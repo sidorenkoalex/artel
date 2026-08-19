@@ -27,6 +27,7 @@ import sqlite3
 import subprocess
 import sys
 import threading
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -37,6 +38,13 @@ LOGS = ROOT / ".artel" / "logs"
 
 AGENT_TIMEOUT_SEC = 1800
 PUMP_JOIN_TIMEOUT_SEC = 10
+# Провал шага по коду возврата ретраится с бэкоффом; ретраи не считаются
+# итерациями ревью (их двигает только вердикт REVIEW.md в cmd_advance).
+AGENT_RETRIES = 2
+AGENT_ATTEMPTS = AGENT_RETRIES + 1
+RETRY_BACKOFF_SEC = 5
+LOG_TAIL_LINES = 15
+LOG_TAIL_CHARS = 1000
 DEFAULT_BUDGET_USD = 5.0
 LIMIT_REVIEW_ITERS = 3
 LIMIT_ACCEPT_REJECTS = 1
@@ -158,6 +166,20 @@ def new_agent_log(task_id: str, role: str) -> Path:
     path = LOGS / f"{prefix}{max(used, default=0) + 1}.log"
     path.touch()
     return path
+
+
+def log_tail(path: Path) -> str:
+    """Последние строки лога прогона — в них причина падения (401, трейсбек).
+
+    Ограничение и по строкам, и по символам: строка трейсбека бывает
+    длиной в экран, а хвост читают глазами в журнале.
+    """
+    try:
+        text = path.read_text(encoding="utf-8", errors="replace")
+    except OSError as exc:
+        return f"лог не прочитан: {exc}"
+    tail = "\n".join(text.splitlines()[-LOG_TAIL_LINES:]).strip()
+    return tail[-LOG_TAIL_CHARS:] if tail else "лог пуст"
 
 
 def render_block(block: dict) -> str:
@@ -460,9 +482,37 @@ def cmd_run(task_id: str) -> None:
         )
     prompt = f"{mission}\n\n--- СКИЛЫ РОЛИ ---\n\n{skills}"
 
+    reason = ""
+    for attempt in range(1, AGENT_ATTEMPTS + 1):
+        outcome, reason = run_agent_once(conn, task_id, role, prompt, attempt)
+        if outcome != "failed":
+            return
+        if attempt < AGENT_ATTEMPTS:
+            pause = RETRY_BACKOFF_SEC * 2 ** (attempt - 1)
+            detail = f"пауза {pause} с перед попыткой {attempt + 1}/{AGENT_ATTEMPTS}"
+            journal(conn, task_id, role, "agent run retry", detail)
+            print(f"[{task_id}] {detail}")
+            time.sleep(pause)
+
+    set_state(conn, task_id, "escalated", "fsm",
+              f"агент не отработал за {AGENT_ATTEMPTS} попытки: {reason}")
+    print(f"  разберись по логам и: artel.py approve {task_id}  (вернёт в работу)")
+
+
+def run_agent_once(conn, task_id: str, role: str, prompt: str,
+                   attempt: int) -> tuple[str, str]:
+    """Один запуск агента: исход попытки и пояснение к нему.
+
+    Исход — "ok" | "failed" | "timeout" | "skipped"; ретраится в `cmd_run`
+    только "failed" (ненулевой rc). Таймаут не ретраится: три подряд — это
+    полтора часа до возврата управления Оператору. Отсутствие CLI — тоже:
+    повторный запуск ничего не изменит, промпт уже напечатан для ручного
+    прогона.
+    """
+    numbered = f"попытка {attempt}/{AGENT_ATTEMPTS}"
     log_path = new_agent_log(task_id, role)
     print(f"[{task_id}] лог шага: {log_path}  (наблюдать: tail -f {log_path})")
-    journal(conn, task_id, role, "agent run started", f"лог: {log_path}")
+    journal(conn, task_id, role, "agent run started", f"{numbered}, лог: {log_path}")
     try:
         proc = subprocess.Popen(
             ["claude", "-p", prompt, "--permission-mode", "acceptEdits",
@@ -479,7 +529,7 @@ def cmd_run(task_id: str) -> None:
         journal(conn, task_id, role, "agent run SKIPPED", "claude CLI не найден")
         print("claude CLI не найден. Запусти роль вручную с этим промптом:\n")
         print(prompt)
-        return
+        return "skipped", "claude CLI не найден"
 
     # Перекачка в потоке: чтение строк блокируется, пока агент молчит, а
     # таймаут шага должен срабатывать и на замолчавшем агенте.
@@ -495,12 +545,20 @@ def cmd_run(task_id: str) -> None:
 
     close_pump(conn, task_id, role, pump, proc)
     if timed_out:
-        journal(conn, task_id, role, "agent run TIMEOUT", "30 мин")
+        journal(conn, task_id, role, "agent run TIMEOUT", f"30 мин, {numbered}")
         print(f"[{task_id}] таймаут шага (30 мин) — разберись и перезапусти run")
-        return
-    journal(conn, task_id, role, "agent run finished", f"rc={rc}")
+        return "timeout", "таймаут шага (30 мин)"
+
+    if rc != 0:
+        reason = f"rc={rc}, {numbered}; хвост {log_path}:\n{log_tail(log_path)}"
+        journal(conn, task_id, role, "agent run FAILED", reason)
+        print(f"[{task_id}] {role}: агент упал ({reason})")
+        return "failed", reason
+
+    journal(conn, task_id, role, "agent run finished", f"rc={rc}, {numbered}")
     print(f"[{task_id}] {role} завершил (rc={rc}); "
           f"дальше: artel.py advance {task_id}")
+    return "ok", ""
 
 
 def close_pump(conn, task_id: str, role: str, pump: OutputPump, proc) -> None:
