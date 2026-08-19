@@ -25,13 +25,16 @@ import re
 import sqlite3
 import subprocess
 import sys
+import threading
 from datetime import datetime, timezone
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 DB = ROOT / ".artel" / "state.db"
 TASKS = ROOT / "tasks"
+LOGS = ROOT / ".artel" / "logs"
 
+AGENT_TIMEOUT_SEC = 1800
 DEFAULT_BUDGET_USD = 5.0
 LIMIT_REVIEW_ITERS = 3
 LIMIT_ACCEPT_REJECTS = 1
@@ -134,6 +137,38 @@ def get_task(conn, task_id: str) -> sqlite3.Row:
     if row is None:
         sys.exit(f"Задача {task_id} не найдена. `status` покажет существующие.")
     return row
+
+
+def new_agent_log(task_id: str, role: str) -> Path:
+    """Путь лога следующего прогона роли: <task>-<role>-<N>.log, N с 1.
+
+    N берётся из имён уже лежащих файлов — прогоны не перезатирают друг
+    друга. Файл создаётся сразу, чтобы `tail -f` можно было запустить,
+    не дожидаясь первой строки агента.
+    """
+    LOGS.mkdir(parents=True, exist_ok=True)
+    prefix = f"{task_id}-{role}-"
+    used = [
+        int(p.stem[len(prefix):])
+        for p in LOGS.glob(f"{prefix}*.log")
+        if p.stem[len(prefix):].isdigit()
+    ]
+    path = LOGS / f"{prefix}{max(used, default=0) + 1}.log"
+    path.touch()
+    return path
+
+
+def stream_to_log(stream, log_path: Path) -> None:
+    """Качает строки процесса в консоль и в лог-файл — по одной, сразу.
+
+    Построчная буферизация обязательна: с ней Оператор видит работу шага
+    через `tail -f` по ходу, а не одним куском после завершения агента.
+    """
+    with open(log_path, "a", encoding="utf-8", buffering=1) as log:
+        for line in stream:
+            sys.stdout.write(line)
+            sys.stdout.flush()
+            log.write(line)
 
 
 # ---------------------------------------------------------------- commands
@@ -348,24 +383,40 @@ def cmd_run(task_id: str) -> None:
         )
     prompt = f"{mission}\n\n--- СКИЛЫ РОЛИ ---\n\n{skills}"
 
-    journal(conn, task_id, role, "agent run started")
+    log_path = new_agent_log(task_id, role)
+    print(f"[{task_id}] лог шага: {log_path}  (наблюдать: tail -f {log_path})")
+    journal(conn, task_id, role, "agent run started", f"лог: {log_path}")
     try:
-        res = subprocess.run(
+        proc = subprocess.Popen(
             ["claude", "-p", prompt, "--permission-mode", "acceptEdits",
              # белый список вместо полного Bash: только git и запуск тестов/guard
              "--allowedTools", "Bash(git:*),Bash(python3:*)"],
-            cwd=ROOT, text=True, timeout=1800,
+            cwd=ROOT, text=True, bufsize=1,
+            stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
         )
-        journal(conn, task_id, role, "agent run finished", f"rc={res.returncode}")
-        print(f"[{task_id}] {role} завершил (rc={res.returncode}); "
-              f"дальше: artel.py advance {task_id}")
     except FileNotFoundError:
         journal(conn, task_id, role, "agent run SKIPPED", "claude CLI не найден")
         print("claude CLI не найден. Запусти роль вручную с этим промптом:\n")
         print(prompt)
+        return
+
+    # Перекачка в потоке: чтение строк блокируется, пока агент молчит, а
+    # таймаут шага должен срабатывать и на замолчавшем агенте.
+    pump = threading.Thread(target=stream_to_log, args=(proc.stdout, log_path))
+    pump.start()
+    try:
+        rc = proc.wait(timeout=AGENT_TIMEOUT_SEC)
     except subprocess.TimeoutExpired:
+        proc.kill()
+        proc.wait()
+        pump.join()
         journal(conn, task_id, role, "agent run TIMEOUT", "30 мин")
         print(f"[{task_id}] таймаут шага (30 мин) — разберись и перезапусти run")
+        return
+    pump.join()
+    journal(conn, task_id, role, "agent run finished", f"rc={rc}")
+    print(f"[{task_id}] {role} завершил (rc={rc}); "
+          f"дальше: artel.py advance {task_id}")
 
 
 def cmd_kill(task_id: str) -> None:
