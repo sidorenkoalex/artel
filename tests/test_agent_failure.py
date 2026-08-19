@@ -6,6 +6,7 @@
 бэкоффа не спим, а записываем.
 """
 import io
+import sqlite3
 import sys
 import tempfile
 import unittest
@@ -152,14 +153,30 @@ class CmdRunFailureTest(TmpRootTest):
         self.assertEqual(self.pauses, [], "успех не ретраится")
 
     def test_failure_is_journaled_with_rc_and_log_tail(self):
-        self.run_agent(*[(1, ["API Error: 401 Unauthorized\n"])] * artel.AGENT_ATTEMPTS)
+        # Попытки говорят разное: хвост в записи должен быть от своего прогона,
+        # а не от первого — по нему разбирают, чем кончилась именно эта попытка.
+        self.run_agent(*[(1, [f"API Error: 401 на попытке {n}\n"])
+                         for n in range(1, artel.AGENT_ATTEMPTS + 1)])
 
         details = self.journal_details("agent run FAILED")
         self.assertEqual(len(details), artel.AGENT_ATTEMPTS)
         self.assertIn("rc=1", details[0])
-        self.assertIn("401 Unauthorized", details[0], "в хвосте лога — причина")
+        self.assertIn("401 на попытке 1", details[0], "в хвосте лога — причина")
+        self.assertIn(f"401 на попытке {artel.AGENT_ATTEMPTS}", details[-1],
+                      "хвост берётся из лога своей попытки")
         self.assertEqual(self.journal_details("agent run finished"), [],
                          "провал не пишется как нормальное завершение")
+
+    def test_console_does_not_repeat_log_tail_on_every_attempt(self):
+        out = self.run_agent(*[(1, ["API Error: 401 Unauthorized\n"])]
+                             * artel.AGENT_ATTEMPTS)
+
+        # По разу на попытку — живой вывод перекачки; плюс один раз в причине
+        # эскалации, которая печатается последней, когда живые строки уже
+        # уехали с экрана. Каждый провал свой хвост в консоли не повторяет.
+        self.assertEqual(out.count("401 Unauthorized"), artel.AGENT_ATTEMPTS + 1,
+                         "строки лога Оператор уже видел вживую — не дублируем")
+        self.assertIn("причина в", out, "путь к логу в консоли остаётся")
 
     def test_failure_prints_no_advance_hint(self):
         out = self.run_agent(*[(1, ["упал\n"])] * artel.AGENT_ATTEMPTS)
@@ -220,6 +237,39 @@ class CmdRunFailureTest(TmpRootTest):
         self.assertEqual(row["review_iters"], 1, "ретраи не считаются итерациями")
         self.assertEqual(row["state"], "escalated")
 
+    def test_approve_returns_failed_dev_step_to_in_dev(self):
+        out = self.run_agent(*[(1, ["упал\n"])] * artel.AGENT_ATTEMPTS)
+        self.assertIn("вернёт в in_dev", out)
+
+        self.capture(artel.cmd_approve, self.TASK)
+
+        self.assertEqual(self.task_row()["state"], "in_dev")
+
+    def test_approve_returns_failed_review_step_to_review(self):
+        """Упало ревью — чинить надо ревью, а не откатывать готовый код в разработку."""
+        conn = artel.db()
+        conn.execute("UPDATE tasks SET state='review' WHERE id=?", (self.TASK,))
+        conn.commit()
+
+        out = self.run_agent(*[(1, ["упал\n"])] * artel.AGENT_ATTEMPTS)
+        self.assertIn("вернёт в review", out)
+
+        self.capture(artel.cmd_approve, self.TASK)
+
+        row = self.task_row()
+        self.assertEqual(row["state"], "review")
+        self.assertIsNone(row["escalated_from"], "точка возврата одноразовая")
+
+    def test_approve_after_other_escalation_still_goes_to_in_dev(self):
+        """Эскалации по вердикту и по лимитам точку возврата не пишут."""
+        conn = artel.db()
+        conn.execute("UPDATE tasks SET state='escalated' WHERE id=?", (self.TASK,))
+        conn.commit()
+
+        self.capture(artel.cmd_approve, self.TASK)
+
+        self.assertEqual(self.task_row()["state"], "in_dev")
+
     def test_every_attempt_writes_its_own_log(self):
         self.run_agent((1, ["первый упал\n"]), (1, ["второй упал\n"]),
                        (0, ["третий дошёл\n"]))
@@ -254,6 +304,24 @@ class CmdRunFailureTest(TmpRootTest):
         self.assertEqual(self.pauses, [])
         self.assertEqual(self.task_row()["state"], "in_dev")
         self.assertIn("Роль: разработчик", out)
+
+
+class MigrationTest(TmpRootTest):
+    """БД прошлой версии догоняется на лету: `init` заново Оператор не делает."""
+
+    def test_return_point_column_is_added_to_old_db(self):
+        artel.DB.parent.mkdir(parents=True, exist_ok=True)
+        old = sqlite3.connect(artel.DB)
+        old.executescript("CREATE TABLE tasks (id TEXT PRIMARY KEY, state TEXT);")
+        old.commit()
+        old.close()
+
+        conn = artel.db()
+        self.addCleanup(conn.close)
+
+        cols = {r["name"] for r in conn.execute("PRAGMA table_info(tasks)")}
+        self.assertIn("escalated_from", cols)
+        self.assertIn("reviewed_iter", cols, "прежняя миграция не потерялась")
 
 
 if __name__ == "__main__":

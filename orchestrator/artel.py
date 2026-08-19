@@ -10,6 +10,10 @@
                      |            ^___________ (acceptance reject, <=1)
   из любого: escalated (вопрос Оператору), killed.
 
+`approve` из escalated возвращает задачу в in_dev, а если эскалировал упавший
+агент — в тот шаг, на котором он упал (см. escalated_from): чинить надо шаг,
+а не откатывать готовую работу в разработку.
+
 Вердикт ревьювера учитывается конечным автоматом ровно один раз: после
 возврата задачи в in_dev переход review -> acceptance требует нового
 REVIEW.md (iteration больше уже учтённого, см. fresh_verdict_iteration).
@@ -92,8 +96,13 @@ def db() -> sqlite3.Connection:
 def migrate(conn: sqlite3.Connection) -> None:
     """Догоняет схему БД, созданной прошлой версией (Фаза 0: без alembic)."""
     cols = {r["name"] for r in conn.execute("PRAGMA table_info(tasks)")}
-    if cols and "reviewed_iter" not in cols:
+    if not cols:
+        return
+    if "reviewed_iter" not in cols:
         conn.execute("ALTER TABLE tasks ADD COLUMN reviewed_iter INTEGER DEFAULT 0")
+        conn.commit()
+    if "escalated_from" not in cols:
+        conn.execute("ALTER TABLE tasks ADD COLUMN escalated_from TEXT")
         conn.commit()
 
 
@@ -279,7 +288,7 @@ def cmd_init() -> None:
         CREATE TABLE IF NOT EXISTS tasks (
           id TEXT PRIMARY KEY, title TEXT, state TEXT, branch TEXT,
           review_iters INTEGER DEFAULT 0, accept_rejects INTEGER DEFAULT 0,
-          reviewed_iter INTEGER DEFAULT 0,
+          reviewed_iter INTEGER DEFAULT 0, escalated_from TEXT,
           budget_usd REAL, spent_usd REAL DEFAULT 0,
           created_at TEXT, updated_at TEXT
         );
@@ -427,7 +436,16 @@ def cmd_approve(task_id: str) -> None:
                 sys.exit(f"merge упал на {' '.join(cmd)}:\n{res.stderr}")
         set_state(conn, task_id, "done", "orchestrator", f"смержено: {branch}")
     elif state == "escalated":
-        set_state(conn, task_id, "in_dev", "operator", "эскалация разрешена, продолжаем")
+        # Куда возвращать — знает только тот, кто эскалировал: провал агента
+        # (cmd_run) пишет в escalated_from состояние своего шага, потому что
+        # чинить надо этот шаг, а не начинать разработку заново. Эскалации по
+        # вердикту ревьювера и по исчерпанным лимитам его не пишут и, как
+        # раньше, уходят в in_dev: там работа и продолжается.
+        back = t["escalated_from"] or "in_dev"
+        conn.execute("UPDATE tasks SET escalated_from=NULL WHERE id=?", (task_id,))
+        conn.commit()
+        set_state(conn, task_id, back, "operator", "эскалация разрешена, продолжаем")
+        print(f"  дальше: artel.py run {task_id}")
     else:
         print(f"[{task_id}] в состоянии {state} нечего подтверждать")
 
@@ -494,9 +512,15 @@ def cmd_run(task_id: str) -> None:
             print(f"[{task_id}] {detail}")
             time.sleep(pause)
 
+    # Шаг, на котором упал агент, запоминаем: чинить надо его, а не задачу
+    # целиком. Без этого approve увёл бы упавшее ревью в in_dev и поднял
+    # разработчика на ветке, где всё уже сделано.
+    conn.execute("UPDATE tasks SET escalated_from=? WHERE id=?", (t["state"], task_id))
+    conn.commit()
     set_state(conn, task_id, "escalated", "fsm",
               f"агент не отработал за {AGENT_ATTEMPTS} попытки: {reason}")
-    print(f"  разберись по логам и: artel.py approve {task_id}  (вернёт в работу)")
+    print(f"  разберись по логам и: artel.py approve {task_id}  "
+          f"(вернёт в {t['state']}, шаг повторится)")
 
 
 def run_agent_once(conn, task_id: str, role: str, prompt: str,
@@ -545,14 +569,20 @@ def run_agent_once(conn, task_id: str, role: str, prompt: str,
 
     close_pump(conn, task_id, role, pump, proc)
     if timed_out:
-        journal(conn, task_id, role, "agent run TIMEOUT", f"30 мин, {numbered}")
+        # «без ретрая» — чтобы читающий журнал не ждал попыток 2 и 3.
+        journal(conn, task_id, role, "agent run TIMEOUT",
+                f"30 мин, {numbered} (без ретрая)")
         print(f"[{task_id}] таймаут шага (30 мин) — разберись и перезапусти run")
         return "timeout", "таймаут шага (30 мин)"
 
     if rc != 0:
         reason = f"rc={rc}, {numbered}; хвост {log_path}:\n{log_tail(log_path)}"
         journal(conn, task_id, role, "agent run FAILED", reason)
-        print(f"[{task_id}] {role}: агент упал ({reason})")
+        # В консоли хвост не повторяем: эти строки Оператор только что видел
+        # вживую (перекачка пишет и в stdout, и в лог). В журнале он нужен —
+        # `log <id>` читают потом, когда вывода на экране уже нет.
+        print(f"[{task_id}] {role}: агент упал (rc={rc}, {numbered}), "
+              f"причина в {log_path}")
         return "failed", reason
 
     journal(conn, task_id, role, "agent run finished", f"rc={rc}, {numbered}")
