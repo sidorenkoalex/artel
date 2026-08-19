@@ -285,7 +285,9 @@ def cmd_run(task_id: str) -> None:
     journal(conn, task_id, role, "agent run started")
     try:
         res = subprocess.run(
-            ["claude", "-p", prompt, "--permission-mode", "acceptEdits"],
+            ["claude", "-p", prompt, "--permission-mode", "acceptEdits",
+             # белый список вместо полного Bash: только git и запуск тестов/guard
+             "--allowedTools", "Bash(git:*),Bash(python3:*)"],
             cwd=ROOT, text=True, timeout=1800,
         )
         journal(conn, task_id, role, "agent run finished", f"rc={res.returncode}")
