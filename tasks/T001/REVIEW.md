@@ -2,8 +2,8 @@
 task: T001
 type: review
 author_role: reviewer
-status: changes_requested
-iteration: 1
+status: approved
+iteration: 2
 ---
 
 # REVIEW: Тест конвейера
@@ -16,8 +16,8 @@ iteration: 1
 
 ## Замечания
 
-- minor — tasks/T002/SPEC.md — в ветку закоммичен артефакт убитой задачи
+- (закрыто) minor — tasks/T002/SPEC.md — в ветку закоммичен артефакт убитой задачи
   T002 (пустой шаблон) — удалить из ветки, мусор в шине артефактов.
 
 ## Вердикт
-changes_requested: убрать tasks/T002/ из ветки, остальное соответствует SPEC.
+approved: замечание итерации 1 закрыто, реализация соответствует SPEC.
