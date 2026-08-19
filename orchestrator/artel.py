@@ -10,6 +10,10 @@
                      |            ^___________ (acceptance reject, <=1)
   из любого: escalated (вопрос Оператору), killed.
 
+`approve` из escalated возвращает задачу в in_dev, а если эскалировал упавший
+агент — в тот шаг, на котором он упал (см. escalated_from): чинить надо шаг,
+а не откатывать готовую работу в разработку.
+
 Вердикт ревьювера учитывается конечным автоматом ровно один раз: после
 возврата задачи в in_dev переход review -> acceptance требует нового
 REVIEW.md (iteration больше уже учтённого, см. fresh_verdict_iteration).
@@ -27,6 +31,7 @@ import sqlite3
 import subprocess
 import sys
 import threading
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -37,6 +42,13 @@ LOGS = ROOT / ".artel" / "logs"
 
 AGENT_TIMEOUT_SEC = 1800
 PUMP_JOIN_TIMEOUT_SEC = 10
+# Провал шага по коду возврата ретраится с бэкоффом; ретраи не считаются
+# итерациями ревью (их двигает только вердикт REVIEW.md в cmd_advance).
+AGENT_RETRIES = 2
+AGENT_ATTEMPTS = AGENT_RETRIES + 1
+RETRY_BACKOFF_SEC = 5
+LOG_TAIL_LINES = 15
+LOG_TAIL_CHARS = 1000
 DEFAULT_BUDGET_USD = 5.0
 LIMIT_REVIEW_ITERS = 3
 LIMIT_ACCEPT_REJECTS = 1
@@ -84,8 +96,13 @@ def db() -> sqlite3.Connection:
 def migrate(conn: sqlite3.Connection) -> None:
     """Догоняет схему БД, созданной прошлой версией (Фаза 0: без alembic)."""
     cols = {r["name"] for r in conn.execute("PRAGMA table_info(tasks)")}
-    if cols and "reviewed_iter" not in cols:
+    if not cols:
+        return
+    if "reviewed_iter" not in cols:
         conn.execute("ALTER TABLE tasks ADD COLUMN reviewed_iter INTEGER DEFAULT 0")
+        conn.commit()
+    if "escalated_from" not in cols:
+        conn.execute("ALTER TABLE tasks ADD COLUMN escalated_from TEXT")
         conn.commit()
 
 
@@ -158,6 +175,20 @@ def new_agent_log(task_id: str, role: str) -> Path:
     path = LOGS / f"{prefix}{max(used, default=0) + 1}.log"
     path.touch()
     return path
+
+
+def log_tail(path: Path) -> str:
+    """Последние строки лога прогона — в них причина падения (401, трейсбек).
+
+    Ограничение и по строкам, и по символам: строка трейсбека бывает
+    длиной в экран, а хвост читают глазами в журнале.
+    """
+    try:
+        text = path.read_text(encoding="utf-8", errors="replace")
+    except OSError as exc:
+        return f"лог не прочитан: {exc}"
+    tail = "\n".join(text.splitlines()[-LOG_TAIL_LINES:]).strip()
+    return tail[-LOG_TAIL_CHARS:] if tail else "лог пуст"
 
 
 def render_block(block: dict) -> str:
@@ -257,7 +288,7 @@ def cmd_init() -> None:
         CREATE TABLE IF NOT EXISTS tasks (
           id TEXT PRIMARY KEY, title TEXT, state TEXT, branch TEXT,
           review_iters INTEGER DEFAULT 0, accept_rejects INTEGER DEFAULT 0,
-          reviewed_iter INTEGER DEFAULT 0,
+          reviewed_iter INTEGER DEFAULT 0, escalated_from TEXT,
           budget_usd REAL, spent_usd REAL DEFAULT 0,
           created_at TEXT, updated_at TEXT
         );
@@ -405,7 +436,16 @@ def cmd_approve(task_id: str) -> None:
                 sys.exit(f"merge упал на {' '.join(cmd)}:\n{res.stderr}")
         set_state(conn, task_id, "done", "orchestrator", f"смержено: {branch}")
     elif state == "escalated":
-        set_state(conn, task_id, "in_dev", "operator", "эскалация разрешена, продолжаем")
+        # Куда возвращать — знает только тот, кто эскалировал: провал агента
+        # (cmd_run) пишет в escalated_from состояние своего шага, потому что
+        # чинить надо этот шаг, а не начинать разработку заново. Эскалации по
+        # вердикту ревьювера и по исчерпанным лимитам его не пишут и, как
+        # раньше, уходят в in_dev: там работа и продолжается.
+        back = t["escalated_from"] or "in_dev"
+        conn.execute("UPDATE tasks SET escalated_from=NULL WHERE id=?", (task_id,))
+        conn.commit()
+        set_state(conn, task_id, back, "operator", "эскалация разрешена, продолжаем")
+        print(f"  дальше: artel.py run {task_id}")
     else:
         print(f"[{task_id}] в состоянии {state} нечего подтверждать")
 
@@ -460,9 +500,43 @@ def cmd_run(task_id: str) -> None:
         )
     prompt = f"{mission}\n\n--- СКИЛЫ РОЛИ ---\n\n{skills}"
 
+    reason = ""
+    for attempt in range(1, AGENT_ATTEMPTS + 1):
+        outcome, reason = run_agent_once(conn, task_id, role, prompt, attempt)
+        if outcome != "failed":
+            return
+        if attempt < AGENT_ATTEMPTS:
+            pause = RETRY_BACKOFF_SEC * 2 ** (attempt - 1)
+            detail = f"пауза {pause} с перед попыткой {attempt + 1}/{AGENT_ATTEMPTS}"
+            journal(conn, task_id, role, "agent run retry", detail)
+            print(f"[{task_id}] {detail}")
+            time.sleep(pause)
+
+    # Шаг, на котором упал агент, запоминаем: чинить надо его, а не задачу
+    # целиком. Без этого approve увёл бы упавшее ревью в in_dev и поднял
+    # разработчика на ветке, где всё уже сделано.
+    conn.execute("UPDATE tasks SET escalated_from=? WHERE id=?", (t["state"], task_id))
+    conn.commit()
+    set_state(conn, task_id, "escalated", "fsm",
+              f"агент не отработал за {AGENT_ATTEMPTS} попытки: {reason}")
+    print(f"  разберись по логам и: artel.py approve {task_id}  "
+          f"(вернёт в {t['state']}, шаг повторится)")
+
+
+def run_agent_once(conn, task_id: str, role: str, prompt: str,
+                   attempt: int) -> tuple[str, str]:
+    """Один запуск агента: исход попытки и пояснение к нему.
+
+    Исход — "ok" | "failed" | "timeout" | "skipped"; ретраится в `cmd_run`
+    только "failed" (ненулевой rc). Таймаут не ретраится: три подряд — это
+    полтора часа до возврата управления Оператору. Отсутствие CLI — тоже:
+    повторный запуск ничего не изменит, промпт уже напечатан для ручного
+    прогона.
+    """
+    numbered = f"попытка {attempt}/{AGENT_ATTEMPTS}"
     log_path = new_agent_log(task_id, role)
     print(f"[{task_id}] лог шага: {log_path}  (наблюдать: tail -f {log_path})")
-    journal(conn, task_id, role, "agent run started", f"лог: {log_path}")
+    journal(conn, task_id, role, "agent run started", f"{numbered}, лог: {log_path}")
     try:
         proc = subprocess.Popen(
             ["claude", "-p", prompt, "--permission-mode", "acceptEdits",
@@ -479,7 +553,7 @@ def cmd_run(task_id: str) -> None:
         journal(conn, task_id, role, "agent run SKIPPED", "claude CLI не найден")
         print("claude CLI не найден. Запусти роль вручную с этим промптом:\n")
         print(prompt)
-        return
+        return "skipped", "claude CLI не найден"
 
     # Перекачка в потоке: чтение строк блокируется, пока агент молчит, а
     # таймаут шага должен срабатывать и на замолчавшем агенте.
@@ -495,12 +569,26 @@ def cmd_run(task_id: str) -> None:
 
     close_pump(conn, task_id, role, pump, proc)
     if timed_out:
-        journal(conn, task_id, role, "agent run TIMEOUT", "30 мин")
+        # «без ретрая» — чтобы читающий журнал не ждал попыток 2 и 3.
+        journal(conn, task_id, role, "agent run TIMEOUT",
+                f"30 мин, {numbered} (без ретрая)")
         print(f"[{task_id}] таймаут шага (30 мин) — разберись и перезапусти run")
-        return
-    journal(conn, task_id, role, "agent run finished", f"rc={rc}")
+        return "timeout", "таймаут шага (30 мин)"
+
+    if rc != 0:
+        reason = f"rc={rc}, {numbered}; хвост {log_path}:\n{log_tail(log_path)}"
+        journal(conn, task_id, role, "agent run FAILED", reason)
+        # В консоли хвост не повторяем: эти строки Оператор только что видел
+        # вживую (перекачка пишет и в stdout, и в лог). В журнале он нужен —
+        # `log <id>` читают потом, когда вывода на экране уже нет.
+        print(f"[{task_id}] {role}: агент упал (rc={rc}, {numbered}), "
+              f"причина в {log_path}")
+        return "failed", reason
+
+    journal(conn, task_id, role, "agent run finished", f"rc={rc}, {numbered}")
     print(f"[{task_id}] {role} завершил (rc={rc}); "
           f"дальше: artel.py advance {task_id}")
+    return "ok", ""
 
 
 def close_pump(conn, task_id: str, role: str, pump: OutputPump, proc) -> None:
