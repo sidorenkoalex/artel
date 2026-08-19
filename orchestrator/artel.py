@@ -39,6 +39,23 @@ ROLE_SKILLS = {
 }
 STATE_ROLE = {"in_dev": "developer", "review": "reviewer"}
 
+# ГОСТ-подобная транслитерация: только stdlib, без внешних зависимостей.
+# ъ/ь пропускаются; ё → yo; щ → sch; ю → yu; я → ya.
+_TRANSLIT = {
+    "а": "a", "б": "b", "в": "v", "г": "g", "д": "d", "е": "e", "ё": "yo",
+    "ж": "zh", "з": "z", "и": "i", "й": "y", "к": "k", "л": "l", "м": "m",
+    "н": "n", "о": "o", "п": "p", "р": "r", "с": "s", "т": "t", "у": "u",
+    "ф": "f", "х": "kh", "ц": "ts", "ч": "ch", "ш": "sh", "щ": "sch",
+    "ъ": "", "ы": "y", "ь": "", "э": "e", "ю": "yu", "я": "ya",
+}
+
+
+def slugify(title: str) -> str:
+    """Слаг ветки: транслит кириллицы, [^a-z0-9]+ → '-', ≤30, пустое → 'task'."""
+    lowered = title.lower()
+    translit = "".join(_TRANSLIT.get(ch, ch) for ch in lowered)
+    return re.sub(r"[^a-z0-9]+", "-", translit)[:30].strip("-") or "task"
+
 
 def now() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%SZ")
@@ -114,8 +131,7 @@ def cmd_new(title: str) -> None:
     conn = db()
     n = conn.execute("SELECT COUNT(*) FROM tasks").fetchone()[0]
     task_id = f"T{n + 1:03d}"
-    slug = re.sub(r"[^a-z0-9]+", "-", title.lower())[:30].strip("-") or "task"
-    branch = f"task/{task_id.lower()}-{slug}"
+    branch = f"task/{task_id.lower()}-{slugify(title)}"
 
     task_dir = TASKS / task_id
     task_dir.mkdir(parents=True)
