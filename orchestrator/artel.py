@@ -21,6 +21,7 @@ REVIEW.md (iteration больше уже учтённого, см. fresh_verdict
   init | new "<название>" | status | show <id> | advance <id> |
   run <id> | approve <id> | reject <id> "<причина>" | kill <id> | log <id>
 """
+import json
 import re
 import sqlite3
 import subprocess
@@ -35,6 +36,7 @@ TASKS = ROOT / "tasks"
 LOGS = ROOT / ".artel" / "logs"
 
 AGENT_TIMEOUT_SEC = 1800
+PUMP_JOIN_TIMEOUT_SEC = 10
 DEFAULT_BUDGET_USD = 5.0
 LIMIT_REVIEW_ITERS = 3
 LIMIT_ACCEPT_REJECTS = 1
@@ -158,17 +160,92 @@ def new_agent_log(task_id: str, role: str) -> Path:
     return path
 
 
+def render_block(block: dict) -> str:
+    """Блок сообщения ассистента → строка Оператору (пустая — не показываем)."""
+    kind = block.get("type")
+    if kind == "text":
+        text = block.get("text", "").strip()
+        return f"{text}\n" if text else ""
+    if kind == "tool_use":
+        args = block.get("input") or {}
+        arg = args.get("command") or args.get("file_path") or args.get("pattern") or ""
+        return f"· {block.get('name')} {' '.join(str(arg).split())[:100]}".rstrip() + "\n"
+    return ""
+
+
+def render_agent_line(raw_line: str) -> str:
+    """Событие `--output-format stream-json` → читаемая строка Оператору.
+
+    Из потока событий Оператору нужны два: что агент сказал и что он делает
+    инструментом, — по ним видно, работает шаг или встал. Служебные события
+    (хуки, лимиты, сводки) отбрасываем. Не-JSON строки (stderr агента,
+    трейсбек CLI) проходят как есть — молча не глотаем ничего.
+    """
+    if not raw_line.lstrip().startswith("{"):
+        return raw_line
+    try:
+        event = json.loads(raw_line)
+    except json.JSONDecodeError:
+        return raw_line
+
+    if event.get("type") == "assistant":
+        content = event.get("message", {}).get("content")
+        if not isinstance(content, list):
+            return ""
+        return "".join(render_block(b) for b in content if isinstance(b, dict))
+    if event.get("type") == "result" and event.get("is_error"):
+        return f"! ошибка агента: {str(event.get('result', ''))[:200]}\n"
+    return ""
+
+
+def tee_lines(stream, log) -> None:
+    """Строки процесса — в консоль и, если он открыт, в лог. По одной, сразу."""
+    for raw_line in stream:
+        line = render_agent_line(raw_line)
+        if not line:
+            continue
+        sys.stdout.write(line)
+        sys.stdout.flush()
+        if log is not None:
+            log.write(line)
+
+
 def stream_to_log(stream, log_path: Path) -> None:
-    """Качает строки процесса в консоль и в лог-файл — по одной, сразу.
+    """Качает вывод процесса в консоль и в лог-файл.
 
     Построчная буферизация обязательна: с ней Оператор видит работу шага
     через `tail -f` по ходу, а не одним куском после завершения агента.
     """
-    with open(log_path, "a", encoding="utf-8", buffering=1) as log:
-        for line in stream:
-            sys.stdout.write(line)
-            sys.stdout.flush()
-            log.write(line)
+    try:
+        log = open(log_path, "a", encoding="utf-8", buffering=1)
+    except OSError:
+        # Пайп дочитываем даже без лога: перестать читать — значит подвесить
+        # агента на записи в переполненный пайп. О сбое узнает cmd_run.
+        tee_lines(stream, None)
+        raise
+    with log:
+        tee_lines(stream, log)
+
+
+class OutputPump(threading.Thread):
+    """Поток перекачки вывода агента; запоминает свой сбой для `cmd_run`.
+
+    Демон: EOF на пайпе может не прийти вовсе (write-конец унаследовал
+    переживший агента процесс), а вечно живой не-демон не дал бы
+    интерпретатору выйти даже после возврата из `cmd_run`.
+    """
+
+    def __init__(self, stream, log_path: Path):
+        super().__init__(daemon=True)
+        self.stream = stream
+        self.log_path = log_path
+        self.error: Exception | None = None
+
+    def run(self) -> None:
+        try:
+            stream_to_log(self.stream, self.log_path)
+        except Exception as exc:  # noqa: BLE001 — сбой лога не роняет шаг
+            self.error = exc
 
 
 # ---------------------------------------------------------------- commands
@@ -389,6 +466,10 @@ def cmd_run(task_id: str) -> None:
     try:
         proc = subprocess.Popen(
             ["claude", "-p", prompt, "--permission-mode", "acceptEdits",
+             # stream-json — единственный режим, где строки приходят по ходу
+             # шага: text и json отдают всё одним куском в конце (замер в
+             # PLAN.md). --verbose при нём обязателен, иначе CLI выходит с rc=1.
+             "--output-format", "stream-json", "--verbose",
              # белый список вместо полного Bash: только git и запуск тестов/guard
              "--allowedTools", "Bash(git:*),Bash(python3:*)"],
             cwd=ROOT, text=True, bufsize=1,
@@ -402,21 +483,47 @@ def cmd_run(task_id: str) -> None:
 
     # Перекачка в потоке: чтение строк блокируется, пока агент молчит, а
     # таймаут шага должен срабатывать и на замолчавшем агенте.
-    pump = threading.Thread(target=stream_to_log, args=(proc.stdout, log_path))
+    pump = OutputPump(proc.stdout, log_path)
     pump.start()
+    timed_out = False
     try:
         rc = proc.wait(timeout=AGENT_TIMEOUT_SEC)
     except subprocess.TimeoutExpired:
         proc.kill()
-        proc.wait()
-        pump.join()
+        rc = proc.wait()
+        timed_out = True
+
+    close_pump(conn, task_id, role, pump, proc)
+    if timed_out:
         journal(conn, task_id, role, "agent run TIMEOUT", "30 мин")
         print(f"[{task_id}] таймаут шага (30 мин) — разберись и перезапусти run")
         return
-    pump.join()
     journal(conn, task_id, role, "agent run finished", f"rc={rc}")
     print(f"[{task_id}] {role} завершил (rc={rc}); "
           f"дальше: artel.py advance {task_id}")
+
+
+def close_pump(conn, task_id: str, role: str, pump: OutputPump, proc) -> None:
+    """Дожидается перекачки и отмечает в журнале, если лог неполный.
+
+    Join с таймаутом: процесс агента уже мёртв, но EOF на пайпе приходит,
+    только когда его закрыли все унаследовавшие — фоновый процесс, оставленный
+    агентом, держал бы `run` вечно. Пайп закрываем лишь после успешного join:
+    `close()` при живом читателе ждёт лок буфера, то есть меняет одно вечное
+    ожидание на другое.
+    """
+    pump.join(PUMP_JOIN_TIMEOUT_SEC)
+    if pump.is_alive():
+        detail = (f"перекачка не завершилась за {PUMP_JOIN_TIMEOUT_SEC} с "
+                  f"(пайп держит чужой процесс) — лог неполный")
+    elif pump.error is not None:
+        proc.stdout.close()
+        detail = f"лог не записан: {pump.error}"
+    else:
+        proc.stdout.close()
+        return
+    journal(conn, task_id, role, "agent log INCOMPLETE", detail)
+    print(f"[{task_id}] {detail}")
 
 
 def cmd_kill(task_id: str) -> None:

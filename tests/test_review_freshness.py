@@ -187,7 +187,9 @@ class ReviewFreshnessScenarioTest(unittest.TestCase):
         self.back_to_review_after_acceptance_reject()
 
         with mock.patch("orchestrator.artel.subprocess.Popen") as popen_mock:
-            popen_mock.return_value = mock.Mock(stdout=iter([]), **{"wait.return_value": 0})
+            proc = mock.MagicMock(**{"wait.return_value": 0})
+            proc.stdout.__iter__.return_value = iter([])
+            popen_mock.return_value = proc
             self.capture(artel.cmd_run, self.TASK)
 
         prompt = popen_mock.call_args.args[0][2]
