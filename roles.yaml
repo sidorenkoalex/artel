@@ -1,0 +1,27 @@
+# Карта исполнителей (§16 дизайн-дока).
+# executor: agent | human | hybrid | external
+# token_slot: имя сервиса в macOS keychain (security find-generic-password -s <slot> -w).
+#   Фаза 0: все слоты падают fallback'ом в общий 'artel-token' (см. ADR-0001).
+#   Выход из Фазы 0: завести отдельные fine-grained PAT и положить в слоты —
+#   код менять не нужно, только keychain.
+
+roles:
+  orchestrator:
+    executor: system            # не LLM: FSM + журнал
+    token_slot: artel-orchestrator
+  analyst:
+    executor: human             # Фаза 0: SPEC пишет Оператор
+    token_slot: null
+  developer:
+    executor: agent
+    token_slot: artel-developer
+    skills: [conventions-core, escalation-rules, coding-standards]
+  reviewer:
+    executor: agent
+    token_slot: artel-reviewer
+    skills: [conventions-core, escalation-rules, review-checklist]
+  verifier:
+    executor: none              # появится в MVP (стенд + приёмочные тесты)
+    token_slot: artel-verifier
+
+token_fallback: artel-token     # один ключ Фазы 0; удалить при разделении PAT

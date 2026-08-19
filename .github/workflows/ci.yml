@@ -1,0 +1,52 @@
+name: ci
+
+on:
+  push:
+    branches: ["main", "task/**"]
+  pull_request:
+
+jobs:
+  guard:
+    name: Валидация артефактов
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: guard.py по всем артефактам задач
+        run: |
+          if ls tasks/*/*.md >/dev/null 2>&1; then
+            python3 scripts/guard.py --all
+          else
+            echo "артефактов пока нет — ок"
+          fi
+
+  python:
+    name: Синтаксис и тесты оркестратора
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: python3 -m py_compile orchestrator/artel.py scripts/guard.py
+      - name: unit-тесты (если появятся)
+        run: |
+          if [ -d tests ]; then python3 -m unittest discover -s tests -v; fi
+
+  protected-paths:
+    name: Enforcement, конфиги системы меняет только Оператор
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
+      - name: diff не трогает защищённые пути (кроме PR Оператора)
+        env:
+          PR_AUTHOR: ${{ github.event.pull_request.user.login }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          # Фаза 0: один аккаунт => проверка деградирует до предупреждения.
+          # При разделении токенов заменить exit 0 на exit 1 (см. ADR-0001).
+          PROTECTED='^(gates\.yaml|roles\.yaml|\.github/|templates/|skills/)'
+          CHANGED=$(git diff --name-only "$BASE_SHA"...HEAD | grep -E "$PROTECTED" || true)
+          if [ -n "$CHANGED" ]; then
+            echo "::warning::PR от $PR_AUTHOR меняет защищённые пути:"
+            echo "$CHANGED"
+            echo "Фаза 0 (один токен): warning. После разделения PAT — fail."
+          fi

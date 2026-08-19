@@ -1,0 +1,29 @@
+# Политика гейтов (§04 дизайн-дока).
+# ФАЗА 0: этот файл — СПРАВОЧНЫЙ. Policy-движка нет, все гейты захардкожены
+# manual в оркестраторе. Файл заведён с первого дня, чтобы структура была
+# готова к MVP. Policy-движок обязан читать его ТОЛЬКО из main.
+#
+# mode: auto | manual | conditional
+# Правила: молчание != согласие (нет автопрохода по таймауту);
+# policy проверяет оркестратор, агент режима гейта не знает.
+
+gates:
+  spec_approved:        # запрос -> SPEC принят в работу
+    mode: manual
+  plan_approved:        # гейт плана (агентский, ревьювер)
+    mode: auto          # auto = по артефакту ревьювера, Оператор не участвует
+  merge:
+    mode: manual        # кандидат на conditional после калибровки доверия
+    # conditional-заготовка (не активна в Фазе 0):
+    # auto_if:
+    #   - diff_lines < 200
+    #   - no_migrations
+    #   - no_paths: ["**/auth/**", "ci/", ".github/", "gates.yaml",
+    #                "roles.yaml", "templates/", "skills/"]
+    #   - review_major_findings == 0
+  deploy_prod:
+    mode: manual
+  rollback:
+    mode: auto          # откат — движение в безопасную сторону
+  budget_increase:
+    mode: manual        # никогда не auto
