@@ -70,7 +70,8 @@ class ReviewFreshnessScenarioTest(unittest.TestCase):
         root = Path(tmp.name)
 
         for attr, value in (("DB", root / ".artel" / "state.db"),
-                            ("TASKS", root / "tasks")):
+                            ("TASKS", root / "tasks"),
+                            ("LOGS", root / ".artel" / "logs")):
             patcher = mock.patch.object(artel, attr, value)
             patcher.start()
             self.addCleanup(patcher.stop)
@@ -185,11 +186,13 @@ class ReviewFreshnessScenarioTest(unittest.TestCase):
     def test_reviewer_prompt_asks_for_next_iteration(self):
         self.back_to_review_after_acceptance_reject()
 
-        with mock.patch("orchestrator.artel.subprocess.run") as run_mock:
-            run_mock.return_value = mock.Mock(returncode=0)
+        with mock.patch("orchestrator.artel.subprocess.Popen") as popen_mock:
+            proc = mock.MagicMock(**{"wait.return_value": 0})
+            proc.stdout.__iter__.return_value = iter([])
+            popen_mock.return_value = proc
             self.capture(artel.cmd_run, self.TASK)
 
-        prompt = run_mock.call_args.args[0][2]
+        prompt = popen_mock.call_args.args[0][2]
         self.assertIn("iteration: 2", prompt)
 
 
