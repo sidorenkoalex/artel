@@ -10,6 +10,10 @@
                      |            ^___________ (acceptance reject, <=1)
   из любого: escalated (вопрос Оператору), killed.
 
+Вердикт ревьювера учитывается конечным автоматом ровно один раз: после
+возврата задачи в in_dev переход review -> acceptance требует нового
+REVIEW.md (iteration больше уже учтённого, см. fresh_verdict_iteration).
+
 Фаза 0: гейт плана (фаза A review-checklist) выполняется ревьювером в одном
 прогоне с ревью MR. Отдельное состояние plan_review появится в MVP.
 
@@ -31,6 +35,9 @@ TASKS = ROOT / "tasks"
 DEFAULT_BUDGET_USD = 5.0
 LIMIT_REVIEW_ITERS = 3
 LIMIT_ACCEPT_REJECTS = 1
+
+# Статусы REVIEW.md, которые FSM отрабатывает как вердикт ревьювера.
+REVIEW_VERDICTS = ("approved", "changes_requested", "escalate")
 
 # Синхронизировано с roles.yaml (Фаза 0: без yaml-парсера).
 ROLE_SKILLS = {
@@ -65,7 +72,16 @@ def db() -> sqlite3.Connection:
     DB.parent.mkdir(exist_ok=True)
     conn = sqlite3.connect(DB)
     conn.row_factory = sqlite3.Row
+    migrate(conn)
     return conn
+
+
+def migrate(conn: sqlite3.Connection) -> None:
+    """Догоняет схему БД, созданной прошлой версией (Фаза 0: без alembic)."""
+    cols = {r["name"] for r in conn.execute("PRAGMA table_info(tasks)")}
+    if cols and "reviewed_iter" not in cols:
+        conn.execute("ALTER TABLE tasks ADD COLUMN reviewed_iter INTEGER DEFAULT 0")
+        conn.commit()
 
 
 def journal(conn, task_id: str, actor: str, action: str, detail: str = "") -> None:
@@ -98,6 +114,21 @@ def frontmatter(path: Path) -> dict:
     return meta
 
 
+def fresh_verdict_iteration(meta: dict, reviewed_iter: int) -> int | None:
+    """Номер итерации вердикта, если он новее уже учтённого, иначе None.
+
+    Вердикт учитывается FSM ровно один раз: после возврата задачи в in_dev
+    прежний REVIEW.md не двигает её обратно в acceptance. Нечитаемый или
+    отсутствующий `iteration` трактуем как несвежий — доказательства нового
+    прогона ревьювера нет.
+    """
+    raw = str(meta.get("iteration", "")).strip()
+    if not raw.isdigit():
+        return None
+    iteration = int(raw)
+    return iteration if iteration > reviewed_iter else None
+
+
 def get_task(conn, task_id: str) -> sqlite3.Row:
     row = conn.execute("SELECT * FROM tasks WHERE id=?", (task_id,)).fetchone()
     if row is None:
@@ -114,6 +145,7 @@ def cmd_init() -> None:
         CREATE TABLE IF NOT EXISTS tasks (
           id TEXT PRIMARY KEY, title TEXT, state TEXT, branch TEXT,
           review_iters INTEGER DEFAULT 0, accept_rejects INTEGER DEFAULT 0,
+          reviewed_iter INTEGER DEFAULT 0,
           budget_usd REAL, spent_usd REAL DEFAULT 0,
           created_at TEXT, updated_at TEXT
         );
@@ -193,6 +225,25 @@ def cmd_advance(task_id: str) -> None:
     elif state == "review":
         meta = frontmatter(tdir / "REVIEW.md")
         status = meta.get("status")
+        if status not in REVIEW_VERDICTS:
+            print(f"[{task_id}] REVIEW.md status={status} — жду вердикта")
+            return
+
+        iteration = fresh_verdict_iteration(meta, t["reviewed_iter"])
+        if iteration is None:
+            detail = (
+                f"вердикт REVIEW.md (status={status}, "
+                f"iteration={meta.get('iteration', '—')}) уже учтён — "
+                f"жду новый прогон ревьювера с iteration: {t['reviewed_iter'] + 1}"
+            )
+            journal(conn, task_id, "fsm", "переход отклонён", detail)
+            print(f"[{task_id}] {detail}")
+            print(f"  дальше: artel.py run {task_id}  (прогон ревьювера)")
+            return
+        conn.execute("UPDATE tasks SET reviewed_iter=? WHERE id=?",
+                     (iteration, task_id))
+        conn.commit()
+
         if status == "approved":
             set_state(conn, task_id, "acceptance", "fsm",
                       "ревью пройдено — приёмка Оператором (по критериям SPEC)")
@@ -208,8 +259,6 @@ def cmd_advance(task_id: str) -> None:
                           f"замечания ревью, итерация {iters}")
         elif status == "escalate":
             set_state(conn, task_id, "escalated", "fsm", "эскалация от ревьювера")
-        else:
-            print(f"[{task_id}] REVIEW.md status={status} — жду вердикта")
 
     elif state == "in_dev":
         # разработчик закончил: PLAN ready и ветка запушена -> в ревью
@@ -293,7 +342,8 @@ def cmd_run(task_id: str) -> None:
             f"diff (git diff main...{t['branch']}).\n"
             f"Проведи обе фазы review-checklist (гейт плана + ревью MR) и "
             f"заполни {task_ref}/REVIEW.md по templates/REVIEW.md "
-            f"(iteration: {t['review_iters'] + 1}). Код НЕ правь — только "
+            # номер, которого ждёт FSM: вердикт с прежним iteration он уже учёл
+            f"(iteration: {t['reviewed_iter'] + 1}). Код НЕ правь — только "
             f"REVIEW.md в ветке задачи."
         )
     prompt = f"{mission}\n\n--- СКИЛЫ РОЛИ ---\n\n{skills}"
