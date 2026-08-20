@@ -14,6 +14,11 @@
 агент — в тот шаг, на котором он упал (см. escalated_from): чинить надо шаг,
 а не откатывать готовую работу в разработку.
 
+Бюджет задачи — жёсткий потолок: стоимость каждого запуска агента снимается
+с финального события потока CLI и копится в spent_usd. На 70% бюджета —
+предупреждение, на 100% — escalated и отказ запускать агента, пока Оператор
+не поднимет потолок (`budget <id> <usd>`) или не закроет задачу (`kill`).
+
 Вердикт ревьювера учитывается конечным автоматом ровно один раз: после
 возврата задачи в in_dev переход review -> acceptance требует нового
 REVIEW.md (iteration больше уже учтённого, см. fresh_verdict_iteration).
@@ -23,9 +28,11 @@ REVIEW.md (iteration больше уже учтённого, см. fresh_verdict
 
 Команды:
   init | new "<название>" | status | show <id> | advance <id> |
-  run <id> | approve <id> | reject <id> "<причина>" | kill <id> | log <id>
+  run <id> | approve <id> | reject <id> "<причина>" | kill <id> | log <id> |
+  budget <id> <usd>
 """
 import json
+import math
 import re
 import sqlite3
 import subprocess
@@ -50,8 +57,14 @@ RETRY_BACKOFF_SEC = 5
 LOG_TAIL_LINES = 15
 LOG_TAIL_CHARS = 1000
 DEFAULT_BUDGET_USD = 5.0
+# Бюджет — жёсткий лимит с алертом на 70% (docs/design.md §6, §7).
+BUDGET_ALERT_RATIO = 0.7
 LIMIT_REVIEW_ITERS = 3
 LIMIT_ACCEPT_REJECTS = 1
+
+# Счётчики usage финального события потока: их сумма и есть «токенов за шаг».
+USAGE_TOKEN_KEYS = ("input_tokens", "output_tokens",
+                    "cache_creation_input_tokens", "cache_read_input_tokens")
 
 # Статусы REVIEW.md, которые FSM отрабатывает как вердикт ревьювера.
 REVIEW_VERDICTS = ("approved", "changes_requested", "escalate")
@@ -229,9 +242,74 @@ def render_agent_line(raw_line: str) -> str:
     return ""
 
 
-def tee_lines(stream, log) -> None:
-    """Строки процесса — в консоль и, если он открыт, в лог. По одной, сразу."""
+def json_number(value) -> float | None:
+    """Число из JSON или None. bool — не число: `True` не стоит доллар."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    return float(value) if math.isfinite(value) else None
+
+
+def cli_number(raw: str) -> float | None:
+    """Число из аргумента CLI; запятая как разделитель тоже считается."""
+    try:
+        value = float(raw.replace(",", ".").strip())
+    except (AttributeError, ValueError):
+        return None
+    # float() принимает 'nan' и 'inf' — потолком ни то, ни другое не работает.
+    return value if math.isfinite(value) else None
+
+
+def step_tokens(usage) -> int | None:
+    """Сумма счётчиков usage; None, если нет ни одного — токены необязательны."""
+    if not isinstance(usage, dict):
+        return None
+    counts = [usage[k] for k in USAGE_TOKEN_KEYS
+              if isinstance(usage.get(k), int) and not isinstance(usage[k], bool)]
+    return sum(counts) if counts else None
+
+
+def parse_cost_event(raw_line: str) -> dict | None:
+    """Стоимость запуска из финального события потока, иначе None.
+
+    Поток `--output-format stream-json` заканчивается событием
+    `type: result` с итоговой стоимостью запуска и usage. В файл лога оно
+    не попадает (`render_agent_line` гасит служебные события), поэтому
+    стоимость снимается прямо с потока перекачкой.
+
+    Всё, что не разобралось — чужой формат, поле не число, отрицательная
+    цена, — это None: по SPEC неизвлечённая стоимость не проваливает шаг.
+    """
+    if not raw_line.lstrip().startswith("{"):
+        return None
+    try:
+        event = json.loads(raw_line)
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(event, dict) or event.get("type") != "result":
+        return None
+    usd = json_number(event.get("total_cost_usd"))
+    if usd is None or usd < 0:
+        return None
+    return {"usd": usd, "tokens": step_tokens(event.get("usage"))}
+
+
+def cost_note(cost: dict | None) -> str:
+    """Стоимость шага для журнала и консоли; пустая строка — не извлеклась."""
+    if cost is None:
+        return ""
+    note = f"стоимость ${cost['usd']:.4f}"
+    return f"{note}, токенов {cost['tokens']}" if cost["tokens"] is not None else note
+
+
+def tee_lines(stream, log, sink=None) -> None:
+    """Строки процесса — в консоль и, если он открыт, в лог. По одной, сразу.
+
+    `sink` получает сырую строку до отрисовки: служебные события (в них
+    стоимость шага) до консоли и лога не доходят.
+    """
     for raw_line in stream:
+        if sink is not None:
+            sink(raw_line)
         line = render_agent_line(raw_line)
         if not line:
             continue
@@ -241,7 +319,7 @@ def tee_lines(stream, log) -> None:
             log.write(line)
 
 
-def stream_to_log(stream, log_path: Path) -> None:
+def stream_to_log(stream, log_path: Path, sink=None) -> None:
     """Качает вывод процесса в консоль и в лог-файл.
 
     Построчная буферизация обязательна: с ней Оператор видит работу шага
@@ -252,10 +330,11 @@ def stream_to_log(stream, log_path: Path) -> None:
     except OSError:
         # Пайп дочитываем даже без лога: перестать читать — значит подвесить
         # агента на записи в переполненный пайп. О сбое узнает cmd_run.
-        tee_lines(stream, None)
+        # Стоимость собираем и здесь: деньги потрачены независимо от лога.
+        tee_lines(stream, None, sink)
         raise
     with log:
-        tee_lines(stream, log)
+        tee_lines(stream, log, sink)
 
 
 class OutputPump(threading.Thread):
@@ -271,10 +350,17 @@ class OutputPump(threading.Thread):
         self.stream = stream
         self.log_path = log_path
         self.error: Exception | None = None
+        self.cost: dict | None = None
+
+    def catch_cost(self, raw_line: str) -> None:
+        """Запоминает стоимость из события потока: последнее — итог запуска."""
+        cost = parse_cost_event(raw_line)
+        if cost is not None:
+            self.cost = cost
 
     def run(self) -> None:
         try:
-            stream_to_log(self.stream, self.log_path)
+            stream_to_log(self.stream, self.log_path, self.catch_cost)
         except Exception as exc:  # noqa: BLE001 — сбой лога не роняет шаг
             self.error = exc
 
@@ -468,6 +554,11 @@ def cmd_run(task_id: str) -> None:
     """Запуск агента текущего шага (claude CLI, headless)."""
     conn = db()
     t = get_task(conn, task_id)
+    # Бюджет проверяем до всего остального: потраченные деньги не зависят от
+    # состояния задачи, а из escalated Оператор её вернуть уже мог.
+    blocked = budget_block(t)
+    if blocked is not None:
+        sys.exit(blocked)
     role = STATE_ROLE.get(t["state"])
     if role is None:
         sys.exit(f"[{task_id}] в состоянии {t['state']} агент не запускается")
@@ -503,6 +594,10 @@ def cmd_run(task_id: str) -> None:
     reason = ""
     for attempt in range(1, AGENT_ATTEMPTS + 1):
         outcome, reason = run_agent_once(conn, task_id, role, prompt, attempt)
+        # Потолок проверяем после каждой попытки, до решения о ретрае: иначе
+        # три попытки подряд потратят бюджет, исчерпанный ещё первой.
+        if enforce_budget(conn, task_id, t["state"]):
+            return
         if outcome != "failed":
             return
         if attempt < AGENT_ATTEMPTS:
@@ -568,15 +663,20 @@ def run_agent_once(conn, task_id: str, role: str, prompt: str,
         timed_out = True
 
     close_pump(conn, task_id, role, pump, proc)
+    # Деньги сжигает любая попытка, а не только успешная: провалившаяся стоит
+    # столько же, и не учитывать её значило бы обходить потолок ретраями.
+    spent = charge_step(conn, task_id, role, pump.cost, numbered)
+
     if timed_out:
         # «без ретрая» — чтобы читающий журнал не ждал попыток 2 и 3.
         journal(conn, task_id, role, "agent run TIMEOUT",
-                f"30 мин, {numbered} (без ретрая)")
+                f"30 мин, {numbered} (без ретрая){spent}")
         print(f"[{task_id}] таймаут шага (30 мин) — разберись и перезапусти run")
         return "timeout", "таймаут шага (30 мин)"
 
     if rc != 0:
-        reason = f"rc={rc}, {numbered}; хвост {log_path}:\n{log_tail(log_path)}"
+        reason = (f"rc={rc}, {numbered}{spent}; "
+                  f"хвост {log_path}:\n{log_tail(log_path)}")
         journal(conn, task_id, role, "agent run FAILED", reason)
         # В консоли хвост не повторяем: эти строки Оператор только что видел
         # вживую (перекачка пишет и в stdout, и в лог). В журнале он нужен —
@@ -585,10 +685,73 @@ def run_agent_once(conn, task_id: str, role: str, prompt: str,
               f"причина в {log_path}")
         return "failed", reason
 
-    journal(conn, task_id, role, "agent run finished", f"rc={rc}, {numbered}")
-    print(f"[{task_id}] {role} завершил (rc={rc}); "
+    journal(conn, task_id, role, "agent run finished", f"rc={rc}, {numbered}{spent}")
+    print(f"[{task_id}] {role} завершил (rc={rc}{spent}); "
           f"дальше: artel.py advance {task_id}")
     return "ok", ""
+
+
+def charge_step(conn, task_id: str, role: str, cost: dict | None,
+                numbered: str) -> str:
+    """Прибавляет стоимость попытки к `spent_usd`; возвращает её для журнала.
+
+    Стоимость не извлеклась — шаг не проваливаем (так решил SPEC): warning в
+    журнал, `spent_usd` не трогаем, дальше всё как раньше. Цена сбоя формата
+    события — потерянная метрика, а не остановленный конвейер.
+    """
+    if cost is None:
+        journal(conn, task_id, role, "agent cost UNKNOWN",
+                f"{numbered}: в выводе нет события со стоимостью — "
+                f"spent_usd не изменён")
+        return ""
+    conn.execute("UPDATE tasks SET spent_usd=spent_usd+?, updated_at=? WHERE id=?",
+                 (cost["usd"], now(), task_id))
+    conn.commit()
+    return f", {cost_note(cost)}"
+
+
+def budget_block(t: sqlite3.Row) -> str | None:
+    """Сообщение, почему `run` не стартует по бюджету, или None.
+
+    Потолок ≤ 0 (или NULL в БД прошлых версий) — потолка нет: иначе задача
+    без бюджета эскалировалась бы на первом же шаге при нулевом расходе.
+    """
+    budget, spent = t["budget_usd"] or 0.0, t["spent_usd"] or 0.0
+    if budget <= 0 or spent < budget:
+        return None
+    return (f"[{t['id']}] бюджет исчерпан: ${spent:.2f} из ${budget:.2f} — "
+            f"агент не запускается.\n"
+            f"  подними потолок: artel.py budget {t['id']} <usd>\n"
+            f"  или закрой задачу: artel.py kill {t['id']}")
+
+
+def enforce_budget(conn, task_id: str, state: str) -> bool:
+    """Реакция на потолок после шага: True — задача ушла в escalated.
+
+    Считает по свежим значениям из БД — стоимость шага туда уже прибавлена.
+    """
+    t = get_task(conn, task_id)
+    budget, spent = t["budget_usd"] or 0.0, t["spent_usd"] or 0.0
+    if budget <= 0:
+        return False
+
+    if spent >= budget:
+        # Точка возврата (T006): шаг мог отработать успешно, и возвращать
+        # задачу из escalated надо туда, где она стояла, а не в разработку.
+        conn.execute("UPDATE tasks SET escalated_from=? WHERE id=?",
+                     (state, task_id))
+        conn.commit()
+        set_state(conn, task_id, "escalated", "fsm",
+                  f"бюджет исчерпан: ${spent:.2f} из ${budget:.2f}")
+        print(f"  дальше: artel.py budget {task_id} <usd>  (или kill)")
+        return True
+
+    if spent >= budget * BUDGET_ALERT_RATIO:
+        detail = (f"израсходовано ${spent:.2f} из ${budget:.2f} — "
+                  f"больше {int(BUDGET_ALERT_RATIO * 100)}% бюджета")
+        journal(conn, task_id, "fsm", "бюджет: предупреждение", detail)
+        print(f"[{task_id}] ВНИМАНИЕ: {detail}")
+    return False
 
 
 def close_pump(conn, task_id: str, role: str, pump: OutputPump, proc) -> None:
@@ -612,6 +775,40 @@ def close_pump(conn, task_id: str, role: str, pump: OutputPump, proc) -> None:
         return
     journal(conn, task_id, role, "agent log INCOMPLETE", detail)
     print(f"[{task_id}] {detail}")
+
+
+def cmd_budget(task_id: str, raw_usd: str) -> None:
+    """Меняет потолок задачи — единственный способ снять блокировку по бюджету."""
+    conn = db()
+    t = get_task(conn, task_id)
+    new_budget = cli_number(raw_usd)
+    if new_budget is None or new_budget <= 0:
+        sys.exit(f"budget: '{raw_usd}' — не сумма в долларах "
+                 f"(пример: artel.py budget {task_id} 10)")
+
+    old, spent = t["budget_usd"] or 0.0, t["spent_usd"] or 0.0
+    conn.execute("UPDATE tasks SET budget_usd=?, updated_at=? WHERE id=?",
+                 (new_budget, now(), task_id))
+    conn.commit()
+    journal(conn, task_id, "operator", "бюджет изменён",
+            f"${old:.2f} -> ${new_budget:.2f}, израсходовано ${spent:.2f}")
+    print(f"[{task_id}] бюджет: ${old:.2f} -> ${new_budget:.2f} "
+          f"(израсходовано ${spent:.2f})")
+
+    if new_budget <= spent:
+        print(f"  этого мало: израсходовано ${spent:.2f} — run остаётся "
+              f"заблокирован")
+        return
+    # Задача с spent_usd >= прежнего потолка стояла заблокированной по бюджету
+    # (после пересечения потолка `run` не стартует, другой эскалации взяться
+    # неоткуда), и поднятие потолка эту блокировку снимает целиком: возвращаем
+    # задачу в шаг, на котором её застал потолок, как это делает approve.
+    if t["state"] == "escalated" and old > 0 and spent >= old:
+        back = t["escalated_from"] or "in_dev"
+        conn.execute("UPDATE tasks SET escalated_from=NULL WHERE id=?", (task_id,))
+        conn.commit()
+        set_state(conn, task_id, back, "operator", "бюджет поднят, продолжаем")
+        print(f"  дальше: artel.py run {task_id}")
 
 
 def cmd_kill(task_id: str) -> None:
@@ -646,6 +843,7 @@ def main() -> None:
         "reject": lambda: cmd_reject(rest[0], rest[1] if len(rest) > 1 else ""),
         "kill": lambda: cmd_kill(rest[0]),
         "log": lambda: cmd_log(rest[0]),
+        "budget": lambda: cmd_budget(rest[0], rest[1] if len(rest) > 1 else ""),
     }
     fn = table.get(cmd)
     if fn is None:
