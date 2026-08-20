@@ -19,6 +19,11 @@
 предупреждение, на 100% — escalated и отказ запускать агента, пока Оператор
 не поднимет потолок (`budget <id> <usd>`) или не закроет задачу (`kill`).
 
+`kill` не только переводит задачу в `killed`, но и убирает её хвосты в
+рабочем дереве: каталог `tasks/<id>/`, не попавший в main, и локальную
+ветку задачи, не смерженную в main. Всё убранное и всё оставленное —
+записью `уборка` в журнале. Логи прогонов не трогаются.
+
 Вердикт ревьювера учитывается конечным автоматом ровно один раз: после
 возврата задачи в in_dev переход review -> acceptance требует нового
 REVIEW.md (iteration больше уже учтённого, см. fresh_verdict_iteration).
@@ -34,6 +39,7 @@ REVIEW.md (iteration больше уже учтённого, см. fresh_verdict
 import json
 import math
 import re
+import shutil
 import sqlite3
 import subprocess
 import sys
@@ -61,6 +67,7 @@ DEFAULT_BUDGET_USD = 5.0
 BUDGET_ALERT_RATIO = 0.7
 LIMIT_REVIEW_ITERS = 3
 LIMIT_ACCEPT_REJECTS = 1
+MAIN_BRANCH = "main"
 
 # Счётчики usage финального события потока: их сумма и есть «токенов за шаг».
 USAGE_TOKEN_KEYS = ("input_tokens", "output_tokens",
@@ -811,10 +818,117 @@ def cmd_budget(task_id: str, raw_usd: str) -> None:
         print(f"  дальше: artel.py run {task_id}")
 
 
+def git(*args: str) -> subprocess.CompletedProcess:
+    """git в корне репозитория; исход разбирает вызывающий.
+
+    Ошибка запуска (git не установлен) — такой же ненулевой код возврата,
+    как и ошибка самой команды: уборке достаточно знать, что ответа нет.
+    """
+    try:
+        return subprocess.run(["git", *args], cwd=ROOT,
+                              capture_output=True, text=True)
+    except OSError as exc:
+        return subprocess.CompletedProcess(args, 1, "", str(exc))
+
+
+def current_branch() -> str:
+    """Ветка под HEAD; пустая строка — git не ответил."""
+    res = git("rev-parse", "--abbrev-ref", "HEAD")
+    return res.stdout.strip() if res.returncode == 0 else ""
+
+
+def branch_exists(branch: str) -> bool:
+    return git("rev-parse", "--verify", "--quiet",
+               f"refs/heads/{branch}").returncode == 0
+
+
+def branch_merged(branch: str) -> bool:
+    """Смержена ли ветка в main — тем же критерием, каким git защищает `-d`."""
+    res = git("branch", "--merged", MAIN_BRANCH, "--list", branch)
+    return res.returncode == 0 and bool(res.stdout.strip())
+
+
+def artifacts_in_main(task_id: str) -> bool | None:
+    """Есть ли каталог задачи в дереве main. None — git не ответил.
+
+    Достаточно самого факта наличия: артефакты задачи, убитой после
+    мержа, — история (docs/design.md §6), её не трогаем целиком.
+    """
+    res = git("ls-tree", "-r", "--name-only", MAIN_BRANCH, "--",
+              f"tasks/{task_id}")
+    if res.returncode != 0:
+        return None
+    return bool(res.stdout.strip())
+
+
+def drop_task_dir(task_id: str) -> str:
+    """Убирает каталог артефактов убитой задачи; строка — что вышло."""
+    tdir = TASKS / task_id
+    in_main = artifacts_in_main(task_id)
+    if in_main is None:
+        return f"каталог tasks/{task_id}/ оставлен: main не прочитан"
+    if in_main:
+        return f"каталог tasks/{task_id}/ оставлен: артефакты в main"
+    if not tdir.exists():
+        return f"каталога tasks/{task_id}/ нет"
+    try:
+        shutil.rmtree(tdir)
+    except OSError as exc:
+        return f"каталог tasks/{task_id}/ не удалён: {exc}"
+    return f"удалён каталог tasks/{task_id}/"
+
+
+def drop_task_branch(branch: str) -> str:
+    """Убирает локальную ветку убитой задачи; строка — что вышло."""
+    if not branch:
+        # Строка задачи из БД прошлых версий: ветка не записана — искать нечего.
+        return "ветка задачи не записана — нечего удалять"
+    if not branch_exists(branch):
+        return f"локальной ветки {branch} нет"
+    if branch_merged(branch):
+        return f"ветка {branch} оставлена: смержена в {MAIN_BRANCH}"
+    # -D, а не -d: удалить надо именно неслитую ветку, а на ней `-d` откажет.
+    res = git("branch", "-D", branch)
+    if res.returncode != 0:
+        return f"ветка {branch} не удалена: {res.stderr.strip()[:200]}"
+    return f"удалена ветка {branch}"
+
+
+def cleanup_killed_task(conn, task_id: str, branch: str) -> None:
+    """Убирает хвосты убитой задачи и перечисляет сделанное в журнале.
+
+    Уборка идёт после смены состояния и не может её отменить: kill switch
+    обязан срабатывать всегда. Поэтому любой невыясненный факт (git
+    промолчал, main не найден) — это «оставлено» со своей причиной, а не
+    исключение. Логи прогонов в .artel/logs/ не трогаются — история
+    наблюдаемости переживает задачу.
+    """
+    # Не `branch_exists`: кроме факта нужна причина — отсутствующий main и
+    # неустановленный git разбираются Оператором по-разному.
+    main = git("rev-parse", "--verify", "--quiet", f"refs/heads/{MAIN_BRANCH}")
+    if main.returncode != 0:
+        reason = main.stderr.strip()[:200] or f"ветки {MAIN_BRANCH} нет"
+        notes = [f"уборка пропущена: {reason} — сверять не с чем"]
+    elif current_branch() == branch:
+        # Агент работает в этом же дереве (cmd_run: cwd=ROOT), так что HEAD
+        # вполне может стоять на ветке задачи. Удалить её git не даст, а
+        # снести закоммиченный в неё каталог — оставить грязное дерево:
+        # ровно тот мусор, ради которого уборка и заводилась.
+        notes = [f"уборка пропущена: ветка {branch} сейчас checked out — "
+                 f"перейди на {MAIN_BRANCH} и повтори kill"]
+    else:
+        notes = [drop_task_dir(task_id), drop_task_branch(branch)]
+
+    journal(conn, task_id, "orchestrator", "уборка", "; ".join(notes))
+    for note in notes:
+        print(f"  {note}")
+
+
 def cmd_kill(task_id: str) -> None:
     conn = db()
-    get_task(conn, task_id)
+    t = get_task(conn, task_id)
     set_state(conn, task_id, "killed", "operator", "kill switch")
+    cleanup_killed_task(conn, task_id, t["branch"])
 
 
 def cmd_log(task_id: str) -> None:
