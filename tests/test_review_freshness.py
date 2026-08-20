@@ -11,6 +11,7 @@
 """
 import io
 import sqlite3
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -21,6 +22,12 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from orchestrator import artel  # noqa: E402
+
+
+def fake_git(*args: str) -> subprocess.CompletedProcess:
+    """Подмена `artel.git`: пустой ответ вместо обращения к репозиторию."""
+    return subprocess.CompletedProcess(list(args), 0, "", "")
+
 
 REVIEW_MD = """---
 task: {task}
@@ -81,6 +88,14 @@ class ReviewFreshnessScenarioTest(unittest.TestCase):
             patcher = mock.patch.object(artel, attr, value)
             patcher.start()
             self.addCleanup(patcher.stop)
+
+        # Ревью-пакет (T011) собирается настоящим git. В песочнице его нет —
+        # подменяем сам вызов: тестам этого модуля важен номер итерации в
+        # промпте, а не содержимое diff (оно проверяется отдельно,
+        # test_review_package.py).
+        git_patcher = mock.patch.object(artel, "git", fake_git)
+        git_patcher.start()
+        self.addCleanup(git_patcher.stop)
 
         self.tdir = artel.TASKS / self.TASK
         self.capture(artel.cmd_init)

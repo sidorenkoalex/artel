@@ -388,13 +388,18 @@ class CmdRunLoggingTest(TmpRootTest):
 
         self.assertTrue(proc.stdout.closed)
 
-    def test_missing_cli_prints_prompt_and_journals_skip(self):
+    def test_missing_cli_saves_prompt_to_a_file_and_journals_skip(self):
+        """Ручной прогон роли: промпт в файле, путь — в выводе и в журнале."""
         with mock.patch.object(artel.subprocess, "Popen", side_effect=FileNotFoundError):
             out = self.capture(artel.cmd_run, self.TASK)
 
-        self.assertIn("Роль: разработчик", out)
+        saved = list(artel.LOGS.glob("*.prompt.txt"))
+        self.assertEqual(len(saved), 1)
+        self.assertIn("Роль: разработчик", saved[0].read_text(encoding="utf-8"))
+        self.assertIn(str(saved[0]), out, "Оператор видит, где взять промпт")
+        self.assertNotIn("Роль: разработчик", out, "простыня не летит в терминал")
         self.assertEqual(self.journal_details("agent run SKIPPED"),
-                         ["claude CLI не найден"])
+                         [f"claude CLI не найден, промпт: {saved[0]}"])
 
     def test_timeout_kills_process_and_journals(self):
         proc = mock.Mock(stdout=FakeStream([]))

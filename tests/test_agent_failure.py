@@ -14,6 +14,7 @@ docs/invariants.md.
 """
 import io
 import sqlite3
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -24,6 +25,11 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from orchestrator import artel  # noqa: E402
+
+
+def fake_git(*args: str) -> subprocess.CompletedProcess:
+    """Подмена `artel.git`: пустой ответ вместо обращения к репозиторию."""
+    return subprocess.CompletedProcess(list(args), 0, "", "")
 
 
 class FakeStream:
@@ -132,6 +138,12 @@ class CmdRunFailureTest(TmpRootTest):
         patcher = mock.patch.object(artel.time, "sleep", self.pauses.append)
         patcher.start()
         self.addCleanup(patcher.stop)
+
+        # Шаг ревью собирает пакет настоящим git (T011); в песочнице
+        # репозитория нет, а этому модулю важен исход попыток агента, не diff.
+        git_patcher = mock.patch.object(artel, "git", fake_git)
+        git_patcher.start()
+        self.addCleanup(git_patcher.stop)
 
     def run_agent(self, *attempts) -> str:
         """attempts: (rc, строки вывода) — по одной паре на попытку."""
@@ -310,7 +322,11 @@ class CmdRunFailureTest(TmpRootTest):
         self.assertEqual(popen.call_count, 1, "повтор не создаст CLI")
         self.assertEqual(self.pauses, [])
         self.assertEqual(self.task_row()["state"], "in_dev")
-        self.assertIn("Роль: разработчик", out)
+        # Промпт для ручного прогона теперь в файле рядом с логом шага (T011).
+        saved = list(artel.LOGS.glob("*.prompt.txt"))
+        self.assertEqual(len(saved), 1)
+        self.assertIn(str(saved[0]), out)
+        self.assertIn("Роль: разработчик", saved[0].read_text(encoding="utf-8"))
 
 
 class MigrationTest(TmpRootTest):
