@@ -42,6 +42,7 @@ docs/adr/0002-integrity-principle.md, CLAUDE.md.
 | 15 | `kill` не изменяет main и не удаляет содержимое, попавшее в main | `test_invariants.KillKeepsMainIntactTest` | design §6 (артефакты остаются как история) |
 | 16 | История наблюдаемости переживает задачу: `.artel/logs/` уборка не трогает | `test_kill_cleanup.KillCleanupTest.test_run_logs_survive_the_kill` | design §7 |
 | 17 | Оценка влияния на систему — артефакт: PLAN без секции «Влияние на систему» не проходит guard | `test_invariants.GuardKeepsTheIntegritySectionTest` | ADR-0002, правило 1 |
+| 18 | Автоматизация механических команд не проходит гейты: `auto` не вызывает `approve`/`reject` и пути мимо гейта не имеет | `test_auto_cycle.AutoNeverPassesAGateTest` | design §4; tasks/T014/SPEC.md, требование 3 |
 
 ## На ревью — тестом не выражаются
 
