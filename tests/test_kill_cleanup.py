@@ -23,7 +23,8 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from orchestrator import artel  # noqa: E402
+from orchestrator import (agent_log, catalog, cleanup, config,  # noqa: E402
+                          gitcmd, store)
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
@@ -40,7 +41,7 @@ class TmpRepoTest(unittest.TestCase):
         # rev-parse` и Path сравниваются как строки.
         self.root = Path(tmp.name).resolve()
 
-        self.git("init", "-b", artel.MAIN_BRANCH)
+        self.git("init", "-b", config.MAIN_BRANCH)
         self.git("config", "user.email", "artel@example.invalid")
         self.git("config", "user.name", "artel tests")
         shutil.copytree(REPO_ROOT / "templates", self.root / "templates")
@@ -52,12 +53,12 @@ class TmpRepoTest(unittest.TestCase):
                             ("DB", self.root / ".artel" / "state.db"),
                             ("TASKS", self.root / "tasks"),
                             ("LOGS", self.root / ".artel" / "logs")):
-            patcher = mock.patch.object(artel, attr, value)
+            patcher = mock.patch.object(config, attr, value)
             patcher.start()
             self.addCleanup(patcher.stop)
 
-        self.capture(artel.cmd_init)
-        self.capture(artel.cmd_new, "Очистка хвостов задачи")
+        self.capture(catalog.cmd_init)
+        self.capture(catalog.cmd_new, "Очистка хвостов задачи")
         self.branch = self.task_row()["branch"]
 
     # ------------------------------------------------------------ утилиты
@@ -76,15 +77,15 @@ class TmpRepoTest(unittest.TestCase):
         return buf.getvalue()
 
     def task_row(self):
-        return artel.db().execute(
+        return store.db().execute(
             "SELECT * FROM tasks WHERE id=?", (self.TASK,)).fetchone()
 
     def task_dir(self) -> Path:
-        return artel.TASKS / self.TASK
+        return config.TASKS / self.TASK
 
     def cleanup_note(self) -> str:
         """Последняя запись журнала об уборке."""
-        rows = artel.db().execute(
+        rows = store.db().execute(
             "SELECT detail FROM steps WHERE task_id=? AND action='уборка'"
             " ORDER BY id", (self.TASK,)).fetchall()
         self.assertTrue(rows, "уборка не попала в журнал")
@@ -95,7 +96,7 @@ class TmpRepoTest(unittest.TestCase):
         self.git("checkout", "-b", self.branch)
         self.git("add", "-A")
         self.git("commit", "-m", f"{self.TASK}: SPEC")
-        self.git("checkout", artel.MAIN_BRANCH)
+        self.git("checkout", config.MAIN_BRANCH)
 
     def branches(self) -> list[str]:
         return self.git("branch", "--format=%(refname:short)").split()
@@ -108,7 +109,7 @@ class KillCleanupTest(TmpRepoTest):
         """Критерий приёмки 1: сценарий T002 — new, kill, чистое дерево."""
         self.assertTrue(self.task_dir().exists(), "new создал каталог задачи")
 
-        self.capture(artel.cmd_kill, self.TASK)
+        self.capture(cleanup.cmd_kill, self.TASK)
 
         self.assertFalse(self.task_dir().exists())
         self.assertEqual(self.git("status", "--porcelain"), "")
@@ -121,7 +122,7 @@ class KillCleanupTest(TmpRepoTest):
         self.task_dir().mkdir(parents=True, exist_ok=True)
         (self.task_dir() / "PLAN.md").write_text("черновик", encoding="utf-8")
 
-        self.capture(artel.cmd_kill, self.TASK)
+        self.capture(cleanup.cmd_kill, self.TASK)
 
         self.assertFalse(self.task_dir().exists())
         self.assertNotIn(self.branch, self.branches())
@@ -132,7 +133,7 @@ class KillCleanupTest(TmpRepoTest):
         self.commit_artifacts_in_branch()
         self.git("merge", "--no-ff", self.branch, "-m", "merge")
 
-        out = self.capture(artel.cmd_kill, self.TASK)
+        out = self.capture(cleanup.cmd_kill, self.TASK)
 
         self.assertTrue((self.task_dir() / "SPEC.md").exists())
         self.assertIn(self.branch, self.branches())
@@ -147,9 +148,9 @@ class KillCleanupTest(TmpRepoTest):
         (self.task_dir() / "PLAN.md").write_text("после мержа", encoding="utf-8")
         self.git("add", "-A")
         self.git("commit", "-m", f"{self.TASK}: PLAN")
-        self.git("checkout", artel.MAIN_BRANCH)
+        self.git("checkout", config.MAIN_BRANCH)
 
-        self.capture(artel.cmd_kill, self.TASK)
+        self.capture(cleanup.cmd_kill, self.TASK)
 
         self.assertTrue((self.task_dir() / "SPEC.md").exists(), "история в main")
         self.assertNotIn(self.branch, self.branches())
@@ -160,7 +161,7 @@ class KillCleanupTest(TmpRepoTest):
         self.git("add", "-A")
         self.git("commit", "-m", "T042: подобрал чужой каталог")
 
-        out = self.capture(artel.cmd_kill, self.TASK)
+        out = self.capture(cleanup.cmd_kill, self.TASK)
 
         self.assertTrue((self.task_dir() / "SPEC.md").exists())
         self.assertEqual(self.git("status", "--porcelain"), "",
@@ -172,7 +173,7 @@ class KillCleanupTest(TmpRepoTest):
         """Тот же риск без коммита: каталог задачи добавлен в индекс main."""
         self.git("add", "-A")
 
-        out = self.capture(artel.cmd_kill, self.TASK)
+        out = self.capture(cleanup.cmd_kill, self.TASK)
 
         self.assertTrue((self.task_dir() / "SPEC.md").exists())
         self.assertIn("отслеживается в main — сними его из индекса", out)
@@ -183,28 +184,28 @@ class KillCleanupTest(TmpRepoTest):
         self.task_dir().mkdir(parents=True, exist_ok=True)
         (self.task_dir() / "SPEC.md").write_text("хвост", encoding="utf-8")
 
-        self.capture(artel.cmd_kill, self.TASK)
+        self.capture(cleanup.cmd_kill, self.TASK)
 
         self.assertEqual(
             self.cleanup_note(),
             f"удалён каталог tasks/{self.TASK}/; удалена ветка {self.branch}")
-        self.assertIn("удалён каталог", self.capture(artel.cmd_log, self.TASK))
+        self.assertIn("удалён каталог", self.capture(catalog.cmd_log, self.TASK))
 
     def test_run_logs_survive_the_kill(self):
         """Требование 4: история наблюдаемости переживает задачу."""
-        log = artel.new_agent_log(self.TASK, "developer")
+        log = agent_log.new_agent_log(self.TASK, "developer")
         log.write_text("шаг разработчика\n", encoding="utf-8")
 
-        self.capture(artel.cmd_kill, self.TASK)
+        self.capture(cleanup.cmd_kill, self.TASK)
 
         self.assertTrue(log.exists())
         self.assertEqual(log.read_text(encoding="utf-8"), "шаг разработчика\n")
 
     def test_repeated_kill_finds_nothing_and_does_not_fail(self):
         """Требование 3: повтор — это пустая уборка, а не падение."""
-        self.capture(artel.cmd_kill, self.TASK)
+        self.capture(cleanup.cmd_kill, self.TASK)
 
-        out = self.capture(artel.cmd_kill, self.TASK)
+        out = self.capture(cleanup.cmd_kill, self.TASK)
 
         self.assertEqual(self.task_row()["state"], "killed")
         self.assertIn(f"каталога tasks/{self.TASK}/ нет", out)
@@ -212,7 +213,7 @@ class KillCleanupTest(TmpRepoTest):
 
     def test_unknown_task_is_reported(self):
         with self.assertRaises(SystemExit) as exit_:
-            self.capture(artel.cmd_kill, "T404")
+            self.capture(cleanup.cmd_kill, "T404")
 
         self.assertIn("не найдена", str(exit_.exception))
 
@@ -220,7 +221,7 @@ class KillCleanupTest(TmpRepoTest):
         self.commit_artifacts_in_branch()
         self.git("checkout", self.branch)
 
-        out = self.capture(artel.cmd_kill, self.TASK)
+        out = self.capture(cleanup.cmd_kill, self.TASK)
 
         self.assertTrue((self.task_dir() / "SPEC.md").exists(),
                         "снести закоммиченный каталог — оставить грязное дерево")
@@ -228,8 +229,8 @@ class KillCleanupTest(TmpRepoTest):
         self.assertIn("перейди на main и повтори kill", out)
         self.assertIn("checked out", self.cleanup_note())
 
-        self.git("checkout", artel.MAIN_BRANCH)
-        self.capture(artel.cmd_kill, self.TASK)
+        self.git("checkout", config.MAIN_BRANCH)
+        self.capture(cleanup.cmd_kill, self.TASK)
 
         self.assertNotIn(self.branch, self.branches(), "повтор доводит уборку")
         self.assertFalse(self.task_dir().exists())
@@ -240,16 +241,16 @@ class CleanupWithoutGitTest(TmpRepoTest):
 
     def test_missing_main_stops_the_cleanup(self):
         self.git("checkout", "-b", "other")
-        self.git("branch", "-D", artel.MAIN_BRANCH)
+        self.git("branch", "-D", config.MAIN_BRANCH)
 
-        out = self.capture(artel.cmd_kill, self.TASK)
+        out = self.capture(cleanup.cmd_kill, self.TASK)
 
         self.assertTrue(self.task_dir().exists(), "сверять не с чем — не трогаем")
         self.assertIn("уборка пропущена: ветки main нет", out)
 
     def test_unreadable_main_tree_keeps_the_dir(self):
         """main на месте, но `ls-tree` ответил ошибкой: сверять по-прежнему не с чем."""
-        out = self.capture_with_failing_git("ls-tree", artel.cmd_kill, self.TASK)
+        out = self.capture_with_failing_git("ls-tree", cleanup.cmd_kill, self.TASK)
 
         self.assertTrue(self.task_dir().exists())
         self.assertIn(f"каталог tasks/{self.TASK}/ оставлен: main не прочитан",
@@ -257,7 +258,7 @@ class CleanupWithoutGitTest(TmpRepoTest):
 
     def test_unreadable_index_keeps_the_dir(self):
         """`ls-files` промолчал — отслеживается каталог или нет, неизвестно."""
-        out = self.capture_with_failing_git("ls-files", artel.cmd_kill, self.TASK)
+        out = self.capture_with_failing_git("ls-files", cleanup.cmd_kill, self.TASK)
 
         self.assertTrue(self.task_dir().exists())
         self.assertIn(f"каталог tasks/{self.TASK}/ оставлен: индекс не прочитан",
@@ -265,7 +266,7 @@ class CleanupWithoutGitTest(TmpRepoTest):
 
     def capture_with_failing_git(self, subcommand: str, fn, *args) -> str:
         """Прогон, в котором одна git-подкоманда отвечает ошибкой."""
-        real_git = artel.git
+        real_git = gitcmd.git
 
         def flaky(*git_args: str):
             if git_args and git_args[0] == subcommand:
@@ -273,13 +274,13 @@ class CleanupWithoutGitTest(TmpRepoTest):
                     git_args, 128, "", f"fatal: {subcommand} не отвечает")
             return real_git(*git_args)
 
-        with mock.patch.object(artel, "git", flaky):
+        with mock.patch.object(gitcmd, "git", flaky):
             return self.capture(fn, *args)
 
     def test_unavailable_git_stops_the_cleanup(self):
-        with mock.patch.object(artel.subprocess, "run",
+        with mock.patch.object(gitcmd.subprocess, "run",
                                side_effect=OSError("git не найден")):
-            out = self.capture(artel.cmd_kill, self.TASK)
+            out = self.capture(cleanup.cmd_kill, self.TASK)
 
         self.assertTrue(self.task_dir().exists())
         self.assertIn("git не найден", out, "в журнале видно настоящую причину")

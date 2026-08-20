@@ -37,7 +37,7 @@ docs/adr/0002-integrity-principle.md, CLAUDE.md.
 | 10 | Поднять потолок может только Оператор командой `budget` | `test_invariants.ExhaustedBudgetIsNotBypassableTest.test_only_the_operator_ceiling_unblocks_the_run`; `test_step_cost.CmdBudgetTest` | design §4 («увеличение лимитов — manual всегда») |
 | 11 | Журнал шагов пишется всегда: запуск, исход, стоимость, сбой лога, уборка | `test_agent_log.CmdRunLoggingTest`; `test_step_cost.CmdRunCostTest.test_step_cost_lands_in_spent_and_journal`; `test_kill_cleanup.KillCleanupTest.test_cleanup_is_listed_in_the_journal` | README 5; design §6, §7 |
 | 12 | git merge выполняет только `approve` из merge_gate — другого пути в системе нет | `test_invariants.MergeOnlyFromMergeGateTest` | design §2, §4; CLAUDE.md |
-| 13 | Переход review → acceptance невозможен без свежего вердикта ревьювера | `test_invariants.FreshVerdictGuardsAcceptanceTest`; `test_review_freshness.FreshVerdictIterationTest` | design §4; artel.py `fresh_verdict_iteration` |
+| 13 | Переход review → acceptance невозможен без свежего вердикта ревьювера | `test_invariants.FreshVerdictGuardsAcceptanceTest`; `test_review_freshness.FreshVerdictIterationTest` | design §4; artifacts.py `fresh_verdict_iteration` |
 | 14 | Kill switch срабатывает всегда: состояние меняется, что бы ни ответили git и ФС | `test_kill_cleanup.CleanupWithoutGitTest` | design §6 |
 | 15 | `kill` не изменяет main и не удаляет содержимое, попавшее в main | `test_invariants.KillKeepsMainIntactTest` | design §6 (артефакты остаются как история) |
 | 16 | История наблюдаемости переживает задачу: `.artel/logs/` уборка не трогает | `test_kill_cleanup.KillCleanupTest.test_run_logs_survive_the_kill` | design §7 |
@@ -59,7 +59,7 @@ docs/adr/0002-integrity-principle.md, CLAUDE.md.
 | Разработчик не мержит, ревьювер не правит код | В Фазе 0 один токен на все роли (ADR-0001), разделение прав существует в промптах; enforcement — branch protection и отдельные PAT | ревью, CI, ADR-0001 |
 | Конфиги системы (gates.yaml, roles.yaml, .github/, templates/, skills/) меняет только Оператор | Проверка живёт в CI (job `protected-paths`), а не в коде оркестратора; в Фазе 0 деградирует до предупреждения — один аккаунт | CI, Оператор |
 | Guards неотключаемы: смержить с красным CI нельзя | Свойство branch protection и настроек репозитория, вне кода | Оператор, настройки репо |
-| Ручной гейт не проходится по таймауту: `awaiting-approval` шлёт напоминание, но никогда не подтверждает (design §6) | У FSM Фазы 0 нет часов и фонового процесса: `advance` времени не смотрит, автопроходить нечему. Подмена `artel.now` в тесте дала бы видимость покрытия, а не покрытие. Кодируется вместе с напоминаниями | ревью, Оператор |
+| Ручной гейт не проходится по таймауту: `awaiting-approval` шлёт напоминание, но никогда не подтверждает (design §6) | У FSM Фазы 0 нет часов и фонового процесса: `advance` времени не смотрит, автопроходить нечему. Подмена `store.now` в тесте дала бы видимость покрытия, а не покрытие. Кодируется вместе с напоминаниями | ревью, Оператор |
 | Policy проверяет оркестратор, а не агент | Policy-движка в Фазе 0 нет: gates.yaml справочный, все гейты захардкожены ручными. Кодируется вместе с движком в MVP | ревью, дизайн |
 | Шаг идемпотентен, агент эфемерен, чекпоинт = последний артефакт в git | Проверяется реальным прогоном (перезапуск шага с чистого контейнера), не юнитом | Оператор, прогон конвейера |
 | Прод-креды только в пайплайне; песочница агента без сети наружу | Вне объёма Фазы 0 (нет деплоя и песочницы в CI) | Оператор |

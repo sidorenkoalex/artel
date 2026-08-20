@@ -1,0 +1,92 @@
+"""Пути и константы оркестратора — один адрес на весь пакет.
+
+Модули обращаются к ним через модуль (`config.TASKS`), а не именем
+(`from .config import TASKS`): импорт по имени копирует значение, и подмена
+пути или лимита в тесте до такого модуля уже не доходит.
+"""
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parent.parent
+DB = ROOT / ".artel" / "state.db"
+TASKS = ROOT / "tasks"
+LOGS = ROOT / ".artel" / "logs"
+
+AGENT_TIMEOUT_SEC = 1800
+PUMP_JOIN_TIMEOUT_SEC = 10
+# Провал шага по коду возврата ретраится с бэкоффом; ретраи не считаются
+# итерациями ревью (их двигает только вердикт REVIEW.md в cmd_advance).
+AGENT_RETRIES = 2
+AGENT_ATTEMPTS = AGENT_RETRIES + 1
+RETRY_BACKOFF_SEC = 5
+LOG_TAIL_LINES = 15
+LOG_TAIL_CHARS = 1000
+DEFAULT_BUDGET_USD = 50.0  # решение Оператора 20.08.2026: $10 буксовал на T010/T011 (многоитерационные циклы)
+# Бюджет — жёсткий лимит с алертом на 70% (docs/design.md §6, §7).
+BUDGET_ALERT_RATIO = 0.7
+# Кто задал потолок задачи (tasks.budget_source). NULL — никто, стоит дефолт.
+BUDGET_SOURCE_SPEC = "spec"
+BUDGET_SOURCE_OPERATOR = "operator"
+LIMIT_REVIEW_ITERS = 3
+LIMIT_ACCEPT_REJECTS = 1
+# Потолок шагов (run+advance) за один вызов `auto` — защита от бесконечного
+# цикла. Ограничивается длина вызова, а не «топтание на месте»: шаг, не
+# сдвинувший состояние, законен (агент не довёл PLAN до ready — следующий
+# прогон продолжит). Достигнутый лимит не эскалирует: задача остаётся там,
+# где стояла, а Оператор смотрит логи или зовёт `auto` снова.
+AUTO_MAX_STEPS = 30
+# Пока покрывает только уборку при kill: мерж в cmd_approve остался на
+# литерале "main" — чужая зона задачи, перевод отдельным MR.
+MAIN_BRANCH = "main"
+# Потолок diff в ревью-пакете. Это защита контекста шага, а не проверка
+# размера MR: изменение больше потолка ревьювер и так обязан отметить
+# замечанием, а усечение ему об этом прямо говорит (T011).
+REVIEW_DIFF_MAX_LINES = 4000
+# Второй потолок — байтовый, на весь пакет. Строк мало, а байт много —
+# обычная картина для сгенерированного файла (бандл, lock, base64): потолок
+# строк такой diff пропускает целиком, а промпт уходит в argv, где предел
+# ядра (ARG_MAX, здесь ~1 МБ) считается в байтах. Без этой отсечки шаг
+# падал бы не ревью, а OSError(E2BIG) мимо обработки исхода. Значение
+# оставляет запас на миссию, скилы и окружение и при этом выше обычного
+# diff в 4000 строк — то есть для нормальной правки связывает потолок строк.
+REVIEW_PACKAGE_MAX_BYTES = 400_000
+
+# Счётчики usage финального события потока: их сумма и есть «токенов за шаг».
+USAGE_TOKEN_KEYS = ("input_tokens", "output_tokens",
+                    "cache_creation_input_tokens", "cache_read_input_tokens")
+
+# Статусы REVIEW.md, которые FSM отрабатывает как вердикт ревьювера.
+REVIEW_VERDICTS = ("approved", "changes_requested", "escalate")
+
+# Синхронизировано с roles.yaml (Фаза 0: без yaml-парсера).
+ROLE_SKILLS = {
+    "developer": ["conventions-core", "escalation-rules", "coding-standards"],
+    "reviewer": ["conventions-core", "escalation-rules", "review-checklist"],
+}
+STATE_ROLE = {"in_dev": "developer", "review": "reviewer"}
+
+# Состояния, на которых останавливается `auto`: причина остановки и следующая
+# команда Оператора. Ключи покрывают все состояния FSM вне STATE_ROLE — цикл
+# выходит именно в них. Подсказка только называет команду: approve и reject
+# на гейтах нажимает Оператор, auto их не вызывает (docs/invariants.md 18).
+AUTO_STOP = {
+    "spec_writing": ("SPEC ещё пишется",
+                     "доведи SPEC.md до status: ready, затем artel.py advance {id}"),
+    "spec_gate": ("гейт SPEC — решение Оператора",
+                  "прочитай SPEC и: artel.py approve {id}"),
+    "acceptance": ("приёмка — решение Оператора",
+                   "проведи приёмку по критериям SPEC: artel.py approve {id} "
+                   "или artel.py reject {id} \"причина\""),
+    "merge_gate": ("гейт merge — решение Оператора",
+                   "artel.py approve {id}  (выполнит merge)"),
+    "escalated": ("эскалация — нужен Оператор",
+                  "разберись: artel.py log {id}, затем artel.py approve {id}"),
+    "done": ("задача закрыта", "ничего не требуется"),
+    "killed": ("задача снята", "ничего не требуется"),
+}
+
+# Эскалаций по существу две, и команда у них разная. Самая частая внутри цикла —
+# исчерпанный потолок (enforce_budget); approve там увёл бы Оператора по кругу:
+# задача вернулась бы в работу, а следующий run снова отказался бы стартовать.
+AUTO_STOP_BUDGET = ("эскалация по бюджету — нужен Оператор",
+                    "подними потолок: artel.py budget {id} <usd>  "
+                    "(или artel.py kill {id})")
