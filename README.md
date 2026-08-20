@@ -44,6 +44,7 @@ python3 orchestrator/artel.py init
 python3 orchestrator/artel.py new "Краткое название задачи"
 # → создаст tasks/<id>/ из шаблонов; заполни SPEC.md и:
 python3 orchestrator/artel.py approve <id>        # гейт SPEC
+python3 orchestrator/artel.py auto <id>           # цикл до ближайшего гейта
 python3 orchestrator/artel.py status
 ```
 

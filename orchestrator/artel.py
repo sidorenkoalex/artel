@@ -44,10 +44,17 @@ REVIEW.md (iteration больше уже учтённого, см. fresh_verdict
 Фаза 0: гейт плана (фаза A review-checklist) выполняется ревьювером в одном
 прогоне с ревью MR. Отдельное состояние plan_review появится в MVP.
 
+`auto <id>` избавляет Оператора от механического чередования `run` и
+`advance`: цикл зовёт те же две команды, пока задача в агентском состоянии
+(in_dev, review), и останавливается на первом месте, где нужен человек —
+ручной гейт, эскалация, done/killed, отказ `run` по бюджету или лимит
+AUTO_MAX_STEPS шагов за вызов. Решений auto не принимает: approve и reject
+остаются ручными (§4), пути мимо гейта у цикла нет.
+
 Команды:
   init | new "<название>" | status | show <id> | advance <id> |
-  run <id> | approve <id> | reject <id> "<причина>" | kill <id> | log <id> |
-  budget <id> <usd>
+  run <id> | auto <id> | approve <id> | reject <id> "<причина>" |
+  kill <id> | log <id> | budget <id> <usd>
 """
 import json
 import math
@@ -83,6 +90,12 @@ BUDGET_SOURCE_SPEC = "spec"
 BUDGET_SOURCE_OPERATOR = "operator"
 LIMIT_REVIEW_ITERS = 3
 LIMIT_ACCEPT_REJECTS = 1
+# Потолок шагов (run+advance) за один вызов `auto` — защита от бесконечного
+# цикла. Ограничивается длина вызова, а не «топтание на месте»: шаг, не
+# сдвинувший состояние, законен (агент не довёл PLAN до ready — следующий
+# прогон продолжит). Достигнутый лимит не эскалирует: задача остаётся там,
+# где стояла, а Оператор смотрит логи или зовёт `auto` снова.
+AUTO_MAX_STEPS = 30
 # Пока покрывает только уборку при kill: мерж в cmd_approve остался на
 # литерале "main" — чужая зона задачи, перевод отдельным MR.
 MAIN_BRANCH = "main"
@@ -112,6 +125,26 @@ ROLE_SKILLS = {
     "reviewer": ["conventions-core", "escalation-rules", "review-checklist"],
 }
 STATE_ROLE = {"in_dev": "developer", "review": "reviewer"}
+
+# Состояния, на которых останавливается `auto`: причина остановки и следующая
+# команда Оператора. Ключи покрывают все состояния FSM вне STATE_ROLE — цикл
+# выходит именно в них. Подсказка только называет команду: approve и reject
+# на гейтах нажимает Оператор, auto их не вызывает (docs/invariants.md 18).
+AUTO_STOP = {
+    "spec_writing": ("SPEC ещё пишется",
+                     "доведи SPEC.md до status: ready, затем artel.py advance {id}"),
+    "spec_gate": ("гейт SPEC — решение Оператора",
+                  "прочитай SPEC и: artel.py approve {id}"),
+    "acceptance": ("приёмка — решение Оператора",
+                   "проведи приёмку по критериям SPEC: artel.py approve {id} "
+                   "или artel.py reject {id} \"причина\""),
+    "merge_gate": ("гейт merge — решение Оператора",
+                   "artel.py approve {id}  (выполнит merge)"),
+    "escalated": ("эскалация — нужен Оператор",
+                  "разберись: artel.py log {id}, затем artel.py approve {id}"),
+    "done": ("задача закрыта", "ничего не требуется"),
+    "killed": ("задача снята", "ничего не требуется"),
+}
 
 # ГОСТ-подобная транслитерация: только stdlib, без внешних зависимостей.
 # ъ/ь пропускаются; ё → yo; щ → sch; ю → yu; я → ya.
@@ -230,6 +263,21 @@ def new_agent_log(task_id: str, role: str) -> Path:
     path = LOGS / f"{prefix}{max(used, default=0) + 1}.log"
     path.touch()
     return path
+
+
+def last_agent_log(task_id: str, role: str) -> str:
+    """Лог последнего прогона роли строкой; '—', если прогонов не было.
+
+    Нужен циклу `auto`: `cmd_run` путь наружу не отдаёт, а сводка шага без
+    ссылки на лог бесполезна. «Последний» — с наибольшим номером, который
+    выдал `new_agent_log`, а не с самым свежим mtime: гранулярность времени
+    на ФС путала бы соседние попытки одного шага.
+    """
+    prefix = f"{task_id}-{role}-"
+    numbered = [(int(p.stem[len(prefix):]), p)
+                for p in LOGS.glob(f"{prefix}*.log")
+                if p.stem[len(prefix):].isdigit()]
+    return str(max(numbered)[1]) if numbered else "—"
 
 
 def log_tail(path: Path) -> str:
@@ -1105,6 +1153,73 @@ def close_pump(conn, task_id: str, role: str, pump: OutputPump, proc) -> None:
     print(f"[{task_id}] {detail}")
 
 
+def auto_stop(conn, task_id: str, state: str, reason: str, hint: str) -> None:
+    """Остановка цикла: запись в журнал и итог Оператору (требования 2, 5)."""
+    journal(conn, task_id, "operator", "auto остановлен", f"{state}: {reason}")
+    print(f"[{task_id}] auto остановлен: {reason}")
+    print(f"  состояние: {state}")
+    print(f"  дальше: {hint}")
+
+
+def cmd_auto(task_id: str) -> None:
+    """Цикл run+advance, пока в шаге работает агент, — до места, где нужен человек.
+
+    Механику шага команда не дублирует: внутри те же `cmd_run` и
+    `cmd_advance`, которые Оператор зовёт руками, — бюджет, ретраи, журнал
+    и вердикты FSM остаются целиком в них. Своё у цикла одно — условие
+    выхода: работаем, пока состояние есть в STATE_ROLE, останавливаемся на
+    первом же состоянии вне его. Так новое агентское состояние (MVP,
+    plan_review) подхватится само, а новое ручное — само остановит.
+
+    Решений auto не принимает: approve и reject остаются за Оператором —
+    ручные гейты обходить нечем (docs/design.md §4, docs/invariants.md 18).
+    """
+    conn = db()
+    state = get_task(conn, task_id)["state"]
+    journal(conn, task_id, "operator", "auto старт",
+            f"состояние {state}, лимит {AUTO_MAX_STEPS} шагов")
+    print(f"[{task_id}] auto: старт из {state}, "
+          f"лимит {AUTO_MAX_STEPS} шагов за вызов")
+
+    steps = 0
+    while state in STATE_ROLE:
+        if steps >= AUTO_MAX_STEPS:
+            auto_stop(conn, task_id, state,
+                      f"лимит {AUTO_MAX_STEPS} шагов за вызов исчерпан",
+                      f"artel.py log {task_id} (что происходит), "
+                      f"затем artel.py auto {task_id} — продолжит отсюда")
+            return
+        steps += 1
+        role, before = STATE_ROLE[state], state
+
+        try:
+            cmd_run(task_id)
+        except SystemExit as exc:
+            # Отказ стартовать `cmd_run` сообщает единственным способом —
+            # sys.exit с текстом (исчерпанный бюджет, budget_block). В цикле
+            # текст печатаем сами: пойманный SystemExit нигде не покажется.
+            print(str(exc))
+            auto_stop(conn, task_id, state, "run отказался стартовать",
+                      f"artel.py budget {task_id} <usd> или artel.py kill {task_id}")
+            return
+
+        # Состояние перечитываем до advance: упавший агент и исчерпанный
+        # потолок уводят задачу в escalated изнутри run, и advance оттуда
+        # только напечатал бы, что двигать нечего.
+        state = get_task(conn, task_id)["state"]
+        if state in STATE_ROLE:
+            cmd_advance(task_id)
+            state = get_task(conn, task_id)["state"]
+        # Живой вывод агента уже был на экране и в логе — здесь только
+        # сводка шага и ссылка на лог прогона (требование 6).
+        print(f"[{task_id}] auto шаг {steps}/{AUTO_MAX_STEPS}: {role} "
+              f"{before} -> {state}, лог: {last_agent_log(task_id, role)}")
+
+    reason, hint = AUTO_STOP.get(state, (f"состояние {state} циклом не обслуживается",
+                                         "artel.py show {id}"))
+    auto_stop(conn, task_id, state, reason, hint.format(id=task_id))
+
+
 def cmd_budget(task_id: str, raw_usd: str) -> None:
     """Меняет потолок задачи — единственный способ снять блокировку по бюджету."""
     conn = db()
@@ -1302,6 +1417,7 @@ def main() -> None:
         "show": lambda: cmd_show(rest[0]),
         "advance": lambda: cmd_advance(rest[0]),
         "run": lambda: cmd_run(rest[0]),
+        "auto": lambda: cmd_auto(rest[0]),
         "approve": lambda: cmd_approve(rest[0]),
         "reject": lambda: cmd_reject(rest[0], rest[1] if len(rest) > 1 else ""),
         "kill": lambda: cmd_kill(rest[0]),
