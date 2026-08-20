@@ -19,6 +19,11 @@
 предупреждение, на 100% — escalated и отказ запускать агента, пока Оператор
 не поднимет потолок (`budget <id> <usd>`) или не закроет задачу (`kill`).
 
+Потолок по умолчанию один на все задачи, но класс задачи виден аналитику
+при постановке: `budget_usd` в frontmatter SPEC применяется к задаче один
+раз, на переходе spec_writing -> spec_gate. Ручное поднятие `budget`
+сильнее значения из SPEC; кто задал потолок, помнит колонка budget_source.
+
 `kill` не только переводит задачу в `killed`, но и убирает её хвосты в
 рабочем дереве: каталог `tasks/<id>/`, не попавший в main, и локальную
 ветку задачи, не смерженную в main. Всё убранное и всё оставленное —
@@ -70,6 +75,9 @@ LOG_TAIL_CHARS = 1000
 DEFAULT_BUDGET_USD = 50.0  # решение Оператора 20.08.2026: $10 буксовал на T010/T011 (многоитерационные циклы)
 # Бюджет — жёсткий лимит с алертом на 70% (docs/design.md §6, §7).
 BUDGET_ALERT_RATIO = 0.7
+# Кто задал потолок задачи (tasks.budget_source). NULL — никто, стоит дефолт.
+BUDGET_SOURCE_SPEC = "spec"
+BUDGET_SOURCE_OPERATOR = "operator"
 LIMIT_REVIEW_ITERS = 3
 LIMIT_ACCEPT_REJECTS = 1
 # Пока покрывает только уборку при kill: мерж в cmd_approve остался на
@@ -142,6 +150,11 @@ def migrate(conn: sqlite3.Connection) -> None:
         conn.commit()
     if "escalated_from" not in cols:
         conn.execute("ALTER TABLE tasks ADD COLUMN escalated_from TEXT")
+        conn.commit()
+    if "budget_source" not in cols:
+        # NULL в старых строках — «потолок никем не задан», то есть дефолт:
+        # значение из SPEC применится к ним на общих основаниях.
+        conn.execute("ALTER TABLE tasks ADD COLUMN budget_source TEXT")
         conn.commit()
 
 
@@ -580,7 +593,7 @@ def cmd_init() -> None:
           id TEXT PRIMARY KEY, title TEXT, state TEXT, branch TEXT,
           review_iters INTEGER DEFAULT 0, accept_rejects INTEGER DEFAULT 0,
           reviewed_iter INTEGER DEFAULT 0, escalated_from TEXT,
-          budget_usd REAL, spent_usd REAL DEFAULT 0,
+          budget_usd REAL, spent_usd REAL DEFAULT 0, budget_source TEXT,
           created_at TEXT, updated_at TEXT
         );
         CREATE TABLE IF NOT EXISTS steps (
@@ -651,7 +664,11 @@ def cmd_advance(task_id: str) -> None:
     tdir = TASKS / task_id
 
     if state == "spec_writing":
-        if frontmatter(tdir / "SPEC.md").get("status") == "ready":
+        meta = frontmatter(tdir / "SPEC.md")
+        if meta.get("status") == "ready":
+            # До смены состояния: потолок задачи должен стоять уже к тому
+            # моменту, когда Оператор смотрит на неё на гейте SPEC.
+            apply_spec_budget(conn, t, meta)
             set_state(conn, task_id, "spec_gate", "fsm", "SPEC готов — ждёт approve")
         else:
             print(f"[{task_id}] SPEC.md ещё не ready — нечего продвигать")
@@ -703,6 +720,70 @@ def cmd_advance(task_id: str) -> None:
 
     else:
         print(f"[{task_id}] состояние {state} двигается через approve/reject/run")
+
+
+def spec_budget(meta: dict) -> tuple[float | None, str]:
+    """Потолок из frontmatter SPEC: (сумма, причина отказа).
+
+    Исходов три, а не два. Поля нет — (None, ""), и это не событие: задача
+    работает по дефолту, как работала (требование 2). Поле есть, но это не
+    сумма, — (None, причина): аналитик что-то имел в виду, и молчать об
+    этом нельзя. Иначе (сумма, "").
+
+    Число разбирается тем же `cli_number`, что и аргумент команды `budget`:
+    одно правило на оба входа в потолок, включая отсев nan/inf.
+    """
+    if "budget_usd" not in meta:
+        return None, ""
+    raw = str(meta["budget_usd"]).strip()
+    value = cli_number(raw)
+    if value is None or value <= 0:
+        return None, f"'{raw}' — не сумма в долларах"
+    return value, ""
+
+
+def apply_spec_budget(conn, t: sqlite3.Row, meta: dict) -> None:
+    """Ставит задаче потолок из SPEC — один раз и никогда поверх ручного.
+
+    Вызывается на переходе spec_writing -> spec_gate: SPEC к этому моменту
+    прочитан и признан готовым, а денег задача ещё не потратила (агент
+    запускается только из in_dev и review).
+
+    Кто задал потолок, помнит `budget_source`: с ним значение из SPEC не
+    применяется ни повторно, ни поверх поднятия Оператора — в какую бы
+    сторону ни шёл порядок (требование 4).
+
+    Функция ничего не бросает и состояние не двигает: непонятное значение —
+    это предупреждение Оператору, а не остановка задачи (требование 3).
+    """
+    task_id = t["id"]
+    old = t["budget_usd"] or 0.0
+    value, refused = spec_budget(meta)
+
+    if refused:
+        detail = f"{refused}, остаётся дефолт ${old:.2f}"
+        journal(conn, task_id, "fsm", "бюджет из SPEC отклонён", detail)
+        print(f"[{task_id}] ВНИМАНИЕ: бюджет из SPEC отклонён: {detail}")
+        return
+    if value is None:
+        return
+
+    source = t["budget_source"]
+    if source is not None:
+        why = ("уже применён" if source == BUDGET_SOURCE_SPEC
+               else "потолок задан Оператором")
+        detail = f"${value:.2f} не применён: {why}, потолок ${old:.2f}"
+        journal(conn, task_id, "fsm", "бюджет из SPEC", detail)
+        print(f"[{task_id}] бюджет из SPEC: {detail}")
+        return
+
+    conn.execute(
+        "UPDATE tasks SET budget_usd=?, budget_source=?, updated_at=? WHERE id=?",
+        (value, BUDGET_SOURCE_SPEC, now(), task_id))
+    conn.commit()
+    detail = f"${value:.2f} (дефолт ${old:.2f})"
+    journal(conn, task_id, "fsm", "бюджет из SPEC", detail)
+    print(f"[{task_id}] бюджет из SPEC: {detail}")
 
 
 def cmd_approve(task_id: str) -> None:
@@ -1013,8 +1094,11 @@ def cmd_budget(task_id: str, raw_usd: str) -> None:
                  f"(пример: artel.py budget {task_id} 10)")
 
     old, spent = t["budget_usd"] or 0.0, t["spent_usd"] or 0.0
-    conn.execute("UPDATE tasks SET budget_usd=?, updated_at=? WHERE id=?",
-                 (new_budget, now(), task_id))
+    # Источник «operator» ставится и здесь, и при поднятии уже поднятого:
+    # решение Оператора о деньгах не перебивается значением из SPEC ни
+    # после него, ни до (apply_spec_budget).
+    conn.execute("UPDATE tasks SET budget_usd=?, budget_source=?, updated_at=? "
+                 "WHERE id=?", (new_budget, BUDGET_SOURCE_OPERATOR, now(), task_id))
     conn.commit()
     journal(conn, task_id, "operator", "бюджет изменён",
             f"${old:.2f} -> ${new_budget:.2f}, израсходовано ${spent:.2f}")
