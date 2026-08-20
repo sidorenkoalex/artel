@@ -84,13 +84,26 @@ class FakeRun:
     агент «сделал» на шаге — дописал артефакт, уронил задачу в escalated или
     ничего. Кончился сценарий — шаг холостой, и это законный исход: агент,
     не доведший PLAN до ready, оставляет задачу там же, где она была.
+
+    Свой потолок вызовов (`arm`) — не дубль лимита цикла, а способ его
+    пришпилить: холостой шаг состояние не двигает, поэтому цикл без рабочего
+    `AUTO_MAX_STEPS` крутился бы вечно, и тест лимита не падал бы, а висел —
+    в CI это шесть часов молчания вместо красного прогона.
     """
 
     def __init__(self):
         self.script: list = []
         self.calls: list[str] = []
+        self.limit: int | None = None
+
+    def arm(self, steps: int) -> None:
+        """Разрешает ещё `steps` вызовов — столько, сколько цикл вправе сделать."""
+        self.limit = len(self.calls) + steps
 
     def __call__(self, task_id: str) -> None:
+        if self.limit is not None and len(self.calls) >= self.limit:
+            raise AssertionError(
+                f"цикл не остановился: шагов больше {artel.AUTO_MAX_STEPS}")
         self.calls.append(task_id)
         if self.script:
             self.script.pop(0)()
@@ -152,6 +165,9 @@ class AutoCycleTest(unittest.TestCase):
         return buf.getvalue()
 
     def auto(self) -> str:
+        # Столько шагов цикл вправе сделать за вызов; шаг сверх этого — не
+        # «долгий прогон», а неостановленный цикл, и тест обязан упасть сразу.
+        self.agent.arm(artel.AUTO_MAX_STEPS)
         return self.capture(artel.cmd_auto, self.TASK)
 
     def task_row(self) -> sqlite3.Row:
@@ -272,6 +288,35 @@ class AutoStopsWhereTheOperatorIsNeededTest(AutoCycleTest):
         self.assertEqual(self.state(), "acceptance")
         self.assertEqual(len(self.agent.calls), 4)
         self.assertEqual(self.task_row()["review_iters"], 1)
+
+    def test_escalation_by_the_ceiling_names_budget(self):
+        """Требование 2: у эскалации по потолку следующая команда — budget.
+
+        approve здесь увёл бы Оператора по кругу: задача вернулась бы в работу,
+        а следующий run снова отказался бы стартовать по тому же потолку.
+        """
+        self.write_plan("ready")
+        self.set_state("in_dev", budget_usd=25.0, spent_usd=0.0)
+        # Так задачу роняет enforce_budget: шаг стоил больше остатка потолка.
+        self.agent.script = [lambda: self.set_state("escalated", spent_usd=26.0)]
+
+        out = self.auto()
+
+        self.assertEqual(self.state(), "escalated")
+        self.assertIn(f"дальше: подними потолок: artel.py budget {self.TASK}", out)
+        self.assertNotIn(f"artel.py approve {self.TASK}", out)
+
+    def test_escalation_with_the_ceiling_intact_names_approve(self):
+        """Вторая ветка: потолок цел (упал агент) — разбор через log и approve."""
+        self.write_plan("ready")
+        self.set_state("in_dev", budget_usd=25.0, spent_usd=1.0)
+        self.agent.script = [lambda: self.set_state("escalated")]
+
+        out = self.auto()
+
+        self.assertEqual(self.state(), "escalated")
+        self.assertIn(f"artel.py approve {self.TASK}", out)
+        self.assertNotIn(f"artel.py budget {self.TASK}", out)
 
     def test_escalation_inside_the_step_stops_the_cycle_before_advance(self):
         """Упавший агент уводит задачу в escalated — двигать её нечем и незачем."""

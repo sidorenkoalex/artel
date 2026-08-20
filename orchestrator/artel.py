@@ -146,6 +146,13 @@ AUTO_STOP = {
     "killed": ("задача снята", "ничего не требуется"),
 }
 
+# Эскалаций по существу две, и команда у них разная. Самая частая внутри цикла —
+# исчерпанный потолок (enforce_budget); approve там увёл бы Оператора по кругу:
+# задача вернулась бы в работу, а следующий run снова отказался бы стартовать.
+AUTO_STOP_BUDGET = ("эскалация по бюджету — нужен Оператор",
+                    "подними потолок: artel.py budget {id} <usd>  "
+                    "(или artel.py kill {id})")
+
 # ГОСТ-подобная транслитерация: только stdlib, без внешних зависимостей.
 # ъ/ь пропускаются; ё → yo; щ → sch; ю → yu; я → ya.
 _TRANSLIT = {
@@ -1153,6 +1160,22 @@ def close_pump(conn, task_id: str, role: str, pump: OutputPump, proc) -> None:
     print(f"[{task_id}] {detail}")
 
 
+def auto_stop_advice(conn, task_id: str, state: str) -> tuple[str, str]:
+    """Причина остановки и следующая команда — по факту, а не по имени состояния.
+
+    Имя состояния не всегда называет причину: в `escalated` задача оказывается
+    и после падения агента, и после пробитого потолка, а команды у этих двух
+    случаев разные. Потолок спрашиваем у того же `budget_block`, которым
+    отказывается стартовать `run`, — так подсказка цикла не может разойтись с
+    его отказом.
+    """
+    reason, hint = AUTO_STOP.get(
+        state, (f"состояние {state} циклом не обслуживается", "artel.py show {id}"))
+    if state == "escalated" and budget_block(get_task(conn, task_id)) is not None:
+        reason, hint = AUTO_STOP_BUDGET
+    return reason, hint.format(id=task_id)
+
+
 def auto_stop(conn, task_id: str, state: str, reason: str, hint: str) -> None:
     """Остановка цикла: запись в журнал и итог Оператору (требования 2, 5)."""
     journal(conn, task_id, "operator", "auto остановлен", f"{state}: {reason}")
@@ -1215,9 +1238,8 @@ def cmd_auto(task_id: str) -> None:
         print(f"[{task_id}] auto шаг {steps}/{AUTO_MAX_STEPS}: {role} "
               f"{before} -> {state}, лог: {last_agent_log(task_id, role)}")
 
-    reason, hint = AUTO_STOP.get(state, (f"состояние {state} циклом не обслуживается",
-                                         "artel.py show {id}"))
-    auto_stop(conn, task_id, state, reason, hint.format(id=task_id))
+    reason, hint = auto_stop_advice(conn, task_id, state)
+    auto_stop(conn, task_id, state, reason, hint)
 
 
 def cmd_budget(task_id: str, raw_usd: str) -> None:
