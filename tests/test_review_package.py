@@ -9,6 +9,7 @@
 промпт агента, что легло в журнал и какие права у шага остались.
 """
 import io
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -17,7 +18,8 @@ from contextlib import redirect_stdout
 from pathlib import Path
 from unittest import mock
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+REPO = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(REPO))
 
 from orchestrator import artel  # noqa: E402
 
@@ -62,23 +64,54 @@ major — orchestrator/artel.py:1 — усечение без пометки.
 """
 
 
+FORM_MD = """---
+task: T000
+type: review
+author_role: reviewer
+status: draft
+---
+
+# REVIEW: <заголовок>
+
+## Замечания
+"""
+
+
 class FakeGit:
-    """Подмена `artel.git`: отвечает на diff заготовками, помнит вызовы."""
+    """Подмена `artel.git`: отвечает на diff и show заготовками, помнит вызовы.
+
+    `files` — содержимое веток: путь → текст, как его отдал бы
+    `git show <ветка>:<путь>`. Чего в словаре нет, того нет и в ветке.
+    """
 
     def __init__(self, stat="orchestrator/artel.py | 2 +-", diff="diff --git a b",
-                 returncode: int = 0, stderr: str = ""):
+                 returncode: int = 0, stderr: str = "", files=None):
         self.stat = stat
         self.diff = diff
         self.returncode = returncode
         self.stderr = stderr
+        self.files = dict(files or {})
         self.calls: list[list[str]] = []
 
     def __call__(self, *args: str) -> subprocess.CompletedProcess:
         self.calls.append(list(args))
+        if args and args[0] == "show":
+            return self.show(args)
         stdout = self.stat if "--stat" in args else self.diff
         return subprocess.CompletedProcess(
             list(args), self.returncode, "" if self.returncode else stdout,
             self.stderr)
+
+    def show(self, args) -> subprocess.CompletedProcess:
+        if self.returncode:  # git сломан целиком — не отвечает и на show
+            return subprocess.CompletedProcess(list(args), self.returncode, "",
+                                               self.stderr)
+        _, rel = args[1].split(":", 1)
+        if rel not in self.files:
+            return subprocess.CompletedProcess(
+                list(args), 128, "",
+                f"fatal: path '{rel}' does not exist in '{args[1]}'")
+        return subprocess.CompletedProcess(list(args), 0, self.files[rel], "")
 
 
 class FakeStream:
@@ -200,19 +233,28 @@ class ReviewPackageTest(unittest.TestCase):
     def setUp(self):
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
-        self.tdir = Path(tmp.name) / "tasks" / self.TASK
+        self.root = Path(tmp.name)
+        self.tdir = self.root / "tasks" / self.TASK
         self.tdir.mkdir(parents=True)
-        patcher = mock.patch.object(artel, "TASKS", Path(tmp.name) / "tasks")
-        patcher.start()
-        self.addCleanup(patcher.stop)
+        for attr, value in (("ROOT", self.root), ("TASKS", self.root / "tasks")):
+            patcher = mock.patch.object(artel, attr, value)
+            patcher.start()
+            self.addCleanup(patcher.stop)
 
-        self.git = FakeGit()
+        # Штатная картина: артефакты закоммичены в ветку задачи, а рабочее
+        # дерево оркестратор оставил на main — в нём этих файлов нет.
+        self.git = FakeGit(files={f"tasks/{self.TASK}/SPEC.md": SPEC_MD,
+                                  f"tasks/{self.TASK}/PLAN.md": PLAN_MD,
+                                  "templates/REVIEW.md": FORM_MD})
         git_patcher = mock.patch.object(artel, "git", self.git)
         git_patcher.start()
         self.addCleanup(git_patcher.stop)
 
-        (self.tdir / "SPEC.md").write_text(SPEC_MD, encoding="utf-8")
-        (self.tdir / "PLAN.md").write_text(PLAN_MD, encoding="utf-8")
+    def put_in_worktree(self, rel: str, text: str) -> Path:
+        path = self.root / rel
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text, encoding="utf-8")
+        return path
 
     def build(self) -> dict:
         return artel.review_package(self.TASK, "Ревью-пакет", self.BRANCH)
@@ -243,12 +285,87 @@ class ReviewPackageTest(unittest.TestCase):
     def test_stat_and_diff_are_taken_against_main(self):
         self.build()
 
-        self.assertEqual(self.git.calls,
+        self.assertEqual([c for c in self.git.calls if c[0] == "diff"],
                          [["diff", "--stat", f"{artel.MAIN_BRANCH}...{self.BRANCH}"],
                           ["diff", f"{artel.MAIN_BRANCH}...{self.BRANCH}"]])
 
+    def test_artifacts_are_read_from_the_same_point_as_the_diff(self):
+        """Артефакты — из ветки задачи, а не из того, что сейчас в дереве."""
+        self.build()
+
+        self.assertEqual([c for c in self.git.calls if c[0] == "show"],
+                         [["show", f"{self.BRANCH}:tasks/{self.TASK}/SPEC.md"],
+                          ["show", f"{self.BRANCH}:tasks/{self.TASK}/PLAN.md"],
+                          ["show", f"{self.BRANCH}:tasks/{self.TASK}/REVIEW.md"],
+                          ["show", f"{self.BRANCH}:templates/REVIEW.md"]])
+
+    def test_tree_on_main_does_not_empty_the_package(self):
+        """Штатный ход оркестратора: после мержа соседней задачи дерево на main.
+
+        Рабочего дерева с `tasks/T001` нет вовсе — пакет обязан собраться
+        из ветки, а не объявить SPEC и PLAN отсутствующими (ревью 2).
+        """
+        self.assertFalse((self.root / "tasks" / self.TASK / "SPEC.md").exists(),
+                         "в дереве артефактов нет — иначе тест ничего не ловит")
+
+        package = self.build()
+
+        self.assertIn("Пакет собирает оркестратор", package["text"], "тело SPEC")
+        self.assertIn("Собрать пакет в cmd_run", package["text"], "тело PLAN")
+        self.assertNotIn("не показан", package["text"])
+        self.assertEqual(package["from_worktree"], [])
+
+    def test_previous_review_survives_a_tree_on_main(self):
+        """Хуже пропавшего PLAN: ревьювер не узнает, что итерация не первая."""
+        self.git.files[f"tasks/{self.TASK}/REVIEW.md"] = REVIEW_MD
+
+        text = self.build()["text"]
+
+        self.assertIn("прошлая итерация", text)
+        self.assertIn("усечение без пометки", text, "замечания прошлой итерации")
+
+    def test_uncommitted_artifact_falls_back_to_the_worktree_and_says_so(self):
+        """PLAN написан, но ещё не в коммите — показываем и называем источник."""
+        del self.git.files[f"tasks/{self.TASK}/PLAN.md"]
+        self.put_in_worktree(f"tasks/{self.TASK}/PLAN.md", PLAN_MD)
+
+        package = self.build()
+
+        self.assertIn("Собрать пакет в cmd_run", package["text"])
+        self.assertIn(artel.WORKTREE_NOTE.strip(), package["text"],
+                      "подмена источника не проходит молча")
+        self.assertEqual(package["from_worktree"], [f"tasks/{self.TASK}/PLAN.md"])
+
+    def test_worktree_fallback_is_visible_in_the_note(self):
+        """Расхождение дерева и diff Оператор разбирает по `log <id>`."""
+        note = self.note_of(from_worktree=[f"tasks/{self.TASK}/PLAN.md"])
+
+        self.assertIn(f"не из ветки, а из рабочего дерева: tasks/{self.TASK}/PLAN.md",
+                      note)
+
+    def test_unreadable_artifact_names_the_reason(self):
+        """Битые байты в артефакте — строка с причиной, а не трейсбек из `run`."""
+        del self.git.files[f"tasks/{self.TASK}/PLAN.md"]
+        path = self.put_in_worktree(f"tasks/{self.TASK}/PLAN.md", "")
+        path.write_bytes(b"\xff\xfe\x00PLAN")
+
+        text = self.build()["text"]
+
+        self.assertIn(f"tasks/{self.TASK}/PLAN.md", text)
+        self.assertIn("не показан", text)
+        self.assertIn("codec", text, "названа причина, а не просто «нет файла»")
+
+    def test_review_form_is_part_of_the_package(self):
+        """Единственное чтение, которое пакет обязан снять: форма вердикта."""
+        text = self.build()["text"]
+
+        marks = self.order_of(text, f"tasks/{self.TASK}/PLAN.md",
+                              "templates/REVIEW.md", "### Изменённые файлы")
+        self.assertEqual(marks, sorted(marks), "форма идёт после артефактов задачи")
+        self.assertIn("# REVIEW: <заголовок>", text, "тело шаблона целиком")
+
     def test_previous_review_is_included_for_iterations(self):
-        (self.tdir / "REVIEW.md").write_text(REVIEW_MD, encoding="utf-8")
+        self.git.files[f"tasks/{self.TASK}/REVIEW.md"] = REVIEW_MD
 
         text = self.build()["text"]
 
@@ -260,16 +377,18 @@ class ReviewPackageTest(unittest.TestCase):
     def test_first_iteration_has_no_review_part(self):
         text = self.build()["text"]
 
-        self.assertNotIn("REVIEW.md", text)
+        self.assertNotIn(f"tasks/{self.TASK}/REVIEW.md", text)
+        self.assertNotIn("прошлая итерация", text)
 
     def test_missing_plan_is_shown_as_missing(self):
         """Пропавший PLAN — факт для ревьювера, а не тихо пустая часть."""
-        (self.tdir / "PLAN.md").unlink()
+        del self.git.files[f"tasks/{self.TASK}/PLAN.md"]
 
         text = self.build()["text"]
 
         self.assertIn(f"tasks/{self.TASK}/PLAN.md", text)
-        self.assertIn("(файла нет)", text)
+        self.assertIn("не показан", text)
+        self.assertIn("does not exist", text, "названо, где именно файла нет")
 
     def test_package_opens_with_a_data_marker(self):
         """Пакет вклеен в канал инструкций — шапка говорит, что это данные."""
@@ -288,6 +407,7 @@ class ReviewPackageTest(unittest.TestCase):
         self.assertFalse(package["truncated"])
         self.assertFalse(package["over_bytes"])
         self.assertEqual(package["not_collected"], "")
+        self.assertEqual(package["from_worktree"], [])
 
     def test_huge_diff_by_bytes_is_cut_with_a_mark(self):
         """Требование 2: потолок пакета держится и на diff из длинных строк."""
@@ -344,7 +464,8 @@ class ReviewPackageTest(unittest.TestCase):
 
     def note_of(self, **over) -> str:
         package = {"chars": 1234, "bytes": 2345, "diff_lines": 56,
-                   "truncated": False, "over_bytes": False, "not_collected": ""}
+                   "truncated": False, "over_bytes": False, "not_collected": "",
+                   "from_worktree": []}
         return artel.package_note(package | over)
 
     def test_note_shows_size(self):
@@ -355,6 +476,7 @@ class ReviewPackageTest(unittest.TestCase):
         self.assertIn("строк diff 56", note)
         self.assertNotIn("усечён", note)
         self.assertNotIn("не собран", note)
+        self.assertNotIn("рабочего дерева", note)
 
     def test_note_shows_both_truncations(self):
         self.assertIn(f"diff усечён до {artel.REVIEW_DIFF_MAX_LINES} строк",
@@ -377,14 +499,25 @@ class CmdRunReviewPackageTest(unittest.TestCase):
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
         root = Path(tmp.name)
-        for attr, value in (("DB", root / ".artel" / "state.db"),
+        # ROOT подменяем вместе с остальным: иначе откат на рабочее дерево
+        # смотрел бы в настоящий репозиторий, где tasks/T001 существует, и
+        # тест зависел бы от чужой задачи. Скилы и шаблоны копируем — их
+        # cmd_run и cmd_new читают из ROOT.
+        for name in ("skills", "templates"):
+            shutil.copytree(REPO / name, root / name)
+        for attr, value in (("ROOT", root),
+                            ("DB", root / ".artel" / "state.db"),
                             ("TASKS", root / "tasks"),
                             ("LOGS", root / ".artel" / "logs")):
             patcher = mock.patch.object(artel, attr, value)
             patcher.start()
             self.addCleanup(patcher.stop)
 
-        self.git = FakeGit()
+        # Артефакты живут в ветке задачи; рабочее дерево здесь на них не
+        # похоже — так же, как у оркестратора после мержа соседней задачи.
+        self.git = FakeGit(files={f"tasks/{self.TASK}/SPEC.md": SPEC_MD,
+                                  f"tasks/{self.TASK}/PLAN.md": PLAN_MD,
+                                  "templates/REVIEW.md": FORM_MD})
         git_patcher = mock.patch.object(artel, "git", self.git)
         git_patcher.start()
         self.addCleanup(git_patcher.stop)
@@ -392,8 +525,6 @@ class CmdRunReviewPackageTest(unittest.TestCase):
         self.capture(artel.cmd_init)
         self.capture(artel.cmd_new, "Ревью-пакет вместо свободного чтения")
         self.tdir = artel.TASKS / self.TASK
-        (self.tdir / "SPEC.md").write_text(SPEC_MD, encoding="utf-8")
-        (self.tdir / "PLAN.md").write_text(PLAN_MD, encoding="utf-8")
 
     def capture(self, fn, *args) -> str:
         buf = io.StringIO()
@@ -432,7 +563,33 @@ class CmdRunReviewPackageTest(unittest.TestCase):
         self.assertIn("Собрать пакет в cmd_run", prompt, "PLAN целиком")
         self.assertIn("orchestrator/artel.py | 2 +-", prompt, "стат-список")
         self.assertIn("diff --git a b", prompt, "diff")
+        self.assertIn("# REVIEW: <заголовок>", prompt, "форма вердикта")
         self.assertIn("review-checklist", prompt, "скилы роли остались в промпте")
+
+    def test_prompt_holds_the_artifacts_with_the_tree_off_the_branch(self):
+        """Дерево на main — пакет всё равно полон: артефакты берутся из ветки."""
+        shutil.rmtree(self.tdir)  # так выглядит дерево после мержа соседней задачи
+
+        _, argv = self.run_agent("review")
+
+        prompt = self.prompt_of(argv)
+        self.assertIn("Пакет собирает оркестратор", prompt, "SPEC целиком")
+        self.assertNotIn("не показан", prompt)
+
+    def test_worktree_fallback_is_journaled(self):
+        """Расхождение источника и diff Оператор видит в `log <id>`.
+
+        Откат берём на `templates/REVIEW.md`: этот файл лежит в рабочем
+        дереве репозитория всегда, так что подмены `ROOT` тест не требует.
+        """
+        del self.git.files["templates/REVIEW.md"]
+
+        _, argv = self.run_agent("review")
+
+        self.assertIn("не из ветки, а из рабочего дерева: templates/REVIEW.md",
+                      self.journal_details("ревью-пакет собран")[0])
+        self.assertIn(artel.WORKTREE_NOTE.strip(), self.prompt_of(argv),
+                      "источник назван и в самом пакете, не только в журнале")
 
     def test_package_size_lands_in_the_journal(self):
         """Критерий приёмки 2: размер входа виден в `log <id>` у старта ревью."""

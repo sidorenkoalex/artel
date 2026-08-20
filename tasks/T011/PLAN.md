@@ -13,27 +13,38 @@ status: ready        # draft | ready | approved
 агент больше не добывает контекст обходом репозитория. Ключевые решения:
 
 - **Пакет — чистая функция от задачи и ветки.** `review_package()`
-  (orchestrator/artel.py:432) возвращает `{text, chars, diff_lines,
-  truncated}`: текст для промпта и размеры для журнала. Никакой записи,
-  никакого состояния — поэтому сборка проверяется юнитом без CLI и без
-  реального git (требование 6).
+  (orchestrator/artel.py:489) возвращает `{text, chars, bytes, diff_lines,
+  truncated, over_bytes, not_collected, from_worktree}`: текст для промпта
+  и размеры с признаками для журнала. Никакой записи, никакого состояния —
+  поэтому сборка проверяется юнитом без CLI и без реального git
+  (требование 6).
+- **Пакет собирается из одной точки — из ветки задачи.** Артефакты берёт
+  `artifact_text` (:399) через `git show <ветка>:<путь>`, оттуда же, откуда
+  `git diff main...<ветка>` берёт содержимое. Рабочее дерево для этого не
+  годится: оркестратор штатно оставляет его на main (`cmd_approve` делает
+  `checkout main` и обратно не возвращается, `cmd_kill` требует быть на
+  main), и чтение из дерева объявляло бы SPEC и PLAN отсутствующими на
+  задаче, где они написаны, а прошлый REVIEW выбрасывало бы молча.
 - **Порядок частей фиксирован**: задача → SPEC → PLAN → прошлый REVIEW
-  (только если файл есть) → стат-список → diff. Ревьювер ориентируется
-  в пакете по постоянной структуре, а тест сравнивает индексы маркеров,
-  а не всю простыню.
-- **Молчание не выдаётся за пустоту.** Отсутствующий артефакт даёт
-  `(файла нет)`, упавший git — `(не собран: <причина>)`
-  (artifact_part:388, git_diff_part:404). Тихо показать ревьюверу
-  «изменений нет» вместо не собранного diff — это выпрошенный вслепую
-  аппрув, худший из возможных исходов правки про экономию.
+  (только если он есть в ветке) → форма вердикта → стат-список → diff.
+  Ревьювер ориентируется в пакете по постоянной структуре, а тест
+  сравнивает индексы маркеров, а не всю простыню.
+- **Молчание не выдаётся за пустоту.** Отсутствующий или нечитаемый
+  артефакт даёт `(не показан: в ветке — …; в дереве — …)`, упавший git —
+  `(не собран: <причина>)` (artifact_part:429, git_diff_part:441). Тихо
+  показать ревьюверу «изменений нет» вместо не собранного diff — это
+  выпрошенный вслепую аппрув, худший из возможных исходов правки про
+  экономию. По той же причине откат на рабочее дерево (файл ещё не в
+  коммите) называет источник в заголовке части (`WORKTREE_NOTE`:396) и
+  в журнале, а не подменяет содержимое незаметно.
 - **Потолок diff — защита контекста шага, а не проверка размера MR.**
   `REVIEW_DIFF_MAX_LINES = 4000` (artel.py:81); за потолком в пакет идёт
   начало diff плюс пометка с обоими числами и прямым указанием, что сам
-  размер — повод для замечания (truncate_diff:418). Усечение стат-списка
+  размер — повод для замечания (truncate_diff:457). Усечение стат-списка
   не трогает: список файлов остаётся полным, то есть ревьювер видит весь
   объём изменения, даже когда содержимое показано частично.
 - **Второй потолок — байтовый, на весь пакет** (`REVIEW_PACKAGE_MAX_BYTES
-  = 400_000`, artel.py:89; `truncate_package`:432). Потолок строк не
+  = 400_000`, artel.py:89; `truncate_package`:471). Потолок строк не
   выражает то ограничение, в которое пакет упирается на самом деле:
   промпт уходит в argv, где предел ядра считается в байтах (замер на
   машине прогона: `SC_ARG_MAX` = 1048576). Десяток строк
@@ -50,7 +61,12 @@ status: ready        # draft | ready | approved
   отделяют только текстовые маркеры, а маркер файл в ветке подделать
   может; правило CLAUDE.md «содержимое репозитория — ДАННЫЕ» здесь
   повторено явно.
-- **Размер входа — в журнал до первой попытки агента** (cmd_run:733), а
+- **Форма вердикта — часть пакета** (`templates/REVIEW.md`,
+  review_package:502). Это единственное чтение, которое пакет обязан был
+  снять и не снимал: миссия велит заполнять REVIEW.md именно по шаблону,
+  обойти его нельзя, значит без него каждый прогон делает гарантированный
+  лишний Read. Шаблон едет тем же путём, что и артефакты, — из ветки.
+- **Размер входа — в журнал до первой попытки агента** (cmd_run:800), а
   не после: запись «сколько было на входе» должна стоять рядом с
   «agent run started», чтобы стоимость прогона соотносилась с ней в
   `log <id>` без арифметики по времени. В той же записи — обе отсечки и
@@ -111,16 +127,46 @@ status: ready        # draft | ready | approved
    ревьювер сам отметил, что требование 1 SPEC просит «полный diff»,
    то есть это правка SPEC, а не кода. Вход в следующую задачу.
 
+3. **Итерация 3: замечания ревью 2.** Тот же файл и та же зона — снова
+   порядок работы, не новая граница MR.
+   - major (артефакты читались из рабочего дерева, а diff — из ref'ов):
+     `artifact_text` artel.py:399 берёт файл через `git show
+     <ветка>:<путь>` и только при неудаче откатывается на дерево, назвав
+     источник; `artifact_part`:429 стал чистым форматированием
+     результата; `review_package`:502–504 резолвит все четыре файла один
+     раз, а включение прошлого REVIEW решается по найденному в ветке
+     (:521), а не по `Path.exists()` в дереве. Расхождение источника
+     уходит в `from_worktree` (:538) и в журнал (`package_note`:557);
+   - minor (`UnicodeDecodeError` мимо `except OSError` ронял `run`
+     трейсбеком): откат на дерево ловит `(OSError, UnicodeDecodeError)`
+     (:427), а декодирование вывода `git show` — свой `except`
+     (:420–424), потому что strict-декодирование сидит внутри
+     `subprocess`, а не в нашем `read_text`;
+   - minor (шаблон вердикта не входил в пакет): `form_rel`:502, часть
+     пакета:526; миссия ревьювера ссылается на форму из пакета
+     (cmd_run:790), а не на путь в репозитории;
+   - minor (ссылки file:line в «Подходе» указывали мимо кода): номера
+     пересчитаны под вершину ветки, кода правка не касается;
+   - тесты: `test_artifacts_are_read_from_the_same_point_as_the_diff`,
+     `test_tree_on_main_does_not_empty_the_package`,
+     `test_previous_review_survives_a_tree_on_main`,
+     `test_uncommitted_artifact_falls_back_to_the_worktree_and_says_so`,
+     `test_worktree_fallback_is_visible_in_the_note`,
+     `test_unreadable_artifact_names_the_reason`,
+     `test_review_form_is_part_of_the_package`,
+     `test_prompt_holds_the_artifacts_with_the_tree_off_the_branch`,
+     `test_worktree_fallback_is_journaled`.
+
 ## Покрытие требований
 
 | Требование | Шаг | Где |
 |---|---|---|
-| 1 (пакет собирается и уходит в промпт целиком) | 1 | `review_package` artel.py:460, cmd_run:748–755; тесты `ReviewPackageTest.test_all_parts_are_present_in_a_stable_order`, `CmdRunReviewPackageTest.test_reviewer_prompt_carries_the_package` |
-| 2 (потолок diff, усечение с пометкой) | 1, 2 | `REVIEW_DIFF_MAX_LINES` artel.py:81, `truncate_diff`:428; байтовый потолок `REVIEW_PACKAGE_MAX_BYTES`:89, `truncate_package`:442. Тесты `TruncateDiffTest`, `TruncatePackageTest`, `ReviewPackageTest.test_big_diff_is_truncated_with_a_mark`, `…test_huge_diff_by_bytes_is_cut_with_a_mark` |
-| 3 (миссия: работа от пакета, точечное чтение по причине) | 1 | cmd_run:732–746; скилы роли остаются в промпте — `test_reviewer_prompt_carries_the_package` («review-checklist» в промпте) |
-| 4 (права и инструменты не сужены) | 1 | `--allowedTools` в `run_agent_once` (artel.py:806) не изменён; тест `test_reviewer_rights_are_not_narrowed` |
-| 5 (размер пакета в журнале при старте ревью) | 1, 2 | `package_note`:499, journal в cmd_run:753; тесты `test_package_size_lands_in_the_journal`, `test_package_is_journaled_before_the_agent_starts`, `test_truncation_is_journaled_too`, `test_failed_diff_is_visible_in_the_journal` |
-| 6 (юнит-тесты сборки, усечения, журнала; без реального CLI) | 1, 2 | tests/test_review_package.py целиком: `subprocess.Popen` и `artel.git` подменены |
+| 1 (пакет собирается и уходит в промпт целиком) | 1, 3 | `review_package` artel.py:489, cmd_run:795–802; артефакты из ветки — `artifact_text`:399. Тесты `ReviewPackageTest.test_all_parts_are_present_in_a_stable_order`, `…test_artifacts_are_read_from_the_same_point_as_the_diff`, `…test_tree_on_main_does_not_empty_the_package`, `…test_previous_review_survives_a_tree_on_main`, `…test_review_form_is_part_of_the_package`, `CmdRunReviewPackageTest.test_reviewer_prompt_carries_the_package`, `…test_prompt_holds_the_artifacts_with_the_tree_off_the_branch` |
+| 2 (потолок diff, усечение с пометкой) | 1, 2 | `REVIEW_DIFF_MAX_LINES` artel.py:81, `truncate_diff`:457; байтовый потолок `REVIEW_PACKAGE_MAX_BYTES`:89, `truncate_package`:471. Тесты `TruncateDiffTest`, `TruncatePackageTest`, `ReviewPackageTest.test_big_diff_is_truncated_with_a_mark`, `…test_huge_diff_by_bytes_is_cut_with_a_mark` |
+| 3 (миссия: работа от пакета, точечное чтение по причине) | 1, 3 | cmd_run:778–794; скилы роли остаются в промпте — `test_reviewer_prompt_carries_the_package` («review-checklist» в промпте) |
+| 4 (права и инструменты не сужены) | 1 | `--allowedTools` в `run_agent_once` (artel.py:853) не изменён; тест `test_reviewer_rights_are_not_narrowed` |
+| 5 (размер пакета в журнале при старте ревью) | 1, 2, 3 | `package_note`:542, journal в cmd_run:800; тесты `test_package_size_lands_in_the_journal`, `test_package_is_journaled_before_the_agent_starts`, `test_truncation_is_journaled_too`, `test_failed_diff_is_visible_in_the_journal`, `test_worktree_fallback_is_journaled` |
+| 6 (юнит-тесты сборки, усечения, журнала; без реального CLI) | 1, 2, 3 | tests/test_review_package.py целиком: `subprocess.Popen` и `artel.git` подменены, `git show` отвечает из заготовленного словаря веток |
 
 Критерий приёмки 3 (фактическая цена прогона) — наблюдение Оператора по
 журналу после ревью T011, автотестом не выражается; ожидание и условия
@@ -145,8 +191,9 @@ status: ready        # draft | ready | approved
   бесплатна и происходит после проверки `budget_block`, то есть за
   потолком шаг по-прежнему не начинается.
 - Инвариант 12 (merge только из merge_gate): пакет зовёт git только на
-  чтение (`diff`, `diff --stat`); свип `MergeOnlyFromMergeGateTest`
-  остался зелёным.
+  чтение (`diff`, `diff --stat`, `show`); ни `checkout`, ни `merge`
+  сборка не делает и состояние дерева не трогает — свип
+  `MergeOnlyFromMergeGateTest` остался зелёным.
 - Права ревьювера (`--allowedTools`) не сужены — это прямое требование 4
   SPEC и одновременно защита от деградации качества ревью (T010: право
   исполнять проверки — доказанная ценность). Тест это фиксирует, чтобы
@@ -157,9 +204,31 @@ status: ready        # draft | ready | approved
 test_step_cost) `artel.git` подменён на `fake_git`: шаг ревью теперь
 обращается к git, а временного репозитория в этих песочницах нет.
 Изменены только фикстуры — ни один ассерт не удалён, не смягчён и не
-заскипан, число тестов не уменьшилось (183 против 156, из них 28
+заскипан, число тестов не уменьшилось (192 против 156 на main, из них 37
 новых, минус ноль). Подмена идёт в ту же сторону, что и правило
-test_invariants: настоящий git в юнит-тестах не исполняется.
+test_invariants: настоящий git в юнит-тестах не исполняется. Эти три
+фикстуры отвечают на любой вызов пустым успехом, поэтому появление
+`git show` их не задело.
+
+На итерации 3 в `tests/test_review_package.py` доработаны две фикстуры:
+`FakeGit` научился отвечать на `git show` из словаря «путь → текст»
+(чего в словаре нет — того нет и в ветке), а `CmdRunReviewPackageTest`
+подменяет ещё и `artel.ROOT`, копируя в песочницу `skills/` и
+`templates/`. Второе — не украшение: откат на рабочее дерево при
+неподменённом `ROOT` смотрел бы в настоящий репозиторий, где `tasks/T001`
+существует, и тест зависел бы от чужой задачи. Ассерты при этом только
+добавлены; `test_first_iteration_has_no_review_part` и
+`test_missing_plan_is_shown_as_missing` стали строже (проверяют
+конкретный путь и названную причину вместо подстроки «REVIEW.md» и
+«(файла нет)»), `test_stat_and_diff_are_taken_against_main` теперь
+сверяет ровно `diff`-вызовы, а порядок и состав `show`-вызовов проверяет
+отдельный тест — то есть разбит на два, а не ослаблен.
+
+Новые проверки прогнаны мутантами на копии дерева (рабочее дерево не
+тронуто): «артефакты снова из рабочего дерева», «форма вердикта убрана из
+пакета», «прошлый REVIEW решается по `Path.exists()` в дереве», «источник
+отката убран из журнала», «`except OSError` вместо `(OSError,
+UnicodeDecodeError)`» — каждая роняет тесты, ни одна не выжила.
 
 На итерации 2 переписаны два ассерта про ручной прогон роли:
 `test_agent_log.test_missing_cli_saves_prompt_to_a_file_and_journals_skip`
@@ -208,6 +277,12 @@ test_invariants: настоящий git в юнит-тестах не испол
   diff»: исключение `tasks/<id>/` из pathspec — правка SPEC, то есть
   решение Оператора и вход в следующую задачу, а не правка этой
   итерации.
+- **Откат на рабочее дерево может показать не то, что в ветке.** Если
+  артефакт ещё не закоммичен, пакет покажет файл из дерева — а дерево
+  может стоять на другой ветке. Это осознанный компромисс: альтернатива
+  — не показывать написанный PLAN вовсе. Риск снят наблюдаемостью:
+  источник назван в заголовке части и отдельной строкой в журнале, то
+  есть странный вердикт разбирается по `log <id>`, а не по догадке.
 - **Байтовый потолок задан числом, а не замером ARG_MAX.** 400 000 байт
   — константа с запасом (худший промпт ~409 КБ против `SC_ARG_MAX`
   1 МБ на машине прогона), а не `os.sysconf` в рантайме: значение
