@@ -67,6 +67,8 @@ DEFAULT_BUDGET_USD = 5.0
 BUDGET_ALERT_RATIO = 0.7
 LIMIT_REVIEW_ITERS = 3
 LIMIT_ACCEPT_REJECTS = 1
+# Пока покрывает только уборку при kill: мерж в cmd_approve остался на
+# литерале "main" — чужая зона задачи, перевод отдельным MR.
 MAIN_BRANCH = "main"
 
 # Счётчики usage финального события потока: их сумма и есть «токенов за шаг».
@@ -861,6 +863,18 @@ def artifacts_in_main(task_id: str) -> bool | None:
     return bool(res.stdout.strip())
 
 
+def artifacts_tracked_here(task_id: str) -> bool | None:
+    """Отслеживается ли каталог задачи здесь и сейчас. None — git не ответил.
+
+    Смотрит индекс, а не дерево HEAD: закоммиченный в текущую ветку и
+    просто добавленный `git add` каталоги одинаково опасны для rmtree.
+    """
+    res = git("ls-files", "--", f"tasks/{task_id}")
+    if res.returncode != 0:
+        return None
+    return bool(res.stdout.strip())
+
+
 def drop_task_dir(task_id: str) -> str:
     """Убирает каталог артефактов убитой задачи; строка — что вышло."""
     tdir = TASKS / task_id
@@ -871,6 +885,19 @@ def drop_task_dir(task_id: str) -> str:
         return f"каталог tasks/{task_id}/ оставлен: артефакты в main"
     if not tdir.exists():
         return f"каталога tasks/{task_id}/ нет"
+    # Каталог убитой задачи мог уехать в чужую ветку через `git add -A`
+    # разработчика — ровно инцидент T002 из SPEC. rmtree по отслеживаемым
+    # файлам оставит в дереве удаления, которые следующий `git add -A`
+    # утащит в тот же чужой коммит: мусор вместо уборки.
+    tracked = artifacts_tracked_here(task_id)
+    if tracked is None:
+        return f"каталог tasks/{task_id}/ оставлен: индекс не прочитан"
+    if tracked:
+        here = current_branch()
+        fix = ("сними его из индекса и повтори kill" if here == MAIN_BRANCH
+               else f"перейди на {MAIN_BRANCH} и повтори kill")
+        return (f"каталог tasks/{task_id}/ оставлен: отслеживается в "
+                f"{here or 'текущей ветке'} — {fix}")
     try:
         shutil.rmtree(tdir)
     except OSError as exc:

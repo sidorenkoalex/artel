@@ -148,6 +148,29 @@ class KillCleanupTest(TmpRepoTest):
         self.assertTrue((self.task_dir() / "SPEC.md").exists(), "история в main")
         self.assertNotIn(self.branch, self.branches())
 
+    def test_dir_committed_into_a_foreign_branch_is_left_alone(self):
+        """Инцидент из SPEC: каталог убитой задачи уехал в чужую ветку."""
+        self.git("checkout", "-b", "task/t042-chuzhaya")
+        self.git("add", "-A")
+        self.git("commit", "-m", "T042: подобрал чужой каталог")
+
+        out = self.capture(artel.cmd_kill, self.TASK)
+
+        self.assertTrue((self.task_dir() / "SPEC.md").exists())
+        self.assertEqual(self.git("status", "--porcelain"), "",
+                         "снести отслеживаемый каталог — оставить грязное дерево")
+        self.assertIn("отслеживается в task/t042-chuzhaya", out)
+        self.assertIn("перейди на main и повтори kill", out)
+
+    def test_dir_staged_on_main_is_left_alone(self):
+        """Тот же риск без коммита: каталог задачи добавлен в индекс main."""
+        self.git("add", "-A")
+
+        out = self.capture(artel.cmd_kill, self.TASK)
+
+        self.assertTrue((self.task_dir() / "SPEC.md").exists())
+        self.assertIn("отслеживается в main — сними его из индекса", out)
+
     def test_cleanup_is_listed_in_the_journal(self):
         """Требование 2: по журналу видно, что именно убрано."""
         self.commit_artifacts_in_branch()
@@ -217,6 +240,35 @@ class CleanupWithoutGitTest(TmpRepoTest):
 
         self.assertTrue(self.task_dir().exists(), "сверять не с чем — не трогаем")
         self.assertIn("уборка пропущена: ветки main нет", out)
+
+    def test_unreadable_main_tree_keeps_the_dir(self):
+        """main на месте, но `ls-tree` ответил ошибкой: сверять по-прежнему не с чем."""
+        out = self.capture_with_failing_git("ls-tree", artel.cmd_kill, self.TASK)
+
+        self.assertTrue(self.task_dir().exists())
+        self.assertIn(f"каталог tasks/{self.TASK}/ оставлен: main не прочитан",
+                      out)
+
+    def test_unreadable_index_keeps_the_dir(self):
+        """`ls-files` промолчал — отслеживается каталог или нет, неизвестно."""
+        out = self.capture_with_failing_git("ls-files", artel.cmd_kill, self.TASK)
+
+        self.assertTrue(self.task_dir().exists())
+        self.assertIn(f"каталог tasks/{self.TASK}/ оставлен: индекс не прочитан",
+                      out)
+
+    def capture_with_failing_git(self, subcommand: str, fn, *args) -> str:
+        """Прогон, в котором одна git-подкоманда отвечает ошибкой."""
+        real_git = artel.git
+
+        def flaky(*git_args: str):
+            if git_args and git_args[0] == subcommand:
+                return subprocess.CompletedProcess(
+                    git_args, 128, "", f"fatal: {subcommand} не отвечает")
+            return real_git(*git_args)
+
+        with mock.patch.object(artel, "git", flaky):
+            return self.capture(fn, *args)
 
     def test_unavailable_git_stops_the_cleanup(self):
         with mock.patch.object(artel.subprocess, "run",
