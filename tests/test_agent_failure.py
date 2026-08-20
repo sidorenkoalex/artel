@@ -14,6 +14,7 @@ docs/invariants.md.
 """
 import io
 import sqlite3
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -24,6 +25,11 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from orchestrator import artel  # noqa: E402
+
+
+def fake_git(*args: str) -> subprocess.CompletedProcess:
+    """Подмена `artel.git`: пустой ответ вместо обращения к репозиторию."""
+    return subprocess.CompletedProcess(list(args), 0, "", "")
 
 
 class FakeStream:
@@ -132,6 +138,12 @@ class CmdRunFailureTest(TmpRootTest):
         patcher = mock.patch.object(artel.time, "sleep", self.pauses.append)
         patcher.start()
         self.addCleanup(patcher.stop)
+
+        # Шаг ревью собирает пакет настоящим git (T011); в песочнице
+        # репозитория нет, а этому модулю важен исход попыток агента, не diff.
+        git_patcher = mock.patch.object(artel, "git", fake_git)
+        git_patcher.start()
+        self.addCleanup(git_patcher.stop)
 
     def run_agent(self, *attempts) -> str:
         """attempts: (rc, строки вывода) — по одной паре на попытку."""

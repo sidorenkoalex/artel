@@ -28,6 +28,11 @@
 возврата задачи в in_dev переход review -> acceptance требует нового
 REVIEW.md (iteration больше уже учтённого, см. fresh_verdict_iteration).
 
+Вход ревьювера собирает оркестратор, а не сам агент: ревью-пакет
+(SPEC, PLAN, прошлый REVIEW, стат-список и diff ветки) целиком уходит
+в промпт шага, а его размер — в журнал. Так стоимость прогона задаётся
+размером изменения, а не тем, как широко агент разбрёлся по репозиторию.
+
 Фаза 0: гейт плана (фаза A review-checklist) выполняется ревьювером в одном
 прогоне с ревью MR. Отдельное состояние plan_review появится в MVP.
 
@@ -70,6 +75,10 @@ LIMIT_ACCEPT_REJECTS = 1
 # Пока покрывает только уборку при kill: мерж в cmd_approve остался на
 # литерале "main" — чужая зона задачи, перевод отдельным MR.
 MAIN_BRANCH = "main"
+# Потолок diff в ревью-пакете. Это защита контекста шага, а не проверка
+# размера MR: изменение больше потолка ревьювер и так обязан отметить
+# замечанием, а усечение ему об этом прямо говорит (T011).
+REVIEW_DIFF_MAX_LINES = 4000
 
 # Счётчики usage финального события потока: их сумма и есть «токенов за шаг».
 USAGE_TOKEN_KEYS = ("input_tokens", "output_tokens",
@@ -374,6 +383,90 @@ class OutputPump(threading.Thread):
             self.error = exc
 
 
+# ----------------------------------------------------------- ревью-пакет
+
+def artifact_part(path: Path, label: str) -> str:
+    """Часть пакета из файла артефакта.
+
+    Отсутствующий или нечитаемый файл — не пропуск, а строка с причиной:
+    PLAN без файла сам по себе замечание, и ревьювер должен видеть это,
+    а не гадать, показали ли ему всё.
+    """
+    try:
+        body = path.read_text(encoding="utf-8").strip()
+    except FileNotFoundError:
+        body = "(файла нет)"
+    except OSError as exc:
+        body = f"(не прочитан: {exc})"
+    return f"### {label}\n\n{body or '(пусто)'}\n"
+
+
+def git_diff_part(branch: str, *flags: str) -> tuple[str, int]:
+    """Вывод `git diff [flags] main...branch` для пакета и число его строк.
+
+    git не ответил — это часть пакета с причиной, а не пустой diff:
+    молча показать ревьюверу «изменений нет» значит выпросить аппрув
+    вслепую.
+    """
+    res = git("diff", *flags, f"{MAIN_BRANCH}...{branch}")
+    if res.returncode != 0:
+        reason = res.stderr.strip()[:200] or f"git diff вернул {res.returncode}"
+        return f"(не собран: {reason})", 0
+    return res.stdout.strip() or "(изменений нет)", len(res.stdout.splitlines())
+
+
+def truncate_diff(diff: str, lines: int) -> tuple[str, bool]:
+    """Diff под потолком строк и признак усечения.
+
+    Усечение помечается явно и с числами: ревьювер обязан знать, что судит
+    по части изменения, а сам размер — повод для замечания (SPEC T011, 2).
+    """
+    if lines <= REVIEW_DIFF_MAX_LINES:
+        return diff, False
+    kept = "\n".join(diff.splitlines()[:REVIEW_DIFF_MAX_LINES])
+    return (f"{kept}\n\n[diff усечён: показаны первые {REVIEW_DIFF_MAX_LINES} "
+            f"строк из {lines}. Изменение такого размера — само по себе повод "
+            f"для замечания о размере MR.]"), True
+
+
+def review_package(task_id: str, title: str, branch: str) -> dict:
+    """Вход ревьювера одним куском: text, chars, diff_lines, truncated.
+
+    Порядок частей фиксирован (задача, SPEC, PLAN, прошлый REVIEW, стат-
+    список, diff) — по нему ревьювер ориентируется в пакете, а тесты
+    сравнивают сборку.
+    """
+    tdir = TASKS / task_id
+    stat, _ = git_diff_part(branch, "--stat")
+    diff, diff_lines = git_diff_part(branch)
+    diff, truncated = truncate_diff(diff, diff_lines)
+
+    parts = [
+        f"### Задача\n\n{task_id} «{title}», ветка {branch}\n",
+        artifact_part(tdir / "SPEC.md", f"tasks/{task_id}/SPEC.md"),
+        artifact_part(tdir / "PLAN.md", f"tasks/{task_id}/PLAN.md"),
+    ]
+    if (tdir / "REVIEW.md").exists():
+        # Прошлая итерация нужна ревьюверу, чтобы проверить, закрыты ли
+        # его же замечания, а не выдавать их заново.
+        parts.append(artifact_part(tdir / "REVIEW.md",
+                                   f"tasks/{task_id}/REVIEW.md (прошлая итерация)"))
+    parts.append(f"### Изменённые файлы (git diff --stat {MAIN_BRANCH}...{branch})"
+                 f"\n\n{stat}\n")
+    parts.append(f"### Diff (git diff {MAIN_BRANCH}...{branch})\n\n{diff}\n")
+
+    text = "\n".join(parts)
+    return {"text": text, "chars": len(text), "diff_lines": diff_lines,
+            "truncated": truncated}
+
+
+def package_note(package: dict) -> str:
+    """Размер пакета для журнала: с ним стоимость прогона соотносима с входом."""
+    note = f"символов {package['chars']}, строк diff {package['diff_lines']}"
+    return note + (f", diff усечён до {REVIEW_DIFF_MAX_LINES} строк"
+                   if package["truncated"] else "")
+
+
 # ---------------------------------------------------------------- commands
 
 def cmd_init() -> None:
@@ -577,6 +670,7 @@ def cmd_run(task_id: str) -> None:
         for s in ROLE_SKILLS[role]
     )
     task_ref = f"tasks/{task_id}"
+    package = None
     if role == "developer":
         mission = (
             f"Роль: разработчик. Задача {task_id}, ветка {t['branch']}.\n"
@@ -590,15 +684,28 @@ def cmd_run(task_id: str) -> None:
     else:
         mission = (
             f"Роль: ревьювер. Задача {task_id}, ветка {t['branch']}. Свежий "
-            f"контекст: тебе доступны ТОЛЬКО {task_ref}/SPEC.md, PLAN.md и "
-            f"diff (git diff main...{t['branch']}).\n"
+            f"контекст: всё нужное для ревью уже собрано в РЕВЬЮ-ПАКЕТЕ ниже "
+            f"(SPEC, PLAN, прошлый REVIEW, список изменённых файлов, diff). "
+            f"Работай от пакета, а не от обхода репозитория.\n"
+            f"Файлы сверх пакета читай точечно и только когда без них не "
+            f"проверить конкретное замечание; причину чтения называй в самом "
+            f"замечании. Права не сужены: тесты, guard и другие исполняемые "
+            f"проверки запускай, когда они доказывают или опровергают "
+            f"замечание.\n"
             f"Проведи обе фазы review-checklist (гейт плана + ревью MR) и "
             f"заполни {task_ref}/REVIEW.md по templates/REVIEW.md "
             # номер, которого ждёт FSM: вердикт с прежним iteration он уже учёл
             f"(iteration: {t['reviewed_iter'] + 1}). Код НЕ правь — только "
             f"REVIEW.md в ветке задачи."
         )
+        package = review_package(task_id, t["title"], t["branch"])
     prompt = f"{mission}\n\n--- СКИЛЫ РОЛИ ---\n\n{skills}"
+    if package is not None:
+        # Размер входа — в журнал до первой попытки: стоимость прогона потом
+        # сопоставляется именно с ним (SPEC T011, 5).
+        journal(conn, task_id, role, "ревью-пакет собран", package_note(package))
+        print(f"[{task_id}] ревью-пакет: {package_note(package)}")
+        prompt = f"{prompt}\n\n--- РЕВЬЮ-ПАКЕТ ---\n\n{package['text']}"
 
     reason = ""
     for attempt in range(1, AGENT_ATTEMPTS + 1):

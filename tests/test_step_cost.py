@@ -13,6 +13,7 @@
 """
 import io
 import json
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -23,6 +24,11 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from orchestrator import artel  # noqa: E402
+
+
+def fake_git(*args: str) -> subprocess.CompletedProcess:
+    """Подмена `artel.git`: пустой ответ вместо обращения к репозиторию."""
+    return subprocess.CompletedProcess(list(args), 0, "", "")
 
 
 def event(**fields) -> str:
@@ -200,6 +206,12 @@ class CmdRunCostTest(TmpRootTest):
         patcher = mock.patch.object(artel.time, "sleep", lambda _: None)
         patcher.start()
         self.addCleanup(patcher.stop)
+
+        # Шаг ревью собирает пакет настоящим git (T011); в песочнице
+        # репозитория нет, а этому модулю важны деньги шага, не diff.
+        git_patcher = mock.patch.object(artel, "git", fake_git)
+        git_patcher.start()
+        self.addCleanup(git_patcher.stop)
 
     def set_task(self, **fields) -> None:
         conn = artel.db()
