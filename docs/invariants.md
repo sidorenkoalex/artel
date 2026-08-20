@@ -9,6 +9,11 @@
 в ревью, а не задача. Роль, которой инвариант мешает выполнить SPEC,
 эскалирует (skills/escalation-rules.md), а не переписывает тест.
 
+Оба файла реестра — `tests/test_invariants.py` и этот документ — стоят
+в `PROTECTED` job'а `protected-paths` (.github/workflows/ci.yml): их
+изменение в PR помечается предупреждением, как и правка конфигов системы.
+В Фазе 0 это предупреждение, после разделения токенов — fail (ADR-0001).
+
 Источники: README «Инварианты», docs/design.md (§2 роли и права, §4 циклы
 и политика гейтов, §6 runtime и FSM, §7 наблюдаемость, §10 экономика),
 docs/adr/0002-integrity-principle.md, CLAUDE.md.
@@ -25,7 +30,7 @@ docs/adr/0002-integrity-principle.md, CLAUDE.md.
 | 3 | У каждого цикла числовой лимит; после лимита — Оператор, не ретрай | `test_review_freshness.ReviewFreshnessScenarioTest`; `test_agent_failure.CmdRunFailureTest`; `test_invariants.CountersNeverResetTest.test_exhausted_review_limit_is_not_reopened_by_escalation` | README 3; design §4 |
 | 4 | Счётчики итераций глобальные на задачу: ни один переход, включая эскалацию и возврат из неё, их не сбрасывает | `test_invariants.CountersNeverResetTest` | design §4 |
 | 5 | Транзиентный ретрай внутри шага не считается итерацией цикла | `test_agent_failure.CmdRunFailureTest.test_retries_are_not_review_iterations` | design §6 |
-| 6 | Молчание ≠ согласие: ручной гейт не проходит ни по времени, ни по повторному опросу | `test_invariants.ManualGatesNeedTheOperatorTest.test_silence_is_not_consent` | README 4; design §4, §6 |
+| 6 | Молчание ≠ согласие: сколько ни опрашивай `advance`, ручной гейт стоит | `test_invariants.ManualGatesNeedTheOperatorTest.test_repeated_polling_does_not_pass_a_gate` | README 4; design §4, §6 |
 | 7 | Ручной гейт (spec_gate, acceptance, merge_gate) проходит только `approve`/`reject` Оператора | `test_invariants.ManualGatesNeedTheOperatorTest` | design §4 |
 | 8 | Потолок задачи = её денежный бюджет: жёсткий, с алертом на 70% | `test_step_cost.CmdRunCostTest` | README 5; design §6, §10 |
 | 9 | Исчерпанный бюджет блокирует запуск агента и не обходится переходами FSM | `test_invariants.ExhaustedBudgetIsNotBypassableTest` | design §6 |
@@ -53,6 +58,7 @@ docs/adr/0002-integrity-principle.md, CLAUDE.md.
 | Разработчик не мержит, ревьювер не правит код | В Фазе 0 один токен на все роли (ADR-0001), разделение прав существует в промптах; enforcement — branch protection и отдельные PAT | ревью, CI, ADR-0001 |
 | Конфиги системы (gates.yaml, roles.yaml, .github/, templates/, skills/) меняет только Оператор | Проверка живёт в CI (job `protected-paths`), а не в коде оркестратора; в Фазе 0 деградирует до предупреждения — один аккаунт | CI, Оператор |
 | Guards неотключаемы: смержить с красным CI нельзя | Свойство branch protection и настроек репозитория, вне кода | Оператор, настройки репо |
+| Ручной гейт не проходится по таймауту: `awaiting-approval` шлёт напоминание, но никогда не подтверждает (design §6) | У FSM Фазы 0 нет часов и фонового процесса: `advance` времени не смотрит, автопроходить нечему. Подмена `artel.now` в тесте дала бы видимость покрытия, а не покрытие. Кодируется вместе с напоминаниями | ревью, Оператор |
 | Policy проверяет оркестратор, а не агент | Policy-движка в Фазе 0 нет: gates.yaml справочный, все гейты захардкожены ручными. Кодируется вместе с движком в MVP | ревью, дизайн |
 | Шаг идемпотентен, агент эфемерен, чекпоинт = последний артефакт в git | Проверяется реальным прогоном (перезапуск шага с чистого контейнера), не юнитом | Оператор, прогон конвейера |
 | Прод-креды только в пайплайне; песочница агента без сети наружу | Вне объёма Фазы 0 (нет деплоя и песочницы в CI) | Оператор |
