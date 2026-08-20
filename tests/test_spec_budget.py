@@ -2,7 +2,8 @@
 
 Проверяется вся дорога числа: разбор поля `budget_usd`, применение ровно
 на переходе spec_writing -> spec_gate, тишина при отсутствии поля,
-предупреждение при мусоре и приоритет ручного поднятия `budget` над
+предупреждение при мусоре, отказ от значения выше дефолта (потолок отсюда
+только понижается, инвариант 10) и приоритет ручного поднятия `budget` над
 значением из SPEC — в обоих порядках.
 
 Песочница как в test_step_cost.py: БД и артефакты во временном каталоге,
@@ -74,6 +75,33 @@ class SpecBudgetParseTest(unittest.TestCase):
                 self.assertIsNone(value)
                 self.assertIn("не сумма в долларах", refused)
                 self.assertIn(raw.strip(), refused, "видно, что именно отвергли")
+
+    def test_quoted_number_is_still_a_number(self):
+        """YAML-кавычки вокруг суммы — форма записи, а не повод для отказа."""
+        for raw in ('"25"', "'25'", '" 25 "'):
+            with self.subTest(raw=raw):
+                self.assertEqual(artel.spec_budget({"budget_usd": raw})[0], 25.0)
+
+    def test_value_above_the_default_is_refused(self):
+        """Требование 1: потолок отсюда только понижается (инвариант 10).
+
+        Причина отказа обязана отличаться от «не сумма в долларах»: число
+        корректно, нельзя именно поднятие, и Оператор должен видеть разницу.
+        """
+        for raw in (f"{artel.DEFAULT_BUDGET_USD + 1:g}",
+                    f"{artel.DEFAULT_BUDGET_USD * 10:g}"):
+            with self.subTest(raw=raw):
+                value, refused = artel.spec_budget({"budget_usd": raw})
+                self.assertIsNone(value)
+                self.assertIn("выше дефолта", refused)
+                self.assertIn("budget", refused, "сказано, чем поднимают потолок")
+                self.assertNotIn("не сумма", refused)
+
+    def test_value_equal_to_the_default_is_taken(self):
+        """Граница строгая: SPEC говорит «не выше», сам дефолт ещё можно."""
+        self.assertEqual(
+            artel.spec_budget({"budget_usd": f"{artel.DEFAULT_BUDGET_USD:g}"}),
+            (artel.DEFAULT_BUDGET_USD, ""))
 
 
 class SpecBudgetOnTheGateTest(unittest.TestCase):
@@ -155,7 +183,8 @@ class SpecBudgetOnTheGateTest(unittest.TestCase):
         self.assertEqual(row["budget_source"], artel.BUDGET_SOURCE_SPEC)
         self.assertEqual(
             self.journal("бюджет из SPEC"),
-            [f"$25.00 (дефолт ${artel.DEFAULT_BUDGET_USD:.2f})"])
+            [f"$25.00 (прежний потолок ${artel.DEFAULT_BUDGET_USD:.2f}, "
+             f"дефолт ${artel.DEFAULT_BUDGET_USD:.2f})"])
         self.assertIn("бюджет из SPEC: $25.00", out)
 
     def test_applied_value_is_the_ceiling_operator_sees(self):
@@ -214,8 +243,55 @@ class SpecBudgetOnTheGateTest(unittest.TestCase):
                 self.assertEqual(
                     len(self.journal("бюджет из SPEC отклонён")), 1)
                 self.assertIn(
-                    f"остаётся дефолт ${artel.DEFAULT_BUDGET_USD:.2f}",
+                    f"остаётся потолок ${artel.DEFAULT_BUDGET_USD:.2f}",
                     self.journal("бюджет из SPEC отклонён")[0])
+
+    def test_value_above_the_default_keeps_the_default_and_warns(self):
+        """Требование 1: значение выше дефолта потолок не поднимает.
+
+        Инвариант 10 («поднять потолок может только Оператор командой
+        budget») не должен обходиться числом, которое пишет агент-аналитик:
+        предупреждение, прежний потолок и обычный переход на гейт.
+        """
+        for usd in (artel.DEFAULT_BUDGET_USD + 1,
+                    artel.DEFAULT_BUDGET_USD * 10):
+            with self.subTest(usd=usd):
+                self.reset_task()
+                self.write_spec(budget_usd=f"{usd:g}")
+
+                out = self.capture(artel.cmd_advance, self.TASK)
+
+                row = self.task_row()
+                self.assertAlmostEqual(row["budget_usd"],
+                                       artel.DEFAULT_BUDGET_USD,
+                                       msg="потолок задачи не поднялся")
+                self.assertIsNone(row["budget_source"],
+                                  "отвергнутое значение источником не стало")
+                self.assertEqual(row["state"], "spec_gate",
+                                 "задача не заблокирована")
+                self.assertIn("ВНИМАНИЕ", out)
+                refusals = self.journal("бюджет из SPEC отклонён")
+                self.assertEqual(len(refusals), 1)
+                self.assertIn("выше дефолта", refusals[0])
+                self.assertIn("budget", refusals[0])
+                self.assertEqual(self.journal("бюджет из SPEC"), [],
+                                 "записи о применении нет — применять нечего")
+
+    def test_value_equal_to_the_default_is_applied(self):
+        """Граница: ровно дефолт — это «не выше», значение применяется.
+
+        Сравнивать надо с DEFAULT_BUDGET_USD, а не с текущим потолком: в
+        старых БД он бывает $5–$10 от прежних дефолтов, и сравнение с ним
+        отвергло бы разрешённые SPEC суммы (см. LegacyDbMigrationTest).
+        """
+        self.write_spec(budget_usd=f"{artel.DEFAULT_BUDGET_USD:g}")
+
+        self.capture(artel.cmd_advance, self.TASK)
+
+        row = self.task_row()
+        self.assertAlmostEqual(row["budget_usd"], artel.DEFAULT_BUDGET_USD)
+        self.assertEqual(row["budget_source"], artel.BUDGET_SOURCE_SPEC)
+        self.assertEqual(row["state"], "spec_gate")
 
     def test_not_ready_spec_does_not_touch_the_budget(self):
         """Пока SPEC не ready, перехода нет — и бюджет не меняется."""
@@ -253,9 +329,10 @@ class SpecBudgetOnTheGateTest(unittest.TestCase):
         self.assertEqual(self.task_row()["budget_source"],
                          artel.BUDGET_SOURCE_OPERATOR)
         self.assertIn("потолок задан Оператором", out)
-        self.assertEqual(self.journal("бюджет из SPEC"),
-                         ["$25.00 не применён: потолок задан Оператором, "
-                          "потолок $100.00"])
+        self.assertEqual(self.journal("бюджет из SPEC не применён"),
+                         ["$25.00 — потолок задан Оператором, остаётся $100.00"])
+        self.assertEqual(self.journal("бюджет из SPEC"), [],
+                         "потолок не менялся — действие в журнале другое")
 
     def test_operator_ceiling_after_the_gate_still_works(self):
         """Критерий приёмки 3: `budget` после применения работает как раньше."""
@@ -277,8 +354,8 @@ class SpecBudgetOnTheGateTest(unittest.TestCase):
         self.capture(artel.cmd_advance, self.TASK)
 
         self.assertAlmostEqual(self.task_row()["budget_usd"], 25.0)
-        self.assertEqual(self.journal("бюджет из SPEC")[1],
-                         "$25.00 не применён: уже применён, потолок $25.00")
+        self.assertEqual(self.journal("бюджет из SPEC не применён"),
+                         ["$25.00 — уже применён, остаётся $25.00"])
 
 
 class LegacyDbMigrationTest(SpecBudgetOnTheGateTest):
