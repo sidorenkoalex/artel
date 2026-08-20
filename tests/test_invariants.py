@@ -203,6 +203,20 @@ class FsmTest(unittest.TestCase):
         return out, popen
 
 
+class FsmStatesCoverTheCodeTest(unittest.TestCase):
+    """Страховка свипов: `FSM_STATES` — список, а не производная от кода.
+
+    Состояния Фазы 0 — строковые литералы в `cmd_*`, реестра состояний нет
+    (PLAN «Риски»). Механически сверяемо одно: рабочие состояния из
+    `STATE_ROLE`. Новое рабочее состояние, забытое в `FSM_STATES`, иначе
+    молча выпало бы из всех свипов модуля — и инварианты в нём не
+    проверялись бы вовсе.
+    """
+
+    def test_every_working_state_is_swept(self):
+        self.assertLessEqual(set(artel.STATE_ROLE), set(FSM_STATES))
+
+
 class MergeOnlyFromMergeGateTest(FsmTest):
     """Инвариант: git merge выполняет только `approve` из merge_gate.
 
@@ -248,8 +262,15 @@ class MergeOnlyFromMergeGateTest(FsmTest):
 
         self.capture(artel.cmd_approve, self.TASK)
 
-        self.assertEqual(self.git_spy.git_subcommands(),
-                         ["checkout", "pull", "merge", "push"])
+        # Ассерт по содержанию инварианта, а не по точному списку вызовов:
+        # merge случается здесь, после обновления main, и мержит ветку задачи.
+        # Равенство всей последовательности покраснело бы на безобидном
+        # `git fetch --prune`, а ложный красный в неослабляемом тесте
+        # провоцирует ровно то ослабление, ради запрета которого он написан.
+        subcommands = self.git_spy.git_subcommands()
+        self.assertIn("merge", subcommands)
+        self.assertLess(subcommands.index("checkout"), subcommands.index("merge"))
+        self.assertLess(subcommands.index("pull"), subcommands.index("merge"))
         merge = [c for c in self.git_spy.calls if c[:2] == ["git", "merge"]][0]
         self.assertIn(self.branch, merge)
         self.assertEqual(self.state(), "done")
@@ -278,6 +299,15 @@ class AgentRunsOnlyFromRunTest(FsmTest):
     а не агент).
     """
 
+    def setUp(self):
+        super().setUp()
+        # Как и в MergeOnlyFromMergeGateTest: без готовых артефактов все три
+        # ветки cmd_advance выходят на проверке артефакта, и свип доказывал
+        # бы «пустая задача никуда не движется», а не сам инвариант.
+        self.write_spec("ready")
+        self.write_plan("ready")
+        self.write_review("approved", 1)
+
     def test_no_fsm_command_starts_an_agent(self):
         for state in FSM_STATES:
             for name, call in self.commands():
@@ -286,7 +316,9 @@ class AgentRunsOnlyFromRunTest(FsmTest):
                     # задачи, и остаток свипа шёл бы по пустой задаче.
                     continue
                 with self.subTest(состояние=state, команда=name):
-                    self.set_state(state)
+                    # reviewed_iter=0: иначе advance из review упирается
+                    # в «вердикт уже учтён» и до перехода не доходит.
+                    self.set_state(state, reviewed_iter=0)
 
                     _, popen = self.run_command(call)
 
