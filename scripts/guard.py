@@ -19,7 +19,8 @@ RULES = {
         "statuses": {"draft", "ready", "approved"},
     },
     "plan": {
-        "sections": ["Подход", "Шаги", "Покрытие требований"],
+        "sections": ["Подход", "Шаги", "Покрытие требований",
+                     "Влияние на систему"],  # принцип целостности (ADR-0002)
         "statuses": {"draft", "ready", "approved"},
     },
     "review": {
