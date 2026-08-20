@@ -447,7 +447,17 @@ def git_diff_part(branch: str, *flags: str) -> tuple[str, int, str]:
     у не собранного и у пустого diff выглядит одинаково, а разбирать
     странный вердикт Оператор будет именно по журналу (T011, ревью 1).
     """
-    res = git("diff", *flags, f"{MAIN_BRANCH}...{branch}")
+    try:
+        res = git("diff", *flags, f"{MAIN_BRANCH}...{branch}")
+    except UnicodeDecodeError as exc:
+        # git считает файл бинарным по NUL-байту в первых 8 КБ, поэтому
+        # текст в cp1251/latin-1 выкладывается в diff байтами как есть, а
+        # strict-декодирование сидит внутри subprocess и бросает мимо
+        # `except OSError` в git(). Без этого перехвата один такой файл в
+        # ветке ронял `run` трейсбеком до первой записи в журнал, и причина
+        # не попадала даже в `log <id>` (T011, ревью 3).
+        reason = f"не прочитан: {exc}"
+        return f"(не собран: {reason})", 0, reason
     if res.returncode != 0:
         reason = res.stderr.strip()[:200] or f"git diff вернул {res.returncode}"
         return f"(не собран: {reason})", 0, reason

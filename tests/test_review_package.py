@@ -82,19 +82,29 @@ class FakeGit:
 
     `files` — содержимое веток: путь → текст, как его отдал бы
     `git show <ветка>:<путь>`. Чего в словаре нет, того нет и в ветке.
+
+    `raises_on` — команда («diff» или «show»), на которой фейк бросает
+    `UnicodeDecodeError` вместо исхода. Так ведёт себя настоящий `git()`:
+    декодирование живёт внутри `subprocess.run(text=True)`, поэтому файл в
+    cp1251/latin-1 не даёт ненулевой код возврата, а бросает исключение.
     """
 
     def __init__(self, stat="orchestrator/artel.py | 2 +-", diff="diff --git a b",
-                 returncode: int = 0, stderr: str = "", files=None):
+                 returncode: int = 0, stderr: str = "", files=None,
+                 raises_on: str = ""):
         self.stat = stat
         self.diff = diff
         self.returncode = returncode
         self.stderr = stderr
         self.files = dict(files or {})
+        self.raises_on = raises_on
         self.calls: list[list[str]] = []
 
     def __call__(self, *args: str) -> subprocess.CompletedProcess:
         self.calls.append(list(args))
+        if args and args[0] == self.raises_on:
+            raise UnicodeDecodeError("utf-8", b"caf\xe9 na\xefve", 3, 4,
+                                     "invalid continuation byte")
         if args and args[0] == "show":
             return self.show(args)
         stdout = self.stat if "--stat" in args else self.diff
@@ -452,6 +462,36 @@ class ReviewPackageTest(unittest.TestCase):
         self.assertEqual(package["not_collected"], "fatal: bad revision",
                          "причина уезжает и в журнал, не только в текст пакета")
 
+    def test_undecodable_diff_becomes_a_visible_reason(self):
+        """Файл в latin-1 внутри ветки — причина в пакете, а не трейсбек из `run`.
+
+        NUL-байта в таком файле нет, бинарным git его не считает и
+        выкладывает его байты в diff как текст; декодирование падает уже
+        внутри `git()` (ревью 3).
+        """
+        self.git.raises_on = "diff"
+
+        package = self.build()
+
+        self.assertIn("не собран", package["text"])
+        self.assertIn("codec", package["text"], "названа причина, а не «нет diff»")
+        self.assertEqual(package["diff_lines"], 0)
+        self.assertIn("codec", package["not_collected"],
+                      "причина уезжает и в журнал, не только в текст пакета")
+        self.assertIn("Пакет собирает оркестратор", package["text"],
+                      "остальной пакет собран: сбой diff не роняет сборку")
+
+    def test_undecodable_artifact_becomes_a_visible_reason(self):
+        """Тот же класс сбоя на пути `git show`: артефакт назван, сборка цела."""
+        self.git.raises_on = "show"
+
+        package = self.build()
+
+        self.assertIn(f"tasks/{self.TASK}/SPEC.md", package["text"])
+        self.assertIn("не показан", package["text"])
+        self.assertIn("codec", package["text"])
+        self.assertIn("diff --git a b", package["text"], "diff на месте")
+
     def test_empty_diff_is_stated_explicitly(self):
         self.git.diff = ""
         self.git.stat = ""
@@ -579,8 +619,10 @@ class CmdRunReviewPackageTest(unittest.TestCase):
     def test_worktree_fallback_is_journaled(self):
         """Расхождение источника и diff Оператор видит в `log <id>`.
 
-        Откат берём на `templates/REVIEW.md`: этот файл лежит в рабочем
-        дереве репозитория всегда, так что подмены `ROOT` тест не требует.
+        Откат берём на `templates/REVIEW.md`: в дереве этот файл есть,
+        потому что `setUp` копирует `templates/` в песочницу под
+        подменённый `ROOT`. Уберёте `copytree` — упадёт этот тест, а не то
+        место, где сломали фикстуру.
         """
         del self.git.files["templates/REVIEW.md"]
 
@@ -632,6 +674,23 @@ class CmdRunReviewPackageTest(unittest.TestCase):
 
         detail = self.journal_details("ревью-пакет собран")[0]
         self.assertIn("diff не собран: fatal: bad revision", detail)
+
+    def test_undecodable_diff_does_not_kill_the_run(self):
+        """Один latin-1 файл в ветке не должен ронять `run` до записи в журнал.
+
+        Сборка стоит перед `agent run started`, поэтому трейсбек здесь
+        оставлял задачу висеть в `review` вообще без строки в `log <id>`, а
+        причина сидела в файле, который ничем себя не выдаёт (ревью 3).
+        """
+        self.git.raises_on = "diff"
+
+        _, argv = self.run_agent("review")
+
+        detail = self.journal_details("ревью-пакет собран")[0]
+        self.assertIn("diff не собран", detail)
+        self.assertIn("codec", detail)
+        self.assertIn("Пакет собирает оркестратор", self.prompt_of(argv),
+                      "шаг всё равно стартовал, и с артефактами в пакете")
 
     def test_developer_step_has_no_package(self):
         """Требование «не входит»: контекст разработчика не меняется."""
