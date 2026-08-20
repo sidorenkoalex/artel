@@ -211,14 +211,30 @@ class MergeOnlyFromMergeGateTest(FsmTest):
     CLAUDE.md (мерж делает оркестратор, никакая роль — нет).
     """
 
+    def setUp(self):
+        super().setUp()
+        # Артефакты готовы намеренно: команда, отвалившаяся на «SPEC не
+        # ready», до кода перехода не доходит и про merge ничего не
+        # доказывает. Свип должен проверять переходы, а не пустую задачу.
+        self.write_spec("ready")
+        self.write_plan("ready")
+        self.write_review("approved", 1)
+
     def test_no_other_state_and_no_other_command_merges(self):
         """Требование 2.1: другого пути к git merge в системе нет."""
         for state in FSM_STATES:
             for name, call in self.commands():
+                if name == "kill":
+                    # Уборка сносит артефакты задачи, и остаток свипа гонялся
+                    # бы по пустому каталогу. Неприкосновенность main при
+                    # kill — свой инвариант, KillKeepsMainIntactTest.
+                    continue
                 if state == "merge_gate" and name == "approve":
                     continue
                 with self.subTest(состояние=state, команда=name):
-                    self.set_state(state)
+                    # reviewed_iter=0: вердикт снова свежий, иначе advance
+                    # из review выходит на «уже учтён», не дойдя до перехода.
+                    self.set_state(state, reviewed_iter=0)
                     self.git_spy.calls.clear()
 
                     self.run_command(call)
@@ -265,7 +281,9 @@ class AgentRunsOnlyFromRunTest(FsmTest):
     def test_no_fsm_command_starts_an_agent(self):
         for state in FSM_STATES:
             for name, call in self.commands():
-                if name == "run":
+                if name in ("run", "kill"):
+                    # run — сам предмет инварианта; kill сносит каталог
+                    # задачи, и остаток свипа шёл бы по пустой задаче.
                     continue
                 with self.subTest(состояние=state, команда=name):
                     self.set_state(state)
@@ -548,16 +566,20 @@ class ManualGatesNeedTheOperatorTest(FsmTest):
                 self.assertEqual(self.state(), gate)
                 self.assertIn("двигается через approve/reject/run", out)
 
-    def test_silence_is_not_consent(self):
-        """Ни время, ни повторные опросы гейт не проходят."""
-        far_future = "2099-01-01 00:00:00Z"
+    def test_repeated_polling_does_not_pass_a_gate(self):
+        """Повторный опрос — не согласие: гейт стоит, сколько его ни дёргай.
+
+        Про «ни по времени» тест молчит осознанно: часов у FSM Фазы 0 нет
+        (`advance` их не смотрит), автопроходить по таймауту нечему.
+        Подмена `artel.now` здесь создавала бы видимость покрытия — см.
+        вторую таблицу docs/invariants.md.
+        """
         for gate in self.GATES:
             with self.subTest(гейт=gate):
                 self.set_state(gate)
 
-                with mock.patch.object(artel, "now", lambda: far_future):
-                    for _ in range(5):
-                        self.capture(artel.cmd_advance, self.TASK)
+                for _ in range(5):
+                    self.capture(artel.cmd_advance, self.TASK)
 
                 self.assertEqual(self.state(), gate)
                 self.assertNotIn("merge", self.git_spy.git_subcommands())
@@ -619,10 +641,25 @@ class KillKeepsMainIntactTest(unittest.TestCase):
     TASK = "T001"
 
     def setUp(self):
-        tmp = tempfile.TemporaryDirectory()
-        self.addCleanup(tmp.cleanup)
+        self.repo = None
+        self.fresh_repo()
+
+    def fresh_repo(self) -> None:
+        """Пустой репозиторий с созданной задачей; предыдущий закрывается тут же.
+
+        Сценарии уборки несовместимы в одном дереве (смерженная ветка против
+        неслитой), поэтому каждому нужен свой репозиторий. Стек закрывает
+        предыдущий сразу, а не копит открытые каталоги и патчи до конца
+        теста: по упавшему сценарию должно быть видно, чей это фикстур.
+        """
+        if self.repo is not None:
+            self.repo.close()
+        self.repo = contextlib.ExitStack()
+        self.addCleanup(self.repo.close)  # ExitStack.close() идемпотентен
+
         # resolve(): на macOS /var — симлинк на /private/var.
-        self.root = Path(tmp.name).resolve()
+        self.root = Path(self.repo.enter_context(
+            tempfile.TemporaryDirectory())).resolve()
 
         self.git("init", "-b", artel.MAIN_BRANCH)
         self.git("config", "user.email", "artel@example.invalid")
@@ -636,9 +673,7 @@ class KillKeepsMainIntactTest(unittest.TestCase):
                             ("DB", self.root / ".artel" / "state.db"),
                             ("TASKS", self.root / "tasks"),
                             ("LOGS", self.root / ".artel" / "logs")):
-            patcher = mock.patch.object(artel, attr, value)
-            patcher.start()
-            self.addCleanup(patcher.stop)
+            self.repo.enter_context(mock.patch.object(artel, attr, value))
 
         self.capture(artel.cmd_init)
         self.capture(artel.cmd_new, "Инварианты системы")
@@ -704,7 +739,7 @@ class KillKeepsMainIntactTest(unittest.TestCase):
         }
         for name, prepare in scenarios.items():
             with self.subTest(сценарий=name):
-                self.setUp()
+                self.fresh_repo()
                 prepare()
                 before = self.main_state()
 
