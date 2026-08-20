@@ -67,7 +67,7 @@ AGENT_ATTEMPTS = AGENT_RETRIES + 1
 RETRY_BACKOFF_SEC = 5
 LOG_TAIL_LINES = 15
 LOG_TAIL_CHARS = 1000
-DEFAULT_BUDGET_USD = 10.0  # $5 не хватало на цикл с одной итерацией ревью (T008)
+DEFAULT_BUDGET_USD = 50.0  # решение Оператора 20.08.2026: $10 буксовал на T010/T011 (многоитерационные циклы)
 # Бюджет — жёсткий лимит с алертом на 70% (docs/design.md §6, §7).
 BUDGET_ALERT_RATIO = 0.7
 LIMIT_REVIEW_ITERS = 3
