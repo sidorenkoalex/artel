@@ -1,6 +1,6 @@
 """Тесты ревью-пакета — входа ревьювера (см. tasks/T011/SPEC.md).
 
-Реального git и реального CLI здесь нет: `artel.git` подменяется фейком с
+Реального git и реального CLI здесь нет: `gitcmd.git` подменяется фейком с
 заготовленным diff, `subprocess.Popen` — фейковым процессом. Так
 проверяется то, что задаёт стоимость прогона: состав и порядок пакета,
 усечение большого diff и запись размера в журнал.
@@ -21,7 +21,8 @@ from unittest import mock
 REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO))
 
-from orchestrator import artel  # noqa: E402
+from orchestrator import (catalog, config, gitcmd, review,  # noqa: E402
+                          runner, store)
 
 SPEC_MD = """---
 task: T001
@@ -78,7 +79,7 @@ status: draft
 
 
 class FakeGit:
-    """Подмена `artel.git`: отвечает на diff и show заготовками, помнит вызовы.
+    """Подмена `gitcmd.git`: отвечает на diff и show заготовками, помнит вызовы.
 
     `files` — содержимое веток: путь → текст, как его отдал бы
     `git show <ветка>:<путь>`. Чего в словаре нет, того нет и в ветке.
@@ -159,32 +160,32 @@ class TruncateDiffTest(unittest.TestCase):
         return "\n".join(f"+строка {n}" for n in range(1, lines + 1))
 
     def test_diff_under_the_cap_is_untouched(self):
-        diff = self.diff_of(artel.REVIEW_DIFF_MAX_LINES)
+        diff = self.diff_of(config.REVIEW_DIFF_MAX_LINES)
 
-        text, truncated = artel.truncate_diff(diff, artel.REVIEW_DIFF_MAX_LINES)
+        text, truncated = review.truncate_diff(diff, config.REVIEW_DIFF_MAX_LINES)
 
         self.assertEqual(text, diff)
         self.assertFalse(truncated)
 
     def test_big_diff_keeps_the_head_and_says_so(self):
-        lines = artel.REVIEW_DIFF_MAX_LINES + 500
+        lines = config.REVIEW_DIFF_MAX_LINES + 500
         diff = self.diff_of(lines)
 
-        text, truncated = artel.truncate_diff(diff, lines)
+        text, truncated = review.truncate_diff(diff, lines)
 
         self.assertTrue(truncated)
         body, _, note = text.partition("[diff усечён")
         self.assertEqual(body.strip().splitlines(),
-                         diff.splitlines()[:artel.REVIEW_DIFF_MAX_LINES],
+                         diff.splitlines()[:config.REVIEW_DIFF_MAX_LINES],
                          "в пакет идёт начало diff, а не произвольный кусок")
-        self.assertIn(str(artel.REVIEW_DIFF_MAX_LINES), note)
+        self.assertIn(str(config.REVIEW_DIFF_MAX_LINES), note)
         self.assertIn(str(lines), note, "видно, сколько строк не показано")
         self.assertIn("размере MR", note, "размер сам по себе — повод к замечанию")
 
     def test_one_line_over_the_cap_is_already_truncated(self):
-        lines = artel.REVIEW_DIFF_MAX_LINES + 1
+        lines = config.REVIEW_DIFF_MAX_LINES + 1
 
-        _, truncated = artel.truncate_diff(self.diff_of(lines), lines)
+        _, truncated = review.truncate_diff(self.diff_of(lines), lines)
 
         self.assertTrue(truncated)
 
@@ -195,31 +196,31 @@ class TruncatePackageTest(unittest.TestCase):
     def test_package_under_the_cap_is_untouched(self):
         text = "х" * 100
 
-        out, over = artel.truncate_package(text)
+        out, over = review.truncate_package(text)
 
         self.assertEqual(out, text)
         self.assertFalse(over)
 
     def test_oversized_package_is_cut_to_the_cap_and_says_so(self):
-        raw = "a" * (artel.REVIEW_PACKAGE_MAX_BYTES + 1000)
+        raw = "a" * (config.REVIEW_PACKAGE_MAX_BYTES + 1000)
 
-        out, over = artel.truncate_package(raw)
+        out, over = review.truncate_package(raw)
 
         self.assertTrue(over)
         body, _, note = out.partition("[пакет усечён")
-        self.assertEqual(len(body.strip()), artel.REVIEW_PACKAGE_MAX_BYTES)
+        self.assertEqual(len(body.strip()), config.REVIEW_PACKAGE_MAX_BYTES)
         self.assertIn(str(len(raw)), note, "видно, сколько байт не показано")
         self.assertIn("размере MR", note)
 
     def test_cap_counts_bytes_not_characters(self):
         """Кириллица — два байта: потолок должен ловить её вдвое раньше."""
-        text = "я" * artel.REVIEW_PACKAGE_MAX_BYTES
+        text = "я" * config.REVIEW_PACKAGE_MAX_BYTES
 
-        out, over = artel.truncate_package(text)
+        out, over = review.truncate_package(text)
 
         self.assertTrue(over, "потолок в символах пропустил бы этот пакет")
         self.assertLessEqual(len(out.encode("utf-8")),
-                             artel.REVIEW_PACKAGE_MAX_BYTES + 500,
+                             config.REVIEW_PACKAGE_MAX_BYTES + 500,
                              "после отсечки остаётся только пометка сверх потолка")
 
     def test_long_lines_are_cut_even_though_the_line_cap_passes(self):
@@ -227,10 +228,10 @@ class TruncatePackageTest(unittest.TestCase):
         lines = 10
         diff = "\n".join("+" + "z" * 300_000 for _ in range(lines))
 
-        under_line_cap, truncated = artel.truncate_diff(diff, lines)
+        under_line_cap, truncated = review.truncate_diff(diff, lines)
         self.assertFalse(truncated, "потолок строк такой diff пропускает")
 
-        _, over = artel.truncate_package(under_line_cap)
+        _, over = review.truncate_package(under_line_cap)
         self.assertTrue(over, "байтовый потолок обязан его поймать")
 
 
@@ -247,7 +248,7 @@ class ReviewPackageTest(unittest.TestCase):
         self.tdir = self.root / "tasks" / self.TASK
         self.tdir.mkdir(parents=True)
         for attr, value in (("ROOT", self.root), ("TASKS", self.root / "tasks")):
-            patcher = mock.patch.object(artel, attr, value)
+            patcher = mock.patch.object(config, attr, value)
             patcher.start()
             self.addCleanup(patcher.stop)
 
@@ -256,7 +257,7 @@ class ReviewPackageTest(unittest.TestCase):
         self.git = FakeGit(files={f"tasks/{self.TASK}/SPEC.md": SPEC_MD,
                                   f"tasks/{self.TASK}/PLAN.md": PLAN_MD,
                                   "templates/REVIEW.md": FORM_MD})
-        git_patcher = mock.patch.object(artel, "git", self.git)
+        git_patcher = mock.patch.object(gitcmd, "git", self.git)
         git_patcher.start()
         self.addCleanup(git_patcher.stop)
 
@@ -267,7 +268,7 @@ class ReviewPackageTest(unittest.TestCase):
         return path
 
     def build(self) -> dict:
-        return artel.review_package(self.TASK, "Ревью-пакет", self.BRANCH)
+        return review.review_package(self.TASK, "Ревью-пакет", self.BRANCH)
 
     def order_of(self, text: str, *marks: str) -> list[int]:
         found = []
@@ -296,8 +297,8 @@ class ReviewPackageTest(unittest.TestCase):
         self.build()
 
         self.assertEqual([c for c in self.git.calls if c[0] == "diff"],
-                         [["diff", "--stat", f"{artel.MAIN_BRANCH}...{self.BRANCH}"],
-                          ["diff", f"{artel.MAIN_BRANCH}...{self.BRANCH}"]])
+                         [["diff", "--stat", f"{config.MAIN_BRANCH}...{self.BRANCH}"],
+                          ["diff", f"{config.MAIN_BRANCH}...{self.BRANCH}"]])
 
     def test_artifacts_are_read_from_the_same_point_as_the_diff(self):
         """Артефакты — из ветки задачи, а не из того, что сейчас в дереве."""
@@ -342,7 +343,7 @@ class ReviewPackageTest(unittest.TestCase):
         package = self.build()
 
         self.assertIn("Собрать пакет в cmd_run", package["text"])
-        self.assertIn(artel.WORKTREE_NOTE.strip(), package["text"],
+        self.assertIn(review.WORKTREE_NOTE.strip(), package["text"],
                       "подмена источника не проходит молча")
         self.assertEqual(package["from_worktree"], [f"tasks/{self.TASK}/PLAN.md"])
 
@@ -429,14 +430,14 @@ class ReviewPackageTest(unittest.TestCase):
         self.assertFalse(package["truncated"], "потолок строк тут не при чём")
         self.assertIn("[пакет усечён", package["text"])
         self.assertLessEqual(
-            package["bytes"], artel.REVIEW_PACKAGE_MAX_BYTES + 500,
+            package["bytes"], config.REVIEW_PACKAGE_MAX_BYTES + 500,
             "пакет обязан влезать в argv — иначе шаг падает OSError, а не ревью")
         self.assertIn("Пакет собирает оркестратор", package["text"],
                       "SPEC идёт до diff и под нож не попадает")
 
     def test_big_diff_is_truncated_with_a_mark(self):
         """Требование 2: за потолком в пакет идёт усечённый diff с пометкой."""
-        lines = artel.REVIEW_DIFF_MAX_LINES + 10
+        lines = config.REVIEW_DIFF_MAX_LINES + 10
         self.git.diff = "\n".join(f"+строка {n}" for n in range(1, lines + 1))
 
         package = self.build()
@@ -506,7 +507,7 @@ class ReviewPackageTest(unittest.TestCase):
         package = {"chars": 1234, "bytes": 2345, "diff_lines": 56,
                    "truncated": False, "over_bytes": False, "not_collected": "",
                    "from_worktree": []}
-        return artel.package_note(package | over)
+        return review.package_note(package | over)
 
     def test_note_shows_size(self):
         note = self.note_of()
@@ -519,9 +520,9 @@ class ReviewPackageTest(unittest.TestCase):
         self.assertNotIn("рабочего дерева", note)
 
     def test_note_shows_both_truncations(self):
-        self.assertIn(f"diff усечён до {artel.REVIEW_DIFF_MAX_LINES} строк",
+        self.assertIn(f"diff усечён до {config.REVIEW_DIFF_MAX_LINES} строк",
                       self.note_of(truncated=True))
-        self.assertIn(f"пакет усечён до {artel.REVIEW_PACKAGE_MAX_BYTES} байт",
+        self.assertIn(f"пакет усечён до {config.REVIEW_PACKAGE_MAX_BYTES} байт",
                       self.note_of(over_bytes=True))
 
     def test_note_tells_a_failed_diff_from_an_empty_one(self):
@@ -549,7 +550,7 @@ class CmdRunReviewPackageTest(unittest.TestCase):
                             ("DB", root / ".artel" / "state.db"),
                             ("TASKS", root / "tasks"),
                             ("LOGS", root / ".artel" / "logs")):
-            patcher = mock.patch.object(artel, attr, value)
+            patcher = mock.patch.object(config, attr, value)
             patcher.start()
             self.addCleanup(patcher.stop)
 
@@ -558,13 +559,13 @@ class CmdRunReviewPackageTest(unittest.TestCase):
         self.git = FakeGit(files={f"tasks/{self.TASK}/SPEC.md": SPEC_MD,
                                   f"tasks/{self.TASK}/PLAN.md": PLAN_MD,
                                   "templates/REVIEW.md": FORM_MD})
-        git_patcher = mock.patch.object(artel, "git", self.git)
+        git_patcher = mock.patch.object(gitcmd, "git", self.git)
         git_patcher.start()
         self.addCleanup(git_patcher.stop)
 
-        self.capture(artel.cmd_init)
-        self.capture(artel.cmd_new, "Ревью-пакет вместо свободного чтения")
-        self.tdir = artel.TASKS / self.TASK
+        self.capture(catalog.cmd_init)
+        self.capture(catalog.cmd_new, "Ревью-пакет вместо свободного чтения")
+        self.tdir = config.TASKS / self.TASK
 
     def capture(self, fn, *args) -> str:
         buf = io.StringIO()
@@ -573,23 +574,23 @@ class CmdRunReviewPackageTest(unittest.TestCase):
         return buf.getvalue()
 
     def set_state(self, state: str) -> None:
-        conn = artel.db()
+        conn = store.db()
         conn.execute("UPDATE tasks SET state=? WHERE id=?", (state, self.TASK))
         conn.commit()
 
     def run_agent(self, state: str) -> tuple[str, list[str]]:
         """Прогон шага; возвращает вывод и argv запущенного CLI."""
         self.set_state(state)
-        with mock.patch.object(artel.subprocess, "Popen") as popen:
+        with mock.patch.object(runner.subprocess, "Popen") as popen:
             popen.return_value = FakeProc(["готово\n"])
-            out = self.capture(artel.cmd_run, self.TASK)
+            out = self.capture(runner.cmd_run, self.TASK)
         return out, popen.call_args.args[0]
 
     def prompt_of(self, argv: list[str]) -> str:
         return argv[argv.index("-p") + 1]
 
     def journal_details(self, action: str) -> list[str]:
-        return [r["detail"] for r in artel.db().execute(
+        return [r["detail"] for r in store.db().execute(
             "SELECT detail FROM steps WHERE task_id=? AND action=? ORDER BY id",
             (self.TASK, action))]
 
@@ -630,7 +631,7 @@ class CmdRunReviewPackageTest(unittest.TestCase):
 
         self.assertIn("не из ветки, а из рабочего дерева: templates/REVIEW.md",
                       self.journal_details("ревью-пакет собран")[0])
-        self.assertIn(artel.WORKTREE_NOTE.strip(), self.prompt_of(argv),
+        self.assertIn(review.WORKTREE_NOTE.strip(), self.prompt_of(argv),
                       "источник назван и в самом пакете, не только в журнале")
 
     def test_package_size_lands_in_the_journal(self):
@@ -639,26 +640,26 @@ class CmdRunReviewPackageTest(unittest.TestCase):
 
         details = self.journal_details("ревью-пакет собран")
         self.assertEqual(len(details), 1)
-        package = artel.review_package(self.TASK, "Ревью-пакет вместо свободного чтения",
-                                       artel.db().execute(
+        package = review.review_package(self.TASK, "Ревью-пакет вместо свободного чтения",
+                                       store.db().execute(
                                            "SELECT branch FROM tasks WHERE id=?",
                                            (self.TASK,)).fetchone()[0])
         self.assertIn(f"символов {package['chars']}", details[0])
         self.assertIn(f"строк diff {package['diff_lines']}", details[0])
-        self.assertIn("символов", self.capture(artel.cmd_log, self.TASK))
+        self.assertIn("символов", self.capture(catalog.cmd_log, self.TASK))
         self.assertIn("ревью-пакет:", out, "размер виден Оператору сразу")
 
     def test_package_is_journaled_before_the_agent_starts(self):
         """Запись о пакете идёт до запуска — иначе она врёт о старте шага."""
         self.run_agent("review")
 
-        actions = [r["action"] for r in artel.db().execute(
+        actions = [r["action"] for r in store.db().execute(
             "SELECT action FROM steps WHERE task_id=? ORDER BY id", (self.TASK,))]
         self.assertLess(actions.index("ревью-пакет собран"),
                         actions.index("agent run started"))
 
     def test_truncation_is_journaled_too(self):
-        lines = artel.REVIEW_DIFF_MAX_LINES + 7
+        lines = config.REVIEW_DIFF_MAX_LINES + 7
         self.git.diff = "\n".join(f"+строка {n}" for n in range(1, lines + 1))
 
         self.run_agent("review")

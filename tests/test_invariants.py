@@ -30,7 +30,8 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from orchestrator import artel  # noqa: E402
+from orchestrator import (budget, catalog, cleanup, config, fsm,  # noqa: E402
+                          gitcmd, runner, store)
 from scripts import guard  # noqa: E402
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -127,18 +128,18 @@ class FsmTest(unittest.TestCase):
         for attr, value in (("DB", root / ".artel" / "state.db"),
                             ("TASKS", root / "tasks"),
                             ("LOGS", root / ".artel" / "logs")):
-            patcher = mock.patch.object(artel, attr, value)
+            patcher = mock.patch.object(config, attr, value)
             patcher.start()
             self.addCleanup(patcher.stop)
 
         self.git_spy = SpyRun()
-        spy_patcher = mock.patch.object(artel.subprocess, "run", self.git_spy)
+        spy_patcher = mock.patch.object(gitcmd.subprocess, "run", self.git_spy)
         spy_patcher.start()
         self.addCleanup(spy_patcher.stop)
 
-        self.capture(artel.cmd_init)
-        self.capture(artel.cmd_new, "Инварианты системы")
-        self.tdir = artel.TASKS / self.TASK
+        self.capture(catalog.cmd_init)
+        self.capture(catalog.cmd_new, "Инварианты системы")
+        self.tdir = config.TASKS / self.TASK
         self.branch = self.task_row()["branch"]
 
     # ------------------------------------------------------------ утилиты
@@ -150,7 +151,7 @@ class FsmTest(unittest.TestCase):
         return buf.getvalue()
 
     def task_row(self):
-        return artel.db().execute(
+        return store.db().execute(
             "SELECT * FROM tasks WHERE id=?", (self.TASK,)).fetchone()
 
     def state(self) -> str:
@@ -159,7 +160,7 @@ class FsmTest(unittest.TestCase):
     def set_state(self, state: str, **fields) -> None:
         """Ставит состояние (и, если нужно, счётчики) в обход переходов."""
         self.tdir.mkdir(parents=True, exist_ok=True)
-        conn = artel.db()
+        conn = store.db()
         conn.execute("UPDATE tasks SET state=? WHERE id=?", (state, self.TASK))
         for column, value in fields.items():
             conn.execute(f"UPDATE tasks SET {column}=? WHERE id=?",
@@ -182,21 +183,21 @@ class FsmTest(unittest.TestCase):
     def commands(self) -> list[tuple[str, object]]:
         """Все команды CLI, кроме `init` и `new` (они не двигают задачу)."""
         return [
-            ("advance", lambda: artel.cmd_advance(self.TASK)),
-            ("approve", lambda: artel.cmd_approve(self.TASK)),
-            ("reject", lambda: artel.cmd_reject(self.TASK, "причина")),
-            ("run", lambda: artel.cmd_run(self.TASK)),
-            ("budget", lambda: artel.cmd_budget(self.TASK, "50")),
-            ("kill", lambda: artel.cmd_kill(self.TASK)),
-            ("status", artel.cmd_status),
-            ("show", lambda: artel.cmd_show(self.TASK)),
-            ("log", lambda: artel.cmd_log(self.TASK)),
+            ("advance", lambda: fsm.cmd_advance(self.TASK)),
+            ("approve", lambda: fsm.cmd_approve(self.TASK)),
+            ("reject", lambda: fsm.cmd_reject(self.TASK, "причина")),
+            ("run", lambda: runner.cmd_run(self.TASK)),
+            ("budget", lambda: budget.cmd_budget(self.TASK, "50")),
+            ("kill", lambda: cleanup.cmd_kill(self.TASK)),
+            ("status", catalog.cmd_status),
+            ("show", lambda: catalog.cmd_show(self.TASK)),
+            ("log", lambda: catalog.cmd_log(self.TASK)),
         ]
 
     def run_command(self, call) -> tuple[str, mock.Mock]:
         """Прогон команды с подменённым агентом; SystemExit — тоже исход."""
         out = ""
-        with mock.patch.object(artel.subprocess, "Popen") as popen:
+        with mock.patch.object(runner.subprocess, "Popen") as popen:
             popen.return_value = FakeProc(["готово\n"])
             with contextlib.suppress(SystemExit):
                 out = self.capture(call)
@@ -214,7 +215,7 @@ class FsmStatesCoverTheCodeTest(unittest.TestCase):
     """
 
     def test_every_working_state_is_swept(self):
-        self.assertLessEqual(set(artel.STATE_ROLE), set(FSM_STATES))
+        self.assertLessEqual(set(config.STATE_ROLE), set(FSM_STATES))
 
 
 class MergeOnlyFromMergeGateTest(FsmTest):
@@ -260,7 +261,7 @@ class MergeOnlyFromMergeGateTest(FsmTest):
         """Контроль: из merge_gate approve мержит ветку задачи и закрывает её."""
         self.set_state("merge_gate")
 
-        self.capture(artel.cmd_approve, self.TASK)
+        self.capture(fsm.cmd_approve, self.TASK)
 
         # Ассерт по содержанию инварианта, а не по точному списку вызовов:
         # merge случается здесь, после обновления main, и мержит ветку задачи.
@@ -284,9 +285,9 @@ class MergeOnlyFromMergeGateTest(FsmTest):
             rc = 1 if list(cmd)[:2] == ["git", "merge"] else 0
             return subprocess.CompletedProcess(list(cmd), rc, "", "конфликт")
 
-        with mock.patch.object(artel.subprocess, "run", failing):
+        with mock.patch.object(fsm.subprocess, "run", failing):
             with self.assertRaises(SystemExit):
-                self.capture(artel.cmd_approve, self.TASK)
+                self.capture(fsm.cmd_approve, self.TASK)
 
         self.assertEqual(self.state(), "merge_gate")
 
@@ -329,9 +330,9 @@ class AgentRunsOnlyFromRunTest(FsmTest):
             with self.subTest(состояние=state):
                 self.set_state(state)
 
-                _, popen = self.run_command(lambda: artel.cmd_run(self.TASK))
+                _, popen = self.run_command(lambda: runner.cmd_run(self.TASK))
 
-                started = state in artel.STATE_ROLE
+                started = state in config.STATE_ROLE
                 self.assertEqual(popen.called, started)
 
 
@@ -339,7 +340,7 @@ class FreshVerdictGuardsAcceptanceTest(FsmTest):
     """Инвариант: review → acceptance — только по свежему вердикту ревьювера.
 
     Источник: docs/design.md §4 (лимит итераций ревью и эскалация после
-    него), artel.py `fresh_verdict_iteration`. Здесь — сквозной путь FSM
+    него), artifacts.py `fresh_verdict_iteration`. Здесь — сквозной путь FSM
     и отсутствие обходных команд; разбор поля iteration покрыт юнитами
     tests/test_review_freshness.py.
     """
@@ -347,32 +348,32 @@ class FreshVerdictGuardsAcceptanceTest(FsmTest):
     def test_every_return_to_dev_requires_a_new_verdict(self):
         """Требование 2.2: путь SPEC → ревью → приёмка → возврат → ревью."""
         self.write_spec("ready")
-        self.capture(artel.cmd_advance, self.TASK)
+        self.capture(fsm.cmd_advance, self.TASK)
         self.assertEqual(self.state(), "spec_gate")
 
-        self.capture(artel.cmd_approve, self.TASK)
+        self.capture(fsm.cmd_approve, self.TASK)
         self.write_plan("ready")
-        self.capture(artel.cmd_advance, self.TASK)
+        self.capture(fsm.cmd_advance, self.TASK)
         self.assertEqual(self.state(), "review")
 
-        out = self.capture(artel.cmd_advance, self.TASK)
+        out = self.capture(fsm.cmd_advance, self.TASK)
         self.assertEqual(self.state(), "review", "REVIEW.md ещё нет")
         self.assertIn("жду вердикта", out)
 
         self.write_review("approved", 1)
-        self.capture(artel.cmd_advance, self.TASK)
+        self.capture(fsm.cmd_advance, self.TASK)
         self.assertEqual(self.state(), "acceptance")
 
-        self.capture(artel.cmd_reject, self.TASK, "критерий 2 не выполнен")
-        self.capture(artel.cmd_advance, self.TASK)
+        self.capture(fsm.cmd_reject, self.TASK, "критерий 2 не выполнен")
+        self.capture(fsm.cmd_advance, self.TASK)
         self.assertEqual(self.state(), "review")
 
-        out = self.capture(artel.cmd_advance, self.TASK)
+        out = self.capture(fsm.cmd_advance, self.TASK)
         self.assertEqual(self.state(), "review", "вердикт #1 уже учтён")
         self.assertIn("уже учтён", out)
 
         self.write_review("approved", 2)
-        self.capture(artel.cmd_advance, self.TASK)
+        self.capture(fsm.cmd_advance, self.TASK)
         self.assertEqual(self.state(), "acceptance")
 
     def test_stale_verdict_is_not_passed_by_any_command(self):
@@ -380,9 +381,9 @@ class FreshVerdictGuardsAcceptanceTest(FsmTest):
         self.write_plan("ready")
         self.write_review("approved", 1)
         self.set_state("review")
-        self.capture(artel.cmd_advance, self.TASK)
-        self.capture(artel.cmd_reject, self.TASK, "доработать")
-        self.capture(artel.cmd_advance, self.TASK)
+        self.capture(fsm.cmd_advance, self.TASK)
+        self.capture(fsm.cmd_reject, self.TASK, "доработать")
+        self.capture(fsm.cmd_advance, self.TASK)
         self.assertEqual(self.state(), "review")
 
         for name, call in self.commands():
@@ -402,15 +403,15 @@ class FreshVerdictGuardsAcceptanceTest(FsmTest):
         self.write_plan("ready")
         self.write_review("approved", 1)
         self.set_state("review")
-        self.capture(artel.cmd_advance, self.TASK)
+        self.capture(fsm.cmd_advance, self.TASK)
         self.assertEqual(self.state(), "acceptance")
 
         self.set_state("escalated")
-        self.capture(artel.cmd_approve, self.TASK)
-        self.capture(artel.cmd_advance, self.TASK)
+        self.capture(fsm.cmd_approve, self.TASK)
+        self.capture(fsm.cmd_advance, self.TASK)
         self.assertEqual(self.state(), "review")
 
-        self.capture(artel.cmd_advance, self.TASK)
+        self.capture(fsm.cmd_advance, self.TASK)
 
         self.assertEqual(self.state(), "review")
         self.assertEqual(self.task_row()["reviewed_iter"], 1)
@@ -430,19 +431,19 @@ class ExhaustedBudgetIsNotBypassableTest(FsmTest):
         self.set_state("in_dev", budget_usd=1.0, spent_usd=1.0)
 
     def try_run(self) -> tuple[str, mock.Mock]:
-        return self.run_command(lambda: artel.cmd_run(self.TASK))
+        return self.run_command(lambda: runner.cmd_run(self.TASK))
 
     def test_run_refuses_and_no_agent_starts(self):
         """Требование 2.3: за потолком шаг не начинается."""
-        with mock.patch.object(artel.subprocess, "Popen") as popen:
+        with mock.patch.object(runner.subprocess, "Popen") as popen:
             with self.assertRaises(SystemExit) as exit_:
-                self.capture(artel.cmd_run, self.TASK)
+                self.capture(runner.cmd_run, self.TASK)
 
         popen.assert_not_called()
         self.assertIn("бюджет исчерпан", str(exit_.exception))
 
     def test_advance_does_not_unblock_the_run(self):
-        self.capture(artel.cmd_advance, self.TASK)
+        self.capture(fsm.cmd_advance, self.TASK)
         self.assertEqual(self.state(), "review")
 
         _, popen = self.try_run()
@@ -453,7 +454,7 @@ class ExhaustedBudgetIsNotBypassableTest(FsmTest):
         """Возврат из эскалации — не деньги: шаг по-прежнему не стартует."""
         self.set_state("escalated", escalated_from="in_dev")
 
-        self.capture(artel.cmd_approve, self.TASK)
+        self.capture(fsm.cmd_approve, self.TASK)
         self.assertEqual(self.state(), "in_dev")
         _, popen = self.try_run()
 
@@ -472,7 +473,7 @@ class ExhaustedBudgetIsNotBypassableTest(FsmTest):
 
     def test_only_the_operator_ceiling_unblocks_the_run(self):
         """Контроль: блокировка не вечная — её снимает `budget` Оператора."""
-        self.capture(artel.cmd_budget, self.TASK, "5")
+        self.capture(budget.cmd_budget, self.TASK, "5")
 
         _, popen = self.try_run()
 
@@ -493,7 +494,7 @@ class CountersNeverResetTest(FsmTest):
         super().setUp()
         self.write_plan("ready")
         self.set_state("review")
-        patcher = mock.patch.object(artel.time, "sleep", lambda _: None)
+        patcher = mock.patch.object(runner.time, "sleep", lambda _: None)
         patcher.start()
         self.addCleanup(patcher.stop)
 
@@ -513,34 +514,34 @@ class CountersNeverResetTest(FsmTest):
 
     def verdict(self, status: str, iteration: int) -> None:
         self.write_review(status, iteration)
-        self.step(f"вердикт {status} #{iteration}", artel.cmd_advance, self.TASK)
+        self.step(f"вердикт {status} #{iteration}", fsm.cmd_advance, self.TASK)
 
     def test_no_transition_of_the_full_cycle_resets_a_counter(self):
         """Требование 2.4: цикл с эскалациями, возвратами и лимитами."""
         self.verdict("changes_requested", 1)
         self.assertEqual(self.state(), "in_dev")
-        self.step("in_dev -> review", artel.cmd_advance, self.TASK)
+        self.step("in_dev -> review", fsm.cmd_advance, self.TASK)
 
         self.verdict("escalate", 2)
         self.assertEqual(self.state(), "escalated")
-        self.step("возврат из эскалации", artel.cmd_approve, self.TASK)
-        self.step("in_dev -> review", artel.cmd_advance, self.TASK)
+        self.step("возврат из эскалации", fsm.cmd_approve, self.TASK)
+        self.step("in_dev -> review", fsm.cmd_advance, self.TASK)
 
         self.verdict("approved", 3)
         self.assertEqual(self.state(), "acceptance")
-        self.step("отказ приёмки", artel.cmd_reject, self.TASK, "не то")
-        self.step("in_dev -> review", artel.cmd_advance, self.TASK)
+        self.step("отказ приёмки", fsm.cmd_reject, self.TASK, "не то")
+        self.step("in_dev -> review", fsm.cmd_advance, self.TASK)
 
         self.verdict("approved", 4)
-        self.step("лимит отказов приёмки", artel.cmd_reject, self.TASK,
+        self.step("лимит отказов приёмки", fsm.cmd_reject, self.TASK,
                   "снова не то")
         self.assertEqual(self.state(), "escalated")
-        self.step("возврат из эскалации", artel.cmd_approve, self.TASK)
+        self.step("возврат из эскалации", fsm.cmd_approve, self.TASK)
 
-        self.step("поднятие бюджета", artel.cmd_budget, self.TASK, "42")
+        self.step("поднятие бюджета", budget.cmd_budget, self.TASK, "42")
         self.step("провал агента", self.failing_run)
         self.assertEqual(self.state(), "escalated")
-        self.step("возврат из эскалации", artel.cmd_approve, self.TASK)
+        self.step("возврат из эскалации", fsm.cmd_approve, self.TASK)
 
         row = self.task_row()
         self.assertEqual(
@@ -549,21 +550,21 @@ class CountersNeverResetTest(FsmTest):
 
     def failing_run(self) -> None:
         """Прогон, в котором агент падает все положенные попытки."""
-        procs = [FakeProc(["упал\n"], 1) for _ in range(artel.AGENT_ATTEMPTS)]
-        with mock.patch.object(artel.subprocess, "Popen", side_effect=procs):
-            artel.cmd_run(self.TASK)
+        procs = [FakeProc(["упал\n"], 1) for _ in range(config.AGENT_ATTEMPTS)]
+        with mock.patch.object(runner.subprocess, "Popen", side_effect=procs):
+            runner.cmd_run(self.TASK)
 
     def test_exhausted_review_limit_is_not_reopened_by_escalation(self):
         """Эскалация по лимиту и возврат из неё не выдают новых итераций."""
-        self.set_state("review", review_iters=artel.LIMIT_REVIEW_ITERS - 1)
+        self.set_state("review", review_iters=config.LIMIT_REVIEW_ITERS - 1)
 
         self.verdict("changes_requested", 1)
         self.assertEqual(self.state(), "escalated")
         self.assertEqual(self.task_row()["review_iters"],
-                         artel.LIMIT_REVIEW_ITERS - 1)
+                         config.LIMIT_REVIEW_ITERS - 1)
 
-        self.step("возврат из эскалации", artel.cmd_approve, self.TASK)
-        self.step("in_dev -> review", artel.cmd_advance, self.TASK)
+        self.step("возврат из эскалации", fsm.cmd_approve, self.TASK)
+        self.step("in_dev -> review", fsm.cmd_advance, self.TASK)
         self.verdict("changes_requested", 2)
 
         self.assertEqual(self.state(), "escalated", "лимит остался исчерпанным")
@@ -593,7 +594,7 @@ class ManualGatesNeedTheOperatorTest(FsmTest):
             with self.subTest(гейт=gate):
                 self.set_state(gate)
 
-                out = self.capture(artel.cmd_advance, self.TASK)
+                out = self.capture(fsm.cmd_advance, self.TASK)
 
                 self.assertEqual(self.state(), gate)
                 self.assertIn("двигается через approve/reject/run", out)
@@ -603,7 +604,7 @@ class ManualGatesNeedTheOperatorTest(FsmTest):
 
         Про «ни по времени» тест молчит осознанно: часов у FSM Фазы 0 нет
         (`advance` их не смотрит), автопроходить по таймауту нечему.
-        Подмена `artel.now` здесь создавала бы видимость покрытия — см.
+        Подмена `store.now` здесь создавала бы видимость покрытия — см.
         вторую таблицу docs/invariants.md.
         """
         for gate in self.GATES:
@@ -611,7 +612,7 @@ class ManualGatesNeedTheOperatorTest(FsmTest):
                 self.set_state(gate)
 
                 for _ in range(5):
-                    self.capture(artel.cmd_advance, self.TASK)
+                    self.capture(fsm.cmd_advance, self.TASK)
 
                 self.assertEqual(self.state(), gate)
                 self.assertNotIn("merge", self.git_spy.git_subcommands())
@@ -637,14 +638,14 @@ class ManualGatesNeedTheOperatorTest(FsmTest):
             with self.subTest(гейт=gate):
                 self.set_state(gate)
 
-                self.capture(artel.cmd_approve, self.TASK)
+                self.capture(fsm.cmd_approve, self.TASK)
 
                 self.assertEqual(self.state(), expected)
 
     def test_operator_reject_returns_acceptance_to_dev(self):
         self.set_state("acceptance")
 
-        self.capture(artel.cmd_reject, self.TASK, "критерий 3 не выполнен")
+        self.capture(fsm.cmd_reject, self.TASK, "критерий 3 не выполнен")
 
         self.assertEqual(self.state(), "in_dev")
 
@@ -654,7 +655,7 @@ class ManualGatesNeedTheOperatorTest(FsmTest):
             with self.subTest(гейт=gate):
                 self.set_state(gate)
 
-                out, popen = self.run_command(lambda: artel.cmd_run(self.TASK))
+                out, popen = self.run_command(lambda: runner.cmd_run(self.TASK))
 
                 popen.assert_not_called()
                 self.assertEqual(self.state(), gate)
@@ -693,7 +694,7 @@ class KillKeepsMainIntactTest(unittest.TestCase):
         self.root = Path(self.repo.enter_context(
             tempfile.TemporaryDirectory())).resolve()
 
-        self.git("init", "-b", artel.MAIN_BRANCH)
+        self.git("init", "-b", config.MAIN_BRANCH)
         self.git("config", "user.email", "artel@example.invalid")
         self.git("config", "user.name", "artel tests")
         shutil.copytree(REPO_ROOT / "templates", self.root / "templates")
@@ -705,11 +706,11 @@ class KillKeepsMainIntactTest(unittest.TestCase):
                             ("DB", self.root / ".artel" / "state.db"),
                             ("TASKS", self.root / "tasks"),
                             ("LOGS", self.root / ".artel" / "logs")):
-            self.repo.enter_context(mock.patch.object(artel, attr, value))
+            self.repo.enter_context(mock.patch.object(config, attr, value))
 
-        self.capture(artel.cmd_init)
-        self.capture(artel.cmd_new, "Инварианты системы")
-        self.branch = artel.db().execute(
+        self.capture(catalog.cmd_init)
+        self.capture(catalog.cmd_new, "Инварианты системы")
+        self.branch = store.db().execute(
             "SELECT branch FROM tasks WHERE id=?", (self.TASK,)).fetchone()[0]
 
     # ------------------------------------------------------------ утилиты
@@ -729,17 +730,17 @@ class KillKeepsMainIntactTest(unittest.TestCase):
 
     def main_state(self) -> tuple[str, str]:
         """Коммит main и его дерево — то, что kill обязан оставить как есть."""
-        return (self.git("rev-parse", artel.MAIN_BRANCH),
-                self.git("ls-tree", "-r", artel.MAIN_BRANCH))
+        return (self.git("rev-parse", config.MAIN_BRANCH),
+                self.git("ls-tree", "-r", config.MAIN_BRANCH))
 
     def task_dir(self) -> Path:
-        return artel.TASKS / self.TASK
+        return config.TASKS / self.TASK
 
     def commit_artifacts_in_branch(self) -> None:
         self.git("checkout", "-b", self.branch)
         self.git("add", "-A")
         self.git("commit", "-m", f"{self.TASK}: SPEC")
-        self.git("checkout", artel.MAIN_BRANCH)
+        self.git("checkout", config.MAIN_BRANCH)
 
     def merge_branch_into_main(self) -> None:
         self.commit_artifacts_in_branch()
@@ -752,7 +753,7 @@ class KillKeepsMainIntactTest(unittest.TestCase):
         self.merge_branch_into_main()
         before = self.main_state()
 
-        self.capture(artel.cmd_kill, self.TASK)
+        self.capture(cleanup.cmd_kill, self.TASK)
 
         self.assertEqual(self.main_state(), before, "kill изменил main")
         self.assertTrue((self.task_dir() / "SPEC.md").exists())
@@ -775,7 +776,7 @@ class KillKeepsMainIntactTest(unittest.TestCase):
                 prepare()
                 before = self.main_state()
 
-                self.capture(artel.cmd_kill, self.TASK)
+                self.capture(cleanup.cmd_kill, self.TASK)
 
                 self.assertEqual(self.main_state(), before)
 
@@ -784,7 +785,7 @@ class KillKeepsMainIntactTest(unittest.TestCase):
         self.commit_artifacts_in_branch()
         before = self.main_state()
 
-        self.capture(artel.cmd_kill, self.TASK)
+        self.capture(cleanup.cmd_kill, self.TASK)
 
         self.assertEqual(self.main_state(), before)
         self.assertNotIn(self.branch,

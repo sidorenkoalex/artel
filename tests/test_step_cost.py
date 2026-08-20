@@ -23,11 +23,12 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from orchestrator import artel  # noqa: E402
+from orchestrator import (agent_log, budget, catalog, config,  # noqa: E402
+                          fsm, gitcmd, runner, spend, store)
 
 
 def fake_git(*args: str) -> subprocess.CompletedProcess:
-    """Подмена `artel.git`: пустой ответ вместо обращения к репозиторию."""
+    """Подмена `gitcmd.git`: пустой ответ вместо обращения к репозиторию."""
     return subprocess.CompletedProcess(list(args), 0, "", "")
 
 
@@ -81,7 +82,7 @@ class TmpRootTest(unittest.TestCase):
         for attr, value in (("DB", root / ".artel" / "state.db"),
                             ("TASKS", root / "tasks"),
                             ("LOGS", root / ".artel" / "logs")):
-            patcher = mock.patch.object(artel, attr, value)
+            patcher = mock.patch.object(config, attr, value)
             patcher.start()
             self.addCleanup(patcher.stop)
 
@@ -96,7 +97,7 @@ class ParseCostEventTest(unittest.TestCase):
     """Разбор финального события потока: цена шага и токены."""
 
     def test_cost_and_tokens_are_taken_from_result_event(self):
-        cost = artel.parse_cost_event(result_event(
+        cost = spend.parse_cost_event(result_event(
             usd=0.1234, usage={"input_tokens": 10, "output_tokens": 90,
                                "cache_creation_input_tokens": 400,
                                "cache_read_input_tokens": 500}))
@@ -104,25 +105,25 @@ class ParseCostEventTest(unittest.TestCase):
         self.assertEqual(cost, {"usd": 0.1234, "tokens": 1000})
 
     def test_tokens_are_optional(self):
-        cost = artel.parse_cost_event(result_event(usd=0.5))
+        cost = spend.parse_cost_event(result_event(usd=0.5))
 
         self.assertEqual(cost, {"usd": 0.5, "tokens": None})
 
     def test_known_usage_counters_are_summed(self):
-        cost = artel.parse_cost_event(result_event(
+        cost = spend.parse_cost_event(result_event(
             usd=0.5, usage={"input_tokens": 7, "server_tool_use": {"a": 1}}))
 
         self.assertEqual(cost["tokens"], 7, "чужие поля usage не считаются")
 
     def test_failed_run_still_costs_money(self):
-        cost = artel.parse_cost_event(event(
+        cost = spend.parse_cost_event(event(
             type="result", subtype="error_during_execution", is_error=True,
             result="лимит контекста", total_cost_usd=0.7))
 
         self.assertEqual(cost["usd"], 0.7)
 
     def test_free_run_is_zero_not_unknown(self):
-        self.assertEqual(artel.parse_cost_event(result_event(usd=0))["usd"], 0.0)
+        self.assertEqual(spend.parse_cost_event(result_event(usd=0))["usd"], 0.0)
 
     def test_events_without_cost_are_unknown(self):
         for raw in (event(type="system", subtype="init"),
@@ -138,13 +139,13 @@ class ParseCostEventTest(unittest.TestCase):
                     "Traceback (most recent call last):\n",
                     "[1, 2]\n"):
             with self.subTest(raw=raw[:45]):
-                self.assertIsNone(artel.parse_cost_event(raw))
+                self.assertIsNone(spend.parse_cost_event(raw))
 
     def test_unknown_cost_renders_as_nothing(self):
-        self.assertEqual(artel.cost_note(None), "")
+        self.assertEqual(spend.cost_note(None), "")
 
     def test_cost_note_shows_dollars_and_tokens(self):
-        note = artel.cost_note({"usd": 0.1234, "tokens": 1000})
+        note = spend.cost_note({"usd": 0.1234, "tokens": 1000})
 
         self.assertIn("$0.1234", note)
         self.assertIn("1000", note)
@@ -153,9 +154,9 @@ class ParseCostEventTest(unittest.TestCase):
 class PumpCostTest(TmpRootTest):
     """Перекачка снимает стоимость с потока — в файл лога она не попадает."""
 
-    def pump(self, lines, log_path=None) -> artel.OutputPump:
-        pump = artel.OutputPump(iter(lines),
-                                log_path or artel.new_agent_log("T007", "developer"))
+    def pump(self, lines, log_path=None) -> agent_log.OutputPump:
+        pump = agent_log.OutputPump(iter(lines),
+                                log_path or agent_log.new_agent_log("T007", "developer"))
         with redirect_stdout(io.StringIO()):
             pump.start()
             pump.join(5)
@@ -167,7 +168,7 @@ class PumpCostTest(TmpRootTest):
         self.assertEqual(pump.cost["usd"], 0.25)
 
     def test_cost_event_does_not_reach_the_log(self):
-        log = artel.new_agent_log("T007", "developer")
+        log = agent_log.new_agent_log("T007", "developer")
 
         self.pump(["работаю\n", result_event(usd=0.25)], log)
 
@@ -180,7 +181,7 @@ class PumpCostTest(TmpRootTest):
         self.assertEqual(pump.cost["usd"], 0.9, "итог запуска — последний")
 
     def test_cost_is_caught_even_when_log_is_not_writable(self):
-        unreachable = artel.LOGS / "нет-такого-каталога" / "шаг.log"
+        unreachable = config.LOGS / "нет-такого-каталога" / "шаг.log"
 
         pump = self.pump([result_event(usd=0.25)], unreachable)
 
@@ -199,22 +200,22 @@ class CmdRunCostTest(TmpRootTest):
 
     def setUp(self):
         super().setUp()
-        self.capture(artel.cmd_init)
-        self.capture(artel.cmd_new, "Учёт стоимости шага")
+        self.capture(catalog.cmd_init)
+        self.capture(catalog.cmd_new, "Учёт стоимости шага")
         self.set_task(state="in_dev")
 
-        patcher = mock.patch.object(artel.time, "sleep", lambda _: None)
+        patcher = mock.patch.object(runner.time, "sleep", lambda _: None)
         patcher.start()
         self.addCleanup(patcher.stop)
 
         # Шаг ревью собирает пакет настоящим git (T011); в песочнице
         # репозитория нет, а этому модулю важны деньги шага, не diff.
-        git_patcher = mock.patch.object(artel, "git", fake_git)
+        git_patcher = mock.patch.object(gitcmd, "git", fake_git)
         git_patcher.start()
         self.addCleanup(git_patcher.stop)
 
     def set_task(self, **fields) -> None:
-        conn = artel.db()
+        conn = store.db()
         assignments = ", ".join(f"{k}=?" for k in fields)
         conn.execute(f"UPDATE tasks SET {assignments} WHERE id=?",
                      (*fields.values(), self.TASK))
@@ -223,18 +224,18 @@ class CmdRunCostTest(TmpRootTest):
     def run_agent(self, *attempts) -> str:
         """attempts: (rc, строки вывода) — по одной паре на попытку."""
         procs = [FakeProc(lines, rc) for rc, lines in attempts]
-        with mock.patch.object(artel.subprocess, "Popen", side_effect=procs) as popen:
-            out = self.capture(artel.cmd_run, self.TASK)
+        with mock.patch.object(runner.subprocess, "Popen", side_effect=procs) as popen:
+            out = self.capture(runner.cmd_run, self.TASK)
         self.popen = popen
         return out
 
     def journal_details(self, action: str) -> list[str]:
-        return [r["detail"] for r in artel.db().execute(
+        return [r["detail"] for r in store.db().execute(
             "SELECT detail FROM steps WHERE task_id=? AND action=? ORDER BY id",
             (self.TASK, action))]
 
     def task_row(self):
-        return artel.db().execute(
+        return store.db().execute(
             "SELECT * FROM tasks WHERE id=?", (self.TASK,)).fetchone()
 
     def test_step_cost_lands_in_spent_and_journal(self):
@@ -257,10 +258,10 @@ class CmdRunCostTest(TmpRootTest):
         """Ретраи после T006 стоят денег — иначе потолок обходится провалами."""
         self.set_task(budget_usd=10.0)
 
-        self.run_agent(*[(1, [result_event(usd=0.2)])] * artel.AGENT_ATTEMPTS)
+        self.run_agent(*[(1, [result_event(usd=0.2)])] * config.AGENT_ATTEMPTS)
 
         self.assertAlmostEqual(self.task_row()["spent_usd"],
-                               0.2 * artel.AGENT_ATTEMPTS)
+                               0.2 * config.AGENT_ATTEMPTS)
         self.assertIn("стоимость $0.2000", self.journal_details("agent run FAILED")[0])
 
     def test_missing_cost_is_warned_but_step_survives(self):
@@ -270,10 +271,10 @@ class CmdRunCostTest(TmpRootTest):
         self.assertEqual(self.task_row()["state"], "in_dev", "шаг не провален")
         self.assertIn("developer завершил (rc=0)", out)
         self.assertEqual(self.journal_details("agent cost UNKNOWN"),
-                         [f"попытка 1/{artel.AGENT_ATTEMPTS}: в выводе нет "
+                         [f"попытка 1/{config.AGENT_ATTEMPTS}: в выводе нет "
                           f"события со стоимостью — spent_usd не изменён"])
         self.assertEqual(self.journal_details("agent run finished"),
-                         [f"rc=0, попытка 1/{artel.AGENT_ATTEMPTS}"])
+                         [f"rc=0, попытка 1/{config.AGENT_ATTEMPTS}"])
 
     def test_status_and_log_show_the_money(self):
         """Критерий приёмки 1: ненулевой spent_usd в status, цена шага в log."""
@@ -281,8 +282,8 @@ class CmdRunCostTest(TmpRootTest):
 
         self.run_agent((0, [result_event(usd=0.25)]))
 
-        self.assertIn("$0.25/5.00", self.capture(artel.cmd_status))
-        self.assertIn("стоимость $0.2500", self.capture(artel.cmd_log, self.TASK))
+        self.assertIn("$0.25/5.00", self.capture(catalog.cmd_status))
+        self.assertIn("стоимость $0.2500", self.capture(catalog.cmd_log, self.TASK))
 
     def test_warning_at_seventy_percent(self):
         self.set_task(budget_usd=1.0)
@@ -334,11 +335,11 @@ class CmdRunCostTest(TmpRootTest):
         """Критерий приёмки 2: повторный run не стартует и объясняет, почему."""
         self.set_task(budget_usd=0.3)
         self.run_agent((0, [result_event(usd=0.5)]))
-        self.capture(artel.cmd_approve, self.TASK)  # Оператор снял эскалацию
+        self.capture(fsm.cmd_approve, self.TASK)  # Оператор снял эскалацию
 
-        with mock.patch.object(artel.subprocess, "Popen") as popen:
+        with mock.patch.object(runner.subprocess, "Popen") as popen:
             with self.assertRaises(SystemExit) as exit_:
-                self.capture(artel.cmd_run, self.TASK)
+                self.capture(runner.cmd_run, self.TASK)
 
         self.assertEqual(popen.call_count, 0, "агент не запускается")
         self.assertIn("бюджет исчерпан", str(exit_.exception))
@@ -361,22 +362,22 @@ class CmdBudgetTest(TmpRootTest):
 
     def setUp(self):
         super().setUp()
-        self.capture(artel.cmd_init)
-        self.capture(artel.cmd_new, "Потолок бюджета")
+        self.capture(catalog.cmd_init)
+        self.capture(catalog.cmd_new, "Потолок бюджета")
 
     def set_task(self, **fields) -> None:
-        conn = artel.db()
+        conn = store.db()
         assignments = ", ".join(f"{k}=?" for k in fields)
         conn.execute(f"UPDATE tasks SET {assignments} WHERE id=?",
                      (*fields.values(), self.TASK))
         conn.commit()
 
     def task_row(self):
-        return artel.db().execute(
+        return store.db().execute(
             "SELECT * FROM tasks WHERE id=?", (self.TASK,)).fetchone()
 
     def journal(self) -> list[tuple[str, str, str]]:
-        return [(r["actor"], r["action"], r["detail"]) for r in artel.db().execute(
+        return [(r["actor"], r["action"], r["detail"]) for r in store.db().execute(
             "SELECT * FROM steps WHERE task_id=? ORDER BY id", (self.TASK,))]
 
     def exhausted(self) -> None:
@@ -387,7 +388,7 @@ class CmdBudgetTest(TmpRootTest):
     def test_new_ceiling_is_saved_and_journaled(self):
         self.set_task(state="in_dev", budget_usd=5.0, spent_usd=1.0)
 
-        out = self.capture(artel.cmd_budget, self.TASK, "12.5")
+        out = self.capture(budget.cmd_budget, self.TASK, "12.5")
 
         self.assertAlmostEqual(self.task_row()["budget_usd"], 12.5)
         self.assertIn(("operator", "бюджет изменён",
@@ -398,26 +399,26 @@ class CmdBudgetTest(TmpRootTest):
         """Критерий приёмки 2: после `budget` шаг продолжается."""
         self.exhausted()
 
-        out = self.capture(artel.cmd_budget, self.TASK, "5")
+        out = self.capture(budget.cmd_budget, self.TASK, "5")
 
         row = self.task_row()
         self.assertEqual(row["state"], "in_dev")
         self.assertIsNone(row["escalated_from"], "точка возврата одноразовая")
         self.assertIn(f"дальше: artel.py run {self.TASK}", out)
-        self.assertIsNone(artel.budget_block(row))
+        self.assertIsNone(budget.budget_block(row))
 
     def test_unblocked_review_step_returns_to_review(self):
         self.exhausted()
         self.set_task(escalated_from="review")
 
-        self.capture(artel.cmd_budget, self.TASK, "5")
+        self.capture(budget.cmd_budget, self.TASK, "5")
 
         self.assertEqual(self.task_row()["state"], "review")
 
     def test_too_small_ceiling_keeps_the_block(self):
         self.exhausted()
 
-        out = self.capture(artel.cmd_budget, self.TASK, "0.4")
+        out = self.capture(budget.cmd_budget, self.TASK, "0.4")
 
         self.assertEqual(self.task_row()["state"], "escalated", "денег всё ещё нет")
         self.assertIn("этого мало", out)
@@ -430,7 +431,7 @@ class CmdBudgetTest(TmpRootTest):
         self.set_task(state="escalated", escalated_from="review",
                       budget_usd=5.0, spent_usd=1.0)
 
-        self.capture(artel.cmd_budget, self.TASK, "10")
+        self.capture(budget.cmd_budget, self.TASK, "10")
 
         row = self.task_row()
         self.assertEqual(row["state"], "escalated")
@@ -439,7 +440,7 @@ class CmdBudgetTest(TmpRootTest):
     def test_working_task_keeps_its_state(self):
         self.set_task(state="in_dev", spent_usd=1.0)
 
-        self.capture(artel.cmd_budget, self.TASK, "10")
+        self.capture(budget.cmd_budget, self.TASK, "10")
 
         self.assertEqual(self.task_row()["state"], "in_dev")
 
@@ -447,19 +448,19 @@ class CmdBudgetTest(TmpRootTest):
         for raw in ("", "дорого", "-5", "0", "nan", "inf"):
             with self.subTest(raw=raw):
                 with self.assertRaises(SystemExit) as exit_:
-                    self.capture(artel.cmd_budget, self.TASK, raw)
+                    self.capture(budget.cmd_budget, self.TASK, raw)
                 self.assertIn("не сумма в долларах", str(exit_.exception))
         self.assertAlmostEqual(self.task_row()["budget_usd"],
-                               artel.DEFAULT_BUDGET_USD)
+                               config.DEFAULT_BUDGET_USD)
 
     def test_comma_is_accepted_as_decimal_separator(self):
-        self.capture(artel.cmd_budget, self.TASK, "7,5")
+        self.capture(budget.cmd_budget, self.TASK, "7,5")
 
         self.assertAlmostEqual(self.task_row()["budget_usd"], 7.5)
 
     def test_unknown_task_is_reported(self):
         with self.assertRaises(SystemExit) as exit_:
-            self.capture(artel.cmd_budget, "T404", "10")
+            self.capture(budget.cmd_budget, "T404", "10")
 
         self.assertIn("не найдена", str(exit_.exception))
 

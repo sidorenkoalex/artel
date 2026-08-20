@@ -25,11 +25,12 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from orchestrator import artel  # noqa: E402
+from orchestrator import (agent_log, auto, budget, catalog,  # noqa: E402
+                          config, fsm, gitcmd, runner, store)
 
 # Настоящая `cmd_run`, снятая до подмены: тесту отказа по бюджету нужна она,
 # а не фейк — предмет проверки в том, как auto реагирует на реальный отказ.
-REAL_CMD_RUN = artel.cmd_run
+REAL_CMD_RUN = runner.cmd_run
 
 # Все состояния FSM Фазы 0 — тот же список, что в tests/test_invariants.py:
 # реестра состояний в коде нет, а свипы этого модуля должны идти по всем.
@@ -59,7 +60,7 @@ iteration: {iteration}
 
 
 def fake_git(*args: str) -> subprocess.CompletedProcess:
-    """Подмена `artel.git`: пустой ответ вместо обращения к репозиторию."""
+    """Подмена `gitcmd.git`: пустой ответ вместо обращения к репозиторию."""
     return subprocess.CompletedProcess(list(args), 0, "", "")
 
 
@@ -103,7 +104,7 @@ class FakeRun:
     def __call__(self, task_id: str) -> None:
         if self.limit is not None and len(self.calls) >= self.limit:
             raise AssertionError(
-                f"цикл не остановился: шагов больше {artel.AUTO_MAX_STEPS}")
+                f"цикл не остановился: шагов больше {config.AUTO_MAX_STEPS}")
         self.calls.append(task_id)
         if self.script:
             self.script.pop(0)()
@@ -132,26 +133,23 @@ class AutoCycleTest(unittest.TestCase):
         for attr, value in (("DB", root / ".artel" / "state.db"),
                             ("TASKS", root / "tasks"),
                             ("LOGS", root / ".artel" / "logs")):
-            self.patch(attr, value)
+            self.patch_object(config, attr, value)
 
         # git настоящему репозиторию в этих тестах не нужен: цикл его не
         # зовёт, а команды внутри него (ревью-пакет, merge) либо подменены,
         # либо не должны случиться — и это проверяется по списку вызовов.
-        self.patch("git", fake_git)
+        self.patch_object(gitcmd, "git", fake_git)
         self.git_spy = SpyRun()
-        self.patch_object(artel.subprocess, "run", self.git_spy)
+        self.patch_object(gitcmd.subprocess, "run", self.git_spy)
 
         self.agent = FakeRun()
-        self.patch("cmd_run", self.agent)
+        self.patch_object(runner, "cmd_run", self.agent)
 
-        self.capture(artel.cmd_init)
-        self.capture(artel.cmd_new, "Цикл auto")
-        self.tdir = artel.TASKS / self.TASK
+        self.capture(catalog.cmd_init)
+        self.capture(catalog.cmd_new, "Цикл auto")
+        self.tdir = config.TASKS / self.TASK
 
     # ------------------------------------------------------------ утилиты
-
-    def patch(self, attr: str, value) -> None:
-        self.patch_object(artel, attr, value)
 
     def patch_object(self, target, attr: str, value) -> None:
         patcher = mock.patch.object(target, attr, value)
@@ -167,11 +165,11 @@ class AutoCycleTest(unittest.TestCase):
     def auto(self) -> str:
         # Столько шагов цикл вправе сделать за вызов; шаг сверх этого — не
         # «долгий прогон», а неостановленный цикл, и тест обязан упасть сразу.
-        self.agent.arm(artel.AUTO_MAX_STEPS)
-        return self.capture(artel.cmd_auto, self.TASK)
+        self.agent.arm(config.AUTO_MAX_STEPS)
+        return self.capture(auto.cmd_auto, self.TASK)
 
     def task_row(self) -> sqlite3.Row:
-        return artel.db().execute(
+        return store.db().execute(
             "SELECT * FROM tasks WHERE id=?", (self.TASK,)).fetchone()
 
     def state(self) -> str:
@@ -179,7 +177,7 @@ class AutoCycleTest(unittest.TestCase):
 
     def set_state(self, state: str, **fields) -> None:
         """Ставит состояние (и, если нужно, счётчики) в обход переходов."""
-        conn = artel.db()
+        conn = store.db()
         conn.execute("UPDATE tasks SET state=? WHERE id=?", (state, self.TASK))
         for column, value in fields.items():
             conn.execute(f"UPDATE tasks SET {column}=? WHERE id=?",
@@ -196,7 +194,7 @@ class AutoCycleTest(unittest.TestCase):
             encoding="utf-8")
 
     def journal_rows(self) -> list[tuple[str, str, str]]:
-        return [(r["actor"], r["action"], r["detail"]) for r in artel.db().execute(
+        return [(r["actor"], r["action"], r["detail"]) for r in store.db().execute(
             "SELECT actor, action, detail FROM steps WHERE task_id=? ORDER BY id",
             (self.TASK,))]
 
@@ -213,7 +211,7 @@ class AutoStopsWhereTheOperatorIsNeededTest(AutoCycleTest):
     def test_every_state_outside_state_role_stops_the_cycle(self):
         """Ни в одном неагентском состоянии цикл не делает шага."""
         for state in FSM_STATES:
-            if state in artel.STATE_ROLE:
+            if state in config.STATE_ROLE:
                 continue
             with self.subTest(состояние=state):
                 self.set_state(state)
@@ -241,15 +239,15 @@ class AutoStopsWhereTheOperatorIsNeededTest(AutoCycleTest):
 
                 out = self.auto()
 
-                reason, _ = artel.AUTO_STOP[state]
+                reason, _ = config.AUTO_STOP[state]
                 self.assertIn(reason, out)
                 self.assertIn("дальше:", out)
                 self.assertIn(f"artel.py {command} {self.TASK}", out)
 
     def test_stop_table_covers_every_state_outside_state_role(self):
         """Полнота таблицы подсказок: состояние без строки — остановка без совета."""
-        self.assertEqual(set(artel.AUTO_STOP),
-                         set(FSM_STATES) - set(artel.STATE_ROLE))
+        self.assertEqual(set(config.AUTO_STOP),
+                         set(FSM_STATES) - set(config.STATE_ROLE))
 
     def test_terminal_states_ask_for_nothing(self):
         for state in ("done", "killed"):
@@ -324,7 +322,7 @@ class AutoStopsWhereTheOperatorIsNeededTest(AutoCycleTest):
         self.set_state("in_dev")
         self.agent.script = [lambda: self.set_state("escalated")]
         advance = SpyCommand()
-        self.patch("cmd_advance", advance)
+        self.patch_object(fsm, "cmd_advance", advance)
 
         out = self.auto()
 
@@ -345,12 +343,12 @@ class AutoStopsOnBudgetRefusalTest(AutoCycleTest):
         super().setUp()
         # Поверх подмены базового класса — настоящая команда: до Popen она
         # не доходит, отказ случается на потолке.
-        self.patch("cmd_run", REAL_CMD_RUN)
+        self.patch_object(runner, "cmd_run", REAL_CMD_RUN)
         self.write_plan("ready")
         self.set_state("in_dev", budget_usd=1.0, spent_usd=1.0)
 
     def test_cycle_stops_and_no_agent_starts(self):
-        with mock.patch.object(artel.subprocess, "Popen") as popen:
+        with mock.patch.object(runner.subprocess, "Popen") as popen:
             out = self.auto()
 
         popen.assert_not_called()
@@ -361,7 +359,7 @@ class AutoStopsOnBudgetRefusalTest(AutoCycleTest):
 
     def test_refusal_is_not_retried(self):
         """Отказ — причина остановки, а не повод зайти на второй круг."""
-        with mock.patch.object(artel.subprocess, "Popen") as popen:
+        with mock.patch.object(runner.subprocess, "Popen") as popen:
             self.auto()
 
         popen.assert_not_called()
@@ -369,7 +367,7 @@ class AutoStopsOnBudgetRefusalTest(AutoCycleTest):
             [a for _, a, _ in self.journal_rows()].count("auto остановлен"), 1)
 
     def test_refusal_lands_in_the_journal(self):
-        with mock.patch.object(artel.subprocess, "Popen"):
+        with mock.patch.object(runner.subprocess, "Popen"):
             self.auto()
 
         self.assertIn("run отказался стартовать",
@@ -389,8 +387,8 @@ class AutoStepLimitTest(AutoCycleTest):
     def test_cycle_stops_after_the_limit(self):
         out = self.auto()
 
-        self.assertEqual(len(self.agent.calls), artel.AUTO_MAX_STEPS)
-        self.assertIn(f"лимит {artel.AUTO_MAX_STEPS} шагов", out)
+        self.assertEqual(len(self.agent.calls), config.AUTO_MAX_STEPS)
+        self.assertIn(f"лимит {config.AUTO_MAX_STEPS} шагов", out)
 
     def test_limit_is_not_an_escalation(self):
         """Задача остаётся в своём состоянии: лимит вызова — не сбой задачи."""
@@ -405,7 +403,7 @@ class AutoStepLimitTest(AutoCycleTest):
 
         self.auto()
 
-        self.assertEqual(len(self.agent.calls), artel.AUTO_MAX_STEPS * 2)
+        self.assertEqual(len(self.agent.calls), config.AUTO_MAX_STEPS * 2)
 
 
 class AutoReportsTheCycleTest(AutoCycleTest):
@@ -422,11 +420,11 @@ class AutoReportsTheCycleTest(AutoCycleTest):
                              lambda: self.write_review("approved", 1)]
 
     def test_step_summary_names_the_transition_and_the_log(self):
-        log = artel.new_agent_log(self.TASK, "developer")
+        log = agent_log.new_agent_log(self.TASK, "developer")
 
         out = self.auto()
 
-        self.assertIn(f"шаг 1/{artel.AUTO_MAX_STEPS}", out)
+        self.assertIn(f"шаг 1/{config.AUTO_MAX_STEPS}", out)
         self.assertIn("developer in_dev -> review", out)
         self.assertIn(f"лог: {log}", out)
 
@@ -442,7 +440,7 @@ class AutoReportsTheCycleTest(AutoCycleTest):
 
         rows = self.journal_rows()
         self.assertIn(("operator", "auto старт",
-                       f"состояние in_dev, лимит {artel.AUTO_MAX_STEPS} шагов"),
+                       f"состояние in_dev, лимит {config.AUTO_MAX_STEPS} шагов"),
                       rows)
         self.assertEqual([(actor, action) for actor, action, _ in rows
                           if action == "auto остановлен"],
@@ -454,7 +452,7 @@ class AutoReportsTheCycleTest(AutoCycleTest):
 
         detail = self.journal_detail("auto остановлен")
         self.assertTrue(detail.startswith("acceptance:"), detail)
-        self.assertIn(artel.AUTO_STOP["acceptance"][0], detail)
+        self.assertIn(config.AUTO_STOP["acceptance"][0], detail)
 
 
 class AutoNeverPassesAGateTest(AutoCycleTest):
@@ -478,8 +476,8 @@ class AutoNeverPassesAGateTest(AutoCycleTest):
 
     def test_auto_calls_neither_approve_nor_reject_from_any_state(self):
         approve, reject = SpyCommand(), SpyCommand()
-        self.patch("cmd_approve", approve)
-        self.patch("cmd_reject", reject)
+        self.patch_object(fsm, "cmd_approve", approve)
+        self.patch_object(fsm, "cmd_reject", reject)
 
         for state in FSM_STATES:
             with self.subTest(состояние=state):

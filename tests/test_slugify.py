@@ -1,11 +1,11 @@
-"""Тесты для orchestrator.artel.slugify (см. tasks/T003/SPEC.md)."""
+"""Тесты для orchestrator.catalog.slugify (см. tasks/T003/SPEC.md)."""
 import sys
 import unittest
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from orchestrator.artel import slugify  # noqa: E402
+from orchestrator.catalog import slugify  # noqa: E402
 
 
 class SlugifyTest(unittest.TestCase):
