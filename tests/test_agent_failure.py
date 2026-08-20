@@ -322,7 +322,11 @@ class CmdRunFailureTest(TmpRootTest):
         self.assertEqual(popen.call_count, 1, "повтор не создаст CLI")
         self.assertEqual(self.pauses, [])
         self.assertEqual(self.task_row()["state"], "in_dev")
-        self.assertIn("Роль: разработчик", out)
+        # Промпт для ручного прогона теперь в файле рядом с логом шага (T011).
+        saved = list(artel.LOGS.glob("*.prompt.txt"))
+        self.assertEqual(len(saved), 1)
+        self.assertIn(str(saved[0]), out)
+        self.assertIn("Роль: разработчик", saved[0].read_text(encoding="utf-8"))
 
 
 class MigrationTest(TmpRootTest):
