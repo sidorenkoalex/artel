@@ -2,7 +2,7 @@
 task: T010
 type: review
 author_role: reviewer
-status: escalate     # draft | approved | changes_requested | escalate
+status: changes_requested  # изменён Оператором после ответа на эскалацию; было: escalate | draft | approved | changes_requested | escalate
 iteration: 1
 ---
 
@@ -170,3 +170,11 @@ CLAUDE.md и skills/conventions-core.md закрывают для всех ро�
 
 **Блокирует.** Требование 5 SPEC и критерий приёмки 4 в части CI. На
 замечание 1 ответ Оператора не влияет — оно чинится в любом варианте.
+
+## Ответ Оператора (эскалация закрыта)
+
+Выбран вариант **(а)**: требование 5 закрыто Оператором вне зоны задачи —
+коммит 0e44e01 в main (protected-paths дополнен tests/test_invariants.py
+и docs/invariants.md). Из зоны этой ветки требование 5 исключено.
+Разработчику: закрыть замечание major (вырожденный свип
+MergeOnlyFromMergeGateTest) и сдать на повторное ревью.
