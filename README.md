@@ -39,12 +39,15 @@ scripts/       guard.py — валидатор структуры артефак
 sandbox/       Dockerfile песочницы агента (в строй — задача B3)
 gates.yaml     НЕ действует; истина — orchestrator/fsm.py (см. шапку файла)
 roles.yaml     карта исполнителей и слоты токенов
+targets.yaml   целевые проекты: forge, база, токен, no_paths, гейт мержа
+.artel/        состояние вне git: БД, логи, каталоги проектов, слой ролей
 ```
 
 ## Быстрый старт
 
 ```bash
 python3 orchestrator/artel.py init
+python3 orchestrator/artel.py target-init artel   # каталог проекта в .artel/
 python3 orchestrator/artel.py new "Краткое название задачи"
 # → создаст tasks/<id>/ из шаблонов; заполни SPEC.md и:
 python3 orchestrator/artel.py approve <id>        # гейт SPEC

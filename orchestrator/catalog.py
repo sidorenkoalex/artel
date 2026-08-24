@@ -23,29 +23,17 @@ def slugify(title: str) -> str:
 
 def cmd_init() -> None:
     conn = store.db()
-    conn.executescript(
-        """
-        CREATE TABLE IF NOT EXISTS tasks (
-          id TEXT PRIMARY KEY, title TEXT, state TEXT, branch TEXT,
-          review_iters INTEGER DEFAULT 0, accept_rejects INTEGER DEFAULT 0,
-          reviewed_iter INTEGER DEFAULT 0, escalated_from TEXT,
-          budget_usd REAL, spent_usd REAL DEFAULT 0, budget_source TEXT,
-          created_at TEXT, updated_at TEXT
-        );
-        CREATE TABLE IF NOT EXISTS steps (
-          id INTEGER PRIMARY KEY AUTOINCREMENT, task_id TEXT, ts TEXT,
-          actor TEXT, action TEXT, detail TEXT
-        );
-        """
-    )
-    conn.commit()
+    store.create_schema(conn)
     print(f"OK: состояние в {config.DB}")
 
 
 def cmd_new(title: str) -> None:
     conn = store.db()
-    n = conn.execute("SELECT COUNT(*) FROM tasks").fetchone()[0]
-    task_id = f"T{n + 1:03d}"
+    # Номер — из персистентного счётчика target'а, а не из COUNT(*) строк
+    # (ADR-0003 3ж): архивация строки номер не освобождает, и реконнект
+    # проекта не создаёт коллизий с уже отработанными задачами.
+    target = config.DEFAULT_TARGET
+    task_id = f"T{store.next_task_number(conn, target):03d}"
     branch = f"task/{task_id.lower()}-{slugify(title)}"
 
     task_dir = config.TASKS / task_id
@@ -54,12 +42,8 @@ def cmd_new(title: str) -> None:
     spec = spec.replace("TASK_ID", task_id).replace("<название задачи>", title)
     (task_dir / "SPEC.md").write_text(spec, encoding="utf-8")
 
-    conn.execute(
-        "INSERT INTO tasks (id,title,state,branch,budget_usd,created_at,updated_at)"
-        " VALUES (?,?,?,?,?,?,?)",
-        (task_id, title, "spec_writing", branch, config.DEFAULT_BUDGET_USD,
-         store.now(), store.now()),
-    )
+    store.insert_task(conn, task_id, title, "spec_writing", branch, target,
+                      config.DEFAULT_BUDGET_USD)
     store.journal(conn, task_id, "operator", "created", title)
     print(f"[{task_id}] «{title}» создана: заполни {task_dir / 'SPEC.md'}")
     print(f"  затем: artel.py advance {task_id}  (SPEC status: ready)")
@@ -67,7 +51,7 @@ def cmd_new(title: str) -> None:
 
 def cmd_status() -> None:
     conn = store.db()
-    rows = conn.execute("SELECT * FROM tasks ORDER BY id").fetchall()
+    rows = store.all_tasks(conn)
     if not rows:
         print("Задач нет. `new \"<название>\"` создаст первую.")
         return
@@ -84,7 +68,8 @@ def cmd_status() -> None:
 def cmd_show(task_id: str) -> None:
     conn = store.db()
     t = store.get_task(conn, task_id)
-    print(f"{t['id']} «{t['title']}»  состояние: {t['state']}  ветка: {t['branch']}")
+    print(f"{t['id']} «{t['title']}»  состояние: {t['state']}  "
+          f"ветка: {t['branch']}  проект: {t['target']}")
     print(f"  ревью-итераций: {t['review_iters']}/{config.LIMIT_REVIEW_ITERS}"
           f"  отказов приёмки: {t['accept_rejects']}"
           f"/{config.LIMIT_ACCEPT_REJECTS}"
@@ -97,8 +82,6 @@ def cmd_show(task_id: str) -> None:
 
 def cmd_log(task_id: str) -> None:
     conn = store.db()
-    for r in conn.execute(
-        "SELECT * FROM steps WHERE task_id=? ORDER BY id", (task_id,)
-    ):
+    for r in store.task_steps(conn, task_id):
         print(f"{r['ts']}  {r['actor']:<12} {r['action']}"
               + (f"  | {r['detail']}" if r["detail"] else ""))

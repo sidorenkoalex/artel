@@ -26,7 +26,20 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from orchestrator import agent_log, catalog, config, runner, store  # noqa: E402
+from orchestrator import (agent_log, catalog, config, gitcmd,  # noqa: E402
+                          runner, store)
+
+
+def fake_git(*args: str) -> subprocess.CompletedProcess:
+    """Подмена `gitcmd.git`: git-идентичность роли, без обращения к репозиторию.
+
+    Нужна, потому что подмена `subprocess.Popen` глобальна: настоящий
+    `gitcmd.git` (его зовёт `runner.role_env` за авторством коммита шага)
+    ушёл бы через неё в фейковый процесс.
+    """
+    identity = {"user.name": "Роль Артели", "user.email": "role@artel.invalid"}
+    value = identity.get(args[-1], "") if args[:2] == ("config", "--get") else ""
+    return subprocess.CompletedProcess(list(args), 0, f"{value}\n", "")
 
 
 def event(**fields) -> str:
@@ -88,7 +101,13 @@ class TmpRootTest(unittest.TestCase):
 
         for attr, value in (("DB", root / ".artel" / "state.db"),
                             ("TASKS", root / "tasks"),
-                            ("LOGS", root / ".artel" / "logs")):
+                            ("LOGS", root / ".artel" / "logs"),
+                            # Курируемый слой ролей (T019): каталог заводит
+                            # запуск шага — пусть заводит в песочнице, а не
+                            # в .artel/ репозитория.
+                            ("ROLE_HOME", root / ".artel" / "home"),
+                            ("ROLE_CONFIG_DIR",
+                             root / ".artel" / "home" / ".claude")):
             patcher = mock.patch.object(config, attr, value)
             patcher.start()
             self.addCleanup(patcher.stop)
@@ -315,6 +334,9 @@ class CmdRunLoggingTest(TmpRootTest):
         conn = store.db()
         conn.execute("UPDATE tasks SET state='in_dev' WHERE id=?", (self.TASK,))
         conn.commit()
+        patcher = mock.patch.object(gitcmd, "git", fake_git)
+        patcher.start()
+        self.addCleanup(patcher.stop)
 
     def run_agent(self, lines, returncode: int = 0):
         with mock.patch.object(runner.subprocess, "Popen") as popen:

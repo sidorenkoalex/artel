@@ -79,10 +79,9 @@ def apply_spec_budget(conn, t: sqlite3.Row, meta: dict) -> None:
         print(f"[{task_id}] бюджет из SPEC не применён: {detail}")
         return
 
-    conn.execute(
-        "UPDATE tasks SET budget_usd=?, budget_source=?, updated_at=? WHERE id=?",
-        (value, config.BUDGET_SOURCE_SPEC, store.now(), task_id))
-    conn.commit()
+    store.update_task(conn, task_id, budget_usd=value,
+                      budget_source=config.BUDGET_SOURCE_SPEC,
+                      updated_at=store.now())
     detail = (f"${value:.2f} (прежний потолок ${old:.2f}, "
               f"дефолт ${config.DEFAULT_BUDGET_USD:.2f})")
     store.journal(conn, task_id, "fsm", "бюджет из SPEC", detail)
@@ -117,9 +116,7 @@ def enforce_budget(conn, task_id: str, state: str) -> bool:
     if spent >= budget:
         # Точка возврата (T006): шаг мог отработать успешно, и возвращать
         # задачу из escalated надо туда, где она стояла, а не в разработку.
-        conn.execute("UPDATE tasks SET escalated_from=? WHERE id=?",
-                     (state, task_id))
-        conn.commit()
+        store.update_task(conn, task_id, escalated_from=state)
         store.set_state(conn, task_id, "escalated", "fsm",
                         f"бюджет исчерпан: ${spent:.2f} из ${budget:.2f}")
         print(f"  дальше: artel.py budget {task_id} <usd>  (или kill)")
@@ -131,6 +128,37 @@ def enforce_budget(conn, task_id: str, state: str) -> bool:
         store.journal(conn, task_id, "fsm", "бюджет: предупреждение", detail)
         print(f"[{task_id}] ВНИМАНИЕ: {detail}")
     return False
+
+
+def check_program_spend(conn, task_id: str, cost: dict | None) -> None:
+    """Пороги суммарного расхода программы: предупреждение и событие журнала.
+
+    Второй контур учёта поверх потолков задач (roadmap §5, ADR-0003 3ж):
+    кошелёк Оператора один на все target'ы, поэтому сумма считается по
+    всем задачам всех проектов, а не по текущей. Пороги ничего не
+    блокируют — пробой стоп-лосса это повод для внеочередного пересмотра
+    программы, а не для остановки шага.
+
+    Событие пишется в момент ПЕРЕСЕЧЕНИЯ порога, а не пока сумма выше
+    него: иначе каждый следующий шаг повторял бы ту же строку, и в
+    журнале порог перестал бы читаться как событие. Стоимость шага уже
+    учтена в `spent_usd` — значение до шага восстанавливается вычитанием.
+
+    Носитель события — журнал: таблица alerts появится в A3 (roadmap §2).
+    """
+    if cost is None or cost["usd"] <= 0:
+        return
+    after = store.total_spent(conn)
+    before = after - cost["usd"]
+    for ratio in config.PROGRAM_ALERT_RATIOS:
+        threshold = config.PROGRAM_STOP_LOSS_USD * ratio
+        if before < threshold <= after:
+            detail = (f"суммарно по всем задачам ${after:.2f} из "
+                      f"${config.PROGRAM_STOP_LOSS_USD:.2f} — пересечён "
+                      f"порог {int(ratio * 100)}% расхода программы")
+            store.journal(conn, task_id, "orchestrator",
+                          "программа: порог расхода", detail)
+            print(f"[{task_id}] ВНИМАНИЕ: {detail}")
 
 
 def cmd_budget(task_id: str, raw_usd: str) -> None:
@@ -146,11 +174,9 @@ def cmd_budget(task_id: str, raw_usd: str) -> None:
     # Источник «operator» ставится и здесь, и при поднятии уже поднятого:
     # решение Оператора о деньгах не перебивается значением из SPEC ни
     # после него, ни до (apply_spec_budget).
-    conn.execute("UPDATE tasks SET budget_usd=?, budget_source=?, updated_at=? "
-                 "WHERE id=?",
-                 (new_budget, config.BUDGET_SOURCE_OPERATOR,
-                  store.now(), task_id))
-    conn.commit()
+    store.update_task(conn, task_id, budget_usd=new_budget,
+                      budget_source=config.BUDGET_SOURCE_OPERATOR,
+                      updated_at=store.now())
     store.journal(conn, task_id, "operator", "бюджет изменён",
                   f"${old:.2f} -> ${new_budget:.2f}, израсходовано ${spent:.2f}")
     print(f"[{task_id}] бюджет: ${old:.2f} -> ${new_budget:.2f} "
@@ -166,8 +192,7 @@ def cmd_budget(task_id: str, raw_usd: str) -> None:
     # задачу в шаг, на котором её застал потолок, как это делает approve.
     if t["state"] == "escalated" and old > 0 and spent >= old:
         back = t["escalated_from"] or "in_dev"
-        conn.execute("UPDATE tasks SET escalated_from=NULL WHERE id=?", (task_id,))
-        conn.commit()
+        store.update_task(conn, task_id, escalated_from=None)
         store.set_state(conn, task_id, back, "operator",
                         "бюджет поднят, продолжаем")
         print(f"  дальше: artel.py run {task_id}")

@@ -1,9 +1,19 @@
-"""Запуск агента шага: промпт роли, попытки, исход, стоимость, журнал."""
+"""Запуск агента шага: промпт роли, окружение, попытки, исход, стоимость."""
+import os
 import subprocess
 import sys
 import time
 
-from . import agent_log, budget, config, review, roles, spend, store
+from . import agent_log, budget, config, gitcmd, review, roles, spend, store
+
+# Идентичность коммитера, которую роль обязана унести с собой в свой HOME.
+# git читает эти переменные ПОВЕРХ конфига, поэтому перенос ровно двух пар
+# возвращает шагу авторство, не втаскивая в него остальной user-слой
+# Оператора: ни его алиасов, ни его хуков, ни его includeIf.
+GIT_IDENTITY = (
+    ("user.name", ("GIT_AUTHOR_NAME", "GIT_COMMITTER_NAME")),
+    ("user.email", ("GIT_AUTHOR_EMAIL", "GIT_COMMITTER_EMAIL")),
+)
 
 
 def cmd_run(task_id: str) -> None:
@@ -94,14 +104,64 @@ def cmd_run(task_id: str) -> None:
     # Шаг, на котором упал агент, запоминаем: чинить надо его, а не задачу
     # целиком. Без этого approve увёл бы упавшее ревью в in_dev и поднял
     # разработчика на ветке, где всё уже сделано.
-    conn.execute("UPDATE tasks SET escalated_from=? WHERE id=?",
-                 (t["state"], task_id))
-    conn.commit()
+    store.update_task(conn, task_id, escalated_from=t["state"])
     store.set_state(conn, task_id, "escalated", "fsm",
                     f"агент не отработал за {config.AGENT_ATTEMPTS} попытки: "
                     f"{reason}")
     print(f"  разберись по логам и: artel.py approve {task_id}  "
           f"(вернёт в {t['state']}, шаг повторится)")
+
+
+def git_identity() -> dict:
+    """Имя и почта коммитера из git-конфига — готовыми переменными окружения.
+
+    Смена HOME уводит из-под роли не только user-слой Оператора, но и его
+    `~/.gitconfig`, а в этом репозитории `user.email` задан только
+    глобально. Без переноса `git commit` внутри шага падает с rc=128
+    («Author identity unknown»), то есть предписанный роли коммит
+    (миссия разработчика выше, skills/conventions-core) не проходит,
+    и ветка задачи остаётся пустой при отработавшем агенте.
+
+    Читается `git config --get` в окружении Оператора, то есть с его
+    ~/.gitconfig, — до подмены HOME. Значение не прочиталось (git молчит,
+    идентичность не задана) — переменной нет, и это видно в журнале:
+    молча уводить шаг в rc=128 нельзя.
+    """
+    identity = {}
+    for option, names in GIT_IDENTITY:
+        res = gitcmd.git("config", "--get", option)
+        value = res.stdout.strip() if res.returncode == 0 else ""
+        if value:
+            identity.update(dict.fromkeys(names, value))
+    return identity
+
+
+def role_env() -> dict:
+    """Окружение процесса роли: HOME и CLAUDE_CONFIG_DIR задаёт пульт.
+
+    Роль не наследует user-слой Оператора (ADR-0003 п.14): его
+    ~/.claude/CLAUDE.md, хуки его плагинов и его MCP исполнялись бы
+    внутри шага — конфиг-инъекция, и заодно недетерминированное
+    окружение, зависящее от того, что Оператор поставил себе вчера.
+    Курируемый слой живёт в .artel/ пульта: что в нём лежит, решает
+    Оператор, но адрес слоя решает пульт.
+
+    Курируемый слой обязан нести то, без чего шаг не выполним, — отсюда
+    git-идентичность (см. `git_identity`). Ставится через `setdefault`:
+    git предпочитает переменную окружения конфигу, поэтому уже заданная
+    Оператором должна остаться сильнее — так роль видит ровно ту
+    идентичность, которую увидел бы git в его HOME.
+
+    Каталог создаётся здесь же: CLI, не нашедший CLAUDE_CONFIG_DIR,
+    создал бы его сам — и это был бы каталог, о котором пульт не знает.
+    """
+    config.ROLE_CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+    env = dict(os.environ)
+    env["HOME"] = str(config.ROLE_HOME)
+    env["CLAUDE_CONFIG_DIR"] = str(config.ROLE_CONFIG_DIR)
+    for name, value in git_identity().items():
+        env.setdefault(name, value)
+    return env
 
 
 def run_agent_once(conn, task_id: str, role: str, prompt: str,
@@ -129,6 +189,30 @@ def run_agent_once(conn, task_id: str, role: str, prompt: str,
                       f"промпт не записан в {prompt_path}: {exc}")
         print(f"[{task_id}] промпт шага не записан ({exc}) — шаг не начат")
         return "skipped", f"промпт не записан: {exc}"
+
+    # Окружение готовится до запуска и без запасного пути: не создался
+    # каталог курируемого слоя — шаг не начинается. Тихо откатиться на HOME
+    # Оператора было бы молчаливой сменой периметра (ADR-0003 п.14).
+    try:
+        env = role_env()
+    except OSError as exc:
+        store.journal(conn, task_id, role, "agent run SKIPPED",
+                      f"каталог окружения роли не создан: {exc}")
+        print(f"[{task_id}] окружение роли не подготовлено ({exc}) — "
+              f"шаг не начат")
+        return "skipped", f"окружение роли не подготовлено: {exc}"
+
+    # Отсутствие идентичности — не повод не запускать шаг (агент делает не
+    # только коммит), но повод сказать об этом до запуска: иначе Оператор
+    # узнает о ней из хвоста лога упавшего `git commit` получасом позже.
+    absent = [name for name in ("GIT_AUTHOR_NAME", "GIT_AUTHOR_EMAIL")
+              if not env.get(name)]
+    if absent:
+        detail = (f"git-идентичность роли не задана ({', '.join(absent)}) — "
+                  f"коммит шага упадёт; чинится "
+                  f"`git config --global user.name/user.email`")
+        store.journal(conn, task_id, role, "agent env WARNING", detail)
+        print(f"[{task_id}] ВНИМАНИЕ: {detail}")
 
     print(f"[{task_id}] лог шага: {log_path}  (наблюдать: tail -f {log_path})")
     store.journal(conn, task_id, role, "agent run started",
@@ -161,8 +245,9 @@ def run_agent_once(conn, task_id: str, role: str, prompt: str,
                  # белый список вместо полного Bash: только git и запуск
                  # тестов/guard
                  "--allowedTools", "Bash(git:*),Bash(python3:*)"],
-                cwd=config.ROOT, text=True, bufsize=1, stdin=prompt_file,
-                stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                cwd=config.ROOT, env=env, text=True, bufsize=1,
+                stdin=prompt_file, stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
             )
         except FileNotFoundError:
             # Промпт уже на диске, и это весь смысл ветки: ручной прогон роли
@@ -189,6 +274,9 @@ def run_agent_once(conn, task_id: str, role: str, prompt: str,
     # Деньги сжигает любая попытка, а не только успешная: провалившаяся стоит
     # столько же, и не учитывать её значило бы обходить потолок ретраями.
     spent = spend.charge_step(conn, task_id, role, pump.cost, numbered)
+    # Порог программы считается сразу после учёта: сумма по всем задачам
+    # всех target'ов сдвинулась именно этим шагом (roadmap §5).
+    budget.check_program_spend(conn, task_id, pump.cost)
 
     if timed_out:
         # «без ретрая» — чтобы читающий журнал не ждал попыток 2 и 3.

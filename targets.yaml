@@ -1,0 +1,31 @@
+# Целевые проекты (ADR-0003 п.2). Читается кодом: orchestrator/targets.py.
+# Формат — то подмножество YAML, которое разбирает orchestrator/yamlmini.py:
+# вложенные отображения по отступу и потоковые списки [a, b].
+#
+# Поля записи:
+#   forge           github | gitlab — семейство API целевого
+#   url             адрес репозитория целевого
+#   base            базовая ветка: от неё ветки задач, в неё merge
+#   token_slot      имя слота в keychain (слоты — см. roles.yaml)
+#   no_paths        пути целевого, которые задачам трогать нельзя
+#   project_skills  курируемый список проектных скилов (ADR-0003 3з)
+#   merge_gate      operator | target-human — кто исполняет гейт мержа (п.7)
+#
+# Каталог target'а (.artel/projects/<имя>/) заводит команда
+#   python3 orchestrator/artel.py target-init <имя>
+#
+# Первая запись — сам пульт: артель становится обычным внешним целевым
+# после A7, до тех пор её артефакты живут в tasks/ пульта (ADR-0003 3д).
+
+targets:
+  artel:
+    forge: github
+    url: https://github.com/sidorenkoalex/artel
+    base: main
+    token_slot: artel-token
+    # Пути, которые меняет только Оператор (CLAUDE.md, ADR-0001). Пока это
+    # декларация: исполнитель no_paths — проверка до merge (A2/A3);
+    # действующий enforcement — job protected-paths в .github/workflows/ci.yml.
+    no_paths: [gates.yaml, roles.yaml, targets.yaml, .github/, templates/, skills/, docs/invariants.md, tests/test_invariants.py]
+    project_skills: []
+    merge_gate: operator

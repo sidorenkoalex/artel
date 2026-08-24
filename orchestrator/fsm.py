@@ -69,9 +69,7 @@ def cmd_advance(task_id: str) -> None:
             print(f"[{task_id}] {detail}")
             print(f"  дальше: artel.py run {task_id}  (прогон ревьювера)")
             return
-        conn.execute("UPDATE tasks SET reviewed_iter=? WHERE id=?",
-                     (iteration, task_id))
-        conn.commit()
+        store.update_task(conn, task_id, reviewed_iter=iteration)
 
         if status == "approved":
             store.set_state(conn, task_id, "acceptance", "fsm",
@@ -84,8 +82,7 @@ def cmd_advance(task_id: str) -> None:
                                 f"лимит ревью "
                                 f"{config.LIMIT_REVIEW_ITERS} исчерпан")
             else:
-                conn.execute("UPDATE tasks SET review_iters=? WHERE id=?",
-                             (iters, task_id))
+                store.update_task(conn, task_id, review_iters=iters)
                 store.set_state(conn, task_id, "in_dev", "fsm",
                                 f"замечания ревью, итерация {iters}")
         elif status == "escalate":
@@ -151,8 +148,7 @@ def cmd_approve(task_id: str) -> None:
         # вердикту ревьювера и по исчерпанным лимитам его не пишут и, как
         # раньше, уходят в in_dev: там работа и продолжается.
         back = t["escalated_from"] or "in_dev"
-        conn.execute("UPDATE tasks SET escalated_from=NULL WHERE id=?", (task_id,))
-        conn.commit()
+        store.update_task(conn, task_id, escalated_from=None)
         store.set_state(conn, task_id, back, "operator",
                         "эскалация разрешена, продолжаем")
         print(f"  дальше: artel.py run {task_id}")
@@ -171,7 +167,6 @@ def cmd_reject(task_id: str, reason: str) -> None:
         store.set_state(conn, task_id, "escalated", "fsm",
                         f"лимит отказов приёмки исчерпан: {reason}")
     else:
-        conn.execute("UPDATE tasks SET accept_rejects=? WHERE id=?",
-                     (rejects, task_id))
+        store.update_task(conn, task_id, accept_rejects=rejects)
         store.set_state(conn, task_id, "in_dev", "operator",
                         f"приёмка отклонена: {reason}")

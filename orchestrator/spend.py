@@ -77,7 +77,5 @@ def charge_step(conn, task_id: str, role: str, cost: dict | None,
                       f"{numbered}: в выводе нет события со стоимостью — "
                       f"spent_usd не изменён")
         return ""
-    conn.execute("UPDATE tasks SET spent_usd=spent_usd+?, updated_at=? WHERE id=?",
-                 (cost["usd"], store.now(), task_id))
-    conn.commit()
+    store.charge(conn, task_id, cost["usd"])
     return f", {cost_note(cost)}"
