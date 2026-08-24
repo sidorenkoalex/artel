@@ -183,7 +183,13 @@ class FsmTest(unittest.TestCase):
 
         for attr, value in (("DB", root / ".artel" / "state.db"),
                             ("TASKS", root / "tasks"),
-                            ("LOGS", root / ".artel" / "logs")):
+                            ("LOGS", root / ".artel" / "logs"),
+                            # Курируемый слой ролей (T019): каталог заводит
+                            # запуск шага — пусть заводит в песочнице, а не
+                            # в .artel/ репозитория.
+                            ("ROLE_HOME", root / ".artel" / "home"),
+                            ("ROLE_CONFIG_DIR",
+                             root / ".artel" / "home" / ".claude")):
             patcher = mock.patch.object(config, attr, value)
             patcher.start()
             self.addCleanup(patcher.stop)
@@ -852,7 +858,13 @@ class KillKeepsMainIntactTest(unittest.TestCase):
         for attr, value in (("ROOT", self.root),
                             ("DB", self.root / ".artel" / "state.db"),
                             ("TASKS", self.root / "tasks"),
-                            ("LOGS", self.root / ".artel" / "logs")):
+                            ("LOGS", self.root / ".artel" / "logs"),
+                            # Курируемый слой ролей (T019): каталог заводит
+                            # запуск шага — пусть заводит в песочнице, а не
+                            # в .artel/ репозитория.
+                            ("ROLE_HOME", self.root / ".artel" / "home"),
+                            ("ROLE_CONFIG_DIR",
+                             self.root / ".artel" / "home" / ".claude")):
             self.repo.enter_context(mock.patch.object(config, attr, value))
 
         self.capture(catalog.cmd_init)

@@ -150,7 +150,13 @@ class AutoCycleTest(unittest.TestCase):
 
         for attr, value in (("DB", root / ".artel" / "state.db"),
                             ("TASKS", root / "tasks"),
-                            ("LOGS", root / ".artel" / "logs")):
+                            ("LOGS", root / ".artel" / "logs"),
+                            # Курируемый слой ролей (T019): каталог заводит
+                            # запуск шага — пусть заводит в песочнице, а не
+                            # в .artel/ репозитория.
+                            ("ROLE_HOME", root / ".artel" / "home"),
+                            ("ROLE_CONFIG_DIR",
+                             root / ".artel" / "home" / ".claude")):
             self.patch_object(config, attr, value)
 
         # git настоящему репозиторию в этих тестах не нужен: цикл его не

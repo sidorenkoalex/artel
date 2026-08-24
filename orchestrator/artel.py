@@ -51,10 +51,17 @@ REVIEW.md (iteration больше уже учтённого, см. fresh_verdict
 AUTO_MAX_STEPS шагов за вызов. Решений auto не принимает: approve и reject
 остаются ручными (§4), пути мимо гейта у цикла нет.
 
+Целевые проекты объявляются в targets.yaml (ADR-0003 п.2), каталог
+проекта заводит `target-init <target>` (.artel/projects/<target>/ —
+workspace, tasks, knowledge, logs). БД одна на все проекты: строка
+задачи и запись журнала помнят свой target, номера задач считает
+персистентный счётчик проекта. Артефакты задач самой артели до A7
+остаются в tasks/ пульта — особый случай догфуда.
+
 Команды:
   init | new "<название>" | status | show <id> | advance <id> |
   run <id> | auto <id> | approve <id> | reject <id> "<причина>" |
-  kill <id> | log <id> | budget <id> <usd>
+  kill <id> | log <id> | budget <id> <usd> | target-init <target>
 
 Структуру артефакта на переходах проверяет код: `advance` прогоняет guard
 по тому артефакту, статус которого и есть условие перехода (SPEC — на гейт
@@ -69,6 +76,8 @@ SPEC, PLAN — в ревью, REVIEW — из ревью). Нарушение с
   yamlmini  разбор подмножества YAML: frontmatter и roles.yaml
   artifacts frontmatter артефактов и свежесть вердикта ревьювера
   roles     карта исполнителей из roles.yaml: состав скилов роли
+  targets   декларация целевых проектов из targets.yaml
+  projects  каталог проекта в .artel/: структура target'а
   gitcmd    вызовы git и вопросы к ветке задачи
   ci        статус CI головного коммита ветки задачи (`gh`)
   agent_log логи прогонов, перекачка вывода агента (OutputPump)
@@ -92,7 +101,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from orchestrator import (auto, budget, catalog,  # noqa: E402
-                          cleanup, fsm, runner)
+                          cleanup, fsm, projects, runner)
 
 
 def main() -> None:
@@ -116,6 +125,7 @@ def main() -> None:
         "log": lambda: catalog.cmd_log(rest[0]),
         "budget": lambda: budget.cmd_budget(rest[0],
                                             rest[1] if len(rest) > 1 else ""),
+        "target-init": lambda: projects.cmd_target_init(rest[0]),
     }
     fn = table.get(cmd)
     if fn is None:
