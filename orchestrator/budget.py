@@ -2,7 +2,7 @@
 import sqlite3
 import sys
 
-from . import config, spend, store
+from . import alerts, config, spend, store
 
 
 def spec_budget(meta: dict) -> tuple[float | None, str]:
@@ -144,7 +144,17 @@ def check_program_spend(conn, task_id: str, cost: dict | None) -> None:
     журнале порог перестал бы читаться как событие. Стоимость шага уже
     учтена в `spent_usd` — значение до шага восстанавливается вычитанием.
 
-    Носитель события — журнал: таблица alerts появится в A3 (roadmap §2).
+    Носитель события журнала ЗАДАЧИ остаётся (существующие тесты
+    `tests/test_multitarget.py::ProgramSpendTest`,
+    `tests/test_multitarget_invariants.py::ProgramSpendAcrossTargetsTest`
+    читают его по имени действия и не про алерты — не трогаем по принципу
+    целостности); ДОБАВЛЕНА таблица `alerts` (kind=threshold, A3, SPEC T022
+    требование 7) как задаче-независимый носитель порога программы: дедуп
+    `alerts.raise_alert` закрывает «повторный прогон не дублирует» без
+    своей проверки здесь (порог и так пересекается не более одного раза
+    на задачу — before<threshold<=after монотонно, — но дедуп защищает от
+    случая, когда тот же порог пересекла ДРУГАЯ задача секундой позже
+    с тем же текстом сообщения).
     """
     if cost is None or cost["usd"] <= 0:
         return
@@ -158,6 +168,8 @@ def check_program_spend(conn, task_id: str, cost: dict | None) -> None:
                       f"порог {int(ratio * 100)}% расхода программы")
             store.journal(conn, task_id, "orchestrator",
                           "программа: порог расхода", detail)
+            alerts.raise_alert(conn, None, "threshold",
+                              "budget.program_spend", detail)
             print(f"[{task_id}] ВНИМАНИЕ: {detail}")
 
 

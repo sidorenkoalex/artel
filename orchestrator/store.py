@@ -35,6 +35,10 @@ CREATE TABLE IF NOT EXISTS steps (
 CREATE TABLE IF NOT EXISTS task_counters (
   target TEXT PRIMARY KEY, next_number INTEGER NOT NULL
 );
+CREATE TABLE IF NOT EXISTS alerts (
+  id INTEGER PRIMARY KEY AUTOINCREMENT, target TEXT, kind TEXT, source TEXT,
+  message TEXT, ts TEXT, ack_ts TEXT, ack_by TEXT, ack_resolution TEXT
+);
 """
 
 TASK_ID = re.compile(r"\AT(\d+)\Z")
@@ -115,6 +119,13 @@ def migrate(conn: sqlite3.Connection) -> None:
         "CREATE TABLE IF NOT EXISTS task_counters ("
         "  target TEXT PRIMARY KEY, next_number INTEGER NOT NULL);")
     seed_task_counters(conn)
+    # Носитель алертов (A3, tasks/T022/SPEC.md требование 7): БД прошлых
+    # версий её не имеют — догоняется тем же приёмом, что и task_counters.
+    conn.executescript(
+        "CREATE TABLE IF NOT EXISTS alerts ("
+        "  id INTEGER PRIMARY KEY AUTOINCREMENT, target TEXT, kind TEXT,"
+        "  source TEXT, message TEXT, ts TEXT, ack_ts TEXT, ack_by TEXT,"
+        "  ack_resolution TEXT);")
     conn.commit()
 
 
@@ -295,3 +306,57 @@ def get_task(conn, task_id: str) -> sqlite3.Row:
     if row is None:
         sys.exit(f"Задача {task_id} не найдена. `status` покажет существующие.")
     return row
+
+
+def latest_fixed_sha(conn, target: str) -> sqlite3.Row:
+    """Последняя (по updated_at) задача target'а с непустым fixed_sha.
+
+    Читатель — doctor.recovery_check (A3): точка сравнения для sha головы
+    артефактного репо против того, что реально зафиксировал последний
+    переход FSM этого target'а.
+    """
+    return conn.execute(
+        "SELECT id, fixed_sha FROM tasks WHERE target=? AND fixed_sha IS NOT NULL "
+        "ORDER BY updated_at DESC, id DESC LIMIT 1", (target,)).fetchone()
+
+
+def open_alert_exists(conn, target: str | None, kind: str, source: str,
+                      message: str) -> bool:
+    """Есть ли уже НЕподтверждённый алерт с тем же ключом (дедуп alerts.raise_alert)."""
+    row = conn.execute(
+        "SELECT 1 FROM alerts WHERE target IS ? AND kind=? AND source=? "
+        "AND message=? AND ack_ts IS NULL",
+        (target, kind, source, message)).fetchone()
+    return row is not None
+
+
+def insert_alert(conn, target: str | None, kind: str, source: str,
+                 message: str) -> None:
+    conn.execute(
+        "INSERT INTO alerts (target, kind, source, message, ts) "
+        "VALUES (?,?,?,?,?)",
+        (target, kind, source, message, now()))
+    conn.commit()
+
+
+def open_alerts(conn, kind: str | None = None) -> list:
+    """Неподтверждённые алерты, свежие сверху; kind — фильтр по типу."""
+    if kind is None:
+        return conn.execute(
+            "SELECT * FROM alerts WHERE ack_ts IS NULL "
+            "ORDER BY id DESC").fetchall()
+    return conn.execute(
+        "SELECT * FROM alerts WHERE ack_ts IS NULL AND kind=? "
+        "ORDER BY id DESC", (kind,)).fetchall()
+
+
+def get_alert(conn, alert_id: int) -> sqlite3.Row | None:
+    return conn.execute("SELECT * FROM alerts WHERE id=?",
+                        (alert_id,)).fetchone()
+
+
+def ack_alert(conn, alert_id: int, actor: str, resolution: str) -> None:
+    conn.execute(
+        "UPDATE alerts SET ack_ts=?, ack_by=?, ack_resolution=? WHERE id=?",
+        (now(), actor, resolution, alert_id))
+    conn.commit()

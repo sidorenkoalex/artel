@@ -1,7 +1,7 @@
 """Каталог задач: заведение, список, карточка задачи, журнал шагов."""
 import re
 
-from . import artifacts, config, store
+from . import alerts, artifacts, config, store
 
 # ГОСТ-подобная транслитерация: только stdlib, без внешних зависимостей.
 # ъ/ь пропускаются; ё → yo; щ → sch; ю → yu; я → ya.
@@ -54,7 +54,6 @@ def cmd_status() -> None:
     rows = store.all_tasks(conn)
     if not rows:
         print("Задач нет. `new \"<название>\"` создаст первую.")
-        return
     for r in rows:
         flag = " <- ЖДЁТ ОПЕРАТОРА" if r["state"] in (
             "spec_gate", "acceptance", "merge_gate", "escalated") else ""
@@ -63,6 +62,15 @@ def cmd_status() -> None:
             f"ревью {r['review_iters']}/{config.LIMIT_REVIEW_ITERS}"
             f"  ${r['spent_usd']:.2f}/{r['budget_usd']:.2f}  {r['title']}{flag}"
         )
+
+    # Требование 7 SPEC T022: триггеры docs/triggers.md — отдельная секция
+    # в status/doctor, не смешиваются с задачами и остальными алертами.
+    triggers = alerts.open_alerts(conn, "trigger")
+    if triggers:
+        print("\nТриггеры (docs/triggers.md) — ack обязан нести решение:")
+        for a in triggers:
+            print(f"  #{a['id']} [{a['target'] or '-'}] {a['source']}: "
+                  f"{a['message']}")
 
 
 def cmd_show(task_id: str) -> None:
