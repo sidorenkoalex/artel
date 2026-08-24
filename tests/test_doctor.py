@@ -304,6 +304,43 @@ class PreflightBlocksMissingTokenTest(TmpRootTest):
                        if c.args and c.args[0] and c.args[0][0] == "claude"]
         self.assertEqual(len(claude_calls), 1, "агент стартовал ровно один раз")
 
+    def test_git_identity_is_part_of_preflight(self):
+        """Требование 2: git-идентичность — тоже пункт pre-flight, не только doctor."""
+        checks = doctor.preflight_checks("developer", config.DEFAULT_TARGET)
+
+        self.assertIn("git-identity", [c.name for c in checks])
+
+    def test_broken_identity_warns_but_does_not_block_the_step(self):
+        def no_identity(*args):
+            return subprocess.CompletedProcess(args, 1, "", "")
+
+        # Гасим ambient GIT_AUTHOR_*/GIT_COMMITTER_* машины, где гоняются
+        # тесты — иначе `env.setdefault` в `role_env` подставляет реальную
+        # идентичность машины раньше замоканного `gitcmd.git` (тот же приём,
+        # что и в `TmpRootTest.setUp` для CLAUDE_CODE_OAUTH_TOKEN).
+        no_env = {"GIT_AUTHOR_NAME": "", "GIT_AUTHOR_EMAIL": "",
+                  "GIT_COMMITTER_NAME": "", "GIT_COMMITTER_EMAIL": ""}
+        with mock.patch.object(runner.gitcmd, "git", no_identity), \
+                mock.patch.dict("os.environ", no_env), \
+                mock.patch.object(runner.subprocess, "Popen",
+                                  side_effect=claude_only_popen(
+                                      FakeAgentProc(["готово\n"]))) as popen:
+            out = capture(runner.cmd_run, self.TASK)
+
+        self.assertIn("git-identity", out)
+        claude_calls = [c for c in popen.call_args_list
+                       if c.args and c.args[0] and c.args[0][0] == "claude"]
+        self.assertEqual(len(claude_calls), 1, "предупреждение не блокирует шаг")
+
+    def test_blocking_failure_makes_no_subprocess_calls_at_all(self):
+        """Регресс: провал по токену не должен тянуть за собой git-идентичность
+        (а с ней — subprocess) — блок уже решён, платить нечем за доп. warn."""
+        with mock.patch.object(runner.keychain, "token", lambda slot: None), \
+                mock.patch.object(runner.subprocess, "Popen") as popen:
+            capture(runner.cmd_run, self.TASK)
+
+        popen.assert_not_called()
+
 
 class IsolationSmokeTest(TmpRootTest):
     """Критерий 3: маркеры project-/user-слоя не достигают env/промпта роли."""
@@ -588,15 +625,17 @@ class LiveSmokeTest(TmpRootTest):
     def test_success_reports_ok_with_cost(self):
         with mock.patch.object(doctor.subprocess, "Popen", side_effect=claude_only_popen(
                 FakeLiveSmokeProc(result_event(0.0123)))):
-            check = doctor.live_smoke()
+            check = doctor.live_smoke(store.db())
 
         self.assertEqual(check.status, "ok")
         self.assertIn("0.0123", check.detail)
+        self.assertEqual(alerts.open_alerts(store.db(), "incident"), [],
+                         "успех не заводит алерт")
 
     def test_nonzero_return_code_fails(self):
         with mock.patch.object(doctor.subprocess, "Popen", side_effect=claude_only_popen(
                 FakeLiveSmokeProc("упал\n", returncode=1))):
-            check = doctor.live_smoke()
+            check = doctor.live_smoke(store.db())
 
         self.assertEqual(check.status, "fail")
         self.assertIn("rc=1", check.detail)
@@ -604,7 +643,7 @@ class LiveSmokeTest(TmpRootTest):
     def test_missing_cost_event_fails(self):
         with mock.patch.object(doctor.subprocess, "Popen", side_effect=claude_only_popen(
                 FakeLiveSmokeProc("готово, без cost\n"))):
-            check = doctor.live_smoke()
+            check = doctor.live_smoke(store.db())
 
         self.assertEqual(check.status, "fail")
         self.assertIn("стоимост", check.detail)
@@ -616,10 +655,30 @@ class LiveSmokeTest(TmpRootTest):
             return REAL_POPEN(cmd, *args, **kwargs)
 
         with mock.patch.object(doctor.subprocess, "Popen", side_effect=popen):
-            check = doctor.live_smoke()
+            check = doctor.live_smoke(store.db())
 
         self.assertEqual(check.status, "fail")
         self.assertIn("не найден", check.detail)
+
+    def test_failure_result_is_journalled_as_an_incident_alert(self):
+        """Требование 3: «результат в журнал» — провал не теряется вместе с stdout."""
+        with mock.patch.object(doctor.subprocess, "Popen", side_effect=claude_only_popen(
+                FakeLiveSmokeProc("упал\n", returncode=1))):
+            check = doctor.live_smoke(store.db())
+
+        incidents = alerts.open_alerts(store.db(), "incident")
+        self.assertEqual(len(incidents), 1)
+        self.assertEqual(incidents[0]["source"], "doctor.live_smoke")
+        self.assertIn("rc=1", incidents[0]["message"])
+        self.assertEqual(incidents[0]["message"], check.detail)
+
+    def test_repeated_failure_does_not_duplicate_the_alert(self):
+        with mock.patch.object(doctor.subprocess, "Popen", side_effect=claude_only_popen(
+                FakeLiveSmokeProc("упал\n", returncode=1))):
+            doctor.live_smoke(store.db())
+            doctor.live_smoke(store.db())
+
+        self.assertEqual(len(alerts.open_alerts(store.db(), "incident")), 1)
 
     def test_command_exists_and_is_wired_into_doctor(self):
         self.assertTrue(callable(doctor.live_smoke))

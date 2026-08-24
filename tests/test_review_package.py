@@ -725,11 +725,14 @@ class CmdRunReviewPackageTest(unittest.TestCase):
 
         self.assertNotIn("--- РЕВЬЮ-ПАКЕТ ---", self.prompt())
         self.assertEqual(self.journal_details("ревью-пакет собран"), [])
-        # Ровно два вызова, и оба — не о пакете: `role_env` берёт авторство
-        # коммита шага. Список точный, а не «нет diff»: любой show или diff
-        # в шаге разработчика по-прежнему провалит тест.
+        # Четыре вызова, и все — не о пакете: `role_env` берёт авторство
+        # коммита шага, дважды — pre-flight (doctor A3, git-идентичность —
+        # warn) и сам запуск агента. Список точный, а не «нет diff»: любой
+        # show или diff в шаге разработчика по-прежнему провалит тест.
         self.assertEqual(self.git.calls,
                          [["config", "--get", "user.name"],
+                          ["config", "--get", "user.email"],
+                          ["config", "--get", "user.name"],
                           ["config", "--get", "user.email"]],
                          "diff разработчику не собирается")
 

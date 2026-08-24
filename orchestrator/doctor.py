@@ -10,14 +10,42 @@
 
 Отсутствие токена роли, найденность CLI, свободное место на диске
 и layout внешнего target'а — блокирующие (`status="fail"`) в preflight.
-Версия CLI ≠ пин — предупреждение (`"warn"`, требование 5 явно оговаривает
-исключение), как и git-идентичность: её уже проверяет
-`runner.run_agent_once` до старта процесса агента, с собственным
-существующим тестом на некритичность отказа
+Git-идентичность тоже участвует в preflight (текст требования 2
+перечисляет её среди «быстрых проверок») — предупреждением
+(`"warn"`), не блоком: `runner.run_agent_once` уже проверяет её ещё раз
+перед стартом процесса агента и журналит собственным предупреждением
+(`agent env WARNING`) с существующим тестом на некритичность отказа
 (`tests/test_multitarget.py`, `...identity_is_journalled_before_the_step`)
-— дублировать её в блокирующем preflight означало бы либо сломать тот
-тест, либо завести бесполезный дубль. `doctor.check_git_identity()`
-существует отдельно, для `cmd_doctor`.
+— превращать её в preflight в блок означало бы сломать тот тест без ADR
+(принцип целостности). Двойная проверка (preflight + запуск агента) —
+сознательно принятая избыточность ради видимости уже в preflight, а не
+молчаливое исключение пункта требования. Она пропускается, если к этому
+моменту preflight уже нашёл блокирующий провал (токен/CLI/диск) — шаг
+всё равно не стартует, платить subprocess-вызовом `git config` за
+дополнительную информацию не о чем не нужно (и, отдельно, ломает тесты,
+проверяющие «при провале preflight не происходит вообще никаких
+subprocess-вызовов», см. `preflight_checks`).
+
+Версия CLI (требование 5) в per-step preflight НЕ входит — сознательно
+суженная трактовка, зафиксированная и подтверждённая измерением, а не
+предположением: живой прогон `claude --version` через `subprocess.run`
+внутри `preflight_checks()` был реализован и прогнан против полного
+набора тестов — 76 упавших тестов в 8+ файлах (`test_multitarget.py`,
+`test_step_cost.py`, `test_agent_prompt.py`, `test_auto_cycle.py`,
+`test_review_freshness.py`, `test_agent_log.py`, `test_agent_failure.py`,
+`test_review_package.py` и др.), все — из-за того, что `subprocess.run`
+внутри порождает `Popen`, а десятки существующих тестов подряд
+запускают шаг агента через `mock.patch.object(runner.subprocess,
+"Popen", ...)` с одним ожидаемым вызовом (сам агент) — лишний вызов
+либо ловится тем же фейком не по назначению (падает на распаковке
+`.communicate()`), либо рвёт инвариант «Popen вызван ровно один раз».
+Почистить это означало бы переписать мокинг подпроцесса в файлах
+задач, не входящих в объём T022, — само по себе нарушение «Изменения
+вне зоны задачи — дефект» и, для тестов с точным счётчиком вызовов,
+риск незаметно ослабить чужую проверку без ADR. `doctor.check_cli_version()`
+остаётся частью `all_checks` — реальная сверка `claude --version`
+происходит при явном вызове `doctor`, не на каждом шаге; открытый вопрос
+для Оператора/аналитика — в PLAN.md, раздел «Риски».
 
 Проверки, представляющие операционный инцидент, а не «шаг сейчас не
 стартует» (recovery, сироты, давность бэкапа), заводят строку в
@@ -107,8 +135,18 @@ def check_token(role: str) -> Check:
 def check_git_identity() -> Check:
     """Итоговый env роли, не сырой `git config`: ambient GIT_AUTHOR_*
     (setdefault-приоритет в `runner.role_env`) тоже закрывает идентичность.
+
+    `role_env()` может поднять `OSError` (курируемый слой не создался —
+    тот же класс отказа, что ловит `check_disk_space`/`live_smoke`) —
+    не блок здесь: preflight лишь предупреждает, а настоящий отказ шага
+    по этой причине остаётся за существующей обработкой в
+    `runner.run_agent_once` (`agent run SKIPPED`).
     """
-    env = runner.role_env()
+    try:
+        env = runner.role_env()
+    except OSError as exc:
+        return Check("git-identity", "warn",
+                     f"окружение роли не подготовлено: {exc}")
     missing = [n for n in ("GIT_AUTHOR_NAME", "GIT_AUTHOR_EMAIL")
               if not env.get(n)]
     if missing:
@@ -154,17 +192,25 @@ def check_target_layout(target: str) -> Check:
 def preflight_checks(role: str, target: str) -> list[Check]:
     """Быстрые проверки перед стартом шага (SPEC требование 2).
 
-    Версия CLI (требование 5) сюда намеренно не входит: сверка требует
-    реального `claude --version` — то же семейство «дорогой проверки»,
-    что и живой смоук (требование 3, «из pre-flight НЕ вызывается —
-    дорого»), только на каждый шаг вместо одного прогона `doctor`, и при
-    этом только предупреждение, не блок. `doctor.check_cli_version()`
-    остаётся частью полного набора `all_checks` (`cmd_doctor`).
+    Блокирующие: CLI найден, токен роли, диск. Warn: layout внешнего
+    target'а (`check_target_layout`), git-идентичность. Версия CLI
+    (требование 5) сюда не входит — см. модульный докстринг (измеренный
+    конфликт с существующими тестами, вопрос в PLAN.md «Риски»).
+
+    Git-идентичность считается, только если ни одна блокирующая проверка
+    уже не провалилась: шаг и так не стартует, а `check_git_identity()`
+    тянет за собой `runner.role_env()` — подпроцесс `git config`, лишний,
+    если исход уже решён (и небезопасный вместе с тестами, которые для
+    провала preflight ожидают вообще ни одного subprocess-вызова —
+    `tests/test_doctor.py::PreflightBlocksMissingTokenTest`).
     """
     checks = [check_cli_found()]
     checks.append(check_token(role))
     checks.append(check_disk_space())
     checks.append(check_target_layout(target))
+    if any(c.status == "fail" for c in checks):
+        return checks
+    checks.append(check_git_identity())
     return checks
 
 
@@ -229,14 +275,27 @@ def isolation_smoke(role: str = "developer") -> Check:
 
 # --- живой смоук CLI (требование 3) -------------------------------------
 
-def live_smoke(role: str = "developer") -> Check:
+def live_smoke(conn, role: str = "developer") -> Check:
     """Минимальный реальный вызов `claude`: код возврата и стоимость в потоке.
 
     НЕ вызывается из pre-flight (дорого); часть `doctor`, обязателен после
     изменения runner/config/roles/пина (SPEC требование 3). Тесты подменяют
     `subprocess.Popen` — настоящий прогон делает Оператор вручную (критерий
     приёмки 8, manual).
+
+    Провал заводит `alerts` (kind=incident, требование 3: «результат в
+    журнал») — тем же способом, что и соседние дорогие/разовые проверки
+    (`recovery_check`, `check_orphans`, `check_backup_age`): вывод `doctor`
+    в терминале, не сохранённый Оператором, иначе теряет провал живого
+    смоука бесследно.
     """
+    check = _live_smoke_run(role)
+    if check.status != "ok":
+        alerts.raise_alert(conn, None, "incident", "doctor.live_smoke", check.detail)
+    return check
+
+
+def _live_smoke_run(role: str) -> Check:
     try:
         env = runner.role_env(role)
     except OSError as exc:
@@ -465,7 +524,7 @@ def all_checks(conn) -> list[Check]:
     checks.append(check_disk_space())
     checks.append(check_backup_age(conn))
     checks.append(isolation_smoke())
-    checks.append(live_smoke())
+    checks.append(live_smoke(conn))
 
     try:
         declared = targets.load()
