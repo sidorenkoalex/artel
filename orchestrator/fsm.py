@@ -5,7 +5,7 @@ from pathlib import Path
 
 from scripts import guard
 
-from . import artifacts, budget, ci, config, store
+from . import artifacts, budget, ci, config, fixation, store
 
 
 def guard_refuses(conn, task_id: str, path: Path) -> bool:
@@ -104,10 +104,48 @@ def cmd_advance(task_id: str) -> None:
         print(f"[{task_id}] состояние {state} двигается через approve/reject/run")
 
 
-def cmd_approve(task_id: str) -> None:
+# Состояния, на входе в approve которых требуется подтверждённый sha
+# (SPEC T021, требование 4): именно те 4 ветки, которые ниже что-то
+# подтверждают, а не просто отвечают «нечего подтверждать».
+APPROVE_NEEDS_SHA = ("spec_gate", "acceptance", "merge_gate", "escalated")
+
+
+def confirm_fixation(conn, task_id: str, sha: str | None) -> bool:
+    """True — approve может продолжить; False — сообщил и ждёт sha (не отказ).
+
+    Живьём пересчитывает `fixation.fix()`, а не читает `tasks.fixed_sha`:
+    approve обязан сверяться с ТЕКУЩИМ состоянием (ADR-0003 п.15, «сверка
+    на каждом следующем гейте... = сравнение sha + чистота рабочей
+    копии»), а не с тем, что было на момент прошлого перехода.
+
+    Фиксации нет (`sha == ""` — git не ответил, песочница без
+    репозитория) — сверять не с чем: approve ведёт себя как до T021
+    (требование 3, критерий 3). Расхождение sha или грязная копия —
+    `sys.exit`, тем же стилем, что и отказ merge по красному CI ниже.
+    """
+    target = store.task_target(conn, task_id)
+    current, clean = fixation.fix(task_id, target)
+    if not current:
+        return True
+    if sha is None:
+        print(f"[{task_id}] approve требует sha — зафиксирован {current}")
+        print(f"  повтори: artel.py approve {task_id} {current}")
+        return False
+    if sha != current or not clean:
+        reason = (f"sha {sha} не совпадает с зафиксированным {current}"
+                  if sha != current else
+                  f"грязная копия артефактов при sha {current}")
+        store.journal(conn, task_id, "operator", "approve отклонён", reason)
+        sys.exit(f"[{task_id}] approve отклонён: {reason}")
+    return True
+
+
+def cmd_approve(task_id: str, sha: str | None = None) -> None:
     conn = store.db()
     t = store.get_task(conn, task_id)
     state = t["state"]
+    if state in APPROVE_NEEDS_SHA and not confirm_fixation(conn, task_id, sha):
+        return
     if state == "spec_gate":
         store.set_state(conn, task_id, "in_dev", "operator",
                         "гейт SPEC пройден")

@@ -26,7 +26,7 @@ CREATE TABLE IF NOT EXISTS tasks (
   review_iters INTEGER DEFAULT 0, accept_rejects INTEGER DEFAULT 0,
   reviewed_iter INTEGER DEFAULT 0, escalated_from TEXT,
   budget_usd REAL, spent_usd REAL DEFAULT 0, budget_source TEXT,
-  target TEXT, created_at TEXT, updated_at TEXT
+  target TEXT, fixed_sha TEXT, created_at TEXT, updated_at TEXT
 );
 CREATE TABLE IF NOT EXISTS steps (
   id INTEGER PRIMARY KEY AUTOINCREMENT, task_id TEXT, target TEXT, ts TEXT,
@@ -107,6 +107,10 @@ def migrate(conn: sqlite3.Connection) -> None:
     for table in ("tasks", "steps"):
         add_column(conn, table, "target",
                    f"TEXT DEFAULT '{config.DEFAULT_TARGET}'")
+    # NULL — фиксации ещё не было (строка старше T021 или задача ни разу
+    # не переходила): approve/run читают это как «сверять не с чем»,
+    # не как нарушение (tasks/T021 SPEC, требование 3).
+    add_column(conn, "tasks", "fixed_sha", "TEXT")
     conn.executescript(
         "CREATE TABLE IF NOT EXISTS task_counters ("
         "  target TEXT PRIMARY KEY, next_number INTEGER NOT NULL);")
@@ -261,6 +265,29 @@ def set_state(conn, task_id: str, state: str, actor: str, detail: str = "") -> N
     update_task(conn, task_id, state=state, updated_at=now())
     journal(conn, task_id, actor, f"state -> {state}", detail)
     print(f"[{task_id}] -> {state}" + (f"  ({detail})" if detail else ""))
+    _record_fixation(conn, task_id)
+
+
+def _record_fixation(conn, task_id: str) -> None:
+    """Хэш-фиксация артефактов на каждом переходе (ADR-0003 п.15, tasks/T021).
+
+    `set_state` — единственная функция, через которую проходит любой
+    переход FSM (advance, approve, эскалация, kill): хук здесь даёт
+    «на каждом переходе» по построению, а не по дисциплине расстановки
+    вызовов по десятку мест пакета.
+
+    Отложенный импорт: `fixation` сама читает `store` (`get_task`,
+    `task_target`) для сверки при старте шага, поэтому подключается
+    только здесь, во время вызова, а не при загрузке `store.py` — иначе
+    модуль перестал бы быть независимым листом пакета (ADR-0003 3ж:
+    «остальные зовут здешние функции по имени», не наоборот).
+    """
+    from . import fixation
+    target = task_target(conn, task_id)
+    sha, clean = fixation.fix(task_id, target)
+    update_task(conn, task_id, fixed_sha=sha or None)
+    journal(conn, task_id, "fsm", "sha зафиксирован",
+           f"target={target}, sha={sha or '—'}, чисто={clean}")
 
 
 def get_task(conn, task_id: str) -> sqlite3.Row:
