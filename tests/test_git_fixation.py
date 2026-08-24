@@ -7,7 +7,8 @@ sha+чистота ветки пульта в журнале догфуда (3),
 invariants.md #25), функция «нет remote» (7).
 
 НЕОСЛАБЛЯЕМЫЕ ТЕСТЫ (ADR-0002): `FsmDecidesOnlyOnFixedHashesTest`,
-`IntegrityIncidentBlocksRunTest` и `ApproveByShaTest` кодируют инвариант
+`IntegrityIncidentBlocksRunTest`, `ApproveByShaTest` и
+`ExternalApproveDoesNotCommitOthersWorkInProgressTest` кодируют инвариант
 25 реестра — их отключение или ослабление допустимо только Оператором
 отдельным ADR (как и `tests/test_invariants.py`).
 
@@ -390,6 +391,91 @@ class ExternalIntegrityIncidentBlocksRunTest(TmpRootTest):
         self.assertEqual(store.get_task(store.db(), self.TASK)["state"],
                          "escalated")
         self.assertIn("грязная копия", out)
+
+
+class ExternalApproveDoesNotCommitOthersWorkInProgressTest(TmpRootTest):
+    """Требование 4 (REVIEW.md T021, замечание 1, итерация 2): `approve`
+    для одной задачи внешнего target не смеет коммитить незакоммиченный
+    WIP ДРУГОЙ задачи того же target как побочный эффект сверки sha —
+    тот же класс дефекта, что закрыт для `check_integrity` в итерации 1
+    (`ExternalIntegrityIncidentBlocksRunTest`), теперь для
+    `fsm.confirm_fixation`/`cmd_approve`: до фикса она сравнивала через
+    мутирующий `fixation.fix()`, а не через нечитающий `fixation.read()`.
+    """
+
+    TASK = "SLED-T001"
+    OTHER = "SLED-T002"
+
+    def setUp(self):
+        super().setUp()
+        config.TARGETS.write_text(TARGETS_YAML, encoding="utf-8")
+        capture(projects.cmd_target_init, "sled")
+        capture(catalog.cmd_init)
+
+    def repo(self) -> Path:
+        return config.PROJECTS / "sled"
+
+    def enter_spec_gate(self, task_id: str) -> str:
+        """Заводит задачу в `spec_gate` с зафиксированным SPEC.md,
+        возвращает sha, записанный переходом в `tasks.fixed_sha`."""
+        store.insert_task(store.db(), task_id, f"Задача {task_id}",
+                          "spec_writing", f"task/{task_id.lower()}",
+                          "sled", 25.0)
+        tdir = self.repo() / "tasks" / task_id
+        tdir.mkdir(parents=True)
+        (tdir / "SPEC.md").write_text("# SPEC заглушка\n", encoding="utf-8")
+        capture(store.set_state, store.db(), task_id, "spec_gate",
+               "operator", "тест: вход в spec_gate")
+        return store.get_task(store.db(), task_id)["fixed_sha"]
+
+    def write_uncommitted_wip(self, task_id: str) -> None:
+        """Роль другой задачи ещё пишет файл, не коммитя (обычный WIP)."""
+        tdir = self.repo() / "tasks" / task_id
+        tdir.mkdir(parents=True, exist_ok=True)
+        (tdir / "PLAN.md").write_text("другая задача ещё работает\n",
+                                      encoding="utf-8")
+
+    def status(self) -> str:
+        return gitcmd.in_repo(self.repo(), "status", "--porcelain").stdout
+
+    def test_approve_without_sha_does_not_commit_another_tasks_wip(self):
+        sha = self.enter_spec_gate(self.TASK)
+        self.write_uncommitted_wip(self.OTHER)
+        head_before = gitcmd.head_sha(self.repo())
+
+        out = capture(fsm.cmd_approve, self.TASK)
+
+        self.assertIn(sha, out)
+        self.assertEqual(store.get_task(store.db(), self.TASK)["state"],
+                         "spec_gate", "approve без sha — мягкий возврат, не переход")
+        self.assertEqual(gitcmd.head_sha(self.repo()), head_before,
+                         "approve без sha не имеет права коммитить")
+        self.assertIn(f"tasks/{self.OTHER}", self.status(),
+                      "WIP другой задачи остался незакоммиченным")
+
+    def test_rejected_approve_does_not_commit_another_tasks_wip(self):
+        self.enter_spec_gate(self.TASK)
+        self.write_uncommitted_wip(self.OTHER)
+        head_before = gitcmd.head_sha(self.repo())
+        wrong = "0" * 40
+
+        with self.assertRaises(SystemExit):
+            capture(fsm.cmd_approve, self.TASK, wrong)
+
+        self.assertEqual(store.get_task(store.db(), self.TASK)["state"],
+                         "spec_gate")
+        self.assertEqual(gitcmd.head_sha(self.repo()), head_before,
+                         "отказанный approve не имеет права коммитить")
+        self.assertIn(f"tasks/{self.OTHER}", self.status(),
+                      "WIP другой задачи остался незакоммиченным")
+
+    def test_approve_with_matching_sha_still_transitions(self):
+        """Контроль: сам фикс не ломает штатный успешный approve."""
+        sha = self.enter_spec_gate(self.TASK)
+
+        capture(fsm.cmd_approve, self.TASK, sha)
+
+        self.assertEqual(store.get_task(store.db(), self.TASK)["state"], "in_dev")
 
 
 class RealPultGitTest(unittest.TestCase):

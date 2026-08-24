@@ -28,8 +28,9 @@ T021, замечание 1, итерация 1): `fix()` — точка ФИКС
 пишет файл) становится частью коммита фиксации ЭТОЙ задачи и сдвигает
 HEAD, который та задача не просила сдвигать — её собственный
 `fixed_sha` тут же расходится с новым HEAD, и она уходит в инцидент
-целостности, которого не совершала. `check_integrity()` поэтому читает
-через `_read()`, не через `fix()`: то же самое для догфуда (там `fix()`
+целостности, которого не совершала. `check_integrity()` (и `confirm_fixation`
+в `fsm.py`, см. REVIEW.md T021 замечание 1 итерации 2) поэтому читают
+через `read()`, не через `fix()`: то же самое для догфуда (там `fix()`
 и так не коммитит), но для внешнего target — без `add -A`/`commit`.
 """
 from . import config, gitcmd, store
@@ -104,8 +105,17 @@ def _read_external(target: str) -> tuple[str, bool]:
     return sha, clean
 
 
-def _read(task_id: str, target: str) -> tuple[str, bool]:
-    """(sha, чисто) для сверки — не мутирует ни догфуд, ни внешний target."""
+def read(task_id: str, target: str) -> tuple[str, bool]:
+    """(sha, чисто) для сверки — не мутирует ни догфуд, ни внешний target.
+
+    Публичная точка входа для ЛЮБОЙ сверки (не фиксации): `check_integrity`
+    (старт шага) и `fsm.confirm_fixation` (approve) обе только сравнивают
+    текущее состояние с зафиксированным/переданным sha — ни та, ни другая
+    не имеет права коммитить чужой WIP того же target как побочный эффект
+    сравнения (REVIEW.md T021, замечание 1 итерации 1 — про
+    `check_integrity`; замечание 1 итерации 2 — тот же класс дефекта в
+    `confirm_fixation`, закрыт тем же приёмом).
+    """
     if target == config.DEFAULT_TARGET:
         return _fix_dogfood(task_id)
     return _read_external(target)
@@ -119,7 +129,7 @@ def check_integrity(conn, task_id: str) -> str | None:
     шага (ADR-0003 п.17, SPEC требование 5). Нет исторической фиксации —
     сверять не с чем: тот же вырожденный случай, что у `fsm.cmd_approve`
     (песочницы без git, требование 3 — флоу не меняется). Читает через
-    `_read()`, не `fix()`: проверка не имеет права коммитить (см.
+    `read()`, не `fix()`: проверка не имеет права коммитить (см.
     модульный докстринг).
     """
     t = store.get_task(conn, task_id)
@@ -127,7 +137,7 @@ def check_integrity(conn, task_id: str) -> str | None:
     if not fixed:
         return None
     target = store.task_target(conn, task_id)
-    current, clean = _read(task_id, target)
+    current, clean = read(task_id, target)
     if not current:
         return "текущее состояние артефактов не прочитано (git не ответил)"
     if current != fixed:

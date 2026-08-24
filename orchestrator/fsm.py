@@ -113,10 +113,15 @@ APPROVE_NEEDS_SHA = ("spec_gate", "acceptance", "merge_gate", "escalated")
 def confirm_fixation(conn, task_id: str, sha: str | None) -> bool:
     """True — approve может продолжить; False — сообщил и ждёт sha (не отказ).
 
-    Живьём пересчитывает `fixation.fix()`, а не читает `tasks.fixed_sha`:
-    approve обязан сверяться с ТЕКУЩИМ состоянием (ADR-0003 п.15, «сверка
-    на каждом следующем гейте... = сравнение sha + чистота рабочей
-    копии»), а не с тем, что было на момент прошлого перехода.
+    Живьём пересчитывает состояние через `fixation.read()`, а не читает
+    `tasks.fixed_sha`: approve обязан сверяться с ТЕКУЩИМ состоянием
+    (ADR-0003 п.15, «сверка на каждом следующем гейте... = сравнение sha +
+    чистота рабочей копии»), а не с тем, что было на момент прошлого
+    перехода. `read()`, не `fix()` (REVIEW.md T021, замечание 1 итерации
+    2): approve — точка ПРОВЕРКИ, не фиксации, и не имеет права коммитить
+    незакоммиченный WIP чужой задачи того же target как побочный эффект
+    сравнения — легитимный коммит перехода случится позже, в
+    `store.set_state` → `fix()`, если сверка сошлась.
 
     Фиксации нет (`sha == ""` — git не ответил, песочница без
     репозитория) — сверять не с чем: approve ведёт себя как до T021
@@ -124,7 +129,7 @@ def confirm_fixation(conn, task_id: str, sha: str | None) -> bool:
     `sys.exit`, тем же стилем, что и отказ merge по красному CI ниже.
     """
     target = store.task_target(conn, task_id)
-    current, clean = fixation.fix(task_id, target)
+    current, clean = fixation.read(task_id, target)
     if not current:
         return True
     if sha is None:
