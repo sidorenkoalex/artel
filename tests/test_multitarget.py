@@ -257,8 +257,10 @@ class TargetInitTest(TmpRootTest):
         self.write_targets()
 
     def dirs(self) -> list:
-        return sorted(p.name for p in
-                      (config.PROJECTS / "artel").iterdir())
+        # .git/.gitignore — артефактный git-репо каталога (tasks/T021,
+        # ADR-0003 3д/п.15), не часть структуры PROJECT_DIRS этого теста.
+        names = {p.name for p in (config.PROJECTS / "artel").iterdir()}
+        return sorted(names - {".git", ".gitignore"})
 
     def test_structure_is_created(self):
         capture(projects.cmd_target_init, "artel")

@@ -60,8 +60,12 @@ workspace, tasks, knowledge, logs). БД одна на все проекты: с
 
 Команды:
   init | new "<название>" | status | show <id> | advance <id> |
-  run <id> | auto <id> | approve <id> | reject <id> "<причина>" |
+  run <id> | auto <id> | approve <id> [sha] | reject <id> "<причина>" |
   kill <id> | log <id> | budget <id> <usd> | target-init <target>
+
+`approve` на гейтах, где фиксация уже есть (A2b, ADR-0003 п.15),
+подтверждает КОНКРЕТНЫЙ sha: без него печатает текущий зафиксированный
+и просит повторить команду с ним, с несовпадающим — отказывает.
 
 Структуру артефакта на переходах проверяет код: `advance` прогоняет guard
 по тому артефакту, статус которого и есть условие перехода (SPEC — на гейт
@@ -79,6 +83,7 @@ SPEC, PLAN — в ревью, REVIEW — из ревью). Нарушение с
   targets   декларация целевых проектов из targets.yaml
   projects  каталог проекта в .artel/: структура target'а
   gitcmd    вызовы git и вопросы к ветке задачи
+  fixation  hash-фиксация артефактов на переходах FSM (A2b, ADR-0003 п.15)
   ci        статус CI головного коммита ветки задачи (`gh`)
   agent_log логи прогонов, перекачка вывода агента (OutputPump)
   spend     разбор события со стоимостью шага и учёт в spent_usd
@@ -118,7 +123,8 @@ def main() -> None:
         "advance": lambda: fsm.cmd_advance(rest[0]),
         "run": lambda: runner.cmd_run(rest[0]),
         "auto": lambda: auto.cmd_auto(rest[0]),
-        "approve": lambda: fsm.cmd_approve(rest[0]),
+        "approve": lambda: fsm.cmd_approve(rest[0],
+                                           rest[1] if len(rest) > 1 else None),
         "reject": lambda: fsm.cmd_reject(rest[0],
                                          rest[1] if len(rest) > 1 else ""),
         "kill": lambda: cleanup.cmd_kill(rest[0]),

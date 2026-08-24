@@ -5,7 +5,8 @@ import sys
 import time
 from pathlib import Path
 
-from . import agent_log, budget, config, gitcmd, keychain, review, roles, spend, store
+from . import (agent_log, budget, config, fixation, gitcmd, keychain, review,
+              roles, spend, store)
 
 # Идентичность коммитера, которую роль обязана унести с собой в свой HOME.
 # git читает эти переменные ПОВЕРХ конфига, поэтому перенос ровно двух пар
@@ -29,6 +30,20 @@ def cmd_run(task_id: str) -> None:
     role = config.STATE_ROLE.get(t["state"])
     if role is None:
         sys.exit(f"[{task_id}] в состоянии {t['state']} агент не запускается")
+
+    # Сверка при старте каждого шага (ADR-0003 п.17, SPEC T021 требование
+    # 5): вход шага сравнивается с sha, зафиксированным на последнем
+    # переходе FSM. Расхождение или грязная копия артефактов — инцидент
+    # целостности, задача останавливается эскалацией, агент не стартует
+    # (закрытие TOCTOU между approve и стартом шага).
+    incident = fixation.check_integrity(conn, task_id)
+    if incident is not None:
+        store.update_task(conn, task_id, escalated_from=t["state"])
+        store.set_state(conn, task_id, "escalated", "fsm",
+                        f"инцидент целостности: {incident}")
+        print(f"[{task_id}] СТОП: инцидент целостности — {incident}")
+        print(f"  разберись и: artel.py approve {task_id} <sha>")
+        return
 
     # Состав скилов роли — из roles.yaml, а не из константы рядом с кодом:
     # правка карты исполнителей меняет промпт без правки кода (T017,
