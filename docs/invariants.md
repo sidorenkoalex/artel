@@ -43,7 +43,7 @@ docs/adr/0002-integrity-principle.md, CLAUDE.md.
 | 16 | История наблюдаемости переживает задачу: `.artel/logs/` уборка не трогает | `test_kill_cleanup.KillCleanupTest.test_run_logs_survive_the_kill` | design §7 |
 | 17 | Оценка влияния на систему — артефакт: PLAN без секции «Влияние на систему» не проходит guard | `test_invariants.GuardKeepsTheIntegritySectionTest` | ADR-0002, правило 1 |
 | 18 | Автоматизация механических команд не проходит гейты: `auto` не вызывает `approve`/`reject` и пути мимо гейта не имеет | `test_auto_cycle.AutoNeverPassesAGateTest` | design §4; tasks/T014/SPEC.md, требование 3 |
-| 19 | Merge требует зелёного CI головного коммита ветки задачи; не-зелёный и **неизвестный** статус merge не выполняют | `test_invariants.MergeNeedsGreenCiTest`; разбор статуса — `test_ci_status.BranchStatusTest` | design §4 (guards неотключаемы); tasks/T017/SPEC.md, требование 6 |
+| 19 | Merge требует зелёного CI головного коммита ветки задачи; не-зелёный, **неизвестный** и **неполный** (проверок меньше, чем обещает `total_count`) статус merge не выполняют | `test_invariants.MergeNeedsGreenCiTest`; разбор статуса — `test_ci_status.BranchStatusTest`, полнота ответа — `test_ci_status.PaginationTest` | design §4 (guards неотключаемы); tasks/T017/SPEC.md, требование 6; tasks/T018/SPEC.md, требования 1–3 |
 
 ## На ревью — тестом не выражаются
 
