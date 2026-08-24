@@ -18,6 +18,19 @@
 `sha == ""` в обеих ветках — git не ответил или фиксировать нечего:
 вырожденный случай, на котором `approve`/`run` ведут себя так же, как до
 T021 (существующие тесты без реального git в песочнице — тот же путь).
+
+`fix()` и `check_integrity()` читают состояние по-разному (REVIEW.md
+T021, замечание 1, итерация 1): `fix()` — точка ФИКСАЦИИ (`set_state`,
+`approve`), ей положено коммитить внешний репо целиком (требование 2).
+`check_integrity()` — точка ПРОВЕРКИ перед стартом шага, и коммитить ей
+нельзя: коммит здесь как побочный эффект сравнения означал бы, что
+чужой незакоммиченный артефакт (роль другой задачи того же target ещё
+пишет файл) становится частью коммита фиксации ЭТОЙ задачи и сдвигает
+HEAD, который та задача не просила сдвигать — её собственный
+`fixed_sha` тут же расходится с новым HEAD, и она уходит в инцидент
+целостности, которого не совершала. `check_integrity()` поэтому читает
+через `_read()`, не через `fix()`: то же самое для догфуда (там `fix()`
+и так не коммитит), но для внешнего target — без `add -A`/`commit`.
 """
 from . import config, gitcmd, store
 
@@ -75,6 +88,29 @@ def _fix_external(target: str) -> tuple[str, bool]:
     return sha, clean
 
 
+def _read_external(target: str) -> tuple[str, bool]:
+    """(sha, чисто) артефактного репо target'а — БЕЗ `add -A`/`commit`.
+
+    Используется только `check_integrity` (см. модульный докстринг):
+    проверка перед стартом шага не имеет права коммитить рабочее дерево
+    репо, в отличие от `_fix_external`, которую вызывает сама фиксация
+    на переходе FSM.
+    """
+    repo = config.PROJECTS / target
+    sha = gitcmd.head_sha(repo)
+    clean = gitcmd.is_clean(repo=repo)
+    if not sha or clean is None:
+        return "", False
+    return sha, clean
+
+
+def _read(task_id: str, target: str) -> tuple[str, bool]:
+    """(sha, чисто) для сверки — не мутирует ни догфуд, ни внешний target."""
+    if target == config.DEFAULT_TARGET:
+        return _fix_dogfood(task_id)
+    return _read_external(target)
+
+
 def check_integrity(conn, task_id: str) -> str | None:
     """None — фиксация не нарушена (или её ещё нет); иначе причина отказа.
 
@@ -82,14 +118,16 @@ def check_integrity(conn, task_id: str) -> str | None:
     переходе FSM (`tasks.fixed_sha`) — закрытие TOCTOU approve → старт
     шага (ADR-0003 п.17, SPEC требование 5). Нет исторической фиксации —
     сверять не с чем: тот же вырожденный случай, что у `fsm.cmd_approve`
-    (песочницы без git, требование 3 — флоу не меняется).
+    (песочницы без git, требование 3 — флоу не меняется). Читает через
+    `_read()`, не `fix()`: проверка не имеет права коммитить (см.
+    модульный докстринг).
     """
     t = store.get_task(conn, task_id)
     fixed = t["fixed_sha"]
     if not fixed:
         return None
     target = store.task_target(conn, task_id)
-    current, clean = fix(task_id, target)
+    current, clean = _read(task_id, target)
     if not current:
         return "текущее состояние артефактов не прочитано (git не ответил)"
     if current != fixed:

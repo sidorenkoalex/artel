@@ -239,6 +239,159 @@ class ExternalTransitionCommitsTest(TmpRootTest):
                          "нечего коммитить — HEAD не двигается")
 
 
+class ExternalIntegrityIncidentBlocksRunTest(TmpRootTest):
+    """Требование 5 (REVIEW.md T021, замечание 2, итерация 1): сверка при
+    старте шага для ВНЕШНЕГО target через `runner.cmd_run`.
+
+    До этой правки `TmpRootTest`-песочница проверяла только инициализацию
+    репо и коммит фиксации (`ArtifactRepoInitTest`, `NoRemoteCheckTest`,
+    `ExternalTransitionCommitsTest`) — ни один тест не доходил до
+    `runner.cmd_run`, хотя `runner.role_cwd` уже умеет запускать шаг для
+    внешнего target. Именно этот пробел не поймал дефект замечания 1
+    (`check_integrity` коммитила чужой незакоммиченный артефакт).
+    """
+
+    TASK = "SLED-T001"
+    OTHER = "SLED-T002"
+
+    def setUp(self):
+        super().setUp()
+        config.TARGETS.write_text(TARGETS_YAML, encoding="utf-8")
+        capture(projects.cmd_target_init, "sled")
+        capture(catalog.cmd_init)
+        # `runner.cmd_run` для роли developer читает skills/*.md по имени
+        # из roles.yaml (conventions-core, escalation-rules, coding-standards).
+        shutil.copytree(REPO_ROOT / "skills", config.ROOT / "skills")
+        patcher = mock.patch.object(runner.keychain, "token",
+                                    lambda slot: "tok-test")
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def repo(self) -> Path:
+        return config.PROJECTS / "sled"
+
+    def make_task(self, task_id: str) -> str:
+        """Заводит задачу сразу в in_dev с зафиксированными SPEC/PLAN.
+
+        Возвращает sha, записанный переходом в `tasks.fixed_sha`.
+        """
+        store.insert_task(store.db(), task_id, f"Задача {task_id}",
+                          "spec_writing", f"task/{task_id.lower()}",
+                          "sled", 25.0)
+        tdir = self.repo() / "tasks" / task_id
+        tdir.mkdir(parents=True)
+        (tdir / "SPEC.md").write_text("# SPEC заглушка\n", encoding="utf-8")
+        (tdir / "PLAN.md").write_text("# PLAN заглушка\n", encoding="utf-8")
+        capture(store.set_state, store.db(), task_id, "in_dev",
+               "operator", "тест: вход в in_dev")
+        return store.get_task(store.db(), task_id)["fixed_sha"]
+
+    def run_faked(self, task_id: str):
+        """Тот же приём, что и `RealPultGitTest.run_faked`: настоящий git,
+        подложный только запуск `claude`."""
+        real_popen = subprocess.Popen
+
+        def side_effect(cmd, *args, **kwargs):
+            if cmd and cmd[0] == "claude":
+                return FakeProc(["готово\n"])
+            return real_popen(cmd, *args, **kwargs)
+
+        with mock.patch.object(runner.subprocess, "Popen",
+                               side_effect=side_effect) as popen:
+            out = capture(runner.cmd_run, task_id)
+        return out, popen
+
+    def claude_launches(self, popen) -> list:
+        return [c for c in popen.call_args_list
+               if c.args and c.args[0] and c.args[0][0] == "claude"]
+
+    def test_tampering_after_fixation_blocks_the_run(self):
+        self.make_task(self.TASK)
+        (self.repo() / "tasks" / self.TASK / "SPEC.md").write_text(
+            "подмена мимо гейта\n", encoding="utf-8")
+
+        out, popen = self.run_faked(self.TASK)
+
+        self.assertEqual(self.claude_launches(popen), [])
+        self.assertEqual(store.get_task(store.db(), self.TASK)["state"],
+                         "escalated")
+        self.assertIn("инцидент целостности", out)
+        # «грязная копия», не «sha разошёлся»: если бы check_integrity
+        # (как до фикса замечания 1) сама закоммитила подмену, sha уже
+        # успел бы уйти вперёд, и причина отказа звучала бы иначе.
+        self.assertIn("грязная копия", out)
+
+    def test_clean_state_runs_normally(self):
+        self.make_task(self.TASK)
+
+        out, popen = self.run_faked(self.TASK)
+
+        self.assertEqual(len(self.claude_launches(popen)), 1)
+        self.assertEqual(store.get_task(store.db(), self.TASK)["state"],
+                         "in_dev")
+
+    def test_check_integrity_does_not_commit_when_tampered(self):
+        """Прямая проверка замечания 1: `check_integrity` — не `fix()`,
+        коммитить не имеет права даже когда есть что коммитить."""
+        fixed = self.make_task(self.TASK)
+        (self.repo() / "tasks" / self.TASK / "SPEC.md").write_text(
+            "подмена мимо гейта\n", encoding="utf-8")
+
+        reason = fixation.check_integrity(store.db(), self.TASK)
+
+        self.assertIsNotNone(reason)
+        self.assertIn("грязная копия", reason)
+        self.assertEqual(gitcmd.head_sha(self.repo()), fixed,
+                         "check_integrity — проверка, не точка фиксации")
+        status = gitcmd.in_repo(self.repo(), "status", "--porcelain").stdout
+        self.assertIn(f"tasks/{self.TASK}/SPEC.md", status,
+                      "подмена осталась незакоммиченной")
+
+    def test_check_integrity_does_not_commit_another_tasks_work_in_progress(self):
+        """Сценарий поломки из замечания 1 REVIEW.md: задача A ещё пишет
+        файл (не закоммичен), Оператор запускает `run` для задачи B того
+        же target — `check_integrity(B)` не смеет утащить WIP A в коммит
+        фиксации B и сдвинуть HEAD, который ни A, ни B не просили сдвигать.
+        """
+        head_before = self.make_task(self.TASK)
+        # Задача A (OTHER) существует, но её СОБСТВЕННЫЙ переход ещё не
+        # случился — роль просто пишет файл в общем репо target'а, не
+        # коммитя (в отличие от `make_task`, здесь нет `store.set_state`,
+        # то есть нет и легитимной фиксации, которая бы сама сдвинула
+        # HEAD — единственная причина «грязно» ниже это WIP A).
+        store.insert_task(store.db(), self.OTHER, f"Задача {self.OTHER}",
+                          "in_dev", f"task/{self.OTHER.lower()}",
+                          "sled", 25.0)
+        (self.repo() / "tasks" / self.OTHER).mkdir(parents=True)
+        (self.repo() / "tasks" / self.OTHER / "PLAN.md").write_text(
+            "A ещё работает\n", encoding="utf-8")
+
+        reason = fixation.check_integrity(store.db(), self.TASK)
+
+        self.assertIsNotNone(reason)
+        self.assertIn("грязная копия", reason)
+        # HEAD артефактного репо не сдвинулся — WIP задачи A остался
+        # незакоммиченным, а не был подхвачен коммитом фиксации B.
+        self.assertEqual(gitcmd.head_sha(self.repo()), head_before,
+                         "check_integrity(B) не смеет коммитить WIP задачи A")
+        status = gitcmd.in_repo(self.repo(), "status", "--porcelain").stdout
+        self.assertIn(f"tasks/{self.OTHER}", status,
+                      "правка A осталась незакоммиченной, не подмешана в коммит B")
+
+        # Через runner.cmd_run — тот же путь, каким Оператор реально
+        # столкнётся со сценарием: репо-широкая «чистота» (требование 2 —
+        # коммит целиком, не по задачам) блокирует и B тоже — известное
+        # ограничение гранулярности A2b при нескольких активных задачах
+        # одного target (tasks/T021/PLAN.md «Риски»), но это отказ, а не
+        # порча истории: HEAD и здесь не двигается заранее самой проверкой.
+        out, popen = self.run_faked(self.TASK)
+
+        self.assertEqual(self.claude_launches(popen), [])
+        self.assertEqual(store.get_task(store.db(), self.TASK)["state"],
+                         "escalated")
+        self.assertIn("грязная копия", out)
+
+
 class RealPultGitTest(unittest.TestCase):
     """Песочница догфуда: ROOT — настоящий git-репозиторий (как test_invariants.
 
@@ -400,6 +553,24 @@ class ApproveByShaTest(RealPultGitTest):
         self.capture(fsm.cmd_approve, self.TASK, sha)
 
         self.assertEqual(store.get_task(store.db(), self.TASK)["state"], "in_dev")
+
+    def test_approve_on_escalated_with_matching_sha_returns_to_escalated_from(self):
+        """`escalated` тоже входит в APPROVE_NEEDS_SHA (fsm.py:110) — это
+        единственный путь выхода из инцидента целостности после того, как
+        Оператор разобрался и подтвердил актуальное состояние.
+        """
+        self.enter_in_dev()
+        (config.TASKS / self.TASK / "SPEC.md").write_text(
+            "подмена мимо гейта\n", encoding="utf-8")
+        self.run_faked()  # инцидент целостности -> escalated, escalated_from=in_dev
+        self.assertEqual(store.get_task(store.db(), self.TASK)["state"],
+                         "escalated")
+        self.commit_task_dir("подтверждено Оператором")
+
+        self.capture(fsm.cmd_approve, self.TASK, self.head())
+
+        self.assertEqual(store.get_task(store.db(), self.TASK)["state"],
+                         "in_dev", "escalated_from вернул задачу в in_dev")
 
 
 class IntegrityIncidentBlocksRunTest(RealPultGitTest):
