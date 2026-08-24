@@ -44,6 +44,11 @@ docs/adr/0002-integrity-principle.md, CLAUDE.md.
 | 17 | Оценка влияния на систему — артефакт: PLAN без секции «Влияние на систему» не проходит guard | `test_invariants.GuardKeepsTheIntegritySectionTest` | ADR-0002, правило 1 |
 | 18 | Автоматизация механических команд не проходит гейты: `auto` не вызывает `approve`/`reject` и пути мимо гейта не имеет | `test_auto_cycle.AutoNeverPassesAGateTest` | design §4; tasks/T014/SPEC.md, требование 3 |
 | 19 | Merge требует зелёного CI головного коммита ветки задачи; не-зелёный, **неизвестный** и **неполный** (проверок меньше, чем обещает `total_count`) статус merge не выполняют | `test_invariants.MergeNeedsGreenCiTest`; разбор статуса — `test_ci_status.BranchStatusTest`, полнота ответа — `test_ci_status.PaginationTest` | design §4 (guards неотключаемы); tasks/T017/SPEC.md, требование 6; tasks/T018/SPEC.md, требования 1–3 |
+| 20 | Артефакты и логи внешнего target не появляются в рабочем дереве пульта ни на одном переходе FSM (`.artel/` — `.gitignore` пульта целиком) | `test_multitarget_invariants.PultArtifactIsolationTest` | ADR-0003 3д; tasks/T020/SPEC.md, требование 1 |
+| 21 | Рабочий каталог роли внешнего target — только `.artel/projects/<target>/workspace/`; окружение процесса не содержит путей и конфигов пульта сверх явно переданного (HOME/CLAUDE_CONFIG_DIR) | `test_multitarget_invariants.ExternalWorkspaceIsolationTest` | ADR-0003 §4, п.14; tasks/T020/SPEC.md, требование 2 |
+| 22 | Нумерация задач независима per-target; операции по `task_id` (журнал, spend, kill) одного target не читают и не меняют строки другого | `test_multitarget_invariants.CrossTargetDbIsolationTest` | ADR-0003 3ж; tasks/T020/SPEC.md, требование 3 |
+| 23 | Пороги суммарного расхода программы (70%/90%) считаются суммой `spent_usd` по всем задачам ВСЕХ target, не одного | `test_multitarget_invariants.ProgramSpendAcrossTargetsTest` | roadmap §5; ADR-0003 3ж; tasks/T020/SPEC.md, требование 4 |
+| 24 | Счётчик номеров задач target не переиспользует номер архивированной (не удалённой) строки при пересеве после reconnect | `test_multitarget_invariants.CounterSurvivesArchivalOnReconnectTest` | ADR-0003 3ж («архивация строк, никогда DELETE»); tasks/T020/SPEC.md, требование 5 |
 
 ## На ревью — тестом не выражаются
 
@@ -65,6 +70,8 @@ docs/adr/0002-integrity-principle.md, CLAUDE.md.
 | Шаг идемпотентен, агент эфемерен, чекпоинт = последний артефакт в git | Проверяется реальным прогоном (перезапуск шага с чистого контейнера), не юнитом | Оператор, прогон конвейера |
 | Прод-креды только в пайплайне; песочница агента без сети наружу | Вне объёма Фазы 0 (нет деплоя и песочницы в CI) | Оператор |
 | Ослабление любой защиты — только Оператором через ADR | Мета-инвариант процесса: его субъект — роль, а не код | ревью (blocker), Оператор |
+| `status`/`show` не путают target чужой строкой при фильтрации по target (SPEC T020, требование 3, «status с фильтром») | Фильтра `--target` у команд каталога сейчас нет (`catalog.cmd_status` печатает все задачи всех target одной лентой) — тестировать нечего до появления самой фичи; адресация по `task_id` (инвариант 22) уже гарантирует, что команды жизненного цикла не путают строки без всякого фильтра | ревью, кандидат в CLI/панель вне A2 |
+| Идентификатор задачи (`tasks.id`) не коллизирует между target буквально одинаковой строкой (например, `"T001"` у двух target одновременно) | `tasks.id` — общий `PRIMARY KEY` на все target (T019); формат id второго target не выбран нигде в коде — решение вместе с командой, которая заводит его задачи (tasks/T019/PLAN.md, «Риски», п.2; tasks/T020/PLAN.md, «Риски», п.1). Кодировать тест сейчас значило бы либо тестировать несуществующий формат, либо тянуть составной PRIMARY KEY по ~60 местам пакета — новый механизм, не тест | ревью, задача, вводящая создание задач второго target |
 
 ## Как добавить инвариант
 

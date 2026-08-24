@@ -3,6 +3,7 @@ import os
 import subprocess
 import sys
 import time
+from pathlib import Path
 
 from . import agent_log, budget, config, gitcmd, keychain, review, roles, spend, store
 
@@ -188,6 +189,27 @@ def role_env(role: str | None = None) -> dict:
     return env
 
 
+def role_cwd(target: str) -> Path:
+    """Рабочий каталог роли: ROOT для догфуда, workspace target'а — иначе.
+
+    Догфуд (`config.DEFAULT_TARGET`) держит артефакты в `tasks/` пульта
+    до A7 (ADR-0003 3д, «особый случай») — рабочий каталог как и был,
+    `ROOT`. Внешний target по ADR-0003 §4 обязан видеть только свой
+    workspace: `.artel/projects/<target>/workspace/`, не дерево пульта
+    с его CLAUDE.md, `.claude/`, `.mcp.json` (та же конфиг-инъекция,
+    от которой T019 увёл HOME/CLAUDE_CONFIG_DIR, — здесь другой вектор,
+    cwd, а не окружение). Каталог создаётся здесь же, как и курируемый
+    слой ролей: до git-первички (A2b) он пуст, но роль обязана
+    стартовать в НЁМ, а не тихо съехать на ROOT из-за отсутствия
+    каталога.
+    """
+    if target == config.DEFAULT_TARGET:
+        return config.ROOT
+    path = config.PROJECTS / target / "workspace"
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
 def run_agent_once(conn, task_id: str, role: str, prompt: str,
                    attempt: int) -> tuple[str, str]:
     """Один запуск агента: исход попытки и пояснение к нему.
@@ -225,6 +247,17 @@ def run_agent_once(conn, task_id: str, role: str, prompt: str,
         print(f"[{task_id}] окружение роли не подготовлено ({exc}) — "
               f"шаг не начат")
         return "skipped", f"окружение роли не подготовлено: {exc}"
+
+    # Тот же принцип, что у окружения выше: рабочий каталог roли не создался —
+    # шаг не стартует, тихого отката на ROOT нет (ADR-0003 §4).
+    try:
+        cwd = role_cwd(store.task_target(conn, task_id))
+    except OSError as exc:
+        store.journal(conn, task_id, role, "agent run SKIPPED",
+                      f"рабочий каталог роли не создан: {exc}")
+        print(f"[{task_id}] рабочий каталог роли не подготовлен ({exc}) — "
+              f"шаг не начат")
+        return "skipped", f"рабочий каталог роли не подготовлен: {exc}"
 
     # Отсутствие идентичности — не повод не запускать шаг (агент делает не
     # только коммит), но повод сказать об этом до запуска: иначе Оператор
@@ -282,7 +315,7 @@ def run_agent_once(conn, task_id: str, role: str, prompt: str,
                  # белый список вместо полного Bash: только git и запуск
                  # тестов/guard
                  "--allowedTools", "Bash(git:*),Bash(python3:*)"],
-                cwd=config.ROOT, env=env, text=True, bufsize=1,
+                cwd=cwd, env=env, text=True, bufsize=1,
                 stdin=prompt_file, stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
             )
