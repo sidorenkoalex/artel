@@ -42,11 +42,21 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 # CI подставляются: предмет свипов — переходы, а не разговор с GitHub.
 # Проверку самого статуса ведёт MergeNeedsGreenCiTest.
 FAKE_SHA = "0123456789abcdef0123456789abcdef01234567"
-GREEN_CI = json.dumps({"check_runs": [
+GREEN_CI = json.dumps({"total_count": 3, "check_runs": [
     {"name": "guard", "status": "completed", "conclusion": "success"},
     {"name": "python", "status": "completed", "conclusion": "success"},
     {"name": "protected-paths", "status": "completed", "conclusion": "skipped"},
 ]})
+
+# Проверок больше, чем пришло в теле ответа: `total_count` обещает 31,
+# записей 30 и все зелёные. До T018 гейт читал первую страницу и такой
+# ответ считал зелёным — единственный вход, где неизвестный статус
+# проходил за годный (SPEC T018, требования 1–2).
+TRUNCATED_CI = json.dumps({
+    "total_count": 31,
+    "check_runs": [{"name": f"check-{i}", "status": "completed",
+                    "conclusion": "success"} for i in range(30)],
+})
 
 # Все состояния FSM (docs/design.md §6 в срезе Фазы 0, artel.py docstring).
 FSM_STATES = ("spec_writing", "spec_gate", "in_dev", "review", "acceptance",
@@ -377,6 +387,7 @@ class MergeNeedsGreenCiTest(FsmTest):
          json.dumps({"check_runs": [
              {"name": "guard", "status": "in_progress", "conclusion": None}]}), 0),
         ("проверок нет вовсе", json.dumps({"check_runs": []}), 0),
+        ("проверок больше, чем в ответе", TRUNCATED_CI, 0),
         ("gh не ответил", "", 1),
         ("ответ не разобрать", "не-JSON", 0),
     )
