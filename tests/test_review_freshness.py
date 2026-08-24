@@ -30,15 +30,24 @@ def fake_git(*args: str) -> subprocess.CompletedProcess:
     return subprocess.CompletedProcess(list(args), 0, "", "")
 
 
+# Заготовки валидны по guard: с T017 он вызывается на каждом переходе
+# `advance` и артефакт без обязательных секций задачу не двигает.
 REVIEW_MD = """---
 task: {task}
 type: review
 author_role: reviewer
 status: {status}
 iteration: {iteration}
+schema_version: 1
 ---
 
 # REVIEW: проверка
+
+## Соответствие SPEC
+
+## Замечания
+
+## Вердикт
 """
 
 PLAN_READY_MD = """---
@@ -46,9 +55,18 @@ task: {task}
 type: plan
 author_role: developer
 status: ready
+schema_version: 1
 ---
 
 # PLAN: проверка
+
+## Подход
+
+## Шаги
+
+## Покрытие требований
+
+## Влияние на систему
 """
 
 
@@ -214,7 +232,9 @@ class ReviewFreshnessScenarioTest(unittest.TestCase):
             popen_mock.return_value = proc
             self.capture(runner.cmd_run, self.TASK)
 
-        prompt = popen_mock.call_args.args[0][2]
+        # Промпт с T017 уходит агенту файлом на stdin, а не аргументом argv.
+        prompt = Path(popen_mock.call_args.kwargs["stdin"].name).read_text(
+            encoding="utf-8")
         self.assertIn("iteration: 2", prompt)
 
 

@@ -19,6 +19,7 @@ main (сценарии уборки — test_kill_cleanup.py).
 """
 import contextlib
 import io
+import json
 import shutil
 import subprocess
 import sys
@@ -30,34 +31,72 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from orchestrator import (budget, catalog, cleanup, config, fsm,  # noqa: E402
-                          gitcmd, runner, store)
+from orchestrator import (budget, catalog, ci, cleanup, config,  # noqa: E402
+                          fsm, gitcmd, runner, store)
 from scripts import guard  # noqa: E402
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
+
+# Головной коммит ветки задачи и зелёный ответ `gh` про его проверки.
+# Ветка в песочнице FSM ненастоящая (git подменён), поэтому sha и статус
+# CI подставляются: предмет свипов — переходы, а не разговор с GitHub.
+# Проверку самого статуса ведёт MergeNeedsGreenCiTest.
+FAKE_SHA = "0123456789abcdef0123456789abcdef01234567"
+GREEN_CI = json.dumps({"check_runs": [
+    {"name": "guard", "status": "completed", "conclusion": "success"},
+    {"name": "python", "status": "completed", "conclusion": "success"},
+    {"name": "protected-paths", "status": "completed", "conclusion": "skipped"},
+]})
 
 # Все состояния FSM (docs/design.md §6 в срезе Фазы 0, artel.py docstring).
 FSM_STATES = ("spec_writing", "spec_gate", "in_dev", "review", "acceptance",
               "merge_gate", "done", "escalated", "killed")
 
+# Заготовки артефактов — валидные по guard: с T017 он вызывается кодом на
+# каждом переходе `advance`, и артефакт без обязательных секций задачу не
+# двигает. Свипы этого модуля должны упираться в инвариант, который они
+# проверяют, а не в сломанную структуру своей же фикстуры.
 SPEC_MD = """---
 task: {task}
 type: spec
 author_role: analyst
 status: {status}
+schema_version: 1
 ---
 
 # SPEC: инвариант
+
+## Контекст
+
+## Требования
+
+## Критерии приёмки
+
+## Не входит
 """
 
-PLAN_MD = """---
+# Frontmatter плана отдельно от секций: GuardKeepsTheIntegritySectionTest
+# собирает план с произвольным набором секций и проверяет, какие из них
+# guard требует.
+PLAN_HEAD = """---
 task: {task}
 type: plan
 author_role: developer
 status: {status}
+schema_version: 1
 ---
 
 # PLAN: инвариант
+
+"""
+
+PLAN_MD = PLAN_HEAD + """## Подход
+
+## Шаги
+
+## Покрытие требований
+
+## Влияние на систему
 """
 
 REVIEW_MD = """---
@@ -66,9 +105,16 @@ type: review
 author_role: reviewer
 status: {status}
 iteration: {iteration}
+schema_version: 1
 ---
 
 # REVIEW: инвариант
+
+## Соответствие SPEC
+
+## Замечания
+
+## Вердикт
 """
 
 
@@ -137,12 +183,27 @@ class FsmTest(unittest.TestCase):
         spy_patcher.start()
         self.addCleanup(spy_patcher.stop)
 
+        self.set_ci(GREEN_CI)
+
         self.capture(catalog.cmd_init)
         self.capture(catalog.cmd_new, "Инварианты системы")
         self.tdir = config.TASKS / self.TASK
         self.branch = self.task_row()["branch"]
 
     # ------------------------------------------------------------ утилиты
+
+    def set_ci(self, stdout: str, returncode: int = 0) -> None:
+        """Ответ `gh` про проверки коммита; sha ветки — фиксированный.
+
+        Подменяется низ (`ci.gh`, `ci.head_sha`), а решение «зелёный ли CI»
+        каждый раз принимает настоящий `ci.branch_status`.
+        """
+        for target, value in (("gh", lambda *a: subprocess.CompletedProcess(
+                                  list(a), returncode, stdout, "")),
+                              ("head_sha", lambda branch: (FAKE_SHA, ""))):
+            patcher = mock.patch.object(ci, target, value)
+            patcher.start()
+            self.addCleanup(patcher.stop)
 
     def capture(self, fn, *args) -> str:
         buf = io.StringIO()
@@ -290,6 +351,81 @@ class MergeOnlyFromMergeGateTest(FsmTest):
                 self.capture(fsm.cmd_approve, self.TASK)
 
         self.assertEqual(self.state(), "merge_gate")
+
+
+class MergeNeedsGreenCiTest(FsmTest):
+    """Инвариант: merge из merge_gate требует зелёного CI головного коммита.
+
+    Источник: docs/design.md §4 (guards неотключаемы, смержить с красным CI
+    нельзя), tasks/T017/SPEC.md, требование 6. До T017 «CI зелёный» проверял
+    глазами Оператор — код мержил что дадут; инвариант в том, что теперь
+    проверяет код и что неизвестный статус трактуется как запрет.
+
+    Проверяются исходы, каждый из которых раньше давал бы merge: CI упал,
+    CI ещё идёт, проверок нет вовсе, `gh` не отвечает, ответ не разобрать.
+    """
+
+    # (имя случая, ответ `gh`, код возврата)
+    NOT_GREEN = (
+        ("проверка упала",
+         json.dumps({"check_runs": [
+             {"name": "python", "status": "completed", "conclusion": "failure"}]}), 0),
+        ("проверка отменена",
+         json.dumps({"check_runs": [
+             {"name": "guard", "status": "completed", "conclusion": "cancelled"}]}), 0),
+        ("CI ещё идёт",
+         json.dumps({"check_runs": [
+             {"name": "guard", "status": "in_progress", "conclusion": None}]}), 0),
+        ("проверок нет вовсе", json.dumps({"check_runs": []}), 0),
+        ("gh не ответил", "", 1),
+        ("ответ не разобрать", "не-JSON", 0),
+    )
+
+    def setUp(self):
+        super().setUp()
+        self.write_spec("approved")
+        self.write_plan("approved")
+        self.write_review("approved", 1)
+
+    def test_no_merge_without_a_green_ci(self):
+        """Требование 6: не-зелёный и неизвестный статус merge не выполняют."""
+        for name, stdout, returncode in self.NOT_GREEN:
+            with self.subTest(случай=name):
+                self.set_state("merge_gate")
+                self.git_spy.calls.clear()
+                self.set_ci(stdout, returncode)
+
+                with self.assertRaises(SystemExit) as exit_:
+                    self.capture(fsm.cmd_approve, self.TASK)
+
+                self.assertNotIn("merge", self.git_spy.git_subcommands(),
+                                 f"«{name}» дошло до git merge")
+                self.assertEqual(self.state(), "merge_gate",
+                                 "задача осталась на гейте merge")
+                self.assertIn("merge отклонён", str(exit_.exception))
+
+    def test_the_refusal_names_the_reason_in_the_journal(self):
+        """Отказ разбирают по журналу: причина в нём, а не только на экране."""
+        self.set_state("merge_gate")
+        self.set_ci(json.dumps({"check_runs": [
+            {"name": "python", "status": "completed", "conclusion": "failure"}]}))
+
+        with contextlib.suppress(SystemExit):
+            self.capture(fsm.cmd_approve, self.TASK)
+
+        details = [r["detail"] for r in store.db().execute(
+            "SELECT detail FROM steps WHERE task_id=? AND action=?",
+            (self.TASK, "статус CI ветки"))]
+        self.assertTrue(any("python=failure" in d for d in details), details)
+
+    def test_green_ci_merges(self):
+        """Контроль: гейт проходим — зелёный CI мержит, как и раньше."""
+        self.set_state("merge_gate")
+
+        self.capture(fsm.cmd_approve, self.TASK)
+
+        self.assertIn("merge", self.git_spy.git_subcommands())
+        self.assertEqual(self.state(), "done")
 
 
 class AgentRunsOnlyFromRunTest(FsmTest):
@@ -810,8 +946,9 @@ class GuardKeepsTheIntegritySectionTest(unittest.TestCase):
 
     def write_plan(self, sections) -> Path:
         body = "".join(f"## {s}\n\nтекст\n\n" for s in sections)
-        self.path.write_text(PLAN_MD.format(task="T001", status="ready") + body,
-                             encoding="utf-8")
+        self.path.write_text(
+            PLAN_HEAD.format(task="T001", status="ready") + body,
+            encoding="utf-8")
         return self.path
 
     def test_plan_without_impact_assessment_is_rejected(self):

@@ -191,7 +191,12 @@ class TruncateDiffTest(unittest.TestCase):
 
 
 class TruncatePackageTest(unittest.TestCase):
-    """Байтовый потолок пакета: промпт уходит в argv, а там предел в байтах."""
+    """Байтовый потолок пакета: контекст и стоимость шага измеримы в байтах.
+
+    Изначально потолок держал предел ядра на argv; с T017 промпт уходит
+    файлом на stdin, а потолок остался — прежним значением и по прежнему
+    поводу: пакет крупнее ревьювер не удержит, а платить за него придётся.
+    """
 
     def test_package_under_the_cap_is_untouched(self):
         text = "х" * 100
@@ -431,7 +436,7 @@ class ReviewPackageTest(unittest.TestCase):
         self.assertIn("[пакет усечён", package["text"])
         self.assertLessEqual(
             package["bytes"], config.REVIEW_PACKAGE_MAX_BYTES + 500,
-            "пакет обязан влезать в argv — иначе шаг падает OSError, а не ревью")
+            "потолок пакета держится и на diff из длинных строк")
         self.assertIn("Пакет собирает оркестратор", package["text"],
                       "SPEC идёт до diff и под нож не попадает")
 
@@ -579,15 +584,22 @@ class CmdRunReviewPackageTest(unittest.TestCase):
         conn.commit()
 
     def run_agent(self, state: str) -> tuple[str, list[str]]:
-        """Прогон шага; возвращает вывод и argv запущенного CLI."""
+        """Прогон шага; возвращает вывод и argv запущенного CLI.
+
+        Промпт в argv не ищется: с T017 он уходит агенту файлом на stdin
+        (SPEC T017, требование 4). Путь к файлу запоминается — его читает
+        `prompt`.
+        """
         self.set_state(state)
         with mock.patch.object(runner.subprocess, "Popen") as popen:
             popen.return_value = FakeProc(["готово\n"])
             out = self.capture(runner.cmd_run, self.TASK)
+        self.prompt_path = Path(popen.call_args.kwargs["stdin"].name)
         return out, popen.call_args.args[0]
 
-    def prompt_of(self, argv: list[str]) -> str:
-        return argv[argv.index("-p") + 1]
+    def prompt(self) -> str:
+        """Промпт шага — из файла, отданного процессу агента на stdin."""
+        return self.prompt_path.read_text(encoding="utf-8")
 
     def journal_details(self, action: str) -> list[str]:
         return [r["detail"] for r in store.db().execute(
@@ -598,7 +610,7 @@ class CmdRunReviewPackageTest(unittest.TestCase):
         """Критерий приёмки 1: SPEC, PLAN, стат-список и diff — в промпте."""
         _, argv = self.run_agent("review")
 
-        prompt = self.prompt_of(argv)
+        prompt = self.prompt()
         self.assertIn("--- РЕВЬЮ-ПАКЕТ ---", prompt)
         self.assertIn("Пакет собирает оркестратор", prompt, "SPEC целиком")
         self.assertIn("Собрать пакет в cmd_run", prompt, "PLAN целиком")
@@ -613,7 +625,7 @@ class CmdRunReviewPackageTest(unittest.TestCase):
 
         _, argv = self.run_agent("review")
 
-        prompt = self.prompt_of(argv)
+        prompt = self.prompt()
         self.assertIn("Пакет собирает оркестратор", prompt, "SPEC целиком")
         self.assertNotIn("не показан", prompt)
 
@@ -631,7 +643,7 @@ class CmdRunReviewPackageTest(unittest.TestCase):
 
         self.assertIn("не из ветки, а из рабочего дерева: templates/REVIEW.md",
                       self.journal_details("ревью-пакет собран")[0])
-        self.assertIn(review.WORKTREE_NOTE.strip(), self.prompt_of(argv),
+        self.assertIn(review.WORKTREE_NOTE.strip(), self.prompt(),
                       "источник назван и в самом пакете, не только в журнале")
 
     def test_package_size_lands_in_the_journal(self):
@@ -690,14 +702,14 @@ class CmdRunReviewPackageTest(unittest.TestCase):
         detail = self.journal_details("ревью-пакет собран")[0]
         self.assertIn("diff не собран", detail)
         self.assertIn("codec", detail)
-        self.assertIn("Пакет собирает оркестратор", self.prompt_of(argv),
+        self.assertIn("Пакет собирает оркестратор", self.prompt(),
                       "шаг всё равно стартовал, и с артефактами в пакете")
 
     def test_developer_step_has_no_package(self):
         """Требование «не входит»: контекст разработчика не меняется."""
         _, argv = self.run_agent("in_dev")
 
-        self.assertNotIn("--- РЕВЬЮ-ПАКЕТ ---", self.prompt_of(argv))
+        self.assertNotIn("--- РЕВЬЮ-ПАКЕТ ---", self.prompt())
         self.assertEqual(self.journal_details("ревью-пакет собран"), [])
         self.assertEqual(self.git.calls, [], "diff разработчику не собирается")
 

@@ -11,7 +11,21 @@ import re
 import sys
 from pathlib import Path
 
+# Файл живёт двумя жизнями — скрипт и модуль (`from scripts import guard`
+# в тестах и в FSM). У скрипта в sys.path лежит scripts/, а не корень
+# репозитория, поэтому корень кладётся руками: та же схема, что в artel.py.
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+from orchestrator import yamlmini  # noqa: E402
+
 REQUIRED_META = {"task", "type", "author_role", "status"}
+
+# Версия формата артефактов, которую понимает этот guard. Артефакт без поля
+# `schema_version` — версия 1: файлы Фазы 0 (T001–T016) писались до его
+# появления и остаются валидными. Артефакт версии выше — ошибка: его писал
+# более новый формат, и молча читать его старыми правилами значит менять
+# сбой проверки на чужой сбой позже (SPEC T017, требование 3).
+SUPPORTED_SCHEMA_VERSION = 1
 
 RULES = {
     "spec": {
@@ -34,37 +48,50 @@ RULES = {
 }
 
 
-def parse_frontmatter(text: str) -> dict | None:
-    m = re.match(r"\A---\n(.*?)\n---\n", text, re.S)
-    if not m:
-        return None
-    meta = {}
-    for line in m.group(1).splitlines():
-        if ":" in line:
-            k, _, v = line.partition(":")
-            meta[k.strip()] = v.split("#")[0].strip()
-    return meta
+def schema_errors(path: Path, meta: dict) -> list[str]:
+    """Совместимость версии схемы артефакта с этим guard'ом."""
+    if "schema_version" not in meta:
+        return []  # артефакт до T017 — версия 1 по определению
+    version = meta["schema_version"]
+    # bool — подтип int, а `schema_version: true` версией не является.
+    if not isinstance(version, int) or isinstance(version, bool) or version < 1:
+        return [f"{path}: schema_version '{version}' — не целое число ≥ 1"]
+    if version > SUPPORTED_SCHEMA_VERSION:
+        return [f"{path}: schema_version {version} новее поддерживаемой "
+                f"{SUPPORTED_SCHEMA_VERSION} — артефакт написан более новым "
+                f"форматом, обнови guard"]
+    return []
 
 
 def check(path: Path) -> list[str]:
     errors: list[str] = []
-    text = path.read_text(encoding="utf-8")
+    try:
+        text = path.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError) as exc:
+        # Guard зовётся не только из CLI, но и из FSM на переходах (T017,
+        # требование 5), а там трейсбек читать некому: нечитаемый файл —
+        # такое же нарушение структуры, как отсутствующая секция.
+        return [f"{path}: не прочитан: {exc}"]
 
-    meta = parse_frontmatter(text)
+    meta = yamlmini.frontmatter(text)
     if meta is None:
         return [f"{path}: нет frontmatter (--- ... ---)"]
+
+    errors.extend(schema_errors(path, meta))
 
     missing = REQUIRED_META - meta.keys()
     if missing:
         errors.append(f"{path}: frontmatter без полей: {', '.join(sorted(missing))}")
 
-    atype = meta.get("type", "")
+    # `or ""` — пустое значение поля типизированный разбор отдаёт как None,
+    # а в тексте нарушения «type ''» читается понятнее, чем «type 'None'».
+    atype = meta.get("type") or ""
     rules = RULES.get(atype)
     if rules is None:
         errors.append(f"{path}: неизвестный type '{atype}' (ожидается: {', '.join(RULES)})")
         return errors
 
-    status = meta.get("status", "")
+    status = meta.get("status") or ""
     if status not in rules["statuses"]:
         errors.append(
             f"{path}: недопустимый status '{status}' для {atype} "
@@ -76,7 +103,7 @@ def check(path: Path) -> list[str]:
         if section not in headers:
             errors.append(f"{path}: отсутствует обязательная секция '## {section}'")
 
-    if meta.get("task") in ("", "TASK_ID"):
+    if meta.get("task") in (None, "", "TASK_ID"):
         errors.append(f"{path}: поле task не заполнено (осталось TASK_ID)")
 
     return errors

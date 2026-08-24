@@ -1,8 +1,32 @@
 """Переходы автомата: advance по артефактам, approve/reject Оператора."""
 import subprocess
 import sys
+from pathlib import Path
 
-from . import artifacts, budget, config, store
+from scripts import guard
+
+from . import artifacts, budget, ci, config, store
+
+
+def guard_refuses(conn, task_id: str, path: Path) -> bool:
+    """Прогон guard по артефакту-условию перехода; True — переход отменён.
+
+    Структуру артефакта проверяет код на самом переходе, а не роль по
+    договорённости и не CI задним числом (SPEC T017, требование 5): задачу
+    двигают статусы артефактов, значит артефакт со сломанной структурой
+    двигать её не должен. Отказ — журнал, названный файл и все причины
+    списком: разбирать его будет Оператор, и трейсбека ему тут не надо.
+    """
+    errors = guard.check(path)
+    if not errors:
+        return False
+    store.journal(conn, task_id, "fsm", "переход отклонён guard'ом",
+                  "; ".join(errors))
+    print(f"[{task_id}] переход отклонён: {path.name} не проходит guard")
+    for error in errors:
+        print(f"  - {error}")
+    print(f"  дальше: почини артефакт и повтори artel.py advance {task_id}")
+    return True
 
 
 def cmd_advance(task_id: str) -> None:
@@ -15,6 +39,8 @@ def cmd_advance(task_id: str) -> None:
     if state == "spec_writing":
         meta = artifacts.frontmatter(tdir / "SPEC.md")
         if meta.get("status") == "ready":
+            if guard_refuses(conn, task_id, tdir / "SPEC.md"):
+                return
             # До смены состояния: потолок задачи должен стоять уже к тому
             # моменту, когда Оператор смотрит на неё на гейте SPEC.
             budget.apply_spec_budget(conn, t, meta)
@@ -28,6 +54,8 @@ def cmd_advance(task_id: str) -> None:
         status = meta.get("status")
         if status not in config.REVIEW_VERDICTS:
             print(f"[{task_id}] REVIEW.md status={status} — жду вердикта")
+            return
+        if guard_refuses(conn, task_id, tdir / "REVIEW.md"):
             return
 
         iteration = artifacts.fresh_verdict_iteration(meta, t["reviewed_iter"])
@@ -68,6 +96,8 @@ def cmd_advance(task_id: str) -> None:
         # разработчик закончил: PLAN ready и ветка запушена -> в ревью
         if artifacts.frontmatter(
                 tdir / "PLAN.md").get("status") in ("ready", "approved"):
+            if guard_refuses(conn, task_id, tdir / "PLAN.md"):
+                return
             store.set_state(conn, task_id, "review", "fsm",
                             "MR готов — прогон ревьювера")
         else:
@@ -91,7 +121,19 @@ def cmd_approve(task_id: str) -> None:
         print(f"  дальше: artel.py approve {task_id}  (выполнит merge)")
     elif state == "merge_gate":
         branch = t["branch"]
-        for cmd in (["git", "checkout", "main"], ["git", "pull", "--ff-only"],
+        # Зелёный CI — условие мержа, проверяемое кодом, а не глазами
+        # Оператора (SPEC T017, требование 6). Неизвестный статус — это
+        # «нельзя»: иначе сломанный или неавторизованный `gh` бесшумно
+        # возвращал бы систему к «смержим, посмотрим потом».
+        green, note = ci.branch_status(branch)
+        store.journal(conn, task_id, "orchestrator", "статус CI ветки", note)
+        if not green:
+            sys.exit(f"[{task_id}] merge отклонён: {note}\n"
+                     f"  задача осталась на гейте merge; почини CI ветки "
+                     f"{branch} и повтори: artel.py approve {task_id}")
+        print(f"[{task_id}] {note}")
+        for cmd in (["git", "checkout", config.MAIN_BRANCH],
+                    ["git", "pull", "--ff-only"],
                     ["git", "merge", "--no-ff", branch, "-m",
                      f"{task_id}: merge {branch}"], ["git", "push"]):
             res = subprocess.run(cmd, cwd=config.ROOT,
