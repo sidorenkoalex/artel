@@ -22,16 +22,26 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from orchestrator import budget, catalog, config, fsm, store  # noqa: E402
 
+# Заготовка валидна по guard: с T017 он вызывается на переходе
+# spec_writing -> spec_gate, и SPEC без обязательных секций до применения
+# потолка не доходит.
 SPEC_MD = """---
 task: {task}
 type: spec
 author_role: analyst
 status: {status}
+schema_version: 1
 {extra}---
 
 # SPEC: бюджет из SPEC
 
 ## Контекст
+
+## Требования
+
+## Критерии приёмки
+
+## Не входит
 """
 
 # Схема tasks до T012 — на ней проверяется миграция существующих БД.

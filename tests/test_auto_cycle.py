@@ -37,14 +37,25 @@ REAL_CMD_RUN = runner.cmd_run
 FSM_STATES = ("spec_writing", "spec_gate", "in_dev", "review", "acceptance",
               "merge_gate", "done", "escalated", "killed")
 
+# Заготовки валидны по guard: с T017 он вызывается на каждом переходе
+# `advance`, и артефакт без обязательных секций цикл дальше не пускает.
 PLAN_MD = """---
 task: {task}
 type: plan
 author_role: developer
 status: {status}
+schema_version: 1
 ---
 
 # PLAN: цикл auto
+
+## Подход
+
+## Шаги
+
+## Покрытие требований
+
+## Влияние на систему
 """
 
 REVIEW_MD = """---
@@ -53,9 +64,16 @@ type: review
 author_role: reviewer
 status: {status}
 iteration: {iteration}
+schema_version: 1
 ---
 
 # REVIEW: цикл auto
+
+## Соответствие SPEC
+
+## Замечания
+
+## Вердикт
 """
 
 

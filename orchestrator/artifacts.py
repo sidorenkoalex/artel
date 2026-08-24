@@ -1,20 +1,23 @@
 """Чтение артефактов задачи: frontmatter и свежесть вердикта ревьювера."""
-import re
 from pathlib import Path
+
+from . import yamlmini
 
 
 def frontmatter(path: Path) -> dict:
-    if not path.exists():
+    """Frontmatter артефакта; пустой словарь — файла нет либо блока нет.
+
+    Разбор общий с guard'ом (`yamlmini`): читатель и валидатор обязаны
+    видеть в одном файле одно и то же, иначе расхождение форматов
+    обнаруживается чужим сбоем, а не проверкой (SPEC T017, требование 2).
+    Нечитаемый файл — тоже пустой словарь: FSM из-за него не двигает
+    задачу, а причину назовёт guard на том же переходе.
+    """
+    try:
+        text = path.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
         return {}
-    m = re.match(r"\A---\n(.*?)\n---\n", path.read_text(encoding="utf-8"), re.S)
-    if not m:
-        return {}
-    meta = {}
-    for line in m.group(1).splitlines():
-        if ":" in line:
-            k, _, v = line.partition(":")
-            meta[k.strip()] = v.split("#")[0].strip()
-    return meta
+    return yamlmini.frontmatter(text) or {}
 
 
 def fresh_verdict_iteration(meta: dict, reviewed_iter: int) -> int | None:

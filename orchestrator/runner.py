@@ -3,7 +3,7 @@ import subprocess
 import sys
 import time
 
-from . import agent_log, budget, config, review, spend, store
+from . import agent_log, budget, config, review, roles, spend, store
 
 
 def cmd_run(task_id: str) -> None:
@@ -19,10 +19,21 @@ def cmd_run(task_id: str) -> None:
     if role is None:
         sys.exit(f"[{task_id}] в состоянии {t['state']} агент не запускается")
 
-    skills = "\n\n".join(
-        (config.ROOT / "skills" / f"{s}.md").read_text(encoding="utf-8")
-        for s in config.ROLE_SKILLS[role]
-    )
+    # Состав скилов роли — из roles.yaml, а не из константы рядом с кодом:
+    # правка карты исполнителей меняет промпт без правки кода (T017,
+    # требование 1). Отказы обеих чтений называются причиной: шаг не
+    # начинается, но Оператор видит, что именно чинить.
+    try:
+        skill_names = roles.skills(role)
+    except roles.RolesError as exc:
+        sys.exit(f"[{task_id}] состав скилов роли {role} не прочитан: {exc}")
+    try:
+        skills = "\n\n".join(
+            (config.ROOT / "skills" / f"{s}.md").read_text(encoding="utf-8")
+            for s in skill_names
+        )
+    except (OSError, UnicodeDecodeError) as exc:
+        sys.exit(f"[{task_id}] скил роли {role} не прочитан: {exc}")
     task_ref = f"tasks/{task_id}"
     package = None
     if role == "developer":
@@ -105,32 +116,62 @@ def run_agent_once(conn, task_id: str, role: str, prompt: str,
     """
     numbered = f"попытка {attempt}/{config.AGENT_ATTEMPTS}"
     log_path = agent_log.new_agent_log(task_id, role)
+    # Промпт уходит агенту файлом на stdin, а не аргументом командной строки
+    # (SPEC T017, требование 4): в argv он упирается в предел ядра, режется
+    # по длине и целиком виден в `ps` любому процессу машины. Файл рядом
+    # с логом заодно делает шаг воспроизводимым руками — раньше промпт
+    # сохранялся только в ветке «CLI не найден» (T011, ревью 1).
+    prompt_path = log_path.with_suffix(".prompt.txt")
+    try:
+        prompt_path.write_text(prompt, encoding="utf-8")
+    except OSError as exc:
+        store.journal(conn, task_id, role, "agent run SKIPPED",
+                      f"промпт не записан в {prompt_path}: {exc}")
+        print(f"[{task_id}] промпт шага не записан ({exc}) — шаг не начат")
+        return "skipped", f"промпт не записан: {exc}"
+
     print(f"[{task_id}] лог шага: {log_path}  (наблюдать: tail -f {log_path})")
     store.journal(conn, task_id, role, "agent run started",
-                  f"{numbered}, лог: {log_path}")
+                  f"{numbered}, лог: {log_path}, промпт: {prompt_path}")
+    # Открытие файла держится вне `try` вокруг Popen: там ловится
+    # FileNotFoundError, и пропавший промпт (ручная уборка `.artel/logs`,
+    # внешний tmp-reaper) отчитывался бы Оператору как «claude CLI не найден» —
+    # он пошёл бы чинить установку CLI вместо диска.
     try:
-        proc = subprocess.Popen(
-            ["claude", "-p", prompt, "--permission-mode", "acceptEdits",
-             # stream-json — единственный режим, где строки приходят по ходу
-             # шага: text и json отдают всё одним куском в конце (замер в
-             # PLAN.md). --verbose при нём обязателен, иначе CLI выходит с rc=1.
-             "--output-format", "stream-json", "--verbose",
-             # белый список вместо полного Bash: только git и запуск тестов/guard
-             "--allowedTools", "Bash(git:*),Bash(python3:*)"],
-            cwd=config.ROOT, text=True, bufsize=1,
-            stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-        )
-    except FileNotFoundError:
-        # Промпт — в файл, а не в терминал: с ревью-пакетом это десятки и
-        # сотни килобайт, из скроллбэка такое не скопировать, а ручной
-        # прогон роли — весь смысл этой ветки (T011, ревью 1).
-        prompt_path = log_path.with_suffix(".prompt.txt")
-        prompt_path.write_text(prompt, encoding="utf-8")
+        prompt_file = open(prompt_path, encoding="utf-8")
+    except OSError as exc:
         store.journal(conn, task_id, role, "agent run SKIPPED",
-                      f"claude CLI не найден, промпт: {prompt_path}")
-        print(f"claude CLI не найден. Промпт шага целиком записан в "
-              f"{prompt_path} — запусти роль вручную с ним.")
-        return "skipped", "claude CLI не найден"
+                      f"промпт не прочитан из {prompt_path}: {exc}")
+        print(f"[{task_id}] промпт шага не прочитан ({exc}) — шаг не начат")
+        return "skipped", f"промпт не прочитан: {exc}"
+
+    # Файл открыт только на время запуска: у процесса свой дескриптор,
+    # а держать его открытым в оркестраторе незачем.
+    with prompt_file:
+        try:
+            proc = subprocess.Popen(
+                # `claude -p` без аргумента читает промпт со стандартного
+                # входа — им и отдаётся файл.
+                ["claude", "-p", "--permission-mode", "acceptEdits",
+                 # stream-json — единственный режим, где строки приходят по
+                 # ходу шага: text и json отдают всё одним куском в конце
+                 # (замер в PLAN.md). --verbose при нём обязателен, иначе
+                 # CLI выходит с rc=1.
+                 "--output-format", "stream-json", "--verbose",
+                 # белый список вместо полного Bash: только git и запуск
+                 # тестов/guard
+                 "--allowedTools", "Bash(git:*),Bash(python3:*)"],
+                cwd=config.ROOT, text=True, bufsize=1, stdin=prompt_file,
+                stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+            )
+        except FileNotFoundError:
+            # Промпт уже на диске, и это весь смысл ветки: ручной прогон роли
+            # делается тем же текстом, из скроллбэка его было бы не скопировать.
+            store.journal(conn, task_id, role, "agent run SKIPPED",
+                          f"claude CLI не найден, промпт: {prompt_path}")
+            print(f"claude CLI не найден. Промпт шага целиком записан в "
+                  f"{prompt_path} — запусти роль вручную с ним.")
+            return "skipped", "claude CLI не найден"
 
     # Перекачка в потоке: чтение строк блокируется, пока агент молчит, а
     # таймаут шага должен срабатывать и на замолчавшем агенте.
