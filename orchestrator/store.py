@@ -147,17 +147,35 @@ def next_task_number(conn: sqlite3.Connection, target: str) -> int:
 
     Номера не переиспользуются: счётчик не смотрит на строки задач вовсе,
     поэтому ни удаление строки, ни её уход в архив номер не возвращают.
+
+    Чтение и сдвиг счётчика — одна транзакция на запись, взятая до чтения
+    (`BEGIN IMMEDIATE`). Без неё SELECT остаётся вне транзакции — python
+    открывает её только на UPDATE, — и два одновременных `new` читают один
+    и тот же номер: второй `insert_task` падает IntegrityError. WAL
+    (требование 5) заводится ровно ради второго процесса на этой БД, так
+    что гонка перестаёт быть теоретической. Синтаксис у транзакции
+    диалектный, схема — нет: переносимость схемы (ADR-0003 3ж) это
+    не трогает, у Postgres роль `BEGIN IMMEDIATE` играет `SELECT ... FOR
+    UPDATE`.
     """
-    row = conn.execute("SELECT next_number FROM task_counters WHERE target=?",
-                       (target,)).fetchone()
-    number = row["next_number"] if row is not None else 1
-    if row is None:
-        conn.execute(
-            "INSERT INTO task_counters (target, next_number) VALUES (?,?)",
-            (target, number + 1))
-    else:
-        conn.execute("UPDATE task_counters SET next_number=? WHERE target=?",
-                     (number + 1, target))
+    conn.commit()  # чужая незакрытая транзакция не даст взять свою
+    conn.execute("BEGIN IMMEDIATE")
+    try:
+        row = conn.execute(
+            "SELECT next_number FROM task_counters WHERE target=?",
+            (target,)).fetchone()
+        number = row["next_number"] if row is not None else 1
+        if row is None:
+            conn.execute(
+                "INSERT INTO task_counters (target, next_number) VALUES (?,?)",
+                (target, number + 1))
+        else:
+            conn.execute(
+                "UPDATE task_counters SET next_number=? WHERE target=?",
+                (number + 1, target))
+    except BaseException:
+        conn.rollback()
+        raise
     conn.commit()
     return number
 

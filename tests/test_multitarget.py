@@ -10,10 +10,13 @@
 каталог, `claude` и git не запускаются.
 """
 import io
+import json
 import re
 import sqlite3
+import subprocess
 import sys
 import tempfile
+import threading
 import unittest
 from contextlib import redirect_stdout
 from pathlib import Path
@@ -58,6 +61,31 @@ def capture(fn, *args) -> str:
     with redirect_stdout(buf):
         fn(*args)
     return buf.getvalue()
+
+
+def result_event(usd: float) -> str:
+    """Финальное событие потока `--output-format stream-json`: в нём стоимость."""
+    return json.dumps({"type": "result", "subtype": "success",
+                       "is_error": False, "result": "готово",
+                       "total_cost_usd": usd}) + "\n"
+
+
+# Идентичность, которую отдаёт подменённый `git config --get`: тесты
+# окружения роли не должны зависеть от того, что настроено на машине.
+PROBE_NAME = "Роль Артели"
+PROBE_EMAIL = "role@artel.invalid"
+
+
+def fake_git_config(*args: str) -> subprocess.CompletedProcess:
+    """Подмена `gitcmd.git`: отвечает на `config --get user.*`, иначе молчит."""
+    answers = {"user.name": PROBE_NAME, "user.email": PROBE_EMAIL}
+    value = answers.get(args[-1], "") if args[:2] == ("config", "--get") else ""
+    return subprocess.CompletedProcess(list(args), 0, f"{value}\n", "")
+
+
+def silent_git(*args: str) -> subprocess.CompletedProcess:
+    """Подмена `gitcmd.git` для машины без заданной идентичности."""
+    return subprocess.CompletedProcess(list(args), 1, "", "")
 
 
 class FakeStream:
@@ -369,6 +397,43 @@ class TaskNumberingTest(TmpRootTest):
         self.assertEqual(first, [1, 2, 3])
         self.assertEqual(second, [1, 2], "счётчик проекта свой, не общий")
 
+    def test_two_callers_at_once_do_not_get_the_same_number(self):
+        """Номер выдаётся под транзакцией: одновременные `new` не совпадают.
+
+        WAL (требование 5) заводится ради второго процесса на той же БД,
+        поэтому чтение счётчика вне транзакции — достижимая гонка, а не
+        теоретическая: оба читают один номер, второй `insert_task` падает
+        IntegrityError.
+        """
+        capture(catalog.cmd_init)
+        callers = 4
+        start = threading.Barrier(callers)
+        taken, failed = [], []
+        lock = threading.Lock()
+
+        def take() -> None:
+            conn = store.db()
+            start.wait()
+            try:
+                number = store.next_task_number(conn, "artel")
+            except sqlite3.Error as exc:  # гонку тоже надо увидеть, не скрыть
+                with lock:
+                    failed.append(str(exc))
+                return
+            with lock:
+                taken.append(number)
+
+        threads = [threading.Thread(target=take) for _ in range(callers)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join(timeout=30)
+
+        self.assertEqual(failed, [])
+        self.assertEqual(sorted(taken), sorted(set(taken)),
+                         "один номер двум задачам — это IntegrityError в `new`")
+        self.assertEqual(len(taken), callers)
+
     def test_task_number_reads_the_identifier(self):
         for task_id, expected in (("T001", 1), ("T019", 19), ("T1000", 1000),
                                   ("", 0), ("XYZ", 0), ("T0x1", 0)):
@@ -504,6 +569,29 @@ class ProgramSpendTest(TmpRootTest):
 
         self.assertEqual(len(self.events()), 1)
 
+    def test_a_step_run_is_what_moves_the_program_counter(self):
+        """Порог считает прогон шага, а не только прямой вызов из теста.
+
+        Без этого теста снятая строка `check_program_spend` из `cmd_run`
+        не роняет ни один тест: стоп-лосс программы молча перестал бы
+        считаться. Потолок задачи снят (budget_usd=0) — проверяется
+        внешний контур, а не эскалация по бюджету задачи.
+        """
+        store.update_task(store.db(), "T001", state="in_dev", budget_usd=0,
+                          spent_usd=config.PROGRAM_STOP_LOSS_USD * 0.7 - 1)
+
+        # gitcmd подменён вместе с Popen: патч Popen ловит и `subprocess.run`
+        # внутри `gitcmd.git` — реального git в этом тесте быть не должно.
+        with mock.patch.object(runner.gitcmd, "git", fake_git_config), \
+                mock.patch.object(runner.subprocess, "Popen") as popen:
+            popen.return_value = FakeProc([result_event(2.0)])
+            out = capture(runner.cmd_run, "T001")
+
+        self.assertIn("пересечён порог 70%", out)
+        events = self.events()
+        self.assertEqual(len(events), 1)
+        self.assertIn("70%", events[0])
+
 
 class RoleEnvTest(TmpRootTest):
     """Критерий 8: процесс роли несёт HOME и CLAUDE_CONFIG_DIR из .artel/."""
@@ -534,13 +622,99 @@ class RoleEnvTest(TmpRootTest):
         capture(catalog.cmd_new, "Окружение роли")
         store.update_task(store.db(), "T001", state="in_dev")
 
-        with mock.patch.object(runner.subprocess, "Popen") as popen:
+        with mock.patch.object(runner.gitcmd, "git", fake_git_config), \
+                mock.patch.object(runner.subprocess, "Popen") as popen:
             popen.return_value = FakeProc(["готово\n"])
             capture(runner.cmd_run, "T001")
 
         env = popen.call_args.kwargs["env"]
         self.assertEqual(env["HOME"], str(config.ROLE_HOME))
         self.assertEqual(env["CLAUDE_CONFIG_DIR"], str(config.ROLE_CONFIG_DIR))
+
+    def test_env_carries_the_git_identity(self):
+        """Слой несёт то, без чего шаг не выполним: авторство коммита."""
+        with mock.patch.object(runner.gitcmd, "git", fake_git_config):
+            env = runner.role_env()
+
+        self.assertEqual(env["GIT_AUTHOR_NAME"], PROBE_NAME)
+        self.assertEqual(env["GIT_COMMITTER_NAME"], PROBE_NAME)
+        self.assertEqual(env["GIT_AUTHOR_EMAIL"], PROBE_EMAIL)
+        self.assertEqual(env["GIT_COMMITTER_EMAIL"], PROBE_EMAIL)
+
+    def test_identity_comes_from_the_git_config_of_the_operator(self):
+        """Читается конфиг, а не константа в коде: у Оператора своё имя."""
+        asked = mock.Mock(side_effect=fake_git_config)
+        with mock.patch.object(runner.gitcmd, "git", asked):
+            runner.role_env()
+
+        options = [call.args[-1] for call in asked.call_args_list]
+        self.assertEqual(options, ["user.name", "user.email"])
+
+    def test_identity_already_in_the_environment_is_not_overridden(self):
+        """git предпочитает переменную конфигу — заданная Оператором сильнее."""
+        with mock.patch.dict(runner.os.environ,
+                             {"GIT_AUTHOR_EMAIL": "operator@example.invalid"}), \
+                mock.patch.object(runner.gitcmd, "git", fake_git_config):
+            env = runner.role_env()
+
+        self.assertEqual(env["GIT_AUTHOR_EMAIL"], "operator@example.invalid")
+        self.assertEqual(env["GIT_COMMITTER_EMAIL"], PROBE_EMAIL)
+
+    def commit_probe(self, env: dict) -> subprocess.CompletedProcess:
+        """git init + commit в песочнице с данным окружением.
+
+        Ни глобального, ни системного конфига: идентичность может прийти
+        только из окружения — иначе проба доказывала бы ~/.gitconfig
+        машины, а не перенос в слой роли.
+        """
+        repo = self.root / "probe"
+        repo.mkdir(exist_ok=True)
+        absent = str(self.root / "нет-такого-конфига")
+        env = dict(env, GIT_CONFIG_GLOBAL=absent, GIT_CONFIG_SYSTEM=absent)
+        for args in (["init", "-q"], ["add", "step.txt"]):
+            if args[0] == "add":
+                (repo / "step.txt").write_text("шаг", encoding="utf-8")
+            subprocess.run(["git", *args], cwd=repo, env=env, check=True,
+                           capture_output=True, text=True)
+        return subprocess.run(["git", "commit", "-m", "T000: шаг роли"],
+                              cwd=repo, env=env, capture_output=True, text=True)
+
+    def test_commit_of_the_step_passes_with_that_environment(self):
+        """Ради этого перенос и делается: коммит шага — предписанное действие."""
+        with mock.patch.object(runner.gitcmd, "git", fake_git_config):
+            env = runner.role_env()
+
+        res = self.commit_probe(env)
+
+        self.assertEqual(res.returncode, 0, res.stderr)
+
+    def test_the_same_commit_without_identity_fails(self):
+        """Обратная сторона: проба ловит именно то, ради чего написана."""
+        with mock.patch.object(runner.gitcmd, "git", fake_git_config):
+            env = runner.role_env()
+        stripped = {name: value for name, value in env.items()
+                    if not name.startswith("GIT_") and name != "EMAIL"}
+
+        res = self.commit_probe(stripped)
+
+        self.assertNotEqual(res.returncode, 0)
+        self.assertIn("identity", res.stderr.lower())
+
+    def test_absent_identity_is_journalled_before_the_step(self):
+        """Идентичности нет — Оператор узнаёт до шага, а не из rc=128 потом."""
+        capture(catalog.cmd_init)
+        capture(catalog.cmd_new, "Окружение роли")
+        store.update_task(store.db(), "T001", state="in_dev")
+
+        with mock.patch.object(runner.gitcmd, "git", silent_git), \
+                mock.patch.object(runner.subprocess, "Popen") as popen:
+            popen.return_value = FakeProc(["готово\n"])
+            out = capture(runner.cmd_run, "T001")
+
+        self.assertIn("git-идентичность роли не задана", out)
+        actions = [r["action"] for r in store.task_steps(store.db(), "T001")]
+        self.assertIn("agent env WARNING", actions)
+        popen.assert_called_once()  # предупреждение, а не отказ запускать шаг
 
     def test_step_does_not_start_without_the_layer(self):
         """Каталог не создался — шаг пропущен, а не запущен с HOME Оператора."""

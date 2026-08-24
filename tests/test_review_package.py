@@ -717,7 +717,13 @@ class CmdRunReviewPackageTest(unittest.TestCase):
 
         self.assertNotIn("--- РЕВЬЮ-ПАКЕТ ---", self.prompt())
         self.assertEqual(self.journal_details("ревью-пакет собран"), [])
-        self.assertEqual(self.git.calls, [], "diff разработчику не собирается")
+        # Ровно два вызова, и оба — не о пакете: `role_env` берёт авторство
+        # коммита шага. Список точный, а не «нет diff»: любой show или diff
+        # в шаге разработчика по-прежнему провалит тест.
+        self.assertEqual(self.git.calls,
+                         [["config", "--get", "user.name"],
+                          ["config", "--get", "user.email"]],
+                         "diff разработчику не собирается")
 
     def test_reviewer_rights_are_not_narrowed(self):
         """Требование 4: инструменты ревьювера те же, что у разработчика."""

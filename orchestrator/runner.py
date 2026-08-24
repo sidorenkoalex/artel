@@ -4,7 +4,16 @@ import subprocess
 import sys
 import time
 
-from . import agent_log, budget, config, review, roles, spend, store
+from . import agent_log, budget, config, gitcmd, review, roles, spend, store
+
+# Идентичность коммитера, которую роль обязана унести с собой в свой HOME.
+# git читает эти переменные ПОВЕРХ конфига, поэтому перенос ровно двух пар
+# возвращает шагу авторство, не втаскивая в него остальной user-слой
+# Оператора: ни его алиасов, ни его хуков, ни его includeIf.
+GIT_IDENTITY = (
+    ("user.name", ("GIT_AUTHOR_NAME", "GIT_COMMITTER_NAME")),
+    ("user.email", ("GIT_AUTHOR_EMAIL", "GIT_COMMITTER_EMAIL")),
+)
 
 
 def cmd_run(task_id: str) -> None:
@@ -103,6 +112,30 @@ def cmd_run(task_id: str) -> None:
           f"(вернёт в {t['state']}, шаг повторится)")
 
 
+def git_identity() -> dict:
+    """Имя и почта коммитера из git-конфига — готовыми переменными окружения.
+
+    Смена HOME уводит из-под роли не только user-слой Оператора, но и его
+    `~/.gitconfig`, а в этом репозитории `user.email` задан только
+    глобально. Без переноса `git commit` внутри шага падает с rc=128
+    («Author identity unknown»), то есть предписанный роли коммит
+    (миссия разработчика выше, skills/conventions-core) не проходит,
+    и ветка задачи остаётся пустой при отработавшем агенте.
+
+    Читается `git config --get` в окружении Оператора, то есть с его
+    ~/.gitconfig, — до подмены HOME. Значение не прочиталось (git молчит,
+    идентичность не задана) — переменной нет, и это видно в журнале:
+    молча уводить шаг в rc=128 нельзя.
+    """
+    identity = {}
+    for option, names in GIT_IDENTITY:
+        res = gitcmd.git("config", "--get", option)
+        value = res.stdout.strip() if res.returncode == 0 else ""
+        if value:
+            identity.update(dict.fromkeys(names, value))
+    return identity
+
+
 def role_env() -> dict:
     """Окружение процесса роли: HOME и CLAUDE_CONFIG_DIR задаёт пульт.
 
@@ -113,6 +146,12 @@ def role_env() -> dict:
     Курируемый слой живёт в .artel/ пульта: что в нём лежит, решает
     Оператор, но адрес слоя решает пульт.
 
+    Курируемый слой обязан нести то, без чего шаг не выполним, — отсюда
+    git-идентичность (см. `git_identity`). Ставится через `setdefault`:
+    git предпочитает переменную окружения конфигу, поэтому уже заданная
+    Оператором должна остаться сильнее — так роль видит ровно ту
+    идентичность, которую увидел бы git в его HOME.
+
     Каталог создаётся здесь же: CLI, не нашедший CLAUDE_CONFIG_DIR,
     создал бы его сам — и это был бы каталог, о котором пульт не знает.
     """
@@ -120,6 +159,8 @@ def role_env() -> dict:
     env = dict(os.environ)
     env["HOME"] = str(config.ROLE_HOME)
     env["CLAUDE_CONFIG_DIR"] = str(config.ROLE_CONFIG_DIR)
+    for name, value in git_identity().items():
+        env.setdefault(name, value)
     return env
 
 
@@ -160,6 +201,18 @@ def run_agent_once(conn, task_id: str, role: str, prompt: str,
         print(f"[{task_id}] окружение роли не подготовлено ({exc}) — "
               f"шаг не начат")
         return "skipped", f"окружение роли не подготовлено: {exc}"
+
+    # Отсутствие идентичности — не повод не запускать шаг (агент делает не
+    # только коммит), но повод сказать об этом до запуска: иначе Оператор
+    # узнает о ней из хвоста лога упавшего `git commit` получасом позже.
+    absent = [name for name in ("GIT_AUTHOR_NAME", "GIT_AUTHOR_EMAIL")
+              if not env.get(name)]
+    if absent:
+        detail = (f"git-идентичность роли не задана ({', '.join(absent)}) — "
+                  f"коммит шага упадёт; чинится "
+                  f"`git config --global user.name/user.email`")
+        store.journal(conn, task_id, role, "agent env WARNING", detail)
+        print(f"[{task_id}] ВНИМАНИЕ: {detail}")
 
     print(f"[{task_id}] лог шага: {log_path}  (наблюдать: tail -f {log_path})")
     store.journal(conn, task_id, role, "agent run started",

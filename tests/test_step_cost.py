@@ -28,8 +28,15 @@ from orchestrator import (agent_log, budget, catalog, config,  # noqa: E402
 
 
 def fake_git(*args: str) -> subprocess.CompletedProcess:
-    """Подмена `gitcmd.git`: пустой ответ вместо обращения к репозиторию."""
-    return subprocess.CompletedProcess(list(args), 0, "", "")
+    """Подмена `gitcmd.git`: пустой ответ вместо обращения к репозиторию.
+
+    Исключение — `config --get user.*`: за ним `runner.role_env` ходит
+    за авторством коммита шага, и пустой ответ означал бы «идентичность
+    не задана», то есть предупреждение в выводе каждого прогона.
+    """
+    identity = {"user.name": "Роль Артели", "user.email": "role@artel.invalid"}
+    value = identity.get(args[-1], "") if args[:2] == ("config", "--get") else ""
+    return subprocess.CompletedProcess(list(args), 0, f"{value}\n", "")
 
 
 def event(**fields) -> str:
