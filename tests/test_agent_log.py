@@ -337,6 +337,10 @@ class CmdRunLoggingTest(TmpRootTest):
         patcher = mock.patch.object(gitcmd, "git", fake_git)
         patcher.start()
         self.addCleanup(patcher.stop)
+        kc_patcher = mock.patch.object(runner.keychain, "token",
+                                       lambda slot: "tok-test")
+        kc_patcher.start()
+        self.addCleanup(kc_patcher.stop)
 
     def run_agent(self, lines, returncode: int = 0):
         with mock.patch.object(runner.subprocess, "Popen") as popen:

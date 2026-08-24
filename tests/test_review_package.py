@@ -265,6 +265,10 @@ class ReviewPackageTest(unittest.TestCase):
         git_patcher = mock.patch.object(gitcmd, "git", self.git)
         git_patcher.start()
         self.addCleanup(git_patcher.stop)
+        kc_patcher = mock.patch.object(runner.keychain, "token",
+                                       lambda slot: "tok-test")
+        kc_patcher.start()
+        self.addCleanup(kc_patcher.stop)
 
     def put_in_worktree(self, rel: str, text: str) -> Path:
         path = self.root / rel
@@ -573,6 +577,10 @@ class CmdRunReviewPackageTest(unittest.TestCase):
         git_patcher = mock.patch.object(gitcmd, "git", self.git)
         git_patcher.start()
         self.addCleanup(git_patcher.stop)
+        kc_patcher = mock.patch.object(runner.keychain, "token",
+                                       lambda slot: "tok-test")
+        kc_patcher.start()
+        self.addCleanup(kc_patcher.stop)
 
         self.capture(catalog.cmd_init)
         self.capture(catalog.cmd_new, "Ревью-пакет вместо свободного чтения")

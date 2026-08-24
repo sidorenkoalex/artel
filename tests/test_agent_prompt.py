@@ -74,6 +74,10 @@ class PromptChannelTest(unittest.TestCase):
         patcher = mock.patch.object(gitcmd, "git", lambda *a: FakeGitResult())
         patcher.start()
         self.addCleanup(patcher.stop)
+        kc_patcher = mock.patch.object(runner.keychain, "token",
+                                       lambda slot: "tok-test")
+        kc_patcher.start()
+        self.addCleanup(kc_patcher.stop)
 
         self.capture(catalog.cmd_init)
         self.capture(catalog.cmd_new, "Канал промпта")

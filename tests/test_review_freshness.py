@@ -121,6 +121,10 @@ class ReviewFreshnessScenarioTest(unittest.TestCase):
         git_patcher = mock.patch.object(gitcmd, "git", fake_git)
         git_patcher.start()
         self.addCleanup(git_patcher.stop)
+        kc_patcher = mock.patch.object(runner.keychain, "token",
+                                       lambda slot: "tok-test")
+        kc_patcher.start()
+        self.addCleanup(kc_patcher.stop)
 
         self.tdir = config.TASKS / self.TASK
         self.capture(catalog.cmd_init)

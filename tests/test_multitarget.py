@@ -136,6 +136,13 @@ class TmpRootTest(unittest.TestCase):
             patcher.start()
             self.addCleanup(patcher.stop)
 
+        # Keychain подменяется функцией, как gitcmd.git: реальный `security`
+        # (и патч Popen, ловящий его subprocess.run) в тестах не участвует.
+        kc_patcher = mock.patch.object(runner.keychain, "token",
+                                       lambda slot: "tok-test")
+        kc_patcher.start()
+        self.addCleanup(kc_patcher.stop)
+
     def write_targets(self, text: str = TARGETS_YAML) -> None:
         config.TARGETS.write_text(text, encoding="utf-8")
 

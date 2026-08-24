@@ -12,20 +12,45 @@ class RolesError(Exception):
     """Состав роли взять неоткуда: файл, формат или сама роль."""
 
 
-def load() -> dict:
-    """Раздел `roles:` файла roles.yaml. RolesError — если его нет."""
+def _document() -> dict:
+    """Весь roles.yaml разобранным отображением. RolesError — не читается."""
     try:
         text = config.ROLES.read_text(encoding="utf-8")
     except (OSError, UnicodeDecodeError) as exc:
         raise RolesError(f"{config.ROLES} не прочитан: {exc}") from exc
     try:
-        data = yamlmini.mapping(text)
+        return yamlmini.mapping(text)
     except yamlmini.YamlError as exc:
         raise RolesError(f"{config.ROLES} не разобран: {exc}") from exc
-    roles = data.get("roles")
+
+
+def load() -> dict:
+    """Раздел `roles:` файла roles.yaml. RolesError — если его нет."""
+    roles = _document().get("roles")
     if not isinstance(roles, dict):
         raise RolesError(f"{config.ROLES}: нет раздела 'roles:'")
     return roles
+
+
+def token_slots(role: str | None) -> list[str]:
+    """Слоты keychain для токена роли: свой token_slot, затем общий fallback.
+
+    Порядок и есть политика ADR-0001: слоты раздельные с первого дня,
+    но пока в keychain лежит один общий 'artel-token', все роли падают
+    в него; разделение PAT — заведение отдельных записей без правки кода.
+    Роль без слота (token_slot: null) или неописанная роль просто
+    не добавляет своего элемента — это не ошибка.
+    """
+    data = _document()
+    slots: list[str] = []
+    entry = data.get("roles", {}).get(role) if isinstance(
+        data.get("roles"), dict) else None
+    if isinstance(entry, dict) and isinstance(entry.get("token_slot"), str):
+        slots.append(entry["token_slot"])
+    fallback = data.get("token_fallback")
+    if isinstance(fallback, str) and fallback not in slots:
+        slots.append(fallback)
+    return slots
 
 
 def skills(role: str) -> list[str]:

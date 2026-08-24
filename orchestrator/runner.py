@@ -4,7 +4,7 @@ import subprocess
 import sys
 import time
 
-from . import agent_log, budget, config, gitcmd, review, roles, spend, store
+from . import agent_log, budget, config, gitcmd, keychain, review, roles, spend, store
 
 # Идентичность коммитера, которую роль обязана унести с собой в свой HOME.
 # git читает эти переменные ПОВЕРХ конфига, поэтому перенос ровно двух пар
@@ -136,7 +136,20 @@ def git_identity() -> dict:
     return identity
 
 
-def role_env() -> dict:
+def role_token(role: str | None) -> str | None:
+    """Подписочный токен роли из keychain — по слотам roles.yaml."""
+    try:
+        slots = roles.token_slots(role)
+    except roles.RolesError:
+        return None
+    for slot in slots:
+        token = keychain.token(slot)
+        if token:
+            return token
+    return None
+
+
+def role_env(role: str | None = None) -> dict:
     """Окружение процесса роли: HOME и CLAUDE_CONFIG_DIR задаёт пульт.
 
     Роль не наследует user-слой Оператора (ADR-0003 п.14): его
@@ -161,6 +174,17 @@ def role_env() -> dict:
     env["CLAUDE_CONFIG_DIR"] = str(config.ROLE_CONFIG_DIR)
     for name, value in git_identity().items():
         env.setdefault(name, value)
+    # Аутентификация CLI живёт в user-слое Оператора (~/.claude.json +
+    # keychain-запись аккаунта) и вместе с ним из-под роли уходит — чистый
+    # HOME отвечает «Not logged in» (фактура T020, вопрос 18 ADR-0003 п.14).
+    # Токен подписки (`claude setup-token`) кладётся Оператором в слот
+    # keychain и приходит роли переменной окружения. setdefault — заданный
+    # Оператором CLAUDE_CODE_OAUTH_TOKEN/ANTHROPIC_API_KEY сильнее слота.
+    if not env.get("CLAUDE_CODE_OAUTH_TOKEN") and not env.get(
+            "ANTHROPIC_API_KEY"):
+        token = role_token(role)
+        if token:
+            env["CLAUDE_CODE_OAUTH_TOKEN"] = token
     return env
 
 
@@ -194,7 +218,7 @@ def run_agent_once(conn, task_id: str, role: str, prompt: str,
     # каталог курируемого слоя — шаг не начинается. Тихо откатиться на HOME
     # Оператора было бы молчаливой сменой периметра (ADR-0003 п.14).
     try:
-        env = role_env()
+        env = role_env(role)
     except OSError as exc:
         store.journal(conn, task_id, role, "agent run SKIPPED",
                       f"каталог окружения роли не создан: {exc}")
@@ -211,6 +235,19 @@ def run_agent_once(conn, task_id: str, role: str, prompt: str,
         detail = (f"git-идентичность роли не задана ({', '.join(absent)}) — "
                   f"коммит шага упадёт; чинится "
                   f"`git config --global user.name/user.email`")
+        store.journal(conn, task_id, role, "agent env WARNING", detail)
+        print(f"[{task_id}] ВНИМАНИЕ: {detail}")
+
+    # Как и с идентичностью: отсутствие токена — не блок (вдруг CLI
+    # аутентифицируется иначе), но сказать надо до запуска, с починкой,
+    # а не хвостом лога «Not logged in» после трёх попыток.
+    if not env.get("CLAUDE_CODE_OAUTH_TOKEN") and not env.get(
+            "ANTHROPIC_API_KEY"):
+        detail = ("токен роли не найден в keychain (слоты: "
+                  f"{', '.join(roles.token_slots(role)) or 'нет'}) — CLI "
+                  "в чистом HOME ответит «Not logged in»; чинится: "
+                  "`claude setup-token`, затем `security "
+                  "add-generic-password -a artel -s artel-token -U`")
         store.journal(conn, task_id, role, "agent env WARNING", detail)
         print(f"[{task_id}] ВНИМАНИЕ: {detail}")
 
