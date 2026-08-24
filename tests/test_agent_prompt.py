@@ -114,8 +114,8 @@ class PromptChannelTest(unittest.TestCase):
 
                 argv = self.argv_of(popen)
                 prompt = self.prompt_path_of(popen).read_text(encoding="utf-8")
-                self.assertNotIn("-p", argv[argv.index("-p") + 1:],
-                                 "после -p идёт флаг, а не промпт")
+                self.assertTrue(argv[argv.index("-p") + 1].startswith("--"),
+                                f"после -p идёт флаг, а не промпт: {argv}")
                 for word in ("Роль:", "СКИЛЫ РОЛИ", prompt[:40]):
                     self.assertFalse(any(word in arg for arg in argv),
                                      f"'{word[:20]}' попал в argv: {argv}")
@@ -176,6 +176,25 @@ class PromptChannelTest(unittest.TestCase):
         popen.assert_not_called()
         self.assertTrue(any("промпт не записан" in d
                             for d in self.journal_details("agent run SKIPPED")))
+
+    def test_a_vanished_prompt_is_not_blamed_on_the_cli(self):
+        """Файл исчез между записью и чтением (уборка `.artel/logs`, tmp-reaper).
+
+        Отчитаться про «claude CLI не найден» значило бы отправить Оператора
+        чинить установку CLI вместо диска: обе беды приходят одним
+        FileNotFoundError, и различает их только место перехвата.
+        """
+        self.set_state("in_dev")
+        with mock.patch.object(runner, "open",
+                               side_effect=FileNotFoundError("нет файла"),
+                               create=True):
+            with mock.patch.object(runner.subprocess, "Popen") as popen:
+                out = self.capture(runner.cmd_run, self.TASK)
+
+        popen.assert_not_called()
+        details = self.journal_details("agent run SKIPPED")
+        self.assertTrue(any("промпт не прочитан" in d for d in details), details)
+        self.assertNotIn("CLI не найден", out)
 
 
 class FakeGitResult:

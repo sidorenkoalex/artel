@@ -16,7 +16,7 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from orchestrator import ci  # noqa: E402
+from orchestrator import ci, config  # noqa: E402
 
 SHA = "0123456789abcdef0123456789abcdef01234567"
 
@@ -144,6 +144,31 @@ class GhCallTest(unittest.TestCase):
 
         self.assertNotEqual(res.returncode, 0)
         self.assertIn("gh", res.stderr)
+
+    def test_the_call_is_bounded_in_time(self):
+        """Молчащая сеть не вешает гейт: у вызова есть предел ожидания."""
+        with mock.patch.object(ci.subprocess, "run") as run_:
+            run_.return_value = subprocess.CompletedProcess([], 0, "{}", "")
+            ci.gh("api", "repos")
+
+        self.assertEqual(run_.call_args.kwargs.get("timeout"),
+                         config.GH_TIMEOUT_SEC, "вызов `gh` без предела ожидания")
+
+    def test_silent_gh_is_a_nonzero_result_and_so_not_green(self):
+        """Истёкший предел — «статус неизвестен», то есть отказ merge."""
+        with mock.patch.object(
+                ci.subprocess, "run",
+                side_effect=subprocess.TimeoutExpired(["gh"], 60)):
+            res = ci.gh("api", "repos")
+
+        self.assertNotEqual(res.returncode, 0)
+        self.assertIn("молчал", res.stderr)
+        with mock.patch.object(ci, "head_sha", lambda branch: (SHA, "")), \
+                mock.patch.object(ci, "gh", lambda *a: res):
+            green, note = ci.branch_status("task/t001-x")
+
+        self.assertFalse(green)
+        self.assertIn("неизвестен", note)
 
 
 if __name__ == "__main__":

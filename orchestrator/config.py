@@ -15,6 +15,11 @@ LOGS = ROOT / ".artel" / "logs"
 ROLES = ROOT / "roles.yaml"
 
 AGENT_TIMEOUT_SEC = 1800
+# Предел ожидания `gh` на гейте merge (orchestrator/ci.py). Без него сетевой
+# столл (VPN или прокси приняли соединение и молчат) вешает `approve` без
+# вывода и без предела; истёкший предел — это «статус CI неизвестен», то есть
+# отказ merge.
+GH_TIMEOUT_SEC = 60
 PUMP_JOIN_TIMEOUT_SEC = 10
 # Провал шага по коду возврата ретраится с бэкоффом; ретраи не считаются
 # итерациями ревью (их двигает только вердикт REVIEW.md в cmd_advance).

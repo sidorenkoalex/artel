@@ -133,10 +133,22 @@ def run_agent_once(conn, task_id: str, role: str, prompt: str,
     print(f"[{task_id}] лог шага: {log_path}  (наблюдать: tail -f {log_path})")
     store.journal(conn, task_id, role, "agent run started",
                   f"{numbered}, лог: {log_path}, промпт: {prompt_path}")
+    # Открытие файла держится вне `try` вокруг Popen: там ловится
+    # FileNotFoundError, и пропавший промпт (ручная уборка `.artel/logs`,
+    # внешний tmp-reaper) отчитывался бы Оператору как «claude CLI не найден» —
+    # он пошёл бы чинить установку CLI вместо диска.
     try:
-        # Файл открыт только на время запуска: у процесса свой дескриптор,
-        # а держать его открытым в оркестраторе незачем.
-        with open(prompt_path, encoding="utf-8") as prompt_file:
+        prompt_file = open(prompt_path, encoding="utf-8")
+    except OSError as exc:
+        store.journal(conn, task_id, role, "agent run SKIPPED",
+                      f"промпт не прочитан из {prompt_path}: {exc}")
+        print(f"[{task_id}] промпт шага не прочитан ({exc}) — шаг не начат")
+        return "skipped", f"промпт не прочитан: {exc}"
+
+    # Файл открыт только на время запуска: у процесса свой дескриптор,
+    # а держать его открытым в оркестраторе незачем.
+    with prompt_file:
+        try:
             proc = subprocess.Popen(
                 # `claude -p` без аргумента читает промпт со стандартного
                 # входа — им и отдаётся файл.
@@ -152,14 +164,14 @@ def run_agent_once(conn, task_id: str, role: str, prompt: str,
                 cwd=config.ROOT, text=True, bufsize=1, stdin=prompt_file,
                 stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
             )
-    except FileNotFoundError:
-        # Промпт уже на диске, и это весь смысл ветки: ручной прогон роли
-        # делается тем же текстом, из скроллбэка его было бы не скопировать.
-        store.journal(conn, task_id, role, "agent run SKIPPED",
-                      f"claude CLI не найден, промпт: {prompt_path}")
-        print(f"claude CLI не найден. Промпт шага целиком записан в "
-              f"{prompt_path} — запусти роль вручную с ним.")
-        return "skipped", "claude CLI не найден"
+        except FileNotFoundError:
+            # Промпт уже на диске, и это весь смысл ветки: ручной прогон роли
+            # делается тем же текстом, из скроллбэка его было бы не скопировать.
+            store.journal(conn, task_id, role, "agent run SKIPPED",
+                          f"claude CLI не найден, промпт: {prompt_path}")
+            print(f"claude CLI не найден. Промпт шага целиком записан в "
+                  f"{prompt_path} — запусти роль вручную с ним.")
+            return "skipped", "claude CLI не найден"
 
     # Перекачка в потоке: чтение строк блокируется, пока агент молчит, а
     # таймаут шага должен срабатывать и на замолчавшем агенте.

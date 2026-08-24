@@ -19,12 +19,19 @@ GREEN = {"success", "skipped", "neutral"}
 def gh(*args: str) -> subprocess.CompletedProcess:
     """`gh` в корне репозитория; отсутствие CLI — такой же ненулевой код.
 
-    Как и в `gitcmd.git`: разбирает исход вызывающий, а «команды нет»
-    и «команда ответила ошибкой» для гейта означают одно — ответа нет.
+    Как и в `gitcmd.git`: разбирает исход вызывающий, а «команды нет»,
+    «команда ответила ошибкой» и «команда не ответила вовсе» для гейта
+    означают одно — ответа нет. Предел ожидания обязателен: гейт merge стоит
+    на живом пути Оператора, и молчащая сеть не должна вешать `approve`
+    без вывода и без конца.
     """
     try:
         return subprocess.run(["gh", *args], cwd=config.ROOT,
-                              capture_output=True, text=True)
+                              capture_output=True, text=True,
+                              timeout=config.GH_TIMEOUT_SEC)
+    except subprocess.TimeoutExpired:
+        return subprocess.CompletedProcess(
+            args, 1, "", f"gh молчал дольше {config.GH_TIMEOUT_SEC} с")
     except OSError as exc:
         return subprocess.CompletedProcess(args, 1, "", str(exc))
 

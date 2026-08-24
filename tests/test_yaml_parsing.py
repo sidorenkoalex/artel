@@ -60,6 +60,33 @@ class ScalarTest(unittest.TestCase):
     def test_trailing_comment_is_cut(self):
         self.assertEqual(yamlmini.scalar("draft   # draft | ready"), "draft")
 
+    def test_quoted_value_with_a_comment_loses_both_quotes(self):
+        """Комментарий на строке значения — по шаблону; кавычки — привычка.
+
+        Вместе они и ломали разбор: проверка кавычек стояла на строке
+        с комментарием, последний символ был не кавычкой, и значение
+        доезжало до guard в виде `'"ready"'` (T017, ревью 1).
+        """
+        for raw in ('"ready"   # draft | ready | approved',
+                    "'ready'  # комментарий",
+                    '"ready"'):
+            with self.subTest(значение=raw):
+                self.assertEqual(yamlmini.scalar(raw), "ready")
+
+    def test_hash_inside_quotes_stays_in_the_value(self):
+        """Комментарий срезается за закрывающей кавычкой, а не до неё."""
+        self.assertEqual(yamlmini.scalar('"a # b"'), "a # b")
+        self.assertEqual(yamlmini.scalar('"a # b"  # хвост'), "a # b")
+
+    def test_broken_quoting_stays_a_plain_scalar(self):
+        """Кавычки не закрыты или покрывают не всё — значение не в кавычках.
+
+        Гадать за автора парсер не должен, а падать ему нельзя: тот же разбор
+        читает frontmatter на пути FSM, где трейсбек запрещён.
+        """
+        self.assertEqual(yamlmini.scalar('"ready'), '"ready')
+        self.assertEqual(yamlmini.scalar('"ready" лишнее'), '"ready" лишнее')
+
     def test_hash_without_a_space_is_part_of_the_value(self):
         """`#` открывает комментарий только после пробела — правило YAML."""
         self.assertEqual(yamlmini.scalar("task#1"), "task#1")
@@ -85,6 +112,14 @@ class FrontmatterTest(unittest.TestCase):
         self.assertIsNone(meta["token_slot"])
         self.assertEqual(meta["title"], "25", "кавычки оставляют строку строкой")
         self.assertEqual(meta["status"], "ready", "комментарий не часть значения")
+
+    def test_quoted_values_next_to_template_comments_are_read(self):
+        """Шаблон поставляет `status:` с комментарием, автор берёт значение
+        в кавычки — до читателя должно доехать значение, а не его запись."""
+        meta = yamlmini.frontmatter('---\ntask: "T017"  # идентификатор\n'
+                                    'status: "ready"        # draft | ready\n---\n')
+
+        self.assertEqual(meta, {"task": "T017", "status": "ready"})
 
     def test_no_frontmatter_is_none(self):
         """None — блока нет вовсе; на нём guard говорит «нет frontmatter»."""
@@ -162,6 +197,7 @@ class MappingTest(unittest.TestCase):
                            ("рваный отступ", "a: 1\n   b: 2\n"),
                            ("незакрытый список", "skills: [a, b\n"),
                            ("мусор после списка", "skills: [a] лишнее\n"),
+                           ("кавычки в списке", 'skills: [a, "b, c"]\n'),
                            ("табуляция в отступе", "roles:\n\tdeveloper: 1\n")):
             with self.subTest(случай=name):
                 with self.assertRaises(yamlmini.YamlError):
