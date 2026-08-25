@@ -72,6 +72,27 @@ schema_version: 1
 ## Не входит
 """
 
+# PLAN.md минимальный и валидный по guard — для сверки чистоты advance
+# (T033): ExternalTargetAdvanceIgnoresDirtyCheckTest ниже.
+PLAN_READY = """---
+task: {task}
+type: plan
+author_role: developer
+status: ready
+schema_version: 1
+---
+
+# PLAN: git-фиксация — внешний target
+
+## Подход
+
+## Шаги
+
+## Покрытие требований
+
+## Влияние на систему
+"""
+
 
 def capture(fn, *args) -> str:
     buf = io.StringIO()
@@ -238,6 +259,41 @@ class ExternalTransitionCommitsTest(TmpRootTest):
 
         self.assertEqual(gitcmd.head_sha(self.repo()), first,
                          "нечего коммитить — HEAD не двигается")
+
+
+class ExternalTargetAdvanceIgnoresDirtyCheckTest(TmpRootTest):
+    """T033, требование 4 (PLAN «Риски»): сверка чистоты `advance` —
+    только догфуд. Для внешнего target артефактный репозиторий коммитит
+    сам оркестратор целиком уже ПОСЛЕ решения перейти (`fixation.
+    _fix_external`, `ExternalTransitionCommitsTest` выше) — до перехода
+    PLAN.md там закономерно не закоммичен, это не забытый коммит роли.
+    Наивная сверка блокировала бы `advance` для внешнего target навсегда.
+    """
+
+    TASK = "SLED-T001"
+
+    def setUp(self):
+        super().setUp()
+        config.TARGETS.write_text(TARGETS_YAML, encoding="utf-8")
+        capture(projects.cmd_target_init, "sled")
+        capture(catalog.cmd_init)
+        store.insert_task(store.db(), self.TASK, "Задача sled", "in_dev",
+                          f"task/{self.TASK.lower()}", "sled", 25.0)
+        # Гейтинг advance читает артефакты из tasks/<id> ПУЛЬТА (до A7,
+        # ADR-0003 3д — независимо от target шага, см. ExternalIntegrity
+        # IncidentBlocksRunTest.make_task ниже), не из репо target'а —
+        # его этот тест намеренно не трогает вовсе.
+        (config.TASKS / self.TASK).mkdir(parents=True)
+        (config.TASKS / self.TASK / "PLAN.md").write_text(
+            PLAN_READY.format(task=self.TASK), encoding="utf-8")
+
+    def test_uncommitted_plan_still_advances_for_external_target(self):
+        out = capture(fsm.cmd_advance, self.TASK)
+
+        self.assertEqual(store.get_task(store.db(), self.TASK)["state"],
+                         "review",
+                         "внешний target не блокируется сверкой чистоты")
+        self.assertNotIn("не закоммичен", out)
 
 
 class ExternalIntegrityIncidentBlocksRunTest(TmpRootTest):
@@ -631,16 +687,24 @@ class DogfoodTransitionJournalsShaTest(RealPultGitTest):
         self.assertEqual(store.get_task(store.db(), self.TASK)["fixed_sha"], sha)
 
     def test_uncommitted_artifact_is_journaled_as_dirty(self):
+        """T033: грязная копия теперь ОТКАЗЫВАЕТ переходу (симметрия с
+        `approve`, инцидент T032), а не журналит фиксацию с чисто=False
+        поверх состоявшегося перехода — старое поведение и было тем самым
+        дефектом асимметрии, который T033 закрывает."""
         (config.TASKS / self.TASK / "SPEC.md").write_text(
             SPEC_READY.format(task=self.TASK), encoding="utf-8")
         # SPEC.md написан, но НЕ закоммичен — грязная копия tasks/<id>.
 
         self.capture(fsm.cmd_advance, self.TASK)
 
-        entries = [r["detail"] for r in store.task_steps(store.db(), self.TASK)
-                   if r["action"] == "sha зафиксирован"]
-        self.assertEqual(len(entries), 1)
-        self.assertIn("чисто=False", entries[0])
+        self.assertEqual(store.get_task(store.db(), self.TASK)["state"],
+                         "spec_writing", "переход по грязной копии не случился")
+        fixed = [r["detail"] for r in store.task_steps(store.db(), self.TASK)
+                 if r["action"] == "sha зафиксирован"]
+        self.assertEqual(fixed, [], "грязный переход фиксацию не журналит")
+        refused = [r["detail"] for r in store.task_steps(store.db(), self.TASK)
+                   if "не закоммичен" in r["detail"]]
+        self.assertTrue(refused, "отказ по грязной копии журналится отдельно")
 
 
 class ApproveByShaTest(RealPultGitTest):
