@@ -1,5 +1,7 @@
 """Ревью-пакет: вход ревьювера собирает оркестратор, а не сам агент."""
-from . import config, gitcmd
+import re
+
+from . import config, gitcmd, store
 
 WORKTREE_NOTE = " (в ветке нет, показан файл из рабочего дерева)"
 
@@ -46,8 +48,12 @@ def artifact_part(label: str, text: str | None, note: str) -> str:
     return f"### {label}{note}\n\n{text.strip() or '(пусто)'}\n"
 
 
-def git_diff_part(branch: str, *flags: str) -> tuple[str, int, str]:
-    """Вывод `git diff [flags] main...branch`, число строк и причина сбоя.
+def git_diff_part(base: str, branch: str, *flags: str) -> tuple[str, int, str]:
+    """Вывод `git diff [flags] base...branch`, число строк и причина сбоя.
+
+    `base` — `config.MAIN_BRANCH` для полного diff ветки или sha
+    предыдущего вердикта для инкрементального (T029) — вызывающий код
+    решает, какой из них подставить, сама функция об этом не знает.
 
     git не ответил — это часть пакета с причиной, а не пустой diff:
     молча показать ревьюверу «изменений нет» значит выпросить аппрув
@@ -56,7 +62,7 @@ def git_diff_part(branch: str, *flags: str) -> tuple[str, int, str]:
     странный вердикт Оператор будет именно по журналу (T011, ревью 1).
     """
     try:
-        res = gitcmd.git("diff", *flags, f"{config.MAIN_BRANCH}...{branch}")
+        res = gitcmd.git("diff", *flags, f"{base}...{branch}")
     except UnicodeDecodeError as exc:
         # git считает файл бинарным по NUL-байту в первых 8 КБ, поэтому
         # текст в cp1251/latin-1 выкладывается в diff байтами как есть, а
@@ -107,12 +113,48 @@ def truncate_package(text: str) -> tuple[str, bool]:
             f"повод для замечания о размере MR.]"), True
 
 
-def review_package(task_id: str, title: str, branch: str) -> dict:
+def previous_verdict_sha(conn, task_id: str) -> str:
+    """Sha, зафиксированный на переходе `review -> in_dev` прошлой итерации.
+
+    Источник — существующий журнал hash-фиксации (T021,
+    `orchestrator/fixation.py`, запись «sha зафиксирован» в
+    `store._record_fixation`) — новый учёт sha не заводится (T029, SPEC
+    требование 3). `_record_fixation` пишет ровно одну такую запись на
+    КАЖДЫЙ переход FSM (`store.set_state`). Между входом в `review`
+    прошлой итерации и входом в `review` текущей лежит ровно два таких
+    перехода: `review -> in_dev` (вердикт `changes_requested` — фиксирует
+    sha состояния, на котором вердикт вынесен) и `in_dev -> review`
+    (правка разработчика — фиксирует новый sha, он же текущий
+    `fixed_sha`, уже давший старт этому шагу). Значит искомый sha —
+    предпоследняя по порядку запись в журнале, а не последняя.
+
+    Меньше двух записей (итерация 1 ещё не выходила из `review`) или sha
+    в записи не распознан (git не ответил в момент той фиксации —
+    вырожденный случай, уже существующий в T021) — пустая строка;
+    вызывающий код трактует это как «сравнивать не с чем» и остаётся на
+    полном diff, тем же приёмом деградации, что и у `fixation.py`.
+    """
+    entries = [s["detail"] for s in store.task_steps(conn, task_id)
+              if s["action"] == "sha зафиксирован"]
+    if len(entries) < 2:
+        return ""
+    match = re.search(r"sha=([0-9a-f]{4,40})", entries[-2])
+    return match.group(1) if match else ""
+
+
+def review_package(task_id: str, title: str, branch: str, *,
+                   iteration: int = 1, prev_sha: str = "") -> dict:
     """Вход ревьювера одним куском: text, chars, bytes, diff_lines и признаки.
 
     Порядок частей фиксирован (задача, SPEC, PLAN, прошлый REVIEW, форма
     вердикта, стат-список, diff) — по нему ревьювер ориентируется в пакете,
     а тесты сравнивают сборку.
+
+    `iteration == 1` — diff всегда от `config.MAIN_BRANCH` (T029, SPEC
+    требование 1, без изменений). `iteration > 1` с непустым `prev_sha`
+    (обычно из `previous_verdict_sha`) — diff и стат-список берутся от
+    этого sha, а не от `main` (требование 2); нет `prev_sha` — тот же
+    вырожденный откат на полный diff, что и в самой `previous_verdict_sha`.
     """
     spec_rel = f"tasks/{task_id}/SPEC.md"
     plan_rel = f"tasks/{task_id}/PLAN.md"
@@ -124,8 +166,12 @@ def review_package(task_id: str, title: str, branch: str) -> dict:
     found = {rel: artifact_text(branch, rel)
              for rel in (spec_rel, plan_rel, review_rel, form_rel)}
 
-    stat, _, stat_failed = git_diff_part(branch, "--stat")
-    diff, diff_lines, diff_failed = git_diff_part(branch)
+    incremental = iteration > 1 and bool(prev_sha)
+    base = prev_sha if incremental else config.MAIN_BRANCH
+    diff_type = "инкрементальный" if incremental else "полный"
+
+    stat, _, stat_failed = git_diff_part(base, branch, "--stat")
+    diff, diff_lines, diff_failed = git_diff_part(base, branch)
     diff, truncated = truncate_diff(diff, diff_lines)
 
     parts = [
@@ -145,11 +191,18 @@ def review_package(task_id: str, title: str, branch: str) -> dict:
         parts.append(artifact_part(f"{review_rel} (прошлая итерация)",
                                    *found[review_rel]))
     parts.append(artifact_part(f"{form_rel} (форма вердикта)", *found[form_rel]))
-    parts.append(f"### Изменённые файлы (git diff --stat "
-                 f"{config.MAIN_BRANCH}...{branch})"
+    parts.append(f"### Изменённые файлы (git diff --stat {base}...{branch})"
                  f"\n\n{stat}\n")
-    parts.append(f"### Diff (git diff {config.MAIN_BRANCH}...{branch})"
+    parts.append(f"### Diff (git diff {base}...{branch})"
                  f"\n\n{diff}\n")
+    if incremental:
+        # Требование 5: инструкция, не переключатель — называет команду,
+        # но не запускает её и не заводит отдельный CLI-режим («не входит»).
+        parts.append(
+            f"Diff выше — инкрементальный: от sha предыдущего вердикта "
+            f"({prev_sha}) до HEAD ветки, не вся ветка целиком. Если для "
+            f"оценки замечания недостаточно — посмотри полный diff ветки "
+            f"отдельно: `git diff {config.MAIN_BRANCH}...{branch}`.\n")
 
     text, over_bytes = truncate_package("\n".join(parts))
     return {"text": text, "chars": len(text),
@@ -159,7 +212,8 @@ def review_package(task_id: str, title: str, branch: str) -> dict:
             # Артефакт не из ветки — расхождение дерева и diff; в журнале
             # оно объясняет странный вердикт без подъёма лога шага.
             "from_worktree": [rel for rel, (text_, note) in found.items()
-                              if text_ is not None and note]}
+                              if text_ is not None and note],
+            "diff_type": diff_type, "iteration": iteration}
 
 
 def package_note(package: dict) -> str:
@@ -167,10 +221,17 @@ def package_note(package: dict) -> str:
 
     Кроме размера в журнал идут обе отсечки и несобранный git: по этой
     строке Оператор потом объясняет себе странный вердикт ревью, не
-    поднимая лог шага.
+    поднимая лог шага. Тип diff и номер итерации (T029, SPEC требования
+    7, 8) — той же строкой, когда пакет их несёт: по ним размеры итераций
+    сравнимы между собой в журнале одной задачи (требование 9). Пакет,
+    собранный вручную без этих полей (юнит-тесты `package_note` до T029),
+    получает строку старого формата — ключей нет, добавить нечего.
     """
     note = (f"символов {package['chars']}, байт {package['bytes']}, "
             f"строк diff {package['diff_lines']}")
+    if package.get("diff_type"):
+        note += (f", diff {package['diff_type']}, "
+                f"итерация {package['iteration']}")
     if package["truncated"]:
         note += f", diff усечён до {config.REVIEW_DIFF_MAX_LINES} строк"
     if package["over_bytes"]:

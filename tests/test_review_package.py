@@ -779,5 +779,158 @@ class CmdRunReviewPackageTest(unittest.TestCase):
         self.assertIn("Bash(python3:*)", tools(rev_argv), "тесты запускать можно")
 
 
+class IncrementalReviewPackageTest(ReviewPackageTest):
+    """`review_package(iteration=..., prev_sha=...)` — diff от sha, не main
+    (T029, SPEC требования 2, 5, 8, 9). Наследует фикстуру `ReviewPackageTest`
+    (тот же `FakeGit`, тот же `build`-каркас), но собирает пакет напрямую с
+    новыми параметрами вместо стандартных."""
+
+    PREV_SHA = "abc1234"
+
+    def build_incremental(self, iteration: int = 2, prev_sha: str | None = None
+                          ) -> dict:
+        return review.review_package(
+            self.TASK, "Ревью-пакет", self.BRANCH,
+            iteration=iteration, prev_sha=self.PREV_SHA if prev_sha is None
+            else prev_sha)
+
+    def test_diff_and_stat_are_taken_against_the_previous_verdict_sha(self):
+        self.build_incremental()
+
+        self.assertEqual(
+            [c for c in self.git.calls if c[0] == "diff"],
+            [["diff", "--stat", f"{self.PREV_SHA}...{self.BRANCH}"],
+             ["diff", f"{self.PREV_SHA}...{self.BRANCH}"]],
+            "iteration > 1 должен сравнивать не с main, а с sha "
+            "предыдущего вердикта")
+
+    def test_package_names_the_full_diff_command(self):
+        """Требование 5: явная инструкция для полного diff по запросу."""
+        text = self.build_incremental()["text"]
+
+        self.assertIn(f"git diff {config.MAIN_BRANCH}...{self.BRANCH}", text)
+
+    def test_first_iteration_does_not_carry_the_full_diff_instruction(self):
+        """iteration == 1 — состав пакета не меняется (требование 1)."""
+        text = self.build()["text"]
+
+        self.assertNotIn("посмотри полный diff ветки отдельно", text,
+                         "инструкция полного diff — только для iteration > 1")
+
+    def test_package_reports_its_diff_type_and_iteration(self):
+        package = self.build_incremental(iteration=3)
+
+        self.assertEqual(package["diff_type"], "инкрементальный")
+        self.assertEqual(package["iteration"], 3)
+
+    def test_first_iteration_package_reports_the_full_diff_type(self):
+        package = self.build()
+
+        self.assertEqual(package["diff_type"], "полный")
+        self.assertEqual(package["iteration"], 1)
+
+    def test_missing_prev_sha_falls_back_to_the_full_diff(self):
+        """Вырожденный случай (SPEC — тот же приём, что и в fixation.py):
+        iteration > 1, но sha не найден — пакет не падает, а ведёт себя
+        как при iteration == 1."""
+        package = self.build_incremental(prev_sha="")
+
+        self.assertEqual(package["diff_type"], "полный")
+        self.assertEqual(
+            [c for c in self.git.calls if c[0] == "diff"],
+            [["diff", "--stat", f"{config.MAIN_BRANCH}...{self.BRANCH}"],
+             ["diff", f"{config.MAIN_BRANCH}...{self.BRANCH}"]])
+
+
+class PackageNoteDiffTypeTest(unittest.TestCase):
+    """`package_note` дописывает тип diff и итерацию (требования 7, 8, 9)."""
+
+    def note_of(self, **over) -> str:
+        package = {"chars": 1234, "bytes": 2345, "diff_lines": 56,
+                  "truncated": False, "over_bytes": False, "not_collected": "",
+                  "from_worktree": []}
+        return review.package_note(package | over)
+
+    def test_full_diff_package_names_its_type_and_iteration(self):
+        note = self.note_of(diff_type="полный", iteration=1)
+
+        self.assertIn("полный", note)
+        self.assertIn("итерация 1", note)
+
+    def test_incremental_package_names_its_type_and_iteration(self):
+        note = self.note_of(diff_type="инкрементальный", iteration=2)
+
+        self.assertIn("инкрементальный", note)
+        self.assertIn("итерация 2", note)
+
+    def test_package_without_diff_type_keeps_the_old_note_shape(self):
+        """Пакет, собранный вручную без этих полей (старые тесты), не падает
+        и не получает лишнего текста."""
+        note = self.note_of()
+
+        self.assertNotIn("итерация", note)
+
+
+class PreviousVerdictShaTest(unittest.TestCase):
+    """`previous_verdict_sha` читает журнал hash-фиксации (T021), не изобретая
+    новый учёт sha (SPEC требование 3)."""
+
+    TASK = "T001"
+
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        root = Path(tmp.name)
+        for attr, value in (("DB", root / ".artel" / "state.db"),
+                            ("TASKS", root / "tasks"),
+                            ("LOGS", root / ".artel" / "logs")):
+            patcher = mock.patch.object(config, attr, value)
+            patcher.start()
+            self.addCleanup(patcher.stop)
+        self.capture(catalog.cmd_init)
+        self.capture(catalog.cmd_new, "sha предыдущего вердикта")
+        self.conn = store.db()
+
+    def capture(self, fn, *args) -> str:
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            fn(*args)
+        return buf.getvalue()
+
+    def fixate(self, sha: str) -> None:
+        store.journal(self.conn, self.TASK, "fsm", "sha зафиксирован",
+                     f"target=dogfood, sha={sha}, чисто=True")
+
+    def test_no_fixation_history_is_empty(self):
+        self.assertEqual(review.previous_verdict_sha(self.conn, self.TASK), "")
+
+    def test_a_single_fixation_is_not_enough_yet(self):
+        """Одна запись — это вход в первую review, сравнивать ещё не с чем."""
+        self.fixate("1111111")
+
+        self.assertEqual(review.previous_verdict_sha(self.conn, self.TASK), "")
+
+    def test_second_to_last_fixation_is_the_previous_verdict(self):
+        """review -> in_dev (вердикт) фиксирует sha_a; in_dev -> review
+        (правка) фиксирует sha_b, уже текущий `fixed_sha`. Искомый —
+        предпоследний, sha_a, не последний."""
+        self.fixate("1111111")  # in_dev -> review, итерация 1
+        self.fixate("2222222")  # review -> in_dev, вердикт итерации 1
+        self.fixate("3333333")  # in_dev -> review, итерация 2 (текущий)
+
+        self.assertEqual(
+            review.previous_verdict_sha(self.conn, self.TASK), "2222222")
+
+    def test_unrecognisable_sha_is_treated_as_missing(self):
+        """git не ответил в момент той фиксации (T021, вырожденный случай) —
+        не трейсбек, а откат на полный diff у вызывающего кода."""
+        self.fixate("1111111")
+        store.journal(self.conn, self.TASK, "fsm", "sha зафиксирован",
+                     "target=dogfood, sha=—, чисто=False")
+        self.fixate("3333333")
+
+        self.assertEqual(review.previous_verdict_sha(self.conn, self.TASK), "")
+
+
 if __name__ == "__main__":
     unittest.main()
