@@ -119,10 +119,20 @@ def build_modules(root: Path) -> list:
     resolved_imports = {}
     imported_by = {m.rel_path.as_posix(): [] for m in modules}
     for module in modules:
+        # `__init__.py` исключён как ЦЕЛЬ зависимости (SPEC T034, требование
+        # 8, ревью T027): `from . import x, y` резолвит уровень-1 импорт без
+        # имени (см. `extract_imported_dotted_names`) в том числе к голому
+        # имени пакета — почти каждый модуль пакета попутно "импортирует"
+        # __init__.py, и он же оказывается в «Импортируется» почти у всех.
+        # Это шум формы, а не сигнал о зависимости от содержимого файла;
+        # единственный код-потребитель карты (`orchestrator/brief.py`)
+        # встраивает карту целиком и по этим спискам не ходит — исключение
+        # им ничего не ломает.
         targets = sorted({
             dotted_to_module[d].rel_path.as_posix()
             for d in module.imports
             if d in dotted_to_module and dotted_to_module[d] is not module
+            and dotted_to_module[d].rel_path.name != "__init__.py"
         })
         resolved_imports[module.rel_path.as_posix()] = targets
         for target in targets:

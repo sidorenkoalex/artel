@@ -128,15 +128,27 @@ class PaginationTest(unittest.TestCase):
         patcher.start()
         self.addCleanup(patcher.stop)
         self.requested: list[int] = []
+        self._serve_patches: list = []
+        self.addCleanup(self._stop_serve_patches)
+
+    def _stop_serve_patches(self) -> None:
+        """Останавливает патчи текущего `serve()` — вызывается и в начале
+        следующего `serve()` (конец каждой итерации subTest), и в tearDown
+        (требование 4, SPEC T034): без этого патчи предыдущих итераций
+        `subTest` копятся до конца всего тестового метода, а не снимаются
+        между вызовами `serve()` (ревью T018)."""
+        while self._serve_patches:
+            self._serve_patches.pop().stop()
 
     def serve(self, pages: list[list[dict]], total: int | None,
               per_page: int = 30, max_pages: int | None = None) -> None:
+        self._stop_serve_patches()
         for name, value in (("CI_CHECKS_PER_PAGE", per_page),
                             ("CI_CHECKS_MAX_PAGES",
                              max_pages or config.CI_CHECKS_MAX_PAGES)):
             patcher = mock.patch.object(config, name, value)
             patcher.start()
-            self.addCleanup(patcher.stop)
+            self._serve_patches.append(patcher)
 
         def fake_gh(*args):
             page = int(args[-1].rsplit("page=", 1)[1])
@@ -149,7 +161,7 @@ class PaginationTest(unittest.TestCase):
 
         patcher = mock.patch.object(ci, "gh", fake_gh)
         patcher.start()
-        self.addCleanup(patcher.stop)
+        self._serve_patches.append(patcher)
 
     def status(self) -> tuple[bool, str]:
         return ci.branch_status("task/t001-x")

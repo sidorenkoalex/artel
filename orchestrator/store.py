@@ -20,17 +20,23 @@ from . import config
 # Схема БД. `target` в обеих таблицах: журнал не должен уметь разойтись
 # с каталогом задач по принадлежности проекту. `task_counters` — нумерация
 # задач per-target: персистентный счётчик, а не COUNT(*) (ADR-0003 3ж).
-SCHEMA = """
+#
+# DEFAULT колонки `target` — тот же литерал, что и в `migrate()`
+# (`add_column(..., "target", f"TEXT DEFAULT '{config.DEFAULT_TARGET}'")`):
+# свежая БД (эта схема) и БД, догнанная миграцией со старой версии, обязаны
+# давать одну и ту же схему колонки (SPEC T034, требование 6, ревью T019).
+SCHEMA = f"""
 CREATE TABLE IF NOT EXISTS tasks (
   id TEXT PRIMARY KEY, title TEXT, state TEXT, branch TEXT,
   review_iters INTEGER DEFAULT 0, accept_rejects INTEGER DEFAULT 0,
   reviewed_iter INTEGER DEFAULT 0, escalated_from TEXT,
   budget_usd REAL, spent_usd REAL DEFAULT 0, budget_source TEXT,
-  target TEXT, fixed_sha TEXT, tests_locked_sha TEXT,
-  created_at TEXT, updated_at TEXT
+  target TEXT DEFAULT '{config.DEFAULT_TARGET}', fixed_sha TEXT,
+  tests_locked_sha TEXT, created_at TEXT, updated_at TEXT
 );
 CREATE TABLE IF NOT EXISTS steps (
-  id INTEGER PRIMARY KEY AUTOINCREMENT, task_id TEXT, target TEXT, ts TEXT,
+  id INTEGER PRIMARY KEY AUTOINCREMENT, task_id TEXT,
+  target TEXT DEFAULT '{config.DEFAULT_TARGET}', ts TEXT,
   actor TEXT, action TEXT, detail TEXT
 );
 CREATE TABLE IF NOT EXISTS task_counters (

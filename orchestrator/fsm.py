@@ -111,8 +111,17 @@ def _tests_writing_ac_state(conn, task_id: str, branch: str,
     return tested, markers, errors
 
 
-def cmd_advance(task_id: str) -> None:
-    """Единственная точка движения FSM: читает статусы артефактов."""
+def cmd_advance(task_id: str) -> bool:
+    """Единственная точка движения FSM: читает статусы артефактов.
+
+    Возврат `True` — переход отклонён именно `guard_refuses()` (структура
+    артефакта-условия сломана); `False` — любой другой исход, включая
+    успешное продвижение и отказ по другой причине (артефакт не ready,
+    грязная копия, вердикт не свежий и т.п.). Различение нужно циклу
+    `auto` (SPEC T034, требование 2): отказ guard'ом — гейт, на котором
+    цикл обязан остановиться, а не звать `cmd_run` заново для того же
+    состояния.
+    """
     conn = store.db()
     t = store.get_task(conn, task_id)
     state = t["state"]
@@ -128,18 +137,18 @@ def cmd_advance(task_id: str) -> None:
         questions = tdir / "QUESTIONS.md"
         if questions.exists():
             if guard_refuses(conn, task_id, questions):
-                return
+                return True
             store.update_task(conn, task_id, escalated_from="spec_writing")
             store.set_state(conn, task_id, "escalated", "fsm",
                             f"analyst: батч вопросов по ТЗ — {questions}")
             print(f"[{task_id}] эскалация analyst: см. {questions}")
-            return
+            return False
         meta = artifacts.frontmatter(tdir / "SPEC.md")
         if meta.get("status") == "ready":
             if _dirty_refuses(conn, task_id, target, "SPEC.md"):
-                return
+                return False
             if guard_refuses(conn, task_id, tdir / "SPEC.md"):
-                return
+                return True
             # До смены состояния: потолок задачи должен стоять уже к тому
             # моменту, когда Оператор смотрит на неё на гейте SPEC.
             budget.apply_spec_budget(conn, t, meta)
@@ -147,17 +156,18 @@ def cmd_advance(task_id: str) -> None:
                             "SPEC готов — ждёт approve")
         else:
             print(f"[{task_id}] SPEC.md ещё не ready — нечего продвигать")
+        return False
 
     elif state == "review":
         meta = artifacts.frontmatter(tdir / "REVIEW.md")
         status = meta.get("status")
         if status not in config.REVIEW_VERDICTS:
             print(f"[{task_id}] REVIEW.md status={status} — жду вердикта")
-            return
+            return False
         if _dirty_refuses(conn, task_id, target, "REVIEW.md"):
-            return
+            return False
         if guard_refuses(conn, task_id, tdir / "REVIEW.md"):
-            return
+            return True
 
         iteration = artifacts.fresh_verdict_iteration(meta, t["reviewed_iter"])
         if iteration is None:
@@ -169,7 +179,7 @@ def cmd_advance(task_id: str) -> None:
             store.journal(conn, task_id, "fsm", "переход отклонён", detail)
             print(f"[{task_id}] {detail}")
             print(f"  дальше: artel.py run {task_id}  (прогон ревьювера)")
-            return
+            return False
         store.update_task(conn, task_id, reviewed_iter=iteration)
 
         if status == "approved":
@@ -186,7 +196,7 @@ def cmd_advance(task_id: str) -> None:
                 print(tail)
                 print(f"  дальше: почини код (не тест) и повтори "
                       f"artel.py advance {task_id}")
-                return
+                return False
             card = acceptance.summary(tdir)
             store.journal(conn, task_id, "fsm", "приёмочные тесты пройдены",
                           card)
@@ -207,13 +217,14 @@ def cmd_advance(task_id: str) -> None:
         elif status == "escalate":
             store.set_state(conn, task_id, "escalated", "fsm",
                             "эскалация от ревьювера")
+        return False
 
     elif state == "tests_writing":
         # test_author закончил: каждый AC-n — тест либо пометка
         # manual/skip/escalate (SPEC T023, требование 4).
         result = _tests_writing_ac_state(conn, task_id, t["branch"], tdir)
         if result is None:
-            return
+            return False
         tested, markers, errors = result
         escalations = {n: reason for n, (kind, reason) in markers.items()
                       if kind == "escalate"}
@@ -225,7 +236,7 @@ def cmd_advance(task_id: str) -> None:
                             f"test_author: критерий неисполним тестом — "
                             f"{detail}")
             print(f"[{task_id}] эскалация test_author: {detail}")
-            return
+            return False
         if errors:
             store.journal(conn, task_id, "fsm",
                           "переход отклонён: трассируемость AC",
@@ -236,7 +247,7 @@ def cmd_advance(task_id: str) -> None:
                 print(f"  - {e}")
             print(f"  дальше: допиши {tdir / 'acceptance_tests'} и повтори "
                   f"artel.py advance {task_id}")
-            return
+            return False
         store.set_state(conn, task_id, "in_dev", "fsm",
                         "приёмочные тесты готовы — трассируемость AC "
                         "пройдена")
@@ -246,6 +257,7 @@ def cmd_advance(task_id: str) -> None:
         store.update_task(conn, task_id,
                           tests_locked_sha=store.get_task(
                               conn, task_id)["fixed_sha"])
+        return False
 
     elif state == "in_dev":
         # разработчик закончил: PLAN ready и ветка запушена -> в ревью
@@ -268,15 +280,15 @@ def cmd_advance(task_id: str) -> None:
                               "переход отклонён: дерево не на ветке задачи",
                               detail)
                 print(f"[{task_id}] переход отклонён: {detail}")
-                return
+                return False
             plan_meta = yamlmini.frontmatter(plan_text) or {}
         else:
             plan_meta = artifacts.frontmatter(tdir / "PLAN.md")
         if plan_meta.get("status") in ("ready", "approved"):
             if _dirty_refuses(conn, task_id, target, "PLAN.md"):
-                return
+                return False
             if guard_refuses(conn, task_id, tdir / "PLAN.md", text=plan_text):
-                return
+                return True
             locked = t["tests_locked_sha"]
             if locked:
                 # Ветка задачи, не литерал "HEAD" (SPEC T031, AC-3): чужой
@@ -301,7 +313,7 @@ def cmd_advance(task_id: str) -> None:
                     print(f"  дальше: разберись, почему git не отвечает на "
                           f"tests_locked_sha={locked}, и повтори "
                           f"artel.py advance {task_id}")
-                    return
+                    return False
                 if diff:
                     detail = (f"acceptance_tests/ изменены после лока "
                               f"(sha {locked}) — спор с тестом = эскалация, "
@@ -312,14 +324,16 @@ def cmd_advance(task_id: str) -> None:
                     print(f"[{task_id}] переход отклонён: {detail}")
                     print(f"  дальше: верни acceptance_tests/ как было, "
                           f"либо эскалируй разногласие Оператору")
-                    return
+                    return False
             store.set_state(conn, task_id, "review", "fsm",
                             "MR готов — прогон ревьювера")
         else:
             print(f"[{task_id}] PLAN.md не ready — разработчик ещё работает")
+        return False
 
     else:
         print(f"[{task_id}] состояние {state} двигается через approve/reject/run")
+        return False
 
 
 # Состояния, на входе в approve которых требуется подтверждённый sha
