@@ -20,12 +20,12 @@ AC-1..AC-8 нельзя проверить вообще никаким тест�
 - Код возврата: 0 — успех, отличный от 0 — провал (AC-8 опирается
   именно на это).
 
-AC-9 сюда не входит — см. пометку `escalate` в конце файла: критерий
-сам по себе оставляет развилку «в CI-джобе или в doctor» нерешённой,
-а два варианта проверяются принципиально разными механизмами
-(статический разбор workflow против импорта функции doctor с ещё
-не существующим именем) — фиксировать один вариант тестом означало бы
-подгонять код под мою догадку, а не под критерий.
+AC-9 (решение Оператора 25.08 по эскалации предыдущего прогона
+test_author, зафиксировано в SPEC.md): сверка стухшей карты живёт
+в том же CI-джобе, что запускает генератор — не в doctor. Тест ниже
+проверяет это статическим разбором того же блока джоба, что и AC-7/
+AC-8 (тот же приём: искать сигнатуры сравнения и провала в тексте
+шага, не предполагая конкретный синтаксис bash/python реализации).
 """
 import re
 import shutil
@@ -329,17 +329,31 @@ class CiWorkflowTest(unittest.TestCase):
         self.assertNotIn("|| exit 0", block,
                         "запуск генератора глушит ненулевой код возврата через || exit 0")
 
+    def test_ac9_same_job_fails_on_built_at_sha_mismatch_with_head(self):
+        found = self._find_generator_job()
+        self.assertIsNotNone(
+            found, f"ни один джоб в {WORKFLOWS_DIR} не запускает {self.GENERATOR_REF}")
+        _file_name, _job_name, block, _file_text = found
 
-# AC-9: escalate — критерий сам оставляет открытой развилку «в CI-джобе
-# или в doctor» (SPEC, требование 7 / АС-9), а два варианта проверяются
-# принципиально разными механизмами: статический разбор YAML workflow
-# (как AC-7/AC-8 выше) против импорта ещё не существующей функции
-# из orchestrator/doctor.py под ещё не согласованным именем. Тест на
-# любой из двух вариантов заранее забраковал бы другой как «неверный» —
-# то есть за разработчика решил бы архитектурный вопрос, который SPEC
-# явно оставил открытым. Нужно решение Оператора: где живёт проверка
-# свежести (CI vs doctor) и, если doctor — какое имя функции/Check
-# фиксировать как контракт теста.
+        self.assertIn(
+            "built_at_sha", block,
+            "джоб, запускающий генератор, не сверяет built_at_sha закоммиченной карты")
+
+        head_ref = re.search(r"git rev-parse HEAD|github\.sha|GITHUB_SHA", block)
+        self.assertIsNotNone(
+            head_ref,
+            "джоб не берёт текущий head sha (git rev-parse HEAD / github.sha / "
+            "$GITHUB_SHA) для сравнения с built_at_sha")
+
+        mismatch_cmp = re.search(r"!=|-ne\b", block)
+        self.assertIsNotNone(
+            mismatch_cmp,
+            "джоб не сравнивает built_at_sha с текущим head на неравенство")
+
+        fail_on_mismatch = re.search(r"exit\s+[1-9]\d*|sys\.exit\(\s*[1-9]", block)
+        self.assertIsNotNone(
+            fail_on_mismatch,
+            "джоб не роняет себя (ненулевой exit) при расхождении built_at_sha и head")
 
 
 if __name__ == "__main__":
