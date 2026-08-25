@@ -34,6 +34,37 @@ def guard_refuses(conn, task_id: str, path: Path, text: str | None = None) -> bo
     return True
 
 
+def _dirty_refuses(conn, task_id: str, target: str, artifact_name: str) -> bool:
+    """Отказ по грязной копии артефакта-условия перехода; True — переход
+    отменён (SPEC T033, требование 1 — симметрия с `approve`).
+
+    Та же сверка, что и `confirm_fixation` у `approve`: `fixation.read()`,
+    не `fix()` — проверка не имеет права коммитить чужой WIP как побочный
+    эффект сравнения (REVIEW.md T021, замечание 1 итерации 2). `current`
+    пустой (git не ответил, коммитов ещё нет) — сверять не с чем, тот же
+    вырожденный случай, на котором `confirm_fixation` пропускает дальше;
+    старые (не-git) песочницы `advance` продолжают работать без изменений.
+
+    Только догфуд (`target == config.DEFAULT_TARGET`, PLAN «Риски»):
+    для внешнего target артефактный репозиторий коммитит сам оркестратор
+    целиком уже ПОСЛЕ решения перейти (`fixation._fix_external`, вызов
+    из `store.set_state`) — до перехода он закономерно не закоммичен,
+    это не забытый коммит роли (та ADR-0003 §4 workspace вообще не
+    коммитит сама), и наивная сверка отказывала бы там всегда.
+    """
+    if target != config.DEFAULT_TARGET:
+        return False
+    current, clean = fixation.read(task_id, target)
+    if not current or clean:
+        return False
+    detail = (f"{artifact_name} не закоммичен — роль обязана коммитить "
+              f"артефакты (скил conventions-core); закоммить и повтори advance")
+    store.journal(conn, task_id, "fsm",
+                  "переход отклонён: рабочая копия артефактов грязная", detail)
+    print(f"[{task_id}] переход отклонён: {detail}")
+    return True
+
+
 def _tests_writing_ac_state(conn, task_id: str, branch: str,
                             tdir: Path) -> tuple[set, dict, list[str]] | None:
     """(тестировано, пометки, ошибки трассируемости) на выходе из
@@ -86,6 +117,7 @@ def cmd_advance(task_id: str) -> None:
     t = store.get_task(conn, task_id)
     state = t["state"]
     tdir = config.TASKS / task_id
+    target = store.task_target(conn, task_id)
 
     if state == "spec_writing":
         # Батч вопросов analyst (SPEC T025, требование 4): файл на месте —
@@ -104,6 +136,8 @@ def cmd_advance(task_id: str) -> None:
             return
         meta = artifacts.frontmatter(tdir / "SPEC.md")
         if meta.get("status") == "ready":
+            if _dirty_refuses(conn, task_id, target, "SPEC.md"):
+                return
             if guard_refuses(conn, task_id, tdir / "SPEC.md"):
                 return
             # До смены состояния: потолок задачи должен стоять уже к тому
@@ -119,6 +153,8 @@ def cmd_advance(task_id: str) -> None:
         status = meta.get("status")
         if status not in config.REVIEW_VERDICTS:
             print(f"[{task_id}] REVIEW.md status={status} — жду вердикта")
+            return
+        if _dirty_refuses(conn, task_id, target, "REVIEW.md"):
             return
         if guard_refuses(conn, task_id, tdir / "REVIEW.md"):
             return
@@ -237,6 +273,8 @@ def cmd_advance(task_id: str) -> None:
         else:
             plan_meta = artifacts.frontmatter(tdir / "PLAN.md")
         if plan_meta.get("status") in ("ready", "approved"):
+            if _dirty_refuses(conn, task_id, target, "PLAN.md"):
+                return
             if guard_refuses(conn, task_id, tdir / "PLAN.md", text=plan_text):
                 return
             locked = t["tests_locked_sha"]

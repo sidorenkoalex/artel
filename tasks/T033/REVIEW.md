@@ -1,0 +1,57 @@
+---
+task: T033
+type: review
+author_role: reviewer
+status: approved        # draft | approved | changes_requested | escalate
+iteration: 1
+schema_version: 2    # версия формата артефакта, см. scripts/guard.py
+---
+
+# REVIEW: advance по зафиксированному состоянию (симметрия с approve)
+
+## Фаза A — гейт плана
+
+Покрытие: все 5 требований SPEC отражены в таблице «Покрытие требований»
+PLAN.md, шаги 1–4 — проверяемые единицы (хелпер + три точки вызова;
+правка roadmap.md; новый тест внешнего target; прогон guard/тестов),
+без микроопераций и без «сделать всё разом». Подход не конфликтует с
+конвенциями: переиспользует `fixation.read()` (не `fix()`) тем же
+приёмом, что и `confirm_fixation` у `approve` (T021, REVIEW замечание 1
+итерации 2), и явно разбирает пограничный случай (внешний target) в
+разделе «Риски», как того требует SPEC требование 4. План аппрувится.
+
+## Соответствие SPEC
+
+| Требование | Вердикт | Комментарий |
+|---|---|---|
+| 1 | OK | `_dirty_refuses` (orchestrator/fsm.py:37-65) вызывается на всех трёх переходах (spec_writing:139, review:157, in_dev:276) через `fixation.read(task_id, target)` — та же функция, что у `confirm_fixation`. |
+| 2 | OK | `store.journal(..., "переход отклонён: рабочая копия артефактов грязная", detail)` — fsm.py:62-63. |
+| 3 | OK | Порядок вызова (после проверки статуса «ready»/вердикта, до `guard_refuses` и до побочных эффектов) сохраняет прежнее поведение для чистой копии — подтверждено прогоном полного набора тестов (27/27 test_git_fixation.py, 13/13 приёмочных AC-1..AC-9, `tests/test_advance_guard.py` не тронут и зелёный). Новые тесты покрывают все три типа условия отдельно (Ac1/Ac2/Ac3 в acceptance_tests). |
+| 4 | OK | PLAN «Риски» называет и обосновывает единственный найденный случай легитимной грязи (внешний target — артефактный репозиторий коммитится оркестратором ПОСЛЕ решения перейти) и решение (`target == config.DEFAULT_TARGET`), покрыт отдельным юнитом `ExternalTargetAdvanceIgnoresDirtyCheckTest` (tests/test_git_fixation.py) — прогнан, зелёный. |
+| 5 | OK | `docs/roadmap.md` — предложение «Из T032: ... асимметрию закрыть требованием чистоты и в advance» удалено, остальной текст строки «Подметалка minor» не тронут (проверено `git diff`, подтверждено `Ac9RoadmapBacklogLineTest`). |
+
+## Замечания
+
+Пусто.
+
+## Вердикт
+
+approved.
+
+Обоснование: реализация точно соответствует всем 9 AC SPEC. Прогнаны
+все проверки: `python3 scripts/guard.py tasks/T033/SPEC.md
+tasks/T033/PLAN.md` — ок; `python3 -m unittest tests.test_git_fixation`
+— 27/27; `python3 -m unittest discover -s tasks/T033/acceptance_tests`
+— 13/13 (AC-1..AC-9); `python3 -m unittest discover -s tests` —
+596 тестов, 3 упавших в `test_multitarget.py::RoleEnvTest` не связаны
+с этой веткой (файл не входит в diff branch — `git diff main...HEAD --
+tests/test_multitarget.py` пуст; падение из-за git-идентичности
+окружения машины ревьювера, не регрессия T033).
+
+Порядок вызова `_dirty_refuses` (до `guard_refuses`, до всех побочных
+эффектов перехода) соблюдён во всех трёх точках — сверено построчно
+против orchestrator/fsm.py. Существующие тесты `advance` не ослаблены
+(AC-8 подтверждён отдельным тестом, сверяющим набор методов с main).
+Изменения не выходят за рамки задачи: только `orchestrator/fsm.py`,
+`docs/roadmap.md`, `docs/codebase-map.md` (регенерация тем же коммитом
+— по конвенции), тесты и артефакты `tasks/T033/`.
