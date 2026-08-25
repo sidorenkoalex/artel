@@ -487,6 +487,10 @@ def check_remote_empty(target: str) -> Check:
 def check_base_branch(name: str, entry: dict) -> Check:
     """Сверка базовой ветки/merge-политики — по возможностям forge, иначе
     честный skip с причиной (SPEC требование 9 явно это допускает)."""
+    if name == config.DEFAULT_TARGET:
+        return Check("base-branch", "skip",
+                     "догфуд — особый случай, не сверка базовой ветки с "
+                     "форджем")
     if entry.get("forge") != "github":
         return Check("base-branch", "skip",
                      f"forge {entry.get('forge')} — сверка не реализована")
