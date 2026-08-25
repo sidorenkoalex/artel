@@ -27,8 +27,8 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from orchestrator import (catalog, config, fsm, gitcmd,  # noqa: E402
-                          runner, store)
+from orchestrator import (acceptance, catalog, config, fsm,  # noqa: E402
+                          gitcmd, runner, store)
 from scripts import guard  # noqa: E402
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -537,6 +537,33 @@ class AcceptanceRunTest(TmpRootTest):
         self.capture(fsm.cmd_advance, self.TASK)
 
         self.assertEqual(self.state(), "acceptance")
+
+    def test_timeout_blocks_the_transition_and_names_the_limit(self):
+        """Ревью замечание (итерация 2, major): защита таймаута прогона
+        (orchestrator/acceptance.py:run) не была codified тестом — прогон
+        без сна, тем же приёмом, что и test_timeout_is_not_retried в
+        tests/test_agent_failure.py (мок с side_effect=TimeoutExpired)."""
+        self.enter_review()
+        self.write_acceptance_tests(AC_TEST_GREEN)
+        exc = subprocess.TimeoutExpired(cmd="unittest",
+                                        timeout=config.ACCEPTANCE_TIMEOUT_SEC)
+
+        with mock.patch.object(acceptance.subprocess, "run",
+                               side_effect=exc) as run_mock:
+            out = self.capture(fsm.cmd_advance, self.TASK)
+
+        # side_effect срабатывает независимо от переданных subprocess.run
+        # аргументов — сама по себе обработка TimeoutExpired не поймала бы
+        # регресс «убрали timeout= из вызова» (реальный subprocess.run без
+        # предела просто не бросил бы это исключение). Проверяем отдельно,
+        # что run() действительно передаёт timeout=ACCEPTANCE_TIMEOUT_SEC.
+        self.assertEqual(run_mock.call_args.kwargs.get("timeout"),
+                         config.ACCEPTANCE_TIMEOUT_SEC)
+        self.assertEqual(self.state(), "review", "переход не должен пройти")
+        self.assertIn(f"превысил {config.ACCEPTANCE_TIMEOUT_SEC}с", out)
+        details = self.journal_details("переход отклонён: приёмочные тесты")
+        self.assertEqual(len(details), 1)
+        self.assertIn("превысил", details[0])
 
 
 # --------------------------------------------------------------------------

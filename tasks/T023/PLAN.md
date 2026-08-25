@@ -196,6 +196,39 @@ tests_writing» → механика меняется на «правка тес
      (`^` под `in_dev`, `|` под `review`, лишний непояснённый `|` убран);
      «Выход тестов_writing» → «Выход из `tests_writing`».
 
+11. **Итерация 3: замечания ревью 2.** Тот же диф, та же зона.
+   - major (защита таймаута прогона из шага 10 не была codified тестом):
+     `tests/test_acceptance_tests_flow.py` (класс `AcceptanceRunTest`) —
+     новый `test_timeout_blocks_the_transition_and_names_the_limit`, по
+     образцу `test_timeout_is_not_retried` (`tests/test_agent_failure.py:318`):
+     `mock.patch.object(acceptance.subprocess, "run",
+     side_effect=subprocess.TimeoutExpired(...))`, без реального сна.
+     Ловит именно тот регресс, который ревью показало мутацией (снятие
+     `timeout=` в `acceptance.py:run()`) — но простой мок `side_effect`
+     сам по себе исход мутации не ловит: `TimeoutExpired` там
+     срабатывает безусловно, независимо от того, передан ли реальный
+     `timeout=` в вызов. Тест поэтому дополнительно проверяет аргументы
+     мока (`run_mock.call_args.kwargs["timeout"] ==
+     config.ACCEPTANCE_TIMEOUT_SEC`) — это и есть утверждение, которое
+     красит тест при снятии `timeout=`. Мутационная проверка повторена:
+     `timeout=config.ACCEPTANCE_TIMEOUT_SEC)` убран из
+     `orchestrator/acceptance.py:run()` вручную — новый тест краснеет
+     (`AssertionError: None != 300`); правка возвращена.
+   - minor (`schema_version: 1 → 2` в `templates/PLAN.md`,
+     `templates/REVIEW.md`, `templates/TEST_REPORT.md` не упомянут в
+     «Влияние на систему»): проверил первым делом — откатить бамп было
+     нельзя, а не «не нужен по существу», как показалось на первый
+     взгляд. `tests/test_guard_schema.py:
+     TemplatesCarryTheVersionTest.test_every_template_declares_the_
+     current_version` — существующий тест из T017 — требует, чтобы
+     ВСЕ четыре шаблона несли ровно `guard.SUPPORTED_SCHEMA_VERSION`;
+     подтверждено прогоном: возврат трёх файлов к `schema_version: 1`
+     красит этот тест (3 failures из 3 subTest). Раз откат ломает
+     существующую защиту, выбран второй вариант, предложенный ревью, —
+     документирование: раздел «Влияние на систему» (блок
+     Protected-paths) теперь называет все три файла и объясняет причину
+     бампа именно этим тестом, не «синхронизацией версии» вообще.
+
 ## Покрытие требований
 
 | Требование | Шаг |
@@ -215,8 +248,20 @@ tests_writing» → механика меняется на «правка тес
 (добавлена роль `test_author`, существующие роли не тронуты),
 `templates/SPEC.md` (bump `schema_version`, разметка «Критерии приёмки»,
 закомменченное поле — существующие поля не тронуты), `skills/`
-(добавлен один файл `test-authoring.md`, существующие скилы не тронуты).
-Это явно предписано SPEC T023 требованием 1 («Правки roles.yaml/skills/
+(добавлен один файл `test-authoring.md`, существующие скилы не тронуты),
+`templates/PLAN.md`/`templates/REVIEW.md`/`templates/TEST_REPORT.md`
+(тот же bump `schema_version: 1 → 2`, без иных правок). Три последних
+не бамп по существу задачи, а обязательное следствие уже существующего
+теста `test_guard_schema.TemplatesCarryTheVersionTest.
+test_every_template_declares_the_current_version` (введён в T017, шаг 1
+диффа не трогал): тест итерирует все четыре шаблона и требует, чтобы
+каждый нёс ровно `guard.SUPPORTED_SCHEMA_VERSION` — подняв константу
+до 2 в шаге 1 (для AC-разметки SPEC), нельзя было не поднять версию
+и в оставшихся трёх, иначе этот тест краснеет для них. Проверено:
+откат бампа в этих трёх файлах красит `TemplatesCarryTheVersionTest`
+на всех трёх шаблонах (`python3 -m unittest tests.test_guard_schema` —
+3 failures), сама возможность отката не рассматривается. Это явно
+предписано SPEC T023 требованием 1 («Правки roles.yaml/skills/
 templates — зона Оператора: подсветятся protected-paths, ревьюеру
 проверить состав отдельно») — не самовольное расширение зоны задачи.
 `protected-paths` в CI (`.github/workflows/ci.yml`) даёт warning, не
