@@ -78,7 +78,7 @@ workspace, tasks, knowledge, logs). БД одна на все проекты: с
   init | new "<название>" [--tz <файл>] | status | show <id> | advance <id> |
   run <id> | auto <id> | approve <id> [sha] | reject <id> "<причина>" |
   kill <id> | log <id> | budget <id> <usd> | target-init <target> |
-  doctor [--restore] | alert-ack <id> "<решение>"
+  doctor [--restore] | alert-ack <id> "<решение>" | version
 
 `approve` на гейтах, где фиксация уже есть (A2b, ADR-0003 п.15),
 подтверждает КОНКРЕТНЫЙ sha: без него печатает текущий зафиксированный
@@ -114,6 +114,7 @@ SPEC, PLAN — в ревью, REVIEW — из ревью). Нарушение с
   catalog   каталог задач: init, new, status, show, log
   alerts    таблица alerts: incident|threshold|trigger, ack с решением (A3)
   doctor    pre-flight, recovery-сверка, сироты, смоук CLI/изоляции (A3)
+  version   пин CLI, фактическая версия, версия схемы артефактов (T030)
 """
 import sys
 from pathlib import Path
@@ -126,7 +127,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from orchestrator import (auto, budget, catalog,  # noqa: E402
-                          cleanup, doctor, fsm, projects, runner)
+                          cleanup, doctor, fsm, projects, runner, version)
 
 
 def _tz_arg(rest: list) -> str:
@@ -143,7 +144,7 @@ def _tz_arg(rest: list) -> str:
 
 def main() -> None:
     args = sys.argv[1:]
-    if not args:
+    if not args or args[0] in ("-h", "--help"):
         print(__doc__)
         return
     cmd, rest = args[0], args[1:]
@@ -167,6 +168,7 @@ def main() -> None:
         "doctor": lambda: doctor.cmd_doctor("--restore" in rest),
         "alert-ack": lambda: doctor.cmd_alert_ack(
             rest[0], rest[1] if len(rest) > 1 else ""),
+        "version": lambda: version.cmd_version(),
     }
     fn = table.get(cmd)
     if fn is None:
