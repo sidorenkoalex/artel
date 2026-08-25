@@ -129,6 +129,18 @@ from orchestrator import (auto, budget, catalog,  # noqa: E402
                           cleanup, doctor, fsm, projects, runner)
 
 
+def _tz_arg(rest: list) -> str:
+    """Значение флага `--tz new "<название>" --tz <файл>` либо None, если
+    флага нет. Флаг без значения (последним аргументом) — понятный отказ,
+    не IndexError из голого `rest[rest.index("--tz") + 1]`."""
+    if "--tz" not in rest:
+        return None
+    idx = rest.index("--tz")
+    if idx + 1 >= len(rest):
+        sys.exit("--tz требует путь к файлу ТЗ следующим аргументом.")
+    return rest[idx + 1]
+
+
 def main() -> None:
     args = sys.argv[1:]
     if not args:
@@ -137,9 +149,7 @@ def main() -> None:
     cmd, rest = args[0], args[1:]
     table = {
         "init": lambda: catalog.cmd_init(),
-        "new": lambda: catalog.cmd_new(
-            rest[0],
-            tz_path=(rest[rest.index("--tz") + 1] if "--tz" in rest else None)),
+        "new": lambda: catalog.cmd_new(rest[0], tz_path=_tz_arg(rest)),
         "status": lambda: catalog.cmd_status(),
         "show": lambda: catalog.cmd_show(rest[0]),
         "advance": lambda: fsm.cmd_advance(rest[0]),

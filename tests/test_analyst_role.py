@@ -21,7 +21,7 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from orchestrator import auto, catalog, config, fsm, gitcmd, runner, store  # noqa: E402
+from orchestrator import artel, auto, catalog, config, fsm, gitcmd, runner, store  # noqa: E402
 from scripts import guard  # noqa: E402
 
 TZ_RAW = "Хотим кнопку экспорта отчёта в CSV на странице задач.\n"
@@ -249,6 +249,40 @@ class CmdNewTzTest(TmpRootTest):
         # Следующая задача получает T002, а не T003 — номер не пропущен.
         self.capture(catalog.cmd_new, "Следующая задача")
         self.assertTrue((config.TASKS / "T002").exists())
+
+
+# --------------------------------------------------------------------------
+# `artel.py`: разбор `--tz` — регрессия на замечание ревью (REVIEW.md,
+# iteration 1, major): флаг последним аргументом без значения падал
+# необработанным IndexError вместо понятного отказа.
+
+class ArtelCliTzFlagTest(TmpRootTest):
+
+    def test_tz_flag_without_value_exits_with_reason_not_indexerror(self):
+        with self.assertRaises(SystemExit) as ctx:
+            artel._tz_arg(["Экспорт CSV", "--tz"])
+        self.assertIn("--tz", str(ctx.exception))
+
+    def test_tz_flag_with_value_returns_it(self):
+        self.assertEqual(
+            artel._tz_arg(["Экспорт CSV", "--tz", "путь.txt"]), "путь.txt")
+
+    def test_without_tz_flag_returns_none(self):
+        self.assertIsNone(artel._tz_arg(["Экспорт CSV"]))
+
+    def test_cli_new_with_dangling_tz_flag_exits_cleanly(self):
+        """Воспроизводит замечание ревью буквально через `main()`: `new
+        "название" --tz` без пути к файлу — понятный отказ, не трейсбек,
+        и без наполовину созданной задачи."""
+        before = {p.name for p in config.TASKS.iterdir()}
+        with mock.patch.object(sys, "argv",
+                               ["artel.py", "new", "Экспорт CSV", "--tz"]):
+            with self.assertRaises(SystemExit) as ctx:
+                artel.main()
+        self.assertIn("--tz", str(ctx.exception))
+        after = {p.name for p in config.TASKS.iterdir()}
+        self.assertEqual(before, after,
+                         "новый каталог задачи не должен был появиться")
 
 
 # --------------------------------------------------------------------------
