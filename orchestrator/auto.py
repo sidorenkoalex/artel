@@ -84,7 +84,19 @@ def cmd_auto(task_id: str) -> None:
         t = store.get_task(conn, task_id)
         state = t["state"]
         if runner.step_role(t) is not None:
-            fsm.cmd_advance(task_id)
+            if fsm.cmd_advance(task_id):
+                # guard отклонил артефакт-условие (требование 2): тот же
+                # по характеру стоп, что и штатный отказ guard'а вне
+                # цикла — цикл не зовёт cmd_run заново для того же
+                # состояния, а останавливается на нём. Подсказка входит
+                # и в reason (значит, и в журнал), не только в hint
+                # (только на экран) — та же по смыслу подсказка, что и у
+                # отказа guard'а вне цикла, должна быть видна и в журнале.
+                hint = f"почини артефакт и повтори artel.py advance {task_id}"
+                auto_stop(conn, task_id, state,
+                          f"advance отклонён guard'ом артефакта-условия — "
+                          f"{hint}", hint)
+                return
             t = store.get_task(conn, task_id)
             state = t["state"]
         # Живой вывод агента уже был на экране и в логе — здесь только

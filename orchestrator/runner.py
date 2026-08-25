@@ -381,7 +381,11 @@ def run_agent_once(conn, task_id: str, role: str, prompt: str,
     # Отсутствие идентичности — не повод не запускать шаг (агент делает не
     # только коммит), но повод сказать об этом до запуска: иначе Оператор
     # узнает о ней из хвоста лога упавшего `git commit` получасом позже.
-    absent = [name for name in ("GIT_AUTHOR_NAME", "GIT_AUTHOR_EMAIL")
+    # Полный набор GIT_IDENTITY (author И committer), не только пара
+    # GIT_AUTHOR_* (SPEC T034, требование 5, ревью T019): committer-часть
+    # молча проходила бы мимо предупреждения, хотя коммит роли одинаково
+    # падает с rc=128 без неё («committer identity unknown»).
+    absent = [name for _, names in GIT_IDENTITY for name in names
               if not env.get(name)]
     if absent:
         detail = (f"git-идентичность роли не задана ({', '.join(absent)}) — "

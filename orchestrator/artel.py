@@ -130,7 +130,7 @@ from orchestrator import (auto, budget, catalog,  # noqa: E402
                           cleanup, doctor, fsm, projects, runner, version)
 
 
-def _tz_arg(rest: list) -> str:
+def _tz_arg(rest: list) -> str | None:
     """Значение флага `--tz new "<название>" --tz <файл>` либо None, если
     флага нет. Флаг без значения (последним аргументом) — понятный отказ,
     не IndexError из голого `rest[rest.index("--tz") + 1]`."""
