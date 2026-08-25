@@ -263,6 +263,15 @@ class ExternalIntegrityIncidentBlocksRunTest(TmpRootTest):
         # `runner.cmd_run` для роли developer читает skills/*.md по имени
         # из roles.yaml (conventions-core, escalation-rules, coding-standards).
         shutil.copytree(REPO_ROOT / "skills", config.ROOT / "skills")
+        # T028: бриф роли developer читает docs/codebase-map.md и CLAUDE.md
+        # из config.ROOT (пульт, не workspace target'а) — без них шаг падает
+        # ENOENT до того, как дойдёт до сверки целостности, которую этот
+        # класс проверяет.
+        (config.ROOT / "docs").mkdir()
+        (config.ROOT / "docs" / "codebase-map.md").write_text(
+            "---\nbuilt_at_sha: 0000000000000000000000000000000000000000\n"
+            "---\n\n# Карта\n", encoding="utf-8")
+        (config.ROOT / "CLAUDE.md").write_text("# Конвенции\n", encoding="utf-8")
         patcher = mock.patch.object(runner.keychain, "token",
                                     lambda slot: "tok-test")
         patcher.start()
@@ -288,6 +297,13 @@ class ExternalIntegrityIncidentBlocksRunTest(TmpRootTest):
         tdir.mkdir(parents=True)
         (tdir / "SPEC.md").write_text("# SPEC заглушка\n", encoding="utf-8")
         (tdir / "PLAN.md").write_text("# PLAN заглушка\n", encoding="utf-8")
+        # T028: бриф роли developer читает tasks/<id>/SPEC.md из ROOT пульта
+        # (config.TASKS), а не из репо target'а, — тот же адрес, что и
+        # `catalog.cmd_new` (артефакты задачи живут в пульте, ADR-0003 3д,
+        # «особый случай», до A7 — независимо от target шага).
+        (config.TASKS / task_id).mkdir(parents=True, exist_ok=True)
+        (config.TASKS / task_id / "SPEC.md").write_text(
+            "# SPEC заглушка\n", encoding="utf-8")
         capture(store.set_state, store.db(), task_id, "in_dev",
                "operator", "тест: вход в in_dev")
         return store.get_task(store.db(), task_id)["fixed_sha"]
@@ -503,6 +519,14 @@ class RealPultGitTest(unittest.TestCase):
         shutil.copytree(REPO_ROOT / "templates", self.root / "templates")
         shutil.copytree(REPO_ROOT / "skills", self.root / "skills")
         shutil.copy(REPO_ROOT / ".gitignore", self.root / ".gitignore")
+        # T028: бриф роли developer/analyst читает docs/codebase-map.md и
+        # CLAUDE.md из config.ROOT — без них шаг падает ENOENT до того, как
+        # дойдёт до реального git, который эта песочница проверяет.
+        (self.root / "docs").mkdir()
+        (self.root / "docs" / "codebase-map.md").write_text(
+            "---\nbuilt_at_sha: 0000000000000000000000000000000000000000\n"
+            "---\n\n# Карта\n", encoding="utf-8")
+        (self.root / "CLAUDE.md").write_text("# Конвенции\n", encoding="utf-8")
         self.git("add", "-A")
         self.git("commit", "-q", "-m", "init")
 

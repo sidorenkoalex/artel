@@ -736,8 +736,13 @@ class RoleEnvTest(TmpRootTest):
         capture(catalog.cmd_new, "Окружение роли")
         store.update_task(store.db(), "T001", state="in_dev")
 
+        # T028: сборка брифа (до `role_env`) сверяет свежесть карты через
+        # `gitcmd.git` — без подмены это настоящий git-подпроцесс, а общий
+        # с `Popen` модульный объект subprocess здесь замокан целиком
+        # (см. `RealPultGitTest.run_faked` в test_git_fixation.py).
         with mock.patch.object(runner, "role_env",
                                side_effect=OSError("нет места")), \
+                mock.patch.object(runner.gitcmd, "git", fake_git_config), \
                 mock.patch.object(runner.subprocess, "Popen") as popen:
             out = capture(runner.cmd_run, "T001")
 

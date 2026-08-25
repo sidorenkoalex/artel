@@ -117,6 +117,14 @@ class TmpRootTest(unittest.TestCase):
         # запись, а не на чтение.
         shutil.copytree(REPO_ROOT / "templates", self.root / "templates")
         shutil.copytree(REPO_ROOT / "skills", self.root / "skills")
+        # T028: бриф роли developer читает docs/codebase-map.md и CLAUDE.md
+        # из config.ROOT — без них шаг падает ENOENT до того, как дойдёт до
+        # cwd/окружения, которые эта песочница проверяет.
+        (self.root / "docs").mkdir()
+        (self.root / "docs" / "codebase-map.md").write_text(
+            "---\nbuilt_at_sha: 0000000000000000000000000000000000000000\n"
+            "---\n\n# Карта\n", encoding="utf-8")
+        (self.root / "CLAUDE.md").write_text("# Конвенции\n", encoding="utf-8")
 
         for attr, value in (("ROOT", self.root),
                             ("DB", self.root / ".artel" / "state.db"),
@@ -274,6 +282,12 @@ class ExternalWorkspaceIsolationTest(TmpRootTest):
         store.create_schema(conn)
         store.insert_task(conn, task_id, title, "in_dev",
                           f"task/{task_id.lower()}", target, 25.0)
+        # T028: бриф роли developer читает tasks/<id>/SPEC.md из ROOT —
+        # без файла шаг падает ENOENT до того, как дойдёт до cwd/окружения,
+        # которые этот класс проверяет.
+        tdir = config.TASKS / task_id
+        tdir.mkdir(parents=True, exist_ok=True)
+        (tdir / "SPEC.md").write_text("# SPEC заглушка\n", encoding="utf-8")
 
     def test_dogfood_cwd_is_root(self):
         """Контроль: догфуд не меняет поведение — cwd остаётся ROOT."""

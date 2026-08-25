@@ -153,6 +153,14 @@ class TmpRootTest(unittest.TestCase):
         self.root = Path(tmp.name)
         shutil.copytree(REPO_ROOT / "skills", self.root / "skills")
         shutil.copytree(REPO_ROOT / "templates", self.root / "templates")
+        # T028: бриф роли developer/analyst читает docs/codebase-map.md и
+        # CLAUDE.md из config.ROOT — без них шаг developer падает ENOENT
+        # ещё до pre-flight-сценариев, которые эта песочница проверяет.
+        (self.root / "docs").mkdir()
+        (self.root / "docs" / "codebase-map.md").write_text(
+            "---\nbuilt_at_sha: 0000000000000000000000000000000000000000\n"
+            "---\n\n# Карта\n", encoding="utf-8")
+        (self.root / "CLAUDE.md").write_text("# Конвенции\n", encoding="utf-8")
 
         for attr, value in (("ROOT", self.root),
                             ("DB", self.root / ".artel" / "state.db"),

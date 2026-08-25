@@ -5,8 +5,8 @@ import sys
 import time
 from pathlib import Path
 
-from . import (agent_log, budget, config, fixation, gitcmd, keychain, review,
-              roles, spend, store)
+from . import (agent_log, brief, budget, config, fixation, gitcmd, keychain,
+              review, roles, spend, store)
 
 # Идентичность коммитера, которую роль обязана унести с собой в свой HOME.
 # git читает эти переменные ПОВЕРХ конфига, поэтому перенос ровно двух пар
@@ -112,11 +112,12 @@ def cmd_run(task_id: str) -> None:
         sys.exit(f"[{task_id}] скил роли {role} не прочитан: {exc}")
     task_ref = f"tasks/{task_id}"
     package = None
+    brief_text = None
     if role == "analyst":
         mission = (
             f"Роль: аналитик. Задача {task_id}, ветка {t['branch']}. "
-            f"Единственный вход — ТЗ Оператора, разработчик увидит задачу "
-            f"только после тебя.\n"
+            f"Основной вход — ТЗ Оператора, разработчик увидит задачу "
+            f"только после тебя. Карта кодовой базы — в БРИФЕ РОЛИ ниже.\n"
             f"1) Прочитай {task_ref}/TZ.md. 2) Создай ветку от main, если "
             f"её ещё нет.\n"
             f"3) ТЗ достаточно — напиши {task_ref}/SPEC.md по "
@@ -132,6 +133,7 @@ def cmd_run(task_id: str) -> None:
             f"5) Прогони scripts/guard.py на своём файле, закоммить в "
             f"ветку. Код репозитория не трогай."
         )
+        brief_text = brief.analyst_map_component(conn, task_id)
     elif role == "test_author":
         mission = (
             f"Роль: автор приёмочных тестов. Задача {task_id}, ветка "
@@ -152,8 +154,10 @@ def cmd_run(task_id: str) -> None:
         )
     elif role == "developer":
         mission = (
-            f"Роль: разработчик. Задача {task_id}, ветка {t['branch']}.\n"
-            f"1) Прочитай {task_ref}/SPEC.md. 2) Создай ветку от main.\n"
+            f"Роль: разработчик. Задача {task_id}, ветка {t['branch']}. "
+            f"SPEC задачи, карта кодовой базы и конвенции проекта — целиком "
+            f"в БРИФЕ РОЛИ ниже, отдельно их читать не нужно.\n"
+            f"1) Изучи бриф. 2) Создай ветку от main.\n"
             f"3) Напиши {task_ref}/PLAN.md по templates/PLAN.md.\n"
             f"4) Реализуй по плану + юнит-тесты. Если есть {task_ref}/REVIEW.md "
             f"со статусом changes_requested — сначала закрой замечания. Если "
@@ -162,6 +166,7 @@ def cmd_run(task_id: str) -> None:
             f"5) Прогони scripts/guard.py на своих артефактах, закоммить всё "
             f"в ветку, поставь PLAN.md status: ready. НЕ мержи."
         )
+        brief_text = brief.developer_brief(conn, task_id)
     else:
         mission = (
             f"Роль: ревьювер. Задача {task_id}, ветка {t['branch']}. Свежий "
@@ -182,6 +187,8 @@ def cmd_run(task_id: str) -> None:
         )
         package = review.review_package(task_id, t["title"], t["branch"])
     prompt = f"{mission}\n\n--- СКИЛЫ РОЛИ ---\n\n{skills}"
+    if brief_text is not None:
+        prompt = f"{prompt}\n\n{brief_text}"
     if package is not None:
         # Размер входа — в журнал до первой попытки: стоимость прогона потом
         # сопоставляется именно с ним (SPEC T011, 5).

@@ -1,0 +1,127 @@
+---
+task: T028
+type: review
+author_role: reviewer
+status: approved
+iteration: 2
+schema_version: 2
+---
+
+# REVIEW: Бриф разработчика: вход роли одним документом
+
+## Фаза A — гейт плана
+
+PLAN итерации 2 (шаг 4) покрывает оба замечания итерации 1 конкретными
+правками кода (`_regenerate_map`, `_stale_paths`) и точечными юнит-тестами
+на каждую из них; таблица покрытия требований не изменилась и по-прежнему
+полна. Подход не расширяет объём задачи и не конфликтует с архитектурой.
+План принят.
+
+## Соответствие SPEC
+
+| Требование | Вердикт | Комментарий |
+|---|---|---|
+| 1 | OK | `brief.developer_brief` собирает SPEC+карта+конвенции одним документом. |
+| 2 | OK | Компоненты клеятся в текст промпта (`runner.py:171,189-191`), инструкция «прочитай сам» убрана из миссии developer. |
+| 3 | OK | Скилы — отдельный, не потревоженный блок `--- СКИЛЫ РОЛИ ---`. |
+| 4 | OK | Карта включается файлом целиком, без среза. |
+| 5 | OK | `_stale_paths` сверяет `built_at_sha..HEAD` тем же `git diff --name-only`, что и CI-джоба `codebase-map` (`.github/workflows/ci.yml:74`). |
+| 6 | OK | При отсутствии расхождений — карта как есть, без пометки (AC-6 зелёный). |
+| 7 | OK | Провал регенерации → `alerts.raise_alert` + текстовая пометка с `built_at_sha` и путями (AC-7 зелёный). Замечание итерации 1 закрыто: отказ самой сверки свежести теперь идёт тем же путём (`orchestrator/brief.py:120-124`). |
+| 8 | OK | Три строки в журнале шага, хэш sha256 по содержимому (AC-8 зелёный). |
+| 9 | OK | `analyst_map_component` — тот же механизм, добавлен к `TZ.md`, конвенции не добавлены (AC-9 зелёный, «Не входит» соблюдено). |
+
+Проверено заново, не только по diff:
+- `tests/test_brief.py` (14 тестов, включая три новых —
+  `test_failed_freshness_check_marks_the_text_and_raises_an_alert`,
+  `test_regeneration_restores_the_working_tree_after_reading`,
+  `test_failed_restore_after_regeneration_raises_an_alert`) — прогнан
+  локально (`python3 -m unittest tests.test_brief -v`), все зелёные.
+- `tasks/T028/acceptance_tests/test_brief.py` (11 тестов, AC-1..AC-9) —
+  прогнан локально, все зелёные.
+- Полный `tests/` (529 тестов) — прогнан локально: 3 падения
+  (`test_multitarget.RoleEnvTest.test_env_carries_the_git_identity`,
+  `test_identity_already_in_the_environment_is_not_overridden` — третье
+  из того же класса симптомов). Перепроверено отдельно (не с чужих слов
+  PLAN): в шеле сессии реально экспортированы `GIT_AUTHOR_*`/
+  `GIT_COMMITTER_*` (`env | grep GIT_AUTHOR`), эти две проверки мокают
+  только `runner.gitcmd.git`, а `runner.role_env` читает идентичность
+  из `os.environ` раньше git-конфига (сам смысл
+  `test_identity_already_in_the_environment_is_not_overridden` — «переменная
+  окружения сильнее конфига») — то есть падение объясняется локальным
+  окружением машины ревьювера, а не веткой; воспроизведено также в
+  отдельном `git worktree` на `main` для `RoleEnvTest` целиком. Оба
+  теста не изменены этим diff и не имеют отношения к `brief.py`.
+- `scripts/guard.py --all` — «ок (71 файлов)».
+- `git diff --stat main...task/t028-brif-razrabotchika-vkhod-roli --
+  gates.yaml roles.yaml targets.yaml .github/ templates/ skills/
+  docs/invariants.md tests/test_invariants.py` — пусто: путей `no_paths`
+  целевого artel diff не касается.
+
+## Замечания к итерации 1 — статус
+
+- **blocker** (`_regenerate_map` оставлял `docs/codebase-map.md`
+  незакоммиченным в `config.ROOT`) — исправлено. `orchestrator/brief.py:84-93`:
+  регенерированный текст читается в память, затем `gitcmd.git("checkout",
+  "--", MAP_REL)` возвращает рабочее дерево к закоммиченному состоянию —
+  до того, как `runner.cmd_run` передаёт управление агенту
+  (`run_agent_once` вызывается позже сборки брифа). Отказ отката —
+  отдельный алерт `brief.codebase_map_restore`
+  (`orchestrator/brief.py:86-92`), а не тихая грязь; уже прочитанный текст
+  всё равно используется для брифа. Проверено юнит-тестом
+  `test_regeneration_restores_the_working_tree_after_reading` (проверяет
+  сам факт вызова `("checkout", "--", MAP_REL)`) и
+  `test_failed_restore_after_regeneration_raises_an_alert` (алерт при
+  отказе отката) — оба зелёные при локальном прогоне. `gitcmd.git`
+  выполняется с `cwd=config.ROOT` (`orchestrator/gitcmd.py:15-16`), то
+  есть `checkout --` действительно применяется к тому же рабочему дереву,
+  в которое писал регенератор — путь восстановления адресует именно тот
+  файл, что описан в замечании.
+
+- **major** (`_stale_paths` сворачивал отказ git-команды сверки в `[]`,
+  т.е. «расхождений нет») — исправлено. `orchestrator/brief.py:39-55`:
+  функция теперь возвращает `None` при `returncode != 0`, а
+  `fresh_map_text` (`orchestrator/brief.py:120-124`) ведёт `None` тем же
+  путём алерта и текстовой пометки, что и провал регенерации — карта не
+  выдаётся молча как свежая. Проверено юнит-тестом
+  `test_failed_freshness_check_marks_the_text_and_raises_an_alert`:
+  git-заглушка, падающая именно на `diff` (`fatal: bad revision ''`, как
+  и было продемонстрировано в замечании итерации 1), даёт пометку
+  «КАРТА НЕАКТУАЛЬНА» + алерт, а `subprocess.run` (регенерация) при этом
+  не вызывается — отказ сверки не путается с расхождением, ведущим к
+  регенерации. Четыре фикстуры, ранее непреднамеренно эксплуатировавшие
+  старую ветку `[]` (`tests/test_doctor.py::TmpRootTest`,
+  `tests/test_git_fixation.py::ExternalIntegrityIncidentBlocksRunTest`,
+  `tests/test_git_fixation.py::RealPultGitTest`,
+  `tests/test_multitarget_invariants.py::TmpRootTest`), по-прежнему
+  используют `built_at_sha: 000...0`/git без коммитов — с новым кодом это
+  теперь идёт по ветке `_mark_stale` (алерт + пометка, без регенерации,
+  т.к. `stale is None` — не непустой список), что не ломает эти тесты:
+  ни один из них не проверял отсутствие пометки в брифе, только успешное
+  прохождение шага. Подтверждено прогоном всех четырёх файлов локально —
+  зелёные.
+
+- **minor** (формулировка риска в PLAN, ложная эквивалентность пустому
+  диффу) — исправлено. `tasks/T028/PLAN.md`, раздел «Риски»: текст теперь
+  описывает фактическое поведение (`_stale_paths` возвращает `None`,
+  путь алерта/пометки), не «эквивалентен пустому диффу».
+
+Класс дефекта (единообразие обработки отказа git между сверкой и
+регенерацией) закрыт целиком: оба места (`_stale_paths`,
+`_regenerate_map`) и путь отката (`checkout`) теперь идут через один и
+тот же принцип «нет ответа → алерт + честная пометка, не молчаливое
+доверие»; сторонних непроверенных `returncode`-веток в
+`orchestrator/brief.py` не осталось (проверено — все три места чтения
+`returncode` в файле обработаны: сверка, регенерация, откат).
+
+## Замечания
+
+(пусто)
+
+## Вердикт
+
+approved — оба замечания итерации 1 (blocker, major) устранены в коде,
+подтверждены новыми юнит-тестами и локальным прогоном; minor-формулировка
+в PLAN поправлена. Полный набор проверок (юнит, приёмочные, `tests/`
+целиком, `guard.py --all`, diff вне зоны задачи) пройден заново в этой
+итерации, не переиспользован «на слово» из PLAN.
