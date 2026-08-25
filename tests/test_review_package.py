@@ -269,6 +269,11 @@ class ReviewPackageTest(unittest.TestCase):
                                        lambda slot: "tok-test")
         kc_patcher.start()
         self.addCleanup(kc_patcher.stop)
+        pf_patcher = mock.patch(
+            "orchestrator.doctor.preflight_checks",
+            lambda role, target: [])
+        pf_patcher.start()
+        self.addCleanup(pf_patcher.stop)
 
     def put_in_worktree(self, rel: str, text: str) -> Path:
         path = self.root / rel
@@ -581,6 +586,11 @@ class CmdRunReviewPackageTest(unittest.TestCase):
                                        lambda slot: "tok-test")
         kc_patcher.start()
         self.addCleanup(kc_patcher.stop)
+        pf_patcher = mock.patch(
+            "orchestrator.doctor.preflight_checks",
+            lambda role, target: [])
+        pf_patcher.start()
+        self.addCleanup(pf_patcher.stop)
 
         self.capture(catalog.cmd_init)
         self.capture(catalog.cmd_new, "Ревью-пакет вместо свободного чтения")
@@ -725,14 +735,12 @@ class CmdRunReviewPackageTest(unittest.TestCase):
 
         self.assertNotIn("--- РЕВЬЮ-ПАКЕТ ---", self.prompt())
         self.assertEqual(self.journal_details("ревью-пакет собран"), [])
-        # Четыре вызова, и все — не о пакете: `role_env` берёт авторство
-        # коммита шага, дважды — pre-flight (doctor A3, git-идентичность —
-        # warn) и сам запуск агента. Список точный, а не «нет diff»: любой
+        # Два вызова, и оба — не о пакете: `role_env` берёт авторство
+        # коммита шага (pre-flight в setUp заглушен — его git-вызовы
+        # проверяет test_doctor). Список точный, а не «нет diff»: любой
         # show или diff в шаге разработчика по-прежнему провалит тест.
         self.assertEqual(self.git.calls,
                          [["config", "--get", "user.name"],
-                          ["config", "--get", "user.email"],
-                          ["config", "--get", "user.name"],
                           ["config", "--get", "user.email"]],
                          "diff разработчику не собирается")
 

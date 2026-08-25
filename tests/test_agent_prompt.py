@@ -78,6 +78,11 @@ class PromptChannelTest(unittest.TestCase):
                                        lambda slot: "tok-test")
         kc_patcher.start()
         self.addCleanup(kc_patcher.stop)
+        pf_patcher = mock.patch(
+            "orchestrator.doctor.preflight_checks",
+            lambda role, target: [])
+        pf_patcher.start()
+        self.addCleanup(pf_patcher.stop)
 
         self.capture(catalog.cmd_init)
         self.capture(catalog.cmd_new, "Канал промпта")
