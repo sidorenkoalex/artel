@@ -12,6 +12,10 @@ roles:
   analyst:
     executor: human             # Фаза 0: SPEC пишет Оператор
     token_slot: null
+  test_author:
+    executor: agent              # A4 (tasks/T023): приёмочные тесты до кода
+    token_slot: artel-test-author
+    skills: [conventions-core, escalation-rules, test-authoring]
   developer:
     executor: agent
     token_slot: artel-developer

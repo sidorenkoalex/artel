@@ -50,6 +50,8 @@ docs/adr/0002-integrity-principle.md, CLAUDE.md.
 | 23 | Пороги суммарного расхода программы (70%/90%) считаются суммой `spent_usd` по всем задачам ВСЕХ target, не одного | `test_multitarget_invariants.ProgramSpendAcrossTargetsTest` | roadmap §5; ADR-0003 3ж; tasks/T020/SPEC.md, требование 4 |
 | 24 | Счётчик номеров задач target не переиспользует номер архивированной (не удалённой) строки при пересеве после reconnect | `test_multitarget_invariants.CounterSurvivesArchivalOnReconnectTest` | ADR-0003 3ж («архивация строк, никогда DELETE»); tasks/T020/SPEC.md, требование 5 |
 | 25 | FSM принимает решения только по артефактам, чьи хэши зафиксированы его журналом: расхождение живого sha (или грязная копия) с зафиксированным на последнем переходе — инцидент целостности, агент не запускается, `approve` без подтверждённого sha не проходит гейт | `test_git_fixation.FsmDecidesOnlyOnFixedHashesTest`; `test_git_fixation.IntegrityIncidentBlocksRunTest`; `test_git_fixation.ApproveByShaTest` | ADR-0003 п.15, п.17; tasks/T021/SPEC.md, требования 4–6 |
+| 26 | Выход из `tests_writing`: критерий приёмки (AC-n) без теста и без пометки manual/skip/escalate — невалидный выход, переход отказывает с именем критерия | `test_acceptance_tests_flow.TraceabilityTest` | tasks/T023/SPEC.md, требование 4 |
+| 27 | Каталог `acceptance_tests/` залочен фиксацией T021 после выхода из `tests_writing`: расхождение с зафиксированным на выходе sha — отказ перехода `in_dev → review`, код чинится под тест, не наоборот | `test_acceptance_tests_flow.LockTest` | tasks/T023/SPEC.md, требование 5 |
 
 ## На ревью — тестом не выражаются
 

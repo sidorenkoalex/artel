@@ -75,6 +75,22 @@ def is_clean(*paths: str, repo: Path | None = None) -> bool | None:
     return not res.stdout.strip()
 
 
+def diff_paths(a: str, b: str, *paths: str) -> bool | None:
+    """True — ревизии `a` и `b` расходятся по путям; None — git не ответил.
+
+    `git diff --quiet` кодирует ответ кодом возврата (0 — совпадают,
+    1 — расходятся), не выводом: достаточно для проверки лока
+    acceptance_tests/ (orchestrator/fsm.py, tasks/T023, требование 5)
+    без парсинга самого диффа. Тот же вырожденный случай «git не ответил»,
+    что у `is_clean`/`head_sha`: заглушка `gitcmd.git = lambda *a: None`
+    в тестах, не связанных с git, возвращает `None` тем же приёмом.
+    """
+    res = git("diff", "--quiet", a, b, "--", *paths)
+    if res is None or res.returncode not in (0, 1):
+        return None
+    return res.returncode == 1
+
+
 def has_no_remote(repo: Path) -> bool:
     """True — `git remote` пуст: ни одной записи (ADR-0003 3д, требование 7).
 

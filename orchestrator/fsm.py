@@ -5,7 +5,7 @@ from pathlib import Path
 
 from scripts import guard
 
-from . import artifacts, budget, ci, config, fixation, store
+from . import acceptance, artifacts, budget, ci, config, fixation, gitcmd, store
 
 
 def guard_refuses(conn, task_id: str, path: Path) -> bool:
@@ -72,6 +72,24 @@ def cmd_advance(task_id: str) -> None:
         store.update_task(conn, task_id, reviewed_iter=iteration)
 
         if status == "approved":
+            # Прогон приёмки (SPEC T023, требование 6): красный
+            # acceptance-тест чинит код разработчик, не переписывает тест
+            # (тесты залочены — см. ветку in_dev выше).
+            green, tail = acceptance.run(tdir)
+            if not green:
+                detail = f"acceptance_tests красные:\n{tail}"
+                store.journal(conn, task_id, "fsm",
+                              "переход отклонён: приёмочные тесты", detail)
+                print(f"[{task_id}] переход отклонён: приёмочные тесты "
+                      f"красные")
+                print(tail)
+                print(f"  дальше: почини код (не тест) и повтори "
+                      f"artel.py advance {task_id}")
+                return
+            card = acceptance.summary(tdir)
+            store.journal(conn, task_id, "fsm", "приёмочные тесты пройдены",
+                          card)
+            print(f"[{task_id}] {card}")
             store.set_state(conn, task_id, "acceptance", "fsm",
                             "ревью пройдено — приёмка Оператором "
                             "(по критериям SPEC)")
@@ -89,12 +107,80 @@ def cmd_advance(task_id: str) -> None:
             store.set_state(conn, task_id, "escalated", "fsm",
                             "эскалация от ревьювера")
 
+    elif state == "tests_writing":
+        # test_author закончил: каждый AC-n — тест либо пометка
+        # manual/skip/escalate (SPEC T023, требование 4).
+        tested, markers = guard.scan_acceptance_tests(tdir)
+        escalations = {n: reason for n, (kind, reason) in markers.items()
+                      if kind == "escalate"}
+        if escalations:
+            detail = "; ".join(f"AC-{n}: {reason}"
+                               for n, reason in sorted(escalations.items()))
+            store.update_task(conn, task_id, escalated_from="tests_writing")
+            store.set_state(conn, task_id, "escalated", "fsm",
+                            f"test_author: критерий неисполним тестом — "
+                            f"{detail}")
+            print(f"[{task_id}] эскалация test_author: {detail}")
+            return
+        errors = guard.acceptance_traceability_errors(tdir)
+        if errors:
+            store.journal(conn, task_id, "fsm",
+                          "переход отклонён: трассируемость AC",
+                          "; ".join(errors))
+            print(f"[{task_id}] переход отклонён: не все критерии "
+                  f"покрыты тестом или пометкой")
+            for e in errors:
+                print(f"  - {e}")
+            print(f"  дальше: допиши {tdir / 'acceptance_tests'} и повтори "
+                  f"artel.py advance {task_id}")
+            return
+        store.set_state(conn, task_id, "in_dev", "fsm",
+                        "приёмочные тесты готовы — трассируемость AC "
+                        "пройдена")
+        # Лок (требование 5): значение, которое set_state только что
+        # посчитал в fixed_sha (T021), становится планкой acceptance_tests/
+        # для in_dev -> review — тот же sha, не новая фиксация.
+        store.update_task(conn, task_id,
+                          tests_locked_sha=store.get_task(
+                              conn, task_id)["fixed_sha"])
+
     elif state == "in_dev":
         # разработчик закончил: PLAN ready и ветка запушена -> в ревью
         if artifacts.frontmatter(
                 tdir / "PLAN.md").get("status") in ("ready", "approved"):
             if guard_refuses(conn, task_id, tdir / "PLAN.md"):
                 return
+            locked = t["tests_locked_sha"]
+            if locked:
+                diff = gitcmd.diff_paths(
+                    locked, "HEAD", f"tasks/{task_id}/acceptance_tests")
+                if diff is None:
+                    # git не ответил (недостижимый sha после rebase/squash,
+                    # сбой команды) — сверять нечего, но это не «нечего
+                    # сверять как задумано»: fail-closed тем же принципом,
+                    # что и fixation.check_integrity() при неответившем git
+                    # (ADR-0002, «неизвестный статус — это нельзя»).
+                    detail = (f"лок acceptance_tests/ не проверен: git не "
+                              f"ответил на sha {locked} — сверка невозможна")
+                    store.journal(conn, task_id, "fsm",
+                                  "переход отклонён: лок приёмочных тестов",
+                                  detail)
+                    print(f"[{task_id}] переход отклонён: {detail}")
+                    print(f"  дальше: разберись, почему git не отвечает на "
+                          f"tests_locked_sha={locked}, и повтори "
+                          f"artel.py advance {task_id}")
+                    return
+                if diff:
+                    detail = (f"acceptance_tests/ изменены после лока "
+                              f"(sha {locked}) — спор с тестом = эскалация, "
+                              f"не правка")
+                    store.journal(conn, task_id, "fsm",
+                                  "переход отклонён: лок приёмочных тестов",
+                                  detail)
+                    print(f"[{task_id}] переход отклонён: {detail}")
+                    print(f"  дальше: верни acceptance_tests/ как было, "
+                          f"либо эскалируй разногласие Оператору")
+                    return
             store.set_state(conn, task_id, "review", "fsm",
                             "MR готов — прогон ревьювера")
         else:
@@ -152,9 +238,24 @@ def cmd_approve(task_id: str, sha: str | None = None) -> None:
     if state in APPROVE_NEEDS_SHA and not confirm_fixation(conn, task_id, sha):
         return
     if state == "spec_gate":
-        store.set_state(conn, task_id, "in_dev", "operator",
-                        "гейт SPEC пройден")
-        print(f"  дальше: artel.py run {task_id}  (запуск разработчика)")
+        # tests_writing до кода (SPEC T023, требование 1): пропускается
+        # только явным skip_tests либо SPEC версии ниже 2 (без AC-разметки,
+        # весь беклог T001–T022 — требование 7); иначе тесты пишутся
+        # раньше, чем задачу увидит разработчик.
+        meta = artifacts.frontmatter(config.TASKS / task_id / "SPEC.md")
+        skip_reason = meta.get("skip_tests")
+        if skip_reason or not guard.requires_ac_markup(meta):
+            detail = (f"тесты пропущены (skip_tests): {skip_reason}"
+                      if skip_reason else
+                      f"SPEC schema_version "
+                      f"{meta.get('schema_version', 1)} — без AC-разметки, "
+                      f"tests_writing недоступна")
+            store.set_state(conn, task_id, "in_dev", "operator", detail)
+            print(f"  дальше: artel.py run {task_id}  (запуск разработчика)")
+        else:
+            store.set_state(conn, task_id, "tests_writing", "operator",
+                            "гейт SPEC пройден — приёмочные тесты до кода")
+            print(f"  дальше: artel.py run {task_id}  (запуск test_author)")
     elif state == "acceptance":
         store.set_state(conn, task_id, "merge_gate", "operator",
                         "приёмка пройдена")

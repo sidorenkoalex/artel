@@ -4,7 +4,7 @@ type: review
 author_role: reviewer
 status: draft        # draft | approved | changes_requested | escalate
 iteration: 1
-schema_version: 1    # версия формата артефакта, см. scripts/guard.py
+schema_version: 2    # версия формата артефакта, см. scripts/guard.py
 ---
 
 # REVIEW: <название задачи>

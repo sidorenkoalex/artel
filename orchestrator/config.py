@@ -47,6 +47,12 @@ GH_TIMEOUT_SEC = 60
 CI_CHECKS_PER_PAGE = 100
 CI_CHECKS_MAX_PAGES = 20
 PUMP_JOIN_TIMEOUT_SEC = 10
+# Предел прогона acceptance_tests/ на гейте review -> acceptance
+# (orchestrator/acceptance.py, SPEC T023 требование 6). Без него зависший
+# тест (сетевой стол, бесконечный цикл, дедлок) вешает advance/auto без
+# предела и без журнала; истёкший предел — красный прогон, тем же стилем,
+# что и таймаут шага агента.
+ACCEPTANCE_TIMEOUT_SEC = 300
 # Провал шага по коду возврата ретраится с бэкоффом; ретраи не считаются
 # итерациями ревью (их двигает только вердикт REVIEW.md в cmd_advance).
 AGENT_RETRIES = 2
@@ -115,7 +121,8 @@ USAGE_TOKEN_KEYS = ("input_tokens", "output_tokens",
 # Статусы REVIEW.md, которые FSM отрабатывает как вердикт ревьювера.
 REVIEW_VERDICTS = ("approved", "changes_requested", "escalate")
 
-STATE_ROLE = {"in_dev": "developer", "review": "reviewer"}
+STATE_ROLE = {"tests_writing": "test_author", "in_dev": "developer",
+             "review": "reviewer"}
 
 # Состояния, на которых останавливается `auto`: причина остановки и следующая
 # команда Оператора. Ключи покрывают все состояния FSM вне STATE_ROLE — цикл

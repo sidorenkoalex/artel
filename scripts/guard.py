@@ -25,7 +25,12 @@ REQUIRED_META = {"task", "type", "author_role", "status"}
 # появления и остаются валидными. Артефакт версии выше — ошибка: его писал
 # более новый формат, и молча читать его старыми правилами значит менять
 # сбой проверки на чужой сбой позже (SPEC T017, требование 3).
-SUPPORTED_SCHEMA_VERSION = 1
+#
+# Версия 2 (tasks/T023): SPEC несёт AC-разметку критериев приёмки
+# (`AC-1.`, `AC-2.`, …) и необязательное поле `skip_tests`. Правило
+# применяется только к version >= 2 — весь беклог T001–T022 остаётся
+# версией 1 и валиден без правок (требование 7).
+SUPPORTED_SCHEMA_VERSION = 2
 
 RULES = {
     "spec": {
@@ -61,6 +66,146 @@ def schema_errors(path: Path, meta: dict) -> list[str]:
                 f"{SUPPORTED_SCHEMA_VERSION} — артефакт написан более новым "
                 f"форматом, обнови guard"]
     return []
+
+
+# --------------------------------------------------------------------------
+# AC-разметка SPEC и трассируемость AC -> тест (tasks/T023, A4).
+#
+# Обе проверки статические: разбор текста регулярными выражениями, без
+# импорта/исполнения .py-файлов — тем же принципом, каким остальной guard
+# проверяет структуру, а не содержательность (докстринг модуля выше).
+# Прогон самих тестов (SPEC T023, требование 6) — отдельно,
+# orchestrator/acceptance.py, не здесь.
+
+# Критерий раздела «Критерии приёмки»: `AC-<n>. текст` строго в начале строки.
+AC_ITEM = re.compile(r"^AC-(\d+)\.\s+\S", re.M)
+# Пункт нумерованного списка БЕЗ AC-разметки — старый формат ("1. ...", не
+# "AC-1. ..."), который не должен молча проходить в SPEC версии 2.
+PLAIN_NUMBERED_ITEM = re.compile(r"^\d+\.\s+\S", re.M)
+# Тест на AC-n: метод `test_ac<n>_...` в любом test_*.py под acceptance_tests/.
+TEST_AC = re.compile(r"def\s+test_ac(\d+)_\w*\s*\(")
+# Любой тестовый метод — для числа в сводке гейта (orchestrator/acceptance.py).
+# Регуляркой, не `unittest.TestLoader().discover()`: discover импортирует
+# модули по голому имени файла в sys.modules процесса, и второй прогон
+# в том же процессе на ДРУГОМ каталоге с файлом того же имени (обычное дело
+# для test_*.py разных задач) падает ImportError «incorrectly imported
+# from» — collect-only обязан быть статическим, не только по духу guard'а,
+# но и чтобы не зависеть от истории вызовов процесса.
+TEST_METHOD = re.compile(r"^\s*def\s+(test_\w+)\s*\(", re.M)
+# Пометка критерия без прямого теста: `# AC-n: manual|skip|escalate — причина`.
+AC_MARKER = re.compile(
+    r"#\s*AC-(\d+):\s*(manual|skip|escalate)\b[^\S\n]*(?:[—-]+[^\S\n]*(.*))?")
+
+
+def _section_body(text: str, name: str) -> str:
+    """Текст секции `## name` до следующего `## ` заголовка или конца файла."""
+    match = re.search(rf"^##\s+{re.escape(name)}\s*$(.*?)(?=^##\s|\Z)",
+                      text, re.M | re.S)
+    return match.group(1) if match else ""
+
+
+def requires_ac_markup(meta: dict) -> bool:
+    """SPEC обязан нести AC-разметку и пройти tests_writing.
+
+    Версия ниже 2 — SPEC написан до A4, разметки не несёт и не обязан
+    (требование 7). `skip_tests` — явный пропуск стадии (требование 2):
+    его причина не пуста ни пустой строкой, ни отсутствием значения.
+    """
+    version = meta.get("schema_version", 1)
+    if not isinstance(version, int) or isinstance(version, bool) or version < 2:
+        return False
+    return meta.get("skip_tests") in (None, "")
+
+
+def spec_ac_errors(path: Path, text: str, meta: dict) -> list[str]:
+    """AC-разметка раздела «Критерии приёмки» (SPEC T023, требования 2, 7)."""
+    if not requires_ac_markup(meta):
+        return []
+    body = _section_body(text, "Критерии приёмки")
+    ac_numbers = [int(n) for n in AC_ITEM.findall(body)]
+    if not ac_numbers:
+        return [f"{path}: критерии приёмки не размечены AC-n (AC-1., AC-2., "
+                f"…) — либо укажи skip_tests в frontmatter"]
+    if len(set(ac_numbers)) != len(ac_numbers):
+        return [f"{path}: номера AC-n повторяются: {ac_numbers}"]
+    if PLAIN_NUMBERED_ITEM.search(body):
+        return [f"{path}: в критериях приёмки остались пункты без "
+                f"AC-разметки"]
+    return []
+
+
+def scan_acceptance_tests(tdir: Path) -> tuple[set, dict]:
+    """(AC, покрытые тестом) и {AC: (пометка, причина)} из acceptance_tests/.
+
+    Статический разбор текстом, без импорта файлов — теста без разметки
+    `test_ac<n>_` парсер не увидит, и это осознанно: содержательность
+    (тест действительно проверяет то, что заявляет) — дело ревью и прогона
+    unittest на гейте (orchestrator/acceptance.py), не структурной проверки.
+    """
+    tests_dir = tdir / "acceptance_tests"
+    tested: set = set()
+    markers: dict = {}
+    if not tests_dir.is_dir():
+        return tested, markers
+    for f in sorted(tests_dir.rglob("*.py")):
+        try:
+            content = f.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            continue
+        tested.update(int(n) for n in TEST_AC.findall(content))
+        for n, kind, reason in AC_MARKER.findall(content):
+            markers[int(n)] = (kind, reason.strip())
+    return tested, markers
+
+
+def count_test_methods(tdir: Path) -> int:
+    """Число тестовых методов в acceptance_tests/*.py — статический счёт."""
+    tests_dir = tdir / "acceptance_tests"
+    if not tests_dir.is_dir():
+        return 0
+    count = 0
+    for f in sorted(tests_dir.rglob("*.py")):
+        try:
+            content = f.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            continue
+        count += len(TEST_METHOD.findall(content))
+    return count
+
+
+def acceptance_traceability_errors(tdir: Path) -> list[str]:
+    """AC без теста и без пометки — невалидный выход из tests_writing
+    (SPEC T023, требование 4).
+
+    SPEC без AC-разметки (версия 1 или `skip_tests`) — tests_writing эту
+    задачу не проходит, сверять нечего.
+    """
+    spec_path = tdir / "SPEC.md"
+    try:
+        text = spec_path.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError) as exc:
+        return [f"{spec_path}: не прочитан: {exc}"]
+    meta = yamlmini.frontmatter(text) or {}
+    if not requires_ac_markup(meta):
+        return []
+    ac_numbers = {int(n) for n in
+                 AC_ITEM.findall(_section_body(text, "Критерии приёмки"))}
+    tested, markers = scan_acceptance_tests(tdir)
+
+    errors: list[str] = []
+    for n in sorted(ac_numbers):
+        if n not in tested and n not in markers:
+            errors.append(f"AC-{n}: нет теста и нет пометки manual/skip")
+    for n, (kind, reason) in sorted(markers.items()):
+        if n not in ac_numbers:
+            errors.append(f"AC-{n}: пометка на критерий, которого нет в SPEC")
+        elif kind in ("skip", "escalate") and not reason:
+            errors.append(f"AC-{n}: пометка {kind} без причины")
+    for n in sorted(tested):
+        if n not in ac_numbers:
+            errors.append(f"AC-{n}: тест на критерий, которого нет в SPEC "
+                          f"(SPEC T023, требование 3 — только из критериев)")
+    return errors
 
 
 def check(path: Path) -> list[str]:
@@ -105,6 +250,9 @@ def check(path: Path) -> list[str]:
 
     if meta.get("task") in (None, "", "TASK_ID"):
         errors.append(f"{path}: поле task не заполнено (осталось TASK_ID)")
+
+    if atype == "spec" and "Критерии приёмки" in headers:
+        errors.extend(spec_ac_errors(path, text, meta))
 
     return errors
 
