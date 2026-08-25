@@ -1,0 +1,62 @@
+---
+task: T029
+type: review
+author_role: reviewer
+status: approved
+iteration: 1
+schema_version: 2
+---
+
+# REVIEW: Инкрементальный дифф ревью поздних итераций
+
+## Гейт плана
+
+PLAN.md покрывает все 9 требований SPEC (таблица покрытия), шаги — единицы
+размера MR (review.py / runner.py / тесты / прогон), подход не конфликтует
+с конвенциями: новый механизм sha не заводится, `fixation.py` не трогается,
+`review_package`/`package_note` расширяются именованными параметрами с
+дефолтами обратно совместимо. Гейт плана — без замечаний.
+
+## Соответствие SPEC
+
+| Требование | Вердикт | Комментарий |
+|---|---|---|
+| 1 | OK | `iteration == 1` → `incremental=False`, `base=config.MAIN_BRANCH` (review.py:169-170), состав/потолки не меняются. Проверено `Ac1FullDiffAtFirstIterationTest`. |
+| 2 | OK | `iteration > 1` и `prev_sha` есть → `base=prev_sha`, diff и стат-список от него (review.py:169-197). Проверено `test_ac2_...` на реальном git в песочнице. |
+| 3 | OK | `previous_verdict_sha` читает `store.task_steps`, фильтр `action == "sha зафиксирован"` (T021, `store._record_fixation`), новый учёт sha не заводится, `fixation.py` не изменён. Проверил цепочку переходов вручную: `in_dev -> review` (fsm.py:198) и `review -> in_dev` (fsm.py:118) — оба через `set_state`, значит ровно одна запись фиксации на каждый, «предпоследняя» логика (review.py:139-142) соответствует модели PLAN. `test_ac3_...` отдельно доказывает, что источник — журнал, а не текущий `fixed_sha`. |
+| 4 | OK | Сборка SPEC/PLAN/(прошлый REVIEW)/формы вердикта (review.py:184-193) не зависит от `iteration`/`incremental`. Проверено `test_ac4_...`. |
+| 5 | OK | При `incremental` в пакет добавлен абзац с `git diff {MAIN_BRANCH}...{branch}` (review.py:198-205) — команда названа, не выполняется, отдельного CLI-режима нет. |
+| 6 | OK | `truncate_diff` вызывается над результатом `git_diff_part(base, ...)` без изменений логики — потолок агностичен к базе diff'а. Проверено `test_ac6_...` с длинным `fix.py`. |
+| 7 | OK | Аналогично: `truncate_package` — без изменений, `test_ac7_...` зелёный. |
+| 8 | OK | `package_note` дописывает `diff {package['diff_type']}` при `package.get("diff_type")` (review.py:230-234); `diff_type` в `review_package` всегда `"полный"`/`"инкрементальный"`, никогда не пустая строка — старое поведение `package_note` без ключа сохранено (`PackageNoteDiffTypeTest.test_package_without_diff_type_keeps_the_old_note_shape`). |
+| 9 | OK | `итерация {package['iteration']}` в той же строке заметки; `runner.py` считает `iteration` один раз и передаёт его и в текст миссии, и в пакет — устранён риск рассинхронизации, который был бы при двух независимых вычислениях. Проверено `test_ac9_...`. |
+
+## Замечания
+
+- (нет замечаний уровня blocker/major)
+
+Дополнительно проверено вручную (не входит в diff, но относится к
+достоверности AC-3): цепочка переходов FSM в `orchestrator/fsm.py` — вход
+в `review` возможен только из `in_dev` (fsm.py:161-198), а `changes_requested`
+всегда переводит `review -> in_dev` (fsm.py:110-119) через тот же
+`store.set_state`. Значит между двумя последовательными входами в `review`
+лежит ровно два вызова `_record_fixation`, и «предпоследняя запись»
+корректно указывает на sha вердикта, а не на текущий `fixed_sha`. Риск
+эскалации-с-ручным-возвратом (иной путь `in_dev`, больше двух переходов)
+явно описан в PLAN («Риски») и осознанно выведен за рамки SPEC (раздел
+«Не входит»: изменение подсчёта итераций reviewed_iter/review_iters) — не
+блокер.
+
+Прогон: `python3 -m unittest discover -s tests` — 565 тестов, 3 упавших
+(`test_multitarget.RoleEnvTest`), все три — про перенос git-идентичности
+в окружение роли, файл и код (`runner.git_identity`) T029 не трогает;
+похоже на утечку локального `~/.gitconfig` Оператора в мок теста на этой
+машине, не регрессия этой ветки. `python3 -m unittest discover -s
+tasks/T029/acceptance_tests` — 9/9 зелёных (AC-1..AC-9).
+
+## Вердикт
+
+approved — все 9 требований SPEC реализованы и подтверждены приёмочными
+и юнит-тестами, системная целостность не нарушена (потолки усечения,
+guard, hash-фиксация не изменены; `review_package`/`package_note`
+расширены обратно совместимо), diff не затрагивает файлы вне зоны задачи.
