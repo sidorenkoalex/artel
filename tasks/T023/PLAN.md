@@ -2,8 +2,8 @@
 task: T023
 type: plan
 author_role: developer
-status: draft        # draft | ready | approved
-schema_version: 1    # версия формата артефакта, см. scripts/guard.py
+status: ready        # draft | ready | approved
+schema_version: 2    # версия формата артефакта, см. scripts/guard.py
 ---
 
 # PLAN: A4 — роль test_author: приёмочные тесты до кода
