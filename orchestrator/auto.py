@@ -34,22 +34,30 @@ def cmd_auto(task_id: str) -> None:
     Механику шага команда не дублирует: внутри те же `cmd_run` и
     `cmd_advance`, которые Оператор зовёт руками, — бюджет, ретраи, журнал
     и вердикты FSM остаются целиком в них. Своё у цикла одно — условие
-    выхода: работаем, пока состояние есть в STATE_ROLE, останавливаемся на
-    первом же состоянии вне его. Так новое агентское состояние (MVP,
+    выхода: работаем, пока у шага есть агентская роль, останавливаемся на
+    первом же состоянии без неё. Так новое агентское состояние (MVP,
     plan_review) подхватится само, а новое ручное — само остановит.
+
+    Роль шага резолвит `runner.step_role`, а не прямое чтение
+    `config.STATE_ROLE`: `spec_writing` — агентское состояние только при
+    заведённом `tasks/<id>/TZ.md` (SPEC T025, требование 1) — условность
+    зависит от конкретной задачи, а не только от имени состояния, поэтому
+    статический словарь эту проверку сам провести не может.
 
     Решений auto не принимает: approve и reject остаются за Оператором —
     ручные гейты обходить нечем (docs/design.md §4, docs/invariants.md 18).
     """
     conn = store.db()
-    state = store.get_task(conn, task_id)["state"]
+    t = store.get_task(conn, task_id)
+    state = t["state"]
     store.journal(conn, task_id, "operator", "auto старт",
                   f"состояние {state}, лимит {config.AUTO_MAX_STEPS} шагов")
     print(f"[{task_id}] auto: старт из {state}, "
           f"лимит {config.AUTO_MAX_STEPS} шагов за вызов")
 
     steps = 0
-    while state in config.STATE_ROLE:
+    role = runner.step_role(t)
+    while role is not None:
         if steps >= config.AUTO_MAX_STEPS:
             auto_stop(conn, task_id, state,
                       f"лимит {config.AUTO_MAX_STEPS} шагов за вызов исчерпан",
@@ -57,7 +65,7 @@ def cmd_auto(task_id: str) -> None:
                       f"затем artel.py auto {task_id} — продолжит отсюда")
             return
         steps += 1
-        role, before = config.STATE_ROLE[state], state
+        before = state
 
         try:
             runner.cmd_run(task_id)
@@ -73,15 +81,18 @@ def cmd_auto(task_id: str) -> None:
         # Состояние перечитываем до advance: упавший агент и исчерпанный
         # потолок уводят задачу в escalated изнутри run, и advance оттуда
         # только напечатал бы, что двигать нечего.
-        state = store.get_task(conn, task_id)["state"]
-        if state in config.STATE_ROLE:
+        t = store.get_task(conn, task_id)
+        state = t["state"]
+        if runner.step_role(t) is not None:
             fsm.cmd_advance(task_id)
-            state = store.get_task(conn, task_id)["state"]
+            t = store.get_task(conn, task_id)
+            state = t["state"]
         # Живой вывод агента уже был на экране и в логе — здесь только
         # сводка шага и ссылка на лог прогона (требование 6).
         print(f"[{task_id}] auto шаг {steps}/{config.AUTO_MAX_STEPS}: {role} "
               f"{before} -> {state}, "
               f"лог: {agent_log.last_agent_log(task_id, role)}")
+        role = runner.step_role(t)
 
     reason, hint = auto_stop_advice(conn, task_id, state)
     auto_stop(conn, task_id, state, reason, hint)

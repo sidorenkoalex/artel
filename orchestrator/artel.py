@@ -67,8 +67,15 @@ workspace, tasks, knowledge, logs). БД одна на все проекты: с
 персистентный счётчик проекта. Артефакты задач самой артели до A7
 остаются в tasks/ пульта — особый случай догфуда.
 
+`new "<название>" --tz <файл>` заводит задачу с ТЗ Оператора
+(`tasks/<id>/TZ.md`, SPEC T025): `spec_writing` в этом случае исполняет
+роль analyst (`run`/`auto`), а не Оператор руками — без флага поведение
+не меняется. Батч вопросов analyst (`QUESTIONS.md`) эскалирует задачу
+немедленно на первом же `advance`, тем же путём `escalated_from`, что
+и падение любого другого агентского шага.
+
 Команды:
-  init | new "<название>" | status | show <id> | advance <id> |
+  init | new "<название>" [--tz <файл>] | status | show <id> | advance <id> |
   run <id> | auto <id> | approve <id> [sha] | reject <id> "<причина>" |
   kill <id> | log <id> | budget <id> <usd> | target-init <target> |
   doctor [--restore] | alert-ack <id> "<решение>"
@@ -122,6 +129,18 @@ from orchestrator import (auto, budget, catalog,  # noqa: E402
                           cleanup, doctor, fsm, projects, runner)
 
 
+def _tz_arg(rest: list) -> str:
+    """Значение флага `--tz new "<название>" --tz <файл>` либо None, если
+    флага нет. Флаг без значения (последним аргументом) — понятный отказ,
+    не IndexError из голого `rest[rest.index("--tz") + 1]`."""
+    if "--tz" not in rest:
+        return None
+    idx = rest.index("--tz")
+    if idx + 1 >= len(rest):
+        sys.exit("--tz требует путь к файлу ТЗ следующим аргументом.")
+    return rest[idx + 1]
+
+
 def main() -> None:
     args = sys.argv[1:]
     if not args:
@@ -130,7 +149,7 @@ def main() -> None:
     cmd, rest = args[0], args[1:]
     table = {
         "init": lambda: catalog.cmd_init(),
-        "new": lambda: catalog.cmd_new(rest[0]),
+        "new": lambda: catalog.cmd_new(rest[0], tz_path=_tz_arg(rest)),
         "status": lambda: catalog.cmd_status(),
         "show": lambda: catalog.cmd_show(rest[0]),
         "advance": lambda: fsm.cmd_advance(rest[0]),
