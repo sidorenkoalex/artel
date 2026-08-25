@@ -14,6 +14,7 @@
 import hashlib
 import re
 import subprocess
+import sys
 
 from . import alerts, config, gitcmd, store
 
@@ -139,11 +140,37 @@ def _journal_component(conn, task_id: str, role: str, label: str,
     return f"### {label}\n\n{text.strip()}\n"
 
 
+def _developer_spec_text(conn, task_id: str) -> str:
+    """SPEC.md задачи — с ВЕТКИ задачи, если рабочее дерево пульта точно
+    стоит не на ней (SPEC T031, AC-2), иначе рабочая копия, как до T031.
+
+    Голый `FileNotFoundError`-трейсбек на чужом чекауте (журнал T030,
+    ~17:35 25.08.2026) заменяет именованный отказ — обеим ветвям чтения,
+    не только git-пути: своя ветка ещё не создана ролью или git не
+    ответил на вопрос «какая ветка» — тот же вырожденный случай, что и
+    везде в T031, но файла на диске тогда тоже может не быть.
+    """
+    branch = store.task_branch(conn, task_id)
+    spec_rel = f"tasks/{task_id}/SPEC.md"
+    if gitcmd.on_foreign_branch(branch):
+        text, reason = gitcmd.show(branch, spec_rel)
+        if text is None:
+            sys.exit(f"[{task_id}] бриф не собран: {spec_rel} ветки "
+                     f"{branch} не прочитан ({reason}) — дерево не на "
+                     f"ветке задачи")
+        return text
+    try:
+        return (config.ROOT / spec_rel).read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError) as exc:
+        sys.exit(f"[{task_id}] бриф не собран: {spec_rel} не прочитан "
+                 f"({exc}) — дерево не на ветке задачи (ветка "
+                 f"{branch or '—'} ещё не создана в git)")
+
+
 def developer_brief(conn, task_id: str) -> str:
     """Бриф роли developer: SPEC задачи + карта + конвенции проекта одним
     документом (требования 1, 3, 4, 8)."""
-    spec_text = (config.TASKS / task_id / "SPEC.md").read_text(
-        encoding="utf-8")
+    spec_text = _developer_spec_text(conn, task_id)
     map_text = fresh_map_text(conn, task_id)
     conventions_text = (config.ROOT / CONVENTIONS_REL).read_text(
         encoding="utf-8")

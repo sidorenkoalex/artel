@@ -5,10 +5,11 @@ from pathlib import Path
 
 from scripts import guard
 
-from . import acceptance, artifacts, budget, ci, config, fixation, gitcmd, store
+from . import (acceptance, artifacts, budget, ci, config, fixation, gitcmd,
+              store, yamlmini)
 
 
-def guard_refuses(conn, task_id: str, path: Path) -> bool:
+def guard_refuses(conn, task_id: str, path: Path, text: str | None = None) -> bool:
     """Прогон guard по артефакту-условию перехода; True — переход отменён.
 
     Структуру артефакта проверяет код на самом переходе, а не роль по
@@ -16,8 +17,12 @@ def guard_refuses(conn, task_id: str, path: Path) -> bool:
     двигают статусы артефактов, значит артефакт со сломанной структурой
     двигать её не должен. Отказ — журнал, названный файл и все причины
     списком: разбирать его будет Оператор, и трейсбека ему тут не надо.
+
+    `text` — уже прочитанное содержимое (с ВЕТКИ задачи при чужом чекауте
+    рабочей копии, SPEC T031) вместо чтения `path` с диска; `None` (по
+    умолчанию) — прежнее поведение, `guard.check(path)`.
     """
-    errors = guard.check(path)
+    errors = guard.check(path) if text is None else guard.check_content(str(path), text)
     if not errors:
         return False
     store.journal(conn, task_id, "fsm", "переход отклонён guard'ом",
@@ -27,6 +32,52 @@ def guard_refuses(conn, task_id: str, path: Path) -> bool:
         print(f"  - {error}")
     print(f"  дальше: почини артефакт и повтори artel.py advance {task_id}")
     return True
+
+
+def _tests_writing_ac_state(conn, task_id: str, branch: str,
+                            tdir: Path) -> tuple[set, dict, list[str]] | None:
+    """(тестировано, пометки, ошибки трассируемости) на выходе из
+    `tests_writing`; `None` — переход отклонён (уже журналирован).
+
+    Рабочее дерево точно на чужой ветке (`gitcmd.on_foreign_branch`, SPEC
+    T031, AC-3) — SPEC.md и acceptance_tests/ читаются с ВЕТКИ задачи
+    (`git show`/`git ls-tree`), не с рабочей копии; иначе — прежний путь
+    через диск (`guard.scan_acceptance_tests`/`acceptance_traceability_errors`),
+    не тронутый T031: оба пути считают одним и тем же ядром
+    (`guard.scan_ac_content`/`traceability_errors_from_content`), так что
+    результат не расходится по источнику файлов, только по тому, где их
+    искать.
+    """
+    if not gitcmd.on_foreign_branch(branch):
+        tested, markers = guard.scan_acceptance_tests(tdir)
+        errors = guard.acceptance_traceability_errors(tdir)
+        return tested, markers, errors
+
+    spec_rel = f"tasks/{task_id}/SPEC.md"
+    tests_rel = f"tasks/{task_id}/acceptance_tests"
+    spec_text, spec_reason = gitcmd.show(branch, spec_rel)
+    paths = gitcmd.ls_tree_files(branch, tests_rel)
+    if spec_text is None or paths is None:
+        reason = spec_reason if spec_text is None else "acceptance_tests/ ветки не прочитан"
+        detail = (f"дерево не на ветке задачи {branch} — {reason}, "
+                  f"трассируемость AC не проверена")
+        store.journal(conn, task_id, "fsm",
+                      "переход отклонён: дерево не на ветке задачи", detail)
+        print(f"[{task_id}] переход отклонён: {detail}")
+        return None
+
+    sources: list[str] = []
+    for p in paths:
+        if not p.endswith(".py"):
+            continue
+        text, _ = gitcmd.show(branch, p)
+        if text is not None:
+            sources.append(text)
+    meta = yamlmini.frontmatter(spec_text) or {}
+    tested, markers = guard.scan_ac_content(sources)
+    errors = guard.traceability_errors_from_content(spec_text, meta, tested,
+                                                     markers)
+    return tested, markers, errors
 
 
 def cmd_advance(task_id: str) -> None:
@@ -124,7 +175,10 @@ def cmd_advance(task_id: str) -> None:
     elif state == "tests_writing":
         # test_author закончил: каждый AC-n — тест либо пометка
         # manual/skip/escalate (SPEC T023, требование 4).
-        tested, markers = guard.scan_acceptance_tests(tdir)
+        result = _tests_writing_ac_state(conn, task_id, t["branch"], tdir)
+        if result is None:
+            return
+        tested, markers, errors = result
         escalations = {n: reason for n, (kind, reason) in markers.items()
                       if kind == "escalate"}
         if escalations:
@@ -136,7 +190,6 @@ def cmd_advance(task_id: str) -> None:
                             f"{detail}")
             print(f"[{task_id}] эскалация test_author: {detail}")
             return
-        errors = guard.acceptance_traceability_errors(tdir)
         if errors:
             store.journal(conn, task_id, "fsm",
                           "переход отклонён: трассируемость AC",
@@ -160,14 +213,41 @@ def cmd_advance(task_id: str) -> None:
 
     elif state == "in_dev":
         # разработчик закончил: PLAN ready и ветка запушена -> в ревью
-        if artifacts.frontmatter(
-                tdir / "PLAN.md").get("status") in ("ready", "approved"):
-            if guard_refuses(conn, task_id, tdir / "PLAN.md"):
+        #
+        # Рабочее дерево точно на чужой ветке (SPEC T031) — PLAN.md
+        # читается с ВЕТКИ задачи (иначе гейт «PLAN.md не ready» молча
+        # держит переход и на чужом чекауте нечего проверять дальше —
+        # без этого лок ниже никогда не достигается со стороны AC-3);
+        # иначе прежний путь через диск, не тронутый T031.
+        branch = t["branch"]
+        foreign = gitcmd.on_foreign_branch(branch)
+        plan_text = None
+        if foreign:
+            plan_text, plan_reason = gitcmd.show(
+                branch, f"tasks/{task_id}/PLAN.md")
+            if plan_text is None:
+                detail = (f"дерево не на ветке задачи {branch} — PLAN.md "
+                          f"ветки не прочитан ({plan_reason})")
+                store.journal(conn, task_id, "fsm",
+                              "переход отклонён: дерево не на ветке задачи",
+                              detail)
+                print(f"[{task_id}] переход отклонён: {detail}")
+                return
+            plan_meta = yamlmini.frontmatter(plan_text) or {}
+        else:
+            plan_meta = artifacts.frontmatter(tdir / "PLAN.md")
+        if plan_meta.get("status") in ("ready", "approved"):
+            if guard_refuses(conn, task_id, tdir / "PLAN.md", text=plan_text):
                 return
             locked = t["tests_locked_sha"]
             if locked:
+                # Ветка задачи, не литерал "HEAD" (SPEC T031, AC-3): чужой
+                # чекаут рабочей копии не должен сверять лок с чужой веткой
+                # вместо своей. Свой чекаут (обычный путь) или ветка ещё
+                # не создана ролью — тот же "HEAD", что и до T031.
+                lock_ref = branch if foreign else "HEAD"
                 diff = gitcmd.diff_paths(
-                    locked, "HEAD", f"tasks/{task_id}/acceptance_tests")
+                    locked, lock_ref, f"tasks/{task_id}/acceptance_tests")
                 if diff is None:
                     # git не ответил (недостижимый sha после rebase/squash,
                     # сбой команды) — сверять нечего, но это не «нечего
@@ -256,7 +336,25 @@ def cmd_approve(task_id: str, sha: str | None = None) -> None:
         # только явным skip_tests либо SPEC версии ниже 2 (без AC-разметки,
         # весь беклог T001–T022 — требование 7); иначе тесты пишутся
         # раньше, чем задачу увидит разработчик.
-        meta = artifacts.frontmatter(config.TASKS / task_id / "SPEC.md")
+        #
+        # Рабочее дерево точно на чужой ветке (SPEC T031, AC-1) — SPEC.md
+        # читается с ВЕТКИ задачи (не молчаливый дефолт «schema_version 1
+        # без AC-разметки», журнал T030 ~17:35 25.08.2026); иначе прежний
+        # путь через диск, не тронутый T031.
+        branch = t["branch"]
+        if gitcmd.on_foreign_branch(branch):
+            spec_text, reason = gitcmd.show(
+                branch, f"tasks/{task_id}/SPEC.md")
+            if spec_text is None:
+                detail = (f"SPEC.md ветки {branch} не прочитан ({reason}) "
+                          f"— дерево не на ветке задачи")
+                store.journal(conn, task_id, "fsm",
+                              "approve отклонён: дерево не на ветке задачи",
+                              detail)
+                sys.exit(f"[{task_id}] approve отклонён: {detail}")
+            meta = yamlmini.frontmatter(spec_text) or {}
+        else:
+            meta = artifacts.frontmatter(config.TASKS / task_id / "SPEC.md")
         skip_reason = meta.get("skip_tests")
         if skip_reason or not guard.requires_ac_markup(meta):
             detail = (f"тесты пропущены (skip_tests): {skip_reason}"

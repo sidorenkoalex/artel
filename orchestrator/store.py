@@ -269,6 +269,19 @@ def task_target(conn: sqlite3.Connection, task_id: str) -> str:
     return row["target"] or config.DEFAULT_TARGET
 
 
+def task_branch(conn: sqlite3.Connection, task_id: str) -> str:
+    """Ветка задачи; пустая строка — задачи нет в БД.
+
+    Та же деградация, что у `task_target`: читатели вроде
+    `brief.developer_brief` (SPEC T031) зовутся и до `insert_task`
+    (юнит-тесты компонентов брифа без заведённой задачи) — `get_task`
+    там бы упал `sys.exit`, а тут есть с чем сравнить чекаут дальше.
+    """
+    row = conn.execute("SELECT branch FROM tasks WHERE id=?",
+                       (task_id,)).fetchone()
+    return (row["branch"] or "") if row is not None else ""
+
+
 def journal(conn, task_id: str, actor: str, action: str, detail: str = "") -> None:
     conn.execute(
         "INSERT INTO steps (task_id, target, ts, actor, action, detail)"

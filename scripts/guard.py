@@ -67,8 +67,11 @@ RULES = {
 }
 
 
-def schema_errors(path: Path, meta: dict) -> list[str]:
-    """Совместимость версии схемы артефакта с этим guard'ом."""
+def schema_errors(path: Path | str, meta: dict) -> list[str]:
+    """Совместимость версии схемы артефакта с этим guard'ом.
+
+    `path` — только для текста ошибок (`Path` с диска или строка-label
+    ветки задачи, `check_content`, SPEC T031) — не читается здесь."""
     if "schema_version" not in meta:
         return []  # артефакт до T017 — версия 1 по определению
     version = meta["schema_version"]
@@ -111,8 +114,13 @@ AC_MARKER = re.compile(
     r"#\s*AC-(\d+):\s*(manual|skip|escalate)\b[^\S\n]*(?:[—-]+[^\S\n]*(.*))?")
 
 
-def _section_body(text: str, name: str) -> str:
-    """Текст секции `## name` до следующего `## ` заголовка или конца файла."""
+def section_body(text: str, name: str) -> str:
+    """Текст секции `## name` до следующего `## ` заголовка или конца файла.
+
+    Публичная (не `_section_body`): переиспользуется вне этого модуля
+    `orchestrator/fsm.py` для ветко-корректного расчёта трассируемости AC
+    с ВЕТКИ задачи, не только с диска (SPEC T031).
+    """
     match = re.search(rf"^##\s+{re.escape(name)}\s*$(.*?)(?=^##\s|\Z)",
                       text, re.M | re.S)
     return match.group(1) if match else ""
@@ -131,11 +139,13 @@ def requires_ac_markup(meta: dict) -> bool:
     return meta.get("skip_tests") in (None, "")
 
 
-def spec_ac_errors(path: Path, text: str, meta: dict) -> list[str]:
-    """AC-разметка раздела «Критерии приёмки» (SPEC T023, требования 2, 7)."""
+def spec_ac_errors(path: Path | str, text: str, meta: dict) -> list[str]:
+    """AC-разметка раздела «Критерии приёмки» (SPEC T023, требования 2, 7).
+
+    `path` — только для текста ошибок (см. `schema_errors`)."""
     if not requires_ac_markup(meta):
         return []
-    body = _section_body(text, "Критерии приёмки")
+    body = section_body(text, "Критерии приёмки")
     ac_numbers = [int(n) for n in AC_ITEM.findall(body)]
     if not ac_numbers:
         return [f"{path}: критерии приёмки не размечены AC-n (AC-1., AC-2., "
@@ -148,8 +158,26 @@ def spec_ac_errors(path: Path, text: str, meta: dict) -> list[str]:
     return []
 
 
+def scan_ac_content(sources: list[str]) -> tuple[set, dict]:
+    """(AC, покрытые тестом) и {AC: (пометка, причина)} по уже прочитанным
+    текстам файлов *.py под acceptance_tests/.
+
+    Источник-агностичное ядро `scan_acceptance_tests` (диск) и ветко-
+    корректного чтения `orchestrator/fsm.py` (git, SPEC T031, AC-3) — сам
+    разбор AC-разметки не должен раздваиваться между источником файлов.
+    """
+    tested: set = set()
+    markers: dict = {}
+    for content in sources:
+        tested.update(int(n) for n in TEST_AC.findall(content))
+        for n, kind, reason in AC_MARKER.findall(content):
+            markers[int(n)] = (kind, reason.strip())
+    return tested, markers
+
+
 def scan_acceptance_tests(tdir: Path) -> tuple[set, dict]:
-    """(AC, покрытые тестом) и {AC: (пометка, причина)} из acceptance_tests/.
+    """(AC, покрытые тестом) и {AC: (пометка, причина)} из acceptance_tests/
+    рабочей копии.
 
     Статический разбор текстом, без импорта файлов — теста без разметки
     `test_ac<n>_` парсер не увидит, и это осознанно: содержательность
@@ -157,19 +185,15 @@ def scan_acceptance_tests(tdir: Path) -> tuple[set, dict]:
     unittest на гейте (orchestrator/acceptance.py), не структурной проверки.
     """
     tests_dir = tdir / "acceptance_tests"
-    tested: set = set()
-    markers: dict = {}
     if not tests_dir.is_dir():
-        return tested, markers
+        return set(), {}
+    sources: list[str] = []
     for f in sorted(tests_dir.rglob("*.py")):
         try:
-            content = f.read_text(encoding="utf-8")
+            sources.append(f.read_text(encoding="utf-8"))
         except (OSError, UnicodeDecodeError):
             continue
-        tested.update(int(n) for n in TEST_AC.findall(content))
-        for n, kind, reason in AC_MARKER.findall(content):
-            markers[int(n)] = (kind, reason.strip())
-    return tested, markers
+    return scan_ac_content(sources)
 
 
 def count_test_methods(tdir: Path) -> int:
@@ -187,25 +211,18 @@ def count_test_methods(tdir: Path) -> int:
     return count
 
 
-def acceptance_traceability_errors(tdir: Path) -> list[str]:
-    """AC без теста и без пометки — невалидный выход из tests_writing
-    (SPEC T023, требование 4).
-
-    SPEC без AC-разметки (версия 1 или `skip_tests`) — tests_writing эту
-    задачу не проходит, сверять нечего.
+def traceability_errors_from_content(spec_text: str, meta: dict, tested: set,
+                                     markers: dict) -> list[str]:
+    """Ядро проверки трассируемости AC -> тест (SPEC T023, требование 4) по
+    уже прочитанным SPEC-тексту и результату `scan_ac_content` — без
+    чтения файлов: источник (рабочая копия или ВЕТКА задачи, SPEC T031,
+    AC-3) выбирает вызывающий код (`acceptance_traceability_errors` — диск,
+    `orchestrator/fsm.py` — git при чужом чекауте), не эта функция.
     """
-    spec_path = tdir / "SPEC.md"
-    try:
-        text = spec_path.read_text(encoding="utf-8")
-    except (OSError, UnicodeDecodeError) as exc:
-        return [f"{spec_path}: не прочитан: {exc}"]
-    meta = yamlmini.frontmatter(text) or {}
     if not requires_ac_markup(meta):
         return []
     ac_numbers = {int(n) for n in
-                 AC_ITEM.findall(_section_body(text, "Критерии приёмки"))}
-    tested, markers = scan_acceptance_tests(tdir)
-
+                 AC_ITEM.findall(section_body(spec_text, "Критерии приёмки"))}
     errors: list[str] = []
     for n in sorted(ac_numbers):
         if n not in tested and n not in markers:
@@ -222,8 +239,75 @@ def acceptance_traceability_errors(tdir: Path) -> list[str]:
     return errors
 
 
-def check(path: Path) -> list[str]:
+def acceptance_traceability_errors(tdir: Path) -> list[str]:
+    """AC без теста и без пометки — невалидный выход из tests_writing
+    (SPEC T023, требование 4), рабочая копия.
+
+    SPEC без AC-разметки (версия 1 или `skip_tests`) — tests_writing эту
+    задачу не проходит, сверять нечего. Само правило —
+    `traceability_errors_from_content`.
+    """
+    spec_path = tdir / "SPEC.md"
+    try:
+        text = spec_path.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError) as exc:
+        return [f"{spec_path}: не прочитан: {exc}"]
+    meta = yamlmini.frontmatter(text) or {}
+    tested, markers = scan_acceptance_tests(tdir)
+    return traceability_errors_from_content(text, meta, tested, markers)
+
+
+def check_content(label: str, text: str) -> list[str]:
+    """Ядро `check` — структурная проверка уже прочитанного текста, без
+    чтения файла: `label` — путь или его подобие, только для текста
+    ошибок (не обязательно существующий `Path`).
+
+    Артефакт-условие перехода FSM может читаться и с диска, и с ВЕТКИ
+    задачи при чужом чекауте рабочей копии (SPEC T031, `orchestrator/
+    fsm.py`, `guard_refuses`) — сама структурная проверка не должна
+    раздваиваться по источнику текста.
+    """
     errors: list[str] = []
+    meta = yamlmini.frontmatter(text)
+    if meta is None:
+        return [f"{label}: нет frontmatter (--- ... ---)"]
+
+    errors.extend(schema_errors(label, meta))
+
+    missing = REQUIRED_META - meta.keys()
+    if missing:
+        errors.append(f"{label}: frontmatter без полей: {', '.join(sorted(missing))}")
+
+    # `or ""` — пустое значение поля типизированный разбор отдаёт как None,
+    # а в тексте нарушения «type ''» читается понятнее, чем «type 'None'».
+    atype = meta.get("type") or ""
+    rules = RULES.get(atype)
+    if rules is None:
+        errors.append(f"{label}: неизвестный type '{atype}' (ожидается: {', '.join(RULES)})")
+        return errors
+
+    status = meta.get("status") or ""
+    if status not in rules["statuses"]:
+        errors.append(
+            f"{label}: недопустимый status '{status}' для {atype} "
+            f"(валидные: {', '.join(sorted(rules['statuses']))})"
+        )
+
+    headers = set(re.findall(r"^##\s+(.+?)\s*$", text, re.M))
+    for section in rules["sections"]:
+        if section not in headers:
+            errors.append(f"{label}: отсутствует обязательная секция '## {section}'")
+
+    if meta.get("task") in (None, "", "TASK_ID"):
+        errors.append(f"{label}: поле task не заполнено (осталось TASK_ID)")
+
+    if atype == "spec" and "Критерии приёмки" in headers:
+        errors.extend(spec_ac_errors(label, text, meta))
+
+    return errors
+
+
+def check(path: Path) -> list[str]:
     try:
         text = path.read_text(encoding="utf-8")
     except (OSError, UnicodeDecodeError) as exc:
@@ -231,44 +315,7 @@ def check(path: Path) -> list[str]:
         # требование 5), а там трейсбек читать некому: нечитаемый файл —
         # такое же нарушение структуры, как отсутствующая секция.
         return [f"{path}: не прочитан: {exc}"]
-
-    meta = yamlmini.frontmatter(text)
-    if meta is None:
-        return [f"{path}: нет frontmatter (--- ... ---)"]
-
-    errors.extend(schema_errors(path, meta))
-
-    missing = REQUIRED_META - meta.keys()
-    if missing:
-        errors.append(f"{path}: frontmatter без полей: {', '.join(sorted(missing))}")
-
-    # `or ""` — пустое значение поля типизированный разбор отдаёт как None,
-    # а в тексте нарушения «type ''» читается понятнее, чем «type 'None'».
-    atype = meta.get("type") or ""
-    rules = RULES.get(atype)
-    if rules is None:
-        errors.append(f"{path}: неизвестный type '{atype}' (ожидается: {', '.join(RULES)})")
-        return errors
-
-    status = meta.get("status") or ""
-    if status not in rules["statuses"]:
-        errors.append(
-            f"{path}: недопустимый status '{status}' для {atype} "
-            f"(валидные: {', '.join(sorted(rules['statuses']))})"
-        )
-
-    headers = set(re.findall(r"^##\s+(.+?)\s*$", text, re.M))
-    for section in rules["sections"]:
-        if section not in headers:
-            errors.append(f"{path}: отсутствует обязательная секция '## {section}'")
-
-    if meta.get("task") in (None, "", "TASK_ID"):
-        errors.append(f"{path}: поле task не заполнено (осталось TASK_ID)")
-
-    if atype == "spec" and "Критерии приёмки" in headers:
-        errors.extend(spec_ac_errors(path, text, meta))
-
-    return errors
+    return check_content(str(path), text)
 
 
 def main() -> int:

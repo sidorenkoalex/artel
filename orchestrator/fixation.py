@@ -53,9 +53,34 @@ def fix(task_id: str, target: str) -> tuple[str, bool]:
     return _fix_external(target)
 
 
+def _dogfood_branch(task_id: str) -> str:
+    """Ветка задачи из БД — источник истины для головы sha (SPEC T031,
+    AC-4), не HEAD текущего чекаута рабочей копии пульта.
+
+    Открывает свою БД-сессию: `fix()`/`read()` держат сигнатуру
+    `(task_id, target)` без `conn` (её же зовут напрямую тесты T031), а
+    задача к этому моменту уже существует в БД (это её собственная
+    фиксация — `store.get_task` тем же приёмом, что и остальные читатели
+    ниже по стеку, `fixation.check_integrity`).
+    """
+    return store.get_task(store.db(), task_id)["branch"]
+
+
 def _fix_dogfood(task_id: str) -> tuple[str, bool]:
-    """Головной sha ветки пульта + чистота `tasks/<id>` (SPEC, требование 3)."""
-    sha = gitcmd.head_sha()
+    """Головной sha ВЕТКИ ЗАДАЧИ + чистота `tasks/<id>` (SPEC, требование 3).
+
+    Рабочее дерево точно на чужой ветке (`gitcmd.on_foreign_branch`,
+    SPEC T031, AC-4) — голова берётся с ветки задачи независимо от
+    чекаута; иначе (свой чекаут, ветка ещё не создана ролью — легитимный
+    ранний момент задачи, git не ответил) — HEAD текущего чекаута, как
+    было до T031: тот же вырожденный случай, на котором стоит стенд
+    заглушек `gitcmd.git` дотестового кода (RealPultGitTest и другие
+    песочницы, где своя ветка задачи никогда не заводится, а вся работа
+    идёт прямо на `main`, — там `on_foreign_branch` остаётся False).
+    """
+    branch = _dogfood_branch(task_id)
+    sha = (gitcmd.branch_head_sha(branch) if gitcmd.on_foreign_branch(branch)
+          else gitcmd.head_sha())
     clean = gitcmd.is_clean(f"tasks/{task_id}")
     if not sha or clean is None:
         return "", False

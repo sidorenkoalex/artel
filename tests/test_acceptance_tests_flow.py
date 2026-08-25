@@ -376,6 +376,101 @@ class AcceptanceTraceabilityFunctionTest(unittest.TestCase):
 
 
 # --------------------------------------------------------------------------
+# guard: источник-агностичные ядра (SPEC T031) — тот же разбор с диска и
+# с ВЕТКИ задачи (orchestrator/fsm.py, `gitcmd.show`/`ls_tree_files`) не
+# должен раздваиваться; здесь сверяется само ядро в отрыве от источника
+# файлов, минуя git целиком.
+
+class ScanAcContentTest(unittest.TestCase):
+    """`guard.scan_ac_content` — то же ядро, что использует
+    `scan_acceptance_tests`, но по уже прочитанным текстам."""
+
+    def test_equivalent_to_scan_acceptance_tests_on_disk(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        tdir = Path(tmp.name)
+        (tdir / "acceptance_tests").mkdir()
+        (tdir / "acceptance_tests" / "test_ac.py").write_text(
+            AC_TEST_BOTH_COVERED, encoding="utf-8")
+
+        from_disk = guard.scan_acceptance_tests(tdir)
+        from_content = guard.scan_ac_content([AC_TEST_BOTH_COVERED])
+
+        self.assertEqual(from_disk, from_content)
+
+    def test_empty_sources_is_empty_not_an_error(self):
+        self.assertEqual(guard.scan_ac_content([]), (set(), {}))
+
+    def test_multiple_sources_are_merged(self):
+        tested, markers = guard.scan_ac_content([
+            "def test_ac1_x():\n    pass\n",
+            "# AC-2: manual — проверка глазами\n",
+        ])
+        self.assertEqual(tested, {1})
+        self.assertEqual(markers[2], ("manual", "проверка глазами"))
+
+
+class TraceabilityErrorsFromContentTest(unittest.TestCase):
+    """`guard.traceability_errors_from_content` — то же ядро, что
+    `acceptance_traceability_errors`, но по уже прочитанным SPEC/тестам."""
+
+    def test_equivalent_to_acceptance_traceability_errors_on_disk(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        tdir = Path(tmp.name)
+        spec_text = SPEC_V2.format(task="T999", extra="")
+        (tdir / "SPEC.md").write_text(spec_text, encoding="utf-8")
+        (tdir / "acceptance_tests").mkdir()
+        (tdir / "acceptance_tests" / "test_ac.py").write_text(
+            AC_TEST_MISSING_AC2, encoding="utf-8")
+
+        from_disk = guard.acceptance_traceability_errors(tdir)
+        meta = guard.yamlmini.frontmatter(spec_text) or {}
+        tested, markers = guard.scan_ac_content([AC_TEST_MISSING_AC2])
+        from_content = guard.traceability_errors_from_content(
+            spec_text, meta, tested, markers)
+
+        self.assertEqual(from_disk, from_content)
+        self.assertTrue(any("AC-2" in e for e in from_content), from_content)
+
+    def test_skip_tests_meta_short_circuits_to_no_errors(self):
+        spec_text = SPEC_V2.format(task="T999", extra="")
+        meta = {"schema_version": 2, "skip_tests": "демонстрационный пропуск"}
+
+        errors = guard.traceability_errors_from_content(
+            spec_text, meta, set(), {})
+
+        self.assertEqual(errors, [])
+
+
+class CheckContentTest(unittest.TestCase):
+    """`guard.check_content` — то же ядро, что `check`, по уже
+    прочитанному тексту (SPEC T031: чтение с диска или с ВЕТКИ задачи
+    при чужом чекауте, `orchestrator/fsm.py` `guard_refuses`)."""
+
+    def test_equivalent_to_check_on_disk(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        path = Path(tmp.name) / "SPEC.md"
+        text = SPEC_V2.format(task="T999", extra="")
+        path.write_text(text, encoding="utf-8")
+
+        from_disk = guard.check(path)
+        from_content = guard.check_content(str(path), text)
+
+        self.assertEqual(from_disk, from_content)
+        self.assertEqual(from_disk, [])
+
+    def test_broken_structure_is_flagged_the_same_way(self):
+        text = SPEC_V1.replace("status: ready", "status: недопустимо")
+
+        errors = guard.check_content("ветка:tasks/T999/SPEC.md", text)
+
+        self.assertTrue(any("недопустимый status" in e for e in errors),
+                        errors)
+
+
+# --------------------------------------------------------------------------
 # FSM: критерий 1 — маршрут spec_gate -> tests_writing / in_dev.
 
 class SpecGateRoutingTest(TmpRootTest):
