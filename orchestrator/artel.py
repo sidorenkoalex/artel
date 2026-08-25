@@ -6,14 +6,14 @@
 
 Состояния:
   spec_writing -> spec_gate -> tests_writing -> in_dev -> review -> acceptance -> merge_gate -> done
-                     |                             |            ^________|  (changes_requested, <=3)
-                     |                             |            ^___________ (acceptance reject, <=1)
+                     |                             ^________|  (changes_requested, <=3)
+                     |                             ^___________ (acceptance reject, <=1)
   из любого: escalated (вопрос Оператору), killed.
 
 `tests_writing` (A4, tasks/T023) — приёмочные тесты до кода, роль
 test_author: `spec_gate` заводит её при approve, если SPEC не помечен
 `skip_tests` и несёт AC-разметку критериев (`schema_version >= 2`); иначе
-approve идёт прямо в `in_dev`, как до T023. Выход тестов_writing —
+approve идёт прямо в `in_dev`, как до T023. Выход из `tests_writing` —
 каждый AC-n получил тест либо пометку manual/skip/escalate
 (`tasks/<id>/acceptance_tests/`); `escalate` уводит задачу в `escalated`
 немедленно. После выхода каталог `acceptance_tests/` залочен фиксацией

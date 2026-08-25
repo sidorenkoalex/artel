@@ -47,6 +47,12 @@ GH_TIMEOUT_SEC = 60
 CI_CHECKS_PER_PAGE = 100
 CI_CHECKS_MAX_PAGES = 20
 PUMP_JOIN_TIMEOUT_SEC = 10
+# Предел прогона acceptance_tests/ на гейте review -> acceptance
+# (orchestrator/acceptance.py, SPEC T023 требование 6). Без него зависший
+# тест (сетевой стол, бесконечный цикл, дедлок) вешает advance/auto без
+# предела и без журнала; истёкший предел — красный прогон, тем же стилем,
+# что и таймаут шага агента.
+ACCEPTANCE_TIMEOUT_SEC = 300
 # Провал шага по коду возврата ретраится с бэкоффом; ретраи не считаются
 # итерациями ревью (их двигает только вердикт REVIEW.md в cmd_advance).
 AGENT_RETRIES = 2

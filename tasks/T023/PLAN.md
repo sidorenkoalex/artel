@@ -161,6 +161,40 @@ tests_writing» → механика меняется на «правка тес
    --all`. Мутационные проверки новых отказов (см. «Влияние на систему»):
    вручную откатить каждую новую защиту и убедиться, что кодирующий её
    тест краснеет, затем вернуть.
+10. **Итерация 2: замечания ревью 1.** Тот же диф, та же зона.
+   - blocker (лок молча пропускался при ошибке git — fail-open вместо
+     fail-closed, требование 5): `gitcmd.diff_paths` возвращает `None`,
+     когда `git diff --quiet` отвечает кодом вне `{0,1}` (например,
+     `tests_locked_sha` недостижим после rebase/squash ветки задачи).
+     Было `if locked and gitcmd.diff_paths(...)`: `locked and None` —
+     ложно `False`, отказа перехода не было. Теперь `orchestrator/fsm.py`
+     (ветка `in_dev`, ~153–176) различает три исхода: `diff is None` —
+     отказ перехода «лок не проверен: git не ответил» (fail-closed, тем
+     же принципом, что `fixation.check_integrity()` при неответившем git);
+     `diff is True` — прежний отказ «изменены после лока»; `diff is
+     False` — переход проходит. Тест: `LockTest.
+     test_unreachable_locked_sha_fails_closed`
+     (tests/test_acceptance_tests_flow.py) — подменяет
+     `tests_locked_sha` заведомо недостижимым sha, проверяет отказ
+     перехода и текст причины.
+   - major (прогон unittest без таймаута мог повесить `advance`/`auto`,
+     требование 6): `orchestrator/acceptance.py:run()` звал
+     `subprocess.run` без `timeout=`, в отличие от остальных
+     subprocess-вызовов пакета. Добавлена `config.ACCEPTANCE_TIMEOUT_SEC`
+     (300с) и `timeout=` в вызове; `subprocess.TimeoutExpired` ловится
+     как красный прогон с причиной «прогон превысил Nс — завис или ждёт
+     сетевой ответ» (тем же стилем, что таймаут шага агента в runner.py).
+     Мутационная проверка (вручную, не отдельным юнитом — реальный
+     `time.sleep` в наборе бьёт по скорости прогона): `acceptance_tests/`
+     с `time.sleep(2)` внутри `test_ac1_slow`, `config.ACCEPTANCE_TIMEOUT_SEC`
+     подменён на 1 через `mock.patch.object` — `run()` вернула
+     `(False, "прогон превысил 1с — завис или ждёт сетевой ответ")` за
+     ~1с, не за 2.
+   - minor (ASCII-диаграмма состояний разъехалась после вставки
+     `tests_writing`, опечатка «тестов_writing»): `orchestrator/
+     artel.py:8–16` — колонки `^`/`|` пересчитаны под новую ширину
+     (`^` под `in_dev`, `|` под `review`, лишний непояснённый `|` убран);
+     «Выход тестов_writing» → «Выход из `tests_writing`».
 
 ## Покрытие требований
 

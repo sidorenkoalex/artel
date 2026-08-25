@@ -151,18 +151,36 @@ def cmd_advance(task_id: str) -> None:
             if guard_refuses(conn, task_id, tdir / "PLAN.md"):
                 return
             locked = t["tests_locked_sha"]
-            if locked and gitcmd.diff_paths(
-                    locked, "HEAD", f"tasks/{task_id}/acceptance_tests"):
-                detail = (f"acceptance_tests/ изменены после лока "
-                          f"(sha {locked}) — спор с тестом = эскалация, "
-                          f"не правка")
-                store.journal(conn, task_id, "fsm",
-                              "переход отклонён: лок приёмочных тестов",
-                              detail)
-                print(f"[{task_id}] переход отклонён: {detail}")
-                print(f"  дальше: верни acceptance_tests/ как было, либо "
-                      f"эскалируй разногласие Оператору")
-                return
+            if locked:
+                diff = gitcmd.diff_paths(
+                    locked, "HEAD", f"tasks/{task_id}/acceptance_tests")
+                if diff is None:
+                    # git не ответил (недостижимый sha после rebase/squash,
+                    # сбой команды) — сверять нечего, но это не «нечего
+                    # сверять как задумано»: fail-closed тем же принципом,
+                    # что и fixation.check_integrity() при неответившем git
+                    # (ADR-0002, «неизвестный статус — это нельзя»).
+                    detail = (f"лок acceptance_tests/ не проверен: git не "
+                              f"ответил на sha {locked} — сверка невозможна")
+                    store.journal(conn, task_id, "fsm",
+                                  "переход отклонён: лок приёмочных тестов",
+                                  detail)
+                    print(f"[{task_id}] переход отклонён: {detail}")
+                    print(f"  дальше: разберись, почему git не отвечает на "
+                          f"tests_locked_sha={locked}, и повтори "
+                          f"artel.py advance {task_id}")
+                    return
+                if diff:
+                    detail = (f"acceptance_tests/ изменены после лока "
+                              f"(sha {locked}) — спор с тестом = эскалация, "
+                              f"не правка")
+                    store.journal(conn, task_id, "fsm",
+                                  "переход отклонён: лок приёмочных тестов",
+                                  detail)
+                    print(f"[{task_id}] переход отклонён: {detail}")
+                    print(f"  дальше: верни acceptance_tests/ как было, "
+                          f"либо эскалируй разногласие Оператору")
+                    return
             store.set_state(conn, task_id, "review", "fsm",
                             "MR готов — прогон ревьювера")
         else:

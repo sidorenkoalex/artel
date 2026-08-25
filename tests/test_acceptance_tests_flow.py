@@ -731,6 +731,20 @@ class LockTest(unittest.TestCase):
 
         self.assertEqual(self.state(), "review")
 
+    def test_unreachable_locked_sha_fails_closed(self):
+        """git не может сравнить sha (rebase/squash увёл коммит из истории)
+        — отказ перехода, не тихий пропуск лока (REVIEW.md T023, замечание 1,
+        blocker: `locked and diff_paths(...)` было `locked and None` = False).
+        """
+        self.enter_in_dev()
+        conn = store.db()
+        store.update_task(conn, self.TASK, tests_locked_sha="d" * 40)
+
+        out = self.capture(fsm.cmd_advance, self.TASK)
+
+        self.assertEqual(self.state(), "in_dev", "переход не должен пройти")
+        self.assertIn("не проверен", out)
+
 
 if __name__ == "__main__":
     unittest.main()

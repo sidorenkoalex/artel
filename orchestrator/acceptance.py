@@ -26,9 +26,15 @@ def run(tdir: Path) -> tuple[bool, str]:
     tests_dir = tdir / "acceptance_tests"
     if not tests_dir.is_dir():
         return True, "acceptance_tests/ нет — приёмочные тесты не заведены"
-    res = subprocess.run(
-        ["python3", "-m", "unittest", "discover", "-s", str(tests_dir)],
-        cwd=config.ROOT, capture_output=True, text=True)
+    try:
+        res = subprocess.run(
+            ["python3", "-m", "unittest", "discover", "-s", str(tests_dir)],
+            cwd=config.ROOT, capture_output=True, text=True,
+            timeout=config.ACCEPTANCE_TIMEOUT_SEC)
+    except subprocess.TimeoutExpired as exc:
+        tail = ((exc.stdout or "") + (exc.stderr or ""))[-2000:]
+        return False, (f"прогон превысил {config.ACCEPTANCE_TIMEOUT_SEC}с "
+                       f"— завис или ждёт сетевой ответ\n{tail}")
     tail = (res.stdout + res.stderr)[-2000:]
     return res.returncode == 0, tail
 
