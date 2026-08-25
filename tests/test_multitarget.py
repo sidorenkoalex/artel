@@ -142,6 +142,11 @@ class TmpRootTest(unittest.TestCase):
                                        lambda slot: "tok-test")
         kc_patcher.start()
         self.addCleanup(kc_patcher.stop)
+        pf_patcher = mock.patch(
+            "orchestrator.doctor.preflight_checks",
+            lambda role, target: [])
+        pf_patcher.start()
+        self.addCleanup(pf_patcher.stop)
 
     def write_targets(self, text: str = TARGETS_YAML) -> None:
         config.TARGETS.write_text(text, encoding="utf-8")

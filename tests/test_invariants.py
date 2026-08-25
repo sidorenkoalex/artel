@@ -199,6 +199,21 @@ class FsmTest(unittest.TestCase):
         spy_patcher.start()
         self.addCleanup(spy_patcher.stop)
 
+        # Песочница не имеет права зависеть от реального keychain машины,
+        # на которой гоняются тесты (тот же приём, что и `TmpRootTest`
+        # в test_multitarget_invariants.py) — иначе pre-flight (A3, SPEC
+        # T022 требование 2) блокирует `run` не по предмету свипа, а по
+        # тому, что нашлось в связке ключей конкретного ноутбука.
+        kc_patcher = mock.patch.object(runner.keychain, "token",
+                                       lambda slot: "tok-test")
+        kc_patcher.start()
+        self.addCleanup(kc_patcher.stop)
+        pf_patcher = mock.patch(
+            "orchestrator.doctor.preflight_checks",
+            lambda role, target: [])
+        pf_patcher.start()
+        self.addCleanup(pf_patcher.stop)
+
         self.set_ci(GREEN_CI)
 
         self.capture(catalog.cmd_init)

@@ -31,6 +31,28 @@ def cmd_run(task_id: str) -> None:
     if role is None:
         sys.exit(f"[{task_id}] в состоянии {t['state']} агент не запускается")
 
+    # Pre-flight перед стартом шага (SPEC T022, требование 2): быстрые
+    # проверки окружения (CLI найден, токен роли добыт, диск, layout
+    # внешнего target'а) — до git-сверки и до попыток агента, отдельным
+    # модулем (ADR-0003 3ж — «одна проверка, одно место»; отложенный
+    # импорт по тому же приёму, что store._record_fixation берёт fixation:
+    # doctor читает runner по имени, runner не должен знать о doctor
+    # на уровне модуля). Провал — шаг не начат, без ретрая, с именованной
+    # причиной. Версия CLI ≠ пин — предупреждение, не блок (требование 5).
+    from . import doctor
+    preflight = doctor.preflight_checks(role, t["target"] or config.DEFAULT_TARGET)
+    for check in preflight:
+        if check.status == "warn":
+            detail = f"{check.name}: {check.detail}"
+            store.journal(conn, task_id, role, "pre-flight WARNING", detail)
+            print(f"[{task_id}] ВНИМАНИЕ: {detail}")
+    failed = [c for c in preflight if c.status == "fail"]
+    if failed:
+        reason = "; ".join(f"{c.name}: {c.detail}" for c in failed)
+        store.journal(conn, task_id, role, "pre-flight FAILED", reason)
+        print(f"[{task_id}] pre-flight провален — шаг не начат: {reason}")
+        return
+
     # Сверка при старте каждого шага (ADR-0003 п.17, SPEC T021 требование
     # 5): вход шага сравнивается с sha, зафиксированным на последнем
     # переходе FSM. Расхождение или грязная копия артефактов — инцидент
@@ -286,18 +308,9 @@ def run_agent_once(conn, task_id: str, role: str, prompt: str,
         store.journal(conn, task_id, role, "agent env WARNING", detail)
         print(f"[{task_id}] ВНИМАНИЕ: {detail}")
 
-    # Как и с идентичностью: отсутствие токена — не блок (вдруг CLI
-    # аутентифицируется иначе), но сказать надо до запуска, с починкой,
-    # а не хвостом лога «Not logged in» после трёх попыток.
-    if not env.get("CLAUDE_CODE_OAUTH_TOKEN") and not env.get(
-            "ANTHROPIC_API_KEY"):
-        detail = ("токен роли не найден в keychain (слоты: "
-                  f"{', '.join(roles.token_slots(role)) or 'нет'}) — CLI "
-                  "в чистом HOME ответит «Not logged in»; чинится: "
-                  "`claude setup-token`, затем `security "
-                  "add-generic-password -a artel -s artel-token -U`")
-        store.journal(conn, task_id, role, "agent env WARNING", detail)
-        print(f"[{task_id}] ВНИМАНИЕ: {detail}")
+    # Отсутствие токена теперь блокирует шаг раньше, в pre-flight
+    # `cmd_run` (SPEC T022, требование 2) — до этой точки код не доходит,
+    # если токена нет ни в keychain, ни в ambient-окружении.
 
     print(f"[{task_id}] лог шага: {log_path}  (наблюдать: tail -f {log_path})")
     store.journal(conn, task_id, role, "agent run started",

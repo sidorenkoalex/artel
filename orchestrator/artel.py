@@ -61,7 +61,8 @@ workspace, tasks, knowledge, logs). БД одна на все проекты: с
 Команды:
   init | new "<название>" | status | show <id> | advance <id> |
   run <id> | auto <id> | approve <id> [sha] | reject <id> "<причина>" |
-  kill <id> | log <id> | budget <id> <usd> | target-init <target>
+  kill <id> | log <id> | budget <id> <usd> | target-init <target> |
+  doctor [--restore] | alert-ack <id> "<решение>"
 
 `approve` на гейтах, где фиксация уже есть (A2b, ADR-0003 п.15),
 подтверждает КОНКРЕТНЫЙ sha: без него печатает текущий зафиксированный
@@ -94,6 +95,8 @@ SPEC, PLAN — в ревью, REVIEW — из ревью). Нарушение с
   auto      цикл run+advance до места, где нужен человек
   cleanup   kill switch и уборка хвостов задачи
   catalog   каталог задач: init, new, status, show, log
+  alerts    таблица alerts: incident|threshold|trigger, ack с решением (A3)
+  doctor    pre-flight, recovery-сверка, сироты, смоук CLI/изоляции (A3)
 """
 import sys
 from pathlib import Path
@@ -106,7 +109,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from orchestrator import (auto, budget, catalog,  # noqa: E402
-                          cleanup, fsm, projects, runner)
+                          cleanup, doctor, fsm, projects, runner)
 
 
 def main() -> None:
@@ -132,6 +135,9 @@ def main() -> None:
         "budget": lambda: budget.cmd_budget(rest[0],
                                             rest[1] if len(rest) > 1 else ""),
         "target-init": lambda: projects.cmd_target_init(rest[0]),
+        "doctor": lambda: doctor.cmd_doctor("--restore" in rest),
+        "alert-ack": lambda: doctor.cmd_alert_ack(
+            rest[0], rest[1] if len(rest) > 1 else ""),
     }
     fn = table.get(cmd)
     if fn is None:

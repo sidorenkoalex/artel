@@ -341,6 +341,11 @@ class CmdRunLoggingTest(TmpRootTest):
                                        lambda slot: "tok-test")
         kc_patcher.start()
         self.addCleanup(kc_patcher.stop)
+        pf_patcher = mock.patch(
+            "orchestrator.doctor.preflight_checks",
+            lambda role, target: [])
+        pf_patcher.start()
+        self.addCleanup(pf_patcher.stop)
 
     def run_agent(self, lines, returncode: int = 0):
         with mock.patch.object(runner.subprocess, "Popen") as popen:

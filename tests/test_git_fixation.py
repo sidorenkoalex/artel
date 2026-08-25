@@ -267,6 +267,11 @@ class ExternalIntegrityIncidentBlocksRunTest(TmpRootTest):
                                     lambda slot: "tok-test")
         patcher.start()
         self.addCleanup(patcher.stop)
+        pf_patcher = mock.patch(
+            "orchestrator.doctor.preflight_checks",
+            lambda role, target: [])
+        pf_patcher.start()
+        self.addCleanup(pf_patcher.stop)
 
     def repo(self) -> Path:
         return config.PROJECTS / "sled"
@@ -515,6 +520,9 @@ class RealPultGitTest(unittest.TestCase):
             self.patches.enter_context(mock.patch.object(config, attr, value))
         self.patches.enter_context(mock.patch.object(
             runner.keychain, "token", lambda slot: "tok-test"))
+        self.patches.enter_context(mock.patch(
+            "orchestrator.doctor.preflight_checks",
+            lambda role, target: []))
 
         self.capture(catalog.cmd_init)
         self.capture(catalog.cmd_new, "Git-фиксация")  # заводит T001
