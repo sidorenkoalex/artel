@@ -1,5 +1,5 @@
 ---
-built_at_sha: 701d9c90e1884cace5cbdd3a3725a7b575d7f53a
+built_at_sha: 970463e1b3fda0a0d8478e2384c7519776c040b2
 ---
 
 # Codebase-map пульта
@@ -291,11 +291,12 @@ built_at_sha: 701d9c90e1884cace5cbdd3a3725a7b575d7f53a
 - `artifact_text`
 - `git_diff_part`
 - `package_note`
+- `previous_verdict_sha`
 - `review_package`
 - `truncate_diff`
 - `truncate_package`
 
-**Импортирует:** `orchestrator/__init__.py`, `orchestrator/config.py`, `orchestrator/gitcmd.py`
+**Импортирует:** `orchestrator/__init__.py`, `orchestrator/config.py`, `orchestrator/gitcmd.py`, `orchestrator/store.py`
 
 **Импортируется:** `orchestrator/runner.py`, `tests/test_review_freshness.py`, `tests/test_review_package.py`
 
@@ -380,7 +381,7 @@ built_at_sha: 701d9c90e1884cace5cbdd3a3725a7b575d7f53a
 
 **Импортирует:** `orchestrator/__init__.py`, `orchestrator/config.py`, `orchestrator/fixation.py`
 
-**Импортируется:** `orchestrator/alerts.py`, `orchestrator/auto.py`, `orchestrator/brief.py`, `orchestrator/budget.py`, `orchestrator/catalog.py`, `orchestrator/cleanup.py`, `orchestrator/doctor.py`, `orchestrator/fixation.py`, `orchestrator/fsm.py`, `orchestrator/runner.py`, `orchestrator/spend.py`, `tests/test_acceptance_tests_flow.py`, `tests/test_advance_guard.py`, `tests/test_agent_failure.py`, `tests/test_agent_log.py`, `tests/test_agent_prompt.py`, `tests/test_analyst_role.py`, `tests/test_auto_cycle.py`, `tests/test_brief.py`, `tests/test_doctor.py`, `tests/test_git_fixation.py`, `tests/test_invariants.py`, `tests/test_kill_cleanup.py`, `tests/test_multitarget.py`, `tests/test_multitarget_invariants.py`, `tests/test_review_freshness.py`, `tests/test_review_package.py`, `tests/test_spec_budget.py`, `tests/test_step_cost.py`
+**Импортируется:** `orchestrator/alerts.py`, `orchestrator/auto.py`, `orchestrator/brief.py`, `orchestrator/budget.py`, `orchestrator/catalog.py`, `orchestrator/cleanup.py`, `orchestrator/doctor.py`, `orchestrator/fixation.py`, `orchestrator/fsm.py`, `orchestrator/review.py`, `orchestrator/runner.py`, `orchestrator/spend.py`, `tests/test_acceptance_tests_flow.py`, `tests/test_advance_guard.py`, `tests/test_agent_failure.py`, `tests/test_agent_log.py`, `tests/test_agent_prompt.py`, `tests/test_analyst_role.py`, `tests/test_auto_cycle.py`, `tests/test_brief.py`, `tests/test_doctor.py`, `tests/test_git_fixation.py`, `tests/test_invariants.py`, `tests/test_kill_cleanup.py`, `tests/test_multitarget.py`, `tests/test_multitarget_invariants.py`, `tests/test_review_freshness.py`, `tests/test_review_package.py`, `tests/test_spec_budget.py`, `tests/test_step_cost.py`
 
 ## orchestrator/targets.py
 
