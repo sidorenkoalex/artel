@@ -50,3 +50,30 @@ jobs:
             echo "$CHANGED"
             echo "Фаза 0 (один токен): warning. После разделения PAT — fail."
           fi
+
+  codebase-map:
+    name: Карта кодовой базы генерируется и свежа
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
+      - name: генератор отрабатывает без ошибок (AC-7, AC-8)
+        run: python3 scripts/codebase_map.py
+      - name: закоммиченная карта не стухла (AC-9, ред. Оператора 25.08)
+        run: |
+          # Стухшая карта = изменения отображаемых модулей между
+          # built_at_sha и head. Равенство sha невыполнимо структурно:
+          # коммит, обновляющий карту, не несёт собственный sha
+          # (ревью T027, итерация 1).
+          base=$(git show HEAD:docs/codebase-map.md | sed -n 's/^built_at_sha: *//p' | head -1)
+          if [ -z "$base" ]; then
+            echo "в закоммиченной карте нет built_at_sha"
+            exit 1
+          fi
+          stale=$(git diff --name-only "$base" HEAD -- 'orchestrator/*.py' 'scripts/*.py' 'tests/*.py')
+          if [ -n "$stale" ]; then
+            echo "карта стухла: модули менялись после built_at_sha=$base:"
+            echo "$stale"
+            exit 1
+          fi
