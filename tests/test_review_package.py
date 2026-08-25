@@ -92,13 +92,17 @@ class FakeGit:
 
     def __init__(self, stat="orchestrator/artel.py | 2 +-", diff="diff --git a b",
                  returncode: int = 0, stderr: str = "", files=None,
-                 raises_on: str = ""):
+                 raises_on: str = "", map_diff: str = ""):
         self.stat = stat
         self.diff = diff
         self.returncode = returncode
         self.stderr = stderr
         self.files = dict(files or {})
         self.raises_on = raises_on
+        # T028: `--name-only` — сверка свежести docs/codebase-map.md
+        # (orchestrator/brief.py), другой запрос, чем ревью-пакетный
+        # `--stat`/полный diff ветки; по умолчанию «карта свежа» (пусто).
+        self.map_diff = map_diff
         self.calls: list[list[str]] = []
 
     def __call__(self, *args: str) -> subprocess.CompletedProcess:
@@ -108,7 +112,12 @@ class FakeGit:
                                      "invalid continuation byte")
         if args and args[0] == "show":
             return self.show(args)
-        stdout = self.stat if "--stat" in args else self.diff
+        if "--name-only" in args:
+            stdout = self.map_diff
+        elif "--stat" in args:
+            stdout = self.stat
+        else:
+            stdout = self.diff
         return subprocess.CompletedProcess(
             list(args), self.returncode, "" if self.returncode else stdout,
             self.stderr)
@@ -560,6 +569,13 @@ class CmdRunReviewPackageTest(unittest.TestCase):
         # cmd_run и cmd_new читают из ROOT.
         for name in ("skills", "templates"):
             shutil.copytree(REPO / name, root / name)
+        # T028: бриф роли developer читает docs/codebase-map.md и CLAUDE.md
+        # из ROOT — без них шаг разработчика падает ENOENT.
+        (root / "docs").mkdir()
+        (root / "docs" / "codebase-map.md").write_text(
+            "---\nbuilt_at_sha: 0000000000000000000000000000000000000000\n"
+            "---\n\n# Карта\n", encoding="utf-8")
+        (root / "CLAUDE.md").write_text("# Конвенции\n", encoding="utf-8")
         for attr, value in (("ROOT", root),
                             ("DB", root / ".artel" / "state.db"),
                             ("TASKS", root / "tasks"),
@@ -735,12 +751,19 @@ class CmdRunReviewPackageTest(unittest.TestCase):
 
         self.assertNotIn("--- РЕВЬЮ-ПАКЕТ ---", self.prompt())
         self.assertEqual(self.journal_details("ревью-пакет собран"), [])
-        # Два вызова, и оба — не о пакете: `role_env` берёт авторство
-        # коммита шага (pre-flight в setUp заглушен — его git-вызовы
-        # проверяет test_doctor). Список точный, а не «нет diff»: любой
-        # show или diff в шаге разработчика по-прежнему провалит тест.
+        # Три вызова, и ни один — не о пакете: первый — сверка свежести
+        # docs/codebase-map.md для брифа роли (orchestrator/brief.py,
+        # tasks/T028), два следующих — `role_env` берёт авторство коммита
+        # шага (pre-flight в setUp заглушен — его git-вызовы проверяет
+        # test_doctor). Список точный: любой `show` (чтение артефакта из
+        # ветки — ревью-пакетное) в шаге разработчика по-прежнему провалит
+        # тест.
         self.assertEqual(self.git.calls,
-                         [["config", "--get", "user.name"],
+                         [["diff", "--name-only",
+                           "0000000000000000000000000000000000000000",
+                           "HEAD", "--", "orchestrator/*.py", "scripts/*.py",
+                           "tests/*.py"],
+                          ["config", "--get", "user.name"],
                           ["config", "--get", "user.email"]],
                          "diff разработчику не собирается")
 
