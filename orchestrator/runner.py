@@ -18,6 +18,31 @@ GIT_IDENTITY = (
 )
 
 
+def step_role(t) -> str | None:
+    """Роль текущего шага задачи; None — состояние не агентское.
+
+    `spec_writing` сознательно не входит в `config.STATE_ROLE` статически
+    (SPEC T025, требование 1 — обратная совместимость): задача без
+    `tasks/<id>/TZ.md` обязана жить прежним флоу («SPEC пишет Оператор»),
+    и `run`/`auto` не имеют права ни разу попытаться запустить агента
+    просто потому, что кто-то добавил запись в общий словарь состояний.
+    Роль `analyst` подключается только когда `TZ.md` реально лежит
+    в каталоге задачи; при отсутствии файла функция ведёт себя так же,
+    как и до этой задачи (роли нет). Единственная точка резолвинга,
+    которую зовут и `cmd_run`, и `auto.cmd_auto` (`STATE_ROLE`/
+    `AUTO_STOP` как словари при этом не трогаются — их читают
+    `test_invariants.FsmStatesCoverTheCodeTest` и `test_auto_cycle.*`
+    буквально по ключам).
+    """
+    role = config.STATE_ROLE.get(t["state"])
+    if role is not None:
+        return role
+    if t["state"] == "spec_writing" and (
+            config.TASKS / t["id"] / "TZ.md").exists():
+        return "analyst"
+    return None
+
+
 def cmd_run(task_id: str) -> None:
     """Запуск агента текущего шага (claude CLI, headless)."""
     conn = store.db()
@@ -27,8 +52,11 @@ def cmd_run(task_id: str) -> None:
     blocked = budget.budget_block(t)
     if blocked is not None:
         sys.exit(blocked)
-    role = config.STATE_ROLE.get(t["state"])
+    role = step_role(t)
     if role is None:
+        if t["state"] == "spec_writing":
+            sys.exit(f"[{task_id}] SPEC пишет Оператор — TZ.md не заведён "
+                     f"(`new \"...\" --tz <файл>` заведёт роль analyst)")
         sys.exit(f"[{task_id}] в состоянии {t['state']} агент не запускается")
 
     # Pre-flight перед стартом шага (SPEC T022, требование 2): быстрые
@@ -84,7 +112,27 @@ def cmd_run(task_id: str) -> None:
         sys.exit(f"[{task_id}] скил роли {role} не прочитан: {exc}")
     task_ref = f"tasks/{task_id}"
     package = None
-    if role == "test_author":
+    if role == "analyst":
+        mission = (
+            f"Роль: аналитик. Задача {task_id}, ветка {t['branch']}. "
+            f"Единственный вход — ТЗ Оператора, разработчик увидит задачу "
+            f"только после тебя.\n"
+            f"1) Прочитай {task_ref}/TZ.md. 2) Создай ветку от main, если "
+            f"её ещё нет.\n"
+            f"3) ТЗ достаточно — напиши {task_ref}/SPEC.md по "
+            f"templates/SPEC.md: критерии приёмки размечены AC-n строго "
+            f"из формулировок ТЗ, «не входит» — из его же границ, "
+            f"budget_usd по классу задачи и только вниз от дефолта, "
+            f"status: ready.\n"
+            f"4) ТЗ неясно или неполно — не домысливай: один батч всех "
+            f"вопросов в {task_ref}/QUESTIONS.md по templates/QUESTIONS.md, "
+            f"отсортированный по блокирующести, каждый — с вариантами "
+            f"и дефолтом. SPEC.md в этом случае не трогай — сам файл "
+            f"эскалирует задачу.\n"
+            f"5) Прогони scripts/guard.py на своём файле, закоммить в "
+            f"ветку. Код репозитория не трогай."
+        )
+    elif role == "test_author":
         mission = (
             f"Роль: автор приёмочных тестов. Задача {task_id}, ветка "
             f"{t['branch']}. Разработчик увидит задачу только после тебя —\n"

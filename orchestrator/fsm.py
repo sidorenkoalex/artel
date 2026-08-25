@@ -37,6 +37,20 @@ def cmd_advance(task_id: str) -> None:
     tdir = config.TASKS / task_id
 
     if state == "spec_writing":
+        # Батч вопросов analyst (SPEC T025, требование 4): файл на месте —
+        # эскалация немедленно, не дожидаясь статуса SPEC.md, тем же
+        # приёмом, что маркер `escalate` в tests_writing (T023). Второй
+        # батч по тому же ТЗ структурно недостижим раньше ответа: пока
+        # задача в escalated, run для неё не стартует.
+        questions = tdir / "QUESTIONS.md"
+        if questions.exists():
+            if guard_refuses(conn, task_id, questions):
+                return
+            store.update_task(conn, task_id, escalated_from="spec_writing")
+            store.set_state(conn, task_id, "escalated", "fsm",
+                            f"analyst: батч вопросов по ТЗ — {questions}")
+            print(f"[{task_id}] эскалация analyst: см. {questions}")
+            return
         meta = artifacts.frontmatter(tdir / "SPEC.md")
         if meta.get("status") == "ready":
             if guard_refuses(conn, task_id, tdir / "SPEC.md"):

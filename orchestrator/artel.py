@@ -67,8 +67,15 @@ workspace, tasks, knowledge, logs). БД одна на все проекты: с
 персистентный счётчик проекта. Артефакты задач самой артели до A7
 остаются в tasks/ пульта — особый случай догфуда.
 
+`new "<название>" --tz <файл>` заводит задачу с ТЗ Оператора
+(`tasks/<id>/TZ.md`, SPEC T025): `spec_writing` в этом случае исполняет
+роль analyst (`run`/`auto`), а не Оператор руками — без флага поведение
+не меняется. Батч вопросов analyst (`QUESTIONS.md`) эскалирует задачу
+немедленно на первом же `advance`, тем же путём `escalated_from`, что
+и падение любого другого агентского шага.
+
 Команды:
-  init | new "<название>" | status | show <id> | advance <id> |
+  init | new "<название>" [--tz <файл>] | status | show <id> | advance <id> |
   run <id> | auto <id> | approve <id> [sha] | reject <id> "<причина>" |
   kill <id> | log <id> | budget <id> <usd> | target-init <target> |
   doctor [--restore] | alert-ack <id> "<решение>"
@@ -130,7 +137,9 @@ def main() -> None:
     cmd, rest = args[0], args[1:]
     table = {
         "init": lambda: catalog.cmd_init(),
-        "new": lambda: catalog.cmd_new(rest[0]),
+        "new": lambda: catalog.cmd_new(
+            rest[0],
+            tz_path=(rest[rest.index("--tz") + 1] if "--tz" in rest else None)),
         "status": lambda: catalog.cmd_status(),
         "show": lambda: catalog.cmd_show(rest[0]),
         "advance": lambda: fsm.cmd_advance(rest[0]),

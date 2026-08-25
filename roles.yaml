@@ -10,8 +10,12 @@ roles:
     executor: system            # не LLM: FSM + журнал
     token_slot: artel-orchestrator
   analyst:
-    executor: human             # Фаза 0: SPEC пишет Оператор
-    token_slot: null
+    executor: agent              # A5 (tasks/T025): SPEC из ТЗ Оператора;
+                                  # без tasks/<id>/TZ.md — прежний флоу
+                                  # (SPEC пишет Оператор, run отказывает
+                                  # именованно)
+    token_slot: artel-analyst
+    skills: [conventions-core, escalation-rules, spec-authoring]
   test_author:
     executor: agent              # A4 (tasks/T023): приёмочные тесты до кода
     token_slot: artel-test-author

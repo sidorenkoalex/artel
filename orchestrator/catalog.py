@@ -1,5 +1,7 @@
 """Каталог задач: заведение, список, карточка задачи, журнал шагов."""
 import re
+import sys
+from pathlib import Path
 
 from . import alerts, artifacts, config, store
 
@@ -27,8 +29,36 @@ def cmd_init() -> None:
     print(f"OK: состояние в {config.DB}")
 
 
-def cmd_new(title: str) -> None:
+def _tz_document(task_id: str, title: str, raw: str) -> str:
+    """Оборачивает свободный текст Оператора минимальным фронтматтером
+    (SPEC T025, требование 1): Оператору не нужно писать шапку руками,
+    а `tasks/<id>/TZ.md` остаётся артефактом, который guard проверяет
+    как любой другой тип."""
+    return (
+        f"---\n"
+        f"task: {task_id}\n"
+        f"type: tz\n"
+        f"author_role: operator\n"
+        f"status: draft\n"
+        f"schema_version: 2\n"
+        f"---\n\n"
+        f"# ТЗ: {title}\n\n"
+        f"{raw}"
+    )
+
+
+def cmd_new(title: str, tz_path: str | None = None) -> None:
     conn = store.db()
+    # Файл ТЗ читается ДО того, как расходуется номер задачи и заводится
+    # каталог: нечитаемый путь не должен оставлять после себя ни
+    # наполовину созданную задачу, ни пропущенный номер счётчика.
+    tz_raw = None
+    if tz_path is not None:
+        try:
+            tz_raw = Path(tz_path).read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError) as exc:
+            sys.exit(f"ТЗ не прочитано из {tz_path}: {exc}")
+
     # Номер — из персистентного счётчика target'а, а не из COUNT(*) строк
     # (ADR-0003 3ж): архивация строки номер не освобождает, и реконнект
     # проекта не создаёт коллизий с уже отработанными задачами.
@@ -42,11 +72,21 @@ def cmd_new(title: str) -> None:
     spec = spec.replace("TASK_ID", task_id).replace("<название задачи>", title)
     (task_dir / "SPEC.md").write_text(spec, encoding="utf-8")
 
+    # ТЗ — необязательный вход роли analyst (SPEC T025, требование 1):
+    # без него задача живёт прежним флоу (SPEC пишет Оператор).
+    if tz_raw is not None:
+        (task_dir / "TZ.md").write_text(
+            _tz_document(task_id, title, tz_raw), encoding="utf-8")
+
     store.insert_task(conn, task_id, title, "spec_writing", branch, target,
                       config.DEFAULT_BUDGET_USD)
     store.journal(conn, task_id, "operator", "created", title)
     print(f"[{task_id}] «{title}» создана: заполни {task_dir / 'SPEC.md'}")
-    print(f"  затем: artel.py advance {task_id}  (SPEC status: ready)")
+    if tz_path is not None:
+        print(f"  ТЗ сохранено: {task_dir / 'TZ.md'}")
+        print(f"  затем: artel.py run {task_id}  (запуск analyst)")
+    else:
+        print(f"  затем: artel.py advance {task_id}  (SPEC status: ready)")
 
 
 def cmd_status() -> None:
