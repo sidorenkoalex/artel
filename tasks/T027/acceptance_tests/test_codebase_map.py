@@ -329,7 +329,12 @@ class CiWorkflowTest(unittest.TestCase):
         self.assertNotIn("|| exit 0", block,
                         "запуск генератора глушит ненулевой код возврата через || exit 0")
 
-    def test_ac9_same_job_fails_on_built_at_sha_mismatch_with_head(self):
+    def test_ac9_same_job_fails_when_mapped_modules_changed_after_built_at_sha(self):
+        """AC-9 в редакции Оператора 25.08 (итерация 2, правка залоченного
+        теста — право Оператора по A4): стухшая карта = изменения
+        отображаемых модулей между built_at_sha и head; сравнение sha
+        на равенство структурно невыполнимо — коммит, обновляющий карту,
+        не может нести собственный sha (находка ревью, итерация 1)."""
         found = self._find_generator_job()
         self.assertIsNotNone(
             found, f"ни один джоб в {WORKFLOWS_DIR} не запускает {self.GENERATOR_REF}")
@@ -337,23 +342,22 @@ class CiWorkflowTest(unittest.TestCase):
 
         self.assertIn(
             "built_at_sha", block,
-            "джоб, запускающий генератор, не сверяет built_at_sha закоммиченной карты")
+            "джоб, запускающий генератор, не читает built_at_sha закоммиченной карты")
 
-        head_ref = re.search(r"git rev-parse HEAD|github\.sha|GITHUB_SHA", block)
+        diff_ref = re.search(r"git diff --name-only", block)
         self.assertIsNotNone(
-            head_ref,
-            "джоб не берёт текущий head sha (git rev-parse HEAD / github.sha / "
-            "$GITHUB_SHA) для сравнения с built_at_sha")
+            diff_ref,
+            "джоб не диффует изменения от built_at_sha до head (git diff --name-only)")
 
-        mismatch_cmp = re.search(r"!=|-ne\b", block)
-        self.assertIsNotNone(
-            mismatch_cmp,
-            "джоб не сравнивает built_at_sha с текущим head на неравенство")
+        for mapped in ("orchestrator", "scripts", "tests"):
+            self.assertIn(
+                mapped, block,
+                f"дифф сверки не ограничен отображаемыми модулями ({mapped})")
 
-        fail_on_mismatch = re.search(r"exit\s+[1-9]\d*|sys\.exit\(\s*[1-9]", block)
+        fail_on_stale = re.search(r"exit\s+[1-9]\d*|sys\.exit\(\s*[1-9]", block)
         self.assertIsNotNone(
-            fail_on_mismatch,
-            "джоб не роняет себя (ненулевой exit) при расхождении built_at_sha и head")
+            fail_on_stale,
+            "джоб не роняет себя (ненулевой exit) при стухшей карте")
 
 
 if __name__ == "__main__":
