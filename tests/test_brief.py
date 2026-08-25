@@ -31,6 +31,29 @@ def fake_git_stale(*paths):
     return fake
 
 
+def fake_git_diff_fails(*args) -> subprocess.CompletedProcess:
+    """git не отвечает на саму сверку свежести (`diff --name-only`) —
+    например история переписана и `built_at_sha` в ней больше не найти."""
+    if args and args[0] == "diff":
+        return subprocess.CompletedProcess(
+            list(args), 128, "", "fatal: bad revision ''")
+    return subprocess.CompletedProcess(list(args), 0, "", "")
+
+
+def fake_git_checkout_fails(*paths):
+    """Сверка находит расхождение и checkout-восстановление после
+    регенерации не удаётся — рабочее дерево остаётся грязным."""
+    def fake(*args) -> subprocess.CompletedProcess:
+        if args and args[0] == "diff":
+            return subprocess.CompletedProcess(
+                list(args), 0, "\n".join(paths) + "\n", "")
+        if args and args[0] == "checkout":
+            return subprocess.CompletedProcess(
+                list(args), 1, "", "стенд: checkout упал")
+        return subprocess.CompletedProcess(list(args), 0, "", "")
+    return fake
+
+
 class BriefUnitTest(unittest.TestCase):
     """Песочница: ROOT/TASKS/DB во tmpdir, карта и SPEC на месте."""
 
@@ -118,6 +141,70 @@ class FreshMapTextTest(BriefUnitTest):
             brief.fresh_map_text(store.db(), "T001")
 
         run_mock.assert_not_called()
+
+    def test_failed_freshness_check_marks_the_text_and_raises_an_alert(self):
+        """git не ответил на саму сверку (не только на регенерацию) —
+        то же молчаливое доверие запрещено (REVIEW T028 итерация 1,
+        замечание major)."""
+        conn = store.db()
+
+        with mock.patch.object(gitcmd, "git", fake_git_diff_fails), \
+                mock.patch("subprocess.run") as run_mock:
+            text = brief.fresh_map_text(conn, "T001")
+
+        self.assertIn("КАРТА НЕАКТУАЛЬНА", text)
+        self.assertIn(MAP_FRESH, text, "исходная карта — не переписана")
+        run_mock.assert_not_called()
+
+        rows = conn.execute("SELECT message FROM alerts").fetchall()
+        self.assertTrue(
+            any("сверка свежести карты не удалась" in (r["message"] or "")
+               for r in rows),
+            "алерт о сбое сверки свежести не найден")
+
+    def test_regeneration_restores_the_working_tree_after_reading(self):
+        """Регенерация не должна оставлять незакоммиченную правку в ROOT
+        (REVIEW T028 итерация 1, blocker) — checkout восстанавливает файл
+        сразу после чтения текста в память."""
+        regenerated = MAP_FRESH.replace("aaaa", "bbbb")
+        calls = []
+
+        def fake_run(cmd, **kwargs) -> subprocess.CompletedProcess:
+            (self.root / "docs" / "codebase-map.md").write_text(
+                regenerated, encoding="utf-8")
+            return subprocess.CompletedProcess(cmd, 0, "", "")
+
+        def fake_git(*args) -> subprocess.CompletedProcess:
+            calls.append(args)
+            return fake_git_stale("orchestrator/runner.py")(*args)
+
+        with mock.patch.object(gitcmd, "git", fake_git), \
+                mock.patch("subprocess.run", side_effect=fake_run):
+            brief.fresh_map_text(store.db(), "T001")
+
+        self.assertIn(("checkout", "--", brief.MAP_REL), calls)
+
+    def test_failed_restore_after_regeneration_raises_an_alert(self):
+        regenerated = MAP_FRESH.replace("aaaa", "bbbb")
+
+        def fake_run(cmd, **kwargs) -> subprocess.CompletedProcess:
+            (self.root / "docs" / "codebase-map.md").write_text(
+                regenerated, encoding="utf-8")
+            return subprocess.CompletedProcess(cmd, 0, "", "")
+
+        conn = store.db()
+        with mock.patch.object(
+                gitcmd, "git",
+                fake_git_checkout_fails("orchestrator/runner.py")), \
+                mock.patch("subprocess.run", side_effect=fake_run):
+            text = brief.fresh_map_text(conn, "T001")
+
+        self.assertEqual(text, regenerated, "текст всё равно используется")
+
+        rows = conn.execute("SELECT message FROM alerts").fetchall()
+        self.assertTrue(
+            any("откат правки" in (r["message"] or "") for r in rows),
+            "алерт о неудавшемся откате рабочего дерева не найден")
 
 
 class DeveloperBriefTest(BriefUnitTest):

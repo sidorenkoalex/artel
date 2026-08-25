@@ -7,8 +7,9 @@
 брифа тем же способом, каким уже пользуется CI-джоба `codebase-map`
 (`.github/workflows/ci.yml`, tasks/T027): диапазон `built_at_sha..HEAD`
 по путям `orchestrator/*.py`, `scripts/*.py`, `tests/*.py`. Расхождение —
-регенерация до сборки; сбой регенерации — алерт и честная пометка в
-тексте, не молчаливая выдача стухшей карты (ADR-0003 §3б).
+регенерация до сборки; сбой регенерации или самой сверки — алерт и честная
+пометка в тексте, не молчаливая выдача стухшей карты (ADR-0003 §3б,
+«никогда молчаливое доверие»).
 """
 import hashlib
 import re
@@ -35,23 +36,71 @@ def _built_at_sha(map_text: str) -> str:
     return match.group(1) if match else ""
 
 
-def _stale_paths(base_sha: str) -> list[str]:
+def _stale_paths(base_sha: str) -> list[str] | None:
     """Пути `orchestrator/scripts/tests`, изменившиеся между `base_sha` и
-    HEAD; git не ответил — считаем «расхождений нет» (то же вырожденное
-    решение, каким уже пользуется `gitcmd.diff_paths`: молчание git не
-    повод регенерировать карту вслепую на каждом шаге)."""
+    HEAD; `None` — git не ответил на саму сверку (тот же вырожденный
+    случай, что уже кодирует `gitcmd.diff_paths`).
+
+    Не путать с пустым списком: пустой список — сверка прошла и
+    расхождений нет (требование 6). `None` — сверка не прошла, и молчаливо
+    трактовать её как «расхождений нет» запрещает ADR-0003 §3б ровно тем
+    же способом, что и отказ регенерации (требование 7) — вызывающий код
+    обязан завести тот же алерт и пометку, не тихо отдать карту как
+    свежую (REVIEW T028 итерация 1, замечание major).
+    """
     res = gitcmd.git("diff", "--name-only", base_sha, "HEAD", "--",
                      *MAP_WATCH_GLOBS)
     if res.returncode != 0:
-        return []
+        return None
     return [p for p in res.stdout.splitlines() if p]
 
 
-def _regenerate_map() -> subprocess.CompletedProcess:
+def _regenerate_map(conn, task_id: str) -> tuple[str | None, str]:
     """Перегон `scripts/codebase_map.py` в корне пульта — тот же генератор,
-    которым уже пользуется CI-джоба `codebase-map` (tasks/T027)."""
-    return subprocess.run(["python3", "scripts/codebase_map.py"],
-                          cwd=config.ROOT, capture_output=True, text=True)
+    которым уже пользуется CI-джоба `codebase-map` (tasks/T027).
+
+    Пишет файл на диск в `config.ROOT` (контракт генератора, tasks/T027) —
+    ровно в то рабочее дерево, которое `runner.role_cwd` отдаёт агенту
+    роли developer/analyst как cwd, и которое агент по своей миссии
+    коммитит целиком. Оставлять эту правку незакоммиченной значило бы
+    подсунуть агенту чужое изменение вне зоны его задачи (REVIEW T028
+    итерация 1, blocker) — поэтому сразу после чтения регенерированного
+    текста в память рабочее дерево возвращается к закоммиченному
+    состоянию (`git checkout --`), и это происходит здесь же, до старта
+    агента (`runner.cmd_run` зовёт сборку брифа раньше `run_agent_once`).
+    Откат не удался — использованный текст всё равно возвращается (он уже
+    прочитан), но заводится отдельный алерт: тихо оставить рабочее дерево
+    грязным запрещает тот же принцип, что и молчаливую выдачу стухшей
+    карты.
+
+    Возвращает (текст_карты, причина_отказа) — текст `None` при отказе
+    самой регенерации.
+    """
+    regen = subprocess.run(["python3", "scripts/codebase_map.py"],
+                           cwd=config.ROOT, capture_output=True, text=True)
+    if regen.returncode != 0:
+        reason = regen.stderr.strip()[:200] or f"код возврата {regen.returncode}"
+        return None, reason
+    text = (config.ROOT / MAP_REL).read_text(encoding="utf-8")
+    restore = gitcmd.git("checkout", "--", MAP_REL)
+    if restore.returncode != 0:
+        alerts.raise_alert(
+            conn, store.task_target(conn, task_id), "incident",
+            "brief.codebase_map_restore",
+            f"{MAP_REL} регенерирован в рабочем дереве {config.ROOT}, но "
+            f"откат правки (git checkout --) не удался — файл остаётся "
+            f"незакоммиченным в общем рабочем дереве пульта")
+    return text, ""
+
+
+def _mark_stale(conn, task_id: str, text: str, base_sha: str, message: str,
+                paths: list[str]) -> str:
+    alerts.raise_alert(conn, store.task_target(conn, task_id), "incident",
+                       "brief.codebase_map", message)
+    note = (
+        f"[КАРТА НЕАКТУАЛЬНА: {message}. Использованный built_at_sha="
+        f"{base_sha or '—'}. Пути расхождения: {', '.join(paths)}.]\n\n")
+    return note + text
 
 
 def fresh_map_text(conn, task_id: str) -> str:
@@ -59,27 +108,27 @@ def fresh_map_text(conn, task_id: str) -> str:
 
     Расхождение по `MAP_WATCH_GLOBS` в диапазоне `built_at_sha..HEAD` —
     регенерация до сборки брифа (требование 5, 6, AC-5, AC-6); сбой
-    регенерации — алерт (`alerts.raise_alert`, дедуп по (target, kind,
-    source, message) уже встроен) и явная пометка в начале текста с
-    использованным `built_at_sha` и путями расхождения, карта — прежняя,
-    непереписанная версия (требование 7, AC-7).
+    регенерации, как и сбой самой сверки свежести, — алерт
+    (`alerts.raise_alert`, дедуп по (target, kind, source, message) уже
+    встроен) и явная пометка в начале текста с использованным
+    `built_at_sha` и путями расхождения, карта — прежняя, непереписанная
+    версия (требование 7, AC-7).
     """
     text = (config.ROOT / MAP_REL).read_text(encoding="utf-8")
     base_sha = _built_at_sha(text)
     stale = _stale_paths(base_sha)
+    if stale is None:
+        return _mark_stale(
+            conn, task_id, text, base_sha,
+            "сверка свежести карты не удалась: git не ответил "
+            "(diff --name-only)", ["неизвестно — git не ответил"])
     if not stale:
         return text
-    regen = _regenerate_map()
-    if regen.returncode == 0:
-        return (config.ROOT / MAP_REL).read_text(encoding="utf-8")
-    reason = regen.stderr.strip()[:200] or f"код возврата {regen.returncode}"
+    regenerated, reason = _regenerate_map(conn, task_id)
+    if regenerated is not None:
+        return regenerated
     message = f"регенерация {MAP_REL} не удалась: {reason}"
-    alerts.raise_alert(conn, store.task_target(conn, task_id), "incident",
-                       "brief.codebase_map", message)
-    note = (
-        f"[КАРТА НЕАКТУАЛЬНА: {message}. Использованный built_at_sha="
-        f"{base_sha or '—'}. Пути расхождения: {', '.join(stale)}.]\n\n")
-    return note + text
+    return _mark_stale(conn, task_id, text, base_sha, message, stale)
 
 
 def _journal_component(conn, task_id: str, role: str, label: str,
