@@ -21,10 +21,10 @@ budget_usd: 15
 
 ## Критерии приёмки
 
-1. AC-1: python3 -c "from orchestrator import config;
-   assert config.DEFAULT_BUDGET_USD > 0" завершается без ошибки.
-2. AC-2 (manual): Оператор видит значение константы в выводе
-   status/доки.
+AC-1. python3 -c "from orchestrator import config; assert
+config.DEFAULT_BUDGET_USD > 0" завершается без ошибки.
+
+AC-2. (manual) Оператор видит значение константы в выводе status/доки.
 
 ## Не входит
 
