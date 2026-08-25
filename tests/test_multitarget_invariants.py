@@ -135,6 +135,13 @@ class TmpRootTest(unittest.TestCase):
                                        lambda slot: "tok-test")
         kc_patcher.start()
         self.addCleanup(kc_patcher.stop)
+        # Тесты этого модуля — об окружении/cwd процесса роли, не о pre-flight;
+        # на машине без claude (CI) pre-flight блокировал бы FakeProc-прогоны.
+        pf_patcher = mock.patch(
+            "orchestrator.doctor.preflight_checks",
+            lambda role, target: [])
+        pf_patcher.start()
+        self.addCleanup(pf_patcher.stop)
 
     def second_target(self, name: str, number: int) -> str:
         """id второго target с отличимым префиксом (см. докстринг модуля)."""

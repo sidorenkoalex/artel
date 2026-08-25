@@ -267,6 +267,14 @@ class PreflightBlocksMissingTokenTest(TmpRootTest):
         super().setUp()
         capture(catalog.cmd_new, "Задача под pre-flight")
         store.update_task(store.db(), self.TASK, state="in_dev")
+        # CLI на машине прогона может отсутствовать (CI-раннер) — проверки
+        # токена/идентичности не должны зависеть от cli-found: он тестируется
+        # отдельно, здесь всегда ok.
+        cli_patcher = mock.patch.object(
+            doctor, "check_cli_found",
+            lambda: doctor.Check("cli-found", "ok", "/stub/claude"))
+        cli_patcher.start()
+        self.addCleanup(cli_patcher.stop)
 
     def test_missing_token_blocks_the_step_with_a_named_reason_and_no_retries(self):
         with mock.patch.object(runner.keychain, "token", lambda slot: None), \
