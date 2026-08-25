@@ -5,10 +5,19 @@
 шагами не думает никто. Все гейты Фазы 0 — ручные (approve/reject из CLI).
 
 Состояния:
-  spec_writing -> spec_gate -> in_dev -> review -> acceptance -> merge_gate -> done
-                     |            ^________|  (changes_requested, <=3)
-                     |            ^___________ (acceptance reject, <=1)
+  spec_writing -> spec_gate -> tests_writing -> in_dev -> review -> acceptance -> merge_gate -> done
+                     |                             |            ^________|  (changes_requested, <=3)
+                     |                             |            ^___________ (acceptance reject, <=1)
   из любого: escalated (вопрос Оператору), killed.
+
+`tests_writing` (A4, tasks/T023) — приёмочные тесты до кода, роль
+test_author: `spec_gate` заводит её при approve, если SPEC не помечен
+`skip_tests` и несёт AC-разметку критериев (`schema_version >= 2`); иначе
+approve идёт прямо в `in_dev`, как до T023. Выход тестов_writing —
+каждый AC-n получил тест либо пометку manual/skip/escalate
+(`tasks/<id>/acceptance_tests/`); `escalate` уводит задачу в `escalated`
+немедленно. После выхода каталог `acceptance_tests/` залочен фиксацией
+(T021): правка после лока — отказ перехода `in_dev -> review`.
 
 `approve` из escalated возвращает задачу в in_dev, а если эскалировал упавший
 агент — в тот шаг, на котором он упал (см. escalated_from): чинить надо шаг,
@@ -85,6 +94,7 @@ SPEC, PLAN — в ревью, REVIEW — из ревью). Нарушение с
   projects  каталог проекта в .artel/: структура target'а
   gitcmd    вызовы git и вопросы к ветке задачи
   fixation  hash-фиксация артефактов на переходах FSM (A2b, ADR-0003 п.15)
+  acceptance прогон и сводка приёмочных тестов задачи (A4, tasks/T023)
   ci        статус CI головного коммита ветки задачи (`gh`)
   agent_log логи прогонов, перекачка вывода агента (OutputPump)
   spend     разбор события со стоимостью шага и учёт в spent_usd

@@ -115,7 +115,8 @@ USAGE_TOKEN_KEYS = ("input_tokens", "output_tokens",
 # Статусы REVIEW.md, которые FSM отрабатывает как вердикт ревьювера.
 REVIEW_VERDICTS = ("approved", "changes_requested", "escalate")
 
-STATE_ROLE = {"in_dev": "developer", "review": "reviewer"}
+STATE_ROLE = {"tests_writing": "test_author", "in_dev": "developer",
+             "review": "reviewer"}
 
 # Состояния, на которых останавливается `auto`: причина остановки и следующая
 # команда Оператора. Ключи покрывают все состояния FSM вне STATE_ROLE — цикл

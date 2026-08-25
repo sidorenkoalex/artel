@@ -26,7 +26,8 @@ CREATE TABLE IF NOT EXISTS tasks (
   review_iters INTEGER DEFAULT 0, accept_rejects INTEGER DEFAULT 0,
   reviewed_iter INTEGER DEFAULT 0, escalated_from TEXT,
   budget_usd REAL, spent_usd REAL DEFAULT 0, budget_source TEXT,
-  target TEXT, fixed_sha TEXT, created_at TEXT, updated_at TEXT
+  target TEXT, fixed_sha TEXT, tests_locked_sha TEXT,
+  created_at TEXT, updated_at TEXT
 );
 CREATE TABLE IF NOT EXISTS steps (
   id INTEGER PRIMARY KEY AUTOINCREMENT, task_id TEXT, target TEXT, ts TEXT,
@@ -115,6 +116,11 @@ def migrate(conn: sqlite3.Connection) -> None:
     # не переходила): approve/run читают это как «сверять не с чем»,
     # не как нарушение (tasks/T021 SPEC, требование 3).
     add_column(conn, "tasks", "fixed_sha", "TEXT")
+    # sha, зафиксированный на выходе tests_writing -> in_dev (tasks/T023,
+    # требование 5): NULL — задача tests_writing не проходила (skip_tests,
+    # SPEC версии 1, либо строка старше T023) — лок acceptance_tests/
+    # сверять не с чем, тот же вырожденный случай, что и у fixed_sha.
+    add_column(conn, "tasks", "tests_locked_sha", "TEXT")
     conn.executescript(
         "CREATE TABLE IF NOT EXISTS task_counters ("
         "  target TEXT PRIMARY KEY, next_number INTEGER NOT NULL);")

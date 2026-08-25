@@ -84,13 +84,33 @@ def cmd_run(task_id: str) -> None:
         sys.exit(f"[{task_id}] скил роли {role} не прочитан: {exc}")
     task_ref = f"tasks/{task_id}"
     package = None
-    if role == "developer":
+    if role == "test_author":
+        mission = (
+            f"Роль: автор приёмочных тестов. Задача {task_id}, ветка "
+            f"{t['branch']}. Разработчик увидит задачу только после тебя —\n"
+            f"1) Прочитай {task_ref}/SPEC.md, раздел «Критерии приёмки» "
+            f"(AC-1, AC-2, …). 2) Создай ветку от main, если её ещё нет.\n"
+            f"3) Для каждого AC-n напиши unittest в "
+            f"{task_ref}/acceptance_tests/test_*.py, метод test_ac<n>_... — "
+            f"ТОЛЬКО из формулировки критерия.\n"
+            f"4) Критерий нельзя проверить тестом напрямую — пометь "
+            f"`# AC-n: manual — <причина>` (Оператор проверит на приёмке) "
+            f"или `# AC-n: skip — <причина>`.\n"
+            f"5) Критерий в принципе неисполним тестом — не изобретай "
+            f"компромисс: `# AC-n: escalate — <вопрос Оператору>`.\n"
+            f"6) Прогони `python3 -m unittest discover -s "
+            f"{task_ref}/acceptance_tests`, закоммить каталог в ветку. "
+            f"Код репозитория и SPEC.md НЕ трогай."
+        )
+    elif role == "developer":
         mission = (
             f"Роль: разработчик. Задача {task_id}, ветка {t['branch']}.\n"
             f"1) Прочитай {task_ref}/SPEC.md. 2) Создай ветку от main.\n"
             f"3) Напиши {task_ref}/PLAN.md по templates/PLAN.md.\n"
             f"4) Реализуй по плану + юнит-тесты. Если есть {task_ref}/REVIEW.md "
-            f"со статусом changes_requested — сначала закрой замечания.\n"
+            f"со статусом changes_requested — сначала закрой замечания. Если "
+            f"есть {task_ref}/acceptance_tests/ — они залочены (tasks/T023): "
+            f"код чинится под них, их правка — эскалация, не правка.\n"
             f"5) Прогони scripts/guard.py на своих артефактах, закоммить всё "
             f"в ветку, поставь PLAN.md status: ready. НЕ мержи."
         )
