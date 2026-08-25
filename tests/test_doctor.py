@@ -461,6 +461,66 @@ class RecoveryCheckTest(TmpRootTest):
         self.assertEqual(checks[0].status, "skip")
 
 
+class BaseBranchCheckTest(unittest.TestCase):
+    """tasks/T032/SPEC.md: догфуд-skip и поведение для внешнего target."""
+
+    EXTERNAL_ENTRY = {
+        "forge": "github",
+        "url": "https://example.invalid/sled",
+        "base": "main",
+    }
+
+    def test_dogfood_target_is_skipped_without_calling_gh(self):
+        entry = {"forge": "github", "url": "https://example.invalid/artel",
+                 "base": "main"}
+
+        with mock.patch.object(doctor.shutil, "which",
+                               return_value="/usr/bin/gh"), \
+             mock.patch.object(doctor.subprocess, "run") as run:
+            check = doctor.check_base_branch(config.DEFAULT_TARGET, entry)
+
+        self.assertEqual(check.status, "skip")
+        run.assert_not_called()
+        self.assertIn("догфуд", check.detail.lower())
+
+    def test_non_github_forge_is_skipped(self):
+        entry = dict(self.EXTERNAL_ENTRY, forge="gitlab")
+
+        check = doctor.check_base_branch("sled", entry)
+
+        self.assertEqual(check.status, "skip")
+
+    def test_missing_gh_cli_is_skipped(self):
+        with mock.patch.object(doctor.shutil, "which", return_value=None):
+            check = doctor.check_base_branch("sled", self.EXTERNAL_ENTRY)
+
+        self.assertEqual(check.status, "skip")
+
+    def test_matching_base_branch_is_ok(self):
+        def fake_run(args, **kwargs):
+            return subprocess.CompletedProcess(args, 0, "main\n", "")
+
+        with mock.patch.object(doctor.shutil, "which",
+                               return_value="/usr/bin/gh"), \
+             mock.patch.object(doctor.subprocess, "run",
+                               side_effect=fake_run):
+            check = doctor.check_base_branch("sled", self.EXTERNAL_ENTRY)
+
+        self.assertEqual(check.status, "ok")
+
+    def test_diverging_base_branch_is_warn(self):
+        def fake_run(args, **kwargs):
+            return subprocess.CompletedProcess(args, 0, "develop\n", "")
+
+        with mock.patch.object(doctor.shutil, "which",
+                               return_value="/usr/bin/gh"), \
+             mock.patch.object(doctor.subprocess, "run",
+                               side_effect=fake_run):
+            check = doctor.check_base_branch("sled", self.EXTERNAL_ENTRY)
+
+        self.assertEqual(check.status, "warn")
+
+
 class ProgramThresholdAlertTest(TmpRootTest):
     """Критерий 5: пороги 70/90% программы — alerts kind=threshold, без дублей."""
 
