@@ -112,7 +112,13 @@ class FakeGit:
                                      "invalid continuation byte")
         if args and args[0] == "show":
             return self.show(args)
-        if "--name-only" in args:
+        if args and args[0] == "rev-parse":
+            # T031: `gitcmd.on_foreign_branch` спрашивает текущую ветку и
+            # существование ветки задачи вне пакета — пустой ответ, тот же
+            # вырожденный случай «git не ответил», что и у остальных
+            # заглушек `gitcmd.git` пакета (не подмешивать в `self.diff`).
+            stdout = ""
+        elif "--name-only" in args:
             stdout = self.map_diff
         elif "--stat" in args:
             stdout = self.stat
@@ -751,15 +757,20 @@ class CmdRunReviewPackageTest(unittest.TestCase):
 
         self.assertNotIn("--- РЕВЬЮ-ПАКЕТ ---", self.prompt())
         self.assertEqual(self.journal_details("ревью-пакет собран"), [])
-        # Три вызова, и ни один — не о пакете: первый — сверка свежести
-        # docs/codebase-map.md для брифа роли (orchestrator/brief.py,
-        # tasks/T028), два следующих — `role_env` берёт авторство коммита
-        # шага (pre-flight в setUp заглушен — его git-вызовы проверяет
-        # test_doctor). Список точный: любой `show` (чтение артефакта из
-        # ветки — ревью-пакетное) в шаге разработчика по-прежнему провалит
-        # тест.
+        # Четыре вызова, и ни один — не о пакете: первый — `gitcmd.
+        # on_foreign_branch` спрашивает текущую ветку для ветко-корректного
+        # чтения SPEC.md брифа (orchestrator/brief.py, SPEC T031) — пустой
+        # ответ заглушки означает «не на чужой ветке», поэтому дальше ни
+        # `rev-parse --verify`, ни `show` не следуют, читается рабочая
+        # копия, как и раньше; второй — сверка свежести docs/codebase-map.md
+        # для брифа роли (orchestrator/brief.py, tasks/T028); два
+        # последних — `role_env` берёт авторство коммита шага (pre-flight
+        # в setUp заглушен — его git-вызовы проверяет test_doctor). Список
+        # точный: любой `show` (чтение артефакта из ветки — ревью-пакетное
+        # или чужой чекаут) в шаге разработчика по-прежнему провалит тест.
         self.assertEqual(self.git.calls,
-                         [["diff", "--name-only",
+                         [["rev-parse", "--abbrev-ref", "HEAD"],
+                          ["diff", "--name-only",
                            "0000000000000000000000000000000000000000",
                            "HEAD", "--", "orchestrator/*.py", "scripts/*.py",
                            "tests/*.py"],
