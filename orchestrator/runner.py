@@ -168,6 +168,8 @@ def cmd_run(task_id: str) -> None:
         )
         brief_text = brief.developer_brief(conn, task_id)
     else:
+        # номер, которого ждёт FSM: вердикт с прежним iteration он уже учёл
+        iteration = t["reviewed_iter"] + 1
         mission = (
             f"Роль: ревьювер. Задача {task_id}, ветка {t['branch']}. Свежий "
             f"контекст: всё нужное для ревью уже собрано в РЕВЬЮ-ПАКЕТЕ ниже "
@@ -181,11 +183,16 @@ def cmd_run(task_id: str) -> None:
             f"замечание.\n"
             f"Проведи обе фазы review-checklist (гейт плана + ревью MR) и "
             f"заполни {task_ref}/REVIEW.md по форме из пакета "
-            # номер, которого ждёт FSM: вердикт с прежним iteration он уже учёл
-            f"(iteration: {t['reviewed_iter'] + 1}). Код НЕ правь — только "
+            f"(iteration: {iteration}). Код НЕ правь — только "
             f"REVIEW.md в ветке задачи."
         )
-        package = review.review_package(task_id, t["title"], t["branch"])
+        # Sha предыдущего вердикта нужен только для инкрементального diff
+        # (iteration > 1) — на первой итерации журнал сравнивать не с чем,
+        # и чтение не тратится зря (T029, SPEC требования 1, 2, 3).
+        prev_sha = (review.previous_verdict_sha(conn, task_id)
+                   if iteration > 1 else "")
+        package = review.review_package(task_id, t["title"], t["branch"],
+                                        iteration=iteration, prev_sha=prev_sha)
     prompt = f"{mission}\n\n--- СКИЛЫ РОЛИ ---\n\n{skills}"
     if brief_text is not None:
         prompt = f"{prompt}\n\n{brief_text}"
