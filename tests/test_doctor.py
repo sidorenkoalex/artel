@@ -695,6 +695,67 @@ class OrphansTest(TmpRootTest):
         self.assertEqual(alerts.open_alerts(store.db(), "incident"), [])
 
 
+class AutoAckTest(TmpRootTest):
+    """tasks/T035/SPEC.md, требования 1-7: авто-ack закрывает алерт, только
+    когда его условие фактически исчезло; нераспознанный формат сообщения
+    (дрейф формата разбора сущности) — безопасный отказ, не ack; авто-ack
+    одного source не задевает открытые алерты другого.
+
+    Пары AC-1/2, AC-3/4, AC-5/6, AC-7/8 (ack при исчезновении условия /
+    не-ack, пока условие в силе) уже покрыты приёмочными тестами
+    (tasks/T035/acceptance_tests/test_auto_ack.py) — здесь только то, чего
+    там нет."""
+
+    def test_auto_ack_records_actor_and_resolution(self):
+        alerts.raise_alert(store.db(), config.DEFAULT_TARGET, "incident",
+                           "doctor.orphans.dir", "T555 без строки БД")
+        alert_id = alerts.open_alerts(store.db(), "incident")[0]["id"]
+
+        alerts.auto_ack(store.db(), alert_id)
+
+        row = store.get_alert(store.db(), alert_id)
+        self.assertEqual(row["ack_by"], "doctor")
+        self.assertIn("условие ушло, прогон doctor", row["ack_resolution"])
+
+    def test_unrecognised_messages_are_left_open_on_next_run(self):
+        cases = (
+            ("doctor.orphans.branch", "ветка потерялась без стандартного текста"),
+            ("doctor.orphans.dir", "каталог пропал без стандартного текста"),
+            ("doctor.orphans.worktree", "worktree пропал без стандартного текста"),
+        )
+        for source, message in cases:
+            with self.subTest(source=source):
+                alerts.raise_alert(store.db(), config.DEFAULT_TARGET, "incident",
+                                   source, message)
+                alert_id = [a for a in alerts.open_alerts(store.db(), "incident")
+                           if a["source"] == source][0]["id"]
+
+                with mock.patch.object(
+                        doctor.gitcmd, "git",
+                        lambda *a: subprocess.CompletedProcess(list(a), 1, "", "")), \
+                        mock.patch.object(doctor.gitcmd, "branch_exists",
+                                          return_value=False):
+                    doctor.check_orphans(store.db())
+
+                self.assertIsNone(store.get_alert(store.db(), alert_id)["ack_ts"],
+                                  "нераспознанное сообщение не должно закрываться")
+
+    def test_backup_age_auto_ack_does_not_touch_orphan_sources(self):
+        store.insert_task(store.db(), "T001", "чужой", "done",
+                          "task/t001-x", config.DEFAULT_TARGET, 25.0)
+        with mock.patch.object(doctor.gitcmd, "branch_exists", return_value=True):
+            doctor.check_orphans(store.db())
+        branch_alert = [a for a in alerts.open_alerts(store.db(), "incident")
+                        if a["source"] == "doctor.orphans.branch"][0]
+
+        config.BACKUP_MARKER.parent.mkdir(parents=True, exist_ok=True)
+        config.BACKUP_MARKER.write_text("ok", encoding="utf-8")
+        doctor.check_backup_age(store.db())
+
+        self.assertIsNone(store.get_alert(store.db(), branch_alert["id"])["ack_ts"],
+                          "авто-ack backup_age не должен трогать чужой source")
+
+
 class LiveSmokeTest(TmpRootTest):
     """Критерий 8: команда есть; тест — с подменённым CLI (реальный прогон — manual)."""
 

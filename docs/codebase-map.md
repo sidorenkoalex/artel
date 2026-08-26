@@ -1,5 +1,5 @@
 ---
-built_at_sha: ef1ea3061314bbf6204ebd3434338a1358957324
+built_at_sha: 83b51ca88ec7a411857815d6037ef17c73649114
 ---
 
 # Codebase-map пульта
@@ -51,6 +51,7 @@ built_at_sha: ef1ea3061314bbf6204ebd3434338a1358957324
 
 **Публичные функции:**
 - `ack`
+- `auto_ack`
 - `open_alerts`
 - `raise_alert`
 
