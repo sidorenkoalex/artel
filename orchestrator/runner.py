@@ -74,7 +74,7 @@ def cmd_run(task_id: str) -> None:
     # проверки окружения (CLI найден, токен роли добыт, диск, layout
     # внешнего target'а) — до git-сверки и до попыток агента, отдельным
     # модулем (ADR-0003 3ж — «одна проверка, одно место»; отложенный
-    # импорт по тому же приёму, что store._record_fixation берёт fixation:
+    # импорт по тому же приёму, что store.record_fixation берёт fixation:
     # doctor читает runner по имени, runner не должен знать о doctor
     # на уровне модуля). Провал — шаг не начат, без ретрая, с именованной
     # причиной. Версия CLI ≠ пин — предупреждение, не блок (требование 5).
@@ -340,6 +340,82 @@ def role_cwd(target: str) -> Path:
     return path
 
 
+def commit_timeout_checkpoint(conn, task_id: str, role: str) -> str:
+    """WIP-чекпоинт ветки задачи при таймауте шага — без участия Оператора.
+
+    Таймаут обрывает шаг агента посреди работы (SPEC T041, «Контекст»):
+    до этой задачи незакоммиченный WIP оставался в рабочем дереве, и
+    сверка целостности на следующем `run` (`fixation.check_integrity`)
+    честно встречала грязную копию и уводила задачу в `escalated` —
+    рестарт решался только руками Оператора (прецеденты T022, T037).
+    Здесь ровно то же действие, что раньше делал Оператор вручную,
+    автоматически: `git add -A` + `git commit` поверх текущего рабочего
+    дерева (оно и есть ветка задачи — роль создаёт и выписывает её
+    первым действием миссии, до всякого таймаута).
+
+    Коммитит, только если реально есть что коммитить (AC-4 — пустой
+    коммит не заводится); ничего не коммитит и не журналит при отказе
+    git на любом из шагов, а не только при «нечего коммитить» — тихий
+    отказ здесь не хуже, чем при таймауте: `check_integrity` следующего
+    `run` увидит либо прежнее чистое состояние, либо ту же грязную
+    копию, что и до этой задачи, без нового способа сломаться.
+
+    Идентичность коммита — служебная (`fixation.FIXATION_AUTHOR_*`), тем
+    же приёмом, что уже применяет `fixation._fix_external` для коммита
+    фиксации внешнего target: это действие оркестратора, а не роли и не
+    Оператора, поэтому не берёт ни git-конфиг Оператора, ни авторство
+    роли. Все git-операции — через `gitcmd`, не через прямой
+    `subprocess`/`git` (SPEC требование 7).
+
+    Коммит легитимно сдвигает HEAD ветки задачи мимо `store.set_state` —
+    без повторной фиксации (`store.record_fixation`) следующий
+    `fixation.check_integrity` увидел бы этот сдвиг как расхождение sha
+    с зафиксированным на входе шага и увёл бы рестарт в инцидент
+    целостности, ровно то, от чего чекпоинт должен избавить (AC-2).
+    `check_integrity`/`fix()` при этом не меняются — фиксация читает их
+    как обычно, просто с уже сдвинутым sha.
+
+    Только догфуд (`target == config.DEFAULT_TARGET`, PLAN «Риски»,
+    REVIEW.md T041 итерации 1, замечание major): `gitcmd.git` всегда
+    бьёт по `config.ROOT`, и для внешнего target это дерево пульта, а
+    не тот репозиторий, где реально работала роль (workspace target'а,
+    `role_cwd`). Коммитить туда чекпоинт было бы неверно вдвойне — либо
+    подхватило бы чужое незакоммиченное состояние ROOT под сообщением
+    этой задачи, либо ничего не нашло бы, оставив настоящий WIP
+    workspace'а нетронутым. При этом `check_integrity` для внешнего
+    target тоже смотрит не в workspace, а в артефактный репозиторий
+    `.artel/projects/<target>/` (`fixation.read`/`_read_external`) —
+    свой workspace ADR-0003 §4 вообще не коммитит (тот же довод, что
+    `fsm._dirty_refuses`), поэтому чекпоинт workspace'а не решал бы и
+    исходную проблему AC-1/AC-2 для внешнего target. Пока
+    `targets.yaml` объявляет только догфуд (ADR-0003 3д, «особый случай
+    до A7»), эта ветка не задета вживую; расширение на внешний target —
+    отдельная задача поверх многотаргетной архитектуры фиксации, не
+    точечная правка этой функции.
+    """
+    if store.task_target(conn, task_id) != config.DEFAULT_TARGET:
+        return ""
+    added = gitcmd.git("add", "-A")
+    if added.returncode != 0:
+        return ""
+    staged = gitcmd.git("diff", "--cached", "--quiet")
+    if staged.returncode != 1:  # 0 — нечего коммитить, иное — git не ответил
+        return ""
+    message = f"{task_id}: WIP-чекпоинт после таймаута шага {role}"
+    commit = gitcmd.git(
+        "-c", f"user.name={fixation.FIXATION_AUTHOR_NAME}",
+        "-c", f"user.email={fixation.FIXATION_AUTHOR_EMAIL}",
+        "commit", "-q", "-m", message)
+    if commit.returncode != 0:
+        return ""
+    sha = gitcmd.head_sha()
+    detail = f"{message} (sha {sha})" if sha else message
+    store.journal(conn, task_id, "orchestrator",
+                  "WIP-чекпоинт после таймаута шага", detail)
+    store.record_fixation(conn, task_id)
+    return detail
+
+
 def run_agent_once(conn, task_id: str, role: str, prompt: str,
                    attempt: int) -> tuple[str, str]:
     """Один запуск агента: исход попытки и пояснение к нему.
@@ -486,6 +562,9 @@ def run_agent_once(conn, task_id: str, role: str, prompt: str,
     budget.check_program_spend(conn, task_id, pump.cost)
 
     if timed_out:
+        # Чекпоинт — до журнала таймаута, чтобы рестарт, начатый сразу по
+        # этой записи, уже видел чистое дерево (SPEC T041, требования 1–4).
+        commit_timeout_checkpoint(conn, task_id, role)
         # «без ретрая» — чтобы читающий журнал не ждал попыток 2 и 3.
         store.journal(conn, task_id, role, "agent run TIMEOUT",
                       f"30 мин, {numbered} (без ретрая){spent}")
