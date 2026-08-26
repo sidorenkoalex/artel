@@ -13,13 +13,11 @@ tests/test_agent_log.py, tests/test_agent_failure.py, tests/test_step_cost.py).
 или удалить его может только Оператор отдельным ADR; перечень «инвариант →
 тест → откуда» — docs/invariants.md.
 """
-import io
 import sqlite3
 import subprocess
 import sys
 import tempfile
 import unittest
-from contextlib import redirect_stdout
 from pathlib import Path
 from unittest import mock
 
@@ -27,6 +25,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from orchestrator import (agent_log, auto, budget, catalog,  # noqa: E402
                           config, fsm, gitcmd, runner, store)
+from tests.sandbox import capture, fake_git  # noqa: E402
 
 # Настоящая `cmd_run`, снятая до подмены: тесту отказа по бюджету нужна она,
 # а не фейк — предмет проверки в том, как auto реагирует на реальный отказ.
@@ -75,11 +74,6 @@ schema_version: 1
 
 ## Вердикт
 """
-
-
-def fake_git(*args: str) -> subprocess.CompletedProcess:
-    """Подмена `gitcmd.git`: пустой ответ вместо обращения к репозиторию."""
-    return subprocess.CompletedProcess(list(args), 0, "", "")
 
 
 class SpyRun:
@@ -180,11 +174,7 @@ class AutoCycleTest(unittest.TestCase):
         patcher.start()
         self.addCleanup(patcher.stop)
 
-    def capture(self, fn, *args) -> str:
-        buf = io.StringIO()
-        with redirect_stdout(buf):
-            fn(*args)
-        return buf.getvalue()
+    capture = staticmethod(capture)
 
     def auto(self) -> str:
         # Столько шагов цикл вправе сделать за вызов; шаг сверх этого — не
@@ -372,7 +362,7 @@ class AutoStopsOnBudgetRefusalTest(AutoCycleTest):
         self.set_state("in_dev", budget_usd=1.0, spent_usd=1.0)
 
     def test_cycle_stops_and_no_agent_starts(self):
-        with mock.patch.object(runner.subprocess, "Popen") as popen:
+        with mock.patch.object(runner, "spawn_agent") as popen:
             out = self.auto()
 
         popen.assert_not_called()
@@ -383,7 +373,7 @@ class AutoStopsOnBudgetRefusalTest(AutoCycleTest):
 
     def test_refusal_is_not_retried(self):
         """Отказ — причина остановки, а не повод зайти на второй круг."""
-        with mock.patch.object(runner.subprocess, "Popen") as popen:
+        with mock.patch.object(runner, "spawn_agent") as popen:
             self.auto()
 
         popen.assert_not_called()
@@ -391,7 +381,7 @@ class AutoStopsOnBudgetRefusalTest(AutoCycleTest):
             [a for _, a, _ in self.journal_rows()].count("auto остановлен"), 1)
 
     def test_refusal_lands_in_the_journal(self):
-        with mock.patch.object(runner.subprocess, "Popen"):
+        with mock.patch.object(runner, "spawn_agent"):
             self.auto()
 
         self.assertIn("run отказался стартовать",

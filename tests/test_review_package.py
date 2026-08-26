@@ -8,13 +8,11 @@
 Тесты не описывают формулировки миссии — только наблюдаемое: что ушло в
 промпт агента, что легло в журнал и какие права у шага остались.
 """
-import io
 import shutil
 import subprocess
 import sys
 import tempfile
 import unittest
-from contextlib import redirect_stdout
 from pathlib import Path
 from unittest import mock
 
@@ -23,6 +21,7 @@ sys.path.insert(0, str(REPO))
 
 from orchestrator import (catalog, config, gitcmd, review,  # noqa: E402
                           runner, store)
+from tests.sandbox import capture  # noqa: E402
 
 SPEC_MD = """---
 task: T001
@@ -618,11 +617,7 @@ class CmdRunReviewPackageTest(unittest.TestCase):
         self.capture(catalog.cmd_new, "Ревью-пакет вместо свободного чтения")
         self.tdir = config.TASKS / self.TASK
 
-    def capture(self, fn, *args) -> str:
-        buf = io.StringIO()
-        with redirect_stdout(buf):
-            fn(*args)
-        return buf.getvalue()
+    capture = staticmethod(capture)
 
     def set_state(self, state: str) -> None:
         conn = store.db()
@@ -637,7 +632,7 @@ class CmdRunReviewPackageTest(unittest.TestCase):
         `prompt`.
         """
         self.set_state(state)
-        with mock.patch.object(runner.subprocess, "Popen") as popen:
+        with mock.patch.object(runner, "spawn_agent") as popen:
             popen.return_value = FakeProc(["готово\n"])
             out = self.capture(runner.cmd_run, self.TASK)
         self.prompt_path = Path(popen.call_args.kwargs["stdin"].name)
@@ -902,11 +897,7 @@ class PreviousVerdictShaTest(unittest.TestCase):
         self.capture(catalog.cmd_new, "sha предыдущего вердикта")
         self.conn = store.db()
 
-    def capture(self, fn, *args) -> str:
-        buf = io.StringIO()
-        with redirect_stdout(buf):
-            fn(*args)
-        return buf.getvalue()
+    capture = staticmethod(capture)
 
     def fixate(self, sha: str) -> None:
         store.journal(self.conn, self.TASK, "fsm", "sha зафиксирован",

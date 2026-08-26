@@ -28,6 +28,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from orchestrator import (alerts, budget, catalog, config, doctor,  # noqa: E402
                           gitcmd, projects, runner, spend, store)
+from tests.sandbox import TmpRootTest, capture  # noqa: E402
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
@@ -62,11 +63,6 @@ TARGETS_YAML_WITH_SLED = """targets:
 """
 
 
-def capture(fn, *args) -> str:
-    buf = io.StringIO()
-    with redirect_stdout(buf):
-        fn(*args)
-    return buf.getvalue()
 
 
 class FakeLiveSmokeProc:
@@ -144,13 +140,11 @@ def claude_only_popen(fake_proc):
     return popen
 
 
-class TmpRootTest(unittest.TestCase):
+class _DoctorTmpRootTest(TmpRootTest):
     """Песочница doctor: пути `config` — во временном каталоге, keychain подменён."""
 
     def setUp(self):
-        tmp = tempfile.TemporaryDirectory()
-        self.addCleanup(tmp.cleanup)
-        self.root = Path(tmp.name)
+        super().setUp()
         shutil.copytree(REPO_ROOT / "skills", self.root / "skills")
         shutil.copytree(REPO_ROOT / "templates", self.root / "templates")
         # T028: бриф роли developer/analyst читает docs/codebase-map.md и
@@ -161,20 +155,6 @@ class TmpRootTest(unittest.TestCase):
             "---\nbuilt_at_sha: 0000000000000000000000000000000000000000\n"
             "---\n\n# Карта\n", encoding="utf-8")
         (self.root / "CLAUDE.md").write_text("# Конвенции\n", encoding="utf-8")
-
-        for attr, value in (("ROOT", self.root),
-                            ("DB", self.root / ".artel" / "state.db"),
-                            ("TASKS", self.root / "tasks"),
-                            ("LOGS", self.root / ".artel" / "logs"),
-                            ("PROJECTS", self.root / ".artel" / "projects"),
-                            ("ROLE_HOME", self.root / ".artel" / "home"),
-                            ("ROLE_CONFIG_DIR",
-                             self.root / ".artel" / "home" / ".claude"),
-                            ("TARGETS", self.root / "targets.yaml"),
-                            ("BACKUP_MARKER", self.root / ".artel" / "backup-marker")):
-            patcher = mock.patch.object(config, attr, value)
-            patcher.start()
-            self.addCleanup(patcher.stop)
 
         kc_patcher = mock.patch.object(runner.keychain, "token",
                                        lambda slot: "tok-test")
@@ -196,6 +176,9 @@ class TmpRootTest(unittest.TestCase):
     def touch_backup(self) -> None:
         config.BACKUP_MARKER.parent.mkdir(parents=True, exist_ok=True)
         config.BACKUP_MARKER.write_text("ok", encoding="utf-8")
+
+
+TmpRootTest = _DoctorTmpRootTest
 
 
 class DoctorCommandTest(TmpRootTest):
@@ -286,7 +269,7 @@ class PreflightBlocksMissingTokenTest(TmpRootTest):
 
     def test_missing_token_blocks_the_step_with_a_named_reason_and_no_retries(self):
         with mock.patch.object(runner.keychain, "token", lambda slot: None), \
-                mock.patch.object(runner.subprocess, "Popen") as popen:
+                mock.patch.object(runner, "spawn_agent") as popen:
             out = capture(runner.cmd_run, self.TASK)
 
         popen.assert_not_called()
@@ -304,14 +287,14 @@ class PreflightBlocksMissingTokenTest(TmpRootTest):
     def test_task_state_is_untouched_by_a_preflight_failure(self):
         """Провал pre-flight — не эскалация: шаг просто не начат."""
         with mock.patch.object(runner.keychain, "token", lambda slot: None), \
-                mock.patch.object(runner.subprocess, "Popen"):
+                mock.patch.object(runner, "spawn_agent"):
             capture(runner.cmd_run, self.TASK)
 
         self.assertEqual(store.get_task(store.db(), self.TASK)["state"], "in_dev")
 
     def test_token_present_lets_the_step_start(self):
         """Контроль: сам pre-flight не мешает обычному запуску."""
-        with mock.patch.object(runner.subprocess, "Popen",
+        with mock.patch.object(runner, "spawn_agent",
                                side_effect=claude_only_popen(
                                    FakeAgentProc(["готово\n"]))) as popen:
             capture(runner.cmd_run, self.TASK)
@@ -338,7 +321,7 @@ class PreflightBlocksMissingTokenTest(TmpRootTest):
                   "GIT_COMMITTER_NAME": "", "GIT_COMMITTER_EMAIL": ""}
         with mock.patch.object(runner.gitcmd, "git", no_identity), \
                 mock.patch.dict("os.environ", no_env), \
-                mock.patch.object(runner.subprocess, "Popen",
+                mock.patch.object(runner, "spawn_agent",
                                   side_effect=claude_only_popen(
                                       FakeAgentProc(["готово\n"]))) as popen:
             out = capture(runner.cmd_run, self.TASK)
@@ -352,7 +335,7 @@ class PreflightBlocksMissingTokenTest(TmpRootTest):
         """Регресс: провал по токену не должен тянуть за собой git-идентичность
         (а с ней — subprocess) — блок уже решён, платить нечем за доп. warn."""
         with mock.patch.object(runner.keychain, "token", lambda slot: None), \
-                mock.patch.object(runner.subprocess, "Popen") as popen:
+                mock.patch.object(runner, "spawn_agent") as popen:
             capture(runner.cmd_run, self.TASK)
 
         popen.assert_not_called()

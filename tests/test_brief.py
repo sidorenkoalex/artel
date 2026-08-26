@@ -174,11 +174,11 @@ class FreshMapTextTest(BriefUnitTest):
                 regenerated, encoding="utf-8")
             return subprocess.CompletedProcess(cmd, 0, "", "")
 
-        def fake_git(*args) -> subprocess.CompletedProcess:
+        def fake_git_with_calls(*args) -> subprocess.CompletedProcess:
             calls.append(args)
             return fake_git_stale("orchestrator/runner.py")(*args)
 
-        with mock.patch.object(gitcmd, "git", fake_git), \
+        with mock.patch.object(gitcmd, "git", fake_git_with_calls), \
                 mock.patch("subprocess.run", side_effect=fake_run):
             brief.fresh_map_text(store.db(), "T001")
 

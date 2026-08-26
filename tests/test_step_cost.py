@@ -13,7 +13,6 @@
 """
 import io
 import json
-import subprocess
 import sys
 import tempfile
 import unittest
@@ -25,18 +24,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from orchestrator import (agent_log, budget, catalog, config,  # noqa: E402
                           fsm, gitcmd, runner, spend, store)
-
-
-def fake_git(*args: str) -> subprocess.CompletedProcess:
-    """Подмена `gitcmd.git`: пустой ответ вместо обращения к репозиторию.
-
-    Исключение — `config --get user.*`: за ним `runner.role_env` ходит
-    за авторством коммита шага, и пустой ответ означал бы «идентичность
-    не задана», то есть предупреждение в выводе каждого прогона.
-    """
-    identity = {"user.name": "Роль Артели", "user.email": "role@artel.invalid"}
-    value = identity.get(args[-1], "") if args[:2] == ("config", "--get") else ""
-    return subprocess.CompletedProcess(list(args), 0, f"{value}\n", "")
+from tests.sandbox import TmpRootTest, fake_git  # noqa: E402
 
 
 def event(**fields) -> str:
@@ -78,32 +66,13 @@ class FakeProc:
         return self.returncode
 
 
-class TmpRootTest(unittest.TestCase):
+class _StepCostTmpRootTest(TmpRootTest):
     """Общая песочница: DB, TASKS и LOGS уводятся во временный каталог."""
 
-    def setUp(self):
-        tmp = tempfile.TemporaryDirectory()
-        self.addCleanup(tmp.cleanup)
-        root = Path(tmp.name)
+    PATCHED_ATTRS = ("DB", "TASKS", "LOGS", "ROLE_HOME", "ROLE_CONFIG_DIR")
 
-        for attr, value in (("DB", root / ".artel" / "state.db"),
-                            ("TASKS", root / "tasks"),
-                            ("LOGS", root / ".artel" / "logs"),
-                            # Курируемый слой ролей (T019): каталог заводит
-                            # запуск шага — пусть заводит в песочнице, а не
-                            # в .artel/ репозитория.
-                            ("ROLE_HOME", root / ".artel" / "home"),
-                            ("ROLE_CONFIG_DIR",
-                             root / ".artel" / "home" / ".claude")):
-            patcher = mock.patch.object(config, attr, value)
-            patcher.start()
-            self.addCleanup(patcher.stop)
 
-    def capture(self, fn, *args) -> str:
-        buf = io.StringIO()
-        with redirect_stdout(buf):
-            fn(*args)
-        return buf.getvalue()
+TmpRootTest = _StepCostTmpRootTest
 
 
 class ParseCostEventTest(unittest.TestCase):
@@ -246,7 +215,7 @@ class CmdRunCostTest(TmpRootTest):
     def run_agent(self, *attempts) -> str:
         """attempts: (rc, строки вывода) — по одной паре на попытку."""
         procs = [FakeProc(lines, rc) for rc, lines in attempts]
-        with mock.patch.object(runner.subprocess, "Popen", side_effect=procs) as popen:
+        with mock.patch.object(runner, "spawn_agent", side_effect=procs) as popen:
             out = self.capture(runner.cmd_run, self.TASK)
         self.popen = popen
         return out
@@ -359,7 +328,7 @@ class CmdRunCostTest(TmpRootTest):
         self.run_agent((0, [result_event(usd=0.5)]))
         self.capture(fsm.cmd_approve, self.TASK)  # Оператор снял эскалацию
 
-        with mock.patch.object(runner.subprocess, "Popen") as popen:
+        with mock.patch.object(runner, "spawn_agent") as popen:
             with self.assertRaises(SystemExit) as exit_:
                 self.capture(runner.cmd_run, self.TASK)
 

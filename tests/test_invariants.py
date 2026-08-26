@@ -18,14 +18,12 @@ main (сценарии уборки — test_kill_cleanup.py).
 в рабочем репозитории им не нужна и запрещена.
 """
 import contextlib
-import io
 import json
 import shutil
 import subprocess
 import sys
 import tempfile
 import unittest
-from contextlib import redirect_stdout
 from pathlib import Path
 from unittest import mock
 
@@ -34,6 +32,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from orchestrator import (budget, catalog, ci, cleanup, config,  # noqa: E402
                           fsm, gitcmd, runner, store)
 from scripts import guard  # noqa: E402
+from tests.sandbox import capture  # noqa: E402
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
@@ -239,11 +238,7 @@ class FsmTest(unittest.TestCase):
             patcher.start()
             self.addCleanup(patcher.stop)
 
-    def capture(self, fn, *args) -> str:
-        buf = io.StringIO()
-        with redirect_stdout(buf):
-            fn(*args)
-        return buf.getvalue()
+    capture = staticmethod(capture)
 
     def task_row(self):
         return store.db().execute(
@@ -292,7 +287,7 @@ class FsmTest(unittest.TestCase):
     def run_command(self, call) -> tuple[str, mock.Mock]:
         """Прогон команды с подменённым агентом; SystemExit — тоже исход."""
         out = ""
-        with mock.patch.object(runner.subprocess, "Popen") as popen:
+        with mock.patch.object(runner, "spawn_agent") as popen:
             popen.return_value = FakeProc(["готово\n"])
             with contextlib.suppress(SystemExit):
                 out = self.capture(call)
@@ -606,7 +601,7 @@ class ExhaustedBudgetIsNotBypassableTest(FsmTest):
 
     def test_run_refuses_and_no_agent_starts(self):
         """Требование 2.3: за потолком шаг не начинается."""
-        with mock.patch.object(runner.subprocess, "Popen") as popen:
+        with mock.patch.object(runner, "spawn_agent") as popen:
             with self.assertRaises(SystemExit) as exit_:
                 self.capture(runner.cmd_run, self.TASK)
 
@@ -722,7 +717,7 @@ class CountersNeverResetTest(FsmTest):
     def failing_run(self) -> None:
         """Прогон, в котором агент падает все положенные попытки."""
         procs = [FakeProc(["упал\n"], 1) for _ in range(config.AGENT_ATTEMPTS)]
-        with mock.patch.object(runner.subprocess, "Popen", side_effect=procs):
+        with mock.patch.object(runner, "spawn_agent", side_effect=procs):
             runner.cmd_run(self.TASK)
 
     def test_exhausted_review_limit_is_not_reopened_by_escalation(self):
@@ -899,11 +894,7 @@ class KillKeepsMainIntactTest(unittest.TestCase):
                          f"git {' '.join(args)} упал: {res.stderr}")
         return res.stdout
 
-    def capture(self, fn, *args) -> str:
-        buf = io.StringIO()
-        with redirect_stdout(buf):
-            fn(*args)
-        return buf.getvalue()
+    capture = staticmethod(capture)
 
     def main_state(self) -> tuple[str, str]:
         """Коммит main и его дерево — то, что kill обязан оставить как есть."""

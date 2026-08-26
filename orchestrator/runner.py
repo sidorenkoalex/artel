@@ -18,6 +18,17 @@ GIT_IDENTITY = (
 )
 
 
+def spawn_agent(cmd: list[str], **kwargs) -> subprocess.Popen:
+    """cli-вызов агента шага — тонкая обёртка над `subprocess.Popen`.
+
+    По образцу `gitcmd.git`/`keychain.token`: отдельная точка мокинга в
+    тестах вместо прямой подмены `subprocess.Popen` (модуль общий на
+    процесс — подмена ловила бы и системные вызовы вне запуска агента,
+    SPEC T037, требование 2).
+    """
+    return subprocess.Popen(cmd, **kwargs)
+
+
 def step_role(t) -> str | None:
     """Роль текущего шага задачи; None — состояние не агентское.
 
@@ -417,7 +428,7 @@ def run_agent_once(conn, task_id: str, role: str, prompt: str,
     # а держать его открытым в оркестраторе незачем.
     with prompt_file:
         try:
-            proc = subprocess.Popen(
+            proc = spawn_agent(
                 # `claude -p` без аргумента читает промпт со стандартного
                 # входа — им и отдаётся файл.
                 ["claude", "-p", "--permission-mode", "acceptEdits",

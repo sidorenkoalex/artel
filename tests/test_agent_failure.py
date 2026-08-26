@@ -12,13 +12,10 @@
 Оператор отдельным ADR; перечень «инвариант → тест → откуда» —
 docs/invariants.md.
 """
-import io
 import sqlite3
-import subprocess
 import sys
 import tempfile
 import unittest
-from contextlib import redirect_stdout
 from pathlib import Path
 from unittest import mock
 
@@ -26,11 +23,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from orchestrator import (agent_log, catalog, config, fsm, gitcmd,  # noqa: E402
                           runner, store)
-
-
-def fake_git(*args: str) -> subprocess.CompletedProcess:
-    """Подмена `gitcmd.git`: пустой ответ вместо обращения к репозиторию."""
-    return subprocess.CompletedProcess(list(args), 0, "", "")
+from tests.sandbox import TmpRootTest, fake_git  # noqa: E402
 
 
 class FakeStream:
@@ -61,32 +54,13 @@ class FakeProc:
         return self.returncode
 
 
-class TmpRootTest(unittest.TestCase):
+class _AgentFailureTmpRootTest(TmpRootTest):
     """Общая песочница: DB, TASKS и LOGS уводятся во временный каталог."""
 
-    def setUp(self):
-        tmp = tempfile.TemporaryDirectory()
-        self.addCleanup(tmp.cleanup)
-        root = Path(tmp.name)
+    PATCHED_ATTRS = ("DB", "TASKS", "LOGS", "ROLE_HOME", "ROLE_CONFIG_DIR")
 
-        for attr, value in (("DB", root / ".artel" / "state.db"),
-                            ("TASKS", root / "tasks"),
-                            ("LOGS", root / ".artel" / "logs"),
-                            # Курируемый слой ролей (T019): каталог заводит
-                            # запуск шага — пусть заводит в песочнице, а не
-                            # в .artel/ репозитория.
-                            ("ROLE_HOME", root / ".artel" / "home"),
-                            ("ROLE_CONFIG_DIR",
-                             root / ".artel" / "home" / ".claude")):
-            patcher = mock.patch.object(config, attr, value)
-            patcher.start()
-            self.addCleanup(patcher.stop)
 
-    def capture(self, fn, *args) -> str:
-        buf = io.StringIO()
-        with redirect_stdout(buf):
-            fn(*args)
-        return buf.getvalue()
+TmpRootTest = _AgentFailureTmpRootTest
 
 
 class LogTailTest(TmpRootTest):
@@ -164,7 +138,7 @@ class CmdRunFailureTest(TmpRootTest):
     def run_agent(self, *attempts) -> str:
         """attempts: (rc, строки вывода) — по одной паре на попытку."""
         procs = [FakeProc(lines, rc) for rc, lines in attempts]
-        with mock.patch.object(runner.subprocess, "Popen", side_effect=procs) as popen:
+        with mock.patch.object(runner, "spawn_agent", side_effect=procs) as popen:
             out = self.capture(runner.cmd_run, self.TASK)
         self.popen = popen
         return out
@@ -322,7 +296,7 @@ class CmdRunFailureTest(TmpRootTest):
                                             timeout=config.AGENT_TIMEOUT_SEC),
             -9,
         ]
-        with mock.patch.object(runner.subprocess, "Popen", return_value=proc) as popen:
+        with mock.patch.object(runner, "spawn_agent", return_value=proc) as popen:
             out = self.capture(runner.cmd_run, self.TASK)
 
         self.assertEqual(popen.call_count, 1, "три таймаута — полтора часа ожидания")
@@ -331,7 +305,7 @@ class CmdRunFailureTest(TmpRootTest):
         self.assertIn("таймаут шага", out)
 
     def test_missing_cli_is_not_retried(self):
-        with mock.patch.object(runner.subprocess, "Popen",
+        with mock.patch.object(runner, "spawn_agent",
                                side_effect=FileNotFoundError) as popen:
             out = self.capture(runner.cmd_run, self.TASK)
 

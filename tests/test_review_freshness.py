@@ -9,13 +9,10 @@
 Ослабить, заскипать или удалить их может только Оператор отдельным ADR;
 перечень «инвариант → тест → откуда» — docs/invariants.md.
 """
-import io
 import sqlite3
-import subprocess
 import sys
 import tempfile
 import unittest
-from contextlib import redirect_stdout
 from pathlib import Path
 from unittest import mock
 
@@ -23,11 +20,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from orchestrator import (artifacts, catalog, config, fsm,  # noqa: E402
                           gitcmd, review, runner, store)
-
-
-def fake_git(*args: str) -> subprocess.CompletedProcess:
-    """Подмена `gitcmd.git`: пустой ответ вместо обращения к репозиторию."""
-    return subprocess.CompletedProcess(list(args), 0, "", "")
+from tests.sandbox import capture, fake_git  # noqa: E402
 
 
 # Заготовки валидны по guard: с T017 он вызывается на каждом переходе
@@ -139,12 +132,7 @@ class ReviewFreshnessScenarioTest(unittest.TestCase):
 
     # ------------------------------------------------------------ утилиты
 
-    def capture(self, fn, *args) -> str:
-        """Вызывает команду FSM и возвращает её stdout."""
-        buf = io.StringIO()
-        with redirect_stdout(buf):
-            fn(*args)
-        return buf.getvalue()
+    capture = staticmethod(capture)
 
     def task_row(self) -> sqlite3.Row:
         return store.db().execute(
@@ -241,7 +229,7 @@ class ReviewFreshnessScenarioTest(unittest.TestCase):
     def test_reviewer_prompt_asks_for_next_iteration(self):
         self.back_to_review_after_acceptance_reject()
 
-        with mock.patch("orchestrator.runner.subprocess.Popen") as popen_mock:
+        with mock.patch("orchestrator.runner.spawn_agent") as popen_mock:
             proc = mock.MagicMock(**{"wait.return_value": 0})
             proc.stdout.__iter__.return_value = iter([])
             popen_mock.return_value = proc
