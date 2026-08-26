@@ -1,6 +1,29 @@
 """Цикл `auto`: run+advance, пока в шаге работает агент."""
 from . import agent_log, budget, config, fsm, runner, store
 
+# Действие журнала, которым отказ `advance` узнаётся вне зависимости от
+# конкретной причины (SPEC T038, требование 1): каждая точка `cmd_advance`
+# (orchestrator/fsm.py), отказывающая переходу НЕ через guard структуры
+# артефакта, журналирует actor "fsm" и action, начинающийся с этой фразы.
+# Guard же возвращает `True` и уводит цикл на существующую немедленную
+# остановку раньше, до этой проверки (требование 3) — пересечения нет.
+REFUSAL_ACTION_PREFIX = "переход отклонён"
+
+
+def _advance_refusal(conn, task_id: str, journaled_before: int) -> str | None:
+    """Текст `action` записи `fsm` «переход отклонён…», добавленной ИМЕННО
+    этим вызовом `cmd_advance`; `None` — отказ не журналировался (агент ещё
+    работает — требование 4).
+
+    `journaled_before` — число строк журнала задачи ДО вызова: отказ
+    ищется среди добавленных после него, иначе отказ прошлого шага
+    засчитался бы за отказ текущего.
+    """
+    for row in store.task_steps(conn, task_id)[journaled_before:]:
+        if row["actor"] == "fsm" and row["action"].startswith(REFUSAL_ACTION_PREFIX):
+            return row["action"]
+    return None
+
 
 def auto_stop_advice(conn, task_id: str, state: str) -> tuple[str, str]:
     """Причина остановки и следующая команда — по факту, а не по имени состояния.
@@ -57,6 +80,10 @@ def cmd_auto(task_id: str) -> None:
 
     steps = 0
     role = runner.step_role(t)
+    # Текст отказа `advance` предыдущего шага без смены состояния; `None` —
+    # предыдущий шаг не был таким отказом, или это первый шаг цикла
+    # (SPEC T038, требование 1).
+    prev_refusal = None
     while role is not None:
         if steps >= config.AUTO_MAX_STEPS:
             auto_stop(conn, task_id, state,
@@ -83,7 +110,9 @@ def cmd_auto(task_id: str) -> None:
         # только напечатал бы, что двигать нечего.
         t = store.get_task(conn, task_id)
         state = t["state"]
+        refusal = None
         if runner.step_role(t) is not None:
+            journaled_before = len(store.task_steps(conn, task_id))
             if fsm.cmd_advance(task_id):
                 # guard отклонил артефакт-условие (требование 2): тот же
                 # по характеру стоп, что и штатный отказ guard'а вне
@@ -97,6 +126,7 @@ def cmd_auto(task_id: str) -> None:
                           f"advance отклонён guard'ом артефакта-условия — "
                           f"{hint}", hint)
                 return
+            refusal = _advance_refusal(conn, task_id, journaled_before)
             t = store.get_task(conn, task_id)
             state = t["state"]
         # Живой вывод агента уже был на экране и в логе — здесь только
@@ -104,6 +134,17 @@ def cmd_auto(task_id: str) -> None:
         print(f"[{task_id}] auto шаг {steps}/{config.AUTO_MAX_STEPS}: {role} "
               f"{before} -> {state}, "
               f"лог: {agent_log.last_agent_log(task_id, role)}")
+        if state == before and refusal is not None and refusal == prev_refusal:
+            # Требование 1 (инцидент T035): два подряд шага без смены
+            # состояния, и на обоих advance отказал тем же текстом —
+            # причина отказа вне зоны агента, прогон агента её не лечит.
+            hint = f"почини причину и повтори artel.py advance {task_id}"
+            auto_stop(conn, task_id, state, f"{refusal} — {hint}", hint)
+            return
+        # Шаг без журналируемого отказа (агент ещё работает, требование 4)
+        # рвёт серию — не даёт двум ОДИНАКОВЫМ, но не идущим подряд отказам
+        # склеиться через него в ложную остановку.
+        prev_refusal = refusal if state == before else None
         role = runner.step_role(t)
 
     reason, hint = auto_stop_advice(conn, task_id, state)
