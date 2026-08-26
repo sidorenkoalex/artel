@@ -10,12 +10,9 @@ tests/test_acceptance_tests_flow.py).
 (`RunAnalystTest`), где нужны те же подмены, что и в
 tests/test_agent_prompt.py: keychain, pre-flight, Popen.
 """
-import io
-import subprocess
 import sys
 import tempfile
 import unittest
-from contextlib import redirect_stdout
 from pathlib import Path
 from unittest import mock
 
@@ -23,6 +20,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from orchestrator import artel, auto, catalog, config, fsm, gitcmd, runner, store  # noqa: E402
 from scripts import guard  # noqa: E402
+from tests.sandbox import TmpRootTest, fake_git  # noqa: E402
 
 TZ_RAW = "Хотим кнопку экспорта отчёта в CSV на странице задач.\n"
 
@@ -102,29 +100,14 @@ schema_version: 2
 """
 
 
-def fake_git(*args: str) -> subprocess.CompletedProcess:
-    return subprocess.CompletedProcess(list(args), 0, "", "")
-
-
-class TmpRootTest(unittest.TestCase):
+class _AnalystRoleTmpRootTest(TmpRootTest):
     """Лёгкая песочница: БД и артефакты во временном каталоге, git — заглушка."""
 
     TASK = "T001"
+    PATCHED_ATTRS = ("DB", "TASKS", "LOGS", "ROLE_HOME", "ROLE_CONFIG_DIR")
 
     def setUp(self):
-        tmp = tempfile.TemporaryDirectory()
-        self.addCleanup(tmp.cleanup)
-        root = Path(tmp.name)
-
-        for attr, value in (("DB", root / ".artel" / "state.db"),
-                            ("TASKS", root / "tasks"),
-                            ("LOGS", root / ".artel" / "logs"),
-                            ("ROLE_HOME", root / ".artel" / "home"),
-                            ("ROLE_CONFIG_DIR",
-                             root / ".artel" / "home" / ".claude")):
-            patcher = mock.patch.object(config, attr, value)
-            patcher.start()
-            self.addCleanup(patcher.stop)
+        super().setUp()
         patcher = mock.patch.object(gitcmd, "git", fake_git)
         patcher.start()
         self.addCleanup(patcher.stop)
@@ -132,12 +115,6 @@ class TmpRootTest(unittest.TestCase):
         self.capture(catalog.cmd_init)
         self.capture(catalog.cmd_new, "Аналитик из ТЗ")
         self.tdir = config.TASKS / self.TASK
-
-    def capture(self, fn, *args) -> str:
-        buf = io.StringIO()
-        with redirect_stdout(buf):
-            fn(*args)
-        return buf.getvalue()
 
     def state(self) -> str:
         return store.db().execute("SELECT state FROM tasks WHERE id=?",
@@ -165,6 +142,9 @@ class TmpRootTest(unittest.TestCase):
         return [r["detail"] for r in store.db().execute(
             "SELECT detail FROM steps WHERE task_id=? AND action=? ORDER BY id",
             (self.TASK, action))]
+
+
+TmpRootTest = _AnalystRoleTmpRootTest
 
 
 # --------------------------------------------------------------------------
@@ -293,7 +273,7 @@ class RunWithoutAgentTest(TmpRootTest):
 
     def test_run_without_tz_refuses_by_name(self):
         with self.assertRaises(SystemExit) as ctx:
-            with mock.patch.object(runner.subprocess, "Popen") as popen:
+            with mock.patch.object(runner, "spawn_agent") as popen:
                 runner.cmd_run(self.TASK)
 
         popen.assert_not_called()
@@ -334,7 +314,7 @@ class RunAnalystTest(TmpRootTest):
         self.addCleanup(pf_patcher.stop)
 
     def run_agent(self) -> mock.Mock:
-        with mock.patch.object(runner.subprocess, "Popen") as popen:
+        with mock.patch.object(runner, "spawn_agent") as popen:
             popen.return_value = FakeProc(["готово\n"])
             self.capture(runner.cmd_run, self.TASK)
         return popen

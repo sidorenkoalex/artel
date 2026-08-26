@@ -9,17 +9,16 @@ Guard был автоматическим условием перехода то
 Песочница как в остальных FSM-тестах: БД и артефакты во временном каталоге,
 git и `claude` сюда не заходят.
 """
-import io
 import sys
 import tempfile
 import unittest
-from contextlib import redirect_stdout
 from pathlib import Path
 from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from orchestrator import catalog, config, fsm, gitcmd, store  # noqa: E402
+from tests.sandbox import capture  # noqa: E402
 
 # Валидные артефакты; «портит» их фикстура — выбрасыванием секции.
 SPEC_MD = """---
@@ -111,11 +110,7 @@ class AdvanceGuardTest(unittest.TestCase):
 
     # ------------------------------------------------------------ утилиты
 
-    def capture(self, fn, *args) -> str:
-        buf = io.StringIO()
-        with redirect_stdout(buf):
-            fn(*args)
-        return buf.getvalue()
+    capture = staticmethod(capture)
 
     def state(self) -> str:
         return store.db().execute("SELECT state FROM tasks WHERE id=?",

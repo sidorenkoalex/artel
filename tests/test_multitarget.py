@@ -9,7 +9,6 @@
 Песочница как в соседних модулях: пути config подменяются на временный
 каталог, `claude` и git не запускаются.
 """
-import io
 import json
 import re
 import sqlite3
@@ -18,7 +17,6 @@ import sys
 import tempfile
 import threading
 import unittest
-from contextlib import redirect_stdout
 from pathlib import Path
 from unittest import mock
 
@@ -26,6 +24,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from orchestrator import (budget, catalog, config, projects,  # noqa: E402
                           runner, spend, store, targets)
+from tests.sandbox import TmpRootTest, capture  # noqa: E402
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
@@ -54,13 +53,6 @@ CREATE TABLE steps (
   actor TEXT, action TEXT, detail TEXT
 );
 """
-
-
-def capture(fn, *args) -> str:
-    buf = io.StringIO()
-    with redirect_stdout(buf):
-        fn(*args)
-    return buf.getvalue()
 
 
 def result_event(usd: float) -> str:
@@ -116,26 +108,14 @@ class FakeProc:
         return self.returncode
 
 
-class TmpRootTest(unittest.TestCase):
+class _MultitargetTmpRootTest(TmpRootTest):
     """Песочница: БД, каталоги проектов и слой ролей во временном каталоге."""
 
+    PATCHED_ATTRS = ("DB", "TASKS", "LOGS", "PROJECTS",
+                     "ROLE_HOME", "ROLE_CONFIG_DIR", "TARGETS")
+
     def setUp(self):
-        tmp = tempfile.TemporaryDirectory()
-        self.addCleanup(tmp.cleanup)
-        self.root = Path(tmp.name)
-
-        for attr, value in (("DB", self.root / ".artel" / "state.db"),
-                            ("TASKS", self.root / "tasks"),
-                            ("LOGS", self.root / ".artel" / "logs"),
-                            ("PROJECTS", self.root / ".artel" / "projects"),
-                            ("ROLE_HOME", self.root / ".artel" / "home"),
-                            ("ROLE_CONFIG_DIR",
-                             self.root / ".artel" / "home" / ".claude"),
-                            ("TARGETS", self.root / "targets.yaml")):
-            patcher = mock.patch.object(config, attr, value)
-            patcher.start()
-            self.addCleanup(patcher.stop)
-
+        super().setUp()
         # Keychain подменяется функцией, как gitcmd.git: реальный `security`
         # (и патч Popen, ловящий его subprocess.run) в тестах не участвует.
         kc_patcher = mock.patch.object(runner.keychain, "token",
@@ -168,6 +148,9 @@ class TmpRootTest(unittest.TestCase):
                 (task_id, "2026-08-01 00:00:00Z", "operator", "created", ""))
         conn.commit()
         conn.close()
+
+
+TmpRootTest = _MultitargetTmpRootTest
 
 
 class TargetsFileTest(TmpRootTest):
@@ -597,7 +580,7 @@ class ProgramSpendTest(TmpRootTest):
         # gitcmd подменён вместе с Popen: патч Popen ловит и `subprocess.run`
         # внутри `gitcmd.git` — реального git в этом тесте быть не должно.
         with mock.patch.object(runner.gitcmd, "git", fake_git_config), \
-                mock.patch.object(runner.subprocess, "Popen") as popen:
+                mock.patch.object(runner, "spawn_agent") as popen:
             popen.return_value = FakeProc([result_event(2.0)])
             out = capture(runner.cmd_run, "T001")
 
@@ -637,7 +620,7 @@ class RoleEnvTest(TmpRootTest):
         store.update_task(store.db(), "T001", state="in_dev")
 
         with mock.patch.object(runner.gitcmd, "git", fake_git_config), \
-                mock.patch.object(runner.subprocess, "Popen") as popen:
+                mock.patch.object(runner, "spawn_agent") as popen:
             popen.return_value = FakeProc(["готово\n"])
             capture(runner.cmd_run, "T001")
 
@@ -721,7 +704,7 @@ class RoleEnvTest(TmpRootTest):
         store.update_task(store.db(), "T001", state="in_dev")
 
         with mock.patch.object(runner.gitcmd, "git", silent_git), \
-                mock.patch.object(runner.subprocess, "Popen") as popen:
+                mock.patch.object(runner, "spawn_agent") as popen:
             popen.return_value = FakeProc(["готово\n"])
             out = capture(runner.cmd_run, "T001")
 
@@ -743,7 +726,7 @@ class RoleEnvTest(TmpRootTest):
         with mock.patch.object(runner, "role_env",
                                side_effect=OSError("нет места")), \
                 mock.patch.object(runner.gitcmd, "git", fake_git_config), \
-                mock.patch.object(runner.subprocess, "Popen") as popen:
+                mock.patch.object(runner, "spawn_agent") as popen:
             out = capture(runner.cmd_run, "T001")
 
         popen.assert_not_called()

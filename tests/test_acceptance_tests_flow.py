@@ -15,13 +15,11 @@ Guard-функции (AC-разметка SPEC, разбор пометок) —
 проверяется реальным `git diff` между двумя коммитами, заглушкой это
 не изобразить (тот же приём, что `RealPultGitTest` в test_git_fixation.py).
 """
-import io
 import shutil
 import subprocess
 import sys
 import tempfile
 import unittest
-from contextlib import redirect_stdout
 from pathlib import Path
 from unittest import mock
 
@@ -30,6 +28,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from orchestrator import (acceptance, catalog, config, fsm,  # noqa: E402
                           gitcmd, runner, store)
 from scripts import guard  # noqa: E402
+from tests.sandbox import TmpRootTest, capture, fake_git  # noqa: E402
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
@@ -170,29 +169,14 @@ class AcceptanceTest(unittest.TestCase):
 """
 
 
-def fake_git(*args: str) -> subprocess.CompletedProcess:
-    return subprocess.CompletedProcess(list(args), 0, "", "")
-
-
-class TmpRootTest(unittest.TestCase):
+class _AcceptanceFlowTmpRootTest(TmpRootTest):
     """Лёгкая песочница: БД и артефакты во временном каталоге, git — заглушка."""
 
     TASK = "T001"
+    PATCHED_ATTRS = ("DB", "TASKS", "LOGS", "ROLE_HOME", "ROLE_CONFIG_DIR")
 
     def setUp(self):
-        tmp = tempfile.TemporaryDirectory()
-        self.addCleanup(tmp.cleanup)
-        root = Path(tmp.name)
-
-        for attr, value in (("DB", root / ".artel" / "state.db"),
-                            ("TASKS", root / "tasks"),
-                            ("LOGS", root / ".artel" / "logs"),
-                            ("ROLE_HOME", root / ".artel" / "home"),
-                            ("ROLE_CONFIG_DIR",
-                             root / ".artel" / "home" / ".claude")):
-            patcher = mock.patch.object(config, attr, value)
-            patcher.start()
-            self.addCleanup(patcher.stop)
+        super().setUp()
         patcher = mock.patch.object(gitcmd, "git", fake_git)
         patcher.start()
         self.addCleanup(patcher.stop)
@@ -200,12 +184,6 @@ class TmpRootTest(unittest.TestCase):
         self.capture(catalog.cmd_init)
         self.capture(catalog.cmd_new, "Приёмочные тесты до кода")
         self.tdir = config.TASKS / self.TASK
-
-    def capture(self, fn, *args) -> str:
-        buf = io.StringIO()
-        with redirect_stdout(buf):
-            fn(*args)
-        return buf.getvalue()
 
     def state(self) -> str:
         return store.db().execute("SELECT state FROM tasks WHERE id=?",
@@ -240,6 +218,9 @@ class TmpRootTest(unittest.TestCase):
         return [r["detail"] for r in store.db().execute(
             "SELECT detail FROM steps WHERE task_id=? AND action=? ORDER BY id",
             (self.TASK, action))]
+
+
+TmpRootTest = _AcceptanceFlowTmpRootTest
 
 
 # --------------------------------------------------------------------------
@@ -709,7 +690,7 @@ class EscalationReturnsToTestsWritingTest(TmpRootTest):
                 return self.returncode
 
         procs = [FakeProc(["упал\n"], 1) for _ in range(config.AGENT_ATTEMPTS)]
-        with mock.patch.object(runner.subprocess, "Popen", side_effect=procs):
+        with mock.patch.object(runner, "spawn_agent", side_effect=procs):
             return self.capture(runner.cmd_run, self.TASK)
 
     def test_test_author_crash_escalates_with_return_point(self):
@@ -773,11 +754,7 @@ class LockTest(unittest.TestCase):
         self.assertEqual(res.returncode, 0, f"git {' '.join(args)}: {res.stderr}")
         return res.stdout
 
-    def capture(self, fn, *args) -> str:
-        buf = io.StringIO()
-        with redirect_stdout(buf):
-            fn(*args)
-        return buf.getvalue()
+    capture = staticmethod(capture)
 
     def state(self) -> str:
         return store.db().execute("SELECT state FROM tasks WHERE id=?",

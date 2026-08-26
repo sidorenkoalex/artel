@@ -9,18 +9,17 @@
 Песочница как в test_step_cost.py: БД и артефакты во временном каталоге,
 `claude` и git не запускаются (эти команды сюда не заходят).
 """
-import io
 import sqlite3
 import sys
 import tempfile
 import unittest
-from contextlib import redirect_stdout
 from pathlib import Path
 from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from orchestrator import budget, catalog, config, fsm, store  # noqa: E402
+from tests.sandbox import capture  # noqa: E402
 
 # Заготовка валидна по guard: с T017 он вызывается на переходе
 # spec_writing -> spec_gate, и SPEC без обязательных секций до применения
@@ -137,11 +136,7 @@ class SpecBudgetOnTheGateTest(unittest.TestCase):
 
     # ------------------------------------------------------------ утилиты
 
-    def capture(self, fn, *args) -> str:
-        buf = io.StringIO()
-        with redirect_stdout(buf):
-            fn(*args)
-        return buf.getvalue()
+    capture = staticmethod(capture)
 
     def write_spec(self, status: str = "ready", **fields) -> None:
         extra = "".join(f"{k}: {v}\n" for k, v in fields.items())

@@ -23,13 +23,11 @@ PRIMARY KEY на все target (T019), и одинаковая строка дл
 Числовая независимость нумерации проверяется отдельно от строки id.
 """
 import contextlib
-import io
 import shutil
 import subprocess
 import sys
 import tempfile
 import unittest
-from contextlib import redirect_stdout
 from pathlib import Path
 from unittest import mock
 
@@ -37,6 +35,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from orchestrator import (budget, catalog, cleanup, config, fsm,  # noqa: E402
                           runner, spend, store)
+from tests.sandbox import TmpRootTest, capture  # noqa: E402
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
@@ -60,13 +59,6 @@ schema_version: 1
 
 ## Не входит
 """
-
-
-def capture(fn, *args) -> str:
-    buf = io.StringIO()
-    with redirect_stdout(buf):
-        fn(*args)
-    return buf.getvalue()
 
 
 class FakeStream:
@@ -103,13 +95,14 @@ def fake_git_config(*args: str) -> subprocess.CompletedProcess:
     return subprocess.CompletedProcess(list(args), 0, f"{value}\n", "")
 
 
-class TmpRootTest(unittest.TestCase):
+class _MultitargetInvariantsTmpRootTest(TmpRootTest):
     """Песочница: БД, каталоги проектов и слой ролей во временном каталоге."""
 
+    PATCHED_ATTRS = ("ROOT", "DB", "TASKS", "LOGS", "PROJECTS",
+                     "ROLE_HOME", "ROLE_CONFIG_DIR", "TARGETS")
+
     def setUp(self):
-        tmp = tempfile.TemporaryDirectory()
-        self.addCleanup(tmp.cleanup)
-        self.root = Path(tmp.name)
+        super().setUp()
         # ROOT — тоже песочница (не только DB/TASKS/...): `cmd_new` читает
         # templates/, `cmd_run` — skills/ роли из `config.ROOT` динамически.
         # Без копии сюда упадут с ENOENT — или, что опаснее, начнут писать
@@ -125,19 +118,6 @@ class TmpRootTest(unittest.TestCase):
             "---\nbuilt_at_sha: 0000000000000000000000000000000000000000\n"
             "---\n\n# Карта\n", encoding="utf-8")
         (self.root / "CLAUDE.md").write_text("# Конвенции\n", encoding="utf-8")
-
-        for attr, value in (("ROOT", self.root),
-                            ("DB", self.root / ".artel" / "state.db"),
-                            ("TASKS", self.root / "tasks"),
-                            ("LOGS", self.root / ".artel" / "logs"),
-                            ("PROJECTS", self.root / ".artel" / "projects"),
-                            ("ROLE_HOME", self.root / ".artel" / "home"),
-                            ("ROLE_CONFIG_DIR",
-                             self.root / ".artel" / "home" / ".claude"),
-                            ("TARGETS", self.root / "targets.yaml")):
-            patcher = mock.patch.object(config, attr, value)
-            patcher.start()
-            self.addCleanup(patcher.stop)
 
         kc_patcher = mock.patch.object(runner.keychain, "token",
                                        lambda slot: "tok-test")
@@ -158,10 +138,13 @@ class TmpRootTest(unittest.TestCase):
     def run_faked(self, task_id: str, lines=("готово\n",)) -> dict:
         """Прогон `cmd_run` с подменённым git/Popen; возвращает kwargs Popen."""
         with mock.patch.object(runner.gitcmd, "git", fake_git_config), \
-                mock.patch.object(runner.subprocess, "Popen") as popen:
+                mock.patch.object(runner, "spawn_agent") as popen:
             popen.return_value = FakeProc(list(lines))
             capture(runner.cmd_run, task_id)
         return popen.call_args.kwargs
+
+
+TmpRootTest = _MultitargetInvariantsTmpRootTest
 
 
 class PultArtifactIsolationTest(unittest.TestCase):
@@ -211,11 +194,7 @@ class PultArtifactIsolationTest(unittest.TestCase):
                          f"git {' '.join(args)} упал: {res.stderr}")
         return res.stdout
 
-    def capture(self, fn, *args) -> str:
-        buf = io.StringIO()
-        with redirect_stdout(buf):
-            fn(*args)
-        return buf.getvalue()
+    capture = staticmethod(capture)
 
     def status(self) -> str:
         return self.git("status", "--porcelain")

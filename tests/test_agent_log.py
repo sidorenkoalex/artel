@@ -28,18 +28,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from orchestrator import (agent_log, catalog, config, gitcmd,  # noqa: E402
                           runner, store)
-
-
-def fake_git(*args: str) -> subprocess.CompletedProcess:
-    """Подмена `gitcmd.git`: git-идентичность роли, без обращения к репозиторию.
-
-    Нужна, потому что подмена `subprocess.Popen` глобальна: настоящий
-    `gitcmd.git` (его зовёт `runner.role_env` за авторством коммита шага)
-    ушёл бы через неё в фейковый процесс.
-    """
-    identity = {"user.name": "Роль Артели", "user.email": "role@artel.invalid"}
-    value = identity.get(args[-1], "") if args[:2] == ("config", "--get") else ""
-    return subprocess.CompletedProcess(list(args), 0, f"{value}\n", "")
+from tests.sandbox import TmpRootTest, fake_git  # noqa: E402
 
 
 def event(**fields) -> str:
@@ -91,32 +80,13 @@ class FakeProc:
         return self.returncode
 
 
-class TmpRootTest(unittest.TestCase):
+class _AgentLogTmpRootTest(TmpRootTest):
     """Общая песочница: DB, TASKS и LOGS уводятся во временный каталог."""
 
-    def setUp(self):
-        tmp = tempfile.TemporaryDirectory()
-        self.addCleanup(tmp.cleanup)
-        root = Path(tmp.name)
+    PATCHED_ATTRS = ("DB", "TASKS", "LOGS", "ROLE_HOME", "ROLE_CONFIG_DIR")
 
-        for attr, value in (("DB", root / ".artel" / "state.db"),
-                            ("TASKS", root / "tasks"),
-                            ("LOGS", root / ".artel" / "logs"),
-                            # Курируемый слой ролей (T019): каталог заводит
-                            # запуск шага — пусть заводит в песочнице, а не
-                            # в .artel/ репозитория.
-                            ("ROLE_HOME", root / ".artel" / "home"),
-                            ("ROLE_CONFIG_DIR",
-                             root / ".artel" / "home" / ".claude")):
-            patcher = mock.patch.object(config, attr, value)
-            patcher.start()
-            self.addCleanup(patcher.stop)
 
-    def capture(self, fn, *args) -> str:
-        buf = io.StringIO()
-        with redirect_stdout(buf):
-            fn(*args)
-        return buf.getvalue()
+TmpRootTest = _AgentLogTmpRootTest
 
 
 class NewAgentLogTest(TmpRootTest):
@@ -348,7 +318,7 @@ class CmdRunLoggingTest(TmpRootTest):
         self.addCleanup(pf_patcher.stop)
 
     def run_agent(self, lines, returncode: int = 0):
-        with mock.patch.object(runner.subprocess, "Popen") as popen:
+        with mock.patch.object(runner, "spawn_agent") as popen:
             popen.return_value = FakeProc(lines, returncode)
             return self.capture(runner.cmd_run, self.TASK)
 
@@ -392,7 +362,7 @@ class CmdRunLoggingTest(TmpRootTest):
         self.assertEqual(self.log_file(2).read_text(encoding="utf-8"), "прогон 2\n")
 
     def test_stderr_merged_into_the_same_file(self):
-        with mock.patch.object(runner.subprocess, "Popen") as popen:
+        with mock.patch.object(runner, "spawn_agent") as popen:
             popen.return_value = FakeProc([])
             self.capture(runner.cmd_run, self.TASK)
 
@@ -402,7 +372,7 @@ class CmdRunLoggingTest(TmpRootTest):
 
     def test_agent_started_in_streaming_mode(self):
         """Без stream-json строки приходят одним куском в конце — см. PLAN.md."""
-        with mock.patch.object(runner.subprocess, "Popen") as popen:
+        with mock.patch.object(runner, "spawn_agent") as popen:
             popen.return_value = FakeProc([])
             self.capture(runner.cmd_run, self.TASK)
 
@@ -412,7 +382,7 @@ class CmdRunLoggingTest(TmpRootTest):
         self.assertIn("--verbose", argv, "без него CLI выходит с rc=1")
 
     def test_pipe_closed_after_pump_finished(self):
-        with mock.patch.object(runner.subprocess, "Popen") as popen:
+        with mock.patch.object(runner, "spawn_agent") as popen:
             proc = FakeProc(["шаг 1\n"])
             popen.return_value = proc
             self.capture(runner.cmd_run, self.TASK)
@@ -421,7 +391,7 @@ class CmdRunLoggingTest(TmpRootTest):
 
     def test_missing_cli_saves_prompt_to_a_file_and_journals_skip(self):
         """Ручной прогон роли: промпт в файле, путь — в выводе и в журнале."""
-        with mock.patch.object(runner.subprocess, "Popen", side_effect=FileNotFoundError):
+        with mock.patch.object(runner, "spawn_agent", side_effect=FileNotFoundError):
             out = self.capture(runner.cmd_run, self.TASK)
 
         saved = list(config.LOGS.glob("*.prompt.txt"))
@@ -438,7 +408,7 @@ class CmdRunLoggingTest(TmpRootTest):
             runner.subprocess.TimeoutExpired(cmd="claude", timeout=config.AGENT_TIMEOUT_SEC),
             -9,
         ]
-        with mock.patch.object(runner.subprocess, "Popen", return_value=proc):
+        with mock.patch.object(runner, "spawn_agent", return_value=proc):
             out = self.capture(runner.cmd_run, self.TASK)
 
         proc.kill.assert_called_once()
@@ -454,7 +424,7 @@ class CmdRunLoggingTest(TmpRootTest):
         self.addCleanup(proc.stdout.released.set)
 
         with mock.patch.object(config, "PUMP_JOIN_TIMEOUT_SEC", 0.05), \
-                mock.patch.object(runner.subprocess, "Popen", return_value=proc):
+                mock.patch.object(runner, "spawn_agent", return_value=proc):
             out = self.capture(runner.cmd_run, self.TASK)
 
         self.assertIn("лог неполный", out)
@@ -468,7 +438,7 @@ class CmdRunLoggingTest(TmpRootTest):
     def test_broken_log_is_journaled_not_silent(self):
         with mock.patch.object(agent_log, "stream_to_log",
                                side_effect=OSError("No space left on device")), \
-                mock.patch.object(runner.subprocess, "Popen") as popen:
+                mock.patch.object(runner, "spawn_agent") as popen:
             popen.return_value = FakeProc(["шаг 1\n"])
             out = self.capture(runner.cmd_run, self.TASK)
 

@@ -24,13 +24,11 @@ T001–T020 остаются зелёными без правок — они и�
 см. tasks/T021/PLAN.md, «Подход»).
 """
 import contextlib
-import io
 import shutil
 import subprocess
 import sys
 import tempfile
 import unittest
-from contextlib import redirect_stdout
 from pathlib import Path
 from unittest import mock
 
@@ -38,6 +36,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from orchestrator import (catalog, config, fixation, fsm,  # noqa: E402
                           gitcmd, projects, runner, store)
+from tests.sandbox import TmpRootTest, capture  # noqa: E402
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
@@ -94,13 +93,6 @@ schema_version: 1
 """
 
 
-def capture(fn, *args) -> str:
-    buf = io.StringIO()
-    with redirect_stdout(buf):
-        fn(*args)
-    return buf.getvalue()
-
-
 class FakeStream:
     """Пайп процесса: отдаёт заготовленные строки, помнит своё закрытие."""
 
@@ -128,26 +120,14 @@ class FakeProc:
         return self.returncode
 
 
-class TmpRootTest(unittest.TestCase):
+class _GitFixationTmpRootTest(TmpRootTest):
     """Песочница мультитаргета: пути `config` — во временном каталоге, git настоящий."""
 
-    def setUp(self):
-        tmp = tempfile.TemporaryDirectory()
-        self.addCleanup(tmp.cleanup)
-        self.root = Path(tmp.name)
+    PATCHED_ATTRS = ("ROOT", "DB", "TASKS", "LOGS", "PROJECTS",
+                     "ROLE_HOME", "ROLE_CONFIG_DIR", "TARGETS")
 
-        for attr, value in (("ROOT", self.root),
-                            ("DB", self.root / ".artel" / "state.db"),
-                            ("TASKS", self.root / "tasks"),
-                            ("LOGS", self.root / ".artel" / "logs"),
-                            ("PROJECTS", self.root / ".artel" / "projects"),
-                            ("ROLE_HOME", self.root / ".artel" / "home"),
-                            ("ROLE_CONFIG_DIR",
-                             self.root / ".artel" / "home" / ".claude"),
-                            ("TARGETS", self.root / "targets.yaml")):
-            patcher = mock.patch.object(config, attr, value)
-            patcher.start()
-            self.addCleanup(patcher.stop)
+
+TmpRootTest = _GitFixationTmpRootTest
 
 
 class ArtifactRepoInitTest(TmpRootTest):
@@ -374,7 +354,7 @@ class ExternalIntegrityIncidentBlocksRunTest(TmpRootTest):
                 return FakeProc(["готово\n"])
             return real_popen(cmd, *args, **kwargs)
 
-        with mock.patch.object(runner.subprocess, "Popen",
+        with mock.patch.object(runner, "spawn_agent",
                                side_effect=side_effect) as popen:
             out = capture(runner.cmd_run, task_id)
         return out, popen
@@ -613,11 +593,7 @@ class RealPultGitTest(unittest.TestCase):
         self.assertEqual(res.returncode, 0, f"git {' '.join(args)}: {res.stderr}")
         return res.stdout
 
-    def capture(self, fn, *args) -> str:
-        buf = io.StringIO()
-        with redirect_stdout(buf):
-            fn(*args)
-        return buf.getvalue()
+    capture = staticmethod(capture)
 
     def head(self) -> str:
         return self.git("rev-parse", "HEAD").strip()
@@ -656,7 +632,7 @@ class RealPultGitTest(unittest.TestCase):
                 return FakeProc(["готово\n"])
             return real_popen(cmd, *args, **kwargs)
 
-        with mock.patch.object(runner.subprocess, "Popen",
+        with mock.patch.object(runner, "spawn_agent",
                                side_effect=side_effect) as popen:
             out = self.capture(runner.cmd_run, self.TASK)
         return out, popen

@@ -8,17 +8,16 @@
 Реального CLI здесь нет: `subprocess.Popen` подменён и запоминает, с чем
 его позвали.
 """
-import io
 import sys
 import tempfile
 import unittest
-from contextlib import redirect_stdout
 from pathlib import Path
 from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from orchestrator import catalog, config, gitcmd, runner, store  # noqa: E402
+from tests.sandbox import capture  # noqa: E402
 
 
 class FakeStream:
@@ -89,11 +88,7 @@ class PromptChannelTest(unittest.TestCase):
 
     # ------------------------------------------------------------ утилиты
 
-    def capture(self, fn, *args) -> str:
-        buf = io.StringIO()
-        with redirect_stdout(buf):
-            fn(*args)
-        return buf.getvalue()
+    capture = staticmethod(capture)
 
     def set_state(self, state: str) -> None:
         conn = store.db()
@@ -103,7 +98,7 @@ class PromptChannelTest(unittest.TestCase):
     def run_agent(self, state: str = "in_dev") -> mock.Mock:
         """Прогон шага с подменённым процессом; возвращает мок Popen."""
         self.set_state(state)
-        with mock.patch.object(runner.subprocess, "Popen") as popen:
+        with mock.patch.object(runner, "spawn_agent") as popen:
             popen.return_value = FakeProc(["готово\n"])
             self.capture(runner.cmd_run, self.TASK)
         return popen
@@ -173,7 +168,7 @@ class PromptChannelTest(unittest.TestCase):
         (`test_the_prompt_file_is_named_in_the_journal`), а не из экрана.
         """
         self.set_state("in_dev")
-        with mock.patch.object(runner.subprocess, "Popen") as popen:
+        with mock.patch.object(runner, "spawn_agent") as popen:
             popen.return_value = FakeProc(["готово\n"])
             out = self.capture(runner.cmd_run, self.TASK)
 
@@ -185,7 +180,7 @@ class PromptChannelTest(unittest.TestCase):
         self.set_state("in_dev")
         with mock.patch.object(Path, "write_text",
                                side_effect=OSError("диск переполнен")):
-            with mock.patch.object(runner.subprocess, "Popen") as popen:
+            with mock.patch.object(runner, "spawn_agent") as popen:
                 self.capture(runner.cmd_run, self.TASK)
 
         popen.assert_not_called()
@@ -203,7 +198,7 @@ class PromptChannelTest(unittest.TestCase):
         with mock.patch.object(runner, "open",
                                side_effect=FileNotFoundError("нет файла"),
                                create=True):
-            with mock.patch.object(runner.subprocess, "Popen") as popen:
+            with mock.patch.object(runner, "spawn_agent") as popen:
                 out = self.capture(runner.cmd_run, self.TASK)
 
         popen.assert_not_called()

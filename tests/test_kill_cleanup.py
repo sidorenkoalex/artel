@@ -11,13 +11,11 @@ Git тут настоящий, но не рабочий: ROOT уводится �
 может только Оператор отдельным ADR; перечень «инвариант → тест →
 откуда» — docs/invariants.md.
 """
-import io
 import shutil
 import subprocess
 import sys
 import tempfile
 import unittest
-from contextlib import redirect_stdout
 from pathlib import Path
 from unittest import mock
 
@@ -25,6 +23,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from orchestrator import (agent_log, catalog, cleanup, config,  # noqa: E402
                           gitcmd, store)
+from tests.sandbox import capture  # noqa: E402
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
@@ -70,11 +69,7 @@ class TmpRepoTest(unittest.TestCase):
                          f"git {' '.join(args)} упал: {res.stderr}")
         return res.stdout
 
-    def capture(self, fn, *args) -> str:
-        buf = io.StringIO()
-        with redirect_stdout(buf):
-            fn(*args)
-        return buf.getvalue()
+    capture = staticmethod(capture)
 
     def task_row(self):
         return store.db().execute(

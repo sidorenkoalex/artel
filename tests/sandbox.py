@@ -1,0 +1,81 @@
+"""Общая тестовая песочница (SPEC T037, требование 1).
+
+`TmpRootTest`, `capture` и `fake_git` копировались по 9/17/8 тестовым
+файлам с расхождениями в наборе подменяемых путей `config` —
+непропатченный путь в очередной копии означал тихую утечку теста на
+реальное дерево пульта (SPEC T037, «Контекст»). Файлы, которым нужен
+не полный набор или доп. подготовка (git-заглушка, `cmd_init`, копия
+`skills/`/`templates/`), наследуют `TmpRootTest` и переопределяют
+`PATCHED_ATTRS`/`setUp` — см. tasks/T037/PLAN.md, «Таблица переносов».
+"""
+import io
+import subprocess
+import tempfile
+import unittest
+from contextlib import redirect_stdout
+from pathlib import Path
+from unittest import mock
+
+from orchestrator import config
+
+# Все пути `config`, которые сегодня подменяет хотя бы одна песочница
+# (SPEC T037, AC-2) — порядок как в orchestrator/config.py.
+ALL_CONFIG_ATTRS = (
+    "DB", "TASKS", "LOGS", "ROOT", "PROJECTS", "TARGETS",
+    "ROLE_HOME", "ROLE_CONFIG_DIR", "BACKUP_MARKER",
+)
+
+
+def capture(fn, *args) -> str:
+    buf = io.StringIO()
+    with redirect_stdout(buf):
+        fn(*args)
+    return buf.getvalue()
+
+
+def fake_git(*args: str) -> subprocess.CompletedProcess:
+    """Подмена `gitcmd.git`: git-идентичность роли, без обращения к репозиторию.
+
+    Нужна, потому что подмена `subprocess.Popen` глобальна: настоящий
+    `gitcmd.git` (его зовёт `runner.role_env` за авторством коммита шага)
+    ушёл бы через неё в фейковый процесс.
+    """
+    identity = {"user.name": "Роль Артели", "user.email": "role@artel.invalid"}
+    value = identity.get(args[-1], "") if args[:2] == ("config", "--get") else ""
+    return subprocess.CompletedProcess(list(args), 0, f"{value}\n", "")
+
+
+class TmpRootTest(unittest.TestCase):
+    """Общая песочница: пути `config` — во временном каталоге.
+
+    `PATCHED_ATTRS` — параметризуемый набор патчей (SPEC T037,
+    требование 1); по умолчанию — все девять путей `config` (AC-2).
+    """
+
+    PATCHED_ATTRS = ALL_CONFIG_ATTRS
+
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.root = Path(tmp.name)
+
+        for attr in self.PATCHED_ATTRS:
+            patcher = mock.patch.object(config, attr, self._patched_path(attr))
+            patcher.start()
+            self.addCleanup(patcher.stop)
+
+    def _patched_path(self, attr: str) -> Path:
+        return {
+            "ROOT": self.root,
+            "DB": self.root / ".artel" / "state.db",
+            "TASKS": self.root / "tasks",
+            "LOGS": self.root / ".artel" / "logs",
+            "PROJECTS": self.root / ".artel" / "projects",
+            "TARGETS": self.root / "targets.yaml",
+            "ROLE_HOME": self.root / ".artel" / "home",
+            "ROLE_CONFIG_DIR": self.root / ".artel" / "home" / ".claude",
+            "BACKUP_MARKER": self.root / ".artel" / "backup-marker",
+        }[attr]
+
+    def capture(self, fn, *args) -> str:
+        return capture(fn, *args)
