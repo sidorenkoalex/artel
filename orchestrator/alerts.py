@@ -46,6 +46,20 @@ def open_alerts(conn, kind: str | None = None) -> list:
     return store.open_alerts(conn, kind)
 
 
+def auto_ack(conn, alert_id: int) -> None:
+    """Ack от имени `doctor`: условие, представленное алертом, при текущем
+    прогоне фактически исчезло (tasks/T035/SPEC.md, требование 6).
+
+    Не переиспользует `ack()`: тот — ручной путь Оператора (CLI
+    `alert-ack`), с его собственными правилами (`trigger` требует текст
+    решения). Авто-ack — только для incident-алертов трёх сирот и
+    `backup_age` (doctor.py решает, когда звать), решение всегда одно и
+    то же и по построению не требует текста от человека.
+    """
+    resolution = f"условие ушло, прогон doctor {store.now()}"
+    store.ack_alert(conn, alert_id, "doctor", resolution)
+
+
 def ack(conn, alert_id: int, actor: str, resolution: str = "") -> str | None:
     """Подтверждает алерт; None — ок, иначе причина отказа (не подтверждён).
 

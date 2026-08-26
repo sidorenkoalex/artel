@@ -383,6 +383,44 @@ def recovery_check(conn, target: str) -> list[Check]:
     return results
 
 
+# --- авто-ack (tasks/T035/SPEC.md, требования 1-7) -----------------------
+
+# Разбор сущности обратно из `message`, который сами же под-проверки ниже
+# и составляют (формат стабилен, т.к. это единственный писатель) — `alerts`
+# не хранит структурированный идентификатор сущности отдельным полем
+# (SPEC этого не просит, заводить миграцию схемы вне зоны задачи).
+_BRANCH_ALERT_RE = re.compile(r"ветка (\S+) не убрана$")
+_DIR_ALERT_RE = re.compile(r"^(.+) без строки БД$")
+_WORKTREE_ALERT_RE = re.compile(r"^worktree (.+) без задачи$")
+
+
+def _auto_ack_gone(conn, source: str, is_live) -> None:
+    """Подтверждает открытые алерты `source`, чьё условие `is_live` больше
+    не подтверждает (требование 7: пока условие в силе — не трогать).
+
+    Сообщение, не распознанное `is_live` (дрейф формата) — безопасный
+    отказ: считается, что условие ещё в силе, ack не проставляется.
+    """
+    for row in alerts.open_alerts(conn, "incident"):
+        if row["source"] == source and not is_live(row["message"]):
+            alerts.auto_ack(conn, row["id"])
+
+
+def _branch_alert_live(message: str) -> bool:
+    match = _BRANCH_ALERT_RE.search(message)
+    return match is None or gitcmd.branch_exists(match.group(1))
+
+
+def _dir_alert_live(message: str, known_ids: set) -> bool:
+    match = _DIR_ALERT_RE.match(message)
+    return match is None or Path(match.group(1)).name not in known_ids
+
+
+def _worktree_alert_live(message: str, current_paths: set) -> bool:
+    match = _WORKTREE_ALERT_RE.match(message)
+    return match is None or match.group(1) in current_paths
+
+
 # --- сироты (требование 8) ----------------------------------------------
 
 def _orphan_worktrees() -> list[str]:
@@ -423,6 +461,8 @@ def check_orphans(conn) -> list[Check]:
                             "; ".join(str(e) for _, e in orphan_dirs)))
     else:
         results.append(Check("orphans-dirs", "ok", "нет каталогов без строки БД"))
+    _auto_ack_gone(conn, "doctor.orphans.dir",
+                  lambda msg: _dir_alert_live(msg, known_ids))
 
     stale = [r for r in store.all_tasks(conn)
             if r["state"] in ("done", "killed") and r["branch"]
@@ -437,6 +477,7 @@ def check_orphans(conn) -> list[Check]:
                             "; ".join(f"{r['id']}:{r['branch']}" for r in stale)))
     else:
         results.append(Check("orphans-branches", "ok", "нет веток done/killed задач"))
+    _auto_ack_gone(conn, "doctor.orphans.branch", _branch_alert_live)
 
     orphan_worktrees = _orphan_worktrees()
     if orphan_worktrees:
@@ -447,6 +488,9 @@ def check_orphans(conn) -> list[Check]:
                             "; ".join(orphan_worktrees)))
     else:
         results.append(Check("orphans-worktrees", "ok", "лишних worktree нет"))
+    current_worktree_paths = set(orphan_worktrees)
+    _auto_ack_gone(conn, "doctor.orphans.worktree",
+                  lambda msg: _worktree_alert_live(msg, current_worktree_paths))
 
     return results
 
@@ -467,6 +511,7 @@ def check_backup_age(conn) -> Check:
                   f"порога {config.BACKUP_MAX_AGE_DAYS}")
         alerts.raise_alert(conn, None, "incident", "doctor.backup_age", message)
         return Check("backup-age", "fail", message)
+    _auto_ack_gone(conn, "doctor.backup_age", lambda _msg: False)
     return Check("backup-age", "ok", f"{age_days:.1f} дн. назад")
 
 
