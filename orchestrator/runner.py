@@ -468,7 +468,19 @@ def run_agent_once(conn, task_id: str, role: str, prompt: str,
     close_pump(conn, task_id, role, pump, proc)
     # Деньги сжигает любая попытка, а не только успешная: провалившаяся стоит
     # столько же, и не учитывать её значило бы обходить потолок ретраями.
-    spent = spend.charge_step(conn, task_id, role, pump.cost, numbered)
+    # Финального события потока нет ИМЕННО из-за таймаута или обрыва
+    # stdout-пайпа (tasks/T040) — отдельная ветка учёта, без изменений
+    # `charge_step` (её сигнатуру напрямую зовут другие тесты, SPEC T040
+    # требование 4). Признак обрыва пайпа — тот же `pump.error`, что уже
+    # заводит «agent log INCOMPLETE» в `close_pump`; новый способ его
+    # обнаружить не заводится.
+    if pump.cost is None and (timed_out or pump.error is not None):
+        cause = "таймаут шага" if timed_out else "обрыв stdout-пайпа"
+        spent = spend.charge_missing_result(
+            conn, task_id, role, numbered, cause,
+            pump.partial_tokens, pump.saw_usage_event)
+    else:
+        spent = spend.charge_step(conn, task_id, role, pump.cost, numbered)
     # Порог программы считается сразу после учёта: сумма по всем задачам
     # всех target'ов сдвинулась именно этим шагом (roadmap §5).
     budget.check_program_spend(conn, task_id, pump.cost)

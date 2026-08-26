@@ -69,6 +69,17 @@ class BlockingStream(FakeStream):
         raise StopIteration
 
 
+class BrokenPipeStream(FakeStream):
+    """Пайп, обрывающийся посреди чтения: после заготовленных строк — `OSError`
+    вместо чистого `StopIteration` (tasks/T040, AC-2)."""
+
+    def __next__(self) -> str:
+        try:
+            return next(self.lines)
+        except StopIteration:
+            raise OSError("обрыв stdout-пайпа шага") from None
+
+
 class FakeProc:
     """Процесс агента: отдаёт заготовленные строки, wait() — сразу rc."""
 
@@ -259,6 +270,36 @@ class OutputPumpTest(TmpRootTest):
 
         self.assertIsNone(pump.error)
         self.assertEqual(log.read_text(encoding="utf-8"), "готово\n")
+
+    def test_partial_tokens_survive_a_broken_pipe(self):
+        """tasks/T040, AC-2: usage-события до обрыва пайпа не теряются —
+        читать их после обрыва больше неоткуда."""
+        log = agent_log.new_agent_log("T005", "developer")
+        stream = BrokenPipeStream([
+            event(type="assistant",
+                 message={"role": "assistant", "content": [],
+                         "usage": {"input_tokens": 30, "output_tokens": 12}}),
+        ])
+        pump = agent_log.OutputPump(stream, log)
+
+        with redirect_stdout(io.StringIO()):
+            pump.start()
+            pump.join(5)
+
+        self.assertIsInstance(pump.error, OSError)
+        self.assertEqual(pump.partial_tokens, 42)
+        self.assertTrue(pump.saw_usage_event)
+
+    def test_no_usage_events_leaves_partial_tokens_at_zero(self):
+        pump = agent_log.OutputPump(iter(["просто вывод\n"]),
+                                    agent_log.new_agent_log("T005", "developer"))
+
+        with redirect_stdout(io.StringIO()):
+            pump.start()
+            pump.join(5)
+
+        self.assertEqual(pump.partial_tokens, 0)
+        self.assertFalse(pump.saw_usage_event)
 
 
 class RealSubprocessPumpTest(TmpRootTest):

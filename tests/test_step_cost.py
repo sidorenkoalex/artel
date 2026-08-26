@@ -38,6 +38,14 @@ def result_event(usd=0.5, **fields) -> str:
                  result="готово", total_cost_usd=usd, **fields)
 
 
+def assistant_event(usage=None) -> str:
+    """Промежуточное событие потока: usage лежит в `message.usage`."""
+    message = {"role": "assistant", "content": [{"type": "text", "text": "работаю"}]}
+    if usage is not None:
+        message["usage"] = usage
+    return event(type="assistant", message=message)
+
+
 class FakeStream:
     """Пайп процесса: отдаёт заготовленные строки, помнит своё закрытие."""
 
@@ -133,6 +141,34 @@ class ParseCostEventTest(unittest.TestCase):
         self.assertIn("1000", note)
 
 
+class StreamUsageTokensTest(unittest.TestCase):
+    """Токены usage любого события потока (tasks/T040) — не только `result`."""
+
+    def test_assistant_event_usage_is_summed(self):
+        tokens = spend.stream_usage_tokens(assistant_event(
+            usage={"input_tokens": 10, "output_tokens": 5}))
+
+        self.assertEqual(tokens, 15)
+
+    def test_result_event_usage_still_works(self):
+        tokens = spend.stream_usage_tokens(result_event(
+            usd=0.5, usage={"input_tokens": 7, "output_tokens": 3}))
+
+        self.assertEqual(tokens, 10)
+
+    def test_assistant_event_without_usage_is_none(self):
+        self.assertIsNone(spend.stream_usage_tokens(assistant_event()))
+
+    def test_other_event_types_are_ignored(self):
+        for raw in (event(type="system", subtype="init"),
+                    event(type="user", message={"role": "user", "content": []}),
+                    event(type="assistant", message="не словарь"),
+                    "простой текст без json\n",
+                    '{"type": "assistant", "message":\n'):
+            with self.subTest(raw=raw[:40]):
+                self.assertIsNone(spend.stream_usage_tokens(raw))
+
+
 class PumpCostTest(TmpRootTest):
     """Перекачка снимает стоимость с потока — в файл лога она не попадает."""
 
@@ -173,6 +209,107 @@ class PumpCostTest(TmpRootTest):
 
     def test_stream_without_cost_leaves_none(self):
         self.assertIsNone(self.pump(["просто вывод\n"]).cost)
+
+    def test_partial_tokens_are_summed_across_events(self):
+        pump = self.pump([
+            assistant_event(usage={"input_tokens": 10, "output_tokens": 5}),
+            "просто текст, не usage-событие\n",
+            assistant_event(usage={"input_tokens": 20, "output_tokens": 8}),
+        ])
+
+        self.assertEqual(pump.partial_tokens, 43)
+        self.assertTrue(pump.saw_usage_event)
+
+    def test_no_usage_events_leaves_partial_tokens_at_zero(self):
+        pump = self.pump(["просто вывод, ни одного usage-события\n"])
+
+        self.assertEqual(pump.partial_tokens, 0)
+        self.assertFalse(pump.saw_usage_event,
+                         "0 токенов не должен выглядеть как «usage видели»")
+
+    def test_partial_tokens_are_kept_even_when_result_arrives(self):
+        """Финальное событие пришло — частичные токены всё равно посчитаны:
+        решение, использовать ли их, принимает вызывающий код."""
+        pump = self.pump([
+            assistant_event(usage={"input_tokens": 10, "output_tokens": 5}),
+            result_event(usd=0.5, usage={"input_tokens": 15, "output_tokens": 9}),
+        ])
+
+        self.assertEqual(pump.cost["usd"], 0.5)
+        self.assertEqual(pump.partial_tokens, 15 + 24)
+
+
+class ChargeMissingResultTest(TmpRootTest):
+    """`spend.charge_missing_result` — учёт попытки без финального события
+    потока (tasks/T040): частичная сумма токенов либо алерт неизвестной
+    стоимости, `spent_usd` не трогается ни в одной ветке."""
+
+    TASK = "T001"
+
+    def setUp(self):
+        super().setUp()
+        self.capture(catalog.cmd_init)
+        self.capture(catalog.cmd_new, "Учёт стоимости без финального события")
+
+    def task_row(self):
+        return store.db().execute(
+            "SELECT * FROM tasks WHERE id=?", (self.TASK,)).fetchone()
+
+    def journal(self) -> list[tuple[str, str, str]]:
+        return [(r["actor"], r["action"], r["detail"]) for r in store.db().execute(
+            "SELECT * FROM steps WHERE task_id=? ORDER BY id", (self.TASK,))]
+
+    def unknown_cost_alerts(self) -> list:
+        return store.db().execute(
+            "SELECT * FROM alerts WHERE kind='incident' AND "
+            "source='spend.unknown_cost'").fetchall()
+
+    def test_partial_tokens_are_journaled_without_touching_spent(self):
+        conn = store.db()
+
+        spent = spend.charge_missing_result(
+            conn, self.TASK, "developer", "попытка 1/3", "таймаут шага",
+            partial_tokens=150, saw_usage_event=True)
+
+        self.assertEqual(self.task_row()["spent_usd"], 0.0)
+        self.assertIn(", частичная: 150 токенов", spent)
+        actions = [(a, action) for a, action, _ in self.journal()]
+        self.assertIn(("developer", "agent cost PARTIAL"), actions)
+        detail = self.journal()[-1][2]
+        self.assertIn("частичная", detail)
+        self.assertIn("150 токенов", detail)
+        self.assertIn("таймаут шага", detail)
+        self.assertEqual(self.unknown_cost_alerts(), [],
+                         "частичная сумма — алерт не заводится (AC-1/2 «либо…либо»)")
+
+    def test_unrecoverable_cost_journals_and_raises_an_alert(self):
+        conn = store.db()
+
+        spent = spend.charge_missing_result(
+            conn, self.TASK, "developer", "попытка 1/3", "обрыв stdout-пайпа",
+            partial_tokens=0, saw_usage_event=False)
+
+        self.assertEqual(self.task_row()["spent_usd"], 0.0)
+        self.assertEqual(spent, "")
+        detail = self.journal()[-1][2]
+        self.assertIn("стоимость шага неизвестна", detail)
+        self.assertIn("обрыв stdout-пайпа", detail)
+        found = self.unknown_cost_alerts()
+        self.assertEqual(len(found), 1)
+        self.assertEqual(found[0]["kind"], "incident")
+        self.assertEqual(found[0]["source"], "spend.unknown_cost")
+        self.assertIn(self.TASK, found[0]["message"])
+
+    def test_repeated_identical_failure_does_not_duplicate_the_alert(self):
+        conn = store.db()
+
+        for _ in range(2):
+            spend.charge_missing_result(
+                conn, self.TASK, "developer", "попытка 1/3", "таймаут шага",
+                partial_tokens=0, saw_usage_event=False)
+
+        self.assertEqual(len(self.unknown_cost_alerts()), 1,
+                         "дедуп alerts.raise_alert не даёт повторам плодить копии")
 
 
 class CmdRunCostTest(TmpRootTest):
@@ -344,6 +481,86 @@ class CmdRunCostTest(TmpRootTest):
 
         self.assertEqual(self.task_row()["state"], "in_dev")
         self.assertNotIn("бюджет исчерпан", out)
+
+
+def timeout_then_killed_proc(lines) -> mock.Mock:
+    """Процесс, чей `wait()` сперва бросает `TimeoutExpired` — таймаут шага
+    без единого ретрая (см. `tests/test_agent_log.py::
+    CmdRunLoggingTest.test_timeout_kills_process_and_journals`)."""
+    proc = mock.Mock(stdout=FakeStream(lines))
+    proc.wait.side_effect = [
+        runner.subprocess.TimeoutExpired(cmd="claude", timeout=config.AGENT_TIMEOUT_SEC),
+        -9,
+    ]
+    return proc
+
+
+class CmdRunPartialCostTest(TmpRootTest):
+    """`run` при таймауте, но с usage-событиями в потоке до обрыва (tasks/
+    T040): частичная сумма токенов в журнале, `spent_usd` не меняется, алерт
+    не заводится. Локальные приёмочные тесты T040 сознательно не фиксируют
+    эту ветку числом (курс токена в доллары не задан) — здесь код всё равно
+    обязан её реально проходить (skills/coding-standards: юнит-тесты — часть
+    определения «сделано»)."""
+
+    TASK = "T001"
+
+    def setUp(self):
+        super().setUp()
+        self.capture(catalog.cmd_init)
+        self.capture(catalog.cmd_new, "Частичная стоимость при таймауте")
+        conn = store.db()
+        conn.execute("UPDATE tasks SET state='in_dev' WHERE id=?", (self.TASK,))
+        conn.commit()
+
+        patcher = mock.patch.object(runner.time, "sleep", lambda _: None)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        git_patcher = mock.patch.object(gitcmd, "git", fake_git)
+        git_patcher.start()
+        self.addCleanup(git_patcher.stop)
+        kc_patcher = mock.patch.object(runner.keychain, "token",
+                                       lambda slot: "tok-test")
+        kc_patcher.start()
+        self.addCleanup(kc_patcher.stop)
+        pf_patcher = mock.patch(
+            "orchestrator.doctor.preflight_checks", lambda role, target: [])
+        pf_patcher.start()
+        self.addCleanup(pf_patcher.stop)
+
+    def task_row(self):
+        return store.db().execute(
+            "SELECT * FROM tasks WHERE id=?", (self.TASK,)).fetchone()
+
+    def journal_text(self) -> str:
+        rows = store.db().execute(
+            "SELECT actor, action, detail FROM steps WHERE task_id=? "
+            "ORDER BY id", (self.TASK,)).fetchall()
+        return "\n".join(f"{r['actor']} | {r['action']} | {r['detail']}"
+                         for r in rows)
+
+    def unknown_cost_alerts(self) -> list:
+        return store.db().execute(
+            "SELECT * FROM alerts WHERE kind='incident' AND "
+            "source='spend.unknown_cost'").fetchall()
+
+    def test_timeout_with_usage_events_charges_a_partial_token_sum(self):
+        proc = timeout_then_killed_proc([
+            assistant_event(usage={"input_tokens": 100, "output_tokens": 50}),
+            assistant_event(usage={"input_tokens": 40, "output_tokens": 10}),
+        ])
+
+        with mock.patch.object(runner, "spawn_agent", return_value=proc):
+            out = self.capture(runner.cmd_run, self.TASK)
+
+        self.assertEqual(self.task_row()["spent_usd"], 0.0)
+        text = self.journal_text()
+        self.assertIn("частичная", text)
+        self.assertIn("200 токенов", text)
+        self.assertNotIn("стоимость шага неизвестна", text)
+        self.assertEqual(self.unknown_cost_alerts(), [],
+                         "usage-события были — алерт неизвестной стоимости не нужен")
+        self.assertIn("таймаут шага (30 мин)", out)
 
 
 class CmdBudgetTest(TmpRootTest):
