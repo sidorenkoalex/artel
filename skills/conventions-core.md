@@ -2,7 +2,9 @@
 
 ## Артефакты
 - Все артефакты задачи живут в `tasks/<id>/`: SPEC.md, PLAN.md, REVIEW.md,
-  TEST_REPORT.md. Создаются из `templates/`, frontmatter обязателен.
+  QUESTIONS.md (батч analyst). Создаются из `templates/`, frontmatter
+  обязателен. (TEST_REPORT.md — резерв под роль verifier, до C4 не
+  создаётся.)
 - Артефакт = единственный канал передачи между ролями. Всё, что не в
   артефакте, — не существует для следующей роли.
 - Обновляя артефакт, меняй `status` во frontmatter — по нему оркестратор
