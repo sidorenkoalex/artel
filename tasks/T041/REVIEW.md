@@ -2,8 +2,8 @@
 task: T041
 type: review
 author_role: reviewer
-status: changes_requested        # draft | approved | changes_requested | escalate
-iteration: 1
+status: approved        # draft | approved | changes_requested | escalate
+iteration: 2
 schema_version: 2    # версия формата артефакта, см. scripts/guard.py
 ---
 
@@ -11,96 +11,90 @@ schema_version: 2    # версия формата артефакта, см. scr
 
 ## Фаза A — план
 
-Покрытие требований в PLAN.md полное (таблица «Покрытие требований»
-закрывает все 7 требований SPEC), шаги — проверяемые единицы (функция +
-переименование + тесты + документация), подход не конфликтует с
-существующей архитектурой фиксации (`fixation.fix`/`_fix_dogfood`/
-`_fix_external`, `store.set_state`). Замечание по плану — в разделе
-«Замечания» ниже (пункт про `store.task_target`): PLAN нигде не
-рассматривает внешние target'ы, хотя `commit_timeout_checkpoint`
-физически обходит именно тот диспетчер (`fixation.fix(task_id, target)`),
-которым живёт остальная фиксация.
+Итерация 1 отметила один пробел плана: PLAN нигде не рассматривал
+внешние target'ы, хотя `commit_timeout_checkpoint` физически обходит
+диспетчер `fixation.fix(task_id, target)`. В этой итерации PLAN
+дополнен: шаг 1 явно описывает проверку `store.task_target(conn,
+task_id) == config.DEFAULT_TARGET` как первое действие функции, таблица
+«Покрытие требований» у требования 1 помечена «(только догфуд — см.
+«Риски»)», и в «Риски» добавлен блок «Только догфуд» с полным разбором
+(почему коммит workspace'а тоже не решил бы AC-1/AC-2 для внешнего
+target, ссылка на `fsm._dirty_refuses`/ADR-0003 3д). Пробел закрыт;
+остальная оценка Фазы A из итерации 1 (покрытие 7 требований, шаги —
+проверяемые единицы, подход не конфликтует с архитектурой) не менялась
+и подтверждена повторно на этом diff.
 
 ## Соответствие SPEC
 
 | Требование | Вердикт | Комментарий |
 |---|---|---|
-| 1 | Частично | Чекпоинт коммитится, но только для догфуда (см. замечание major ниже) — `commit_timeout_checkpoint` не читает `store.task_target`, всегда бьёт по `config.ROOT` через `gitcmd.git`. |
-| 2 | OK | Сообщение коммита дословно `f"{task_id}: WIP-чекпоинт после таймаута шага {role}"`, подтверждено `test_ac1_...` (сверка `git log -1 --format=%s`). |
-| 3 | OK | `store.journal(conn, task_id, "orchestrator", "WIP-чекпоинт после таймаута шага", detail)` — actor и пометка таймаута в action, подтверждено `test_ac1_...`. |
-| 4 | OK | Вызов `commit_timeout_checkpoint` только внутри `if timed_out:` (orchestrator/runner.py:544-552), ветка `if rc != 0:` (строка 554) не тронута; `test_ac3_...` проверяет explicit. |
-| 5 | OK | `fixation.check_integrity`/`fix`/`read` не изменены (diff не затрагивает `orchestrator/fixation.py`); `test_refixation_keeps_check_integrity_clean_after_the_commit` подтверждает поведение. |
-| 6 | OK | Ветка `timed_out` в `cmd_run`/`run_agent_once` по-прежнему возвращает `"timeout"` без ретрая; не менялась, кроме добавленного вызова чекпоинта. |
-| 7 | OK | Все операции — `gitcmd.git("add"/"diff"/"commit")`, `gitcmd.head_sha()`; прямого `subprocess`/`git` в обход модуля нет. |
+| 1 | OK | `commit_timeout_checkpoint` (orchestrator/runner.py:396-397) теперь первым действием сверяет `store.task_target(conn, task_id) != config.DEFAULT_TARGET` и делает no-op для внешнего target — ограничение задокументировано в PLAN «Риски» и докстринге функции, не расширяет требование молча. Для догфуда (единственный существующий target, ADR-0003 3д) коммит по-прежнему работает как в итерации 1. |
+| 2 | OK | Без изменений с итерации 1: сообщение коммита дословно `f"{task_id}: WIP-чекпоинт после таймаута шага {role}"` (runner.py:404), подтверждено `test_ac1_...`. |
+| 3 | OK | Без изменений: `store.journal(conn, task_id, "orchestrator", "WIP-чекпоинт после таймаута шага", detail)` (runner.py:412-413), подтверждено `test_ac1_...`. |
+| 4 | OK | Без изменений: вызов только внутри `if timed_out:` (runner.py:567), ветка `if rc != 0:` (runner.py:574) не тронута; `test_ac3_...` проверяет explicit. |
+| 5 | OK | `fixation.check_integrity`/`fix`/`read` по-прежнему не изменены во всей ветке (`git diff main...HEAD` не затрагивает `orchestrator/fixation.py`). |
+| 6 | OK | Без изменений: ветка `timed_out` в `run_agent_once` по-прежнему возвращает `"timeout"` без ретрая. |
+| 7 | OK | Без изменений: все операции — `gitcmd.git("add"/"diff"/"commit")`, `gitcmd.head_sha()`; прямого `subprocess`/`git` в обход модуля нет. |
 
 ## Замечания
 
-- **blocker** — `docs/codebase-map.md` — карта устарела относительно
-  фактического дерева коммита `f2a8fba`: перегенерировал `scripts/
-  codebase_map.py` локально на HEAD этой ветки и получил реальную (не
-  только `built_at_sha`) разницу — отсутствует целая секция `##
-  tests/test_timeout_checkpoint.py` и этот файл не добавлен в списки
-  «Импортируется» у `orchestrator/fixation.py`, `orchestrator/gitcmd.py`,
-  `orchestrator/runner.py`, `orchestrator/store.py`. Похоже, карта была
-  regenerated ДО того, как в этот же коммит добавили `tests/
-  test_timeout_checkpoint.py` (94 строки, тот же `f2a8fba`), и повторно
-  не перегенерирована. CI-джоб `codebase-map` (`.github/workflows/
-  ci.yml:54-81`) гоняет ровно ту же регенерацию и диффит без строки
-  `built_at_sha` — на этой ветке он покраснеет (проверено воспроизведением
-  локально). Это тот самый класс дефекта, который описан в conventions-core
-  и уже случался на T028/T029. Исправление: `python3 scripts/
-  codebase_map.py` ещё раз на актуальном дереве и закоммитить результат.
+Пусто — все три пункта вердикта итерации 1 проверены и закрыты
+(детали — ниже, для трассируемости).
 
-- **major** — `orchestrator/runner.py:343-396` (`commit_timeout_checkpoint`),
-  строки 378/381 (`gitcmd.git("add", "-A")` / `gitcmd.git("diff",
-  "--cached", "--quiet")`) — функция коммитит только рабочее дерево
-  пульта (`gitcmd.git` всегда работает с `cwd=config.ROOT`,
-  `orchestrator/gitcmd.py:16`), не сверяясь с `store.task_target(conn,
-  task_id)`. Вся остальная фиксация в проекте таргет-осведомлённая:
-  `fixation.fix(task_id, target)` (fixation.py:49-53) диспетчерит
-  `_fix_dogfood` vs `_fix_external(target)` (последняя коммитит через
-  `gitcmd.in_repo(config.PROJECTS / target, ...)`, fixation.py:90-114), и
-  `role_cwd(target)` (runner.py:322-338) для внешнего target отдаёт
-  `.artel/projects/<target>/workspace/`, а не `config.ROOT`. Сценарий
-  поломки: при таймауте шага задачи с `target != config.DEFAULT_TARGET`
-  (`role_cwd` = внешний workspace, где реально работал агент)
-  `commit_timeout_checkpoint` вместо этого дерева закоммитит текущее
-  состояние `config.ROOT` (репозиторий пульта) — либо тихо ничего не
-  сделает (если ROOT в этот момент чист), оставив реальный WIP внешнего
-  target'а незакоммиченным (AC-1 не выполняется для этой задачи), либо, что
-  хуже, закоммитит в ROOT постороннее незакоммиченное состояние пульта под
-  сообщением о совсем другой задаче/ветке. Сейчас это не воспроизводимо
-  «живьём» — `targets.yaml` объявляет единственный target `artel`
-  (`config.DEFAULT_TARGET`, ADR-0003 3д: «Догфуд — особый случай до A7»),
-  поэтому `store.task_target` всегда возвращает догфуд и путь не
-  задет. Но PLAN нигде не фиксирует это как сознательно принятую границу
-  задачи (ни в «Не входит» SPEC, ни в «Риски»/«Влияние на систему» PLAN —
-  там разбирается только edge-case «роль ещё не создала ветку», без
-  упоминания target'а вовсе), а SPEC требование 1 говорит просто
-  «рабочее дерево ветки задачи» без ограничения догфудом. Пока
-  многотаргетность не активирована — не блокер, но нужно явно
-  зафиксировать это ограничение (SPEC «Не входит» или PLAN «Риски»),
-  либо сделать `commit_timeout_checkpoint` таргет-осведомлённой той же
-  диспетчеризацией, что уже есть в `fixation.fix`/`role_cwd`.
+- Проверка (была: blocker) — `docs/codebase-map.md` перегенерирован
+  локально командой `python3 scripts/codebase_map.py` на HEAD `f5928dd`
+  и сравнен с закоммитированной версией построчно без учёта строки
+  `built_at_sha`: разницы нет — секция `## tests/test_timeout_
+  checkpoint.py` и записи «Импортируется» у `orchestrator/fixation.py`,
+  `orchestrator/gitcmd.py`, `orchestrator/runner.py`, `orchestrator/
+  store.py` присутствуют и совпадают с фактическим деревом. `built_at_
+  sha` в закоммитированной карте (`5ad1fc1f...`) — sha родителя коммита
+  `f5928dd` (тот, что был HEAD в момент запуска скрипта до коммита) —
+  то же соглашение, что и в предыдущих коммитах этой ветки; CI-джоб
+  `codebase-map` (`.github/workflows/ci.yml:54-81`) диффит без этой
+  строки, так что расхождение не покрасит CI. Локальная регенерация,
+  сделанная для проверки, отменена (`git checkout -- docs/codebase-
+  map.md`) — REVIEW.md правит только этот файл.
+- Проверка (была: major) — `orchestrator/runner.py:396-397` теперь
+  содержит `if store.task_target(conn, task_id) != config.DEFAULT_
+  TARGET: return ""` до первого `gitcmd.git("add", ...)`; юнит-тест
+  `test_non_dogfood_target_skips_checkpoint` (tests/test_timeout_
+  checkpoint.py) явно проверяет через `mock.patch.object(gitcmd,
+  "git")` + `git_mock.assert_not_called()`, что для `target =
+  "another-target"` git вообще не вызывается, коммит не создаётся,
+  журнал не пишется. Ограничение «только догфуд» зафиксировано в PLAN
+  «Риски» (не только в коде) — расхождение SPEC/PLAN закрыто.
+- Проверка (была: minor) — `tests/test_timeout_checkpoint.py` получил
+  `test_git_diff_failure_commits_nothing_and_journals_nothing` и
+  `test_git_commit_failure_commits_nothing_and_journals_nothing`
+  (через общий параметризованный хелпер `_run_with_failing_step`),
+  закрывающие класс «отказ git на любом из трёх шагов» целиком, не
+  только `git add`, как было в итерации 1.
 
-- **minor** — `tests/test_timeout_checkpoint.py` — юнит-тесты покрывают
-  отказ только на шаге `git add` (`test_git_add_failure_commits_nothing_
-  and_journals_nothing`); отказ `git diff --cached --quiet` (код возврата
-  вне {0,1}) и отказ `git commit` (строки 381 и 388-391
-  `orchestrator/runner.py`) не покрыты отдельными тестами, хотя PLAN
-  («Риски»/шаг 5) обещал проверить «отказ на любом из трёх шагов». Не
-  блокирует — логика симметрична уже протестированному пути и повторяет
-  устоявшийся паттерн `fixation._fix_external`, но при желании закрыть
-  класс целиком двумя дополнительными кейсами.
+## Верификация (эта итерация)
+
+- `python3 -m unittest discover -s tests -p "test_*.py"` — 625 тестов,
+  3 падения (`test_multitarget.RoleEnvTest::test_env_carries_the_git_
+  identity`, `::test_identity_already_in_the_environment_is_not_
+  overridden`, `::test_absent_identity_is_journalled_before_the_step`).
+  Не относятся к T041 (нет упоминаний `commit_timeout_checkpoint`/
+  `record_fixation`/`timeout` в этих тестах): проверено воспроизведением
+  той же тестовой группы на `main` в отдельном `git worktree` — падают
+  идентично (локальный git-конфиг машины подставляет реальные `user.
+  name`/`user.email` вместо ожидаемых тестом значений-проб). Пред-
+  существующий дефект окружения, не регрессия этой ветки.
+- `python3 -m unittest tests.test_timeout_checkpoint -v` — 7/7 OK.
+- `python3 -m unittest discover -s tasks/T041/acceptance_tests -p
+  "test_*.py" -v` — 4/4 OK (AC-1..AC-4).
+- `git diff --stat main...task/t041-protokol-restarta-posle-taymau` —
+  изменённые файлы совпадают с PLAN «Шаги» (runner.py, store.py,
+  review.py-комментарии, codebase-map.md, invariants.md, тесты,
+  артефакты задачи); ничего вне зоны задачи (`gates.yaml`, `roles.yaml`,
+  `.github/`, `templates/`, `skills/` не затронуты).
 
 ## Вердикт
 
-`changes_requested`:
-1. (blocker) Перегенерировать `docs/codebase-map.md` на актуальном
-   дереве и закоммитить — иначе CI-джоб `codebase-map` красный.
-2. (major) Явно зафиксировать в SPEC «Не входит» или PLAN «Риски»
-   ограничение чекпоинта догфудом (`config.DEFAULT_TARGET`) — либо
-   сделать `commit_timeout_checkpoint` таргет-осведомлённой, как
-   `fixation.fix`/`role_cwd`.
-3. (minor, по желанию) Добавить юнит-тесты на отказ `git diff`/`git
-   commit` внутри `commit_timeout_checkpoint`, не только `git add`.
+`approved`. Оба замечания предыдущей итерации (blocker: устаревшая
+карта; major: чекпоинт не таргет-осведомлён) закрыты и подтверждены
+прогоном тестов и построчным сравнением карты; minor по тестам отказа
+git тоже закрыт, хотя и был необязательным.
