@@ -69,22 +69,80 @@ class CommitTimeoutCheckpointTest(RealPultGitTest):
         self.assertEqual(store.get_task(conn, self.TASK)["fixed_sha"],
                          self.head())
 
+    def _run_with_failing_step(self, failing_subcommand: str, rc: int):
+        """Заглушка `gitcmd.git`: заданный git-подкоманде отвечает `rc`,
+        остальные проходят настоящим `gitcmd.git` (тот же приём, что и
+        существующий `test_git_add_failure_...` — только параметризован
+        по шагу, чтобы закрыть класс целиком: `add`/`diff`/`commit`)."""
+        real_git = gitcmd.git
+
+        def side_effect(*args):
+            if failing_subcommand in args:
+                return subprocess.CompletedProcess(list(args), rc, "", "boom")
+            return real_git(*args)
+
+        with mock.patch.object(gitcmd, "git", side_effect=side_effect):
+            return runner.commit_timeout_checkpoint(
+                store.db(), self.TASK, "developer")
+
     def test_git_add_failure_commits_nothing_and_journals_nothing(self):
         self.enter_in_dev()
         (self.root / "tasks" / self.TASK / "wip.md").write_text(
             "недописано\n", encoding="utf-8")
         before = self.head()
-        real_git = gitcmd.git
 
-        def failing_add(*args):
-            if args and args[0] == "add":
-                return subprocess.CompletedProcess(list(args), 1, "", "boom")
-            return real_git(*args)
+        detail = self._run_with_failing_step("add", 1)
 
-        with mock.patch.object(gitcmd, "git", side_effect=failing_add):
+        self.assertEqual(detail, "")
+        self.assertEqual(self.head(), before)
+        self.assertEqual(self.orchestrator_steps(), [])
+
+    def test_git_diff_failure_commits_nothing_and_journals_nothing(self):
+        """REVIEW.md T041 итерация 1, замечание minor: тот же класс отказа
+        (`git diff --cached --quiet` вне {0,1} — git не ответил), что и у
+        `git add`, отдельным кейсом."""
+        self.enter_in_dev()
+        (self.root / "tasks" / self.TASK / "wip.md").write_text(
+            "недописано\n", encoding="utf-8")
+        before = self.head()
+
+        detail = self._run_with_failing_step("diff", 2)
+
+        self.assertEqual(detail, "")
+        self.assertEqual(self.head(), before)
+        self.assertEqual(self.orchestrator_steps(), [])
+
+    def test_git_commit_failure_commits_nothing_and_journals_nothing(self):
+        """REVIEW.md T041 итерация 1, замечание minor: та же деградация
+        для отказа самого `git commit`."""
+        self.enter_in_dev()
+        (self.root / "tasks" / self.TASK / "wip.md").write_text(
+            "недописано\n", encoding="utf-8")
+        before = self.head()
+
+        detail = self._run_with_failing_step("commit", 1)
+
+        self.assertEqual(detail, "")
+        self.assertEqual(self.head(), before)
+        self.assertEqual(self.orchestrator_steps(), [])
+
+    def test_non_dogfood_target_skips_checkpoint(self):
+        """REVIEW.md T041 итерация 1, замечание major: для target'а,
+        отличного от догфуда, чекпоинт — тихий no-op ДО первого `git
+        add` (см. докстринг `commit_timeout_checkpoint` и PLAN «Риски») —
+        `gitcmd.git` вообще не должен быть вызван."""
+        self.enter_in_dev()
+        (self.root / "tasks" / self.TASK / "wip.md").write_text(
+            "недописано\n", encoding="utf-8")
+        before = self.head()
+        conn = store.db()
+        store.update_task(conn, self.TASK, target="another-target")
+
+        with mock.patch.object(gitcmd, "git") as git_mock:
             detail = runner.commit_timeout_checkpoint(
-                store.db(), self.TASK, "developer")
+                conn, self.TASK, "developer")
 
+        git_mock.assert_not_called()
         self.assertEqual(detail, "")
         self.assertEqual(self.head(), before)
         self.assertEqual(self.orchestrator_steps(), [])

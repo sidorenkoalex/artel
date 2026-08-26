@@ -374,7 +374,27 @@ def commit_timeout_checkpoint(conn, task_id: str, role: str) -> str:
     целостности, ровно то, от чего чекпоинт должен избавить (AC-2).
     `check_integrity`/`fix()` при этом не меняются — фиксация читает их
     как обычно, просто с уже сдвинутым sha.
+
+    Только догфуд (`target == config.DEFAULT_TARGET`, PLAN «Риски»,
+    REVIEW.md T041 итерации 1, замечание major): `gitcmd.git` всегда
+    бьёт по `config.ROOT`, и для внешнего target это дерево пульта, а
+    не тот репозиторий, где реально работала роль (workspace target'а,
+    `role_cwd`). Коммитить туда чекпоинт было бы неверно вдвойне — либо
+    подхватило бы чужое незакоммиченное состояние ROOT под сообщением
+    этой задачи, либо ничего не нашло бы, оставив настоящий WIP
+    workspace'а нетронутым. При этом `check_integrity` для внешнего
+    target тоже смотрит не в workspace, а в артефактный репозиторий
+    `.artel/projects/<target>/` (`fixation.read`/`_read_external`) —
+    свой workspace ADR-0003 §4 вообще не коммитит (тот же довод, что
+    `fsm._dirty_refuses`), поэтому чекпоинт workspace'а не решал бы и
+    исходную проблему AC-1/AC-2 для внешнего target. Пока
+    `targets.yaml` объявляет только догфуд (ADR-0003 3д, «особый случай
+    до A7»), эта ветка не задета вживую; расширение на внешний target —
+    отдельная задача поверх многотаргетной архитектуры фиксации, не
+    точечная правка этой функции.
     """
+    if store.task_target(conn, task_id) != config.DEFAULT_TARGET:
+        return ""
     added = gitcmd.git("add", "-A")
     if added.returncode != 0:
         return ""
