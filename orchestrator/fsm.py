@@ -49,14 +49,23 @@ def _regenerate_and_commit_map(conn, task_id: str) -> None:
         return
     # Не git-вызов (требование 6, AC-4) — прямой subprocess.run, тем же
     # приёмом, что brief._regenerate_map.
-    regen = subprocess.run(["python3", "scripts/codebase_map.py"],
-                           cwd=config.ROOT, capture_output=True, text=True)
+    try:
+        regen = subprocess.run(["python3", "scripts/codebase_map.py"],
+                               cwd=config.ROOT, capture_output=True, text=True)
+    except OSError as exc:
+        _map_regen_incident(conn, task_id,
+                            f"регенерация {MAP_REL} не удалась: {exc}")
+        return
     if regen.returncode != 0:
         reason = regen.stderr.strip()[:200] or f"код возврата {regen.returncode}"
         _map_regen_incident(conn, task_id,
                             f"регенерация {MAP_REL} не удалась: {reason}")
         return
-    regenerated = map_path.read_text(encoding="utf-8")
+    try:
+        regenerated = map_path.read_text(encoding="utf-8")
+    except OSError as exc:
+        _map_regen_incident(conn, task_id, f"{MAP_REL} не прочитан: {exc}")
+        return
     if _map_content_without_sha(regenerated) == _map_content_without_sha(committed):
         restore = gitcmd.git("checkout", "--", MAP_REL)
         if restore.returncode != 0:

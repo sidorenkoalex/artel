@@ -207,6 +207,34 @@ class RegenerateAndCommitMapTest(unittest.TestCase):
         self.assertTrue(incidents[0]["source"].startswith("fsm.map_regen"))
         self.assertIn("стенд: checkout упал", incidents[0]["message"])
 
+    def test_regeneration_oserror_raises_incident_and_does_not_commit(self):
+        with mock.patch.object(gitcmd, "git", fake_git_clean), \
+                mock.patch("subprocess.run",
+                           side_effect=FileNotFoundError("python3 не найден")) as run_mock:
+            fsm._regenerate_and_commit_map(self.conn, "T001")
+
+        run_mock.assert_called_once()
+        incidents = self.incidents()
+        self.assertEqual(len(incidents), 1)
+        self.assertTrue(incidents[0]["source"].startswith("fsm.map_regen"))
+        self.assertIn("python3 не найден", incidents[0]["message"])
+        self.assertEqual(self.map_path.read_text(encoding="utf-8"),
+                         COMMITTED_MAP, "провал регенерации — карта не тронута")
+
+    def test_second_read_oserror_raises_incident_and_does_not_commit(self):
+        def fake_run(cmd, **kwargs) -> subprocess.CompletedProcess:
+            self.map_path.unlink()
+            return subprocess.CompletedProcess(cmd, 0, "", "")
+
+        with mock.patch.object(gitcmd, "git", fake_git_clean), \
+                mock.patch("subprocess.run", side_effect=fake_run):
+            fsm._regenerate_and_commit_map(self.conn, "T001")
+
+        incidents = self.incidents()
+        self.assertEqual(len(incidents), 1)
+        self.assertTrue(incidents[0]["source"].startswith("fsm.map_regen"))
+        self.assertIn("не прочитан", incidents[0]["message"])
+
     def test_missing_map_file_raises_incident(self):
         self.map_path.unlink()
 
