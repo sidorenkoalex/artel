@@ -380,7 +380,7 @@ class MergeOnlyFromMergeGateTest(FsmTest):
             rc = 1 if list(cmd)[:2] == ["git", "merge"] else 0
             return subprocess.CompletedProcess(list(cmd), rc, "", "конфликт")
 
-        with mock.patch.object(fsm.subprocess, "run", failing):
+        with mock.patch.object(gitcmd.subprocess, "run", failing):
             with self.assertRaises(SystemExit):
                 self.capture(fsm.cmd_approve, self.TASK)
 

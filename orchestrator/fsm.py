@@ -1,5 +1,4 @@
 """Переходы автомата: advance по артефактам, approve/reject Оператора."""
-import subprocess
 import sys
 from pathlib import Path
 
@@ -441,8 +440,7 @@ def cmd_approve(task_id: str, sha: str | None = None) -> None:
                     ["git", "pull", "--ff-only"],
                     ["git", "merge", "--no-ff", branch, "-m",
                      f"{task_id}: merge {branch}"], ["git", "push"]):
-            res = subprocess.run(cmd, cwd=config.ROOT,
-                                 capture_output=True, text=True)
+            res = gitcmd.git(*cmd[1:])
             if res.returncode != 0:
                 store.journal(conn, task_id, "orchestrator", "merge FAILED",
                               res.stderr.strip()[:500])
