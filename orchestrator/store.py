@@ -301,16 +301,22 @@ def set_state(conn, task_id: str, state: str, actor: str, detail: str = "") -> N
     update_task(conn, task_id, state=state, updated_at=now())
     journal(conn, task_id, actor, f"state -> {state}", detail)
     print(f"[{task_id}] -> {state}" + (f"  ({detail})" if detail else ""))
-    _record_fixation(conn, task_id)
+    record_fixation(conn, task_id)
 
 
-def _record_fixation(conn, task_id: str) -> None:
-    """Хэш-фиксация артефактов на каждом переходе (ADR-0003 п.15, tasks/T021).
+def record_fixation(conn, task_id: str) -> None:
+    """Хэш-фиксация артефактов: на каждом переходе FSM и на WIP-чекпоинте.
 
     `set_state` — единственная функция, через которую проходит любой
     переход FSM (advance, approve, эскалация, kill): хук здесь даёт
     «на каждом переходе» по построению, а не по дисциплине расстановки
     вызовов по десятку мест пакета.
+
+    Второй, не-транзиционный вызывающий — `runner.commit_timeout_checkpoint`
+    (tasks/T041): WIP-чекпоинт при таймауте шага легитимно сдвигает HEAD
+    ветки задачи мимо `set_state`, и без повторной фиксации следующий
+    `check_integrity` увидел бы этот сдвиг как расхождение sha, а не как
+    ожидаемое состояние после чекпоинта.
 
     Отложенный импорт: `fixation` сама читает `store` (`get_task`,
     `task_target`) для сверки при старте шага, поэтому подключается

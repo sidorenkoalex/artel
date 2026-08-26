@@ -1,5 +1,5 @@
 ---
-built_at_sha: dbacf4435d296b4fb73839f495a51ac4a85e0f1b
+built_at_sha: 01e45550d2adfe107ffc0b1a9cad9a95996ba3e5
 ---
 
 # Codebase-map пульта
@@ -325,6 +325,7 @@ built_at_sha: dbacf4435d296b4fb73839f495a51ac4a85e0f1b
 **Публичные функции:**
 - `close_pump`
 - `cmd_run`
+- `commit_timeout_checkpoint`
 - `git_identity`
 - `role_cwd`
 - `role_env`
@@ -378,6 +379,7 @@ built_at_sha: dbacf4435d296b4fb73839f495a51ac4a85e0f1b
 - `now`
 - `open_alert_exists`
 - `open_alerts`
+- `record_fixation`
 - `seed_task_counters`
 - `set_state`
 - `table_columns`

@@ -118,8 +118,8 @@ def previous_verdict_sha(conn, task_id: str) -> str:
 
     Источник — существующий журнал hash-фиксации (T021,
     `orchestrator/fixation.py`, запись «sha зафиксирован» в
-    `store._record_fixation`) — новый учёт sha не заводится (T029, SPEC
-    требование 3). `_record_fixation` пишет ровно одну такую запись на
+    `store.record_fixation`) — новый учёт sha не заводится (T029, SPEC
+    требование 3). `record_fixation` пишет ровно одну такую запись на
     КАЖДЫЙ переход FSM (`store.set_state`). Между входом в `review`
     прошлой итерации и входом в `review` текущей лежит ровно два таких
     перехода: `review -> in_dev` (вердикт `changes_requested` — фиксирует
