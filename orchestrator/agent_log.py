@@ -143,12 +143,28 @@ class OutputPump(threading.Thread):
         self.log_path = log_path
         self.error: Exception | None = None
         self.cost: dict | None = None
+        # Токены промежуточных usage-событий (tasks/T040): читать их после
+        # обрыва потока неоткуда, кроме как во время самого чтения, поэтому
+        # копятся здесь же, рядом с `cost`. `saw_usage_event` — отдельно от
+        # суммы: «увидели usage с нулём токенов» не должно выглядеть как
+        # «usage не видели вовсе».
+        self.partial_tokens = 0
+        self.saw_usage_event = False
 
     def catch_cost(self, raw_line: str) -> None:
-        """Запоминает стоимость из события потока: последнее — итог запуска."""
+        """Запоминает стоимость из события потока: последнее — итог запуска.
+
+        Заодно копит токены usage ЛЮБОГО события (не только финального) —
+        частичная находка на случай, если финальное событие так и не
+        придёт (см. `orchestrator.spend.charge_missing_result`).
+        """
         cost = spend.parse_cost_event(raw_line)
         if cost is not None:
             self.cost = cost
+        tokens = spend.stream_usage_tokens(raw_line)
+        if tokens is not None:
+            self.saw_usage_event = True
+            self.partial_tokens += tokens
 
     def run(self) -> None:
         try:

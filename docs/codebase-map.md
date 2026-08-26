@@ -1,5 +1,5 @@
 ---
-built_at_sha: 0323ef6f3e68fc1930538e32ec4bc54e0f8991c0
+built_at_sha: dbacf4435d296b4fb73839f495a51ac4a85e0f1b
 ---
 
 # Codebase-map пульта
@@ -57,7 +57,7 @@ built_at_sha: 0323ef6f3e68fc1930538e32ec4bc54e0f8991c0
 
 **Импортирует:** `orchestrator/store.py`
 
-**Импортируется:** `orchestrator/brief.py`, `orchestrator/budget.py`, `orchestrator/catalog.py`, `orchestrator/doctor.py`, `tests/test_doctor.py`
+**Импортируется:** `orchestrator/brief.py`, `orchestrator/budget.py`, `orchestrator/catalog.py`, `orchestrator/doctor.py`, `orchestrator/spend.py`, `tests/test_doctor.py`
 
 ## orchestrator/artel.py
 
@@ -342,14 +342,16 @@ built_at_sha: 0323ef6f3e68fc1930538e32ec4bc54e0f8991c0
 **Назначение:** Стоимость шага: разбор чисел, событие потока, учёт в spent_usd.
 
 **Публичные функции:**
+- `charge_missing_result`
 - `charge_step`
 - `cli_number`
 - `cost_note`
 - `json_number`
 - `parse_cost_event`
 - `step_tokens`
+- `stream_usage_tokens`
 
-**Импортирует:** `orchestrator/config.py`, `orchestrator/store.py`
+**Импортирует:** `orchestrator/alerts.py`, `orchestrator/config.py`, `orchestrator/store.py`
 
 **Импортируется:** `orchestrator/agent_log.py`, `orchestrator/budget.py`, `orchestrator/doctor.py`, `orchestrator/runner.py`, `tests/test_doctor.py`, `tests/test_multitarget.py`, `tests/test_multitarget_invariants.py`, `tests/test_step_cost.py`
 
@@ -731,8 +733,10 @@ built_at_sha: 0323ef6f3e68fc1930538e32ec4bc54e0f8991c0
 **Назначение:** Тесты учёта стоимости шага и потолка бюджета (см. tasks/T007/SPEC.md).
 
 **Публичные функции:**
+- `assistant_event`
 - `event`
 - `result_event`
+- `timeout_then_killed_proc`
 
 **Импортирует:** `orchestrator/agent_log.py`, `orchestrator/budget.py`, `orchestrator/catalog.py`, `orchestrator/config.py`, `orchestrator/fsm.py`, `orchestrator/gitcmd.py`, `orchestrator/runner.py`, `orchestrator/spend.py`, `orchestrator/store.py`, `tests/sandbox.py`
 
