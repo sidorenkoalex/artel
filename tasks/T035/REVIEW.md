@@ -1,0 +1,86 @@
+---
+task: T035
+type: review
+author_role: reviewer
+status: approved        # draft | approved | changes_requested | escalate
+iteration: 1
+schema_version: 2    # версия формата артефакта, см. scripts/guard.py
+---
+
+# REVIEW: Авто-закрытие алертов doctor при исчезновении условия
+
+## Фаза A — гейт плана
+
+1. Покрытие требований в PLAN.md полное: требования 1-7 → шаг 2, требование
+   6 → шаг 1, требования 8-9 не меняются (обосновано — `raise_alert`/`ack`
+   не трогаются, `_auto_ack_gone` зовётся только для 4 перечисленных
+   source). Требование 9 дополнительно защищено тестом в шаге 3 (AC-10) —
+   в таблице это не отражено строкой, но не критично: реализация всё равно
+   структурно исключает прочие source (единственные вызовы
+   `_auto_ack_gone` — с явно перечисленными source), таблица не искажает
+   объём работы.
+2. Шаги — не микрооперации: шаг 2 сознательно объединяет 3 под-проверки +
+   backup_age (общий хелпер `_auto_ack_gone`, разносить по MR не имеет
+   смысла — обоснование в PLAN принято).
+3. Подход не конфликтует с конвенциями: SQL остаётся только в `store.py`
+   (ADR-0003 3ж) — `alerts.auto_ack` зовёт `store.ack_alert`, не пишет SQL
+   напрямую; `alerts.ack()` (ручной путь) не тронут — раздельные функции,
+   как заявлено.
+
+Гейт плана пройден, замечаний нет.
+
+## Соответствие SPEC
+
+| Требование | Вердикт | Комментарий |
+|---|---|---|
+| 1 | OK | `_auto_ack_gone` вызван после всех трёх под-проверок `check_orphans` (doctor.py:464-465,480,492-493) и после успешного `check_backup_age` (doctor.py:514). |
+| 2 | OK | `_branch_alert_live` (doctor.py:409-411) сверяет с `gitcmd.branch_exists`; AC-1/AC-2 зелёные (`acceptance_tests/test_auto_ack.py::BranchAutoAckTest`). |
+| 3 | OK | `_dir_alert_live` (doctor.py:414-416) сверяет basename каталога с текущим `known_ids`; AC-3/AC-4 зелёные. |
+| 4 | OK | AC-4 (`DirAutoAckTest.test_ac4...`) подтверждает: пока строки БД нет — ack не проставляется. |
+| 5 | OK | `_worktree_alert_live` (doctor.py:419-421) сверяет путь с текущим списком worktree; AC-5/AC-6 зелёные. |
+| 6 | OK | `alerts.auto_ack` (alerts.py:49-60) — `ack_by="doctor"`, резолюция `f"условие ушло, прогон doctor {store.now()}"`. Проверил `store.now()` — полный UTC-таймстамп (`%Y-%m-%d %H:%M:%SZ`), не только дата; SPEC пишет «<дата>» условно, тесты проверяют `assertIn("условие ушло, прогон doctor", ...)` — формально требование выполнено (дата внутри есть), расхождение не существенно (minor ниже, не блокер). |
+| 7 | OK | Каждый предикат `is_live` возвращает `True` (условие ещё в силе → не ack) для нераспознанного сообщения и для живого условия; `_auto_ack_gone` ack'ает только когда `not is_live(...)`. Прогнал AC-2/4/6/8 и `tests/test_doctor.py::AutoAckTest.test_unrecognised_messages_are_left_open_on_next_run` — все зелёные. |
+| 8 | OK | `raise_alert`, `open_alerts`, `ack` в alerts.py не изменены (diff это подтверждает — только новая функция `auto_ack` добавлена). `ManualAckAndDedupUnaffectedTest` (AC-9) зелёный. |
+| 9 | OK | `_auto_ack_gone` вызывается только с четырьмя перечисленными source; `OtherSourceNotAutoAckedTest` (AC-10) и `AutoAckTest.test_backup_age_auto_ack_does_not_touch_orphan_sources` — зелёные. |
+| 10 | OK | см. требование 9. |
+| 11 | Частично, не блокер | Прогнал `python3 -m unittest discover -s tests -v`: 599 тестов, 3 упавших — все три в `test_multitarget.py::RoleEnvTest`, из-за амбиентной git-идентичности машины (`GIT_AUTHOR_NAME`/`EMAIL` подхватывают реальные `Alexander Sidorenko`/`al.sidorenko@x5.ru` вместо ожидаемых тестовых значений). `test_multitarget.py` в diff вообще не фигурирует, и сам файл не менялся начиная с `main` — падение воспроизводится независимо от T035, ровно как заявлено в докстроке `acceptance_tests/test_auto_ack.py`. Раздел AC-11 корректно размечен `manual` со ссылкой на CI (чистый раннер). `tests/test_doctor.py` (61 новых строк, без правок существующих тестов) и приёмочные тесты T035 — все зелёные (44 + 10 тестов). |
+
+## Замечания
+
+Пусто — блокеров и major нет.
+
+Минорные наблюдения (не требуют исправления, для протокола):
+- minor — `orchestrator/alerts.py:59` — `auto_ack` использует `store.now()`
+  (полный таймстамп с секундами), а SPEC требование 6 формулирует
+  «<дата>» — в тексте резолюции оказывается больше, чем буквально просят.
+  Не противоречит требованию (дата в строке есть) и совпадает с
+  единственным доступным в `store.py` хелпером времени — оставить как
+  есть.
+- minor — `orchestrator/doctor.py:404-406` — `_auto_ack_gone` делает
+  полный `alerts.open_alerts(conn, "incident")` по разу на каждый из 4
+  source (3 раза в `check_orphans` + 1 раз в `check_backup_age`), т.е. 4
+  прохода по таблице `alerts` за один прогон `doctor`. При текущих
+  объёмах (десятки алертов) не заметно; если увидит рост — повод собрать
+  один проход с группировкой по source, не сейчас.
+
+### Проверка целостности системы (ADR-0002)
+
+- Существующие тесты/гейты/лимиты не ослаблены и не удалены: `alerts.ack`,
+  `raise_alert`, `open_alerts` — байт в байт как были (diff подтверждает).
+  Новая `auto_ack` — отдельная функция, не переиспользует и не меняет
+  ручной путь.
+- Diff не выходит за заявленную зону: `orchestrator/alerts.py`,
+  `orchestrator/doctor.py`, `tests/test_doctor.py` (только новые тесты),
+  `docs/codebase-map.md` (регенерация тем же коммитом — `a66c7e6`,
+  `built_at_sha` корректно указывает на родительский коммит `83b51ca`),
+  артефакты `tasks/T035/*`. `.github/`, `gates.yaml`, `roles.yaml`,
+  `templates/`, `skills/` не тронуты.
+- `python3 scripts/guard.py tasks/T035/PLAN.md tasks/T035/SPEC.md` →
+  `GUARD: ок (2 файлов)`. `python3 scripts/codebase_map.py --check` →
+  без вывода (карта свежая).
+- Откат PLAN описывает верно: `auto_ack`/`_auto_ack_gone` не участвуют в
+  схеме БД, `git revert` безопасен.
+
+## Вердикт
+
+approved
