@@ -26,6 +26,6 @@ targets:
     # Пути, которые меняет только Оператор (CLAUDE.md, ADR-0001). Пока это
     # декларация: исполнитель no_paths — проверка до merge (A2/A3);
     # действующий enforcement — job protected-paths в .github/workflows/ci.yml.
-    no_paths: [gates.yaml, roles.yaml, targets.yaml, .github/, templates/, skills/, docs/invariants.md, tests/test_invariants.py]
+    no_paths: [gates.yaml, roles.yaml, targets.yaml, CLAUDE.md, .github/, templates/, skills/, docs/invariants.md, tests/test_invariants.py]
     project_skills: []
     merge_gate: operator
