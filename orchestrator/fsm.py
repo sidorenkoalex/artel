@@ -1,11 +1,92 @@
 """Переходы автомата: advance по артефактам, approve/reject Оператора."""
+import subprocess
 import sys
 from pathlib import Path
 
 from scripts import guard
 
-from . import (acceptance, artifacts, budget, ci, config, fixation, gitcmd,
-              store, yamlmini)
+from . import (acceptance, alerts, artifacts, budget, ci, config, fixation,
+              gitcmd, store, yamlmini)
+
+# Регенерация/коммит карты кодовой базы на merge_gate (SPEC T042).
+MAP_REL = "docs/codebase-map.md"
+
+
+def _map_content_without_sha(text: str) -> str:
+    """Текст карты без строки `built_at_sha:` — сверка содержимым, тем же
+    принципом, что и CI-джоб `codebase-map` (`.github/workflows/ci.yml`,
+    ред. Оператора 26.08, SPEC T042 требование 2): `built_at_sha` меняется
+    при каждой регенерации и сам по себе не повод коммитить.
+    """
+    return "\n".join(line for line in text.splitlines()
+                     if not line.startswith("built_at_sha:"))
+
+
+def _map_regen_incident(conn, task_id: str, message: str) -> None:
+    """Провал шага карты — журнал и incident-алерт, не отказ merge
+    (SPEC T042, требование 5)."""
+    store.journal(conn, task_id, "orchestrator",
+                  "регенерация карты FAILED", message)
+    alerts.raise_alert(conn, store.task_target(conn, task_id), "incident",
+                       "fsm.map_regen", message)
+
+
+def _regenerate_and_commit_map(conn, task_id: str) -> None:
+    """Регенерация `docs/codebase-map.md` после merge и коммит отдельным
+    коммитом, если карта содержательно изменилась (SPEC T042, требования
+    1-3); без содержательных отличий — откат правки, коммита нет.
+
+    Зовётся ПОСЛЕ успешного merge, ДО push (требование 1, 4): что бы тут
+    ни случилось, `git push` в вызывающем коде выполняется в любом случае
+    (требование 5) — эта функция никогда не бросает исключение и не
+    делает `sys.exit`, любой провал уходит в `_map_regen_incident`.
+    """
+    map_path = config.ROOT / MAP_REL
+    try:
+        committed = map_path.read_text(encoding="utf-8")
+    except OSError as exc:
+        _map_regen_incident(conn, task_id, f"{MAP_REL} не прочитан: {exc}")
+        return
+    # Не git-вызов (требование 6, AC-4) — прямой subprocess.run, тем же
+    # приёмом, что brief._regenerate_map.
+    try:
+        regen = subprocess.run(["python3", "scripts/codebase_map.py"],
+                               cwd=config.ROOT, capture_output=True, text=True)
+    except OSError as exc:
+        _map_regen_incident(conn, task_id,
+                            f"регенерация {MAP_REL} не удалась: {exc}")
+        return
+    if regen.returncode != 0:
+        reason = regen.stderr.strip()[:200] or f"код возврата {regen.returncode}"
+        _map_regen_incident(conn, task_id,
+                            f"регенерация {MAP_REL} не удалась: {reason}")
+        return
+    try:
+        regenerated = map_path.read_text(encoding="utf-8")
+    except OSError as exc:
+        _map_regen_incident(conn, task_id, f"{MAP_REL} не прочитан: {exc}")
+        return
+    if _map_content_without_sha(regenerated) == _map_content_without_sha(committed):
+        restore = gitcmd.git("checkout", "--", MAP_REL)
+        if restore.returncode != 0:
+            _map_regen_incident(
+                conn, task_id,
+                f"откат {MAP_REL} без содержательных отличий не удался: "
+                f"{restore.stderr.strip()[:200]}")
+        return
+    added = gitcmd.git("add", MAP_REL)
+    if added.returncode != 0:
+        _map_regen_incident(conn, task_id,
+                            f"git add {MAP_REL} не удался: "
+                            f"{added.stderr.strip()[:200]}")
+        return
+    commit = gitcmd.git(
+        "commit", "-m",
+        f"карта кодовой базы: регенерация после merge {task_id}")
+    if commit.returncode != 0:
+        _map_regen_incident(conn, task_id,
+                            f"коммит {MAP_REL} не удался: "
+                            f"{commit.stderr.strip()[:200]}")
 
 
 def guard_refuses(conn, task_id: str, path: Path, text: str | None = None) -> bool:
@@ -439,12 +520,21 @@ def cmd_approve(task_id: str, sha: str | None = None) -> None:
         for cmd in (["git", "checkout", config.MAIN_BRANCH],
                     ["git", "pull", "--ff-only"],
                     ["git", "merge", "--no-ff", branch, "-m",
-                     f"{task_id}: merge {branch}"], ["git", "push"]):
+                     f"{task_id}: merge {branch}"]):
             res = gitcmd.git(*cmd[1:])
             if res.returncode != 0:
                 store.journal(conn, task_id, "orchestrator", "merge FAILED",
                               res.stderr.strip()[:500])
                 sys.exit(f"merge упал на {' '.join(cmd)}:\n{res.stderr}")
+        # Карта кодовой базы (SPEC T042): после merge, до push; провал
+        # шага карты не отменяет merge (требование 5) — push ниже
+        # выполняется независимо от исхода `_regenerate_and_commit_map`.
+        _regenerate_and_commit_map(conn, task_id)
+        push = gitcmd.git("push")
+        if push.returncode != 0:
+            store.journal(conn, task_id, "orchestrator", "merge FAILED",
+                          push.stderr.strip()[:500])
+            sys.exit(f"merge упал на git push:\n{push.stderr}")
         store.set_state(conn, task_id, "done", "orchestrator",
                         f"смержено: {branch}")
     elif state == "escalated":

@@ -1,0 +1,83 @@
+---
+task: T042
+type: review
+author_role: reviewer
+status: approved        # draft | approved | changes_requested | escalate
+iteration: 2
+schema_version: 2    # версия формата артефакта, см. scripts/guard.py
+---
+
+# REVIEW: Авто-коммит регенерированной карты кодовой базы оркестратором на merge_gate
+
+## Фаза A — гейт плана
+Изменение в этой итерации не меняет подход и не переписывает PLAN.md —
+это точечная правка по единственному замечанию итерации 1 (обернуть два
+необработанных вызова в `try/except OSError`), внутри уже согласованного
+шага 1. Повторно смотрел на «Влияние на систему»: диапазон затронутого
+кода не расширился (по-прежнему только `_regenerate_and_commit_map` и
+тесты), новых side-effect'ов нет. Гейт плана пройден (без изменений
+относительно итерации 1).
+
+## Соответствие SPEC
+
+| Требование | Вердикт | Комментарий |
+|---|---|---|
+| 1 | OK | Без изменений с итерации 1 — `_regenerate_and_commit_map` вызывается в `cmd_approve` между merge и push (`orchestrator/fsm.py:519`). |
+| 2 | OK | Без изменений с итерации 1 — сверка через `_map_content_without_sha`, коммит с ожидаемым сообщением. |
+| 3 | OK | Без изменений с итерации 1 — откат через `gitcmd.git checkout --` при отсутствии содержательных отличий. |
+| 4 | OK | Без изменений с итерации 1 — `git push` единственный, после шага карты. |
+| 5 | OK | Замечание итерации 1 устранено: оба ранее необработанных вызова — `subprocess.run(["python3", "scripts/codebase_map.py"], ...)` (`orchestrator/fsm.py:52-53`) и второе `map_path.read_text(...)` (`orchestrator/fsm.py:59`) — теперь каждый в своём `try/except OSError`, ведущем в `_map_regen_incident` и `return` (`orchestrator/fsm.py:52-58`, `:59-62`), тем же паттерном, что уже был у первого чтения (`:46-49`). Функция теперь действительно никогда не пробрасывает исключение наружу ни на одном из четырёх шагов (чтение → регенерация → второе чтение → git-операции), что и обещает докстринг (`fsm.py:41-42`) и требование 5. Проверено чтением кода и целевыми тестами (см. «Тесты»). |
+| 6 | OK | Без изменений с итерации 1 — единственный не-git `subprocess.run` (регенерация), AST-проверка (AC-4) зелёная. |
+
+## Замечания
+Пусто — блокирующих и значимых замечаний нет.
+
+Минорное (не влияет на вердикт, справочно): та же категория пробела
+(`subprocess.run`/повторное чтение без `try/except OSError`) остаётся в
+`orchestrator/brief.py:80,85` (`_regenerate_map`) — вне зоны этой задачи
+(файл не тронут diff'ом), уже отмечено в REVIEW.md итерации 1 как
+кандидат в беклог; повторяю здесь для трассируемости, действий в рамках
+T042 не требует.
+
+## Тесты
+Прогнаны:
+- `python3 -m unittest tests.test_fsm_map_regen -v` — 11/11 ok (9 из
+  итерации 1 + 2 новых: `test_regeneration_oserror_raises_incident_and_does_not_commit`
+  бьёт по `subprocess.run` через `side_effect=FileNotFoundError`,
+  `test_second_read_oserror_raises_incident_and_does_not_commit` удаляет
+  файл карты внутри фейкового `subprocess.run` так, что второе чтение
+  ловит `FileNotFoundError`). Оба новых теста проверяют: ровно один
+  incident в `alerts`, `source` начинается с `fsm.map_regen`, сообщение
+  содержит текст исходной ошибки, карта на диске не тронута/не
+  закоммичена. Мутационно: откат обёртки `try/except` на любом из двух
+  вызовов сразу ломает соответствующий новый тест (исключение
+  пробрасывается наружу теста unittest как ошибка, а не помечается как
+  incident) — замечание итерации 1 закрыто тестами, не только кодом.
+- `python3 -m unittest tasks.T042.acceptance_tests.test_map_regen_on_merge -v` —
+  6/6 ok (AC-1, AC-2, AC-3, AC-4, AC-6; AC-5 — `manual`, обоснование как в
+  итерации 1).
+- `python3 -m unittest discover -s tests -v` — 636 тестов (было 634 в
+  итерации 1, +2 новых из этой правки), 3 упавших
+  (`tests.test_multitarget.RoleEnvTest`, утечка локального
+  git-идентити машины в `GIT_AUTHOR_NAME`/`GIT_COMMITTER_EMAIL`).
+  Перепроверено отдельно в этой итерации: `git checkout main` (чистый
+  worktree) → `python3 -m unittest tests.test_multitarget.RoleEnvTest -v`
+  → те же 3 теста падают с той же самой ассерцией
+  (`al.sidorenko@x5.ru != role@artel.invalid`), то есть падение
+  предсуществующее и не зависит от diff'а этой задачи. AC-5 выполнен.
+- `python3 scripts/codebase_map.py` вручную на HEAD ветки: разница с
+  закоммиченной `docs/codebase-map.md` — только `built_at_sha`, карта
+  содержательно свежа; рабочее дерево возвращено `git checkout --`.
+- `git diff --stat main...task/t042-avto-kommit-regenerirovannoy-k` —
+  весь диапазон изменений ветки: `orchestrator/fsm.py`,
+  `tests/test_fsm_map_regen.py`,
+  `tasks/T042/acceptance_tests/test_map_regen_on_merge.py`,
+  `docs/codebase-map.md`, артефакты `tasks/T042/*`. `.github/`,
+  `skills/`, `templates/`, `gates.yaml`, `roles.yaml` не затронуты —
+  AC-6 подтверждён на полном диапазоне ветки, не только на инкременте
+  этой итерации.
+
+## Вердикт
+approved — замечание итерации 1 устранено полностью (код + тесты),
+требования SPEC 1-6 и AC-1..AC-6 выполнены, регрессий нет, зона diff'а
+не вышла за рамки задачи.
