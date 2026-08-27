@@ -247,7 +247,7 @@ def isolation_smoke(role: str = "developer") -> Check:
             ISOLATION_MARKER in str(v) for v in env.values()):
         leaks.append("user-слой: HOME роли не отведён от ambient-значения")
 
-    project_dir = runner.role_cwd(ISOLATION_SMOKE_TARGET)
+    project_dir = runner.role_cwd(None, None, ISOLATION_SMOKE_TARGET)
     try:
         (project_dir / "CLAUDE.md").write_text(ISOLATION_MARKER, encoding="utf-8")
         try:

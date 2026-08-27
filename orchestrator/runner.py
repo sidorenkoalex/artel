@@ -6,7 +6,7 @@ import time
 from pathlib import Path
 
 from . import (agent_log, brief, budget, config, fixation, gitcmd, keychain,
-              lease, review, roles, spend, store)
+              lease, review, roles, spend, store, workspace)
 
 # Идентичность коммитера, которую роль обязана унести с собой в свой HOME.
 # git читает эти переменные ПОВЕРХ конфига, поэтому перенос ровно двух пар
@@ -86,6 +86,26 @@ def _cmd_run(conn, task_id: str) -> None:
                      f"(`new \"...\" --tz <файл>` заведёт роль analyst)")
         sys.exit(f"[{task_id}] в состоянии {t['state']} агент не запускается")
 
+    target = t["target"] or config.DEFAULT_TARGET
+
+    # Рабочая поверхность агентного шага (SPEC T045, требование 3, AC-8,
+    # сценарий 1): worktree задачи уже есть, но стоит не на её ветке —
+    # кто-то переключил его руками. Отказ до старта агента вместо попытки
+    # самому починить рабочую поверхность или молча стартовать на чужой
+    # ветке. Worktree ещё не заведён (`None`) — сверять не с чем: его
+    # заведёт `role_cwd` через `workspace.ensure` на правильной ветке.
+    if target == config.DEFAULT_TARGET:
+        on_branch = workspace.on_task_branch(task_id, t["branch"])
+        if on_branch is False:
+            wt = workspace.path(task_id)
+            detail = (f"{wt} стоит не на ветке задачи {t['branch']} — шаг "
+                      f"не начат; перейди в worktree на свою ветку либо "
+                      f"разберись, кто её переключил, и повтори run")
+            store.journal(conn, task_id, role,
+                          "run отклонён: чужая ветка worktree", detail)
+            print(f"[{task_id}] run отклонён: {detail}")
+            return
+
     # Pre-flight перед стартом шага (SPEC T022, требование 2): быстрые
     # проверки окружения (CLI найден, токен роли добыт, диск, layout
     # внешнего target'а) — до git-сверки и до попыток агента, отдельным
@@ -95,7 +115,7 @@ def _cmd_run(conn, task_id: str) -> None:
     # на уровне модуля). Провал — шаг не начат, без ретрая, с именованной
     # причиной. Версия CLI ≠ пин — предупреждение, не блок (требование 5).
     from . import doctor
-    preflight = doctor.preflight_checks(role, t["target"] or config.DEFAULT_TARGET)
+    preflight = doctor.preflight_checks(role, target)
     for check in preflight:
         if check.status == "warn":
             detail = f"{check.name}: {check.detail}"
@@ -142,55 +162,59 @@ def _cmd_run(conn, task_id: str) -> None:
     brief_text = None
     if role == "analyst":
         mission = (
-            f"Роль: аналитик. Задача {task_id}, ветка {t['branch']}. "
+            f"Роль: аналитик. Задача {task_id}, ветка {t['branch']} — уже "
+            f"выписана в этом рабочем каталоге (собственный worktree "
+            f"задачи, рабочая копия пульта его не видит). "
             f"Основной вход — ТЗ Оператора, разработчик увидит задачу "
             f"только после тебя. Карта кодовой базы — в БРИФЕ РОЛИ ниже.\n"
-            f"1) Прочитай {task_ref}/TZ.md. 2) Создай ветку от main, если "
-            f"её ещё нет.\n"
-            f"3) ТЗ достаточно — напиши {task_ref}/SPEC.md по "
+            f"1) Прочитай {task_ref}/TZ.md.\n"
+            f"2) ТЗ достаточно — напиши {task_ref}/SPEC.md по "
             f"templates/SPEC.md: критерии приёмки размечены AC-n строго "
             f"из формулировок ТЗ, «не входит» — из его же границ, "
             f"budget_usd по классу задачи и только вниз от дефолта, "
             f"status: ready.\n"
-            f"4) ТЗ неясно или неполно — не домысливай: один батч всех "
+            f"3) ТЗ неясно или неполно — не домысливай: один батч всех "
             f"вопросов в {task_ref}/QUESTIONS.md по templates/QUESTIONS.md, "
             f"отсортированный по блокирующести, каждый — с вариантами "
             f"и дефолтом. SPEC.md в этом случае не трогай — сам файл "
             f"эскалирует задачу.\n"
-            f"5) Прогони scripts/guard.py на своём файле, закоммить в "
+            f"4) Прогони scripts/guard.py на своём файле, закоммить в "
             f"ветку. Код репозитория не трогай."
         )
         brief_text = brief.analyst_map_component(conn, task_id)
     elif role == "test_author":
         mission = (
             f"Роль: автор приёмочных тестов. Задача {task_id}, ветка "
-            f"{t['branch']}. Разработчик увидит задачу только после тебя —\n"
+            f"{t['branch']} — уже выписана в этом рабочем каталоге "
+            f"(собственный worktree задачи). Разработчик увидит задачу "
+            f"только после тебя —\n"
             f"1) Прочитай {task_ref}/SPEC.md, раздел «Критерии приёмки» "
-            f"(AC-1, AC-2, …). 2) Создай ветку от main, если её ещё нет.\n"
-            f"3) Для каждого AC-n напиши unittest в "
+            f"(AC-1, AC-2, …).\n"
+            f"2) Для каждого AC-n напиши unittest в "
             f"{task_ref}/acceptance_tests/test_*.py, метод test_ac<n>_... — "
             f"ТОЛЬКО из формулировки критерия.\n"
-            f"4) Критерий нельзя проверить тестом напрямую — пометь "
+            f"3) Критерий нельзя проверить тестом напрямую — пометь "
             f"`# AC-n: manual — <причина>` (Оператор проверит на приёмке) "
             f"или `# AC-n: skip — <причина>`.\n"
-            f"5) Критерий в принципе неисполним тестом — не изобретай "
+            f"4) Критерий в принципе неисполним тестом — не изобретай "
             f"компромисс: `# AC-n: escalate — <вопрос Оператору>`.\n"
-            f"6) Прогони `python3 -m unittest discover -s "
+            f"5) Прогони `python3 -m unittest discover -s "
             f"{task_ref}/acceptance_tests`, закоммить каталог в ветку. "
             f"Код репозитория и SPEC.md НЕ трогай."
         )
     elif role == "developer":
         mission = (
-            f"Роль: разработчик. Задача {task_id}, ветка {t['branch']}. "
-            f"SPEC задачи, карта кодовой базы и конвенции проекта — целиком "
-            f"в БРИФЕ РОЛИ ниже, отдельно их читать не нужно.\n"
-            f"1) Изучи бриф. 2) Создай ветку от main.\n"
-            f"3) Напиши {task_ref}/PLAN.md по templates/PLAN.md.\n"
-            f"4) Реализуй по плану + юнит-тесты. Если есть {task_ref}/REVIEW.md "
+            f"Роль: разработчик. Задача {task_id}, ветка {t['branch']} — "
+            f"уже выписана в этом рабочем каталоге (собственный worktree "
+            f"задачи). SPEC задачи, карта кодовой базы и конвенции проекта "
+            f"— целиком в БРИФЕ РОЛИ ниже, отдельно их читать не нужно.\n"
+            f"1) Изучи бриф.\n"
+            f"2) Напиши {task_ref}/PLAN.md по templates/PLAN.md.\n"
+            f"3) Реализуй по плану + юнит-тесты. Если есть {task_ref}/REVIEW.md "
             f"со статусом changes_requested — сначала закрой замечания. Если "
             f"есть {task_ref}/acceptance_tests/ — они залочены (tasks/T023): "
             f"код чинится под них, их правка — эскалация, не правка.\n"
-            f"5) Прогони scripts/guard.py на своих артефактах, закоммить всё "
+            f"4) Прогони scripts/guard.py на своих артефактах, закоммить всё "
             f"в ветку, поставь PLAN.md status: ready. НЕ мержи."
         )
         brief_text = brief.developer_brief(conn, task_id)
@@ -335,22 +359,31 @@ def role_env(role: str | None = None) -> dict:
     return env
 
 
-def role_cwd(target: str) -> Path:
-    """Рабочий каталог роли: ROOT для догфуда, workspace target'а — иначе.
+def role_cwd(conn, task_id: str, target: str) -> Path:
+    """Рабочий каталог роли: worktree задачи для догфуда, workspace
+    target'а — иначе.
 
-    Догфуд (`config.DEFAULT_TARGET`) держит артефакты в `tasks/` пульта
-    до A7 (ADR-0003 3д, «особый случай») — рабочий каталог как и был,
-    `ROOT`. Внешний target по ADR-0003 §4 обязан видеть только свой
-    workspace: `.artel/projects/<target>/workspace/`, не дерево пульта
-    с его CLAUDE.md, `.claude/`, `.mcp.json` (та же конфиг-инъекция,
-    от которой T019 увёл HOME/CLAUDE_CONFIG_DIR, — здесь другой вектор,
-    cwd, а не окружение). Каталог создаётся здесь же, как и курируемый
-    слой ролей: до git-первички (A2b) он пуст, но роль обязана
-    стартовать в НЁМ, а не тихо съехать на ROOT из-за отсутствия
-    каталога.
+    Догфуд (`config.DEFAULT_TARGET`) с T045 — уже не общая рабочая копия
+    пульта (`config.ROOT`), а собственный git worktree задачи в
+    стандартном месте (`workspace.ensure`, SPEC T045 требования 1-2):
+    агентный шаг исполняется там, рабочая копия пульта остаётся
+    территорией оркестратора и не переключается запуском роли (инцидент
+    26–27.08, из-за которого решение и принято). Внешний target по
+    ADR-0003 §4 обязан видеть только свой workspace:
+    `.artel/projects/<target>/workspace/`, не дерево пульта с его
+    CLAUDE.md, `.claude/`, `.mcp.json` (та же конфиг-инъекция, от
+    которой T019 увёл HOME/CLAUDE_CONFIG_DIR, — здесь другой вектор,
+    cwd, а не окружение); этот путь T045 не меняет. Каталог workspace
+    внешнего target создаётся здесь же, как и курируемый слой ролей: до
+    git-первички (A2b) он пуст, но роль обязана стартовать в НЁМ, а не
+    тихо съехать на ROOT из-за отсутствия каталога.
     """
     if target == config.DEFAULT_TARGET:
-        return config.ROOT
+        branch = store.task_branch(conn, task_id)
+        wt_path, error = workspace.ensure(task_id, branch)
+        if error is not None:
+            raise OSError(error)
+        return wt_path
     path = config.PROJECTS / target / "workspace"
     path.mkdir(parents=True, exist_ok=True)
     return path
@@ -473,7 +506,7 @@ def run_agent_once(conn, task_id: str, role: str, prompt: str,
     # Тот же принцип, что у окружения выше: рабочий каталог roли не создался —
     # шаг не стартует, тихого отката на ROOT нет (ADR-0003 §4).
     try:
-        cwd = role_cwd(store.task_target(conn, task_id))
+        cwd = role_cwd(conn, task_id, store.task_target(conn, task_id))
     except OSError as exc:
         store.journal(conn, task_id, role, "agent run SKIPPED",
                       f"рабочий каталог роли не создан: {exc}")
