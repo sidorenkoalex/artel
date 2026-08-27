@@ -213,3 +213,90 @@ CI (существующий джоб `protected-paths` — единственн
   подбора у target'а сменился состав ролей/схема БД, — деградирует до
   пустых полей (0 тестов, без причины эскалации), не падает: то же
   свойство отказоустойчивости, что и у отсутствующего `tasks/<id>/`.
+
+## Эскалация
+
+### Вопросы
+
+1. **Блокирует финальный `status: ready` — приёмочный тест противоречит
+   решению (d) и своему соседу по каталогу.**
+   `tasks/T043/acceptance_tests/test_retro_failure_handling.py::
+   Ac3KillRetroFailureTest.test_ac3_kill_path_retro_failure_still_completes_kill`
+   (добавлен `69239ae`, ДО решения (d) от 27.08) вызывает
+   `cleanup.cmd_kill` напрямую с `fail_git_subcommands=("add", "commit")`
+   и требует: (а) запись в журнале о провале RETRO-шага, (б) открытый
+   incident `fsm.retro` — то есть требует, чтобы `cmd_kill` ВООБЩЕ
+   ПЫТАЛСЯ сгенерировать/записать/закоммитить RETRO. Это прямо
+   противоречит требованию 2 SPEC.md (решение (d), 27.08): «kill main
+   НЕ изменяет: ни генерации файла RETRO в рабочее дерево, ни коммита,
+   ни push при kill не происходит» — без исключения на случай провала —
+   и тесту-соседу `test_retro_killed_debt.py::
+   Ac2KillDoesNotTouchMainTest`, который в ТОМ ЖЕ каталоге на успешном
+   моке git явно проверяет обратное: `kill` не должен ни разу позвать
+   `git add`/`git commit`, ни создать `docs/retro/<id>.md` в рабочем
+   дереве.
+   Проверено прогоном: реализация этой ветки (`orchestrator/retro.py`,
+   `orchestrator/fsm.py::_generate_and_commit_retro`, `cleanup.py` не
+   тронут) зелёная на `Ac2KillDoesNotTouchMainTest`, обоих тестах
+   `Ac2Ac8Ac9KilledRetroDebtTest`, `Ac1DoneRetroTest`,
+   `Ac4DeterministicGenerationTest`, `Ac3DoneRetroFailureTest`,
+   `NewGitCallsGoThroughGitcmdTest`, `ProtectedPathsUntouchedTest` (11 из
+   12 приёмочных тестов задачи) и на всём `tests/test_retro.py` +
+   `tests/test_fsm_retro.py` (13 юнит-тестов). Красный — только
+   `Ac3KillRetroFailureTest`. Реализация, которая заставила бы
+   `cmd_kill` пытаться писать/коммитить RETRO (чтобы этот тест мог
+   получить отказ от мока git и завести incident), гарантированно
+   провалила бы `Ac2KillDoesNotTouchMainTest` и нарушила бы буквальный
+   текст требования 2 — оба теста не проходятся одной и той же
+   реализацией ни при каком выборе разработчика.
+   По `git log` расхождение похоже на недосмотр: коммит `8b2deef`
+   (тесты по решению (d)) удалил устаревший `test_retro_escalation.py`
+   и добавил `test_retro_killed_debt.py`, но не тронул более ранний
+   `test_retro_failure_handling.py`, чей `Ac3KillRetroFailureTest`
+   написан под дорешенческую модель («kill сам пытается коммитить
+   RETRO и может на этом упасть») и не обновлён под (d).
+   Правка `tasks/T043/acceptance_tests/` — вне зоны роли разработчика
+   (залочено test_author, tasks/T023; правка чужого локед-теста —
+   эскалация, не правка, `skills/coding-standards.md`).
+   Варианты:
+   - **(default)** test_author удаляет/переписывает
+     `Ac3KillRetroFailureTest` в `test_retro_failure_handling.py`:
+     AC-3 done-путь уже покрыт независимым `Ac3DoneRetroFailureTest`
+     в том же файле (зелёный на этой ветке); AC-3 применительно к
+     «kill-пути» после (d) — это провал ПОДБОРА killed-долга на
+     `merge_gate` (killed-задача существует, но её RETRO не
+     сгенерировался/не закоммитился), что уже покрыто
+     `tests/test_fsm_retro.py::
+     GenerateAndCommitRetroTest.test_generation_exception_raises_incident_and_still_tries_debts`
+     (зелёный) — новый приёмочный тест не нужен, только удаление
+     устаревшего класса.
+   - Оператор ADR-ом переопределяет решение (d) обратно в сторону «kill
+     сам коммитит RETRO с main» — возвращает конфликт с неослабляемым
+     инвариантом 15 (`tests/test_invariants.py::KillKeepsMainIntactTest`),
+     ради устранения которого решение (d) и принималось; не рекомендую.
+
+### Контекст
+
+- Код и юнит-тесты реализуют SPEC.md буквально по решению (d):
+  `orchestrator/retro.py` (новый), `orchestrator/fsm.py`
+  (`_generate_and_commit_retro` и три помощника, встраивание в
+  `cmd_approve` между `merge` и `push`), `tests/test_retro.py`,
+  `tests/test_fsm_retro.py`. `orchestrator/cleanup.py` не тронут.
+- `tasks/T043/acceptance_tests/`: 11 из 12 тестов зелёные; единственный
+  красный — `Ac3KillRetroFailureTest` (см. вопрос 1).
+- Полный `tests/` (`python3 -m unittest discover -s tests`): 652 теста,
+  3 провала — все три в `tests/test_multitarget.py::RoleEnvTest`
+  (сверка GIT_AUTHOR/COMMITTER identity), воспроизводятся на HEAD этой
+  ветки БЕЗ правок T043 (`git stash` + прогон) — локальный `git config`
+  машины разработчика подставляется вместо ожидаемых тестом значений,
+  предсуществующая проблема стенда, вне зоны этой задачи.
+- `docs/retro/T001.md` — файл, случайно закоммиченный в прерванной
+  попытке 1 (WIP-чекпоинт после обрыва 403), удалён этим коммитом:
+  противоречил требованию 12 (backfill T001–T042 не выполняется).
+
+### Блокирует
+
+Финальный `status: ready` этого PLAN.md (и тем самым гейт `in_dev` →
+`review`): единственный оставшийся красный тест не чинится со стороны
+кода — правки требует сам приёмочный тест, редактировать который вне
+полномочий роли разработчика.
