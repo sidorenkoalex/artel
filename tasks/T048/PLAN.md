@@ -207,3 +207,54 @@ orchestrator import retro"`). Карта кодовой базы переген�
 `guard.acceptance_traceability_errors(tasks/T048)` — без ошибок; diff
 итерации не касается `.github/`, `skills/`, `templates/`,
 `docs/invariants.md` (AC-7 по-прежнему зелёный).
+
+## Итерация 3 — закрытие REVIEW итерации 2 (changes_requested)
+
+major (тестовое покрытие, `orchestrator/catalog.py:78-93`) — исправлено.
+Замечание не оспаривало саму правку гонки `branch`/`task_id` (итерация 2
+подтвердила её верной воспроизведением) — оно указывало, что закрытие
+зафиксировано только текстом PLAN.md/REVIEW.md, а не исполняемым тестом:
+мутационная проверка ревьювера (откат пересчёта `branch` к состоянию
+родительского коммита `d15a2f5`) не роняла ни один из 703+6 тестов
+пакета. Добавлен `tests/test_catalog_new_race.py`
+(`PeekTaskNumberRaceTest`) — воспроизводит ровно сценарий из замечания:
+пять «конкурентных» задач напрямую забирают номера через
+`store.next_task_number`, затем `store.peek_task_number` подменяется на
+функцию, возвращающую результат настоящего `peek_task_number` минус 1
+(устаревшее значение счётчика), и вызывается `catalog.cmd_new`. Тест
+проверяет, что итоговый `branch` заведённой задачи в БД посчитан от
+реального `task_id` (`T006`), а не от peek-значения (`T005`).
+
+Тест-на-тесте (тот же приём мутационной проверки, что применил ревьювер
+в Фазе B итерации 2): временно откатил пересчёт `branch` в
+`orchestrator/catalog.py:88-93` к состоянию родительского коммита (branch
+считается один раз от peek-значения, без повторного расчёта после
+`next_task_number`) — `tests/test_catalog_new_race.py` падает
+(`AssertionError: 'task/t005-zadacha-pod-gonkoy' !=
+'task/t006-zadacha-pod-gonkoy'`), подтверждая, что тест ловит именно этот
+класс регрессии. Правка отменена, код возвращён к исправленному виду.
+
+Файл лёгкий (наследует `tests.sandbox.TmpRootTest` + `fake_git`, тем же
+приёмом, что `tests/test_analyst_role.py::_AnalystRoleTmpRootTest`;
+`ROOT` не патчится — `cmd_new` читает настоящий `templates/SPEC.md`
+пульта) — реального git не требует, гонка воспроизводится детерминированно
+через прямые вызовы `store.next_task_number`/подмену
+`store.peek_task_number`, без параллелизма/threading.
+
+Добавление регресс-теста — не в `tasks/T048/acceptance_tests/` (тот
+залочен ролью test_author, T023 — правка приёмочных тестов не в зоне
+разработчика), а в `tests/`, как и предлагало замечание («в `tests/` или
+как AC-3-дополнение в acceptance_tests»); AC-3 и так покрыт
+последовательным сценарием `test_ac3_existing_branch_refused.py`, новый
+файл добавляет непокрытый конкурентный случай тем же требованием 1/AC-3.
+
+Карта кодовой базы перегенерирована (`scripts/codebase_map.py`) — новый
+файл `tests/test_catalog_new_race.py` учтён.
+
+Прогон после правки: `python3 -m unittest discover -s tests` — 704/704 OK
+(703 + новый тест); `python3 -m unittest discover -s
+tasks/T048/acceptance_tests` — 6/6 OK; `guard.check()` на SPEC.md/PLAN.md
+и `guard.acceptance_traceability_errors(tasks/T048)` — без ошибок; diff
+итерации (`tests/test_catalog_new_race.py`, `docs/codebase-map.md`,
+`tasks/T048/PLAN.md`) не касается `.github/`, `skills/`, `templates/`,
+`docs/invariants.md` (AC-7 по-прежнему зелёный).
