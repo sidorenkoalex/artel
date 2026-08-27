@@ -29,7 +29,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from orchestrator import (alerts, budget, catalog, config, doctor,  # noqa: E402
                           gitcmd, projects, runner, spend, store)
-from tests.sandbox import TmpRootTest, capture  # noqa: E402
+from tests.sandbox import TmpRootTest, capture, fake_git  # noqa: E402
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
@@ -177,17 +177,29 @@ class _DoctorTmpRootTest(TmpRootTest):
         # Эта песочница — про doctor/pre-flight, не про worktree-механику
         # (SPEC T045): `self.root` не настоящий git-репозиторий (никогда
         # им не был — до T045 `role_cwd` для догфуда возвращал `config.ROOT`
-        # без единого git-вызова), а часть сценариев подменяют только
-        # `claude ...` (`claude_only_run`/`claude_only_popen`), пропуская
-        # остальные команды в настоящий subprocess. Обходим
-        # `workspace.ensure` напрямую, тем же приёмом, что и keychain выше,
-        # чтобы шаг стартовал в этой нерепозиторной песочнице.
-        wt_patcher = mock.patch.object(
-            runner.workspace, "ensure",
-            lambda task_id, branch: (self.root / ".artel" / "worktrees"
-                                     / task_id, None))
-        wt_patcher.start()
-        self.addCleanup(wt_patcher.stop)
+        # без единого git-вызова), а часть сценариев (recovery, orphans)
+        # заводят СВОЙ настоящий git внешнего target — фейк `gitcmd.git`
+        # здесь, на общем уровне, сломал бы их. Классам, которым нужен
+        # `cmd_new` (SPEC T048: сам заводит ветку/worktree и коммитит в
+        # них через `gitcmd`), фейк ставит их собственный `setUp`.
+
+    def new_task_in_fake_git(self, title: str) -> str:
+        """`cmd_new` под фейком `gitcmd.git`, тем же приёмом, что и в
+        остальных песочницах без настоящего git; SPEC.md/TZ.md кладёт в
+        worktree (требование 2) — эта песочница читает их с диска main
+        (`gitcmd.on_foreign_branch` тут всегда False из-за фейка), так
+        что то же содержимое дублируется на диск main для брифа роли."""
+        git_patcher = mock.patch.object(gitcmd, "git", fake_git)
+        git_patcher.start()
+        self.addCleanup(git_patcher.stop)
+        out = capture(catalog.cmd_new, title)
+        task_id = out.split("]")[0].strip("[")
+        wt_spec = config.WORKTREES / task_id / "tasks" / task_id / "SPEC.md"
+        disk_dir = config.TASKS / task_id
+        disk_dir.mkdir(parents=True, exist_ok=True)
+        (disk_dir / "SPEC.md").write_text(
+            wt_spec.read_text(encoding="utf-8"), encoding="utf-8")
+        return out
 
     def touch_backup(self) -> None:
         config.BACKUP_MARKER.parent.mkdir(parents=True, exist_ok=True)
@@ -272,7 +284,7 @@ class PreflightBlocksMissingTokenTest(TmpRootTest):
 
     def setUp(self):
         super().setUp()
-        capture(catalog.cmd_new, "Задача под pre-flight")
+        self.new_task_in_fake_git("Задача под pre-flight")
         store.update_task(store.db(), self.TASK, state="in_dev")
         # CLI на машине прогона может отсутствовать (CI-раннер) — проверки
         # токена/идентичности не должны зависеть от cli-found: он тестируется
@@ -327,7 +339,14 @@ class PreflightBlocksMissingTokenTest(TmpRootTest):
 
     def test_broken_identity_warns_but_does_not_block_the_step(self):
         def no_identity(*args):
-            return subprocess.CompletedProcess(args, 1, "", "")
+            # Только запросы идентичности отвечают отказом — остальное
+            # (в частности `workspace.ensure` внутри `role_cwd`, SPEC
+            # T045/T048) идёт тем же фейком, что и в `setUp`, иначе
+            # рабочий каталог роли не готовится вовсе и шаг не стартует
+            # по совсем другой причине, не той, что проверяет этот тест.
+            if args[:2] == ("config", "--get"):
+                return subprocess.CompletedProcess(args, 1, "", "")
+            return fake_git(*args)
 
         # Гасим ambient GIT_AUTHOR_*/GIT_COMMITTER_* машины, где гоняются
         # тесты — иначе `env.setdefault` в `role_env` подставляет реальную
@@ -527,7 +546,7 @@ class ProgramThresholdAlertTest(TmpRootTest):
 
     def setUp(self):
         super().setUp()
-        capture(catalog.cmd_new, "Порог программы")
+        self.new_task_in_fake_git("Порог программы")
 
     def test_crossing_seventy_percent_creates_a_threshold_alert(self):
         store.update_task(store.db(), self.TASK,

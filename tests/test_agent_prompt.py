@@ -17,7 +17,7 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from orchestrator import catalog, config, gitcmd, runner, store  # noqa: E402
-from tests.sandbox import capture  # noqa: E402
+from tests.sandbox import capture, fake_git  # noqa: E402
 
 
 class FakeStream:
@@ -65,12 +65,20 @@ class PromptChannelTest(unittest.TestCase):
                             # в .artel/ репозитория.
                             ("ROLE_HOME", root / ".artel" / "home"),
                             ("ROLE_CONFIG_DIR",
-                             root / ".artel" / "home" / ".claude")):
+                             root / ".artel" / "home" / ".claude"),
+                            # `cmd_new` (SPEC T048) сам заводит ветку и
+                            # worktree через `gitcmd` — тому нужен адрес,
+                            # не задетый ROOT репозитория пульта.
+                            ("WORKTREES", root / ".artel" / "worktrees")):
             patcher = mock.patch.object(config, attr, value)
             patcher.start()
             self.addCleanup(patcher.stop)
-        # git не спрашиваем: ревью-пакет собирается на заготовке.
-        patcher = mock.patch.object(gitcmd, "git", lambda *a: FakeGitResult())
+        # git не спрашиваем: ревью-пакет собирается на заготовке. Не
+        # `lambda *a: FakeGitResult()` (везде rc=0) — с SPEC T048 `cmd_new`
+        # сам решает, заводить ли задачу, по ответу `branch_exists`
+        # (AC-3): успех на любой вызов означал бы «ветка уже есть» и
+        # вечный отказ. `tests.sandbox.fake_git` этот случай уже разбирает.
+        patcher = mock.patch.object(gitcmd, "git", fake_git)
         patcher.start()
         self.addCleanup(patcher.stop)
         kc_patcher = mock.patch.object(runner.keychain, "token",
@@ -205,14 +213,6 @@ class PromptChannelTest(unittest.TestCase):
         details = self.journal_details("agent run SKIPPED")
         self.assertTrue(any("промпт не прочитан" in d for d in details), details)
         self.assertNotIn("CLI не найден", out)
-
-
-class FakeGitResult:
-    """Ответ подменённого git: пустой, но с полями настоящего исхода."""
-
-    returncode = 0
-    stdout = ""
-    stderr = ""
 
 
 if __name__ == "__main__":

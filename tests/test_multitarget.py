@@ -619,6 +619,22 @@ class ProgramSpendTest(TmpRootTest):
 class RoleEnvTest(TmpRootTest):
     """Критерий 8: процесс роли несёт HOME и CLAUDE_CONFIG_DIR из .artel/."""
 
+    def setUp(self):
+        super().setUp()
+        # Гасим ambient GIT_AUTHOR_*/GIT_COMMITTER_* среды, где гоняются
+        # тесты (машина прогона может нести реальную идентичность
+        # Оператора в окружении) — `role_env` ставит идентичность через
+        # `setdefault`, который смотрит на ПРИСУТСТВИЕ ключа, не на
+        # истинность значения, так что тут не годится пустая строка как
+        # заглушка (тот же класс утечки, что `test_doctor.py` уже гасит
+        # для CLAUDE_CODE_OAUTH_TOKEN, но там `.get()` и пустая строка
+        # достаточна) — нужно реальное отсутствие ключа.
+        for name in ("GIT_AUTHOR_NAME", "GIT_AUTHOR_EMAIL",
+                    "GIT_COMMITTER_NAME", "GIT_COMMITTER_EMAIL"):
+            if name in runner.os.environ:
+                old = runner.os.environ.pop(name)
+                self.addCleanup(runner.os.environ.__setitem__, name, old)
+
     def test_env_points_at_the_curated_layer(self):
         env = runner.role_env()
 

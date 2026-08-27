@@ -26,7 +26,7 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from orchestrator import (acceptance, catalog, config, fsm,  # noqa: E402
-                          gitcmd, runner, store)
+                          gitcmd, runner, store, workspace)
 from scripts import guard  # noqa: E402
 from tests.sandbox import TmpRootTest, capture, fake_git  # noqa: E402
 
@@ -749,16 +749,25 @@ class LockTest(unittest.TestCase):
 
         self.capture(catalog.cmd_init)
         self.capture(catalog.cmd_new, "Лок приёмочных тестов")
-        self.tdir = config.TASKS / self.TASK
-        # С SPEC T048 `cmd_new` пишет SPEC.md в worktree, не на диск
-        # main — этот тест кладёт его напрямую на диск (симуляция
-        # ветко-корректного fallback), каталог заводит сам.
-        self.tdir.mkdir(parents=True, exist_ok=True)
+        # С SPEC T048 `cmd_new` сам заводит РЕАЛЬНУЮ ветку/worktree и
+        # коммитит в них — ROOT (`self.root`) остаётся на main (требование
+        # 4), так что дальнейшие артефакты этого теста коммитятся В
+        # WORKTREE задачи (`on_foreign_branch` для него истинно), не в
+        # ROOT: коммит поверх main не попал бы на ветку задачи вовсе.
+        self.branch = self.row()["branch"]
+        self.tdir = workspace.path(self.TASK) / "tasks" / self.TASK
 
     def git(self, *args: str) -> str:
         res = subprocess.run(["git", *args], cwd=self.root,
                              capture_output=True, text=True)
         self.assertEqual(res.returncode, 0, f"git {' '.join(args)}: {res.stderr}")
+        return res.stdout
+
+    def git_wt(self, *args: str) -> str:
+        res = subprocess.run(["git", "-C", str(workspace.path(self.TASK)),
+                              *args], capture_output=True, text=True)
+        self.assertEqual(res.returncode, 0,
+                         f"git -C worktree {' '.join(args)}: {res.stderr}")
         return res.stdout
 
     capture = staticmethod(capture)
@@ -772,11 +781,11 @@ class LockTest(unittest.TestCase):
                                   (self.TASK,)).fetchone()
 
     def commit_task_dir(self, message: str = "артефакт") -> None:
-        self.git("add", f"tasks/{self.TASK}")
-        self.git("commit", "-q", "-m", message)
+        self.git_wt("add", f"tasks/{self.TASK}")
+        self.git_wt("commit", "-q", "-m", message)
 
     def head(self) -> str:
-        return self.git("rev-parse", "HEAD").strip()
+        return self.git_wt("rev-parse", "HEAD").strip()
 
     def enter_tests_writing(self) -> str:
         (self.tdir / "SPEC.md").write_text(
