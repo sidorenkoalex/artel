@@ -29,6 +29,13 @@
   ненулевой `current` и потребовал бы sha, который тесты не передают —
   тот же приём, каким довольствовался T042, только там `rev-parse HEAD`
   не переопределялся и `current` оставался пустым).
+
+`new_task()` заводит вторую задачу в той же песочнице (та же БД,
+`config.TASKS`) — нужно сценарию AC-2/8/9 (решение (d), tasks/T043/TZ.md):
+`kill` одной задачи не трогает main, а её killed-RETRO подбирает
+следующий `merge_gate` ДРУГОЙ, живой задачи. `approve()`/`kill()`
+принимают необязательный `task`, `task_row()`/`add_finished_step()`/
+`add_escalation()` — тоже, по умолчанию `self.TASK`.
 """
 import shutil
 import subprocess
@@ -40,7 +47,7 @@ from unittest import mock
 REPO_ROOT = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(REPO_ROOT))
 
-from orchestrator import cleanup, config, fsm, gitcmd, store  # noqa: E402
+from orchestrator import catalog, cleanup, config, fsm, gitcmd, store  # noqa: E402
 from tests.test_invariants import FsmTest  # noqa: E402
 
 MERGE_SHA = "eeee555566667777888899990000111122223333"
@@ -113,6 +120,11 @@ class RetroSandboxTest(FsmTest):
         (retro_root / "docs" / "retro").mkdir(parents=True)
         (retro_root / "docs" / "codebase-map.md").write_text(
             COMMITTED_MAP, encoding="utf-8")
+        # `templates/` — нужен `catalog.cmd_new` при заведении ВТОРОЙ задачи
+        # сценарием AC-2/8/9 (`new_task()`): самого `self.TASK` это не
+        # касается — он заведён раньше, ещё до подмены `config.ROOT` здесь
+        # (см. `FsmTest.setUp()`, читает шаблон с реального `config.ROOT`).
+        shutil.copytree(REPO_ROOT / "templates", retro_root / "templates")
         root_patcher = mock.patch.object(config, "ROOT", retro_root)
         root_patcher.start()
         self.addCleanup(root_patcher.stop)
@@ -139,13 +151,29 @@ class RetroSandboxTest(FsmTest):
         (adir / "test_fixture.py").write_text(ACCEPTANCE_TEST_FIXTURE,
                                               encoding="utf-8")
 
+    def new_task(self, title: str) -> str:
+        """Заводит вторую задачу в этой же песочнице; возвращает её id."""
+        before = {t["id"] for t in store.all_tasks(store.db())}
+        self.capture(catalog.cmd_new, title)
+        after = {t["id"] for t in store.all_tasks(store.db())}
+        added = after - before
+        assert len(added) == 1, f"cmd_new завёл не одну задачу: {added}"
+        return added.pop()
+
+    def task_row(self, task: str | None = None):
+        return store.db().execute(
+            "SELECT * FROM tasks WHERE id=?", (task or self.TASK,)).fetchone()
+
     def add_finished_step(self, actor: str, usd: float, tokens: int,
-                          attempt: str = "попытка 1/1") -> None:
-        store.journal(store.db(), self.TASK, actor, "agent run finished",
+                          attempt: str = "попытка 1/1",
+                          task: str | None = None) -> None:
+        store.journal(store.db(), task or self.TASK, actor,
+                     "agent run finished",
                      f"rc=0, {attempt}, стоимость ${usd:.4f}, токенов {tokens}")
 
-    def add_escalation(self, detail: str) -> None:
-        store.journal(store.db(), self.TASK, "fsm", "state -> escalated", detail)
+    def add_escalation(self, detail: str, task: str | None = None) -> None:
+        store.journal(store.db(), task or self.TASK, "fsm",
+                     "state -> escalated", detail)
 
     # ------------------------------------------------------------- git-фейк
 
@@ -178,15 +206,15 @@ class RetroSandboxTest(FsmTest):
             return subprocess.CompletedProcess(cmd, 0, "", "")
         return fake
 
-    def approve(self, **fake_kwargs) -> str:
+    def approve(self, task: str | None = None, **fake_kwargs) -> str:
         fake = self.fake_subprocess(**fake_kwargs)
         with mock.patch.object(gitcmd.subprocess, "run", fake):
-            return self.capture(fsm.cmd_approve, self.TASK, MERGE_SHA)
+            return self.capture(fsm.cmd_approve, task or self.TASK, MERGE_SHA)
 
-    def kill(self, **fake_kwargs) -> str:
+    def kill(self, task: str | None = None, **fake_kwargs) -> str:
         fake = self.fake_subprocess(**fake_kwargs)
         with mock.patch.object(gitcmd.subprocess, "run", fake):
-            return self.capture(cleanup.cmd_kill, self.TASK)
+            return self.capture(cleanup.cmd_kill, task or self.TASK)
 
     def retro_path(self, task=None) -> Path:
         return self.retro_root / "docs" / "retro" / f"{task or self.TASK}.md"
