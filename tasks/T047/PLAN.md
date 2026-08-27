@@ -167,7 +167,7 @@ PLAN.md (T031) — решение сознательно повторяет ег
 diff --git a/docs/invariants.md b/docs/invariants.md
 --- a/docs/invariants.md
 +++ b/docs/invariants.md
-@@ -52,7 +52,7 @@
+@@ -52,6 +52,6 @@
  | 25 | FSM принимает решения только по артефактам, чьи хэши зафиксированы его журналом: расхождение живого sha (или грязная копия) с зафиксированным на последнем переходе — инцидент целостности, агент не запускается, `approve` без подтверждённого sha не проходит гейт | `test_git_fixation.FsmDecidesOnlyOnFixedHashesTest`; `test_git_fixation.IntegrityIncidentBlocksRunTest`; `test_git_fixation.ApproveByShaTest` | ADR-0003 п.15, п.17; tasks/T021/SPEC.md, требования 4–6 |
  | 26 | Выход из `tests_writing`: критерий приёмки (AC-n) без теста и без пометки manual/skip/escalate — невалидный выход, переход отказывает с именем критерия | `test_acceptance_tests_flow.TraceabilityTest` | tasks/T023/SPEC.md, требование 4 |
  | 27 | Каталог `acceptance_tests/` залочен фиксацией T021 после выхода из `tests_writing`: расхождение с зафиксированным на выходе sha — отказ перехода `in_dev → review`, код чинится под тест, не наоборот | `test_acceptance_tests_flow.LockTest` | tasks/T023/SPEC.md, требование 5 |
@@ -176,3 +176,17 @@ diff --git a/docs/invariants.md b/docs/invariants.md
  | 29 | Стоимость шага не остаётся неучтённой молча: если финальное событие потока (`type: result`) не пришло из-за таймаута шага или обрыва stdout-пайпа, в журнал попадает либо частичная сумма из промежуточных usage-событий с пометкой «частичная», либо событие «стоимость шага неизвестна» с открытым алертом `alerts` (`kind=incident`, `source=spend.unknown_cost`); `spent_usd` при этом не дописывается фиктивной суммой | `tasks/T040/acceptance_tests/test_step_cost_on_missing_final_event.py::MissingFinalEventCostTest`; `test_step_cost.ChargeMissingResultTest`; `test_step_cost.CmdRunPartialCostTest` | tasks/T040/SPEC.md, требования 1–3 |
  | 30 | Таймаут шага с незакоммиченным WIP в рабочем дереве ветки задачи коммитится оркестратором чекпоинтом (`<id>: WIP-чекпоинт после таймаута шага <role>`, журнал actor=`orchestrator`) без участия Оператора; провал шага по коду возврата (не таймаут) и таймаут при уже чистом дереве чекпоинт не коммитят | `tasks/T041/acceptance_tests/test_checkpoint_after_timeout.py::CheckpointAfterTimeoutTest`; `test_timeout_checkpoint.CommitTimeoutCheckpointTest` | tasks/T041/SPEC.md, требования 1–4; прецеденты tasks/T022, tasks/T037 (ручной чекпоинт Оператора) |
 ```
+
+Applicability проверена (замечание major из REVIEW итерации 1 — хедер хунка
+`@@ -52,7 +52,7 @@` не совпадал с реальным диапазоном изменения,
+6 строк, а не 7): дифф выше сохранён в файл байт-в-байт и прогнан
+`git apply --check` штатной командой (без `--recount`) против рабочей
+копии `docs/invariants.md` на main —
+
+```
+$ git apply --check t047_invariants.diff
+$ echo $?
+0
+```
+
+— применяется чисто, дополнительных инструкций Оператору не требуется.
