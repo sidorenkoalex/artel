@@ -175,3 +175,35 @@ commit_timeout_checkpoint` (SPEC T041): git-операции переведен�
   а утечки реальной идентичности; если причина глубже точки вызова
   теста (например порядок глобальных патчей на уровне класса), может
   потребовать более широкого разбора.
+
+## Итерация 2 — закрытие REVIEW итерации 1 (changes_requested)
+
+major (`orchestrator/catalog.py:80-89`, гонка `branch`/`task_id`) —
+исправлено. `branch` пересчитан от РЕАЛЬНОГО `task_id` сразу после
+`store.next_task_number` (`catalog.py:88-93`), а не только один раз от
+`store.peek_task_number` до входа в транзакцию. Ранняя проверка на
+peek-значении (строки 80-86) осталась как есть — быстрый UX-отказ без
+похода в транзакцию для типового случая; реально заводимое имя ветки,
+которое уходит в `workspace.ensure` и в коммит/БД, теперь всегда
+посчитано от фактически выданного номера. Сценарий гонки из REVIEW
+(peek видит 5, транзакция выдаёт 6) воспроизведён отдельно патчем
+`store.peek_task_number`/`store.next_task_number` на разные значения —
+после исправления `branch` заведённой задачи `T006` равен
+`task/t006-...`, не `task/t005-...`; до исправления воспроизводилось
+расхождение, описанное в замечании. Требование 1 и AC-3 закрыты без
+оговорок и в конкурентном случае, не только в последовательном.
+
+minor (`orchestrator/retro.py:68`, литерал `"kill: TZ.md"` вместо
+константы) — исправлено. `retro.py` импортирует `cleanup` и сравнивает
+с `cleanup.KILL_TZ_JOURNAL_ACTION`; циклического импорта нет —
+`cleanup.py` не импортирует `retro` (проверено `python3 -c "from
+orchestrator import retro"`). Карта кодовой базы перегенерирована
+(`scripts/codebase_map.py`) — новая связь `retro.py → cleanup.py`
+отражена.
+
+Прогон после обеих правок: `python3 -m unittest discover -s tests` —
+703/703 OK; `python3 -m unittest discover -s tasks/T048/acceptance_tests`
+— 6/6 OK (AC-1..AC-5, AC-7); `guard.check()` на SPEC.md/PLAN.md и
+`guard.acceptance_traceability_errors(tasks/T048)` — без ошибок; diff
+итерации не касается `.github/`, `skills/`, `templates/`,
+`docs/invariants.md` (AC-7 по-прежнему зелёный).

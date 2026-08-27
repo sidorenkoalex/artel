@@ -1,5 +1,5 @@
 ---
-built_at_sha: 37f42a84609d3ee1acace0ac9652892b82cb0745
+built_at_sha: d15a2f59a888557c5caba3d00e98cc990917c5cb
 ---
 
 # Codebase-map пульта
@@ -170,7 +170,7 @@ built_at_sha: 37f42a84609d3ee1acace0ac9652892b82cb0745
 
 **Импортирует:** `orchestrator/config.py`, `orchestrator/gitcmd.py`, `orchestrator/lease.py`, `orchestrator/store.py`, `orchestrator/workspace.py`
 
-**Импортируется:** `orchestrator/artel.py`, `tests/test_invariants.py`, `tests/test_kill_cleanup.py`, `tests/test_multitarget_invariants.py`
+**Импортируется:** `orchestrator/artel.py`, `orchestrator/retro.py`, `tests/test_invariants.py`, `tests/test_kill_cleanup.py`, `tests/test_multitarget_invariants.py`
 
 ## orchestrator/config.py
 
@@ -311,7 +311,7 @@ built_at_sha: 37f42a84609d3ee1acace0ac9652892b82cb0745
 - `retro_path`
 - `retro_rel_path`
 
-**Импортирует:** `orchestrator/config.py`, `orchestrator/store.py`, `scripts/guard.py`
+**Импортирует:** `orchestrator/cleanup.py`, `orchestrator/config.py`, `orchestrator/store.py`, `scripts/guard.py`
 
 **Импортируется:** `orchestrator/fsm.py`, `tests/test_fsm_retro.py`, `tests/test_retro.py`
 

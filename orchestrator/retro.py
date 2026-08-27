@@ -13,7 +13,7 @@ import re
 
 from scripts import guard
 
-from . import config, store
+from . import cleanup, config, store
 
 RETRO_DIR_REL = "docs/retro"
 
@@ -61,11 +61,9 @@ def _gist(title: str, context_line: str) -> str:
 
 def _journaled_tz_text(steps) -> str | None:
     """Текст `TZ.md`, положенный в журнал `kill` (SPEC T048, требование 5,
-    `orchestrator/cleanup.py`); литерал действия сверяется буквально —
-    тот же приём, что `_actor_costs`/`_escalations` уже используют для
-    строк `runner.py`/`store.py`."""
+    `orchestrator/cleanup.py`)."""
     for s in steps:
-        if s["action"] == "kill: TZ.md":
+        if s["action"] == cleanup.KILL_TZ_JOURNAL_ACTION:
             return s["detail"] or None
     return None
 

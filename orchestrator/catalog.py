@@ -86,6 +86,11 @@ def cmd_new(title: str, tz_path: str | None = None) -> None:
                  f"израсходован)")
 
     task_id = f"T{store.next_task_number(conn, target):03d}"
+    # Ранняя проверка выше — по peek-значению, для быстрого UX-отказа без
+    # похода в транзакцию; но реально заводимое имя ветки обязано считаться
+    # от ФАКТИЧЕСКИ выданного номера — под гонкой двух конкурентных `new`
+    # peek- и реальный номер могут разойтись (реестр T048, замечание major).
+    branch = f"task/{task_id.lower()}-{slugify(title)}"
     wt_path, error = workspace.ensure(task_id, branch)
     if error is not None:
         sys.exit(f"[{task_id}] worktree не создан: {error}")
