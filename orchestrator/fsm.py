@@ -158,11 +158,11 @@ def _generate_and_commit_retro(conn, task_id: str, merge_sha: str) -> None:
         try:
             debt_text = retro.build_killed(conn, debt_id)
         except Exception as exc:  # noqa: BLE001 — см. докстринг выше
-            _retro_incident(conn, task_id,
+            _retro_incident(conn, debt_id,
                             f"генерация killed-RETRO {debt_id} не удалась: {exc}")
             continue
         if _write_and_stage_retro(conn, debt_id, debt_text):
-            _commit_retro(conn, task_id,
+            _commit_retro(conn, debt_id,
                           f"{task_id}: killed-RETRO долга {debt_id}")
 
 

@@ -170,6 +170,68 @@ class GenerateAndCommitRetroTest(unittest.TestCase):
             retro.retro_path(killed_id).read_text(encoding="utf-8"),
             "уже есть\n")
 
+    def test_killed_debt_commit_failure_attributes_incident_to_debt_not_task(self):
+        killed_id = "T901"
+        debt_target = "sled"
+        store.insert_task(self.conn, killed_id, "Убитая", "killed",
+                          "task/t901-x", debt_target, 50.0)
+        store.journal(self.conn, killed_id, "operator", "state -> killed",
+                     "kill switch")
+
+        def fake_git(*args) -> subprocess.CompletedProcess:
+            if args and args[0] == "commit" and killed_id in args[-1]:
+                return subprocess.CompletedProcess(list(args), 1, "",
+                                                   "стенд: commit долга упал")
+            return subprocess.CompletedProcess(list(args), 0, "", "")
+
+        with mock.patch.object(gitcmd, "git", fake_git):
+            fsm._generate_and_commit_retro(self.conn, self.TASK, "a" * 40)
+
+        debt_journal = "\n".join(
+            f"{s['action']} {s['detail']}"
+            for s in store.task_steps(self.conn, killed_id))
+        task_journal = "\n".join(
+            f"{s['action']} {s['detail']}"
+            for s in store.task_steps(self.conn, self.TASK))
+        self.assertIn("RETRO FAILED", debt_journal,
+                      "провал коммита killed-долга должен уйти в журнал "
+                      "убитой задачи (debt_id), не мержащейся")
+        self.assertNotIn("RETRO FAILED", task_journal,
+                         "мержащаяся задача не должна получить чужую "
+                         "запись о провале RETRO killed-долга")
+
+        incidents = self.incidents()
+        self.assertEqual(len(incidents), 1)
+        self.assertEqual(
+            incidents[0]["target"], debt_target,
+            "incident-алерт должен уйти в target killed-задачи-долга, "
+            "не в target мержащейся задачи (мультитаргет)")
+
+    def test_killed_debt_generation_failure_attributes_incident_to_debt_not_task(self):
+        killed_id = "T901"
+        store.insert_task(self.conn, killed_id, "Убитая", "killed",
+                          "task/t901-x", config.DEFAULT_TARGET, 50.0)
+        store.journal(self.conn, killed_id, "operator", "state -> killed",
+                     "kill switch")
+
+        with mock.patch.object(gitcmd, "git", fake_git_clean), \
+                mock.patch.object(retro, "build_killed",
+                                  side_effect=RuntimeError("бум долга")):
+            fsm._generate_and_commit_retro(self.conn, self.TASK, "a" * 40)
+
+        debt_journal = "\n".join(
+            f"{s['action']} {s['detail']}"
+            for s in store.task_steps(self.conn, killed_id))
+        task_journal = "\n".join(
+            f"{s['action']} {s['detail']}"
+            for s in store.task_steps(self.conn, self.TASK))
+        self.assertIn("RETRO FAILED", debt_journal,
+                      "провал генерации killed-долга должен уйти в журнал "
+                      "убитой задачи (debt_id), не мержащейся")
+        self.assertNotIn("RETRO FAILED", task_journal,
+                         "мержащаяся задача не должна получить чужую "
+                         "запись о провале генерации RETRO killed-долга")
+
     def test_no_killed_debts_means_only_done_commit(self):
         git_calls = []
 

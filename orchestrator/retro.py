@@ -117,11 +117,23 @@ def _acceptance_counts(task_id: str) -> tuple[int, int, int]:
     return count, manual, skip
 
 
-def _escalations_block(steps) -> list[str]:
+def _escalations_block(steps, *, full: bool) -> list[str]:
+    """`full=True` (killed) — последняя эскалация цитируется ЦЕЛИКОМ
+    (требование 7, лимит 30 строк для неё явно снят требованием 4).
+    `full=False` (done) — только ПЕРВАЯ строка `detail`: `detail` записи
+    `state -> escalated` не гарантированно однострочный (самый частый
+    случай — исчерпание попыток агента, `runner.py`, тянет в `detail`
+    хвост лога до `config.LOG_TAIL_LINES` строк), а для done требование 4
+    исключения по объёму не делает — лимит 30 строк должен быть
+    гарантирован статически, а не количеством строк в тексте причины."""
     escalations = _escalations(steps)
     if not escalations:
         return ["Эскалации: нет"]
-    return [f"Эскалации: {len(escalations)} (последняя): {escalations[-1]}"]
+    last = escalations[-1]
+    if not full:
+        first_line, sep, _rest = last.partition("\n")
+        last = f"{first_line}…" if sep else first_line
+    return [f"Эскалации: {len(escalations)} (последняя): {last}"]
 
 
 def _cost_block(steps, spent_usd: float) -> list[str]:
@@ -152,7 +164,7 @@ def build_done(conn, task_id: str, merge_sha: str) -> str:
         f"Ревью: {t['review_iters']} итераций; "
         f"приёмка: {t['accept_rejects']} отказ(ов)",
         "",
-        *_escalations_block(steps),
+        *_escalations_block(steps, full=False),
         "",
         f"Приёмочные тесты: {count} тест(ов), {manual} manual, {skip} skip",
     ]
@@ -182,7 +194,7 @@ def build_killed(conn, task_id: str) -> str:
         f"Ревью: {t['review_iters']} итераций; "
         f"приёмка: {t['accept_rejects']} отказ(ов)",
         "",
-        *_escalations_block(steps),
+        *_escalations_block(steps, full=True),
         "",
         f"Приёмочные тесты: {count} тест(ов), {manual} manual, {skip} skip",
     ]

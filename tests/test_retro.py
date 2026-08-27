@@ -148,6 +148,37 @@ class RetroGenerationTest(unittest.TestCase):
 
         self.assertIn("Эскалации: нет", text)
 
+    def test_build_done_truncates_multiline_escalation_to_first_line(self):
+        """Самый частый путь эскалации в системе — исчерпание попыток
+        агента (`orchestrator/runner.py`): `detail` тянет хвост лога
+        (`config.LOG_TAIL_LINES` строк, склеенных через `\\n`) одной
+        f-строкой. Требование 4 разрешает превышать 30 строк только для
+        killed — для done лимит обязан держаться независимо от того,
+        сколько строк в тексте причины последней эскалации."""
+        log_tail = "\n".join(f"строка лога {i}" for i in range(15))
+        self.add_step("fsm", "state -> escalated",
+                      f"исчерпаны попытки агента\n{log_tail}")
+
+        text = retro.build_done(self.conn, self.TASK, "dddd" * 10)
+
+        self.assertIn("исчерпаны попытки агента", text)
+        self.assertNotIn("строка лога", text)
+        self.assertLessEqual(len(text.splitlines()), 30)
+
+    def test_build_killed_quotes_multiline_escalation_verbatim(self):
+        """killed — исключение по объёму цитаты (требование 4/7) явно
+        разрешено: полный многострочный `detail` должен попасть в файл
+        дословно, не только первая строка."""
+        log_tail = "\n".join(f"строка лога {i}" for i in range(5))
+        self.add_step("operator", "state -> killed", "kill switch")
+        self.add_step("fsm", "state -> escalated",
+                      f"исчерпаны попытки агента\n{log_tail}")
+
+        text = retro.build_killed(self.conn, self.TASK)
+
+        self.assertIn("исчерпаны попытки агента", text)
+        self.assertIn("строка лога 4", text)
+
     def test_build_killed_has_no_artifacts_and_no_address_form(self):
         self.add_step("operator", "state -> killed", "kill switch")
 
