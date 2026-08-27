@@ -113,7 +113,7 @@ class FakeRun:
         """Разрешает ещё `steps` вызовов — столько, сколько цикл вправе сделать."""
         self.limit = len(self.calls) + steps
 
-    def __call__(self, task_id: str) -> None:
+    def __call__(self, task_id: str, session_id: str | None = None) -> None:
         if self.limit is not None and len(self.calls) >= self.limit:
             raise AssertionError(
                 f"цикл не остановился: шагов больше {config.AUTO_MAX_STEPS}")
@@ -128,7 +128,7 @@ class SpyCommand:
     def __init__(self):
         self.calls: list[tuple] = []
 
-    def __call__(self, *args) -> None:
+    def __call__(self, *args, **kwargs) -> None:
         self.calls.append(args)
 
 
@@ -357,7 +357,7 @@ class FakeAdvance:
         self.script: list = []
         self.calls = 0
 
-    def __call__(self, task_id: str) -> bool:
+    def __call__(self, task_id: str, session_id: str | None = None) -> bool:
         self.calls += 1
         action = self.script.pop(0) if self.script else None
         if action is not None:
@@ -654,6 +654,43 @@ class AutoNeverPassesAGateTest(AutoCycleTest):
         self.assertEqual(self.state(), "acceptance",
                          "auto увела задачу дальше приёмки")
         self.assertNotIn("merge", self.git_spy.git_subcommands())
+
+
+class AutoLeaseTest(AutoCycleTest):
+    """SPEC T044: `auto` берёт lease задачи один раз на весь цикл.
+
+    Приёмочные тесты (tasks/T044/acceptance_tests) кроют AC-1..AC-4 через
+    все семь команд сквозным путём с реальным `runner.cmd_run`; здесь —
+    именно обёртка `auto.cmd_auto` в изоляции (агент подменён `FakeRun`,
+    как и в остальных тестах этого файла), два её собственных края: отказ
+    до первого шага цикла и освобождение по завершении.
+    """
+
+    def test_foreign_fresh_lease_refuses_before_the_first_step(self):
+        self.set_state("in_dev")
+        conn = store.db()
+        conn.execute(
+            "INSERT INTO leases (task_id, session_id, pid, hostname,"
+            " heartbeat_ts) VALUES (?,?,?,?,?)",
+            (self.TASK, "sess-holder", 999, "holder-host", store.now()))
+        conn.commit()
+
+        out = self.capture(auto.cmd_auto, self.TASK, "sess-caller")
+
+        self.assertIn("sess-holder", out)
+        self.assertIn("holder-host", out)
+        self.assertEqual(self.agent.calls, [], "auto запустила шаг при чужом lease")
+        self.assertEqual(self.state(), "in_dev")
+
+    def test_own_fresh_lease_is_released_when_the_cycle_stops(self):
+        """Гейт без единого шага (роли нет с самого начала) — lease всё
+        равно взят и отпущен: следующая сессия его не встречает."""
+        self.set_state("spec_gate", reviewed_iter=0)
+
+        self.capture(auto.cmd_auto, self.TASK, "sess-a")
+
+        self.assertIsNone(store.lease_row(store.db(), self.TASK),
+                          "cmd_auto не отпустила взятый ею с нуля lease")
 
 
 if __name__ == "__main__":

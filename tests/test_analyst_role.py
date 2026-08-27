@@ -373,7 +373,7 @@ class AutoAnalystTest(TmpRootTest):
     def test_auto_runs_analyst_and_stops_at_spec_gate(self):
         self.write_tz()
 
-        def fake_run(task_id: str) -> None:
+        def fake_run(task_id: str, session_id: str | None = None) -> None:
             self.write("SPEC.md", SPEC_V2_READY)
 
         with mock.patch.object(runner, "cmd_run", side_effect=fake_run) as cmd_run:

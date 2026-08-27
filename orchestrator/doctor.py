@@ -50,6 +50,7 @@ subprocess-вызовов», см. `preflight_checks`).
 import os
 import re
 import shutil
+import socket
 import subprocess
 import sys
 import tempfile
@@ -489,6 +490,44 @@ def check_orphans(conn) -> list[Check]:
     return results
 
 
+# --- lease с мёртвым pid (SPEC T044, требование 11) ----------------------
+
+def _pid_alive(pid: int) -> bool:
+    """`os.kill(pid, 0)` не посылает сигнал, только проверяет адресуемость:
+    `ProcessLookupError` — процесса нет, `PermissionError` — есть, но чужой
+    (всё равно жив)."""
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    except OSError:
+        return False
+    return True
+
+
+def check_leases(conn) -> list[Check]:
+    """Требование 11: lease с мёртвым pid НА ЭТОМ host — incident-алерт,
+    по аналогии с `check_orphans`. Чужой host не проверяется — pid без
+    доступа к его процессной таблице нельзя ни подтвердить, ни опровергнуть.
+    """
+    host = socket.gethostname()
+    dead = [row for row in store.all_leases(conn)
+           if row["hostname"] == host and not _pid_alive(row["pid"])]
+    if not dead:
+        return [Check("leases", "ok", "нет lease с мёртвым pid на этом host")]
+
+    results = []
+    for row in dead:
+        message = (f"{row['task_id']}: lease сессии {row['session_id']} "
+                  f"мёртв (pid {row['pid']} на {row['hostname']})")
+        alerts.raise_alert(conn, store.task_target(conn, row["task_id"]),
+                          "incident", "doctor.leases", message)
+        results.append(Check("leases", "fail", message))
+    return results
+
+
 # --- прочие проверки (требование 9) --------------------------------------
 
 def check_backup_age(conn) -> Check:
@@ -583,6 +622,7 @@ def all_checks(conn) -> list[Check]:
         checks.extend(recovery_check(conn, name))
 
     checks.extend(check_orphans(conn))
+    checks.extend(check_leases(conn))
     return checks
 
 

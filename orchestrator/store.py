@@ -46,6 +46,10 @@ CREATE TABLE IF NOT EXISTS alerts (
   id INTEGER PRIMARY KEY AUTOINCREMENT, target TEXT, kind TEXT, source TEXT,
   message TEXT, ts TEXT, ack_ts TEXT, ack_by TEXT, ack_resolution TEXT
 );
+CREATE TABLE IF NOT EXISTS leases (
+  task_id TEXT PRIMARY KEY, session_id TEXT, pid INTEGER, hostname TEXT,
+  heartbeat_ts TEXT
+);
 """
 
 TASK_ID = re.compile(r"\AT(\d+)\Z")
@@ -138,6 +142,12 @@ def migrate(conn: sqlite3.Connection) -> None:
         "  id INTEGER PRIMARY KEY AUTOINCREMENT, target TEXT, kind TEXT,"
         "  source TEXT, message TEXT, ts TEXT, ack_ts TEXT, ack_by TEXT,"
         "  ack_resolution TEXT);")
+    # Носитель advisory-lease задачи (SPEC T044, требование 1): БД прошлых
+    # версий её не имеют — догоняется тем же приёмом, что и alerts/task_counters.
+    conn.executescript(
+        "CREATE TABLE IF NOT EXISTS leases ("
+        "  task_id TEXT PRIMARY KEY, session_id TEXT, pid INTEGER,"
+        "  hostname TEXT, heartbeat_ts TEXT);")
     conn.commit()
 
 
@@ -379,6 +389,44 @@ def open_alerts(conn, kind: str | None = None) -> list:
     return conn.execute(
         "SELECT * FROM alerts WHERE ack_ts IS NULL AND kind=? "
         "ORDER BY id DESC", (kind,)).fetchall()
+
+
+def lease_row(conn, task_id: str) -> sqlite3.Row | None:
+    """Строка lease задачи; None — свободна (SPEC T044, требование 1)."""
+    return conn.execute("SELECT * FROM leases WHERE task_id=?",
+                        (task_id,)).fetchone()
+
+
+def insert_lease(conn, task_id: str, session_id: str, pid: int,
+                 hostname: str, heartbeat_ts: str) -> None:
+    """Заводит lease задачи, до этого свободной (`lease.acquire`)."""
+    conn.execute(
+        "INSERT INTO leases (task_id, session_id, pid, hostname,"
+        " heartbeat_ts) VALUES (?,?,?,?,?)",
+        (task_id, session_id, pid, hostname, heartbeat_ts))
+    conn.commit()
+
+
+def update_lease(conn, task_id: str, session_id: str, pid: int,
+                 hostname: str, heartbeat_ts: str) -> None:
+    """Продление своего lease либо перехват чужого протухшего — обе ветки
+    переписывают все поля строки (`lease.acquire`, требования 3, 5)."""
+    conn.execute(
+        "UPDATE leases SET session_id=?, pid=?, hostname=?, heartbeat_ts=? "
+        "WHERE task_id=?", (session_id, pid, hostname, heartbeat_ts, task_id))
+    conn.commit()
+
+
+def release_lease(conn, task_id: str, session_id: str) -> None:
+    """Снимает lease задачи, если он всё ещё принадлежит этой сессии."""
+    conn.execute("DELETE FROM leases WHERE task_id=? AND session_id=?",
+                (task_id, session_id))
+    conn.commit()
+
+
+def all_leases(conn) -> list:
+    """Все lease (команда `doctor`, требование 11)."""
+    return conn.execute("SELECT * FROM leases").fetchall()
 
 
 def get_alert(conn, alert_id: int) -> sqlite3.Row | None:

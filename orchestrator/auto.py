@@ -1,5 +1,5 @@
 """Цикл `auto`: run+advance, пока в шаге работает агент."""
-from . import agent_log, budget, config, fsm, runner, store
+from . import agent_log, budget, config, fsm, lease, runner, store
 
 # Действие журнала, которым отказ `advance` узнаётся вне зависимости от
 # конкретной причины (SPEC T038, требование 1): каждая точка `cmd_advance`
@@ -51,7 +51,7 @@ def auto_stop(conn, task_id: str, state: str, reason: str, hint: str) -> None:
     print(f"  дальше: {hint}")
 
 
-def cmd_auto(task_id: str) -> None:
+def cmd_auto(task_id: str, session_id: str | None = None) -> None:
     """Цикл run+advance, пока в шаге работает агент, — до места, где нужен человек.
 
     Механику шага команда не дублирует: внутри те же `cmd_run` и
@@ -69,8 +69,26 @@ def cmd_auto(task_id: str) -> None:
 
     Решений auto не принимает: approve и reject остаются за Оператором —
     ручные гейты обходить нечем (docs/design.md §4, docs/invariants.md 18).
+
+    Держит lease задачи один раз на весь цикл (SPEC T044, требование 2) и
+    передаёт свой `session_id` во внутренние `run`/`advance` — те видят
+    уже существующий lease своей же сессии и на каждом шаге его продлевают
+    (требование 7), сами не отпуская (см. `orchestrator/lease.py`).
     """
     conn = store.db()
+    sid = lease.resolve_session_id(session_id)
+    refusal, fresh = lease.acquire(conn, task_id, sid)
+    if refusal is not None:
+        print(refusal)
+        return
+    try:
+        _cmd_auto(conn, task_id, sid)
+    finally:
+        if fresh:
+            lease.release(conn, task_id, sid)
+
+
+def _cmd_auto(conn, task_id: str, session_id: str) -> None:
     t = store.get_task(conn, task_id)
     state = t["state"]
     store.journal(conn, task_id, "operator", "auto старт",
@@ -95,7 +113,7 @@ def cmd_auto(task_id: str) -> None:
         before = state
 
         try:
-            runner.cmd_run(task_id)
+            runner.cmd_run(task_id, session_id=session_id)
         except SystemExit as exc:
             # Отказ стартовать `cmd_run` сообщает единственным способом —
             # sys.exit с текстом (исчерпанный бюджет, budget_block). В цикле
@@ -113,7 +131,7 @@ def cmd_auto(task_id: str) -> None:
         refusal = None
         if runner.step_role(t) is not None:
             journaled_before = len(store.task_steps(conn, task_id))
-            if fsm.cmd_advance(task_id):
+            if fsm.cmd_advance(task_id, session_id=session_id):
                 # guard отклонил артефакт-условие (требование 2): тот же
                 # по характеру стоп, что и штатный отказ guard'а вне
                 # цикла — цикл не зовёт cmd_run заново для того же
