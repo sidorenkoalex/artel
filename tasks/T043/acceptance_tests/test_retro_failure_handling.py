@@ -60,36 +60,9 @@ class Ac3DoneRetroFailureTest(RetroSandboxTest):
             "не заведён incident-алерт с source вида fsm.retro "
             "(SPEC, требование 9)")
 
-
-class Ac3KillRetroFailureTest(RetroSandboxTest):
-    """Провал коммита RETRO при kill (с ветки main) не отменяет сам kill —
-    kill switch срабатывает всегда (docs/invariants.md, инвариант 14)."""
-
-    def setUp(self):
-        super().setUp()
-        self.write_context_spec()
-
-    def test_ac3_kill_path_retro_failure_still_completes_kill(self):
-        self.kill(current_branch=config.MAIN_BRANCH,
-                 fail_git_subcommands=("add", "commit"))
-
-        self.assertEqual(
-            self.state(), "killed",
-            "провал шага RETRO не должен отменять kill")
-
-        text = journal_text(self.TASK)
-        self.assertTrue(
-            any(k in text for k in ("retro", "ретро"))
-            and any(k in text for k in ("failed", "провал", "не удал", "ошиб")),
-            "в журнале нет записи о провале шага генерации/коммита RETRO "
-            "при kill")
-
-        self.assertTrue(
-            retro_incidents(),
-            "не заведён incident-алерт с source вида fsm.retro при провале "
-            "RETRO во время kill (SPEC, требование 9)")
-
-
-if __name__ == "__main__":
-    import unittest
-    unittest.main()
+# Ред. Оператора 27.08 (эскалация developer, PLAN T043): класс
+# Ac3KillRetroFailureTest удалён — написан до решения (d) и требовал,
+# чтобы kill пытался коммитить RETRO, что противоречит требованию 2
+# SPEC и Ac2KillDoesNotTouchMainTest. AC-3 покрыт: done-путь —
+# Ac3DoneRetroFailureTest ниже; kill-путь (провал подбора долга) —
+# tests/test_fsm_retro.py::GenerateAndCommitRetroTest.
