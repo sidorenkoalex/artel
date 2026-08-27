@@ -1,5 +1,5 @@
 ---
-built_at_sha: 134d78287a75f85d7ac9709666bf59c2ae797afa
+built_at_sha: 26e8b36200165fa214313aa1f67692b83ce08cdd
 ---
 
 # Codebase-map пульта
@@ -284,7 +284,7 @@ built_at_sha: 134d78287a75f85d7ac9709666bf59c2ae797afa
 
 **Импортирует:** `orchestrator/config.py`, `orchestrator/store.py`
 
-**Импортируется:** `orchestrator/auto.py`, `orchestrator/budget.py`, `orchestrator/cleanup.py`, `orchestrator/fsm.py`, `orchestrator/runner.py`, `tests/test_lease.py`
+**Импортируется:** `orchestrator/auto.py`, `orchestrator/budget.py`, `orchestrator/cleanup.py`, `orchestrator/fsm.py`, `orchestrator/runner.py`, `orchestrator/workspace.py`, `tests/test_lease.py`
 
 ## orchestrator/projects.py
 
@@ -463,7 +463,7 @@ built_at_sha: 134d78287a75f85d7ac9709666bf59c2ae797afa
 - `registered_paths`
 - `remove`
 
-**Импортирует:** `orchestrator/config.py`, `orchestrator/gitcmd.py`, `orchestrator/store.py`
+**Импортирует:** `orchestrator/config.py`, `orchestrator/gitcmd.py`, `orchestrator/lease.py`, `orchestrator/store.py`
 
 **Импортируется:** `orchestrator/artel.py`, `orchestrator/cleanup.py`, `orchestrator/doctor.py`, `orchestrator/fsm.py`, `orchestrator/runner.py`, `tests/test_kill_cleanup.py`, `tests/test_multitarget_invariants.py`, `tests/test_workspace.py`
 

@@ -247,6 +247,24 @@ class RemoveTest(RealGitWorkspaceTest):
 
         self.assertIn("не найден", note)
 
+    def test_failure_with_empty_stderr_still_reports_a_reason(self):
+        """Review T045 итерация 1 замечание 2: `git worktree remove`
+        отказал (returncode != 0), но ничего не написал в stderr — как
+        `ensure()` на тот же вырожденный случай, отчёт не пустая строка."""
+        workspace.ensure(self.TASK, self.branch)
+        real_git = gitcmd.git
+
+        def failing_git(*args: str) -> subprocess.CompletedProcess:
+            if args[:2] == ("worktree", "remove"):
+                return subprocess.CompletedProcess(list(args), 1, "", "")
+            return real_git(*args)
+
+        with mock.patch.object(gitcmd, "git", failing_git):
+            note = workspace.remove(self.TASK)
+
+        self.assertIn("не убран", note)
+        self.assertIn("вернул", note)
+
 
 class CmdWorkspaceTest(RealGitWorkspaceTest):
 
@@ -281,6 +299,34 @@ class CmdWorkspaceTest(RealGitWorkspaceTest):
                 self.capture(workspace.cmd_workspace, self.TASK)
 
         self.assertIn("не удалось", str(ctx.exception))
+
+
+class CmdWorkspaceLeaseTest(RealGitWorkspaceTest):
+    """SPEC T044 требование 2, review T045 итерация 1 замечание 1:
+    `workspace <id>` — мутирующая команда задачи как и остальные, берёт
+    lease перед `git worktree add` (по образцу
+    `tests.test_auto_cycle.AutoLeaseTest`)."""
+
+    def test_foreign_fresh_lease_refuses_without_creating_a_worktree(self):
+        conn = store.db()
+        conn.execute(
+            "INSERT INTO leases (task_id, session_id, pid, hostname,"
+            " heartbeat_ts) VALUES (?,?,?,?,?)",
+            (self.TASK, "sess-holder", 999, "holder-host", store.now()))
+        conn.commit()
+
+        with self.assertRaises(SystemExit) as ctx:
+            self.capture(workspace.cmd_workspace, self.TASK, "sess-caller")
+
+        self.assertIn("sess-holder", str(ctx.exception))
+        self.assertIn("holder-host", str(ctx.exception))
+        self.assertNotIn(str(self.wt_path()), self.worktree_list())
+
+    def test_own_fresh_lease_is_released_after_the_call(self):
+        self.capture(workspace.cmd_workspace, self.TASK, "sess-a")
+
+        self.assertIsNone(store.lease_row(store.db(), self.TASK),
+                          "cmd_workspace не отпустила взятый ею с нуля lease")
 
 
 if __name__ == "__main__":

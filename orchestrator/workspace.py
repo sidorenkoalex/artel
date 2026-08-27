@@ -17,7 +17,7 @@ import shutil
 import sys
 from pathlib import Path
 
-from . import config, gitcmd, store
+from . import config, gitcmd, lease, store
 
 
 def path(task_id: str) -> Path:
@@ -110,15 +110,36 @@ def remove(task_id: str) -> str:
         return f"worktree {wt_path} не найден — нечего убирать"
     res = gitcmd.git("worktree", "remove", "--force", str(wt_path))
     if res is None or res.returncode != 0:
-        reason = res.stderr.strip()[:200] if res is not None else "git не ответил"
+        reason = (res.stderr.strip()[:200] if res is not None and res.stderr
+                  else f"git worktree remove вернул {res.returncode if res else '—'}")
         return f"worktree {wt_path} не убран: {reason}"
     return f"убран worktree {wt_path}"
 
 
-def cmd_workspace(task_id: str) -> None:
+def cmd_workspace(task_id: str, session_id: str | None = None) -> None:
     """CLI `workspace <id>` (AC-1, AC-2): создаёт или выдаёт путь
-    существующего worktree задачи."""
+    существующего worktree задачи.
+
+    Берёт lease задачи перед работой (SPEC T044, требование 2) — тем же
+    приёмом, что `runner.cmd_run`/`cleanup.cmd_kill`: `git worktree add`
+    невозможно безопасно сериализовать иначе, а `workspace <id>` — такая
+    же мутирующая команда задачи, как и остальные (без lease — гонка с
+    параллельной сессией, держащей задачу в `auto`/`run`, на один и тот
+    же `git worktree add`, review T045 итерация 1, замечание 1).
+    """
     conn = store.db()
+    sid = lease.resolve_session_id(session_id)
+    refusal, fresh = lease.acquire(conn, task_id, sid)
+    if refusal is not None:
+        sys.exit(refusal)
+    try:
+        _cmd_workspace(conn, task_id)
+    finally:
+        if fresh:
+            lease.release(conn, task_id, sid)
+
+
+def _cmd_workspace(conn, task_id: str) -> None:
     t = store.get_task(conn, task_id)
     wt_path, error = ensure(task_id, t["branch"])
     if error is not None:
