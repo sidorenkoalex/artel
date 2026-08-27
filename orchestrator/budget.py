@@ -2,7 +2,7 @@
 import sqlite3
 import sys
 
-from . import alerts, config, spend, store
+from . import alerts, config, lease, spend, store
 
 
 def spec_budget(meta: dict) -> tuple[float | None, str]:
@@ -173,9 +173,25 @@ def check_program_spend(conn, task_id: str, cost: dict | None) -> None:
             print(f"[{task_id}] ВНИМАНИЕ: {detail}")
 
 
-def cmd_budget(task_id: str, raw_usd: str) -> None:
-    """Меняет потолок задачи — единственный способ снять блокировку по бюджету."""
+def cmd_budget(task_id: str, raw_usd: str, session_id: str | None = None) -> None:
+    """Меняет потолок задачи — единственный способ снять блокировку по бюджету.
+
+    Берёт lease задачи перед работой (SPEC T044, требование 2) — обёртка
+    вокруг `_cmd_budget`, см. `orchestrator/lease.py`.
+    """
     conn = store.db()
+    sid = lease.resolve_session_id(session_id)
+    refusal, fresh = lease.acquire(conn, task_id, sid)
+    if refusal is not None:
+        sys.exit(refusal)
+    try:
+        _cmd_budget(conn, task_id, raw_usd)
+    finally:
+        if fresh:
+            lease.release(conn, task_id, sid)
+
+
+def _cmd_budget(conn, task_id: str, raw_usd: str) -> None:
     t = store.get_task(conn, task_id)
     new_budget = spend.cli_number(raw_usd)
     if new_budget is None or new_budget <= 0:

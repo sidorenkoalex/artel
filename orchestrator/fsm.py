@@ -6,7 +6,7 @@ from pathlib import Path
 from scripts import guard
 
 from . import (acceptance, alerts, artifacts, budget, ci, config, fixation,
-              gitcmd, retro, store, yamlmini)
+              gitcmd, lease, retro, store, yamlmini)
 
 # Регенерация/коммит карты кодовой базы на merge_gate (SPEC T042).
 MAP_REL = "docs/codebase-map.md"
@@ -268,18 +268,38 @@ def _tests_writing_ac_state(conn, task_id: str, branch: str,
     return tested, markers, errors
 
 
-def cmd_advance(task_id: str) -> bool:
+def cmd_advance(task_id: str, session_id: str | None = None) -> bool:
     """Единственная точка движения FSM: читает статусы артефактов.
 
     Возврат `True` — переход отклонён именно `guard_refuses()` (структура
     артефакта-условия сломана); `False` — любой другой исход, включая
     успешное продвижение и отказ по другой причине (артефакт не ready,
-    грязная копия, вердикт не свежий и т.п.). Различение нужно циклу
+    грязная копия, вердикт не свежий и т.п., а также отказ по чужому
+    живому lease — SPEC T044, требование 2). Различение нужно циклу
     `auto` (SPEC T034, требование 2): отказ guard'ом — гейт, на котором
     цикл обязан остановиться, а не звать `cmd_run` заново для того же
     состояния.
+
+    Отказ по lease печатается и возвращает `False`, не бросает исключение
+    (в отличие от остальных шести мутирующих команд, `sys.exit`): `advance`
+    уже возвращает исход значением, а не исключением, во всех остальных
+    ветках — новый способ отказа не должен становиться единственным,
+    который `auto` не умеет поймать.
     """
     conn = store.db()
+    sid = lease.resolve_session_id(session_id)
+    refusal, fresh = lease.acquire(conn, task_id, sid)
+    if refusal is not None:
+        print(refusal)
+        return False
+    try:
+        return _cmd_advance(conn, task_id)
+    finally:
+        if fresh:
+            lease.release(conn, task_id, sid)
+
+
+def _cmd_advance(conn, task_id: str) -> bool:
     t = store.get_task(conn, task_id)
     state = t["state"]
     tdir = config.TASKS / task_id
@@ -534,8 +554,22 @@ def confirm_fixation(conn, task_id: str, sha: str | None) -> bool:
     return True
 
 
-def cmd_approve(task_id: str, sha: str | None = None) -> None:
+def cmd_approve(task_id: str, sha: str | None = None,
+               session_id: str | None = None) -> None:
+    """Берёт lease задачи перед работой (SPEC T044, требование 2)."""
     conn = store.db()
+    sid = lease.resolve_session_id(session_id)
+    refusal, fresh = lease.acquire(conn, task_id, sid)
+    if refusal is not None:
+        sys.exit(refusal)
+    try:
+        _cmd_approve(conn, task_id, sha)
+    finally:
+        if fresh:
+            lease.release(conn, task_id, sid)
+
+
+def _cmd_approve(conn, task_id: str, sha: str | None) -> None:
     t = store.get_task(conn, task_id)
     state = t["state"]
     if state in APPROVE_NEEDS_SHA and not confirm_fixation(conn, task_id, sha):
@@ -637,8 +671,21 @@ def cmd_approve(task_id: str, sha: str | None = None) -> None:
         print(f"[{task_id}] в состоянии {state} нечего подтверждать")
 
 
-def cmd_reject(task_id: str, reason: str) -> None:
+def cmd_reject(task_id: str, reason: str, session_id: str | None = None) -> None:
+    """Берёт lease задачи перед работой (SPEC T044, требование 2)."""
     conn = store.db()
+    sid = lease.resolve_session_id(session_id)
+    refusal, fresh = lease.acquire(conn, task_id, sid)
+    if refusal is not None:
+        sys.exit(refusal)
+    try:
+        _cmd_reject(conn, task_id, reason)
+    finally:
+        if fresh:
+            lease.release(conn, task_id, sid)
+
+
+def _cmd_reject(conn, task_id: str, reason: str) -> None:
     t = store.get_task(conn, task_id)
     if t["state"] != "acceptance":
         sys.exit(f"[{task_id}] reject применим только в acceptance "

@@ -6,7 +6,7 @@ import time
 from pathlib import Path
 
 from . import (agent_log, brief, budget, config, fixation, gitcmd, keychain,
-              review, roles, spend, store)
+              lease, review, roles, spend, store)
 
 # Идентичность коммитера, которую роль обязана унести с собой в свой HOME.
 # git читает эти переменные ПОВЕРХ конфига, поэтому перенос ровно двух пар
@@ -54,9 +54,25 @@ def step_role(t) -> str | None:
     return None
 
 
-def cmd_run(task_id: str) -> None:
-    """Запуск агента текущего шага (claude CLI, headless)."""
+def cmd_run(task_id: str, session_id: str | None = None) -> None:
+    """Запуск агента текущего шага (claude CLI, headless).
+
+    Берёт lease задачи перед работой (SPEC T044, требование 2) — обёртка
+    вокруг `_cmd_run`, см. `orchestrator/lease.py`.
+    """
     conn = store.db()
+    sid = lease.resolve_session_id(session_id)
+    refusal, fresh = lease.acquire(conn, task_id, sid)
+    if refusal is not None:
+        sys.exit(refusal)
+    try:
+        _cmd_run(conn, task_id)
+    finally:
+        if fresh:
+            lease.release(conn, task_id, sid)
+
+
+def _cmd_run(conn, task_id: str) -> None:
     t = store.get_task(conn, task_id)
     # Бюджет проверяем до всего остального: потраченные деньги не зависят от
     # состояния задачи, а из escalated Оператор её вернуть уже мог.

@@ -15,6 +15,7 @@
 """
 import io
 import shutil
+import socket
 import subprocess
 import sys
 import tempfile
@@ -676,6 +677,90 @@ class OrphansTest(TmpRootTest):
 
         self.assertTrue(all(c.status == "ok" for c in checks))
         self.assertEqual(alerts.open_alerts(store.db(), "incident"), [])
+
+
+class LeasesCheckTest(TmpRootTest):
+    """SPEC T044, требование 11: lease с мёртвым pid на этом host — incident.
+
+    AC-6 (tasks/T044/acceptance_tests) уже кроет golden path одного
+    мёртвого и одного живого lease; здесь — форма результата и края,
+    которые критерию не нужны (несколько мёртвых, чужой host, пустая
+    таблица), по образцу `OrphansTest`.
+    """
+
+    def setUp(self):
+        super().setUp()
+        capture(catalog.cmd_init)
+        for task_id in ("T001", "T002"):
+            store.insert_task(store.db(), task_id, "Задача", "in_dev",
+                              f"task/{task_id.lower()}-zadacha",
+                              config.DEFAULT_TARGET, 25.0)
+
+    @staticmethod
+    def dead_pid() -> int:
+        proc = subprocess.Popen([sys.executable, "-c", "pass"],
+                                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        proc.wait()
+        return proc.pid
+
+    def test_empty_leases_table_is_ok(self):
+        checks = doctor.check_leases(store.db())
+
+        self.assertTrue(all(c.status == "ok" for c in checks))
+        self.assertEqual(alerts.open_alerts(store.db(), "incident"), [])
+
+    def test_foreign_host_dead_pid_is_not_flagged(self):
+        """Чужой host: pid из чужой процессной таблицы нельзя ни
+        подтвердить мёртвым, ни живым — не проверяется вовсе."""
+        conn = store.db()
+        conn.execute(
+            "INSERT INTO leases (task_id, session_id, pid, hostname,"
+            " heartbeat_ts) VALUES (?,?,?,?,?)",
+            ("T001", "sess", self.dead_pid(), "other-host.invalid", store.now()))
+        conn.commit()
+
+        checks = doctor.check_leases(store.db())
+
+        self.assertTrue(all(c.status != "fail" for c in checks))
+        self.assertEqual(alerts.open_alerts(store.db(), "incident"), [])
+
+    def test_multiple_dead_leases_each_raise_their_own_incident(self):
+        conn = store.db()
+        host = socket.gethostname()
+        for task_id in ("T001", "T002"):
+            conn.execute(
+                "INSERT INTO leases (task_id, session_id, pid, hostname,"
+                " heartbeat_ts) VALUES (?,?,?,?,?)",
+                (task_id, f"sess-{task_id}", self.dead_pid(), host, store.now()))
+        conn.commit()
+
+        checks = doctor.check_leases(store.db())
+
+        failed = [c for c in checks if c.status == "fail"]
+        self.assertEqual(len(failed), 2)
+        incidents = [a for a in alerts.open_alerts(store.db(), "incident")
+                    if a["source"] == "doctor.leases"]
+        self.assertEqual(len(incidents), 2)
+        messages = [i["message"] for i in incidents]
+        self.assertTrue(any("T001" in m for m in messages))
+        self.assertTrue(any("T002" in m for m in messages))
+
+    def test_repeated_run_does_not_duplicate_the_incident(self):
+        """Дедуп — по тому же ключу (target, kind, source, message), что и
+        остальные incident-алерты doctor (`alerts.raise_alert`)."""
+        conn = store.db()
+        conn.execute(
+            "INSERT INTO leases (task_id, session_id, pid, hostname,"
+            " heartbeat_ts) VALUES (?,?,?,?,?)",
+            ("T001", "sess", self.dead_pid(), socket.gethostname(), store.now()))
+        conn.commit()
+
+        doctor.check_leases(store.db())
+        doctor.check_leases(store.db())
+
+        incidents = [a for a in alerts.open_alerts(store.db(), "incident")
+                    if a["source"] == "doctor.leases"]
+        self.assertEqual(len(incidents), 1)
 
 
 class AutoAckTest(TmpRootTest):
