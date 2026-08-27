@@ -56,27 +56,41 @@ def acquire(conn, task_id: str, session_id: str) -> tuple[str | None, bool]:
     hostname/heartbeat переписываются на вызывающую сторону) с отдельной
     записью в журнале задачи. `взят_с_нуля` — True, только если до этого
     вызова строки не было вовсе (см. модульный докстринг про `release`).
+
+    Чтение строки (`store.lease_row`) и её запись (`insert_lease`/
+    `update_lease`) выполняются внутри одной транзакции `BEGIN IMMEDIATE`:
+    она берёт RESERVED-блокировку до чтения, поэтому вторая параллельная
+    сессия, тоже вызвавшая `acquire()` на ту же задачу, не может ни
+    прочитать, ни записать, пока первая не закоммитит (или не откатит)
+    — без этого окно между чтением строки и её записью позволяло двум
+    сессиям одновременно решить, что lease свободен или протух, и обеим
+    уйти писать (ревью T044, итерация 1, Замечание 1).
     """
-    row = store.lease_row(conn, task_id)
-    pid, hostname = os.getpid(), socket.gethostname()
-    if row is None:
-        store.insert_lease(conn, task_id, session_id, pid, hostname, store.now())
-        return None, True
-    if row["session_id"] == session_id:
+    conn.execute("BEGIN IMMEDIATE")
+    try:
+        row = store.lease_row(conn, task_id)
+        pid, hostname = os.getpid(), socket.gethostname()
+        if row is None:
+            store.insert_lease(conn, task_id, session_id, pid, hostname, store.now())
+            return None, True
+        if row["session_id"] == session_id:
+            store.update_lease(conn, task_id, session_id, pid, hostname, store.now())
+            return None, False
+        age = _age_seconds(row["heartbeat_ts"])
+        if age <= config.LEASE_STALE_AFTER_SEC:
+            refusal = (f"[{task_id}] задачу ведёт сессия {row['session_id']} "
+                      f"с host {row['hostname']}, heartbeat {int(age)} сек "
+                      f"назад — подожди её или разберись, что с ней")
+            return refusal, False
+        detail = (f"lease протух ({int(age)} сек > порог "
+                 f"{config.LEASE_STALE_AFTER_SEC}) у сессии {row['session_id']} "
+                 f"({row['hostname']}) — перехвачен сессией {session_id}")
         store.update_lease(conn, task_id, session_id, pid, hostname, store.now())
+        store.journal(conn, task_id, "lease", "lease перехвачен", detail)
         return None, False
-    age = _age_seconds(row["heartbeat_ts"])
-    if age <= config.LEASE_STALE_AFTER_SEC:
-        refusal = (f"[{task_id}] задачу ведёт сессия {row['session_id']} "
-                  f"с host {row['hostname']}, heartbeat {int(age)} сек "
-                  f"назад — подожди её или разберись, что с ней")
-        return refusal, False
-    detail = (f"lease протух ({int(age)} сек > порог "
-             f"{config.LEASE_STALE_AFTER_SEC}) у сессии {row['session_id']} "
-             f"({row['hostname']}) — перехвачен сессией {session_id}")
-    store.update_lease(conn, task_id, session_id, pid, hostname, store.now())
-    store.journal(conn, task_id, "fsm", "lease перехвачен", detail)
-    return None, False
+    finally:
+        if conn.in_transaction:
+            conn.rollback()
 
 
 def release(conn, task_id: str, session_id: str) -> None:

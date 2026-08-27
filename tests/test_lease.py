@@ -9,6 +9,7 @@
 import os
 import socket
 import sys
+import threading
 import unittest
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -130,6 +131,99 @@ class AcquireReleaseTest(TmpRootTest):
 
         lease.release(store.db(), self.TASK, "sess-a")
         self.assertIsNone(self.row())
+
+
+class ConcurrentAcquireTest(TmpRootTest):
+    """Ревью T044 (итерация 1), Замечание 1: read-then-write в `acquire()`
+    (`lease_row` -> `insert_lease`/`update_lease`) должен быть атомарным
+    под конкурентным доступом двух и более сессий к одной задаче — не
+    только в однопоточных прогонах остальных тестов этого файла. Каждый
+    поток открывает своё собственное подключение (`store.db()`), как и
+    делают отдельные процессы CLI, — общий только файл БД."""
+
+    TASK = "T001"
+    THREADS = 8
+
+    def setUp(self):
+        super().setUp()
+        capture(catalog.cmd_init)
+        store.insert_task(store.db(), self.TASK, "Задача", "in_dev",
+                          "task/t001-zadacha", config.DEFAULT_TARGET, 25.0)
+        # Догоняет migrate()/seed_task_counters ПОСЛЕ вставки T001, пока
+        # тест ещё однопоточный: без этого первый же `store.db()` каждого
+        # потока ниже гонится за посевом task_counters.artel — отдельный,
+        # не связанный с T044 дефект (check-then-insert без транзакции в
+        # `store.seed_task_counters`), который иначе маскирует проверяемую
+        # здесь гонку `lease.acquire()`.
+        store.db()
+
+    def _run_concurrently(self, session_ids):
+        """Каждая сессия — своё подключение, как у реального CLI-процесса.
+        sqlite3 запрещает использовать Connection не из того потока, где
+        она создана, поэтому каждый поток открывает её сам — но ДО
+        барьера, который синхронизирует только сам вызов `acquire()`.
+        Иначе тест ловит не гонку `acquire()`, а несвязанную с T044 гонку
+        на посев `task_counters` внутри `store.migrate()`, который зовёт
+        каждый `store.db()` (эта гонка уже закрыта разово в `setUp()`,
+        до которого сюда никакой поток не доходит)."""
+        barrier = threading.Barrier(len(session_ids))
+        results = [None] * len(session_ids)
+        errors = []
+
+        def worker(i, sid):
+            try:
+                conn = store.db()
+                barrier.wait(timeout=5)
+                results[i] = lease.acquire(conn, self.TASK, sid)
+            except Exception as exc:
+                errors.append(exc)
+
+        threads = [threading.Thread(target=worker, args=(i, sid))
+                  for i, sid in enumerate(session_ids)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(timeout=10)
+        return results, errors
+
+    def test_concurrent_acquire_on_free_lease_exactly_one_wins(self):
+        """Случай 1 из Замечания 1: гонка на INSERT при свободном lease —
+        раньше вторая сессия получала необработанный
+        `sqlite3.IntegrityError` вместо именованного отказа."""
+        session_ids = [f"sess-{i}" for i in range(self.THREADS)]
+
+        results, errors = self._run_concurrently(session_ids)
+
+        self.assertEqual(errors, [], "acquire() не должна падать под гонкой")
+        fresh_wins = [r for r in results if r[1]]
+        refusals = [r for r in results if r[0] is not None]
+        self.assertEqual(len(fresh_wins), 1, results)
+        self.assertEqual(len(refusals), self.THREADS - 1, results)
+
+    def test_concurrent_acquire_on_stale_lease_exactly_one_intercepts(self):
+        """Случай 2 из Замечания 1: гонка на UPDATE протухшего чужого
+        lease — раньше обе сессии молча считали лизинг своим и обе шли
+        выполнять тело мутирующей команды параллельно."""
+        conn = store.db()
+        stale_ts = _ts_ago(config.LEASE_STALE_AFTER_SEC + 1)
+        conn.execute(
+            "INSERT INTO leases (task_id, session_id, pid, hostname,"
+            " heartbeat_ts) VALUES (?,?,?,?,?)",
+            (self.TASK, "sess-holder", 999, "holder-host", stale_ts))
+        conn.commit()
+        journalled_before = len(store.task_steps(store.db(), self.TASK))
+        session_ids = [f"sess-{i}" for i in range(self.THREADS)]
+
+        results, errors = self._run_concurrently(session_ids)
+
+        self.assertEqual(errors, [], "acquire() не должна падать под гонкой")
+        wins = [r for r in results if r[0] is None]
+        self.assertEqual(len(wins), 1, results)
+        row = store.lease_row(store.db(), self.TASK)
+        self.assertIn(row["session_id"], session_ids)
+        new_steps = store.task_steps(store.db(), self.TASK)[journalled_before:]
+        intercept_steps = [s for s in new_steps if "lease" in s["action"]]
+        self.assertEqual(len(intercept_steps), 1, new_steps)
 
 
 if __name__ == "__main__":
