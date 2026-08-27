@@ -201,6 +201,45 @@ class FsmTest(unittest.TestCase):
         spy_patcher.start()
         self.addCleanup(spy_patcher.stop)
 
+        # ROOT намеренно НЕ подменяется целиком (в отличие от прочих путей
+        # выше): `cmd_run` читает роль/навыки/конвенции с РЕАЛЬНОГО
+        # `config.ROOT` (skills/, CLAUDE.md — см. `runner.role_env`), и свип
+        # `AgentRunsOnlyFromRunTest`/`CountersNeverResetTest` по всем
+        # состояниям это использует. С T043 `fsm.cmd_approve` на
+        # `merge_gate` пишет `docs/retro/<id>.md` прямым `Path.write_text`
+        # (не через замоканный `subprocess.run` выше) — без изоляции этот
+        # путь ушёл бы в РЕАЛЬНЫЙ `docs/retro/` репозитория, где гоняются
+        # тесты. Подменяем ROOT только на время самого вызова
+        # `fsm.cmd_approve` (единственная точка, что и пишет `docs/...` —
+        # `_regenerate_and_commit_map`, T042, туда же), на синтетический
+        # каталог с заглушкой карты (тем же приёмом, что и
+        # `RegenerateAndCommitMapTest` в tests/test_fsm_map_regen.py) —
+        # остальной код (`cmd_run` и всё прочее) продолжает видеть
+        # настоящий ROOT.
+        real_root = config.ROOT
+        retro_root = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, retro_root, ignore_errors=True)
+        (retro_root / "docs").mkdir(parents=True)
+        (retro_root / "docs" / "codebase-map.md").write_text(
+            "---\nbuilt_at_sha: 0\n---\n\n# карта\n", encoding="utf-8")
+        original_approve = fsm.cmd_approve
+
+        def approve_with_isolated_root(*args, **kwargs):
+            # Наследники (например `tasks/T043/acceptance_tests/
+            # retro_sandbox.py::RetroSandboxTest`) подменяют `config.ROOT`
+            # своим собственным синтетическим деревом ПОСЛЕ `super().setUp()`
+            # — тогда к моменту вызова `config.ROOT` уже не `real_root`, и
+            # эта обёртка не имеет права навязывать СВОЙ каталог поверх.
+            if config.ROOT != real_root:
+                return original_approve(*args, **kwargs)
+            with mock.patch.object(config, "ROOT", retro_root):
+                return original_approve(*args, **kwargs)
+
+        approve_patcher = mock.patch.object(
+            fsm, "cmd_approve", approve_with_isolated_root)
+        approve_patcher.start()
+        self.addCleanup(approve_patcher.stop)
+
         # Песочница не имеет права зависеть от реального keychain машины,
         # на которой гоняются тесты (тот же приём, что и `TmpRootTest`
         # в test_multitarget_invariants.py) — иначе pre-flight (A3, SPEC
