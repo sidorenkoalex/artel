@@ -6,7 +6,7 @@ from pathlib import Path
 from scripts import guard
 
 from . import (acceptance, alerts, artifacts, budget, ci, config, fixation,
-              gitcmd, store, yamlmini)
+              gitcmd, retro, store, yamlmini)
 
 # Регенерация/коммит карты кодовой базы на merge_gate (SPEC T042).
 MAP_REL = "docs/codebase-map.md"
@@ -87,6 +87,83 @@ def _regenerate_and_commit_map(conn, task_id: str) -> None:
         _map_regen_incident(conn, task_id,
                             f"коммит {MAP_REL} не удался: "
                             f"{commit.stderr.strip()[:200]}")
+
+
+# Дайджест задачи в main на переходе в done/killed (SPEC T043). killed-RETRO
+# доставляется не самим `kill` (решение (d) Оператора, tasks/T043/TZ.md —
+# `orchestrator/cleanup.py` не трогается, инвариант 15 цел буквально), а
+# ближайшим `merge_gate` ЛЮБОЙ задачи, тем же приёмом, что карта T042.
+
+
+def _retro_incident(conn, task_id: str, message: str) -> None:
+    """Провал шага RETRO — журнал и incident-алерт, не отказ merge (SPEC
+    T043, требование 9), тем же приёмом, что `_map_regen_incident`."""
+    store.journal(conn, task_id, "orchestrator", "RETRO FAILED", message)
+    alerts.raise_alert(conn, store.task_target(conn, task_id), "incident",
+                       "fsm.retro", message)
+
+
+def _write_and_stage_retro(conn, task_id: str, text: str) -> bool:
+    """True — файл записан и добавлен в индекс git; False — провал
+    (инцидент уже заведён)."""
+    path = retro.retro_path(task_id)
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text, encoding="utf-8")
+    except OSError as exc:
+        _retro_incident(conn, task_id, f"{path} не записан: {exc}")
+        return False
+    added = gitcmd.git("add", retro.retro_rel_path(task_id))
+    if added.returncode != 0:
+        _retro_incident(conn, task_id,
+                        f"git add {retro.retro_rel_path(task_id)} не удался: "
+                        f"{added.stderr.strip()[:200]}")
+        return False
+    return True
+
+
+def _commit_retro(conn, task_id: str, message: str) -> None:
+    commit = gitcmd.git("commit", "-m", message)
+    if commit.returncode != 0:
+        _retro_incident(conn, task_id,
+                        f"коммит RETRO не удался: "
+                        f"{commit.stderr.strip()[:200]}")
+
+
+def _generate_and_commit_retro(conn, task_id: str, merge_sha: str) -> None:
+    """done-RETRO мержащейся задачи + подбор killed-долгов (SPEC T043,
+    требования 1, 2, 5-8) — коммит отдельный на каждую задачу (провал
+    одной не должен мешать журналировать/чинить остальные по отдельности).
+
+    Зовётся ПОСЛЕ успешного merge, ДО push (тем же местом, что
+    `_regenerate_and_commit_map`): что бы тут ни случилось, `push` в
+    вызывающем коде выполняется в любом случае (требование 9) — генерация
+    контента обёрнута широким `except Exception` умышленно (не только
+    `OSError`, как у карты): в отличие от регенерации карты, здесь
+    несколько независимых источников чтения (журнал БД, SPEC, разбор
+    acceptance_tests/), и ни один сбой любого из них не имеет права
+    отменить сам переход.
+    """
+    try:
+        text = retro.build_done(conn, task_id, merge_sha)
+    except Exception as exc:  # noqa: BLE001 — см. докстринг: провал не критичен
+        _retro_incident(conn, task_id, f"генерация RETRO не удалась: {exc}")
+    else:
+        if _write_and_stage_retro(conn, task_id, text):
+            _commit_retro(conn, task_id, f"{task_id}: RETRO задачи")
+
+    debts = [t["id"] for t in store.all_tasks(conn)
+            if t["state"] == "killed" and not retro.retro_path(t["id"]).exists()]
+    for debt_id in debts:
+        try:
+            debt_text = retro.build_killed(conn, debt_id)
+        except Exception as exc:  # noqa: BLE001 — см. докстринг выше
+            _retro_incident(conn, task_id,
+                            f"генерация killed-RETRO {debt_id} не удалась: {exc}")
+            continue
+        if _write_and_stage_retro(conn, debt_id, debt_text):
+            _commit_retro(conn, task_id,
+                          f"{task_id}: killed-RETRO долга {debt_id}")
 
 
 def guard_refuses(conn, task_id: str, path: Path, text: str | None = None) -> bool:
@@ -526,10 +603,18 @@ def cmd_approve(task_id: str, sha: str | None = None) -> None:
                 store.journal(conn, task_id, "orchestrator", "merge FAILED",
                               res.stderr.strip()[:500])
                 sys.exit(f"merge упал на {' '.join(cmd)}:\n{res.stderr}")
+        # sha КОММИТА МЕРЖА — сразу после успешного merge, ДО любых
+        # последующих служебных коммитов (карты, RETRO): адрес артефактов
+        # RETRO (SPEC T043, требование 8) обязан указывать именно на этот
+        # коммит, а не на более поздний, который сдвинул бы HEAD дальше.
+        merge_sha = gitcmd.head_sha()
         # Карта кодовой базы (SPEC T042): после merge, до push; провал
         # шага карты не отменяет merge (требование 5) — push ниже
         # выполняется независимо от исхода `_regenerate_and_commit_map`.
         _regenerate_and_commit_map(conn, task_id)
+        # Дайджест задачи в main (SPEC T043): после карты, до push, тем же
+        # принципом некритичности — провал не отменяет переход.
+        _generate_and_commit_retro(conn, task_id, merge_sha)
         push = gitcmd.git("push")
         if push.returncode != 0:
             store.journal(conn, task_id, "orchestrator", "merge FAILED",
