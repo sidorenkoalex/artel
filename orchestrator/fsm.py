@@ -222,6 +222,27 @@ def _dirty_refuses(conn, task_id: str, target: str, artifact_name: str) -> bool:
     return True
 
 
+def _read_branch_text_or_refuse(conn, task_id: str, branch: str,
+                                rel_name: str) -> str | None:
+    """Текст `tasks/<id>/<rel_name>` С ВЕТКИ задачи; `None` — дерево на
+    чужой ветке, а файл там не прочитан — отказ уже журналирован и
+    напечатан (SPEC T031, T047: общий узел для мест, где отсутствие
+    файла на ветке — не легитимное «ещё не готово», а именованный отказ,
+    прецедент — прежнее инлайн-чтение PLAN.md в `in_dev`).
+
+    Звать только когда `gitcmd.on_foreign_branch(branch)` истинно — сама
+    функция это не проверяет, только читает и оформляет отказ.
+    """
+    text, reason = gitcmd.show(branch, f"tasks/{task_id}/{rel_name}")
+    if text is None:
+        detail = (f"дерево не на ветке задачи {branch} — {rel_name} "
+                  f"ветки не прочитан ({reason})")
+        store.journal(conn, task_id, "fsm",
+                      "переход отклонён: дерево не на ветке задачи", detail)
+        print(f"[{task_id}] переход отклонён: {detail}")
+    return text
+
+
 def _tests_writing_ac_state(conn, task_id: str, branch: str,
                             tdir: Path) -> tuple[set, dict, list[str]] | None:
     """(тестировано, пометки, ошибки трассируемости) на выходе из
@@ -311,20 +332,64 @@ def _cmd_advance(conn, task_id: str) -> bool:
         # приёмом, что маркер `escalate` в tests_writing (T023). Второй
         # батч по тому же ТЗ структурно недостижим раньше ответа: пока
         # задача в escalated, run для неё не стартует.
-        questions = tdir / "QUESTIONS.md"
-        if questions.exists():
-            if guard_refuses(conn, task_id, questions):
-                return True
-            store.update_task(conn, task_id, escalated_from="spec_writing")
-            store.set_state(conn, task_id, "escalated", "fsm",
-                            f"analyst: батч вопросов по ТЗ — {questions}")
-            print(f"[{task_id}] эскалация analyst: см. {questions}")
-            return False
-        meta = artifacts.frontmatter(tdir / "SPEC.md")
+        #
+        # Рабочее дерево точно на чужой ветке (SPEC T047, требования 1, 3)
+        # — и статус SPEC.md, и батч QUESTIONS.md читаются с ВЕТКИ задачи
+        # (класс-дефект T030/T046: главная копия пульта на main видит
+        # только то, что закоммичено туда же, не в ветку задачи). Иначе —
+        # прежний путь через диск, не тронутый T047.
+        branch = t["branch"]
+        spec_text = None
+        if gitcmd.on_foreign_branch(branch):
+            # QUESTIONS.md необязателен (большинство задач его не заводят)
+            # — отсутствие на ветке не отказ, тот же приём, что
+            # `_tests_writing_ac_state` уже применяет к необязательному
+            # каталогу `acceptance_tests/` (T031).
+            q_rel = f"tasks/{task_id}/QUESTIONS.md"
+            q_paths = gitcmd.ls_tree_files(branch, q_rel)
+            if q_paths is None:
+                detail = (f"дерево не на ветке задачи {branch} — не "
+                          f"удалось проверить наличие QUESTIONS.md")
+                store.journal(conn, task_id, "fsm",
+                              "переход отклонён: дерево не на ветке задачи",
+                              detail)
+                print(f"[{task_id}] переход отклонён: {detail}")
+                return False
+            if q_paths:
+                q_text = _read_branch_text_or_refuse(conn, task_id, branch,
+                                                     "QUESTIONS.md")
+                if q_text is None:
+                    return False
+                if guard_refuses(conn, task_id, tdir / "QUESTIONS.md",
+                                 text=q_text):
+                    return True
+                store.update_task(conn, task_id, escalated_from="spec_writing")
+                store.set_state(
+                    conn, task_id, "escalated", "fsm",
+                    f"analyst: батч вопросов по ТЗ — ветка {branch}:{q_rel}")
+                print(f"[{task_id}] эскалация analyst: см. ветку {branch}, "
+                      f"{q_rel}")
+                return False
+            spec_text = _read_branch_text_or_refuse(conn, task_id, branch,
+                                                     "SPEC.md")
+            if spec_text is None:
+                return False
+            meta = yamlmini.frontmatter(spec_text) or {}
+        else:
+            questions = tdir / "QUESTIONS.md"
+            if questions.exists():
+                if guard_refuses(conn, task_id, questions):
+                    return True
+                store.update_task(conn, task_id, escalated_from="spec_writing")
+                store.set_state(conn, task_id, "escalated", "fsm",
+                                f"analyst: батч вопросов по ТЗ — {questions}")
+                print(f"[{task_id}] эскалация analyst: см. {questions}")
+                return False
+            meta = artifacts.frontmatter(tdir / "SPEC.md")
         if meta.get("status") == "ready":
             if _dirty_refuses(conn, task_id, target, "SPEC.md"):
                 return False
-            if guard_refuses(conn, task_id, tdir / "SPEC.md"):
+            if guard_refuses(conn, task_id, tdir / "SPEC.md", text=spec_text):
                 return True
             # До смены состояния: потолок задачи должен стоять уже к тому
             # моменту, когда Оператор смотрит на неё на гейте SPEC.
@@ -336,14 +401,28 @@ def _cmd_advance(conn, task_id: str) -> bool:
         return False
 
     elif state == "review":
-        meta = artifacts.frontmatter(tdir / "REVIEW.md")
+        # Рабочее дерево точно на чужой ветке (SPEC T047, требование 2) —
+        # вердикт REVIEW.md (status, iteration) читается с ВЕТКИ задачи,
+        # тем же приёмом, что SPEC.md выше (класс-дефект T030/T045: главная
+        # копия пульта на main не видит вердикт, закоммиченный только в
+        # ветку). Иначе — прежний путь через диск, не тронутый T047.
+        branch = t["branch"]
+        review_text = None
+        if gitcmd.on_foreign_branch(branch):
+            review_text = _read_branch_text_or_refuse(conn, task_id, branch,
+                                                       "REVIEW.md")
+            if review_text is None:
+                return False
+            meta = yamlmini.frontmatter(review_text) or {}
+        else:
+            meta = artifacts.frontmatter(tdir / "REVIEW.md")
         status = meta.get("status")
         if status not in config.REVIEW_VERDICTS:
             print(f"[{task_id}] REVIEW.md status={status} — жду вердикта")
             return False
         if _dirty_refuses(conn, task_id, target, "REVIEW.md"):
             return False
-        if guard_refuses(conn, task_id, tdir / "REVIEW.md"):
+        if guard_refuses(conn, task_id, tdir / "REVIEW.md", text=review_text):
             return True
 
         iteration = artifacts.fresh_verdict_iteration(meta, t["reviewed_iter"])
@@ -453,20 +532,16 @@ def _cmd_advance(conn, task_id: str) -> bool:
         # читается с ВЕТКИ задачи (иначе гейт «PLAN.md не ready» молча
         # держит переход и на чужом чекауте нечего проверять дальше —
         # без этого лок ниже никогда не достигается со стороны AC-3);
-        # иначе прежний путь через диск, не тронутый T031.
+        # иначе прежний путь через диск, не тронутый T031. Чтение —
+        # общий узел `_read_branch_text_or_refuse` (T047), тот же приём
+        # теперь и у SPEC.md/REVIEW.md выше.
         branch = t["branch"]
         foreign = gitcmd.on_foreign_branch(branch)
         plan_text = None
         if foreign:
-            plan_text, plan_reason = gitcmd.show(
-                branch, f"tasks/{task_id}/PLAN.md")
+            plan_text = _read_branch_text_or_refuse(conn, task_id, branch,
+                                                     "PLAN.md")
             if plan_text is None:
-                detail = (f"дерево не на ветке задачи {branch} — PLAN.md "
-                          f"ветки не прочитан ({plan_reason})")
-                store.journal(conn, task_id, "fsm",
-                              "переход отклонён: дерево не на ветке задачи",
-                              detail)
-                print(f"[{task_id}] переход отклонён: {detail}")
                 return False
             plan_meta = yamlmini.frontmatter(plan_text) or {}
         else:
