@@ -2,7 +2,7 @@
 import shutil
 import sys
 
-from . import config, gitcmd, lease, store
+from . import config, gitcmd, lease, store, workspace
 
 
 def artifacts_in_main(task_id: str) -> bool | None:
@@ -94,14 +94,19 @@ def cleanup_killed_task(conn, task_id: str, branch: str) -> None:
         reason = main.stderr.strip()[:200] or f"ветки {config.MAIN_BRANCH} нет"
         notes = [f"уборка пропущена: {reason} — сверять не с чем"]
     elif gitcmd.current_branch() == branch:
-        # Агент работает в этом же дереве (cmd_run: cwd=ROOT), так что HEAD
-        # вполне может стоять на ветке задачи. Удалить её git не даст, а
-        # снести закоммиченный в неё каталог — оставить грязное дерево:
-        # ровно тот мусор, ради которого уборка и заводилась.
+        # Агент шага работает в своём worktree (SPEC T045), а не в главной
+        # копии, но Оператор мог руками зачекаутить ветку задачи в ROOT
+        # (ADR-0003 3д — главная копия остаётся обычной рабочей копией
+        # git). Удалить такую ветку git не даст, а снести закоммиченный
+        # в неё каталог — оставить грязное дерево: ровно тот мусор, ради
+        # которого уборка и заводилась.
         notes = [f"уборка пропущена: ветка {branch} сейчас checked out — "
                  f"перейди на {config.MAIN_BRANCH} и повтори kill"]
     else:
-        notes = [drop_task_dir(task_id), drop_task_branch(branch)]
+        # Worktree — первым: ветку с `-D` не удалить, пока её держит
+        # worktree (SPEC T045, требование 5, AC-5).
+        notes = [workspace.remove(task_id), drop_task_dir(task_id),
+                 drop_task_branch(branch)]
 
     store.journal(conn, task_id, "orchestrator", "уборка", "; ".join(notes))
     for note in notes:

@@ -22,7 +22,7 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from orchestrator import (agent_log, catalog, cleanup, config,  # noqa: E402
-                          gitcmd, store)
+                          gitcmd, store, workspace)
 from tests.sandbox import capture  # noqa: E402
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -51,7 +51,8 @@ class TmpRepoTest(unittest.TestCase):
         for attr, value in (("ROOT", self.root),
                             ("DB", self.root / ".artel" / "state.db"),
                             ("TASKS", self.root / "tasks"),
-                            ("LOGS", self.root / ".artel" / "logs")):
+                            ("LOGS", self.root / ".artel" / "logs"),
+                            ("WORKTREES", self.root / ".artel" / "worktrees")):
             patcher = mock.patch.object(config, attr, value)
             patcher.start()
             self.addCleanup(patcher.stop)
@@ -123,6 +124,21 @@ class KillCleanupTest(TmpRepoTest):
         self.assertNotIn(self.branch, self.branches())
         self.assertEqual(self.git("status", "--porcelain"), "")
 
+    def test_kill_removes_task_worktree_before_the_branch(self):
+        """SPEC T045, требование 5, AC-5: `-D` не удалит ветку, пока её
+        держит worktree — уборка обязана снести worktree первой."""
+        self.commit_artifacts_in_branch()
+        wt_path = workspace.path(self.TASK)
+        self.git("worktree", "add", str(wt_path), self.branch)
+
+        out = self.capture(cleanup.cmd_kill, self.TASK)
+
+        self.assertFalse(wt_path.exists(), "worktree обязан быть убран")
+        self.assertNotIn(str(wt_path), self.git("worktree", "list"))
+        self.assertNotIn(self.branch, self.branches(),
+                         "ветку не убрать, пока её держит worktree")
+        self.assertIn(f"убран worktree {wt_path}", out)
+
     def test_merged_task_keeps_artifacts_and_branch(self):
         """Критерий приёмки 2: артефакты в main — не трогаем ничего."""
         self.commit_artifacts_in_branch()
@@ -183,7 +199,9 @@ class KillCleanupTest(TmpRepoTest):
 
         self.assertEqual(
             self.cleanup_note(),
-            f"удалён каталог tasks/{self.TASK}/; удалена ветка {self.branch}")
+            f"worktree {workspace.path(self.TASK)} не найден — нечего "
+            f"убирать; удалён каталог tasks/{self.TASK}/; удалена ветка "
+            f"{self.branch}")
         self.assertIn("удалён каталог", self.capture(catalog.cmd_log, self.TASK))
 
     def test_run_logs_survive_the_kill(self):

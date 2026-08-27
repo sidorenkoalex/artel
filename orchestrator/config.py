@@ -30,6 +30,9 @@ DEFAULT_TARGET = "artel"
 # решает Оператор; адрес слоя задаёт пульт.
 ROLE_HOME = ROOT / ".artel" / "home"
 ROLE_CONFIG_DIR = ROLE_HOME / ".claude"
+# Рабочая поверхность задачи (SPEC T045): git worktree на её ветке в
+# стандартном месте — `orchestrator/workspace.py` эту норму несёт.
+WORKTREES = ROOT / ".artel" / "worktrees"
 
 AGENT_TIMEOUT_SEC = 1800
 # Предел ожидания `gh` на гейте merge (orchestrator/ci.py). Без него сетевой

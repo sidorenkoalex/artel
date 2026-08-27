@@ -127,7 +127,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from orchestrator import (auto, budget, catalog,  # noqa: E402
-                          cleanup, doctor, fsm, projects, runner, version)
+                          cleanup, doctor, fsm, projects, runner, version,
+                          workspace)
 
 
 def _tz_arg(rest: list) -> str | None:
@@ -154,6 +155,7 @@ def main() -> None:
         "status": lambda: catalog.cmd_status(),
         "show": lambda: catalog.cmd_show(rest[0]),
         "advance": lambda: fsm.cmd_advance(rest[0]),
+        "workspace": lambda: workspace.cmd_workspace(rest[0]),
         "run": lambda: runner.cmd_run(rest[0]),
         "auto": lambda: auto.cmd_auto(rest[0]),
         "approve": lambda: fsm.cmd_approve(rest[0],

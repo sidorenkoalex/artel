@@ -174,6 +174,21 @@ class _DoctorTmpRootTest(TmpRootTest):
         config.TARGETS.write_text(TARGETS_YAML_DOGFOOD_ONLY, encoding="utf-8")
         capture(catalog.cmd_init)
 
+        # Эта песочница — про doctor/pre-flight, не про worktree-механику
+        # (SPEC T045): `self.root` не настоящий git-репозиторий (никогда
+        # им не был — до T045 `role_cwd` для догфуда возвращал `config.ROOT`
+        # без единого git-вызова), а часть сценариев подменяют только
+        # `claude ...` (`claude_only_run`/`claude_only_popen`), пропуская
+        # остальные команды в настоящий subprocess. Обходим
+        # `workspace.ensure` напрямую, тем же приёмом, что и keychain выше,
+        # чтобы шаг стартовал в этой нерепозиторной песочнице.
+        wt_patcher = mock.patch.object(
+            runner.workspace, "ensure",
+            lambda task_id, branch: (self.root / ".artel" / "worktrees"
+                                     / task_id, None))
+        wt_patcher.start()
+        self.addCleanup(wt_patcher.stop)
+
     def touch_backup(self) -> None:
         config.BACKUP_MARKER.parent.mkdir(parents=True, exist_ok=True)
         config.BACKUP_MARKER.write_text("ok", encoding="utf-8")

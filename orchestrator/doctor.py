@@ -58,7 +58,8 @@ import time
 from collections import namedtuple
 from pathlib import Path
 
-from . import alerts, config, gitcmd, projects, roles, runner, spend, store, targets
+from . import (alerts, config, gitcmd, projects, roles, runner, spend, store,
+              targets, workspace)
 
 # status: "ok" | "warn" | "fail" | "skip" ("skip" — честный пропуск проверки,
 # требование 9: сверка forge-политики без `gh`/сети — не провал и не ок).
@@ -247,7 +248,7 @@ def isolation_smoke(role: str = "developer") -> Check:
             ISOLATION_MARKER in str(v) for v in env.values()):
         leaks.append("user-слой: HOME роли не отведён от ambient-значения")
 
-    project_dir = runner.role_cwd(ISOLATION_SMOKE_TARGET)
+    project_dir = runner.role_cwd(None, None, ISOLATION_SMOKE_TARGET)
     try:
         (project_dir / "CLAUDE.md").write_text(ISOLATION_MARKER, encoding="utf-8")
         try:
@@ -418,16 +419,19 @@ def _worktree_alert_live(message: str, current_paths: set) -> bool:
 
 # --- сироты (требование 8) ----------------------------------------------
 
-def _orphan_worktrees() -> list[str]:
-    res = gitcmd.git("worktree", "list", "--porcelain")
-    if res.returncode != 0:
-        return []
-    paths = [line.split(" ", 1)[1] for line in res.stdout.splitlines()
-            if line.startswith("worktree ")]
-    # Первая запись — основной checkout (ROOT). Per-task worktree ещё не
-    # реализован (ADR-0003 3д — «полная версия», отложено): любая запись
-    # сверх него сегодня сирота по построению.
-    return paths[1:]
+def _is_legit_task_worktree(wt_path: str, known_ids: set) -> bool:
+    """Легитимный per-task worktree (SPEC T045, AC-9): лежит ровно в
+    `config.WORKTREES/<id>`, и `<id>` — известная задача. Иначе (чужое
+    место, неизвестная задача) — сирота по построению."""
+    p = Path(wt_path)
+    return p.parent == config.WORKTREES and p.name in known_ids
+
+
+def _orphan_worktrees(known_ids: set) -> list[str]:
+    # Первая запись `workspace.registered_paths()` — основной checkout
+    # (ROOT), не worktree ни одной задачи.
+    paths = workspace.registered_paths()[1:]
+    return [p for p in paths if not _is_legit_task_worktree(p, known_ids)]
 
 
 def check_orphans(conn) -> list[Check]:
@@ -474,7 +478,7 @@ def check_orphans(conn) -> list[Check]:
         results.append(Check("orphans-branches", "ok", "нет веток done/killed задач"))
     _auto_ack_gone(conn, "doctor.orphans.branch", _branch_alert_live)
 
-    orphan_worktrees = _orphan_worktrees()
+    orphan_worktrees = _orphan_worktrees(known_ids)
     if orphan_worktrees:
         for path in orphan_worktrees:
             alerts.raise_alert(conn, config.DEFAULT_TARGET, "incident",

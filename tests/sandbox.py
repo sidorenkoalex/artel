@@ -22,7 +22,7 @@ from orchestrator import config
 # (SPEC T037, AC-2) — порядок как в orchestrator/config.py.
 ALL_CONFIG_ATTRS = (
     "DB", "TASKS", "LOGS", "ROOT", "PROJECTS", "TARGETS",
-    "ROLE_HOME", "ROLE_CONFIG_DIR", "BACKUP_MARKER",
+    "ROLE_HOME", "ROLE_CONFIG_DIR", "BACKUP_MARKER", "WORKTREES",
 )
 
 
@@ -49,7 +49,7 @@ class TmpRootTest(unittest.TestCase):
     """Общая песочница: пути `config` — во временном каталоге.
 
     `PATCHED_ATTRS` — параметризуемый набор патчей (SPEC T037,
-    требование 1); по умолчанию — все девять путей `config` (AC-2).
+    требование 1); по умолчанию — все десять путей `config` (AC-2).
     """
 
     PATCHED_ATTRS = ALL_CONFIG_ATTRS
@@ -75,6 +75,7 @@ class TmpRootTest(unittest.TestCase):
             "ROLE_HOME": self.root / ".artel" / "home",
             "ROLE_CONFIG_DIR": self.root / ".artel" / "home" / ".claude",
             "BACKUP_MARKER": self.root / ".artel" / "backup-marker",
+            "WORKTREES": self.root / ".artel" / "worktrees",
         }[attr]
 
     def capture(self, fn, *args) -> str:

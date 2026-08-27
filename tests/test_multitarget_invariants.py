@@ -34,7 +34,7 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from orchestrator import (budget, catalog, cleanup, config, fsm,  # noqa: E402
-                          runner, spend, store)
+                          runner, spend, store, workspace)
 from tests.sandbox import TmpRootTest, capture  # noqa: E402
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -99,7 +99,7 @@ class _MultitargetInvariantsTmpRootTest(TmpRootTest):
     """Песочница: БД, каталоги проектов и слой ролей во временном каталоге."""
 
     PATCHED_ATTRS = ("ROOT", "DB", "TASKS", "LOGS", "PROJECTS",
-                     "ROLE_HOME", "ROLE_CONFIG_DIR", "TARGETS")
+                     "ROLE_HOME", "ROLE_CONFIG_DIR", "TARGETS", "WORKTREES")
 
     def setUp(self):
         super().setUp()
@@ -268,13 +268,15 @@ class ExternalWorkspaceIsolationTest(TmpRootTest):
         tdir.mkdir(parents=True, exist_ok=True)
         (tdir / "SPEC.md").write_text("# SPEC заглушка\n", encoding="utf-8")
 
-    def test_dogfood_cwd_is_root(self):
-        """Контроль: догфуд не меняет поведение — cwd остаётся ROOT."""
+    def test_dogfood_cwd_is_worktree(self):
+        """SPEC T045, AC-3: агентный шаг догфуда исполняется в worktree
+        своей задачи, не в главной копии пульта (ROOT)."""
         self.new_task("T001", config.DEFAULT_TARGET, "Догфуд")
 
         kwargs = self.run_faked("T001")
 
-        self.assertEqual(kwargs["cwd"], config.ROOT)
+        self.assertEqual(kwargs["cwd"], workspace.path("T001"))
+        self.assertNotEqual(kwargs["cwd"], config.ROOT)
 
     def test_external_target_cwd_is_its_workspace(self):
         """Требование 2: внешний target — рабочий каталог только его workspace."""

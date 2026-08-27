@@ -916,7 +916,11 @@ class KillKeepsMainIntactTest(unittest.TestCase):
                             # в .artel/ репозитория.
                             ("ROLE_HOME", self.root / ".artel" / "home"),
                             ("ROLE_CONFIG_DIR",
-                             self.root / ".artel" / "home" / ".claude")):
+                             self.root / ".artel" / "home" / ".claude"),
+                            # Worktree задачи (SPEC T045): kill убирает его —
+                            # без патча ушёл бы в .artel/worktrees/ РЕАЛЬНОГО
+                            # репозитория пульта, не песочницы.
+                            ("WORKTREES", self.root / ".artel" / "worktrees")):
             self.repo.enter_context(mock.patch.object(config, attr, value))
 
         self.capture(catalog.cmd_init)
