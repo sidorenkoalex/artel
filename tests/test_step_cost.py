@@ -77,7 +77,8 @@ class FakeProc:
 class _StepCostTmpRootTest(TmpRootTest):
     """Общая песочница: DB, TASKS и LOGS уводятся во временный каталог."""
 
-    PATCHED_ATTRS = ("DB", "TASKS", "LOGS", "ROLE_HOME", "ROLE_CONFIG_DIR")
+    PATCHED_ATTRS = ("DB", "TASKS", "LOGS", "ROLE_HOME", "ROLE_CONFIG_DIR",
+                     "WORKTREES")
 
 
 TmpRootTest = _StepCostTmpRootTest
@@ -248,6 +249,9 @@ class ChargeMissingResultTest(TmpRootTest):
 
     def setUp(self):
         super().setUp()
+        git_patcher = mock.patch.object(gitcmd, "git", fake_git)
+        git_patcher.start()
+        self.addCleanup(git_patcher.stop)
         self.capture(catalog.cmd_init)
         self.capture(catalog.cmd_new, "Учёт стоимости без финального события")
 
@@ -319,6 +323,13 @@ class CmdRunCostTest(TmpRootTest):
 
     def setUp(self):
         super().setUp()
+        # Шаг ревью собирает пакет настоящим git (T011); в песочнице
+        # репозитория нет, а этому модулю важны деньги шага, не diff.
+        # Патчится ДО `cmd_new` (SPEC T048): он сам заводит ветку/worktree
+        # через `gitcmd`, и без фейка ушёл бы в РЕАЛЬНЫЙ репозиторий пульта.
+        git_patcher = mock.patch.object(gitcmd, "git", fake_git)
+        git_patcher.start()
+        self.addCleanup(git_patcher.stop)
         self.capture(catalog.cmd_init)
         self.capture(catalog.cmd_new, "Учёт стоимости шага")
         self.set_task(state="in_dev")
@@ -327,11 +338,6 @@ class CmdRunCostTest(TmpRootTest):
         patcher.start()
         self.addCleanup(patcher.stop)
 
-        # Шаг ревью собирает пакет настоящим git (T011); в песочнице
-        # репозитория нет, а этому модулю важны деньги шага, не diff.
-        git_patcher = mock.patch.object(gitcmd, "git", fake_git)
-        git_patcher.start()
-        self.addCleanup(git_patcher.stop)
         kc_patcher = mock.patch.object(runner.keychain, "token",
                                        lambda slot: "tok-test")
         kc_patcher.start()
@@ -507,6 +513,11 @@ class CmdRunPartialCostTest(TmpRootTest):
 
     def setUp(self):
         super().setUp()
+        # ДО `cmd_new` (SPEC T048) — сам заводит ветку/worktree через
+        # `gitcmd`, без фейка ушёл бы в реальный репозиторий пульта.
+        git_patcher = mock.patch.object(gitcmd, "git", fake_git)
+        git_patcher.start()
+        self.addCleanup(git_patcher.stop)
         self.capture(catalog.cmd_init)
         self.capture(catalog.cmd_new, "Частичная стоимость при таймауте")
         conn = store.db()
@@ -516,9 +527,6 @@ class CmdRunPartialCostTest(TmpRootTest):
         patcher = mock.patch.object(runner.time, "sleep", lambda _: None)
         patcher.start()
         self.addCleanup(patcher.stop)
-        git_patcher = mock.patch.object(gitcmd, "git", fake_git)
-        git_patcher.start()
-        self.addCleanup(git_patcher.stop)
         kc_patcher = mock.patch.object(runner.keychain, "token",
                                        lambda slot: "tok-test")
         kc_patcher.start()
@@ -570,6 +578,9 @@ class CmdBudgetTest(TmpRootTest):
 
     def setUp(self):
         super().setUp()
+        git_patcher = mock.patch.object(gitcmd, "git", fake_git)
+        git_patcher.start()
+        self.addCleanup(git_patcher.stop)
         self.capture(catalog.cmd_init)
         self.capture(catalog.cmd_new, "Потолок бюджета")
 

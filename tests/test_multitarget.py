@@ -24,7 +24,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from orchestrator import (budget, catalog, config, projects,  # noqa: E402
                           runner, spend, store, targets)
-from tests.sandbox import TmpRootTest, capture  # noqa: E402
+from tests.sandbox import TmpRootTest, capture, fake_git  # noqa: E402
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
@@ -134,12 +134,25 @@ class _MultitargetTmpRootTest(TmpRootTest):
         # `workspace.ensure` напрямую, тем же приёмом, что и keychain/
         # preflight выше, чтобы `role_cwd` для догфуда не блокировала шаг
         # раньше, чем тест успевает проверить то, ради чего он написан.
+        # Путь — сам `self.root` (SPEC T048): `cmd_new` пишет TZ.md/SPEC.md
+        # в `<worktree>/tasks/<id>`, а тесты этого модуля читают их через
+        # `config.TASKS` (= `self.root/tasks`) — подставной каталог обязан
+        # с ним совпасть, иначе файлы и проверки расходятся по разным путям.
         wt_patcher = mock.patch.object(
             runner.workspace, "ensure",
-            lambda task_id, branch: (self.root / ".artel" / "worktrees"
-                                     / task_id, None))
+            lambda task_id, branch: (self.root, None))
         wt_patcher.start()
         self.addCleanup(wt_patcher.stop)
+        # `cmd_new` сам решает, заводить ли задачу, по ответу
+        # `gitcmd.branch_exists` (SPEC T048, требование 1, AC-3) и коммитит
+        # ТЗ/SPEC через `gitcmd.in_repo` — оба идут через `gitcmd.git`,
+        # который этот модуль иначе не трогает вовсе; лёгкая заглушка
+        # общего вида (SPEC T048, `tests.sandbox.fake_git`) отвечает «нет
+        # такой ветки» и успехом на остальное, не пытаясь осмысленно вести
+        # состояние репозитория — этому модулю оно не нужно.
+        git_patcher = mock.patch.object(runner.gitcmd, "git", fake_git)
+        git_patcher.start()
+        self.addCleanup(git_patcher.stop)
 
     def write_targets(self, text: str = TARGETS_YAML) -> None:
         config.TARGETS.write_text(text, encoding="utf-8")

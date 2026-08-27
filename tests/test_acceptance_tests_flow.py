@@ -173,7 +173,8 @@ class _AcceptanceFlowTmpRootTest(TmpRootTest):
     """Лёгкая песочница: БД и артефакты во временном каталоге, git — заглушка."""
 
     TASK = "T001"
-    PATCHED_ATTRS = ("DB", "TASKS", "LOGS", "ROLE_HOME", "ROLE_CONFIG_DIR")
+    PATCHED_ATTRS = ("DB", "TASKS", "LOGS", "ROLE_HOME", "ROLE_CONFIG_DIR",
+                     "WORKTREES")
 
     def setUp(self):
         super().setUp()
@@ -184,6 +185,7 @@ class _AcceptanceFlowTmpRootTest(TmpRootTest):
         self.capture(catalog.cmd_init)
         self.capture(catalog.cmd_new, "Приёмочные тесты до кода")
         self.tdir = config.TASKS / self.TASK
+        self.tdir.mkdir(parents=True, exist_ok=True)
 
     def state(self) -> str:
         return store.db().execute("SELECT state FROM tasks WHERE id=?",
@@ -740,13 +742,18 @@ class LockTest(unittest.TestCase):
             config, ROOT=self.root, DB=self.root / ".artel" / "state.db",
             TASKS=self.root / "tasks", LOGS=self.root / ".artel" / "logs",
             ROLE_HOME=self.root / ".artel" / "home",
-            ROLE_CONFIG_DIR=self.root / ".artel" / "home" / ".claude")
+            ROLE_CONFIG_DIR=self.root / ".artel" / "home" / ".claude",
+            WORKTREES=self.root / ".artel" / "worktrees")
         self.patches.start()
         self.addCleanup(self.patches.stop)
 
         self.capture(catalog.cmd_init)
         self.capture(catalog.cmd_new, "Лок приёмочных тестов")
         self.tdir = config.TASKS / self.TASK
+        # С SPEC T048 `cmd_new` пишет SPEC.md в worktree, не на диск
+        # main — этот тест кладёт его напрямую на диск (симуляция
+        # ветко-корректного fallback), каталог заводит сам.
+        self.tdir.mkdir(parents=True, exist_ok=True)
 
     def git(self, *args: str) -> str:
         res = subprocess.run(["git", *args], cwd=self.root,

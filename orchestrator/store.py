@@ -179,6 +179,21 @@ def seed_task_counters(conn: sqlite3.Connection) -> None:
     conn.commit()
 
 
+def peek_task_number(conn: sqlite3.Connection, target: str) -> int:
+    """Номер следующей задачи БЕЗ расхода счётчика.
+
+    `cmd_new` (SPEC T048, требование 1) обязан проверить коллизию ветки
+    ДО решения расходовать номер — отказ не имеет права стоить задаче
+    номера. Читает то же самое, что и первый шаг `next_task_number`, но
+    без транзакции и без записи: сам расход остаётся только за
+    `next_task_number`.
+    """
+    row = conn.execute(
+        "SELECT next_number FROM task_counters WHERE target=?",
+        (target,)).fetchone()
+    return row["next_number"] if row is not None else 1
+
+
 def next_task_number(conn: sqlite3.Connection, target: str) -> int:
     """Номер следующей задачи target'а; счётчик сдвигается тем же вызовом.
 

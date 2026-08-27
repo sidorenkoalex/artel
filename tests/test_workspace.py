@@ -56,8 +56,16 @@ class RealGitWorkspaceTest(unittest.TestCase):
             self.addCleanup(patcher.stop)
 
         self.capture(catalog.cmd_init)
-        self.capture(catalog.cmd_new, "Worktree-модуль")
-        self.branch = self.task_row()["branch"]
+        # НЕ через `catalog.cmd_new`: с SPEC T048 он сам заводит ветку и
+        # worktree (`workspace.ensure`) — это сломало бы предпосылку
+        # класса «ветка ещё не заведена в git», которую тестируют модули
+        # ниже. Прямая вставка строки задачи — тот же путь до `cmd_new`
+        # (T025), тут он ещё пригождается для изолированного теста модуля.
+        title = "Worktree-модуль"
+        self.branch = f"task/{self.TASK.lower()}-{catalog.slugify(title)}"
+        store.insert_task(store.db(), self.TASK, title, "spec_writing",
+                          self.branch, config.DEFAULT_TARGET,
+                          config.DEFAULT_BUDGET_USD)
 
     # ------------------------------------------------------------ утилиты
 
@@ -133,9 +141,12 @@ class EnsureTest(RealGitWorkspaceTest):
         self.assertTrue(path.is_dir())
 
     def test_seeds_uncommitted_task_dir_into_a_fresh_worktree(self):
-        """`cmd_new` оставляет tasks/<id>/SPEC.md некоммиченным в главной
-        копии — свежий worktree обязан унести копию (иначе analyst не
-        увидит SPEC.md/TZ.md вовсе, см. PLAN «Подход»)."""
+        """Артефакты, некоммиченные в главной копии — свежий worktree
+        обязан унести копию (иначе analyst не увидит SPEC.md/TZ.md вовсе,
+        см. PLAN «Подход»)."""
+        (config.TASKS / self.TASK).mkdir(parents=True, exist_ok=True)
+        (config.TASKS / self.TASK / "SPEC.md").write_text(
+            "SPEC задачи\n", encoding="utf-8")
         (config.TASKS / self.TASK / "TZ.md").write_text(
             "ТЗ задачи\n", encoding="utf-8")
 

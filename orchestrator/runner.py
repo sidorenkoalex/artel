@@ -38,20 +38,34 @@ def step_role(t) -> str | None:
     и `run`/`auto` не имеют права ни разу попытаться запустить агента
     просто потому, что кто-то добавил запись в общий словарь состояний.
     Роль `analyst` подключается только когда `TZ.md` реально лежит
-    в каталоге задачи; при отсутствии файла функция ведёт себя так же,
-    как и до этой задачи (роли нет). Единственная точка резолвинга,
-    которую зовут и `cmd_run`, и `auto.cmd_auto` (`STATE_ROLE`/
-    `AUTO_STOP` как словари при этом не трогаются — их читают
-    `test_invariants.FsmStatesCoverTheCodeTest` и `test_auto_cycle.*`
-    буквально по ключам).
+    в задаче; при отсутствии файла функция ведёт себя так же, как и до
+    этой задачи (роли нет). Единственная точка резолвинга, которую зовут
+    и `cmd_run`, и `auto.cmd_auto` (`STATE_ROLE`/`AUTO_STOP` как словари
+    при этом не трогаются — их читают `test_invariants.FsmStatesCoverTheCodeTest`
+    и `test_auto_cycle.*` буквально по ключам).
+
+    Наличие `TZ.md` определяется ветко-корректно (SPEC T048, требование 7
+    — тот же класс, что уже закрыт для статусов SPEC/REVIEW/QUESTIONS,
+    T031/T047): `cmd_new` с этой задачи коммитит TZ.md сразу в ветку, не
+    на диск main (требование 4), так что на чужой ветке (`gitcmd.
+    on_foreign_branch`) файл ищется В НЕЙ (`gitcmd.show`), а не в
+    `config.TASKS` — иначе только что заведённая ролью задача выглядела
+    бы так, будто ТЗ не было вовсе. Иначе (своя ветка уже выписана; ветка
+    ещё не создана; git не ответил) — прежнее поведение, диск: тот же
+    вырожденный случай, на котором стоит весь стенд заглушек `gitcmd.git`.
     """
     role = config.STATE_ROLE.get(t["state"])
     if role is not None:
         return role
-    if t["state"] == "spec_writing" and (
-            config.TASKS / t["id"] / "TZ.md").exists():
-        return "analyst"
-    return None
+    if t["state"] != "spec_writing":
+        return None
+    branch = t["branch"]
+    if gitcmd.on_foreign_branch(branch):
+        tz_text, _ = gitcmd.show(branch, f"tasks/{t['id']}/TZ.md")
+        has_tz = tz_text is not None
+    else:
+        has_tz = (config.TASKS / t["id"] / "TZ.md").exists()
+    return "analyst" if has_tz else None
 
 
 def cmd_run(task_id: str, session_id: str | None = None) -> None:

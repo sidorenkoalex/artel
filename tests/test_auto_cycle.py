@@ -150,7 +150,11 @@ class AutoCycleTest(unittest.TestCase):
                             # в .artel/ репозитория.
                             ("ROLE_HOME", root / ".artel" / "home"),
                             ("ROLE_CONFIG_DIR",
-                             root / ".artel" / "home" / ".claude")):
+                             root / ".artel" / "home" / ".claude"),
+                            # `cmd_new` (SPEC T048) пишет TZ.md/SPEC.md в
+                            # worktree — пусть тоже в песочницу, не в
+                            # `.artel/worktrees/` репозитория.
+                            ("WORKTREES", root / ".artel" / "worktrees")):
             self.patch_object(config, attr, value)
 
         # git настоящему репозиторию в этих тестах не нужен: цикл его не
@@ -166,6 +170,11 @@ class AutoCycleTest(unittest.TestCase):
         self.capture(catalog.cmd_init)
         self.capture(catalog.cmd_new, "Цикл auto")
         self.tdir = config.TASKS / self.TASK
+        # С SPEC T048 `cmd_new` пишет артефакты в worktree, не на диск
+        # main — тесты этого файла кладут PLAN.md/REVIEW.md/... напрямую
+        # на диск (симуляция ветко-корректного fallback), каталог для них
+        # заводит сам файл, не `cmd_new`.
+        self.tdir.mkdir(parents=True, exist_ok=True)
 
     # ------------------------------------------------------------ утилиты
 

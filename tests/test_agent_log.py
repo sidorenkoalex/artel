@@ -94,7 +94,8 @@ class FakeProc:
 class _AgentLogTmpRootTest(TmpRootTest):
     """Общая песочница: DB, TASKS и LOGS уводятся во временный каталог."""
 
-    PATCHED_ATTRS = ("DB", "TASKS", "LOGS", "ROLE_HOME", "ROLE_CONFIG_DIR")
+    PATCHED_ATTRS = ("DB", "TASKS", "LOGS", "ROLE_HOME", "ROLE_CONFIG_DIR",
+                     "WORKTREES")
 
 
 TmpRootTest = _AgentLogTmpRootTest
@@ -340,14 +341,16 @@ class CmdRunLoggingTest(TmpRootTest):
 
     def setUp(self):
         super().setUp()
+        # ДО `cmd_new` (SPEC T048) — сам заводит ветку/worktree через
+        # `gitcmd`, без фейка ушёл бы в реальный репозиторий пульта.
+        patcher = mock.patch.object(gitcmd, "git", fake_git)
+        patcher.start()
+        self.addCleanup(patcher.stop)
         self.capture(catalog.cmd_init)
         self.capture(catalog.cmd_new, "Лог агента")
         conn = store.db()
         conn.execute("UPDATE tasks SET state='in_dev' WHERE id=?", (self.TASK,))
         conn.commit()
-        patcher = mock.patch.object(gitcmd, "git", fake_git)
-        patcher.start()
-        self.addCleanup(patcher.stop)
         kc_patcher = mock.patch.object(runner.keychain, "token",
                                        lambda slot: "tok-test")
         kc_patcher.start()

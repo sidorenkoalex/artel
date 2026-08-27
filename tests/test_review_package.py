@@ -21,7 +21,7 @@ sys.path.insert(0, str(REPO))
 
 from orchestrator import (catalog, config, gitcmd, review,  # noqa: E402
                           runner, store)
-from tests.sandbox import capture  # noqa: E402
+from tests.sandbox import capture, fake_git  # noqa: E402
 
 SPEC_MD = """---
 task: T001
@@ -111,6 +111,14 @@ class FakeGit:
                                      "invalid continuation byte")
         if args and args[0] == "show":
             return self.show(args)
+        if (len(args) >= 3 and args[0] == "rev-parse" and args[1] == "--verify"
+                and args[-1].startswith("refs/heads/")):
+            # SPEC T048: `cmd_new` решает по этому ответу, заводить ли
+            # задачу (AC-3, `gitcmd.branch_exists`) — «нет такой ветки»,
+            # тем же приёмом, что и `tests.sandbox.fake_git`; отвечать
+            # успехом на любой git-вызов, как ниже, значило бы «ветка уже
+            # существует» для ЛЮБОГО имени и отказ `cmd_new` всегда.
+            return subprocess.CompletedProcess(list(args), 1, "", "")
         if args and args[0] == "rev-parse":
             # T031: `gitcmd.on_foreign_branch` спрашивает текущую ветку и
             # существование ветки задачи вне пакета — пустой ответ, тот же
@@ -617,16 +625,22 @@ class CmdRunReviewPackageTest(unittest.TestCase):
         # не умеет осмысленно `worktree add/list`, а тесты (например,
         # `test_developer_step_has_no_package`) сверяют СПИСОК git-вызовов
         # шага буквально — обходим `workspace.ensure` напрямую, тем же
-        # приёмом, что и preflight/keychain выше.
+        # приёмом, что и preflight/keychain выше. Путь — сам `root` (SPEC
+        # T048): `cmd_new` пишет `tasks/<id>` в НЕГО, и `self.tdir` ниже
+        # обязан совпасть, иначе тест и код смотрят в разные каталоги.
         wt_patcher = mock.patch.object(
             runner.workspace, "ensure",
-            lambda task_id, branch: (root / ".artel" / "worktrees"
-                                     / task_id, None))
+            lambda task_id, branch: (root, None))
         wt_patcher.start()
         self.addCleanup(wt_patcher.stop)
 
         self.capture(catalog.cmd_init)
         self.capture(catalog.cmd_new, "Ревью-пакет вместо свободного чтения")
+        # Вызовы `cmd_new` (branch_exists, коммит ТЗ/SPEC — SPEC T048) —
+        # это подготовка песочницы, не часть шага, который проверяют тесты
+        # буквальным списком `self.git.calls` (например,
+        # `test_developer_step_has_no_package`).
+        self.git.calls.clear()
         self.tdir = config.TASKS / self.TASK
 
     capture = staticmethod(capture)
@@ -905,10 +919,22 @@ class PreviousVerdictShaTest(unittest.TestCase):
         root = Path(tmp.name)
         for attr, value in (("DB", root / ".artel" / "state.db"),
                             ("TASKS", root / "tasks"),
-                            ("LOGS", root / ".artel" / "logs")):
+                            ("LOGS", root / ".artel" / "logs"),
+                            # SPEC T048: `cmd_new` заводит настоящий worktree
+                            # через `gitcmd` — непропатченный `WORKTREES`
+                            # утёк бы на реальный пульт (tests/sandbox.py).
+                            ("WORKTREES", root / ".artel" / "worktrees")):
             patcher = mock.patch.object(config, attr, value)
             patcher.start()
             self.addCleanup(patcher.stop)
+        # Этому классу от `cmd_new` нужна только строка в БД — `gitcmd.git`
+        # без подмены ушёл бы в РЕАЛЬНЫЙ git пульта (SPEC T048, требование
+        # 1, `branch_exists`/`workspace.ensure`): лёгкая общая заглушка
+        # (`tests.sandbox.fake_git`), тем же приёмом, что и в соседних
+        # модулях.
+        git_patcher = mock.patch.object(gitcmd, "git", fake_git)
+        git_patcher.start()
+        self.addCleanup(git_patcher.stop)
         self.capture(catalog.cmd_init)
         self.capture(catalog.cmd_new, "sha предыдущего вердикта")
         self.conn = store.db()

@@ -33,7 +33,7 @@ HEAD, который та задача не просила сдвигать — 
 через `read()`, не через `fix()`: то же самое для догфуда (там `fix()`
 и так не коммитит), но для внешнего target — без `add -A`/`commit`.
 """
-from . import config, gitcmd, store
+from . import config, gitcmd, store, workspace
 
 # Идентичность коммитов фиксации внешнего target: это действие
 # оркестратора, а не роли и не Оператора — коммит служебный (диффов кода
@@ -74,14 +74,24 @@ def _fix_dogfood(task_id: str) -> tuple[str, bool]:
     чекаута; иначе (свой чекаут, ветка ещё не создана ролью — легитимный
     ранний момент задачи, git не ответил) — HEAD текущего чекаута, как
     было до T031: тот же вырожденный случай, на котором стоит стенд
-    заглушек `gitcmd.git` дотестового кода (RealPultGitTest и другие
-    песочницы, где своя ветка задачи никогда не заводится, а вся работа
-    идёт прямо на `main`, — там `on_foreign_branch` остаётся False).
+    заглушек `gitcmd.git` дотестового кода (песочницы, где своя ветка
+    задачи никогда не заводится, а вся работа идёт прямо на `main`, —
+    там `on_foreign_branch` остаётся False).
+
+    Чистота — тем же критерием ветки/чекаута (SPEC T048): с `cmd_new`
+    задача всегда получает собственный worktree с самого начала, и её
+    живые `tasks/<id>` лежат ТАМ, не на диске main — сверка чистоты
+    рабочей копии пульта (`config.ROOT`) видела бы ЛЮБУЮ правку в
+    worktree как «чисто» (main о ней просто не знает), давая любой правке
+    мимо гейта пройти незамеченной. На чужой ветке чистота — по worktree
+    задачи (`workspace.path`), иначе — прежнее поведение (main).
     """
     branch = _dogfood_branch(task_id)
-    sha = (gitcmd.branch_head_sha(branch) if gitcmd.on_foreign_branch(branch)
-          else gitcmd.head_sha())
-    clean = gitcmd.is_clean(f"tasks/{task_id}")
+    foreign = gitcmd.on_foreign_branch(branch)
+    sha = gitcmd.branch_head_sha(branch) if foreign else gitcmd.head_sha()
+    clean = (gitcmd.is_clean(f"tasks/{task_id}",
+                             repo=workspace.path(task_id))
+             if foreign else gitcmd.is_clean(f"tasks/{task_id}"))
     if not sha or clean is None:
         return "", False
     return sha, clean

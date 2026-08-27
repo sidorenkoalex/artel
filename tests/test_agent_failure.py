@@ -57,7 +57,8 @@ class FakeProc:
 class _AgentFailureTmpRootTest(TmpRootTest):
     """Общая песочница: DB, TASKS и LOGS уводятся во временный каталог."""
 
-    PATCHED_ATTRS = ("DB", "TASKS", "LOGS", "ROLE_HOME", "ROLE_CONFIG_DIR")
+    PATCHED_ATTRS = ("DB", "TASKS", "LOGS", "ROLE_HOME", "ROLE_CONFIG_DIR",
+                     "WORKTREES")
 
 
 TmpRootTest = _AgentFailureTmpRootTest
@@ -109,6 +110,14 @@ class CmdRunFailureTest(TmpRootTest):
 
     def setUp(self):
         super().setUp()
+        # Шаг ревью собирает пакет настоящим git (T011); в песочнице
+        # репозитория нет, а этому модулю важен исход попыток агента, не
+        # diff. Патчится ДО `cmd_new` (SPEC T048): он сам заводит
+        # ветку/worktree через `gitcmd`, без фейка ушёл бы в реальный
+        # репозиторий пульта.
+        git_patcher = mock.patch.object(gitcmd, "git", fake_git)
+        git_patcher.start()
+        self.addCleanup(git_patcher.stop)
         self.capture(catalog.cmd_init)
         self.capture(catalog.cmd_new, "Код возврата агента")
         conn = store.db()
@@ -120,11 +129,6 @@ class CmdRunFailureTest(TmpRootTest):
         patcher.start()
         self.addCleanup(patcher.stop)
 
-        # Шаг ревью собирает пакет настоящим git (T011); в песочнице
-        # репозитория нет, а этому модулю важен исход попыток агента, не diff.
-        git_patcher = mock.patch.object(gitcmd, "git", fake_git)
-        git_patcher.start()
-        self.addCleanup(git_patcher.stop)
         kc_patcher = mock.patch.object(runner.keychain, "token",
                                        lambda slot: "tok-test")
         kc_patcher.start()
