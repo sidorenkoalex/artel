@@ -127,6 +127,19 @@ class _MultitargetTmpRootTest(TmpRootTest):
             lambda role, target: [])
         pf_patcher.start()
         self.addCleanup(pf_patcher.stop)
+        # Этот модуль — про окружение/бюджет/нумерацию, не про worktree-
+        # механику (SPEC T045): `gitcmd.git` тестов подменяется заглушками
+        # по одному аргументу (`fake_git_config`/`silent_git`), которые не
+        # умеют осмысленно отвечать на `worktree add/list` — обходим
+        # `workspace.ensure` напрямую, тем же приёмом, что и keychain/
+        # preflight выше, чтобы `role_cwd` для догфуда не блокировала шаг
+        # раньше, чем тест успевает проверить то, ради чего он написан.
+        wt_patcher = mock.patch.object(
+            runner.workspace, "ensure",
+            lambda task_id, branch: (self.root / ".artel" / "worktrees"
+                                     / task_id, None))
+        wt_patcher.start()
+        self.addCleanup(wt_patcher.stop)
 
     def write_targets(self, text: str = TARGETS_YAML) -> None:
         config.TARGETS.write_text(text, encoding="utf-8")

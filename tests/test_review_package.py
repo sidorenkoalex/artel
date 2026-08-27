@@ -612,6 +612,18 @@ class CmdRunReviewPackageTest(unittest.TestCase):
             lambda role, target: [])
         pf_patcher.start()
         self.addCleanup(pf_patcher.stop)
+        # Этот модуль — про сборку ревью-пакета, не про worktree-механику
+        # (SPEC T045): `FakeGit` отвечает на любую команду заготовкой diff,
+        # не умеет осмысленно `worktree add/list`, а тесты (например,
+        # `test_developer_step_has_no_package`) сверяют СПИСОК git-вызовов
+        # шага буквально — обходим `workspace.ensure` напрямую, тем же
+        # приёмом, что и preflight/keychain выше.
+        wt_patcher = mock.patch.object(
+            runner.workspace, "ensure",
+            lambda task_id, branch: (root / ".artel" / "worktrees"
+                                     / task_id, None))
+        wt_patcher.start()
+        self.addCleanup(wt_patcher.stop)
 
         self.capture(catalog.cmd_init)
         self.capture(catalog.cmd_new, "Ревью-пакет вместо свободного чтения")
@@ -752,19 +764,23 @@ class CmdRunReviewPackageTest(unittest.TestCase):
 
         self.assertNotIn("--- РЕВЬЮ-ПАКЕТ ---", self.prompt())
         self.assertEqual(self.journal_details("ревью-пакет собран"), [])
-        # Четыре вызова, и ни один — не о пакете: первый — `gitcmd.
-        # on_foreign_branch` спрашивает текущую ветку для ветко-корректного
-        # чтения SPEC.md брифа (orchestrator/brief.py, SPEC T031) — пустой
-        # ответ заглушки означает «не на чужой ветке», поэтому дальше ни
-        # `rev-parse --verify`, ни `show` не следуют, читается рабочая
-        # копия, как и раньше; второй — сверка свежести docs/codebase-map.md
-        # для брифа роли (orchestrator/brief.py, tasks/T028); два
-        # последних — `role_env` берёт авторство коммита шага (pre-flight
-        # в setUp заглушен — его git-вызовы проверяет test_doctor). Список
-        # точный: любой `show` (чтение артефакта из ветки — ревью-пакетное
-        # или чужой чекаут) в шаге разработчика по-прежнему провалит тест.
+        # Пять вызовов, и ни один — не о пакете: первый — `workspace.
+        # on_task_branch` (SPEC T045, AC-8) спрашивает список worktree
+        # перед стартом шага; второй — `gitcmd.on_foreign_branch` спрашивает
+        # текущую ветку для ветко-корректного чтения SPEC.md брифа
+        # (orchestrator/brief.py, SPEC T031) — пустой ответ заглушки
+        # означает «не на чужой ветке», поэтому дальше ни `rev-parse
+        # --verify`, ни `show` не следуют, читается рабочая копия, как и
+        # раньше; третий — сверка свежести docs/codebase-map.md для брифа
+        # роли (orchestrator/brief.py, tasks/T028); два последних —
+        # `role_env` берёт авторство коммита шага (`role_cwd`/
+        # `workspace.ensure` подменены в setUp — их git-вызовы проверяет
+        # tests/test_workspace.py). Список точный: любой `show` (чтение
+        # артефакта из ветки — ревью-пакетное или чужой чекаут) в шаге
+        # разработчика по-прежнему провалит тест.
         self.assertEqual(self.git.calls,
-                         [["rev-parse", "--abbrev-ref", "HEAD"],
+                         [["worktree", "list", "--porcelain"],
+                          ["rev-parse", "--abbrev-ref", "HEAD"],
                           ["diff", "--name-only",
                            "0000000000000000000000000000000000000000",
                            "HEAD", "--", "orchestrator/*.py", "scripts/*.py",

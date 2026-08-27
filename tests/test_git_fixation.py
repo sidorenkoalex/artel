@@ -576,7 +576,8 @@ class RealPultGitTest(unittest.TestCase):
                             ("ROLE_HOME", self.root / ".artel" / "home"),
                             ("ROLE_CONFIG_DIR",
                              self.root / ".artel" / "home" / ".claude"),
-                            ("TARGETS", self.root / "targets.yaml")):
+                            ("TARGETS", self.root / "targets.yaml"),
+                            ("WORKTREES", self.root / ".artel" / "worktrees")):
             self.patches.enter_context(mock.patch.object(config, attr, value))
         self.patches.enter_context(mock.patch.object(
             runner.keychain, "token", lambda slot: "tok-test"))

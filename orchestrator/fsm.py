@@ -6,7 +6,7 @@ from pathlib import Path
 from scripts import guard
 
 from . import (acceptance, alerts, artifacts, budget, ci, config, fixation,
-              gitcmd, lease, retro, store, yamlmini)
+              gitcmd, lease, retro, store, workspace, yamlmini)
 
 # Регенерация/коммит карты кодовой базы на merge_gate (SPEC T042).
 MAP_REL = "docs/codebase-map.md"
@@ -363,7 +363,17 @@ def _cmd_advance(conn, task_id: str) -> bool:
             # Прогон приёмки (SPEC T023, требование 6): красный
             # acceptance-тест чинит код разработчик, не переписывает тест
             # (тесты залочены — см. ветку in_dev выше).
-            green, tail = acceptance.run(tdir)
+            #
+            # SPEC T045, побочная находка (PLAN, «Подход»): после T045
+            # главная копия пульта остаётся на main, не на ветке задачи —
+            # `tasks/<id>/acceptance_tests` читается из worktree задачи,
+            # если он заведён и стоит на своей ветке; иначе (легаси-
+            # песочницы без реального git, worktree ещё не заведён)
+            # прежний путь — с диска главной копии.
+            acc_tdir = tdir
+            if workspace.on_task_branch(task_id, t["branch"]) is True:
+                acc_tdir = workspace.path(task_id) / "tasks" / task_id
+            green, tail = acceptance.run(acc_tdir)
             if not green:
                 detail = f"acceptance_tests красные:\n{tail}"
                 store.journal(conn, task_id, "fsm",
@@ -374,7 +384,7 @@ def _cmd_advance(conn, task_id: str) -> bool:
                 print(f"  дальше: почини код (не тест) и повтори "
                       f"artel.py advance {task_id}")
                 return False
-            card = acceptance.summary(tdir)
+            card = acceptance.summary(acc_tdir)
             store.journal(conn, task_id, "fsm", "приёмочные тесты пройдены",
                           card)
             print(f"[{task_id}] {card}")
@@ -617,6 +627,30 @@ def _cmd_approve(conn, task_id: str, sha: str | None) -> None:
         print(f"  дальше: artel.py approve {task_id}  (выполнит merge)")
     elif state == "merge_gate":
         branch = t["branch"]
+        # Рабочая поверхность оркестратора (SPEC T045, требования 3-4,
+        # AC-8 сценарий 2): merge — территория главной копии пульта на
+        # main, не чужой ветки Оператора/сессии. Проверяется ДО двухшаговой
+        # sha-сверки `confirm_fixation` выше (та уже пройдена к этой
+        # точке) — отказ здесь не имеет права сам переключать главную
+        # копию, только останавливать команду; не `sys.exit` (в отличие от
+        # красного CI/провала git ниже — там инфраструктурный отказ, а не
+        # рутинная сверка поверхности): задача остаётся на гейте
+        # merge_gate, чтобы Оператор мог повторить approve тем же
+        # процессом после перехода на main. Пустая строка — git не ответил
+        # (вырожденный случай песочниц без реального git, тот же приём
+        # деградации, что у `gitcmd.on_foreign_branch`) — сверять не с чем,
+        # пропускается.
+        root_branch = gitcmd.current_branch()
+        if root_branch and root_branch != config.MAIN_BRANCH:
+            detail = (f"главная копия пульта стоит на {root_branch}, не "
+                      f"на {config.MAIN_BRANCH} — merge не выполняется; "
+                      f"перейди на {config.MAIN_BRANCH} и повтори "
+                      f"artel.py approve {task_id}")
+            store.journal(conn, task_id, "fsm",
+                          "approve отклонён: главная копия не на main",
+                          detail)
+            print(f"[{task_id}] approve отклонён: {detail}")
+            return
         # Зелёный CI — условие мержа, проверяемое кодом, а не глазами
         # Оператора (SPEC T017, требование 6). Неизвестный статус — это
         # «нельзя»: иначе сломанный или неавторизованный `gh` бесшумно
@@ -656,6 +690,10 @@ def _cmd_approve(conn, task_id: str, sha: str | None) -> None:
             sys.exit(f"merge упал на git push:\n{push.stderr}")
         store.set_state(conn, task_id, "done", "orchestrator",
                         f"смержено: {branch}")
+        # Worktree задачи отслужил (SPEC T045, требование 5, AC-6):
+        # смержено, дальше агентным шагам там делать нечего.
+        note = workspace.remove(task_id)
+        store.journal(conn, task_id, "orchestrator", "worktree убран", note)
     elif state == "escalated":
         # Куда возвращать — знает только тот, кто эскалировал: провал агента
         # (cmd_run) пишет в escalated_from состояние своего шага, потому что

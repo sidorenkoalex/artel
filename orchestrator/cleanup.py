@@ -2,7 +2,7 @@
 import shutil
 import sys
 
-from . import config, gitcmd, lease, store
+from . import config, gitcmd, lease, store, workspace
 
 
 def artifacts_in_main(task_id: str) -> bool | None:
@@ -101,7 +101,10 @@ def cleanup_killed_task(conn, task_id: str, branch: str) -> None:
         notes = [f"уборка пропущена: ветка {branch} сейчас checked out — "
                  f"перейди на {config.MAIN_BRANCH} и повтори kill"]
     else:
-        notes = [drop_task_dir(task_id), drop_task_branch(branch)]
+        # Worktree — первым: ветку с `-D` не удалить, пока её держит
+        # worktree (SPEC T045, требование 5, AC-5).
+        notes = [workspace.remove(task_id), drop_task_dir(task_id),
+                 drop_task_branch(branch)]
 
     store.journal(conn, task_id, "orchestrator", "уборка", "; ".join(notes))
     for note in notes:
