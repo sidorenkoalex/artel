@@ -1,9 +1,10 @@
 """Каталог задач: заведение, список, карточка задачи, журнал шагов."""
 import re
+import shutil
 import sys
 from pathlib import Path
 
-from . import alerts, artifacts, config, fixation, gitcmd, store, workspace
+from . import alerts, artifacts, budget, config, fixation, gitcmd, store, workspace
 
 # ГОСТ-подобная транслитерация: только stdlib, без внешних зависимостей.
 # ъ/ь пропускаются; ё → yo; щ → sch; ю → yu; я → ya.
@@ -24,9 +25,48 @@ def slugify(title: str) -> str:
 
 
 def cmd_init() -> None:
+    """Заводит состояние пульта; на непустом проекте — холодный старт
+    (SPEC T049, ADR-0005 п.5): счётчик номеров, слой ролей и программный
+    расход досеваются от наблюдаемого мира, а не остаются пустыми.
+    """
     conn = store.db()
     store.create_schema(conn)
+    # `store.db()` выше уже звал `migrate()`, но ДО `create_schema` — на
+    # свежей БД таблиц ещё не было, и `migrate` вышла первой же строкой
+    # («табиц tasks ещё нет — схему ставит init»), не дойдя до сева.
+    # Явный вызов здесь делает посев частью самого `init` (требование 2),
+    # а не побочным эффектом первого следующего `store.db()`.
+    store.seed_task_counters(conn)
+    _deploy_role_home_reference()
+    budget.reseed_program_spend(conn)
     print(f"OK: состояние в {config.DB}")
+    print("Задачи в полёте (ветки task/* без строки в БД) холодный старт "
+         "не восстанавливает автоматически — пересборка по веткам "
+         "остаётся ручной сверкой Оператора (SPEC T049, требование 11).")
+
+
+def _deploy_role_home_reference() -> None:
+    """Разворачивает курируемый слой ролей из референса пульта, если
+    `.artel/home` ещё не существует (SPEC T049, требования 8-9, AC-5).
+
+    Каталог референса `docs/reference/role-home/claude/` копируется как
+    `.artel/home/.claude/` — имя без ведущей точки в самом репозитории
+    (docs/reference/role-home.md), переименование — только здесь, при
+    развёртывании.
+    """
+    if config.ROLE_HOME.exists():
+        return
+    reference = config.ROOT / "docs" / "reference" / "role-home"
+    if not reference.is_dir():
+        return
+    config.ROLE_HOME.mkdir(parents=True)
+    for entry in reference.iterdir():
+        dest_name = ".claude" if entry.name == "claude" else entry.name
+        dest = config.ROLE_HOME / dest_name
+        if entry.is_dir():
+            shutil.copytree(entry, dest)
+        else:
+            shutil.copy2(entry, dest)
 
 
 def _tz_document(task_id: str, title: str, raw: str) -> str:

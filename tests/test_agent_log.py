@@ -14,6 +14,7 @@ docs/invariants.md.
 """
 import io
 import json
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -28,7 +29,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from orchestrator import (agent_log, catalog, config, gitcmd,  # noqa: E402
                           runner, store)
-from tests.sandbox import TmpRootTest, fake_git  # noqa: E402
+from tests.sandbox import (TmpRootTest, fake_git,  # noqa: E402
+                           seed_developer_brief_fixtures, sync_spec_from_worktree)
+
+REPO_ROOT = Path(__file__).resolve().parent.parent
 
 
 def event(**fields) -> str:
@@ -92,10 +96,22 @@ class FakeProc:
 
 
 class _AgentLogTmpRootTest(TmpRootTest):
-    """Общая песочница: DB, TASKS и LOGS уводятся во временный каталог."""
+    """Общая песочница: DB, TASKS и LOGS уводятся во временный каталог.
+
+    `ROOT` тоже уводится (SPEC T049: холодный старт сканирует его для
+    посева счётчика — непропатченный ROOT читал бы реальное дерево
+    пульта) — `templates/` копируется рядом, `cmd_new` продолжает читать
+    настоящий `templates/SPEC.md`, только уже из песочницы.
+    """
 
     PATCHED_ATTRS = ("DB", "TASKS", "LOGS", "ROLE_HOME", "ROLE_CONFIG_DIR",
-                     "WORKTREES")
+                     "WORKTREES", "ROOT")
+
+    def setUp(self):
+        super().setUp()
+        shutil.copytree(REPO_ROOT / "templates", self.root / "templates")
+        shutil.copytree(REPO_ROOT / "skills", self.root / "skills")
+        seed_developer_brief_fixtures(self.root)
 
 
 TmpRootTest = _AgentLogTmpRootTest
@@ -348,6 +364,7 @@ class CmdRunLoggingTest(TmpRootTest):
         self.addCleanup(patcher.stop)
         self.capture(catalog.cmd_init)
         self.capture(catalog.cmd_new, "Лог агента")
+        sync_spec_from_worktree(self.TASK)
         conn = store.db()
         conn.execute("UPDATE tasks SET state='in_dev' WHERE id=?", (self.TASK,))
         conn.commit()

@@ -33,6 +33,43 @@ def capture(fn, *args) -> str:
     return buf.getvalue()
 
 
+def seed_developer_brief_fixtures(root: Path) -> None:
+    """Синтетические `docs/codebase-map.md`/`CLAUDE.md` в `root` (T028):
+    бриф роли developer/analyst (`orchestrator/brief.py`) читает оба из
+    `config.ROOT` — без них шаг падает ENOENT ещё до сценария, который
+    песочница проверяет. Тот же приём, что уже был у `tests/test_doctor.py`
+    `_DoctorTmpRootTest.setUp` до этой задачи (SPEC T049 добавила
+    сканирование `config.ROOT` холодным стартом и туда, где раньше он
+    оставался непропатченным реальным деревом пульта, — остальные
+    песочницы, гоняющие `cmd_run` роли developer/analyst, этот же
+    минимум теперь заводят себе явно, а не получают его случайно от
+    реального ROOT)."""
+    (root / "docs").mkdir(parents=True, exist_ok=True)
+    (root / "docs" / "codebase-map.md").write_text(
+        "---\nbuilt_at_sha: 0000000000000000000000000000000000000000\n"
+        "---\n\n# Карта\n", encoding="utf-8")
+    (root / "CLAUDE.md").write_text("# Конвенции\n", encoding="utf-8")
+
+
+def sync_spec_from_worktree(task_id: str) -> None:
+    """Зеркалит SPEC.md из воркт-дерева задачи в `config.TASKS` (легаси-путь
+    чтения брифа разработчика).
+
+    `cmd_new` (SPEC T048) пишет SPEC.md в worktree
+    (`config.WORKTREES/<id>/tasks/<id>/`), не в `config.TASKS`.
+    `brief._developer_spec_text` при этом падает на `config.TASKS`, когда
+    `gitcmd.on_foreign_branch` — False (в лёгких песочницах с `fake_git`
+    выше — всегда: `current_branch()` там пустая строка). Без зеркала
+    следующий `cmd_run` роли developer получает `FileNotFoundError` на
+    путь, которого `cmd_new` с T048 больше не пишет.
+    """
+    wt_spec = config.WORKTREES / task_id / "tasks" / task_id / "SPEC.md"
+    dest_dir = config.TASKS / task_id
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    (dest_dir / "SPEC.md").write_text(
+        wt_spec.read_text(encoding="utf-8"), encoding="utf-8")
+
+
 def fake_git(*args: str) -> subprocess.CompletedProcess:
     """Подмена `gitcmd.git`: git-идентичность роли, без обращения к репозиторию.
 

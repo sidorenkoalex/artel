@@ -10,6 +10,7 @@ tests/test_acceptance_tests_flow.py).
 (`RunAnalystTest`), где нужны те же подмены, что и в
 tests/test_agent_prompt.py: keychain, pre-flight, Popen.
 """
+import shutil
 import sys
 import tempfile
 import unittest
@@ -20,7 +21,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from orchestrator import artel, auto, catalog, config, fsm, gitcmd, runner, store  # noqa: E402
 from scripts import guard  # noqa: E402
-from tests.sandbox import TmpRootTest, fake_git  # noqa: E402
+from tests.sandbox import (TmpRootTest, fake_git,  # noqa: E402
+                           seed_developer_brief_fixtures)
+
+REPO_ROOT = Path(__file__).resolve().parent.parent
 
 TZ_RAW = "Хотим кнопку экспорта отчёта в CSV на странице задач.\n"
 
@@ -101,14 +105,23 @@ schema_version: 2
 
 
 class _AnalystRoleTmpRootTest(TmpRootTest):
-    """Лёгкая песочница: БД и артефакты во временном каталоге, git — заглушка."""
+    """Лёгкая песочница: БД и артефакты во временном каталоге, git — заглушка.
+
+    `ROOT` тоже уводится (SPEC T049: холодный старт сканирует его для
+    посева счётчика — непропатченный ROOT читал бы реальное дерево
+    пульта) — `templates/` копируется рядом, `cmd_new` продолжает читать
+    настоящий `templates/SPEC.md`, только уже из песочницы.
+    """
 
     TASK = "T001"
     PATCHED_ATTRS = ("DB", "TASKS", "LOGS", "ROLE_HOME", "ROLE_CONFIG_DIR",
-                     "WORKTREES")
+                     "WORKTREES", "ROOT")
 
     def setUp(self):
         super().setUp()
+        shutil.copytree(REPO_ROOT / "templates", self.root / "templates")
+        shutil.copytree(REPO_ROOT / "skills", self.root / "skills")
+        seed_developer_brief_fixtures(self.root)
         patcher = mock.patch.object(gitcmd, "git", fake_git)
         patcher.start()
         self.addCleanup(patcher.stop)

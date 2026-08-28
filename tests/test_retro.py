@@ -205,5 +205,37 @@ class RetroGenerationTest(unittest.TestCase):
         self.assertIn("причина не найдена в журнале", text)
 
 
+class ParseTotalCostTest(unittest.TestCase):
+    """`retro.parse_total_cost` (SPEC T049, требование 4) — извлечение
+    «Стоимость итого: $X.XX» из уже сгенерированного RETRO для пересева
+    программного расхода холодного старта (`budget.reseed_program_spend`)."""
+
+    def test_finds_total_cost_on_its_own_line(self):
+        text = "# RETRO: T900\n\nСтоимость итого: $12.50\n  developer: $12.50\n"
+
+        self.assertEqual(retro.parse_total_cost(text), 12.5)
+
+    def test_finds_integer_cost_without_fraction(self):
+        text = "Стоимость итого: $7\n"
+
+        self.assertEqual(retro.parse_total_cost(text), 7.0)
+
+    def test_missing_line_returns_none(self):
+        text = "# RETRO: T900\n\nИтог: done, sha aaaa\n"
+
+        self.assertIsNone(retro.parse_total_cost(text))
+
+    def test_only_matches_at_line_start_not_per_actor_line(self):
+        """Требование 4: строка ИТОГО, не построчная разбивка по актёру —
+        `COST_RE` («стоимость $X») уже покрывает построчный разбор, здесь
+        нужна ИМЕННО заглавная сумма RETRO, привязанная к началу строки."""
+        text = "  developer: стоимость $3.00, 10 токенов\n"
+
+        self.assertIsNone(retro.parse_total_cost(text))
+
+    def test_empty_text_returns_none(self):
+        self.assertIsNone(retro.parse_total_cost(""))
+
+
 if __name__ == "__main__":
     unittest.main()

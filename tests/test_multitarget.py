@@ -11,6 +11,7 @@
 """
 import json
 import re
+import shutil
 import sqlite3
 import subprocess
 import sys
@@ -24,7 +25,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from orchestrator import (budget, catalog, config, projects,  # noqa: E402
                           runner, spend, store, targets)
-from tests.sandbox import TmpRootTest, capture, fake_git  # noqa: E402
+from tests.sandbox import (TmpRootTest, capture, fake_git,  # noqa: E402
+                           seed_developer_brief_fixtures)
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
@@ -109,13 +111,23 @@ class FakeProc:
 
 
 class _MultitargetTmpRootTest(TmpRootTest):
-    """Песочница: БД, каталоги проектов и слой ролей во временном каталоге."""
+    """Песочница: БД, каталоги проектов и слой ролей во временном каталоге.
+
+    `ROOT` тоже уводится (SPEC T049: холодный старт сканирует его для
+    посева счётчика — непропатченный ROOT читал бы реальное дерево
+    пульта и его настоящие номера задач) — `templates/` копируется рядом,
+    `cmd_new` продолжает читать настоящий `templates/SPEC.md`, только уже
+    из песочницы.
+    """
 
     PATCHED_ATTRS = ("DB", "TASKS", "LOGS", "PROJECTS",
-                     "ROLE_HOME", "ROLE_CONFIG_DIR", "TARGETS")
+                     "ROLE_HOME", "ROLE_CONFIG_DIR", "TARGETS", "ROOT")
 
     def setUp(self):
         super().setUp()
+        shutil.copytree(REPO_ROOT / "templates", self.root / "templates")
+        shutil.copytree(REPO_ROOT / "skills", self.root / "skills")
+        seed_developer_brief_fixtures(self.root)
         # Keychain подменяется функцией, как gitcmd.git: реальный `security`
         # (и патч Popen, ловящий его subprocess.run) в тестах не участвует.
         kc_patcher = mock.patch.object(runner.keychain, "token",

@@ -170,14 +170,22 @@ class AcceptanceTest(unittest.TestCase):
 
 
 class _AcceptanceFlowTmpRootTest(TmpRootTest):
-    """Лёгкая песочница: БД и артефакты во временном каталоге, git — заглушка."""
+    """Лёгкая песочница: БД и артефакты во временном каталоге, git — заглушка.
+
+    `ROOT` тоже уводится (SPEC T049: холодный старт сканирует его для
+    посева счётчика — непропатченный ROOT читал бы реальное дерево
+    пульта) — `templates/` копируется рядом, `cmd_new` продолжает читать
+    настоящий `templates/SPEC.md`, только уже из песочницы.
+    """
 
     TASK = "T001"
     PATCHED_ATTRS = ("DB", "TASKS", "LOGS", "ROLE_HOME", "ROLE_CONFIG_DIR",
-                     "WORKTREES")
+                     "WORKTREES", "ROOT")
 
     def setUp(self):
         super().setUp()
+        shutil.copytree(REPO_ROOT / "templates", self.root / "templates")
+        shutil.copytree(REPO_ROOT / "skills", self.root / "skills")
         patcher = mock.patch.object(gitcmd, "git", fake_git)
         patcher.start()
         self.addCleanup(patcher.stop)

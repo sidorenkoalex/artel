@@ -9,6 +9,7 @@
 Ослабить, заскипать или удалить их может только Оператор отдельным ADR;
 перечень «инвариант → тест → откуда» — docs/invariants.md.
 """
+import shutil
 import sqlite3
 import sys
 import tempfile
@@ -21,6 +22,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from orchestrator import (artifacts, catalog, config, fsm,  # noqa: E402
                           gitcmd, review, runner, store)
 from tests.sandbox import capture, fake_git  # noqa: E402
+
+REPO_ROOT = Path(__file__).resolve().parent.parent
 
 
 # Заготовки валидны по guard: с T017 он вызывается на каждом переходе
@@ -93,16 +96,27 @@ class ReviewFreshnessScenarioTest(unittest.TestCase):
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
         root = Path(tmp.name)
+        # `ROOT` тоже уводится (SPEC T049: холодный старт сканирует его для
+        # посева счётчика — непропатченный ROOT читал бы реальное дерево
+        # пульта); `templates/`/`skills/` копируются рядом — `cmd_new`
+        # читает `templates/SPEC.md`, `cmd_run` читает промпт роли из
+        # `skills/*.md`, оба уже из песочницы.
+        shutil.copytree(REPO_ROOT / "templates", root / "templates")
+        shutil.copytree(REPO_ROOT / "skills", root / "skills")
 
         for attr, value in (("DB", root / ".artel" / "state.db"),
                             ("TASKS", root / "tasks"),
                             ("LOGS", root / ".artel" / "logs"),
+                            ("ROOT", root),
+                            ("PROJECTS", root / ".artel" / "projects"),
+                            ("TARGETS", root / "targets.yaml"),
                             # Курируемый слой ролей (T019): каталог заводит
                             # запуск шага — пусть заводит в песочнице, а не
                             # в .artel/ репозитория.
                             ("ROLE_HOME", root / ".artel" / "home"),
                             ("ROLE_CONFIG_DIR",
                              root / ".artel" / "home" / ".claude"),
+                            ("BACKUP_MARKER", root / ".artel" / "backup-marker"),
                             # `cmd_new` (SPEC T048) сам заводит ветку и
                             # worktree через `gitcmd`.
                             ("WORKTREES", root / ".artel" / "worktrees")):

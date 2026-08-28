@@ -58,8 +58,8 @@ import time
 from collections import namedtuple
 from pathlib import Path
 
-from . import (alerts, config, gitcmd, projects, roles, runner, spend, store,
-              targets, workspace)
+from . import (alerts, coldstart, config, gitcmd, projects, roles, runner,
+              spend, store, targets, workspace)
 
 # status: "ok" | "warn" | "fail" | "skip" ("skip" — честный пропуск проверки,
 # требование 9: сверка forge-политики без `gh`/сети — не провал и не ок).
@@ -535,21 +535,63 @@ def check_leases(conn) -> list[Check]:
 # --- прочие проверки (требование 9) --------------------------------------
 
 def check_backup_age(conn) -> Check:
+    """Деградировано до информационной строки (SPEC T049, требование 6;
+    легализовано ADR-0005 п.3: отдельный бэкап `.artel/` не ведётся —
+    сохранность определяется уровнем target'а, не бэкапом пульта).
+    Больше не заводит `incident`: маркер, если Оператор всё же его ведёт
+    по своей воле, остаётся диагностической строкой, не гейтом. Любой
+    открытый алерт этого источника, заведённый ДО этой правки,
+    авто-ack'ается — условие, которое его подняло, снято настоящей
+    задачей, не наблюдением doctor.
+    """
+    _auto_ack_gone(conn, "doctor.backup_age", lambda _msg: False)
     marker = config.BACKUP_MARKER
     if not marker.exists():
-        message = (f"{marker} не найден — бэкап .artel/ не настроен "
-                  f"(Time Machine/rsync должен touch'ать этот файл по "
-                  f"завершении, ADR-0003 3к)")
-        alerts.raise_alert(conn, None, "incident", "doctor.backup_age", message)
-        return Check("backup-age", "fail", message)
+        return Check("backup-age", "ok",
+                     "бэкап .artel/ отдельно не ведётся (ADR-0005 п.3) — "
+                     "информационно, не гейт")
     age_days = (time.time() - marker.stat().st_mtime) / 86400
-    if age_days > config.BACKUP_MAX_AGE_DAYS:
-        message = (f"последний бэкап {age_days:.1f} дн. назад — больше "
-                  f"порога {config.BACKUP_MAX_AGE_DAYS}")
-        alerts.raise_alert(conn, None, "incident", "doctor.backup_age", message)
-        return Check("backup-age", "fail", message)
-    _auto_ack_gone(conn, "doctor.backup_age", lambda _msg: False)
-    return Check("backup-age", "ok", f"{age_days:.1f} дн. назад")
+    return Check("backup-age", "ok",
+                 f"маркер найден, {age_days:.1f} дн. назад — информационно "
+                 f"(ADR-0005 п.3, бэкап .artel/ не обязателен)")
+
+
+def check_task_counters(conn) -> Check:
+    """Счётчик номеров target'а не должен быть НИЖЕ наблюдаемого max
+    (SPEC T049, требование 3, ADR-0005 п.5) — иначе следующая заведённая
+    задача коллизирует номером с уже существующей где-то в мире. Дословно
+    требование 3: «≥» — здоровое состояние, не «строго больше» (та
+    гарантия — уже у `store.seed_task_counters`, AC-1).
+
+    Каждый расхождение — именованный `incident`-алерт (`doctor.task_
+    counter`), тем же приёмом, что у `check_orphans`/`check_leases`.
+
+    Множество проверяемых target'ов — не только те, у кого уже есть
+    строка счётчика (`store.counter_targets`), но и все, объявленные
+    `targets.yaml` (REVIEW T049 итерации 1, замечание major): target
+    без строки счётчика — это ровно необнаруженный холодный старт,
+    который эта проверка обязана поймать, а не пропустить молча.
+    """
+    try:
+        declared = targets.load()
+    except targets.TargetsError:
+        declared = {}
+    checked_targets = ({config.DEFAULT_TARGET} | store.counter_targets(conn)
+                       | set(declared))
+    behind = []
+    for target in sorted(checked_targets):
+        next_number = store.peek_task_number(conn, target)
+        observed = coldstart.observed_max_task_number(target)
+        if next_number < observed:
+            message = (f"{target}: счётчик номеров ({next_number}) ниже "
+                      f"наблюдаемого max ({observed}) — коллизия номеров "
+                      f"при следующей `new`")
+            alerts.raise_alert(conn, target, "incident",
+                              "doctor.task_counter", message)
+            behind.append(message)
+    if behind:
+        return Check("task-counters", "fail", "; ".join(behind))
+    return Check("task-counters", "ok", "счётчики ≥ наблюдаемого max")
 
 
 def check_remote_empty(target: str) -> Check:
@@ -611,6 +653,7 @@ def all_checks(conn) -> list[Check]:
     checks.append(check_git_identity())
     checks.append(check_disk_space())
     checks.append(check_backup_age(conn))
+    checks.append(check_task_counters(conn))
     checks.append(isolation_smoke())
     checks.append(live_smoke(conn))
 

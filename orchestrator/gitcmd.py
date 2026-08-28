@@ -44,6 +44,21 @@ def branch_merged(branch: str) -> bool:
     return res.returncode == 0 and bool(res.stdout.strip())
 
 
+def list_branches(prefix: str = "") -> list[str] | None:
+    """Локальные ветки под `refs/heads/<prefix>`; `None` — git не ответил.
+
+    Наблюдаемый мир для холодного старта (SPEC T049, требование 1):
+    ветки `task/*` без строки БД — один из трёх источников максимума
+    номеров задач (`orchestrator/coldstart.py`). Пустой список — легитимный
+    ответ (веток с таким префиксом нет), тот же приём, что у
+    `ls_tree_files` не путать с `None`.
+    """
+    res = git("for-each-ref", "--format=%(refname:short)", f"refs/heads/{prefix}")
+    if res is None or res.returncode != 0:
+        return None
+    return [b for b in res.stdout.splitlines() if b]
+
+
 def in_repo(repo: Path, *args: str) -> subprocess.CompletedProcess:
     """git-команда в произвольном репозитории (не ROOT пульта) через `-C`.
 

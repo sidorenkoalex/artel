@@ -10,6 +10,7 @@ REVIEW итерации 2 воспроизвёл гонку вручную (Фа
 подтвердил, что откат правки не роняет ни один тест пакета — этот файл
 закрывает тот пробел исполняемой защитой.
 """
+import shutil
 import sys
 import unittest
 from pathlib import Path
@@ -20,16 +21,21 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from orchestrator import catalog, config, gitcmd, store  # noqa: E402
 from tests.sandbox import TmpRootTest, fake_git  # noqa: E402
 
+REPO_ROOT = Path(__file__).resolve().parent.parent
+
 
 class PeekTaskNumberRaceTest(TmpRootTest):
-    """`ROOT` намеренно не патчится — `cmd_new` читает настоящий
-    `templates/SPEC.md` пульта, тем же приёмом, что `tests/
-    test_analyst_role.py::_AnalystRoleTmpRootTest`."""
+    """`ROOT` тоже уводится в песочницу (SPEC T049: холодный старт сканирует
+    его для посева счётчика — непропатченный ROOT читал бы реальное дерево
+    пульта и его настоящие номера задач, ломая счёт «T006» ниже);
+    `templates/` копируется рядом, `cmd_new` продолжает читать настоящий
+    `templates/SPEC.md`, только уже из песочницы."""
 
-    PATCHED_ATTRS = ("DB", "TASKS", "LOGS", "WORKTREES")
+    PATCHED_ATTRS = ("DB", "TASKS", "LOGS", "WORKTREES", "ROOT")
 
     def setUp(self):
         super().setUp()
+        shutil.copytree(REPO_ROOT / "templates", self.root / "templates")
         patcher = mock.patch.object(gitcmd, "git", fake_git)
         patcher.start()
         self.addCleanup(patcher.stop)
