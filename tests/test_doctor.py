@@ -797,6 +797,172 @@ class LeasesCheckTest(TmpRootTest):
                     if a["source"] == "doctor.leases"]
         self.assertEqual(len(incidents), 1)
 
+    def test_row_removed_is_auto_acked_on_next_run(self):
+        """SPEC T054, требование 1 (AC-1): строка снята -> auto-ack."""
+        conn = store.db()
+        conn.execute(
+            "INSERT INTO leases (task_id, session_id, pid, hostname,"
+            " heartbeat_ts) VALUES (?,?,?,?,?)",
+            ("T001", "sess", self.dead_pid(), socket.gethostname(), store.now()))
+        conn.commit()
+        doctor.check_leases(conn)
+        alert_id = [a for a in alerts.open_alerts(conn, "incident")
+                   if a["source"] == "doctor.leases"][0]["id"]
+
+        store.release_lease(conn, "T001", "sess")
+        doctor.check_leases(conn)
+
+        self.assertIsNotNone(store.get_alert(conn, alert_id)["ack_ts"])
+
+    def test_pid_becomes_alive_is_auto_acked_on_next_run(self):
+        """SPEC T054, требование 1 (AC-1): pid жив -> auto-ack."""
+        conn = store.db()
+        conn.execute(
+            "INSERT INTO leases (task_id, session_id, pid, hostname,"
+            " heartbeat_ts) VALUES (?,?,?,?,?)",
+            ("T001", "sess", self.dead_pid(), socket.gethostname(), store.now()))
+        conn.commit()
+        doctor.check_leases(conn)
+        alert_id = [a for a in alerts.open_alerts(conn, "incident")
+                   if a["source"] == "doctor.leases"][0]["id"]
+
+        store.update_lease(conn, "T001", "sess", os.getpid(),
+                           socket.gethostname(), store.now())
+        doctor.check_leases(conn)
+
+        self.assertIsNotNone(store.get_alert(conn, alert_id)["ack_ts"])
+
+    def test_dead_pid_still_present_is_not_auto_acked(self):
+        """SPEC T054, требование 1 (AC-1): условие в силе -> не auto-ack."""
+        conn = store.db()
+        conn.execute(
+            "INSERT INTO leases (task_id, session_id, pid, hostname,"
+            " heartbeat_ts) VALUES (?,?,?,?,?)",
+            ("T001", "sess", self.dead_pid(), socket.gethostname(), store.now()))
+        conn.commit()
+        doctor.check_leases(conn)
+        alert_id = [a for a in alerts.open_alerts(conn, "incident")
+                   if a["source"] == "doctor.leases"][0]["id"]
+
+        doctor.check_leases(conn)
+
+        self.assertIsNone(store.get_alert(conn, alert_id)["ack_ts"])
+
+
+class MergeLockCheckTest(TmpRootTest):
+    """SPEC T053, требование 4: мёртвый держатель мьютекса merge —
+    incident-алерт; SPEC T054, требование 2 (AC-2): тот же алерт закрывается
+    авто-ack'ом, когда условие исчезло."""
+
+    def setUp(self):
+        super().setUp()
+        capture(catalog.cmd_init)
+        for task_id in ("T001", "T002"):
+            store.insert_task(store.db(), task_id, "Задача", "in_dev",
+                              f"task/{task_id.lower()}-zadacha",
+                              config.DEFAULT_TARGET, 25.0)
+
+    @staticmethod
+    def dead_pid() -> int:
+        proc = subprocess.Popen([sys.executable, "-c", "pass"],
+                                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        proc.wait()
+        return proc.pid
+
+    def test_empty_lock_is_ok(self):
+        checks = doctor.check_merge_lock(store.db())
+
+        self.assertTrue(all(c.status == "ok" for c in checks))
+        self.assertEqual(alerts.open_alerts(store.db(), "incident"), [])
+
+    def test_foreign_host_dead_pid_is_not_flagged(self):
+        conn = store.db()
+        store.set_merge_lock(conn, "T001", "sess", self.dead_pid(),
+                             "other-host.invalid", store.now())
+
+        checks = doctor.check_merge_lock(conn)
+
+        self.assertTrue(all(c.status != "fail" for c in checks))
+        self.assertEqual(alerts.open_alerts(conn, "incident"), [])
+
+    def test_dead_holder_on_this_host_raises_an_incident(self):
+        conn = store.db()
+        store.set_merge_lock(conn, "T001", "sess", self.dead_pid(),
+                             socket.gethostname(), store.now())
+
+        checks = doctor.check_merge_lock(conn)
+
+        self.assertTrue(any(c.status == "fail" for c in checks))
+        incidents = [a for a in alerts.open_alerts(conn, "incident")
+                    if a["source"] == "doctor.merge_lock"]
+        self.assertEqual(len(incidents), 1)
+        self.assertIn("T001", incidents[0]["message"])
+
+    def test_repeated_run_does_not_duplicate_the_incident(self):
+        conn = store.db()
+        store.set_merge_lock(conn, "T001", "sess", self.dead_pid(),
+                             socket.gethostname(), store.now())
+
+        doctor.check_merge_lock(conn)
+        doctor.check_merge_lock(conn)
+
+        incidents = [a for a in alerts.open_alerts(conn, "incident")
+                    if a["source"] == "doctor.merge_lock"]
+        self.assertEqual(len(incidents), 1)
+
+    def test_lock_cleared_is_auto_acked_on_next_run(self):
+        conn = store.db()
+        store.set_merge_lock(conn, "T001", "sess", self.dead_pid(),
+                             socket.gethostname(), store.now())
+        doctor.check_merge_lock(conn)
+        alert_id = [a for a in alerts.open_alerts(conn, "incident")
+                   if a["source"] == "doctor.merge_lock"][0]["id"]
+
+        store.release_merge_lock(conn, "sess")
+        doctor.check_merge_lock(conn)
+
+        self.assertIsNotNone(store.get_alert(conn, alert_id)["ack_ts"])
+
+    def test_holder_changed_is_auto_acked_on_next_run(self):
+        conn = store.db()
+        store.set_merge_lock(conn, "T001", "sess-1", self.dead_pid(),
+                             socket.gethostname(), store.now())
+        doctor.check_merge_lock(conn)
+        alert_id = [a for a in alerts.open_alerts(conn, "incident")
+                   if a["source"] == "doctor.merge_lock"][0]["id"]
+
+        store.set_merge_lock(conn, "T002", "sess-2", self.dead_pid(),
+                             socket.gethostname(), store.now())
+        doctor.check_merge_lock(conn)
+
+        self.assertIsNotNone(store.get_alert(conn, alert_id)["ack_ts"])
+
+    def test_holder_pid_becomes_alive_is_auto_acked_on_next_run(self):
+        conn = store.db()
+        store.set_merge_lock(conn, "T001", "sess", self.dead_pid(),
+                             socket.gethostname(), store.now())
+        doctor.check_merge_lock(conn)
+        alert_id = [a for a in alerts.open_alerts(conn, "incident")
+                   if a["source"] == "doctor.merge_lock"][0]["id"]
+
+        store.set_merge_lock(conn, "T001", "sess", os.getpid(),
+                             socket.gethostname(), store.now())
+        doctor.check_merge_lock(conn)
+
+        self.assertIsNotNone(store.get_alert(conn, alert_id)["ack_ts"])
+
+    def test_dead_holder_remains_is_not_auto_acked(self):
+        conn = store.db()
+        store.set_merge_lock(conn, "T001", "sess", self.dead_pid(),
+                             socket.gethostname(), store.now())
+        doctor.check_merge_lock(conn)
+        alert_id = [a for a in alerts.open_alerts(conn, "incident")
+                   if a["source"] == "doctor.merge_lock"][0]["id"]
+
+        doctor.check_merge_lock(conn)
+
+        self.assertIsNone(store.get_alert(conn, alert_id)["ack_ts"])
+
 
 class BranchFreshnessCheckTest(TmpRootTest):
     """SPEC T051, требование 8 (AC-5): активная задача с веткой, отставшей
