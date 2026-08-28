@@ -10,10 +10,8 @@
 
 Все операции идут через `gitcmd.git` (единственная точка мокинга,
 которой уже пользуется весь пакет) — модуль сам не делает ни одного
-сырого `Path.mkdir`/`shutil` вне `_seed_uncommitted_artifacts` (та
-касается только уже реально созданного git'ом worktree).
+сырого `Path.mkdir`/`shutil`.
 """
-import shutil
 import sys
 from pathlib import Path
 
@@ -41,27 +39,6 @@ def _registered(wt_path: Path) -> bool:
     return str(wt_path) in registered_paths()
 
 
-def _seed_uncommitted_artifacts(task_id: str, wt_path: Path) -> None:
-    """Переносит в свежий worktree то, что `cmd_new`/Оператор оставили
-    некоммиченным в главной копии (`tasks/<id>/`).
-
-    До этой задачи ветку задачи заводила сама роль (`git checkout -b`)
-    В ТОЙ ЖЕ рабочей копии, где `cmd_new` уже положил SPEC.md/TZ.md на
-    диск некоммичено — checkout untracked-файлы не трогает, и они просто
-    оставались на месте. Отдельный worktree их не наследует: без явного
-    переноса первый агентный шаг (например analyst) не увидел бы TZ.md
-    вовсе. Только для СВЕЖЕЙ ветки: если ветка уже существовала, нужное
-    содержимое уже закоммичено предыдущим шагом и лежит в самом checkout'е.
-    """
-    src = config.TASKS / task_id
-    if not src.is_dir():
-        return
-    dst = wt_path / "tasks" / task_id
-    if dst.exists():
-        return
-    shutil.copytree(src, dst)
-
-
 def ensure(task_id: str, branch: str) -> tuple[Path, str | None]:
     """Создаёт (если нет) worktree задачи на её ветке; идемпотентно
     (AC-1, AC-2). (путь, причина отказа) — причина `None` при успехе.
@@ -81,8 +58,6 @@ def ensure(task_id: str, branch: str) -> tuple[Path, str | None]:
     else:
         res = gitcmd.git("worktree", "add", "-b", branch, str(wt_path),
                          config.MAIN_BRANCH)
-        if res is not None and res.returncode == 0:
-            _seed_uncommitted_artifacts(task_id, wt_path)
     if res is None or res.returncode != 0:
         reason = (res.stderr.strip()[:300] if res is not None and res.stderr
                   else f"git worktree add вернул {res.returncode if res else '—'}")

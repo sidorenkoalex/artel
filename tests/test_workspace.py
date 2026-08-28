@@ -140,25 +140,6 @@ class EnsureTest(RealGitWorkspaceTest):
         self.assertEqual(merge_base, main_head)
         self.assertTrue(path.is_dir())
 
-    def test_seeds_uncommitted_task_dir_into_a_fresh_worktree(self):
-        """Артефакты, некоммиченные в главной копии — свежий worktree
-        обязан унести копию (иначе analyst не увидит SPEC.md/TZ.md вовсе,
-        см. PLAN «Подход»)."""
-        (config.TASKS / self.TASK).mkdir(parents=True, exist_ok=True)
-        (config.TASKS / self.TASK / "SPEC.md").write_text(
-            "SPEC задачи\n", encoding="utf-8")
-        (config.TASKS / self.TASK / "TZ.md").write_text(
-            "ТЗ задачи\n", encoding="utf-8")
-
-        path, error = workspace.ensure(self.TASK, self.branch)
-
-        self.assertIsNone(error)
-        seeded = path / "tasks" / self.TASK
-        self.assertTrue((seeded / "SPEC.md").is_file())
-        self.assertTrue((seeded / "TZ.md").is_file())
-        self.assertEqual((seeded / "TZ.md").read_text(encoding="utf-8"),
-                         "ТЗ задачи\n")
-
     def test_repeated_call_is_idempotent(self):
         first, error1 = workspace.ensure(self.TASK, self.branch)
 
