@@ -19,7 +19,9 @@ main (сценарии уборки — test_kill_cleanup.py).
 """
 import contextlib
 import json
+import os
 import shutil
+import socket
 import subprocess
 import sys
 import tempfile
@@ -795,6 +797,97 @@ class ExhaustedBudgetIsNotBypassableTest(FsmTest):
     def test_only_the_operator_ceiling_unblocks_the_run(self):
         """Контроль: блокировка не вечная — её снимает `budget` Оператора."""
         self.capture(budget.cmd_budget, self.TASK, "5")
+
+        _, popen = self.try_run()
+
+        popen.assert_called_once()
+
+
+class ParallelTaskLimitIsNotBypassableTest(FsmTest):
+    """Инвариант: `MAX_PARALLEL_TASKS` блокирует старт агентного шага, пока
+    число других задач с живым lease не опустится ниже потолка — не
+    обходится ни повторным `run`, ни `advance` следующим за отказавшим
+    шагом (SPEC T060, требование 6, AC-6).
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.write_plan("ready")
+        self.set_state("in_dev")
+        conn = store.db()
+        for i in range(config.MAX_PARALLEL_TASKS):
+            task_id = f"T90{i}"
+            store.insert_task(conn, task_id, f"Другая задача {task_id}",
+                              "in_dev", f"task/{task_id.lower()}-fake",
+                              config.DEFAULT_TARGET, config.DEFAULT_BUDGET_USD)
+            conn.execute(
+                "INSERT INTO leases (task_id, session_id, pid, hostname,"
+                " heartbeat_ts) VALUES (?,?,?,?,?)",
+                (task_id, f"session-busy-{i}", os.getpid(),
+                 socket.gethostname(), store.now()))
+        conn.commit()
+
+    def try_run(self) -> tuple[str, mock.Mock]:
+        return self.run_command(lambda: runner.cmd_run(self.TASK))
+
+    def test_run_refuses_and_no_agent_starts(self):
+        with mock.patch.object(runner, "spawn_agent") as popen:
+            with self.assertRaises(SystemExit) as exit_:
+                self.capture(runner.cmd_run, self.TASK)
+
+        popen.assert_not_called()
+        self.assertIn(str(config.MAX_PARALLEL_TASKS), str(exit_.exception))
+
+    def test_advance_does_not_unblock_the_run(self):
+        """`advance` — переход по готовности артефакта, лимитер run с ним не
+        связан: продвижение состояния не снимает и не обходит его отказ."""
+        self.try_run()
+        self.capture(fsm.cmd_advance, self.TASK)
+        self.assertEqual(self.state(), "review")
+
+        _, popen = self.try_run()
+
+        popen.assert_not_called()
+
+    def test_retry_does_not_bypass_the_refusal(self):
+        _, popen1 = self.try_run()
+        popen1.assert_not_called()
+
+        _, popen2 = self.try_run()
+        popen2.assert_not_called()
+
+    def test_refusal_is_journalled(self):
+        journalled_before = len(store.task_steps(store.db(), self.TASK))
+
+        self.try_run()
+
+        new_steps = store.task_steps(store.db(), self.TASK)[journalled_before:]
+        self.assertTrue(
+            any("лимит параллельных задач" in s["action"] for s in new_steps),
+            new_steps)
+
+    def test_own_lease_does_not_count_against_the_task_itself(self):
+        """Требование 2: собственный lease стартующей задачи — не в счёт."""
+        conn = store.db()
+        conn.execute("DELETE FROM leases WHERE task_id=?", (self.TASK,))
+        conn.execute(
+            "INSERT INTO leases (task_id, session_id, pid, hostname,"
+            " heartbeat_ts) VALUES (?,?,?,?,?)",
+            (self.TASK, "own-session", os.getpid(), socket.gethostname(),
+             store.now()))
+        # На потолке ровно MAX_PARALLEL_TASKS чужих — свой lease его не
+        # усугубляет и не защищает: отказ остаётся тем же самым отказом.
+        conn.commit()
+
+        _, popen = self.try_run()
+
+        popen.assert_not_called()
+
+    def test_below_the_ceiling_run_starts(self):
+        """Контроль: ниже потолка (одна чужая задача свободна) run проходит."""
+        conn = store.db()
+        conn.execute("DELETE FROM leases WHERE task_id=?", ("T900",))
+        conn.commit()
 
         _, popen = self.try_run()
 

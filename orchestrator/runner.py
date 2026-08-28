@@ -6,7 +6,7 @@ import time
 from pathlib import Path
 
 from . import (agent_log, brief, budget, config, fixation, gitcmd, keychain,
-              lease, review, roles, spend, store, workspace)
+              lease, parallel_limit, review, roles, spend, store, workspace)
 
 # Идентичность коммитера, которую роль обязана унести с собой в свой HOME.
 # git читает эти переменные ПОВЕРХ конфига, поэтому перенос ровно двух пар
@@ -86,6 +86,19 @@ def _cmd_run(conn, task_id: str) -> None:
     blocked = budget.budget_block(t)
     if blocked is not None:
         sys.exit(blocked)
+
+    # Лимитер параллельных задач (SPEC T060, требования 2-4): общесистемный
+    # потолок слотов, не зависящий от состояния/роли этой задачи — той же
+    # природы, что и бюджет выше, поэтому проверяется тем же местом, до
+    # резолвинга роли. В отличие от budget_block (журналируется только
+    # изнутри auto.auto_stop), отказ журналируется здесь явно: требование
+    # 3 обязывает журнал и для одиночного `run`, не только для `auto`.
+    limit_refusal = parallel_limit.refusal(conn, task_id)
+    if limit_refusal is not None:
+        store.journal(conn, task_id, "fsm",
+                      "run отклонён: лимит параллельных задач", limit_refusal)
+        sys.exit(limit_refusal)
+
     role = step_role(t)
     if role is None:
         if t["state"] == "spec_writing":
