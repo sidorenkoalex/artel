@@ -28,7 +28,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from orchestrator import (acceptance, catalog, config, fsm,  # noqa: E402
                           gitcmd, runner, store, workspace)
 from scripts import guard  # noqa: E402
-from tests.sandbox import TmpRootTest, capture, fake_git  # noqa: E402
+from tests.sandbox import FakeProc, TmpRootTest, capture, fake_git  # noqa: E402
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
@@ -889,27 +889,6 @@ class EscalationReturnsToTestsWritingTest(TmpRootTest):
         self.addCleanup(sleep_patcher.stop)
 
     def run_failing_agent(self) -> str:
-        class FakeStream:
-            def __init__(self, lines):
-                self.lines = iter(lines)
-
-            def __iter__(self):
-                return self
-
-            def __next__(self):
-                return next(self.lines)
-
-            def close(self):
-                pass
-
-        class FakeProc:
-            def __init__(self, lines, rc):
-                self.stdout = FakeStream(lines)
-                self.returncode = rc
-
-            def wait(self, timeout=None):
-                return self.returncode
-
         procs = [FakeProc(["упал\n"], 1) for _ in range(config.AGENT_ATTEMPTS)]
         with mock.patch.object(runner, "spawn_agent", side_effect=procs):
             return self.capture(runner.cmd_run, self.TASK)
