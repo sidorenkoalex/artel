@@ -209,8 +209,9 @@ class ExternalTransitionCommitsTest(TmpRootTest):
         self.assertEqual(gitcmd.head_sha(self.repo()), "",
                          "до перехода в репо ещё нет коммитов")
 
-        capture(store.set_state, store.db(), self.TASK, "in_dev",
-               "operator", "тест")
+        capture(lambda: store.set_state(
+            store.db(), self.TASK, "in_dev", "operator",
+            expected_state="spec_writing", detail="тест"))
 
         sha = gitcmd.head_sha(self.repo())
         self.assertNotEqual(sha, "")
@@ -218,8 +219,9 @@ class ExternalTransitionCommitsTest(TmpRootTest):
         self.assertIn("SPEC.md", shown)
 
     def test_sha_lands_in_the_journal(self):
-        capture(store.set_state, store.db(), self.TASK, "in_dev",
-               "operator", "тест")
+        capture(lambda: store.set_state(
+            store.db(), self.TASK, "in_dev", "operator",
+            expected_state="spec_writing", detail="тест"))
 
         sha = gitcmd.head_sha(self.repo())
         entries = [r["detail"] for r in store.task_steps(store.db(), self.TASK)
@@ -230,12 +232,14 @@ class ExternalTransitionCommitsTest(TmpRootTest):
         self.assertEqual(store.get_task(store.db(), self.TASK)["fixed_sha"], sha)
 
     def test_second_transition_without_changes_reuses_the_head(self):
-        capture(store.set_state, store.db(), self.TASK, "in_dev",
-               "operator", "тест")
+        capture(lambda: store.set_state(
+            store.db(), self.TASK, "in_dev", "operator",
+            expected_state="spec_writing", detail="тест"))
         first = gitcmd.head_sha(self.repo())
 
-        capture(store.set_state, store.db(), self.TASK, "review",
-               "operator", "тест")
+        capture(lambda: store.set_state(
+            store.db(), self.TASK, "review", "operator",
+            expected_state="in_dev", detail="тест"))
 
         self.assertEqual(gitcmd.head_sha(self.repo()), first,
                          "нечего коммитить — HEAD не двигается")
@@ -340,8 +344,9 @@ class ExternalIntegrityIncidentBlocksRunTest(TmpRootTest):
         (config.TASKS / task_id).mkdir(parents=True, exist_ok=True)
         (config.TASKS / task_id / "SPEC.md").write_text(
             "# SPEC заглушка\n", encoding="utf-8")
-        capture(store.set_state, store.db(), task_id, "in_dev",
-               "operator", "тест: вход в in_dev")
+        capture(lambda: store.set_state(
+            store.db(), task_id, "in_dev", "operator",
+            expected_state="spec_writing", detail="тест: вход в in_dev"))
         return store.get_task(store.db(), task_id)["fixed_sha"]
 
     def run_faked(self, task_id: str):
@@ -481,8 +486,9 @@ class ExternalApproveDoesNotCommitOthersWorkInProgressTest(TmpRootTest):
         tdir = self.repo() / "tasks" / task_id
         tdir.mkdir(parents=True)
         (tdir / "SPEC.md").write_text("# SPEC заглушка\n", encoding="utf-8")
-        capture(store.set_state, store.db(), task_id, "spec_gate",
-               "operator", "тест: вход в spec_gate")
+        capture(lambda: store.set_state(
+            store.db(), task_id, "spec_gate", "operator",
+            expected_state="spec_writing", detail="тест: вход в spec_gate"))
         return store.get_task(store.db(), task_id)["fixed_sha"]
 
     def write_uncommitted_wip(self, task_id: str) -> None:

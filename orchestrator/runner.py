@@ -151,7 +151,8 @@ def _cmd_run(conn, task_id: str) -> None:
     if incident is not None:
         store.update_task(conn, task_id, escalated_from=t["state"])
         store.set_state(conn, task_id, "escalated", "fsm",
-                        f"инцидент целостности: {incident}")
+                        expected_state=t["state"],
+                        detail=f"инцидент целостности: {incident}")
         print(f"[{task_id}] СТОП: инцидент целостности — {incident}")
         print(f"  разберись и: artel.py approve {task_id} <sha>")
         return
@@ -291,7 +292,8 @@ def _cmd_run(conn, task_id: str) -> None:
     # разработчика на ветке, где всё уже сделано.
     store.update_task(conn, task_id, escalated_from=t["state"])
     store.set_state(conn, task_id, "escalated", "fsm",
-                    f"агент не отработал за {config.AGENT_ATTEMPTS} попытки: "
+                    expected_state=t["state"],
+                    detail=f"агент не отработал за {config.AGENT_ATTEMPTS} попытки: "
                     f"{reason}")
     print(f"  разберись по логам и: artel.py approve {task_id}  "
           f"(вернёт в {t['state']}, шаг повторится)")

@@ -118,7 +118,8 @@ def enforce_budget(conn, task_id: str, state: str) -> bool:
         # задачу из escalated надо туда, где она стояла, а не в разработку.
         store.update_task(conn, task_id, escalated_from=state)
         store.set_state(conn, task_id, "escalated", "fsm",
-                        f"бюджет исчерпан: ${spent:.2f} из ${budget:.2f}")
+                        expected_state=state,
+                        detail=f"бюджет исчерпан: ${spent:.2f} из ${budget:.2f}")
         print(f"  дальше: artel.py budget {task_id} <usd>  (или kill)")
         return True
 
@@ -286,5 +287,5 @@ def _cmd_budget(conn, task_id: str, raw_usd: str) -> None:
         back = t["escalated_from"] or "in_dev"
         store.update_task(conn, task_id, escalated_from=None)
         store.set_state(conn, task_id, back, "operator",
-                        "бюджет поднят, продолжаем")
+                        expected_state=t["state"], detail="бюджет поднят, продолжаем")
         print(f"  дальше: artel.py run {task_id}")

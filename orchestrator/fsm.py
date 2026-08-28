@@ -366,7 +366,8 @@ def _cmd_advance(conn, task_id: str) -> bool:
                 store.update_task(conn, task_id, escalated_from="spec_writing")
                 store.set_state(
                     conn, task_id, "escalated", "fsm",
-                    f"analyst: батч вопросов по ТЗ — ветка {branch}:{q_rel}")
+                    expected_state=state,
+                    detail=f"analyst: батч вопросов по ТЗ — ветка {branch}:{q_rel}")
                 print(f"[{task_id}] эскалация analyst: см. ветку {branch}, "
                       f"{q_rel}")
                 return False
@@ -381,8 +382,9 @@ def _cmd_advance(conn, task_id: str) -> bool:
                 if guard_refuses(conn, task_id, questions):
                     return True
                 store.update_task(conn, task_id, escalated_from="spec_writing")
-                store.set_state(conn, task_id, "escalated", "fsm",
-                                f"analyst: батч вопросов по ТЗ — {questions}")
+                store.set_state(
+                    conn, task_id, "escalated", "fsm", expected_state=state,
+                    detail=f"analyst: батч вопросов по ТЗ — {questions}")
                 print(f"[{task_id}] эскалация analyst: см. {questions}")
                 return False
             meta = artifacts.frontmatter(tdir / "SPEC.md")
@@ -395,7 +397,7 @@ def _cmd_advance(conn, task_id: str) -> bool:
             # моменту, когда Оператор смотрит на неё на гейте SPEC.
             budget.apply_spec_budget(conn, t, meta)
             store.set_state(conn, task_id, "spec_gate", "fsm",
-                            "SPEC готов — ждёт approve")
+                            expected_state=state, detail="SPEC готов — ждёт approve")
         else:
             print(f"[{task_id}] SPEC.md ещё не ready — нечего продвигать")
         return False
@@ -468,21 +470,24 @@ def _cmd_advance(conn, task_id: str) -> bool:
                           card)
             print(f"[{task_id}] {card}")
             store.set_state(conn, task_id, "acceptance", "fsm",
-                            "ревью пройдено — приёмка Оператором "
+                            expected_state=state,
+                            detail="ревью пройдено — приёмка Оператором "
                             "(по критериям SPEC)")
         elif status == "changes_requested":
             iters = t["review_iters"] + 1
             if iters >= config.LIMIT_REVIEW_ITERS:
                 store.set_state(conn, task_id, "escalated", "fsm",
-                                f"лимит ревью "
+                                expected_state=state,
+                                detail=f"лимит ревью "
                                 f"{config.LIMIT_REVIEW_ITERS} исчерпан")
             else:
                 store.update_task(conn, task_id, review_iters=iters)
                 store.set_state(conn, task_id, "in_dev", "fsm",
-                                f"замечания ревью, итерация {iters}")
+                                expected_state=state,
+                                detail=f"замечания ревью, итерация {iters}")
         elif status == "escalate":
             store.set_state(conn, task_id, "escalated", "fsm",
-                            "эскалация от ревьювера")
+                            expected_state=state, detail="эскалация от ревьювера")
         return False
 
     elif state == "tests_writing":
@@ -499,7 +504,8 @@ def _cmd_advance(conn, task_id: str) -> bool:
                                for n, reason in sorted(escalations.items()))
             store.update_task(conn, task_id, escalated_from="tests_writing")
             store.set_state(conn, task_id, "escalated", "fsm",
-                            f"test_author: критерий неисполним тестом — "
+                            expected_state=state,
+                            detail=f"test_author: критерий неисполним тестом — "
                             f"{detail}")
             print(f"[{task_id}] эскалация test_author: {detail}")
             return False
@@ -514,8 +520,8 @@ def _cmd_advance(conn, task_id: str) -> bool:
             print(f"  дальше: допиши {tdir / 'acceptance_tests'} и повтори "
                   f"artel.py advance {task_id}")
             return False
-        store.set_state(conn, task_id, "in_dev", "fsm",
-                        "приёмочные тесты готовы — трассируемость AC "
+        store.set_state(conn, task_id, "in_dev", "fsm", expected_state=state,
+                        detail="приёмочные тесты готовы — трассируемость AC "
                         "пройдена")
         # Лок (требование 5): значение, которое set_state только что
         # посчитал в fixed_sha (T021), становится планкой acceptance_tests/
@@ -588,7 +594,7 @@ def _cmd_advance(conn, task_id: str) -> bool:
                           f"либо эскалируй разногласие Оператору")
                     return False
             store.set_state(conn, task_id, "review", "fsm",
-                            "MR готов — прогон ревьювера")
+                            expected_state=state, detail="MR готов — прогон ревьювера")
         else:
             print(f"[{task_id}] PLAN.md не ready — разработчик ещё работает")
         return False
@@ -690,15 +696,17 @@ def _cmd_approve(conn, task_id: str, sha: str | None) -> None:
                       f"SPEC schema_version "
                       f"{meta.get('schema_version', 1)} — без AC-разметки, "
                       f"tests_writing недоступна")
-            store.set_state(conn, task_id, "in_dev", "operator", detail)
+            store.set_state(conn, task_id, "in_dev", "operator",
+                            expected_state=state, detail=detail)
             print(f"  дальше: artel.py run {task_id}  (запуск разработчика)")
         else:
             store.set_state(conn, task_id, "tests_writing", "operator",
-                            "гейт SPEC пройден — приёмочные тесты до кода")
+                            expected_state=state,
+                            detail="гейт SPEC пройден — приёмочные тесты до кода")
             print(f"  дальше: artel.py run {task_id}  (запуск test_author)")
     elif state == "acceptance":
         store.set_state(conn, task_id, "merge_gate", "operator",
-                        "приёмка пройдена")
+                        expected_state=state, detail="приёмка пройдена")
         print(f"  дальше: artel.py approve {task_id}  (выполнит merge)")
     elif state == "merge_gate":
         branch = t["branch"]
@@ -764,7 +772,7 @@ def _cmd_approve(conn, task_id: str, sha: str | None) -> None:
                           push.stderr.strip()[:500])
             sys.exit(f"merge упал на git push:\n{push.stderr}")
         store.set_state(conn, task_id, "done", "orchestrator",
-                        f"смержено: {branch}")
+                        expected_state=state, detail=f"смержено: {branch}")
         # Worktree задачи отслужил (SPEC T045, требование 5, AC-6):
         # смержено, дальше агентным шагам там делать нечего.
         note = workspace.remove(task_id)
@@ -778,7 +786,7 @@ def _cmd_approve(conn, task_id: str, sha: str | None) -> None:
         back = t["escalated_from"] or "in_dev"
         store.update_task(conn, task_id, escalated_from=None)
         store.set_state(conn, task_id, back, "operator",
-                        "эскалация разрешена, продолжаем")
+                        expected_state=state, detail="эскалация разрешена, продолжаем")
         print(f"  дальше: artel.py run {task_id}")
     else:
         print(f"[{task_id}] в состоянии {state} нечего подтверждать")
@@ -800,14 +808,17 @@ def cmd_reject(task_id: str, reason: str, session_id: str | None = None) -> None
 
 def _cmd_reject(conn, task_id: str, reason: str) -> None:
     t = store.get_task(conn, task_id)
-    if t["state"] != "acceptance":
+    state = t["state"]
+    if state != "acceptance":
         sys.exit(f"[{task_id}] reject применим только в acceptance "
-                 f"(сейчас {t['state']})")
+                 f"(сейчас {state})")
     rejects = t["accept_rejects"] + 1
     if rejects > config.LIMIT_ACCEPT_REJECTS:
         store.set_state(conn, task_id, "escalated", "fsm",
-                        f"лимит отказов приёмки исчерпан: {reason}")
+                        expected_state=state,
+                        detail=f"лимит отказов приёмки исчерпан: {reason}")
     else:
         store.update_task(conn, task_id, accept_rejects=rejects)
         store.set_state(conn, task_id, "in_dev", "operator",
-                        f"приёмка отклонена: {reason}")
+                        expected_state=state,
+                        detail=f"приёмка отклонена: {reason}")

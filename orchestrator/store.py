@@ -367,8 +367,63 @@ def journal(conn, task_id: str, actor: str, action: str, detail: str = "") -> No
     conn.commit()
 
 
-def set_state(conn, task_id: str, state: str, actor: str, detail: str = "") -> None:
-    update_task(conn, task_id, state=state, updated_at=now())
+class CasConflict(Exception):
+    """Проигрыш CAS-перехода `set_state`: строка уже в другом состоянии
+    (SPEC T050, требования 3-4).
+
+    `actual` — состояние, реально прочитанное из БД сразу после проигрыша:
+    `kill` (единственный вызыватель, которому SPEC разрешает повторять,
+    требование 6) берёт его как `expected_state` следующей попытки без
+    лишнего `get_task`.
+    """
+
+    def __init__(self, task_id: str, expected: str, actual: str) -> None:
+        self.task_id = task_id
+        self.expected = expected
+        self.actual = actual
+        super().__init__(f"[{task_id}] CAS-переход отклонён: ожидалось "
+                         f"{expected}, в БД {actual}")
+
+
+def set_state(conn, task_id: str, state: str, actor: str, *,
+              expected_state: str, detail: str = "") -> None:
+    """Атомарный переход `tasks.state` — единственная точка его мутации.
+
+    CAS (SPEC T050, требования 1-4): `expected_state` обязателен и
+    keyword-only — молчаливый дефолт («не проверять») свёл бы сверку на
+    нет для любого пропущенного вызова. Вызыватель обязан передать
+    состояние, которое сам прочитал и на основании которого принял
+    решение о переходе (требование 5) — не перечитывать его прямо перед
+    этим вызовом ради успеха сверки: тогда CAS перестаёт отличать
+    «решение было верным» от «проиграли гонку и подстроились под неё».
+
+    Проигрыш (строка уже не в `expected_state` — конкурентная сессия
+    успела перейти первой) не пишет ни в `journal`, ни хэш-фиксацию
+    (обе строки ниже проверки `rowcount`, требования 2-3, AC-2) и
+    бросает `CasConflict` с фактическим состоянием (требование 3, AC-3).
+    Не `sys.exit` — `store.py` остаётся листом графа импортов, а
+    `sys.exit` сделал бы проигрыш неперехватываемым даже для `kill`,
+    которому требование 6 прямо предписывает перехват и повтор.
+
+    `updated_at` — с точностью до микросекунд, не через `now()`
+    (секундная): переход и предшествующая ему запись строки (`insert_task`/
+    `update_task`) регулярно попадают в одну и ту же секунду в тестах и
+    под нагрузкой, а AC-4 требует, чтобы именно `updated_at` менялся
+    вместе со `state` при каждом успешном CAS. `now()` (секундная
+    точность) остаётся общим форматом для `leases.heartbeat_ts`/
+    `steps.ts` — его строго парсит `strptime` за пределами этого файла
+    (`lease._age_seconds` и приёмочный тест tasks/T044); `tasks.updated_at`
+    обратно не парсится нигде в кодовой базе, так что более точный формат
+    именно здесь ничего не ломает.
+    """
+    stamp = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S.%fZ")
+    cur = conn.execute(
+        "UPDATE tasks SET state=?, updated_at=? WHERE id=? AND state=?",
+        (state, stamp, task_id, expected_state))
+    conn.commit()
+    if cur.rowcount == 0:
+        actual = get_task(conn, task_id)["state"]
+        raise CasConflict(task_id, expected_state, actual)
     journal(conn, task_id, actor, f"state -> {state}", detail)
     print(f"[{task_id}] -> {state}" + (f"  ({detail})" if detail else ""))
     record_fixation(conn, task_id)
