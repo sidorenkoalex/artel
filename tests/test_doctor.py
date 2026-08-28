@@ -30,7 +30,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from orchestrator import (alerts, budget, catalog, config, doctor,  # noqa: E402
                           gitcmd, projects, runner, spend, store)
-from tests.sandbox import TmpRootTest, capture, fake_git  # noqa: E402
+from tests.sandbox import (TmpRootTest, capture, claude_only_popen,  # noqa: E402
+                           claude_only_run, fake_git)
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
@@ -113,33 +114,6 @@ class FakeAgentProc:
 
 def result_event(usd: float) -> str:
     return f'{{"type":"result","total_cost_usd":{usd},"usage":{{}}}}\n'
-
-
-REAL_RUN = subprocess.run
-REAL_POPEN = subprocess.Popen
-
-
-def claude_only_run(claude_stdout: str, claude_returncode: int = 0):
-    """`subprocess.run` side_effect: отвечает только на `claude ...`, остальное
-    (`git config --get ...` внутри `gitcmd.git`, тот же общий модуль
-    `subprocess`) уходит в настоящий `subprocess.run` — та же ловушка, что
-    и с `Popen`: подмена атрибута `subprocess.run` глобальна на модуль.
-    """
-    def run(args, **kwargs):
-        if args and args[0] == "claude":
-            return subprocess.CompletedProcess(args, claude_returncode,
-                                               claude_stdout, "")
-        return REAL_RUN(args, **kwargs)
-    return run
-
-
-def claude_only_popen(fake_proc):
-    """Аналог `claude_only_run` для `subprocess.Popen` (см. `doctor.live_smoke`)."""
-    def popen(cmd, *args, **kwargs):
-        if cmd and cmd[0] == "claude":
-            return fake_proc
-        return REAL_POPEN(cmd, *args, **kwargs)
-    return popen
 
 
 class _DoctorTmpRootTest(TmpRootTest):
@@ -1232,10 +1206,12 @@ class LiveSmokeTest(TmpRootTest):
         self.assertIn("стоимост", check.detail)
 
     def test_cli_not_found_fails(self):
+        real_popen = subprocess.Popen
+
         def popen(cmd, *args, **kwargs):
             if cmd and cmd[0] == "claude":
                 raise FileNotFoundError()
-            return REAL_POPEN(cmd, *args, **kwargs)
+            return real_popen(cmd, *args, **kwargs)
 
         with mock.patch.object(doctor.subprocess, "Popen", side_effect=popen):
             check = doctor.live_smoke(store.db())

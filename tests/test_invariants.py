@@ -34,7 +34,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from orchestrator import (artel, budget, catalog, ci, cleanup,  # noqa: E402
                           config, fsm, gitcmd, runner, store)
 from scripts import guard  # noqa: E402
-from tests.sandbox import capture  # noqa: E402
+from tests.sandbox import FakeProc, capture  # noqa: E402
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
@@ -153,34 +153,6 @@ class SpyRun:
     def git_subcommands(self) -> list[str]:
         """Подкоманды git по порядку: ['checkout', 'pull', 'merge', ...]."""
         return [c[1] for c in self.calls if len(c) > 1 and c[0] == "git"]
-
-
-class FakeStream:
-    """Пайп процесса: отдаёт заготовленные строки, помнит своё закрытие."""
-
-    def __init__(self, lines):
-        self.lines = iter(lines)
-        self.closed = False
-
-    def __iter__(self):
-        return self
-
-    def __next__(self) -> str:
-        return next(self.lines)
-
-    def close(self) -> None:
-        self.closed = True
-
-
-class FakeProc:
-    """Процесс агента: отдаёт заготовленные строки, wait() — сразу rc."""
-
-    def __init__(self, lines, returncode: int = 0):
-        self.stdout = FakeStream(lines)
-        self.returncode = returncode
-
-    def wait(self, timeout=None) -> int:
-        return self.returncode
 
 
 class FsmTest(unittest.TestCase):

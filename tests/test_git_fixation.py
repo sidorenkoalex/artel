@@ -36,7 +36,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from orchestrator import (catalog, config, fixation, fsm,  # noqa: E402
                           gitcmd, projects, runner, store, workspace)
-from tests.sandbox import TmpRootTest, capture  # noqa: E402
+from tests.sandbox import FakeProc, TmpRootTest, capture, claude_only_popen  # noqa: E402
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
@@ -91,33 +91,6 @@ schema_version: 1
 
 ## Влияние на систему
 """
-
-
-class FakeStream:
-    """Пайп процесса: отдаёт заготовленные строки, помнит своё закрытие."""
-
-    def __init__(self, lines):
-        self.lines = iter(lines)
-
-    def __iter__(self):
-        return self
-
-    def __next__(self) -> str:
-        return next(self.lines)
-
-    def close(self) -> None:
-        pass
-
-
-class FakeProc:
-    """Процесс агента: отдаёт заготовленные строки, wait() — сразу rc."""
-
-    def __init__(self, lines, returncode: int = 0):
-        self.stdout = FakeStream(lines)
-        self.returncode = returncode
-
-    def wait(self, timeout=None) -> int:
-        return self.returncode
 
 
 class _GitFixationTmpRootTest(TmpRootTest):
@@ -352,15 +325,9 @@ class ExternalIntegrityIncidentBlocksRunTest(TmpRootTest):
     def run_faked(self, task_id: str):
         """Тот же приём, что и `RealPultGitTest.run_faked`: настоящий git,
         подложный только запуск `claude`."""
-        real_popen = subprocess.Popen
-
-        def side_effect(cmd, *args, **kwargs):
-            if cmd and cmd[0] == "claude":
-                return FakeProc(["готово\n"])
-            return real_popen(cmd, *args, **kwargs)
-
-        with mock.patch.object(runner, "spawn_agent",
-                               side_effect=side_effect) as popen:
+        with mock.patch.object(
+                runner, "spawn_agent",
+                side_effect=claude_only_popen(FakeProc(["готово\n"]))) as popen:
             out = capture(runner.cmd_run, task_id)
         return out, popen
 
@@ -652,15 +619,9 @@ class RealPultGitTest(unittest.TestCase):
         не переживёт `Popen`, не умеющий быть контекстным менеджером.
         `side_effect` пропускает наружу только запуск `claude`.
         """
-        real_popen = subprocess.Popen
-
-        def side_effect(cmd, *args, **kwargs):
-            if cmd and cmd[0] == "claude":
-                return FakeProc(["готово\n"])
-            return real_popen(cmd, *args, **kwargs)
-
-        with mock.patch.object(runner, "spawn_agent",
-                               side_effect=side_effect) as popen:
+        with mock.patch.object(
+                runner, "spawn_agent",
+                side_effect=claude_only_popen(FakeProc(["готово\n"]))) as popen:
             out = self.capture(runner.cmd_run, self.TASK)
         return out, popen
 
