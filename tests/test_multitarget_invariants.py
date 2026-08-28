@@ -35,7 +35,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from orchestrator import (budget, catalog, cleanup, config, fsm,  # noqa: E402
                           runner, spend, store, workspace)
-from tests.sandbox import TmpRootTest, capture, fake_git  # noqa: E402
+from tests.sandbox import FakeProc, TmpRootTest, capture, fake_git  # noqa: E402
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
@@ -59,33 +59,6 @@ schema_version: 1
 
 ## Не входит
 """
-
-
-class FakeStream:
-    """Пайп процесса: отдаёт заготовленные строки, помнит своё закрытие."""
-
-    def __init__(self, lines):
-        self.lines = iter(lines)
-
-    def __iter__(self):
-        return self
-
-    def __next__(self) -> str:
-        return next(self.lines)
-
-    def close(self) -> None:
-        pass
-
-
-class FakeProc:
-    """Процесс агента: отдаёт заготовленные строки, wait() — сразу rc."""
-
-    def __init__(self, lines, returncode: int = 0):
-        self.stdout = FakeStream(lines)
-        self.returncode = returncode
-
-    def wait(self, timeout=None) -> int:
-        return self.returncode
 
 
 def fake_git_config(*args: str) -> subprocess.CompletedProcess:

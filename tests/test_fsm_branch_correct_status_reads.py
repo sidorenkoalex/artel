@@ -24,6 +24,7 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from orchestrator import catalog, config, fsm, gitcmd, store, workspace  # noqa: E402
+from tests.sandbox import ALL_CONFIG_ATTRS, TmpRootTest  # noqa: E402
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
@@ -87,7 +88,7 @@ schema_version: 2
 """
 
 
-class RealGitBranchTest(unittest.TestCase):
+class RealGitBranchTest(TmpRootTest):
     """ROOT — свежий репозиторий с main; `cmd_new` (SPEC T048) сам заводит
     РЕАЛЬНУЮ ветку/worktree задачи T001 и коммитит в неё шаблонный
     SPEC.md — ROOT остаётся на main. Дальнейшие артефакты этот тест
@@ -114,12 +115,9 @@ class RealGitBranchTest(unittest.TestCase):
 
         self.patches = contextlib.ExitStack()
         self.addCleanup(self.patches.close)
-        for attr, value in (("ROOT", self.root),
-                            ("DB", self.root / ".artel" / "state.db"),
-                            ("TASKS", self.root / "tasks"),
-                            ("LOGS", self.root / ".artel" / "logs"),
-                            ("WORKTREES", self.root / ".artel" / "worktrees")):
-            self.patches.enter_context(mock.patch.object(config, attr, value))
+        for attr in ALL_CONFIG_ATTRS:
+            self.patches.enter_context(
+                mock.patch.object(config, attr, self._patched_path(attr)))
 
         self.capture(catalog.cmd_init)
         self.capture(catalog.cmd_new, "Ветко-корректные чтения статусов")

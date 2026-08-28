@@ -1,4 +1,5 @@
-"""Общая тестовая песочница (SPEC T037, требование 1).
+"""Общая тестовая песочница (SPEC T037, требование 1; SPEC T061 —
+второй заход: `FakeProc` и claude-only side_effect).
 
 `TmpRootTest`, `capture` и `fake_git` копировались по 9/17/8 тестовым
 файлам с расхождениями в наборе подменяемых путей `config` —
@@ -7,6 +8,11 @@
 не полный набор или доп. подготовка (git-заглушка, `cmd_init`, копия
 `skills/`/`templates/`), наследуют `TmpRootTest` и переопределяют
 `PATCHED_ATTRS`/`setUp` — см. tasks/T037/PLAN.md, «Таблица переносов».
+
+`FakeProc` и пара `claude_only_run`/`claude_only_popen` копировались
+той же дорогой (SPEC T061, находка CR-2026-08-28-2, ★5): подмена
+только запуска `claude`, настоящий git — тем же общим `subprocess`,
+что и у `runner`/`gitcmd`.
 """
 import io
 import subprocess
@@ -68,6 +74,75 @@ def sync_spec_from_worktree(task_id: str) -> None:
     dest_dir.mkdir(parents=True, exist_ok=True)
     (dest_dir / "SPEC.md").write_text(
         wt_spec.read_text(encoding="utf-8"), encoding="utf-8")
+
+
+def fake_git_for(responses: dict) -> callable:
+    """Параметризуемая заглушка `gitcmd.git`: подкоманда (первый позиционный
+    аргумент вызова) ищется в `responses` и отвечает фиксированным
+    `(returncode, stdout, stderr)`; всё остальное — чисто (rc=0, пустой
+    вывод), без git-идентичности и отказа `rev-parse --verify`, которые
+    несёт `fake_git` (эти сценарии — сверка свежести карты/её регенерация
+    в tests/test_brief.py — идентичности и веток не касаются)."""
+    def fake(*args: str) -> subprocess.CompletedProcess:
+        if args and args[0] in responses:
+            rc, out, err = responses[args[0]]
+            return subprocess.CompletedProcess(list(args), rc, out, err)
+        return subprocess.CompletedProcess(list(args), 0, "", "")
+    return fake
+
+
+class _FakeStream:
+    """Пайп процесса: отдаёт заготовленные строки, помнит своё закрытие."""
+
+    def __init__(self, lines):
+        self.lines = iter(lines)
+        self.closed = False
+
+    def __iter__(self):
+        return self
+
+    def __next__(self) -> str:
+        return next(self.lines)
+
+    def close(self) -> None:
+        self.closed = True
+
+
+class FakeProc:
+    """Процесс агента: отдаёт заготовленные строки, wait() — сразу rc."""
+
+    def __init__(self, lines, returncode: int = 0):
+        self.stdout = _FakeStream(lines)
+        self.returncode = returncode
+
+    def wait(self, timeout=None) -> int:
+        return self.returncode
+
+
+_REAL_RUN = subprocess.run
+_REAL_POPEN = subprocess.Popen
+
+
+def claude_only_run(claude_stdout: str, claude_returncode: int = 0):
+    """`subprocess.run` side_effect: отвечает только на `claude ...`, остальное
+    (например, `git config --get ...` внутри `gitcmd.git` — тот же общий
+    модуль `subprocess`) уходит в настоящий `subprocess.run`: подмена
+    атрибута `subprocess.run` глобальна на модуль."""
+    def run(args, **kwargs):
+        if args and args[0] == "claude":
+            return subprocess.CompletedProcess(args, claude_returncode,
+                                               claude_stdout, "")
+        return _REAL_RUN(args, **kwargs)
+    return run
+
+
+def claude_only_popen(fake_proc):
+    """Аналог `claude_only_run` для `subprocess.Popen`/`runner.spawn_agent`."""
+    def popen(cmd, *args, **kwargs):
+        if cmd and cmd[0] == "claude":
+            return fake_proc
+        return _REAL_POPEN(cmd, *args, **kwargs)
+    return popen
 
 
 def fake_git(*args: str) -> subprocess.CompletedProcess:
