@@ -718,6 +718,58 @@ def confirm_fixation(conn, task_id: str, sha: str | None) -> bool:
     return True
 
 
+def _touches_protected_path(path: str) -> bool:
+    return any(path == p or path.startswith(p) for p in config.PROTECTED_PATHS)
+
+
+def _handle_merge_conflict(conn, task_id: str, state: str, branch: str,
+                           merge_res) -> None:
+    """Разбор провала `git merge --no-ff <branch>` при `approve` из
+    `merge_gate` (SPEC T052, требования 2-3; AC-3, AC-4, AC-5).
+
+    Отличает содержательный конфликт (git начал merge, но не смог
+    разрешить его сам) от инфраструктурного отказа: список файлов с
+    неразрешённым конфликтом (`git diff --name-only --diff-filter=U`)
+    пуст или git не ответил — конфликта в СОДЕРЖИМОМ нет, отказ прежний
+    (`sys.exit`, задача остаётся в `merge_gate`, требование 3/AC-5).
+
+    Список не пуст — содержательный конфликт: `git merge --abort`
+    возвращает main в чистое состояние (требование 5), а задача уходит
+    в `in_dev` (AC-3) либо, если конфликт задевает защищённый путь
+    (`config.PROTECTED_PATHS`), в `escalated` (AC-4) — оба перехода
+    несут перечень конфликтующих файлов в журнал через `detail`
+    `store.set_state`.
+    """
+    store.journal(conn, task_id, "orchestrator", "merge FAILED",
+                  merge_res.stderr.strip()[:500])
+    conflicts = gitcmd.git("diff", "--name-only", "--diff-filter=U")
+    files = sorted(set(conflicts.stdout.split())) \
+        if conflicts is not None and conflicts.returncode == 0 else []
+    if not files:
+        sys.exit(f"merge упал на git merge --no-ff {branch}:\n"
+                 f"{merge_res.stderr}")
+
+    abort = gitcmd.git("merge", "--abort")
+    abort_note = ""
+    if abort is None or abort.returncode != 0:
+        abort_note = (f"; git merge --abort не удался: "
+                      f"{abort.stderr.strip()[:200] if abort is not None else 'git не ответил'}")
+
+    file_list = ", ".join(files)
+    protected = [f for f in files if _touches_protected_path(f)]
+    if protected:
+        detail = (f"конфликт merge затрагивает защищённый путь "
+                  f"({', '.join(protected)}); конфликтующие файлы: "
+                  f"{file_list}{abort_note}")
+        store.set_state(conn, task_id, "escalated", "fsm",
+                        expected_state=state, detail=detail)
+    else:
+        detail = (f"содержательный конфликт merge — возврат в разработку; "
+                  f"конфликтующие файлы: {file_list}{abort_note}")
+        store.set_state(conn, task_id, "in_dev", "fsm",
+                        expected_state=state, detail=detail)
+
+
 def cmd_approve(task_id: str, sha: str | None = None,
                session_id: str | None = None) -> None:
     """Берёт lease задачи перед работой (SPEC T044, требование 2)."""
@@ -824,14 +876,17 @@ def _cmd_approve(conn, task_id: str, sha: str | None) -> None:
                      f"{branch} и повтори: artel.py approve {task_id}")
         print(f"[{task_id}] {note}")
         for cmd in (["git", "checkout", config.MAIN_BRANCH],
-                    ["git", "pull", "--ff-only"],
-                    ["git", "merge", "--no-ff", branch, "-m",
-                     f"{task_id}: merge {branch}"]):
+                    ["git", "pull", "--ff-only"]):
             res = gitcmd.git(*cmd[1:])
             if res.returncode != 0:
                 store.journal(conn, task_id, "orchestrator", "merge FAILED",
                               res.stderr.strip()[:500])
                 sys.exit(f"merge упал на {' '.join(cmd)}:\n{res.stderr}")
+        merge_res = gitcmd.git("merge", "--no-ff", branch, "-m",
+                               f"{task_id}: merge {branch}")
+        if merge_res.returncode != 0:
+            _handle_merge_conflict(conn, task_id, state, branch, merge_res)
+            return
         # sha КОММИТА МЕРЖА — сразу после успешного merge, ДО любых
         # последующих служебных коммитов (карты, RETRO): адрес артефактов
         # RETRO (SPEC T043, требование 8) обязан указывать именно на этот
@@ -887,9 +942,18 @@ def cmd_reject(task_id: str, reason: str, session_id: str | None = None) -> None
 def _cmd_reject(conn, task_id: str, reason: str) -> None:
     t = store.get_task(conn, task_id)
     state = t["state"]
+    if state == "merge_gate":
+        # Возврат из merge_gate (SPEC T052, требование 1, AC-1): один
+        # переход в in_dev с причиной Оператора в журнале — не гейт
+        # приёмки, accept_rejects её лимитом не считает (AC-7: счётчики
+        # итераций других циклов возвратом из merge_gate не трогаются).
+        store.set_state(conn, task_id, "in_dev", "operator",
+                        expected_state=state,
+                        detail=f"возврат из merge_gate: {reason}")
+        return
     if state != "acceptance":
-        sys.exit(f"[{task_id}] reject применим только в acceptance "
-                 f"(сейчас {state})")
+        sys.exit(f"[{task_id}] reject применим только в acceptance или "
+                 f"merge_gate (сейчас {state})")
     rejects = t["accept_rejects"] + 1
     if rejects > config.LIMIT_ACCEPT_REJECTS:
         store.set_state(conn, task_id, "escalated", "fsm",
