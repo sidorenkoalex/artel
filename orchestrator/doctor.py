@@ -223,11 +223,28 @@ def isolation_smoke(role: str = "developer") -> Check:
     $HOME Оператора — офлайн-смоук им не пользуется вовсе) и убеждается,
     что итоговое окружение роли этот каталог не унаследовало.
 
-    project-слой: `role_cwd()` эфемерного target'а — безопасный для записи
-    каталог `.artel/projects/<synthetic>/workspace/` (gitignored, не
-    реальный клон), маркер в нём проверяется на промпт роли — тот
-    собирается только из `config.ROOT/skills/*.md` (`runner.cmd_run`),
-    cwd в сборку не входит структурно.
+    project-слой (CLAUDE.md рабочего каталога): `role_cwd()` эфемерного
+    target'а — безопасный для записи каталог `.artel/projects/
+    <synthetic>/workspace/` (gitignored, не реальный клон), маркер в нём
+    проверяется на промпт роли — тот собирается только из
+    `config.ROOT/skills/*.md` (`runner.cmd_run`), cwd в сборку не входит
+    структурно.
+
+    project-/local-хуки (SPEC T058, инцидент T046): реальный `claude`
+    шага роли резолвит `.claude/settings.json`/`.claude/settings.local.
+    json` от cwd через git независимо от того, что несёт промпт, —
+    проверка выше это не ловит. Здесь — структурная, офлайн проверка
+    (без реального запуска `claude`, тем же приёмом, что и два маркера
+    выше): единственная защита от этого вектора — флаг `--setting-
+    sources`, реально попадающий в argv `run_agent_once`
+    (`orchestrator/runner.py:572`) из `config.AGENT_SETTING_SOURCES`;
+    здесь сверяется, что сама константа не включает `project`/`local`.
+    Дискриминирующую половину критерия (канарейка реально не/срабатывает)
+    проверяют локальные приёмочные `tasks/T058/acceptance_tests/
+    test_ac1_ac2_role_hook_isolation.py` — они гоняют настоящий `claude`
+    против настоящей канарейки на реально построенных `cmd`/`cwd`/`env`
+    шага и не дублируются здесь намеренно (см. PLAN.md T058, «Подход»):
+    живой прогон на каждый `doctor` не офлайн и не бесплатен.
     """
     leaks = []
 
@@ -265,10 +282,19 @@ def isolation_smoke(role: str = "developer") -> Check:
     finally:
         shutil.rmtree(config.PROJECTS / ISOLATION_SMOKE_TARGET, ignore_errors=True)
 
+    excluded_sources = {"project", "local"}
+    active_sources = {s.strip() for s in config.AGENT_SETTING_SOURCES.split(",")}
+    if active_sources & excluded_sources:
+        leaks.append("project-хук: --setting-sources шага роли не "
+                    f"исключает {sorted(active_sources & excluded_sources)} "
+                    "— project-/local-слой клиентских настроек "
+                    "(включая хуки) достижим шагом роли")
+
     if leaks:
         return Check("isolation-smoke", "fail", "; ".join(leaks))
     return Check("isolation-smoke", "ok",
-                 "маркеры project-/user-слоя не достигли env/промпта роли")
+                 "маркеры project-/user-слоя не достигли env/промпта роли, "
+                 "project-/local-хуки исключены из resolve-сурсов шага")
 
 
 # --- живой смоук CLI (требование 3) -------------------------------------

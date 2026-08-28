@@ -411,6 +411,25 @@ class IsolationSmokeTest(TmpRootTest):
         self.assertEqual(check.status, "fail")
         self.assertIn("промпт роли", check.detail)
 
+    def test_project_hook_setting_source_leak_is_caught(self):
+        """Мутация третьего класса (SPEC T058): `--setting-sources` шага
+        роли перестал исключать project-/local-слой (в т.ч. хуки, инцидент
+        T046) — смоук обязан это поймать."""
+        with mock.patch.object(doctor.config, "AGENT_SETTING_SOURCES",
+                               "user,project"):
+            check = doctor.isolation_smoke()
+
+        self.assertEqual(check.status, "fail")
+        self.assertIn("project-хук", check.detail)
+
+    def test_local_setting_source_leak_is_also_caught(self):
+        with mock.patch.object(doctor.config, "AGENT_SETTING_SOURCES",
+                               "local"):
+            check = doctor.isolation_smoke()
+
+        self.assertEqual(check.status, "fail")
+        self.assertIn("project-хук", check.detail)
+
 
 class RecoveryCheckTest(TmpRootTest):
     """Критерий 4: recovery-сверка ловит расхождение sha и грязный репо."""

@@ -155,6 +155,21 @@ class PromptChannelTest(unittest.TestCase):
                     self.assertFalse(any(word in arg for arg in argv),
                                      f"'{word[:20]}' попал в argv: {argv}")
 
+    def test_setting_sources_excludes_project_and_local_layer(self):
+        """SPEC T058, требование 1: агентный шаг не читает project-/local-
+        слой клиентских настроек репозитория (инцидент T046) — `claude`
+        запускается с `--setting-sources`, исключающим оба источника."""
+        for state in ("in_dev", "review"):
+            with self.subTest(состояние=state):
+                argv = self.argv_of(self.run_agent(state))
+
+                self.assertIn("--setting-sources", argv)
+                value = argv[argv.index("--setting-sources") + 1]
+                sources = {s.strip() for s in value.split(",")}
+                self.assertFalse(
+                    sources & {"project", "local"},
+                    f"--setting-sources {value!r} не исключает project/local")
+
     def test_the_process_gets_the_prompt_on_stdin(self):
         popen = self.run_agent()
 
