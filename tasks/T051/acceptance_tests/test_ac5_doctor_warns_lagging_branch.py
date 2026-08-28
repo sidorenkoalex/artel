@@ -13,6 +13,19 @@ from orchestrator import config, doctor, runner, store  # noqa: E402
 # 8) — устойчиво к тому, каким именно developer выберет N в этих рамках.
 LAG_COMMITS = 25
 
+REAL_RUN = subprocess.run
+
+
+def _claude_only_run(args, **kwargs):
+    """Фейк только для `claude ...`; git и остальное — в настоящий
+    `subprocess.run`. `doctor.subprocess` и `gitcmd.subprocess` — один
+    модуль, безусловная глушилка душила и git-вызовы сверки свежести
+    (образец — `tests/test_doctor.py::claude_only_run`; правка Оператора
+    по эскалации T051, вопрос 2)."""
+    if args and args[0] == "claude":
+        return subprocess.CompletedProcess(list(args), 1, "", "")
+    return REAL_RUN(args, **kwargs)
+
 
 class DoctorWarnsLaggingActiveBranchTest(RealGitFreshnessTest):
 
@@ -33,7 +46,7 @@ class DoctorWarnsLaggingActiveBranchTest(RealGitFreshnessTest):
                               lambda slot: "tok-test"), \
                 mock.patch.object(
                     doctor.subprocess, "run",
-                    return_value=subprocess.CompletedProcess([], 1, "", "")), \
+                    side_effect=_claude_only_run), \
                 mock.patch.object(doctor.subprocess, "Popen",
                                   side_effect=FileNotFoundError):
             return doctor.all_checks(store.db())
