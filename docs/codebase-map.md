@@ -1,5 +1,5 @@
 ---
-built_at_sha: 7d1544f682de489a48f00893d491ffa67fd703de
+built_at_sha: 2c89af90b5988dbfa75ab737a715109c24955fdb
 ---
 
 # Codebase-map пульта
@@ -172,7 +172,7 @@ built_at_sha: 7d1544f682de489a48f00893d491ffa67fd703de
 
 **Импортирует:** `orchestrator/config.py`, `orchestrator/gitcmd.py`, `orchestrator/lease.py`, `orchestrator/store.py`, `orchestrator/workspace.py`
 
-**Импортируется:** `orchestrator/artel.py`, `orchestrator/retro.py`, `tests/test_invariants.py`, `tests/test_kill_cleanup.py`, `tests/test_multitarget_invariants.py`
+**Импортируется:** `orchestrator/artel.py`, `orchestrator/retro.py`, `tests/test_invariants.py`, `tests/test_kill_cleanup.py`, `tests/test_multitarget_invariants.py`, `tests/test_retro.py`
 
 ## orchestrator/coldstart.py
 
@@ -984,7 +984,7 @@ built_at_sha: 7d1544f682de489a48f00893d491ffa67fd703de
 
 **Публичные функции:** (нет)
 
-**Импортирует:** `orchestrator/config.py`, `orchestrator/retro.py`, `orchestrator/store.py`, `tests/sandbox.py`
+**Импортирует:** `orchestrator/cleanup.py`, `orchestrator/config.py`, `orchestrator/retro.py`, `orchestrator/store.py`, `tests/sandbox.py`
 
 **Импортируется:** —
 
