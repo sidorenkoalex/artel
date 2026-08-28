@@ -32,7 +32,8 @@ CREATE TABLE IF NOT EXISTS tasks (
   reviewed_iter INTEGER DEFAULT 0, escalated_from TEXT,
   budget_usd REAL, spent_usd REAL DEFAULT 0, budget_source TEXT,
   target TEXT DEFAULT '{config.DEFAULT_TARGET}', fixed_sha TEXT,
-  tests_locked_sha TEXT, created_at TEXT, updated_at TEXT
+  tests_locked_sha TEXT, is_canary INTEGER DEFAULT 0,
+  created_at TEXT, updated_at TEXT
 );
 CREATE TABLE IF NOT EXISTS steps (
   id INTEGER PRIMARY KEY AUTOINCREMENT, task_id TEXT,
@@ -135,6 +136,11 @@ def migrate(conn: sqlite3.Connection) -> None:
     # SPEC версии 1, либо строка старше T023) — лок acceptance_tests/
     # сверять не с чем, тот же вырожденный случай, что и у fixed_sha.
     add_column(conn, "tasks", "tests_locked_sha", "TEXT")
+    # Пометка канареечной задачи (tasks/T065/SPEC.md, требование 6, правка
+    # Оператора 28.08): ТОЛЬКО колонка БД — title её не несёт (роль видит
+    # title в промпте, а канареечная задача обязана быть неотличимой от
+    # продуктовой ДЛЯ РОЛЕЙ). DEFAULT 0 — строки старше T065 не канареечные.
+    add_column(conn, "tasks", "is_canary", "INTEGER DEFAULT 0")
     conn.executescript(
         "CREATE TABLE IF NOT EXISTS task_counters ("
         "  target TEXT PRIMARY KEY, next_number INTEGER NOT NULL);")
@@ -290,13 +296,20 @@ def next_task_number(conn: sqlite3.Connection, target: str) -> int:
 
 def insert_task(conn: sqlite3.Connection, task_id: str, title: str,
                 state: str, branch: str, target: str,
-                budget_usd: float) -> None:
-    """Заводит строку задачи (команда `new`)."""
+                budget_usd: float, *, is_canary: bool = False) -> None:
+    """Заводит строку задачи (команда `new`).
+
+    `is_canary` — keyword-only, дефолт `False` не меняет поведение
+    существующих вызывателей (tasks/T065/SPEC.md, требование 6):
+    единственный, кто передаёт `True`, — `catalog.cmd_new(..., canary=True)`
+    из команды `canary`.
+    """
     stamp = now()
     conn.execute(
         "INSERT INTO tasks (id,title,state,branch,target,budget_usd,"
-        "created_at,updated_at) VALUES (?,?,?,?,?,?,?,?)",
-        (task_id, title, state, branch, target, budget_usd, stamp, stamp))
+        "is_canary,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?)",
+        (task_id, title, state, branch, target, budget_usd,
+         int(is_canary), stamp, stamp))
     conn.commit()
 
 
