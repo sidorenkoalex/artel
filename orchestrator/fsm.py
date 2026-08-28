@@ -433,10 +433,18 @@ def _tests_writing_ac_state(conn, task_id: str, branch: str,
     (`guard.scan_ac_content`/`traceability_errors_from_content`), так что
     результат не расходится по источнику файлов, только по тому, где их
     искать.
+
+    `errors` несёт и ошибки трассируемости AC (T023), и ошибки маркера
+    красноты (`guard.redness_marker_errors_from_files`/`scan_redness_markers`,
+    SPEC T064) — единственное место, где обе проверки подключены к выходу
+    именно из `tests_writing`: задача, чьё состояние это состояние уже
+    прошло, сюда больше не попадает (обратная совместимость T064,
+    требование 4, — структурно, через однонаправленность FSM).
     """
     if not gitcmd.on_foreign_branch(branch):
         tested, markers = guard.scan_acceptance_tests(tdir)
         errors = guard.acceptance_traceability_errors(tdir)
+        errors = errors + guard.scan_redness_markers(tdir)
         return tested, markers, errors
 
     spec_rel = f"tasks/{task_id}/SPEC.md"
@@ -453,16 +461,21 @@ def _tests_writing_ac_state(conn, task_id: str, branch: str,
         return None
 
     sources: list[str] = []
+    redness_files: list[tuple[str, str]] = []
     for p in paths:
         if not p.endswith(".py"):
             continue
         text, _ = gitcmd.show(branch, p)
-        if text is not None:
-            sources.append(text)
+        if text is None:
+            continue
+        sources.append(text)
+        if Path(p).name.startswith("test_"):
+            redness_files.append((p, text))
     meta = yamlmini.frontmatter(spec_text) or {}
     tested, markers = guard.scan_ac_content(sources)
     errors = guard.traceability_errors_from_content(spec_text, meta, tested,
                                                      markers)
+    errors = errors + guard.redness_marker_errors_from_files(redness_files)
     return tested, markers, errors
 
 

@@ -8,7 +8,6 @@
 """
 import subprocess
 import sys
-import tempfile
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -16,27 +15,16 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from orchestrator import alerts, config, fsm, gitcmd, retro, store  # noqa: E402
+from tests.sandbox import TmpRootTest, fake_git  # noqa: E402
 
 
-def fake_git_clean(*args) -> subprocess.CompletedProcess:
-    return subprocess.CompletedProcess(list(args), 0, "", "")
-
-
-class GenerateAndCommitRetroTest(unittest.TestCase):
+class GenerateAndCommitRetroTest(TmpRootTest):
+    """Песочница: sandbox.TmpRootTest полным набором путей (SPEC T061, AC-3)."""
 
     TASK = "T900"
 
     def setUp(self):
-        tmp = tempfile.TemporaryDirectory()
-        self.addCleanup(tmp.cleanup)
-        self.root = Path(tmp.name)
-        for attr, value in (("ROOT", self.root),
-                            ("DB", self.root / ".artel" / "state.db"),
-                            ("TASKS", self.root / "tasks")):
-            patcher = mock.patch.object(config, attr, value)
-            patcher.start()
-            self.addCleanup(patcher.stop)
-
+        super().setUp()
         store.create_schema(store.db())
         self.conn = store.db()
         store.insert_task(self.conn, self.TASK, "Задача", "merge_gate",
@@ -163,7 +151,7 @@ class GenerateAndCommitRetroTest(unittest.TestCase):
         retro.retro_path(killed_id).parent.mkdir(parents=True, exist_ok=True)
         retro.retro_path(killed_id).write_text("уже есть\n", encoding="utf-8")
 
-        with mock.patch.object(gitcmd, "git", fake_git_clean):
+        with mock.patch.object(gitcmd, "git", fake_git):
             fsm._generate_and_commit_retro(self.conn, self.TASK, "a" * 40)
 
         self.assertEqual(
@@ -214,7 +202,7 @@ class GenerateAndCommitRetroTest(unittest.TestCase):
         store.journal(self.conn, killed_id, "operator", "state -> killed",
                      "kill switch")
 
-        with mock.patch.object(gitcmd, "git", fake_git_clean), \
+        with mock.patch.object(gitcmd, "git", fake_git), \
                 mock.patch.object(retro, "build_killed",
                                   side_effect=RuntimeError("бум долга")):
             fsm._generate_and_commit_retro(self.conn, self.TASK, "a" * 40)

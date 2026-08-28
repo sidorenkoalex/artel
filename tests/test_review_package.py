@@ -21,7 +21,7 @@ sys.path.insert(0, str(REPO))
 
 from orchestrator import (catalog, config, gitcmd, review,  # noqa: E402
                           runner, store)
-from tests.sandbox import capture, fake_git  # noqa: E402
+from tests.sandbox import FakeProc, capture, fake_git  # noqa: E402
 
 SPEC_MD = """---
 task: T001
@@ -145,34 +145,6 @@ class FakeGit:
                 list(args), 128, "",
                 f"fatal: path '{rel}' does not exist in '{args[1]}'")
         return subprocess.CompletedProcess(list(args), 0, self.files[rel], "")
-
-
-class FakeStream:
-    """Пайп процесса: отдаёт заготовленные строки, помнит своё закрытие."""
-
-    def __init__(self, lines):
-        self.lines = iter(lines)
-        self.closed = False
-
-    def __iter__(self):
-        return self
-
-    def __next__(self) -> str:
-        return next(self.lines)
-
-    def close(self) -> None:
-        self.closed = True
-
-
-class FakeProc:
-    """Процесс агента: отдаёт заготовленные строки, wait() — сразу rc."""
-
-    def __init__(self, lines, returncode: int = 0):
-        self.stdout = FakeStream(lines)
-        self.returncode = returncode
-
-    def wait(self, timeout=None) -> int:
-        return self.returncode
 
 
 class TruncateDiffTest(unittest.TestCase):
