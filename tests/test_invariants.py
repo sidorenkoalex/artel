@@ -379,12 +379,34 @@ class FsmStatesCoverTheCodeTest(unittest.TestCase):
 
 
 class MergeOnlyFromMergeGateTest(FsmTest):
-    """Инвариант: git merge выполняет только `approve` из merge_gate.
+    """Инвариант 12 (ред. ADR-0006): в main мержит только `approve` из
+    merge_gate.
 
     Источник: docs/design.md §2 (единственное право записи оркестратора —
     merge прошедшего гейты MR), §4 (ревью MR → merge — ручной гейт),
-    CLAUDE.md (мерж делает оркестратор, никакая роль — нет).
+    CLAUDE.md (мерж делает оркестратор, никакая роль — нет); ADR-0006 —
+    единственный merge вне гейта — актуализация ветки задачи от main
+    (сверка свежести T051): в worktree задачи (`-C`), вливает main,
+    ветку задачи в аргументах не упоминает, main не изменяет.
     """
+
+    @staticmethod
+    def _plain_args(call: list[str]) -> list[str]:
+        """argv git-вызова без пар `-C <путь>` / `-c <ключ=значение>`.
+
+        Свип до ADR-0006 брал подкоманду как `argv[1]` и не видел merge
+        в форме `git -C <path> merge ...` (`gitcmd.in_repo`) — буква была
+        уже намерения. Нормализация закрывает эту дыру: подкоманда и её
+        аргументы читаются из любого фактического вида вызова.
+        """
+        args, i = [], 1
+        while i < len(call):
+            if call[i] in ("-C", "-c") and i + 1 < len(call):
+                i += 2
+                continue
+            args.append(call[i])
+            i += 1
+        return args
 
     def setUp(self):
         super().setUp()
@@ -396,7 +418,13 @@ class MergeOnlyFromMergeGateTest(FsmTest):
         self.write_review("approved", 1)
 
     def test_no_other_state_and_no_other_command_merges(self):
-        """Требование 2.1: другого пути к git merge в системе нет."""
+        """Требование 2.1: другого пути влить что-либо в main нет.
+
+        Вне merge_gate+approve merge допустим единственный (ADR-0006) —
+        актуализация ветки задачи от main: обязан идти в `-C`-форме
+        (worktree задачи, не рабочая копия пульта), вливать main и не
+        упоминать ветку задачи в аргументах. Любой другой merge — красный.
+        """
         for state in FSM_STATES:
             for name, call in self.commands():
                 if name == "kill":
@@ -414,8 +442,20 @@ class MergeOnlyFromMergeGateTest(FsmTest):
 
                     self.run_command(call)
 
-                    self.assertNotIn("merge", self.git_spy.git_subcommands(),
-                                     f"{name} из {state} дошла до git merge")
+                    for raw in self.git_spy.calls:
+                        if not raw or raw[0] != "git":
+                            continue
+                        args = self._plain_args(raw)
+                        if not args or args[0] != "merge":
+                            continue
+                        why = f"{name} из {state}: git merge {raw}"
+                        self.assertIn("-C", raw,
+                                      f"{why} — merge вне worktree задачи")
+                        self.assertIn(config.MAIN_BRANCH, args,
+                                      f"{why} — вливается не main")
+                        self.assertNotIn(self.branch, args,
+                                         f"{why} — ветка задачи в merge "
+                                         f"вне merge_gate")
 
     def test_merge_gate_approve_is_that_path(self):
         """Контроль: из merge_gate approve мержит ветку задачи и закрывает её."""
