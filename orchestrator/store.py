@@ -164,19 +164,50 @@ def seed_task_counters(conn: sqlite3.Connection) -> None:
     target'а, а не за их количеством: строка, ушедшая в архив, номер
     не освобождает (ADR-0003 3ж). Засев идёт на миграции, то есть до
     любой архивации, которую сделает уже новый код.
+
+    Источник максимума — не только строки `tasks` (БД может быть пуста
+    или вовсе не существовать, холодный старт), но и наблюдаемый мир:
+    `coldstart.observed_max_task_number` (SPEC T049, требование 1–2,
+    ADR-0005 п.5) — каталоги задач, ветки `task/*`, RETRO, история main.
+    Дорогой скан (FS + git-подпроцессы) платится РОВНО ОДИН РАЗ на
+    target — только пока у него ещё нет строки счётчика (`target not in
+    known`); эта функция зовётся на КАЖДОМ `store.db()` (внутри
+    `migrate`), так что после первого успешного посева следующие вызовы
+    его не трогают. Отложенный импорт `coldstart` — тем же приёмом, что
+    `record_fixation` лениво зовёт `fixation`: `store.py` остаётся
+    листом графа импортов на момент загрузки модуля.
     """
+    from . import coldstart
     known = {r["target"] for r in
              conn.execute("SELECT target FROM task_counters")}
-    top: dict = {}
+    top: dict = {config.DEFAULT_TARGET: 0}
     for row in conn.execute("SELECT id, target FROM tasks"):
         target = row["target"] or config.DEFAULT_TARGET
         top[target] = max(top.get(target, 0), task_number(row["id"]))
+    for target, number in top.items():
+        if target not in known:
+            observed = coldstart.observed_max_task_number(target)
+            top[target] = max(number, observed)
     for target, number in top.items():
         if target not in known:
             conn.execute(
                 "INSERT INTO task_counters (target, next_number) VALUES (?,?)",
                 (target, number + 1))
     conn.commit()
+
+
+def counter_targets(conn: sqlite3.Connection) -> set:
+    """Target'ы, у которых уже есть строка счётчика номеров (doctor A3,
+    SPEC T049, требование 3)."""
+    return {r["target"] for r in conn.execute("SELECT target FROM task_counters")}
+
+
+def task_exists(conn: sqlite3.Connection, task_id: str) -> bool:
+    """Есть ли строка задачи с этим id — без исключения `get_task` при
+    отсутствии (SPEC T049: синтетическая строка пересева расхода
+    проверяется на существование перед `insert_task`)."""
+    return conn.execute("SELECT 1 FROM tasks WHERE id=?",
+                        (task_id,)).fetchone() is not None
 
 
 def peek_task_number(conn: sqlite3.Connection, target: str) -> int:

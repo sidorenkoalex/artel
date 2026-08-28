@@ -2,7 +2,7 @@
 import sqlite3
 import sys
 
-from . import alerts, config, lease, spend, store
+from . import alerts, config, lease, retro, spend, store
 
 
 def spec_budget(meta: dict) -> tuple[float | None, str]:
@@ -171,6 +171,56 @@ def check_program_spend(conn, task_id: str, cost: dict | None) -> None:
             alerts.raise_alert(conn, None, "threshold",
                               "budget.program_spend", detail)
             print(f"[{task_id}] ВНИМАНИЕ: {detail}")
+
+
+def reseed_program_spend(conn) -> None:
+    """Пересевает суммарный программный расход (roadmap §5, `PROGRAM_
+    STOP_LOSS_USD`) суммой «Стоимость итого» из всех `docs/retro/T*.md`
+    (SPEC T049, требования 4–5, холодный старт — ADR-0005 п.5). Журнал
+    шагов, откуда раньше считались события порога, при потере `.artel/`
+    теряется вместе с БД — RETRO переживает потерю (в git-истории main,
+    ADR-0005 п.1) и остаётся единственным детерминированным источником.
+
+    Сумма кладётся в `spent_usd` синтетической строки `tasks`
+    (`config.PROGRAM_SPEND_RESEED_TASK_ID`): `store.total_spent`
+    суммирует именно эту колонку по ВСЕМ строкам — тем самым пересев
+    учитывается порогами программы (`check_program_spend`) без
+    отдельного контура учёта.
+
+    Идемпотентно — сумма и число задач каждый раз ПЕРЕСЧИТЫВАЮТСЯ заново
+    и ПЕРЕЗАПИСЫВАЮТ прежнее значение строки, не прибавляются к нему:
+    повторный `init`/пересев после появления новых RETRO не задваивает
+    расход. RETRO ещё нет вовсе (или каталог недоступен) — функция не
+    создаёт строку и не журналирует: нечего пересевать, а не «пересеяно
+    $0.00 по 0 задачам» в каждом прогоне `init` пустого проекта.
+    """
+    retro_dir = config.ROOT / retro.RETRO_DIR_REL
+    total = 0.0
+    count = 0
+    if retro_dir.is_dir():
+        for path in sorted(retro_dir.glob("T*.md")):
+            try:
+                text = path.read_text(encoding="utf-8")
+            except OSError:
+                continue
+            cost = retro.parse_total_cost(text)
+            if cost is None:
+                continue
+            total += cost
+            count += 1
+    if count == 0:
+        return
+
+    task_id = config.PROGRAM_SPEND_RESEED_TASK_ID
+    if not store.task_exists(conn, task_id):
+        store.insert_task(conn, task_id,
+                          "Пересеянный программный расход (RETRO, "
+                          "холодный старт)", "done", "",
+                          config.DEFAULT_TARGET, total)
+    store.update_task(conn, task_id, spent_usd=total, budget_usd=total,
+                      updated_at=store.now())
+    store.journal(conn, task_id, "orchestrator", "программа: пересев расхода",
+                  f"расход пересеян из RETRO: ${total:.2f} по {count} задачам")
 
 
 def cmd_budget(task_id: str, raw_usd: str, session_id: str | None = None) -> None:

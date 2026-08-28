@@ -25,6 +25,11 @@ NO_ARTIFACTS_NOTE = "артефакты не сохранены (ветка уд
 # только сумма по actor, а не разбор попытки/кода возврата.
 COST_RE = re.compile(r"стоимость \$([0-9]+(?:\.[0-9]+)?)")
 TOKENS_RE = re.compile(r"токенов (\d+)")
+# Первая строка `_cost_block` — «Стоимость итого: $X.XX» (не путать с
+# `COST_RE` построчного разбора по актёру): холодный старт (SPEC T049,
+# требование 4) парсит именно её при пересеве программного расхода.
+TOTAL_COST_RE = re.compile(r"^Стоимость итого: \$([0-9]+(?:\.[0-9]+)?)",
+                           re.MULTILINE)
 
 
 def retro_rel_path(task_id: str) -> str:
@@ -150,6 +155,15 @@ def _escalations_block(steps, *, full: bool) -> list[str]:
         first_line, sep, _rest = last.partition("\n")
         last = f"{first_line}…" if sep else first_line
     return [f"Эскалации: {len(escalations)} (последняя): {last}"]
+
+
+def parse_total_cost(text: str) -> float | None:
+    """«Стоимость итого: $X.XX» из уже сгенерированного RETRO; `None` —
+    строка не найдена (не формат RETRO, или файл повреждён). Используется
+    `orchestrator/budget.reseed_program_spend` (SPEC T049, требование 4)
+    при пересеве программного расхода холодного старта."""
+    match = TOTAL_COST_RE.search(text)
+    return float(match.group(1)) if match else None
 
 
 def _cost_block(steps, spent_usd: float) -> list[str]:
