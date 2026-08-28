@@ -453,29 +453,100 @@ def commit_timeout_checkpoint(conn, task_id: str, role: str) -> str:
     до A7»), эта ветка не задета вживую; расширение на внешний target —
     отдельная задача поверх многотаргетной архитектуры фиксации, не
     точечная правка этой функции.
+
+    Git-обвязка (`add -A` → `diff --cached --quiet` → `commit`) —
+    `_commit_worktree_change`, общая с `commit_step_artifacts` (SPEC
+    T059): обе функции отличаются только сообщением коммита, текстом
+    действия журнала и условием вызова (таймаут здесь, `rc == 0` там).
     """
     if store.task_target(conn, task_id) != config.DEFAULT_TARGET:
         return ""
     wt = workspace.path(task_id)
-    added = gitcmd.in_repo(wt, "add", "-A")
-    if added.returncode != 0:
-        return ""
-    staged = gitcmd.in_repo(wt, "diff", "--cached", "--quiet")
-    if staged.returncode != 1:  # 0 — нечего коммитить, иное — git не ответил
-        return ""
     message = f"{task_id}: WIP-чекпоинт после таймаута шага {role}"
-    commit = gitcmd.in_repo(
-        wt, "-c", f"user.name={fixation.FIXATION_AUTHOR_NAME}",
-        "-c", f"user.email={fixation.FIXATION_AUTHOR_EMAIL}",
-        "commit", "-q", "-m", message)
-    if commit.returncode != 0:
+    committed, sha = _commit_worktree_change(wt, message)
+    if not committed:
         return ""
-    sha = gitcmd.head_sha(wt)
     detail = f"{message} (sha {sha})" if sha else message
     store.journal(conn, task_id, "orchestrator",
                   "WIP-чекпоинт после таймаута шага", detail)
     store.record_fixation(conn, task_id)
     return detail
+
+
+def commit_step_artifacts(conn, task_id: str, role: str) -> str:
+    """Автокоммит незакоммиченных артефактов роли по завершении успешного
+    шага (rc=0), до advance-логики (SPEC T059, требования 1-3).
+
+    Класс «роль завершила шаг rc=0, но не закоммитила артефакт»
+    повторился 10 раз (REVIEW.md T041, T044, T045, T048, T051, T052) —
+    каждый раз отказ `advance`, инцидент целостности и спасение
+    Оператором вручную (`git add && git commit`); спасённый Оператором
+    артефакт при этом был неотличим от роль-произведённого —
+    `author_role` лгал о происхождении (наблюдение ревьювера T052). Эта
+    функция делает то же самое действие сама, служебным коммитом
+    оркестраторского авторства (`fixation.FIXATION_AUTHOR_*`), а не
+    подделкой авторства роли: журнал несёт `actor=orchestrator`, тем же
+    правом, каким оркестратор уже коммитит фиксацию и WIP-чекпоинт
+    таймаута.
+
+    Коммитит, только если реально есть что коммитить: роль уже
+    закоммитила свои изменения сама → `_commit_worktree_change` не
+    находит застейдженного диффа, пустой коммит не заводится и запись в
+    журнал не пишется (требование 2). Молча отказывает при отказе git
+    на любом из шагов — та же деградация без git, что у
+    `commit_timeout_checkpoint` (требование 6).
+
+    Только догфуд (`target == config.DEFAULT_TARGET`) — тем же доводом,
+    что уже есть в докстринге `commit_timeout_checkpoint`: для внешнего
+    target собственная фиксация уже коммитит артефактный репозиторий
+    целиком на переходе FSM (`fixation._fix_external`), а свой
+    `workspace` внешний target вообще не коммитит (ADR-0003 §4) — новый
+    механизм не решал бы для него никакой проблемы.
+
+    `git add` ограничен путями worktree задачи целиком (требование 3):
+    `_commit_worktree_change` зовёт `gitcmd.in_repo(wt, "add", "-A")` —
+    `-A` без путей добавляет изменения всего рабочего дерева РЕПОЗИТОРИЯ
+    `wt` (её отдельного git-worktree, ветка задачи), не произвольного
+    дерева и не рабочей копии пульта (урок инцидента T048 с чужой
+    сессией пульта — здесь операции вообще не видят `config.ROOT`).
+    """
+    if store.task_target(conn, task_id) != config.DEFAULT_TARGET:
+        return ""
+    wt = workspace.path(task_id)
+    message = f"{task_id}: артефакты шага {role} (автокоммит оркестратора)"
+    committed, sha = _commit_worktree_change(wt, message)
+    if not committed:
+        return ""
+    detail = f"{message} (sha {sha})" if sha else message
+    store.journal(conn, task_id, "orchestrator",
+                  "автокоммит артефактов шага", detail)
+    store.record_fixation(conn, task_id)
+    return detail
+
+
+def _commit_worktree_change(wt: Path, message: str) -> tuple[bool, str]:
+    """(закоммичено, sha) — `add -A` + `commit` служебной идентичностью
+    В ЗАДАННОМ worktree; `закоммичено=False` — нечего коммитить или git
+    не ответил на любом из трёх шагов.
+
+    Общая обвязка `commit_timeout_checkpoint` и `commit_step_artifacts`
+    (SPEC T059) — обе отличаются только сообщением коммита и моментом
+    вызова, сама последовательность git-операций (и её деградация без
+    git) — одна на двоих.
+    """
+    added = gitcmd.in_repo(wt, "add", "-A")
+    if added.returncode != 0:
+        return False, ""
+    staged = gitcmd.in_repo(wt, "diff", "--cached", "--quiet")
+    if staged.returncode != 1:  # 0 — нечего коммитить, иное — git не ответил
+        return False, ""
+    commit = gitcmd.in_repo(
+        wt, "-c", f"user.name={fixation.FIXATION_AUTHOR_NAME}",
+        "-c", f"user.email={fixation.FIXATION_AUTHOR_EMAIL}",
+        "commit", "-q", "-m", message)
+    if commit.returncode != 0:
+        return False, ""
+    return True, gitcmd.head_sha(wt)
 
 
 def run_agent_once(conn, task_id: str, role: str, prompt: str,
@@ -649,6 +720,10 @@ def run_agent_once(conn, task_id: str, role: str, prompt: str,
               f"причина в {log_path}")
         return "failed", reason
 
+    # Автокоммит — до журнала завершения шага и до advance-логики
+    # (SPEC T059, требование 1): роль может не успеть закоммитить свой
+    # артефакт, а `advance` уже проверяет чистоту рабочей копии.
+    commit_step_artifacts(conn, task_id, role)
     store.journal(conn, task_id, role, "agent run finished",
                   f"rc={rc}, {numbered}{spent}")
     print(f"[{task_id}] {role} завершил (rc={rc}{spent}); "
