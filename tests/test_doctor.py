@@ -798,6 +798,67 @@ class LeasesCheckTest(TmpRootTest):
         self.assertEqual(len(incidents), 1)
 
 
+class BranchFreshnessCheckTest(TmpRootTest):
+    """SPEC T051, требование 8 (AC-5): активная задача с веткой, отставшей
+    от `config.MAIN_BRANCH` больше чем на `config.STALE_BRANCH_WARN_COMMITS`
+    коммитов, — warn, не incident (см. PLAN «Подход»); требование 9 (AC-6)
+    — git не отвечающий осмысленно пропускается молча, по образцу
+    `LeasesCheckTest`/`OrphansTest`.
+    """
+
+    def setUp(self):
+        super().setUp()
+        capture(catalog.cmd_init)
+
+    def test_stale_active_task_warns(self):
+        store.insert_task(store.db(), "T001", "Задача", "in_dev",
+                          "task/t001-zadacha", config.DEFAULT_TARGET, 25.0)
+        with mock.patch.object(doctor.gitcmd, "commits_behind",
+                               lambda b: config.STALE_BRANCH_WARN_COMMITS + 1):
+            checks = doctor.check_branch_freshness(store.db())
+
+        self.assertTrue(any(c.status == "warn" for c in checks))
+        self.assertIn("T001", checks[0].detail)
+        self.assertEqual(alerts.open_alerts(store.db(), "incident"), [],
+                         "отставание ветки — не incident (не ack-целевой)")
+
+    def test_exactly_at_the_threshold_is_ok(self):
+        store.insert_task(store.db(), "T001", "Задача", "in_dev",
+                          "task/t001-zadacha", config.DEFAULT_TARGET, 25.0)
+        with mock.patch.object(doctor.gitcmd, "commits_behind",
+                               lambda b: config.STALE_BRANCH_WARN_COMMITS):
+            checks = doctor.check_branch_freshness(store.db())
+
+        self.assertTrue(all(c.status == "ok" for c in checks))
+
+    def test_terminal_tasks_are_not_checked(self):
+        store.insert_task(store.db(), "T001", "Готова", "done",
+                          "task/t001-gotova", config.DEFAULT_TARGET, 25.0)
+        checked_branches = []
+        with mock.patch.object(
+                doctor.gitcmd, "commits_behind",
+                lambda b: checked_branches.append(b) or 999):
+            checks = doctor.check_branch_freshness(store.db())
+
+        self.assertEqual(checked_branches, [])
+        self.assertTrue(all(c.status == "ok" for c in checks))
+
+    def test_unresponsive_git_is_silently_skipped(self):
+        store.insert_task(store.db(), "T001", "Задача", "in_dev",
+                          "task/t001-zadacha", config.DEFAULT_TARGET, 25.0)
+        with mock.patch.object(doctor.gitcmd, "commits_behind",
+                               lambda b: None):
+            checks = doctor.check_branch_freshness(store.db())
+
+        self.assertTrue(all(c.status == "ok" for c in checks))
+
+    def test_no_active_tasks_is_ok(self):
+        checks = doctor.check_branch_freshness(store.db())
+
+        self.assertTrue(all(c.status == "ok" for c in checks))
+        self.assertEqual(alerts.open_alerts(store.db(), "incident"), [])
+
+
 class TaskCounterCheckTest(TmpRootTest):
     """SPEC T049, требование 3 (AC-2): счётчик номеров target'а ниже
     наблюдаемого max — incident; на уровне или выше — здоровое состояние.

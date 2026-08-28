@@ -1,5 +1,5 @@
 ---
-built_at_sha: 9d25c1b597357cfd27ea0664c3e72300323d367a
+built_at_sha: b8126bdc5704874492908dbfee69eb3ec9e7984a
 ---
 
 # Codebase-map пульта
@@ -202,6 +202,7 @@ built_at_sha: 9d25c1b597357cfd27ea0664c3e72300323d367a
 - `all_checks`
 - `check_backup_age`
 - `check_base_branch`
+- `check_branch_freshness`
 - `check_cli_found`
 - `check_cli_version`
 - `check_disk_space`
@@ -260,6 +261,7 @@ built_at_sha: 9d25c1b597357cfd27ea0664c3e72300323d367a
 - `branch_exists`
 - `branch_head_sha`
 - `branch_merged`
+- `commits_behind`
 - `current_branch`
 - `diff_paths`
 - `git`
