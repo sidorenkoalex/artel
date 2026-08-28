@@ -84,10 +84,13 @@ class Ac4ReleaseFreesLimiterSlotForRunTest(Ac4Sandbox):
     достигнут) -> `run` своей задачи отказывает -> `release` одной из
     занятых задач -> тот же `run` проходит."""
 
-    HOLDERS = (
-        ("T901", "session-busy-1"),
-        ("T902", "session-busy-2"),
-    )
+    # Динамика от config (правка Оператора 28.08 по эскалации PLAN:
+    # зашитая двойка сломалась при подъёме потолка 2 -> 5 подтяжкой) —
+    # держателей сеется ровно столько, каков текущий потолок.
+    @property
+    def HOLDERS(self):
+        return tuple((f"T9{i:02d}", f"session-busy-{i}")
+                     for i in range(1, config.MAX_PARALLEL_TASKS + 1))
 
     def _seed_holders_at_cap(self) -> None:
         self.assertEqual(
@@ -121,10 +124,11 @@ class Ac4ReleaseFreesLimiterSlotForRunTest(Ac4Sandbox):
 class Ac4ReleaseFreesLimiterSlotForAutoTest(Ac4Sandbox):
     """AC-4 через `auto`: тот же сценарий, но запуск — `auto`."""
 
-    HOLDERS = (
-        ("T903", "session-busy-3"),
-        ("T904", "session-busy-4"),
-    )
+    # Динамика от config — см. комментарий у Run-класса выше.
+    @property
+    def HOLDERS(self):
+        return tuple((f"T9{i:02d}", f"session-busy-{i}")
+                     for i in range(51, 51 + config.MAX_PARALLEL_TASKS))
 
     def _seed_holders_at_cap(self) -> None:
         self.assertEqual(
