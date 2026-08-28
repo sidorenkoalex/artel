@@ -48,8 +48,9 @@ def _read_spec_text(task_id: str) -> str | None:
 
 
 def _first_context_line(spec_text: str | None) -> str:
-    """Дословная первая непустая строка раздела «Контекст» — не пересказ,
-    точечное извлечение (требование 5)."""
+    """Дословная первая непустая строка раздела «Контекст» — фолбэк
+    killed-«Сути» без ТЗ в журнале (SPEC T063, требование 3): прежнее
+    поведение build_killed, оставленное без изменений этой задачей."""
     if not spec_text:
         return ""
     body = guard.section_body(spec_text, "Контекст")
@@ -58,6 +59,26 @@ def _first_context_line(spec_text: str | None) -> str:
         if line:
             return line
     return ""
+
+
+def _first_sentence(text: str) -> str:
+    """Полное первое предложение текста: пробелы и переносы строк схлопнуты
+    в один, обрезка — по первой точке (границе предложения), а не по
+    границе строки или запятой (SPEC T063, требования 1, 2). Точки нет —
+    возвращается весь схлопнутый текст."""
+    normalized = " ".join(text.split())
+    if not normalized:
+        return ""
+    dot = normalized.find(".")
+    return normalized[:dot + 1] if dot != -1 else normalized
+
+
+def _first_context_sentence(spec_text: str | None) -> str:
+    """Полное первое предложение раздела «Контекст» SPEC — done-«Суть»
+    (SPEC T063, требование 1)."""
+    if not spec_text:
+        return ""
+    return _first_sentence(guard.section_body(spec_text, "Контекст"))
 
 
 def _gist(title: str, context_line: str) -> str:
@@ -71,13 +92,6 @@ def _journaled_tz_text(steps) -> str | None:
         if s["action"] == cleanup.KILL_TZ_JOURNAL_ACTION:
             return s["detail"] or None
     return None
-
-
-def _tz_gist_line(tz_text: str) -> str:
-    """Схлопывает переносы строк ТЗ в одну строку «Сути» (killed-RETRO
-    остаётся построчным документом, требование 6) — без урезания
-    содержимого, только пробелы вместо переводов строк."""
-    return " ".join(tz_text.split())
 
 
 def _actor_costs(steps) -> list[tuple[str, float, int | None]]:
@@ -178,7 +192,7 @@ def build_done(conn, task_id: str, merge_sha: str) -> str:
     """RETRO задачи, дошедшей до `done` (требования 4, 5, 8)."""
     t = store.get_task(conn, task_id)
     steps = store.task_steps(conn, task_id)
-    context_line = _first_context_line(_read_spec_text(task_id))
+    context_line = _first_context_sentence(_read_spec_text(task_id))
     count, manual, skip = _acceptance_counts(task_id)
     address = f"{merge_sha}:tasks/{task_id}/"
 
@@ -211,9 +225,11 @@ def build_killed(conn, task_id: str) -> str:
     # «Суть» строится из ТЗ, положенного в журнал `kill` (SPEC T048,
     # требование 6) — SPEC.md пустого шаблона-заглушки для killed-задачи
     # нового флоу main не видел вовсе (требование 4), читать неоткуда.
-    # ТЗ не было (`new` без `--tz`) — старый источник как запасной путь.
+    # Полное первое предложение ТЗ (SPEC T063, требование 2), не просто
+    # схлопнутая строка. ТЗ не было (`new` без `--tz`) — старый построчный
+    # фолбэк как запасной путь (SPEC T063, требование 3, не меняется).
     tz_text = _journaled_tz_text(steps)
-    context_line = (_tz_gist_line(tz_text) if tz_text is not None
+    context_line = (_first_sentence(tz_text) if tz_text is not None
                     else _first_context_line(_read_spec_text(task_id)))
     count, manual, skip = _acceptance_counts(task_id)
     reason = _last_step_detail(steps, "state -> killed") or "причина не найдена в журнале"

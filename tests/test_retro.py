@@ -13,7 +13,36 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from orchestrator import config, retro, store  # noqa: E402
+from orchestrator import cleanup, config, retro, store  # noqa: E402
+
+SENTENCE_SPEC_TEXT = """---
+task: T900
+type: spec
+author_role: analyst
+status: ready
+schema_version: 2
+---
+
+# SPEC: задача для теста
+
+## Контекст
+
+Первая часть, вторая часть,
+третья часть на новой строке — тут точка.
+Второе предложение не должно попасть в Суть.
+
+## Требования
+
+1. Требование.
+
+## Критерии приёмки
+
+AC-1. Критерий.
+
+## Не входит
+
+- Ничего.
+"""
 
 SPEC_TEXT = """---
 task: T900
@@ -109,6 +138,33 @@ class RetroGenerationTest(unittest.TestCase):
         self.assertIn("developer", text)
         self.assertLessEqual(len(text.splitlines()), 30)
 
+    def test_build_done_gist_takes_full_first_sentence_not_line_or_comma(self):
+        """SPEC T063, требование 1 — предложение, перенесённое через
+        несколько строк и содержащее запятые до точки, должно попасть в
+        Суть целиком, обрезка идёт по точке."""
+        self.write_spec(SENTENCE_SPEC_TEXT)
+
+        text = retro.build_done(self.conn, self.TASK, "deadbeef" * 5)
+
+        self.assertIn("Первая часть, вторая часть, "
+                      "третья часть на новой строке — тут точка.", text)
+        self.assertNotIn("Второе предложение", text)
+
+    def test_build_killed_gist_from_journaled_tz_takes_full_first_sentence(self):
+        """SPEC T063, требование 2 — то же правило обрезки по точке для
+        ТЗ, сохранённого в журнал `kill` (SPEC T048)."""
+        self.add_step("operator", "state -> killed", "kill switch")
+        self.add_step("operator", cleanup.KILL_TZ_JOURNAL_ACTION,
+                      "Первая часть ТЗ, вторая часть ТЗ,\n"
+                      "третья часть ТЗ на новой строке — тут точка ТЗ.\n"
+                      "Второе предложение ТЗ не должно попасть в Суть.\n")
+
+        text = retro.build_killed(self.conn, self.TASK)
+
+        self.assertIn("Первая часть ТЗ, вторая часть ТЗ, "
+                      "третья часть ТЗ на новой строке — тут точка ТЗ.", text)
+        self.assertNotIn("Второе предложение ТЗ", text)
+
     def test_build_done_is_deterministic(self):
         self.write_spec()
         self.write_acceptance_tests()
@@ -203,6 +259,26 @@ class RetroGenerationTest(unittest.TestCase):
         text = retro.build_killed(self.conn, self.TASK)
 
         self.assertIn("причина не найдена в журнале", text)
+
+
+class FirstSentenceTest(unittest.TestCase):
+    """`_first_sentence` — обрезка по точке, не по строке/запятой
+    (SPEC T063, требования 1, 2)."""
+
+    def test_cuts_at_first_dot_across_lines_and_commas(self):
+        text = "Часть один, часть два,\nчасть три на новой строке.\nХвост."
+
+        self.assertEqual(retro._first_sentence(text),
+                         "Часть один, часть два, часть три на новой строке.")
+
+    def test_no_dot_returns_whole_collapsed_text(self):
+        text = "Без точки\nна двух строках"
+
+        self.assertEqual(retro._first_sentence(text),
+                         "Без точки на двух строках")
+
+    def test_empty_text_returns_empty_string(self):
+        self.assertEqual(retro._first_sentence(""), "")
 
 
 class ParseTotalCostTest(unittest.TestCase):
