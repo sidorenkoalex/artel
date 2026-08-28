@@ -127,8 +127,35 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from orchestrator import (auto, budget, catalog,  # noqa: E402
-                          cleanup, doctor, fsm, projects, runner, version,
-                          workspace)
+                          cleanup, config, doctor, fsm, projects, runner,
+                          version, workspace)
+
+
+def _refuse_if_worktree() -> None:
+    """Инвариант T056: пульт исполняется только из главной копии, не из
+    git-worktree роли (`.artel/worktrees/<id>`, T045). До T056 запуск
+    `artel.py` с cwd внутри worktree резолвил `config.ROOT` туда же и
+    на ходу заводил там паразитную пустую `.artel/state.db` — инцидент
+    28.08 (T052, T055): читающая команда над такой БД лжёт, мутирующая
+    исполнилась бы мимо настоящего пульта. Признак worktree — `ROOT/.git`
+    файл-ссылка (`gitdir: <main>/.git/worktrees/<id>`), а не каталог;
+    у тестовых песочниц (`config.ROOT` во временном каталоге без `.git`)
+    признак не срабатывает — их поведение не меняется.
+    """
+    git_path = config.ROOT / ".git"
+    if not git_path.is_file():
+        return
+    marker = "gitdir: "
+    line = git_path.read_text(encoding="utf-8").strip()
+    gitdir = line[len(marker):] if line.startswith(marker) else ""
+    suffix = "/.git/worktrees/"
+    idx = gitdir.find(suffix)
+    main_copy = gitdir[:idx] if idx != -1 else "?"
+    sys.exit(
+        f"[инвариант] {config.ROOT} — git-worktree, не главная копия "
+        f"репозитория: пульт исполняется только из главной копии. "
+        f"Перезапусти команду из {main_copy}."
+    )
 
 
 def _tz_arg(rest: list) -> str | None:
@@ -144,6 +171,7 @@ def _tz_arg(rest: list) -> str | None:
 
 
 def main() -> None:
+    _refuse_if_worktree()
     args = sys.argv[1:]
     if not args or args[0] in ("-h", "--help"):
         print(__doc__)
