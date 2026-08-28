@@ -1,5 +1,5 @@
 ---
-built_at_sha: 523ce0e3df6b0d2a243e0d1179fe7ee99204a5c5
+built_at_sha: c4426d02f20c22ee3c2f1c499dd294deecf852d4
 ---
 
 # Codebase-map пульта
@@ -222,7 +222,7 @@ built_at_sha: 523ce0e3df6b0d2a243e0d1179fe7ee99204a5c5
 - `preflight_checks`
 - `recovery_check`
 
-**Импортирует:** `orchestrator/alerts.py`, `orchestrator/coldstart.py`, `orchestrator/config.py`, `orchestrator/gitcmd.py`, `orchestrator/projects.py`, `orchestrator/roles.py`, `orchestrator/runner.py`, `orchestrator/spend.py`, `orchestrator/store.py`, `orchestrator/targets.py`, `orchestrator/workspace.py`
+**Импортирует:** `orchestrator/alerts.py`, `orchestrator/coldstart.py`, `orchestrator/config.py`, `orchestrator/gitcmd.py`, `orchestrator/liveness.py`, `orchestrator/projects.py`, `orchestrator/roles.py`, `orchestrator/runner.py`, `orchestrator/spend.py`, `orchestrator/store.py`, `orchestrator/targets.py`, `orchestrator/workspace.py`
 
 **Импортируется:** `orchestrator/artel.py`, `orchestrator/runner.py`, `orchestrator/version.py`, `tests/test_coldstart.py`, `tests/test_doctor.py`, `tests/test_version.py`
 
@@ -298,10 +298,21 @@ built_at_sha: 523ce0e3df6b0d2a243e0d1179fe7ee99204a5c5
 - `acquire`
 - `release`
 - `resolve_session_id`
+- `run_locked`
 
-**Импортирует:** `orchestrator/config.py`, `orchestrator/store.py`
+**Импортирует:** `orchestrator/config.py`, `orchestrator/liveness.py`, `orchestrator/store.py`
 
 **Импортируется:** `orchestrator/auto.py`, `orchestrator/budget.py`, `orchestrator/cleanup.py`, `orchestrator/fsm.py`, `orchestrator/runner.py`, `orchestrator/workspace.py`, `tests/test_lease.py`
+
+## orchestrator/liveness.py
+
+**Назначение:** Возраст heartbeat и адресуемость pid — общие для lease/merge_lock/doctor.
+
+**Публичные функции:** (нет)
+
+**Импортирует:** —
+
+**Импортируется:** `orchestrator/doctor.py`, `orchestrator/lease.py`, `orchestrator/merge_lock.py`
 
 ## orchestrator/merge_lock.py
 
@@ -310,8 +321,9 @@ built_at_sha: 523ce0e3df6b0d2a243e0d1179fe7ee99204a5c5
 **Публичные функции:**
 - `acquire`
 - `release`
+- `run_window`
 
-**Импортирует:** `orchestrator/config.py`, `orchestrator/store.py`
+**Импортирует:** `orchestrator/config.py`, `orchestrator/liveness.py`, `orchestrator/store.py`
 
 **Импортируется:** `orchestrator/fsm.py`, `tests/test_merge_lock.py`
 

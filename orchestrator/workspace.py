@@ -103,15 +103,8 @@ def cmd_workspace(task_id: str, session_id: str | None = None) -> None:
     же `git worktree add`, review T045 итерация 1, замечание 1).
     """
     conn = store.db()
-    sid = lease.resolve_session_id(session_id)
-    refusal, fresh = lease.acquire(conn, task_id, sid)
-    if refusal is not None:
-        sys.exit(refusal)
-    try:
-        _cmd_workspace(conn, task_id)
-    finally:
-        if fresh:
-            lease.release(conn, task_id, sid)
+    lease.run_locked(conn, task_id, session_id,
+                     lambda sid: _cmd_workspace(conn, task_id))
 
 
 def _cmd_workspace(conn, task_id: str) -> None:

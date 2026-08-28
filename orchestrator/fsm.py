@@ -386,16 +386,9 @@ def cmd_advance(task_id: str, session_id: str | None = None) -> bool:
     который `auto` не умеет поймать.
     """
     conn = store.db()
-    sid = lease.resolve_session_id(session_id)
-    refusal, fresh = lease.acquire(conn, task_id, sid)
-    if refusal is not None:
-        print(refusal)
-        return False
-    try:
-        return _cmd_advance(conn, task_id)
-    finally:
-        if fresh:
-            lease.release(conn, task_id, sid)
+    return bool(lease.run_locked(
+        conn, task_id, session_id, lambda sid: _cmd_advance(conn, task_id),
+        on_refusal="print"))
 
 
 def _cmd_advance(conn, task_id: str) -> bool:
@@ -889,15 +882,8 @@ def cmd_approve(task_id: str, sha: str | None = None,
                session_id: str | None = None) -> None:
     """Берёт lease задачи перед работой (SPEC T044, требование 2)."""
     conn = store.db()
-    sid = lease.resolve_session_id(session_id)
-    refusal, fresh = lease.acquire(conn, task_id, sid)
-    if refusal is not None:
-        sys.exit(refusal)
-    try:
-        _cmd_approve(conn, task_id, sha, sid)
-    finally:
-        if fresh:
-            lease.release(conn, task_id, sid)
+    lease.run_locked(conn, task_id, session_id,
+                     lambda sid: _cmd_approve(conn, task_id, sha, sid))
 
 
 def _cmd_approve(conn, task_id: str, sha: str | None, sid: str) -> None:
@@ -958,15 +944,12 @@ def _cmd_approve(conn, task_id: str, sha: str | None, sid: str) -> None:
         # на весь пульт, не на задачу — вторая сессия, вызвавшая approve
         # из merge_gate, пока мьютекс занят, получает немедленный
         # именованный отказ (`sys.exit`, тем же стилем, что и отказ lease
-        # выше) вместо ожидания. `finally` снимает его при ЛЮБОМ исходе
-        # тела окна, включая `sys.exit` внутри него (требование 3).
-        refusal = merge_lock.acquire(conn, task_id, sid)
-        if refusal is not None:
-            sys.exit(refusal)
-        try:
-            _cmd_approve_merge_gate(conn, task_id, state, t)
-        finally:
-            merge_lock.release(conn, sid)
+        # выше) вместо ожидания. `merge_lock.run_window` снимает мьютекс
+        # при ЛЮБОМ исходе тела окна, включая `sys.exit` внутри него
+        # (требование 3) — общая точка обвязки (SPEC T057, требование 2).
+        merge_lock.run_window(
+            conn, task_id, sid,
+            lambda: _cmd_approve_merge_gate(conn, task_id, state, t))
     elif state == "escalated":
         # Куда возвращать — знает только тот, кто эскалировал: провал агента
         # (cmd_run) пишет в escalated_from состояние своего шага, потому что
@@ -985,15 +968,8 @@ def _cmd_approve(conn, task_id: str, sha: str | None, sid: str) -> None:
 def cmd_reject(task_id: str, reason: str, session_id: str | None = None) -> None:
     """Берёт lease задачи перед работой (SPEC T044, требование 2)."""
     conn = store.db()
-    sid = lease.resolve_session_id(session_id)
-    refusal, fresh = lease.acquire(conn, task_id, sid)
-    if refusal is not None:
-        sys.exit(refusal)
-    try:
-        _cmd_reject(conn, task_id, reason)
-    finally:
-        if fresh:
-            lease.release(conn, task_id, sid)
+    lease.run_locked(conn, task_id, session_id,
+                     lambda sid: _cmd_reject(conn, task_id, reason))
 
 
 def _cmd_reject(conn, task_id: str, reason: str) -> None:

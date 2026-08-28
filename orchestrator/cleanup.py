@@ -1,6 +1,5 @@
 """kill switch и уборка хвостов задачи: каталог артефактов и ветка."""
 import shutil
-import sys
 
 from . import config, gitcmd, lease, store, workspace
 
@@ -116,15 +115,8 @@ def cleanup_killed_task(conn, task_id: str, branch: str) -> None:
 def cmd_kill(task_id: str, session_id: str | None = None) -> None:
     """Берёт lease задачи перед работой (SPEC T044, требование 2)."""
     conn = store.db()
-    sid = lease.resolve_session_id(session_id)
-    refusal, fresh = lease.acquire(conn, task_id, sid)
-    if refusal is not None:
-        sys.exit(refusal)
-    try:
-        _cmd_kill(conn, task_id)
-    finally:
-        if fresh:
-            lease.release(conn, task_id, sid)
+    lease.run_locked(conn, task_id, session_id,
+                     lambda sid: _cmd_kill(conn, task_id))
 
 
 
