@@ -150,8 +150,37 @@ def _journal_tz_before_cleanup(conn, task_id: str, branch: str) -> None:
                       KILL_TZ_JOURNAL_ACTION, text)
 
 
+# Терминальные состояния FSM: kill из них — no-op на самом переходе
+# (SPEC T050, требование 6) — уборка ниже всё равно остаётся безусловной.
+TERMINAL_STATES = ("done", "killed")
+
+
 def _cmd_kill(conn, task_id: str) -> None:
+    """Kill switch: убивает задачу из ЛЮБОГО нетерминального состояния,
+    даже если конкурентная сессия успела перейти между чтением состояния
+    и CAS-попыткой (SPEC T050, требования 6-7, инвариант №14).
+
+    Единственный вызыватель `set_state`, которому разрешено повторять
+    проигрыш CAS (требование 6, в отличие от advance/approve/reject/merge
+    — требование 4): проигрыш называет фактическое состояние
+    (`store.CasConflict.actual`) без лишнего `get_task` — им и
+    повторяется попытка. Задача уже терминальна (на входе или гонка
+    подвела туда же) — сообщается и завершается без ошибки (требование
+    6), но не отменяет уборку хвостов ниже — `test_repeated_kill_finds_
+    nothing_and_does_not_fail` (tests/test_kill_cleanup.py) требует, чтобы
+    повторный kill на уже killed задаче всё равно доводил её до конца.
+    """
     t = store.get_task(conn, task_id)
     _journal_tz_before_cleanup(conn, task_id, t["branch"])
-    store.set_state(conn, task_id, "killed", "operator", "kill switch")
+    state = t["state"]
+    won = False
+    while not won and state not in TERMINAL_STATES:
+        try:
+            store.set_state(conn, task_id, "killed", "operator",
+                            expected_state=state, detail="kill switch")
+            won = True
+        except store.CasConflict as exc:
+            state = exc.actual
+    if not won:
+        print(f"[{task_id}] уже {state} — kill не требуется")
     cleanup_killed_task(conn, task_id, t["branch"])
