@@ -31,7 +31,7 @@ docs/adr/0002-integrity-principle.md, CLAUDE.md.
 | 4 | Счётчики итераций глобальные на задачу: ни один переход, включая эскалацию и возврат из неё, их не сбрасывает | `test_invariants.CountersNeverResetTest` | design §4 |
 | 5 | Транзиентный ретрай внутри шага не считается итерацией цикла | `test_agent_failure.CmdRunFailureTest.test_retries_are_not_review_iterations` | design §6 |
 | 6 | Молчание ≠ согласие: сколько ни опрашивай `advance`, ручной гейт стоит | `test_invariants.ManualGatesNeedTheOperatorTest.test_repeated_polling_does_not_pass_a_gate` | README 4; design §4, §6 |
-| 7 | Ручной гейт (spec_gate, acceptance, merge_gate) проходит только `approve`/`reject` Оператора | `test_invariants.ManualGatesNeedTheOperatorTest` | design §4 |
+| 7 | Гейт (spec_gate, acceptance, merge_gate) проходит `approve`/`reject` Оператора ЛИБО автогейт по политике `gates.yaml` — только при выполнении ВСЕХ условий этой политики для данного гейта (ADR-0007); дефолт политики каждого гейта — manual, при нём поведение не отличается от исходного | `test_invariants.ManualGatesNeedTheOperatorTest`; `tasks/T066/acceptance_tests/test_ac1_ac2_ac3_autogate_success.py` | design §4; ADR-0007 |
 | 8 | Потолок задачи = её денежный бюджет: жёсткий, с алертом на 70% | `test_step_cost.CmdRunCostTest` | README 5; design §6, §10 |
 | 9 | Исчерпанный бюджет блокирует запуск агента и не обходится переходами FSM | `test_invariants.ExhaustedBudgetIsNotBypassableTest` | design §6 |
 | 10 | Поднять потолок может только Оператор командой `budget` | `test_invariants.ExhaustedBudgetIsNotBypassableTest.test_only_the_operator_ceiling_unblocks_the_run`; `test_step_cost.CmdBudgetTest` | design §4 («увеличение лимитов — manual всегда») |
