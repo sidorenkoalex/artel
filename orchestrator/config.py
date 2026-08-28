@@ -144,6 +144,13 @@ USAGE_TOKEN_KEYS = ("input_tokens", "output_tokens",
 # Статусы REVIEW.md, которые FSM отрабатывает как вердикт ревьювера.
 REVIEW_VERDICTS = ("approved", "changes_requested", "escalate")
 
+# Защищённые пути — зона Оператора, не роли конвейера (CLAUDE.md, скил
+# conventions-core). Конфликт merge, задевающий любой из них (SPEC T052,
+# требование 2), эскалирует вместо автоматического возврата в in_dev:
+# developer не вправе разрешать спор здесь сам.
+PROTECTED_PATHS = ("gates.yaml", "roles.yaml", ".github/", "templates/",
+                   "skills/")
+
 STATE_ROLE = {"tests_writing": "test_author", "in_dev": "developer",
              "review": "reviewer"}
 

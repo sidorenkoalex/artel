@@ -477,19 +477,64 @@ class MergeOnlyFromMergeGateTest(FsmTest):
         self.assertEqual(self.state(), "done")
 
     def test_merge_failure_leaves_the_task_in_the_gate(self):
-        """Провал merge не закрывает задачу: гейт не пройден, пока не смержено."""
+        """Провал merge не закрывает задачу (инвариант 6/AC-6, T052):
+        содержательный конфликт возвращает её в in_dev с диагностикой в
+        журнале, не молча оставляет на гейте (SPEC T052, требование 2,
+        AC-3) — задача НЕ переходит в `done`.
+        """
         self.set_state("merge_gate")
 
         def failing(cmd, *args, **kwargs):
             self.git_spy(cmd, *args, **kwargs)
-            rc = 1 if list(cmd)[:2] == ["git", "merge"] else 0
-            return subprocess.CompletedProcess(list(cmd), rc, "", "конфликт")
+            argv = list(cmd)
+            if argv[:3] == ["git", "merge", "--no-ff"]:
+                return subprocess.CompletedProcess(argv, 1, "", "конфликт")
+            if argv[:4] == ["git", "diff", "--name-only", "--diff-filter=U"]:
+                return subprocess.CompletedProcess(argv, 0, "shared.txt\n", "")
+            return subprocess.CompletedProcess(argv, 0, "", "")
 
         with mock.patch.object(gitcmd.subprocess, "run", failing):
-            with self.assertRaises(SystemExit):
+            self.capture(fsm.cmd_approve, self.TASK)
+
+        self.assertEqual(self.state(), "in_dev")
+        self.assertNotEqual(self.state(), "done")
+        journal = "\n".join(r["detail"] for r in store.db().execute(
+            "SELECT detail FROM steps WHERE task_id=? ORDER BY id",
+            (self.TASK,)))
+        self.assertIn("shared.txt", journal,
+                     "конфликтующий файл обязан попасть в журнал задачи")
+
+    def test_merge_abort_failure_keeps_task_in_the_gate(self):
+        """Отказ самого `git merge --abort` (SPEC T052, требование 5):
+        main нельзя объявить чистым, когда он не чист — переход состояния
+        не выполняется, задача остаётся в `merge_gate` инфраструктурным
+        отказом, а не молча уходит в `in_dev`/`escalated` с грязным main.
+        """
+        self.set_state("merge_gate")
+
+        def failing(cmd, *args, **kwargs):
+            self.git_spy(cmd, *args, **kwargs)
+            argv = list(cmd)
+            if argv[:3] == ["git", "merge", "--no-ff"]:
+                return subprocess.CompletedProcess(argv, 1, "", "конфликт")
+            if argv[:4] == ["git", "diff", "--name-only", "--diff-filter=U"]:
+                return subprocess.CompletedProcess(argv, 0, "shared.txt\n", "")
+            if argv[:3] == ["git", "merge", "--abort"]:
+                return subprocess.CompletedProcess(argv, 1, "", "не могу")
+            return subprocess.CompletedProcess(argv, 0, "", "")
+
+        with mock.patch.object(gitcmd.subprocess, "run", failing):
+            with self.assertRaises(SystemExit) as exit_:
                 self.capture(fsm.cmd_approve, self.TASK)
 
-        self.assertEqual(self.state(), "merge_gate")
+        self.assertEqual(self.state(), "merge_gate",
+                         "abort не удался — задача обязана остаться на гейте")
+        self.assertIn("abort", str(exit_.exception))
+        journal = "\n".join(r["detail"] for r in store.db().execute(
+            "SELECT detail FROM steps WHERE task_id=? ORDER BY id",
+            (self.TASK,)))
+        self.assertIn("не могу", journal,
+                     "причина отказа abort обязана попасть в журнал")
 
 
 class MergeNeedsGreenCiTest(FsmTest):
