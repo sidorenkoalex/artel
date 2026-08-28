@@ -39,7 +39,18 @@ def fake_git(*args: str) -> subprocess.CompletedProcess:
     Нужна, потому что подмена `subprocess.Popen` глобальна: настоящий
     `gitcmd.git` (его зовёт `runner.role_env` за авторством коммита шага)
     ушёл бы через неё в фейковый процесс.
+
+    `rev-parse --verify --quiet refs/heads/<ветка>` (`gitcmd.branch_exists`)
+    — отдельно, с отказом (SPEC T048): `cmd_new` с этой задачи сам решает,
+    заводить ли задачу, по ответу этого вызова (AC-3, требование 1) — если
+    отвечать успехом на любой git-вызов, как раньше, `cmd_new` увидел бы
+    ЛЮБУЮ ветку как уже существующую и отказывал бы всегда. В лёгких
+    песочницах реальных веток нет ни одной — ответ «нет» тут не заглушка
+    ради прохождения теста, а корректная симуляция вырожденного случая.
     """
+    if (len(args) >= 3 and args[0] == "rev-parse" and args[1] == "--verify"
+            and args[-1].startswith("refs/heads/")):
+        return subprocess.CompletedProcess(list(args), 1, "", "")
     identity = {"user.name": "Роль Артели", "user.email": "role@artel.invalid"}
     value = identity.get(args[-1], "") if args[:2] == ("config", "--get") else ""
     return subprocess.CompletedProcess(list(args), 0, f"{value}\n", "")

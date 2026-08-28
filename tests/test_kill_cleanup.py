@@ -5,6 +5,18 @@ Git тут настоящий, но не рабочий: ROOT уводится �
 Так проверяются реальные ответы git (`ls-tree`, `branch --merged`), а
 рабочее дерево репозитория остаётся нетронутым.
 
+С SPEC T048 `catalog.cmd_new` сам заводит ветку и worktree задачи (T045)
+и сразу коммитит в них SPEC.md (и TZ.md, если был) — main эти файлы
+никогда не видит (требование 4). Поэтому сразу после `new` в `self.root`
+(main) `tasks/<id>/` не существует вовсе, а ветка и worktree задачи уже
+на месте с одним коммитом; сценарии ниже, которым нужны артефакты НА
+MAIN (симуляция инцидента T002 — каталог подобран в чужую ветку/индекс,
+или задача убита до слияния), заводят их сами явной записью на диск, а
+сценариям, которым нужен ДОПОЛНИТЕЛЬНЫЙ коммит поверх того, что уже
+сделал `new`, коммитят его В WORKTREE задачи (`git -C <worktree>`), а не
+чекаутом ветки задачи в ROOT — ветку и так держит worktree, второй
+чекаут той же ветки git не даст сделать (SPEC T045).
+
 НЕОСЛАБЛЯЕМЫЕ ТЕСТЫ (ADR-0002, принцип целостности): кодируют инварианты
 «kill switch срабатывает всегда» и «артефакты, попавшие в main, — история
 и не удаляются» (docs/design.md §6). Ослабить, заскипать или удалить их
@@ -29,7 +41,9 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 
 
 class TmpRepoTest(unittest.TestCase):
-    """Задача T001 в свежем временном репозитории с веткой main."""
+    """Задача T001 в свежем временном репозитории с веткой main; `new`
+    уже завела ветку/worktree задачи и закоммитила в них SPEC.md (SPEC
+    T048) — main остаётся чистым."""
 
     TASK = "T001"
 
@@ -70,6 +84,33 @@ class TmpRepoTest(unittest.TestCase):
                          f"git {' '.join(args)} упал: {res.stderr}")
         return res.stdout
 
+    def git_wt(self, *args: str) -> str:
+        """git прямо в worktree задачи — не чекаутом её ветки в ROOT
+        (ветку и так держит worktree, SPEC T045)."""
+        res = subprocess.run(["git", "-C", str(workspace.path(self.TASK)),
+                              *args], capture_output=True, text=True)
+        self.assertEqual(res.returncode, 0,
+                         f"git -C worktree {' '.join(args)} упал: {res.stderr}")
+        return res.stdout
+
+    def commit_more_in_worktree(self, rel: str, text: str, message: str) -> None:
+        """Ещё один коммит поверх того, что уже сделал `new` — как если
+        бы роль продолжила работу в своём worktree (SPEC T045)."""
+        p = workspace.path(self.TASK) / rel
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(text, encoding="utf-8")
+        self.git_wt("add", "-A")
+        self.git_wt("commit", "-m", message)
+
+    def seed_main_task_dir(self, name: str = "SPEC.md",
+                           text: str = "подобрано") -> None:
+        """Кладёт файл в `tasks/<id>/` НА MAIN напрямую — симуляция
+        инцидента T002 (каталог убитой задачи оказался в main руками
+        Оператора или роли), не через `new` (он туда больше не пишет,
+        требование 4)."""
+        self.task_dir().mkdir(parents=True, exist_ok=True)
+        (self.task_dir() / name).write_text(text, encoding="utf-8")
+
     capture = staticmethod(capture)
 
     def task_row(self):
@@ -87,36 +128,34 @@ class TmpRepoTest(unittest.TestCase):
         self.assertTrue(rows, "уборка не попала в журнал")
         return rows[-1]["detail"]
 
-    def commit_artifacts_in_branch(self) -> None:
-        """Разработчик закоммитил артефакты в ветку задачи и ушёл на main."""
-        self.git("checkout", "-b", self.branch)
-        self.git("add", "-A")
-        self.git("commit", "-m", f"{self.TASK}: SPEC")
-        self.git("checkout", config.MAIN_BRANCH)
-
     def branches(self) -> list[str]:
         return self.git("branch", "--format=%(refname:short)").split()
 
 
 class KillCleanupTest(TmpRepoTest):
-    """`kill <id>` убирает каталог задачи и её локальную ветку."""
+    """`kill <id>` убирает worktree, каталог артефактов в main и локальную
+    ветку задачи."""
 
     def test_task_killed_before_commit_leaves_no_trace(self):
-        """Критерий приёмки 1: сценарий T002 — new, kill, чистое дерево."""
-        self.assertTrue(self.task_dir().exists(), "new создал каталог задачи")
+        """Критерий приёмки 1: сценарий T002 — new, kill, чистое дерево
+        main. С SPEC T048 `new` уже коммитит SPEC.md сразу в ветку/
+        worktree задачи, не в main (требование 4) — main тут нечего
+        подчищать, он и так чист."""
+        self.assertFalse(self.task_dir().exists(), "new не трогает main")
+        self.assertTrue(workspace.path(self.TASK).exists(), "new завела worktree")
 
         self.capture(cleanup.cmd_kill, self.TASK)
 
         self.assertFalse(self.task_dir().exists())
+        self.assertFalse(workspace.path(self.TASK).exists())
         self.assertEqual(self.git("status", "--porcelain"), "")
         self.assertEqual(self.task_row()["state"], "killed")
+        self.assertNotIn(self.branch, self.branches())
 
     def test_branch_only_artifacts_and_branch_are_removed(self):
-        self.commit_artifacts_in_branch()
-        # Черновик, написанный агентом после коммита: не отслеживается, и
+        # Черновик, написанный агентом после коммита `new`: не отслеживается, и
         # каталог задачи переживает переключение на main вместе с ним.
-        self.task_dir().mkdir(parents=True, exist_ok=True)
-        (self.task_dir() / "PLAN.md").write_text("черновик", encoding="utf-8")
+        self.seed_main_task_dir("PLAN.md", "черновик")
 
         self.capture(cleanup.cmd_kill, self.TASK)
 
@@ -126,10 +165,10 @@ class KillCleanupTest(TmpRepoTest):
 
     def test_kill_removes_task_worktree_before_the_branch(self):
         """SPEC T045, требование 5, AC-5: `-D` не удалит ветку, пока её
-        держит worktree — уборка обязана снести worktree первой."""
-        self.commit_artifacts_in_branch()
+        держит worktree — уборка обязана снести worktree первой. `new`
+        (SPEC T048) уже завела worktree сама — незачем заводить второй."""
         wt_path = workspace.path(self.TASK)
-        self.git("worktree", "add", str(wt_path), self.branch)
+        self.assertTrue(wt_path.exists())
 
         out = self.capture(cleanup.cmd_kill, self.TASK)
 
@@ -141,7 +180,6 @@ class KillCleanupTest(TmpRepoTest):
 
     def test_merged_task_keeps_artifacts_and_branch(self):
         """Критерий приёмки 2: артефакты в main — не трогаем ничего."""
-        self.commit_artifacts_in_branch()
         self.git("merge", "--no-ff", self.branch, "-m", "merge")
 
         out = self.capture(cleanup.cmd_kill, self.TASK)
@@ -153,13 +191,9 @@ class KillCleanupTest(TmpRepoTest):
 
     def test_unmerged_branch_is_removed_even_when_artifacts_are_in_main(self):
         """Условия требования 1 независимы: ветка ушла вперёд после мержа."""
-        self.commit_artifacts_in_branch()
         self.git("merge", "--no-ff", self.branch, "-m", "merge")
-        self.git("checkout", self.branch)
-        (self.task_dir() / "PLAN.md").write_text("после мержа", encoding="utf-8")
-        self.git("add", "-A")
-        self.git("commit", "-m", f"{self.TASK}: PLAN")
-        self.git("checkout", config.MAIN_BRANCH)
+        self.commit_more_in_worktree("tasks/T001/PLAN.md", "после мержа",
+                                     f"{self.TASK}: PLAN")
 
         self.capture(cleanup.cmd_kill, self.TASK)
 
@@ -168,6 +202,7 @@ class KillCleanupTest(TmpRepoTest):
 
     def test_dir_committed_into_a_foreign_branch_is_left_alone(self):
         """Инцидент из SPEC: каталог убитой задачи уехал в чужую ветку."""
+        self.seed_main_task_dir()
         self.git("checkout", "-b", "task/t042-chuzhaya")
         self.git("add", "-A")
         self.git("commit", "-m", "T042: подобрал чужой каталог")
@@ -182,6 +217,7 @@ class KillCleanupTest(TmpRepoTest):
 
     def test_dir_staged_on_main_is_left_alone(self):
         """Тот же риск без коммита: каталог задачи добавлен в индекс main."""
+        self.seed_main_task_dir()
         self.git("add", "-A")
 
         out = self.capture(cleanup.cmd_kill, self.TASK)
@@ -191,17 +227,14 @@ class KillCleanupTest(TmpRepoTest):
 
     def test_cleanup_is_listed_in_the_journal(self):
         """Требование 2: по журналу видно, что именно убрано."""
-        self.commit_artifacts_in_branch()
-        self.task_dir().mkdir(parents=True, exist_ok=True)
-        (self.task_dir() / "SPEC.md").write_text("хвост", encoding="utf-8")
+        self.seed_main_task_dir()
 
         self.capture(cleanup.cmd_kill, self.TASK)
 
         self.assertEqual(
             self.cleanup_note(),
-            f"worktree {workspace.path(self.TASK)} не найден — нечего "
-            f"убирать; удалён каталог tasks/{self.TASK}/; удалена ветка "
-            f"{self.branch}")
+            f"убран worktree {workspace.path(self.TASK)}; удалён каталог "
+            f"tasks/{self.TASK}/; удалена ветка {self.branch}")
         self.assertIn("удалён каталог", self.capture(catalog.cmd_log, self.TASK))
 
     def test_run_logs_survive_the_kill(self):
@@ -231,7 +264,11 @@ class KillCleanupTest(TmpRepoTest):
         self.assertIn("не найдена", str(exit_.exception))
 
     def test_checked_out_branch_is_left_alone_until_the_next_kill(self):
-        self.commit_artifacts_in_branch()
+        # Ветку держит worktree, заведённый `new` (SPEC T045/T048) — снять
+        # его первым, иначе второй чекаут той же ветки в ROOT git не даст
+        # сделать; дальше воспроизводим ровно сценарий «Оператор руками
+        # зачекаутил ветку задачи в главной копии».
+        self.git("worktree", "remove", "--force", str(workspace.path(self.TASK)))
         self.git("checkout", self.branch)
 
         out = self.capture(cleanup.cmd_kill, self.TASK)
@@ -253,6 +290,7 @@ class CleanupWithoutGitTest(TmpRepoTest):
     """git промолчал — уборка ничего не трогает и говорит об этом."""
 
     def test_missing_main_stops_the_cleanup(self):
+        self.seed_main_task_dir()
         self.git("checkout", "-b", "other")
         self.git("branch", "-D", config.MAIN_BRANCH)
 
@@ -263,6 +301,8 @@ class CleanupWithoutGitTest(TmpRepoTest):
 
     def test_unreadable_main_tree_keeps_the_dir(self):
         """main на месте, но `ls-tree` ответил ошибкой: сверять по-прежнему не с чем."""
+        self.seed_main_task_dir()
+
         out = self.capture_with_failing_git("ls-tree", cleanup.cmd_kill, self.TASK)
 
         self.assertTrue(self.task_dir().exists())
@@ -271,6 +311,8 @@ class CleanupWithoutGitTest(TmpRepoTest):
 
     def test_unreadable_index_keeps_the_dir(self):
         """`ls-files` промолчал — отслеживается каталог или нет, неизвестно."""
+        self.seed_main_task_dir()
+
         out = self.capture_with_failing_git("ls-files", cleanup.cmd_kill, self.TASK)
 
         self.assertTrue(self.task_dir().exists())
@@ -291,6 +333,8 @@ class CleanupWithoutGitTest(TmpRepoTest):
             return self.capture(fn, *args)
 
     def test_unavailable_git_stops_the_cleanup(self):
+        self.seed_main_task_dir()
+
         with mock.patch.object(gitcmd.subprocess, "run",
                                side_effect=OSError("git не найден")):
             out = self.capture(cleanup.cmd_kill, self.TASK)

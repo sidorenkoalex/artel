@@ -35,7 +35,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from orchestrator import (budget, catalog, cleanup, config, fsm,  # noqa: E402
                           runner, spend, store, workspace)
-from tests.sandbox import TmpRootTest, capture  # noqa: E402
+from tests.sandbox import TmpRootTest, capture, fake_git  # noqa: E402
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
@@ -135,6 +135,29 @@ class _MultitargetInvariantsTmpRootTest(TmpRootTest):
         """id второго target с отличимым префиксом (см. докстринг модуля)."""
         return f"{name.upper()}-T{number:03d}"
 
+    def new_pult_task(self, title: str) -> str:
+        """`cmd_new` задачи пульта, ограниченный тем, что этому модулю нужно
+        от неё: строка в БД и `tasks/<id>` (SPEC T048).
+
+        Этот класс — об окружении/cwd/изоляции target'ов, не о worktree-
+        механике (SPEC T045): без git-репозитория в `config.ROOT` (только
+        скопирован, не `git init`) настоящий `git worktree add` упал бы
+        `fatal: not a git repository`. Обходим `workspace.ensure` тем же
+        приёмом, что `test_multitarget._MultitargetTmpRootTest`: путь — сам
+        `self.root`, чтобы `tasks/<id>` совпал с `config.TASKS`, который
+        читают `test_directories_of_two_targets_do_not_collide` и подобные.
+        `gitcmd.git` — общая лёгкая заглушка (`rev-parse --verify` отвечает
+        «нет ветки», остальное — успех): `cmd_new` решает по ней, заводить
+        ли задачу (AC-3), и коммитит ТЗ/SPEC. Только вокруг `cmd_new`, не
+        на весь класс: `ExternalWorkspaceIsolationTest` тем же базовым
+        классом пользуется для теста РЕАЛЬНОГО `workspace.ensure` (SPEC
+        T045, AC-3) и не должен получить его подмену стороной.
+        """
+        with mock.patch.object(runner.workspace, "ensure",
+                               lambda task_id, branch: (self.root, None)), \
+                mock.patch.object(runner.gitcmd, "git", fake_git):
+            return capture(catalog.cmd_new, title)
+
     def run_faked(self, task_id: str, lines=("готово\n",)) -> dict:
         """Прогон `cmd_run` с подменённым git/Popen; возвращает kwargs Popen."""
         with mock.patch.object(runner.gitcmd, "git", fake_git_config), \
@@ -181,7 +204,13 @@ class PultArtifactIsolationTest(unittest.TestCase):
                             ("ROLE_HOME", self.root / ".artel" / "home"),
                             ("ROLE_CONFIG_DIR",
                              self.root / ".artel" / "home" / ".claude"),
-                            ("TARGETS", self.root / "targets.yaml")):
+                            ("TARGETS", self.root / "targets.yaml"),
+                            # SPEC T048: `cmd_new` заводит настоящий worktree
+                            # задачи (`workspace.ensure`) — непропатченный
+                            # `config.WORKTREES` тем же приёмом, что и
+                            # остальные пути этого списка, утёк бы на
+                            # реальный пульт (tests/sandbox.py, докстринг).
+                            ("WORKTREES", self.root / ".artel" / "worktrees")):
             self.patches.enter_context(mock.patch.object(config, attr, value))
 
         self.capture(catalog.cmd_init)
@@ -229,9 +258,17 @@ class PultArtifactIsolationTest(unittest.TestCase):
         self.assertEqual(self.artel_lines(), [],
                          "внешние артефакты попали в git status")
 
-        # Переход самого пульта: SPEC готов, advance на spec_gate.
-        (config.TASKS / self.TASK / "SPEC.md").write_text(
+        # Переход самого пульта: SPEC готов, advance на spec_gate. SPEC.md
+        # (SPEC T048) живёт в worktree задачи, не на диске main — advance
+        # читает статус с ВЕТКИ (T031/T047, branch-correct reads), а не с
+        # рабочего дерева, так что правку нужно закоммитить в worktree.
+        wt = workspace.path(self.TASK)
+        (wt / "tasks" / self.TASK / "SPEC.md").write_text(
             SPEC_READY.format(task=self.TASK), encoding="utf-8")
+        subprocess.run(["git", "-C", str(wt), "add", "-A",
+                       f"tasks/{self.TASK}"], cwd=wt, check=True)
+        subprocess.run(["git", "-C", str(wt), "commit", "-q", "-m", "SPEC готов"],
+                       cwd=wt, check=True)
         self.capture(fsm.cmd_advance, self.TASK)
         self.drop_external_artifacts("sled2")  # второй внешний target
         self.assertEqual(self.artel_lines(), [],
@@ -243,7 +280,9 @@ class PultArtifactIsolationTest(unittest.TestCase):
         self.assertEqual(self.artel_lines(), [],
                          "внешние артефакты всплыли после kill")
         # Контроль: сама уборка отработала (иначе тест ничего не доказывал бы).
-        self.assertFalse((config.TASKS / self.TASK).exists())
+        # SPEC T048: артефакты живут в worktree задачи, не на диске main —
+        # именно его отсутствие после kill и есть признак реальной уборки.
+        self.assertFalse(wt.exists())
 
 
 class ExternalWorkspaceIsolationTest(TmpRootTest):
@@ -350,7 +389,7 @@ class CrossTargetDbIsolationTest(TmpRootTest):
 
     def test_rows_and_journals_do_not_cross_targets(self):
         capture(catalog.cmd_init)
-        capture(catalog.cmd_new, "Задача пульта")  # T001, target=artel
+        self.new_pult_task("Задача пульта")  # T001, target=artel
         sled_id = self.second_target("sled", 1)
         store.insert_task(store.db(), sled_id, "Задача sled", "in_dev",
                           f"task/{sled_id.lower()}", "sled", 25.0)
@@ -375,7 +414,7 @@ class CrossTargetDbIsolationTest(TmpRootTest):
 
     def test_kill_of_one_target_task_does_not_touch_the_other(self):
         capture(catalog.cmd_init)
-        capture(catalog.cmd_new, "Задача пульта")  # T001, target=artel
+        self.new_pult_task("Задача пульта")  # T001, target=artel
         sled_id = self.second_target("sled", 1)
         store.insert_task(store.db(), sled_id, "Задача sled", "in_dev",
                           f"task/{sled_id.lower()}", "sled", 25.0)
@@ -390,7 +429,7 @@ class CrossTargetDbIsolationTest(TmpRootTest):
     def test_directories_of_two_targets_do_not_collide(self):
         """Требование 1/3 на стыке: артефакты пульта и внешнего в разных путях."""
         capture(catalog.cmd_init)
-        capture(catalog.cmd_new, "Задача пульта")  # T001, target=artel
+        self.new_pult_task("Задача пульта")  # T001, target=artel
         sled_id = self.second_target("sled", 1)
 
         pult_dir = config.TASKS / "T001"
@@ -424,7 +463,7 @@ class ProgramSpendAcrossTargetsTest(TmpRootTest):
 
     def test_threshold_sums_two_different_targets(self):
         capture(catalog.cmd_init)
-        capture(catalog.cmd_new, "Задача пульта")  # T001, target=artel
+        self.new_pult_task("Задача пульта")  # T001, target=artel
         sled_id = self.second_target("sled", 1)
         store.insert_task(store.db(), sled_id, "Задача sled", "in_dev",
                           f"task/{sled_id.lower()}", "sled", 25.0)

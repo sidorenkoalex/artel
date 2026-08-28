@@ -104,7 +104,8 @@ class _AnalystRoleTmpRootTest(TmpRootTest):
     """Лёгкая песочница: БД и артефакты во временном каталоге, git — заглушка."""
 
     TASK = "T001"
-    PATCHED_ATTRS = ("DB", "TASKS", "LOGS", "ROLE_HOME", "ROLE_CONFIG_DIR")
+    PATCHED_ATTRS = ("DB", "TASKS", "LOGS", "ROLE_HOME", "ROLE_CONFIG_DIR",
+                     "WORKTREES")
 
     def setUp(self):
         super().setUp()
@@ -113,8 +114,20 @@ class _AnalystRoleTmpRootTest(TmpRootTest):
         self.addCleanup(patcher.stop)
 
         self.capture(catalog.cmd_init)
+        # `config.TASKS` реально существует и в проде (`tasks/` пульта);
+        # с SPEC T048 `cmd_new` больше не заводит его побочно как раньше
+        # (пишет в worktree, не на диск main) — тесты, кладущие артефакты
+        # на диск напрямую (`write`/`write_tz`, симуляция ветко-корректного
+        # fallback), нуждаются в каталоге сами.
+        config.TASKS.mkdir(parents=True, exist_ok=True)
         self.capture(catalog.cmd_new, "Аналитик из ТЗ")
         self.tdir = config.TASKS / self.TASK
+
+    def wt_tdir(self, task_id: str | None = None) -> Path:
+        """Каталог артефактов задачи В ВОРКТРИ (SPEC T048): `cmd_new` с
+        этой задачи пишет TZ.md/SPEC.md туда, не в `config.TASKS`."""
+        tid = task_id or self.TASK
+        return config.WORKTREES / tid / "tasks" / tid
 
     def state(self) -> str:
         return store.db().execute("SELECT state FROM tasks WHERE id=?",
@@ -132,6 +145,7 @@ class _AnalystRoleTmpRootTest(TmpRootTest):
     def write_tz(self, raw: str = TZ_RAW) -> Path:
         """Пишет TZ.md ЭТОЙ задаче напрямую — не через `cmd_new` (не
         заводит вторую задачу, только добавляет вход analyst к self.TASK)."""
+        self.tdir.mkdir(parents=True, exist_ok=True)
         tz_path = self.tdir / "TZ.md"
         tz_path.write_text(
             catalog._tz_document(self.TASK, "Аналитик из ТЗ", raw),
@@ -189,10 +203,15 @@ class GuardNewTypesTest(unittest.TestCase):
 # `catalog.cmd_new`: заведение TZ.md флагом (критерий приёмки 1, часть 1).
 
 class CmdNewTzTest(TmpRootTest):
+    """С SPEC T048 `cmd_new` пишет TZ.md/SPEC.md в ВОРКТРИ задачи, не на
+    диск main (`config.TASKS`) — проверки ниже смотрят в `wt_tdir()`, не
+    в `self.tdir` (тот теперь используется только как отдельная
+    диск-песочница остальных FSM-тестов этого файла, требование 4)."""
 
     def test_without_tz_flag_behaves_as_before(self):
-        self.assertFalse((self.tdir / "TZ.md").exists())
-        self.assertTrue((self.tdir / "SPEC.md").exists())
+        wt_dir = self.wt_tdir()
+        self.assertFalse((wt_dir / "TZ.md").exists())
+        self.assertTrue((wt_dir / "SPEC.md").exists())
 
     def test_tz_flag_creates_a_guard_valid_artifact(self):
         tz_file = self.tdir.parent / "tz-input.txt"
@@ -201,7 +220,7 @@ class CmdNewTzTest(TmpRootTest):
         out = self.capture(catalog.cmd_new, "Экспорт CSV", str(tz_file))
 
         task_id = out.split("]")[0].strip("[")
-        tz_path = config.TASKS / task_id / "TZ.md"
+        tz_path = self.wt_tdir(task_id) / "TZ.md"
         self.assertTrue(tz_path.exists())
         self.assertEqual(guard.check(tz_path), [])
         self.assertIn(TZ_RAW.strip(), tz_path.read_text(encoding="utf-8"))
@@ -216,19 +235,22 @@ class CmdNewTzTest(TmpRootTest):
         self.assertIn("ТЗ не прочитано", str(ctx.exception))
 
     def test_unreadable_tz_path_leaves_no_half_created_task(self):
-        """Отказ до расхода номера счётчика и до создания каталога задачи —
-        иначе на диске остаётся сирота без строки БД (doctor.check_orphans)."""
+        """Отказ до расхода номера счётчика и до создания задачи — иначе
+        БД получает сироту без ветки/воркри. Сверяется с БД, не с
+        листингом каталога (conventions-core: `tasks/` двигают
+        параллельные сессии)."""
         missing = self.tdir.parent / "нет-такого-файла.txt"
-        before = {p.name for p in config.TASKS.iterdir()}
 
         with self.assertRaises(SystemExit):
             catalog.cmd_new("Экспорт CSV", str(missing))
 
-        after = {p.name for p in config.TASKS.iterdir()}
-        self.assertEqual(before, after, "новый каталог задачи не должен был появиться")
+        self.assertIsNone(store.db().execute(
+            "SELECT 1 FROM tasks WHERE id='T002'").fetchone(),
+            "отказ не должен создавать вторую задачу")
         # Следующая задача получает T002, а не T003 — номер не пропущен.
         self.capture(catalog.cmd_new, "Следующая задача")
-        self.assertTrue((config.TASKS / "T002").exists())
+        self.assertIsNotNone(store.db().execute(
+            "SELECT 1 FROM tasks WHERE id='T002'").fetchone())
 
 
 # --------------------------------------------------------------------------
@@ -253,16 +275,16 @@ class ArtelCliTzFlagTest(TmpRootTest):
     def test_cli_new_with_dangling_tz_flag_exits_cleanly(self):
         """Воспроизводит замечание ревью буквально через `main()`: `new
         "название" --tz` без пути к файлу — понятный отказ, не трейсбек,
-        и без наполовину созданной задачи."""
-        before = {p.name for p in config.TASKS.iterdir()}
+        и без наполовину созданной задачи (сверка с БД, не с листингом
+        каталога — conventions-core)."""
         with mock.patch.object(sys, "argv",
                                ["artel.py", "new", "Экспорт CSV", "--tz"]):
             with self.assertRaises(SystemExit) as ctx:
                 artel.main()
         self.assertIn("--tz", str(ctx.exception))
-        after = {p.name for p in config.TASKS.iterdir()}
-        self.assertEqual(before, after,
-                         "новый каталог задачи не должен был появиться")
+        self.assertIsNone(store.db().execute(
+            "SELECT 1 FROM tasks WHERE id='T002'").fetchone(),
+            "дефектный --tz не должен был завести вторую задачу")
 
 
 # --------------------------------------------------------------------------

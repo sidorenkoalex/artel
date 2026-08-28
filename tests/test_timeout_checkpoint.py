@@ -41,13 +41,15 @@ class CommitTimeoutCheckpointTest(RealPultGitTest):
 
     def test_dirty_tree_commits_with_message_sha_and_journal_entry(self):
         self.enter_in_dev()
-        (self.root / "tasks" / self.TASK / "wip.md").write_text(
+        (self.task_dir() / "wip.md").write_text(
             "недописано\n", encoding="utf-8")
 
         detail = runner.commit_timeout_checkpoint(
             store.db(), self.TASK, "developer")
 
-        subject = self.git("log", "-1", "--format=%s").strip()
+        # Коммит чекпоинта — в worktree задачи, не в ROOT (тот остаётся на
+        # main, SPEC T048); `git log` читается там же.
+        subject = self.git_in_worktree("log", "-1", "--format=%s").strip()
         self.assertEqual(subject,
                          f"{self.TASK}: WIP-чекпоинт после таймаута шага developer")
         self.assertIn(subject, detail)
@@ -59,7 +61,7 @@ class CommitTimeoutCheckpointTest(RealPultGitTest):
 
     def test_refixation_keeps_check_integrity_clean_after_the_commit(self):
         self.enter_in_dev()
-        (self.root / "tasks" / self.TASK / "wip.md").write_text(
+        (self.task_dir() / "wip.md").write_text(
             "недописано\n", encoding="utf-8")
 
         runner.commit_timeout_checkpoint(store.db(), self.TASK, "developer")
@@ -87,7 +89,7 @@ class CommitTimeoutCheckpointTest(RealPultGitTest):
 
     def test_git_add_failure_commits_nothing_and_journals_nothing(self):
         self.enter_in_dev()
-        (self.root / "tasks" / self.TASK / "wip.md").write_text(
+        (self.task_dir() / "wip.md").write_text(
             "недописано\n", encoding="utf-8")
         before = self.head()
 
@@ -102,7 +104,7 @@ class CommitTimeoutCheckpointTest(RealPultGitTest):
         (`git diff --cached --quiet` вне {0,1} — git не ответил), что и у
         `git add`, отдельным кейсом."""
         self.enter_in_dev()
-        (self.root / "tasks" / self.TASK / "wip.md").write_text(
+        (self.task_dir() / "wip.md").write_text(
             "недописано\n", encoding="utf-8")
         before = self.head()
 
@@ -116,7 +118,7 @@ class CommitTimeoutCheckpointTest(RealPultGitTest):
         """REVIEW.md T041 итерация 1, замечание minor: та же деградация
         для отказа самого `git commit`."""
         self.enter_in_dev()
-        (self.root / "tasks" / self.TASK / "wip.md").write_text(
+        (self.task_dir() / "wip.md").write_text(
             "недописано\n", encoding="utf-8")
         before = self.head()
 
@@ -132,7 +134,7 @@ class CommitTimeoutCheckpointTest(RealPultGitTest):
         add` (см. докстринг `commit_timeout_checkpoint` и PLAN «Риски») —
         `gitcmd.git` вообще не должен быть вызван."""
         self.enter_in_dev()
-        (self.root / "tasks" / self.TASK / "wip.md").write_text(
+        (self.task_dir() / "wip.md").write_text(
             "недописано\n", encoding="utf-8")
         before = self.head()
         conn = store.db()

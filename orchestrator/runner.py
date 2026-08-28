@@ -38,20 +38,34 @@ def step_role(t) -> str | None:
     и `run`/`auto` не имеют права ни разу попытаться запустить агента
     просто потому, что кто-то добавил запись в общий словарь состояний.
     Роль `analyst` подключается только когда `TZ.md` реально лежит
-    в каталоге задачи; при отсутствии файла функция ведёт себя так же,
-    как и до этой задачи (роли нет). Единственная точка резолвинга,
-    которую зовут и `cmd_run`, и `auto.cmd_auto` (`STATE_ROLE`/
-    `AUTO_STOP` как словари при этом не трогаются — их читают
-    `test_invariants.FsmStatesCoverTheCodeTest` и `test_auto_cycle.*`
-    буквально по ключам).
+    в задаче; при отсутствии файла функция ведёт себя так же, как и до
+    этой задачи (роли нет). Единственная точка резолвинга, которую зовут
+    и `cmd_run`, и `auto.cmd_auto` (`STATE_ROLE`/`AUTO_STOP` как словари
+    при этом не трогаются — их читают `test_invariants.FsmStatesCoverTheCodeTest`
+    и `test_auto_cycle.*` буквально по ключам).
+
+    Наличие `TZ.md` определяется ветко-корректно (SPEC T048, требование 7
+    — тот же класс, что уже закрыт для статусов SPEC/REVIEW/QUESTIONS,
+    T031/T047): `cmd_new` с этой задачи коммитит TZ.md сразу в ветку, не
+    на диск main (требование 4), так что на чужой ветке (`gitcmd.
+    on_foreign_branch`) файл ищется В НЕЙ (`gitcmd.show`), а не в
+    `config.TASKS` — иначе только что заведённая ролью задача выглядела
+    бы так, будто ТЗ не было вовсе. Иначе (своя ветка уже выписана; ветка
+    ещё не создана; git не ответил) — прежнее поведение, диск: тот же
+    вырожденный случай, на котором стоит весь стенд заглушек `gitcmd.git`.
     """
     role = config.STATE_ROLE.get(t["state"])
     if role is not None:
         return role
-    if t["state"] == "spec_writing" and (
-            config.TASKS / t["id"] / "TZ.md").exists():
-        return "analyst"
-    return None
+    if t["state"] != "spec_writing":
+        return None
+    branch = t["branch"]
+    if gitcmd.on_foreign_branch(branch):
+        tz_text, _ = gitcmd.show(branch, f"tasks/{t['id']}/TZ.md")
+        has_tz = tz_text is not None
+    else:
+        has_tz = (config.TASKS / t["id"] / "TZ.md").exists()
+    return "analyst" if has_tz else None
 
 
 def cmd_run(task_id: str, session_id: str | None = None) -> None:
@@ -425,18 +439,21 @@ def commit_timeout_checkpoint(conn, task_id: str, role: str) -> str:
     как обычно, просто с уже сдвинутым sha.
 
     Только догфуд (`target == config.DEFAULT_TARGET`, PLAN «Риски»,
-    REVIEW.md T041 итерации 1, замечание major): `gitcmd.git` всегда
-    бьёт по `config.ROOT`, и для внешнего target это дерево пульта, а
-    не тот репозиторий, где реально работала роль (workspace target'а,
-    `role_cwd`). Коммитить туда чекпоинт было бы неверно вдвойне — либо
-    подхватило бы чужое незакоммиченное состояние ROOT под сообщением
-    этой задачи, либо ничего не нашло бы, оставив настоящий WIP
-    workspace'а нетронутым. При этом `check_integrity` для внешнего
-    target тоже смотрит не в workspace, а в артефактный репозиторий
-    `.artel/projects/<target>/` (`fixation.read`/`_read_external`) —
-    свой workspace ADR-0003 §4 вообще не коммитит (тот же довод, что
-    `fsm._dirty_refuses`), поэтому чекпоинт workspace'а не решал бы и
-    исходную проблему AC-1/AC-2 для внешнего target. Пока
+    REVIEW.md T041 итерации 1, замечание major). С SPEC T045 (`role_cwd`)
+    догфуд-роль работает в СОБСТВЕННОМ worktree задачи
+    (`workspace.path`), не в `config.ROOT`, — операции идут через
+    `gitcmd.in_repo(workspace.path(task_id), ...)`, тем же приёмом, что
+    `fixation._fix_dogfood` уже применяет к сверке чистоты worktree
+    (SPEC T048). Коммитить в `config.ROOT` было бы неверно вдвойне — либо
+    подхватило бы чужое незакоммиченное состояние главной копии под
+    сообщением этой задачи, либо ничего не нашло бы, оставив настоящий
+    WIP worktree'а нетронутым (класс-дефект T041×T045, докстринг
+    исправлен в T048 — до этой правки функция ошибочно била по ROOT).
+    Для внешнего target `check_integrity` смотрит не в workspace, а в
+    артефактный репозиторий `.artel/projects/<target>/` (`fixation.read`/
+    `_read_external`) — свой workspace ADR-0003 §4 вообще не коммитит
+    (тот же довод, что `fsm._dirty_refuses`), поэтому чекпоинт workspace'а
+    не решал бы исходную проблему AC-1/AC-2 для внешнего target. Пока
     `targets.yaml` объявляет только догфуд (ADR-0003 3д, «особый случай
     до A7»), эта ветка не задета вживую; расширение на внешний target —
     отдельная задача поверх многотаргетной архитектуры фиксации, не
@@ -444,20 +461,21 @@ def commit_timeout_checkpoint(conn, task_id: str, role: str) -> str:
     """
     if store.task_target(conn, task_id) != config.DEFAULT_TARGET:
         return ""
-    added = gitcmd.git("add", "-A")
+    wt = workspace.path(task_id)
+    added = gitcmd.in_repo(wt, "add", "-A")
     if added.returncode != 0:
         return ""
-    staged = gitcmd.git("diff", "--cached", "--quiet")
+    staged = gitcmd.in_repo(wt, "diff", "--cached", "--quiet")
     if staged.returncode != 1:  # 0 — нечего коммитить, иное — git не ответил
         return ""
     message = f"{task_id}: WIP-чекпоинт после таймаута шага {role}"
-    commit = gitcmd.git(
-        "-c", f"user.name={fixation.FIXATION_AUTHOR_NAME}",
+    commit = gitcmd.in_repo(
+        wt, "-c", f"user.name={fixation.FIXATION_AUTHOR_NAME}",
         "-c", f"user.email={fixation.FIXATION_AUTHOR_EMAIL}",
         "commit", "-q", "-m", message)
     if commit.returncode != 0:
         return ""
-    sha = gitcmd.head_sha()
+    sha = gitcmd.head_sha(wt)
     detail = f"{message} (sha {sha})" if sha else message
     store.journal(conn, task_id, "orchestrator",
                   "WIP-чекпоинт после таймаута шага", detail)

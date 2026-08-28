@@ -23,7 +23,7 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from orchestrator import catalog, config, fsm, gitcmd, store  # noqa: E402
+from orchestrator import catalog, config, fsm, gitcmd, store, workspace  # noqa: E402
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
@@ -88,10 +88,14 @@ schema_version: 2
 
 
 class RealGitBranchTest(unittest.TestCase):
-    """ROOT — свежий репозиторий с main и заведённой задачей T001; ветка
-    задачи создаётся тестом (`git checkout -b`) уже после `cmd_new`, тем
-    же приёмом, что `tasks/T047/acceptance_tests/test_branch_correct_
-    status_reads.RealGitBranchTest`."""
+    """ROOT — свежий репозиторий с main; `cmd_new` (SPEC T048) сам заводит
+    РЕАЛЬНУЮ ветку/worktree задачи T001 и коммитит в неё шаблонный
+    SPEC.md — ROOT остаётся на main. Дальнейшие артефакты этот тест
+    коммитит В WORKTREE задачи (`git -C`, не чекаутом её ветки в ROOT —
+    ветку и так держит worktree, повторный чекаут той же ветки git не
+    даст сделать, SPEC T045), тем же приёмом, что
+    `tests/test_kill_cleanup.py`/`tests/test_acceptance_tests_flow.
+    LockTest` этой же задачи."""
 
     TASK = "T001"
 
@@ -113,18 +117,27 @@ class RealGitBranchTest(unittest.TestCase):
         for attr, value in (("ROOT", self.root),
                             ("DB", self.root / ".artel" / "state.db"),
                             ("TASKS", self.root / "tasks"),
-                            ("LOGS", self.root / ".artel" / "logs")):
+                            ("LOGS", self.root / ".artel" / "logs"),
+                            ("WORKTREES", self.root / ".artel" / "worktrees")):
             self.patches.enter_context(mock.patch.object(config, attr, value))
 
         self.capture(catalog.cmd_init)
         self.capture(catalog.cmd_new, "Ветко-корректные чтения статусов")
         self.tdir = config.TASKS / self.TASK
         self.branch = store.get_task(store.db(), self.TASK)["branch"]
+        self.wt_dir = workspace.path(self.TASK) / "tasks" / self.TASK
 
     def git(self, *args: str) -> str:
         res = subprocess.run(["git", *args], cwd=self.root,
                              capture_output=True, text=True)
         self.assertEqual(res.returncode, 0, f"git {' '.join(args)}: {res.stderr}")
+        return res.stdout
+
+    def git_wt(self, *args: str) -> str:
+        res = subprocess.run(["git", "-C", str(workspace.path(self.TASK)),
+                              *args], capture_output=True, text=True)
+        self.assertEqual(res.returncode, 0,
+                         f"git -C worktree {' '.join(args)}: {res.stderr}")
         return res.stdout
 
     def capture(self, fn, *args) -> str:
@@ -158,10 +171,13 @@ class RealGitBranchTest(unittest.TestCase):
                                       encoding="utf-8")
 
     def write_on_task_branch(self, name: str, template: str) -> None:
-        self.checkout(self.branch, create=True)
-        self.write(name, template)
-        self.commit_task_dir(f"{name} задачи")
-        self.checkout(config.MAIN_BRANCH)
+        """Кладёт файл прямо в worktree задачи (её ветку и так держит
+        worktree — checkout не нужен) и коммитит его там же."""
+        self.wt_dir.mkdir(parents=True, exist_ok=True)
+        (self.wt_dir / name).write_text(template.format(task=self.TASK),
+                                        encoding="utf-8")
+        self.git_wt("add", f"tasks/{self.TASK}")
+        self.git_wt("commit", "-q", "-m", f"{name} задачи")
 
 
 # ---------------------------------------------------------------------
@@ -203,17 +219,17 @@ class QuestionsOnForeignBranchTest(RealGitBranchTest):
 
 class RequiredArtifactMissingOnBranchTest(RealGitBranchTest):
 
-    def _fork_branch_without_task_dir(self) -> None:
-        """Заводит ветку задачи в git, но БЕЗ коммита tasks/<id>/ на
-        ней — только несвязанный коммит; возвращается на main."""
-        self.checkout(self.branch, create=True)
-        (self.root / "marker.txt").write_text("noop\n", encoding="utf-8")
-        self.git("add", "marker.txt")
-        self.git("commit", "-q", "-m", "несвязанный коммит, без tasks/")
-        self.checkout(config.MAIN_BRANCH)
+    def _remove_task_dir_from_branch(self) -> None:
+        """С SPEC T048 `cmd_new` сам коммитит шаблонный SPEC.md на ветку
+        задачи — «ветка есть, а обязательного артефакта на ней нет»
+        обычным путём больше не возникает. Симулируем вырожденный случай
+        (порча ветки, force-push поверх, ручной `git rm`) явным коммитом
+        удаления `tasks/<id>/` поверх того, что уже сделал `cmd_new`."""
+        self.git_wt("rm", "-r", "-q", f"tasks/{self.TASK}")
+        self.git_wt("commit", "-q", "-m", "tasks/ снесён с ветки")
 
     def test_spec_writing_refuses_when_branch_exists_without_spec_md(self):
-        self._fork_branch_without_task_dir()
+        self._remove_task_dir_from_branch()
 
         out = self.capture(fsm.cmd_advance, self.TASK)
 
@@ -225,7 +241,8 @@ class RequiredArtifactMissingOnBranchTest(RealGitBranchTest):
         self.assertIn("SPEC.md", out)
 
     def test_review_refuses_when_branch_exists_without_review_md(self):
-        self._fork_branch_without_task_dir()
+        # REVIEW.md `cmd_new` не пишет вовсе (только SPEC.md/TZ.md,
+        # требования 2-3) — ветка и без порчи уже без него.
         self.set_state("review")
 
         out = self.capture(fsm.cmd_advance, self.TASK)
@@ -262,10 +279,7 @@ class GuardSeesBranchContentNotDiskTest(RealGitBranchTest):
         # бы читал его); ветка задачи — СВОЙ, валидный.
         self.write("SPEC.md", BROKEN_SPEC)
         self.commit_task_dir("сломанный SPEC.md — закоммичен прямо в main")
-        self.checkout(self.branch, create=True)
-        self.write("SPEC.md", SPEC_READY)
-        self.commit_task_dir("валидный SPEC.md — закоммичен на ветке")
-        self.checkout(config.MAIN_BRANCH)
+        self.write_on_task_branch("SPEC.md", SPEC_READY)
 
         out = self.capture(fsm.cmd_advance, self.TASK)
 

@@ -18,8 +18,8 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from orchestrator import budget, catalog, config, fsm, store  # noqa: E402
-from tests.sandbox import capture  # noqa: E402
+from orchestrator import budget, catalog, config, fsm, gitcmd, store  # noqa: E402
+from tests.sandbox import capture, fake_git  # noqa: E402
 
 # Заготовка валидна по guard: с T017 он вызывается на переходе
 # spec_writing -> spec_gate, и SPEC без обязательных секций до применения
@@ -125,14 +125,33 @@ class SpecBudgetOnTheGateTest(unittest.TestCase):
 
         for attr, value in (("DB", root / ".artel" / "state.db"),
                             ("TASKS", root / "tasks"),
-                            ("LOGS", root / ".artel" / "logs")):
+                            ("LOGS", root / ".artel" / "logs"),
+                            ("WORKTREES", root / ".artel" / "worktrees")):
             patcher = mock.patch.object(config, attr, value)
             patcher.start()
             self.addCleanup(patcher.stop)
 
+        # ДО `cmd_new` (SPEC T048) — сам заводит ветку/worktree через
+        # `gitcmd`, без фейка ушёл бы в реальный репозиторий пульта.
+        git_patcher = mock.patch.object(gitcmd, "git", fake_git)
+        git_patcher.start()
+        self.addCleanup(git_patcher.stop)
+
         self.capture(catalog.cmd_init)
         self.capture(catalog.cmd_new, "Бюджет задачи из SPEC")
+        # `write_spec` кладёт SPEC.md на диск НАПРЯМУЮ, минуя worktree —
+        # песочница не на «чужой ветке» (`gitcmd.on_foreign_branch` тут
+        # всегда False с фейком выше), так что `fsm._cmd_advance` читает
+        # его отсюда же; `cmd_new` больше не заводит этот каталог сам
+        # (SPEC T048 требование 4 — пишет в worktree, не на диск main).
         self.tdir = config.TASKS / self.TASK
+        self.tdir.mkdir(parents=True, exist_ok=True)
+        # Шаблонный SPEC.md `new` кладёт в worktree (требование 2), не в
+        # `self.tdir` — тесту нужен именно нетронутый шаблон (проверка
+        # закомментированной подсказки), копируем его сюда же.
+        wt_spec = config.WORKTREES / self.TASK / "tasks" / self.TASK / "SPEC.md"
+        (self.tdir / "SPEC.md").write_text(
+            wt_spec.read_text(encoding="utf-8"), encoding="utf-8")
 
     # ------------------------------------------------------------ утилиты
 

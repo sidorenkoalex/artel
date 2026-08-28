@@ -17,8 +17,8 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from orchestrator import catalog, config, fsm, gitcmd, store  # noqa: E402
-from tests.sandbox import capture  # noqa: E402
+from orchestrator import catalog, config, fsm, gitcmd, store, workspace  # noqa: E402
+from tests.sandbox import capture, fake_git  # noqa: E402
 
 # Валидные артефакты; «портит» их фикстура — выбрасыванием секции.
 SPEC_MD = """---
@@ -100,9 +100,21 @@ class AdvanceGuardTest(unittest.TestCase):
             patcher = mock.patch.object(config, attr, value)
             patcher.start()
             self.addCleanup(patcher.stop)
-        patcher = mock.patch.object(gitcmd, "git", lambda *a: None)
+        # Этот модуль — о guard'е на артефактах, не о git/worktree-механике
+        # (SPEC T045/T048): лёгкая общая заглушка (`tests.sandbox.fake_git`)
+        # отвечает «нет такой ветки» и успехом на остальное — этого
+        # достаточно, чтобы `cmd_new` завёл задачу и закоммитил ТЗ/SPEC
+        # (AC-3, требования 1—3), не отвечая осмысленно на `worktree
+        # add/list` — их обходим `workspace.ensure` напрямую, путь — сам
+        # `root`, чтобы `tasks/<id>` совпал с `config.TASKS`, который
+        # читает `self.tdir` ниже.
+        patcher = mock.patch.object(gitcmd, "git", fake_git)
         patcher.start()
         self.addCleanup(patcher.stop)
+        wt_patcher = mock.patch.object(
+            workspace, "ensure", lambda task_id, branch: (root, None))
+        wt_patcher.start()
+        self.addCleanup(wt_patcher.stop)
 
         self.capture(catalog.cmd_init)
         self.capture(catalog.cmd_new, "Guard на переходах")

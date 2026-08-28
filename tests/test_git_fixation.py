@@ -35,7 +35,7 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from orchestrator import (catalog, config, fixation, fsm,  # noqa: E402
-                          gitcmd, projects, runner, store)
+                          gitcmd, projects, runner, store, workspace)
 from tests.sandbox import TmpRootTest, capture  # noqa: E402
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -586,7 +586,13 @@ class RealPultGitTest(unittest.TestCase):
             lambda role, target: []))
 
         self.capture(catalog.cmd_init)
-        self.capture(catalog.cmd_new, "Git-фиксация")  # заводит T001
+        self.capture(catalog.cmd_new, "Git-фиксация")  # заводит T001, свой worktree
+        # SPEC T048: `cmd_new` заводит РЕАЛЬНУЮ ветку/worktree задачи —
+        # рабочее дерево этой песочницы (`self.root`) остаётся на main,
+        # `on_foreign_branch` для T001 теперь истинно (было ложно до T048,
+        # см. докстринг `fixation._fix_dogfood`); голова читается с ветки
+        # задачи (`gitcmd.branch_head_sha`), артефакты живут в её worktree.
+        self.branch = store.get_task(store.db(), self.TASK)["branch"]
 
     def git(self, *args: str) -> str:
         res = subprocess.run(["git", *args], cwd=self.root,
@@ -596,15 +602,29 @@ class RealPultGitTest(unittest.TestCase):
 
     capture = staticmethod(capture)
 
+    def task_dir(self) -> Path:
+        """Каталог артефактов задачи — в её worktree, не на диске main
+        (SPEC T048, требование 4)."""
+        return workspace.path(self.TASK) / "tasks" / self.TASK
+
+    def git_in_worktree(self, *args: str) -> str:
+        wt = workspace.path(self.TASK)
+        res = subprocess.run(["git", "-C", str(wt), *args],
+                             capture_output=True, text=True)
+        self.assertEqual(res.returncode, 0, f"git {' '.join(args)}: {res.stderr}")
+        return res.stdout
+
     def head(self) -> str:
-        return self.git("rev-parse", "HEAD").strip()
+        """Головной sha ВЕТКИ задачи (см. `fixation._fix_dogfood`) — общий
+        для всех worktree одного репозитория объект, читается с main."""
+        return gitcmd.branch_head_sha(self.branch)
 
     def commit_task_dir(self, message: str = "артефакт") -> None:
-        self.git("add", f"tasks/{self.TASK}")
-        self.git("commit", "-q", "-m", message)
+        self.git_in_worktree("add", f"tasks/{self.TASK}")
+        self.git_in_worktree("commit", "-q", "-m", message)
 
     def enter_spec_gate(self) -> str:
-        (config.TASKS / self.TASK / "SPEC.md").write_text(
+        (self.task_dir() / "SPEC.md").write_text(
             SPEC_READY.format(task=self.TASK), encoding="utf-8")
         self.commit_task_dir()
         self.capture(fsm.cmd_advance, self.TASK)
@@ -667,10 +687,20 @@ class DogfoodTransitionJournalsShaTest(RealPultGitTest):
         """T033: грязная копия теперь ОТКАЗЫВАЕТ переходу (симметрия с
         `approve`, инцидент T032), а не журналит фиксацию с чисто=False
         поверх состоявшегося перехода — старое поведение и было тем самым
-        дефектом асимметрии, который T033 закрывает."""
-        (config.TASKS / self.TASK / "SPEC.md").write_text(
+        дефектом асимметрии, который T033 закрывает.
+
+        Статус SPEC.md (SPEC T048) читается с ВЕТКИ задачи, не с диска —
+        «ready» обязан быть сперва закоммичен, иначе advance его просто не
+        увидит («ещё не ready»), а не дойдёт до сверки чистоты. Грязная
+        копия здесь — правка ПОВЕРХ уже закоммиченного ready-SPEC.md.
+        """
+        (self.task_dir() / "SPEC.md").write_text(
             SPEC_READY.format(task=self.TASK), encoding="utf-8")
-        # SPEC.md написан, но НЕ закоммичен — грязная копия tasks/<id>.
+        self.commit_task_dir()
+        (self.task_dir() / "SPEC.md").write_text(
+            SPEC_READY.format(task=self.TASK) + "\nправка мимо коммита\n",
+            encoding="utf-8")
+        # SPEC.md правлен, но правка НЕ закоммичена — грязная копия tasks/<id>.
 
         self.capture(fsm.cmd_advance, self.TASK)
 
@@ -719,7 +749,7 @@ class ApproveByShaTest(RealPultGitTest):
         Оператор разобрался и подтвердил актуальное состояние.
         """
         self.enter_in_dev()
-        (config.TASKS / self.TASK / "SPEC.md").write_text(
+        (self.task_dir() / "SPEC.md").write_text(
             "подмена мимо гейта\n", encoding="utf-8")
         self.run_faked()  # инцидент целостности -> escalated, escalated_from=in_dev
         self.assertEqual(store.get_task(store.db(), self.TASK)["state"],
@@ -737,7 +767,7 @@ class IntegrityIncidentBlocksRunTest(RealPultGitTest):
 
     def test_uncommitted_change_after_approve_blocks_the_run(self):
         self.enter_in_dev()
-        (config.TASKS / self.TASK / "SPEC.md").write_text(
+        (self.task_dir() / "SPEC.md").write_text(
             "подмена мимо гейта\n", encoding="utf-8")
 
         out, popen = self.run_faked()
@@ -750,7 +780,7 @@ class IntegrityIncidentBlocksRunTest(RealPultGitTest):
     def test_committed_change_after_approve_also_blocks_the_run(self):
         """Разошедшийся sha — не только грязная копия, но и посторонний коммит."""
         self.enter_in_dev()
-        (config.TASKS / self.TASK / "SPEC.md").write_text(
+        (self.task_dir() / "SPEC.md").write_text(
             "подмена мимо гейта\n", encoding="utf-8")
         self.commit_task_dir("посторонняя правка")
 
@@ -785,7 +815,7 @@ class FsmDecidesOnlyOnFixedHashesTest(RealPultGitTest):
     def test_tampering_between_approve_and_run_is_caught_not_silently_used(self):
         self.enter_in_dev()
 
-        (config.TASKS / self.TASK / "PLAN.md").write_text(
+        (self.task_dir() / "PLAN.md").write_text(
             "самозванный PLAN, гейт не проходил\n", encoding="utf-8")
         self.commit_task_dir("чужая правка мимо гейта")
 
@@ -801,7 +831,7 @@ class FsmDecidesOnlyOnFixedHashesTest(RealPultGitTest):
         осталась бы незамеченной и агент бы стартовал.
         """
         self.enter_in_dev()
-        (config.TASKS / self.TASK / "PLAN.md").write_text(
+        (self.task_dir() / "PLAN.md").write_text(
             "самозванный PLAN\n", encoding="utf-8")
         self.commit_task_dir("чужая правка мимо гейта")
 

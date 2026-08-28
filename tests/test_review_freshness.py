@@ -102,7 +102,10 @@ class ReviewFreshnessScenarioTest(unittest.TestCase):
                             # в .artel/ репозитория.
                             ("ROLE_HOME", root / ".artel" / "home"),
                             ("ROLE_CONFIG_DIR",
-                             root / ".artel" / "home" / ".claude")):
+                             root / ".artel" / "home" / ".claude"),
+                            # `cmd_new` (SPEC T048) сам заводит ветку и
+                            # worktree через `gitcmd`.
+                            ("WORKTREES", root / ".artel" / "worktrees")):
             patcher = mock.patch.object(config, attr, value)
             patcher.start()
             self.addCleanup(patcher.stop)
@@ -124,9 +127,15 @@ class ReviewFreshnessScenarioTest(unittest.TestCase):
         pf_patcher.start()
         self.addCleanup(pf_patcher.stop)
 
-        self.tdir = config.TASKS / self.TASK
         self.capture(catalog.cmd_init)
         self.capture(catalog.cmd_new, "Проверка вердикта")
+        # REVIEW.md/PLAN.md здесь кладутся на диск НАПРЯМУЮ (не через
+        # `cmd_new`, требование 4 — он пишет в worktree, не в
+        # `config.TASKS`); песочница не на «чужой ветке» в смысле
+        # `gitcmd.on_foreign_branch` (фейк `gitcmd.git` держит
+        # `current_branch()` пустым), так что fsm читает их отсюда же.
+        self.tdir = config.TASKS / self.TASK
+        self.tdir.mkdir(parents=True, exist_ok=True)
         self.set_state("review")
         self.write_plan_ready()
 

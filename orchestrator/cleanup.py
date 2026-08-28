@@ -127,7 +127,31 @@ def cmd_kill(task_id: str, session_id: str | None = None) -> None:
             lease.release(conn, task_id, sid)
 
 
+
+# Литерал действия журнала — источник «Сути» killed-RETRO следующего
+# merge_gate (SPEC T048, требование 6, `orchestrator/retro.py`); строка
+# сверяется буквально, тем же приёмом, что `retro._actor_costs`/
+# `_escalations` уже сверяются с литералами `runner.py`/`store.py`.
+KILL_TZ_JOURNAL_ACTION = "kill: TZ.md"
+
+
+def _journal_tz_before_cleanup(conn, task_id: str, branch: str) -> None:
+    """Полный текст `TZ.md` (если он был) — в журнал БД ДО уборки ветки
+    (SPEC T048, требование 5): main для убитой задачи не видел ни SPEC.md,
+    ни TZ.md вовсе (требование 4), а сама ветка после `cleanup_killed_task`
+    удаляется — читать станет неоткуда. Ветко-корректное чтение
+    (`gitcmd.show`), тем же приёмом, что и `runner.step_role` (T031/T047,
+    требование 7): TZ.md коммитится `cmd_new` сразу в ветку, не на диск.
+    Файла нет (`new` без `--tz`) — журналить нечего, не отказ.
+    """
+    text, _ = gitcmd.show(branch, f"tasks/{task_id}/TZ.md")
+    if text is not None:
+        store.journal(conn, task_id, "orchestrator",
+                      KILL_TZ_JOURNAL_ACTION, text)
+
+
 def _cmd_kill(conn, task_id: str) -> None:
     t = store.get_task(conn, task_id)
+    _journal_tz_before_cleanup(conn, task_id, t["branch"])
     store.set_state(conn, task_id, "killed", "operator", "kill switch")
     cleanup_killed_task(conn, task_id, t["branch"])

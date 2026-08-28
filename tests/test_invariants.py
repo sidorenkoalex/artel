@@ -138,6 +138,14 @@ class SpyRun:
 
     def __call__(self, cmd, *args, **kwargs) -> subprocess.CompletedProcess:
         self.calls.append(list(cmd))
+        # `rev-parse --verify --quiet refs/heads/*` (`gitcmd.branch_exists`)
+        # — отдельно, с отказом (SPEC T048, тот же приём, что и
+        # `tests.sandbox.fake_git`): `cmd_new` теперь решает, заводить ли
+        # задачу, по ответу этого вызова (AC-3) — отвечай он успехом на
+        # всё подряд, `cmd_new` увидел бы любую ветку уже существующей.
+        if (len(cmd) >= 4 and cmd[1] == "rev-parse" and cmd[2] == "--verify"
+                and cmd[-1].startswith("refs/heads/")):
+            return subprocess.CompletedProcess(list(cmd), 1, "", "")
         return subprocess.CompletedProcess(list(cmd), 0, "", "")
 
     def git_subcommands(self) -> list[str]:
@@ -191,7 +199,12 @@ class FsmTest(unittest.TestCase):
                             # в .artel/ репозитория.
                             ("ROLE_HOME", root / ".artel" / "home"),
                             ("ROLE_CONFIG_DIR",
-                             root / ".artel" / "home" / ".claude")):
+                             root / ".artel" / "home" / ".claude"),
+                            # `cmd_new` (SPEC T048) пишет TZ.md/SPEC.md в
+                            # worktree — та же логика, что и у ROLE_HOME
+                            # выше: в песочницу, не в `.artel/worktrees/`
+                            # репозитория (ROOT ниже намеренно реальный).
+                            ("WORKTREES", root / ".artel" / "worktrees")):
             patcher = mock.patch.object(config, attr, value)
             patcher.start()
             self.addCleanup(patcher.stop)
@@ -260,6 +273,11 @@ class FsmTest(unittest.TestCase):
         self.capture(catalog.cmd_init)
         self.capture(catalog.cmd_new, "Инварианты системы")
         self.tdir = config.TASKS / self.TASK
+        # С SPEC T048 `cmd_new` пишет артефакты в worktree, не на диск
+        # main — тесты этого файла кладут SPEC.md/PLAN.md/... напрямую на
+        # диск (симуляция ветко-корректного fallback), каталог заводит
+        # сам файл.
+        self.tdir.mkdir(parents=True, exist_ok=True)
         self.branch = self.task_row()["branch"]
 
     # ------------------------------------------------------------ утилиты
@@ -948,10 +966,10 @@ class KillKeepsMainIntactTest(unittest.TestCase):
         return config.TASKS / self.TASK
 
     def commit_artifacts_in_branch(self) -> None:
-        self.git("checkout", "-b", self.branch)
-        self.git("add", "-A")
-        self.git("commit", "-m", f"{self.TASK}: SPEC")
-        self.git("checkout", config.MAIN_BRANCH)
+        """С SPEC T048 `cmd_new` уже коммитит SPEC.md в ветку задачи одним
+        коммитом ("<id>: ТЗ Оператора (...)") — заводить его тут больше
+        нечего; метод остаётся no-op ради вызовов ниже, вместо удаления
+        (обратная совместимость сценариев `test_kill_never_commits_to_main`)."""
 
     def merge_branch_into_main(self) -> None:
         self.commit_artifacts_in_branch()
@@ -978,6 +996,11 @@ class KillKeepsMainIntactTest(unittest.TestCase):
             "артефакты только в ветке": self.commit_artifacts_in_branch,
             "ветка задачи под HEAD": lambda: (
                 self.commit_artifacts_in_branch(),
+                # Ветка задачи уже стоит в СВОЁМ worktree (SPEC T045/T048,
+                # `cmd_new` заводит его сразу) — git не даст ту же ветку
+                # ЕЩЁ и в главной копии, пока не убрать первый чекаут.
+                self.git("worktree", "remove", "--force",
+                        str(config.WORKTREES / self.TASK)),
                 self.git("checkout", self.branch)),
             "смержено в main": self.merge_branch_into_main,
         }

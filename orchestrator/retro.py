@@ -13,7 +13,7 @@ import re
 
 from scripts import guard
 
-from . import config, store
+from . import cleanup, config, store
 
 RETRO_DIR_REL = "docs/retro"
 
@@ -57,6 +57,22 @@ def _first_context_line(spec_text: str | None) -> str:
 
 def _gist(title: str, context_line: str) -> str:
     return f"{title} — {context_line}" if context_line else title
+
+
+def _journaled_tz_text(steps) -> str | None:
+    """Текст `TZ.md`, положенный в журнал `kill` (SPEC T048, требование 5,
+    `orchestrator/cleanup.py`)."""
+    for s in steps:
+        if s["action"] == cleanup.KILL_TZ_JOURNAL_ACTION:
+            return s["detail"] or None
+    return None
+
+
+def _tz_gist_line(tz_text: str) -> str:
+    """Схлопывает переносы строк ТЗ в одну строку «Сути» (killed-RETRO
+    остаётся построчным документом, требование 6) — без урезания
+    содержимого, только пробелы вместо переводов строк."""
+    return " ".join(tz_text.split())
 
 
 def _actor_costs(steps) -> list[tuple[str, float, int | None]]:
@@ -178,7 +194,13 @@ def build_killed(conn, task_id: str) -> str:
     `cleanup.cleanup_killed_task`."""
     t = store.get_task(conn, task_id)
     steps = store.task_steps(conn, task_id)
-    context_line = _first_context_line(_read_spec_text(task_id))
+    # «Суть» строится из ТЗ, положенного в журнал `kill` (SPEC T048,
+    # требование 6) — SPEC.md пустого шаблона-заглушки для killed-задачи
+    # нового флоу main не видел вовсе (требование 4), читать неоткуда.
+    # ТЗ не было (`new` без `--tz`) — старый источник как запасной путь.
+    tz_text = _journaled_tz_text(steps)
+    context_line = (_tz_gist_line(tz_text) if tz_text is not None
+                    else _first_context_line(_read_spec_text(task_id)))
     count, manual, skip = _acceptance_counts(task_id)
     reason = _last_step_detail(steps, "state -> killed") or "причина не найдена в журнале"
 
