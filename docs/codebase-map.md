@@ -1,5 +1,5 @@
 ---
-built_at_sha: fee0af8a993123d8dce16ddb6bd934aaa00f4464
+built_at_sha: 57f4fd2691f1c84e96b958cc79a808b107600c16
 ---
 
 # Codebase-map пульта
@@ -570,10 +570,14 @@ built_at_sha: fee0af8a993123d8dce16ddb6bd934aaa00f4464
 - `check`
 - `check_content`
 - `count_test_methods`
+- `has_redness_marker`
 - `main`
+- `module_docstring`
+- `redness_marker_errors_from_files`
 - `requires_ac_markup`
 - `scan_ac_content`
 - `scan_acceptance_tests`
+- `scan_redness_markers`
 - `schema_errors`
 - `section_body`
 - `spec_ac_errors`
