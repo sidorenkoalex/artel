@@ -30,6 +30,14 @@ DEFAULT_TARGET = "artel"
 # решает Оператор; адрес слоя задаёт пульт.
 ROLE_HOME = ROOT / ".artel" / "home"
 ROLE_CONFIG_DIR = ROLE_HOME / ".claude"
+# Продолжение той же изоляции на project-/local-слой клиентских настроек
+# (SPEC T058, инцидент T046 27.08): HOME/CLAUDE_CONFIG_DIR выше уводят
+# только user-слой, а `claude` резолвит `.claude/` репозитория (project)
+# и `.claude/settings.local.json` (local) от cwd через git — до этой
+# задачи операторский хук главной копии исполнялся в сессии роли.
+# `--setting-sources` — единственный подтверждённый `claude --help`
+# способ исключить оба слоя из резолвинга целиком, независимо от cwd.
+AGENT_SETTING_SOURCES = "user"
 # Рабочая поверхность задачи (SPEC T045): git worktree на её ветке в
 # стандартном месте — `orchestrator/workspace.py` эту норму несёт.
 WORKTREES = ROOT / ".artel" / "worktrees"

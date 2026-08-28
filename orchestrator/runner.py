@@ -577,7 +577,10 @@ def run_agent_once(conn, task_id: str, role: str, prompt: str,
                  "--output-format", "stream-json", "--verbose",
                  # белый список вместо полного Bash: только git и запуск
                  # тестов/guard
-                 "--allowedTools", "Bash(git:*),Bash(python3:*)"],
+                 "--allowedTools", "Bash(git:*),Bash(python3:*)",
+                 # изоляция от project-/local-слоя клиентских настроек
+                 # репозитория (хуки, MCP) — SPEC T058, инцидент T046
+                 "--setting-sources", config.AGENT_SETTING_SOURCES],
                 cwd=cwd, env=env, text=True, bufsize=1,
                 stdin=prompt_file, stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
