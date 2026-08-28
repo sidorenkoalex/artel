@@ -6,7 +6,7 @@ from pathlib import Path
 from scripts import guard
 
 from . import (acceptance, alerts, artifacts, budget, ci, config, fixation,
-              gitcmd, lease, retro, store, workspace, yamlmini)
+              gitcmd, lease, merge_lock, retro, store, workspace, yamlmini)
 
 # Регенерация/коммит карты кодовой базы на merge_gate (SPEC T042).
 MAP_REL = "docs/codebase-map.md"
@@ -168,18 +168,29 @@ def _generate_and_commit_retro(conn, task_id: str, merge_sha: str) -> None:
 
 # --- сверка свежести ветки до гейта (SPEC T051) ---------------------------
 
-def _pull_main_or_escalate(conn, task_id: str, t, state: str) -> bool:
+def _pull_main_or_escalate(conn, task_id: str, t, state: str) -> str:
     """Сверка свежести ветки задачи на входе в гейт (SPEC T051, требования
-    1-7, 10; ADR-0006 п.2) — единственная точка вызова для обеих точек
-    сверки (`in_dev -> review`, `acceptance -> merge_gate`).
+    1-7, 10; ADR-0006 п.2) и, начиная с T053 требование 5, ВНУТРИ окна
+    `merge_gate` под мьютексом merge — один и тот же узел для всех трёх
+    точек сверки (`in_dev -> review`, `acceptance -> merge_gate`,
+    `merge_gate -> done`).
 
-    True — переход отклонён: задача уже эскалирована (состояние и
-    диагностика уже записаны через `store.set_state`, требования 5-6);
-    вызывающий код обязан немедленно вернуться, не выполняя сам переход.
-    False — либо ветка не отстала от `config.MAIN_BRANCH` (требование 7:
-    поведение перехода прежнее байт-в-байт, никакой git-вызов не сделан),
-    либо подтяжка прошла и приёмочные тесты в подтянутом дереве зелёные —
-    вызывающий код продолжает штатный переход.
+    Возврат — один из трёх исходов:
+    - `"escalated"` — переход уже отклонён: задача уже эскалирована
+      (состояние и диагностика уже записаны через `store.set_state`,
+      требования 5-6); вызывающий код обязан немедленно вернуться, не
+      выполняя сам переход;
+    - `"fresh"` — ветка не отстала от `config.MAIN_BRANCH` (требование 7:
+      поведение перехода прежнее байт-в-байт, никакой git-вызов не
+      сделан);
+    - `"pulled"` — подтяжка прошла и приёмочные тесты в подтянутом
+      дереве зелёные. Точки `in_dev -> review`/`acceptance -> merge_gate`
+      обе продолжают штатный переход одинаково что при `"fresh"`, что при
+      `"pulled"` (T051, не различали их и раньше — общий `bool`); третья
+      точка (`merge_gate -> done`, T053) обязана различать их сама: после
+      `"pulled"` merge в этом же вызове НЕ выполняется (SPEC T053,
+      требование 5) — сдвинутый головой ветки sha делает зафиксированный
+      снимок невалидным для merge (инвариант 19 не ослабляется).
 
     Merge — единственный вне `merge_gate`, разрешённый ADR-0006 п.2: в
     worktree ЗАДАЧИ (`gitcmd.in_repo`, форма `-C`), вливает
@@ -197,7 +208,7 @@ def _pull_main_or_escalate(conn, task_id: str, t, state: str) -> bool:
     branch = t["branch"]
     behind = gitcmd.commits_behind(branch)
     if not behind:
-        return False
+        return "fresh"
 
     wt_path, error = workspace.ensure(task_id, branch)
     if error is not None:
@@ -205,7 +216,7 @@ def _pull_main_or_escalate(conn, task_id: str, t, state: str) -> bool:
             conn, task_id, "escalated", "fsm", expected_state=state,
             detail=f"подтяжка {config.MAIN_BRANCH} отменена: worktree "
             f"задачи не создан — {error}")
-        return True
+        return "escalated"
 
     merge = gitcmd.in_repo(wt_path, "merge", "--no-ff", config.MAIN_BRANCH,
                            "-m", f"{task_id}: подтяжка {config.MAIN_BRANCH}")
@@ -219,7 +230,7 @@ def _pull_main_or_escalate(conn, task_id: str, t, state: str) -> bool:
             conn, task_id, "escalated", "fsm", expected_state=state,
             detail=f"конфликт подтяжки {config.MAIN_BRANCH} в ветку "
             f"{branch}: {note}")
-        return True
+        return "escalated"
 
     green, tail = acceptance.run(wt_path / "tasks" / task_id)
     if not green:
@@ -228,9 +239,9 @@ def _pull_main_or_escalate(conn, task_id: str, t, state: str) -> bool:
             detail=f"приёмочные тесты красные после подтяжки "
             f"{config.MAIN_BRANCH} (слияние сохранено, откат не "
             f"выполняется):\n{tail}")
-        return True
+        return "escalated"
 
-    return False
+    return "pulled"
 
 
 def guard_refuses(conn, task_id: str, path: Path, text: str | None = None) -> bool:
@@ -664,7 +675,7 @@ def _cmd_advance(conn, task_id: str) -> bool:
             # последний шаг перед самим переходом — отставшая ветка либо
             # подтягивается и проходит приёмку, либо эскалирует и возврата
             # уже не будет.
-            if _pull_main_or_escalate(conn, task_id, t, state):
+            if _pull_main_or_escalate(conn, task_id, t, state) == "escalated":
                 return False
             store.set_state(conn, task_id, "review", "fsm",
                             expected_state=state, detail="MR готов — прогон ревьювера")
@@ -780,6 +791,100 @@ def _handle_merge_conflict(conn, task_id: str, state: str, branch: str,
                         expected_state=state, detail=detail)
 
 
+def _cmd_approve_merge_gate(conn, task_id: str, state: str, t) -> None:
+    """Тело окна `merge_gate -> done`, исполняемое ПОД МЬЮТЕКСОМ merge
+    (SPEC T053, требование 1): сверка главной копии -> сверка свежести
+    ветки внутри окна (требования 5-8) -> зелёный CI -> checkout/pull/
+    merge -> карта/RETRO -> push -> done.
+    """
+    branch = t["branch"]
+    # Рабочая поверхность оркестратора (SPEC T045, требования 3-4,
+    # AC-8 сценарий 2): merge — территория главной копии пульта на
+    # main, не чужой ветки Оператора/сессии. Проверяется ДО двухшаговой
+    # sha-сверки `confirm_fixation` выше (та уже пройдена к этой
+    # точке) — отказ здесь не имеет права сам переключать главную
+    # копию, только останавливать команду; не `sys.exit` (в отличие от
+    # красного CI/провала git ниже — там инфраструктурный отказ, а не
+    # рутинная сверка поверхности): задача остаётся на гейте
+    # merge_gate, чтобы Оператор мог повторить approve тем же
+    # процессом после перехода на main. Пустая строка — git не ответил
+    # (вырожденный случай песочниц без реального git, тот же приём
+    # деградации, что у `gitcmd.on_foreign_branch`) — сверять не с чем,
+    # пропускается.
+    root_branch = gitcmd.current_branch()
+    if root_branch and root_branch != config.MAIN_BRANCH:
+        detail = (f"главная копия пульта стоит на {root_branch}, не "
+                  f"на {config.MAIN_BRANCH} — merge не выполняется; "
+                  f"перейди на {config.MAIN_BRANCH} и повтори "
+                  f"artel.py approve {task_id}")
+        store.journal(conn, task_id, "fsm",
+                      "approve отклонён: главная копия не на main",
+                      detail)
+        print(f"[{task_id}] approve отклонён: {detail}")
+        return
+    # Сверка свежести ветки ПОД МЬЮТЕКСОМ, до сверки CI (SPEC T053,
+    # требования 5-8): main мог уйти вперёд, пока задача стояла на гейте
+    # или ждала освобождения чужого merge-окна — дыра №2 из «Контекста»
+    # SPEC. Подтяжка сдвигает head ветки задачи, зафиксированный снимок
+    # инвалидируется — merge в main в ЭТОМ ЖЕ вызове не выполняется
+    # (инвариант 19 не ослабляется), задача остаётся на гейте.
+    pull_outcome = _pull_main_or_escalate(conn, task_id, t, state)
+    if pull_outcome == "escalated":
+        return
+    if pull_outcome == "pulled":
+        new_head = gitcmd.branch_head_sha(branch)
+        print(f"[{task_id}] ветка подтянута к {config.MAIN_BRANCH} "
+              f"(новый head {new_head}) — дождись зелёного CI этого head "
+              f"и повтори artel.py approve {task_id}")
+        return
+    # Зелёный CI — условие мержа, проверяемое кодом, а не глазами
+    # Оператора (SPEC T017, требование 6). Неизвестный статус — это
+    # «нельзя»: иначе сломанный или неавторизованный `gh` бесшумно
+    # возвращал бы систему к «смержим, посмотрим потом».
+    green, note = ci.branch_status(branch)
+    store.journal(conn, task_id, "orchestrator", "статус CI ветки", note)
+    if not green:
+        sys.exit(f"[{task_id}] merge отклонён: {note}\n"
+                 f"  задача осталась на гейте merge; почини CI ветки "
+                 f"{branch} и повтори: artel.py approve {task_id}")
+    print(f"[{task_id}] {note}")
+    for cmd in (["git", "checkout", config.MAIN_BRANCH],
+                ["git", "pull", "--ff-only"]):
+        res = gitcmd.git(*cmd[1:])
+        if res.returncode != 0:
+            store.journal(conn, task_id, "orchestrator", "merge FAILED",
+                          res.stderr.strip()[:500])
+            sys.exit(f"merge упал на {' '.join(cmd)}:\n{res.stderr}")
+    merge_res = gitcmd.git("merge", "--no-ff", branch, "-m",
+                           f"{task_id}: merge {branch}")
+    if merge_res.returncode != 0:
+        _handle_merge_conflict(conn, task_id, state, branch, merge_res)
+        return
+    # sha КОММИТА МЕРЖА — сразу после успешного merge, ДО любых
+    # последующих служебных коммитов (карты, RETRO): адрес артефактов
+    # RETRO (SPEC T043, требование 8) обязан указывать именно на этот
+    # коммит, а не на более поздний, который сдвинул бы HEAD дальше.
+    merge_sha = gitcmd.head_sha()
+    # Карта кодовой базы (SPEC T042): после merge, до push; провал
+    # шага карты не отменяет merge (требование 5) — push ниже
+    # выполняется независимо от исхода `_regenerate_and_commit_map`.
+    _regenerate_and_commit_map(conn, task_id)
+    # Дайджест задачи в main (SPEC T043): после карты, до push, тем же
+    # принципом некритичности — провал не отменяет переход.
+    _generate_and_commit_retro(conn, task_id, merge_sha)
+    push = gitcmd.git("push")
+    if push.returncode != 0:
+        store.journal(conn, task_id, "orchestrator", "merge FAILED",
+                      push.stderr.strip()[:500])
+        sys.exit(f"merge упал на git push:\n{push.stderr}")
+    store.set_state(conn, task_id, "done", "orchestrator",
+                    expected_state=state, detail=f"смержено: {branch}")
+    # Worktree задачи отслужил (SPEC T045, требование 5, AC-6):
+    # смержено, дальше агентным шагам там делать нечего.
+    note = workspace.remove(task_id)
+    store.journal(conn, task_id, "orchestrator", "worktree убран", note)
+
+
 def cmd_approve(task_id: str, sha: str | None = None,
                session_id: str | None = None) -> None:
     """Берёт lease задачи перед работой (SPEC T044, требование 2)."""
@@ -789,13 +894,13 @@ def cmd_approve(task_id: str, sha: str | None = None,
     if refusal is not None:
         sys.exit(refusal)
     try:
-        _cmd_approve(conn, task_id, sha)
+        _cmd_approve(conn, task_id, sha, sid)
     finally:
         if fresh:
             lease.release(conn, task_id, sid)
 
 
-def _cmd_approve(conn, task_id: str, sha: str | None) -> None:
+def _cmd_approve(conn, task_id: str, sha: str | None, sid: str) -> None:
     t = store.get_task(conn, task_id)
     state = t["state"]
     if state in APPROVE_NEEDS_SHA and not confirm_fixation(conn, task_id, sha):
@@ -843,83 +948,25 @@ def _cmd_approve(conn, task_id: str, sha: str | None) -> None:
         # Сверка свежести ветки до гейта (SPEC T051, требования 1, 4):
         # тот же узел, что и на входе в review — approve не выносит на
         # merge_gate срез, который мог устареть, пока задача ждала приёмки.
-        if _pull_main_or_escalate(conn, task_id, t, state):
+        if _pull_main_or_escalate(conn, task_id, t, state) == "escalated":
             return
         store.set_state(conn, task_id, "merge_gate", "operator",
                         expected_state=state, detail="приёмка пройдена")
         print(f"  дальше: artel.py approve {task_id}  (выполнит merge)")
     elif state == "merge_gate":
-        branch = t["branch"]
-        # Рабочая поверхность оркестратора (SPEC T045, требования 3-4,
-        # AC-8 сценарий 2): merge — территория главной копии пульта на
-        # main, не чужой ветки Оператора/сессии. Проверяется ДО двухшаговой
-        # sha-сверки `confirm_fixation` выше (та уже пройдена к этой
-        # точке) — отказ здесь не имеет права сам переключать главную
-        # копию, только останавливать команду; не `sys.exit` (в отличие от
-        # красного CI/провала git ниже — там инфраструктурный отказ, а не
-        # рутинная сверка поверхности): задача остаётся на гейте
-        # merge_gate, чтобы Оператор мог повторить approve тем же
-        # процессом после перехода на main. Пустая строка — git не ответил
-        # (вырожденный случай песочниц без реального git, тот же приём
-        # деградации, что у `gitcmd.on_foreign_branch`) — сверять не с чем,
-        # пропускается.
-        root_branch = gitcmd.current_branch()
-        if root_branch and root_branch != config.MAIN_BRANCH:
-            detail = (f"главная копия пульта стоит на {root_branch}, не "
-                      f"на {config.MAIN_BRANCH} — merge не выполняется; "
-                      f"перейди на {config.MAIN_BRANCH} и повтори "
-                      f"artel.py approve {task_id}")
-            store.journal(conn, task_id, "fsm",
-                          "approve отклонён: главная копия не на main",
-                          detail)
-            print(f"[{task_id}] approve отклонён: {detail}")
-            return
-        # Зелёный CI — условие мержа, проверяемое кодом, а не глазами
-        # Оператора (SPEC T017, требование 6). Неизвестный статус — это
-        # «нельзя»: иначе сломанный или неавторизованный `gh` бесшумно
-        # возвращал бы систему к «смержим, посмотрим потом».
-        green, note = ci.branch_status(branch)
-        store.journal(conn, task_id, "orchestrator", "статус CI ветки", note)
-        if not green:
-            sys.exit(f"[{task_id}] merge отклонён: {note}\n"
-                     f"  задача осталась на гейте merge; почини CI ветки "
-                     f"{branch} и повтори: artel.py approve {task_id}")
-        print(f"[{task_id}] {note}")
-        for cmd in (["git", "checkout", config.MAIN_BRANCH],
-                    ["git", "pull", "--ff-only"]):
-            res = gitcmd.git(*cmd[1:])
-            if res.returncode != 0:
-                store.journal(conn, task_id, "orchestrator", "merge FAILED",
-                              res.stderr.strip()[:500])
-                sys.exit(f"merge упал на {' '.join(cmd)}:\n{res.stderr}")
-        merge_res = gitcmd.git("merge", "--no-ff", branch, "-m",
-                               f"{task_id}: merge {branch}")
-        if merge_res.returncode != 0:
-            _handle_merge_conflict(conn, task_id, state, branch, merge_res)
-            return
-        # sha КОММИТА МЕРЖА — сразу после успешного merge, ДО любых
-        # последующих служебных коммитов (карты, RETRO): адрес артефактов
-        # RETRO (SPEC T043, требование 8) обязан указывать именно на этот
-        # коммит, а не на более поздний, который сдвинул бы HEAD дальше.
-        merge_sha = gitcmd.head_sha()
-        # Карта кодовой базы (SPEC T042): после merge, до push; провал
-        # шага карты не отменяет merge (требование 5) — push ниже
-        # выполняется независимо от исхода `_regenerate_and_commit_map`.
-        _regenerate_and_commit_map(conn, task_id)
-        # Дайджест задачи в main (SPEC T043): после карты, до push, тем же
-        # принципом некритичности — провал не отменяет переход.
-        _generate_and_commit_retro(conn, task_id, merge_sha)
-        push = gitcmd.git("push")
-        if push.returncode != 0:
-            store.journal(conn, task_id, "orchestrator", "merge FAILED",
-                          push.stderr.strip()[:500])
-            sys.exit(f"merge упал на git push:\n{push.stderr}")
-        store.set_state(conn, task_id, "done", "orchestrator",
-                        expected_state=state, detail=f"смержено: {branch}")
-        # Worktree задачи отслужил (SPEC T045, требование 5, AC-6):
-        # смержено, дальше агентным шагам там делать нечего.
-        note = workspace.remove(task_id)
-        store.journal(conn, task_id, "orchestrator", "worktree убран", note)
+        # Мьютекс merge-окна (SPEC T053, требования 1-3): один держатель
+        # на весь пульт, не на задачу — вторая сессия, вызвавшая approve
+        # из merge_gate, пока мьютекс занят, получает немедленный
+        # именованный отказ (`sys.exit`, тем же стилем, что и отказ lease
+        # выше) вместо ожидания. `finally` снимает его при ЛЮБОМ исходе
+        # тела окна, включая `sys.exit` внутри него (требование 3).
+        refusal = merge_lock.acquire(conn, task_id, sid)
+        if refusal is not None:
+            sys.exit(refusal)
+        try:
+            _cmd_approve_merge_gate(conn, task_id, state, t)
+        finally:
+            merge_lock.release(conn, sid)
     elif state == "escalated":
         # Куда возвращать — знает только тот, кто эскалировал: провал агента
         # (cmd_run) пишет в escalated_from состояние своего шага, потому что
