@@ -29,8 +29,8 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from orchestrator import (budget, catalog, ci, cleanup, config,  # noqa: E402
-                          fsm, gitcmd, runner, store)
+from orchestrator import (artel, budget, catalog, ci, cleanup,  # noqa: E402
+                          config, fsm, gitcmd, runner, store)
 from scripts import guard  # noqa: E402
 from tests.sandbox import capture  # noqa: E402
 
@@ -1156,6 +1156,68 @@ class GuardKeepsTheIntegritySectionTest(unittest.TestCase):
 
     def test_complete_plan_passes(self):
         self.assertEqual(guard.check(self.write_plan(self.SECTIONS)), [])
+
+
+class MainCopyGuardTest(unittest.TestCase):
+    """Инвариант: пульт исполняется только из главной копии, не из
+    git-worktree (tasks/T056/SPEC.md). Инцидент 28.08 (T052, T055):
+    `config.ROOT` резолвился внутрь `.artel/worktrees/<id>`, и код на
+    ходу заводил там паразитную пустую `.artel/state.db`.
+
+    Признак worktree из требования 2 SPEC — файл-ссылка `ROOT/.git`
+    (`gitdir: <main>/.git/worktrees/<id>`), не каталог; фейкового файла
+    достаточно, настоящий `git worktree add` не нужен — сквозной прогон
+    через реальный git ведёт `tasks/T056/acceptance_tests/
+    test_ac1_worktree_root_refuses.py`.
+    """
+
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        # resolve(): см. KillKeepsMainIntactTest — /var симлинк на macOS.
+        self.sandbox = Path(tmp.name).resolve()
+        self.main_copy = self.sandbox / "main"
+        self.worktree = self.sandbox / "worktree"
+        self.worktree.mkdir(parents=True)
+        (self.worktree / ".git").write_text(
+            f"gitdir: {self.main_copy}/.git/worktrees/T001\n",
+            encoding="utf-8")
+
+    def test_worktree_root_refuses_before_touching_the_db(self):
+        with mock.patch.object(config, "ROOT", self.worktree), \
+             mock.patch.object(sys, "argv", ["artel.py", "status"]):
+            with self.assertRaises(SystemExit) as ctx:
+                artel.main()
+
+        message = str(ctx.exception)
+        self.assertIn(str(self.worktree), message)
+        self.assertIn(str(self.main_copy), message)
+        self.assertIn("перезапуст", message.lower())
+        self.assertFalse((self.worktree / ".artel").exists(),
+                         "guard не должен создавать .artel/ в worktree")
+
+    def test_main_copy_directory_is_not_refused(self):
+        """Контроль: обычный каталог (`.git` — каталог, не файл) —
+        поведение не меняется (требование 6 SPEC), guard не срабатывает."""
+        (self.main_copy / ".git").mkdir(parents=True)
+
+        with mock.patch.object(config, "ROOT", self.main_copy):
+            try:
+                artel._refuse_if_worktree()
+            except SystemExit:
+                self.fail("guard отказал в главной копии")
+
+    def test_sandbox_without_dot_git_is_not_refused(self):
+        """Контроль: временный каталог без `.git` вовсе (обычная тестовая
+        песочница, требование 5 SPEC) — guard не срабатывает."""
+        bare = self.sandbox / "bare"
+        bare.mkdir()
+
+        with mock.patch.object(config, "ROOT", bare):
+            try:
+                artel._refuse_if_worktree()
+            except SystemExit:
+                self.fail("guard отказал вне worktree и вне главной копии")
 
 
 if __name__ == "__main__":
