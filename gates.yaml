@@ -1,34 +1,24 @@
-# НЕ ДЕЙСТВУЕТ. Истина по гейтам и состояниям — orchestrator/fsm.py.
-# Файл никем не читается и разошёлся с FSM (нет гейта acceptance, имена
-# не совпадают с состояниями); НЕ синхронизировать руками — регенерируется
-# из FSM при Г1a командой `artel describe` (решение Оператора 2026-08-24,
-# аудит v5, выбор №1 вариант б).
+# Политика гейтов (ADR-0007, SPEC T066). ДЕЙСТВУЕТ: читается
+# `orchestrator/gates.py` (`policy()`) на каждом переходе `review ->
+# acceptance` — ТОЛЬКО из главной копии пульта (`config.ROOT`), никогда
+# с ветки/worktree задачи. Меняет этот файл только Оператор отдельным MR
+# (PROTECTED_PATHS, skills/conventions-core.md) — kill-switch автогейта
+# любого гейта одной строкой: значение обратно на `manual`.
 #
-# Политика гейтов (§04 дизайн-дока).
-# ФАЗА 0: этот файл — СПРАВОЧНЫЙ. Policy-движка нет, все гейты захардкожены
-# manual в оркестраторе. Policy-движок обязан читать его ТОЛЬКО из main.
+# Значение каждого гейта — буквально `auto` или `manual`. Дефолт при
+# отсутствии ключа, неизвестном значении или нечитаемом файле — `manual`
+# (fail-closed): молчание/поломка файла не читается как согласие.
 #
-# mode: auto | manual | conditional
-# Правила: молчание != согласие (нет автопрохода по таймауту);
-# policy проверяет оркестратор, агент режима гейта не знает.
-
+# Имена гейтов — состояния FSM (`orchestrator/fsm.py`): spec_gate,
+# acceptance, merge_gate. Только `acceptance` умеет автопроходить (ADR-0007
+# п.3-5): условия — каталог приёмочных тестов задачи без manual/skip,
+# зелёный прогон приёмочных задачи, зелёный полный набор `tests/` в
+# worktree ветки, бюджет и пороги программы (A1) не пробиты, вердикт
+# REVIEW approved текущей итерации. `merge_gate` (ждёт детекторов
+# деградации) и `spec_gate` (без горизонта автоматизации) автопути не
+# получают ни при каком значении здесь — `orchestrator/fsm.py` читает
+# политику только на переходе acceptance.
 gates:
-  spec_approved:        # запрос -> SPEC принят в работу
-    mode: manual
-  plan_approved:        # гейт плана (агентский, ревьювер)
-    mode: auto          # auto = по артефакту ревьювера, Оператор не участвует
-  merge:
-    mode: manual        # кандидат на conditional после калибровки доверия
-    # conditional-заготовка (не активна в Фазе 0):
-    # auto_if:
-    #   - diff_lines < 200
-    #   - no_migrations
-    #   - no_paths: ["**/auth/**", "ci/", ".github/", "gates.yaml",
-    #                "roles.yaml", "templates/", "skills/"]
-    #   - review_major_findings == 0
-  deploy_prod:
-    mode: manual
-  rollback:
-    mode: auto          # откат — движение в безопасную сторону
-  budget_increase:
-    mode: manual        # никогда не auto
+  spec_gate: manual
+  acceptance: auto
+  merge_gate: manual
