@@ -50,6 +50,10 @@ CREATE TABLE IF NOT EXISTS leases (
   task_id TEXT PRIMARY KEY, session_id TEXT, pid INTEGER, hostname TEXT,
   heartbeat_ts TEXT
 );
+CREATE TABLE IF NOT EXISTS merge_locks (
+  task_id TEXT, session_id TEXT, pid INTEGER, hostname TEXT,
+  heartbeat_ts TEXT
+);
 """
 
 TASK_ID = re.compile(r"\AT(\d+)\Z")
@@ -147,6 +151,13 @@ def migrate(conn: sqlite3.Connection) -> None:
     conn.executescript(
         "CREATE TABLE IF NOT EXISTS leases ("
         "  task_id TEXT PRIMARY KEY, session_id TEXT, pid INTEGER,"
+        "  hostname TEXT, heartbeat_ts TEXT);")
+    # Мьютекс merge-окна (SPEC T053, требование 1): один держатель на весь
+    # пульт, не per-task, как `leases` — `task_id` здесь не ключ, а поле
+    # «какую задачу держит сессия», по конвенции не более одной строки.
+    conn.executescript(
+        "CREATE TABLE IF NOT EXISTS merge_locks ("
+        "  task_id TEXT, session_id TEXT, pid INTEGER,"
         "  hostname TEXT, heartbeat_ts TEXT);")
     conn.commit()
 
@@ -542,6 +553,38 @@ def release_lease(conn, task_id: str, session_id: str) -> None:
 def all_leases(conn) -> list:
     """Все lease (команда `doctor`, требование 11)."""
     return conn.execute("SELECT * FROM leases").fetchall()
+
+
+def merge_lock_row(conn) -> sqlite3.Row | None:
+    """Строка мьютекса merge-окна — не более одной на весь пульт; None —
+    свободен (SPEC T053, требование 1-2)."""
+    return conn.execute("SELECT * FROM merge_locks").fetchone()
+
+
+def set_merge_lock(conn, task_id: str, session_id: str, pid: int,
+                   hostname: str, heartbeat_ts: str) -> None:
+    """Заводит мьютекс merge-окна либо переписывает держателя (свежий
+    вход, продление своего или перехват протухшего чужого — все три
+    ветки `merge_lock.acquire`). Таблица несёт не более одной строки
+    (требование 2), поэтому запись всегда идёт через снос предыдущей —
+    не `INSERT`/`UPDATE` порознь, как у `leases`: там раздельные ветки
+    нужны только ради различения «взято с нуля» (`lease.acquire`
+    требование, из которого `auto` решает, снимать ли за собой чужой
+    lease); мьютекс merge живёт ровно одну операцию окна, и это различие
+    ему не нужно (`orchestrator/merge_lock.py`)."""
+    conn.execute("DELETE FROM merge_locks")
+    conn.execute(
+        "INSERT INTO merge_locks (task_id, session_id, pid, hostname,"
+        " heartbeat_ts) VALUES (?,?,?,?,?)",
+        (task_id, session_id, pid, hostname, heartbeat_ts))
+    conn.commit()
+
+
+def release_merge_lock(conn, session_id: str) -> None:
+    """Снимает мьютекс merge-окна, если он всё ещё принадлежит этой
+    сессии (SPEC T053, требование 3)."""
+    conn.execute("DELETE FROM merge_locks WHERE session_id=?", (session_id,))
+    conn.commit()
 
 
 def get_alert(conn, alert_id: int) -> sqlite3.Row | None:

@@ -568,6 +568,32 @@ def check_leases(conn) -> list[Check]:
     return results
 
 
+def check_merge_lock(conn) -> list[Check]:
+    """SPEC T053, требование 4: мёртвый держатель мьютекса merge (протухший
+    heartbeat/неживой pid) не блокирует merge навечно — `merge_lock.acquire`
+    сам перешагивает такой замок при следующем взятии; эта проверка лишь
+    делает факт видимым Оператору, тем же приёмом, что `check_leases`
+    (требование 11 T044, на которую и ссылается требование 4). Чужой host
+    не проверяется — та же причина, что у `check_leases`.
+    """
+    row = store.merge_lock_row(conn)
+    if row is None:
+        return [Check("merge-lock", "ok", "мьютекс merge свободен")]
+    if row["hostname"] != socket.gethostname():
+        return [Check("merge-lock", "ok",
+                      f"мьютекс merge держит {row['task_id']} на чужом "
+                      f"host {row['hostname']} — pid не проверяется")]
+    if _pid_alive(row["pid"]):
+        return [Check("merge-lock", "ok",
+                      f"мьютекс merge держит {row['task_id']} (сессия "
+                      f"{row['session_id']}), pid жив")]
+    message = (f"{row['task_id']}: мьютекс merge сессии {row['session_id']} "
+              f"мёртв (pid {row['pid']} на {row['hostname']})")
+    alerts.raise_alert(conn, store.task_target(conn, row["task_id"]),
+                       "incident", "doctor.merge_lock", message)
+    return [Check("merge-lock", "fail", message)]
+
+
 # --- прочие проверки (требование 9) --------------------------------------
 
 def check_backup_age(conn) -> Check:
@@ -706,6 +732,7 @@ def all_checks(conn) -> list[Check]:
 
     checks.extend(check_orphans(conn))
     checks.extend(check_leases(conn))
+    checks.extend(check_merge_lock(conn))
     checks.extend(check_branch_freshness(conn))
     return checks
 
