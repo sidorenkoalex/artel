@@ -78,7 +78,18 @@ workspace, tasks, knowledge, logs). БД одна на все проекты: с
   init | new "<название>" [--tz <файл>] | status | show <id> | advance <id> |
   run <id> | auto <id> | approve <id> [sha] | reject <id> "<причина>" |
   kill <id> | log <id> | budget <id> <usd> | target-init <target> |
-  doctor [--restore] | alert-ack <id> "<решение>" | version
+  doctor [--restore] | alert-ack <id> "<решение>" | version |
+  canary <каталог-ТЗ> [--rewrite-baseline]
+
+`canary <каталог>` (tasks/T065/SPEC.md) — синтетический прогон конвейера:
+заводит по задаче на каждый `*.md` каталога (`catalog.cmd_new`, пометка
+canary ТОЛЬКО колонкой БД, не в title), ведёт их `auto`-циклом, сама
+проходит `spec_gate`/`acceptance` (отдельный от `cmd_approve`/`auto`
+кодовый путь — инвариант 18 не затронут) и убивает на `merge_gate`
+(никогда не approve, main не трогает). Отчёт — stdout и
+`.artel/canary/<таймстамп>.json`; первый прогон без `.artel/canary/
+baseline.json` пишет его, следующие сравнивают и предупреждают при
+отклонении >50%, не перезаписывая файл без `--rewrite-baseline`.
 
 `approve` на гейтах, где фиксация уже есть (A2b, ADR-0003 п.15),
 подтверждает КОНКРЕТНЫЙ sha: без него печатает текущий зафиксированный
@@ -115,6 +126,7 @@ SPEC, PLAN — в ревью, REVIEW — из ревью). Нарушение с
   alerts    таблица alerts: incident|threshold|trigger, ack с решением (A3)
   doctor    pre-flight, recovery-сверка, сироты, смоук CLI/изоляции (A3)
   version   пин CLI, фактическая версия, версия схемы артефактов (T030)
+  canary    синтетический прогон конвейера, метрики, бейзлайн (T065)
 """
 import sys
 from pathlib import Path
@@ -126,7 +138,7 @@ from pathlib import Path
 # у запущенного файла в нём лежит orchestrator/, а не корень.
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from orchestrator import (auto, budget, catalog,  # noqa: E402
+from orchestrator import (auto, budget, canary, catalog,  # noqa: E402
                           cleanup, config, doctor, fsm, projects, runner,
                           version, workspace)
 
@@ -199,6 +211,8 @@ def main() -> None:
         "alert-ack": lambda: doctor.cmd_alert_ack(
             rest[0], rest[1] if len(rest) > 1 else ""),
         "version": lambda: version.cmd_version(),
+        "canary": lambda: canary.cmd_canary(
+            rest[0], rewrite_baseline="--rewrite-baseline" in rest),
     }
     fn = table.get(cmd)
     if fn is None:

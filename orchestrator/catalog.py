@@ -87,7 +87,8 @@ def _tz_document(task_id: str, title: str, raw: str) -> str:
     )
 
 
-def cmd_new(title: str, tz_path: str | None = None) -> None:
+def cmd_new(title: str, tz_path: str | None = None, *,
+           canary: bool = False) -> str:
     """Заводит задачу: ТЗ/SPEC рождаются сразу в её ветке (ADR-0005 п.9,
     SPEC T048) — рабочая копия main не трогается ни на одном шаге
     (требование 4): ни новых файлов на диске main, ни коммитов в main.
@@ -101,6 +102,14 @@ def cmd_new(title: str, tz_path: str | None = None) -> None:
     заводит и ветку от `config.MAIN_BRANCH` через `gitcmd`, образец T036),
     и в НЕГО, не в `config.TASKS`, пишутся TZ.md/SPEC.md — одним коммитом
     оркестраторского авторства (требования 2, 3).
+
+    `canary` — keyword-only, дефолт `False` не меняет поведение
+    существующих вызывателей: команда `canary` (tasks/T065/SPEC.md,
+    требование 1) заводит свои задачи через ЭТУ же функцию с `canary=True`,
+    пишущим пометку ТОЛЬКО в колонку БД `tasks.is_canary` (требование 6),
+    не в `title` — `title` канареечной задачи ничем не отличается от
+    продуктовой, роль его не видит иначе. Возвращает `task_id`, чтобы
+    вызывающий код (тот же `canary`) мог собрать список заведённых задач.
     """
     conn = store.db()
     # Файл ТЗ читается ДО того, как расходуется номер задачи и заводится
@@ -163,7 +172,7 @@ def cmd_new(title: str, tz_path: str | None = None) -> None:
                  f"{committed.stderr.strip()[:200] if committed is not None else '—'}")
 
     store.insert_task(conn, task_id, title, "spec_writing", branch, target,
-                      config.DEFAULT_BUDGET_USD)
+                      config.DEFAULT_BUDGET_USD, is_canary=canary)
     store.journal(conn, task_id, "operator", "created", title)
     print(f"[{task_id}] «{title}» создана в ветке {branch}: "
          f"заполни {task_dir / 'SPEC.md'}")
@@ -172,6 +181,7 @@ def cmd_new(title: str, tz_path: str | None = None) -> None:
         print(f"  затем: artel.py run {task_id}  (запуск analyst)")
     else:
         print(f"  затем: artel.py advance {task_id}  (SPEC status: ready)")
+    return task_id
 
 
 def cmd_status() -> None:
@@ -182,10 +192,14 @@ def cmd_status() -> None:
     for r in rows:
         flag = " <- ЖДЁТ ОПЕРАТОРА" if r["state"] in (
             "spec_gate", "acceptance", "merge_gate", "escalated") else ""
+        # Пометка canary — ТОЛЬКО здесь и в RETRO (tasks/T065/SPEC.md,
+        # требование 6), не в `title` самой задачи: строка `status` видна
+        # Оператору, не роли внутри промпта шага.
+        mark = "  [canary]" if r["is_canary"] else ""
         print(
             f"{r['id']}  {r['state']:<13} "
             f"ревью {r['review_iters']}/{config.LIMIT_REVIEW_ITERS}"
-            f"  ${r['spent_usd']:.2f}/{r['budget_usd']:.2f}  {r['title']}{flag}"
+            f"  ${r['spent_usd']:.2f}/{r['budget_usd']:.2f}  {r['title']}{flag}{mark}"
         )
 
     # Требование 7 SPEC T022: триггеры docs/triggers.md — отдельная секция
