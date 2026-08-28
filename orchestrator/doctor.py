@@ -494,6 +494,42 @@ def check_orphans(conn) -> list[Check]:
     return results
 
 
+# --- свежесть ветки (SPEC T051, требование 8) -----------------------------
+
+def check_branch_freshness(conn) -> list[Check]:
+    """Активная (нетерминальная) задача, чья ветка отстала от
+    `config.MAIN_BRANCH` больше чем на `config.STALE_BRANCH_WARN_COMMITS`
+    коммитов, — предупреждение (AC-5).
+
+    Не incident, в отличие от `check_orphans`/`check_leases`: отставание
+    ветки — ожидаемое и самоустраняющееся состояние параллельной работы
+    (roadmap §4 п.2а), не операционный дефект с жизненным циклом ack —
+    тем же приёмом, что `check_cli_version`/`check_target_layout`
+    (информационный warn, не incident, ничего не заводит в `alerts`).
+
+    Ветка ещё не существует в git или git не ответил
+    (`gitcmd.commits_behind` вернул `None`) — сверять не с чем, задача
+    молча пропускается (требование 9: тот же приём деградации, что у
+    остальных git-примитивов, на которые уже опирается doctor).
+    """
+    stale = []
+    for t in store.all_tasks(conn):
+        if t["state"] in ("done", "killed") or not t["branch"]:
+            continue
+        behind = gitcmd.commits_behind(t["branch"])
+        if behind is not None and behind > config.STALE_BRANCH_WARN_COMMITS:
+            stale.append((t, behind))
+    if not stale:
+        return [Check("branch-freshness", "ok",
+                      f"нет активных задач с веткой отставшей больше "
+                      f"{config.STALE_BRANCH_WARN_COMMITS} коммитов от "
+                      f"{config.MAIN_BRANCH}")]
+    return [Check("branch-freshness", "warn",
+                  f"{t['id']}: ветка {t['branch']} отстала от "
+                  f"{config.MAIN_BRANCH} на {behind} коммитов")
+           for t, behind in stale]
+
+
 # --- lease с мёртвым pid (SPEC T044, требование 11) ----------------------
 
 def _pid_alive(pid: int) -> bool:
@@ -670,6 +706,7 @@ def all_checks(conn) -> list[Check]:
 
     checks.extend(check_orphans(conn))
     checks.extend(check_leases(conn))
+    checks.extend(check_branch_freshness(conn))
     return checks
 
 

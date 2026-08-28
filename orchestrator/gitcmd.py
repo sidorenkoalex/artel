@@ -44,6 +44,28 @@ def branch_merged(branch: str) -> bool:
     return res.returncode == 0 and bool(res.stdout.strip())
 
 
+def commits_behind(branch: str, base: str | None = None) -> int | None:
+    """Число коммитов `base` (по умолчанию `config.MAIN_BRANCH`), которых
+    нет в `branch`; `None` — git не ответил, `branch`/`base` не существует,
+    или ответ не разобрать как число (SPEC T051, требование 2).
+
+    `base` — параметр, не читается через `config.MAIN_BRANCH` как значение
+    по умолчанию аргумента (оно вычислилось бы один раз при определении
+    функции и не увидело бы подмену `config.MAIN_BRANCH` в тестах, тот же
+    приём, что у остальных примитивов модуля). `res is None`/непустой,
+    но нечисловой вывод — тот же вырожденный случай «git не ответил
+    осмысленно», что у `head_sha`/`is_clean`: заглушки `gitcmd.git` в
+    тестах, не связанных с git (SPEC T051, требование 9), отвечают пустым
+    выводом с кодом 0 на любую нераспознанную команду и не должны
+    трактоваться как «ноль коммитов».
+    """
+    res = git("rev-list", "--count", f"{branch}..{base or config.MAIN_BRANCH}")
+    if res is None or res.returncode != 0:
+        return None
+    text = res.stdout.strip()
+    return int(text) if text.isdigit() else None
+
+
 def list_branches(prefix: str = "") -> list[str] | None:
     """Локальные ветки под `refs/heads/<prefix>`; `None` — git не ответил.
 

@@ -158,6 +158,40 @@ class OnForeignBranchTest(RealGitSandbox):
         self.assertFalse(gitcmd.on_foreign_branch(""))
 
 
+class CommitsBehindTest(RealGitSandbox):
+    """SPEC T051, требование 2: число коммитов base, которых нет в branch."""
+
+    def test_branch_with_everything_from_main_is_zero_behind(self):
+        self.checkout("feature", create=True)
+
+        self.assertEqual(gitcmd.commits_behind("feature"), 0)
+
+    def test_counts_commits_on_main_absent_from_the_branch(self):
+        self.checkout("feature", create=True)
+        self.checkout(config.MAIN_BRANCH)
+        self.write_and_commit("a.txt", "1\n")
+        self.write_and_commit("b.txt", "2\n")
+
+        self.assertEqual(gitcmd.commits_behind("feature"), 2)
+
+    def test_missing_branch_is_none(self):
+        self.assertIsNone(gitcmd.commits_behind("no-such-branch"))
+
+    def test_custom_base_overrides_main_branch(self):
+        self.checkout("feature", create=True)
+        self.checkout(config.MAIN_BRANCH)
+        self.checkout("other", create=True)
+        self.write_and_commit("x.txt", "x\n")
+
+        self.assertEqual(gitcmd.commits_behind("feature", base="other"), 1)
+        self.assertEqual(gitcmd.commits_behind("feature"), 0,
+                         "без base сверка идёт с MAIN_BRANCH, не с 'other'")
+
+    def test_unresponsive_git_is_none(self):
+        with mock.patch.object(gitcmd, "git", lambda *a: None):
+            self.assertIsNone(gitcmd.commits_behind("feature"))
+
+
 class TaskBranchTest(unittest.TestCase):
     """`store.task_branch` — та же деградация, что `store.task_target`."""
 
