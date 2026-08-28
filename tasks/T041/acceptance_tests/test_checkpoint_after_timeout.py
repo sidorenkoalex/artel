@@ -48,7 +48,7 @@ from unittest import mock
 REPO_ROOT = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(REPO_ROOT))
 
-from orchestrator import config, gitcmd, runner, store  # noqa: E402
+from orchestrator import config, gitcmd, runner, store, workspace  # noqa: E402
 from tests.test_git_fixation import FakeProc, RealPultGitTest  # noqa: E402
 
 
@@ -134,8 +134,13 @@ class CheckpointAfterTimeoutTest(RealPultGitTest):
         """Незакоммиченный файл — то, что реально оставляет оборванный
         агент в рабочем дереве ветки задачи. Каталог `tasks/<id>/` —
         не произвольный выбор: `fixation.check_integrity` сверяет
-        чистоту узко по нему (см. модульный докстринг)."""
-        path = config.TASKS / self.TASK / name
+        чистоту узко по нему (см. модульный докстринг). Адрес — worktree
+        задачи (`workspace.path`), не диск main (`config.TASKS`): с
+        SPEC T045/T048 роль работает в собственном worktree, `config.TASKS`
+        для догфуд-задачи вообще не существует на диске (дефект SPEC
+        T059, «Контекст», из-за которого этот файл падал на текущем
+        коде до правки адреса)."""
+        path = workspace.path(self.TASK) / "tasks" / self.TASK / name
         path.write_text("работа агента, оборванная посреди шага\n",
                         encoding="utf-8")
         return path
@@ -155,9 +160,10 @@ class CheckpointAfterTimeoutTest(RealPultGitTest):
 
         self.assertIn("таймаут", out)
         self.assertTrue(
-            gitcmd.is_clean(),
-            "AC-1: чекпоинт коммитит WIP — рабочее дерево снова чистое")
-        subject = self.git("log", "-1", "--format=%s").strip()
+            gitcmd.is_clean(repo=workspace.path(self.TASK)),
+            "AC-1: чекпоинт коммитит WIP — рабочее дерево worktree "
+            "задачи снова чистое")
+        subject = self.git_in_worktree("log", "-1", "--format=%s").strip()
         self.assertEqual(
             subject,
             f"{self.TASK}: WIP-чекпоинт после таймаута шага developer",
@@ -208,13 +214,15 @@ class CheckpointAfterTimeoutTest(RealPultGitTest):
             "AC-3: провал по коду возврата (rc != 0, не таймаут) не "
             "коммитит чекпоинт")
         self.assertFalse(
-            gitcmd.is_clean(),
-            "AC-3: рабочее дерево ветки задачи остаётся незакоммиченным, "
-            "как до этой задачи")
+            gitcmd.is_clean(repo=workspace.path(self.TASK)),
+            "AC-3: рабочее дерево worktree задачи остаётся "
+            "незакоммиченным, как до этой задачи")
 
     def test_ac4_timeout_on_clean_tree_creates_no_empty_checkpoint(self):
         self.enter_in_dev()
-        self.assertTrue(gitcmd.is_clean(), "предусловие: дерево чистое")
+        self.assertTrue(
+            gitcmd.is_clean(repo=workspace.path(self.TASK)),
+            "предусловие: дерево worktree задачи чистое")
         before = self.head()
 
         self.run_agent(TimeoutThenKilledProc(["агент молчит, ничего не "
@@ -224,7 +232,7 @@ class CheckpointAfterTimeoutTest(RealPultGitTest):
             self.head(), before,
             "AC-4: таймаут при чистом рабочем дереве не создаёт пустой "
             "коммит-чекпоинт")
-        self.assertTrue(gitcmd.is_clean())
+        self.assertTrue(gitcmd.is_clean(repo=workspace.path(self.TASK)))
 
 
 # AC-5: manual — CI (`.github/workflows/ci.yml`, шаг `unittest discover -s

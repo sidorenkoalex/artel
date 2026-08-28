@@ -598,7 +598,14 @@ class CmdRunReviewPackageTest(unittest.TestCase):
                             # в .artel/ репозитория.
                             ("ROLE_HOME", root / ".artel" / "home"),
                             ("ROLE_CONFIG_DIR",
-                             root / ".artel" / "home" / ".claude")):
+                             root / ".artel" / "home" / ".claude"),
+                            # SPEC T059: автокоммит успешного шага читает
+                            # `workspace.path(task_id)` напрямую (не через
+                            # подменённый ниже `workspace.ensure`) —
+                            # непропатченный `WORKTREES` утёк бы на
+                            # реальный worktree пульта (тот же довод, что у
+                            # `PreviousVerdictShaTest` в этом же модуле).
+                            ("WORKTREES", root / ".artel" / "worktrees")):
             patcher = mock.patch.object(config, attr, value)
             patcher.start()
             self.addCleanup(patcher.stop)
@@ -778,7 +785,7 @@ class CmdRunReviewPackageTest(unittest.TestCase):
 
         self.assertNotIn("--- РЕВЬЮ-ПАКЕТ ---", self.prompt())
         self.assertEqual(self.journal_details("ревью-пакет собран"), [])
-        # Пять вызовов, и ни один — не о пакете: первый — `workspace.
+        # Семь вызовов, и ни один — не о пакете: первый — `workspace.
         # on_task_branch` (SPEC T045, AC-8) спрашивает список worktree
         # перед стартом шага; второй — `gitcmd.on_foreign_branch` спрашивает
         # текущую ветку для ветко-корректного чтения SPEC.md брифа
@@ -786,12 +793,17 @@ class CmdRunReviewPackageTest(unittest.TestCase):
         # означает «не на чужой ветке», поэтому дальше ни `rev-parse
         # --verify`, ни `show` не следуют, читается рабочая копия, как и
         # раньше; третий — сверка свежести docs/codebase-map.md для брифа
-        # роли (orchestrator/brief.py, tasks/T028); два последних —
+        # роли (orchestrator/brief.py, tasks/T028); следующие два —
         # `role_env` берёт авторство коммита шага (`role_cwd`/
         # `workspace.ensure` подменены в setUp — их git-вызовы проверяет
-        # tests/test_workspace.py). Список точный: любой `show` (чтение
+        # tests/test_workspace.py); последние два — автокоммит успешного
+        # шага (SPEC T059, `runner.commit_step_artifacts`): `add -A` и
+        # `diff --cached --quiet` на пустом дереве этого фейка отвечают
+        # «нечего коммитить» (returncode=0 по умолчанию у `FakeGit`), сам
+        # `commit` не следует. Список точный: любой `show` (чтение
         # артефакта из ветки — ревью-пакетное или чужой чекаут) в шаге
         # разработчика по-прежнему провалит тест.
+        wt = str(config.WORKTREES / self.TASK)
         self.assertEqual(self.git.calls,
                          [["worktree", "list", "--porcelain"],
                           ["rev-parse", "--abbrev-ref", "HEAD"],
@@ -800,7 +812,9 @@ class CmdRunReviewPackageTest(unittest.TestCase):
                            "HEAD", "--", "orchestrator/*.py", "scripts/*.py",
                            "tests/*.py"],
                           ["config", "--get", "user.name"],
-                          ["config", "--get", "user.email"]],
+                          ["config", "--get", "user.email"],
+                          ["-C", wt, "add", "-A"],
+                          ["-C", wt, "diff", "--cached", "--quiet"]],
                          "diff разработчику не собирается")
 
     def test_reviewer_rights_are_not_narrowed(self):
