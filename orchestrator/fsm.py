@@ -166,6 +166,73 @@ def _generate_and_commit_retro(conn, task_id: str, merge_sha: str) -> None:
                           f"{task_id}: killed-RETRO долга {debt_id}")
 
 
+# --- сверка свежести ветки до гейта (SPEC T051) ---------------------------
+
+def _pull_main_or_escalate(conn, task_id: str, t, state: str) -> bool:
+    """Сверка свежести ветки задачи на входе в гейт (SPEC T051, требования
+    1-7, 10; ADR-0006 п.2) — единственная точка вызова для обеих точек
+    сверки (`in_dev -> review`, `acceptance -> merge_gate`).
+
+    True — переход отклонён: задача уже эскалирована (состояние и
+    диагностика уже записаны через `store.set_state`, требования 5-6);
+    вызывающий код обязан немедленно вернуться, не выполняя сам переход.
+    False — либо ветка не отстала от `config.MAIN_BRANCH` (требование 7:
+    поведение перехода прежнее байт-в-байт, никакой git-вызов не сделан),
+    либо подтяжка прошла и приёмочные тесты в подтянутом дереве зелёные —
+    вызывающий код продолжает штатный переход.
+
+    Merge — единственный вне `merge_gate`, разрешённый ADR-0006 п.2: в
+    worktree ЗАДАЧИ (`gitcmd.in_repo`, форма `-C`), вливает
+    `config.MAIN_BRANCH`, ветку задачи в аргументах не упоминает и не
+    трогает main ни байтом (требование 10) — не rebase (требование 3),
+    существующие sha ветки остаются валидными предками.
+
+    `gitcmd.commits_behind` вернул `None` — git не ответил (песочницы без
+    реального git: `fake_git` и аналоги, требование 9) — тот же
+    вырожденный случай деградации, что и у остальных git-примитивов
+    оркестратора: сверка молча пропускается, `bool(None)` ложно ровно как
+    и `bool(0)` (ветка не отстала) — оба ведут к одному и тому же
+    «ничего не делать».
+    """
+    branch = t["branch"]
+    behind = gitcmd.commits_behind(branch)
+    if not behind:
+        return False
+
+    wt_path, error = workspace.ensure(task_id, branch)
+    if error is not None:
+        store.set_state(
+            conn, task_id, "escalated", "fsm", expected_state=state,
+            detail=f"подтяжка {config.MAIN_BRANCH} отменена: worktree "
+            f"задачи не создан — {error}")
+        return True
+
+    merge = gitcmd.in_repo(wt_path, "merge", "--no-ff", config.MAIN_BRANCH,
+                           "-m", f"{task_id}: подтяжка {config.MAIN_BRANCH}")
+    if merge is None or merge.returncode != 0:
+        abort = gitcmd.in_repo(wt_path, "merge", "--abort")
+        note = merge.stderr.strip()[:500] if merge is not None else "git не ответил"
+        if abort is None or abort.returncode != 0:
+            note += (f"; git merge --abort не удался: "
+                    f"{abort.stderr.strip()[:200] if abort is not None else 'git не ответил'}")
+        store.set_state(
+            conn, task_id, "escalated", "fsm", expected_state=state,
+            detail=f"конфликт подтяжки {config.MAIN_BRANCH} в ветку "
+            f"{branch}: {note}")
+        return True
+
+    green, tail = acceptance.run(wt_path / "tasks" / task_id)
+    if not green:
+        store.set_state(
+            conn, task_id, "escalated", "fsm", expected_state=state,
+            detail=f"приёмочные тесты красные после подтяжки "
+            f"{config.MAIN_BRANCH} (слияние сохранено, откат не "
+            f"выполняется):\n{tail}")
+        return True
+
+    return False
+
+
 def guard_refuses(conn, task_id: str, path: Path, text: str | None = None) -> bool:
     """Прогон guard по артефакту-условию перехода; True — переход отменён.
 
@@ -593,6 +660,12 @@ def _cmd_advance(conn, task_id: str) -> bool:
                     print(f"  дальше: верни acceptance_tests/ как было, "
                           f"либо эскалируй разногласие Оператору")
                     return False
+            # Сверка свежести ветки до гейта (SPEC T051, требования 1, 4):
+            # последний шаг перед самим переходом — отставшая ветка либо
+            # подтягивается и проходит приёмку, либо эскалирует и возврата
+            # уже не будет.
+            if _pull_main_or_escalate(conn, task_id, t, state):
+                return False
             store.set_state(conn, task_id, "review", "fsm",
                             expected_state=state, detail="MR готов — прогон ревьювера")
         else:
@@ -705,6 +778,11 @@ def _cmd_approve(conn, task_id: str, sha: str | None) -> None:
                             detail="гейт SPEC пройден — приёмочные тесты до кода")
             print(f"  дальше: artel.py run {task_id}  (запуск test_author)")
     elif state == "acceptance":
+        # Сверка свежести ветки до гейта (SPEC T051, требования 1, 4):
+        # тот же узел, что и на входе в review — approve не выносит на
+        # merge_gate срез, который мог устареть, пока задача ждала приёмки.
+        if _pull_main_or_escalate(conn, task_id, t, state):
+            return
         store.set_state(conn, task_id, "merge_gate", "operator",
                         expected_state=state, detail="приёмка пройдена")
         print(f"  дальше: artel.py approve {task_id}  (выполнит merge)")
