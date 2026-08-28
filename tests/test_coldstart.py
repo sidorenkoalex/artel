@@ -14,8 +14,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from orchestrator import coldstart, config  # noqa: E402
-from tests.sandbox import TmpRootTest  # noqa: E402
+from orchestrator import alerts, catalog, coldstart, config, doctor, store  # noqa: E402
+from tests.sandbox import TmpRootTest, capture  # noqa: E402
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
@@ -101,6 +101,63 @@ class GitObservedWorldTest(TmpRootTest):
         self.git("branch", "task/t040-chuzhaya-vetka")
 
         self.assertEqual(coldstart.observed_max_task_number("sled"), 0)
+
+
+class MultiTargetSeedAndCheckTest(TmpRootTest):
+    """Regression REVIEW T049 итерации 1, замечание major: посев счётчика
+    (`store.seed_task_counters`) и проверка `doctor.check_task_counters`
+    раньше видели только `config.DEFAULT_TARGET` — «прочий» target с
+    задачами на диске под `.artel/projects/<target>/tasks/`, но без
+    строк `tasks`/`task_counters` в БД (ровно холодный старт второго
+    target'а), молча пропускался обоими. Множество проверяемых/сеемых
+    target'ов теперь расширено декларацией `targets.yaml`."""
+
+    TARGETS_YAML = """targets:
+  artel:
+    forge: github
+    url: https://example.invalid/artel
+    base: main
+    token_slot: artel-token
+    no_paths: []
+    project_skills: []
+    merge_gate: operator
+  sled:
+    forge: github
+    url: https://example.invalid/sled
+    base: main
+    token_slot: sled-token
+    no_paths: []
+    project_skills: []
+    merge_gate: target-human
+"""
+
+    def setUp(self):
+        super().setUp()
+        config.TARGETS.write_text(self.TARGETS_YAML, encoding="utf-8")
+
+    def test_seed_picks_up_declared_target_without_any_db_rows(self):
+        (config.PROJECTS / "sled" / "tasks" / "T005").mkdir(parents=True)
+
+        capture(catalog.cmd_init)
+        conn = store.db()
+
+        self.assertIn("sled", store.counter_targets(conn))
+        self.assertEqual(store.peek_task_number(conn, "sled"), 6)
+
+    def test_doctor_check_catches_declared_target_without_counter_row(self):
+        (config.PROJECTS / "sled" / "tasks" / "T005").mkdir(parents=True)
+        conn = store.db()
+        store.create_schema(conn)
+        # Намеренно БЕЗ store.seed_task_counters(conn) — воспроизводит
+        # ситуацию «строки счётчика для sled ещё нет вовсе» (до фикса
+        # doctor молчал именно в этом случае).
+
+        check = doctor.check_task_counters(conn)
+
+        self.assertEqual(check.status, "fail")
+        incidents = [a for a in alerts.open_alerts(conn, "incident")
+                    if a["source"] == "doctor.task_counter"]
+        self.assertTrue(any("sled" in i["message"] for i in incidents))
 
 
 if __name__ == "__main__":

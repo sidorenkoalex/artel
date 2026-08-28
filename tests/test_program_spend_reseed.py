@@ -87,6 +87,36 @@ class ProgramSpendReseedTest(TmpRootTest):
         self.assertIn("по 1 задачам", steps[-1]["detail"])
         self.assertAlmostEqual(store.total_spent(self.conn), 10.0)
 
+    def test_retro_of_task_still_in_db_is_not_double_counted(self):
+        """Regression REVIEW T049 итерации 1, замечание blocker: «тёплый»
+        пульт (БД не потеряна) — задача с живой строкой `tasks` И своим
+        RETRO не должна засчитываться в пересев второй раз поверх уже
+        учтённого `tasks.spent_usd`."""
+        store.insert_task(self.conn, "T001", "задача", "done", "",
+                          config.DEFAULT_TARGET, 50.0)
+        store.update_task(self.conn, "T001", spent_usd=50.0)
+        self.write_retro("T001", 50.0)
+
+        budget.reseed_program_spend(self.conn)
+
+        self.assertFalse(store.task_exists(
+            self.conn, config.PROGRAM_SPEND_RESEED_TASK_ID))
+        self.assertAlmostEqual(store.total_spent(self.conn), 50.0)
+
+    def test_mixes_lost_and_live_rows_without_double_counting(self):
+        store.insert_task(self.conn, "T001", "задача", "done", "",
+                          config.DEFAULT_TARGET, 50.0)
+        store.update_task(self.conn, "T001", spent_usd=50.0)
+        self.write_retro("T001", 50.0)
+        self.write_retro("T002", 20.0)  # строки T002 в БД уже нет — потеряна
+
+        budget.reseed_program_spend(self.conn)
+
+        steps = store.task_steps(self.conn, config.PROGRAM_SPEND_RESEED_TASK_ID)
+        self.assertIn("расход пересеян из RETRO: $20.00 по 1 задачам",
+                     [s["detail"] for s in steps])
+        self.assertAlmostEqual(store.total_spent(self.conn), 70.0)
+
     def test_reseed_row_id_is_outside_the_tnnn_numbering_space(self):
         self.write_retro("T001", 3.0)
 

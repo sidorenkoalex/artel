@@ -565,8 +565,19 @@ def check_task_counters(conn) -> Check:
 
     Каждый расхождение — именованный `incident`-алерт (`doctor.task_
     counter`), тем же приёмом, что у `check_orphans`/`check_leases`.
+
+    Множество проверяемых target'ов — не только те, у кого уже есть
+    строка счётчика (`store.counter_targets`), но и все, объявленные
+    `targets.yaml` (REVIEW T049 итерации 1, замечание major): target
+    без строки счётчика — это ровно необнаруженный холодный старт,
+    который эта проверка обязана поймать, а не пропустить молча.
     """
-    checked_targets = {config.DEFAULT_TARGET} | store.counter_targets(conn)
+    try:
+        declared = targets.load()
+    except targets.TargetsError:
+        declared = {}
+    checked_targets = ({config.DEFAULT_TARGET} | store.counter_targets(conn)
+                       | set(declared))
     behind = []
     for target in sorted(checked_targets):
         next_number = store.peek_task_number(conn, target)

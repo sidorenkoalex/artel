@@ -169,21 +169,35 @@ def seed_task_counters(conn: sqlite3.Connection) -> None:
     или вовсе не существовать, холодный старт), но и наблюдаемый мир:
     `coldstart.observed_max_task_number` (SPEC T049, требование 1–2,
     ADR-0005 п.5) — каталоги задач, ветки `task/*`, RETRO, история main.
-    Дорогой скан (FS + git-подпроцессы) платится РОВНО ОДИН РАЗ на
-    target — только пока у него ещё нет строки счётчика (`target not in
-    known`); эта функция зовётся на КАЖДОМ `store.db()` (внутри
-    `migrate`), так что после первого успешного посева следующие вызовы
-    его не трогают. Отложенный импорт `coldstart` — тем же приёмом, что
-    `record_fixation` лениво зовёт `fixation`: `store.py` остаётся
-    листом графа импортов на момент загрузки модуля.
+    Множество target'ов для посева — не только те, что засветились
+    строками `tasks` (у только что подключённого/потерявшего БД target'а
+    таких строк нет вовсе), но и все, объявленные `targets.yaml`
+    (REVIEW T049 итерации 1, замечание major): именно этой декларации
+    соответствуют каталоги `.artel/projects/<target>/tasks/`, которые
+    `coldstart` и сканирует для «прочих target». Невалидный
+    `targets.yaml` не должен ронять посев счётчиков — используется
+    best-effort (пусто при `TargetsError`, ту же проверку файла отдельно
+    делает `doctor`). Дорогой скан (FS + git-подпроцессы) платится РОВНО
+    ОДИН РАЗ на target — только пока у него ещё нет строки счётчика
+    (`target not in known`); эта функция зовётся на КАЖДОМ `store.db()`
+    (внутри `migrate`), так что после первого успешного посева следующие
+    вызовы его не трогают. Отложенный импорт `coldstart`/`targets` — тем
+    же приёмом, что `record_fixation` лениво зовёт `fixation`: `store.py`
+    остаётся листом графа импортов на момент загрузки модуля.
     """
-    from . import coldstart
+    from . import coldstart, targets
     known = {r["target"] for r in
              conn.execute("SELECT target FROM task_counters")}
     top: dict = {config.DEFAULT_TARGET: 0}
     for row in conn.execute("SELECT id, target FROM tasks"):
         target = row["target"] or config.DEFAULT_TARGET
         top[target] = max(top.get(target, 0), task_number(row["id"]))
+    try:
+        declared = targets.load()
+    except targets.TargetsError:
+        declared = {}
+    for name in declared:
+        top.setdefault(name, 0)
     for target, number in top.items():
         if target not in known:
             observed = coldstart.observed_max_task_number(target)
