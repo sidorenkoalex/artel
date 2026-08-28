@@ -12,8 +12,65 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from orchestrator import config, retro, store  # noqa: E402
+from orchestrator import cleanup, config, retro, store  # noqa: E402
 from tests.sandbox import TmpRootTest  # noqa: E402
+
+SENTENCE_SPEC_TEXT = """---
+task: T900
+type: spec
+author_role: analyst
+status: ready
+schema_version: 2
+---
+
+# SPEC: задача для теста
+
+## Контекст
+
+Первая часть, вторая часть,
+третья часть на новой строке — тут точка.
+Второе предложение не должно попасть в Суть.
+
+## Требования
+
+1. Требование.
+
+## Критерии приёмки
+
+AC-1. Критерий.
+
+## Не входит
+
+- Ничего.
+"""
+
+TOKEN_DOT_SPEC_TEXT = """---
+task: T900
+type: spec
+author_role: analyst
+status: ready
+schema_version: 2
+---
+
+# SPEC: задача для теста
+
+## Контекст
+
+`docs/codebase-map.md` устарел после 27.08, регенерация нужна в тот же
+день. Второе предложение не должно попасть в Суть.
+
+## Требования
+
+1. Требование.
+
+## Критерии приёмки
+
+AC-1. Критерий.
+
+## Не входит
+
+- Ничего.
+"""
 
 SPEC_TEXT = """---
 task: T900
@@ -95,6 +152,47 @@ class RetroGenerationTest(TmpRootTest):
         self.assertNotIn("Вторая строка контекста", text)
         self.assertIn("developer", text)
         self.assertLessEqual(len(text.splitlines()), 30)
+
+    def test_build_done_gist_takes_full_first_sentence_not_line_or_comma(self):
+        """SPEC T063, требование 1 — предложение, перенесённое через
+        несколько строк и содержащее запятые до точки, должно попасть в
+        Суть целиком, обрезка идёт по точке."""
+        self.write_spec(SENTENCE_SPEC_TEXT)
+
+        text = retro.build_done(self.conn, self.TASK, "deadbeef" * 5)
+
+        self.assertIn("Первая часть, вторая часть, "
+                      "третья часть на новой строке — тут точка.", text)
+        self.assertNotIn("Второе предложение", text)
+
+    def test_build_done_gist_does_not_cut_at_dot_inside_path_or_date(self):
+        """REVIEW T063 итерации 1, blocker: мотивирующий пример SPEC
+        (путь `docs/codebase-map.md` и дата `27.08` до реальной точки
+        конца предложения) проходит через build_done без обрезки внутри
+        токена."""
+        self.write_spec(TOKEN_DOT_SPEC_TEXT)
+
+        text = retro.build_done(self.conn, self.TASK, "deadbeef" * 5)
+
+        self.assertIn(
+            "`docs/codebase-map.md` устарел после 27.08, регенерация "
+            "нужна в тот же день.", text)
+        self.assertNotIn("Второе предложение", text)
+
+    def test_build_killed_gist_from_journaled_tz_takes_full_first_sentence(self):
+        """SPEC T063, требование 2 — то же правило обрезки по точке для
+        ТЗ, сохранённого в журнал `kill` (SPEC T048)."""
+        self.add_step("operator", "state -> killed", "kill switch")
+        self.add_step("operator", cleanup.KILL_TZ_JOURNAL_ACTION,
+                      "Первая часть ТЗ, вторая часть ТЗ,\n"
+                      "третья часть ТЗ на новой строке — тут точка ТЗ.\n"
+                      "Второе предложение ТЗ не должно попасть в Суть.\n")
+
+        text = retro.build_killed(self.conn, self.TASK)
+
+        self.assertIn("Первая часть ТЗ, вторая часть ТЗ, "
+                      "третья часть ТЗ на новой строке — тут точка ТЗ.", text)
+        self.assertNotIn("Второе предложение ТЗ", text)
 
     def test_build_done_is_deterministic(self):
         self.write_spec()
@@ -190,6 +288,50 @@ class RetroGenerationTest(TmpRootTest):
         text = retro.build_killed(self.conn, self.TASK)
 
         self.assertIn("причина не найдена в журнале", text)
+
+
+class FirstSentenceTest(unittest.TestCase):
+    """`_first_sentence` — обрезка по точке, не по строке/запятой
+    (SPEC T063, требования 1, 2)."""
+
+    def test_cuts_at_first_dot_across_lines_and_commas(self):
+        text = "Часть один, часть два,\nчасть три на новой строке.\nХвост."
+
+        self.assertEqual(retro._first_sentence(text),
+                         "Часть один, часть два, часть три на новой строке.")
+
+    def test_no_dot_returns_whole_collapsed_text(self):
+        text = "Без точки\nна двух строках"
+
+        self.assertEqual(retro._first_sentence(text),
+                         "Без точки на двух строках")
+
+    def test_empty_text_returns_empty_string(self):
+        self.assertEqual(retro._first_sentence(""), "")
+
+    def test_does_not_cut_at_dot_inside_file_path_or_date(self):
+        """REVIEW T063 итерации 1, blocker: точка внутри пути/расширения
+        файла или даты (без пробела после неё) — не граница предложения,
+        поиск должен продолжаться до реальной точки-конца-предложения."""
+        text = ("Правка тронула `orchestrator/artel.py` 27.08, но задача "
+                "решена в тот же день. Второе предложение лишнее.")
+
+        self.assertEqual(
+            retro._first_sentence(text),
+            "Правка тронула `orchestrator/artel.py` 27.08, но задача "
+            "решена в тот же день.")
+
+    def test_does_not_cut_at_dot_inside_abbreviation(self):
+        text = ("Опишем кратко, т.е. по сути, всё сделано верно. "
+                "Второе предложение лишнее.")
+
+        self.assertEqual(
+            retro._first_sentence(text),
+            "Опишем кратко, т.е. по сути, всё сделано верно.")
+
+    def test_cuts_at_trailing_dot_with_no_following_text(self):
+        self.assertEqual(retro._first_sentence("Всё предложение целиком."),
+                         "Всё предложение целиком.")
 
 
 class ParseTotalCostTest(unittest.TestCase):
