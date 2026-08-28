@@ -13,8 +13,14 @@ schema_version: 2    # версия формата артефакта, см. scr
 lease-механики (T044): «занятая другая задача» — строка
 `store.all_leases`, чей `heartbeat_ts` не старше
 `config.LEASE_STALE_AFTER_SEC` (`liveness._age_seconds`) и чей `pid`
-адресуем (`liveness._pid_alive`), исключая строки с `task_id`, равным
-стартующей задаче.
+адресуем **на своём host** (`liveness._pid_alive`), исключая строки с
+`task_id`, равным стартующей задаче. Для строк с чужим `hostname` (не
+равным `socket.gethostname()`) `_pid_alive` не зовётся вовсе — pid
+другой машины нельзя ни подтвердить, ни опровергнуть локально, такая
+строка считается занятой без проверки pid (тот же приём, что уже
+использует `doctor.check_leases`/`check_merge_lock` и
+`merge_lock._holder_is_dead`), heartbeat при этом по-прежнему решает
+как host-независимая проверка.
 
 Новый модуль `orchestrator/parallel_limit.py` (по образцу `budget.py`/
 `merge_lock.py` — маленький модуль, читающий store+liveness, без

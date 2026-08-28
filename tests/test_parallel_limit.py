@@ -94,6 +94,20 @@ class ParallelLimitTest(TmpRootTest):
 
         self.assertEqual(parallel_limit.busy_other_tasks(store.db(), self.TASK), [])
 
+    def test_foreign_host_counts_even_with_locally_dead_pid(self):
+        self.seed_lease("T901", "sess-1", _dead_pid(), "other-host",
+                        store.now())
+
+        busy = parallel_limit.busy_other_tasks(store.db(), self.TASK)
+
+        self.assertEqual([r["task_id"] for r in busy], ["T901"])
+
+    def test_foreign_host_with_stale_heartbeat_is_still_excluded(self):
+        stale = _ts_ago(config.LEASE_STALE_AFTER_SEC + 1)
+        self.seed_lease("T901", "sess-1", _dead_pid(), "other-host", stale)
+
+        self.assertEqual(parallel_limit.busy_other_tasks(store.db(), self.TASK), [])
+
     def test_several_foreign_tasks_all_count(self):
         self.seed_lease("T901", "sess-1", os.getpid(), socket.gethostname(),
                         store.now())

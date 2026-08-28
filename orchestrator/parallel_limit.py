@@ -8,19 +8,29 @@
 мёртвые по pid lease в счёт не идут; lease самой стартующей задачи не
 считается против неё независимо от того, чей это `session_id`
 (требование 2).
+
+Чужой host: числа pid host-локальны, `liveness._pid_alive` (`os.kill`)
+на ЧУЖОЙ pid ничего не значит на этой машине — тот же приём, что
+`doctor.check_leases`/`check_merge_lock`/`merge_lock._holder_is_dead`:
+`_pid_alive` зовётся только для строк со своим host, для чужого host pid
+нельзя ни подтвердить, ни опровергнуть — считаем занятой (heartbeat
+по-прежнему решает, он host-независим).
 """
+import socket
+
 from . import config, liveness, store
 
 
 def busy_other_tasks(conn, task_id: str) -> list:
     """Живые lease чужих (не `task_id`) задач."""
+    host = socket.gethostname()
     busy = []
     for row in store.all_leases(conn):
         if row["task_id"] == task_id:
             continue
         if liveness._age_seconds(row["heartbeat_ts"]) > config.LEASE_STALE_AFTER_SEC:
             continue
-        if not liveness._pid_alive(row["pid"]):
+        if row["hostname"] == host and not liveness._pid_alive(row["pid"]):
             continue
         busy.append(row)
     return busy
