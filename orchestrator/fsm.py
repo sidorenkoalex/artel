@@ -738,7 +738,12 @@ def _handle_merge_conflict(conn, task_id: str, state: str, branch: str,
     в `in_dev` (AC-3) либо, если конфликт задевает защищённый путь
     (`config.PROTECTED_PATHS`), в `escalated` (AC-4) — оба перехода
     несут перечень конфликтующих файлов в журнал через `detail`
-    `store.set_state`.
+    `store.set_state`. Если сам `git merge --abort` не удался, main
+    остаётся с незавершённым merge — переход состояния НЕ выполняется
+    (иначе main тихо остался бы грязным при формально успешном
+    переходе, ломая последующие approve других задач); это
+    инфраструктурный отказ той же природы, что и «git не ответил»
+    выше — `sys.exit`, задача остаётся в `merge_gate`.
     """
     store.journal(conn, task_id, "orchestrator", "merge FAILED",
                   merge_res.stderr.strip()[:500])
@@ -750,22 +755,27 @@ def _handle_merge_conflict(conn, task_id: str, state: str, branch: str,
                  f"{merge_res.stderr}")
 
     abort = gitcmd.git("merge", "--abort")
-    abort_note = ""
     if abort is None or abort.returncode != 0:
-        abort_note = (f"; git merge --abort не удался: "
-                      f"{abort.stderr.strip()[:200] if abort is not None else 'git не ответил'}")
+        abort_err = abort.stderr.strip()[:500] if abort is not None else "git не ответил"
+        store.journal(conn, task_id, "orchestrator", "merge --abort FAILED",
+                      abort_err)
+        sys.exit(f"[{task_id}] merge отклонён: конфликт в файлах "
+                 f"{', '.join(files)}, но git merge --abort не смог "
+                 f"вернуть main в чистое состояние ({abort_err}); "
+                 f"main требует ручной уборки Оператором; задача осталась "
+                 f"в merge_gate")
 
     file_list = ", ".join(files)
     protected = [f for f in files if _touches_protected_path(f)]
     if protected:
         detail = (f"конфликт merge затрагивает защищённый путь "
                   f"({', '.join(protected)}); конфликтующие файлы: "
-                  f"{file_list}{abort_note}")
+                  f"{file_list}")
         store.set_state(conn, task_id, "escalated", "fsm",
                         expected_state=state, detail=detail)
     else:
         detail = (f"содержательный конфликт merge — возврат в разработку; "
-                  f"конфликтующие файлы: {file_list}{abort_note}")
+                  f"конфликтующие файлы: {file_list}")
         store.set_state(conn, task_id, "in_dev", "fsm",
                         expected_state=state, detail=detail)
 
