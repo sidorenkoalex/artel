@@ -27,6 +27,18 @@ def _claude_only_run(args, **kwargs):
     return REAL_RUN(args, **kwargs)
 
 
+REAL_POPEN = subprocess.Popen
+
+
+def _claude_only_popen(cmd, *args, **kwargs):
+    """То же для `Popen`: настоящий `subprocess.run` внутри себя зовёт
+    `subprocess.Popen`, поэтому безусловный мок Popen ронял даже git,
+    пропущенный `_claude_only_run` в настоящий `run`."""
+    if cmd and cmd[0] == "claude":
+        raise FileNotFoundError("claude")
+    return REAL_POPEN(cmd, *args, **kwargs)
+
+
 class DoctorWarnsLaggingActiveBranchTest(RealGitFreshnessTest):
 
     def setUp(self):
@@ -48,7 +60,7 @@ class DoctorWarnsLaggingActiveBranchTest(RealGitFreshnessTest):
                     doctor.subprocess, "run",
                     side_effect=_claude_only_run), \
                 mock.patch.object(doctor.subprocess, "Popen",
-                                  side_effect=FileNotFoundError):
+                                  side_effect=_claude_only_popen):
             return doctor.all_checks(store.db())
 
     def test_ac5_active_task_far_behind_main_gets_a_warning(self):
