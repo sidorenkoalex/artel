@@ -2,7 +2,7 @@
 task: T062
 type: plan
 author_role: developer
-status: draft        # draft | ready | approved
+status: ready        # draft | ready | approved
 schema_version: 2
 ---
 
@@ -180,6 +180,15 @@ session_id)` с session_id, только что прочитанным из ст
 
 ## Эскалация
 
+**Снята.** Ред. Оператора `4b09fa9` устранила блокер по варианту «(a)
+[дефолт]» ниже: `HOLDERS` в обоих классах
+`test_ac4_release_frees_limiter_slot.py` переведён с зашитого кортежа
+из двух записей на `@property`, генерирующее ровно
+`config.MAX_PARALLEL_TASKS` держателей. После правки все 8 приёмочных
+тестов `tasks/T062/acceptance_tests/` зелёные, полный `tests/` — 828/828
+зелёных, `scripts/guard.py --all` — ок (200 файлов). Раздел ниже оставлен
+как исторический след эскалации.
+
 Реализация (шаги 1–6 выше) завершена и закоммичена: `orchestrator/
 release.py`, команда `release` в `orchestrator/artel.py`, инвариант 32 в
 `docs/invariants.md`, `tests/test_release.py` (юнит-тесты модуля),
@@ -189,10 +198,10 @@ release.py`, команда `release` в `orchestrator/artel.py`, инвариа
 AC-5 (`Ac5ReleaseBypassesLeaseAndLimiterTest` — подтверждает, что
 `cmd_release` не вызывает ни `lease.acquire`/`run_locked`, ни
 `parallel_limit.refusal`) и AC-7 (`LEASE_STALE_AFTER_SEC` — 7200 или
-900). Красны только два теста AC-4 — не по вине кода `release.py`, а
-из-за стороннего дрейфа фикстуры, править который вне права роли (см.
-ниже). `status` не поднят в `ready` до ответа Оператора, чтобы FSM не
-пропустил задачу в `review` с красными приёмочными тестами.
+900). На момент эскалации были красны два теста AC-4 — не по вине кода
+`release.py`, а из-за стороннего дрейфа фикстуры (см. ниже); после
+правки Оператора `4b09fa9` все 8 приёмочных тестов зелёные (см.
+«Снята» выше), `status` поднят в `ready`.
 
 ### Вопросы
 
@@ -260,6 +269,6 @@ AC-5 (`Ac5ReleaseBypassesLeaseAndLimiterTest` — подтверждает, чт
 
 ### Блокирует
 
-- Финальный `status: ready` этого PLAN.md и переход `in_dev -> review`
-  с полностью зелёным приёмочным набором (AC-4 — сквозной критерий
-  SPEC, не `manual`/`skip`).
+~~Финальный `status: ready` этого PLAN.md и переход `in_dev -> review`
+с полностью зелёным приёмочным набором (AC-4 — сквозной критерий SPEC,
+не `manual`/`skip`).~~ Снято — см. «Снята» в начале раздела.
