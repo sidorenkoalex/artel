@@ -635,10 +635,12 @@ def run_agent_once(conn, task_id: str, role: str, prompt: str,
         # этой записи, уже видел чистое дерево (SPEC T041, требования 1–4).
         commit_timeout_checkpoint(conn, task_id, role)
         # «без ретрая» — чтобы читающий журнал не ждал попыток 2 и 3.
+        timeout_min = f"{config.AGENT_TIMEOUT_SEC // 60} мин"
         store.journal(conn, task_id, role, "agent run TIMEOUT",
-                      f"30 мин, {numbered} (без ретрая){spent}")
-        print(f"[{task_id}] таймаут шага (30 мин) — разберись и перезапусти run")
-        return "timeout", "таймаут шага (30 мин)"
+                      f"{timeout_min}, {numbered} (без ретрая){spent}")
+        print(f"[{task_id}] таймаут шага ({timeout_min}) — разберись и "
+              f"перезапусти run")
+        return "timeout", f"таймаут шага ({timeout_min})"
 
     if rc != 0:
         reason = (f"rc={rc}, {numbered}{spent}; "
