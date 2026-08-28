@@ -7,6 +7,7 @@
     python3 scripts/guard.py --all          # все артефакты в tasks/
 Выход: 0 — ок, 1 — есть нарушения (список в stdout).
 """
+import ast
 import re
 import sys
 from pathlib import Path
@@ -113,6 +114,13 @@ TEST_METHOD = re.compile(r"^\s*def\s+(test_\w+)\s*\(", re.M)
 AC_MARKER = re.compile(
     r"#\s*AC-(\d+):\s*(manual|skip|escalate)\b[^\S\n]*(?:[—-]+[^\S\n]*(.*))?")
 
+# Маркер причины красноты в докстринге модуля приёмочного теста (SPEC
+# T064, требование 1): «Красен до реализации: <объяснение>» или «Зелёный
+# с рождения: <объяснение>», непустой текст на той же строке после
+# двоеточия. Однострочный по тому же приёму, что AC_MARKER выше.
+REDNESS_MARKER = re.compile(
+    r"(?:Красен до реализации|Зелёный с рождения):[^\S\n]*(\S.*)")
+
 
 def section_body(text: str, name: str) -> str:
     """Текст секции `## name` до следующего `## ` заголовка или конца файла.
@@ -209,6 +217,65 @@ def count_test_methods(tdir: Path) -> int:
             continue
         count += len(TEST_METHOD.findall(content))
     return count
+
+
+def module_docstring(source: str) -> str | None:
+    """Докстринг модуля из текста .py-файла; `None` — файл не парсится
+    (SyntaxError) или докстринга нет.
+
+    `ast.parse`, не regex по тексту файла: докстринг модуля — синтаксическая
+    сущность (первый expression-statement тела модуля), а не «первая
+    тройная кавычка», которую перепутал бы regex со строкой внутри функции.
+    Тот же приём (без импорта/исполнения файла), что
+    `scripts/codebase_map.py::extract_purpose`.
+    """
+    try:
+        tree = ast.parse(source)
+    except SyntaxError:
+        return None
+    return ast.get_docstring(tree)
+
+
+def has_redness_marker(docstring: str | None) -> bool:
+    """Докстринг несёт «Красен до реализации:»/«Зелёный с рождения:» с
+    непустым объяснением (SPEC T064, требования 1, 3 — только формальный
+    факт присутствия строки, не оценка смысла)."""
+    if not docstring:
+        return False
+    return bool(REDNESS_MARKER.search(docstring))
+
+
+def redness_marker_errors_from_files(files: list[tuple[str, str]]) -> list[str]:
+    """Ядро проверки маркера красноты (SPEC T064, требования 1–3) по уже
+    прочитанным (label, текст) парам файлов `acceptance_tests/test_*.py` —
+    без чтения файлов: источник (рабочая копия или ВЕТКА задачи, тот же
+    приём, что `traceability_errors_from_content`) выбирает вызывающий код.
+    """
+    errors: list[str] = []
+    for label, source in files:
+        if not has_redness_marker(module_docstring(source)):
+            errors.append(
+                f"{label}: нет маркера «Красен до реализации:» или "
+                f"«Зелёный с рождения:» в докстринге модуля")
+    return errors
+
+
+def scan_redness_markers(tdir: Path) -> list[str]:
+    """Ошибки маркера красноты для `acceptance_tests/test_*.py` рабочей
+    копии (SPEC T064). Только `test_*.py` — SPEC требование 1 называет
+    этот шаблон, вспомогательные файлы (`_sandbox.py`, `__init__.py`)
+    маркером не размечаются.
+    """
+    tests_dir = tdir / "acceptance_tests"
+    if not tests_dir.is_dir():
+        return []
+    files: list[tuple[str, str]] = []
+    for f in sorted(tests_dir.rglob("test_*.py")):
+        try:
+            files.append((str(f), f.read_text(encoding="utf-8")))
+        except (OSError, UnicodeDecodeError):
+            continue
+    return redness_marker_errors_from_files(files)
 
 
 def traceability_errors_from_content(spec_text: str, meta: dict, tested: set,
