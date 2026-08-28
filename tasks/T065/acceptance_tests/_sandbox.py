@@ -172,6 +172,17 @@ class SmartAgent:
             cwd=wt_path, check=True, capture_output=True, text=True)
 
 
+def has_canary_mark(text: str) -> bool:
+    """Несёт ли текст пометку canary — по-английски (SPEC требования 2, 3,
+    6 буквально называют её `canary`, тем же словом, каким `journal` метит
+    гейты) или по-русски (`канарееч*`/`канарейк*` — естественный вариант
+    для строк status/RETRO, целиком русскоязычных во всей остальной
+    кодовой базе); принимается любой из двух, не только латиница —
+    формулировка AC-4 называет ФАКТ отличимости, не язык надписи."""
+    lowered = text.lower()
+    return "canary" in lowered or "канаре" in lowered
+
+
 def task_metrics(data, task_id: str):
     """Запись метрик задачи из разобранного JSON-отчёта: либо прямо на
     верхнем уровне (`data[task_id]`), либо под общей обёрткой

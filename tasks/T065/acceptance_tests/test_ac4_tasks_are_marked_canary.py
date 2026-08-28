@@ -3,12 +3,17 @@
 этой пометке; их расход при этом учтён в `total_spent` наравне с
 продуктовыми задачами.
 
-Механизм пометки (колонка или префикс в title) — решение developer в
-PLAN (SPEC, требование 6), тест его не называет — только то, что где-то
-в наблюдаемых поверхностях (`status`, killed-RETRO) она читается словом
-«canary» (тем же словом, что и в её собственном требовании 2 — «с
-пометкой canary в журнале»; словарь термина уже задан SPEC, не выдуман
-здесь).
+Механизм пометки — SPEC требование 6 (правка Оператора 28.08) сузило его
+до КОЛОНКИ БД буквально: пометка в title запрещена (title виден ролям в
+промпте — канареечная задача обязана быть неотличимой от продуктовой
+ДЛЯ РОЛЕЙ, иначе контаминация бенчмарка). Тест это уважает: не трогает
+`title` ни у канареечной, ни у продуктовой задачи, только читает
+Operator-facing поверхности (`status`, killed-RETRO) — им положено
+показывать пометку, самому title — нет. Слово пометки тест не пинит на
+латиницу: `_sandbox.has_canary_mark` принимает и «canary» (буквально из
+требования 2 — «с пометкой canary в журнале»), и русское «канаре*»
+(естественный вариант для строк, целиком русскоязычных в остальной
+кодовой базе) — критерий про факт отличимости, не про язык надписи.
 
 Красен до реализации: команды `canary` нет в таблице `orchestrator/
 artel.py::main` — `run_canary` возвращает текст с «Неизвестная команда
@@ -21,7 +26,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from _sandbox import CanarySandbox  # noqa: E402
+from _sandbox import CanarySandbox, has_canary_mark  # noqa: E402
 
 from orchestrator import catalog, cleanup, retro, store  # noqa: E402
 
@@ -48,12 +53,14 @@ class CanaryTasksAreMarkedTest(CanarySandbox):
                            if l.startswith(canary_id))
         product_line = next(l for l in status_out.splitlines()
                             if l.startswith(product_id))
-        self.assertIn("canary", canary_line.lower(),
-                     f"строка status канареечной задачи не несёт пометку "
-                     f"canary: {canary_line!r}")
-        self.assertNotIn("canary", product_line.lower(),
-                        f"строка status продуктовой задачи ошибочно "
-                        f"помечена canary: {product_line!r}")
+        self.assertTrue(
+            has_canary_mark(canary_line),
+            f"строка status канареечной задачи не несёт пометку canary: "
+            f"{canary_line!r}")
+        self.assertFalse(
+            has_canary_mark(product_line),
+            f"строка status продуктовой задачи ошибочно помечена canary: "
+            f"{product_line!r}")
 
         # total_spent: расход канареечной задачи учтён наравне с прочими
         # (требование 6) — колонка `spent_usd` общая для всех строк
@@ -73,12 +80,14 @@ class CanaryTasksAreMarkedTest(CanarySandbox):
         self.capture(cleanup.cmd_kill, product_id)
         canary_retro = retro.build_killed(conn, canary_id)
         product_retro = retro.build_killed(conn, product_id)
-        self.assertIn("canary", canary_retro.lower(),
-                     f"killed-RETRO канареечной задачи не несёт пометку "
-                     f"canary:\n{canary_retro}")
-        self.assertNotIn("canary", product_retro.lower(),
-                        f"killed-RETRO продуктовой задачи ошибочно несёт "
-                        f"пометку canary:\n{product_retro}")
+        self.assertTrue(
+            has_canary_mark(canary_retro),
+            f"killed-RETRO канареечной задачи не несёт пометку canary:\n"
+            f"{canary_retro}")
+        self.assertFalse(
+            has_canary_mark(product_retro),
+            f"killed-RETRO продуктовой задачи ошибочно несёт пометку "
+            f"canary:\n{product_retro}")
 
 
 if __name__ == "__main__":
