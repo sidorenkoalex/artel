@@ -22,7 +22,8 @@ budget_usd: 50
 
 ## Требования
 
-1. Merge-цикл команды `approve` на переходе `acceptance -> merge_gate`
+1. Merge-цикл команды `approve` из состояния `merge_gate` — переход
+   `merge_gate -> done`
    (вся операция: сверка CI → checkout main → pull → merge → done)
    исполняется под глобальным мьютексом «merge» в БД, реализованным
    строкой/таблицей замка по образцу lease (T044): session_id/pid/
