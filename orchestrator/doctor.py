@@ -58,8 +58,8 @@ import time
 from collections import namedtuple
 from pathlib import Path
 
-from . import (alerts, coldstart, config, gitcmd, projects, roles, runner,
-              spend, store, targets, workspace)
+from . import (alerts, coldstart, config, gitcmd, liveness, projects, roles,
+              runner, spend, store, targets, workspace)
 
 # status: "ok" | "warn" | "fail" | "skip" ("skip" — честный пропуск проверки,
 # требование 9: сверка forge-политики без `gh`/сети — не провал и не ок).
@@ -532,21 +532,6 @@ def check_branch_freshness(conn) -> list[Check]:
 
 # --- lease с мёртвым pid (SPEC T044, требование 11) ----------------------
 
-def _pid_alive(pid: int) -> bool:
-    """`os.kill(pid, 0)` не посылает сигнал, только проверяет адресуемость:
-    `ProcessLookupError` — процесса нет, `PermissionError` — есть, но чужой
-    (всё равно жив)."""
-    try:
-        os.kill(pid, 0)
-    except ProcessLookupError:
-        return False
-    except PermissionError:
-        return True
-    except OSError:
-        return False
-    return True
-
-
 # Тот же приём разбора, что у `_branch_alert_live`/`_dir_alert_live`/
 # `_worktree_alert_live` выше: сущность восстанавливается из `message`,
 # который сами же `check_leases`/`check_merge_lock` и составляют.
@@ -567,7 +552,7 @@ def _lease_alert_live(message: str, rows_by_task: dict) -> bool:
     row = rows_by_task.get(task_id)
     if row is None or row["session_id"] != session_id:
         return False
-    return not _pid_alive(row["pid"])
+    return not liveness._pid_alive(row["pid"])
 
 
 def _merge_lock_alert_live(message: str, row) -> bool:
@@ -583,7 +568,7 @@ def _merge_lock_alert_live(message: str, row) -> bool:
     task_id, session_id = match.group(1), match.group(2)
     if row["task_id"] != task_id or row["session_id"] != session_id:
         return False
-    return not _pid_alive(row["pid"])
+    return not liveness._pid_alive(row["pid"])
 
 
 def check_leases(conn) -> list[Check]:
@@ -599,7 +584,7 @@ def check_leases(conn) -> list[Check]:
     host = socket.gethostname()
     rows = store.all_leases(conn)
     dead = [row for row in rows
-           if row["hostname"] == host and not _pid_alive(row["pid"])]
+           if row["hostname"] == host and not liveness._pid_alive(row["pid"])]
 
     if not dead:
         results = [Check("leases", "ok", "нет lease с мёртвым pid на этом host")]
@@ -637,7 +622,7 @@ def check_merge_lock(conn) -> list[Check]:
         result = [Check("merge-lock", "ok",
                         f"мьютекс merge держит {row['task_id']} на чужом "
                         f"host {row['hostname']} — pid не проверяется")]
-    elif _pid_alive(row["pid"]):
+    elif liveness._pid_alive(row["pid"]):
         result = [Check("merge-lock", "ok",
                         f"мьютекс merge держит {row['task_id']} (сессия "
                         f"{row['session_id']}), pid жив")]

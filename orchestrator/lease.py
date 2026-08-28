@@ -19,9 +19,9 @@ lease не второй конечный автомат, а только пра�
 """
 import os
 import socket
-from datetime import datetime, timezone
+import sys
 
-from . import config, store
+from . import config, liveness, store
 
 
 def resolve_session_id(session_id: str | None) -> str:
@@ -39,12 +39,6 @@ def resolve_session_id(session_id: str | None) -> str:
     if session_id:
         return session_id
     return os.environ.get("ARTEL_SESSION_ID") or f"ppid-{os.getppid()}"
-
-
-def _age_seconds(heartbeat_ts: str) -> float:
-    ts = datetime.strptime(heartbeat_ts, "%Y-%m-%d %H:%M:%SZ").replace(
-        tzinfo=timezone.utc)
-    return (datetime.now(timezone.utc) - ts).total_seconds()
 
 
 def acquire(conn, task_id: str, session_id: str) -> tuple[str | None, bool]:
@@ -76,7 +70,7 @@ def acquire(conn, task_id: str, session_id: str) -> tuple[str | None, bool]:
         if row["session_id"] == session_id:
             store.update_lease(conn, task_id, session_id, pid, hostname, store.now())
             return None, False
-        age = _age_seconds(row["heartbeat_ts"])
+        age = liveness._age_seconds(row["heartbeat_ts"])
         if age <= config.LEASE_STALE_AFTER_SEC:
             refusal = (f"[{task_id}] задачу ведёт сессия {row['session_id']} "
                       f"с host {row['hostname']}, heartbeat {int(age)} сек "
@@ -96,3 +90,37 @@ def acquire(conn, task_id: str, session_id: str) -> tuple[str | None, bool]:
 def release(conn, task_id: str, session_id: str) -> None:
     """Освобождает lease, взятый С НУЛЯ этой сессией (см. модульный докстринг)."""
     store.release_lease(conn, task_id, session_id)
+
+
+def run_locked(conn, task_id: str, session_id: str | None, body,
+               *, on_refusal: str = "exit"):
+    """Общая точка обвязки мутирующих команд задачи (SPEC T057, требование
+    2): `resolve_session_id` -> `acquire` -> отказ -> `body(sid)` ->
+    `release`-если-`fresh` в `finally`. Прежде эта пятишаговая связка была
+    дословно продублирована в восьми вызывателях (CR-2026-08-28-4).
+
+    `body` принимает уже разрешённый `session_id` и исполняется, только
+    если `acquire()` не отказал; возврат `run_locked` — то же, что вернул
+    `body`, либо `None` при отказе с `on_refusal="print"`.
+
+    `on_refusal` — канал отказа не унифицирован между прежними 8 копиями
+    (SPEC требование 4) и остаётся параметром, а не константой:
+    `"exit"` (умолчание, approve/reject/run/budget/kill/workspace) —
+    `sys.exit(refusal)` тем же текстом, что и раньше, без захода в тело;
+    `"print"` (advance/auto) — печатает отказ и возвращает `None`, не
+    бросая исключение, — эти два вызывателя сами решают исход отказанного
+    пути (`False`/пустой возврат), а не проваливаются наружу через
+    `SystemExit`.
+    """
+    sid = resolve_session_id(session_id)
+    refusal, fresh = acquire(conn, task_id, sid)
+    if refusal is not None:
+        if on_refusal == "exit":
+            sys.exit(refusal)
+        print(refusal)
+        return None
+    try:
+        return body(sid)
+    finally:
+        if fresh:
+            release(conn, task_id, sid)

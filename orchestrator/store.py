@@ -423,7 +423,7 @@ def set_state(conn, task_id: str, state: str, actor: str, *,
     вместе со `state` при каждом успешном CAS. `now()` (секундная
     точность) остаётся общим форматом для `leases.heartbeat_ts`/
     `steps.ts` — его строго парсит `strptime` за пределами этого файла
-    (`lease._age_seconds` и приёмочный тест tasks/T044); `tasks.updated_at`
+    (`liveness._age_seconds` и приёмочный тест tasks/T044); `tasks.updated_at`
     обратно не парсится нигде в кодовой базе, так что более точный формат
     именно здесь ничего не ломает.
     """

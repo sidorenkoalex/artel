@@ -139,6 +139,65 @@ class AcquireReleaseTest(TmpRootTest):
         self.assertIsNone(self.row())
 
 
+class RunWindowTest(TmpRootTest):
+    """SPEC T057, требование 2 rev. AC-3: общая точка окна merge-мьютекса —
+    `acquire` -> отказ (`sys.exit`) -> `body()` -> `release` безусловно."""
+
+    TASK = "T001"
+    HOLDER_TASK = "T999"
+
+    def setUp(self):
+        super().setUp()
+        capture(catalog.cmd_init)
+        store.insert_task(store.db(), self.TASK, "Задача", "merge_gate",
+                          "task/t001-zadacha", config.DEFAULT_TARGET, 25.0)
+        store.insert_task(store.db(), self.HOLDER_TASK, "Держит окно",
+                          "merge_gate", "task/t999-holder",
+                          config.DEFAULT_TARGET, 25.0)
+
+    def row(self):
+        return store.merge_lock_row(store.db())
+
+    def test_success_runs_body_and_releases_the_mutex_afterwards(self):
+        conn = store.db()
+        seen = []
+
+        result = merge_lock.run_window(conn, self.TASK, "sess-a",
+                                       lambda: seen.append("done") or "ok")
+
+        self.assertEqual(result, "ok")
+        self.assertEqual(seen, ["done"])
+        self.assertIsNone(self.row(), "мьютекс обязан быть отпущен после "
+                                      "тела окна")
+
+    def test_refusal_exits_without_running_the_body(self):
+        conn = store.db()
+        store.set_merge_lock(conn, self.HOLDER_TASK, "sess-holder", 999,
+                             "holder-host", store.now())
+        called = []
+
+        with self.assertRaises(SystemExit) as ctx:
+            merge_lock.run_window(conn, self.TASK, "sess-caller",
+                                  lambda: called.append("ran"))
+
+        self.assertIn("sess-holder", str(ctx.exception))
+        self.assertEqual(called, [])
+        self.assertEqual(self.row()["session_id"], "sess-holder",
+                         "отказанное взятие не имеет права тронуть чужой "
+                         "мьютекс")
+
+    def test_mutex_is_released_even_when_the_body_raises(self):
+        conn = store.db()
+
+        with self.assertRaises(ValueError):
+            merge_lock.run_window(
+                conn, self.TASK, "sess-a",
+                lambda: (_ for _ in ()).throw(ValueError))
+
+        self.assertIsNone(self.row(), "тело упало — мьютекс всё равно "
+                                      "обязан быть отпущен")
+
+
 class ConcurrentAcquireTest(TmpRootTest):
     """Read-then-write в `acquire()` (`merge_lock_row` -> `set_merge_lock`)
     обязан быть атомарным под конкурентным доступом (SPEC T053, требование

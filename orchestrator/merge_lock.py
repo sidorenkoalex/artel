@@ -20,29 +20,9 @@ Lease задачи (`lease.py`, T044) не защищает от гонки за
 """
 import os
 import socket
-from datetime import datetime, timezone
+import sys
 
-from . import config, store
-
-
-def _age_seconds(heartbeat_ts: str) -> float:
-    ts = datetime.strptime(heartbeat_ts, "%Y-%m-%d %H:%M:%SZ").replace(
-        tzinfo=timezone.utc)
-    return (datetime.now(timezone.utc) - ts).total_seconds()
-
-
-def _pid_alive(pid: int) -> bool:
-    """`os.kill(pid, 0)` не шлёт сигнал, только проверяет адресуемость —
-    тот же приём, что `doctor._pid_alive` (SPEC T044, требование 11)."""
-    try:
-        os.kill(pid, 0)
-    except ProcessLookupError:
-        return False
-    except PermissionError:
-        return True
-    except OSError:
-        return False
-    return True
+from . import config, liveness, store
 
 
 def _holder_is_dead(row) -> bool:
@@ -53,9 +33,10 @@ def _holder_is_dead(row) -> bool:
     один синхронный вызов, и pid-проверку делает только `doctor`). Чужой
     host — судить о pid нечем, решает только heartbeat (тот же приём, что
     `doctor.check_leases`/`check_merge_lock`)."""
-    if _age_seconds(row["heartbeat_ts"]) > config.LEASE_STALE_AFTER_SEC:
+    if liveness._age_seconds(row["heartbeat_ts"]) > config.LEASE_STALE_AFTER_SEC:
         return True
-    return row["hostname"] == socket.gethostname() and not _pid_alive(row["pid"])
+    return (row["hostname"] == socket.gethostname()
+           and not liveness._pid_alive(row["pid"]))
 
 
 def acquire(conn, task_id: str, session_id: str) -> str | None:
@@ -73,7 +54,7 @@ def acquire(conn, task_id: str, session_id: str) -> str | None:
                                  store.now())
             return None
         if not _holder_is_dead(row):
-            age = _age_seconds(row["heartbeat_ts"])
+            age = liveness._age_seconds(row["heartbeat_ts"])
             return (f"[{task_id}] merge-окно занято сессией "
                    f"{row['session_id']} (задача {row['task_id']}), "
                    f"heartbeat {int(age)} сек назад — дождись освобождения "
@@ -81,8 +62,8 @@ def acquire(conn, task_id: str, session_id: str) -> str | None:
         detail = (f"держатель мьютекса merge мёртв (сессия "
                  f"{row['session_id']} на {row['hostname']}, pid "
                  f"{row['pid']}, задача {row['task_id']}, heartbeat "
-                 f"{int(_age_seconds(row['heartbeat_ts']))} сек назад) — "
-                 f"перехвачен сессией {session_id}")
+                 f"{int(liveness._age_seconds(row['heartbeat_ts']))} сек "
+                 f"назад) — перехвачен сессией {session_id}")
         store.set_merge_lock(conn, task_id, session_id, pid, hostname,
                              store.now())
         store.journal(conn, task_id, "merge-lock",
@@ -98,3 +79,23 @@ def release(conn, session_id: str) -> None:
     вызывать из `finally` по завершении окна, независимо от исхода (SPEC
     T053, требование 3)."""
     store.release_merge_lock(conn, session_id)
+
+
+def run_window(conn, task_id: str, session_id: str, body):
+    """Единая точка окна merge-мьютекса (SPEC T053, требования 1-3):
+    `acquire` -> отказ (`sys.exit`) -> `body()` -> `release` безусловно в
+    `finally`, независимо от исхода тела (без понятия `fresh` — см.
+    модульный докстринг).
+
+    Перенесена дословно из `fsm._cmd_approve` (ветка `merge_gate`, SPEC
+    T057, требование 1 rev. AC-3): `sid` там уже разрешён общей точкой
+    `lease.run_locked` снаружи merge-окна, здесь он приходит готовым
+    параметром, не переразрешается.
+    """
+    refusal = acquire(conn, task_id, session_id)
+    if refusal is not None:
+        sys.exit(refusal)
+    try:
+        return body()
+    finally:
+        release(conn, session_id)

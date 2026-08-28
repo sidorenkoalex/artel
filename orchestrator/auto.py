@@ -76,16 +76,9 @@ def cmd_auto(task_id: str, session_id: str | None = None) -> None:
     (требование 7), сами не отпуская (см. `orchestrator/lease.py`).
     """
     conn = store.db()
-    sid = lease.resolve_session_id(session_id)
-    refusal, fresh = lease.acquire(conn, task_id, sid)
-    if refusal is not None:
-        print(refusal)
-        return
-    try:
-        _cmd_auto(conn, task_id, sid)
-    finally:
-        if fresh:
-            lease.release(conn, task_id, sid)
+    lease.run_locked(conn, task_id, session_id,
+                     lambda sid: _cmd_auto(conn, task_id, sid),
+                     on_refusal="print")
 
 
 def _cmd_auto(conn, task_id: str, session_id: str) -> None:

@@ -133,6 +133,90 @@ class AcquireReleaseTest(TmpRootTest):
         self.assertIsNone(self.row())
 
 
+class RunLockedTest(TmpRootTest):
+    """SPEC T057, требование 2: общая точка обвязки — `resolve_session_id`
+    -> `acquire` -> отказ -> `body(sid)` -> `release`-если-`fresh`."""
+
+    TASK = "T001"
+
+    def setUp(self):
+        super().setUp()
+        capture(catalog.cmd_init)
+        store.insert_task(store.db(), self.TASK, "Задача", "in_dev",
+                          "task/t001-zadacha", config.DEFAULT_TARGET, 25.0)
+
+    def row(self):
+        return store.lease_row(store.db(), self.TASK)
+
+    def test_fresh_acquire_runs_body_and_releases_afterwards(self):
+        conn = store.db()
+        seen = []
+
+        result = lease.run_locked(conn, self.TASK, "sess-a",
+                                  lambda sid: seen.append(sid) or "ok")
+
+        self.assertEqual(result, "ok")
+        self.assertEqual(seen, ["sess-a"])
+        self.assertIsNone(self.row(), "lease, взятый с нуля, обязан быть "
+                                      "отпущен после тела")
+
+    def test_renewed_own_lease_runs_body_and_is_not_released(self):
+        conn = store.db()
+        lease.acquire(conn, self.TASK, "sess-a")
+
+        lease.run_locked(conn, self.TASK, "sess-a", lambda sid: None)
+
+        self.assertIsNotNone(self.row(), "lease, продлённый (не с нуля), "
+                                        "не имеет права быть отпущенным")
+
+    def test_refusal_defaults_to_sys_exit_and_does_not_run_body(self):
+        conn = store.db()
+        conn.execute(
+            "INSERT INTO leases (task_id, session_id, pid, hostname,"
+            " heartbeat_ts) VALUES (?,?,?,?,?)",
+            (self.TASK, "sess-holder", 999, "holder-host", store.now()))
+        conn.commit()
+        called = []
+
+        with self.assertRaises(SystemExit) as ctx:
+            lease.run_locked(conn, self.TASK, "sess-caller",
+                             lambda sid: called.append(sid))
+
+        self.assertIn("sess-holder", str(ctx.exception))
+        self.assertEqual(called, [])
+
+    def test_refusal_with_print_channel_prints_and_returns_none_without_body(self):
+        conn = store.db()
+        conn.execute(
+            "INSERT INTO leases (task_id, session_id, pid, hostname,"
+            " heartbeat_ts) VALUES (?,?,?,?,?)",
+            (self.TASK, "sess-holder", 999, "holder-host", store.now()))
+        conn.commit()
+        called = []
+        result = {}
+
+        def call():
+            result["value"] = lease.run_locked(
+                conn, self.TASK, "sess-caller", lambda sid: called.append(sid),
+                on_refusal="print")
+
+        out = capture(call)
+
+        self.assertIsNone(result["value"])
+        self.assertEqual(called, [])
+        self.assertIn("sess-holder", out)
+
+    def test_body_result_is_released_even_when_body_raises(self):
+        conn = store.db()
+
+        with self.assertRaises(ValueError):
+            lease.run_locked(conn, self.TASK, "sess-a",
+                             lambda sid: (_ for _ in ()).throw(ValueError))
+
+        self.assertIsNone(self.row(), "тело упало — lease, взятый с нуля, "
+                                      "всё равно обязан быть отпущен")
+
+
 class ConcurrentAcquireTest(TmpRootTest):
     """Ревью T044 (итерация 1), Замечание 1: read-then-write в `acquire()`
     (`lease_row` -> `insert_lease`/`update_lease`) должен быть атомарным
