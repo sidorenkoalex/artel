@@ -7,21 +7,17 @@
 """
 import subprocess
 import sys
-import tempfile
 import unittest
 from pathlib import Path
 from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from orchestrator import alerts, config, fsm, gitcmd, store  # noqa: E402
+from orchestrator import alerts, fsm, gitcmd, store  # noqa: E402
+from tests.sandbox import TmpRootTest, fake_git  # noqa: E402
 
 COMMITTED_MAP = ("---\nbuilt_at_sha: aaaa000011112222333344445555666677778888\n"
                  "---\n\n# Карта кодовой базы\n\nСодержимое A.\n")
-
-
-def fake_git_clean(*args) -> subprocess.CompletedProcess:
-    return subprocess.CompletedProcess(list(args), 0, "", "")
 
 
 class MapContentWithoutShaTest(unittest.TestCase):
@@ -41,21 +37,13 @@ class MapContentWithoutShaTest(unittest.TestCase):
                             fsm._map_content_without_sha(other))
 
 
-class RegenerateAndCommitMapTest(unittest.TestCase):
-    """Песочница: ROOT/DB во tmpdir, карта на месте — тот же приём, что
-    `tests/test_brief.py` (`BriefUnitTest`)."""
+class RegenerateAndCommitMapTest(TmpRootTest):
+    """Песочница: sandbox.TmpRootTest полным набором путей (SPEC T061,
+    AC-3) — карта на месте, тот же приём, что `tests/test_brief.py`
+    (`BriefUnitTest`)."""
 
     def setUp(self):
-        tmp = tempfile.TemporaryDirectory()
-        self.addCleanup(tmp.cleanup)
-        self.root = Path(tmp.name)
-        for attr, value in (("ROOT", self.root),
-                            ("DB", self.root / ".artel" / "state.db"),
-                            ("TASKS", self.root / "tasks")):
-            patcher = mock.patch.object(config, attr, value)
-            patcher.start()
-            self.addCleanup(patcher.stop)
-
+        super().setUp()
         (self.root / "docs").mkdir(parents=True)
         self.map_path = self.root / "docs" / "codebase-map.md"
         self.map_path.write_text(COMMITTED_MAP, encoding="utf-8")
@@ -124,7 +112,7 @@ class RegenerateAndCommitMapTest(unittest.TestCase):
         fail = subprocess.CompletedProcess(
             ["python3"], 1, "", "стенд: генератор карты упал")
 
-        with mock.patch.object(gitcmd, "git", fake_git_clean), \
+        with mock.patch.object(gitcmd, "git", fake_git), \
                 mock.patch("subprocess.run", return_value=fail) as run_mock:
             fsm._regenerate_and_commit_map(self.conn, "T001")
 
@@ -208,7 +196,7 @@ class RegenerateAndCommitMapTest(unittest.TestCase):
         self.assertIn("стенд: checkout упал", incidents[0]["message"])
 
     def test_regeneration_oserror_raises_incident_and_does_not_commit(self):
-        with mock.patch.object(gitcmd, "git", fake_git_clean), \
+        with mock.patch.object(gitcmd, "git", fake_git), \
                 mock.patch("subprocess.run",
                            side_effect=FileNotFoundError("python3 не найден")) as run_mock:
             fsm._regenerate_and_commit_map(self.conn, "T001")
@@ -226,7 +214,7 @@ class RegenerateAndCommitMapTest(unittest.TestCase):
             self.map_path.unlink()
             return subprocess.CompletedProcess(cmd, 0, "", "")
 
-        with mock.patch.object(gitcmd, "git", fake_git_clean), \
+        with mock.patch.object(gitcmd, "git", fake_git), \
                 mock.patch("subprocess.run", side_effect=fake_run):
             fsm._regenerate_and_commit_map(self.conn, "T001")
 
@@ -238,7 +226,7 @@ class RegenerateAndCommitMapTest(unittest.TestCase):
     def test_missing_map_file_raises_incident(self):
         self.map_path.unlink()
 
-        with mock.patch.object(gitcmd, "git", fake_git_clean), \
+        with mock.patch.object(gitcmd, "git", fake_git), \
                 mock.patch("subprocess.run") as run_mock:
             fsm._regenerate_and_commit_map(self.conn, "T001")
 

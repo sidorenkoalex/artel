@@ -21,7 +21,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from orchestrator import artel, auto, catalog, config, fsm, gitcmd, runner, store  # noqa: E402
 from scripts import guard  # noqa: E402
-from tests.sandbox import (TmpRootTest, fake_git,  # noqa: E402
+from tests.sandbox import (FakeProc, TmpRootTest, fake_git,  # noqa: E402
                            seed_developer_brief_fixtures)
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -364,29 +364,6 @@ class RunAnalystTest(TmpRootTest):
         self.assertIn("Роль: аналитик", prompt)
         self.assertIn("TZ.md", prompt)
         self.assertIn("conventions-core", prompt)
-
-
-class FakeStream:
-    def __init__(self, lines):
-        self.lines = iter(lines)
-
-    def __iter__(self):
-        return self
-
-    def __next__(self):
-        return next(self.lines)
-
-    def close(self):
-        pass
-
-
-class FakeProc:
-    def __init__(self, lines, returncode: int = 0):
-        self.stdout = FakeStream(lines)
-        self.returncode = returncode
-
-    def wait(self, timeout=None) -> int:
-        return self.returncode
 
 
 # --------------------------------------------------------------------------
