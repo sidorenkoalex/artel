@@ -77,8 +77,16 @@ workspace, tasks, knowledge, logs). БД одна на все проекты: с
 Команды:
   init | new "<название>" [--tz <файл>] | status | show <id> | advance <id> |
   run <id> | auto <id> | approve <id> [sha] | reject <id> "<причина>" |
-  kill <id> | log <id> | budget <id> <usd> | target-init <target> |
-  doctor [--restore] | alert-ack <id> "<решение>" | version
+  kill <id> | release <id> | log <id> | budget <id> <usd> |
+  target-init <target> | doctor [--restore] | alert-ack <id> "<решение>" |
+  version
+
+`release <id>` — операторское снятие lease задачи (SPEC T062): удаляет
+строку `leases` независимо от свежести heartbeat и журналирует данные
+бывшего держателя. Не мутирующая команда в смысле lease — своего lease
+не берёт и лимитер `MAX_PARALLEL_TASKS` не проходит (инвариант 32,
+тот же класс, что `kill`/`status`/`approve`/`reject`/`budget`/`log`/
+`doctor`); задача без lease — не ошибка, код возврата 0.
 
 `approve` на гейтах, где фиксация уже есть (A2b, ADR-0003 п.15),
 подтверждает КОНКРЕТНЫЙ sha: без него печатает текущий зафиксированный
@@ -111,6 +119,7 @@ SPEC, PLAN — в ревью, REVIEW — из ревью). Нарушение с
   runner    запуск агента шага: промпт, попытки, исход
   auto      цикл run+advance до места, где нужен человек
   cleanup   kill switch и уборка хвостов задачи
+  release   операторское снятие lease задачи, независимо от свежести (T062)
   catalog   каталог задач: init, new, status, show, log
   alerts    таблица alerts: incident|threshold|trigger, ack с решением (A3)
   doctor    pre-flight, recovery-сверка, сироты, смоук CLI/изоляции (A3)
@@ -127,8 +136,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from orchestrator import (auto, budget, catalog,  # noqa: E402
-                          cleanup, config, doctor, fsm, projects, runner,
-                          version, workspace)
+                          cleanup, config, doctor, fsm, projects, release,
+                          runner, version, workspace)
 
 
 def _refuse_if_worktree() -> None:
@@ -191,6 +200,7 @@ def main() -> None:
         "reject": lambda: fsm.cmd_reject(rest[0],
                                          rest[1] if len(rest) > 1 else ""),
         "kill": lambda: cleanup.cmd_kill(rest[0]),
+        "release": lambda: release.cmd_release(rest[0]),
         "log": lambda: catalog.cmd_log(rest[0]),
         "budget": lambda: budget.cmd_budget(rest[0],
                                             rest[1] if len(rest) > 1 else ""),
