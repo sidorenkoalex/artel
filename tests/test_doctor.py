@@ -14,6 +14,7 @@
 настоящий git (тот же приём, что `RealPultGitTest`).
 """
 import io
+import os
 import shutil
 import socket
 import subprocess
@@ -795,6 +796,103 @@ class LeasesCheckTest(TmpRootTest):
         incidents = [a for a in alerts.open_alerts(store.db(), "incident")
                     if a["source"] == "doctor.leases"]
         self.assertEqual(len(incidents), 1)
+
+
+class TaskCounterCheckTest(TmpRootTest):
+    """SPEC T049, требование 3 (AC-2): счётчик номеров target'а ниже
+    наблюдаемого max — incident; на уровне или выше — здоровое состояние.
+
+    Сквозной путь (посев через `cmd_init`, реальный git) уже покрыт
+    `tasks/T049/acceptance_tests/test_ac2_doctor_counter_incident.py` —
+    здесь `check_task_counters` дёргается напрямую, без git (наблюдаемый
+    max в этой песочнице приходит только от каталогов `tasks/T*`)."""
+
+    def setUp(self):
+        super().setUp()
+        capture(catalog.cmd_init)
+
+    def test_counter_behind_observed_max_raises_an_incident(self):
+        (config.TASKS / "T010").mkdir(parents=True)
+        conn = store.db()
+        conn.execute("UPDATE task_counters SET next_number=3 WHERE target=?",
+                     (config.DEFAULT_TARGET,))
+        conn.commit()
+
+        check = doctor.check_task_counters(conn)
+
+        self.assertEqual(check.status, "fail")
+        incidents = [a for a in alerts.open_alerts(conn, "incident")
+                    if a["source"] == "doctor.task_counter"]
+        self.assertEqual(len(incidents), 1)
+        self.assertIn(config.DEFAULT_TARGET, incidents[0]["message"])
+
+    def test_counter_equal_to_observed_max_is_ok(self):
+        conn = store.db()
+        (config.TASKS / "T001").mkdir(parents=True)
+        conn.execute("UPDATE task_counters SET next_number=1 WHERE target=?",
+                     (config.DEFAULT_TARGET,))
+        conn.commit()
+
+        check = doctor.check_task_counters(conn)
+
+        self.assertEqual(check.status, "ok")
+        self.assertEqual(alerts.open_alerts(conn, "incident"), [])
+
+    def test_counter_above_observed_max_is_ok(self):
+        check = doctor.check_task_counters(store.db())
+
+        self.assertEqual(check.status, "ok")
+        self.assertEqual(alerts.open_alerts(store.db(), "incident"), [])
+
+    def test_repeated_run_does_not_duplicate_the_incident(self):
+        (config.TASKS / "T010").mkdir(parents=True)
+        conn = store.db()
+        conn.execute("UPDATE task_counters SET next_number=3 WHERE target=?",
+                     (config.DEFAULT_TARGET,))
+        conn.commit()
+
+        doctor.check_task_counters(conn)
+        doctor.check_task_counters(conn)
+
+        incidents = [a for a in alerts.open_alerts(conn, "incident")
+                    if a["source"] == "doctor.task_counter"]
+        self.assertEqual(len(incidents), 1)
+
+
+class BackupAgeDegradedCheckTest(TmpRootTest):
+    """SPEC T049, требование 6 (AC-4): `check_backup_age` больше не заводит
+    `incident` — ни при отсутствии маркера, ни при просроченном. До этой
+    задачи (tasks/T022) отсутствие/просрочка маркера были гейтом; здесь —
+    регресс-тест на то, что деградация действительно снята, а не только
+    задокументирована."""
+
+    def test_missing_marker_is_ok_without_an_incident(self):
+        self.assertFalse(config.BACKUP_MARKER.exists())
+
+        check = doctor.check_backup_age(store.db())
+
+        self.assertEqual(check.status, "ok")
+        self.assertEqual(alerts.open_alerts(store.db(), "incident"), [])
+
+    def test_stale_marker_is_still_ok_without_an_incident(self):
+        """Раньше просроченный (по мотивам T022) маркер заводил бы incident
+        — здесь маркер искусственно состарен, а прогон остаётся `ok`."""
+        self.touch_backup()
+        old = time.time() - 999 * 86400
+        os.utime(config.BACKUP_MARKER, (old, old))
+
+        check = doctor.check_backup_age(store.db())
+
+        self.assertEqual(check.status, "ok")
+        self.assertEqual(alerts.open_alerts(store.db(), "incident"), [])
+
+    def test_fresh_marker_reports_informational_ok(self):
+        self.touch_backup()
+
+        check = doctor.check_backup_age(store.db())
+
+        self.assertEqual(check.status, "ok")
+        self.assertIn("информационно", check.detail)
 
 
 class AutoAckTest(TmpRootTest):
