@@ -315,9 +315,15 @@ class Ac5GateAndReadonlyCommandsIgnoreLimiterTest(LimiterSandbox):
 
         _invoke(lambda: cleanup.cmd_kill(self.TASK))
 
+        # «kill выполнился» = задача в killed; строка НЕ удаляется —
+        # архивация, никогда DELETE (ADR-0003 3ж; правка Оператора:
+        # исходный ассерт requires-row-gone требовал нарушить это правило).
         row = store.db().execute(
             "SELECT * FROM tasks WHERE id=?", (self.TASK,)).fetchone()
-        self.assertIsNone(row, "kill не выполнился при занятых других задачах")
+        self.assertIsNotNone(row, "строка задачи удалена — kill обязан "
+                                  "архивировать, не удалять (ADR-0003 3ж)")
+        self.assertEqual(row["state"], "killed",
+                         "kill не выполнился при занятых других задачах")
 
     def test_ac5_approve_ignores_the_limiter(self):
         self.reset_task()
