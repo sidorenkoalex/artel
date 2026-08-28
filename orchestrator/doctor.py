@@ -547,24 +547,74 @@ def _pid_alive(pid: int) -> bool:
     return True
 
 
+# Тот же приём разбора, что у `_branch_alert_live`/`_dir_alert_live`/
+# `_worktree_alert_live` выше: сущность восстанавливается из `message`,
+# который сами же `check_leases`/`check_merge_lock` и составляют.
+_LEASE_ALERT_RE = re.compile(r"^(\S+): lease сессии (\S+) мёртв \(pid \d+ на \S+\)$")
+_MERGE_LOCK_ALERT_RE = re.compile(
+    r"^(\S+): мьютекс merge сессии (\S+) мёртв \(pid \d+ на \S+\)$")
+
+
+def _lease_alert_live(message: str, rows_by_task: dict) -> bool:
+    """SPEC T054, требование 1: условие живо, пока строка leases с тем же
+    task_id/session_id ещё на месте и её (актуальный, не из сообщения) pid
+    мёртв. Строки нет, session_id другой (lease перехвачен/переиздан) или
+    pid ожил — условие снято."""
+    match = _LEASE_ALERT_RE.match(message)
+    if match is None:
+        return True
+    task_id, session_id = match.group(1), match.group(2)
+    row = rows_by_task.get(task_id)
+    if row is None or row["session_id"] != session_id:
+        return False
+    return not _pid_alive(row["pid"])
+
+
+def _merge_lock_alert_live(message: str, row) -> bool:
+    """SPEC T054, требование 2: условие живо, пока текущий держатель
+    мьютекса — то же (task_id, session_id), что в сообщении, и его
+    (актуальный) pid мёртв. Замок пуст, держатель сменился или pid ожил —
+    условие снято."""
+    match = _MERGE_LOCK_ALERT_RE.match(message)
+    if match is None:
+        return True
+    if row is None:
+        return False
+    task_id, session_id = match.group(1), match.group(2)
+    if row["task_id"] != task_id or row["session_id"] != session_id:
+        return False
+    return not _pid_alive(row["pid"])
+
+
 def check_leases(conn) -> list[Check]:
     """Требование 11: lease с мёртвым pid НА ЭТОМ host — incident-алерт,
     по аналогии с `check_orphans`. Чужой host не проверяется — pid без
     доступа к его процессной таблице нельзя ни подтвердить, ни опровергнуть.
+
+    Авто-ack (SPEC T054, требование 1) зовётся на каждом прогоне, не
+    только когда найден свежий мёртвый lease — иначе алерт прошлого
+    прогона не закроется в прогоне, где условие уже снято, но новых
+    находок нет.
     """
     host = socket.gethostname()
-    dead = [row for row in store.all_leases(conn)
+    rows = store.all_leases(conn)
+    dead = [row for row in rows
            if row["hostname"] == host and not _pid_alive(row["pid"])]
-    if not dead:
-        return [Check("leases", "ok", "нет lease с мёртвым pid на этом host")]
 
-    results = []
-    for row in dead:
-        message = (f"{row['task_id']}: lease сессии {row['session_id']} "
-                  f"мёртв (pid {row['pid']} на {row['hostname']})")
-        alerts.raise_alert(conn, store.task_target(conn, row["task_id"]),
-                          "incident", "doctor.leases", message)
-        results.append(Check("leases", "fail", message))
+    if not dead:
+        results = [Check("leases", "ok", "нет lease с мёртвым pid на этом host")]
+    else:
+        results = []
+        for row in dead:
+            message = (f"{row['task_id']}: lease сессии {row['session_id']} "
+                      f"мёртв (pid {row['pid']} на {row['hostname']})")
+            alerts.raise_alert(conn, store.task_target(conn, row["task_id"]),
+                              "incident", "doctor.leases", message)
+            results.append(Check("leases", "fail", message))
+
+    rows_by_task = {row["task_id"]: row for row in rows}
+    _auto_ack_gone(conn, "doctor.leases",
+                  lambda msg: _lease_alert_live(msg, rows_by_task))
     return results
 
 
@@ -575,23 +625,32 @@ def check_merge_lock(conn) -> list[Check]:
     делает факт видимым Оператору, тем же приёмом, что `check_leases`
     (требование 11 T044, на которую и ссылается требование 4). Чужой host
     не проверяется — та же причина, что у `check_leases`.
+
+    Авто-ack (SPEC T054, требование 2) — как у `check_leases`: зовётся на
+    каждом прогоне перед `return`, не только когда найден свежий мёртвый
+    держатель.
     """
     row = store.merge_lock_row(conn)
     if row is None:
-        return [Check("merge-lock", "ok", "мьютекс merge свободен")]
-    if row["hostname"] != socket.gethostname():
-        return [Check("merge-lock", "ok",
-                      f"мьютекс merge держит {row['task_id']} на чужом "
-                      f"host {row['hostname']} — pid не проверяется")]
-    if _pid_alive(row["pid"]):
-        return [Check("merge-lock", "ok",
-                      f"мьютекс merge держит {row['task_id']} (сессия "
-                      f"{row['session_id']}), pid жив")]
-    message = (f"{row['task_id']}: мьютекс merge сессии {row['session_id']} "
-              f"мёртв (pid {row['pid']} на {row['hostname']})")
-    alerts.raise_alert(conn, store.task_target(conn, row["task_id"]),
-                       "incident", "doctor.merge_lock", message)
-    return [Check("merge-lock", "fail", message)]
+        result = [Check("merge-lock", "ok", "мьютекс merge свободен")]
+    elif row["hostname"] != socket.gethostname():
+        result = [Check("merge-lock", "ok",
+                        f"мьютекс merge держит {row['task_id']} на чужом "
+                        f"host {row['hostname']} — pid не проверяется")]
+    elif _pid_alive(row["pid"]):
+        result = [Check("merge-lock", "ok",
+                        f"мьютекс merge держит {row['task_id']} (сессия "
+                        f"{row['session_id']}), pid жив")]
+    else:
+        message = (f"{row['task_id']}: мьютекс merge сессии {row['session_id']} "
+                  f"мёртв (pid {row['pid']} на {row['hostname']})")
+        alerts.raise_alert(conn, store.task_target(conn, row["task_id"]),
+                           "incident", "doctor.merge_lock", message)
+        result = [Check("merge-lock", "fail", message)]
+
+    _auto_ack_gone(conn, "doctor.merge_lock",
+                  lambda msg: _merge_lock_alert_live(msg, row))
+    return result
 
 
 # --- прочие проверки (требование 9) --------------------------------------
