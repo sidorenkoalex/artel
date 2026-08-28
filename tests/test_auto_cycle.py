@@ -13,6 +13,7 @@ tests/test_agent_log.py, tests/test_agent_failure.py, tests/test_step_cost.py).
 или удалить его может только Оператор отдельным ADR; перечень «инвариант →
 тест → откуда» — docs/invariants.md.
 """
+import shutil
 import sqlite3
 import subprocess
 import sys
@@ -26,6 +27,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from orchestrator import (agent_log, auto, budget, catalog,  # noqa: E402
                           config, fsm, gitcmd, runner, store)
 from tests.sandbox import capture, fake_git  # noqa: E402
+
+REPO_ROOT = Path(__file__).resolve().parent.parent
 
 # Настоящая `cmd_run`, снятая до подмены: тесту отказа по бюджету нужна она,
 # а не фейк — предмет проверки в том, как auto реагирует на реальный отказ.
@@ -141,16 +144,25 @@ class AutoCycleTest(unittest.TestCase):
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
         root = Path(tmp.name)
+        # `ROOT` тоже уводится (SPEC T049: холодный старт сканирует его для
+        # посева счётчика — непропатченный ROOT читал бы реальное дерево
+        # пульта); `templates/` копируется рядом, `cmd_new` продолжает
+        # читать настоящий `templates/SPEC.md`, только уже из песочницы.
+        shutil.copytree(REPO_ROOT / "templates", root / "templates")
 
         for attr, value in (("DB", root / ".artel" / "state.db"),
                             ("TASKS", root / "tasks"),
                             ("LOGS", root / ".artel" / "logs"),
+                            ("ROOT", root),
+                            ("PROJECTS", root / ".artel" / "projects"),
+                            ("TARGETS", root / "targets.yaml"),
                             # Курируемый слой ролей (T019): каталог заводит
                             # запуск шага — пусть заводит в песочнице, а не
                             # в .artel/ репозитория.
                             ("ROLE_HOME", root / ".artel" / "home"),
                             ("ROLE_CONFIG_DIR",
                              root / ".artel" / "home" / ".claude"),
+                            ("BACKUP_MARKER", root / ".artel" / "backup-marker"),
                             # `cmd_new` (SPEC T048) пишет TZ.md/SPEC.md в
                             # worktree — пусть тоже в песочницу, не в
                             # `.artel/worktrees/` репозитория.

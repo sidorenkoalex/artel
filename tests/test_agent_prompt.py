@@ -8,6 +8,7 @@
 Реального CLI здесь нет: `subprocess.Popen` подменён и запоминает, с чем
 его позвали.
 """
+import shutil
 import sys
 import tempfile
 import unittest
@@ -17,7 +18,10 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from orchestrator import catalog, config, gitcmd, runner, store  # noqa: E402
-from tests.sandbox import capture, fake_git  # noqa: E402
+from tests.sandbox import (capture, fake_git,  # noqa: E402
+                           seed_developer_brief_fixtures, sync_spec_from_worktree)
+
+REPO_ROOT = Path(__file__).resolve().parent.parent
 
 
 class FakeStream:
@@ -56,16 +60,28 @@ class PromptChannelTest(unittest.TestCase):
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
         root = Path(tmp.name)
+        # `ROOT` тоже уводится (SPEC T049: холодный старт сканирует его для
+        # посева счётчика — непропатченный ROOT читал бы реальное дерево
+        # пульта); `templates/`/`skills/` копируются рядом — `cmd_new`
+        # читает `templates/SPEC.md`, `cmd_run` читает промпт роли из
+        # `skills/*.md`, оба уже из песочницы.
+        shutil.copytree(REPO_ROOT / "templates", root / "templates")
+        shutil.copytree(REPO_ROOT / "skills", root / "skills")
+        seed_developer_brief_fixtures(root)
 
         for attr, value in (("DB", root / ".artel" / "state.db"),
                             ("TASKS", root / "tasks"),
                             ("LOGS", root / ".artel" / "logs"),
+                            ("ROOT", root),
+                            ("PROJECTS", root / ".artel" / "projects"),
+                            ("TARGETS", root / "targets.yaml"),
                             # Курируемый слой ролей (T019): каталог заводит
                             # запуск шага — пусть заводит в песочнице, а не
                             # в .artel/ репозитория.
                             ("ROLE_HOME", root / ".artel" / "home"),
                             ("ROLE_CONFIG_DIR",
                              root / ".artel" / "home" / ".claude"),
+                            ("BACKUP_MARKER", root / ".artel" / "backup-marker"),
                             # `cmd_new` (SPEC T048) сам заводит ветку и
                             # worktree через `gitcmd` — тому нужен адрес,
                             # не задетый ROOT репозитория пульта.
@@ -93,6 +109,7 @@ class PromptChannelTest(unittest.TestCase):
 
         self.capture(catalog.cmd_init)
         self.capture(catalog.cmd_new, "Канал промпта")
+        sync_spec_from_worktree(self.TASK)
 
     # ------------------------------------------------------------ утилиты
 

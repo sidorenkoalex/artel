@@ -270,8 +270,21 @@ class FsmTest(unittest.TestCase):
 
         self.set_ci(GREEN_CI)
 
-        self.capture(catalog.cmd_init)
-        self.capture(catalog.cmd_new, "Инварианты системы")
+        # `cmd_init`/`cmd_new` — единственные вызовы этого setUp, читающие
+        # ROOT ДО того, как ниже он специально остаётся реальным для
+        # `cmd_run` (см. комментарий выше): холодный старт (SPEC T049)
+        # сканирует ROOT на счётчик номеров и программный расход —
+        # непропатченный ROOT читал бы настоящие `tasks/`, `docs/retro/`
+        # и git-историю ЭТОГО репозитория и раздувал бы то и другое, ломая
+        # ожидание «первая заведённая задача — T001». Тем же приёмом, что
+        # `approve_with_isolated_root` ниже — ROOT патчится СИНТЕТИЧЕСКИМ
+        # каталогом только на время самого вызова.
+        cold_start_root = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, cold_start_root, ignore_errors=True)
+        shutil.copytree(REPO_ROOT / "templates", cold_start_root / "templates")
+        with mock.patch.object(config, "ROOT", cold_start_root):
+            self.capture(catalog.cmd_init)
+            self.capture(catalog.cmd_new, "Инварианты системы")
         self.tdir = config.TASKS / self.TASK
         # С SPEC T048 `cmd_new` пишет артефакты в worktree, не на диск
         # main — тесты этого файла кладут SPEC.md/PLAN.md/... напрямую на
