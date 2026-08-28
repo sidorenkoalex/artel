@@ -7,13 +7,13 @@
 """
 import shutil
 import sys
-import tempfile
 import unittest
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from orchestrator import config, retro, store  # noqa: E402
+from tests.sandbox import TmpRootTest  # noqa: E402
 
 SPEC_TEXT = """---
 task: T900
@@ -54,31 +54,18 @@ class T(unittest.TestCase):
 ''').replace("@ac", "ac").replace("@AC", "AC")
 
 
-class RetroGenerationTest(unittest.TestCase):
-    """Песочница: ROOT/DB/TASKS во tmpdir — тот же приём, что
-    `tests/test_fsm_map_regen.py::RegenerateAndCommitMapTest`."""
+class RetroGenerationTest(TmpRootTest):
+    """Песочница: sandbox.TmpRootTest полным набором путей (SPEC T061, AC-3)."""
 
     TASK = "T900"
 
     def setUp(self):
-        tmp = tempfile.TemporaryDirectory()
-        self.addCleanup(tmp.cleanup)
-        self.root = Path(tmp.name)
-        for attr, value in (("ROOT", self.root),
-                            ("DB", self.root / ".artel" / "state.db"),
-                            ("TASKS", self.root / "tasks")):
-            self._patch(attr, value)
+        super().setUp()
         store.create_schema(store.db())
         self.conn = store.db()
         store.insert_task(self.conn, self.TASK, "Задача для теста",
                           "merge_gate", "task/t900-x", config.DEFAULT_TARGET,
                           50.0)
-
-    def _patch(self, attr, value):
-        from unittest import mock
-        patcher = mock.patch.object(config, attr, value)
-        patcher.start()
-        self.addCleanup(patcher.stop)
 
     def write_spec(self, text=SPEC_TEXT) -> None:
         tdir = config.TASKS / self.TASK

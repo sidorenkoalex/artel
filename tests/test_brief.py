@@ -5,7 +5,6 @@
 """
 import subprocess
 import sys
-import tempfile
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -13,61 +12,37 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from orchestrator import brief, config, gitcmd, store  # noqa: E402
+from tests.sandbox import TmpRootTest, fake_git, fake_git_for  # noqa: E402
 
 MAP_FRESH = ("---\nbuilt_at_sha: aaaa000011112222333344445555666677778888\n"
             "---\n\n# Карта\n")
 
 
-def fake_git_clean(*args) -> subprocess.CompletedProcess:
-    return subprocess.CompletedProcess(list(args), 0, "", "")
-
-
 def fake_git_stale(*paths):
-    def fake(*args) -> subprocess.CompletedProcess:
-        if args and args[0] == "diff":
-            return subprocess.CompletedProcess(
-                list(args), 0, "\n".join(paths) + "\n", "")
-        return subprocess.CompletedProcess(list(args), 0, "", "")
-    return fake
+    """Сверка свежести карты находит расхождение по указанным путям."""
+    return fake_git_for({"diff": (0, "\n".join(paths) + "\n", "")})
 
 
-def fake_git_diff_fails(*args) -> subprocess.CompletedProcess:
-    """git не отвечает на саму сверку свежести (`diff --name-only`) —
-    например история переписана и `built_at_sha` в ней больше не найти."""
-    if args and args[0] == "diff":
-        return subprocess.CompletedProcess(
-            list(args), 128, "", "fatal: bad revision ''")
-    return subprocess.CompletedProcess(list(args), 0, "", "")
+# git не отвечает на саму сверку свежести (`diff --name-only`) —
+# например история переписана и `built_at_sha` в ней больше не найти.
+fake_git_diff_fails = fake_git_for({"diff": (128, "", "fatal: bad revision ''")})
 
 
 def fake_git_checkout_fails(*paths):
     """Сверка находит расхождение и checkout-восстановление после
     регенерации не удаётся — рабочее дерево остаётся грязным."""
-    def fake(*args) -> subprocess.CompletedProcess:
-        if args and args[0] == "diff":
-            return subprocess.CompletedProcess(
-                list(args), 0, "\n".join(paths) + "\n", "")
-        if args and args[0] == "checkout":
-            return subprocess.CompletedProcess(
-                list(args), 1, "", "стенд: checkout упал")
-        return subprocess.CompletedProcess(list(args), 0, "", "")
-    return fake
+    return fake_git_for({
+        "diff": (0, "\n".join(paths) + "\n", ""),
+        "checkout": (1, "", "стенд: checkout упал"),
+    })
 
 
-class BriefUnitTest(unittest.TestCase):
-    """Песочница: ROOT/TASKS/DB во tmpdir, карта и SPEC на месте."""
+class BriefUnitTest(TmpRootTest):
+    """Песочница: sandbox.TmpRootTest полным набором путей (SPEC T061,
+    AC-3) — карта и SPEC остаются собственной фикстурой этого файла."""
 
     def setUp(self):
-        tmp = tempfile.TemporaryDirectory()
-        self.addCleanup(tmp.cleanup)
-        self.root = Path(tmp.name)
-        for attr, value in (("ROOT", self.root),
-                            ("DB", self.root / ".artel" / "state.db"),
-                            ("TASKS", self.root / "tasks")):
-            patcher = mock.patch.object(config, attr, value)
-            patcher.start()
-            self.addCleanup(patcher.stop)
-
+        super().setUp()
         (self.root / "docs").mkdir(parents=True)
         (self.root / "docs" / "codebase-map.md").write_text(
             MAP_FRESH, encoding="utf-8")
@@ -96,7 +71,7 @@ class ComponentHashTest(unittest.TestCase):
 class FreshMapTextTest(BriefUnitTest):
 
     def test_fresh_map_returns_the_file_as_is(self):
-        with mock.patch.object(gitcmd, "git", fake_git_clean):
+        with mock.patch.object(gitcmd, "git", fake_git):
             text = brief.fresh_map_text(store.db(), "T001")
 
         self.assertEqual(text, MAP_FRESH)
@@ -136,7 +111,7 @@ class FreshMapTextTest(BriefUnitTest):
             "алерт о сбое регенерации не найден")
 
     def test_no_regeneration_call_when_map_is_fresh(self):
-        with mock.patch.object(gitcmd, "git", fake_git_clean), \
+        with mock.patch.object(gitcmd, "git", fake_git), \
                 mock.patch("subprocess.run") as run_mock:
             brief.fresh_map_text(store.db(), "T001")
 
@@ -211,7 +186,7 @@ class DeveloperBriefTest(BriefUnitTest):
 
     def test_assembles_three_components_and_journals_their_hashes(self):
         conn = store.db()
-        with mock.patch.object(gitcmd, "git", fake_git_clean):
+        with mock.patch.object(gitcmd, "git", fake_git):
             text = brief.developer_brief(conn, "T001")
 
         self.assertIn("Маркер-текста-SPEC.", text)
@@ -229,7 +204,7 @@ class AnalystMapComponentTest(BriefUnitTest):
 
     def test_adds_only_the_map_and_journals_one_hash(self):
         conn = store.db()
-        with mock.patch.object(gitcmd, "git", fake_git_clean):
+        with mock.patch.object(gitcmd, "git", fake_git):
             text = brief.analyst_map_component(conn, "T001")
 
         self.assertIn(MAP_FRESH, text)

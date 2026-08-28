@@ -23,9 +23,10 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from orchestrator import config, gitcmd, store  # noqa: E402
+from tests.sandbox import ALL_CONFIG_ATTRS, TmpRootTest  # noqa: E402
 
 
-class RealGitSandbox(unittest.TestCase):
+class RealGitSandbox(TmpRootTest):
     """`self.root` — свежий git-репозиторий с веткой main и одним коммитом."""
 
     def setUp(self):
@@ -40,9 +41,10 @@ class RealGitSandbox(unittest.TestCase):
         self.git("add", "-A")
         self.git("commit", "-q", "-m", "init")
 
-        self.patcher = mock.patch.object(config, "ROOT", self.root)
-        self.patcher.start()
-        self.addCleanup(self.patcher.stop)
+        for attr in ALL_CONFIG_ATTRS:
+            patcher = mock.patch.object(config, attr, self._patched_path(attr))
+            patcher.start()
+            self.addCleanup(patcher.stop)
 
     def git(self, *args: str) -> str:
         res = subprocess.run(["git", *args], cwd=self.root,
@@ -192,16 +194,11 @@ class CommitsBehindTest(RealGitSandbox):
             self.assertIsNone(gitcmd.commits_behind("feature"))
 
 
-class TaskBranchTest(unittest.TestCase):
+class TaskBranchTest(TmpRootTest):
     """`store.task_branch` — та же деградация, что `store.task_target`."""
 
     def setUp(self):
-        tmp = tempfile.TemporaryDirectory()
-        self.addCleanup(tmp.cleanup)
-        self.patcher = mock.patch.object(
-            config, "DB", Path(tmp.name) / "state.db")
-        self.patcher.start()
-        self.addCleanup(self.patcher.stop)
+        super().setUp()
         self.conn = store.db()
         store.create_schema(self.conn)
 

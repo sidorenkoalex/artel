@@ -25,7 +25,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from orchestrator import (agent_log, budget, catalog, config,  # noqa: E402
                           fsm, gitcmd, runner, spend, store)
-from tests.sandbox import (TmpRootTest, fake_git,  # noqa: E402
+from tests.sandbox import (FakeProc, TmpRootTest, fake_git,  # noqa: E402
                            seed_developer_brief_fixtures, sync_spec_from_worktree)
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -66,16 +66,6 @@ class FakeStream:
     def close(self) -> None:
         self.closed = True
 
-
-class FakeProc:
-    """Процесс агента: отдаёт заготовленные строки, wait() — сразу rc."""
-
-    def __init__(self, lines, returncode: int = 0):
-        self.stdout = FakeStream(lines)
-        self.returncode = returncode
-
-    def wait(self, timeout=None) -> int:
-        return self.returncode
 
 
 class _StepCostTmpRootTest(TmpRootTest):
