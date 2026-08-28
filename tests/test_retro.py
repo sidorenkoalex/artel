@@ -44,6 +44,34 @@ AC-1. Критерий.
 - Ничего.
 """
 
+TOKEN_DOT_SPEC_TEXT = """---
+task: T900
+type: spec
+author_role: analyst
+status: ready
+schema_version: 2
+---
+
+# SPEC: задача для теста
+
+## Контекст
+
+`docs/codebase-map.md` устарел после 27.08, регенерация нужна в тот же
+день. Второе предложение не должно попасть в Суть.
+
+## Требования
+
+1. Требование.
+
+## Критерии приёмки
+
+AC-1. Критерий.
+
+## Не входит
+
+- Ничего.
+"""
+
 SPEC_TEXT = """---
 task: T900
 type: spec
@@ -148,6 +176,20 @@ class RetroGenerationTest(unittest.TestCase):
 
         self.assertIn("Первая часть, вторая часть, "
                       "третья часть на новой строке — тут точка.", text)
+        self.assertNotIn("Второе предложение", text)
+
+    def test_build_done_gist_does_not_cut_at_dot_inside_path_or_date(self):
+        """REVIEW T063 итерации 1, blocker: мотивирующий пример SPEC
+        (путь `docs/codebase-map.md` и дата `27.08` до реальной точки
+        конца предложения) проходит через build_done без обрезки внутри
+        токена."""
+        self.write_spec(TOKEN_DOT_SPEC_TEXT)
+
+        text = retro.build_done(self.conn, self.TASK, "deadbeef" * 5)
+
+        self.assertIn(
+            "`docs/codebase-map.md` устарел после 27.08, регенерация "
+            "нужна в тот же день.", text)
         self.assertNotIn("Второе предложение", text)
 
     def test_build_killed_gist_from_journaled_tz_takes_full_first_sentence(self):
@@ -279,6 +321,30 @@ class FirstSentenceTest(unittest.TestCase):
 
     def test_empty_text_returns_empty_string(self):
         self.assertEqual(retro._first_sentence(""), "")
+
+    def test_does_not_cut_at_dot_inside_file_path_or_date(self):
+        """REVIEW T063 итерации 1, blocker: точка внутри пути/расширения
+        файла или даты (без пробела после неё) — не граница предложения,
+        поиск должен продолжаться до реальной точки-конца-предложения."""
+        text = ("Правка тронула `orchestrator/artel.py` 27.08, но задача "
+                "решена в тот же день. Второе предложение лишнее.")
+
+        self.assertEqual(
+            retro._first_sentence(text),
+            "Правка тронула `orchestrator/artel.py` 27.08, но задача "
+            "решена в тот же день.")
+
+    def test_does_not_cut_at_dot_inside_abbreviation(self):
+        text = ("Опишем кратко, т.е. по сути, всё сделано верно. "
+                "Второе предложение лишнее.")
+
+        self.assertEqual(
+            retro._first_sentence(text),
+            "Опишем кратко, т.е. по сути, всё сделано верно.")
+
+    def test_cuts_at_trailing_dot_with_no_following_text(self):
+        self.assertEqual(retro._first_sentence("Всё предложение целиком."),
+                         "Всё предложение целиком.")
 
 
 class ParseTotalCostTest(unittest.TestCase):

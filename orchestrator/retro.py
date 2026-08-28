@@ -63,14 +63,35 @@ def _first_context_line(spec_text: str | None) -> str:
 
 def _first_sentence(text: str) -> str:
     """Полное первое предложение текста: пробелы и переносы строк схлопнуты
-    в один, обрезка — по первой точке (границе предложения), а не по
-    границе строки или запятой (SPEC T063, требования 1, 2). Точки нет —
-    возвращается весь схлопнутый текст."""
+    в один, обрезка — по первой точке, являющейся границей предложения, а
+    не по границе строки/запятой и не по точке внутри токена (SPEC T063,
+    требования 1, 2). Точки нет — возвращается весь схлопнутый текст.
+
+    Реальные SPEC.md репозитория (REVIEW T063 итерации 1, замечание
+    blocker) систематически содержат точки, не завершающие предложение, —
+    в путях/расширениях файлов (`codebase-map.md`), датах (`27.08`),
+    сокращениях и номерах пунктов (`п.5`). Такую точку отличает то, что
+    сразу за ней (без пробела) идёт ещё один непробельный символ —
+    настоящая граница предложения либо конец текста, либо пробел, а
+    следующий за пробелом видимый символ — заглавная буква (новое
+    предложение) или конца текста нет вовсе."""
     normalized = " ".join(text.split())
     if not normalized:
         return ""
-    dot = normalized.find(".")
-    return normalized[:dot + 1] if dot != -1 else normalized
+    length = len(normalized)
+    pos = 0
+    while True:
+        dot = normalized.find(".", pos)
+        if dot == -1:
+            return normalized
+        end = dot + 1
+        if end == length:
+            return normalized[:end]
+        if normalized[end] == " ":
+            next_char = normalized[end:].lstrip(" ")
+            if not next_char or next_char[0].isupper():
+                return normalized[:end]
+        pos = end
 
 
 def _first_context_sentence(spec_text: str | None) -> str:
