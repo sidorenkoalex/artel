@@ -116,7 +116,25 @@ schema_version: 2
 ## Вердикт
 """
 
-AC_TEST_BOTH_COVERED = """import unittest
+# Маркер красноты (SPEC T064) — обязателен на выходе из tests_writing;
+# эта фикстура проезжает этот выход в TraceabilityTest/LockTest, не только
+# review -> acceptance.
+AC_TEST_BOTH_COVERED = '''"""Красен до реализации: фикстура покрывает оба критерия SPEC_V2
+песочницы — тест и manual-пометка, до появления реализации кода задачи."""
+import unittest
+
+
+class AcceptanceTest(unittest.TestCase):
+    def test_ac1_first_criterion(self):
+        self.assertTrue(True)
+
+
+# AC-2: manual — Оператор проверяет глазами на приёмке
+'''
+
+# То же покрытие AC-1/AC-2, БЕЗ маркера — изолирует отказ по признаку
+# «нет маркера» от отказа по признаку «нет трассируемости» (SPEC T064).
+AC_TEST_BOTH_COVERED_NO_MARKER = """import unittest
 
 
 class AcceptanceTest(unittest.TestCase):
@@ -367,6 +385,121 @@ class AcceptanceTraceabilityFunctionTest(unittest.TestCase):
 
 
 # --------------------------------------------------------------------------
+# guard: маркер причины красноты в докстринге модуля (SPEC T064).
+
+class ModuleDocstringTest(unittest.TestCase):
+    """`guard.module_docstring` — докстринг модуля через `ast`, не regex."""
+
+    def test_returns_the_module_docstring(self):
+        self.assertEqual(
+            guard.module_docstring('"""Текст докстринга."""\nimport os\n'),
+            "Текст докстринга.")
+
+    def test_no_docstring_is_none(self):
+        self.assertIsNone(guard.module_docstring("import os\n"))
+
+    def test_string_inside_a_function_is_not_the_module_docstring(self):
+        source = ("import os\n\n\n"
+                  "def f():\n"
+                  '    """Красен до реализации: не докстринг модуля."""\n')
+        self.assertIsNone(guard.module_docstring(source))
+
+    def test_syntax_error_is_none_not_a_crash(self):
+        self.assertIsNone(guard.module_docstring("def f(:\n"))
+
+
+class HasRednessMarkerTest(unittest.TestCase):
+    """`guard.has_redness_marker` — только формальный факт: строка с
+    непустым текстом после двоеточия (SPEC T064, требование 3)."""
+
+    def test_red_marker_with_explanation_is_recognised(self):
+        self.assertTrue(guard.has_redness_marker(
+            "Красен до реализации: код ещё не написан."))
+
+    def test_green_marker_with_explanation_is_recognised(self):
+        self.assertTrue(guard.has_redness_marker(
+            "Зелёный с рождения: проверяет сохранение поведения."))
+
+    def test_none_docstring_is_false(self):
+        self.assertFalse(guard.has_redness_marker(None))
+
+    def test_docstring_without_marker_is_false(self):
+        self.assertFalse(guard.has_redness_marker("Обычное описание теста."))
+
+    def test_marker_with_empty_text_after_colon_is_false(self):
+        self.assertFalse(guard.has_redness_marker("Красен до реализации:"))
+
+    def test_marker_word_in_running_text_without_colon_is_false(self):
+        self.assertFalse(guard.has_redness_marker(
+            "Тест красен до реализации кода, как обычно."))
+
+
+class RednessMarkerErrorsFromFilesTest(unittest.TestCase):
+    """`guard.redness_marker_errors_from_files` — ядро, без чтения файлов."""
+
+    def test_file_without_marker_is_named_in_the_error(self):
+        errors = guard.redness_marker_errors_from_files(
+            [("acceptance_tests/test_ac.py", AC_TEST_MISSING_AC2)])
+
+        self.assertTrue(any("acceptance_tests/test_ac.py" in e
+                            for e in errors), errors)
+
+    def test_file_with_red_marker_is_not_flagged(self):
+        errors = guard.redness_marker_errors_from_files(
+            [("test_ac.py", AC_TEST_BOTH_COVERED)])
+
+        self.assertEqual(errors, [])
+
+    def test_multiple_files_are_checked_independently(self):
+        errors = guard.redness_marker_errors_from_files([
+            ("test_a.py", AC_TEST_BOTH_COVERED),
+            ("test_b.py", AC_TEST_MISSING_AC2),
+        ])
+
+        self.assertEqual(len(errors), 1)
+        self.assertIn("test_b.py", errors[0])
+
+    def test_empty_files_is_empty_not_an_error(self):
+        self.assertEqual(guard.redness_marker_errors_from_files([]), [])
+
+
+class ScanRednessMarkersTest(unittest.TestCase):
+    """`guard.scan_redness_markers` — рабочая копия, только `test_*.py`."""
+
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.tdir = Path(tmp.name)
+
+    def write(self, content: str, name: str) -> None:
+        tests_dir = self.tdir / "acceptance_tests"
+        tests_dir.mkdir(parents=True, exist_ok=True)
+        (tests_dir / name).write_text(content, encoding="utf-8")
+
+    def test_missing_directory_is_empty_not_an_error(self):
+        self.assertEqual(guard.scan_redness_markers(self.tdir), [])
+
+    def test_test_file_without_marker_is_flagged(self):
+        self.write(AC_TEST_MISSING_AC2, "test_ac.py")
+
+        errors = guard.scan_redness_markers(self.tdir)
+
+        self.assertTrue(any("test_ac.py" in e for e in errors), errors)
+
+    def test_non_test_file_is_not_checked(self):
+        """SPEC требование 1 называет только `test_*.py` — вспомогательные
+        файлы (`_sandbox.py`) маркером не размечаются."""
+        self.write(AC_TEST_MISSING_AC2, "_sandbox.py")
+
+        self.assertEqual(guard.scan_redness_markers(self.tdir), [])
+
+    def test_test_file_with_marker_is_not_flagged(self):
+        self.write(AC_TEST_BOTH_COVERED, "test_ac.py")
+
+        self.assertEqual(guard.scan_redness_markers(self.tdir), [])
+
+
+# --------------------------------------------------------------------------
 # guard: источник-агностичные ядра (SPEC T031) — тот же разбор с диска и
 # с ВЕТКИ задачи (orchestrator/fsm.py, `gitcmd.show`/`ls_tree_files`) не
 # должен раздваиваться; здесь сверяется само ядро в отрыве от источника
@@ -569,6 +702,72 @@ class TraceabilityTest(TmpRootTest):
 
 
 # --------------------------------------------------------------------------
+# FSM: маркер причины красноты на выходе из tests_writing (SPEC T064).
+# Тот же вход, что TraceabilityTest, но переменная — маркер, не AC.
+
+class RednessMarkerFsmTest(TmpRootTest):
+
+    def enter_tests_writing(self) -> None:
+        self.write_spec(SPEC_V2)
+        self.set_state("tests_writing")
+
+    def test_missing_marker_blocks_the_transition_despite_full_traceability(self):
+        self.enter_tests_writing()
+        self.write_acceptance_tests(AC_TEST_BOTH_COVERED_NO_MARKER)
+
+        out = self.capture(fsm.cmd_advance, self.TASK)
+
+        self.assertEqual(
+            self.state(), "tests_writing",
+            "трассируемость AC полная — единственная причина отказа "
+            "обязана быть отсутствием маркера")
+        self.assertIn("test_ac.py", out)
+        self.assertIn("маркера", out)
+
+    def test_marker_present_passes_the_transition(self):
+        self.enter_tests_writing()
+        self.write_acceptance_tests(AC_TEST_BOTH_COVERED)
+
+        self.capture(fsm.cmd_advance, self.TASK)
+
+        self.assertEqual(self.state(), "in_dev")
+
+    def test_one_file_without_marker_among_several_is_named(self):
+        self.enter_tests_writing()
+        self.write_acceptance_tests(AC_TEST_BOTH_COVERED, name="test_a.py")
+        self.write_acceptance_tests(AC_TEST_BOTH_COVERED_NO_MARKER,
+                                    name="test_b.py")
+
+        out = self.capture(fsm.cmd_advance, self.TASK)
+
+        self.assertEqual(self.state(), "tests_writing")
+        self.assertIn("test_b.py", out)
+        self.assertNotIn("test_a.py", out)
+
+    def test_helper_file_without_marker_is_not_flagged(self):
+        """Только `test_*.py` размечается маркером (SPEC требование 1) —
+        вспомогательный файл (не `test_*.py`) без маркера не блокирует."""
+        self.enter_tests_writing()
+        self.write_acceptance_tests(AC_TEST_BOTH_COVERED, name="test_ac.py")
+        self.write_acceptance_tests(
+            "def helper():\n    pass\n", name="_helpers.py")
+
+        self.capture(fsm.cmd_advance, self.TASK)
+
+        self.assertEqual(self.state(), "in_dev")
+
+    def test_refusal_is_journaled(self):
+        self.enter_tests_writing()
+        self.write_acceptance_tests(AC_TEST_BOTH_COVERED_NO_MARKER)
+
+        self.capture(fsm.cmd_advance, self.TASK)
+
+        details = self.journal_details("переход отклонён: трассируемость AC")
+        self.assertEqual(len(details), 1)
+        self.assertIn("маркера", details[0])
+
+
+# --------------------------------------------------------------------------
 # FSM: критерий 4 — прогон приёмки на review -> acceptance.
 
 class AcceptanceRunTest(TmpRootTest):
@@ -619,6 +818,18 @@ class AcceptanceRunTest(TmpRootTest):
     def test_no_acceptance_tests_directory_does_not_block_legacy_tasks(self):
         """Задачи без acceptance_tests/ (skip_tests, либо старше T023)."""
         self.enter_review()
+
+        self.capture(fsm.cmd_advance, self.TASK)
+
+        self.assertEqual(self.state(), "acceptance")
+
+    def test_missing_redness_marker_does_not_block_review_to_acceptance(self):
+        """Маркер красноты (SPEC T064) проверяется только на выходе из
+        `tests_writing` — задача уже прошла его (симулирует задачу,
+        заведённую сразу в `review`), отсутствие маркера здесь не имеет
+        права заблокировать существующий переход review -> acceptance."""
+        self.enter_review()
+        self.write_acceptance_tests(AC_TEST_BOTH_COVERED_NO_MARKER)
 
         self.capture(fsm.cmd_advance, self.TASK)
 
