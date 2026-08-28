@@ -131,7 +131,7 @@ LEASE_STALE_AFTER_SEC = 7200
 # отдельного конечного автомата под лимит не заводится. Меняет только
 # Оператор (ADR-0002, класс «лимит»); неослабляемый тест —
 # tests/test_invariants.ParallelTaskLimitIsNotBypassableTest.
-MAX_PARALLEL_TASKS = 2
+MAX_PARALLEL_TASKS = 5
 # Ветка, в которую мержит оркестратор и относительно которой считается
 # уборка при kill и diff ревью-пакета. Литералов "main" в коде не осталось
 # (T017, требование 7).
