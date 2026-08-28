@@ -127,7 +127,10 @@ class ReleaseTest(TmpRootTest):
         """Гонка: строка сменила держателя между `lease_row` и удалением
         (перехват `lease.acquire` другой сессией) — `release_lease`
         удаляет по паре (task_id, session_id), поэтому устаревшая
-        картина, прочитанная `cmd_release`, не сносит уже новую строку."""
+        картина, прочитанная `cmd_release`, не сносит уже новую строку.
+
+        REVIEW T062, итерация 1, Замечание 1: no-op под гонкой не должен
+        выглядеть как успех — ни в журнале, ни в печатном сообщении."""
         self.insert_lease(self.TASK, HOLDER_SESSION, HOLDER_PID,
                           HOLDER_HOST, store.now())
         stale_row = store.lease_row(store.db(), self.TASK)
@@ -141,11 +144,19 @@ class ReleaseTest(TmpRootTest):
                 ("session-new-holder", self.TASK))
             conn.commit()
 
-            capture(release.cmd_release, self.TASK)
+            output = capture(release.cmd_release, self.TASK)
 
         row = self.row()
         self.assertIsNotNone(row, "release снял строку нового держателя")
         self.assertEqual(row["session_id"], "session-new-holder")
+        self.assertEqual(self.journal(), [],
+                         "no-op под гонкой не должен журналироваться "
+                         "как свершившееся снятие")
+        self.assertNotIn("lease снят Оператором", output,
+                         "печать не должна заявлять успех при no-op")
+        self.assertIn(HOLDER_SESSION, output,
+                      "сообщение о гонке должно называть устаревшего "
+                      "держателя, который читал release")
 
 
 if __name__ == "__main__":
