@@ -41,7 +41,7 @@ tasks/<id>/    артефакты задач Фазы 0 — история и э
 docs/          design, roadmap, invariants, adr/, audits/, deferred/, triggers
 scripts/       guard.py — валидатор структуры артефактов
 sandbox/       Dockerfile песочницы агента (в строй — задача B3)
-gates.yaml     НЕ действует; истина — orchestrator/fsm.py (см. шапку файла)
+gates.yaml     политика гейтов (ADR-0007): acceptance умеет auto, читает orchestrator/gates.py
 roles.yaml     карта исполнителей и слоты токенов
 targets.yaml   целевые проекты: forge, база, токен, no_paths, гейт мержа
 .artel/        состояние вне git: БД, логи, каталоги проектов, слой ролей

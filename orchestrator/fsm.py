@@ -6,7 +6,8 @@ from pathlib import Path
 from scripts import guard
 
 from . import (acceptance, alerts, artifacts, budget, ci, config, fixation,
-              gitcmd, lease, merge_lock, retro, store, workspace, yamlmini)
+              gates, gitcmd, lease, merge_lock, retro, store, workspace,
+              yamlmini)
 
 # Регенерация/коммит карты кодовой базы на merge_gate (SPEC T042).
 MAP_REL = "docs/codebase-map.md"
@@ -168,6 +169,67 @@ def _generate_and_commit_retro(conn, task_id: str, merge_sha: str) -> None:
 
 # --- сверка свежести ветки до гейта (SPEC T051) ---------------------------
 
+def _conflicting_files(wt_path) -> list[str]:
+    """Файлы с неразрешённым конфликтом в worktree после неудачного `git
+    merge` (SPEC T067, требование 1) — тем же приёмом, что уже читает
+    `_handle_merge_conflict` для ДРУГОГО merge (main <- ветка задачи,
+    T052), только здесь список нужен ДО решения абортить или разрешать
+    самому, а не только для диагностики.
+
+    Пустой список — git не ответил осмысленно (заглушки без реального
+    git, инфраструктурный сбой самой команды `diff`) — вызывающий код
+    в этом случае не находит РОВНО `[MAP_REL]` и уходит в прежний
+    безусловный abort+escalate (требование 4, тот же вырожденный случай
+    деградации, что у остальных примитивов подтяжки).
+    """
+    res = gitcmd.in_repo(wt_path, "diff", "--name-only", "--diff-filter=U")
+    if res is None or res.returncode != 0:
+        return []
+    return sorted(set(res.stdout.split()))
+
+
+def _auto_resolve_map_conflict(conn, task_id: str, wt_path) -> bool:
+    """Единственный конфликтующий файл — `docs/codebase-map.md` (SPEC
+    T067, требования 1-2, 5): `checkout --theirs` + регенерация
+    генератором НА СЛИТОМ дереве worktree задачи (`cwd=wt_path`, не
+    `config.ROOT` — карта, которую сверяют критерии приёмки, это карта
+    ВЕТКИ задачи, не главной копии пульта) + `add` + `commit`, который
+    и завершает merge, начатый вызывающим кодом.
+
+    `True` — merge завершён, подтяжка продолжается точно так же, как
+    обычная удачная подтяжка без конфликта (требование 2); `False` —
+    любой шаг не удался (checkout/регенерация/add/commit) — merge НЕ
+    завершён, вызывающий код обязан сам сделать `git merge --abort` и
+    эскалировать тем же путём, что и неразрешаемый конфликт (требование
+    5, AC-5): здесь нарочно нет своего abort — единая точка отката
+    ближе к месту, где решение «разрешать или нет» уже принято.
+    """
+    checkout = gitcmd.in_repo(wt_path, "checkout", "--theirs", MAP_REL)
+    if checkout is None or checkout.returncode != 0:
+        return False
+    try:
+        regen = subprocess.run(["python3", "scripts/codebase_map.py"],
+                               cwd=wt_path, capture_output=True, text=True)
+    except OSError:
+        return False
+    if regen.returncode != 0:
+        return False
+    added = gitcmd.in_repo(wt_path, "add", MAP_REL)
+    if added is None or added.returncode != 0:
+        return False
+    commit = gitcmd.in_repo(wt_path, "commit", "-m",
+                            f"{task_id}: подтяжка {config.MAIN_BRANCH}")
+    if commit is None or commit.returncode != 0:
+        return False
+    store.journal(
+        conn, task_id, "orchestrator",
+        "конфликт подтяжки: карта авторазрешена регенерацией",
+        f"{MAP_REL} — единственный конфликтующий файл, разрешён "
+        f"checkout --theirs + регенерация scripts/codebase_map.py на "
+        f"слитом дереве worktree задачи")
+    return True
+
+
 def _pull_main_or_escalate(conn, task_id: str, t, state: str) -> str:
     """Сверка свежести ветки задачи на входе в гейт (SPEC T051, требования
     1-7, 10; ADR-0006 п.2) и, начиная с T053 требование 5, ВНУТРИ окна
@@ -204,6 +266,13 @@ def _pull_main_or_escalate(conn, task_id: str, t, state: str) -> str:
     оркестратора: сверка молча пропускается, `bool(None)` ложно ровно как
     и `bool(0)` (ветка не отстала) — оба ведут к одному и тому же
     «ничего не делать».
+
+    Конфликт merge, где единственный конфликтующий файл —
+    `docs/codebase-map.md` (SPEC T067), разрешается здесь же сам, не
+    эскалируя: `_conflicting_files` + `_auto_resolve_map_conflict`. Любой
+    другой конфликт (карта вместе с другим файлом, без карты вовсе, или
+    авторазрешение само не удалось) — прежнее поведение T051/T052
+    байт-в-байт: `git merge --abort` + `"escalated"`.
     """
     branch = t["branch"]
     behind = gitcmd.commits_behind(branch)
@@ -221,16 +290,22 @@ def _pull_main_or_escalate(conn, task_id: str, t, state: str) -> str:
     merge = gitcmd.in_repo(wt_path, "merge", "--no-ff", config.MAIN_BRANCH,
                            "-m", f"{task_id}: подтяжка {config.MAIN_BRANCH}")
     if merge is None or merge.returncode != 0:
-        abort = gitcmd.in_repo(wt_path, "merge", "--abort")
-        note = merge.stderr.strip()[:500] if merge is not None else "git не ответил"
-        if abort is None or abort.returncode != 0:
-            note += (f"; git merge --abort не удался: "
-                    f"{abort.stderr.strip()[:200] if abort is not None else 'git не ответил'}")
-        store.set_state(
-            conn, task_id, "escalated", "fsm", expected_state=state,
-            detail=f"конфликт подтяжки {config.MAIN_BRANCH} в ветку "
-            f"{branch}: {note}")
-        return "escalated"
+        resolved = False
+        if merge is not None:
+            files = _conflicting_files(wt_path)
+            if files == [MAP_REL]:
+                resolved = _auto_resolve_map_conflict(conn, task_id, wt_path)
+        if not resolved:
+            abort = gitcmd.in_repo(wt_path, "merge", "--abort")
+            note = merge.stderr.strip()[:500] if merge is not None else "git не ответил"
+            if abort is None or abort.returncode != 0:
+                note += (f"; git merge --abort не удался: "
+                        f"{abort.stderr.strip()[:200] if abort is not None else 'git не ответил'}")
+            store.set_state(
+                conn, task_id, "escalated", "fsm", expected_state=state,
+                detail=f"конфликт подтяжки {config.MAIN_BRANCH} в ветку "
+                f"{branch}: {note}")
+            return "escalated"
 
     green, tail = acceptance.run(wt_path / "tasks" / task_id)
     if not green:
@@ -242,6 +317,104 @@ def _pull_main_or_escalate(conn, task_id: str, t, state: str) -> str:
         return "escalated"
 
     return "pulled"
+
+
+# --- автогейт acceptance по политике gates.yaml (ADR-0007, SPEC T066) -----
+
+AUTOGATE_PASS_MESSAGE = "acceptance пройден автогейтом (политика gates.yaml)"
+
+
+def _autogate_conditions(conn, task_id: str, t, acc_tdir: Path,
+                         iteration: int) -> tuple[list[str], str | None]:
+    """(выполненные условия, причина первого невыполненного).
+
+    Короткое замыкание на первом несовпадении — SPEC требование 4 просит
+    ОДНУ строку причины, не собранный список всех отказов сразу. Условие
+    "б" (приёмочные тесты задачи зелёные) сюда не входит отдельной
+    проверкой: к этой точке код уже гарантированно прошёл `acceptance.run`
+    зелёным (иначе переход не добрался бы до состояния `acceptance`
+    вообще) — только записывается в перечень как выполненное.
+    """
+    ok: list[str] = []
+
+    tests_dir = acc_tdir / "acceptance_tests"
+    if not tests_dir.is_dir() or not any(tests_dir.glob("*.py")):
+        return ok, ("автогейт: каталог приёмочных тестов пуст или "
+                    "отсутствует")
+    _, markers = guard.scan_acceptance_tests(acc_tdir)
+    manual_ns = sorted(n for n, (kind, _) in markers.items() if kind == "manual")
+    skip_ns = sorted(n for n, (kind, _) in markers.items() if kind == "skip")
+    if manual_ns:
+        return ok, (f"автогейт: критерии manual — "
+                    f"{', '.join(f'AC-{n}' for n in manual_ns)}")
+    if skip_ns:
+        return ok, (f"автогейт: критерии skip — "
+                    f"{', '.join(f'AC-{n}' for n in skip_ns)}")
+    ok.append("каталог приёмочных тестов: 0 manual, 0 skip критериев")
+    ok.append("приёмочные тесты задачи зелёные")
+
+    wt_root = (workspace.path(task_id)
+              if workspace.on_task_branch(task_id, t["branch"]) is True
+              else None)
+    if wt_root is None:
+        return ok, ("автогейт: полный набор tests/ не проверен — worktree "
+                    "задачи не заведён")
+    green, _ = acceptance.run_full_suite(wt_root)
+    if not green:
+        return ok, "автогейт: полный набор tests/ красный"
+    ok.append("полный набор tests/ в worktree ветки зелёный")
+
+    if budget.budget_block(t) is not None:
+        return ok, "автогейт: бюджет задачи исчерпан"
+    ok.append(f"бюджет задачи не превышен (${t['spent_usd'] or 0.0:.2f} из "
+              f"${t['budget_usd'] or 0.0:.2f})")
+
+    total = store.total_spent(conn)
+    if any(total >= config.PROGRAM_STOP_LOSS_USD * ratio
+          for ratio in config.PROGRAM_ALERT_RATIOS):
+        return ok, "автогейт: порог расхода программы (A1) пробит"
+    ok.append("порог расхода программы (A1) не пробит")
+
+    ok.append(f"вердикт REVIEW approved текущей итерации ({iteration})")
+    return ok, None
+
+
+def _maybe_autogate_acceptance(conn, task_id: str, t, acc_tdir: Path,
+                               iteration: int) -> None:
+    """После перехода `review -> acceptance` — попытка автогейта.
+
+    Политика гейта acceptance не `auto` (включая неизвестное значение,
+    отсутствие секции или нечитаемый `gates.yaml` — `gates.policy`
+    вырождает всё это в `manual`) — функция не журналирует и не печатает
+    НИЧЕГО: поведение обязано остаться байт-в-байт прежним (SPEC AC-5).
+
+    Условие не выполнено — задача остаётся в `acceptance` (уже
+    установлено вызывающим кодом) и ждёт Оператора; причина — одной
+    строкой в журнале и в выводе (SPEC AC-4). Все условия выполнены —
+    гейт проходится автогейтом: переход `acceptance -> merge_gate` тем
+    же действием, `actor=autogate`, перечень условий в детали журнала
+    (SPEC AC-1..AC-3).
+
+    Сверка свежести ветки (T051) здесь намеренно не повторяется: между
+    входом в `acceptance` (только что, этим же вызовом) и этим решением
+    не проходит времени, в отличие от ручного approve после ожидания
+    Оператора — второй такой же проверкой без временнóго окна нечего
+    ловить.
+    """
+    if gates.policy("acceptance") != gates.AUTO:
+        return
+    ok_conditions, reason = _autogate_conditions(conn, task_id, t, acc_tdir,
+                                                 iteration)
+    if reason is not None:
+        store.journal(conn, task_id, "fsm", "автогейт acceptance не пройден",
+                      reason)
+        print(f"[{task_id}] {reason} — жду Оператора")
+        return
+    print(f"[{task_id}] {AUTOGATE_PASS_MESSAGE}")
+    store.set_state(conn, task_id, "merge_gate", "autogate",
+                    expected_state="acceptance",
+                    detail="; ".join(ok_conditions))
+    print(f"  дальше: artel.py approve {task_id}  (выполнит merge)")
 
 
 def guard_refuses(conn, task_id: str, path: Path, text: str | None = None) -> bool:
@@ -557,6 +730,7 @@ def _cmd_advance(conn, task_id: str) -> bool:
                             expected_state=state,
                             detail="ревью пройдено — приёмка Оператором "
                             "(по критериям SPEC)")
+            _maybe_autogate_acceptance(conn, task_id, t, acc_tdir, iteration)
         elif status == "changes_requested":
             iters = t["review_iters"] + 1
             if iters >= config.LIMIT_REVIEW_ITERS:

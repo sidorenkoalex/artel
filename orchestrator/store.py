@@ -543,11 +543,18 @@ def update_lease(conn, task_id: str, session_id: str, pid: int,
     conn.commit()
 
 
-def release_lease(conn, task_id: str, session_id: str) -> None:
-    """Снимает lease задачи, если он всё ещё принадлежит этой сессии."""
-    conn.execute("DELETE FROM leases WHERE task_id=? AND session_id=?",
-                (task_id, session_id))
+def release_lease(conn, task_id: str, session_id: str) -> bool:
+    """Снимает lease задачи, если он всё ещё принадлежит этой сессии.
+
+    Возвращает `True`, только если строка реально была удалена — строка
+    могла уже сменить держателя между чтением вызывающим кодом и этим
+    вызовом (перехват чужим `lease.acquire`), тогда `DELETE` сносит 0
+    строк и вызывающий код обязан не журналировать/не печатать успех как
+    свершившийся факт (REVIEW T062, итерация 1, Замечание 1)."""
+    cur = conn.execute("DELETE FROM leases WHERE task_id=? AND session_id=?",
+                       (task_id, session_id))
     conn.commit()
+    return cur.rowcount > 0
 
 
 def all_leases(conn) -> list:

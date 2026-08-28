@@ -134,6 +134,13 @@ class BranchFreshnessGateTest(unittest.TestCase):
             return subprocess.CompletedProcess(
                 ("git", "-C", str(repo), *args), 1, "",
                 "CONFLICT (content): Merge conflict in shared.txt")
+        if args[:2] == ("diff", "--name-only"):
+            # Конфликт не сводится к «только карта» (SPEC T067,
+            # требование 4) — список конфликтующих файлов называет
+            # посторонний файл, авторазрешение не применимо, прежний
+            # abort+escalate.
+            return subprocess.CompletedProcess(
+                ("git", "-C", str(repo), *args), 0, "shared.txt\n", "")
         raise AssertionError(f"неожиданный gitcmd.in_repo вызов: {args}")
 
     def _recording_ok(self, repo, *args) -> subprocess.CompletedProcess:
