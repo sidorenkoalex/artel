@@ -404,6 +404,61 @@ class IsolationSmokeTest(TmpRootTest):
         self.assertEqual(check.status, "fail")
         self.assertIn("project-хук", check.detail)
 
+    def test_mcp_vector_leak_is_caught(self):
+        """Мутация четвёртого класса (SPEC T069): `--strict-mcp-config`
+        исчез из команды запуска шага — смоук обязан это поймать."""
+        leaking_cmd = ["claude", "-p", "--permission-mode", "acceptEdits"]
+        with mock.patch.object(doctor.runner, "role_cmd",
+                               return_value=leaking_cmd):
+            check = doctor.isolation_smoke()
+
+        self.assertEqual(check.status, "fail")
+        self.assertIn("MCP", check.detail)
+
+
+class TargetWrapperCheckTest(unittest.TestCase):
+    """SPEC T069, требование 3: инвентаризация обвязки target'а —
+    информационная (warn/ok), никогда не блокирует."""
+
+    def test_dogfood_is_skipped(self):
+        check = doctor.check_target_wrapper(config.DEFAULT_TARGET)
+
+        self.assertEqual(check.status, "skip")
+
+    def test_no_wrapper_is_ok(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            (Path(tmp) / "sled" / "workspace").mkdir(parents=True)
+            with mock.patch.object(config, "PROJECTS", Path(tmp)):
+                check = doctor.check_target_wrapper("sled")
+
+        self.assertEqual(check.status, "ok")
+
+    def test_wrapper_present_is_warn_and_names_the_markers(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            ws = Path(tmp) / "sled" / "workspace"
+            ws.mkdir(parents=True)
+            (ws / ".mcp.json").write_text("{}", encoding="utf-8")
+            (ws / "CLAUDE.md").write_text("# обвязка\n", encoding="utf-8")
+            with mock.patch.object(config, "PROJECTS", Path(tmp)):
+                check = doctor.check_target_wrapper("sled")
+
+        self.assertEqual(check.status, "warn")
+        self.assertIn(".mcp.json", check.detail)
+        self.assertIn("CLAUDE.md", check.detail)
+
+    def test_wrapper_never_fails(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            ws = Path(tmp) / "sled" / "workspace"
+            ws.mkdir(parents=True)
+            (ws / ".claude").mkdir()
+            (ws / ".mcp.json").write_text("{}", encoding="utf-8")
+            (ws / "CLAUDE.md").write_text("# обвязка\n", encoding="utf-8")
+            (ws / "AGENTS.md").write_text("# обвязка\n", encoding="utf-8")
+            with mock.patch.object(config, "PROJECTS", Path(tmp)):
+                check = doctor.check_target_wrapper("sled")
+
+        self.assertNotEqual(check.status, "fail")
+
 
 class RecoveryCheckTest(TmpRootTest):
     """Критерий 4: recovery-сверка ловит расхождение sha и грязный репо."""
