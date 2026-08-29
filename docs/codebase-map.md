@@ -1,5 +1,5 @@
 ---
-built_at_sha: a0cba67810d1000f2bc0de84d98832f99c16cbc8
+built_at_sha: e528194f2e51a972eeda5c844c83e0a7e9ef7687
 ---
 
 # Codebase-map пульта
@@ -224,6 +224,7 @@ built_at_sha: a0cba67810d1000f2bc0de84d98832f99c16cbc8
 - `check_orphans`
 - `check_remote_empty`
 - `check_target_layout`
+- `check_target_wrapper`
 - `check_task_counters`
 - `check_token`
 - `cli_version`
@@ -457,6 +458,7 @@ built_at_sha: a0cba67810d1000f2bc0de84d98832f99c16cbc8
 - `commit_step_artifacts`
 - `commit_timeout_checkpoint`
 - `git_identity`
+- `role_cmd`
 - `role_cwd`
 - `role_env`
 - `role_token`

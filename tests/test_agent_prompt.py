@@ -142,6 +142,18 @@ class PromptChannelTest(unittest.TestCase):
                     sources & {"project", "local"},
                     f"--setting-sources {value!r} не исключает project/local")
 
+    def test_strict_mcp_config_and_no_curated_mcp_servers(self):
+        """SPEC T069, требование 1: шаг роли не резолвит MCP-серверы из
+        `.mcp.json` рабочего каталога — `--strict-mcp-config` без
+        `--mcp-config` (курируемого списка MCP-серверов у пульта пока
+        нет) резолвит шагу ноль MCP-серверов."""
+        for state in ("in_dev", "review"):
+            with self.subTest(состояние=state):
+                argv = self.argv_of(self.run_agent(state))
+
+                self.assertIn("--strict-mcp-config", argv)
+                self.assertNotIn("--mcp-config", argv)
+
     def test_the_process_gets_the_prompt_on_stdin(self):
         popen = self.run_agent()
 
