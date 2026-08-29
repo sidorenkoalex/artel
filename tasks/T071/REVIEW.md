@@ -29,7 +29,7 @@ schema_version: 2
 
 ## Фаза B: ревью MR
 
-### Соответствие SPEC
+## Соответствие SPEC
 
 | Требование | Вердикт | Комментарий |
 |---|---|---|
@@ -43,7 +43,7 @@ schema_version: 2
 AC-1..AC-4 — все зелёные (`python3 -m unittest tasks.T071.acceptance_tests.test_spec_gate_shared_node -v`, 4/4 OK).
 AC-5 — полный набор зелёный (`python3 -m unittest discover -s tests`, 907 тестов, OK; побочный вывод про бюджет/kill switch — из встроенных в некоторые тесты сценариев с временными БД, git status после прогона чист).
 
-### Замечания
+## Замечания
 
 - minor — `tasks/T071/PLAN.md:47` vs `tasks/T071/PLAN.md:73` — шаг 1 плана обещает юнит-тесты «в `tests/test_fsm_branch_correct_status_reads.py`», но этот файл в diff не тронут (`tests/test_fsm_branch_correct_status_reads.py` по-прежнему покрывает только `cmd_advance`, `cmd_approve`/`spec_gate` там не упоминается ни разу — проверено grep'ом по файлу). Фактически тесты AC-1..AC-4 легли в `tasks/T071/acceptance_tests/test_spec_gate_shared_node.py`, как и описывает раздел «Влияние на систему» того же PLAN (со ссылкой на образец T047's `tasks/T047/acceptance_tests/...`, что и требует SPEC AC-3). AC-3 требованию это не противоречит и на смержимость не влияет — расхождение внутри самого документа PLAN, стоит иметь в виду при следующей правке того же класса, чтобы не читать шаг 1 как источник истины о расположении тестов.
 
