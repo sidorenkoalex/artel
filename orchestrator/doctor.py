@@ -185,6 +185,36 @@ def check_target_layout(target: str) -> Check:
     return Check("target-layout", "ok", "артефактный репо на месте")
 
 
+# Маркеры агентской обвязки target'а (SPEC T069, требование 3; ADR-0003
+# п.14 — «агентская обвязка целевого не наследуется»); тот же список
+# путей, что и в docstring `runner.role_cwd` про cwd-вектор конфиг-инъекции.
+TARGET_WRAPPER_MARKERS = (".claude", ".mcp.json", "CLAUDE.md", "AGENTS.md")
+
+
+def check_target_wrapper(target: str) -> Check:
+    """Инвентаризация обвязки внешнего target'а (SPEC T069, требование 3):
+    наличие `.claude/`, `.mcp.json`, `CLAUDE.md`/`AGENTS.md` в его
+    workspace — информационно, никогда не блокирует. Основа для будущей
+    подсветки изменений этих путей в MR (A7, вне объёма).
+
+    Смотрит `workspace/` — то же дерево, что реально видит cwd шага роли
+    (`runner.role_cwd`), не артефактный репозиторий `config.PROJECTS/
+    <target>` целиком (туда git-первичка A2b коммитит SPEC/PLAN/REVIEW —
+    другое дерево, не задето этой проверкой).
+    """
+    if target == config.DEFAULT_TARGET:
+        return Check("target-wrapper", "skip",
+                     "догфуд — не внешний target (ADR-0003 3д)")
+    ws = config.PROJECTS / target / "workspace"
+    found = [name for name in TARGET_WRAPPER_MARKERS if (ws / name).exists()]
+    if found:
+        return Check("target-wrapper", "warn",
+                     f"обнаружена агентская обвязка target'а {target}: "
+                     f"{', '.join(found)} (ADR-0003 п.14)")
+    return Check("target-wrapper", "ok",
+                 f"агентская обвязка target'а {target} не обнаружена")
+
+
 def preflight_checks(role: str, target: str) -> list[Check]:
     """Быстрые проверки перед стартом шага (SPEC требование 2).
 
@@ -245,6 +275,20 @@ def isolation_smoke(role: str = "developer") -> Check:
     против настоящей канарейки на реально построенных `cmd`/`cwd`/`env`
     шага и не дублируются здесь намеренно (см. PLAN.md T058, «Подход»):
     живой прогон на каждый `doctor` не офлайн и не бесплатен.
+
+    MCP-вектор (SPEC T069, требование 2): `claude` резолвит `.mcp.json`
+    рабочего каталога — право коммита в целевой проект означало бы
+    возможность подключить произвольный MCP-сервер в шаг роли. Защита —
+    флаг `--strict-mcp-config` в реальном argv шага (`runner.role_cmd()`,
+    единый источник для запуска и для этой проверки — SPEC T069, «тот же
+    приём, что уже применён к --setting-sources», здесь буквально: сама
+    сборка cmd, а не только константа). Живая дискриминирующая проверка
+    того же класса, что и у project-/local-хуков выше, здесь не
+    построена: экспериментально подтверждено (см. докстринг
+    `tasks/T069/acceptance_tests/test_ac1_strict_mcp_command.py`), что
+    свежий project-scope MCP-сервер в headless `-p`-режиме не
+    подключается структурно ни с флагом, ни без него — различающего
+    живого сигнала нет.
     """
     leaks = []
 
@@ -290,11 +334,19 @@ def isolation_smoke(role: str = "developer") -> Check:
                     "— project-/local-слой клиентских настроек "
                     "(включая хуки) достижим шагом роли")
 
+    cmd = runner.role_cmd()
+    if "--strict-mcp-config" not in cmd:
+        leaks.append("MCP-вектор: --strict-mcp-config отсутствует в "
+                    "команде запуска шага роли — .mcp.json рабочего "
+                    "каталога достижим шагом")
+
     if leaks:
         return Check("isolation-smoke", "fail", "; ".join(leaks))
     return Check("isolation-smoke", "ok",
                  "маркеры project-/user-слоя не достигли env/промпта роли, "
-                 "project-/local-хуки исключены из resolve-сурсов шага")
+                 "project-/local-хуки исключены из resolve-сурсов шага, "
+                 "MCP-конфиг рабочего каталога изолирован "
+                 "(--strict-mcp-config)")
 
 
 # --- живой смоук CLI (требование 3) -------------------------------------
@@ -796,6 +848,7 @@ def all_checks(conn) -> list[Check]:
         declared = {}
     for name, entry in declared.items():
         checks.append(check_target_layout(name))
+        checks.append(check_target_wrapper(name))
         checks.append(check_remote_empty(name))
         checks.append(check_base_branch(name, entry))
         checks.extend(recovery_check(conn, name))

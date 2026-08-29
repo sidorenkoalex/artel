@@ -562,6 +562,37 @@ def _commit_worktree_change(wt: Path, message: str) -> tuple[bool, str]:
     return True, gitcmd.head_sha(wt)
 
 
+def role_cmd() -> list[str]:
+    """Argv шага роли: сборка без побочных эффектов, один источник истины
+    для реального запуска (`run_agent_once`) и для офлайн-сверки
+    `doctor.isolation_smoke` (SPEC T069, требование 2) — вместо двух
+    списков флагов, синхронизируемых руками.
+
+    `--strict-mcp-config` без курируемого `--mcp-config` (пульт его пока
+    не заводит, SPEC T069 требование 1) резолвит шагу ноль MCP-серверов
+    независимо от `.mcp.json` рабочего каталога — конфиг-инъекция через
+    MCP тем же вектором, что уже закрыт `--setting-sources` для
+    project-/local-хуков (SPEC T058, инцидент T046).
+    """
+    return [
+        # `claude -p` без аргумента читает промпт со стандартного входа.
+        "claude", "-p", "--permission-mode", "acceptEdits",
+        # stream-json — единственный режим, где строки приходят по ходу
+        # шага: text и json отдают всё одним куском в конце (замер в
+        # PLAN.md T017). --verbose при нём обязателен, иначе CLI выходит
+        # с rc=1.
+        "--output-format", "stream-json", "--verbose",
+        # белый список вместо полного Bash: только git и запуск тестов/guard
+        "--allowedTools", "Bash(git:*),Bash(python3:*)",
+        # изоляция от project-/local-слоя клиентских настроек репозитория
+        # (хуки, MCP) — SPEC T058, инцидент T046
+        "--setting-sources", config.AGENT_SETTING_SOURCES,
+        # изоляция MCP-вектора: ambient `.mcp.json` рабочего каталога не
+        # резолвится — SPEC T069
+        "--strict-mcp-config",
+    ]
+
+
 def run_agent_once(conn, task_id: str, role: str, prompt: str,
                    attempt: int) -> tuple[str, str]:
     """Один запуск агента: исход попытки и пояснение к нему.
@@ -651,20 +682,9 @@ def run_agent_once(conn, task_id: str, role: str, prompt: str,
     with prompt_file:
         try:
             proc = spawn_agent(
-                # `claude -p` без аргумента читает промпт со стандартного
-                # входа — им и отдаётся файл.
-                ["claude", "-p", "--permission-mode", "acceptEdits",
-                 # stream-json — единственный режим, где строки приходят по
-                 # ходу шага: text и json отдают всё одним куском в конце
-                 # (замер в PLAN.md). --verbose при нём обязателен, иначе
-                 # CLI выходит с rc=1.
-                 "--output-format", "stream-json", "--verbose",
-                 # белый список вместо полного Bash: только git и запуск
-                 # тестов/guard
-                 "--allowedTools", "Bash(git:*),Bash(python3:*)",
-                 # изоляция от project-/local-слоя клиентских настроек
-                 # репозитория (хуки, MCP) — SPEC T058, инцидент T046
-                 "--setting-sources", config.AGENT_SETTING_SOURCES],
+                # Промпт — файлом на стандартном входе, им и отдаётся
+                # `prompt_file` (см. `role_cmd`, флаги — там).
+                role_cmd(),
                 cwd=cwd, env=env, text=True, bufsize=1,
                 stdin=prompt_file, stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
