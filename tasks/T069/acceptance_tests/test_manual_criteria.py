@@ -8,6 +8,10 @@ tasks/T037/acceptance_tests/test_manual_criteria.py,
 tasks/T053/acceptance_tests/test_ac7_full_suite_regression.py,
 tasks/T057/acceptance_tests/test_manual_criteria.py,
 tasks/T058/acceptance_tests/test_manual_criteria.py).
+
+Зелёный с рождения: файл не содержит исполняемых тестов — только
+manual-пометку AC-4; краснеть здесь нечему, критерий проверяет CI
+полным набором tests/ на ветке задачи.
 """
 
 # AC-4: manual — «полный тестовый набор зелёный» проверяется тем же

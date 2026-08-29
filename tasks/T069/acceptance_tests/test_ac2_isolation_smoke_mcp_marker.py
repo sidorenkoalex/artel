@@ -39,8 +39,7 @@ skills/test-authoring.md, «Краснота — объяснённая, не п
 появился там, а не в приёмочных тестах). Полный набор `tests/`, включая
 эту мутацию, зелёный проверяет AC-4.
 
-Красен до реализации:
-`test_ac2_isolation_smoke_ok_detail_names_the_mcp_marker` — сегодняшний
+Красен до реализации: `test_ac2_isolation_smoke_ok_detail_names_the_mcp_marker` — сегодняшний
 `detail` `isolation_smoke()` не содержит подстроки "mcp" (проверено
 прогоном перед написанием этого докстринга); маркер MCP-вектора ещё не
 добавлен.
