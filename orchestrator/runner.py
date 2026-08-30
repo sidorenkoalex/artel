@@ -119,8 +119,7 @@ def _cmd_run(conn, task_id: str) -> None:
     if pause.is_paused(t):
         detail = (f"задача на паузе — следующий агентный шаг не "
                   f"начинается; `artel.py resume {task_id}` снимет пометку")
-        store.journal(conn, task_id, role, "run отклонён: задача на паузе",
-                      detail)
+        store.journal(conn, task_id, role, pause.REFUSAL_ACTION, detail)
         sys.exit(f"[{task_id}] run отклонён: {detail}")
 
     target = t["target"] or config.DEFAULT_TARGET

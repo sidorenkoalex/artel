@@ -594,6 +594,43 @@ class AutoStopsOnPauseRefusalTest(AutoCycleTest):
                       self.journal_detail("auto остановлен"))
 
 
+class AutoStopsOnPauseAndBudgetTogetherTest(AutoCycleTest):
+    """REVIEW.md T070, итерация 2, замечание 1 (major): пауза и исчерпанный
+    бюджет — независимые пометки, Оператор вправе выставить обе одной и той
+    же задаче (снизить потолок и поставить паузу — «остановить понадёжнее»).
+    `budget_block` в `runner._cmd_run` проверяется РАНЬШЕ паузы (та же
+    функция, budget выше по коду) — значит именно бюджет и есть настоящая
+    причина этого конкретного отказа `run`, а не пауза, хотя пометка паузы
+    тоже стоит. Итоговое сообщение обязано называть бюджет: `resume` его не
+    решает, а старая реализация (опрос текущего `pause.is_paused` вместо
+    разбора того, что журналировал именно этот вызов) называла бы паузу.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.patch_object(runner, "cmd_run", REAL_CMD_RUN)
+        self.write_plan("ready")
+        self.set_state("in_dev", budget_usd=1.0, spent_usd=2.0)
+        pause.cmd_pause(self.TASK)
+
+    def test_final_message_names_budget_not_pause(self):
+        with mock.patch.object(runner, "spawn_agent") as popen:
+            out = self.auto()
+
+        popen.assert_not_called()
+        self.assertEqual(self.state(), "in_dev", "задача осталась где стояла")
+        self.assertIn("run отказался стартовать", out)
+        self.assertIn(f"artel.py budget {self.TASK}", out)
+        self.assertNotIn("auto остановлен: задача на паузе", out)
+
+    def test_journal_names_budget_not_pause(self):
+        with mock.patch.object(runner, "spawn_agent"):
+            self.auto()
+
+        self.assertIn("run отказался стартовать",
+                      self.journal_detail("auto остановлен"))
+
+
 class AutoStepLimitTest(AutoCycleTest):
     """Требование 4: у цикла числовой лимит, и по нему — Оператор, не ретрай."""
 

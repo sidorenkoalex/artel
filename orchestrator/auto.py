@@ -10,6 +10,22 @@ from . import agent_log, budget, config, fsm, lease, pause, runner, store
 REFUSAL_ACTION_PREFIX = "переход отклонён"
 
 
+def _run_paused_refusal(conn, task_id: str, journaled_before: int) -> bool:
+    """Отказал ли `run` ИМЕННО этим вызовом из-за паузы (REVIEW.md T070,
+    итерация 2, замечание 1) — а не приписан ей задним числом по текущему
+    `pause.is_paused`, который путает её с одновременным отказом по бюджету
+    или лимиту параллельных задач.
+
+    `journaled_before` — число строк журнала задачи ДО вызова `run`, тем же
+    приёмом, что и `_advance_refusal`: отказ ищется среди добавленных им
+    самим записей, а не среди всех, что видел журнал когда-либо.
+    """
+    for row in store.task_steps(conn, task_id)[journaled_before:]:
+        if row["action"] == pause.REFUSAL_ACTION:
+            return True
+    return False
+
+
 def _advance_refusal(conn, task_id: str, journaled_before: int) -> str | None:
     """Текст `action` записи `fsm` «переход отклонён…», добавленной ИМЕННО
     этим вызовом `cmd_advance`; `None` — отказ не журналировался (агент ещё
@@ -105,6 +121,7 @@ def _cmd_auto(conn, task_id: str, session_id: str) -> None:
         steps += 1
         before = state
 
+        run_journaled_before = len(store.task_steps(conn, task_id))
         try:
             runner.cmd_run(task_id, session_id=session_id)
         except SystemExit as exc:
@@ -115,11 +132,14 @@ def _cmd_auto(conn, task_id: str, session_id: str) -> None:
             print(str(exc))
             # Пауза (SPEC T070, требование 2) — не «эскалация по бюджету»:
             # причина должна быть видна Оператору в итоговом сообщении, а
-            # не потеряться среди прочих отказов `run`, иначе цикл
-            # останавливается верно, но молча про настоящую причину (тот
-            # же приём различения, что и `auto_stop_advice` для бюджета
-            # внутри `escalated`).
-            if pause.is_paused(store.get_task(conn, task_id)):
+            # не потеряться среди прочих отказов `run`. Причина — по тому,
+            # что реально журналировал ИМЕННО этот вызов `cmd_run`
+            # (`_run_paused_refusal`), а не по независимому текущему опросу
+            # `pause.is_paused`: тот путал бы паузу с ОДНОВРЕМЕННЫМ отказом
+            # по бюджету/лимиту параллельных задач, если Оператор выставил
+            # оба (REVIEW.md T070, итерация 2, замечание 1) — тот же приём
+            # различения, что уже несёт `_advance_refusal` чуть ниже.
+            if _run_paused_refusal(conn, task_id, run_journaled_before):
                 reason, hint = config.AUTO_STOP_PAUSE
                 auto_stop(conn, task_id, state, reason, hint.format(id=task_id))
                 return
