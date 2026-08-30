@@ -100,6 +100,73 @@ class TemplatesCarryTheVersionTest(unittest.TestCase):
                                  guard.SUPPORTED_SCHEMA_VERSION)
 
 
+REVIEW_MD = """---
+task: T072
+type: review
+author_role: reviewer
+status: {status}
+iteration: 1
+schema_version: 2
+---
+
+# REVIEW: секция «Проверено исполнением»
+
+## Соответствие SPEC
+| Требование | Вердикт | Комментарий |
+|---|---|---|
+| 1 | OK | |
+
+## Замечания
+
+## Вердикт
+{status}
+{section}"""
+
+
+class ReviewEvidenceSectionTest(unittest.TestCase):
+    """Секция «Проверено исполнением» при status: approved (tasks/T072/SPEC.md,
+    требования 1, 2, 4)."""
+
+    def test_approved_with_filled_section_passes(self):
+        text = REVIEW_MD.format(
+            status="approved",
+            section="\n## Проверено исполнением\n"
+                    "`python3 -m unittest discover -s tests` — зелёный.\n")
+
+        self.assertEqual(guard.check_content("REVIEW.md", text), [])
+
+    def test_approved_without_section_is_rejected(self):
+        text = REVIEW_MD.format(status="approved", section="")
+
+        errors = guard.check_content("REVIEW.md", text)
+
+        self.assertTrue(any("Проверено исполнением" in e for e in errors), errors)
+
+    def test_approved_with_empty_section_is_rejected(self):
+        text = REVIEW_MD.format(status="approved",
+                                 section="\n## Проверено исполнением\n")
+
+        errors = guard.check_content("REVIEW.md", text)
+
+        self.assertTrue(any("Проверено исполнением" in e for e in errors), errors)
+
+    def test_missing_and_empty_messages_differ(self):
+        missing = guard.check_content(
+            "REVIEW.md", REVIEW_MD.format(status="approved", section=""))
+        empty = guard.check_content(
+            "REVIEW.md", REVIEW_MD.format(status="approved",
+                                          section="\n## Проверено исполнением\n"))
+
+        self.assertNotEqual(missing, empty)
+
+    def test_non_approved_statuses_do_not_require_the_section(self):
+        for status in guard.RULES["review"]["statuses"] - {"approved"}:
+            with self.subTest(status=status):
+                text = REVIEW_MD.format(status=status, section="")
+
+                self.assertEqual(guard.check_content("REVIEW.md", text), [])
+
+
 class UnreadableArtifactTest(unittest.TestCase):
     """Guard зовётся из FSM: нечитаемый файл — нарушение, а не исключение."""
 

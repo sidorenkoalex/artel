@@ -114,6 +114,10 @@ schema_version: 2
 ## Замечания
 
 ## Вердикт
+approved
+
+## Проверено исполнением
+`python3 -m unittest discover -s tests` — зелёный.
 """
 
 # Маркер красноты (SPEC T064) — обязателен на выходе из tests_writing;

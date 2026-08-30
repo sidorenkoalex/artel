@@ -76,6 +76,9 @@ schema_version: 1
 ## Замечания
 
 ## Вердикт
+
+## Проверено исполнением
+`python3 -m unittest discover -s tests` — зелёный.
 """
 
 
