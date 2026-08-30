@@ -41,6 +41,20 @@ SPEC; кто задал потолок, помнит колонка budget_sourc
 ветку задачи, не смерженную в main. Всё убранное и всё оставленное —
 записью `уборка` в журнале. Логи прогонов не трогаются.
 
+`merge_gate -> done` (approve) той же логикой убирает worktree и, следом
+за ним, локальную ветку задачи — та уже влита `--no-ff` в main (история
+мержа полная, без squash), поэтому удаляется безопасным `git branch -d`
+(tasks/T073/SPEC.md, требование 2). Обе уборки — журналом.
+
+`prune [--execute]` (tasks/T073/SPEC.md) исполняет retention-политику
+`docs/retention.md` для `.artel/logs/` (90 дней И N=20 последних задач,
+`config.LOG_RETENTION_DAYS`/`LOG_RETENTION_KEEP_TASKS`) и `alerts`
+(архивация старше 90 дней в `alerts_archive`, не удаление). Без флага —
+dry-run: план, ничего не трогает. С `--execute` — исполняет и печатает,
+что́ фактически убрано. Не привязана к переходу FSM ни одной задачи и
+не отменяет инвариант 16 (`.artel/logs/` уборка `kill`/`done` не
+трогает) — `prune` не часть этой уборки.
+
 Вердикт ревьювера учитывается конечным автоматом ровно один раз: после
 возврата задачи в in_dev переход review -> acceptance требует нового
 REVIEW.md (iteration больше уже учтённого, см. fresh_verdict_iteration).
@@ -79,7 +93,7 @@ workspace, tasks, knowledge, logs). БД одна на все проекты: с
   run <id> | auto <id> | approve <id> [sha] | reject <id> "<причина>" |
   kill <id> | release <id> | log <id> | budget <id> <usd> |
   target-init <target> | doctor [--restore] | alert-ack <id> "<решение>" |
-  version | canary <каталог-ТЗ> [--rewrite-baseline]
+  version | canary <каталог-ТЗ> [--rewrite-baseline] | prune [--execute]
 
 `release <id>` — операторское снятие lease задачи (SPEC T062): удаляет
 строку `leases` независимо от свежести heartbeat и журналирует данные
@@ -135,6 +149,7 @@ SPEC, PLAN — в ревью, REVIEW — из ревью). Нарушение с
   doctor    pre-flight, recovery-сверка, сироты, смоук CLI/изоляции (A3)
   version   пин CLI, фактическая версия, версия схемы артефактов (T030)
   canary    синтетический прогон конвейера, метрики, бейзлайн (T065)
+  prune     retention-политика: .artel/logs/, архивация alerts (T073)
 """
 import sys
 from pathlib import Path
@@ -147,8 +162,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from orchestrator import (auto, budget, canary, catalog,  # noqa: E402
-                          cleanup, config, doctor, fsm, projects, release,
-                          runner, version, workspace)
+                          cleanup, config, doctor, fsm, projects, prune,
+                          release, runner, version, workspace)
 
 
 def _refuse_if_worktree() -> None:
@@ -222,6 +237,7 @@ def main() -> None:
         "version": lambda: version.cmd_version(),
         "canary": lambda: canary.cmd_canary(
             rest[0], rewrite_baseline="--rewrite-baseline" in rest),
+        "prune": lambda: prune.cmd_prune("--execute" in rest),
     }
     fn = table.get(cmd)
     if fn is None:

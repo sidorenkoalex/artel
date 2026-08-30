@@ -47,6 +47,11 @@ CREATE TABLE IF NOT EXISTS alerts (
   id INTEGER PRIMARY KEY AUTOINCREMENT, target TEXT, kind TEXT, source TEXT,
   message TEXT, ts TEXT, ack_ts TEXT, ack_by TEXT, ack_resolution TEXT
 );
+CREATE TABLE IF NOT EXISTS alerts_archive (
+  id INTEGER PRIMARY KEY, target TEXT, kind TEXT, source TEXT,
+  message TEXT, ts TEXT, ack_ts TEXT, ack_by TEXT, ack_resolution TEXT,
+  archived_ts TEXT
+);
 CREATE TABLE IF NOT EXISTS leases (
   task_id TEXT PRIMARY KEY, session_id TEXT, pid INTEGER, hostname TEXT,
   heartbeat_ts TEXT
@@ -152,6 +157,15 @@ def migrate(conn: sqlite3.Connection) -> None:
         "  id INTEGER PRIMARY KEY AUTOINCREMENT, target TEXT, kind TEXT,"
         "  source TEXT, message TEXT, ts TEXT, ack_ts TEXT, ack_by TEXT,"
         "  ack_resolution TEXT);")
+    # Архивная таблица `prune` (tasks/T073/SPEC.md, требование 3): БД
+    # прошлых версий её не имеют — догоняется тем же приёмом, что и alerts.
+    # `id` без AUTOINCREMENT: `archive_alert` переносит исходный id
+    # архивируемой строки alerts, не заводит новый.
+    conn.executescript(
+        "CREATE TABLE IF NOT EXISTS alerts_archive ("
+        "  id INTEGER PRIMARY KEY, target TEXT, kind TEXT, source TEXT,"
+        "  message TEXT, ts TEXT, ack_ts TEXT, ack_by TEXT,"
+        "  ack_resolution TEXT, archived_ts TEXT);")
     # Носитель advisory-lease задачи (SPEC T044, требование 1): БД прошлых
     # версий её не имеют — догоняется тем же приёмом, что и alerts/task_counters.
     conn.executescript(
@@ -610,6 +624,34 @@ def release_merge_lock(conn, session_id: str) -> None:
 def get_alert(conn, alert_id: int) -> sqlite3.Row | None:
     return conn.execute("SELECT * FROM alerts WHERE id=?",
                         (alert_id,)).fetchone()
+
+
+def alerts_older_than(conn, cutoff_ts: str) -> list:
+    """Alerts (любой `kind`, вне зависимости от `ack`) старше `cutoff_ts` —
+    кандидаты архивации `prune` (tasks/T073/SPEC.md, требование 3, AC-6).
+
+    `ts` — тот же формат, что и `now()` (`%Y-%m-%d %H:%M:%SZ`), фиксированной
+    ширины: лексикографическое сравнение строк совпадает с хронологическим.
+    """
+    return conn.execute(
+        "SELECT * FROM alerts WHERE ts < ? ORDER BY id", (cutoff_ts,)).fetchall()
+
+
+def archive_alert(conn, alert_id: int) -> None:
+    """Переносит alert в `alerts_archive`: перенос, не дублирование
+    (tasks/T073/SPEC.md, требование 3, AC-6) — строка покидает `alerts`
+    ровно туда, куда попадает в `alerts_archive`, с тем же `id`."""
+    row = get_alert(conn, alert_id)
+    if row is None:
+        return
+    conn.execute(
+        "INSERT INTO alerts_archive (id, target, kind, source, message, ts,"
+        " ack_ts, ack_by, ack_resolution, archived_ts)"
+        " VALUES (?,?,?,?,?,?,?,?,?,?)",
+        (row["id"], row["target"], row["kind"], row["source"], row["message"],
+         row["ts"], row["ack_ts"], row["ack_by"], row["ack_resolution"], now()))
+    conn.execute("DELETE FROM alerts WHERE id=?", (alert_id,))
+    conn.commit()
 
 
 def ack_alert(conn, alert_id: int, actor: str, resolution: str) -> None:
