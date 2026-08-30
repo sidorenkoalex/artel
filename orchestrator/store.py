@@ -32,7 +32,7 @@ CREATE TABLE IF NOT EXISTS tasks (
   reviewed_iter INTEGER DEFAULT 0, escalated_from TEXT,
   budget_usd REAL, spent_usd REAL DEFAULT 0, budget_source TEXT,
   target TEXT DEFAULT '{config.DEFAULT_TARGET}', fixed_sha TEXT,
-  tests_locked_sha TEXT, is_canary INTEGER DEFAULT 0,
+  tests_locked_sha TEXT, is_canary INTEGER DEFAULT 0, paused INTEGER DEFAULT 0,
   created_at TEXT, updated_at TEXT
 );
 CREATE TABLE IF NOT EXISTS steps (
@@ -146,6 +146,11 @@ def migrate(conn: sqlite3.Connection) -> None:
     # title в промпте, а канареечная задача обязана быть неотличимой от
     # продуктовой ДЛЯ РОЛЕЙ). DEFAULT 0 — строки старше T065 не канареечные.
     add_column(conn, "tasks", "is_canary", "INTEGER DEFAULT 0")
+    # Пометка штатной паузы задачи (tasks/T070/SPEC.md, требование 4): БД,
+    # не файл рабочего каталога — рабочих копий несколько, БД остаётся
+    # единственным источником правды (та же логика, что и у lease/
+    # merge-lock). DEFAULT 0 — строки старше T070 не на паузе.
+    add_column(conn, "tasks", "paused", "INTEGER DEFAULT 0")
     conn.executescript(
         "CREATE TABLE IF NOT EXISTS task_counters ("
         "  target TEXT PRIMARY KEY, next_number INTEGER NOT NULL);")

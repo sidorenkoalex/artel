@@ -91,9 +91,17 @@ workspace, tasks, knowledge, logs). БД одна на все проекты: с
 Команды:
   init | new "<название>" [--tz <файл>] | status | show <id> | advance <id> |
   run <id> | auto <id> | approve <id> [sha] | reject <id> "<причина>" |
-  kill <id> | release <id> | log <id> | budget <id> <usd> |
-  target-init <target> | doctor [--restore] | alert-ack <id> "<решение>" |
-  version | canary <каталог-ТЗ> [--rewrite-baseline] | prune [--execute]
+  kill <id> | release <id> | pause <id> | resume <id> | log <id> |
+  budget <id> <usd> | target-init <target> | doctor [--restore] |
+  alert-ack <id> "<решение>" | version | canary <каталог-ТЗ>
+  [--rewrite-baseline] | prune [--execute]
+
+`pause <id>` (SPEC T070) — штатная приостановка: помечает задачу в БД,
+не заводя нового состояния FSM; `run`/`auto` перед стартом агентного
+шага видят пометку и останавливаются штатно, уже идущий шаг не
+прерывается. `resume <id>` снимает пометку, сама шаги не запускает.
+`kill`/`approve`/`reject`/`advance` пометку не читают и работают на
+приостановленной задаче как обычно.
 
 `release <id>` — операторское снятие lease задачи (SPEC T062): удаляет
 строку `leases` независимо от свежести heartbeat и журналирует данные
@@ -144,6 +152,7 @@ SPEC, PLAN — в ревью, REVIEW — из ревью). Нарушение с
   auto      цикл run+advance до места, где нужен человек
   cleanup   kill switch и уборка хвостов задачи
   release   операторское снятие lease задачи, независимо от свежести (T062)
+  pause     штатная приостановка задачи: pause/resume, без нового состояния FSM (T070)
   catalog   каталог задач: init, new, status, show, log
   alerts    таблица alerts: incident|threshold|trigger, ack с решением (A3)
   doctor    pre-flight, recovery-сверка, сироты, смоук CLI/изоляции (A3)
@@ -162,7 +171,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from orchestrator import (auto, budget, canary, catalog,  # noqa: E402
-                          cleanup, config, doctor, fsm, projects, prune,
+                          cleanup, config, doctor, fsm, pause, projects, prune,
                           release, runner, version, workspace)
 
 
@@ -227,6 +236,8 @@ def main() -> None:
                                          rest[1] if len(rest) > 1 else ""),
         "kill": lambda: cleanup.cmd_kill(rest[0]),
         "release": lambda: release.cmd_release(rest[0]),
+        "pause": lambda: pause.cmd_pause(rest[0]),
+        "resume": lambda: pause.cmd_resume(rest[0]),
         "log": lambda: catalog.cmd_log(rest[0]),
         "budget": lambda: budget.cmd_budget(rest[0],
                                             rest[1] if len(rest) > 1 else ""),

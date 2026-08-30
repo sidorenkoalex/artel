@@ -1091,18 +1091,18 @@ def _cmd_approve(conn, task_id: str, sha: str | None, sid: str) -> None:
         # Рабочее дерево точно на чужой ветке (SPEC T031, AC-1) — SPEC.md
         # читается с ВЕТКИ задачи (не молчаливый дефолт «schema_version 1
         # без AC-разметки», журнал T030 ~17:35 25.08.2026); иначе прежний
-        # путь через диск, не тронутый T031.
+        # путь через диск, не тронутый T031. Чтение — общий узел
+        # `_read_branch_text_or_refuse` (T047, SPEC T071): узел сам
+        # журналирует и печатает именованный отказ, дублировать его текст
+        # отдельным `sys.exit` не нужно — `return` останавливает попытку
+        # approve без смены состояния тем же способом, что и остальные
+        # вызовы узла в `_cmd_advance`.
         branch = t["branch"]
         if gitcmd.on_foreign_branch(branch):
-            spec_text, reason = gitcmd.show(
-                branch, f"tasks/{task_id}/SPEC.md")
+            spec_text = _read_branch_text_or_refuse(conn, task_id, branch,
+                                                     "SPEC.md")
             if spec_text is None:
-                detail = (f"SPEC.md ветки {branch} не прочитан ({reason}) "
-                          f"— дерево не на ветке задачи")
-                store.journal(conn, task_id, "fsm",
-                              "approve отклонён: дерево не на ветке задачи",
-                              detail)
-                sys.exit(f"[{task_id}] approve отклонён: {detail}")
+                return
             meta = yamlmini.frontmatter(spec_text) or {}
         else:
             meta = artifacts.frontmatter(config.TASKS / task_id / "SPEC.md")

@@ -6,7 +6,8 @@ import time
 from pathlib import Path
 
 from . import (agent_log, brief, budget, config, fixation, gitcmd, keychain,
-              lease, parallel_limit, review, roles, spend, store, workspace)
+              lease, parallel_limit, pause, review, roles, spend, store,
+              workspace)
 
 # Идентичность коммитера, которую роль обязана унести с собой в свой HOME.
 # git читает эти переменные ПОВЕРХ конфига, поэтому перенос ровно двух пар
@@ -105,6 +106,21 @@ def _cmd_run(conn, task_id: str) -> None:
             sys.exit(f"[{task_id}] SPEC пишет Оператор — TZ.md не заведён "
                      f"(`new \"...\" --tz <файл>` заведёт роль analyst)")
         sys.exit(f"[{task_id}] в состоянии {t['state']} агент не запускается")
+
+    # Штатная пауза (SPEC T070, требование 2): пометка стоит — шаг не
+    # начинается, но уже идущий шаг (эта же функция, стартовавшая раньше)
+    # эта проверка не трогает — она стоит строго до всего, что реально
+    # запускает агента (workspace, pre-flight, spawn), поэтому не может
+    # оборвать процесс, стартовавший до постановки паузы (AC-3). Отказ —
+    # `sys.exit`, тем же приёмом, что и бюджет/лимит параллельных задач
+    # выше: `auto` ловит `SystemExit` и останавливает цикл немедленно,
+    # вместо того чтобы прокручивать шаги до `AUTO_MAX_STEPS`, принимая
+    # отказ паузы за «шаг ещё не готов, продолжай».
+    if pause.is_paused(t):
+        detail = (f"задача на паузе — следующий агентный шаг не "
+                  f"начинается; `artel.py resume {task_id}` снимет пометку")
+        store.journal(conn, task_id, role, pause.REFUSAL_ACTION, detail)
+        sys.exit(f"[{task_id}] run отклонён: {detail}")
 
     target = t["target"] or config.DEFAULT_TARGET
 
@@ -286,12 +302,12 @@ def _cmd_run(conn, task_id: str) -> None:
         if outcome != "failed":
             return
         if attempt < config.AGENT_ATTEMPTS:
-            pause = config.RETRY_BACKOFF_SEC * 2 ** (attempt - 1)
-            detail = (f"пауза {pause} с перед попыткой "
+            backoff_sec = config.RETRY_BACKOFF_SEC * 2 ** (attempt - 1)
+            detail = (f"пауза {backoff_sec} с перед попыткой "
                       f"{attempt + 1}/{config.AGENT_ATTEMPTS}")
             store.journal(conn, task_id, role, "agent run retry", detail)
             print(f"[{task_id}] {detail}")
-            time.sleep(pause)
+            time.sleep(backoff_sec)
 
     # Шаг, на котором упал агент, запоминаем: чинить надо его, а не задачу
     # целиком. Без этого approve увёл бы упавшее ревью в in_dev и поднял
