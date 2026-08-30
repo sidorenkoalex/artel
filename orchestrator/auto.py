@@ -1,5 +1,5 @@
 """Цикл `auto`: run+advance, пока в шаге работает агент."""
-from . import agent_log, budget, config, fsm, lease, runner, store
+from . import agent_log, budget, config, fsm, lease, pause, runner, store
 
 # Действие журнала, которым отказ `advance` узнаётся вне зависимости от
 # конкретной причины (SPEC T038, требование 1): каждая точка `cmd_advance`
@@ -109,9 +109,20 @@ def _cmd_auto(conn, task_id: str, session_id: str) -> None:
             runner.cmd_run(task_id, session_id=session_id)
         except SystemExit as exc:
             # Отказ стартовать `cmd_run` сообщает единственным способом —
-            # sys.exit с текстом (исчерпанный бюджет, budget_block). В цикле
-            # текст печатаем сами: пойманный SystemExit нигде не покажется.
+            # sys.exit с текстом (исчерпанный бюджет, лимит параллельных
+            # задач, штатная пауза). В цикле текст печатаем сами: пойманный
+            # SystemExit нигде не покажется.
             print(str(exc))
+            # Пауза (SPEC T070, требование 2) — не «эскалация по бюджету»:
+            # причина должна быть видна Оператору в итоговом сообщении, а
+            # не потеряться среди прочих отказов `run`, иначе цикл
+            # останавливается верно, но молча про настоящую причину (тот
+            # же приём различения, что и `auto_stop_advice` для бюджета
+            # внутри `escalated`).
+            if pause.is_paused(store.get_task(conn, task_id)):
+                reason, hint = config.AUTO_STOP_PAUSE
+                auto_stop(conn, task_id, state, reason, hint.format(id=task_id))
+                return
             auto_stop(conn, task_id, state, "run отказался стартовать",
                       f"artel.py budget {task_id} <usd> или artel.py kill {task_id}")
             return

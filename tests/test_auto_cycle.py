@@ -25,7 +25,7 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from orchestrator import (agent_log, auto, budget, catalog,  # noqa: E402
-                          config, fsm, gitcmd, runner, store)
+                          config, fsm, gitcmd, pause, runner, store)
 from tests.sandbox import capture, fake_git  # noqa: E402
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -533,6 +533,64 @@ class AutoStopsOnBudgetRefusalTest(AutoCycleTest):
             self.auto()
 
         self.assertIn("run отказался стартовать",
+                      self.journal_detail("auto остановлен"))
+
+
+class AutoStopsOnPauseRefusalTest(AutoCycleTest):
+    """SPEC T070, требование 2: пауза, поставленная до старта `auto`,
+    останавливает цикл на первой же попытке `run` — не после
+    `AUTO_MAX_STEPS` попыток (регресс REVIEW.md итерации 1: `auto` не
+    отличал отказ по паузе от «шаг ещё не готов» и прокручивал цикл до
+    предела, а итоговое сообщение называло лимит шагов, а не паузу).
+
+    `cmd_run` тут настоящая — по тому же доводу, что и у
+    `AutoStopsOnBudgetRefusalTest`: имитация отказа доказывала бы только
+    то, что тест умеет бросать `SystemExit`, а не то, что `auto`
+    действительно отличает отказ по паузе от прочих.
+    """
+
+    def setUp(self):
+        super().setUp()
+        # Поверх подмены базового класса — настоящая команда: до Popen она
+        # не доходит, отказ случается на пометке паузы.
+        self.patch_object(runner, "cmd_run", REAL_CMD_RUN)
+        self.write_plan("ready")
+        self.set_state("in_dev")
+        pause.cmd_pause(self.TASK)
+
+    def test_cycle_stops_on_the_first_attempt_and_no_agent_starts(self):
+        with mock.patch.object(runner, "spawn_agent") as popen:
+            out = self.auto()
+
+        popen.assert_not_called()
+        self.assertEqual(self.state(), "in_dev", "задача осталась где стояла")
+        self.assertIn("задача на паузе", out)
+        self.assertIn(f"artel.py resume {self.TASK}", out)
+
+    def test_refusal_is_not_retried(self):
+        """Отказ — причина остановки, а не повод крутиться до лимита шагов."""
+        with mock.patch.object(runner, "spawn_agent") as popen:
+            self.auto()
+
+        popen.assert_not_called()
+        self.assertEqual(
+            [a for _, a, _ in self.journal_rows()]
+            .count("run отклонён: задача на паузе"), 1,
+            "run на паузе отказал больше одного раза за вызов auto")
+
+    def test_final_message_names_pause_not_the_step_limit(self):
+        with mock.patch.object(runner, "spawn_agent"):
+            out = self.auto()
+
+        # "лимит N шагов за вызов" тоже встречается на старте (информационная
+        # строка) — предмет проверки в том, что СТОП не мотивирован лимитом.
+        self.assertNotIn(f"лимит {config.AUTO_MAX_STEPS} шагов исчерпан", out)
+
+    def test_refusal_lands_in_the_journal(self):
+        with mock.patch.object(runner, "spawn_agent"):
+            self.auto()
+
+        self.assertIn("задача на паузе",
                       self.journal_detail("auto остановлен"))
 
 
