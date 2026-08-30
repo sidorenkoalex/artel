@@ -19,6 +19,10 @@
    `tasks/T063/acceptance_tests/test_retro_suite_and_docs_untouched.py`
    AC-5 и `tasks/T049/acceptance_tests/test_ac6_ac7_regression_and_
    protected_paths.py` AC-7.
+
+Зелёный с рождения: дифф-тест утверждает, что ветка НЕ трогает
+`docs/adr/` — верно и до, и после реализации (запрет, не новая
+функциональность); краснеет только при нарушении границы.
 """
 
 # AC-10: manual — «текст уточнения инварианта 16 подготовлен (и годится
