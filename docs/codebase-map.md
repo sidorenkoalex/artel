@@ -1,5 +1,5 @@
 ---
-built_at_sha: e528194f2e51a972eeda5c844c83e0a7e9ef7687
+built_at_sha: 9b96765812e820c580c11dc6c726ffa014074600
 ---
 
 # Codebase-map пульта
@@ -92,7 +92,7 @@ built_at_sha: e528194f2e51a972eeda5c844c83e0a7e9ef7687
 - `auto_stop_advice`
 - `cmd_auto`
 
-**Импортирует:** `orchestrator/agent_log.py`, `orchestrator/budget.py`, `orchestrator/config.py`, `orchestrator/fsm.py`, `orchestrator/lease.py`, `orchestrator/runner.py`, `orchestrator/store.py`
+**Импортирует:** `orchestrator/agent_log.py`, `orchestrator/budget.py`, `orchestrator/config.py`, `orchestrator/fsm.py`, `orchestrator/lease.py`, `orchestrator/pause.py`, `orchestrator/runner.py`, `orchestrator/store.py`
 
 **Импортируется:** `orchestrator/artel.py`, `orchestrator/canary.py`, `tests/test_analyst_role.py`, `tests/test_auto_cycle.py`
 
@@ -374,7 +374,7 @@ built_at_sha: e528194f2e51a972eeda5c844c83e0a7e9ef7687
 
 **Импортирует:** `orchestrator/store.py`
 
-**Импортируется:** `orchestrator/artel.py`, `orchestrator/runner.py`, `tests/test_pause.py`
+**Импортируется:** `orchestrator/artel.py`, `orchestrator/auto.py`, `orchestrator/runner.py`, `tests/test_auto_cycle.py`, `tests/test_pause.py`
 
 ## orchestrator/projects.py
 
@@ -741,7 +741,7 @@ built_at_sha: e528194f2e51a972eeda5c844c83e0a7e9ef7687
 
 **Публичные функции:** (нет)
 
-**Импортирует:** `orchestrator/agent_log.py`, `orchestrator/auto.py`, `orchestrator/budget.py`, `orchestrator/catalog.py`, `orchestrator/config.py`, `orchestrator/fsm.py`, `orchestrator/gitcmd.py`, `orchestrator/runner.py`, `orchestrator/store.py`, `tests/sandbox.py`
+**Импортирует:** `orchestrator/agent_log.py`, `orchestrator/auto.py`, `orchestrator/budget.py`, `orchestrator/catalog.py`, `orchestrator/config.py`, `orchestrator/fsm.py`, `orchestrator/gitcmd.py`, `orchestrator/pause.py`, `orchestrator/runner.py`, `orchestrator/store.py`, `tests/sandbox.py`
 
 **Импортируется:** —
 
