@@ -76,6 +76,28 @@ def drop_task_branch(branch: str) -> str:
     return f"удалена ветка {branch}"
 
 
+def drop_merged_task_branch(branch: str) -> str:
+    """Убирает ветку задачи, ТОЛЬКО ЧТО влитую в main (переход `merge_gate
+    -> done`, tasks/T073/SPEC.md, требование 2): строка — что вышло.
+
+    Не `drop_task_branch` (kill): та НАМЕРЕННО оставляет смерженную ветку
+    — «история killed-задачи»; здесь наоборот, смержённость — условие
+    удаления, не повод оставить (merge остаётся `--no-ff` без squash —
+    история мержа в main полная, docs/retention.md). `-d` (safe delete),
+    не `-D`: git сам откажет, если ветка внезапно не влита — единственная
+    защита, которая тут нужна. Вызывается ПОСЛЕ уборки worktree
+    (`workspace.remove`) — `-d` не удалит ветку, пока её держит worktree.
+    """
+    if not branch:
+        return "ветка задачи не записана — нечего удалять"
+    if not gitcmd.branch_exists(branch):
+        return f"локальной ветки {branch} нет"
+    res = gitcmd.git("branch", "-d", branch)
+    if res.returncode != 0:
+        return f"ветка {branch} не удалена: {res.stderr.strip()[:200]}"
+    return f"удалена ветка {branch}"
+
+
 def cleanup_killed_task(conn, task_id: str, branch: str) -> None:
     """Убирает хвосты убитой задачи и перечисляет сделанное в журнале.
 

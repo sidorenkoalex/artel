@@ -71,6 +71,9 @@ schema_version: 2
 
 ## Вердикт
 approved
+
+## Проверено исполнением
+`python3 -m unittest discover -s tests` — зелёный.
 """
 
 QUESTIONS_READY = """---

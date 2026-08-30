@@ -324,6 +324,35 @@ def acceptance_traceability_errors(tdir: Path) -> list[str]:
     return traceability_errors_from_content(text, meta, tested, markers)
 
 
+# Секция «Проверено исполнением» — обязательна при status: approved
+# (tasks/T072/SPEC.md, требования 1–2). Урок ручных гейтов Оператора
+# (docs/operator-gates.md, норматив 26.08 «гейт — проверка, а не
+# подтверждение приезда») распространяется и на агентское ревью:
+# одобрение без исполненной проверки — слепое.
+EVIDENCE_SECTION = "Проверено исполнением"
+
+
+def review_evidence_errors(path: Path | str, text: str, meta: dict) -> list[str]:
+    """Секция «Проверено исполнением» при `status: approved` (SPEC T072,
+    требования 1, 2, 4). Для остальных статусов — не требуется (AC-5).
+
+    `path` — только для текста ошибок (см. `schema_errors`). Различает
+    «секции нет вовсе» и «секция есть, но пустая» — AC-4 требует, чтобы
+    сообщение называло, что именно отсутствует."""
+    if meta.get("status") != "approved":
+        return []
+    headers = set(re.findall(r"^##\s+(.+?)\s*$", text, re.M))
+    if EVIDENCE_SECTION not in headers:
+        return [f"{path}: approved-ревью без секции '## {EVIDENCE_SECTION}' — "
+                f"добавь секцию с перечислением команд/тестов, которые ты "
+                f"реально запускал, и что они показали"]
+    body = section_body(text, EVIDENCE_SECTION).strip()
+    if not body:
+        return [f"{path}: секция '## {EVIDENCE_SECTION}' пустая — впиши, "
+                f"какие команды/тесты ты реально запускал и что они показали"]
+    return []
+
+
 def check_content(label: str, text: str) -> list[str]:
     """Ядро `check` — структурная проверка уже прочитанного текста, без
     чтения файла: `label` — путь или его подобие, только для текста
@@ -370,6 +399,9 @@ def check_content(label: str, text: str) -> list[str]:
 
     if atype == "spec" and "Критерии приёмки" in headers:
         errors.extend(spec_ac_errors(label, text, meta))
+
+    if atype == "review":
+        errors.extend(review_evidence_errors(label, text, meta))
 
     return errors
 
