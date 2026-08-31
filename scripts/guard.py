@@ -208,12 +208,17 @@ def scan_acceptance_tests(tdir: Path) -> tuple[set, dict]:
     `test_ac<n>_` парсер не увидит, и это осознанно: содержательность
     (тест действительно проверяет то, что заявляет) — дело ревью и прогона
     unittest на гейте (orchestrator/acceptance.py), не структурной проверки.
+
+    Только `test_*.py` (SPEC T081) — тот же приём, что `scan_redness_markers`
+    (T064): маркер или тест-метод во вспомогательном файле вроде
+    `_sandbox.py` (например, литерал-фикстура в исходнике теста другой
+    задачи) не должен читаться как настоящая AC-разметка этой задачи.
     """
     tests_dir = tdir / "acceptance_tests"
     if not tests_dir.is_dir():
         return set(), {}
     sources: list[str] = []
-    for f in sorted(tests_dir.rglob("*.py")):
+    for f in sorted(tests_dir.rglob("test_*.py")):
         try:
             sources.append(f.read_text(encoding="utf-8"))
         except (OSError, UnicodeDecodeError):
