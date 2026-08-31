@@ -33,6 +33,7 @@ CREATE TABLE IF NOT EXISTS tasks (
   budget_usd REAL, spent_usd REAL DEFAULT 0, budget_source TEXT,
   target TEXT DEFAULT '{config.DEFAULT_TARGET}', fixed_sha TEXT,
   tests_locked_sha TEXT, is_canary INTEGER DEFAULT 0, paused INTEGER DEFAULT 0,
+  answer_baseline INTEGER,
   created_at TEXT, updated_at TEXT
 );
 CREATE TABLE IF NOT EXISTS steps (
@@ -146,6 +147,13 @@ def migrate(conn: sqlite3.Connection) -> None:
     # единственным источником правды (та же логика, что и у lease/
     # merge-lock). DEFAULT 0 — строки старше T070 не на паузе.
     add_column(conn, "tasks", "paused", "INTEGER DEFAULT 0")
+    # Снимок числа ANSWER-*.md на момент эскалации (tasks/T075, SPEC AC-3):
+    # NULL — эскалация класса «лимит», ответа не требует (как до этой
+    # задачи); не-NULL — approve из escalated обязан увидеть на ветке
+    # больше файлов ANSWER-*.md, чем было тут зафиксировано, иначе
+    # отказывает. Число, не булев флаг: гейт различает НОВЫЙ ответ от уже
+    # существующего файла прошлого раунда эскалации той же задачи.
+    add_column(conn, "tasks", "answer_baseline", "INTEGER")
     conn.executescript(
         "CREATE TABLE IF NOT EXISTS task_counters ("
         "  target TEXT PRIMARY KEY, next_number INTEGER NOT NULL);")

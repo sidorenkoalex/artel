@@ -239,6 +239,7 @@ def _cmd_run(conn, task_id: str) -> None:
             f"{task_ref}/acceptance_tests`, закоммить каталог в ветку. "
             f"Код репозитория и SPEC.md НЕ трогай."
         )
+        brief_text = brief.test_author_answer_component(conn, task_id)
     elif role == "developer":
         mission = (
             f"Роль: разработчик. Задача {task_id}, ветка {t['branch']} — "
