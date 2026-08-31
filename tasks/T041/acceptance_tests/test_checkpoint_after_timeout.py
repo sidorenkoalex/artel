@@ -3,6 +3,16 @@ WIP-чекпоинт оркестратора.
 
 Источник — tasks/T041/SPEC.md, «Критерии приёмки» (AC-1..AC-5).
 
+`test_ac3_...` обновлён задачей T074 (tasks/T074/SPEC.md, требование 3):
+правило AC-3 «rc != 0 не коммитит чекпоинт» — прежнее, T074 явно
+заменяет его противоположным («правило чекпоинта WIP расширяется... не
+только при таймауте, но и при аварийном завершении шага», включая
+rc != 0). Это не ослабление теста (ADR-0002): строгость проверки не
+снята, тест приведён в соответствие с новым правилом, которое сама
+SPEC T074 предписывает как замену прежнего — см. также
+`tasks/T074/acceptance_tests/test_ac9_checkpoint_on_abnormal_step_end.py`,
+докстринг модуля, который описывает эту же замену со стороны T074.
+
 Чекпоинт коммитит РЕАЛЬНОЕ рабочее дерево ветки задачи (`git add -A` +
 `git commit`) — заглушкой `gitcmd.git` эту механику не проверить и не
 отличить от отсутствия коммита вовсе. Песочница — `RealPultGitTest`
@@ -200,7 +210,9 @@ class CheckpointAfterTimeoutTest(RealPultGitTest):
             f"AC-2: рестарт шага после чекпоинта обязан пройти без "
             f"эскалации — фактический вывод рестарта:\n{out}")
 
-    def test_ac3_return_code_failure_does_not_checkpoint(self):
+    def test_ac3_return_code_failure_now_checkpoints_per_t074(self):
+        """T074 (SPEC требование 3) заменяет прежнее правило AC-3
+        («rc != 0 не коммитит») противоположным — см. докстринг модуля."""
         self.enter_in_dev()
         before = self.head()
 
@@ -209,14 +221,14 @@ class CheckpointAfterTimeoutTest(RealPultGitTest):
             self.run_agent(FailedProc(["падаю с кодом возврата\n"],
                                       returncode=1, leaves_wip=self.write_wip))
 
-        self.assertEqual(
+        self.assertNotEqual(
             self.head(), before,
-            "AC-3: провал по коду возврата (rc != 0, не таймаут) не "
-            "коммитит чекпоинт")
-        self.assertFalse(
+            "T074: провал по коду возврата (rc != 0, не таймаут) теперь "
+            "коммитит чекпоинт (расширение правила T041)")
+        self.assertTrue(
             gitcmd.is_clean(repo=workspace.path(self.TASK)),
-            "AC-3: рабочее дерево worktree задачи остаётся "
-            "незакоммиченным, как до этой задачи")
+            "T074: рабочее дерево worktree задачи снова чистое — "
+            "чекпоинт закоммитил WIP")
 
     def test_ac4_timeout_on_clean_tree_creates_no_empty_checkpoint(self):
         self.enter_in_dev()
