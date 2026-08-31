@@ -66,6 +66,26 @@ def commits_behind(branch: str, base: str | None = None) -> int | None:
     return int(text) if text.isdigit() else None
 
 
+def commit_committer_dates(since: str, until: str,
+                           repo: Path | None = None) -> list[str] | None:
+    """ISO8601 committer-даты (`%cI`, со смещением) коммитов диапазона
+    `since..until` (SPEC T076, требование 1) — порядок вывода `git log`
+    вызывающему коду не важен, каждая дата сверяется независимо
+    (`fixation.refixate_after_rejected_transition`).
+
+    `None` — git не ответил, либо диапазон недостижим (`since` не предок
+    `until`, несуществующий sha — `res.returncode != 0`): вызывающий код
+    обязан трактовать это как «неизвестно» и не перефиксировать
+    (fail-closed, тот же принцип, что `fixation.check_integrity` при
+    неответившем git).
+    """
+    args = ("log", "--format=%cI", f"{since}..{until}")
+    res = in_repo(repo, *args) if repo else git(*args)
+    if res is None or res.returncode != 0:
+        return None
+    return [ln for ln in res.stdout.splitlines() if ln.strip()]
+
+
 def list_branches(prefix: str = "") -> list[str] | None:
     """Локальные ветки под `refs/heads/<prefix>`; `None` — git не ответил.
 
