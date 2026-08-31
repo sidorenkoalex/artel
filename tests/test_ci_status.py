@@ -334,5 +334,193 @@ class GhCallTest(unittest.TestCase):
         self.assertIn("неизвестен", note)
 
 
+class FindRunIdTest(unittest.TestCase):
+    """`find_run_id` — id workflow-прогона по sha, адрес для `gh run rerun`
+    (SPEC T082, требование 7): check-run'ы, которые видит `branch_status`,
+    его не несут — нужен отдельный опрос `actions/runs`.
+    """
+
+    def answer(self, stdout: str, returncode: int = 0) -> None:
+        patcher = mock.patch.object(
+            ci, "gh",
+            lambda *a, **kw: subprocess.CompletedProcess(list(a), returncode,
+                                                          stdout, ""))
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def test_run_id_parsed_from_the_first_workflow_run(self):
+        self.answer(json.dumps({"workflow_runs": [{"databaseId": 4242}]}))
+
+        run_id, why = ci.find_run_id(SHA)
+
+        self.assertEqual(run_id, "4242")
+        self.assertEqual(why, "")
+
+    def test_no_workflow_runs_for_the_sha_is_not_found(self):
+        self.answer(json.dumps({"workflow_runs": []}))
+
+        run_id, why = ci.find_run_id(SHA)
+
+        self.assertEqual(run_id, "")
+        self.assertIn("нет", why)
+
+    def test_gh_that_does_not_answer_is_not_found(self):
+        self.answer("", returncode=1)
+
+        run_id, why = ci.find_run_id(SHA)
+
+        self.assertEqual(run_id, "")
+        self.assertIn("не ответил", why)
+
+    def test_unparseable_response_is_not_found(self):
+        self.answer("not json")
+
+        run_id, why = ci.find_run_id(SHA)
+
+        self.assertEqual(run_id, "")
+        self.assertIn("не разобран", why)
+
+    def test_missing_numeric_id_is_not_found(self):
+        self.answer(json.dumps({"workflow_runs": [{"name": "ci"}]}))
+
+        run_id, why = ci.find_run_id(SHA)
+
+        self.assertEqual(run_id, "")
+        self.assertIn("id", why)
+
+    def test_the_failed_run_is_picked_over_a_more_recent_green_one(self):
+        """Ревью T082 итерации 2, замечание major 2: push- и pull_request-
+        триггеры одного sha дают два прогона (открытый PR ветки задачи) —
+        «самый свежий» слепо промахивался бы, если упавший прогон не он.
+        """
+        self.answer(json.dumps({"workflow_runs": [
+            {"databaseId": 2, "status": "completed", "conclusion": "success"},
+            {"databaseId": 1, "status": "completed", "conclusion": "failure"},
+        ]}))
+
+        run_id, why = ci.find_run_id(SHA)
+
+        self.assertEqual(run_id, "1")
+        self.assertEqual(why, "")
+
+    def test_the_most_recent_failed_run_is_picked_among_several(self):
+        self.answer(json.dumps({"workflow_runs": [
+            {"databaseId": 3, "status": "completed", "conclusion": "success"},
+            {"databaseId": 2, "status": "completed", "conclusion": "failure"},
+            {"databaseId": 1, "status": "completed", "conclusion": "cancelled"},
+        ]}))
+
+        run_id, why = ci.find_run_id(SHA)
+
+        self.assertEqual(run_id, "2")
+        self.assertEqual(why, "")
+
+    def test_falls_back_to_the_most_recent_run_when_none_is_failed(self):
+        """Ни один завершённый прогон не пришёл не-зелёным (гонка API,
+        неполный ответ) — деградация на прежнее поведение: ре-ран должен
+        хоть на что-то нацелиться, не отказывать совсем."""
+        self.answer(json.dumps({"workflow_runs": [
+            {"databaseId": 2, "status": "completed", "conclusion": "success"},
+            {"databaseId": 1, "status": "completed", "conclusion": "success"},
+        ]}))
+
+        run_id, why = ci.find_run_id(SHA)
+
+        self.assertEqual(run_id, "2")
+        self.assertEqual(why, "")
+
+
+class StatusKindTest(unittest.TestCase):
+    """Подтип не-зелёного `note` из `branch_status` (SPEC T082, ревью
+    итерации 2, замечание major 1): триггерить ре-ран и журналировать
+    «подтверждённый красный» имеет смысл только для реально красного
+    статуса, не для «ещё идёт»/«неизвестен» — там нечего подтверждать.
+    """
+
+    def test_still_running_is_not_red(self):
+        self.assertEqual(
+            ci.status_kind("CI коммита abc12345 ещё идёт: guard"), "running")
+
+    def test_unknown_status_is_not_red(self):
+        for note in ("статус CI неизвестен: ветки нет",
+                     "статус CI коммита abc12345 неизвестен: gh не ответил",
+                     "у коммита abc12345 нет ни одной проверки CI — "
+                     "статус неизвестен"):
+            with self.subTest(note=note):
+                self.assertEqual(ci.status_kind(note), "unknown")
+
+    def test_failed_conclusion_is_red(self):
+        self.assertEqual(
+            ci.status_kind("CI коммита abc12345 не зелёный: python=failure"),
+            "red")
+
+
+class TriggerRerunTest(unittest.TestCase):
+    """`trigger_rerun` реально перезапускает CI (не читает тот же статус
+    повторно, ревью T082 итерации 1, замечание blocker): триггер —
+    `gh run rerun <id> --failed`, ожидание — `gh run watch <id>`.
+    """
+
+    def setUp(self):
+        patcher = mock.patch.object(ci, "head_sha", lambda branch: (SHA, ""))
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        patcher = mock.patch.object(
+            ci, "find_run_id", lambda sha: ("4242", ""))
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def test_rerun_and_watch_are_both_called_for_the_found_run(self):
+        calls: list[tuple] = []
+
+        def fake_gh(*args, **kwargs):
+            calls.append(args)
+            return subprocess.CompletedProcess(list(args), 0, "", "")
+
+        with mock.patch.object(ci, "gh", fake_gh):
+            note = ci.trigger_rerun("task/t001-x")
+
+        self.assertEqual(calls[0], ("run", "rerun", "4242", "--failed"))
+        self.assertEqual(calls[1][:3], ("run", "watch", "4242"))
+        self.assertIn("4242", note)
+
+    def test_watch_waits_with_a_much_longer_timeout_than_a_rest_poll(self):
+        seen_timeouts = []
+
+        def fake_gh(*args, **kwargs):
+            seen_timeouts.append(kwargs.get("timeout"))
+            return subprocess.CompletedProcess(list(args), 0, "", "")
+
+        with mock.patch.object(ci, "gh", fake_gh):
+            ci.trigger_rerun("task/t001-x")
+
+        # rerun (без явного timeout) + watch (config.CI_RERUN_WAIT_SEC)
+        self.assertEqual(seen_timeouts, [None, config.CI_RERUN_WAIT_SEC])
+
+    def test_run_not_found_is_a_best_effort_no_crash(self):
+        with mock.patch.object(ci, "find_run_id", lambda sha: ("", "нет прогонов")):
+            note = ci.trigger_rerun("task/t001-x")
+
+        self.assertIn("не запущен", note)
+
+    def test_rerun_command_failure_is_a_best_effort_no_crash(self):
+        with mock.patch.object(
+                ci, "gh",
+                lambda *a, **kw: subprocess.CompletedProcess(list(a), 1, "",
+                                                              "boom")):
+            note = ci.trigger_rerun("task/t001-x")
+
+        self.assertIn("не запущен", note)
+        self.assertIn("boom", note)
+
+    def test_unknown_head_sha_is_a_best_effort_no_crash(self):
+        with mock.patch.object(ci, "head_sha",
+                               lambda branch: ("", "ветки нет")):
+            note = ci.trigger_rerun("task/t001-x")
+
+        self.assertIn("не запущен", note)
+        self.assertIn("ветки нет", note)
+
+
 if __name__ == "__main__":
     unittest.main()

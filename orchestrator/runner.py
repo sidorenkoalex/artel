@@ -5,9 +5,9 @@ import sys
 import time
 from pathlib import Path
 
-from . import (agent_log, brief, budget, config, fixation, gitcmd, keychain,
-              lease, parallel_limit, pause, review, roles, spend, store,
-              workspace)
+from . import (agent_log, alerts, brief, budget, config, fixation, gitcmd,
+              keychain, lease, parallel_limit, pause, review, roles, spend,
+              store, workspace)
 
 # Идентичность коммитера, которую роль обязана унести с собой в свой HOME.
 # git читает эти переменные ПОВЕРХ конфига, поэтому перенос ровно двух пар
@@ -17,6 +17,114 @@ GIT_IDENTITY = (
     ("user.name", ("GIT_AUTHOR_NAME", "GIT_COMMITTER_NAME")),
     ("user.email", ("GIT_AUTHOR_EMAIL", "GIT_COMMITTER_EMAIL")),
 )
+
+# Эвристики ошибок агента (SPEC T082, требования 1-2): классификация по
+# подстроке в объединённом stdout+stderr провалившейся попытки, без учёта
+# регистра. Сигнатуры 1а/1б/«обрыв потока» — дословные, снятые Оператором
+# с логов инцидентов T043 (27.08) и T075-T078 (31.08); список класса 2
+# (session limit подписки) — версия 1, предположительная, без живого
+# инцидента (tasks/T082/ANSWER-1.md). Специфичные списки проверяются
+# раньше общего якоря «API Error:» (класс 1, «системный кандидат») —
+# иначе он перехватывал бы и их (требование 1, «страховка от промаха»).
+CLASS_1A_SIGNATURES = ("403", "failed to authenticate")
+CLASS_1B_SIGNATURES = ("connection refused", "connectionrefused")
+STREAM_BROKEN_SIGNATURE = "connection lost mid-response"
+SESSION_LIMIT_SIGNATURES = ("session limit", "usage limit", "5-hour limit",
+                            "resets at")
+SYSTEM_CANDIDATE_ANCHOR = "api error:"
+
+# Связка «транзиентное системное» (требование 3): auth/403, сетевой отказ
+# до API, «системный кандидат» — минутный бэкофф вместо секундного,
+# число попыток шага не меняется (инвариант 3). «Обрыв потока» в связку
+# НЕ входит — требование 3 её не называет, у неё свой путь (требование 5).
+TRANSIENT_SYSTEM_CLASSES = ("1a", "1b", "system_candidate")
+
+CLASS_LABELS = {
+    "1a": "класс 1а (auth/403)",
+    "1b": "класс 1б (сетевой отказ до API)",
+    "stream_broken": "обрыв потока",
+    "system_candidate": "класс 1, системный кандидат",
+    "session_limit": "класс 2 (session limit подписки)",
+}
+
+
+def _attempts_word(n: int) -> str:
+    """Русское числительное «попытка» в форме, согласованной с {n} (ревью
+    T082 итерации 1, замечание minor): класс 2 (session limit) обрывает
+    цикл на attempt=1 (требование 4), и «за 1 попытки» — не по-русски."""
+    if 11 <= n % 100 <= 14:
+        return "попыток"
+    last = n % 10
+    if last == 1:
+        return "попытку"
+    if 2 <= last <= 4:
+        return "попытки"
+    return "попыток"
+
+
+def classify_attempt_failure(text: str) -> str | None:
+    """Класс отказа попытки по её тексту; `None` — нераспознанный (SPEC
+    T082, требования 1-2, критерии AC-1..AC-6).
+    """
+    lowered = text.lower()
+    if any(sig in lowered for sig in CLASS_1A_SIGNATURES):
+        return "1a"
+    if any(sig in lowered for sig in CLASS_1B_SIGNATURES):
+        return "1b"
+    if STREAM_BROKEN_SIGNATURE in lowered:
+        return "stream_broken"
+    if any(sig in lowered for sig in SESSION_LIMIT_SIGNATURES):
+        return "session_limit"
+    if SYSTEM_CANDIDATE_ANCHOR in lowered:
+        return "system_candidate"
+    return None
+
+
+def _attempt_output_text(log_path: Path) -> str:
+    """Полный текст лога ЭТОЙ попытки — `agent_log.new_agent_log` заводит
+    файл заново на каждый вызов `run_agent_once`, поэтому чтение целиком
+    (не хвоста) не подмешивает соседние попытки; классификатор смотрит на
+    объединённый stdout+stderr, а не на усечённый `log_tail`."""
+    try:
+        return log_path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return ""
+
+
+def _record_failure_classification(conn, task_id: str, role: str,
+                                    numbered: str, text: str) -> str | None:
+    """Классифицирует провалившуюся попытку, журналирует сырой текст
+    структурно (требование 6, AC-13) и заводит алерты классов «обрыв
+    потока»/2 (требования 4-5, AC-11, AC-12). Возвращает класс или `None`.
+    """
+    failure_class = classify_attempt_failure(text)
+    if failure_class is None:
+        return None
+    # Срез С ХВОСТА, не с головы (ревью T082 итерации 1, замечание major):
+    # причина падения — в конце вывода (тот же приём, что и `agent_log.
+    # log_tail`), а реалистичный лог попытки почти всегда длиннее
+    # LOG_TAIL_CHARS до совпавшей сигнатуры — головной срез её обрезал бы.
+    store.journal(conn, task_id, role, "agent failure classified",
+                  f"{numbered}: {CLASS_LABELS[failure_class]}; текст: "
+                  f"{text.strip()[-config.LOG_TAIL_CHARS:]}")
+    target = store.task_target(conn, task_id)
+    if failure_class == "stream_broken":
+        # Требование 5: алерт обязан открыться независимо от того, каким
+        # путём `spend.py` учёл (или не учёл) стоимость этой попытки —
+        # заводится здесь явно, а не внутри spend.charge_missing_result.
+        alerts.raise_alert(
+            conn, target, "incident", "spend.unknown_cost",
+            f"{task_id}/{role}: {numbered}, обрыв потока (Connection lost "
+            f"mid-response) — стоимость попытки не гарантированно "
+            f"восстановлена")
+    if failure_class == "session_limit":
+        # Триггер №15 (docs/triggers.md): счётчик частоты, не решение по
+        # кредам ролей — решение остаётся за Оператором.
+        alerts.raise_alert(
+            conn, target, "trigger", "triggers.md#15",
+            f"{task_id}/{role}: {numbered}, обнаружен лимит сессии "
+            f"подписки — триггер №15 (раздельные креды ролей)")
+    return failure_class
 
 
 def spawn_agent(cmd: list[str], **kwargs) -> subprocess.Popen:
@@ -304,16 +412,29 @@ def _cmd_run(conn, task_id: str) -> None:
         prompt = f"{prompt}\n\n--- ОТКАЗ ADVANCE (история) ---\n\n{refusal_block}"
 
     reason = ""
+    failure_class = None
     for attempt in range(1, config.AGENT_ATTEMPTS + 1):
-        outcome, reason = run_agent_once(conn, task_id, role, prompt, attempt)
+        outcome, reason, failure_class = run_agent_once(
+            conn, task_id, role, prompt, attempt)
         # Потолок проверяем после каждой попытки, до решения о ретрае: иначе
         # три попытки подряд потратят бюджет, исчерпанный ещё первой.
         if budget.enforce_budget(conn, task_id, t["state"]):
             return
         if outcome != "failed":
             return
+        if failure_class == "session_limit":
+            # Требование 4/AC-9: класс 2 не расходует остаток попыток шага —
+            # отказ сразу, без ретрая (в отличие от связки «транзиентное
+            # системное» ниже, которую ретрай как раз должен пережидать).
+            break
         if attempt < config.AGENT_ATTEMPTS:
-            backoff_sec = config.RETRY_BACKOFF_SEC * 2 ** (attempt - 1)
+            if failure_class in TRANSIENT_SYSTEM_CLASSES:
+                # Требование 3/AC-7: связка 1а/1б/«системный кандидат» —
+                # минутный бэкофф, не секундный; число попыток не меняется.
+                backoff_sec = (config.TRANSIENT_SYSTEM_BACKOFF_SEC
+                              * 2 ** (attempt - 1))
+            else:
+                backoff_sec = config.RETRY_BACKOFF_SEC * 2 ** (attempt - 1)
             detail = (f"пауза {backoff_sec} с перед попыткой "
                       f"{attempt + 1}/{config.AGENT_ATTEMPTS}")
             store.journal(conn, task_id, role, "agent run retry", detail)
@@ -323,10 +444,17 @@ def _cmd_run(conn, task_id: str) -> None:
     # Шаг, на котором упал агент, запоминаем: чинить надо его, а не задачу
     # целиком. Без этого approve увёл бы упавшее ревью в in_dev и поднял
     # разработчика на ветке, где всё уже сделано.
+    note = ""
+    if failure_class == "session_limit":
+        # AC-10: причина — лимит сессии подписки, нужно дождаться reset
+        # (текст печатается тем же `set_state` ниже, что и в журнал).
+        note = (" — лимит сессии подписки исчерпан (класс 2), дождись "
+                "сброса (reset) лимита и повтори")
     store.update_task(conn, task_id, escalated_from=t["state"])
     store.set_state(conn, task_id, "escalated", "fsm",
                     expected_state=t["state"],
-                    detail=f"агент не отработал за {config.AGENT_ATTEMPTS} попытки: "
+                    detail=f"агент не отработал за {attempt} "
+                    f"{_attempts_word(attempt)}{note}: "
                     f"{reason}")
     print(f"  разберись по логам и: artel.py approve {task_id}  "
           f"(вернёт в {t['state']}, шаг повторится)")
@@ -689,14 +817,16 @@ def role_cmd() -> list[str]:
 
 
 def run_agent_once(conn, task_id: str, role: str, prompt: str,
-                   attempt: int) -> tuple[str, str]:
-    """Один запуск агента: исход попытки и пояснение к нему.
+                   attempt: int) -> tuple[str, str, str | None]:
+    """Один запуск агента: исход попытки, пояснение и класс отказа.
 
     Исход — "ok" | "failed" | "timeout" | "skipped"; ретраится в `cmd_run`
     только "failed" (ненулевой rc). Таймаут не ретраится: три подряд — это
     полтора часа до возврата управления Оператору. Отсутствие CLI — тоже:
     повторный запуск ничего не изменит, промпт уже сохранён для ручного
-    прогона.
+    прогона. Класс отказа (SPEC T082, требования 1-2) — `None` вне
+    "failed" и для нераспознанного текста; иначе решает `cmd_run` —
+    бэкофф связки «транзиентное системное» или немедленный отказ класса 2.
     """
     numbered = f"попытка {attempt}/{config.AGENT_ATTEMPTS}"
     log_path = agent_log.new_agent_log(task_id, role)
@@ -712,7 +842,7 @@ def run_agent_once(conn, task_id: str, role: str, prompt: str,
         store.journal(conn, task_id, role, "agent run SKIPPED",
                       f"промпт не записан в {prompt_path}: {exc}")
         print(f"[{task_id}] промпт шага не записан ({exc}) — шаг не начат")
-        return "skipped", f"промпт не записан: {exc}"
+        return "skipped", f"промпт не записан: {exc}", None
 
     # Окружение готовится до запуска и без запасного пути: не создался
     # каталог курируемого слоя — шаг не начинается. Тихо откатиться на HOME
@@ -724,7 +854,7 @@ def run_agent_once(conn, task_id: str, role: str, prompt: str,
                       f"каталог окружения роли не создан: {exc}")
         print(f"[{task_id}] окружение роли не подготовлено ({exc}) — "
               f"шаг не начат")
-        return "skipped", f"окружение роли не подготовлено: {exc}"
+        return "skipped", f"окружение роли не подготовлено: {exc}", None
 
     # Тот же принцип, что у окружения выше: рабочий каталог roли не создался —
     # шаг не стартует, тихого отката на ROOT нет (ADR-0003 §4).
@@ -735,7 +865,7 @@ def run_agent_once(conn, task_id: str, role: str, prompt: str,
                       f"рабочий каталог роли не создан: {exc}")
         print(f"[{task_id}] рабочий каталог роли не подготовлен ({exc}) — "
               f"шаг не начат")
-        return "skipped", f"рабочий каталог роли не подготовлен: {exc}"
+        return "skipped", f"рабочий каталог роли не подготовлен: {exc}", None
 
     # Отсутствие идентичности — не повод не запускать шаг (агент делает не
     # только коммит), но повод сказать об этом до запуска: иначе Оператор
@@ -770,7 +900,7 @@ def run_agent_once(conn, task_id: str, role: str, prompt: str,
         store.journal(conn, task_id, role, "agent run SKIPPED",
                       f"промпт не прочитан из {prompt_path}: {exc}")
         print(f"[{task_id}] промпт шага не прочитан ({exc}) — шаг не начат")
-        return "skipped", f"промпт не прочитан: {exc}"
+        return "skipped", f"промпт не прочитан: {exc}", None
 
     # Файл открыт только на время запуска: у процесса свой дескриптор,
     # а держать его открытым в оркестраторе незачем.
@@ -791,7 +921,7 @@ def run_agent_once(conn, task_id: str, role: str, prompt: str,
                           f"claude CLI не найден, промпт: {prompt_path}")
             print(f"claude CLI не найден. Промпт шага целиком записан в "
                   f"{prompt_path} — запусти роль вручную с ним.")
-            return "skipped", "claude CLI не найден"
+            return "skipped", "claude CLI не найден", None
 
     # Перекачка в потоке: чтение строк блокируется, пока агент молчит, а
     # таймаут шага должен срабатывать и на замолчавшем агенте.
@@ -835,7 +965,7 @@ def run_agent_once(conn, task_id: str, role: str, prompt: str,
                       f"{timeout_min}, {numbered} (без ретрая){spent}")
         print(f"[{task_id}] таймаут шага ({timeout_min}) — разберись и "
               f"перезапусти run")
-        return "timeout", f"таймаут шага ({timeout_min})"
+        return "timeout", f"таймаут шага ({timeout_min})", None
 
     if rc != 0:
         # Чекпоинт — до журнала провала, тем же доводом, что и у таймаута
@@ -846,12 +976,18 @@ def run_agent_once(conn, task_id: str, role: str, prompt: str,
         reason = (f"rc={rc}, {numbered}{spent}; "
                   f"хвост {log_path}:\n{agent_log.log_tail(log_path)}")
         store.journal(conn, task_id, role, "agent run FAILED", reason)
+        # Эвристики ошибок агента (SPEC T082): классификация по ПОЛНОМУ
+        # тексту попытки (не по усечённому хвосту выше) — журналирует
+        # сырой текст структурно и заводит алерты классов «обрыв
+        # потока»/2, решение о бэкоффе/немедленном отказе — за `cmd_run`.
+        failure_class = _record_failure_classification(
+            conn, task_id, role, numbered, _attempt_output_text(log_path))
         # В консоли хвост не повторяем: эти строки Оператор только что видел
         # вживую (перекачка пишет и в stdout, и в лог). В журнале он нужен —
         # `log <id>` читают потом, когда вывода на экране уже нет.
         print(f"[{task_id}] {role}: агент упал (rc={rc}, {numbered}), "
               f"причина в {log_path}")
-        return "failed", reason
+        return "failed", reason, failure_class
 
     if pump.error is not None:
         # Обрыв stdout-пайпа без таймаута (rc=0, но перекачка сама поймала
@@ -869,7 +1005,7 @@ def run_agent_once(conn, task_id: str, role: str, prompt: str,
                   f"rc={rc}, {numbered}{spent}")
     print(f"[{task_id}] {role} завершил (rc={rc}{spent}); "
           f"дальше: artel.py advance {task_id}")
-    return "ok", ""
+    return "ok", "", None
 
 
 def close_pump(conn, task_id: str, role: str, pump: agent_log.OutputPump,
