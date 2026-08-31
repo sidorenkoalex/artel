@@ -25,8 +25,26 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from orchestrator import (agent_log, auto, budget, catalog,  # noqa: E402
-                          config, fsm, gitcmd, pause, runner, store)
+                          ci, config, fsm, gitcmd, pause, runner, store)
 from tests.sandbox import capture, fake_git  # noqa: E402
+
+# Дефолтная CI-фикстура песочницы этого файла (SPEC T086): с этой задачи
+# `verifying` больше не безусловная остановка `auto` — он опрашивает CI
+# циклом (`orchestrator/auto.py`). Без мока `ci.verifying_status` любой
+# тест этого файла, дошедший до `verifying` (а `FSM_STATES`-свипы делают
+# это намеренно), поймал бы настоящий `VERIFYING_NONE` (fake_git отвечает
+# отказом на `rev-parse --verify`, requirement AC-1 T048) — тот НЕ
+# стоп-условие, и `_advance_verifying_poll` заснула бы взаправду на
+# `config.VERIFYING_POLL_INTERVAL_SEC` навсегда. Красный — не зелёный:
+# он воспроизводит СТАРОЕ поведение «стоп сразу, без цикла» (задача
+# остаётся в verifying, агент не звался), которое большинство тестов
+# этого файла уже ожидают по не связанной с CI причине; тесты, которым
+# нужен другой исход, переопределяют мок сами.
+_DEFAULT_VERIFYING_NOTE = "CI коммита aaaaaaaa не зелёный: guard=failure"
+
+
+def _default_verifying_status(branch: str) -> tuple[str, str]:
+    return ci.VERIFYING_RED, _DEFAULT_VERIFYING_NOTE
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
@@ -179,6 +197,11 @@ class AutoCycleTest(unittest.TestCase):
         self.git_spy = SpyRun()
         self.patch_object(gitcmd.subprocess, "run", self.git_spy)
 
+        # SPEC T086: дефолтный CI красный (см. комментарий над модулем) —
+        # тесты, которым нужен другой исход в verifying, патчат
+        # `ci.verifying_status` заново поверх этого дефолта.
+        self.patch_object(ci, "verifying_status", _default_verifying_status)
+
         self.agent = FakeRun()
         self.patch_object(runner, "cmd_run", self.agent)
 
@@ -270,7 +293,6 @@ class AutoStopsWhereTheOperatorIsNeededTest(AutoCycleTest):
             "merge_gate": "approve",
             "escalated": "log",
             "spec_writing": "advance",
-            "verifying": "advance",
         }
         for state, command in expected.items():
             with self.subTest(состояние=state):
@@ -283,10 +305,27 @@ class AutoStopsWhereTheOperatorIsNeededTest(AutoCycleTest):
                 self.assertIn("дальше:", out)
                 self.assertIn(f"artel.py {command} {self.TASK}", out)
 
+    def test_verifying_stop_names_reject_on_red_ci(self):
+        """SPEC T086, требование 2/AC-4: `verifying` больше не берёт свою
+        подсказку из `config.AUTO_STOP` (её там больше нет, см.
+        `test_stop_table_covers_every_state_outside_state_role`) — на
+        красном CI (дефолт песочницы этого файла) цикл называет reject."""
+        self.set_state("verifying")
+
+        out = self.auto()
+
+        reason, _ = config.AUTO_STOP_VERIFYING_RED
+        self.assertIn(reason, out)
+        self.assertIn("дальше:", out)
+        self.assertIn(f"artel.py reject {self.TASK}", out)
+
     def test_stop_table_covers_every_state_outside_state_role(self):
-        """Полнота таблицы подсказок: состояние без строки — остановка без совета."""
+        """Полнота таблицы подсказок: состояние без строки — остановка без
+        совета. Исключение — `verifying` (SPEC T086): та больше не
+        безусловная остановка, у неё своя логика в `auto.py`, не запись в
+        этом словаре (см. `AUTO_STOP_VERIFYING_RED`)."""
         self.assertEqual(set(config.AUTO_STOP),
-                         set(FSM_STATES) - set(config.STATE_ROLE))
+                         set(FSM_STATES) - set(config.STATE_ROLE) - {"verifying"})
 
     def test_terminal_states_ask_for_nothing(self):
         for state in ("done", "killed"):
@@ -301,8 +340,15 @@ class AutoStopsWhereTheOperatorIsNeededTest(AutoCycleTest):
         """Критерий приёмки 1: от in_dev до verifying без ручных run и advance.
 
         SPEC T079 вставила verifying между review и acceptance: verifying
-        не агентское состояние (нет роли, ждёт CI) — auto останавливается
-        на нём, как и раньше останавливался на acceptance.
+        не агентское состояние (нет роли, ждёт CI). С SPEC T086 auto не
+        просто останавливается на входе в него — сам опрашивает CI циклом
+        (`orchestrator/auto.py`); дефолт CI-фикстуры этого файла красный
+        (см. комментарий у модуля), так что опрос стопорит цикл сразу же,
+        тем же по наблюдаемому итогу поведением, что и раньше (задача
+        остаётся в verifying, ни одного лишнего вызова агента) — только
+        подсказка теперь называет `reject`, не общий текст `AUTO_STOP`
+        (та запись для `verifying` удалена, см. `test_stop_table_
+        covers_every_state_outside_state_role`).
         """
         self.write_plan("ready")
         self.set_state("in_dev")
@@ -312,7 +358,32 @@ class AutoStopsWhereTheOperatorIsNeededTest(AutoCycleTest):
 
         self.assertEqual(self.state(), "verifying")
         self.assertEqual(len(self.agent.calls), 2)
-        self.assertIn("ожидание зелёного CI ветки", out)
+        self.assertIn(config.AUTO_STOP_VERIFYING_RED[0], out)
+
+    def test_cycle_runs_the_task_from_dev_to_acceptance_when_ci_is_green(self):
+        """SPEC T086, требование 1/AC-3: verifying достигнутый ИЗНУТРИ
+        цикла (не только как стартовое состояние вызова) тоже не
+        останавливает auto — зелёный CI уводит дальше, тем же вызовом.
+
+        Регресс на риск конкретно этой реализации: специальная ветка
+        `_cmd_auto` для `state == "verifying"` держится ОТДЕЛЬНЫМ
+        дизъюнктом условия цикла (`role is not None or state ==
+        "verifying"`), а не проверкой на входе в функцию — упусти это,
+        и опрос сработал бы только когда verifying был стартовым
+        состоянием, но не когда до него дошли через review.
+        """
+        self.patch_object(ci, "verifying_status",
+                          lambda branch: (ci.VERIFYING_GREEN,
+                                          "CI коммита aaaaaaaa зелёный (2 проверок)"))
+        self.write_plan("ready")
+        self.set_state("in_dev")
+        self.agent.script = [lambda: None, lambda: self.write_review("approved", 1)]
+
+        out = self.auto()
+
+        self.assertEqual(self.state(), "acceptance")
+        self.assertEqual(len(self.agent.calls), 2)
+        self.assertIn("приёмка — решение Оператора", out)
 
     def test_review_iterations_are_passed_without_the_operator(self):
         """Замечания ревью — тоже агентские шаги: цикл их отрабатывает сам."""
@@ -713,12 +784,18 @@ class AutoReportsTheCycleTest(AutoCycleTest):
                          [("operator", "auto остановлен")])
 
     def test_stop_reason_is_in_the_journal_detail(self):
-        """Требование 5: причина остановки — в detail, а не только на экране."""
+        """Требование 5: причина остановки — в detail, а не только на экране.
+
+        SPEC T086: `verifying` больше не берёт подсказку из `config.
+        AUTO_STOP` (записи для него там больше нет) — красный CI
+        (дефолт песочницы этого файла) останавливает цикл своей веткой в
+        `auto.py`, причина — `config.AUTO_STOP_VERIFYING_RED`.
+        """
         self.auto()
 
         detail = self.journal_detail("auto остановлен")
         self.assertTrue(detail.startswith("verifying:"), detail)
-        self.assertIn(config.AUTO_STOP["verifying"][0], detail)
+        self.assertIn(config.AUTO_STOP_VERIFYING_RED[0], detail)
 
 
 class AutoNeverPassesAGateTest(AutoCycleTest):
