@@ -2,8 +2,8 @@
 task: T079
 type: review
 author_role: reviewer
-status: changes_requested        # draft | approved | changes_requested | escalate
-iteration: 1
+status: approved        # draft | approved | changes_requested | escalate
+iteration: 2
 schema_version: 2    # версия формата артефакта, см. scripts/guard.py
 ---
 
@@ -13,38 +13,83 @@ schema_version: 2    # версия формата артефакта, см. scr
 
 | Требование | Вердикт | Комментарий |
 |---|---|---|
-| 1 (Draft MR на первый вход в in_dev, один на цикл) | Реализовано не так | `ensure_draft_mr` и её идемпотентность (`draft_mr_created`) корректны сами по себе, но узел `_maybe_ensure_draft_mr` вызывается не на всех входах в `in_dev` — см. Замечание 1. |
-| 2 (undraft на входе в merge_gate) | OK | `_cmd_approve` (fsm.py:1283-1287) зовёт `github_adapter.undraft_mr` сразу после `set_state(..., "merge_gate", ...)`; сбой адаптера — инцидент, не блокирует гейт (unit-тесты `UndraftMrTest`). |
-| 3 (merge — побочный эффект локального push, не API-вызов) | OK | `_cmd_approve_merge_gate` не тронута; адаптер не несёт отдельного merge-вызова (ANSWER-1, вариант B) — подтверждено чтением `orchestrator/github_adapter.py` и diff `fsm.py` (нет новых вызовов в merge_gate-ветке `approve`, кроме undraft на входе). |
-| 4 (verifying между review и acceptance) | Реализовано верно, с открытой эскалацией | `review -> verifying` — единственный исход по approved+зелёным acceptance_tests (fsm.py:826-835); AC-4 зелёный. Конфликт с `tests/test_invariants.py` (3 теста) — реален, подтверждён прогоном, корректно проанализирован и вынесен в PLAN «Эскалация»; см. «Проверено исполнением» и «Вердикт». |
-| 5 (четыре исхода статуса CI в verifying) | OK | `ci.verifying_status`/`run_list` разбирают все 4 исхода корректно (`RunListTest`, `VerifyingStatusTest`, AC-5..AC-8 — все зелёные); тонкая развилка «check_runs вернул (None, why)» трактуется как «пусто» и уходит на `run_list` — согласуется с духом требования, не противоречит формулировке. |
-| 6 (потолок ожидания → escalated) | OK | `LIMIT_VERIFYING_ATTEMPTS`, счётчик попыток, сброс на входе в verifying (fsm.py:832, 883) — AC-9 зелёный. |
-| 7 (красный CI не выталкивает автоматически) | OK | Ветка `verifying` в `_cmd_advance` не имеет пути в `in_dev` без явного `reject`; AC-8 подтверждает. |
-| 8 (reject расширен на verifying) | OK | `_cmd_reject` (fsm.py:1358-1370) — AC-10, AC-11 зелёные, счётчики не растут. |
-| 9 (механизм периодического вызова advance вне объёма) | OK | Не реализовывался, контракт разового вызова соблюдён. |
+| 1 (Draft MR на первый вход в in_dev, один на цикл) | Реализовано верно | Замечание 1 итерации 1 закрыто: `_maybe_ensure_draft_mr` теперь стоит на всех 8 фактических точках входа в `in_dev` — проверено построчно (`grep -n 'set_state(conn, task_id, "in_dev"\|back = t\[.escalated_from.\]'` даёт 8 совпадений, `grep -n '_maybe_ensure_draft_mr'` — 8 вызовов, каждый привязан к своему `set_state`/ветке `back == "in_dev"`, включая корректно исключённые ветки — возврат из эскалации не в `in_dev` (fsm.py:1333) и эскалацию по лимиту приёмки (fsm.py:1377-1380), которые узел заводить не должны). Идемпотентность несёт `draft_mr_created` в `github_adapter.ensure_draft_mr`. |
+| 2 (undraft на входе в merge_gate) | OK | Не тронуто этой итерацией; подтверждено повторным прогоном `UndraftMrTest`. |
+| 3 (merge — побочный эффект локального push, не API-вызов) | OK | Не тронуто этой итерацией. |
+| 4 (verifying между review и acceptance) | Реализовано верно, с открытой эскалацией (не закрывает вердикт) | Не тронуто этой итерацией; конфликт с `tests/test_invariants.py` (3 теста) остаётся тем же, что и в итерации 1 — подтверждён повторным прогоном, корректно проанализирован в PLAN «Эскалация», решение за Оператором. |
+| 5 (четыре исхода статуса CI в verifying) | OK | Не тронуто этой итерацией. |
+| 6 (потолок ожидания → escalated) | OK | Не тронуто этой итерацией. |
+| 7 (красный CI не выталкивает автоматически) | OK | Не тронуто этой итерацией. |
+| 8 (reject расширен на verifying) | OK | Не тронуто этой итерацией. |
+| 9 (механизм периодического вызова advance вне объёма) | OK | Не тронуто этой итерацией. |
 
 ## Замечания
 
-- major — `orchestrator/fsm.py:1329-1333` (возврат из `escalated` в состояние `t["escalated_from"] or "in_dev"`) и `orchestrator/fsm.py:1371-1383` (`reject` из `acceptance` в `in_dev`, унаследованный путь T052) — оба являются легитимными повторными входами задачи в `in_dev`, но не зовут `_maybe_ensure_draft_mr`, в отличие от всех остальных 6 точек входа в `in_dev` в этом diff (fsm.py:848, 940, 1123, 1270, 1356, 1369). Само PLAN.md прямо формулирует намерение как «побочный эффект входа в `in_dev`» (не «побочный эффект НЕКОТОРЫХ входов») — это расхождение между декларируемым дизайном и фактическим покрытием точек вызова.
-  Конкретный сценарий поломки: `ensure_draft_mr` падает на самом первом входе в `in_dev` (например, транзиентный сбой `git push -u origin <branch>` или `gh pr create`) — до этой задачи ветка задачи была локальной до самого merge (PLAN «Риски»), т.е. без успешного push ветка вообще не существует на GitHub и check-runs/`gh run list` НИКОГДА её не увидят (проверено: `.github/workflows/ci.yml` триггерится на `push`/`pull_request`, значит без реального push проверок не будет вовсе). Если после этого до входа в `review` не случится ни одной итерации `changes_requested` (обычный путь ретрая, fsm.py:848) — задача доходит до `verifying`, «проверок нет вовсе» держит её до истечения потолка (AC-9), она уходит в `escalated`. Оператор разрешает эскалацию (`approve`) — по коду `escalated_from` для этого класса эскалации не пишется (докстринг fsm.py:1324-1328), значит `back` = `"in_dev"` по умолчанию (fsm.py:1329) — но `_maybe_ensure_draft_mr` здесь не зовётся. Если новый цикл разработки снова доходит до `review -> approved` без `changes_requested`, Draft MR так и не заводится, и цикл эскалации по потолку `verifying` повторяется бесконечно без вмешательства вне FSM.
-  Предложение: добавить `_maybe_ensure_draft_mr(conn, task_id)` в обеих точках, тем же приёмом, что и в уже покрытых шести местах (после `set_state` на `in_dev`, до `return`/до конца ветки).
+Замечаний нет. Замечание 1 итерации 1 (major, два пропущенных входа
+в `in_dev`) закрыто классово, а не точечно: `orchestrator/fsm.py:1333-1334`
+(возврат из `escalated`, только когда `back == "in_dev"`) и
+`orchestrator/fsm.py:1386` (`reject` из `acceptance`, ветка «лимит не
+исчерпан») — две новые точки; уже стоявшие в итерации 1
+`orchestrator/fsm.py:1358, 1371` (`reject` из `merge_gate`/`verifying`)
+не тронуты. Регресс на оба новых места и их отрицательные соседние
+ветки — `tests/test_fsm_draft_mr_reentry.py` (5 тестов, включая
+проверку, что возврат из эскалации в состояние, отличное от `in_dev`,
+и эскалация по лимиту приёмки узел НЕ зовут).
 
-- minor — `orchestrator/github_adapter.py:34-66` (`ensure_draft_mr`) — если `gh pr create --draft` падает с ошибкой «уже существует» (PR реально есть на GitHub, например из-за гонки push/create или предыдущей частично успешной попытки), функция помечает это инцидентом и НЕ выставляет `draft_mr_created=1` — при каждом следующем входе в `in_dev` она будет повторять ту же попытку `pr create` и снова падать с той же ошибкой, без способа обнаружить, что MR на самом деле уже заведён. Не блокирует эту задачу (узкий случай, покрыт инцидент-алертом, не ломает FSM), но стоит учитывать при последующей доработке адаптера.
+Замечание 2 итерации 1 (minor, гонка `gh pr create` на «уже
+существует») этой итерацией не закрывалось — ожидаемо: minor не
+блокирует, PLAN на него не ссылается как на закрытое, узкий случай
+покрыт инцидент-алертом и не ломает FSM.
 
 ## Вердикт
 
-changes_requested — устранить пробел из Замечания 1 (два непокрытых входа в `in_dev`) и повторно прогнать `tests/test_github_adapter.py`/полный юнит-сьют.
-
-Отдельно, вне рамок «исправь и подай снова»: конфликт SPEC-требования 4 (AC-4) с тремя тестами `tests/test_invariants.py` — подтверждён прогоном (см. «Проверено исполнением»), реализация соответствует SPEC буквально и корректно, конфликт вызван протекцией `no_paths` (AC-14) на файле, кодирующем СТАРЫЙ инвариант «review → acceptance за один advance», который требование 4 сознательно отменяет. Разработчик не имеет права править `tests/test_invariants.py` (ADR-0002) — решение (принять готовый минимальный патч из PLAN «Эскалация», вариант (а)/default, либо иное) остаётся за Оператором и этим REVIEW не блокируется: весь диапазон `tasks/T079/acceptance_tests/` (19/19, включая AC-4) зелёный без единой правки, AC-14 подтверждён отдельно (`test_ac14_path_scope.py`).
+approved — замечание 1 (major) итерации 1 закрыто полностью на всех
+8 точках входа в `in_dev`, регресс есть, полный юнит-сьют и локед
+acceptance_tests зелёные (кроме заранее эскалированного и
+проанализированного конфликта с `tests/test_invariants.py`,
+не входящего в объём «исправь и подай снова» — решение за Оператором,
+см. «Эскалация» в PLAN.md, актуальна без изменений с итерации 1).
 
 ## Проверено исполнением
 
-- `python3 -m unittest discover -s tests` — 1063 теста, 3 красных (все три — `tests/test_invariants.py::FreshVerdictGuardsAcceptanceTest`/`CountersNeverResetTest`, ассерт `state() == "acceptance"` после одного `advance` из `review`, вместо `"verifying"` — совпадает с заявленным в PLAN «Эскалация» конфликтом; фактическая красная тройка идентична названной).
-- `cd tasks/T079/acceptance_tests && python3 -m unittest discover -s . -p "test_*.py"` — 19/19 зелёные (AC-1..AC-14 покрыты, включая manual-пометки AC-1/2/3/13 и AC-14 path-scope).
-- `python3 -m unittest tests.test_merge_lock tests.test_advance_guard` — 18/18 зелёные (AC-13: T052/T053 не задеты).
-- `python3 scripts/codebase_map.py` (регенерация вручную, изменения затем отменены `git checkout -- docs/codebase-map.md`) — diff свёлся только к строке `built_at_sha` (ветка успела уйти вперёд отдельным коммитом после того, как разработчик коммитил карту) — содержимое карты (без sha) идентично закоммиченному, регенерация не устарела.
-- Прочитаны (без правки) для проверки конкретных замечаний: `orchestrator/fsm.py` (все точки перехода в `in_dev`, ветка `verifying` в `_cmd_advance`, `_cmd_reject`, `_cmd_approve`), `orchestrator/github_adapter.py`, `orchestrator/ci.py` (новые функции), `orchestrator/alerts.py` (сигнатура `raise_alert` — совпадает с вызовом в `_incident`), `orchestrator/targets.py` (сигнатура `target()`/`TargetsError` — совпадает с `_is_github_target`), `tests/test_invariants.py` (`FSM_STATES`, `STATE_ROLE` — «verifying» не входит в `STATE_ROLE`, поэтому `FsmStatesCoverTheCodeTest` не страдает от отсутствия «verifying» в защищённом `FSM_STATES`), `.github/workflows/ci.yml` (триггеры `push`/`pull_request` — обосновывает серьёзность Замечания 1).
+- `git log --oneline -5` / `git status` — ветка чистая, коммит
+  `c167c55` («T079: закрыт REVIEW замечание 1 — Draft MR на всех
+  входах в in_dev») поверх `d5fb77b` (REVIEW итерации 1).
+- Прочитан `orchestrator/fsm.py` целиком вокруг всех 8 точек входа
+  в `in_dev` (строки 835-848, 925-940, 1115-1123, 1260-1271,
+  1300-1335, 1347-1386) — каждый вызов `_maybe_ensure_draft_mr`
+  привязан к правильному `set_state`/условию, отрицательные ветки
+  (возврат эскалации не в `in_dev`, эскалация по лимиту приёмки)
+  корректно его не зовут.
+- `grep -n 'set_state(conn, task_id, "in_dev"\|back = t\[.escalated_from.\]' orchestrator/fsm.py`
+  — 8 совпадений; `grep -n '_maybe_ensure_draft_mr' orchestrator/fsm.py`
+  — 9 строк (1 определение + 8 использований в перечисленных местах)
+  — построчное соответствие подтверждено (см. «Соответствие SPEC»,
+  требование 1).
+- `python3 -m unittest discover -s tests` — 1068 тестов, 3 красных
+  (`test_invariants.CountersNeverResetTest::
+  test_no_transition_of_the_full_cycle_resets_a_counter`,
+  `test_invariants.FreshVerdictGuardsAcceptanceTest::
+  test_escalation_and_return_do_not_make_the_verdict_fresh`,
+  `test_invariants.FreshVerdictGuardsAcceptanceTest::
+  test_every_return_to_dev_requires_a_new_verdict`) — список идентичен
+  заявленному в PLAN.md и итерации 1, новых красных нет.
+- `python3 -m unittest tests.test_fsm_draft_mr_reentry tests.test_merge_lock tests.test_advance_guard`
+  — 23/23 зелёные (5 новых регресс-тестов на оба закрытых пробела +
+  их отрицательные ветки; T052/T053 не задеты, AC-13).
+- `cd tasks/T079/acceptance_tests && python3 -m unittest discover -s . -p "test_*.py"`
+  — 19/19 зелёные (AC-1..AC-14, включая AC-4).
+- `git diff main --stat -- gates.yaml roles.yaml targets.yaml .github/ templates/ skills/ docs/invariants.md tests/test_invariants.py CLAUDE.md`
+  — пусто: ни один путь `no_paths` target `artel` не тронут (AC-14).
+- `python3 scripts/codebase_map.py` (регенерация вручную, изменения
+  затем отменены `git checkout -- docs/codebase-map.md`) — diff свёлся
+  только к строке `built_at_sha` (ветка ушла на один коммит вперёд
+  после того, как карта была закоммичена вместе с ним) — содержимое
+  карты без sha идентично закоммиченному, регенерация не устарела.
 
 ## Предложения системе
 
-- Класс «побочный эффект входа в состояние X реализован не на ВСЕХ фактических путях входа в X» — здесь у `_maybe_ensure_draft_mr` 6 из 8 точек входа в `in_dev` покрыты, 2 пропущены (Замечание 1). Стоило бы завести для этого класса такой же явный чек-лист-приём, как уже есть для «промежуточное состояние ломает свипы test_invariants.py» (PLAN этой же задачи, «Предложения системе»): при добавлении узла, который должен сработать «на каждом входе в состояние Y», разработчику стоит явно перечислить (и держать актуальным списком в комментарии/тесте) все `set_state(..., "Y", ...)` в модуле — иначе рефакторинг/новая ветка эскалации молча теряет побочный эффект.
+Нет новых сверх уже зафиксированных в PLAN.md и REVIEW.md итерации 1
+(класс «промежуточное состояние ломает свипы test_invariants.py» и
+класс «побочный эффект входа в состояние X не на всех фактических
+путях входа» — оба уже описаны там, повторять не буду).
