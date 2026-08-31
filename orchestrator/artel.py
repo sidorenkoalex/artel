@@ -41,6 +41,20 @@ SPEC; кто задал потолок, помнит колонка budget_sourc
 ветку задачи, не смерженную в main. Всё убранное и всё оставленное —
 записью `уборка` в журнале. Логи прогонов не трогаются.
 
+`merge_gate -> done` (approve) той же логикой убирает worktree и, следом
+за ним, локальную ветку задачи — та уже влита `--no-ff` в main (история
+мержа полная, без squash), поэтому удаляется безопасным `git branch -d`
+(tasks/T073/SPEC.md, требование 2). Обе уборки — журналом.
+
+`prune [--execute]` (tasks/T073/SPEC.md) исполняет retention-политику
+`docs/retention.md` для `.artel/logs/` (90 дней И N=20 последних задач,
+`config.LOG_RETENTION_DAYS`/`LOG_RETENTION_KEEP_TASKS`) и `alerts`
+(архивация старше 90 дней в `alerts_archive`, не удаление). Без флага —
+dry-run: план, ничего не трогает. С `--execute` — исполняет и печатает,
+что́ фактически убрано. Не привязана к переходу FSM ни одной задачи и
+не отменяет инвариант 16 (`.artel/logs/` уборка `kill`/`done` не
+трогает) — `prune` не часть этой уборки.
+
 Вердикт ревьювера учитывается конечным автоматом ровно один раз: после
 возврата задачи в in_dev переход review -> acceptance требует нового
 REVIEW.md (iteration больше уже учтённого, см. fresh_verdict_iteration).
@@ -77,10 +91,10 @@ workspace, tasks, knowledge, logs). БД одна на все проекты: с
 Команды:
   init | new "<название>" [--tz <файл>] | status | show <id> | advance <id> |
   run <id> | auto <id> | approve <id> [sha] | reject <id> "<причина>" |
-  answer <id> <файл-с-ответом> | kill <id> | release <id> | pause <id> |
-  resume <id> | log <id> | budget <id> <usd> | target-init <target> |
-  doctor [--restore] | alert-ack <id> "<решение>" | version |
-  canary <каталог-ТЗ> [--rewrite-baseline]
+  answer <id> <файл-с-ответом> | kill <id> | release <id> |
+  pause [--now] <id> | resume <id> | log <id> | budget <id> <usd> |
+  target-init <target> | doctor [--restore] | alert-ack <id> "<решение>" |
+  version | canary <каталог-ТЗ> [--rewrite-baseline] | prune [--execute]
 
 `pause <id>` (SPEC T070) — штатная приостановка: помечает задачу в БД,
 не заводя нового состояния FSM; `run`/`auto` перед стартом агентного
@@ -88,6 +102,17 @@ workspace, tasks, knowledge, logs). БД одна на все проекты: с
 прерывается. `resume <id>` снимает пометку, сама шаги не запускает.
 `kill`/`approve`/`reject`/`advance` пометку не читают и работают на
 приостановленной задаче как обычно.
+
+`pause --now <id>` (SPEC T074) — жёсткая приостановка: та же пометка,
+что у обычной `pause`, ПЛЮС, если сейчас бежит агентный шаг задачи (в
+этом же процессе или в другом процессе этой машины — параллельная
+CLI-сессия, фоновый `auto`), прерывает его: процесс агента завершается,
+незакоммиченный WIP worktree задачи чекпоинтится служебным коммитом с
+пометкой причины «pause --now», lease держателя снимается, частичная
+стоимость шага учитывается по механике T040. Адресация — по данным
+lease задачи (pid, host); lease нет, его процесс мёртв или агентного
+шага сейчас нет вовсе — честная деградация до обычной `pause`, не
+ошибка; lease на другом host — честный отказ прервать (вне объёма).
 
 `release <id>` — операторское снятие lease задачи (SPEC T062): удаляет
 строку `leases` независимо от свежести heartbeat и журналирует данные
@@ -151,12 +176,13 @@ SPEC, PLAN — в ревью, REVIEW — из ревью). Нарушение с
   cleanup   kill switch и уборка хвостов задачи
   release   операторское снятие lease задачи, независимо от свежести (T062)
   answer    канал ответа Оператора на эскалацию: ANSWER-n.md (T075)
-  pause     штатная приостановка задачи: pause/resume, без нового состояния FSM (T070)
+  pause     штатная и жёсткая (--now) приостановка задачи: pause/resume (T070, T074)
   catalog   каталог задач: init, new, status, show, log
   alerts    таблица alerts: incident|threshold|trigger, ack с решением (A3)
   doctor    pre-flight, recovery-сверка, сироты, смоук CLI/изоляции (A3)
   version   пин CLI, фактическая версия, версия схемы артефактов (T030)
   canary    синтетический прогон конвейера, метрики, бейзлайн (T065)
+  prune     retention-политика: .artel/logs/, архивация alerts (T073)
 """
 import sys
 from pathlib import Path
@@ -169,7 +195,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from orchestrator import (answer, auto, budget, canary, catalog,  # noqa: E402
-                          cleanup, config, doctor, fsm, pause, projects,
+                          cleanup, config, doctor, fsm, pause, projects, prune,
                           release, runner, version, workspace)
 
 
@@ -212,6 +238,19 @@ def _tz_arg(rest: list) -> str | None:
     return rest[idx + 1]
 
 
+def _cmd_pause(rest: list) -> None:
+    """`pause <id>` (T070) либо `pause --now <id>` (T074) — флаг перед id,
+    тем же местом разбора, что уже держит команду `pause` в таблице
+    диспетчера ниже, а не второй записью в ней (SPEC T074 называет её
+    формой той же команды `pause`, не отдельной)."""
+    if rest and rest[0] == "--now":
+        if len(rest) < 2:
+            sys.exit("pause --now требует id задачи следующим аргументом.")
+        pause.cmd_pause_now(rest[1])
+        return
+    pause.cmd_pause(rest[0])
+
+
 def main() -> None:
     _refuse_if_worktree()
     args = sys.argv[1:]
@@ -235,7 +274,7 @@ def main() -> None:
         "answer": lambda: answer.cmd_answer(rest[0], rest[1]),
         "kill": lambda: cleanup.cmd_kill(rest[0]),
         "release": lambda: release.cmd_release(rest[0]),
-        "pause": lambda: pause.cmd_pause(rest[0]),
+        "pause": lambda: _cmd_pause(rest),
         "resume": lambda: pause.cmd_resume(rest[0]),
         "log": lambda: catalog.cmd_log(rest[0]),
         "budget": lambda: budget.cmd_budget(rest[0],
@@ -247,6 +286,7 @@ def main() -> None:
         "version": lambda: version.cmd_version(),
         "canary": lambda: canary.cmd_canary(
             rest[0], rewrite_baseline="--rewrite-baseline" in rest),
+        "prune": lambda: prune.cmd_prune("--execute" in rest),
     }
     fn = table.get(cmd)
     if fn is None:

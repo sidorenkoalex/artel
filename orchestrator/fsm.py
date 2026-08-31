@@ -5,9 +5,9 @@ from pathlib import Path
 
 from scripts import guard
 
-from . import (acceptance, alerts, artifacts, budget, ci, config, fixation,
-              gates, gitcmd, lease, merge_lock, retro, store, workspace,
-              yamlmini)
+from . import (acceptance, alerts, artifacts, budget, ci, cleanup, config,
+              fixation, gates, gitcmd, lease, merge_lock, retro, store,
+              workspace, yamlmini)
 
 # Регенерация/коммит карты кодовой базы на merge_gate (SPEC T042).
 MAP_REL = "docs/codebase-map.md"
@@ -1094,6 +1094,10 @@ def _cmd_approve_merge_gate(conn, task_id: str, state: str, t) -> None:
     # смержено, дальше агентным шагам там делать нечего.
     note = workspace.remove(task_id)
     store.journal(conn, task_id, "orchestrator", "worktree убран", note)
+    # Ветка задачи — следом за worktree (tasks/T073/SPEC.md, требование 2):
+    # `-d` откажет, пока ветку держит worktree, поэтому порядок обязателен.
+    branch_note = cleanup.drop_merged_task_branch(branch)
+    store.journal(conn, task_id, "orchestrator", "ветка убрана", branch_note)
 
 
 def cmd_approve(task_id: str, sha: str | None = None,
