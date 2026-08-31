@@ -23,7 +23,8 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from orchestrator import config, gitcmd, store  # noqa: E402
-from tests.sandbox import ALL_CONFIG_ATTRS, TmpRootTest  # noqa: E402
+from tests.sandbox import (ALL_CONFIG_ATTRS, TmpRootTest,  # noqa: E402
+                           resilient_tmp_cleanup)
 
 
 class RealGitSandbox(TmpRootTest):
@@ -31,7 +32,7 @@ class RealGitSandbox(TmpRootTest):
 
     def setUp(self):
         tmp = tempfile.TemporaryDirectory()
-        self.addCleanup(tmp.cleanup)
+        self.addCleanup(resilient_tmp_cleanup, tmp)
         self.root = Path(tmp.name).resolve()
 
         self.git("init", "-q", "-b", config.MAIN_BRANCH)

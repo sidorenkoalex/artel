@@ -18,7 +18,7 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from orchestrator import catalog, config, gitcmd, store, workspace  # noqa: E402
-from tests.sandbox import capture  # noqa: E402
+from tests.sandbox import capture, resilient_tmp_cleanup  # noqa: E402
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
@@ -32,7 +32,7 @@ class RealGitWorkspaceTest(unittest.TestCase):
 
     def setUp(self):
         tmp = tempfile.TemporaryDirectory()
-        self.addCleanup(tmp.cleanup)
+        self.addCleanup(resilient_tmp_cleanup, tmp)
         # resolve(): на macOS /var — симлинк на /private/var.
         self.root = Path(tmp.name).resolve()
 
