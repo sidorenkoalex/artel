@@ -33,7 +33,8 @@ CREATE TABLE IF NOT EXISTS tasks (
   budget_usd REAL, spent_usd REAL DEFAULT 0, budget_source TEXT,
   target TEXT DEFAULT '{config.DEFAULT_TARGET}', fixed_sha TEXT,
   tests_locked_sha TEXT, is_canary INTEGER DEFAULT 0, paused INTEGER DEFAULT 0,
-  answer_baseline INTEGER,
+  answer_baseline INTEGER, verifying_attempts INTEGER DEFAULT 0,
+  draft_mr_created INTEGER DEFAULT 0,
   created_at TEXT, updated_at TEXT
 );
 CREATE TABLE IF NOT EXISTS steps (
@@ -159,6 +160,14 @@ def migrate(conn: sqlite3.Connection) -> None:
     # отказывает. Число, не булев флаг: гейт различает НОВЫЙ ответ от уже
     # существующего файла прошлого раунда эскалации той же задачи.
     add_column(conn, "tasks", "answer_baseline", "INTEGER")
+    # Счётчик попыток advance в verifying без зелёного CI (SPEC T079,
+    # требование 6) — потолок ожидания; сбрасывается на каждом входе в
+    # verifying (fsm.py), растёт на каждом не-зелёном advance оттуда же.
+    add_column(conn, "tasks", "verifying_attempts", "INTEGER DEFAULT 0")
+    # Идемпотентность Draft MR (SPEC T079, требование 1): MR заводится
+    # ровно один раз за жизненный цикл задачи — колонка, не запрос к
+    # GitHub на каждый вход в in_dev (orchestrator/github_adapter.py).
+    add_column(conn, "tasks", "draft_mr_created", "INTEGER DEFAULT 0")
     conn.executescript(
         "CREATE TABLE IF NOT EXISTS task_counters ("
         "  target TEXT PRIMARY KEY, next_number INTEGER NOT NULL);")

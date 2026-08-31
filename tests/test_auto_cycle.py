@@ -36,8 +36,8 @@ REAL_CMD_RUN = runner.cmd_run
 
 # Все состояния FSM Фазы 0 — тот же список, что в tests/test_invariants.py:
 # реестра состояний в коде нет, а свипы этого модуля должны идти по всем.
-FSM_STATES = ("spec_writing", "spec_gate", "in_dev", "review", "acceptance",
-              "merge_gate", "done", "escalated", "killed")
+FSM_STATES = ("spec_writing", "spec_gate", "in_dev", "review", "verifying",
+              "acceptance", "merge_gate", "done", "escalated", "killed")
 
 # Заготовки валидны по guard: с T017 он вызывается на каждом переходе
 # `advance`, и артефакт без обязательных секций цикл дальше не пускает.
@@ -270,6 +270,7 @@ class AutoStopsWhereTheOperatorIsNeededTest(AutoCycleTest):
             "merge_gate": "approve",
             "escalated": "log",
             "spec_writing": "advance",
+            "verifying": "advance",
         }
         for state, command in expected.items():
             with self.subTest(состояние=state):
@@ -296,17 +297,22 @@ class AutoStopsWhereTheOperatorIsNeededTest(AutoCycleTest):
 
                 self.assertIn("ничего не требуется", out)
 
-    def test_cycle_runs_the_task_from_dev_to_acceptance(self):
-        """Критерий приёмки 1: от in_dev до приёмки без ручных run и advance."""
+    def test_cycle_runs_the_task_from_dev_to_verifying(self):
+        """Критерий приёмки 1: от in_dev до verifying без ручных run и advance.
+
+        SPEC T079 вставила verifying между review и acceptance: verifying
+        не агентское состояние (нет роли, ждёт CI) — auto останавливается
+        на нём, как и раньше останавливался на acceptance.
+        """
         self.write_plan("ready")
         self.set_state("in_dev")
         self.agent.script = [lambda: None, lambda: self.write_review("approved", 1)]
 
         out = self.auto()
 
-        self.assertEqual(self.state(), "acceptance")
+        self.assertEqual(self.state(), "verifying")
         self.assertEqual(len(self.agent.calls), 2)
-        self.assertIn("приёмка — решение Оператора", out)
+        self.assertIn("ожидание зелёного CI ветки", out)
 
     def test_review_iterations_are_passed_without_the_operator(self):
         """Замечания ревью — тоже агентские шаги: цикл их отрабатывает сам."""
@@ -321,7 +327,7 @@ class AutoStopsWhereTheOperatorIsNeededTest(AutoCycleTest):
 
         self.auto()
 
-        self.assertEqual(self.state(), "acceptance")
+        self.assertEqual(self.state(), "verifying")
         self.assertEqual(len(self.agent.calls), 4)
         self.assertEqual(self.task_row()["review_iters"], 1)
 
@@ -693,7 +699,7 @@ class AutoReportsTheCycleTest(AutoCycleTest):
         out = self.auto()
 
         self.assertIn("лог: —", out)
-        self.assertEqual(self.state(), "acceptance")
+        self.assertEqual(self.state(), "verifying")
 
     def test_start_and_stop_are_journalled_by_the_operator(self):
         self.auto()
@@ -711,8 +717,8 @@ class AutoReportsTheCycleTest(AutoCycleTest):
         self.auto()
 
         detail = self.journal_detail("auto остановлен")
-        self.assertTrue(detail.startswith("acceptance:"), detail)
-        self.assertIn(config.AUTO_STOP["acceptance"][0], detail)
+        self.assertTrue(detail.startswith("verifying:"), detail)
+        self.assertIn(config.AUTO_STOP["verifying"][0], detail)
 
 
 class AutoNeverPassesAGateTest(AutoCycleTest):
@@ -770,8 +776,8 @@ class AutoNeverPassesAGateTest(AutoCycleTest):
 
         self.auto()
 
-        self.assertEqual(self.state(), "acceptance",
-                         "auto увела задачу дальше приёмки")
+        self.assertEqual(self.state(), "verifying",
+                         "auto увела задачу дальше verifying")
         self.assertNotIn("merge", self.git_spy.git_subcommands())
 
 
