@@ -423,6 +423,59 @@ class RednessMarkerMessageTest(unittest.TestCase):
              "маркером)"])
 
 
+class AcMarkerScannersOnlyReadTestFilesTest(unittest.TestCase):
+    """`scan_acceptance_tests` и `scan_redness_markers` читают только
+    `acceptance_tests/test_*.py` (SPEC T081, требование 3): маркер/тест-
+    метод во вспомогательном файле вроде `_sandbox.py` не считается, тот
+    же маркер в `test_*.py` — считается (тот же приём, что T064 уже
+    применил к маркеру красноты)."""
+
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.tdir = Path(tmp.name)
+        (self.tdir / "acceptance_tests").mkdir(parents=True)
+
+    def write(self, name: str, content: str) -> None:
+        (self.tdir / "acceptance_tests" / name).write_text(
+            content, encoding="utf-8")
+
+    def test_scan_acceptance_tests_ignores_non_test_file(self):
+        self.write("_sandbox.py",
+                   "def test_ac1_helper():\n    pass\n\n"
+                   "# AC-2: manual — проверка глазами\n")
+
+        tested, markers = guard.scan_acceptance_tests(self.tdir)
+
+        self.assertEqual(tested, set())
+        self.assertEqual(markers, {})
+
+    def test_scan_acceptance_tests_reads_test_file(self):
+        self.write("test_ac.py",
+                   "def test_ac1_helper():\n    pass\n\n"
+                   "# AC-2: manual — проверка глазами\n")
+
+        tested, markers = guard.scan_acceptance_tests(self.tdir)
+
+        self.assertEqual(tested, {1})
+        self.assertEqual(markers, {2: ("manual", "проверка глазами")})
+
+    def test_scan_redness_markers_ignores_non_test_file(self):
+        self.write("_sandbox.py", '"""Обычный докстринг без маркера."""\n')
+
+        errors = guard.scan_redness_markers(self.tdir)
+
+        self.assertEqual(errors, [])
+
+    def test_scan_redness_markers_reads_test_file(self):
+        self.write("test_ac.py", '"""Обычный докстринг без маркера."""\n')
+
+        errors = guard.scan_redness_markers(self.tdir)
+
+        self.assertEqual(len(errors), 1)
+        self.assertIn("test_ac.py", errors[0])
+
+
 class UnreadableArtifactTest(unittest.TestCase):
     """Guard зовётся из FSM: нечитаемый файл — нарушение, а не исключение."""
 
