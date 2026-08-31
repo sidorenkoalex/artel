@@ -86,6 +86,12 @@ schema_version: 2
 # tests/test_acceptance_tests_flow.py::AC_TEST_ESCALATE_AC2): эскалация
 # проверяется раньше трассируемости остальных критериев (fsm.py,
 # `_cmd_advance`, ветка `tests_writing`), так что непокрытый AC-1 не мешает.
+# Маркер собран конкатенацией, чтобы литерал «AC-n: escalate» не встречался
+# в тексте ЭТОГО файла: сканер AC-маркеров (scripts/guard.py::
+# scan_acceptance_tests) читает все *.py каталога, включая _sandbox.py,
+# и принял бы фикстуру за настоящую эскалацию задачи T075 (случилось
+# 31.08, ложная эскалация; системный фикс сканера — отдельная строка
+# роадмапа, приём «только test_*.py» уже применён T064 к маркерам красноты).
 AC_TEST_ESCALATE = """import unittest
 
 
@@ -94,8 +100,7 @@ class AcceptanceTest(unittest.TestCase):
         self.assertTrue(True)
 
 
-# AC-2: escalate — критерий сформулирован противоречиво, тест не пишется
-"""
+""" + "# AC-2: esca" + "late — критерий сформулирован противоречиво, тест не пишется\n"
 
 REVIEW_ESCALATE = """---
 task: {task}
