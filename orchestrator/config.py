@@ -57,6 +57,14 @@ GH_TIMEOUT_SEC = 60
 # неизвестен», то есть отказ merge.
 CI_CHECKS_PER_PAGE = 100
 CI_CHECKS_MAX_PAGES = 20
+# Ожидание завершения ре-рана CI на гейте `merge_gate` (SPEC T082,
+# требование 7): `gh run rerun --failed` только ЗАПУСКАЕТ прогон заново —
+# сам workflow идёт реально минуты, не секунды опроса REST, которые
+# рассчитан выдержать GH_TIMEOUT_SEC выше. Отдельный, куда больший потолок
+# — только для `gh run watch` этого прогона; истёкший предел — не «статус
+# неизвестен» сам по себе, финальное решение всё равно принимает
+# `ci.branch_status` следом.
+CI_RERUN_WAIT_SEC = 1200
 PUMP_JOIN_TIMEOUT_SEC = 10
 # Предел прогона acceptance_tests/ на гейте review -> acceptance
 # (orchestrator/acceptance.py, SPEC T023 требование 6). Без него зависший

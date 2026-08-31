@@ -20,22 +20,25 @@ from . import config, gitcmd
 GREEN = {"success", "skipped", "neutral"}
 
 
-def gh(*args: str) -> subprocess.CompletedProcess:
+def gh(*args: str, timeout: int | None = None) -> subprocess.CompletedProcess:
     """`gh` в корне репозитория; отсутствие CLI — такой же ненулевой код.
 
     Как и в `gitcmd.git`: разбирает исход вызывающий, а «команды нет»,
     «команда ответила ошибкой» и «команда не ответила вовсе» для гейта
     означают одно — ответа нет. Предел ожидания обязателен: гейт merge стоит
     на живом пути Оператора, и молчащая сеть не должна вешать `approve`
-    без вывода и без конца.
+    без вывода и без конца. `timeout` по умолчанию — `GH_TIMEOUT_SEC`
+    (короткий REST-опрос); `trigger_rerun` передаёт свой, куда больший —
+    `gh run watch` реально ждёт завершения workflow, не ответа API.
     """
+    timeout_sec = config.GH_TIMEOUT_SEC if timeout is None else timeout
     try:
         return subprocess.run(["gh", *args], cwd=config.ROOT,
                               capture_output=True, text=True,
-                              timeout=config.GH_TIMEOUT_SEC)
+                              timeout=timeout_sec)
     except subprocess.TimeoutExpired:
         return subprocess.CompletedProcess(
-            args, 1, "", f"gh молчал дольше {config.GH_TIMEOUT_SEC} с")
+            args, 1, "", f"gh молчал дольше {timeout_sec} с")
     except OSError as exc:
         return subprocess.CompletedProcess(args, 1, "", str(exc))
 
@@ -151,3 +154,65 @@ def branch_status(branch: str) -> tuple[bool, str]:
     if failed:
         return False, f"CI коммита {short} не зелёный: {', '.join(failed)}"
     return True, f"CI коммита {short} зелёный ({len(runs)} проверок)"
+
+
+def find_run_id(sha: str) -> tuple[str, str]:
+    """Id workflow-прогона головного коммита; ("", причина) — не найден.
+
+    `gh run rerun` адресуется по id прогона (workflow run), не по sha
+    коммита — check-run'ы, которые видит `branch_status`, его не несут
+    (SPEC T082, требование 7: ре-ран обязан реально перезапустить
+    CI-прогон, а не повторно прочитать тот же завершённый статус).
+    Берётся самый свежий прогон этого sha — при нескольких workflow на
+    коммит `gh run rerun` перезапускает конкретно его; страховки от
+    нескольких параллельных workflow этот SPEC не требует («Не входит»:
+    задача про один ре-ран самого прогона, не про сетевую надёжность
+    опроса).
+    """
+    res = gh("api", f"repos/{{owner}}/{{repo}}/actions/runs"
+                    f"?head_sha={sha}&per_page=1")
+    if res.returncode != 0:
+        detail = (res.stderr or res.stdout).strip()[:200]
+        return "", f"gh не ответил: {detail or f'код {res.returncode}'}"
+    try:
+        payload = json.loads(res.stdout)
+    except (json.JSONDecodeError, TypeError) as exc:
+        return "", f"ответ gh не разобран: {exc}"
+    runs = payload.get("workflow_runs") if isinstance(payload, dict) else None
+    if not isinstance(runs, list) or not runs or not isinstance(runs[0], dict):
+        return "", f"для коммита {sha[:8]} нет workflow-прогонов"
+    run_id = runs[0].get("databaseId", runs[0].get("id"))
+    if not isinstance(run_id, int) or isinstance(run_id, bool):
+        return "", "у прогона нет числового id"
+    return str(run_id), ""
+
+
+def trigger_rerun(branch: str) -> str:
+    """Настоящий повторный прогон CI головного коммита ветки (SPEC T082,
+    требование 7): `gh run rerun <id> --failed` реально запускает упавшие
+    job'ы заново (не то же самое, что повторное чтение уже завершённого
+    check-run'а `branch_status`'ом), затем `gh run watch` ждёт его
+    завершения — до того, как вызывающий код спросит `branch_status`
+    снова за итоговым результатом.
+
+    Best-effort: любой сбой (gh недоступен, прогон не найден, сеть легла)
+    не бросает исключение — гейт не имеет права зависнуть на детекте
+    флейка. Причина возвращается для журнала; повторный `branch_status`
+    следом честно увидит тот же красный статус, если триггер не удался.
+    """
+    sha, why = head_sha(branch)
+    if not sha:
+        return f"ре-ран CI не запущен: {why}"
+    run_id, why = find_run_id(sha)
+    if not run_id:
+        return f"ре-ран CI не запущен: {why}"
+    rerun = gh("run", "rerun", run_id, "--failed")
+    if rerun.returncode != 0:
+        detail = (rerun.stderr or rerun.stdout).strip()[:200]
+        return (f"ре-ран прогона {run_id} не запущен: "
+               f"{detail or f'код {rerun.returncode}'}")
+    watch = gh("run", "watch", run_id, "--exit-status",
+              timeout=config.CI_RERUN_WAIT_SEC)
+    detail = (watch.stderr or watch.stdout).strip()[:200]
+    return (f"ре-ран прогона {run_id} запущен, ожидание завершения: "
+           f"{detail or 'gh run watch завершился'}")

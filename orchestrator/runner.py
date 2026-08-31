@@ -48,6 +48,20 @@ CLASS_LABELS = {
 }
 
 
+def _attempts_word(n: int) -> str:
+    """Русское числительное «попытка» в форме, согласованной с {n} (ревью
+    T082 итерации 1, замечание minor): класс 2 (session limit) обрывает
+    цикл на attempt=1 (требование 4), и «за 1 попытки» — не по-русски."""
+    if 11 <= n % 100 <= 14:
+        return "попыток"
+    last = n % 10
+    if last == 1:
+        return "попытку"
+    if 2 <= last <= 4:
+        return "попытки"
+    return "попыток"
+
+
 def classify_attempt_failure(text: str) -> str | None:
     """Класс отказа попытки по её тексту; `None` — нераспознанный (SPEC
     T082, требования 1-2, критерии AC-1..AC-6).
@@ -86,9 +100,13 @@ def _record_failure_classification(conn, task_id: str, role: str,
     failure_class = classify_attempt_failure(text)
     if failure_class is None:
         return None
+    # Срез С ХВОСТА, не с головы (ревью T082 итерации 1, замечание major):
+    # причина падения — в конце вывода (тот же приём, что и `agent_log.
+    # log_tail`), а реалистичный лог попытки почти всегда длиннее
+    # LOG_TAIL_CHARS до совпавшей сигнатуры — головной срез её обрезал бы.
     store.journal(conn, task_id, role, "agent failure classified",
                   f"{numbered}: {CLASS_LABELS[failure_class]}; текст: "
-                  f"{text.strip()[:config.LOG_TAIL_CHARS]}")
+                  f"{text.strip()[-config.LOG_TAIL_CHARS:]}")
     target = store.task_target(conn, task_id)
     if failure_class == "stream_broken":
         # Требование 5: алерт обязан открыться независимо от того, каким
@@ -435,7 +453,8 @@ def _cmd_run(conn, task_id: str) -> None:
     store.update_task(conn, task_id, escalated_from=t["state"])
     store.set_state(conn, task_id, "escalated", "fsm",
                     expected_state=t["state"],
-                    detail=f"агент не отработал за {attempt} попытки{note}: "
+                    detail=f"агент не отработал за {attempt} "
+                    f"{_attempts_word(attempt)}{note}: "
                     f"{reason}")
     print(f"  разберись по логам и: artel.py approve {task_id}  "
           f"(вернёт в {t['state']}, шаг повторится)")
