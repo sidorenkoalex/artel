@@ -388,6 +388,72 @@ class FindRunIdTest(unittest.TestCase):
         self.assertEqual(run_id, "")
         self.assertIn("id", why)
 
+    def test_the_failed_run_is_picked_over_a_more_recent_green_one(self):
+        """Ревью T082 итерации 2, замечание major 2: push- и pull_request-
+        триггеры одного sha дают два прогона (открытый PR ветки задачи) —
+        «самый свежий» слепо промахивался бы, если упавший прогон не он.
+        """
+        self.answer(json.dumps({"workflow_runs": [
+            {"databaseId": 2, "status": "completed", "conclusion": "success"},
+            {"databaseId": 1, "status": "completed", "conclusion": "failure"},
+        ]}))
+
+        run_id, why = ci.find_run_id(SHA)
+
+        self.assertEqual(run_id, "1")
+        self.assertEqual(why, "")
+
+    def test_the_most_recent_failed_run_is_picked_among_several(self):
+        self.answer(json.dumps({"workflow_runs": [
+            {"databaseId": 3, "status": "completed", "conclusion": "success"},
+            {"databaseId": 2, "status": "completed", "conclusion": "failure"},
+            {"databaseId": 1, "status": "completed", "conclusion": "cancelled"},
+        ]}))
+
+        run_id, why = ci.find_run_id(SHA)
+
+        self.assertEqual(run_id, "2")
+        self.assertEqual(why, "")
+
+    def test_falls_back_to_the_most_recent_run_when_none_is_failed(self):
+        """Ни один завершённый прогон не пришёл не-зелёным (гонка API,
+        неполный ответ) — деградация на прежнее поведение: ре-ран должен
+        хоть на что-то нацелиться, не отказывать совсем."""
+        self.answer(json.dumps({"workflow_runs": [
+            {"databaseId": 2, "status": "completed", "conclusion": "success"},
+            {"databaseId": 1, "status": "completed", "conclusion": "success"},
+        ]}))
+
+        run_id, why = ci.find_run_id(SHA)
+
+        self.assertEqual(run_id, "2")
+        self.assertEqual(why, "")
+
+
+class StatusKindTest(unittest.TestCase):
+    """Подтип не-зелёного `note` из `branch_status` (SPEC T082, ревью
+    итерации 2, замечание major 1): триггерить ре-ран и журналировать
+    «подтверждённый красный» имеет смысл только для реально красного
+    статуса, не для «ещё идёт»/«неизвестен» — там нечего подтверждать.
+    """
+
+    def test_still_running_is_not_red(self):
+        self.assertEqual(
+            ci.status_kind("CI коммита abc12345 ещё идёт: guard"), "running")
+
+    def test_unknown_status_is_not_red(self):
+        for note in ("статус CI неизвестен: ветки нет",
+                     "статус CI коммита abc12345 неизвестен: gh не ответил",
+                     "у коммита abc12345 нет ни одной проверки CI — "
+                     "статус неизвестен"):
+            with self.subTest(note=note):
+                self.assertEqual(ci.status_kind(note), "unknown")
+
+    def test_failed_conclusion_is_red(self):
+        self.assertEqual(
+            ci.status_kind("CI коммита abc12345 не зелёный: python=failure"),
+            "red")
+
 
 class TriggerRerunTest(unittest.TestCase):
     """`trigger_rerun` реально перезапускает CI (не читает тот же статус

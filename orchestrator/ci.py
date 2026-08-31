@@ -156,6 +156,33 @@ def branch_status(branch: str) -> tuple[bool, str]:
     return True, f"CI коммита {short} зелёный ({len(runs)} проверок)"
 
 
+def status_kind(note: str) -> str:
+    """Подтип не-зелёного `note` из `branch_status`: "running" | "unknown" |
+    "red" (SPEC T082, ревью итерации 2, замечание major 1).
+
+    `branch_status` сворачивает три разных обстоятельства в один и тот же
+    `green=False`: проверки ещё не завершились, статус вообще не удалось
+    узнать (нет проверок / `gh` не ответил / ответ не разобрать) и
+    проверки завершились, но с плохим заключением. Только последнее —
+    «красный» в смысле требования 7: там есть что подтверждать ре-раном.
+    Первые два — «ещё нет ответа», и ре-ран/запись в flake-rate для них
+    были бы ложью (ре-ран уже идущего или несуществующего прогона ничего
+    не подтверждает, а «ещё идёт»/«неизвестен», записанные как
+    «подтверждённый красный», обесценивают саму метрику AC-17). Решает по
+    тем же строкам, что сама `branch_status` уже кладёт в `note` для этих
+    двух случаев ("ещё идёт", "неизвестен") — отдельного канала передачи
+    подтипа заводить не пришлось: `branch_status` остаётся `(bool, str)`,
+    как её ожидают все нынешние вызыватели и приёмочные тесты T082
+    (`tasks/T082/acceptance_tests/test_ci_flake_rerun.py` мокает её именно
+    двухэлементным кортежем).
+    """
+    if "ещё идёт" in note:
+        return "running"
+    if "неизвестен" in note:
+        return "unknown"
+    return "red"
+
+
 def find_run_id(sha: str) -> tuple[str, str]:
     """Id workflow-прогона головного коммита; ("", причина) — не найден.
 
@@ -163,14 +190,27 @@ def find_run_id(sha: str) -> tuple[str, str]:
     коммита — check-run'ы, которые видит `branch_status`, его не несут
     (SPEC T082, требование 7: ре-ран обязан реально перезапустить
     CI-прогон, а не повторно прочитать тот же завершённый статус).
-    Берётся самый свежий прогон этого sha — при нескольких workflow на
-    коммит `gh run rerun` перезапускает конкретно его; страховки от
-    нескольких параллельных workflow этот SPEC не требует («Не входит»:
-    задача про один ре-ран самого прогона, не про сетевую надёжность
-    опроса).
+
+    Один sha может нести НЕСКОЛЬКО прогонов одного workflow (SPEC T082,
+    ревью итерации 2, замечание major 2): `.github/workflows/ci.yml`
+    триггерится и на `push` (ветки `main`/`task/**`), и на `pull_request`
+    — при открытом PR ветки задачи (штатный сценарий этой системы, не
+    гипотетический — см. `/code-review ultra <PR#>`) один и тот же
+    head-коммит порождает два независимых прогона. «Самый свежий прогон»
+    вслепую промахивался бы, если упавший прогон — не он (например,
+    push-прогон упал, а более поздний pull_request-прогон того же
+    коммита успешен). Эта функция вызывается только когда
+    `status_kind(note) == "red"` — то есть ВСЕ проверки коммита уже
+    завершены и хотя бы одна не прошла (иначе `branch_status` отдал бы
+    "running", и до сюда код не дошёл бы, см. `fsm._cmd_approve_merge_gate`)
+    — поэтому среди завершённых прогонов сверяется, у кого заключение
+    само не зелёное, и берётся самый свежий из НИХ, а не из всех подряд.
+    Ни одного такого не нашлось (гонка API, неполный ответ) — деградация
+    на прежнее поведение (самый свежий прогон вообще): ре-ран должен хоть
+    на что-то нацелиться, а не отказывать совсем.
     """
     res = gh("api", f"repos/{{owner}}/{{repo}}/actions/runs"
-                    f"?head_sha={sha}&per_page=1")
+                    f"?head_sha={sha}&per_page={config.CI_RUNS_PER_PAGE}")
     if res.returncode != 0:
         detail = (res.stderr or res.stdout).strip()[:200]
         return "", f"gh не ответил: {detail or f'код {res.returncode}'}"
@@ -179,9 +219,13 @@ def find_run_id(sha: str) -> tuple[str, str]:
     except (json.JSONDecodeError, TypeError) as exc:
         return "", f"ответ gh не разобран: {exc}"
     runs = payload.get("workflow_runs") if isinstance(payload, dict) else None
-    if not isinstance(runs, list) or not runs or not isinstance(runs[0], dict):
+    if (not isinstance(runs, list) or not runs
+            or not all(isinstance(r, dict) for r in runs)):
         return "", f"для коммита {sha[:8]} нет workflow-прогонов"
-    run_id = runs[0].get("databaseId", runs[0].get("id"))
+    failed = [r for r in runs if r.get("status") == "completed"
+             and r.get("conclusion") not in GREEN]
+    run = (failed or runs)[0]
+    run_id = run.get("databaseId", run.get("id"))
     if not isinstance(run_id, int) or isinstance(run_id, bool):
         return "", "у прогона нет числового id"
     return str(run_id), ""
