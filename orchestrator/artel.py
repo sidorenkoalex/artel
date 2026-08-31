@@ -91,10 +91,10 @@ workspace, tasks, knowledge, logs). БД одна на все проекты: с
 Команды:
   init | new "<название>" [--tz <файл>] | status | show <id> | advance <id> |
   run <id> | auto <id> | approve <id> [sha] | reject <id> "<причина>" |
-  kill <id> | release <id> | pause [--now] <id> | resume <id> | log <id> |
-  budget <id> <usd> | target-init <target> | doctor [--restore] |
-  alert-ack <id> "<решение>" | version | canary <каталог-ТЗ>
-  [--rewrite-baseline] | prune [--execute]
+  answer <id> <файл-с-ответом> | kill <id> | release <id> |
+  pause [--now] <id> | resume <id> | log <id> | budget <id> <usd> |
+  target-init <target> | doctor [--restore] | alert-ack <id> "<решение>" |
+  version | canary <каталог-ТЗ> [--rewrite-baseline] | prune [--execute]
 
 `pause <id>` (SPEC T070) — штатная приостановка: помечает задачу в БД,
 не заводя нового состояния FSM; `run`/`auto` перед стартом агентного
@@ -135,6 +135,18 @@ baseline.json` пишет его, следующие сравнивают и п�
 подтверждает КОНКРЕТНЫЙ sha: без него печатает текущий зафиксированный
 и просит повторить команду с ним, с несовпадающим — отказывает.
 
+`answer <id> <файл-с-ответом>` (SPEC T075) — канал ответа Оператора на
+эскалацию: читает текст из файла, создаёт `tasks/<id>/ANSWER-n.md` в
+worktree задачи и коммитит его в её ветку. Эскалация со структурированным
+вопросом роли (батч QUESTIONS.md из `spec_writing`, маркер `AC-n:
+escalate` из `tests_writing`, вердикт REVIEW.md `status: escalate` из
+`review`) требует нового ANSWER-n.md на ветке — `approve` из `escalated`
+без него отказывает и печатает, какого файла не хватает; эскалации
+класса «лимит» (бюджет, попытки агента, итерации ревью, отказы приёмки,
+инцидент целостности, конфликт подтяжки главной ветки) ответа не
+требуют, как и до этой задачи. Следующий запуск роли получает ответ
+(и исходный вопрос, если он был) в своём брифе (`orchestrator/brief.py`).
+
 Структуру артефакта на переходах проверяет код: `advance` прогоняет guard
 по тому артефакту, статус которого и есть условие перехода (SPEC — на гейт
 SPEC, PLAN — в ревью, REVIEW — из ревью). Нарушение структуры отказывает
@@ -163,6 +175,7 @@ SPEC, PLAN — в ревью, REVIEW — из ревью). Нарушение с
   auto      цикл run+advance до места, где нужен человек
   cleanup   kill switch и уборка хвостов задачи
   release   операторское снятие lease задачи, независимо от свежести (T062)
+  answer    канал ответа Оператора на эскалацию: ANSWER-n.md (T075)
   pause     штатная и жёсткая (--now) приостановка задачи: pause/resume (T070, T074)
   catalog   каталог задач: init, new, status, show, log
   alerts    таблица alerts: incident|threshold|trigger, ack с решением (A3)
@@ -181,7 +194,7 @@ from pathlib import Path
 # у запущенного файла в нём лежит orchestrator/, а не корень.
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from orchestrator import (auto, budget, canary, catalog,  # noqa: E402
+from orchestrator import (answer, auto, budget, canary, catalog,  # noqa: E402
                           cleanup, config, doctor, fsm, pause, projects, prune,
                           release, runner, version, workspace)
 
@@ -258,6 +271,7 @@ def main() -> None:
                                            rest[1] if len(rest) > 1 else None),
         "reject": lambda: fsm.cmd_reject(rest[0],
                                          rest[1] if len(rest) > 1 else ""),
+        "answer": lambda: answer.cmd_answer(rest[0], rest[1]),
         "kill": lambda: cleanup.cmd_kill(rest[0]),
         "release": lambda: release.cmd_release(rest[0]),
         "pause": lambda: _cmd_pause(rest),

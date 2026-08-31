@@ -494,6 +494,49 @@ def _read_branch_text_or_refuse(conn, task_id: str, branch: str,
     return text
 
 
+def _answer_file_count(t, tdir: Path) -> int | None:
+    """Число `ANSWER-*.md` задачи — с ВЕТКИ, если рабочее дерево на чужой
+    ветке (SPEC T031/T047, тот же приём, что и остальные чтения этого
+    файла в модуле), иначе с диска. `None` — git не ответил на чужой
+    ветке (нельзя посчитать — не значит «ноль», вызывающий код решает,
+    как трактовать).
+
+    Считает файлы, не разбирает номер `n`: гейту возврата (`_cmd_approve`)
+    достаточно знать, что число ANSWER-файлов ВЫРОСЛО относительно
+    зафиксированного на эскалации снимка (`answer_baseline`), не какой
+    именно номер у нового файла.
+    """
+    branch = t["branch"]
+    if gitcmd.on_foreign_branch(branch):
+        paths = gitcmd.ls_tree_files(branch, f"tasks/{t['id']}")
+        if paths is None:
+            return None
+        return sum(1 for p in paths
+                  if Path(p).name.startswith("ANSWER-")
+                  and Path(p).name.endswith(".md"))
+    return len(list(tdir.glob("ANSWER-*.md")))
+
+
+def _answer_baseline_or_refuse(conn, task_id: str, t, tdir: Path) -> int | None:
+    """Снимок числа ANSWER-*.md на момент эскалации — тем же приёмом
+    отказа, что `_read_branch_text_or_refuse` (SPEC T031, T047): `None`
+    от `_answer_file_count` — git не ответил на чужой ветке, а не «файлов
+    ноль» — молчаливое схлопывание в `or 0` замаскировало бы именно тот
+    класс сбоя, от которого рядом стоящий код (`q_paths is None` и
+    остальные ветки этого модуля) отказывает громко (REVIEW T075
+    итерация 1, замечание minor). Возврат `None` — отказ уже
+    журналирован и напечатан, переход обязан не эскалировать в этот
+    момент, а не эскалировать с недостоверным `baseline=0`."""
+    count = _answer_file_count(t, tdir)
+    if count is None:
+        detail = (f"дерево не на ветке задачи {t['branch']} — число "
+                  f"ANSWER-*.md не посчитано, эскалация отложена")
+        store.journal(conn, task_id, "fsm",
+                      "переход отклонён: дерево не на ветке задачи", detail)
+        print(f"[{task_id}] переход отклонён: {detail}")
+    return count
+
+
 def _tests_writing_ac_state(conn, task_id: str, branch: str,
                             tdir: Path) -> tuple[set, dict, list[str]] | None:
     """(тестировано, пометки, ошибки трассируемости) на выходе из
@@ -653,7 +696,12 @@ def _cmd_advance(conn, task_id: str) -> bool:
                 if guard_refuses(conn, task_id, tdir / "QUESTIONS.md",
                                  text=q_text):
                     return True
-                store.update_task(conn, task_id, escalated_from="spec_writing")
+                answer_baseline = _answer_baseline_or_refuse(conn, task_id, t, tdir)
+                if answer_baseline is None:
+                    return False
+                store.update_task(
+                    conn, task_id, escalated_from="spec_writing",
+                    answer_baseline=answer_baseline)
                 store.set_state(
                     conn, task_id, "escalated", "fsm",
                     expected_state=state,
@@ -671,7 +719,12 @@ def _cmd_advance(conn, task_id: str) -> bool:
             if questions.exists():
                 if guard_refuses(conn, task_id, questions):
                     return True
-                store.update_task(conn, task_id, escalated_from="spec_writing")
+                answer_baseline = _answer_baseline_or_refuse(conn, task_id, t, tdir)
+                if answer_baseline is None:
+                    return False
+                store.update_task(
+                    conn, task_id, escalated_from="spec_writing",
+                    answer_baseline=answer_baseline)
                 store.set_state(
                     conn, task_id, "escalated", "fsm", expected_state=state,
                     detail=f"analyst: батч вопросов по ТЗ — {questions}")
@@ -777,6 +830,10 @@ def _cmd_advance(conn, task_id: str) -> bool:
                                 expected_state=state,
                                 detail=f"замечания ревью, итерация {iters}")
         elif status == "escalate":
+            answer_baseline = _answer_baseline_or_refuse(conn, task_id, t, tdir)
+            if answer_baseline is None:
+                return False
+            store.update_task(conn, task_id, answer_baseline=answer_baseline)
             store.set_state(conn, task_id, "escalated", "fsm",
                             expected_state=state, detail="эскалация от ревьювера")
         return False
@@ -793,7 +850,12 @@ def _cmd_advance(conn, task_id: str) -> bool:
         if escalations:
             detail = "; ".join(f"AC-{n}: {reason}"
                                for n, reason in sorted(escalations.items()))
-            store.update_task(conn, task_id, escalated_from="tests_writing")
+            answer_baseline = _answer_baseline_or_refuse(conn, task_id, t, tdir)
+            if answer_baseline is None:
+                return False
+            store.update_task(
+                conn, task_id, escalated_from="tests_writing",
+                answer_baseline=answer_baseline)
             store.set_state(conn, task_id, "escalated", "fsm",
                             expected_state=state,
                             detail=f"test_author: критерий неисполним тестом — "
@@ -1175,13 +1237,35 @@ def _cmd_approve(conn, task_id: str, sha: str | None, sid: str) -> None:
             conn, task_id, sid,
             lambda: _cmd_approve_merge_gate(conn, task_id, state, t))
     elif state == "escalated":
+        # Ответ Оператора (SPEC T075, AC-3): эскалация со структурированным
+        # вопросом роли (QUESTIONS.md/spec_writing, `AC-n: escalate`/
+        # tests_writing, REVIEW.md `status: escalate`/review) зафиксировала
+        # `answer_baseline` — число ANSWER-*.md на момент эскалации — в
+        # том же месте кода, что и сам факт эскалации (не позже,
+        # содержательным разбором артефактов здесь: `escalated_from`
+        # неоднозначен между классами, докстрин AC-5 приёмочных тестов).
+        # `None` — эскалация класса «лимит»/инцидент, ответа не требует,
+        # как и до этой задачи.
+        baseline = t["answer_baseline"]
+        if baseline is not None:
+            tdir = config.TASKS / task_id
+            count = _answer_file_count(t, tdir)
+            if count is None or count <= baseline:
+                expected = f"tasks/{task_id}/ANSWER-{baseline + 1}.md"
+                detail = (f"approve отклонён: не хватает {expected} — "
+                          f"ответь Оператором (artel.py answer {task_id} "
+                          f"<файл-с-ответом>) перед возвратом из эскалации")
+                store.journal(conn, task_id, "fsm",
+                              "approve отклонён: нет ANSWER", detail)
+                print(f"[{task_id}] {detail}")
+                return
         # Куда возвращать — знает только тот, кто эскалировал: провал агента
         # (cmd_run) пишет в escalated_from состояние своего шага, потому что
         # чинить надо этот шаг, а не начинать разработку заново. Эскалации по
         # вердикту ревьювера и по исчерпанным лимитам его не пишут и, как
         # раньше, уходят в in_dev: там работа и продолжается.
         back = t["escalated_from"] or "in_dev"
-        store.update_task(conn, task_id, escalated_from=None)
+        store.update_task(conn, task_id, escalated_from=None, answer_baseline=None)
         store.set_state(conn, task_id, back, "operator",
                         expected_state=state, detail="эскалация разрешена, продолжаем")
         print(f"  дальше: artel.py run {task_id}")

@@ -90,6 +90,21 @@ schema_version: 2
    дефолт: A.
 """
 
+ANSWER_READY = """---
+task: {task}
+type: answer
+author_role: operator
+status: ready
+schema_version: 2
+---
+
+# ANSWER-1: ответ Оператора
+
+## Ответы
+
+Вариант A.
+"""
+
 QUESTIONS_NO_SECTION = """---
 task: {task}
 type: questions
@@ -452,6 +467,9 @@ class QuestionsEscalationTest(TmpRootTest):
         self.write("QUESTIONS.md", QUESTIONS_VALID)
         self.capture(fsm.cmd_advance, self.TASK)
         self.assertEqual(self.state(), "escalated")
+        # QUESTIONS.md — эскалация со структурированным вопросом роли
+        # (SPEC T075, AC-3): approve из escalated требует ANSWER-n.md.
+        self.write("ANSWER-1.md", ANSWER_READY)
 
         self.capture(fsm.cmd_approve, self.TASK)
 

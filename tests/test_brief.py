@@ -215,5 +215,62 @@ class AnalystMapComponentTest(BriefUnitTest):
         self.assertIn("docs/codebase-map.md", details[0])
 
 
+class AnswerComponentTest(BriefUnitTest):
+    """SPEC T075, AC-6: ANSWER-n.md/QUESTIONS.md — добавка брифа, не его
+    обязательная часть. `DeveloperBriefTest`/`AnalystMapComponentTest`
+    выше уже проверяют регрессию «нет ANSWER — состав брифа не меняется»
+    (три/один журналируемых компонента без правки этого файла); здесь —
+    то, что этой регрессией не покрыто: содержимое, когда ANSWER есть, и
+    выбор ПОСЛЕДНЕГО файла при нескольких раундах."""
+
+    def test_developer_brief_includes_the_only_answer(self):
+        (config.TASKS / "T001" / "ANSWER-1.md").write_text(
+            "---\ntask: T001\ntype: answer\nauthor_role: operator\n"
+            "status: ready\nschema_version: 2\n---\n\n"
+            "# ANSWER-1: ответ Оператора\n\n## Ответы\n\nМАРКЕР-ANSWER-1\n",
+            encoding="utf-8")
+        conn = store.db()
+        with mock.patch.object(gitcmd, "git", fake_git):
+            text = brief.developer_brief(conn, "T001")
+
+        self.assertIn("МАРКЕР-ANSWER-1", text)
+        self.assertIn("tasks/T001/ANSWER-1.md", text)
+
+    def test_developer_brief_picks_the_latest_of_several_answers(self):
+        for n in (1, 2, 10):
+            (config.TASKS / "T001" / f"ANSWER-{n}.md").write_text(
+                "---\ntask: T001\ntype: answer\nauthor_role: operator\n"
+                "status: ready\nschema_version: 2\n---\n\n"
+                f"# ANSWER-{n}: ответ Оператора\n\n## Ответы\n\n"
+                f"МАРКЕР-ANSWER-{n}\n",
+                encoding="utf-8")
+        conn = store.db()
+        with mock.patch.object(gitcmd, "git", fake_git):
+            text = brief.developer_brief(conn, "T001")
+
+        self.assertIn("МАРКЕР-ANSWER-10", text,
+                      "номер сравнивается как число (10 > 2), не строкой")
+        self.assertNotIn("МАРКЕР-ANSWER-1\n", text)
+        self.assertNotIn("МАРКЕР-ANSWER-2\n", text)
+
+    def test_analyst_brief_pairs_questions_with_the_answer(self):
+        (config.TASKS / "T001" / "QUESTIONS.md").write_text(
+            "---\ntask: T001\ntype: questions\nauthor_role: analyst\n"
+            "status: draft\nschema_version: 2\n---\n\n# QUESTIONS\n\n"
+            "## Вопросы\n\n1. **Вопрос?** — МАРКЕР-QUESTION — дефолт: A.\n",
+            encoding="utf-8")
+        (config.TASKS / "T001" / "ANSWER-1.md").write_text(
+            "---\ntask: T001\ntype: answer\nauthor_role: operator\n"
+            "status: ready\nschema_version: 2\n---\n\n"
+            "# ANSWER-1: ответ Оператора\n\n## Ответы\n\nМАРКЕР-ANSWER\n",
+            encoding="utf-8")
+        conn = store.db()
+        with mock.patch.object(gitcmd, "git", fake_git):
+            text = brief.analyst_map_component(conn, "T001")
+
+        self.assertIn("МАРКЕР-QUESTION", text)
+        self.assertIn("МАРКЕР-ANSWER", text)
+
+
 if __name__ == "__main__":
     unittest.main()

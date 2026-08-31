@@ -15,6 +15,7 @@ import hashlib
 import re
 import subprocess
 import sys
+from pathlib import Path
 
 from . import alerts, config, gitcmd, store
 
@@ -145,9 +146,14 @@ def _journal_component(conn, task_id: str, role: str, label: str,
     return f"### {label}\n\n{text.strip()}\n"
 
 
-def _developer_spec_text(conn, task_id: str) -> str:
+def _developer_spec_text(conn, task_id: str, branch: str, foreign: bool) -> str:
     """SPEC.md задачи — с ВЕТКИ задачи, если рабочее дерево пульта точно
     стоит не на ней (SPEC T031, AC-2), иначе рабочая копия, как до T031.
+
+    `foreign` — уже посчитанный `gitcmd.on_foreign_branch(branch)`
+    вызывающим кодом (SPEC T075): бриф читает несколько файлов задачи
+    (SPEC/QUESTIONS/ANSWER) одним и тем же вопросом «на чужой ли ветке
+    рабочее дерево» — второй git-вызов того же вопроса лишний.
 
     Голый `FileNotFoundError`-трейсбек на чужом чекауте (журнал T030,
     ~17:35 25.08.2026) заменяет именованный отказ — обеим ветвям чтения,
@@ -155,9 +161,8 @@ def _developer_spec_text(conn, task_id: str) -> str:
     ответил на вопрос «какая ветка» — тот же вырожденный случай, что и
     везде в T031, но файла на диске тогда тоже может не быть.
     """
-    branch = store.task_branch(conn, task_id)
     spec_rel = f"tasks/{task_id}/SPEC.md"
-    if gitcmd.on_foreign_branch(branch):
+    if foreign:
         text, reason = gitcmd.show(branch, spec_rel)
         if text is None:
             sys.exit(f"[{task_id}] бриф не собран: {spec_rel} ветки "
@@ -172,10 +177,77 @@ def _developer_spec_text(conn, task_id: str) -> str:
                  f"{branch or '—'} ещё не создана в git)")
 
 
+def _branch_or_disk_text(task_id: str, branch: str, rel: str,
+                         foreign: bool) -> str | None:
+    """Текст `tasks/<id>/<rel>` — с ветки задачи, если рабочее дерево на
+    чужой ветке (SPEC T031/T047, тот же приём, что `_developer_spec_text`),
+    иначе с диска. `None` — файла нет ни там, ни там: отсутствие ANSWER/
+    QUESTIONS — легитимное «эскалации не было», не отказ сборки брифа
+    (в отличие от SPEC.md, чтение которого обязательно)."""
+    if foreign:
+        text, _ = gitcmd.show(branch, f"tasks/{task_id}/{rel}")
+        return text
+    path = config.TASKS / task_id / rel
+    if not path.exists():
+        return None
+    try:
+        return path.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        return None
+
+
+def _latest_answer_rel(task_id: str, branch: str, foreign: bool) -> str | None:
+    """Имя `ANSWER-n.md` с наибольшим `n` — с ветки или с диска; `None` —
+    ANSWER-файлов у задачи ещё нет."""
+    if foreign:
+        paths = gitcmd.ls_tree_files(branch, f"tasks/{task_id}") or []
+        names = [Path(p).name for p in paths]
+    else:
+        names = [p.name for p in (config.TASKS / task_id).glob("ANSWER-*.md")]
+    numbers = []
+    for name in names:
+        if name.startswith("ANSWER-") and name.endswith(".md"):
+            suffix = name[len("ANSWER-"):-len(".md")]
+            if suffix.isdigit():
+                numbers.append(int(suffix))
+    if not numbers:
+        return None
+    return f"ANSWER-{max(numbers)}.md"
+
+
+def _answer_component(conn, task_id: str, role: str, branch: str,
+                      foreign: bool) -> str:
+    """Добавка брифа с текстом последнего ANSWER-n.md задачи (SPEC T075,
+    AC-6) — пустая строка, если ответов ещё нет: канал не обязан
+    заполнять бриф, когда эскалации не было."""
+    rel = _latest_answer_rel(task_id, branch, foreign)
+    if rel is None:
+        return ""
+    text = _branch_or_disk_text(task_id, branch, rel, foreign)
+    if text is None:
+        return ""
+    return _journal_component(conn, task_id, role, f"tasks/{task_id}/{rel}", text)
+
+
+def _questions_component(conn, task_id: str, role: str, branch: str,
+                         foreign: bool) -> str:
+    """Добавка брифа с текстом QUESTIONS.md задачи (SPEC T075, AC-6) —
+    пустая строка, если батча вопросов не было."""
+    text = _branch_or_disk_text(task_id, branch, "QUESTIONS.md", foreign)
+    if text is None:
+        return ""
+    return _journal_component(conn, task_id, role,
+                              f"tasks/{task_id}/QUESTIONS.md", text)
+
+
 def developer_brief(conn, task_id: str) -> str:
     """Бриф роли developer: SPEC задачи + карта + конвенции проекта одним
-    документом (требования 1, 3, 4, 8)."""
-    spec_text = _developer_spec_text(conn, task_id)
+    документом (требования 1, 3, 4, 8); ANSWER-n.md последней эскалации
+    — если она была (SPEC T075, AC-6: ответ обязан дойти до роли, а не
+    только существовать в ветке)."""
+    branch = store.task_branch(conn, task_id)
+    foreign = gitcmd.on_foreign_branch(branch)
+    spec_text = _developer_spec_text(conn, task_id, branch, foreign)
     map_text = fresh_map_text(conn, task_id)
     conventions_text = (config.ROOT / CONVENTIONS_REL).read_text(
         encoding="utf-8")
@@ -186,6 +258,9 @@ def developer_brief(conn, task_id: str) -> str:
         _journal_component(conn, task_id, "developer", CONVENTIONS_REL,
                            conventions_text),
     ]
+    answer_part = _answer_component(conn, task_id, "developer", branch, foreign)
+    if answer_part:
+        parts.append(answer_part)
     return f"{HEADER}\n\n" + "\n".join(parts)
 
 
@@ -215,7 +290,31 @@ def advance_refusal_history(conn, task_id: str, role: str, state: str) -> str:
 def analyst_map_component(conn, task_id: str) -> str:
     """Добавка к входу analyst: карта тем же механизмом, что у developer
     (требование 9) — TZ.md остаётся прежним, отдельно не читаемым здесь
-    входом, скилы и остальной вход роли не меняются."""
+    входом, скилы и остальной вход роли не меняются. QUESTIONS.md и
+    ANSWER-n.md последнего батча — если он был (SPEC T075, AC-6): роль
+    видит и свой вопрос, и ответ на него, не только ответ без контекста."""
+    branch = store.task_branch(conn, task_id)
+    foreign = gitcmd.on_foreign_branch(branch)
     map_text = fresh_map_text(conn, task_id)
-    part = _journal_component(conn, task_id, "analyst", MAP_REL, map_text)
+    parts = [_journal_component(conn, task_id, "analyst", MAP_REL, map_text)]
+    q_part = _questions_component(conn, task_id, "analyst", branch, foreign)
+    if q_part:
+        parts.append(q_part)
+    a_part = _answer_component(conn, task_id, "analyst", branch, foreign)
+    if a_part:
+        parts.append(a_part)
+    return f"{HEADER}\n\n" + "\n".join(parts)
+
+
+def test_author_answer_component(conn, task_id: str) -> str | None:
+    """Промпт-добавка роли test_author: только ANSWER-n.md последней
+    эскалации (SPEC T075, AC-6) — эта роль не получает SPEC/карту/
+    конвенции отдельным брифом (`runner.py`, ветка `test_author`) ни до,
+    ни после этой задачи, добавляется только новый минимум. `None` —
+    ответов ещё нет, промпт шага остаётся прежним (без добавки)."""
+    branch = store.task_branch(conn, task_id)
+    foreign = gitcmd.on_foreign_branch(branch)
+    part = _answer_component(conn, task_id, "test_author", branch, foreign)
+    if not part:
+        return None
     return f"{HEADER}\n\n{part}"

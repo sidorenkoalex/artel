@@ -317,6 +317,16 @@ class FsmTest(unittest.TestCase):
             REVIEW_MD.format(task=self.TASK, status=status, iteration=iteration),
             encoding="utf-8")
 
+    def write_answer(self, n: int) -> None:
+        """ANSWER-n.md — вход гейта возврата из эскалации класса «вопрос
+        роли» (SPEC T075, AC-3): без него `approve` из `escalated` для
+        вердикта REVIEW.md `status: escalate` отказывает."""
+        (self.tdir / f"ANSWER-{n}.md").write_text(
+            f"---\ntask: {self.TASK}\ntype: answer\nauthor_role: operator\n"
+            f"status: ready\nschema_version: 2\n---\n\n"
+            f"# ANSWER-{n}: ответ Оператора\n\n## Ответы\n\nOK\n",
+            encoding="utf-8")
+
     def commands(self) -> list[tuple[str, object]]:
         """Все команды CLI, кроме `init` и `new` (они не двигают задачу)."""
         return [
@@ -913,6 +923,10 @@ class CountersNeverResetTest(FsmTest):
 
         self.verdict("escalate", 2)
         self.assertEqual(self.state(), "escalated")
+        # Вердикт REVIEW.md `status: escalate` — эскалация со
+        # структурированным вопросом роли (SPEC T075, AC-3): `approve`
+        # из escalated требует ANSWER-n.md, иначе отказывает.
+        self.write_answer(1)
         self.step("возврат из эскалации", fsm.cmd_approve, self.TASK)
         self.step("in_dev -> review", fsm.cmd_advance, self.TASK)
 
