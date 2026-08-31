@@ -418,6 +418,40 @@ def journal(conn, task_id: str, actor: str, action: str, detail: str = "") -> No
     conn.commit()
 
 
+REFUSAL_ACTION_PREFIX = "переход отклонён"
+
+
+def refusal_history(conn, task_id: str, state: str, limit: int) -> list:
+    """Последние `limit` записей `"переход отклонён..."` этой задачи,
+    принадлежащие ТЕКУЩЕМУ визиту состояния `state` (SPEC T078,
+    требования 1, 3, 4).
+
+    Скоуп без новой колонки: нижняя граница — id последней записи
+    `"state -> {state}"` этой задачи, которую `set_state` журналирует на
+    каждом переходе. Отказ advance не меняет состояние, так что всё,
+    что журналируется после входа в `state` и до следующего перехода,
+    по построению происходит, пока задача в нём — включая повторный
+    визит того же состояния позже (новая запись `state -> {state}`
+    сдвигает границу вперёд и отсекает отказы прошлого визита).
+
+    Первое состояние задачи (`spec_writing`) в него не входит через
+    `set_state` — задача рождается там напрямую (`insert_task`), такой
+    записи нет никогда, граница 0: в выборку идут все отказы задачи,
+    что верно — раньше первого состояния задачи не существовало.
+    """
+    steps = task_steps(conn, task_id)
+    marker = f"state -> {state}"
+    since_id = 0
+    for row in reversed(steps):
+        if row["action"] == marker:
+            since_id = row["id"]
+            break
+    matches = [row for row in steps
+              if row["id"] > since_id
+              and row["action"].startswith(REFUSAL_ACTION_PREFIX)]
+    return matches[-limit:]
+
+
 class CasConflict(Exception):
     """Проигрыш CAS-перехода `set_state`: строка уже в другом состоянии
     (SPEC T050, требования 3-4).

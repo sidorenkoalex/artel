@@ -293,6 +293,16 @@ def _cmd_run(conn, task_id: str) -> None:
         print(f"[{task_id}] ревью-пакет: {review.package_note(package)}")
         prompt = f"{prompt}\n\n--- РЕВЬЮ-ПАКЕТ ---\n\n{package['text']}"
 
+    # Отказ advance доносится до следующего запуска роли (SPEC T078):
+    # одна точка для всех ролей — механика не зависит от того, какая
+    # роль читает бриф в этом состоянии, только от того, есть ли у
+    # ТЕКУЩЕГО визита состояния своя история отказов (пусто — прежний
+    # промпт без изменений, требование 5).
+    refusal_block = brief.advance_refusal_history(conn, task_id, role,
+                                                   t["state"])
+    if refusal_block:
+        prompt = f"{prompt}\n\n--- ОТКАЗ ADVANCE (история) ---\n\n{refusal_block}"
+
     reason = ""
     for attempt in range(1, config.AGENT_ATTEMPTS + 1):
         outcome, reason = run_agent_once(conn, task_id, role, prompt, attempt)

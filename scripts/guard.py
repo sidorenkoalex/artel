@@ -85,11 +85,15 @@ def schema_errors(path: Path | str, meta: dict) -> list[str]:
     version = meta["schema_version"]
     # bool — подтип int, а `schema_version: true` версией не является.
     if not isinstance(version, int) or isinstance(version, bool) or version < 1:
-        return [f"{path}: schema_version '{version}' — не целое число ≥ 1"]
+        return [f"{path}: schema_version '{version}' — не целое число ≥ 1, "
+                f"замени значение на целое число (например {SUPPORTED_SCHEMA_VERSION})"]
     if version > SUPPORTED_SCHEMA_VERSION:
         return [f"{path}: schema_version {version} новее поддерживаемой "
-                f"{SUPPORTED_SCHEMA_VERSION} — артефакт написан более новым "
-                f"форматом, обнови guard"]
+                f"{SUPPORTED_SCHEMA_VERSION} — этот guard не понимает формат "
+                f"настолько новой версии; замени значение на "
+                f"{SUPPORTED_SCHEMA_VERSION} или ниже, а если тебе действительно "
+                f"нужны возможности версии {version} — эскалируй, чтобы Оператор "
+                f"обновил guard"]
     return []
 
 
@@ -164,12 +168,18 @@ def spec_ac_errors(path: Path | str, text: str, meta: dict) -> list[str]:
     ac_numbers = [int(n) for n in AC_ITEM.findall(body)]
     if not ac_numbers:
         return [f"{path}: критерии приёмки не размечены AC-n (AC-1., AC-2., "
-                f"…) — либо укажи skip_tests в frontmatter"]
+                f"…) — размечай каждый пункт в формате 'AC-<номер>. текст' "
+                f"с точки в начале строки, либо укажи skip_tests в "
+                f"frontmatter, если тесты на этот SPEC осознанно пропущены"]
     if len(set(ac_numbers)) != len(ac_numbers):
-        return [f"{path}: номера AC-n повторяются: {ac_numbers}"]
+        return [f"{path}: номера AC-n повторяются: {ac_numbers} — "
+                f"перенумеруй критерии так, чтобы каждый номер AC-n "
+                f"встречался ровно один раз"]
     if PLAIN_NUMBERED_ITEM.search(body):
         return [f"{path}: в критериях приёмки остались пункты без "
-                f"AC-разметки"]
+                f"AC-разметки (обычный '1. текст' вместо 'AC-1. текст') — "
+                f"замени нумерацию таких пунктов на формат 'AC-<номер>. "
+                f"текст', например 'AC-1.', 'AC-2.'"]
     return []
 
 
@@ -262,8 +272,12 @@ def redness_marker_errors_from_files(files: list[tuple[str, str]]) -> list[str]:
     for label, source in files:
         if not has_redness_marker(module_docstring(source)):
             errors.append(
-                f"{label}: нет маркера «Красен до реализации:» или "
-                f"«Зелёный с рождения:» в докстринге модуля")
+                f"{label}: нет маркера «Красен до реализации:» или «Зелёный "
+                f"с рождения:» с непустым объяснением на той же строке сразу "
+                f"после двоеточия в докстринге модуля — допиши объяснение "
+                f"сразу после двоеточия на той же строке, например «Красен "
+                f"до реализации: <причина>» (перенос объяснения на "
+                f"следующую строку не считается заполненным маркером)")
     return errors
 
 
@@ -300,16 +314,30 @@ def traceability_errors_from_content(spec_text: str, meta: dict, tested: set,
     errors: list[str] = []
     for n in sorted(ac_numbers):
         if n not in tested and n not in markers:
-            errors.append(f"AC-{n}: нет теста и нет пометки manual/skip")
+            errors.append(
+                f"AC-{n}: нет теста и нет пометки manual/skip/escalate — "
+                f"добавь тестовый метод 'def test_ac{n}_...' в "
+                f"acceptance_tests/, либо пометку "
+                f"'# AC-{n}: manual|skip|escalate — причина' в том же "
+                f"каталоге")
     for n, (kind, reason) in sorted(markers.items()):
         if n not in ac_numbers:
-            errors.append(f"AC-{n}: пометка на критерий, которого нет в SPEC")
+            errors.append(
+                f"AC-{n}: пометка на критерий, которого нет в SPEC — убери "
+                f"эту пометку либо добавь критерий AC-{n} в раздел «Критерии "
+                f"приёмки» SPEC")
         elif kind in ("skip", "escalate") and not reason:
-            errors.append(f"AC-{n}: пометка {kind} без причины")
+            errors.append(
+                f"AC-{n}: пометка {kind} без причины — впиши причину после "
+                f"тире в той же строке, например "
+                f"'# AC-{n}: {kind} — <причина>'")
     for n in sorted(tested):
         if n not in ac_numbers:
-            errors.append(f"AC-{n}: тест на критерий, которого нет в SPEC "
-                          f"(SPEC T023, требование 3 — только из критериев)")
+            errors.append(
+                f"AC-{n}: тест на критерий, которого нет в SPEC (SPEC T023, "
+                f"требование 3 — только из критериев) — переименуй тест на "
+                f"существующий AC-номер либо добавь критерий AC-{n} в раздел "
+                f"«Критерии приёмки» SPEC")
     return errors
 
 
@@ -373,36 +401,59 @@ def check_content(label: str, text: str) -> list[str]:
     errors: list[str] = []
     meta = yamlmini.frontmatter(text)
     if meta is None:
-        return [f"{label}: нет frontmatter (--- ... ---)"]
+        return [f"{label}: нет frontmatter (--- ... ---) — добавь в начало "
+                f"файла блок между двумя строками '---' с обязательными "
+                f"полями {', '.join(sorted(REQUIRED_META))}"]
 
     errors.extend(schema_errors(label, meta))
 
     missing = REQUIRED_META - meta.keys()
     if missing:
-        errors.append(f"{label}: frontmatter без полей: {', '.join(sorted(missing))}")
+        errors.append(f"{label}: добавь в frontmatter обязательные поля: "
+                      f"{', '.join(sorted(missing))}")
 
     # `or ""` — пустое значение поля типизированный разбор отдаёт как None,
     # а в тексте нарушения «type ''» читается понятнее, чем «type 'None'».
     atype = meta.get("type") or ""
     rules = RULES.get(atype)
     if rules is None:
-        errors.append(f"{label}: неизвестный type '{atype}' (ожидается: {', '.join(RULES)})")
+        errors.append(f"{label}: неизвестный type '{atype}' — замени поле "
+                      f"type в frontmatter на одно из: {', '.join(RULES)}")
         return errors
 
     status = meta.get("status") or ""
     if status not in rules["statuses"]:
         errors.append(
-            f"{label}: недопустимый status '{status}' для {atype} "
-            f"(валидные: {', '.join(sorted(rules['statuses']))})"
+            f"{label}: недопустимый status '{status}' для {atype} — замени "
+            f"поле status в frontmatter на одно из валидных значений: "
+            f"{', '.join(sorted(rules['statuses']))}"
         )
 
-    headers = set(re.findall(r"^##\s+(.+?)\s*$", text, re.M))
+    all_headings = re.findall(r"^(#{1,6})\s+(.+?)\s*$", text, re.M)
+    headers = {title for hashes, title in all_headings if hashes == "##"}
+    levels_by_title: dict[str, set] = {}
+    for hashes, title in all_headings:
+        levels_by_title.setdefault(title, set()).add(len(hashes))
     for section in rules["sections"]:
-        if section not in headers:
-            errors.append(f"{label}: отсутствует обязательная секция '## {section}'")
+        if section in headers:
+            continue
+        wrong_levels = levels_by_title.get(section, set()) - {2}
+        if wrong_levels:
+            level = sorted(wrong_levels)[0]
+            errors.append(
+                f"{label}: заголовок секции '{section}' стоит на уровне H{level} "
+                f"('{'#' * level} {section}') — обязательные секции требуют "
+                f"уровень H2, ровно два символа '#': переименуй заголовок в "
+                f"'## {section}'")
+        else:
+            errors.append(
+                f"{label}: отсутствует обязательная секция '## {section}' — "
+                f"добавь в файл заголовок '## {section}' и содержимое под ним")
 
     if meta.get("task") in (None, "", "TASK_ID"):
-        errors.append(f"{label}: поле task не заполнено (осталось TASK_ID)")
+        errors.append(f"{label}: поле task не заполнено (осталось TASK_ID) — "
+                      f"впиши в frontmatter реальный номер задачи вместо "
+                      f"TASK_ID")
 
     if atype == "spec" and "Критерии приёмки" in headers:
         errors.extend(spec_ac_errors(label, text, meta))
