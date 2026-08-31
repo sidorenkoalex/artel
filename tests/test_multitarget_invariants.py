@@ -35,7 +35,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from orchestrator import (budget, catalog, cleanup, config, fsm,  # noqa: E402
                           runner, spend, store, workspace)
-from tests.sandbox import FakeProc, TmpRootTest, capture, fake_git  # noqa: E402
+from tests.sandbox import (FakeProc, TmpRootTest, capture,  # noqa: E402
+                           fake_git, resilient_tmp_cleanup)
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
@@ -156,7 +157,7 @@ class PultArtifactIsolationTest(unittest.TestCase):
 
     def setUp(self):
         tmp = tempfile.TemporaryDirectory()
-        self.addCleanup(tmp.cleanup)
+        self.addCleanup(resilient_tmp_cleanup, tmp)
         self.root = Path(tmp.name).resolve()
 
         self.git("init", "-q", "-b", config.MAIN_BRANCH)
