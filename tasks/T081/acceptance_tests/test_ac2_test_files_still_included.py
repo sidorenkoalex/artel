@@ -36,15 +36,25 @@ class TestFileStillIncludedTest(unittest.TestCase):
         self.assertIn(3, tested)
 
     def test_ac2_manual_marker_in_test_file_is_counted(self):
-        self.write("test_ac.py", "# AC-4: manual — проверка глазами\n")
+        # Конкатенация литерала (приём T075, коммит 7cb7e25): этот файл
+        # сам подпадает под test_*.py и читается scan_acceptance_tests при
+        # проверке T081, поэтому сплошной литерал "AC-4: manual" в
+        # исходнике был бы прочитан как реальная пометка T081 (тот же
+        # класс дефекта, что ANSWER-1, 31.08).
+        self.write("test_ac.py", "# AC-" + "4: manual — проверка глазами\n")
 
         _, markers = guard.scan_acceptance_tests(self.tdir)
 
         self.assertEqual(markers[4], ("manual", "проверка глазами"))
 
     def test_ac2_escalate_marker_in_test_file_is_counted(self):
+        # Конкатенация литерала (приём T075, коммит 7cb7e25): этот файл
+        # сам подпадает под test_*.py и читается scan_acceptance_tests при
+        # проверке T081, поэтому сплошной литерал "AC-5: escalate" в
+        # исходнике был бы прочитан как настоящая эскалация T081
+        # (ANSWER-1, 31.08).
         self.write("test_ac.py",
-                   "# AC-5: escalate — критерий противоречив\n")
+                   "# AC-5: esca" + "late — критерий противоречив\n")
 
         _, markers = guard.scan_acceptance_tests(self.tdir)
 

@@ -1,6 +1,6 @@
 """AC-3 (tasks/T081/SPEC.md): `tasks/T075/acceptance_tests/_sandbox.py`
-содержит маркер `# AC-2: escalate — критерий сформулирован противоречиво,
-тест не пишется` естественной строкой (без конкатенации литерала), и
+содержит комментарий-маркер эскалации критерия AC-2 (полный текст — в
+NATURAL_MARKER ниже) естественной строкой, без конкатенации литерала, и
 полный набор тестов репозитория остаётся зелёным.
 
 Красен до реализации: `_sandbox.py` сейчас собирает маркер конкатенацией
@@ -19,8 +19,14 @@ sys.path.insert(0, str(REPO_ROOT))
 SANDBOX_PATH = (REPO_ROOT / "tasks" / "T075" / "acceptance_tests"
                 / "_sandbox.py")
 
+#   Конкатенация литерала (приём T075, коммит 7cb7e25): этот файл сам
+#   подпадает под test_*.py и читается scan_acceptance_tests при проверке
+#   T081, поэтому сплошная запись маркера AC-2 типа escalate в исходнике
+#   была бы прочитана как настоящая эскалация T081 (тот же класс дефекта,
+#   что ANSWER-1, 31.08) — хотя сама регулярка ищет естественную строку
+#   в ЧУЖОМ файле (_sandbox.py), а не эскалирует эту задачу.
 NATURAL_MARKER = re.compile(
-    r"^# AC-2: escalate — критерий сформулирован противоречиво, "
+    r"^# AC-2: esca" + r"late — критерий сформулирован противоречиво, "
     r"тест не пишется\s*$", re.M)
 
 
@@ -31,7 +37,7 @@ class SandboxMarkerRevertedTest(unittest.TestCase):
 
         self.assertRegex(
             content, NATURAL_MARKER,
-            "_sandbox.py обязан нести маркер '# AC-2: escalate — ...' "
+            "_sandbox.py обязан нести маркер '# AC-2: esca" + "late — ...' "
             "естественной строкой (SPEC T081, AC-3)")
 
     def test_ac3_concatenation_workaround_is_gone(self):
