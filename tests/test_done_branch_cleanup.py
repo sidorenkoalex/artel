@@ -18,13 +18,14 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from orchestrator import cleanup, config  # noqa: E402
+from tests.sandbox import resilient_tmp_cleanup  # noqa: E402
 
 
 class DropMergedTaskBranchTest(unittest.TestCase):
 
     def setUp(self):
         tmp = tempfile.TemporaryDirectory()
-        self.addCleanup(tmp.cleanup)
+        self.addCleanup(resilient_tmp_cleanup, tmp)
         self.root = Path(tmp.name).resolve()
 
         self.git("init", "-q", "-b", config.MAIN_BRANCH)

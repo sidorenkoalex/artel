@@ -36,7 +36,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from orchestrator import (catalog, config, fixation, fsm,  # noqa: E402
                           gitcmd, projects, runner, store, workspace)
-from tests.sandbox import FakeProc, TmpRootTest, capture, claude_only_popen  # noqa: E402
+from tests.sandbox import (FakeProc, TmpRootTest, capture,  # noqa: E402
+                           claude_only_popen, resilient_tmp_cleanup)
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
@@ -519,7 +520,7 @@ class RealPultGitTest(unittest.TestCase):
 
     def setUp(self):
         tmp = tempfile.TemporaryDirectory()
-        self.addCleanup(tmp.cleanup)
+        self.addCleanup(resilient_tmp_cleanup, tmp)
         self.root = Path(tmp.name).resolve()
 
         self.git("init", "-q", "-b", config.MAIN_BRANCH)
