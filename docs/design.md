@@ -394,11 +394,11 @@ stateDiagram-v2
 диаграмма — его проекция. Оверлеи, доступные из любого состояния:
 `escalated` (исчерпан лимит — ждёт решения Оператора) и `killed`.
 Каждый переход = guards + policy (§4); лимиты на рёбрах — глобальные
-счётчики задачи. Запланированные расширения маршрута: `tests_writing`
-между spec_gate и in_dev (test_author, roadmap A4), `verifying` между
-review и acceptance (ожидание CI, затем verify-профиль — roadmap B1b,
-ADR-0003 п.10), `awaiting_human` после merge_gate ≡ undraft для
-merge_gate: target-human (ADR-0003 п.7, фаза C). Целевой автомат
+счётчики задачи. Расширения маршрута в бою: `tests_writing` между
+spec_gate и in_dev (A4, T023), `verifying` между review и acceptance
+(ожидание CI — B1b/T079, ADR-0009; verify-профиль ADR-0003 п.10 —
+дальше). Запланировано: `awaiting_human` после merge_gate ≡ undraft
+для merge_gate: target-human (ADR-0003 п.7, фаза C). Целевой автомат
 с прод-хвостом (deploy_gate → deployed → watching) —
 `docs/deferred/prod-loop.md`.
 
@@ -595,8 +595,8 @@ in/out» соблюдена буквально: вызов рантайма аг
 модуле, смена рантайма не задевает конечный автомат.
 
 Сам оркестратор из одного файла вырос в модульный пакет `orchestrator/` —
-13 модулей плюс `artel.py`, где остались только разбор argv и таблица
-команд (T015): `config` (пути и константы), `store` (БД, миграции, журнал),
+порядка сорока модулей плюс `artel.py`, где остались только разбор argv
+и таблица команд (T015); несущие: `config` (пути и константы), `store` (БД, миграции, журнал),
 `artifacts` (frontmatter и свежесть вердикта), `gitcmd`, `agent_log`,
 `spend` (стоимость шага), `review` (ревью-пакет), `budget`, `fsm`,
 `runner`, `auto`, `cleanup`, `catalog`.
