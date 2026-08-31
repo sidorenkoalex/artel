@@ -1119,9 +1119,30 @@ def _cmd_approve_merge_gate(conn, task_id: str, state: str, t) -> None:
     green, note = ci.branch_status(branch)
     store.journal(conn, task_id, "orchestrator", "статус CI ветки", note)
     if not green:
-        sys.exit(f"[{task_id}] merge отклонён: {note}\n"
-                 f"  задача осталась на гейте merge; почини CI ветки "
-                 f"{branch} и повтори: artel.py approve {task_id}")
+        # Ре-ран флейка (SPEC T082, требование 7, AC-14..17): красный
+        # первый статус перепроверяется РОВНО ОДИН РАЗ, до отказа гейта —
+        # `ci.branch_status` не про сетевую надёжность самого опроса
+        # («не входит»), а про то, что один красный прогон CI не всегда
+        # значит «сломано». Каждое срабатывание (флейк или подтверждённый
+        # красный) — в метрику flake-rate журнала, флейк отдельно от
+        # подтверждённого красного (AC-17).
+        rerun_green, rerun_note = ci.branch_status(branch)
+        store.journal(conn, task_id, "orchestrator",
+                      "статус CI ветки (ре-ран)", rerun_note)
+        if rerun_green:
+            store.journal(
+                conn, task_id, "orchestrator", "flake-rate",
+                f"флейк: первый статус красный, ре-ран зелёный "
+                f"({note} -> {rerun_note})")
+            green, note = rerun_green, rerun_note
+        else:
+            store.journal(
+                conn, task_id, "orchestrator", "flake-rate",
+                f"подтверждённый красный: первый статус красный, ре-ран "
+                f"тоже красный ({note} -> {rerun_note})")
+            sys.exit(f"[{task_id}] merge отклонён: {rerun_note}\n"
+                     f"  задача осталась на гейте merge; почини CI ветки "
+                     f"{branch} и повтори: artel.py approve {task_id}")
     print(f"[{task_id}] {note}")
     for cmd in (["git", "checkout", config.MAIN_BRANCH],
                 ["git", "pull", "--ff-only"]):
