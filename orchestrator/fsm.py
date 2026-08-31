@@ -1330,6 +1330,8 @@ def _cmd_approve(conn, task_id: str, sha: str | None, sid: str) -> None:
         store.update_task(conn, task_id, escalated_from=None, answer_baseline=None)
         store.set_state(conn, task_id, back, "operator",
                         expected_state=state, detail="эскалация разрешена, продолжаем")
+        if back == "in_dev":
+            _maybe_ensure_draft_mr(conn, task_id)
         print(f"  дальше: artel.py run {task_id}")
     else:
         print(f"[{task_id}] в состоянии {state} нечего подтверждать")
@@ -1381,3 +1383,4 @@ def _cmd_reject(conn, task_id: str, reason: str) -> None:
         store.set_state(conn, task_id, "in_dev", "operator",
                         expected_state=state,
                         detail=f"приёмка отклонена: {reason}")
+        _maybe_ensure_draft_mr(conn, task_id)

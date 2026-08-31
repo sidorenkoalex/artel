@@ -61,6 +61,38 @@ ANSWER-1 и всеми AC), нашла и закрыла единственны�
 пробел (юнит-тесты модулей — см. «Шаги», п.2) и довела задачу до
 `status: ready`, включая находку и оформление эскалации ниже.
 
+Итерация 2 (после REVIEW.md, `changes_requested`, замечание 1, major):
+`_maybe_ensure_draft_mr` действительно звалась не на всех входах в
+`in_dev` — двух из восьми не хватало. Замечание — класса «побочный
+эффект входа в состояние X реализован не на ВСЕХ фактических путях
+входа в X» (то же REVIEW, «Предложения системе»): закрыт приёмом
+«найди все аналогичные места», не точечно — `grep -n 'set_state(conn,
+task_id, "in_dev"' orchestrator/fsm.py` подтвердил ровно 7 буквальных
+мест плюс один динамический (`back = t["escalated_from"] or "in_dev"`,
+куда `in_dev` приходит не литералом), все восемь теперь вызывают узел.
+Закрыто:
+- `orchestrator/fsm.py:1329-1334` (`_cmd_approve`, ветка `escalated` —
+  возврат `back = t["escalated_from"] or "in_dev"`): `_maybe_ensure_
+  draft_mr` зовётся после `set_state`, но ТОЛЬКО когда `back ==
+  "in_dev"` — возврат из эскалации в другое состояние (`spec_writing`,
+  `tests_writing`, если шаг там же и упал) Draft MR заводить не должен,
+  это не вход в `in_dev`.
+- `orchestrator/fsm.py:1379-1386` (`_cmd_reject` из `acceptance`,
+  унаследованный путь T052, ветка «лимит не исчерпан»): добавлен вызов
+  сразу за `set_state(..., "in_dev", ...)`, тем же приёмом, что уже
+  стоял в ветках `merge_gate`/`verifying` этой же функции. Ветка
+  «лимит исчерпан» (`accept_rejects > LIMIT_ACCEPT_REJECTS`) ведёт в
+  `escalated`, не в `in_dev`, — там узел не нужен и не добавлен.
+
+Регресс на оба случая — новый файл `tests/test_fsm_draft_mr_reentry.py`
+(«Шаги», п.2а): белым ящиком, `github_adapter.ensure_draft_mr`
+подменена моком, проверяется факт вызова/невызова на каждой из веток
+`_cmd_approve`(escalated)/`_cmd_reject`(acceptance), включая
+отрицательные случаи (возврат не в `in_dev`, эскалация по лимиту).
+`python3 -m unittest discover -s tests` — 1068 тестов (было 1063 в
+итерации 1: +5 новых юнит-тестов), 3 красных — тот же названный список
+(«Эскалация» ниже, не новые); `tasks/T079/acceptance_tests/` — 19/19.
+
 ## Шаги
 
 1. GitHub-адаптер, `verifying` в FSM, статус CI, `reject`-расширение,
@@ -79,9 +111,15 @@ ANSWER-1 и всеми AC), нашла и закрыла единственны�
    `tests/test_github_adapter.py` (новый) — идемпотентность
    `ensure_draft_mr`/`undraft_mr`, пропуск канареечных/не-github
    задач, сбой адаптера = инцидент, а не исключение.
+   2а. (итерация 2, замечание 1 REVIEW.md) `orchestrator/fsm.py` —
+   `_maybe_ensure_draft_mr` добавлена в двух пропущенных точках входа
+   в `in_dev` (возврат из `escalated`, `reject` из `acceptance`);
+   `tests/test_fsm_draft_mr_reentry.py` (новый) — регресс на обе точки
+   и на их отрицательные соседние ветки.
 3. `docs/codebase-map.md` — регенерация (`scripts/codebase_map.py`)
    тем же коммитом (conventions-core): подхватывает
-   `orchestrator/github_adapter.py` и новые функции `ci.py`.
+   `orchestrator/github_adapter.py`, новые функции `ci.py` и новый
+   тестовый модуль п.2а.
 
 ## Покрытие требований
 
@@ -119,7 +157,7 @@ main --stat`, ниже).
 завести ожидание CI. Файл в `no_paths` (AC-14) — право менять его есть
 только у Оператора через ADR (ADR-0002, принцип целостности), поэтому
 не правлю. Полный прогон `python3 -m unittest discover -s tests` —
-1059 тестов, 3 красных (список ниже), без ошибок; локед
+1068 тестов, 3 красных (список ниже), без ошибок; локед
 `tasks/T079/acceptance_tests/` — 19/19 зелёные.
 
 Откат — `git revert` коммитов этой ветки; новые колонки БД не имеют
@@ -220,12 +258,12 @@ main --stat`, ниже).
 
 ### Контекст
 
-- Реализация (шаги 1-3 «Шаги») завершена и прогнана: `python3 -m
-  unittest discover -s tests` — 1059/1062, 3 красных (см. вопрос 1),
-  0 ошибок; `tasks/T079/acceptance_tests/` — 19/19 (включая AC-4);
-  `tests/test_merge_lock.py`, переходы `merge_gate` в
-  `tests/test_advance_guard.py` — зелёные (AC-13, T052/T053 не
-  задеты).
+- Реализация (шаги 1-3 «Шаги», включая п.2а итерации 2) завершена и
+  прогнана: `python3 -m unittest discover -s tests` — 1068 тестов,
+  3 красных (см. вопрос 1), 0 ошибок; `tasks/T079/acceptance_tests/`
+  — 19/19 (включая AC-4); `tests/test_merge_lock.py`, переходы
+  `merge_gate` в `tests/test_advance_guard.py` — зелёные (AC-13,
+  T052/T053 не задеты).
 - `docs/codebase-map.md` регенерирован тем же коммитом.
 - Diff ограничен `orchestrator/`, `tests/`, `docs/codebase-map.md`
   (AC-14) — `git diff main --stat` не показывает ни одного пути из
