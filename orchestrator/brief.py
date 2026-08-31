@@ -24,6 +24,10 @@ CONVENTIONS_REL = "CLAUDE.md"
 # свежести карты (SPEC T028, требование 5).
 MAP_WATCH_GLOBS = ("orchestrator/*.py", "scripts/*.py", "tests/*.py")
 HEADER = "--- БРИФ РОЛИ ---"
+# Потолок записей в блоке отказов advance (SPEC T078, требование 3) —
+# мягкое значение кода, не инвариант: чтобы бриф не разбухал бесконтрольно
+# при частом топтании на одном состоянии.
+ADVANCE_REFUSAL_LIMIT = 5
 
 
 def component_hash(text: str) -> str:
@@ -183,6 +187,29 @@ def developer_brief(conn, task_id: str) -> str:
                            conventions_text),
     ]
     return f"{HEADER}\n\n" + "\n".join(parts)
+
+
+def advance_refusal_history(conn, task_id: str, role: str, state: str) -> str:
+    """Блок «предыдущая попытка сдать шаг отклонена — почини это»
+    (SPEC T078): роль, запускаемая в состоянии, из которого прошлый
+    advance этой задачи отказал, получает текст отказа(ов) целиком, как
+    его печатает guard/условие перехода — вместо холостого прогона
+    вслепую (фактура T069, SPEC T078, «Контекст»).
+
+    Отказов по этому визиту состояния не было — пустая строка, бриф не
+    меняется вовсе (требование 5, AC-2): вызывающий код обязан не
+    добавлять пустой блок к промпту.
+    """
+    rows = store.refusal_history(conn, task_id, state, ADVANCE_REFUSAL_LIMIT)
+    if not rows:
+        return ""
+    body = "\n\n".join(f"— {row['action']}:\n{row['detail']}" for row in rows)
+    text = (
+        "Предыдущая попытка сдать шаг отклонена вот почему — почини это:"
+        f"\n\n{body}\n"
+    )
+    return _journal_component(conn, task_id, role,
+                              "история отказов advance", text)
 
 
 def analyst_map_component(conn, task_id: str) -> str:
