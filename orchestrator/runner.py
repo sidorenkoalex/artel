@@ -512,6 +512,74 @@ def commit_timeout_checkpoint(conn, task_id: str, role: str) -> str:
     return detail
 
 
+def commit_abnormal_checkpoint(conn, task_id: str, role: str, cause: str) -> str:
+    """WIP-чекпоинт при аварийном завершении шага: rc != 0 или обрыв
+    stdout-пайпа без таймаута (SPEC T074, требование 3 — расширение
+    правила T041 «чекпоинт только на таймауте»: до этой задачи оба
+    случая оставляли WIP как есть — rc != 0 сознательно (T041, «не
+    входит»), обрыв пайпа с rc=0 попадал под безусловный успешный
+    `commit_step_artifacts` и получал сообщение обычного автокоммита,
+    неотличимое от штатного успеха шага (см. `tasks/T074/acceptance_tests/
+    test_ac9_checkpoint_on_abnormal_step_end.py`, докстринг модуля).
+
+    Сообщение и действие журнала несут слово «чекпоинт» (та же природа,
+    что `commit_timeout_checkpoint`) плюс `cause` — короткая пометка
+    причины («rc=1», «обрыв потока»), которую вызыватель формирует под
+    свой сценарий; `commit_timeout_checkpoint` не тронут — таймаут
+    остаётся отдельной веткой со своим прежним сообщением.
+
+    Остальное поведение — дословно `commit_timeout_checkpoint`: только
+    догфуд, коммитит, только если есть что коммитить, тихая деградация
+    без git, общая обвязка `_commit_worktree_change` (SPEC T059), повторная
+    фиксация (`store.record_fixation`) — тот же довод, что там.
+    """
+    if store.task_target(conn, task_id) != config.DEFAULT_TARGET:
+        return ""
+    wt = workspace.path(task_id)
+    message = f"{task_id}: WIP-чекпоинт после аварийного завершения шага {role} ({cause})"
+    committed, sha = _commit_worktree_change(wt, message)
+    if not committed:
+        return ""
+    detail = f"{message} (sha {sha})" if sha else message
+    store.journal(conn, task_id, "orchestrator",
+                  "WIP-чекпоинт после аварийного завершения шага", detail)
+    store.record_fixation(conn, task_id)
+    return detail
+
+
+def commit_pause_now_checkpoint(conn, task_id: str, role: str) -> str:
+    """WIP-чекпоинт при `pause --now` бегущего шага (SPEC T074,
+    требования 1 и 3): вызывается `orchestrator.pause.cmd_pause_now`
+    ПОСЛЕ того, как процесс шага уже прерван — оркестратор чекпоинтит
+    дерево worktree задачи так же, как при таймауте (T041/T059), но из
+    ДРУГОГО процесса (того, что выполняет саму `pause --now`), не из
+    того, что запускало шаг.
+
+    Сообщение коммита несёт литерал «pause --now» (SPEC, требование 1:
+    «пометка причины «pause --now»», AC-3) — им же, а не отдельным
+    словом «чекпоинт» в отрыве от причины, ищет пометку приёмочный тест
+    (`tasks/T074/acceptance_tests/
+    test_ac2_ac3_ac4_ac5_interrupt_sequence.py`).
+
+    Остальное — общая обвязка `_commit_worktree_change` (только догфуд,
+    коммитит только при реальном diff, тихая деградация без git,
+    `store.record_fixation` — та же фиксация, что не даёт следующему
+    `fixation.check_integrity` увидеть сдвиг HEAD как инцидент, AC-14).
+    """
+    if store.task_target(conn, task_id) != config.DEFAULT_TARGET:
+        return ""
+    wt = workspace.path(task_id)
+    message = f"{task_id}: WIP-чекпоинт pause --now (шаг {role} прерван)"
+    committed, sha = _commit_worktree_change(wt, message)
+    if not committed:
+        return ""
+    detail = f"{message} (sha {sha})" if sha else message
+    store.journal(conn, task_id, "orchestrator", "WIP-чекпоинт pause --now",
+                  detail)
+    store.record_fixation(conn, task_id)
+    return detail
+
+
 def commit_step_artifacts(conn, task_id: str, role: str) -> str:
     """Автокоммит незакоммиченных артефактов роли по завершении успешного
     шага (rc=0), до advance-логики (SPEC T059, требования 1-3).
@@ -769,6 +837,11 @@ def run_agent_once(conn, task_id: str, role: str, prompt: str,
         return "timeout", f"таймаут шага ({timeout_min})"
 
     if rc != 0:
+        # Чекпоинт — до журнала провала, тем же доводом, что и у таймаута
+        # выше (SPEC T074, требование 3 — расширение правила T041: провал
+        # по коду возврата тоже аварийное завершение шага, не только
+        # таймаут). Сам провал/ретрай/эскалация ниже не меняются.
+        commit_abnormal_checkpoint(conn, task_id, role, f"rc={rc}")
         reason = (f"rc={rc}, {numbered}{spent}; "
                   f"хвост {log_path}:\n{agent_log.log_tail(log_path)}")
         store.journal(conn, task_id, role, "agent run FAILED", reason)
@@ -779,10 +852,18 @@ def run_agent_once(conn, task_id: str, role: str, prompt: str,
               f"причина в {log_path}")
         return "failed", reason
 
-    # Автокоммит — до журнала завершения шага и до advance-логики
-    # (SPEC T059, требование 1): роль может не успеть закоммитить свой
-    # артефакт, а `advance` уже проверяет чистоту рабочей копии.
-    commit_step_artifacts(conn, task_id, role)
+    if pump.error is not None:
+        # Обрыв stdout-пайпа без таймаута (rc=0, но перекачка сама поймала
+        # исключение) — тоже аварийное завершение (SPEC T074, требование 3):
+        # безусловный `commit_step_artifacts` ниже закоммитил бы тот же WIP
+        # сообщением обычного успешного автокоммита, неотличимым от штатного
+        # завершения шага (см. `commit_abnormal_checkpoint`, докстринг).
+        commit_abnormal_checkpoint(conn, task_id, role, "обрыв потока")
+    else:
+        # Автокоммит — до журнала завершения шага и до advance-логики
+        # (SPEC T059, требование 1): роль может не успеть закоммитить свой
+        # артефакт, а `advance` уже проверяет чистоту рабочей копии.
+        commit_step_artifacts(conn, task_id, role)
     store.journal(conn, task_id, role, "agent run finished",
                   f"rc={rc}, {numbered}{spent}")
     print(f"[{task_id}] {role} завершил (rc={rc}{spent}); "

@@ -150,5 +150,141 @@ class CommitTimeoutCheckpointTest(RealPultGitTest):
         self.assertEqual(self.orchestrator_steps(), [])
 
 
+class CommitAbnormalCheckpointTest(RealPultGitTest):
+    """Юнит-тесты `runner.commit_abnormal_checkpoint` (SPEC T074, требование
+    3 — расширение правила T041: чекпоинт не только на таймауте, но и на
+    аварийном завершении шага, rc != 0/обрыв потока)."""
+
+    def orchestrator_steps(self) -> list:
+        return [r for r in store.task_steps(store.db(), self.TASK)
+               if r["actor"] == "orchestrator"]
+
+    def test_clean_tree_commits_nothing_and_journals_nothing(self):
+        self.enter_in_dev()
+        before = self.head()
+
+        detail = runner.commit_abnormal_checkpoint(
+            store.db(), self.TASK, "developer", "rc=1")
+
+        self.assertEqual(detail, "")
+        self.assertEqual(self.head(), before)
+        self.assertEqual(self.orchestrator_steps(), [])
+
+    def test_dirty_tree_commits_with_cause_marker_in_message_and_journal(self):
+        self.enter_in_dev()
+        (self.task_dir() / "wip.md").write_text(
+            "недописано\n", encoding="utf-8")
+
+        detail = runner.commit_abnormal_checkpoint(
+            store.db(), self.TASK, "developer", "rc=1")
+
+        subject = self.git_in_worktree("log", "-1", "--format=%s").strip()
+        self.assertIn("чекпоинт", subject.lower())
+        self.assertIn("rc=1", subject)
+        self.assertIn(subject, detail)
+        self.assertIn(self.head(), detail)
+
+        entries = self.orchestrator_steps()
+        self.assertEqual(len(entries), 1)
+        self.assertIn("чекпоинт", entries[0]["action"].lower())
+
+    def test_refixation_keeps_check_integrity_clean_after_the_commit(self):
+        self.enter_in_dev()
+        (self.task_dir() / "wip.md").write_text(
+            "недописано\n", encoding="utf-8")
+
+        runner.commit_abnormal_checkpoint(
+            store.db(), self.TASK, "developer", "обрыв потока")
+
+        conn = store.db()
+        self.assertIsNone(fixation.check_integrity(conn, self.TASK))
+        self.assertEqual(store.get_task(conn, self.TASK)["fixed_sha"],
+                         self.head())
+
+    def test_non_dogfood_target_skips_checkpoint(self):
+        self.enter_in_dev()
+        (self.task_dir() / "wip.md").write_text(
+            "недописано\n", encoding="utf-8")
+        before = self.head()
+        conn = store.db()
+        store.update_task(conn, self.TASK, target="another-target")
+
+        with mock.patch.object(gitcmd, "git") as git_mock:
+            detail = runner.commit_abnormal_checkpoint(
+                conn, self.TASK, "developer", "rc=1")
+
+        git_mock.assert_not_called()
+        self.assertEqual(detail, "")
+        self.assertEqual(self.head(), before)
+        self.assertEqual(self.orchestrator_steps(), [])
+
+
+class CommitPauseNowCheckpointTest(RealPultGitTest):
+    """Юнит-тесты `runner.commit_pause_now_checkpoint` (SPEC T074,
+    требования 1, 3 — чекпоинт `pause --now`, вызванный самой командой
+    `orchestrator.pause.cmd_pause_now` из ДРУГОГО процесса, не из того,
+    что исполняло прерванный шаг)."""
+
+    def orchestrator_steps(self) -> list:
+        return [r for r in store.task_steps(store.db(), self.TASK)
+               if r["actor"] == "orchestrator"]
+
+    def test_clean_tree_commits_nothing_and_journals_nothing(self):
+        self.enter_in_dev()
+        before = self.head()
+
+        detail = runner.commit_pause_now_checkpoint(
+            store.db(), self.TASK, "developer")
+
+        self.assertEqual(detail, "")
+        self.assertEqual(self.head(), before)
+        self.assertEqual(self.orchestrator_steps(), [])
+
+    def test_dirty_tree_commits_with_pause_now_marker(self):
+        self.enter_in_dev()
+        (self.task_dir() / "wip.md").write_text(
+            "недописано\n", encoding="utf-8")
+
+        detail = runner.commit_pause_now_checkpoint(
+            store.db(), self.TASK, "developer")
+
+        subject = self.git_in_worktree("log", "-1", "--format=%s").strip()
+        self.assertIn("pause --now", subject)
+        self.assertIn(subject, detail)
+
+        entries = self.orchestrator_steps()
+        self.assertEqual(len(entries), 1)
+        self.assertIn("pause --now", entries[0]["action"])
+
+    def test_refixation_keeps_check_integrity_clean_after_the_commit(self):
+        self.enter_in_dev()
+        (self.task_dir() / "wip.md").write_text(
+            "недописано\n", encoding="utf-8")
+
+        runner.commit_pause_now_checkpoint(store.db(), self.TASK, "developer")
+
+        conn = store.db()
+        self.assertIsNone(fixation.check_integrity(conn, self.TASK))
+        self.assertEqual(store.get_task(conn, self.TASK)["fixed_sha"],
+                         self.head())
+
+    def test_non_dogfood_target_skips_checkpoint(self):
+        self.enter_in_dev()
+        (self.task_dir() / "wip.md").write_text(
+            "недописано\n", encoding="utf-8")
+        before = self.head()
+        conn = store.db()
+        store.update_task(conn, self.TASK, target="another-target")
+
+        with mock.patch.object(gitcmd, "git") as git_mock:
+            detail = runner.commit_pause_now_checkpoint(
+                conn, self.TASK, "developer")
+
+        git_mock.assert_not_called()
+        self.assertEqual(detail, "")
+        self.assertEqual(self.head(), before)
+        self.assertEqual(self.orchestrator_steps(), [])
+
+
 if __name__ == "__main__":
     unittest.main()

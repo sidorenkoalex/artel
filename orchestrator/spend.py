@@ -1,6 +1,7 @@
 """Стоимость шага: разбор чисел, событие потока, учёт в spent_usd."""
 import json
 import math
+from pathlib import Path
 
 from . import alerts, config, store
 
@@ -85,6 +86,33 @@ def stream_usage_tokens(raw_line: str) -> int | None:
     else:
         return None
     return step_tokens(usage)
+
+
+def partial_tokens_from_log(path: Path) -> tuple[int, bool]:
+    """(токены, видели_ли_usage) из УЖЕ ЗАПИСАННОГО на диск лога шага.
+
+    Тот же разбор, что `OutputPump.catch_cost` делает по ходу потока
+    (T040): каждая строка — через `stream_usage_tokens`, найденные счётчики
+    суммируются. Здесь — постфактум по файлу, а не по живому потоку
+    (SPEC T074, требование 4): `pause --now` живёт в ДРУГОМ процессе, чем
+    прерванный шаг, — памяти его `OutputPump` уже нет, есть только то, что
+    успело лечь в лог-файл на диск.
+
+    Лог не прочитан (отсутствует прогон, ФС не ответила) — `(0, False)`,
+    та же деградация без данных, что у отсутствия usage-событий в потоке.
+    """
+    try:
+        text = path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return 0, False
+    tokens = 0
+    saw = False
+    for line in text.splitlines():
+        found = stream_usage_tokens(line)
+        if found is not None:
+            saw = True
+            tokens += found
+    return tokens, saw
 
 
 def cost_note(cost: dict | None) -> str:
