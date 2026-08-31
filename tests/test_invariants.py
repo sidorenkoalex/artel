@@ -670,6 +670,8 @@ class FreshVerdictGuardsAcceptanceTest(FsmTest):
 
         self.write_review("approved", 1)
         self.capture(fsm.cmd_advance, self.TASK)
+        self.assertEqual(self.state(), "verifying")
+        self.capture(fsm.cmd_advance, self.TASK)
         self.assertEqual(self.state(), "acceptance")
 
         self.capture(fsm.cmd_reject, self.TASK, "критерий 2 не выполнен")
@@ -681,6 +683,8 @@ class FreshVerdictGuardsAcceptanceTest(FsmTest):
         self.assertIn("уже учтён", out)
 
         self.write_review("approved", 2)
+        self.capture(fsm.cmd_advance, self.TASK)
+        self.assertEqual(self.state(), "verifying")
         self.capture(fsm.cmd_advance, self.TASK)
         self.assertEqual(self.state(), "acceptance")
 
@@ -711,6 +715,8 @@ class FreshVerdictGuardsAcceptanceTest(FsmTest):
         self.write_plan("ready")
         self.write_review("approved", 1)
         self.set_state("review")
+        self.capture(fsm.cmd_advance, self.TASK)
+        self.assertEqual(self.state(), "verifying")
         self.capture(fsm.cmd_advance, self.TASK)
         self.assertEqual(self.state(), "acceptance")
 
@@ -931,11 +937,15 @@ class CountersNeverResetTest(FsmTest):
         self.step("in_dev -> review", fsm.cmd_advance, self.TASK)
 
         self.verdict("approved", 3)
+        self.assertEqual(self.state(), "verifying")
+        self.step("verifying -> acceptance", fsm.cmd_advance, self.TASK)
         self.assertEqual(self.state(), "acceptance")
         self.step("отказ приёмки", fsm.cmd_reject, self.TASK, "не то")
         self.step("in_dev -> review", fsm.cmd_advance, self.TASK)
 
         self.verdict("approved", 4)
+        self.assertEqual(self.state(), "verifying")
+        self.step("verifying -> acceptance", fsm.cmd_advance, self.TASK)
         self.step("лимит отказов приёмки", fsm.cmd_reject, self.TASK,
                   "снова не то")
         self.assertEqual(self.state(), "escalated")
