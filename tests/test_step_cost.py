@@ -176,6 +176,56 @@ class StreamUsageTokensTest(unittest.TestCase):
                 self.assertIsNone(spend.stream_usage_tokens(raw))
 
 
+class PartialTokensFromLogTest(unittest.TestCase):
+    """`spend.partial_tokens_from_log` (SPEC T074, требование 4) — тот же
+    разбор usage-событий, что `OutputPump.catch_cost` делает по потоку,
+    только постфактум по уже записанному на диск файлу лога."""
+
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.log_path = Path(tmp.name) / "step.log"
+
+    def write(self, lines: list) -> None:
+        self.log_path.write_text("".join(lines), encoding="utf-8")
+
+    def test_usage_events_are_summed(self):
+        self.write([
+            "агент работает\n",
+            assistant_event(usage={"input_tokens": 10, "output_tokens": 5}),
+            assistant_event(usage={"input_tokens": 20, "output_tokens": 8}),
+        ])
+
+        tokens, saw = spend.partial_tokens_from_log(self.log_path)
+
+        self.assertEqual(tokens, 43)
+        self.assertTrue(saw)
+
+    def test_no_usage_events_returns_zero_and_false(self):
+        self.write(["агент работает, без usage\n"])
+
+        tokens, saw = spend.partial_tokens_from_log(self.log_path)
+
+        self.assertEqual(tokens, 0)
+        self.assertFalse(saw)
+
+    def test_missing_file_returns_zero_and_false(self):
+        tokens, saw = spend.partial_tokens_from_log(
+            self.log_path.parent / "nope.log")
+
+        self.assertEqual(tokens, 0)
+        self.assertFalse(saw)
+
+    def test_result_event_in_log_counts_too(self):
+        self.write([result_event(usd=0.5, usage={"input_tokens": 7,
+                                                  "output_tokens": 3})])
+
+        tokens, saw = spend.partial_tokens_from_log(self.log_path)
+
+        self.assertEqual(tokens, 10)
+        self.assertTrue(saw)
+
+
 class PumpCostTest(TmpRootTest):
     """Перекачка снимает стоимость с потока — в файл лога она не попадает."""
 

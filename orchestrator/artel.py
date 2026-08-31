@@ -91,7 +91,7 @@ workspace, tasks, knowledge, logs). БД одна на все проекты: с
 Команды:
   init | new "<название>" [--tz <файл>] | status | show <id> | advance <id> |
   run <id> | auto <id> | approve <id> [sha] | reject <id> "<причина>" |
-  kill <id> | release <id> | pause <id> | resume <id> | log <id> |
+  kill <id> | release <id> | pause [--now] <id> | resume <id> | log <id> |
   budget <id> <usd> | target-init <target> | doctor [--restore] |
   alert-ack <id> "<решение>" | version | canary <каталог-ТЗ>
   [--rewrite-baseline] | prune [--execute]
@@ -102,6 +102,17 @@ workspace, tasks, knowledge, logs). БД одна на все проекты: с
 прерывается. `resume <id>` снимает пометку, сама шаги не запускает.
 `kill`/`approve`/`reject`/`advance` пометку не читают и работают на
 приостановленной задаче как обычно.
+
+`pause --now <id>` (SPEC T074) — жёсткая приостановка: та же пометка,
+что у обычной `pause`, ПЛЮС, если сейчас бежит агентный шаг задачи (в
+этом же процессе или в другом процессе этой машины — параллельная
+CLI-сессия, фоновый `auto`), прерывает его: процесс агента завершается,
+незакоммиченный WIP worktree задачи чекпоинтится служебным коммитом с
+пометкой причины «pause --now», lease держателя снимается, частичная
+стоимость шага учитывается по механике T040. Адресация — по данным
+lease задачи (pid, host); lease нет, его процесс мёртв или агентного
+шага сейчас нет вовсе — честная деградация до обычной `pause`, не
+ошибка; lease на другом host — честный отказ прервать (вне объёма).
 
 `release <id>` — операторское снятие lease задачи (SPEC T062): удаляет
 строку `leases` независимо от свежести heartbeat и журналирует данные
@@ -152,7 +163,7 @@ SPEC, PLAN — в ревью, REVIEW — из ревью). Нарушение с
   auto      цикл run+advance до места, где нужен человек
   cleanup   kill switch и уборка хвостов задачи
   release   операторское снятие lease задачи, независимо от свежести (T062)
-  pause     штатная приостановка задачи: pause/resume, без нового состояния FSM (T070)
+  pause     штатная и жёсткая (--now) приостановка задачи: pause/resume (T070, T074)
   catalog   каталог задач: init, new, status, show, log
   alerts    таблица alerts: incident|threshold|trigger, ack с решением (A3)
   doctor    pre-flight, recovery-сверка, сироты, смоук CLI/изоляции (A3)
@@ -214,6 +225,19 @@ def _tz_arg(rest: list) -> str | None:
     return rest[idx + 1]
 
 
+def _cmd_pause(rest: list) -> None:
+    """`pause <id>` (T070) либо `pause --now <id>` (T074) — флаг перед id,
+    тем же местом разбора, что уже держит команду `pause` в таблице
+    диспетчера ниже, а не второй записью в ней (SPEC T074 называет её
+    формой той же команды `pause`, не отдельной)."""
+    if rest and rest[0] == "--now":
+        if len(rest) < 2:
+            sys.exit("pause --now требует id задачи следующим аргументом.")
+        pause.cmd_pause_now(rest[1])
+        return
+    pause.cmd_pause(rest[0])
+
+
 def main() -> None:
     _refuse_if_worktree()
     args = sys.argv[1:]
@@ -236,7 +260,7 @@ def main() -> None:
                                          rest[1] if len(rest) > 1 else ""),
         "kill": lambda: cleanup.cmd_kill(rest[0]),
         "release": lambda: release.cmd_release(rest[0]),
-        "pause": lambda: pause.cmd_pause(rest[0]),
+        "pause": lambda: _cmd_pause(rest),
         "resume": lambda: pause.cmd_resume(rest[0]),
         "log": lambda: catalog.cmd_log(rest[0]),
         "budget": lambda: budget.cmd_budget(rest[0],
