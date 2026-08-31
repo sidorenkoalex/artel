@@ -670,12 +670,12 @@ class FreshVerdictGuardsAcceptanceTest(FsmTest):
 
         self.write_review("approved", 1)
         self.capture(fsm.cmd_advance, self.TASK)
-        # ADR-0009: маршрут review -> verifying -> acceptance (B1b, T079).
-        # До мержа T079 advance ведёт из review сразу в acceptance — тест
-        # принимает оба маршрута; охраняемое здесь — свежесть вердикта
-        # и счётчики, строгость маршрута кодирует AC-4 задачи T079.
-        if self.state() == "verifying":
-            self.capture(fsm.cmd_advance, self.TASK)
+        # ADR-0009: маршрут review -> verifying -> acceptance (B1b, T079);
+        # остановка в verifying обязательна — ужесточено после мержа T079
+        # (ADR-0009 п.3, второй шаг). Охраняемое: свежесть вердикта,
+        # счётчики и обязательность промежуточной остановки.
+        self.assertEqual(self.state(), "verifying")
+        self.capture(fsm.cmd_advance, self.TASK)
         self.assertEqual(self.state(), "acceptance")
 
         self.capture(fsm.cmd_reject, self.TASK, "критерий 2 не выполнен")
@@ -688,8 +688,8 @@ class FreshVerdictGuardsAcceptanceTest(FsmTest):
 
         self.write_review("approved", 2)
         self.capture(fsm.cmd_advance, self.TASK)
-        if self.state() == "verifying":
-            self.capture(fsm.cmd_advance, self.TASK)
+        self.assertEqual(self.state(), "verifying")
+        self.capture(fsm.cmd_advance, self.TASK)
         self.assertEqual(self.state(), "acceptance")
 
     def test_stale_verdict_is_not_passed_by_any_command(self):
@@ -720,8 +720,8 @@ class FreshVerdictGuardsAcceptanceTest(FsmTest):
         self.write_review("approved", 1)
         self.set_state("review")
         self.capture(fsm.cmd_advance, self.TASK)
-        if self.state() == "verifying":
-            self.capture(fsm.cmd_advance, self.TASK)
+        self.assertEqual(self.state(), "verifying")
+        self.capture(fsm.cmd_advance, self.TASK)
         self.assertEqual(self.state(), "acceptance")
 
         self.set_state("escalated")
@@ -941,15 +941,15 @@ class CountersNeverResetTest(FsmTest):
         self.step("in_dev -> review", fsm.cmd_advance, self.TASK)
 
         self.verdict("approved", 3)
-        if self.state() == "verifying":
-            self.step("verifying -> acceptance", fsm.cmd_advance, self.TASK)
+        self.assertEqual(self.state(), "verifying")
+        self.step("verifying -> acceptance", fsm.cmd_advance, self.TASK)
         self.assertEqual(self.state(), "acceptance")
         self.step("отказ приёмки", fsm.cmd_reject, self.TASK, "не то")
         self.step("in_dev -> review", fsm.cmd_advance, self.TASK)
 
         self.verdict("approved", 4)
-        if self.state() == "verifying":
-            self.step("verifying -> acceptance", fsm.cmd_advance, self.TASK)
+        self.assertEqual(self.state(), "verifying")
+        self.step("verifying -> acceptance", fsm.cmd_advance, self.TASK)
         self.step("лимит отказов приёмки", fsm.cmd_reject, self.TASK,
                   "снова не то")
         self.assertEqual(self.state(), "escalated")
