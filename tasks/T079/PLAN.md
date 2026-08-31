@@ -93,6 +93,23 @@ task_id, "in_dev"' orchestrator/fsm.py` подтвердил ровно 7 бук
 итерации 1: +5 новых юнит-тестов), 3 красных — тот же названный список
 («Эскалация» ниже, не новые); `tasks/T079/acceptance_tests/` — 19/19.
 
+Итерация 4 (после REVIEW.md, `changes_requested`, замечание major):
+объединяющий коммит `6d62210` («подтяжка main») разрешил конфликт
+в `docs/codebase-map.md` взятием версии main вместо регенерации —
+карта откатилась и потеряла весь раздел `orchestrator/github_adapter.py`
+и обе тестовые ссылки (`test_github_adapter.py`,
+`test_fsm_draft_mr_reentry.py`), хотя сам merge коснулся
+`orchestrator/{ci,config,fsm,runner}.py`. Закрыто: `python3
+scripts/codebase_map.py` на текущем HEAD и коммит результата отдельным
+шагом (conventions-core: регенерация тем же коммитом, что и правка
+`*.py`; здесь — исправляющий коммит поверх уже состоявшегося слияния,
+не переигровка самого merge). Функциональный код этой итерацией не
+менялся — единственная правка: `docs/codebase-map.md`. Проверено:
+`python3 -m unittest discover -s tests` — 1099/1099 (то же число, что
+в REVIEW.md итерации 4, регресса нет); `tasks/T079/acceptance_tests/`
+— 19/19; `python3 scripts/guard.py --all` — ок; `git diff main --stat`
+по путям `no_paths` target `artel` — пусто (AC-14).
+
 ## Шаги
 
 1. GitHub-адаптер, `verifying` в FSM, статус CI, `reject`-расширение,
