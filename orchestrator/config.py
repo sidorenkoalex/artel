@@ -57,6 +57,12 @@ GH_TIMEOUT_SEC = 60
 # неизвестен», то есть отказ merge.
 CI_CHECKS_PER_PAGE = 100
 CI_CHECKS_MAX_PAGES = 20
+# `gh run list` по ветке — второй источник статуса CI в `verifying`,
+# когда check-runs коммита пусты (роадмап P3, T040; SPEC T079 требование
+# 5, AC-6/AC-7): задержка события GitHub делает check-runs временно
+# пустыми, пока запуск уже виден по ветке. Небольшой запас, не полная
+# страница — интересен сам факт «есть хоть один запуск», не их список.
+CI_RUN_LIST_LIMIT = 20
 # Число прогонов `actions/runs` на sha, из которых `find_run_id` выбирает
 # адрес ре-рана (SPEC T082, ревью итерации 2, замечание major 2): push- и
 # pull_request-триггеры одного workflow дают на sha ДВА прогона при
@@ -72,7 +78,7 @@ CI_RUNS_PER_PAGE = 10
 # `ci.branch_status` следом.
 CI_RERUN_WAIT_SEC = 1200
 PUMP_JOIN_TIMEOUT_SEC = 10
-# Предел прогона acceptance_tests/ на гейте review -> acceptance
+# Предел прогона acceptance_tests/ на гейте review -> verifying
 # (orchestrator/acceptance.py, SPEC T023 требование 6). Без него зависший
 # тест (сетевой стол, бесконечный цикл, дедлок) вешает advance/auto без
 # предела и без журнала; истёкший предел — красный прогон, тем же стилем,
@@ -120,6 +126,13 @@ BUDGET_SOURCE_SPEC = "spec"
 BUDGET_SOURCE_OPERATOR = "operator"
 LIMIT_REVIEW_ITERS = 3
 LIMIT_ACCEPT_REJECTS = 1
+# Потолок ожидания CI в `verifying` (SPEC T079, требование 6): число
+# ПОПЫТОК `advance`, не время — механизм периодического вызова advance
+# в verifying (кто и как часто опрашивает статус CI) вне объёма этой
+# задачи (требование 9), так что часы тут мерить нечем. По истечении —
+# единственный автоматический выход из verifying, кроме зелёного CI:
+# эскалация с диагностикой последнего известного статуса (AC-9).
+LIMIT_VERIFYING_ATTEMPTS = 20
 # A3 doctor (tasks/T022/SPEC.md). Пин версии CLI: обновление — осознанный
 # шаг Оператора после смоук-прогона (требование 5); расхождение с ним —
 # предупреждение, не блок. Текущее значение — установленный пакет
@@ -227,6 +240,9 @@ AUTO_STOP = {
                    "или artel.py reject {id} \"причина\""),
     "merge_gate": ("гейт merge — решение Оператора",
                    "artel.py approve {id}  (выполнит merge)"),
+    "verifying": ("ожидание зелёного CI ветки",
+                  "artel.py advance {id}  (статус CI), или artel.py reject "
+                  "{id} \"причина\"  (вернуть в разработку)"),
     "escalated": ("эскалация — нужен Оператор",
                   "разберись: artel.py log {id}, затем artel.py approve {id}"),
     "done": ("задача закрыта", "ничего не требуется"),

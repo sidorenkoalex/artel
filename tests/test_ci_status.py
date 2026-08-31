@@ -278,6 +278,189 @@ class PaginationTest(unittest.TestCase):
         self.assertIn("page=1", asked[0][-1])
 
 
+class RunListTest(unittest.TestCase):
+    """`ci.run_list` — второй источник статуса CI в `verifying` (SPEC T079,
+    требование 5): запуски `gh run list` по ветке, второй сигнал против
+    check-runs коммита при задержке события GitHub (роадмап P3, T040)."""
+
+    def answer(self, stdout: str, returncode: int = 0) -> None:
+        patcher = mock.patch.object(
+            ci, "gh",
+            lambda *a: subprocess.CompletedProcess(list(a), returncode,
+                                                   stdout, ""))
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def test_runs_come_back_as_a_list(self):
+        self.answer(json.dumps([{"headBranch": "task/t001-x",
+                                 "status": "in_progress"}]))
+
+        runs, why = ci.run_list("task/t001-x")
+
+        self.assertEqual(runs, [{"headBranch": "task/t001-x",
+                                 "status": "in_progress"}])
+        self.assertEqual(why, "")
+
+    def test_no_runs_is_an_empty_list_not_none(self):
+        self.answer(json.dumps([]))
+
+        runs, why = ci.run_list("task/t001-x")
+
+        self.assertEqual(runs, [])
+        self.assertEqual(why, "")
+
+    def test_gh_that_does_not_answer_is_none(self):
+        self.answer("", 1)
+
+        runs, why = ci.run_list("task/t001-x")
+
+        self.assertIsNone(runs)
+        self.assertIn("не ответил", why)
+
+    def test_unparsable_json_is_none(self):
+        self.answer("not json")
+
+        runs, why = ci.run_list("task/t001-x")
+
+        self.assertIsNone(runs)
+        self.assertIn("не разобран", why)
+
+    def test_non_list_payload_is_none(self):
+        self.answer(json.dumps({"message": "not found"}))
+
+        runs, why = ci.run_list("task/t001-x")
+
+        self.assertIsNone(runs)
+        self.assertIn("нет списка", why)
+
+    def test_asks_for_the_branch_and_a_bounded_limit(self):
+        asked: list[tuple] = []
+
+        def spy_gh(*args):
+            asked.append(args)
+            return subprocess.CompletedProcess(list(args), 0, "[]", "")
+
+        with mock.patch.object(ci, "gh", spy_gh):
+            ci.run_list("task/t001-x")
+
+        self.assertIn("run", asked[0])
+        self.assertIn("list", asked[0])
+        self.assertIn("task/t001-x", asked[0])
+        self.assertIn(str(config.CI_RUN_LIST_LIMIT), asked[0])
+
+
+class VerifyingStatusTest(unittest.TestCase):
+    """`ci.verifying_status` — четыре исхода `verifying` (SPEC T079,
+    требование 5, AC-5..AC-8): собственная развилка функции, `check_runs`/
+    `run_list` подменены — их отдельные правила разбора уже проверены
+    выше/в `RunListTest`, здесь проверяется только то, как их результат
+    сводится к одному из четырёх исходов."""
+
+    def setUp(self):
+        patcher = mock.patch.object(ci, "head_sha", lambda branch: (SHA, ""))
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def set_check_runs(self, runs, why: str = "") -> None:
+        patcher = mock.patch.object(ci, "check_runs", lambda sha: (runs, why))
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def set_run_list(self, runs, why: str = "") -> None:
+        patcher = mock.patch.object(ci, "run_list", lambda branch: (runs, why))
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def test_all_green_and_completed_is_green(self):
+        self.set_check_runs([run("guard"), run("python")])
+
+        outcome, note = ci.verifying_status("task/t001-x")
+
+        self.assertEqual(outcome, ci.VERIFYING_GREEN)
+        self.assertIn(SHA[:8], note)
+
+    def test_a_red_conclusion_is_red_not_running_or_none(self):
+        self.set_check_runs([run("guard"),
+                             run("python", conclusion="failure")])
+
+        outcome, note = ci.verifying_status("task/t001-x")
+
+        self.assertEqual(outcome, ci.VERIFYING_RED)
+        self.assertIn("python=failure", note)
+
+    def test_an_unfinished_check_run_is_running(self):
+        self.set_check_runs([run("python", status="in_progress",
+                                 conclusion=None)])
+
+        outcome, note = ci.verifying_status("task/t001-x")
+
+        self.assertEqual(outcome, ci.VERIFYING_RUNNING)
+        self.assertIn("python", note)
+
+    def test_no_check_runs_and_no_run_list_is_none_at_all(self):
+        """AC-6: check-runs пусты И `gh run list` тоже ничего не видит."""
+        self.set_check_runs([])
+        self.set_run_list([])
+
+        outcome, note = ci.verifying_status("task/t001-x")
+
+        self.assertEqual(outcome, ci.VERIFYING_NONE)
+        self.assertIn("проверок нет вовсе", note)
+
+    def test_no_check_runs_but_gh_run_list_sees_a_run_is_running(self):
+        """AC-7: check-runs пусты, но `gh run list` видит запуск по ветке —
+        трактуется как «проверки идут», источник назван в журнале."""
+        self.set_check_runs([])
+        self.set_run_list([{"headBranch": "task/t001-x",
+                            "status": "in_progress"}])
+
+        outcome, note = ci.verifying_status("task/t001-x")
+
+        self.assertEqual(outcome, ci.VERIFYING_RUNNING)
+        self.assertIn("gh run list", note)
+
+    def test_unknown_check_runs_status_falls_back_to_run_list_too(self):
+        """`check_runs` вернул (None, why) — тоже «пусто» для этой развилки
+        (неизвестный статус не отличим от отсутствия проверок здесь)."""
+        self.set_check_runs(None, "gh не ответил")
+        self.set_run_list([{"headBranch": "task/t001-x"}])
+
+        outcome, _ = ci.verifying_status("task/t001-x")
+
+        self.assertEqual(outcome, ci.VERIFYING_RUNNING)
+
+    def test_run_list_that_does_not_answer_still_reports_none(self):
+        self.set_check_runs([])
+        self.set_run_list(None, "gh run list не ответил")
+
+        outcome, note = ci.verifying_status("task/t001-x")
+
+        self.assertEqual(outcome, ci.VERIFYING_NONE)
+        self.assertIn("проверок нет вовсе", note)
+
+    def test_unknown_head_commit_is_none(self):
+        with mock.patch.object(ci, "head_sha",
+                               lambda branch: ("", "ветки нет")):
+            outcome, note = ci.verifying_status("task/t001-x")
+
+        self.assertEqual(outcome, ci.VERIFYING_NONE)
+        self.assertIn("ветки нет", note)
+
+    def test_never_calls_run_list_when_check_runs_already_answered(self):
+        """Требование 5, AC-12: не должно быть лишних вызовов, если ответ
+        по check-runs коммита уже есть (зелёный/красный/идёт)."""
+        self.set_check_runs([run("guard")])
+        called = []
+        patcher = mock.patch.object(
+            ci, "run_list", lambda branch: called.append(branch) or ([], ""))
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+        ci.verifying_status("task/t001-x")
+
+        self.assertEqual(called, [], "run_list вызван, хотя check_runs уже ответил")
+
+
 class HeadShaTest(unittest.TestCase):
     """Sha головного коммита: спрашивается у git, пустой ответ — причина."""
 

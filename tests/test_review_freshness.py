@@ -183,11 +183,19 @@ class ReviewFreshnessScenarioTest(unittest.TestCase):
             "SELECT action, detail FROM steps WHERE task_id=? ORDER BY id",
             (self.TASK,))]
 
-    def back_to_review_after_acceptance_reject(self) -> None:
-        """review(approved #1) → acceptance → reject → in_dev → review."""
+    def back_to_review_after_verifying_reject(self) -> None:
+        """review(approved #1) → verifying → reject → in_dev → review.
+
+        SPEC T079 вставила `verifying` между `review` и `acceptance`
+        (requirement 4): свежий approved-вердикт больше не ведёт
+        напрямую в `acceptance`, и `reject` (requirement 8, AC-10) с
+        T079 применим и к `verifying`, не только к `acceptance` —
+        реализует ту же проверку «возврат требует нового вердикта» без
+        необходимости зеленить CI веткой ради захода в `acceptance`.
+        """
         self.write_review("approved", 1)
         self.capture(fsm.cmd_advance, self.TASK)
-        self.assertEqual(self.task_row()["state"], "acceptance")
+        self.assertEqual(self.task_row()["state"], "verifying")
         self.capture(fsm.cmd_reject, self.TASK, "критерий 2 не выполнен")
         self.assertEqual(self.task_row()["state"], "in_dev")
         self.capture(fsm.cmd_advance, self.TASK)
@@ -195,8 +203,8 @@ class ReviewFreshnessScenarioTest(unittest.TestCase):
 
     # ----------------------------------------------------------- сценарии
 
-    def test_stale_approved_does_not_pass_after_acceptance_reject(self):
-        self.back_to_review_after_acceptance_reject()
+    def test_stale_approved_does_not_pass_after_verifying_reject(self):
+        self.back_to_review_after_verifying_reject()
 
         out = self.capture(fsm.cmd_advance, self.TASK)
 
@@ -205,7 +213,7 @@ class ReviewFreshnessScenarioTest(unittest.TestCase):
         self.assertIn("iteration: 2", out)
 
     def test_stale_verdict_is_journaled(self):
-        self.back_to_review_after_acceptance_reject()
+        self.back_to_review_after_verifying_reject()
 
         self.capture(fsm.cmd_advance, self.TASK)
 
@@ -213,14 +221,14 @@ class ReviewFreshnessScenarioTest(unittest.TestCase):
         self.assertEqual(len(rejected), 1)
         self.assertIn("уже учтён", rejected[0])
 
-    def test_fresh_verdict_passes_to_acceptance(self):
-        self.back_to_review_after_acceptance_reject()
+    def test_fresh_verdict_passes_to_verifying(self):
+        self.back_to_review_after_verifying_reject()
         self.capture(fsm.cmd_advance, self.TASK)  # старый вердикт не провозит
 
         self.write_review("approved", 2)
         self.capture(fsm.cmd_advance, self.TASK)
 
-        self.assertEqual(self.task_row()["state"], "acceptance")
+        self.assertEqual(self.task_row()["state"], "verifying")
 
     def test_changes_requested_counted_once(self):
         self.write_review("changes_requested", 1)
@@ -236,12 +244,14 @@ class ReviewFreshnessScenarioTest(unittest.TestCase):
         # лимит итераций тот же вердикт второй раз не съедает
         self.assertEqual(self.task_row()["review_iters"], 1)
 
-    def test_first_verdict_passes_as_before(self):
+    def test_first_verdict_passes_to_verifying(self):
+        """SPEC T079, требование 4: review->acceptance напрямую больше
+        нет — свежий approved ведёт в verifying (ждёт зелёного CI)."""
         self.write_review("approved", 1)
 
         self.capture(fsm.cmd_advance, self.TASK)
 
-        self.assertEqual(self.task_row()["state"], "acceptance")
+        self.assertEqual(self.task_row()["state"], "verifying")
         self.assertEqual(self.task_row()["reviewed_iter"], 1)
 
     def test_draft_review_still_waits_for_verdict(self):
@@ -253,7 +263,7 @@ class ReviewFreshnessScenarioTest(unittest.TestCase):
         self.assertIn("жду вердикта", out)
 
     def test_reviewer_prompt_asks_for_next_iteration(self):
-        self.back_to_review_after_acceptance_reject()
+        self.back_to_review_after_verifying_reject()
 
         with mock.patch("orchestrator.runner.spawn_agent") as popen_mock:
             proc = mock.MagicMock(**{"wait.return_value": 0})

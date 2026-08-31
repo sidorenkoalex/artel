@@ -807,7 +807,7 @@ class AcceptanceRunTest(TmpRootTest):
 
         out = self.capture(fsm.cmd_advance, self.TASK)
 
-        self.assertEqual(self.state(), "acceptance")
+        self.assertEqual(self.state(), "verifying")
         self.assertIn("manual", out)
         self.assertIn("AC-2", out, "manual-критерий назван в карточке гейта")
 
@@ -826,19 +826,19 @@ class AcceptanceRunTest(TmpRootTest):
 
         self.capture(fsm.cmd_advance, self.TASK)
 
-        self.assertEqual(self.state(), "acceptance")
+        self.assertEqual(self.state(), "verifying")
 
-    def test_missing_redness_marker_does_not_block_review_to_acceptance(self):
+    def test_missing_redness_marker_does_not_block_review_to_verifying(self):
         """Маркер красноты (SPEC T064) проверяется только на выходе из
         `tests_writing` — задача уже прошла его (симулирует задачу,
         заведённую сразу в `review`), отсутствие маркера здесь не имеет
-        права заблокировать существующий переход review -> acceptance."""
+        права заблокировать существующий переход review -> verifying."""
         self.enter_review()
         self.write_acceptance_tests(AC_TEST_BOTH_COVERED_NO_MARKER)
 
         self.capture(fsm.cmd_advance, self.TASK)
 
-        self.assertEqual(self.state(), "acceptance")
+        self.assertEqual(self.state(), "verifying")
 
     def test_timeout_blocks_the_transition_and_names_the_limit(self):
         """Ревью замечание (итерация 2, major): защита таймаута прогона

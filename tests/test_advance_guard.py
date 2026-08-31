@@ -88,7 +88,7 @@ approved
 TRANSITIONS = {
     "spec_writing": ("SPEC.md", SPEC_MD, "spec_gate"),
     "in_dev": ("PLAN.md", PLAN_MD, "review"),
-    "review": ("REVIEW.md", REVIEW_MD, "acceptance"),
+    "review": ("REVIEW.md", REVIEW_MD, "verifying"),
 }
 
 
@@ -256,7 +256,7 @@ class AdvanceGuardTest(unittest.TestCase):
         name, template = self.prepare("review")
         self.write(name, template)
         self.capture(fsm.cmd_advance, self.TASK)
-        self.assertEqual(self.state(), "acceptance")
+        self.assertEqual(self.state(), "verifying")
 
         self.set_state("review")
         out = self.capture(fsm.cmd_advance, self.TASK)

@@ -6,11 +6,21 @@ from pathlib import Path
 from scripts import guard
 
 from . import (acceptance, alerts, artifacts, budget, ci, cleanup, config,
-              fixation, gates, gitcmd, lease, merge_lock, retro, store,
-              workspace, yamlmini)
+              fixation, gates, github_adapter, gitcmd, lease, merge_lock,
+              retro, store, workspace, yamlmini)
 
 # Регенерация/коммит карты кодовой базы на merge_gate (SPEC T042).
 MAP_REL = "docs/codebase-map.md"
+
+
+def _maybe_ensure_draft_mr(conn, task_id: str) -> None:
+    """Draft MR — побочный эффект каждого входа в `in_dev` (SPEC T079,
+    требование 1); идемпотентность несёт `github_adapter.ensure_draft_mr`
+    сама (колонка `draft_mr_created`), так что этот узел зовётся
+    одинаково с любой из точек входа в `in_dev`, не только с первой.
+    """
+    t = store.get_task(conn, task_id)
+    github_adapter.ensure_draft_mr(conn, task_id, t)
 
 
 def _map_content_without_sha(text: str) -> str:
@@ -381,7 +391,8 @@ def _autogate_conditions(conn, task_id: str, t, acc_tdir: Path,
 
 def _maybe_autogate_acceptance(conn, task_id: str, t, acc_tdir: Path,
                                iteration: int) -> None:
-    """После перехода `review -> acceptance` — попытка автогейта.
+    """После входа в `acceptance` (с SPEC T079 — из `verifying`, раньше —
+    напрямую из `review`) — попытка автогейта.
 
     Политика гейта acceptance не `auto` (включая неизвестное значение,
     отсутствие секции или нечитаемый `gates.yaml` — `gates.policy`
@@ -812,11 +823,16 @@ def _cmd_advance(conn, task_id: str) -> bool:
             store.journal(conn, task_id, "fsm", "приёмочные тесты пройдены",
                           card)
             print(f"[{task_id}] {card}")
-            store.set_state(conn, task_id, "acceptance", "fsm",
+            # Вставка verifying между review и acceptance (SPEC T079,
+            # требование 4; ADR-0003 п.10): свежий approved + зелёные
+            # acceptance_tests раньше вели напрямую в acceptance — теперь
+            # ждут ещё и зелёного CI головного коммита ветки. Автогейт
+            # acceptance (_maybe_autogate_acceptance) переехал на вход
+            # `verifying -> acceptance` ниже — тот же вызов, новая точка.
+            store.update_task(conn, task_id, verifying_attempts=0)
+            store.set_state(conn, task_id, "verifying", "fsm",
                             expected_state=state,
-                            detail="ревью пройдено — приёмка Оператором "
-                            "(по критериям SPEC)")
-            _maybe_autogate_acceptance(conn, task_id, t, acc_tdir, iteration)
+                            detail="ревью пройдено — жду зелёного CI ветки")
         elif status == "changes_requested":
             iters = t["review_iters"] + 1
             if iters >= config.LIMIT_REVIEW_ITERS:
@@ -829,6 +845,7 @@ def _cmd_advance(conn, task_id: str) -> bool:
                 store.set_state(conn, task_id, "in_dev", "fsm",
                                 expected_state=state,
                                 detail=f"замечания ревью, итерация {iters}")
+                _maybe_ensure_draft_mr(conn, task_id)
         elif status == "escalate":
             answer_baseline = _answer_baseline_or_refuse(conn, task_id, t, tdir)
             if answer_baseline is None:
@@ -836,6 +853,44 @@ def _cmd_advance(conn, task_id: str) -> bool:
             store.update_task(conn, task_id, answer_baseline=answer_baseline)
             store.set_state(conn, task_id, "escalated", "fsm",
                             expected_state=state, detail="эскалация от ревьювера")
+        return False
+
+    elif state == "verifying":
+        # Ожидание зелёного CI головного коммита ветки задачи (SPEC T079,
+        # требования 5-7; AC-5..AC-9). Четыре исхода различает
+        # `ci.verifying_status` (роадмап P3, T040): зелёный, «проверок нет
+        # вовсе», «проверки идут» (в т.ч. по gh run list), CI красный —
+        # только первый двигает задачу; остальные три ждут, различаясь
+        # только диагностикой в журнале (AC-6/AC-7/AC-8), пока не
+        # исчерпан потолок попыток (требование 6, AC-9). Ни один исход
+        # не создаёт коммитов и не «будит» CI (требование 5, AC-12).
+        branch = t["branch"]
+        outcome, note = ci.verifying_status(branch)
+        store.journal(conn, task_id, "orchestrator",
+                      "статус CI ветки (verifying)", note)
+        if outcome == ci.VERIFYING_GREEN:
+            print(f"[{task_id}] {note}")
+            store.set_state(conn, task_id, "acceptance", "fsm",
+                            expected_state=state, detail=note)
+            acc_tdir = tdir
+            if workspace.on_task_branch(task_id, t["branch"]) is True:
+                acc_tdir = workspace.path(task_id) / "tasks" / task_id
+            _maybe_autogate_acceptance(conn, task_id, t, acc_tdir,
+                                       t["reviewed_iter"])
+            return False
+        attempts = (t["verifying_attempts"] or 0) + 1
+        if attempts >= config.LIMIT_VERIFYING_ATTEMPTS:
+            store.update_task(conn, task_id, verifying_attempts=0)
+            store.set_state(conn, task_id, "escalated", "fsm",
+                            expected_state=state,
+                            detail=f"потолок ожидания CI в verifying "
+                            f"исчерпан ({config.LIMIT_VERIFYING_ATTEMPTS} "
+                            f"попыток advance) — последний статус: {note}")
+            print(f"[{task_id}] потолок ожидания CI исчерпан — эскалация")
+        else:
+            store.update_task(conn, task_id, verifying_attempts=attempts)
+            print(f"[{task_id}] {note} — жду "
+                 f"({attempts}/{config.LIMIT_VERIFYING_ATTEMPTS})")
         return False
 
     elif state == "tests_writing":
@@ -882,6 +937,7 @@ def _cmd_advance(conn, task_id: str) -> bool:
         store.update_task(conn, task_id,
                           tests_locked_sha=store.get_task(
                               conn, task_id)["fixed_sha"])
+        _maybe_ensure_draft_mr(conn, task_id)
         return False
 
     elif state == "in_dev":
@@ -1064,6 +1120,7 @@ def _handle_merge_conflict(conn, task_id: str, state: str, branch: str,
                   f"конфликтующие файлы: {file_list}")
         store.set_state(conn, task_id, "in_dev", "fsm",
                         expected_state=state, detail=detail)
+        _maybe_ensure_draft_mr(conn, task_id)
 
 
 def _cmd_approve_merge_gate(conn, task_id: str, state: str, t) -> None:
@@ -1249,6 +1306,7 @@ def _cmd_approve(conn, task_id: str, sha: str | None, sid: str) -> None:
                       f"tests_writing недоступна")
             store.set_state(conn, task_id, "in_dev", "operator",
                             expected_state=state, detail=detail)
+            _maybe_ensure_draft_mr(conn, task_id)
             print(f"  дальше: artel.py run {task_id}  (запуск разработчика)")
         else:
             store.set_state(conn, task_id, "tests_writing", "operator",
@@ -1263,6 +1321,10 @@ def _cmd_approve(conn, task_id: str, sha: str | None, sid: str) -> None:
             return
         store.set_state(conn, task_id, "merge_gate", "operator",
                         expected_state=state, detail="приёмка пройдена")
+        # Undraft Draft MR (SPEC T079, требование 2, AC-2): побочный
+        # эффект входа в merge_gate, не условие перехода — отказ адаптера
+        # не держит гейт (github_adapter.undraft_mr сама не бросает).
+        github_adapter.undraft_mr(conn, task_id, store.get_task(conn, task_id))
         print(f"  дальше: artel.py approve {task_id}  (выполнит merge)")
     elif state == "merge_gate":
         # Мьютекс merge-окна (SPEC T053, требования 1-3): один держатель
@@ -1307,6 +1369,8 @@ def _cmd_approve(conn, task_id: str, sha: str | None, sid: str) -> None:
         store.update_task(conn, task_id, escalated_from=None, answer_baseline=None)
         store.set_state(conn, task_id, back, "operator",
                         expected_state=state, detail="эскалация разрешена, продолжаем")
+        if back == "in_dev":
+            _maybe_ensure_draft_mr(conn, task_id)
         print(f"  дальше: artel.py run {task_id}")
     else:
         print(f"[{task_id}] в состоянии {state} нечего подтверждать")
@@ -1330,10 +1394,24 @@ def _cmd_reject(conn, task_id: str, reason: str) -> None:
         store.set_state(conn, task_id, "in_dev", "operator",
                         expected_state=state,
                         detail=f"возврат из merge_gate: {reason}")
+        _maybe_ensure_draft_mr(conn, task_id)
+        return
+    if state == "verifying":
+        # Возврат из verifying (SPEC T079, требование 8, AC-10): тем же
+        # приёмом, каким T052 расширила reject на merge_gate — один
+        # переход в in_dev, без роста review_iters/accept_rejects.
+        # Единственный ручной выход из verifying при красном CI —
+        # симметрия инварианта 19 (требование 7): красный CI сам по себе
+        # задачу не возвращает, только reject Оператора или потолок
+        # ожидания (AC-9).
+        store.set_state(conn, task_id, "in_dev", "operator",
+                        expected_state=state,
+                        detail=f"возврат из verifying: {reason}")
+        _maybe_ensure_draft_mr(conn, task_id)
         return
     if state != "acceptance":
-        sys.exit(f"[{task_id}] reject применим только в acceptance или "
-                 f"merge_gate (сейчас {state})")
+        sys.exit(f"[{task_id}] reject применим только в acceptance, "
+                 f"merge_gate или verifying (сейчас {state})")
     rejects = t["accept_rejects"] + 1
     if rejects > config.LIMIT_ACCEPT_REJECTS:
         store.set_state(conn, task_id, "escalated", "fsm",
@@ -1344,3 +1422,4 @@ def _cmd_reject(conn, task_id: str, reason: str) -> None:
         store.set_state(conn, task_id, "in_dev", "operator",
                         expected_state=state,
                         detail=f"приёмка отклонена: {reason}")
+        _maybe_ensure_draft_mr(conn, task_id)

@@ -16,7 +16,10 @@ docs/invariants.md) этим не затронут — `auto` как модул�
 не проходит ни одного гейта; путь существует только внутри этого модуля
 и только для задач, которые сама же команда `canary` завела. `merge_gate`
 canary не approve никогда — задача убивается штатным `cleanup.cmd_kill`
-(main этим путём не трогается — kill не мержит).
+(main этим путём не трогается — kill не мержит). `verifying` (SPEC T079)
+канарейка тоже не дожидается — CI ветки, которого у неё нет и не будет
+(канареечные задачи не заводят Draft MR, github_adapter.py), задача
+убивается тем же приёмом, что и на `merge_gate`.
 """
 import json
 import sys
@@ -79,6 +82,22 @@ def _kill_at_merge_gate(conn, task_id: str) -> None:
     cleanup.cmd_kill(task_id)
 
 
+def _kill_at_verifying(conn, task_id: str) -> None:
+    """`verifying` (SPEC T079) ждёт реального CI ветки — у канареечной
+    задачи его никогда не будет (`github_adapter.ensure_draft_mr`
+    пропускает канареечные задачи, tasks/T065/SPEC.md границы: песочница/
+    креды роли — вне объёма). Ждать здесь потолок `advance` (SPEC T079,
+    требование 6) — платить реальным временем прогона canary за
+    заведомо недостижимый зелёный CI; убиваем сразу, тем же приёмом, что
+    `_kill_at_merge_gate`."""
+    store.journal(conn, task_id, CANARY_MARK_ACTOR,
+                 "canary: verifying не дожидается CI — задача убивается",
+                 "канареечная задача не заводит Draft MR и не имеет "
+                 "реального CI ветки (tasks/T079/SPEC.md, требование 1 — "
+                 "canary вне объёма адаптера)")
+    cleanup.cmd_kill(task_id)
+
+
 def _drive_task(conn, task_id: str) -> None:
     """Ведёт ОДНУ заведённую канарейкой задачу до её конца (`killed`) или
     до состояния, дальше которого canary не умеет вести (эскалация и
@@ -95,6 +114,9 @@ def _drive_task(conn, task_id: str) -> None:
             continue
         if state == "merge_gate":
             _kill_at_merge_gate(conn, task_id)
+            return
+        if state == "verifying":
+            _kill_at_verifying(conn, task_id)
             return
         if runner.step_role(t) is not None:
             # `auto` остановился, не дойдя до гейта (лимит AUTO_MAX_STEPS

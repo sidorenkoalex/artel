@@ -125,6 +125,83 @@ def check_runs(sha: str) -> tuple[list | None, str]:
     return runs, ""
 
 
+def run_list(branch: str) -> tuple[list | None, str]:
+    """Запуски `gh run list` по ветке; (None, причина) — ответа нет.
+
+    Второй источник статуса CI для `verifying` (роадмап P3, T040; SPEC
+    T079, требование 5, AC-6/AC-7): задержка события GitHub оставляет
+    check-runs коммита временно пустыми, хотя запуск по ветке уже виден.
+    Литерал `run`/`list` в argv — прямая цитата требования 5 («gh run
+    list по ветке»), не домысел интерфейса.
+    """
+    res = gh("run", "list", "--branch", branch, "--json",
+             "headBranch,status,conclusion", "--limit",
+             str(config.CI_RUN_LIST_LIMIT))
+    if res.returncode != 0:
+        detail = (res.stderr or res.stdout).strip()[:200]
+        return None, f"gh run list не ответил: {detail or f'код {res.returncode}'}"
+    try:
+        payload = json.loads(res.stdout)
+    except (json.JSONDecodeError, TypeError) as exc:
+        return None, f"ответ gh run list не разобран: {exc}"
+    if not isinstance(payload, list):
+        return None, "в ответе gh run list нет списка запусков"
+    return payload, ""
+
+
+# Четыре исхода requirement 5 SPEC T079 (AC-5..AC-8): зелёный, «проверок
+# нет вовсе», «проверки идут» (в т.ч. по gh run list), «CI красный».
+VERIFYING_GREEN = "green"
+VERIFYING_NONE = "none"
+VERIFYING_RUNNING = "running"
+VERIFYING_RED = "red"
+
+
+def verifying_status(branch: str) -> tuple[str, str]:
+    """Статус CI ветки задачи в состоянии `verifying` (SPEC T079,
+    требование 5) — не то же самое, что `branch_status`: тот сворачивает
+    любой не-зелёный исход в единое "нельзя мержить" (гейт merge_gate,
+    условие которого не различает причины); здесь причины различать
+    обязательно — «проверок нет» и «CI красный» ведут к разным записям
+    журнала и (со временем) к разным решениям Оператора.
+
+    Не создаёт коммитов и не зовёт ничего, что «будит» CI (требование 5,
+    AC-12) — читает только.
+    """
+    sha, why = head_sha(branch)
+    if not sha:
+        return VERIFYING_NONE, f"статус CI неизвестен: {why}"
+    short = sha[:8]
+
+    runs, why = check_runs(sha)
+    if not runs:
+        first_source = (f"у коммита {short} нет ни одной проверки CI"
+                        if runs is not None else
+                        f"статус check-runs коммита {short} неизвестен ({why})")
+        runs_by_branch, run_why = run_list(branch)
+        if runs_by_branch:
+            return VERIFYING_RUNNING, (f"{first_source}, но `gh run list` "
+                                       f"по ветке {branch} показывает "
+                                       f"запуск — проверки идут")
+        detail = (f"и `gh run list` по ветке {branch} не ответил "
+                  f"({run_why})" if runs_by_branch is None else
+                  f"и `gh run list` по ветке {branch} не показывает "
+                  f"запусков")
+        return VERIFYING_NONE, f"{first_source}, {detail} — проверок нет вовсе"
+
+    running = [str(r.get("name", "?")) for r in runs
+              if r.get("status") != "completed"]
+    if running:
+        return VERIFYING_RUNNING, (f"CI коммита {short} ещё идёт: "
+                                   f"{', '.join(running)}")
+
+    failed = [f"{r.get('name', '?')}={r.get('conclusion')}" for r in runs
+             if r.get("conclusion") not in GREEN]
+    if failed:
+        return VERIFYING_RED, f"CI коммита {short} не зелёный: {', '.join(failed)}"
+    return VERIFYING_GREEN, f"CI коммита {short} зелёный ({len(runs)} проверок)"
+
+
 def branch_status(branch: str) -> tuple[bool, str]:
     """(Зелёный ли CI ветки, пояснение для журнала и Оператора).
 
