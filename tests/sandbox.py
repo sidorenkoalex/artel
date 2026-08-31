@@ -21,13 +21,26 @@
 каталога; ран post-merge T038, 26.08) — десяток тестовых файлов держали
 свою копию `tmp = tempfile.TemporaryDirectory(); self.addCleanup(tmp.
 cleanup)` в обход этого модуля.
+
+`_ts_ago`, `FakeStream` (было приватным `_FakeStream`), `SpyRun`,
+`RealGitSandbox`, `_dead_pid` — третье поколение той же копипасты
+(SPEC T089, находка CR-2 ревизии 31.08): `_ts_ago` байт-в-байт повторён в
+4 файлах (формат метки времени heartbeat lease), `FakeStream` — в 4
+копиях, `SpyRun`/`RealGitSandbox`/`_dead_pid` — по 2. `SpyRun` сведён к
+варианту-надмножеству (спецкейс `rev-parse --verify refs/heads/*`, тот же
+приём, что `fake_git` ниже); `RealGitSandbox` несёт только общую часть
+(git-репозиторий с одним коммитом на main + патч `ALL_CONFIG_ATTRS`) —
+файл-специфичная надстройка (`head`/`write_and_commit` или
+`TASK`/`commit_on_branch`) остаётся локальным подклассом там, где нужна.
 """
 import errno
 import io
 import shutil
 import subprocess
+import sys
 import tempfile
 import unittest
+from datetime import datetime, timedelta, timezone
 from contextlib import redirect_stdout
 from pathlib import Path
 from unittest import mock
@@ -127,7 +140,7 @@ def fake_git_for(responses: dict) -> callable:
     return fake
 
 
-class _FakeStream:
+class FakeStream:
     """Пайп процесса: отдаёт заготовленные строки, помнит своё закрытие."""
 
     def __init__(self, lines):
@@ -148,7 +161,7 @@ class FakeProc:
     """Процесс агента: отдаёт заготовленные строки, wait() — сразу rc."""
 
     def __init__(self, lines, returncode: int = 0):
-        self.stdout = _FakeStream(lines)
+        self.stdout = FakeStream(lines)
         self.returncode = returncode
 
     def wait(self, timeout=None) -> int:
@@ -179,6 +192,47 @@ def claude_only_popen(fake_proc):
             return fake_proc
         return _REAL_POPEN(cmd, *args, **kwargs)
     return popen
+
+
+def _ts_ago(seconds: float) -> str:
+    """Метка времени heartbeat lease `seconds` секунд назад, в формате,
+    который читает `orchestrator.liveness` (SPEC T089: формат heartbeat
+    lease знали по отдельности 4 копии этой функции)."""
+    return (datetime.now(timezone.utc) - timedelta(seconds=seconds)).strftime(
+        "%Y-%m-%d %H:%M:%SZ")
+
+
+def _dead_pid() -> int:
+    """Гарантированно мёртвый pid: дочерний процесс, дождавшийся своего
+    завершения."""
+    proc = subprocess.Popen([sys.executable, "-c", "pass"],
+                            stdout=subprocess.DEVNULL,
+                            stderr=subprocess.DEVNULL)
+    proc.wait()
+    return proc.pid
+
+
+class SpyRun:
+    """Подмена `subprocess.run`: команда запоминается и не исполняется."""
+
+    def __init__(self):
+        self.calls: list = []
+
+    def __call__(self, cmd, *args, **kwargs) -> subprocess.CompletedProcess:
+        self.calls.append(list(cmd))
+        # `rev-parse --verify --quiet refs/heads/*` (`gitcmd.branch_exists`)
+        # — отдельно, с отказом (SPEC T048, тот же приём, что и `fake_git`
+        # выше): `cmd_new` решает, заводить ли задачу, по ответу этого
+        # вызова — отвечай он успехом на всё подряд, `cmd_new` увидел бы
+        # любую ветку уже существующей.
+        if (len(cmd) >= 4 and cmd[1] == "rev-parse" and cmd[2] == "--verify"
+                and cmd[-1].startswith("refs/heads/")):
+            return subprocess.CompletedProcess(list(cmd), 1, "", "")
+        return subprocess.CompletedProcess(list(cmd), 0, "", "")
+
+    def git_subcommands(self) -> list:
+        """Подкоманды git по порядку: ['checkout', 'pull', 'merge', ...]."""
+        return [c[1] for c in self.calls if len(c) > 1 and c[0] == "git"]
 
 
 def fake_git(*args: str) -> subprocess.CompletedProcess:
@@ -239,3 +293,45 @@ class TmpRootTest(unittest.TestCase):
 
     def capture(self, fn, *args) -> str:
         return capture(fn, *args)
+
+
+class RealGitSandbox(TmpRootTest):
+    """`self.root` — свежий git-репозиторий с веткой main и одним коммитом.
+
+    Общая часть двух копий (SPEC T089): предмет проверки у обоих исходных
+    файлов — поведение относительно НАСТОЯЩЕГО git-репозитория, заглушкой
+    (`fake_git`) это не изобразить. Файл-специфичную надстройку (методы
+    `head`/`write_and_commit` или атрибуты `TASK`/`self.branch` и
+    `commit_on_branch`) несёт локальный подкласс в каждом тестовом файле —
+    здесь только то, что было byte-identical в обеих копиях.
+    """
+
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(resilient_tmp_cleanup, tmp)
+        self.root = Path(tmp.name).resolve()
+
+        self.git("init", "-q", "-b", config.MAIN_BRANCH)
+        self.git("config", "user.email", "artel@example.invalid")
+        self.git("config", "user.name", "artel tests")
+        (self.root / "marker.txt").write_text("main\n", encoding="utf-8")
+        self.git("add", "-A")
+        self.git("commit", "-q", "-m", "init")
+
+        for attr in ALL_CONFIG_ATTRS:
+            patcher = mock.patch.object(config, attr, self._patched_path(attr))
+            patcher.start()
+            self.addCleanup(patcher.stop)
+
+    def git(self, *args: str) -> str:
+        res = subprocess.run(["git", *args], cwd=self.root,
+                             capture_output=True, text=True)
+        self.assertEqual(res.returncode, 0, f"git {' '.join(args)}: {res.stderr}")
+        return res.stdout
+
+    def checkout(self, branch: str, create: bool = False) -> None:
+        args = ["checkout", "-q"]
+        if create:
+            args.append("-b")
+        args.append(branch)
+        self.git(*args)

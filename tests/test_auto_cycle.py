@@ -15,7 +15,6 @@ tests/test_agent_log.py, tests/test_agent_failure.py, tests/test_step_cost.py).
 """
 import shutil
 import sqlite3
-import subprocess
 import sys
 import tempfile
 import unittest
@@ -26,7 +25,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from orchestrator import (agent_log, auto, budget, catalog,  # noqa: E402
                           config, fsm, gitcmd, pause, runner, store)
-from tests.sandbox import capture, fake_git  # noqa: E402
+from tests.sandbox import SpyRun, capture, fake_git  # noqa: E402
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
@@ -80,20 +79,6 @@ schema_version: 1
 ## Проверено исполнением
 `python3 -m unittest discover -s tests` — зелёный.
 """
-
-
-class SpyRun:
-    """Подмена `subprocess.run`: команда запоминается и не исполняется."""
-
-    def __init__(self):
-        self.calls: list[list[str]] = []
-
-    def __call__(self, cmd, *args, **kwargs) -> subprocess.CompletedProcess:
-        self.calls.append(list(cmd))
-        return subprocess.CompletedProcess(list(cmd), 0, "", "")
-
-    def git_subcommands(self) -> list[str]:
-        return [c[1] for c in self.calls if len(c) > 1 and c[0] == "git"]
 
 
 class FakeRun:

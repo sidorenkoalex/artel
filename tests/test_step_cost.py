@@ -25,7 +25,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from orchestrator import (agent_log, budget, catalog, config,  # noqa: E402
                           fsm, gitcmd, runner, spend, store)
-from tests.sandbox import (FakeProc, TmpRootTest, fake_git,  # noqa: E402
+from tests.sandbox import (FakeProc, FakeStream, TmpRootTest, fake_git,  # noqa: E402
                            seed_developer_brief_fixtures, sync_spec_from_worktree)
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -48,23 +48,6 @@ def assistant_event(usage=None) -> str:
     if usage is not None:
         message["usage"] = usage
     return event(type="assistant", message=message)
-
-
-class FakeStream:
-    """Пайп процесса: отдаёт заготовленные строки, помнит своё закрытие."""
-
-    def __init__(self, lines):
-        self.lines = iter(lines)
-        self.closed = False
-
-    def __iter__(self):
-        return self
-
-    def __next__(self) -> str:
-        return next(self.lines)
-
-    def close(self) -> None:
-        self.closed = True
 
 
 

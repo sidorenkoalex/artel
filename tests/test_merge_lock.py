@@ -8,34 +8,16 @@
 """
 import os
 import socket
-import subprocess
 import sys
 import threading
 import unittest
-from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from orchestrator import catalog, config, merge_lock, store  # noqa: E402
-from tests.sandbox import TmpRootTest, capture  # noqa: E402
-
-
-def _ts_ago(seconds: float) -> str:
-    return (datetime.now(timezone.utc) - timedelta(seconds=seconds)).strftime(
-        "%Y-%m-%d %H:%M:%SZ")
-
-
-def _dead_pid() -> int:
-    """Гарантированно мёртвый pid: дочерний процесс, дождавшийся своего
-    завершения (тот же приём, что `tasks/T053/acceptance_tests/
-    test_ac6_dead_holder_lock_stepped_over.py::_dead_pid`)."""
-    proc = subprocess.Popen([sys.executable, "-c", "pass"],
-                            stdout=subprocess.DEVNULL,
-                            stderr=subprocess.DEVNULL)
-    proc.wait()
-    return proc.pid
+from tests.sandbox import TmpRootTest, _dead_pid, _ts_ago, capture  # noqa: E402
 
 
 class AcquireReleaseTest(TmpRootTest):

@@ -13,9 +13,7 @@
 28 реестра (docs/invariants.md) — его отключение или ослабление допустимо
 только Оператором отдельным ADR.
 """
-import subprocess
 import sys
-import tempfile
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -23,42 +21,14 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from orchestrator import config, gitcmd, store  # noqa: E402
-from tests.sandbox import (ALL_CONFIG_ATTRS, TmpRootTest,  # noqa: E402
-                           resilient_tmp_cleanup)
+from tests.sandbox import RealGitSandbox, TmpRootTest  # noqa: E402
 
 
-class RealGitSandbox(TmpRootTest):
-    """`self.root` — свежий git-репозиторий с веткой main и одним коммитом."""
-
-    def setUp(self):
-        tmp = tempfile.TemporaryDirectory()
-        self.addCleanup(resilient_tmp_cleanup, tmp)
-        self.root = Path(tmp.name).resolve()
-
-        self.git("init", "-q", "-b", config.MAIN_BRANCH)
-        self.git("config", "user.email", "artel@example.invalid")
-        self.git("config", "user.name", "artel tests")
-        (self.root / "marker.txt").write_text("main\n", encoding="utf-8")
-        self.git("add", "-A")
-        self.git("commit", "-q", "-m", "init")
-
-        for attr in ALL_CONFIG_ATTRS:
-            patcher = mock.patch.object(config, attr, self._patched_path(attr))
-            patcher.start()
-            self.addCleanup(patcher.stop)
-
-    def git(self, *args: str) -> str:
-        res = subprocess.run(["git", *args], cwd=self.root,
-                             capture_output=True, text=True)
-        self.assertEqual(res.returncode, 0, f"git {' '.join(args)}: {res.stderr}")
-        return res.stdout
-
-    def checkout(self, branch: str, create: bool = False) -> None:
-        args = ["checkout", "-q"]
-        if create:
-            args.append("-b")
-        args.append(branch)
-        self.git(*args)
+class _GitcmdRealGitSandbox(RealGitSandbox):
+    """Надстройка над общей `sandbox.RealGitSandbox`, нужная только этому
+    файлу: чтение головы ветки и добавление коммита без переключения на
+    ветку задачи (тесты `on_foreign_branch`/`show`/`ls_tree_files` читают
+    ветки, не переключая на них рабочее дерево)."""
 
     def head(self) -> str:
         return self.git("rev-parse", "HEAD").strip()
@@ -70,7 +40,7 @@ class RealGitSandbox(TmpRootTest):
         self.git("commit", "-q", "-m", message)
 
 
-class ShowTest(RealGitSandbox):
+class ShowTest(_GitcmdRealGitSandbox):
 
     def test_reads_file_from_a_branch_regardless_of_checkout(self):
         self.checkout("feature", create=True)
@@ -97,7 +67,7 @@ class ShowTest(RealGitSandbox):
         self.assertTrue(reason)
 
 
-class LsTreeFilesTest(RealGitSandbox):
+class LsTreeFilesTest(_GitcmdRealGitSandbox):
 
     def test_lists_files_under_a_directory_in_the_branch(self):
         self.checkout("feature", create=True)
@@ -122,7 +92,7 @@ class LsTreeFilesTest(RealGitSandbox):
         self.assertIsNone(gitcmd.ls_tree_files("no-such-branch", "dir"))
 
 
-class BranchHeadShaTest(RealGitSandbox):
+class BranchHeadShaTest(_GitcmdRealGitSandbox):
 
     def test_returns_the_branch_tip_independent_of_checkout(self):
         self.checkout("feature", create=True)
@@ -138,7 +108,7 @@ class BranchHeadShaTest(RealGitSandbox):
         self.assertEqual(gitcmd.branch_head_sha("no-such-branch"), "")
 
 
-class OnForeignBranchTest(RealGitSandbox):
+class OnForeignBranchTest(_GitcmdRealGitSandbox):
 
     def test_own_branch_checked_out_is_not_foreign(self):
         self.checkout("feature", create=True)
@@ -161,7 +131,7 @@ class OnForeignBranchTest(RealGitSandbox):
         self.assertFalse(gitcmd.on_foreign_branch(""))
 
 
-class CommitsBehindTest(RealGitSandbox):
+class CommitsBehindTest(_GitcmdRealGitSandbox):
     """SPEC T051, требование 2: число коммитов base, которых нет в branch."""
 
     def test_branch_with_everything_from_main_is_zero_behind(self):

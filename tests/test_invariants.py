@@ -34,7 +34,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from orchestrator import (artel, budget, catalog, ci, cleanup,  # noqa: E402
                           config, fsm, gitcmd, runner, store)
 from scripts import guard  # noqa: E402
-from tests.sandbox import FakeProc, capture, resilient_tmp_cleanup  # noqa: E402
+from tests.sandbox import (FakeProc, SpyRun, capture,  # noqa: E402
+                           resilient_tmp_cleanup)
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
@@ -133,29 +134,6 @@ schema_version: 1
 ## Проверено исполнением
 `python3 -m unittest discover -s tests` — зелёный.
 """
-
-
-class SpyRun:
-    """Подмена `subprocess.run`: команда запоминается и не исполняется."""
-
-    def __init__(self):
-        self.calls: list[list[str]] = []
-
-    def __call__(self, cmd, *args, **kwargs) -> subprocess.CompletedProcess:
-        self.calls.append(list(cmd))
-        # `rev-parse --verify --quiet refs/heads/*` (`gitcmd.branch_exists`)
-        # — отдельно, с отказом (SPEC T048, тот же приём, что и
-        # `tests.sandbox.fake_git`): `cmd_new` теперь решает, заводить ли
-        # задачу, по ответу этого вызова (AC-3) — отвечай он успехом на
-        # всё подряд, `cmd_new` увидел бы любую ветку уже существующей.
-        if (len(cmd) >= 4 and cmd[1] == "rev-parse" and cmd[2] == "--verify"
-                and cmd[-1].startswith("refs/heads/")):
-            return subprocess.CompletedProcess(list(cmd), 1, "", "")
-        return subprocess.CompletedProcess(list(cmd), 0, "", "")
-
-    def git_subcommands(self) -> list[str]:
-        """Подкоманды git по порядку: ['checkout', 'pull', 'merge', ...]."""
-        return [c[1] for c in self.calls if len(c) > 1 and c[0] == "git"]
 
 
 class FsmTest(unittest.TestCase):
