@@ -3,7 +3,7 @@ task: T079
 type: review
 author_role: reviewer
 status: approved        # draft | approved | changes_requested | escalate
-iteration: 2
+iteration: 3
 schema_version: 2    # версия формата артефакта, см. scripts/guard.py
 ---
 
@@ -13,10 +13,10 @@ schema_version: 2    # версия формата артефакта, см. scr
 
 | Требование | Вердикт | Комментарий |
 |---|---|---|
-| 1 (Draft MR на первый вход в in_dev, один на цикл) | Реализовано верно | Замечание 1 итерации 1 закрыто: `_maybe_ensure_draft_mr` теперь стоит на всех 8 фактических точках входа в `in_dev` — проверено построчно (`grep -n 'set_state(conn, task_id, "in_dev"\|back = t\[.escalated_from.\]'` даёт 8 совпадений, `grep -n '_maybe_ensure_draft_mr'` — 8 вызовов, каждый привязан к своему `set_state`/ветке `back == "in_dev"`, включая корректно исключённые ветки — возврат из эскалации не в `in_dev` (fsm.py:1333) и эскалацию по лимиту приёмки (fsm.py:1377-1380), которые узел заводить не должны). Идемпотентность несёт `draft_mr_created` в `github_adapter.ensure_draft_mr`. |
-| 2 (undraft на входе в merge_gate) | OK | Не тронуто этой итерацией; подтверждено повторным прогоном `UndraftMrTest`. |
+| 1 (Draft MR на первый вход в in_dev, один на цикл) | OK | Не тронуто этой итерацией; закрыто и подтверждено в итерации 2. |
+| 2 (undraft на входе в merge_gate) | OK | Не тронуто этой итерацией. |
 | 3 (merge — побочный эффект локального push, не API-вызов) | OK | Не тронуто этой итерацией. |
-| 4 (verifying между review и acceptance) | Реализовано верно, с открытой эскалацией (не закрывает вердикт) | Не тронуто этой итерацией; конфликт с `tests/test_invariants.py` (3 теста) остаётся тем же, что и в итерации 1 — подтверждён повторным прогоном, корректно проанализирован в PLAN «Эскалация», решение за Оператором. |
+| 4 (verifying между review и acceptance) | Реализовано верно, эскалация закрыта | Конфликт с `tests/test_invariants.py` (3 теста), открытый с итерации 1, разрешён: Оператор принял ADR-0009 (docs/adr/0009-verifying-route.md) и закоммитил маршрутно-агностичную форму трёх (фактически четырёх — пятая точка, verdict 4 в `CountersNeverResetTest`, поймана сверх минимального патча разработчика) правок теста НАПРЯМУЮ В MAIN (`33ea71e`, `b672c67`), а не в ветку задачи — правка `no_paths`-файла вне полномочий роли разработчика (ADR-0002), поэтому и обязана была прийти через main. Ветка забрала это через `git merge` («подтяжка main», `bf3830d`). Полный юнит-сьют — 0 красных (было 3). Локед `test_ac4_review_to_verifying.py` по-прежнему проверяет, что один `advance` из `review` с approved+зелёным CI останавливается в `verifying` — старое поведение «review→acceptance за один шаг» не вернулось; временная route-agnostic форма трёх инвариант-тестов допускает оба маршрута ровно до этого MR (ADR §3), это операторское решение вне зоны review разработчика. |
 | 5 (четыре исхода статуса CI в verifying) | OK | Не тронуто этой итерацией. |
 | 6 (потолок ожидания → escalated) | OK | Не тронуто этой итерацией. |
 | 7 (красный CI не выталкивает автоматически) | OK | Не тронуто этой итерацией. |
@@ -25,71 +25,91 @@ schema_version: 2    # версия формата артефакта, см. scr
 
 ## Замечания
 
-Замечаний нет. Замечание 1 итерации 1 (major, два пропущенных входа
-в `in_dev`) закрыто классово, а не точечно: `orchestrator/fsm.py:1333-1334`
-(возврат из `escalated`, только когда `back == "in_dev"`) и
-`orchestrator/fsm.py:1386` (`reject` из `acceptance`, ветка «лимит не
-исчерпан») — две новые точки; уже стоявшие в итерации 1
-`orchestrator/fsm.py:1358, 1371` (`reject` из `merge_gate`/`verifying`)
-не тронуты. Регресс на оба новых места и их отрицательные соседние
-ветки — `tests/test_fsm_draft_mr_reentry.py` (5 тестов, включая
-проверку, что возврат из эскалации в состояние, отличное от `in_dev`,
-и эскалация по лимиту приёмки узел НЕ зовут).
+Замечаний нет.
 
-Замечание 2 итерации 1 (minor, гонка `gh pr create` на «уже
-существует») этой итерацией не закрывалось — ожидаемо: minor не
-блокирует, PLAN на него не ссылается как на закрытое, узкий случай
-покрыт инцидент-алертом и не ломает FSM.
+Проверено, что diff этой итерации (`git diff 8dacdc32...HEAD`) ограничен
+двумя файлами — `docs/adr/0009-verifying-route.md` и
+`tests/test_invariants.py` — и что вклад именно ветки задачи (не main)
+в оба этих файла равен нулю: `git merge-base main
+task/t079-b1b-github-adapter-draft-mr-i` == `git rev-parse main` ==
+`b672c677dc913d5bd580c44f4a109c57ed298b54`, т.е. main целиком —
+предок ветки, расхождений с main нет вообще (`git diff main
+task/t079-b1b-github-adapter-draft-mr-i -- tests/test_invariants.py
+docs/adr/0009-verifying-route.md` — пусто). Единственная попытка
+править `tests/test_invariants.py` НЕПОСРЕДСТВЕННО в ветке
+(`d064d09`, до правильного решения через main) была тем же процессом
+самостоятельно распознана как нарушение `no_paths`/ADR-0002 и
+полностью отменена (`8260472`, `git show 8260472 --stat` — чистые
+10 удалённых строк, ровно откат `d064d09`) ещё до финального мержа
+main — в текущем HEAD её следов нет. AC-14 не нарушен.
 
 ## Вердикт
 
-approved — замечание 1 (major) итерации 1 закрыто полностью на всех
-8 точках входа в `in_dev`, регресс есть, полный юнит-сьют и локед
-acceptance_tests зелёные (кроме заранее эскалированного и
-проанализированного конфликта с `tests/test_invariants.py`,
-не входящего в объём «исправь и подай снова» — решение за Оператором,
-см. «Эскалация» в PLAN.md, актуальна без изменений с итерации 1).
+approved — единственная открытая эскалация (конфликт требования 4
+с тремя тестами `tests/test_invariants.py`) закрыта операторским
+ADR-0009 через коммиты в main, подтянутые в ветку мержем, без единой
+правки `no_paths`-файлов силами роли разработчика. Полный юнит-сьют
+и локед `acceptance_tests` зелёные без исключений (впервые за все три
+итерации — 0 красных). Код `orchestrator/` не менялся с итерации 2
+(diff этой итерации — только ADR-документ и подтянутый из main тест).
 
 ## Проверено исполнением
 
-- `git log --oneline -5` / `git status` — ветка чистая, коммит
-  `c167c55` («T079: закрыт REVIEW замечание 1 — Draft MR на всех
-  входах в in_dev») поверх `d5fb77b` (REVIEW итерации 1).
-- Прочитан `orchestrator/fsm.py` целиком вокруг всех 8 точек входа
-  в `in_dev` (строки 835-848, 925-940, 1115-1123, 1260-1271,
-  1300-1335, 1347-1386) — каждый вызов `_maybe_ensure_draft_mr`
-  привязан к правильному `set_state`/условию, отрицательные ветки
-  (возврат эскалации не в `in_dev`, эскалация по лимиту приёмки)
-  корректно его не зовут.
-- `grep -n 'set_state(conn, task_id, "in_dev"\|back = t\[.escalated_from.\]' orchestrator/fsm.py`
-  — 8 совпадений; `grep -n '_maybe_ensure_draft_mr' orchestrator/fsm.py`
-  — 9 строк (1 определение + 8 использований в перечисленных местах)
-  — построчное соответствие подтверждено (см. «Соответствие SPEC»,
-  требование 1).
-- `python3 -m unittest discover -s tests` — 1068 тестов, 3 красных
-  (`test_invariants.CountersNeverResetTest::
+- `git status` — ветка чистая, HEAD `bf3830d` («T079: подтяжка main»),
+  merge двух родителей: `8260472` (тип задачи) и `b672c67` (main,
+  ADR-0009 Оператора).
+- `git merge-base main task/t079-b1b-github-adapter-draft-mr-i` =
+  `git rev-parse main` = `b672c677dc913d5bd580c44f4a109c57ed298b54` —
+  main целиком содержится в ветке, независимых от main правок
+  `tests/test_invariants.py`/`docs/adr/0009-verifying-route.md` в
+  текущем HEAD нет; `git diff main task/t079-b1b-github-adapter-draft-mr-i
+  -- tests/test_invariants.py docs/adr/0009-verifying-route.md` — пусто.
+- `git log -1 --format='%P' bf3830d` → `8260472 b672c67` (merge-коммит,
+  не переигранные коммиты); `git show 8260472 --stat` — 10 строк
+  удалено, ровно откат ранее ошибочно закоммиченной в ветку правки
+  `d064d09`, до финального мержа.
+- `python3 -m unittest discover -s tests` — 1068 тестов, **0 красных**
+  (в итерациях 1-2 было 3: `test_invariants.CountersNeverResetTest::
   test_no_transition_of_the_full_cycle_resets_a_counter`,
-  `test_invariants.FreshVerdictGuardsAcceptanceTest::
+  `FreshVerdictGuardsAcceptanceTest::
   test_escalation_and_return_do_not_make_the_verdict_fresh`,
-  `test_invariants.FreshVerdictGuardsAcceptanceTest::
-  test_every_return_to_dev_requires_a_new_verdict`) — список идентичен
-  заявленному в PLAN.md и итерации 1, новых красных нет.
-- `python3 -m unittest tests.test_fsm_draft_mr_reentry tests.test_merge_lock tests.test_advance_guard`
-  — 23/23 зелёные (5 новых регресс-тестов на оба закрытых пробела +
-  их отрицательные ветки; T052/T053 не задеты, AC-13).
-- `cd tasks/T079/acceptance_tests && python3 -m unittest discover -s . -p "test_*.py"`
-  — 19/19 зелёные (AC-1..AC-14, включая AC-4).
-- `git diff main --stat -- gates.yaml roles.yaml targets.yaml .github/ templates/ skills/ docs/invariants.md tests/test_invariants.py CLAUDE.md`
-  — пусто: ни один путь `no_paths` target `artel` не тронут (AC-14).
-- `python3 scripts/codebase_map.py` (регенерация вручную, изменения
-  затем отменены `git checkout -- docs/codebase-map.md`) — diff свёлся
-  только к строке `built_at_sha` (ветка ушла на один коммит вперёд
-  после того, как карта была закоммичена вместе с ним) — содержимое
-  карты без sha идентично закоммиченному, регенерация не устарела.
+  `FreshVerdictGuardsAcceptanceTest::
+  test_every_return_to_dev_requires_a_new_verdict`) — все три теперь
+  зелёные благодаря ADR-0009-правке в main.
+- `cd tasks/T079/acceptance_tests && python3 -m unittest discover -s .
+  -p "test_*.py"` — 19/19 зелёные (AC-1..AC-14, включая AC-4).
+- `python3 -m unittest tests.test_merge_lock tests.test_advance_guard
+  tests.test_fsm_draft_mr_reentry` — 23/23 зелёные (T052/T053 не
+  задеты, AC-13; Draft MR на всех точках входа — не регрессировало).
+- `git diff main --stat -- gates.yaml roles.yaml targets.yaml .github/
+  templates/ skills/ docs/invariants.md tests/test_invariants.py
+  CLAUDE.md` — пусто относительно ТЕКУЩЕГО main: ни один путь
+  `no_paths` target `artel` веткой не тронут (AC-14 подтверждён заново,
+  не просто унаследован из итерации 2, т.к. main с тех пор продвинулся).
+- `python3 scripts/codebase_map.py` (регенерация вручную, отменена
+  `git checkout -- docs/codebase-map.md`) — diff свёлся только к строке
+  `built_at_sha`, содержимое карты без sha идентично закоммиченному —
+  регенерация не устарела.
+- Прочитан `docs/adr/0009-verifying-route.md` целиком и diff-хунк
+  `tests/test_invariants.py` (4 места: 3 в
+  `FreshVerdictGuardsAcceptanceTest`, 2 в одном методе
+  `CountersNeverResetTest` — verdict 3 и verdict 4) — форма `if
+  self.state() == "verifying": <ещё один advance>` перед финальным
+  `assertEqual(state, "acceptance")` корректно допускает оба маршрута
+  и не смягчает исходную охраняемую семантику (свежесть вердикта,
+  несбрасываемость счётчиков) — меняется только число шагов, как и
+  описано в ADR §2.
 
 ## Предложения системе
 
-Нет новых сверх уже зафиксированных в PLAN.md и REVIEW.md итерации 1
-(класс «промежуточное состояние ломает свипы test_invariants.py» и
-класс «побочный эффект входа в состояние X не на всех фактических
-путях входа» — оба уже описаны там, повторять не буду).
+Нет новых сверх уже зафиксированных в PLAN.md и REVIEW.md итераций 1-2.
+Отдельно стоит отметить как удачный прецедент (не проблему): попытка
+поправить `no_paths`-файл прямо в ветке задачи (`d064d09`, метка
+«правка Оператора» в сообщении коммита) была распознана и полностью
+отменена (`8260472`) ДО того, как ушла на ревью, а верная версия той
+же правки уехала через main — процесс самокорректировался без участия
+ревьювера. Стоит проговорить этот кейс в скиле, отвечающем за операторские
+правки `no_paths` (или в ADR-0002), как канонический пример: «правка
+`no_paths`, инициированная решением по эскалации — всегда коммит в
+main, попытка закоммитить её в ветку задачи ловится и откатывается
+до подачи на ревью».
