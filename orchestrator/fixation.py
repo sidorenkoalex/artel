@@ -33,6 +33,8 @@ HEAD, который та задача не просила сдвигать — 
 через `read()`, не через `fix()`: то же самое для догфуда (там `fix()`
 и так не коммитит), но для внешнего target — без `add -A`/`commit`.
 """
+from datetime import datetime, timezone
+
 from . import config, gitcmd, store, workspace
 
 # Идентичность коммитов фиксации внешнего target: это действие
@@ -180,3 +182,94 @@ def check_integrity(conn, task_id: str) -> str | None:
     if not clean:
         return f"грязная копия артефактов при sha {fixed}"
     return None
+
+
+def _parse_step_ts(ts: str) -> float:
+    """Эпоха UTC записи журнала (`store.now()`, формат
+    `%Y-%m-%d %H:%M:%SZ`) — сравнима с committer-эпохой коммита (SPEC
+    T076, требование 1)."""
+    return datetime.strptime(ts, "%Y-%m-%d %H:%M:%SZ").replace(
+        tzinfo=timezone.utc).timestamp()
+
+
+def _own_step_run_windows(conn, task_id: str) -> list[tuple[float, float]]:
+    """Замкнутые окна `(started, finished)` агентных прогонов ТЕКУЩЕГО
+    шага задачи, в эпохах UTC (SPEC T076, требование 1).
+
+    Якорь — момент последней записи журнала «sha зафиксирован»: она
+    пишет `record_fixation` на КАЖДОМ переходе FSM (`store.set_state`),
+    в том числе на входе в текущее состояние — записи `agent run
+    started`/`agent run finished` раньше этого момента принадлежат
+    предыдущему шагу и не в счёт. `refixate_after_rejected_transition`
+    сам пишет ДРУГОЕ имя действия («sha перефиксирован после отклонённого
+    перехода»), поэтому повторные вызовы этой функции внутри одного и
+    того же состояния не сдвигают якорь — только настоящий переход FSM
+    может (что и требуется: якорь обязан указывать на вход в состояние).
+
+    Незакрытое окно (`started` без парного `finished` — прогон ещё не
+    завершился к моменту сверки, либо завершился неуспехом:
+    `agent run TIMEOUT`/`FAILED`/`SKIPPED`) в список не попадает —
+    доказательства завершённого шага у него нет, коммиты внутри такого
+    окна сверка обязана трактовать как непроверенные (fail-closed,
+    требование 3).
+    """
+    rows = store.task_steps(conn, task_id)
+    entry_ts = None
+    for r in reversed(rows):
+        if r["action"] == "sha зафиксирован":
+            entry_ts = r["ts"]
+            break
+    if entry_ts is None:
+        return []
+    windows: list[tuple[float, float]] = []
+    pending_start = None
+    for r in rows:
+        if r["ts"] < entry_ts:
+            continue
+        if r["action"] == "agent run started":
+            pending_start = r["ts"]
+        elif r["action"] == "agent run finished" and pending_start is not None:
+            windows.append((_parse_step_ts(pending_start), _parse_step_ts(r["ts"])))
+            pending_start = None
+    return windows
+
+
+def refixate_after_rejected_transition(conn, task_id: str, target: str,
+                                       entry_sha: str, current_sha: str) -> bool:
+    """`True` — ВСЕ новые коммиты между `entry_sha` и `current_sha`
+    порождены собственным шагом задачи (SPEC T076, требования 1-2):
+    `fixed_sha` перефиксирован на `current_sha`, журнал несёт запись о
+    перефиксации. `False` — среди коммитов есть хотя бы один вне окна
+    шага, окон нет вовсе, или git не ответил однозначно: фиксация НЕ
+    трогается, дальнейший `check_integrity()` эскалирует «инцидент
+    целостности» как и раньше (требование 3, fail-closed тем же
+    принципом, что и сам `check_integrity` при неответившем git).
+
+    Зовётся ТОЛЬКО когда переход FSM отклонён и задача осталась в
+    прежнем состоянии (`fsm._advance_with_refixation`) — успешные
+    переходы перефиксируют sha сами через `store.set_state` ->
+    `record_fixation`, эта функция им не нужна (требование 5). Не
+    вызывает `fix()`/`record_fixation` — та пишет «sha зафиксирован»,
+    служащую якорем `_own_step_run_windows`; путает эту запись с
+    результатом отклонённого перехода нельзя (см. докстринг выше).
+    """
+    repo = None if target == config.DEFAULT_TARGET else config.PROJECTS / target
+    dates = gitcmd.commit_committer_dates(entry_sha, current_sha, repo=repo)
+    if not dates:
+        return False
+    windows = _own_step_run_windows(conn, task_id)
+    if not windows:
+        return False
+    for date in dates:
+        try:
+            commit_ts = datetime.fromisoformat(date).astimezone(
+                timezone.utc).timestamp()
+        except ValueError:
+            return False
+        if not any(start <= commit_ts <= finish for start, finish in windows):
+            return False
+    store.update_task(conn, task_id, fixed_sha=current_sha)
+    store.journal(
+        conn, task_id, "fsm", "sha перефиксирован после отклонённого перехода",
+        f"коммиты шага: было {entry_sha}, сейчас {current_sha}")
+    return True

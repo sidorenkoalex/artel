@@ -573,8 +573,41 @@ def cmd_advance(task_id: str, session_id: str | None = None) -> bool:
     """
     conn = store.db()
     return bool(lease.run_locked(
-        conn, task_id, session_id, lambda sid: _cmd_advance(conn, task_id),
+        conn, task_id, session_id,
+        lambda sid: _advance_with_refixation(conn, task_id),
         on_refusal="print"))
+
+
+def _advance_with_refixation(conn, task_id: str) -> bool:
+    """`_cmd_advance` + перефиксация sha на пути отклонённого перехода
+    (SPEC T076, требования 1-5): переход отклонён (guard/условие не
+    пройдено), задача осталась в исходном состоянии, а голова ветки
+    сдвинулась ТОЛЬКО коммитами собственного шага задачи (роль легитимно
+    коммитила артефакты внутри шага, T069/T073) — фиксация подтягивается
+    на текущую голову тем же итогом, каким её обновил бы успешный
+    переход, без эскалации «инцидент целостности» на следующем старте
+    шага.
+
+    Успешный переход (состояние сменилось) уже перефиксировал sha сам
+    через `store.set_state` -> `record_fixation` — здесь нечего делать
+    (требование 5, проверка `state` замыкает функцию раньше сравнения
+    sha). Посторонний коммит вне окна шага, класс «грязная копия»
+    (голова не сдвинулась вовсе) — `fixation.read()` не изменился или
+    `refixate_after_rejected_transition` вернула `False` — фиксация
+    остаётся прежней, `check_integrity` эскалирует как и раньше
+    (требования 3-4).
+    """
+    t_before = store.get_task(conn, task_id)
+    state_before = t_before["state"]
+    entry_sha = t_before["fixed_sha"]
+    result = _cmd_advance(conn, task_id)
+    if entry_sha and store.get_task(conn, task_id)["state"] == state_before:
+        target = store.task_target(conn, task_id)
+        current, _clean = fixation.read(task_id, target)
+        if current and current != entry_sha:
+            fixation.refixate_after_rejected_transition(
+                conn, task_id, target, entry_sha, current)
+    return result
 
 
 def _cmd_advance(conn, task_id: str) -> bool:
