@@ -1176,9 +1176,48 @@ def _cmd_approve_merge_gate(conn, task_id: str, state: str, t) -> None:
     green, note = ci.branch_status(branch)
     store.journal(conn, task_id, "orchestrator", "статус CI ветки", note)
     if not green:
-        sys.exit(f"[{task_id}] merge отклонён: {note}\n"
-                 f"  задача осталась на гейте merge; почини CI ветки "
-                 f"{branch} и повтори: artel.py approve {task_id}")
+        # Ре-ран флейка (SPEC T082, требование 7, AC-14..17) — только для
+        # ПОДТВЕРЖДЁННО красного статуса: `status_kind` отличает его от
+        # «CI ещё идёт» и «статус неизвестен» (ревью итерации 2, замечание
+        # major 1) — эти два case не «не прошли», они «ещё не ответили»,
+        # ре-ран уже идущего или несуществующего прогона ничего не решает
+        # и не подтверждает, а запись в flake-rate «подтверждённый
+        # красный» для них была бы ложью, обесценивающей саму метрику.
+        # Для них — прежнее поведение (отказ без ре-рана: подожди ещё).
+        if ci.status_kind(note) != "red":
+            sys.exit(f"[{task_id}] merge отклонён: {note}\n"
+                     f"  задача осталась на гейте merge; почини CI ветки "
+                     f"{branch} и повтори: artel.py approve {task_id}")
+        # `ci.trigger_rerun` реально перезапускает упавший CI-прогон
+        # (`gh run rerun --failed`) и ждёт его завершения (`gh run
+        # watch`) — не просто повторно читает тот же завершённый статус
+        # («не входит»: задача про сам ре-ран прогона, не про сетевую
+        # надёжность опроса). Итоговый вердикт всё равно принимает
+        # `branch_status` — тем же способом, что и первый раз, а не
+        # заключение `gh run watch`, у которого свои критерии зелёности.
+        # Каждое срабатывание (флейк или подтверждённый красный) — в
+        # метрику flake-rate журнала, флейк отдельно от подтверждённого
+        # красного (AC-17).
+        rerun_trigger_note = ci.trigger_rerun(branch)
+        store.journal(conn, task_id, "orchestrator", "ре-ран CI запущен",
+                      rerun_trigger_note)
+        rerun_green, rerun_note = ci.branch_status(branch)
+        store.journal(conn, task_id, "orchestrator",
+                      "статус CI ветки (ре-ран)", rerun_note)
+        if rerun_green:
+            store.journal(
+                conn, task_id, "orchestrator", "flake-rate",
+                f"флейк: первый статус красный, ре-ран зелёный "
+                f"({note} -> {rerun_note})")
+            green, note = rerun_green, rerun_note
+        else:
+            store.journal(
+                conn, task_id, "orchestrator", "flake-rate",
+                f"подтверждённый красный: первый статус красный, ре-ран "
+                f"тоже красный ({note} -> {rerun_note})")
+            sys.exit(f"[{task_id}] merge отклонён: {rerun_note}\n"
+                     f"  задача осталась на гейте merge; почини CI ветки "
+                     f"{branch} и повтори: artel.py approve {task_id}")
     print(f"[{task_id}] {note}")
     for cmd in (["git", "checkout", config.MAIN_BRANCH],
                 ["git", "pull", "--ff-only"]):
