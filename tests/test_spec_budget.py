@@ -410,12 +410,32 @@ class LegacyDbMigrationTest(SpecBudgetOnTheGateTest):
         self.addCleanup(tmp.cleanup)
         root = Path(tmp.name)
 
+        # Тот же набор путей и `gitcmd.git`, что несёт `SpecBudgetOnThe
+        # GateTest.setUp` (AC-2, tasks/T083/SPEC.md): без ROOT/WORKTREES
+        # унаследованные тестовые методы зовут `fsm.cmd_advance`, который
+        # безусловно читает `gitcmd.on_foreign_branch(branch)` — с
+        # непропатченным `gitcmd.git` это настоящий `subprocess.run(["git",
+        # ...], cwd=config.ROOT)`, а непропатченный `config.ROOT` — реальный
+        # корень пульта (рабочая копия, откуда запущен тест), не эта
+        # песочница.
         for attr, value in (("DB", root / ".artel" / "state.db"),
                             ("TASKS", root / "tasks"),
-                            ("LOGS", root / ".artel" / "logs")):
+                            ("LOGS", root / ".artel" / "logs"),
+                            ("ROOT", root),
+                            ("PROJECTS", root / ".artel" / "projects"),
+                            ("TARGETS", root / "targets.yaml"),
+                            ("ROLE_HOME", root / ".artel" / "home"),
+                            ("ROLE_CONFIG_DIR",
+                             root / ".artel" / "home" / ".claude"),
+                            ("BACKUP_MARKER", root / ".artel" / "backup-marker"),
+                            ("WORKTREES", root / ".artel" / "worktrees")):
             patcher = mock.patch.object(config, attr, value)
             patcher.start()
             self.addCleanup(patcher.stop)
+
+        git_patcher = mock.patch.object(gitcmd, "git", fake_git)
+        git_patcher.start()
+        self.addCleanup(git_patcher.stop)
 
         config.DB.parent.mkdir(parents=True, exist_ok=True)
         legacy = sqlite3.connect(config.DB)

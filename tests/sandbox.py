@@ -13,8 +13,18 @@
 той же дорогой (SPEC T061, находка CR-2026-08-28-2, ★5): подмена
 только запуска `claude`, настоящий git — тем же общим `subprocess`,
 что и у `runner`/`gitcmd`.
+
+`resilient_tmp_cleanup` (SPEC T083, требование 1) — та же копипаста ещё
+раз: `TemporaryDirectory.cleanup()` с настоящим git внутри изредка падает
+`OSError: [Errno 39] Directory not empty` при удалении `.git` (гонка ФС
+некоторых CI-раннеров между записью git-объекта и `rmtree` того же
+каталога; ран post-merge T038, 26.08) — десяток тестовых файлов держали
+свою копию `tmp = tempfile.TemporaryDirectory(); self.addCleanup(tmp.
+cleanup)` в обход этого модуля.
 """
+import errno
 import io
+import shutil
 import subprocess
 import tempfile
 import unittest
@@ -37,6 +47,32 @@ def capture(fn, *args) -> str:
     with redirect_stdout(buf):
         fn(*args)
     return buf.getvalue()
+
+
+def resilient_tmp_cleanup(tmp: tempfile.TemporaryDirectory) -> None:
+    """Устойчивая уборка временной git-песочницы (SPEC T083, требование 1).
+
+    `tmp.cleanup()` на некоторых CI-раннерах изредка падает `OSError:
+    [Errno 39] Directory not empty` при удалении `.git` — гонка ФС между
+    записью git-объекта и `rmtree` того же каталога уже ПОСЛЕ того, как
+    сценарий теста отработал (ран post-merge T038, 26.08 — раннер Linux,
+    где `ENOTEMPTY == 39`; на macOS то же условие ОС отдаёт `errno.
+    ENOTEMPTY == 66` — сверяемся с обоими числами, не только с локальным
+    `errno.ENOTEMPTY`). Повтор `cleanup()` почти всегда проходит:
+    `TemporaryDirectory.cleanup()` заново зовёт `rmtree`, пока каталог
+    физически существует. Финальный `shutil.rmtree(ignore_errors=True)` —
+    страховка на случай, если гонка не улеглась за отведённые попытки, не
+    маскировка другой причины: `OSError` с иным `errno` пробрасывается
+    сразу, без глотания."""
+    retryable = {39, errno.ENOTEMPTY}
+    for _ in range(2):
+        try:
+            tmp.cleanup()
+            return
+        except OSError as exc:
+            if exc.errno not in retryable:
+                raise
+    shutil.rmtree(tmp.name, ignore_errors=True)
 
 
 def seed_developer_brief_fixtures(root: Path) -> None:
@@ -179,7 +215,7 @@ class TmpRootTest(unittest.TestCase):
 
     def setUp(self):
         tmp = tempfile.TemporaryDirectory()
-        self.addCleanup(tmp.cleanup)
+        self.addCleanup(resilient_tmp_cleanup, tmp)
         self.root = Path(tmp.name)
 
         for attr in self.PATCHED_ATTRS:

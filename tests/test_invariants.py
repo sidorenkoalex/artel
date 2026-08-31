@@ -34,7 +34,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from orchestrator import (artel, budget, catalog, ci, cleanup,  # noqa: E402
                           config, fsm, gitcmd, runner, store)
 from scripts import guard  # noqa: E402
-from tests.sandbox import FakeProc, capture  # noqa: E402
+from tests.sandbox import FakeProc, capture, resilient_tmp_cleanup  # noqa: E402
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
@@ -1093,9 +1093,10 @@ class KillKeepsMainIntactTest(unittest.TestCase):
         self.repo = contextlib.ExitStack()
         self.addCleanup(self.repo.close)  # ExitStack.close() идемпотентен
 
+        tmp = tempfile.TemporaryDirectory()
+        self.repo.callback(resilient_tmp_cleanup, tmp)
         # resolve(): на macOS /var — симлинк на /private/var.
-        self.root = Path(self.repo.enter_context(
-            tempfile.TemporaryDirectory())).resolve()
+        self.root = Path(tmp.name).resolve()
 
         self.git("init", "-b", config.MAIN_BRANCH)
         self.git("config", "user.email", "artel@example.invalid")

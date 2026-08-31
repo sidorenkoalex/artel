@@ -35,7 +35,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from orchestrator import (agent_log, catalog, cleanup, config,  # noqa: E402
                           gitcmd, store, workspace)
-from tests.sandbox import capture  # noqa: E402
+from tests.sandbox import capture, resilient_tmp_cleanup  # noqa: E402
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
@@ -49,7 +49,7 @@ class TmpRepoTest(unittest.TestCase):
 
     def setUp(self):
         tmp = tempfile.TemporaryDirectory()
-        self.addCleanup(tmp.cleanup)
+        self.addCleanup(resilient_tmp_cleanup, tmp)
         # resolve(): на macOS /var — симлинк на /private/var, а `git
         # rev-parse` и Path сравниваются как строки.
         self.root = Path(tmp.name).resolve()
