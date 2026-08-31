@@ -26,7 +26,11 @@ schema_version: 2
    счёт файлов — второй раунд после `ANSWER-1.md` обязан получить
    `ANSWER-2.md`, даже если первый когда-то убрали), пишет
    `ANSWER-n.md` в worktree задачи (`workspace.ensure`, идемпотентно),
-   коммитит БЕЗ `-c user.name=...` (в отличие от `catalog.cmd_new`,
+   стейджит `git add -- <ANSWER-n.md>` ТОЧЕЧНО (не `add -A tasks/<id>`
+   — worktree задачи живёт дольше одного вызова и может нести чужие
+   незакоммиченные правки; REVIEW итерация 1, замечание major, регресс
+   `tests/test_answer.py::AnswerCommandStrayFilesTest`), коммитит БЕЗ
+   `-c user.name=...` (в отличие от `catalog.cmd_new`,
    который явно проставляет служебную identity `fixation.
    FIXATION_AUTHOR_NAME/EMAIL` артефактам ТЗ) — коммит обязан остаться
    под identity Оператора, не оркестратора (SPEC AC-2, «не служебный
@@ -52,7 +56,12 @@ schema_version: 2
    раунда есть» — без этого второй раунд эскалации той же задачи
    молча засчитал бы ответ первого раунда (юнит-тест `tests/
    test_answer_gate.py` — сценарий, который приёмочные тесты T075 не
-   покрывают, они гоняют только один раунд на задачу).
+   покрывают, они гоняют только один раунд на задачу). `None` от
+   `_answer_file_count` (git не ответил на чужой ветке в момент самой
+   эскалации) — именованный отказ перехода через новый узел
+   `_answer_baseline_or_refuse` (тем же приёмом, что
+   `_read_branch_text_or_refuse`), не молчаливое схлопывание в
+   `baseline=0` (REVIEW итерация 1, замечание minor).
 
    Подсчёт (`fsm._answer_file_count`) — ветко-корректный (SPEC T031/
    T047, тот же приём, что и остальные чтения в `_cmd_advance`): с
@@ -96,7 +105,9 @@ schema_version: 2
    ветка `test_author`): доставка ANSWER/QUESTIONS в бриф/промпт (AC-6).
 5. Регенерация `docs/codebase-map.md` (правка `orchestrator/*.py`,
    конвенция `conventions-core`). Юнит-тесты (`tests/test_answer.py`,
-   `tests/test_answer_gate.py`, добавки `tests/test_brief.py`) и починка
+   `tests/test_answer_gate.py`, `tests/test_answer_branch_reads.py`
+   (реальный git, branch-aware чтение ANSWER/QUESTIONS — REVIEW
+   итерация 1, замечание major), добавки `tests/test_brief.py`) и починка
    двух существующих тестов, чьи фикстуры молчаливо предполагали старое
    поведение «эскалация-вопрос возвращается без ответа»
    (`tests/test_invariants.py::CountersNeverResetTest`, `tests/
@@ -147,7 +158,14 @@ schema_version: 2
   этой задачи (см. докстринг `_sandbox.py` приёмочных тестов) — сама
   реализация branch-aware по тем же соображениям, что и остальной
   `fsm.py`/`brief.py`, но это решение разработчика для корректности в
-  проде, не требование, зафиксированное тестом.
+  проде, не требование, зафиксированное AC. Сам branch-aware путь
+  (`fsm._answer_file_count`, `brief._answer_component`/
+  `_questions_component`/`_latest_answer_rel` на чужой ветке) закрыт
+  юнит-тестами `tests/test_answer_branch_reads.py` (реальный git, приём
+  `tests/test_gitcmd_branch_reads.py::RealGitSandbox`) — по итогам
+  REVIEW итерация 1, замечание major: без него класс дефекта T030/T046
+  («молчаливое доверие диску вместо ветки») мог вернуться на этом коде
+  незамеченным.
 
 ## Риски
 

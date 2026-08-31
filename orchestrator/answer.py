@@ -77,8 +77,14 @@ def _cmd_answer(conn, task_id: str, file_path: str) -> None:
     answer_path = task_dir / f"ANSWER-{n}.md"
     answer_path.write_text(_answer_document(task_id, n, raw), encoding="utf-8")
 
-    rel = f"tasks/{task_id}"
-    added = gitcmd.in_repo(wt_path, "add", "-A", rel)
+    # `add -- <файл>`, НЕ `add -A tasks/<id>`: worktree задачи живёт
+    # дольше одного вызова (`workspace.ensure` его не чистит) и вполне
+    # может нести чужие незакоммиченные правки (упавший на попытке шаг
+    # роли, ручная правка Оператора) — стейджинг обязан захватить только
+    # свежесозданный ANSWER, а не всё, что случайно лежит рядом в
+    # tasks/<id> (REVIEW T075 итерация 1, замечание major).
+    rel_answer = f"tasks/{task_id}/ANSWER-{n}.md"
+    added = gitcmd.in_repo(wt_path, "add", "--", rel_answer)
     if added is None or added.returncode != 0:
         sys.exit(f"[{task_id}] ANSWER-{n}.md не застейджен: "
                  f"{added.stderr.strip()[:200] if added is not None else '—'}")

@@ -109,5 +109,46 @@ class AnswerCommandRefusalsTest(RealPultGitTest):
         return f.name
 
 
+class AnswerCommandStrayFilesTest(RealPultGitTest):
+    """REVIEW T075 итерация 1, замечание major: `answer` стейджил
+    `tasks/<id>` целиком (`add -A`), а не только новый `ANSWER-n.md` —
+    любая чужая незакоммиченная правка того же (переиспользуемого на
+    протяжении жизни задачи) worktree молча уходила в коммит с
+    сообщением «ответ Оператора». Регресс на этот класс дефекта."""
+
+    def test_leftover_uncommitted_file_in_task_dir_is_not_swept_into_the_commit(self):
+        self._escalate()
+        stray = self.task_dir() / "stray.txt"
+        stray.write_text("чужая незакоммиченная правка\n", encoding="utf-8")
+
+        answer.cmd_answer(self.TASK, self._answer_file("Ответ.\n"))
+
+        status = self.git_in_worktree("status", "--porcelain",
+                                      f"tasks/{self.TASK}")
+        self.assertIn(
+            "?? tasks/T001/stray.txt", status,
+            "answer обязан застейджить и закоммитить только ANSWER-n.md, "
+            "посторонний незакоммиченный файл того же tasks/<id> обязан "
+            "остаться нетронутым")
+        self.assertNotIn("stray.txt", self.git_in_worktree(
+            "log", "-1", "--name-only", "--format="))
+
+    def _escalate(self) -> None:
+        (self.task_dir() / "QUESTIONS.md").write_text(
+            QUESTIONS_TEXT.format(task=self.TASK), encoding="utf-8")
+        self.commit_task_dir("батч вопросов")
+        self.capture(fsm.cmd_advance, self.TASK)
+        self.assertEqual(store.get_task(store.db(), self.TASK)["state"],
+                         "escalated")
+
+    def _answer_file(self, text: str) -> str:
+        f = tempfile.NamedTemporaryFile(
+            mode="w", suffix=".md", delete=False, encoding="utf-8")
+        self.addCleanup(lambda: Path(f.name).unlink(missing_ok=True))
+        f.write(text)
+        f.close()
+        return f.name
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -517,6 +517,26 @@ def _answer_file_count(t, tdir: Path) -> int | None:
     return len(list(tdir.glob("ANSWER-*.md")))
 
 
+def _answer_baseline_or_refuse(conn, task_id: str, t, tdir: Path) -> int | None:
+    """Снимок числа ANSWER-*.md на момент эскалации — тем же приёмом
+    отказа, что `_read_branch_text_or_refuse` (SPEC T031, T047): `None`
+    от `_answer_file_count` — git не ответил на чужой ветке, а не «файлов
+    ноль» — молчаливое схлопывание в `or 0` замаскировало бы именно тот
+    класс сбоя, от которого рядом стоящий код (`q_paths is None` и
+    остальные ветки этого модуля) отказывает громко (REVIEW T075
+    итерация 1, замечание minor). Возврат `None` — отказ уже
+    журналирован и напечатан, переход обязан не эскалировать в этот
+    момент, а не эскалировать с недостоверным `baseline=0`."""
+    count = _answer_file_count(t, tdir)
+    if count is None:
+        detail = (f"дерево не на ветке задачи {t['branch']} — число "
+                  f"ANSWER-*.md не посчитано, эскалация отложена")
+        store.journal(conn, task_id, "fsm",
+                      "переход отклонён: дерево не на ветке задачи", detail)
+        print(f"[{task_id}] переход отклонён: {detail}")
+    return count
+
+
 def _tests_writing_ac_state(conn, task_id: str, branch: str,
                             tdir: Path) -> tuple[set, dict, list[str]] | None:
     """(тестировано, пометки, ошибки трассируемости) на выходе из
@@ -643,9 +663,12 @@ def _cmd_advance(conn, task_id: str) -> bool:
                 if guard_refuses(conn, task_id, tdir / "QUESTIONS.md",
                                  text=q_text):
                     return True
+                answer_baseline = _answer_baseline_or_refuse(conn, task_id, t, tdir)
+                if answer_baseline is None:
+                    return False
                 store.update_task(
                     conn, task_id, escalated_from="spec_writing",
-                    answer_baseline=_answer_file_count(t, tdir) or 0)
+                    answer_baseline=answer_baseline)
                 store.set_state(
                     conn, task_id, "escalated", "fsm",
                     expected_state=state,
@@ -663,9 +686,12 @@ def _cmd_advance(conn, task_id: str) -> bool:
             if questions.exists():
                 if guard_refuses(conn, task_id, questions):
                     return True
+                answer_baseline = _answer_baseline_or_refuse(conn, task_id, t, tdir)
+                if answer_baseline is None:
+                    return False
                 store.update_task(
                     conn, task_id, escalated_from="spec_writing",
-                    answer_baseline=_answer_file_count(t, tdir) or 0)
+                    answer_baseline=answer_baseline)
                 store.set_state(
                     conn, task_id, "escalated", "fsm", expected_state=state,
                     detail=f"analyst: батч вопросов по ТЗ — {questions}")
@@ -771,8 +797,10 @@ def _cmd_advance(conn, task_id: str) -> bool:
                                 expected_state=state,
                                 detail=f"замечания ревью, итерация {iters}")
         elif status == "escalate":
-            store.update_task(
-                conn, task_id, answer_baseline=_answer_file_count(t, tdir) or 0)
+            answer_baseline = _answer_baseline_or_refuse(conn, task_id, t, tdir)
+            if answer_baseline is None:
+                return False
+            store.update_task(conn, task_id, answer_baseline=answer_baseline)
             store.set_state(conn, task_id, "escalated", "fsm",
                             expected_state=state, detail="эскалация от ревьювера")
         return False
@@ -789,9 +817,12 @@ def _cmd_advance(conn, task_id: str) -> bool:
         if escalations:
             detail = "; ".join(f"AC-{n}: {reason}"
                                for n, reason in sorted(escalations.items()))
+            answer_baseline = _answer_baseline_or_refuse(conn, task_id, t, tdir)
+            if answer_baseline is None:
+                return False
             store.update_task(
                 conn, task_id, escalated_from="tests_writing",
-                answer_baseline=_answer_file_count(t, tdir) or 0)
+                answer_baseline=answer_baseline)
             store.set_state(conn, task_id, "escalated", "fsm",
                             expected_state=state,
                             detail=f"test_author: критерий неисполним тестом — "
