@@ -4,7 +4,9 @@ AC-2: «Функция-генератор идентификатора зада�
 ULID; вне тела этой функции в кодовой базе отсутствуют новые операции
 парсинга/сортировки/предположений о длине формата id.»
 
-Красен до реализации по двум разным причинам:
+Красен до реализации: сегодняшний `catalog.cmd_new` всё ещё выдаёт
+`Tnnn` через литерал `:03d`, не ULID-генератор — оба теста ниже падают
+на этом, каждый по своей грани критерия:
 
 - `test_ac2_cmd_new_produces_a_valid_ulid_task_id` падает на регэкспе
   ULID: сегодняшний `catalog.cmd_new` всё ещё выдаёт `Tnnn`
@@ -24,15 +26,17 @@ store.py`, где живёт `task_number`/`TASK_ID` (SPEC, требование
 совпадает с этим регэкспом — исключение ему не требуется.
 """
 import re
+import shutil
 import sys
 import unittest
 from pathlib import Path
+from unittest import mock
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(REPO_ROOT))
 
-from orchestrator import catalog, config  # noqa: E402
-from tests.sandbox import TmpRootTest, capture  # noqa: E402
+from orchestrator import catalog, config, gitcmd, workspace  # noqa: E402
+from tests.sandbox import TmpRootTest, capture, fake_git  # noqa: E402
 
 ULID_RE = re.compile(r"^[0-9A-HJKMNP-TV-Z]{26}$")
 
@@ -47,9 +51,26 @@ SCANNED_DIRS = (REPO_ROOT / "orchestrator", REPO_ROOT / "scripts")
 
 
 class Ac2UlidGeneratorTest(TmpRootTest):
+    """`cmd_new` не о git/worktree-механике здесь (та же граница, что у
+    `tests/test_advance_guard.py::AdvanceGuardTest`): `templates/`
+    копируется в песочницу, `gitcmd.git` подменён лёгкой `fake_git`
+    (git-идентичность без реального репозитория), `workspace.ensure`
+    подменён напрямую на `self.root` — без этого `cmd_new` уходит в
+    `SystemExit` на «not a git repository» ещё до того, как успевает
+    вернуть id, который и проверяет этот критерий."""
 
     def setUp(self):
         super().setUp()
+        shutil.copytree(REPO_ROOT / "templates", self.root / "templates")
+
+        git_patcher = mock.patch.object(gitcmd, "git", fake_git)
+        git_patcher.start()
+        self.addCleanup(git_patcher.stop)
+        wt_patcher = mock.patch.object(
+            workspace, "ensure", lambda task_id, branch: (self.root, None))
+        wt_patcher.start()
+        self.addCleanup(wt_patcher.stop)
+
         capture(catalog.cmd_init)
 
     def test_ac2_cmd_new_produces_a_valid_ulid_task_id(self):
