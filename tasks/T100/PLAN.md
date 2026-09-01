@@ -3,7 +3,7 @@ task: T100
 type: plan
 author_role: developer
 status: ready        # draft | ready | approved
-schema_version: 3    # версия формата артефакта, см. scripts/guard.py
+schema_version: 2    # версия формата артефакта, см. scripts/guard.py
 ---
 
 # PLAN: Реестр замечаний ревью: жизненный цикл каждого замечания
