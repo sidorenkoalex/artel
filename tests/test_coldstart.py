@@ -145,19 +145,26 @@ class MultiTargetSeedAndCheckTest(TmpRootTest):
         self.assertEqual(store.peek_task_number(conn, "sled"), 6)
 
     def test_doctor_check_catches_declared_target_without_counter_row(self):
+        """SPEC T094, требование 6 (AC-7) СУПЕРСЕДИРУЕТ прежнее поведение
+        (см. tests/test_doctor.py::TaskCounterCheckTest — тот же класс
+        супersession): отсутствие строки счётчика для target'а больше не
+        даёт `fail`/incident — сверка деградирована до информационной
+        безусловно, генератор id — ULID, счётчик не участвует. Имя метода
+        сохранено байт-в-байт (прецедент AC-7/T031: тестовый метод не
+        исчезает без ADR) — тело проверяет актуальный инвариант."""
         (config.PROJECTS / "sled" / "tasks" / "T005").mkdir(parents=True)
         conn = store.db()
         store.create_schema(conn)
-        # Намеренно БЕЗ store.seed_task_counters(conn) — воспроизводит
-        # ситуацию «строки счётчика для sled ещё нет вовсе» (до фикса
-        # doctor молчал именно в этом случае).
+        # Намеренно БЕЗ store.seed_task_counters(conn) — строки счётчика
+        # для sled нет вовсе.
 
         check = doctor.check_task_counters(conn)
 
-        self.assertEqual(check.status, "fail")
+        self.assertEqual(check.status, "ok")
+        self.assertIn("не движется", check.detail)
         incidents = [a for a in alerts.open_alerts(conn, "incident")
                     if a["source"] == "doctor.task_counter"]
-        self.assertTrue(any("sled" in i["message"] for i in incidents))
+        self.assertEqual(incidents, [])
 
 
 if __name__ == "__main__":
