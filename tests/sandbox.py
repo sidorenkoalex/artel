@@ -45,7 +45,7 @@ from contextlib import redirect_stdout
 from pathlib import Path
 from unittest import mock
 
-from orchestrator import config
+from orchestrator import config, store
 
 # Все пути `config`, которые сегодня подменяет хотя бы одна песочница
 # (SPEC T037, AC-2) — порядок как в orchestrator/config.py.
@@ -322,6 +322,18 @@ class RealGitSandbox(TmpRootTest):
             patcher = mock.patch.object(config, attr, self._patched_path(attr))
             patcher.start()
             self.addCleanup(patcher.stop)
+
+        # Схема БД (SPEC T090, `store.migrate`: «БД ещё не создана — схему
+        # ставит init») — `CREATE TABLE IF NOT EXISTS` идемпотентна, так что
+        # подклассы, зовущие `catalog.cmd_init` сами (посев счётчиков/
+        # ролей/программного расхода — то, что схемой не является), делают
+        # это поверх без конфликта. Без строки ниже любой прямой
+        # `store.insert_task`/`catalog.cmd_new` до собственного `cmd_init`
+        # подкласса падает `sqlite3.OperationalError: no such table: tasks`
+        # (см. tasks/T094/acceptance_tests/_sandbox.py:
+        # ExternalTargetGitSandbox — заводит внешний target напрямую через
+        # store, не через cmd_init).
+        store.create_schema(store.db())
 
     def git(self, *args: str) -> str:
         res = subprocess.run(["git", *args], cwd=self.root,

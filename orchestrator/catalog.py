@@ -136,7 +136,7 @@ def cmd_new(title: str, tz_path: str | None = None, *,
     task_id = idgen.new_task_id()
     branch = f"task/{task_id.lower()}-{slugify(title)}"
 
-    spec = (config.ROOT / "templates" / "SPEC.md").read_text(encoding="utf-8")
+    spec = (config.TEMPLATES / "SPEC.md").read_text(encoding="utf-8")
     spec = spec.replace("TASK_ID", task_id).replace("<название задачи>", title)
     tz_doc = _tz_document(task_id, title, tz_raw) if tz_raw is not None else None
 
