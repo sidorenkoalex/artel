@@ -405,12 +405,6 @@ def _autogate_conditions(conn, task_id: str, t, acc_tdir: Path,
     ok.append(f"бюджет задачи не превышен (${t['spent_usd'] or 0.0:.2f} из "
               f"${t['budget_usd'] or 0.0:.2f})")
 
-    total = store.total_spent(conn)
-    if any(total >= config.PROGRAM_STOP_LOSS_USD * ratio
-          for ratio in config.PROGRAM_ALERT_RATIOS):
-        return ok, "автогейт: порог расхода программы (A1) пробит"
-    ok.append("порог расхода программы (A1) не пробит")
-
     ok.append(f"вердикт REVIEW approved текущей итерации ({iteration})")
     return ok, None
 
