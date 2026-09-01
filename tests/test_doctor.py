@@ -30,8 +30,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from orchestrator import (alerts, budget, catalog, config, doctor,  # noqa: E402
                           gitcmd, projects, runner, spend, store)
-from tests.sandbox import (TmpRootTest, capture, claude_only_popen,  # noqa: E402
-                           claude_only_run, fake_git)
+from tests.sandbox import (FakeStream, TmpRootTest, capture,  # noqa: E402
+                           claude_only_popen, claude_only_run, fake_git)
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
@@ -83,22 +83,6 @@ class FakeLiveSmokeProc:
 
     def wait(self, timeout=None) -> int:
         return self.returncode
-
-
-class FakeStream:
-    """Пайп процесса агента: отдаёт заготовленные строки, помнит своё закрытие."""
-
-    def __init__(self, lines):
-        self.lines = iter(lines)
-
-    def __iter__(self):
-        return self
-
-    def __next__(self) -> str:
-        return next(self.lines)
-
-    def close(self) -> None:
-        pass
 
 
 class FakeAgentProc:

@@ -11,19 +11,13 @@ import socket
 import sys
 import threading
 import unittest
-from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from orchestrator import catalog, config, lease, store  # noqa: E402
-from tests.sandbox import TmpRootTest, capture  # noqa: E402
-
-
-def _ts_ago(seconds: float) -> str:
-    return (datetime.now(timezone.utc) - timedelta(seconds=seconds)).strftime(
-        "%Y-%m-%d %H:%M:%SZ")
+from tests.sandbox import TmpRootTest, _ts_ago, capture  # noqa: E402
 
 
 class ResolveSessionIdTest(unittest.TestCase):

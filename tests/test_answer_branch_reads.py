@@ -10,13 +10,10 @@
 `on_foreign_branch` всегда ложно (REVIEW T075 итерация 1, замечание
 major).
 
-Реальный git, тем же приёмом, что `tests/test_gitcmd_branch_reads.py::
-RealGitSandbox` — сам предмет проверки (расхождение диска и ветки)
-заглушкой не изобразить.
+Реальный git, тем же приёмом, что `tests.sandbox.RealGitSandbox` (T089) —
+сам предмет проверки (расхождение диска и ветки) заглушкой не изобразить.
 """
-import subprocess
 import sys
-import tempfile
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -24,8 +21,7 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from orchestrator import brief, config, fsm, gitcmd, store  # noqa: E402
-from tests.sandbox import (ALL_CONFIG_ATTRS, TmpRootTest,  # noqa: E402
-                           resilient_tmp_cleanup)
+from tests.sandbox import RealGitSandbox  # noqa: E402
 
 ANSWER_MD = """---
 task: {task}
@@ -58,47 +54,19 @@ schema_version: 2
 """
 
 
-class RealGitSandbox(TmpRootTest):
-    """`self.root` — свежий git-репозиторий с main; ветка задачи заведена
-    отдельно и main её не чекаутит — `on_foreign_branch(self.branch)`
-    истинно с самого начала теста, ничего дополнительно готовить не
-    надо."""
+class _AnswerRealGitSandbox(RealGitSandbox):
+    """Надстройка над общей `sandbox.RealGitSandbox`, нужная только этому
+    файлу: ветка задачи заведена отдельно и main её не чекаутит —
+    `on_foreign_branch(self.branch)` истинно с самого начала теста, ничего
+    дополнительно готовить не надо."""
 
     TASK = "T001"
 
     def setUp(self):
-        tmp = tempfile.TemporaryDirectory()
-        self.addCleanup(resilient_tmp_cleanup, tmp)
-        self.root = Path(tmp.name).resolve()
-
-        self.git("init", "-q", "-b", config.MAIN_BRANCH)
-        self.git("config", "user.email", "artel@example.invalid")
-        self.git("config", "user.name", "artel tests")
-        (self.root / "marker.txt").write_text("main\n", encoding="utf-8")
-        self.git("add", "-A")
-        self.git("commit", "-q", "-m", "init")
-
-        for attr in ALL_CONFIG_ATTRS:
-            patcher = mock.patch.object(config, attr, self._patched_path(attr))
-            patcher.start()
-            self.addCleanup(patcher.stop)
-
+        super().setUp()
         self.branch = "task/t001-vetko-korrektnoe-chtenie"
         self.checkout(self.branch, create=True)
         self.checkout(config.MAIN_BRANCH)
-
-    def git(self, *args: str) -> str:
-        res = subprocess.run(["git", *args], cwd=self.root,
-                             capture_output=True, text=True)
-        self.assertEqual(res.returncode, 0, f"git {' '.join(args)}: {res.stderr}")
-        return res.stdout
-
-    def checkout(self, branch: str, create: bool = False) -> None:
-        args = ["checkout", "-q"]
-        if create:
-            args.append("-b")
-        args.append(branch)
-        self.git(*args)
 
     def commit_on_branch(self, name: str, template: str, n: int = 1) -> None:
         """Пишет и коммитит артефакт ПРЯМО на ветку задачи — main (и
@@ -115,7 +83,7 @@ class RealGitSandbox(TmpRootTest):
         self.checkout(config.MAIN_BRANCH)
 
 
-class AnswerFileCountOnForeignBranchTest(RealGitSandbox):
+class AnswerFileCountOnForeignBranchTest(_AnswerRealGitSandbox):
 
     def test_counts_answer_files_from_the_branch_not_the_disk(self):
         self.commit_on_branch("ANSWER-1.md", ANSWER_MD, 1)
@@ -146,7 +114,7 @@ class AnswerFileCountOnForeignBranchTest(RealGitSandbox):
             "решает, как трактовать (docstring _answer_file_count)")
 
 
-class BriefAnswerComponentsOnForeignBranchTest(RealGitSandbox):
+class BriefAnswerComponentsOnForeignBranchTest(_AnswerRealGitSandbox):
 
     def setUp(self):
         super().setUp()

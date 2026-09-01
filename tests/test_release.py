@@ -9,23 +9,17 @@
 """
 import sys
 import unittest
-from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from orchestrator import catalog, config, release, store  # noqa: E402
-from tests.sandbox import TmpRootTest, capture  # noqa: E402
+from tests.sandbox import TmpRootTest, _ts_ago, capture  # noqa: E402
 
 HOLDER_SESSION = "session-holder"
 HOLDER_PID = 424242
 HOLDER_HOST = "holder-host"
-
-
-def _ts_ago(seconds: float) -> str:
-    return (datetime.now(timezone.utc) - timedelta(seconds=seconds)).strftime(
-        "%Y-%m-%d %H:%M:%SZ")
 
 
 class ReleaseTest(TmpRootTest):
