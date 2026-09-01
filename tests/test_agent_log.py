@@ -481,5 +481,97 @@ class CmdRunLoggingTest(TmpRootTest):
         self.assertIn("лог не записан", out)
 
 
+def tool_use_call(call_id: str, name: str, **input_kwargs) -> dict:
+    return {"type": "tool_use", "id": call_id, "name": name, "input": input_kwargs}
+
+
+def tool_result_event(call_id: str, content: str, is_error: bool = False) -> str:
+    return event(type="user", message={"role": "user", "content": [
+        {"type": "tool_result", "tool_use_id": call_id, "content": content,
+         "is_error": is_error}]})
+
+
+class StepFrictionTest(unittest.TestCase):
+    """tasks/T095/SPEC.md, AC-1 — детали помимо направления/детерминизма,
+    уже покрытых `tasks/T095/acceptance_tests/test_ac1_*.py`."""
+
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.tmp_dir = Path(tmp.name)
+        self._n = 0
+
+    def write(self, lines: list) -> Path:
+        self._n += 1
+        path = self.tmp_dir / f"step-{self._n}.log"
+        path.write_text("".join(lines), encoding="utf-8")
+        return path
+
+    def test_empty_log_has_zero_friction(self):
+        path = self.write([])
+
+        self.assertEqual(agent_log.step_friction(path), 0.0)
+
+    def test_log_without_a_single_tool_call_has_zero_friction(self):
+        path = self.write([assistant_event({"type": "text", "text": "Читаю SPEC."})])
+
+        self.assertEqual(agent_log.step_friction(path), 0.0)
+
+    def test_non_json_lines_are_ignored_not_counted_as_calls(self):
+        path = self.write([
+            "Traceback (most recent call last):\n",
+            assistant_event(tool_use_call("t1", "Read", file_path="a.py")),
+        ])
+
+        self.assertEqual(agent_log.step_friction(path), 0.0)
+
+    def test_a_call_flagged_by_two_signals_is_not_counted_twice(self):
+        """Повторный Read того же файла + ошибка на том же вызове — один
+        и тот же вызов не должен удвоить непродуктивную долю."""
+        path = self.write([
+            assistant_event(tool_use_call("t1", "Read", file_path="a.py")),
+            assistant_event(tool_use_call("t2", "Read", file_path="a.py")),
+            tool_result_event("t2", "permission denied", is_error=True),
+            assistant_event(tool_use_call("t3", "Bash", command="pytest")),
+            assistant_event(tool_use_call("t4", "Edit", file_path="c.py")),
+        ])
+
+        self.assertEqual(agent_log.step_friction(path), 0.25)
+
+    def test_different_files_read_once_each_are_not_repeats(self):
+        path = self.write([
+            assistant_event(tool_use_call("t1", "Read", file_path="a.py")),
+            assistant_event(tool_use_call("t2", "Read", file_path="b.py")),
+            assistant_event(tool_use_call("t3", "Read", file_path="c.py")),
+        ])
+
+        self.assertEqual(agent_log.step_friction(path), 0.0)
+
+    def test_retry_of_a_different_command_after_an_error_is_not_flagged(self):
+        """Ошибка одного вызова не обязана метить НЕ похожий на него
+        следующий вызов — сигнал 2 ТЗ это «тот же вызов повторно», не
+        «любой вызов после сбоя»."""
+        path = self.write([
+            assistant_event(tool_use_call("t1", "Bash", command="pytest")),
+            tool_result_event("t1", "ModuleNotFoundError", is_error=True),
+            assistant_event(tool_use_call("t2", "Read", file_path="a.py")),
+        ])
+
+        self.assertEqual(agent_log.step_friction(path), 0.5)
+
+    def test_repeated_large_result_from_different_tools_is_flagged(self):
+        """Сигнал 3 ТЗ не привязан к конкретному инструменту/файлу — тот
+        же большой текст, полученный ЛЮБЫМ инструментом дважды, считается."""
+        big = "y" * (agent_log.LARGE_TOOL_RESULT_CHARS + 1)
+        path = self.write([
+            assistant_event(tool_use_call("t1", "Bash", command="cat log")),
+            tool_result_event("t1", big),
+            assistant_event(tool_use_call("t2", "Read", file_path="other.log")),
+            tool_result_event("t2", big),
+        ])
+
+        self.assertEqual(agent_log.step_friction(path), 0.5)
+
+
 if __name__ == "__main__":
     unittest.main()

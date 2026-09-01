@@ -1,5 +1,5 @@
 ---
-built_at_sha: 1d6be036b6ab3220c561b175e1512b28c5dc337f
+built_at_sha: 48e34abf7efb3ff1ddc8c977d742c6535b6a882e
 ---
 
 # Codebase-map пульта
@@ -39,12 +39,13 @@ built_at_sha: 1d6be036b6ab3220c561b175e1512b28c5dc337f
 - `new_agent_log`
 - `render_agent_line`
 - `render_block`
+- `step_friction`
 - `stream_to_log`
 - `tee_lines`
 
 **Импортирует:** `orchestrator/config.py`, `orchestrator/spend.py`
 
-**Импортируется:** `orchestrator/auto.py`, `orchestrator/pause.py`, `orchestrator/runner.py`, `tests/test_agent_failure.py`, `tests/test_agent_log.py`, `tests/test_auto_cycle.py`, `tests/test_kill_cleanup.py`, `tests/test_pause_now.py`, `tests/test_step_cost.py`
+**Импортируется:** `orchestrator/auto.py`, `orchestrator/pause.py`, `orchestrator/report.py`, `orchestrator/runner.py`, `tests/test_agent_failure.py`, `tests/test_agent_log.py`, `tests/test_auto_cycle.py`, `tests/test_kill_cleanup.py`, `tests/test_pause_now.py`, `tests/test_report.py`, `tests/test_step_cost.py`
 
 ## orchestrator/alerts.py
 
@@ -525,7 +526,7 @@ built_at_sha: 1d6be036b6ab3220c561b175e1512b28c5dc337f
 **Публичные функции:**
 - `cmd_report`
 
-**Импортирует:** `orchestrator/config.py`, `orchestrator/store.py`
+**Импортирует:** `orchestrator/agent_log.py`, `orchestrator/config.py`, `orchestrator/store.py`
 
 **Импортируется:** `orchestrator/artel.py`, `tests/test_report.py`
 
@@ -862,6 +863,8 @@ built_at_sha: 1d6be036b6ab3220c561b175e1512b28c5dc337f
 **Публичные функции:**
 - `assistant_event`
 - `event`
+- `tool_result_event`
+- `tool_use_call`
 
 **Импортирует:** `orchestrator/agent_log.py`, `orchestrator/catalog.py`, `orchestrator/config.py`, `orchestrator/gitcmd.py`, `orchestrator/runner.py`, `orchestrator/store.py`, `tests/sandbox.py`
 
@@ -1295,7 +1298,7 @@ built_at_sha: 1d6be036b6ab3220c561b175e1512b28c5dc337f
 
 **Публичные функции:** (нет)
 
-**Импортирует:** `orchestrator/config.py`, `orchestrator/report.py`, `orchestrator/store.py`, `tests/sandbox.py`
+**Импортирует:** `orchestrator/agent_log.py`, `orchestrator/config.py`, `orchestrator/report.py`, `orchestrator/store.py`, `tests/sandbox.py`
 
 **Импортируется:** —
 

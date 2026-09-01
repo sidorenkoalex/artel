@@ -15,7 +15,7 @@ report.py/artel.py). `steps.id` — сквозной autoincrement через в
 import html as html_lib
 from datetime import datetime, timedelta, timezone
 
-from . import config, store
+from . import agent_log, config, store
 
 # Гейты, где решение принимает только Оператор, независимо от политики
 # `gates.yaml` (`orchestrator/gates.py` применяет её ТОЛЬКО к acceptance;
@@ -39,6 +39,11 @@ GATE_TRANSITION_ACTION = "state -> merge_gate"
 GATE_RATIO_ACTORS = ("autogate", "operator")
 GATE_RATIO_WINDOW = 10
 OPERATOR_WINDOW_DAYS = 14
+
+# Число последних задач, для которых блок метрики «трение» (tasks/T095/
+# SPEC.md, требование 3) показывает значения — «последние задачи», не
+# весь корпус разом (борд и так уже показывает все задачи).
+FRICTION_RECENT_TASKS = 10
 
 
 def _esc(value) -> str:
@@ -115,6 +120,59 @@ def _cost_per_done_task(tasks: list) -> float | None:
     if not done_spend:
         return None
     return sum(done_spend) / len(done_spend)
+
+
+def _task_step_logs(task_id: str) -> list:
+    """Файлы логов шагов задачи, доступные на диске прямо сейчас.
+
+    Роль/номер прогона в имени файла (`<id>-<role>-N.log`) здесь не
+    важны — трение считается по ЗАДАЧЕ (AC-2), не по конкретной роли."""
+    if not config.LOGS.exists():
+        return []
+    return sorted(config.LOGS.glob(f"{task_id}-*-*.log"))
+
+
+def _task_friction(task_id: str) -> tuple:
+    """(среднее трение задачи, число учтённых логов); `None` — логов нет.
+
+    Лог, пропавший между `glob` и чтением (вычищен `prune` в процессе
+    генерации отчёта), — честный пропуск ИМЕННО этого шага (AC-5), а не
+    падение всего расчёта задачи."""
+    values = []
+    for log_path in _task_step_logs(task_id):
+        try:
+            values.append(agent_log.step_friction(log_path))
+        except OSError:
+            continue
+    if not values:
+        return None, 0
+    return sum(values) / len(values), len(values)
+
+
+def _friction_by_task(tasks: list) -> list:
+    """[(id, среднее|None, число логов), ...] для последних
+    `FRICTION_RECENT_TASKS` задач (SPEC требование 3, AC-2)."""
+    recent = tasks[-FRICTION_RECENT_TASKS:]
+    return [(row["id"], *_task_friction(row["id"])) for row in recent]
+
+
+def _friction_trend(by_task: list) -> str:
+    """Направление трения по известным (не «нет данных») значениям
+    списка: сравнение среднего первой и второй половины — простейшая
+    детерминированная мера направления без статистики (`median` и
+    подобное — сигнатура регресс-флага, docs/roadmap.md, запрещённого
+    этой задаче, «Не входит» SPEC)."""
+    known = [v for _, v, _ in by_task if v is not None]
+    if len(known) < 2:
+        return "недостаточно данных"
+    mid = len(known) // 2
+    earlier = sum(known[:mid]) / mid
+    later = sum(known[mid:]) / (len(known) - mid)
+    if later > earlier:
+        return "рост"
+    if later < earlier:
+        return "снижение"
+    return "стабильно"
 
 
 # --------------------------------------------------------------- рендер
@@ -232,6 +290,28 @@ def _metrics_html(steps: list, tasks: list, total_spent: float) -> str:
     )
 
 
+def _friction_html(tasks: list) -> str:
+    """Блок метрики «трение» (tasks/T095/SPEC.md, требование 3): значения
+    по последним задачам и тренд. Источник — файлы `.artel/logs/`,
+    доступные на диске в момент генерации (AC-4/AC-5), не новая запись
+    в `state.db`."""
+    by_task = _friction_by_task(tasks)
+    rows_html = "".join(
+        f'<div class="metric-row">{_esc(task_id)}: '
+        + (f'{round(avg * 100)}% (шагов с логом: {n})' if avg is not None
+           else "логов шагов не найдено")
+        + '</div>'
+        for task_id, avg, n in by_task
+    ) or '<p class="empty">Задач нет.</p>'
+
+    return (
+        '<h3>Значения по последним задачам</h3>'
+        f'{rows_html}'
+        '<h3>Тренд</h3>'
+        f'<div class="metric-row">{_esc(_friction_trend(by_task))}</div>'
+    )
+
+
 _STYLE = """
   :root {
     --bg: #f4f5f7; --panel: #ffffff; --border: #dde1e6; --text: #1c2530;
@@ -309,6 +389,8 @@ def _render(tasks: list, steps: list, alerts: list, total_spent: float) -> str:
         f"{_board_html(tasks)}</section>\n"
         '<section class="panel"><h2>Метрики гейтовой нагрузки</h2>'
         f"{_metrics_html(steps, tasks, total_spent)}</section>\n"
+        '<section class="panel"><h2>Метрика «трение»: непродуктивные токены шага</h2>'
+        f"{_friction_html(tasks)}</section>\n"
         "</main>\n"
         "<footer>Сгенерировано командой `report` из state.db — "
         "срез на момент запуска, история прежних отчётов не хранится."

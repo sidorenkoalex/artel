@@ -129,6 +129,136 @@ def stream_to_log(stream, log_path: Path, sink=None) -> None:
         tee_lines(stream, log, sink)
 
 
+# ------------------------------------------ метрика «трение» шага (T095)
+#
+# Доля непродуктивных вызовов инструментов шага — детерминированный
+# разбор того же формата `--output-format stream-json`, что и
+# `render_agent_line` выше, но по ЗАВЕРШЁННОМУ логу целиком (не по
+# потоку построчно), поскольку сигналы требуют видеть вызов и его
+# результат вместе (tasks/T095/SPEC.md).
+
+# Размер результата инструмента, начиная с которого повторное появление
+# того же текста считается «перечитыванием большого куска» (ТЗ, сигнал
+# 3) — эвристика формы сигнала, не порог алерта/гейта (пороги и алерты
+# по самой метрике трения SPEC запрещает, «Не входит»).
+LARGE_TOOL_RESULT_CHARS = 20_000
+
+
+def _tool_use_calls(events: list) -> list:
+    """Вызовы инструментов из событий потока, в порядке появления.
+
+    Ключевой аргумент (`file_path`/`command`/`pattern`) — то немногое,
+    что отличает повтор идентичного вызова от нового; какого именно
+    инструмента он есть, зависит от инструмента (Read/Edit против Bash),
+    поэтому берётся первый попавшийся из трёх, а не имя, фиксированное
+    заранее.
+    """
+    calls = []
+    for ev in events:
+        if ev.get("type") != "assistant":
+            continue
+        content = ev.get("message", {}).get("content")
+        if not isinstance(content, list):
+            continue
+        for block in content:
+            if not isinstance(block, dict) or block.get("type") != "tool_use":
+                continue
+            args = block.get("input") or {}
+            key = args.get("file_path") or args.get("command") or args.get("pattern") or ""
+            calls.append({"id": block.get("id"), "name": block.get("name"), "key": key})
+    return calls
+
+
+def _tool_results(events: list) -> dict:
+    """`tool_use_id -> (текст результата, is_error)` из событий `type: user`.
+
+    Здесь, а не в `render_agent_line`: та функция намеренно гасит
+    `tool_result` целиком («служебные события» докстринг выше) — этому
+    разбору содержимое результата как раз и нужно."""
+    results = {}
+    for ev in events:
+        if ev.get("type") != "user":
+            continue
+        content = ev.get("message", {}).get("content")
+        if not isinstance(content, list):
+            continue
+        for block in content:
+            if not isinstance(block, dict) or block.get("type") != "tool_result":
+                continue
+            text = block.get("content")
+            results[block.get("tool_use_id")] = (
+                text if isinstance(text, str) else "", bool(block.get("is_error")))
+    return results
+
+
+def step_friction(log_path: Path) -> float:
+    """Доля непродуктивных вызовов инструментов шага (tasks/T095/SPEC.md,
+    AC-1) — 0.0 значит ни одного из сигналов ТЗ, 1.0 значит каждый вызов
+    инструмента шага был отмечен хотя бы одним из них.
+
+    Три сигнала, все — по вызовам инструментов, в порядке появления в
+    потоке; один вызов не считается дважды, даже если под него подходит
+    больше одного сигнала (множество id, не сумма счётчиков):
+    - повторное чтение `Read` уже встречавшегося в этом шаге файла;
+    - вызов, чей результат несёт ошибку, и следующий за ним вызов с тем
+      же именем инструмента и тем же ключевым аргументом (ретрай);
+    - результат размером от `LARGE_TOOL_RESULT_CHARS` символов, текст
+      которого дословно уже встречался среди более ранних результатов
+      этого шага (независимо от инструмента/файла, в отличие от первого
+      сигнала).
+
+    Знаменатель — число вызовов инструментов шага, не токены usage: SPEC
+    AC-1 сама допускает единицу «токенов/событий», а usage-поля есть не
+    у каждого события потока (T040 — обрыв, таймаут). Шаг без единого
+    вызова инструмента — 0.0, делить нечего.
+    """
+    events = []
+    for raw_line in log_path.read_text(encoding="utf-8", errors="replace").splitlines():
+        stripped = raw_line.lstrip()
+        if not stripped.startswith("{"):
+            continue
+        try:
+            events.append(json.loads(stripped))
+        except json.JSONDecodeError:
+            continue
+
+    calls = _tool_use_calls(events)
+    if not calls:
+        return 0.0
+    results = _tool_results(events)
+
+    unproductive = set()
+    seen_read_files = set()
+    seen_large_results = set()
+    pending_retry = None  # (name, key) непосредственно предыдущего вызова с ошибкой
+
+    for call in calls:
+        call_id, name, key = call["id"], call["name"], call["key"]
+        result_text, is_error = results.get(call_id, ("", False))
+        signalled = False
+
+        if name == "Read" and key:
+            if key in seen_read_files:
+                signalled = True
+            seen_read_files.add(key)
+
+        if is_error:
+            signalled = True
+        elif pending_retry == (name, key):
+            signalled = True
+
+        if len(result_text) >= LARGE_TOOL_RESULT_CHARS:
+            if result_text in seen_large_results:
+                signalled = True
+            seen_large_results.add(result_text)
+
+        if signalled:
+            unproductive.add(call_id)
+        pending_retry = (name, key) if is_error else None
+
+    return len(unproductive) / len(calls)
+
+
 class OutputPump(threading.Thread):
     """Поток перекачки вывода агента; запоминает свой сбой для `cmd_run`.
 
