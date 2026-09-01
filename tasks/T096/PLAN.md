@@ -2,7 +2,7 @@
 task: T096
 type: plan
 author_role: developer
-status: draft        # draft | ready | approved
+status: ready        # draft | ready | approved
 schema_version: 2
 ---
 
