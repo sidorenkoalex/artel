@@ -7,7 +7,7 @@
 процесса по данным lease (тот же приём, что `tests/test_doctor.py::
 dead_pid` и `tasks/T074/acceptance_tests/_sandbox.py::spawn_sleep_process`
 — сигнал ОС проверяется результатом, не способом доставки). Git-механика
-чекпоинта (`runner.commit_pause_now_checkpoint`) замокана — она уже
+чекпоинта (`checkpoint.commit_pause_now_checkpoint`) замокана — она уже
 покрыта `tests/test_timeout_checkpoint.py::CommitPauseNowCheckpointTest`
 (реальный git) и приёмочными тестами; здесь важно только то, что
 `cmd_pause_now` зовёт её с правильной ролью в правильном месте
@@ -22,7 +22,7 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from orchestrator import catalog, config, pause, runner, store  # noqa: E402
+from orchestrator import catalog, checkpoint, config, pause, store  # noqa: E402
 from tests.sandbox import TmpRootTest, capture  # noqa: E402
 
 
@@ -58,7 +58,7 @@ class PauseNowTest(TmpRootTest):
         # чистом дереве, оставляя проверку самой git-механики
         # `tests/test_timeout_checkpoint.py::CommitPauseNowCheckpointTest`
         # и приёмочным тестам.
-        patcher = mock.patch.object(runner, "commit_pause_now_checkpoint",
+        patcher = mock.patch.object(checkpoint, "commit_pause_now_checkpoint",
                                     return_value="")
         self.checkpoint_mock = patcher.start()
         self.addCleanup(patcher.stop)
