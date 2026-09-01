@@ -125,6 +125,17 @@ def sync_spec_from_worktree(task_id: str) -> None:
         wt_spec.read_text(encoding="utf-8"), encoding="utf-8")
 
 
+def capture_new_task_id(fn, *args) -> tuple:
+    """(текст stdout, возвращённое значение) — `capture()` отбрасывает
+    возврат вызываемого; тестам, читавшим id задачи из `catalog.cmd_new`
+    буквальным `"T001"` (SPEC T094, требование 2: id — ULID, не
+    предсказуемая строка), нужен и печатаемый текст, и сам id."""
+    buf = io.StringIO()
+    with redirect_stdout(buf):
+        result = fn(*args)
+    return buf.getvalue(), result
+
+
 def fake_git_for(responses: dict) -> callable:
     """Параметризуемая заглушка `gitcmd.git`: подкоманда (первый позиционный
     аргумент вызова) ищется в `responses` и отвечает фиксированным
