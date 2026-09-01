@@ -19,12 +19,39 @@ from pathlib import Path
 from . import config, store
 
 
+_CLOSE_ACTIONS = ("state -> done", "state -> killed")
+
+
+def _close_ts(conn, task_id: str) -> str | None:
+    """Момент закрытия задачи из журнала (`store.now()`, `%Y-%m-%d
+    %H:%M:%SZ` — ширина фиксирована, лексикографическое сравнение строк
+    совпадает с хронологическим); `None` — задача ещё не закрыта."""
+    for row in reversed(store.task_steps(conn, task_id)):
+        if row["action"] in _CLOSE_ACTIONS:
+            return row["ts"]
+    return None
+
+
 def _kept_task_ids(conn) -> set:
-    """id последних `config.LOG_RETENTION_KEEP_TASKS` задач по номеру —
-    их логи retention не трогает независимо от возраста (AC-5)."""
-    rows = sorted(store.all_tasks(conn),
-                  key=lambda r: store.task_number(r["id"]), reverse=True)
-    return {r["id"] for r in rows[:config.LOG_RETENTION_KEEP_TASKS]}
+    """id последних `config.LOG_RETENTION_KEEP_TASKS` ЗАКРЫТЫХ задач по
+    дате закрытия из журнала (SPEC T094, требование 5, AC-6) — не по
+    числовому номеру: ULID id не несёт сравнимого по величине номера
+    (требование 2), а `Tnnn`-задачи участвуют в этом же датовом отборе,
+    не в отдельном отборе «последние N по номеру». Ещё не закрытая
+    задача (нет записи `state -> done`/`state -> killed`) не участвует в
+    датовом ранжировании вовсе — её логи retention не трогает независимо
+    от возраста, тем же принципом, что и раньше для «последних N»."""
+    closed: list[tuple[str, str]] = []
+    open_ids: set = set()
+    for row in store.all_tasks(conn):
+        ts = _close_ts(conn, row["id"])
+        if ts is None:
+            open_ids.add(row["id"])
+        else:
+            closed.append((ts, row["id"]))
+    closed.sort(reverse=True)
+    kept_closed = {task_id for _, task_id in closed[:config.LOG_RETENTION_KEEP_TASKS]}
+    return open_ids | kept_closed
 
 
 def _log_candidates(conn) -> list:

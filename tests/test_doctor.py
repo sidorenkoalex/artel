@@ -1058,19 +1058,20 @@ class BranchFreshnessCheckTest(TmpRootTest):
 
 
 class TaskCounterCheckTest(TmpRootTest):
-    """SPEC T049, требование 3 (AC-2): счётчик номеров target'а ниже
-    наблюдаемого max — incident; на уровне или выше — здоровое состояние.
-
-    Сквозной путь (посев через `cmd_init`, реальный git) уже покрыт
-    `tasks/T049/acceptance_tests/test_ac2_doctor_counter_incident.py` —
-    здесь `check_task_counters` дёргается напрямую, без git (наблюдаемый
-    max в этой песочнице приходит только от каталогов `tasks/T*`)."""
+    """SPEC T094, требование 6 (AC-7) СУПЕРСЕДИРУЕТ SPEC T049 требование 3:
+    контур счётчика номеров заморожен как legacy (генератор id — ULID,
+    `orchestrator/idgen.py`) — сверка деградирована до информационной,
+    никогда не `fail`, алерт `doctor.task_counter` больше не заводится
+    ни при каком отставании счётчика. Сквозной путь (посев через
+    `cmd_init`, реальный git) — `tasks/T049/acceptance_tests/
+    test_ac2_doctor_counter_incident.py` (обновлён этой же задачей);
+    здесь `check_task_counters` дёргается напрямую, без git."""
 
     def setUp(self):
         super().setUp()
         capture(catalog.cmd_init)
 
-    def test_counter_behind_observed_max_raises_an_incident(self):
+    def test_counter_behind_observed_max_is_informational_only(self):
         (config.TASKS / "T010").mkdir(parents=True)
         conn = store.db()
         conn.execute("UPDATE task_counters SET next_number=3 WHERE target=?",
@@ -1079,11 +1080,11 @@ class TaskCounterCheckTest(TmpRootTest):
 
         check = doctor.check_task_counters(conn)
 
-        self.assertEqual(check.status, "fail")
+        self.assertEqual(check.status, "ok")
+        self.assertIn("не движется", check.detail)
         incidents = [a for a in alerts.open_alerts(conn, "incident")
                     if a["source"] == "doctor.task_counter"]
-        self.assertEqual(len(incidents), 1)
-        self.assertIn(config.DEFAULT_TARGET, incidents[0]["message"])
+        self.assertEqual(incidents, [])
 
     def test_counter_equal_to_observed_max_is_ok(self):
         conn = store.db()
@@ -1103,42 +1104,19 @@ class TaskCounterCheckTest(TmpRootTest):
         self.assertEqual(check.status, "ok")
         self.assertEqual(alerts.open_alerts(store.db(), "incident"), [])
 
-    def test_repeated_run_does_not_duplicate_the_incident(self):
-        (config.TASKS / "T010").mkdir(parents=True)
+    def test_preexisting_incident_is_auto_acked_once_check_stops_raising_it(self):
+        """Прогон до SPEC T094 мог оставить открытый incident этого
+        source — авто-ack безусловно его закрывает (условие «ещё живо»
+        теперь всегда `False`, требование 6)."""
         conn = store.db()
-        conn.execute("UPDATE task_counters SET next_number=3 WHERE target=?",
-                     (config.DEFAULT_TARGET,))
-        conn.commit()
+        alerts.raise_alert(conn, config.DEFAULT_TARGET, "incident",
+                          "doctor.task_counter", "legacy incident")
 
-        doctor.check_task_counters(conn)
         doctor.check_task_counters(conn)
 
         incidents = [a for a in alerts.open_alerts(conn, "incident")
                     if a["source"] == "doctor.task_counter"]
-        self.assertEqual(len(incidents), 1)
-
-    def test_catching_up_target_is_auto_acked_without_touching_a_lagging_target(self):
-        """SPEC T088, требования 5-6: закрытие алерта одного target
-        (`sled`, счётчик догнал) не задевает алерт другого (`artel`,
-        счётчик остаётся позади) — из того же прогона."""
-        config.TARGETS.write_text(TARGETS_YAML_WITH_SLED, encoding="utf-8")
-        conn = store.db()  # сеет счётчики artel/sled пока их tasks/ пусты
-        (config.TASKS / "T010").mkdir(parents=True)
-        (config.PROJECTS / "sled" / "tasks" / "T010").mkdir(parents=True)
-
-        doctor.check_task_counters(conn)
-        by_target = {a["target"]: a["id"] for a in alerts.open_alerts(conn, "incident")
-                    if a["source"] == "doctor.task_counter"}
-        self.assertEqual(set(by_target), {config.DEFAULT_TARGET, "sled"})
-
-        conn.execute("UPDATE task_counters SET next_number=10 WHERE target=?", ("sled",))
-        conn.commit()
-        doctor.check_task_counters(conn)
-
-        self.assertIsNone(
-            store.get_alert(conn, by_target[config.DEFAULT_TARGET])["ack_ts"],
-            "artel остаётся позади — ack не должен проставляться")
-        self.assertIsNotNone(store.get_alert(conn, by_target["sled"])["ack_ts"])
+        self.assertEqual(incidents, [])
 
 
 class BackupAgeDegradedCheckTest(TmpRootTest):

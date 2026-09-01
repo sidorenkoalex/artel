@@ -1,0 +1,171 @@
+"""Артефактная ветка пульта: `tasks/<id>/` внешнего target'а при жизни
+задачи (SPEC T094, требования 7-11; AC-8, AC-9, AC-10, AC-12).
+
+Self/догфуд (`config.DEFAULT_TARGET`) эту ветку не заводит — требование
+16/AC-18: до A7 self остаётся на однобраншевом флоу (`tasks/<id>/` живёт
+прямо в ветке `task/*`, как и раньше, `orchestrator/catalog.py`).
+
+Запись — веткой-плотником (`hash-object`/`update-index`/`write-tree`/
+`commit-tree`/`update-ref`), не рабочим деревом `config.ROOT`: главная
+копия пульта в этот момент может стоять на любой ветке (main, ручной
+чекаут Оператора) — плотницкая запись её чекаут не трогает вовсе.
+Временный `GIT_INDEX_FILE` (тот же приём, каким `tasks/T094/
+acceptance_tests/test_ac16_retro_corpus_local_rebuild.py` кладёт тестовый
+`refs/artifacts/*`) держит операции независимыми от индекса основной
+рабочей копии.
+"""
+import os
+import subprocess
+from datetime import datetime, timezone
+from pathlib import Path
+
+from . import config, fixation, gitcmd
+
+PASSPORT_REL_TMPL = "tasks/{task_id}/PASSPORT.md"
+
+
+def branch_name(task_id: str) -> str:
+    """Имя артефактной ветки пульта задачи (реестр PLAN.md, требование 1:
+    имя решает разработчик — SPEC схему не называет)."""
+    return f"artifact/{task_id.lower()}"
+
+
+def _now() -> str:
+    return datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%SZ")
+
+
+def write_commit(repo: Path, files: dict, message: str, author_name: str,
+                 author_email: str, parent: str | None = None) -> str:
+    """Коммитит `files` ({путь: текст}) в объектную базу `repo` плотницки
+    (используется и `snapshot.publish_and_cleanup` — коммит в клоне
+    целевого, не только в `config.ROOT`);
+    `parent`, если задан, — дерево-родитель загружается в индекс первым
+    (`read-tree`), так что новый коммит несёт и старое содержимое, не
+    только правку `files` (дописывание, не перезапись — AC-12). Возвращает
+    sha нового коммита; пустая строка — git не ответил на любом шаге.
+    """
+    index_file = repo / f".artel-carpentry-index-{os.getpid()}-{abs(id(files))}"
+    env = {**os.environ, "GIT_INDEX_FILE": str(index_file)}
+    try:
+        if parent:
+            read_tree = subprocess.run(
+                ["git", "read-tree", parent], cwd=repo, env=env,
+                capture_output=True, text=True)
+            if read_tree.returncode != 0:
+                return ""
+        for rel, text in files.items():
+            blob = subprocess.run(
+                ["git", "hash-object", "-w", "--stdin"], cwd=repo, env=env,
+                input=text, capture_output=True, text=True)
+            if blob.returncode != 0:
+                return ""
+            upd = subprocess.run(
+                ["git", "update-index", "--add", "--cacheinfo",
+                 f"100644,{blob.stdout.strip()},{rel}"],
+                cwd=repo, env=env, capture_output=True, text=True)
+            if upd.returncode != 0:
+                return ""
+        tree = subprocess.run(["git", "write-tree"], cwd=repo, env=env,
+                              capture_output=True, text=True)
+        if tree.returncode != 0:
+            return ""
+        tree_sha = tree.stdout.strip()
+        commit_args = ["git", "commit-tree", tree_sha, "-m", message]
+        if parent:
+            commit_args += ["-p", parent]
+        commit_env = {**env, "GIT_AUTHOR_NAME": author_name,
+                      "GIT_AUTHOR_EMAIL": author_email,
+                      "GIT_COMMITTER_NAME": author_name,
+                      "GIT_COMMITTER_EMAIL": author_email}
+        commit = subprocess.run(commit_args, cwd=repo, env=commit_env,
+                                capture_output=True, text=True)
+        if commit.returncode != 0:
+            return ""
+        return commit.stdout.strip()
+    finally:
+        try:
+            index_file.unlink(missing_ok=True)
+        except OSError:
+            pass
+
+
+def commit_files(task_id: str, files: dict, message: str,
+                 author_name: str = fixation.FIXATION_AUTHOR_NAME,
+                 author_email: str = fixation.FIXATION_AUTHOR_EMAIL) -> str:
+    """Коммитит `files` в артефактную ветку задачи (создаёт её, если ещё
+    нет — от головы `config.MAIN_BRANCH`, тем же принципом, что кодовая
+    ветка `task/*`). Возвращает sha нового коммита; пустая строка — git
+    не ответил.
+    """
+    branch = branch_name(task_id)
+    parent = gitcmd.branch_head_sha(branch) or gitcmd.branch_head_sha(
+        config.MAIN_BRANCH) or None
+    commit_sha = write_commit(config.ROOT, files, message, author_name,
+                              author_email, parent=parent)
+    if not commit_sha:
+        return ""
+    upd_ref = subprocess.run(
+        ["git", "update-ref", f"refs/heads/{branch}", commit_sha],
+        cwd=config.ROOT, capture_output=True, text=True)
+    if upd_ref.returncode != 0:
+        return ""
+    return commit_sha
+
+
+def push(task_id: str) -> bool:
+    """Push best-effort артефактной ветки в origin пульта (SPEC требование
+    7, AC-8): отказ (нет origin, сеть недоступна) — `False`, не исключение
+    — вызывающий код (`catalog.cmd_new`) не имеет права из-за этого
+    отказать в заведении задачи."""
+    branch = branch_name(task_id)
+    res = gitcmd.git("push", "-q", "origin", f"refs/heads/{branch}:refs/heads/{branch}")
+    return res is not None and res.returncode == 0
+
+
+def read_tree(task_id: str) -> dict:
+    """{путь: текст} всех файлов `tasks/<id>/` артефактной ветки задачи;
+    пустой словарь — ветки нет или каталог в ней пуст."""
+    branch = branch_name(task_id)
+    paths = gitcmd.ls_tree_files(branch, f"tasks/{task_id}") or []
+    files = {}
+    for rel in paths:
+        text, _ = gitcmd.show(branch, rel)
+        if text is not None:
+            files[rel] = text
+    return files
+
+
+def append_passport_line(task_id: str, state: str, actor: str) -> None:
+    """Дописывает строку паспорта живой задачи (SPEC требование 11,
+    AC-12) в артефактную ветку — состояние, момент перехода
+    (`_now()`, тот же формат, что `store.now()`), актор. Читает текущее
+    содержимое файла ветко-корректно (`gitcmd.show`) и коммитит
+    НАКОПЛЕННЫЙ текст — предыдущие строки не теряются (дописывание, не
+    перезапись)."""
+    rel = PASSPORT_REL_TMPL.format(task_id=task_id)
+    branch = branch_name(task_id)
+    existing, _ = gitcmd.show(branch, rel)
+    prior = existing if existing is not None else "# Паспорт живой задачи\n\n"
+    line = f"{_now()}  {state}  actor={actor}\n"
+    commit_files(task_id, {rel: prior + line},
+                f"{task_id}: паспорт — {state}")
+
+
+def snapshot_pending(task_id: str) -> bool:
+    """True — артефактная ветка задачи ещё существует локально: снапшот
+    закрытия (SPEC требования 12-13) ещё не подтверждён в origin
+    целевого (AC-15) — уборка ветки ждёт."""
+    return gitcmd.branch_exists(branch_name(task_id))
+
+
+def drop(task_id: str) -> str:
+    """Удаляет артефактную ветку задачи ПОСЛЕ подтверждённого снапшота
+    (AC-13, AC-15); строка — что вышло."""
+    branch = branch_name(task_id)
+    if not gitcmd.branch_exists(branch):
+        return f"артефактной ветки {branch} нет"
+    res = gitcmd.git("branch", "-D", branch)
+    if res is None or res.returncode != 0:
+        reason = res.stderr.strip()[:200] if res is not None else "git не ответил"
+        return f"артефактная ветка {branch} не удалена: {reason}"
+    return f"удалена артефактная ветка {branch}"

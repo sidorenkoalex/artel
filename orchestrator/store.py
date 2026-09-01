@@ -540,6 +540,24 @@ def set_state(conn, task_id: str, state: str, actor: str, *,
     journal(conn, task_id, actor, f"state -> {state}", detail)
     print(f"[{task_id}] -> {state}" + (f"  ({detail})" if detail else ""))
     record_fixation(conn, task_id)
+    _append_passport_line(conn, task_id, state, actor)
+
+
+def _append_passport_line(conn, task_id: str, state: str, actor: str) -> None:
+    """Паспорт живой задачи (SPEC T094, требование 11, AC-12): на каждом
+    переходе FSM — строка в артефактную ветку пульта, «только для глаз»
+    (не входит в автоматические решения). Только внешний target —
+    self/догфуд не заводит артефактную ветку вовсе (требование 16/AC-18).
+
+    Отложенный импорт: `artifact_branch` не читает `store` на уровне
+    модуля, но `store.py` остаётся листом графа импортов при загрузке
+    (тот же приём, что `record_fixation` уже применяет к `fixation`).
+    """
+    target = task_target(conn, task_id)
+    if target == config.DEFAULT_TARGET:
+        return
+    from . import artifact_branch
+    artifact_branch.append_passport_line(task_id, state, actor)
 
 
 def record_fixation(conn, task_id: str) -> None:
@@ -566,11 +584,52 @@ def record_fixation(conn, task_id: str) -> None:
     target = task_target(conn, task_id)
     sha, clean = fixation.fix(task_id, target)
     update_task(conn, task_id, fixed_sha=sha or None)
-    journal(conn, task_id, "fsm", "sha зафиксирован",
-           f"target={target}, sha={sha or '—'}, чисто={clean}")
+    if target == config.DEFAULT_TARGET:
+        detail = f"target={target}, sha={sha or '—'}, чисто={clean}"
+    else:
+        # Два sha (SPEC T094, требование 9, AC-10): голова кодовой ветки
+        # ЦЕЛЕВОГО и голова артефактной ветки ПУЛЬТА — `sha`/`clean` выше
+        # (легаси-фиксация `.artel/projects/<target>/`, требование 2 в
+        # процессе перевода на артефактную ветку) остаются в detail без
+        # изменений — этот блок ДОБАВЛЯЕТ, не заменяет.
+        code_sha = fixation.external_code_sha(target)
+        artifact_sha = fixation.external_artifact_sha(task_id)
+        detail = (f"target={target}, sha={sha or '—'}, чисто={clean}, "
+                  f"код={code_sha or '—'}, артефакты={artifact_sha or '—'}")
+    journal(conn, task_id, "fsm", "sha зафиксирован", detail)
+
+
+def resolve_task_id(conn, task_id: str) -> str:
+    """Разрешает уникальный префикс `task_id` в полный id (SPEC T094,
+    требование 3, AC-3) — БЕЗ предположений о формате/длине id (AC-2):
+    точное совпадение проверяется первым (легаси `Tnnn` и ULID обоих
+    видов совпадают с собой буквально), иначе — поиск по префиксу через
+    `LIKE` со всеми существующими id.
+
+    Точного совпадения и ровно одного префиксного совпадения нет — id
+    возвращается как есть: вызывающий код (`get_task`) сам отказывает
+    «не найдена», сохраняя прежнее сообщение для опечатки. Больше одного
+    префиксного совпадения — явный отказ ЗДЕСЬ, с перечислением всех
+    совпавших id (AC-3): не тот же текст, что «не найдена», иначе
+    неоднозначность неотличима от отсутствия задачи.
+    """
+    if not task_id:
+        return task_id
+    if conn.execute("SELECT 1 FROM tasks WHERE id=?", (task_id,)).fetchone():
+        return task_id
+    escaped = task_id.replace("%", r"\%").replace("_", r"\_")
+    matches = [r["id"] for r in conn.execute(
+        "SELECT id FROM tasks WHERE id LIKE ? ESCAPE '\\'", (f"{escaped}%",))]
+    if len(matches) == 1:
+        return matches[0]
+    if len(matches) > 1:
+        sys.exit(f"Префикс {task_id!r} неоднозначен — совпадает с "
+                 f"{len(matches)} задачами: {', '.join(sorted(matches))}")
+    return task_id
 
 
 def get_task(conn, task_id: str) -> sqlite3.Row:
+    task_id = resolve_task_id(conn, task_id)
     row = conn.execute("SELECT * FROM tasks WHERE id=?", (task_id,)).fetchone()
     if row is None:
         sys.exit(f"Задача {task_id} не найдена. `status` покажет существующие.")

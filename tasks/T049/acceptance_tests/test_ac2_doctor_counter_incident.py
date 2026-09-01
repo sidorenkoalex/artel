@@ -49,17 +49,30 @@ class TaskCounterIncidentSandbox(TmpRootTest):
 
 
 class CounterBehindObservedMaxTest(TaskCounterIncidentSandbox):
+    """Поведение «отставание счётчика — incident» СУПЕРСЕДИРОВАНО SPEC
+    T094 (требование 6, AC-7, решения Оператора 31.08/01.09): контур
+    счётчика номеров заморожен как legacy — генератором id стал ULID
+    (`orchestrator/idgen.py`), `cmd_new` больше не расходует счётчик ни
+    для одного target, коллизия номеров структурно не существует. Тест
+    обновлён на новую, явно предписанную деградацию (тем же приёмом, что
+    T049 сама уже применила к `check_backup_age` в этом же файле рядом —
+    `tasks/T049/acceptance_tests/test_ac4_backup_age_no_alert.py`), а не
+    ослаблен произвольно: старое поведение (`status == "fail"` +
+    incident) с T094 запрещено дословно требованием 6."""
 
-    def test_ac2_counter_behind_observed_max_raises_an_incident_alert(self):
+    def test_ac2_counter_behind_observed_max_is_informational_not_incident(self):
         self.set_counter(3)  # ниже наблюдаемого max (T010 -> 10)
 
         check = doctor.check_task_counters(store.db())
 
-        self.assertEqual(check.status, "fail", check.detail)
-        incidents = alerts.open_alerts(store.db(), "incident")
-        self.assertTrue(
-            incidents,
-            "счётчик (3) ниже наблюдаемого max (10) не поднял incident-алерт")
+        self.assertNotEqual(check.status, "fail", check.detail)
+        self.assertIn("не движется", check.detail)
+        incidents = [a for a in alerts.open_alerts(store.db(), "incident")
+                    if a["source"] == "doctor.task_counter"]
+        self.assertEqual(
+            incidents, [],
+            "счётчик позади наблюдаемого max не должен алертовать пульт "
+            "после SPEC T094 (контур заморожен как legacy)")
 
 
 class CounterAtOrAboveObservedMaxTest(TaskCounterIncidentSandbox):

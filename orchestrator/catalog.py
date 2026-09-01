@@ -4,7 +4,8 @@ import shutil
 import sys
 from pathlib import Path
 
-from . import alerts, artifacts, budget, config, fixation, gitcmd, store, workspace
+from . import (alerts, artifact_branch, artifacts, budget, config, fixation,
+              gitcmd, idgen, store, workspace)
 
 # ГОСТ-подобная транслитерация: только stdlib, без внешних зависимостей.
 # ъ/ь пропускаются; ё → yo; щ → sch; ю → yu; я → ya.
@@ -88,20 +89,30 @@ def _tz_document(task_id: str, title: str, raw: str) -> str:
 
 
 def cmd_new(title: str, tz_path: str | None = None, *,
-           canary: bool = False) -> str:
+           canary: bool = False, target: str | None = None) -> str:
     """Заводит задачу: ТЗ/SPEC рождаются сразу в её ветке (ADR-0005 п.9,
     SPEC T048) — рабочая копия main не трогается ни на одном шаге
     (требование 4): ни новых файлов на диске main, ни коммитов в main.
 
-    Порядок — «сначала все проверки, потом побочные эффекты» (тот же
-    принцип, что у отказа по нечитаемому файлу ТЗ ниже): файл ТЗ читается
-    первым, коллизия имени ветки проверяется ДО расхода номера счётчика
-    (`store.peek_task_number`, не `next_task_number` — требование 1, AC-3).
-    Только после обеих проверок номер расходуется по-настоящему, заводится
-    worktree задачи штатной механикой T045 (`workspace.ensure` сама же
-    заводит и ветку от `config.MAIN_BRANCH` через `gitcmd`, образец T036),
-    и в НЕГО, не в `config.TASKS`, пишутся TZ.md/SPEC.md — одним коммитом
-    оркестраторского авторства (требования 2, 3).
+    Id — ULID (SPEC T094, требование 2, AC-2): единственный генератор —
+    `idgen.new_task_id()`, без счётчика и без коллизий по построению —
+    ранняя peek-проверка ветки (T048) и повторный расход счётчика после
+    неё, нужные только под гонку конкурентного `next_task_number`,
+    отсюда убраны вместе с самим счётчиком как источником id (контур
+    `task_counters` остаётся, но заморожен как legacy — требование 6, не
+    удаляется этой задачей).
+
+    `target` (SPEC T094, требования 7-9, AC-8/AC-9) — keyword-only,
+    `None` (self/догфуд, `config.DEFAULT_TARGET`) не меняет поведение
+    существующих вызывателей: `tasks/<id>/` рождается прямо в worktree
+    кодовой ветки задачи, как и раньше (требование 16/AC-18 — self не
+    заводит артефактную ветку пульта до A7). Для ЛЮБОГО другого target
+    `tasks/<id>/` коммитится ВЕТКОЙ ПУЛЬТА (`orchestrator/
+    artifact_branch.py`) — кодовая ветка `branch` только ЗАПИСЫВАЕТСЯ в
+    БД (её создание и код — дело роли-разработчика в клоне целевого,
+    `runner.role_cwd`, эта функция туда не пишет вовсе, AC-9). Push
+    артефактной ветки в origin пульта — best-effort (требование 7,
+    AC-8): отказ сети не отменяет заведение задачи.
 
     `canary` — keyword-only, дефолт `False` не меняет поведение
     существующих вызывателей: команда `canary` (tasks/T065/SPEC.md,
@@ -112,9 +123,8 @@ def cmd_new(title: str, tz_path: str | None = None, *,
     вызывающий код (тот же `canary`) мог собрать список заведённых задач.
     """
     conn = store.db()
-    # Файл ТЗ читается ДО того, как расходуется номер задачи и заводится
-    # каталог: нечитаемый путь не должен оставлять после себя ни
-    # наполовину созданную задачу, ни пропущенный номер счётчика.
+    # Файл ТЗ читается ДО побочных эффектов: нечитаемый путь не должен
+    # оставлять после себя наполовину созданную задачу.
     tz_raw = None
     if tz_path is not None:
         try:
@@ -122,39 +132,49 @@ def cmd_new(title: str, tz_path: str | None = None, *,
         except (OSError, UnicodeDecodeError) as exc:
             sys.exit(f"ТЗ не прочитано из {tz_path}: {exc}")
 
-    # Номер — из персистентного счётчика target'а, а не из COUNT(*) строк
-    # (ADR-0003 3ж): архивация строки номер не освобождает, и реконнект
-    # проекта не создаёт коллизий с уже отработанными задачами.
-    target = config.DEFAULT_TARGET
-    number = store.peek_task_number(conn, target)
-    task_id = f"T{number:03d}"
+    target = target or config.DEFAULT_TARGET
+    task_id = idgen.new_task_id()
     branch = f"task/{task_id.lower()}-{slugify(title)}"
-    if gitcmd.branch_exists(branch):
-        sys.exit(f"ветка {branch} уже существует — задача не заведена "
-                 f"(разберись с веткой и повтори new; номер счётчика не "
-                 f"израсходован)")
 
-    task_id = f"T{store.next_task_number(conn, target):03d}"
-    # Ранняя проверка выше — по peek-значению, для быстрого UX-отказа без
-    # похода в транзакцию; но реально заводимое имя ветки обязано считаться
-    # от ФАКТИЧЕСКИ выданного номера — под гонкой двух конкурентных `new`
-    # peek- и реальный номер могут разойтись (реестр T048, замечание major).
-    branch = f"task/{task_id.lower()}-{slugify(title)}"
+    spec = (config.ROOT / "templates" / "SPEC.md").read_text(encoding="utf-8")
+    spec = spec.replace("TASK_ID", task_id).replace("<название задачи>", title)
+    tz_doc = _tz_document(task_id, title, tz_raw) if tz_raw is not None else None
+
+    if target == config.DEFAULT_TARGET:
+        _new_dogfood(task_id, title, branch, spec, tz_doc)
+    else:
+        _new_external_artifact_branch(task_id, title, spec, tz_doc)
+
+    store.insert_task(conn, task_id, title, "spec_writing", branch, target,
+                      config.DEFAULT_BUDGET_USD, is_canary=canary)
+    store.journal(conn, task_id, "operator", "created", title)
+    print(f"[{task_id}] «{title}» создана"
+         + (f" в ветке {branch}" if target == config.DEFAULT_TARGET
+            else f" (target {target}, артефактная ветка пульта "
+                 f"{artifact_branch.branch_name(task_id)})"))
+    if tz_path is not None:
+        print(f"  затем: artel.py run {task_id}  (запуск analyst)")
+    else:
+        print(f"  затем: artel.py advance {task_id}  (SPEC status: ready)")
+    return task_id
+
+
+def _new_dogfood(task_id: str, title: str, branch: str, spec: str,
+                 tz_doc: str | None) -> None:
+    """Self/догфуд (требование 16/AC-18): однобраншевый флоу, байт-в-байт
+    прежнее поведение `cmd_new` до SPEC T094 (worktree кодовой ветки,
+    коммит оркестраторского авторства)."""
+    if gitcmd.branch_exists(branch):
+        sys.exit(f"ветка {branch} уже существует — задача не заведена")
     wt_path, error = workspace.ensure(task_id, branch)
     if error is not None:
         sys.exit(f"[{task_id}] worktree не создан: {error}")
 
     task_dir = wt_path / "tasks" / task_id
     task_dir.mkdir(parents=True)
-    spec = (config.ROOT / "templates" / "SPEC.md").read_text(encoding="utf-8")
-    spec = spec.replace("TASK_ID", task_id).replace("<название задачи>", title)
     (task_dir / "SPEC.md").write_text(spec, encoding="utf-8")
-
-    # ТЗ — необязательный вход роли analyst (SPEC T025, требование 1):
-    # без него задача живёт прежним флоу (SPEC пишет Оператор).
-    if tz_raw is not None:
-        (task_dir / "TZ.md").write_text(
-            _tz_document(task_id, title, tz_raw), encoding="utf-8")
+    if tz_doc is not None:
+        (task_dir / "TZ.md").write_text(tz_doc, encoding="utf-8")
 
     commit_message = f"{task_id}: ТЗ Оператора ({title})"
     added = gitcmd.in_repo(wt_path, "add", "-A", f"tasks/{task_id}")
@@ -171,17 +191,23 @@ def cmd_new(title: str, tz_path: str | None = None, *,
         sys.exit(f"[{task_id}] коммит ветки {branch} не сделан: "
                  f"{committed.stderr.strip()[:200] if committed is not None else '—'}")
 
-    store.insert_task(conn, task_id, title, "spec_writing", branch, target,
-                      config.DEFAULT_BUDGET_USD, is_canary=canary)
-    store.journal(conn, task_id, "operator", "created", title)
-    print(f"[{task_id}] «{title}» создана в ветке {branch}: "
-         f"заполни {task_dir / 'SPEC.md'}")
-    if tz_path is not None:
-        print(f"  ТЗ сохранено: {task_dir / 'TZ.md'}")
-        print(f"  затем: artel.py run {task_id}  (запуск analyst)")
-    else:
-        print(f"  затем: artel.py advance {task_id}  (SPEC status: ready)")
-    return task_id
+
+def _new_external_artifact_branch(task_id: str, title: str, spec: str,
+                                  tz_doc: str | None) -> None:
+    """Внешний target (требования 7-9, AC-8/AC-9): `tasks/<id>/` коммитится
+    в артефактную ветку пульта плотницки (`artifact_branch.commit_files`),
+    рабочая копия/worktree пульта не трогаются вовсе. Push в origin —
+    best-effort (требование 7): отказ не прерывает заведение задачи и не
+    превращает его в ошибку команды (AC-8)."""
+    files = {f"tasks/{task_id}/SPEC.md": spec}
+    if tz_doc is not None:
+        files[f"tasks/{task_id}/TZ.md"] = tz_doc
+    commit_sha = artifact_branch.commit_files(
+        task_id, files, f"{task_id}: ТЗ Оператора ({title})")
+    if not commit_sha:
+        sys.exit(f"[{task_id}] артефактная ветка пульта не создана — git "
+                 f"не ответил")
+    artifact_branch.push(task_id)
 
 
 def cmd_status() -> None:
@@ -222,9 +248,22 @@ def cmd_show(task_id: str) -> None:
           f"/{config.LIMIT_ACCEPT_REJECTS}"
           f"  бюджет: ${t['spent_usd']:.2f}/{t['budget_usd']:.2f}")
     for name in ("SPEC.md", "PLAN.md", "REVIEW.md", "TEST_REPORT.md"):
-        meta = artifacts.frontmatter(config.TASKS / task_id / name)
+        meta = _artifact_frontmatter(t["target"], task_id, name)
         if meta:
             print(f"  {name}: status={meta.get('status', '?')}")
+
+
+def _artifact_frontmatter(target: str, task_id: str, name: str) -> dict:
+    """Frontmatter артефакта задачи для `cmd_show` — с диска для self
+    (прежнее поведение), из артефактной ветки пульта для любого другого
+    target (SPEC T094, требование 10, AC-11 — реестр AC-1: `tasks/<id>/`
+    внешнего target на диске `config.TASKS` не существует вовсе)."""
+    if target == config.DEFAULT_TARGET:
+        return artifacts.frontmatter(config.TASKS / task_id / name)
+    from . import yamlmini
+    text, _ = gitcmd.show(artifact_branch.branch_name(task_id),
+                          f"tasks/{task_id}/{name}")
+    return (yamlmini.frontmatter(text) or {}) if text is not None else {}
 
 
 def cmd_log(task_id: str) -> None:
