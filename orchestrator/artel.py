@@ -196,7 +196,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from orchestrator import (answer, auto, budget, canary, catalog,  # noqa: E402
                           cleanup, config, doctor, fsm, pause, projects, prune,
-                          release, runner, version, workspace)
+                          release, report, runner, version, workspace)
 
 
 def _refuse_if_worktree() -> None:
@@ -287,6 +287,7 @@ def main() -> None:
         "canary": lambda: canary.cmd_canary(
             rest[0], rewrite_baseline="--rewrite-baseline" in rest),
         "prune": lambda: prune.cmd_prune("--execute" in rest),
+        "report": lambda: report.cmd_report(),
     }
     fn = table.get(cmd)
     if fn is None:
