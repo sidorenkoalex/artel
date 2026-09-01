@@ -1,53 +1,24 @@
-"""Общая песочница приёмочных тестов T066 (не test_*.py — не подхватывается
+"""Общая песочница приёмочных тестов T085 (не test_*.py — не подхватывается
 `unittest discover` напрямую, только импортом из test_ac*.py).
 
 Автогейт acceptance читает `gates.yaml` из главной копии пульта (`config.
-ROOT`, "ветка main" в терминах комментария самого `gates.yaml`: "Policy-
-движок обязан читать его ТОЛЬКО из main") и реально прогоняет приёмочные
-тесты задачи + полный набор `tests/` В WORKTREE ВЕТКИ ЗАДАЧИ (SPEC
-требование 2, б-в) — подменять эти прогоны заглушками нечем проверить
-критерии буквально: тест обязан увидеть настоящий зелёный/красный
-результат настоящего `python3 -m unittest discover`. Тот же приём
-временного git-репозитория и per-task worktree, что и
-`tasks/T051/acceptance_tests/_sandbox.py` / `tasks/T045/acceptance_tests/
-_sandbox.py`.
+ROOT`) и реально прогоняет приёмочные тесты задачи + полный набор `tests/`
+В WORKTREE ВЕТКИ ЗАДАЧИ — подменять эти прогоны заглушками нечем проверить
+критерии буквально: тест обязан увидеть настоящий зелёный/красный результат
+настоящего `python3 -m unittest discover`. Тот же приём временного
+git-репозитория и per-task worktree, что и `tasks/T066/acceptance_tests/
+_sandbox.py` (эта задача исполняет ADR-0010 поверх той же механики
+`orchestrator/fsm.py::_autogate_conditions`, введённой T066).
 
-Тесты не переоткрывают конкретную функцию/имя, которым разработчик решит
-исполнить автогейт (её ещё нет — эту задачу впервые пишет developer после
-test_author, SPEC требование 1: точный формат `gates.yaml` — его решение
-в PLAN) — только наблюдаемое поведение публичных точек входа
-`fsm.cmd_advance`/`fsm.cmd_approve`, состояние задачи в БД, журнал шагов
-и печать команды.
-
-## Допущения интерфейса, которые вводит этот файл
-
-- Формат политики `gates.yaml` — плоское отображение `gates: {<имя
-  гейта>: <auto|manual>}` с именами гейтов, буквально совпадающими с
-  состояниями FSM (`spec_gate`, `acceptance`, `merge_gate`) — дословно
-  пример из SPEC требования 1 и ADR-0007 (п.2 решения и раздел
-  «Раскатка»), а не нынешняя нерабочая заглушка `gates.yaml` (там —
-  вложенный `mode:` для гейтов, которых в FSM не существует; сам файл
-  помечен «НЕ ДЕЙСТВУЕТ», «регенерируется», «policy-движка нет» — не
-  образец формата для активной политики ADR-0007).
-- Порог программы (A1, `config.PROGRAM_STOP_LOSS_USD` /
-  `config.PROGRAM_ALERT_RATIOS`) читается через `config`, не литералом
-  (урок T062 28.08, скил test-authoring): «пробит» в тестах — расход
-  далеко за пределами САМОГО СТРОГОГО из настроенных отношений, чтобы
-  сценарий не зависел от того, какое именно отношение разработчик
-  выберет точкой блокировки.
-
-## Маршрут `review -> acceptance` (правка ADR-0009/T085, мандат ANSWER-1)
-
-С T079 между `review` и `acceptance` стоит состояние `verifying`: одного
-`cmd_advance` из `review` уже недостаточно, чтобы добраться до оценки
-автогейта acceptance — нужен второй `advance`, обрабатывающий
-`verifying`, а ему нужен зелёный CI головного коммита ветки. Это условие
-не входит в состав автогейта acceptance (SPEC T066/T085 требования) —
-здесь просто убирается с дороги фикстурой, постоянно зелёной, тем же
-приёмом (`ci.gh`/`ci.head_sha`), что и `tasks/T079/acceptance_tests/
-_sandbox.py::VerifyingTest.set_ci_dual` / `tasks/T085/acceptance_tests/
-_sandbox.py`. Метод `advance_to_autogate` ниже — два `cmd_advance`
-подряд с этой фикстурой.
+Своя копия песочницы, не импорт из tasks/T066/acceptance_tests/ (тот же
+приём, что у tasks/T079/acceptance_tests/_sandbox.py — у каждой задачи
+своя самодостаточная копия, без межзадачных импортов): `REVIEW_APPROVED_MD`
+здесь ОБЯЗАНА нести секцию '## Проверено исполнением' (обязательна для
+status: approved с tasks/T072/SPEC.md, `scripts/guard.py::EVIDENCE_
+SECTION`) — фикстура T066 её не несёт (та задача принята ДО T072) и
+поэтому сегодня красна по причине, не имеющей отношения к ADR-0010 (см.
+эскалацию AC-6 в test_ac6_t066_composition_escalation.py). Тесты ЭТОЙ
+задачи не должны наследовать чужую стухшую фикстуру.
 """
 import json
 import shutil
@@ -60,15 +31,15 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
-from orchestrator import catalog, ci, config, gitcmd, store, workspace  # noqa: E402
+from orchestrator import catalog, ci, config, store, workspace  # noqa: E402
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 
 TASK = "T001"
 OTHER_SPENDER_TASK = "T002"
 
-# Приёмочный тест задачи (акт "б" SPEC), который всегда проходит.
-PASSING_ACCEPTANCE_TEST = '''"""Маркер: заведомо зелёный приёмочный тест песочницы T066."""
+# Приёмочный тест задачи (условие "б"), который всегда проходит.
+PASSING_ACCEPTANCE_TEST = '''"""Маркер: заведомо зелёный приёмочный тест песочницы T085."""
 import unittest
 
 
@@ -76,33 +47,6 @@ class MarkerTest(unittest.TestCase):
     def test_ac1_marker_always_passes(self):
         self.assertTrue(True)
 '''
-
-# Приёмочный тест задачи, который всегда падает.
-FAILING_ACCEPTANCE_TEST = '''"""Маркер: заведомо красный приёмочный тест песочницы T066."""
-import unittest
-
-
-class MarkerTest(unittest.TestCase):
-    def test_ac1_marker_always_passes(self):
-        self.assertTrue(True)
-
-    def test_zz_marker_deliberately_red(self):
-        self.fail("MARKER-RED")
-'''
-
-# `_HASH`-косвенность НАМЕРЕННАЯ: собранная ниже строка-фикстура несёт
-# буквальный текст решётка+пробел+"AC"+дефис+"2"+двоеточие+manual (и то
-# же для skip) — если записать его В ЭТОМ файле как обычный литерал,
-# `scripts/guard.py` (`AC_MARKER`, чисто текстовый разбор БЕЗ импорта
-# файлов) прочитал бы его как пометку САМОГО T066 поверх реального
-# теста AC-2 (`_sandbox.py` лежит рядом в `tasks/T066/acceptance_tests/`
-# и тоже сканируется на выходе из tests_writing) — ложный manual/skip
-# у критерия, который на
-# самом деле полностью покрыта тестом. Косвенность через `_HASH` не
-# меняет получившуюся строку (её и видит FSM, сканируя ФИКСТУРУ
-# отдельной симулированной задачи в песочнице), только не даёт
-# буквальному `#\\s*AC-2:` появиться в исходнике ЭТОГО файла.
-_HASH = "#"
 
 # Приёмочный тест задачи с 0 тестов, но с одним AC, помеченным manual
 # (условие "а" — 0 manual обязателен для автопрохода).
@@ -112,8 +56,8 @@ MANUAL_MARKER_ACCEPTANCE_TEST = (
     "class MarkerTest(unittest.TestCase):\n"
     "    def test_ac1_marker_always_passes(self):\n"
     "        self.assertTrue(True)\n\n\n"
-    + _HASH + " AC-2: manual — маркер песочницы T066: критерий с "
-    "пометкой manual обязан блокировать условие (а) автопрохода.\n"
+    "# AC-2: manual — маркер песочницы T085: критерий с пометкой manual "
+    "обязан блокировать условие (а) автопрохода.\n"
 )
 
 # То же для skip.
@@ -123,12 +67,12 @@ SKIP_MARKER_ACCEPTANCE_TEST = (
     "class MarkerTest(unittest.TestCase):\n"
     "    def test_ac1_marker_always_passes(self):\n"
     "        self.assertTrue(True)\n\n\n"
-    + _HASH + " AC-2: skip — маркер песочницы T066: критерий с "
-    "пометкой skip обязан блокировать условие (а) автопрохода.\n"
+    "# AC-2: skip — маркер песочницы T085: критерий с пометкой skip "
+    "обязан блокировать условие (а) автопрохода.\n"
 )
 
-# Полный набор `tests/` worktree ветки (акт "в" SPEC) — всегда проходит.
-PASSING_FULL_SUITE_TEST = '''"""Маркер: заведомо зелёный тест полного набора песочницы T066."""
+# Полный набор `tests/` worktree ветки (условие "в") — всегда проходит.
+PASSING_FULL_SUITE_TEST = '''"""Маркер: заведомо зелёный тест полного набора песочницы T085."""
 import unittest
 
 
@@ -138,7 +82,7 @@ class FullSuiteMarkerTest(unittest.TestCase):
 '''
 
 # Полный набор `tests/` worktree ветки, который всегда падает.
-FAILING_FULL_SUITE_TEST = '''"""Маркер: заведомо красный тест полного набора песочницы T066."""
+FAILING_FULL_SUITE_TEST = '''"""Маркер: заведомо красный тест полного набора песочницы T085."""
 import unittest
 
 
@@ -150,60 +94,50 @@ class FullSuiteMarkerTest(unittest.TestCase):
         self.fail("MARKER-FULL-SUITE-RED")
 '''
 
+# REVIEW.md approved свежей итерации (условие "д") — с секцией
+# '## Проверено исполнением', обязательной с T072 (см. докстринг модуля).
 REVIEW_APPROVED_MD = """---
 task: {task}
 type: review
 author_role: reviewer
 status: approved
 iteration: {iteration}
-schema_version: 1
+schema_version: 2
 ---
 
-# REVIEW: автогейт acceptance
+# REVIEW: автогейт acceptance (песочница T085)
 
 ## Соответствие SPEC
+
+| Требование | Вердикт | Комментарий |
+|---|---|---|
+| 1 | OK | |
 
 ## Замечания
 
 ## Вердикт
+approved
 
 ## Проверено исполнением
-`python3 -m unittest discover -s tests` — зелёный (фикстура; секция
-обязательна для approved с T072 — дочинено Оператором 01.09, ANSWER T085).
+`python3 -m unittest discover -s tests` — все тесты зелёные (песочница).
 """
 
-# Политика `gates.yaml` (SPEC требование 1, ADR-0007 п.2 и «Раскатка») —
-# см. докстринг модуля, «Допущения интерфейса».
+# Политика `gates.yaml` (плоское отображение `gates: {{<имя гейта>:
+# <auto|manual>}}`, ADR-0007) — acceptance открыт автогейту.
 GATES_ACCEPTANCE_AUTO = """gates:
   spec_gate: manual
   acceptance: auto
   merge_gate: manual
 """
 
-GATES_ACCEPTANCE_MANUAL = """gates:
-  spec_gate: manual
-  acceptance: manual
-  merge_gate: manual
-"""
-
-GATES_NO_POLICY_SECTION = """# gates.yaml без секции политики — легаси-состояние до ADR-0007.
-some_other_key: значение
-"""
-
-GATES_UNREADABLE = """gates:
-  acceptance: [auto
-  это не валидный YAML — незакрытая последовательность
-"""
-
-GATES_MERGE_AND_SPEC_ALSO_AUTO = """gates:
-  spec_gate: auto
-  acceptance: manual
-  merge_gate: auto
-"""
-
-# CI головного коммита ветки — постоянно зелёный (см. «Маршрут» в
-# докстринге модуля): убирает `verifying` (T079) с дороги, не входит в
-# состав автогейта acceptance, который проверяют эти сценарии.
+# Состояние `verifying` (SPEC T079) сегодня стоит МЕЖДУ `review` и
+# `acceptance`: одного `cmd_advance` из `review` уже недостаточно, чтобы
+# добраться до оценки автогейта acceptance — нужен второй `advance`,
+# обрабатывающий `verifying`, и ему нужен зелёный CI головного коммита
+# ветки. Это условие не входит в состав автогейта acceptance (SPEC T085
+# требования 1-2) — здесь просто убирается с дороги фикстурой,
+# постоянно зелёной, тем же приёмом (`ci.gh`/`ci.head_sha`), что
+# `tasks/T079/acceptance_tests/_sandbox.py::VerifyingTest.set_ci_dual`.
 GREEN_CHECK_RUNS = json.dumps({"total_count": 2, "check_runs": [
     {"name": "guard", "status": "completed", "conclusion": "success"},
     {"name": "python", "status": "completed", "conclusion": "success"},
@@ -290,12 +224,6 @@ class AutogateSandbox(unittest.TestCase):
             fn(*args)
         return buf.getvalue()
 
-    def set_state(self, state: str, task_id=None) -> None:
-        conn = store.db()
-        conn.execute("UPDATE tasks SET state=? WHERE id=?",
-                     (state, task_id or self.TASK))
-        conn.commit()
-
     def task_row(self, task_id=None):
         return store.db().execute(
             "SELECT * FROM tasks WHERE id=?",
@@ -316,8 +244,7 @@ class AutogateSandbox(unittest.TestCase):
         входит в `acceptance` в том же вызове, включая попытку автогейта
         (`orchestrator/fsm.py`, ветка `state == "verifying"`, исход
         `ci.VERIFYING_GREEN`, тот же вызов `_maybe_autogate_acceptance`,
-        что раньше срабатывал прямо на входе `review -> acceptance`,
-        см. «Маршрут» в докстринге модуля)."""
+        что раньше срабатывал прямо на входе `review -> acceptance`)."""
         from orchestrator import fsm
         out = self.capture(fsm.cmd_advance, task_id or self.TASK)
         out += self.capture(fsm.cmd_advance, task_id or self.TASK)
@@ -356,9 +283,7 @@ class AutogateSandbox(unittest.TestCase):
 
     def write_gates_policy(self, content: str) -> None:
         """Политика гейтов — файл ГЛАВНОЙ копии пульта (`config.ROOT`),
-        не worktree задачи: `gates.yaml` читается только из main (см.
-        комментарий самого файла в реальном репозитории и докстринг
-        модуля)."""
+        не worktree задачи: `gates.yaml` читается только из main."""
         (self.root / "gates.yaml").write_text(content, encoding="utf-8")
 
     def set_task_budget(self, budget_usd: float, spent_usd: float,
@@ -369,7 +294,9 @@ class AutogateSandbox(unittest.TestCase):
     def seed_program_overspend(self) -> None:
         """Другая задача с расходом далеко за пределами самого строгого
         порога программы (A1) — `store.total_spent` суммирует по ВСЕМ
-        задачам (roadmap §5), не только текущей."""
+        задачам (roadmap §5), не только текущей. Отношение читается из
+        `config.PROGRAM_ALERT_RATIOS` (крутилка Оператора), не литералом
+        (урок T062 28.08, скил test-authoring)."""
         conn = store.db()
         store.insert_task(conn, OTHER_SPENDER_TASK, "Расход другой задачи",
                           "done", "", config.DEFAULT_TARGET,
@@ -383,10 +310,10 @@ class AutogateSandbox(unittest.TestCase):
                          budget_usd: float | None = None,
                          spent_usd: float = 0.0,
                          iteration: int = 1) -> Path:
-        """Задача `review` с настраиваемым набором условий SPEC требования
-        2 — по умолчанию все пять выполнены (зелёный сценарий); каждый
-        именованный параметр меняет ровно одно условие, остальные
-        остаются зелёными. Возвращает worktree."""
+        """Задача `review` с настраиваемым набором условий автопрохода —
+        по умолчанию все выполнены (зелёный сценарий); каждый именованный
+        параметр меняет ровно одно условие, остальные остаются зелёными.
+        Возвращает worktree."""
         self.write_gates_policy(gates_content)
         if budget_usd is not None:
             self.set_task_budget(budget_usd, spent_usd)
@@ -398,8 +325,11 @@ class AutogateSandbox(unittest.TestCase):
         return wt
 
     def prepare_green_scenario(self, gates_content: str = GATES_ACCEPTANCE_AUTO):
-        """Задача `review` со всеми условиями автопрохода выполненными:
-        acceptance_tests зелёные без manual/skip, полный `tests/` worktree
-        зелёный, REVIEW approved свежей итерации, бюджет и порог A1 не
-        пробиты. Возвращает worktree."""
+        """Задача `review` со всеми условиями автопрохода выполненными
+        (порог A1, если он вообще проверяется, — тоже не пробит: расход
+        программы по умолчанию нулевой). Возвращает worktree."""
         return self.prepare_scenario(gates_content=gates_content)
+
+
+if __name__ == "__main__":
+    unittest.main()

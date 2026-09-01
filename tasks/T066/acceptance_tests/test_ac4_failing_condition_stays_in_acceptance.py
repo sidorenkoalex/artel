@@ -1,8 +1,22 @@
 """AC-4 (tasks/T066/SPEC.md): при наличии хотя бы одного из
 manual-критерий / skip-критерий / красный тест приёмочных / красный тест
-полного набора / превышенный бюджет задачи / пробитый порог A1 —
+полного набора / превышенный бюджет задачи —
 задача останавливается и ждёт Оператора; причина «почему не автогейт»
 присутствует в выводе команды и в журнале одной строкой.
+
+Состав условий обновлён под ADR-0010 (tasks/T085/SPEC.md AC-6, мандат
+ANSWER-1 T085, 01.09): «пробитый порог программы (A1)» удалён из этого
+перечня — с ADR-0010 порог программы стал отчётной вехой, а не условием
+автогейта, и сценарий `ProgramThresholdBreachBlocksAutogateTest`,
+кодировавший его как блокирующий, удалён этой правкой. Это не ослабление
+гейта (остальные пять классов отказа проверяются как прежде) — это
+санкционированное Оператором изменение состава.
+
+Маршрут обновлён под T079/ADR-0009 (тот же мандат): сценарии, где
+приёмочные тесты задачи зелёные (все, кроме
+`RedOwnAcceptanceTestsNeverReachesMergeGateTest` — см. ниже), теперь
+доходят до оценки автогейта acceptance только через `verifying`
+(`_sandbox.py::advance_to_autogate`, «Маршрут» в докстринге модуля).
 
 Политика во всех сценариях этого файла — `acceptance: auto`
 (`GATES_ACCEPTANCE_AUTO`): автогейт оценивается и явно не проходит по
@@ -26,11 +40,11 @@ SPEC требование 2, условие "б" в этом смысле уже
 имеет значение по существу критерия — автогейт НИКОГДА не проносит
 задачу мимо этого отказа в `merge_gate`.
 
-Красен до реализации (пять классов — manual/skip/красный полный набор/
-бюджет/порог A1): условия автопрохода SPEC требования 2 сегодня никто
-не проверяет и не журналирует «почему не автогейт» — до кода задачи
-падает именно проверка причины (слово «автогейт» в выводе/журнале),
-при уже верном (структурно неизменном) состоянии `acceptance`.
+Красен до реализации (четыре класса — manual/skip/красный полный
+набор/бюджет): условия автопрохода SPEC требования 2 сегодня никто не
+проверяет и не журналирует «почему не автогейт» — до кода задачи падает
+именно проверка причины (слово «автогейт» в выводе/журнале), при уже
+верном (структурно неизменном) состоянии `acceptance`.
 
 Зелёный с рождения (`RedOwnAcceptanceTestsNeverReachesMergeGateTest`):
 кодирует СУЩЕСТВУЮЩУЮ, не введённую этой задачей механику (красные
@@ -69,7 +83,7 @@ class ManualCriterionBlocksAutogateTest(_StoppedForOperatorMixin, AutogateSandbo
     def test_ac4_manual_criterion_stays_in_acceptance(self):
         self.prepare_scenario(acceptance_content=MANUAL_MARKER_ACCEPTANCE_TEST)
 
-        out = self.capture(fsm.cmd_advance, self.TASK)
+        out = self.advance_to_autogate()
 
         self.assertEqual(self.state(), "acceptance")
         self.assert_autogate_reason_present(out)
@@ -80,7 +94,7 @@ class SkipCriterionBlocksAutogateTest(_StoppedForOperatorMixin, AutogateSandbox)
     def test_ac4_skip_criterion_stays_in_acceptance(self):
         self.prepare_scenario(acceptance_content=SKIP_MARKER_ACCEPTANCE_TEST)
 
-        out = self.capture(fsm.cmd_advance, self.TASK)
+        out = self.advance_to_autogate()
 
         self.assertEqual(self.state(), "acceptance")
         self.assert_autogate_reason_present(out)
@@ -91,7 +105,7 @@ class RedFullSuiteBlocksAutogateTest(_StoppedForOperatorMixin, AutogateSandbox):
     def test_ac4_red_full_suite_stays_in_acceptance(self):
         self.prepare_scenario(full_suite_content=FAILING_FULL_SUITE_TEST)
 
-        out = self.capture(fsm.cmd_advance, self.TASK)
+        out = self.advance_to_autogate()
 
         self.assertEqual(self.state(), "acceptance")
         self.assert_autogate_reason_present(out)
@@ -102,19 +116,7 @@ class ExceededTaskBudgetBlocksAutogateTest(_StoppedForOperatorMixin, AutogateSan
     def test_ac4_exceeded_budget_stays_in_acceptance(self):
         self.prepare_scenario(budget_usd=10.0, spent_usd=10.0)
 
-        out = self.capture(fsm.cmd_advance, self.TASK)
-
-        self.assertEqual(self.state(), "acceptance")
-        self.assert_autogate_reason_present(out)
-
-
-class ProgramThresholdBreachBlocksAutogateTest(_StoppedForOperatorMixin, AutogateSandbox):
-
-    def test_ac4_a1_program_threshold_breach_stays_in_acceptance(self):
-        self.seed_program_overspend()
-        self.prepare_scenario()
-
-        out = self.capture(fsm.cmd_advance, self.TASK)
+        out = self.advance_to_autogate()
 
         self.assertEqual(self.state(), "acceptance")
         self.assert_autogate_reason_present(out)
