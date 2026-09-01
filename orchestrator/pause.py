@@ -20,7 +20,7 @@ release.py::cmd_release`: они не мутируют шаг задачи, то
 ставит ту же пометку (требование 1), но, если задача сейчас держит
 живой lease на этой же машине (роль агентная, `store.lease_row`
 адресует живой pid), прерывает его процесс, чекпоинтит WIP worktree
-(механика T041/T059, `orchestrator/runner.py::commit_pause_now_checkpoint`)
+(механика T041/T059, `orchestrator/checkpoint.py::commit_pause_now_checkpoint`)
 и снимает lease тем же приёмом, что `orchestrator/release.py::cmd_release`.
 Она тоже не берёт lease задачи и не проходит лимитер — по тому же
 доводу: действует НАД чужим держателем, не мутирует шаг своей же
@@ -32,7 +32,7 @@ import socket
 import time
 from pathlib import Path
 
-from . import agent_log, liveness, spend, store
+from . import agent_log, checkpoint, liveness, spend, store
 
 # Опрос после SIGTERM перед эскалацией до SIGKILL (требование 1: «процесс
 # агента корректно завершается» — короткая пауза на штатное завершение,
@@ -209,9 +209,9 @@ def cmd_pause_now(task_id: str) -> None:
 
     _account_partial_cost(conn, task_id, role)
 
-    checkpoint = runner.commit_pause_now_checkpoint(conn, task_id, role)
-    if checkpoint:
-        print(f"[{task_id}] {checkpoint}")
+    checkpoint_detail = checkpoint.commit_pause_now_checkpoint(conn, task_id, role)
+    if checkpoint_detail:
+        print(f"[{task_id}] {checkpoint_detail}")
 
     removed = store.release_lease(conn, task_id, row["session_id"])
     lease_detail = (f"session_id={row['session_id']}, pid={row['pid']}, "

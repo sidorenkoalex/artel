@@ -1,4 +1,5 @@
-"""Юнит-тесты `runner.commit_step_artifacts` (tasks/T059/SPEC.md).
+"""Юнит-тесты `checkpoint.commit_step_artifacts` (tasks/T059/SPEC.md;
+перенесено из runner.py в T091 — декомпозиция диспетчеров fsm/runner).
 
 Приёмочные тесты (tasks/T059/acceptance_tests) проверяют критерии
 приёмки целиком через `cmd_run` с подложным процессом агента; здесь —
@@ -20,7 +21,7 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from orchestrator import fixation, gitcmd, runner, store  # noqa: E402
+from orchestrator import checkpoint, fixation, gitcmd, store  # noqa: E402
 from tests.test_git_fixation import RealPultGitTest  # noqa: E402
 
 
@@ -34,7 +35,7 @@ class CommitStepArtifactsTest(RealPultGitTest):
         self.enter_in_dev()
         before = self.head()
 
-        detail = runner.commit_step_artifacts(
+        detail = checkpoint.commit_step_artifacts(
             store.db(), self.TASK, "developer")
 
         self.assertEqual(detail, "")
@@ -46,7 +47,7 @@ class CommitStepArtifactsTest(RealPultGitTest):
         (self.task_dir() / "wip.md").write_text(
             "недописанный артефакт роли\n", encoding="utf-8")
 
-        detail = runner.commit_step_artifacts(
+        detail = checkpoint.commit_step_artifacts(
             store.db(), self.TASK, "developer")
 
         # Коммит автокоммита — в worktree задачи, не в ROOT (тот
@@ -67,7 +68,7 @@ class CommitStepArtifactsTest(RealPultGitTest):
         (self.task_dir() / "wip.md").write_text(
             "недописанный артефакт роли\n", encoding="utf-8")
 
-        runner.commit_step_artifacts(store.db(), self.TASK, "developer")
+        checkpoint.commit_step_artifacts(store.db(), self.TASK, "developer")
 
         conn = store.db()
         self.assertIsNone(fixation.check_integrity(conn, self.TASK))
@@ -87,7 +88,7 @@ class CommitStepArtifactsTest(RealPultGitTest):
             return real_git(*args)
 
         with mock.patch.object(gitcmd, "git", side_effect=side_effect):
-            return runner.commit_step_artifacts(
+            return checkpoint.commit_step_artifacts(
                 store.db(), self.TASK, "developer")
 
     def test_git_add_failure_commits_nothing_and_journals_nothing(self):
@@ -140,7 +141,7 @@ class CommitStepArtifactsTest(RealPultGitTest):
         store.update_task(conn, self.TASK, target="another-target")
 
         with mock.patch.object(gitcmd, "git") as git_mock:
-            detail = runner.commit_step_artifacts(
+            detail = checkpoint.commit_step_artifacts(
                 conn, self.TASK, "developer")
 
         git_mock.assert_not_called()

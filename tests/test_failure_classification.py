@@ -1,4 +1,6 @@
-"""Юнит-тесты классификатора ошибок агента (SPEC T082, требования 1-2).
+"""Юнит-тесты классификатора ошибок агента (SPEC T082, требования 1-2;
+перенесено из runner.py в orchestrator/failure_classification.py в T091
+— декомпозиция диспетчеров fsm/runner).
 
 Приёмочные тесты (`tasks/T082/acceptance_tests/`) проверяют классификацию
 только через наблюдаемый эффект `runner.cmd_run` (прямой вызов был бы
@@ -15,33 +17,33 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from orchestrator import config, runner  # noqa: E402
+from orchestrator import config, failure_classification  # noqa: E402
 
 
 class ClassifyAttemptFailureTest(unittest.TestCase):
 
     def test_403_substring_is_class_1a(self):
         self.assertEqual(
-            runner.classify_attempt_failure("Failed: API Error: 403 Request "
+            failure_classification.classify_attempt_failure("Failed: API Error: 403 Request "
                                             "not allowed"), "1a")
 
     def test_failed_to_authenticate_case_insensitive(self):
         self.assertEqual(
-            runner.classify_attempt_failure("FAILED TO AUTHENTICATE — "
+            failure_classification.classify_attempt_failure("FAILED TO AUTHENTICATE — "
                                             "токен просрочен"), "1a")
 
     def test_connection_refused_is_class_1b(self):
         self.assertEqual(
-            runner.classify_attempt_failure("сеть: Connection refused, "
+            failure_classification.classify_attempt_failure("сеть: Connection refused, "
                                             "повтор позже"), "1b")
 
     def test_connectionrefused_camelcase_is_class_1b(self):
         self.assertEqual(
-            runner.classify_attempt_failure("connectionrefused"), "1b")
+            failure_classification.classify_attempt_failure("connectionrefused"), "1b")
 
     def test_stream_broken_signature(self):
         self.assertEqual(
-            runner.classify_attempt_failure(
+            failure_classification.classify_attempt_failure(
                 "API Error: Connection lost mid-response. The response "
                 "above may be incomplete."), "stream_broken")
 
@@ -50,18 +52,18 @@ class ClassifyAttemptFailureTest(unittest.TestCase):
                       "resets at"):
             with self.subTest(phrase=phrase):
                 self.assertEqual(
-                    runner.classify_attempt_failure(f"чтo-то {phrase} "
+                    failure_classification.classify_attempt_failure(f"чтo-то {phrase} "
                                                     f"чтo-то"),
                     "session_limit")
 
     def test_bare_api_error_prefix_is_system_candidate(self):
         self.assertEqual(
-            runner.classify_attempt_failure(
+            failure_classification.classify_attempt_failure(
                 "API Error: 529 Overloaded, please retry later"),
             "system_candidate")
 
     def test_unrelated_text_is_unrecognized(self):
-        self.assertIsNone(runner.classify_attempt_failure(
+        self.assertIsNone(failure_classification.classify_attempt_failure(
             "упал: непонятная внутренняя ошибка агента"))
 
     def test_1a_takes_priority_over_the_generic_api_error_anchor(self):
@@ -69,17 +71,17 @@ class ClassifyAttemptFailureTest(unittest.TestCase):
         # обязаны перехватывать текст РАНЬШЕ общего якоря «API Error:» —
         # иначе 403 терялся бы в «системном кандидате».
         self.assertEqual(
-            runner.classify_attempt_failure(
+            failure_classification.classify_attempt_failure(
                 "API Error: 403 Request not allowed"), "1a")
 
     def test_session_limit_takes_priority_over_the_generic_api_error_anchor(self):
         self.assertEqual(
-            runner.classify_attempt_failure(
+            failure_classification.classify_attempt_failure(
                 "API Error: usage limit reached, try later"),
             "session_limit")
 
     def test_empty_text_is_unrecognized(self):
-        self.assertIsNone(runner.classify_attempt_failure(""))
+        self.assertIsNone(failure_classification.classify_attempt_failure(""))
 
 
 class AttemptOutputTextTest(unittest.TestCase):
@@ -94,14 +96,14 @@ class AttemptOutputTextTest(unittest.TestCase):
             lines += [f"строка {i}\n" for i in range(1, 100)]
             path.write_text("".join(lines), encoding="utf-8")
 
-            text = runner._attempt_output_text(path)
+            text = failure_classification._attempt_output_text(path)
 
             self.assertGreater(len(text.splitlines()), config.LOG_TAIL_LINES)
-            self.assertEqual(runner.classify_attempt_failure(text), "1a")
+            self.assertEqual(failure_classification.classify_attempt_failure(text), "1a")
 
     def test_missing_file_is_empty_text(self):
         self.assertEqual(
-            runner._attempt_output_text(Path("/nonexistent/path.log")), "")
+            failure_classification._attempt_output_text(Path("/nonexistent/path.log")), "")
 
 
 if __name__ == "__main__":

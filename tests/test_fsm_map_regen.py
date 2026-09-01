@@ -1,5 +1,6 @@
 """Юнит-тесты регенерации/коммита карты кодовой базы на merge_gate
-(orchestrator/fsm.py, tasks/T042/SPEC.md).
+(orchestrator/fsm_postmerge.py, tasks/T042/SPEC.md; перенесено из fsm.py
+в T091 — декомпозиция диспетчеров fsm/runner).
 
 Функции по отдельности, не через `fsm.cmd_approve` целиком — сквозной путь
 (AC-1..AC-3) уже покрывают приёмочные тесты
@@ -13,7 +14,7 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from orchestrator import alerts, fsm, gitcmd, store  # noqa: E402
+from orchestrator import alerts, fsm_postmerge, gitcmd, store  # noqa: E402
 from tests.sandbox import TmpRootTest, fake_git  # noqa: E402
 
 COMMITTED_MAP = ("---\nbuilt_at_sha: aaaa000011112222333344445555666677778888\n"
@@ -27,14 +28,14 @@ class MapContentWithoutShaTest(unittest.TestCase):
             "aaaa000011112222333344445555666677778888",
             "dddd444455556666777788889999000011112222")
 
-        self.assertEqual(fsm._map_content_without_sha(COMMITTED_MAP),
-                         fsm._map_content_without_sha(other))
+        self.assertEqual(fsm_postmerge._map_content_without_sha(COMMITTED_MAP),
+                         fsm_postmerge._map_content_without_sha(other))
 
     def test_text_difference_is_not_equal(self):
         other = COMMITTED_MAP.replace("Содержимое A.", "Содержимое B.")
 
-        self.assertNotEqual(fsm._map_content_without_sha(COMMITTED_MAP),
-                            fsm._map_content_without_sha(other))
+        self.assertNotEqual(fsm_postmerge._map_content_without_sha(COMMITTED_MAP),
+                            fsm_postmerge._map_content_without_sha(other))
 
 
 class RegenerateAndCommitMapTest(TmpRootTest):
@@ -71,15 +72,15 @@ class RegenerateAndCommitMapTest(TmpRootTest):
 
         with mock.patch.object(gitcmd, "git", fake_git), \
                 mock.patch("subprocess.run", side_effect=fake_run):
-            fsm._regenerate_and_commit_map(self.conn, "T001")
+            fsm_postmerge._regenerate_and_commit_map(self.conn, "T001")
 
-        self.assertIn(("add", fsm.MAP_REL), git_calls)
+        self.assertIn(("add", fsm_postmerge.MAP_REL), git_calls)
         commit_calls = [c for c in git_calls if c[0] == "commit"]
         self.assertEqual(len(commit_calls), 1)
         message = " ".join(commit_calls[0])
         self.assertIn("T001", message)
         self.assertIn("регенерация", message.lower())
-        self.assertNotIn(("checkout", "--", fsm.MAP_REL), git_calls)
+        self.assertNotIn(("checkout", "--", fsm_postmerge.MAP_REL), git_calls)
         self.assertEqual(self.incidents(), [])
 
     def test_only_built_at_sha_changed_restores_and_does_not_commit(self):
@@ -100,9 +101,9 @@ class RegenerateAndCommitMapTest(TmpRootTest):
 
         with mock.patch.object(gitcmd, "git", fake_git), \
                 mock.patch("subprocess.run", side_effect=fake_run):
-            fsm._regenerate_and_commit_map(self.conn, "T001")
+            fsm_postmerge._regenerate_and_commit_map(self.conn, "T001")
 
-        self.assertIn(("checkout", "--", fsm.MAP_REL), git_calls)
+        self.assertIn(("checkout", "--", fsm_postmerge.MAP_REL), git_calls)
         self.assertFalse(any(c[0] in ("add", "commit") for c in git_calls))
         self.assertEqual(self.map_path.read_text(encoding="utf-8"),
                          COMMITTED_MAP)
@@ -114,7 +115,7 @@ class RegenerateAndCommitMapTest(TmpRootTest):
 
         with mock.patch.object(gitcmd, "git", fake_git), \
                 mock.patch("subprocess.run", return_value=fail) as run_mock:
-            fsm._regenerate_and_commit_map(self.conn, "T001")
+            fsm_postmerge._regenerate_and_commit_map(self.conn, "T001")
 
         run_mock.assert_called_once()
         incidents = self.incidents()
@@ -141,7 +142,7 @@ class RegenerateAndCommitMapTest(TmpRootTest):
 
         with mock.patch.object(gitcmd, "git", fake_git), \
                 mock.patch("subprocess.run", side_effect=fake_run):
-            fsm._regenerate_and_commit_map(self.conn, "T001")
+            fsm_postmerge._regenerate_and_commit_map(self.conn, "T001")
 
         self.assertFalse(any(c[0] == "commit" for c in git_calls),
                          "add упал — коммитить нечего")
@@ -164,7 +165,7 @@ class RegenerateAndCommitMapTest(TmpRootTest):
 
         with mock.patch.object(gitcmd, "git", fake_git), \
                 mock.patch("subprocess.run", side_effect=fake_run):
-            fsm._regenerate_and_commit_map(self.conn, "T001")
+            fsm_postmerge._regenerate_and_commit_map(self.conn, "T001")
 
         incidents = self.incidents()
         self.assertEqual(len(incidents), 1)
@@ -188,7 +189,7 @@ class RegenerateAndCommitMapTest(TmpRootTest):
 
         with mock.patch.object(gitcmd, "git", fake_git), \
                 mock.patch("subprocess.run", side_effect=fake_run):
-            fsm._regenerate_and_commit_map(self.conn, "T001")
+            fsm_postmerge._regenerate_and_commit_map(self.conn, "T001")
 
         incidents = self.incidents()
         self.assertEqual(len(incidents), 1)
@@ -199,7 +200,7 @@ class RegenerateAndCommitMapTest(TmpRootTest):
         with mock.patch.object(gitcmd, "git", fake_git), \
                 mock.patch("subprocess.run",
                            side_effect=FileNotFoundError("python3 не найден")) as run_mock:
-            fsm._regenerate_and_commit_map(self.conn, "T001")
+            fsm_postmerge._regenerate_and_commit_map(self.conn, "T001")
 
         run_mock.assert_called_once()
         incidents = self.incidents()
@@ -216,7 +217,7 @@ class RegenerateAndCommitMapTest(TmpRootTest):
 
         with mock.patch.object(gitcmd, "git", fake_git), \
                 mock.patch("subprocess.run", side_effect=fake_run):
-            fsm._regenerate_and_commit_map(self.conn, "T001")
+            fsm_postmerge._regenerate_and_commit_map(self.conn, "T001")
 
         incidents = self.incidents()
         self.assertEqual(len(incidents), 1)
@@ -228,7 +229,7 @@ class RegenerateAndCommitMapTest(TmpRootTest):
 
         with mock.patch.object(gitcmd, "git", fake_git), \
                 mock.patch("subprocess.run") as run_mock:
-            fsm._regenerate_and_commit_map(self.conn, "T001")
+            fsm_postmerge._regenerate_and_commit_map(self.conn, "T001")
 
         run_mock.assert_not_called()
         incidents = self.incidents()
