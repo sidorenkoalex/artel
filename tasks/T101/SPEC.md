@@ -42,13 +42,18 @@ budget_usd: 15
    (а) в событие(я) запуска и завершения агентного шага в
    `orchestrator/runner.py` (команды `run`/`auto`);
    (б) в событие журнала, фиксирующее исход прогона приёмочных тестов
-   задачи (`orchestrator/acceptance.py`).
+   задачи — в фактических точках вызова `acceptance.run`
+   (`orchestrator/fsm_advance.py`, `orchestrator/fsm_autogate.py`);
+   сам `acceptance.py` журнал не пишет и соединения с БД не имеет.
 5. Fingerprint виден Оператору штатным просмотром журнала
    (`artel.py log <id>`) без дополнительных флагов или команд.
    Включение в `artel report` — по усмотрению разработчика, не
    обязательно.
 6. Изменения ограничены зонами: `orchestrator/runner.py` (точки
-   журналирования шага), `orchestrator/acceptance.py`, при
+   журналирования шага), `orchestrator/acceptance.py`, точечно —
+   строки журналирования исхода приёмочных тестов в
+   `orchestrator/fsm_advance.py` и `orchestrator/fsm_autogate.py`
+   (оба файла вне diff T094, сверено на гейте 01.09), при
    необходимости `orchestrator/agent_log.py`. Не меняются: схема
    `store.db` и код `store.py` сверх вызова существующего журнального
    API, `catalog.py`, `brief.py`, `fixation.py`, `doctor.py`,
@@ -87,8 +92,9 @@ AC-4. Fingerprint записывается в существующее поле 
 
 AC-5. Fingerprint записывается в существующее поле `detail`
 журнального события, фиксирующего исход прогона приёмочных тестов
-задачи (`orchestrator/acceptance.py`) — без изменения схемы БД, без
-новых таблиц и колонок.
+задачи, — в фактических точках вызова `acceptance.run`
+(`orchestrator/fsm_advance.py`, `orchestrator/fsm_autogate.py`) —
+без изменения схемы БД, без новых таблиц и колонок.
 
 AC-6. В рамках одного процесса оркестратора повторный сбор
 fingerprint не выполняет внешние вызовы (git/claude CLI) повторно —
@@ -98,7 +104,9 @@ AC-7. Fingerprint виден Оператору штатным просмотр�
 (`artel.py log <id>`) без дополнительных флагов или команд.
 
 AC-8. Изменения задачи не выходят за зоны `orchestrator/runner.py`,
-`orchestrator/acceptance.py` и (при необходимости)
+`orchestrator/acceptance.py`, точечных строк журналирования исхода
+приёмочных тестов в `orchestrator/fsm_advance.py` и
+`orchestrator/fsm_autogate.py` и (при необходимости)
 `orchestrator/agent_log.py`; схема `store.db`, `store.py` сверх вызова
 существующего журнального API, `catalog.py`, `brief.py`,
 `fixation.py`, `doctor.py`, `cleanup.py`, `prune.py`, `config.py` не
