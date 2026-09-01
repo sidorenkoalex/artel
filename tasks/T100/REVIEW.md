@@ -4,7 +4,7 @@ type: review
 author_role: reviewer
 status: approved
 iteration: 1
-schema_version: 3
+schema_version: 2
 ---
 
 # REVIEW: Реестр замечаний ревью — жизненный цикл каждого замечания
