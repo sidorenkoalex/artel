@@ -4,7 +4,7 @@ type: spec
 author_role: analyst
 status: ready
 schema_version: 2
-budget_usd: 50
+budget_usd: 25
 ---
 
 # SPEC: Леджер замечаний ревью: жизненный цикл каждого замечания
