@@ -2,7 +2,7 @@
 task: T094
 type: plan
 author_role: developer
-status: draft
+status: ready
 schema_version: 2
 ---
 
