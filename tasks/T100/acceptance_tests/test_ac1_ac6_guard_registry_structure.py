@@ -132,7 +132,7 @@ class WellFormedRecordPassesTest(unittest.TestCase):
     записью леджера (id, файл/строка, суть, последствие, решение,
     статус) не отклоняется guard'ом."""
 
-    def test_ac1_well_formed_registry_record_passes_guard(self):
+    def test_ac1_well_formed_ledger_record_passes_guard(self):
         text = REVIEW_BASE.format(task=TASK, schema_version=3,
                                   ledger_section=SECTION_ONE_VALID_RECORD)
 
@@ -156,10 +156,10 @@ class MissingSectionRejectedTest(unittest.TestCase):
 
         self.assertTrue(
             errors,
-            "REVIEW.md со schema_version: 3 без секции «Реестр "
+            "REVIEW.md со schema_version: 3 без секции «Леджер "
             "замечаний» прошёл guard без единого нарушения")
         self.assertTrue(
-            any("Реестр замечаний" in e for e in errors),
+            any("Леджер замечаний" in e for e in errors),
             f"ни одно нарушение не называет секцию «Леджер замечаний»: "
             f"{errors}")
 
@@ -168,7 +168,7 @@ class DuplicateIdRejectedTest(unittest.TestCase):
     """AC-3: guard отклоняет REVIEW.md, где id двух записей леджера
     совпадают."""
 
-    def test_ac3_duplicate_registry_ids_are_rejected(self):
+    def test_ac3_duplicate_ledger_ids_are_rejected(self):
         text = REVIEW_BASE.format(task=TASK, schema_version=3,
                                   ledger_section=SECTION_DUPLICATE_ID)
 
@@ -230,17 +230,17 @@ class SchemaVersionBelowThreeUnaffectedTest(unittest.TestCase):
     < 3, проходит guard без применения к нему AC-1..AC-5 — так же, как
     REVIEW.md прежнего формата до этой задачи."""
 
-    def test_ac6_missing_schema_version_field_ignores_registry_requirements(self):
+    def test_ac6_missing_schema_version_field_ignores_ledger_requirements(self):
         text = REVIEW_BASE_NO_SCHEMA.format(task=TASK)
 
         errors = guard.check_content("REVIEW.md", text)
 
         self.assertEqual(
             errors, [],
-            f"REVIEW.md без поля schema_version (нет секции «Реестр "
+            f"REVIEW.md без поля schema_version (нет секции «Леджер "
             f"замечаний») отклонён guard'ом: {errors}")
 
-    def test_ac6_schema_version_2_ignores_registry_requirements(self):
+    def test_ac6_schema_version_2_ignores_ledger_requirements(self):
         text = REVIEW_BASE.format(task=TASK, schema_version=2,
                                   ledger_section=SECTION_ABSENT)
 
@@ -248,7 +248,7 @@ class SchemaVersionBelowThreeUnaffectedTest(unittest.TestCase):
 
         self.assertEqual(
             errors, [],
-            f"REVIEW.md со schema_version: 2 (нет секции «Реестр "
+            f"REVIEW.md со schema_version: 2 (нет секции «Леджер "
             f"замечаний») отклонён guard'ом: {errors}")
 
 
