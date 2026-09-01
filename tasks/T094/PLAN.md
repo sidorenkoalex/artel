@@ -280,20 +280,27 @@ checkpoint.py) явно ветвится по `target == config.DEFAULT_TARGET` 
    вместе с «двухоператорным экспериментом», SPEC «Не входит»).
 2. **AC-15, подтест `test_ac15_retried_by_doctor_after_origin_recovers`
    red в среде без реальных учётных данных claude CLI/keychain**:
-   `doctor.cmd_doctor()` агрегирует ВСЕ проверки — в песочнице этой
-   разработческой сессии нет keychain-слотов `artel-developer`/
-   `artel-reviewer`/`artel-test_author` и `claude` не залогинен
-   (`live-smoke`/`isolation-smoke`/`token` красные по причинам,
-   не имеющим отношения к T094: `security find-generic-password`,
-   `claude setup-token` — операторские действия вне этой сессии).
-   Сама механика ретрая снапшота внутри `doctor` работает верно —
-   видно по её собственному `[ok] snapshot-pending:...` в выводе
-   прогона; `sys.exit(1)` из `cmd_doctor` наступает от НЕСВЯЗАННЫХ
+   `doctor.cmd_doctor()` агрегирует ВСЕ проверки. По ANSWER-2 (диагноз
+   Оператора живым прогоном) `isolation-smoke` падал ENOENT — песочница
+   `tasks/T094/acceptance_tests/_sandbox.py::ExternalTargetGitSandbox`
+   не несла реальных `skills/*.md` под патченным `config.ROOT`; исправлено
+   тем же приёмом, что `tests/test_doctor.py::_DoctorTmpRootTest`
+   (`shutil.copytree(REPO_ROOT / "skills", self.root / "skills")` в
+   `setUp`) — `isolation-smoke` теперь честно `[ok]` (проверено живым
+   прогоном, 27/28 приёмочных). Остаток красноты — `token`/`live-smoke`:
+   в песочнице ЭТОЙ разработческой сессии нет keychain-слотов
+   `artel-developer`/`artel-reviewer`/`artel-test_author` и `claude` не
+   залогинен (`security find-generic-password`, `claude setup-token` —
+   операторские действия вне этой сессии, не код задачи). Сама механика
+   ретрая снапшота внутри `doctor` работает верно — видно по её
+   собственному `[ok] snapshot-pending:...` в выводе прогона;
+   `sys.exit(1)` из `cmd_doctor` наступает от НЕСВЯЗАННЫХ с T094
    проверок. Два других подтеста той же AC-15 (`...on_next_command...`,
    `...transition_completes...`) зелёные — они не зависят от полного
    `cmd_doctor`. Ослаблять `check_token`/`live_smoke` для обхода —
-   запрещено принципом целостности; фикс — только на машине с
-   настоящими credentials (Оператор/verifier), не код этой задачи.
+   запрещено принципом целостности; на машине с настоящими credentials
+   (Оператор/verifier, где Оператор и наблюдал исходные «провалов 1»)
+   этот подтест должен идти зелёным — 28/28.
 3. **Диф `.github/workflows/ci.yml` не применён** — greplint (AC-4) и
    guard на `artifact/**` начнут реально работать только после того,
    как Оператор применит приложенный диф отдельным MR (тот же

@@ -18,12 +18,14 @@
 сценарий на уровне ниже, тем же способом, каким уже устроен
 `test_multitarget.py`.
 """
+import shutil
 import subprocess
 import sys
 import tempfile
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
+_REPO_ROOT = Path(__file__).resolve().parents[3]
+sys.path.insert(0, str(_REPO_ROOT))
 
 from orchestrator import config, store  # noqa: E402
 from tests.sandbox import RealGitSandbox, resilient_tmp_cleanup  # noqa: E402
@@ -62,6 +64,15 @@ class ExternalTargetGitSandbox(RealGitSandbox):
     def setUp(self):
         super().setUp()
         config.TARGETS.write_text(TARGETS_YAML, encoding="utf-8")
+
+        # `config.ROOT` патчен на `self.root` (`TmpRootTest`) — doctor's
+        # `isolation_smoke()` собирает промпт роли из `config.ROOT/skills/
+        # *.md` (ANSWER-2 T094): без реальных файлов чек честно падает
+        # ENOENT вместо оценки изоляции. `config.ROLES`/`config.TEMPLATES`
+        # вычислены от НЕпатченного ROOT при импорте (см. orchestrator/
+        # config.py) и продолжают читать настоящие `roles.yaml`/`templates/`
+        # репозитория — здесь докопировать нужно только `skills/`.
+        shutil.copytree(_REPO_ROOT / "skills", self.root / "skills")
 
         bare_tmp = tempfile.TemporaryDirectory()
         self.addCleanup(resilient_tmp_cleanup, bare_tmp)
