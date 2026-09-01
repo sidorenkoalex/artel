@@ -807,6 +807,9 @@ class ParallelTaskLimitIsNotBypassableTest(FsmTest):
 
     def setUp(self):
         super().setUp()
+        # См. коммент в `CountersNeverResetTest.setUp`: с ULID id брифу
+        # неоткуда случайно найти чужой SPEC.md — свой нужен явно.
+        self.write_spec("ready")
         self.write_plan("ready")
         self.set_state("in_dev")
         conn = store.db()
@@ -901,6 +904,13 @@ class CountersNeverResetTest(FsmTest):
 
     def setUp(self):
         super().setUp()
+        # С предсказуемым "T001" SPEC.md здесь никогда не писался, но
+        # `brief.developer_brief` случайно находил на диске настоящий
+        # (давно закрытый) `tasks/T001/SPEC.md` реального дерева пульта —
+        # с ULID id совпадения больше нет (см. докстринг `FsmTest.setUp`),
+        # и без своего SPEC.md сборка брифа отказывает «дерево не на
+        # ветке задачи».
+        self.write_spec("ready")
         self.write_plan("ready")
         self.set_state("review")
         patcher = mock.patch.object(runner.time, "sleep", lambda _: None)
