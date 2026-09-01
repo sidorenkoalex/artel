@@ -202,6 +202,19 @@ def verifying_status(branch: str) -> tuple[str, str]:
     return VERIFYING_GREEN, f"CI коммита {short} зелёный ({len(runs)} проверок)"
 
 
+def verifying_is_red(note: str) -> bool:
+    """Был ли `note` из `verifying_status` исходом `VERIFYING_RED` (SPEC
+    T086, требование 2): тот же приём, что `status_kind` для `note`
+    `branch_status` — сверка по подстроке, которую сама `verifying_status`
+    кладёт в `note` только для красного исхода ("не зелёный:"), а не
+    повторный опрос CI. Позволяет `auto` (orchestrator/auto.py) отличить
+    завершённый красный CI от "проверок нет"/"проверки идут" по уже
+    прочитанному и журналированному `fsm.cmd_advance` тексту, не опрашивая
+    `gh` второй раз за ту же итерацию.
+    """
+    return "не зелёный:" in note
+
+
 def branch_status(branch: str) -> tuple[bool, str]:
     """(Зелёный ли CI ветки, пояснение для журнала и Оператора).
 
