@@ -364,10 +364,17 @@ def live_smoke(conn, role: str = "developer") -> Check:
     (`recovery_check`, `check_orphans`, `check_backup_age`): вывод `doctor`
     в терминале, не сохранённый Оператором, иначе теряет провал живого
     смоука бесследно.
+
+    Авто-ack (SPEC T088, требование 1) зовётся на каждом прогоне, не
+    только при провале — тем же приёмом, что `check_leases`/
+    `check_merge_lock`: иначе алерт прошлого провала не закроется в
+    прогоне, где очередной вызов уже вернул `status="ok"`, но новых
+    находок (по построению) нет.
     """
     check = _live_smoke_run(role)
     if check.status != "ok":
         alerts.raise_alert(conn, None, "incident", "doctor.live_smoke", check.detail)
+    _auto_ack_gone(conn, "doctor.live_smoke", lambda _msg: check.status != "ok")
     return check
 
 
@@ -417,6 +424,11 @@ def recovery_check(conn, target: str) -> list[Check]:
     (мерж, коммиты Оператора вне цикла задач) — сверка sha дала бы
     систематические ложные инциденты, не имеющие отношения к целостности
     артефактов (tasks/T022/PLAN.md, «Подход»).
+
+    Авто-ack трёх под-проверок (SPEC T088, требования 2-4, 6) зовётся на
+    каждом прогоне для КОНКРЕТНОГО target — независимо от остальных двух
+    под-проверок и от того же source другого target (`_auto_ack_gone`
+    получает `target=target`).
     """
     if target == config.DEFAULT_TARGET:
         return [Check("recovery", "skip", "догфуд вне объёма recovery-сверки")]
@@ -429,30 +441,38 @@ def recovery_check(conn, target: str) -> list[Check]:
     results = []
     latest = store.latest_fixed_sha(conn, target)
     current = gitcmd.head_sha(repo)
-    if latest is not None and current and current != latest["fixed_sha"]:
+    sha_mismatch = latest is not None and current and current != latest["fixed_sha"]
+    if sha_mismatch:
         message = (f"sha головы {current} разошёлся с зафиксированным "
                   f"{latest['fixed_sha']} ({latest['id']})")
         alerts.raise_alert(conn, target, "incident", "doctor.recovery.sha", message)
         results.append(Check("recovery-sha", "fail", message))
     else:
         results.append(Check("recovery-sha", "ok", "sha головы сходится с журналом"))
+    _auto_ack_gone(conn, "doctor.recovery.sha", lambda _msg: sha_mismatch,
+                  target=target)
 
     clean = gitcmd.is_clean(repo=repo)
-    if clean is False:
+    dirty = clean is False
+    if dirty:
         message = f"артефактный репо {target} грязный"
         alerts.raise_alert(conn, target, "incident", "doctor.recovery.dirty", message)
         results.append(Check("recovery-clean", "fail", message))
     else:
         results.append(Check("recovery-clean", "ok", "рабочая копия чистая"))
+    _auto_ack_gone(conn, "doctor.recovery.dirty", lambda _msg: dirty, target=target)
 
     fsck = gitcmd.in_repo(repo, "fsck", "--no-progress")
-    if fsck.returncode != 0:
+    fsck_failed = fsck.returncode != 0
+    if fsck_failed:
         message = (f"git fsck {target}: "
                   f"{fsck.stderr.strip()[:300] or fsck.stdout.strip()[:300]}")
         alerts.raise_alert(conn, target, "incident", "doctor.recovery.fsck", message)
         results.append(Check("recovery-fsck", "fail", message))
     else:
         results.append(Check("recovery-fsck", "ok", "git fsck чисто"))
+    _auto_ack_gone(conn, "doctor.recovery.fsck", lambda _msg: fsck_failed,
+                  target=target)
 
     return results
 
@@ -468,15 +488,28 @@ _DIR_ALERT_RE = re.compile(r"^(.+) без строки БД$")
 _WORKTREE_ALERT_RE = re.compile(r"^worktree (.+) без задачи$")
 
 
-def _auto_ack_gone(conn, source: str, is_live) -> None:
+def _auto_ack_gone(conn, source: str, is_live, target: str | None = None) -> None:
     """Подтверждает открытые алерты `source`, чьё условие `is_live` больше
     не подтверждает (требование 7: пока условие в силе — не трогать).
 
     Сообщение, не распознанное `is_live` (дрейф формата) — безопасный
     отказ: считается, что условие ещё в силе, ack не проставляется.
+
+    `target`, если задан, дополнительно фильтрует по колонке `target`
+    строки алерта (SPEC T088, требование 6): источники, у которых
+    несколько target одновременно держат свой открытый алерт того же
+    `source` (`doctor.recovery.*`, `doctor.task_counter`), не должны
+    получать ack одного target по состоянию другого. По умолчанию
+    `None` — прежнее поведение (не фильтровать), которое сохраняют все
+    вызовы, где сущность и так уникальна внутри `message`
+    (сироты/leases/merge_lock/backup_age).
     """
     for row in alerts.open_alerts(conn, "incident"):
-        if row["source"] == source and not is_live(row["message"]):
+        if row["source"] != source:
+            continue
+        if target is not None and row["target"] != target:
+            continue
+        if not is_live(row["message"]):
             alerts.auto_ack(conn, row["id"])
 
 
@@ -755,6 +788,10 @@ def check_task_counters(conn) -> Check:
     `targets.yaml` (REVIEW T049 итерации 1, замечание major): target
     без строки счётчика — это ровно необнаруженный холодный старт,
     который эта проверка обязана поймать, а не пропустить молча.
+
+    Авто-ack (SPEC T088, требования 5-6) зовётся на КАЖДОЙ итерации
+    цикла для своего target, независимо от исхода остальных target
+    этого же прогона (`_auto_ack_gone(..., target=target)`).
     """
     try:
         declared = targets.load()
@@ -766,13 +803,16 @@ def check_task_counters(conn) -> Check:
     for target in sorted(checked_targets):
         next_number = store.peek_task_number(conn, target)
         observed = coldstart.observed_max_task_number(target)
-        if next_number < observed:
+        is_behind = next_number < observed
+        if is_behind:
             message = (f"{target}: счётчик номеров ({next_number}) ниже "
                       f"наблюдаемого max ({observed}) — коллизия номеров "
                       f"при следующей `new`")
             alerts.raise_alert(conn, target, "incident",
                               "doctor.task_counter", message)
             behind.append(message)
+        _auto_ack_gone(conn, "doctor.task_counter",
+                      lambda _msg, is_behind=is_behind: is_behind, target=target)
     if behind:
         return Check("task-counters", "fail", "; ".join(behind))
     return Check("task-counters", "ok", "счётчики ≥ наблюдаемого max")
