@@ -240,6 +240,11 @@ def cmd_status() -> None:
 
 def cmd_show(task_id: str) -> None:
     conn = store.db()
+    # Префикс -> полный id ОДИН РАЗ здесь (SPEC T094, требование 3, AC-3),
+    # до любого использования task_id ниже — иначе строки статуса читались
+    # бы неразрешённым префиксом мимо сводной строки (REVIEW T094 итерация
+    # 1, замечание 1: `_artifact_frontmatter` теряла SPEC.md/PLAN.md/...).
+    task_id = store.resolve_task_id(conn, task_id)
     t = store.get_task(conn, task_id)
     print(f"{t['id']} «{t['title']}»  состояние: {t['state']}  "
           f"ветка: {t['branch']}  проект: {t['target']}")
@@ -268,6 +273,11 @@ def _artifact_frontmatter(target: str, task_id: str, name: str) -> dict:
 
 def cmd_log(task_id: str) -> None:
     conn = store.db()
+    # Префикс -> полный id (SPEC T094, требование 3, AC-3) — без этого
+    # `task_steps` требует точного совпадения `id` и молча печатает 0
+    # строк для валидного уникального префикса (REVIEW T094 итерация 1,
+    # замечание 1).
+    task_id = store.resolve_task_id(conn, task_id)
     for r in store.task_steps(conn, task_id):
         print(f"{r['ts']}  {r['actor']:<12} {r['action']}"
               + (f"  | {r['detail']}" if r["detail"] else ""))

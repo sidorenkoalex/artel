@@ -409,8 +409,16 @@ def cmd_advance(task_id: str, session_id: str | None = None) -> bool:
     уже возвращает исход значением, а не исключением, во всех остальных
     ветках — новый способ отказа не должен становиться единственным,
     который `auto` не умеет поймать.
+
+    Префикс -> полный id (SPEC T094, требование 3, AC-3) резолвится ЗДЕСЬ,
+    до lease/путей на диске — иначе `advance <префикс>` строил `tdir` из
+    несуществующего каталога и ложно отказывал переход (REVIEW T094
+    итерация 1, замечание 1: живой репро — `cmd_advance` с уникальным
+    префиксом печатал «PLAN.md не ready» на задаче с реально готовым
+    PLAN.md).
     """
     conn = store.db()
+    task_id = store.resolve_task_id(conn, task_id)
     return bool(lease.run_locked(
         conn, task_id, session_id,
         lambda sid: _advance_with_refixation(conn, task_id),
@@ -519,8 +527,12 @@ def confirm_fixation(conn, task_id: str, sha: str | None) -> bool:
 
 def cmd_approve(task_id: str, sha: str | None = None,
                session_id: str | None = None) -> None:
-    """Берёт lease задачи перед работой (SPEC T044, требование 2)."""
+    """Берёт lease задачи перед работой (SPEC T044, требование 2).
+
+    Префикс -> полный id (SPEC T094, требование 3, AC-3) резолвится ЗДЕСЬ,
+    до lease/CAS (REVIEW T094 итерация 1, замечание 1)."""
     conn = store.db()
+    task_id = store.resolve_task_id(conn, task_id)
     lease.run_locked(conn, task_id, session_id,
                      lambda sid: _cmd_approve(conn, task_id, sha, sid))
 
@@ -636,8 +648,14 @@ def _cmd_approve(conn, task_id: str, sha: str | None, sid: str) -> None:
 
 
 def cmd_reject(task_id: str, reason: str, session_id: str | None = None) -> None:
-    """Берёт lease задачи перед работой (SPEC T044, требование 2)."""
+    """Берёт lease задачи перед работой (SPEC T044, требование 2).
+
+    Префикс -> полный id (SPEC T094, требование 3, AC-3) резолвится ЗДЕСЬ,
+    до lease/CAS — иначе `reject` с префиксом на `merge_gate` кидал
+    необработанный `CasConflict` сквозь `lease.run_locked` (REVIEW T094
+    итерация 1, замечание 1)."""
     conn = store.db()
+    task_id = store.resolve_task_id(conn, task_id)
     lease.run_locked(conn, task_id, session_id,
                      lambda sid: _cmd_reject(conn, task_id, reason))
 

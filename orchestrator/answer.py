@@ -51,8 +51,12 @@ def cmd_answer(task_id: str, file_path: str,
               session_id: str | None = None) -> None:
     """Берёт lease задачи перед работой (SPEC T044, требование 2) — тем же
     приёмом, что и остальные мутирующие команды задачи (approve/reject/
-    run/kill/workspace)."""
+    run/kill/workspace).
+
+    Префикс -> полный id (SPEC T094, требование 3, AC-3) резолвится ЗДЕСЬ,
+    до lease (REVIEW T094 итерация 1, замечание 1)."""
     conn = store.db()
+    task_id = store.resolve_task_id(conn, task_id)
     lease.run_locked(conn, task_id, session_id,
                      lambda sid: _cmd_answer(conn, task_id, file_path))
 
