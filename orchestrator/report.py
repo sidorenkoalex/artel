@@ -132,12 +132,42 @@ def _task_step_logs(task_id: str) -> list:
     return sorted(config.LOGS.glob(f"{task_id}-*-*.log"))
 
 
-def _task_friction(task_id: str) -> tuple:
-    """(среднее трение задачи, число учтённых логов); `None` — логов нет.
+def _task_journal_friction(task_id: str, steps: list) -> list:
+    """Значения трения этой задачи, уже посчитанные ВЖИВУЮ и записанные
+    `orchestrator/runner.py` в журнал (`agent_log.FRICTION_JOURNAL_ACTION`,
+    вариант 4б SPEC требования 4-5, обоснование — tasks/T095/PLAN.md)."""
+    values = []
+    for row in steps:
+        if (row["task_id"] != task_id
+                or row["action"] != agent_log.FRICTION_JOURNAL_ACTION):
+            continue
+        try:
+            values.append(float(row["detail"]))
+        except (TypeError, ValueError):
+            continue
+    return values
 
-    Лог, пропавший между `glob` и чтением (вычищен `prune` в процессе
-    генерации отчёта), — честный пропуск ИМЕННО этого шага (AC-5), а не
-    падение всего расчёта задачи."""
+
+def _task_friction(task_id: str, steps: list) -> tuple:
+    """(среднее трение задачи, число учтённых шагов); `None` — нечего
+    усреднять.
+
+    Журнал — приоритетный источник (вариант 4б, `_task_journal_friction`):
+    если хоть один шаг задачи успел записать своё трение туда, в дело
+    идут ТОЛЬКО эти значения — персистентный `.artel/logs/*.log` того же
+    шага несёт рендер-транскрипт, не сырой поток (`agent_log.
+    step_friction`, докстринг; ответ Оператора 01.09, ANSWER-1.md), и
+    повторный разбор файла дал бы ложный 0.0, разбавляющий честное число
+    журнала. Файлы `.artel/logs/` — запасной путь ТОЛЬКО когда журнал по
+    задаче пуст: у фикстур приёмочных тестов (без настоящего прогона
+    шага через `runner.py`) журнальной записи нет вовсе, а лог доступен
+    и несёт сырой `stream-json` напрямую — тот же наблюдаемый случай,
+    что и лог, вычищенный `prune`, до которого журнал не успел появиться
+    (AC-5: честный пропуск, не ошибка)."""
+    journal_values = _task_journal_friction(task_id, steps)
+    if journal_values:
+        return sum(journal_values) / len(journal_values), len(journal_values)
+
     values = []
     for log_path in _task_step_logs(task_id):
         try:
@@ -149,11 +179,11 @@ def _task_friction(task_id: str) -> tuple:
     return sum(values) / len(values), len(values)
 
 
-def _friction_by_task(tasks: list) -> list:
-    """[(id, среднее|None, число логов), ...] для последних
+def _friction_by_task(tasks: list, steps: list) -> list:
+    """[(id, среднее|None, число шагов), ...] для последних
     `FRICTION_RECENT_TASKS` задач (SPEC требование 3, AC-2)."""
     recent = tasks[-FRICTION_RECENT_TASKS:]
-    return [(row["id"], *_task_friction(row["id"])) for row in recent]
+    return [(row["id"], *_task_friction(row["id"], steps)) for row in recent]
 
 
 def _friction_trend(by_task: list) -> str:
@@ -290,16 +320,18 @@ def _metrics_html(steps: list, tasks: list, total_spent: float) -> str:
     )
 
 
-def _friction_html(tasks: list) -> str:
+def _friction_html(tasks: list, steps: list) -> str:
     """Блок метрики «трение» (tasks/T095/SPEC.md, требование 3): значения
-    по последним задачам и тренд. Источник — файлы `.artel/logs/`,
-    доступные на диске в момент генерации (AC-4/AC-5), не новая запись
-    в `state.db`."""
-    by_task = _friction_by_task(tasks)
+    по последним задачам и тренд. Источник — журнал `steps` (шаги,
+    посчитавшие трение вживую при завершении, вариант 4б) с запасным
+    путём на файлы `.artel/logs/`, доступные на диске в момент генерации
+    (AC-4/AC-5, `_task_friction`) — ни то, ни другое не новая запись в
+    `state.db`: только уже существующие `store.task_steps`/чтение файлов."""
+    by_task = _friction_by_task(tasks, steps)
     rows_html = "".join(
         f'<div class="metric-row">{_esc(task_id)}: '
-        + (f'{round(avg * 100)}% (шагов с логом: {n})' if avg is not None
-           else "логов шагов не найдено")
+        + (f'{round(avg * 100)}% (шагов: {n})' if avg is not None
+           else "трение не посчитано")
         + '</div>'
         for task_id, avg, n in by_task
     ) or '<p class="empty">Задач нет.</p>'
@@ -389,8 +421,8 @@ def _render(tasks: list, steps: list, alerts: list, total_spent: float) -> str:
         f"{_board_html(tasks)}</section>\n"
         '<section class="panel"><h2>Метрики гейтовой нагрузки</h2>'
         f"{_metrics_html(steps, tasks, total_spent)}</section>\n"
-        '<section class="panel"><h2>Метрика «трение»: непродуктивные токены шага</h2>'
-        f"{_friction_html(tasks)}</section>\n"
+        '<section class="panel"><h2>Метрика «трение»</h2>'
+        f"{_friction_html(tasks, steps)}</section>\n"
         "</main>\n"
         "<footer>Сгенерировано командой `report` из state.db — "
         "срез на момент запуска, история прежних отчётов не хранится."

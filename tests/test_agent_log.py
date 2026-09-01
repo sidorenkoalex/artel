@@ -290,6 +290,40 @@ class OutputPumpTest(TmpRootTest):
         self.assertEqual(pump.partial_tokens, 0)
         self.assertFalse(pump.saw_usage_event)
 
+    def test_friction_is_computed_from_the_raw_stream_not_the_rendered_log(self):
+        """Ответ Оператора 01.09 (tasks/T095/ANSWER-1.md): персистентный
+        лог несёт только рендер (`render_agent_line`) — сигналов ТЗ в нём
+        нет. `pump.friction` обязана увидеть повторный `Read` по сырому
+        потоку живьём, даже когда пост-фактум разбор того же файла лога
+        честно даёт 0.0 (тот самый дефект, который чинит T095)."""
+        log = agent_log.new_agent_log("T005", "developer")
+        stream = iter([
+            assistant_event({"type": "tool_use", "id": "t1", "name": "Read",
+                            "input": {"file_path": "a.py"}}),
+            assistant_event({"type": "tool_use", "id": "t2", "name": "Read",
+                            "input": {"file_path": "a.py"}}),
+        ])
+        pump = agent_log.OutputPump(stream, log)
+
+        with redirect_stdout(io.StringIO()):
+            pump.start()
+            pump.join(5)
+
+        self.assertEqual(agent_log.step_friction(log), 0.0,
+                         "лог на диске — рендер, а не сырой поток")
+        self.assertEqual(pump.friction, 0.5,
+                         "трение вживую обязано увидеть повтор Read")
+
+    def test_friction_defaults_to_zero_without_a_single_tool_call(self):
+        pump = agent_log.OutputPump(iter(["просто вывод\n"]),
+                                    agent_log.new_agent_log("T005", "developer"))
+
+        with redirect_stdout(io.StringIO()):
+            pump.start()
+            pump.join(5)
+
+        self.assertEqual(pump.friction, 0.0)
+
 
 class RealSubprocessPumpTest(TmpRootTest):
     """Настоящий пайп и настоящий поток: фейки эту связку не проверяют."""

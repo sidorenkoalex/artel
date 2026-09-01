@@ -143,6 +143,28 @@ def stream_to_log(stream, log_path: Path, sink=None) -> None:
 # по самой метрике трения SPEC запрещает, «Не входит»).
 LARGE_TOOL_RESULT_CHARS = 20_000
 
+# Действие журнала `steps` (`store.journal`), которым `orchestrator/
+# runner.py` (точка завершения шага, вариант 4б SPEC требования 4-5)
+# записывает трение шага сразу по его завершении — общее имя между
+# «пишет» (runner.py) и «агрегирует» (report.py), чтобы строка не
+# разъехалась по двум независимым копиям.
+FRICTION_JOURNAL_ACTION = "agent run friction"
+
+
+def _parse_stream_event(raw_line: str) -> dict | None:
+    """Одна строка потока `--output-format stream-json` → событие или
+    `None` для не-JSON строки (stderr агента, трейсбек CLI) — тот же
+    приём отсечения, что уже `spend.parse_cost_event`/
+    `render_agent_line` выше."""
+    stripped = raw_line.lstrip()
+    if not stripped.startswith("{"):
+        return None
+    try:
+        event = json.loads(stripped)
+    except json.JSONDecodeError:
+        return None
+    return event if isinstance(event, dict) else None
+
 
 def _tool_use_calls(events: list) -> list:
     """Вызовы инструментов из событий потока, в порядке появления.
@@ -191,10 +213,12 @@ def _tool_results(events: list) -> dict:
     return results
 
 
-def step_friction(log_path: Path) -> float:
-    """Доля непродуктивных вызовов инструментов шага (tasks/T095/SPEC.md,
-    AC-1) — 0.0 значит ни одного из сигналов ТЗ, 1.0 значит каждый вызов
-    инструмента шага был отмечен хотя бы одним из них.
+def _friction_from_events(events: list) -> float:
+    """Доля непродуктивных вызовов инструментов среди событий потока —
+    тело метрики (tasks/T095/SPEC.md, AC-1), общее между постфактум-
+    разбором файла (`step_friction`) и накоплением вживую (`OutputPump`,
+    вариант 4б): 0.0 значит ни одного из сигналов ТЗ, 1.0 значит каждый
+    вызов инструмента шага был отмечен хотя бы одним из них.
 
     Три сигнала, все — по вызовам инструментов, в порядке появления в
     потоке; один вызов не считается дважды, даже если под него подходит
@@ -212,16 +236,6 @@ def step_friction(log_path: Path) -> float:
     у каждого события потока (T040 — обрыв, таймаут). Шаг без единого
     вызова инструмента — 0.0, делить нечего.
     """
-    events = []
-    for raw_line in log_path.read_text(encoding="utf-8", errors="replace").splitlines():
-        stripped = raw_line.lstrip()
-        if not stripped.startswith("{"):
-            continue
-        try:
-            events.append(json.loads(stripped))
-        except json.JSONDecodeError:
-            continue
-
     calls = _tool_use_calls(events)
     if not calls:
         return 0.0
@@ -259,6 +273,35 @@ def step_friction(log_path: Path) -> float:
     return len(unproductive) / len(calls)
 
 
+def step_friction(log_path: Path) -> float:
+    """Доля непродуктивных вызовов инструментов шага, по ЗАВЕРШЁННОМУ
+    файлу лога целиком — постфактум-разбор (tasks/T095/SPEC.md, AC-1),
+    см. `_friction_from_events` для самих сигналов.
+
+    ВНИМАНИЕ (ответ Оператора 01.09.2026, `tasks/T095/ANSWER-1.md`):
+    персистентный `.artel/logs/<id>-<role>-N.log`, как его реально
+    пишет `tee_lines`/`stream_to_log`, несёт РЕНДЕР-транскрипт
+    (`render_agent_line`), а не сырой `--output-format stream-json` —
+    сигналов ТЗ в нём нет (0.0 на каждом из 36 проверенных живых логов).
+    Эта функция остаётся верной для файла, который ДЕЙСТВИТЕЛЬНО несёт
+    сырой JSON построчно (так фикстуры приёмочных тестов и юнит-тестов
+    этого модуля), но production-агрегация (`report.py`) больше НЕ
+    вызывает её на реальных логах шагов — трение реальных шагов
+    накапливается вживую в `OutputPump.friction`, пока сырые события ещё
+    доступны, и журналируется `orchestrator/runner.py` при завершении
+    шага (`FRICTION_JOURNAL_ACTION`). `step_friction` остаётся публичной
+    ради этого же алгоритма над произвольным raw-JSON логом (тесты,
+    ручной разбор) — интерфейс зафиксирован приёмочными тестами
+    `tasks/T095/acceptance_tests/`.
+    """
+    events = []
+    for raw_line in log_path.read_text(encoding="utf-8", errors="replace").splitlines():
+        event = _parse_stream_event(raw_line)
+        if event is not None:
+            events.append(event)
+    return _friction_from_events(events)
+
+
 class OutputPump(threading.Thread):
     """Поток перекачки вывода агента; запоминает свой сбой для `cmd_run`.
 
@@ -280,13 +323,20 @@ class OutputPump(threading.Thread):
         # «usage не видели вовсе».
         self.partial_tokens = 0
         self.saw_usage_event = False
+        # Трение шага (T095, ANSWER-1.md): персистентный лог несёт только
+        # рендер, поэтому сигналы ТЗ нужно ловить здесь же, на сырых
+        # строках потока, пока они ещё живы — `_friction_events` копит их
+        # тем же приёмом, что `partial_tokens` копит usage построчно.
+        self._friction_events: list = []
 
     def catch_cost(self, raw_line: str) -> None:
         """Запоминает стоимость из события потока: последнее — итог запуска.
 
         Заодно копит токены usage ЛЮБОГО события (не только финального) —
         частичная находка на случай, если финальное событие так и не
-        придёт (см. `orchestrator.spend.charge_missing_result`).
+        придёт (см. `orchestrator.spend.charge_missing_result`), и сырые
+        события для метрики «трение» (`self.friction`) — тем же доводом:
+        персистентный лог их уже не несёт (`step_friction`, докстринг).
         """
         cost = spend.parse_cost_event(raw_line)
         if cost is not None:
@@ -295,6 +345,18 @@ class OutputPump(threading.Thread):
         if tokens is not None:
             self.saw_usage_event = True
             self.partial_tokens += tokens
+        event = _parse_stream_event(raw_line)
+        if event is not None:
+            self._friction_events.append(event)
+
+    @property
+    def friction(self) -> float:
+        """Трение шага по событиям, накопленным вживую (см. `catch_cost`).
+
+        Читается после `join()` — обрыв потока/таймаут значит частичный
+        набор событий, как и `partial_tokens`; это то же самое честное
+        «посчитано по тому, что успели увидеть», а не ошибка."""
+        return _friction_from_events(self._friction_events)
 
     def run(self) -> None:
         try:

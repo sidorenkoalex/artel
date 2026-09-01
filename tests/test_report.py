@@ -259,21 +259,49 @@ class TaskStepLogsTest(TmpRootTest):
                          ["T001-developer-1.log", "T001-developer-2.log"])
 
 
+class TaskJournalFrictionTest(unittest.TestCase):
+    """tasks/T095/SPEC.md, вариант 4б — трение, записанное `runner.py`
+    в журнал `steps` (`agent_log.FRICTION_JOURNAL_ACTION`)."""
+
+    def test_no_matching_rows_gives_empty_list(self):
+        steps = [_row(task_id="T001", action="agent run finished", detail="rc=0")]
+
+        self.assertEqual(report._task_journal_friction("T001", steps), [])
+
+    def test_collects_only_this_tasks_friction_rows(self):
+        steps = [
+            _row(task_id="T001", action=agent_log.FRICTION_JOURNAL_ACTION,
+                detail="0.5000"),
+            _row(task_id="T002", action=agent_log.FRICTION_JOURNAL_ACTION,
+                detail="0.9000"),
+            _row(task_id="T001", action="agent run finished", detail="rc=0"),
+        ]
+
+        self.assertEqual(report._task_journal_friction("T001", steps), [0.5])
+
+    def test_unparsable_detail_is_skipped_not_raised(self):
+        steps = [_row(task_id="T001", action=agent_log.FRICTION_JOURNAL_ACTION,
+                     detail="перекачка не завершилась")]
+
+        self.assertEqual(report._task_journal_friction("T001", steps), [])
+
+
 class TaskFrictionTest(TmpRootTest):
-    """tasks/T095/SPEC.md, AC-2/AC-5 — среднее по логам задачи, честный
-    пропуск отсутствующих/нечитаемых."""
+    """tasks/T095/SPEC.md, AC-2/AC-5 — среднее по шагам задачи: журнал
+    (вариант 4б) в приоритете, файлы `.artel/logs/` — запасной путь,
+    честный пропуск отсутствующих/нечитаемых."""
 
-    def test_no_logs_gives_no_average(self):
-        self.assertEqual(report._task_friction("T001"), (None, 0))
+    def test_no_logs_and_no_journal_gives_no_average(self):
+        self.assertEqual(report._task_friction("T001", []), (None, 0))
 
-    def test_averages_over_every_available_log(self):
+    def test_averages_over_every_available_log_when_journal_is_empty(self):
         config.LOGS.mkdir(parents=True)
         (config.LOGS / "T001-developer-1.log").write_text(
             _read_call("t1", "a.py") + _read_call("t2", "b.py"), encoding="utf-8")
         (config.LOGS / "T001-developer-2.log").write_text(
             _read_call("t1", "a.py") + _read_call("t2", "a.py"), encoding="utf-8")
 
-        avg, n = report._task_friction("T001")
+        avg, n = report._task_friction("T001", [])
 
         self.assertEqual(n, 2)
         self.assertEqual(avg, 0.25)  # (0.0 + 0.5) / 2
@@ -285,7 +313,21 @@ class TaskFrictionTest(TmpRootTest):
 
         with mock.patch.object(agent_log, "step_friction",
                                side_effect=OSError("вычищено prune")):
-            self.assertEqual(report._task_friction("T001"), (None, 0))
+            self.assertEqual(report._task_friction("T001", []), (None, 0))
+
+    def test_journal_rows_take_priority_over_stale_log_files(self):
+        """Реальный шаг: и журнальная запись, и рендер-лог существуют —
+        лог несёт 0.0 (рендер, не сырой поток), журнал несёт настоящее
+        число; должно победить журнальное значение, а не их смесь."""
+        config.LOGS.mkdir(parents=True)
+        (config.LOGS / "T001-developer-1.log").write_text(
+            "· Read a.py\n· Read a.py\n", encoding="utf-8")
+        steps = [_row(task_id="T001", action=agent_log.FRICTION_JOURNAL_ACTION,
+                     detail="0.7500")]
+
+        avg, n = report._task_friction("T001", steps)
+
+        self.assertEqual((avg, n), (0.75, 1))
 
 
 class FrictionByTaskTest(unittest.TestCase):
@@ -295,7 +337,7 @@ class FrictionByTaskTest(unittest.TestCase):
         tasks = [_row(id=f"T{i:03d}") for i in range(1, 15)]
 
         with mock.patch.object(report, "_task_friction", return_value=(0.0, 1)):
-            by_task = report._friction_by_task(tasks)
+            by_task = report._friction_by_task(tasks, [])
 
         self.assertEqual(len(by_task), report.FRICTION_RECENT_TASKS)
         self.assertEqual(by_task[0][0], "T005")
@@ -336,24 +378,24 @@ class FrictionHtmlTest(unittest.TestCase):
     """tasks/T095/SPEC.md, требование 3 — форма блока трения в report."""
 
     def test_no_tasks_says_so(self):
-        self.assertIn("Задач нет", report._friction_html([]))
+        self.assertIn("Задач нет", report._friction_html([], []))
 
     def test_mentions_the_trend(self):
-        self.assertIn("Тренд", report._friction_html([]))
+        self.assertIn("Тренд", report._friction_html([], []))
 
-    def test_task_without_logs_is_named_not_a_number(self):
+    def test_task_without_data_is_named_not_a_number(self):
         with mock.patch.object(report, "_task_friction", return_value=(None, 0)):
-            html = report._friction_html([_row(id="T001")])
+            html = report._friction_html([_row(id="T001")], [])
 
         self.assertIn("T001", html)
-        self.assertIn("логов шагов не найдено", html)
+        self.assertIn("трение не посчитано", html)
 
     def test_task_with_data_shows_its_percentage(self):
         with mock.patch.object(report, "_task_friction", return_value=(0.25, 2)):
-            html = report._friction_html([_row(id="T001")])
+            html = report._friction_html([_row(id="T001")], [])
 
         self.assertIn("25%", html)
-        self.assertIn("шагов с логом: 2", html)
+        self.assertIn("шагов: 2", html)
 
 
 class _frozen_today:

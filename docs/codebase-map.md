@@ -1,5 +1,5 @@
 ---
-built_at_sha: dfa009414c5352b8944f2658f00f1ffc704f6d51
+built_at_sha: 7579f460c25a77f6a94365f1b3367c5086a69cba
 ---
 
 # Codebase-map пульта
@@ -1371,6 +1371,7 @@ built_at_sha: dfa009414c5352b8944f2658f00f1ffc704f6d51
 - `event`
 - `result_event`
 - `timeout_then_killed_proc`
+- `tool_use_event`
 
 **Импортирует:** `orchestrator/agent_log.py`, `orchestrator/budget.py`, `orchestrator/catalog.py`, `orchestrator/config.py`, `orchestrator/fsm.py`, `orchestrator/gitcmd.py`, `orchestrator/runner.py`, `orchestrator/spend.py`, `orchestrator/store.py`, `tests/sandbox.py`
 
