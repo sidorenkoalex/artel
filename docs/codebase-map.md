@@ -1,5 +1,5 @@
 ---
-built_at_sha: cd67b65c0cdb2229569749f1e6202dfb43ed0c80
+built_at_sha: 7579f460c25a77f6a94365f1b3367c5086a69cba
 ---
 
 # Codebase-map пульта
@@ -39,12 +39,13 @@ built_at_sha: cd67b65c0cdb2229569749f1e6202dfb43ed0c80
 - `new_agent_log`
 - `render_agent_line`
 - `render_block`
+- `step_friction`
 - `stream_to_log`
 - `tee_lines`
 
 **Импортирует:** `orchestrator/config.py`, `orchestrator/spend.py`
 
-**Импортируется:** `orchestrator/auto.py`, `orchestrator/pause.py`, `orchestrator/runner.py`, `tests/test_agent_failure.py`, `tests/test_agent_log.py`, `tests/test_auto_cycle.py`, `tests/test_kill_cleanup.py`, `tests/test_pause_now.py`, `tests/test_step_cost.py`
+**Импортируется:** `orchestrator/auto.py`, `orchestrator/pause.py`, `orchestrator/report.py`, `orchestrator/runner.py`, `tests/test_agent_failure.py`, `tests/test_agent_log.py`, `tests/test_auto_cycle.py`, `tests/test_kill_cleanup.py`, `tests/test_pause_now.py`, `tests/test_report.py`, `tests/test_step_cost.py`
 
 ## orchestrator/alerts.py
 
@@ -525,7 +526,7 @@ built_at_sha: cd67b65c0cdb2229569749f1e6202dfb43ed0c80
 **Публичные функции:**
 - `cmd_report`
 
-**Импортирует:** `orchestrator/config.py`, `orchestrator/store.py`
+**Импортирует:** `orchestrator/agent_log.py`, `orchestrator/config.py`, `orchestrator/store.py`
 
 **Импортируется:** `orchestrator/artel.py`, `tests/test_report.py`
 
@@ -862,6 +863,8 @@ built_at_sha: cd67b65c0cdb2229569749f1e6202dfb43ed0c80
 **Публичные функции:**
 - `assistant_event`
 - `event`
+- `tool_result_event`
+- `tool_use_call`
 
 **Импортирует:** `orchestrator/agent_log.py`, `orchestrator/catalog.py`, `orchestrator/config.py`, `orchestrator/gitcmd.py`, `orchestrator/runner.py`, `orchestrator/store.py`, `tests/sandbox.py`
 
@@ -1295,7 +1298,7 @@ built_at_sha: cd67b65c0cdb2229569749f1e6202dfb43ed0c80
 
 **Публичные функции:** (нет)
 
-**Импортирует:** `orchestrator/config.py`, `orchestrator/report.py`, `orchestrator/store.py`, `tests/sandbox.py`
+**Импортирует:** `orchestrator/agent_log.py`, `orchestrator/config.py`, `orchestrator/report.py`, `orchestrator/store.py`, `tests/sandbox.py`
 
 **Импортируется:** —
 
@@ -1368,6 +1371,7 @@ built_at_sha: cd67b65c0cdb2229569749f1e6202dfb43ed0c80
 - `event`
 - `result_event`
 - `timeout_then_killed_proc`
+- `tool_use_event`
 
 **Импортирует:** `orchestrator/agent_log.py`, `orchestrator/budget.py`, `orchestrator/catalog.py`, `orchestrator/config.py`, `orchestrator/fsm.py`, `orchestrator/gitcmd.py`, `orchestrator/runner.py`, `orchestrator/spend.py`, `orchestrator/store.py`, `tests/sandbox.py`
 

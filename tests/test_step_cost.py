@@ -50,6 +50,12 @@ def assistant_event(usage=None) -> str:
     return event(type="assistant", message=message)
 
 
+def tool_use_event(call_id: str, name: str, **input_kwargs) -> str:
+    """Событие потока с вызовом инструмента (tasks/T095/SPEC.md)."""
+    return event(type="assistant", message={"role": "assistant", "content": [
+        {"type": "tool_use", "id": call_id, "name": name, "input": input_kwargs}]})
+
+
 
 class _StepCostTmpRootTest(TmpRootTest):
     """Общая песочница: DB, TASKS и LOGS уводятся во временный каталог.
@@ -427,6 +433,29 @@ class CmdRunCostTest(TmpRootTest):
         self.run_agent((0, [result_event(usd=0.5)]))
 
         self.assertAlmostEqual(self.task_row()["spent_usd"], 0.75)
+
+    def test_step_friction_lands_in_journal_from_the_live_stream(self):
+        """tasks/T095/SPEC.md, вариант 4б: трение считается по СЫРЫМ
+        событиям потока (не по персистентному рендер-логу) и журналируется
+        точкой завершения шага (`runner.py`) сразу же."""
+        self.run_agent((0, [
+            tool_use_event("t1", "Read", file_path="a.py"),
+            tool_use_event("t2", "Read", file_path="a.py"),
+            result_event(usd=0.1),
+        ]))
+
+        detail = self.journal_details(agent_log.FRICTION_JOURNAL_ACTION)
+        self.assertEqual(len(detail), 1, "трение шага не попало в журнал")
+        self.assertEqual(float(detail[0]), 0.5)
+
+    def test_step_friction_is_journaled_even_for_a_clean_step(self):
+        self.run_agent((0, [
+            tool_use_event("t1", "Read", file_path="a.py"),
+            result_event(usd=0.1),
+        ]))
+
+        detail = self.journal_details(agent_log.FRICTION_JOURNAL_ACTION)
+        self.assertEqual(float(detail[0]), 0.0)
 
     def test_failed_attempts_are_paid_for_too(self):
         """Ретраи после T006 стоят денег — иначе потолок обходится провалами."""
