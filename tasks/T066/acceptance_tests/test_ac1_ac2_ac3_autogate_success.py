@@ -21,12 +21,18 @@ SPEC требования 2 выполненными — три критерия
 все три теста падают именно на этом: состояние остаётся `acceptance`
 (не `merge_gate`), журнал не несёт `actor=autogate`, вывод не содержит
 фразу «пройден автогейтом».
+
+Маршрут обновлён под T079/ADR-0009 (мандат ANSWER-1 T085, 01.09):
+`review -> acceptance` больше не один шаг — между ними `verifying`,
+дожидающийся зелёного CI ветки (см. `_sandbox.py::advance_to_autogate`,
+«Маршрут» в докстринге модуля). Это не меняет то, что проверяет
+критерий: те же наблюдаемые следствия одного логического прохода
+условий SPEC требования 2, просто за два `cmd_advance` вместо одного.
 """
 import re
 import unittest
 
 from _sandbox import AutogateSandbox  # noqa: E402
-from orchestrator import fsm  # noqa: E402
 
 
 class AutogatePassesAllConditionsTest(AutogateSandbox):
@@ -34,7 +40,7 @@ class AutogatePassesAllConditionsTest(AutogateSandbox):
     def setUp(self):
         super().setUp()
         self.prepare_green_scenario()
-        self.out = self.capture(fsm.cmd_advance, self.TASK)
+        self.out = self.advance_to_autogate()
 
     def test_ac1_review_to_merge_gate_in_one_action_without_operator_approve(self):
         self.assertEqual(

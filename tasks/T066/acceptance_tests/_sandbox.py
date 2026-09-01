@@ -35,7 +35,21 @@ test_author, SPEC требование 1: точный формат `gates.yaml`
   далеко за пределами САМОГО СТРОГОГО из настроенных отношений, чтобы
   сценарий не зависел от того, какое именно отношение разработчик
   выберет точкой блокировки.
+
+## Маршрут `review -> acceptance` (правка ADR-0009/T085, мандат ANSWER-1)
+
+С T079 между `review` и `acceptance` стоит состояние `verifying`: одного
+`cmd_advance` из `review` уже недостаточно, чтобы добраться до оценки
+автогейта acceptance — нужен второй `advance`, обрабатывающий
+`verifying`, а ему нужен зелёный CI головного коммита ветки. Это условие
+не входит в состав автогейта acceptance (SPEC T066/T085 требования) —
+здесь просто убирается с дороги фикстурой, постоянно зелёной, тем же
+приёмом (`ci.gh`/`ci.head_sha`), что и `tasks/T079/acceptance_tests/
+_sandbox.py::VerifyingTest.set_ci_dual` / `tasks/T085/acceptance_tests/
+_sandbox.py`. Метод `advance_to_autogate` ниже — два `cmd_advance`
+подряд с этой фикстурой.
 """
+import json
 import shutil
 import subprocess
 import sys
@@ -46,7 +60,7 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
-from orchestrator import catalog, config, gitcmd, store, workspace  # noqa: E402
+from orchestrator import catalog, ci, config, gitcmd, store, workspace  # noqa: E402
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 
@@ -187,6 +201,14 @@ GATES_MERGE_AND_SPEC_ALSO_AUTO = """gates:
   merge_gate: auto
 """
 
+# CI головного коммита ветки — постоянно зелёный (см. «Маршрут» в
+# докстринге модуля): убирает `verifying` (T079) с дороги, не входит в
+# состав автогейта acceptance, который проверяют эти сценарии.
+GREEN_CHECK_RUNS = json.dumps({"total_count": 2, "check_runs": [
+    {"name": "guard", "status": "completed", "conclusion": "success"},
+    {"name": "python", "status": "completed", "conclusion": "success"},
+]})
+
 
 class AutogateSandbox(unittest.TestCase):
     """Задача T001 в свежем временном git-репозитории с веткой main;
@@ -230,6 +252,23 @@ class AutogateSandbox(unittest.TestCase):
         store.insert_task(store.db(), self.TASK, "Автогейт acceptance",
                           "review", self.branch, config.DEFAULT_TARGET,
                           config.DEFAULT_BUDGET_USD)
+        self._set_ci_green()
+
+    def _set_ci_green(self) -> None:
+        def gh(*args: str, **kwargs) -> subprocess.CompletedProcess:
+            joined = " ".join(args)
+            if "check-runs" in joined:
+                return subprocess.CompletedProcess(list(args), 0,
+                                                    GREEN_CHECK_RUNS, "")
+            return subprocess.CompletedProcess(list(args), 0, "[]", "")
+
+        def head_sha(branch: str) -> tuple[str, str]:
+            return self.git("rev-parse", branch).stdout.strip(), ""
+
+        for target, value in (("gh", gh), ("head_sha", head_sha)):
+            patcher = mock.patch.object(ci, target, value)
+            patcher.start()
+            self.addCleanup(patcher.stop)
 
     # ------------------------------------------------------------ утилиты
 
@@ -270,6 +309,19 @@ class AutogateSandbox(unittest.TestCase):
         return [(r["actor"], r["action"], r["detail"]) for r in store.db().execute(
             "SELECT actor, action, detail FROM steps WHERE task_id=? "
             "ORDER BY id", (task_id or self.TASK,))]
+
+    def advance_to_autogate(self, task_id=None) -> str:
+        """Два `cmd_advance` подряд: первый — `review -> verifying`,
+        второй обрабатывает `verifying` (CI зелёный по фикстуре setUp) и
+        входит в `acceptance` в том же вызове, включая попытку автогейта
+        (`orchestrator/fsm.py`, ветка `state == "verifying"`, исход
+        `ci.VERIFYING_GREEN`, тот же вызов `_maybe_autogate_acceptance`,
+        что раньше срабатывал прямо на входе `review -> acceptance`,
+        см. «Маршрут» в докстринге модуля)."""
+        from orchestrator import fsm
+        out = self.capture(fsm.cmd_advance, task_id or self.TASK)
+        out += self.capture(fsm.cmd_advance, task_id or self.TASK)
+        return out
 
     def make_worktree(self, task_id=None, branch=None) -> Path:
         wt_path, error = workspace.ensure(task_id or self.TASK,
