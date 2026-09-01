@@ -284,6 +284,20 @@ def _cmd_approve_merge_gate(conn, task_id: str, state: str, t,
         sys.exit(f"merge упал на git push:\n{push.stderr}")
     store.set_state(conn, task_id, "done", "orchestrator",
                     expected_state=state, detail=f"смержено: {branch}")
+    # Снапшот закрытия (SPEC T094, требования 12-13, AC-13, AC-15) — ДО
+    # уборки веток ниже, тем же узлом, что и `cleanup._cmd_kill` для
+    # пути `killed`: внешний target, не канарейка (self/канарейка снапшот
+    # не заводят вовсе — `_publish_snapshot_if_pending` сама решает).
+    # Push снапшота не удался — `snapshot.pending` остаётся истинным, и
+    # уборка worktree/ветки задачи ниже пропускается (AC-15: переход в
+    # `done` уже совершён, ветки ждут следующего доверенного прогона).
+    target = t["target"] or config.DEFAULT_TARGET
+    is_canary = bool(t["is_canary"])
+    cleanup._publish_snapshot_if_pending(conn, task_id, target, is_canary)
+    if target != config.DEFAULT_TARGET and not is_canary:
+        from . import snapshot
+        if snapshot.pending(task_id):
+            return ("done",)
     # Worktree задачи отслужил (SPEC T045, требование 5, AC-6):
     # смержено, дальше агентным шагам там делать нечего.
     note = workspace.remove(task_id)

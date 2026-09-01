@@ -22,7 +22,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from orchestrator import (acceptance, catalog, config, fsm, gitcmd,  # noqa: E402
                           store, workspace)
-from tests.sandbox import capture, fake_git  # noqa: E402
+from tests.sandbox import capture, capture_new_task_id, fake_git  # noqa: E402
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
@@ -48,7 +48,6 @@ schema_version: 1
 
 class MapConflictAutoResolveTest(unittest.TestCase):
 
-    TASK = "T001"
     MAP_REL = "docs/codebase-map.md"
 
     def setUp(self):
@@ -83,7 +82,8 @@ class MapConflictAutoResolveTest(unittest.TestCase):
         self.addCleanup(wt_patcher.stop)
 
         self.capture(catalog.cmd_init)
-        self.capture(catalog.cmd_new, "Авторазрешение конфликта карты")
+        _, self.TASK = capture_new_task_id(
+            catalog.cmd_new, "Авторазрешение конфликта карты")
         self.tdir = config.TASKS / self.TASK
         self.branch = self.task_row()["branch"]
 

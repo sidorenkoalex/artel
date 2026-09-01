@@ -20,7 +20,7 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from orchestrator import budget, catalog, config, fsm, gitcmd, store  # noqa: E402
-from tests.sandbox import capture, fake_git  # noqa: E402
+from tests.sandbox import capture, capture_new_task_id, fake_git  # noqa: E402
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
@@ -119,8 +119,6 @@ class SpecBudgetParseTest(unittest.TestCase):
 class SpecBudgetOnTheGateTest(unittest.TestCase):
     """`advance` из spec_writing: потолок задачи берётся из SPEC."""
 
-    TASK = "T001"
-
     def setUp(self):
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
@@ -153,7 +151,8 @@ class SpecBudgetOnTheGateTest(unittest.TestCase):
         self.addCleanup(git_patcher.stop)
 
         self.capture(catalog.cmd_init)
-        self.capture(catalog.cmd_new, "Бюджет задачи из SPEC")
+        _, self.TASK = capture_new_task_id(
+            catalog.cmd_new, "Бюджет задачи из SPEC")
         # `write_spec` кладёт SPEC.md на диск НАПРЯМУЮ, минуя worktree —
         # песочница не на «чужой ветке» (`gitcmd.on_foreign_branch` тут
         # всегда False с фейком выше), так что `fsm._cmd_advance` читает
@@ -404,6 +403,11 @@ class LegacyDbMigrationTest(SpecBudgetOnTheGateTest):
     дать старой БД ровно то же поведение, что и новой, — иначе половина
     требований проверена только на свежесозданной схеме.
     """
+
+    # Заведена напрямую записью в БД (легаси-путь ниже), не через `cmd_new`
+    # — значит фиксированный id (не ULID) тут корректен (SPEC T094, AC-5:
+    # старые Tnnn обязаны продолжать работать).
+    TASK = "T001"
 
     def setUp(self):
         tmp = tempfile.TemporaryDirectory()

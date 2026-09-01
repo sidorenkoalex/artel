@@ -21,7 +21,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from orchestrator import (artifacts, catalog, config, fsm,  # noqa: E402
                           gitcmd, review, runner, store)
-from tests.sandbox import capture, fake_git  # noqa: E402
+from tests.sandbox import capture, capture_new_task_id, fake_git  # noqa: E402
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
@@ -93,7 +93,6 @@ class FreshVerdictIterationTest(unittest.TestCase):
 
 
 class ReviewFreshnessScenarioTest(unittest.TestCase):
-    TASK = "T001"
 
     def setUp(self):
         tmp = tempfile.TemporaryDirectory()
@@ -145,7 +144,8 @@ class ReviewFreshnessScenarioTest(unittest.TestCase):
         self.addCleanup(pf_patcher.stop)
 
         self.capture(catalog.cmd_init)
-        self.capture(catalog.cmd_new, "Проверка вердикта")
+        _, self.TASK = capture_new_task_id(
+            catalog.cmd_new, "Проверка вердикта")
         # REVIEW.md/PLAN.md здесь кладутся на диск НАПРЯМУЮ (не через
         # `cmd_new`, требование 4 — он пишет в worktree, не в
         # `config.TASKS`); песочница не на «чужой ветке» в смысле

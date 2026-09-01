@@ -811,11 +811,7 @@ def check_pending_snapshots(conn) -> list[Check]:
     origin целевого. Каждый прогон `doctor` пробует push заново; успех
     убирает ветку тем же путём, что и повторный `kill`."""
     checks = []
-    rows = conn.execute(
-        "SELECT id, target FROM tasks WHERE state IN ('done','killed') "
-        "AND is_canary=0 AND target IS NOT NULL AND target != ?",
-        (config.DEFAULT_TARGET,)).fetchall()
-    for row in rows:
+    for row in store.closed_external_tasks(conn):
         task_id = row["id"]
         target = row["target"] or config.DEFAULT_TARGET
         if not snapshot.pending(task_id):

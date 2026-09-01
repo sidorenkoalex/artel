@@ -409,6 +409,17 @@ def all_tasks(conn: sqlite3.Connection) -> list:
     return conn.execute("SELECT * FROM tasks ORDER BY id").fetchall()
 
 
+def closed_external_tasks(conn: sqlite3.Connection) -> list:
+    """Задачи внешнего target'а в `done`/`killed`, не канарейка (SPEC
+    T094, требование 13, AC-15) — кандидаты на дожим недоставленного
+    снапшота закрытия. Читатель — `doctor.check_pending_snapshots`
+    (SQL живёт только здесь, ADR-0003 3ж)."""
+    return conn.execute(
+        "SELECT id, target FROM tasks WHERE state IN ('done','killed') "
+        "AND is_canary=0 AND target IS NOT NULL AND target != ?",
+        (config.DEFAULT_TARGET,)).fetchall()
+
+
 def task_steps(conn: sqlite3.Connection, task_id: str) -> list:
     """Журнал шагов задачи по порядку записи (команда `log`)."""
     return conn.execute("SELECT * FROM steps WHERE task_id=? ORDER BY id",
