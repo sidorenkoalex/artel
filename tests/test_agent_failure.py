@@ -24,7 +24,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from orchestrator import (agent_log, catalog, config, fsm, gitcmd,  # noqa: E402
                           runner, store)
-from tests.sandbox import (FakeProc, FakeStream, TmpRootTest, fake_git,  # noqa: E402
+from tests.sandbox import (FakeProc, FakeStream, TmpRootTest,  # noqa: E402
+                           capture_new_task_id, fake_git,
                            seed_developer_brief_fixtures, sync_spec_from_worktree)
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -94,8 +95,6 @@ class LogTailTest(TmpRootTest):
 class CmdRunFailureTest(TmpRootTest):
     """`run` с падающим агентом: журнал, ретраи, эскалация."""
 
-    TASK = "T001"
-
     def setUp(self):
         super().setUp()
         # Шаг ревью собирает пакет настоящим git (T011); в песочнице
@@ -107,7 +106,10 @@ class CmdRunFailureTest(TmpRootTest):
         git_patcher.start()
         self.addCleanup(git_patcher.stop)
         self.capture(catalog.cmd_init)
-        self.capture(catalog.cmd_new, "Код возврата агента")
+        # `cmd_new` возвращает id ULID (SPEC T094, требование 2), больше не
+        # предсказуемый "T001" — забираем реальный через
+        # `capture_new_task_id`, а не `self.capture` (та отбрасывает возврат).
+        _, self.TASK = capture_new_task_id(catalog.cmd_new, "Код возврата агента")
         sync_spec_from_worktree(self.TASK)
         conn = store.db()
         conn.execute("UPDATE tasks SET state='in_dev' WHERE id=?", (self.TASK,))

@@ -126,7 +126,7 @@ class AnswerCommandStrayFilesTest(RealPultGitTest):
         status = self.git_in_worktree("status", "--porcelain",
                                       f"tasks/{self.TASK}")
         self.assertIn(
-            "?? tasks/T001/stray.txt", status,
+            f"?? tasks/{self.TASK}/stray.txt", status,
             "answer обязан застейджить и закоммитить только ANSWER-n.md, "
             "посторонний незакоммиченный файл того же tasks/<id> обязан "
             "остаться нетронутым")

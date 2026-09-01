@@ -19,7 +19,7 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from orchestrator import catalog, config, fsm, gitcmd, store, workspace  # noqa: E402
-from tests.sandbox import capture, fake_git  # noqa: E402
+from tests.sandbox import capture, capture_new_task_id, fake_git  # noqa: E402
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
@@ -94,8 +94,6 @@ TRANSITIONS = {
 
 class AdvanceGuardTest(unittest.TestCase):
 
-    TASK = "T001"
-
     def setUp(self):
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
@@ -137,7 +135,10 @@ class AdvanceGuardTest(unittest.TestCase):
         self.addCleanup(wt_patcher.stop)
 
         self.capture(catalog.cmd_init)
-        self.capture(catalog.cmd_new, "Guard на переходах")
+        # `cmd_new` возвращает id ULID (SPEC T094, требование 2), больше не
+        # предсказуемый "T001" — забираем реальный через
+        # `capture_new_task_id`, а не `self.capture` (та отбрасывает возврат).
+        _, self.TASK = capture_new_task_id(catalog.cmd_new, "Guard на переходах")
         self.tdir = config.TASKS / self.TASK
 
     # ------------------------------------------------------------ утилиты

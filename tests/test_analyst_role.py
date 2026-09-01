@@ -21,8 +21,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from orchestrator import artel, auto, catalog, config, fsm, gitcmd, runner, store  # noqa: E402
 from scripts import guard  # noqa: E402
-from tests.sandbox import (FakeProc, TmpRootTest, fake_git,  # noqa: E402
-                           seed_developer_brief_fixtures)
+from tests.sandbox import (FakeProc, TmpRootTest, capture_new_task_id,  # noqa: E402
+                           fake_git, seed_developer_brief_fixtures)
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
@@ -128,7 +128,6 @@ class _AnalystRoleTmpRootTest(TmpRootTest):
     настоящий `templates/SPEC.md`, только уже из песочницы.
     """
 
-    TASK = "T001"
     PATCHED_ATTRS = ("DB", "TASKS", "LOGS", "ROLE_HOME", "ROLE_CONFIG_DIR",
                      "WORKTREES", "ROOT")
 
@@ -148,7 +147,9 @@ class _AnalystRoleTmpRootTest(TmpRootTest):
         # на диск напрямую (`write`/`write_tz`, симуляция ветко-корректного
         # fallback), нуждаются в каталоге сами.
         config.TASKS.mkdir(parents=True, exist_ok=True)
-        self.capture(catalog.cmd_new, "Аналитик из ТЗ")
+        # Id — ULID (SPEC T094), не предсказуемый "T001" — берём реальный
+        # возврат `cmd_new`, а не отбрасываем его через `self.capture`.
+        _, self.TASK = capture_new_task_id(catalog.cmd_new, "Аналитик из ТЗ")
         self.tdir = config.TASKS / self.TASK
 
     def wt_tdir(self, task_id: str | None = None) -> Path:
@@ -266,19 +267,23 @@ class CmdNewTzTest(TmpRootTest):
         """Отказ до расхода номера счётчика и до создания задачи — иначе
         БД получает сироту без ветки/воркри. Сверяется с БД, не с
         листингом каталога (conventions-core: `tasks/` двигают
-        параллельные сессии)."""
+        параллельные сессии). Id — ULID (SPEC T094), не предсказуемый
+        "T002" — считаем строки в `tasks`, а не ждём конкретный id."""
         missing = self.tdir.parent / "нет-такого-файла.txt"
+        before = store.db().execute(
+            "SELECT COUNT(*) FROM tasks").fetchone()[0]
 
         with self.assertRaises(SystemExit):
             catalog.cmd_new("Экспорт CSV", str(missing))
 
-        self.assertIsNone(store.db().execute(
-            "SELECT 1 FROM tasks WHERE id='T002'").fetchone(),
-            "отказ не должен создавать вторую задачу")
-        # Следующая задача получает T002, а не T003 — номер не пропущен.
-        self.capture(catalog.cmd_new, "Следующая задача")
+        self.assertEqual(
+            store.db().execute("SELECT COUNT(*) FROM tasks").fetchone()[0],
+            before, "отказ не должен создавать вторую задачу")
+        # Следующая задача заводится нормально — отказ не срывает
+        # заведение следующей задачи (генератор id не зависит от него).
+        _, new_id = capture_new_task_id(catalog.cmd_new, "Следующая задача")
         self.assertIsNotNone(store.db().execute(
-            "SELECT 1 FROM tasks WHERE id='T002'").fetchone())
+            "SELECT 1 FROM tasks WHERE id=?", (new_id,)).fetchone())
 
 
 # --------------------------------------------------------------------------
@@ -304,15 +309,19 @@ class ArtelCliTzFlagTest(TmpRootTest):
         """Воспроизводит замечание ревью буквально через `main()`: `new
         "название" --tz` без пути к файлу — понятный отказ, не трейсбек,
         и без наполовину созданной задачи (сверка с БД, не с листингом
-        каталога — conventions-core)."""
+        каталога — conventions-core). Id — ULID (SPEC T094): считаем
+        строки в `tasks`, а не ждём предсказуемый "T002"."""
+        before = store.db().execute(
+            "SELECT COUNT(*) FROM tasks").fetchone()[0]
+
         with mock.patch.object(sys, "argv",
                                ["artel.py", "new", "Экспорт CSV", "--tz"]):
             with self.assertRaises(SystemExit) as ctx:
                 artel.main()
         self.assertIn("--tz", str(ctx.exception))
-        self.assertIsNone(store.db().execute(
-            "SELECT 1 FROM tasks WHERE id='T002'").fetchone(),
-            "дефектный --tz не должен был завести вторую задачу")
+        self.assertEqual(
+            store.db().execute("SELECT COUNT(*) FROM tasks").fetchone()[0],
+            before, "дефектный --tz не должен был завести вторую задачу")
 
 
 # --------------------------------------------------------------------------

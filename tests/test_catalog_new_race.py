@@ -19,7 +19,7 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from orchestrator import catalog, config, gitcmd, store  # noqa: E402
-from tests.sandbox import TmpRootTest, fake_git  # noqa: E402
+from tests.sandbox import TmpRootTest, capture_new_task_id, fake_git  # noqa: E402
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
