@@ -1,5 +1,4 @@
-"""Юнит-тесты `checkpoint.commit_step_artifacts` (tasks/T059/SPEC.md;
-перенесено из runner.py в T091 — декомпозиция диспетчеров fsm/runner).
+"""Юнит-тесты `checkpoint.commit_step_artifacts` (tasks/T059/SPEC.md).
 
 Приёмочные тесты (tasks/T059/acceptance_tests) проверяют критерии
 приёмки целиком через `cmd_run` с подложным процессом агента; здесь —

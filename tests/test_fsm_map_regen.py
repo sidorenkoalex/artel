@@ -1,6 +1,5 @@
 """Юнит-тесты регенерации/коммита карты кодовой базы на merge_gate
-(orchestrator/fsm_postmerge.py, tasks/T042/SPEC.md; перенесено из fsm.py
-в T091 — декомпозиция диспетчеров fsm/runner).
+(orchestrator/fsm_postmerge.py, tasks/T042/SPEC.md).
 
 Функции по отдельности, не через `fsm.cmd_approve` целиком — сквозной путь
 (AC-1..AC-3) уже покрывают приёмочные тесты

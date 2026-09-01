@@ -1,5 +1,4 @@
-"""Юнит-тесты обвязки RETRO в orchestrator/fsm_postmerge.py (SPEC T043,
-перенесено из fsm.py в T091 — декомпозиция диспетчеров fsm/runner):
+"""Юнит-тесты обвязки RETRO в orchestrator/fsm_postmerge.py (SPEC T043):
 некритичность провала, подбор killed-долгов, форма коммитов.
 
 Сквозной путь через `cmd_approve` целиком уже покрывают приёмочные тесты

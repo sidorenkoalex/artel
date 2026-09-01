@@ -1,5 +1,4 @@
-"""Юнит-тесты `checkpoint.commit_timeout_checkpoint` (tasks/T041/SPEC.md;
-перенесено из runner.py в T091 — декомпозиция диспетчеров fsm/runner).
+"""Юнит-тесты `checkpoint.commit_timeout_checkpoint` (tasks/T041/SPEC.md).
 
 Приёмочные тесты (tasks/T041/acceptance_tests) проверяют критерии
 приёмки целиком через `cmd_run` с подложным процессом агента; здесь —
