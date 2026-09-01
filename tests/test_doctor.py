@@ -1133,6 +1133,29 @@ class TaskCounterCheckTest(TmpRootTest):
                     if a["source"] == "doctor.task_counter"]
         self.assertEqual(len(incidents), 1)
 
+    def test_catching_up_target_is_auto_acked_without_touching_a_lagging_target(self):
+        """SPEC T088, требования 5-6: закрытие алерта одного target
+        (`sled`, счётчик догнал) не задевает алерт другого (`artel`,
+        счётчик остаётся позади) — из того же прогона."""
+        config.TARGETS.write_text(TARGETS_YAML_WITH_SLED, encoding="utf-8")
+        conn = store.db()  # сеет счётчики artel/sled пока их tasks/ пусты
+        (config.TASKS / "T010").mkdir(parents=True)
+        (config.PROJECTS / "sled" / "tasks" / "T010").mkdir(parents=True)
+
+        doctor.check_task_counters(conn)
+        by_target = {a["target"]: a["id"] for a in alerts.open_alerts(conn, "incident")
+                    if a["source"] == "doctor.task_counter"}
+        self.assertEqual(set(by_target), {config.DEFAULT_TARGET, "sled"})
+
+        conn.execute("UPDATE task_counters SET next_number=10 WHERE target=?", ("sled",))
+        conn.commit()
+        doctor.check_task_counters(conn)
+
+        self.assertIsNone(
+            store.get_alert(conn, by_target[config.DEFAULT_TARGET])["ack_ts"],
+            "artel остаётся позади — ack не должен проставляться")
+        self.assertIsNotNone(store.get_alert(conn, by_target["sled"])["ack_ts"])
+
 
 class BackupAgeDegradedCheckTest(TmpRootTest):
     """SPEC T049, требование 6 (AC-4): `check_backup_age` больше не заводит
@@ -1229,6 +1252,45 @@ class AutoAckTest(TmpRootTest):
 
         self.assertIsNone(store.get_alert(store.db(), branch_alert["id"])["ack_ts"],
                           "авто-ack backup_age не должен трогать чужой source")
+
+
+class AutoAckGoneTargetFilterTest(TmpRootTest):
+    """tasks/T088/SPEC.md, требование 6: параметр `target` `_auto_ack_gone`
+    изолированно от прогона `recovery_check`/`check_task_counters` — свежий
+    источник, у которого несколько target держат открытый алерт того же
+    `source` одновременно, ack'ается только по своему target; старое
+    поведение (без `target`, как у сирот/leases/merge_lock/backup_age)
+    не меняется."""
+
+    def test_target_filter_leaves_other_targets_alone(self):
+        alerts.raise_alert(store.db(), "sled", "incident",
+                           "doctor.recovery.sha", "sled разошёлся")
+        alerts.raise_alert(store.db(), "crate", "incident",
+                           "doctor.recovery.sha", "crate разошёлся")
+        sled_id = [a for a in alerts.open_alerts(store.db(), "incident")
+                  if a["target"] == "sled"][0]["id"]
+        crate_id = [a for a in alerts.open_alerts(store.db(), "incident")
+                   if a["target"] == "crate"][0]["id"]
+
+        doctor._auto_ack_gone(store.db(), "doctor.recovery.sha",
+                              lambda _msg: False, target="crate")
+
+        self.assertIsNone(store.get_alert(store.db(), sled_id)["ack_ts"],
+                          "фильтр по target='crate' не должен задевать sled")
+        self.assertIsNotNone(store.get_alert(store.db(), crate_id)["ack_ts"])
+
+    def test_no_target_argument_keeps_matching_across_targets(self):
+        """Совместимость: вызовы без `target` (сироты/leases/merge_lock/
+        backup_age) продолжают ack'ать по всем target сразу."""
+        alerts.raise_alert(store.db(), "sled", "incident",
+                           "doctor.orphans.branch", "T001 (done): ветка t не убрана")
+        alerts.raise_alert(store.db(), "crate", "incident",
+                           "doctor.orphans.branch", "T002 (done): ветка t2 не убрана")
+
+        doctor._auto_ack_gone(store.db(), "doctor.orphans.branch", lambda _msg: False)
+
+        self.assertEqual(alerts.open_alerts(store.db(), "incident"), [],
+                         "без фильтра target ack обязан закрыть оба алерта источника")
 
 
 class LiveSmokeTest(TmpRootTest):

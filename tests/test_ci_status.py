@@ -461,6 +461,34 @@ class VerifyingStatusTest(unittest.TestCase):
         self.assertEqual(called, [], "run_list вызван, хотя check_runs уже ответил")
 
 
+class VerifyingIsRedTest(unittest.TestCase):
+    """`ci.verifying_is_red` (SPEC T086, требование 2): различает
+    завершённый красный CI от прочих трёх исходов `verifying_status` по
+    `note`, тем же приёмом, что `status_kind` для `note` `branch_status`
+    (`StatusKindTest` выше) — без повторного опроса `gh`."""
+
+    def test_red_note_is_red(self):
+        self.assertTrue(ci.verifying_is_red(
+            "CI коммита abc12345 не зелёный: python=failure"))
+
+    def test_green_note_is_not_red(self):
+        self.assertFalse(ci.verifying_is_red(
+            "CI коммита abc12345 зелёный (2 проверок)"))
+
+    def test_running_note_is_not_red(self):
+        self.assertFalse(ci.verifying_is_red(
+            "CI коммита abc12345 ещё идёт: python"))
+
+    def test_none_notes_are_not_red(self):
+        for note in (
+                "статус CI неизвестен: ветки нет",
+                "у коммита abc12345 нет ни одной проверки CI, и `gh run "
+                "list` по ветке task/t001-x не показывает запусков — "
+                "проверок нет вовсе"):
+            with self.subTest(note=note):
+                self.assertFalse(ci.verifying_is_red(note))
+
+
 class HeadShaTest(unittest.TestCase):
     """Sha головного коммита: спрашивается у git, пустой ответ — причина."""
 

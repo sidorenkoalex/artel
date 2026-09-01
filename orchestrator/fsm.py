@@ -1,6 +1,7 @@
 """Переходы автомата: advance по артефактам, approve/reject Оператора."""
 import subprocess
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 
 from scripts import guard
@@ -11,6 +12,31 @@ from . import (acceptance, alerts, artifacts, budget, ci, cleanup, config,
 
 # Регенерация/коммит карты кодовой базы на merge_gate (SPEC T042).
 MAP_REL = "docs/codebase-map.md"
+
+# Action журнала статуса CI, прочитанного в ветке `verifying` (ниже) —
+# общий текст с `orchestrator/auto.py` (SPEC T086, требование 1):
+# `_verifying_poll_note` там ищет среди записей журнала ИМЕННО этот
+# action, чтобы различить красный CI от «нет ответа»/«идёт», не опрашивая
+# `ci.verifying_status` второй раз за ту же итерацию цикла.
+VERIFYING_STATUS_ACTION = "статус CI ветки (verifying)"
+
+
+def _verifying_elapsed_seconds(updated_at: str) -> float:
+    """Секунды с момента входа в `verifying` (SPEC T086, требование 3):
+    `updated_at` последнего `set_state -> verifying` пишется с точностью
+    до микросекунд (`store.set_state`) — не секундным форматом `store.
+    now()` (`liveness._age_seconds` парсит именно его для heartbeat).
+    Второй формат разбирается тоже: строка `tasks.updated_at`, оставшаяся
+    от завода задачи (`store.insert_task` пишет её через `now()`), не
+    успевает смениться `set_state`-переходом там, где тест заводит
+    `verifying` в обход самих переходов FSM прямой записью в БД.
+    """
+    try:
+        entered = datetime.strptime(updated_at, "%Y-%m-%d %H:%M:%S.%fZ")
+    except ValueError:
+        entered = datetime.strptime(updated_at, "%Y-%m-%d %H:%M:%SZ")
+    return (datetime.now(timezone.utc) - entered.replace(
+        tzinfo=timezone.utc)).total_seconds()
 
 
 def _maybe_ensure_draft_mr(conn, task_id: str) -> None:
@@ -851,17 +877,20 @@ def _cmd_advance(conn, task_id: str) -> bool:
 
     elif state == "verifying":
         # Ожидание зелёного CI головного коммита ветки задачи (SPEC T079,
-        # требования 5-7; AC-5..AC-9). Четыре исхода различает
-        # `ci.verifying_status` (роадмап P3, T040): зелёный, «проверок нет
-        # вовсе», «проверки идут» (в т.ч. по gh run list), CI красный —
-        # только первый двигает задачу; остальные три ждут, различаясь
-        # только диагностикой в журнале (AC-6/AC-7/AC-8), пока не
-        # исчерпан потолок попыток (требование 6, AC-9). Ни один исход
-        # не создаёт коммитов и не «будит» CI (требование 5, AC-12).
+        # требования 5-7 + SPEC T086, требования 2-4). Четыре исхода
+        # различает `ci.verifying_status` (роадмап P3, T040): зелёный,
+        # «проверок нет вовсе», «проверки идут» (в т.ч. по gh run list),
+        # CI красный — трактовка не меняется относительно T079/ADR-0009:
+        # только зелёный двигает задачу, остальные три ждут, различаясь
+        # только диагностикой в журнале. Владелец опроса и его частота —
+        # теперь `auto` (orchestrator/auto.py, требование 1); этот вызов
+        # остаётся тем же ОДНИМ опросом что и раньше при ручном advance
+        # (требование 5, AC-8). Ни один исход не создаёт коммитов и не
+        # «будит» CI (требование 7, AC-10).
         branch = t["branch"]
         outcome, note = ci.verifying_status(branch)
         store.journal(conn, task_id, "orchestrator",
-                      "статус CI ветки (verifying)", note)
+                      VERIFYING_STATUS_ACTION, note)
         if outcome == ci.VERIFYING_GREEN:
             print(f"[{task_id}] {note}")
             store.set_state(conn, task_id, "acceptance", "fsm",
@@ -872,19 +901,22 @@ def _cmd_advance(conn, task_id: str) -> bool:
             _maybe_autogate_acceptance(conn, task_id, t, acc_tdir,
                                        t["reviewed_iter"])
             return False
-        attempts = (t["verifying_attempts"] or 0) + 1
-        if attempts >= config.LIMIT_VERIFYING_ATTEMPTS:
-            store.update_task(conn, task_id, verifying_attempts=0)
+        # Счётчик попыток остаётся информационной записью (требование 3,
+        # AC-7) — эскалацию решает только прошедшее время с момента входа
+        # в состояние, не число вызовов advance.
+        store.update_task(
+            conn, task_id, verifying_attempts=(t["verifying_attempts"] or 0) + 1)
+        elapsed = _verifying_elapsed_seconds(t["updated_at"])
+        if elapsed >= config.VERIFYING_CEILING_SEC:
             store.set_state(conn, task_id, "escalated", "fsm",
                             expected_state=state,
                             detail=f"потолок ожидания CI в verifying "
-                            f"исчерпан ({config.LIMIT_VERIFYING_ATTEMPTS} "
-                            f"попыток advance) — последний статус: {note}")
+                            f"исчерпан ({config.VERIFYING_CEILING_SEC}с) — "
+                            f"последний статус: {note}")
             print(f"[{task_id}] потолок ожидания CI исчерпан — эскалация")
         else:
-            store.update_task(conn, task_id, verifying_attempts=attempts)
             print(f"[{task_id}] {note} — жду "
-                 f"({attempts}/{config.LIMIT_VERIFYING_ATTEMPTS})")
+                 f"({int(elapsed)}с/{config.VERIFYING_CEILING_SEC}с)")
         return False
 
     elif state == "tests_writing":
