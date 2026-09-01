@@ -1,5 +1,5 @@
 ---
-built_at_sha: 9dc58a69cf4113face63a0cad49ca5da6bd6ed3a
+built_at_sha: 3b87add35c0889cc5ecf70337b50e912ceed1017
 ---
 
 # Codebase-map пульта
@@ -366,7 +366,7 @@ built_at_sha: 9dc58a69cf4113face63a0cad49ca5da6bd6ed3a
 
 **Публичные функции:** (нет)
 
-**Импортирует:** `orchestrator/ci.py`, `orchestrator/cleanup.py`, `orchestrator/config.py`, `orchestrator/fsm.py`, `orchestrator/fsm_postmerge.py`, `orchestrator/gitcmd.py`, `orchestrator/merge_lock.py`, `orchestrator/store.py`, `orchestrator/workspace.py`
+**Импортирует:** `orchestrator/ci.py`, `orchestrator/cleanup.py`, `orchestrator/config.py`, `orchestrator/fsm.py`, `orchestrator/fsm_postmerge.py`, `orchestrator/gitcmd.py`, `orchestrator/merge_lock.py`, `orchestrator/snapshot.py`, `orchestrator/store.py`, `orchestrator/workspace.py`
 
 **Импортируется:** `orchestrator/fsm.py`, `tests/test_merge_gate_ci_wait.py`
 
@@ -661,7 +661,7 @@ built_at_sha: 9dc58a69cf4113face63a0cad49ca5da6bd6ed3a
 
 **Импортирует:** `orchestrator/artifact_branch.py`, `orchestrator/config.py`, `orchestrator/fixation.py`, `orchestrator/gitcmd.py`, `orchestrator/retro.py`, `orchestrator/store.py`
 
-**Импортируется:** `orchestrator/cleanup.py`, `orchestrator/doctor.py`
+**Импортируется:** `orchestrator/cleanup.py`, `orchestrator/doctor.py`, `orchestrator/fsm_merge_gate.py`
 
 ## orchestrator/spend.py
 
@@ -694,6 +694,7 @@ built_at_sha: 9dc58a69cf4113face63a0cad49ca5da6bd6ed3a
 - `all_tasks`
 - `archive_alert`
 - `charge`
+- `closed_external_tasks`
 - `counter_targets`
 - `create_schema`
 - `db`
