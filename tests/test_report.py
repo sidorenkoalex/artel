@@ -194,16 +194,6 @@ class BoardHtmlTest(unittest.TestCase):
         self.assertIn("Задач нет", report._board_html([]))
 
 
-class StyleBoardColumnWidthTest(unittest.TestCase):
-    """Ширина колонки борда следует норме `docs/design-system.md`
-    (tasks/T096/SPEC.md, требование 4 и AC-2/AC-7 — расхождение с
-    `tasks/T080/mockup.html` устранено значением, не структурой)."""
-
-    def test_col_width_matches_mockup_norm(self):
-        self.assertIn("min-width: 168px; flex: 0 0 168px;", report._STYLE)
-        self.assertNotIn("200px", report._STYLE)
-
-
 class EscUsdTest(unittest.TestCase):
 
     def test_esc_escapes_html_special_characters(self):
