@@ -267,7 +267,7 @@ _STYLE = """
   .board { display: flex; gap: 12px; overflow-x: auto; padding-bottom: 6px; }
   .col {
     background: #fafbfc; border: 1px solid var(--border); border-radius: 8px;
-    min-width: 200px; flex: 0 0 200px; padding: 8px;
+    min-width: 168px; flex: 0 0 168px; padding: 8px;
     display: flex; flex-direction: column; gap: 8px;
   }
   .col-head { margin-bottom: 2px; }
