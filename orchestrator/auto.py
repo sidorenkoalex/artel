@@ -1,5 +1,7 @@
 """Цикл `auto`: run+advance, пока в шаге работает агент."""
-from . import agent_log, budget, config, fsm, lease, pause, runner, store
+import time
+
+from . import agent_log, budget, ci, config, fsm, lease, pause, runner, store
 
 # Действие журнала, которым отказ `advance` узнаётся вне зависимости от
 # конкретной причины (SPEC T038, требование 1): каждая точка `cmd_advance`
@@ -39,6 +41,54 @@ def _advance_refusal(conn, task_id: str, journaled_before: int) -> str | None:
         if row["actor"] == "fsm" and row["action"].startswith(REFUSAL_ACTION_PREFIX):
             return row["action"]
     return None
+
+
+def _verifying_poll_note(conn, task_id: str, journaled_before: int) -> str | None:
+    """Detail записи `fsm.VERIFYING_STATUS_ACTION`, добавленной ИМЕННО
+    последним `fsm.cmd_advance` (тот же приём отсечки, что и
+    `_advance_refusal` выше) — не самой свежей строки журнала вообще: тот
+    же вызов мог дописать и другую запись (переход состояния).
+
+    `None` — эта запись не появилась вовсе (не должно случиться при
+    штатной работе `fsm.cmd_advance` из `verifying`, но `_advance_
+    verifying_poll` обязана остаться безопасной и на такой исход).
+    """
+    for row in store.task_steps(conn, task_id)[journaled_before:]:
+        if row["action"] == fsm.VERIFYING_STATUS_ACTION:
+            return row["detail"]
+    return None
+
+
+def _advance_verifying_poll(conn, task_id: str, session_id: str) -> bool:
+    """Один advance-опрос CI в `verifying` внутри цикла `auto` (SPEC T086,
+    требование 1): не расходует `AUTO_MAX_STEPS` — пауза здесь ждёт
+    внешнее событие (CI), не выполняет шаг конвейера (требование 1, AC-2).
+
+    Опрос — тот же `fsm.cmd_advance`, что и ручной Оператор (требование 5
+    не меняется): зелёный CI уже увёл задачу в `acceptance` изнутри него,
+    исчерпанный потолок времени — в `escalated` (требования 3-4) — в
+    обоих случаях эта функция возвращает `False`, дальше решает вызывающий
+    цикл по новому `state`. Завершённый красный CI (требование 2, AC-4)
+    здесь же и останавливает цикл `auto` — задача остаётся в `verifying`,
+    подсказка называет `reject`; это ЕДИНСТВЕННЫЙ исход, где функция сама
+    печатает итог и возвращает `True` (цикл обязан остановиться немедленно,
+    не дожидаясь потолка времени). «Проверок нет»/«проверки идут» не
+    меняют состояние — функция засыпает на `VERIFYING_POLL_INTERVAL_SEC` и
+    возвращает `False`, вызывающий цикл повторит опрос.
+    """
+    journaled_before = len(store.task_steps(conn, task_id))
+    fsm.cmd_advance(task_id, session_id=session_id)
+    t = store.get_task(conn, task_id)
+    if t["state"] != "verifying":
+        return False
+    note = _verifying_poll_note(conn, task_id, journaled_before)
+    if note is not None and ci.verifying_is_red(note):
+        reason, hint = config.AUTO_STOP_VERIFYING_RED
+        auto_stop(conn, task_id, "verifying", f"{reason} — {note}",
+                  hint.format(id=task_id))
+        return True
+    time.sleep(config.VERIFYING_POLL_INTERVAL_SEC)
+    return False
 
 
 def auto_stop_advice(conn, task_id: str, state: str) -> tuple[str, str]:
@@ -111,7 +161,21 @@ def _cmd_auto(conn, task_id: str, session_id: str) -> None:
     # предыдущий шаг не был таким отказом, или это первый шаг цикла
     # (SPEC T038, требование 1).
     prev_refusal = None
-    while role is not None:
+    # `verifying` не входит в STATE_ROLE (нет агентской роли, SPEC T086) —
+    # условие цикла держит его отдельным дизъюнктом, не значением `role`:
+    # состояние достижимо и как стартовое для всего вызова, и как исход
+    # обычного шага изнутри цикла (review -> verifying при approved
+    # вердикте, ADR-0009) — второе разрешает войти в опрос, даже если
+    # `role` к этому моменту уже `None`.
+    while role is not None or state == "verifying":
+        if state == "verifying":
+            if _advance_verifying_poll(conn, task_id, session_id):
+                return
+            t = store.get_task(conn, task_id)
+            state = t["state"]
+            role = runner.step_role(t)
+            continue
+
         if steps >= config.AUTO_MAX_STEPS:
             auto_stop(conn, task_id, state,
                       f"лимит {config.AUTO_MAX_STEPS} шагов за вызов исчерпан",

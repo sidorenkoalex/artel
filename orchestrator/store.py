@@ -71,9 +71,28 @@ def now() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%SZ")
 
 
+class _AutoClosingConnection(sqlite3.Connection):
+    """Соединение, закрывающееся само при потере последней ссылки.
+
+    `db()` зовётся сотнями мест кодовой базы инлайн (`store.get_task(
+    store.db(), ...)`), без переменной, которую вызывающий код мог бы
+    закрыть явно (tasks/T090/SPEC.md, требование 1) — переписывать каждое
+    такое место несоразмерно требованию. `__del__` закрывает БД раньше,
+    чем её увидит С-уровневый деаллокатор `sqlite3.Connection` — именно
+    он печатает `ResourceWarning: unclosed database`, если объект
+    уничтожается незакрытым. CPython уничтожает нециклические объекты по
+    счётчику ссылок немедленно (не дожидаясь GC или выхода из процесса),
+    так что закрытие происходит на месте, а не «только за счёт завершения
+    процесса» — тем же путём для любой точки вызова `db()`.
+    """
+
+    def __del__(self):
+        self.close()
+
+
 def db() -> sqlite3.Connection:
     config.DB.parent.mkdir(exist_ok=True)
-    conn = sqlite3.connect(config.DB)
+    conn = sqlite3.connect(config.DB, factory=_AutoClosingConnection)
     conn.row_factory = sqlite3.Row
     enable_wal(conn)
     migrate(conn)
