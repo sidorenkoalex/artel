@@ -238,6 +238,43 @@ def _tz_arg(rest: list) -> str | None:
     return rest[idx + 1]
 
 
+_NEW_USAGE = 'new "<название>" [--tz <файл>]'
+
+
+def _parse_new_args(rest: list) -> tuple | None:
+    """Разбор argv `new` до вызова `catalog.cmd_new` (tasks/T102/SPEC.md):
+    нераспознанное (лишний позиционный, неизвестный флаг, название с `-`)
+    отказывает ДО расходования номера задачи и создания ветки — сегодня
+    `rest[0]` берёт первый токен названием безусловно, а всё остальное
+    молча теряется (T097 — «--help» стало названием, T098/T099 — путь
+    ТЗ, переданный позиционно, проигнорирован).
+
+    Возвращает `(title, tz_path)` либо `None` — сигнал «задачу не заводим»
+    (пустой `rest` или `-h`/`--help`: справка, не ошибка)."""
+    if not rest or rest[0] in ("-h", "--help"):
+        print(_NEW_USAGE)
+        return None
+    title = rest[0]
+    if title.startswith("-"):
+        sys.exit(f"Нераспознанный аргумент: {title}\n{_NEW_USAGE}")
+    tz_path = _tz_arg(rest)
+    remainder = rest[1:]
+    if "--tz" in remainder:
+        idx = remainder.index("--tz")
+        remainder = remainder[:idx] + remainder[idx + 2:]
+    if remainder:
+        sys.exit(f"Нераспознанный аргумент: {remainder[0]}\n{_NEW_USAGE}")
+    return title, tz_path
+
+
+def _cmd_new(rest: list) -> None:
+    parsed = _parse_new_args(rest)
+    if parsed is None:
+        return
+    title, tz_path = parsed
+    catalog.cmd_new(title, tz_path=tz_path)
+
+
 def _cmd_pause(rest: list) -> None:
     """`pause <id>` (T070) либо `pause --now <id>` (T074) — флаг перед id,
     тем же местом разбора, что уже держит команду `pause` в таблице
@@ -260,7 +297,7 @@ def main() -> None:
     cmd, rest = args[0], args[1:]
     table = {
         "init": lambda: catalog.cmd_init(),
-        "new": lambda: catalog.cmd_new(rest[0], tz_path=_tz_arg(rest)),
+        "new": lambda: _cmd_new(rest),
         "status": lambda: catalog.cmd_status(),
         "show": lambda: catalog.cmd_show(rest[0]),
         "advance": lambda: fsm.cmd_advance(rest[0]),
