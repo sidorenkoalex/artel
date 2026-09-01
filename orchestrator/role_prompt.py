@@ -1,0 +1,102 @@
+"""Миссия роли + бриф/ревью-пакет шага: сборка содержимого промпта, общего
+для всех ролей `cmd_run` (analyst/test_author/developer/reviewer).
+Перенесено из orchestrator/runner.py без изменения поведения (T091,
+декомпозиция диспетчеров fsm/runner).
+"""
+from . import brief, review
+
+
+def mission_brief_package(conn, task_id: str, t, role: str):
+    """(mission, brief_text, package) — `brief_text`/`package` — `None`,
+    когда роли соответствующий компонент не положен (та же комбинация,
+    что и раньше в теле `_cmd_run`: только `role == "review"` собирает
+    `package`, у остальных трёх ролей он всегда `None`)."""
+    task_ref = f"tasks/{task_id}"
+    package = None
+    brief_text = None
+    if role == "analyst":
+        mission = (
+            f"Роль: аналитик. Задача {task_id}, ветка {t['branch']} — уже "
+            f"выписана в этом рабочем каталоге (собственный worktree "
+            f"задачи, рабочая копия пульта его не видит). "
+            f"Основной вход — ТЗ Оператора, разработчик увидит задачу "
+            f"только после тебя. Карта кодовой базы — в БРИФЕ РОЛИ ниже.\n"
+            f"1) Прочитай {task_ref}/TZ.md.\n"
+            f"2) ТЗ достаточно — напиши {task_ref}/SPEC.md по "
+            f"templates/SPEC.md: критерии приёмки размечены AC-n строго "
+            f"из формулировок ТЗ, «не входит» — из его же границ, "
+            f"budget_usd по классу задачи и только вниз от дефолта, "
+            f"status: ready.\n"
+            f"3) ТЗ неясно или неполно — не домысливай: один батч всех "
+            f"вопросов в {task_ref}/QUESTIONS.md по templates/QUESTIONS.md, "
+            f"отсортированный по блокирующести, каждый — с вариантами "
+            f"и дефолтом. SPEC.md в этом случае не трогай — сам файл "
+            f"эскалирует задачу.\n"
+            f"4) Прогони scripts/guard.py на своём файле, закоммить в "
+            f"ветку. Код репозитория не трогай."
+        )
+        brief_text = brief.analyst_map_component(conn, task_id)
+    elif role == "test_author":
+        mission = (
+            f"Роль: автор приёмочных тестов. Задача {task_id}, ветка "
+            f"{t['branch']} — уже выписана в этом рабочем каталоге "
+            f"(собственный worktree задачи). Разработчик увидит задачу "
+            f"только после тебя —\n"
+            f"1) Прочитай {task_ref}/SPEC.md, раздел «Критерии приёмки» "
+            f"(AC-1, AC-2, …).\n"
+            f"2) Для каждого AC-n напиши unittest в "
+            f"{task_ref}/acceptance_tests/test_*.py, метод test_ac<n>_... — "
+            f"ТОЛЬКО из формулировки критерия.\n"
+            f"3) Критерий нельзя проверить тестом напрямую — пометь "
+            f"`# AC-n: manual — <причина>` (Оператор проверит на приёмке) "
+            f"или `# AC-n: skip — <причина>`.\n"
+            f"4) Критерий в принципе неисполним тестом — не изобретай "
+            f"компромисс: `# AC-n: escalate — <вопрос Оператору>`.\n"
+            f"5) Прогони `python3 -m unittest discover -s "
+            f"{task_ref}/acceptance_tests`, закоммить каталог в ветку. "
+            f"Код репозитория и SPEC.md НЕ трогай."
+        )
+        brief_text = brief.test_author_answer_component(conn, task_id)
+    elif role == "developer":
+        mission = (
+            f"Роль: разработчик. Задача {task_id}, ветка {t['branch']} — "
+            f"уже выписана в этом рабочем каталоге (собственный worktree "
+            f"задачи). SPEC задачи, карта кодовой базы и конвенции проекта "
+            f"— целиком в БРИФЕ РОЛИ ниже, отдельно их читать не нужно.\n"
+            f"1) Изучи бриф.\n"
+            f"2) Напиши {task_ref}/PLAN.md по templates/PLAN.md.\n"
+            f"3) Реализуй по плану + юнит-тесты. Если есть {task_ref}/REVIEW.md "
+            f"со статусом changes_requested — сначала закрой замечания. Если "
+            f"есть {task_ref}/acceptance_tests/ — они залочены (tasks/T023): "
+            f"код чинится под них, их правка — эскалация, не правка.\n"
+            f"4) Прогони scripts/guard.py на своих артефактах, закоммить всё "
+            f"в ветку, поставь PLAN.md status: ready. НЕ мержи."
+        )
+        brief_text = brief.developer_brief(conn, task_id)
+    else:
+        # номер, которого ждёт FSM: вердикт с прежним iteration он уже учёл
+        iteration = t["reviewed_iter"] + 1
+        mission = (
+            f"Роль: ревьювер. Задача {task_id}, ветка {t['branch']}. Свежий "
+            f"контекст: всё нужное для ревью уже собрано в РЕВЬЮ-ПАКЕТЕ ниже "
+            f"(SPEC, PLAN, прошлый REVIEW, форма вердикта, список изменённых "
+            f"файлов, diff). "
+            f"Работай от пакета, а не от обхода репозитория.\n"
+            f"Файлы сверх пакета читай точечно и только когда без них не "
+            f"проверить конкретное замечание; причину чтения называй в самом "
+            f"замечании. Права не сужены: тесты, guard и другие исполняемые "
+            f"проверки запускай, когда они доказывают или опровергают "
+            f"замечание.\n"
+            f"Проведи обе фазы review-checklist (гейт плана + ревью MR) и "
+            f"заполни {task_ref}/REVIEW.md по форме из пакета "
+            f"(iteration: {iteration}). Код НЕ правь — только "
+            f"REVIEW.md в ветке задачи."
+        )
+        # Sha предыдущего вердикта нужен только для инкрементального diff
+        # (iteration > 1) — на первой итерации журнал сравнивать не с чем,
+        # и чтение не тратится зря (T029, SPEC требования 1, 2, 3).
+        prev_sha = (review.previous_verdict_sha(conn, task_id)
+                   if iteration > 1 else "")
+        package = review.review_package(task_id, t["title"], t["branch"],
+                                        iteration=iteration, prev_sha=prev_sha)
+    return mission, brief_text, package

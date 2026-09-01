@@ -18,7 +18,7 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from orchestrator import catalog, ci, config, fsm, merge_lock, store  # noqa: E402
+from orchestrator import catalog, ci, config, fsm_merge_gate, merge_lock, store  # noqa: E402
 from tests.sandbox import TmpRootTest, capture  # noqa: E402
 
 RUNNING = (False, "CI коммита abc12345 ещё идёт: python")
@@ -80,8 +80,8 @@ class MergeGateCiWaitUnitTest(TmpRootTest):
         conn = store.db()
         start = time.monotonic()
         deadline = start + ceiling_sec
-        return fsm._wait_for_branch_ci_green(conn, self.TASK, "task/t001-zadacha",
-                                             start, deadline)
+        return fsm_merge_gate._wait_for_branch_ci_green(
+            conn, self.TASK, "task/t001-zadacha", start, deadline)
 
 
 class WaitLoopContinuesOnNonFinalStatusTest(MergeGateCiWaitUnitTest):
@@ -203,8 +203,8 @@ class OuterCycleDeadlineTest(MergeGateCiWaitUnitTest):
 
         with mock.patch.object(merge_lock, "acquire", fake_acquire), \
              mock.patch.object(merge_lock, "release", fake_release), \
-             mock.patch.object(fsm, "_cmd_approve_merge_gate", fake_body):
-            fsm._cmd_approve_merge_gate_cycle(
+             mock.patch.object(fsm_merge_gate, "_cmd_approve_merge_gate", fake_body):
+            fsm_merge_gate._cmd_approve_merge_gate_cycle(
                 store.db(), self.TASK, "sess-1", {"branch": "task/t001-zadacha"},
                 "merge_gate")
 
@@ -228,9 +228,9 @@ class OuterCycleDeadlineTest(MergeGateCiWaitUnitTest):
 
         with mock.patch.object(merge_lock, "acquire", lambda *a: None), \
              mock.patch.object(merge_lock, "release", lambda *a: None), \
-             mock.patch.object(fsm, "_cmd_approve_merge_gate", fake_body), \
-             mock.patch.object(fsm, "_wait_for_branch_ci_green", spying_wait):
-            fsm._cmd_approve_merge_gate_cycle(
+             mock.patch.object(fsm_merge_gate, "_cmd_approve_merge_gate", fake_body), \
+             mock.patch.object(fsm_merge_gate, "_wait_for_branch_ci_green", spying_wait):
+            fsm_merge_gate._cmd_approve_merge_gate_cycle(
                 store.db(), self.TASK, "sess-1", {"branch": "task/t001-zadacha"},
                 "merge_gate")
 

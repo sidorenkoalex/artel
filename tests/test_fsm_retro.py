@@ -1,8 +1,8 @@
-"""Юнит-тесты обвязки RETRO в orchestrator/fsm.py (SPEC T043):
+"""Юнит-тесты обвязки RETRO в orchestrator/fsm_postmerge.py (SPEC T043):
 некритичность провала, подбор killed-долгов, форма коммитов.
 
 Сквозной путь через `cmd_approve` целиком уже покрывают приёмочные тесты
-`tasks/T043/acceptance_tests/` — здесь `fsm._generate_and_commit_retro`
+`tasks/T043/acceptance_tests/` — здесь `fsm_postmerge._generate_and_commit_retro`
 по отдельности, тем же приёмом, что
 `tests/test_fsm_map_regen.py::RegenerateAndCommitMapTest`.
 """
@@ -14,7 +14,7 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from orchestrator import alerts, config, fsm, gitcmd, retro, store  # noqa: E402
+from orchestrator import alerts, config, fsm_postmerge, gitcmd, retro, store  # noqa: E402
 from tests.sandbox import TmpRootTest, fake_git  # noqa: E402
 
 
@@ -41,7 +41,7 @@ class GenerateAndCommitRetroTest(TmpRootTest):
             return subprocess.CompletedProcess(list(args), 0, "", "")
 
         with mock.patch.object(gitcmd, "git", fake_git):
-            fsm._generate_and_commit_retro(self.conn, self.TASK, "a" * 40)
+            fsm_postmerge._generate_and_commit_retro(self.conn, self.TASK, "a" * 40)
 
         self.assertTrue(retro.retro_path(self.TASK).exists())
         self.assertIn(("add", retro.retro_rel_path(self.TASK)), git_calls)
@@ -63,7 +63,7 @@ class GenerateAndCommitRetroTest(TmpRootTest):
         bad_root.write_text("x", encoding="utf-8")
         with mock.patch.object(config, "ROOT", bad_root), \
                 mock.patch.object(gitcmd, "git", fake_git):
-            fsm._generate_and_commit_retro(self.conn, self.TASK, "a" * 40)
+            fsm_postmerge._generate_and_commit_retro(self.conn, self.TASK, "a" * 40)
 
         self.assertEqual(git_calls, [])
         incidents = self.incidents()
@@ -78,7 +78,7 @@ class GenerateAndCommitRetroTest(TmpRootTest):
             return subprocess.CompletedProcess(list(args), 0, "", "")
 
         with mock.patch.object(gitcmd, "git", fake_git):
-            fsm._generate_and_commit_retro(self.conn, self.TASK, "a" * 40)
+            fsm_postmerge._generate_and_commit_retro(self.conn, self.TASK, "a" * 40)
 
         incidents = self.incidents()
         self.assertEqual(len(incidents), 1)
@@ -93,7 +93,7 @@ class GenerateAndCommitRetroTest(TmpRootTest):
             return subprocess.CompletedProcess(list(args), 0, "", "")
 
         with mock.patch.object(gitcmd, "git", fake_git):
-            fsm._generate_and_commit_retro(self.conn, self.TASK, "a" * 40)
+            fsm_postmerge._generate_and_commit_retro(self.conn, self.TASK, "a" * 40)
 
         incidents = self.incidents()
         self.assertEqual(len(incidents), 1)
@@ -112,7 +112,7 @@ class GenerateAndCommitRetroTest(TmpRootTest):
         with mock.patch.object(gitcmd, "git", fake_git), \
                 mock.patch.object(retro, "build_done",
                                   side_effect=RuntimeError("бум")):
-            fsm._generate_and_commit_retro(self.conn, self.TASK, "a" * 40)
+            fsm_postmerge._generate_and_commit_retro(self.conn, self.TASK, "a" * 40)
 
         self.assertFalse(retro.retro_path(self.TASK).exists())
         incidents = self.incidents()
@@ -134,7 +134,7 @@ class GenerateAndCommitRetroTest(TmpRootTest):
             return subprocess.CompletedProcess(list(args), 0, "", "")
 
         with mock.patch.object(gitcmd, "git", fake_git):
-            fsm._generate_and_commit_retro(self.conn, self.TASK, "a" * 40)
+            fsm_postmerge._generate_and_commit_retro(self.conn, self.TASK, "a" * 40)
 
         self.assertTrue(retro.retro_path(killed_id).exists())
         self.assertIn("kill switch",
@@ -152,7 +152,7 @@ class GenerateAndCommitRetroTest(TmpRootTest):
         retro.retro_path(killed_id).write_text("уже есть\n", encoding="utf-8")
 
         with mock.patch.object(gitcmd, "git", fake_git):
-            fsm._generate_and_commit_retro(self.conn, self.TASK, "a" * 40)
+            fsm_postmerge._generate_and_commit_retro(self.conn, self.TASK, "a" * 40)
 
         self.assertEqual(
             retro.retro_path(killed_id).read_text(encoding="utf-8"),
@@ -173,7 +173,7 @@ class GenerateAndCommitRetroTest(TmpRootTest):
             return subprocess.CompletedProcess(list(args), 0, "", "")
 
         with mock.patch.object(gitcmd, "git", fake_git):
-            fsm._generate_and_commit_retro(self.conn, self.TASK, "a" * 40)
+            fsm_postmerge._generate_and_commit_retro(self.conn, self.TASK, "a" * 40)
 
         debt_journal = "\n".join(
             f"{s['action']} {s['detail']}"
@@ -205,7 +205,7 @@ class GenerateAndCommitRetroTest(TmpRootTest):
         with mock.patch.object(gitcmd, "git", fake_git), \
                 mock.patch.object(retro, "build_killed",
                                   side_effect=RuntimeError("бум долга")):
-            fsm._generate_and_commit_retro(self.conn, self.TASK, "a" * 40)
+            fsm_postmerge._generate_and_commit_retro(self.conn, self.TASK, "a" * 40)
 
         debt_journal = "\n".join(
             f"{s['action']} {s['detail']}"
@@ -228,7 +228,7 @@ class GenerateAndCommitRetroTest(TmpRootTest):
             return subprocess.CompletedProcess(list(args), 0, "", "")
 
         with mock.patch.object(gitcmd, "git", fake_git):
-            fsm._generate_and_commit_retro(self.conn, self.TASK, "a" * 40)
+            fsm_postmerge._generate_and_commit_retro(self.conn, self.TASK, "a" * 40)
 
         commit_messages = [c for c in git_calls if c[0] == "commit"]
         self.assertEqual(len(commit_messages), 1)

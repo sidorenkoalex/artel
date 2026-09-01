@@ -1,13 +1,20 @@
-"""Запуск агента шага: промпт роли, окружение, попытки, исход, стоимость."""
+"""Запуск агента шага: промпт роли, окружение, попытки, исход, стоимость.
+
+Классификация ошибок попытки — `orchestrator/failure_classification.py`;
+WIP-чекпоинты рабочего дерева — `orchestrator/checkpoint.py`; сборка
+миссии/брифа/ревью-пакета роли — `orchestrator/role_prompt.py` (T091,
+декомпозиция диспетчеров fsm/runner). Здесь остаются запуск процесса
+агента, окружение/cwd/argv шага и сам цикл попыток `cmd_run`.
+"""
 import os
 import subprocess
 import sys
 import time
 from pathlib import Path
 
-from . import (agent_log, alerts, brief, budget, config, fixation, gitcmd,
-              keychain, lease, parallel_limit, pause, review, roles, spend,
-              store, workspace)
+from . import (agent_log, brief, budget, checkpoint, config, failure_classification,
+              fixation, gitcmd, keychain, lease, parallel_limit, pause,
+              review, role_prompt, roles, spend, store, workspace)
 
 # Идентичность коммитера, которую роль обязана унести с собой в свой HOME.
 # git читает эти переменные ПОВЕРХ конфига, поэтому перенос ровно двух пар
@@ -17,35 +24,6 @@ GIT_IDENTITY = (
     ("user.name", ("GIT_AUTHOR_NAME", "GIT_COMMITTER_NAME")),
     ("user.email", ("GIT_AUTHOR_EMAIL", "GIT_COMMITTER_EMAIL")),
 )
-
-# Эвристики ошибок агента (SPEC T082, требования 1-2): классификация по
-# подстроке в объединённом stdout+stderr провалившейся попытки, без учёта
-# регистра. Сигнатуры 1а/1б/«обрыв потока» — дословные, снятые Оператором
-# с логов инцидентов T043 (27.08) и T075-T078 (31.08); список класса 2
-# (session limit подписки) — версия 1, предположительная, без живого
-# инцидента (tasks/T082/ANSWER-1.md). Специфичные списки проверяются
-# раньше общего якоря «API Error:» (класс 1, «системный кандидат») —
-# иначе он перехватывал бы и их (требование 1, «страховка от промаха»).
-CLASS_1A_SIGNATURES = ("403", "failed to authenticate")
-CLASS_1B_SIGNATURES = ("connection refused", "connectionrefused")
-STREAM_BROKEN_SIGNATURE = "connection lost mid-response"
-SESSION_LIMIT_SIGNATURES = ("session limit", "usage limit", "5-hour limit",
-                            "resets at")
-SYSTEM_CANDIDATE_ANCHOR = "api error:"
-
-# Связка «транзиентное системное» (требование 3): auth/403, сетевой отказ
-# до API, «системный кандидат» — минутный бэкофф вместо секундного,
-# число попыток шага не меняется (инвариант 3). «Обрыв потока» в связку
-# НЕ входит — требование 3 её не называет, у неё свой путь (требование 5).
-TRANSIENT_SYSTEM_CLASSES = ("1a", "1b", "system_candidate")
-
-CLASS_LABELS = {
-    "1a": "класс 1а (auth/403)",
-    "1b": "класс 1б (сетевой отказ до API)",
-    "stream_broken": "обрыв потока",
-    "system_candidate": "класс 1, системный кандидат",
-    "session_limit": "класс 2 (session limit подписки)",
-}
 
 
 def _attempts_word(n: int) -> str:
@@ -60,71 +38,6 @@ def _attempts_word(n: int) -> str:
     if 2 <= last <= 4:
         return "попытки"
     return "попыток"
-
-
-def classify_attempt_failure(text: str) -> str | None:
-    """Класс отказа попытки по её тексту; `None` — нераспознанный (SPEC
-    T082, требования 1-2, критерии AC-1..AC-6).
-    """
-    lowered = text.lower()
-    if any(sig in lowered for sig in CLASS_1A_SIGNATURES):
-        return "1a"
-    if any(sig in lowered for sig in CLASS_1B_SIGNATURES):
-        return "1b"
-    if STREAM_BROKEN_SIGNATURE in lowered:
-        return "stream_broken"
-    if any(sig in lowered for sig in SESSION_LIMIT_SIGNATURES):
-        return "session_limit"
-    if SYSTEM_CANDIDATE_ANCHOR in lowered:
-        return "system_candidate"
-    return None
-
-
-def _attempt_output_text(log_path: Path) -> str:
-    """Полный текст лога ЭТОЙ попытки — `agent_log.new_agent_log` заводит
-    файл заново на каждый вызов `run_agent_once`, поэтому чтение целиком
-    (не хвоста) не подмешивает соседние попытки; классификатор смотрит на
-    объединённый stdout+stderr, а не на усечённый `log_tail`."""
-    try:
-        return log_path.read_text(encoding="utf-8", errors="replace")
-    except OSError:
-        return ""
-
-
-def _record_failure_classification(conn, task_id: str, role: str,
-                                    numbered: str, text: str) -> str | None:
-    """Классифицирует провалившуюся попытку, журналирует сырой текст
-    структурно (требование 6, AC-13) и заводит алерты классов «обрыв
-    потока»/2 (требования 4-5, AC-11, AC-12). Возвращает класс или `None`.
-    """
-    failure_class = classify_attempt_failure(text)
-    if failure_class is None:
-        return None
-    # Срез С ХВОСТА, не с головы (ревью T082 итерации 1, замечание major):
-    # причина падения — в конце вывода (тот же приём, что и `agent_log.
-    # log_tail`), а реалистичный лог попытки почти всегда длиннее
-    # LOG_TAIL_CHARS до совпавшей сигнатуры — головной срез её обрезал бы.
-    store.journal(conn, task_id, role, "agent failure classified",
-                  f"{numbered}: {CLASS_LABELS[failure_class]}; текст: "
-                  f"{text.strip()[-config.LOG_TAIL_CHARS:]}")
-    target = store.task_target(conn, task_id)
-    if failure_class == "stream_broken":
-        # Требование 5: алерт обязан открыться независимо от того, каким
-        # путём `spend.py` учёл (или не учёл) стоимость этой попытки —
-        # заводится здесь явно, а не внутри spend.charge_missing_result.
-        alerts.raise_alert(
-            conn, target, "incident", "spend.unknown_cost",
-            f"{task_id}/{role}: {numbered}, обрыв потока (Connection lost "
-            f"mid-response) — стоимость попытки не гарантированно "
-            f"восстановлена")
-    if failure_class == "session_limit":
-        # Триггер №15 (docs/triggers.md): счётчик частоты, не решение по
-        # кредам ролей — решение остаётся за Оператором.
-        alerts.raise_alert(
-            conn, target, "trigger", "triggers.md#15",
-            f"{task_id}/{role}: {numbered}, обнаружен лимит сессии "
-            f"подписки — триггер №15 (раздельные креды ролей)")
-    return failure_class
 
 
 def spawn_agent(cmd: list[str], **kwargs) -> subprocess.Popen:
@@ -302,94 +215,8 @@ def _cmd_run(conn, task_id: str) -> None:
         )
     except (OSError, UnicodeDecodeError) as exc:
         sys.exit(f"[{task_id}] скил роли {role} не прочитан: {exc}")
-    task_ref = f"tasks/{task_id}"
-    package = None
-    brief_text = None
-    if role == "analyst":
-        mission = (
-            f"Роль: аналитик. Задача {task_id}, ветка {t['branch']} — уже "
-            f"выписана в этом рабочем каталоге (собственный worktree "
-            f"задачи, рабочая копия пульта его не видит). "
-            f"Основной вход — ТЗ Оператора, разработчик увидит задачу "
-            f"только после тебя. Карта кодовой базы — в БРИФЕ РОЛИ ниже.\n"
-            f"1) Прочитай {task_ref}/TZ.md.\n"
-            f"2) ТЗ достаточно — напиши {task_ref}/SPEC.md по "
-            f"templates/SPEC.md: критерии приёмки размечены AC-n строго "
-            f"из формулировок ТЗ, «не входит» — из его же границ, "
-            f"budget_usd по классу задачи и только вниз от дефолта, "
-            f"status: ready.\n"
-            f"3) ТЗ неясно или неполно — не домысливай: один батч всех "
-            f"вопросов в {task_ref}/QUESTIONS.md по templates/QUESTIONS.md, "
-            f"отсортированный по блокирующести, каждый — с вариантами "
-            f"и дефолтом. SPEC.md в этом случае не трогай — сам файл "
-            f"эскалирует задачу.\n"
-            f"4) Прогони scripts/guard.py на своём файле, закоммить в "
-            f"ветку. Код репозитория не трогай."
-        )
-        brief_text = brief.analyst_map_component(conn, task_id)
-    elif role == "test_author":
-        mission = (
-            f"Роль: автор приёмочных тестов. Задача {task_id}, ветка "
-            f"{t['branch']} — уже выписана в этом рабочем каталоге "
-            f"(собственный worktree задачи). Разработчик увидит задачу "
-            f"только после тебя —\n"
-            f"1) Прочитай {task_ref}/SPEC.md, раздел «Критерии приёмки» "
-            f"(AC-1, AC-2, …).\n"
-            f"2) Для каждого AC-n напиши unittest в "
-            f"{task_ref}/acceptance_tests/test_*.py, метод test_ac<n>_... — "
-            f"ТОЛЬКО из формулировки критерия.\n"
-            f"3) Критерий нельзя проверить тестом напрямую — пометь "
-            f"`# AC-n: manual — <причина>` (Оператор проверит на приёмке) "
-            f"или `# AC-n: skip — <причина>`.\n"
-            f"4) Критерий в принципе неисполним тестом — не изобретай "
-            f"компромисс: `# AC-n: escalate — <вопрос Оператору>`.\n"
-            f"5) Прогони `python3 -m unittest discover -s "
-            f"{task_ref}/acceptance_tests`, закоммить каталог в ветку. "
-            f"Код репозитория и SPEC.md НЕ трогай."
-        )
-        brief_text = brief.test_author_answer_component(conn, task_id)
-    elif role == "developer":
-        mission = (
-            f"Роль: разработчик. Задача {task_id}, ветка {t['branch']} — "
-            f"уже выписана в этом рабочем каталоге (собственный worktree "
-            f"задачи). SPEC задачи, карта кодовой базы и конвенции проекта "
-            f"— целиком в БРИФЕ РОЛИ ниже, отдельно их читать не нужно.\n"
-            f"1) Изучи бриф.\n"
-            f"2) Напиши {task_ref}/PLAN.md по templates/PLAN.md.\n"
-            f"3) Реализуй по плану + юнит-тесты. Если есть {task_ref}/REVIEW.md "
-            f"со статусом changes_requested — сначала закрой замечания. Если "
-            f"есть {task_ref}/acceptance_tests/ — они залочены (tasks/T023): "
-            f"код чинится под них, их правка — эскалация, не правка.\n"
-            f"4) Прогони scripts/guard.py на своих артефактах, закоммить всё "
-            f"в ветку, поставь PLAN.md status: ready. НЕ мержи."
-        )
-        brief_text = brief.developer_brief(conn, task_id)
-    else:
-        # номер, которого ждёт FSM: вердикт с прежним iteration он уже учёл
-        iteration = t["reviewed_iter"] + 1
-        mission = (
-            f"Роль: ревьювер. Задача {task_id}, ветка {t['branch']}. Свежий "
-            f"контекст: всё нужное для ревью уже собрано в РЕВЬЮ-ПАКЕТЕ ниже "
-            f"(SPEC, PLAN, прошлый REVIEW, форма вердикта, список изменённых "
-            f"файлов, diff). "
-            f"Работай от пакета, а не от обхода репозитория.\n"
-            f"Файлы сверх пакета читай точечно и только когда без них не "
-            f"проверить конкретное замечание; причину чтения называй в самом "
-            f"замечании. Права не сужены: тесты, guard и другие исполняемые "
-            f"проверки запускай, когда они доказывают или опровергают "
-            f"замечание.\n"
-            f"Проведи обе фазы review-checklist (гейт плана + ревью MR) и "
-            f"заполни {task_ref}/REVIEW.md по форме из пакета "
-            f"(iteration: {iteration}). Код НЕ правь — только "
-            f"REVIEW.md в ветке задачи."
-        )
-        # Sha предыдущего вердикта нужен только для инкрементального diff
-        # (iteration > 1) — на первой итерации журнал сравнивать не с чем,
-        # и чтение не тратится зря (T029, SPEC требования 1, 2, 3).
-        prev_sha = (review.previous_verdict_sha(conn, task_id)
-                   if iteration > 1 else "")
-        package = review.review_package(task_id, t["title"], t["branch"],
-                                        iteration=iteration, prev_sha=prev_sha)
+    mission, brief_text, package = role_prompt.mission_brief_package(
+        conn, task_id, t, role)
     prompt = f"{mission}\n\n--- СКИЛЫ РОЛИ ---\n\n{skills}"
     if brief_text is not None:
         prompt = f"{prompt}\n\n{brief_text}"
@@ -428,7 +255,7 @@ def _cmd_run(conn, task_id: str) -> None:
             # системное» ниже, которую ретрай как раз должен пережидать).
             break
         if attempt < config.AGENT_ATTEMPTS:
-            if failure_class in TRANSIENT_SYSTEM_CLASSES:
+            if failure_class in failure_classification.TRANSIENT_SYSTEM_CLASSES:
                 # Требование 3/AC-7: связка 1а/1б/«системный кандидат» —
                 # минутный бэкофф, не секундный; число попыток не меняется.
                 backoff_sec = (config.TRANSIENT_SYSTEM_BACKOFF_SEC
@@ -564,225 +391,6 @@ def role_cwd(conn, task_id: str, target: str) -> Path:
     path = config.PROJECTS / target / "workspace"
     path.mkdir(parents=True, exist_ok=True)
     return path
-
-
-def commit_timeout_checkpoint(conn, task_id: str, role: str) -> str:
-    """WIP-чекпоинт ветки задачи при таймауте шага — без участия Оператора.
-
-    Таймаут обрывает шаг агента посреди работы (SPEC T041, «Контекст»):
-    до этой задачи незакоммиченный WIP оставался в рабочем дереве, и
-    сверка целостности на следующем `run` (`fixation.check_integrity`)
-    честно встречала грязную копию и уводила задачу в `escalated` —
-    рестарт решался только руками Оператора (прецеденты T022, T037).
-    Здесь ровно то же действие, что раньше делал Оператор вручную,
-    автоматически: `git add -A` + `git commit` поверх текущего рабочего
-    дерева (оно и есть ветка задачи — роль создаёт и выписывает её
-    первым действием миссии, до всякого таймаута).
-
-    Коммитит, только если реально есть что коммитить (AC-4 — пустой
-    коммит не заводится); ничего не коммитит и не журналит при отказе
-    git на любом из шагов, а не только при «нечего коммитить» — тихий
-    отказ здесь не хуже, чем при таймауте: `check_integrity` следующего
-    `run` увидит либо прежнее чистое состояние, либо ту же грязную
-    копию, что и до этой задачи, без нового способа сломаться.
-
-    Идентичность коммита — служебная (`fixation.FIXATION_AUTHOR_*`), тем
-    же приёмом, что уже применяет `fixation._fix_external` для коммита
-    фиксации внешнего target: это действие оркестратора, а не роли и не
-    Оператора, поэтому не берёт ни git-конфиг Оператора, ни авторство
-    роли. Все git-операции — через `gitcmd`, не через прямой
-    `subprocess`/`git` (SPEC требование 7).
-
-    Коммит легитимно сдвигает HEAD ветки задачи мимо `store.set_state` —
-    без повторной фиксации (`store.record_fixation`) следующий
-    `fixation.check_integrity` увидел бы этот сдвиг как расхождение sha
-    с зафиксированным на входе шага и увёл бы рестарт в инцидент
-    целостности, ровно то, от чего чекпоинт должен избавить (AC-2).
-    `check_integrity`/`fix()` при этом не меняются — фиксация читает их
-    как обычно, просто с уже сдвинутым sha.
-
-    Только догфуд (`target == config.DEFAULT_TARGET`, PLAN «Риски»,
-    REVIEW.md T041 итерации 1, замечание major). С SPEC T045 (`role_cwd`)
-    догфуд-роль работает в СОБСТВЕННОМ worktree задачи
-    (`workspace.path`), не в `config.ROOT`, — операции идут через
-    `gitcmd.in_repo(workspace.path(task_id), ...)`, тем же приёмом, что
-    `fixation._fix_dogfood` уже применяет к сверке чистоты worktree
-    (SPEC T048). Коммитить в `config.ROOT` было бы неверно вдвойне — либо
-    подхватило бы чужое незакоммиченное состояние главной копии под
-    сообщением этой задачи, либо ничего не нашло бы, оставив настоящий
-    WIP worktree'а нетронутым (класс-дефект T041×T045, докстринг
-    исправлен в T048 — до этой правки функция ошибочно била по ROOT).
-    Для внешнего target `check_integrity` смотрит не в workspace, а в
-    артефактный репозиторий `.artel/projects/<target>/` (`fixation.read`/
-    `_read_external`) — свой workspace ADR-0003 §4 вообще не коммитит
-    (тот же довод, что `fsm._dirty_refuses`), поэтому чекпоинт workspace'а
-    не решал бы исходную проблему AC-1/AC-2 для внешнего target. Пока
-    `targets.yaml` объявляет только догфуд (ADR-0003 3д, «особый случай
-    до A7»), эта ветка не задета вживую; расширение на внешний target —
-    отдельная задача поверх многотаргетной архитектуры фиксации, не
-    точечная правка этой функции.
-
-    Git-обвязка (`add -A` → `diff --cached --quiet` → `commit`) —
-    `_commit_worktree_change`, общая с `commit_step_artifacts` (SPEC
-    T059): обе функции отличаются только сообщением коммита, текстом
-    действия журнала и условием вызова (таймаут здесь, `rc == 0` там).
-    """
-    if store.task_target(conn, task_id) != config.DEFAULT_TARGET:
-        return ""
-    wt = workspace.path(task_id)
-    message = f"{task_id}: WIP-чекпоинт после таймаута шага {role}"
-    committed, sha = _commit_worktree_change(wt, message)
-    if not committed:
-        return ""
-    detail = f"{message} (sha {sha})" if sha else message
-    store.journal(conn, task_id, "orchestrator",
-                  "WIP-чекпоинт после таймаута шага", detail)
-    store.record_fixation(conn, task_id)
-    return detail
-
-
-def commit_abnormal_checkpoint(conn, task_id: str, role: str, cause: str) -> str:
-    """WIP-чекпоинт при аварийном завершении шага: rc != 0 или обрыв
-    stdout-пайпа без таймаута (SPEC T074, требование 3 — расширение
-    правила T041 «чекпоинт только на таймауте»: до этой задачи оба
-    случая оставляли WIP как есть — rc != 0 сознательно (T041, «не
-    входит»), обрыв пайпа с rc=0 попадал под безусловный успешный
-    `commit_step_artifacts` и получал сообщение обычного автокоммита,
-    неотличимое от штатного успеха шага (см. `tasks/T074/acceptance_tests/
-    test_ac9_checkpoint_on_abnormal_step_end.py`, докстринг модуля).
-
-    Сообщение и действие журнала несут слово «чекпоинт» (та же природа,
-    что `commit_timeout_checkpoint`) плюс `cause` — короткая пометка
-    причины («rc=1», «обрыв потока»), которую вызыватель формирует под
-    свой сценарий; `commit_timeout_checkpoint` не тронут — таймаут
-    остаётся отдельной веткой со своим прежним сообщением.
-
-    Остальное поведение — дословно `commit_timeout_checkpoint`: только
-    догфуд, коммитит, только если есть что коммитить, тихая деградация
-    без git, общая обвязка `_commit_worktree_change` (SPEC T059), повторная
-    фиксация (`store.record_fixation`) — тот же довод, что там.
-    """
-    if store.task_target(conn, task_id) != config.DEFAULT_TARGET:
-        return ""
-    wt = workspace.path(task_id)
-    message = f"{task_id}: WIP-чекпоинт после аварийного завершения шага {role} ({cause})"
-    committed, sha = _commit_worktree_change(wt, message)
-    if not committed:
-        return ""
-    detail = f"{message} (sha {sha})" if sha else message
-    store.journal(conn, task_id, "orchestrator",
-                  "WIP-чекпоинт после аварийного завершения шага", detail)
-    store.record_fixation(conn, task_id)
-    return detail
-
-
-def commit_pause_now_checkpoint(conn, task_id: str, role: str) -> str:
-    """WIP-чекпоинт при `pause --now` бегущего шага (SPEC T074,
-    требования 1 и 3): вызывается `orchestrator.pause.cmd_pause_now`
-    ПОСЛЕ того, как процесс шага уже прерван — оркестратор чекпоинтит
-    дерево worktree задачи так же, как при таймауте (T041/T059), но из
-    ДРУГОГО процесса (того, что выполняет саму `pause --now`), не из
-    того, что запускало шаг.
-
-    Сообщение коммита несёт литерал «pause --now» (SPEC, требование 1:
-    «пометка причины «pause --now»», AC-3) — им же, а не отдельным
-    словом «чекпоинт» в отрыве от причины, ищет пометку приёмочный тест
-    (`tasks/T074/acceptance_tests/
-    test_ac2_ac3_ac4_ac5_interrupt_sequence.py`).
-
-    Остальное — общая обвязка `_commit_worktree_change` (только догфуд,
-    коммитит только при реальном diff, тихая деградация без git,
-    `store.record_fixation` — та же фиксация, что не даёт следующему
-    `fixation.check_integrity` увидеть сдвиг HEAD как инцидент, AC-14).
-    """
-    if store.task_target(conn, task_id) != config.DEFAULT_TARGET:
-        return ""
-    wt = workspace.path(task_id)
-    message = f"{task_id}: WIP-чекпоинт pause --now (шаг {role} прерван)"
-    committed, sha = _commit_worktree_change(wt, message)
-    if not committed:
-        return ""
-    detail = f"{message} (sha {sha})" if sha else message
-    store.journal(conn, task_id, "orchestrator", "WIP-чекпоинт pause --now",
-                  detail)
-    store.record_fixation(conn, task_id)
-    return detail
-
-
-def commit_step_artifacts(conn, task_id: str, role: str) -> str:
-    """Автокоммит незакоммиченных артефактов роли по завершении успешного
-    шага (rc=0), до advance-логики (SPEC T059, требования 1-3).
-
-    Класс «роль завершила шаг rc=0, но не закоммитила артефакт»
-    повторился 10 раз (REVIEW.md T041, T044, T045, T048, T051, T052) —
-    каждый раз отказ `advance`, инцидент целостности и спасение
-    Оператором вручную (`git add && git commit`); спасённый Оператором
-    артефакт при этом был неотличим от роль-произведённого —
-    `author_role` лгал о происхождении (наблюдение ревьювера T052). Эта
-    функция делает то же самое действие сама, служебным коммитом
-    оркестраторского авторства (`fixation.FIXATION_AUTHOR_*`), а не
-    подделкой авторства роли: журнал несёт `actor=orchestrator`, тем же
-    правом, каким оркестратор уже коммитит фиксацию и WIP-чекпоинт
-    таймаута.
-
-    Коммитит, только если реально есть что коммитить: роль уже
-    закоммитила свои изменения сама → `_commit_worktree_change` не
-    находит застейдженного диффа, пустой коммит не заводится и запись в
-    журнал не пишется (требование 2). Молча отказывает при отказе git
-    на любом из шагов — та же деградация без git, что у
-    `commit_timeout_checkpoint` (требование 6).
-
-    Только догфуд (`target == config.DEFAULT_TARGET`) — тем же доводом,
-    что уже есть в докстринге `commit_timeout_checkpoint`: для внешнего
-    target собственная фиксация уже коммитит артефактный репозиторий
-    целиком на переходе FSM (`fixation._fix_external`), а свой
-    `workspace` внешний target вообще не коммитит (ADR-0003 §4) — новый
-    механизм не решал бы для него никакой проблемы.
-
-    `git add` ограничен путями worktree задачи целиком (требование 3):
-    `_commit_worktree_change` зовёт `gitcmd.in_repo(wt, "add", "-A")` —
-    `-A` без путей добавляет изменения всего рабочего дерева РЕПОЗИТОРИЯ
-    `wt` (её отдельного git-worktree, ветка задачи), не произвольного
-    дерева и не рабочей копии пульта (урок инцидента T048 с чужой
-    сессией пульта — здесь операции вообще не видят `config.ROOT`).
-    """
-    if store.task_target(conn, task_id) != config.DEFAULT_TARGET:
-        return ""
-    wt = workspace.path(task_id)
-    message = f"{task_id}: артефакты шага {role} (автокоммит оркестратора)"
-    committed, sha = _commit_worktree_change(wt, message)
-    if not committed:
-        return ""
-    detail = f"{message} (sha {sha})" if sha else message
-    store.journal(conn, task_id, "orchestrator",
-                  "автокоммит артефактов шага", detail)
-    store.record_fixation(conn, task_id)
-    return detail
-
-
-def _commit_worktree_change(wt: Path, message: str) -> tuple[bool, str]:
-    """(закоммичено, sha) — `add -A` + `commit` служебной идентичностью
-    В ЗАДАННОМ worktree; `закоммичено=False` — нечего коммитить или git
-    не ответил на любом из трёх шагов.
-
-    Общая обвязка `commit_timeout_checkpoint` и `commit_step_artifacts`
-    (SPEC T059) — обе отличаются только сообщением коммита и моментом
-    вызова, сама последовательность git-операций (и её деградация без
-    git) — одна на двоих.
-    """
-    added = gitcmd.in_repo(wt, "add", "-A")
-    if added.returncode != 0:
-        return False, ""
-    staged = gitcmd.in_repo(wt, "diff", "--cached", "--quiet")
-    if staged.returncode != 1:  # 0 — нечего коммитить, иное — git не ответил
-        return False, ""
-    commit = gitcmd.in_repo(
-        wt, "-c", f"user.name={fixation.FIXATION_AUTHOR_NAME}",
-        "-c", f"user.email={fixation.FIXATION_AUTHOR_EMAIL}",
-        "commit", "-q", "-m", message)
-    if commit.returncode != 0:
-        return False, ""
-    return True, gitcmd.head_sha(wt)
 
 
 def role_cmd() -> list[str]:
@@ -958,7 +566,7 @@ def run_agent_once(conn, task_id: str, role: str, prompt: str,
     if timed_out:
         # Чекпоинт — до журнала таймаута, чтобы рестарт, начатый сразу по
         # этой записи, уже видел чистое дерево (SPEC T041, требования 1–4).
-        commit_timeout_checkpoint(conn, task_id, role)
+        checkpoint.commit_timeout_checkpoint(conn, task_id, role)
         # «без ретрая» — чтобы читающий журнал не ждал попыток 2 и 3.
         timeout_min = f"{config.AGENT_TIMEOUT_SEC // 60} мин"
         store.journal(conn, task_id, role, "agent run TIMEOUT",
@@ -972,7 +580,7 @@ def run_agent_once(conn, task_id: str, role: str, prompt: str,
         # выше (SPEC T074, требование 3 — расширение правила T041: провал
         # по коду возврата тоже аварийное завершение шага, не только
         # таймаут). Сам провал/ретрай/эскалация ниже не меняются.
-        commit_abnormal_checkpoint(conn, task_id, role, f"rc={rc}")
+        checkpoint.commit_abnormal_checkpoint(conn, task_id, role, f"rc={rc}")
         reason = (f"rc={rc}, {numbered}{spent}; "
                   f"хвост {log_path}:\n{agent_log.log_tail(log_path)}")
         store.journal(conn, task_id, role, "agent run FAILED", reason)
@@ -980,8 +588,9 @@ def run_agent_once(conn, task_id: str, role: str, prompt: str,
         # тексту попытки (не по усечённому хвосту выше) — журналирует
         # сырой текст структурно и заводит алерты классов «обрыв
         # потока»/2, решение о бэкоффе/немедленном отказе — за `cmd_run`.
-        failure_class = _record_failure_classification(
-            conn, task_id, role, numbered, _attempt_output_text(log_path))
+        failure_class = failure_classification._record_failure_classification(
+            conn, task_id, role, numbered,
+            failure_classification._attempt_output_text(log_path))
         # В консоли хвост не повторяем: эти строки Оператор только что видел
         # вживую (перекачка пишет и в stdout, и в лог). В журнале он нужен —
         # `log <id>` читают потом, когда вывода на экране уже нет.
@@ -995,12 +604,12 @@ def run_agent_once(conn, task_id: str, role: str, prompt: str,
         # безусловный `commit_step_artifacts` ниже закоммитил бы тот же WIP
         # сообщением обычного успешного автокоммита, неотличимым от штатного
         # завершения шага (см. `commit_abnormal_checkpoint`, докстринг).
-        commit_abnormal_checkpoint(conn, task_id, role, "обрыв потока")
+        checkpoint.commit_abnormal_checkpoint(conn, task_id, role, "обрыв потока")
     else:
         # Автокоммит — до журнала завершения шага и до advance-логики
         # (SPEC T059, требование 1): роль может не успеть закоммитить свой
         # артефакт, а `advance` уже проверяет чистоту рабочей копии.
-        commit_step_artifacts(conn, task_id, role)
+        checkpoint.commit_step_artifacts(conn, task_id, role)
     store.journal(conn, task_id, role, "agent run finished",
                   f"rc={rc}, {numbered}{spent}")
     print(f"[{task_id}] {role} завершил (rc={rc}{spent}); "

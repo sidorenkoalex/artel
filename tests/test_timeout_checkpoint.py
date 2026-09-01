@@ -1,4 +1,4 @@
-"""Юнит-тесты `runner.commit_timeout_checkpoint` (tasks/T041/SPEC.md).
+"""Юнит-тесты `checkpoint.commit_timeout_checkpoint` (tasks/T041/SPEC.md).
 
 Приёмочные тесты (tasks/T041/acceptance_tests) проверяют критерии
 приёмки целиком через `cmd_run` с подложным процессом агента; здесь —
@@ -18,7 +18,7 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from orchestrator import fixation, gitcmd, runner, store  # noqa: E402
+from orchestrator import checkpoint, fixation, gitcmd, store  # noqa: E402
 from tests.test_git_fixation import RealPultGitTest  # noqa: E402
 
 
@@ -32,7 +32,7 @@ class CommitTimeoutCheckpointTest(RealPultGitTest):
         self.enter_in_dev()
         before = self.head()
 
-        detail = runner.commit_timeout_checkpoint(
+        detail = checkpoint.commit_timeout_checkpoint(
             store.db(), self.TASK, "developer")
 
         self.assertEqual(detail, "")
@@ -44,7 +44,7 @@ class CommitTimeoutCheckpointTest(RealPultGitTest):
         (self.task_dir() / "wip.md").write_text(
             "недописано\n", encoding="utf-8")
 
-        detail = runner.commit_timeout_checkpoint(
+        detail = checkpoint.commit_timeout_checkpoint(
             store.db(), self.TASK, "developer")
 
         # Коммит чекпоинта — в worktree задачи, не в ROOT (тот остаётся на
@@ -64,7 +64,7 @@ class CommitTimeoutCheckpointTest(RealPultGitTest):
         (self.task_dir() / "wip.md").write_text(
             "недописано\n", encoding="utf-8")
 
-        runner.commit_timeout_checkpoint(store.db(), self.TASK, "developer")
+        checkpoint.commit_timeout_checkpoint(store.db(), self.TASK, "developer")
 
         conn = store.db()
         self.assertIsNone(fixation.check_integrity(conn, self.TASK))
@@ -84,7 +84,7 @@ class CommitTimeoutCheckpointTest(RealPultGitTest):
             return real_git(*args)
 
         with mock.patch.object(gitcmd, "git", side_effect=side_effect):
-            return runner.commit_timeout_checkpoint(
+            return checkpoint.commit_timeout_checkpoint(
                 store.db(), self.TASK, "developer")
 
     def test_git_add_failure_commits_nothing_and_journals_nothing(self):
@@ -141,7 +141,7 @@ class CommitTimeoutCheckpointTest(RealPultGitTest):
         store.update_task(conn, self.TASK, target="another-target")
 
         with mock.patch.object(gitcmd, "git") as git_mock:
-            detail = runner.commit_timeout_checkpoint(
+            detail = checkpoint.commit_timeout_checkpoint(
                 conn, self.TASK, "developer")
 
         git_mock.assert_not_called()
@@ -151,7 +151,7 @@ class CommitTimeoutCheckpointTest(RealPultGitTest):
 
 
 class CommitAbnormalCheckpointTest(RealPultGitTest):
-    """Юнит-тесты `runner.commit_abnormal_checkpoint` (SPEC T074, требование
+    """Юнит-тесты `checkpoint.commit_abnormal_checkpoint` (SPEC T074, требование
     3 — расширение правила T041: чекпоинт не только на таймауте, но и на
     аварийном завершении шага, rc != 0/обрыв потока)."""
 
@@ -163,7 +163,7 @@ class CommitAbnormalCheckpointTest(RealPultGitTest):
         self.enter_in_dev()
         before = self.head()
 
-        detail = runner.commit_abnormal_checkpoint(
+        detail = checkpoint.commit_abnormal_checkpoint(
             store.db(), self.TASK, "developer", "rc=1")
 
         self.assertEqual(detail, "")
@@ -175,7 +175,7 @@ class CommitAbnormalCheckpointTest(RealPultGitTest):
         (self.task_dir() / "wip.md").write_text(
             "недописано\n", encoding="utf-8")
 
-        detail = runner.commit_abnormal_checkpoint(
+        detail = checkpoint.commit_abnormal_checkpoint(
             store.db(), self.TASK, "developer", "rc=1")
 
         subject = self.git_in_worktree("log", "-1", "--format=%s").strip()
@@ -193,7 +193,7 @@ class CommitAbnormalCheckpointTest(RealPultGitTest):
         (self.task_dir() / "wip.md").write_text(
             "недописано\n", encoding="utf-8")
 
-        runner.commit_abnormal_checkpoint(
+        checkpoint.commit_abnormal_checkpoint(
             store.db(), self.TASK, "developer", "обрыв потока")
 
         conn = store.db()
@@ -210,7 +210,7 @@ class CommitAbnormalCheckpointTest(RealPultGitTest):
         store.update_task(conn, self.TASK, target="another-target")
 
         with mock.patch.object(gitcmd, "git") as git_mock:
-            detail = runner.commit_abnormal_checkpoint(
+            detail = checkpoint.commit_abnormal_checkpoint(
                 conn, self.TASK, "developer", "rc=1")
 
         git_mock.assert_not_called()
@@ -220,7 +220,7 @@ class CommitAbnormalCheckpointTest(RealPultGitTest):
 
 
 class CommitPauseNowCheckpointTest(RealPultGitTest):
-    """Юнит-тесты `runner.commit_pause_now_checkpoint` (SPEC T074,
+    """Юнит-тесты `checkpoint.commit_pause_now_checkpoint` (SPEC T074,
     требования 1, 3 — чекпоинт `pause --now`, вызванный самой командой
     `orchestrator.pause.cmd_pause_now` из ДРУГОГО процесса, не из того,
     что исполняло прерванный шаг)."""
@@ -233,7 +233,7 @@ class CommitPauseNowCheckpointTest(RealPultGitTest):
         self.enter_in_dev()
         before = self.head()
 
-        detail = runner.commit_pause_now_checkpoint(
+        detail = checkpoint.commit_pause_now_checkpoint(
             store.db(), self.TASK, "developer")
 
         self.assertEqual(detail, "")
@@ -245,7 +245,7 @@ class CommitPauseNowCheckpointTest(RealPultGitTest):
         (self.task_dir() / "wip.md").write_text(
             "недописано\n", encoding="utf-8")
 
-        detail = runner.commit_pause_now_checkpoint(
+        detail = checkpoint.commit_pause_now_checkpoint(
             store.db(), self.TASK, "developer")
 
         subject = self.git_in_worktree("log", "-1", "--format=%s").strip()
@@ -261,7 +261,7 @@ class CommitPauseNowCheckpointTest(RealPultGitTest):
         (self.task_dir() / "wip.md").write_text(
             "недописано\n", encoding="utf-8")
 
-        runner.commit_pause_now_checkpoint(store.db(), self.TASK, "developer")
+        checkpoint.commit_pause_now_checkpoint(store.db(), self.TASK, "developer")
 
         conn = store.db()
         self.assertIsNone(fixation.check_integrity(conn, self.TASK))
@@ -277,7 +277,7 @@ class CommitPauseNowCheckpointTest(RealPultGitTest):
         store.update_task(conn, self.TASK, target="another-target")
 
         with mock.patch.object(gitcmd, "git") as git_mock:
-            detail = runner.commit_pause_now_checkpoint(
+            detail = checkpoint.commit_pause_now_checkpoint(
                 conn, self.TASK, "developer")
 
         git_mock.assert_not_called()
