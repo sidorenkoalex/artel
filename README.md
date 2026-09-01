@@ -25,8 +25,10 @@ test_author (приёмочные тесты до кода) и analyst (SPEC и�
 
 Ролей конвейера четыре: analyst, test_author, developer, reviewer
 (рамка ADR-0001 расширена A4/A5 — SPEC пишет analyst из свободного ТЗ
-Оператора, приёмочные тесты до кода пишет test_author). Все гейты
-по-прежнему ручные (`approve`/`reject`), один токен на все роли
+Оператора, приёмочные тесты до кода пишет test_author). Гейты
+spec_gate и merge_gate — ручные (`approve`/`reject`); acceptance
+умеет автопроход по политике gates.yaml (ADR-0007; с ADR-0010 —
+без привязки к программным порогам). Один токен на все роли
 (слоты в roles.yaml раздельные; разделение PAT — по триггеру №3 из
 docs/triggers.md).
 

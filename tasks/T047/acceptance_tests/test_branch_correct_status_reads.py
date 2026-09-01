@@ -81,6 +81,10 @@ schema_version: 2
 ## Вердикт
 
 approved
+
+## Проверено исполнением
+`python3 -m unittest discover -s tests` — зелёный (фикстура; секция
+обязательна для approved с T072 — дочинено Оператором 01.09, ANSWER T085).
 """
 
 REVIEW_CHANGES_REQUESTED = """---
