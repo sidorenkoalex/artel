@@ -45,7 +45,7 @@ from contextlib import redirect_stdout
 from pathlib import Path
 from unittest import mock
 
-from orchestrator import config, store
+from orchestrator import config, gitcmd, store
 
 # Все пути `config`, которые сегодня подменяет хотя бы одна песочница
 # (SPEC T037, AC-2) — порядок как в orchestrator/config.py.
@@ -308,6 +308,25 @@ class TmpRootTest(unittest.TestCase):
             patcher = mock.patch.object(config, attr, self._patched_path(attr))
             patcher.start()
             self.addCleanup(patcher.stop)
+
+        # `catalog.cmd_new` (A7, generic-путь, AC-5) для ЛЮБОГО target,
+        # включая self/артель, коммитит артефакты плотницки
+        # (`artifact_branch.write_commit`) — та функция зовёт
+        # `subprocess.run` НАПРЯМУЮ, минуя `gitcmd.git` и любой его мок
+        # (`fake_git` и подобные патчат другой атрибут). Без этого патча
+        # КАЖДЫЙ `cmd_new` в песочнице без настоящего git-репозитория в
+        # `self.root` падает `sys.exit` («git не ответил») ещё до
+        # сценария, который тест проверяет — `SpyRun` отвечает
+        # правдоподобным sha на `hash-object`/`write-tree`/`commit-tree`
+        # (не роняет коммит) и корректно типизирует stdout под `text=`
+        # вызывающего кода. Подклассы, которым нужен собственный мок
+        # `subprocess.run` (полный контроль над git-вызовами), патчат
+        # `gitcmd.subprocess.run` поверх после `super().setUp()` — снятие
+        # патчей идёт в LIFO-порядке штатным `addCleanup`.
+        self.git_spy = SpyRun()
+        spy_patcher = mock.patch.object(gitcmd.subprocess, "run", self.git_spy)
+        spy_patcher.start()
+        self.addCleanup(spy_patcher.stop)
 
     def _patched_path(self, attr: str) -> Path:
         return {
