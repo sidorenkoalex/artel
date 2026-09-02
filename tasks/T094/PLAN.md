@@ -432,6 +432,26 @@ ExternalTargetAdvanceIgnoresDirtyCheckTest`/
 откатывать нечего до заявки Оператора; применённый Оператором диф
 откатывается его собственным `git revert`.
 
+Постскриптум (подтяжка main, 35 коммитов позади — T097-T102, после
+итерации 3): `docs/codebase-map.md` регенерирован, конфликт импортов
+в `fsm_advance.py` (`shutil`/`artifact_source` этой ветки + `guard`
+T100 — реестр замечаний ревью) разрешён объединением, поведение обеих
+сторон сохранено. Подтяжка обнажила тот же класс дефекта, что и в
+итерации ULID-миграции (a0822b1): `test_agent_log.py::CmdRunLoggingTest`
+и четыре класса `test_step_cost.py` (`ChargeMissingResultTest`,
+`CmdRunCostTest`, `CmdRunPartialCostTest`, `CmdBudgetTest`) — тесты из
+T095, добавленные ДО ULID-миграции этой ветки — хардкодили
+`TASK = "T001"` и звали `cmd_new` через `self.capture` (отбрасывает
+возврат), не через `capture_new_task_id`; `cmd_new` при этом уже
+возвращает ULID, поэтому `self.TASK` не совпадал с реальной строкой
+БД. Починены тем же приёмом, что уже применён в
+`test_agent_failure.py`/`test_advance_guard.py`. Число «1191» выше по
+разделу — снимок на момент итерации 3, ДО этой подтяжки; актуальный
+прогон после неё: `tests/` — 1216 passed (полный набор, регресса нет),
+приёмочные тесты этой задачи — 27/28 (тот же экологический сбой
+token/live-smoke AC-15, не код — см. «Проверено исполнением»
+REVIEW.md итерации 2), `scripts/guard.py --all` — 353 файла, чисто.
+
 ## Риски
 1. **Лок acceptance_tests внешнего target не сверяется** (не новый
    регресс этой задачи — `fsm_advance.in_dev`, комментарий inline):
