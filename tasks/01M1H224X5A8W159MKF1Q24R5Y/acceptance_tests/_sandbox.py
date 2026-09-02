@@ -126,11 +126,23 @@ class ArtelSelfTargetSandbox(RealGitSandbox):
         SPEC — код задачи артели живёт в её собственной ветке пульта, как
         и до A7; вне объёма этой песочницы — только первичка АРТЕФАКТОВ
         уходит с диска main в артефактную ветку/M1) и возвращает чекаут на
-        `main`, откуда `approve` реально исполняется."""
+        `main`, откуда `approve` реально исполняется.
+
+        `git add <rel>` — ИМЕННО файл, не `-A`: песочница (в отличие от
+        боевого репозитория, `.gitignore` которого несёт `.artel/`, см.
+        корневой `.gitignore`) не коммитит игнор-файл, а `.artel/state.db`
+        к этому моменту уже существует на диске (`store.create_schema`
+        внутри `RealGitSandbox.setUp`) — слепой `-A` затянул бы его в
+        коммит кодовой ветки, и обратный `checkout` на `main` УДАЛИЛ бы
+        файл БД из рабочего дерева (git убирает файлы, трекнутые в ветке,
+        которую покидают, и отсутствующие в целевой — ровно то, что
+        обнаружилось при первом прогоне этого хелпера: `insert_task`
+        сразу после этой функции падал `no such table: tasks`, потому что
+        файла `.artel/state.db` на диске уже не было)."""
         self.checkout(branch, create=True)
         (self.root / rel).parent.mkdir(parents=True, exist_ok=True)
         (self.root / rel).write_text(text, encoding="utf-8")
-        self.git("add", "-A")
+        self.git("add", rel)
         self.git("commit", "-q", "-m", message)
         self.checkout(config.MAIN_BRANCH)
 
