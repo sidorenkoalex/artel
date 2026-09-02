@@ -17,7 +17,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-from . import alerts, config, gitcmd, store
+from . import alerts, config, context_package, gitcmd, store
 
 MAP_REL = "docs/codebase-map.md"
 CONVENTIONS_REL = "CLAUDE.md"
@@ -29,6 +29,11 @@ HEADER = "--- БРИФ РОЛИ ---"
 # мягкое значение кода, не инвариант: чтобы бриф не разбухал бесконтрольно
 # при частом топтании на одном состоянии.
 ADVANCE_REFUSAL_LIMIT = 5
+# Источник алерта «карта крупнее потолка файла брифа» (tasks/
+# 01M1GCN1FPSC1A6WK9WD1Q1V8X, AC-21): сигнал, что лимит пакета начал
+# жать — в отличие от пропуска артефакта конкретной задачи (AC-22),
+# который остаётся фактом описи и алерт не поднимает.
+MAP_OVERSIZED_ALERT_SOURCE = "brief.codebase_map_oversized"
 
 
 def component_hash(text: str) -> str:
@@ -146,6 +151,23 @@ def _journal_component(conn, task_id: str, role: str, label: str,
     return f"### {label}\n\n{text.strip()}\n"
 
 
+def _manifest_component(conn, task_id: str, role: str, label: str,
+                        text: str) -> str:
+    """То же журналирование, что `_journal_component`, но с описью и
+    дисциплиной размера брифа разработчика (tasks/
+    01M1GCN1FPSC1A6WK9WD1Q1V8X, AC-1/AC-2, требование 1): компонент под
+    потолком файла несёт путь/размер/sha256 в заголовке, крупнее — не
+    идёт в текст брифа целиком, только путь/размер/причина пропуска.
+
+    Не используется для analyst/test_author (SPEC «Не входит»: опись
+    требование 1 называет только бриф разработчика и ревью-пакет) —
+    те продолжают звать `_journal_component` напрямую.
+    """
+    store.journal(conn, task_id, role, "бриф: компонент",
+                  f"{label}: sha256={component_hash(text)}")
+    return context_package.render_component(label, text)
+
+
 def _artifact_source_branch(conn, task_id: str) -> tuple[str, bool]:
     """(ветка-источник `tasks/<id>/`, foreign) — общая точка входа для
     всех читателей брифа (SPEC T094, требование 10, AC-11 — реестр AC-1).
@@ -229,17 +251,21 @@ def _latest_answer_rel(task_id: str, branch: str, foreign: bool) -> str | None:
 
 
 def _answer_component(conn, task_id: str, role: str, branch: str,
-                      foreign: bool) -> str:
+                      foreign: bool, render=_journal_component) -> str:
     """Добавка брифа с текстом последнего ANSWER-n.md задачи (SPEC T075,
     AC-6) — пустая строка, если ответов ещё нет: канал не обязан
-    заполнять бриф, когда эскалации не было."""
+    заполнять бриф, когда эскалации не было.
+
+    `render` — как оформить кусок брифа (`_journal_component` по
+    умолчанию для analyst/test_author; `_manifest_component` для
+    developer, tasks/01M1GCN1FPSC1A6WK9WD1Q1V8X, AC-1)."""
     rel = _latest_answer_rel(task_id, branch, foreign)
     if rel is None:
         return ""
     text = _branch_or_disk_text(task_id, branch, rel, foreign)
     if text is None:
         return ""
-    return _journal_component(conn, task_id, role, f"tasks/{task_id}/{rel}", text)
+    return render(conn, task_id, role, f"tasks/{task_id}/{rel}", text)
 
 
 def _questions_component(conn, task_id: str, role: str, branch: str,
@@ -253,27 +279,59 @@ def _questions_component(conn, task_id: str, role: str, branch: str,
                               f"tasks/{task_id}/QUESTIONS.md", text)
 
 
+def _handle_map_size_alert(conn, task_id: str, map_text: str) -> None:
+    """Алерт «карта крупнее потолка файла брифа» (AC-21): docs/codebase-
+    map.md — ВСЕГДА включаемый компонент, его пропуск по потолку размера
+    файла (AC-2) — не факт описи, как у остальных компонентов задачи
+    (AC-22), а сигнал, что лимит пакета начал жать. Авто-закрывается тем
+    же паттерном, что T035/T088, когда карта снова умещается в потолок.
+    """
+    target = store.task_target(conn, task_id)
+    size = len(map_text.encode("utf-8"))
+    if size > config.CONTEXT_FILE_MAX_BYTES:
+        message = (f"{MAP_REL} превышает потолок файла брифа: {size} байт "
+                  f"> {config.CONTEXT_FILE_MAX_BYTES} байт — компонент "
+                  f"пропущен из брифа разработчика")
+        alerts.raise_alert(conn, target, "incident",
+                           MAP_OVERSIZED_ALERT_SOURCE, message)
+        return
+    for row in alerts.open_alerts(conn, "incident"):
+        if row["source"] == MAP_OVERSIZED_ALERT_SOURCE and row["target"] == target:
+            alerts.auto_ack(conn, row["id"])
+
+
 def developer_brief(conn, task_id: str) -> str:
     """Бриф роли developer: SPEC задачи + карта + конвенции проекта одним
     документом (требования 1, 3, 4, 8); ANSWER-n.md последней эскалации
     — если она была (SPEC T075, AC-6: ответ обязан дойти до роли, а не
-    только существовать в ветке)."""
+    только существовать в ветке).
+
+    Опись и дисциплина частей (tasks/01M1GCN1FPSC1A6WK9WD1Q1V8X,
+    требования 1-3, 7): каждый компонент несёт путь/размер/sha256 или
+    путь/размер/причину пропуска (AC-1/AC-2); итоговый текст крупнее
+    потолка части делится на пронумерованные части без потери хвоста
+    (AC-5/AC-6/AC-7).
+    """
     branch, foreign = _artifact_source_branch(conn, task_id)
     spec_text = _developer_spec_text(conn, task_id, branch, foreign)
     map_text = fresh_map_text(conn, task_id)
     conventions_text = (config.ROOT / CONVENTIONS_REL).read_text(
         encoding="utf-8")
+    _handle_map_size_alert(conn, task_id, map_text)
     parts = [
-        _journal_component(conn, task_id, "developer",
-                           f"tasks/{task_id}/SPEC.md", spec_text),
-        _journal_component(conn, task_id, "developer", MAP_REL, map_text),
-        _journal_component(conn, task_id, "developer", CONVENTIONS_REL,
-                           conventions_text),
+        _manifest_component(conn, task_id, "developer",
+                            f"tasks/{task_id}/SPEC.md", spec_text),
+        _manifest_component(conn, task_id, "developer", MAP_REL, map_text),
+        _manifest_component(conn, task_id, "developer", CONVENTIONS_REL,
+                            conventions_text),
     ]
-    answer_part = _answer_component(conn, task_id, "developer", branch, foreign)
+    answer_part = _answer_component(conn, task_id, "developer", branch,
+                                    foreign, render=_manifest_component)
     if answer_part:
         parts.append(answer_part)
-    return f"{HEADER}\n\n" + "\n".join(parts)
+    body = f"{HEADER}\n\n" + "\n".join(parts)
+    text, _ = context_package.discipline(body)
+    return text
 
 
 def advance_refusal_history(conn, task_id: str, role: str, state: str) -> str:

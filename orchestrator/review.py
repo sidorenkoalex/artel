@@ -1,7 +1,7 @@
 """Ревью-пакет: вход ревьювера собирает оркестратор, а не сам агент."""
 import re
 
-from . import config, gitcmd, store
+from . import config, context_package, gitcmd, store
 
 WORKTREE_NOTE = " (в ветке нет, показан файл из рабочего дерева)"
 
@@ -41,11 +41,25 @@ def artifact_part(label: str, text: str | None, note: str) -> str:
 
     Отсутствующий или нечитаемый файл — не пропуск, а строка с причиной:
     PLAN без файла сам по себе замечание, и ревьювер должен видеть это,
-    а не гадать, показали ли ему всё.
+    а не гадать, показали ли ему всё. Файл прочитан, но крупнее потолка
+    компонента (AC-2/AC-3, tasks/01M1GCN1FPSC1A6WK9WD1Q1V8X) — тело не
+    идёт в пакет, заголовок несёт причину пропуска вместо содержимого;
+    файл под потолком — заголовок несёт размер и sha256 (AC-1).
     """
     if text is None:
         return f"### {label}\n\n{note}\n"
-    return f"### {label}{note}\n\n{text.strip() or '(пусто)'}\n"
+    size = len(text.encode("utf-8"))
+    if size > config.CONTEXT_FILE_MAX_BYTES:
+        return (
+            f"### {label}{note} — {size} байт — пропущен: "
+            f"{context_package.FILE_CAP_REASON} (потолок "
+            f"{config.CONTEXT_FILE_MAX_BYTES} байт)\n\n"
+            f"[содержимое не показано — {context_package.FILE_CAP_REASON}; "
+            f"читай {label} адресно инструментом чтения]\n"
+        )
+    sha = context_package.sha256_of(text)
+    body = text.strip() or "(пусто)"
+    return f"### {label}{note} — {size} байт, sha256={sha}\n\n{body}\n"
 
 
 def git_diff_part(base: str, branch: str, *flags: str) -> tuple[str, int, str]:
@@ -76,41 +90,6 @@ def git_diff_part(base: str, branch: str, *flags: str) -> tuple[str, int, str]:
         reason = res.stderr.strip()[:200] or f"git diff вернул {res.returncode}"
         return f"(не собран: {reason})", 0, reason
     return res.stdout.strip() or "(изменений нет)", len(res.stdout.splitlines()), ""
-
-
-def truncate_diff(diff: str, lines: int) -> tuple[str, bool]:
-    """Diff под потолком строк и признак усечения.
-
-    Усечение помечается явно и с числами: ревьювер обязан знать, что судит
-    по части изменения, а сам размер — повод для замечания (SPEC T011, 2).
-    """
-    if lines <= config.REVIEW_DIFF_MAX_LINES:
-        return diff, False
-    kept = "\n".join(diff.splitlines()[:config.REVIEW_DIFF_MAX_LINES])
-    return (f"{kept}\n\n[diff усечён: показаны первые "
-            f"{config.REVIEW_DIFF_MAX_LINES} "
-            f"строк из {lines}. Изменение такого размера — само по себе повод "
-            f"для замечания о размере MR.]"), True
-
-
-def truncate_package(text: str) -> tuple[str, bool]:
-    """Пакет под байтовым потолком и признак усечения.
-
-    Режем весь собранный текст, а не только diff: diff идёт последним, так
-    что под нож попадает именно его хвост, и при этом отсечка держит бюджет
-    argv целиком, чем бы пакет ни раздулся (REVIEW_PACKAGE_MAX_BYTES).
-    """
-    raw = text.encode("utf-8")
-    if len(raw) <= config.REVIEW_PACKAGE_MAX_BYTES:
-        return text, False
-    # errors="ignore" — срез по байтам может разрубить символ пополам.
-    kept = raw[:config.REVIEW_PACKAGE_MAX_BYTES].decode("utf-8",
-                                                       errors="ignore")
-    return (f"{kept}\n\n[пакет усечён: показаны первые "
-            f"{config.REVIEW_PACKAGE_MAX_BYTES} байт из {len(raw)}, "
-            f"хвост (конец "
-            f"diff) не показан. Изменение такого размера — само по себе "
-            f"повод для замечания о размере MR.]"), True
 
 
 def previous_verdict_sha(conn, task_id: str) -> str:
@@ -172,7 +151,6 @@ def review_package(task_id: str, title: str, branch: str, *,
 
     stat, _, stat_failed = git_diff_part(base, branch, "--stat")
     diff, diff_lines, diff_failed = git_diff_part(base, branch)
-    diff, truncated = truncate_diff(diff, diff_lines)
 
     parts = [
         # Пакет вклеен в тот же промпт, что и миссия, и отделён от неё только
@@ -204,10 +182,15 @@ def review_package(task_id: str, title: str, branch: str, *,
             f"оценки замечания недостаточно — посмотри полный diff ветки "
             f"отдельно: `git diff {config.MAIN_BRANCH}...{branch}`.\n")
 
-    text, over_bytes = truncate_package("\n".join(parts))
+    body = "\n".join(parts)
+    # Замена прежнего `truncate_package`/`truncate_diff` (SPEC
+    # 01M1GCN1FPSC1A6WK9WD1Q1V8X, требования 3-4): пакет крупнее потолка
+    # части делится на пронумерованные части без потери хвоста, а не
+    # усекается молча (AC-5/AC-6/AC-9/AC-10).
+    text, parts_n = context_package.discipline(body)
     return {"text": text, "chars": len(text),
             "bytes": len(text.encode("utf-8")), "diff_lines": diff_lines,
-            "truncated": truncated, "over_bytes": over_bytes,
+            "parts": parts_n,
             "not_collected": diff_failed or stat_failed,
             # Артефакт не из ветки — расхождение дерева и diff; в журнале
             # оно объясняет странный вердикт без подъёма лога шага.
@@ -219,23 +202,22 @@ def review_package(task_id: str, title: str, branch: str, *,
 def package_note(package: dict) -> str:
     """Размер пакета для журнала: с ним стоимость прогона соотносима с входом.
 
-    Кроме размера в журнал идут обе отсечки и несобранный git: по этой
-    строке Оператор потом объясняет себе странный вердикт ревью, не
-    поднимая лог шага. Тип diff и номер итерации (T029, SPEC требования
-    7, 8) — той же строкой, когда пакет их несёт: по ним размеры итераций
-    сравнимы между собой в журнале одной задачи (требование 9). Пакет,
-    собранный вручную без этих полей (юнит-тесты `package_note` до T029),
-    получает строку старого формата — ключей нет, добавить нечего.
+    Кроме размера в журнал идут число частей (когда пакет поделён,
+    tasks/01M1GCN1FPSC1A6WK9WD1Q1V8X) и несобранный git: по этой строке
+    Оператор потом объясняет себе странный вердикт ревью, не поднимая лог
+    шага. Тип diff и номер итерации (T029, SPEC требования 7, 8) — той же
+    строкой, когда пакет их несёт: по ним размеры итераций сравнимы между
+    собой в журнале одной задачи (требование 9). Пакет, собранный вручную
+    без этих полей (юнит-тесты `package_note` до T029), получает строку
+    старого формата — ключей нет, добавить нечего.
     """
     note = (f"символов {package['chars']}, байт {package['bytes']}, "
             f"строк diff {package['diff_lines']}")
     if package.get("diff_type"):
         note += (f", diff {package['diff_type']}, "
                 f"итерация {package['iteration']}")
-    if package["truncated"]:
-        note += f", diff усечён до {config.REVIEW_DIFF_MAX_LINES} строк"
-    if package["over_bytes"]:
-        note += f", пакет усечён до {config.REVIEW_PACKAGE_MAX_BYTES} байт"
+    if package.get("parts"):
+        note += f", пакет поделён на {package['parts']} частей"
     if package["not_collected"]:
         note += f", diff не собран: {package['not_collected']}"
     if package["from_worktree"]:
