@@ -22,7 +22,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from orchestrator import (acceptance, catalog, config, fsm, gitcmd,  # noqa: E402
                           store, workspace)
-from tests.sandbox import capture, fake_git  # noqa: E402
+from tests.sandbox import capture, capture_new_task_id, fake_git  # noqa: E402
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
@@ -47,8 +47,6 @@ schema_version: 1
 
 
 class BranchFreshnessGateTest(unittest.TestCase):
-
-    TASK = "T001"
 
     def setUp(self):
         tmp = tempfile.TemporaryDirectory()
@@ -82,7 +80,7 @@ class BranchFreshnessGateTest(unittest.TestCase):
         self.addCleanup(wt_patcher.stop)
 
         self.capture(catalog.cmd_init)
-        self.capture(catalog.cmd_new, "Сверка свежести")
+        _, self.TASK = capture_new_task_id(catalog.cmd_new, "Сверка свежести")
         self.tdir = config.TASKS / self.TASK
         self.branch = self.task_row()["branch"]
 

@@ -25,7 +25,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from orchestrator import catalog, config, fsm, gitcmd, store, workspace  # noqa: E402
 from tests.sandbox import (ALL_CONFIG_ATTRS, TmpRootTest,  # noqa: E402
-                           resilient_tmp_cleanup)
+                           capture_new_task_id, resilient_tmp_cleanup)
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
@@ -102,8 +102,6 @@ class RealGitBranchTest(TmpRootTest):
     `tests/test_kill_cleanup.py`/`tests/test_acceptance_tests_flow.
     LockTest` этой же задачи."""
 
-    TASK = "T001"
-
     def setUp(self):
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(resilient_tmp_cleanup, tmp)
@@ -124,7 +122,8 @@ class RealGitBranchTest(TmpRootTest):
                 mock.patch.object(config, attr, self._patched_path(attr)))
 
         self.capture(catalog.cmd_init)
-        self.capture(catalog.cmd_new, "Ветко-корректные чтения статусов")
+        _, self.TASK = capture_new_task_id(
+            catalog.cmd_new, "Ветко-корректные чтения статусов")
         self.tdir = config.TASKS / self.TASK
         self.branch = store.get_task(store.db(), self.TASK)["branch"]
         self.wt_dir = workspace.path(self.TASK) / "tasks" / self.TASK

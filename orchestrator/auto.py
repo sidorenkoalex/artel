@@ -140,8 +140,12 @@ def cmd_auto(task_id: str, session_id: str | None = None) -> None:
     передаёт свой `session_id` во внутренние `run`/`advance` — те видят
     уже существующий lease своей же сессии и на каждом шаге его продлевают
     (требование 7), сами не отпуская (см. `orchestrator/lease.py`).
+
+    Префикс -> полный id (SPEC T094, требование 3, AC-3) резолвится ЗДЕСЬ,
+    до lease (REVIEW T094 итерация 1, замечание 1).
     """
     conn = store.db()
+    task_id = store.resolve_task_id(conn, task_id)
     lease.run_locked(conn, task_id, session_id,
                      lambda sid: _cmd_auto(conn, task_id, sid),
                      on_refusal="print")

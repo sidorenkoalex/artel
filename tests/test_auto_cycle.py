@@ -25,7 +25,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from orchestrator import (agent_log, auto, budget, catalog,  # noqa: E402
                           ci, config, fsm, gitcmd, pause, runner, store)
-from tests.sandbox import SpyRun, capture, fake_git  # noqa: E402
+from tests.sandbox import (SpyRun, capture,  # noqa: E402
+                           capture_new_task_id, fake_git)
 
 # Дефолтная CI-фикстура песочницы этого файла (SPEC T086): с этой задачи
 # `verifying` больше не безусловная остановка `auto` — он опрашивает CI
@@ -144,8 +145,6 @@ class SpyCommand:
 class AutoCycleTest(unittest.TestCase):
     """Песочница цикла: БД и артефакты во временном каталоге, агент подменён."""
 
-    TASK = "T001"
-
     def setUp(self):
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
@@ -191,7 +190,7 @@ class AutoCycleTest(unittest.TestCase):
         self.patch_object(runner, "cmd_run", self.agent)
 
         self.capture(catalog.cmd_init)
-        self.capture(catalog.cmd_new, "Цикл auto")
+        _, self.TASK = capture_new_task_id(catalog.cmd_new, "Цикл auto")
         self.tdir = config.TASKS / self.TASK
         # С SPEC T048 `cmd_new` пишет артефакты в worktree, не на диск
         # main — тесты этого файла кладут PLAN.md/REVIEW.md/... напрямую

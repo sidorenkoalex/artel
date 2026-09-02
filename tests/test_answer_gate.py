@@ -19,7 +19,7 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from orchestrator import catalog, config, fsm, gitcmd, store, workspace  # noqa: E402
-from tests.sandbox import capture, fake_git  # noqa: E402
+from tests.sandbox import capture, capture_new_task_id, fake_git  # noqa: E402
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
@@ -56,7 +56,6 @@ schema_version: 2
 
 class SecondEscalationRoundNeedsANewAnswerTest(unittest.TestCase):
 
-    TASK = "T001"
     capture = staticmethod(capture)
 
     def setUp(self):
@@ -88,7 +87,8 @@ class SecondEscalationRoundNeedsANewAnswerTest(unittest.TestCase):
         self.addCleanup(wt_patcher.stop)
 
         self.capture(catalog.cmd_init)
-        self.capture(catalog.cmd_new, "Гейт ответа — второй раунд")
+        _, self.TASK = capture_new_task_id(
+            catalog.cmd_new, "Гейт ответа — второй раунд")
         self.tdir = config.TASKS / self.TASK
 
     def state(self) -> str:

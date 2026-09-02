@@ -26,6 +26,8 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent.parent))
 
 from orchestrator import catalog, config, fsm, gitcmd, store  # noqa: E402
+from orchestrator import workspace  # noqa: E402
+from tests.sandbox import fake_git  # noqa: E402
 
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent.parent
 
@@ -115,12 +117,12 @@ changes_requested
 
 
 class RealGitBranchTest(unittest.TestCase):
-    """ROOT — свежий репозиторий с веткой main и заведённой задачей T001;
-    ветка задачи создаётся ролью (`git checkout -b`) уже после `cmd_new`,
-    как в реальном флоу — до этого момента она попросту не существует в
-    git (легитимный ранний момент жизни задачи, ADR-0003 3д)."""
-
-    TASK = "T001"
+    """ROOT — свежий репозиторий с веткой main и заведённой задачей (id —
+    ULID, SPEC T094 требование 2: `self.TASK` заполняется РЕАЛЬНЫМ
+    возвратом `cmd_new` в `setUp`, не литералом `T001`); ветка задачи
+    создаётся ролью (`git checkout -b`) уже после `cmd_new`, как в
+    реальном флоу — до этого момента она попросту не существует в git
+    (легитимный ранний момент жизни задачи, ADR-0003 3д)."""
 
     def setUp(self):
         tmp = tempfile.TemporaryDirectory()
@@ -140,11 +142,13 @@ class RealGitBranchTest(unittest.TestCase):
         for attr, value in (("ROOT", self.root),
                             ("DB", self.root / ".artel" / "state.db"),
                             ("TASKS", self.root / "tasks"),
-                            ("LOGS", self.root / ".artel" / "logs")):
+                            ("LOGS", self.root / ".artel" / "logs"),
+                            ("WORKTREES", self.root / ".artel" / "worktrees")):
             self.patches.enter_context(mock.patch.object(config, attr, value))
 
         self.capture(catalog.cmd_init)
-        self.capture(catalog.cmd_new, "Ветко-корректные чтения статусов")
+        with redirect_stdout(io.StringIO()):
+            self.TASK = catalog.cmd_new("Ветко-корректные чтения статусов")
         self.tdir = config.TASKS / self.TASK
         self.branch = store.get_task(store.db(), self.TASK)["branch"]
 
@@ -163,11 +167,22 @@ class RealGitBranchTest(unittest.TestCase):
         return buf.getvalue()
 
     def checkout(self, branch: str, create: bool = False) -> None:
+        """Переключает чекаут `self.root`. `cmd_new` (T048) уже завела
+        РЕАЛЬНЫЙ linked worktree на `self.branch` (`workspace.ensure`) —
+        git не даёт держать одну ветку разом в `self.root` и в linked
+        worktree, так что заход НА `self.branch` сначала убирает
+        воркдерево, а уход с неё — восстанавливает (тот же приём, что
+        tasks/T031/acceptance_tests/test_branch_correct_reads.py
+        `RealGitBranchTest.checkout`)."""
+        if branch == self.branch:
+            self.capture(workspace.remove, self.TASK)
         args = ["checkout", "-q"]
         if create:
             args.append("-b")
         args.append(branch)
         self.git(*args)
+        if branch != self.branch:
+            workspace.ensure(self.TASK, self.branch)
 
     # -- задача / состояние -------------------------------------------
 
@@ -198,8 +213,10 @@ class RealGitBranchTest(unittest.TestCase):
         """Артефакт коммитится на ВЕТКЕ задачи, рабочее дерево пульта
         остаётся на main (SPEC «Контекст», журнал T046/T045 27.08.2026):
         реалистичный расклад — до merge_gate ветка задачи в main не
-        мержится (ADR-0003)."""
-        self.checkout(self.branch, create=True)
+        мержится (ADR-0003). Ветка `self.branch` уже существует (её
+        завёл `cmd_new`/`workspace.ensure` в setUp) — без `create=True`,
+        иначе git отказал бы «уже существует»."""
+        self.checkout(self.branch)
         self.write(name, template)
         self.commit_task_dir(f"{name} задачи")
         self.checkout(config.MAIN_BRANCH)
@@ -235,6 +252,12 @@ class SpecWritingBranchRoutingTest(RealGitBranchTest):
 class ReviewBranchRoutingTest(RealGitBranchTest):
 
     def test_ac2_approved_verdict_on_task_branch_advances_to_acceptance(self):
+        """SPEC T079, требование 4 СУПЕРСЕДИРУЕТ буквальный «в acceptance»
+        этого имени (имя сохранено байт-в-байт — прецедент AC-7/T031:
+        тестовый метод не исчезает без ADR): `review -> acceptance`
+        обзавёлся промежуточным `verifying` (ожидание зелёного CI головы
+        ветки) — тело проверяет актуальный первый шаг того же
+        branch-корректного маршрута."""
         self.write_on_task_branch("REVIEW.md", REVIEW_APPROVED)
         self.set_state("review")
         self.assertEqual(
@@ -245,11 +268,12 @@ class ReviewBranchRoutingTest(RealGitBranchTest):
         self.capture(fsm.cmd_advance, self.TASK)
 
         self.assertEqual(
-            self.state(), "acceptance",
+            self.state(), "verifying",
             "рабочее дерево пульта на main, вердикт REVIEW.md (approved, "
             "iteration=1) закоммичен только на ветке задачи — advance "
-            "обязан перевести review -> acceptance по вердикту без "
-            "ручного чекаута Оператора (SPEC T047 AC-2)")
+            "обязан перевести review -> verifying по вердикту без "
+            "ручного чекаута Оператора (SPEC T047 AC-2, SPEC T079 "
+            "требование 4)")
 
     def test_ac2_changes_requested_verdict_on_task_branch_advances_to_in_dev(self):
         self.write_on_task_branch("REVIEW.md", REVIEW_CHANGES_REQUESTED)
@@ -271,10 +295,18 @@ class ReviewBranchRoutingTest(RealGitBranchTest):
 # (SPEC, требование 5).
 
 class NoTaskBranchDegradationTest(RealGitBranchTest):
-    """Настоящий git, но ветка задачи ещё НЕ создана ролью (ранний момент
-    жизни задачи, ADR-0003 3д) — артефакт лежит прямо на диске main,
-    как до T047; `on_foreign_branch` обязан деградировать в прежний путь
-    чтения с диска, потому что ветки задачи попросту нет в git."""
+    """Настоящий git; сценарий «ветки задачи ещё нет» — с T045 `cmd_new`
+    заводит worktree/ветку сразу (`workspace.ensure`, `_new_dogfood`),
+    естественного раннего момента жизни задачи без ветки (ADR-0003 3д,
+    как было до T045) больше не бывает — `setUp` ниже ВОСПРОИЗВОДИТ его
+    явным удалением: `on_foreign_branch` обязан деградировать в прежний
+    путь чтения с диска одинаково, естественно ветки нет или она удалена
+    явно — с точки зрения проверяемого кода разницы нет."""
+
+    def setUp(self):
+        super().setUp()
+        self.capture(workspace.remove, self.TASK)
+        self.git("branch", "-D", self.branch)
 
     def test_ac3_spec_writing_transition_unaffected_without_task_branch(self):
         self.assertFalse(
@@ -296,6 +328,10 @@ class NoTaskBranchDegradationTest(RealGitBranchTest):
             "как до T047 (SPEC, требование 5, AC-3)")
 
     def test_ac3_review_transition_unaffected_without_task_branch(self):
+        """SPEC T079, требование 4 СУПЕРСЕДИРУЕТ буквальный «в acceptance»
+        (см. тот же класс адаптации в `ReviewBranchRoutingTest.
+        test_ac2_approved_verdict_on_task_branch_advances_to_acceptance`
+        выше) — `verifying` вставлен между `review` и `acceptance`."""
         self.write("REVIEW.md", REVIEW_APPROVED)
         self.commit_task_dir("REVIEW.md на main — ветки задачи ещё нет")
         self.set_state("review")
@@ -303,20 +339,26 @@ class NoTaskBranchDegradationTest(RealGitBranchTest):
         self.capture(fsm.cmd_advance, self.TASK)
 
         self.assertEqual(
-            self.state(), "acceptance",
-            "ветка задачи ещё не создана в git — review -> acceptance "
+            self.state(), "verifying",
+            "ветка задачи ещё не создана в git — review -> verifying "
             "обязан работать прежним способом (чтение с диска), как до "
-            "T047 (SPEC, требование 5, AC-3)")
+            "T047 (SPEC, требование 5, AC-3; SPEC T079 требование 4)")
 
 
 class NoGitDegradationTest(unittest.TestCase):
-    """Песочница вовсе без реального git (`gitcmd.git` заглушен `None`,
-    тот же приём, что `tests/test_advance_guard.py`) — сценарий «песочницы
-    без git» из требования 5. `config.ROOT` не подменяется: `catalog.
-    cmd_new` читает реальный `templates/SPEC.md` этого репозитория, как и
-    в `test_advance_guard.py`."""
-
-    TASK = "T001"
+    """Песочница вовсе без РЕАЛЬНОГО git-репозитория (`gitcmd.git`
+    подменена лёгкой общей заглушкой `tests.sandbox.fake_git` — тот же
+    приём, что `tests/test_advance_guard.py`, SPEC T045/T048: `cmd_new`
+    заводит worktree/ветку плотницки поверх заглушки, полный отказ
+    git (`lambda *a: None`) роняет `cmd_new` уже в `setUp`, до сценария,
+    который тест проверяет) — сценарий «песочницы без git» из
+    требования 5: `gitcmd.on_foreign_branch` здесь всегда `False`
+    (`current_branch()` в заглушке пуста), branch-корректные чтения
+    обязаны деградировать к чтению с диска. `config.ROOT` не
+    подменяется: `catalog.cmd_new` читает реальный `templates/SPEC.md`
+    этого репозитория, как и в `test_advance_guard.py`. `self.TASK` —
+    реальный возврат `cmd_new` (SPEC T094 требование 2: id — ULID, не
+    предсказуемый литерал)."""
 
     def setUp(self):
         tmp = tempfile.TemporaryDirectory()
@@ -327,13 +369,15 @@ class NoGitDegradationTest(unittest.TestCase):
         self.addCleanup(self.patches.close)
         for attr, value in (("DB", root / ".artel" / "state.db"),
                             ("TASKS", root / "tasks"),
-                            ("LOGS", root / ".artel" / "logs")):
+                            ("LOGS", root / ".artel" / "logs"),
+                            ("WORKTREES", root / ".artel" / "worktrees")):
             self.patches.enter_context(mock.patch.object(config, attr, value))
         self.patches.enter_context(
-            mock.patch.object(gitcmd, "git", lambda *a: None))
+            mock.patch.object(gitcmd, "git", fake_git))
 
         self.capture(catalog.cmd_init)
-        self.capture(catalog.cmd_new, "Ветко-корректные чтения без git")
+        with redirect_stdout(io.StringIO()):
+            self.TASK = catalog.cmd_new("Ветко-корректные чтения без git")
         self.tdir = config.TASKS / self.TASK
 
     def capture(self, fn, *args) -> str:
@@ -367,16 +411,19 @@ class NoGitDegradationTest(unittest.TestCase):
             "диска), как до T047 (SPEC, требование 5, AC-3)")
 
     def test_ac3_review_transition_unaffected_without_git(self):
+        """SPEC T079, требование 4 СУПЕРСЕДИРУЕТ буквальный «в acceptance»
+        (тот же класс адаптации, что `ReviewBranchRoutingTest` выше)."""
         self.write("REVIEW.md", REVIEW_APPROVED)
         self.set_state("review")
 
         self.capture(fsm.cmd_advance, self.TASK)
 
         self.assertEqual(
-            self.state(), "acceptance",
-            "песочница без git (`gitcmd.git` не отвечает) — review -> "
-            "acceptance обязан работать прежним способом (чтение с "
-            "диска), как до T047 (SPEC, требование 5, AC-3)")
+            self.state(), "verifying",
+            "песочница без git (`gitcmd.git` — лёгкая заглушка без "
+            "реального репозитория) — review -> verifying обязан "
+            "работать прежним способом (чтение с диска), как до T047 "
+            "(SPEC, требование 5, AC-3; SPEC T079 требование 4)")
 
 
 # ---------------------------------------------------------------------

@@ -35,7 +35,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from orchestrator import (agent_log, catalog, cleanup, config,  # noqa: E402
                           gitcmd, store, workspace)
-from tests.sandbox import capture, resilient_tmp_cleanup  # noqa: E402
+from tests.sandbox import (capture, capture_new_task_id,  # noqa: E402
+                           resilient_tmp_cleanup)
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
@@ -44,8 +45,6 @@ class TmpRepoTest(unittest.TestCase):
     """Задача T001 в свежем временном репозитории с веткой main; `new`
     уже завела ветку/worktree задачи и закоммитила в них SPEC.md (SPEC
     T048) — main остаётся чистым."""
-
-    TASK = "T001"
 
     def setUp(self):
         tmp = tempfile.TemporaryDirectory()
@@ -72,7 +71,8 @@ class TmpRepoTest(unittest.TestCase):
             self.addCleanup(patcher.stop)
 
         self.capture(catalog.cmd_init)
-        self.capture(catalog.cmd_new, "Очистка хвостов задачи")
+        _, self.TASK = capture_new_task_id(
+            catalog.cmd_new, "Очистка хвостов задачи")
         self.branch = self.task_row()["branch"]
 
     # ------------------------------------------------------------ утилиты
@@ -192,7 +192,7 @@ class KillCleanupTest(TmpRepoTest):
     def test_unmerged_branch_is_removed_even_when_artifacts_are_in_main(self):
         """Условия требования 1 независимы: ветка ушла вперёд после мержа."""
         self.git("merge", "--no-ff", self.branch, "-m", "merge")
-        self.commit_more_in_worktree("tasks/T001/PLAN.md", "после мержа",
+        self.commit_more_in_worktree(f"tasks/{self.TASK}/PLAN.md", "после мержа",
                                      f"{self.TASK}: PLAN")
 
         self.capture(cleanup.cmd_kill, self.TASK)

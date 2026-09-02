@@ -3,6 +3,7 @@
 артефактов успешного шага (SPEC T059). Перенесено из orchestrator/runner.py
 без изменения поведения (T091, декомпозиция диспетчеров fsm/runner).
 """
+import shutil
 from pathlib import Path
 
 from . import config, fixation, gitcmd, store, workspace
@@ -174,22 +175,30 @@ def commit_step_artifacts(conn, task_id: str, role: str) -> str:
     на любом из шагов — та же деградация без git, что у
     `commit_timeout_checkpoint` (требование 6).
 
-    Только догфуд (`target == config.DEFAULT_TARGET`) — тем же доводом,
-    что уже есть в докстринге `commit_timeout_checkpoint`: для внешнего
-    target собственная фиксация уже коммитит артефактный репозиторий
-    целиком на переходе FSM (`fixation._fix_external`), а свой
-    `workspace` внешний target вообще не коммитит (ADR-0003 §4) — новый
-    механизм не решал бы для него никакой проблемы.
+    Догфуд (`target == config.DEFAULT_TARGET`): `git add` ограничен
+    путями worktree задачи целиком (требование 3) — `_commit_worktree_
+    change` зовёт `gitcmd.in_repo(wt, "add", "-A")` — `-A` без путей
+    добавляет изменения всего рабочего дерева РЕПОЗИТОРИЯ `wt` (её
+    отдельного git-worktree, ветка задачи), не произвольного дерева и не
+    рабочей копии пульта (урок инцидента T048 с чужой сессией пульта —
+    здесь операции вообще не видят `config.ROOT`).
 
-    `git add` ограничен путями worktree задачи целиком (требование 3):
-    `_commit_worktree_change` зовёт `gitcmd.in_repo(wt, "add", "-A")` —
-    `-A` без путей добавляет изменения всего рабочего дерева РЕПОЗИТОРИЯ
-    `wt` (её отдельного git-worktree, ветка задачи), не произвольного
-    дерева и не рабочей копии пульта (урок инцидента T048 с чужой
-    сессией пульта — здесь операции вообще не видят `config.ROOT`).
+    Внешний target (SPEC T094, требование 8, AC-9): роль-разработчик/
+    ревьювер/test_author пишет `tasks/<id>/` в СВОЙ рабочий каталог
+    (`runner.role_cwd` — клон КОДА целевого, `config.PROJECTS/<target>/
+    workspace/`, ADR-0003 §4) тем же способом, что и в догфуде — она не
+    знает об артефактной ветке пульта. `_commit_external_step_artifacts`
+    перекладывает то, что роль там написала, в артефактную ветку пульта
+    и убирает эти файлы из рабочего каталога целевого — без этого шага
+    первый же реальный шаг роли внешнего target нарушал бы требование 8
+    (было исправлено этой же задачей, REVIEW.md T094 итерация 1,
+    замечание 2: до правки функция безусловно пропускала любой target,
+    кроме self, — код роли-разработчика оставался лежать в клоне
+    целевого, ничем не перенесённый).
     """
-    if store.task_target(conn, task_id) != config.DEFAULT_TARGET:
-        return ""
+    target = store.task_target(conn, task_id)
+    if target != config.DEFAULT_TARGET:
+        return _commit_external_step_artifacts(conn, task_id, role, target)
     wt = workspace.path(task_id)
     message = f"{task_id}: артефакты шага {role} (автокоммит оркестратора)"
     committed, sha = _commit_worktree_change(wt, message)
@@ -198,6 +207,60 @@ def commit_step_artifacts(conn, task_id: str, role: str) -> str:
     detail = f"{message} (sha {sha})" if sha else message
     store.journal(conn, task_id, "orchestrator",
                   "автокоммит артефактов шага", detail)
+    store.record_fixation(conn, task_id)
+    return detail
+
+
+def _commit_external_step_artifacts(conn, task_id: str, role: str,
+                                    target: str) -> str:
+    """`commit_step_artifacts` для внешнего target (SPEC T094, требование
+    8, AC-9): `tasks/<id>/`, написанный ролью в её рабочем каталоге
+    (клон кода целевого), коммитится плотницки в артефактную ветку
+    пульта (`orchestrator/artifact_branch.py`, тот же приём, что уже
+    несёт `catalog._new_external_artifact_branch`) и убирается ОТТУДА —
+    следующий шаг роли не увидит чужого прошлого содержимого как своё
+    незакоммиченное, а кодовая ветка целевого не подхватит `tasks/<id>/`
+    ни одним будущим коммитом роли (требование 8: «кодовая ветка task/*
+    целевого свободна от артефактов задачи»).
+
+    Каталога нет или он пуст — роль ничего не написала на этом шаге
+    (например, чисто код без правки артефакта) — не отказ, тот же довод,
+    что и у догфудной ветки («нечего коммитить»).
+
+    Читает файлы БАЙТАМИ, не текстом (REVIEW.md T094 итерация 2,
+    замечание 1 — major): раньше `read_text(encoding="utf-8")` молча
+    пропускал (`continue`) любой не-UTF8/бинарный файл, а последующий
+    `shutil.rmtree` ниже удалял его с диска без следа, даже если он так
+    и не попал в артефактную ветку — асимметрия с self-путём
+    (`_commit_worktree_change`, настоящий `git add -A`, коммитит любые
+    байты). `artifact_branch.write_commit` принимает `bytes` наравне со
+    `str` — потери не осталось для ни одного файла, читаемого с диска.
+    """
+    from . import artifact_branch
+    workspace_root = config.PROJECTS / target / "workspace"
+    task_dir = workspace_root / "tasks" / task_id
+    if not task_dir.is_dir():
+        return ""
+    files = {}
+    for path in sorted(task_dir.rglob("*")):
+        if not path.is_file():
+            continue
+        rel = path.relative_to(workspace_root).as_posix()
+        try:
+            files[rel] = path.read_bytes()
+        except OSError:
+            continue
+    if not files:
+        return ""
+    message = f"{task_id}: артефакты шага {role} (автокоммит оркестратора)"
+    commit_sha = artifact_branch.commit_files(task_id, files, message)
+    if not commit_sha:
+        return ""
+    shutil.rmtree(task_dir, ignore_errors=True)
+    artifact_branch.push(task_id)
+    detail = f"{message} (артефактная ветка, sha {commit_sha})"
+    store.journal(conn, task_id, "orchestrator",
+                  "автокоммит артефактов шага (артефактная ветка)", detail)
     store.record_fixation(conn, task_id)
     return detail
 

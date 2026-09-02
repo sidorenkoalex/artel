@@ -62,8 +62,14 @@ def cmd_pause(task_id: str) -> None:
     Задача, уже приостановленная, — не ошибка (требование 9, AC-12):
     понятное сообщение вместо повторной записи в БД и журнал — молчаливый
     no-op, а не вторая запись о том же факте.
+
+    Префикс -> полный id (SPEC T094, требование 3, AC-3) резолвится ЗДЕСЬ,
+    до `update_task`/журнала — иначе `pause <префикс>` печатала бы успех,
+    физически не меняя ни одной строки (REVIEW T094 итерация 1, замечание
+    1).
     """
     conn = store.db()
+    task_id = store.resolve_task_id(conn, task_id)
     t = store.get_task(conn, task_id)
     if is_paused(t):
         print(f"[{task_id}] уже на паузе — pause ничего не делает")
@@ -82,8 +88,13 @@ def cmd_resume(task_id: str) -> None:
     Задача, не бывшая на паузе, — не ошибка (требование 9, AC-13):
     понятное сообщение, без записи в журнал (нечего снимать — не новый
     факт).
+
+    Префикс -> полный id (SPEC T094, требование 3, AC-3) резолвится ЗДЕСЬ,
+    тем же доводом, что у `cmd_pause` (REVIEW T094 итерация 1, замечание
+    1).
     """
     conn = store.db()
+    task_id = store.resolve_task_id(conn, task_id)
     t = store.get_task(conn, task_id)
     if not is_paused(t):
         print(f"[{task_id}] не была на паузе — resume ничего не делает")
@@ -157,8 +168,13 @@ def cmd_pause_now(task_id: str) -> None:
     прерывание вне объёма `pause --now`. Пометка паузы всё равно
     ставится (требование 1 безусловно) — команда явно вызывает `cmd_pause`
     и в этой ветке тоже.
+
+    Префикс -> полный id (SPEC T094, требование 3, AC-3) резолвится ЗДЕСЬ,
+    до `lease_row`/чекпоинта/журнала — весь дальнейший код функции читает
+    уже разрешённый `task_id` (REVIEW T094 итерация 1, замечание 1).
     """
     conn = store.db()
+    task_id = store.resolve_task_id(conn, task_id)
     t = store.get_task(conn, task_id)
 
     from . import runner

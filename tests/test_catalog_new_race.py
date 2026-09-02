@@ -19,7 +19,7 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from orchestrator import catalog, config, gitcmd, store  # noqa: E402
-from tests.sandbox import TmpRootTest, fake_git  # noqa: E402
+from tests.sandbox import TmpRootTest, capture_new_task_id, fake_git  # noqa: E402
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
@@ -42,10 +42,21 @@ class PeekTaskNumberRaceTest(TmpRootTest):
         self.capture(catalog.cmd_init)
 
     def test_branch_follows_real_task_id_not_stale_peek(self):
+        """SPEC T094, требование 2 СУПЕРСЕДИРУЕТ REVIEW T048 итерации 2:
+        id задачи — ULID (`idgen.new_task_id()`), не производная от
+        `store.next_task_number`/`peek_task_number` — гонка, которую этот
+        тест раньше ловил (branch считался от устаревшего peek, пока
+        next_task_number уже выдал следующее значение), структурно
+        невозможна: `cmd_new` эти функции для id/branch вообще не
+        вызывает. Имя метода сохранено байт-в-байт (прецедент AC-7/T031:
+        тестовый метод не исчезает без ADR) — тело проверяет актуальный
+        инвариант: branch всегда считается от РЕАЛЬНО возвращённого
+        task_id, даже если peek_task_number подделан на заведомо неверное
+        значение."""
         conn = store.db()
-        # Пять «конкурентных» задач забирают номера 1..5 напрямую через
-        # счётчик — peek этого теста после них устарел бы, если бы читался
-        # заранее (моделируем это ниже подменой на 1 меньше реального).
+        # Пять «конкурентных» задач всё ещё двигают legacy-счётчик
+        # (требование 6 — контур заморожен, не удалён) — на id/branch
+        # ниже это уже не влияет никак.
         for _ in range(5):
             store.next_task_number(conn, config.DEFAULT_TARGET)
 
@@ -53,21 +64,16 @@ class PeekTaskNumberRaceTest(TmpRootTest):
         with mock.patch.object(
                 store, "peek_task_number",
                 side_effect=lambda c, t: real_peek(c, t) - 1):
-            out = self.capture(catalog.cmd_new, "Задача под гонкой")
-
-        task_id = out.split("]")[0].strip("[")
-        self.assertEqual(task_id, "T006",
-                         "next_task_number должен выдать реальный номер 6")
+            _, task_id = capture_new_task_id(catalog.cmd_new, "Задача под гонкой")
 
         row = store.db().execute(
             "SELECT branch FROM tasks WHERE id=?", (task_id,)).fetchone()
         expected_branch = (
-            f"task/t006-{catalog.slugify('Задача под гонкой')}")
+            f"task/{task_id.lower()}-{catalog.slugify('Задача под гонкой')}")
         self.assertEqual(
             row["branch"], expected_branch,
-            "branch обязан считаться от реального task_id (T006), а не "
-            "от устаревшего peek-значения (T005) — гонка REVIEW T048 "
-            "итерации 2")
+            "branch обязан считаться от реального task_id (ULID) — "
+            "подделка peek_task_number не должна на него влиять")
 
         wt_dir = config.WORKTREES / task_id / "tasks" / task_id
         self.assertTrue((wt_dir / "SPEC.md").exists())

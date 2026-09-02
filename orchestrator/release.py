@@ -25,8 +25,12 @@ def cmd_release(task_id: str) -> None:
     этом случае не пишется — решению разработчика (AC-3): запись о
     снятии несуществующей строки не несла бы новой информации, которую
     не несёт уже сам факт отсутствия lease у задачи.
+
+    Префикс -> полный id (SPEC T094, требование 3, AC-3) резолвится ЗДЕСЬ,
+    до чтения `leases` (REVIEW T094 итерация 1, замечание 1).
     """
     conn = store.db()
+    task_id = store.resolve_task_id(conn, task_id)
     row = store.lease_row(conn, task_id)
     if row is None:
         print(f"[{task_id}] lease не заведён — снимать нечего")

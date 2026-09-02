@@ -59,7 +59,7 @@ from collections import namedtuple
 from pathlib import Path
 
 from . import (alerts, coldstart, config, gitcmd, liveness, projects, roles,
-              runner, spend, store, targets, workspace)
+              runner, snapshot, spend, store, targets, workspace)
 
 # status: "ok" | "warn" | "fail" | "skip" ("skip" — честный пропуск проверки,
 # требование 9: сверка forge-политики без `gh`/сети — не провал и не ок).
@@ -774,24 +774,21 @@ def check_backup_age(conn) -> Check:
 
 
 def check_task_counters(conn) -> Check:
-    """Счётчик номеров target'а не должен быть НИЖЕ наблюдаемого max
-    (SPEC T049, требование 3, ADR-0005 п.5) — иначе следующая заведённая
-    задача коллизирует номером с уже существующей где-то в мире. Дословно
-    требование 3: «≥» — здоровое состояние, не «строго больше» (та
-    гарантия — уже у `store.seed_task_counters`, AC-1).
+    """Контур счётчика номеров задач — замороженный legacy (SPEC T094,
+    требование 6; ADR-0005 п.5 правки этой же задачи): генератором id
+    стал ULID (`orchestrator/idgen.py`), `cmd_new` больше не расходует
+    `store.next_task_number` ни для одного target — коллизия номеров,
+    которую эта проверка когда-то ловила, для ULID структурно не
+    существует. Сверка деградирована до информационной (AC-7): статус
+    никогда не `fail`, алерт `doctor.task_counter` не заводится — только
+    дословная формулировка «счётчик не движется» в detail.
 
-    Каждый расхождение — именованный `incident`-алерт (`doctor.task_
-    counter`), тем же приёмом, что у `check_orphans`/`check_leases`.
-
-    Множество проверяемых target'ов — не только те, у кого уже есть
-    строка счётчика (`store.counter_targets`), но и все, объявленные
-    `targets.yaml` (REVIEW T049 итерации 1, замечание major): target
-    без строки счётчика — это ровно необнаруженный холодный старт,
-    который эта проверка обязана поймать, а не пропустить молча.
-
-    Авто-ack (SPEC T088, требования 5-6) зовётся на КАЖДОЙ итерации
-    цикла для своего target, независимо от исхода остальных target
-    этого же прогона (`_auto_ack_gone(..., target=target)`).
+    Полное удаление самого контура (`task_counters`, `seed_task_counters`,
+    `next_task_number`/`peek_task_number`) — отдельная мелочь после M1
+    (SPEC «Не входит»); эта функция лишь перестаёт его блокирующе
+    сверять. Прежний incident-алерт мог остаться открытым от прогона
+    до этой задачи — авто-ack безусловно закрывает его (условие
+    «ещё живо» теперь всегда `False`).
     """
     try:
         declared = targets.load()
@@ -799,23 +796,31 @@ def check_task_counters(conn) -> Check:
         declared = {}
     checked_targets = ({config.DEFAULT_TARGET} | store.counter_targets(conn)
                        | set(declared))
-    behind = []
     for target in sorted(checked_targets):
-        next_number = store.peek_task_number(conn, target)
-        observed = coldstart.observed_max_task_number(target)
-        is_behind = next_number < observed
-        if is_behind:
-            message = (f"{target}: счётчик номеров ({next_number}) ниже "
-                      f"наблюдаемого max ({observed}) — коллизия номеров "
-                      f"при следующей `new`")
-            alerts.raise_alert(conn, target, "incident",
-                              "doctor.task_counter", message)
-            behind.append(message)
-        _auto_ack_gone(conn, "doctor.task_counter",
-                      lambda _msg, is_behind=is_behind: is_behind, target=target)
-    if behind:
-        return Check("task-counters", "fail", "; ".join(behind))
-    return Check("task-counters", "ok", "счётчики ≥ наблюдаемого max")
+        _auto_ack_gone(conn, "doctor.task_counter", lambda _msg: False,
+                      target=target)
+    return Check("task-counters", "ok",
+                 "счётчик номеров задач заморожен как legacy (ULID — "
+                 "основной генератор, SPEC T094) — счётчик не движется")
+
+
+def check_pending_snapshots(conn) -> list[Check]:
+    """Дожимает недоставленные снапшоты закрытия (SPEC T094, требование
+    13, AC-15): задачи `done`/`killed` внешнего target'а, не канарейка,
+    чья артефактная ветка пульта ещё жива — снапшот не подтверждён в
+    origin целевого. Каждый прогон `doctor` пробует push заново; успех
+    убирает ветку тем же путём, что и повторный `kill`."""
+    checks = []
+    for row in store.closed_external_tasks(conn):
+        task_id = row["id"]
+        target = row["target"] or config.DEFAULT_TARGET
+        if not snapshot.pending(task_id):
+            continue
+        state = store.get_task(conn, task_id)["state"]
+        note = snapshot.publish_and_cleanup(conn, task_id, target, state)
+        status = "ok" if "опубликован" in note else "warn"
+        checks.append(Check(f"snapshot-pending:{task_id}", status, note))
+    return checks
 
 
 def check_remote_empty(target: str) -> Check:
@@ -893,6 +898,7 @@ def all_checks(conn) -> list[Check]:
         checks.append(check_base_branch(name, entry))
         checks.extend(recovery_check(conn, name))
 
+    checks.extend(check_pending_snapshots(conn))
     checks.extend(check_orphans(conn))
     checks.extend(check_leases(conn))
     checks.extend(check_merge_lock(conn))

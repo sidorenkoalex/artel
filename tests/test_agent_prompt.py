@@ -18,15 +18,14 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from orchestrator import catalog, config, gitcmd, runner, store  # noqa: E402
-from tests.sandbox import (FakeProc, capture, fake_git,  # noqa: E402
-                           seed_developer_brief_fixtures, sync_spec_from_worktree)
+from tests.sandbox import (FakeProc, capture, capture_new_task_id,  # noqa: E402
+                           fake_git, seed_developer_brief_fixtures,
+                           sync_spec_from_worktree)
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
 
 class PromptChannelTest(unittest.TestCase):
-
-    TASK = "T001"
 
     def setUp(self):
         tmp = tempfile.TemporaryDirectory()
@@ -80,7 +79,10 @@ class PromptChannelTest(unittest.TestCase):
         self.addCleanup(pf_patcher.stop)
 
         self.capture(catalog.cmd_init)
-        self.capture(catalog.cmd_new, "Канал промпта")
+        # `cmd_new` возвращает id ULID (SPEC T094, требование 2), больше не
+        # предсказуемый "T001" — забираем реальный через
+        # `capture_new_task_id`, а не `self.capture` (та отбрасывает возврат).
+        _, self.TASK = capture_new_task_id(catalog.cmd_new, "Канал промпта")
         sync_spec_from_worktree(self.TASK)
 
     # ------------------------------------------------------------ утилиты

@@ -29,7 +29,7 @@ from orchestrator import (acceptance, catalog, config, fsm,  # noqa: E402
                           gitcmd, runner, store, workspace)
 from scripts import guard  # noqa: E402
 from tests.sandbox import (FakeProc, TmpRootTest, capture,  # noqa: E402
-                           fake_git, resilient_tmp_cleanup)
+                           capture_new_task_id, fake_git, resilient_tmp_cleanup)
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
@@ -201,7 +201,6 @@ class _AcceptanceFlowTmpRootTest(TmpRootTest):
     настоящий `templates/SPEC.md`, только уже из песочницы.
     """
 
-    TASK = "T001"
     PATCHED_ATTRS = ("DB", "TASKS", "LOGS", "ROLE_HOME", "ROLE_CONFIG_DIR",
                      "WORKTREES", "ROOT")
 
@@ -214,7 +213,8 @@ class _AcceptanceFlowTmpRootTest(TmpRootTest):
         self.addCleanup(patcher.stop)
 
         self.capture(catalog.cmd_init)
-        self.capture(catalog.cmd_new, "Приёмочные тесты до кода")
+        _, self.TASK = capture_new_task_id(catalog.cmd_new,
+                                           "Приёмочные тесты до кода")
         self.tdir = config.TASKS / self.TASK
         self.tdir.mkdir(parents=True, exist_ok=True)
 
@@ -925,8 +925,6 @@ class LockTest(unittest.TestCase):
     заглушкой этого не изобразить (см. `RealPultGitTest`, test_git_fixation.py).
     """
 
-    TASK = "T001"
-
     def setUp(self):
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(resilient_tmp_cleanup, tmp)
@@ -951,7 +949,8 @@ class LockTest(unittest.TestCase):
         self.addCleanup(self.patches.stop)
 
         self.capture(catalog.cmd_init)
-        self.capture(catalog.cmd_new, "Лок приёмочных тестов")
+        _, self.TASK = capture_new_task_id(catalog.cmd_new,
+                                           "Лок приёмочных тестов")
         # С SPEC T048 `cmd_new` сам заводит РЕАЛЬНУЮ ветку/worktree и
         # коммитит в них — ROOT (`self.root`) остаётся на main (требование
         # 4), так что дальнейшие артефакты этого теста коммитятся В

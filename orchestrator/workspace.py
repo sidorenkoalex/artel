@@ -101,8 +101,14 @@ def cmd_workspace(task_id: str, session_id: str | None = None) -> None:
     же мутирующая команда задачи, как и остальные (без lease — гонка с
     параллельной сессией, держащей задачу в `auto`/`run`, на один и тот
     же `git worktree add`, review T045 итерация 1, замечание 1).
+
+    Префикс -> полный id (SPEC T094, требование 3, AC-3) резолвится ЗДЕСЬ,
+    до lease — иначе `workspace <префикс>` заводит/ищет worktree по
+    несовпадающему с остальной системой ключу (REVIEW T094 итерация 1,
+    замечание 1).
     """
     conn = store.db()
+    task_id = store.resolve_task_id(conn, task_id)
     lease.run_locked(conn, task_id, session_id,
                      lambda sid: _cmd_workspace(conn, task_id))
 
