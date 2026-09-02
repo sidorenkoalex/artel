@@ -1,10 +1,59 @@
 """Наблюдаемость шага: файлы логов прогонов и перекачка вывода агента."""
 import json
+import platform
+import subprocess
 import sys
 import threading
 from pathlib import Path
 
 from . import config, spend
+
+# «Единицы секунд» (SPEC T101, требование 2) — тот же порядок, что уже
+# использует `orchestrator/doctor.py::cli_version` (10с) для того же
+# внешнего вызова claude CLI; здесь короче, поскольку и git, и claude
+# снимаются на каждом журнальном событии до первого попадания в кэш —
+# два подвисших вызова подряд не должны заметно задерживать сам шаг.
+ENV_FINGERPRINT_TIMEOUT_SEC = 5
+
+_environment_fingerprint_cache: str | None = None
+
+
+def _tool_version_text(cmd: list) -> str:
+    """Сырой вывод `<бинарь> --version`; "недоступно: <причина>" — бинарь
+    не найден, внешний вызов подвис или вернул ненулевой код (SPEC T101,
+    требование 2). Ошибка ЭТОГО поля не мешает снятию остальных."""
+    try:
+        res = subprocess.run(cmd, capture_output=True, text=True,
+                             timeout=ENV_FINGERPRINT_TIMEOUT_SEC)
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        return f"недоступно: {exc}"
+    if res.returncode != 0:
+        return f"недоступно: rc={res.returncode}"
+    text = (res.stdout or res.stderr or "").strip()
+    return text if text else "недоступно: пустой вывод"
+
+
+def environment_fingerprint() -> str:
+    """Fingerprint окружения шага: интерпретатор Python, версии git и
+    claude CLI (SPEC T101, требование 1) — как часть значения поля
+    `detail` существующих журнальных событий (требование 4-5), без
+    новых таблиц/колонок.
+
+    Кэшируется на процесс оркестратора (требование 3, AC-6): второе и
+    последующие обращения в рамках одного и того же запуска CLI отдают
+    уже собранное значение без повторных subprocess-вызовов git/claude.
+    Сбой снятия отдельного поля не бросает исключение наружу (требование
+    2) — вызывающий код (`runner.py`, `fsm_advance.py`) никогда не видит
+    здесь ничего, кроме готовой строки.
+    """
+    global _environment_fingerprint_cache
+    if _environment_fingerprint_cache is not None:
+        return _environment_fingerprint_cache
+    python_part = f"python={platform.python_version()} ({sys.executable})"
+    git_part = f"git={_tool_version_text(['git', '--version'])}"
+    claude_part = f"claude={_tool_version_text(['claude', '--version'])}"
+    _environment_fingerprint_cache = f"{python_part}, {git_part}, {claude_part}"
+    return _environment_fingerprint_cache
 
 
 def new_agent_log(task_id: str, role: str) -> Path:

@@ -480,8 +480,11 @@ class CmdRunCostTest(TmpRootTest):
         self.assertEqual(self.journal_details("agent cost UNKNOWN"),
                          [f"попытка 1/{config.AGENT_ATTEMPTS}: в выводе нет "
                           f"события со стоимостью — spent_usd не изменён"])
-        self.assertEqual(self.journal_details("agent run finished"),
-                         [f"rc=0, попытка 1/{config.AGENT_ATTEMPTS}"])
+        finished = self.journal_details("agent run finished")
+        self.assertEqual(len(finished), 1)
+        self.assertTrue(
+            finished[0].startswith(f"rc=0, попытка 1/{config.AGENT_ATTEMPTS}, "),
+            finished[0])
 
     def test_status_and_log_show_the_money(self):
         """Критерий приёмки 1: ненулевой spent_usd в status, цена шага в log."""
