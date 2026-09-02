@@ -183,6 +183,8 @@ SPEC, PLAN — в ревью, REVIEW — из ревью). Нарушение с
   version   пин CLI, фактическая версия, версия схемы артефактов (T030)
   canary    синтетический прогон конвейера, метрики, бейзлайн (T065)
   prune     retention-политика: .artel/logs/, архивация alerts (T073)
+  dry_run   сухой прогон приёмки: read-only предпросмотр без исполнения
+            (SPEC 01M1GJ3ZP1YGG5QRB6FQ44NN8D)
 """
 import sys
 from pathlib import Path
@@ -195,8 +197,9 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from orchestrator import (answer, auto, budget, canary, catalog,  # noqa: E402
-                          cleanup, config, doctor, fsm, pause, projects, prune,
-                          release, report, runner, version, workspace)
+                          cleanup, config, doctor, dry_run, fsm, pause,
+                          projects, prune, release, report, runner, version,
+                          workspace)
 
 
 def _refuse_if_worktree() -> None:
@@ -325,6 +328,7 @@ def main() -> None:
             rest[0], rewrite_baseline="--rewrite-baseline" in rest),
         "prune": lambda: prune.cmd_prune("--execute" in rest),
         "report": lambda: report.cmd_report(),
+        "acceptance-dry-run": lambda: dry_run.cmd_acceptance_dry_run(rest[0]),
     }
     fn = table.get(cmd)
     if fn is None:
