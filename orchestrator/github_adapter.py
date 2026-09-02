@@ -78,6 +78,45 @@ def ensure_draft_mr(conn, task_id: str, t) -> None:
                  create.stdout.strip()[:300])
 
 
+def ensure_head_in_origin(conn, task_id: str, branch: str) -> tuple[bool, str]:
+    """Голова `branch` видна в origin — предусловие входа в `verifying`
+    (`fsm_advance.py::review`) и КАЖДОГО approve `merge_gate`
+    (`fsm_merge_gate.py::_cmd_approve_merge_gate`) (SPEC
+    01M1GS5HZ1JXFGKVR95HEW0AEZ, требования 1-3, 7): опрос CI по sha,
+    которого origin не видел, висит до потолка ожидания вместо
+    содержательного ответа (тот же класс инцидента, что решает эта
+    задача).
+
+    Сверяет ТОЧНЫЙ sha (`gitcmd.remote_branch_sha` vs
+    `gitcmd.branch_head_sha`), не факт присутствия имени ветки в origin
+    (AC-2) — устаревший коммит там не читается как «уже опубликован».
+    Совпадают — no-op, без единой записи в журнал (AC-1/AC-8: «попытки
+    push нет»). Расходятся — публикует голову тем же вызовом, которым
+    ветка публикуется впервые (`ensure_draft_mr` выше, `git push -u
+    origin <branch>`): успех журналируется и возвращает `(True, "")`
+    (AC-3/AC-8); провал журналируется и возвращает `(False, <причина>)`
+    с ИМЕНОВАННЫМ текстом причины, который SPEC требует байт-в-байт
+    (AC-4/AC-9) — решение о смене состояния/эскалации на этом отказе
+    остаётся за вызывающим кодом, сам хелпер состояние задачи не трогает.
+    """
+    local = gitcmd.branch_head_sha(branch)
+    remote = gitcmd.remote_branch_sha(branch)
+    if local and remote == local:
+        return True, ""
+    push = gitcmd.git("push", "-u", "origin", branch)
+    if push is None or push.returncode != 0:
+        err = ((push.stderr or push.stdout).strip()[:300]
+              if push is not None else "git не ответил")
+        detail = f"голова ветки не в origin, push не удался: {err}"
+        store.journal(conn, task_id, "orchestrator",
+                      "push FAILED (голова не в origin)", detail)
+        return False, detail
+    store.journal(conn, task_id, "orchestrator", "push (голова не в origin)",
+                 f"git push -u origin {branch}: "
+                 f"{push.stdout.strip()[:300] or 'ok'}")
+    return True, ""
+
+
 def undraft_mr(conn, task_id: str, t) -> None:
     """Снимает Draft (SPEC T079, требование 2, AC-2) на входе в
     `merge_gate`; молчит, если Draft MR этой задачи не заводился

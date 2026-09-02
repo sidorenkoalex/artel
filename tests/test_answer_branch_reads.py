@@ -143,7 +143,7 @@ class BriefAnswerComponentsOnForeignBranchTest(_AnswerRealGitSandbox):
         self.commit_on_branch("ANSWER-1.md", ANSWER_MD, 1)
 
         part = brief._answer_component(self.conn, self.TASK, "developer",
-                                       self.branch, True)
+                                       self.branch, True, brief.new_run_id())
 
         self.assertIn("Раунд 1: OK.", part)
 
@@ -151,13 +151,13 @@ class BriefAnswerComponentsOnForeignBranchTest(_AnswerRealGitSandbox):
         self.commit_on_branch("QUESTIONS.md", QUESTIONS_MD)
 
         part = brief._questions_component(self.conn, self.TASK, "analyst",
-                                          self.branch, True)
+                                          self.branch, True, brief.new_run_id())
 
         self.assertIn("QUESTIONS: батч", part)
 
     def test_no_answer_files_on_the_branch_is_empty_string(self):
         part = brief._answer_component(self.conn, self.TASK, "developer",
-                                       self.branch, True)
+                                       self.branch, True, brief.new_run_id())
 
         self.assertEqual(part, "")
 

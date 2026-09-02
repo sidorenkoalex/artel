@@ -23,6 +23,7 @@ MAIN (симуляция инцидента T002 — каталог подобр
 может только Оператор отдельным ADR; перечень «инвариант → тест →
 откуда» — docs/invariants.md.
 """
+import os
 import shutil
 import subprocess
 import sys
@@ -256,6 +257,24 @@ class KillCleanupTest(TmpRepoTest):
         self.assertEqual(self.task_row()["state"], "killed")
         self.assertIn(f"каталога tasks/{self.TASK}/ нет", out)
         self.assertIn(f"локальной ветки {self.branch} нет", out)
+
+    def test_kill_releases_the_lease_and_names_the_killing_session(self):
+        """SPEC 01M1GCHKG8DDK4DCZWCE3DYKWC, требование 3 (AC-6): kill снимает
+        lease задачи безусловно и журналирует снявшую сессию — `run_locked`
+        сам отпускает lease, только если взял его «с нуля» этим же вызовом
+        (см. `orchestrator/lease.py`), поэтому это отдельный, ранее
+        отсутствовавший путь."""
+        with mock.patch.dict(os.environ, {"ARTEL_SESSION_ID": "sess-kill-unit"}):
+            self.capture(cleanup.cmd_kill, self.TASK)
+
+        self.assertIsNone(store.lease_row(store.db(), self.TASK))
+        steps = store.db().execute(
+            "SELECT * FROM steps WHERE task_id=? ORDER BY id",
+            (self.TASK,)).fetchall()
+        self.assertTrue(
+            any("sess-kill-unit" in
+               ((s["detail"] or "") + (s["session_id"] or "")) for s in steps),
+            f"снятие lease при kill не называет снявшую сессию: {[dict(s) for s in steps]}")
 
     def test_unknown_task_is_reported(self):
         with self.assertRaises(SystemExit) as exit_:
