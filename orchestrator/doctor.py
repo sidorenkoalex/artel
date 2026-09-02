@@ -737,20 +737,39 @@ def _reconcile_orphaned_step(conn, task_id: str, dead_session_id: str,
     store.journal(conn, task_id, "doctor", action, detail)
 
 
-def _lease_fail_detail(conn, row, steps: list, orphan) -> str:
+def _last_start_step(steps):
+    """Последняя запись «agent run started» в журнале задачи, ЗАКРЫТА она
+    терминальной парой или нет — в отличие от `_orphaned_start_step`,
+    которая ищет только НЕзакрытую (для идемпотентного рекона, AC-7/AC-8).
+    Используется в FAIL-строке `check_leases` (AC-10, REVIEW.md
+    итерации 1, R1-F1): держатель lease мог умереть МЕЖДУ шагами, когда
+    последний запуск агента уже штатно завершился терминальным событием —
+    Оператору всё равно нужен номер и время старта ПОСЛЕДНЕГО шага
+    задачи, не только оборванного. `None` — агент по этой задаче ещё ни
+    разу не запускался (в журнале нет ни одной записи «agent run
+    started»)."""
+    last = None
+    for s in steps:
+        if (s["action"] or "") == "agent run started":
+            last = s
+    return last
+
+
+def _lease_fail_detail(conn, row, steps: list) -> str:
     """FAIL-строка `check_leases` по мёртвому lease (SPEC 01M1G...,
     требование 5, AC-10): держатель/pid/host (существующий текст,
     прежде байт-в-байт совпадавший с сообщением алерта) + роль держателя,
-    номер и время старта оборванного шага (если есть) и последнее
-    журнальное событие задачи — Оператору не нужно отдельно звать `log`,
-    чтобы понять, что произошло."""
+    номер и время старта последнего шага задачи (не только оборванного —
+    R1-F1) и последнее журнальное событие задачи — Оператору не нужно
+    отдельно звать `log`, чтобы понять, что произошло."""
     base = (f"{row['task_id']}: lease сессии {row['session_id']} "
            f"мёртв (pid {row['pid']} на {row['hostname']})")
     t = store.get_task(conn, row["task_id"])
     role = config.STATE_ROLE.get(t["state"], t["state"])
     parts = [base, f"роль {role}"]
-    if orphan is not None:
-        parts.append(f"шаг {orphan['id']} (старт {orphan['ts']})")
+    last_start = _last_start_step(steps)
+    if last_start is not None:
+        parts.append(f"шаг {last_start['id']} (старт {last_start['ts']})")
     if steps:
         last = steps[-1]
         parts.append(f"последнее событие: {last['action']} ({last['ts']})")
@@ -793,7 +812,6 @@ def check_leases(conn) -> list[Check]:
         results = []
         for row in dead:
             steps = store.task_steps(conn, row["task_id"])
-            orphan = _orphaned_start_step(steps)
             _reconcile_orphaned_step(conn, row["task_id"], row["session_id"], steps)
             # Сообщение алерта — прежний формат байт-в-байт (не FAIL-строка
             # `Check` ниже): `_LEASE_ALERT_RE`/`_lease_alert_live` разбирают
@@ -804,7 +822,7 @@ def check_leases(conn) -> list[Check]:
             alerts.raise_alert(conn, store.task_target(conn, row["task_id"]),
                               "incident", "doctor.leases", message)
             results.append(Check("leases", "fail",
-                                 _lease_fail_detail(conn, row, steps, orphan)))
+                                 _lease_fail_detail(conn, row, steps)))
 
     rows_by_task = {row["task_id"]: row for row in rows}
     _auto_ack_gone(conn, "doctor.leases",

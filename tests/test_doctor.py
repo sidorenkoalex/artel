@@ -991,6 +991,40 @@ class LeaseFailDetailAndReconciliationTest(TmpRootTest):
         self.assertIn("agent env WARNING", detail)
         self.assertRegex(detail, r"шаг\D{0,20}\d")
 
+    def test_fail_detail_names_step_even_when_last_run_already_finished(self):
+        """REVIEW.md итерации 1, R1-F1: сессия могла умереть МЕЖДУ шагами —
+        последний запуск агента уже штатно закрыт терминальным событием
+        (не сирота для рекона), но AC-10 всё равно требует номер и время
+        старта ПОСЛЕДНЕГО шага в FAIL-строке, не только оборванного."""
+        conn = store.db()
+        conn.execute(
+            "INSERT INTO steps (task_id, target, ts, actor, action, detail)"
+            " VALUES (?,?,?,?,?,?)",
+            (self.TASK, config.DEFAULT_TARGET, "2026-01-02 03:00:00Z",
+             "developer", "agent run started", ""))
+        conn.execute(
+            "INSERT INTO steps (task_id, target, ts, actor, action, detail)"
+            " VALUES (?,?,?,?,?,?)",
+            (self.TASK, config.DEFAULT_TARGET, "2026-01-02 03:05:00Z",
+             "developer", "agent run finished", ""))
+        conn.commit()
+        self.insert_dead_lease("sess-no-orphan")
+
+        checks = doctor.check_leases(store.db())
+
+        failed = [c for c in checks if c.status == "fail"]
+        self.assertEqual(len(failed), 1, checks)
+        detail = failed[0].detail
+        self.assertRegex(
+            detail, r"шаг\D{0,20}\d",
+            f"FAIL-строка не называет номер шага, когда последний запуск "
+            f"агента уже закрыт терминальным событием (R1-F1): {detail!r}")
+        self.assertIn(
+            "2026-01-02 03:00:00Z", detail,
+            f"FAIL-строка не называет время старта последнего шага, когда "
+            f"он уже закрыт терминальным событием (R1-F1): {detail!r}")
+        self.assertIn("agent run finished", detail)
+
 
 class LeaseAntiRaceTest(TmpRootTest):
     """SPEC 01M1GCHKG8DDK4DCZWCE3DYKWC, требование 5, AC-9: FAIL по мёртвому
