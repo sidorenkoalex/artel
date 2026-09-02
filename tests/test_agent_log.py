@@ -481,7 +481,8 @@ class CmdRunLoggingTest(TmpRootTest):
         proc.kill.assert_called_once()
         self.assertIn("таймаут шага", out)
         self.assertEqual(self.journal_details("agent run TIMEOUT"),
-                         [f"30 мин, попытка 1/{config.AGENT_ATTEMPTS} (без ретрая)"])
+                         [f"{config.AGENT_TIMEOUT_SEC // 60} мин, "
+                          f"попытка 1/{config.AGENT_ATTEMPTS} (без ретрая)"])
         self.assertEqual(self.journal_details("agent run finished"), [])
 
     def test_stuck_pump_does_not_hang_run(self):
