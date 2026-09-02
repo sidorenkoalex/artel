@@ -1,5 +1,5 @@
 ---
-built_at_sha: 3caf32876e6d57e8d966b292a25d37fa588af70e
+built_at_sha: db1e04e3861c46e3ec4d309cdf06f160225cd88e
 ---
 
 # Codebase-map пульта
@@ -81,7 +81,7 @@ built_at_sha: 3caf32876e6d57e8d966b292a25d37fa588af70e
 
 **Импортирует:** `orchestrator/answer.py`, `orchestrator/auto.py`, `orchestrator/budget.py`, `orchestrator/canary.py`, `orchestrator/catalog.py`, `orchestrator/cleanup.py`, `orchestrator/config.py`, `orchestrator/doctor.py`, `orchestrator/fsm.py`, `orchestrator/pause.py`, `orchestrator/projects.py`, `orchestrator/prune.py`, `orchestrator/release.py`, `orchestrator/report.py`, `orchestrator/runner.py`, `orchestrator/version.py`, `orchestrator/workspace.py`
 
-**Импортируется:** `tests/test_analyst_role.py`, `tests/test_invariants.py`
+**Импортируется:** `tests/test_analyst_role.py`, `tests/test_invariants.py`, `tests/test_new_argv_parsing.py`
 
 ## orchestrator/artifacts.py
 
@@ -1232,6 +1232,16 @@ built_at_sha: 3caf32876e6d57e8d966b292a25d37fa588af70e
 - `fake_git_config`
 
 **Импортирует:** `orchestrator/budget.py`, `orchestrator/catalog.py`, `orchestrator/cleanup.py`, `orchestrator/config.py`, `orchestrator/fsm.py`, `orchestrator/runner.py`, `orchestrator/spend.py`, `orchestrator/store.py`, `orchestrator/workspace.py`, `tests/sandbox.py`
+
+**Импортируется:** —
+
+## tests/test_new_argv_parsing.py
+
+**Назначение:** Юнит-тесты `orchestrator.artel._parse_new_args` (tasks/T102/SPEC.md):
+
+**Публичные функции:** (нет)
+
+**Импортирует:** `orchestrator/artel.py`
 
 **Импортируется:** —
 
