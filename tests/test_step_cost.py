@@ -25,8 +25,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from orchestrator import (agent_log, budget, catalog, config,  # noqa: E402
                           fsm, gitcmd, runner, spend, store)
-from tests.sandbox import (FakeProc, FakeStream, TmpRootTest,  # noqa: E402
-                           capture_new_task_id, fake_git,
+from tests.sandbox import (FakeProc, FakeStream, TmpRootTest, fake_git,  # noqa: E402
                            seed_developer_brief_fixtures, sync_spec_from_worktree)
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -291,14 +290,15 @@ class ChargeMissingResultTest(TmpRootTest):
     потока (tasks/T040): частичная сумма токенов либо алерт неизвестной
     стоимости, `spent_usd` не трогается ни в одной ветке."""
 
+    TASK = "T001"
+
     def setUp(self):
         super().setUp()
         git_patcher = mock.patch.object(gitcmd, "git", fake_git)
         git_patcher.start()
         self.addCleanup(git_patcher.stop)
         self.capture(catalog.cmd_init)
-        _, self.TASK = capture_new_task_id(
-            catalog.cmd_new, "Учёт стоимости без финального события")
+        self.capture(catalog.cmd_new, "Учёт стоимости без финального события")
 
     def task_row(self):
         return store.db().execute(
@@ -364,6 +364,8 @@ class ChargeMissingResultTest(TmpRootTest):
 class CmdRunCostTest(TmpRootTest):
     """`run` считает деньги: журнал шага, spent_usd, реакция на потолок."""
 
+    TASK = "T001"
+
     def setUp(self):
         super().setUp()
         # Шаг ревью собирает пакет настоящим git (T011); в песочнице
@@ -374,8 +376,7 @@ class CmdRunCostTest(TmpRootTest):
         git_patcher.start()
         self.addCleanup(git_patcher.stop)
         self.capture(catalog.cmd_init)
-        _, self.TASK = capture_new_task_id(
-            catalog.cmd_new, "Учёт стоимости шага")
+        self.capture(catalog.cmd_new, "Учёт стоимости шага")
         sync_spec_from_worktree(self.TASK)
         self.set_task(state="in_dev")
 
@@ -577,6 +578,8 @@ class CmdRunPartialCostTest(TmpRootTest):
     обязан её реально проходить (skills/coding-standards: юнит-тесты — часть
     определения «сделано»)."""
 
+    TASK = "T001"
+
     def setUp(self):
         super().setUp()
         # ДО `cmd_new` (SPEC T048) — сам заводит ветку/worktree через
@@ -585,8 +588,7 @@ class CmdRunPartialCostTest(TmpRootTest):
         git_patcher.start()
         self.addCleanup(git_patcher.stop)
         self.capture(catalog.cmd_init)
-        _, self.TASK = capture_new_task_id(
-            catalog.cmd_new, "Частичная стоимость при таймауте")
+        self.capture(catalog.cmd_new, "Частичная стоимость при таймауте")
         sync_spec_from_worktree(self.TASK)
         conn = store.db()
         conn.execute("UPDATE tasks SET state='in_dev' WHERE id=?", (self.TASK,))
@@ -636,11 +638,14 @@ class CmdRunPartialCostTest(TmpRootTest):
         self.assertNotIn("стоимость шага неизвестна", text)
         self.assertEqual(self.unknown_cost_alerts(), [],
                          "usage-события были — алерт неизвестной стоимости не нужен")
-        self.assertIn(f"таймаут шага ({config.AGENT_TIMEOUT_SEC // 60} мин)", out)
+        self.assertIn(
+            f"таймаут шага ({config.AGENT_TIMEOUT_SEC // 60} мин)", out)
 
 
 class CmdBudgetTest(TmpRootTest):
     """`budget <id> <usd>`: поднятие потолка и снятие блокировки."""
+
+    TASK = "T001"
 
     def setUp(self):
         super().setUp()
@@ -648,7 +653,7 @@ class CmdBudgetTest(TmpRootTest):
         git_patcher.start()
         self.addCleanup(git_patcher.stop)
         self.capture(catalog.cmd_init)
-        _, self.TASK = capture_new_task_id(catalog.cmd_new, "Потолок бюджета")
+        self.capture(catalog.cmd_new, "Потолок бюджета")
 
     def set_task(self, **fields) -> None:
         conn = store.db()

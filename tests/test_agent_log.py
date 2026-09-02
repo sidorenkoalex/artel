@@ -29,8 +29,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from orchestrator import (agent_log, catalog, config, gitcmd,  # noqa: E402
                           runner, store)
-from tests.sandbox import (FakeProc, FakeStream, TmpRootTest,  # noqa: E402
-                           capture_new_task_id, fake_git,
+from tests.sandbox import (FakeProc, FakeStream, TmpRootTest, fake_git,  # noqa: E402
                            seed_developer_brief_fixtures, sync_spec_from_worktree)
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -360,6 +359,7 @@ class RealSubprocessPumpTest(TmpRootTest):
 
 
 class CmdRunLoggingTest(TmpRootTest):
+    TASK = "T001"
 
     def setUp(self):
         super().setUp()
@@ -369,10 +369,7 @@ class CmdRunLoggingTest(TmpRootTest):
         patcher.start()
         self.addCleanup(patcher.stop)
         self.capture(catalog.cmd_init)
-        # `cmd_new` возвращает id ULID (SPEC T094, требование 2), больше не
-        # предсказуемый "T001" — забираем реальный через
-        # `capture_new_task_id`, а не `self.capture` (та отбрасывает возврат).
-        _, self.TASK = capture_new_task_id(catalog.cmd_new, "Лог агента")
+        self.capture(catalog.cmd_new, "Лог агента")
         sync_spec_from_worktree(self.TASK)
         conn = store.db()
         conn.execute("UPDATE tasks SET state='in_dev' WHERE id=?", (self.TASK,))
@@ -483,10 +480,9 @@ class CmdRunLoggingTest(TmpRootTest):
 
         proc.kill.assert_called_once()
         self.assertIn("таймаут шага", out)
-        self.assertEqual(
-            self.journal_details("agent run TIMEOUT"),
-            [f"{config.AGENT_TIMEOUT_SEC // 60} мин, попытка 1/"
-             f"{config.AGENT_ATTEMPTS} (без ретрая)"])
+        self.assertEqual(self.journal_details("agent run TIMEOUT"),
+                         [f"{config.AGENT_TIMEOUT_SEC // 60} мин, "
+                          f"попытка 1/{config.AGENT_ATTEMPTS} (без ретрая)"])
         self.assertEqual(self.journal_details("agent run finished"), [])
 
     def test_stuck_pump_does_not_hang_run(self):
