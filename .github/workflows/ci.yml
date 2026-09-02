@@ -2,7 +2,10 @@ name: ci
 
 on:
   push:
-    branches: ["main", "task/**"]
+    # "artifact/**" — артефактная ветка пульта задачи внешнего target'а
+    # (SPEC T094, требование 7): guard обязан валидировать структуру
+    # tasks/<id>/ и там же, не только на кодовых ветках self.
+    branches: ["main", "task/**", "artifact/**"]
   pull_request:
 
 jobs:
@@ -17,6 +20,33 @@ jobs:
             python3 scripts/guard.py --all
           else
             echo "артефактов пока нет — ок"
+          fi
+
+  id-format-greplint:
+    name: Линт — новый парсинг формата id задачи вне генератора
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
+      - name: diff не добавляет парсинг формата id задачи вне orchestrator/idgen.py
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          # SPEC T094, требование 4/AC-4: формат id задачи (ULID и легаси
+          # Tnnn) обязана знать только orchestrator/idgen.py — остальной
+          # код обращается с id как с непрозрачной строкой (требование 2).
+          # Линт смотрит только НОВЫЕ строки дифа (тот же приём, что
+          # protected-paths ниже) — существующий легаси-парсер
+          # (orchestrator/store.py, TASK_ID, требование 6) не тронут этим
+          # PR и линт его не видит.
+          PATTERN='T%0[0-9]|T\{[a-zA-Z_]*:0[0-9]+d\}|\\d\{3\}|TASK_ID *= *re\.compile|r["'"'"']\^?T\\\\?d'
+          ADDED=$(git diff "$BASE_SHA"...HEAD -- . ':!orchestrator/idgen.py' \
+            | grep -E '^\+' | grep -Ev '^\+\+\+' | grep -E "$PATTERN" || true)
+          if [ -n "$ADDED" ]; then
+            echo "::error::диф добавляет парсинг формата id задачи вне orchestrator/idgen.py (SPEC T094, требование 4):"
+            echo "$ADDED"
+            exit 1
           fi
 
   python:
