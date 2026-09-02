@@ -8,13 +8,13 @@
 "ревью X/Y", бюджет, title) остаётся на месте для ЛЮБОЙ задачи, с lease
 или без.
 
-Красный до реализации (тесты на держателя — `test_ac11_shows_dead_holder`/
-`test_ac11_shows_alive_holder`): сегодня `catalog.cmd_status` не читает
+Красен до реализации: тесты на держателя (`test_ac11_shows_dead_holder`/
+`test_ac11_shows_alive_holder`) — сегодня `catalog.cmd_status` не читает
 таблицу `leases` вовсе (`orchestrator/catalog.py::cmd_status`) —
 держатель нигде не появляется.
 
-Зелёный с рождения (`test_ac11_existing_columns_are_preserved_for_every_
-line`): существующий префикс строки status (id, state, "ревью X/Y",
+Зелёный с рождения: тест `test_ac11_existing_columns_are_preserved_for_
+every_line` — существующий префикс строки status (id, state, "ревью X/Y",
 бюджет, title) уже сегодня соответствует `EXISTING_COLUMNS_RE` для всех
 трёх задач вне зависимости от lease — тест фиксирует это как регрессионный
 барьер: добавка держателя обязана остаться ДОБАВКОЙ, не заменой или

@@ -1,7 +1,7 @@
 """AC-4: захват свободного (ранее не существовавшего) lease
 журналируется отдельной записью, называющей взявшую сессию.
 
-Красный до реализации: `orchestrator.lease.acquire`, ветка `row is
+Красен до реализации: `orchestrator.lease.acquire`, ветка `row is
 None` (свободный lease), сегодня только вставляет строку `leases` —
 `store.journal` в этой ветке не зовётся вовсе (см. `orchestrator/
 lease.py`, "if row is None: store.insert_lease(...); return None,

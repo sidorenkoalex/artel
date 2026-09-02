@@ -25,7 +25,7 @@ lease БЕЗУСЛОВНО ("любым путём") — поэтому тест
 названо" проверяют именно НОВУЮ, требуемую AC-6 функциональность, а не
 побочный эффект уже существующего "fresh -> release" в `run_locked`.
 
-Красны до реализации все четыре теста: `lease.release()` сегодня не
+Красен до реализации: все четыре теста — `lease.release()` сегодня не
 журналирует ничего вовсе (`orchestrator/lease.py::release` — голый
 `store.release_lease`, без единого `store.journal`); `release.cmd_
 release`, `pause.cmd_pause_now` журналируют identity ПРЕЖНЕГО

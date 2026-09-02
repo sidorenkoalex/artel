@@ -3,7 +3,7 @@
 lease.py`), — единственный источник идентификатора сессии для lease и
 для журнала одного и того же вызова.
 
-Красный до реализации: `orchestrator.release.cmd_release` — команда,
+Красен до реализации: `orchestrator.release.cmd_release` — команда,
 которая никогда не проходит через `lease.py` (она не мутирующая в
 смысле `lease.run_locked`, см. её модульный докстринг: "`lease.acquire`/
 `lease.run_locked`/`parallel_limit.refusal` здесь не вызываются
