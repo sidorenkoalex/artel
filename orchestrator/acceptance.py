@@ -9,11 +9,12 @@
 (его докстринг) — прогон и сбор тестов поэтому здесь, не там.
 """
 import subprocess
+import tempfile
 from pathlib import Path
 
 from scripts import guard
 
-from . import config
+from . import config, gitcmd
 
 
 def run(tdir: Path) -> tuple[bool, str]:
@@ -37,6 +38,36 @@ def run(tdir: Path) -> tuple[bool, str]:
                        f"— завис или ждёт сетевой ответ\n{tail}")
     tail = (res.stdout + res.stderr)[-2000:]
     return res.returncode == 0, tail
+
+
+def materialize_from_branch(task_id: str, branch: str) -> Path:
+    """Временный каталог с `tasks/<id>/acceptance_tests/`, вычитанным из
+    ВЕТКИ (SPEC T094, требование 10, реестр PLAN.md пункт 2 — «лок
+    acceptance_tests»): внешний target не несёт живого worktree с этим
+    каталогом на диске — `acceptance_tests/` живёт только в артефактной
+    ветке пульта (`orchestrator/fsm_advance.py::review`/`verifying`
+    зовут эту функцию перед `run()`/`summary()`/`guard.
+    scan_acceptance_tests`, тем же приёмом, что self читает с
+    worktree). Вызывающий код обязан убрать каталог сам (`shutil.
+    rmtree`) — эта функция только материализует, не чистит за собой.
+
+    Ветки нет, или в ней нет `acceptance_tests/` — валидный исход
+    (пустой каталог): `run()`/`summary()` уже умеют трактовать
+    отсутствие `acceptance_tests/` как «тесты не заведены», не отказ.
+    """
+    tmp_root = Path(tempfile.mkdtemp(prefix=f"artel-acceptance-{task_id}-"))
+    prefix = f"tasks/{task_id}/acceptance_tests/"
+    paths = gitcmd.ls_tree_files(branch, f"tasks/{task_id}/acceptance_tests") or []
+    for rel in paths:
+        if not rel.startswith(prefix):
+            continue
+        text, _ = gitcmd.show(branch, rel)
+        if text is None:
+            continue
+        dest = tmp_root / "acceptance_tests" / rel[len(prefix):]
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        dest.write_text(text, encoding="utf-8")
+    return tmp_root
 
 
 def run_full_suite(root: Path) -> tuple[bool, str]:

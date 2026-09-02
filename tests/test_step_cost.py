@@ -25,7 +25,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from orchestrator import (agent_log, budget, catalog, config,  # noqa: E402
                           fsm, gitcmd, runner, spend, store)
-from tests.sandbox import (FakeProc, FakeStream, TmpRootTest, fake_git,  # noqa: E402
+from tests.sandbox import (FakeProc, FakeStream, TmpRootTest,  # noqa: E402
+                           capture_new_task_id, fake_git,
                            seed_developer_brief_fixtures, sync_spec_from_worktree)
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -290,15 +291,17 @@ class ChargeMissingResultTest(TmpRootTest):
     потока (tasks/T040): частичная сумма токенов либо алерт неизвестной
     стоимости, `spent_usd` не трогается ни в одной ветке."""
 
-    TASK = "T001"
-
     def setUp(self):
         super().setUp()
         git_patcher = mock.patch.object(gitcmd, "git", fake_git)
         git_patcher.start()
         self.addCleanup(git_patcher.stop)
         self.capture(catalog.cmd_init)
-        self.capture(catalog.cmd_new, "Учёт стоимости без финального события")
+        # `cmd_new` возвращает id ULID (SPEC T094, требование 2), больше не
+        # предсказуемый "T001" — забираем реальный через
+        # `capture_new_task_id`, а не `self.capture` (та отбрасывает возврат).
+        _, self.TASK = capture_new_task_id(
+            catalog.cmd_new, "Учёт стоимости без финального события")
 
     def task_row(self):
         return store.db().execute(
@@ -364,8 +367,6 @@ class ChargeMissingResultTest(TmpRootTest):
 class CmdRunCostTest(TmpRootTest):
     """`run` считает деньги: журнал шага, spent_usd, реакция на потолок."""
 
-    TASK = "T001"
-
     def setUp(self):
         super().setUp()
         # Шаг ревью собирает пакет настоящим git (T011); в песочнице
@@ -376,7 +377,10 @@ class CmdRunCostTest(TmpRootTest):
         git_patcher.start()
         self.addCleanup(git_patcher.stop)
         self.capture(catalog.cmd_init)
-        self.capture(catalog.cmd_new, "Учёт стоимости шага")
+        # `cmd_new` возвращает id ULID (SPEC T094, требование 2), больше не
+        # предсказуемый "T001" — забираем реальный через
+        # `capture_new_task_id`, а не `self.capture` (та отбрасывает возврат).
+        _, self.TASK = capture_new_task_id(catalog.cmd_new, "Учёт стоимости шага")
         sync_spec_from_worktree(self.TASK)
         self.set_task(state="in_dev")
 
@@ -581,8 +585,6 @@ class CmdRunPartialCostTest(TmpRootTest):
     обязан её реально проходить (skills/coding-standards: юнит-тесты — часть
     определения «сделано»)."""
 
-    TASK = "T001"
-
     def setUp(self):
         super().setUp()
         # ДО `cmd_new` (SPEC T048) — сам заводит ветку/worktree через
@@ -591,7 +593,11 @@ class CmdRunPartialCostTest(TmpRootTest):
         git_patcher.start()
         self.addCleanup(git_patcher.stop)
         self.capture(catalog.cmd_init)
-        self.capture(catalog.cmd_new, "Частичная стоимость при таймауте")
+        # `cmd_new` возвращает id ULID (SPEC T094, требование 2), больше не
+        # предсказуемый "T001" — забираем реальный через
+        # `capture_new_task_id`, а не `self.capture` (та отбрасывает возврат).
+        _, self.TASK = capture_new_task_id(
+            catalog.cmd_new, "Частичная стоимость при таймауте")
         sync_spec_from_worktree(self.TASK)
         conn = store.db()
         conn.execute("UPDATE tasks SET state='in_dev' WHERE id=?", (self.TASK,))
@@ -648,15 +654,16 @@ class CmdRunPartialCostTest(TmpRootTest):
 class CmdBudgetTest(TmpRootTest):
     """`budget <id> <usd>`: поднятие потолка и снятие блокировки."""
 
-    TASK = "T001"
-
     def setUp(self):
         super().setUp()
         git_patcher = mock.patch.object(gitcmd, "git", fake_git)
         git_patcher.start()
         self.addCleanup(git_patcher.stop)
         self.capture(catalog.cmd_init)
-        self.capture(catalog.cmd_new, "Потолок бюджета")
+        # `cmd_new` возвращает id ULID (SPEC T094, требование 2), больше не
+        # предсказуемый "T001" — забираем реальный через
+        # `capture_new_task_id`, а не `self.capture` (та отбрасывает возврат).
+        _, self.TASK = capture_new_task_id(catalog.cmd_new, "Потолок бюджета")
 
     def set_task(self, **fields) -> None:
         conn = store.db()

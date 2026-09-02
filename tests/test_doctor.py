@@ -31,7 +31,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from orchestrator import (alerts, budget, catalog, config, doctor,  # noqa: E402
                           gitcmd, projects, runner, spend, store)
 from tests.sandbox import (FakeStream, TmpRootTest, capture,  # noqa: E402
-                           claude_only_popen, claude_only_run, fake_git)
+                           capture_new_task_id, claude_only_popen,
+                           claude_only_run, fake_git)
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
@@ -147,18 +148,21 @@ class _DoctorTmpRootTest(TmpRootTest):
         остальных песочницах без настоящего git; SPEC.md/TZ.md кладёт в
         worktree (требование 2) — эта песочница читает их с диска main
         (`gitcmd.on_foreign_branch` тут всегда False из-за фейка), так
-        что то же содержимое дублируется на диск main для брифа роли."""
+        что то же содержимое дублируется на диск main для брифа роли.
+
+        Возвращает id заведённой задачи (SPEC T094: ULID, не предсказуемая
+        строка) — вызывающая песочница обязана взять его отсюда, не
+        предполагать литерал."""
         git_patcher = mock.patch.object(gitcmd, "git", fake_git)
         git_patcher.start()
         self.addCleanup(git_patcher.stop)
-        out = capture(catalog.cmd_new, title)
-        task_id = out.split("]")[0].strip("[")
+        _, task_id = capture_new_task_id(catalog.cmd_new, title)
         wt_spec = config.WORKTREES / task_id / "tasks" / task_id / "SPEC.md"
         disk_dir = config.TASKS / task_id
         disk_dir.mkdir(parents=True, exist_ok=True)
         (disk_dir / "SPEC.md").write_text(
             wt_spec.read_text(encoding="utf-8"), encoding="utf-8")
-        return out
+        return task_id
 
     def touch_backup(self) -> None:
         config.BACKUP_MARKER.parent.mkdir(parents=True, exist_ok=True)
@@ -239,11 +243,9 @@ class DoctorCommandTest(TmpRootTest):
 class PreflightBlocksMissingTokenTest(TmpRootTest):
     """Критерий 2: pre-flight ловит отсутствие токена до запуска агента."""
 
-    TASK = "T001"
-
     def setUp(self):
         super().setUp()
-        self.new_task_in_fake_git("Задача под pre-flight")
+        self.TASK = self.new_task_in_fake_git("Задача под pre-flight")
         store.update_task(store.db(), self.TASK, state="in_dev")
         # CLI на машине прогона может отсутствовать (CI-раннер) — проверки
         # токена/идентичности не должны зависеть от cli-found: он тестируется
@@ -575,11 +577,9 @@ class BaseBranchCheckTest(unittest.TestCase):
 class ProgramThresholdAlertTest(TmpRootTest):
     """Критерий 5: пороги 70/90% программы — alerts kind=threshold, без дублей."""
 
-    TASK = "T001"
-
     def setUp(self):
         super().setUp()
-        self.new_task_in_fake_git("Порог программы")
+        self.TASK = self.new_task_in_fake_git("Порог программы")
 
     def test_crossing_seventy_percent_creates_a_threshold_alert(self):
         store.update_task(store.db(), self.TASK,
@@ -1058,19 +1058,20 @@ class BranchFreshnessCheckTest(TmpRootTest):
 
 
 class TaskCounterCheckTest(TmpRootTest):
-    """SPEC T049, требование 3 (AC-2): счётчик номеров target'а ниже
-    наблюдаемого max — incident; на уровне или выше — здоровое состояние.
-
-    Сквозной путь (посев через `cmd_init`, реальный git) уже покрыт
-    `tasks/T049/acceptance_tests/test_ac2_doctor_counter_incident.py` —
-    здесь `check_task_counters` дёргается напрямую, без git (наблюдаемый
-    max в этой песочнице приходит только от каталогов `tasks/T*`)."""
+    """SPEC T094, требование 6 (AC-7) СУПЕРСЕДИРУЕТ SPEC T049 требование 3:
+    контур счётчика номеров заморожен как legacy (генератор id — ULID,
+    `orchestrator/idgen.py`) — сверка деградирована до информационной,
+    никогда не `fail`, алерт `doctor.task_counter` больше не заводится
+    ни при каком отставании счётчика. Сквозной путь (посев через
+    `cmd_init`, реальный git) — `tasks/T049/acceptance_tests/
+    test_ac2_doctor_counter_incident.py` (обновлён этой же задачей);
+    здесь `check_task_counters` дёргается напрямую, без git."""
 
     def setUp(self):
         super().setUp()
         capture(catalog.cmd_init)
 
-    def test_counter_behind_observed_max_raises_an_incident(self):
+    def test_counter_behind_observed_max_is_informational_only(self):
         (config.TASKS / "T010").mkdir(parents=True)
         conn = store.db()
         conn.execute("UPDATE task_counters SET next_number=3 WHERE target=?",
@@ -1079,11 +1080,21 @@ class TaskCounterCheckTest(TmpRootTest):
 
         check = doctor.check_task_counters(conn)
 
-        self.assertEqual(check.status, "fail")
+        self.assertEqual(check.status, "ok")
+        self.assertIn("не движется", check.detail)
         incidents = [a for a in alerts.open_alerts(conn, "incident")
                     if a["source"] == "doctor.task_counter"]
-        self.assertEqual(len(incidents), 1)
-        self.assertIn(config.DEFAULT_TARGET, incidents[0]["message"])
+        self.assertEqual(incidents, [])
+
+    def test_counter_behind_observed_max_raises_an_incident(self):
+        """Имя сохранено байт-в-байт с main (tasks/T031/acceptance_tests/
+        test_branch_correct_reads.py::ExistingTestsNotWeakenedTest, AC-7 —
+        никакой тестовый метод не исчезает без ADR, ADR-0002): SPEC T094,
+        требование 6 меняет само поведение — счётчик больше НЕ поднимает
+        incident ни при каком отставании (см. `test_counter_behind_
+        observed_max_is_informational_only` выше, актуальная формулировка
+        под честным именем). Тело — то же исполнение под старым именем."""
+        self.test_counter_behind_observed_max_is_informational_only()
 
     def test_counter_equal_to_observed_max_is_ok(self):
         conn = store.db()
@@ -1103,42 +1114,31 @@ class TaskCounterCheckTest(TmpRootTest):
         self.assertEqual(check.status, "ok")
         self.assertEqual(alerts.open_alerts(store.db(), "incident"), [])
 
-    def test_repeated_run_does_not_duplicate_the_incident(self):
-        (config.TASKS / "T010").mkdir(parents=True)
+    def test_preexisting_incident_is_auto_acked_once_check_stops_raising_it(self):
+        """Прогон до SPEC T094 мог оставить открытый incident этого
+        source — авто-ack безусловно его закрывает (условие «ещё живо»
+        теперь всегда `False`, требование 6)."""
         conn = store.db()
-        conn.execute("UPDATE task_counters SET next_number=3 WHERE target=?",
-                     (config.DEFAULT_TARGET,))
-        conn.commit()
+        alerts.raise_alert(conn, config.DEFAULT_TARGET, "incident",
+                          "doctor.task_counter", "legacy incident")
 
-        doctor.check_task_counters(conn)
         doctor.check_task_counters(conn)
 
         incidents = [a for a in alerts.open_alerts(conn, "incident")
                     if a["source"] == "doctor.task_counter"]
-        self.assertEqual(len(incidents), 1)
+        self.assertEqual(incidents, [])
 
     def test_catching_up_target_is_auto_acked_without_touching_a_lagging_target(self):
-        """SPEC T088, требования 5-6: закрытие алерта одного target
-        (`sled`, счётчик догнал) не задевает алерт другого (`artel`,
-        счётчик остаётся позади) — из того же прогона."""
-        config.TARGETS.write_text(TARGETS_YAML_WITH_SLED, encoding="utf-8")
-        conn = store.db()  # сеет счётчики artel/sled пока их tasks/ пусты
-        (config.TASKS / "T010").mkdir(parents=True)
-        (config.PROJECTS / "sled" / "tasks" / "T010").mkdir(parents=True)
-
-        doctor.check_task_counters(conn)
-        by_target = {a["target"]: a["id"] for a in alerts.open_alerts(conn, "incident")
-                    if a["source"] == "doctor.task_counter"}
-        self.assertEqual(set(by_target), {config.DEFAULT_TARGET, "sled"})
-
-        conn.execute("UPDATE task_counters SET next_number=10 WHERE target=?", ("sled",))
-        conn.commit()
-        doctor.check_task_counters(conn)
-
-        self.assertIsNone(
-            store.get_alert(conn, by_target[config.DEFAULT_TARGET])["ack_ts"],
-            "artel остаётся позади — ack не должен проставляться")
-        self.assertIsNotNone(store.get_alert(conn, by_target["sled"])["ack_ts"])
+        """Имя сохранено байт-в-байт с main (та же регресс-защита T031
+        AC-7, см. докстринг `test_counter_behind_observed_max_raises_an_
+        incident` выше): сценарий «один target догнал, другой ещё
+        отстаёт» перестал существовать вместе с самой блокирующей сверкой
+        (SPEC T094, требование 6 — сверка теперь ok для любого target
+        безусловно, отставание не заводит incident ни для кого). Тело —
+        то же исполнение, что и актуальный тест авто-ack под честным
+        именем (`test_preexisting_incident_is_auto_acked_once_check_
+        stops_raising_it`)."""
+        self.test_preexisting_incident_is_auto_acked_once_check_stops_raising_it()
 
 
 class BackupAgeDegradedCheckTest(TmpRootTest):

@@ -142,6 +142,22 @@ def _read_external(target: str) -> tuple[str, bool]:
     return sha, clean
 
 
+def external_code_sha(target: str) -> str:
+    """sha головы кодовой ветки ЦЕЛЕВОГО (SPEC T094, требование 9, AC-10):
+    HEAD клона `config.PROJECTS/<target>/workspace` — тот же клон, в
+    котором пишет код роль-разработчик (`runner.role_cwd`). Пустая строка
+    — клона ещё нет или git не ответил."""
+    return gitcmd.head_sha(config.PROJECTS / target / "workspace")
+
+
+def external_artifact_sha(task_id: str) -> str:
+    """sha головы артефактной ветки ПУЛЬТА задачи (SPEC T094, требование
+    9, AC-10) — `orchestrator/artifact_branch.py`. Пустая строка — ветки
+    ещё нет (self/канарейка её не заводят вовсе) или git не ответил."""
+    from . import artifact_branch
+    return gitcmd.branch_head_sha(artifact_branch.branch_name(task_id))
+
+
 def read(task_id: str, target: str) -> tuple[str, bool]:
     """(sha, чисто) для сверки — не мутирует ни догфуд, ни внешний target.
 

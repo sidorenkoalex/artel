@@ -21,7 +21,8 @@ sys.path.insert(0, str(REPO))
 
 from orchestrator import (catalog, config, gitcmd, review,  # noqa: E402
                           runner, store)
-from tests.sandbox import FakeProc, capture, fake_git  # noqa: E402
+from tests.sandbox import (FakeProc, capture, capture_new_task_id,  # noqa: E402
+                           fake_git)
 
 SPEC_MD = """---
 task: T001
@@ -542,8 +543,6 @@ class ReviewPackageTest(unittest.TestCase):
 class CmdRunReviewPackageTest(unittest.TestCase):
     """`run` в review: пакет уходит в промпт, размер — в журнал, права те же."""
 
-    TASK = "T001"
-
     def setUp(self):
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
@@ -584,9 +583,9 @@ class CmdRunReviewPackageTest(unittest.TestCase):
 
         # Артефакты живут в ветке задачи; рабочее дерево здесь на них не
         # похоже — так же, как у оркестратора после мержа соседней задачи.
-        self.git = FakeGit(files={f"tasks/{self.TASK}/SPEC.md": SPEC_MD,
-                                  f"tasks/{self.TASK}/PLAN.md": PLAN_MD,
-                                  "templates/REVIEW.md": FORM_MD})
+        # `files` заполняется НИЖЕ, уже после `cmd_new` (SPEC T094: id —
+        # ULID, а не предсказуемый "T001" — заранее ключи словаря не собрать).
+        self.git = FakeGit(files={"templates/REVIEW.md": FORM_MD})
         git_patcher = mock.patch.object(gitcmd, "git", self.git)
         git_patcher.start()
         self.addCleanup(git_patcher.stop)
@@ -614,7 +613,10 @@ class CmdRunReviewPackageTest(unittest.TestCase):
         self.addCleanup(wt_patcher.stop)
 
         self.capture(catalog.cmd_init)
-        self.capture(catalog.cmd_new, "Ревью-пакет вместо свободного чтения")
+        _, self.TASK = capture_new_task_id(
+            catalog.cmd_new, "Ревью-пакет вместо свободного чтения")
+        self.git.files.update({f"tasks/{self.TASK}/SPEC.md": SPEC_MD,
+                               f"tasks/{self.TASK}/PLAN.md": PLAN_MD})
         # Вызовы `cmd_new` (branch_exists, коммит ТЗ/SPEC — SPEC T048) —
         # это подготовка песочницы, не часть шага, который проверяют тесты
         # буквальным списком `self.git.calls` (например,

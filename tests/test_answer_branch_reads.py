@@ -85,6 +85,13 @@ class _AnswerRealGitSandbox(RealGitSandbox):
 
 class AnswerFileCountOnForeignBranchTest(_AnswerRealGitSandbox):
 
+    def setUp(self):
+        super().setUp()
+        self.conn = store.db()
+        store.create_schema(self.conn)
+        store.insert_task(self.conn, self.TASK, "Задача", "spec_writing",
+                          self.branch, config.DEFAULT_TARGET, 25.0)
+
     def test_counts_answer_files_from_the_branch_not_the_disk(self):
         self.commit_on_branch("ANSWER-1.md", ANSWER_MD, 1)
         self.commit_on_branch("ANSWER-2.md", ANSWER_MD, 2)
@@ -92,22 +99,21 @@ class AnswerFileCountOnForeignBranchTest(_AnswerRealGitSandbox):
         self.assertFalse((self.root / "tasks" / self.TASK).exists(),
                          "файлы существуют только на ветке, не на диске")
 
-        t = {"id": self.TASK, "branch": self.branch}
-        count = fsm._answer_file_count(t, self.root / "tasks" / self.TASK)
+        count = fsm._answer_file_count(self.conn, self.TASK,
+                                       self.root / "tasks" / self.TASK)
 
         self.assertEqual(count, 2)
 
     def test_missing_directory_on_the_branch_is_zero_not_none(self):
-        t = {"id": self.TASK, "branch": self.branch}
-
-        count = fsm._answer_file_count(t, self.root / "tasks" / self.TASK)
+        count = fsm._answer_file_count(self.conn, self.TASK,
+                                       self.root / "tasks" / self.TASK)
 
         self.assertEqual(count, 0)
 
     def test_unresponsive_git_is_none(self):
-        t = {"id": self.TASK, "branch": self.branch}
         with mock.patch.object(gitcmd, "ls_tree_files", lambda *a, **k: None):
-            count = fsm._answer_file_count(t, self.root / "tasks" / self.TASK)
+            count = fsm._answer_file_count(self.conn, self.TASK,
+                                           self.root / "tasks" / self.TASK)
 
         self.assertIsNone(
             count, "git не ответил — не значит «ноль», вызывающий код "

@@ -25,7 +25,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from orchestrator import (budget, catalog, config, projects,  # noqa: E402
                           runner, spend, store, targets)
-from tests.sandbox import (FakeProc, TmpRootTest, capture, fake_git,  # noqa: E402
+from tests.sandbox import (FakeProc, TmpRootTest, capture,  # noqa: E402
+                           capture_new_task_id, fake_git,
                            seed_developer_brief_fixtures)
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -336,12 +337,12 @@ class TargetColumnTest(TmpRootTest):
 
     def test_new_task_is_written_with_its_target(self):
         capture(catalog.cmd_init)
-        capture(catalog.cmd_new, "Мультитаргет")
+        _, task_id = capture_new_task_id(catalog.cmd_new, "Мультитаргет")
 
         conn = store.db()
-        self.assertEqual(store.get_task(conn, "T001")["target"],
+        self.assertEqual(store.get_task(conn, task_id)["target"],
                          config.DEFAULT_TARGET)
-        self.assertEqual(store.task_target(conn, "T001"),
+        self.assertEqual(store.task_target(conn, task_id),
                          config.DEFAULT_TARGET)
 
     def test_schema_stays_portable(self):
@@ -358,7 +359,18 @@ class TargetColumnTest(TmpRootTest):
 
 
 class TaskNumberingTest(TmpRootTest):
-    """Критерий 4: номера задач не переиспользуются после архивации строки."""
+    """Критерий 4: номера задач не переиспользуются после архивации строки.
+
+    SPEC T094, требование 6: `cmd_new` больше не расходует этот счётчик
+    (id — ULID, `orchestrator/idgen.py`) — контур `task_counters`
+    остаётся легаси, замороженным, не удалённым этой задачей. Эти три
+    теста больше не могут вести сценарий ЧЕРЕЗ `cmd_new` (он не выдаёт
+    `Tnnn`) — ведут `store.next_task_number`/`store.insert_task` напрямую,
+    тем же приёмом, что уже применяют `test_counters_are_per_target`/
+    `test_two_callers_at_once_do_not_get_the_same_number` ниже; свойство
+    счётчика (не переиспользует номер, переживает переоткрытие БД,
+    досеивается от наблюдаемого max) не изменилось и по-прежнему
+    проверяется — изменился только вызыватель."""
 
     def numbers(self, conn) -> list:
         return sorted(r["id"] for r in store.all_tasks(conn))
@@ -368,20 +380,30 @@ class TaskNumberingTest(TmpRootTest):
         conn.execute("DELETE FROM tasks WHERE id=?", (task_id,))
         conn.commit()
 
+    def _insert_numbered(self, conn, title: str) -> str:
+        """Легаси-потребитель счётчика (SPEC T094, требование 6) — то,
+        что раньше делал `cmd_new` сам, до перевода на ULID."""
+        task_id = f"T{store.next_task_number(conn, 'artel'):03d}"
+        store.insert_task(conn, task_id, title, "spec_writing",
+                          f"task/{task_id.lower()}-x", "artel",
+                          config.DEFAULT_BUDGET_USD)
+        return task_id
+
     def test_number_is_not_reused_after_a_row_is_archived(self):
         capture(catalog.cmd_init)
-        capture(catalog.cmd_new, "Первая")
-        capture(catalog.cmd_new, "Вторая")
-        self.archive(store.db(), "T002")
+        conn = store.db()
+        self._insert_numbered(conn, "Первая")
+        self._insert_numbered(conn, "Вторая")
+        self.archive(conn, "T002")
 
-        capture(catalog.cmd_new, "Третья")
+        self._insert_numbered(store.db(), "Третья")
 
         self.assertEqual(self.numbers(store.db()), ["T001", "T003"],
                          "COUNT(*) выдал бы T002 второй раз")
 
     def test_counter_survives_a_reopen_of_the_database(self):
         capture(catalog.cmd_init)
-        capture(catalog.cmd_new, "Первая")
+        self._insert_numbered(store.db(), "Первая")
 
         self.assertEqual(store.next_task_number(store.db(), "artel"), 2)
         self.assertEqual(store.next_task_number(store.db(), "artel"), 3)
@@ -390,9 +412,9 @@ class TaskNumberingTest(TmpRootTest):
         """Счётчик догоняет БД Фазы 0: следующая задача — за максимальной."""
         self.legacy_db([("T001", "done", 1.0), ("T017", "done", 2.0)])
 
-        capture(catalog.cmd_new, "После миграции")
+        number = store.next_task_number(store.db(), "artel")
 
-        self.assertIn("T018", self.numbers(store.db()))
+        self.assertEqual(number, 18)
 
     def test_counters_are_per_target(self):
         conn = store.db()
@@ -499,21 +521,21 @@ class ProgramSpendTest(TmpRootTest):
     def setUp(self):
         super().setUp()
         capture(catalog.cmd_init)
-        capture(catalog.cmd_new, "Пороги программы")
+        _, self.TASK = capture_new_task_id(catalog.cmd_new, "Пороги программы")
 
     def spend_to(self, total: float) -> None:
         """Ставит суммарный расход программы равным total."""
-        store.update_task(store.db(), "T001", spent_usd=total)
+        store.update_task(store.db(), self.TASK, spent_usd=total)
 
     def step(self, usd: float) -> str:
         """Шаг стоимостью usd: учёт стоимости и проверка порогов после него."""
         conn = store.db()
         cost = {"usd": usd, "tokens": None}
-        out = capture(spend.charge_step, conn, "T001", "developer", cost, "1/3")
-        return out + capture(budget.check_program_spend, conn, "T001", cost)
+        out = capture(spend.charge_step, conn, self.TASK, "developer", cost, "1/3")
+        return out + capture(budget.check_program_spend, conn, self.TASK, cost)
 
     def events(self) -> list:
-        return [r["detail"] for r in store.task_steps(store.db(), "T001")
+        return [r["detail"] for r in store.task_steps(store.db(), self.TASK)
                 if r["action"] == "программа: порог расхода"]
 
     def test_crossing_seventy_percent_warns_and_journals(self):
@@ -561,15 +583,15 @@ class ProgramSpendTest(TmpRootTest):
         self.spend_to(config.PROGRAM_STOP_LOSS_USD * 0.7 - 1)
 
         out = self.step(0.0) + capture(
-            budget.check_program_spend, store.db(), "T001", None)
+            budget.check_program_spend, store.db(), self.TASK, None)
 
         self.assertNotIn("ВНИМАНИЕ", out)
         self.assertEqual(self.events(), [])
 
     def test_sum_covers_all_tasks_not_only_the_current_one(self):
         """Кошелёк Оператора один: сумма считается по всем задачам."""
-        capture(catalog.cmd_new, "Вторая задача")
-        store.update_task(store.db(), "T002",
+        _, other_task = capture_new_task_id(catalog.cmd_new, "Вторая задача")
+        store.update_task(store.db(), other_task,
                           spent_usd=config.PROGRAM_STOP_LOSS_USD * 0.7 - 1)
 
         self.step(2.0)
@@ -584,7 +606,7 @@ class ProgramSpendTest(TmpRootTest):
         считаться. Потолок задачи снят (budget_usd=0) — проверяется
         внешний контур, а не эскалация по бюджету задачи.
         """
-        store.update_task(store.db(), "T001", state="in_dev", budget_usd=0,
+        store.update_task(store.db(), self.TASK, state="in_dev", budget_usd=0,
                           spent_usd=config.PROGRAM_STOP_LOSS_USD * 0.7 - 1)
 
         # gitcmd подменён вместе с Popen: патч Popen ловит и `subprocess.run`
@@ -592,7 +614,7 @@ class ProgramSpendTest(TmpRootTest):
         with mock.patch.object(runner.gitcmd, "git", fake_git_config), \
                 mock.patch.object(runner, "spawn_agent") as popen:
             popen.return_value = FakeProc([result_event(2.0)])
-            out = capture(runner.cmd_run, "T001")
+            out = capture(runner.cmd_run, self.TASK)
 
         self.assertIn("пересечён порог 70%", out)
         events = self.events()
@@ -642,13 +664,13 @@ class RoleEnvTest(TmpRootTest):
 
     def test_agent_process_gets_that_environment(self):
         capture(catalog.cmd_init)
-        capture(catalog.cmd_new, "Окружение роли")
-        store.update_task(store.db(), "T001", state="in_dev")
+        _, task_id = capture_new_task_id(catalog.cmd_new, "Окружение роли")
+        store.update_task(store.db(), task_id, state="in_dev")
 
         with mock.patch.object(runner.gitcmd, "git", fake_git_config), \
                 mock.patch.object(runner, "spawn_agent") as popen:
             popen.return_value = FakeProc(["готово\n"])
-            capture(runner.cmd_run, "T001")
+            capture(runner.cmd_run, task_id)
 
         env = popen.call_args.kwargs["env"]
         self.assertEqual(env["HOME"], str(config.ROLE_HOME))
@@ -726,24 +748,24 @@ class RoleEnvTest(TmpRootTest):
     def test_absent_identity_is_journalled_before_the_step(self):
         """Идентичности нет — Оператор узнаёт до шага, а не из rc=128 потом."""
         capture(catalog.cmd_init)
-        capture(catalog.cmd_new, "Окружение роли")
-        store.update_task(store.db(), "T001", state="in_dev")
+        _, task_id = capture_new_task_id(catalog.cmd_new, "Окружение роли")
+        store.update_task(store.db(), task_id, state="in_dev")
 
         with mock.patch.object(runner.gitcmd, "git", silent_git), \
                 mock.patch.object(runner, "spawn_agent") as popen:
             popen.return_value = FakeProc(["готово\n"])
-            out = capture(runner.cmd_run, "T001")
+            out = capture(runner.cmd_run, task_id)
 
         self.assertIn("git-идентичность роли не задана", out)
-        actions = [r["action"] for r in store.task_steps(store.db(), "T001")]
+        actions = [r["action"] for r in store.task_steps(store.db(), task_id)]
         self.assertIn("agent env WARNING", actions)
         popen.assert_called_once()  # предупреждение, а не отказ запускать шаг
 
     def test_step_does_not_start_without_the_layer(self):
         """Каталог не создался — шаг пропущен, а не запущен с HOME Оператора."""
         capture(catalog.cmd_init)
-        capture(catalog.cmd_new, "Окружение роли")
-        store.update_task(store.db(), "T001", state="in_dev")
+        _, task_id = capture_new_task_id(catalog.cmd_new, "Окружение роли")
+        store.update_task(store.db(), task_id, state="in_dev")
 
         # T028: сборка брифа (до `role_env`) сверяет свежесть карты через
         # `gitcmd.git` — без подмены это настоящий git-подпроцесс, а общий
@@ -753,11 +775,11 @@ class RoleEnvTest(TmpRootTest):
                                side_effect=OSError("нет места")), \
                 mock.patch.object(runner.gitcmd, "git", fake_git_config), \
                 mock.patch.object(runner, "spawn_agent") as popen:
-            out = capture(runner.cmd_run, "T001")
+            out = capture(runner.cmd_run, task_id)
 
         popen.assert_not_called()
         self.assertIn("окружение роли не подготовлено", out)
-        details = [r["detail"] for r in store.task_steps(store.db(), "T001")
+        details = [r["detail"] for r in store.task_steps(store.db(), task_id)
                    if r["action"] == "agent run SKIPPED"]
         self.assertTrue(details and "нет места" in details[0])
 

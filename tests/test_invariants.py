@@ -35,7 +35,7 @@ from orchestrator import (artel, budget, catalog, ci, cleanup,  # noqa: E402
                           config, fsm, gitcmd, runner, store)
 from scripts import guard  # noqa: E402
 from tests.sandbox import (FakeProc, SpyRun, capture,  # noqa: E402
-                           resilient_tmp_cleanup)
+                           capture_new_task_id, resilient_tmp_cleanup)
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
@@ -139,15 +139,12 @@ schema_version: 1
 class FsmTest(unittest.TestCase):
     """Песочница FSM: БД и артефакты во временном каталоге, git не исполняется."""
 
-    TASK = "T001"
-
     def setUp(self):
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
         root = Path(tmp.name)
 
         for attr, value in (("DB", root / ".artel" / "state.db"),
-                            ("TASKS", root / "tasks"),
                             ("LOGS", root / ".artel" / "logs"),
                             # Курируемый слой ролей (T019): каталог заводит
                             # запуск шага — пусть заводит в песочнице, а не
@@ -163,6 +160,19 @@ class FsmTest(unittest.TestCase):
             patcher = mock.patch.object(config, attr, value)
             patcher.start()
             self.addCleanup(patcher.stop)
+        # `TASKS` НЕ патчится отдельно (в отличие от прежней версии этого
+        # файла): `brief._developer_spec_text` на «чужая ветка не найдена»
+        # (`on_foreign_branch` здесь всегда False — SpyRun ниже отвечает
+        # отказом на ЛЮБОЙ `rev-parse --verify refs/heads/*`) читает
+        # SPEC.md с диска через `config.ROOT / "tasks/<id>/..."`, НЕ через
+        # `config.TASKS` — до SPEC T094 (id — предсказуемый "T001") это
+        # расхождение маскировалось совпадением: `config.ROOT` этого
+        # класса намеренно настоящий (см. ниже), и в реальном дереве
+        # пульта существует настоящий `tasks/T001/` (давно закрытая
+        # задача) — сверка читала ЕГО, не то, что писал `write_spec` этого
+        # файла. С ULID id каждый прогон уникален, совпадения больше нет.
+        # `config.TASKS` остаётся дефолтным `ROOT/tasks` (как и в проде) —
+        # `self.tdir` ниже пишет туда же, откуда бриф реально читает.
 
         self.git_spy = SpyRun()
         spy_patcher = mock.patch.object(gitcmd.subprocess, "run", self.git_spy)
@@ -239,13 +249,20 @@ class FsmTest(unittest.TestCase):
         shutil.copytree(REPO_ROOT / "templates", cold_start_root / "templates")
         with mock.patch.object(config, "ROOT", cold_start_root):
             self.capture(catalog.cmd_init)
-            self.capture(catalog.cmd_new, "Инварианты системы")
+            # SPEC T094: id — ULID, не предсказуемый "T001" — берём то, что
+            # реально вернул `cmd_new`.
+            _, self.TASK = capture_new_task_id(catalog.cmd_new, "Инварианты системы")
         self.tdir = config.TASKS / self.TASK
         # С SPEC T048 `cmd_new` пишет артефакты в worktree, не на диск
         # main — тесты этого файла кладут SPEC.md/PLAN.md/... напрямую на
         # диск (симуляция ветко-корректного fallback), каталог заводит
         # сам файл.
         self.tdir.mkdir(parents=True, exist_ok=True)
+        # `config.TASKS` теперь = реальный `ROOT/tasks` (см. комментарий
+        # выше) — `self.tdir` физически лежит в РЕАЛЬНОМ дереве пульта;
+        # ULID гарантирует уникальное неколлизирующее имя, но каталог
+        # обязан быть убран, а не оставлен в рабочей копии после теста.
+        self.addCleanup(shutil.rmtree, self.tdir, ignore_errors=True)
         self.branch = self.task_row()["branch"]
 
     # ------------------------------------------------------------ утилиты
@@ -723,6 +740,11 @@ class ExhaustedBudgetIsNotBypassableTest(FsmTest):
 
     def setUp(self):
         super().setUp()
+        # `runner.cmd_run` собирает бриф developer безусловно (читает
+        # SPEC.md) — до SPEC T094 отсутствие `write_spec` здесь маскировал
+        # реальный `tasks/T001/SPEC.md` пульта (id был предсказуемым
+        # "T001"); ULID убрал совпадение, SPEC.md нужен явно.
+        self.write_spec("ready")
         self.write_plan("ready")
         self.set_state("in_dev", budget_usd=1.0, spent_usd=1.0)
 
@@ -785,6 +807,9 @@ class ParallelTaskLimitIsNotBypassableTest(FsmTest):
 
     def setUp(self):
         super().setUp()
+        # См. коммент в `CountersNeverResetTest.setUp`: с ULID id брифу
+        # неоткуда случайно найти чужой SPEC.md — свой нужен явно.
+        self.write_spec("ready")
         self.write_plan("ready")
         self.set_state("in_dev")
         conn = store.db()
@@ -879,6 +904,13 @@ class CountersNeverResetTest(FsmTest):
 
     def setUp(self):
         super().setUp()
+        # С предсказуемым "T001" SPEC.md здесь никогда не писался, но
+        # `brief.developer_brief` случайно находил на диске настоящий
+        # (давно закрытый) `tasks/T001/SPEC.md` реального дерева пульта —
+        # с ULID id совпадения больше нет (см. докстринг `FsmTest.setUp`),
+        # и без своего SPEC.md сборка брифа отказывает «дерево не на
+        # ветке задачи».
+        self.write_spec("ready")
         self.write_plan("ready")
         self.set_state("review")
         patcher = mock.patch.object(runner.time, "sleep", lambda _: None)
@@ -1066,8 +1098,6 @@ class KillKeepsMainIntactTest(unittest.TestCase):
     только неприкосновенность main.
     """
 
-    TASK = "T001"
-
     def setUp(self):
         self.repo = None
         self.fresh_repo()
@@ -1115,7 +1145,9 @@ class KillKeepsMainIntactTest(unittest.TestCase):
             self.repo.enter_context(mock.patch.object(config, attr, value))
 
         self.capture(catalog.cmd_init)
-        self.capture(catalog.cmd_new, "Инварианты системы")
+        # SPEC T094: id — ULID, не предсказуемый "T001" — берём то, что
+        # реально вернул `cmd_new`.
+        _, self.TASK = capture_new_task_id(catalog.cmd_new, "Инварианты системы")
         self.branch = store.db().execute(
             "SELECT branch FROM tasks WHERE id=?", (self.TASK,)).fetchone()[0]
 

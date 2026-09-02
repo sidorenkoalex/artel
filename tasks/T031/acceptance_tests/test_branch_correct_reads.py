@@ -35,7 +35,7 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent.parent))
 
 from orchestrator import brief, catalog, config, fixation, fsm, store  # noqa: E402
-from orchestrator import runner  # noqa: E402
+from orchestrator import runner, workspace  # noqa: E402
 
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent.parent
 
@@ -85,7 +85,8 @@ schema_version: 2
 ## Влияние на систему
 """
 
-AC_TEST_BOTH_COVERED = """import unittest
+AC_TEST_BOTH_COVERED = """\"\"\"Зелёный с рождения: фикстура T031, обе критерии проверены сразу.\"\"\"
+import unittest
 
 
 class AcceptanceTest(unittest.TestCase):
@@ -99,11 +100,12 @@ class AcceptanceTest(unittest.TestCase):
 
 class RealGitBranchTest(unittest.TestCase):
     """Песочница с настоящим git: ROOT — свежий репозиторий с веткой main
-    и заведённой задачей T001; `OTHER_BRANCH` существует с самого начала
-    (тот же коммит, что main на момент создания задачи) и воспроизводит
-    чужую ветку, на которую «съехало» рабочее дерево (журнал T030)."""
+    и заведённой задачей (id — ULID, SPEC T094 требование 2: `self.TASK`
+    заполняется РЕАЛЬНЫМ возвратом `cmd_new` в `setUp`, не литералом);
+    `OTHER_BRANCH` существует с самого начала (тот же коммит, что main на
+    момент создания задачи) и воспроизводит чужую ветку, на которую
+    «съехало» рабочее дерево (журнал T030)."""
 
-    TASK = "T001"
     OTHER_BRANCH = "task/t029-drugaya-zadacha"
 
     def setUp(self):
@@ -138,6 +140,7 @@ class RealGitBranchTest(unittest.TestCase):
                             ("ROLE_HOME", self.root / ".artel" / "home"),
                             ("ROLE_CONFIG_DIR",
                              self.root / ".artel" / "home" / ".claude"),
+                            ("WORKTREES", self.root / ".artel" / "worktrees"),
                             ("TARGETS", self.root / "targets.yaml")):
             self.patches.enter_context(mock.patch.object(config, attr, value))
         self.patches.enter_context(mock.patch.object(
@@ -146,7 +149,8 @@ class RealGitBranchTest(unittest.TestCase):
             "orchestrator.doctor.preflight_checks", lambda role, target: []))
 
         self.capture(catalog.cmd_init)
-        self.capture(catalog.cmd_new, "Ветко-корректные чтения")
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.TASK = catalog.cmd_new("Ветко-корректные чтения")
         self.tdir = config.TASKS / self.TASK
         self.branch = store.get_task(store.db(), self.TASK)["branch"]
 
@@ -173,11 +177,24 @@ class RealGitBranchTest(unittest.TestCase):
         return self.git("rev-parse", "HEAD").strip()
 
     def checkout(self, branch: str, create: bool = False) -> None:
+        """Переключает чекаут `self.root` (однодеревная модель этого теста,
+        старше T045). `cmd_new` (T048) заводит РЕАЛЬНЫЙ linked worktree на
+        `self.branch` — git не даёт держать одну ветку разом в `self.root`
+        и в linked worktree, так что заход НА `self.branch` сначала убирает
+        воркдерево (`workspace.remove`), а уход С нея — восстанавливает его
+        (`workspace.ensure`): AC-4 читает «чужой» чекаут именно через
+        `workspace.path` (`fixation._fix_dogfood`), ему нужно, чтобы
+        воркдерево задачи было на месте, когда `self.root` смотрит в другую
+        сторону."""
+        if branch == self.branch:
+            self.capture(workspace.remove, self.TASK)
         args = ["checkout", "-q"]
         if create:
             args.append("-b")
         args.append(branch)
         self.git(*args)
+        if branch != self.branch:
+            workspace.ensure(self.TASK, self.branch)
 
     # -- задача / состояние -------------------------------------------
 
@@ -214,8 +231,10 @@ class RealGitBranchTest(unittest.TestCase):
         """SPEC.md v2 с AC-разметкой, ready, закоммичен на ветке задачи —
         главный сценарий: артефакт существует ТОЛЬКО там, main/чужая ветка
         его не видят (реалистично: до merge_gate ветка задачи не мержится
-        в main, ADR-0003)."""
-        self.checkout(self.branch, create=True)
+        в main, ADR-0003). Ветка `self.branch` уже существует (её завёл
+        `cmd_new` в setUp) — без `-b`, иначе git отказал бы «уже
+        существует»."""
+        self.checkout(self.branch)
         self.write("SPEC.md", SPEC_V2)
         self.commit_task_dir("SPEC.md ready")
 
@@ -424,6 +443,11 @@ class NoUnhandledExceptionOnMissingBranchTest(RealGitBranchTest):
         self.write_acceptance_tests(AC_TEST_BOTH_COVERED)
         self.commit_task_dir("acceptance_tests от test_author")
         self.checkout(self.OTHER_BRANCH)
+        # `checkout` выше восстановил linked worktree на `self.branch`
+        # (см. её докстринг) — веткой сейчас владеет он же, `-D` без
+        # предварительного `workspace.remove` откажет тем же способом,
+        # что и живой git.
+        self.capture(workspace.remove, self.TASK)
         self.git("branch", "-D", self.branch)  # ветки задачи в git больше нет
         store.update_task(store.db(), self.TASK, fixed_sha="f" * 40)
 

@@ -243,8 +243,12 @@ def cmd_budget(task_id: str, raw_usd: str, session_id: str | None = None) -> Non
 
     Берёт lease задачи перед работой (SPEC T044, требование 2) — обёртка
     вокруг `_cmd_budget`, см. `orchestrator/lease.py`.
+
+    Префикс -> полный id (SPEC T094, требование 3, AC-3) резолвится ЗДЕСЬ,
+    до lease (REVIEW T094 итерация 1, замечание 1).
     """
     conn = store.db()
+    task_id = store.resolve_task_id(conn, task_id)
     lease.run_locked(conn, task_id, session_id,
                      lambda sid: _cmd_budget(conn, task_id, raw_usd))
 

@@ -37,7 +37,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from orchestrator import (catalog, config, fixation, fsm,  # noqa: E402
                           gitcmd, projects, runner, store, workspace)
 from tests.sandbox import (FakeProc, TmpRootTest, capture,  # noqa: E402
-                           claude_only_popen, resilient_tmp_cleanup)
+                           capture_new_task_id, claude_only_popen,
+                           resilient_tmp_cleanup)
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
@@ -237,13 +238,27 @@ class ExternalTargetAdvanceIgnoresDirtyCheckTest(TmpRootTest):
         capture(catalog.cmd_init)
         store.insert_task(store.db(), self.TASK, "Задача sled", "in_dev",
                           f"task/{self.TASK.lower()}", "sled", 25.0)
-        # Гейтинг advance читает артефакты из tasks/<id> ПУЛЬТА (до A7,
-        # ADR-0003 3д — независимо от target шага, см. ExternalIntegrity
-        # IncidentBlocksRunTest.make_task ниже), не из репо target'а —
-        # его этот тест намеренно не трогает вовсе.
-        (config.TASKS / self.TASK).mkdir(parents=True)
-        (config.TASKS / self.TASK / "PLAN.md").write_text(
-            PLAN_READY.format(task=self.TASK), encoding="utf-8")
+        # SPEC T094, требование 10: гейтинг advance для НЕ-self target
+        # читает tasks/<id>/PLAN.md из артефактной ветки ПУЛЬТА
+        # (`artifact_source.resolve`), не из `config.TASKS` — ROOT этой
+        # песочницы должен быть настоящим git-репозиторием (тот же приём,
+        # что `ExternalIntegrityIncidentBlocksRunTest.setUp` ниже).
+        subprocess.run(["git", "init", "-q", "-b", config.MAIN_BRANCH],
+                       cwd=config.ROOT, check=True)
+        subprocess.run(["git", "config", "user.email", "artel@example.invalid"],
+                       cwd=config.ROOT, check=True)
+        subprocess.run(["git", "config", "user.name", "artel tests"],
+                       cwd=config.ROOT, check=True)
+        (config.ROOT / "marker.txt").write_text("main\n", encoding="utf-8")
+        shutil.copy(REPO_ROOT / ".gitignore", config.ROOT / ".gitignore")
+        subprocess.run(["git", "add", "-A"], cwd=config.ROOT, check=True)
+        subprocess.run(["git", "commit", "-q", "-m", "init"],
+                       cwd=config.ROOT, check=True)
+        from orchestrator import artifact_branch
+        artifact_branch.commit_files(
+            self.TASK,
+            {f"tasks/{self.TASK}/PLAN.md": PLAN_READY.format(task=self.TASK)},
+            f"{self.TASK}: PLAN заглушка")
 
     def test_uncommitted_plan_still_advances_for_external_target(self):
         out = capture(fsm.cmd_advance, self.TASK)
@@ -274,6 +289,24 @@ class ExternalIntegrityIncidentBlocksRunTest(TmpRootTest):
         config.TARGETS.write_text(TARGETS_YAML, encoding="utf-8")
         capture(projects.cmd_target_init, "sled")
         capture(catalog.cmd_init)
+        # SPEC T094, требование 10: бриф developer для ЛЮБОГО не-self
+        # target читает tasks/<id>/ из артефактной ветки ПУЛЬТА
+        # (`brief._artifact_source_branch`) — ROOT этой песочницы должен
+        # быть настоящим git-репозиторием, не только `config.PROJECTS/sled`.
+        subprocess.run(["git", "init", "-q", "-b", config.MAIN_BRANCH],
+                       cwd=config.ROOT, check=True)
+        subprocess.run(["git", "config", "user.email", "artel@example.invalid"],
+                       cwd=config.ROOT, check=True)
+        subprocess.run(["git", "config", "user.name", "artel tests"],
+                       cwd=config.ROOT, check=True)
+        (config.ROOT / "marker.txt").write_text("main\n", encoding="utf-8")
+        # `.artel/` несёт вложенный git-репозиторий (`config.PROJECTS/sled`,
+        # `projects.cmd_target_init` выше) — без `.gitignore` `git add -A`
+        # отказывает на нём как на подмодуле без коммита.
+        shutil.copy(REPO_ROOT / ".gitignore", config.ROOT / ".gitignore")
+        subprocess.run(["git", "add", "-A"], cwd=config.ROOT, check=True)
+        subprocess.run(["git", "commit", "-q", "-m", "init"],
+                       cwd=config.ROOT, check=True)
         # `runner.cmd_run` для роли developer читает skills/*.md по имени
         # из roles.yaml (conventions-core, escalation-rules, coding-standards).
         shutil.copytree(REPO_ROOT / "skills", config.ROOT / "skills")
@@ -311,13 +344,15 @@ class ExternalIntegrityIncidentBlocksRunTest(TmpRootTest):
         tdir.mkdir(parents=True)
         (tdir / "SPEC.md").write_text("# SPEC заглушка\n", encoding="utf-8")
         (tdir / "PLAN.md").write_text("# PLAN заглушка\n", encoding="utf-8")
-        # T028: бриф роли developer читает tasks/<id>/SPEC.md из ROOT пульта
-        # (config.TASKS), а не из репо target'а, — тот же адрес, что и
-        # `catalog.cmd_new` (артефакты задачи живут в пульте, ADR-0003 3д,
-        # «особый случай», до A7 — независимо от target шага).
-        (config.TASKS / task_id).mkdir(parents=True, exist_ok=True)
-        (config.TASKS / task_id / "SPEC.md").write_text(
-            "# SPEC заглушка\n", encoding="utf-8")
+        # SPEC T094, требование 10: бриф роли developer для НЕ-self target
+        # читает tasks/<id>/SPEC.md из артефактной ветки ПУЛЬТА
+        # (`brief._artifact_source_branch`), не из `config.TASKS` — та
+        # мирная площадка (ADR-0003 3д, «особый случай») с этой задачи
+        # остаётся только за self/догфудом (требование 16).
+        from orchestrator import artifact_branch
+        artifact_branch.commit_files(
+            task_id, {f"tasks/{task_id}/SPEC.md": "# SPEC заглушка\n"},
+            f"{task_id}: SPEC заглушка")
         capture(lambda: store.set_state(
             store.db(), task_id, "in_dev", "operator",
             expected_state="spec_writing", detail="тест: вход в in_dev"))
@@ -441,6 +476,22 @@ class ExternalApproveDoesNotCommitOthersWorkInProgressTest(TmpRootTest):
         config.TARGETS.write_text(TARGETS_YAML, encoding="utf-8")
         capture(projects.cmd_target_init, "sled")
         capture(catalog.cmd_init)
+        # SPEC T094, требование 10: approve на spec_gate для НЕ-self
+        # target читает tasks/<id>/SPEC.md из артефактной ветки ПУЛЬТА
+        # (`artifact_source.resolve`) — ROOT этой песочницы должен быть
+        # настоящим git-репозиторием (тот же приём, что
+        # `ExternalIntegrityIncidentBlocksRunTest.setUp`).
+        subprocess.run(["git", "init", "-q", "-b", config.MAIN_BRANCH],
+                       cwd=config.ROOT, check=True)
+        subprocess.run(["git", "config", "user.email", "artel@example.invalid"],
+                       cwd=config.ROOT, check=True)
+        subprocess.run(["git", "config", "user.name", "artel tests"],
+                       cwd=config.ROOT, check=True)
+        (config.ROOT / "marker.txt").write_text("main\n", encoding="utf-8")
+        shutil.copy(REPO_ROOT / ".gitignore", config.ROOT / ".gitignore")
+        subprocess.run(["git", "add", "-A"], cwd=config.ROOT, check=True)
+        subprocess.run(["git", "commit", "-q", "-m", "init"],
+                       cwd=config.ROOT, check=True)
 
     def repo(self) -> Path:
         return config.PROJECTS / "sled"
@@ -454,6 +505,14 @@ class ExternalApproveDoesNotCommitOthersWorkInProgressTest(TmpRootTest):
         tdir = self.repo() / "tasks" / task_id
         tdir.mkdir(parents=True)
         (tdir / "SPEC.md").write_text("# SPEC заглушка\n", encoding="utf-8")
+        # SPEC T094, требование 10: approve читает SPEC.md с артефактной
+        # ветки пульта для НЕ-self target, не из `self.repo()` (легаси-
+        # адрес фиксации, ADR-0005 п.4 до правки — сохраняется для
+        # `fixed_sha`, требование 9, но не для содержимого).
+        from orchestrator import artifact_branch
+        artifact_branch.commit_files(
+            task_id, {f"tasks/{task_id}/SPEC.md": "# SPEC заглушка\n"},
+            f"{task_id}: SPEC заглушка")
         capture(lambda: store.set_state(
             store.db(), task_id, "spec_gate", "operator",
             expected_state="spec_writing", detail="тест: вход в spec_gate"))
@@ -516,8 +575,6 @@ class RealPultGitTest(unittest.TestCase):
     состояния рабочей копии, заглушкой git его не изобразить.
     """
 
-    TASK = "T001"
-
     def setUp(self):
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(resilient_tmp_cleanup, tmp)
@@ -560,12 +617,15 @@ class RealPultGitTest(unittest.TestCase):
             lambda role, target: []))
 
         self.capture(catalog.cmd_init)
-        self.capture(catalog.cmd_new, "Git-фиксация")  # заводит T001, свой worktree
+        # SPEC T094: id — ULID, не предсказуемый "T001" — берём то, что
+        # реально вернул `cmd_new`, а не литерал.
+        _, self.TASK = capture_new_task_id(catalog.cmd_new, "Git-фиксация")
         # SPEC T048: `cmd_new` заводит РЕАЛЬНУЮ ветку/worktree задачи —
         # рабочее дерево этой песочницы (`self.root`) остаётся на main,
-        # `on_foreign_branch` для T001 теперь истинно (было ложно до T048,
-        # см. докстринг `fixation._fix_dogfood`); голова читается с ветки
-        # задачи (`gitcmd.branch_head_sha`), артефакты живут в её worktree.
+        # `on_foreign_branch` для этой задачи теперь истинно (было ложно до
+        # T048, см. докстринг `fixation._fix_dogfood`); голова читается с
+        # ветки задачи (`gitcmd.branch_head_sha`), артефакты живут в её
+        # worktree.
         self.branch = store.get_task(store.db(), self.TASK)["branch"]
 
     def git(self, *args: str) -> str:

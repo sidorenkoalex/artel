@@ -36,7 +36,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from orchestrator import (budget, catalog, cleanup, config, fsm,  # noqa: E402
                           runner, spend, store, workspace)
 from tests.sandbox import (FakeProc, TmpRootTest, capture,  # noqa: E402
-                           fake_git, resilient_tmp_cleanup)
+                           capture_new_task_id, fake_git, resilient_tmp_cleanup)
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
@@ -126,11 +126,15 @@ class _MultitargetInvariantsTmpRootTest(TmpRootTest):
         на весь класс: `ExternalWorkspaceIsolationTest` тем же базовым
         классом пользуется для теста РЕАЛЬНОГО `workspace.ensure` (SPEC
         T045, AC-3) и не должен получить его подмену стороной.
-        """
+
+        Возвращает id заведённой задачи (SPEC T094: ULID, не предсказуемая
+        строка) — вызывающая сторона обязана взять его отсюда, не
+        предполагать литерал «T001»."""
         with mock.patch.object(runner.workspace, "ensure",
                                lambda task_id, branch: (self.root, None)), \
                 mock.patch.object(runner.gitcmd, "git", fake_git):
-            return capture(catalog.cmd_new, title)
+            _, task_id = capture_new_task_id(catalog.cmd_new, title)
+            return task_id
 
     def run_faked(self, task_id: str, lines=("готово\n",)) -> dict:
         """Прогон `cmd_run` с подменённым git/Popen; возвращает kwargs Popen."""
@@ -152,8 +156,6 @@ class PultArtifactIsolationTest(unittest.TestCase):
     конструктивно). Git здесь настоящий — вопрос в том, что git status
     ФАКТИЧЕСКИ видит, а не в тексте .gitignore самом по себе.
     """
-
-    TASK = "T001"
 
     def setUp(self):
         tmp = tempfile.TemporaryDirectory()
@@ -188,7 +190,7 @@ class PultArtifactIsolationTest(unittest.TestCase):
             self.patches.enter_context(mock.patch.object(config, attr, value))
 
         self.capture(catalog.cmd_init)
-        self.capture(catalog.cmd_new, "Изоляция артефактов")
+        _, self.TASK = capture_new_task_id(catalog.cmd_new, "Изоляция артефактов")
 
     def git(self, *args: str) -> str:
         res = subprocess.run(["git", *args], cwd=self.root,
@@ -363,57 +365,58 @@ class CrossTargetDbIsolationTest(TmpRootTest):
 
     def test_rows_and_journals_do_not_cross_targets(self):
         capture(catalog.cmd_init)
-        self.new_pult_task("Задача пульта")  # T001, target=artel
+        artel_id = self.new_pult_task("Задача пульта")  # target=artel
         sled_id = self.second_target("sled", 1)
         store.insert_task(store.db(), sled_id, "Задача sled", "in_dev",
                           f"task/{sled_id.lower()}", "sled", 25.0)
 
         conn = store.db()
-        store.journal(conn, "T001", "operator", "пультовое событие")
+        store.journal(conn, artel_id, "operator", "пультовое событие")
         store.journal(conn, sled_id, "operator", "внешнее событие")
-        store.charge(conn, "T001", 3.0)
+        store.charge(conn, artel_id, 3.0)
         store.charge(conn, sled_id, 7.0)
 
-        artel_steps = [r["action"] for r in store.task_steps(conn, "T001")]
+        artel_steps = [r["action"] for r in store.task_steps(conn, artel_id)]
         sled_steps = [r["action"] for r in store.task_steps(conn, sled_id)]
         self.assertIn("пультовое событие", artel_steps)
         self.assertNotIn("внешнее событие", artel_steps)
         self.assertIn("внешнее событие", sled_steps)
         self.assertNotIn("пультовое событие", sled_steps)
 
-        self.assertAlmostEqual(store.get_task(conn, "T001")["spent_usd"], 3.0)
+        self.assertAlmostEqual(store.get_task(conn, artel_id)["spent_usd"], 3.0)
         self.assertAlmostEqual(store.get_task(conn, sled_id)["spent_usd"], 7.0)
-        self.assertEqual(store.task_target(conn, "T001"), "artel")
+        self.assertEqual(store.task_target(conn, artel_id), "artel")
         self.assertEqual(store.task_target(conn, sled_id), "sled")
 
     def test_kill_of_one_target_task_does_not_touch_the_other(self):
         capture(catalog.cmd_init)
-        self.new_pult_task("Задача пульта")  # T001, target=artel
+        artel_id = self.new_pult_task("Задача пульта")  # target=artel
         sled_id = self.second_target("sled", 1)
         store.insert_task(store.db(), sled_id, "Задача sled", "in_dev",
                           f"task/{sled_id.lower()}", "sled", 25.0)
-        store.update_task(store.db(), "T001", state="in_dev")
+        store.update_task(store.db(), artel_id, state="in_dev")
 
         capture(cleanup.cmd_kill, sled_id)
 
         self.assertEqual(store.get_task(store.db(), sled_id)["state"], "killed")
-        self.assertEqual(store.get_task(store.db(), "T001")["state"], "in_dev",
+        self.assertEqual(store.get_task(store.db(), artel_id)["state"], "in_dev",
                          "kill чужого target тронул строку пульта")
 
     def test_directories_of_two_targets_do_not_collide(self):
         """Требование 1/3 на стыке: артефакты пульта и внешнего в разных путях."""
         capture(catalog.cmd_init)
-        self.new_pult_task("Задача пульта")  # T001, target=artel
+        artel_id = self.new_pult_task("Задача пульта")  # target=artel
         sled_id = self.second_target("sled", 1)
 
-        pult_dir = config.TASKS / "T001"
+        pult_dir = config.TASKS / artel_id
         external_dir = config.PROJECTS / "sled" / "tasks" / sled_id
         external_dir.mkdir(parents=True)
 
         self.assertTrue(pult_dir.is_dir())
         self.assertNotEqual(pult_dir, external_dir)
-        self.assertFalse((config.PROJECTS / "sled" / "tasks" / "T001").exists(),
-                         "внешний target не должен видеть путь пультового id")
+        self.assertFalse(
+            (config.PROJECTS / "sled" / "tasks" / artel_id).exists(),
+            "внешний target не должен видеть путь пультового id")
 
 
 class ProgramSpendAcrossTargetsTest(TmpRootTest):
@@ -437,7 +440,7 @@ class ProgramSpendAcrossTargetsTest(TmpRootTest):
 
     def test_threshold_sums_two_different_targets(self):
         capture(catalog.cmd_init)
-        self.new_pult_task("Задача пульта")  # T001, target=artel
+        artel_id = self.new_pult_task("Задача пульта")  # target=artel
         sled_id = self.second_target("sled", 1)
         store.insert_task(store.db(), sled_id, "Задача sled", "in_dev",
                           f"task/{sled_id.lower()}", "sled", 25.0)
@@ -446,7 +449,7 @@ class ProgramSpendAcrossTargetsTest(TmpRootTest):
         # последнего шага (та же арифметика, что у test_multitarget
         # .ProgramSpendTest: сумма чуть ниже 70%, шаг переводит её за порог).
         total_before = config.PROGRAM_STOP_LOSS_USD * 0.7 - 1
-        store.update_task(store.db(), "T001", spent_usd=total_before * 0.4)
+        store.update_task(store.db(), artel_id, spent_usd=total_before * 0.4)
         store.update_task(store.db(), sled_id, spent_usd=total_before * 0.6)
 
         out = self.spend_step(sled_id, 2.0)

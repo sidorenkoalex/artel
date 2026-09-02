@@ -146,6 +146,19 @@ def _journal_component(conn, task_id: str, role: str, label: str,
     return f"### {label}\n\n{text.strip()}\n"
 
 
+def _artifact_source_branch(conn, task_id: str) -> tuple[str, bool]:
+    """(ветка-источник `tasks/<id>/`, foreign) — общая точка входа для
+    всех читателей брифа (SPEC T094, требование 10, AC-11 — реестр AC-1).
+
+    Делегирует `orchestrator/artifact_source.py::resolve` (T094 итерация
+    2 — тот же резолвер теперь несёт и `fsm.py`/`fsm_advance.py`/
+    `acceptance.py`, чтобы не плодить копию этого решения в нескольких
+    местах, PLAN.md «Вопрос Оператору — требование 10», вариант А).
+    """
+    from . import artifact_source
+    return artifact_source.resolve(conn, task_id)
+
+
 def _developer_spec_text(conn, task_id: str, branch: str, foreign: bool) -> str:
     """SPEC.md задачи — с ВЕТКИ задачи, если рабочее дерево пульта точно
     стоит не на ней (SPEC T031, AC-2), иначе рабочая копия, как до T031.
@@ -245,8 +258,7 @@ def developer_brief(conn, task_id: str) -> str:
     документом (требования 1, 3, 4, 8); ANSWER-n.md последней эскалации
     — если она была (SPEC T075, AC-6: ответ обязан дойти до роли, а не
     только существовать в ветке)."""
-    branch = store.task_branch(conn, task_id)
-    foreign = gitcmd.on_foreign_branch(branch)
+    branch, foreign = _artifact_source_branch(conn, task_id)
     spec_text = _developer_spec_text(conn, task_id, branch, foreign)
     map_text = fresh_map_text(conn, task_id)
     conventions_text = (config.ROOT / CONVENTIONS_REL).read_text(
@@ -293,8 +305,7 @@ def analyst_map_component(conn, task_id: str) -> str:
     входом, скилы и остальной вход роли не меняются. QUESTIONS.md и
     ANSWER-n.md последнего батча — если он был (SPEC T075, AC-6): роль
     видит и свой вопрос, и ответ на него, не только ответ без контекста."""
-    branch = store.task_branch(conn, task_id)
-    foreign = gitcmd.on_foreign_branch(branch)
+    branch, foreign = _artifact_source_branch(conn, task_id)
     map_text = fresh_map_text(conn, task_id)
     parts = [_journal_component(conn, task_id, "analyst", MAP_REL, map_text)]
     q_part = _questions_component(conn, task_id, "analyst", branch, foreign)
@@ -312,8 +323,7 @@ def test_author_answer_component(conn, task_id: str) -> str | None:
     конвенции отдельным брифом (`runner.py`, ветка `test_author`) ни до,
     ни после этой задачи, добавляется только новый минимум. `None` —
     ответов ещё нет, промпт шага остаётся прежним (без добавки)."""
-    branch = store.task_branch(conn, task_id)
-    foreign = gitcmd.on_foreign_branch(branch)
+    branch, foreign = _artifact_source_branch(conn, task_id)
     part = _answer_component(conn, task_id, "test_author", branch, foreign)
     if not part:
         return None

@@ -135,8 +135,15 @@ def cleanup_killed_task(conn, task_id: str, branch: str) -> None:
 
 
 def cmd_kill(task_id: str, session_id: str | None = None) -> None:
-    """Берёт lease задачи перед работой (SPEC T044, требование 2)."""
+    """Берёт lease задачи перед работой (SPEC T044, требование 2).
+
+    Префикс -> полный id (SPEC T094, требование 3, AC-3) резолвится ЗДЕСЬ,
+    до lease/CAS/путей на диске — иначе `kill` неразрешённым префиксом
+    брал lease по несуществующему ключу и зацикливался в `_cmd_kill` на
+    вечно проигрывающем CAS (REVIEW T094 итерация 1, замечание 1: живой
+    репро — `cmd_kill` с уникальным префиксом зависал бесконечно)."""
     conn = store.db()
+    task_id = store.resolve_task_id(conn, task_id)
     lease.run_locked(conn, task_id, session_id,
                      lambda sid: _cmd_kill(conn, task_id))
 
@@ -149,7 +156,8 @@ def cmd_kill(task_id: str, session_id: str | None = None) -> None:
 KILL_TZ_JOURNAL_ACTION = "kill: TZ.md"
 
 
-def _journal_tz_before_cleanup(conn, task_id: str, branch: str) -> None:
+def _journal_tz_before_cleanup(conn, task_id: str, branch: str,
+                               target: str) -> None:
     """Полный текст `TZ.md` (если он был) — в журнал БД ДО уборки ветки
     (SPEC T048, требование 5): main для убитой задачи не видел ни SPEC.md,
     ни TZ.md вовсе (требование 4), а сама ветка после `cleanup_killed_task`
@@ -157,8 +165,17 @@ def _journal_tz_before_cleanup(conn, task_id: str, branch: str) -> None:
     (`gitcmd.show`), тем же приёмом, что и `runner.step_role` (T031/T047,
     требование 7): TZ.md коммитится `cmd_new` сразу в ветку, не на диск.
     Файла нет (`new` без `--tz`) — журналить нечего, не отказ.
+
+    Внешний target (SPEC T094, требование 10): `tasks/<id>/` живёт в
+    артефактной ветке пульта, не в `branch` (та несёт только код целевого
+    и пульту вообще не принадлежит) — читается оттуда.
     """
-    text, _ = gitcmd.show(branch, f"tasks/{task_id}/TZ.md")
+    if target != config.DEFAULT_TARGET:
+        from . import artifact_branch
+        source_branch = artifact_branch.branch_name(task_id)
+    else:
+        source_branch = branch
+    text, _ = gitcmd.show(source_branch, f"tasks/{task_id}/TZ.md")
     if text is not None:
         store.journal(conn, task_id, "orchestrator",
                       KILL_TZ_JOURNAL_ACTION, text)
@@ -185,7 +202,8 @@ def _cmd_kill(conn, task_id: str) -> None:
     повторный kill на уже killed задаче всё равно доводил её до конца.
     """
     t = store.get_task(conn, task_id)
-    _journal_tz_before_cleanup(conn, task_id, t["branch"])
+    target = t["target"] or config.DEFAULT_TARGET
+    _journal_tz_before_cleanup(conn, task_id, t["branch"], target)
     state = t["state"]
     won = False
     while not won and state not in TERMINAL_STATES:
@@ -197,4 +215,26 @@ def _cmd_kill(conn, task_id: str) -> None:
             state = exc.actual
     if not won:
         print(f"[{task_id}] уже {state} — kill не требуется")
+    _publish_snapshot_if_pending(conn, task_id, target, bool(t["is_canary"]))
     cleanup_killed_task(conn, task_id, t["branch"])
+
+
+def _publish_snapshot_if_pending(conn, task_id: str, target: str,
+                                 is_canary: bool) -> None:
+    """Снапшот закрытия (SPEC T094, требования 12-13, AC-13) — только
+    внешний target (требование 16/AC-18) и не канарейка (требование 12,
+    AC-13 «исключение канарейки»). `snapshot.pending` — False, если
+    задача не заводила артефактную ветку вовсе (self/канарейка) или
+    снапшот уже подтверждён в origin целевого раньше (идемпотентность
+    повторного `kill`, AC-15).
+
+    Отложенный импорт: `snapshot` -> `retro` -> `cleanup` — прямой
+    импорт на уровне модуля замкнул бы этот же файл в цикл.
+    """
+    if target == config.DEFAULT_TARGET or is_canary:
+        return
+    from . import snapshot
+    if not snapshot.pending(task_id):
+        return
+    note = snapshot.publish_and_cleanup(conn, task_id, target, "killed")
+    print(f"  {note}")
