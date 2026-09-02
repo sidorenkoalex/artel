@@ -1,7 +1,8 @@
 """Цикл `auto`: run+advance, пока в шаге работает агент."""
 import time
 
-from . import agent_log, budget, ci, config, fsm, lease, pause, runner, store
+from . import (agent_log, budget, ci, config, fixation, fsm, lease, pause,
+              runner, store)
 
 # Действие журнала, которым отказ `advance` узнаётся вне зависимости от
 # конкретной причины (SPEC T038, требование 1): каждая точка `cmd_advance`
@@ -99,13 +100,27 @@ def auto_stop_advice(conn, task_id: str, state: str) -> tuple[str, str]:
     случаев разные. Потолок спрашиваем у того же `budget_block`, которым
     отказывается стартовать `run`, — так подсказка цикла не может разойтись с
     его отказом.
+
+    Подсказки состояний из `fsm.APPROVE_NEEDS_SHA` несут `{sha}` (SPEC
+    «approve: полный sha в подсказках», требование 1) — зафиксированный
+    sha готовым к копированию, а не голым `<id>`, которым Оператору
+    иначе пришлось бы достраивать значение по памяти (инцидент 02.09,
+    мерж T101). Потолок бюджета подменяет подсказку `escalated` на
+    `AUTO_STOP_BUDGET` (без `{sha}`, следующая команда — `budget`, не
+    `approve`) — sha в этом случае не ищется.
     """
     reason, hint = config.AUTO_STOP.get(
         state, (f"состояние {state} циклом не обслуживается", "artel.py show {id}"))
+    needs_sha = state in fsm.APPROVE_NEEDS_SHA
     if state == "escalated" and budget.budget_block(
             store.get_task(conn, task_id)) is not None:
         reason, hint = config.AUTO_STOP_BUDGET
-    return reason, hint.format(id=task_id)
+        needs_sha = False
+    sha_hint = ""
+    if needs_sha:
+        target = store.task_target(conn, task_id)
+        sha_hint = fixation.approve_sha_hint(task_id, target)
+    return reason, hint.format(id=task_id, sha=sha_hint)
 
 
 def auto_stop(conn, task_id: str, state: str, reason: str, hint: str) -> None:

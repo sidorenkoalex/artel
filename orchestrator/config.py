@@ -280,18 +280,25 @@ STATE_ROLE = {"tests_writing": "test_author", "in_dev": "developer",
 # и потолок времени останавливаются раньше — см. AUTO_STOP_VERIFYING_RED).
 # Подсказка только называет команду: approve и reject на гейтах нажимает
 # Оператор, auto их не вызывает (docs/invariants.md 18).
+#
+# `{sha}` — суффикс `" <зафиксированный sha>"`, подставляемый `auto.
+# auto_stop_advice` (SPEC «approve: полный sha в подсказках», требование
+# 1) для команд `approve`: готовая к копированию строка вместо голого
+# `<id>`, которую Оператору иначе приходится достраивать вручную
+# (инцидент 02.09, мерж T101). Пусто — фиксации ещё нет, подсказка
+# остаётся байт-в-байт прежней.
 AUTO_STOP = {
     "spec_writing": ("SPEC ещё пишется",
                      "доведи SPEC.md до status: ready, затем artel.py advance {id}"),
     "spec_gate": ("гейт SPEC — решение Оператора",
-                  "прочитай SPEC и: artel.py approve {id}"),
+                  "прочитай SPEC и: artel.py approve {id}{sha}"),
     "acceptance": ("приёмка — решение Оператора",
-                   "проведи приёмку по критериям SPEC: artel.py approve {id} "
+                   "проведи приёмку по критериям SPEC: artel.py approve {id}{sha} "
                    "или artel.py reject {id} \"причина\""),
     "merge_gate": ("гейт merge — решение Оператора",
-                   "artel.py approve {id}  (выполнит merge)"),
+                   "artel.py approve {id}{sha}  (выполнит merge)"),
     "escalated": ("эскалация — нужен Оператор",
-                  "разберись: artel.py log {id}, затем artel.py approve {id}"),
+                  "разберись: artel.py log {id}, затем artel.py approve {id}{sha}"),
     "done": ("задача закрыта", "ничего не требуется"),
     "killed": ("задача снята", "ничего не требуется"),
 }
