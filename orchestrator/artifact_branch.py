@@ -36,13 +36,19 @@ def _now() -> str:
 
 def write_commit(repo: Path, files: dict, message: str, author_name: str,
                  author_email: str, parent: str | None = None) -> str:
-    """Коммитит `files` ({путь: текст}) в объектную базу `repo` плотницки
-    (используется и `snapshot.publish_and_cleanup` — коммит в клоне
-    целевого, не только в `config.ROOT`);
-    `parent`, если задан, — дерево-родитель загружается в индекс первым
-    (`read-tree`), так что новый коммит несёт и старое содержимое, не
-    только правку `files` (дописывание, не перезапись — AC-12). Возвращает
-    sha нового коммита; пустая строка — git не ответил на любом шаге.
+    """Коммитит `files` ({путь: текст ИЛИ bytes}) в объектную базу `repo`
+    плотницки (используется и `snapshot.publish_and_cleanup` — коммит в
+    клоне целевого, не только в `config.ROOT`); `parent`, если задан, —
+    дерево-родитель загружается в индекс первым (`read-tree`), так что
+    новый коммит несёт и старое содержимое, не только правку `files`
+    (дописывание, не перезапись — AC-12). Возвращает sha нового коммита;
+    пустая строка — git не ответил на любом шаге.
+
+    Значение `files[rel]` — `str` (обычный артефакт-текст) или `bytes`
+    (нетекстовое содержимое, например бинарный файл роли, REVIEW.md T094
+    итерация 2, замечание 1: раньше такие файлы терялись при попытке
+    прочитать их как UTF-8) — `hash-object` получает байты напрямую в
+    обоих случаях, `str` кодируется UTF-8 без потерь для текста.
     """
     index_file = repo / f".artel-carpentry-index-{os.getpid()}-{abs(id(files))}"
     env = {**os.environ, "GIT_INDEX_FILE": str(index_file)}
@@ -53,15 +59,17 @@ def write_commit(repo: Path, files: dict, message: str, author_name: str,
                 capture_output=True, text=True)
             if read_tree.returncode != 0:
                 return ""
-        for rel, text in files.items():
+        for rel, content in files.items():
+            data = content if isinstance(content, bytes) else content.encode("utf-8")
             blob = subprocess.run(
                 ["git", "hash-object", "-w", "--stdin"], cwd=repo, env=env,
-                input=text, capture_output=True, text=True)
+                input=data, capture_output=True)
             if blob.returncode != 0:
                 return ""
+            blob_sha = blob.stdout.decode().strip()
             upd = subprocess.run(
                 ["git", "update-index", "--add", "--cacheinfo",
-                 f"100644,{blob.stdout.strip()},{rel}"],
+                 f"100644,{blob_sha},{rel}"],
                 cwd=repo, env=env, capture_output=True, text=True)
             if upd.returncode != 0:
                 return ""

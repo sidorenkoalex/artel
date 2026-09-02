@@ -16,8 +16,8 @@ from pathlib import Path
 
 from scripts import guard
 
-from . import (acceptance, artifacts, config, fixation, github_adapter,
-              gitcmd, lease, store, workspace, yamlmini)
+from . import (acceptance, artifact_source, artifacts, config, fixation,
+              github_adapter, gitcmd, lease, store, workspace, yamlmini)
 
 # Своя копия константы (та же строка, что и в orchestrator/fsm_postmerge.py
 # и orchestrator/brief.py — каждый модуль держит её по своему поводу):
@@ -290,10 +290,11 @@ def _read_branch_text_or_refuse(conn, task_id: str, branch: str,
     return text
 
 
-def _answer_file_count(t, tdir: Path) -> int | None:
-    """Число `ANSWER-*.md` задачи — с ВЕТКИ, если рабочее дерево на чужой
-    ветке (SPEC T031/T047, тот же приём, что и остальные чтения этого
-    файла в модуле), иначе с диска. `None` — git не ответил на чужой
+def _answer_file_count(conn, task_id: str, tdir: Path) -> int | None:
+    """Число `ANSWER-*.md` задачи — с ВЕТКИ-ИСТОЧНИКА `tasks/<id>/`
+    (`artifact_source.resolve`, SPEC T031/T047/T094 требование 10, тот же
+    приём, что и остальные чтения этого файла в модуле), если она чужая
+    рабочей копии пульта, иначе с диска. `None` — git не ответил на чужой
     ветке (нельзя посчитать — не значит «ноль», вызывающий код решает,
     как трактовать).
 
@@ -302,9 +303,9 @@ def _answer_file_count(t, tdir: Path) -> int | None:
     зафиксированного на эскалации снимка (`answer_baseline`), не какой
     именно номер у нового файла.
     """
-    branch = t["branch"]
-    if gitcmd.on_foreign_branch(branch):
-        paths = gitcmd.ls_tree_files(branch, f"tasks/{t['id']}")
+    branch, foreign = artifact_source.resolve(conn, task_id)
+    if foreign:
+        paths = gitcmd.ls_tree_files(branch, f"tasks/{task_id}")
         if paths is None:
             return None
         return sum(1 for p in paths
@@ -313,7 +314,7 @@ def _answer_file_count(t, tdir: Path) -> int | None:
     return len(list(tdir.glob("ANSWER-*.md")))
 
 
-def _answer_baseline_or_refuse(conn, task_id: str, t, tdir: Path) -> int | None:
+def _answer_baseline_or_refuse(conn, task_id: str, tdir: Path) -> int | None:
     """Снимок числа ANSWER-*.md на момент эскалации — тем же приёмом
     отказа, что `_read_branch_text_or_refuse` (SPEC T031, T047): `None`
     от `_answer_file_count` — git не ответил на чужой ветке, а не «файлов
@@ -323,9 +324,10 @@ def _answer_baseline_or_refuse(conn, task_id: str, t, tdir: Path) -> int | None:
     итерация 1, замечание minor). Возврат `None` — отказ уже
     журналирован и напечатан, переход обязан не эскалировать в этот
     момент, а не эскалировать с недостоверным `baseline=0`."""
-    count = _answer_file_count(t, tdir)
+    count = _answer_file_count(conn, task_id, tdir)
     if count is None:
-        detail = (f"дерево не на ветке задачи {t['branch']} — число "
+        branch, _ = artifact_source.resolve(conn, task_id)
+        detail = (f"дерево не на ветке задачи {branch} — число "
                   f"ANSWER-*.md не посчитано, эскалация отложена")
         store.journal(conn, task_id, "fsm",
                       "переход отклонён: дерево не на ветке задачи", detail)
@@ -548,17 +550,19 @@ def _cmd_approve(conn, task_id: str, sha: str | None, sid: str) -> None:
         # весь беклог T001–T022 — требование 7); иначе тесты пишутся
         # раньше, чем задачу увидит разработчик.
         #
-        # Рабочее дерево точно на чужой ветке (SPEC T031, AC-1) — SPEC.md
-        # читается с ВЕТКИ задачи (не молчаливый дефолт «schema_version 1
-        # без AC-разметки», журнал T030 ~17:35 25.08.2026); иначе прежний
-        # путь через диск, не тронутый T031. Чтение — общий узел
-        # `_read_branch_text_or_refuse` (T047, SPEC T071): узел сам
-        # журналирует и печатает именованный отказ, дублировать его текст
-        # отдельным `sys.exit` не нужно — `return` останавливает попытку
-        # approve без смены состояния тем же способом, что и остальные
-        # вызовы узла в `_cmd_advance`.
-        branch = t["branch"]
-        if gitcmd.on_foreign_branch(branch):
+        # Рабочее дерево точно на чужой ветке-источнике `tasks/<id>/`
+        # (SPEC T031, AC-1; T094 требование 10 — ветка-источник теперь
+        # артефактная ветка пульта для внешнего target, `artifact_source.
+        # resolve`) — SPEC.md читается с НЕЁ (не молчаливый дефолт
+        # «schema_version 1 без AC-разметки», журнал T030 ~17:35
+        # 25.08.2026); иначе прежний путь через диск, не тронутый T031.
+        # Чтение — общий узел `_read_branch_text_or_refuse` (T047, SPEC
+        # T071): узел сам журналирует и печатает именованный отказ,
+        # дублировать его текст отдельным `sys.exit` не нужно — `return`
+        # останавливает попытку approve без смены состояния тем же
+        # способом, что и остальные вызовы узла в `_cmd_advance`.
+        branch, foreign = artifact_source.resolve(conn, task_id)
+        if foreign:
             spec_text = _read_branch_text_or_refuse(conn, task_id, branch,
                                                      "SPEC.md")
             if spec_text is None:
@@ -621,7 +625,7 @@ def _cmd_approve(conn, task_id: str, sha: str | None, sid: str) -> None:
         baseline = t["answer_baseline"]
         if baseline is not None:
             tdir = config.TASKS / task_id
-            count = _answer_file_count(t, tdir)
+            count = _answer_file_count(conn, task_id, tdir)
             if count is None or count <= baseline:
                 expected = f"tasks/{task_id}/ANSWER-{baseline + 1}.md"
                 detail = (f"approve отклонён: не хватает {expected} — "

@@ -226,6 +226,15 @@ def _commit_external_step_artifacts(conn, task_id: str, role: str,
     Каталога нет или он пуст — роль ничего не написала на этом шаге
     (например, чисто код без правки артефакта) — не отказ, тот же довод,
     что и у догфудной ветки («нечего коммитить»).
+
+    Читает файлы БАЙТАМИ, не текстом (REVIEW.md T094 итерация 2,
+    замечание 1 — major): раньше `read_text(encoding="utf-8")` молча
+    пропускал (`continue`) любой не-UTF8/бинарный файл, а последующий
+    `shutil.rmtree` ниже удалял его с диска без следа, даже если он так
+    и не попал в артефактную ветку — асимметрия с self-путём
+    (`_commit_worktree_change`, настоящий `git add -A`, коммитит любые
+    байты). `artifact_branch.write_commit` принимает `bytes` наравне со
+    `str` — потери не осталось для ни одного файла, читаемого с диска.
     """
     from . import artifact_branch
     workspace_root = config.PROJECTS / target / "workspace"
@@ -238,8 +247,8 @@ def _commit_external_step_artifacts(conn, task_id: str, role: str,
             continue
         rel = path.relative_to(workspace_root).as_posix()
         try:
-            files[rel] = path.read_text(encoding="utf-8")
-        except (OSError, UnicodeDecodeError):
+            files[rel] = path.read_bytes()
+        except OSError:
             continue
     if not files:
         return ""

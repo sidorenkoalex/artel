@@ -238,13 +238,27 @@ class ExternalTargetAdvanceIgnoresDirtyCheckTest(TmpRootTest):
         capture(catalog.cmd_init)
         store.insert_task(store.db(), self.TASK, "Задача sled", "in_dev",
                           f"task/{self.TASK.lower()}", "sled", 25.0)
-        # Гейтинг advance читает артефакты из tasks/<id> ПУЛЬТА (до A7,
-        # ADR-0003 3д — независимо от target шага, см. ExternalIntegrity
-        # IncidentBlocksRunTest.make_task ниже), не из репо target'а —
-        # его этот тест намеренно не трогает вовсе.
-        (config.TASKS / self.TASK).mkdir(parents=True)
-        (config.TASKS / self.TASK / "PLAN.md").write_text(
-            PLAN_READY.format(task=self.TASK), encoding="utf-8")
+        # SPEC T094, требование 10: гейтинг advance для НЕ-self target
+        # читает tasks/<id>/PLAN.md из артефактной ветки ПУЛЬТА
+        # (`artifact_source.resolve`), не из `config.TASKS` — ROOT этой
+        # песочницы должен быть настоящим git-репозиторием (тот же приём,
+        # что `ExternalIntegrityIncidentBlocksRunTest.setUp` ниже).
+        subprocess.run(["git", "init", "-q", "-b", config.MAIN_BRANCH],
+                       cwd=config.ROOT, check=True)
+        subprocess.run(["git", "config", "user.email", "artel@example.invalid"],
+                       cwd=config.ROOT, check=True)
+        subprocess.run(["git", "config", "user.name", "artel tests"],
+                       cwd=config.ROOT, check=True)
+        (config.ROOT / "marker.txt").write_text("main\n", encoding="utf-8")
+        shutil.copy(REPO_ROOT / ".gitignore", config.ROOT / ".gitignore")
+        subprocess.run(["git", "add", "-A"], cwd=config.ROOT, check=True)
+        subprocess.run(["git", "commit", "-q", "-m", "init"],
+                       cwd=config.ROOT, check=True)
+        from orchestrator import artifact_branch
+        artifact_branch.commit_files(
+            self.TASK,
+            {f"tasks/{self.TASK}/PLAN.md": PLAN_READY.format(task=self.TASK)},
+            f"{self.TASK}: PLAN заглушка")
 
     def test_uncommitted_plan_still_advances_for_external_target(self):
         out = capture(fsm.cmd_advance, self.TASK)
@@ -462,6 +476,22 @@ class ExternalApproveDoesNotCommitOthersWorkInProgressTest(TmpRootTest):
         config.TARGETS.write_text(TARGETS_YAML, encoding="utf-8")
         capture(projects.cmd_target_init, "sled")
         capture(catalog.cmd_init)
+        # SPEC T094, требование 10: approve на spec_gate для НЕ-self
+        # target читает tasks/<id>/SPEC.md из артефактной ветки ПУЛЬТА
+        # (`artifact_source.resolve`) — ROOT этой песочницы должен быть
+        # настоящим git-репозиторием (тот же приём, что
+        # `ExternalIntegrityIncidentBlocksRunTest.setUp`).
+        subprocess.run(["git", "init", "-q", "-b", config.MAIN_BRANCH],
+                       cwd=config.ROOT, check=True)
+        subprocess.run(["git", "config", "user.email", "artel@example.invalid"],
+                       cwd=config.ROOT, check=True)
+        subprocess.run(["git", "config", "user.name", "artel tests"],
+                       cwd=config.ROOT, check=True)
+        (config.ROOT / "marker.txt").write_text("main\n", encoding="utf-8")
+        shutil.copy(REPO_ROOT / ".gitignore", config.ROOT / ".gitignore")
+        subprocess.run(["git", "add", "-A"], cwd=config.ROOT, check=True)
+        subprocess.run(["git", "commit", "-q", "-m", "init"],
+                       cwd=config.ROOT, check=True)
 
     def repo(self) -> Path:
         return config.PROJECTS / "sled"
@@ -475,6 +505,14 @@ class ExternalApproveDoesNotCommitOthersWorkInProgressTest(TmpRootTest):
         tdir = self.repo() / "tasks" / task_id
         tdir.mkdir(parents=True)
         (tdir / "SPEC.md").write_text("# SPEC заглушка\n", encoding="utf-8")
+        # SPEC T094, требование 10: approve читает SPEC.md с артефактной
+        # ветки пульта для НЕ-self target, не из `self.repo()` (легаси-
+        # адрес фиксации, ADR-0005 п.4 до правки — сохраняется для
+        # `fixed_sha`, требование 9, но не для содержимого).
+        from orchestrator import artifact_branch
+        artifact_branch.commit_files(
+            task_id, {f"tasks/{task_id}/SPEC.md": "# SPEC заглушка\n"},
+            f"{task_id}: SPEC заглушка")
         capture(lambda: store.set_state(
             store.db(), task_id, "spec_gate", "operator",
             expected_state="spec_writing", detail="тест: вход в spec_gate"))

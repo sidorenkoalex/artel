@@ -14,6 +14,7 @@ target, кроме self: роль внешнего target писала `tasks/<i
 читает файлы с диска, коммитит их плотницки в артефактную ветку ПУЛЬТА
 и убирает исходники — ни то, ни другое не требует git внутри workspace).
 """
+import subprocess
 import sys
 import unittest
 from pathlib import Path
@@ -93,6 +94,50 @@ class CommitExternalStepArtifactsTest(RealGitSandbox):
         review_text, _ = gitcmd.show(branch, f"tasks/{self.TASK}/REVIEW.md")
         self.assertEqual(plan_text, "план разработчика")
         self.assertEqual(review_text, "ревью")
+
+    def test_binary_file_is_not_lost(self):
+        # REVIEW.md T094 итерация 2, замечание 1 (major): раньше
+        # `read_text(encoding="utf-8")` молча пропускал файл, не проходящий
+        # UTF-8-декодирование, а `shutil.rmtree` затем удалял его с диска
+        # без следа и без сигнала об этом — ни в артефактной ветке, ни на
+        # диске. Здесь смесь текстового и бинарного файла: оба обязаны
+        # попасть в артефактную ветку, ничего не должно потеряться.
+        self.write("PLAN.md", "план разработчика")
+        binary = bytes(range(256)) + b"\x89PNG\r\n\x1a\n"
+        (self.task_dir / "screenshot.png").write_bytes(binary)
+
+        detail = checkpoint.commit_step_artifacts(store.db(), self.TASK,
+                                                   "developer")
+
+        self.assertIn("артефактная ветка", detail)
+        committed = self.artifact_branch_files()
+        self.assertIn(f"tasks/{self.TASK}/PLAN.md", committed)
+        self.assertIn(f"tasks/{self.TASK}/screenshot.png", committed)
+        self.assertFalse(self.task_dir.exists())
+        cat = subprocess.run(
+            ["git", "show", f"artifact/{self.TASK.lower()}:"
+             f"tasks/{self.TASK}/screenshot.png"],
+            cwd=config.ROOT, capture_output=True)
+        self.assertEqual(cat.returncode, 0)
+        self.assertEqual(cat.stdout, binary)
+
+    def test_all_files_binary_still_commits_and_clears_the_dir(self):
+        # Второй, менее острый случай того же замечания: если ВСЕ файлы
+        # каталога не текстовые, `files` раньше оставался пустым и функция
+        # возвращала "" ДО rmtree — данные не терялись физически, но и не
+        # коммитились НИКОГДА (перманентное нарушение требования 8 для
+        # такого содержимого). Теперь бинарные файлы коммитятся как любые
+        # другие.
+        self.task_dir.rmdir()
+        self.task_dir.mkdir()
+        (self.task_dir / "blob.bin").write_bytes(b"\x00\x01\xff\xfe")
+
+        detail = checkpoint.commit_step_artifacts(store.db(), self.TASK,
+                                                   "developer")
+
+        self.assertIn("артефактная ветка", detail)
+        self.assertIn(f"tasks/{self.TASK}/blob.bin", self.artifact_branch_files())
+        self.assertFalse(self.task_dir.exists())
 
     def test_journal_records_the_autocommit(self):
         self.write("PLAN.md", "черновик")

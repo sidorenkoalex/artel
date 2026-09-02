@@ -150,19 +150,13 @@ def _artifact_source_branch(conn, task_id: str) -> tuple[str, bool]:
     """(ветка-источник `tasks/<id>/`, foreign) — общая точка входа для
     всех читателей брифа (SPEC T094, требование 10, AC-11 — реестр AC-1).
 
-    Self/догфуд: прежнее поведение T031/T047 байт-в-байт — кодовая ветка
-    задачи, `foreign` по факту чекаута рабочей копии пульта. Любой другой
-    target (требование 8): `tasks/<id>/` живёт ТОЛЬКО в артефактной ветке
-    пульта, никогда в кодовой ветке целевого — `foreign` всегда `True`
-    (рабочая копия пульта эту ветку не чекаутит вовсе, читать с неё —
-    единственный корректный путь).
+    Делегирует `orchestrator/artifact_source.py::resolve` (T094 итерация
+    2 — тот же резолвер теперь несёт и `fsm.py`/`fsm_advance.py`/
+    `acceptance.py`, чтобы не плодить копию этого решения в нескольких
+    местах, PLAN.md «Вопрос Оператору — требование 10», вариант А).
     """
-    target = store.task_target(conn, task_id)
-    if target != config.DEFAULT_TARGET:
-        from . import artifact_branch
-        return artifact_branch.branch_name(task_id), True
-    branch = store.task_branch(conn, task_id)
-    return branch, gitcmd.on_foreign_branch(branch)
+    from . import artifact_source
+    return artifact_source.resolve(conn, task_id)
 
 
 def _developer_spec_text(conn, task_id: str, branch: str, foreign: bool) -> str:

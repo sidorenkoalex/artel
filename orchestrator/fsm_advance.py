@@ -5,8 +5,10 @@ if/elif `orchestrator/fsm.py::_cmd_advance`, перенесённое без и�
 `fsm.py` — эти функции не вызываются напрямую иначе, кроме тестов,
 идущих через публичный `fsm.cmd_advance`.
 """
-from . import (acceptance, artifacts, budget, ci, config, fsm, fsm_autogate,
-              gitcmd, store, workspace, yamlmini)
+import shutil
+
+from . import (acceptance, artifact_source, artifacts, budget, ci, config,
+              fsm, fsm_autogate, gitcmd, store, workspace, yamlmini)
 
 
 def spec_writing(conn, task_id: str, t, tdir, target: str, state: str) -> bool:
@@ -16,14 +18,16 @@ def spec_writing(conn, task_id: str, t, tdir, target: str, state: str) -> bool:
     # батч по тому же ТЗ структурно недостижим раньше ответа: пока
     # задача в escalated, run для неё не стартует.
     #
-    # Рабочее дерево точно на чужой ветке (SPEC T047, требования 1, 3)
-    # — и статус SPEC.md, и батч QUESTIONS.md читаются с ВЕТКИ задачи
-    # (класс-дефект T030/T046: главная копия пульта на main видит
-    # только то, что закоммичено туда же, не в ветку задачи). Иначе —
+    # Рабочее дерево точно на чужой ветке-источнике `tasks/<id>/` (SPEC
+    # T047, требования 1, 3; T094 требование 10 — артефактная ветка
+    # пульта для внешнего target, `artifact_source.resolve`) — и статус
+    # SPEC.md, и батч QUESTIONS.md читаются С НЕЁ (класс-дефект
+    # T030/T046: главная копия пульта на main видит только то, что
+    # закоммичено туда же, не в ветку задачи/артефактную ветку). Иначе —
     # прежний путь через диск, не тронутый T047.
-    branch = t["branch"]
+    branch, foreign = artifact_source.resolve(conn, task_id)
     spec_text = None
-    if gitcmd.on_foreign_branch(branch):
+    if foreign:
         # QUESTIONS.md необязателен (большинство задач его не заводят)
         # — отсутствие на ветке не отказ, тот же приём, что
         # `_tests_writing_ac_state` уже применяет к необязательному
@@ -46,7 +50,7 @@ def spec_writing(conn, task_id: str, t, tdir, target: str, state: str) -> bool:
             if fsm.guard_refuses(conn, task_id, tdir / "QUESTIONS.md",
                                  text=q_text):
                 return True
-            answer_baseline = fsm._answer_baseline_or_refuse(conn, task_id, t, tdir)
+            answer_baseline = fsm._answer_baseline_or_refuse(conn, task_id, tdir)
             if answer_baseline is None:
                 return False
             store.update_task(
@@ -69,7 +73,7 @@ def spec_writing(conn, task_id: str, t, tdir, target: str, state: str) -> bool:
         if questions.exists():
             if fsm.guard_refuses(conn, task_id, questions):
                 return True
-            answer_baseline = fsm._answer_baseline_or_refuse(conn, task_id, t, tdir)
+            answer_baseline = fsm._answer_baseline_or_refuse(conn, task_id, tdir)
             if answer_baseline is None:
                 return False
             store.update_task(
@@ -97,14 +101,15 @@ def spec_writing(conn, task_id: str, t, tdir, target: str, state: str) -> bool:
 
 
 def review(conn, task_id: str, t, tdir, target: str, state: str) -> bool:
-    # Рабочее дерево точно на чужой ветке (SPEC T047, требование 2) —
-    # вердикт REVIEW.md (status, iteration) читается с ВЕТКИ задачи,
-    # тем же приёмом, что SPEC.md выше (класс-дефект T030/T045: главная
-    # копия пульта на main не видит вердикт, закоммиченный только в
-    # ветку). Иначе — прежний путь через диск, не тронутый T047.
-    branch = t["branch"]
+    # Рабочее дерево точно на чужой ветке-источнике `tasks/<id>/` (SPEC
+    # T047, требование 2; T094 требование 10) — вердикт REVIEW.md
+    # (status, iteration) читается С НЕЁ, тем же приёмом, что SPEC.md
+    # выше (класс-дефект T030/T045: главная копия пульта на main не
+    # видит вердикт, закоммиченный только в ветку/артефактную ветку).
+    # Иначе — прежний путь через диск, не тронутый T047.
+    branch, foreign = artifact_source.resolve(conn, task_id)
     review_text = None
-    if gitcmd.on_foreign_branch(branch):
+    if foreign:
         review_text = fsm._read_branch_text_or_refuse(conn, task_id, branch,
                                                         "REVIEW.md")
         if review_text is None:
@@ -144,22 +149,35 @@ def review(conn, task_id: str, t, tdir, target: str, state: str) -> bool:
         # `tasks/<id>/acceptance_tests` читается из worktree задачи,
         # если он заведён и стоит на своей ветке; иначе (легаси-
         # песочницы без реального git, worktree ещё не заведён)
-        # прежний путь — с диска главной копии.
+        # прежний путь — с диска главной копии. Внешний target (SPEC
+        # T094, требование 10, реестр PLAN.md пункт 2 «лок
+        # acceptance_tests»): живого worktree с этим каталогом на диске
+        # нет вовсе — `acceptance_tests/` живёт только в артефактной
+        # ветке пульта (`branch` уже резолвлен выше), материализуется во
+        # временный каталог на время прогона и убирается сразу после.
         acc_tdir = tdir
-        if workspace.on_task_branch(task_id, t["branch"]) is True:
+        cleanup_acc = None
+        if target != config.DEFAULT_TARGET:
+            acc_tdir = acceptance.materialize_from_branch(task_id, branch)
+            cleanup_acc = acc_tdir
+        elif workspace.on_task_branch(task_id, t["branch"]) is True:
             acc_tdir = workspace.path(task_id) / "tasks" / task_id
-        green, tail = acceptance.run(acc_tdir)
-        if not green:
-            detail = f"acceptance_tests красные:\n{tail}"
-            store.journal(conn, task_id, "fsm",
-                          "переход отклонён: приёмочные тесты", detail)
-            print(f"[{task_id}] переход отклонён: приёмочные тесты "
-                  f"красные")
-            print(tail)
-            print(f"  дальше: почини код (не тест) и повтори "
-                  f"artel.py advance {task_id}")
-            return False
-        card = acceptance.summary(acc_tdir)
+        try:
+            green, tail = acceptance.run(acc_tdir)
+            if not green:
+                detail = f"acceptance_tests красные:\n{tail}"
+                store.journal(conn, task_id, "fsm",
+                              "переход отклонён: приёмочные тесты", detail)
+                print(f"[{task_id}] переход отклонён: приёмочные тесты "
+                      f"красные")
+                print(tail)
+                print(f"  дальше: почини код (не тест) и повтори "
+                      f"artel.py advance {task_id}")
+                return False
+            card = acceptance.summary(acc_tdir)
+        finally:
+            if cleanup_acc is not None:
+                shutil.rmtree(cleanup_acc, ignore_errors=True)
         store.journal(conn, task_id, "fsm", "приёмочные тесты пройдены",
                       card)
         print(f"[{task_id}] {card}")
@@ -187,7 +205,7 @@ def review(conn, task_id: str, t, tdir, target: str, state: str) -> bool:
                             detail=f"замечания ревью, итерация {iters}")
             fsm._maybe_ensure_draft_mr(conn, task_id)
     elif status == "escalate":
-        answer_baseline = fsm._answer_baseline_or_refuse(conn, task_id, t, tdir)
+        answer_baseline = fsm._answer_baseline_or_refuse(conn, task_id, tdir)
         if answer_baseline is None:
             return False
         store.update_task(conn, task_id, answer_baseline=answer_baseline)
@@ -216,11 +234,27 @@ def verifying(conn, task_id: str, t, tdir, target: str, state: str) -> bool:
         print(f"[{task_id}] {note}")
         store.set_state(conn, task_id, "acceptance", "fsm",
                         expected_state=state, detail=note)
+        # Каталог acceptance_tests/ для автогейта (SPEC T094, требование
+        # 10) — тем же приёмом, что `review()` выше: внешний target не
+        # несёт живого worktree, читаем из артефактной ветки пульта во
+        # временный каталог, чужой CI-запрос (`branch` = код-ветка,
+        # выше) этого не касается — материализация нужна только
+        # `acceptance_tests/`, не коду.
         acc_tdir = tdir
-        if workspace.on_task_branch(task_id, t["branch"]) is True:
+        cleanup_acc = None
+        if target != config.DEFAULT_TARGET:
+            artifact_branch_name, _ = artifact_source.resolve(conn, task_id)
+            acc_tdir = acceptance.materialize_from_branch(
+                task_id, artifact_branch_name)
+            cleanup_acc = acc_tdir
+        elif workspace.on_task_branch(task_id, t["branch"]) is True:
             acc_tdir = workspace.path(task_id) / "tasks" / task_id
-        fsm_autogate._maybe_autogate_acceptance(conn, task_id, t, acc_tdir,
-                                               t["reviewed_iter"])
+        try:
+            fsm_autogate._maybe_autogate_acceptance(conn, task_id, t, acc_tdir,
+                                                   t["reviewed_iter"])
+        finally:
+            if cleanup_acc is not None:
+                shutil.rmtree(cleanup_acc, ignore_errors=True)
         return False
     # Счётчик попыток остаётся информационной записью (требование 3,
     # AC-7) — эскалацию решает только прошедшее время с момента входа
@@ -243,8 +277,12 @@ def verifying(conn, task_id: str, t, tdir, target: str, state: str) -> bool:
 
 def tests_writing(conn, task_id: str, t, tdir, target: str, state: str) -> bool:
     # test_author закончил: каждый AC-n — тест либо пометка
-    # manual/skip/escalate (SPEC T023, требование 4).
-    result = fsm._tests_writing_ac_state(conn, task_id, t["branch"], tdir)
+    # manual/skip/escalate (SPEC T023, требование 4). Ветка-источник
+    # `tasks/<id>/` (SPEC T094, требование 10) — артефактная ветка
+    # пульта для внешнего target, не кодовая ветка целевого (та в
+    # `config.ROOT` не существует вовсе).
+    branch, _ = artifact_source.resolve(conn, task_id)
+    result = fsm._tests_writing_ac_state(conn, task_id, branch, tdir)
     if result is None:
         return False
     tested, markers, errors = result
@@ -253,7 +291,7 @@ def tests_writing(conn, task_id: str, t, tdir, target: str, state: str) -> bool:
     if escalations:
         detail = "; ".join(f"AC-{n}: {reason}"
                            for n, reason in sorted(escalations.items()))
-        answer_baseline = fsm._answer_baseline_or_refuse(conn, task_id, t, tdir)
+        answer_baseline = fsm._answer_baseline_or_refuse(conn, task_id, tdir)
         if answer_baseline is None:
             return False
         store.update_task(
@@ -292,15 +330,14 @@ def tests_writing(conn, task_id: str, t, tdir, target: str, state: str) -> bool:
 def in_dev(conn, task_id: str, t, tdir, target: str, state: str) -> bool:
     # разработчик закончил: PLAN ready и ветка запушена -> в ревью
     #
-    # Рабочее дерево точно на чужой ветке (SPEC T031) — PLAN.md
-    # читается с ВЕТКИ задачи (иначе гейт «PLAN.md не ready» молча
-    # держит переход и на чужом чекауте нечего проверять дальше —
-    # без этого лок ниже никогда не достигается со стороны AC-3);
-    # иначе прежний путь через диск, не тронутый T031. Чтение —
-    # общий узел `_read_branch_text_or_refuse` (T047), тот же приём
-    # теперь и у SPEC.md/REVIEW.md выше.
-    branch = t["branch"]
-    foreign = gitcmd.on_foreign_branch(branch)
+    # Рабочее дерево точно на чужой ветке-источнике `tasks/<id>/` (SPEC
+    # T031; T094 требование 10) — PLAN.md читается С НЕЁ (иначе гейт
+    # «PLAN.md не ready» молча держит переход и на чужом чекауте нечего
+    # проверять дальше — без этого лок ниже никогда не достигается со
+    # стороны AC-3); иначе прежний путь через диск, не тронутый T031.
+    # Чтение — общий узел `_read_branch_text_or_refuse` (T047), тот же
+    # приём теперь и у SPEC.md/REVIEW.md выше.
+    branch, foreign = artifact_source.resolve(conn, task_id)
     plan_text = None
     if foreign:
         plan_text = fsm._read_branch_text_or_refuse(conn, task_id, branch,
@@ -317,10 +354,22 @@ def in_dev(conn, task_id: str, t, tdir, target: str, state: str) -> bool:
             return True
         locked = t["tests_locked_sha"]
         if locked:
-            # Ветка задачи, не литерал "HEAD" (SPEC T031, AC-3): чужой
-            # чекаут рабочей копии не должен сверять лок с чужой веткой
-            # вместо своей. Свой чекаут (обычный путь) или ветка ещё
-            # не создана ролью — тот же "HEAD", что и до T031.
+            # Ветка-источник tasks/<id>/, не литерал "HEAD" (SPEC T031,
+            # AC-3): чужой чекаут рабочей копии не должен сверять лок с
+            # чужой веткой вместо своей. Свой чекаут (обычный путь) или
+            # ветка ещё не создана ролью — тот же "HEAD", что и до T031.
+            #
+            # Внешний target: `locked` (`tests_locked_sha`/`fixed_sha`)
+            # остаётся на легаси-схеме фиксации (`fixation._fix_external`
+            # — коммит `.artel/projects/<target>/`, PLAN.md, реестр
+            # пункт 1, «не заменяя легаси-строку», требование 9) — sha
+            # из ЭТОГО репозитория `config.ROOT` не знает независимо от
+            # выбора `lock_ref` здесь. `gitcmd.diff_paths` поэтому не
+            # ответит на `locked` и сверка ниже уйдёт в существующий
+            # fail-closed отказ («лок не проверен») — не новый регресс
+            # этой правки, а незакрытый остаток легаси-схемы `fixed_sha`
+            # (сознательно вне объёма этой итерации, тот же довод, что
+            # и у требования 9).
             lock_ref = branch if foreign else "HEAD"
             diff = gitcmd.diff_paths(
                 locked, lock_ref, f"tasks/{task_id}/acceptance_tests")
