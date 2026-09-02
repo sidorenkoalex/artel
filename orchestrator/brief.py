@@ -11,7 +11,6 @@
 пометка в тексте, не молчаливая выдача стухшей карты (ADR-0003 §3б,
 «никогда молчаливое доверие»).
 """
-import hashlib
 import re
 import subprocess
 import sys
@@ -38,8 +37,14 @@ MAP_OVERSIZED_ALERT_SOURCE = "brief.codebase_map_oversized"
 
 def component_hash(text: str) -> str:
     """sha256 содержимого компонента: журнал остаётся верным содержимому,
-    а не статической меткой (SPEC T028, требование 8)."""
-    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+    а не статической меткой (SPEC T028, требование 8).
+
+    Делегирует `context_package.sha256_of` (R1-F3, REVIEW.md итерация 1,
+    minor): та же формула хэша нужна и здесь (журнал), и в описи пакета
+    (`context_package.render_component`) — две независимые реализации
+    одного и того же хэша расходились бы молча при случайной правке
+    только одной из них."""
+    return context_package.sha256_of(text)
 
 
 def _built_at_sha(map_text: str) -> str:
@@ -105,42 +110,59 @@ def _regenerate_map(conn, task_id: str) -> tuple[str | None, str]:
     return text, ""
 
 
-def _mark_stale(conn, task_id: str, text: str, base_sha: str, message: str,
-                paths: list[str]) -> str:
+def _stale_note(conn, task_id: str, base_sha: str, message: str,
+               paths: list[str]) -> str:
     alerts.raise_alert(conn, store.task_target(conn, task_id), "incident",
                        "brief.codebase_map", message)
-    note = (
+    return (
         f"[КАРТА НЕАКТУАЛЬНА: {message}. Использованный built_at_sha="
         f"{base_sha or '—'}. Пути расхождения: {', '.join(paths)}.]\n\n")
-    return note + text
 
 
-def fresh_map_text(conn, task_id: str) -> str:
-    """Текст `docs/codebase-map.md`, свежей или честно помеченной стухшей.
+def _fresh_map_text_and_note(conn, task_id: str) -> tuple[str, str]:
+    """(текст карты — как есть на диске/после регенерации, БЕЗ пометки;
+    пометка стухлости или пустая строка).
 
     Расхождение по `MAP_WATCH_GLOBS` в диапазоне `built_at_sha..HEAD` —
     регенерация до сборки брифа (требование 5, 6, AC-5, AC-6); сбой
     регенерации, как и сбой самой сверки свежести, — алерт
     (`alerts.raise_alert`, дедуп по (target, kind, source, message) уже
-    встроен) и явная пометка в начале текста с использованным
-    `built_at_sha` и путями расхождения, карта — прежняя, непереписанная
-    версия (требование 7, AC-7).
+    встроен) и явная пометка с использованным `built_at_sha` и путями
+    расхождения, карта — прежняя, непереписанная версия (требование 7,
+    AC-7).
+
+    Текст и пометка — раздельные значения (R1-F4, REVIEW.md итерация 1,
+    minor): опись пакета (`context_package.render_component`) обязана
+    отвечать размером и sha256 байт в байт содержимому, которое читал бы
+    инструмент чтения `docs/codebase-map.md` — то есть по ЭТОМУ тексту,
+    без примешанной пометки. Раньше пометка приклеивалась к тексту ДО
+    сборки описи, и sha256/размер в описи расходились с `sha256sum
+    docs/codebase-map.md`, пока карта стухшая.
     """
     text = (config.ROOT / MAP_REL).read_text(encoding="utf-8")
     base_sha = _built_at_sha(text)
     stale = _stale_paths(base_sha)
     if stale is None:
-        return _mark_stale(
-            conn, task_id, text, base_sha,
+        return text, _stale_note(
+            conn, task_id, base_sha,
             "сверка свежести карты не удалась: git не ответил "
             "(diff --name-only)", ["неизвестно — git не ответил"])
     if not stale:
-        return text
+        return text, ""
     regenerated, reason = _regenerate_map(conn, task_id)
     if regenerated is not None:
-        return regenerated
+        return regenerated, ""
     message = f"регенерация {MAP_REL} не удалась: {reason}"
-    return _mark_stale(conn, task_id, text, base_sha, message, stale)
+    return text, _stale_note(conn, task_id, base_sha, message, stale)
+
+
+def fresh_map_text(conn, task_id: str) -> str:
+    """Текст `docs/codebase-map.md`, свежей или честно помеченной стухшей
+    (требование 9, analyst — опись/дисциплина размера её не касаются,
+    SPEC «Не входит»: пометка здесь по-прежнему приклеена перед текстом,
+    как одна строка, тем же способом, что и до R1-F4)."""
+    text, note = _fresh_map_text_and_note(conn, task_id)
+    return note + text
 
 
 def _journal_component(conn, task_id: str, role: str, label: str,
@@ -314,14 +336,19 @@ def developer_brief(conn, task_id: str) -> str:
     """
     branch, foreign = _artifact_source_branch(conn, task_id)
     spec_text = _developer_spec_text(conn, task_id, branch, foreign)
-    map_text = fresh_map_text(conn, task_id)
+    # Текст карты и пометка стухлости — раздельно (R1-F4): опись считает
+    # размер/sha256 по `map_text` как есть на диске, пометка (если карта
+    # стухла) идёт в текст брифа ПЕРЕД компонентом, но не участвует в его
+    # заголовке — иначе sha256 в описи разошёлся бы с sha256sum файла.
+    map_text, map_note = _fresh_map_text_and_note(conn, task_id)
     conventions_text = (config.ROOT / CONVENTIONS_REL).read_text(
         encoding="utf-8")
     _handle_map_size_alert(conn, task_id, map_text)
     parts = [
         _manifest_component(conn, task_id, "developer",
                             f"tasks/{task_id}/SPEC.md", spec_text),
-        _manifest_component(conn, task_id, "developer", MAP_REL, map_text),
+        map_note + _manifest_component(conn, task_id, "developer", MAP_REL,
+                                       map_text),
         _manifest_component(conn, task_id, "developer", CONVENTIONS_REL,
                             conventions_text),
     ]
@@ -329,8 +356,12 @@ def developer_brief(conn, task_id: str) -> str:
                                     foreign, render=_manifest_component)
     if answer_part:
         parts.append(answer_part)
-    body = f"{HEADER}\n\n" + "\n".join(parts)
-    text, _ = context_package.discipline(body)
+    # Разделитель между HEADER и первым компонентом — "\n\n" (двойной
+    # перевод строки), поэтому "" — отдельный пустой компонент между
+    # HEADER и parts[0] (R1-F1: дисциплина частей уважает границы КАЖДОГО
+    # переданного компонента, включая HEADER, — sep.join([HEADER, "",
+    # *parts]) побайтово равно прежнему f"{HEADER}\n\n" + "\n".join(parts)).
+    text, _ = context_package.discipline([HEADER, "", *parts])
     return text
 
 

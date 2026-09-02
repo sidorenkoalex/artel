@@ -159,7 +159,7 @@ class ContextPackageDisciplineTest(unittest.TestCase):
     def test_text_under_the_part_cap_is_untouched(self):
         text = "х" * 100
 
-        out, parts_n = context_package.discipline(text)
+        out, parts_n = context_package.discipline([text])
 
         self.assertEqual(out, text)
         self.assertEqual(parts_n, 0)
@@ -170,7 +170,7 @@ class ContextPackageDisciplineTest(unittest.TestCase):
         self.assertGreater(len(text.encode("utf-8")),
                            config.CONTEXT_PART_MAX_BYTES)
 
-        out, parts_n = context_package.discipline(text)
+        out, parts_n = context_package.discipline([text])
 
         self.assertGreater(parts_n, 1)
         self.assertIn("по порядку", out)
@@ -184,7 +184,7 @@ class ContextPackageDisciplineTest(unittest.TestCase):
         """Кириллица — два байта: потолок должен ловить её вдвое раньше."""
         text = "я" * config.CONTEXT_PART_MAX_BYTES
 
-        out, parts_n = context_package.discipline(text)
+        out, parts_n = context_package.discipline([text])
 
         self.assertGreater(parts_n, 0, "потолок в символах пропустил бы этот текст")
 
@@ -208,6 +208,59 @@ class ContextPackageDisciplineTest(unittest.TestCase):
         self.assertEqual("".join(parts), text)
         for part in parts:
             self.assertLessEqual(part.count("\n"), 1)
+
+
+class DisciplineComponentBoundaryTest(unittest.TestCase):
+    """Регресс R1-F1 (REVIEW.md итерация 1, major): деление на части
+    обязано уважать границы КОМПОНЕНТОВ, а не резать по строкам всего
+    склеенного тела вслепую — иначе крупный сосед мог подвести тело почти
+    вплотную к границе части и разорвать соседний компонент (например
+    diff), хотя его собственный размер меньше потолка (нарушение AC-8).
+
+    Воспроизводит сценарий ревьювера: компонент-заполнитель ЧУТЬ меньше
+    потолка части, следом — маленький компонент (аналог diff'а из
+    нескольких строк) — раньше «### Diff» и последняя строка diff'а
+    попадали в разные пронумерованные части."""
+
+    def test_a_small_component_after_a_near_cap_filler_is_never_split(self):
+        cap = config.CONTEXT_PART_MAX_BYTES
+        filler = "х" * (cap - 300)  # почти вплотную к границе части
+        small_component = "### Diff\n\n+строка 1\n+строка 2\n+строка 3\n"
+
+        out, parts_n = context_package.discipline([filler, small_component])
+
+        self.assertGreater(parts_n, 0, "тело обязано превысить потолок части")
+        self.assertIn(
+            small_component, out,
+            "маленький компонент обязан появиться в тексте пакета целиком, "
+            "одним непрерывным куском — не разорванным между частями")
+
+    def test_small_components_stay_whole_regardless_of_position(self):
+        cap = config.CONTEXT_PART_MAX_BYTES
+        filler = "х" * (cap - 300)
+        head = "### Задача\n\nT001 «Тест», ветка t/1\n"
+        tail = "### Diff\n\n+строка 1\n+строка 2\n"
+
+        out, parts_n = context_package.discipline([head, filler, tail])
+
+        self.assertGreater(parts_n, 0)
+        self.assertIn(head, out)
+        self.assertIn(tail, out)
+
+    def test_concatenation_of_parts_is_still_byte_for_byte_the_original(self):
+        cap = config.CONTEXT_PART_MAX_BYTES
+        components = ["### A\n\nМаркер-A\n", "х" * (cap - 300),
+                     "### Diff\n\n+строка 1\n+строка 2\n+строка 3\n"]
+        expected = "\n".join(components)
+
+        out, parts_n = context_package.discipline(components)
+
+        self.assertGreater(parts_n, 0)
+        # Части встроены в `out` под заголовками «--- ЧАСТЬ N/M ... ---» —
+        # проверяем инвариант через split_into_parts на самом ожидаемом
+        # тексте, тем же способом, что и остальные тесты AC-6 этого файла.
+        rebuilt = context_package._pack_components(components, "\n")
+        self.assertEqual("".join(rebuilt), expected)
 
 
 class RenderComponentTest(unittest.TestCase):

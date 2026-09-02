@@ -182,12 +182,17 @@ def review_package(task_id: str, title: str, branch: str, *,
             f"оценки замечания недостаточно — посмотри полный diff ветки "
             f"отдельно: `git diff {config.MAIN_BRANCH}...{branch}`.\n")
 
-    body = "\n".join(parts)
     # Замена прежнего `truncate_package`/`truncate_diff` (SPEC
     # 01M1GCN1FPSC1A6WK9WD1Q1V8X, требования 3-4): пакет крупнее потолка
     # части делится на пронумерованные части без потери хвоста, а не
-    # усекается молча (AC-5/AC-6/AC-9/AC-10).
-    text, parts_n = context_package.discipline(body)
+    # усекается молча (AC-5/AC-6/AC-9/AC-10). `parts` передаётся СПИСКОМ,
+    # не готовым `"\n".join(parts)` (R1-F1, REVIEW.md итерация 1, major):
+    # деление на части обязано уважать границы каждого компонента (в том
+    # числе diff'а) — иначе крупные соседние компоненты (SPEC/PLAN/
+    # прошлый REVIEW) могли подвести накопленный размер тела почти
+    # вплотную к границе части и разорвать diff пополам, хотя его
+    # собственный размер меньше потолка (нарушение AC-8).
+    text, parts_n = context_package.discipline(parts)
     return {"text": text, "chars": len(text),
             "bytes": len(text.encode("utf-8")), "diff_lines": diff_lines,
             "parts": parts_n,

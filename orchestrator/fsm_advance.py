@@ -384,8 +384,42 @@ def _capacity_gate_refuses(conn, task_id: str, t, state: str) -> bool:
 
     `True` — переход отклонён, отказ уже журналирован (AC-13); гейт сам
     не эскалирует и не делает ничего автоматически (AC-14) — задача
-    остаётся в `in_dev` до решения Оператора."""
-    diff, _, _ = _review_git_diff_part(config.MAIN_BRANCH, t["branch"])
+    остаётся в `in_dev` до решения Оператора.
+
+    git не ответил на сам diff — fail-closed, не fail-open (R1-F2,
+    REVIEW.md итерация 1, major): `git_diff_part` в этом случае отдаёт
+    короткую строку `"(не собран: <reason>)"` вместо текста diff, и
+    измерять байты именно этой строки значит пропускать переход, так и
+    не выяснив фактический размер снимка — тот же принцип «неизвестный
+    статус — это нельзя» (ADR-0002), что уже применён парой функций выше
+    в этом же файле для лока `acceptance_tests/`.
+
+    Внешний (не self) target — гейт не проверяется вовсе, тем же
+    доводом «сознательно вне объёма этой итерации», что уже
+    зафиксирован парой функций выше в этом же файле для лока
+    `acceptance_tests/` с внешним target: `git diff config.MAIN_BRANCH
+    ...<ветка задачи>` в `config.ROOT` — репозитории ПУЛЬТА — не видит
+    настоящий код внешнего target (тот живёт в отдельном репозитории
+    `config.PROJECTS/<target>/workspace`), а до самого перехода
+    `tasks/<id>/` для внешнего target ещё не закоммичен в свою ветку
+    (коммитит `fixation._fix_external` уже ПОСЛЕ решения перейти,
+    `ExternalTargetAdvanceIgnoresDirtyCheckTest`) — fail-closed здесь
+    заблокировал бы КАЖДЫЙ переход `in_dev -> review` для КАЖДОЙ задачи
+    любого внешнего target навсегда, а не редкий сбой git."""
+    if store.task_target(conn, task_id) != config.DEFAULT_TARGET:
+        return False
+    diff, _, reason = _review_git_diff_part(config.MAIN_BRANCH, t["branch"])
+    if reason:
+        detail = (f"гейт ёмкости: git не ответил на diff снимка "
+                 f"({config.MAIN_BRANCH}...{t['branch']}) — сверка "
+                 f"размера невозможна: {reason}")
+        store.journal(conn, task_id, "fsm",
+                      "переход отклонён: гейт ёмкости diff", detail)
+        print(f"[{task_id}] переход отклонён: {detail}")
+        print(f"  дальше: разберись, почему git не отвечает на diff "
+              f"{config.MAIN_BRANCH}...{t['branch']}, и повтори "
+              f"artel.py advance {task_id}")
+        return True
     size = len(diff.encode("utf-8"))
     if size <= config.REVIEW_SNAPSHOT_DIFF_MAX_BYTES:
         return False
