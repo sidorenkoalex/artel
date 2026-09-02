@@ -34,8 +34,11 @@ from orchestrator import catalog, config, store  # noqa: E402
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from _sandbox import TmpRootTest, capture, dead_pid  # noqa: E402
 
+# Якорь идентификатора форматно-нейтрален (правка Оператора 02.09,
+# линт T094): id задачи — непрозрачная строка, тест проверяет состав
+# колонок строки status, а не формат идентификатора.
 EXISTING_COLUMNS_RE = re.compile(
-    r"^T\d{3}\s+in_dev\s+ревью 0/\d+\s+\$0\.00/\d+\.\d{2}\s+Задача")
+    r"^\S+\s+in_dev\s+ревью 0/\d+\s+\$0\.00/\d+\.\d{2}\s+Задача")
 
 DEAD_SESSION = "sess-dead-holder-ac11"
 ALIVE_SESSION = "sess-alive-holder-ac11"
