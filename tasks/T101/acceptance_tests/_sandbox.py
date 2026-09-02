@@ -40,7 +40,8 @@ REPO_ROOT = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(REPO_ROOT))
 
 from orchestrator import catalog, config, fsm, gitcmd, store  # noqa: E402
-from tests.sandbox import TmpRootTest, fake_git  # noqa: E402
+from tests.sandbox import (TmpRootTest, capture_new_task_id,  # noqa: E402
+                           fake_git)
 
 DRIVERS_DIR = Path(__file__).resolve().parent
 
@@ -208,7 +209,6 @@ class ReviewAdvanceSandbox(TmpRootTest):
     лёгкая песочница, `gitcmd.git` заглушкой, `on_foreign_branch` — False,
     поэтому `acc_tdir` берётся с диска главной копии, а не из worktree)."""
 
-    TASK = "T001"
     PATCHED_ATTRS = ("DB", "TASKS", "LOGS", "ROLE_HOME", "ROLE_CONFIG_DIR",
                      "WORKTREES", "ROOT")
 
@@ -222,7 +222,10 @@ class ReviewAdvanceSandbox(TmpRootTest):
         self.addCleanup(patcher.stop)
 
         self.capture(catalog.cmd_init)
-        self.capture(catalog.cmd_new, "Песочница T101 review->acceptance")
+        # id — ULID из возврата `cmd_new` (SPEC T094, требование 2):
+        # классовый хардкод "T001" сломался мержем M1.
+        self.TASK = capture_new_task_id(
+            catalog.cmd_new, "Песочница T101 review->acceptance")[1]
         self.tdir = config.TASKS / self.TASK
         self.tdir.mkdir(parents=True, exist_ok=True)
         (self.tdir / "SPEC.md").write_text(SPEC_V2.format(task=self.TASK),

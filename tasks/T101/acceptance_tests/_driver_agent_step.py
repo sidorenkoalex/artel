@@ -37,8 +37,6 @@ sys.path.insert(0, str(REPO_ROOT))
 from orchestrator import catalog, config, doctor, gitcmd, runner, store  # noqa: E402
 from tests.sandbox import FakeProc, fake_git  # noqa: E402
 
-TASK = "T001"
-
 for _attr, _value in (
     ("ROOT", ROOT_DIR),
     ("DB", ROOT_DIR / ".artel" / "state.db"),
@@ -90,7 +88,9 @@ def custom_run(cmd, *a, **kw):
 subprocess.run = custom_run
 
 catalog.cmd_init()
-catalog.cmd_new("Fingerprint окружения — драйвер T101")
+# id — ULID из возврата `cmd_new` (SPEC T094, требование 2), не
+# предсказуемая строка "T001": хардкод сломался мержем M1.
+TASK = catalog.cmd_new("Fingerprint окружения — драйвер T101")
 
 # Лёгкая песочница без реального git: `cmd_new` пишет SPEC только в
 # worktree (`config.WORKTREES/<id>/tasks/<id>/`), легаси-путь чтения
