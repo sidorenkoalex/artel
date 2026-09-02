@@ -638,7 +638,8 @@ class CmdRunPartialCostTest(TmpRootTest):
         self.assertNotIn("стоимость шага неизвестна", text)
         self.assertEqual(self.unknown_cost_alerts(), [],
                          "usage-события были — алерт неизвестной стоимости не нужен")
-        self.assertIn("таймаут шага (30 мин)", out)
+        self.assertIn(
+            f"таймаут шага ({config.AGENT_TIMEOUT_SEC // 60} мин)", out)
 
 
 class CmdBudgetTest(TmpRootTest):
