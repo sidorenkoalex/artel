@@ -77,8 +77,15 @@ class AcceptanceTest(unittest.TestCase):
 class _RefixationTest(RealPultGitTest):
 
     def enter_tests_writing(self) -> str:
-        (self.task_dir() / "SPEC.md").write_text(
-            SPEC_V2.format(task=self.TASK), encoding="utf-8")
+        spec_text = SPEC_V2.format(task=self.TASK)
+        self.task_dir().mkdir(parents=True, exist_ok=True)
+        (self.task_dir() / "SPEC.md").write_text(spec_text, encoding="utf-8")
+        # Содержимое, которое читает FSM (SPEC T094, требование 10) —
+        # артефактная ветка пульта, отдельно от репо фиксации
+        # (`task_dir()`), тем же приёмом, что `RealPultGitTest.
+        # enter_spec_gate`.
+        self._seed_artifact_branch(f"tasks/{self.TASK}/SPEC.md", spec_text,
+                                   f"{self.TASK}: SPEC готов")
         self.commit_task_dir("SPEC.md ready")
         self.capture(fsm.cmd_advance, self.TASK)  # spec_writing -> spec_gate
         sha = self.head()
@@ -91,6 +98,12 @@ class _RefixationTest(RealPultGitTest):
         (self.task_dir() / "acceptance_tests").mkdir(parents=True, exist_ok=True)
         (self.task_dir() / "acceptance_tests" / "test_ac.py").write_text(
             text, encoding="utf-8")
+        # `fsm_advance.tests_writing` читает acceptance_tests/ с артефактной
+        # ветки пульта (`artifact_source.resolve`), не с диска репо
+        # фиксации — тот же приём, что и SPEC.md выше.
+        self._seed_artifact_branch(
+            f"tasks/{self.TASK}/acceptance_tests/test_ac.py", text,
+            f"{self.TASK}: acceptance_tests")
 
     def commit_as_role(self, message: str, role: str = "test_author") -> None:
         """Легитимный коммит роли ВНУТРИ шага — обрамлён теми же
@@ -279,27 +292,41 @@ class SuccessfulTransitionUnaffectedTest(_RefixationTest):
 
 
 class CommitCommitterDatesTest(RealPultGitTest):
+    """`repo=self.repo()` явно на каждом вызове: без `repo=` `gitcmd.
+    commit_committer_dates` смотрит в `config.ROOT` (`gitcmd.git`), а
+    `self.head()` этой песочницы — sha репо ФИКСАЦИИ self/артели
+    (`config.PROJECTS/artel`, A7 generic-путь) — другой репозиторий.
+
+    Репо фиксации пусто (ни одного коммита) до первого перехода FSM
+    (`ExternalTransitionCommitsTest` — то же самое для 'sled', симметрия
+    A7 требование 2) — `self.enter_spec_gate()` в начале каждого теста
+    даёт `self.head()` реальный, непустой sha, а не пустую строку."""
 
     def test_returns_one_iso_date_per_commit_in_range(self):
+        self.enter_spec_gate()
         before = self.head()
         (self.task_dir()).mkdir(parents=True, exist_ok=True)
         (self.task_dir() / "note.txt").write_text("x", encoding="utf-8")
         self.commit_task_dir("заметка")
         after = self.head()
 
-        dates = gitcmd.commit_committer_dates(before, after)
+        dates = gitcmd.commit_committer_dates(before, after, repo=self.repo())
 
         self.assertEqual(len(dates), 1)
         datetime.fromisoformat(dates[0])  # не падает — валидный ISO8601
 
     def test_empty_range_is_an_empty_list_not_none(self):
-        head = self.head()
+        head = self.enter_spec_gate()
 
-        self.assertEqual(gitcmd.commit_committer_dates(head, head), [])
+        self.assertEqual(
+            gitcmd.commit_committer_dates(head, head, repo=self.repo()), [])
 
     def test_unreachable_range_returns_none(self):
+        self.enter_spec_gate()
+
         self.assertIsNone(
-            gitcmd.commit_committer_dates("0" * 40, self.head()))
+            gitcmd.commit_committer_dates("0" * 40, self.head(),
+                                          repo=self.repo()))
 
 
 if __name__ == "__main__":
