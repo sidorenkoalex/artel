@@ -3,7 +3,9 @@
 Реального git и реального CLI здесь нет: `gitcmd.git` подменяется фейком с
 заготовленным diff, `subprocess.Popen` — фейковым процессом. Так
 проверяется то, что задаёт стоимость прогона: состав и порядок пакета,
-усечение большого diff и запись размера в журнал.
+дисциплина частей большого diff/пакета (tasks/
+01M1GCN1FPSC1A6WK9WD1Q1V8X — замена прежнего молчаливого усечения) и
+запись размера в журнал.
 
 Тесты не описывают формулировки миссии — только наблюдаемое: что ушло в
 промпт агента, что легло в журнал и какие права у шага остались.
@@ -19,8 +21,8 @@ from unittest import mock
 REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO))
 
-from orchestrator import (catalog, config, gitcmd, review,  # noqa: E402
-                          runner, store)
+from orchestrator import (catalog, config, context_package, gitcmd,  # noqa: E402
+                          review, runner, store)
 from tests.sandbox import (FakeProc, capture, capture_new_task_id,  # noqa: E402
                            fake_git)
 
@@ -148,91 +150,142 @@ class FakeGit:
         return subprocess.CompletedProcess(list(args), 0, self.files[rel], "")
 
 
-class TruncateDiffTest(unittest.TestCase):
-    """Потолок diff: под ним — как есть, над ним — начало и явная пометка."""
+class ContextPackageDisciplineTest(unittest.TestCase):
+    """`context_package.discipline` — замена прежних `truncate_diff`/
+    `truncate_package` (tasks/01M1GCN1FPSC1A6WK9WD1Q1V8X, AC-5/AC-6/AC-7/
+    AC-8/AC-9/AC-10): текст под потолком части — как есть, крупнее —
+    пронумерованные части без потери хвоста."""
 
-    def diff_of(self, lines: int) -> str:
-        return "\n".join(f"+строка {n}" for n in range(1, lines + 1))
-
-    def test_diff_under_the_cap_is_untouched(self):
-        diff = self.diff_of(config.REVIEW_DIFF_MAX_LINES)
-
-        text, truncated = review.truncate_diff(diff, config.REVIEW_DIFF_MAX_LINES)
-
-        self.assertEqual(text, diff)
-        self.assertFalse(truncated)
-
-    def test_big_diff_keeps_the_head_and_says_so(self):
-        lines = config.REVIEW_DIFF_MAX_LINES + 500
-        diff = self.diff_of(lines)
-
-        text, truncated = review.truncate_diff(diff, lines)
-
-        self.assertTrue(truncated)
-        body, _, note = text.partition("[diff усечён")
-        self.assertEqual(body.strip().splitlines(),
-                         diff.splitlines()[:config.REVIEW_DIFF_MAX_LINES],
-                         "в пакет идёт начало diff, а не произвольный кусок")
-        self.assertIn(str(config.REVIEW_DIFF_MAX_LINES), note)
-        self.assertIn(str(lines), note, "видно, сколько строк не показано")
-        self.assertIn("размере MR", note, "размер сам по себе — повод к замечанию")
-
-    def test_one_line_over_the_cap_is_already_truncated(self):
-        lines = config.REVIEW_DIFF_MAX_LINES + 1
-
-        _, truncated = review.truncate_diff(self.diff_of(lines), lines)
-
-        self.assertTrue(truncated)
-
-
-class TruncatePackageTest(unittest.TestCase):
-    """Байтовый потолок пакета: контекст и стоимость шага измеримы в байтах.
-
-    Изначально потолок держал предел ядра на argv; с T017 промпт уходит
-    файлом на stdin, а потолок остался — прежним значением и по прежнему
-    поводу: пакет крупнее ревьювер не удержит, а платить за него придётся.
-    """
-
-    def test_package_under_the_cap_is_untouched(self):
+    def test_text_under_the_part_cap_is_untouched(self):
         text = "х" * 100
 
-        out, over = review.truncate_package(text)
+        out, parts_n = context_package.discipline([text])
 
         self.assertEqual(out, text)
-        self.assertFalse(over)
+        self.assertEqual(parts_n, 0)
 
-    def test_oversized_package_is_cut_to_the_cap_and_says_so(self):
-        raw = "a" * (config.REVIEW_PACKAGE_MAX_BYTES + 1000)
+    def test_oversized_text_is_split_into_numbered_parts_with_sha256(self):
+        lines = [f"+строка {n}" for n in range(1, 6000)]
+        text = "\n".join(lines)
+        self.assertGreater(len(text.encode("utf-8")),
+                           config.CONTEXT_PART_MAX_BYTES)
 
-        out, over = review.truncate_package(raw)
+        out, parts_n = context_package.discipline([text])
 
-        self.assertTrue(over)
-        body, _, note = out.partition("[пакет усечён")
-        self.assertEqual(len(body.strip()), config.REVIEW_PACKAGE_MAX_BYTES)
-        self.assertIn(str(len(raw)), note, "видно, сколько байт не показано")
-        self.assertIn("размере MR", note)
+        self.assertGreater(parts_n, 1)
+        self.assertIn("по порядку", out)
+        self.assertIn("--- ЧАСТЬ 1/", out)
+        self.assertIn(f"--- ЧАСТЬ {parts_n}/{parts_n}", out)
+        for line in lines:
+            self.assertIn(line, out.splitlines())
+        self.assertNotIn("усечён", out)
 
     def test_cap_counts_bytes_not_characters(self):
         """Кириллица — два байта: потолок должен ловить её вдвое раньше."""
-        text = "я" * config.REVIEW_PACKAGE_MAX_BYTES
+        text = "я" * config.CONTEXT_PART_MAX_BYTES
 
-        out, over = review.truncate_package(text)
+        out, parts_n = context_package.discipline([text])
 
-        self.assertTrue(over, "потолок в символах пропустил бы этот пакет")
-        self.assertLessEqual(len(out.encode("utf-8")),
-                             config.REVIEW_PACKAGE_MAX_BYTES + 500,
-                             "после отсечки остаётся только пометка сверх потолка")
+        self.assertGreater(parts_n, 0, "потолок в символах пропустил бы этот текст")
 
-    def test_long_lines_are_cut_even_though_the_line_cap_passes(self):
-        """Сценарий сбоя: сгенерированный файл — строк мало, байт мегабайты."""
-        lines = 10
-        diff = "\n".join("+" + "z" * 300_000 for _ in range(lines))
+    def test_split_parts_concatenate_back_to_the_original_byte_for_byte(self):
+        text = "\n".join(f"+line-{n:05d}" for n in range(8000))
 
-        under_line_cap, truncated = review.truncate_diff(diff, lines)
-        self.assertFalse(truncated, "потолок строк такой diff пропускает")
+        parts = context_package.split_into_parts(text)
 
-        _, over = review.truncate_package(under_line_cap)
-        self.assertTrue(over, "байтовый потолок обязан его поймать")
+        self.assertGreater(len(parts), 1)
+        self.assertEqual("".join(parts), text)
+
+    def test_no_line_is_split_across_parts(self):
+        """Сценарий сбоя прежнего усечения: строка длиннее потолка части
+        целиком открывает свою часть, а не разрывается посередине."""
+        line = "+" + "z" * 300_000
+        text = "\n".join(line for _ in range(10))
+
+        parts = context_package.split_into_parts(text)
+
+        self.assertEqual(len(parts), 10)
+        self.assertEqual("".join(parts), text)
+        for part in parts:
+            self.assertLessEqual(part.count("\n"), 1)
+
+
+class DisciplineComponentBoundaryTest(unittest.TestCase):
+    """Регресс R1-F1 (REVIEW.md итерация 1, major): деление на части
+    обязано уважать границы КОМПОНЕНТОВ, а не резать по строкам всего
+    склеенного тела вслепую — иначе крупный сосед мог подвести тело почти
+    вплотную к границе части и разорвать соседний компонент (например
+    diff), хотя его собственный размер меньше потолка (нарушение AC-8).
+
+    Воспроизводит сценарий ревьювера: компонент-заполнитель ЧУТЬ меньше
+    потолка части, следом — маленький компонент (аналог diff'а из
+    нескольких строк) — раньше «### Diff» и последняя строка diff'а
+    попадали в разные пронумерованные части."""
+
+    def test_a_small_component_after_a_near_cap_filler_is_never_split(self):
+        cap = config.CONTEXT_PART_MAX_BYTES
+        filler = "х" * (cap - 300)  # почти вплотную к границе части
+        small_component = "### Diff\n\n+строка 1\n+строка 2\n+строка 3\n"
+
+        out, parts_n = context_package.discipline([filler, small_component])
+
+        self.assertGreater(parts_n, 0, "тело обязано превысить потолок части")
+        self.assertIn(
+            small_component, out,
+            "маленький компонент обязан появиться в тексте пакета целиком, "
+            "одним непрерывным куском — не разорванным между частями")
+
+    def test_small_components_stay_whole_regardless_of_position(self):
+        cap = config.CONTEXT_PART_MAX_BYTES
+        filler = "х" * (cap - 300)
+        head = "### Задача\n\nT001 «Тест», ветка t/1\n"
+        tail = "### Diff\n\n+строка 1\n+строка 2\n"
+
+        out, parts_n = context_package.discipline([head, filler, tail])
+
+        self.assertGreater(parts_n, 0)
+        self.assertIn(head, out)
+        self.assertIn(tail, out)
+
+    def test_concatenation_of_parts_is_still_byte_for_byte_the_original(self):
+        cap = config.CONTEXT_PART_MAX_BYTES
+        components = ["### A\n\nМаркер-A\n", "х" * (cap - 300),
+                     "### Diff\n\n+строка 1\n+строка 2\n+строка 3\n"]
+        expected = "\n".join(components)
+
+        out, parts_n = context_package.discipline(components)
+
+        self.assertGreater(parts_n, 0)
+        # Части встроены в `out` под заголовками «--- ЧАСТЬ N/M ... ---» —
+        # проверяем инвариант через split_into_parts на самом ожидаемом
+        # тексте, тем же способом, что и остальные тесты AC-6 этого файла.
+        rebuilt = context_package._pack_components(components, "\n")
+        self.assertEqual("".join(rebuilt), expected)
+
+
+class RenderComponentTest(unittest.TestCase):
+    """`context_package.render_component` — опись компонента (AC-1) и
+    пропуск компонента крупнее потолка файла (AC-2)."""
+
+    def test_component_under_the_cap_carries_size_and_sha256(self):
+        text = "тело компонента\n"
+
+        out = context_package.render_component("tasks/T001/SPEC.md", text)
+
+        self.assertIn("tasks/T001/SPEC.md", out)
+        self.assertIn(str(len(text.encode("utf-8"))), out)
+        self.assertIn(context_package.sha256_of(text), out)
+        self.assertIn("тело компонента", out)
+
+    def test_component_over_the_cap_is_skipped_with_a_reason(self):
+        text = "я" * (config.CONTEXT_FILE_MAX_BYTES + 1)
+
+        out = context_package.render_component("CLAUDE.md", text)
+
+        self.assertIn("CLAUDE.md", out)
+        self.assertIn(str(len(text.encode("utf-8"))), out)
+        self.assertIn(context_package.FILE_CAP_REASON, out)
+        self.assertNotIn(text, out)
 
 
 class ReviewPackageTest(unittest.TestCase):
@@ -424,40 +477,42 @@ class ReviewPackageTest(unittest.TestCase):
         self.assertEqual(package["chars"], len(package["text"]))
         self.assertEqual(package["bytes"], len(package["text"].encode("utf-8")))
         self.assertEqual(package["diff_lines"], 1)
-        self.assertFalse(package["truncated"])
-        self.assertFalse(package["over_bytes"])
+        self.assertEqual(package["parts"], 0)
         self.assertEqual(package["not_collected"], "")
         self.assertEqual(package["from_worktree"], [])
 
-    def test_huge_diff_by_bytes_is_cut_with_a_mark(self):
-        """Требование 2: потолок пакета держится и на diff из длинных строк."""
-        self.git.diff = "\n".join("+" + "z" * 200_000 for _ in range(6))
+    def test_huge_diff_by_bytes_is_split_into_numbered_parts(self):
+        """tasks/01M1GCN1FPSC1A6WK9WD1Q1V8X, AC-5/AC-9: пакет крупнее потолка
+        части из diff с длинными строками делится на части, а не режется
+        молча."""
+        lines = ["+" + "z" * 200_000 for _ in range(6)]
+        self.git.diff = "\n".join(lines)
 
         package = self.build()
 
-        self.assertTrue(package["over_bytes"])
-        self.assertFalse(package["truncated"], "потолок строк тут не при чём")
-        self.assertIn("[пакет усечён", package["text"])
-        self.assertLessEqual(
-            package["bytes"], config.REVIEW_PACKAGE_MAX_BYTES + 500,
-            "потолок пакета держится и на diff из длинных строк")
+        self.assertGreater(package["parts"], 1)
+        self.assertNotIn("[пакет усечён", package["text"])
+        self.assertIn("по порядку", package["text"])
+        for line in lines:
+            self.assertIn(line, package["text"].splitlines())
         self.assertIn("Пакет собирает оркестратор", package["text"],
-                      "SPEC идёт до diff и под нож не попадает")
+                      "SPEC не теряется при делении на части")
 
-    def test_big_diff_is_truncated_with_a_mark(self):
-        """Требование 2: за потолком в пакет идёт усечённый diff с пометкой."""
-        lines = config.REVIEW_DIFF_MAX_LINES + 10
+    def test_big_diff_is_split_into_numbered_parts_without_loss(self):
+        """AC-9/AC-10: diff крупнее потолка части делится на пронумерованные
+        части со sha256 — не усекается с потерей хвоста."""
+        lines = config.CONTEXT_PART_MAX_BYTES // 10 + 100
         self.git.diff = "\n".join(f"+строка {n}" for n in range(1, lines + 1))
 
         package = self.build()
 
-        self.assertTrue(package["truncated"])
+        self.assertGreater(package["parts"], 1)
         self.assertEqual(package["diff_lines"], lines, "в журнал — полный размер")
-        self.assertIn("[diff усечён", package["text"])
-        self.assertIn("+строка 1\n", package["text"])
-        self.assertNotIn(f"+строка {lines}", package["text"])
+        self.assertNotIn("[diff усечён", package["text"])
+        self.assertIn("+строка 1", package["text"].splitlines())
+        self.assertIn(f"+строка {lines}", package["text"].splitlines())
         self.assertIn("orchestrator/artel.py | 2 +-", package["text"],
-                      "стат-список при усечении остаётся полным")
+                      "стат-список при делении на части остаётся полным")
 
     def test_silent_git_becomes_a_visible_reason(self):
         """Пустой diff и не собранный diff — разные вещи, и это видно."""
@@ -468,7 +523,7 @@ class ReviewPackageTest(unittest.TestCase):
 
         self.assertIn("не собран: fatal: bad revision", package["text"])
         self.assertEqual(package["diff_lines"], 0)
-        self.assertFalse(package["truncated"])
+        self.assertEqual(package["parts"], 0)
         self.assertEqual(package["not_collected"], "fatal: bad revision",
                          "причина уезжает и в журнал, не только в текст пакета")
 
@@ -514,8 +569,7 @@ class ReviewPackageTest(unittest.TestCase):
 
     def note_of(self, **over) -> str:
         package = {"chars": 1234, "bytes": 2345, "diff_lines": 56,
-                   "truncated": False, "over_bytes": False, "not_collected": "",
-                   "from_worktree": []}
+                   "parts": 0, "not_collected": "", "from_worktree": []}
         return review.package_note(package | over)
 
     def test_note_shows_size(self):
@@ -527,12 +581,12 @@ class ReviewPackageTest(unittest.TestCase):
         self.assertNotIn("усечён", note)
         self.assertNotIn("не собран", note)
         self.assertNotIn("рабочего дерева", note)
+        self.assertNotIn("частей", note)
 
-    def test_note_shows_both_truncations(self):
-        self.assertIn(f"diff усечён до {config.REVIEW_DIFF_MAX_LINES} строк",
-                      self.note_of(truncated=True))
-        self.assertIn(f"пакет усечён до {config.REVIEW_PACKAGE_MAX_BYTES} байт",
-                      self.note_of(over_bytes=True))
+    def test_note_shows_the_parts_count(self):
+        """tasks/01M1GCN1FPSC1A6WK9WD1Q1V8X: пакет, поделённый на части,
+        называет их число в журнале — вместо прежнего «усечён»."""
+        self.assertIn("пакет поделён на 3 частей", self.note_of(parts=3))
 
     def test_note_tells_a_failed_diff_from_an_empty_one(self):
         """Иначе «строк diff 0» у сбоя и у пустой ветки читается одинаково."""
@@ -718,13 +772,15 @@ class CmdRunReviewPackageTest(unittest.TestCase):
         self.assertLess(actions.index("ревью-пакет собран"),
                         actions.index("agent run started"))
 
-    def test_truncation_is_journaled_too(self):
-        lines = config.REVIEW_DIFF_MAX_LINES + 7
+    def test_split_into_parts_is_journaled_too(self):
+        """tasks/01M1GCN1FPSC1A6WK9WD1Q1V8X: пакет, поделённый на части,
+        называет их число в журнале (замена прежнего «усечён»)."""
+        lines = config.CONTEXT_PART_MAX_BYTES // 10 + 100
         self.git.diff = "\n".join(f"+строка {n}" for n in range(1, lines + 1))
 
         self.run_agent("review")
 
-        self.assertIn("усечён", self.journal_details("ревью-пакет собран")[0])
+        self.assertIn("поделён на", self.journal_details("ревью-пакет собран")[0])
 
     def test_failed_diff_is_visible_in_the_journal(self):
         """Вердикт по пакету без diff должен объясняться из `log <id>`."""
@@ -871,8 +927,7 @@ class PackageNoteDiffTypeTest(unittest.TestCase):
 
     def note_of(self, **over) -> str:
         package = {"chars": 1234, "bytes": 2345, "diff_lines": 56,
-                  "truncated": False, "over_bytes": False, "not_collected": "",
-                  "from_worktree": []}
+                  "parts": 0, "not_collected": "", "from_worktree": []}
         return review.package_note(package | over)
 
     def test_full_diff_package_names_its_type_and_iteration(self):
