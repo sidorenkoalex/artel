@@ -15,7 +15,7 @@ import sqlite3
 import sys
 from datetime import datetime, timezone
 
-from . import config
+from . import config, session
 
 # Схема БД. `target` в обеих таблицах: журнал не должен уметь разойтись
 # с каталогом задач по принадлежности проекту. `task_counters` — нумерация
@@ -40,7 +40,7 @@ CREATE TABLE IF NOT EXISTS tasks (
 CREATE TABLE IF NOT EXISTS steps (
   id INTEGER PRIMARY KEY AUTOINCREMENT, task_id TEXT,
   target TEXT DEFAULT '{config.DEFAULT_TARGET}', ts TEXT,
-  actor TEXT, action TEXT, detail TEXT
+  actor TEXT, action TEXT, detail TEXT, session_id TEXT
 );
 CREATE TABLE IF NOT EXISTS task_counters (
   target TEXT PRIMARY KEY, next_number INTEGER NOT NULL
@@ -153,6 +153,11 @@ def migrate(conn: sqlite3.Connection) -> None:
     for table in ("tasks", "steps"):
         add_column(conn, table, "target",
                    f"TEXT DEFAULT '{config.DEFAULT_TARGET}'")
+    # Identity сессии, записавшей запись журнала (SPEC 01M1G..., требование
+    # 2): NULL в старых строках — записаны до этой задачи, «кем» неизвестно
+    # и не восстановимо задним числом, читатели (`catalog.cmd_log`/
+    # `cmd_status`) обязаны деградировать на этом молча.
+    add_column(conn, "steps", "session_id", "TEXT")
     # NULL — фиксации ещё не было (строка старше T021 или задача ни разу
     # не переходила): approve/run читают это как «сверять не с чем»,
     # не как нарушение (tasks/T021 SPEC, требование 3).
@@ -448,11 +453,34 @@ def task_branch(conn: sqlite3.Connection, task_id: str) -> str:
     return (row["branch"] or "") if row is not None else ""
 
 
-def journal(conn, task_id: str, actor: str, action: str, detail: str = "") -> None:
+def journal(conn, task_id: str, actor: str, action: str, detail: str = "",
+           *, session_id: str | None = None) -> None:
+    """Пишет запись журнала `steps` — каждая новая запись несёт identity
+    сессии, её записавшей (SPEC 01M1G..., требование 1-2, AC-1/AC-2).
+
+    `session_id` — keyword-only, `None` по умолчанию: тогда identity
+    резолвится ЗДЕСЬ, тем же источником, что и `lease.resolve_session_id`
+    (`session.resolve_session_id`) — identity ТЕКУЩЕГО процесса. Это и
+    есть единая точка требования 1: подавляющее большинство ~70
+    вызывающих мест `journal()` по всей кодовой базе сами не имеют дела с
+    чужой identity и не передают параметр вовсе — они уже исполняются
+    внутри одного и того же процесса CLI-вызова, чей `ARTEL_SESSION_ID`/
+    ppid не меняется по его ходу, так что дефолтный резолв здесь даёт ТУ
+    ЖЕ identity, что дала бы явная прокидка через десяток модулей.
+
+    Явный параметр — только для мест, уже владеющих ЧУЖОЙ или иначе
+    полученной identity, отличной от «резолвящейся из окружения этого же
+    процесса прямо сейчас» (`lease.acquire`: identity, взявшая/перехватившая
+    lease, — уже готовый аргумент функции, не обязана совпадать с тем, что
+    резолвил бы повторный вызов `resolve_session_id` в контексте теста).
+    """
+    if session_id is None:
+        session_id = session.resolve_session_id(None)
     conn.execute(
-        "INSERT INTO steps (task_id, target, ts, actor, action, detail)"
-        " VALUES (?,?,?,?,?,?)",
-        (task_id, task_target(conn, task_id), now(), actor, action, detail),
+        "INSERT INTO steps (task_id, target, ts, actor, action, detail,"
+        " session_id) VALUES (?,?,?,?,?,?,?)",
+        (task_id, task_target(conn, task_id), now(), actor, action, detail,
+         session_id),
     )
     conn.commit()
 

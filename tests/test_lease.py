@@ -17,7 +17,7 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from orchestrator import catalog, config, lease, store  # noqa: E402
-from tests.sandbox import TmpRootTest, _ts_ago, capture  # noqa: E402
+from tests.sandbox import TmpRootTest, _dead_pid, _ts_ago, capture  # noqa: E402
 
 
 class ResolveSessionIdTest(unittest.TestCase):
@@ -125,6 +125,109 @@ class AcquireReleaseTest(TmpRootTest):
 
         lease.release(store.db(), self.TASK, "sess-a")
         self.assertIsNone(self.row())
+
+
+class AcquireJournalCauseTest(TmpRootTest):
+    """SPEC 01M1GCHKG8DDK4DCZWCE3DYKWC: identity в журнале lease-событий
+    (требования 1-3, AC-1, AC-4..AC-6)."""
+
+    TASK = "T001"
+
+    def setUp(self):
+        super().setUp()
+        capture(catalog.cmd_init)
+        store.insert_task(store.db(), self.TASK, "Задача", "in_dev",
+                          "task/t001-zadacha", config.DEFAULT_TARGET, 25.0)
+
+    def steps(self):
+        return store.task_steps(store.db(), self.TASK)
+
+    def test_fresh_acquire_records_the_taking_session_id_in_the_column(self):
+        """AC-4: захват свободного lease несёт identity взявшей сессии не
+        только в `detail`, но и в новой колонке `steps.session_id`."""
+        lease.acquire(store.db(), self.TASK, "sess-fresh")
+
+        new = self.steps()
+        self.assertTrue(new)
+        self.assertEqual(new[-1]["session_id"], "sess-fresh")
+
+    def test_intercept_of_dead_pid_on_this_host_names_the_cause(self):
+        """AC-5, сценарий A: прежний держатель на этом host, pid мёртв —
+        причина перехвата называет именно это, не общий «heartbeat
+        протух»."""
+        conn = store.db()
+        stale_ts = _ts_ago(config.LEASE_STALE_AFTER_SEC + 1)
+        conn.execute(
+            "INSERT INTO leases (task_id, session_id, pid, hostname,"
+            " heartbeat_ts) VALUES (?,?,?,?,?)",
+            (self.TASK, "sess-dead-holder", _dead_pid(), socket.gethostname(),
+             stale_ts))
+        conn.commit()
+
+        lease.acquire(store.db(), self.TASK, "sess-taker")
+
+        detail = self.steps()[-1]["detail"]
+        self.assertIn("pid", detail)
+        self.assertTrue("мёртв" in detail or "мертв" in detail)
+
+    def test_intercept_of_foreign_host_keeps_the_heartbeat_cause(self):
+        """AC-5, сценарий Б: прежний держатель на чужом host — pid
+        непроверяем, причина остаётся прежней «heartbeat протух»
+        (регресс существующего поведения)."""
+        conn = store.db()
+        stale_ts = _ts_ago(config.LEASE_STALE_AFTER_SEC + 1)
+        conn.execute(
+            "INSERT INTO leases (task_id, session_id, pid, hostname,"
+            " heartbeat_ts) VALUES (?,?,?,?,?)",
+            (self.TASK, "sess-foreign-holder", 999999, "other-host.invalid",
+             stale_ts))
+        conn.commit()
+
+        lease.acquire(store.db(), self.TASK, "sess-taker")
+
+        detail = self.steps()[-1]["detail"]
+        self.assertIn("heartbeat", detail)
+        self.assertIn("протух", detail)
+
+
+class ReleaseAnyTest(TmpRootTest):
+    """SPEC 01M1GCHKG8DDK4DCZWCE3DYKWC, требование 3, AC-6: снятие lease
+    «любым путём» — общий узел `lease.release_any` для `kill`/`done`."""
+
+    TASK = "T001"
+
+    def setUp(self):
+        super().setUp()
+        capture(catalog.cmd_init)
+        store.insert_task(store.db(), self.TASK, "Задача", "in_dev",
+                          "task/t001-zadacha", config.DEFAULT_TARGET, 25.0)
+
+    def test_releases_a_lease_held_by_a_different_session_and_names_the_caller(self):
+        conn = store.db()
+        conn.execute(
+            "INSERT INTO leases (task_id, session_id, pid, hostname,"
+            " heartbeat_ts) VALUES (?,?,?,?,?)",
+            (self.TASK, "sess-other-holder", 424242, "holder-host", store.now()))
+        conn.commit()
+
+        with mock.patch.dict(os.environ, {"ARTEL_SESSION_ID": "sess-releaser"}):
+            detail = lease.release_any(conn, self.TASK, "orchestrator",
+                                       "тестовое снятие")
+
+        self.assertIsNotNone(detail)
+        self.assertIsNone(store.lease_row(store.db(), self.TASK))
+        last = store.task_steps(store.db(), self.TASK)[-1]
+        self.assertEqual(last["action"], "тестовое снятие")
+        self.assertEqual(last["session_id"], "sess-releaser")
+        self.assertIn("sess-other-holder", last["detail"])
+
+    def test_no_lease_is_a_silent_no_op(self):
+        conn = store.db()
+
+        result = lease.release_any(conn, self.TASK, "orchestrator", "снятие")
+
+        self.assertIsNone(result)
+        self.assertEqual(store.task_steps(conn, self.TASK), [])
 
 
 class RunLockedTest(TmpRootTest):

@@ -29,7 +29,7 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from orchestrator import (alerts, budget, catalog, config, doctor,  # noqa: E402
-                          gitcmd, projects, runner, spend, store)
+                          gitcmd, liveness, projects, runner, spend, store)
 from tests.sandbox import (FakeStream, TmpRootTest, capture,  # noqa: E402
                            capture_new_task_id, claude_only_popen,
                            claude_only_run, fake_git)
@@ -879,6 +879,155 @@ class LeasesCheckTest(TmpRootTest):
         doctor.check_leases(conn)
 
         self.assertIsNone(store.get_alert(conn, alert_id)["ack_ts"])
+
+
+class LeaseFailDetailAndReconciliationTest(TmpRootTest):
+    """SPEC 01M1GCHKG8DDK4DCZWCE3DYKWC, требования 4-5 (AC-7..AC-10):
+    рекон осиротевшего шага и обогащённая FAIL-строка `check_leases`,
+    отдельно от golden path (tasks/T044 acceptance) и от анти-race/полей
+    (01M1G... acceptance) — здесь узкие юнит-срезы форм, которых критерию
+    не нужно."""
+
+    TASK = "T001"
+
+    def setUp(self):
+        super().setUp()
+        capture(catalog.cmd_init)
+        store.insert_task(store.db(), self.TASK, "Задача", "in_dev",
+                          "task/t001-zadacha", config.DEFAULT_TARGET, 25.0)
+
+    @staticmethod
+    def dead_pid() -> int:
+        proc = subprocess.Popen([sys.executable, "-c", "pass"],
+                                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        proc.wait()
+        return proc.pid
+
+    def insert_dead_lease(self, session_id: str = "sess-dead") -> None:
+        conn = store.db()
+        conn.execute(
+            "INSERT INTO leases (task_id, session_id, pid, hostname,"
+            " heartbeat_ts) VALUES (?,?,?,?,?)",
+            (self.TASK, session_id, self.dead_pid(), socket.gethostname(),
+             store.now()))
+        conn.commit()
+
+    def test_no_orphan_step_leaves_the_journal_untouched(self):
+        """Нет «agent run started» без пары — нечего реконить."""
+        before = len(store.task_steps(store.db(), self.TASK))
+        self.insert_dead_lease()
+
+        doctor.check_leases(store.db())
+
+        after = store.task_steps(store.db(), self.TASK)
+        self.assertFalse(
+            any("оборван" in (s["action"] or "") for s in after[before:]),
+            after[before:])
+
+    def test_orphan_with_a_terminal_pair_is_not_reconciled(self):
+        """«agent run started», уже закрытый терминальным событием, — не
+        сирота, даже если lease теперь мёртв."""
+        conn = store.db()
+        conn.execute(
+            "INSERT INTO steps (task_id, target, ts, actor, action, detail)"
+            " VALUES (?,?,?,?,?,?)",
+            (self.TASK, config.DEFAULT_TARGET, store.now(), "developer",
+             "agent run started", ""))
+        conn.execute(
+            "INSERT INTO steps (task_id, target, ts, actor, action, detail)"
+            " VALUES (?,?,?,?,?,?)",
+            (self.TASK, config.DEFAULT_TARGET, store.now(), "developer",
+             "agent run finished", ""))
+        conn.commit()
+        self.insert_dead_lease()
+
+        doctor.check_leases(store.db())
+
+        steps = store.task_steps(store.db(), self.TASK)
+        self.assertFalse(any("оборван" in (s["action"] or "") for s in steps))
+
+    def test_reconciliation_runs_only_once_across_repeated_calls(self):
+        """AC-8: три прогона подряд на том же осиротевшем шаге — ровно
+        одно терминальное событие обрыва."""
+        conn = store.db()
+        conn.execute(
+            "INSERT INTO steps (task_id, target, ts, actor, action, detail)"
+            " VALUES (?,?,?,?,?,?)",
+            (self.TASK, config.DEFAULT_TARGET, store.now(), "developer",
+             "agent run started", ""))
+        conn.commit()
+        self.insert_dead_lease("sess-orphan-holder")
+
+        doctor.check_leases(store.db())
+        doctor.check_leases(store.db())
+        doctor.check_leases(store.db())
+
+        steps = store.task_steps(store.db(), self.TASK)
+        orphaned = [s for s in steps if "оборван" in (s["action"] or "")
+                   and "sess-orphan-holder" in (s["action"] or "")]
+        self.assertEqual(len(orphaned), 1, steps)
+
+    def test_fail_detail_names_role_and_last_journal_event(self):
+        conn = store.db()
+        conn.execute(
+            "INSERT INTO steps (task_id, target, ts, actor, action, detail)"
+            " VALUES (?,?,?,?,?,?)",
+            (self.TASK, config.DEFAULT_TARGET, "2026-01-02 03:00:00Z",
+             "developer", "agent run started", ""))
+        conn.execute(
+            "INSERT INTO steps (task_id, target, ts, actor, action, detail)"
+            " VALUES (?,?,?,?,?,?)",
+            (self.TASK, config.DEFAULT_TARGET, "2026-01-02 03:05:00Z",
+             "developer", "agent env WARNING", ""))
+        conn.commit()
+        self.insert_dead_lease("sess-role-holder")
+
+        checks = doctor.check_leases(store.db())
+
+        failed = [c for c in checks if c.status == "fail"]
+        self.assertEqual(len(failed), 1, checks)
+        detail = failed[0].detail
+        self.assertIn("developer", detail)
+        self.assertIn("agent env WARNING", detail)
+        self.assertRegex(detail, r"шаг\D{0,20}\d")
+
+
+class LeaseAntiRaceTest(TmpRootTest):
+    """SPEC 01M1GCHKG8DDK4DCZWCE3DYKWC, требование 5, AC-9: FAIL по мёртвому
+    lease требует ДВА согласных снимка живости pid."""
+
+    TASK = "T001"
+
+    def setUp(self):
+        super().setUp()
+        capture(catalog.cmd_init)
+        store.insert_task(store.db(), self.TASK, "Задача", "in_dev",
+                          "task/t001-zadacha", config.DEFAULT_TARGET, 25.0)
+        conn = store.db()
+        conn.execute(
+            "INSERT INTO leases (task_id, session_id, pid, hostname,"
+            " heartbeat_ts) VALUES (?,?,?,?,?)",
+            (self.TASK, "sess-flaky", 555555, socket.gethostname(), store.now()))
+        conn.commit()
+
+    def test_dead_on_both_snapshots_fails(self):
+        with mock.patch.object(liveness, "_pid_alive", return_value=False):
+            checks = doctor.check_leases(store.db())
+
+        self.assertTrue(any(c.status == "fail" for c in checks), checks)
+
+    def test_dead_then_alive_does_not_fail(self):
+        seen = {"n": 0}
+
+        def flaky(pid):
+            seen["n"] += 1
+            return seen["n"] > 1
+
+        with mock.patch.object(liveness, "_pid_alive", side_effect=flaky):
+            checks = doctor.check_leases(store.db())
+
+        self.assertEqual(seen["n"], 2, "анти-race обязан снять второй снимок")
+        self.assertFalse(any(c.status == "fail" for c in checks), checks)
 
 
 class MergeLockCheckTest(TmpRootTest):
