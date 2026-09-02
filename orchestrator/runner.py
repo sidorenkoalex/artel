@@ -201,7 +201,12 @@ def _cmd_run(conn, task_id: str) -> None:
                         expected_state=t["state"],
                         detail=f"инцидент целостности: {incident}")
         print(f"[{task_id}] СТОП: инцидент целостности — {incident}")
-        print(f"  разберись и: artel.py approve {task_id} <sha>")
+        # Sha, перефиксированный только что этим же set_state (SPEC
+        # «approve: полный sha в подсказках», требование 1) — готовое к
+        # копированию значение вместо литерального плейсхолдера `<sha>`,
+        # который Оператору иначе пришлось бы искать самому.
+        sha_hint = fixation.approve_sha_hint(task_id, target)
+        print(f"  разберись и: artel.py approve {task_id}{sha_hint}")
         return
 
     # Состав скилов роли — из roles.yaml, а не из константы рядом с кодом:
@@ -287,7 +292,11 @@ def _cmd_run(conn, task_id: str) -> None:
                     detail=f"агент не отработал за {attempt} "
                     f"{_attempts_word(attempt)}{note}: "
                     f"{reason}")
-    print(f"  разберись по логам и: artel.py approve {task_id}  "
+    # Sha, зафиксированный этим же set_state (SPEC «approve: полный sha
+    # в подсказках», требование 1) — тот же приём, что и у отказа
+    # инцидента целостности выше.
+    sha_hint = fixation.approve_sha_hint(task_id, target)
+    print(f"  разберись по логам и: artel.py approve {task_id}{sha_hint}  "
           f"(вернёт в {t['state']}, шаг повторится)")
 
 
