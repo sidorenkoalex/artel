@@ -497,7 +497,8 @@ def run_agent_once(conn, task_id: str, role: str, prompt: str,
 
     print(f"[{task_id}] лог шага: {log_path}  (наблюдать: tail -f {log_path})")
     store.journal(conn, task_id, role, "agent run started",
-                  f"{numbered}, лог: {log_path}, промпт: {prompt_path}")
+                  f"{numbered}, лог: {log_path}, промпт: {prompt_path}, "
+                  f"окружение: {agent_log.environment_fingerprint()}")
     # Открытие файла держится вне `try` вокруг Popen: там ловится
     # FileNotFoundError, и пропавший промпт (ручная уборка `.artel/logs`,
     # внешний tmp-reaper) отчитывался бы Оператору как «claude CLI не найден» —
@@ -620,7 +621,8 @@ def run_agent_once(conn, task_id: str, role: str, prompt: str,
         # артефакт, а `advance` уже проверяет чистоту рабочей копии.
         checkpoint.commit_step_artifacts(conn, task_id, role)
     store.journal(conn, task_id, role, "agent run finished",
-                  f"rc={rc}, {numbered}{spent}")
+                  f"rc={rc}, {numbered}{spent}, "
+                  f"окружение: {agent_log.environment_fingerprint()}")
     print(f"[{task_id}] {role} завершил (rc={rc}{spent}); "
           f"дальше: artel.py advance {task_id}")
     return "ok", "", None

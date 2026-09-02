@@ -5,8 +5,8 @@ if/elif `orchestrator/fsm.py::_cmd_advance`, перенесённое без и�
 `fsm.py` — эти функции не вызываются напрямую иначе, кроме тестов,
 идущих через публичный `fsm.cmd_advance`.
 """
-from . import (acceptance, artifacts, budget, ci, config, fsm, fsm_autogate,
-              gitcmd, store, workspace, yamlmini)
+from . import (acceptance, agent_log, artifacts, budget, ci, config, fsm,
+              fsm_autogate, gitcmd, store, workspace, yamlmini)
 
 
 def spec_writing(conn, task_id: str, t, tdir, target: str, state: str) -> bool:
@@ -149,8 +149,14 @@ def review(conn, task_id: str, t, tdir, target: str, state: str) -> bool:
         if workspace.on_task_branch(task_id, t["branch"]) is True:
             acc_tdir = workspace.path(task_id) / "tasks" / task_id
         green, tail = acceptance.run(acc_tdir)
+        # Fingerprint окружения (SPEC T101, требование 4б, AC-5) — часть
+        # исхода прогона приёмочных тестов, тем же приёмом, что и у
+        # события агентного шага (`runner.py`): значение поля `detail`
+        # существующего журнального события, без новой таблицы/колонки.
+        fingerprint = agent_log.environment_fingerprint()
         if not green:
-            detail = f"acceptance_tests красные:\n{tail}"
+            detail = (f"acceptance_tests красные:\n{tail}\n"
+                      f"окружение: {fingerprint}")
             store.journal(conn, task_id, "fsm",
                           "переход отклонён: приёмочные тесты", detail)
             print(f"[{task_id}] переход отклонён: приёмочные тесты "
@@ -161,7 +167,7 @@ def review(conn, task_id: str, t, tdir, target: str, state: str) -> bool:
             return False
         card = acceptance.summary(acc_tdir)
         store.journal(conn, task_id, "fsm", "приёмочные тесты пройдены",
-                      card)
+                      f"{card}\nокружение: {fingerprint}")
         print(f"[{task_id}] {card}")
         # Вставка verifying между review и acceptance (SPEC T079,
         # требование 4; ADR-0003 п.10): свежий approved + зелёные

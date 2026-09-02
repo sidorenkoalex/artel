@@ -14,6 +14,7 @@ docs/invariants.md.
 """
 import io
 import json
+import platform
 import shutil
 import subprocess
 import sys
@@ -87,6 +88,78 @@ class _AgentLogTmpRootTest(TmpRootTest):
 
 
 TmpRootTest = _AgentLogTmpRootTest
+
+
+class EnvironmentFingerprintTest(unittest.TestCase):
+    """SPEC T101, требования 1-3 — сборщик fingerprint окружения шага:
+    версия/путь интерпретатора Python, версии git и claude CLI, кэш на
+    процесс, устойчивость к недоступному инструменту/таймауту.
+
+    Кэш модуля сбрасывается вокруг каждого теста: без этого более ранний
+    тест того же процесса (или сама реализация задачи, зовущая функцию
+    из `runner.py`/`fsm_advance.py`) навсегда зафиксировал бы значение
+    для всех последующих проверок в этом файле."""
+
+    def setUp(self):
+        agent_log._environment_fingerprint_cache = None
+        self.addCleanup(setattr, agent_log, "_environment_fingerprint_cache", None)
+
+    def test_available_tools_report_python_git_and_claude_versions(self):
+        def fake_run(cmd, **kw):
+            if cmd[0] == "git":
+                return subprocess.CompletedProcess(cmd, 0, "git version 2.43.0\n", "")
+            return subprocess.CompletedProcess(
+                cmd, 0, f"{config.CLI_VERSION_PIN} (Claude Code)\n", "")
+
+        with mock.patch.object(agent_log.subprocess, "run", side_effect=fake_run):
+            fingerprint = agent_log.environment_fingerprint()
+
+        self.assertIn(sys.executable, fingerprint)
+        self.assertIn(platform.python_version(), fingerprint)
+        self.assertIn("2.43.0", fingerprint)
+        self.assertIn(config.CLI_VERSION_PIN, fingerprint)
+
+    def test_missing_binary_is_recorded_as_a_field_level_failure(self):
+        with mock.patch.object(agent_log.subprocess, "run",
+                               side_effect=FileNotFoundError("git не найден")):
+            fingerprint = agent_log.environment_fingerprint()
+
+        self.assertIn("недоступно:", fingerprint)
+        self.assertIn(platform.python_version(), fingerprint,
+                      "сбой снятия одного поля не должен ронять остальные")
+
+    def test_timeout_is_recorded_without_raising_and_the_call_uses_a_short_timeout(self):
+        calls = []
+
+        def fake_run(cmd, **kw):
+            calls.append(kw.get("timeout"))
+            raise subprocess.TimeoutExpired(cmd=cmd, timeout=kw.get("timeout"))
+
+        with mock.patch.object(agent_log.subprocess, "run", side_effect=fake_run):
+            fingerprint = agent_log.environment_fingerprint()
+
+        self.assertIn("недоступно:", fingerprint)
+        self.assertEqual(len(calls), 2, "по одному вызову на git и claude")
+        for timeout in calls:
+            self.assertIsNotNone(timeout, "иначе сценарий таймаута завис бы навечно")
+            self.assertGreater(timeout, 0)
+            self.assertLessEqual(timeout, 10, "таймаут обязан быть «единиц секунд»")
+
+    def test_result_is_cached_and_external_calls_are_not_repeated(self):
+        call_count = 0
+
+        def fake_run(cmd, **kw):
+            nonlocal call_count
+            call_count += 1
+            return subprocess.CompletedProcess(cmd, 0, "v1\n", "")
+
+        with mock.patch.object(agent_log.subprocess, "run", side_effect=fake_run):
+            first = agent_log.environment_fingerprint()
+            second = agent_log.environment_fingerprint()
+
+        self.assertEqual(first, second)
+        self.assertEqual(call_count, 2,
+                         "второе обращение не должно повторять subprocess-вызовы")
 
 
 class NewAgentLogTest(TmpRootTest):
@@ -420,6 +493,45 @@ class CmdRunLoggingTest(TmpRootTest):
         details = self.journal_details("agent run started")
         self.assertEqual(len(details), 1)
         self.assertIn(str(self.log_file(1)), details[0])
+
+    def test_environment_fingerprint_is_journaled_on_start_and_finish(self):
+        """SPEC T101, требования 1, 4а/AC-4 — fingerprint в обоих
+        журнальных событиях агентного шага, значением ОДНОГО и того же
+        сбора (AC-6 проверяется отдельно — здесь только присутствие)."""
+        def fake_run(cmd, **kw):
+            if cmd[0] == "git":
+                return subprocess.CompletedProcess(cmd, 0, "git version 9.9.9\n", "")
+            return subprocess.CompletedProcess(
+                cmd, 0, f"{config.CLI_VERSION_PIN} (Claude Code)\n", "")
+
+        agent_log._environment_fingerprint_cache = None
+        self.addCleanup(setattr, agent_log, "_environment_fingerprint_cache", None)
+        with mock.patch.object(agent_log.subprocess, "run", side_effect=fake_run):
+            self.run_agent(["шаг 1\n"])
+
+        started = self.journal_details("agent run started")
+        finished = self.journal_details("agent run finished")
+        self.assertEqual(len(started), 1)
+        self.assertEqual(len(finished), 1)
+        for detail in (started[0], finished[0]):
+            self.assertIn("9.9.9", detail)
+            self.assertIn(config.CLI_VERSION_PIN, detail)
+
+    def test_missing_git_during_fingerprint_does_not_change_the_step_outcome(self):
+        """SPEC T101, требование 2/AC-3 — сбой снятия fingerprint (бинарь
+        не найден) не меняет исход шага: тот же rc=0, то же завершение."""
+        agent_log._environment_fingerprint_cache = None
+        self.addCleanup(setattr, agent_log, "_environment_fingerprint_cache", None)
+        with mock.patch.object(agent_log.subprocess, "run",
+                               side_effect=FileNotFoundError("git не найден")):
+            out = self.run_agent(["шаг 1\n"])
+
+        self.assertIn("developer завершил (rc=0)", out)
+        finished = self.journal_details("agent run finished")
+        self.assertEqual(len(finished), 1)
+        self.assertIn("rc=0", finished[0])
+        self.assertIn("недоступно:", finished[0])
+        self.assertEqual(self.journal_details("agent run FAILED"), [])
 
     def test_second_run_writes_new_file(self):
         self.run_agent(["прогон 1\n"])
