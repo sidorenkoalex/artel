@@ -1,5 +1,5 @@
 ---
-built_at_sha: 40c0097968746de3c08e0ee6480dac2bbdc1c50d
+built_at_sha: c855ef2dcffc533c484b05bbba63324f49c343d0
 ---
 
 # Codebase-map пульта
@@ -135,9 +135,9 @@ built_at_sha: 40c0097968746de3c08e0ee6480dac2bbdc1c50d
 - `auto_stop_advice`
 - `cmd_auto`
 
-**Импортирует:** `orchestrator/agent_log.py`, `orchestrator/budget.py`, `orchestrator/ci.py`, `orchestrator/config.py`, `orchestrator/fsm.py`, `orchestrator/lease.py`, `orchestrator/pause.py`, `orchestrator/runner.py`, `orchestrator/store.py`
+**Импортирует:** `orchestrator/agent_log.py`, `orchestrator/budget.py`, `orchestrator/ci.py`, `orchestrator/config.py`, `orchestrator/fixation.py`, `orchestrator/fsm.py`, `orchestrator/lease.py`, `orchestrator/pause.py`, `orchestrator/runner.py`, `orchestrator/store.py`
 
-**Импортируется:** `orchestrator/artel.py`, `orchestrator/canary.py`, `tests/test_analyst_role.py`, `tests/test_auto_cycle.py`
+**Импортируется:** `orchestrator/artel.py`, `orchestrator/canary.py`, `tests/test_analyst_role.py`, `tests/test_auto_cycle.py`, `tests/test_git_fixation.py`
 
 ## orchestrator/brief.py
 
@@ -322,6 +322,7 @@ built_at_sha: 40c0097968746de3c08e0ee6480dac2bbdc1c50d
 **Назначение:** Hash-фиксация артефактов на переходах FSM (ADR-0003 п.15, п.17; tasks/T021).
 
 **Публичные функции:**
+- `approve_sha_hint`
 - `check_integrity`
 - `external_artifact_sha`
 - `external_code_sha`
@@ -331,7 +332,7 @@ built_at_sha: 40c0097968746de3c08e0ee6480dac2bbdc1c50d
 
 **Импортирует:** `orchestrator/artifact_branch.py`, `orchestrator/config.py`, `orchestrator/gitcmd.py`, `orchestrator/store.py`, `orchestrator/workspace.py`
 
-**Импортируется:** `orchestrator/artifact_branch.py`, `orchestrator/catalog.py`, `orchestrator/checkpoint.py`, `orchestrator/fsm.py`, `orchestrator/runner.py`, `orchestrator/snapshot.py`, `orchestrator/store.py`, `tests/test_git_fixation.py`, `tests/test_step_autocommit.py`, `tests/test_step_refixation.py`, `tests/test_timeout_checkpoint.py`
+**Импортируется:** `orchestrator/artifact_branch.py`, `orchestrator/auto.py`, `orchestrator/catalog.py`, `orchestrator/checkpoint.py`, `orchestrator/fsm.py`, `orchestrator/fsm_autogate.py`, `orchestrator/runner.py`, `orchestrator/snapshot.py`, `orchestrator/store.py`, `tests/test_git_fixation.py`, `tests/test_step_autocommit.py`, `tests/test_step_refixation.py`, `tests/test_timeout_checkpoint.py`
 
 ## orchestrator/fsm.py
 
@@ -369,9 +370,9 @@ built_at_sha: 40c0097968746de3c08e0ee6480dac2bbdc1c50d
 
 **Публичные функции:** (нет)
 
-**Импортирует:** `orchestrator/acceptance.py`, `orchestrator/budget.py`, `orchestrator/gates.py`, `orchestrator/store.py`, `orchestrator/workspace.py`, `scripts/guard.py`
+**Импортирует:** `orchestrator/acceptance.py`, `orchestrator/budget.py`, `orchestrator/fixation.py`, `orchestrator/gates.py`, `orchestrator/store.py`, `orchestrator/workspace.py`, `scripts/guard.py`
 
-**Импортируется:** `orchestrator/fsm_advance.py`
+**Импортируется:** `orchestrator/fsm_advance.py`, `tests/test_git_fixation.py`
 
 ## orchestrator/fsm_merge_gate.py
 
@@ -402,7 +403,7 @@ built_at_sha: 40c0097968746de3c08e0ee6480dac2bbdc1c50d
 
 **Импортирует:** `orchestrator/config.py`, `orchestrator/yamlmini.py`
 
-**Импортируется:** `orchestrator/fsm_autogate.py`, `tests/test_gates.py`
+**Импортируется:** `orchestrator/fsm_autogate.py`, `tests/test_gates.py`, `tests/test_git_fixation.py`
 
 ## orchestrator/gitcmd.py
 
@@ -1240,7 +1241,7 @@ built_at_sha: 40c0097968746de3c08e0ee6480dac2bbdc1c50d
 
 **Публичные функции:** (нет)
 
-**Импортирует:** `orchestrator/artifact_branch.py`, `orchestrator/catalog.py`, `orchestrator/config.py`, `orchestrator/fixation.py`, `orchestrator/fsm.py`, `orchestrator/gitcmd.py`, `orchestrator/projects.py`, `orchestrator/runner.py`, `orchestrator/store.py`, `orchestrator/workspace.py`, `tests/sandbox.py`
+**Импортирует:** `orchestrator/artifact_branch.py`, `orchestrator/auto.py`, `orchestrator/catalog.py`, `orchestrator/config.py`, `orchestrator/fixation.py`, `orchestrator/fsm.py`, `orchestrator/fsm_autogate.py`, `orchestrator/gates.py`, `orchestrator/gitcmd.py`, `orchestrator/projects.py`, `orchestrator/runner.py`, `orchestrator/store.py`, `orchestrator/workspace.py`, `tests/sandbox.py`
 
 **Импортируется:** `tests/test_answer.py`, `tests/test_step_autocommit.py`, `tests/test_step_refixation.py`, `tests/test_timeout_checkpoint.py`
 

@@ -174,6 +174,21 @@ def read(task_id: str, target: str) -> tuple[str, bool]:
     return _read_external(target)
 
 
+def approve_sha_hint(task_id: str, target: str) -> str:
+    """Суффикс `" <sha>"`, готовый к вставке в подсказку `artel.py
+    approve <id>` (SPEC «approve: полный sha в подсказках», требование
+    1) — зафиксированный sha тем же живым чтением, что и `fsm.
+    confirm_fixation` (не колонка `tasks.fixed_sha`: подсказка обязана
+    называть то же значение, которое approve реально сверит).
+
+    Пусто — фиксации ещё нет (git не ответил, вырожденный случай
+    песочниц без реального git): подсказка остаётся без sha, байт-в-байт
+    как до этой задачи.
+    """
+    current, _clean = read(task_id, target)
+    return f" {current}" if current else ""
+
+
 def check_integrity(conn, task_id: str) -> str | None:
     """None — фиксация не нарушена (или её ещё нет); иначе причина отказа.
 
