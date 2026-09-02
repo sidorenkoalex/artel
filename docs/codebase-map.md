@@ -1,5 +1,5 @@
 ---
-built_at_sha: d424d58f32d30111fe66af5001defc2c393059fd
+built_at_sha: 3facd9b524382e33b7a8591c6ac0065b953da7db
 ---
 
 # Codebase-map пульта
@@ -359,7 +359,7 @@ built_at_sha: d424d58f32d30111fe66af5001defc2c393059fd
 - `tests_writing`
 - `verifying`
 
-**Импортирует:** `orchestrator/acceptance.py`, `orchestrator/agent_log.py`, `orchestrator/artifact_source.py`, `orchestrator/artifacts.py`, `orchestrator/budget.py`, `orchestrator/ci.py`, `orchestrator/config.py`, `orchestrator/fsm.py`, `orchestrator/fsm_autogate.py`, `orchestrator/gitcmd.py`, `orchestrator/store.py`, `orchestrator/workspace.py`, `orchestrator/yamlmini.py`, `scripts/guard.py`
+**Импортирует:** `orchestrator/acceptance.py`, `orchestrator/agent_log.py`, `orchestrator/artifact_source.py`, `orchestrator/artifacts.py`, `orchestrator/budget.py`, `orchestrator/ci.py`, `orchestrator/config.py`, `orchestrator/fsm.py`, `orchestrator/fsm_autogate.py`, `orchestrator/gitcmd.py`, `orchestrator/github_adapter.py`, `orchestrator/store.py`, `orchestrator/workspace.py`, `orchestrator/yamlmini.py`, `scripts/guard.py`
 
 **Импортируется:** `orchestrator/fsm.py`
 
@@ -379,7 +379,7 @@ built_at_sha: d424d58f32d30111fe66af5001defc2c393059fd
 
 **Публичные функции:** (нет)
 
-**Импортирует:** `orchestrator/ci.py`, `orchestrator/cleanup.py`, `orchestrator/config.py`, `orchestrator/fsm.py`, `orchestrator/fsm_postmerge.py`, `orchestrator/gitcmd.py`, `orchestrator/merge_lock.py`, `orchestrator/snapshot.py`, `orchestrator/store.py`, `orchestrator/workspace.py`
+**Импортирует:** `orchestrator/ci.py`, `orchestrator/cleanup.py`, `orchestrator/config.py`, `orchestrator/fsm.py`, `orchestrator/fsm_postmerge.py`, `orchestrator/gitcmd.py`, `orchestrator/github_adapter.py`, `orchestrator/merge_lock.py`, `orchestrator/snapshot.py`, `orchestrator/store.py`, `orchestrator/workspace.py`
 
 **Импортируется:** `orchestrator/fsm.py`, `tests/test_fsm_merge_gate_done_snapshot.py`, `tests/test_merge_gate_ci_wait.py`
 
@@ -424,6 +424,7 @@ built_at_sha: d424d58f32d30111fe66af5001defc2c393059fd
 - `list_branches`
 - `ls_tree_files`
 - `on_foreign_branch`
+- `remote_branch_sha`
 - `show`
 
 **Импортирует:** `orchestrator/config.py`
@@ -436,11 +437,12 @@ built_at_sha: d424d58f32d30111fe66af5001defc2c393059fd
 
 **Публичные функции:**
 - `ensure_draft_mr`
+- `ensure_head_in_origin`
 - `undraft_mr`
 
 **Импортирует:** `orchestrator/alerts.py`, `orchestrator/ci.py`, `orchestrator/config.py`, `orchestrator/gitcmd.py`, `orchestrator/store.py`, `orchestrator/targets.py`
 
-**Импортируется:** `orchestrator/fsm.py`, `tests/test_github_adapter.py`
+**Импортируется:** `orchestrator/fsm.py`, `orchestrator/fsm_advance.py`, `orchestrator/fsm_merge_gate.py`, `tests/test_github_adapter.py`
 
 ## orchestrator/idgen.py
 

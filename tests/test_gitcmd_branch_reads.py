@@ -13,7 +13,9 @@
 28 реестра (docs/invariants.md) — его отключение или ослабление допустимо
 только Оператором отдельным ADR.
 """
+import shutil
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -163,6 +165,57 @@ class CommitsBehindTest(_GitcmdRealGitSandbox):
     def test_unresponsive_git_is_none(self):
         with mock.patch.object(gitcmd, "git", lambda *a: None):
             self.assertIsNone(gitcmd.commits_behind("feature"))
+
+
+class RemoteBranchShaTest(_GitcmdRealGitSandbox):
+    """`gitcmd.remote_branch_sha` (SPEC 01M1GS5HZ1JXFGKVR95HEW0AEZ, AC-2):
+    sha ветки в origin по точному `refs/heads/<branch>`, не по факту
+    присутствия имени ветки в origin — настоящий bare-remote, заглушкой
+    `gitcmd.git` расхождение конкретных sha не изобразить (тот же довод,
+    что у `_sandbox.HeadInOriginSandbox` в приёмочных тестах этой задачи).
+    """
+
+    def setUp(self):
+        super().setUp()
+        bare = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, bare, ignore_errors=True)
+        self.git("init", "-q", "--bare", bare)
+        self.git("remote", "add", "origin", bare)
+
+    def test_branch_never_pushed_is_empty(self):
+        self.checkout("feature", create=True)
+
+        self.assertEqual(gitcmd.remote_branch_sha("feature"), "")
+
+    def test_matches_the_pushed_head(self):
+        self.checkout("feature", create=True)
+        self.write_and_commit("f.txt", "правка\n")
+        feature_head = self.head()
+        self.git("push", "-q", "-u", "origin", "feature")
+
+        self.assertEqual(gitcmd.remote_branch_sha("feature"), feature_head)
+
+    def test_stale_origin_does_not_match_the_new_local_head(self):
+        """Origin знает ветку, но на старом коммите — сверка обязана
+        отличить это от «уже актуально», не только от «ветки там нет»."""
+        self.checkout("feature", create=True)
+        self.write_and_commit("f.txt", "1\n")
+        self.git("push", "-q", "-u", "origin", "feature")
+        stale = gitcmd.remote_branch_sha("feature")
+        self.write_and_commit("f.txt", "2\n")
+
+        self.assertEqual(gitcmd.remote_branch_sha("feature"), stale)
+        self.assertNotEqual(gitcmd.remote_branch_sha("feature"), self.head())
+
+    def test_no_origin_remote_configured_is_empty(self):
+        self.git("remote", "remove", "origin")
+        self.checkout("feature", create=True)
+
+        self.assertEqual(gitcmd.remote_branch_sha("feature"), "")
+
+    def test_unresponsive_git_is_empty(self):
+        with mock.patch.object(gitcmd, "git", lambda *a: None):
+            self.assertEqual(gitcmd.remote_branch_sha("feature"), "")
 
 
 class TaskBranchTest(TmpRootTest):

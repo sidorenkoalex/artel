@@ -164,6 +164,103 @@ class EnsureDraftMrTest(unittest.TestCase):
         self.assertIn("main", call)
 
 
+class EnsureHeadInOriginTest(unittest.TestCase):
+    """`github_adapter.ensure_head_in_origin` (SPEC
+    01M1GS5HZ1JXFGKVR95HEW0AEZ, требования 1-3, AC-1..AC-4): sha
+    головы ветки в origin. Сюда — только сама сверка/авто-push/
+    журналирование в изоляции; поведение внутри реальных переходов FSM
+    (порядок относительно `reviewed_iter`, AC-5) кроют приёмочные тесты
+    задачи на настоящем git."""
+
+    def setUp(self):
+        self.conn = mock.Mock()
+        self.journal_patcher = mock.patch.object(github_adapter.store, "journal")
+        self.journal = self.journal_patcher.start()
+        self.addCleanup(self.journal_patcher.stop)
+
+    def test_matching_sha_is_a_noop(self):
+        with mock.patch.object(github_adapter.gitcmd, "branch_head_sha",
+                               lambda b: "abc123"), \
+             mock.patch.object(github_adapter.gitcmd, "remote_branch_sha",
+                               lambda b: "abc123"), \
+             mock.patch.object(github_adapter.gitcmd, "git") as git_mock:
+            ok, detail = github_adapter.ensure_head_in_origin(
+                self.conn, "T001", "task/t001-x")
+
+        self.assertTrue(ok)
+        self.assertEqual(detail, "")
+        git_mock.assert_not_called()
+        self.journal.assert_not_called()
+
+    def test_missing_head_triggers_a_push_and_journals_success(self):
+        pushes = []
+
+        def fake_git(*args):
+            pushes.append(args)
+            return subprocess.CompletedProcess(list(args), 0, "ok\n", "")
+
+        with mock.patch.object(github_adapter.gitcmd, "branch_head_sha",
+                               lambda b: "abc123"), \
+             mock.patch.object(github_adapter.gitcmd, "remote_branch_sha",
+                               lambda b: ""), \
+             mock.patch.object(github_adapter.gitcmd, "git", fake_git):
+            ok, detail = github_adapter.ensure_head_in_origin(
+                self.conn, "T001", "task/t001-x")
+
+        self.assertTrue(ok)
+        self.assertEqual(detail, "")
+        self.assertEqual(pushes, [("push", "-u", "origin", "task/t001-x")])
+        self.journal.assert_called_once()
+        self.assertIn("push", self.journal.call_args[0][3])
+
+    def test_stale_remote_sha_triggers_a_push_too(self):
+        """AC-2: расхождение по sha, не только полное отсутствие ветки в
+        origin, тоже обязано запустить push."""
+        with mock.patch.object(github_adapter.gitcmd, "branch_head_sha",
+                               lambda b: "new-sha"), \
+             mock.patch.object(github_adapter.gitcmd, "remote_branch_sha",
+                               lambda b: "old-sha"), \
+             mock.patch.object(
+                 github_adapter.gitcmd, "git",
+                 lambda *a: subprocess.CompletedProcess(list(a), 0, "ok\n", "")):
+            ok, _ = github_adapter.ensure_head_in_origin(
+                self.conn, "T001", "task/t001-x")
+
+        self.assertTrue(ok)
+        self.journal.assert_called_once()
+
+    def test_failed_push_is_a_named_refusal(self):
+        with mock.patch.object(github_adapter.gitcmd, "branch_head_sha",
+                               lambda b: "abc123"), \
+             mock.patch.object(github_adapter.gitcmd, "remote_branch_sha",
+                               lambda b: ""), \
+             mock.patch.object(
+                 github_adapter.gitcmd, "git",
+                 lambda *a: subprocess.CompletedProcess(
+                     list(a), 1, "", "permission denied")):
+            ok, detail = github_adapter.ensure_head_in_origin(
+                self.conn, "T001", "task/t001-x")
+
+        self.assertFalse(ok)
+        self.assertEqual(
+            detail,
+            "голова ветки не в origin, push не удался: permission denied")
+        self.journal.assert_called_once()
+        self.assertIn("push не удался", self.journal.call_args[0][4])
+
+    def test_push_returning_none_is_also_a_named_refusal(self):
+        with mock.patch.object(github_adapter.gitcmd, "branch_head_sha",
+                               lambda b: "abc123"), \
+             mock.patch.object(github_adapter.gitcmd, "remote_branch_sha",
+                               lambda b: ""), \
+             mock.patch.object(github_adapter.gitcmd, "git", lambda *a: None):
+            ok, detail = github_adapter.ensure_head_in_origin(
+                self.conn, "T001", "task/t001-x")
+
+        self.assertFalse(ok)
+        self.assertIn("git не ответил", detail)
+
+
 class UndraftMrTest(unittest.TestCase):
 
     def setUp(self):
