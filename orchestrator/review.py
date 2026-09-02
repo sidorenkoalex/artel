@@ -214,8 +214,11 @@ def review_package(task_id: str, title: str, branch: str, *,
     # Деление на части не знает о границах (tasks/
     # 01M1GV6H5DDDCWW4G3GW1D3A1X, AC-7) — часть, где закрывающий маркер
     # физически попал в другую пронумерованную часть, получает явный
-    # признак незавершённости.
-    text = brief.mark_unclosed_parts(text, run_id)
+    # признак незавершённости. `parts_n` (0 — деление не произошло)
+    # передан явно (R1-F1, REVIEW.md итерация 1, major): без него функция
+    # заново искала бы заголовки частей наивным regex по всему тексту,
+    # включая тело недоверенных компонентов пакета (diff/SPEC/PLAN).
+    text = brief.mark_unclosed_parts(text, run_id, parts_n)
     return {"text": text, "chars": len(text),
             "bytes": len(text.encode("utf-8")), "diff_lines": diff_lines,
             "parts": parts_n,

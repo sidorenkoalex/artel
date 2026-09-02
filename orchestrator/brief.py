@@ -86,16 +86,73 @@ def wrap_boundary(run_id: str, text: str) -> str:
     return f"{_open_marker(run_id)}\n{text.strip()}\n{_close_marker(run_id)}"
 
 
-def mark_unclosed_parts(text: str, run_id: str) -> str:
+_PART_HEADER_RE = re.compile(
+    r"--- ЧАСТЬ (\d+)/(\d+) \((\d+) байт, sha256=([0-9a-f]{64})\) ---\n\n")
+
+
+def _validated_part_starts(text: str, num_parts: int) -> list[int] | None:
+    """Позиции начала каждой из `num_parts` частей `context_package.
+    discipline()`, подтверждённые сверкой заявленных в заголовке байт и
+    sha256 с фактическим содержимым сегмента — не одним лишь текстовым
+    совпадением префикса «--- ЧАСТЬ N/M» (R1-F1, REVIEW.md итерация 1,
+    major): такое совпадение мог нести сам текст недоверенного компонента
+    (тот же класс подмены, от которого AC-8 защищает ВНЕШНИЙ граничный
+    маркер, — здесь распространён на ВНУТРЕННИЙ признак деления частей).
+
+    Подделать заголовок, который пройдёт эту сверку, значит заранее знать
+    sha256 текста, который в реальности последует за ним при итоговой
+    сборке брифа/пакета — автор содержимого компонента этим не
+    располагает, сборка ещё не произошла. `None` — ожидаемое число
+    подтверждённых заголовков по порядку 1..`num_parts` не найдено: не
+    гадаем дальше, тот же вырожденный отказ, что и в остальном коде этого
+    модуля."""
+    starts: list[int] = []
+    pos = 0
+    for i in range(1, num_parts + 1):
+        search_from = pos
+        matched = None
+        while True:
+            m = _PART_HEADER_RE.search(text, search_from)
+            if m is None:
+                return None
+            n, total = int(m.group(1)), int(m.group(2))
+            claimed_len, sha_hex = int(m.group(3)), m.group(4)
+            if n == i and total == num_parts:
+                content_start = m.end()
+                segment = text[content_start:].encode("utf-8")[:claimed_len]
+                if len(segment) == claimed_len:
+                    try:
+                        decoded = segment.decode("utf-8")
+                    except UnicodeDecodeError:
+                        decoded = None
+                    if decoded is not None and component_hash(decoded) == sha_hex:
+                        matched = (m.start(), content_start + len(decoded))
+                        break
+            search_from = m.start() + 1
+        starts.append(matched[0])
+        pos = matched[1]
+    return starts
+
+
+def mark_unclosed_parts(text: str, run_id: str, num_parts: int) -> str:
     """Часть-сегмент `context_package.discipline`, несущий открывающий
     маркер `run_id` без парного закрывающего (тот попал в другую
     пронумерованную часть — AC-7), получает `UNCLOSED_PART_NOTE` в
-    конец своего сегмента. Документ без деления на части (нет заголовков
-    «--- ЧАСТЬ N/M») не трогается вовсе — признак незавершённости не
+    конец своего сегмента.
+
+    `num_parts` — второе значение, которое уже возвращает `discipline()`
+    (0 — деление на части не произошло вовсе): признак незавершённости не
     печатается безусловно (симметричный тест AC-7: маленький бриф не
-    несёт этого текста)."""
-    boundaries = [m.start() for m in re.finditer(r"--- ЧАСТЬ \d+/\d+", text)]
-    if not boundaries:
+    несёт этого текста) — при `num_parts == 0` строка «--- ЧАСТЬ N/M»,
+    случайно или намеренно оказавшаяся внутри тела компонента, не может
+    создать ложное деление (R1-F1, REVIEW.md итерация 1, major), потому
+    что деления не было вовсе; при `num_parts > 0` настоящие заголовки
+    ищутся через `_validated_part_starts`, сверяющую байты и sha256
+    сегмента, а не просто текстовый вид заголовка."""
+    if num_parts == 0:
+        return text
+    boundaries = _validated_part_starts(text, num_parts)
+    if boundaries is None:
         return text
     opens = [m.start() for m in re.finditer(re.escape(_open_marker(run_id)), text)]
     closes = [m.start() for m in re.finditer(re.escape(_close_marker(run_id)), text)]
@@ -462,8 +519,9 @@ def developer_brief(conn, task_id: str) -> str:
                                     foreign, run_id, render=_manifest_component)
     if answer_part:
         parts.append(answer_part)
-    text, _ = context_package.discipline([HEADER, BOUNDARY_INSTRUCTION, *parts])
-    return mark_unclosed_parts(text, run_id)
+    text, num_parts = context_package.discipline(
+        [HEADER, BOUNDARY_INSTRUCTION, *parts])
+    return mark_unclosed_parts(text, run_id, num_parts)
 
 
 def advance_refusal_history(conn, task_id: str, role: str, state: str) -> str:
