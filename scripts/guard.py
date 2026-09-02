@@ -309,6 +309,67 @@ def scan_redness_markers(tdir: Path) -> list[str]:
     return redness_marker_errors_from_files(files)
 
 
+# --------------------------------------------------------------------------
+# Образец формата идентификатора задачи в acceptance_tests/ (SPEC
+# 01M1H186VEVG6NF40YKH1338MD, требования 1-2): инцидент 02.09.2026 —
+# приёмочный тест зашил формат id («T и три цифры») в проверку вывода, и
+# CI-job id-format-greplint (.github/workflows/ci.yml) поймал это только
+# на PR, когда acceptance_tests/ уже был зафиксирован локом (ADR-0003,
+# инвариант 27). Проверка здесь ловит тот же класс дефекта РАНЬШЕ — на
+# выходе из tests_writing, до записи tests_locked_sha.
+#
+# Набор образцов — общий источник с CI-job (требование 2, AC-3):
+# id_format_patterns.txt читают ОБА потребителя (этот модуль и bash-шаг
+# job'а через `grep -Ef`) — правка файла меняет поведение обоих без
+# правки кода.
+ID_FORMAT_PATTERNS_PATH = Path(__file__).resolve().parent / "id_format_patterns.txt"
+
+ID_FORMAT_HINT = ("формат идентификатора знает только генератор; строй "
+                  "проверку от фактического идентификатора")
+
+
+def id_format_patterns() -> list[re.Pattern]:
+    """Скомпилированные образцы формата идентификатора задачи из общего
+    источника (см. заголовок секции выше)."""
+    lines = ID_FORMAT_PATTERNS_PATH.read_text(encoding="utf-8").splitlines()
+    return [re.compile(line) for line in lines if line.strip()]
+
+
+def id_format_sample_errors(files: list[tuple[str, str]]) -> list[str]:
+    """Ошибки образца формата идентификатора задачи по уже прочитанным
+    (label, текст) парам .py-файлов acceptance_tests/ — источник (диск
+    или ВЕТКА задачи) выбирает вызывающий код, тем же приёмом, что
+    `redness_marker_errors_from_files`."""
+    patterns = id_format_patterns()
+    errors: list[str] = []
+    for label, source in files:
+        for lineno, line in enumerate(source.splitlines(), start=1):
+            if any(p.search(line) for p in patterns):
+                errors.append(f"{label}:{lineno}: строка несёт образец "
+                              f"формата идентификатора задачи — "
+                              f"{ID_FORMAT_HINT}")
+    return errors
+
+
+def scan_id_format_samples(tdir: Path) -> list[str]:
+    """Ошибки образца формата идентификатора для всех `*.py` под
+    acceptance_tests/ рабочей копии — та же область файлов, что источники
+    трассируемости AC (`scan_ac_content`), шире `scan_redness_markers`
+    (не только `test_*.py`): образец формата может утечь и во
+    вспомогательный файл вроде `_sandbox.py`.
+    """
+    tests_dir = tdir / "acceptance_tests"
+    if not tests_dir.is_dir():
+        return []
+    files: list[tuple[str, str]] = []
+    for f in sorted(tests_dir.rglob("*.py")):
+        try:
+            files.append((str(f), f.read_text(encoding="utf-8")))
+        except (OSError, UnicodeDecodeError):
+            continue
+    return id_format_sample_errors(files)
+
+
 def traceability_errors_from_content(spec_text: str, meta: dict, tested: set,
                                      markers: dict) -> list[str]:
     """Ядро проверки трассируемости AC -> тест (SPEC T023, требование 4) по
