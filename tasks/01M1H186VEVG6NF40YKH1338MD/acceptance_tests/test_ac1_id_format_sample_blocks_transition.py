@@ -34,6 +34,14 @@ from _sandbox import (AC_TEST_WITH_ID_SAMPLE, ID_SAMPLE_LINE,  # noqa: E402
 class IdFormatSampleBlocksTransitionTest(TmpRootTest):
 
     def test_ac1_id_format_sample_blocks_transition_before_lock(self):
+        """Файл приёмочных тестов несёт образец формата идентификатора:
+        переход tests_writing -> in_dev отклоняется ДО записи фиксации
+        лока — задача остаётся в tests_writing, tests_locked_sha пуст.
+        
+        Ловит мутацию: разработчик ставит новую проверку ПОСЛЕ записи
+        tests_locked_sha (или глотает её отказ) — состояние ушло бы
+        в in_dev либо лок оказался бы записан.
+        """
         self.enter_tests_writing()
         self.write_acceptance_tests(AC_TEST_WITH_ID_SAMPLE, name="test_ac.py")
 
@@ -50,6 +58,13 @@ class IdFormatSampleBlocksTransitionTest(TmpRootTest):
             "(SPEC AC-1)")
 
     def test_ac1_refusal_message_names_file_and_line(self):
+        """Отказ перехода называет конкретный файл и номер строки
+        с образцом формата идентификатора.
+        
+        Ловит мутацию: разработчик печатает обобщённый отказ без адреса
+        («найден образец») — проверки на имя файла и вычисленный номер
+        строки упадут.
+        """
         self.enter_tests_writing()
         self.write_acceptance_tests(AC_TEST_WITH_ID_SAMPLE, name="test_ac.py")
 
@@ -66,6 +81,12 @@ class IdFormatSampleBlocksTransitionTest(TmpRootTest):
             f"acceptance_tests/test_ac.py, SPEC AC-1) — вывод: {out}")
 
     def test_ac1_refusal_message_carries_generator_hint(self):
+        """Отказ несёт дословную подсказку про единственный генератор
+        формата идентификатора.
+        
+        Ловит мутацию: подсказка перефразирована или выброшена при
+        рефакторинге сообщения — дословное совпадение исчезнет.
+        """
         self.enter_tests_writing()
         self.write_acceptance_tests(AC_TEST_WITH_ID_SAMPLE, name="test_ac.py")
 

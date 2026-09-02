@@ -29,6 +29,12 @@ from _sandbox import (AC_TEST_CLEAN, AC_TEST_WITH_ID_SAMPLE,  # noqa: E402
 class RejectionDoesNotEscalateTest(TmpRootTest):
 
     def test_ac4_rejection_leaves_task_in_tests_writing_not_escalated(self):
+        """Отказ по образцу не эскалирует: задача остаётся в tests_writing,
+        решения Оператора не требуется.
+        
+        Ловит мутацию: разработчик оформляет отказ переводом в escalated
+        (как батч вопросов) — состояние станет escalated.
+        """
         self.enter_tests_writing()
         self.write_acceptance_tests(AC_TEST_WITH_ID_SAMPLE, name="test_ac.py")
 
@@ -45,6 +51,12 @@ class RejectionDoesNotEscalateTest(TmpRootTest):
             "в escalated (SPEC AC-4)")
 
     def test_ac4_fixing_the_file_and_retrying_advance_succeeds_unassisted(self):
+        """После починки файла повторный advance проходит сам, без
+        вмешательства Оператора.
+        
+        Ловит мутацию: отказ оставляет блокирующее состояние (маркер,
+        запись), из-за которого чистый повтор не проходит.
+        """
         self.enter_tests_writing()
         self.write_acceptance_tests(AC_TEST_WITH_ID_SAMPLE, name="test_ac.py")
         self.capture(fsm.cmd_advance, self.TASK)

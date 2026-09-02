@@ -73,10 +73,18 @@ class AcceptanceTest(unittest.TestCase):
         self.assertEqual(1 + 1, 2)
 '''
 
+# Образец «T и три цифры» собран конкатенацией (правка Оператора по
+# ADR-0012, R1-F1 ревью 02.09): буквальное написание в исходнике
+# _sandbox.py само совпадало бы с образцами линта формата
+# идентификатора — и активный CI-джоб, и новая проверка ложно
+# срабатывали бы на этой фикстуре.
+_ID_SAMPLE_RE = "T" + "\\" + "d{3}"
+
 # Полное покрытие фиктивных AC-1/AC-2, валидный маркер красноты,
-# СОДЕРЖИТ образец формата идентификатора задачи (`r"T\\d{3}"` —
-# «T и три цифры», тот же класс дефекта, что инцидент 02.09.2026 из
-# SPEC «Контекст») — сценарий AC-1 (SPEC 01M1H186VEVG6NF40YKH1338MD).
+# СОДЕРЖИТ образец формата идентификатора задачи («T и три цифры»,
+# подставляется из _ID_SAMPLE_RE — см. выше; тот же класс дефекта,
+# что инцидент 02.09.2026 из SPEC «Контекст») — сценарий AC-1
+# (SPEC 01M1H186VEVG6NF40YKH1338MD).
 AC_TEST_WITH_ID_SAMPLE = '''"""Красен до реализации: фикстура-песочница содержит образец формата
 идентификатора задачи — сама песочница, не задача
 01M1H186VEVG6NF40YKH1338MD."""
@@ -85,11 +93,17 @@ import unittest
 
 class AcceptanceTest(unittest.TestCase):
     def test_ac1_first_criterion(self):
-        self.assertRegex("T042", r"T\\d{3}")
+        self.assertRegex("T042", r"__ID_SAMPLE__")
 
     def test_ac2_second_criterion(self):
         self.assertEqual(1 + 1, 2)
 '''
+
+# Подстановка реального образца в шаблон: в исходнике фикстуры стоит
+# заглушка __ID_SAMPLE__, буквальный образец существует только в
+# сгенерированном при прогоне файле (см. _ID_SAMPLE_RE выше).
+AC_TEST_WITH_ID_SAMPLE = AC_TEST_WITH_ID_SAMPLE.replace(
+    "__ID_SAMPLE__", _ID_SAMPLE_RE)
 
 # Строка с образцом формата идентификатора в AC_TEST_WITH_ID_SAMPLE —
 # вычислено из самого текста фикстуры, а не подобрано вручную: правка
@@ -97,7 +111,7 @@ class AcceptanceTest(unittest.TestCase):
 # сообщении отказа (SPEC AC-1 — «сообщение называет файл и строку»).
 ID_SAMPLE_LINE = next(
     i for i, line in enumerate(AC_TEST_WITH_ID_SAMPLE.splitlines(), start=1)
-    if r'T\d{3}' in line)
+    if _ID_SAMPLE_RE in line)
 
 
 class _TmpRootTest(_BaseTmpRootTest):

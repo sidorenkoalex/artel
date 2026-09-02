@@ -131,6 +131,11 @@ class AcceptanceTest(unittest.TestCase):
 class ExistingChecksNotWeakenedTest(unittest.TestCase):
 
     def test_ac5_unsupported_schema_version_is_still_rejected(self):
+        """Существующий отказ по неподдерживаемой версии схемы жив.
+        
+        Ловит мутацию: новая проверка встроена ранним return и
+        перехватывает поток до старой валидации — старый отказ исчез бы.
+        """
         errors = guard.schema_errors(
             "label", {"schema_version": guard.SUPPORTED_SCHEMA_VERSION + 1})
 
@@ -140,6 +145,11 @@ class ExistingChecksNotWeakenedTest(unittest.TestCase):
             "новее поддерживаемой (SPEC AC-5, принцип целостности)")
 
     def test_ac5_missing_required_section_is_still_rejected(self):
+        """Существующий отказ по отсутствию обязательной секции жив.
+        
+        Ловит мутацию: тот же ранний return новой проверки — файл без
+        секции, но без образца, прошёл бы мимо guard.
+        """
         errors = guard.check_content("ветка:tasks/T999/SPEC.md",
                                      SPEC_MISSING_SECTION)
 
@@ -149,6 +159,11 @@ class ExistingChecksNotWeakenedTest(unittest.TestCase):
             f"'## Не входит' у SPEC (SPEC AC-5): {errors}")
 
     def test_ac5_invalid_status_is_still_rejected(self):
+        """Существующий отказ по недопустимому статусу артефакта жив.
+        
+        Ловит мутацию: перестроение цепочки проверок потеряло валидацию
+        статуса — недопустимый статус прошёл бы.
+        """
         errors = guard.check_content("ветка:tasks/T999/SPEC.md",
                                      SPEC_BAD_STATUS)
 
@@ -158,6 +173,11 @@ class ExistingChecksNotWeakenedTest(unittest.TestCase):
             f"status (SPEC AC-5): {errors}")
 
     def test_ac5_ac_traceability_still_flags_missing_ac(self):
+        """Трассируемость AC по-прежнему ловит непокрытый критерий.
+        
+        Ловит мутацию: новая проверка возвращает успех до прохода
+        трассируемости — непокрытый AC перестал бы блокировать выход.
+        """
         meta = guard.yamlmini.frontmatter(SPEC_V2) or {}
         tested, markers = guard.scan_ac_content([AC_TEST_MISSING_AC2])
 
@@ -171,6 +191,11 @@ class ExistingChecksNotWeakenedTest(unittest.TestCase):
             f"{errors}")
 
     def test_ac5_redness_marker_check_still_flags_missing_marker(self):
+        """Проверка маркера красноты по-прежнему ловит его отсутствие.
+        
+        Ловит мутацию: объединение проходов потеряло проверку маркера —
+        файл без маркера прошёл бы.
+        """
         errors = guard.redness_marker_errors_from_files(
             [("ветка:tasks/T999/acceptance_tests/test_ac.py",
               NO_REDNESS_MARKER_SOURCE)])
@@ -182,6 +207,12 @@ class ExistingChecksNotWeakenedTest(unittest.TestCase):
             f"{errors}")
 
     def test_ac5_ci_job_id_format_greplint_still_present(self):
+        """CI-джоб проверки формата идентификатора остался в ci.yml после
+        выноса образцов в общий источник.
+        
+        Ловит мутацию: вынос образцов удалил или переименовал джоб —
+        grep по имени джоба в ci.yml упадёт.
+        """
         ci_yml = (Path(__file__).resolve().parents[3] /
                   ".github" / "workflows" / "ci.yml").read_text(
             encoding="utf-8")

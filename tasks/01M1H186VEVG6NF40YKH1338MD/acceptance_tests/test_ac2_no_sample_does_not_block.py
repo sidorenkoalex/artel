@@ -26,6 +26,12 @@ from _sandbox import AC_TEST_CLEAN, TmpRootTest  # noqa: E402
 class NoIdFormatSampleDoesNotBlockTest(TmpRootTest):
 
     def test_ac2_content_without_sample_advances_as_before(self):
+        """Чистое содержимое (без образца) проходит переход как прежде.
+        
+        Ловит мутацию: разработчик делает образец слишком широким
+        (например, ловит любые «{3}») — проверка ложно сработает на
+        чистом файле и переход не пройдёт.
+        """
         self.enter_tests_writing()
         self.write_acceptance_tests(AC_TEST_CLEAN, name="test_ac.py")
 
