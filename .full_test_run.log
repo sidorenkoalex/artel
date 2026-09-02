@@ -1,0 +1,131 @@
+..............................................................................................Exception ignored in: <function _AutoClosingConnection.__del__ at 0x1086abec0>
+Traceback (most recent call last):
+  File "/Users/al.sidorenko/projects/artel/.artel/worktrees/01M1GS5HZ1JXFGKVR95HEW0AEZ/orchestrator/store.py", line 90, in __del__
+    self.close()
+sqlite3.ProgrammingError: SQLite objects created in a thread can only be used in that same thread. The object was created in thread id 8401792064 and this is thread id 6142210048.
+Exception ignored in: <function _AutoClosingConnection.__del__ at 0x1086abec0>
+Traceback (most recent call last):
+  File "/Users/al.sidorenko/projects/artel/.artel/worktrees/01M1GS5HZ1JXFGKVR95HEW0AEZ/orchestrator/store.py", line 90, in __del__
+    self.close()
+sqlite3.ProgrammingError: SQLite objects created in a thread can only be used in that same thread. The object was created in thread id 8401792064 and this is thread id 6142210048.
+Exception ignored in: <function _AutoClosingConnection.__del__ at 0x1086abec0>
+Traceback (most recent call last):
+  File "/Users/al.sidorenko/projects/artel/.artel/worktrees/01M1GS5HZ1JXFGKVR95HEW0AEZ/orchestrator/store.py", line 90, in __del__
+    self.close()
+sqlite3.ProgrammingError: SQLite objects created in a thread can only be used in that same thread. The object was created in thread id 8401792064 and this is thread id 6142210048.
+Exception ignored in: <function _AutoClosingConnection.__del__ at 0x1086abec0>
+Traceback (most recent call last):
+  File "/Users/al.sidorenko/projects/artel/.artel/worktrees/01M1GS5HZ1JXFGKVR95HEW0AEZ/orchestrator/store.py", line 90, in __del__
+    self.close()
+sqlite3.ProgrammingError: SQLite objects created in a thread can only be used in that same thread. The object was created in thread id 8401792064 and this is thread id 6142210048.
+Exception ignored in: <function _AutoClosingConnection.__del__ at 0x1086abec0>
+Traceback (most recent call last):
+  File "/Users/al.sidorenko/projects/artel/.artel/worktrees/01M1GS5HZ1JXFGKVR95HEW0AEZ/orchestrator/store.py", line 90, in __del__
+    self.close()
+sqlite3.ProgrammingError: SQLite objects created in a thread can only be used in that same thread. The object was created in thread id 8401792064 and this is thread id 6142210048.
+Exception ignored in: <function _AutoClosingConnection.__del__ at 0x1086abec0>
+Traceback (most recent call last):
+  File "/Users/al.sidorenko/projects/artel/.artel/worktrees/01M1GS5HZ1JXFGKVR95HEW0AEZ/orchestrator/store.py", line 90, in __del__
+    self.close()
+sqlite3.ProgrammingError: SQLite objects created in a thread can only be used in that same thread. The object was created in thread id 8401792064 and this is thread id 6142210048.
+Exception ignored in: <function _AutoClosingConnection.__del__ at 0x1086abec0>
+Traceback (most recent call last):
+  File "/Users/al.sidorenko/projects/artel/.artel/worktrees/01M1GS5HZ1JXFGKVR95HEW0AEZ/orchestrator/store.py", line 90, in __del__
+    self.close()
+sqlite3.ProgrammingError: SQLite objects created in a thread can only be used in that same thread. The object was created in thread id 8401792064 and this is thread id 6142210048.
+Exception ignored in: <function _AutoClosingConnection.__del__ at 0x1086abec0>
+Traceback (most recent call last):
+  File "/Users/al.sidorenko/projects/artel/.artel/worktrees/01M1GS5HZ1JXFGKVR95HEW0AEZ/orchestrator/store.py", line 90, in __del__
+    self.close()
+sqlite3.ProgrammingError: SQLite objects created in a thread can only be used in that same thread. The object was created in thread id 8401792064 and this is thread id 6142210048.
+Exception ignored in: <function _AutoClosingConnection.__del__ at 0x1086abec0>
+Traceback (most recent call last):
+  File "/Users/al.sidorenko/projects/artel/.artel/worktrees/01M1GS5HZ1JXFGKVR95HEW0AEZ/orchestrator/store.py", line 90, in __del__
+    self.close()
+sqlite3.ProgrammingError: SQLite objects created in a thread can only be used in that same thread. The object was created in thread id 8401792064 and this is thread id 6142210048.
+Exception ignored in: <function _AutoClosingConnection.__del__ at 0x1086abec0>
+Traceback (most recent call last):
+  File "/Users/al.sidorenko/projects/artel/.artel/worktrees/01M1GS5HZ1JXFGKVR95HEW0AEZ/orchestrator/store.py", line 90, in __del__
+    self.close()
+sqlite3.ProgrammingError: SQLite objects created in a thread can only be used in that same thread. The object was created in thread id 8401792064 and this is thread id 6142210048.
+Exception ignored in: <function _AutoClosingConnection.__del__ at 0x1086abec0>
+Traceback (most recent call last):
+  File "/Users/al.sidorenko/projects/artel/.artel/worktrees/01M1GS5HZ1JXFGKVR95HEW0AEZ/orchestrator/store.py", line 90, in __del__
+    self.close()
+sqlite3.ProgrammingError: SQLite objects created in a thread can only be used in that same thread. The object was created in thread id 8401792064 and this is thread id 6142210048.
+Exception ignored in: <function _AutoClosingConnection.__del__ at 0x1086abec0>
+Traceback (most recent call last):
+  File "/Users/al.sidorenko/projects/artel/.artel/worktrees/01M1GS5HZ1JXFGKVR95HEW0AEZ/orchestrator/store.py", line 90, in __del__
+    self.close()
+sqlite3.ProgrammingError: SQLite objects created in a thread can only be used in that same thread. The object was created in thread id 8401792064 and this is thread id 6142210048.
+Exception ignored in: <function _AutoClosingConnection.__del__ at 0x1086abec0>
+Traceback (most recent call last):
+  File "/Users/al.sidorenko/projects/artel/.artel/worktrees/01M1GS5HZ1JXFGKVR95HEW0AEZ/orchestrator/store.py", line 90, in __del__
+    self.close()
+sqlite3.ProgrammingError: SQLite objects created in a thread can only be used in that same thread. The object was created in thread id 8401792064 and this is thread id 6142210048.
+Exception ignored in: <function _AutoClosingConnection.__del__ at 0x1086abec0>
+Traceback (most recent call last):
+  File "/Users/al.sidorenko/projects/artel/.artel/worktrees/01M1GS5HZ1JXFGKVR95HEW0AEZ/orchestrator/store.py", line 90, in __del__
+    self.close()
+sqlite3.ProgrammingError: SQLite objects created in a thread can only be used in that same thread. The object was created in thread id 8401792064 and this is thread id 6142210048.
+Exception ignored in: <function _AutoClosingConnection.__del__ at 0x1086abec0>
+Traceback (most recent call last):
+  File "/Users/al.sidorenko/projects/artel/.artel/worktrees/01M1GS5HZ1JXFGKVR95HEW0AEZ/orchestrator/store.py", line 90, in __del__
+    self.close()
+sqlite3.ProgrammingError: SQLite objects created in a thread can only be used in that same thread. The object was created in thread id 8401792064 and this is thread id 6142210048.
+Exception ignored in: <function _AutoClosingConnection.__del__ at 0x1086abec0>
+Traceback (most recent call last):
+  File "/Users/al.sidorenko/projects/artel/.artel/worktrees/01M1GS5HZ1JXFGKVR95HEW0AEZ/orchestrator/store.py", line 90, in __del__
+    self.close()
+sqlite3.ProgrammingError: SQLite objects created in a thread can only be used in that same thread. The object was created in thread id 8401792064 and this is thread id 6142210048.
+Exception ignored in: <function _AutoClosingConnection.__del__ at 0x1086abec0>
+Traceback (most recent call last):
+  File "/Users/al.sidorenko/projects/artel/.artel/worktrees/01M1GS5HZ1JXFGKVR95HEW0AEZ/orchestrator/store.py", line 90, in __del__
+    self.close()
+sqlite3.ProgrammingError: SQLite objects created in a thread can only be used in that same thread. The object was created in thread id 8401792064 and this is thread id 6142210048.
+Exception ignored in: <function _AutoClosingConnection.__del__ at 0x1086abec0>
+Traceback (most recent call last):
+  File "/Users/al.sidorenko/projects/artel/.artel/worktrees/01M1GS5HZ1JXFGKVR95HEW0AEZ/orchestrator/store.py", line 90, in __del__
+    self.close()
+sqlite3.ProgrammingError: SQLite objects created in a thread can only be used in that same thread. The object was created in thread id 8401792064 and this is thread id 6142210048.
+Exception ignored in: <function _AutoClosingConnection.__del__ at 0x1086abec0>
+Traceback (most recent call last):
+  File "/Users/al.sidorenko/projects/artel/.artel/worktrees/01M1GS5HZ1JXFGKVR95HEW0AEZ/orchestrator/store.py", line 90, in __del__
+    self.close()
+sqlite3.ProgrammingError: SQLite objects created in a thread can only be used in that same thread. The object was created in thread id 8401792064 and this is thread id 6142210048.
+Exception ignored in: <function _AutoClosingConnection.__del__ at 0x1086abec0>
+Traceback (most recent call last):
+  File "/Users/al.sidorenko/projects/artel/.artel/worktrees/01M1GS5HZ1JXFGKVR95HEW0AEZ/orchestrator/store.py", line 90, in __del__
+    self.close()
+sqlite3.ProgrammingError: SQLite objects created in a thread can only be used in that same thread. The object was created in thread id 8401792064 and this is thread id 6142210048.
+Exception ignored in: <function _AutoClosingConnection.__del__ at 0x1086abec0>
+Traceback (most recent call last):
+  File "/Users/al.sidorenko/projects/artel/.artel/worktrees/01M1GS5HZ1JXFGKVR95HEW0AEZ/orchestrator/store.py", line 90, in __del__
+    self.close()
+sqlite3.ProgrammingError: SQLite objects created in a thread can only be used in that same thread. The object was created in thread id 8401792064 and this is thread id 6142210048.
+Exception ignored in: <function _AutoClosingConnection.__del__ at 0x1086abec0>
+Traceback (most recent call last):
+  File "/Users/al.sidorenko/projects/artel/.artel/worktrees/01M1GS5HZ1JXFGKVR95HEW0AEZ/orchestrator/store.py", line 90, in __del__
+    self.close()
+sqlite3.ProgrammingError: SQLite objects created in a thread can only be used in that same thread. The object was created in thread id 8401792064 and this is thread id 6142210048.
+Exception ignored in: <function _AutoClosingConnection.__del__ at 0x1086abec0>
+Traceback (most recent call last):
+  File "/Users/al.sidorenko/projects/artel/.artel/worktrees/01M1GS5HZ1JXFGKVR95HEW0AEZ/orchestrator/store.py", line 90, in __del__
+    self.close()
+sqlite3.ProgrammingError: SQLite objects created in a thread can only be used in that same thread. The object was created in thread id 8401792064 and this is thread id 6142210048.
+Exception ignored in: <function _AutoClosingConnection.__del__ at 0x1086abec0>
+Traceback (most recent call last):
+  File "/Users/al.sidorenko/projects/artel/.artel/worktrees/01M1GS5HZ1JXFGKVR95HEW0AEZ/orchestrator/store.py", line 90, in __del__
+    self.close()
+sqlite3.ProgrammingError: SQLite objects created in a thread can only be used in that same thread. The object was created in thread id 8401792064 and this is thread id 6142210048.
+Exception ignored in: <function _AutoClosingConnection.__del__ at 0x1086abec0>
+Traceback (most recent call last):
+  File "/Users/al.sidorenko/projects/artel/.artel/worktrees/01M1GS5HZ1JXFGKVR95HEW0AEZ/orchestrator/store.py", line 90, in __del__
+    self.close()
+sqlite3.ProgrammingError: SQLite objects created in a thread can only be used in that same thread. The object was created in thread id 8401792064 and this is thread id 6142210048.
+Exception ignored in: <function _AutoClosingConnection.__del__ at 0x1086abec0>
+Traceback (most recent call last):
+  File "/Users/al.sidorenko/projects/artel/.artel/worktrees/01M1GS5HZ1JXFGKVR95HEW0AEZ/orchestrator/store.py", line 90, in __del__
+    self.close()
+sqlite3.ProgrammingError: SQLite objects created in a thread can only be used in that same thread. The object was created in thread id 8401792064 and this is thread id 6142210048.
+..........................................................................................................................................................................................................................................................................................................................................................................................................................................................................
