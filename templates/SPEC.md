@@ -3,7 +3,7 @@ task: TASK_ID
 type: spec
 author_role: analyst
 status: draft        # draft | ready | approved
-schema_version: 2    # версия формата артефакта, см. scripts/guard.py
+schema_version: 3    # версия формата артефакта, см. scripts/guard.py
 # Потолок задачи, $. Раскомментируй, если класс задачи виден сразу:
 # мелкий фикс ~15, типовая задача ~25, тестовый слой или широкий
 # рефакторинг ~50. Без поля — дефолт оркестратора.

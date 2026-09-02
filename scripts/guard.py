@@ -31,7 +31,12 @@ REQUIRED_META = {"task", "type", "author_role", "status"}
 # (`AC-1.`, `AC-2.`, …) и необязательное поле `skip_tests`. Правило
 # применяется только к version >= 2 — весь беклог T001–T022 остаётся
 # версией 1 и валиден без правок (требование 7).
-SUPPORTED_SCHEMA_VERSION = 2
+#
+# Версия 3 (tasks/T100): REVIEW.md несёт секцию «Реестр замечаний» —
+# id, статус (пятёрка значений), обязательные поля каждой записи.
+# Правило применяется только к version >= 3 (требование 6) — тем же
+# приёмом версии-гейтинга, что версия 2 выше применена к SPEC.
+SUPPORTED_SCHEMA_VERSION = 3
 
 RULES = {
     "spec": {
@@ -393,6 +398,133 @@ def review_evidence_errors(path: Path | str, text: str, meta: dict) -> list[str]
     return []
 
 
+# --------------------------------------------------------------------------
+# Секция «Реестр замечаний» REVIEW.md (tasks/T100, требования 1, 2, 6, 7):
+# запись — строка markdown-таблицы с id вида `R<итерация>-F<номер>`,
+# статусом из пятёрки {open, fixed, rejected, accepted, needs_work} и
+# обязательными полями файл/строка, суть, последствие, решение. Применяется
+# только при schema_version >= 3 (требование 6) — та же версия-гейтинг,
+# что `requires_ac_markup` выше применяет к AC-разметке SPEC.
+REGISTRY_SECTION = "Реестр замечаний"
+REGISTRY_STATUSES = {"open", "fixed", "rejected", "accepted", "needs_work"}
+REGISTRY_ID = re.compile(r"^R\d+-F\d+$")
+# Порядок колонок таблицы фиксирован заголовком секции (см. templates/
+# REVIEW.md): id | статус | файл/строка | суть | последствие | решение.
+REGISTRY_FIELD_LABELS = ("id", "статус", "файл/строка", "суть",
+                         "последствие", "решение")
+REGISTRY_FIELD_KEYS = ("id", "status", "location", "gist", "consequence",
+                       "decision")
+REGISTRY_SEPARATOR_CELL = re.compile(r"^:?-{1,}:?$")
+
+
+def requires_registry(meta: dict) -> bool:
+    """REVIEW.md обязан нести секцию «Реестр замечаний» и пройти её
+    структурные проверки (требования 1, 6, 7).
+
+    Версия ниже 3 (или отсутствие поля — версия 1 по умолчанию) — формат
+    REVIEW.md до этой задачи, требования 1–5 к нему не применяются (SPEC
+    T100, требование 6), тем же приёмом, что `requires_ac_markup` выше.
+    """
+    version = meta.get("schema_version", 1)
+    if not isinstance(version, int) or isinstance(version, bool):
+        return False
+    return version >= 3
+
+
+def registry_table_rows(body: str) -> list[list[str]]:
+    """Строки данных markdown-таблицы реестра — без заголовка ('| id | …')
+    и строки-разделителя ('|---|---|…'). Не различает валидные и
+    невалидные строки данных (число ячеек, формат id, допустимость
+    статуса) — это дело `registry_record_errors`/`registry_records`.
+    """
+    rows: list[list[str]] = []
+    for line in body.splitlines():
+        line = line.strip()
+        if not line.startswith("|"):
+            continue
+        cells = [c.strip() for c in line.strip("|").split("|")]
+        if cells and cells[0].lower() == "id":
+            continue  # строка заголовка таблицы
+        if all(REGISTRY_SEPARATOR_CELL.fullmatch(c) for c in cells):
+            continue  # строка-разделитель '|---|---|…'
+        rows.append(cells)
+    return rows
+
+
+def registry_records(text: str) -> list[dict]:
+    """Записи реестра как словари ({"id", "status", …}) — только
+    well-formed строки (ровно столько колонок, сколько полей записи).
+
+    Источник для гейта требования 5 (`orchestrator/fsm_advance.py::
+    review()`): к моменту его вызова guard уже подтвердил структуру
+    REVIEW.md на том же переходе (`fsm.guard_refuses`), поэтому здесь
+    достаточно молча пропустить малформед-строки, а не повторять
+    структурные ошибки `registry_record_errors`.
+    """
+    body = section_body(text, REGISTRY_SECTION)
+    records = []
+    for cells in registry_table_rows(body):
+        if len(cells) != len(REGISTRY_FIELD_KEYS):
+            continue
+        records.append(dict(zip(REGISTRY_FIELD_KEYS, cells)))
+    return records
+
+
+def registry_record_errors(path: Path | str, cells: list[str]) -> list[str]:
+    """Структурные нарушения одной строки данных таблицы реестра
+    (требования 1, 2, 7 — AC-3, AC-4, AC-5). `path` — только для текста
+    ошибок (см. `schema_errors`)."""
+    if len(cells) != len(REGISTRY_FIELD_LABELS):
+        return [f"{path}: строка реестра '{' | '.join(cells)}' — ожидается "
+                f"{len(REGISTRY_FIELD_LABELS)} колонок "
+                f"({', '.join(REGISTRY_FIELD_LABELS)}), получено "
+                f"{len(cells)}"]
+    record_id, status, location, gist, consequence, decision = cells
+    errors: list[str] = []
+    if not REGISTRY_ID.fullmatch(record_id):
+        errors.append(f"{path}: id записи реестра '{record_id}' не "
+                      f"соответствует формату 'R<итерация>-F<номер>' — "
+                      f"например 'R1-F1'")
+    if status not in REGISTRY_STATUSES:
+        errors.append(f"{path}: запись {record_id} — статус '{status}' не "
+                      f"входит в допустимое множество "
+                      f"{', '.join(sorted(REGISTRY_STATUSES))}")
+    missing = [label for label, value in
+              zip(REGISTRY_FIELD_LABELS[2:], (location, gist, consequence, decision))
+              if not value]
+    if missing:
+        errors.append(f"{path}: запись {record_id} — не заполнены "
+                      f"обязательные поля: {', '.join(missing)}")
+    return errors
+
+
+def registry_errors(path: Path | str, text: str, meta: dict) -> list[str]:
+    """Структурные проверки секции «Реестр замечаний» целиком: секция на
+    месте, id уникальны, каждая запись валидна (SPEC T100, требования 1,
+    2, 6, 7 — AC-1..AC-6). `path` — только для текста ошибок."""
+    if not requires_registry(meta):
+        return []
+    headers = set(re.findall(r"^##\s+(.+?)\s*$", text, re.M))
+    if REGISTRY_SECTION not in headers:
+        return [f"{path}: REVIEW.md со schema_version >= 3 без секции "
+                f"'## {REGISTRY_SECTION}' — добавь секцию с записями "
+                f"замечаний (id, файл/строка, суть, последствие, решение, "
+                f"статус)"]
+    body = section_body(text, REGISTRY_SECTION)
+    rows = registry_table_rows(body)
+    errors: list[str] = []
+    seen: dict[str, int] = {}
+    for cells in rows:
+        errors.extend(registry_record_errors(path, cells))
+        if cells and REGISTRY_ID.fullmatch(cells[0]):
+            seen[cells[0]] = seen.get(cells[0], 0) + 1
+    for record_id in sorted(rid for rid, n in seen.items() if n > 1):
+        errors.append(f"{path}: id записи реестра '{record_id}' "
+                      f"встречается более одного раза — id обязаны быть "
+                      f"уникальны в пределах файла")
+    return errors
+
+
 def check_content(label: str, text: str) -> list[str]:
     """Ядро `check` — структурная проверка уже прочитанного текста, без
     чтения файла: `label` — путь или его подобие, только для текста
@@ -465,6 +597,7 @@ def check_content(label: str, text: str) -> list[str]:
 
     if atype == "review":
         errors.extend(review_evidence_errors(label, text, meta))
+        errors.extend(registry_errors(label, text, meta))
 
     return errors
 
