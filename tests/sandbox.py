@@ -229,8 +229,20 @@ class SpyRun:
     def __init__(self):
         self.calls: list = []
 
+    # sha-плейсхолдер для плотницких git-команд ниже — 40 hex-символов,
+    # синтаксически валидный sha (git его не проверяет, "не исполняется").
+    _FAKE_SHA = "f" * 40
+
     def __call__(self, cmd, *args, **kwargs) -> subprocess.CompletedProcess:
         self.calls.append(list(cmd))
+        # Тип stdout/stderr — как у настоящего `subprocess.run`: `bytes`,
+        # если вызывающий код не просил текст (`text`/`universal_newlines`/
+        # `encoding`) — иначе код вроде `artifact_branch.write_commit`
+        # (плотницкая запись, `hash-object` без `text=True` — бинарные
+        # артефакты, AC-12) получал бы `str` и падал на `.decode()`.
+        want_text = bool(kwargs.get("text") or kwargs.get("universal_newlines")
+                         or kwargs.get("encoding"))
+        empty = "" if want_text else b""
         # `rev-parse --verify --quiet refs/heads/*` (`gitcmd.branch_exists`)
         # — отдельно, с отказом (SPEC T048, тот же приём, что и `fake_git`
         # выше): `cmd_new` решает, заводить ли задачу, по ответу этого
@@ -238,8 +250,17 @@ class SpyRun:
         # любую ветку уже существующей.
         if (len(cmd) >= 4 and cmd[1] == "rev-parse" and cmd[2] == "--verify"
                 and cmd[-1].startswith("refs/heads/")):
-            return subprocess.CompletedProcess(list(cmd), 1, "", "")
-        return subprocess.CompletedProcess(list(cmd), 0, "", "")
+            return subprocess.CompletedProcess(list(cmd), 1, empty, empty)
+        # `hash-object`/`write-tree`/`commit-tree` — плотницкая запись
+        # артефактной ветки (`artifact_branch.write_commit`, A7 generic-путь
+        # `catalog.cmd_new`, AC-5) читает их stdout как sha и трактует
+        # пустой ответ как «git не ответил» (`sys.exit`) — отвечать пустышкой
+        # тут значило бы ложно проваливать КАЖДЫЙ `cmd_new` под этим спаем.
+        if len(cmd) >= 2 and cmd[1] in ("hash-object", "write-tree",
+                                        "commit-tree"):
+            sha = self._FAKE_SHA if want_text else self._FAKE_SHA.encode()
+            return subprocess.CompletedProcess(list(cmd), 0, sha, empty)
+        return subprocess.CompletedProcess(list(cmd), 0, empty, empty)
 
     def git_subcommands(self) -> list:
         """Подкоманды git по порядку: ['checkout', 'pull', 'merge', ...]."""
