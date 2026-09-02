@@ -4,16 +4,19 @@
 двигает FSM); их правка в обход гейтов = управление конвейером. Каждый
 переход `store.set_state` фиксирует физическое состояние артефактов
 задачи в колонку `tasks.fixed_sha` — FSM и `approve` сверяются с ней
-одинаково, не зная, откуда взялся sha:
+одинаково, не зная, откуда взялся sha.
 
-- **Догфуд** (`config.DEFAULT_TARGET`, особый случай до A7, ADR-0003 3д):
-  существующий флоу артефактов не меняется — коммитит их сама роль
-  внутри шага; здесь только чтение уже закоммиченного состояния рабочей
-  копии пульта (головной sha ветки + чистота `tasks/<id>`).
-- **Внешний target**: артефактный git-репозиторий
-  `.artel/projects/<target>/` (`projects.init_artifact_repo`) коммитит
-  оркестратор целиком на каждом переходе — будущие типы артефактов
-  фиксируются тем же коммитом без правки этого модуля (ADR-0003 п.15).
+Единая логика для ЛЮБОГО target (A7, требование 2 — снятие особого
+случая догфуда): артефактный git-репозиторий `.artel/projects/<target>/`
+(`projects.init_artifact_repo`) коммитит оркестратор целиком на каждом
+переходе — будущие типы артефактов фиксируются тем же коммитом без
+правки этого модуля (ADR-0003 п.15). До A7 self/догфуд
+(`config.DEFAULT_TARGET`) нёс собственную ветвь (`_fix_dogfood`: чтение
+головного sha ветки задачи + чистоты `tasks/<id>` рабочей копии) —
+убрана целиком вместе с однобраншевым флоу заведения задачи
+(`catalog._new_dogfood`, тоже убран этой задачей): артель теперь
+фиксируется тем же кодом, что уже сегодня фиксирует любой другой
+target.
 
 `sha == ""` в обеих ветках — git не ответил или фиксировать нечего:
 вырожденный случай, на котором `approve`/`run` ведут себя так же, как до
@@ -35,7 +38,7 @@ HEAD, который та задача не просила сдвигать — 
 """
 from datetime import datetime, timezone
 
-from . import config, gitcmd, store, workspace
+from . import config, gitcmd, store
 
 # Идентичность коммитов фиксации внешнего target: это действие
 # оркестратора, а не роли и не Оператора — коммит служебный (диффов кода
@@ -50,53 +53,7 @@ FIXATION_AUTHOR_EMAIL = "orchestrator@artel.invalid"
 
 def fix(task_id: str, target: str) -> tuple[str, bool]:
     """(sha, чисто) — фиксация текущего состояния артефактов задачи."""
-    if target == config.DEFAULT_TARGET:
-        return _fix_dogfood(task_id)
     return _fix_external(target)
-
-
-def _dogfood_branch(task_id: str) -> str:
-    """Ветка задачи из БД — источник истины для головы sha (SPEC T031,
-    AC-4), не HEAD текущего чекаута рабочей копии пульта.
-
-    Открывает свою БД-сессию: `fix()`/`read()` держат сигнатуру
-    `(task_id, target)` без `conn` (её же зовут напрямую тесты T031), а
-    задача к этому моменту уже существует в БД (это её собственная
-    фиксация — `store.get_task` тем же приёмом, что и остальные читатели
-    ниже по стеку, `fixation.check_integrity`).
-    """
-    return store.get_task(store.db(), task_id)["branch"]
-
-
-def _fix_dogfood(task_id: str) -> tuple[str, bool]:
-    """Головной sha ВЕТКИ ЗАДАЧИ + чистота `tasks/<id>` (SPEC, требование 3).
-
-    Рабочее дерево точно на чужой ветке (`gitcmd.on_foreign_branch`,
-    SPEC T031, AC-4) — голова берётся с ветки задачи независимо от
-    чекаута; иначе (свой чекаут, ветка ещё не создана ролью — легитимный
-    ранний момент задачи, git не ответил) — HEAD текущего чекаута, как
-    было до T031: тот же вырожденный случай, на котором стоит стенд
-    заглушек `gitcmd.git` дотестового кода (песочницы, где своя ветка
-    задачи никогда не заводится, а вся работа идёт прямо на `main`, —
-    там `on_foreign_branch` остаётся False).
-
-    Чистота — тем же критерием ветки/чекаута (SPEC T048): с `cmd_new`
-    задача всегда получает собственный worktree с самого начала, и её
-    живые `tasks/<id>` лежат ТАМ, не на диске main — сверка чистоты
-    рабочей копии пульта (`config.ROOT`) видела бы ЛЮБУЮ правку в
-    worktree как «чисто» (main о ней просто не знает), давая любой правке
-    мимо гейта пройти незамеченной. На чужой ветке чистота — по worktree
-    задачи (`workspace.path`), иначе — прежнее поведение (main).
-    """
-    branch = _dogfood_branch(task_id)
-    foreign = gitcmd.on_foreign_branch(branch)
-    sha = gitcmd.branch_head_sha(branch) if foreign else gitcmd.head_sha()
-    clean = (gitcmd.is_clean(f"tasks/{task_id}",
-                             repo=workspace.path(task_id))
-             if foreign else gitcmd.is_clean(f"tasks/{task_id}"))
-    if not sha or clean is None:
-        return "", False
-    return sha, clean
 
 
 def _fix_external(target: str) -> tuple[str, bool]:
@@ -159,7 +116,8 @@ def external_artifact_sha(task_id: str) -> str:
 
 
 def read(task_id: str, target: str) -> tuple[str, bool]:
-    """(sha, чисто) для сверки — не мутирует ни догфуд, ни внешний target.
+    """(sha, чисто) для сверки — не мутирует внешний target (единая
+    логика для ЛЮБОГО target, A7 требование 2).
 
     Публичная точка входа для ЛЮБОЙ сверки (не фиксации): `check_integrity`
     (старт шага) и `fsm.confirm_fixation` (approve) обе только сравнивают
@@ -169,8 +127,6 @@ def read(task_id: str, target: str) -> tuple[str, bool]:
     `check_integrity`; замечание 1 итерации 2 — тот же класс дефекта в
     `confirm_fixation`, закрыт тем же приёмом).
     """
-    if target == config.DEFAULT_TARGET:
-        return _fix_dogfood(task_id)
     return _read_external(target)
 
 
@@ -284,8 +240,8 @@ def refixate_after_rejected_transition(conn, task_id: str, target: str,
     служащую якорем `_own_step_run_windows`; путает эту запись с
     результатом отклонённого перехода нельзя (см. докстринг выше).
     """
-    repo = None if target == config.DEFAULT_TARGET else config.PROJECTS / target
-    dates = gitcmd.commit_committer_dates(entry_sha, current_sha, repo=repo)
+    dates = gitcmd.commit_committer_dates(entry_sha, current_sha,
+                                          repo=config.PROJECTS / target)
     if not dates:
         return False
     windows = _own_step_run_windows(conn, task_id)

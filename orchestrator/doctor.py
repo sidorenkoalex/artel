@@ -165,7 +165,8 @@ def check_disk_space() -> Check:
 
 
 def check_target_layout(target: str) -> Check:
-    """workspace и артефактный репо внешнего target'а (требование 2, 9).
+    """workspace и артефактный репо target'а — единая логика для ЛЮБОГО
+    объявленного target, включая артель (A7, требование 2, AC-2).
 
     Не блокирует: `runner.role_cwd` создаёт workspace лениво по требованию
     (существующее поведение, `tests/test_multitarget_invariants.py`
@@ -175,8 +176,6 @@ def check_target_layout(target: str) -> Check:
     докстринг). Предупреждение — не потому что неважно, а потому что
     существующая архитектура уже деградирует по этому пути мягко.
     """
-    if target == config.DEFAULT_TARGET:
-        return Check("target-layout", "ok", "догфуд — особый случай (ADR-0003 3д)")
     repo = config.PROJECTS / target / ".git"
     if not repo.is_dir():
         return Check("target-layout", "warn",
@@ -192,19 +191,16 @@ TARGET_WRAPPER_MARKERS = (".claude", ".mcp.json", "CLAUDE.md", "AGENTS.md")
 
 
 def check_target_wrapper(target: str) -> Check:
-    """Инвентаризация обвязки внешнего target'а (SPEC T069, требование 3):
-    наличие `.claude/`, `.mcp.json`, `CLAUDE.md`/`AGENTS.md` в его
-    workspace — информационно, никогда не блокирует. Основа для будущей
-    подсветки изменений этих путей в MR (A7, вне объёма).
+    """Инвентаризация обвязки target'а (SPEC T069, требование 3; A7,
+    требование 2, AC-2 — единая логика для ЛЮБОГО объявленного target,
+    включая артель): наличие `.claude/`, `.mcp.json`, `CLAUDE.md`/
+    `AGENTS.md` в его workspace — информационно, никогда не блокирует.
 
     Смотрит `workspace/` — то же дерево, что реально видит cwd шага роли
     (`runner.role_cwd`), не артефактный репозиторий `config.PROJECTS/
     <target>` целиком (туда git-первичка A2b коммитит SPEC/PLAN/REVIEW —
     другое дерево, не задето этой проверкой).
     """
-    if target == config.DEFAULT_TARGET:
-        return Check("target-wrapper", "skip",
-                     "догфуд — не внешний target (ADR-0003 3д)")
     ws = config.PROJECTS / target / "workspace"
     found = [name for name in TARGET_WRAPPER_MARKERS if (ws / name).exists()]
     if found:
@@ -418,21 +414,20 @@ def _live_smoke_run(role: str) -> Check:
 # --- recovery-сверка (требование 4) -------------------------------------
 
 def recovery_check(conn, target: str) -> list[Check]:
-    """Журнал БД ↔ файлы задач для ВНЕШНЕГО target: sha, чистота, fsck.
-
-    Догфуд вне объёма сверки: HEAD ветки пульта двигают процессы вне FSM
-    (мерж, коммиты Оператора вне цикла задач) — сверка sha дала бы
-    систематические ложные инциденты, не имеющие отношения к целостности
-    артефактов (tasks/T022/PLAN.md, «Подход»).
+    """Журнал БД ↔ файлы задач артефактного репо target'а: sha, чистота,
+    fsck — единая логика для ЛЮБОГО объявленного target, включая артель
+    (A7, требование 2, AC-3). Сверка HEAD главной копии пульта
+    (`config.ROOT`) в объём этой проверки не входит — та отдельная
+    забота doctor-проверки пина (`check_root_pin`, AC-13): HEAD ROOT
+    двигают процессы вне FSM обычной задачи (мерж, `pin-update`), сверка
+    sha «как для артефактного репо» дала бы систематические ложные
+    инциденты, не имеющие отношения к целостности артефактов.
 
     Авто-ack трёх под-проверок (SPEC T088, требования 2-4, 6) зовётся на
     каждом прогоне для КОНКРЕТНОГО target — независимо от остальных двух
     под-проверок и от того же source другого target (`_auto_ack_gone`
     получает `target=target`).
     """
-    if target == config.DEFAULT_TARGET:
-        return [Check("recovery", "skip", "догфуд вне объёма recovery-сверки")]
-
     repo = config.PROJECTS / target
     if not (repo / ".git").is_dir():
         return [Check("recovery", "skip",
@@ -550,11 +545,16 @@ def check_orphans(conn) -> list[Check]:
     results = []
 
     known_ids = {r["id"] for r in store.all_tasks(conn)}
+    # Исторический tasks/ пульта сканируется БЕЗ ИЗМЕНЕНИЙ (требование 3
+    # SPEC A7) вдобавок к артефактному каталогу КАЖДОГО объявленного
+    # target, включая артель — она больше не исключается по имени
+    # (A7, требование 2, AC-4): новые задачи артели ведут первичку в
+    # `.artel/projects/artel/tasks/`, тем же путём, что и любой другой
+    # target.
     scan = [(config.DEFAULT_TARGET, config.TASKS)]
     try:
         for name in targets.load():
-            if name != config.DEFAULT_TARGET:
-                scan.append((name, config.PROJECTS / name / "tasks"))
+            scan.append((name, config.PROJECTS / name / "tasks"))
     except targets.TargetsError:
         pass  # сломанный targets.yaml — забота другой проверки doctor'а
     orphan_dirs = [
@@ -824,9 +824,11 @@ def check_pending_snapshots(conn) -> list[Check]:
 
 
 def check_remote_empty(target: str) -> Check:
-    if target == config.DEFAULT_TARGET:
-        return Check("remote-empty", "skip",
-                     "догфуд — remote есть, это GitHub пульта (ожидаемо)")
+    """Единая логика для ЛЮБОГО объявленного target, включая артель (A7,
+    требование 2, AC-2): артефактный репозиторий `.artel/projects/
+    <target>/` — не клон целевого форджа, у него нет причин нести
+    remote, независимо от того, что сам target объявляет своим
+    настоящим GitHub-репозиторием."""
     if not (config.PROJECTS / target / ".git").is_dir():
         return Check("remote-empty", "skip",
                      f"артефактный репо {target} не инициализирован")
@@ -839,11 +841,9 @@ def check_remote_empty(target: str) -> Check:
 
 def check_base_branch(name: str, entry: dict) -> Check:
     """Сверка базовой ветки/merge-политики — по возможностям forge, иначе
-    честный skip с причиной (SPEC требование 9 явно это допускает)."""
-    if name == config.DEFAULT_TARGET:
-        return Check("base-branch", "skip",
-                     "догфуд — особый случай, не сверка базовой ветки с "
-                     "форджем")
+    честный skip с причиной (SPEC требование 9 явно это допускает).
+    Единая логика для ЛЮБОГО объявленного target, включая артель (A7,
+    требование 2, AC-2)."""
     if entry.get("forge") != "github":
         return Check("base-branch", "skip",
                      f"forge {entry.get('forge')} — сверка не реализована")
@@ -868,6 +868,39 @@ def check_base_branch(name: str, entry: dict) -> Check:
                      f"targets.yaml base={entry['base']!r}, у форджа "
                      f"{remote_base!r}")
     return Check("base-branch", "ok", f"база сходится: {remote_base}")
+
+
+# --- пин запущенной версии (A7, Stage1, требования 5-6, AC-13) ----------
+
+def check_root_pin() -> Check:
+    """Расхождение пина `config.ROOT` (HEAD главной копии — Stage0
+    удерживает его от изменения переходом `merge_gate -> done`,
+    `orchestrator/fsm_merge_gate.py`) с текущим HEAD `refs/heads/
+    <MAIN_BRANCH>` main артели (её `origin`) — информационно, никогда
+    не блокирует прогон doctor (AC-13): пин обновляет только Оператор
+    отдельной командой `pin-update` (Stage1, AC-14), не doctor сам.
+
+    `git ls-remote origin` — единственный опрос без единого локального
+    side-effect (не трогает объектную базу/индекс/HEAD ROOT, в отличие
+    от `git fetch`): доктор не имеет права двигать что-либо сам.
+
+    Git не ответил (нет origin, сеть недоступна, песочница без
+    настоящего git) — сверять не с чем, `ok` тем же приёмом деградации,
+    что и у остальных git-примитивов doctor'а: отсутствие ответа — не
+    расхождение и не повод для warn.
+    """
+    root_sha = gitcmd.head_sha()
+    ls = gitcmd.git("ls-remote", "origin", f"refs/heads/{config.MAIN_BRANCH}")
+    if ls is None or ls.returncode != 0 or not ls.stdout.strip() or not root_sha:
+        return Check("root-pin", "ok",
+                     "main артели (origin) не опрошен — пин не сверен")
+    origin_sha = ls.stdout.split()[0]
+    if origin_sha == root_sha:
+        return Check("root-pin", "ok", f"пин {root_sha} сходится с main "
+                     f"артели {origin_sha}")
+    return Check("root-pin", "warn",
+                 f"пин {root_sha} отстал от main артели {origin_sha} — "
+                 f"обнови: artel.py pin-update {origin_sha}")
 
 
 # --- команда doctor -------------------------------------------------------
@@ -903,6 +936,7 @@ def all_checks(conn) -> list[Check]:
     checks.extend(check_leases(conn))
     checks.extend(check_merge_lock(conn))
     checks.extend(check_branch_freshness(conn))
+    checks.append(check_root_pin())
     return checks
 
 

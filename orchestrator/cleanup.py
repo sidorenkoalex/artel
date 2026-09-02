@@ -221,17 +221,17 @@ def _cmd_kill(conn, task_id: str) -> None:
 
 def _publish_snapshot_if_pending(conn, task_id: str, target: str,
                                  is_canary: bool) -> None:
-    """Снапшот закрытия (SPEC T094, требования 12-13, AC-13) — только
-    внешний target (требование 16/AC-18) и не канарейка (требование 12,
-    AC-13 «исключение канарейки»). `snapshot.pending` — False, если
-    задача не заводила артефактную ветку вовсе (self/канарейка) или
-    снапшот уже подтверждён в origin целевого раньше (идемпотентность
-    повторного `kill`, AC-15).
+    """Снапшот закрытия (SPEC T094, требования 12-13, AC-13) — для ЛЮБОГО
+    target (A7, требование 2 — снятие особого случая догфуда) и не
+    канарейка (требование 12, AC-13 «исключение канарейки»). `snapshot.
+    pending` — False, если задача не заводила артефактную ветку вовсе
+    (канарейка) или снапшот уже подтверждён в origin целевого раньше
+    (идемпотентность повторного `kill`, AC-15).
 
     Отложенный импорт: `snapshot` -> `retro` -> `cleanup` — прямой
     импорт на уровне модуля замкнул бы этот же файл в цикл.
     """
-    if target == config.DEFAULT_TARGET or is_canary:
+    if is_canary:
         return
     from . import snapshot
     if not snapshot.pending(task_id):

@@ -175,40 +175,24 @@ def commit_step_artifacts(conn, task_id: str, role: str) -> str:
     на любом из шагов — та же деградация без git, что у
     `commit_timeout_checkpoint` (требование 6).
 
-    Догфуд (`target == config.DEFAULT_TARGET`): `git add` ограничен
-    путями worktree задачи целиком (требование 3) — `_commit_worktree_
-    change` зовёт `gitcmd.in_repo(wt, "add", "-A")` — `-A` без путей
-    добавляет изменения всего рабочего дерева РЕПОЗИТОРИЯ `wt` (её
-    отдельного git-worktree, ветка задачи), не произвольного дерева и не
-    рабочей копии пульта (урок инцидента T048 с чужой сессией пульта —
-    здесь операции вообще не видят `config.ROOT`).
-
-    Внешний target (SPEC T094, требование 8, AC-9): роль-разработчик/
-    ревьювер/test_author пишет `tasks/<id>/` в СВОЙ рабочий каталог
-    (`runner.role_cwd` — клон КОДА целевого, `config.PROJECTS/<target>/
-    workspace/`, ADR-0003 §4) тем же способом, что и в догфуде — она не
-    знает об артефактной ветке пульта. `_commit_external_step_artifacts`
-    перекладывает то, что роль там написала, в артефактную ветку пульта
-    и убирает эти файлы из рабочего каталога целевого — без этого шага
-    первый же реальный шаг роли внешнего target нарушал бы требование 8
-    (было исправлено этой же задачей, REVIEW.md T094 итерация 1,
-    замечание 2: до правки функция безусловно пропускала любой target,
-    кроме self, — код роли-разработчика оставался лежать в клоне
-    целевого, ничем не перенесённый).
+    Единая логика для ЛЮБОГО target (A7, требование 2 — снятие особого
+    случая догфуда): роль-разработчик/ревьювер/test_author пишет
+    `tasks/<id>/` в СВОЙ рабочий каталог (`runner.role_cwd` — клон КОДА
+    целевого, `config.PROJECTS/<target>/workspace/`, ADR-0003 §4) — она
+    не знает об артефактной ветке пульта. `_commit_external_step_
+    artifacts` перекладывает то, что роль там написала, в артефактную
+    ветку пульта и убирает эти файлы из рабочего каталога целевого — без
+    этого шага первый же реальный шаг роли внешнего target нарушал бы
+    требование 8 (было исправлено этой же задачей SPEC T094, REVIEW.md
+    итерация 1, замечание 2: до правки функция безусловно пропускала
+    любой target, кроме self, — код роли-разработчика оставался лежать в
+    клоне целевого, ничем не перенесённый). До A7 self/догфуд нёс
+    собственную ветвь (`_commit_worktree_change` в её git-worktree,
+    `workspace.path`) — убрана целиком вместе с однобраншевым флоу
+    заведения задачи (`catalog._new_dogfood`, тоже убран этой задачей).
     """
     target = store.task_target(conn, task_id)
-    if target != config.DEFAULT_TARGET:
-        return _commit_external_step_artifacts(conn, task_id, role, target)
-    wt = workspace.path(task_id)
-    message = f"{task_id}: артефакты шага {role} (автокоммит оркестратора)"
-    committed, sha = _commit_worktree_change(wt, message)
-    if not committed:
-        return ""
-    detail = f"{message} (sha {sha})" if sha else message
-    store.journal(conn, task_id, "orchestrator",
-                  "автокоммит артефактов шага", detail)
-    store.record_fixation(conn, task_id)
-    return detail
+    return _commit_external_step_artifacts(conn, task_id, role, target)
 
 
 def _commit_external_step_artifacts(conn, task_id: str, role: str,
