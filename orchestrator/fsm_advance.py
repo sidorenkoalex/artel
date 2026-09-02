@@ -5,6 +5,8 @@ if/elif `orchestrator/fsm.py::_cmd_advance`, перенесённое без и�
 `fsm.py` — эти функции не вызываются напрямую иначе, кроме тестов,
 идущих через публичный `fsm.cmd_advance`.
 """
+from scripts import guard
+
 from . import (acceptance, agent_log, artifacts, budget, ci, config, fsm,
               fsm_autogate, gitcmd, store, workspace, yamlmini)
 
@@ -135,6 +137,30 @@ def review(conn, task_id: str, t, tdir, target: str, state: str) -> bool:
     store.update_task(conn, task_id, reviewed_iter=iteration)
 
     if status == "approved":
+        # Реестр замечаний (SPEC T100, требование 5): вердикт approved
+        # не проходит этот гейт, пока в реестре есть запись со статусом
+        # отличным от accepted — ни fixed, ни rejected сами по себе не
+        # закрывают замечание (ANSWER-1, симметрия). Применяется только
+        # при schema_version >= 3 (требование 6); guard уже подтвердил
+        # структуру этого REVIEW.md выше по функции (fsm.guard_refuses)
+        # — здесь читается тот же текст, отдельного чтения не заводится.
+        if guard.requires_registry(meta):
+            registry_text = review_text
+            if registry_text is None:
+                registry_text = (tdir / "REVIEW.md").read_text(encoding="utf-8")
+            unresolved = [r["id"] for r in guard.registry_records(registry_text)
+                         if r.get("status") != "accepted"]
+            if unresolved:
+                detail = (f"реестр замечаний не закрыт: "
+                          f"{', '.join(unresolved)} — каждая запись обязана "
+                          f"дойти до status: accepted явным решением "
+                          f"ревьювера, прежде чем approved пройдёт гейт")
+                store.journal(conn, task_id, "fsm",
+                              "переход отклонён: реестр замечаний", detail)
+                print(f"[{task_id}] переход отклонён: {detail}")
+                print(f"  дальше: доведи записи {', '.join(unresolved)} до "
+                      f"accepted и повтори artel.py advance {task_id}")
+                return False
         # Прогон приёмки (SPEC T023, требование 6): красный
         # acceptance-тест чинит код разработчик, не переписывает тест
         # (тесты залочены — см. ветку in_dev выше).

@@ -500,5 +500,126 @@ class UnreadableArtifactTest(unittest.TestCase):
         self.assertTrue(any("не прочитан" in e for e in guard.check(path)))
 
 
+# --------------------------------------------------------------------------
+# Секция «Реестр замечаний» REVIEW.md (tasks/T100/SPEC.md, требования 1,
+# 2, 6, 7) — юнит-тесты по функциям отдельно, дополняют чёрный ящик
+# tasks/T100/acceptance_tests/test_ac1_ac6_guard_registry_structure.py.
+
+class RequiresRegistryTest(unittest.TestCase):
+    """`requires_registry` — версия-гейтинг требования 6, граничные значения."""
+
+    def test_version_3_requires_the_registry(self):
+        self.assertTrue(guard.requires_registry({"schema_version": 3}))
+
+    def test_version_above_3_requires_the_registry(self):
+        self.assertTrue(guard.requires_registry({"schema_version": 4}))
+
+    def test_version_2_does_not_require_the_registry(self):
+        self.assertFalse(guard.requires_registry({"schema_version": 2}))
+
+    def test_missing_field_does_not_require_the_registry(self):
+        self.assertFalse(guard.requires_registry({}))
+
+    def test_non_integer_version_does_not_require_the_registry(self):
+        for raw in ("три", "3.0", True):
+            with self.subTest(значение=raw):
+                self.assertFalse(guard.requires_registry({"schema_version": raw}))
+
+
+class RegistryTableRowsTest(unittest.TestCase):
+    """`registry_table_rows` отсекает строку заголовка и разделителя,
+    оставляет только строки данных."""
+
+    BODY = ("| id | статус | файл/строка | суть | последствие | решение |\n"
+            "|---|---|---|---|---|---|\n"
+            "| R1-F1 | open | a.py:1 | суть | последствие | решение |\n"
+            "| R1-F2 | accepted | b.py:2 | суть2 | последствие2 | решение2 |\n")
+
+    def test_only_data_rows_are_returned(self):
+        rows = guard.registry_table_rows(self.BODY)
+
+        self.assertEqual(len(rows), 2)
+        self.assertEqual(rows[0][0], "R1-F1")
+        self.assertEqual(rows[1][0], "R1-F2")
+
+    def test_empty_body_has_no_rows(self):
+        self.assertEqual(guard.registry_table_rows(""), [])
+
+
+class RegistryRecordsTest(unittest.TestCase):
+    """`registry_records` — записи из well-formed строк как словари."""
+
+    def test_well_formed_row_becomes_a_record(self):
+        text = ("## Реестр замечаний\n"
+                "| id | статус | файл/строка | суть | последствие | решение |\n"
+                "|---|---|---|---|---|---|\n"
+                "| R1-F1 | fixed | a.py:1 | суть | последствие | решение |\n")
+
+        records = guard.registry_records(text)
+
+        self.assertEqual(records,
+                         [{"id": "R1-F1", "status": "fixed",
+                           "location": "a.py:1", "gist": "суть",
+                           "consequence": "последствие",
+                           "decision": "решение"}])
+
+    def test_malformed_row_is_silently_skipped(self):
+        text = ("## Реестр замечаний\n"
+                "| id | статус | файл/строка | суть | последствие | решение |\n"
+                "|---|---|---|---|---|---|\n"
+                "| R1-F1 | fixed | только три колонки |\n")
+
+        self.assertEqual(guard.registry_records(text), [])
+
+    def test_no_section_means_no_records(self):
+        self.assertEqual(guard.registry_records("# REVIEW: без реестра\n"), [])
+
+
+class RegistryRecordErrorsMessageTest(unittest.TestCase):
+    """Сообщения `registry_record_errors` называют требуемую форму
+    (тот же стиль, что `SchemaErrorsMessageTest` выше)."""
+
+    def test_wrong_column_count_message_says_what_to_do(self):
+        errors = guard.registry_record_errors("label", ["R1-F1", "open"])
+
+        self.assertEqual(len(errors), 1)
+        self.assertIn("получено 2", errors[0])
+
+    def test_bad_id_format_message_says_what_to_do(self):
+        errors = guard.registry_record_errors(
+            "label", ["F1-R1", "open", "a.py:1", "суть", "последствие",
+                     "решение"])
+
+        self.assertTrue(any("формату" in e for e in errors), errors)
+
+    def test_multiple_missing_fields_are_all_named(self):
+        errors = guard.registry_record_errors(
+            "label", ["R1-F1", "open", "a.py:1", "", "", "решение"])
+
+        self.assertEqual(len(errors), 1)
+        self.assertIn("суть", errors[0])
+        self.assertIn("последствие", errors[0])
+
+
+class RegistryErrorsDuplicateIdMessageTest(unittest.TestCase):
+    """`registry_errors` называет каждый повторяющийся id ровно один раз,
+    даже если он встречается больше двух раз подряд."""
+
+    def test_id_repeated_three_times_is_named_once(self):
+        row = ("| R1-F1 | open | a.py:1 | суть | последствие | решение |\n")
+        text = ("---\ntask: T900\ntype: review\nauthor_role: reviewer\n"
+                "status: draft\niteration: 1\nschema_version: 3\n---\n\n"
+                "# REVIEW: id x3\n\n## Соответствие SPEC\n\n## Замечания\n\n"
+                "## Реестр замечаний\n"
+                "| id | статус | файл/строка | суть | последствие | решение |\n"
+                "|---|---|---|---|---|---|\n" + row * 3 +
+                "\n## Вердикт\ndraft\n")
+
+        errors = guard.check_content("label", text)
+
+        matches = [e for e in errors if "R1-F1" in e and "встречается" in e]
+        self.assertEqual(len(matches), 1, errors)
+
+
 if __name__ == "__main__":
     unittest.main()
