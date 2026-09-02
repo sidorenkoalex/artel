@@ -6,7 +6,7 @@ from pathlib import Path
 
 from scripts import guard
 
-from . import acceptance, budget, gates, store, workspace
+from . import acceptance, budget, fixation, gates, store, workspace
 
 AUTOGATE_PASS_MESSAGE = "acceptance пройден автогейтом (политика gates.yaml)"
 
@@ -96,4 +96,8 @@ def _maybe_autogate_acceptance(conn, task_id: str, t, acc_tdir: Path,
     store.set_state(conn, task_id, "merge_gate", "autogate",
                     expected_state="acceptance",
                     detail="; ".join(ok_conditions))
-    print(f"  дальше: artel.py approve {task_id}  (выполнит merge)")
+    # Sha, зафиксированный ЭТИМ переходом (SPEC «approve: полный sha в
+    # подсказках», требование 1) — тот же приём, что и ручной вход в
+    # merge_gate из `fsm._cmd_approve`.
+    sha_hint = fixation.approve_sha_hint(task_id, store.task_target(conn, task_id))
+    print(f"  дальше: artel.py approve {task_id}{sha_hint}  (выполнит merge)")
