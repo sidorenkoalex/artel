@@ -34,8 +34,9 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from orchestrator import (catalog, config, fixation, fsm,  # noqa: E402
-                          gitcmd, projects, runner, store, workspace)
+from orchestrator import (auto, catalog, config, fixation, fsm,  # noqa: E402
+                          fsm_autogate, gates, gitcmd, projects, runner,
+                          store, workspace)
 from tests.sandbox import (FakeProc, TmpRootTest, capture,  # noqa: E402
                            capture_new_task_id, claude_only_popen,
                            resilient_tmp_cleanup)
@@ -868,6 +869,283 @@ class FsmDecidesOnlyOnFixedHashesTest(RealPultGitTest):
             _, popen = self.run_faked()
 
         self.assertEqual(len(self.claude_launches(popen)), 1)
+
+
+class ApproveShaHintTest(unittest.TestCase):
+    """`fixation.approve_sha_hint` (tasks/01M1GHZTX9YEPF0TY46QWZAGD8/SPEC.md,
+    требование 1) — узел общий для всех точек печати подсказки `approve`
+    с sha; юниты здесь чистые (мокают `fixation.read`), сценарии с
+    настоящим git — классы ниже и локальные приёмочные тесты AC-1.
+    """
+
+    def test_empty_when_fixation_not_available(self):
+        """Фиксации нет (`fixation.read` вернул `available=False`) —
+        подсказка остаётся пустой строкой, вырожденный случай без git.
+
+        Ловит мутацию: если проверка `available` уберётся и функция
+        начнёт подставлять `current` независимо от него, здесь вместо
+        пустой строки окажется мусорное значение первого элемента кортежа.
+        """
+        with mock.patch.object(fixation, "read", return_value=("", False)):
+            self.assertEqual(fixation.approve_sha_hint("T1", "artel"), "")
+
+    def test_leading_space_and_sha_when_fixed(self):
+        """Фиксация есть — подсказка равна ровно пробелу и полному sha,
+        готовая ко вставке хвостом в строку команды.
+
+        Ловит мутацию: если ведущий пробел потеряется (конкатенация
+        `sha` без разделителя) или в подсказку попадёт часть sha вместо
+        полного значения, сравнение с ` {sha}` не пройдёт.
+        """
+        sha = "a" * 40
+        with mock.patch.object(fixation, "read", return_value=(sha, True)):
+            self.assertEqual(fixation.approve_sha_hint("T1", "artel"), f" {sha}")
+
+
+class AutoStopHintIncludesShaOnEveryApproveNeedsShaStateTest(RealPultGitTest):
+    """Требование 1 (категория «остановки auto»): локальный приёмочный
+    тест AC-1 проверяет только `merge_gate` — здесь то же самое для
+    остальных трёх состояний `fsm.APPROVE_NEEDS_SHA` (`spec_gate`,
+    `acceptance`, `escalated`), которые тоже несут `{sha}` в `config.
+    AUTO_STOP` и форматируются тем же `auto.auto_stop_advice`.
+    """
+
+    def force_state(self, state: str) -> str:
+        conn = store.db()
+        current = store.get_task(conn, self.TASK)["state"]
+        store.set_state(conn, self.TASK, state, "operator",
+                        expected_state=current, detail="тест: подготовка")
+        return self.head()
+
+    def _assert_hint_has_sha(self, out: str, sha: str) -> None:
+        hint_lines = [line for line in out.splitlines()
+                     if "artel.py approve" in line]
+        self.assertTrue(hint_lines,
+                        f"строка подсказки не найдена в выводе auto:\n{out}")
+        self.assertTrue(any(sha in line for line in hint_lines),
+                        f"зафиксированный sha {sha} не найден в подсказке:\n{out}")
+
+    def test_spec_gate_auto_stop_hint_includes_full_fixed_sha(self):
+        """Остановка `auto` на `spec_gate` печатает подсказку `approve`
+        с зафиксированным sha этого состояния.
+
+        Ловит мутацию: если `{sha}` в `config.AUTO_STOP["spec_gate"]`
+        забудут подставить (или `auto_stop_advice` не станет вычислять
+        `sha_hint` для этого состояния), подсказка останется без sha и
+        assertTrue на `any(sha in line ...)` упадёт.
+        """
+        sha = self.enter_spec_gate()
+
+        out = self.capture(auto.cmd_auto, self.TASK)
+
+        self._assert_hint_has_sha(out, sha)
+
+    def test_acceptance_auto_stop_hint_includes_full_fixed_sha(self):
+        """Остановка `auto` на `acceptance` печатает подсказку `approve`
+        с зафиксированным sha этого состояния.
+
+        Ловит мутацию: если ветку `acceptance` в `auto_stop_advice`
+        забудут включить в список состояний, для которых считается
+        `sha_hint`, подсказка останется без sha.
+        """
+        sha = self.force_state("acceptance")
+
+        out = self.capture(auto.cmd_auto, self.TASK)
+
+        self._assert_hint_has_sha(out, sha)
+
+    def test_escalated_auto_stop_hint_includes_full_fixed_sha(self):
+        """Эскалация не по потолку бюджета — `AUTO_STOP["escalated"]`
+        несёт `{sha}`; эскалация ПО потолку подменяется на `AUTO_STOP_
+        BUDGET` (следующая команда — `budget`, не `approve`) и своего
+        теста не требует — она не называет approve вовсе.
+
+        Ловит мутацию: если `{sha}` в `config.AUTO_STOP["escalated"]`
+        забудут подставить, подсказка останется без sha и `_assert_hint_
+        has_sha` не найдёт его в выводе.
+        """
+        sha = self.force_state("escalated")
+
+        out = self.capture(auto.cmd_auto, self.TASK)
+
+        self._assert_hint_has_sha(out, sha)
+
+
+class AutogateMergeGateHintIncludesShaTest(RealPultGitTest):
+    """Требование 1 (категория «переход в merge_gate»): вторая точка входа
+    в `merge_gate` — автогейт (`fsm_autogate._maybe_autogate_acceptance`,
+    не ручной `fsm._cmd_approve`, который уже покрыт AC-1) — несёт то же
+    самое `{sha}`.
+
+    Условия автогейта (`_autogate_conditions`) подменены на «всё
+    выполнено»: предмет теста — печать подсказки после перехода, не сама
+    политика допуска (та своя, `tests/test_...` для `fsm_autogate.py` не
+    заводился отдельно — тонкая обвязка, перенесённая из `fsm.py` без
+    изменений, T091).
+    """
+
+    def test_autogate_transition_hint_includes_full_fixed_sha(self):
+        """Автоматический переход `acceptance -> merge_gate` через
+        `_maybe_autogate_acceptance` печатает подсказку `approve` с
+        зафиксированным sha, как и ручной путь из AC-1.
+
+        Ловит мутацию: если `{sha}` забудут подставить именно в этой
+        точке печати (второй сайт, отдельный от `fsm._cmd_approve`),
+        подсказка автогейта останется без sha, а `fsm._cmd_approve`
+        по-прежнему будет его печатать — асимметрия, которую поймает
+        только тест именно этого сайта.
+        """
+        self.enter_in_dev()
+        conn = store.db()
+        store.set_state(conn, self.TASK, "acceptance", "operator",
+                        expected_state="in_dev", detail="тест: подготовка")
+        t = store.get_task(conn, self.TASK)
+        fixed_sha = t["fixed_sha"]
+
+        with mock.patch.object(gates, "policy", return_value=gates.AUTO), \
+             mock.patch.object(fsm_autogate, "_autogate_conditions",
+                               return_value=(["ok"], None)):
+            out = self.capture(fsm_autogate._maybe_autogate_acceptance,
+                               conn, self.TASK, t, self.task_dir(), 1)
+
+        self.assertEqual(store.get_task(conn, self.TASK)["state"], "merge_gate")
+        hint_lines = [line for line in out.splitlines()
+                     if "artel.py approve" in line]
+        self.assertTrue(hint_lines,
+                        f"строка подсказки не найдена в выводе автогейта:\n{out}")
+        self.assertTrue(any(fixed_sha in line for line in hint_lines),
+                        f"зафиксированный sha {fixed_sha} не найден в "
+                        f"подсказке:\n{out}")
+
+
+class RunnerEscalationHintsIncludeShaTest(RealPultGitTest):
+    """Требование 1 (категория «статусные подсказки эскалаций с
+    фиксацией»): обе точки `runner._cmd_run`, которые сами уводят задачу
+    в `escalated`, несут зафиксированный sha — инцидент целостности
+    раньше печатал буквальный плейсхолдер `<sha>` вместо значения.
+    """
+
+    def test_integrity_incident_hint_includes_full_fixed_sha(self):
+        """Инцидент целостности (артефакт подменён мимо гейта) уводит
+        задачу в `escalated` и печатает подсказку `approve` с реальным
+        зафиксированным sha вместо буквального плейсхолдера `<sha>`.
+
+        Ловит мутацию: если `runner._cmd_run` на этом пути вернёт
+        подсказку без вычисленного `approve_sha_hint` (старое поведение
+        — буквальный `<sha>` или пустая подсказка), sha в выводе не
+        найдётся.
+        """
+        sha = self.enter_in_dev()
+        (self.task_dir() / "SPEC.md").write_text(
+            "подмена мимо гейта\n", encoding="utf-8")
+
+        out, popen = self.run_faked()
+
+        self.assertEqual(self.claude_launches(popen), [])
+        self.assertEqual(store.get_task(store.db(), self.TASK)["state"],
+                         "escalated")
+        hint_lines = [line for line in out.splitlines()
+                     if "artel.py approve" in line]
+        self.assertTrue(hint_lines,
+                        f"строка подсказки не найдена в выводе:\n{out}")
+        self.assertTrue(any(sha in line for line in hint_lines),
+                        f"зафиксированный sha {sha} не найден в подсказке:\n{out}")
+
+    def test_agent_failure_escalation_hint_includes_full_fixed_sha(self):
+        """Провал агента после исчерпанных попыток уводит задачу в
+        `escalated` и печатает подсказку `approve` с зафиксированным sha
+        — второй сайт эскалации в `runner._cmd_run`, отдельный от
+        инцидента целостности.
+
+        Ловит мутацию: если sha подставляется только на пути инцидента
+        целостности, а этот сайт (провал агента) забудут завести на тот
+        же `approve_sha_hint`, подсказка здесь останется без sha.
+        """
+        sha = self.enter_in_dev()
+
+        with mock.patch.object(
+                runner, "run_agent_once",
+                return_value=("failed", "тестовый сбой", "session_limit")):
+            out = self.capture(runner.cmd_run, self.TASK)
+
+        self.assertEqual(store.get_task(store.db(), self.TASK)["state"],
+                         "escalated")
+        hint_lines = [line for line in out.splitlines()
+                     if "artel.py approve" in line]
+        self.assertTrue(hint_lines,
+                        f"строка подсказки не найдена в выводе:\n{out}")
+        self.assertTrue(any(sha in line for line in hint_lines),
+                        f"зафиксированный sha {sha} не найден в подсказке:\n{out}")
+
+
+class ApproveAcceptsFixedShaPrefixTest(RealPultGitTest):
+    """`fsm.confirm_fixation` (tasks/01M1GHZTX9YEPF0TY46QWZAGD8/SPEC.md,
+    требования 2-3): свой юнит-контур поверх настоящего git, за пределами
+    локальных приёмочных AC-2..AC-4 — те же сценарии, но с настоящей
+    веткой задачи, не только `spec_gate` из их песочницы.
+    """
+
+    def test_prefix_of_fixed_sha_transitions_like_the_full_value(self):
+        """`approve` с минимально допустимым префиксом (`APPROVE_SHA_
+        PREFIX_MIN` символов) зафиксированного sha на реальной ветке
+        задачи переводит `spec_gate -> in_dev` так же, как полный sha.
+
+        Ловит мутацию: если сравнение снова станет строгим `sha ==
+        current` вместо `current.startswith(sha)` после проверки длины,
+        approve с префиксом отклонится и состояние останется `spec_gate`.
+        """
+        sha = self.enter_spec_gate()
+        prefix = sha[:fsm.APPROVE_SHA_PREFIX_MIN]
+
+        self.capture(fsm.cmd_approve, self.TASK, prefix)
+
+        self.assertEqual(store.get_task(store.db(), self.TASK)["state"],
+                         "in_dev")
+
+    def test_value_of_min_length_not_a_prefix_is_refused_with_fixed_sha(self):
+        """Значение допустимой длины (`APPROVE_SHA_PREFIX_MIN` символов),
+        которое НЕ является префиксом зафиксированного sha, отклоняется
+        прежним отказом «не совпадает» с печатью зафиксированного sha,
+        состояние не двигается.
+
+        Ловит мутацию: если проверка длины подменит собой сравнение
+        содержимого (любое значение нужной длины проходит), approve с
+        заведомо неверным значением ошибочно переведёт задачу в `in_dev`.
+        """
+        sha = self.enter_spec_gate()
+        wrong = ("0" if sha[0] != "0" else "1") + "0" * (
+            fsm.APPROVE_SHA_PREFIX_MIN - 1)
+        self.assertFalse(sha.startswith(wrong))
+
+        with self.assertRaises(SystemExit) as ctx:
+            self.capture(fsm.cmd_approve, self.TASK, wrong)
+
+        self.assertIn(sha, str(ctx.exception))
+        self.assertEqual(store.get_task(store.db(), self.TASK)["state"],
+                         "spec_gate")
+
+    def test_value_shorter_than_min_length_is_refused_by_name(self):
+        """Значение короче `APPROVE_SHA_PREFIX_MIN` символов отклоняется
+        отдельным именованным отказом про минимальную длину — раньше
+        проверки совпадения, с другим текстом, чем «не совпадает».
+
+        Ловит мутацию: если проверка длины уберётся или переставится
+        после сравнения по `startswith` (короткая строка — валидный
+        префикс любого sha), короткое значение либо пройдёт как
+        approve, либо будет отклонено текстом «не совпадает», а не
+        именованным отказом про длину.
+        """
+        sha = self.enter_spec_gate()
+        too_short = sha[:fsm.APPROVE_SHA_PREFIX_MIN - 1]
+
+        with self.assertRaises(SystemExit) as ctx:
+            self.capture(fsm.cmd_approve, self.TASK, too_short)
+
+        message = str(ctx.exception)
+        self.assertNotIn("не совпадает с зафиксированным", message)
+        self.assertIn(str(fsm.APPROVE_SHA_PREFIX_MIN), message)
+        self.assertEqual(store.get_task(store.db(), self.TASK)["state"],
+                         "spec_gate")
 
 
 if __name__ == "__main__":

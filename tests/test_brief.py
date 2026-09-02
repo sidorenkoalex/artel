@@ -11,7 +11,7 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from orchestrator import brief, config, gitcmd, store  # noqa: E402
+from orchestrator import brief, config, context_package, gitcmd, store  # noqa: E402
 from tests.sandbox import TmpRootTest, fake_git, fake_git_for  # noqa: E402
 
 MAP_FRESH = ("---\nbuilt_at_sha: aaaa000011112222333344445555666677778888\n"
@@ -198,6 +198,28 @@ class DeveloperBriefTest(BriefUnitTest):
         for label in ("tasks/T001/SPEC.md", "docs/codebase-map.md",
                      "CLAUDE.md"):
             self.assertTrue(any(label in d for d in details), details)
+
+
+class DeveloperBriefStaleMapManifestTest(BriefUnitTest):
+    """R1-F4 (REVIEW.md итерация 1, minor): опись компонента карты
+    обязана нести размер/sha256 ИСХОДНОГО файла на диске, а не текста с
+    примешанной пометкой «КАРТА НЕАКТУАЛЬНА» — иначе sha256 из описи
+    расходится с `sha256sum docs/codebase-map.md`, пока карта стухшая."""
+
+    def test_manifest_sha256_matches_the_file_on_disk_even_when_stale(self):
+        conn = store.db()
+        with mock.patch.object(gitcmd, "git", fake_git_diff_fails):
+            text = brief.developer_brief(conn, "T001")
+
+        self.assertIn("КАРТА НЕАКТУАЛЬНА", text, "пометка обязана остаться видна роли")
+        expected_sha = context_package.sha256_of(MAP_FRESH)
+        expected_size = len(MAP_FRESH.encode("utf-8"))
+        self.assertIn(
+            expected_sha, text,
+            "опись обязана нести sha256 исходного файла карты (без "
+            "пометки), а не текста с примешанной пометкой стухлости")
+        self.assertIn(str(expected_size), text,
+                     "опись обязана нести размер исходного файла карты")
 
 
 class AnalystMapComponentTest(BriefUnitTest):

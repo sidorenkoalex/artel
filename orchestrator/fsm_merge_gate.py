@@ -7,7 +7,7 @@ import sys
 import time
 
 from . import (ci, cleanup, config, fsm, fsm_postmerge, gitcmd,
-              github_adapter, merge_lock, store, workspace)
+              github_adapter, lease, merge_lock, store, workspace)
 
 
 def _touches_protected_path(path: str) -> bool:
@@ -300,6 +300,10 @@ def _cmd_approve_merge_gate(conn, task_id: str, state: str, t,
         sys.exit(f"merge упал на git push:\n{push.stderr}")
     store.set_state(conn, task_id, "done", "orchestrator",
                     expected_state=state, detail=f"смержено: {branch}")
+    # Успешное закрытие задачи обязано снять lease безусловно, «любым
+    # путём» (SPEC 01M1G..., требование 3, AC-6) — этот путь раньше lease
+    # не трогал вовсе.
+    lease.release_any(conn, task_id, "orchestrator", "lease снят: задача done")
     # Снапшот закрытия (SPEC T094, требования 12-13, AC-13, AC-15) — ДО
     # уборки веток ниже, тем же узлом, что и `cleanup._cmd_kill` для
     # пути `killed`: внешний target, не канарейка (self/канарейка снапшот

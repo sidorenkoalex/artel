@@ -12,6 +12,19 @@ from scripts import guard
 from . import (acceptance, agent_log, artifact_source, artifacts, budget,
               ci, config, fsm, fsm_autogate, gitcmd, github_adapter, store,
               workspace, yamlmini)
+# Функция, не модуль (SPEC 01M1GCN1FPSC1A6WK9WD1Q1V8X, требование 5): этот
+# же модуль ниже определяет обработчик состояния `review` под тем же
+# именем `review` — `from . import review` тут вело бы к коллизии имён,
+# как только определение функции переопределит имя модуля.
+from .review import git_diff_part as _review_git_diff_part
+
+# Причина отказа гейта ёмкости — дословно (tasks/01M1GCN1FPSC1A6WK9WD1Q1V8X,
+# AC-13): снимок задачи крупнее потолка `config.REVIEW_SNAPSHOT_DIFF_MAX_BYTES`
+# не помещается ни в один прогон ревьювера — вердикт по такому объёму
+# ненадёжен по построению, решение (разделить задачу или поднять потолок)
+# — только Оператора (AC-14).
+CAPACITY_GATE_REASON = "снимок не помещается в один контекст ревью — разделить задачу"
+>>>>>>> main
 
 
 def spec_writing(conn, task_id: str, t, tdir, target: str, state: str) -> bool:
@@ -379,6 +392,67 @@ def tests_writing(conn, task_id: str, t, tdir, target: str, state: str) -> bool:
     return False
 
 
+def _capacity_gate_refuses(conn, task_id: str, t, state: str) -> bool:
+    """Гейт ёмкости diff снимка на `in_dev -> review` (tasks/
+    01M1GCN1FPSC1A6WK9WD1Q1V8X, требование 5, AC-12..AC-16): полный diff
+    снимка (`git diff config.MAIN_BRANCH...<ветка задачи>`) — тот же
+    расчёт, что и «полный» `diff_type` в `review.review_package` при
+    `iteration == 1` (T029) — не имеет права превышать
+    `config.REVIEW_SNAPSHOT_DIFF_MAX_BYTES`. Пересчитывается заново на
+    КАЖДОМ входе в гейт, не по инкременту прошлой итерации (AC-15).
+
+    `True` — переход отклонён, отказ уже журналирован (AC-13); гейт сам
+    не эскалирует и не делает ничего автоматически (AC-14) — задача
+    остаётся в `in_dev` до решения Оператора.
+
+    git не ответил на сам diff — fail-closed, не fail-open (R1-F2,
+    REVIEW.md итерация 1, major): `git_diff_part` в этом случае отдаёт
+    короткую строку `"(не собран: <reason>)"` вместо текста diff, и
+    измерять байты именно этой строки значит пропускать переход, так и
+    не выяснив фактический размер снимка — тот же принцип «неизвестный
+    статус — это нельзя» (ADR-0002), что уже применён парой функций выше
+    в этом же файле для лока `acceptance_tests/`.
+
+    Внешний (не self) target — гейт не проверяется вовсе, тем же
+    доводом «сознательно вне объёма этой итерации», что уже
+    зафиксирован парой функций выше в этом же файле для лока
+    `acceptance_tests/` с внешним target: `git diff config.MAIN_BRANCH
+    ...<ветка задачи>` в `config.ROOT` — репозитории ПУЛЬТА — не видит
+    настоящий код внешнего target (тот живёт в отдельном репозитории
+    `config.PROJECTS/<target>/workspace`), а до самого перехода
+    `tasks/<id>/` для внешнего target ещё не закоммичен в свою ветку
+    (коммитит `fixation._fix_external` уже ПОСЛЕ решения перейти,
+    `ExternalTargetAdvanceIgnoresDirtyCheckTest`) — fail-closed здесь
+    заблокировал бы КАЖДЫЙ переход `in_dev -> review` для КАЖДОЙ задачи
+    любого внешнего target навсегда, а не редкий сбой git."""
+    if store.task_target(conn, task_id) != config.DEFAULT_TARGET:
+        return False
+    diff, _, reason = _review_git_diff_part(config.MAIN_BRANCH, t["branch"])
+    if reason:
+        detail = (f"гейт ёмкости: git не ответил на diff снимка "
+                 f"({config.MAIN_BRANCH}...{t['branch']}) — сверка "
+                 f"размера невозможна: {reason}")
+        store.journal(conn, task_id, "fsm",
+                      "переход отклонён: гейт ёмкости diff", detail)
+        print(f"[{task_id}] переход отклонён: {detail}")
+        print(f"  дальше: разберись, почему git не отвечает на diff "
+              f"{config.MAIN_BRANCH}...{t['branch']}, и повтори "
+              f"artel.py advance {task_id}")
+        return True
+    size = len(diff.encode("utf-8"))
+    if size <= config.REVIEW_SNAPSHOT_DIFF_MAX_BYTES:
+        return False
+    detail = (f"{CAPACITY_GATE_REASON} ({task_id} «{t['title']}»): diff "
+             f"снимка {size} байт > потолка "
+             f"{config.REVIEW_SNAPSHOT_DIFF_MAX_BYTES} байт")
+    store.journal(conn, task_id, "fsm",
+                  "переход отклонён: гейт ёмкости diff", detail)
+    print(f"[{task_id}] переход отклонён: {detail}")
+    print(f"  дальше: решение Оператора — разделить задачу или поднять "
+          f"потолок (ADR-0002)")
+    return True
+
+
 def in_dev(conn, task_id: str, t, tdir, target: str, state: str) -> bool:
     # разработчик закончил: PLAN ready и ветка запушена -> в ревью
     #
@@ -457,6 +531,8 @@ def in_dev(conn, task_id: str, t, tdir, target: str, state: str) -> bool:
         # подтягивается и проходит приёмку, либо эскалирует и возврата
         # уже не будет.
         if fsm._pull_main_or_escalate(conn, task_id, t, state) == "escalated":
+            return False
+        if _capacity_gate_refuses(conn, task_id, t, state):
             return False
         store.set_state(conn, task_id, "review", "fsm",
                         expected_state=state, detail="MR готов — прогон ревьювера")
