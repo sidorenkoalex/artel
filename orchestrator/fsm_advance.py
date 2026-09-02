@@ -10,8 +10,8 @@ import shutil
 from scripts import guard
 
 from . import (acceptance, agent_log, artifact_source, artifacts, budget,
-              ci, config, fsm, fsm_autogate, gitcmd, store, workspace,
-              yamlmini)
+              ci, config, fsm, fsm_autogate, gitcmd, github_adapter, store,
+              workspace, yamlmini)
 # Функция, не модуль (SPEC 01M1GCN1FPSC1A6WK9WD1Q1V8X, требование 5): этот
 # же модуль ниже определяет обработчик состояния `review` под тем же
 # именем `review` — `from . import review` тут вело бы к коллизии имён,
@@ -152,6 +152,24 @@ def review(conn, task_id: str, t, tdir, target: str, state: str) -> bool:
         print(f"[{task_id}] {detail}")
         print(f"  дальше: artel.py run {task_id}  (прогон ревьювера)")
         return False
+
+    if status == "approved":
+        # Голова ветки задачи на origin — предусловие входа в verifying
+        # (SPEC 01M1GS5HZ1JXFGKVR95HEW0AEZ, требования 1-3, AC-1..AC-5):
+        # ДО потребления свежести вердикта (`store.update_task` ниже) —
+        # иначе провалившийся push съел бы свежесть первым же заходом и
+        # заблокировал повторный advance после починки origin (AC-5)
+        # тем же «вердикт уже учтён», что и рефьюзл выше.
+        push_ok, push_detail = github_adapter.ensure_head_in_origin(
+            conn, task_id, t["branch"])
+        if not push_ok:
+            store.journal(conn, task_id, "fsm",
+                          "переход отклонён: голова не в origin", push_detail)
+            print(f"[{task_id}] переход отклонён: {push_detail}")
+            print(f"  дальше: почини доступ к origin и повтори "
+                  f"artel.py advance {task_id}")
+            return False
+
     store.update_task(conn, task_id, reviewed_iter=iteration)
 
     if status == "approved":

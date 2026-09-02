@@ -157,6 +157,17 @@ VERIFYING_RUNNING = "running"
 VERIFYING_RED = "red"
 
 
+def _commit_not_found_in_origin(why: str) -> bool:
+    """`why` из `check_runs`/`check_runs_page` называет HTTP 422 — GitHub
+    не нашёл коммит вовсе, а не «CI ещё не ответил» (SPEC
+    01M1GS5HZ1JXFGKVR95HEW0AEZ, требование 4, AC-6): голова ветки задачи
+    не в origin, опрос CI по её sha структурно не может дать ответа.
+    Сверка по подстроке "422" в сыром тексте `gh` — тот же приём, что
+    `verifying_is_red`/`status_kind` уже применяют к своим `note`.
+    """
+    return "422" in why
+
+
 def verifying_status(branch: str) -> tuple[str, str]:
     """Статус CI ветки задачи в состоянии `verifying` (SPEC T079,
     требование 5) — не то же самое, что `branch_status`: тот сворачивает
@@ -174,6 +185,10 @@ def verifying_status(branch: str) -> tuple[str, str]:
     short = sha[:8]
 
     runs, why = check_runs(sha)
+    if runs is None and _commit_not_found_in_origin(why):
+        return VERIFYING_NONE, (
+            f"голова ветки не в origin — GitHub не нашёл коммит {short} "
+            f"({why}); подсказка: git push -u origin {branch}")
     if not runs:
         first_source = (f"у коммита {short} нет ни одной проверки CI"
                         if runs is not None else

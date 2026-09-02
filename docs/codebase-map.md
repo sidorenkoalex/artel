@@ -1,5 +1,5 @@
 ---
-built_at_sha: b091f32305b4086d6feba33a3c397d3455737324
+built_at_sha: 412c0f10197951eddbe77ba37fb4e6109ab80169
 ---
 
 # Codebase-map пульта
@@ -388,7 +388,7 @@ built_at_sha: b091f32305b4086d6feba33a3c397d3455737324
 - `tests_writing`
 - `verifying`
 
-**Импортирует:** `orchestrator/acceptance.py`, `orchestrator/agent_log.py`, `orchestrator/artifact_source.py`, `orchestrator/artifacts.py`, `orchestrator/budget.py`, `orchestrator/ci.py`, `orchestrator/config.py`, `orchestrator/fsm.py`, `orchestrator/fsm_autogate.py`, `orchestrator/gitcmd.py`, `orchestrator/review.py`, `orchestrator/store.py`, `orchestrator/workspace.py`, `orchestrator/yamlmini.py`, `scripts/guard.py`
+**Импортирует:** `orchestrator/acceptance.py`, `orchestrator/agent_log.py`, `orchestrator/artifact_source.py`, `orchestrator/artifacts.py`, `orchestrator/budget.py`, `orchestrator/ci.py`, `orchestrator/config.py`, `orchestrator/fsm.py`, `orchestrator/fsm_autogate.py`, `orchestrator/gitcmd.py`, `orchestrator/github_adapter.py`, `orchestrator/review.py`, `orchestrator/store.py`, `orchestrator/workspace.py`, `orchestrator/yamlmini.py`, `scripts/guard.py`
 
 **Импортируется:** `orchestrator/fsm.py`, `tests/test_capacity_gate.py`
 
@@ -408,7 +408,7 @@ built_at_sha: b091f32305b4086d6feba33a3c397d3455737324
 
 **Публичные функции:** (нет)
 
-**Импортирует:** `orchestrator/ci.py`, `orchestrator/cleanup.py`, `orchestrator/config.py`, `orchestrator/fsm.py`, `orchestrator/fsm_postmerge.py`, `orchestrator/gitcmd.py`, `orchestrator/lease.py`, `orchestrator/merge_lock.py`, `orchestrator/snapshot.py`, `orchestrator/store.py`, `orchestrator/workspace.py`
+**Импортирует:** `orchestrator/ci.py`, `orchestrator/cleanup.py`, `orchestrator/config.py`, `orchestrator/fsm.py`, `orchestrator/fsm_postmerge.py`, `orchestrator/gitcmd.py`, `orchestrator/github_adapter.py`, `orchestrator/lease.py`, `orchestrator/merge_lock.py`, `orchestrator/snapshot.py`, `orchestrator/store.py`, `orchestrator/workspace.py`
 
 **Импортируется:** `orchestrator/fsm.py`, `tests/test_fsm_merge_gate_done_snapshot.py`, `tests/test_merge_gate_ci_wait.py`
 
@@ -453,6 +453,7 @@ built_at_sha: b091f32305b4086d6feba33a3c397d3455737324
 - `list_branches`
 - `ls_tree_files`
 - `on_foreign_branch`
+- `remote_branch_sha`
 - `show`
 
 **Импортирует:** `orchestrator/config.py`
@@ -465,11 +466,12 @@ built_at_sha: b091f32305b4086d6feba33a3c397d3455737324
 
 **Публичные функции:**
 - `ensure_draft_mr`
+- `ensure_head_in_origin`
 - `undraft_mr`
 
 **Импортирует:** `orchestrator/alerts.py`, `orchestrator/ci.py`, `orchestrator/config.py`, `orchestrator/gitcmd.py`, `orchestrator/store.py`, `orchestrator/targets.py`
 
-**Импортируется:** `orchestrator/fsm.py`, `tests/test_github_adapter.py`
+**Импортируется:** `orchestrator/fsm.py`, `orchestrator/fsm_advance.py`, `orchestrator/fsm_merge_gate.py`, `tests/test_github_adapter.py`
 
 ## orchestrator/idgen.py
 

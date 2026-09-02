@@ -6,8 +6,8 @@
 import sys
 import time
 
-from . import (ci, cleanup, config, fsm, fsm_postmerge, gitcmd, lease,
-              merge_lock, store, workspace)
+from . import (ci, cleanup, config, fsm, fsm_postmerge, gitcmd,
+              github_adapter, lease, merge_lock, store, workspace)
 
 
 def _touches_protected_path(path: str) -> bool:
@@ -171,6 +171,21 @@ def _cmd_approve_merge_gate(conn, task_id: str, state: str, t,
     `"pulled"` ниже его не читает.
     """
     branch = t["branch"]
+    # Голова ветки задачи на origin — предусловие КАЖДОГО approve
+    # merge_gate (SPEC 01M1GS5HZ1JXFGKVR95HEW0AEZ, требование 7,
+    # AC-8/AC-9), самой первой строкой тела: расхождение может
+    # появиться уже ПОСЛЕ входа на гейт (новый коммит на ветке задачи
+    # между заходами approve/цикла ожидания CI), не только на самом
+    # входе. Провал — graceful возврат (тот же приём, что сверка главной
+    # копии ниже), задача остаётся на merge_gate без эскалации; повторный
+    # approve после починки origin продолжает штатно (AC-9).
+    push_ok, push_detail = github_adapter.ensure_head_in_origin(
+        conn, task_id, branch)
+    if not push_ok:
+        store.journal(conn, task_id, "orchestrator",
+                      "approve отклонён: голова не в origin", push_detail)
+        print(f"[{task_id}] approve отклонён: {push_detail}")
+        return ("stopped",)
     # Рабочая поверхность оркестратора (SPEC T045, требования 3-4,
     # AC-8 сценарий 2): merge — территория главной копии пульта на
     # main, не чужой ветки Оператора/сессии. Проверяется ДО двухшаговой
