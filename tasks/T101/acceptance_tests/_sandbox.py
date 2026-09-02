@@ -34,9 +34,13 @@ import json
 import subprocess
 import sys
 from pathlib import Path
+from unittest import mock
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(REPO_ROOT))
+
+from orchestrator import catalog, config, fsm, gitcmd, store  # noqa: E402
+from tests.sandbox import TmpRootTest, fake_git  # noqa: E402
 
 DRIVERS_DIR = Path(__file__).resolve().parent
 
@@ -83,3 +87,171 @@ def run_driver(driver_name: str, *args: str,
         raise AssertionError(
             f"драйвер {driver_name}: последняя строка stdout — не JSON "
             f"({exc}): {lines[-1]!r}") from exc
+
+
+# ---------------------------------------------------------------------------
+# Песочница AC-5/AC-7 (fingerprint в исходе прогона приёмочных тестов и его
+# видимость в `artel.py log`): здесь достаточно ОДНОГО процесса на весь
+# файл — сценарии не переключают доступность git/claude между собой (везде
+# `version_stub_run` ниже отвечает одинаково), так что риск утечки кэша
+# фингерпринта между сценариями ТОГО ЖЕ процесса (см. докстринг модуля выше
+# про AC-6) здесь не встаёт — в отличие от `_driver_agent_step.py`, эти
+# тесты не сравнивают доступный/недоступный инструмент друг с другом.
+
+_REAL_SUBPROCESS_RUN = subprocess.run
+
+
+def version_stub_run(git_stdout: str = "git version 2.43.0\n",
+                     claude_stdout: str | None = None):
+    """`subprocess.run` side_effect: отвечает на `git --version`/
+    `claude --version`, остальное (в первую очередь — реальный `python3 -m
+    unittest discover` внутри `orchestrator/acceptance.py::run`) уходит в
+    настоящий `subprocess.run` — тот же приём, что `tests/sandbox.
+    claude_only_run`, но отвечает и на git, и на claude сразу (см.
+    докстринг `_sandbox.py`, «Допущение об интерфейсе»)."""
+    if claude_stdout is None:
+        claude_stdout = f"{config.CLI_VERSION_PIN} (Claude Code)\n"
+
+    def run(cmd, *a, **kw):
+        if cmd and cmd[0] == "git" and "--version" in cmd:
+            return subprocess.CompletedProcess(cmd, 0, git_stdout, "")
+        if cmd and cmd[0] == "claude" and "--version" in cmd:
+            return subprocess.CompletedProcess(cmd, 0, claude_stdout, "")
+        return _REAL_SUBPROCESS_RUN(cmd, *a, **kw)
+    return run
+
+
+SPEC_V2 = """---
+task: {task}
+type: spec
+author_role: analyst
+status: ready
+schema_version: 2
+---
+
+# SPEC: песочница T101 (review -> acceptance)
+
+## Контекст
+
+## Требования
+
+1. ...
+
+## Критерии приёмки
+
+AC-1. Единственный критерий песочницы, проверяемый тестом.
+
+## Не входит
+"""
+
+PLAN_MD = """---
+task: {task}
+type: plan
+author_role: developer
+status: ready
+schema_version: 2
+---
+
+# PLAN: песочница T101
+
+## Подход
+
+## Шаги
+
+## Покрытие требований
+
+## Влияние на систему
+"""
+
+REVIEW_MD = """---
+task: {task}
+type: review
+author_role: reviewer
+status: approved
+iteration: 1
+schema_version: 2
+---
+
+# REVIEW: песочница T101
+
+## Соответствие SPEC
+
+## Замечания
+
+## Вердикт
+approved
+
+## Проверено исполнением
+`python3 -m unittest discover -s tests` — зелёный.
+"""
+
+AC_TEST_PASS = """import unittest
+
+
+class AcceptanceTest(unittest.TestCase):
+    def test_ac1_ok(self):
+        self.assertTrue(True)
+"""
+
+AC_TEST_FAIL = """import unittest
+
+
+class AcceptanceTest(unittest.TestCase):
+    def test_ac1_ok(self):
+        self.fail("намеренно красный сценарий песочницы T101")
+"""
+
+
+class ReviewAdvanceSandbox(TmpRootTest):
+    """Задача в состоянии `review`, готовая к `fsm.cmd_advance` (тот же
+    рецепт, что `tests/test_acceptance_tests_flow.py::AcceptanceRunTest` —
+    лёгкая песочница, `gitcmd.git` заглушкой, `on_foreign_branch` — False,
+    поэтому `acc_tdir` берётся с диска главной копии, а не из worktree)."""
+
+    TASK = "T001"
+    PATCHED_ATTRS = ("DB", "TASKS", "LOGS", "ROLE_HOME", "ROLE_CONFIG_DIR",
+                     "WORKTREES", "ROOT")
+
+    def setUp(self):
+        super().setUp()
+        import shutil
+        shutil.copytree(REPO_ROOT / "templates", self.root / "templates")
+        shutil.copytree(REPO_ROOT / "skills", self.root / "skills")
+        patcher = mock.patch.object(gitcmd, "git", fake_git)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+        self.capture(catalog.cmd_init)
+        self.capture(catalog.cmd_new, "Песочница T101 review->acceptance")
+        self.tdir = config.TASKS / self.TASK
+        self.tdir.mkdir(parents=True, exist_ok=True)
+        (self.tdir / "SPEC.md").write_text(SPEC_V2.format(task=self.TASK),
+                                           encoding="utf-8")
+        (self.tdir / "PLAN.md").write_text(PLAN_MD.format(task=self.TASK),
+                                           encoding="utf-8")
+        (self.tdir / "REVIEW.md").write_text(REVIEW_MD.format(task=self.TASK),
+                                             encoding="utf-8")
+        self._set_state("review")
+
+    def _set_state(self, state: str) -> None:
+        conn = store.db()
+        conn.execute("UPDATE tasks SET state=? WHERE id=?", (state, self.TASK))
+        conn.commit()
+
+    def state(self) -> str:
+        return store.db().execute(
+            "SELECT state FROM tasks WHERE id=?", (self.TASK,)).fetchone()[0]
+
+    def write_acceptance_tests(self, content: str,
+                               name: str = "test_ac.py") -> None:
+        tests_dir = self.tdir / "acceptance_tests"
+        tests_dir.mkdir(parents=True, exist_ok=True)
+        (tests_dir / name).write_text(content, encoding="utf-8")
+
+    def journal_details(self, action: str) -> list:
+        return [r["detail"] for r in store.db().execute(
+            "SELECT detail FROM steps WHERE task_id=? AND action=? ORDER BY id",
+            (self.TASK, action))]
+
+    def advance(self) -> str:
+        return self.capture(fsm.cmd_advance, self.TASK)
