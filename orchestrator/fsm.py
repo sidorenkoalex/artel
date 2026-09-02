@@ -491,6 +491,16 @@ def _cmd_advance(conn, task_id: str) -> bool:
 # подтверждают, а не просто отвечают «нечего подтверждать».
 APPROVE_NEEDS_SHA = ("spec_gate", "acceptance", "merge_gate", "escalated")
 
+# Минимальная длина префикса sha, принимаемого `approve` вместо полного
+# значения (SPEC «approve: полный sha в подсказках», требование 2; SPEC
+# «Не входит» — фиксированная величина, не предмет настройки в этой
+# задаче). Тот же порядок приёма, что и уникальный префикс id задач
+# (T094, `store.resolve_task_id`), но сверяется с ОДНИМ эталоном —
+# зафиксированным sha ЭТОЙ задачи, не поиском среди множества
+# кандидатов: «уникальный» здесь про отсечение случайных опечаток
+# короткой длиной, не про отсутствие коллизий.
+APPROVE_SHA_PREFIX_MIN = 8
+
 
 def confirm_fixation(conn, task_id: str, sha: str | None) -> bool:
     """True — approve может продолжить; False — сообщил и ждёт sha (не отказ).
@@ -509,6 +519,16 @@ def confirm_fixation(conn, task_id: str, sha: str | None) -> bool:
     репозитория) — сверять не с чем: approve ведёт себя как до T021
     (требование 3, критерий 3). Расхождение sha или грязная копия —
     `sys.exit`, тем же стилем, что и отказ merge по красному CI ниже.
+
+    Переданный `sha` короче `APPROVE_SHA_PREFIX_MIN` — именованный отказ
+    про минимальную длину, ДО сравнения с зафиксированным (SPEC
+    требование 3, AC-4): короткий отрезок совпал бы с зафиксированным
+    почти всегда случайно, отличить опечатку от намеренного префикса
+    нечем. От `APPROVE_SHA_PREFIX_MIN` и длиннее — `current.startswith
+    (sha)` принимает как полный sha (совпадает с собой целиком), так и
+    любой его префикс той же длины (SPEC требование 2, AC-2); не
+    префикс — прежний отказ «не совпадает» с печатью зафиксированного
+    sha (SPEC требование 3, AC-3), байт-в-байт как до этой задачи.
     """
     target = store.task_target(conn, task_id)
     current, clean = fixation.read(task_id, target)
@@ -518,9 +538,17 @@ def confirm_fixation(conn, task_id: str, sha: str | None) -> bool:
         print(f"[{task_id}] approve требует sha — зафиксирован {current}")
         print(f"  повтори: artel.py approve {task_id} {current}")
         return False
-    if sha != current or not clean:
+    if len(sha) < APPROVE_SHA_PREFIX_MIN:
+        reason = (f"sha {sha!r} короче минимальной длины "
+                  f"{APPROVE_SHA_PREFIX_MIN} символов — approve принимает "
+                  f"полный sha или его уникальный префикс от "
+                  f"{APPROVE_SHA_PREFIX_MIN} символов")
+        store.journal(conn, task_id, "operator", "approve отклонён", reason)
+        sys.exit(f"[{task_id}] approve отклонён: {reason}")
+    matches = current.startswith(sha)
+    if not matches or not clean:
         reason = (f"sha {sha} не совпадает с зафиксированным {current}"
-                  if sha != current else
+                  if not matches else
                   f"грязная копия артефактов при sha {current}")
         store.journal(conn, task_id, "operator", "approve отклонён", reason)
         sys.exit(f"[{task_id}] approve отклонён: {reason}")
@@ -598,7 +626,12 @@ def _cmd_approve(conn, task_id: str, sha: str | None, sid: str) -> None:
         # эффект входа в merge_gate, не условие перехода — отказ адаптера
         # не держит гейт (github_adapter.undraft_mr сама не бросает).
         github_adapter.undraft_mr(conn, task_id, store.get_task(conn, task_id))
-        print(f"  дальше: artel.py approve {task_id}  (выполнит merge)")
+        # Sha, зафиксированный ЭТИМ переходом (SPEC «approve: полный sha в
+        # подсказках», требование 1) — готовая к копированию команда,
+        # вместо голого `<id>`, которое Оператору иначе пришлось бы
+        # достраивать по памяти (инцидент 02.09, мерж T101).
+        sha_hint = fixation.approve_sha_hint(task_id, store.task_target(conn, task_id))
+        print(f"  дальше: artel.py approve {task_id}{sha_hint}  (выполнит merge)")
     elif state == "merge_gate":
         # Мьютекс merge-окна (SPEC T053, требования 1-3): один держатель
         # на весь пульт, не на задачу — вторая сессия, вызвавшая approve
