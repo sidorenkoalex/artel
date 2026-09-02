@@ -1,5 +1,5 @@
 ---
-built_at_sha: 77b42545eace458912def9b915661087614c0a84
+built_at_sha: b091f32305b4086d6feba33a3c397d3455737324
 ---
 
 # Codebase-map пульта
@@ -149,11 +149,14 @@ built_at_sha: 77b42545eace458912def9b915661087614c0a84
 - `component_hash`
 - `developer_brief`
 - `fresh_map_text`
+- `mark_unclosed_parts`
+- `new_run_id`
 - `test_author_answer_component`
+- `wrap_boundary`
 
 **Импортирует:** `orchestrator/alerts.py`, `orchestrator/artifact_source.py`, `orchestrator/config.py`, `orchestrator/context_package.py`, `orchestrator/gitcmd.py`, `orchestrator/store.py`
 
-**Импортируется:** `orchestrator/role_prompt.py`, `orchestrator/runner.py`, `tests/test_advance_refusal_history.py`, `tests/test_answer_branch_reads.py`, `tests/test_brief.py`
+**Импортируется:** `orchestrator/review.py`, `orchestrator/role_prompt.py`, `orchestrator/runner.py`, `tests/test_advance_refusal_history.py`, `tests/test_answer_branch_reads.py`, `tests/test_brief.py`
 
 ## orchestrator/budget.py
 
@@ -640,7 +643,7 @@ built_at_sha: 77b42545eace458912def9b915661087614c0a84
 - `previous_verdict_sha`
 - `review_package`
 
-**Импортирует:** `orchestrator/config.py`, `orchestrator/context_package.py`, `orchestrator/gitcmd.py`, `orchestrator/store.py`
+**Импортирует:** `orchestrator/brief.py`, `orchestrator/config.py`, `orchestrator/context_package.py`, `orchestrator/gitcmd.py`, `orchestrator/store.py`
 
 **Импортируется:** `orchestrator/fsm_advance.py`, `orchestrator/role_prompt.py`, `orchestrator/runner.py`, `tests/test_review_freshness.py`, `tests/test_review_package.py`
 
