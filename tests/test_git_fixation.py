@@ -879,10 +879,24 @@ class ApproveShaHintTest(unittest.TestCase):
     """
 
     def test_empty_when_fixation_not_available(self):
+        """Фиксации нет (`fixation.read` вернул `available=False`) —
+        подсказка остаётся пустой строкой, вырожденный случай без git.
+
+        Ловит мутацию: если проверка `available` уберётся и функция
+        начнёт подставлять `current` независимо от него, здесь вместо
+        пустой строки окажется мусорное значение первого элемента кортежа.
+        """
         with mock.patch.object(fixation, "read", return_value=("", False)):
             self.assertEqual(fixation.approve_sha_hint("T1", "artel"), "")
 
     def test_leading_space_and_sha_when_fixed(self):
+        """Фиксация есть — подсказка равна ровно пробелу и полному sha,
+        готовая ко вставке хвостом в строку команды.
+
+        Ловит мутацию: если ведущий пробел потеряется (конкатенация
+        `sha` без разделителя) или в подсказку попадёт часть sha вместо
+        полного значения, сравнение с ` {sha}` не пройдёт.
+        """
         sha = "a" * 40
         with mock.patch.object(fixation, "read", return_value=(sha, True)):
             self.assertEqual(fixation.approve_sha_hint("T1", "artel"), f" {sha}")
@@ -912,6 +926,14 @@ class AutoStopHintIncludesShaOnEveryApproveNeedsShaStateTest(RealPultGitTest):
                         f"зафиксированный sha {sha} не найден в подсказке:\n{out}")
 
     def test_spec_gate_auto_stop_hint_includes_full_fixed_sha(self):
+        """Остановка `auto` на `spec_gate` печатает подсказку `approve`
+        с зафиксированным sha этого состояния.
+
+        Ловит мутацию: если `{sha}` в `config.AUTO_STOP["spec_gate"]`
+        забудут подставить (или `auto_stop_advice` не станет вычислять
+        `sha_hint` для этого состояния), подсказка останется без sha и
+        assertTrue на `any(sha in line ...)` упадёт.
+        """
         sha = self.enter_spec_gate()
 
         out = self.capture(auto.cmd_auto, self.TASK)
@@ -919,6 +941,13 @@ class AutoStopHintIncludesShaOnEveryApproveNeedsShaStateTest(RealPultGitTest):
         self._assert_hint_has_sha(out, sha)
 
     def test_acceptance_auto_stop_hint_includes_full_fixed_sha(self):
+        """Остановка `auto` на `acceptance` печатает подсказку `approve`
+        с зафиксированным sha этого состояния.
+
+        Ловит мутацию: если ветку `acceptance` в `auto_stop_advice`
+        забудут включить в список состояний, для которых считается
+        `sha_hint`, подсказка останется без sha.
+        """
         sha = self.force_state("acceptance")
 
         out = self.capture(auto.cmd_auto, self.TASK)
@@ -929,7 +958,12 @@ class AutoStopHintIncludesShaOnEveryApproveNeedsShaStateTest(RealPultGitTest):
         """Эскалация не по потолку бюджета — `AUTO_STOP["escalated"]`
         несёт `{sha}`; эскалация ПО потолку подменяется на `AUTO_STOP_
         BUDGET` (следующая команда — `budget`, не `approve`) и своего
-        теста не требует — она не называет approve вовсе."""
+        теста не требует — она не называет approve вовсе.
+
+        Ловит мутацию: если `{sha}` в `config.AUTO_STOP["escalated"]`
+        забудут подставить, подсказка останется без sha и `_assert_hint_
+        has_sha` не найдёт его в выводе.
+        """
         sha = self.force_state("escalated")
 
         out = self.capture(auto.cmd_auto, self.TASK)
@@ -951,6 +985,16 @@ class AutogateMergeGateHintIncludesShaTest(RealPultGitTest):
     """
 
     def test_autogate_transition_hint_includes_full_fixed_sha(self):
+        """Автоматический переход `acceptance -> merge_gate` через
+        `_maybe_autogate_acceptance` печатает подсказку `approve` с
+        зафиксированным sha, как и ручной путь из AC-1.
+
+        Ловит мутацию: если `{sha}` забудут подставить именно в этой
+        точке печати (второй сайт, отдельный от `fsm._cmd_approve`),
+        подсказка автогейта останется без sha, а `fsm._cmd_approve`
+        по-прежнему будет его печатать — асимметрия, которую поймает
+        только тест именно этого сайта.
+        """
         self.enter_in_dev()
         conn = store.db()
         store.set_state(conn, self.TASK, "acceptance", "operator",
@@ -982,6 +1026,15 @@ class RunnerEscalationHintsIncludeShaTest(RealPultGitTest):
     """
 
     def test_integrity_incident_hint_includes_full_fixed_sha(self):
+        """Инцидент целостности (артефакт подменён мимо гейта) уводит
+        задачу в `escalated` и печатает подсказку `approve` с реальным
+        зафиксированным sha вместо буквального плейсхолдера `<sha>`.
+
+        Ловит мутацию: если `runner._cmd_run` на этом пути вернёт
+        подсказку без вычисленного `approve_sha_hint` (старое поведение
+        — буквальный `<sha>` или пустая подсказка), sha в выводе не
+        найдётся.
+        """
         sha = self.enter_in_dev()
         (self.task_dir() / "SPEC.md").write_text(
             "подмена мимо гейта\n", encoding="utf-8")
@@ -999,6 +1052,15 @@ class RunnerEscalationHintsIncludeShaTest(RealPultGitTest):
                         f"зафиксированный sha {sha} не найден в подсказке:\n{out}")
 
     def test_agent_failure_escalation_hint_includes_full_fixed_sha(self):
+        """Провал агента после исчерпанных попыток уводит задачу в
+        `escalated` и печатает подсказку `approve` с зафиксированным sha
+        — второй сайт эскалации в `runner._cmd_run`, отдельный от
+        инцидента целостности.
+
+        Ловит мутацию: если sha подставляется только на пути инцидента
+        целостности, а этот сайт (провал агента) забудут завести на тот
+        же `approve_sha_hint`, подсказка здесь останется без sha.
+        """
         sha = self.enter_in_dev()
 
         with mock.patch.object(
@@ -1024,6 +1086,14 @@ class ApproveAcceptsFixedShaPrefixTest(RealPultGitTest):
     """
 
     def test_prefix_of_fixed_sha_transitions_like_the_full_value(self):
+        """`approve` с минимально допустимым префиксом (`APPROVE_SHA_
+        PREFIX_MIN` символов) зафиксированного sha на реальной ветке
+        задачи переводит `spec_gate -> in_dev` так же, как полный sha.
+
+        Ловит мутацию: если сравнение снова станет строгим `sha ==
+        current` вместо `current.startswith(sha)` после проверки длины,
+        approve с префиксом отклонится и состояние останется `spec_gate`.
+        """
         sha = self.enter_spec_gate()
         prefix = sha[:fsm.APPROVE_SHA_PREFIX_MIN]
 
@@ -1033,6 +1103,15 @@ class ApproveAcceptsFixedShaPrefixTest(RealPultGitTest):
                          "in_dev")
 
     def test_value_of_min_length_not_a_prefix_is_refused_with_fixed_sha(self):
+        """Значение допустимой длины (`APPROVE_SHA_PREFIX_MIN` символов),
+        которое НЕ является префиксом зафиксированного sha, отклоняется
+        прежним отказом «не совпадает» с печатью зафиксированного sha,
+        состояние не двигается.
+
+        Ловит мутацию: если проверка длины подменит собой сравнение
+        содержимого (любое значение нужной длины проходит), approve с
+        заведомо неверным значением ошибочно переведёт задачу в `in_dev`.
+        """
         sha = self.enter_spec_gate()
         wrong = ("0" if sha[0] != "0" else "1") + "0" * (
             fsm.APPROVE_SHA_PREFIX_MIN - 1)
@@ -1046,6 +1125,16 @@ class ApproveAcceptsFixedShaPrefixTest(RealPultGitTest):
                          "spec_gate")
 
     def test_value_shorter_than_min_length_is_refused_by_name(self):
+        """Значение короче `APPROVE_SHA_PREFIX_MIN` символов отклоняется
+        отдельным именованным отказом про минимальную длину — раньше
+        проверки совпадения, с другим текстом, чем «не совпадает».
+
+        Ловит мутацию: если проверка длины уберётся или переставится
+        после сравнения по `startswith` (короткая строка — валидный
+        префикс любого sha), короткое значение либо пройдёт как
+        approve, либо будет отклонено текстом «не совпадает», а не
+        именованным отказом про длину.
+        """
         sha = self.enter_spec_gate()
         too_short = sha[:fsm.APPROVE_SHA_PREFIX_MIN - 1]
 
