@@ -1,5 +1,5 @@
 ---
-built_at_sha: 0e32a988b5775db571466366f8cc8192c5fb9857
+built_at_sha: d424d58f32d30111fe66af5001defc2c393059fd
 ---
 
 # Codebase-map пульта
@@ -35,6 +35,7 @@ built_at_sha: 0e32a988b5775db571466366f8cc8192c5fb9857
 **Назначение:** Наблюдаемость шага: файлы логов прогонов и перекачка вывода агента.
 
 **Публичные функции:**
+- `environment_fingerprint`
 - `last_agent_log`
 - `log_tail`
 - `new_agent_log`
@@ -46,7 +47,7 @@ built_at_sha: 0e32a988b5775db571466366f8cc8192c5fb9857
 
 **Импортирует:** `orchestrator/config.py`, `orchestrator/spend.py`
 
-**Импортируется:** `orchestrator/auto.py`, `orchestrator/pause.py`, `orchestrator/report.py`, `orchestrator/runner.py`, `tests/test_agent_failure.py`, `tests/test_agent_log.py`, `tests/test_auto_cycle.py`, `tests/test_kill_cleanup.py`, `tests/test_pause_now.py`, `tests/test_report.py`, `tests/test_step_cost.py`
+**Импортируется:** `orchestrator/auto.py`, `orchestrator/fsm_advance.py`, `orchestrator/pause.py`, `orchestrator/report.py`, `orchestrator/runner.py`, `tests/test_acceptance_tests_flow.py`, `tests/test_agent_failure.py`, `tests/test_agent_log.py`, `tests/test_auto_cycle.py`, `tests/test_kill_cleanup.py`, `tests/test_pause_now.py`, `tests/test_report.py`, `tests/test_step_cost.py`
 
 ## orchestrator/alerts.py
 
@@ -358,7 +359,7 @@ built_at_sha: 0e32a988b5775db571466366f8cc8192c5fb9857
 - `tests_writing`
 - `verifying`
 
-**Импортирует:** `orchestrator/acceptance.py`, `orchestrator/artifact_source.py`, `orchestrator/artifacts.py`, `orchestrator/budget.py`, `orchestrator/ci.py`, `orchestrator/config.py`, `orchestrator/fsm.py`, `orchestrator/fsm_autogate.py`, `orchestrator/gitcmd.py`, `orchestrator/store.py`, `orchestrator/workspace.py`, `orchestrator/yamlmini.py`, `scripts/guard.py`
+**Импортирует:** `orchestrator/acceptance.py`, `orchestrator/agent_log.py`, `orchestrator/artifact_source.py`, `orchestrator/artifacts.py`, `orchestrator/budget.py`, `orchestrator/ci.py`, `orchestrator/config.py`, `orchestrator/fsm.py`, `orchestrator/fsm_autogate.py`, `orchestrator/gitcmd.py`, `orchestrator/store.py`, `orchestrator/workspace.py`, `orchestrator/yamlmini.py`, `scripts/guard.py`
 
 **Импортируется:** `orchestrator/fsm.py`
 
@@ -896,9 +897,10 @@ built_at_sha: 0e32a988b5775db571466366f8cc8192c5fb9857
 
 **Назначение:** Тесты A4 — роль test_author, приёмочные тесты до кода (tasks/T023/SPEC.md).
 
-**Публичные функции:** (нет)
+**Публичные функции:**
+- `version_stub_run`
 
-**Импортирует:** `orchestrator/acceptance.py`, `orchestrator/catalog.py`, `orchestrator/config.py`, `orchestrator/fsm.py`, `orchestrator/gitcmd.py`, `orchestrator/runner.py`, `orchestrator/store.py`, `orchestrator/workspace.py`, `scripts/guard.py`, `tests/sandbox.py`
+**Импортирует:** `orchestrator/acceptance.py`, `orchestrator/agent_log.py`, `orchestrator/catalog.py`, `orchestrator/config.py`, `orchestrator/fsm.py`, `orchestrator/gitcmd.py`, `orchestrator/runner.py`, `orchestrator/store.py`, `orchestrator/workspace.py`, `scripts/guard.py`, `tests/sandbox.py`
 
 **Импортируется:** —
 

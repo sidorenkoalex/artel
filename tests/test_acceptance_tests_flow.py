@@ -25,7 +25,7 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from orchestrator import (acceptance, catalog, config, fsm,  # noqa: E402
+from orchestrator import (acceptance, agent_log, catalog, config, fsm,  # noqa: E402
                           gitcmd, runner, store, workspace)
 from scripts import guard  # noqa: E402
 from tests.sandbox import (FakeProc, TmpRootTest, capture,  # noqa: E402
@@ -190,6 +190,24 @@ class AcceptanceTest(unittest.TestCase):
     def test_ac2_second_criterion(self):
         self.fail("код ещё не реализован")
 """
+
+
+def version_stub_run(git_stdout: str = "git version 9.9.9\n"):
+    """`subprocess.run` side_effect (SPEC T101): отвечает на `git --version`/
+    `claude --version` фиксированными строками, остальное (реальный
+    `python3 -m unittest discover` внутри `acceptance.run`) уходит в
+    настоящий `subprocess.run` — не подменяет прогон приёмки, только
+    версии инструментов, которые снимает fingerprint окружения."""
+    real_run = subprocess.run
+    claude_stdout = f"{config.CLI_VERSION_PIN} (Claude Code)\n"
+
+    def run(cmd, *a, **kw):
+        if cmd and cmd[0] == "git" and "--version" in cmd:
+            return subprocess.CompletedProcess(cmd, 0, git_stdout, "")
+        if cmd and cmd[0] == "claude" and "--version" in cmd:
+            return subprocess.CompletedProcess(cmd, 0, claude_stdout, "")
+        return real_run(cmd, *a, **kw)
+    return run
 
 
 class _AcceptanceFlowTmpRootTest(TmpRootTest):
@@ -801,6 +819,22 @@ class AcceptanceRunTest(TmpRootTest):
         details = self.journal_details("переход отклонён: приёмочные тесты")
         self.assertEqual(len(details), 1)
 
+    def test_environment_fingerprint_lands_in_the_red_journal_entry(self):
+        """SPEC T101, требование 4б/AC-5 — fingerprint в исходе прогона
+        приёмочных тестов, ветка «красный прогон»."""
+        self.enter_review()
+        self.write_acceptance_tests(AC_TEST_RED)
+        agent_log._environment_fingerprint_cache = None
+        self.addCleanup(setattr, agent_log, "_environment_fingerprint_cache", None)
+
+        with mock.patch("subprocess.run", side_effect=version_stub_run()):
+            self.capture(fsm.cmd_advance, self.TASK)
+
+        details = self.journal_details("переход отклонён: приёмочные тесты")
+        self.assertEqual(len(details), 1)
+        self.assertIn("9.9.9", details[0])
+        self.assertIn(config.CLI_VERSION_PIN, details[0])
+
     def test_green_acceptance_tests_transition_and_print_summary(self):
         self.enter_review()
         self.write_acceptance_tests(AC_TEST_BOTH_COVERED)
@@ -819,6 +853,22 @@ class AcceptanceRunTest(TmpRootTest):
 
         details = self.journal_details("приёмочные тесты пройдены")
         self.assertEqual(len(details), 1)
+
+    def test_environment_fingerprint_lands_in_the_green_journal_entry(self):
+        """SPEC T101, требование 4б/AC-5 — та же fingerprint, ветка
+        «зелёный прогон» (журнал «приёмочные тесты пройдены»)."""
+        self.enter_review()
+        self.write_acceptance_tests(AC_TEST_BOTH_COVERED)
+        agent_log._environment_fingerprint_cache = None
+        self.addCleanup(setattr, agent_log, "_environment_fingerprint_cache", None)
+
+        with mock.patch("subprocess.run", side_effect=version_stub_run()):
+            self.capture(fsm.cmd_advance, self.TASK)
+
+        details = self.journal_details("приёмочные тесты пройдены")
+        self.assertEqual(len(details), 1)
+        self.assertIn("9.9.9", details[0])
+        self.assertIn(config.CLI_VERSION_PIN, details[0])
 
     def test_no_acceptance_tests_directory_does_not_block_legacy_tasks(self):
         """Задачи без acceptance_tests/ (skip_tests, либо старше T023)."""
