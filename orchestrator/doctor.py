@@ -70,6 +70,11 @@ ISOLATION_MARKER = "АРТЕЛЬ-ИЗОЛЯЦИЯ-A3-МАРКЕР-НЕ-ДОЛЖ�
 ISOLATION_SMOKE_TARGET = "__doctor_isolation_smoke__"
 LIVE_SMOKE_PROMPT = "Ответь одним словом: ок."
 LIVE_SMOKE_TIMEOUT_SEC = 120
+# Анти-race `check_leases` (SPEC 01M1G..., требование 5, AC-9): интервал
+# между двумя снимками `liveness._pid_alive` одного и того же lease перед
+# тем, как считать его мёртвым — тот же порядок величины, что уже
+# использует `pause.TERMINATE_POLL_SEC` для опроса живости pid.
+LEASE_DEAD_RECHECK_SEC = 0.05
 
 
 # --- окружение шага (требование 2, 5, 9) ------------------------------
@@ -682,10 +687,109 @@ def _merge_lock_alert_live(message: str, row) -> bool:
     return not liveness._pid_alive(row["pid"])
 
 
+# --- рекон осиротевшего шага (SPEC 01M1G..., требование 4, AC-7/AC-8) ---
+
+# Терминальные события, закрывающие «agent run started» тем же приёмом,
+# что уже пишет `orchestrator/runner.py` (`store.journal(..., "agent run
+# ...")`): любое из них ПОСЛЕ старта — шаг довели до конца, не сирота.
+_STEP_TERMINAL_ACTIONS = {
+    "agent run finished", "agent run FAILED", "agent run TIMEOUT",
+    "agent run SKIPPED",
+}
+# Маркер терминального события САМОГО РЕКОНА (см. `_reconcile_orphaned_
+# step` ниже) — засчитывается как та же терминальная пара: повторный
+# проход по журналу больше не видит уже реконенный старт сиротой
+# (идемпотентность, AC-8).
+_ORPHAN_ACTION_MARKER = "шаг оборван"
+
+
+def _orphaned_start_step(steps):
+    """Последнее «agent run started» без терминальной пары ГДЕ УГОДНО
+    дальше в журнале — не только сравнением с последней записью (реконом
+    может быть пропущено другое событие между стартом и обрывом, см.
+    докстринг AC-7 приёмочного теста). `steps` — журнал ОДНОЙ задачи по
+    порядку записи; `None` — сирот нет."""
+    pending = None
+    for s in steps:
+        action = s["action"] or ""
+        if action == "agent run started":
+            pending = s
+        elif action in _STEP_TERMINAL_ACTIONS or _ORPHAN_ACTION_MARKER in action:
+            pending = None
+    return pending
+
+
+def _reconcile_orphaned_step(conn, task_id: str, dead_session_id: str,
+                             steps: list) -> None:
+    """Дописывает «шаг оборван смертью сессии `<id>`» для «agent run
+    started» без терминальной пары, если он есть (SPEC 01M1G..., AC-7).
+
+    `steps` — снимок журнала, снятый ДО этого вызова (в `check_leases`,
+    до печати FAIL-строки): реконенное событие не должно само стать
+    «последним событием задачи» в FAIL-строке этого же прогона (иначе
+    Оператор не увидел бы, что реально происходило до рекона)."""
+    orphan = _orphaned_start_step(steps)
+    if orphan is None:
+        return
+    action = f"шаг оборван смертью сессии {dead_session_id}"
+    detail = (f"шаг id={orphan['id']} ({orphan['actor']}), старт "
+             f"{orphan['ts']}: {orphan['detail'] or '—'}")
+    store.journal(conn, task_id, "doctor", action, detail)
+
+
+def _last_start_step(steps):
+    """Последняя запись «agent run started» в журнале задачи, ЗАКРЫТА она
+    терминальной парой или нет — в отличие от `_orphaned_start_step`,
+    которая ищет только НЕзакрытую (для идемпотентного рекона, AC-7/AC-8).
+    Используется в FAIL-строке `check_leases` (AC-10, REVIEW.md
+    итерации 1, R1-F1): держатель lease мог умереть МЕЖДУ шагами, когда
+    последний запуск агента уже штатно завершился терминальным событием —
+    Оператору всё равно нужен номер и время старта ПОСЛЕДНЕГО шага
+    задачи, не только оборванного. `None` — агент по этой задаче ещё ни
+    разу не запускался (в журнале нет ни одной записи «agent run
+    started»)."""
+    last = None
+    for s in steps:
+        if (s["action"] or "") == "agent run started":
+            last = s
+    return last
+
+
+def _lease_fail_detail(conn, row, steps: list) -> str:
+    """FAIL-строка `check_leases` по мёртвому lease (SPEC 01M1G...,
+    требование 5, AC-10): держатель/pid/host (существующий текст,
+    прежде байт-в-байт совпадавший с сообщением алерта) + роль держателя,
+    номер и время старта последнего шага задачи (не только оборванного —
+    R1-F1) и последнее журнальное событие задачи — Оператору не нужно
+    отдельно звать `log`, чтобы понять, что произошло."""
+    base = (f"{row['task_id']}: lease сессии {row['session_id']} "
+           f"мёртв (pid {row['pid']} на {row['hostname']})")
+    t = store.get_task(conn, row["task_id"])
+    role = config.STATE_ROLE.get(t["state"], t["state"])
+    parts = [base, f"роль {role}"]
+    last_start = _last_start_step(steps)
+    if last_start is not None:
+        parts.append(f"шаг {last_start['id']} (старт {last_start['ts']})")
+    if steps:
+        last = steps[-1]
+        parts.append(f"последнее событие: {last['action']} ({last['ts']})")
+    return ", ".join(parts)
+
+
 def check_leases(conn) -> list[Check]:
-    """Требование 11: lease с мёртвым pid НА ЭТОМ host — incident-алерт,
-    по аналогии с `check_orphans`. Чужой host не проверяется — pid без
-    доступа к его процессной таблице нельзя ни подтвердить, ни опровергнуть.
+    """Требование 11 (T044)/5 (01M1G...): lease с мёртвым pid НА ЭТОМ host
+    — incident-алерт, по аналогии с `check_orphans`. Чужой host не
+    проверяется — pid без доступа к его процессной таблице нельзя ни
+    подтвердить, ни опровергнуть.
+
+    Анти-race (AC-9): «мёртв» на первом снимке — не окончательный вердикт,
+    пока не подтверждён вторым снимком после `LEASE_DEAD_RECHECK_SEC` —
+    ловит гонку между pid'ами двух соседних шагов ОДНОЙ сессии (шаг A уже
+    завершился, шаг B ещё не стартовал).
+
+    Каждый подтверждённо мёртвый lease заодно реконит осиротевший шаг
+    задачи (AC-7/AC-8) — `doctor.check_leases` уже владеет и мёртвым pid,
+    и строкой `leases` в одном месте (SPEC, «Материалы»).
 
     Авто-ack (SPEC T054, требование 1) зовётся на каждом прогоне, не
     только когда найден свежий мёртвый lease — иначе алерт прошлого
@@ -694,19 +798,31 @@ def check_leases(conn) -> list[Check]:
     """
     host = socket.gethostname()
     rows = store.all_leases(conn)
-    dead = [row for row in rows
-           if row["hostname"] == host and not liveness._pid_alive(row["pid"])]
+    candidates = [row for row in rows
+                 if row["hostname"] == host and not liveness._pid_alive(row["pid"])]
+    dead = []
+    for row in candidates:
+        time.sleep(LEASE_DEAD_RECHECK_SEC)
+        if not liveness._pid_alive(row["pid"]):
+            dead.append(row)
 
     if not dead:
         results = [Check("leases", "ok", "нет lease с мёртвым pid на этом host")]
     else:
         results = []
         for row in dead:
+            steps = store.task_steps(conn, row["task_id"])
+            _reconcile_orphaned_step(conn, row["task_id"], row["session_id"], steps)
+            # Сообщение алерта — прежний формат байт-в-байт (не FAIL-строка
+            # `Check` ниже): `_LEASE_ALERT_RE`/`_lease_alert_live` разбирают
+            # именно его для авто-ack, менять его означало бы сломать AC-1
+            # SPEC T054.
             message = (f"{row['task_id']}: lease сессии {row['session_id']} "
                       f"мёртв (pid {row['pid']} на {row['hostname']})")
             alerts.raise_alert(conn, store.task_target(conn, row["task_id"]),
                               "incident", "doctor.leases", message)
-            results.append(Check("leases", "fail", message))
+            results.append(Check("leases", "fail",
+                                 _lease_fail_detail(conn, row, steps)))
 
     rows_by_task = {row["task_id"]: row for row in rows}
     _auto_ack_gone(conn, "doctor.leases",

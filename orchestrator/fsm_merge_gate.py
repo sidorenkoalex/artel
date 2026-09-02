@@ -20,7 +20,8 @@ import tempfile
 import time
 from pathlib import Path
 
-from . import ci, cleanup, config, fsm, fsm_postmerge, gitcmd, merge_lock, store, workspace
+from . import (ci, cleanup, config, fsm, fsm_postmerge, gitcmd,
+              github_adapter, lease, merge_lock, store, workspace)
 
 
 def _touches_protected_path(path: str) -> bool:
@@ -227,6 +228,24 @@ def _cmd_approve_merge_gate(conn, task_id: str, state: str, t,
     # AC-10 (ANSWER-1, вопрос 1): проверка «главная копия на main» убрана
     # целиком — плотницкий merge (Stage0, ниже) не читает и не требует
     # чекаута `config.ROOT` вовсе, ему структурно нечего защищать.
+    #
+    # Голова ветки задачи на origin — предусловие КАЖДОГО approve
+    # merge_gate (SPEC 01M1GS5HZ1JXFGKVR95HEW0AEZ, требование 7,
+    # AC-8/AC-9), самой первой строкой тела: расхождение может
+    # появиться уже ПОСЛЕ входа на гейт (новый коммит на ветке задачи
+    # между заходами approve/цикла ожидания CI), не только на самом
+    # входе. Провал — graceful возврат, задача остаётся на merge_gate
+    # без эскалации; повторный approve после починки origin продолжает
+    # штатно (AC-9). Эта проверка не зависит от чекаута `config.ROOT`
+    # (она про ветку ЗАДАЧИ в origin, не про главную копию) — Stage0 её
+    # не отменяет.
+    push_ok, push_detail = github_adapter.ensure_head_in_origin(
+        conn, task_id, branch)
+    if not push_ok:
+        store.journal(conn, task_id, "orchestrator",
+                      "approve отклонён: голова не в origin", push_detail)
+        print(f"[{task_id}] approve отклонён: {push_detail}")
+        return ("stopped",)
     # Сверка свежести ветки ПОД МЬЮТЕКСОМ, до сверки CI (SPEC T053,
     # требования 5-8): main мог уйти вперёд, пока задача стояла на гейте
     # или ждала освобождения чужого merge-окна — дыра №2 из «Контекста»
@@ -336,6 +355,10 @@ def _cmd_approve_merge_gate(conn, task_id: str, state: str, t,
                  f"{push.stderr if push is not None else '—'}")
     store.set_state(conn, task_id, "done", "orchestrator",
                     expected_state=state, detail=f"смержено: {branch}")
+    # Успешное закрытие задачи обязано снять lease безусловно, «любым
+    # путём» (SPEC 01M1G..., требование 3, AC-6) — этот путь раньше lease
+    # не трогал вовсе.
+    lease.release_any(conn, task_id, "orchestrator", "lease снят: задача done")
     # Снапшот закрытия (SPEC T094, требования 12-13, AC-13, AC-15) — ДО
     # уборки веток ниже, тем же узлом, что и `cleanup._cmd_kill` для
     # пути `killed`: внешний target, не канарейка (self/канарейка снапшот

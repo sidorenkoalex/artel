@@ -40,9 +40,17 @@ jobs:
           # protected-paths ниже) — существующий легаси-парсер
           # (orchestrator/store.py, TASK_ID, требование 6) не тронут этим
           # PR и линт его не видит.
-          PATTERN='T%0[0-9]|T\{[a-zA-Z_]*:0[0-9]+d\}|\\d\{3\}|TASK_ID *= *re\.compile|r["'"'"']\^?T\\\\?d'
-          ADDED=$(git diff "$BASE_SHA"...HEAD -- . ':!orchestrator/idgen.py' \
-            | grep -E '^\+' | grep -Ev '^\+\+\+' | grep -E "$PATTERN" || true)
+          # Область — только *.py (правка Оператора 02.09): назначение
+          # линта — «КОД не парсит формат id»; Markdown-артефакты задач
+          # (PLAN/REVIEW/RETRO), цитирующие шаблон в прозе, давали
+          # ложные срабатывания.
+          #
+          # Образцы — общий источник с проверкой перехода tests_writing ->
+          # in_dev (SPEC 01M1H186VEVG6NF40YKH1338MD, требование 2/AC-3):
+          # scripts/id_format_patterns.txt, не инлайн-паттерн здесь —
+          # правка файла меняет обе проверки без правки этого job'а.
+          ADDED=$(git diff "$BASE_SHA"...HEAD -- '*.py' ':!orchestrator/idgen.py' \
+            | grep -E '^\+' | grep -Ev '^\+\+\+' | grep -Ef scripts/id_format_patterns.txt || true)
           if [ -n "$ADDED" ]; then
             echo "::error::диф добавляет парсинг формата id задачи вне orchestrator/idgen.py (SPEC T094, требование 4):"
             echo "$ADDED"

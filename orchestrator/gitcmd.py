@@ -218,6 +218,21 @@ def show(branch: str, rel: str) -> tuple[str | None, str]:
     return None, res.stderr.strip()[:200] or f"git show вернул {res.returncode}"
 
 
+def remote_branch_sha(branch: str) -> str:
+    """sha `branch` в `origin`; пустая строка — там такой ветки нет (ещё не
+    публиковалась, либо разошлась по имени) или git не ответил.
+
+    Адресуется полным `refs/heads/<branch>`, не голым именем ветки (SPEC
+    01M1GS5HZ1JXFGKVR95HEW0AEZ, AC-2): `git ls-remote origin <branch>`
+    неполным именем мог бы зацепить одноимённый тег — здесь сверяется
+    именно голова ветки-задачи.
+    """
+    res = git("ls-remote", "origin", f"refs/heads/{branch}")
+    if res is None or res.returncode != 0 or not res.stdout.strip():
+        return ""
+    return res.stdout.split()[0]
+
+
 def ls_tree_files(branch: str, rel_dir: str) -> list[str] | None:
     """Пути файлов под `rel_dir` в дереве `branch`; None — git не ответил.
 

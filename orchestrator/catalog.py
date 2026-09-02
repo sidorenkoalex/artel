@@ -1,11 +1,12 @@
 """Каталог задач: заведение, список, карточка задачи, журнал шагов."""
 import re
 import shutil
+import socket
 import sys
 from pathlib import Path
 
 from . import (alerts, artifact_branch, artifacts, budget, config, gitcmd,
-              idgen, store)
+              idgen, liveness, store)
 
 # ГОСТ-подобная транслитерация: только stdlib, без внешних зависимостей.
 # ъ/ь пропускаются; ё → yo; щ → sch; ю → yu; я → ya.
@@ -175,6 +176,28 @@ def _new_external_artifact_branch(task_id: str, title: str, spec: str,
     artifact_branch.push(task_id)
 
 
+def _lease_holder_suffix(conn, task_id: str) -> str:
+    """Держатель lease задачи, если он есть — identity + жив/мёртв (SPEC
+    01M1G..., требование 6, AC-11), ДОБАВКОЙ в конец строки `status`, не
+    заменой существующих колонок.
+
+    Живость проверяется, только если держатель на ЭТОМ host — тот же
+    приём различения «свой/чужой host», которым уже пользуется
+    `doctor.check_leases`/`check_merge_lock`: pid чужого host нельзя ни
+    подтвердить мёртвым, ни опровергнуть, поэтому он молча считается
+    «жив» (то же допущение, что уже принял `doctor.check_merge_lock`
+    для мёртвого держателя на чужом host).
+    """
+    row = store.lease_row(conn, task_id)
+    if row is None:
+        return ""
+    if row["hostname"] == socket.gethostname():
+        alive = liveness._pid_alive(row["pid"])
+    else:
+        alive = True
+    return f"  [lease: {row['session_id']} {'жив' if alive else 'мёртв'}]"
+
+
 def cmd_status() -> None:
     conn = store.db()
     rows = store.all_tasks(conn)
@@ -187,10 +210,12 @@ def cmd_status() -> None:
         # требование 6), не в `title` самой задачи: строка `status` видна
         # Оператору, не роли внутри промпта шага.
         mark = "  [canary]" if r["is_canary"] else ""
+        holder = _lease_holder_suffix(conn, r["id"])
         print(
             f"{r['id']}  {r['state']:<13} "
             f"ревью {r['review_iters']}/{config.LIMIT_REVIEW_ITERS}"
-            f"  ${r['spent_usd']:.2f}/{r['budget_usd']:.2f}  {r['title']}{flag}{mark}"
+            f"  ${r['spent_usd']:.2f}/{r['budget_usd']:.2f}  {r['title']}"
+            f"{flag}{mark}{holder}"
         )
 
     # Требование 7 SPEC T022: триггеры docs/triggers.md — отдельная секция
@@ -244,5 +269,12 @@ def cmd_log(task_id: str) -> None:
     # замечание 1).
     task_id = store.resolve_task_id(conn, task_id)
     for r in store.task_steps(conn, task_id):
-        print(f"{r['ts']}  {r['actor']:<12} {r['action']}"
-              + (f"  | {r['detail']}" if r["detail"] else ""))
+        line = f"{r['ts']}  {r['actor']:<12} {r['action']}"
+        if r["detail"]:
+            line += f"  | {r['detail']}"
+        # session_id — ДОБАВКОЙ в конец, одной строкой (SPEC 01M1G...,
+        # AC-3): NULL у записей старше миграции (`store.migrate`) — молча
+        # не показывается, не «None» текстом.
+        if r["session_id"]:
+            line += f"  [{r['session_id']}]"
+        print(line)

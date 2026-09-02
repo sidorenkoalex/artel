@@ -215,6 +215,11 @@ def _cmd_kill(conn, task_id: str) -> None:
             state = exc.actual
     if not won:
         print(f"[{task_id}] уже {state} — kill не требуется")
+    # kill обязан снять lease задачи безусловно, «любым путём» (SPEC
+    # 01M1G..., требование 3, AC-6) — независимо от того, взял ли его
+    # штатный `run_locked` этого же вызова «с нуля» (тот отпустил бы его
+    # сам только в этом случае, см. `orchestrator/lease.py`).
+    lease.release_any(conn, task_id, "orchestrator", "kill: lease снят")
     _publish_snapshot_if_pending(conn, task_id, target, bool(t["is_canary"]))
     cleanup_killed_task(conn, task_id, t["branch"])
 

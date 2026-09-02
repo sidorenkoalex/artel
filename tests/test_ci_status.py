@@ -461,6 +461,88 @@ class VerifyingStatusTest(unittest.TestCase):
         self.assertEqual(called, [], "run_list вызван, хотя check_runs уже ответил")
 
 
+class CommitNotFoundInOriginTest(unittest.TestCase):
+    """`ci._commit_not_found_in_origin` (SPEC
+    01M1GS5HZ1JXFGKVR95HEW0AEZ, требование 4): сверка по подстроке "422",
+    тем же приёмом, что `status_kind`/`verifying_is_red` уже применяют."""
+
+    def test_detects_the_422_substring(self):
+        self.assertTrue(ci._commit_not_found_in_origin(
+            "gh не ответил: HTTP 422: No commit found for SHA: abc"))
+
+    def test_other_failures_are_not_detected(self):
+        self.assertFalse(ci._commit_not_found_in_origin(
+            "gh не ответил: gh молчал дольше 10 с"))
+
+
+class VerifyingStatus422Test(unittest.TestCase):
+    """`ci.verifying_status` различает HTTP 422 («коммит не найден») от
+    прочих сбоев опроса CI (SPEC 01M1GS5HZ1JXFGKVR95HEW0AEZ, требование 4,
+    AC-6): вместо нейтрального «статус неизвестен» — именованная причина
+    «голова не в origin» с подсказкой push, и без бесполезного фолбэка на
+    `gh run list` (коммита на GitHub нет вовсе — прогон с ним не свяжется).
+    """
+
+    def setUp(self):
+        patcher = mock.patch.object(ci, "head_sha", lambda branch: (SHA, ""))
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def set_check_runs(self, runs, why: str = "") -> None:
+        patcher = mock.patch.object(ci, "check_runs", lambda sha: (runs, why))
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def test_422_note_names_head_not_in_origin_with_a_push_hint(self):
+        self.set_check_runs(
+            None, "gh не ответил: HTTP 422: No commit found for SHA: "
+            f"{SHA} (https://api.github.com/repos/x/y/commits/{SHA}/check-runs)")
+
+        outcome, note = ci.verifying_status("task/t001-x")
+
+        self.assertEqual(outcome, ci.VERIFYING_NONE)
+        lowered = note.lower()
+        self.assertIn("голова", lowered)
+        self.assertIn("origin", lowered)
+        self.assertIn("push", lowered)
+        self.assertIn("task/t001-x", note)
+
+    def test_422_does_not_fall_back_to_run_list(self):
+        self.set_check_runs(None, "gh не ответил: HTTP 422: No commit found")
+        called = []
+        patcher = mock.patch.object(
+            ci, "run_list", lambda branch: called.append(branch) or ([], ""))
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+        ci.verifying_status("task/t001-x")
+
+        self.assertEqual(called, [], "gh run list не должен был спрашиваться")
+
+    def test_non_422_failure_keeps_the_neutral_wording(self):
+        self.set_check_runs(None, "gh не ответил: gh молчал дольше 10 с")
+        patcher = mock.patch.object(ci, "run_list", lambda branch: ([], ""))
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+        _outcome, note = ci.verifying_status("task/t001-x")
+
+        self.assertNotIn("push", note.lower())
+
+    def test_empty_check_runs_list_is_not_treated_as_422(self):
+        """Пустой список без ошибки — легитимное «проверок нет», не 422:
+        различение обязано смотреть на `runs is None`, не только на `why`."""
+        self.set_check_runs([])
+        patcher = mock.patch.object(ci, "run_list", lambda branch: ([], ""))
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+        outcome, note = ci.verifying_status("task/t001-x")
+
+        self.assertEqual(outcome, ci.VERIFYING_NONE)
+        self.assertNotIn("push", note.lower())
+
+
 class VerifyingIsRedTest(unittest.TestCase):
     """`ci.verifying_is_red` (SPEC T086, требование 2): различает
     завершённый красный CI от прочих трёх исходов `verifying_status` по
