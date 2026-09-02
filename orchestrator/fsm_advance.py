@@ -9,8 +9,9 @@ import shutil
 
 from scripts import guard
 
-from . import (acceptance, artifact_source, artifacts, budget, ci, config,
-              fsm, fsm_autogate, gitcmd, store, workspace, yamlmini)
+from . import (acceptance, agent_log, artifact_source, artifacts, budget,
+              ci, config, fsm, fsm_autogate, gitcmd, store, workspace,
+              yamlmini)
 # Функция, не модуль (SPEC 01M1GCN1FPSC1A6WK9WD1Q1V8X, требование 5): этот
 # же модуль ниже определяет обработчик состояния `review` под тем же
 # именем `review` — `from . import review` тут вело бы к коллизии имён,
@@ -202,8 +203,15 @@ def review(conn, task_id: str, t, tdir, target: str, state: str) -> bool:
             acc_tdir = workspace.path(task_id) / "tasks" / task_id
         try:
             green, tail = acceptance.run(acc_tdir)
+            # Fingerprint окружения (SPEC T101, требование 4б, AC-5) —
+            # часть исхода прогона приёмочных тестов, тем же приёмом, что
+            # и у события агентного шага (`runner.py`): значение поля
+            # `detail` существующего журнального события, без новой
+            # таблицы/колонки.
+            fingerprint = agent_log.environment_fingerprint()
             if not green:
-                detail = f"acceptance_tests красные:\n{tail}"
+                detail = (f"acceptance_tests красные:\n{tail}\n"
+                          f"окружение: {fingerprint}")
                 store.journal(conn, task_id, "fsm",
                               "переход отклонён: приёмочные тесты", detail)
                 print(f"[{task_id}] переход отклонён: приёмочные тесты "
@@ -217,7 +225,7 @@ def review(conn, task_id: str, t, tdir, target: str, state: str) -> bool:
             if cleanup_acc is not None:
                 shutil.rmtree(cleanup_acc, ignore_errors=True)
         store.journal(conn, task_id, "fsm", "приёмочные тесты пройдены",
-                      card)
+                      f"{card}\nокружение: {fingerprint}")
         print(f"[{task_id}] {card}")
         # Вставка verifying между review и acceptance (SPEC T079,
         # требование 4; ADR-0003 п.10): свежий approved + зелёные
