@@ -3,7 +3,7 @@
 — меняется только наличие граничных маркеров вокруг недоверенного
 содержимого.
 
-Зелёный с рождения по числу журналируемых компонентов: то же число
+Зелёный с рождения: тесты этого файла проверяют то же число журналируемых
 компонентов, что `tests/test_brief.py::DeveloperBriefTest.
 test_assembles_three_components_and_journals_their_hashes`/
 `AnalystMapComponentTest.test_adds_only_the_map_and_journals_one_hash`
