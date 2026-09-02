@@ -24,7 +24,6 @@ from .review import git_diff_part as _review_git_diff_part
 # ненадёжен по построению, решение (разделить задачу или поднять потолок)
 # — только Оператора (AC-14).
 CAPACITY_GATE_REASON = "снимок не помещается в один контекст ревью — разделить задачу"
->>>>>>> main
 
 
 def spec_writing(conn, task_id: str, t, tdir, target: str, state: str) -> bool:
