@@ -54,6 +54,18 @@ from _sandbox import LeaseTaskTest, RealGitSandbox, any_step_carries, capture  #
 class ReleaseCommandNamesReleasingSessionTest(LeaseTaskTest):
 
     def test_ac6_release_command_names_the_releasing_session(self):
+        """Обычный путь снятия lease: `release.cmd_release` под явным
+        `ARTEL_SESSION_ID`, отличным от identity текущего держателя,
+        обязан оставить в журнале запись, называющую именно снимающую
+        (вызывающую) сессию.
+
+        Ловит мутацию: разработчик журналирует снятие, но использует для
+        этого identity ПРЕЖНЕГО держателя, прочитанную из самой строки
+        `leases` (`row['session_id']`) — как `cmd_release` делает это
+        сегодня для одного из своих текущих сообщений, — вместо identity
+        вызывающей стороны; тест ставит держателя и releaser'а заведомо
+        разными identity, чтобы такая подмена не прошла незамеченной.
+        """
         self.insert_lease(self.TASK, "sess-holder-release", 424242,
                           "holder-host", store.now())
         before = len(self.steps())
@@ -80,6 +92,19 @@ class KillReleasesLeaseTest(RealGitSandbox):
                           config.DEFAULT_TARGET, config.DEFAULT_BUDGET_USD)
 
     def test_ac6_kill_releases_lease_and_names_the_killing_session(self):
+        """`cleanup.cmd_kill` вызывается той же identity, что уже
+        держит lease (renewal, не «с нуля» — см. докстринг модуля):
+        именно в этом неблагоприятном для штатного `run_locked` случае
+        `kill` обязан снять lease безусловно и назвать снявшую сессию.
+
+        Ловит мутацию: разработчик добавляет журналирование снятия
+        только в штатный путь `run_locked`'s `finally` (срабатывает
+        только когда lease был взят «с нуля» этим же вызовом, `fresh=
+        True`), полагая, что этого достаточно — тест намеренно ставит
+        lease уже принадлежащим той же identity ДО вызова `kill`
+        (`fresh=False`), поэтому пройдёт только безусловное снятие,
+        которого требует AC-6 «любым путём».
+        """
         with mock.patch.dict(os.environ, {"ARTEL_SESSION_ID": "sess-kill-ac6"}):
             # Lease уже принадлежит той же identity, что резолвит сам
             # `kill` ниже, — `run_locked` внутри `cmd_kill` продлит его
@@ -126,6 +151,17 @@ class PauseNowReleasesLeaseTest(LeaseTaskTest):
         return proc
 
     def test_ac6_pause_now_releases_lease_and_names_the_pausing_session(self):
+        """`pause.cmd_pause_now` под явным `ARTEL_SESSION_ID` снимает
+        lease живого (реально запущенного) процесса-держателя и обязан
+        назвать в журнале именно вызывающую (ставящую паузу) сессию.
+
+        Ловит мутацию: разработчик чинит `lease.release()`, чтобы она
+        журналировала снявшую сессию, но `cmd_pause_now` снимает lease
+        МИМО этой функции — прямым вызовом `store.release_lease` (как
+        делает сегодня) — так что общая правка `release()` не долетает
+        до этого пути; тест ловит именно этот отдельный путь, как и
+        требует AC-6 («тесты покрывают каждый путь отдельно»).
+        """
         proc = self._spawn_sleep_process()
         self.insert_lease(self.TASK, "sess-holder-pausenow", proc.pid,
                           socket.gethostname(), store.now())
@@ -172,6 +208,17 @@ class DoneTransitionReleasesLeaseTest(RealGitSandbox):
         self.addCleanup(ci_patcher.stop)
 
     def test_ac6_done_transition_releases_lease_and_names_the_closing_session(self):
+        """Успешное закрытие задачи (`_cmd_approve_merge_gate`, CI зелёный
+        -> `done`) под явным `ARTEL_SESSION_ID` обязано снять чужой lease
+        и назвать в журнале закрывающую сессию.
+
+        Ловит мутацию: разработчик чинит `release`/`kill`/`pause --now`
+        (три остальных пути AC-6), но не трогает путь `done` вовсе —
+        `_cmd_approve_merge_gate` сегодня не обращается к lease
+        совсем, и остаться так же после задачи проще всего, если этот
+        четвёртый путь просто забыт при переносе одной и той же правки
+        по трём другим местам.
+        """
         conn = store.db()
         conn.execute(
             "INSERT INTO leases (task_id, session_id, pid, hostname,"

@@ -8,9 +8,17 @@
 "ревью X/Y", бюджет, title) остаётся на месте для ЛЮБОЙ задачи, с lease
 или без.
 
-Красный до реализации: сегодня `catalog.cmd_status` не читает таблицу
-`leases` вовсе (`orchestrator/catalog.py::cmd_status`) — держатель нигде
-не появляется.
+Красный до реализации (тесты на держателя — `test_ac11_shows_dead_holder`/
+`test_ac11_shows_alive_holder`): сегодня `catalog.cmd_status` не читает
+таблицу `leases` вовсе (`orchestrator/catalog.py::cmd_status`) —
+держатель нигде не появляется.
+
+Зелёный с рождения (`test_ac11_existing_columns_are_preserved_for_every_
+line`): существующий префикс строки status (id, state, "ревью X/Y",
+бюджет, title) уже сегодня соответствует `EXISTING_COLUMNS_RE` для всех
+трёх задач вне зависимости от lease — тест фиксирует это как регрессионный
+барьер: добавка держателя обязана остаться ДОБАВКОЙ, не заменой или
+перестановкой существующих колонок.
 """
 import os
 import re
@@ -63,6 +71,19 @@ class StatusHolderDisplayTest(TmpRootTest):
                if ln.startswith("T0")}
 
     def test_ac11_existing_columns_are_preserved_for_every_line(self):
+        """Три задачи — без lease, с мёртвым и с живым держателем: во
+        всех трёх строках `status` существующий префикс (id, state,
+        "ревью X/Y", бюджет, title) остаётся на месте и в исходном
+        порядке, независимо от того, добавлена ли информация о lease.
+
+        Зелёный с рождения (см. докстринг модуля).
+
+        Ловит мутацию: разработчик добавляет держателя ПЕРЕД
+        существующими колонками (например, первым полем строки) или
+        вставляет его между `state` и "ревью X/Y" вместо того, чтобы
+        дописать его в конец строки — `EXISTING_COLUMNS_RE` жёстко
+        фиксирует текущий порядок и перестанет совпадать.
+        """
         lines = self._lines()
         for task_id in ("T001", "T002", "T003"):
             self.assertRegex(
@@ -72,6 +93,15 @@ class StatusHolderDisplayTest(TmpRootTest):
                 f"{lines[task_id]!r}")
 
     def test_ac11_shows_dead_holder(self):
+        """Задача T002 несёт lease с гарантированно мёртвым pid
+        (`_sandbox.dead_pid`): строка `status` обязана назвать
+        держателя (`session_id`) и явно сообщить, что он мёртв.
+
+        Ловит мутацию: разработчик показывает identity держателя, но
+        решение «жив/мёртв» берёт не из проверки pid, а из самого факта
+        наличия строки `leases` (lease есть -> «жив» всегда) — эта
+        задача с заведомо мёртвым pid тогда ошибочно покажется живой.
+        """
         line = self._lines()["T002"]
 
         self.assertIn(DEAD_SESSION, line,
@@ -81,6 +111,15 @@ class StatusHolderDisplayTest(TmpRootTest):
             f"строка T002 не сообщает, что держатель lease мёртв: {line!r}")
 
     def test_ac11_shows_alive_holder(self):
+        """Задача T003 несёт lease с pid текущего тестового процесса
+        (заведомо живой): строка `status` обязана назвать держателя и
+        явно сообщить, что он жив.
+
+        Ловит мутацию: разработчик хардкодит вывод «мёртв» для ЛЮБОГО
+        держателя (например, копирует ветку T002 и забывает завести
+        симметричную ветку для живого случая) — эта задача с заведомо
+        живым pid тогда ошибочно покажется мёртвой.
+        """
         line = self._lines()["T003"]
 
         self.assertIn(ALIVE_SESSION, line,

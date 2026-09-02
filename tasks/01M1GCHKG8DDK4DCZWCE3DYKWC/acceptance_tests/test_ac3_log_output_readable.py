@@ -38,6 +38,17 @@ DUMP_MARKERS = ("Row(", "OrderedDict(", "sqlite3.Row", "{'", '{"')
 class LogOutputReadableTest(LeaseTaskTest):
 
     def test_ac3_session_identity_is_shown_as_a_single_readable_line(self):
+        """После `pause` под явным `ARTEL_SESSION_ID` вывод `catalog.
+        cmd_log` называет эту сессию, и делает это одной обычной строкой
+        текста, а не питоновским дампом структуры записи.
+
+        Ловит мутацию: разработчик реализует AC-2 через добавление
+        session_id в `detail`, но склеивает его туда через `str(dict(...))`
+        или `repr(row)` вместо форматированной строки — идентификатор
+        появится в выводе `log` (первая половина теста пройдёт), но
+        строка станет похожа на `{'session_id': ...}` или `Row(...)`, и
+        `DUMP_MARKERS`-проверка это поймает.
+        """
         with mock.patch.dict(os.environ, {"ARTEL_SESSION_ID": "sess-ac3-readable"}):
             capture(pause.cmd_pause, self.TASK)
 

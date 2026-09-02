@@ -42,6 +42,18 @@ HOLDER_SESSION = "sess-holder-antirace"
 class AntiRaceTest(LeaseTaskTest):
 
     def test_ac9_dead_then_alive_recheck_does_not_fail(self):
+        """`liveness._pid_alive` отвечает «мёртв» на первый снимок и
+        «жив» на все последующие (race между pid'ами соседних шагов
+        одной сессии, см. докстринг модуля): `doctor.check_leases`
+        обязан по этому lease обойтись без FAIL.
+
+        Ловит мутацию: разработчик добавляет повторный снимок, но
+        кэширует результат ПЕРВОГО вызова `_pid_alive` вместо того,
+        чтобы реально вызвать его снова — `flaky_alive` в этом случае
+        либо не будет вызвана второй раз вовсе (`seen["n"]` останется
+        1), либо вердикт всё равно составится по первому (ложному)
+        снимку «мёртв».
+        """
         self.insert_lease(self.TASK, HOLDER_SESSION, 555555,
                           socket.gethostname(), store.now())
         seen = {"n": 0}
@@ -87,6 +99,21 @@ class FailLineFieldsTest(LeaseTaskTest):
                           socket.gethostname(), store.now())
 
     def test_ac10_fail_line_names_holder_role_step_start_and_last_event(self):
+        """pid держателя стабильно мёртв (обе сверки AC-9 согласны): FAIL-
+        строка `doctor.check_leases` обязана назвать держателя, его роль
+        (`developer` — состояние `in_dev`), номер оборванного шага, время
+        его старта (`STEP_START_TS`) и последнее журнальное событие
+        задачи (`LAST_EVENT_ACTION`/`LAST_EVENT_TS`), а не только
+        `session_id`/`pid`/`hostname`, как сегодня.
+
+        Ловит мутацию: разработчик добавляет в FAIL-строку роль и номер
+        шага, но берёт «последнее журнальное событие» ЛЮБОЕ, а не
+        буквально последнее по времени (например, последнее событие
+        ДАННОГО шага вместо последнего события всей задачи) — при трёх
+        разных записях в фикстуре (`pre-flight ok` -> `agent run started`
+        -> `LAST_EVENT_ACTION`) неверный выбор события покажет не тот
+        текст, что ожидает тест.
+        """
         with mock.patch.object(liveness, "_pid_alive", return_value=False):
             checks = doctor.check_leases(store.db())
 

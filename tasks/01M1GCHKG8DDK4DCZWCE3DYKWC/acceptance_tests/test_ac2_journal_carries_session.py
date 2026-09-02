@@ -30,6 +30,16 @@ from _sandbox import LeaseTaskTest, any_step_carries, capture  # noqa: E402
 class JournalCarriesSessionTest(LeaseTaskTest):
 
     def test_ac2_pause_journal_entry_carries_the_session_identity(self):
+        """`pause.cmd_pause` вызывается под явным `ARTEL_SESSION_ID` —
+        новая запись журнала, зафиксировавшая факт паузы, обязана нести
+        этот идентификатор среди своих полей.
+
+        Ловит мутацию: разработчик резолвит identity сессии и прокидывает
+        её в `store.journal` для `cmd_resume`, но забывает сделать то же
+        самое для `cmd_pause` (симметричная правка двух соседних функций
+        — типичное место разъехаться); тест на resume при этом останется
+        зелёным, а этот покраснеет.
+        """
         before = len(self.steps())
 
         with mock.patch.dict(os.environ, {"ARTEL_SESSION_ID": "sess-ac2-pause"}):
@@ -43,6 +53,16 @@ class JournalCarriesSessionTest(LeaseTaskTest):
             f"записавшей её сессии (AC-2): {new_steps}")
 
     def test_ac2_resume_journal_entry_carries_the_session_identity(self):
+        """Зеркало предыдущего теста для `pause.cmd_resume`: снятие паузы
+        под явным `ARTEL_SESSION_ID` обязано журналироваться с тем же
+        идентификатором.
+
+        Ловит мутацию: правка identity-резолва доехала только до
+        `cmd_pause`, а `cmd_resume` продолжает журналировать литеральный
+        актор `"operator"` без обращения к сессии вызывающего — тот же
+        класс рассинхрона, что и у теста на pause, только в обратную
+        сторону.
+        """
         capture(pause.cmd_pause, self.TASK)  # предпосылка: снимать нечего без паузы
         before = len(self.steps())
 

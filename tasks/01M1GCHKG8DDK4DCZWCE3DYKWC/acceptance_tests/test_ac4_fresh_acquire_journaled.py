@@ -26,6 +26,16 @@ from _sandbox import LeaseTaskTest, any_step_carries  # noqa: E402
 class FreshAcquireJournaledTest(LeaseTaskTest):
 
     def test_ac4_fresh_acquire_journals_the_taking_session(self):
+        """Захват lease, ранее не существовавшего вовсе (`row is None` в
+        `lease.acquire`), обязан оставить в журнале задачи запись,
+        называющую взявшую его сессию.
+
+        Ловит мутацию: разработчик добавляет `store.journal(...)` только
+        в ветку перехвата протухшего чужого lease (`row is not None`,
+        уже журналируемую сегодня), не трогая соседнюю ветку `row is
+        None` — обе ветки лежат рядом в одной функции и легко спутать,
+        какая из них уже журналирует, а какая ещё нет.
+        """
         self.assertIsNone(self.lease_row(), "предпосылка: lease ещё "
                           "не заведён — захват должен быть «с нуля»")
         before = len(self.steps())
