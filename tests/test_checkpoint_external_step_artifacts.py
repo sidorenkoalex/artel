@@ -157,7 +157,12 @@ class CommitExternalStepArtifactsTest(RealGitSandbox):
         совпадает 1-в-1 с легитимным сценарием QUESTIONS.md (тест выше)
         — единственное, что их различает, это `type` фронтматтера:
         PLAN.md не должен исчезнуть, потому что его тип не в списке
-        удаляемых, даже когда роль в это раз его не переписала."""
+        удаляемых, даже когда роль в это раз его не переписала.
+
+        Ловит мутацию: снятие второго условия («последний коммит пути
+        — автокоммит той же роли» без проверки `type` кандидата ∈
+        `_DELETABLE_ARTIFACT_TYPES`) — тогда PLAN.md пропадает из
+        артефактной ветки на этом шаге."""
         self.write("PLAN.md", "---\ntask: x\ntype: plan\n---\n# PLAN\n")
         checkpoint.commit_step_artifacts(store.db(), self.TASK, "developer")
 
