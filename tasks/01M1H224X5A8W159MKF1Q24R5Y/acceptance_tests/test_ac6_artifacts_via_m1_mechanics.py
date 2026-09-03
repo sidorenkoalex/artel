@@ -174,30 +174,38 @@ class CheckpointCommitsToArtifactBranchForArtelTest(ArtelM1Sandbox):
         self.assertNotEqual(detail, "")
 
 
-class RoleCwdUsesProjectsWorkspaceForArtelTest(ArtelM1Sandbox):
+class RoleCwdKeepsCodeWorktreeForArtelTest(ArtelM1Sandbox):
 
-    def test_ac6_role_cwd_returns_projects_workspace_not_a_task_worktree(self):
-        """`runner.role_cwd(conn, task_id, "artel")` обязана вернуть
-        `.artel/projects/artel/workspace/` (тот же путь, что для любого
-        внешнего target) — не заводить/возвращать git-worktree кодовой
-        ветки задачи (`workspace.ensure`).
+    def test_ac6_role_cwd_returns_task_code_worktree_not_projects_workspace(self):
+        """Пересмотр планки решением Оператора 03.09 (вариант A по
+        блокеру R1-F1 ревью итерации 1; канал — ADR-0012): требование
+        2 SPEC («первичка артефактов вне git пульта») относится к
+        АРТЕФАКТАМ, не к коду. `runner.role_cwd(conn, task_id,
+        "artel")` обязана вернуть git-worktree КОДОВОЙ ветки задачи
+        в стандартном месте (T045, `workspace.ensure`): Draft-MR,
+        merge_gate, гейт ёмкости и WIP-чекпоинты работают только
+        с кодовой веткой, связанной с config.ROOT. Внешний workspace
+        остаётся каталогом внешних target и артефактной механики.
 
-        Ловит мутацию: `if target == config.DEFAULT_TARGET: ... return
-        wt_path` в `role_cwd` — тогда для 'artel' будет вызван
-        `workspace.ensure(task_id, branch)`, заводящий worktree
-        `.artel/worktrees/<id>/`, а не `.artel/projects/artel/workspace/`.
+        Ловит мутацию: единая ветвь `PROJECTS/<target>/workspace`
+        и для артели (реализация до пересмотра, дефект R1-F1) —
+        возвращённый путь не совпадёт со стандартным worktree
+        кодовой ветки, и оба ассерта упадут.
         """
         task_id = "01ARTELROLECWDTASK0001"
+        branch = f"task/{task_id.lower()}"
         store.insert_task(store.db(), task_id, "Задача артели", "in_dev",
-                          f"task/{task_id.lower()}", config.DEFAULT_TARGET,
+                          branch, config.DEFAULT_TARGET,
                           config.DEFAULT_BUDGET_USD)
+        self.git("branch", branch)
 
         cwd = runner.role_cwd(store.db(), task_id, config.DEFAULT_TARGET)
 
-        self.assertEqual(cwd, config.PROJECTS / config.DEFAULT_TARGET / "workspace")
-        self.assertFalse((config.WORKTREES / task_id).exists(),
-                         "role_cwd не должна заводить worktree кодовой "
-                         "ветки для артели")
+        self.assertEqual(cwd, config.WORKTREES / task_id,
+                         "код артели живёт в worktree кодовой ветки "
+                         "задачи, не во внешнем workspace")
+        self.assertTrue((config.WORKTREES / task_id).exists(),
+                        "worktree кодовой ветки обязан быть заведён")
 
 
 class KillPublishesSnapshotForArtelTest(ArtelM1Sandbox):
