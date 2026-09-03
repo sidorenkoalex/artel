@@ -945,6 +945,24 @@ tasks/<id>/ в код-ветках») на реальном прогоне, не
   A/B/C Вопроса 1 не изменились, новый батч не открываю (тот же класс,
   что и предыдущие перепроверки этого PLAN). Кода этой сессией не
   менялось.
+- Независимая перепроверка ещё одной новой сессией разработчика (после
+  коммита `db57536`, без новых коммитов Оператора в ветке и без
+  ANSWER-2.md к этому моменту — `git log --oneline main..HEAD` даёт 43
+  коммита вперёд, `HEAD..main` — 1 (`7fd63ef`, только
+  `docs/roadmap.md`, не затрагивает код/тесты этой задачи, подтягивать
+  в ветку не требуется), рабочее дерево чистое на HEAD `db57536`):
+  полный прогон `python3 -m unittest discover -s tests -q` — `Ran 1306
+  tests in 131.750s`, `OK (skipped=1)` (exit code 0; единственный skip
+  — тот же `RoleCwdVsCommitSourceGapTest`); `python3 -m unittest
+  discover -s tasks/01M1H224X5A8W159MKF1Q24R5Y/acceptance_tests -p
+  'test_*.py' -q` — `Ran 44 tests in 18.754s`, `OK`, exit code 0, без
+  FAILED; `python3 scripts/guard.py` на SPEC/PLAN/REVIEW/ANSWER-1 —
+  `GUARD: ок (4 файлов)`. Состояние байт-в-байт совпадает с
+  зафиксированным в `db57536`: диагноз (девятый потребитель
+  `role_cwd`, `checkpoint._commit_external_step_artifacts`) и варианты
+  A/B/C Вопроса 1 не изменились, новый батч не открываю (тот же класс,
+  что и предыдущие перепроверки этого PLAN). Кода этой сессией не
+  менялось.
 
 **Блокирует**: `PLAN.md status: ready`. Полный `tests/` (1306/1306,
 включая `skip=1` на доказательном тесте) и `acceptance_tests/` (44/44)
