@@ -36,7 +36,7 @@ sys.path.insert(0, str(_REPO_ROOT))
 
 from orchestrator import (artifact_branch, artifact_source, catalog,  # noqa: E402
                           checkpoint, cleanup, config, fixation, gitcmd,
-                          runner, store)
+                          runner, store, workspace)
 from tests.sandbox import RealGitSandbox, resilient_tmp_cleanup  # noqa: E402
 import tempfile  # noqa: E402
 
@@ -140,8 +140,11 @@ class CheckpointCommitsToArtifactBranchForArtelTest(ArtelM1Sandbox):
         store.insert_task(store.db(), self.TASK, "Задача артели", "in_dev",
                           f"task/{self.TASK.lower()}-x", config.DEFAULT_TARGET,
                           config.DEFAULT_BUDGET_USD)
-        self.workspace_root = config.PROJECTS / config.DEFAULT_TARGET / "workspace"
-        self.task_dir = self.workspace_root / "tasks" / self.TASK
+        # Пересмотр планки решением Оператора 03.09 (вариант A второй
+        # эскалации, канал ADR-0012): рабочий каталог роли артели —
+        # worktree КОДОВОЙ ветки (`workspace.path`, тот же адрес, что
+        # возвращает восстановленный `role_cwd`), не внешний workspace.
+        self.task_dir = workspace.path(self.TASK) / "tasks" / self.TASK
         self.task_dir.mkdir(parents=True)
 
     def artifact_branch_files(self) -> list:
@@ -149,18 +152,18 @@ class CheckpointCommitsToArtifactBranchForArtelTest(ArtelM1Sandbox):
             artifact_branch.branch_name(self.TASK), f"tasks/{self.TASK}") or []
 
     def test_ac6_role_step_artifacts_of_an_artel_task_land_in_artifact_branch(self):
-        """Роль пишет `PLAN.md` в свой рабочий каталог (`.artel/projects/
-        artel/workspace/tasks/<id>/`) — `checkpoint.commit_step_artifacts`
-        обязана перенести его в артефактную ветку пульта `artifact/<id>` и
-        убрать исходник, тем же путём, что уже работает для любого
-        внешнего target (`test_checkpoint_external_step_artifacts.py`).
+        """Роль пишет `PLAN.md` в свой НАСТОЯЩИЙ рабочий каталог —
+        `workspace.path(task_id)/tasks/<id>/` (worktree кодовой ветки,
+        куда её приводит `role_cwd`) — `checkpoint.commit_step_artifacts`
+        обязана перенести его оттуда в артефактную ветку пульта
+        `artifact/<id>` и убрать исходник; кодовая ветка `tasks/<id>/`
+        не получает (требование 8).
 
-        Ловит мутацию: `if target != config.DEFAULT_TARGET: return
-        _commit_external_step_artifacts(...)` в `commit_step_artifacts` —
-        тогда для 'artel' сработает self-ветка `_commit_worktree_change`,
-        которая ищет `workspace.path(task_id)` (worktree кодовой ветки —
-        artel-задача, заведённая под M1, такого worktree не имеет), и
-        `PLAN.md` в артефактную ветку не попадёт.
+        Ловит мутацию: источник автокоммита для артели захардкожен на
+        `PROJECTS/artel/workspace/tasks/<id>/` (дефект, доказанный
+        `tests/test_step_autocommit.py::RoleCwdVsCommitSourceGapTest`)
+        — файл в настоящем каталоге роли не найден, «нечего коммитить»,
+        `PLAN.md` в артефактную ветку не попадает, первый ассерт падает.
         """
         (self.task_dir / "PLAN.md").write_text("план\n", encoding="utf-8")
 
