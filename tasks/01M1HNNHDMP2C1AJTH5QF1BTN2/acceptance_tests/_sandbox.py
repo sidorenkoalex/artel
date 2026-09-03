@@ -18,15 +18,36 @@ HEAD на момент написания этих тестов; прецеде�
 
 Реальный git (`tests.sandbox.RealGitSandbox`, тот же приём, что
 `tests/test_acceptance_tests_flow.py::LockTest`): предмет проверки —
-настоящие коммиты на ветке задачи, реальное значение `tests_locked_sha`,
-инвариант 27 лока (`git diff --quiet` между зафиксированным и текущим sha)
-— заглушкой `gitcmd.git` этого не изобразить.
+настоящие коммиты на артефактной ветке пульта, реальное значение
+`tests_locked_sha`, инвариант 27 лока (`git diff --quiet` между
+зафиксированным и текущим sha) — заглушкой `gitcmd.git` этого не изобразить.
 
 Красен до реализации: до кода задачи 01M1HNNHDMP2C1AJTH5QF1BTN2 в таблице
 диспетчера `orchestrator/artel.py::main` нет ни одной команды сверх
 `BASELINE_COMMANDS` — `discover_amend_command_name()` падает
 `AssertionError` с понятным текстом ещё до того, как тест успевает
 проверить хоть что-то по существу.
+
+ANSWER-3 (переписывание `AmendSandbox`, вариант б): после A7 планка
+`tasks/<id>/` живёт ТОЛЬКО в артефактной ветке пульта (`artifact_branch.
+branch_name`), никогда в кодовой ветке задачи — `enter_in_dev()` поэтому
+пишет SPEC.md/acceptance_tests ПРЯМО на артефактную ветку плотницки
+(`artifact_branch.commit_files`, тот же приём, что `_new_external_
+artifact_branch`/`checkpoint._commit_external_step_artifacts`), а не в
+worktree кодовой ветки. Worktree (`workspace.ensure`) остаётся
+исключительно поверхностью, которой РЕАЛЬНО оперирует производственная
+команда правки планки: Оператор кладёт правку `acceptance_tests/` прямо
+в него (`write_acceptance_tests`, тот же физический путь, что и раньше),
+команда сама читает её оттуда и коммитит на артефактную ветку — сама
+песочница коммит не делает вовсе.
+
+`head()` и `git_wt()` адресуются к АРТЕФАКТНОЙ ветке пульта (`self.branch`),
+не к HEAD worktree'а кодовой ветки: именно с ней сверяет лок гейт
+`in_dev -> review` (`orchestrator/fsm_advance.py::in_dev`, `lock_ref =
+branch`) и именно её сдвигает production `amend-tests` после коммита
+(ANSWER-3, вопрос 2) — до этой правки `tests_locked_sha` сдвигался на
+HEAD worktree'а кодовой ветки, асимметрия с гейтом (см. `PLAN.md`,
+раздел «Эскалация», вопрос 2, ныне устранённая).
 """
 import ast
 import io
@@ -39,7 +60,8 @@ from unittest import mock
 REPO_ROOT = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(REPO_ROOT))
 
-from orchestrator import artel, catalog, config, fsm, store, workspace  # noqa: E402
+from orchestrator import (artel, artifact_branch, catalog, config, fsm,  # noqa: E402
+                          gitcmd, store, workspace)
 from tests.sandbox import RealGitSandbox, capture_new_task_id  # noqa: E402
 
 ARTEL_PY = REPO_ROOT / "orchestrator" / "artel.py"
@@ -111,25 +133,6 @@ AC-1. Первый критерий, проверяемый тестом.
 AC-2. Второй критерий, проверяемый тестом или пометкой.
 
 ## Не входит
-"""
-
-PLAN_TPL = """---
-task: {task}
-type: plan
-author_role: developer
-status: ready
-schema_version: 2
----
-
-# PLAN: фикстура правки планки
-
-## Подход
-
-## Шаги
-
-## Покрытие требований
-
-## Влияние на систему
 """
 
 # Исходное содержимое acceptance_tests/, которым фикстура заходит в
@@ -226,7 +229,7 @@ class AcceptanceTest(unittest.TestCase):
 class AmendSandbox(RealGitSandbox):
     """Задача, доведённая реальным FSM до `in_dev` — лок `tests_locked_sha`
     уже стоит (тот же рецепт, что `LockTest.enter_in_dev` в
-    `tests/test_acceptance_tests_flow.py`)."""
+    `tests/test_acceptance_tests_flow.py`, ANSWER-3 вопрос 1, вариант б)."""
 
     def setUp(self):
         super().setUp()
@@ -234,11 +237,13 @@ class AmendSandbox(RealGitSandbox):
         _, self.TASK = capture_new_task_id(catalog.cmd_new,
                                            "Фикстура правки планки")
         self.conn = store.db()
+        self.branch = artifact_branch.branch_name(self.TASK)
         # post-A7 cmd_new больше не заводит worktree/кодовую ветку сама
-        # (ANSWER-2) — завести явно ДО первой записи в self.tdir.
-        workspace.ensure(self.TASK, self.row()["branch"])
-        self.tdir = workspace.path(self.TASK) / "tasks" / self.TASK
-        self.tdir.mkdir(parents=True, exist_ok=True)
+        # (ANSWER-2) — production amend.py читает правку Оператора именно
+        # отсюда (ANSWER-3, вопрос 2), заводим явно ДО первой записи.
+        wt_path, error = workspace.ensure(self.TASK, self.row()["branch"])
+        self.assertIsNone(error, f"worktree не создан: {error}")
+        self.tdir = wt_path / "tasks" / self.TASK
 
     def capture(self, fn, *args) -> str:
         buf = io.StringIO()
@@ -247,10 +252,17 @@ class AmendSandbox(RealGitSandbox):
         return buf.getvalue()
 
     def git_wt(self, *args: str) -> str:
-        res = subprocess.run(["git", "-C", str(workspace.path(self.TASK)),
-                              *args], capture_output=True, text=True)
+        """Git-запрос к АРТЕФАКТНОЙ ветке пульта (см. докстринг модуля):
+        имя сохранено ради `test_ac6_commit_message_includes_reason.py`
+        (локед, интерфейс не менялся) — правка планки коммитится туда,
+        не в worktree кодовой ветки, поэтому запрос идёт в `config.ROOT`
+        с явным именем ветки последним аргументом (валидный синтаксис
+        `git log`/`show`: ревизия — обычный позиционный аргумент)."""
+        res = subprocess.run(["git", "-C", str(config.ROOT), *args, self.branch],
+                             capture_output=True, text=True)
         self.assertEqual(res.returncode, 0,
-                         f"git -C worktree {' '.join(args)}: {res.stderr}")
+                         f"git -C {config.ROOT} {' '.join(args)} {self.branch}: "
+                         f"{res.stderr}")
         return res.stdout
 
     def row(self):
@@ -261,30 +273,40 @@ class AmendSandbox(RealGitSandbox):
         return self.row()["state"]
 
     def head(self) -> str:
-        return self.git_wt("rev-parse", "HEAD").strip()
+        """sha головы артефактной ветки — независимо от текущего чекаута
+        (та же ветка, с которой сверяет лок гейт `in_dev -> review`)."""
+        return gitcmd.branch_head_sha(self.branch)
 
-    def commit_task_dir(self, message: str = "артефакт") -> None:
-        self.git_wt("add", f"tasks/{self.TASK}")
-        self.git_wt("commit", "-q", "-m", message)
+    def artifact_commit(self, files: dict, message: str) -> str:
+        """Коммитит `files` ПЛОТНИЦКИ прямо на артефактную ветку задачи
+        (ANSWER-3, вопрос 1) — тем же приёмом, что `catalog._new_external_
+        artifact_branch`/`checkpoint._commit_external_step_artifacts`."""
+        sha = artifact_branch.commit_files(self.TASK, files,
+                                           f"{self.TASK}: {message}")
+        self.assertTrue(sha, f"коммит {message!r} на артефактную ветку не удался")
+        return sha
 
     def write_acceptance_tests(self, content: str) -> None:
+        """Правка Оператора — физически в worktree кодовой ветки
+        (`self.tdir`), тот самый каталог, который production `amend-tests`
+        читает и коммитит на артефактную ветку (ANSWER-3, вопрос 2)."""
         tests_dir = self.tdir / "acceptance_tests"
         tests_dir.mkdir(parents=True, exist_ok=True)
         (tests_dir / "test_ac.py").write_text(content, encoding="utf-8")
 
     def enter_in_dev(self) -> str:
         """Доводит задачу до `in_dev` с зафиксированным локом; возвращает
-        sha лока (== HEAD ветки задачи на этот момент)."""
-        (self.tdir / "SPEC.md").write_text(SPEC_TPL.format(task=self.TASK),
-                                           encoding="utf-8")
-        self.commit_task_dir()
+        sha лока (== HEAD артефактной ветки на этот момент)."""
+        self.artifact_commit({f"tasks/{self.TASK}/SPEC.md":
+                              SPEC_TPL.format(task=self.TASK)}, "SPEC")
         self.capture(fsm.cmd_advance, self.TASK)  # spec_writing -> spec_gate
-        sha = self.head()
+        sha = gitcmd.head_sha(config.PROJECTS / config.DEFAULT_TARGET)
         self.capture(fsm.cmd_approve, self.TASK, sha)  # -> tests_writing
         self.assertEqual(self.state(), "tests_writing")
 
-        self.write_acceptance_tests(AC_TEST_LOCKED)
-        self.commit_task_dir("acceptance_tests от test_author")
+        self.artifact_commit(
+            {f"tasks/{self.TASK}/acceptance_tests/test_ac.py": AC_TEST_LOCKED},
+            "acceptance_tests от test_author")
         self.capture(fsm.cmd_advance, self.TASK)  # tests_writing -> in_dev
         self.assertEqual(self.state(), "in_dev")
 
