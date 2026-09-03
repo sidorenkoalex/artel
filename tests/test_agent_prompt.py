@@ -18,9 +18,10 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from orchestrator import catalog, config, gitcmd, runner, store  # noqa: E402
-from tests.sandbox import (FakeProc, capture, capture_new_task_id,  # noqa: E402
-                           fake_git, seed_developer_brief_fixtures,
-                           sync_spec_from_worktree)
+from tests.sandbox import (FakeProc, SpyRun, capture,  # noqa: E402
+                           capture_new_task_id, disk_backed_ls_tree_files,
+                           disk_backed_show, fake_git,
+                           seed_developer_brief_fixtures, sync_spec_from_worktree)
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
@@ -68,6 +69,28 @@ class PromptChannelTest(unittest.TestCase):
         patcher = mock.patch.object(gitcmd, "git", fake_git)
         patcher.start()
         self.addCleanup(patcher.stop)
+        # A7 (generic-путь заведения, AC-5): `cmd_new` коммитит артефакты
+        # плотницки (`artifact_branch.write_commit`) — та функция зовёт
+        # `subprocess.run` НАПРЯМУЮ, минуя `gitcmd.git`/фейк выше; `root`
+        # здесь не настоящий git-репозиторий — без этого патча `cmd_new`
+        # падает `sys.exit` («git не ответил») ещё до сценария, который
+        # тест проверяет (тот же приём, что `tests.sandbox.TmpRootTest.
+        # setUp`).
+        spy_patcher = mock.patch.object(gitcmd.subprocess, "run", SpyRun())
+        spy_patcher.start()
+        self.addCleanup(spy_patcher.stop)
+        # `artifact_source.resolve` теперь ВСЕГДА возвращает `foreign=True`
+        # — брифу/FSM читают SPEC через `gitcmd.show`/`ls_tree_files`, не
+        # с диска напрямую; эта песочница без настоящего git ведёт один
+        # источник истины — диск `config.TASKS` (`sync_spec_from_worktree`
+        # ниже), тот же приём, что `tests.test_invariants.FsmTest`.
+        show_patcher = mock.patch.object(gitcmd, "show", disk_backed_show)
+        show_patcher.start()
+        self.addCleanup(show_patcher.stop)
+        ls_patcher = mock.patch.object(gitcmd, "ls_tree_files",
+                                       disk_backed_ls_tree_files)
+        ls_patcher.start()
+        self.addCleanup(ls_patcher.stop)
         kc_patcher = mock.patch.object(runner.keychain, "token",
                                        lambda slot: "tok-test")
         kc_patcher.start()

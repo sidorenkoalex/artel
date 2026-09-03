@@ -1,30 +1,43 @@
 """Снапшот артефактов задачи в `refs/artifacts/<id>` ЦЕЛЕВОГО при закрытии
 (`done`/`killed`, не канарейка) — SPEC T094, требования 12-14; AC-13,
-AC-14, AC-15.
-
-Только внешний target (self/догфуд остаётся на однобраншевом флоу без
-снапшота до A7, требование 16/AC-18) и только не-канареечная задача
-(требование 12/AC-13) — вызывающий код (`orchestrator/cleanup.py`)
-решает это ДО вызова `publish_and_cleanup`.
+AC-14, AC-15. С A7 (требование 2, AC-7/AC-8) — ЛЮБОЙ target, включая
+артель: `cleanup._publish_snapshot_if_pending` не несёт больше
+self-исключения, только канареечное (требование 12/AC-13) — решает это
+вызывающий код (`orchestrator/cleanup.py`) ДО вызова `publish_and_cleanup`.
 
 Правило требования 14 (AC-14): снапшот пишется ОДИНАКОВО для целевых
 уровня `full` и `partial` — всегда в `refs/artifacts/<id>` РЕПОЗИТОРИЯ
-ЦЕЛЕВОГО (его `origin`, тот же клон `config.PROJECTS/<target>/workspace`,
-которым уже пользуется `runner.role_cwd`), никогда в
-`.artel/projects/<target>/` пульта — здесь нет ни одной строки, которая
-писала бы куда-то, кроме этого клона и его `origin`.
+ЦЕЛЕВОГО (его `origin`), никогда в `.artel/projects/<target>/` пульта —
+здесь нет ни одной строки, которая писала бы куда-то, кроме этого
+репозитория и его `origin`.
+
+Для self/артели (`config.DEFAULT_TARGET`) этот репозиторий — сам
+`config.ROOT`, не `config.PROJECTS/artel/workspace` (A7, `_target_
+workspace` ниже): у артели структурно нет отдельного клона себя самой —
+`config.ROOT` УЖЕ несёт настоящий `origin` (главная копия пульта — и
+есть её собственный чекаут), тогда как `PROJECTS/artel/workspace`
+(рабочий каталог РОЛИ, `runner.role_cwd`) заводится лениво и получает
+origin только если/когда роль сама его клонирует по ходу шага — задача,
+закрытая ДО первого шага роли (например `kill` сразу после `new`), эту
+предпосылку не несёт. Тот же класс исключения, что PLAN.md A7 уже
+называет для гейта ёмкости diff снимка и сверки свежести ветки: код
+артели физически живёт в `config.ROOT`, не в отдельном клоне, как у
+настоящего внешнего target — явное решение, не молчаливый skip.
 """
 import os
 from pathlib import Path
 
 from . import artifact_branch, config, fixation, gitcmd, retro, store
 
-SNAPSHOT_REF_TMPL = "refs/artifacts/{task_id}"
-RETRO_REL_TMPL = "tasks/{task_id}/RETRO.md"
-
 
 def _target_workspace(target: str) -> Path:
+    if target == config.DEFAULT_TARGET:
+        return config.ROOT
     return config.PROJECTS / target / "workspace"
+
+
+SNAPSHOT_REF_TMPL = "refs/artifacts/{task_id}"
+RETRO_REL_TMPL = "tasks/{task_id}/RETRO.md"
 
 
 def _operator_identity() -> str:

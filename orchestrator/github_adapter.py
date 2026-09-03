@@ -31,6 +31,22 @@ def _incident(conn, task_id: str, action: str, message: str) -> None:
                        "github_adapter", message)
 
 
+def _touched_protected_paths(branch: str, base: str) -> list[str]:
+    """Пути `config.PROTECTED_PATHS`, затронутые диффом `base...branch`
+    (A7, требование 7, AC-16) — независимо от предупреждения, которое
+    уже печатает CI-job protected-paths (не заменяет его, дополняет).
+
+    Git не ответил на diff — пустой список (не отказ и не эскалация:
+    подсветка в MR — необязательное дополнение, отсутствие ответа не
+    имеет права держать заведение Draft MR)."""
+    res = gitcmd.git("diff", "--name-only", f"{base}...{branch}")
+    if res is None or res.returncode != 0:
+        return []
+    paths = [p for p in res.stdout.splitlines() if p]
+    return [p for p in paths if any(p == pp or p.startswith(pp)
+                                    for pp in config.PROTECTED_PATHS)]
+
+
 def ensure_draft_mr(conn, task_id: str, t) -> None:
     """Draft MR ветки задачи — ровно один раз за жизненный цикл (SPEC
     T079, требование 1, AC-1): идемпотентность несёт колонка
@@ -76,6 +92,22 @@ def ensure_draft_mr(conn, task_id: str, t) -> None:
     store.update_task(conn, task_id, draft_mr_created=1)
     store.journal(conn, task_id, "orchestrator", "Draft MR заведён",
                  create.stdout.strip()[:300])
+
+    # Подсветка защищённых путей (A7, требование 7, AC-16): комментарий
+    # на MR — в дополнение к предупреждению CI-job protected-paths, не
+    # взамен него. Отказ комментария — не отказ Draft MR (та уже
+    # заведена): incident тем же приёмом, что и остальные сбои модуля.
+    protected = _touched_protected_paths(branch, base)
+    if protected:
+        comment = ci.gh(
+            "pr", "comment", branch, "--body",
+            f"⚠️ Диф задачи {task_id} затрагивает защищённые пути: "
+            f"{', '.join(protected)} (config.PROTECTED_PATHS).")
+        if comment is None or comment.returncode != 0:
+            detail = ((comment.stderr or comment.stdout).strip()[:300]
+                      if comment is not None else "gh не ответил")
+            _incident(conn, task_id, "MR protected-paths comment FAILED",
+                      detail)
 
 
 def ensure_head_in_origin(conn, task_id: str, branch: str) -> tuple[bool, str]:

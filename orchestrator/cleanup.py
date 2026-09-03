@@ -166,15 +166,15 @@ def _journal_tz_before_cleanup(conn, task_id: str, branch: str,
     требование 7): TZ.md коммитится `cmd_new` сразу в ветку, не на диск.
     Файла нет (`new` без `--tz`) — журналить нечего, не отказ.
 
-    Внешний target (SPEC T094, требование 10): `tasks/<id>/` живёт в
-    артефактной ветке пульта, не в `branch` (та несёт только код целевого
-    и пульту вообще не принадлежит) — читается оттуда.
+    Единая логика для ЛЮБОГО target, включая артель (A7, требование 2 —
+    снятие особого случая догфуда): `tasks/<id>/` живёт в АРТЕФАКТНОЙ
+    ветке пульта, не в `branch` (кодовая ветка задачи — код целевого,
+    пульту вообще не принадлежит) — читается оттуда. `branch` остаётся
+    параметром сигнатуры ради вызывающего кода (`_cmd_kill`), не
+    участвует в чтении.
     """
-    if target != config.DEFAULT_TARGET:
-        from . import artifact_branch
-        source_branch = artifact_branch.branch_name(task_id)
-    else:
-        source_branch = branch
+    from . import artifact_branch
+    source_branch = artifact_branch.branch_name(task_id)
     text, _ = gitcmd.show(source_branch, f"tasks/{task_id}/TZ.md")
     if text is not None:
         store.journal(conn, task_id, "orchestrator",
@@ -226,17 +226,17 @@ def _cmd_kill(conn, task_id: str) -> None:
 
 def _publish_snapshot_if_pending(conn, task_id: str, target: str,
                                  is_canary: bool) -> None:
-    """Снапшот закрытия (SPEC T094, требования 12-13, AC-13) — только
-    внешний target (требование 16/AC-18) и не канарейка (требование 12,
-    AC-13 «исключение канарейки»). `snapshot.pending` — False, если
-    задача не заводила артефактную ветку вовсе (self/канарейка) или
-    снапшот уже подтверждён в origin целевого раньше (идемпотентность
-    повторного `kill`, AC-15).
+    """Снапшот закрытия (SPEC T094, требования 12-13, AC-13) — для ЛЮБОГО
+    target (A7, требование 2 — снятие особого случая догфуда) и не
+    канарейка (требование 12, AC-13 «исключение канарейки»). `snapshot.
+    pending` — False, если задача не заводила артефактную ветку вовсе
+    (канарейка) или снапшот уже подтверждён в origin целевого раньше
+    (идемпотентность повторного `kill`, AC-15).
 
     Отложенный импорт: `snapshot` -> `retro` -> `cleanup` — прямой
     импорт на уровне модуля замкнул бы этот же файл в цикл.
     """
-    if target == config.DEFAULT_TARGET or is_canary:
+    if is_canary:
         return
     from . import snapshot
     if not snapshot.pending(task_id):

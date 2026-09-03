@@ -23,7 +23,8 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from orchestrator import catalog, config, fsm, gitcmd, store, workspace  # noqa: E402
+from orchestrator import (artifact_branch, catalog, config, fsm,  # noqa: E402
+                          gitcmd, store)
 from tests.sandbox import (ALL_CONFIG_ATTRS, TmpRootTest,  # noqa: E402
                            capture_new_task_id, resilient_tmp_cleanup)
 
@@ -93,14 +94,14 @@ schema_version: 2
 
 
 class RealGitBranchTest(TmpRootTest):
-    """ROOT — свежий репозиторий с main; `cmd_new` (SPEC T048) сам заводит
-    РЕАЛЬНУЮ ветку/worktree задачи T001 и коммитит в неё шаблонный
-    SPEC.md — ROOT остаётся на main. Дальнейшие артефакты этот тест
-    коммитит В WORKTREE задачи (`git -C`, не чекаутом её ветки в ROOT —
-    ветку и так держит worktree, повторный чекаут той же ветки git не
-    даст сделать, SPEC T045), тем же приёмом, что
-    `tests/test_kill_cleanup.py`/`tests/test_acceptance_tests_flow.
-    LockTest` этой же задачи."""
+    """ROOT — свежий репозиторий с main; `cmd_new` (A7, generic-путь,
+    AC-5) коммитит шаблонный SPEC.md плотницки в АРТЕФАКТНУЮ ВЕТКУ
+    ПУЛЬТА (`artifact/<id>`, `artifact_branch.commit_files`), не в
+    кодовую ветку/worktree задачи (`cmd_new` их больше не заводит вовсе)
+    — ROOT остаётся на main. Дальнейшие артефакты этот тест коммитит
+    ПРЯМО В АРТЕФАКТНУЮ ВЕТКУ (чекаутом в ROOT — реальный git, песочница
+    временная, не рабочее дерево пульта), затем возвращает ROOT на
+    main."""
 
     def setUp(self):
         tmp = tempfile.TemporaryDirectory()
@@ -126,19 +127,12 @@ class RealGitBranchTest(TmpRootTest):
             catalog.cmd_new, "Ветко-корректные чтения статусов")
         self.tdir = config.TASKS / self.TASK
         self.branch = store.get_task(store.db(), self.TASK)["branch"]
-        self.wt_dir = workspace.path(self.TASK) / "tasks" / self.TASK
+        self.artifact_branch = artifact_branch.branch_name(self.TASK)
 
     def git(self, *args: str) -> str:
         res = subprocess.run(["git", *args], cwd=self.root,
                              capture_output=True, text=True)
         self.assertEqual(res.returncode, 0, f"git {' '.join(args)}: {res.stderr}")
-        return res.stdout
-
-    def git_wt(self, *args: str) -> str:
-        res = subprocess.run(["git", "-C", str(workspace.path(self.TASK)),
-                              *args], capture_output=True, text=True)
-        self.assertEqual(res.returncode, 0,
-                         f"git -C worktree {' '.join(args)}: {res.stderr}")
         return res.stdout
 
     def capture(self, fn, *args) -> str:
@@ -172,13 +166,18 @@ class RealGitBranchTest(TmpRootTest):
                                       encoding="utf-8")
 
     def write_on_task_branch(self, name: str, template: str) -> None:
-        """Кладёт файл прямо в worktree задачи (её ветку и так держит
-        worktree — checkout не нужен) и коммитит его там же."""
-        self.wt_dir.mkdir(parents=True, exist_ok=True)
-        (self.wt_dir / name).write_text(template.format(task=self.TASK),
-                                        encoding="utf-8")
-        self.git_wt("add", f"tasks/{self.TASK}")
-        self.git_wt("commit", "-q", "-m", f"{name} задачи")
+        """Кладёт файл прямо в АРТЕФАКТНУЮ ВЕТКУ ПУЛЬТА (A7 — веткой-
+        источником `tasks/<id>/` служит она, не кодовая ветка задачи) и
+        коммитит его там же, чекаутом в ROOT — реальный git песочницы,
+        не рабочее дерево пульта."""
+        self.checkout(self.artifact_branch)
+        d = self.root / "tasks" / self.TASK
+        (d / name).parent.mkdir(parents=True, exist_ok=True)
+        (d / name).write_text(template.format(task=self.TASK),
+                              encoding="utf-8")
+        self.git("add", f"tasks/{self.TASK}")
+        self.git("commit", "-q", "-m", f"{name} задачи")
+        self.checkout(config.MAIN_BRANCH)
 
 
 # ---------------------------------------------------------------------
@@ -221,13 +220,15 @@ class QuestionsOnForeignBranchTest(RealGitBranchTest):
 class RequiredArtifactMissingOnBranchTest(RealGitBranchTest):
 
     def _remove_task_dir_from_branch(self) -> None:
-        """С SPEC T048 `cmd_new` сам коммитит шаблонный SPEC.md на ветку
-        задачи — «ветка есть, а обязательного артефакта на ней нет»
+        """`cmd_new` (A7) сам коммитит шаблонный SPEC.md в артефактную
+        ветку — «ветка есть, а обязательного артефакта на ней нет»
         обычным путём больше не возникает. Симулируем вырожденный случай
         (порча ветки, force-push поверх, ручной `git rm`) явным коммитом
         удаления `tasks/<id>/` поверх того, что уже сделал `cmd_new`."""
-        self.git_wt("rm", "-r", "-q", f"tasks/{self.TASK}")
-        self.git_wt("commit", "-q", "-m", "tasks/ снесён с ветки")
+        self.checkout(self.artifact_branch)
+        self.git("rm", "-r", "-q", f"tasks/{self.TASK}")
+        self.git("commit", "-q", "-m", "tasks/ снесён с ветки")
+        self.checkout(config.MAIN_BRANCH)
 
     def test_spec_writing_refuses_when_branch_exists_without_spec_md(self):
         self._remove_task_dir_from_branch()

@@ -175,53 +175,36 @@ def commit_step_artifacts(conn, task_id: str, role: str) -> str:
     на любом из шагов — та же деградация без git, что у
     `commit_timeout_checkpoint` (требование 6).
 
-    Догфуд (`target == config.DEFAULT_TARGET`): `git add` ограничен
-    путями worktree задачи целиком (требование 3) — `_commit_worktree_
-    change` зовёт `gitcmd.in_repo(wt, "add", "-A")` — `-A` без путей
-    добавляет изменения всего рабочего дерева РЕПОЗИТОРИЯ `wt` (её
-    отдельного git-worktree, ветка задачи), не произвольного дерева и не
-    рабочей копии пульта (урок инцидента T048 с чужой сессией пульта —
-    здесь операции вообще не видят `config.ROOT`).
-
-    Внешний target (SPEC T094, требование 8, AC-9): роль-разработчик/
-    ревьювер/test_author пишет `tasks/<id>/` в СВОЙ рабочий каталог
-    (`runner.role_cwd` — клон КОДА целевого, `config.PROJECTS/<target>/
-    workspace/`, ADR-0003 §4) тем же способом, что и в догфуде — она не
+    Единая логика для ЛЮБОГО target (A7, требование 2 — снятие особого
+    случая догфуда): роль-разработчик/ревьювер/test_author пишет
+    `tasks/<id>/` в СВОЙ рабочий каталог (`runner.role_cwd`) — она не
     знает об артефактной ветке пульта. `_commit_external_step_artifacts`
     перекладывает то, что роль там написала, в артефактную ветку пульта
-    и убирает эти файлы из рабочего каталога целевого — без этого шага
-    первый же реальный шаг роли внешнего target нарушал бы требование 8
-    (было исправлено этой же задачей, REVIEW.md T094 итерация 1,
-    замечание 2: до правки функция безусловно пропускала любой target,
-    кроме self, — код роли-разработчика оставался лежать в клоне
-    целевого, ничем не перенесённый).
+    и убирает эти файлы из рабочего каталога — без этого шага первый же
+    реальный шаг роли нарушал бы требование 8 (было исправлено этой же
+    задачей SPEC T094, REVIEW.md итерация 1, замечание 2: до правки
+    функция безусловно пропускала любой target, кроме self, — код
+    роли-разработчика оставался лежать в клоне целевого, ничем не
+    перенесённый). До A7 self/догфуд нёс собственную ветвь
+    (`_commit_worktree_change` в её git-worktree, `workspace.path`) —
+    убрана целиком вместе с однобраншевым флоу заведения задачи
+    (`catalog._new_dogfood`, тоже убран этой задачей).
     """
     target = store.task_target(conn, task_id)
-    if target != config.DEFAULT_TARGET:
-        return _commit_external_step_artifacts(conn, task_id, role, target)
-    wt = workspace.path(task_id)
-    message = f"{task_id}: артефакты шага {role} (автокоммит оркестратора)"
-    committed, sha = _commit_worktree_change(wt, message)
-    if not committed:
-        return ""
-    detail = f"{message} (sha {sha})" if sha else message
-    store.journal(conn, task_id, "orchestrator",
-                  "автокоммит артефактов шага", detail)
-    store.record_fixation(conn, task_id)
-    return detail
+    return _commit_external_step_artifacts(conn, task_id, role, target)
 
 
 def _commit_external_step_artifacts(conn, task_id: str, role: str,
                                     target: str) -> str:
-    """`commit_step_artifacts` для внешнего target (SPEC T094, требование
-    8, AC-9): `tasks/<id>/`, написанный ролью в её рабочем каталоге
-    (клон кода целевого), коммитится плотницки в артефактную ветку
-    пульта (`orchestrator/artifact_branch.py`, тот же приём, что уже
-    несёт `catalog._new_external_artifact_branch`) и убирается ОТТУДА —
+    """`commit_step_artifacts` для любого target (SPEC T094, требование
+    8, AC-9): `tasks/<id>/`, написанный ролью в её рабочем каталоге,
+    коммитится плотницки в артефактную ветку пульта
+    (`orchestrator/artifact_branch.py`, тот же приём, что уже несёт
+    `catalog._new_external_artifact_branch`) и убирается ОТТУДА —
     следующий шаг роли не увидит чужого прошлого содержимого как своё
-    незакоммиченное, а кодовая ветка целевого не подхватит `tasks/<id>/`
-    ни одним будущим коммитом роли (требование 8: «кодовая ветка task/*
-    целевого свободна от артефактов задачи»).
+    незакоммиченное, а кодовая ветка не подхватит `tasks/<id>/` ни одним
+    будущим коммитом роли (требование 8: «кодовая ветка task/* свободна
+    от артефактов задачи»).
 
     Каталога нет или он пуст — роль ничего не написала на этом шаге
     (например, чисто код без правки артефакта) — не отказ, тот же довод,
@@ -235,9 +218,20 @@ def _commit_external_step_artifacts(conn, task_id: str, role: str,
     (`_commit_worktree_change`, настоящий `git add -A`, коммитит любые
     байты). `artifact_branch.write_commit` принимает `bytes` наравне со
     `str` — потери не осталось для ни одного файла, читаемого с диска.
+
+    Источник для self/артели — worktree КОДОВОЙ ветки задачи
+    (`workspace.path(task_id)`), не `config.PROJECTS/<target>/workspace`:
+    пересмотр планки решением Оператора 03.09 (вариант A второй
+    эскалации задачи A7, канал ADR-0012, коммит `9a984c3`) — `role_cwd`
+    для self возвращает именно этот worktree (T045), и источник
+    автокоммита обязан совпасть с ним же, иначе роль пишет в один
+    каталог, а автокоммит ищет в другом.
     """
     from . import artifact_branch
-    workspace_root = config.PROJECTS / target / "workspace"
+    if target == config.DEFAULT_TARGET:
+        workspace_root = workspace.path(task_id)
+    else:
+        workspace_root = config.PROJECTS / target / "workspace"
     task_dir = workspace_root / "tasks" / task_id
     if not task_dir.is_dir():
         return ""
