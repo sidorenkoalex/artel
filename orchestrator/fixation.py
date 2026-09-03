@@ -61,8 +61,23 @@ def _fix_external(target: str) -> tuple[str, bool]:
 
     Нечего коммитить (второй переход подряд без правки файлов) — не
     отказ: фиксируется уже существующий HEAD той же операцией.
+
+    Репозиторий заводится здесь же, если его ещё нет (A7, «чини класс
+    ошибки»): `config.PROJECTS/<target>/` — подкаталог `config.ROOT`, и
+    `git -C <repo>` без `.git` В НЁМ САМОМ не откажет, а молча уйдёт
+    вверх по дереву и найдёт `.git` пульта — команда «выполнится»
+    успешно, но закоммитит рабочую копию ГЛАВНОЙ КОПИИ ПУЛЬТА под
+    сообщением фиксации target'а (найдено на AC-7: `commit_step_
+    artifacts` первого шага задачи, для которой `target-init` ещё не
+    вызывался, иначе тихо подмешивал бы коммит в `config.ROOT`). `git
+    init` идемпотентен (`projects.init_artifact_repo`, тот же приём, что
+    и `target-init`) — повторный вызов на уже заведённом репо не портит
+    историю.
     """
     repo = config.PROJECTS / target
+    if not (repo / ".git").is_dir():
+        from . import projects
+        projects.init_artifact_repo(target)
     added = gitcmd.in_repo(repo, "add", "-A")
     if added.returncode != 0:
         return "", False

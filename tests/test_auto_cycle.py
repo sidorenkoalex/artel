@@ -26,7 +26,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from orchestrator import (agent_log, auto, budget, catalog,  # noqa: E402
                           ci, config, fsm, gitcmd, pause, runner, store)
 from tests.sandbox import (SpyRun, capture,  # noqa: E402
-                           capture_new_task_id, fake_git)
+                           capture_new_task_id, disk_backed_ls_tree_files,
+                           disk_backed_show, fake_git)
 
 # Дефолтная CI-фикстура песочницы этого файла (SPEC T086): с этой задачи
 # `verifying` больше не безусловная остановка `auto` — он опрашивает CI
@@ -180,6 +181,17 @@ class AutoCycleTest(unittest.TestCase):
         self.patch_object(gitcmd, "git", fake_git)
         self.git_spy = SpyRun()
         self.patch_object(gitcmd.subprocess, "run", self.git_spy)
+
+        # A7: `artifact_source.resolve` теперь ВСЕГДА возвращает
+        # `foreign=True` — FSM читает SPEC/PLAN/REVIEW через `gitcmd.show`/
+        # `gitcmd.ls_tree_files`, заглушенный выше `fake_git` вернул бы
+        # пустышку вместо содержимого, которое кладёт на диск `write_plan`/
+        # `write_review` (тот же класс дефекта, что и в `tests/
+        # test_invariants.py::FsmTest`) — эта песочница ведёт ровно один
+        # источник истины (диск `self.tdir`), настоящий git не заводится
+        # (докстринг класса: «git настоящему репозиторию не нужен»).
+        self.patch_object(gitcmd, "show", disk_backed_show)
+        self.patch_object(gitcmd, "ls_tree_files", disk_backed_ls_tree_files)
 
         # SPEC T086: дефолтный CI красный (см. комментарий над модулем) —
         # тесты, которым нужен другой исход в verifying, патчат

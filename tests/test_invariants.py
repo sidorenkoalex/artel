@@ -35,7 +35,8 @@ from orchestrator import (artel, budget, catalog, ci, cleanup,  # noqa: E402
                           config, fsm, gitcmd, runner, store)
 from scripts import guard  # noqa: E402
 from tests.sandbox import (FakeProc, SpyRun, capture,  # noqa: E402
-                           capture_new_task_id, resilient_tmp_cleanup)
+                           capture_new_task_id, disk_backed_ls_tree_files,
+                           disk_backed_show, resilient_tmp_cleanup)
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
@@ -178,6 +179,22 @@ class FsmTest(unittest.TestCase):
         spy_patcher = mock.patch.object(gitcmd.subprocess, "run", self.git_spy)
         spy_patcher.start()
         self.addCleanup(spy_patcher.stop)
+
+        # A7: `artifact_source.resolve` теперь ВСЕГДА возвращает
+        # `foreign=True` (артефактная ветка пульта, даже для self) — FSM
+        # читает SPEC/PLAN/REVIEW/ANSWER через `gitcmd.show`/
+        # `gitcmd.ls_tree_files`, не с диска напрямую. Этот файл ведёт
+        # ровно один источник истины — диск `self.tdir` (`config.TASKS/
+        # <id>/`, см. `write_spec`/`write_plan`/... ниже) — настоящий git
+        # здесь не заводится (докстринг класса: «git не исполняется»),
+        # поэтому чтение веток подменяется на чтение того же диска.
+        show_patcher = mock.patch.object(gitcmd, "show", disk_backed_show)
+        show_patcher.start()
+        self.addCleanup(show_patcher.stop)
+        ls_patcher = mock.patch.object(gitcmd, "ls_tree_files",
+                                       disk_backed_ls_tree_files)
+        ls_patcher.start()
+        self.addCleanup(ls_patcher.stop)
 
         # ROOT намеренно НЕ подменяется целиком (в отличие от прочих путей
         # выше): `cmd_run` читает роль/навыки/конвенции с РЕАЛЬНОГО
@@ -440,22 +457,36 @@ class MergeOnlyFromMergeGateTest(FsmTest):
                                          f"вне merge_gate")
 
     def test_merge_gate_approve_is_that_path(self):
-        """Контроль: из merge_gate approve мержит ветку задачи и закрывает её."""
+        """Контроль: из merge_gate approve мержит ветку задачи и закрывает её.
+
+        Stage0 (A7, ANSWER-1 вопрос 1, вариант B): плотницкий merge идёт
+        в scratch-worktree (`git worktree add --detach` + `git -C
+        <scratch> merge --no-ff <branch>`), не `git checkout main` +
+        `git pull` рабочего дерева `config.ROOT` — прежний свип по
+        порядку `checkout < merge`/`pull < merge` кодировал МЕХАНИЗМ, а
+        не инвариант; перенос на сверку ИСХОДА (merge случился и мержит
+        именно ветку задачи) — сам мандат даёт ANSWER-1, образец —
+        нелокированный `tasks/01M1H224X5A8W159MKF1Q24R5Y/acceptance_tests/
+        test_ac15_invariants_12_19_remain_green.py`.
+        """
         self.set_state("merge_gate")
 
         self.capture(fsm.cmd_approve, self.TASK)
 
         # Ассерт по содержанию инварианта, а не по точному списку вызовов:
-        # merge случается здесь, после обновления main, и мержит ветку задачи.
-        # Равенство всей последовательности покраснело бы на безобидном
-        # `git fetch --prune`, а ложный красный в неослабляемом тесте
-        # провоцирует ровно то ослабление, ради запрета которого он написан.
+        # merge случается здесь и мержит ветку задачи. Равенство всей
+        # последовательности покраснело бы на безобидном `git fetch
+        # --prune`, а ложный красный в неослабляемом тесте провоцирует
+        # ровно то ослабление, ради запрета которого он написан.
         subcommands = self.git_spy.git_subcommands()
         self.assertIn("merge", subcommands)
-        self.assertLess(subcommands.index("checkout"), subcommands.index("merge"))
-        self.assertLess(subcommands.index("pull"), subcommands.index("merge"))
-        merge = [c for c in self.git_spy.calls if c[:2] == ["git", "merge"]][0]
-        self.assertIn(self.branch, merge)
+        self.assertLess(subcommands.index("worktree"), subcommands.index("merge"),
+                        "плотницкий merge обязан идти в scratch-worktree, "
+                        "заведённом до самого merge")
+        merge_calls = [c for c in self.git_spy.calls
+                      if self._plain_args(c)[:1] == ["merge"]]
+        self.assertTrue(merge_calls, "git merge не вызван")
+        self.assertIn(self.branch, merge_calls[0])
         self.assertEqual(self.state(), "done")
 
     def test_merge_failure_leaves_the_task_in_the_gate(self):
@@ -469,9 +500,14 @@ class MergeOnlyFromMergeGateTest(FsmTest):
         def failing(cmd, *args, **kwargs):
             self.git_spy(cmd, *args, **kwargs)
             argv = list(cmd)
-            if argv[:3] == ["git", "merge", "--no-ff"]:
+            # Stage0 (A7): плотницкий merge идёт в scratch-worktree, `git
+            # -C <scratch> merge --no-ff ...` — подкоманда сдвинута парой
+            # `-C <путь>` (`_plain_args`, тот же приём, что уже несёт
+            # `test_no_other_state_and_no_other_command_merges` выше).
+            plain = self._plain_args(argv) if argv[:1] == ["git"] else argv
+            if plain[:2] == ["merge", "--no-ff"]:
                 return subprocess.CompletedProcess(argv, 1, "", "конфликт")
-            if argv[:4] == ["git", "diff", "--name-only", "--diff-filter=U"]:
+            if plain[:3] == ["diff", "--name-only", "--diff-filter=U"]:
                 return subprocess.CompletedProcess(argv, 0, "shared.txt\n", "")
             return subprocess.CompletedProcess(argv, 0, "", "")
 
@@ -497,11 +533,14 @@ class MergeOnlyFromMergeGateTest(FsmTest):
         def failing(cmd, *args, **kwargs):
             self.git_spy(cmd, *args, **kwargs)
             argv = list(cmd)
-            if argv[:3] == ["git", "merge", "--no-ff"]:
+            # Stage0 (A7): scratch-worktree — та же нормализация `-C`, что
+            # и в соседнем `test_merge_failure_leaves_the_task_in_the_gate`.
+            plain = self._plain_args(argv) if argv[:1] == ["git"] else argv
+            if plain[:2] == ["merge", "--no-ff"]:
                 return subprocess.CompletedProcess(argv, 1, "", "конфликт")
-            if argv[:4] == ["git", "diff", "--name-only", "--diff-filter=U"]:
+            if plain[:3] == ["diff", "--name-only", "--diff-filter=U"]:
                 return subprocess.CompletedProcess(argv, 0, "shared.txt\n", "")
-            if argv[:3] == ["git", "merge", "--abort"]:
+            if plain[:2] == ["merge", "--abort"]:
                 return subprocess.CompletedProcess(argv, 1, "", "не могу")
             return subprocess.CompletedProcess(argv, 0, "", "")
 
@@ -659,9 +698,20 @@ class FreshVerdictGuardsAcceptanceTest(FsmTest):
         self.capture(fsm.cmd_advance, self.TASK)
         self.assertEqual(self.state(), "review")
 
+        # A7: `review` теперь читает REVIEW.md с артефактной ветки пульта
+        # (`artifact_source.resolve`, foreign=True для ЛЮБОГО target,
+        # включая self) — отсутствующий на ветке файл отказывает именно
+        # так, как уже установлено и протестировано для внешнего target
+        # (`tests/test_fsm_branch_correct_status_reads.py::
+        # RequiredArtifactMissingOnBranchTest.
+        # test_review_refuses_when_branch_exists_without_review_md`), не
+        # мягким «жду вердикта» — та ветка (`artifacts.frontmatter` на
+        # пустом словаре) была особенностью прежнего self-only пути,
+        # убранного вместе с однобраншевым флоу.
         out = self.capture(fsm.cmd_advance, self.TASK)
         self.assertEqual(self.state(), "review", "REVIEW.md ещё нет")
-        self.assertIn("жду вердикта", out)
+        self.assertIn("дерево не на ветке задачи", out)
+        self.assertIn("REVIEW.md", out)
 
         self.write_review("approved", 1)
         self.capture(fsm.cmd_advance, self.TASK)
@@ -1128,6 +1178,21 @@ class KillKeepsMainIntactTest(unittest.TestCase):
         self.git("add", "-A")
         self.git("commit", "-m", "init")
 
+        # `origin` — bare-репо, играющий роль главной копии артели на
+        # фордже (ANSWER-1, A7): `cleanup.cmd_kill` теперь для ЛЮБОГО
+        # target, включая self, публикует снапшот в `refs/artifacts/<id>`
+        # origin ПЕРЕД уборкой (`_publish_snapshot_if_pending`, AC-6/AC-7)
+        # — без настоящего origin push отказывает молча (тот же вырожденный
+        # случай, что и у любого другого target без сети) и артефактная
+        # ветка пульта остаётся неубранной (AC-15).
+        origin_tmp = tempfile.TemporaryDirectory()
+        self.repo.callback(resilient_tmp_cleanup, origin_tmp)
+        self.origin = Path(origin_tmp.name).resolve()
+        subprocess.run(["git", "init", "-q", "--bare", "-b",
+                        config.MAIN_BRANCH, str(self.origin)],
+                       check=True, capture_output=True, text=True)
+        self.git("remote", "add", "origin", str(self.origin))
+
         for attr, value in (("ROOT", self.root),
                             ("DB", self.root / ".artel" / "state.db"),
                             ("TASKS", self.root / "tasks"),
@@ -1171,10 +1236,18 @@ class KillKeepsMainIntactTest(unittest.TestCase):
         return config.TASKS / self.TASK
 
     def commit_artifacts_in_branch(self) -> None:
-        """С SPEC T048 `cmd_new` уже коммитит SPEC.md в ветку задачи одним
-        коммитом ("<id>: ТЗ Оператора (...)") — заводить его тут больше
-        нечего; метод остаётся no-op ради вызовов ниже, вместо удаления
-        (обратная совместимость сценариев `test_kill_never_commits_to_main`)."""
+        """A7 (generic-путь заведения, AC-5): `cmd_new` больше не заводит
+        кодовую ветку задачи сама (SPEC.md уходит в АРТЕФАКТНУЮ ветку
+        пульта, не в `self.branch`) — её первым коммитом заводит сама
+        роль-разработчик на своём шаге; здесь тот же первый коммит
+        имитируется напрямую, тем же git. Возвращает рабочее дерево на
+        `MAIN_BRANCH` — вызывающий код (`merge_branch_into_main`) мержит
+        именно оттуда."""
+        self.git("checkout", "-b", self.branch)
+        (self.root / "feature.txt").write_text("код фичи\n", encoding="utf-8")
+        self.git("add", "feature.txt")
+        self.git("commit", "-m", f"{self.TASK}: код фичи")
+        self.git("checkout", config.MAIN_BRANCH)
 
     def merge_branch_into_main(self) -> None:
         self.commit_artifacts_in_branch()
@@ -1183,14 +1256,29 @@ class KillKeepsMainIntactTest(unittest.TestCase):
     # ----------------------------------------------------------- сценарии
 
     def test_merged_artifacts_survive_the_kill(self):
-        """Требование 2.5: попавшее в main — история, её kill не удаляет."""
+        """Требование 2.5: попавшее в main — история, её kill не удаляет.
+
+        A7 (AC-6/AC-7): `tasks/<id>/` больше не часть кодовой ветки/main
+        вовсе (артефакты живут в артефактной ветке пульта, привязка к
+        коду — уже история другого рода) — «артефакты пережили kill»
+        теперь означает снапшот в `refs/artifacts/<id>` origin, не файлы
+        на диске `config.TASKS` (там их и не было — `cmd_new` пишет
+        только в артефактную ветку, AC-5)."""
         self.merge_branch_into_main()
         before = self.main_state()
 
         self.capture(cleanup.cmd_kill, self.TASK)
 
         self.assertEqual(self.main_state(), before, "kill изменил main")
-        self.assertTrue((self.task_dir() / "SPEC.md").exists())
+        ref = subprocess.run(
+            ["git", "-C", str(self.origin), "show-ref", "--verify", "--quiet",
+             f"refs/artifacts/{self.TASK}"], capture_output=True, text=True)
+        self.assertEqual(ref.returncode, 0,
+                         f"снапшот {self.TASK} не найден в origin после kill")
+        show = subprocess.run(
+            ["git", "-C", str(self.origin), "ls-tree", "-r", "--name-only",
+             f"refs/artifacts/{self.TASK}"], capture_output=True, text=True)
+        self.assertIn(f"tasks/{self.TASK}/SPEC.md", show.stdout.splitlines())
         self.assertEqual(self.git("status", "--porcelain"), "",
                          "содержимое main осталось на диске без изменений")
 
@@ -1200,12 +1288,10 @@ class KillKeepsMainIntactTest(unittest.TestCase):
             "до коммита": lambda: None,
             "артефакты только в ветке": self.commit_artifacts_in_branch,
             "ветка задачи под HEAD": lambda: (
+                # A7: `cmd_new` больше не заводит worktree сама (AC-5) —
+                # ветка задачи нигде не выписана заранее, убирать перед
+                # чекаутом здесь больше нечего.
                 self.commit_artifacts_in_branch(),
-                # Ветка задачи уже стоит в СВОЁМ worktree (SPEC T045/T048,
-                # `cmd_new` заводит его сразу) — git не даст ту же ветку
-                # ЕЩЁ и в главной копии, пока не убрать первый чекаут.
-                self.git("worktree", "remove", "--force",
-                        str(config.WORKTREES / self.TASK)),
                 self.git("checkout", self.branch)),
             "смержено в main": self.merge_branch_into_main,
         }

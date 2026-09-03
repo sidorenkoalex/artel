@@ -107,22 +107,30 @@ def seed_developer_brief_fixtures(root: Path) -> None:
 
 
 def sync_spec_from_worktree(task_id: str) -> None:
-    """Зеркалит SPEC.md из воркт-дерева задачи в `config.TASKS` (легаси-путь
-    чтения брифа разработчика).
+    """Кладёт SPEC.md задачи на диск `config.TASKS/<id>/` (легаси-путь
+    чтения брифа разработчика в лёгких песочницах без настоящего git).
 
-    `cmd_new` (SPEC T048) пишет SPEC.md в worktree
-    (`config.WORKTREES/<id>/tasks/<id>/`), не в `config.TASKS`.
-    `brief._developer_spec_text` при этом падает на `config.TASKS`, когда
-    `gitcmd.on_foreign_branch` — False (в лёгких песочницах с `fake_git`
-    выше — всегда: `current_branch()` там пустая строка). Без зеркала
-    следующий `cmd_run` роли developer получает `FileNotFoundError` на
-    путь, которого `cmd_new` с T048 больше не пишет.
+    A7 (generic-путь заведения, AC-5): `cmd_new` коммитит SPEC.md в
+    АРТЕФАКТНУЮ ВЕТКУ пульта плотницки (`artifact_branch.commit_files`),
+    не на диск и не в worktree — в лёгкой песочнице (`fake_git`/`SpyRun`
+    без реального git) эта плотницкая запись ничего не пишет по-настоящему
+    (нет `.git` дерева, которое реально принять коммит), так что
+    содержимого ветки взять неоткуда. `brief._developer_spec_text` (через
+    `artifact_source.resolve`, `foreign=True` теперь для ЛЮБОГО target)
+    без диска падает `FileNotFoundError`/именованным отказом — здесь
+    кладётся тот же шаблон, который РЕАЛЬНО закоммитил бы `cmd_new`
+    (`templates/SPEC.md` с подстановкой `TASK_ID`), в паре с патчем
+    `gitcmd.show`/`gitcmd.ls_tree_files` на `disk_backed_show`/
+    `disk_backed_ls_tree_files` (см. их докстринги) — вместе они делают
+    диск `config.TASKS` источником истины для чтения FSM/брифа в этих
+    песочницах, тем же приёмом, что уже несёт `tests.test_invariants.
+    FsmTest`/`tests.test_auto_cycle.AutoCycleTest`.
     """
-    wt_spec = config.WORKTREES / task_id / "tasks" / task_id / "SPEC.md"
+    template = (config.TEMPLATES / "SPEC.md").read_text(encoding="utf-8")
+    text = template.replace("TASK_ID", task_id)
     dest_dir = config.TASKS / task_id
     dest_dir.mkdir(parents=True, exist_ok=True)
-    (dest_dir / "SPEC.md").write_text(
-        wt_spec.read_text(encoding="utf-8"), encoding="utf-8")
+    (dest_dir / "SPEC.md").write_text(text, encoding="utf-8")
 
 
 def capture_new_task_id(fn, *args) -> tuple:
@@ -134,6 +142,51 @@ def capture_new_task_id(fn, *args) -> tuple:
     with redirect_stdout(buf):
         result = fn(*args)
     return buf.getvalue(), result
+
+
+def _tasks_relative_path(rel: str):
+    """`config.TASKS / <rel без ведущего "tasks/">` — НЕ `config.ROOT /
+    rel`: `config.ROOT` в `tests.test_invariants.FsmTest` временно
+    подменяется НА ВРЕМЯ САМОГО вызова `fsm.cmd_approve` (`approve_with_
+    isolated_root`, изоляция генерации карты/RETRO от реального дерева
+    пульта) — `disk_backed_show`, вычисляющий путь от `config.ROOT` в
+    момент чтения, получил бы чужой синтетический каталог без tasks/<id>/
+    вовсе. `config.TASKS` — независимый атрибут `orchestrator/config.py`
+    (посчитан один раз при импорте, `ROOT / "tasks"`), которого эта
+    подмена не касается — стабильный путь для всей жизни процесса."""
+    from orchestrator import config
+    from pathlib import PurePosixPath
+    parts = PurePosixPath(rel).parts
+    assert parts and parts[0] == "tasks", f"неожиданный rel: {rel!r}"
+    return config.TASKS.joinpath(*parts[1:])
+
+
+def disk_backed_show(branch: str, rel: str) -> tuple:
+    """Замена `gitcmd.show` (A7): `rel` — всегда `tasks/<id>/<файл>`
+    (соглашение всех вызывающих мест — `fsm.py`/`brief.py`/`fsm_advance.py`)
+    — `artifact_source.resolve` теперь всегда возвращает `foreign=True`,
+    и без этой подмены чтение ушло бы в `gitcmd.git`, заглушенный в этих
+    песочницах (генерику или вовсе не исполняемый). Возвращает содержимое
+    БУКВАЛЬНО с диска (`_tasks_relative_path`) — ветка (`branch`) не
+    участвует: песочницы, которые сюда попадают, ведут ровно ОДИН
+    источник истины (диск `config.TASKS`), git branch не заводят."""
+    try:
+        return _tasks_relative_path(rel).read_text(encoding="utf-8"), ""
+    except FileNotFoundError:
+        return None, "файла нет на диске"
+    except OSError as exc:
+        return None, str(exc)
+
+
+def disk_backed_ls_tree_files(branch: str, rel_dir: str) -> list | None:
+    """Замена `gitcmd.ls_tree_files` — тот же приём, что `disk_backed_show`
+    выше: список файлов `config.TASKS/...` с диска, ветка не участвует."""
+    path = _tasks_relative_path(rel_dir)
+    if not path.is_dir():
+        return []
+    return sorted(
+        f"{rel_dir.rstrip('/')}/{p.relative_to(path).as_posix()}"
+        for p in path.rglob("*") if p.is_file())
 
 
 def fake_git_for(responses: dict) -> callable:
@@ -224,15 +277,28 @@ def _dead_pid() -> int:
 
 
 class SpyRun:
-    """Подмена `subprocess.run`: фейкует ТОЛЬКО плотницкие git-примитивы
-    артефактной ветки (`artifact_branch.write_commit`/`commit_files`) —
-    им нужен git-репозиторий, которого в лёгкой песочнице `TmpRootTest`
-    нет (`self.root` — обычный временный каталог, не git-репо, пока тест
-    сам его не завёл `git init`). Всё остальное (`init`, `add`/`commit`,
-    `status`, `remote`, `fsck`, `push`, ...) уходит в НАСТОЯЩИЙ
-    `subprocess.run`: код, оперирующий РЕАЛЬНО заведённым по ходу теста
-    репозиторием (`projects.cmd_target_init` и подобные), обязан видеть
-    настоящий исход, а не молчаливую заглушку — иначе, например,
+    """Подмена `subprocess.run`: команда запоминается; исход зависит от
+    `passthrough_unknown`.
+
+    По умолчанию (`passthrough_unknown=False`, байт-в-байт прежнее
+    поведение) фейкует ЛЮБУЮ команду фиксированным успехом, кроме
+    отдельно распознанных плотницких примитивов ниже — так её использует
+    `tests/test_invariants.py::FsmTest`/`tests/test_auto_cycle.py`
+    (`config.ROOT` там НАСТОЯЩИЙ, не временный каталог: реальный
+    `subprocess.run` там недопустим ни для одной команды, не только для
+    плотницких).
+
+    `passthrough_unknown=True` (`TmpRootTest.setUp` ниже) фейкует ТОЛЬКО
+    плотницкие git-примитивы артефактной ветки (`artifact_branch.
+    write_commit`/`commit_files`) — им нужен git-репозиторий, которого в
+    лёгкой песочнице `TmpRootTest` нет (`self.root` — обычный временный
+    каталог, не git-репо, пока тест сам его не завёл `git init`). Всё
+    остальное (`init`, `add`/`commit`, `status`, `remote`, `fsck`,
+    `push`, ...) уходит в НАСТОЯЩИЙ `subprocess.run` — безопасно именно
+    потому, что `TmpRootTest.self.root` ВСЕГДА временный каталог, никогда
+    реальное дерево пульта: код, оперирующий РЕАЛЬНО заведённым по ходу
+    теста репозиторием (`projects.cmd_target_init` и подобные), обязан
+    видеть настоящий исход, а не молчаливую заглушку — иначе, например,
     dirty-детект `git status --porcelain` не отличил бы правку от чистого
     дерева (находка A7: `tasks/01M1H224X5A8W159MKF1Q24R5Y/acceptance_tests/
     test_ac2_doctor_generic_checks.py`/`test_ac3_recovery_check_scope.py`
@@ -240,8 +306,9 @@ class SpyRun:
     по-настоящему — бланкетный фейк «успех на всё» их ложно зеленил).
     """
 
-    def __init__(self):
+    def __init__(self, passthrough_unknown: bool = False):
         self.calls: list = []
+        self.passthrough_unknown = passthrough_unknown
 
     # sha-плейсхолдер для плотницких git-команд ниже — 40 hex-символов,
     # синтаксически валидный sha (git его не проверяет, "не исполняется").
@@ -281,11 +348,27 @@ class SpyRun:
             return subprocess.CompletedProcess(list(cmd), 0, sha, empty)
         if len(cmd) >= 2 and cmd[1] in self._PLUMBING_OK:
             return subprocess.CompletedProcess(list(cmd), 0, empty, empty)
-        return _REAL_RUN(cmd, *args, **kwargs)
+        if self.passthrough_unknown:
+            return _REAL_RUN(cmd, *args, **kwargs)
+        return subprocess.CompletedProcess(list(cmd), 0, empty, empty)
 
     def git_subcommands(self) -> list:
-        """Подкоманды git по порядку: ['checkout', 'pull', 'merge', ...]."""
-        return [c[1] for c in self.calls if len(c) > 1 and c[0] == "git"]
+        """Подкоманды git по порядку: ['checkout', 'pull', 'merge', ...] —
+        сквозь ведущие `-C <путь>` (Stage0, плотницкий merge в scratch-
+        worktree, `gitcmd.in_repo`/`in_repo`: `git -C <scratch> merge
+        ...`) — без пропуска пар `-C` первый элемент был бы всегда `-C`,
+        а не настоящей подкомандой, и `assertIn`/`assertNotIn("merge",
+        ...)` проверяли бы не то, что называют."""
+        result = []
+        for c in self.calls:
+            if len(c) < 2 or c[0] != "git":
+                continue
+            i = 1
+            while i + 1 < len(c) and c[i] == "-C":
+                i += 2
+            if i < len(c):
+                result.append(c[i])
+        return result
 
 
 def fake_git(*args: str) -> subprocess.CompletedProcess:
@@ -344,7 +427,14 @@ class TmpRootTest(unittest.TestCase):
         # `subprocess.run` (полный контроль над git-вызовами), патчат
         # `gitcmd.subprocess.run` поверх после `super().setUp()` — снятие
         # патчей идёт в LIFO-порядке штатным `addCleanup`.
-        self.git_spy = SpyRun()
+        # `passthrough_unknown=True` — безопасно именно здесь: `self.root`
+        # (и, если он в `PATCHED_ATTRS`, `config.ROOT`) ВСЕГДА временный
+        # каталог этой песочницы, никогда реальное дерево пульта — в
+        # отличие от `tests/test_invariants.py::FsmTest`/`tests/
+        # test_auto_cycle.py`, которые заводят `SpyRun()` сами, с
+        # НАСТОЯЩИМ `config.ROOT`, и поэтому обязаны получать классический
+        # (полностью фейковый) `SpyRun` — дефолт конструктора без флага.
+        self.git_spy = SpyRun(passthrough_unknown=True)
         spy_patcher = mock.patch.object(gitcmd.subprocess, "run", self.git_spy)
         spy_patcher.start()
         self.addCleanup(spy_patcher.stop)
