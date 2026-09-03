@@ -18,7 +18,7 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from orchestrator import catalog, config, gitcmd, store  # noqa: E402
+from orchestrator import artifact_branch, catalog, config, gitcmd, store  # noqa: E402
 from tests.sandbox import TmpRootTest, capture_new_task_id, fake_git  # noqa: E402
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -64,7 +64,7 @@ class PeekTaskNumberRaceTest(TmpRootTest):
         with mock.patch.object(
                 store, "peek_task_number",
                 side_effect=lambda c, t: real_peek(c, t) - 1):
-            _, task_id = capture_new_task_id(catalog.cmd_new, "Задача под гонкой")
+            out, task_id = capture_new_task_id(catalog.cmd_new, "Задача под гонкой")
 
         row = store.db().execute(
             "SELECT branch FROM tasks WHERE id=?", (task_id,)).fetchone()
@@ -75,8 +75,16 @@ class PeekTaskNumberRaceTest(TmpRootTest):
             "branch обязан считаться от реального task_id (ULID) — "
             "подделка peek_task_number не должна на него влиять")
 
-        wt_dir = config.WORKTREES / task_id / "tasks" / task_id
-        self.assertTrue((wt_dir / "SPEC.md").exists())
+        # A7 (generic-путь заведения, AC-5): `cmd_new` больше не заводит
+        # worktree/кодовую ветку сама — SPEC.md коммитится плотницки в
+        # артефактную ветку пульта (`artifact_branch.commit_files`,
+        # `subprocess.run` напрямую, минуя `gitcmd.git`/фейк выше);
+        # плотницкая запись, не отвечающая успехом, обрывает `cmd_new`
+        # `sys.exit`, так что успешный вывод — сама по себе проверка,
+        # что коммит прошёл (сверить его содержимое через
+        # `gitcmd.ls_tree_files` в этой песочнице без настоящего git
+        # нельзя — тот же `fake_git`).
+        self.assertIn(artifact_branch.branch_name(task_id), out)
 
 
 if __name__ == "__main__":

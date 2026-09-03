@@ -22,7 +22,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from orchestrator import (acceptance, catalog, config, fsm, gitcmd,  # noqa: E402
                           store, workspace)
-from tests.sandbox import capture, capture_new_task_id, fake_git  # noqa: E402
+from tests.sandbox import (SpyRun, capture, capture_new_task_id,  # noqa: E402
+                           disk_backed_ls_tree_files, disk_backed_show,
+                           fake_git)
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
@@ -72,6 +74,28 @@ class BranchFreshnessGateTest(unittest.TestCase):
         patcher = mock.patch.object(gitcmd, "git", fake_git)
         patcher.start()
         self.addCleanup(patcher.stop)
+        # A7 (generic-путь заведения, AC-5): `cmd_new` коммитит артефакты
+        # плотницки (`artifact_branch.write_commit`) — та функция зовёт
+        # `subprocess.run` НАПРЯМУЮ, минуя `gitcmd.git`/фейк выше; `root`
+        # здесь не настоящий git-репозиторий — без этого патча `cmd_new`
+        # падает `sys.exit` («git не ответил») ещё до сценария, который
+        # тест проверяет (тот же приём, что `tests.sandbox.TmpRootTest.
+        # setUp`).
+        spy_patcher = mock.patch.object(gitcmd.subprocess, "run", SpyRun())
+        spy_patcher.start()
+        self.addCleanup(spy_patcher.stop)
+        # `artifact_source.resolve` теперь ВСЕГДА возвращает `foreign=True`
+        # — FSM читает PLAN/SPEC через `gitcmd.show`/`ls_tree_files`, не с
+        # диска напрямую; эта песочница без настоящего git ведёт один
+        # источник истины — диск `self.tdir` (тот же приём, что
+        # `tests.test_invariants.FsmTest`).
+        show_patcher = mock.patch.object(gitcmd, "show", disk_backed_show)
+        show_patcher.start()
+        self.addCleanup(show_patcher.stop)
+        ls_patcher = mock.patch.object(gitcmd, "ls_tree_files",
+                                       disk_backed_ls_tree_files)
+        ls_patcher.start()
+        self.addCleanup(ls_patcher.stop)
 
         self.wt_path = root / "wt"
         wt_patcher = mock.patch.object(
@@ -123,7 +147,37 @@ class BranchFreshnessGateTest(unittest.TestCase):
     def _ok(repo, *args) -> subprocess.CompletedProcess:
         return subprocess.CompletedProcess(("git", "-C", str(repo), *args), 0, "", "")
 
+    def _fixation_response(self, repo, *args) -> subprocess.CompletedProcess | None:
+        """Ответ на вызовы `fixation.read`/`fix` (A7: self/артель фиксируется
+        тем же кодом, что и любой target, — `confirm_fixation`/`record_
+        fixation` зовут `gitcmd.in_repo` на КАЖДОМ approve/advance, до и
+        независимо от предмета этого файла, подтяжки свежести) — `None`,
+        если `args` не про фиксацию (вызывающий код решает дальше сам).
+        Эти вызовы НЕ считаются `merge_calls`/`abort_calls` — те про
+        предмет теста, не про фиксацию."""
+        if args == ("rev-parse", "HEAD"):
+            # Пустой sha (не фейковый непустой) — `confirm_fixation`
+            # деградирует «сверять не с чем» (тот же вырожденный случай,
+            # что и до A7: этот файл — не про фиксацию, approve без `sha`
+            # обязан продолжать работать).
+            return subprocess.CompletedProcess(
+                ("git", "-C", str(repo), *args), 0, "", "")
+        if args[:2] == ("status", "--porcelain"):
+            return subprocess.CompletedProcess(
+                ("git", "-C", str(repo), *args), 0, "", "")
+        if args[:1] == ("init",):
+            return self._ok(repo, *args)
+        if args[:2] == ("diff", "--cached"):
+            return subprocess.CompletedProcess(
+                ("git", "-C", str(repo), *args), 0, "", "")  # нечего коммитить
+        if args[:1] == ("add",):
+            return self._ok(repo, *args)
+        return None
+
     def _conflict_then_abort_ok(self, repo, *args) -> subprocess.CompletedProcess:
+        fixation_response = self._fixation_response(repo, *args)
+        if fixation_response is not None:
+            return fixation_response
         if args[:1] == ("merge",) and "--abort" in args:
             self.abort_calls.append((repo, args))
             return self._ok(repo, *args)
@@ -142,6 +196,9 @@ class BranchFreshnessGateTest(unittest.TestCase):
         raise AssertionError(f"неожиданный gitcmd.in_repo вызов: {args}")
 
     def _recording_ok(self, repo, *args) -> subprocess.CompletedProcess:
+        fixation_response = self._fixation_response(repo, *args)
+        if fixation_response is not None:
+            return fixation_response
         self.merge_calls.append((repo, args))
         return self._ok(repo, *args)
 

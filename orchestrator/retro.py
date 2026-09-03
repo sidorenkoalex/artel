@@ -36,8 +36,13 @@ def retro_rel_path(task_id: str) -> str:
     return f"{RETRO_DIR_REL}/{task_id}.md"
 
 
-def retro_path(task_id: str):
-    return config.ROOT / retro_rel_path(task_id)
+def retro_path(task_id: str, repo=None):
+    """Путь `docs/retro/<id>.md`; `repo` (A7, Stage0, AC-9) — корень, в
+    котором физически лежит файл, по умолчанию `config.ROOT`. Переход
+    `merge_gate -> done` пишет RETRO в scratch-worktree плотницкого
+    merge (`orchestrator/fsm_merge_gate.py`), не в `config.ROOT` —
+    единственный вызыватель, передающий `repo` явно."""
+    return (repo if repo is not None else config.ROOT) / retro_rel_path(task_id)
 
 
 def _read_spec_text(task_id: str) -> str | None:

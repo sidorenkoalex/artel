@@ -25,7 +25,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from orchestrator import (agent_log, catalog, config, fsm, gitcmd,  # noqa: E402
                           runner, store)
 from tests.sandbox import (FakeProc, FakeStream, TmpRootTest,  # noqa: E402
-                           capture_new_task_id, fake_git,
+                           capture_new_task_id, disk_backed_ls_tree_files,
+                           disk_backed_show, fake_git,
                            seed_developer_brief_fixtures, sync_spec_from_worktree)
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -105,6 +106,18 @@ class CmdRunFailureTest(TmpRootTest):
         git_patcher = mock.patch.object(gitcmd, "git", fake_git)
         git_patcher.start()
         self.addCleanup(git_patcher.stop)
+        # A7: FSM/бриф читают SPEC/PLAN/... через `gitcmd.show`/
+        # `gitcmd.ls_tree_files` (артефактная ветка, `foreign=True` для
+        # ЛЮБОГО target) — эта песочница без настоящего git ведёт диск
+        # `config.TASKS` как единственный источник истины (`sync_spec_
+        # from_worktree` ниже пишет туда же).
+        show_patcher = mock.patch.object(gitcmd, "show", disk_backed_show)
+        show_patcher.start()
+        self.addCleanup(show_patcher.stop)
+        ls_patcher = mock.patch.object(gitcmd, "ls_tree_files",
+                                       disk_backed_ls_tree_files)
+        ls_patcher.start()
+        self.addCleanup(ls_patcher.stop)
         self.capture(catalog.cmd_init)
         # `cmd_new` возвращает id ULID (SPEC T094, требование 2), больше не
         # предсказуемый "T001" — забираем реальный через

@@ -5,8 +5,8 @@ import socket
 import sys
 from pathlib import Path
 
-from . import (alerts, artifact_branch, artifacts, budget, config, fixation,
-              gitcmd, idgen, liveness, store, workspace)
+from . import (alerts, artifact_branch, artifacts, budget, config, gitcmd,
+              idgen, liveness, store)
 
 # ГОСТ-подобная транслитерация: только stdlib, без внешних зависимостей.
 # ъ/ь пропускаются; ё → yo; щ → sch; ю → yu; я → ya.
@@ -103,17 +103,20 @@ def cmd_new(title: str, tz_path: str | None = None, *,
     `task_counters` остаётся, но заморожен как legacy — требование 6, не
     удаляется этой задачей).
 
-    `target` (SPEC T094, требования 7-9, AC-8/AC-9) — keyword-only,
-    `None` (self/догфуд, `config.DEFAULT_TARGET`) не меняет поведение
-    существующих вызывателей: `tasks/<id>/` рождается прямо в worktree
-    кодовой ветки задачи, как и раньше (требование 16/AC-18 — self не
-    заводит артефактную ветку пульта до A7). Для ЛЮБОГО другого target
-    `tasks/<id>/` коммитится ВЕТКОЙ ПУЛЬТА (`orchestrator/
+    `target` (SPEC T094, требования 7-9, AC-8/AC-9; A7 требование 2 —
+    снятие особого случая догфуда) — keyword-only, `None` дефолтится в
+    `config.DEFAULT_TARGET` (артель). Для ЛЮБОГО target, включая
+    артель, `tasks/<id>/` коммитится ВЕТКОЙ ПУЛЬТА (`orchestrator/
     artifact_branch.py`) — кодовая ветка `branch` только ЗАПИСЫВАЕТСЯ в
-    БД (её создание и код — дело роли-разработчика в клоне целевого,
-    `runner.role_cwd`, эта функция туда не пишет вовсе, AC-9). Push
-    артефактной ветки в origin пульта — best-effort (требование 7,
-    AC-8): отказ сети не отменяет заведение задачи.
+    БД (её создание и код — дело роли-разработчика в клоне целевого
+    либо, для артели, в `config.ROOT` напрямую; эта функция туда не
+    пишет вовсе, AC-9). Push артефактной ветки в origin пульта —
+    best-effort (требование 7, AC-8): отказ сети не отменяет заведение
+    задачи. До A7 self/догфуд заводил worktree и кодовую ветку сама
+    (требование 16/AC-18 M1) — этот путь (`_new_dogfood`) убран вместе
+    со особым случаем (A7, AC-5): исторические задачи в `tasks/`
+    пульта, заведённые им, не трогаются, но новые задачи артели идут
+    тем же generic-путём, что и любой другой target.
 
     `canary` — keyword-only, дефолт `False` не меняет поведение
     существующих вызывателей: команда `canary` (tasks/T065/SPEC.md,
@@ -141,56 +144,18 @@ def cmd_new(title: str, tz_path: str | None = None, *,
     spec = spec.replace("TASK_ID", task_id).replace("<название задачи>", title)
     tz_doc = _tz_document(task_id, title, tz_raw) if tz_raw is not None else None
 
-    if target == config.DEFAULT_TARGET:
-        _new_dogfood(task_id, title, branch, spec, tz_doc)
-    else:
-        _new_external_artifact_branch(task_id, title, spec, tz_doc)
+    _new_external_artifact_branch(task_id, title, spec, tz_doc)
 
     store.insert_task(conn, task_id, title, "spec_writing", branch, target,
                       config.DEFAULT_BUDGET_USD, is_canary=canary)
     store.journal(conn, task_id, "operator", "created", title)
-    print(f"[{task_id}] «{title}» создана"
-         + (f" в ветке {branch}" if target == config.DEFAULT_TARGET
-            else f" (target {target}, артефактная ветка пульта "
-                 f"{artifact_branch.branch_name(task_id)})"))
+    print(f"[{task_id}] «{title}» создана (target {target}, артефактная "
+         f"ветка пульта {artifact_branch.branch_name(task_id)})")
     if tz_path is not None:
         print(f"  затем: artel.py run {task_id}  (запуск analyst)")
     else:
         print(f"  затем: artel.py advance {task_id}  (SPEC status: ready)")
     return task_id
-
-
-def _new_dogfood(task_id: str, title: str, branch: str, spec: str,
-                 tz_doc: str | None) -> None:
-    """Self/догфуд (требование 16/AC-18): однобраншевый флоу, байт-в-байт
-    прежнее поведение `cmd_new` до SPEC T094 (worktree кодовой ветки,
-    коммит оркестраторского авторства)."""
-    if gitcmd.branch_exists(branch):
-        sys.exit(f"ветка {branch} уже существует — задача не заведена")
-    wt_path, error = workspace.ensure(task_id, branch)
-    if error is not None:
-        sys.exit(f"[{task_id}] worktree не создан: {error}")
-
-    task_dir = wt_path / "tasks" / task_id
-    task_dir.mkdir(parents=True)
-    (task_dir / "SPEC.md").write_text(spec, encoding="utf-8")
-    if tz_doc is not None:
-        (task_dir / "TZ.md").write_text(tz_doc, encoding="utf-8")
-
-    commit_message = f"{task_id}: ТЗ Оператора ({title})"
-    added = gitcmd.in_repo(wt_path, "add", "-A", f"tasks/{task_id}")
-    if added is None or added.returncode != 0:
-        # `res is None` — git не ответил вовсе, тот же вырожденный случай,
-        # что и у `workspace.ensure`/`gitcmd.branch_exists` выше.
-        sys.exit(f"[{task_id}] ТЗ/SPEC не застейджены: "
-                 f"{added.stderr.strip()[:200] if added is not None else '—'}")
-    committed = gitcmd.in_repo(
-        wt_path, "-c", f"user.name={fixation.FIXATION_AUTHOR_NAME}",
-        "-c", f"user.email={fixation.FIXATION_AUTHOR_EMAIL}",
-        "commit", "-q", "-m", commit_message)
-    if committed is None or committed.returncode != 0:
-        sys.exit(f"[{task_id}] коммит ветки {branch} не сделан: "
-                 f"{committed.stderr.strip()[:200] if committed is not None else '—'}")
 
 
 def _new_external_artifact_branch(task_id: str, title: str, spec: str,

@@ -7,6 +7,7 @@ Happy path (создание, коммит, авторство, журнал) у
 песочница `RealPultGitTest` с настоящим git) — здесь только то, что он
 не проверяет: чистые функции модуля и отказы по предусловиям.
 """
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -14,7 +15,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from orchestrator import answer, fsm, store  # noqa: E402
+from orchestrator import answer, fsm, store, workspace  # noqa: E402
 from scripts import guard  # noqa: E402
 from tests.test_git_fixation import RealPultGitTest  # noqa: E402
 
@@ -69,7 +70,53 @@ class AnswerDocumentIsGuardValidTest(unittest.TestCase):
         self.assertIn("МАРКЕР-xyz", text)
 
 
-class AnswerCommandRefusalsTest(RealPultGitTest):
+class _WorktreeAnswerTest(RealPultGitTest):
+    """`answer.py` не входит в состав AC-6 (A7 не генерализует этот файл)
+    — команда `answer` по-прежнему пишет `ANSWER-n.md` в worktree КОДОВОЙ
+    ветки задачи (`workspace.ensure`), тот же класс отставания, что и
+    три WIP-чекпоинта (`tests/test_timeout_checkpoint.py::
+    _WorktreeCheckpointTest`, тем же приёмом здесь). `_escalate()` при
+    этом сеет QUESTIONS.md в АРТЕФАКТНУЮ ВЕТКУ пульта — её (не worktree)
+    читает `fsm_advance.spec_writing` через `artifact_source.resolve`
+    (SPEC T094, требование 10, A7 требование 2 — generic-путь)."""
+
+    def setUp(self):
+        super().setUp()
+        branch = store.get_task(store.db(), self.TASK)["branch"]
+        wt_path, error = workspace.ensure(self.TASK, branch)
+        self.assertIsNone(error, f"worktree не создан: {error}")
+        self.wt = wt_path
+
+    def worktree_task_dir(self) -> Path:
+        d = self.wt / "tasks" / self.TASK
+        d.mkdir(parents=True, exist_ok=True)
+        return d
+
+    def worktree_git(self, *args: str) -> str:
+        res = subprocess.run(["git", "-C", str(self.wt), *args],
+                             capture_output=True, text=True)
+        self.assertEqual(res.returncode, 0, f"git {' '.join(args)}: {res.stderr}")
+        return res.stdout
+
+    def _escalate(self) -> None:
+        self._seed_artifact_branch(
+            f"tasks/{self.TASK}/QUESTIONS.md",
+            QUESTIONS_TEXT.format(task=self.TASK),
+            f"{self.TASK}: батч вопросов")
+        self.capture(fsm.cmd_advance, self.TASK)
+        self.assertEqual(store.get_task(store.db(), self.TASK)["state"],
+                         "escalated")
+
+    def _answer_file(self, text: str) -> str:
+        f = tempfile.NamedTemporaryFile(
+            mode="w", suffix=".md", delete=False, encoding="utf-8")
+        self.addCleanup(lambda: Path(f.name).unlink(missing_ok=True))
+        f.write(text)
+        f.close()
+        return f.name
+
+
+class AnswerCommandRefusalsTest(_WorktreeAnswerTest):
 
     def test_refuses_outside_escalated_state(self):
         self.assertEqual(store.get_task(store.db(), self.TASK)["state"],
@@ -80,7 +127,7 @@ class AnswerCommandRefusalsTest(RealPultGitTest):
             answer.cmd_answer(self.TASK, answer_file)
 
         self.assertIn("escalated", str(ctx.exception))
-        self.assertFalse((self.task_dir() / "ANSWER-1.md").exists())
+        self.assertFalse((self.worktree_task_dir() / "ANSWER-1.md").exists())
 
     def test_refuses_on_unreadable_answer_file(self):
         self._escalate()
@@ -90,26 +137,10 @@ class AnswerCommandRefusalsTest(RealPultGitTest):
             answer.cmd_answer(self.TASK, missing)
 
         self.assertIn("не прочитан", str(ctx.exception))
-        self.assertFalse((self.task_dir() / "ANSWER-1.md").exists())
-
-    def _escalate(self) -> None:
-        (self.task_dir() / "QUESTIONS.md").write_text(
-            QUESTIONS_TEXT.format(task=self.TASK), encoding="utf-8")
-        self.commit_task_dir("батч вопросов")
-        self.capture(fsm.cmd_advance, self.TASK)
-        self.assertEqual(store.get_task(store.db(), self.TASK)["state"],
-                         "escalated")
-
-    def _answer_file(self, text: str) -> str:
-        f = tempfile.NamedTemporaryFile(
-            mode="w", suffix=".md", delete=False, encoding="utf-8")
-        self.addCleanup(lambda: Path(f.name).unlink(missing_ok=True))
-        f.write(text)
-        f.close()
-        return f.name
+        self.assertFalse((self.worktree_task_dir() / "ANSWER-1.md").exists())
 
 
-class AnswerCommandStrayFilesTest(RealPultGitTest):
+class AnswerCommandStrayFilesTest(_WorktreeAnswerTest):
     """REVIEW T075 итерация 1, замечание major: `answer` стейджил
     `tasks/<id>` целиком (`add -A`), а не только новый `ANSWER-n.md` —
     любая чужая незакоммиченная правка того же (переиспользуемого на
@@ -118,36 +149,20 @@ class AnswerCommandStrayFilesTest(RealPultGitTest):
 
     def test_leftover_uncommitted_file_in_task_dir_is_not_swept_into_the_commit(self):
         self._escalate()
-        stray = self.task_dir() / "stray.txt"
+        stray = self.worktree_task_dir() / "stray.txt"
         stray.write_text("чужая незакоммиченная правка\n", encoding="utf-8")
 
         answer.cmd_answer(self.TASK, self._answer_file("Ответ.\n"))
 
-        status = self.git_in_worktree("status", "--porcelain",
-                                      f"tasks/{self.TASK}")
+        status = self.worktree_git("status", "--porcelain",
+                                   f"tasks/{self.TASK}")
         self.assertIn(
             f"?? tasks/{self.TASK}/stray.txt", status,
             "answer обязан застейджить и закоммитить только ANSWER-n.md, "
             "посторонний незакоммиченный файл того же tasks/<id> обязан "
             "остаться нетронутым")
-        self.assertNotIn("stray.txt", self.git_in_worktree(
+        self.assertNotIn("stray.txt", self.worktree_git(
             "log", "-1", "--name-only", "--format="))
-
-    def _escalate(self) -> None:
-        (self.task_dir() / "QUESTIONS.md").write_text(
-            QUESTIONS_TEXT.format(task=self.TASK), encoding="utf-8")
-        self.commit_task_dir("батч вопросов")
-        self.capture(fsm.cmd_advance, self.TASK)
-        self.assertEqual(store.get_task(store.db(), self.TASK)["state"],
-                         "escalated")
-
-    def _answer_file(self, text: str) -> str:
-        f = tempfile.NamedTemporaryFile(
-            mode="w", suffix=".md", delete=False, encoding="utf-8")
-        self.addCleanup(lambda: Path(f.name).unlink(missing_ok=True))
-        f.write(text)
-        f.close()
-        return f.name
 
 
 if __name__ == "__main__":
