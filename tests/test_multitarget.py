@@ -23,11 +23,11 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from orchestrator import (budget, catalog, config, projects,  # noqa: E402
+from orchestrator import (budget, catalog, config, gitcmd, projects,  # noqa: E402
                           runner, spend, store, targets)
 from tests.sandbox import (FakeProc, TmpRootTest, capture,  # noqa: E402
-                           capture_new_task_id, fake_git,
-                           seed_developer_brief_fixtures)
+                           capture_new_task_id, disk_backed_show, fake_git,
+                           seed_developer_brief_fixtures, sync_spec_from_worktree)
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
@@ -758,8 +758,17 @@ class RoleEnvTest(TmpRootTest):
         capture(catalog.cmd_init)
         _, task_id = capture_new_task_id(catalog.cmd_new, "Окружение роли")
         store.update_task(store.db(), task_id, state="in_dev")
+        sync_spec_from_worktree(task_id)
 
+        # `silent_git` роняет ЛЮБУЮ git-команду (returncode 1) — годится
+        # для предмета теста (сверка git-идентичности), но брифу роли
+        # (A7: SPEC.md читается с артефактной ветки, `gitcmd.show`) нечем
+        # ответить тем же провалом — `gitcmd.show` патчится отдельно, на
+        # чтение с диска (`disk_backed_show`, тот же приём, что и
+        # `tests.test_invariants.FsmTest`), не участвует в сверке
+        # идентичности этого теста.
         with mock.patch.object(runner.gitcmd, "git", silent_git), \
+                mock.patch.object(gitcmd, "show", disk_backed_show), \
                 mock.patch.object(runner, "spawn_agent") as popen:
             popen.return_value = FakeProc(["готово\n"])
             out = capture(runner.cmd_run, task_id)

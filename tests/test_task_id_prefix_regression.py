@@ -26,9 +26,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from orchestrator import (catalog, cleanup, config, fsm,  # noqa: E402
                           gitcmd, store, workspace)
-from tests.sandbox import (TmpRootTest, capture,  # noqa: E402
-                           capture_new_task_id, fake_git,
-                           resilient_tmp_cleanup)
+from tests.sandbox import (SpyRun, TmpRootTest, capture,  # noqa: E402
+                           capture_new_task_id, disk_backed_ls_tree_files,
+                           disk_backed_show, fake_git, resilient_tmp_cleanup,
+                           sync_spec_from_worktree)
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
@@ -138,9 +139,32 @@ class PrefixAdvanceRejectTest(unittest.TestCase):
             workspace, "ensure", lambda task_id, branch: (root, None))
         wt_patcher.start()
         self.addCleanup(wt_patcher.stop)
+        # A7 (generic-путь заведения, AC-5): `cmd_new` коммитит артефакты
+        # плотницки, минуя `gitcmd.git` (фейк выше) — без этого патча
+        # `cmd_new` падает `sys.exit` («git не ответил»).
+        spy_patcher = mock.patch.object(gitcmd.subprocess, "run", SpyRun())
+        spy_patcher.start()
+        self.addCleanup(spy_patcher.stop)
+        # `artifact_source.resolve` теперь ВСЕГДА `foreign=True` — FSM
+        # читает SPEC.md через `gitcmd.show`/`ls_tree_files`; эта
+        # песочница без настоящего git ведёт диск `config.TASKS` как
+        # единственный источник истины.
+        show_patcher = mock.patch.object(gitcmd, "show", disk_backed_show)
+        show_patcher.start()
+        self.addCleanup(show_patcher.stop)
+        ls_patcher = mock.patch.object(gitcmd, "ls_tree_files",
+                                       disk_backed_ls_tree_files)
+        ls_patcher.start()
+        self.addCleanup(ls_patcher.stop)
 
         capture(catalog.cmd_init)
         _, self.TASK = capture_new_task_id(catalog.cmd_new, "Advance префиксом")
+        # `cmd_new` (A7) коммитит SPEC.md в артефактную ветку пульта
+        # плотницки, не на диск — эта песочница без настоящего git читает
+        # диск `config.TASKS` как единственный источник истины, значит
+        # содержимое кладётся сюда же явно (тем же приёмом, что и
+        # `tests.test_agent_prompt.PromptChannelTest`).
+        sync_spec_from_worktree(self.TASK)
         self.tdir = config.TASKS / self.TASK
         self.prefix = self.TASK[:8]
         self.assertNotEqual(self.prefix, self.TASK,

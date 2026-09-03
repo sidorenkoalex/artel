@@ -21,7 +21,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from orchestrator import (artifacts, catalog, config, fsm,  # noqa: E402
                           gitcmd, review, runner, store)
-from tests.sandbox import capture, capture_new_task_id, fake_git  # noqa: E402
+from tests.sandbox import (SpyRun, capture, capture_new_task_id,  # noqa: E402
+                           disk_backed_ls_tree_files, disk_backed_show,
+                           fake_git)
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
@@ -133,6 +135,24 @@ class ReviewFreshnessScenarioTest(unittest.TestCase):
         git_patcher = mock.patch.object(gitcmd, "git", fake_git)
         git_patcher.start()
         self.addCleanup(git_patcher.stop)
+        # A7 (generic-путь заведения, AC-5): `cmd_new` коммитит артефакты
+        # плотницки, минуя `gitcmd.git` (фейк выше) — без этого патча
+        # `cmd_new` падает `sys.exit` («git не ответил»).
+        spy_patcher = mock.patch.object(gitcmd.subprocess, "run", SpyRun())
+        spy_patcher.start()
+        self.addCleanup(spy_patcher.stop)
+        # `artifact_source.resolve` теперь ВСЕГДА `foreign=True` — FSM
+        # читает REVIEW.md/PLAN.md через `gitcmd.show`/`ls_tree_files`;
+        # эта песочница без настоящего git ведёт диск `config.TASKS` как
+        # единственный источник истины (тем же приёмом, что и
+        # `write_review`/`write_plan_ready` ниже).
+        show_patcher = mock.patch.object(gitcmd, "show", disk_backed_show)
+        show_patcher.start()
+        self.addCleanup(show_patcher.stop)
+        ls_patcher = mock.patch.object(gitcmd, "ls_tree_files",
+                                       disk_backed_ls_tree_files)
+        ls_patcher.start()
+        self.addCleanup(ls_patcher.stop)
         kc_patcher = mock.patch.object(runner.keychain, "token",
                                        lambda slot: "tok-test")
         kc_patcher.start()

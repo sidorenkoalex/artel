@@ -27,7 +27,6 @@ import contextlib
 import shutil
 import subprocess
 import sys
-import tempfile
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -36,10 +35,15 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from orchestrator import (auto, catalog, config, fixation, fsm,  # noqa: E402
                           fsm_autogate, gates, gitcmd, projects, runner,
-                          store, workspace)
+                          store)
 from tests.sandbox import (FakeProc, TmpRootTest, capture,  # noqa: E402
                            capture_new_task_id, claude_only_popen,
                            resilient_tmp_cleanup)
+
+# Захвачен ДО любого mock.patch (порядок импорта модуля) — настоящий
+# subprocess.run, которым `_GitFixationTmpRootTest.setUp` перекрывает
+# `SpyRun` базового `TmpRootTest` (см. его докстринг ниже).
+_REAL_SUBPROCESS_RUN = subprocess.run
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
@@ -49,6 +53,20 @@ TARGETS_YAML = """targets:
     url: https://example.invalid/sled
     base: main
     token_slot: sled-token
+    no_paths: []
+    project_skills: []
+    merge_gate: operator
+"""
+
+# `artel` — обычная запись target (A7, AC-1): `RealPultGitTest` заводит
+# self-задачи через generic-путь `cmd_new`, тем же приёмом, что и
+# `TARGETS_YAML` выше для 'sled'.
+ARTEL_TARGETS_YAML = f"""targets:
+  {config.DEFAULT_TARGET}:
+    forge: github
+    url: https://example.invalid/artel
+    base: main
+    token_slot: artel-token
     no_paths: []
     project_skills: []
     merge_gate: operator
@@ -101,6 +119,17 @@ class _GitFixationTmpRootTest(TmpRootTest):
 
     PATCHED_ATTRS = ("ROOT", "DB", "TASKS", "LOGS", "PROJECTS",
                      "ROLE_HOME", "ROLE_CONFIG_DIR", "TARGETS")
+
+    def setUp(self):
+        super().setUp()
+        # Весь этот файл проверяет НАСТОЯЩИЙ git (см. докстринг модуля) —
+        # `SpyRun` базового `TmpRootTest` (заглушка ради плотницкой записи
+        # `cmd_new` без реального репозитория, tests/sandbox.py) перекрыт
+        # здесь настоящим `subprocess.run`, как и описывает комментарий
+        # `TmpRootTest.setUp` про подклассы с собственным моком git.
+        patcher = mock.patch.object(gitcmd.subprocess, "run", _REAL_SUBPROCESS_RUN)
+        patcher.start()
+        self.addCleanup(patcher.stop)
 
 
 TmpRootTest = _GitFixationTmpRootTest
@@ -574,65 +603,64 @@ class ExternalApproveDoesNotCommitOthersWorkInProgressTest(TmpRootTest):
         self.assertEqual(store.get_task(store.db(), self.TASK)["state"], "in_dev")
 
 
-class RealPultGitTest(unittest.TestCase):
-    """Песочница догфуда: ROOT — настоящий git-репозиторий (как test_invariants.
-
-    PultArtifactIsolationTest): здесь проверяется чтение РЕАЛЬНОГО
-    состояния рабочей копии, заглушкой git его не изобразить.
+class RealPultGitTest(_GitFixationTmpRootTest):
+    """Песочница self/артель (A7, generic-путь, ANSWER-1 вопрос 1): self
+    (`config.DEFAULT_TARGET`) фиксируется тем же кодом, что и ЛЮБОЙ
+    внешний target (`ExternalIntegrityIncidentBlocksRunTest` выше) —
+    фиксация читает/пишет `config.PROJECTS/artel/tasks/<id>/`, не
+    worktree кодовой ветки (та мирная площадка, `_fix_dogfood`, убрана
+    вместе с однобраншевым флоу заведения задачи, `catalog._new_dogfood`).
+    Содержимое, которое читает FSM (статус SPEC.md и т.п.), живёт
+    отдельно — в артефактной ветке пульта (`artifact_branch.py`, M1) —
+    `enter_spec_gate` пишет в ОБА места, как и `ExternalIntegrityIncidentBlocksRunTest.make_task`.
     """
 
     def setUp(self):
-        tmp = tempfile.TemporaryDirectory()
-        self.addCleanup(resilient_tmp_cleanup, tmp)
-        self.root = Path(tmp.name).resolve()
-
-        self.git("init", "-q", "-b", config.MAIN_BRANCH)
-        self.git("config", "user.email", "artel@example.invalid")
-        self.git("config", "user.name", "artel tests")
-        shutil.copytree(REPO_ROOT / "templates", self.root / "templates")
-        shutil.copytree(REPO_ROOT / "skills", self.root / "skills")
-        shutil.copy(REPO_ROOT / ".gitignore", self.root / ".gitignore")
+        super().setUp()
+        config.TARGETS.write_text(ARTEL_TARGETS_YAML, encoding="utf-8")
+        self.capture(projects.cmd_target_init, config.DEFAULT_TARGET)
+        self.capture(catalog.cmd_init)
+        # SPEC T094, требование 10: артефактная ветка пульта и её чтение
+        # (`artifact_source.resolve`) живут в РЕАЛЬНОМ git-репозитории
+        # `config.ROOT`, не в подменённом одними путями `config` каталоге.
+        subprocess.run(["git", "init", "-q", "-b", config.MAIN_BRANCH],
+                       cwd=config.ROOT, check=True)
+        subprocess.run(["git", "config", "user.email", "artel@example.invalid"],
+                       cwd=config.ROOT, check=True)
+        subprocess.run(["git", "config", "user.name", "artel tests"],
+                       cwd=config.ROOT, check=True)
+        shutil.copytree(REPO_ROOT / "templates", config.ROOT / "templates")
+        shutil.copytree(REPO_ROOT / "skills", config.ROOT / "skills")
+        shutil.copy(REPO_ROOT / ".gitignore", config.ROOT / ".gitignore")
         # T028: бриф роли developer/analyst читает docs/codebase-map.md и
         # CLAUDE.md из config.ROOT — без них шаг падает ENOENT до того, как
         # дойдёт до реального git, который эта песочница проверяет.
-        (self.root / "docs").mkdir()
-        (self.root / "docs" / "codebase-map.md").write_text(
+        (config.ROOT / "docs").mkdir()
+        (config.ROOT / "docs" / "codebase-map.md").write_text(
             "---\nbuilt_at_sha: 0000000000000000000000000000000000000000\n"
             "---\n\n# Карта\n", encoding="utf-8")
-        (self.root / "CLAUDE.md").write_text("# Конвенции\n", encoding="utf-8")
-        self.git("add", "-A")
-        self.git("commit", "-q", "-m", "init")
+        (config.ROOT / "CLAUDE.md").write_text("# Конвенции\n", encoding="utf-8")
+        subprocess.run(["git", "add", "-A"], cwd=config.ROOT, check=True)
+        subprocess.run(["git", "commit", "-q", "-m", "init"],
+                       cwd=config.ROOT, check=True)
 
         self.patches = contextlib.ExitStack()
         self.addCleanup(self.patches.close)
-        for attr, value in (("ROOT", self.root),
-                            ("DB", self.root / ".artel" / "state.db"),
-                            ("TASKS", self.root / "tasks"),
-                            ("LOGS", self.root / ".artel" / "logs"),
-                            ("PROJECTS", self.root / ".artel" / "projects"),
-                            ("ROLE_HOME", self.root / ".artel" / "home"),
-                            ("ROLE_CONFIG_DIR",
-                             self.root / ".artel" / "home" / ".claude"),
-                            ("TARGETS", self.root / "targets.yaml"),
-                            ("WORKTREES", self.root / ".artel" / "worktrees")):
-            self.patches.enter_context(mock.patch.object(config, attr, value))
         self.patches.enter_context(mock.patch.object(
             runner.keychain, "token", lambda slot: "tok-test"))
         self.patches.enter_context(mock.patch(
             "orchestrator.doctor.preflight_checks",
             lambda role, target: []))
 
-        self.capture(catalog.cmd_init)
         # SPEC T094: id — ULID, не предсказуемый "T001" — берём то, что
-        # реально вернул `cmd_new`, а не литерал.
+        # реально вернул `cmd_new`, а не литерал. `target` не передан —
+        # `cmd_new` дефолтится в `config.DEFAULT_TARGET` (A7, требование 2).
         _, self.TASK = capture_new_task_id(catalog.cmd_new, "Git-фиксация")
-        # SPEC T048: `cmd_new` заводит РЕАЛЬНУЮ ветку/worktree задачи —
-        # рабочее дерево этой песочницы (`self.root`) остаётся на main,
-        # `on_foreign_branch` для этой задачи теперь истинно (было ложно до
-        # T048, см. докстринг `fixation._fix_dogfood`); голова читается с
-        # ветки задачи (`gitcmd.branch_head_sha`), артефакты живут в её
-        # worktree.
-        self.branch = store.get_task(store.db(), self.TASK)["branch"]
+
+    def repo(self) -> Path:
+        """Артефактный репозиторий фиксации self/артели — тот же адрес,
+        что `_fix_external`/`_read_external` (`config.PROJECTS/<target>`)."""
+        return config.PROJECTS / config.DEFAULT_TARGET
 
     def git(self, *args: str) -> str:
         res = subprocess.run(["git", *args], cwd=self.root,
@@ -643,30 +671,50 @@ class RealPultGitTest(unittest.TestCase):
     capture = staticmethod(capture)
 
     def task_dir(self) -> Path:
-        """Каталог артефактов задачи — в её worktree, не на диске main
-        (SPEC T048, требование 4)."""
-        return workspace.path(self.TASK) / "tasks" / self.TASK
+        """Каталог артефактов задачи в РЕПО ФИКСАЦИИ (`fixation._fix_
+        external` коммитит именно его целиком, A7 требование 2) — не
+        путать с артефактной веткой пульта (M1), где живёт содержимое,
+        которое читает FSM (`enter_spec_gate` пишет в оба места)."""
+        return self.repo() / "tasks" / self.TASK
 
     def git_in_worktree(self, *args: str) -> str:
-        wt = workspace.path(self.TASK)
-        res = subprocess.run(["git", "-C", str(wt), *args],
+        res = subprocess.run(["git", "-C", str(self.repo()), *args],
                              capture_output=True, text=True)
         self.assertEqual(res.returncode, 0, f"git {' '.join(args)}: {res.stderr}")
         return res.stdout
 
     def head(self) -> str:
-        """Головной sha ВЕТКИ задачи (см. `fixation._fix_dogfood`) — общий
-        для всех worktree одного репозитория объект, читается с main."""
-        return gitcmd.branch_head_sha(self.branch)
+        """Головной sha репо фиксации self/артели (`fixation._fix_external`,
+        A7 требование 2) — то же самое значение, что `tasks.fixed_sha`."""
+        return gitcmd.head_sha(self.repo())
 
     def commit_task_dir(self, message: str = "артефакт") -> None:
-        self.git_in_worktree("add", f"tasks/{self.TASK}")
-        self.git_in_worktree("commit", "-q", "-m", message)
+        """Коммит МИМО обычной фиксации (`fixation.fix()` внутри `store.
+        set_state`) — симулирует постороннюю правку репо фиксации (сама
+        фиксация коммитит сама на каждом переходе и в этом явном коммите
+        не нуждается, `ExternalTransitionCommitsTest` выше). Идентичность
+        коммитера — явными `-c`, репо фиксации (`self.repo()`,
+        `projects.init_artifact_repo`) не несёт собственного git-конфига."""
+        self.git_in_worktree("add", "-A")
+        self.git_in_worktree(
+            "-c", f"user.name={fixation.FIXATION_AUTHOR_NAME}",
+            "-c", f"user.email={fixation.FIXATION_AUTHOR_EMAIL}",
+            "commit", "-q", "-m", message)
+
+    def _seed_artifact_branch(self, rel: str, text: str, message: str) -> None:
+        """Содержимое, которое читает FSM (`artifact_source.resolve`,
+        SPEC T094 требование 10) — артефактная ветка пульта, ОТДЕЛЬНО от
+        репо фиксации (`task_dir()`), тем же приёмом, что `Externa
+        lIntegrityIncidentBlocksRunTest.make_task` выше."""
+        from orchestrator import artifact_branch
+        artifact_branch.commit_files(self.TASK, {rel: text}, message)
 
     def enter_spec_gate(self) -> str:
-        (self.task_dir() / "SPEC.md").write_text(
-            SPEC_READY.format(task=self.TASK), encoding="utf-8")
-        self.commit_task_dir()
+        self.task_dir().mkdir(parents=True, exist_ok=True)
+        spec_text = SPEC_READY.format(task=self.TASK)
+        (self.task_dir() / "SPEC.md").write_text(spec_text, encoding="utf-8")
+        self._seed_artifact_branch(f"tasks/{self.TASK}/SPEC.md", spec_text,
+                                   f"{self.TASK}: SPEC готов")
         self.capture(fsm.cmd_advance, self.TASK)
         return self.head()
 
@@ -728,12 +776,18 @@ class DogfoodTransitionJournalsShaTest(RealPultGitTest):
         увидит («ещё не ready»), а не дойдёт до сверки чистоты. Грязная
         копия здесь — правка ПОВЕРХ уже закоммиченного ready-SPEC.md.
         """
-        (self.task_dir() / "SPEC.md").write_text(
-            SPEC_READY.format(task=self.TASK), encoding="utf-8")
+        spec_text = SPEC_READY.format(task=self.TASK)
+        self.task_dir().mkdir(parents=True, exist_ok=True)
+        (self.task_dir() / "SPEC.md").write_text(spec_text, encoding="utf-8")
         self.commit_task_dir()
+        # Статус SPEC.md читается с артефактной ветки пульта (SPEC T094,
+        # требование 10; `enter_spec_gate` выше) — без неё advance
+        # отказывает раньше сверки чистоты («ещё не ready»), не дойдя до
+        # предмета этого теста.
+        self._seed_artifact_branch(f"tasks/{self.TASK}/SPEC.md", spec_text,
+                                   f"{self.TASK}: SPEC готов")
         (self.task_dir() / "SPEC.md").write_text(
-            SPEC_READY.format(task=self.TASK) + "\nправка мимо коммита\n",
-            encoding="utf-8")
+            spec_text + "\nправка мимо коммита\n", encoding="utf-8")
         # SPEC.md правлен, но правка НЕ закоммичена — грязная копия tasks/<id>.
 
         self.capture(fsm.cmd_advance, self.TASK)
@@ -788,7 +842,12 @@ class ApproveByShaTest(RealPultGitTest):
         self.run_faked()  # инцидент целостности -> escalated, escalated_from=in_dev
         self.assertEqual(store.get_task(store.db(), self.TASK)["state"],
                          "escalated")
-        self.commit_task_dir("подтверждено Оператором")
+        # Сама эскалация уже зафиксировала тронутое состояние (`store.
+        # set_state` -> `record_fixation` -> `fixation.fix()` коммитит
+        # репо фиксации целиком на КАЖДОМ переходе, включая переход в
+        # escalated) — репо фиксации здесь уже чисто, отдельный коммит
+        # «подтверждено Оператором» не нужен (в отличие от старого
+        # догфуд-флоу, где `fix()` только читала, не коммитила).
 
         self.capture(fsm.cmd_approve, self.TASK, self.head())
 
@@ -1040,7 +1099,7 @@ class RunnerEscalationHintsIncludeShaTest(RealPultGitTest):
         — буквальный `<sha>` или пустая подсказка), sha в выводе не
         найдётся.
         """
-        sha = self.enter_in_dev()
+        self.enter_in_dev()
         (self.task_dir() / "SPEC.md").write_text(
             "подмена мимо гейта\n", encoding="utf-8")
 
@@ -1049,6 +1108,12 @@ class RunnerEscalationHintsIncludeShaTest(RealPultGitTest):
         self.assertEqual(self.claude_launches(popen), [])
         self.assertEqual(store.get_task(store.db(), self.TASK)["state"],
                          "escalated")
+        # sha берётся ПОСЛЕ эскалации, не до: сам переход в escalated уже
+        # зафиксировал тронутое состояние (`record_fixation` внутри
+        # `store.set_state` коммитит репо фиксации целиком на каждом
+        # переходе, включая escalated) — подсказка обязана называть ИМЕННО
+        # этот новый sha, не тот, что был зафиксирован до подмены.
+        sha = self.head()
         hint_lines = [line for line in out.splitlines()
                      if "artel.py approve" in line]
         self.assertTrue(hint_lines,

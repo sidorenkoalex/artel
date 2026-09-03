@@ -32,7 +32,8 @@ from orchestrator import (alerts, budget, catalog, config, doctor,  # noqa: E402
                           gitcmd, liveness, projects, runner, spend, store)
 from tests.sandbox import (FakeStream, TmpRootTest, capture,  # noqa: E402
                            capture_new_task_id, claude_only_popen,
-                           claude_only_run, fake_git)
+                           claude_only_run, disk_backed_ls_tree_files,
+                           disk_backed_show, fake_git, sync_spec_from_worktree)
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
@@ -145,10 +146,13 @@ class _DoctorTmpRootTest(TmpRootTest):
 
     def new_task_in_fake_git(self, title: str) -> str:
         """`cmd_new` под фейком `gitcmd.git`, тем же приёмом, что и в
-        остальных песочницах без настоящего git; SPEC.md/TZ.md кладёт в
-        worktree (требование 2) — эта песочница читает их с диска main
-        (`gitcmd.on_foreign_branch` тут всегда False из-за фейка), так
-        что то же содержимое дублируется на диск main для брифа роли.
+        остальных песочницах без настоящего git. A7: `cmd_new` коммитит
+        SPEC.md в АРТЕФАКТНУЮ ВЕТКУ пульта (`artifact_source.resolve`
+        теперь всегда `foreign=True`) — `gitcmd.show`/`ls_tree_files`
+        патчены на чтение с диска main (`disk_backed_show`/
+        `disk_backed_ls_tree_files`, тот же приём, что и `tests.
+        test_invariants.FsmTest`), сюда — тот же шаблон, который реально
+        закоммитил бы `cmd_new` (`sync_spec_from_worktree`).
 
         Возвращает id заведённой задачи (SPEC T094: ULID, не предсказуемая
         строка) — вызывающая песочница обязана взять его отсюда, не
@@ -156,12 +160,15 @@ class _DoctorTmpRootTest(TmpRootTest):
         git_patcher = mock.patch.object(gitcmd, "git", fake_git)
         git_patcher.start()
         self.addCleanup(git_patcher.stop)
+        show_patcher = mock.patch.object(gitcmd, "show", disk_backed_show)
+        show_patcher.start()
+        self.addCleanup(show_patcher.stop)
+        ls_patcher = mock.patch.object(gitcmd, "ls_tree_files",
+                                       disk_backed_ls_tree_files)
+        ls_patcher.start()
+        self.addCleanup(ls_patcher.stop)
         _, task_id = capture_new_task_id(catalog.cmd_new, title)
-        wt_spec = config.WORKTREES / task_id / "tasks" / task_id / "SPEC.md"
-        disk_dir = config.TASKS / task_id
-        disk_dir.mkdir(parents=True, exist_ok=True)
-        (disk_dir / "SPEC.md").write_text(
-            wt_spec.read_text(encoding="utf-8"), encoding="utf-8")
+        sync_spec_from_worktree(task_id)
         return task_id
 
     def touch_backup(self) -> None:
@@ -406,10 +413,16 @@ class TargetWrapperCheckTest(unittest.TestCase):
     """SPEC T069, требование 3: инвентаризация обвязки target'а —
     информационная (warn/ok), никогда не блокирует."""
 
-    def test_dogfood_is_skipped(self):
-        check = doctor.check_target_wrapper(config.DEFAULT_TARGET)
+    def test_artel_uses_the_generic_path_not_a_dogfood_skip(self):
+        """A7, требование 2 (AC-2): артель (`config.DEFAULT_TARGET`) —
+        та же generic-логика, что и любой другой target, не skip по
+        имени — «нет workspace» здесь `warn`, тем же основанием, что и
+        для `sled` в `test_no_wrapper_is_ok` ниже."""
+        with tempfile.TemporaryDirectory() as tmp:
+            with mock.patch.object(config, "PROJECTS", Path(tmp)):
+                check = doctor.check_target_wrapper(config.DEFAULT_TARGET)
 
-        self.assertEqual(check.status, "skip")
+        self.assertNotEqual(check.status, "skip")
 
     def test_no_wrapper_is_ok(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -507,11 +520,33 @@ class RecoveryCheckTest(TmpRootTest):
         incidents = alerts.open_alerts(store.db(), "incident")
         self.assertTrue(any("грязный" in a["message"] for a in incidents))
 
-    def test_dogfood_is_out_of_scope(self):
+    def test_artel_gets_the_same_recovery_sverka_as_any_target(self):
+        """A7, требование 2 (AC-3): артель (`config.DEFAULT_TARGET`) —
+        та же логика recovery-сверки, что и `sled` выше (`test_healthy_
+        repo_recovery_is_ok`), не skip «вне объёма» по имени target'а.
+        Сверка HEAD `config.ROOT` (пин) в этот тест не входит — она
+        отдельная забота `check_root_pin` (AC-13)."""
+        capture(projects.cmd_target_init, config.DEFAULT_TARGET)
+        artel_task = "T900"
+        store.insert_task(store.db(), artel_task, "Задача артели", "in_dev",
+                          f"task/{artel_task.lower()}", config.DEFAULT_TARGET,
+                          25.0)
+        tdir = config.PROJECTS / config.DEFAULT_TARGET / "tasks" / artel_task
+        tdir.mkdir(parents=True, exist_ok=True)
+        (tdir / "SPEC.md").write_text("артефакт\n", encoding="utf-8")
+        repo = config.PROJECTS / config.DEFAULT_TARGET
+        gitcmd.in_repo(repo, "add", "-A")
+        gitcmd.in_repo(repo, "-c", "user.name=t", "-c", "user.email=t@t.invalid",
+                       "commit", "-q", "-m", "фиксация")
+        sha = gitcmd.head_sha(repo)
+        store.update_task(store.db(), artel_task, fixed_sha=sha)
+
         checks = doctor.recovery_check(store.db(), config.DEFAULT_TARGET)
 
-        self.assertEqual(len(checks), 1)
-        self.assertEqual(checks[0].status, "skip")
+        statuses = {c.name: c.status for c in checks}
+        self.assertEqual(statuses["recovery-sha"], "ok")
+        self.assertEqual(statuses["recovery-clean"], "ok")
+        self.assertEqual(alerts.open_alerts(store.db(), "incident"), [])
 
 
 class BaseBranchCheckTest(unittest.TestCase):
@@ -523,18 +558,24 @@ class BaseBranchCheckTest(unittest.TestCase):
         "base": "main",
     }
 
-    def test_dogfood_target_is_skipped_without_calling_gh(self):
+    def test_artel_uses_the_generic_path_not_a_dogfood_skip(self):
+        """A7, требование 2 (AC-2): артель (`config.DEFAULT_TARGET`) —
+        та же generic-логика, что и любой другой `forge: github` target
+        (сверка с форджем через `gh`, не skip по имени)."""
         entry = {"forge": "github", "url": "https://example.invalid/artel",
                  "base": "main"}
 
+        def fake_run(args, **kwargs):
+            return subprocess.CompletedProcess(args, 0, "main\n", "")
+
         with mock.patch.object(doctor.shutil, "which",
                                return_value="/usr/bin/gh"), \
-             mock.patch.object(doctor.subprocess, "run") as run:
+             mock.patch.object(doctor.subprocess, "run",
+                               side_effect=fake_run) as run:
             check = doctor.check_base_branch(config.DEFAULT_TARGET, entry)
 
-        self.assertEqual(check.status, "skip")
-        run.assert_not_called()
-        self.assertIn("догфуд", check.detail.lower())
+        self.assertEqual(check.status, "ok")
+        run.assert_called()
 
     def test_non_github_forge_is_skipped(self):
         entry = dict(self.EXTERNAL_ENTRY, forge="gitlab")

@@ -23,8 +23,8 @@ sys.path.insert(0, str(REPO))
 
 from orchestrator import (catalog, config, context_package, gitcmd,  # noqa: E402
                           review, runner, store)
-from tests.sandbox import (FakeProc, capture, capture_new_task_id,  # noqa: E402
-                           fake_git)
+from tests.sandbox import (FakeProc, SpyRun, capture,  # noqa: E402
+                           capture_new_task_id, fake_git)
 
 SPEC_MD = """---
 task: T001
@@ -680,6 +680,16 @@ class CmdRunReviewPackageTest(unittest.TestCase):
             lambda task_id, branch: (root, None))
         wt_patcher.start()
         self.addCleanup(wt_patcher.stop)
+        # A7 (generic-путь заведения, AC-5): `cmd_new` коммитит артефакты
+        # плотницки (`artifact_branch.write_commit`) — та функция зовёт
+        # `subprocess.run` НАПРЯМУЮ, минуя `gitcmd.git`/`FakeGit` выше;
+        # `root` здесь не настоящий git-репозиторий — без этого патча
+        # `cmd_new` падает `sys.exit` («git не ответил») ещё до сценария,
+        # который тест проверяет (тот же приём, что `tests.sandbox.
+        # TmpRootTest.setUp`).
+        spy_patcher = mock.patch.object(gitcmd.subprocess, "run", SpyRun())
+        spy_patcher.start()
+        self.addCleanup(spy_patcher.stop)
 
         self.capture(catalog.cmd_init)
         _, self.TASK = capture_new_task_id(
@@ -737,8 +747,14 @@ class CmdRunReviewPackageTest(unittest.TestCase):
         self.assertIn("review-checklist", prompt, "скилы роли остались в промпте")
 
     def test_prompt_holds_the_artifacts_with_the_tree_off_the_branch(self):
-        """Дерево на main — пакет всё равно полон: артефакты берутся из ветки."""
-        shutil.rmtree(self.tdir)  # так выглядит дерево после мержа соседней задачи
+        """Дерево на main — пакет всё равно полон: артефакты берутся из ветки.
+
+        A7 (generic-путь заведения, AC-5): `cmd_new` больше не пишет
+        `tasks/<id>/` на диск main вовсе (артефакты живут только в
+        артефактной ветке) — `self.tdir` уже не существует к этому
+        моменту БЕЗ дополнительной симуляции; `rmtree` — best-effort,
+        на случай если он всё же появился (не отказ, если нет)."""
+        shutil.rmtree(self.tdir, ignore_errors=True)
 
         _, argv = self.run_agent("review")
 
@@ -842,44 +858,51 @@ class CmdRunReviewPackageTest(unittest.TestCase):
 
         self.assertNotIn("--- РЕВЬЮ-ПАКЕТ ---", self.prompt())
         self.assertEqual(self.journal_details("ревью-пакет собран"), [])
-        # Список точный, но `show` в нём теперь есть — и это ожидаемо (tasks/
-        # 01M1K7KP0D8ZKRM9KTE75DCCYR, AC-1/AC-2): первый вызов —
-        # `workspace.on_task_branch` (SPEC T045, AC-8) спрашивает список
-        # worktree перед стартом шага; следующие три — скилы роли
-        # (`roles.yaml`: conventions-core, escalation-rules, coding-
-        # standards), читаются с ГОЛОВЫ `main` через `gitcmd.show`
-        # (`brief.skills_text`), не с диска; следующий — `gitcmd.
-        # on_foreign_branch` спрашивает текущую ветку для ветко-корректного
-        # чтения SPEC.md брифа (orchestrator/brief.py, SPEC T031) — пустой
-        # ответ заглушки означает «не на чужой ветке», поэтому SPEC.md
-        # читается с рабочей копии, как и раньше (эта задача источник
-        # чтения АРТЕФАКТОВ задачи не меняет, SPEC «Не входит»); следующий
-        # — сверка свежести docs/codebase-map.md для брифа роли
-        # (orchestrator/brief.py, tasks/T028); следующий — CLAUDE.md,
-        # тоже с головы `main` через `gitcmd.show` (`brief.
-        # _main_branch_text`); следующие два — `role_env` берёт авторство
-        # коммита шага (`role_cwd`/`workspace.ensure` подменены в setUp —
-        # их git-вызовы проверяет tests/test_workspace.py); последние два —
-        # автокоммит успешного шага (SPEC T059, `runner.
-        # commit_step_artifacts`): `add -A` и `diff --cached --quiet` на
-        # пустом дереве этого фейка отвечают «нечего коммитить»
-        # (returncode=0 по умолчанию у `FakeGit`), сам `commit` не следует.
-        wt = str(config.WORKTREES / self.TASK)
+        # Список точный: первый вызов — `workspace.on_task_branch`
+        # (SPEC T045, AC-8) спрашивает список worktree перед стартом шага;
+        # следующие три — скилы роли (`roles.yaml`: conventions-core,
+        # escalation-rules, coding-standards), читаются с ГОЛОВЫ `main`
+        # через `gitcmd.show` (`brief.skills_text`), не с диска (tasks/
+        # 01M1K7KP0D8ZKRM9KTE75DCCYR, AC-1/AC-6); пятый — SPEC.md брифа
+        # читается С АРТЕФАКТНОЙ ВЕТКИ пульта (A7, требование 2:
+        # `artifact_source.resolve` теперь всегда `foreign=True`, даже для
+        # self, `orchestrator/brief.py`) — прежний вопрос «на чужой ли
+        # ветке рабочее дерево» (`rev-parse --abbrev-ref HEAD`) этому пути
+        # больше не нужен, `resolve` больше не зовёт git вовсе; шестой —
+        # сверка свежести docs/codebase-map.md для брифа роли
+        # (orchestrator/brief.py, tasks/T028); седьмой — CLAUDE.md, тоже
+        # с головы `main` через `gitcmd.show` (`brief._main_branch_text`,
+        # tasks/01M1K7KP0D8ZKRM9KTE75DCCYR, AC-2/AC-4); восьмой — та же
+        # генерализация A7, что и у пятого: `_latest_answer_rel` листает
+        # `tasks/<id>/` артефактной ветки в поиске ANSWER-n.md (историю
+        # эскалаций) через `ls-tree`, не `Path.glob` диска; последние два
+        # — `role_env` берёт авторство коммита шага (`role_cwd`/
+        # `workspace.ensure` подменены в setUp — их git-вызовы проверяет
+        # tests/test_workspace.py). Автокоммит успешного шага (SPEC T059)
+        # не следует вовсе: `_commit_external_step_artifacts` (A7,
+        # generic-путь) коммитит workspace РОЛИ (`config.PROJECTS/<target>/
+        # workspace/tasks/<id>`), которого фейковый агент этого теста не
+        # писал — каталога нет, функция возвращает раньше любого git-
+        # вызова (в отличие от прежнего безусловного `git add -A`
+        # догфуда). Список точный: любой `show` diff/stat (чтение
+        # ревью-пакета) в шаге разработчика по-прежнему провалит тест.
         self.assertEqual(self.git.calls,
                          [["worktree", "list", "--porcelain"],
                           ["show", "main:skills/conventions-core.md"],
                           ["show", "main:skills/escalation-rules.md"],
                           ["show", "main:skills/coding-standards.md"],
-                          ["rev-parse", "--abbrev-ref", "HEAD"],
+                          ["show", f"artifact/{self.TASK.lower()}:"
+                           f"tasks/{self.TASK}/SPEC.md"],
                           ["diff", "--name-only",
                            "0000000000000000000000000000000000000000",
                            "HEAD", "--", "orchestrator/*.py", "scripts/*.py",
                            "tests/*.py"],
                           ["show", "main:CLAUDE.md"],
+                          ["ls-tree", "-r", "--name-only",
+                           f"artifact/{self.TASK.lower()}", "--",
+                           f"tasks/{self.TASK}"],
                           ["config", "--get", "user.name"],
-                          ["config", "--get", "user.email"],
-                          ["-C", wt, "add", "-A"],
-                          ["-C", wt, "diff", "--cached", "--quiet"]],
+                          ["config", "--get", "user.email"]],
                          "diff разработчику не собирается")
 
     def test_reviewer_rights_are_not_narrowed(self):

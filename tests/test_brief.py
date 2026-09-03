@@ -12,7 +12,8 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from orchestrator import brief, config, context_package, gitcmd, store  # noqa: E402
-from tests.sandbox import TmpRootTest, fake_git, fake_git_for  # noqa: E402
+from tests.sandbox import (TmpRootTest, disk_backed_ls_tree_files,  # noqa: E402
+                           disk_backed_show, fake_git, fake_git_for)
 
 MAP_FRESH = ("---\nbuilt_at_sha: aaaa000011112222333344445555666677778888\n"
             "---\n\n# Карта\n")
@@ -53,6 +54,25 @@ class BriefUnitTest(TmpRootTest):
             "# SPEC\n\nМаркер-текста-SPEC.\n", encoding="utf-8")
 
         store.create_schema(store.db())
+
+        # `artifact_source.resolve` теперь ВСЕГДА `foreign=True` (A7) —
+        # бриф читает SPEC/QUESTIONS/ANSWER через `gitcmd.show`/
+        # `ls_tree_files`, не с диска напрямую. `fake_git` (патчится
+        # локально каждым тестом этого файла) отвечает пустым успехом на
+        # ЛЮБУЮ подкоманду, включая `show`/`ls-tree` несуществующего
+        # файла — из-за этого `_branch_or_disk_text`/`_latest_answer_rel`
+        # видели бы фиктивное непустое содержимое там, где на диске
+        # ничего нет. Эта песочница без настоящего git ведёт диск
+        # `config.TASKS` как единственный источник истины (тем же
+        # приёмом, что `tests.sandbox.TmpRootTest`-наследники в других
+        # файлах).
+        show_patcher = mock.patch.object(gitcmd, "show", disk_backed_show)
+        show_patcher.start()
+        self.addCleanup(show_patcher.stop)
+        ls_patcher = mock.patch.object(gitcmd, "ls_tree_files",
+                                       disk_backed_ls_tree_files)
+        ls_patcher.start()
+        self.addCleanup(ls_patcher.stop)
 
     def journal_details(self, actor: str) -> list[str]:
         return [r["detail"] for r in store.db().execute(

@@ -34,6 +34,14 @@ def init_artifact_repo(name: str) -> str:
     """
     path = project_dir(name)
     existed = (path / ".git").is_dir()
+    # Настоящий `git init <путь>` заводит каталог сам (implicit `mkdir -p`)
+    # — заглушки `gitcmd.git` в лёгких песочницах (`fake_git`/аналоги)
+    # отвечают успехом, не трогая диск: без явного `mkdir` здесь
+    # `.gitignore` ниже падал бы `FileNotFoundError` на каталоге, которого
+    # реально нет (найдено на A7: `fixation._fix_external` теперь сама
+    # заводит артефактный репо лениво, и первый такой вызов может прийтись
+    # на песочницу без настоящего git).
+    path.mkdir(parents=True, exist_ok=True)
     res = gitcmd.in_repo(path, "init", "-q", "-b", config.MAIN_BRANCH)
     if res.returncode != 0:
         return f"git-репо не создано: {res.stderr.strip()[:200]}"
