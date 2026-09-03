@@ -174,6 +174,10 @@ def disk_backed_show(branch: str, rel: str) -> tuple:
         return _tasks_relative_path(rel).read_text(encoding="utf-8"), ""
     except FileNotFoundError:
         return None, "файла нет на диске"
+    except UnicodeDecodeError as exc:
+        # Тот же приём деградации, что и настоящий `gitcmd.show`: файл с
+        # непрочитанными байтами — именованный отказ, не трейсбек.
+        return None, f"не прочитан: {exc}"
     except OSError as exc:
         return None, str(exc)
 

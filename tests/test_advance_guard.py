@@ -19,7 +19,9 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from orchestrator import catalog, config, fsm, gitcmd, store, workspace  # noqa: E402
-from tests.sandbox import capture, capture_new_task_id, fake_git  # noqa: E402
+from tests.sandbox import (SpyRun, capture, capture_new_task_id,  # noqa: E402
+                           disk_backed_ls_tree_files, disk_backed_show,
+                           fake_git)
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
@@ -133,6 +135,26 @@ class AdvanceGuardTest(unittest.TestCase):
             workspace, "ensure", lambda task_id, branch: (root, None))
         wt_patcher.start()
         self.addCleanup(wt_patcher.stop)
+        # A7 (generic-путь заведения, AC-5): `cmd_new` коммитит артефакты
+        # плотницки (`artifact_branch.write_commit`), минуя `gitcmd.git`
+        # (фейк выше) — без этого патча `cmd_new` падает `sys.exit` («git
+        # не ответил») ещё до сценария, который тест проверяет (приём
+        # `tests.sandbox.TmpRootTest.setUp`).
+        spy_patcher = mock.patch.object(gitcmd.subprocess, "run", SpyRun())
+        spy_patcher.start()
+        self.addCleanup(spy_patcher.stop)
+        # `artifact_source.resolve` теперь ВСЕГДА `foreign=True` — guard
+        # читает артефакты через `gitcmd.show`/`ls_tree_files`, не с диска
+        # напрямую; эта песочница без настоящего git ведёт один источник
+        # истины — диск `config.TASKS`, тем же приёмом, что и `self.write`
+        # ниже (`tests.test_invariants.FsmTest`).
+        show_patcher = mock.patch.object(gitcmd, "show", disk_backed_show)
+        show_patcher.start()
+        self.addCleanup(show_patcher.stop)
+        ls_patcher = mock.patch.object(gitcmd, "ls_tree_files",
+                                       disk_backed_ls_tree_files)
+        ls_patcher.start()
+        self.addCleanup(ls_patcher.stop)
 
         self.capture(catalog.cmd_init)
         # `cmd_new` возвращает id ULID (SPEC T094, требование 2), больше не

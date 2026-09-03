@@ -210,3 +210,109 @@ branch, "--body", <текст с путями>)` после `pr create` — не
   любого внешнего target до этой задачи) и не решает — она вне рамки
   ANSWER-1/AC-6, но заслуживает отдельной задачи по сведению фиксации
   на артефактную ветку M1.
+- `scripts/guard.py::RULES["plan"]["statuses"]` несёт только `{draft,
+  ready, approved}` — у роли developer нет структурного носителя
+  эскалации (в отличие от QUESTIONS.md/analyst, `AC-n: escalate`/
+  test_author, `status: escalate` REVIEW.md/reviewer, см. докстринг
+  `orchestrator/fsm.py` у ветки `elif state == "escalated":`). Скил
+  escalation-rules предписывает всем ролям одну и ту же механику
+  («заверши артефакт со `status: escalate`»), но для PLAN.md это
+  структурно невозможно — guard.py её отклонит. Класс подтверждён этой
+  задачей: раздел «Эскалация» ниже пришлось разместить свободным
+  текстом, `status` PLAN.md остался `draft` за неимением легального
+  альтернативного значения.
+
+## Эскалация
+
+Реализация (Б1/Б2/Б3) завершена, весь `tests/` зелёный (1305/1305), и
+43 из 44 локальных приёмочных тестов этой задачи зелёные. Одна
+локальная приёмочная проверка (`tasks/01M1H224X5A8W159MKF1Q24R5Y/
+acceptance_tests/test_ac7_full_scenario_no_pult_writes.py::
+FullArtelTaskScenarioTest::test_ac7_full_lifecycle_never_writes_task_dir_to_code_or_main`,
+последний блок, строки 156-157) противоречит самой себе же соседнему
+локальному приёмочному файлу (`test_ac8_ac9_ac12_carpentry_merge.py`)
+и, как следствие, мандату ANSWER-1 (вариант B) — код чинится под
+залоченные приёмочные тесты (tasks/T023), их правка мне недоступна;
+это эскалация, не правка (скил coding-standards, «Опись пакета
+контекста»/conventions-core).
+
+**Вопросы**
+
+1. (блокирует PLAN.md status: ready) Финальная проверка теста
+   `test_ac7...` сверяет, что `feature.txt` (код фичи, закоммиченный
+   ролью-разработчиком в кодовую ветку `config.ROOT`) появился в
+   `gitcmd.ls_tree_files(config.MAIN_BRANCH, "")` — то есть в ЛОКАЛЬНОЙ
+   ветке `main` `config.ROOT` (та же функция, тот же `config.ROOT`, без
+   явного `repo=`). Но AC-8/AC-12 (тот же самый набор приёмочных
+   тестов, `test_ac8_ac9_ac12_carpentry_merge.py`, требования 1, 3-4)
+   явно и намеренно мандируют ОБРАТНОЕ: рабочее дерево и локальный
+   `refs/heads/main` `config.ROOT` обязаны остаться НЕТРОНУТЫМИ после
+   `approve` — продвигается только `refs/heads/main` `self.origin`
+   («main артели», ANSWER-1 вариант B), и сам этот файл сверяет
+   `feature.txt` именно там (`self.origin_tree_files("refs/heads/
+   main")`, не `gitcmd.ls_tree_files(config.MAIN_BRANCH, ...)`). Живой
+   прогон (`tests/test_kill_cleanup.py`-стиля отладочный скрипт,
+   привожу в журнале задачи) подтверждает: после успешного `approve`
+   `origin`'s main реально несёт `feature.txt`/`marker.txt`/
+   `docs/retro/<id>.md` (мерж-коммит с двумя родителями, карта/RETRO
+   отдельными коммитами — AC-8/AC-9 выполнены), а ЛОКАЛЬНЫЙ `main`
+   `config.ROOT` как был на «init»-коммите, так и остался (AC-12
+   выполнен). Реализовать код так, чтобы `test_ac7` тоже прошёл (то
+   есть локальный `main` ПОЛУЧИЛ бы `feature.txt`), возможно только
+   ценой нарушения AC-8/AC-12 — оба варианта не сосуществуют
+   одновременно ни при какой корректной реализации Stage0.
+   — Варианты: A) `test_ac7...` несёт дефект — правильная сверка
+   позднего блока тем же приёмом, что уже несёт сосед
+   (`self.origin_tree_files("refs/heads/main")`), тест поправит
+   Оператор/test_author, код остаётся как есть; B) я ошибаюсь в
+   разборе мандата ANSWER-1/AC-8, и «main артели» на самом деле
+   означает ЛОКАЛЬНЫЙ `refs/heads/main` `config.ROOT` — тогда AC-8/
+   AC-12 и их собственный тестовый файл сформулированы неверно, и
+   реализацию придётся пересмотреть кардинально (вернуться к чекауту
+   ROOT), вместе с переписыванием `test_ac8_ac9_ac12_carpentry_merge.py`.
+   — Дефолт при молчании: A — `test_ac8_ac9_ac12_carpentry_merge.py`
+   написан тем же test_author для той же задачи, использует ту же
+   песочницу (`_sandbox.ArtelSelfTargetSandbox`) и явно, многократно
+   (4 теста) утверждает обратное последнему блоку `test_ac7`; более
+   вероятно, что именно в `test_ac7` разошлась одна проверка (похоже
+   на copy-paste остатка от более раннего черновика сценария, где
+   «main» ещё подразумевался локальным), чем что целый отдельный файл
+   и мандат ANSWER-1 системно ошибаются.
+
+**Контекст**
+
+- Реализовано и зелено: `targets.yaml` (AC-1), generic-путь doctor/
+  catalog/fixation/checkpoint/cleanup/runner/fsm для артели (AC-2..
+  AC-6), плотницкий merge Stage0 (AC-8/AC-9/AC-10/AC-12 — все
+  локальные приёмочные тесты зелёные), doctor-проверка пина + команда
+  `pin-update` (AC-13/AC-14, `orchestrator/pin.py`,
+  `doctor.check_root_pin`), защищённые пути в Draft-MR (AC-16),
+  инварианты 12/19 адаптированы на сверку исхода через настоящий git
+  без ослабления утверждения (AC-15).
+- Юнит-тесты `tests/`: адаптированы под generic-путь (переведены на
+  M1-механику вместо однобраншевого флоу) 19 файлов, обнаруженных ещё
+  ДО меня в этой ветке (`test_git_fixation.py`, `test_invariants.py` и
+  др.), и ещё 10 файлов адаптированы мной в этом заходе
+  (`test_advance_guard.py`, `test_answer_gate.py`,
+  `test_review_freshness.py`, `test_task_id_prefix_regression.py`,
+  `test_answer_branch_reads.py`, `test_brief.py`,
+  `test_catalog_new_race.py`, `test_fsm_branch_correct_status_reads.py`,
+  `test_id_format_guard.py`, `test_kill_cleanup.py`) — все по тому же
+  установленному в ветке приёму (`tests/sandbox.py::SpyRun`/
+  `disk_backed_show`/`disk_backed_ls_tree_files`/`sync_spec_from_
+  worktree`, реальный git + артефактная ветка вместо однобраншевого
+  флоу там, где песочница гоняет настоящий git). Полный набор:
+  1305/1305 зелёных.
+- `python3 scripts/guard.py` прогнан на артефактах задачи (SPEC.md,
+  ANSWER-1.md — PLAN.md прогонится тем же вызовом после снятия
+  эскалации).
+- `python3 scripts/codebase_map.py` перезапущен этим же заходом (правка
+  `tests/*.py`, скил conventions-core) — `docs/codebase-map.md`
+  закоммичен вместе с остальным.
+
+**Блокирует**: `PLAN.md status: ready` и, соответственно, сдачу задачи
+в `review` — я не вправе объявить критерии приёмки выполненными, пока
+залоченный приёмочный тест красный, и не вправе поправить сам тест.
+Весь код и все юнит-/приёмочные тесты, НЕ зависящие от вопроса 1,
+готовы и закоммичены в ветку — эскалация не блокирует ничего, кроме
+финального статуса.
