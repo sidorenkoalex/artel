@@ -177,19 +177,18 @@ def commit_step_artifacts(conn, task_id: str, role: str) -> str:
 
     Единая логика для ЛЮБОГО target (A7, требование 2 — снятие особого
     случая догфуда): роль-разработчик/ревьювер/test_author пишет
-    `tasks/<id>/` в СВОЙ рабочий каталог (`runner.role_cwd` — клон КОДА
-    целевого, `config.PROJECTS/<target>/workspace/`, ADR-0003 §4) — она
-    не знает об артефактной ветке пульта. `_commit_external_step_
-    artifacts` перекладывает то, что роль там написала, в артефактную
-    ветку пульта и убирает эти файлы из рабочего каталога целевого — без
-    этого шага первый же реальный шаг роли внешнего target нарушал бы
-    требование 8 (было исправлено этой же задачей SPEC T094, REVIEW.md
-    итерация 1, замечание 2: до правки функция безусловно пропускала
-    любой target, кроме self, — код роли-разработчика оставался лежать в
-    клоне целевого, ничем не перенесённый). До A7 self/догфуд нёс
-    собственную ветвь (`_commit_worktree_change` в её git-worktree,
-    `workspace.path`) — убрана целиком вместе с однобраншевым флоу
-    заведения задачи (`catalog._new_dogfood`, тоже убран этой задачей).
+    `tasks/<id>/` в СВОЙ рабочий каталог (`runner.role_cwd`) — она не
+    знает об артефактной ветке пульта. `_commit_external_step_artifacts`
+    перекладывает то, что роль там написала, в артефактную ветку пульта
+    и убирает эти файлы из рабочего каталога — без этого шага первый же
+    реальный шаг роли нарушал бы требование 8 (было исправлено этой же
+    задачей SPEC T094, REVIEW.md итерация 1, замечание 2: до правки
+    функция безусловно пропускала любой target, кроме self, — код
+    роли-разработчика оставался лежать в клоне целевого, ничем не
+    перенесённый). До A7 self/догфуд нёс собственную ветвь
+    (`_commit_worktree_change` в её git-worktree, `workspace.path`) —
+    убрана целиком вместе с однобраншевым флоу заведения задачи
+    (`catalog._new_dogfood`, тоже убран этой задачей).
     """
     target = store.task_target(conn, task_id)
     return _commit_external_step_artifacts(conn, task_id, role, target)
@@ -197,15 +196,15 @@ def commit_step_artifacts(conn, task_id: str, role: str) -> str:
 
 def _commit_external_step_artifacts(conn, task_id: str, role: str,
                                     target: str) -> str:
-    """`commit_step_artifacts` для внешнего target (SPEC T094, требование
-    8, AC-9): `tasks/<id>/`, написанный ролью в её рабочем каталоге
-    (клон кода целевого), коммитится плотницки в артефактную ветку
-    пульта (`orchestrator/artifact_branch.py`, тот же приём, что уже
-    несёт `catalog._new_external_artifact_branch`) и убирается ОТТУДА —
+    """`commit_step_artifacts` для любого target (SPEC T094, требование
+    8, AC-9): `tasks/<id>/`, написанный ролью в её рабочем каталоге,
+    коммитится плотницки в артефактную ветку пульта
+    (`orchestrator/artifact_branch.py`, тот же приём, что уже несёт
+    `catalog._new_external_artifact_branch`) и убирается ОТТУДА —
     следующий шаг роли не увидит чужого прошлого содержимого как своё
-    незакоммиченное, а кодовая ветка целевого не подхватит `tasks/<id>/`
-    ни одним будущим коммитом роли (требование 8: «кодовая ветка task/*
-    целевого свободна от артефактов задачи»).
+    незакоммиченное, а кодовая ветка не подхватит `tasks/<id>/` ни одним
+    будущим коммитом роли (требование 8: «кодовая ветка task/* свободна
+    от артефактов задачи»).
 
     Каталога нет или он пуст — роль ничего не написала на этом шаге
     (например, чисто код без правки артефакта) — не отказ, тот же довод,
@@ -219,9 +218,20 @@ def _commit_external_step_artifacts(conn, task_id: str, role: str,
     (`_commit_worktree_change`, настоящий `git add -A`, коммитит любые
     байты). `artifact_branch.write_commit` принимает `bytes` наравне со
     `str` — потери не осталось для ни одного файла, читаемого с диска.
+
+    Источник для self/артели — worktree КОДОВОЙ ветки задачи
+    (`workspace.path(task_id)`), не `config.PROJECTS/<target>/workspace`:
+    пересмотр планки решением Оператора 03.09 (вариант A второй
+    эскалации задачи A7, канал ADR-0012, коммит `9a984c3`) — `role_cwd`
+    для self возвращает именно этот worktree (T045), и источник
+    автокоммита обязан совпасть с ним же, иначе роль пишет в один
+    каталог, а автокоммит ищет в другом.
     """
     from . import artifact_branch
-    workspace_root = config.PROJECTS / target / "workspace"
+    if target == config.DEFAULT_TARGET:
+        workspace_root = workspace.path(task_id)
+    else:
+        workspace_root = config.PROJECTS / target / "workspace"
     task_dir = workspace_root / "tasks" / task_id
     if not task_dir.is_dir():
         return ""

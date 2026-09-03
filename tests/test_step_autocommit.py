@@ -9,7 +9,9 @@
 A7 (генерализация, требование 2) переводит `commit_step_artifacts` на
 ЕДИНЫЙ путь для любого target — `checkpoint._commit_external_step_
 artifacts`: роль пишет `tasks/<id>/` в свой рабочий каталог
-(`config.PROJECTS/<target>/workspace/tasks/<id>/`), функция плотницки
+(`runner.role_cwd` — для self/артели это `workspace.path(task_id)`,
+git-worktree КОДОВОЙ ветки задачи, T045; для внешнего target —
+`config.PROJECTS/<target>/workspace/tasks/<id>/`), функция плотницки
 (`orchestrator/artifact_branch.py`) переносит это в артефактную ветку
 ПУЛЬТА и убирает из рабочего каталога. Три РАЗНЫХ физических места:
 рабочий каталог роли (откуда автокоммит ЧИТАЕТ), артефактная ветка
@@ -23,13 +25,12 @@ record_fixation` после автокоммита — своя отдельна
 
 Пересмотр планки решением Оператора 03.09 (вариант A, блокер R1-F1
 ревью итерации 1 задачи A7; канал ADR-0012) вернул `runner.role_cwd`
-для self/артели на git-worktree КОДОВОЙ ветки задачи — НЕ на
-`config.PROJECTS/artel/workspace/`, использованный ниже как источник
-для изолированных случаев самой функции автокоммита. С этого момента
-`workspace_task_dir()` ниже — УЖЕ НЕ то же самое место, что реальный
-`runner.role_cwd()` вернёт для self/артели; `RoleCwdVsCommitSourceGapTest`
-в конце файла документирует и доказывает исполнением расхождение
-(tasks/01M1H224X5A8W159MKF1Q24R5Y/PLAN.md, «Эскалация», Вопрос 2).
+для self/артели на git-worktree КОДОВОЙ ветки задачи; второй пересмотр
+планки тем же днём (вариант A второй эскалации, канал ADR-0012, коммит
+`9a984c3`) синхронизировал источник `_commit_external_step_artifacts`
+с этим же адресом (PLAN.md, «Эскалация: восстановленный role_cwd
+разошёлся...», Вопрос 1) — `workspace_task_dir()` ниже и реальный
+`runner.role_cwd()` снова указывают в одно место.
 """
 import sys
 import unittest
@@ -39,7 +40,7 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from orchestrator import (artifact_branch, checkpoint, config, fixation,  # noqa: E402
-                          gitcmd, runner, store)
+                          gitcmd, runner, store, workspace)
 from tests.test_git_fixation import RealPultGitTest  # noqa: E402
 
 
@@ -47,14 +48,12 @@ class CommitStepArtifactsTest(RealPultGitTest):
 
     def workspace_task_dir(self) -> Path:
         """Источник для изолированных случаев самой функции автокоммита —
-        `config.PROJECTS/artel/workspace/tasks/<id>/`, ОТДЕЛЬНО от репо
-        фиксации `self.task_dir()` (`config.PROJECTS/artel/tasks/<id>/`).
-
-        НЕ путать с реальным `runner.role_cwd()` для self/артели — с
-        03.09 (вариант A по R1-F1) он возвращает git-worktree кодовой
-        ветки задачи, не этот путь (см. докстринг модуля,
-        `RoleCwdVsCommitSourceGapTest`)."""
-        d = config.PROJECTS / config.DEFAULT_TARGET / "workspace" / "tasks" / self.TASK
+        `workspace.path(self.TASK)/tasks/<id>/`, тот же адрес, что
+        реальный `runner.role_cwd()` вернёт для self/артели (T045,
+        синхронизировано `checkpoint._commit_external_step_artifacts`
+        коммитом `9a984c3`/PLAN.md «Эскалация»). ОТДЕЛЬНО от репо
+        фиксации `self.task_dir()` (`config.PROJECTS/artel/tasks/<id>/`)."""
+        d = workspace.path(self.TASK) / "tasks" / self.TASK
         d.mkdir(parents=True, exist_ok=True)
         return d
 
@@ -104,8 +103,7 @@ class CommitStepArtifactsTest(RealPultGitTest):
         # ветка/рабочий каталог целевого свободны от артефактов задачи).
         # `workspace_task_dir()` сама создаёт каталог (`mkdir`) — здесь
         # путь вычислен напрямую, чтобы не воссоздать убранное.
-        raw_dir = (config.PROJECTS / config.DEFAULT_TARGET / "workspace"
-                  / "tasks" / self.TASK)
+        raw_dir = workspace.path(self.TASK) / "tasks" / self.TASK
         self.assertFalse(raw_dir.exists())
 
     def test_refixation_keeps_check_integrity_clean_after_the_commit(self):
@@ -174,27 +172,19 @@ class RoleCwdVsCommitSourceGapTest(RealPultGitTest):
     поставил в вину `test_ac7_full_scenario_no_pult_writes.py`).
 
     Пересмотр планки решением Оператора 03.09 (вариант A по R1-F1;
-    `orchestrator/runner.py::role_cwd`, коммит этой же сессии) вернул
-    self/артели git-worktree кодовой ветки задачи. `checkpoint._commit_
-    external_step_artifacts` при этом НЕ тронут — источник для self
-    остался захардкожен на `config.PROJECTS/artel/workspace/tasks/<id>/`
-    (см. `workspace_task_dir()` выше и REVIEW.md AC-6 `Checkpoint
-    CommitsToArtifactBranchForArtelTest`, залоченный acceptance-тест,
-    пишущий ИМЕННО туда). Эти два места разошлись: артефакт, реально
-    написанный ролью в её настоящем `role_cwd()` (worktree кодовой
-    ветки), `commit_step_artifacts` там не ищет — тест ниже
-    воспроизводит это исполнением и красен (`skip`), пока конфликт не
-    разрешён Оператором (PLAN.md, «Эскалация», Вопрос 2): починка кода
-    без правки залоченного `CheckpointCommitsToArtifactBranchForArtelTest`
-    (право только Оператора, tasks/T023) невозможна — обе стороны
-    конфликта вне мандата разработчика.
+    `orchestrator/runner.py::role_cwd`, коммит той же сессии) вернул
+    self/артели git-worktree кодовой ветки задачи. Расхождение с
+    `checkpoint._commit_external_step_artifacts` (источник для self был
+    захардкожен на `config.PROJECTS/artel/workspace/tasks/<id>/`) —
+    разрешено вторым пересмотром планки Оператором 03.09 (вариант A
+    второй эскалации, канал ADR-0012, коммит `9a984c3`: залоченный
+    `CheckpointCommitsToArtifactBranchForArtelTest` поправлен на
+    `workspace.path(task_id)`) и правкой `_commit_external_step_
+    artifacts` (PLAN.md, «Эскалация: восстановленный role_cwd
+    разошёлся...», Вопрос 1, вариант A) — источник теперь совпадает с
+    `role_cwd`.
     """
 
-    @unittest.skip(
-        "R1-F1×R1-F2 follow-up — tasks/01M1H224X5A8W159MKF1Q24R5Y/"
-        "PLAN.md, «Эскалация», Вопрос 2: чинить требует правки залоченного "
-        "AC-6 CheckpointCommitsToArtifactBranchForArtelTest — решение за "
-        "Оператором.")
     def test_artifact_written_via_real_role_cwd_reaches_artifact_branch(self):
         self.enter_in_dev()
         cwd = runner.role_cwd(store.db(), self.TASK, config.DEFAULT_TARGET)

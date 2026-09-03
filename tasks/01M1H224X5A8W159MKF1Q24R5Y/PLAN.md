@@ -968,3 +968,114 @@ tasks/<id>/ в код-ветках») на реальном прогоне, не
 включая `skip=1` на доказательном тесте) и `acceptance_tests/` (44/44)
 зелёные, `guard.py` — ок; блокирует именно эскалация, не красные
 тесты.
+
+## Разрешение эскалации: восстановленный role_cwd разошёлся с
+источником checkpoint._commit_external_step_artifacts (новая сессия) +
+новая узкая эскалация того же класса
+
+Оператор применил правку планки по каналу ADR-0012 (коммит `9a984c3`,
+15:35 03.09) — вариант A Вопроса 1 предыдущего раздела: залоченный
+`tasks/01M1H224X5A8W159MKF1Q24R5Y/acceptance_tests/
+test_ac6_artifacts_via_m1_mechanics.py::
+CheckpointCommitsToArtifactBranchForArtelTest` поправлен на источник
+`workspace.path(task_id)/tasks/<id>/` (тот же адрес, что уже
+возвращает восстановленный `role_cwd`); коммит прямо фиксирует «тест
+красен до правки кода утверждением» — правка кода оставлена мне.
+
+Применено этой сессией: `orchestrator/checkpoint.py::
+_commit_external_step_artifacts` — для `target == config.DEFAULT_
+TARGET` источник переключён на `workspace.path(task_id)` (было:
+`config.PROJECTS / target / "workspace"` безусловно для любого
+target); для внешнего target поведение не изменилось. По правилу
+coding-standards «чини класс ошибки, не экземпляр» — адаптированы ВСЕ
+места, писавшие/читавшие по старому адресу в диффе этой задачи:
+`tests/test_step_autocommit.py::CommitStepArtifactsTest.
+workspace_task_dir()` и вычисление `raw_dir` в `test_dirty_tree_
+commits_to_artifact_branch_and_journals` переведены на `workspace.
+path(self.TASK)`; `tests/test_step_autocommit.py::
+RoleCwdVsCommitSourceGapTest` (регресс-тест, НЕ залоченный —
+`tests/`, не `acceptance_tests/`) расскипан — доказанное им
+расхождение снято, тест зелёный без skip. Полный `tests/`:
+`Ran 1306 tests in 132.283s`, `OK` (0 skipped — счётчик тот же, что и
+раньше, «скип» стал «пройден»).
+
+**Новая узкая эскалация того же класса.** Полный прогон
+`acceptance_tests/` после этой правки: `Ran 44 tests`, `FAILED
+(failures=1)` — красен ОДИН тест, `tasks/01M1H224X5A8W159MKF1Q24R5Y/
+acceptance_tests/test_ac7_full_scenario_no_pult_writes.py::
+FullArtelTaskScenarioTest::
+test_ac7_full_lifecycle_never_writes_task_dir_to_code_or_main`, строка
+122:
+
+```
+role_task_dir = config.PROJECTS / config.DEFAULT_TARGET / "workspace" / "tasks" / task_id
+```
+
+— тот же старый адрес (`PROJECTS/artel/workspace/tasks/<id>/`), что
+правка `9a984c3` заменила в СОСЕДНЕМ тесте того же класса
+(`CheckpointCommitsToArtifactBranchForArtelTest`), но не тронула
+здесь: этот тест — отдельный залоченный файл, правка `9a984c3` его не
+касалась. `AssertionError: 'tasks/<id>/PLAN.md' not found in
+['tasks/<id>/SPEC.md']` — воспроизведено `python3 -m unittest tasks.
+01M1H224X5A8W159MKF1Q24R5Y.acceptance_tests.
+test_ac7_full_scenario_no_pult_writes -v`.
+
+Проверено исполнением: это единственный оставшийся красный тест во
+всём `acceptance_tests/` (44 теста, 1 failure, без ERROR); правка кода
+корректна для ВСЕХ остальных 43 тестов, включая полный залоченный
+класс `CheckpointCommitsToArtifactBranchForArtelTest`
+(`test_ac6_artifacts_via_m1_mechanics.py`, 5/5 зелёных) и весь
+`test_ac2_doctor_generic_checks.py` (единственное другое совпадение
+`grep` по паттерну `PROJECTS.*workspace` в `acceptance_tests/` — тот
+файл проверяет `doctor.check_target_wrapper`, читает
+`config.PROJECTS/<target>/workspace/CLAUDE.md` напрямую, никак не
+связан с `role_cwd`/`commit_step_artifacts`, не задет этой правкой,
+подтверждено прогоном — не в списке красных).
+
+**Вопросы**
+
+1. (блокирует PLAN.md status: ready) Прошу применить тем же каналом
+   ADR-0012 (тот же класс правки, что и `9a984c3` — синхронизация
+   источника со строки 122 файла с уже утверждённым вариантом A)
+   точечную правку строки 122
+   `tasks/01M1H224X5A8W159MKF1Q24R5Y/acceptance_tests/
+   test_ac7_full_scenario_no_pult_writes.py`:
+   ```
+   role_task_dir = workspace.path(task_id) / "tasks" / task_id
+   ```
+   (потребует добавить `workspace` в существующий импорт `from
+   orchestrator import (artifact_branch, catalog, checkpoint, ci,
+   config, fsm_merge_gate, gitcmd, github_adapter, store)` на строке
+   29-31 файла — `workspace` туда же по алфавиту). Комментарий над
+   строкой (119-121, «роль пишет артефакты шага... в свой рабочий
+   каталог `.artel/projects/artel/workspace/tasks/<id>/`») тоже
+   устарел этой же правкой Оператора 03.09 — предлагаю заодно
+   поправить на «в свой рабочий каталог — worktree кодовой ветки
+   (`workspace.path(task_id)/tasks/<id>/`)».
+   — Варианты: A) применить показанную правку как есть — проверяемое
+   свойство теста (АС-7: `tasks/<id>/` не попадает в кодовую
+   ветку/main, а из артефактного каталога роли переносится в
+   артефактную ветку пульта) не меняется, меняется только адрес
+   каталога-источника на уже утверждённый вариантом A предыдущего
+   раздела; B) иное решение Оператора, если анализ ошибочен.
+   — Дефолт при молчании: A — тот же вариант, что уже применён
+   Оператором к буквально соседнему тесту того же класса той же
+   сессией (`9a984c3`), только пропущенный в этом файле.
+
+**Контекст**
+
+- Код (`checkpoint.py`) и все НЕ залоченные тесты (`tests/`) уже
+  поправлены и зелены в этой ветке — блокирует только этот один
+  залоченный тест.
+- `python3 scripts/guard.py` на SPEC.md/PLAN.md/REVIEW.md/ANSWER-1.md
+  — прогнан после правки, результат в конце этого раздела.
+- `python3 scripts/codebase_map.py` — актуален для текущего HEAD после
+  правки `checkpoint.py` (регенерирован этим же коммитом, T023
+  правило «правишь *.py в orchestrator/ — регенерируй карту»).
+
+**Блокирует**: `PLAN.md status: ready`. `tests/` — 1306/1306 зелёных
+(0 skipped). `acceptance_tests/` — 43/44, единственный красный —
+`test_ac7_full_scenario_no_pult_writes.py:122`, тот же класс
+несоответствия адреса, что уже дважды решён Оператором вариантом A по
+каналу ADR-0012 в этой же задаче (`98bb3f9`, `9a984c3`); правка строки
+— вне мандата разработчика (T023, ADR-0012 п.2).
