@@ -33,8 +33,8 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from orchestrator import (budget, catalog, cleanup, config, fsm,  # noqa: E402
-                          runner, spend, store, workspace)
+from orchestrator import (artifact_branch, budget, catalog, cleanup,  # noqa: E402
+                          config, fsm, gitcmd, runner, spend, store, workspace)
 from tests.sandbox import (FakeProc, TmpRootTest, capture,  # noqa: E402
                            capture_new_task_id, fake_git, resilient_tmp_cleanup)
 
@@ -170,6 +170,21 @@ class PultArtifactIsolationTest(unittest.TestCase):
         self.git("add", "-A")
         self.git("commit", "-q", "-m", "init")
 
+        # `origin` — bare-репо, играющий роль главной копии артели на
+        # фордже (ANSWER-1, A7): `cleanup.cmd_kill` для ЛЮБОГО target,
+        # включая self, публикует снапшот в `refs/artifacts/<id>` origin
+        # ПЕРЕД уборкой (`_publish_snapshot_if_pending`) — без настоящего
+        # origin push отказывает молча и артефактная ветка пульта
+        # остаётся неубранной (тот же приём, что `tests/test_invariants.
+        # py::KillKeepsMainIntactTest.setUp`).
+        origin_tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(resilient_tmp_cleanup, origin_tmp)
+        self.origin = Path(origin_tmp.name).resolve()
+        subprocess.run(["git", "init", "-q", "--bare", "-b",
+                        config.MAIN_BRANCH, str(self.origin)],
+                       check=True, capture_output=True, text=True)
+        self.git("remote", "add", "origin", str(self.origin))
+
         self.patches = contextlib.ExitStack()
         self.addCleanup(self.patches.close)
         for attr, value in (("ROOT", self.root),
@@ -234,31 +249,34 @@ class PultArtifactIsolationTest(unittest.TestCase):
         self.assertEqual(self.artel_lines(), [],
                          "внешние артефакты попали в git status")
 
-        # Переход самого пульта: SPEC готов, advance на spec_gate. SPEC.md
-        # (SPEC T048) живёт в worktree задачи, не на диске main — advance
-        # читает статус с ВЕТКИ (T031/T047, branch-correct reads), а не с
-        # рабочего дерева, так что правку нужно закоммитить в worktree.
-        wt = workspace.path(self.TASK)
-        (wt / "tasks" / self.TASK / "SPEC.md").write_text(
+        # Переход самого пульта: SPEC готов, advance на spec_gate. A7
+        # (требование 2, AC-5): `cmd_new` коммитит SPEC.md в АРТЕФАКТНУЮ
+        # ветку пульта (не worktree кодовой ветки, той однобраншевый флоу
+        # убран) — правка идёт туда же, тем же приёмом, что уже несёт
+        # `KillKeepsMainIntactTest.commit_artifacts_in_branch` (checkout
+        # реальной веткой, коммит, возврат на main).
+        branch = artifact_branch.branch_name(self.TASK)
+        self.git("checkout", "-q", branch)
+        (self.root / "tasks" / self.TASK / "SPEC.md").write_text(
             SPEC_READY.format(task=self.TASK), encoding="utf-8")
-        subprocess.run(["git", "-C", str(wt), "add", "-A",
-                       f"tasks/{self.TASK}"], cwd=wt, check=True)
-        subprocess.run(["git", "-C", str(wt), "commit", "-q", "-m", "SPEC готов"],
-                       cwd=wt, check=True)
+        self.git("add", "-A", f"tasks/{self.TASK}")
+        self.git("commit", "-q", "-m", "SPEC готов")
+        self.git("checkout", "-q", config.MAIN_BRANCH)
         self.capture(fsm.cmd_advance, self.TASK)
         self.drop_external_artifacts("sled2")  # второй внешний target
         self.assertEqual(self.artel_lines(), [],
                          "внешние артефакты всплыли после advance")
 
-        # kill пультовой задачи трогает git (удаление ветки/каталога) —
-        # .artel/ обязан остаться невидим и после этого.
+        # kill пультовой задачи трогает git (публикация снапшота, уборка
+        # артефактной ветки) — .artel/ обязан остаться невидим и после
+        # этого.
         self.capture(cleanup.cmd_kill, self.TASK)
         self.assertEqual(self.artel_lines(), [],
                          "внешние артефакты всплыли после kill")
-        # Контроль: сама уборка отработала (иначе тест ничего не доказывал бы).
-        # SPEC T048: артефакты живут в worktree задачи, не на диске main —
-        # именно его отсутствие после kill и есть признак реальной уборки.
-        self.assertFalse(wt.exists())
+        # Контроль: сама уборка отработала (иначе тест ничего не доказывал
+        # бы) — A7: артефактная ветка пульта убирается уборкой закрытия
+        # (снапшот/kill), не worktree (её эта задача больше не заводит).
+        self.assertFalse(gitcmd.branch_exists(branch))
 
 
 class ExternalWorkspaceIsolationTest(TmpRootTest):
@@ -283,14 +301,17 @@ class ExternalWorkspaceIsolationTest(TmpRootTest):
         tdir.mkdir(parents=True, exist_ok=True)
         (tdir / "SPEC.md").write_text("# SPEC заглушка\n", encoding="utf-8")
 
-    def test_dogfood_cwd_is_worktree(self):
-        """SPEC T045, AC-3: агентный шаг догфуда исполняется в worktree
-        своей задачи, не в главной копии пульта (ROOT)."""
-        self.new_task("T001", config.DEFAULT_TARGET, "Догфуд")
+    def test_dogfood_cwd_is_its_workspace(self):
+        """A7, требование 2 (AC-2): артель (`config.DEFAULT_TARGET`) —
+        рабочий каталог роли только её workspace, той же generic-логикой
+        `runner.role_cwd`, что и любой другой объявленный target — не
+        worktree кодовой ветки задачи (однобраншевый флоу убран)."""
+        self.new_task("T001", config.DEFAULT_TARGET, "Артель")
 
         kwargs = self.run_faked("T001")
 
-        self.assertEqual(kwargs["cwd"], workspace.path("T001"))
+        expected = config.PROJECTS / config.DEFAULT_TARGET / "workspace"
+        self.assertEqual(kwargs["cwd"], expected)
         self.assertNotEqual(kwargs["cwd"], config.ROOT)
 
     def test_external_target_cwd_is_its_workspace(self):
@@ -403,20 +424,26 @@ class CrossTargetDbIsolationTest(TmpRootTest):
                          "kill чужого target тронул строку пульта")
 
     def test_directories_of_two_targets_do_not_collide(self):
-        """Требование 1/3 на стыке: артефакты пульта и внешнего в разных путях."""
+        """Требование 1/3 на стыке: артефакты артели и внешнего target'а
+        фиксируются в разных путях (A7, требование 2 — оба target'а,
+        включая артель, фиксируются одной generic-логикой
+        `fixation._fix_external`, `config.PROJECTS/<target>/tasks/<id>` —
+        артель больше не пишет `tasks/<id>` на диск `config.TASKS`
+        напрямую)."""
         capture(catalog.cmd_init)
         artel_id = self.new_pult_task("Задача пульта")  # target=artel
         sled_id = self.second_target("sled", 1)
 
-        pult_dir = config.TASKS / artel_id
+        artel_dir = config.PROJECTS / "artel" / "tasks" / artel_id
         external_dir = config.PROJECTS / "sled" / "tasks" / sled_id
+        artel_dir.mkdir(parents=True)
         external_dir.mkdir(parents=True)
 
-        self.assertTrue(pult_dir.is_dir())
-        self.assertNotEqual(pult_dir, external_dir)
+        self.assertTrue(artel_dir.is_dir())
+        self.assertNotEqual(artel_dir, external_dir)
         self.assertFalse(
             (config.PROJECTS / "sled" / "tasks" / artel_id).exists(),
-            "внешний target не должен видеть путь пультового id")
+            "внешний target не должен видеть путь id артели")
 
 
 class ProgramSpendAcrossTargetsTest(TmpRootTest):

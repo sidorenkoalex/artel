@@ -180,8 +180,18 @@ def disk_backed_show(branch: str, rel: str) -> tuple:
 
 def disk_backed_ls_tree_files(branch: str, rel_dir: str) -> list | None:
     """Замена `gitcmd.ls_tree_files` — тот же приём, что `disk_backed_show`
-    выше: список файлов `config.TASKS/...` с диска, ветка не участвует."""
+    выше: список файлов `config.TASKS/...` с диска, ветка не участвует.
+
+    `rel_dir` — не обязательно каталог: настоящий `git ls-tree -- <path>`
+    принимает и файловый pathspec (существующие вызывающие места, напр.
+    `fsm_advance.spec_writing`, зовут его так же для проверки наличия
+    ОДНОГО файла, `tasks/<id>/QUESTIONS.md`) — файл возвращает список из
+    одного элемента, каталог — список файлов под ним, ничего из двух не
+    существует — пустой список (не `None`: тот вырожденный случай «git не
+    ответил», не «пусто»)."""
     path = _tasks_relative_path(rel_dir)
+    if path.is_file():
+        return [rel_dir]
     if not path.is_dir():
         return []
     return sorted(

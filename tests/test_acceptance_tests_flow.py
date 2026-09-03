@@ -25,11 +25,12 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from orchestrator import (acceptance, agent_log, catalog, config, fsm,  # noqa: E402
-                          gitcmd, runner, store, workspace)
+from orchestrator import (acceptance, agent_log, artifact_branch, catalog,  # noqa: E402
+                          config, fsm, gitcmd, runner, store, workspace)
 from scripts import guard  # noqa: E402
 from tests.sandbox import (FakeProc, TmpRootTest, capture,  # noqa: E402
-                           capture_new_task_id, fake_git, resilient_tmp_cleanup)
+                           capture_new_task_id, disk_backed_ls_tree_files,
+                           disk_backed_show, fake_git, resilient_tmp_cleanup)
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
@@ -229,6 +230,19 @@ class _AcceptanceFlowTmpRootTest(TmpRootTest):
         patcher = mock.patch.object(gitcmd, "git", fake_git)
         patcher.start()
         self.addCleanup(patcher.stop)
+        # A7: `artifact_source.resolve` теперь ВСЕГДА возвращает
+        # `foreign=True` (артефактная ветка пульта, даже для self) — FSM
+        # читает SPEC/PLAN/REVIEW через `gitcmd.show`/`ls_tree_files`, не
+        # с диска напрямую; эта песочница без настоящего git ведёт один
+        # источник истины — диск `self.tdir` (тот же приём, что
+        # `tests.test_invariants.FsmTest`/`tests.test_spec_budget`).
+        show_patcher = mock.patch.object(gitcmd, "show", disk_backed_show)
+        show_patcher.start()
+        self.addCleanup(show_patcher.stop)
+        ls_patcher = mock.patch.object(gitcmd, "ls_tree_files",
+                                       disk_backed_ls_tree_files)
+        ls_patcher.start()
+        self.addCleanup(ls_patcher.stop)
 
         self.capture(catalog.cmd_init)
         _, self.TASK = capture_new_task_id(catalog.cmd_new,
@@ -718,10 +732,15 @@ class TraceabilityTest(TmpRootTest):
         self.capture(fsm.cmd_advance, self.TASK)
 
         self.assertEqual(self.state(), "in_dev")
-        # git — заглушка (fake_git), fixed_sha пустой: locked-колонка всё
-        # равно берёт РОВНО то же значение, что и fixed_sha (не отдельная
-        # фиксация) — проверяем именно это соответствие, не конкретный sha.
-        self.assertEqual(self.row()["tests_locked_sha"], self.row()["fixed_sha"])
+        # A7: колонка `tests_locked_sha` берёт sha АРТЕФАКТНОЙ ВЕТКИ пульта
+        # (`gitcmd.branch_head_sha`), не `fixed_sha` (артефактный репо
+        # `config.PROJECTS/<target>/`, куда M1-механика ничего не пишет —
+        # сверка против него никогда не увидела бы диффа, PLAN.md A7,
+        # «Предложения системе») — git здесь заглушка (`fake_git`), не
+        # знающая об этой ветке, значение вырождается в пустую строку, то
+        # же поведение деградации, что и у остальных git-примитивов
+        # оркестратора без реального git.
+        self.assertEqual(self.row()["tests_locked_sha"], "")
 
 
 # --------------------------------------------------------------------------
@@ -973,6 +992,21 @@ class LockTest(unittest.TestCase):
     Реальный git (не заглушка): лок сверяется настоящим `git diff` между
     sha, зафиксированным на выходе tests_writing, и текущим HEAD —
     заглушкой этого не изобразить (см. `RealPultGitTest`, test_git_fixation.py).
+
+    A7 (generic-путь заведения, AC-5): `cmd_new` больше не заводит
+    worktree/кодовую ветку задачи — `tasks/<id>/` коммитится ПЛОТНИЦКИ в
+    АРТЕФАКТНУЮ ветку пульта (`self.branch`, `artifact_branch.branch_name`),
+    правится тем же приёмом, что и `tests.test_invariants.
+    KillKeepsMainIntactTest`: checkout ветки в `self.root` (единственный
+    git-репозиторий этого теста — реального worktree больше нет), правка,
+    коммит, checkout обратно на main (роль внешнего target никогда не
+    задерживается на артефактной ветке пульта — `gitcmd.on_foreign_branch`
+    обязан увидеть её как чужую, `fsm._tests_writing_ac_state`). Код задачи
+    (`self.code_branch`) заводится явно — тем же приёмом, что и
+    `KillKeepsMainIntactTest.commit_artifacts_in_branch`: гейт ёмкости diff
+    снимка (`fsm_advance._capacity_gate_refuses`) для self/артели сверяет
+    именно его (PLAN.md A7, «Явно НЕ генерализуется» — код артели физически
+    живёт в `config.ROOT`, не в отдельном клоне).
     """
 
     def setUp(self):
@@ -992,6 +1026,7 @@ class LockTest(unittest.TestCase):
         self.patches = mock.patch.multiple(
             config, ROOT=self.root, DB=self.root / ".artel" / "state.db",
             TASKS=self.root / "tasks", LOGS=self.root / ".artel" / "logs",
+            PROJECTS=self.root / ".artel" / "projects",
             ROLE_HOME=self.root / ".artel" / "home",
             ROLE_CONFIG_DIR=self.root / ".artel" / "home" / ".claude",
             WORKTREES=self.root / ".artel" / "worktrees")
@@ -1001,25 +1036,23 @@ class LockTest(unittest.TestCase):
         self.capture(catalog.cmd_init)
         _, self.TASK = capture_new_task_id(catalog.cmd_new,
                                            "Лок приёмочных тестов")
-        # С SPEC T048 `cmd_new` сам заводит РЕАЛЬНУЮ ветку/worktree и
-        # коммитит в них — ROOT (`self.root`) остаётся на main (требование
-        # 4), так что дальнейшие артефакты этого теста коммитятся В
-        # WORKTREE задачи (`on_foreign_branch` для него истинно), не в
-        # ROOT: коммит поверх main не попал бы на ветку задачи вовсе.
-        self.branch = self.row()["branch"]
-        self.tdir = workspace.path(self.TASK) / "tasks" / self.TASK
+        # Код задачи имитируется явно (см. докстринг класса) — ветка,
+        # которую в реальном сценарии первым коммитом заводит роль
+        # разработчика (AC-5).
+        self.code_branch = self.row()["branch"]
+        self.git("checkout", "-q", "-b", self.code_branch)
+        (self.root / "feature.txt").write_text("код фичи\n", encoding="utf-8")
+        self.git("add", "feature.txt")
+        self.git("commit", "-q", "-m", f"{self.TASK}: код фичи")
+        self.git("checkout", "-q", config.MAIN_BRANCH)
+
+        self.branch = artifact_branch.branch_name(self.TASK)
+        self.tdir = self.root / "tasks" / self.TASK
 
     def git(self, *args: str) -> str:
         res = subprocess.run(["git", *args], cwd=self.root,
                              capture_output=True, text=True)
         self.assertEqual(res.returncode, 0, f"git {' '.join(args)}: {res.stderr}")
-        return res.stdout
-
-    def git_wt(self, *args: str) -> str:
-        res = subprocess.run(["git", "-C", str(workspace.path(self.TASK)),
-                              *args], capture_output=True, text=True)
-        self.assertEqual(res.returncode, 0,
-                         f"git -C worktree {' '.join(args)}: {res.stderr}")
         return res.stdout
 
     capture = staticmethod(capture)
@@ -1032,19 +1065,33 @@ class LockTest(unittest.TestCase):
         return store.db().execute("SELECT * FROM tasks WHERE id=?",
                                   (self.TASK,)).fetchone()
 
+    def on_artifact_branch(self) -> None:
+        """checkout артефактной ветки пульта — предпосылка любой правки
+        `self.tdir` (см. докстринг класса)."""
+        self.git("checkout", "-q", self.branch)
+
     def commit_task_dir(self, message: str = "артефакт") -> None:
-        self.git_wt("add", f"tasks/{self.TASK}")
-        self.git_wt("commit", "-q", "-m", message)
+        """Коммитит правки `self.tdir` (уже на артефактной ветке — вызывать
+        после `on_artifact_branch`) и возвращает рабочее дерево на main."""
+        self.git("add", "-A", f"tasks/{self.TASK}")
+        self.git("commit", "-q", "-m", message)
+        self.git("checkout", "-q", config.MAIN_BRANCH)
 
     def head(self) -> str:
-        return self.git_wt("rev-parse", "HEAD").strip()
+        """sha головы артефактной ветки — независимо от текущего чекаута."""
+        return self.git("rev-parse", self.branch).strip()
 
     def enter_tests_writing(self) -> str:
+        self.on_artifact_branch()
         (self.tdir / "SPEC.md").write_text(
             SPEC_V2.format(task=self.TASK, extra=""), encoding="utf-8")
         self.commit_task_dir()
         self.capture(fsm.cmd_advance, self.TASK)  # spec_writing -> spec_gate
-        sha = self.head()
+        # `confirm_fixation`/`cmd_approve` сверяются с sha АРТЕФАКТНОГО
+        # РЕПО target'а (`fixation._fix_external`, config.PROJECTS/<target>),
+        # не с sha артефактной ветки пульта (`self.head()`) — два разных
+        # репозитория (PLAN.md A7, «Предложения системе»).
+        sha = gitcmd.head_sha(config.PROJECTS / config.DEFAULT_TARGET)
         self.capture(fsm.cmd_approve, self.TASK, sha)  # -> tests_writing
         self.assertEqual(self.state(), "tests_writing")
         return sha
@@ -1056,6 +1103,7 @@ class LockTest(unittest.TestCase):
 
     def enter_in_dev(self) -> str:
         self.enter_tests_writing()
+        self.on_artifact_branch()
         self.write_acceptance_tests(AC_TEST_BOTH_COVERED)
         self.commit_task_dir("acceptance_tests от test_author")
 
@@ -1064,6 +1112,7 @@ class LockTest(unittest.TestCase):
         self.assertEqual(self.state(), "in_dev")
         locked = self.row()["tests_locked_sha"]
         self.assertEqual(locked, self.head(), "лок берёт sha этого коммита")
+        self.on_artifact_branch()
         (self.tdir / "PLAN.md").write_text(
             PLAN_MD.format(task=self.TASK), encoding="utf-8")
         self.commit_task_dir("PLAN")
@@ -1071,6 +1120,7 @@ class LockTest(unittest.TestCase):
 
     def test_edit_after_lock_blocks_in_dev_to_review(self):
         self.enter_in_dev()
+        self.on_artifact_branch()
         (self.tdir / "acceptance_tests" / "test_ac.py").write_text(
             AC_TEST_MISSING_AC2, encoding="utf-8")
         self.commit_task_dir("разработчик поправил тест — спор с тестом")
@@ -1090,6 +1140,7 @@ class LockTest(unittest.TestCase):
     def test_new_unrelated_file_does_not_trip_the_lock(self):
         """Лок реагирует на acceptance_tests/, а не на любой коммит задачи."""
         self.enter_in_dev()
+        self.on_artifact_branch()
         (self.tdir / "notes.md").write_text("заметка разработчика\n",
                                             encoding="utf-8")
         self.commit_task_dir("заметка вне тестов")
