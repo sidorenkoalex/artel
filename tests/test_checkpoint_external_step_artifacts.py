@@ -95,6 +95,49 @@ class CommitExternalStepArtifactsTest(RealGitSandbox):
         self.assertEqual(plan_text, "план разработчика")
         self.assertEqual(review_text, "ревью")
 
+    def test_same_role_second_step_drops_a_file_it_no_longer_writes(self):
+        """SPEC 01M1KT0792125J9ZNJNZJ86E9Q, требование 4/AC-6: файл,
+        который сама РОЛЬ больше не пишет на своём следующем шаге,
+        обязан пропасть из артефактной ветки — не путать с файлом ДРУГОЙ
+        роли (тест выше), который переживает чужой автокоммит."""
+        self.write("QUESTIONS.md", "батч вопросов")
+        checkpoint.commit_step_artifacts(store.db(), self.TASK, "analyst")
+        self.assertIn(f"tasks/{self.TASK}/QUESTIONS.md",
+                      self.artifact_branch_files())
+
+        self.task_dir.mkdir(parents=True)
+        self.write("SPEC.md", "спека готова")
+        checkpoint.commit_step_artifacts(store.db(), self.TASK, "analyst")
+
+        files = self.artifact_branch_files()
+        self.assertIn(f"tasks/{self.TASK}/SPEC.md", files)
+        self.assertNotIn(f"tasks/{self.TASK}/QUESTIONS.md", files)
+
+    def test_same_role_deletion_does_not_remove_another_roles_file(self):
+        """Регресс-контроль симметрии для предыдущего теста: удаление,
+        обнаруженное для РОЛИ analyst, не имеет права задеть файл,
+        последний раз тронутый ДРУГОЙ ролью (developer) — иначе фикс
+        AC-6 стал бы той же поломкой, что и `test_second_step_
+        accumulates_onto_the_first_not_replaces_it` ловит для обычного
+        случая."""
+        self.write("PLAN.md", "план разработчика")
+        checkpoint.commit_step_artifacts(store.db(), self.TASK, "developer")
+
+        self.task_dir.mkdir(parents=True)
+        self.write("QUESTIONS.md", "батч вопросов")
+        checkpoint.commit_step_artifacts(store.db(), self.TASK, "analyst")
+
+        self.task_dir.mkdir(parents=True)
+        self.write("SPEC.md", "спека готова")
+        checkpoint.commit_step_artifacts(store.db(), self.TASK, "analyst")
+
+        files = self.artifact_branch_files()
+        self.assertIn(f"tasks/{self.TASK}/SPEC.md", files)
+        self.assertIn(f"tasks/{self.TASK}/PLAN.md", files,
+                      "файл чужой роли не должен пострадать от удаления, "
+                      "обнаруженного для другой роли")
+        self.assertNotIn(f"tasks/{self.TASK}/QUESTIONS.md", files)
+
     def test_binary_file_is_not_lost(self):
         # REVIEW.md T094 итерация 2, замечание 1 (major): раньше
         # `read_text(encoding="utf-8")` молча пропускал файл, не проходящий

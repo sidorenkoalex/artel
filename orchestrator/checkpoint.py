@@ -226,6 +226,25 @@ def _commit_external_step_artifacts(conn, task_id: str, role: str,
     для self возвращает именно этот worktree (T045), и источник
     автокоммита обязан совпасть с ним же, иначе роль пишет в один
     каталог, а автокоммит ищет в другом.
+
+    Удаления переносятся тоже (SPEC 01M1KT0792125J9ZNJNZJ86E9Q,
+    требование 4/AC-6), но НЕ полным зеркалированием диска на артефактную
+    ветку целиком: роль на КАЖДОМ шаге видит пустой `task_dir` (эта же
+    функция wipe'ает его в конце любого успешного коммита) и пишет туда
+    только то, что меняет СЕЙЧАС, — файл другой роли/шага, не тронутый
+    сегодня, обязан пережить чужой автокоммит (`tests/
+    test_checkpoint_external_step_artifacts.py::
+    test_second_step_accumulates_onto_the_first_not_replaces_it`, уже
+    зелёный тест, ломать нельзя). Удалённым считается только путь,
+    ПОСЛЕДНИЙ коммит которого на артефактной ветке — автокоммит ЭТОЙ ЖЕ
+    роли (`_OWN_COMMIT_MESSAGE` ниже, уникален для пары task_id/role):
+    тогда его отсутствие в СЕГОДНЯШНЕМ `files` — сигнал «эта же роль
+    больше не хочет этот файл» (пример — QUESTIONS.md analyst,
+    правило скила spec-authoring — «удали QUESTIONS.md» перед новым
+    SPEC.md), а не «эту итерацию его просто не переписали». Путь,
+    последний раз тронутый ДРУГИМ автором (другая роль, PASSPORT.md
+    переходов, ANSWER Оператора) — никогда не кандидат на удаление
+    здесь, независимо от локального отсутствия.
     """
     from . import artifact_branch
     if target == config.DEFAULT_TARGET:
@@ -244,15 +263,28 @@ def _commit_external_step_artifacts(conn, task_id: str, role: str,
             files[rel] = path.read_bytes()
         except OSError:
             continue
-    if not files:
-        return ""
+
+    branch = artifact_branch.branch_name(task_id)
     message = f"{task_id}: артефакты шага {role} (автокоммит оркестратора)"
-    commit_sha = artifact_branch.commit_files(task_id, files, message)
+    existing = gitcmd.ls_tree_files(branch, f"tasks/{task_id}") or []
+    removed = []
+    for rel in sorted(set(existing) - set(files)):
+        subject = gitcmd.git("log", "-1", "--format=%s", branch, "--", rel)
+        if (subject is not None and subject.returncode == 0
+                and subject.stdout.strip() == message):
+            removed.append(rel)
+
+    if not files and not removed:
+        return ""
+    commit_sha = artifact_branch.commit_files(task_id, files, message,
+                                              remove=removed)
     if not commit_sha:
         return ""
     shutil.rmtree(task_dir, ignore_errors=True)
     artifact_branch.push(task_id)
     detail = f"{message} (артефактная ветка, sha {commit_sha})"
+    if removed:
+        detail += f"; удалено: {', '.join(removed)}"
     store.journal(conn, task_id, "orchestrator",
                   "автокоммит артефактов шага (артефактная ветка)", detail)
     store.record_fixation(conn, task_id)
