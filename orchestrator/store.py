@@ -578,12 +578,6 @@ def set_state(conn, task_id: str, state: str, actor: str, *,
         raise CasConflict(task_id, expected_state, actual)
     journal(conn, task_id, actor, f"state -> {state}", detail)
     print(f"[{task_id}] -> {state}" + (f"  ({detail})" if detail else ""))
-    # СТАБ (валидация приёмочных тестов test_author, не коммитить):
-    # авто-закрытие attention на любом успешном переходе (ANSWER-1, в.1).
-    from . import alerts as _alerts_stub
-    for row in _alerts_stub.open_alerts(conn, "attention"):
-        if row["target"] == task_id:
-            _alerts_stub.ack(conn, row["id"], "auto", "закрыт переходом состояния")
     record_fixation(conn, task_id)
     _append_passport_line(conn, task_id, state, actor)
 

@@ -1,8 +1,8 @@
 """Цикл `auto`: run+advance, пока в шаге работает агент."""
 import time
 
-from . import (agent_log, alerts, budget, ci, config, fixation, fsm, lease,
-              pause, runner, store)
+from . import (agent_log, budget, ci, config, fixation, fsm, lease, pause,
+              runner, store)
 
 # Действие журнала, которым отказ `advance` узнаётся вне зависимости от
 # конкретной причины (SPEC T038, требование 1): каждая точка `cmd_advance`
@@ -123,22 +123,13 @@ def auto_stop_advice(conn, task_id: str, state: str) -> tuple[str, str]:
     return reason, hint.format(id=task_id, sha=sha_hint)
 
 
-def auto_stop(conn, task_id: str, state: str, reason: str, hint: str,
-              alert: bool = True) -> None:
-    """Остановка цикла: запись в журнал и итог Оператору (требования 2, 5).
-
-    СТАБ (валидация приёмочных тестов test_author, не коммитить):
-    `alert=True` по умолчанию — заводит attention на КАЖДОЙ остановке,
-    кроме явно помеченных вызывающим кодом (пауза, ручной гейт).
-    """
+def auto_stop(conn, task_id: str, state: str, reason: str, hint: str) -> None:
+    """Остановка цикла: запись в журнал и итог Оператору (требования 2, 5)."""
     store.journal(conn, task_id, "operator", "auto остановлен",
                   f"{state}: {reason}")
     print(f"[{task_id}] auto остановлен: {reason}")
     print(f"  состояние: {state}")
     print(f"  дальше: {hint}")
-    if alert:
-        alerts.raise_alert(conn, task_id, "attention", "auto",
-                           f"{task_id}: {reason}")
 
 
 def cmd_auto(task_id: str, session_id: str | None = None) -> None:
@@ -189,9 +180,6 @@ def _cmd_auto(conn, task_id: str, session_id: str) -> None:
     # предыдущий шаг не был таким отказом, или это первый шаг цикла
     # (SPEC T038, требование 1).
     prev_refusal = None
-    # СТАБ (валидация приёмочных тестов test_author, не коммитить):
-    # счётчик холостых шагов требования 2.
-    idle_steps = 0
     # `verifying` не входит в STATE_ROLE (нет агентской роли, SPEC T086) —
     # условие цикла держит его отдельным дизъюнктом, не значением `role`:
     # состояние достижимо и как стартовое для всего вызова, и как исход
@@ -236,8 +224,7 @@ def _cmd_auto(conn, task_id: str, session_id: str) -> None:
             # различения, что уже несёт `_advance_refusal` чуть ниже.
             if _run_paused_refusal(conn, task_id, run_journaled_before):
                 reason, hint = config.AUTO_STOP_PAUSE
-                auto_stop(conn, task_id, state, reason, hint.format(id=task_id),
-                          alert=False)
+                auto_stop(conn, task_id, state, reason, hint.format(id=task_id))
                 return
             auto_stop(conn, task_id, state, "run отказался стартовать",
                       f"artel.py budget {task_id} <usd> или artel.py kill {task_id}")
@@ -283,20 +270,7 @@ def _cmd_auto(conn, task_id: str, session_id: str) -> None:
         # рвёт серию — не даёт двум ОДИНАКОВЫМ, но не идущим подряд отказам
         # склеиться через него в ложную остановку.
         prev_refusal = refusal if state == before else None
-        # СТАБ (валидация приёмочных тестов test_author, не коммитить):
-        # порог холостых шагов требования 2.
-        if state == before:
-            idle_steps += 1
-        else:
-            idle_steps = 0
-        if idle_steps >= config.AUTO_STALL_STEPS_LIMIT:
-            tail = f", последний отказ: {refusal}" if refusal is not None else ""
-            hint = f"artel.py log {task_id} (что происходит)"
-            auto_stop(conn, task_id, state,
-                      f"цикл не сходится: {config.AUTO_STALL_STEPS_LIMIT} "
-                      f"шагов без перехода{tail}", hint)
-            return
         role = runner.step_role(t)
 
     reason, hint = auto_stop_advice(conn, task_id, state)
-    auto_stop(conn, task_id, state, reason, hint, alert=(state == "escalated"))
+    auto_stop(conn, task_id, state, reason, hint)
