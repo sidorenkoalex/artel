@@ -9,6 +9,19 @@ untracked, переименование), извлечение итоговой 
 окно всегда из одной задачи, см. докстринг
 `acceptance_tests/test_ac9_threshold_alert.py`) и счёт событий строго по
 task_id окна, а также разбор argv `--reason` (`artel._reason_arg`).
+
+`AmendThenReviewGateTest` (ANSWER-3, вопрос 2) — регресс-тест реальным
+git: до этой правки production `amend-tests` сдвигал `tests_locked_sha`
+на HEAD worktree'а КОДОВОЙ ветки, а гейт `in_dev -> review` сверяет лок
+с АРТЕФАКТНОЙ веткой пульта (`orchestrator/fsm_advance.py::in_dev`,
+`lock_ref = branch`) — асимметрия ломала переход сразу же после
+успешной правки планки (tasks/01M1HNNHDMP2C1AJTH5QF1BTN2/PLAN.md,
+«Эскалация», вопрос 2). Фикстура — тот же рецепт, что `tests/
+test_acceptance_tests_flow.py::LockTest` (SPEC.md/PLAN.md/acceptance_tests
+пишутся прямо на артефактную ветку, `artifact_branch.commit_files`),
+переиспользующая её шаблоны `SPEC_V2`/`PLAN_MD`/`AC_TEST_BOTH_COVERED`
+(тот же приём, что `tests/test_answer.py` уже переиспользует `RealPultGitTest`
+из `tests/test_git_fixation.py`).
 """
 import subprocess
 import sys
@@ -18,8 +31,12 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from orchestrator import amend, artel, catalog, config, gitcmd, store  # noqa: E402
-from tests.sandbox import TmpRootTest, capture  # noqa: E402
+from orchestrator import (amend, artel, artifact_branch, catalog, config,  # noqa: E402
+                          fsm, gitcmd, store, workspace)
+from tests.sandbox import RealGitSandbox, TmpRootTest, capture  # noqa: E402
+from tests.sandbox import capture_new_task_id  # noqa: E402
+from tests.test_acceptance_tests_flow import (  # noqa: E402
+    AC_TEST_BOTH_COVERED, PLAN_MD, SPEC_V2)
 
 
 class RunSummaryTest(unittest.TestCase):
@@ -77,6 +94,90 @@ class WorktreeChangedPathsTest(unittest.TestCase):
 
     def test_git_not_responding_returns_none(self):
         self.assertIsNone(self._paths("", returncode=128))
+
+
+class TestsSnapshotAndMaterializeTest(RealGitSandbox):
+    """`_materialize_tests_if_missing`/`_tests_snapshot`/
+    `_artifact_tests_snapshot` (ANSWER-3, вопрос 2) в изоляции: приёмочные
+    тесты кроют их только сквозным путём через FSM, здесь — сами хелперы
+    отдельно от отказов/лока/журнала."""
+
+    def setUp(self):
+        super().setUp()
+        capture(catalog.cmd_init)
+        _, self.TASK = capture_new_task_id(catalog.cmd_new, "снимок и материализация")
+        self.conn = store.db()
+        wt_path, error = workspace.ensure(self.TASK, self.row()["branch"])
+        self.assertIsNone(error, f"worktree не создан: {error}")
+        self.wt_path = wt_path
+        self.tdir = wt_path / "tasks" / self.TASK
+        self.rel_tests_dir = f"tasks/{self.TASK}/acceptance_tests"
+        # `--exclude-standard` (ANSWER-3: __pycache__/*.pyc не в коммит)
+        # читает .gitignore из рабочего дерева worktree — не коммичен,
+        # git всё равно его учитывает при статусе/ls-files.
+        (self.wt_path / ".gitignore").write_text("__pycache__/\n*.pyc\n",
+                                                  encoding="utf-8")
+
+    def row(self):
+        return store.db().execute("SELECT * FROM tasks WHERE id=?",
+                                  (self.TASK,)).fetchone()
+
+    def test_materialize_fills_missing_directory_from_artifact_branch(self):
+        artifact_branch.commit_files(
+            self.TASK,
+            {f"tasks/{self.TASK}/acceptance_tests/test_ac.py": "содержимое\n"},
+            f"{self.TASK}: acceptance_tests")
+
+        amend._materialize_tests_if_missing(self.TASK, self.tdir)
+
+        self.assertEqual(
+            (self.tdir / "acceptance_tests" / "test_ac.py").read_text(
+                encoding="utf-8"),
+            "содержимое\n")
+
+    def test_materialize_skips_already_present_directory(self):
+        (self.tdir / "acceptance_tests").mkdir(parents=True)
+        (self.tdir / "acceptance_tests" / "test_ac.py").write_text(
+            "правка Оператора\n", encoding="utf-8")
+
+        amend._materialize_tests_if_missing(self.TASK, self.tdir)
+
+        self.assertEqual(
+            (self.tdir / "acceptance_tests" / "test_ac.py").read_text(
+                encoding="utf-8"),
+            "правка Оператора\n",
+            "уже существующий каталог не должен перетираться материализацией")
+
+    def test_tests_snapshot_excludes_gitignored_pycache(self):
+        tests_dir = self.tdir / "acceptance_tests"
+        tests_dir.mkdir(parents=True)
+        (tests_dir / "test_ac.py").write_text("...\n", encoding="utf-8")
+        pycache = tests_dir / "__pycache__"
+        pycache.mkdir()
+        (pycache / "test_ac.cpython-312.pyc").write_bytes(b"\x00\x01")
+
+        snapshot = amend._tests_snapshot(self.wt_path, self.rel_tests_dir)
+
+        self.assertIn(f"{self.rel_tests_dir}/test_ac.py", snapshot)
+        self.assertFalse(
+            any("__pycache__" in rel for rel in snapshot),
+            f"__pycache__ не должен попасть в снимок для коммита: "
+            f"{sorted(snapshot)}")
+
+    def test_artifact_snapshot_matches_disk_snapshot_after_bare_materialize(self):
+        artifact_branch.commit_files(
+            self.TASK,
+            {f"tasks/{self.TASK}/acceptance_tests/test_ac.py": "исходное\n"},
+            f"{self.TASK}: acceptance_tests")
+
+        amend._materialize_tests_if_missing(self.TASK, self.tdir)
+
+        disk = amend._tests_snapshot(self.wt_path, self.rel_tests_dir)
+        baseline = amend._artifact_tests_snapshot(self.TASK, self.rel_tests_dir)
+        self.assertEqual(
+            disk, baseline,
+            "материализация без правки Оператора не должна читаться как "
+            "изменение (AC-2)")
 
 
 class LockedWindowTest(TmpRootTest):
@@ -153,6 +254,113 @@ class AmendEventsInWindowTest(TmpRootTest):
 
     def test_empty_window_counts_zero(self):
         self.assertEqual(amend._amend_events_in_window(self.conn, []), 0)
+
+
+# Правка Оператора: содержательно другой текст, по-прежнему покрывает
+# AC-1/AC-2 (тот же довод, что AC_TEST_AMENDED_V1 в
+# tasks/01M1HNNHDMP2C1AJTH5QF1BTN2/acceptance_tests/_sandbox.py).
+AC_TEST_AMENDED = '''"""Красен до реализации: фикстура покрывает оба критерия
+SPEC_V2 песочницы (правка Оператора: добавлена вторая проверка AC-1)."""
+import unittest
+
+
+class AcceptanceTest(unittest.TestCase):
+    def test_ac1_first_criterion(self):
+        self.assertTrue(True)
+
+    def test_ac1_first_criterion_again(self):
+        self.assertEqual(1 + 1, 2)
+
+
+# AC-2: manual — Оператор проверяет глазами на приёмке
+'''
+
+
+class AmendThenReviewGateTest(RealGitSandbox):
+    """ANSWER-3, вопрос 2 — см. докстринг модуля."""
+
+    def setUp(self):
+        super().setUp()
+        capture(catalog.cmd_init)
+        _, self.TASK = capture_new_task_id(catalog.cmd_new,
+                                           "amend -> review, гейт лока")
+        self.conn = store.db()
+        self.branch = artifact_branch.branch_name(self.TASK)
+        self.code_branch = self.row()["branch"]
+        wt_path, error = workspace.ensure(self.TASK, self.code_branch)
+        self.assertIsNone(error, f"worktree не создан: {error}")
+        self.wt_path = wt_path
+        self.tdir = wt_path / "tasks" / self.TASK
+        # Код фичи (self-target, тот же приём, что LockTest.setUp, AC-5):
+        # гейт ёмкости diff снимка (`_capacity_gate_refuses`) для self
+        # сверяет именно кодовую ветку в config.ROOT.
+        (self.wt_path / "feature.txt").write_text("код фичи\n", encoding="utf-8")
+        self.git_wt("add", "feature.txt")
+        self.git_wt("commit", "-q", "-m", f"{self.TASK}: код фичи")
+
+    def row(self):
+        return store.db().execute("SELECT * FROM tasks WHERE id=?",
+                                  (self.TASK,)).fetchone()
+
+    def state(self) -> str:
+        return self.row()["state"]
+
+    def git_wt(self, *args: str) -> str:
+        res = subprocess.run(["git", "-C", str(self.wt_path), *args],
+                             capture_output=True, text=True)
+        self.assertEqual(res.returncode, 0,
+                         f"git -C {self.wt_path} {' '.join(args)}: {res.stderr}")
+        return res.stdout
+
+    def artifact_commit(self, files: dict, message: str) -> None:
+        sha = artifact_branch.commit_files(self.TASK, files,
+                                           f"{self.TASK}: {message}")
+        self.assertTrue(sha, f"коммит {message!r} на артефактную ветку не удался")
+
+    def enter_in_dev(self) -> None:
+        self.artifact_commit(
+            {f"tasks/{self.TASK}/SPEC.md": SPEC_V2.format(task=self.TASK, extra="")},
+            "SPEC")
+        capture(fsm.cmd_advance, self.TASK)  # spec_writing -> spec_gate
+        sha = gitcmd.head_sha(config.PROJECTS / config.DEFAULT_TARGET)
+        capture(fsm.cmd_approve, self.TASK, sha)  # -> tests_writing
+        self.assertEqual(self.state(), "tests_writing")
+
+        self.artifact_commit(
+            {f"tasks/{self.TASK}/acceptance_tests/test_ac.py": AC_TEST_BOTH_COVERED},
+            "acceptance_tests")
+        capture(fsm.cmd_advance, self.TASK)  # tests_writing -> in_dev
+        self.assertEqual(self.state(), "in_dev")
+
+    def test_amend_then_advance_passes_lock_gate(self):
+        """Успешный `amend-tests`, сразу за ним `advance` — переход
+        `in_dev -> review` обязан пройти: лок (`tests_locked_sha`) после
+        правки указывает на ту же артефактную ветку, с которой гейт его
+        сверяет, а не на HEAD (не относящегося к делу) worktree'а
+        кодовой ветки.
+
+        Ловит регрессию: `amend-tests` сдвигает `tests_locked_sha` на
+        HEAD worktree'а кодовой ветки — `gitcmd.diff_paths` гейта
+        сравнивает лок с АРТЕФАКТНОЙ веткой и всегда видит «расхождение»
+        (два физически разных дерева), переход отклоняется бесконечно.
+        """
+        self.enter_in_dev()
+        (self.tdir / "acceptance_tests").mkdir(parents=True, exist_ok=True)
+        (self.tdir / "acceptance_tests" / "test_ac.py").write_text(
+            AC_TEST_AMENDED, encoding="utf-8")
+        self.artifact_commit(
+            {f"tasks/{self.TASK}/PLAN.md": PLAN_MD.format(task=self.TASK)}, "PLAN")
+
+        out = capture(amend.cmd_amend_tests, self.TASK,
+                      "исправлена опечатка (регресс ANSWER-3, вопрос 2)")
+        self.assertEqual(self.state(), "in_dev", f"amend-tests отказал: {out}")
+
+        capture(fsm.cmd_advance, self.TASK)
+
+        self.assertEqual(
+            self.state(), "review",
+            "гейт in_dev -> review обязан пройти сразу после успешной "
+            "правки планки")
 
 
 class ReasonArgTest(unittest.TestCase):
