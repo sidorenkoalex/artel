@@ -22,7 +22,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from orchestrator import (acceptance, catalog, config, fsm, gitcmd,  # noqa: E402
                           store, workspace)
-from tests.sandbox import capture, capture_new_task_id, fake_git  # noqa: E402
+from tests.sandbox import (SpyRun, capture, capture_new_task_id,  # noqa: E402
+                           disk_backed_ls_tree_files, disk_backed_show,
+                           fake_git)
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
@@ -74,6 +76,28 @@ class MapConflictAutoResolveTest(unittest.TestCase):
         patcher = mock.patch.object(gitcmd, "git", fake_git)
         patcher.start()
         self.addCleanup(patcher.stop)
+        # A7 (generic-путь заведения, AC-5): `cmd_new` коммитит артефакты
+        # плотницки (`artifact_branch.write_commit`) — та функция зовёт
+        # `subprocess.run` НАПРЯМУЮ, минуя `gitcmd.git`/фейк выше; `root`
+        # здесь не настоящий git-репозиторий — без этого патча `cmd_new`
+        # падает `sys.exit` («git не ответил») ещё до сценария, который
+        # тест проверяет (тот же приём, что `tests.sandbox.TmpRootTest.
+        # setUp`/`tests.test_spec_budget`).
+        spy_patcher = mock.patch.object(gitcmd.subprocess, "run", SpyRun())
+        spy_patcher.start()
+        self.addCleanup(spy_patcher.stop)
+        # `artifact_source.resolve` теперь ВСЕГДА возвращает `foreign=True`
+        # — FSM читает SPEC/PLAN через `gitcmd.show`/`ls_tree_files`, не с
+        # диска напрямую; эта песочница без настоящего git ведёт один
+        # источник истины — диск `self.tdir` (тот же приём, что
+        # `tests.test_invariants.FsmTest`).
+        show_patcher = mock.patch.object(gitcmd, "show", disk_backed_show)
+        show_patcher.start()
+        self.addCleanup(show_patcher.stop)
+        ls_patcher = mock.patch.object(gitcmd, "ls_tree_files",
+                                       disk_backed_ls_tree_files)
+        ls_patcher.start()
+        self.addCleanup(ls_patcher.stop)
 
         self.wt_path = root / "wt"
         wt_patcher = mock.patch.object(
@@ -147,6 +171,25 @@ class MapConflictAutoResolveTest(unittest.TestCase):
                     "")
             if args[:1] in (("checkout",), ("add",), ("commit",)):
                 return self._ok(repo, *args)
+            # `fsm._dirty_refuses`/`store.record_fixation` (A7: self/артель
+            # фиксируется тем же кодом, что и любой target, — эти вызовы
+            # существовали и до A7, просто не были достижимы этой лёгкой
+            # песочницей раньше, пока она падала на `cmd_new`) сверяют/
+            # коммитят артефактный репо `config.PROJECTS/<target>/`
+            # (`fixation.read`/`fix`) ПЕРЕД/НА каждом из трёх гейтов
+            # (SPEC/REVIEW/PLAN) — «чисто, нечего коммитить» здесь, тест
+            # не о фиксации.
+            if args == ("rev-parse", "HEAD"):
+                return subprocess.CompletedProcess(
+                    ("git", "-C", str(repo), *args), 0, "f" * 40 + "\n", "")
+            if args[:2] == ("status", "--porcelain"):
+                return subprocess.CompletedProcess(
+                    ("git", "-C", str(repo), *args), 0, "", "")
+            if args[:1] == ("init",):
+                return self._ok(repo, *args)
+            if args[:2] == ("diff", "--cached"):
+                return subprocess.CompletedProcess(
+                    ("git", "-C", str(repo), *args), 0, "", "")  # нечего коммитить
             raise AssertionError(f"неожиданный gitcmd.in_repo вызов: {args}")
 
         return calls, side_effect

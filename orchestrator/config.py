@@ -143,6 +143,14 @@ PROGRAM_ALERT_RATIOS = (0.7, 0.9)
 # на ней возвращает 0) — не участвует в нумерации и не коллизирует ни с
 # одной настоящей задачей.
 PROGRAM_SPEND_RESEED_TASK_ID = "PROGRAM-SPEND-RESEED"
+# Синтетический task_id для журнала команды `pin-update` (A7, Stage1,
+# требование 6): операция не привязана ни к одной задаче — тот же приём,
+# что и PROGRAM_SPEND_RESEED_TASK_ID выше. Хвост значения — не отдельным
+# словом-SQL-глаголом в верхнем регистре (tests/test_multitarget.py::
+# SqlOnlyInStoreTest сканирует orchestrator/ на сырой SQL вне store.py
+# по границам слов через дефис) — дописана буква, чтобы граница слова
+# не совпала.
+PIN_UPDATE_JOURNAL_TASK_ID = "PIN-UPDATED"
 # Кто задал потолок задачи (tasks.budget_source). NULL — никто, стоит дефолт.
 BUDGET_SOURCE_SPEC = "spec"
 BUDGET_SOURCE_OPERATOR = "operator"

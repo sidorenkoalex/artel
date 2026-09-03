@@ -2,9 +2,23 @@
 разбор конфликта merge, ре-ран флейка CI, ожидание CI ветки вне мьютекса,
 собственно merge в main. Перенесено из orchestrator/fsm.py без изменения
 поведения (T091, декомпозиция диспетчеров fsm/runner).
+
+Stage0 (A7, ANSWER-1 вопрос 1, вариант B): `approve` из `merge_gate`
+записывает merge-коммит в `refs/heads/<MAIN_BRANCH>` main артели
+(её `origin`) плотницки — через временный detached scratch-worktree
+(`_scratch_worktree`) и явный push конкретного sha, — не через `git
+checkout`/`git merge`/`git push` рабочего дерева `config.ROOT`:
+рабочее дерево и HEAD ROOT остаются на зафиксированном пином sha
+непосредственно до и сразу после успешного `approve` (AC-8, AC-9,
+AC-12). Единственный способ продвинуть ROOT вперёд — отдельная
+операторская команда `pin-update` (`orchestrator/pin.py`, Stage1), вне
+цикла FSM.
 """
+import shutil
 import sys
+import tempfile
 import time
+from pathlib import Path
 
 from . import (ci, cleanup, config, fsm, fsm_postmerge, gitcmd,
               github_adapter, lease, merge_lock, store, workspace)
@@ -14,10 +28,47 @@ def _touches_protected_path(path: str) -> bool:
     return any(path == p or path.startswith(p) for p in config.PROTECTED_PATHS)
 
 
+def _origin_main_sha() -> str | None:
+    """sha текущего HEAD `refs/heads/<MAIN_BRANCH>` main артели (её
+    `origin`, ANSWER-1) — `None`, git не ответил.
+
+    `git fetch` пишет только в объектную базу и `FETCH_HEAD`/
+    remote-tracking ref, никогда в локальный `refs/heads/<MAIN_BRANCH>`
+    — рабочее дерево и HEAD `config.ROOT` не задеты (AC-8).
+    """
+    fetch = gitcmd.git("fetch", "-q", "origin", config.MAIN_BRANCH)
+    if fetch is None or fetch.returncode != 0:
+        return None
+    res = gitcmd.git("rev-parse", "FETCH_HEAD")
+    return res.stdout.strip() if res is not None and res.returncode == 0 else None
+
+
+def _scratch_worktree(sha: str) -> tuple[Path | None, str | None]:
+    """Временный detached git-worktree на `sha`, ВНЕ рабочего дерева
+    `config.ROOT` (AC-8) — тот же приём, что `orchestrator/workspace.py`
+    уже несёт для задач, здесь одноразовый и detached (main артели —
+    не ветка задачи, checkout по имени ветки уже занят самим ROOT).
+    (путь, None) — успех; (None, причина) — git не ответил.
+    """
+    scratch = Path(tempfile.mkdtemp(prefix="artel-merge-carpentry-"))
+    res = gitcmd.git("worktree", "add", "--detach", str(scratch), sha)
+    if res is None or res.returncode != 0:
+        shutil.rmtree(scratch, ignore_errors=True)
+        reason = res.stderr.strip()[:300] if res is not None else "git не ответил"
+        return None, reason
+    return scratch, None
+
+
+def _drop_scratch_worktree(repo: Path) -> None:
+    gitcmd.git("worktree", "remove", "--force", str(repo))
+    shutil.rmtree(repo, ignore_errors=True)
+
+
 def _handle_merge_conflict(conn, task_id: str, state: str, branch: str,
-                           merge_res) -> None:
+                           merge_res, repo: Path) -> None:
     """Разбор провала `git merge --no-ff <branch>` при `approve` из
-    `merge_gate` (SPEC T052, требования 2-3; AC-3, AC-4, AC-5).
+    `merge_gate` (SPEC T052, требования 2-3; AC-3, AC-4, AC-5) — merge
+    идёт в scratch-worktree `repo` (Stage0, AC-8), не в `config.ROOT`.
 
     Отличает содержательный конфликт (git начал merge, но не смог
     разрешить его сам) от инфраструктурного отказа: список файлов с
@@ -26,37 +77,40 @@ def _handle_merge_conflict(conn, task_id: str, state: str, branch: str,
     (`sys.exit`, задача остаётся в `merge_gate`, требование 3/AC-5).
 
     Список не пуст — содержательный конфликт: `git merge --abort`
-    возвращает main в чистое состояние (требование 5), а задача уходит
-    в `in_dev` (AC-3) либо, если конфликт задевает защищённый путь
-    (`config.PROTECTED_PATHS`), в `escalated` (AC-4) — оба перехода
-    несут перечень конфликтующих файлов в журнал через `detail`
-    `store.set_state`. Если сам `git merge --abort` не удался, main
-    остаётся с незавершённым merge — переход состояния НЕ выполняется
-    (иначе main тихо остался бы грязным при формально успешном
-    переходе, ломая последующие approve других задач); это
-    инфраструктурный отказ той же природы, что и «git не ответил»
-    выше — `sys.exit`, задача остаётся в `merge_gate`.
+    возвращает scratch-дерево в чистое состояние (требование 5), а
+    задача уходит в `in_dev` (AC-3) либо, если конфликт задевает
+    защищённый путь (`config.PROTECTED_PATHS`), в `escalated` (AC-4) —
+    оба перехода несут перечень конфликтующих файлов в журнал через
+    `detail` `store.set_state`. Если сам `git merge --abort` не удался,
+    scratch-дерево остаётся с незавершённым merge НАРОЧНО (для разбора
+    Оператором) — переход состояния НЕ выполняется; `config.ROOT`
+    (в отличие от прежнего чекаут-механизма) этим отказом не задет
+    вовсе — инфраструктурный отказ той же природы, что и «git не
+    ответил» выше — `sys.exit`, задача остаётся в `merge_gate`.
     """
     store.journal(conn, task_id, "orchestrator", "merge FAILED",
-                  merge_res.stderr.strip()[:500])
-    conflicts = gitcmd.git("diff", "--name-only", "--diff-filter=U")
+                  merge_res.stderr.strip()[:500] if merge_res is not None
+                  else "git не ответил")
+    conflicts = gitcmd.in_repo(repo, "diff", "--name-only", "--diff-filter=U")
     files = sorted(set(conflicts.stdout.split())) \
         if conflicts is not None and conflicts.returncode == 0 else []
     if not files:
+        _drop_scratch_worktree(repo)
         sys.exit(f"merge упал на git merge --no-ff {branch}:\n"
-                 f"{merge_res.stderr}")
+                 f"{merge_res.stderr if merge_res is not None else '—'}")
 
-    abort = gitcmd.git("merge", "--abort")
+    abort = gitcmd.in_repo(repo, "merge", "--abort")
     if abort is None or abort.returncode != 0:
         abort_err = abort.stderr.strip()[:500] if abort is not None else "git не ответил"
         store.journal(conn, task_id, "orchestrator", "merge --abort FAILED",
                       abort_err)
         sys.exit(f"[{task_id}] merge отклонён: конфликт в файлах "
                  f"{', '.join(files)}, но git merge --abort не смог "
-                 f"вернуть main в чистое состояние ({abort_err}); "
-                 f"main требует ручной уборки Оператором; задача осталась "
-                 f"в merge_gate")
+                 f"вернуть scratch-дерево {repo} в чистое состояние "
+                 f"({abort_err}); дерево оставлено для разбора Оператором "
+                 f"(config.ROOT не задет); задача осталась в merge_gate")
 
+    _drop_scratch_worktree(repo)
     file_list = ", ".join(files)
     protected = [f for f in files if _touches_protected_path(f)]
     if protected:
@@ -150,9 +204,9 @@ def _cmd_approve_merge_gate(conn, task_id: str, state: str, t,
                             confirmed_ci_note: str | None = None) -> tuple:
     """Тело окна `merge_gate -> done`, исполняемое ПОД МЬЮТЕКСОМ merge
     (SPEC T053, требование 1; SPEC T087, требования 1-2, 5-6): сверка
-    главной копии -> сверка свежести ветки внутри окна (требования 5-8
-    T053) -> зелёный CI -> checkout/pull/merge -> карта/RETRO -> push ->
-    done.
+    свежести ветки внутри окна (требования 5-8 T053) -> зелёный CI ->
+    плотницкий merge в scratch-worktree (Stage0, AC-8) -> карта/RETRO ->
+    push явным sha -> done.
 
     Возврат — сигнал вызывающему циклу (`_cmd_approve_merge_gate_cycle`):
     `"stopped"` — окно завершилось без merge (эскалация, красная главная
@@ -171,44 +225,26 @@ def _cmd_approve_merge_gate(conn, task_id: str, state: str, t,
     `"pulled"` ниже его не читает.
     """
     branch = t["branch"]
+    # AC-10 (ANSWER-1, вопрос 1): проверка «главная копия на main» убрана
+    # целиком — плотницкий merge (Stage0, ниже) не читает и не требует
+    # чекаута `config.ROOT` вовсе, ему структурно нечего защищать.
+    #
     # Голова ветки задачи на origin — предусловие КАЖДОГО approve
     # merge_gate (SPEC 01M1GS5HZ1JXFGKVR95HEW0AEZ, требование 7,
     # AC-8/AC-9), самой первой строкой тела: расхождение может
     # появиться уже ПОСЛЕ входа на гейт (новый коммит на ветке задачи
     # между заходами approve/цикла ожидания CI), не только на самом
-    # входе. Провал — graceful возврат (тот же приём, что сверка главной
-    # копии ниже), задача остаётся на merge_gate без эскалации; повторный
-    # approve после починки origin продолжает штатно (AC-9).
+    # входе. Провал — graceful возврат, задача остаётся на merge_gate
+    # без эскалации; повторный approve после починки origin продолжает
+    # штатно (AC-9). Эта проверка не зависит от чекаута `config.ROOT`
+    # (она про ветку ЗАДАЧИ в origin, не про главную копию) — Stage0 её
+    # не отменяет.
     push_ok, push_detail = github_adapter.ensure_head_in_origin(
         conn, task_id, branch)
     if not push_ok:
         store.journal(conn, task_id, "orchestrator",
                       "approve отклонён: голова не в origin", push_detail)
         print(f"[{task_id}] approve отклонён: {push_detail}")
-        return ("stopped",)
-    # Рабочая поверхность оркестратора (SPEC T045, требования 3-4,
-    # AC-8 сценарий 2): merge — территория главной копии пульта на
-    # main, не чужой ветки Оператора/сессии. Проверяется ДО двухшаговой
-    # sha-сверки `confirm_fixation` выше (та уже пройдена к этой
-    # точке) — отказ здесь не имеет права сам переключать главную
-    # копию, только останавливать команду; не `sys.exit` (в отличие от
-    # красного CI/провала git ниже — там инфраструктурный отказ, а не
-    # рутинная сверка поверхности): задача остаётся на гейте
-    # merge_gate, чтобы Оператор мог повторить approve тем же
-    # процессом после перехода на main. Пустая строка — git не ответил
-    # (вырожденный случай песочниц без реального git, тот же приём
-    # деградации, что у `gitcmd.on_foreign_branch`) — сверять не с чем,
-    # пропускается.
-    root_branch = gitcmd.current_branch()
-    if root_branch and root_branch != config.MAIN_BRANCH:
-        detail = (f"главная копия пульта стоит на {root_branch}, не "
-                  f"на {config.MAIN_BRANCH} — merge не выполняется; "
-                  f"перейди на {config.MAIN_BRANCH} и повтори "
-                  f"artel.py approve {task_id}")
-        store.journal(conn, task_id, "fsm",
-                      "approve отклонён: главная копия не на main",
-                      detail)
-        print(f"[{task_id}] approve отклонён: {detail}")
         return ("stopped",)
     # Сверка свежести ветки ПОД МЬЮТЕКСОМ, до сверки CI (SPEC T053,
     # требования 5-8): main мог уйти вперёд, пока задача стояла на гейте
@@ -269,35 +305,54 @@ def _cmd_approve_merge_gate(conn, task_id: str, state: str, t,
                          f"{task_id}")
             _, note = _ci_confirm_red_or_flake(conn, task_id, branch, note)
     print(f"[{task_id}] {note}")
-    for cmd in (["git", "checkout", config.MAIN_BRANCH],
-                ["git", "pull", "--ff-only"]):
-        res = gitcmd.git(*cmd[1:])
-        if res.returncode != 0:
-            store.journal(conn, task_id, "orchestrator", "merge FAILED",
-                          res.stderr.strip()[:500])
-            sys.exit(f"merge упал на {' '.join(cmd)}:\n{res.stderr}")
-    merge_res = gitcmd.git("merge", "--no-ff", branch, "-m",
-                           f"{task_id}: merge {branch}")
-    if merge_res.returncode != 0:
-        _handle_merge_conflict(conn, task_id, state, branch, merge_res)
+    # Плотницкий merge (Stage0, ANSWER-1 вопрос 1, вариант B; AC-8):
+    # текущий sha main артели (её origin) БЕЗ прикосновения к локальному
+    # refs/heads/<MAIN_BRANCH> — `_origin_main_sha` только фетчит.
+    origin_sha = _origin_main_sha()
+    if origin_sha is None:
+        sys.exit(f"[{task_id}] merge отклонён: git fetch origin "
+                 f"{config.MAIN_BRANCH} не ответил\n"
+                 f"  задача осталась на гейте merge; почини доступ к "
+                 f"origin и повтори: artel.py approve {task_id}")
+    scratch, scratch_error = _scratch_worktree(origin_sha)
+    if scratch is None:
+        store.journal(conn, task_id, "orchestrator", "merge FAILED",
+                      scratch_error)
+        sys.exit(f"merge упал на подготовке scratch-дерева: {scratch_error}")
+
+    merge_res = gitcmd.in_repo(scratch, "merge", "--no-ff", branch, "-m",
+                               f"{task_id}: merge {branch}")
+    if merge_res is None or merge_res.returncode != 0:
+        _handle_merge_conflict(conn, task_id, state, branch, merge_res, scratch)
         return ("stopped",)
     # sha КОММИТА МЕРЖА — сразу после успешного merge, ДО любых
     # последующих служебных коммитов (карты, RETRO): адрес артефактов
     # RETRO (SPEC T043, требование 8) обязан указывать именно на этот
     # коммит, а не на более поздний, который сдвинул бы HEAD дальше.
-    merge_sha = gitcmd.head_sha()
+    merge_sha = gitcmd.head_sha(scratch)
     # Карта кодовой базы (SPEC T042): после merge, до push; провал
     # шага карты не отменяет merge (требование 5) — push ниже
     # выполняется независимо от исхода `_regenerate_and_commit_map`.
-    fsm_postmerge._regenerate_and_commit_map(conn, task_id)
+    # Оба служебных шага работают В SCRATCH (AC-9) — не в `config.ROOT`.
+    fsm_postmerge._regenerate_and_commit_map(conn, task_id, repo=scratch)
     # Дайджест задачи в main (SPEC T043): после карты, до push, тем же
     # принципом некритичности — провал не отменяет переход.
-    fsm_postmerge._generate_and_commit_retro(conn, task_id, merge_sha)
-    push = gitcmd.git("push")
-    if push.returncode != 0:
+    fsm_postmerge._generate_and_commit_retro(conn, task_id, merge_sha,
+                                             repo=scratch)
+    final_sha = gitcmd.head_sha(scratch)
+    _drop_scratch_worktree(scratch)
+    # Push ЯВНОГО sha (не текущего чекаута) прямо в `refs/heads/
+    # <MAIN_BRANCH>` origin — из `config.ROOT`, чья объектная база уже
+    # несёт коммиты scratch-worktree (общий `.git`), но чей собственный
+    # чекаут/HEAD этот push не трогает вовсе (AC-8).
+    push = gitcmd.git("push", "origin",
+                      f"{final_sha}:refs/heads/{config.MAIN_BRANCH}")
+    if push is None or push.returncode != 0:
         store.journal(conn, task_id, "orchestrator", "merge FAILED",
-                      push.stderr.strip()[:500])
-        sys.exit(f"merge упал на git push:\n{push.stderr}")
+                      push.stderr.strip()[:500] if push is not None
+                      else "git не ответил")
+        sys.exit(f"merge упал на git push:\n"
+                 f"{push.stderr if push is not None else '—'}")
     store.set_state(conn, task_id, "done", "orchestrator",
                     expected_state=state, detail=f"смержено: {branch}")
     # Успешное закрытие задачи обязано снять lease безусловно, «любым

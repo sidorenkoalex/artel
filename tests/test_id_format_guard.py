@@ -252,7 +252,6 @@ class IdFormatSampleOnForeignBranchTest(RealGitBranchTest):
         # удваиваем их только для этого пути записи, исходная константа
         # для прямых вызовов guard-функций не трогается.
         escaped = content.replace("{", "{{").replace("}", "}}")
-        (self.wt_dir / "acceptance_tests").mkdir(parents=True, exist_ok=True)
         self.write_on_task_branch("acceptance_tests/test_ac.py", escaped)
 
     def test_id_format_sample_on_task_branch_blocks_transition(self):
