@@ -17,10 +17,18 @@ SQL самих операций — в store.py (ADR-0003 3ж: «единств�
 - `trigger` — реестр docs/triggers.md; ack обязан нести решение
   («внедряем — задача N» либо «отложено до <граница>»), поэтому только
   для него `ack()` требует непустой `resolution`.
+- `attention` — остановка `auto` не на ручном гейте и не по паузе (SPEC
+  01M1KCSTBYF1CRJBSY4P6VYQEA, требование 3): цикл буксует или встал там,
+  где раньше был виден только по запросу статуса Оператором. `target` —
+  id задачи. Заводится `auto.auto_stop` (`raise_attention_alert`),
+  закрывается автоматически на следующем успешном переходе состояния
+  этой задачи, кем бы он ни был вызван (требование 4) —
+  `close_attention_alerts`, зовётся из `store.set_state`, единственной
+  точки любого перехода FSM.
 """
 from . import store
 
-KINDS = ("incident", "threshold", "trigger")
+KINDS = ("incident", "threshold", "trigger", "attention")
 
 
 def raise_alert(conn, target: str | None, kind: str, source: str,
@@ -44,6 +52,27 @@ def raise_alert(conn, target: str | None, kind: str, source: str,
 def open_alerts(conn, kind: str | None = None) -> list:
     """Неподтверждённые алерты, свежие сверху; kind — фильтр по типу."""
     return store.open_alerts(conn, kind)
+
+
+def raise_attention_alert(conn, task_id: str, message: str) -> bool:
+    """Заводит алерт `kind=attention` остановки `auto` (требование 3) —
+    тонкая обёртка над `raise_alert`: дедуп по (target, kind, source,
+    message) и решение «заведён/уже открыт» остаются его же."""
+    return raise_alert(conn, task_id, "attention", "auto", message)
+
+
+def close_attention_alerts(conn, task_id: str) -> None:
+    """Закрывает открытые алерты `kind=attention` этой задачи (требование
+    4): любой успешный переход состояния задачи закрывает буксование,
+    которое он сам и разрешил. Не `auto_ack`/`ack` — оба решают ЧУЖУЮ
+    задачу (doctor/Оператор соответственно, SPEC «Не входит»); здесь
+    закрытие не требует решения человека, сама смена состояния и есть
+    ответ на вопрос «буксует ли».
+    """
+    for row in open_alerts(conn, "attention"):
+        if row["target"] == task_id:
+            store.ack_alert(conn, row["id"], "auto",
+                            "закрыт следующим переходом состояния задачи")
 
 
 def auto_ack(conn, alert_id: int) -> None:
