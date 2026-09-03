@@ -224,7 +224,21 @@ def _dead_pid() -> int:
 
 
 class SpyRun:
-    """Подмена `subprocess.run`: команда запоминается и не исполняется."""
+    """Подмена `subprocess.run`: фейкует ТОЛЬКО плотницкие git-примитивы
+    артефактной ветки (`artifact_branch.write_commit`/`commit_files`) —
+    им нужен git-репозиторий, которого в лёгкой песочнице `TmpRootTest`
+    нет (`self.root` — обычный временный каталог, не git-репо, пока тест
+    сам его не завёл `git init`). Всё остальное (`init`, `add`/`commit`,
+    `status`, `remote`, `fsck`, `push`, ...) уходит в НАСТОЯЩИЙ
+    `subprocess.run`: код, оперирующий РЕАЛЬНО заведённым по ходу теста
+    репозиторием (`projects.cmd_target_init` и подобные), обязан видеть
+    настоящий исход, а не молчаливую заглушку — иначе, например,
+    dirty-детект `git status --porcelain` не отличил бы правку от чистого
+    дерева (находка A7: `tasks/01M1H224X5A8W159MKF1Q24R5Y/acceptance_tests/
+    test_ac2_doctor_generic_checks.py`/`test_ac3_recovery_check_scope.py`
+    заводят репозиторий `projects.cmd_target_init` и коммитят в него
+    по-настоящему — бланкетный фейк «успех на всё» их ложно зеленил).
+    """
 
     def __init__(self):
         self.calls: list = []
@@ -232,6 +246,12 @@ class SpyRun:
     # sha-плейсхолдер для плотницких git-команд ниже — 40 hex-символов,
     # синтаксически валидный sha (git его не проверяет, "не исполняется").
     _FAKE_SHA = "f" * 40
+    # Плотницкие примитивы `artifact_branch.write_commit`/`commit_files` —
+    # единственное, что здесь фейкуется; `hash-object`/`write-tree`/
+    # `commit-tree` несут sha в stdout, `update-index`/`update-ref`/
+    # `read-tree` — пустой успех.
+    _PLUMBING_SHA = ("hash-object", "write-tree", "commit-tree")
+    _PLUMBING_OK = ("update-index", "update-ref", "read-tree")
 
     def __call__(self, cmd, *args, **kwargs) -> subprocess.CompletedProcess:
         self.calls.append(list(cmd))
@@ -256,11 +276,12 @@ class SpyRun:
         # `catalog.cmd_new`, AC-5) читает их stdout как sha и трактует
         # пустой ответ как «git не ответил» (`sys.exit`) — отвечать пустышкой
         # тут значило бы ложно проваливать КАЖДЫЙ `cmd_new` под этим спаем.
-        if len(cmd) >= 2 and cmd[1] in ("hash-object", "write-tree",
-                                        "commit-tree"):
+        if len(cmd) >= 2 and cmd[1] in self._PLUMBING_SHA:
             sha = self._FAKE_SHA if want_text else self._FAKE_SHA.encode()
             return subprocess.CompletedProcess(list(cmd), 0, sha, empty)
-        return subprocess.CompletedProcess(list(cmd), 0, empty, empty)
+        if len(cmd) >= 2 and cmd[1] in self._PLUMBING_OK:
+            return subprocess.CompletedProcess(list(cmd), 0, empty, empty)
+        return _REAL_RUN(cmd, *args, **kwargs)
 
     def git_subcommands(self) -> list:
         """Подкоманды git по порядку: ['checkout', 'pull', 'merge', ...]."""
