@@ -81,6 +81,13 @@ def step_role(t) -> str | None:
         return role
     if t["state"] != "spec_writing":
         return None
+    from . import artifact_source
+    conn = store.db()
+    artifact_branch_name, foreign = artifact_source.resolve(conn, t["id"])
+    if foreign:
+        tz_text, _ = gitcmd.show(artifact_branch_name, f"tasks/{t['id']}/TZ.md")
+        if tz_text is not None:
+            return "analyst"
     branch = t["branch"]
     if gitcmd.on_foreign_branch(branch):
         tz_text, _ = gitcmd.show(branch, f"tasks/{t['id']}/TZ.md")

@@ -71,6 +71,22 @@ def _cmd_answer(conn, task_id: str, file_path: str) -> None:
     except (OSError, UnicodeDecodeError) as exc:
         sys.exit(f"[{task_id}] файл ответа не прочитан из {file_path}: {exc}")
 
+    from . import artifact_branch, artifact_source
+    artifact_branch_name, foreign = artifact_source.resolve(conn, task_id)
+    if foreign:
+        existing = gitcmd.ls_tree_files(artifact_branch_name, f"tasks/{task_id}") or []
+        n = _next_answer_number_from_names(existing)
+        rel = f"tasks/{task_id}/ANSWER-{n}.md"
+        text = _answer_document(task_id, n, raw)
+        commit_sha = artifact_branch.commit_files(
+            task_id, {rel: text}, f"{task_id}: ANSWER-{n} — ответ Оператора")
+        if not commit_sha:
+            sys.exit(f"[{task_id}] ANSWER-{n}.md не закоммичен в артефактную ветку")
+        store.journal(conn, task_id, "operator", "ANSWER создан", rel)
+        print(f"[{task_id}] {rel} создан и закоммичен в артефактную ветку "
+             f"{artifact_branch_name}")
+        return
+
     wt_path, error = workspace.ensure(task_id, t["branch"])
     if error is not None:
         sys.exit(f"[{task_id}] worktree не готов: {error}")
