@@ -2,7 +2,7 @@
 task: 01M1H224X5A8W159MKF1Q24R5Y
 type: plan
 author_role: developer
-status: draft
+status: ready
 schema_version: 3
 ---
 
@@ -1102,3 +1102,44 @@ test_ac7_full_scenario_no_pult_writes -v`.
 несоответствия адреса, что уже дважды решён Оператором вариантом A по
 каналу ADR-0012 в этой же задаче (`98bb3f9`, `9a984c3`); правка строки
 — вне мандата разработчика (T023, ADR-0012 п.2).
+
+## Разрешение эскалации (эта сессия)
+
+Оператор применил ровно показанную в Вопросе 1 правку (вариант A) по
+каналу ADR-0012 — коммит `6859d12` на этой ветке (появился между
+чтением брифа и стартом верификации этой сессии, до предыдущего HEAD
+`6c32388` эскалации отдельным ANSWER-2.md не заводилось): строка 122
+`test_ac7_full_scenario_no_pult_writes.py` читает каталог роли как
+`workspace.path(task_id) / "tasks" / task_id` (импорт `workspace`
+добавлен в `from orchestrator import (...)`, комментарий 118-123
+обновлён на «worktree кодовой ветки»), синхронизировано с уже
+применённым `role_cwd`/`checkpoint._commit_external_step_artifacts`
+(`ac9ee11`, `9a984c3`/`401a53b`).
+
+Независимая проверка этой сессией на HEAD `6859d12`: `git status
+--short` — чисто; `git log --oneline main..HEAD` — 48 коммитов,
+`HEAD..main` — по-прежнему только `7fd63ef` (`docs/roadmap.md`, не
+затрагивает код/тесты этой задачи, подтягивать не требуется). Полный
+прогон `python3 -m unittest discover -s tests -q` — `Ran 1306 tests in
+132.944s`, `OK` (exit code 0, 0 skipped). `python3 -m unittest
+discover -s tasks/01M1H224X5A8W159MKF1Q24R5Y/acceptance_tests -p
+'test_*.py' -q` — `Ran 44 tests in 18.725s`, `OK` (44/44, включая
+починенный `test_ac7_full_lifecycle_never_writes_task_dir_to_code_or_main`,
+подтверждено также точечным прогоном этого теста в изоляции и
+адресным дебагом фактического пути записи/чтения — файл артефакта
+физически проходит через `workspace.path(task_id)/tasks/<id>/`, тот
+же каталог, что читает `checkpoint._commit_external_step_artifacts`).
+`python3 scripts/guard.py` на SPEC.md/PLAN.md/REVIEW.md/ANSWER-1.md —
+`GUARD: ок (4 файлов)`. Изменений `*.py` в этой сессии не вносилось
+(правка Оператора уже в ветке, затронула только залоченный
+приёмочный тест) — регенерация `docs/codebase-map.md` не требуется
+(`built_at_sha` актуален текущему HEAD).
+
+Реестр замечаний REVIEW.md (итерация 1, `changes_requested`): обе
+записи (`R1-F1`, `R1-F2`) уже несут статус `fixed` с обоснованием от
+предыдущей сессии — новых открытых (`open`/`needs_work`) записей нет,
+переразметки не требуется. Закрытие записей в `accepted` и итоговый
+вердикт — решение ревьювера следующей итерации, не разработчика.
+
+Блокер снят, все требования SPEC (AC-1..AC-17) реализованы и зелены
+без ослабления инвариантов 12/19/T056 — статус: `ready`.
