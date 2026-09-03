@@ -6,7 +6,26 @@
 import shutil
 from pathlib import Path
 
-from . import config, fixation, gitcmd, store, workspace
+from . import config, fixation, gitcmd, store, workspace, yamlmini
+
+# Типы артефактов, для которых допустимо удаление правилом «последний
+# коммит пути на артефактной ветке — автокоммит ЭТОЙ ЖЕ роли» ниже
+# (REVIEW.md 01M1KT0792125J9ZNJNZJ86E9Q итерация 1, замечание R1-F1):
+# единственный задокументированный и протестированный сценарий, где
+# роль сама убирает СВОЙ файл — QUESTIONS.md после ответа Оператора
+# (skills/spec-authoring.md). Frontmatter `type` — сигнал из СОДЕРЖИМОГО
+# файла (валидируется guard'ом), не побочный продукт механики коммита,
+# как «текст сообщения совпал»: тот сигнал один и тот же и для этого
+# сценария, и для реального ПОВТОРНОГО шага ТОЙ ЖЕ роли в ТОМ ЖЕ
+# состоянии без намерения что-то удалить (auto-цикл `in_dev`, пока
+# PLAN.md не `ready`; `reject` из `acceptance`, возвращающий в `in_dev`
+# без смены роли) — там ничто не гарантирует, что роль перепишет файл,
+# который хочет сохранить (`orchestrator/brief.py::developer_brief` не
+# кладёт содержимое прежнего PLAN.md в промпт, `task_dir` пуст на
+# каждом шаге). PLAN.md/REVIEW.md/SPEC.md (`type: plan/review/spec`)
+# никогда не кандидаты на удаление этим путём, даже если формально
+# совпал автор последнего коммита.
+_DELETABLE_ARTIFACT_TYPES = frozenset({"questions"})
 
 
 def commit_timeout_checkpoint(conn, task_id: str, role: str) -> str:
@@ -235,16 +254,23 @@ def _commit_external_step_artifacts(conn, task_id: str, role: str,
     сегодня, обязан пережить чужой автокоммит (`tests/
     test_checkpoint_external_step_artifacts.py::
     test_second_step_accumulates_onto_the_first_not_replaces_it`, уже
-    зелёный тест, ломать нельзя). Удалённым считается только путь,
-    ПОСЛЕДНИЙ коммит которого на артефактной ветке — автокоммит ЭТОЙ ЖЕ
-    роли (`_OWN_COMMIT_MESSAGE` ниже, уникален для пары task_id/role):
-    тогда его отсутствие в СЕГОДНЯШНЕМ `files` — сигнал «эта же роль
-    больше не хочет этот файл» (пример — QUESTIONS.md analyst,
-    правило скила spec-authoring — «удали QUESTIONS.md» перед новым
-    SPEC.md), а не «эту итерацию его просто не переписали». Путь,
+    зелёный тест, ломать нельзя). Кандидат на удаление — путь, ПОСЛЕДНИЙ
+    коммит которого на артефактной ветке — автокоммит ЭТОЙ ЖЕ роли (по
+    тексту `message` ниже, уникален для пары task_id/role) — но сам по
+    себе этот сигнал совпадает и с реальным ПОВТОРНЫМ шагом ТОЙ ЖЕ роли
+    В ТОМ ЖЕ состоянии, где роль файл просто не тронула, не отказалась
+    от него (REVIEW.md итерация 1, замечание R1-F1: auto-цикл `in_dev`,
+    пока PLAN.md не `ready`; `reject` из `acceptance` — оба возвращают
+    роль в `in_dev` с пустым `task_dir`, ничем не гарантируя, что она
+    перепишет файл, который хочет сохранить). Второе условие сужает
+    кандидата до реально документированного случая: frontmatter `type`
+    файла обязан быть в `_DELETABLE_ARTIFACT_TYPES` (сейчас — только
+    `questions`, пример — QUESTIONS.md analyst, правило скила
+    spec-authoring — «удали QUESTIONS.md» перед новым SPEC.md). Путь,
     последний раз тронутый ДРУГИМ автором (другая роль, PASSPORT.md
-    переходов, ANSWER Оператора) — никогда не кандидат на удаление
-    здесь, независимо от локального отсутствия.
+    переходов, ANSWER Оператора), или чей `type` не в списке (PLAN.md,
+    REVIEW.md, SPEC.md) — никогда не кандидат на удаление здесь,
+    независимо от локального отсутствия.
     """
     from . import artifact_branch
     if target == config.DEFAULT_TARGET:
@@ -270,8 +296,12 @@ def _commit_external_step_artifacts(conn, task_id: str, role: str,
     removed = []
     for rel in sorted(set(existing) - set(files)):
         subject = gitcmd.git("log", "-1", "--format=%s", branch, "--", rel)
-        if (subject is not None and subject.returncode == 0
+        if not (subject is not None and subject.returncode == 0
                 and subject.stdout.strip() == message):
+            continue
+        content, _ = gitcmd.show(branch, rel)
+        meta = yamlmini.frontmatter(content) if content is not None else None
+        if meta is not None and meta.get("type") in _DELETABLE_ARTIFACT_TYPES:
             removed.append(rel)
 
     if not files and not removed:

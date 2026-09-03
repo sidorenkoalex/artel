@@ -1,5 +1,5 @@
 ---
-built_at_sha: 8a683e5d2426219f2fc8e56c4d2d5140441b77d2
+built_at_sha: 2cae576fd401f405160b5d7500aba063d35a662d
 ---
 
 # Codebase-map пульта
@@ -212,7 +212,7 @@ built_at_sha: 8a683e5d2426219f2fc8e56c4d2d5140441b77d2
 - `commit_step_artifacts`
 - `commit_timeout_checkpoint`
 
-**Импортирует:** `orchestrator/artifact_branch.py`, `orchestrator/config.py`, `orchestrator/fixation.py`, `orchestrator/gitcmd.py`, `orchestrator/store.py`, `orchestrator/workspace.py`
+**Импортирует:** `orchestrator/artifact_branch.py`, `orchestrator/config.py`, `orchestrator/fixation.py`, `orchestrator/gitcmd.py`, `orchestrator/store.py`, `orchestrator/workspace.py`, `orchestrator/yamlmini.py`
 
 **Импортируется:** `orchestrator/pause.py`, `orchestrator/runner.py`, `tests/test_checkpoint_external_step_artifacts.py`, `tests/test_pause_now.py`, `tests/test_step_autocommit.py`, `tests/test_timeout_checkpoint.py`
 
@@ -852,7 +852,7 @@ built_at_sha: 8a683e5d2426219f2fc8e56c4d2d5140441b77d2
 
 **Импортирует:** —
 
-**Импортируется:** `orchestrator/artifacts.py`, `orchestrator/canary.py`, `orchestrator/catalog.py`, `orchestrator/fsm.py`, `orchestrator/fsm_advance.py`, `orchestrator/gates.py`, `orchestrator/retro_corpus.py`, `orchestrator/roles.py`, `orchestrator/targets.py`, `scripts/guard.py`, `tests/test_fsm_merge_gate_done_snapshot.py`, `tests/test_guard_schema.py`, `tests/test_yaml_parsing.py`
+**Импортируется:** `orchestrator/artifacts.py`, `orchestrator/canary.py`, `orchestrator/catalog.py`, `orchestrator/checkpoint.py`, `orchestrator/fsm.py`, `orchestrator/fsm_advance.py`, `orchestrator/gates.py`, `orchestrator/retro_corpus.py`, `orchestrator/roles.py`, `orchestrator/targets.py`, `scripts/guard.py`, `tests/test_fsm_merge_gate_done_snapshot.py`, `tests/test_guard_schema.py`, `tests/test_yaml_parsing.py`
 
 ## scripts/codebase_map.py
 
