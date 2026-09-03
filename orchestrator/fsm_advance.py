@@ -345,7 +345,7 @@ def tests_writing(conn, task_id: str, t, tdir, target: str, state: str) -> bool:
     # `tasks/<id>/` (SPEC T094, требование 10) — артефактная ветка
     # пульта для внешнего target, не кодовая ветка целевого (та в
     # `config.ROOT` не существует вовсе).
-    branch, _ = artifact_source.resolve(conn, task_id)
+    branch, foreign = artifact_source.resolve(conn, task_id)
     result = fsm._tests_writing_ac_state(conn, task_id, branch, tdir)
     if result is None:
         return False
@@ -381,12 +381,24 @@ def tests_writing(conn, task_id: str, t, tdir, target: str, state: str) -> bool:
     store.set_state(conn, task_id, "in_dev", "fsm", expected_state=state,
                     detail="приёмочные тесты готовы — трассируемость AC "
                     "пройдена")
-    # Лок (требование 5): значение, которое set_state только что
-    # посчитал в fixed_sha (T021), становится планкой acceptance_tests/
-    # для in_dev -> review — тот же sha, не новая фиксация.
-    store.update_task(conn, task_id,
-                      tests_locked_sha=store.get_task(
-                          conn, task_id)["fixed_sha"])
+    # Лок (требование 5): планка acceptance_tests/ для in_dev -> review.
+    #
+    # Foreign (A7, требование 2 — единая логика для ЛЮБОГО target,
+    # включая артель, теперь всегда True): sha АРТЕФАКТНОЙ ВЕТКИ пульта
+    # (`config.ROOT`, настоящий git, `branch` уже resolved выше) — не
+    # `fixed_sha`, который `set_state` только что посчитал через
+    # `fixation._fix_external`. Тот коммитит `config.PROJECTS/<target>/`
+    # — репозиторий, в который M1-механика (артефактная ветка,
+    # `checkpoint._commit_external_step_artifacts`) ничего не пишет
+    # (найдено на AC-7/AC-8: сверка против него никогда не видит диффа
+    # — «замок» пропускал бы ЛЮБУЮ правку `acceptance_tests/` молча,
+    # `LockTest.test_edit_after_lock_blocks_in_dev_to_review`). Не-foreign
+    # (сегодня недостижимо после генерализации self — оставлено на
+    # случай песочницы без git, где `on_foreign_branch` всегда False) —
+    # прежнее поведение, `fixed_sha`.
+    locked_sha = (gitcmd.branch_head_sha(branch) if foreign
+                 else store.get_task(conn, task_id)["fixed_sha"])
+    store.update_task(conn, task_id, tests_locked_sha=locked_sha)
     fsm._maybe_ensure_draft_mr(conn, task_id)
     return False
 
@@ -479,22 +491,16 @@ def in_dev(conn, task_id: str, t, tdir, target: str, state: str) -> bool:
             return True
         locked = t["tests_locked_sha"]
         if locked:
-            # Ветка-источник tasks/<id>/, не литерал "HEAD" (SPEC T031,
-            # AC-3): чужой чекаут рабочей копии не должен сверять лок с
-            # чужой веткой вместо своей. Свой чекаут (обычный путь) или
-            # ветка ещё не создана ролью — тот же "HEAD", что и до T031.
-            #
-            # Внешний target: `locked` (`tests_locked_sha`/`fixed_sha`)
-            # остаётся на легаси-схеме фиксации (`fixation._fix_external`
-            # — коммит `.artel/projects/<target>/`, PLAN.md, реестр
-            # пункт 1, «не заменяя легаси-строку», требование 9) — sha
-            # из ЭТОГО репозитория `config.ROOT` не знает независимо от
-            # выбора `lock_ref` здесь. `gitcmd.diff_paths` поэтому не
-            # ответит на `locked` и сверка ниже уйдёт в существующий
-            # fail-closed отказ («лок не проверен») — не новый регресс
-            # этой правки, а незакрытый остаток легаси-схемы `fixed_sha`
-            # (сознательно вне объёма этой итерации, тот же довод, что
-            # и у требования 9).
+            # `locked` (`tests_locked_sha`) — sha АРТЕФАКТНОЙ ВЕТКИ пульта
+            # (`config.ROOT`, настоящий git) на момент лока, когда
+            # `foreign` (`tests_writing`, A7 требование 2 — единая логика
+            # для ЛЮБОГО target, включая артель, теперь всегда True) —
+            # сверяется ТАМ ЖЕ, в `config.ROOT`, против текущей головы
+            # ТОЙ ЖЕ ветки (`branch`), не «HEAD» рабочего дерева (чужой
+            # чекаут не должен сверять лок с чужой веткой вместо своей).
+            # Не-foreign (сегодня недостижимо после генерализации self —
+            # песочница без git) — прежнее поведение: `locked` из
+            # `fixed_sha`, сверка по "HEAD" рабочего дерева main.
             lock_ref = branch if foreign else "HEAD"
             diff = gitcmd.diff_paths(
                 locked, lock_ref, f"tasks/{task_id}/acceptance_tests")

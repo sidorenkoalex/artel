@@ -349,17 +349,21 @@ def _tests_writing_ac_state(conn, task_id: str, branch: str,
     результат не расходится по источнику файлов, только по тому, где их
     искать.
 
-    `errors` несёт и ошибки трассируемости AC (T023), и ошибки маркера
+    `errors` несёт ошибки трассируемости AC (T023), ошибки маркера
     красноты (`guard.redness_marker_errors_from_files`/`scan_redness_markers`,
-    SPEC T064) — единственное место, где обе проверки подключены к выходу
-    именно из `tests_writing`: задача, чьё состояние это состояние уже
-    прошло, сюда больше не попадает (обратная совместимость T064,
-    требование 4, — структурно, через однонаправленность FSM).
+    SPEC T064) и ошибки образца формата идентификатора задачи
+    (`guard.id_format_sample_errors`/`scan_id_format_samples`, SPEC
+    01M1H186VEVG6NF40YKH1338MD) — единственное место, где все три проверки
+    подключены к выходу именно из `tests_writing`: задача, чьё состояние
+    это состояние уже прошло, сюда больше не попадает (обратная
+    совместимость T064, требование 4, — структурно, через
+    однонаправленность FSM).
     """
     if not gitcmd.on_foreign_branch(branch):
         tested, markers = guard.scan_acceptance_tests(tdir)
         errors = guard.acceptance_traceability_errors(tdir)
         errors = errors + guard.scan_redness_markers(tdir)
+        errors = errors + guard.scan_id_format_samples(tdir)
         return tested, markers, errors
 
     spec_rel = f"tasks/{task_id}/SPEC.md"
@@ -377,6 +381,7 @@ def _tests_writing_ac_state(conn, task_id: str, branch: str,
 
     sources: list[str] = []
     redness_files: list[tuple[str, str]] = []
+    id_format_files: list[tuple[str, str]] = []
     for p in paths:
         if not p.endswith(".py"):
             continue
@@ -384,6 +389,7 @@ def _tests_writing_ac_state(conn, task_id: str, branch: str,
         if text is None:
             continue
         sources.append(text)
+        id_format_files.append((p, text))
         if Path(p).name.startswith("test_"):
             redness_files.append((p, text))
     meta = yamlmini.frontmatter(spec_text) or {}
@@ -391,6 +397,7 @@ def _tests_writing_ac_state(conn, task_id: str, branch: str,
     errors = guard.traceability_errors_from_content(spec_text, meta, tested,
                                                      markers)
     errors = errors + guard.redness_marker_errors_from_files(redness_files)
+    errors = errors + guard.id_format_sample_errors(id_format_files)
     return tested, markers, errors
 
 

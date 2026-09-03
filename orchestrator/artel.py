@@ -95,7 +95,14 @@ workspace, tasks, knowledge, logs). БД одна на все проекты: с
   pause [--now] <id> | resume <id> | log <id> | budget <id> <usd> |
   target-init <target> | doctor [--restore] | alert-ack <id> "<решение>" |
   version | canary <каталог-ТЗ> [--rewrite-baseline] | prune [--execute] |
-  amend-tests <id> --reason "<основание>"
+  amend-tests <id> --reason "<основание>" | pin-update <sha main артели>
+
+`pin-update <sha>` (A7, Stage1) — обновляет пин запущенной версии:
+продвигает рабочее дерево и HEAD `config.ROOT` до `<sha>` main артели
+(`git fetch` + `git merge --ff-only`), журналирует операторскую
+идентичность и оба sha. `merge_gate -> done` (Stage0) НЕ двигает
+`config.ROOT` сам — это единственный способ его продвинуть; `doctor`
+только сообщает о расхождении (`check_root_pin`), не обновляет пин сам.
 
 `pause <id>` (SPEC T070) — штатная приостановка: помечает задачу в БД,
 не заводя нового состояния FSM; `run`/`auto` перед стартом агентного
@@ -216,7 +223,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from orchestrator import (amend, answer, auto, budget, canary, catalog,  # noqa: E402
-                          cleanup, config, doctor, dry_run, fsm, pause,
+                          cleanup, config, doctor, dry_run, fsm, pause, pin,
                           projects, prune, release, report, runner, version,
                           workspace)
 
@@ -363,6 +370,7 @@ def main() -> None:
         "report": lambda: report.cmd_report(),
         "acceptance-dry-run": lambda: dry_run.cmd_acceptance_dry_run(rest[0]),
         "amend-tests": lambda: amend.cmd_amend_tests(rest[0], _reason_arg(rest)),
+        "pin-update": lambda: pin.cmd_pin_update(rest[0]),
     }
     fn = table.get(cmd)
     if fn is None:

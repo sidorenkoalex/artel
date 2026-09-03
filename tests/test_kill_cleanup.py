@@ -44,8 +44,12 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 
 class TmpRepoTest(unittest.TestCase):
     """Задача T001 в свежем временном репозитории с веткой main; `new`
-    уже завела ветку/worktree задачи и закоммитила в них SPEC.md (SPEC
-    T048) — main остаётся чистым."""
+    (A7, generic-путь, AC-5) коммитит SPEC.md плотницки в артефактную
+    ветку ПУЛЬТА, не в кодовую ветку/worktree задачи — та больше не
+    заводится сама (кодовую ветку/worktree заводит первым действием
+    роль-разработчик, `ensure_worktree` ниже симулирует именно этот шаг
+    там, где сценарию нужна уже существующая кодовая ветка/worktree) —
+    main остаётся чистым."""
 
     def setUp(self):
         tmp = tempfile.TemporaryDirectory()
@@ -94,6 +98,20 @@ class TmpRepoTest(unittest.TestCase):
                          f"git -C worktree {' '.join(args)} упал: {res.stderr}")
         return res.stdout
 
+    def ensure_worktree(self) -> None:
+        """Роль-разработчик (не `cmd_new`, A7 требование 2) заводит
+        worktree/кодовую ветку задачи первым действием своего шага и
+        сразу коммитит SPEC.md в неё — byte-в-byte то, что раньше делал
+        сам `cmd_new` (`_new_dogfood`), чтобы сценарии уборки ниже видели
+        ту же топологию: ветка НЕ пустой предок main (пустая ветвь без
+        собственных коммитов — тривиально «смержена», `gitcmd.
+        branch_merged`, и `drop_task_branch` её сохраняет — не тот
+        сценарий, который проверяют «неслитая ветка убрана»)."""
+        wt_path, error = workspace.ensure(self.TASK, self.branch)
+        self.assertIsNone(error, f"worktree не создан: {error}")
+        self.commit_more_in_worktree(f"tasks/{self.TASK}/SPEC.md", "готово",
+                                     f"{self.TASK}: SPEC")
+
     def commit_more_in_worktree(self, rel: str, text: str, message: str) -> None:
         """Ещё один коммит поверх того, что уже сделал `new` — как если
         бы роль продолжила работу в своём worktree (SPEC T045)."""
@@ -139,11 +157,13 @@ class KillCleanupTest(TmpRepoTest):
 
     def test_task_killed_before_commit_leaves_no_trace(self):
         """Критерий приёмки 1: сценарий T002 — new, kill, чистое дерево
-        main. С SPEC T048 `new` уже коммитит SPEC.md сразу в ветку/
-        worktree задачи, не в main (требование 4) — main тут нечего
-        подчищать, он и так чист."""
+        main. `new` (A7) коммитит SPEC.md в артефактную ветку пульта, не
+        в main и не в кодовую ветку/worktree (требование 4) — main тут
+        нечего подчищать, он и так чист; worktree заводит явно этот
+        тест, как сделала бы роль-разработчик первым действием шага."""
+        self.ensure_worktree()
         self.assertFalse(self.task_dir().exists(), "new не трогает main")
-        self.assertTrue(workspace.path(self.TASK).exists(), "new завела worktree")
+        self.assertTrue(workspace.path(self.TASK).exists(), "worktree заведён")
 
         self.capture(cleanup.cmd_kill, self.TASK)
 
@@ -166,8 +186,8 @@ class KillCleanupTest(TmpRepoTest):
 
     def test_kill_removes_task_worktree_before_the_branch(self):
         """SPEC T045, требование 5, AC-5: `-D` не удалит ветку, пока её
-        держит worktree — уборка обязана снести worktree первой. `new`
-        (SPEC T048) уже завела worktree сама — незачем заводить второй."""
+        держит worktree — уборка обязана снести worktree первой."""
+        self.ensure_worktree()
         wt_path = workspace.path(self.TASK)
         self.assertTrue(wt_path.exists())
 
@@ -181,6 +201,7 @@ class KillCleanupTest(TmpRepoTest):
 
     def test_merged_task_keeps_artifacts_and_branch(self):
         """Критерий приёмки 2: артефакты в main — не трогаем ничего."""
+        self.ensure_worktree()
         self.git("merge", "--no-ff", self.branch, "-m", "merge")
 
         out = self.capture(cleanup.cmd_kill, self.TASK)
@@ -192,6 +213,7 @@ class KillCleanupTest(TmpRepoTest):
 
     def test_unmerged_branch_is_removed_even_when_artifacts_are_in_main(self):
         """Условия требования 1 независимы: ветка ушла вперёд после мержа."""
+        self.ensure_worktree()
         self.git("merge", "--no-ff", self.branch, "-m", "merge")
         self.commit_more_in_worktree(f"tasks/{self.TASK}/PLAN.md", "после мержа",
                                      f"{self.TASK}: PLAN")
@@ -228,6 +250,7 @@ class KillCleanupTest(TmpRepoTest):
 
     def test_cleanup_is_listed_in_the_journal(self):
         """Требование 2: по журналу видно, что именно убрано."""
+        self.ensure_worktree()
         self.seed_main_task_dir()
 
         self.capture(cleanup.cmd_kill, self.TASK)
@@ -283,10 +306,12 @@ class KillCleanupTest(TmpRepoTest):
         self.assertIn("не найдена", str(exit_.exception))
 
     def test_checked_out_branch_is_left_alone_until_the_next_kill(self):
-        # Ветку держит worktree, заведённый `new` (SPEC T045/T048) — снять
-        # его первым, иначе второй чекаут той же ветки в ROOT git не даст
-        # сделать; дальше воспроизводим ровно сценарий «Оператор руками
-        # зачекаутил ветку задачи в главной копии».
+        # Worktree заводит явно этот тест (роль-разработчик его завела
+        # бы первым действием шага, A7) — снять его первым, иначе второй
+        # чекаут той же ветки в ROOT git не даст сделать; дальше
+        # воспроизводим ровно сценарий «Оператор руками зачекаутил ветку
+        # задачи в главной копии».
+        self.ensure_worktree()
         self.git("worktree", "remove", "--force", str(workspace.path(self.TASK)))
         self.git("checkout", self.branch)
 

@@ -20,7 +20,9 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from orchestrator import budget, catalog, config, fsm, gitcmd, store  # noqa: E402
-from tests.sandbox import capture, capture_new_task_id, fake_git  # noqa: E402
+from tests.sandbox import (SpyRun, capture, capture_new_task_id,  # noqa: E402
+                           disk_backed_ls_tree_files, disk_backed_show,
+                           fake_git, sync_spec_from_worktree)
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
@@ -144,28 +146,46 @@ class SpecBudgetOnTheGateTest(unittest.TestCase):
             patcher.start()
             self.addCleanup(patcher.stop)
 
-        # ДО `cmd_new` (SPEC T048) — сам заводит ветку/worktree через
-        # `gitcmd`, без фейка ушёл бы в реальный репозиторий пульта.
+        # ДО `cmd_new` (SPEC T048) — сам заводит артефактную ветку пульта
+        # через `gitcmd`, без фейка ушёл бы в реальный репозиторий пульта.
         git_patcher = mock.patch.object(gitcmd, "git", fake_git)
         git_patcher.start()
         self.addCleanup(git_patcher.stop)
+        # A7 (generic-путь заведения, AC-5): `cmd_new` коммитит артефакты
+        # плотницки (`artifact_branch.write_commit`) — та функция зовёт
+        # `subprocess.run` НАПРЯМУЮ, минуя `gitcmd.git`/фейк выше; `root`
+        # здесь не настоящий git-репозиторий (только скопированные
+        # `templates/`) — без этого патча `cmd_new` падает `sys.exit`
+        # («git не ответил») ещё до сценария, который тест проверяет
+        # (тот же приём, что `tests.sandbox.TmpRootTest.setUp`).
+        spy_patcher = mock.patch.object(gitcmd.subprocess, "run", SpyRun())
+        spy_patcher.start()
+        self.addCleanup(spy_patcher.stop)
+        # A7: `artifact_source.resolve` теперь ВСЕГДА возвращает
+        # `foreign=True` (артефактная ветка пульта, даже для self/артель)
+        # — `fsm._cmd_advance` читает SPEC.md через `gitcmd.show`/
+        # `ls_tree_files`, не с диска напрямую; эта песочница без
+        # настоящего git ведёт один источник истины — диск `self.tdir`
+        # (тот же приём, что `tests.test_invariants.FsmTest`).
+        show_patcher = mock.patch.object(gitcmd, "show", disk_backed_show)
+        show_patcher.start()
+        self.addCleanup(show_patcher.stop)
+        ls_patcher = mock.patch.object(gitcmd, "ls_tree_files",
+                                       disk_backed_ls_tree_files)
+        ls_patcher.start()
+        self.addCleanup(ls_patcher.stop)
 
         self.capture(catalog.cmd_init)
         _, self.TASK = capture_new_task_id(
             catalog.cmd_new, "Бюджет задачи из SPEC")
-        # `write_spec` кладёт SPEC.md на диск НАПРЯМУЮ, минуя worktree —
-        # песочница не на «чужой ветке» (`gitcmd.on_foreign_branch` тут
-        # всегда False с фейком выше), так что `fsm._cmd_advance` читает
-        # его отсюда же; `cmd_new` больше не заводит этот каталог сам
-        # (SPEC T048 требование 4 — пишет в worktree, не на диск main).
+        # `write_spec` кладёт SPEC.md на диск (`config.TASKS/<id>/`, читает
+        # `disk_backed_show` выше) — `cmd_new` (A7, generic-путь, AC-5)
+        # коммитит его в АРТЕФАКТНУЮ ВЕТКУ пульта плотницки, не сюда;
+        # `sync_spec_from_worktree` кладёт тот же нетронутый шаблон
+        # (`templates/SPEC.md`), который реально закоммитил бы `cmd_new`
+        # (тест проверяет закомментированную подсказку в нём).
         self.tdir = config.TASKS / self.TASK
-        self.tdir.mkdir(parents=True, exist_ok=True)
-        # Шаблонный SPEC.md `new` кладёт в worktree (требование 2), не в
-        # `self.tdir` — тесту нужен именно нетронутый шаблон (проверка
-        # закомментированной подсказки), копируем его сюда же.
-        wt_spec = config.WORKTREES / self.TASK / "tasks" / self.TASK / "SPEC.md"
-        (self.tdir / "SPEC.md").write_text(
-            wt_spec.read_text(encoding="utf-8"), encoding="utf-8")
+        sync_spec_from_worktree(self.TASK)
 
     # ------------------------------------------------------------ утилиты
 
@@ -440,6 +460,16 @@ class LegacyDbMigrationTest(SpecBudgetOnTheGateTest):
         git_patcher = mock.patch.object(gitcmd, "git", fake_git)
         git_patcher.start()
         self.addCleanup(git_patcher.stop)
+        # A7: та же подмена чтения ветки на диск, что и в базовом классе
+        # (см. его докстринг) — `fsm._cmd_advance` читает SPEC.md через
+        # `gitcmd.show`/`ls_tree_files` для ЛЮБОГО target теперь.
+        show_patcher = mock.patch.object(gitcmd, "show", disk_backed_show)
+        show_patcher.start()
+        self.addCleanup(show_patcher.stop)
+        ls_patcher = mock.patch.object(gitcmd, "ls_tree_files",
+                                       disk_backed_ls_tree_files)
+        ls_patcher.start()
+        self.addCleanup(ls_patcher.stop)
 
         config.DB.parent.mkdir(parents=True, exist_ok=True)
         legacy = sqlite3.connect(config.DB)

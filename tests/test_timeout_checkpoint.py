@@ -18,42 +18,95 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from orchestrator import checkpoint, fixation, gitcmd, store  # noqa: E402
+from orchestrator import checkpoint, fixation, gitcmd, store, workspace  # noqa: E402
 from tests.test_git_fixation import RealPultGitTest  # noqa: E402
 
 
-class CommitTimeoutCheckpointTest(RealPultGitTest):
+class _WorktreeCheckpointTest(RealPultGitTest):
+    """Три WIP-чекпоинта (`commit_timeout_checkpoint`/`commit_abnormal_
+    checkpoint`/`commit_pause_now_checkpoint`) явно НЕ генерализованы A7
+    (PLAN «Подход», Б1: «структурно неприменимо ... корректная
+    генерализация — отдельная задача») — они по-прежнему коммитят
+    worktree КОДОВОЙ ветки задачи (`workspace.path`), не репо фиксации
+    self/артели (`RealPultGitTest.task_dir()`/`repo()`, теперь —
+    `config.PROJECTS/artel`). До A7 `cmd_new` заводил этот worktree сам;
+    generic-путь этой задачи (AC-5) его больше не создаёт — эта
+    песочница заводит его явно (`workspace.ensure`), тем же способом,
+    каким и раньше worktree доводился до состояния «есть» (сама механика
+    чекпоинта от способа появления worktree не зависит, только от его
+    наличия).
+
+    `store.record_fixation`, которую чекпоинт зовёт ПОСЛЕ своего коммита
+    (SPEC T041), сама теперь идёт через generic `fixation.fix()` — репо
+    ФИКСАЦИИ (`config.PROJECTS/artel`), не worktree, куда чекпоинт только
+    что закоммитил: это два РАЗНЫХ репозитория (тот же класс расхождения,
+    что PLAN «Предложения системе» — «два параллельных механизма для
+    одного понятия» — уже отмечает для внешнего target в целом, не
+    создан и не решён этой песочницей). Проверка «check_integrity чист
+    после коммита» поэтому сверяется с `self.head()` (репо фиксации), не
+    с головой worktree.
+    """
+
+    def setUp(self):
+        super().setUp()
+        branch = store.get_task(store.db(), self.TASK)["branch"]
+        wt_path, error = workspace.ensure(self.TASK, branch)
+        self.assertIsNone(error, f"worktree не создан: {error}")
+        self.wt = wt_path
+
+    def worktree_task_dir(self) -> Path:
+        d = self.wt / "tasks" / self.TASK
+        d.mkdir(parents=True, exist_ok=True)
+        return d
+
+    def worktree_git(self, *args: str) -> str:
+        res = subprocess.run(["git", "-C", str(self.wt), *args],
+                             capture_output=True, text=True)
+        self.assertEqual(res.returncode, 0, f"git {' '.join(args)}: {res.stderr}")
+        return res.stdout
+
+    def worktree_head(self) -> str:
+        return gitcmd.head_sha(self.wt)
 
     def orchestrator_steps(self) -> list:
+        """Записи журнала САМОГО чекпоинта — не любые действия actor=
+        'orchestrator': generic-approve self/артели (A7) теперь пытается
+        Draft-MR (github forge, AC-1) и при отказе (нет origin в
+        песочнице) журналит `actor='orchestrator'` под именем «Draft MR
+        FAILED» — тот же actor, но другой предмет, не про чекпоинт."""
         return [r for r in store.task_steps(store.db(), self.TASK)
-               if r["actor"] == "orchestrator"]
+               if r["actor"] == "orchestrator"
+               and r["action"].startswith("WIP-чекпоинт")]
+
+
+class CommitTimeoutCheckpointTest(_WorktreeCheckpointTest):
 
     def test_clean_tree_commits_nothing_and_journals_nothing(self):
         self.enter_in_dev()
-        before = self.head()
+        before = self.worktree_head()
 
         detail = checkpoint.commit_timeout_checkpoint(
             store.db(), self.TASK, "developer")
 
         self.assertEqual(detail, "")
-        self.assertEqual(self.head(), before)
+        self.assertEqual(self.worktree_head(), before)
         self.assertEqual(self.orchestrator_steps(), [])
 
     def test_dirty_tree_commits_with_message_sha_and_journal_entry(self):
         self.enter_in_dev()
-        (self.task_dir() / "wip.md").write_text(
+        (self.worktree_task_dir() / "wip.md").write_text(
             "недописано\n", encoding="utf-8")
 
         detail = checkpoint.commit_timeout_checkpoint(
             store.db(), self.TASK, "developer")
 
-        # Коммит чекпоинта — в worktree задачи, не в ROOT (тот остаётся на
-        # main, SPEC T048); `git log` читается там же.
-        subject = self.git_in_worktree("log", "-1", "--format=%s").strip()
+        # Коммит чекпоинта — в worktree кодовой ветки задачи, не в ROOT
+        # (тот остаётся на main, SPEC T048); `git log` читается там же.
+        subject = self.worktree_git("log", "-1", "--format=%s").strip()
         self.assertEqual(subject,
                          f"{self.TASK}: WIP-чекпоинт после таймаута шага developer")
         self.assertIn(subject, detail)
-        self.assertIn(self.head(), detail)
+        self.assertIn(self.worktree_head(), detail)
 
         entries = self.orchestrator_steps()
         self.assertEqual(len(entries), 1)
@@ -61,7 +114,7 @@ class CommitTimeoutCheckpointTest(RealPultGitTest):
 
     def test_refixation_keeps_check_integrity_clean_after_the_commit(self):
         self.enter_in_dev()
-        (self.task_dir() / "wip.md").write_text(
+        (self.worktree_task_dir() / "wip.md").write_text(
             "недописано\n", encoding="utf-8")
 
         checkpoint.commit_timeout_checkpoint(store.db(), self.TASK, "developer")
@@ -89,14 +142,14 @@ class CommitTimeoutCheckpointTest(RealPultGitTest):
 
     def test_git_add_failure_commits_nothing_and_journals_nothing(self):
         self.enter_in_dev()
-        (self.task_dir() / "wip.md").write_text(
+        (self.worktree_task_dir() / "wip.md").write_text(
             "недописано\n", encoding="utf-8")
-        before = self.head()
+        before = self.worktree_head()
 
         detail = self._run_with_failing_step("add", 1)
 
         self.assertEqual(detail, "")
-        self.assertEqual(self.head(), before)
+        self.assertEqual(self.worktree_head(), before)
         self.assertEqual(self.orchestrator_steps(), [])
 
     def test_git_diff_failure_commits_nothing_and_journals_nothing(self):
@@ -104,28 +157,28 @@ class CommitTimeoutCheckpointTest(RealPultGitTest):
         (`git diff --cached --quiet` вне {0,1} — git не ответил), что и у
         `git add`, отдельным кейсом."""
         self.enter_in_dev()
-        (self.task_dir() / "wip.md").write_text(
+        (self.worktree_task_dir() / "wip.md").write_text(
             "недописано\n", encoding="utf-8")
-        before = self.head()
+        before = self.worktree_head()
 
         detail = self._run_with_failing_step("diff", 2)
 
         self.assertEqual(detail, "")
-        self.assertEqual(self.head(), before)
+        self.assertEqual(self.worktree_head(), before)
         self.assertEqual(self.orchestrator_steps(), [])
 
     def test_git_commit_failure_commits_nothing_and_journals_nothing(self):
         """REVIEW.md T041 итерация 1, замечание minor: та же деградация
         для отказа самого `git commit`."""
         self.enter_in_dev()
-        (self.task_dir() / "wip.md").write_text(
+        (self.worktree_task_dir() / "wip.md").write_text(
             "недописано\n", encoding="utf-8")
-        before = self.head()
+        before = self.worktree_head()
 
         detail = self._run_with_failing_step("commit", 1)
 
         self.assertEqual(detail, "")
-        self.assertEqual(self.head(), before)
+        self.assertEqual(self.worktree_head(), before)
         self.assertEqual(self.orchestrator_steps(), [])
 
     def test_non_dogfood_target_skips_checkpoint(self):
@@ -134,9 +187,9 @@ class CommitTimeoutCheckpointTest(RealPultGitTest):
         add` (см. докстринг `commit_timeout_checkpoint` и PLAN «Риски») —
         `gitcmd.git` вообще не должен быть вызван."""
         self.enter_in_dev()
-        (self.task_dir() / "wip.md").write_text(
+        (self.worktree_task_dir() / "wip.md").write_text(
             "недописано\n", encoding="utf-8")
-        before = self.head()
+        before = self.worktree_head()
         conn = store.db()
         store.update_task(conn, self.TASK, target="another-target")
 
@@ -146,43 +199,39 @@ class CommitTimeoutCheckpointTest(RealPultGitTest):
 
         git_mock.assert_not_called()
         self.assertEqual(detail, "")
-        self.assertEqual(self.head(), before)
+        self.assertEqual(self.worktree_head(), before)
         self.assertEqual(self.orchestrator_steps(), [])
 
 
-class CommitAbnormalCheckpointTest(RealPultGitTest):
+class CommitAbnormalCheckpointTest(_WorktreeCheckpointTest):
     """Юнит-тесты `checkpoint.commit_abnormal_checkpoint` (SPEC T074, требование
     3 — расширение правила T041: чекпоинт не только на таймауте, но и на
     аварийном завершении шага, rc != 0/обрыв потока)."""
 
-    def orchestrator_steps(self) -> list:
-        return [r for r in store.task_steps(store.db(), self.TASK)
-               if r["actor"] == "orchestrator"]
-
     def test_clean_tree_commits_nothing_and_journals_nothing(self):
         self.enter_in_dev()
-        before = self.head()
+        before = self.worktree_head()
 
         detail = checkpoint.commit_abnormal_checkpoint(
             store.db(), self.TASK, "developer", "rc=1")
 
         self.assertEqual(detail, "")
-        self.assertEqual(self.head(), before)
+        self.assertEqual(self.worktree_head(), before)
         self.assertEqual(self.orchestrator_steps(), [])
 
     def test_dirty_tree_commits_with_cause_marker_in_message_and_journal(self):
         self.enter_in_dev()
-        (self.task_dir() / "wip.md").write_text(
+        (self.worktree_task_dir() / "wip.md").write_text(
             "недописано\n", encoding="utf-8")
 
         detail = checkpoint.commit_abnormal_checkpoint(
             store.db(), self.TASK, "developer", "rc=1")
 
-        subject = self.git_in_worktree("log", "-1", "--format=%s").strip()
+        subject = self.worktree_git("log", "-1", "--format=%s").strip()
         self.assertIn("чекпоинт", subject.lower())
         self.assertIn("rc=1", subject)
         self.assertIn(subject, detail)
-        self.assertIn(self.head(), detail)
+        self.assertIn(self.worktree_head(), detail)
 
         entries = self.orchestrator_steps()
         self.assertEqual(len(entries), 1)
@@ -190,7 +239,7 @@ class CommitAbnormalCheckpointTest(RealPultGitTest):
 
     def test_refixation_keeps_check_integrity_clean_after_the_commit(self):
         self.enter_in_dev()
-        (self.task_dir() / "wip.md").write_text(
+        (self.worktree_task_dir() / "wip.md").write_text(
             "недописано\n", encoding="utf-8")
 
         checkpoint.commit_abnormal_checkpoint(
@@ -203,9 +252,9 @@ class CommitAbnormalCheckpointTest(RealPultGitTest):
 
     def test_non_dogfood_target_skips_checkpoint(self):
         self.enter_in_dev()
-        (self.task_dir() / "wip.md").write_text(
+        (self.worktree_task_dir() / "wip.md").write_text(
             "недописано\n", encoding="utf-8")
-        before = self.head()
+        before = self.worktree_head()
         conn = store.db()
         store.update_task(conn, self.TASK, target="another-target")
 
@@ -215,40 +264,36 @@ class CommitAbnormalCheckpointTest(RealPultGitTest):
 
         git_mock.assert_not_called()
         self.assertEqual(detail, "")
-        self.assertEqual(self.head(), before)
+        self.assertEqual(self.worktree_head(), before)
         self.assertEqual(self.orchestrator_steps(), [])
 
 
-class CommitPauseNowCheckpointTest(RealPultGitTest):
+class CommitPauseNowCheckpointTest(_WorktreeCheckpointTest):
     """Юнит-тесты `checkpoint.commit_pause_now_checkpoint` (SPEC T074,
     требования 1, 3 — чекпоинт `pause --now`, вызванный самой командой
     `orchestrator.pause.cmd_pause_now` из ДРУГОГО процесса, не из того,
     что исполняло прерванный шаг)."""
 
-    def orchestrator_steps(self) -> list:
-        return [r for r in store.task_steps(store.db(), self.TASK)
-               if r["actor"] == "orchestrator"]
-
     def test_clean_tree_commits_nothing_and_journals_nothing(self):
         self.enter_in_dev()
-        before = self.head()
+        before = self.worktree_head()
 
         detail = checkpoint.commit_pause_now_checkpoint(
             store.db(), self.TASK, "developer")
 
         self.assertEqual(detail, "")
-        self.assertEqual(self.head(), before)
+        self.assertEqual(self.worktree_head(), before)
         self.assertEqual(self.orchestrator_steps(), [])
 
     def test_dirty_tree_commits_with_pause_now_marker(self):
         self.enter_in_dev()
-        (self.task_dir() / "wip.md").write_text(
+        (self.worktree_task_dir() / "wip.md").write_text(
             "недописано\n", encoding="utf-8")
 
         detail = checkpoint.commit_pause_now_checkpoint(
             store.db(), self.TASK, "developer")
 
-        subject = self.git_in_worktree("log", "-1", "--format=%s").strip()
+        subject = self.worktree_git("log", "-1", "--format=%s").strip()
         self.assertIn("pause --now", subject)
         self.assertIn(subject, detail)
 
@@ -258,7 +303,7 @@ class CommitPauseNowCheckpointTest(RealPultGitTest):
 
     def test_refixation_keeps_check_integrity_clean_after_the_commit(self):
         self.enter_in_dev()
-        (self.task_dir() / "wip.md").write_text(
+        (self.worktree_task_dir() / "wip.md").write_text(
             "недописано\n", encoding="utf-8")
 
         checkpoint.commit_pause_now_checkpoint(store.db(), self.TASK, "developer")
@@ -270,9 +315,9 @@ class CommitPauseNowCheckpointTest(RealPultGitTest):
 
     def test_non_dogfood_target_skips_checkpoint(self):
         self.enter_in_dev()
-        (self.task_dir() / "wip.md").write_text(
+        (self.worktree_task_dir() / "wip.md").write_text(
             "недописано\n", encoding="utf-8")
-        before = self.head()
+        before = self.worktree_head()
         conn = store.db()
         store.update_task(conn, self.TASK, target="another-target")
 
@@ -282,7 +327,7 @@ class CommitPauseNowCheckpointTest(RealPultGitTest):
 
         git_mock.assert_not_called()
         self.assertEqual(detail, "")
-        self.assertEqual(self.head(), before)
+        self.assertEqual(self.worktree_head(), before)
         self.assertEqual(self.orchestrator_steps(), [])
 
 

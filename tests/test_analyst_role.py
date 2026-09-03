@@ -22,7 +22,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from orchestrator import artel, auto, catalog, config, fsm, gitcmd, runner, store  # noqa: E402
 from scripts import guard  # noqa: E402
 from tests.sandbox import (FakeProc, TmpRootTest, capture_new_task_id,  # noqa: E402
-                           fake_git, seed_developer_brief_fixtures)
+                           disk_backed_ls_tree_files, disk_backed_show,
+                           fake_git, seed_developer_brief_fixtures,
+                           sync_spec_from_worktree)
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
@@ -128,8 +130,8 @@ class _AnalystRoleTmpRootTest(TmpRootTest):
     настоящий `templates/SPEC.md`, только уже из песочницы.
     """
 
-    PATCHED_ATTRS = ("DB", "TASKS", "LOGS", "ROLE_HOME", "ROLE_CONFIG_DIR",
-                     "WORKTREES", "ROOT")
+    PATCHED_ATTRS = ("DB", "TASKS", "LOGS", "PROJECTS", "ROLE_HOME",
+                     "ROLE_CONFIG_DIR", "WORKTREES", "ROOT")
 
     def setUp(self):
         super().setUp()
@@ -139,6 +141,19 @@ class _AnalystRoleTmpRootTest(TmpRootTest):
         patcher = mock.patch.object(gitcmd, "git", fake_git)
         patcher.start()
         self.addCleanup(patcher.stop)
+        # A7: `artifact_source.resolve` теперь ВСЕГДА возвращает
+        # `foreign=True` (артефактная ветка пульта, даже для self) — FSM/
+        # бриф читают SPEC/TZ через `gitcmd.show`/`ls_tree_files`, не с
+        # диска напрямую; эта песочница без настоящего git ведёт один
+        # источник истины — диск `self.tdir` (тот же приём, что
+        # `tests.test_invariants.FsmTest`).
+        show_patcher = mock.patch.object(gitcmd, "show", disk_backed_show)
+        show_patcher.start()
+        self.addCleanup(show_patcher.stop)
+        ls_patcher = mock.patch.object(gitcmd, "ls_tree_files",
+                                       disk_backed_ls_tree_files)
+        ls_patcher.start()
+        self.addCleanup(ls_patcher.stop)
 
         self.capture(catalog.cmd_init)
         # `config.TASKS` реально существует и в проде (`tasks/` пульта);
@@ -151,12 +166,12 @@ class _AnalystRoleTmpRootTest(TmpRootTest):
         # возврат `cmd_new`, а не отбрасываем его через `self.capture`.
         _, self.TASK = capture_new_task_id(catalog.cmd_new, "Аналитик из ТЗ")
         self.tdir = config.TASKS / self.TASK
-
-    def wt_tdir(self, task_id: str | None = None) -> Path:
-        """Каталог артефактов задачи В ВОРКТРИ (SPEC T048): `cmd_new` с
-        этой задачи пишет TZ.md/SPEC.md туда, не в `config.TASKS`."""
-        tid = task_id or self.TASK
-        return config.WORKTREES / tid / "tasks" / tid
+        # A7 (generic-путь заведения, AC-5): `cmd_new` коммитит SPEC.md в
+        # АРТЕФАКТНУЮ ВЕТКУ пульта плотницки — в этой лёгкой песочнице
+        # (без настоящего git) содержимого там реально нет; кладём тот
+        # же шаблон, который РЕАЛЬНО закоммитил бы `cmd_new`, на диск,
+        # откуда его читает `disk_backed_show` выше.
+        sync_spec_from_worktree(self.TASK)
 
     def state(self) -> str:
         return store.db().execute("SELECT state FROM tasks WHERE id=?",
@@ -232,27 +247,52 @@ class GuardNewTypesTest(unittest.TestCase):
 # `catalog.cmd_new`: заведение TZ.md флагом (критерий приёмки 1, часть 1).
 
 class CmdNewTzTest(TmpRootTest):
-    """С SPEC T048 `cmd_new` пишет TZ.md/SPEC.md в ВОРКТРИ задачи, не на
-    диск main (`config.TASKS`) — проверки ниже смотрят в `wt_tdir()`, не
-    в `self.tdir` (тот теперь используется только как отдельная
-    диск-песочница остальных FSM-тестов этого файла, требование 4)."""
+    """A7 (generic-путь заведения, AC-5): `cmd_new` коммитит TZ.md/SPEC.md
+    ПЛОТНИЦКИ в артефактную ветку пульта (`artifact_branch.commit_files`),
+    не в worktree (тот однобраншевый флоу убран вместе с `_new_dogfood`)
+    — эта лёгкая песочница без настоящего git не может прочитать
+    результат назад, поэтому проверки перехватывают `files`, переданные
+    самому `commit_files` (реализация ПОД ней остаётся настоящей —
+    `SpyRun` уже фейкует плотницкий git)."""
+
+    def capture_commit_files(self) -> list:
+        calls = []
+        real = catalog.artifact_branch.commit_files
+
+        def spy(task_id, files, message, **kwargs):
+            calls.append((task_id, dict(files)))
+            return real(task_id, files, message, **kwargs)
+
+        patcher = mock.patch.object(catalog.artifact_branch, "commit_files", spy)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        return calls
 
     def test_without_tz_flag_behaves_as_before(self):
-        wt_dir = self.wt_tdir()
-        self.assertFalse((wt_dir / "TZ.md").exists())
-        self.assertTrue((wt_dir / "SPEC.md").exists())
+        calls = self.capture_commit_files()
+
+        _, task_id = capture_new_task_id(catalog.cmd_new, "Без ТЗ")
+
+        files = calls[-1][1]
+        self.assertNotIn(f"tasks/{task_id}/TZ.md", files)
+        self.assertIn(f"tasks/{task_id}/SPEC.md", files)
 
     def test_tz_flag_creates_a_guard_valid_artifact(self):
+        calls = self.capture_commit_files()
         tz_file = self.tdir.parent / "tz-input.txt"
         tz_file.write_text(TZ_RAW, encoding="utf-8")
 
         out = self.capture(catalog.cmd_new, "Экспорт CSV", str(tz_file))
 
         task_id = out.split("]")[0].strip("[")
-        tz_path = self.wt_tdir(task_id) / "TZ.md"
-        self.assertTrue(tz_path.exists())
+        files = calls[-1][1]
+        tz_text = files[f"tasks/{task_id}/TZ.md"]
+        tz_dir = self.tdir.parent / task_id
+        tz_dir.mkdir(parents=True, exist_ok=True)
+        tz_path = tz_dir / "TZ.md"
+        tz_path.write_text(tz_text, encoding="utf-8")
         self.assertEqual(guard.check(tz_path), [])
-        self.assertIn(TZ_RAW.strip(), tz_path.read_text(encoding="utf-8"))
+        self.assertIn(TZ_RAW.strip(), tz_text)
         self.assertIn("run", out)
 
     def test_unreadable_tz_path_exits_with_reason(self):
