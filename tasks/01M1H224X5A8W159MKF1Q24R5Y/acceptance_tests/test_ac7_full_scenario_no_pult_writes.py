@@ -153,8 +153,13 @@ class FullArtelTaskScenarioTest(RealGitSandbox):
         # tasks/<id>/ по-прежнему нигде в main пульта — ни при жизни, ни
         # после done код фичи (без tasks/<id>/) смержен, артефакты — нет.
         self.assertEqual(self.main_tree_files(task_id), [])
+        # origin, не локальный main: при пине (stage0) локальный main
+        # стоит на месте, результат мержа уезжает плотницкой записью
+        # в origin — тот же объект проверки, что у соседних AC-8/AC-12
+        # (правка планки Оператором по ADR-0012, дефект копипасты,
+        # вопрос A из PLAN «Эскалация»).
         self.assertIn("feature.txt",
-                      gitcmd.ls_tree_files(config.MAIN_BRANCH, "") or [])
+                      self.origin_tree_files("refs/heads/main"))
 
         # После закрытия — снапшот в refs/artifacts/<id> артели (origin),
         # артефактная ветка пульта убрана.
