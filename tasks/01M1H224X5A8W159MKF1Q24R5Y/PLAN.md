@@ -304,8 +304,13 @@ FullArtelTaskScenarioTest::test_ac7_full_lifecycle_never_writes_task_dir_to_code
   флоу там, где песочница гоняет настоящий git). Полный набор:
   1305/1305 зелёных.
 - `python3 scripts/guard.py` прогнан на артефактах задачи (SPEC.md,
-  ANSWER-1.md — PLAN.md прогонится тем же вызовом после снятия
-  эскалации).
+  ANSWER-1.md, TZ.md и сам PLAN.md — `GUARD: ок (4 файлов)`; структура
+  валидна и со `status: draft` — блокирует не guard, а сама эскалация,
+  см. «Предложения системе»).
+- Повторный прогон `python3 -m unittest discover -s tests -q` в этой же
+  сессии (после подтверждения эскалации независимым разбором обоих
+  приёмочных файлов): 1305/1305 зелёных — подтверждает цифру выше без
+  расхождений.
 - `python3 scripts/codebase_map.py` перезапущен этим же заходом (правка
   `tests/*.py`, скил conventions-core) — `docs/codebase-map.md`
   закоммичен вместе с остальным.
