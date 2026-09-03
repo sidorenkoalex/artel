@@ -30,7 +30,7 @@ sys.path.insert(0, str(_REPO_ROOT))
 
 from orchestrator import (artifact_branch, catalog, checkpoint, ci,  # noqa: E402
                           config, fsm_merge_gate, gitcmd, github_adapter,
-                          store)
+                          store, workspace)
 from tests.sandbox import RealGitSandbox, resilient_tmp_cleanup  # noqa: E402
 
 ARTEL_TARGETS_YAML = """targets:
@@ -115,11 +115,13 @@ class FullArtelTaskScenarioTest(RealGitSandbox):
         self.assertEqual(t["draft_mr_created"], 1)
         self.assertEqual(self.code_branch_tree_files(code_branch, task_id), [])
 
-        # 3. Роль пишет артефакты шага (например PLAN.md) в свой рабочий
-        # каталог `.artel/projects/artel/workspace/tasks/<id>/` (AC-6) —
-        # `commit_step_artifacts` обязан перенести их в артефактную ветку,
-        # не в кодовую.
-        role_task_dir = config.PROJECTS / config.DEFAULT_TARGET / "workspace" / "tasks" / task_id
+        # 3. Роль пишет артефакты шага (например PLAN.md) в свой НАСТОЯЩИЙ
+        # рабочий каталог — worktree кодовой ветки, `workspace.path(id)/
+        # tasks/<id>/` (AC-6; пересмотр планки Оператором 03.09 по
+        # ADR-0012, третье место одной ошибки «артефакты вне git» ≠ «код
+        # вне git») — `commit_step_artifacts` обязан перенести их в
+        # артефактную ветку, не в кодовую.
+        role_task_dir = workspace.path(task_id) / "tasks" / task_id
         role_task_dir.mkdir(parents=True)
         (role_task_dir / "PLAN.md").write_text("план\n", encoding="utf-8")
         checkpoint.commit_step_artifacts(store.db(), task_id, "developer")
