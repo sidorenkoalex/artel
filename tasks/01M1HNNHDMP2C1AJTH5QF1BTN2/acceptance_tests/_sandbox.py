@@ -45,13 +45,14 @@ from tests.sandbox import RealGitSandbox, capture_new_task_id  # noqa: E402
 ARTEL_PY = REPO_ROOT / "orchestrator" / "artel.py"
 
 # Ключи `table` в orchestrator/artel.py::main на HEAD этой ветки на момент
-# написания тестов (25 команд) — заведомо НЕ включает команду правки
-# планки, которую заведёт разработчик.
+# написания тестов (25 команд) плюс `pin-update`, влившаяся из main
+# подтяжкой A7 (ANSWER-2) — заведомо НЕ включает команду правки планки,
+# которую заведёт разработчик.
 BASELINE_COMMANDS = frozenset({
     "init", "new", "status", "show", "advance", "workspace", "run", "auto",
     "approve", "reject", "answer", "kill", "release", "pause", "resume",
     "log", "budget", "target-init", "doctor", "alert-ack", "version",
-    "canary", "prune", "report", "acceptance-dry-run",
+    "canary", "prune", "report", "acceptance-dry-run", "pin-update",
 })
 
 
@@ -232,8 +233,12 @@ class AmendSandbox(RealGitSandbox):
         self.capture(catalog.cmd_init)
         _, self.TASK = capture_new_task_id(catalog.cmd_new,
                                            "Фикстура правки планки")
-        self.tdir = workspace.path(self.TASK) / "tasks" / self.TASK
         self.conn = store.db()
+        # post-A7 cmd_new больше не заводит worktree/кодовую ветку сама
+        # (ANSWER-2) — завести явно ДО первой записи в self.tdir.
+        workspace.ensure(self.TASK, self.row()["branch"])
+        self.tdir = workspace.path(self.TASK) / "tasks" / self.TASK
+        self.tdir.mkdir(parents=True, exist_ok=True)
 
     def capture(self, fn, *args) -> str:
         buf = io.StringIO()
