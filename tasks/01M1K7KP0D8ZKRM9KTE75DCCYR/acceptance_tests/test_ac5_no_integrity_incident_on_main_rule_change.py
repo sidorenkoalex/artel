@@ -25,7 +25,7 @@ sys.path.insert(0, str(REPO_ROOT))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from _sandbox import TaskSandbox, claude_md_marker, skill_marker  # noqa: E402
-from orchestrator import checkpoint, fixation, store  # noqa: E402
+from orchestrator import checkpoint, fixation, store, workspace  # noqa: E402
 
 
 class NoIntegrityIncidentOnMainRuleChangeTest(TaskSandbox):
@@ -53,10 +53,28 @@ class NoIntegrityIncidentOnMainRuleChangeTest(TaskSandbox):
             "подготовка теста: первая фиксация обязана дать непустой sha")
 
         # WIP-чекпоинт первого («прерванного») среза — та же механика,
-        # что таймаут реального шага.
-        wt = self.worktree_path()
-        (wt / f"tasks/{self.TASK}/WIP.md").write_text(
-            "недописанный след первого среза\n", encoding="utf-8")
+        # что таймаут реального шага. Артефакт WIP.md — в артефактную
+        # ветку (ANSWER-2 к эскалации этой задачи: `tasks/<id>/`
+        # self-таргета после A7 живёт ТОЛЬКО там, `artifact_source.
+        # resolve` — `foreign=True` безусловно; прямая запись в ветку/
+        # worktree кода устарела). `commit_timeout_checkpoint` чекпоинтит
+        # рабочее дерево КОДОВОЙ ветки (`workspace.path`) — та после A7
+        # заводится лениво первым шагом роли (`workspace.ensure`,
+        # `runner.role_cwd`, T045), не самим `cmd_new` (раньше worktree
+        # существовал сразу, отсюда и была возможна прямая запись без
+        # заведения) — здесь заводится тем же способом, а незакоммиченный
+        # след кладётся ПРЯМО В НЕЁ (не под `tasks/<id>/` — та ветка этот
+        # путь больше не несёт вовсе), чтобы самому механизму чекпоинта
+        # было что закоммитить.
+        self.write_and_commit_in_worktree(
+            "WIP.md", "недописанный след первого среза\n",
+            "WIP.md от test_author (артефактная ветка)")
+        branch = store.get_task(conn, self.TASK)["branch"]
+        wt, err = workspace.ensure(self.TASK, branch)
+        self.assertIsNone(
+            err, f"подготовка теста: worktree обязан завестись: {err}")
+        (wt / "WIP-code.md").write_text(
+            "недописанный код первого среза\n", encoding="utf-8")
         checkpoint_detail = checkpoint.commit_timeout_checkpoint(
             conn, self.TASK, "test_author")
         self.assertTrue(

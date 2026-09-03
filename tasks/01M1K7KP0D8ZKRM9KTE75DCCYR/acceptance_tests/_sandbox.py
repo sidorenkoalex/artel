@@ -34,8 +34,9 @@ from unittest import mock
 REPO_ROOT = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(REPO_ROOT))
 
-from orchestrator import (brief, catalog, checkpoint, config, context_package,  # noqa: E402
-                          fixation, gitcmd, roles, runner, store)  # noqa: E402
+from orchestrator import (artifact_branch, brief, catalog, checkpoint,  # noqa: E402
+                          config, context_package, fixation, gitcmd, roles,  # noqa: E402
+                          runner, store)  # noqa: E402
 from tests.sandbox import (FakeProc, RealGitSandbox, capture,  # noqa: E402
                            capture_new_task_id, resilient_tmp_cleanup)
 
@@ -157,21 +158,16 @@ class TaskSandbox(RealGitSandbox):
 
     def write_and_commit_in_worktree(self, rel_under_task_dir: str,
                                      content: str, message: str) -> str:
-        """Коммитит `tasks/<id>/<rel_under_task_dir>` прямо в СОБСТВЕННЫЙ
-        worktree задачи (её ветка) — тем же местом, где реальная роль
-        коммитит артефакты (T045)."""
-        wt = self.worktree_path()
+        """Коммитит `tasks/<id>/<rel_under_task_dir>` в АРТЕФАКТНУЮ ВЕТКУ
+        пульта (`artifact_branch.commit_files`) — тем же местом, где
+        реальная роль коммитит артефакты ЛЮБОГО target'а, включая self,
+        ПОСЛЕ A7 (ANSWER-2 к эскалации этой задачи, ADR-0012):
+        `artifact_source.resolve` теперь безусловно `foreign=True`,
+        `tasks/<id>/` self-таргета больше не живёт в ветке/worktree кода
+        (`config.WORKTREES/<id>`, T045) вовсе — до A7 этот метод писал
+        именно туда, тем приёмом self-таргет и работал."""
         rel = f"tasks/{self.TASK}/{rel_under_task_dir}"
-        path = wt / rel
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(content, encoding="utf-8")
-        subprocess.run(["git", "add", "-A"], cwd=wt, check=True,
-                       capture_output=True, text=True)
-        subprocess.run(["git", "commit", "-q", "-m", message], cwd=wt,
-                       check=True, capture_output=True, text=True)
-        return subprocess.run(
-            ["git", "rev-parse", "HEAD"], cwd=wt, check=True,
-            capture_output=True, text=True).stdout.strip()
+        return artifact_branch.commit_files(self.TASK, {rel: content}, message)
 
     def set_state(self, state: str) -> None:
         conn = store.db()
