@@ -1072,6 +1072,29 @@ test_ac7_full_scenario_no_pult_writes -v`.
 - `python3 scripts/codebase_map.py` — актуален для текущего HEAD после
   правки `checkpoint.py` (регенерирован этим же коммитом, T023
   правило «правишь *.py в orchestrator/ — регенерируй карту»).
+- Независимая перепроверка новой сессией разработчика (после коммита
+  `401a53b`, без новых коммитов Оператора в ветке и без ANSWER-2.md к
+  этому моменту — `git log --oneline main..HEAD` даёт 46 коммитов
+  вперёд, `HEAD..main` — 1 (`7fd63ef`, только `docs/roadmap.md`, не
+  затрагивает код/тесты этой задачи, подтягивать в ветку не требуется),
+  рабочее дерево чистое на HEAD `401a53b`): полный прогон `python3 -m
+  unittest discover -s tests -q` — `Ran 1306 tests in 131.547s`, `OK`
+  (exit code 0, 0 skipped); `python3 -m unittest discover -s
+  tasks/01M1H224X5A8W159MKF1Q24R5Y/acceptance_tests -p 'test_*.py' -q`
+  — `Ran 44 tests in 19.663s`, `FAILED (failures=1)`, единственный
+  красный — тот же `test_ac7_full_scenario_no_pult_writes.py:122`
+  (`AssertionError: 'tasks/<id>/PLAN.md' not found in
+  ['tasks/<id>/SPEC.md']`), тот же класс несоответствия адреса, что
+  уже описан выше; `python3 scripts/guard.py` на SPEC/PLAN/REVIEW/
+  ANSWER-1 — `GUARD: ок (4 файлов)`; `python3 scripts/codebase_map.py`
+  прогнан контрольно — содержимое карты не изменилось (только служебное
+  поле `built_at_sha`, откат `git checkout -- docs/codebase-map.md`,
+  правка не коммитится, т.к. *.py этой сессией не менялся). Состояние
+  байт-в-байт совпадает с зафиксированным в `401a53b`: диагноз (строка
+  122 несёт старый адрес, залочена T023, вне мандата разработчика) и
+  Вопрос 1 (варианты A/B) не изменились, новый батч не открываю (тот
+  же класс, что и предыдущие перепроверки этого PLAN). Кода этой
+  сессией не менялось.
 
 **Блокирует**: `PLAN.md status: ready`. `tests/` — 1306/1306 зелёных
 (0 skipped). `acceptance_tests/` — 43/44, единственный красный —
