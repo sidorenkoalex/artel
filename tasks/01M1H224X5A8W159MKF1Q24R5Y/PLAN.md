@@ -2,7 +2,7 @@
 task: 01M1H224X5A8W159MKF1Q24R5Y
 type: plan
 author_role: developer
-status: draft
+status: ready
 schema_version: 3
 ---
 
@@ -339,3 +339,18 @@ acceptance_tests/ -q`: 43 passed, 1 failed, тот же файл). Класс у
 инициатива правки остаётся диагнозом Оператора). Весь код и все
 юнит-/приёмочные тесты, НЕ зависящие от вопроса 1, готовы и закоммичены
 в ветку — эскалация не блокирует ничего, кроме финального статуса.
+
+## Разрешение эскалации (эта сессия)
+
+Оператор применил точечную правку строк 161-162
+`test_ac7_full_scenario_no_pult_writes.py` по каналу ADR-0012
+(коммит `7d6d3e8`) — ровно тот вызов `self.origin_ref_files("refs/
+heads/main", task_id)`, что был предложен вариантом A вопроса 1.
+Независимая проверка этой сессией: `python3 -m unittest discover -s
+tests -q` — 1305/1305 зелёных (exit code 0); `python3 -m unittest
+discover -s tasks/01M1H224X5A8W159MKF1Q24R5Y/acceptance_tests -p
+'test_*.py'` — 44/44 зелёных (`Ran 44 tests ... OK`), включая
+починенный `test_ac7`; `python3 scripts/guard.py` на SPEC.md/PLAN.md/
+ANSWER-1.md/TZ.md — `GUARD: ок (4 файлов)`. Изменений `*.py` в этой
+сессии не вносилось (правка Оператора уже в ветке) — регенерация
+`docs/codebase-map.md` не требуется. Блокер снят, статус — `ready`.
