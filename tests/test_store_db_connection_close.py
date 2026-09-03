@@ -37,7 +37,11 @@ class DbConnectionAutoCloseTest(TmpRootTest):
     def test_del_swallows_programmingerror_from_foreign_thread_close(self):
         """`__del__` не бросает наружу `sqlite3.ProgrammingError`, каким
         его сообщает sqlite3 при попытке закрыть соединение не из
-        создавшего его потока (CR-2)."""
+        создавшего его потока (CR-2).
+
+        Ловит мутацию: удаление try/except вокруг self.close() в
+        __del__ — тогда conn.__del__() в отдельном потоке пробросит
+        sqlite3.ProgrammingError вместо тихого возврата."""
         conn = store.db()
         conn.close = mock.Mock(
             side_effect=sqlite3.ProgrammingError(
