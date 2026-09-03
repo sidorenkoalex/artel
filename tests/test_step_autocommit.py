@@ -8,18 +8,28 @@
 
 A7 (генерализация, требование 2) переводит `commit_step_artifacts` на
 ЕДИНЫЙ путь для любого target — `checkpoint._commit_external_step_
-artifacts`: роль пишет `tasks/<id>/` в СВОЙ рабочий каталог
-(`config.PROJECTS/<target>/workspace/tasks/<id>/`, `runner.role_cwd`),
-функция плотницки (`orchestrator/artifact_branch.py`) переносит это в
-артефактную ветку ПУЛЬТА и убирает из рабочего каталога. Три РАЗНЫХ
-физических места: рабочий каталог роли (откуда автокоммит ЧИТАЕТ),
-артефактная ветка пульта (куда коммитит) и репо фиксации self/артели
+artifacts`: роль пишет `tasks/<id>/` в свой рабочий каталог
+(`config.PROJECTS/<target>/workspace/tasks/<id>/`), функция плотницки
+(`orchestrator/artifact_branch.py`) переносит это в артефактную ветку
+ПУЛЬТА и убирает из рабочего каталога. Три РАЗНЫХ физических места:
+рабочий каталог роли (откуда автокоммит ЧИТАЕТ), артефактная ветка
+пульта (куда коммитит) и репо фиксации self/артели
 `config.PROJECTS/artel/tasks/<id>/` (`RealPultGitTest.task_dir()`,
 `fixation._fix_external`, читает/пишет ИСКЛЮЧИТЕЛЬНО `store.
 record_fixation` после автокоммита — своя отдельная, не связанная с
 первыми двумя, фиксация sha, PLAN «Предложения системе»). Песочница —
 `RealPultGitTest` (tests/test_git_fixation.py): настоящий git, заглушкой
 эту механику не проверить (тот же довод, что в acceptance_tests T059).
+
+Пересмотр планки решением Оператора 03.09 (вариант A, блокер R1-F1
+ревью итерации 1 задачи A7; канал ADR-0012) вернул `runner.role_cwd`
+для self/артели на git-worktree КОДОВОЙ ветки задачи — НЕ на
+`config.PROJECTS/artel/workspace/`, использованный ниже как источник
+для изолированных случаев самой функции автокоммита. С этого момента
+`workspace_task_dir()` ниже — УЖЕ НЕ то же самое место, что реальный
+`runner.role_cwd()` вернёт для self/артели; `RoleCwdVsCommitSourceGapTest`
+в конце файла документирует и доказывает исполнением расхождение
+(tasks/01M1H224X5A8W159MKF1Q24R5Y/PLAN.md, «Эскалация», Вопрос 2).
 """
 import sys
 import unittest
@@ -28,16 +38,22 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from orchestrator import artifact_branch, checkpoint, config, fixation, store  # noqa: E402
+from orchestrator import (artifact_branch, checkpoint, config, fixation,  # noqa: E402
+                          gitcmd, runner, store)
 from tests.test_git_fixation import RealPultGitTest  # noqa: E402
 
 
 class CommitStepArtifactsTest(RealPultGitTest):
 
     def workspace_task_dir(self) -> Path:
-        """Рабочий каталог роли (`runner.role_cwd`) для self/артели —
+        """Источник для изолированных случаев самой функции автокоммита —
         `config.PROJECTS/artel/workspace/tasks/<id>/`, ОТДЕЛЬНО от репо
-        фиксации `self.task_dir()` (`config.PROJECTS/artel/tasks/<id>/`)."""
+        фиксации `self.task_dir()` (`config.PROJECTS/artel/tasks/<id>/`).
+
+        НЕ путать с реальным `runner.role_cwd()` для self/артели — с
+        03.09 (вариант A по R1-F1) он возвращает git-worktree кодовой
+        ветки задачи, не этот путь (см. докстринг модуля,
+        `RoleCwdVsCommitSourceGapTest`)."""
         d = config.PROJECTS / config.DEFAULT_TARGET / "workspace" / "tasks" / self.TASK
         d.mkdir(parents=True, exist_ok=True)
         return d
@@ -147,6 +163,53 @@ class CommitStepArtifactsTest(RealPultGitTest):
         self.assertEqual(self.head(), before)
         self.assertEqual(self.orchestrator_steps(), [])
         self.assertTrue((self.workspace_task_dir() / "wip.md").exists())
+
+class RoleCwdVsCommitSourceGapTest(RealPultGitTest):
+    """Регресс-тест по рекомендации REVIEW.md T-A7 итерации 1, R1-F2
+    («после исправления R1-F1 — добавить хотя бы один тест/сценарий,
+    который заводит код через настоящий `role_cwd()`, не через ручной
+    `git checkout -b`»): пишет артефакт РОВНО туда, куда указывает
+    настоящий `runner.role_cwd()`, а не в захардкоженный
+    `workspace_task_dir()` выше (тот же класс слепого пятна, что R1-F2
+    поставил в вину `test_ac7_full_scenario_no_pult_writes.py`).
+
+    Пересмотр планки решением Оператора 03.09 (вариант A по R1-F1;
+    `orchestrator/runner.py::role_cwd`, коммит этой же сессии) вернул
+    self/артели git-worktree кодовой ветки задачи. `checkpoint._commit_
+    external_step_artifacts` при этом НЕ тронут — источник для self
+    остался захардкожен на `config.PROJECTS/artel/workspace/tasks/<id>/`
+    (см. `workspace_task_dir()` выше и REVIEW.md AC-6 `Checkpoint
+    CommitsToArtifactBranchForArtelTest`, залоченный acceptance-тест,
+    пишущий ИМЕННО туда). Эти два места разошлись: артефакт, реально
+    написанный ролью в её настоящем `role_cwd()` (worktree кодовой
+    ветки), `commit_step_artifacts` там не ищет — тест ниже
+    воспроизводит это исполнением и красен (`skip`), пока конфликт не
+    разрешён Оператором (PLAN.md, «Эскалация», Вопрос 2): починка кода
+    без правки залоченного `CheckpointCommitsToArtifactBranchForArtelTest`
+    (право только Оператора, tasks/T023) невозможна — обе стороны
+    конфликта вне мандата разработчика.
+    """
+
+    @unittest.skip(
+        "R1-F1×R1-F2 follow-up — tasks/01M1H224X5A8W159MKF1Q24R5Y/"
+        "PLAN.md, «Эскалация», Вопрос 2: чинить требует правки залоченного "
+        "AC-6 CheckpointCommitsToArtifactBranchForArtelTest — решение за "
+        "Оператором.")
+    def test_artifact_written_via_real_role_cwd_reaches_artifact_branch(self):
+        self.enter_in_dev()
+        cwd = runner.role_cwd(store.db(), self.TASK, config.DEFAULT_TARGET)
+        task_dir = cwd / "tasks" / self.TASK
+        task_dir.mkdir(parents=True, exist_ok=True)
+        (task_dir / "PLAN.md").write_text("план\n", encoding="utf-8")
+
+        checkpoint.commit_step_artifacts(store.db(), self.TASK, "developer")
+
+        files = gitcmd.ls_tree_files(artifact_branch.branch_name(self.TASK),
+                                     f"tasks/{self.TASK}") or []
+        self.assertIn(f"tasks/{self.TASK}/PLAN.md", files,
+                      "артефакт, написанный в настоящий role_cwd(), обязан "
+                      "дойти до артефактной ветки пульта")
+
 
 if __name__ == "__main__":
     unittest.main()

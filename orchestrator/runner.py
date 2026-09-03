@@ -377,25 +377,38 @@ def role_env(role: str | None = None) -> dict:
 
 
 def role_cwd(conn, task_id: str, target: str) -> Path:
-    """Рабочий каталог роли: workspace target'а — единая логика для
-    ЛЮБОГО target (A7, требование 2 — снятие особого случая догфуда).
+    """Рабочий каталог роли: worktree задачи для self/артели, workspace
+    target'а — иначе.
+
+    Пересмотр планки решением Оператора 03.09 (вариант A по блокеру
+    R1-F1 ревью итерации 1 задачи A7; канал ADR-0012): требование 2
+    SPEC A7 («первичка артефактов вне git пульта») относится к
+    АРТЕФАКТАМ, не к коду. Self/артель (`config.DEFAULT_TARGET`) с
+    T045 — не общая рабочая копия пульта (`config.ROOT`), а собственный
+    git worktree задачи в стандартном месте (`workspace.ensure`, SPEC
+    T045 требования 1-2): агентный шаг исполняется там, рабочая копия
+    пульта остаётся территорией оркестратора и не переключается
+    запуском роли (инцидент 26–27.08, из-за которого решение и
+    принято). Draft-MR, merge_gate, гейт ёмкости и WIP-чекпоинты
+    работают только с кодовой веткой, физически связанной с
+    `config.ROOT` — именно этот worktree, не внешний артефактный
+    каталог.
 
     Внешний target по ADR-0003 §4 обязан видеть только свой workspace:
     `.artel/projects/<target>/workspace/`, не дерево пульта с его
     CLAUDE.md, `.claude/`, `.mcp.json` (та же конфиг-инъекция, от
     которой T019 увёл HOME/CLAUDE_CONFIG_DIR, — здесь другой вектор,
-    cwd, а не окружение). Каталог workspace создаётся здесь же, как и
-    курируемый слой ролей: до git-первички (A2b) он пуст, но роль
-    обязана стартовать в НЁМ, а не тихо съехать на ROOT из-за
-    отсутствия каталога.
-
-    До A7 self/догфуд (`config.DEFAULT_TARGET`) с T045 возвращал
-    собственный git worktree задачи в стандартном месте (`workspace.
-    ensure`, SPEC T045 требования 1-2) — убран целиком вместе с
-    однобраншевым флоу заведения задачи (`catalog._new_dogfood`, тоже
-    убран этой задачей): артель заводит рабочий каталог роли тем же
-    кодом, что уже сегодня использует любой другой target.
+    cwd, а не окружение); этот путь T045 не меняет. Каталог workspace
+    внешнего target создаётся здесь же, как и курируемый слой ролей: до
+    git-первички (A2b) он пуст, но роль обязана стартовать в НЁМ, а не
+    тихо съехать на ROOT из-за отсутствия каталога.
     """
+    if target == config.DEFAULT_TARGET:
+        branch = store.task_branch(conn, task_id)
+        wt_path, error = workspace.ensure(task_id, branch)
+        if error is not None:
+            raise OSError(error)
+        return wt_path
     path = config.PROJECTS / target / "workspace"
     path.mkdir(parents=True, exist_ok=True)
     return path

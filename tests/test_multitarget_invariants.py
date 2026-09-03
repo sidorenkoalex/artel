@@ -301,16 +301,20 @@ class ExternalWorkspaceIsolationTest(TmpRootTest):
         tdir.mkdir(parents=True, exist_ok=True)
         (tdir / "SPEC.md").write_text("# SPEC заглушка\n", encoding="utf-8")
 
-    def test_dogfood_cwd_is_its_workspace(self):
-        """A7, требование 2 (AC-2): артель (`config.DEFAULT_TARGET`) —
-        рабочий каталог роли только её workspace, той же generic-логикой
-        `runner.role_cwd`, что и любой другой объявленный target — не
-        worktree кодовой ветки задачи (однобраншевый флоу убран)."""
+    def test_dogfood_cwd_is_its_worktree(self):
+        """Пересмотр планки решением Оператора 03.09 (вариант A по
+        блокеру R1-F1 ревью итерации 1 задачи A7; канал ADR-0012):
+        требование 2 SPEC («первичка артефактов вне git пульта»)
+        относится к АРТЕФАКТАМ, не к коду — self/артель
+        (`config.DEFAULT_TARGET`) по-прежнему работает в собственном
+        git worktree кодовой ветки задачи (`workspace.ensure`, SPEC
+        T045), не во внешнем `.artel/projects/artel/workspace`
+        (тот остаётся каталогом артефактной механики M1, не кода)."""
         self.new_task("T001", config.DEFAULT_TARGET, "Артель")
 
         kwargs = self.run_faked("T001")
 
-        expected = config.PROJECTS / config.DEFAULT_TARGET / "workspace"
+        expected = config.WORKTREES / "T001"
         self.assertEqual(kwargs["cwd"], expected)
         self.assertNotEqual(kwargs["cwd"], config.ROOT)
 
