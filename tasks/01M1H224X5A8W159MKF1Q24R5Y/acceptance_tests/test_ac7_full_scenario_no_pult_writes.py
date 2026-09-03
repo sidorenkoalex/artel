@@ -159,7 +159,7 @@ class FullArtelTaskScenarioTest(RealGitSandbox):
         # (правка планки Оператором по ADR-0012, дефект копипасты,
         # вопрос A из PLAN «Эскалация»).
         self.assertIn("feature.txt",
-                      self.origin_tree_files("refs/heads/main"))
+                      self.origin_ref_files("refs/heads/main", task_id))
 
         # После закрытия — снапшот в refs/artifacts/<id> артели (origin),
         # артефактная ветка пульта убрана.
