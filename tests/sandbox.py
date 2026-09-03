@@ -162,16 +162,23 @@ def _tasks_relative_path(rel: str):
 
 
 def disk_backed_show(branch: str, rel: str) -> tuple:
-    """Замена `gitcmd.show` (A7): `rel` — всегда `tasks/<id>/<файл>`
-    (соглашение всех вызывающих мест — `fsm.py`/`brief.py`/`fsm_advance.py`)
-    — `artifact_source.resolve` теперь всегда возвращает `foreign=True`,
-    и без этой подмены чтение ушло бы в `gitcmd.git`, заглушенный в этих
-    песочницах (генерику или вовсе не исполняемый). Возвращает содержимое
-    БУКВАЛЬНО с диска (`_tasks_relative_path`) — ветка (`branch`) не
-    участвует: песочницы, которые сюда попадают, ведут ровно ОДИН
-    источник истины (диск `config.TASKS`), git branch не заводят."""
+    """Замена `gitcmd.show` (A7 + tasks/01M1K7KP0D8ZKRM9KTE75DCCYR): `rel`
+    либо `tasks/<id>/<файл>` (артефакт задачи — соглашение `fsm.py`/
+    `brief.py`/`fsm_advance.py`, `artifact_source.resolve` теперь всегда
+    `foreign=True`), либо `skills/<файл>.md`/`CLAUDE.md` (правило системы,
+    читается с ГОЛОВЫ `main` — `brief.skills_text`/`brief.
+    _main_branch_text`, AC-1/AC-2). Без этой подмены оба чтения ушли бы в
+    `gitcmd.git`, заглушенный в этих песочницах (генерику или вовсе не
+    исполняемый). Ветка (`branch`) не участвует: песочницы, которые сюда
+    попадают, ведут ровно ОДИН источник истины на каждый вид `rel` — диск
+    `config.TASKS` для артефактов задачи (`_tasks_relative_path`), диск
+    `config.ROOT` для правил системы (тот же корень, где песочница уже
+    сеет `skills/`/`CLAUDE.md`, см. `seed_developer_brief_fixtures`) —
+    git branch не заводят."""
+    path = _tasks_relative_path(rel) if rel.startswith("tasks/") \
+        else config.ROOT / rel
     try:
-        return _tasks_relative_path(rel).read_text(encoding="utf-8"), ""
+        return path.read_text(encoding="utf-8"), ""
     except FileNotFoundError:
         return None, "файла нет на диске"
     except UnicodeDecodeError as exc:
