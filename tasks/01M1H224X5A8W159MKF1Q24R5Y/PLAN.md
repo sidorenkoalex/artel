@@ -319,6 +319,18 @@ acceptance_tests/ -q`: 43 passed, 1 failed, тот же файл). Класс у
   `AttributeError` в самой правке `98bb3f9` (см. выше).
 - `python3 scripts/codebase_map.py` актуален для текущего HEAD (без
   изменений `*.py` этим заходом — только PLAN.md).
+- Независимая переверка новой сессией разработчика (после коммита
+  `df97766`, без каких-либо новых коммитов в ветке со стороны
+  Оператора/ANSWER-2.md к этому моменту): `python3 -m unittest
+  discover -s tests` — 1305/1305 зелёных (151 сек); `pytest tasks/
+  01M1H224X5A8W159MKF1Q24R5Y/acceptance_tests/ -q` — 43 passed, 1
+  failed, тот же файл/строка/причина (`AttributeError:
+  'FullArtelTaskScenarioTest' object has no attribute
+  'origin_tree_files'`, `test_ac7_full_scenario_no_pult_writes.py:162`);
+  `python3 scripts/guard.py` на 4 артефактах — `GUARD: ок`. Состояние
+  байт-в-байт совпадает с зафиксированным в `df97766`: диагноз и
+  Вопрос 1 не изменились, новый батч не открываю (правило
+  escalation-rules — вопрос уже задан, ответа от Оператора ещё нет).
 
 **Блокирует**: `PLAN.md status: ready` и, соответственно, сдачу задачи
 в `review` — я не вправе объявить критерии приёмки выполненными, пока
