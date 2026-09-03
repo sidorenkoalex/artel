@@ -375,7 +375,11 @@ def skills_text(conn, task_id: str, role: str,
     Фингерпринт каждого скила — в журнал шага той же механикой, что и у
     остальных компонентов брифа (`_journal_component`, требование 2/3,
     AC-4/AC-8): значение отражает фактически прочитанный main-текст, не
-    диск.
+    диск. Журналирование происходит ОДНИМ проходом ПОСЛЕ того, как все
+    скилы роли прочитаны успешно (R1-F1, REVIEW.md итерация 1, minor) —
+    иначе отказ чтения скила N оставлял бы в журнале запись про скилы
+    <N для шага, который так и не стартовал (частичное состояние,
+    `store.journal` коммитит в БД немедленно).
 
     (None, причина) — какой-то скил не прочитан: вызывающий код
     (`runner._cmd_run`) решает, как остановить шаг, тем же приёмом, что
@@ -386,10 +390,11 @@ def skills_text(conn, task_id: str, role: str,
         text, reason = gitcmd.show(config.MAIN_BRANCH, rel)
         if text is None:
             return None, f"{rel}: {reason}"
+        texts.append((rel, text))
+    for rel, text in texts:
         store.journal(conn, task_id, role, "бриф: компонент",
                       f"{rel}: sha256={component_hash(text)}")
-        texts.append(text)
-    return "\n\n".join(texts), ""
+    return "\n\n".join(text for _, text in texts), ""
 
 
 def _artifact_source_branch(conn, task_id: str) -> tuple[str, bool]:
