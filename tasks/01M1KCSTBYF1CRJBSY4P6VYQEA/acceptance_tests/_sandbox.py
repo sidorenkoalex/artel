@@ -121,7 +121,21 @@ schema_version: 1
 
 
 def fake_git(*args: str) -> subprocess.CompletedProcess:
-    """Подмена `gitcmd.git`: пустой ответ вместо обращения к репозиторию."""
+    """Подмена `gitcmd.git`: пустой ответ вместо обращения к репозиторию.
+
+    `rev-parse --verify --quiet refs/heads/<ветка>` (`gitcmd.branch_exists`)
+    — отдельно, с отказом (тот же приём, что `tests/sandbox.py::fake_git`,
+    SPEC T048): `catalog.cmd_new` peek-проверяет существование ветки ДО
+    её создания и отказывается заводить задачу, если ответ успешный —
+    наивная заглушка «успех на любой git-вызов» заставила бы `cmd_new`
+    видеть ЛЮБУЮ ветку как уже существующую и отказывать всегда (баг,
+    подтверждённый прогоном: T034 и AC-1..AC-6 этой задачи роняли
+    `setUp` в `SystemExit` именно по этой причине, до того как эта
+    заглушка была исправлена).
+    """
+    if (len(args) >= 3 and args[0] == "rev-parse" and args[1] == "--verify"
+            and args[-1].startswith("refs/heads/")):
+        return subprocess.CompletedProcess(list(args), 1, "", "")
     return subprocess.CompletedProcess(list(args), 0, "", "")
 
 
@@ -180,11 +194,44 @@ class FakeAdvance:
 
 class StallDetectionSandbox(unittest.TestCase):
     """БД и артефакты во временном каталоге, `cmd_run`/`gitcmd.git`
-    подменены (тем же минимальным набором патчей `config`, что и у
-    tasks/T038/T034 acceptance_tests — без ROOT/PROJECTS/TARGETS/WORKTREES,
-    которые тем песочницам тоже не понадобились)."""
+    подменены.
 
-    TASK = "T001"
+    ПРАВКА ПОСЛЕ ПРОГОНА (см. скил test-authoring, «После обрыва —
+    перечитай всё»): исходная версия этой песочницы (до правки) не
+    патчила `WORKTREES` и не заводила `self.tdir` явно — предполагалось,
+    что `catalog.cmd_new` (target по умолчанию `artel`, self/догфуд)
+    пишет `SPEC.md`/`TZ.md` прямо в `config.TASKS/<id>`, тем же путём,
+    который потом читают `write_plan`/`write_review`. Прогон вживую
+    показал, что это не так дважды:
+    1) `_new_dogfood` (SPEC T048) СНАЧАЛА peek-проверяет
+       `gitcmd.branch_exists(branch)` — «пустой ответ на любой git-вызов»
+       (прежний `fake_git`) читается как «ветка уже есть», и `cmd_new`
+       отказывает всегда (`SystemExit`) ещё до создания каталога задачи;
+       чинится тем же приёмом, что и у `tests/sandbox.py::fake_git`
+       (`rev-parse --verify ... refs/heads/*` — единственная команда,
+       отвечающая отказом).
+    2) Даже после починки (1) `_new_dogfood` пишет `SPEC.md`/`TZ.md` в
+       `workspace.ensure(...)` — путь `config.WORKTREES/<id>/tasks/<id>`,
+       НЕ в `config.TASKS/<id>` — без патча `WORKTREES` это реальный
+       каталог `.artel/worktrees/` РЕПОЗИТОРИЯ, в котором гоняются тесты
+       (не временный каталог песочницы!): непропатченный `WORKTREES`
+       на self/target `artel` заводил мусорные каталоги в живом дереве
+       на каждый прогон. Патч `WORKTREES` ниже — тем же приёмом, что и
+       `tests/test_auto_cycle.py`'s собственная песочница.
+    Сами тесты этого файла `advance`-функции (`in_dev`/`review`/
+    `spec_writing`) читают НЕ оттуда, а из `config.TASKS/<id>` — тем же
+    вырожденным путём «своя ветка» (`gitcmd.on_foreign_branch` с пустым
+    `current_branch()` от `fake_git` — тот же приём, что и у
+    `tests/test_auto_cycle.py`), поэтому `self.tdir` заводится explicit
+    `mkdir` здесь же, а не как побочный эффект `cmd_new`.
+
+    ТРЕТЬЯ находка того же прогона: `self.TASK` был захардкожен строкой
+    `"T001"` — прежний, отменённый SPEC T094 (требование 2: id задачи —
+    ULID, не предсказуемая строка) адрес. `catalog.cmd_new` сегодня сам
+    генерирует id (`idgen.new_task_id()`) и ВОЗВРАЩАЕТ его —
+    `self.TASK` заводится ИЗ этого возврата (тот же приём, что и
+    `tests/sandbox.py::capture_new_task_id`), не литералом.
+    """
 
     def setUp(self):
         tmp = tempfile.TemporaryDirectory()
@@ -194,6 +241,7 @@ class StallDetectionSandbox(unittest.TestCase):
         for attr, value in (("DB", root / ".artel" / "state.db"),
                             ("TASKS", root / "tasks"),
                             ("LOGS", root / ".artel" / "logs"),
+                            ("WORKTREES", root / ".artel" / "worktrees"),
                             ("ROLE_HOME", root / ".artel" / "home"),
                             ("ROLE_CONFIG_DIR",
                              root / ".artel" / "home" / ".claude")):
@@ -204,8 +252,11 @@ class StallDetectionSandbox(unittest.TestCase):
         self.patch_object(runner, "cmd_run", self.agent)
 
         self.capture(catalog.cmd_init)
-        self.capture(catalog.cmd_new, "Детекция буксования")
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            self.TASK = catalog.cmd_new("Детекция буксования")
         self.tdir = config.TASKS / self.TASK
+        self.tdir.mkdir(parents=True, exist_ok=True)
 
     def patch_object(self, target, attr: str, value) -> None:
         patcher = mock.patch.object(target, attr, value)
@@ -234,6 +285,28 @@ class StallDetectionSandbox(unittest.TestCase):
             conn.execute(f"UPDATE tasks SET {column}=? WHERE id=?",
                          (value, self.TASK))
         conn.commit()
+
+    def idle_with_periodic_transitions(self, total: int, block: int) -> list:
+        """Сценарий агента: `(block-1)` холостых шагов, затем один шаг,
+        насильно меняющий состояние в обход `advance` (чередование
+        `in_dev`/`review` — оба агентские), повторяя это до заполнения
+        `total` шагов. Держит цикл живым дольше порога холостых шагов
+        требования 2, не давая ему сработать раньше времени — общий
+        приём для тестов требования 2, где нужно пройти МНОГО шагов, не
+        собрав `block` холостых подряд (AC-6: сброс счётчика переходом;
+        AC-10: лимит `AUTO_MAX_STEPS`, не порог холостых)."""
+        script: list = []
+        other = {"in_dev": "review", "review": "in_dev"}
+        current = "in_dev"
+        while len(script) < total:
+            gap = min(block - 1, total - len(script))
+            script.extend([lambda: None] * gap)
+            if len(script) >= total:
+                break
+            nxt = other[current]
+            script.append(lambda nxt=nxt: self.set_state(nxt))
+            current = nxt
+        return script
 
     def write_plan(self, template: str = READY_PLAN_MD) -> None:
         (self.tdir / "PLAN.md").write_text(

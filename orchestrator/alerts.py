@@ -20,7 +20,7 @@ SQL самих операций — в store.py (ADR-0003 3ж: «единств�
 """
 from . import store
 
-KINDS = ("incident", "threshold", "trigger")
+KINDS = ("incident", "threshold", "trigger", "attention")  # СТАБ, не коммитить
 
 
 def raise_alert(conn, target: str | None, kind: str, source: str,
