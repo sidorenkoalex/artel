@@ -345,6 +345,53 @@ def _manifest_component(conn, task_id: str, role: str, label: str,
            f"{wrap_boundary(run_id, text)}\n")
 
 
+def _main_branch_text(task_id: str, rel: str) -> str:
+    """Текст `rel` с ГОЛОВЫ ветки `main` пульта (tasks/
+    01M1K7KP0D8ZKRM9KTE75DCCYR, требование 1) — не с диска рабочей копии
+    `config.ROOT`: `CLAUDE.md` — правило системы, а не артефакт задачи,
+    роль обязана видеть версию, действующую в `main` сейчас, а не ту, что
+    была на момент отведения ветки задачи (ADR-0012, замечание R1-F3).
+
+    Тот же приём ветко-корректного чтения, что инвариант 28 применяет к
+    артефактам задачи (`gitcmd.show`), только с обратным адресом — не
+    ветка задачи, а `main`. Git не ответил или файла там нет — шаг не
+    начат с именованной причиной (тот же приём, что `_developer_spec_text`
+    выше)."""
+    text, reason = gitcmd.show(config.MAIN_BRANCH, rel)
+    if text is None:
+        sys.exit(f"[{task_id}] бриф не собран: {rel} ветки "
+                 f"{config.MAIN_BRANCH} не прочитан ({reason})")
+    return text
+
+
+def skills_text(conn, task_id: str, role: str,
+                skill_names: list[str]) -> tuple[str | None, str]:
+    """Текст скилов роли (`skills/*.md`, состав из `roles.yaml`) — с
+    ГОЛОВЫ ветки `main` пульта (tasks/01M1K7KP0D8ZKRM9KTE75DCCYR, AC-1/
+    AC-6), не с диска рабочей копии `config.ROOT`: скилы — правило
+    системы, читается версия, действующая в `main` СЕЙЧАС, а не та, что
+    была на момент отведения ветки задачи (ADR-0012, замечание R1-F3).
+
+    Фингерпринт каждого скила — в журнал шага той же механикой, что и у
+    остальных компонентов брифа (`_journal_component`, требование 2/3,
+    AC-4/AC-8): значение отражает фактически прочитанный main-текст, не
+    диск.
+
+    (None, причина) — какой-то скил не прочитан: вызывающий код
+    (`runner._cmd_run`) решает, как остановить шаг, тем же приёмом, что
+    у соседнего `roles.RolesError`."""
+    texts = []
+    for name in skill_names:
+        rel = f"skills/{name}.md"
+        text, reason = gitcmd.show(config.MAIN_BRANCH, rel)
+        if text is None:
+            return None, f"{rel}: {reason}"
+        store.journal(conn, task_id, role, "бриф: компонент",
+                      f"{rel}: sha256={component_hash(text)}")
+        texts.append(text)
+    return "\n\n".join(texts), ""
+
+
 def _artifact_source_branch(conn, task_id: str) -> tuple[str, bool]:
     """(ветка-источник `tasks/<id>/`, foreign) — общая точка входа для
     всех читателей брифа (SPEC T094, требование 10, AC-11 — реестр AC-1).
@@ -495,6 +542,11 @@ def developer_brief(conn, task_id: str) -> str:
     AC-1/AC-3/AC-5/AC-7): один `run_id` на весь вызов оборачивает тело
     КАЖДОГО компонента, а деление на части поверх уже обёрнутого текста
     получает признак незавершённости, если разрезало пару маркеров.
+
+    `CLAUDE.md` — правило системы, читается с ГОЛОВЫ ветки `main`, не с
+    диска рабочей копии (tasks/01M1K7KP0D8ZKRM9KTE75DCCYR, AC-2/AC-4):
+    `_main_branch_text`, не `config.ROOT / CONVENTIONS_REL`. SPEC.md —
+    по-прежнему с ветки задачи (SPEC «Не входит»).
     """
     branch, foreign = _artifact_source_branch(conn, task_id)
     run_id = new_run_id()
@@ -504,8 +556,7 @@ def developer_brief(conn, task_id: str) -> str:
     # стухла) идёт в текст брифа ПЕРЕД компонентом, но не участвует в его
     # заголовке — иначе sha256 в описи разошёлся бы с sha256sum файла.
     map_text, map_note = _fresh_map_text_and_note(conn, task_id)
-    conventions_text = (config.ROOT / CONVENTIONS_REL).read_text(
-        encoding="utf-8")
+    conventions_text = _main_branch_text(task_id, CONVENTIONS_REL)
     _handle_map_size_alert(conn, task_id, map_text)
     parts = [
         _manifest_component(conn, task_id, "developer",

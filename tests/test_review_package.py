@@ -639,7 +639,22 @@ class CmdRunReviewPackageTest(unittest.TestCase):
         # похоже — так же, как у оркестратора после мержа соседней задачи.
         # `files` заполняется НИЖЕ, уже после `cmd_new` (SPEC T094: id —
         # ULID, а не предсказуемый "T001" — заранее ключи словаря не собрать).
-        self.git = FakeGit(files={"templates/REVIEW.md": FORM_MD})
+        #
+        # Скилы и CLAUDE.md — тоже записи `files` (tasks/
+        # 01M1K7KP0D8ZKRM9KTE75DCCYR, AC-1/AC-2): с этой задачи `runner.
+        # cmd_run`/`brief.developer_brief` читают их через `gitcmd.show`
+        # (голова `main`), не с диска — без записи в `files` `FakeGit.show`
+        # отвечал бы «файла нет в ветке» (докстринг класса) и шаг падал бы
+        # `sys.exit`. Содержимое — то же, что уже лежит на диске `root`
+        # (`copytree`/запись CLAUDE.md выше), никакого расхождения с
+        # версией, которую эти тесты ожидают увидеть в промпте.
+        skill_files = {f"skills/{p.name}": p.read_text(encoding="utf-8")
+                       for p in (root / "skills").glob("*.md")}
+        self.git = FakeGit(files={
+            "templates/REVIEW.md": FORM_MD,
+            "CLAUDE.md": (root / "CLAUDE.md").read_text(encoding="utf-8"),
+            **skill_files,
+        })
         git_patcher = mock.patch.object(gitcmd, "git", self.git)
         git_patcher.start()
         self.addCleanup(git_patcher.stop)
@@ -783,11 +798,23 @@ class CmdRunReviewPackageTest(unittest.TestCase):
         self.assertIn("поделён на", self.journal_details("ревью-пакет собран")[0])
 
     def test_failed_diff_is_visible_in_the_journal(self):
-        """Вердикт по пакету без diff должен объясняться из `log <id>`."""
-        self.git.returncode = 1
-        self.git.stderr = "fatal: bad revision"
+        """Вердикт по пакету без diff должен объясняться из `log <id>`.
 
-        self.run_agent("review")
+        Ломаем только сам `diff` (полный и `--stat`), не весь git целиком
+        (`self.git.returncode = 1` ломал бы и `show` — tasks/
+        01M1K7KP0D8ZKRM9KTE75DCCYR: скилы/CLAUDE.md шага читаются через
+        `show` РАНЬШЕ, чем собирается пакет, и шаг не стартовал бы вовсе,
+        а не только терял diff). `--name-only` (сверка свежести карты) не
+        трогаем — это не diff пакета.
+        """
+        def diff_broken(*args):
+            if args and args[0] == "diff" and "--name-only" not in args:
+                return subprocess.CompletedProcess(
+                    list(args), 1, "", "fatal: bad revision")
+            return self.git(*args)
+
+        with mock.patch.object(gitcmd, "git", diff_broken):
+            self.run_agent("review")
 
         detail = self.journal_details("ревью-пакет собран")[0]
         self.assertIn("diff не собран: fatal: bad revision", detail)
@@ -815,32 +842,40 @@ class CmdRunReviewPackageTest(unittest.TestCase):
 
         self.assertNotIn("--- РЕВЬЮ-ПАКЕТ ---", self.prompt())
         self.assertEqual(self.journal_details("ревью-пакет собран"), [])
-        # Семь вызовов, и ни один — не о пакете: первый — `workspace.
-        # on_task_branch` (SPEC T045, AC-8) спрашивает список worktree
-        # перед стартом шага; второй — `gitcmd.on_foreign_branch` спрашивает
-        # текущую ветку для ветко-корректного чтения SPEC.md брифа
-        # (orchestrator/brief.py, SPEC T031) — пустой ответ заглушки
-        # означает «не на чужой ветке», поэтому дальше ни `rev-parse
-        # --verify`, ни `show` не следуют, читается рабочая копия, как и
-        # раньше; третий — сверка свежести docs/codebase-map.md для брифа
-        # роли (orchestrator/brief.py, tasks/T028); следующие два —
-        # `role_env` берёт авторство коммита шага (`role_cwd`/
-        # `workspace.ensure` подменены в setUp — их git-вызовы проверяет
-        # tests/test_workspace.py); последние два — автокоммит успешного
-        # шага (SPEC T059, `runner.commit_step_artifacts`): `add -A` и
-        # `diff --cached --quiet` на пустом дереве этого фейка отвечают
-        # «нечего коммитить» (returncode=0 по умолчанию у `FakeGit`), сам
-        # `commit` не следует. Список точный: любой `show` (чтение
-        # артефакта из ветки — ревью-пакетное или чужой чекаут) в шаге
-        # разработчика по-прежнему провалит тест.
+        # Список точный, но `show` в нём теперь есть — и это ожидаемо (tasks/
+        # 01M1K7KP0D8ZKRM9KTE75DCCYR, AC-1/AC-2): первый вызов —
+        # `workspace.on_task_branch` (SPEC T045, AC-8) спрашивает список
+        # worktree перед стартом шага; следующие три — скилы роли
+        # (`roles.yaml`: conventions-core, escalation-rules, coding-
+        # standards), читаются с ГОЛОВЫ `main` через `gitcmd.show`
+        # (`brief.skills_text`), не с диска; следующий — `gitcmd.
+        # on_foreign_branch` спрашивает текущую ветку для ветко-корректного
+        # чтения SPEC.md брифа (orchestrator/brief.py, SPEC T031) — пустой
+        # ответ заглушки означает «не на чужой ветке», поэтому SPEC.md
+        # читается с рабочей копии, как и раньше (эта задача источник
+        # чтения АРТЕФАКТОВ задачи не меняет, SPEC «Не входит»); следующий
+        # — сверка свежести docs/codebase-map.md для брифа роли
+        # (orchestrator/brief.py, tasks/T028); следующий — CLAUDE.md,
+        # тоже с головы `main` через `gitcmd.show` (`brief.
+        # _main_branch_text`); следующие два — `role_env` берёт авторство
+        # коммита шага (`role_cwd`/`workspace.ensure` подменены в setUp —
+        # их git-вызовы проверяет tests/test_workspace.py); последние два —
+        # автокоммит успешного шага (SPEC T059, `runner.
+        # commit_step_artifacts`): `add -A` и `diff --cached --quiet` на
+        # пустом дереве этого фейка отвечают «нечего коммитить»
+        # (returncode=0 по умолчанию у `FakeGit`), сам `commit` не следует.
         wt = str(config.WORKTREES / self.TASK)
         self.assertEqual(self.git.calls,
                          [["worktree", "list", "--porcelain"],
+                          ["show", "main:skills/conventions-core.md"],
+                          ["show", "main:skills/escalation-rules.md"],
+                          ["show", "main:skills/coding-standards.md"],
                           ["rev-parse", "--abbrev-ref", "HEAD"],
                           ["diff", "--name-only",
                            "0000000000000000000000000000000000000000",
                            "HEAD", "--", "orchestrator/*.py", "scripts/*.py",
                            "tests/*.py"],
+                          ["show", "main:CLAUDE.md"],
                           ["config", "--get", "user.name"],
                           ["config", "--get", "user.email"],
                           ["-C", wt, "add", "-A"],

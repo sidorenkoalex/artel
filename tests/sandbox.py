@@ -260,10 +260,28 @@ def fake_git(*args: str) -> subprocess.CompletedProcess:
     ЛЮБУЮ ветку как уже существующую и отказывал бы всегда. В лёгких
     песочницах реальных веток нет ни одной — ответ «нет» тут не заглушка
     ради прохождения теста, а корректная симуляция вырожденного случая.
+
+    `show <ветка>:<путь>` (`gitcmd.show`) — тоже отдельно (tasks/
+    01M1K7KP0D8ZKRM9KTE75DCCYR, AC-1/AC-2): скилы/CLAUDE.md с этой задачи
+    читаются через него с головы `main`, а не с диска напрямую. В лёгких
+    песочницах настоящих коммитов нет ни одного — ответом служит диск
+    `config.ROOT/<путь>`, который эти же песочницы уже наполняют реальными
+    фикстурами (`seed_developer_brief_fixtures`, `shutil.copytree(...,
+    "skills")`) как раз для этого чтения; файла на диске нет — тот же
+    отказ, что дал бы `git show` на несуществующий путь.
     """
     if (len(args) >= 3 and args[0] == "rev-parse" and args[1] == "--verify"
             and args[-1].startswith("refs/heads/")):
         return subprocess.CompletedProcess(list(args), 1, "", "")
+    if len(args) == 2 and args[0] == "show" and ":" in args[1]:
+        _, _, rel = args[1].partition(":")
+        try:
+            content = (config.ROOT / rel).read_text(encoding="utf-8")
+        except OSError:
+            return subprocess.CompletedProcess(
+                list(args), 128, "",
+                f"fatal: path '{rel}' does not exist in '{args[1]}'")
+        return subprocess.CompletedProcess(list(args), 0, content, "")
     identity = {"user.name": "Роль Артели", "user.email": "role@artel.invalid"}
     value = identity.get(args[-1], "") if args[:2] == ("config", "--get") else ""
     return subprocess.CompletedProcess(list(args), 0, f"{value}\n", "")
