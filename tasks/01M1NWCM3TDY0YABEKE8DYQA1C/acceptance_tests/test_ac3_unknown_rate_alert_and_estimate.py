@@ -8,9 +8,10 @@ spent_usd задачи не изменился; открыт алерт kind=thr
 
 Роль сценария — `verifier` (roles.yaml её несёт, но `executor: none`,
 и требование 1/AC-1 не называет её среди четырёх ролей с курсом) —
-роль, для которой курс заведомо не задан ни при каком разрешении
-эскалации test_ac1_token_rate_table.py (та эскалация — только про
-analyst/test_author/developer/reviewer).
+роль, для которой курс заведомо не задан независимо от решения
+Оператора по эскалации test_ac1_token_rate_table.py (ANSWER-2.md,
+вариант A — курс заводится только на analyst/test_author/developer/
+reviewer, `verifier` в их числе нет).
 
 Красен до реализации: `spend.charge_missing_result` (orchestrator/
 spend.py:143) сегодня для `saw_usage_event=True` пишет в журнал
