@@ -275,6 +275,12 @@ class CommitExternalStepArtifactsGitignoreFilterTest(RealGitSandbox):
         return text
 
     def test_pyc_from_workdir_is_not_committed_normal_file_is(self):
+        """Ловит мутацию: `_commit_external_step_artifacts` перестаёт
+        прогонять `raw_files` через `check_ignore` перед формированием
+        коммита (регрессия к старому поведению — обход `rglob("*")` без
+        фильтра) — `.pyc` из `__pycache__/` попал бы в артефактную ветку
+        наравне с `PLAN.md` (AC-2).
+        """
         self.write("PLAN.md", "план")
         self.write("acceptance_tests/__pycache__/x.cpython-311.pyc",
                    bytes(range(8)))
@@ -288,6 +294,11 @@ class CommitExternalStepArtifactsGitignoreFilterTest(RealGitSandbox):
             files)
 
     def test_directory_rule_excludes_a_file_extension_lists_would_miss(self):
+        """Ловит мутацию: фильтр в `checkpoint.py` реализован как самодельный
+        список суффиксов (`.pyc`, `.log`, ...) вместо настоящего
+        `check_ignore` — `dropme/notes.txt` не матчится ни одним суффиксом
+        и продолжил бы коммититься (SPEC, требование 1, критерий = git).
+        """
         self.write("PLAN.md", "план")
         self.write("dropme/notes.txt", "мусор")
 
@@ -298,6 +309,12 @@ class CommitExternalStepArtifactsGitignoreFilterTest(RealGitSandbox):
         self.assertNotIn(f"tasks/{self.TASK}/dropme/notes.txt", files)
 
     def test_preexisting_ignored_file_is_not_deleted_when_absent_from_workdir(self):
+        """Ловит мутацию: `existing` (пути уже в артефактной ветке) не
+        фильтруется через `check_ignore` перед вычислением `existing -
+        files` — игнорируемый `.pyc`, зафиксированный ранее, попал бы в
+        список на удаление просто потому, что отсутствует в текущем
+        рабочем каталоге (SPEC, требование 2).
+        """
         pyc_rel = "acceptance_tests/__pycache__/x.pyc"
         sha = artifact_branch.commit_files(
             self.TASK,
@@ -316,6 +333,12 @@ class CommitExternalStepArtifactsGitignoreFilterTest(RealGitSandbox):
         self.assertIn(f"tasks/{self.TASK}/REVIEW.md", files)
 
     def test_preexisting_ignored_file_is_not_updated_when_present_in_workdir(self):
+        """Ловит мутацию: `raw_files` (пути с диска) фильтруется через
+        `check_ignore`, но `existing` — нет (асимметричный фикс) — новое
+        содержимое `.pyc`, присутствующего в рабочем каталоге, перезаписало
+        бы зафиксированную запись в артефактной ветке вместо того, чтобы
+        остаться нетронутой (SPEC, требование 2, симметрия в обе стороны).
+        """
         pyc_rel = "acceptance_tests/__pycache__/x.pyc"
         sha = artifact_branch.commit_files(
             self.TASK,
@@ -334,6 +357,12 @@ class CommitExternalStepArtifactsGitignoreFilterTest(RealGitSandbox):
                          "каталоге не должно порождать запись/перезапись")
 
     def test_check_ignore_failure_degrades_silently_without_committing(self):
+        """Ловит мутацию: на `check_ignore` вернувшем `None` (git не ответил)
+        код продолжает коммитить `raw_files` без фильтрации вместо fail-
+        closed отказа — `PLAN.md` попал бы в артефактную ветку вслепую,
+        нарушая тот же принцип, что уже несут остальные git-первичные
+        операции `checkpoint.py` (SPEC, требование 6).
+        """
         self.write("PLAN.md", "план")
         with mock.patch.object(gitcmd, "check_ignore", return_value=None):
             detail = checkpoint.commit_step_artifacts(store.db(), self.TASK,

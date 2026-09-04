@@ -41,6 +41,12 @@ class FixIgnoredArtifactFilesTest(RealGitSandbox):
             "SELECT detail FROM steps WHERE task_id=? ORDER BY id", (task_id,))]
 
     def test_ignored_file_removed_normal_file_kept(self):
+        """Ловит мутацию: `_fix_ignored_artifact_files` собирает пути для
+        `commit_files(..., remove=...)` без прогона через `check_ignore`
+        (например, чистит вообще все пути задачи) — либо `.pyc` остался бы
+        в ветке (фильтр не сработал), либо `PLAN.md` тоже был бы удалён
+        (фильтр слишком широкий); оба провала ловятся парой assert'ов ниже.
+        """
         task_id = "01FIXTASKPYCREMOVE01"
         self.seed_task(task_id, "in_dev", {
             f"tasks/{task_id}/PLAN.md": "план\n",
@@ -54,6 +60,12 @@ class FixIgnoredArtifactFilesTest(RealGitSandbox):
         self.assertTrue(self.journal_entries(task_id))
 
     def test_task_without_ignored_files_is_not_journaled(self):
+        """Ловит мутацию: журналирование срабатывает безусловно для каждой
+        живой задачи, а не только для реально изменённых (пропущено
+        сравнение «нашли ли игнорируемые пути») — задача без единого
+        игнорируемого файла получила бы шумную запись в `store.journal`,
+        AC-5 требует запись только для затронутых задач.
+        """
         task_id = "01FIXTASKNOJUNK00001"
         self.seed_task(task_id, "in_dev",
                        {f"tasks/{task_id}/PLAN.md": "план\n"})
@@ -64,6 +76,12 @@ class FixIgnoredArtifactFilesTest(RealGitSandbox):
         self.assertEqual(self.journal_entries(task_id), [])
 
     def test_done_task_is_not_touched(self):
+        """Ловит мутацию: фильтр «живых» задач в `_fix_ignored_artifact_files`
+        забывает исключить `done`/`killed` (например, копирует критерий из
+        `check_orphans` неверно) — артефактная ветка закрытой задачи была бы
+        переписана уборкой, хотя SPEC («Не входит») ограничивает действие
+        живыми задачами.
+        """
         task_id = "01FIXTASKDONESKIP001"
         self.seed_task(task_id, "done", {
             f"tasks/{task_id}/PLAN.md": "план\n",
@@ -76,6 +94,11 @@ class FixIgnoredArtifactFilesTest(RealGitSandbox):
         self.assertEqual(self.journal_entries(task_id), [])
 
     def test_main_is_never_touched(self):
+        """Ловит мутацию: уборка по ошибке пишет через рабочее дерево пульта
+        (`git rm`/checkout в `config.ROOT`) вместо плотницкой записи прямо
+        в `refs/heads/artifact/<id>` — `main` сдвинулся бы или рабочее
+        дерево испачкалось, что нарушает неприкосновенность `main` (AC-5).
+        """
         task_id = "01FIXTASKMAINSAFE001"
         self.seed_task(task_id, "in_dev", {
             f"tasks/{task_id}/PLAN.md": "план\n",
@@ -88,6 +111,12 @@ class FixIgnoredArtifactFilesTest(RealGitSandbox):
         self.assertEqual(gitcmd.git("status", "--porcelain").stdout.strip(), "")
 
     def test_multiple_live_tasks_only_affected_ones_journaled(self):
+        """Ловит мутацию: цикл по живым задачам обрывается на первой найденной
+        или журналирует по общему флагу вместо задачи-за-задачей — при двух
+        задачах, из которых игнорируемый файл есть только у одной, чистая
+        задача либо тоже получила бы запись в журнал, либо у грязной задачи
+        `.pyc` остался бы неубранным (цикл остановился на первой).
+        """
         clean_id = "01FIXTASKMULTICLEAN1"
         dirty_id = "01FIXTASKMULTIDIRTY1"
         self.seed_task(clean_id, "in_dev",
