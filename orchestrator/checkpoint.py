@@ -243,6 +243,22 @@ def commit_abnormal_checkpoint(conn, task_id: str, role: str, cause: str) -> str
     свой сценарий; `commit_timeout_checkpoint` не тронут — таймаут
     остаётся отдельной веткой со своим прежним сообщением.
 
+    Мандат роли и перенос `tasks/<id>/` в артефактную ветку — дословно
+    `commit_timeout_checkpoint` (SPEC 01M1NKTF173WV5CPDZ1C3WW69K,
+    REVIEW.md итерация 2, R1-F1 — переоткрыт: правка `commit_timeout_
+    checkpoint` для мандата `developer`/отката вне мандата, полученная
+    подтяжкой main, не была применена сюда, и материализованный
+    `runner.role_cwd` артефакт любой роли, включая роли без мандата
+    кода, безусловно коммитился в кодовую ветку на аварийном
+    завершении шага — тот же класс, что итерация 1 уже закрывала для
+    всех трёх WIP-чекпоинтов). `developer` — код вне `tasks/<id>/`
+    (`exclude`), остальные роли — откат WIP вне `tasks/<id>/`
+    (`_discard_out_of_mandate_changes`); `tasks/<id>/`, материализованный
+    или изменённый на этом шаге, переносится в артефактную ветку
+    `_commit_external_step_artifacts` для ЛЮБОЙ роли, а не рукой этой
+    функции — единственный путь, каким `tasks/<id>/` попадает в git
+    (требование 3).
+
     Остальное поведение — дословно `commit_timeout_checkpoint`: только
     догфуд, коммитит, только если есть что коммитить, тихая деградация
     без git, общая обвязка `_commit_worktree_change` (SPEC T059), повторная
@@ -251,14 +267,26 @@ def commit_abnormal_checkpoint(conn, task_id: str, role: str, cause: str) -> str
     if store.task_target(conn, task_id) != config.DEFAULT_TARGET:
         return ""
     wt = workspace.path(task_id)
-    message = f"{task_id}: WIP-чекпоинт после аварийного завершения шага {role} ({cause})"
-    committed, sha = _commit_worktree_change(wt, message)
-    if not committed:
-        return ""
-    detail = f"{message} (sha {sha})" if sha else message
-    store.journal(conn, task_id, "orchestrator",
-                  "WIP-чекпоинт после аварийного завершения шага", detail)
-    store.record_fixation(conn, task_id)
+    detail = ""
+    if role == "developer":
+        message = f"{task_id}: WIP-чекпоинт после аварийного завершения шага {role} ({cause})"
+        committed, sha = _commit_worktree_change(
+            wt, message, exclude=f"tasks/{task_id}")
+        if committed:
+            detail = f"{message} (sha {sha})" if sha else message
+            store.journal(conn, task_id, "orchestrator",
+                          "WIP-чекпоинт после аварийного завершения шага", detail)
+            store.record_fixation(conn, task_id)
+    else:
+        discarded = _discard_out_of_mandate_changes(wt, task_id)
+        if discarded:
+            journal_detail = (f"{task_id}: WIP вне мандата роли {role} "
+                              f"после аварийного завершения шага откачен — {discarded}")
+            store.journal(conn, task_id, "orchestrator",
+                          "WIP-чекпоинт после аварийного завершения шага — откат вне мандата",
+                          journal_detail)
+
+    _commit_external_step_artifacts(conn, task_id, role, config.DEFAULT_TARGET)
     return detail
 
 
@@ -276,6 +304,17 @@ def commit_pause_now_checkpoint(conn, task_id: str, role: str) -> str:
     (`tasks/T074/acceptance_tests/
     test_ac2_ac3_ac4_ac5_interrupt_sequence.py`).
 
+    Мандат роли и перенос `tasks/<id>/` в артефактную ветку — дословно
+    `commit_timeout_checkpoint` (SPEC 01M1NKTF173WV5CPDZ1C3WW69K,
+    REVIEW.md итерация 2, R1-F1 — переоткрыт: та же правка, применённая
+    к `commit_timeout_checkpoint` подтяжкой main, сюда не долетела —
+    материализованный `runner.role_cwd` артефакт любой роли, включая
+    роли без мандата кода, безусловно коммитился в кодовую ветку на
+    `pause --now`). `developer` — код вне `tasks/<id>/` (`exclude`),
+    остальные роли — откат WIP вне `tasks/<id>/`
+    (`_discard_out_of_mandate_changes`); `tasks/<id>/` переносится в
+    артефактную ветку `_commit_external_step_artifacts` для ЛЮБОЙ роли.
+
     Остальное — общая обвязка `_commit_worktree_change` (только догфуд,
     коммитит только при реальном diff, тихая деградация без git,
     `store.record_fixation` — та же фиксация, что не даёт следующему
@@ -284,14 +323,26 @@ def commit_pause_now_checkpoint(conn, task_id: str, role: str) -> str:
     if store.task_target(conn, task_id) != config.DEFAULT_TARGET:
         return ""
     wt = workspace.path(task_id)
-    message = f"{task_id}: WIP-чекпоинт pause --now (шаг {role} прерван)"
-    committed, sha = _commit_worktree_change(wt, message)
-    if not committed:
-        return ""
-    detail = f"{message} (sha {sha})" if sha else message
-    store.journal(conn, task_id, "orchestrator", "WIP-чекпоинт pause --now",
-                  detail)
-    store.record_fixation(conn, task_id)
+    detail = ""
+    if role == "developer":
+        message = f"{task_id}: WIP-чекпоинт pause --now (шаг {role} прерван)"
+        committed, sha = _commit_worktree_change(
+            wt, message, exclude=f"tasks/{task_id}")
+        if committed:
+            detail = f"{message} (sha {sha})" if sha else message
+            store.journal(conn, task_id, "orchestrator", "WIP-чекпоинт pause --now",
+                          detail)
+            store.record_fixation(conn, task_id)
+    else:
+        discarded = _discard_out_of_mandate_changes(wt, task_id)
+        if discarded:
+            journal_detail = (f"{task_id}: WIP вне мандата роли {role} "
+                              f"pause --now откачен — {discarded}")
+            store.journal(conn, task_id, "orchestrator",
+                          "WIP-чекпоинт pause --now — откат вне мандата",
+                          journal_detail)
+
+    _commit_external_step_artifacts(conn, task_id, role, config.DEFAULT_TARGET)
     return detail
 
 
@@ -544,11 +595,13 @@ def _commit_worktree_change(wt: Path, message: str,
     `exclude` — путь (пример: `tasks/<id>`), исключаемый из коммита ПОСЛЕ
     `add -A` через `git reset` (SPEC 01M1NBWTSXEJB24PXR417YF1VA, AC-1):
     мандат `developer` — все пути worktree, кроме `tasks/<id>/` (та часть
-    переносится в артефактную ветку отдельно, не через эту функцию).
-    `None` (по умолчанию) — прежнее поведение, весь worktree целиком;
-    остальные вызывающие (`commit_abnormal_checkpoint`,
-    `commit_pause_now_checkpoint`) мандата не несут и этот параметр не
-    передают.
+    переносится в артефактную ветку отдельно, не через эту функцию). Все
+    три WIP-чекпоинта роли `developer` (`commit_timeout_checkpoint`,
+    `commit_abnormal_checkpoint`, `commit_pause_now_checkpoint`, SPEC
+    01M1NKTF173WV5CPDZ1C3WW69K, REVIEW.md итерация 2, R1-F1) передают
+    его одинаково; `None` (по умолчанию) — для остальных ролей мандата
+    кода нет вовсе, эта функция для них не вызывается (см.
+    `_discard_out_of_mandate_changes`).
     """
     added = gitcmd.in_repo(wt, "add", "-A")
     if added.returncode != 0:
