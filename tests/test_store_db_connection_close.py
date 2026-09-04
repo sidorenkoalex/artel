@@ -10,8 +10,10 @@
 import gc
 import sqlite3
 import sys
+import threading
 import warnings
 from pathlib import Path
+from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
@@ -31,6 +33,37 @@ class DbConnectionAutoCloseTest(TmpRootTest):
 
         with self.assertRaises(sqlite3.ProgrammingError):
             conn.execute("SELECT 1")
+
+    def test_del_swallows_programmingerror_from_foreign_thread_close(self):
+        """`__del__` не бросает наружу `sqlite3.ProgrammingError`, каким
+        его сообщает sqlite3 при попытке закрыть соединение не из
+        создавшего его потока (CR-2).
+
+        Ловит мутацию: удаление try/except вокруг self.close() в
+        __del__ — тогда conn.__del__() в отдельном потоке пробросит
+        sqlite3.ProgrammingError вместо тихого возврата."""
+        conn = store.db()
+        conn.close = mock.Mock(
+            side_effect=sqlite3.ProgrammingError(
+                "SQLite objects created in a thread can only be used in "
+                "that same thread."))
+
+        result = {}
+
+        def finalize_in_other_thread():
+            try:
+                conn.__del__()
+            except BaseException as exc:  # noqa: BLE001 - хотим увидеть любой сбой теста
+                result["error"] = exc
+
+        thread = threading.Thread(target=finalize_in_other_thread)
+        thread.start()
+        thread.join(timeout=5)
+
+        self.assertNotIn("error", result)
+
+        del conn.close
+        conn.close()
 
     def test_no_resourcewarning_when_connection_is_used_inline_and_discarded(self):
         store.create_schema(store.db())
