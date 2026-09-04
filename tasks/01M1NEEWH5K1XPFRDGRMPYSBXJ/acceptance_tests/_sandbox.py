@@ -411,22 +411,6 @@ class CanarySandbox(unittest.TestCase):
             ("ROLE_HOME", self.root / ".artel" / "home"),
             ("ROLE_CONFIG_DIR", self.root / ".artel" / "home" / ".claude"),
             ("WORKTREES", self.root / ".artel" / "worktrees"),
-            # PROJECTS/TARGETS/BACKUP_MARKER — вычислены модулем `config`
-            # ОДИН раз при импорте от РЕАЛЬНОГО `ROOT` (не свойство,
-            # обычные module-level константы) — патч одного `ROOT` их не
-            # трогает. Без этих трёх патчей `doctor.all_checks()`
-            # (нужен AC-15/AC-16-тестам этого каталога) читал бы
-            # `targets.yaml`/`.artel/projects`/`.artel/backup-marker`
-            # НАСТОЯЩЕГО репозитория пульта (в котором реально
-            # исполняется этот тест), а не песочницы — тот же полный
-            # набор путей `config`, что `tests/sandbox.py::
-            # ALL_CONFIG_ATTRS` уже патчит для `TmpRootTest` (T037,
-            # требование 1) — здесь лишь закрыт пробел, оставшийся вне
-            # его исходных семи путей, которых до сих пор хватало (ни
-            # один тест этого каталога не звал doctor).
-            ("PROJECTS", self.root / ".artel" / "projects"),
-            ("TARGETS", self.root / "targets.yaml"),
-            ("BACKUP_MARKER", self.root / ".artel" / "backup-marker"),
         ):
             patcher = mock.patch.object(config, attr, value)
             patcher.start()
