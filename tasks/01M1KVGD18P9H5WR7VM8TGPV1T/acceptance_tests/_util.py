@@ -55,14 +55,17 @@ def diff_refs(before: dict, after: dict) -> dict:
 
 
 def cleanup_new_refs(before: dict, after: dict) -> None:
-    """Убирает ссылки, появившиеся между `before` и `after`.
+    """Убирает ссылки, появившиеся между `before` и `after`, и восстанавливает
+    ссылки, которые СУЩЕСТВОВАЛИ раньше, но сдвинули sha, на снимок `before`
+    (ADR-0012, ANSWER-2 п.1, R1-F5).
 
     Настоящий репозиторий пульта общий на все параллельные сессии —
     приёмочный тест, диагностирующий утечку записи, не имеет права сам
     оставлять после себя новый мусор сверх уже накопленного, который он
     же и обнаружил (репозиторий на момент подготовки этой планки уже
     нёс тысячи веток `artifact/*` от прошлых утечек — тот самый дефект,
-    который описывает SPEC «Контекст»)."""
+    который описывает SPEC «Контекст»), ни оставлять СУЩЕСТВОВАВШУЮ раньше
+    ссылку сдвинутой на чужой sha."""
     for refname in sorted(after.keys() - before.keys()):
         if refname.startswith("refs/heads/"):
             subprocess.run(["git", "branch", "-D", refname[len("refs/heads/"):]],
@@ -70,3 +73,8 @@ def cleanup_new_refs(before: dict, after: dict) -> None:
         elif refname.startswith("refs/artifacts/"):
             subprocess.run(["git", "update-ref", "-d", refname],
                            cwd=config.ROOT, capture_output=True, text=True)
+    shifted = before.keys() & after.keys()
+    for refname in sorted(refname for refname in shifted
+                          if before[refname] != after[refname]):
+        subprocess.run(["git", "update-ref", refname, before[refname]],
+                       cwd=config.ROOT, capture_output=True, text=True)

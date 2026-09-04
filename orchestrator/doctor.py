@@ -1035,20 +1035,34 @@ def sweep_orphan_artifact_branches(conn) -> list[str]:
 
     Ровно один incident-алерт на весь прогон уборки, с перечислением
     удалённого в сообщении (не по алерту на каждую ветку — Оператору
-    нужна одна строка на уборку, не журнал по счётчику находок).
-    Возвращает список удалённых имён веток; пустой — сирот не нашлось.
+    нужна одна строка на уборку, не журнал по счётчику находок). Возврат
+    `git branch -D` проверяется (ANSWER-2 п.3, R1-F3): ветка, которую не
+    удалось удалить, не попадает ни в возвращаемый список, ни в текст
+    алерта как «удалено» — только в отдельную честную часть сообщения.
+    Возвращает список ФАКТИЧЕСКИ удалённых имён веток; пустой — либо
+    сирот не нашлось, либо ни одно удаление не удалось.
     """
     known_ids = {r["id"].lower() for r in store.all_tasks(conn)}
     branches = gitcmd.list_branches("artifact/") or []
     orphans = sorted(b for b in branches
                      if b[len("artifact/"):] not in known_ids)
+    deleted = []
+    failed = []
     for branch in orphans:
-        gitcmd.git("branch", "-D", branch)
+        res = gitcmd.git("branch", "-D", branch)
+        (deleted if res is not None and res.returncode == 0 else failed).append(branch)
     if orphans:
+        parts = []
+        if deleted:
+            parts.append(f"удалены: {', '.join(deleted)}")
+        if failed:
+            parts.append(f"НЕ удалены (ошибка git branch -D): {', '.join(failed)}")
         alerts.raise_alert(
             conn, None, "incident", ORPHAN_ARTIFACT_BRANCH_SOURCE,
-            f"осиротевшие артефактные ветки удалены: {', '.join(orphans)}")
-    return orphans
+            f"осиротевшие артефактные ветки: {'; '.join(parts)}")
+    return deleted
+
+
 # --- уборка игнорируемых файлов артефактных веток (SPEC ------------------
 # 01M1KVG3KSCY47HWXWF5HM0E76, требование 4, AC-5) -------------------------
 
