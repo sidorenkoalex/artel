@@ -98,55 +98,5 @@ on_refusal="exit")` не тронуты (SPEC, «Не входит» + ANSWER-1,
 detail напрямую, поэтому инъекции в SQL/журнал нет (тот же
 `store.journal`, что и у прочих событий).
 
-### Заход после отказа advance («лок приёмочных тестов»)
-
-`advance` был отклонён гейтом «лок приёмочных тестов» (`fsm_advance.py:
-523`, `diff_paths(tests_locked_sha=9f61cb5, branch, "acceptance_tests")`).
-Диагноз подтверждён прямой сверкой: `git diff 9f61cb5
-artifact/01m1neeysp0qwpmxhg0bk591m7 -- .../acceptance_tests/*.py` —
-пусто (ни одного изменённого теста); тот же диапазон без исключения
-`*.py` показывает исключительно `__pycache__/*.pyc` (включая файлы с
-именами вида `*-pytest-9.1.1.pyc`, отсутствовавшие на локе). Это
-известный класс «регрессия A7 №4» (`orchestrator/checkpoint.py::
-_commit_external_step_artifacts` собирает `tasks/<id>/` сырым
-`rglob`, без учёта `.gitignore`; чисто аддитивная запись в
-`artifact_branch.write_commit` никогда не удаляет однажды
-закоммиченный `.pyc` сама) — подтверждён тем же классом на
-`tasks/01M1HNNHDMP2C1AJTH5QF1BTN2/PLAN.md` (три независимых захода),
-`tasks/01M1K7KP0D8ZKRM9KTE75DCCYR/PLAN.md`,
-`tasks/01M1KCSTBYF1CRJBSY4P6VYQEA/PLAN.md`/`REVIEW.md`. Штатный фикс
-корня — отдельная задача `01M1KVG3KSCY47HWXWF5HM0E76`
-(«автокоммит артефактов шага учитывает .gitignore»), в main пока не
-слита. По прецеденту ANSWER-5/ANSWER-6 (`01M1HNNHDMP2C1AJTH5QF1BTN2`,
-раздел «Эскалация», вопрос 1, вариант «б»): присутствие `__pycache__`
-в артефактной ветке после шага — НЕ основание для эскалации
-разработчиком; ресинхронизация `acceptance_tests/` с локом — действие
-Оператора (мост), не разработчика. Единственное обязательство
-разработчика — не добавлять новый дрейф своим шагом.
-
-Этим заходом: код/тесты не менялись (снимок `fc6b2eb` без изменений).
-Все прогоны — флагом `-B` (`PYTHONDONTWRITEBYTECODE`), тем же приёмом:
-`python3 -B -m unittest tests.test_lease tests.test_pause
-tests.test_release` — 56 ok; `python3 -B -m unittest discover -s
-tasks/01M1NEEYSP0QWPMXHG0BK591M7/acceptance_tests` — 18 ok (AC-1..AC-8
-все зелёные); `python3 -B scripts/guard.py tasks/
-01M1NEEYSP0QWPMXHG0BK591M7/PLAN.md tasks/01M1NEEYSP0QWPMXHG0BK591M7/
-SPEC.md` — `GUARD: ок (2 файлов)`; `find tasks/
-01M1NEEYSP0QWPMXHG0BK591M7 -name __pycache__ -o -name '*.pyc'` — пусто
-до и после. `tasks/01M1NEEYSP0QWPMXHG0BK591M7/` в рабочем дереве этой
-сессии на старте оказался удалён вне коммита (тот же класс, что
-описан `[[feedback_task_dir_deletion_recovery]]`) — восстановлен
-`git checkout --`, не переписан. PLAN.md остаётся `status: ready`.
-
 ## Предложения системе
-- Класс «`escalate` недостижим для роли developer через PLAN.md»
-  (`scripts/guard.py::RULES["plan"]["statuses"]` не несёт `escalate`,
-  а `fsm_advance.py::in_dev` не читает такой статус) уже трижды
-  подтверждён (`tasks/T079`, `tasks/01M1HNNHDMP2C1AJTH5QF1BTN2` дважды)
-  — этим заходом эскалация не понадобилась (класс «регрессия A7 №4»
-  прецедентно закрыт без неё), но сам структурный пробел остаётся не
-  зачинен.
-- Класс «регрессия A7 №4» (`__pycache__` в артефактной ветке ломает
-  лок `acceptance_tests/`) подтверждён четвёртой независимой задачей
-  подряд — фикс `01M1KVG3KSCY47HWXWF5HM0E76` стоит смержить раньше,
-  чем эта планка нарастёт до пятого прецедента.
+(пусто)
