@@ -602,7 +602,6 @@ def registry_errors(path: Path | str, text: str, meta: dict) -> list[str]:
 # объём — тот же класс, что «Влияние на систему» PLAN (инвариант 17), но
 # УСЛОВНЫЙ (AC-6: без единого сигнала секция не обязательна вовсе).
 SPLIT_ASSESSMENT_SECTION = "Оценка объёма и деление"
-ZONES_SECTION = "Зоны"
 
 # Три фразы требования 1/AC-2 — буквально из SPEC. Ищутся по ВСЕМУ тексту
 # SPEC, не только по разделу «Зоны»: SPEC не обязан держать «Зоны»
@@ -614,7 +613,11 @@ UNCERTAINTY_PHRASES = ("ориентировочно", "весь оркестр�
 
 # Путь вида `orchestrator/<имя>.py`/`scripts/<имя>.py» (ANSWER-1, AC-1/
 # AC-3) — источник для двух разных сигналов: числа файлов зоны и
-# пересечения с docs/invariants.md.
+# пересечения с docs/invariants.md. Ищется по ВСЕМУ тексту SPEC, тем же
+# доводом, что UNCERTAINTY_PHRASES выше: ни `templates/SPEC.md`, ни
+# существующая практика 105 задач не несут отдельного раздела «## Зоны»
+# — заголовок, привязка к которому оставляла бы сигнал мёртвым кодом
+# (REVIEW.md, итерация 1, замечание R1-F1).
 ZONE_PATH = re.compile(r"(?:orchestrator|scripts)/\w+\.py")
 
 # Прогноз диффа строкой секции (ANSWER-1, AC-1) — запасной путь, когда
@@ -659,15 +662,12 @@ def requires_split_assessment(meta: dict) -> bool:
     return version >= 3
 
 
-def _zone_text(text: str) -> str:
-    """Текст раздела «Зоны» SPEC; пусто — раздела нет (не обязателен)."""
-    return section_body(text, ZONES_SECTION)
-
-
 def _zone_paths(text: str) -> set[str]:
     """Пути формата `orchestrator/<имя>.py`/`scripts/<имя>.py`, упомянутые
-    в разделе «Зоны» (ANSWER-1)."""
-    return set(ZONE_PATH.findall(_zone_text(text)))
+    в тексте SPEC (ANSWER-1) — по ВСЕМУ тексту, не по разделу «Зоны»,
+    которого не несёт ни `templates/SPEC.md`, ни существующая практика
+    (REVIEW.md, итерация 1, R1-F1)."""
+    return set(ZONE_PATH.findall(text))
 
 
 def _diff_forecast_kib(text: str, meta: dict) -> float | None:

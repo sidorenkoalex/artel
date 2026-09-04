@@ -65,6 +65,10 @@ class SnapshotSplitAssessmentTest(TmpRootTest):
         return git
 
     def test_fills_diff_bytes_and_split_assessment_for_self_target(self):
+        """Ловит мутацию: снимок не вызывает `git diff`/`git show` вовсе,
+        либо пишет не то поле (перепутаны местами `diff_bytes` и
+        `split_assessment`) — обе колонки остались бы `NULL` или несли
+        значение друг друга."""
         diff_text = "diff --git a b\n+код"
         with mock.patch.object(
                 gitcmd, "git", self._fake_git((0, diff_text, ""), SPEC_WITH_SECTION)):
@@ -75,6 +79,10 @@ class SnapshotSplitAssessmentTest(TmpRootTest):
         self.assertEqual(row["split_assessment"], "Деление на 2 части.")
 
     def test_empty_or_missing_section_becomes_literal_no_signals(self):
+        """Ловит мутацию: пустая/отсутствующая секция «Оценка объёма и
+        деление» пишется в БД как есть (пустая строка или `NULL`) вместо
+        читаемого литерала «сигналов нет» — отчёт (AC-12) показывал бы
+        пустую ячейку неотличимо от «колонка не заполнена вовсе»."""
         with mock.patch.object(
                 gitcmd, "git",
                 self._fake_git((0, "diff --git a b", ""), SPEC_WITHOUT_SIGNALS)):
@@ -84,6 +92,10 @@ class SnapshotSplitAssessmentTest(TmpRootTest):
         self.assertEqual(row["split_assessment"], "сигналов нет")
 
     def test_git_diff_failure_leaves_diff_bytes_null_but_does_not_raise(self):
+        """Ловит мутацию: сбой `git diff` не перехвачен (исключение
+        всплывает и роняет гейт `merge_gate`) либо ошибочно останавливает
+        чтение секции — сбой одной команды git не должен ронять гейт и не
+        должен мешать заполнению независимого поля."""
         with mock.patch.object(
                 gitcmd, "git",
                 self._fake_git((128, "", "fatal: bad revision"), SPEC_WITH_SECTION)):
@@ -95,6 +107,10 @@ class SnapshotSplitAssessmentTest(TmpRootTest):
                          "сбой diff не обязан мешать чтению секции")
 
     def test_git_show_failure_leaves_split_assessment_null_but_does_not_raise(self):
+        """Ловит мутацию: сбой `git show` (файла на артефактной ветке нет)
+        не перехвачен и роняет гейт, либо ошибочно затирает уже
+        посчитанный `diff_bytes` — независимость двух полей должна
+        сохраняться и при сбое второй команды."""
         with mock.patch.object(
                 gitcmd, "git",
                 self._fake_git((0, "diff --git a b", ""), None)):
@@ -105,6 +121,10 @@ class SnapshotSplitAssessmentTest(TmpRootTest):
         self.assertIsNone(row["split_assessment"])
 
     def test_external_target_skips_diff_but_still_reads_split_assessment(self):
+        """Ловит мутацию: диф внешнего target'а считается наравне с self
+        (пропуск `_capacity_gate_refuses`-довода потерян) — `diff_bytes`
+        внешней задачи заполнился бы по коду `config.ROOT`, который её не
+        видит, и нёс бы неверное (нулевое или чужое) число."""
         store.update_task(self.conn, self.task_id, target="sled")
         with mock.patch.object(
                 gitcmd, "git",

@@ -76,7 +76,11 @@ def _meta(text: str) -> dict:
 
 class ZoneFilesSignalTest(unittest.TestCase):
     """«Число затрагиваемых модулей/файлов» — порог `config.
-    SPLIT_SIGNAL_ZONE_FILES` по числу путей раздела «Зоны»."""
+    SPLIT_SIGNAL_ZONE_FILES` по числу путей, упомянутых в тексте SPEC.
+
+    Ловит мутацию: граница сдвинута на единицу (`>` вместо `>=` или
+    наоборот) — оба теста вместе фиксируют ровно порог: `threshold - 1`
+    не срабатывает, `threshold` уже срабатывает."""
 
     def test_below_threshold_does_not_fire(self):
         paths = [f"orchestrator/m{i}.py"
@@ -98,7 +102,11 @@ class ZoneFilesSignalTest(unittest.TestCase):
 
 
 class AcCountSignalTest(unittest.TestCase):
-    """«Число критериев приёмки» — порог `config.SPLIT_SIGNAL_AC_COUNT`."""
+    """«Число критериев приёмки» — порог `config.SPLIT_SIGNAL_AC_COUNT`.
+
+    Ловит мутацию: граница сдвинута на единицу — `threshold - 1` не
+    срабатывает, `threshold` уже срабатывает, оба теста вместе фиксируют
+    ровно порог `>=`, не `>`."""
 
     def test_below_threshold_does_not_fire(self):
         text = spec_text(ac_count=config.SPLIT_SIGNAL_AC_COUNT - 1)
@@ -117,7 +125,11 @@ class AcCountSignalTest(unittest.TestCase):
 
 class BudgetSignalTest(unittest.TestCase):
     """«Бюджет» — порог `config.SPLIT_SIGNAL_BUDGET_USD`, `budget_usd`
-    frontmatter."""
+    frontmatter.
+
+    Ловит мутацию: граница сдвинута на единицу — `threshold - 1` не
+    срабатывает, `threshold` уже срабатывает, оба теста вместе фиксируют
+    ровно порог `>=`, не `>`."""
 
     def test_below_threshold_does_not_fire(self):
         text = spec_text(budget=config.SPLIT_SIGNAL_BUDGET_USD - 1)
@@ -143,6 +155,9 @@ class DiffForecastSignalTest(unittest.TestCase):
                * config.SPLIT_SIGNAL_DIFF_FORECAST_RATIO)
 
     def test_frontmatter_field_below_threshold_does_not_fire(self):
+        """Ловит мутацию: граница `> threshold` подменена на `>=
+        threshold` (или сравнение вовсе выпало) — значение ровно под
+        порогом ложно срабатывало бы."""
         text = spec_text(extra_meta=f"diff_forecast_kib: "
                                     f"{int(self._threshold_kib() - 1)}\n")
 
@@ -151,6 +166,9 @@ class DiffForecastSignalTest(unittest.TestCase):
         self.assertNotIn("прогноз диффа", names)
 
     def test_frontmatter_field_above_threshold_fires(self):
+        """Ловит мутацию: чтение `diff_forecast_kib` из frontmatter
+        выпало (например читается только строка секции) — значение выше
+        порога перестало бы срабатывать."""
         text = spec_text(extra_meta=f"diff_forecast_kib: "
                                     f"{int(self._threshold_kib() + 1)}\n")
 
@@ -159,6 +177,9 @@ class DiffForecastSignalTest(unittest.TestCase):
         self.assertIn("прогноз диффа", names)
 
     def test_section_line_above_threshold_fires_without_frontmatter_field(self):
+        """Ловит мутацию: запасное чтение строки «Прогноз диффа: N КиБ»
+        секции (`DIFF_FORECAST_LINE`) выпало — без frontmatter-поля
+        сигнал перестал бы срабатывать вовсе."""
         kib = int(self._threshold_kib() + 1)
         text = spec_text(volume_section=f"Прогноз диффа: {kib} КиБ.")
 
@@ -169,7 +190,11 @@ class DiffForecastSignalTest(unittest.TestCase):
     def test_missing_forecast_alone_is_not_a_signal(self):
         """«Чистый» SPEC без единого сигнала и без прогноза — прогноз не
         считается сигналом сам по себе (AC-6): вписывать его просто по
-        факту отсутствия поля не нужно, если больше ничего не сработало."""
+        факту отсутствия поля не нужно, если больше ничего не сработало.
+
+        Ловит мутацию: условие «сигнал, только если сработал другой»
+        (`elif forecast is None and names`) заменено на безусловное — уже
+        сам факт отсутствия прогноза красил бы «чистый» SPEC."""
         text = spec_text()
 
         names = guard.split_signal_names(text, _meta(text))
@@ -178,7 +203,11 @@ class DiffForecastSignalTest(unittest.TestCase):
 
     def test_missing_forecast_is_a_signal_when_another_signal_fired(self):
         """Отсутствие прогноза становится сигналом, ТОЛЬКО когда уже
-        сработал другой (ANSWER-1, редактура Оператора 04.09)."""
+        сработал другой (ANSWER-1, редактура Оператора 04.09).
+
+        Ловит мутацию: ветка «прогноз не дан» удалена целиком — сигнал
+        «прогноз диффа не дан» никогда бы не появлялся в списке, даже
+        когда бюджет уже сработал."""
         text = spec_text(budget=config.SPLIT_SIGNAL_BUDGET_USD)
 
         names = guard.split_signal_names(text, _meta(text))
@@ -192,6 +221,10 @@ class InvariantMechanismSignalUnitTest(unittest.TestCase):
     оценки смысла, только буквальная подстрока (ANSWER-1)."""
 
     def test_no_zones_section_never_fires(self):
+        """Ловит мутацию: сигнал срабатывает безусловно (например
+        `if zone_paths:` заменено на константу `True`) — SPEC без единого
+        пути формата `orchestrator/<имя>.py`/`scripts/<имя>.py` не должен
+        красить сигнал сравнением с пустым множеством путей."""
         text = spec_text(zone_paths=None)
 
         names = guard.split_signal_names(text, _meta(text))
@@ -199,6 +232,9 @@ class InvariantMechanismSignalUnitTest(unittest.TestCase):
         self.assertNotIn("затронут инвариантный механизм", names)
 
     def test_zone_path_present_in_invariants_doc_fires(self):
+        """Ловит мутацию: сравнение подстроки с `docs/invariants.md`
+        выпало или инвертировано (`not in` вместо `in`) — путь, реально
+        встречающийся в документе, перестал бы зажигать сигнал."""
         text = spec_text(zone_paths=["scripts/fixture_only_module.py"])
         fake_invariants = "`scripts/fixture_only_module.py` несёт механику\n"
 
@@ -219,15 +255,29 @@ class RequiresSplitAssessmentTest(unittest.TestCase):
     `schema_version: 1` и `budget_usd` выше нового порога)."""
 
     def test_version_3_requires_the_check(self):
+        """Ловит мутацию: граница `>= 3` сдвинута вверх (например `> 3`)
+        — версия 3, текущий дефолт `templates/SPEC.md`, перестала бы
+        требовать проверку."""
         self.assertTrue(guard.requires_split_assessment({"schema_version": 3}))
 
     def test_version_below_3_does_not_require_the_check(self):
+        """Ловит мутацию: версия-гейтинг выпал целиком (функция всегда
+        возвращает `True`) — старый беклог версии 1 упёрся бы в новую
+        проверку задним числом, регресс, уже пойманный `test_spec_budget.py`
+        при первой реализации."""
         self.assertFalse(guard.requires_split_assessment({"schema_version": 1}))
 
     def test_missing_field_does_not_require_the_check(self):
+        """Ловит мутацию: отсутствие поля дефолтится не в версию 1, а в
+        версию >= 3 (например `meta.get("schema_version", 3)`) — SPEC без
+        поля `schema_version` вовсе ошибочно попал бы под новую проверку."""
         self.assertFalse(guard.requires_split_assessment({}))
 
     def test_old_spec_with_high_budget_and_no_section_is_not_rejected(self):
+        """Ловит мутацию: версия-гейтинг не проведён до конца в
+        `split_assessment_errors`/`check_content` (проверяется
+        `requires_split_assessment`, но результат не используется) —
+        сквозной путь через `check_content`, не только сам предикат."""
         text = spec_text(budget=500, volume_section=None,
                          extra_meta="").replace("schema_version: 3",
                                                 "schema_version: 1")
@@ -240,12 +290,18 @@ class SplitAssessmentErrorsTest(unittest.TestCase):
     вызывается из `check_content` (проверка проводки, не самих сигналов)."""
 
     def test_non_spec_artifact_is_never_checked(self):
+        """Ловит мутацию: проверка `type` выпала (например
+        `meta.get("type")` не сравнивается с `"spec"`) — PLAN/REVIEW с тем
+        же набором сигналов ошибочно попали бы под отказ."""
         errors = guard.split_assessment_errors(
             "label", "любой текст", {"type": "plan", "schema_version": 3})
 
         self.assertEqual(errors, [])
 
     def test_check_content_wires_the_new_check_for_spec(self):
+        """Ловит мутацию: вызов `split_assessment_errors` выпал из
+        `check_content` (проводка не собрана) — SPEC с сработавшим
+        сигналом и пустой секцией проходил бы `check_content` молча."""
         text = spec_text(budget=config.SPLIT_SIGNAL_BUDGET_USD,
                          volume_section=None)
 
@@ -255,6 +311,9 @@ class SplitAssessmentErrorsTest(unittest.TestCase):
             any("Оценка объёма и деление" in e for e in errors), errors)
 
     def test_check_content_does_not_reject_a_clean_spec(self):
+        """Ловит мутацию: сигнал срабатывает без причины (ложное
+        `if True` вместо реальной проверки условий) — обычный SPEC без
+        единого сигнала ошибочно красился бы отказом."""
         text = spec_text()
 
         self.assertEqual(guard.check_content("SPEC.md", text), [])
@@ -268,6 +327,10 @@ class ClosedTaskExceptionTest(unittest.TestCase):
     `docs/retention.md` объявляет SPEC смерженных задач вечными."""
 
     def test_closed_task_with_fired_signal_is_not_rejected(self):
+        """Ловит мутацию: исключение `_closed_before_split_assessment` не
+        подключено в `split_assessment_errors` (проверка написана, но не
+        вызывается) — закрытая задача из ANSWER-3 продолжала бы краситься
+        отказом."""
         text = spec_text(budget=config.SPLIT_SIGNAL_BUDGET_USD,
                          volume_section=None)
         with tempfile.TemporaryDirectory() as tmp:
@@ -281,7 +344,12 @@ class ClosedTaskExceptionTest(unittest.TestCase):
     def test_live_task_with_fired_signal_is_still_rejected(self):
         """Тот же SPEC, но без `docs/retro/T900.md` — задача живая,
         проверка действует как обычно (исключение не превращается в
-        общее ослабление)."""
+        общее ослабление).
+
+        Ловит мутацию: `_closed_before_split_assessment` возвращает
+        `True` безусловно (например по одному наличию сегмента
+        `tasks/<id>/` в пути, без проверки файла retro) — живые задачи
+        освободились бы от проверки так же, как закрытые."""
         text = spec_text(budget=config.SPLIT_SIGNAL_BUDGET_USD,
                          volume_section=None)
         with tempfile.TemporaryDirectory() as tmp:
@@ -292,6 +360,11 @@ class ClosedTaskExceptionTest(unittest.TestCase):
             any("Оценка объёма и деление" in e for e in errors), errors)
 
     def test_label_without_task_segment_is_never_closed(self):
+        """Ловит мутацию: регэксп `TASK_ID_FROM_PATH` не находит
+        совпадение и код по ошибке трактует «нет совпадения» как «задача
+        закрыта» (например `return True` в ветке `if not match`) — метка
+        вроде голого `SPEC.md`, не несущая пути `tasks/<id>/`, ошибочно
+        считалась бы закрытой задачей."""
         self.assertFalse(guard._closed_before_split_assessment("SPEC.md"))
 
 
