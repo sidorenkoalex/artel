@@ -3,102 +3,196 @@ task: 01M1HNNHDMP2C1AJTH5QF1BTN2
 type: review
 author_role: reviewer
 status: changes_requested
-iteration: 1
+iteration: 2
 schema_version: 3
 ---
 
 # REVIEW: Штатная команда правки зафиксированной планки приёмки
 
-## Фаза A: проверка плана
+Прошлого REVIEW.md в истории ветки нет (`git log -- tasks/.../REVIEW.md`
+— пусто): фактически это первый вердикт по MR, несмотря на запрошенный
+`iteration: 2`. Инкрементальный diff пакета (`00e32aaf...`) не собрался
+(`Invalid symmetric difference expression`) — sha не существует в этом
+репозитории (`git cat-file -t` — ошибка), и REVIEW.md с таким base sha
+никогда не коммитился. Ревью проведено по полному diff `main...HEAD`
+для `orchestrator/`, `tests/`, `docs/codebase-map.md` (`tasks/<id>/*`
+входит в diff `main HEAD` тоже, но это первичные артефакты аналитика/
+разработчика этой же задачи, не сторонний контент).
 
-Покрытие требований/AC в PLAN.md полное (таблицы «Покрытие требований» и
-AC есть, все пункты закрыты шагом 1, регресс — шагами 2-3). Размер шага 1
-(один модуль `orchestrator/amend.py`) — проверяемая единица, не «сделать
-всё». Подход не противоречит конвенциям (SQL остаётся в store.py,
-`lease.run_locked` — тот же приём, что `answer.cmd_answer`).
+## Фаза A: гейт плана
 
-Однако ключевая техническая посылка подхода не подтверждается кодом:
-PLAN.md («Подход», шаг 3) заявляет, что песочница приёмочных тестов
-использует «тот же рецепт, что `LockTest.enter_in_dev` в
-`tests/test_acceptance_tests_flow.py`». Это не так — `LockTest` (после
-A7) работает с ОДНИМ репозиторием без отдельного worktree, коммитит
-`tasks/<id>/` на явно заведённую артефактную ветку пульта и вручную
-имитирует создание кодовой ветки задачи (`self.code_branch`) ПЕРЕД тем,
-как в неё что-то писать. Песочница этой задачи (`_sandbox.py`,
-`AmendSandbox`) вместо этого использует `RealGitSandbox` + `catalog.
-cmd_new` и сразу пишет в `workspace.path(TASK) / "tasks" / TASK`, ни разу
-не вызывая `workspace.ensure`/не создавая кодовую ветку — то есть
-опирается на ДОГЕНЕРАЛИЗОВАННОЕ (до-A7) поведение `cmd_new`, которое
-после мержа A7 в эту ветку (коммит `3d79a14`) в системе уже не
-действует. Возможное объяснение — PLAN.md/песочница написаны ДО мержа
-A7 в эту ветку, и после «подтяжки main» (`3d79a14`, разрешение
-конфликтов + `tests/` 1323 OK) collateral-эффект на СОБСТВЕННЫЙ
-приёмочный набор этой задачи не был перепроверен. См. замечание R1-F1 —
-это не только дефект плана, но и подтверждённый исполнением дефект кода
-песочницы (Фаза B).
+1. Покрытие требований — таблица PLAN.md полна, каждое требование и
+   каждый AC сведены к шагу. OK.
+2. Шаги — единица размера MR разумна (один модуль + регистрация +
+   тесты + фикстура). OK.
+3. Подход не конфликтует с конвенциями — учтена ревизия после A7
+   (коммит на артефактную ветку, `--untracked-files=all`), обоснованно.
+   НО: подход целиком построен на допущении «`tasks/<id>/` НЕ отслеживается
+   кодовой веткой» (докстринг `amend.py:16-19`, «Подход» в PLAN.md) —
+   это допущение фактически ложно для ЭТОЙ ЖЕ задачи (см. Замечание
+   R2-F1) и, судя по `git ls-tree main -- tasks/`, ещё для минимум
+   десятка задач в main (`T001`, `T003`..`T012`,
+   `01M1GCHKG8DDK4DCZWCE3DYKWC`, `01M1GHZTX9YEPF0TY46QWZAGD8`,
+   `01M1GJ3ZP1YGG5QRB6FQ44NN8D`, `01M1GS5HZ1JXFGKVR95HEW0AEZ`,
+   `01M1GV6H5DDDCWW4G3GW1D3A1X`, `01M1H186VEVG6NF40YKH1338MD`,
+   `01M1H224X5A8W159MKF1Q24R5Y`, `01M1K7KP0D8ZKRM9KTE75DCCYR`,
+   `01M1KCJGN61QT1M0PZKGMVA86Y`). PLAN не рассматривает этот случай ни
+   в «Подходе», ни в «Рисках» — блокирующий пробел, см. Замечание R2-F1.
 
 ## Соответствие SPEC
 
 | Требование | Вердикт | Комментарий |
 |---|---|---|
-| 1 (коммит, лок, журнал sha+reason) | реализовано | `_cmd_amend_tests` (orchestrator/amend.py:107-152); юнит-тестами покрыты хелперы, но сквозной приёмочный тест AC-1 сейчас не проходит из-за R1-F1 (фикстура, не логика команды) |
-| 2 (три именованных отказа + лок-не-стоял) | реализовано | AC-2/AC-3/AC-4/AC-5 в коде есть; сквозная проверка блокирована R1-F1 |
-| 3 (журнал — признаваемое основание, без ссылки на ADR) | реализовано | коммит формируется командой, ADR не требуется в сообщении |
-| 4 (метка «правка планки», отчётность, порог/алерт) | реализовано | `AMEND_ACTION`, `report._all_steps` без нового кода, `alerts.raise_alert`; юнит-тесты окна/счётчика зелёные (tests/test_amend.py) |
-| 5 (не оценивает существо, не запускает агентов) | реализовано | нет обращений к `runner.spawn_agent`/оценке диффа |
-| 6 (обязательный прогон, маркер красноты, итог в журнале) | реализовано технически | `acceptance.run` + `guard.scan_redness_markers`, `_run_summary`; сквозная проверка AC-10/AC-11 блокирована R1-F1 |
+| 1 (коммит на артефактную ветку, лок, журнал sha+reason) | не так | Коммит идёт с `disk`-снимком, который систематически теряет содержимое ТРЕКНУТЫХ файлов `acceptance_tests/` — реальная правка Оператора может не попасть в коммит вовсе, лок при этом всё равно двигается (R2-F1). |
+| 2 (три именованных отказа + лок не стоял) | реализовано не так | AC-2 («нет изменений») построена на том же сломанном снимке — не срабатывает как надо в трекнутом сценарии (R2-F1); AC-3/AC-4/AC-5 — OK. |
+| 3 (журнал — признаваемое основание) | OK | `commit_message`/`detail` содержат `reason`, ссылка на ADR не требуется. |
+| 4 (метка «правка планки», отчётность, порог/алерт) | OK | `AMEND_ACTION` как `action` журнала — отличимо; окно/порог реализованы в `amend.py:168-190`, `WINDOW_SIZE=5`/`WINDOW_THRESHOLD=1` соответствуют ANSWER-1 варианту B. |
+| 5 (не оценивает существо, не запускает агентов) | OK | Ни один агентский путь не вызывается. |
+| 6 (обязательный прогон, маркер красноты, итог в журнале) | OK | `acceptance.run`/`guard.scan_redness_markers`/`_run_summary` — на месте. |
+
+| AC | Вердикт |
+|---|---|
+| AC-1 | реализовано не так (R2-F1) |
+| AC-2 | реализовано не так (R2-F1) |
+| AC-3 | OK (`--untracked-files=all`, проверено вручную) |
+| AC-4 | OK |
+| AC-5 | OK |
+| AC-6 | OK |
+| AC-7 | OK |
+| AC-8 | OK (существующий `report`, без нового кода) |
+| AC-9 | OK (window/threshold логика, юнит-тесты `LockedWindowTest`/`AmendEventsInWindowTest`) |
+| AC-10 | OK |
+| AC-11 | OK |
+| AC-12 | OK |
+| AC-13 | OK — `1331 passed, 408 subtests passed` (полный набор), `Ran 14 tests ... OK` (планка задачи), регресса нет |
 
 ## Замечания
 
-- **blocker** — `tasks/01M1HNNHDMP2C1AJTH5QF1BTN2/acceptance_tests/_sandbox.py:230-273` (`AmendSandbox.setUp`/`enter_in_dev`) — приёмочный набор этой же задачи (единственное сквозное доказательство AC-1..AC-12) фактически НЕ ПРОХОДИТ на текущем HEAD ветки. Воспроизведено исполнением:
-  `python3 -m unittest discover -s tasks/01M1HNNHDMP2C1AJTH5QF1BTN2/acceptance_tests -v` → `Ran 14 tests ... FAILED (failures=1, errors=13)`.
-  Причина: после мержа A7 в эту ветку (`3d79a14`) `catalog.cmd_new` больше не заводит worktree/кодовую ветку задачи автоматически (см. докстринг `catalog.cmd_new`, требование A7 №2, и докстринг `LockTest` в `tests/test_acceptance_tests_flow.py`: «cmd_new больше не заводит worktree/кодовую ветку задачи... код задачи заводится явно»). `AmendSandbox.setUp` (строка 230) вызывает `catalog.cmd_new`, затем сразу вычисляет `self.tdir = workspace.path(self.TASK) / "tasks" / self.TASK` (строка 235) и в `enter_in_dev` (строка 270) пишет в этот путь `SPEC.md` — ни разу не вызвав `workspace.ensure(self.TASK, branch)` (или эквивалент — заведение кодовой ветки/worktree, как это вручную делает `LockTest.setUp`). Каталог физически не существует → `FileNotFoundError` на первой же попытке записи. Затронуты все тесты, которые доходят до `enter_in_dev()`: test_ac1, test_ac2, test_ac3, test_ac5, test_ac6, test_ac7, test_ac8, test_ac9, test_ac10 (оба метода), test_ac11, test_ac12 (оба метода) — 13 из 14.
-  Предложение: в `AmendSandbox.setUp` перед первой записью в `self.tdir` явно завести кодовую ветку/worktree задачи — либо вызвать `workspace.ensure(self.TASK, t["branch"])` (если `amend.py` действительно ожидает `tasks/<id>/acceptance_tests/` в worktree кодовой ветки — что, судя по production-коду `amend.py:120` (`workspace.ensure(task_id, t["branch"])`), верно и для собственно команды), либо взять рецепт `LockTest.setUp` целиком (явное `git checkout -b <code_branch>` + коммит фиктивного файла + возврат на артефактную/main-ветку) — какой из двух путей ближе к реальному потоку роли-разработчика, решает исполнитель, но фикстура обязана давать зелёный прогон.
+- **blocker** — `orchestrator/amend.py:119-144` (`_tests_snapshot`),
+  `amend.py:223-234` (сверка AC-2 на этом снимке), `amend.py:254`
+  (коммит именно этого снимка в артефактную ветку) — снимок диска берёт
+  ТОЛЬКО untracked-файлы (`git ls-files --others --exclude-standard`),
+  но `tasks/<id>/acceptance_tests/` реально ТРЕКНУТ кодовой веткой для
+  этой же самой задачи (проверено: `git ls-files
+  tasks/01M1HNNHDMP2C1AJTH5QF1BTN2/acceptance_tests/` в рабочем дереве
+  задачи выдаёт все 14 файлов как tracked) и ещё минимум для десятка
+  задач в main (список — в «Фаза A» выше). Живая проверка прямо в этом
+  дереве:
+  `python3 -B -c "from orchestrator import amend; from pathlib import Path; print(len(amend._tests_snapshot(Path('.'), 'tasks/01M1HNNHDMP2C1AJTH5QF1BTN2/acceptance_tests')))"`
+  — `0`, при этом `_artifact_tests_snapshot(...)` для той же задачи
+  возвращает `14`. Последствие двойное: (а) AC-2 «нет изменений»
+  сравнивает `disk={}` c непустым `baseline` — они НИКОГДА не равны для
+  такой задачи, отказ «нечего фиксировать» не сработает, даже если
+  Оператор ничего не менял; (б) если Оператор реально отредактировал
+  содержимое уже трекнутого файла (обычный случай правки существующего
+  теста — а не добавление нового файла), `git status` это увидит (не
+  «outside»), но `_tests_snapshot` — нет: `commit_files(task_id,
+  disk={}, ...)` уходит с ПУСТЫМ словарём файлов, `write_commit`
+  (`artifact_branch.py:39-99`) при пустом `files` делает `read-tree
+  parent` без единого `update-index`, получает дерево, ПОБАЙТНО
+  идентичное родителю, и всё равно возвращает новый (непустой) sha
+  коммита — т.е. `tests_locked_sha` сдвигается, журнал пишет «успех», а
+  реальная правка Оператора в артефактную ветку не попадает вовсе.
+  Ровно класс инцидента 03.09 (необнаруженная опечатка/потерянная
+  правка), который эта задача должна была устранить, воспроизводится
+  под конкретным, действительно наступающим условием. Тестовый гарнитур
+  не ловит это структурно: `RealGitSandbox`/`AmendSandbox`
+  (`tests/sandbox.py:499`, `tasks/.../acceptance_tests/_sandbox.py:229`)
+  и все сценарии `TestsSnapshotAndMaterializeTest`/
+  `AmendThenReviewGateTest` пишут правку Оператора ТОЛЬКО прямой
+  записью на диск (`Path.write_text`) без единого `git add`/`commit` в
+  кодовую ветку worktree — то есть всегда untracked по построению,
+  сценарий «файл уже трекнут в кодовой ветке» ни разу не
+  воспроизведён. Предложение: `_tests_snapshot` обязана видеть и
+  модифицированные ТРЕКНУТЫЕ файлы — например, объединить `git
+  ls-files --others --exclude-standard` с `git diff --name-only
+  <rel_tests_dir>`/`git status --porcelain` по тому же каталогу (тот же
+  источник, что уже использует `_worktree_changed_paths`, который эту
+  проблему не имеет), и добавить в `TestsSnapshotAndMaterializeTest`
+  сценарий, где `acceptance_tests/` предварительно закоммичена В
+  КОДОВУЮ ветку (`self.git("add", ...)`/`self.git("commit", ...)`), а
+  затем отредактирована — ровно состояние, в котором реально находится
+  эта же задача.
 
-- **blocker** — `tasks/01M1HNNHDMP2C1AJTH5QF1BTN2/acceptance_tests/_sandbox.py:50-57` (`BASELINE_COMMANDS`) — снимок команд диспетчера устарел относительно текущего HEAD: не содержит `"pin-update"`, которая уже присутствует в таблице `orchestrator/artel.py::main` (внесена A7, тоже пришла мержем `3d79a14`). Из-за этого `discover_amend_command_name()` видит ДВЕ новые команды (`{"amend-tests", "pin-update"}`) вместо одной и падает `AssertionError`. Воспроизведено исполнением — единственный тест, доходящий до этой точки без R1-F1 (у него нет `enter_in_dev()`):
-  `python3 -m unittest tasks.01M1HNNHDMP2C1AJTH5QF1BTN2.acceptance_tests.test_ac4_lock_not_set_refuses` → `AssertionError: в таблице диспетчера появилось больше одной новой команды: ['amend-tests', 'pin-update']`.
-  После исправления R1-F1 эта же ошибка проявится во ВСЕХ 14 тестах (сейчас 13 из них не долетают до неё только потому, что раньше падают в `enter_in_dev`). Предложение: добавить `"pin-update"` (и вообще сверить полный текущий список команд `orchestrator/artel.py::main` на момент HEAD этой ветки) в `BASELINE_COMMANDS`.
-
-Обе находки — один класс («приёмочная песочница задачи не сверена с состоянием ветки после подтяжки A7», коммит `3d79a14`, где `tests/` перепроверены, а `tasks/01M1HNNHDMP2C1AJTH5QF1BTN2/acceptance_tests/` — нет). Юнит-тесты `tests/test_amend.py` (17/17 OK) и логика самой команды `orchestrator/amend.py` при чтении не вызывают подобных сомнений — обе находки локализованы в тестовой песочнице задачи, не в production-коде.
+- **major** — `tests/test_amend.py:44,50,64,77,84,90,95,125,138,151,167,
+  201,207,220,239,250,255,335,368,371,375,378` (все 22 тестовых метода
+  файла) — ни один не несёт докстринг с заявкой `Ловит мутацию: …`,
+  обязательной для нового/изменённого теста
+  (`skills/test-authoring.md:45-54`, review-checklist п.3: «сверяй тест
+  С НЕЙ ... заявки нет вовсе → замечание»). У методов нет докстрингов
+  вовсе (ни сценария, ни наблюдаемого свойства, ни заявленной мутации).
+  Последствие: ревью следующей итерации (и ревью любых будущих правок
+  этого файла) не может сверить тест с заявленной чувствительностью —
+  только гадать по имени метода, что противоречит и «Докстринг —
+  сценарий, не пересказ имени» той же секции скила. Предложение:
+  добавить каждому методу докстринг вида «<сценарий>. Ловит мутацию:
+  <конкретная правдоподобная поломка>» — например, для
+  `test_parses_modified_and_untracked_paths` — «правка Оператора
+  смешана с untracked файлом в выводе `git status --porcelain`.
+  Ловит мутацию: если код перестанет резать первые 3 символа строки
+  (`XY `) или начнёт складывать старую/новую сторону переименования
+  вместе».
 
 ## Реестр замечаний
 
 | id | статус | файл/строка | суть | последствие | решение |
 |---|---|---|---|---|---|
-| R1-F1 | open | tasks/01M1HNNHDMP2C1AJTH5QF1BTN2/acceptance_tests/_sandbox.py:230-273 | `AmendSandbox` не заводит кодовую ветку/worktree задачи (пост-A7 `cmd_new` этого не делает сама) перед записью в `self.tdir` | 13 из 14 приёмочных тестов задачи падают `FileNotFoundError`, AC-1..AC-3, AC-5..AC-12 фактически не проверены сквозным прогоном | завести worktree/кодовую ветку явно в `setUp`/`enter_in_dev` (напр. `workspace.ensure`) до первой записи в `self.tdir` |
-| R1-F2 | open | tasks/01M1HNNHDMP2C1AJTH5QF1BTN2/acceptance_tests/_sandbox.py:50-57 | `BASELINE_COMMANDS` не включает `"pin-update"`, уже существующую в диспетчере после мержа A7 | `discover_amend_command_name()` падает `AssertionError` («больше одной новой команды») на любом тесте, реально доходящем до вызова команды; подтверждено на test_ac4 | добавить `"pin-update"` (и сверить полный список) в `BASELINE_COMMANDS` |
+| R2-F1 | open | orchestrator/amend.py:119-144,223-234,254 | `_tests_snapshot` видит только untracked-файлы, теряет правки уже трекнутых | AC-1/AC-2 не работают для задач, чей `tasks/<id>/acceptance_tests/` трекнут кодовой веткой (в т.ч. для этой самой задачи) — лок двигается без реального коммита правки | расширить снимок на модифицированные трекнутые файлы + регресс-тест на трекнутом сценарии |
+| R2-F2 | open | tests/test_amend.py (22 метода, список выше) | ни один тест не несёт докстринг «Ловит мутацию: …» | ревью не может сверить чувствительность теста с заявкой (test-authoring.md) | добавить докстринги с заявленной мутацией каждому методу |
 
 ## Вердикт
 
-changes_requested — исправить R1-F1 и R1-F2 (приёмочная песочница
-задачи), затем прогнать `tasks/01M1HNNHDMP2C1AJTH5QF1BTN2/acceptance_tests/`
-и приложить результат («Проверено исполнением» следующей итерации).
-Production-код `orchestrator/amend.py`/`orchestrator/artel.py` и юнит-тесты
-`tests/test_amend.py` при чтении и прогоне нареканий не вызвали — после
-починки фикстуры ожидаю быстрое схождение, если сквозной прогон не
-вскроет новых дефектов уже в самой команде.
+changes_requested — 1 blocker (R2-F1), 1 major (R2-F2). Список замечаний
+выше исчерпывающий, переделывать всё не нужно: точечная правка
+`_tests_snapshot` + регресс-тест на трекнутом сценарии, плюс докстринги
+к существующим 22 методам `tests/test_amend.py`.
 
 ## Проверено исполнением
 
-- `python3 -m unittest tests.test_amend -v` — 17 тестов, все `OK`.
-- `python3 -m unittest discover -s tasks/01M1HNNHDMP2C1AJTH5QF1BTN2/acceptance_tests -v` — `Ran 14 tests in 4.210s`, `FAILED (failures=1, errors=13)` (см. R1-F1/R1-F2).
-- `python3 -m unittest tasks.01M1HNNHDMP2C1AJTH5QF1BTN2.acceptance_tests.test_ac1_successful_amend_commits_locks_journals -v` — изолированный прогон одного файла, тот же `FileNotFoundError` (не артефакт совместного discover-прогона).
-- `python3 -m unittest tasks.01M1HNNHDMP2C1AJTH5QF1BTN2.acceptance_tests.test_ac4_lock_not_set_refuses -v` — `AssertionError` про `BASELINE_COMMANDS` (R1-F2), отдельно от R1-F1.
-- Чтение сигнатур `store.update_task`/`store.journal`/`store.all_tasks`/`store.task_steps`/`store.resolve_task_id`/`store.get_task`/`store.open_alerts`, `alerts.raise_alert`, `gitcmd.in_repo`/`head_sha`, `workspace.ensure`/`path`, `lease.run_locked`, `acceptance.run`, `guard.scan_redness_markers`, `report._all_steps` — все вызовы в `orchestrator/amend.py` и `tests/test_amend.py` соответствуют реальным сигнатурам.
-- Сверка `tests_locked_sha=` конвенции (`store.update_task` без `updated_at`) с существующим вызывающим местом `orchestrator/fsm_advance.py:401` — совпадает, не отклонение.
-- `git log -- tests/test_new_argv_parsing.py` / чтение файла — подтверждено, что «Ловит мутацию:»-докстринги в проекте требуются для `acceptance_tests/` (test-authoring), а не для обычных юнит-тестов `tests/*.py`; отсутствие таких докстрингов в `tests/test_amend.py` — не отклонение от конвенции.
+- `git checkout -- tasks/01M1HNNHDMP2C1AJTH5QF1BTN2/` — восстановлен
+  каталог задачи, пропавший в рабочем дереве на старте сессии (тот же
+  класс, что и в предыдущих итерациях; не переписывался).
+- `git log --oneline -- tasks/01M1HNNHDMP2C1AJTH5QF1BTN2/REVIEW.md` —
+  пусто: прошлого REVIEW.md в истории нет, sha пакета `00e32aaf...` не
+  существует в репозитории (`git cat-file -t` — ошибка) — ревью
+  проведено по полному `git diff main HEAD` для затронутого кода.
+- `git ls-files tasks/01M1HNNHDMP2C1AJTH5QF1BTN2/acceptance_tests/` (из
+  рабочего дерева этой же задачи, `config.WORKTREES/<id>`, — той самой,
+  что использует `workspace.ensure` в `amend.py`) — все 14 файлов
+  трекнуты кодовой веткой, не untracked.
+- `python3 -B -c "from orchestrator import amend; from pathlib import
+  Path; snap=amend._tests_snapshot(Path('.'),
+  'tasks/01M1HNNHDMP2C1AJTH5QF1BTN2/acceptance_tests');
+  base=amend._artifact_tests_snapshot('01M1HNNHDMP2C1AJTH5QF1BTN2',
+  'tasks/01M1HNNHDMP2C1AJTH5QF1BTN2/acceptance_tests'); print(len(snap),
+  len(base))"` — `0 14`: живое, без побочных эффектов (только чтение,
+  `cmd_amend_tests`/мутирующие функции не вызывались) подтверждение
+  R2-F1 на реальном состоянии этой задачи.
+- `grep -n "Ловит мутацию" tests/test_amend.py` — пусто (0 совпадений
+  на 22 тестовых метода) — подтверждение R2-F2.
+- `python3 -B -m pytest tests/test_amend.py -q` — `22 passed in 3.07s`.
+- `python3 -B -m unittest discover -s
+  tasks/01M1HNNHDMP2C1AJTH5QF1BTN2/acceptance_tests -p 'test_*.py'` —
+  `Ran 14 tests ... OK`.
+- `python3 -B -m pytest tests/ -q` (полный набор) — `1331 passed, 408
+  subtests passed in 140.32s`, без падений.
+- `python3 -B scripts/codebase_map.py` (регенерация, для сверки с PLAN
+  шагом 6) — изменилась только строка `built_at_sha` (`952b1b2...` ->
+  `391b8a8...`, ожидаемый дрейф CI-джоба, не дефект); содержимое карты
+  без этой строки идентично закоммиченному — правка отменена
+  (`git checkout -- docs/codebase-map.md`), REVIEW не мутирует чужие
+  файлы.
+- Рабочее дерево на конец ревью — чистое (`git status --short` пусто),
+  кроме нового `tasks/01M1HNNHDMP2C1AJTH5QF1BTN2/REVIEW.md`.
 
 ## Предложения системе
 
-- `tasks/<id>/acceptance_tests/` песочницы, построенные поверх
-  `RealGitSandbox`/`catalog.cmd_new`, стоит явно предупреждать (в
-  `templates/`/skills для test_author) о пост-A7 поведении `cmd_new`
-  (не заводит кодовую ветку/worktree сама) — иначе класс дефекта
-  R1-F1 будет повторяться в каждой задаче, чья песочница написана по
-  аналогии со старыми (до-A7) приёмами.
-- «Подтяжка main в ветку задачи» (conventions-core уже фиксирует
-  регенерацию codebase-map при такой подтяжке) стоит расширить явным
-  напоминанием прогнать СОБСТВЕННЫЙ `tasks/<id>/acceptance_tests/`
-  задачи, не только `tests/` — оба найденных дефекта (R1-F1, R1-F2)
-  возникли именно потому, что после `3d79a14` был перепроверен только
-  общий набор.
+- Класс «PLAN обосновывает подход допущением про A7 (`tasks/<id>/`
+  всегда untracked в кодовой ветке), не сверив его с фактическим
+  состоянием СВОЕЙ ЖЕ задачи» — при живом расследовании выяснилось, что
+  минимум десяток задач в main (включая саму `01M1H224X5A8W159MKF1Q24R5Y`
+  — задачу A7!) несут `tasks/<id>/` трекнутым в кодовой ветке. Стоит
+  явно зафиксировровать в `conventions-core`/A7-скиле: «untracked
+  tasks/<id>/» — свойство НОВЫХ задач post-A7, не универсальный
+  инвариант; код, который на него полагается, обязан либо проверить
+  факт (git ls-files), либо явно обработать оба случая.
