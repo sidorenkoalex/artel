@@ -1,13 +1,14 @@
-"""Юнит-тесты `orchestrator/answer.py` (SPEC T075): счётчик номера
-ANSWER-n.md, генерация guard-валидного документа, отказы `answer` вне
-состояния escalated и на нечитаемом файле ответа.
+"""Юнит-тесты `orchestrator/answer.py` (SPEC T075, SPEC
+01M1KT0792125J9ZNJNZJ86E9Q требование 2): счётчик номера ANSWER-n.md,
+генерация guard-валидного документа, отказы `answer` вне состояния
+escalated и на нечитаемом файле ответа.
 
-Happy path (создание, коммит, авторство, журнал) уже покрыт приёмочным
-тестом AC-2 (`tasks/T075/acceptance_tests/test_ac2_answer_command.py`,
-песочница `RealPultGitTest` с настоящим git) — здесь только то, что он
-не проверяет: чистые функции модуля и отказы по предусловиям.
+Happy path (создание, коммит в артефактную ветку, журнал) — приёмочные
+тесты AC-3/AC-4 задачи 01M1KT0792125J9ZNJNZJ86E9Q (`tasks/
+01M1KT0792125J9ZNJNZJ86E9Q/acceptance_tests/`, песочница
+`RealPultGitTest` с настоящим git) — здесь только то, что они не
+проверяют: чистые функции модуля и отказы по предусловиям.
 """
-import subprocess
 import sys
 import tempfile
 import unittest
@@ -15,7 +16,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from orchestrator import answer, fsm, store, workspace  # noqa: E402
+from orchestrator import answer, fsm, gitcmd, store  # noqa: E402
 from scripts import guard  # noqa: E402
 from tests.test_git_fixation import RealPultGitTest  # noqa: E402
 
@@ -37,25 +38,20 @@ schema_version: 2
 
 class NextAnswerNumberTest(unittest.TestCase):
 
-    def setUp(self):
-        tmp = tempfile.TemporaryDirectory()
-        self.addCleanup(tmp.cleanup)
-        self.tdir = Path(tmp.name)
-
     def test_first_round_is_one(self):
-        self.assertEqual(answer._next_answer_number(self.tdir), 1)
+        self.assertEqual(answer._next_answer_number([]), 1)
 
     def test_uses_max_plus_one_not_count(self):
-        (self.tdir / "ANSWER-1.md").write_text("x", encoding="utf-8")
-        (self.tdir / "ANSWER-3.md").write_text("x", encoding="utf-8")
         self.assertEqual(
-            answer._next_answer_number(self.tdir), 4,
-            "следующий номер — максимум существующих + 1, не счёт файлов")
+            answer._next_answer_number(
+                ["tasks/T001/ANSWER-1.md", "tasks/T001/ANSWER-3.md"]),
+            4, "следующий номер — максимум существующих + 1, не счёт файлов")
 
     def test_non_numeric_suffix_is_ignored(self):
-        (self.tdir / "ANSWER-1.md").write_text("x", encoding="utf-8")
-        (self.tdir / "ANSWER-final.md").write_text("x", encoding="utf-8")
-        self.assertEqual(answer._next_answer_number(self.tdir), 2)
+        self.assertEqual(
+            answer._next_answer_number(
+                ["tasks/T001/ANSWER-1.md", "tasks/T001/ANSWER-final.md"]),
+            2)
 
 
 class AnswerDocumentIsGuardValidTest(unittest.TestCase):
@@ -70,33 +66,12 @@ class AnswerDocumentIsGuardValidTest(unittest.TestCase):
         self.assertIn("МАРКЕР-xyz", text)
 
 
-class _WorktreeAnswerTest(RealPultGitTest):
-    """`answer.py` не входит в состав AC-6 (A7 не генерализует этот файл)
-    — команда `answer` по-прежнему пишет `ANSWER-n.md` в worktree КОДОВОЙ
-    ветки задачи (`workspace.ensure`), тот же класс отставания, что и
-    три WIP-чекпоинта (`tests/test_timeout_checkpoint.py::
-    _WorktreeCheckpointTest`, тем же приёмом здесь). `_escalate()` при
-    этом сеет QUESTIONS.md в АРТЕФАКТНУЮ ВЕТКУ пульта — её (не worktree)
-    читает `fsm_advance.spec_writing` через `artifact_source.resolve`
-    (SPEC T094, требование 10, A7 требование 2 — generic-путь)."""
-
-    def setUp(self):
-        super().setUp()
-        branch = store.get_task(store.db(), self.TASK)["branch"]
-        wt_path, error = workspace.ensure(self.TASK, branch)
-        self.assertIsNone(error, f"worktree не создан: {error}")
-        self.wt = wt_path
-
-    def worktree_task_dir(self) -> Path:
-        d = self.wt / "tasks" / self.TASK
-        d.mkdir(parents=True, exist_ok=True)
-        return d
-
-    def worktree_git(self, *args: str) -> str:
-        res = subprocess.run(["git", "-C", str(self.wt), *args],
-                             capture_output=True, text=True)
-        self.assertEqual(res.returncode, 0, f"git {' '.join(args)}: {res.stderr}")
-        return res.stdout
+class _ArtifactBranchAnswerTest(RealPultGitTest):
+    """`answer` (после SPEC 01M1KT0792125J9ZNJNZJ86E9Q, требование 2)
+    пишет `ANSWER-n.md` плотницки в АРТЕФАКТНУЮ ветку пульта, кодовую
+    ветку/worktree задачи не трогает вовсе — `_escalate()` сеет
+    QUESTIONS.md туда же, тем же приёмом, что читает `fsm_advance.
+    spec_writing` через `artifact_source.resolve`."""
 
     def _escalate(self) -> None:
         self._seed_artifact_branch(
@@ -115,8 +90,13 @@ class _WorktreeAnswerTest(RealPultGitTest):
         f.close()
         return f.name
 
+    def artifact_branch_files(self) -> list:
+        from orchestrator import artifact_branch
+        branch = artifact_branch.branch_name(self.TASK)
+        return gitcmd.ls_tree_files(branch, f"tasks/{self.TASK}") or []
 
-class AnswerCommandRefusalsTest(_WorktreeAnswerTest):
+
+class AnswerCommandRefusalsTest(_ArtifactBranchAnswerTest):
 
     def test_refuses_outside_escalated_state(self):
         self.assertEqual(store.get_task(store.db(), self.TASK)["state"],
@@ -127,7 +107,8 @@ class AnswerCommandRefusalsTest(_WorktreeAnswerTest):
             answer.cmd_answer(self.TASK, answer_file)
 
         self.assertIn("escalated", str(ctx.exception))
-        self.assertFalse((self.worktree_task_dir() / "ANSWER-1.md").exists())
+        self.assertNotIn(f"tasks/{self.TASK}/ANSWER-1.md",
+                         self.artifact_branch_files())
 
     def test_refuses_on_unreadable_answer_file(self):
         self._escalate()
@@ -137,32 +118,27 @@ class AnswerCommandRefusalsTest(_WorktreeAnswerTest):
             answer.cmd_answer(self.TASK, missing)
 
         self.assertIn("не прочитан", str(ctx.exception))
-        self.assertFalse((self.worktree_task_dir() / "ANSWER-1.md").exists())
+        self.assertNotIn(f"tasks/{self.TASK}/ANSWER-1.md",
+                         self.artifact_branch_files())
 
 
-class AnswerCommandStrayFilesTest(_WorktreeAnswerTest):
-    """REVIEW T075 итерация 1, замечание major: `answer` стейджил
-    `tasks/<id>` целиком (`add -A`), а не только новый `ANSWER-n.md` —
-    любая чужая незакоммиченная правка того же (переиспользуемого на
-    протяжении жизни задачи) worktree молча уходила в коммит с
-    сообщением «ответ Оператора». Регресс на этот класс дефекта."""
+class AnswerCommandDoesNotDisturbOtherArtifactsTest(_ArtifactBranchAnswerTest):
+    """Тот же класс дефекта, что REVIEW T075 итерация 1, замечание major
+    (тогда — `add -A` worktree, теперь — плотницкая запись): `answer`
+    обязан коммитить РОВНО `ANSWER-n.md`, ничего больше из уже лежащего
+    в артефактной ветке `tasks/<id>/` (например QUESTIONS.md эскалации)
+    не трогая и не теряя."""
 
-    def test_leftover_uncommitted_file_in_task_dir_is_not_swept_into_the_commit(self):
+    def test_pre_existing_artifact_branch_files_survive_the_answer_commit(self):
         self._escalate()
-        stray = self.worktree_task_dir() / "stray.txt"
-        stray.write_text("чужая незакоммиченная правка\n", encoding="utf-8")
 
         answer.cmd_answer(self.TASK, self._answer_file("Ответ.\n"))
 
-        status = self.worktree_git("status", "--porcelain",
-                                   f"tasks/{self.TASK}")
-        self.assertIn(
-            f"?? tasks/{self.TASK}/stray.txt", status,
-            "answer обязан застейджить и закоммитить только ANSWER-n.md, "
-            "посторонний незакоммиченный файл того же tasks/<id> обязан "
-            "остаться нетронутым")
-        self.assertNotIn("stray.txt", self.worktree_git(
-            "log", "-1", "--name-only", "--format="))
+        files = self.artifact_branch_files()
+        self.assertIn(f"tasks/{self.TASK}/ANSWER-1.md", files)
+        self.assertIn(f"tasks/{self.TASK}/QUESTIONS.md", files,
+                      "answer не имеет права затронуть чужие артефакты "
+                      "той же ветки")
 
 
 if __name__ == "__main__":

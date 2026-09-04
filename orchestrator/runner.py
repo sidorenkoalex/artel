@@ -75,12 +75,28 @@ def step_role(t) -> str | None:
     бы так, будто ТЗ не было вовсе. Иначе (своя ветка уже выписана; ветка
     ещё не создана; git не ответил) — прежнее поведение, диск: тот же
     вырожденный случай, на котором стоит весь стенд заглушек `gitcmd.git`.
+
+    ДОБАВЛЕНО (SPEC 01M1KT0792125J9ZNJNZJ86E9Q, требование 1): проверка
+    выше не видит TZ.md, лежащий в АРТЕФАКТНОЙ ветке пульта
+    (`artifact_source.resolve`) — у задачи, заведённой `cmd_new --tz`
+    после A7, кодовой ветки `t["branch"]` в git ещё нет вовсе (первый шаг
+    роли её ещё не создал), и старая проверка молчит «ТЗ не заведён»,
+    хотя `cmd_new` реально закоммитил TZ.md в артефактную ветку. Читается
+    ПЕРВОЙ, поверх старой проверки (не вместо неё) — задача прежнего
+    флоу, чей TZ.md лежит только в кодовой ветке (AC-2), обязана
+    по-прежнему находиться старым путём ниже.
     """
     role = config.STATE_ROLE.get(t["state"])
     if role is not None:
         return role
     if t["state"] != "spec_writing":
         return None
+    from . import artifact_source
+    artifact_branch_name, foreign = artifact_source.resolve(store.db(), t["id"])
+    if foreign:
+        tz_text, _ = gitcmd.show(artifact_branch_name, f"tasks/{t['id']}/TZ.md")
+        if tz_text is not None:
+            return "analyst"
     branch = t["branch"]
     if gitcmd.on_foreign_branch(branch):
         tz_text, _ = gitcmd.show(branch, f"tasks/{t['id']}/TZ.md")

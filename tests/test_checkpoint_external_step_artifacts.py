@@ -26,6 +26,15 @@ from tests.sandbox import RealGitSandbox  # noqa: E402
 
 TARGET = "extproj"
 
+QUESTIONS_MD = """---
+task: x
+type: questions
+author_role: analyst
+status: draft
+---
+# QUESTIONS
+"""
+
 
 class CommitExternalStepArtifactsTest(RealGitSandbox):
 
@@ -94,6 +103,78 @@ class CommitExternalStepArtifactsTest(RealGitSandbox):
         review_text, _ = gitcmd.show(branch, f"tasks/{self.TASK}/REVIEW.md")
         self.assertEqual(plan_text, "план разработчика")
         self.assertEqual(review_text, "ревью")
+
+    def test_same_role_second_step_drops_a_file_it_no_longer_writes(self):
+        """SPEC 01M1KT0792125J9ZNJNZJ86E9Q, требование 4/AC-6: файл,
+        который сама РОЛЬ больше не пишет на своём следующем шаге,
+        обязан пропасть из артефактной ветки — не путать с файлом ДРУГОЙ
+        роли (тест выше), который переживает чужой автокоммит."""
+        self.write("QUESTIONS.md", QUESTIONS_MD)
+        checkpoint.commit_step_artifacts(store.db(), self.TASK, "analyst")
+        self.assertIn(f"tasks/{self.TASK}/QUESTIONS.md",
+                      self.artifact_branch_files())
+
+        self.task_dir.mkdir(parents=True)
+        self.write("SPEC.md", "спека готова")
+        checkpoint.commit_step_artifacts(store.db(), self.TASK, "analyst")
+
+        files = self.artifact_branch_files()
+        self.assertIn(f"tasks/{self.TASK}/SPEC.md", files)
+        self.assertNotIn(f"tasks/{self.TASK}/QUESTIONS.md", files)
+
+    def test_same_role_deletion_does_not_remove_another_roles_file(self):
+        """Регресс-контроль симметрии для предыдущего теста: удаление,
+        обнаруженное для РОЛИ analyst, не имеет права задеть файл,
+        последний раз тронутый ДРУГОЙ ролью (developer) — иначе фикс
+        AC-6 стал бы той же поломкой, что и `test_second_step_
+        accumulates_onto_the_first_not_replaces_it` ловит для обычного
+        случая."""
+        self.write("PLAN.md", "план разработчика")
+        checkpoint.commit_step_artifacts(store.db(), self.TASK, "developer")
+
+        self.task_dir.mkdir(parents=True)
+        self.write("QUESTIONS.md", QUESTIONS_MD)
+        checkpoint.commit_step_artifacts(store.db(), self.TASK, "analyst")
+
+        self.task_dir.mkdir(parents=True)
+        self.write("SPEC.md", "спека готова")
+        checkpoint.commit_step_artifacts(store.db(), self.TASK, "analyst")
+
+        files = self.artifact_branch_files()
+        self.assertIn(f"tasks/{self.TASK}/SPEC.md", files)
+        self.assertIn(f"tasks/{self.TASK}/PLAN.md", files,
+                      "файл чужой роли не должен пострадать от удаления, "
+                      "обнаруженного для другой роли")
+        self.assertNotIn(f"tasks/{self.TASK}/QUESTIONS.md", files)
+
+    def test_same_role_second_step_in_the_same_state_does_not_drop_an_untouched_file(self):
+        """REVIEW.md итерация 1, замечание R1-F1: та же роль (developer),
+        второй шаг В ТОМ ЖЕ состоянии (auto-цикл `in_dev`/`reject` из
+        `acceptance`) — файл предыдущего шага (PLAN.md, `type: plan`) НЕ
+        переписан на этом шаге, но роль пишет ДРУГОЙ файл в тот же
+        `task_dir` (например, разметку `REVIEW.md` по правилу «Реестр
+        замечаний»). «Последний коммит пути — автокоммит этой же роли»
+        совпадает 1-в-1 с легитимным сценарием QUESTIONS.md (тест выше)
+        — единственное, что их различает, это `type` фронтматтера:
+        PLAN.md не должен исчезнуть, потому что его тип не в списке
+        удаляемых, даже когда роль в это раз его не переписала.
+
+        Ловит мутацию: снятие второго условия («последний коммит пути
+        — автокоммит той же роли» без проверки `type` кандидата ∈
+        `_DELETABLE_ARTIFACT_TYPES`) — тогда PLAN.md пропадает из
+        артефактной ветки на этом шаге."""
+        self.write("PLAN.md", "---\ntask: x\ntype: plan\n---\n# PLAN\n")
+        checkpoint.commit_step_artifacts(store.db(), self.TASK, "developer")
+
+        self.task_dir.mkdir(parents=True)
+        self.write("REVIEW.md", "---\ntask: x\ntype: review\n---\n# REVIEW\n")
+        checkpoint.commit_step_artifacts(store.db(), self.TASK, "developer")
+
+        files = self.artifact_branch_files()
+        self.assertIn(f"tasks/{self.TASK}/REVIEW.md", files)
+        self.assertIn(f"tasks/{self.TASK}/PLAN.md", files,
+                      "файл, не переписанный на повторном шаге ТОЙ ЖЕ "
+                      "роли в ТОМ ЖЕ состоянии, не должен молча исчезать")
 
     def test_binary_file_is_not_lost(self):
         # REVIEW.md T094 итерация 2, замечание 1 (major): раньше

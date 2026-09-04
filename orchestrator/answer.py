@@ -1,32 +1,42 @@
-"""Команда `answer`: канал ответа Оператора на эскалацию (SPEC T075).
+"""Команда `answer`: канал ответа Оператора на эскалацию (SPEC T075,
+SPEC 01M1KT0792125J9ZNJNZJ86E9Q требование 2).
 
 `artel.py answer <id> <файл-с-ответом>` читает текст ответа из файла
-Оператора, создаёт `tasks/<id>/ANSWER-n.md` в worktree задачи (`n` —
-порядковый номер, следующий за уже существующими файлами того же
-префикса) и коммитит его в ветку задачи — Оператор не правит worktree
-руками (требование 2).
+Оператора и коммитит `tasks/<id>/ANSWER-n.md` (`n` — порядковый номер,
+следующий за уже существующими файлами того же префикса) в артефактную
+ветку пульта (`artifact_branch.commit_files`) — плотницки, без чекаута
+(ADR-0012/A7): туда же, откуда его читает возврат из эскалации
+(`fsm._answer_file_count` через `artifact_source.resolve`), а не в
+worktree кодовой ветки задачи, которую эта команда до A7 создавала как
+побочный эффект. Кодовая ветка и рабочее дерево `answer` не трогает
+вовсе (ANSWER-1.md Оператора этой задачи, вариант A вопроса 1: у любой
+задачи после A7 артефактная ветка есть всегда, отдельного пути «прежнего
+флоу» для `answer` не существует).
 
-Коммит НЕ несёт `-c user.name=.../-c user.email=...` (в отличие от
-`catalog.cmd_new`, который явно проставляет служебную identity
-`fixation.FIXATION_AUTHOR_NAME/EMAIL` артефактам, рождающимся из ТЗ):
-ответ — содержательное решение Оператора, не служебный артефакт
-оркестратора, и коммит обязан остаться под его identity (git-конфиг
-или `GIT_AUTHOR_*` окружения вызывающей сессии), тот же довод, что и
-`commit_task_dir` в `tests/test_git_fixation.RealPultGitTest`.
+Идентичность коммита — служебная (`fixation.FIXATION_AUTHOR_*`, дефолт
+`artifact_branch.commit_files`), тем же приёмом, что и автокоммит шага
+(`checkpoint._commit_external_step_artifacts`, «образец» из SPEC
+«Материалы»): плотницкая запись не завязана ни на чей git-конфиг, читать
+identity вызывающей сессии здесь уже нечего.
 """
 import sys
 from pathlib import Path
 
-from . import gitcmd, lease, store, workspace
+from . import artifact_branch, artifact_source, gitcmd, lease, store
 
 
-def _next_answer_number(task_dir: Path) -> int:
-    """Следующий свободный номер `ANSWER-n.md`: максимум существующих + 1,
-    не счёт файлов — второй раунд эскалации после первого ответа обязан
-    получить `ANSWER-2.md`, даже если бы `ANSWER-1.md` когда-то убрали."""
+def _next_answer_number(names) -> int:
+    """Следующий свободный номер `ANSWER-n.md` по списку путей
+    АРТЕФАКТНОЙ ветки задачи (`gitcmd.ls_tree_files`) — максимум
+    существующих + 1, не счёт файлов: второй раунд эскалации после
+    первого ответа обязан получить `ANSWER-2.md`, даже если бы
+    `ANSWER-1.md` когда-то убрали."""
     existing = []
-    for path in task_dir.glob("ANSWER-*.md"):
-        suffix = path.stem[len("ANSWER-"):]
+    for name in names:
+        stem = Path(name).stem
+        if not stem.startswith("ANSWER-"):
+            continue
+        suffix = stem[len("ANSWER-"):]
         if suffix.isdigit():
             existing.append(int(suffix))
     return max(existing, default=0) + 1
@@ -71,33 +81,18 @@ def _cmd_answer(conn, task_id: str, file_path: str) -> None:
     except (OSError, UnicodeDecodeError) as exc:
         sys.exit(f"[{task_id}] файл ответа не прочитан из {file_path}: {exc}")
 
-    wt_path, error = workspace.ensure(task_id, t["branch"])
-    if error is not None:
-        sys.exit(f"[{task_id}] worktree не готов: {error}")
-
-    task_dir = wt_path / "tasks" / task_id
-    task_dir.mkdir(parents=True, exist_ok=True)
-    n = _next_answer_number(task_dir)
-    answer_path = task_dir / f"ANSWER-{n}.md"
-    answer_path.write_text(_answer_document(task_id, n, raw), encoding="utf-8")
-
-    # `add -- <файл>`, НЕ `add -A tasks/<id>`: worktree задачи живёт
-    # дольше одного вызова (`workspace.ensure` его не чистит) и вполне
-    # может нести чужие незакоммиченные правки (упавший на попытке шаг
-    # роли, ручная правка Оператора) — стейджинг обязан захватить только
-    # свежесозданный ANSWER, а не всё, что случайно лежит рядом в
-    # tasks/<id> (REVIEW T075 итерация 1, замечание major).
+    branch, _foreign = artifact_source.resolve(conn, task_id)
+    existing = gitcmd.ls_tree_files(branch, f"tasks/{task_id}") or []
+    n = _next_answer_number(existing)
     rel_answer = f"tasks/{task_id}/ANSWER-{n}.md"
-    added = gitcmd.in_repo(wt_path, "add", "--", rel_answer)
-    if added is None or added.returncode != 0:
-        sys.exit(f"[{task_id}] ANSWER-{n}.md не застейджен: "
-                 f"{added.stderr.strip()[:200] if added is not None else '—'}")
+    text = _answer_document(task_id, n, raw)
     commit_message = f"{task_id}: ANSWER-{n} — ответ Оператора"
-    committed = gitcmd.in_repo(wt_path, "commit", "-q", "-m", commit_message)
-    if committed is None or committed.returncode != 0:
-        sys.exit(f"[{task_id}] коммит ANSWER-{n}.md не сделан: "
-                 f"{committed.stderr.strip()[:200] if committed is not None else '—'}")
+    commit_sha = artifact_branch.commit_files(task_id, {rel_answer: text},
+                                              commit_message)
+    if not commit_sha:
+        sys.exit(f"[{task_id}] {rel_answer} не закоммичен в артефактную "
+                 f"ветку {branch}")
 
-    store.journal(conn, task_id, "operator", "ANSWER создан",
-                 f"tasks/{task_id}/ANSWER-{n}.md")
-    print(f"[{task_id}] {answer_path} создан и закоммичен в ветку {t['branch']}")
+    store.journal(conn, task_id, "operator", "ANSWER создан", rel_answer)
+    print(f"[{task_id}] {rel_answer} создан и закоммичен в артефактную "
+          f"ветку {branch}")
