@@ -13,10 +13,14 @@ tests -q` из корня репозитория. Снимок ссылок во
 
 Дорогой тест: реальный прогон занимает несколько минут — то же
 свойство, что и у самого критерия («весь прогон не трогает ссылки» не
-доказать, не запустив весь прогон). `_util.cleanup_new_refs` в
-`finally` убирает то, что сам прогон завёл нового в НАСТОЯЩЕМ
-репозитории пульта, — тест не имеет права наращивать ту самую утечку,
-которую диагностирует.
+доказать, не запустив весь прогон). ANSWER-4 (REVIEW.md итерация 4,
+R4-F1): тест НЕ убирает за собой расхождение снимков — настоящий
+репозиторий пульта общий на все параллельные сессии, и уборка,
+удалявшая/форс-ресетившая ссылки по признаку «появилась/сдвинулась за
+время прогона», не умела отличить утечку кода этой задачи от настоящей
+чужой ветки, появившейся/сдвинувшейся за те же минуты — риск тихо
+задеть параллельную сессию. При расхождении тест просто падает и
+перечисляет разошедшиеся ссылки в сообщении об ошибке.
 
 Красен до реализации: на сегодняшнем коде `tests/test_review_package.
 py::PreviousVerdictShaTest` заводит задачу через `catalog.cmd_new` без
@@ -50,7 +54,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 from orchestrator import config  # noqa: E402
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from _util import cleanup_new_refs, diff_refs, refs_snapshot  # noqa: E402
+from _util import diff_refs, refs_snapshot  # noqa: E402
 
 FULL_SUITE_TIMEOUT_SECONDS = 1200
 
@@ -70,23 +74,20 @@ class Ac1FullSuiteDoesNotMutateRealRepoTest(unittest.TestCase):
         и тест падает.
         """
         before = refs_snapshot()
-        try:
-            result = subprocess.run(
-                [sys.executable, "-m", "unittest", "discover", "-s", "tests", "-q"],
-                cwd=config.ROOT, capture_output=True, text=True,
-                timeout=FULL_SUITE_TIMEOUT_SECONDS)
-            self.assertIn(
-                result.returncode, (0, 1),
-                f"прогон tests/ не завершился штатно (код {result.returncode}): "
-                f"{result.stderr[-2000:]}")
-            after = refs_snapshot()
-            changed = diff_refs(before, after)
-            self.assertEqual(
-                {}, changed,
-                f"прогон tests/ изменил набор ссылок настоящего репозитория "
-                f"пульта: {changed}")
-        finally:
-            cleanup_new_refs(before, refs_snapshot())
+        result = subprocess.run(
+            [sys.executable, "-m", "unittest", "discover", "-s", "tests", "-q"],
+            cwd=config.ROOT, capture_output=True, text=True,
+            timeout=FULL_SUITE_TIMEOUT_SECONDS)
+        self.assertIn(
+            result.returncode, (0, 1),
+            f"прогон tests/ не завершился штатно (код {result.returncode}): "
+            f"{result.stderr[-2000:]}")
+        after = refs_snapshot()
+        changed = diff_refs(before, after)
+        self.assertEqual(
+            {}, changed,
+            f"прогон tests/ изменил набор ссылок настоящего репозитория "
+            f"пульта: {changed}")
 
 
 if __name__ == "__main__":

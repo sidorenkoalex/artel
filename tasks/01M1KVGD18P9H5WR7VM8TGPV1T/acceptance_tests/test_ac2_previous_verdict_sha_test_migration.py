@@ -35,7 +35,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 from orchestrator import config  # noqa: E402
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from _util import cleanup_new_refs, diff_refs, refs_snapshot  # noqa: E402
+from _util import diff_refs, refs_snapshot  # noqa: E402
 
 
 class Ac2PreviousVerdictShaTestMigrationTest(unittest.TestCase):
@@ -52,23 +52,20 @@ class Ac2PreviousVerdictShaTestMigrationTest(unittest.TestCase):
         репозитории, снимок расходится, тест красный.
         """
         before = refs_snapshot()
-        try:
-            result = subprocess.run(
-                [sys.executable, "-m", "unittest",
-                 "tests.test_review_package.PreviousVerdictShaTest", "-q"],
-                cwd=config.ROOT, capture_output=True, text=True, timeout=120)
-            self.assertIn(
-                result.returncode, (0, 1),
-                f"прогон PreviousVerdictShaTest не завершился штатно "
-                f"(код {result.returncode}): {result.stderr[-2000:]}")
-            after = refs_snapshot()
-            changed = diff_refs(before, after)
-            self.assertEqual(
-                {}, changed,
-                f"PreviousVerdictShaTest изменил ссылки настоящего "
-                f"репозитория пульта: {changed}")
-        finally:
-            cleanup_new_refs(before, refs_snapshot())
+        result = subprocess.run(
+            [sys.executable, "-m", "unittest",
+             "tests.test_review_package.PreviousVerdictShaTest", "-q"],
+            cwd=config.ROOT, capture_output=True, text=True, timeout=120)
+        self.assertIn(
+            result.returncode, (0, 1),
+            f"прогон PreviousVerdictShaTest не завершился штатно "
+            f"(код {result.returncode}): {result.stderr[-2000:]}")
+        after = refs_snapshot()
+        changed = diff_refs(before, after)
+        self.assertEqual(
+            {}, changed,
+            f"PreviousVerdictShaTest изменил ссылки настоящего "
+            f"репозитория пульта: {changed}")
 
 
 if __name__ == "__main__":
