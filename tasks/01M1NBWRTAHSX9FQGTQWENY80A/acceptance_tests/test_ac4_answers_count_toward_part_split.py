@@ -5,7 +5,7 @@ context_package.discipline, и делятся на пронумерованны�
 потолка части.»
 
 `test_ac4_a_large_answer_alone_pushes_the_package_into_numbered_parts` —
-КРАСЕН до реализации: `review.review_package` сегодня вообще не читает
+Красен до реализации: `review.review_package` сегодня вообще не читает
 ANSWER-n.md (см. докстринг test_ac1) — крупный ANSWER-файл сегодня никак
 не мог бы раздуть тело пакета сверх `config.CONTEXT_PART_MAX_BYTES` и
 вызвать деление на части: остальные компоненты фикстуры (SPEC/PLAN/
@@ -13,8 +13,8 @@ diff/stat из `AnswerInReviewPackageSandbox`) сами по себе далек
 потолка части.
 
 `test_ac4_without_the_large_answer_the_same_task_does_not_split` —
-ЗЕЛЁНЫЙ с рождения (контрольная пара к первому, без ANSWER вовсе —
-поведение не зависит от реализации этой задачи).
+Зелёный с рождения: контрольная пара к первому, без ANSWER вовсе —
+поведение не зависит от реализации этой задачи.
 
 Потолок — `config.CONTEXT_PART_MAX_BYTES`, не литерал: тест берёт значение
 динамически (см. skill test-authoring, «Предпосылки о значениях
