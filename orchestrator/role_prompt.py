@@ -97,6 +97,6 @@ def mission_brief_package(conn, task_id: str, t, role: str):
         # и чтение не тратится зря (T029, SPEC требования 1, 2, 3).
         prev_sha = (review.previous_verdict_sha(conn, task_id)
                    if iteration > 1 else "")
-        package = review.review_package(task_id, t["title"], t["branch"],
+        package = review.review_package(conn, task_id, t["title"], t["branch"],
                                         iteration=iteration, prev_sha=prev_sha)
     return mission, brief_text, package
