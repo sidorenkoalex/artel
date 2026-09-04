@@ -35,7 +35,7 @@ CREATE TABLE IF NOT EXISTS tasks (
   tests_locked_sha TEXT, is_canary INTEGER DEFAULT 0, paused INTEGER DEFAULT 0,
   answer_baseline INTEGER, verifying_attempts INTEGER DEFAULT 0,
   draft_mr_created INTEGER DEFAULT 0,
-  diff_bytes INTEGER, split_assessment TEXT,
+  diff_bytes INTEGER, split_assessment TEXT, zones TEXT,
   created_at TEXT, updated_at TEXT
 );
 CREATE TABLE IF NOT EXISTS steps (
@@ -209,6 +209,11 @@ def migrate(conn: sqlite3.Connection) -> None:
     # читает `report._DASH` для обоих случаев одинаково.
     add_column(conn, "tasks", "diff_bytes", "INTEGER")
     add_column(conn, "tasks", "split_assessment", "TEXT")
+    # Значение frontmatter-поля `zones:` SPEC, сохранённое при `approve`
+    # на `spec_gate` (01M1NKVPD2A79PQ6K0JVV1B2Q1, AC-3) — то же поле,
+    # что механика «Оценка объёма и деление» уже структурирует для
+    # сигналов деления (SPEC, требование 1).
+    add_column(conn, "tasks", "zones", "TEXT")
     conn.executescript(
         "CREATE TABLE IF NOT EXISTS task_counters ("
         "  target TEXT PRIMARY KEY, next_number INTEGER NOT NULL);")

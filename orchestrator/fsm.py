@@ -639,6 +639,11 @@ def _cmd_approve(conn, task_id: str, sha: str | None, sid: str) -> None:
             meta = yamlmini.frontmatter(spec_text) or {}
         else:
             meta = artifacts.frontmatter(config.TASKS / task_id / "SPEC.md")
+        # Значение zones (01M1NKVPD2A79PQ6K0JVV1B2Q1, AC-3) сохраняется тем
+        # же моментом входа approve на spec_gate, что и budget/split_
+        # assessment рядом — meta уже прочитана выше, поле отсутствует у
+        # SPEC старых версий (`meta.get` даёт None, колонка тогда NULL).
+        store.update_task(conn, task_id, zones=meta.get("zones"))
         skip_reason = meta.get("skip_tests")
         if skip_reason or not guard.requires_ac_markup(meta):
             detail = (f"тесты пропущены (skip_tests): {skip_reason}"
