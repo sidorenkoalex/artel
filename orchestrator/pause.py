@@ -16,6 +16,11 @@
 параллельных задач — по тому же доводу, что и `orchestrator/
 release.py::cmd_release`: они не мутируют шаг задачи, только пометку.
 
+`cmd_pause` (SPEC 01M1NEEYSP0QWPMXHG0BK591M7) печатает предупреждение
+ДО выполнения, если задачу прямо сейчас ведёт ЧУЖАЯ живая сессия
+(`lease.warn_foreign_live`) — предупреждение только информирует, само
+выполнение `pause` не блокирует и подтверждения не запрашивает.
+
 `cmd_pause_now` (SPEC T074) — жёсткий вариант поверх того же модуля:
 ставит ту же пометку (требование 1), но, если задача сейчас держит
 живой lease на этой же машине (роль агентная, `store.lease_row`
@@ -32,7 +37,8 @@ import socket
 import time
 from pathlib import Path
 
-from . import agent_log, checkpoint, liveness, spend, store
+from . import agent_log, checkpoint, lease, liveness, spend, store
+from .session import resolve_session_id
 
 # Опрос после SIGTERM перед эскалацией до SIGKILL (требование 1: «процесс
 # агента корректно завершается» — короткая пауза на штатное завершение,
@@ -67,9 +73,15 @@ def cmd_pause(task_id: str) -> None:
     до `update_task`/журнала — иначе `pause <префикс>` печатала бы успех,
     физически не меняя ни одной строки (REVIEW T094 итерация 1, замечание
     1).
+
+    Предупреждение о чужом живом lease (SPEC 01M1NEEYSP0QWPMXHG0BK591M7,
+    требование 1) печатается ЗДЕСЬ же, до веток "уже на паузе"/пометки —
+    факт, что задачу ведёт другая сессия, верен независимо от того,
+    окажется ли сам `pause` no-op'ом.
     """
     conn = store.db()
     task_id = store.resolve_task_id(conn, task_id)
+    lease.warn_foreign_live(conn, task_id, resolve_session_id())
     t = store.get_task(conn, task_id)
     if is_paused(t):
         print(f"[{task_id}] уже на паузе — pause ничего не делает")

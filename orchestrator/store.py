@@ -30,7 +30,8 @@ CREATE TABLE IF NOT EXISTS tasks (
   id TEXT PRIMARY KEY, title TEXT, state TEXT, branch TEXT,
   review_iters INTEGER DEFAULT 0, accept_rejects INTEGER DEFAULT 0,
   reviewed_iter INTEGER DEFAULT 0, escalated_from TEXT,
-  budget_usd REAL, spent_usd REAL DEFAULT 0, budget_source TEXT,
+  budget_usd REAL, spent_usd REAL DEFAULT 0, spent_estimate_usd REAL DEFAULT 0,
+  budget_source TEXT,
   target TEXT DEFAULT '{config.DEFAULT_TARGET}', fixed_sha TEXT,
   tests_locked_sha TEXT, is_canary INTEGER DEFAULT 0, paused INTEGER DEFAULT 0,
   answer_baseline INTEGER, verifying_attempts INTEGER DEFAULT 0,
@@ -203,6 +204,14 @@ def migrate(conn: sqlite3.Connection) -> None:
     # ровно один раз за жизненный цикл задачи — колонка, не запрос к
     # GitHub на каждый вход в in_dev (orchestrator/github_adapter.py).
     add_column(conn, "tasks", "draft_mr_created", "INTEGER DEFAULT 0")
+    # Верхняя оценка неучтённой стоимости шага (SPEC
+    # 01M1NWCM3TDY0YABEKE8DYQA1C, требование 1): накопительная, отдельная от
+    # `spent_usd` — таймаут шага роли БЕЗ курса токенов (`config.TOKEN_RATES`)
+    # прибавляет сюда именованную константу вместо точной суммы (требование
+    # 3). DEFAULT 0 — строки старше этой задачи не несут неучтённой
+    # стоимости задним числом (требование 9: пересчёт прошлых шагов не
+    # производится).
+    add_column(conn, "tasks", "spent_estimate_usd", "REAL DEFAULT 0")
     # Снимок объёма на входе в merge_gate (tasks/01M1KS8K9RXWHX2PW3ZKB0P903,
     # ANSWER-1/ANSWER-2): NULL — задача закрыта до появления колонки, либо
     # снимок не удался (сбой git — не блокирует переход) — `artel report`
@@ -425,9 +434,28 @@ def charge(conn: sqlite3.Connection, task_id: str, usd: float) -> None:
     conn.commit()
 
 
+def charge_estimate(conn: sqlite3.Connection, task_id: str, usd: float) -> None:
+    """Прибавляет верхнюю оценку неучтённой стоимости шага к
+    `spent_estimate_usd` (SPEC 01M1NWCM3TDY0YABEKE8DYQA1C, требование 3) —
+    накопительно и отдельно от `charge`/`spent_usd`: оценка не заменяет
+    точную сумму, а называет то, что курс токенов роли посчитать не смог."""
+    conn.execute("UPDATE tasks SET spent_estimate_usd=spent_estimate_usd+?, "
+                 "updated_at=? WHERE id=?", (usd, now(), task_id))
+    conn.commit()
+
+
 def total_spent(conn: sqlite3.Connection) -> float:
     """Суммарный расход по всем задачам всех target'ов (roadmap §5)."""
     row = conn.execute("SELECT SUM(spent_usd) AS total FROM tasks").fetchone()
+    return row["total"] or 0.0
+
+
+def total_estimate(conn: sqlite3.Connection) -> float:
+    """Суммарная верхняя оценка неучтённой стоимости по всем задачам всех
+    target'ов (SPEC 01M1NWCM3TDY0YABEKE8DYQA1C, требование 6) — тот же
+    приём агрегации, что и `total_spent`, отдельная колонка."""
+    row = conn.execute(
+        "SELECT SUM(spent_estimate_usd) AS total FROM tasks").fetchone()
     return row["total"] or 0.0
 
 

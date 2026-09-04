@@ -206,8 +206,15 @@ def parse_total_cost(text: str) -> float | None:
     return float(match.group(1)) if match else None
 
 
-def _cost_block(steps, spent_usd: float) -> list[str]:
+def _cost_block(steps, spent_usd: float,
+                spent_estimate_usd: float = 0.0) -> list[str]:
     lines = [f"Стоимость итого: ${spent_usd:.2f}"]
+    # Верхняя оценка (SPEC 01M1NWCM3TDY0YABEKE8DYQA1C, требование 7) —
+    # отдельной строкой от «Стоимость итого», и только когда она есть:
+    # задача без частичных шагов без курса не обзаводится строкой «$0.00».
+    if spent_estimate_usd > 0:
+        lines.append(
+            f"Верхняя оценка неучтённой стоимости: ${spent_estimate_usd:.2f}")
     for actor, usd, tokens in _actor_costs(steps):
         tail = f", {tokens} токенов" if tokens is not None else ""
         lines.append(f"  {actor}: ${usd:.2f}{tail}")
@@ -230,7 +237,8 @@ def build_done(conn, task_id: str, merge_sha: str) -> str:
         f"Суть: {_gist(t['title'], context_line)}",
         *(["Канареечная задача: да"] if t["is_canary"] else []),
         "",
-        *_cost_block(steps, t["spent_usd"] or 0.0),
+        *_cost_block(steps, t["spent_usd"] or 0.0,
+                    t["spent_estimate_usd"] or 0.0),
         "",
         f"Ревью: {t['review_iters']} итераций; "
         f"приёмка: {t['accept_rejects']} отказ(ов)",
@@ -269,7 +277,8 @@ def build_killed(conn, task_id: str) -> str:
         f"Суть: {_gist(t['title'], context_line)}",
         *(["Канареечная задача: да"] if t["is_canary"] else []),
         "",
-        *_cost_block(steps, t["spent_usd"] or 0.0),
+        *_cost_block(steps, t["spent_usd"] or 0.0,
+                    t["spent_estimate_usd"] or 0.0),
         "",
         f"Ревью: {t['review_iters']} итераций; "
         f"приёмка: {t['accept_rejects']} отказ(ов)",

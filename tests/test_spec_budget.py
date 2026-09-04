@@ -20,9 +20,9 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from orchestrator import budget, catalog, config, fsm, gitcmd, store  # noqa: E402
-from tests.sandbox import (SpyRun, capture, capture_new_task_id,  # noqa: E402
-                           disk_backed_ls_tree_files, disk_backed_show,
-                           fake_git, sync_spec_from_worktree)
+from tests.sandbox import (SpyRun, TmpRootTest, capture,  # noqa: E402
+                           capture_new_task_id, disk_backed_ls_tree_files,
+                           disk_backed_show, fake_git, sync_spec_from_worktree)
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
@@ -506,6 +506,83 @@ class LegacyDbMigrationTest(SpecBudgetOnTheGateTest):
                           "PRAGMA table_info(tasks)")})
         self.assertIsNone(self.task_row()["budget_source"],
                           "у существующей задачи источник не задан — дефолт")
+
+
+class SpentWithEstimateGateTest(TmpRootTest):
+    """`budget.spent_with_estimate`/`budget_block`/`enforce_budget` считают
+    потолок по `spent_usd + spent_estimate_usd` (SPEC
+    01M1NWCM3TDY0YABEKE8DYQA1C, требование 5) — юнит-угол на функцию
+    суммы и на вырожденные случаи, дополняющий приёмочные
+    `tasks/01M1NWCM3TDY0YABEKE8DYQA1C/acceptance_tests/test_ac5_*`."""
+
+    TASK = "T900"
+
+    def setUp(self):
+        super().setUp()
+        store.create_schema(store.db())
+        self.conn = store.db()
+        store.insert_task(self.conn, self.TASK, "Задача", "in_dev",
+                          "task/t900-x", config.DEFAULT_TARGET, 50.0)
+
+    def task_row(self):
+        return store.db().execute(
+            "SELECT * FROM tasks WHERE id=?", (self.TASK,)).fetchone()
+
+    def set_task(self, **fields) -> None:
+        assignments = ", ".join(f"{k}=?" for k in fields)
+        self.conn.execute(f"UPDATE tasks SET {assignments} WHERE id=?",
+                          (*fields.values(), self.TASK))
+        self.conn.commit()
+
+    def test_spent_with_estimate_adds_both_columns(self):
+        """Ловит мутацию: `spent_with_estimate` возвращает только
+        `spent_usd` (забывает прибавить `spent_estimate_usd`) — тогда
+        результат будет 3.0 вместо 7.0."""
+        self.set_task(spent_usd=3.0, spent_estimate_usd=4.0)
+
+        self.assertEqual(budget.spent_with_estimate(self.task_row()), 7.0)
+
+    def test_spent_with_estimate_treats_null_estimate_as_zero(self):
+        """Строки старше этой задачи (или свежие с NULL из ручного UPDATE)
+        не должны ронять сумму — тот же приём деградации, что и у
+        `spent_usd or 0.0` рядом.
+
+        Ловит мутацию: `spent_with_estimate` складывает
+        `t["spent_estimate_usd"]` без `or 0.0` — тогда на строке с
+        NULL сложение `3.0 + None` бросит `TypeError` вместо того,
+        чтобы вернуть 3.0."""
+        self.set_task(spent_usd=3.0, spent_estimate_usd=None)
+
+        self.assertEqual(budget.spent_with_estimate(self.task_row()), 3.0)
+
+    def test_budget_block_ignores_the_estimate_when_there_is_no_ceiling(self):
+        """Потолок <= 0 — потолка нет вовсе, независимо от того, сколько
+        стоит верхняя оценка (тот же вырожденный случай, что уже был у
+        одного только `spent_usd` до этой задачи).
+
+        Ловит мутацию: `budget_block` проверяет исчерпание раньше
+        вырожденного случая `budget <= 0` (или проверяет его по
+        одному `spent_usd`, без учёта того, что `spent_with_estimate`
+        уже >= 0) — тогда при `budget_usd=0.0` и
+        `spent_estimate_usd=999.0` функция всё равно вернёт сообщение
+        о блокировке вместо `None`."""
+        self.set_task(budget_usd=0.0, spent_usd=0.0, spent_estimate_usd=999.0)
+
+        self.assertIsNone(budget.budget_block(self.task_row()))
+
+    def test_enforce_budget_does_not_escalate_below_the_combined_ceiling(self):
+        """Ловит мутацию: `enforce_budget` завышает сумму — например,
+        прибавляет `spent_estimate_usd` ещё раз поверх
+        `spent_with_estimate`, или сравнивает с потолком `spent_usd`
+        и `spent_estimate_usd` по отдельности через `or` — тогда
+        `3.0 + 4.0` ложно дотянется/превысит потолок $10.00, задача
+        уйдёт в `escalated`, и оба `assert` ниже упадут."""
+        self.set_task(budget_usd=10.0, spent_usd=3.0, spent_estimate_usd=4.0)
+
+        escalated = budget.enforce_budget(self.conn, self.TASK, "in_dev")
+
+        self.assertFalse(escalated)
+        self.assertEqual(self.task_row()["state"], "in_dev")
 
 
 if __name__ == "__main__":
