@@ -314,6 +314,172 @@ class RunLockedTest(TmpRootTest):
                                       "всё равно обязан быть отпущен")
 
 
+class ForeignLiveLeaseTest(TmpRootTest):
+    """SPEC 01M1NEEYSP0QWPMXHG0BK591M7, требование 1: `foreign_live_lease`/
+    `warn_foreign_live` в изоляции — сквозной путь через `pause`/`release`
+    покрыт приёмочными тестами AC-1..AC-7."""
+
+    TASK = "T001"
+
+    def setUp(self):
+        super().setUp()
+        capture(catalog.cmd_init)
+        store.insert_task(store.db(), self.TASK, "Задача", "in_dev",
+                          "task/t001-zadacha", config.DEFAULT_TARGET, 25.0)
+
+    def insert_lease(self, session_id: str, pid: int, hostname: str,
+                     heartbeat_ts: str) -> None:
+        conn = store.db()
+        conn.execute(
+            "INSERT INTO leases (task_id, session_id, pid, hostname,"
+            " heartbeat_ts) VALUES (?,?,?,?,?)",
+            (self.TASK, session_id, pid, hostname, heartbeat_ts))
+        conn.commit()
+
+    def steps(self):
+        return store.task_steps(store.db(), self.TASK)
+
+    def test_no_lease_returns_none(self):
+        """Ловит мутацию: если `foreign_live_lease` перестанет возвращать
+        `None` для задачи без строки lease вовсе (например, начнёт падать
+        на `row["session_id"]` без проверки `row is None`), тест
+        провалится на `AssertionError`, а не на исключении."""
+        self.assertIsNone(
+            lease.foreign_live_lease(store.db(), self.TASK, "sess-current"))
+
+    def test_own_live_lease_returns_none(self):
+        """Ловит мутацию: если проверка `row["session_id"] == session_id`
+        будет убрана или инвертирована, функция начнёт возвращать строку
+        СВОЕГО lease как «чужую» — тест провалится."""
+        self.insert_lease("sess-current", os.getpid(), socket.gethostname(),
+                          store.now())
+
+        self.assertIsNone(
+            lease.foreign_live_lease(store.db(), self.TASK, "sess-current"))
+
+    def test_foreign_live_lease_returns_the_row(self):
+        """Ловит мутацию: чужой lease на СВОЕМ host, свежий heartbeat,
+        живой pid — если ветка `age > LEASE_STALE_AFTER_SEC` или проверка
+        `_pid_alive` начнёт отказывать здесь ошибочно, `row` станет
+        `None` вместо строки держателя."""
+        self.insert_lease("sess-holder", os.getpid(), socket.gethostname(),
+                          _ts_ago(5))
+
+        row = lease.foreign_live_lease(store.db(), self.TASK, "sess-current")
+
+        self.assertIsNotNone(row)
+        self.assertEqual(row["session_id"], "sess-holder")
+
+    def test_foreign_host_live_heartbeat_unaddressable_pid_returns_the_row(self):
+        """Ловит мутацию R1-F1: чужой lease на ДРУГОМ host (типичный
+        межхостовый случай, инцидент 02.09.2026 из SPEC «Контекст») с
+        pid, заведомо мёртвым НА ЭТОЙ машине (`_dead_pid()`) — если код
+        вернётся к безусловной проверке `_pid_alive` без сверки hostname,
+        функция ошибочно вернёт `None` вместо строки держателя, хотя
+        heartbeat свежий и lease реально жив на своём host."""
+        self.insert_lease("sess-holder", _dead_pid(), "other-host",
+                          _ts_ago(5))
+
+        row = lease.foreign_live_lease(store.db(), self.TASK, "sess-current")
+
+        self.assertIsNotNone(row)
+        self.assertEqual(row["session_id"], "sess-holder")
+
+    def test_foreign_stale_heartbeat_returns_none(self):
+        """Ловит мутацию: если порог `config.LEASE_STALE_AFTER_SEC` в
+        сравнении `age > ...` будет сдвинут или убран, протухший чужой
+        lease начнёт ошибочно считаться живым."""
+        stale_ts = _ts_ago(config.LEASE_STALE_AFTER_SEC + 1)
+        self.insert_lease("sess-holder", os.getpid(), socket.gethostname(),
+                          stale_ts)
+
+        self.assertIsNone(
+            lease.foreign_live_lease(store.db(), self.TASK, "sess-current"))
+
+    def test_foreign_dead_pid_returns_none(self):
+        """Ловит мутацию: чужой lease на СВОЕМ host с мёртвым pid — если
+        сверка `row["hostname"] == socket.gethostname()` перед
+        `_pid_alive` будет убрана или инвертирована, мёртвый держатель на
+        своём же host начнёт ошибочно считаться живым."""
+        self.insert_lease("sess-holder", _dead_pid(), socket.gethostname(),
+                          _ts_ago(5))
+
+        self.assertIsNone(
+            lease.foreign_live_lease(store.db(), self.TASK, "sess-current"))
+
+    def test_warn_foreign_live_prints_holder_and_heartbeat_age(self):
+        """Ловит мутацию: если `warn_foreign_live` перестанет печатать
+        `session_id` держателя или числовой возраст heartbeat, регекс
+        `\\d+\\s*сек`/`assertIn` перестанут находить их в выводе."""
+        self.insert_lease("sess-holder", os.getpid(), socket.gethostname(),
+                          _ts_ago(5))
+
+        output = capture(lease.warn_foreign_live, store.db(), self.TASK,
+                         "sess-current")
+
+        self.assertIn("sess-holder", output)
+        self.assertRegex(output, r"\d+\s*сек")
+
+    def test_warn_foreign_live_includes_role_and_step_when_known(self):
+        """Ловит мутацию R1-F2: `T001` заведена в состоянии `in_dev`
+        (`config.STATE_ROLE["in_dev"] == "developer"`) — если
+        `warn_foreign_live` перестанет подмешивать `role=`/`step=` в
+        вывод и журнал, когда `runner.step_role` резолвится не в `None`,
+        `assertIn` ниже не найдут ни то, ни другое."""
+        self.insert_lease("sess-holder", os.getpid(), socket.gethostname(),
+                          _ts_ago(5))
+
+        output = capture(lease.warn_foreign_live, store.db(), self.TASK,
+                         "sess-current")
+
+        self.assertIn("role=developer", output)
+        self.assertIn("step=in_dev", output)
+        self.assertIn("role=developer", self.steps()[0]["detail"])
+        self.assertIn("step=in_dev", self.steps()[0]["detail"])
+
+    def test_warn_foreign_live_journals_with_holder_session_id(self):
+        """Ловит мутацию: если `store.journal` внутри `warn_foreign_live`
+        перестанет вызываться, или вызовется с `session_id` ТЕКУЩЕЙ
+        сессии вместо держателя, `new[0]["session_id"]` разойдётся с
+        `"sess-holder"` (требование 3 — identity держателя, не
+        текущей)."""
+        self.insert_lease("sess-holder", os.getpid(), socket.gethostname(),
+                          _ts_ago(5))
+
+        capture(lease.warn_foreign_live, store.db(), self.TASK,
+               "sess-current")
+
+        new = self.steps()
+        self.assertEqual(len(new), 1)
+        self.assertEqual(new[0]["session_id"], "sess-holder")
+        self.assertIn("sess-holder", new[0]["detail"])
+
+    def test_warn_own_live_lease_prints_nothing_and_does_not_journal(self):
+        """Ловит мутацию: если `warn_foreign_live` перестанет полагаться
+        на `foreign_live_lease` (например, начнёт печатать для ЛЮБОГО
+        lease вне зависимости от identity), собственный живой lease
+        текущей сессии начнёт ошибочно печататься и журналироваться —
+        требование 2."""
+        self.insert_lease("sess-current", os.getpid(), socket.gethostname(),
+                          store.now())
+
+        output = capture(lease.warn_foreign_live, store.db(), self.TASK,
+                         "sess-current")
+
+        self.assertEqual(output, "")
+        self.assertEqual(self.steps(), [])
+
+    def test_warn_no_lease_prints_nothing_and_does_not_journal(self):
+        """Ловит мутацию: если `warn_foreign_live` перестанет проверять
+        `foreign_live_lease is None` перед печатью/журналом, задача без
+        lease вовсе начнёт ошибочно порождать вывод или запись."""
+        output = capture(lease.warn_foreign_live, store.db(), self.TASK,
+                         "sess-current")
+
+        self.assertEqual(output, "")
+        self.assertEqual(self.steps(), [])
+
+
 class ConcurrentAcquireTest(TmpRootTest):
     """Ревью T044 (итерация 1), Замечание 1: read-then-write в `acquire()`
     (`lease_row` -> `insert_lease`/`update_lease`) должен быть атомарным
