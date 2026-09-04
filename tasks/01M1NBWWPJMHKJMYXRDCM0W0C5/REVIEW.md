@@ -39,7 +39,7 @@ PLAN.md покрывает все три требования SPEC таблиц�
 
 | id | статус | файл/строка | суть | последствие | решение |
 |---|---|---|---|---|---|
-| R1-F1 | open | tests/test_fsm_autogate.py:108, tests/test_fsm_autogate.py:123, tasks/01M1NBWWPJMHKJMYXRDCM0W0C5/acceptance_tests/test_ac8_existing_suite_stays_green.py:48 | три новых теста без заявки «Ловит мутацию: …» в докстринге | тест-ревьюверу следующей итерации/следующей задачи, трогающей эти тесты, нечем свериться при мутационной проверке (skills/test-authoring.md) | дописать в докстринг каждого из трёх тестов явную заявку «Ловит мутацию: …», описывающую конкретный сценарий поломки кода, который тест ловит |
+| R1-F1 | fixed | tests/test_fsm_autogate.py:108, tests/test_fsm_autogate.py:123, tasks/01M1NBWWPJMHKJMYXRDCM0W0C5/acceptance_tests/test_ac8_existing_suite_stays_green.py:48 | три новых теста без заявки «Ловит мутацию: …» в докстринге | тест-ревьюверу следующей итерации/следующей задачи, трогающей эти тесты, нечем свериться при мутационной проверке (skills/test-authoring.md) | дописал заявку «Ловит мутацию: …» в докстринги `NonPyFilesIgnoredTest.test_directory_with_only_non_py_files_is_treated_as_empty` (tests/test_fsm_autogate.py:108) и `SourceNoteOnPassTest.test_ok_list_names_branch_and_sha_on_clean_planka` (tests/test_fsm_autogate.py:123) — оба зелёные. Третий файл (`tasks/01M1NBWWPJMHKJMYXRDCM0W0C5/acceptance_tests/test_ac8_existing_suite_stays_green.py`) не тронул: он в залоченном `acceptance_tests/` (tasks/T023/SPEC.md, требование 5 — «правка залоченного теста = правка SPEC = только Оператор», фиксация T021 детектирует любой байт-диф и блокирует переход `in_dev -> review` причиной «спор с тестом = эскалация»); правка docstring в нём — вне полномочий роли `developer`, не только логики теста. Оставил файл без изменений — решение по этой части finding'а за ревьювером/Оператором (см. «Предложения системе»). |
 
 ## Вердикт
 changes_requested — единственное замечание R1-F1 (minor, три докстринга
@@ -68,4 +68,15 @@ changes_requested — единственное замечание R1-F1 (minor, 
 - Прочитан `docs/adr/0007-gate-policy-autogate.md` (условия а-д, строки 30-36) — состав и порядок условий совпадают с `orchestrator/fsm_autogate.py:45-92`, дифф не меняет б/в/г/д.
 
 ## Предложения системе
-(нет)
+- Класс: ревью адресует minor-находку (докстринг без заявки «Ловит
+  мутацию») файлу внутри залоченного `acceptance_tests/` (tasks/T023,
+  требование 5) — роль `developer` не имеет права его редактировать
+  (любой байт-диф ловит фиксация T021 и блокирует `in_dev -> review`).
+  Итерация 2 не смогла закрыть R1-F1 полностью по этой причине
+  (`tasks/01M1NBWWPJMHKJMYXRDCM0W0C5/acceptance_tests/test_ac8_
+  existing_suite_stays_green.py:48` остался без докстринг-заявки).
+  Стоит либо не адресовывать developer'у находки на файлы
+  `acceptance_tests/` (адресовать test_author/Оператору напрямую,
+  или через `amend-tests`), либо явно проговорить в
+  skills/coding-standards.md, что такие находки — материал для
+  `rejected` с пояснением, а не для правки.

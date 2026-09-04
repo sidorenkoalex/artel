@@ -109,6 +109,13 @@ class NonPyFilesIgnoredTest(_AutogateConditionsUnitTest):
         """Каталог в дереве ветки существует, но несёт только не-`.py`
         файл — тот же отказ, что и для полностью отсутствующего
         каталога (фильтр на `.py`, не голое «список путей непуст»).
+
+        Ловит мутацию: код, убравший фильтр `p.endswith(".py")` перед
+        `py_paths` (голая проверка «список путей из дерева непуст»),
+        принял бы README.md за непустую планку — `sources` остался бы
+        пуст (`gitcmd.show` для него не замокан), markers пуст, и
+        условие «а» прошло бы автогейтом вместо ожидаемого отказа
+        «каталог приёмочных тестов пуст или отсутствует».
         """
         rel = f"tasks/{self.TASK}/acceptance_tests/README.md"
 
@@ -125,6 +132,12 @@ class SourceNoteOnPassTest(_AutogateConditionsUnitTest):
         точную пометку источника (ветка + полный sha), которую
         `_maybe_autogate_acceptance` кладёт в `detail` перехода
         `acceptance -> merge_gate` (SPEC AC-6).
+
+        Ловит мутацию: код, забывший `ok.append(source_note)` на пути
+        пройденного условия «а» (называть источник — не только на
+        отказе, но и на успехе, того требует SPEC AC-6), — тест уронил
+        бы `assertIn`; тесты на путях отказа (`reason`) такой пропуск
+        не поймали бы, поэтому нужен отдельный тест именно ветки успеха.
         """
         rel = f"tasks/{self.TASK}/acceptance_tests/test_marker.py"
         content = (
