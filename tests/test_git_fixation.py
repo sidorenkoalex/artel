@@ -330,6 +330,23 @@ class ExternalIntegrityIncidentBlocksRunTest(TmpRootTest):
         subprocess.run(["git", "config", "user.name", "artel tests"],
                        cwd=config.ROOT, check=True)
         (config.ROOT / "marker.txt").write_text("main\n", encoding="utf-8")
+        # `runner.cmd_run` для роли developer читает skills/*.md по имени
+        # из roles.yaml (conventions-core, escalation-rules, coding-standards)
+        # — с этой задачи (tasks/01M1K7KP0D8ZKRM9KTE75DCCYR, AC-1) через
+        # `git show main:...`, а не с диска: обязаны попасть в коммит НИЖЕ,
+        # иначе `git show` не найдёт их в `main` (незакоммиченный диск —
+        # ровно тот случай, который AC-1 обязан игнорировать).
+        shutil.copytree(REPO_ROOT / "skills", config.ROOT / "skills")
+        # T028: бриф роли developer читает docs/codebase-map.md и CLAUDE.md
+        # из config.ROOT (пульт, не workspace target'а) — без них шаг падает
+        # ENOENT до того, как дойдёт до сверки целостности, которую этот
+        # класс проверяет. CLAUDE.md — тоже через `git show main:...` с этой
+        # задачи (AC-2), тоже обязан попасть в коммит ниже.
+        (config.ROOT / "docs").mkdir()
+        (config.ROOT / "docs" / "codebase-map.md").write_text(
+            "---\nbuilt_at_sha: 0000000000000000000000000000000000000000\n"
+            "---\n\n# Карта\n", encoding="utf-8")
+        (config.ROOT / "CLAUDE.md").write_text("# Конвенции\n", encoding="utf-8")
         # `.artel/` несёт вложенный git-репозиторий (`config.PROJECTS/sled`,
         # `projects.cmd_target_init` выше) — без `.gitignore` `git add -A`
         # отказывает на нём как на подмодуле без коммита.
@@ -337,18 +354,6 @@ class ExternalIntegrityIncidentBlocksRunTest(TmpRootTest):
         subprocess.run(["git", "add", "-A"], cwd=config.ROOT, check=True)
         subprocess.run(["git", "commit", "-q", "-m", "init"],
                        cwd=config.ROOT, check=True)
-        # `runner.cmd_run` для роли developer читает skills/*.md по имени
-        # из roles.yaml (conventions-core, escalation-rules, coding-standards).
-        shutil.copytree(REPO_ROOT / "skills", config.ROOT / "skills")
-        # T028: бриф роли developer читает docs/codebase-map.md и CLAUDE.md
-        # из config.ROOT (пульт, не workspace target'а) — без них шаг падает
-        # ENOENT до того, как дойдёт до сверки целостности, которую этот
-        # класс проверяет.
-        (config.ROOT / "docs").mkdir()
-        (config.ROOT / "docs" / "codebase-map.md").write_text(
-            "---\nbuilt_at_sha: 0000000000000000000000000000000000000000\n"
-            "---\n\n# Карта\n", encoding="utf-8")
-        (config.ROOT / "CLAUDE.md").write_text("# Конвенции\n", encoding="utf-8")
         patcher = mock.patch.object(runner.keychain, "token",
                                     lambda slot: "tok-test")
         patcher.start()

@@ -79,8 +79,16 @@ def fake_git_config(*args: str) -> subprocess.CompletedProcess:
 
 
 def silent_git(*args: str) -> subprocess.CompletedProcess:
-    """Подмена `gitcmd.git` для машины без заданной идентичности."""
-    return subprocess.CompletedProcess(list(args), 1, "", "")
+    """Подмена `gitcmd.git` для машины без заданной идентичности: отказывает
+    только `config --get user.*` — настоящий git без identity по-прежнему
+    отвечает на чтения (`show`/`diff`), которых тест не касается (tasks/
+    01M1K7KP0D8ZKRM9KTE75DCCYR: скилы/CLAUDE.md с этой задачи читаются
+    через `gitcmd.show` ещё до git-идентичности — отказ ВСЕГО git здесь
+    ронял бы шаг раньше, чем тест успевает проверить предупреждение об
+    identity)."""
+    if args[:2] == ("config", "--get"):
+        return subprocess.CompletedProcess(list(args), 1, "", "")
+    return fake_git(*args)
 
 
 class _MultitargetTmpRootTest(TmpRootTest):

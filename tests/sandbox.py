@@ -162,16 +162,23 @@ def _tasks_relative_path(rel: str):
 
 
 def disk_backed_show(branch: str, rel: str) -> tuple:
-    """Замена `gitcmd.show` (A7): `rel` — всегда `tasks/<id>/<файл>`
-    (соглашение всех вызывающих мест — `fsm.py`/`brief.py`/`fsm_advance.py`)
-    — `artifact_source.resolve` теперь всегда возвращает `foreign=True`,
-    и без этой подмены чтение ушло бы в `gitcmd.git`, заглушенный в этих
-    песочницах (генерику или вовсе не исполняемый). Возвращает содержимое
-    БУКВАЛЬНО с диска (`_tasks_relative_path`) — ветка (`branch`) не
-    участвует: песочницы, которые сюда попадают, ведут ровно ОДИН
-    источник истины (диск `config.TASKS`), git branch не заводят."""
+    """Замена `gitcmd.show` (A7 + tasks/01M1K7KP0D8ZKRM9KTE75DCCYR): `rel`
+    либо `tasks/<id>/<файл>` (артефакт задачи — соглашение `fsm.py`/
+    `brief.py`/`fsm_advance.py`, `artifact_source.resolve` теперь всегда
+    `foreign=True`), либо `skills/<файл>.md`/`CLAUDE.md` (правило системы,
+    читается с ГОЛОВЫ `main` — `brief.skills_text`/`brief.
+    _main_branch_text`, AC-1/AC-2). Без этой подмены оба чтения ушли бы в
+    `gitcmd.git`, заглушенный в этих песочницах (генерику или вовсе не
+    исполняемый). Ветка (`branch`) не участвует: песочницы, которые сюда
+    попадают, ведут ровно ОДИН источник истины на каждый вид `rel` — диск
+    `config.TASKS` для артефактов задачи (`_tasks_relative_path`), диск
+    `config.ROOT` для правил системы (тот же корень, где песочница уже
+    сеет `skills/`/`CLAUDE.md`, см. `seed_developer_brief_fixtures`) —
+    git branch не заводят."""
+    path = _tasks_relative_path(rel) if rel.startswith("tasks/") \
+        else config.ROOT / rel
     try:
-        return _tasks_relative_path(rel).read_text(encoding="utf-8"), ""
+        return path.read_text(encoding="utf-8"), ""
     except FileNotFoundError:
         return None, "файла нет на диске"
     except UnicodeDecodeError as exc:
@@ -399,10 +406,28 @@ def fake_git(*args: str) -> subprocess.CompletedProcess:
     ЛЮБУЮ ветку как уже существующую и отказывал бы всегда. В лёгких
     песочницах реальных веток нет ни одной — ответ «нет» тут не заглушка
     ради прохождения теста, а корректная симуляция вырожденного случая.
+
+    `show <ветка>:<путь>` (`gitcmd.show`) — тоже отдельно (tasks/
+    01M1K7KP0D8ZKRM9KTE75DCCYR, AC-1/AC-2): скилы/CLAUDE.md с этой задачи
+    читаются через него с головы `main`, а не с диска напрямую. В лёгких
+    песочницах настоящих коммитов нет ни одного — ответом служит диск
+    `config.ROOT/<путь>`, который эти же песочницы уже наполняют реальными
+    фикстурами (`seed_developer_brief_fixtures`, `shutil.copytree(...,
+    "skills")`) как раз для этого чтения; файла на диске нет — тот же
+    отказ, что дал бы `git show` на несуществующий путь.
     """
     if (len(args) >= 3 and args[0] == "rev-parse" and args[1] == "--verify"
             and args[-1].startswith("refs/heads/")):
         return subprocess.CompletedProcess(list(args), 1, "", "")
+    if len(args) == 2 and args[0] == "show" and ":" in args[1]:
+        _, _, rel = args[1].partition(":")
+        try:
+            content = (config.ROOT / rel).read_text(encoding="utf-8")
+        except OSError:
+            return subprocess.CompletedProcess(
+                list(args), 128, "",
+                f"fatal: path '{rel}' does not exist in '{args[1]}'")
+        return subprocess.CompletedProcess(list(args), 0, content, "")
     identity = {"user.name": "Роль Артели", "user.email": "role@artel.invalid"}
     value = identity.get(args[-1], "") if args[:2] == ("config", "--get") else ""
     return subprocess.CompletedProcess(list(args), 0, f"{value}\n", "")
