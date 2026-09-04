@@ -1278,8 +1278,11 @@ class PreviousVerdictShaTest(TmpRootTest):
         """review -> in_dev (вердикт) фиксирует sha_a; in_dev -> review
         (правка) фиксирует sha_b, уже текущий `fixed_sha`. Искомый —
         предпоследний, sha_a, не последний. `fixation_sha` каждой записи —
-        отдельное значение, чтобы совпадение с ним доказывало регресс
-        (previous_verdict_sha прочитал `sha=`, а не `код=`)."""
+        отдельное значение, чтобы совпадение с ним доказывало регресс.
+
+        Ловит мутацию: previous_verdict_sha продолжает читать `sha=`
+        вместо `код=` — result совпадёт с fixation_sha, не с code_sha.
+        """
         self.fixate("1111111", fixation_sha="8888888")  # in_dev -> review, итерация 1
         self.fixate("2222222", fixation_sha="7777777")  # review -> in_dev, вердикт итерации 1
         self.fixate("3333333", fixation_sha="6666666")  # in_dev -> review, итерация 2 (текущий)
@@ -1292,7 +1295,11 @@ class PreviousVerdictShaTest(TmpRootTest):
 
     def test_unrecognisable_sha_is_treated_as_missing(self):
         """git не ответил в момент той фиксации (T021, вырожденный случай) —
-        не трейсбек, а откат на полный diff у вызывающего кода."""
+        не трейсбек, а откат на полный diff у вызывающего кода.
+
+        Ловит мутацию: previous_verdict_sha разбирает `sha=` вместо
+        `код=` в записи с `код=—` — вернёт «9999999» вместо пустой строки.
+        """
         self.fixate("1111111")
         store.journal(self.conn, self.TASK, "fsm", "sha зафиксирован",
                      "target=dogfood, sha=9999999, чисто=False, код=—")
