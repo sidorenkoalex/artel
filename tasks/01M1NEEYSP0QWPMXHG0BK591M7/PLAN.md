@@ -175,3 +175,87 @@ test_author'а утащил их в снимок, `.gitignore` их на код�
   `git checkout -- tasks/01M1NEEYSP0QWPMXHG0BK591M7/` из HEAD, руками
   ничего не переписывалось; упомянуто на случай, если это системный
   симптом, а не разовая случайность.
+
+## Замечания REVIEW.md итерации 3 закрыты (ANSWER-3)
+
+REVIEW.md (итерация 3, `changes_requested`) держал реестр R1-F1..R1-F4
+без единого коммита с итерации 1: `foreign_live_lease` не сверяла
+`hostname` перед `_pid_alive` (major, R1-F1), предупреждение не несло
+роль/шаг (minor, R1-F2), грамматика формулировки (minor, R1-F3), 13
+юнит-тестов без докстринга «Ловит мутацию: …» и ни одного теста с
+чужим hostname (major, R1-F4). Оператор (ANSWER-3): исправить все
+четыре, реестр закрыть по леджеру, ничего сверх замечаний не менять,
+бюджет поднят до 70.
+
+- **R1-F1** — `orchestrator/lease.py::foreign_live_lease` (строка 150)
+  теперь сравнивает `row["hostname"] == socket.gethostname()` ПЕРЕД
+  `_pid_alive` — тот же приём, что уже применяют `lease.acquire`
+  (строка 73), `catalog._lease_holder_suffix` и `pause.cmd_pause_now`:
+  для СВОЕГО host мёртвый pid по-прежнему даёт `None` (живость
+  проверяема и опровергнута), для ЧУЖОГО host pid не проверяется вовсе
+  — heartbeat остаётся единственным критерием (адрес непроверяем
+  локальной таблицей процессов, поэтому не трактуется ни как «жив
+  ложно», ни как «мёртв ложно»). Докстринг `foreign_live_lease`
+  переписан под новое поведение.
+- **R1-F2** — `warn_foreign_live` резолвит `role = runner.step_role(t)`
+  и `step = t["state"]` (отложенный импорт `runner` — тот же приём, что
+  `pause.cmd_pause_now` уже применяет по той же причине цикла
+  импортов), подмешивает `role=…, step=…` в `detail`, только когда
+  `role is not None`.
+- **R1-F3** — текст предупреждения переформулирован: «она может
+  активно работать над задачей; предупреждение не блокирует
+  выполнение» — грамматически корректно, состав `detail` не менялся.
+- **R1-F4** — всем 13 методам (`tests/test_lease.py` — 9,
+  `tests/test_pause.py` — 2, `tests/test_release.py` — 2) добавлен
+  докстринг с конкретной заявкой «Ловит мутацию: …»; добавлены два
+  новых теста: `tests/test_lease.py::
+  test_foreign_host_live_heartbeat_unaddressable_pid_returns_the_row`
+  (чужой host + заведомо мёртвый локально `_dead_pid()` + свежий
+  heartbeat -> живая строка — фиксирует R1-F1 регрессом на будущее) и
+  `tests/test_lease.py::test_warn_foreign_live_includes_role_and_step_when_known`
+  (T001 в `in_dev` -> `role=developer`, `step=in_dev` — фиксирует
+  R1-F2).
+
+Побочный эффект исправления R1-F1 (ожидаемый, не дефект): до фикса
+lease на ЧУЖОМ host с непроверяемым локально pid молча трактовался как
+«не жив» — два существующих теста T062-эпохи (`tests/test_release.py::
+test_journals_former_holder_with_numeric_heartbeat_age`,
+`::test_row_replaced_between_read_and_delete_is_not_removed`),
+использующие `HOLDER_HOST` («chужой» hostname) со свежим heartbeat,
+раньше не видели предупреждения вовсе. После фикса `warn_foreign_live`
+на этих сценариях честно печатает и журналирует предупреждение — оба
+теста адаптированы читать запись САМОГО снятия по `action == "lease
+снят Оператором"`, а не первую/единственную запись журнала; поведение,
+которое они изначально проверяли (гонка «строка сменилась между
+чтением и удалением»), не изменилось. Комментарий-обоснование выбора
+`HOLDER_HOST` в `tests/test_release.py` (строки перед
+`test_release_warns_on_foreign_live_lease`) обновлён — прежний текст
+объяснял выбор «своего» host предположением, ставшим неверным после
+R1-F1.
+
+Реестр REVIEW.md отмечен по каждой из четырёх записей `fixed` с
+описанием правки в колонке «решение» (коротко) — закрытие в `accepted`
+остаётся за ревьювером следующей итерации.
+
+### Проверено исполнением (итерация после ANSWER-3)
+
+- `python3 -m pytest tests/test_lease.py tests/test_pause.py
+  tests/test_release.py -q` — 58 passed (было 56 — R1-F4 добавил два
+  новых теста).
+- `python3 -m pytest tasks/01M1NEEYSP0QWPMXHG0BK591M7/acceptance_tests/
+  -q` — 18 passed, без единой правки состава (лок не тронут).
+- `python3 -m pytest tests/ -q` — 1402 passed, 417 subtests passed, 0
+  ошибок, 0 регрессов (было 1400 — прирост ровно на два новых теста
+  R1-F4).
+- `python3 scripts/guard.py tasks/01M1NEEYSP0QWPMXHG0BK591M7/SPEC.md
+  tasks/01M1NEEYSP0QWPMXHG0BK591M7/PLAN.md
+  tasks/01M1NEEYSP0QWPMXHG0BK591M7/REVIEW.md` — «GUARD: ок (3 файлов)».
+- `python3 scripts/codebase_map.py` — перегенерирован тем же коммитом
+  (правка `orchestrator/lease.py`): новая запись `lease.py` ->
+  `orchestrator/runner.py` в «Импортирует» (отложенный импорт внутри
+  `warn_foreign_live` тоже учитывается статическим разбором).
+- `git diff --stat` затрагивает только `orchestrator/lease.py`,
+  `tests/test_lease.py`, `tests/test_pause.py`, `tests/test_release.py`,
+  `docs/codebase-map.md`, `tasks/01M1NEEYSP0QWPMXHG0BK591M7/{PLAN,
+  REVIEW}.md` — ничего сверх замечаний реестра не менялось
+  (ANSWER-3).
