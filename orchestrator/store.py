@@ -202,6 +202,12 @@ def migrate(conn: sqlite3.Connection) -> None:
     # ровно один раз за жизненный цикл задачи — колонка, не запрос к
     # GitHub на каждый вход в in_dev (orchestrator/github_adapter.py).
     add_column(conn, "tasks", "draft_mr_created", "INTEGER DEFAULT 0")
+    # sha головы артефактной ветки на момент последней материализации
+    # `runner.role_cwd` (SPEC 01M1NKTF173WV5CPDZ1C3WW69K, AC-1/AC-6): NULL —
+    # материализации ещё не было (строка старше этой задачи либо у задачи
+    # нет артефактной ветки) — конфликт-гвард автокоммита сверять не с чем,
+    # тот же вырожденный случай, что и у fixed_sha/tests_locked_sha.
+    add_column(conn, "tasks", "materialized_artifact_sha", "TEXT")
     conn.executescript(
         "CREATE TABLE IF NOT EXISTS task_counters ("
         "  target TEXT PRIMARY KEY, next_number INTEGER NOT NULL);")

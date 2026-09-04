@@ -897,17 +897,27 @@ class CmdRunReviewPackageTest(unittest.TestCase):
         # (orchestrator/brief.py, tasks/T028); седьмой — CLAUDE.md, тоже
         # с головы `main` через `gitcmd.show` (`brief._main_branch_text`,
         # tasks/01M1K7KP0D8ZKRM9KTE75DCCYR, AC-2/AC-4); восьмой — та же
-        # генерализация A7, что и у пятого: `_latest_answer_rel` листает
-        # `tasks/<id>/` артефактной ветки в поиске ANSWER-n.md (историю
-        # эскалаций) через `ls-tree`, не `Path.glob` диска; последние два
-        # — `role_env` берёт авторство коммита шага (`role_cwd`/
-        # `workspace.ensure` подменены в setUp — их git-вызовы проверяет
-        # tests/test_workspace.py). Автокоммит успешного шага (SPEC T059)
-        # не следует вовсе: `_commit_external_step_artifacts` (A7,
-        # generic-путь) коммитит workspace РОЛИ (`config.PROJECTS/<target>/
-        # workspace/tasks/<id>`), которого фейковый агент этого теста не
-        # писал — каталога нет, функция возвращает раньше любого git-
-        # вызова (в отличие от прежнего безусловного `git add -A`
+        # генерализация A7, что и у пятого: PLAN.md/REVIEW.md артефактной
+        # ветки — тем же приёмом (SPEC 01M1NKTF173WV5CPDZ1C3WW69K,
+        # требование 2, AC-3, `brief._plan_review_components`); девятый —
+        # `_latest_answer_rel` листает `tasks/<id>/` артефактной ветки в
+        # поиске ANSWER-n.md (историю эскалаций) через `ls-tree`, не
+        # `Path.glob` диска; десятый и одиннадцатый — `role_env` берёт
+        # авторство коммита шага; последний — материализация `tasks/<id>/`
+        # на старте шага (SPEC 01M1NKTF173WV5CPDZ1C3WW69K, требование 1,
+        # `runner.role_cwd` -> `artifact_branch.materialize_task_dir`):
+        # `workspace.ensure` подменена в setUp (её собственные git-вызовы
+        # проверяет tests/test_workspace.py), но материализация читает
+        # АРТЕФАКТНУЮ ветку через `gitcmd.branch_head_sha` независимо от
+        # подмены `ensure` — `FakeGit` отвечает «ветки нет» на любой
+        # `rev-parse --verify refs/heads/*` (см. её докстринг), поэтому
+        # дальше `ls-tree`/`show` материализация не идёт — тихая
+        # деградация, ровно один git-вызов. Автокоммит успешного шага
+        # (SPEC T059) не следует вовсе: `_commit_external_step_artifacts`
+        # (A7, generic-путь) коммитит workspace РОЛИ (`config.PROJECTS/
+        # <target>/workspace/tasks/<id>`), которого фейковый агент этого
+        # теста не писал — каталога нет, функция возвращает раньше любого
+        # git-вызова (в отличие от прежнего безусловного `git add -A`
         # догфуда). Список точный: любой `show` diff/stat (чтение
         # ревью-пакета) в шаге разработчика по-прежнему провалит тест.
         self.assertEqual(self.git.calls,
@@ -922,11 +932,17 @@ class CmdRunReviewPackageTest(unittest.TestCase):
                            "HEAD", "--", "orchestrator/*.py", "scripts/*.py",
                            "tests/*.py"],
                           ["show", "main:CLAUDE.md"],
+                          ["show", f"artifact/{self.TASK.lower()}:"
+                           f"tasks/{self.TASK}/PLAN.md"],
+                          ["show", f"artifact/{self.TASK.lower()}:"
+                           f"tasks/{self.TASK}/REVIEW.md"],
                           ["ls-tree", "-r", "--name-only",
                            f"artifact/{self.TASK.lower()}", "--",
                            f"tasks/{self.TASK}"],
                           ["config", "--get", "user.name"],
-                          ["config", "--get", "user.email"]],
+                          ["config", "--get", "user.email"],
+                          ["rev-parse", "--verify", "--quiet",
+                           f"refs/heads/artifact/{self.TASK.lower()}"]],
                          "diff разработчику не собирается")
 
     def test_reviewer_rights_are_not_narrowed(self):

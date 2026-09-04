@@ -270,9 +270,25 @@ def _commit_external_step_artifacts(conn, task_id: str, role: str,
     последний раз тронутый ДРУГИМ автором (другая роль, PASSPORT.md
     переходов, ANSWER Оператора), или чей `type` не в списке (PLAN.md,
     REVIEW.md, SPEC.md) — никогда не кандидат на удаление здесь,
-    независимо от локального отсутствия.
+    независимо от локального отсутствия. Исключение — удаление файлов
+    `acceptance_tests/` ДО фиксации лока (см. блок ниже, SPEC
+    01M1NKTF173WV5CPDZ1C3WW69K, требование 7/AC-13/AC-14/AC-15): planка
+    приёмки ещё не зафиксирована, значит она ещё не «чужая», её меняет
+    сам test_author.
+
+    Конфликт-гвард (SPEC 01M1NKTF173WV5CPDZ1C3WW69K, требование 4,
+    AC-6/AC-7): файл, который на этом шаге НЕ поменялся на диске
+    относительно версии, материализованной `runner.role_cwd` на СТАРТЕ
+    шага (`tasks.materialized_artifact_sha`), но который в артефактной
+    ветке изменился ПОСЛЕ этого старта (правка Оператора на гейте между
+    стартом и концом шага, инцидент 04.09) — исключается из переноса,
+    заводит alert `kind=incident`, и НЕ рассматривается на удаление ниже
+    (правка Оператора — не сигнал «роль его убрала»). Файл, который роль
+    реально поменяла (диск разошёлся с baseline), — конфликта не ловит,
+    коммитится как обычно: конфликт по одному файлу не блокирует перенос
+    остальных (AC-7).
     """
-    from . import artifact_branch
+    from . import alerts, artifact_branch
     if target == config.DEFAULT_TARGET:
         workspace_root = workspace.path(task_id)
     else:
@@ -308,6 +324,32 @@ def _commit_external_step_artifacts(conn, task_id: str, role: str,
              if rel not in ignored}
     existing = [rel for rel in existing if rel not in ignored]
 
+    t = store.get_task(conn, task_id)
+    baseline_sha = t["materialized_artifact_sha"] or ""
+    if baseline_sha:
+        conflicted = []
+        for rel in sorted(set(files) & set(existing)):
+            baseline_text, _ = gitcmd.show(baseline_sha, rel)
+            if baseline_text is None:
+                continue  # файл появился на этом шаге — конфликтовать не с чем
+            content = files[rel]
+            try:
+                disk_text = (content.decode("utf-8")
+                            if isinstance(content, bytes) else content)
+            except UnicodeDecodeError:
+                continue  # бинарное содержимое — сравнение текстом бессмысленно
+            if disk_text != baseline_text:
+                continue  # роль сама поменяла файл — не конфликт, её правка идёт дальше
+            current_text, _ = gitcmd.show(branch, rel)
+            if current_text is not None and current_text != baseline_text:
+                conflicted.append(rel)
+        for rel in conflicted:
+            del files[rel]
+            alerts.raise_alert(
+                conn, task_id, "incident", "checkpoint",
+                f"конфликт артефактов: правка в ветке новее рабочего "
+                f"каталога — {rel}")
+
     message = f"{task_id}: артефакты шага {role} (автокоммит оркестратора)"
     removed = []
     for rel in sorted(set(existing) - set(files)):
@@ -317,7 +359,20 @@ def _commit_external_step_artifacts(conn, task_id: str, role: str,
             continue
         content, _ = gitcmd.show(branch, rel)
         meta = yamlmini.frontmatter(content) if content is not None else None
-        if meta is not None and meta.get("type") in _DELETABLE_ARTIFACT_TYPES:
+        deletable = meta is not None and meta.get("type") in _DELETABLE_ARTIFACT_TYPES
+        if not deletable and role == "test_author" and t["state"] == "tests_writing" \
+                and not t["tests_locked_sha"] \
+                and rel.startswith(f"tasks/{task_id}/acceptance_tests/"):
+            # SPEC 01M1NKTF173WV5CPDZ1C3WW69K, требование 7/AC-13/AC-15:
+            # тесты `acceptance_tests/*.py` не несут frontmatter вовсе
+            # (`_DELETABLE_ARTIFACT_TYPES` их никогда не увидит), но до
+            # фиксации лока планка ещё правится самим test_author'ом —
+            # её удаление им же обязано доехать до ветки тем же коммитом,
+            # без повторной попытки (канарейка v2). После лока (AC-14)
+            # `tests_locked_sha` уже не пуст — эта ветка не срабатывает,
+            # прежнее правило (только `type: questions`) остаётся в силе.
+            deletable = True
+        if deletable:
             removed.append(rel)
 
     if not files and not removed:
