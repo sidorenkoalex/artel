@@ -35,9 +35,30 @@ setUp` уже патчит `gitcmd.subprocess.run` (`SpyRun`) — тот же о
 что и глобальный `subprocess.run` (`subprocess` — модуль-синглтон).
 Перенос плотницких вызовов в `gitcmd.carpentry` (которая тоже зовёт
 `subprocess.run` того же модуля) автоматически попадает под этот же
-патч — `tests/sandbox.py` НЕ пришлось менять вовсе: структурная правка
-(требование 2/3, AC-3) и рантайм-защита (AC-1/AC-2) сошлись без
-дополнительной механики.
+патч — структурная правка (требование 2/3, AC-3) и рантайм-защита
+(AC-1/AC-2) сошлись без дополнительной механики уже на этом шаге.
+
+ANSWER-2 п.2 (R1-F2) снял двусмысленность прочтения требования 1 «обе
+механики» буквально: не только CI-сторож (ниже) вокруг ВСЕГО прогона
+`tests/`, но и рантайм-рубеж НА УРОВНЕ базового класса самой песочницы —
+`tests/sandbox.py::TmpRootTest.setUp`/`tearDown` снимают `git for-each-
+ref` НАСТОЯЩЕГО репозитория пульта (`refs/heads/`/`refs/artifacts/`) до
+и после КАЖДОГО теста-наследника и валят тест немедленно при расхождении
+(`real_repo_refs`, `_REAL_ROOT` — зафиксирован при импорте модуля, до
+любой подмены `config.ROOT`, через `_REAL_RUN`, не через текущий,
+возможно уже подменённый `subprocess.run`). Это ловит регрессию, которую
+структурная проверка `test_invariants.CarpentryGitCallsGoThroughGitcmdTest`
+(только три названных модуля) и CI-сторож (только весь прогон целиком,
+без указания виновника) не видят по отдельности: новый тестовый класс,
+исключивший `ROOT` из `PATCHED_ATTRS`, либо четвёртый «плотницкий» модуль
+с ещё не распознанной `SpyRun` git-командой — тест-виновник падает сразу
+в `tearDown`, не дожидаясь дорогого сторожа вокруг всего набора. Два
+класса (`RealGitSandbox`, `tests/test_fsm_branch_correct_status_reads.
+py::RealGitBranchTest`) целиком переопределяют `TmpRootTest.setUp` без
+`super().setUp()` — оба явно заводят собственный снимок-«до» первой
+строкой, иначе унаследованный `tearDown` падал бы `AttributeError`
+(проверено репозиторным grep'ом: других таких переопределений во всём
+дереве не нашлось).
 
 `PreviousVerdictShaTest` переведён на `tests.sandbox.TmpRootTest`
 (требование 3, AC-2): `TmpRootTest.setUp` патчит ВЕСЬ `ALL_CONFIG_ATTRS`
@@ -86,13 +107,37 @@ test_ac1_full_suite_ref_isolation.py`.
    убран как более не нужный.
 3. `tests/test_review_package.py::PreviousVerdictShaTest`: миграция на
    `tests.sandbox.TmpRootTest` (общая точка подмены требования 2).
+3а. (ANSWER-2 п.2, R1-F2) `tests/sandbox.py`: `real_repo_refs`,
+    `_REAL_ROOT`, `TmpRootTest.setUp`/`tearDown` — снимок `git for-each-
+    ref` НАСТОЯЩЕГО репозитория пульта до/после каждого теста-наследника,
+    падение теста при расхождении; `RealGitSandbox.setUp` и
+    `tests/test_fsm_branch_correct_status_reads.py::RealGitBranchTest.
+    setUp` (оба переопределяют `TmpRootTest.setUp` целиком, без
+    `super()`) заводят собственный снимок-«до» первой строкой.
 4. `orchestrator/doctor.py`: `sweep_orphan_artifact_branches`, keyword
-   `fix` у `cmd_doctor`; `orchestrator/artel.py`: разбор `--fix` в
-   таблице команд `doctor`.
-5. Юнит-тесты: `tests/test_gitcmd_carpentry.py` (новая функция),
+   `fix` у `cmd_doctor` (R1-F6, ANSWER-2 п.3: `orchestrator/artel.py`
+   правки НЕ требует — диспетчер `doctor` уже разбирает `rest` обобщённо
+   (`"--fix" in rest`, тем же приёмом, что и существующий `--restore`,
+   `orchestrator/artel.py:363`) — новый keyword подхватывается без
+   изменения кода `artel.py`; прежняя формулировка этого шага заявляла
+   такую правку, которой в диффе этой ветки нет — `git diff main HEAD --
+   orchestrator/artel.py` пуст). Возврат `git branch -D` проверяется
+   (R1-F3, ANSWER-2 п.3): ветка с неудачным удалением не попадает в
+   возвращаемый список/алерт как «удалена», отдельная честная часть
+   сообщения «НЕ удалены»; пустая строка перед следующим разделом файла
+   (R1-F4).
+5. Юнит-тесты: `tests/test_gitcmd_carpentry.py` (новая функция, докстрины
+   пяти методов дополнены заявкой «Ловит мутацию: …», R1-F1),
    `tests/test_doctor.py::OrphanArtifactBranchSweepTest` (permanentная
    регрессия уборки сирот — за пределами локальных `acceptance_tests/`
-   этой задачи, которые не входят в штатный прогон `tests/`).
+   этой задачи, которые не входят в штатный прогон `tests/`; докстрины
+   четырёх существующих методов дополнены той же заявкой, R1-F1; новый
+   `test_failed_deletion_is_not_reported_as_deleted` — регрессия R1-F3).
+5а. (ANSWER-2 п.1, ADR-0012, R1-F5 — лок снят Оператором ИМЕННО на этот
+    файл и эту правку) `tasks/01M1KVGD18P9H5WR7VM8TGPV1T/acceptance_tests/
+    _util.py::cleanup_new_refs`: восстанавливает и ссылки, СУЩЕСТВОВАВШИЕ
+    раньше, но сдвинувшие sha (по снимку «до»), не только новые —
+    утверждения приёмочных тестов, использующих эту функцию, не менялись.
 6. Unified-диффы трёх защищённых путей — приложение к этому PLAN.md
    (ANSWER-1), не коммит в ветку.
 
@@ -100,7 +145,7 @@ test_ac1_full_suite_ref_isolation.py`.
 
 | Требование | Шаг |
 |---|---|
-| 1 (инвариант-тест: и sandbox, и CI) | 1, 2 (структурная база), 6 (CI-сторож + постоянный тест в test_invariants.py) |
+| 1 (инвариант-тест: и sandbox, и CI) | 1, 2 (структурная база), 3а (рантайм-рубеж в песочнице, ANSWER-2 п.2), 6 (CI-сторож + постоянный тест в test_invariants.py) |
 | 2 (единая точка подмены) | 1, 2 |
 | 3 (миграция PreviousVerdictShaTest и прочих офендеров) | 3 |
 | 4 (уборка сирот, только по вызову Оператора) | 4, 5 |
