@@ -279,6 +279,17 @@ CONTEXT_PART_MAX_BYTES = 65_536
 # после мержа 01M1H224X5A8W159MKF1Q24R5Y — возвращён 03.09.
 REVIEW_SNAPSHOT_DIFF_MAX_BYTES = 262_144
 
+# Пороги сигналов «подозрения на большой объём» на этапе SPEC
+# (tasks/01M1KS8K9RXWHX2PW3ZKB0P903, требование 1, 7; ANSWER-1 — имена и
+# значения зафиксированы буквально ответом на эскалацию AC-1). Меняет
+# только Оператор (ADR-0002, класс «лимит»).
+SPLIT_SIGNAL_ZONE_FILES = 5
+SPLIT_SIGNAL_AC_COUNT = 10
+SPLIT_SIGNAL_BUDGET_USD = 30
+# Доля от REVIEW_SNAPSHOT_DIFF_MAX_BYTES, с которой прогноз диффа SPEC
+# (`diff_forecast_kib`) считается сигналом (ANSWER-1).
+SPLIT_SIGNAL_DIFF_FORECAST_RATIO = 0.5
+
 # Счётчики usage финального события потока: их сумма и есть «токенов за шаг».
 USAGE_TOKEN_KEYS = ("input_tokens", "output_tokens",
                     "cache_creation_input_tokens", "cache_read_input_tokens")
