@@ -2,7 +2,14 @@
 каталога `~/.artel-canary` (вне корня пульта) и принимает параметр
 выборки k, отбирая k случайных шаблонов из доступных N.
 
-Красен до реализации: `canary` пока умеет только v1-сигнатуру (`cmd_canary(tz_dir, *, rewrite_baseline)`, `tasks/T065/SPEC.md`) — `--k` читается как позиционный `tz_dir` (несуществующий каталог `--k`), команда падает `SystemExit("canary: каталог не найден: --k")` до заведения хоть одной задачи (проверено самим прогоном файла — см. коммит этой задачи: `python3 -m unittest discover` красит `test_ac1_five_templates_but_only_k_tasks_are_created` этой причиной, не опечаткой песочницы).
+Красен до реализации: `canary` пока умеет только v1-сигнатуру
+(`cmd_canary(tz_dir, *, rewrite_baseline)`, `tasks/T065/SPEC.md`) —
+`--k` читается как позиционный `tz_dir` (несуществующий каталог
+`--k`), команда падает `SystemExit("canary: каталог не найден: --k")`
+до заведения хоть одной задачи (проверено самим прогоном файла —
+см. коммит этой задачи: `python3 -m unittest discover` красит
+`test_ac1_five_templates_but_only_k_tasks_are_created` этой причиной,
+не опечаткой песочницы).
 """
 import sys
 import unittest
