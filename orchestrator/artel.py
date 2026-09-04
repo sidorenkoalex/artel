@@ -95,7 +95,7 @@ workspace, tasks, knowledge, logs). БД одна на все проекты: с
   pause [--now] <id> | resume <id> | log <id> | budget <id> <usd> |
   target-init <target> | doctor [--restore] | alert-ack <id> "<решение>" |
   version | canary <каталог-ТЗ> [--rewrite-baseline] | prune [--execute] |
-  pin-update <sha main артели>
+  amend-tests <id> --reason "<основание>" | pin-update <sha main артели>
 
 `pin-update <sha>` (A7, Stage1) — обновляет пин запущенной версии:
 продвигает рабочее дерево и HEAD `config.ROOT` до `<sha>` main артели
@@ -162,6 +162,21 @@ SPEC, PLAN — в ревью, REVIEW — из ревью). Нарушение с
 зелёного CI головного коммита ветки задачи (`gh`); неизвестный статус —
 тоже отказ, задача остаётся на гейте.
 
+`amend-tests <id> --reason "<основание>"` (ADR-0012, SPEC
+01M1HNNHDMP2C1AJTH5QF1BTN2) — штатная правка уже зафиксированной планки
+приёмки: Оператор правит `tasks/<id>/acceptance_tests/` прямо в
+worktree задачи, команда коммитит правку, сдвигает `tests_locked_sha`
+на sha этого коммита и журналирует событие «правка планки» с прежним и
+новым sha и основанием. Отказывает именованно (без изменений), если:
+изменений в каталоге нет; есть изменения за его пределами; лок ещё не
+стоял; `--reason` пуст; обязательный прогон `acceptance_tests/` не
+«OK» (кроме падений, промаркированных «Красен до реализации»/«Зелёный
+с рождения» — тем же разбором, что выход из `tests_writing`). Не
+оценивает существо правки (это чек-лист ревьювера) и не запускает
+агентов. Больше одной правки в скользящем окне последних 5 задач
+пульта, дошедших до фиксации лока (program-wide), поднимает алерт
+«планка девальвируется» (kind=threshold) сразу после записи события.
+
 Модули пакета (T015; здесь — только разбор argv и таблица команд):
   config    пути и константы; все обращения к ним идут через модуль
   store     БД, миграции схемы, журнал шагов, смена состояния
@@ -193,6 +208,9 @@ SPEC, PLAN — в ревью, REVIEW — из ревью). Нарушение с
   prune     retention-политика: .artel/logs/, архивация alerts (T073)
   dry_run   сухой прогон приёмки: read-only предпросмотр без исполнения
             (SPEC 01M1GJ3ZP1YGG5QRB6FQ44NN8D)
+  amend     штатная правка зафиксированной планки приёмки: коммит,
+            лок, журнал, порог «планка девальвируется» (ADR-0012,
+            SPEC 01M1HNNHDMP2C1AJTH5QF1BTN2)
 """
 import sys
 from pathlib import Path
@@ -204,7 +222,7 @@ from pathlib import Path
 # у запущенного файла в нём лежит orchestrator/, а не корень.
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from orchestrator import (answer, auto, budget, canary, catalog,  # noqa: E402
+from orchestrator import (amend, answer, auto, budget, canary, catalog,  # noqa: E402
                           cleanup, config, doctor, dry_run, fsm, pause, pin,
                           projects, prune, release, report, runner, version,
                           workspace)
@@ -286,6 +304,20 @@ def _cmd_new(rest: list) -> None:
     catalog.cmd_new(title, tz_path=tz_path)
 
 
+def _reason_arg(rest: list) -> str | None:
+    """Значение флага `--reason` команды `amend-tests <id> --reason
+    "<основание>"`; `None` — флаг не передан вовсе. `amend.cmd_amend_tests`
+    не различает «флага нет» и «флаг передан пустой строкой» — оба
+    отказывают одинаково (SPEC AC-5), поэтому здесь достаточно вернуть
+    `None`/пустую строку как есть, без специальной обработки."""
+    if "--reason" not in rest:
+        return None
+    idx = rest.index("--reason")
+    if idx + 1 >= len(rest):
+        sys.exit("--reason требует основание правки следующим аргументом.")
+    return rest[idx + 1]
+
+
 def _cmd_pause(rest: list) -> None:
     """`pause <id>` (T070) либо `pause --now <id>` (T074) — флаг перед id,
     тем же местом разбора, что уже держит команду `pause` в таблице
@@ -337,6 +369,7 @@ def main() -> None:
         "prune": lambda: prune.cmd_prune("--execute" in rest),
         "report": lambda: report.cmd_report(),
         "acceptance-dry-run": lambda: dry_run.cmd_acceptance_dry_run(rest[0]),
+        "amend-tests": lambda: amend.cmd_amend_tests(rest[0], _reason_arg(rest)),
         "pin-update": lambda: pin.cmd_pin_update(rest[0]),
     }
     fn = table.get(cmd)
