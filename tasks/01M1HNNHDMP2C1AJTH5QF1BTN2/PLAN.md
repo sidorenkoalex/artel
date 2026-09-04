@@ -405,3 +405,29 @@ review`: гейт лока (`orchestrator/fsm_advance.py::in_dev`) продол�
 снимок, что `0925596`/`5223b62`/`1324539`, планка 14/14 OK, полный
 набор 1328 passed — см. «Прогон» выше). Повторной эскалации по этому
 вопросу не будет.
+
+### Заход после подтяжки main (391b8a8)
+
+`tasks/01M1HNNHDMP2C1AJTH5QF1BTN2/` в рабочем дереве на старте этого
+захода снова оказался удалён вне коммита (тот же класс, что уже
+отмечался предыдущими заходами) — восстановлен `git checkout --`, не
+переписан. Подтяжка `391b8a8` (`git show --stat`) меняла `*.py`
+(`orchestrator/brief.py`, `orchestrator/runner.py`,
+`orchestrator/store.py`, `tests/sandbox.py`, `tests/test_brief.py`,
+`tests/test_git_fixation.py`, `tests/test_multitarget.py`,
+`tests/test_review_package.py`,
+`tests/test_store_db_connection_close.py`) без регенерации карты тем
+же шагом (`conventions-core`: подтяжка main тоже требует regen) —
+`docs/codebase-map.md` нёс `built_at_sha: 952b1b2...` (до мержа) при
+HEAD `391b8a8`. Регенерировано (`python3 scripts/codebase_map.py`,
+коммит `2094692`): контентно карта не изменилась (только
+`built_at_sha`), `orchestrator/amend.py` в ней присутствует корректно.
+Код `amend.py`/`test_amend.py`/`_sandbox.py` этим заходом не менялся.
+Прогон: `python3 -B -m unittest discover -s
+tasks/01M1HNNHDMP2C1AJTH5QF1BTN2/acceptance_tests` — 14/14 OK; `python3
+-B -m pytest tests/ -q` — 1331 passed, 408 subtests passed (рост с 1328
+до 1331 — три теста, привнесённые подтяжкой из других задач);
+`python3 -B scripts/guard.py tasks/01M1HNNHDMP2C1AJTH5QF1BTN2/*.md` —
+`GUARD: ок (4 файлов)`. `__pycache__`/`*.pyc` в `tasks/
+01M1HNNHDMP2C1AJTH5QF1BTN2/` на конец захода — пусто (все прогоны
+`-B`). PLAN.md остаётся `status: ready`.
