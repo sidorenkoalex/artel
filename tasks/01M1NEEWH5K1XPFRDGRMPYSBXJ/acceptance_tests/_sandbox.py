@@ -403,13 +403,24 @@ class CanarySandbox(unittest.TestCase):
         self._git("add", "-A")
         self._git("commit", "-q", "-m", "init")
 
+        # PROJECTS/TARGETS/BACKUP_MARKER (AC-15: эта песочница — первая
+        # здесь, кому нужен настоящий `doctor.all_checks`/`cmd_doctor`) —
+        # без них `targets.load()` читал бы РЕАЛЬНЫЙ `targets.yaml` пульта
+        # (модульная константа `config.TARGETS`, не переисчисляется от
+        # патченного `config.ROOT`) и часть проверок доктора ушла бы в
+        # сеть за настоящим `gh repo view` реального target'а; полный
+        # набор путей — тот же, что `tests/sandbox.py::TmpRootTest.
+        # PATCHED_ATTRS` (`ALL_CONFIG_ATTRS`), не изобретение здесь.
         for attr, value in (
             ("ROOT", self.root),
             ("DB", self.root / ".artel" / "state.db"),
             ("TASKS", self.root / "tasks"),
             ("LOGS", self.root / ".artel" / "logs"),
+            ("PROJECTS", self.root / ".artel" / "projects"),
+            ("TARGETS", self.root / "targets.yaml"),
             ("ROLE_HOME", self.root / ".artel" / "home"),
             ("ROLE_CONFIG_DIR", self.root / ".artel" / "home" / ".claude"),
+            ("BACKUP_MARKER", self.root / ".artel" / "backup-marker"),
             ("WORKTREES", self.root / ".artel" / "worktrees"),
         ):
             patcher = mock.patch.object(config, attr, value)
