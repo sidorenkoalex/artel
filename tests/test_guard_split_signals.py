@@ -15,6 +15,7 @@ split_assessment_errors` и граничные случаи, которые пр
 сработал другой» (ANSWER-1, редактура Оператора 04.09).
 """
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -257,6 +258,41 @@ class SplitAssessmentErrorsTest(unittest.TestCase):
         text = spec_text()
 
         self.assertEqual(guard.check_content("SPEC.md", text), [])
+
+
+class ClosedTaskExceptionTest(unittest.TestCase):
+    """SPEC задачи, у которой уже есть `docs/retro/<id>.md` (задача
+    закрыта ДО появления этой проверки), не подпадает под `split_
+    assessment_errors` (ANSWER-3, вариант b): новые правила guard
+    действуют на живые задачи, история не переписывается —
+    `docs/retention.md` объявляет SPEC смерженных задач вечными."""
+
+    def test_closed_task_with_fired_signal_is_not_rejected(self):
+        text = spec_text(budget=config.SPLIT_SIGNAL_BUDGET_USD,
+                         volume_section=None)
+        with tempfile.TemporaryDirectory() as tmp:
+            retro_dir = Path(tmp)
+            (retro_dir / "T900.md").write_text("RETRO\n", encoding="utf-8")
+            with mock.patch.object(guard, "RETRO_DIR", retro_dir):
+                errors = guard.check_content("tasks/T900/SPEC.md", text)
+
+        self.assertEqual(errors, [])
+
+    def test_live_task_with_fired_signal_is_still_rejected(self):
+        """Тот же SPEC, но без `docs/retro/T900.md` — задача живая,
+        проверка действует как обычно (исключение не превращается в
+        общее ослабление)."""
+        text = spec_text(budget=config.SPLIT_SIGNAL_BUDGET_USD,
+                         volume_section=None)
+        with tempfile.TemporaryDirectory() as tmp:
+            with mock.patch.object(guard, "RETRO_DIR", Path(tmp)):
+                errors = guard.check_content("tasks/T900/SPEC.md", text)
+
+        self.assertTrue(
+            any("Оценка объёма и деление" in e for e in errors), errors)
+
+    def test_label_without_task_segment_is_never_closed(self):
+        self.assertFalse(guard._closed_before_split_assessment("SPEC.md"))
 
 
 if __name__ == "__main__":

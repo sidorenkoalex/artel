@@ -2,6 +2,11 @@
 """Guard: валидатор СТРУКТУРЫ артефактов задач (frontmatter + обязательные
 секции). Содержательность не проверяет — это работа гейтов и людей (§04).
 
+Новые правила guard действуют на живые задачи; история не переписывается —
+задача, уже закрытая до появления правила (несёт `docs/retro/<id>.md`), под
+это правило задним числом не подпадает (ANSWER-3 tasks/01M1KS8K9RXWHX2PW3ZKB0P903,
+пример — `_closed_before_split_assessment`).
+
 Использование:
     python3 scripts/guard.py tasks/T001/SPEC.md [ещё файлы...]
     python3 scripts/guard.py --all          # все артефакты в tasks/
@@ -619,6 +624,24 @@ DIFF_FORECAST_LINE = re.compile(
 
 INVARIANTS_DOC_PATH = Path(__file__).resolve().parent.parent / "docs" / "invariants.md"
 
+# Задача, уже закрытая ДО появления этой проверки (несёт docs/retro/<id>.md),
+# под split_assessment_errors не подпадает (ANSWER-3, вариант b): новые
+# правила guard действуют на живые задачи, история не переписывается —
+# docs/retention.md объявляет SPEC/PLAN/REVIEW смерженных задач вечными,
+# backfill секции в них задним числом не требуется.
+RETRO_DIR = Path(__file__).resolve().parent.parent / "docs" / "retro"
+TASK_ID_FROM_PATH = re.compile(r"(?:^|/)tasks/([^/]+)/")
+
+
+def _closed_before_split_assessment(path: Path | str) -> bool:
+    """`True`, если `path` указывает на SPEC задачи, для которой уже есть
+    `docs/retro/<id>.md` — задача закрыта раньше, чем появилась эта
+    проверка."""
+    match = TASK_ID_FROM_PATH.search(str(path))
+    if not match:
+        return False
+    return (RETRO_DIR / f"{match.group(1)}.md").exists()
+
 
 def requires_split_assessment(meta: dict) -> bool:
     """SPEC обязан нести проверку сигналов объёма (требования 1, 3).
@@ -720,6 +743,8 @@ def split_assessment_errors(path: Path | str, text: str, meta: dict) -> list[str
     один сигнал (требование 3, AC-5/AC-7). `path` — только для текста
     ошибок (см. `schema_errors`)."""
     if (meta.get("type") or "") != "spec" or not requires_split_assessment(meta):
+        return []
+    if _closed_before_split_assessment(path):
         return []
     signals = split_signal_names(text, meta)
     if not signals:
