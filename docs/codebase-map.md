@@ -1,5 +1,5 @@
 ---
-built_at_sha: 017e977c87eee4cf27ef5646b86ece7cd935d9a4
+built_at_sha: a5ecf69a142b017dbc5f121212c444823bf4a35a
 ---
 
 # Codebase-map пульта
@@ -125,7 +125,7 @@ built_at_sha: 017e977c87eee4cf27ef5646b86ece7cd935d9a4
 
 **Импортирует:** `orchestrator/artifact_branch.py`
 
-**Импортируется:** `orchestrator/answer.py`, `orchestrator/brief.py`, `orchestrator/fsm.py`, `orchestrator/fsm_advance.py`, `orchestrator/runner.py`
+**Импортируется:** `orchestrator/answer.py`, `orchestrator/brief.py`, `orchestrator/fsm.py`, `orchestrator/fsm_advance.py`, `orchestrator/review.py`, `orchestrator/runner.py`
 
 ## orchestrator/artifacts.py
 
@@ -673,7 +673,7 @@ built_at_sha: 017e977c87eee4cf27ef5646b86ece7cd935d9a4
 - `previous_verdict_sha`
 - `review_package`
 
-**Импортирует:** `orchestrator/brief.py`, `orchestrator/config.py`, `orchestrator/context_package.py`, `orchestrator/gitcmd.py`, `orchestrator/store.py`
+**Импортирует:** `orchestrator/artifact_source.py`, `orchestrator/brief.py`, `orchestrator/config.py`, `orchestrator/context_package.py`, `orchestrator/gitcmd.py`, `orchestrator/store.py`
 
 **Импортируется:** `orchestrator/fsm_advance.py`, `orchestrator/role_prompt.py`, `orchestrator/runner.py`, `tests/test_review_freshness.py`, `tests/test_review_package.py`
 
