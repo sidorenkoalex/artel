@@ -1,8 +1,8 @@
 """Цикл `auto`: run+advance, пока в шаге работает агент."""
 import time
 
-from . import (agent_log, budget, ci, config, fixation, fsm, lease, pause,
-              runner, store)
+from . import (agent_log, alerts, budget, ci, config, fixation, fsm, lease,
+              pause, runner, store)
 
 # Действие журнала, которым отказ `advance` узнаётся вне зависимости от
 # конкретной причины (SPEC T038, требование 1): каждая точка `cmd_advance`
@@ -11,6 +11,17 @@ from . import (agent_log, budget, ci, config, fixation, fsm, lease, pause,
 # Guard же возвращает `True` и уводит цикл на существующую немедленную
 # остановку раньше, до этой проверки (требование 3) — пересечения нет.
 REFUSAL_ACTION_PREFIX = "переход отклонён"
+
+# Требование 3 (SPEC 01M1KCSTBYF1CRJBSY4P6VYQEA): состояния, чья остановка
+# `auto` — штатный исход, не буксование, поэтому финальный выход цикла
+# (без агентской роли) НЕ поднимает алерт `kind=attention`, независимо от
+# числа пройденных шагов вызова. Ручные гейты — уже сегодня «ЖДЁТ
+# ОПЕРАТОРА» в `catalog.cmd_status`; `done`/`killed` — задача закрыта,
+# откручивать нечего. `escalated` сюда НЕ входит: SPEC требует алерт «любой
+# причины» эскалации, в т.ч. когда задача уже была в ней до вызова (ANSWER-1,
+# вопрос 2; AC-7, AC-17).
+_NO_ALERT_FINAL_STATES = ("spec_gate", "acceptance", "merge_gate",
+                         "done", "killed")
 
 
 def _run_paused_refusal(conn, task_id: str, journaled_before: int) -> bool:
@@ -86,10 +97,26 @@ def _advance_verifying_poll(conn, task_id: str, session_id: str) -> bool:
     if note is not None and ci.verifying_is_red(note):
         reason, hint = config.AUTO_STOP_VERIFYING_RED
         auto_stop(conn, task_id, "verifying", f"{reason} — {note}",
-                  hint.format(id=task_id))
+                  hint.format(id=task_id), alert=True)
         return True
     time.sleep(config.VERIFYING_POLL_INTERVAL_SEC)
     return False
+
+
+def _final_stop_raises_alert(state: str, steps: int) -> bool:
+    """Требование 3: алерт финального выхода цикла (нет агентской роли,
+    `auto_stop_advice`) — за вычетом исключений требования 3 (ANSWER-1,
+    вопрос 2): ручной гейт/терминал (`_NO_ALERT_FINAL_STATES`) и
+    `spec_writing` без единого пройденного шага — роли не было с самого
+    начала вызова, потому что `tasks/<id>/TZ.md` не заведён (SPEC T025;
+    AC-16). Пауза сюда не доходит — обрабатывается отдельной веткой
+    `SystemExit` внутри цикла шагов.
+    """
+    if state in _NO_ALERT_FINAL_STATES:
+        return False
+    if state == "spec_writing" and steps == 0:
+        return False
+    return True
 
 
 def auto_stop_advice(conn, task_id: str, state: str) -> tuple[str, str]:
@@ -123,13 +150,25 @@ def auto_stop_advice(conn, task_id: str, state: str) -> tuple[str, str]:
     return reason, hint.format(id=task_id, sha=sha_hint)
 
 
-def auto_stop(conn, task_id: str, state: str, reason: str, hint: str) -> None:
-    """Остановка цикла: запись в журнал и итог Оператору (требования 2, 5)."""
+def auto_stop(conn, task_id: str, state: str, reason: str, hint: str, *,
+              alert: bool) -> None:
+    """Остановка цикла: запись в журнал и итог Оператору (требования 2, 5).
+
+    `alert` (требование 3, обязателен и keyword-only — молчаливый дефолт
+    свёл бы решение «поднимать или нет» на нет для любого пропущенного
+    вызова, тот же довод, что и у `store.set_state`'а `expected_state`):
+    каждая точка остановки цикла решает это явно, по СВОЕЙ причине —
+    `False` только для ручного гейта/паузы/нулевого числа шагов без роли
+    с самого начала (AC-14..AC-16), `True` во всех прочих случаях.
+    """
     store.journal(conn, task_id, "operator", "auto остановлен",
                   f"{state}: {reason}")
     print(f"[{task_id}] auto остановлен: {reason}")
     print(f"  состояние: {state}")
     print(f"  дальше: {hint}")
+    if alert:
+        alerts.raise_attention_alert(
+            conn, task_id, f"[{task_id}] auto остановлен: {state}: {reason}")
 
 
 def cmd_auto(task_id: str, session_id: str | None = None) -> None:
@@ -180,6 +219,12 @@ def _cmd_auto(conn, task_id: str, session_id: str) -> None:
     # предыдущий шаг не был таким отказом, или это первый шаг цикла
     # (SPEC T038, требование 1).
     prev_refusal = None
+    # Число шагов run+advance ПОДРЯД без смены состояния (требование 2):
+    # сбрасывается на 0 любым переходом, независимо от стоп-крана
+    # требования 1 (тот считает только повтор ОДНОГО класса отказа, этот —
+    # каждый холостой шаг). Опрос `verifying` (`_advance_verifying_poll`)
+    # не расходует счётчик — не агентный шаг конвейера (см. `continue` ниже).
+    idle_steps = 0
     # `verifying` не входит в STATE_ROLE (нет агентской роли, SPEC T086) —
     # условие цикла держит его отдельным дизъюнктом, не значением `role`:
     # состояние достижимо и как стартовое для всего вызова, и как исход
@@ -199,7 +244,8 @@ def _cmd_auto(conn, task_id: str, session_id: str) -> None:
             auto_stop(conn, task_id, state,
                       f"лимит {config.AUTO_MAX_STEPS} шагов за вызов исчерпан",
                       f"artel.py log {task_id} (что происходит), "
-                      f"затем artel.py auto {task_id} — продолжит отсюда")
+                      f"затем artel.py auto {task_id} — продолжит отсюда",
+                      alert=True)
             return
         steps += 1
         before = state
@@ -224,10 +270,15 @@ def _cmd_auto(conn, task_id: str, session_id: str) -> None:
             # различения, что уже несёт `_advance_refusal` чуть ниже.
             if _run_paused_refusal(conn, task_id, run_journaled_before):
                 reason, hint = config.AUTO_STOP_PAUSE
-                auto_stop(conn, task_id, state, reason, hint.format(id=task_id))
+                # Пауза — действие самого Оператора (ANSWER-1, вопрос 2):
+                # он уже знает о причине остановки, алерт был бы
+                # уведомлением о собственном же решении.
+                auto_stop(conn, task_id, state, reason, hint.format(id=task_id),
+                          alert=False)
                 return
             auto_stop(conn, task_id, state, "run отказался стартовать",
-                      f"artel.py budget {task_id} <usd> или artel.py kill {task_id}")
+                      f"artel.py budget {task_id} <usd> или artel.py kill {task_id}",
+                      alert=True)
             return
 
         # Состояние перечитываем до advance: упавший агент и исчерпанный
@@ -249,7 +300,7 @@ def _cmd_auto(conn, task_id: str, session_id: str) -> None:
                 hint = f"почини артефакт и повтори artel.py advance {task_id}"
                 auto_stop(conn, task_id, state,
                           f"advance отклонён guard'ом артефакта-условия — "
-                          f"{hint}", hint)
+                          f"{hint}", hint, alert=True)
                 return
             refusal = _advance_refusal(conn, task_id, journaled_before)
             t = store.get_task(conn, task_id)
@@ -264,13 +315,33 @@ def _cmd_auto(conn, task_id: str, session_id: str) -> None:
             # состояния, и на обоих advance отказал тем же текстом —
             # причина отказа вне зоны агента, прогон агента её не лечит.
             hint = f"почини причину и повтори artel.py advance {task_id}"
-            auto_stop(conn, task_id, state, f"{refusal} — {hint}", hint)
+            auto_stop(conn, task_id, state, f"{refusal} — {hint}", hint,
+                      alert=True)
             return
         # Шаг без журналируемого отказа (агент ещё работает, требование 4)
         # рвёт серию — не даёт двум ОДИНАКОВЫМ, но не идущим подряд отказам
         # склеиться через него в ложную остановку.
         prev_refusal = refusal if state == before else None
+        if state == before:
+            idle_steps += 1
+        else:
+            idle_steps = 0
+        if idle_steps >= config.AUTO_STALL_STEPS_LIMIT:
+            # Требование 2: N шагов подряд без перехода — независимо от
+            # класса отказа (в отличие от стоп-крана требования 1 выше,
+            # который уже отсёк бы ДВА подряд отказа ОДНОГО класса раньше,
+            # чем счётчик успел бы дойти до N при дефолтных значениях).
+            # Хвост «, последний отказ: <класс>» — только если ПОСЛЕДНИЙ
+            # из N шагов журналировал отказ (ANSWER-1, вопрос 3): его
+            # отсутствие само по себе несёт факт «агент продолжал работу».
+            tail = f", последний отказ: {refusal}" if refusal is not None else ""
+            reason = f"цикл не сходится: {idle_steps} шагов без перехода{tail}"
+            hint = (f"artel.py log {task_id} — глянь, что происходит на "
+                    f"последних шагах, затем artel.py advance {task_id}")
+            auto_stop(conn, task_id, state, reason, hint, alert=True)
+            return
         role = runner.step_role(t)
 
     reason, hint = auto_stop_advice(conn, task_id, state)
-    auto_stop(conn, task_id, state, reason, hint)
+    auto_stop(conn, task_id, state, reason, hint,
+              alert=_final_stop_raises_alert(state, steps))

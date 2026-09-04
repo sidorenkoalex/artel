@@ -470,6 +470,16 @@ class AutoStopsOnRepeatedAdvanceRefusalTest(AutoCycleTest):
 
     def setUp(self):
         super().setUp()
+        # Порог холостых шагов (SPEC 01M1KCSTBYF1CRJBSY4P6VYQEA, требование
+        # 2, `config.AUTO_STALL_STEPS_LIMIT`, дефолт 5) — отдельный,
+        # ортогональный этому классу стоп-триггер: несколько тестов ниже
+        # намеренно гоняют цикл до `AUTO_MAX_STEPS` (30) НЕ журналируя
+        # переход (проверяют, что стоп-кран требования 1 — сравнение
+        # КЛАССОВ подряд — их не остановит раньше), и порог холостых
+        # сработал бы первым, если его не поднять выше числового потолка
+        # (у требования 2 свои тесты в приёмке этой задачи).
+        self.patch_object(config, "AUTO_STALL_STEPS_LIMIT",
+                          config.AUTO_MAX_STEPS + 1)
         self.write_plan("ready")
         self.set_state("in_dev")
         self.advance = FakeAdvance()
@@ -714,6 +724,17 @@ class AutoStepLimitTest(AutoCycleTest):
         super().setUp()
         # PLAN не ready: шаг не двигает состояние, и цикл упирается в лимит —
         # ровно тот случай, ради которого лимит и стоит.
+        #
+        # Порог холостых шагов (SPEC 01M1KCSTBYF1CRJBSY4P6VYQEA, требование
+        # 2, `config.AUTO_STALL_STEPS_LIMIT`, дефолт 5) — отдельный, более
+        # ранний стоп-триггер для ЛЮБОЙ холостой серии; предмет ЭТОГО теста
+        # — числовой потолок `AUTO_MAX_STEPS`, не он (у порога холостых свои
+        # тесты в приёмке этой задачи). Патч поднимает порог выше
+        # `AUTO_MAX_STEPS`, чтобы 30-шаговая холостая серия ниже
+        # действительно дошла до числового потолка, а не до более раннего
+        # порога холостых.
+        self.patch_object(config, "AUTO_STALL_STEPS_LIMIT",
+                          config.AUTO_MAX_STEPS + 1)
         self.write_plan("draft")
         self.set_state("in_dev")
 
