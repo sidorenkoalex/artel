@@ -222,7 +222,13 @@ class CommitExternalStepArtifactsTest(RealGitSandbox):
         self.assertFalse(self.task_dir.exists())
 
     def test_timeout_marker_carried_and_deletion_still_matches_across_flavors(self):
-        """SPEC 01M1NBWTSXEJB24PXR417YF1VA, AC-5: `timeout=True` — вызов
+        """Ловит мутацию: `own_commit_marker` сверяется точным текстом
+        сообщения вместо префикса (или пометка «WIP после таймаута»
+        ломает распознавание) — чередование обычного шага и обрыва по
+        таймауту одной и той же роли не давало бы удалить прежний файл на
+        второй итерации.
+
+        SPEC 01M1NBWTSXEJB24PXR417YF1VA, AC-5: `timeout=True` — вызов
         из `checkpoint.commit_timeout_checkpoint` — несёт пометку «WIP
         после таймаута» в сообщении/detail коммита артефактной ветки.
 
