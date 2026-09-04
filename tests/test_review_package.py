@@ -23,8 +23,8 @@ sys.path.insert(0, str(REPO))
 
 from orchestrator import (catalog, config, context_package, gitcmd,  # noqa: E402
                           review, runner, store)
-from tests.sandbox import (FakeProc, SpyRun, capture,  # noqa: E402
-                           capture_new_task_id, fake_git)
+from tests.sandbox import (FakeProc, SpyRun, TmpRootTest, capture,  # noqa: E402
+                           capture_new_task_id)
 
 SPEC_MD = """---
 task: T001
@@ -1008,39 +1008,34 @@ class PackageNoteDiffTypeTest(unittest.TestCase):
         self.assertNotIn("итерация", note)
 
 
-class PreviousVerdictShaTest(unittest.TestCase):
+class PreviousVerdictShaTest(TmpRootTest):
     """`previous_verdict_sha` читает журнал hash-фиксации (T021), не изобретая
-    новый учёт sha (SPEC требование 3)."""
+    новый учёт sha (SPEC требование 3).
+
+    Песочница — общая точка подмены `tests.sandbox.TmpRootTest` (SPEC
+    01M1KVGD18P9H5WR7VM8TGPV1T, требования 2-3), не собственный
+    урезанный набор патчей: до этой миграции `setUp` патчил `DB`/`TASKS`/
+    `LOGS`/`WORKTREES` и `gitcmd.git` (`fake_git`), но НЕ `config.ROOT` —
+    `catalog.cmd_new` коммитит `tasks/<id>/` в артефактную ветку пульта
+    плотницки (`artifact_branch.commit_files` → `write_commit`), которая
+    звала `subprocess.run` НАПРЯМУЮ, мимо `gitcmd.git` и его подмены
+    (SPEC «Контекст»): запись уходила в НАСТОЯЩИЙ репозиторий пульта —
+    источник сотен осиротевших веток `artifact/*`, которые эта задача
+    чинит. `TmpRootTest.setUp` патчит `config.ROOT` (и весь остальной
+    `ALL_CONFIG_ATTRS`) вместе с плотницкой подменой `gitcmd.subprocess.
+    run` (`SpyRun(passthrough_unknown=True)`) — тем же единым патчем
+    закрывает обе дыры сразу, без отдельного `gitcmd.git`/`fake_git`
+    (`cmd_new` этого класса не заводит worktree — `_new_external_
+    artifact_branch` его не трогает вовсе, см. `orchestrator/catalog.py`).
+    """
 
     TASK = "T001"
 
     def setUp(self):
-        tmp = tempfile.TemporaryDirectory()
-        self.addCleanup(tmp.cleanup)
-        root = Path(tmp.name)
-        for attr, value in (("DB", root / ".artel" / "state.db"),
-                            ("TASKS", root / "tasks"),
-                            ("LOGS", root / ".artel" / "logs"),
-                            # SPEC T048: `cmd_new` заводит настоящий worktree
-                            # через `gitcmd` — непропатченный `WORKTREES`
-                            # утёк бы на реальный пульт (tests/sandbox.py).
-                            ("WORKTREES", root / ".artel" / "worktrees")):
-            patcher = mock.patch.object(config, attr, value)
-            patcher.start()
-            self.addCleanup(patcher.stop)
-        # Этому классу от `cmd_new` нужна только строка в БД — `gitcmd.git`
-        # без подмены ушёл бы в РЕАЛЬНЫЙ git пульта (SPEC T048, требование
-        # 1, `branch_exists`/`workspace.ensure`): лёгкая общая заглушка
-        # (`tests.sandbox.fake_git`), тем же приёмом, что и в соседних
-        # модулях.
-        git_patcher = mock.patch.object(gitcmd, "git", fake_git)
-        git_patcher.start()
-        self.addCleanup(git_patcher.stop)
+        super().setUp()
         self.capture(catalog.cmd_init)
         self.capture(catalog.cmd_new, "sha предыдущего вердикта")
         self.conn = store.db()
-
-    capture = staticmethod(capture)
 
     def fixate(self, sha: str) -> None:
         store.journal(self.conn, self.TASK, "fsm", "sha зафиксирован",

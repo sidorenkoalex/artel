@@ -787,6 +787,71 @@ class OrphansTest(TmpRootTest):
         self.assertEqual(alerts.open_alerts(store.db(), "incident"), [])
 
 
+class OrphanArtifactBranchSweepTest(TmpRootTest):
+    """SPEC 01M1KVGD18P9H5WR7VM8TGPV1T, требование 4: `doctor --fix`
+    удаляет ветки `artifact/<id>` пульта без строки БД — уборка того
+    класса утечки, который SPEC «Контекст» описывает (тест, заводящий
+    задачу через `cmd_new` без подмены `config.ROOT`, коммитил в
+    НАСТОЯЩИЙ репозиторий пульта). Только по явному вызову, ровно один
+    incident-алерт на весь прогон, ветки живых задач не трогаются."""
+
+    def test_sweep_deletes_only_branches_without_a_db_row(self):
+        store.insert_task(store.db(), "T001", "Живая задача", "in_dev",
+                          "task/t001-zhivaya-zadacha", config.DEFAULT_TARGET, 25.0)
+        deleted_via_git = []
+
+        def fake_git(*args):
+            if len(args) >= 3 and args[0] == "branch" and args[1] == "-D":
+                deleted_via_git.append(args[2])
+            return subprocess.CompletedProcess(list(args), 0, "", "")
+
+        with mock.patch.object(
+                doctor.gitcmd, "list_branches",
+                lambda prefix="": ["artifact/t001", "artifact/t777"]), \
+                mock.patch.object(doctor.gitcmd, "git", fake_git):
+            deleted = doctor.sweep_orphan_artifact_branches(store.db())
+
+        self.assertEqual(deleted, ["artifact/t777"])
+        self.assertEqual(deleted_via_git, ["artifact/t777"])
+        incidents = [a for a in alerts.open_alerts(store.db(), "incident")
+                    if a["source"] == doctor.ORPHAN_ARTIFACT_BRANCH_SOURCE]
+        self.assertEqual(len(incidents), 1)
+        self.assertIn("artifact/t777", incidents[0]["message"])
+        self.assertNotIn("artifact/t001", incidents[0]["message"])
+
+    def test_no_orphans_raises_no_alert(self):
+        store.insert_task(store.db(), "T001", "Живая задача", "in_dev",
+                          "task/t001-zhivaya-zadacha", config.DEFAULT_TARGET, 25.0)
+
+        with mock.patch.object(doctor.gitcmd, "list_branches",
+                               lambda prefix="": ["artifact/t001"]), \
+                mock.patch.object(doctor.gitcmd, "git",
+                                  lambda *a: subprocess.CompletedProcess(
+                                      list(a), 0, "", "")):
+            deleted = doctor.sweep_orphan_artifact_branches(store.db())
+
+        self.assertEqual(deleted, [])
+        self.assertEqual(
+            [a for a in alerts.open_alerts(store.db(), "incident")
+             if a["source"] == doctor.ORPHAN_ARTIFACT_BRANCH_SOURCE], [])
+
+    def test_cmd_doctor_default_does_not_sweep(self):
+        with mock.patch.object(doctor, "all_checks", lambda conn: []), \
+                mock.patch.object(doctor, "sweep_orphan_artifact_branches") as sweep:
+            capture(doctor.cmd_doctor)
+
+        sweep.assert_not_called()
+
+    def test_cmd_doctor_fix_sweeps_once_and_lists_output(self):
+        with mock.patch.object(doctor, "all_checks", lambda conn: []), \
+                mock.patch.object(doctor, "sweep_orphan_artifact_branches",
+                                  return_value=["artifact/t777"]) as sweep:
+            out = capture(lambda: doctor.cmd_doctor(fix=True))
+
+        sweep.assert_called_once()
+        self.assertIn("artifact/t777", out)
+
+
 class LeasesCheckTest(TmpRootTest):
     """SPEC T044, требование 11: lease с мёртвым pid на этом host — incident.
 

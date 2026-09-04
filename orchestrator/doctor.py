@@ -1019,6 +1019,37 @@ def check_root_pin() -> Check:
                  f"обнови: artel.py pin-update {origin_sha}")
 
 
+# --- уборка осиротевших артефактных веток (SPEC 01M1KVGD18P9H5WR7VM8TGPV1T,
+# требование 4/AC-4) --------------------------------------------------------
+
+ORPHAN_ARTIFACT_BRANCH_SOURCE = "doctor.cleanup.artifact_branches"
+
+
+def sweep_orphan_artifact_branches(conn) -> list[str]:
+    """Удаляет ветки `artifact/<id>` пульта, для которых нет строки в БД
+    (SPEC «Контекст»: источник утечки — тест, заводящий задачу через
+    `cmd_new` без подмены `config.ROOT`, коммитивший артефакты прямиком
+    в НАСТОЯЩИЙ репозиторий пульта). Только по явному вызову Оператора
+    (`doctor --fix`), не автоматически — ветки живых задач не трогаются.
+
+    Ровно один incident-алерт на весь прогон уборки, с перечислением
+    удалённого в сообщении (не по алерту на каждую ветку — Оператору
+    нужна одна строка на уборку, не журнал по счётчику находок).
+    Возвращает список удалённых имён веток; пустой — сирот не нашлось.
+    """
+    known_ids = {r["id"].lower() for r in store.all_tasks(conn)}
+    branches = gitcmd.list_branches("artifact/") or []
+    orphans = sorted(b for b in branches
+                     if b[len("artifact/"):] not in known_ids)
+    for branch in orphans:
+        gitcmd.git("branch", "-D", branch)
+    if orphans:
+        alerts.raise_alert(
+            conn, None, "incident", ORPHAN_ARTIFACT_BRANCH_SOURCE,
+            f"осиротевшие артефактные ветки удалены: {', '.join(orphans)}")
+    return orphans
+
+
 # --- команда doctor -------------------------------------------------------
 
 def all_checks(conn) -> list[Check]:
@@ -1059,10 +1090,18 @@ def all_checks(conn) -> list[Check]:
 LABELS = {"ok": "ok", "warn": "WARN", "fail": "FAIL", "skip": "skip"}
 
 
-def cmd_doctor(restore: bool = False) -> None:
+def cmd_doctor(restore: bool = False, fix: bool = False) -> None:
     conn = store.db()
     if restore:
         print("Recovery-сверка после восстановления .artel/ из бэкапа:")
+    if fix:
+        removed = sweep_orphan_artifact_branches(conn)
+        if removed:
+            print("Осиротевшие артефактные ветки удалены:")
+            for branch in removed:
+                print(f"  {branch}")
+        else:
+            print("Осиротевших артефактных веток не найдено.")
     checks = all_checks(conn)
     for c in checks:
         print(f"  [{LABELS[c.status]}] {c.name}: {c.detail}")
