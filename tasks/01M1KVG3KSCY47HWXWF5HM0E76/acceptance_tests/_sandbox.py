@@ -43,8 +43,11 @@ TARGET = "extproj"
 # Реальный корневой .gitignore пульта (SPEC, требование 1) — те же
 # правила, что перечислены как минимум SPEC ("__pycache__/, *.pyc,
 # *.log"), плюс `dropme/` — директорное правило, которого расширением
-# не описать (см. докстринг модуля).
-GITIGNORE_TEXT = "__pycache__/\n*.pyc\n*.log\ndropme/\n"
+# не описать (см. докстринг модуля), и `.artel/` — как в настоящем
+# `.gitignore` пульта (рантайм-каталог `store.db()`/`config.DB`,
+# без него AC-5 (`git status --porcelain` над `config.ROOT`) увидел бы
+# `.artel/` как чужую грязь рабочего дерева, а не как игнорируемый путь).
+GITIGNORE_TEXT = "__pycache__/\n*.pyc\n*.log\ndropme/\n.artel/\n"
 
 SPEC_V2 = """---
 task: {task}
@@ -208,13 +211,26 @@ class DoctorFixSandbox(RealGitSandbox):
         """`artel.py doctor --fix` — CLI целиком (AC-5 называет команду
         буквально, не внутреннюю функцию); `SystemExit` (обычные doctor-
         проверки почти наверняка проваливаются в голой песочнице — нет
-        токенов, нет CLI claude в PATH этого процесса) проглатывается:
-        AC-5 не про итоговый код возврата doctor, а про сам факт уборки
-        игнорируемых файлов + журнал + нетронутый main."""
+        токенов) проглатывается: AC-5 не про итоговый код возврата
+        doctor, а про сам факт уборки игнорируемых файлов + журнал +
+        нетронутый main.
+
+        `doctor.cli_version` заменена целиком, а не только `Popen`
+        (случай, когда CLI `claude` реально стоит в PATH окружения,
+        где гоняются тесты, — этот процесс): `check_cli_version()` идёт
+        через `subprocess.run(["claude", ...])`, а `subprocess.run`
+        внутри себя открывает `Popen(...)` как контекстный менеджер —
+        подмена `Popen` на `_FakeLiveSmokeProc` (нужная для `live_smoke`)
+        ловит и этот вызов тоже и падает `TypeError`, потому что у
+        подмены нет `__enter__`/`__exit__`. Проверка версии CLI не
+        относится к AC-5 (уборка игнорируемых файлов), поэтому она
+        просто закорочена на пин, без похода в subprocess вовсе."""
         fake_proc = _FakeLiveSmokeProc()
         with mock.patch.object(sys, "argv", ["artel.py", "doctor", "--fix"]), \
                 mock.patch.object(doctor.subprocess, "Popen",
-                                  side_effect=claude_only_popen(fake_proc)):
+                                  side_effect=claude_only_popen(fake_proc)), \
+                mock.patch.object(doctor, "cli_version",
+                                  return_value=config.CLI_VERSION_PIN):
             try:
                 return capture(artel.main)
             except SystemExit:
@@ -285,7 +301,11 @@ class LockFlowSandbox(unittest.TestCase):
         self.git("checkout", "-q", self.branch)
 
     def commit_task_dir(self, message: str = "артефакт") -> None:
-        self.git("add", "-A", f"tasks/{self.TASK}")
+        # `-f`: AC-4 сеет игнорируемый `.pyc` НАПРЯМУЮ (симуляция инцидента
+        # 03.09) тем же методом, каким остальные сценарии кладут обычные
+        # файлы — голый `git add -A` тихо пропускает игнорируемые пути, и
+        # `git commit` без единого добавленного файла падает кодом 1.
+        self.git("add", "-A", "-f", f"tasks/{self.TASK}")
         self.git("commit", "-q", "-m", message)
         self.git("checkout", "-q", config.MAIN_BRANCH)
 
