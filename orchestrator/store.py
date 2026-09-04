@@ -35,6 +35,7 @@ CREATE TABLE IF NOT EXISTS tasks (
   tests_locked_sha TEXT, is_canary INTEGER DEFAULT 0, paused INTEGER DEFAULT 0,
   answer_baseline INTEGER, verifying_attempts INTEGER DEFAULT 0,
   draft_mr_created INTEGER DEFAULT 0,
+  diff_bytes INTEGER, split_assessment TEXT,
   created_at TEXT, updated_at TEXT
 );
 CREATE TABLE IF NOT EXISTS steps (
@@ -202,6 +203,12 @@ def migrate(conn: sqlite3.Connection) -> None:
     # ровно один раз за жизненный цикл задачи — колонка, не запрос к
     # GitHub на каждый вход в in_dev (orchestrator/github_adapter.py).
     add_column(conn, "tasks", "draft_mr_created", "INTEGER DEFAULT 0")
+    # Снимок объёма на входе в merge_gate (tasks/01M1KS8K9RXWHX2PW3ZKB0P903,
+    # ANSWER-1/ANSWER-2): NULL — задача закрыта до появления колонки, либо
+    # снимок не удался (сбой git — не блокирует переход) — `artel report`
+    # читает `report._DASH` для обоих случаев одинаково.
+    add_column(conn, "tasks", "diff_bytes", "INTEGER")
+    add_column(conn, "tasks", "split_assessment", "TEXT")
     conn.executescript(
         "CREATE TABLE IF NOT EXISTS task_counters ("
         "  target TEXT PRIMARY KEY, next_number INTEGER NOT NULL);")
