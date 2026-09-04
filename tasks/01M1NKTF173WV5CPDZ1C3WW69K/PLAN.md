@@ -255,6 +255,54 @@ schema_version: 3
 `python3 scripts/guard.py tasks/01M1NKTF173WV5CPDZ1C3WW69K/{PLAN,REVIEW,SPEC}.md`
 — без нарушений. Бюджет задачи поднят Оператором до $60 (ANSWER-1).
 
+### Правки итерации 3 (REVIEW.md итерация 2, R1-F1 переоткрыт)
+
+Подтяжка main (ANSWER-1, «Разрешение» выше) принесла мандат-ветвление
+только для `commit_timeout_checkpoint` и сознательно оставила
+`commit_abnormal_checkpoint`/`commit_pause_now_checkpoint` без
+`exclude` — это была ошибка (одностороннее сужение зоны в PLAN, не
+явная эскалация Оператору, как справедливо указал ревьювер): та же
+дыра, что итерация 1 закрывала для всех трёх WIP-чекпоинтов, вернулась
+для двух из них через подтяжку. Правка:
+
+- `orchestrator/checkpoint.py::commit_abnormal_checkpoint` и
+  `commit_pause_now_checkpoint` получили дословно то же
+  мандат-ветвление, что уже несёт `commit_timeout_checkpoint`:
+  `developer` коммитит worktree кодовой ветки с
+  `exclude=f"tasks/{task_id}"`, остальные роли — откат WIP вне
+  `tasks/<id>/` через `_discard_out_of_mandate_changes`. Обе функции
+  теперь безусловно (после ветвления) зовут
+  `_commit_external_step_artifacts(conn, task_id, role,
+  config.DEFAULT_TARGET)` — перенос `tasks/<id>/` в артефактную ветку
+  для ЛЮБОЙ роли, тем же путём, что и у таймаута (без `timeout=True` —
+  это не таймаут-сценарий, пометка сообщения не нужна).
+- `_commit_worktree_change` — докстринг обновлён: список вызывающих,
+  передающих `exclude`, больше не называет только
+  `commit_timeout_checkpoint` (был неточен уже на момент подтяжки).
+- Юнит-тесты `tests/test_timeout_checkpoint.py`: «dirty tree» тесты
+  обоих классов (`CommitAbnormalCheckpointTest`/
+  `CommitPauseNowCheckpointTest`) дополнены правкой ВНЕ `tasks/<id>/`
+  (иначе после исключения код-коммит пуст — тот же приём, что уже
+  применён к `CommitTimeoutCheckpointTest`); добавлено по три новых
+  теста на класс: `test_developer_mandate_excludes_task_dir_from_code_
+  commit`, `test_non_developer_role_discards_change_outside_task_dir`,
+  `test_materialized_spec_is_absent_from_the_code_branch_after_
+  {abnormal_end,pause_now}` — последний воспроизводит сценарий
+  ревьювера дословно (роль `reviewer`, `runner.role_cwd` материализует
+  SPEC.md → чекпоинт → `tasks/<id>/SPEC.md` отсутствует в `git ls-tree
+  HEAD` кодовой ветки). Реестр замечаний REVIEW.md: R1-F1 размечен
+  `fixed`.
+
+Проверено исполнением: `python3 -m unittest tests.test_timeout_
+checkpoint` — 25 тестов, OK (было 19); `python3 -m unittest discover -s
+tests` (передний план, ~202 с) — **1487 тестов, OK** (было 1481, +6
+новых); `python3 -m unittest discover -s
+tasks/01M1NKTF173WV5CPDZ1C3WW69K/acceptance_tests` — 19 тестов, OK;
+`python3 scripts/guard.py tasks/01M1NKTF173WV5CPDZ1C3WW69K/PLAN.md
+tasks/01M1NKTF173WV5CPDZ1C3WW69K/REVIEW.md
+tasks/01M1NKTF173WV5CPDZ1C3WW69K/SPEC.md` — без нарушений; карта
+кодовой базы перегенерирована (`scripts/codebase_map.py`).
+
 ## Риски
 
 - Регенерация карты кодовой базы этим коммитом (`orchestrator/*.py`,
