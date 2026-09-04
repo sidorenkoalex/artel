@@ -229,17 +229,20 @@ def _cmd_run(conn, task_id: str) -> None:
     # правка карты исполнителей меняет промпт без правки кода (T017,
     # требование 1). Отказы обеих чтений называются причиной: шаг не
     # начинается, но Оператор видит, что именно чинить.
+    #
+    # Текст самих скилов — с ГОЛОВЫ ветки `main`, не с диска рабочей копии
+    # `config.ROOT` (tasks/01M1K7KP0D8ZKRM9KTE75DCCYR, AC-1/AC-6): скилы —
+    # правило системы, роль обязана видеть версию, действующую в `main`
+    # СЕЙЧАС, а не ту, что была на момент отведения ветки задачи (ADR-0012,
+    # замечание R1-F3) — `brief.skills_text`, тот же приём, что инвариант
+    # 28 применяет к артефактам задачи, с обратным адресом.
     try:
         skill_names = roles.skills(role)
     except roles.RolesError as exc:
         sys.exit(f"[{task_id}] состав скилов роли {role} не прочитан: {exc}")
-    try:
-        skills = "\n\n".join(
-            (config.ROOT / "skills" / f"{s}.md").read_text(encoding="utf-8")
-            for s in skill_names
-        )
-    except (OSError, UnicodeDecodeError) as exc:
-        sys.exit(f"[{task_id}] скил роли {role} не прочитан: {exc}")
+    skills, reason = brief.skills_text(conn, task_id, role, skill_names)
+    if skills is None:
+        sys.exit(f"[{task_id}] скил роли {role} не прочитан: {reason}")
     mission, brief_text, package = role_prompt.mission_brief_package(
         conn, task_id, t, role)
     prompt = f"{mission}\n\n--- СКИЛЫ РОЛИ ---\n\n{skills}"

@@ -639,7 +639,22 @@ class CmdRunReviewPackageTest(unittest.TestCase):
         # похоже — так же, как у оркестратора после мержа соседней задачи.
         # `files` заполняется НИЖЕ, уже после `cmd_new` (SPEC T094: id —
         # ULID, а не предсказуемый "T001" — заранее ключи словаря не собрать).
-        self.git = FakeGit(files={"templates/REVIEW.md": FORM_MD})
+        #
+        # Скилы и CLAUDE.md — тоже записи `files` (tasks/
+        # 01M1K7KP0D8ZKRM9KTE75DCCYR, AC-1/AC-2): с этой задачи `runner.
+        # cmd_run`/`brief.developer_brief` читают их через `gitcmd.show`
+        # (голова `main`), не с диска — без записи в `files` `FakeGit.show`
+        # отвечал бы «файла нет в ветке» (докстринг класса) и шаг падал бы
+        # `sys.exit`. Содержимое — то же, что уже лежит на диске `root`
+        # (`copytree`/запись CLAUDE.md выше), никакого расхождения с
+        # версией, которую эти тесты ожидают увидеть в промпте.
+        skill_files = {f"skills/{p.name}": p.read_text(encoding="utf-8")
+                       for p in (root / "skills").glob("*.md")}
+        self.git = FakeGit(files={
+            "templates/REVIEW.md": FORM_MD,
+            "CLAUDE.md": (root / "CLAUDE.md").read_text(encoding="utf-8"),
+            **skill_files,
+        })
         git_patcher = mock.patch.object(gitcmd, "git", self.git)
         git_patcher.start()
         self.addCleanup(git_patcher.stop)
@@ -799,11 +814,23 @@ class CmdRunReviewPackageTest(unittest.TestCase):
         self.assertIn("поделён на", self.journal_details("ревью-пакет собран")[0])
 
     def test_failed_diff_is_visible_in_the_journal(self):
-        """Вердикт по пакету без diff должен объясняться из `log <id>`."""
-        self.git.returncode = 1
-        self.git.stderr = "fatal: bad revision"
+        """Вердикт по пакету без diff должен объясняться из `log <id>`.
 
-        self.run_agent("review")
+        Ломаем только сам `diff` (полный и `--stat`), не весь git целиком
+        (`self.git.returncode = 1` ломал бы и `show` — tasks/
+        01M1K7KP0D8ZKRM9KTE75DCCYR: скилы/CLAUDE.md шага читаются через
+        `show` РАНЬШЕ, чем собирается пакет, и шаг не стартовал бы вовсе,
+        а не только терял diff). `--name-only` (сверка свежести карты) не
+        трогаем — это не diff пакета.
+        """
+        def diff_broken(*args):
+            if args and args[0] == "diff" and "--name-only" not in args:
+                return subprocess.CompletedProcess(
+                    list(args), 1, "", "fatal: bad revision")
+            return self.git(*args)
+
+        with mock.patch.object(gitcmd, "git", diff_broken):
+            self.run_agent("review")
 
         detail = self.journal_details("ревью-пакет собран")[0]
         self.assertIn("diff не собран: fatal: bad revision", detail)
@@ -831,14 +858,22 @@ class CmdRunReviewPackageTest(unittest.TestCase):
 
         self.assertNotIn("--- РЕВЬЮ-ПАКЕТ ---", self.prompt())
         self.assertEqual(self.journal_details("ревью-пакет собран"), [])
-        # Шесть вызовов, и ни один — не о пакете: первый — `workspace.
-        # on_task_branch` (SPEC T045, AC-8) спрашивает список worktree
-        # перед стартом шага; второй — SPEC.md брифа читается С АРТЕФАКТНОЙ
-        # ВЕТКИ пульта (A7, требование 2: `artifact_source.resolve` теперь
-        # всегда `foreign=True`, даже для self, `orchestrator/brief.py`);
-        # третий — сверка свежести docs/codebase-map.md для брифа роли
-        # (orchestrator/brief.py, tasks/T028); четвёртый — та же
-        # генерализация, что и у второго: `_latest_answer_rel` листает
+        # Список точный: первый вызов — `workspace.on_task_branch`
+        # (SPEC T045, AC-8) спрашивает список worktree перед стартом шага;
+        # следующие три — скилы роли (`roles.yaml`: conventions-core,
+        # escalation-rules, coding-standards), читаются с ГОЛОВЫ `main`
+        # через `gitcmd.show` (`brief.skills_text`), не с диска (tasks/
+        # 01M1K7KP0D8ZKRM9KTE75DCCYR, AC-1/AC-6); пятый — SPEC.md брифа
+        # читается С АРТЕФАКТНОЙ ВЕТКИ пульта (A7, требование 2:
+        # `artifact_source.resolve` теперь всегда `foreign=True`, даже для
+        # self, `orchestrator/brief.py`) — прежний вопрос «на чужой ли
+        # ветке рабочее дерево» (`rev-parse --abbrev-ref HEAD`) этому пути
+        # больше не нужен, `resolve` больше не зовёт git вовсе; шестой —
+        # сверка свежести docs/codebase-map.md для брифа роли
+        # (orchestrator/brief.py, tasks/T028); седьмой — CLAUDE.md, тоже
+        # с головы `main` через `gitcmd.show` (`brief._main_branch_text`,
+        # tasks/01M1K7KP0D8ZKRM9KTE75DCCYR, AC-2/AC-4); восьмой — та же
+        # генерализация A7, что и у пятого: `_latest_answer_rel` листает
         # `tasks/<id>/` артефактной ветки в поиске ANSWER-n.md (историю
         # эскалаций) через `ls-tree`, не `Path.glob` диска; последние два
         # — `role_env` берёт авторство коммита шага (`role_cwd`/
@@ -853,12 +888,16 @@ class CmdRunReviewPackageTest(unittest.TestCase):
         # ревью-пакета) в шаге разработчика по-прежнему провалит тест.
         self.assertEqual(self.git.calls,
                          [["worktree", "list", "--porcelain"],
+                          ["show", "main:skills/conventions-core.md"],
+                          ["show", "main:skills/escalation-rules.md"],
+                          ["show", "main:skills/coding-standards.md"],
                           ["show", f"artifact/{self.TASK.lower()}:"
                            f"tasks/{self.TASK}/SPEC.md"],
                           ["diff", "--name-only",
                            "0000000000000000000000000000000000000000",
                            "HEAD", "--", "orchestrator/*.py", "scripts/*.py",
                            "tests/*.py"],
+                          ["show", "main:CLAUDE.md"],
                           ["ls-tree", "-r", "--name-only",
                            f"artifact/{self.TASK.lower()}", "--",
                            f"tasks/{self.TASK}"],
