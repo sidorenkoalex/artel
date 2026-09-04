@@ -93,7 +93,7 @@ workspace, tasks, knowledge, logs). БД одна на все проекты: с
   run <id> | auto <id> | approve <id> [sha] | reject <id> "<причина>" |
   answer <id> <файл-с-ответом> | kill <id> | release <id> |
   pause [--now] <id> | resume <id> | log <id> | budget <id> <usd> |
-  target-init <target> | doctor [--restore] | alert-ack <id> "<решение>" |
+  target-init <target> | doctor [--restore] [--fix] | alert-ack <id> "<решение>" |
   version | canary <каталог-ТЗ> [--rewrite-baseline] | prune [--execute] |
   amend-tests <id> --reason "<основание>" | pin-update <sha main артели>
 
@@ -360,7 +360,7 @@ def main() -> None:
         "budget": lambda: budget.cmd_budget(rest[0],
                                             rest[1] if len(rest) > 1 else ""),
         "target-init": lambda: projects.cmd_target_init(rest[0]),
-        "doctor": lambda: doctor.cmd_doctor("--restore" in rest),
+        "doctor": lambda: doctor.cmd_doctor("--restore" in rest, "--fix" in rest),
         "alert-ack": lambda: doctor.cmd_alert_ack(
             rest[0], rest[1] if len(rest) > 1 else ""),
         "version": lambda: version.cmd_version(),
