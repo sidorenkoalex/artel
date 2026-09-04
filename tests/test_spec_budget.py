@@ -268,9 +268,17 @@ class SpecBudgetOnTheGateTest(unittest.TestCase):
         значит закомментированная подсказка аналитику (требование 5)
         полем не притворяется.
         """
+        # schema_version 4 (шаблон с этой задачи) требует поле `zones:`
+        # (01M1NKVPD2A79PQ6K0JVV1B2Q1, AC-1) — заполняем закомментированную
+        # подсказку шаблона, как сделал бы analyst; сам тест — про бюджет,
+        # не про зоны.
         spec = self.tdir / "SPEC.md"
         spec.write_text(spec.read_text(encoding="utf-8")
-                        .replace("status: draft", "status: ready"),
+                        .replace("status: draft", "status: ready")
+                        .replace("# zones: orchestrator/store.py, "
+                                 "orchestrator/config.py",
+                                 "zones: orchestrator/store.py, "
+                                 "orchestrator/config.py"),
                         encoding="utf-8")
 
         self.capture(fsm.cmd_advance, self.TASK)
