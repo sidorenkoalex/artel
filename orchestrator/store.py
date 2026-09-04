@@ -590,6 +590,7 @@ def set_state(conn, task_id: str, state: str, actor: str, *,
     print(f"[{task_id}] -> {state}" + (f"  ({detail})" if detail else ""))
     record_fixation(conn, task_id)
     _append_passport_line(conn, task_id, state, actor)
+    _close_attention_alert(conn, task_id)
 
 
 def _append_passport_line(conn, task_id: str, state: str, actor: str) -> None:
@@ -607,6 +608,24 @@ def _append_passport_line(conn, task_id: str, state: str, actor: str) -> None:
         return
     from . import artifact_branch
     artifact_branch.append_passport_line(task_id, state, actor)
+
+
+def _close_attention_alert(conn, task_id: str) -> None:
+    """Закрывает открытый alert `kind=attention` этой задачи (SPEC
+    01M1KCSTBYF1CRJBSY4P6VYQEA, требование 4; ANSWER-1, вопрос 1,
+    вариант B): `set_state` — единственная точка, через которую проходит
+    ЛЮБОЙ переход FSM (auto, ручной advance, approve, reject) — хук здесь
+    закрывает алерт буксования независимо от того, кто перевёл задачу
+    дальше, вместо того чтобы ждать следующий вызов `auto` (при варианте
+    A алерт после ручного `approve` Оператора висел бы ложно до тех пор —
+    довод ANSWER-1 против него).
+
+    Отложенный импорт (тот же приём, что и `record_fixation`/
+    `_append_passport_line` выше): `alerts` сама читает `store` — прямой
+    импорт на уровне модуля дал бы цикл.
+    """
+    from . import alerts
+    alerts.close_attention_alerts(conn, task_id)
 
 
 def record_fixation(conn, task_id: str) -> None:

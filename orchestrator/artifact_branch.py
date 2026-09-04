@@ -37,7 +37,8 @@ def _now() -> str:
 
 
 def write_commit(repo: Path, files: dict, message: str, author_name: str,
-                 author_email: str, parent: str | None = None) -> str:
+                 author_email: str, parent: str | None = None,
+                 remove: list | None = None) -> str:
     """Коммитит `files` ({путь: текст ИЛИ bytes}) в объектную базу `repo`
     плотницки (используется и `snapshot.publish_and_cleanup` — коммит в
     клоне целевого, не только в `config.ROOT`); `parent`, если задан, —
@@ -51,6 +52,14 @@ def write_commit(repo: Path, files: dict, message: str, author_name: str,
     итерация 2, замечание 1: раньше такие файлы терялись при попытке
     прочитать их как UTF-8) — `hash-object` получает байты напрямую в
     обоих случаях, `str` кодируется UTF-8 без потерь для текста.
+
+    `remove` — пути, которые обязаны пропасть из дерева результата, а не
+    просто отсутствовать в `files` (SPEC 01M1KT0792125J9ZNJNZJ86E9Q,
+    требование 4/AC-6): `update-index --force-remove` поверх дерева,
+    загруженного `read-tree parent`, — без него запись, отсутствующая в
+    `files`, остаётся в результирующем дереве навсегда (дописывание,
+    никогда не удаление). Применяется ПОСЛЕ `files` — вызывающий код не
+    имеет права пересекать `files` и `remove` одним и тем же путём.
     """
     index_file = repo / f".artel-carpentry-index-{os.getpid()}-{abs(id(files))}"
     env = {**os.environ, "GIT_INDEX_FILE": str(index_file)}
@@ -74,6 +83,12 @@ def write_commit(repo: Path, files: dict, message: str, author_name: str,
                  f"100644,{blob_sha},{rel}"],
                 cwd=repo, env=env, capture_output=True, text=True)
             if upd.returncode != 0:
+                return ""
+        for rel in (remove or []):
+            rm = subprocess.run(
+                ["git", "update-index", "--force-remove", "--", rel],
+                cwd=repo, env=env, capture_output=True, text=True)
+            if rm.returncode != 0:
                 return ""
         tree = subprocess.run(["git", "write-tree"], cwd=repo, env=env,
                               capture_output=True, text=True)
@@ -101,17 +116,17 @@ def write_commit(repo: Path, files: dict, message: str, author_name: str,
 
 def commit_files(task_id: str, files: dict, message: str,
                  author_name: str = fixation.FIXATION_AUTHOR_NAME,
-                 author_email: str = fixation.FIXATION_AUTHOR_EMAIL) -> str:
+                 author_email: str = fixation.FIXATION_AUTHOR_EMAIL,
+                 remove: list | None = None) -> str:
     """Коммитит `files` в артефактную ветку задачи (создаёт её, если ещё
     нет — от головы `config.MAIN_BRANCH`, тем же принципом, что кодовая
     ветка `task/*`). Возвращает sha нового коммита; пустая строка — git
-    не ответил.
-    """
+    не ответил. `remove` — см. `write_commit`."""
     branch = branch_name(task_id)
     parent = gitcmd.branch_head_sha(branch) or gitcmd.branch_head_sha(
         config.MAIN_BRANCH) or None
     commit_sha = write_commit(config.ROOT, files, message, author_name,
-                              author_email, parent=parent)
+                              author_email, parent=parent, remove=remove)
     if not commit_sha:
         return ""
     upd_ref = subprocess.run(
