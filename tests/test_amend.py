@@ -42,12 +42,23 @@ from tests.test_acceptance_tests_flow import (  # noqa: E402
 class RunSummaryTest(unittest.TestCase):
 
     def test_extracts_ran_line_and_ok(self):
+        """Из типичного хвоста unittest-прогона извлекается только итоговая
+        строка `Ran N ... OK`, без предшествующих точек прогресса.
+
+        Ловит мутацию: регулярка `_RUN_SUMMARY` теряет якорь на `OK`/`FAILED`
+        и вместо итоговой строки в журнал (AC-11) уходит весь хвост целиком."""
         tail = ("..\n"
                "----------------------------------------------------------------------\n"
                "Ran 2 tests in 0.001s\n\nOK\n")
         self.assertEqual(amend._run_summary(tail), "Ran 2 tests in 0.001s\n\nOK")
 
     def test_extracts_ran_line_and_failed_with_count(self):
+        """Итоговая строка проваленного прогона несёт число падений
+        (`FAILED (failures=1)`), но не тащит traceback конкретного теста.
+
+        Ловит мутацию: регулярка захватывает весь блок от первого `FAIL:`
+        (не только итоговую строку) — журнал AC-11 раздувается диагностикой
+        вместо краткого итога."""
         tail = ("F\n"
                "======================================================================\n"
                "FAIL: test_ac1_first_criterion\n"
@@ -62,6 +73,11 @@ class RunSummaryTest(unittest.TestCase):
                          "итоговая строка не обязана тащить весь traceback")
 
     def test_missing_ran_line_falls_back_to_full_tail(self):
+        """Хвост, не похожий на вывод unittest (регулярка не нашла совпадения),
+        возвращается как есть, без потери диагностики.
+
+        Ловит мутацию: убранный fallback (`if match else tail.strip()`)
+        превращает несовпадение в `None`/исключение вместо всего хвоста."""
         tail = "что-то совсем не похожее на вывод unittest"
         self.assertEqual(amend._run_summary(tail), tail)
 
@@ -75,6 +91,12 @@ class WorktreeChangedPathsTest(unittest.TestCase):
             return amend._worktree_changed_paths(Path("/irrelevant"))
 
     def test_parses_modified_and_untracked_paths(self):
+        """И модифицированный (` M`), и untracked (`??`) путь строки
+        `git status --porcelain` попадают в список изменённых путей.
+
+        Ловит мутацию: сдвинутый срез `line[3:]` (например `line[2:]`) режет
+        первый символ имени файла — AC-3 сравнивал бы с префиксом усечённый
+        путь и ошибочно считал бы правку «за пределами» каталога."""
         output = (" M tasks/T001/acceptance_tests/test_ac.py\n"
                  "?? tasks/T001/PLAN.md\n")
         self.assertEqual(
@@ -82,17 +104,34 @@ class WorktreeChangedPathsTest(unittest.TestCase):
             ["tasks/T001/PLAN.md", "tasks/T001/acceptance_tests/test_ac.py"])
 
     def test_rename_keeps_only_the_new_side(self):
+        """Для строки переименования (`R  старый -> новый`) в список попадает
+        только новая сторона — старого пути на диске уже нет.
+
+        Ловит мутацию: убранный `.split(" -> ", 1)[1]` оставляет в списке
+        старый (уже не существующий) путь либо всю строку `"старый -> новый"`
+        одним элементом."""
         output = ("R  tasks/T001/acceptance_tests/old.py -> "
                  "tasks/T001/acceptance_tests/new.py\n")
         self.assertEqual(self._paths(output),
                          ["tasks/T001/acceptance_tests/new.py"])
 
     def test_blank_lines_are_ignored(self):
+        """Пустая строка на конце вывода `git status --porcelain` не
+        превращается в фиктивный «изменённый путь».
+
+        Ловит мутацию: убранная проверка `if not line.strip(): continue`
+        добавляет в список путь из трёх символов среза пустой строки."""
         output = " M tasks/T001/acceptance_tests/test_ac.py\n\n"
         self.assertEqual(self._paths(output),
                          ["tasks/T001/acceptance_tests/test_ac.py"])
 
     def test_git_not_responding_returns_none(self):
+        """Ненулевой код возврата git — сигнал «git не ответил», функция
+        возвращает `None`, а не пустой/частичный список путей.
+
+        Ловит мутацию: убранная проверка `res.returncode != 0` маскирует
+        сбой git под «изменений нет» — команда молча продолжила бы с
+        `outside=[]` вместо именованного отказа."""
         self.assertIsNone(self._paths("", returncode=128))
 
 
@@ -123,6 +162,12 @@ class TestsSnapshotAndMaterializeTest(RealGitSandbox):
                                   (self.TASK,)).fetchone()
 
     def test_materialize_fills_missing_directory_from_artifact_branch(self):
+        """Если `acceptance_tests/` ещё нет на диске worktree, материализация
+        заполняет её текущим содержимым артефактной ветки.
+
+        Ловит мутацию: перепутанный срез префикса при построении `dest`
+        (например обрезка `tasks/{id}/` вместо полного пути) кладёт файл не
+        туда либо роняет исключение вместо записи содержимого на диск."""
         artifact_branch.commit_files(
             self.TASK,
             {f"tasks/{self.TASK}/acceptance_tests/test_ac.py": "содержимое\n"},
@@ -136,6 +181,12 @@ class TestsSnapshotAndMaterializeTest(RealGitSandbox):
             "содержимое\n")
 
     def test_materialize_skips_already_present_directory(self):
+        """Каталог `acceptance_tests/` уже есть на диске (Оператор уже
+        положил туда правку) — материализация его не трогает вовсе.
+
+        Ловит мутацию: убранный ранний `if tests_dir.is_dir(): return`
+        заставляет материализацию перезаписать уже внесённую правку Оператора
+        содержимым артефактной ветки — правка тихо теряется."""
         (self.tdir / "acceptance_tests").mkdir(parents=True)
         (self.tdir / "acceptance_tests" / "test_ac.py").write_text(
             "правка Оператора\n", encoding="utf-8")
@@ -149,6 +200,12 @@ class TestsSnapshotAndMaterializeTest(RealGitSandbox):
             "уже существующий каталог не должен перетираться материализацией")
 
     def test_tests_snapshot_excludes_gitignored_pycache(self):
+        """`__pycache__`/`*.pyc`, неизбежный побочный продукт обязательного
+        прогона AC-10, не попадает в снимок для коммита в артефактную ветку.
+
+        Ловит мутацию: убранный `--exclude-standard` (или замена его на
+        сырой обход каталога) протаскивает `__pycache__` в снимок — коммит
+        правки нёс бы байт-кодовый мусор."""
         tests_dir = self.tdir / "acceptance_tests"
         tests_dir.mkdir(parents=True)
         (tests_dir / "test_ac.py").write_text("...\n", encoding="utf-8")
@@ -164,7 +221,50 @@ class TestsSnapshotAndMaterializeTest(RealGitSandbox):
             f"__pycache__ не должен попасть в снимок для коммита: "
             f"{sorted(snapshot)}")
 
+    def test_tests_snapshot_includes_modified_tracked_file(self):
+        """Файл `acceptance_tests/`, уже трекнутый КОДОВОЙ веткой задачи
+        (сценарий этой самой задачи, заведённой до A7 — `git ls-files
+        tasks/<id>/acceptance_tests/` не пуст), и правда изменённый
+        Оператором на диске worktree, попадает в снимок с НОВЫМ содержимым.
+
+        Ловит мутацию: `--cached` убран из `ls-files` (регресс к REVIEW.md
+        iteration 2/3, R2-F1) — снимок видит только untracked-файлы, правка
+        уже трекнутого файла становится невидимой: AC-2 никогда не находит
+        разницу с непустым baseline, а `tests_locked_sha` сдвигается на
+        коммит, побайтно идентичный родителю — правка Оператора теряется
+        молча."""
+        tests_dir = self.tdir / "acceptance_tests"
+        tests_dir.mkdir(parents=True)
+        tracked = tests_dir / "test_ac.py"
+        tracked.write_text("исходное содержимое\n", encoding="utf-8")
+        self.git_wt("add", "--", self.rel_tests_dir)
+        self.git_wt("commit", "-q", "-m", "трекнутая планка (сценарий до A7)")
+        tracked.write_text("правка Оператора\n", encoding="utf-8")
+
+        snapshot = amend._tests_snapshot(self.wt_path, self.rel_tests_dir)
+
+        self.assertEqual(
+            snapshot.get(f"{self.rel_tests_dir}/test_ac.py"),
+            "правка Оператора\n".encode("utf-8"),
+            f"снимок обязан видеть правку уже трекнутого файла: {snapshot}")
+
+    def git_wt(self, *args: str) -> str:
+        res = subprocess.run(["git", "-C", str(self.wt_path), *args],
+                             capture_output=True, text=True)
+        self.assertEqual(res.returncode, 0,
+                         f"git -C {self.wt_path} {' '.join(args)}: {res.stderr}")
+        return res.stdout
+
     def test_artifact_snapshot_matches_disk_snapshot_after_bare_materialize(self):
+        """Диск сразу после «голой» материализации (без правки Оператора)
+        побайтно совпадает со снимком артефактной ветки — сверка AC-2 не
+        должна путать материализацию с реальной правкой.
+
+        Ловит мутацию: потерянный слэш в префиксе `_artifact_tests_snapshot`
+        (`f"{rel_tests_dir}"` вместо `f"{rel_tests_dir}/"`) либо портит набор
+        ключей baseline, либо случайно подхватывает посторонний файл с тем
+        же префиксом имени — снимки расходятся без единой правки Оператора,
+        и AC-2 ложно решает, что фиксировать нечего."""
         artifact_branch.commit_files(
             self.TASK,
             {f"tasks/{self.TASK}/acceptance_tests/test_ac.py": "исходное\n"},
@@ -199,12 +299,24 @@ class LockedWindowTest(TmpRootTest):
         self.conn.commit()
 
     def test_unlocked_tasks_are_excluded(self):
+        """Задача, ещё не дошедшая до фиксации лока (`tests_locked_sha`
+        пуст), не попадает в окно вовсе — даже если program-wide она моложе.
+
+        Ловит мутацию: убранный фильтр `if t["tests_locked_sha"]` включает
+        незалоченную задачу в окно — порог AC-9 считался бы по задачам,
+        которые ещё не проходили `tests_writing -> in_dev`."""
         self._make_task("T001", "2026-09-01 10:00:00Z", locked=True)
         self._make_task("T002", "2026-09-01 11:00:00Z", locked=False)
 
         self.assertEqual(amend._locked_window_task_ids(self.conn), ["T001"])
 
     def test_window_keeps_last_five_by_creation_order_program_wide(self):
+        """Из 7 залоченных задач разных target окно берёт ровно последние 5
+        по порядку заведения (`created_at`), не различая target.
+
+        Ловит мутацию: фильтрация по `config.DEFAULT_TARGET` вместо
+        program-wide теряет задачи `other-target` — окно AC-9 считалось бы
+        по одному target, а не по всему пульту, как требует SPEC."""
         ids = [f"P{i:03d}" for i in range(1, 8)]  # 7 залоченных задач
         for i, task_id in enumerate(ids):
             target = config.DEFAULT_TARGET if i % 2 == 0 else "other-target"
@@ -218,6 +330,12 @@ class LockedWindowTest(TmpRootTest):
                          "заведения независимо от target")
 
     def test_fewer_than_five_locked_tasks_returns_all_of_them(self):
+        """Меньше 5 залоченных задач всего — окно составляют все они, без
+        падения и без набора несуществующих «пустых» мест.
+
+        Ловит мутацию: срез `locked[-limit:]`, заменённый на срез с
+        фиксированной длиной без учёта фактического размера списка, роняет
+        `IndexError` либо молча теряет часть задач при недоборе до 5."""
         self._make_task("T001", "2026-09-01 10:00:00Z", locked=True)
         self._make_task("T002", "2026-09-01 11:00:00Z", locked=True)
 
@@ -237,6 +355,14 @@ class AmendEventsInWindowTest(TmpRootTest):
                               config.DEFAULT_TARGET, config.DEFAULT_BUDGET_USD)
 
     def test_counts_only_amend_events_of_tasks_in_window(self):
+        """Считаются только события журнала с действием `AMEND_ACTION`
+        («правка планки») — прочие события того же task_id (например
+        фиксация sha со стороны FSM) в счёт не идут; повторная правка той
+        же задачи — вторая единица счёта (SPEC требование 4).
+
+        Ловит мутацию: убранный фильтр `AMEND_ACTION in s["action"]` считает
+        ЛЮБОЕ событие журнала задачи из окна — порог AC-9 срабатывал бы от
+        обычных шагов конвейера, не только от правок планки."""
         store.journal(self.conn, "T001", "operator", amend.AMEND_ACTION, "x")
         store.journal(self.conn, "T001", "operator", amend.AMEND_ACTION, "y")
         store.journal(self.conn, "T002", "operator", amend.AMEND_ACTION, "z")
@@ -248,11 +374,23 @@ class AmendEventsInWindowTest(TmpRootTest):
             amend._amend_events_in_window(self.conn, ["T001", "T002"]), 3)
 
     def test_task_outside_window_is_not_counted(self):
+        """Событие «правка планки» задачи, чей `task_id` НЕ входит в
+        переданное окно, не учитывается в счёте вовсе.
+
+        Ловит мутацию: счётчик, игнорирующий `window_ids` и суммирующий
+        события ВСЕХ задач БД, завышал бы порог AC-9 старыми правками
+        задач, давно выпавших из скользящего окна последних 5."""
         store.journal(self.conn, "T002", "operator", amend.AMEND_ACTION, "z")
 
         self.assertEqual(amend._amend_events_in_window(self.conn, ["T001"]), 0)
 
     def test_empty_window_counts_zero(self):
+        """Пустое окно (например задач, дошедших до лока, ещё нет вовсе) —
+        счёт правок равен 0, без исключения на пустом списке.
+
+        Ловит мутацию: цикл `for task_id in window_ids`, заменённый на
+        обращение к `window_ids[0]` без проверки длины, роняет `IndexError`
+        вместо честного нуля."""
         self.assertEqual(amend._amend_events_in_window(self.conn, []), 0)
 
 
@@ -339,11 +477,11 @@ class AmendThenReviewGateTest(RealGitSandbox):
         сверяет, а не на HEAD (не относящегося к делу) worktree'а
         кодовой ветки.
 
-        Ловит регрессию: `amend-tests` сдвигает `tests_locked_sha` на
-        HEAD worktree'а кодовой ветки — `gitcmd.diff_paths` гейта
-        сравнивает лок с АРТЕФАКТНОЙ веткой и всегда видит «расхождение»
-        (два физически разных дерева), переход отклоняется бесконечно.
-        """
+        Ловит мутацию: `_cmd_amend_tests` сдвигает `tests_locked_sha` на
+        `gitcmd.head_sha(wt_path)` (HEAD worktree'а кодовой ветки) вместо
+        sha коммита на артефактную ветку — гейт `in_dev` сравнивает лок с
+        АРТЕФАКТНОЙ веткой и всегда видит «расхождение» (два физически
+        разных дерева), переход отклоняется бесконечно."""
         self.enter_in_dev()
         (self.tdir / "acceptance_tests").mkdir(parents=True, exist_ok=True)
         (self.tdir / "acceptance_tests" / "test_ac.py").write_text(
@@ -366,16 +504,41 @@ class AmendThenReviewGateTest(RealGitSandbox):
 class ReasonArgTest(unittest.TestCase):
 
     def test_flag_absent_returns_none(self):
+        """Argv без `--reason` вовсе — разбор возвращает `None`, отличимый
+        от пустой строки (AC-5 обязана различать «флага нет» и «флаг пуст»).
+
+        Ловит мутацию: разбор, возвращающий `""` вместо `None` при
+        отсутствующем флаге, стирает различие, которое `_cmd_amend_tests`
+        всё равно сводит к одному отказу — но ломает любой ДРУГОЙ вызывающий
+        код, полагающийся на `None` как признак «флаг не передан»."""
         self.assertIsNone(artel._reason_arg(["T001"]))
 
     def test_flag_with_value_returns_it(self):
+        """`--reason <значение>` — разбор возвращает ровно переданное
+        значение, без искажений.
+
+        Ловит мутацию: индексация следующего элемента со сдвигом (например
+        `argv[i+2]` вместо `argv[i+1]`) возвращает не то значение либо
+        падает `IndexError` на однословном основании."""
         self.assertEqual(
             artel._reason_arg(["T001", "--reason", "опечатка"]), "опечатка")
 
     def test_flag_with_empty_string_value_returns_empty_string(self):
+        """`--reason ""` (флаг присутствует, значение — пустая строка) —
+        разбор возвращает именно пустую строку, не `None`.
+
+        Ловит мутацию: проверка `if value:` вместо `if value is not None`
+        на месте разбора схлопывает пустую строку с «флага нет» — AC-5
+        неотличим бы от AC-4/иного отказа по логам, хотя причина разная."""
         self.assertEqual(artel._reason_arg(["T001", "--reason", ""]), "")
 
     def test_dangling_flag_without_value_exits(self):
+        """`--reason` последним элементом argv, без значения после него —
+        именованный `SystemExit`, а не падение с трассировкой.
+
+        Ловит мутацию: убранная проверка границы списка (`i + 1 <
+        len(argv)`) роняет необработанный `IndexError` вместо понятного
+        сообщения об ошибке использования команды."""
         with self.assertRaises(SystemExit) as ctx:
             artel._reason_arg(["T001", "--reason"])
         self.assertIn("--reason", str(ctx.exception))

@@ -79,6 +79,31 @@ AmendThenReviewGateTest`, ныне зелёным). Эта итерация PLAN
 содержимого диффа — только зоны/основание/лок/прогон (AC-12), это не
 изменилось.
 
+**Правка R2-F1/R2-F2 (REVIEW.md iteration 2/3, ANSWER-7).** Пункт 5
+выше («сверка... по содержимому») предполагал, что `tasks/<id>/`
+ВСЕГДА untracked в кодовой ветке post-A7 — ревью iteration 2 живым
+расследованием опровергло это как универсальный инвариант: минимум
+десяток задач main, включая саму задачу A7 и эту самую задачу
+(заведены до A7), несут `tasks/<id>/acceptance_tests/` трекнутым
+(`git ls-files tasks/01M1HNNHDMP2C1AJTH5QF1BTN2/acceptance_tests/` —
+14 файлов). `_tests_snapshot` (`amend.py:119-159`) при этом смотрела
+только `git ls-files --others --exclude-standard` (untracked) — правка
+уже трекнутого файла становилась невидимой снимку: AC-2 никогда не
+находила разницу с непустым baseline, а `tests_locked_sha` сдвигался
+на коммит, побайтно идентичный родителю (`commit_files` с пустым
+`files`) — правка Оператора терялась молча, лок — нет. Правка: `--cached`
+добавлен к `git ls-files` рядом с `--others --exclude-standard` —
+снимок теперь видит трекнутые пути ЛЮБОГО состояния (изменённые или
+нет) плюс не-`.gitignore`-нутые untracked, тот же набор, что видит
+обычный `git add .`; «untracked tasks/<id>/» перестаёт быть
+предпосылкой кода — реализация работает одинаково для задач ДО и
+ПОСЛЕ A7. Регресс-тест `TestsSnapshotAndMaterializeTest::
+test_tests_snapshot_includes_modified_tracked_file`
+(`tests/test_amend.py`) коммитит файл планки в код-ветку worktree,
+правит его на диске, проверяет, что снимок видит новое содержимое;
+мутационно проверен вручную (временный откат `--cached` красит именно
+этот тест — `snapshot.get(...)` возвращает `None`, восстановлено).
+
 **Переписывание `_sandbox.py` (ANSWER-3, вопрос 1, вариант б).**
 Лок снят Оператором на файл
 `tasks/01M1HNNHDMP2C1AJTH5QF1BTN2/acceptance_tests/_sandbox.py`
@@ -216,20 +241,16 @@ SPEC не просит.
 Никакой существующий тест/гейт/лимит не ослабляется: новая команда не
 меняет ни один переход FSM, ни guard.py, ни gates.yaml/roles.yaml.
 
-**Прогон планки задачи** (после переписывания `_sandbox.py` и правки
-асимметрии):
-`python3 -m unittest discover -s tasks/01M1HNNHDMP2C1AJTH5QF1BTN2/acceptance_tests -p 'test_*.py'`
-— `Ran 14 tests in 15.593s`, `OK`.
+**Прогон планки задачи** (после правки R2-F1/R2-F2):
+`python3 -B -m unittest discover -s tasks/01M1HNNHDMP2C1AJTH5QF1BTN2/acceptance_tests -p 'test_*.py'`
+— `Ran 14 tests in 14.941s`, `OK`.
 
-**Прогон полного набора `tests/`** (после тех же правок, продакшн-код
+**Прогон полного набора `tests/`** (после правки R2-F1/R2-F2, продакшн-код
 и тесты этой итерации включены):
-`python3 -m pytest tests/ -q` — `1328 passed, 26 warnings, 408 subtests
-passed in 142.49s` (0 failed; 26 предупреждений — существующие
-`ResourceWarning`/`PytestUnraisableExceptionWarning` про закрытие
-sqlite-соединений между потоками GC, не новые и не связаны с этой
-задачей). Было 1323 на входе итерации (эскалация) — прирост на 5:
-1 регресс-тест `AmendThenReviewGateTest` + 4 юнит-теста
-`TestsSnapshotAndMaterializeTest`.
+`python3 -B -m pytest tests/ -q` — `1332 passed, 408 subtests passed in
+135.32s` (0 failed). Было 1331 на входе итерации (после подтяжки main)
+— прирост на 1: регресс-тест `test_tests_snapshot_includes_modified_
+tracked_file` (R2-F1).
 
 ## Риски
 
@@ -431,3 +452,47 @@ tasks/01M1HNNHDMP2C1AJTH5QF1BTN2/acceptance_tests` — 14/14 OK; `python3
 `GUARD: ок (4 файлов)`. `__pycache__`/`*.pyc` в `tasks/
 01M1HNNHDMP2C1AJTH5QF1BTN2/` на конец захода — пусто (все прогоны
 `-B`). PLAN.md остаётся `status: ready`.
+
+### Заход по ANSWER-7 — правка R2-F1/R2-F2 (лимит ревью снят)
+
+`tasks/01M1HNNHDMP2C1AJTH5QF1BTN2/` в рабочем дереве на старте этого
+захода снова оказался удалён вне коммита (тот же повторяющийся класс)
+— восстановлен `git checkout --`, не переписан (память
+`feedback_task_dir_deletion_recovery`).
+
+ANSWER-7 закрыла эскалацию «лимит ревью 3 исчерпан»: возврат в работу
+с исправлением REVIEW.md iteration 3 (`changes_requested`, коммит
+`d25f4fe` на ветке `artifact/01m1hnnhdmp2c1ajth5qf1btn2` — REVIEW.md,
+как и прежде, коммитится только на артефактную ветку, не в кодовую).
+Оба открытых замечания реестра исправлены этим заходом:
+
+- **R2-F1 (blocker)** — `orchestrator/amend.py::_tests_snapshot`
+  дополнена `--cached` в `git ls-files` (см. «Подход» выше, раздел
+  «Правка R2-F1/R2-F2»); регресс-тест `TestsSnapshotAndMaterializeTest::
+  test_tests_snapshot_includes_modified_tracked_file` добавлен и
+  мутационно проверен (без `--cached` красен, с `--cached` зелен).
+- **R2-F2 (major)** — всем 22 тестовым методам `tests/test_amend.py`
+  (включая новый регресс-тест R2-F1) добавлены докстринги со строкой
+  «Ловит мутацию: <конкретная правдоподобная поломка>», по месту
+  каждого теста; `grep -c "Ловит мутацию" tests/test_amend.py` — `22`.
+
+Реестр REVIEW.md (файл материализован в рабочее дерево из артефактной
+ветки, т.к. локально отсутствовал) размечен по каждой записи: оба
+`R2-F1`/`R2-F2` — `fixed`, с коротким описанием правки в колонке
+«решение» (skills/coding-standards: закрытие в `accepted` — решение
+ревьювера следующей итерацией, не самоклозинг).
+
+Прогон: `python3 -B -m unittest discover -s
+tasks/01M1HNNHDMP2C1AJTH5QF1BTN2/acceptance_tests -p 'test_*.py'` —
+14/14 `OK`; `python3 -B -m pytest tests/test_amend.py -q` — `23
+passed` (было 22, +1 регресс-тест R2-F1); `python3 -B -m pytest tests/
+-q` (полный набор) — `1332 passed, 408 subtests passed in 135.32s`
+(было 1331 на входе — прирост ровно на 1 новый тест, регрессов нет).
+`python3 -B scripts/guard.py tasks/01M1HNNHDMP2C1AJTH5QF1BTN2/*.md` —
+`GUARD: ок (5 файлов)` (пять — REVIEW.md впервые материализован в
+рабочем дереве этой задачи). `python3 scripts/codebase_map.py` —
+перегенерирован (правились `.py`: `orchestrator/amend.py`,
+`tests/test_amend.py`); контентно карта не изменилась (кроме
+`built_at_sha`) — сигнатуры публичных функций `amend.py` не менялись.
+`__pycache__`/`*.pyc` в `tasks/01M1HNNHDMP2C1AJTH5QF1BTN2/` на конец
+захода — пусто (все прогоны `-B`). PLAN.md остаётся `status: ready`.

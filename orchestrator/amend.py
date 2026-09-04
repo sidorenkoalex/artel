@@ -124,12 +124,27 @@ def _tests_snapshot(wt_path: Path, rel_tests_dir: str) -> dict[str, bytes] | Non
     AC-10 — ANSWER-3) в это множество не попадают, тем же критерием, что
     обычный `git add`. `None` — git не ответил.
 
+    `--cached --others --exclude-standard` (REVIEW.md iteration 2/3,
+    R2-F1) — БЕЗ `--cached` `ls-files` возвращает только untracked-файлы:
+    для задач, чей `tasks/<id>/acceptance_tests/` уже трекнут кодовой
+    веткой (в т.ч. для этой самой задачи — заведена до A7, 14 файлов
+    трекнуты, `git ls-files tasks/<id>/acceptance_tests/` не пуст),
+    правка уже отслеживаемого файла невидима снимку: `disk` возвращал
+    бы `{}` для НЕИЗМЕНЁННОГО untracked-множества, сверка AC-2 никогда
+    не находила бы разницу с непустым `baseline`, а фиксация ушла бы с
+    пустым `files` (побайтно тот же коммит, но новый sha) — лок
+    сдвигался бы без реального содержимого правки. `--cached` добавляет
+    уже трекнутые пути (сколь угодно изменённые/неизменённые) к тому же
+    выводу; `--exclude-standard` по-прежнему фильтрует ТОЛЬКО untracked-
+    часть (`.gitignore`-политика git не применяется к уже трекнутым
+    путям — тот же принцип, что у обычного `git add .`).
+
     Байты, не текст (тот же довод, что `checkpoint._commit_external_
     step_artifacts`, REVIEW.md T094 итерация 2, замечание 1) — точная
     копия того, что реально лежит на диске, без риска потерять
     не-UTF8 содержимое."""
-    res = gitcmd.in_repo(wt_path, "ls-files", "--others", "--exclude-standard",
-                         "--", rel_tests_dir)
+    res = gitcmd.in_repo(wt_path, "ls-files", "--cached", "--others",
+                         "--exclude-standard", "--", rel_tests_dir)
     if res is None or res.returncode != 0:
         return None
     files = {}
