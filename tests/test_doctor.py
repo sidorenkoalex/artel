@@ -858,6 +858,34 @@ class OrphanArtifactBranchSweepTest(TmpRootTest):
         self.assertIn("НЕ удалены", incidents[0]["message"])
         self.assertIn("artifact/t777", incidents[0]["message"])
 
+    def test_cmd_doctor_fix_reports_found_but_not_removed_honestly(self):
+        """R1-F3 (ANSWER-3): сироты найдены, но `git branch -D` провалился
+        на всех — `cmd_doctor(fix=True)` не должен печатать «не найдено»
+        (расходится с журналом алертов, который `sweep_orphan_artifact_
+        branches` уже честно ведёт), а отдельной честной строкой сказать,
+        что сироты найдены, но не удалены.
+
+        Ловит мутацию: `cmd_doctor` решает между «не найдено» и «найдены,
+        не удалены» только по пустоте возвращённого `sweep_orphan_
+        artifact_branches` списка (`removed`), не проверяя, были ли сироты
+        на самом деле, — тогда сценарий «найдены, все удаления
+        провалились» снова печатал бы обнадёживающее «не найдено».
+        """
+        def fake_git(*args):
+            if len(args) >= 3 and args[0] == "branch" and args[1] == "-D":
+                return subprocess.CompletedProcess(
+                    list(args), 1, "", "error: branch is checked out")
+            return subprocess.CompletedProcess(list(args), 0, "", "")
+
+        with mock.patch.object(doctor, "all_checks", lambda conn: []), \
+                mock.patch.object(doctor.gitcmd, "list_branches",
+                                  lambda prefix="": ["artifact/t777"]), \
+                mock.patch.object(doctor.gitcmd, "git", fake_git):
+            out = capture(lambda: doctor.cmd_doctor(fix=True))
+
+        self.assertNotIn("не найдено", out)
+        self.assertIn("найдены, но не удалены", out)
+
     def test_no_orphans_raises_no_alert(self):
         """Ловит мутацию: `sweep_orphan_artifact_branches` заводит
         incident-алерт безусловно (не только `if orphans:`) — тогда

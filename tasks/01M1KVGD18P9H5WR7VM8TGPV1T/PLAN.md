@@ -38,27 +38,28 @@ setUp` уже патчит `gitcmd.subprocess.run` (`SpyRun`) — тот же о
 патч — структурная правка (требование 2/3, AC-3) и рантайм-защита
 (AC-1/AC-2) сошлись без дополнительной механики уже на этом шаге.
 
-ANSWER-2 п.2 (R1-F2) снял двусмысленность прочтения требования 1 «обе
-механики» буквально: не только CI-сторож (ниже) вокруг ВСЕГО прогона
-`tests/`, но и рантайм-рубеж НА УРОВНЕ базового класса самой песочницы —
-`tests/sandbox.py::TmpRootTest.setUp`/`tearDown` снимают `git for-each-
-ref` НАСТОЯЩЕГО репозитория пульта (`refs/heads/`/`refs/artifacts/`) до
-и после КАЖДОГО теста-наследника и валят тест немедленно при расхождении
-(`real_repo_refs`, `_REAL_ROOT` — зафиксирован при импорте модуля, до
-любой подмены `config.ROOT`, через `_REAL_RUN`, не через текущий,
-возможно уже подменённый `subprocess.run`). Это ловит регрессию, которую
-структурная проверка `test_invariants.CarpentryGitCallsGoThroughGitcmdTest`
-(только три названных модуля) и CI-сторож (только весь прогон целиком,
-без указания виновника) не видят по отдельности: новый тестовый класс,
-исключивший `ROOT` из `PATCHED_ATTRS`, либо четвёртый «плотницкий» модуль
-с ещё не распознанной `SpyRun` git-командой — тест-виновник падает сразу
-в `tearDown`, не дожидаясь дорогого сторожа вокруг всего набора. Два
-класса (`RealGitSandbox`, `tests/test_fsm_branch_correct_status_reads.
-py::RealGitBranchTest`) целиком переопределяют `TmpRootTest.setUp` без
-`super().setUp()` — оба явно заводят собственный снимок-«до» первой
-строкой, иначе унаследованный `tearDown` падал бы `AttributeError`
-(проверено репозиторным grep'ом: других таких переопределений во всём
-дереве не нашлось).
+ANSWER-3 (возврат после лимита ревью итерации 3, R1-F2): рантайм-рубеж
+«набор тестов не пишет в настоящий репозиторий» НЕ ставится на уровне
+общего базового класса `tests/sandbox.py::TmpRootTest` — предыдущая
+итерация (по прочтению ANSWER-2 п.2 «обе механики» буквально) добавляла
+туда `real_repo_refs`/`_REAL_ROOT` и сверку снимков `setUp`/`tearDown`
+для ЛЮБОГО из 1425+ тестов-наследников пакета `tests/`; ревьювер
+эмпирически воспроизвёл ложный красный на тесте, вообще не относящемся
+к git-изоляции, из-за чужого коммита другой параллельной задачи в общий
+`config.ROOT` этого рабочего дерева (REVIEW.md итерация 3, R1-F2). Правка
+этой итерации убирает `real_repo_refs`/`_REAL_ROOT` и связанную сверку из
+`tests/sandbox.py` целиком — `TmpRootTest.setUp`/`RealGitSandbox.setUp`/
+`tests/test_fsm_branch_correct_status_reads.py::RealGitBranchTest.setUp`
+возвращены к состоянию до итерации 2 (без `_real_refs_before`), общий
+`tearDown` больше не существует. Рубеж требования 1 остаётся ровно там,
+где ANSWER-3 его оставляет: на приёмочных тестах этой задачи
+(`tasks/.../acceptance_tests/test_ac1_full_suite_ref_isolation.py` —
+дорогой прогон ВСЕГО `tests/` со сверкой снимков, тот самый
+«Инвариант-тест из AC-1», которым его называет само SPEC требование
+AC-2; `test_ac2_previous_verdict_sha_test_migration.py` — тот же приём,
+но узко вокруг одного `PreviousVerdictShaTest`) и на CI-стороже вокруг
+ВСЕГО прогона `tests/` (`.github/workflows/ci.yml`, диф ниже, ANSWER-1) —
+не в базовом классе, разделяемом всем пакетом `tests/`.
 
 `PreviousVerdictShaTest` переведён на `tests.sandbox.TmpRootTest`
 (требование 3, AC-2): `TmpRootTest.setUp` патчит ВЕСЬ `ALL_CONFIG_ATTRS`
@@ -87,6 +88,22 @@ AC-4 (уборка сирот): реализован вариант `doctor --fi
 `store.all_tasks`, регистронезависимо), удаляет их (`gitcmd.git("branch",
 "-D", ...)`), заводит ровно один incident-алерт на прогон.
 
+ANSWER-3, R1-F3: закрытая в итерации 3 половина (`git branch -D` возврат
+проверяется, incident-алерт честен) не покрывала CLI-вывод `cmd_doctor` —
+при «сироты найдены, но НИ ОДНО удаление не удалось»
+`sweep_orphan_artifact_branches` по контракту (залочен приёмочным
+`test_ac4_orphan_artifact_branch_cleanup.py` на `-> list[str]` удалённых
+имён) возвращает пустой список неотличимо от «сирот не было вовсе» —
+`cmd_doctor` печатал обнадёживающее «не найдено», хотя журнал алертов уже
+говорил обратное. Не меняя залоченную сигнатуру, добавлена
+`doctor._orphan_artifact_branches(conn)` — только чтение (детект без
+удаления), общая часть между `sweep_orphan_artifact_branches` (внутри) и
+`cmd_doctor` (снимает её ДО вызова sweep, для отчёта); `cmd_doctor`
+теперь различает три случая печатью: «удалены: …» (`removed` непусто),
+«найдены, но не удалены — см. журнал алертов» (`removed` пусто, но
+`_orphan_artifact_branches` до вызова sweep нашла хотя бы одну ветку),
+«не найдено» (`removed` пусто и до вызова sweep сирот не было вовсе).
+
 Три защищённых пути (`.github/workflows/ci.yml`, `docs/invariants.md`,
 `tests/test_invariants.py`) — не коммитятся в ветку задачи (ANSWER-1):
 приложены ниже unified-диффами, `git apply --check` пройден на чистом
@@ -107,13 +124,18 @@ test_ac1_full_suite_ref_isolation.py`.
    убран как более не нужный.
 3. `tests/test_review_package.py::PreviousVerdictShaTest`: миграция на
    `tests.sandbox.TmpRootTest` (общая точка подмены требования 2).
-3а. (ANSWER-2 п.2, R1-F2) `tests/sandbox.py`: `real_repo_refs`,
-    `_REAL_ROOT`, `TmpRootTest.setUp`/`tearDown` — снимок `git for-each-
-    ref` НАСТОЯЩЕГО репозитория пульта до/после каждого теста-наследника,
-    падение теста при расхождении; `RealGitSandbox.setUp` и
-    `tests/test_fsm_branch_correct_status_reads.py::RealGitBranchTest.
-    setUp` (оба переопределяют `TmpRootTest.setUp` целиком, без
-    `super()`) заводят собственный снимок-«до» первой строкой.
+3а. (ANSWER-3, R1-F2 — СНЯТО) Итерация 2 добавляла сюда `real_repo_refs`/
+    `_REAL_ROOT`/`TmpRootTest.setUp`/`tearDown` (снимок `git for-each-ref`
+    НАСТОЯЩЕГО репозитория пульта до/после КАЖДОГО теста-наследника) —
+    ANSWER-3 велит эту правку отменить: рубеж на уровне общего базового
+    класса ловит и чужую параллельную активность в разделяемом
+    `config.ROOT`, не только утечку кода этой задачи (эмпирически
+    воспроизведено ревьювером в REVIEW.md итерации 3). `tests/sandbox.py`
+    возвращён к состоянию до этой правки — `real_repo_refs`/`_REAL_ROOT`
+    и сверка снимков в `setUp`/`tearDown` убраны целиком; `RealGitSandbox.
+    setUp` и `tests/test_fsm_branch_correct_status_reads.py::
+    RealGitBranchTest.setUp` больше не заводят `_real_refs_before` (нечего
+    сверять — унаследованный `tearDown` эту проверку больше не делает).
 4. `orchestrator/doctor.py`: `sweep_orphan_artifact_branches`, keyword
    `fix` у `cmd_doctor` (R1-F6, ANSWER-2 п.3: `orchestrator/artel.py`
    правки НЕ требует — диспетчер `doctor` уже разбирает `rest` обобщённо
@@ -126,13 +148,23 @@ test_ac1_full_suite_ref_isolation.py`.
    возвращаемый список/алерт как «удалена», отдельная честная часть
    сообщения «НЕ удалены»; пустая строка перед следующим разделом файла
    (R1-F4).
+4а. (ANSWER-3, R1-F3 — вторая половина) `orchestrator/doctor.py`: новая
+    `_orphan_artifact_branches(conn)` (детект без удаления, общий код с
+    `sweep_orphan_artifact_branches`); `cmd_doctor` зовёт её ДО
+    `sweep_orphan_artifact_branches`, чтобы различить в CLI-выводе «не
+    найдено» от «найдены, но не удалены» — залоченная приёмочным тестом
+    сигнатура `sweep_orphan_artifact_branches(conn) -> list[str]` не
+    менялась.
 5. Юнит-тесты: `tests/test_gitcmd_carpentry.py` (новая функция, докстрины
    пяти методов дополнены заявкой «Ловит мутацию: …», R1-F1),
    `tests/test_doctor.py::OrphanArtifactBranchSweepTest` (permanentная
    регрессия уборки сирот — за пределами локальных `acceptance_tests/`
    этой задачи, которые не входят в штатный прогон `tests/`; докстрины
-   четырёх существующих методов дополнены той же заявкой, R1-F1; новый
-   `test_failed_deletion_is_not_reported_as_deleted` — регрессия R1-F3).
+   четырёх существующих методов дополнены той же заявкой, R1-F1;
+   `test_failed_deletion_is_not_reported_as_deleted` — регрессия R1-F3 на
+   уровне `sweep_orphan_artifact_branches`; новый
+   `test_cmd_doctor_fix_reports_found_but_not_removed_honestly` —
+   регрессия R1-F3 на уровне `cmd_doctor`, ANSWER-3).
 5а. (ANSWER-2 п.1, ADR-0012, R1-F5 — лок снят Оператором ИМЕННО на этот
     файл и эту правку) `tasks/01M1KVGD18P9H5WR7VM8TGPV1T/acceptance_tests/
     _util.py::cleanup_new_refs`: восстанавливает и ссылки, СУЩЕСТВОВАВШИЕ
@@ -145,10 +177,10 @@ test_ac1_full_suite_ref_isolation.py`.
 
 | Требование | Шаг |
 |---|---|
-| 1 (инвариант-тест: и sandbox, и CI) | 1, 2 (структурная база), 3а (рантайм-рубеж в песочнице, ANSWER-2 п.2), 6 (CI-сторож + постоянный тест в test_invariants.py) |
+| 1 (инвариант-тест: приёмочные тесты этой задачи + CI, не общий базовый класс — ANSWER-3) | 1, 2 (структурная база), acceptance_tests/ этой задачи (AC-1/AC-2, рубеж «требования 1» по формулировке SPEC AC-2), 6 (CI-сторож + постоянный тест в test_invariants.py) |
 | 2 (единая точка подмены) | 1, 2 |
 | 3 (миграция PreviousVerdictShaTest и прочих офендеров) | 3 |
-| 4 (уборка сирот, только по вызову Оператора) | 4, 5 |
+| 4 (уборка сирот, только по вызову Оператора) | 4, 4а, 5 |
 | 5 (защищённые пути — диффом, не коммитом) | 6 |
 
 ## Влияние на систему

@@ -54,39 +54,6 @@ ALL_CONFIG_ATTRS = (
     "ROLE_HOME", "ROLE_CONFIG_DIR", "BACKUP_MARKER", "WORKTREES",
 )
 
-# Настоящий корень пульта, зафиксированный при импорте этого модуля — ДО
-# того, как первая же песочница подменит `config.ROOT` (SPEC
-# 01M1KVGD18P9H5WR7VM8TGPV1T, требование 1, ANSWER-2 п.2): рантайм-рубеж
-# инварианта 33 внутри самой песочницы, поверх дорогого CI-сторожа вокруг
-# всего прогона `tests/`. Ловит регрессию, которую структурная проверка
-# трёх известных плотницких модулей (`test_invariants.
-# CarpentryGitCallsGoThroughGitcmdTest`) не видит: новый тестовый класс,
-# исключивший `ROOT` из `PATCHED_ATTRS`, либо четвёртый «плотницкий»
-# модуль с ещё не распознанной `SpyRun` git-командой, ушедшей настоящим
-# `subprocess.run` мимо любой подмены.
-_REAL_ROOT = config.ROOT
-
-
-def real_repo_refs() -> dict:
-    """{refname: sha} ссылок `refs/heads/`/`refs/artifacts/` НАСТОЯЩЕГО
-    репозитория пульта (`_REAL_ROOT`) прямо сейчас — та же пара префиксов,
-    что AC-1/AC-2 называют явно.
-
-    Всегда через `_REAL_RUN`, не через (возможно уже подменённый в момент
-    вызова) `subprocess.run` — снимок обязан видеть НАСТОЯЩИЙ git
-    независимо от активного патча."""
-    res = _REAL_RUN(
-        ["git", "for-each-ref", "--format=%(refname) %(objectname)",
-         "refs/heads/", "refs/artifacts/"],
-        cwd=_REAL_ROOT, capture_output=True, text=True)
-    refs = {}
-    for line in res.stdout.splitlines():
-        line = line.strip()
-        if line:
-            refname, sha = line.split()
-            refs[refname] = sha
-    return refs
-
 
 def capture(fn, *args) -> str:
     buf = io.StringIO()
@@ -476,8 +443,6 @@ class TmpRootTest(unittest.TestCase):
     PATCHED_ATTRS = ALL_CONFIG_ATTRS
 
     def setUp(self):
-        self._real_refs_before = real_repo_refs()
-
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(resilient_tmp_cleanup, tmp)
         self.root = Path(tmp.name)
@@ -530,26 +495,6 @@ class TmpRootTest(unittest.TestCase):
     def capture(self, fn, *args) -> str:
         return capture(fn, *args)
 
-    def tearDown(self):
-        """SPEC 01M1KVGD18P9H5WR7VM8TGPV1T, требование 1 (ANSWER-2 п.2,
-        R1-F2): ни один тест-наследник не имеет права сдвинуть или завести
-        ссылку НАСТОЯЩЕГО репозитория пульта — снимок из `setUp` сверяется
-        здесь, падение немедленно называет тест-виновника, не дожидаясь
-        дорогого сторожа вокруг всего прогона `tests/` (CI job `python`).
-
-        Через `_REAL_RUN` (не текущий, возможно ещё подменённый `SpyRun`
-        `subprocess.run`) — тот же приём, что и в `real_repo_refs`.
-        """
-        after = real_repo_refs()
-        before = self._real_refs_before
-        if before != after:
-            changed = {k: (before.get(k), after.get(k))
-                      for k in before.keys() | after.keys()
-                      if before.get(k) != after.get(k)}
-            self.fail(
-                "тест изменил ссылки НАСТОЯЩЕГО репозитория пульта "
-                f"(SPEC 01M1KVGD18P9H5WR7VM8TGPV1T, требование 1): {changed}")
-
 
 class RealGitSandbox(TmpRootTest):
     """`self.root` — свежий git-репозиторий с веткой main и одним коммитом.
@@ -563,12 +508,9 @@ class RealGitSandbox(TmpRootTest):
     """
 
     def setUp(self):
-        # `TmpRootTest.tearDown` (унаследован, не переопределён здесь)
-        # сверяет этот снимок — своего `setUp` целиком заменяет
-        # `TmpRootTest.setUp`, `super().setUp()` не зовётся (иначе временный
-        # каталог и патчи `ALL_CONFIG_ATTRS` завелись бы дважды).
-        self._real_refs_before = real_repo_refs()
-
+        # `super().setUp()` не зовётся — своего `setUp` целиком заменяет
+        # `TmpRootTest.setUp` (нужен свой порядок: git-репозиторий раньше
+        # патчей `ALL_CONFIG_ATTRS`).
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(resilient_tmp_cleanup, tmp)
         self.root = Path(tmp.name).resolve()

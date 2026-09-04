@@ -1026,6 +1026,18 @@ def check_root_pin() -> Check:
 ORPHAN_ARTIFACT_BRANCH_SOURCE = "doctor.cleanup.artifact_branches"
 
 
+def _orphan_artifact_branches(conn) -> list[str]:
+    """Ветки `artifact/<id>` пульта, для которых нет строки в БД
+    (регистронезависимо — `artifact_branch.branch_name` работает с
+    `task_id.lower()`). Только чтение, без удаления — общая часть между
+    `sweep_orphan_artifact_branches` (сама уборка) и `cmd_doctor`
+    (честный CLI-вывод R1-F3: нужно знать, были ли сироты, независимо от
+    того, удалось ли их удалить)."""
+    known_ids = {r["id"].lower() for r in store.all_tasks(conn)}
+    branches = gitcmd.list_branches("artifact/") or []
+    return sorted(b for b in branches if b[len("artifact/"):] not in known_ids)
+
+
 def sweep_orphan_artifact_branches(conn) -> list[str]:
     """Удаляет ветки `artifact/<id>` пульта, для которых нет строки в БД
     (SPEC «Контекст»: источник утечки — тест, заводящий задачу через
@@ -1040,12 +1052,11 @@ def sweep_orphan_artifact_branches(conn) -> list[str]:
     удалось удалить, не попадает ни в возвращаемый список, ни в текст
     алерта как «удалено» — только в отдельную честную часть сообщения.
     Возвращает список ФАКТИЧЕСКИ удалённых имён веток; пустой — либо
-    сирот не нашлось, либо ни одно удаление не удалось.
+    сирот не нашлось, либо ни одно удаление не удалось (`cmd_doctor`
+    различает эти два случая в CLI-выводе через `_orphan_artifact_
+    branches`, ANSWER-3 R1-F3).
     """
-    known_ids = {r["id"].lower() for r in store.all_tasks(conn)}
-    branches = gitcmd.list_branches("artifact/") or []
-    orphans = sorted(b for b in branches
-                     if b[len("artifact/"):] not in known_ids)
+    orphans = _orphan_artifact_branches(conn)
     deleted = []
     failed = []
     for branch in orphans:
@@ -1155,11 +1166,18 @@ def cmd_doctor(restore: bool = False, fix: bool = False) -> None:
     if restore:
         print("Recovery-сверка после восстановления .artel/ из бэкапа:")
     if fix:
+        found_before = bool(_orphan_artifact_branches(conn))
         removed = sweep_orphan_artifact_branches(conn)
         if removed:
             print("Осиротевшие артефактные ветки удалены:")
             for branch in removed:
                 print(f"  {branch}")
+        elif found_before:
+            # R1-F3 (ANSWER-3): найдены, но НИ ОДНО удаление не прошло —
+            # честно об этом, не «не найдено» (расхождение с журналом
+            # алертов, который sweep уже честно ведёт).
+            print("Осиротевшие артефактные ветки найдены, но не удалены "
+                 "— см. журнал алертов (doctor.cleanup.artifact_branches).")
         else:
             print("Осиротевших артефактных веток не найдено.")
         print("Уборка игнорируемых файлов артефактных веток живых задач:")

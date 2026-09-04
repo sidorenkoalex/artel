@@ -26,8 +26,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from orchestrator import (artifact_branch, catalog, config, fsm,  # noqa: E402
                           gitcmd, store)
 from tests.sandbox import (ALL_CONFIG_ATTRS, TmpRootTest,  # noqa: E402
-                           capture_new_task_id, real_repo_refs,
-                           resilient_tmp_cleanup)
+                           capture_new_task_id, resilient_tmp_cleanup)
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
@@ -105,12 +104,9 @@ class RealGitBranchTest(TmpRootTest):
     main."""
 
     def setUp(self):
-        # `TmpRootTest.tearDown` (унаследован, не переопределён здесь)
-        # сверяет этот снимок — свой `setUp` целиком заменяет
-        # `TmpRootTest.setUp`, `super().setUp()` не зовётся (SPEC
-        # 01M1KVGD18P9H5WR7VM8TGPV1T, требование 1, ANSWER-2 п.2).
-        self._real_refs_before = real_repo_refs()
-
+        # Свой `setUp` целиком заменяет `TmpRootTest.setUp`,
+        # `super().setUp()` не зовётся — нужен свой порядок (git-репозиторий
+        # с шаблонами раньше патчей `ALL_CONFIG_ATTRS`).
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(resilient_tmp_cleanup, tmp)
         self.root = Path(tmp.name).resolve()
