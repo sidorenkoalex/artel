@@ -1,0 +1,20 @@
+[
+  "test_ac1_ac2_pause_warns_and_executes.py::PauseWarnsOnForeignLiveLeaseTest::test_ac1_warning_names_holder_and_heartbeat_age",
+  "test_ac1_ac2_pause_warns_and_executes.py::PauseWarnsOnForeignLiveLeaseTest::test_ac1_warning_printed_before_pause_confirmation",
+  "test_ac1_ac2_pause_warns_and_executes.py::PauseWarnsOnForeignLiveLeaseTest::test_ac2_pause_still_pauses_the_task",
+  "test_ac3_release_warns_and_executes.py::ReleaseWarnsOnForeignLiveLeaseTest::test_ac3_release_still_removes_the_lease",
+  "test_ac3_release_warns_and_executes.py::ReleaseWarnsOnForeignLiveLeaseTest::test_ac3_warning_names_holder_and_heartbeat_age",
+  "test_ac3_release_warns_and_executes.py::ReleaseWarnsOnForeignLiveLeaseTest::test_ac3_warning_printed_before_release_confirmation",
+  "test_ac4_own_lease_no_warning.py::OwnLeaseNoWarningTest::test_ac4_pause_output_unchanged_for_own_live_lease",
+  "test_ac4_own_lease_no_warning.py::OwnLeaseNoWarningTest::test_ac4_release_output_unchanged_for_own_live_lease",
+  "test_ac5_dead_stale_lease_no_warning.py::DeadPidNoWarningTest::test_ac5_pause_no_warning_for_dead_pid",
+  "test_ac5_dead_stale_lease_no_warning.py::DeadPidNoWarningTest::test_ac5_release_no_warning_for_dead_pid",
+  "test_ac5_dead_stale_lease_no_warning.py::StaleHeartbeatNoWarningTest::test_ac5_pause_no_warning_for_stale_heartbeat",
+  "test_ac5_dead_stale_lease_no_warning.py::StaleHeartbeatNoWarningTest::test_ac5_release_no_warning_for_stale_heartbeat",
+  "test_ac6_warning_journaled.py::PauseWarningJournaledTest::test_ac6_pause_foreign_live_lease_adds_one_extra_journal_entry",
+  "test_ac6_warning_journaled.py::ReleaseWarningJournaledTest::test_ac6_release_foreign_live_lease_adds_one_extra_journal_entry",
+  "test_ac7_readonly_no_warning.py::ReadonlyCommandsNoWarningTest::test_ac7_doctor_lease_check_unchanged_for_live_foreign_lease",
+  "test_ac7_readonly_no_warning.py::ReadonlyCommandsNoWarningTest::test_ac7_log_does_not_mention_the_foreign_holder",
+  "test_ac7_readonly_no_warning.py::ReadonlyCommandsNoWarningTest::test_ac7_show_does_not_mention_the_foreign_holder",
+  "test_ac7_readonly_no_warning.py::ReadonlyCommandsNoWarningTest::test_ac7_status_appends_nothing_after_existing_lease_suffix"
+]
