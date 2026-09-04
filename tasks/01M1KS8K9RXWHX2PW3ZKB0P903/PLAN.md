@@ -92,6 +92,28 @@ acceptance_tests/`, 16/16 зелёных) плюс полный `tests/` (1357/1
    `python3 scripts/guard.py --all` зелёный (408 файлов), полный
    `tests/` зелёный (см. «Контекст» в «Эскалация» — числа последнего
    прогона).
+10. Правка замечаний REVIEW.md итерации 1 (R1-F1, R1-F2) — требование 1.
+    **Готово.** R1-F1: `scripts/guard.py::_zone_paths` искал пути только
+    в разделе `## Зоны`, которого нет ни в `templates/SPEC.md`, ни в
+    единой из 105 реальных SPEC — сигналы «число затрагиваемых
+    модулей/файлов» (AC-1) и «затронут инвариантный механизм» (AC-3)
+    были мёртвым кодом в проде. Правка (вариант б из предложения ревью):
+    `_zone_paths` ищет пути по ВСЕМУ тексту SPEC, тем же приёмом, что
+    `UNCERTAINTY_PHRASES` для AC-2 — `ZONES_SECTION`/`_zone_text` убраны
+    как более не нужные. Локальные фикстуры (`_sandbox.py`,
+    `tests/test_guard_split_signals.py`) кладут пути внутрь текста через
+    заголовок «## Зоны» — раздел остался частным случаем текста, а не
+    обязательным условием сигнала, поэтому 28/28 юнит-тестов и 16/16
+    приёмочных остались зелёными без единой правки тестов. R1-F2:
+    дописан докстринг `Ловит мутацию: …` — классовый, где сценарий общий
+    для всех методов класса (`ZoneFilesSignalTest`/`AcCountSignalTest`/
+    `BudgetSignalTest`), пометодный, где сценарий различается внутри
+    класса (`DiffForecastSignalTest`/`InvariantMechanismSignalUnitTest`/
+    `RequiresSplitAssessmentTest`/`SplitAssessmentErrorsTest`/
+    `ClosedTaskExceptionTest`/`SnapshotSplitAssessmentTest`) — все 28
+    методов покрыты. Реестр замечаний REVIEW.md размечен `fixed` по
+    обеим записям. `python3 scripts/guard.py --all` (413 файлов) и
+    полный `tests/` — зелёные.
 
 ## Покрытие требований
 
