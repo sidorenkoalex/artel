@@ -75,6 +75,36 @@ artifacts` (SPEC T094) из `commit_timeout_checkpoint`, для ЛЮБОЙ ро�
 6. Подтяжка `main` (зависимость по зонам из SPEC уже смержена) —
    разрешение конфликта в той же функции, регенерация карты кодовой
    базы.
+7. Закрытие REVIEW.md итерации 4 (blocker) — правка, чинящая
+   git-статус `R` (staged rename) в `_discard_out_of_mandate_changes`
+   (R1-F1) и заявки «Ловит мутацию: …» в 6 местах
+   `tests/test_timeout_checkpoint.py`/`tests/
+   test_checkpoint_external_step_artifacts.py` (R1-F2), реально лежала
+   в рабочем дереве уже в итерации 3, но не попадала ни в один коммит
+   кодовой ветки четыре итерации подряд (сам блокер ревью). По ANSWER-3
+   правка закоммичена Оператором из рабочего дерева в коммит
+   `56379c94` — по содержанию идентична тому, что независимо
+   перепроверил ревьювер в итерации 4 (`git diff --stat c0ab85fb
+   56379c94 -- orchestrator/checkpoint.py tests/
+   test_timeout_checkpoint.py tests/
+   test_checkpoint_external_step_artifacts.py` — 3 файла,
+   119(+)/18(-), совпадает с числами из REVIEW.md итерации 4).
+   Разработчик (этот шаг) перепрогнал планку заново на HEAD `56379c94`
+   после коммита:
+   - `python3 -m unittest tests.test_timeout_checkpoint tests.
+     test_checkpoint_external_step_artifacts -v` — 34/34 `ok`.
+   - `python3 -m unittest discover -s tests` — 1419 тестов, `OK`.
+   - `python3 -m unittest discover -s tasks/
+     01M1NBWTSXEJB24PXR417YF1VA/acceptance_tests -p "test_ac*.py" -v`
+     — 11/11 `ok`.
+   - `python3 scripts/guard.py tasks/01M1NBWTSXEJB24PXR417YF1VA/
+     SPEC.md tasks/01M1NBWTSXEJB24PXR417YF1VA/PLAN.md` — `GUARD: ок
+     (2 файлов)`.
+   Рабочее дерево на момент этого шага чистое (`git status
+   --porcelain=v1` — пусто) — правка кода не требуется, только
+   верификация и обновление PLAN.md. Реестр замечаний R1-F1/R1-F2 —
+   решение о статусе (`accepted`) остаётся за ревьювером следующей
+   (последней по ANSWER-3) итерации; этот шаг его не трогает.
 
 ## Покрытие требований
 
@@ -114,10 +144,12 @@ artifacts` (SPEC T094) из `commit_timeout_checkpoint`, для ЛЮБОЙ ро�
 не отличаются от прочих по схеме).
 
 Регрессионный щит: планка A7 (существующие тесты `tests/`) прогнана
-целиком после подтяжки `main` и сведения конфликта — зелёная (AC-9);
-приёмочные тесты `tasks/01M1NBWTSXEJB24PXR417YF1VA/acceptance_tests/`
-(зафиксированы test_author, локальная правка запрещена) — зелёные без
-единой правки их текста.
+целиком на HEAD `56379c94` (после закрытия blocker'а итерации 4, шаг
+7) — 1419/1419 `OK` (AC-9); приёмочные тесты `tasks/
+01M1NBWTSXEJB24PXR417YF1VA/acceptance_tests/` (зафиксированы
+test_author, локальная правка запрещена) — 11/11 `ok`, без единой
+правки их текста; `scripts/guard.py` на SPEC.md/PLAN.md — `GUARD: ок
+(2 файлов)`.
 
 ## Риски
 `_discard_out_of_mandate_changes` удаляет с диска новые нетрекенные
