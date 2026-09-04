@@ -93,7 +93,7 @@ def commit_timeout_checkpoint(conn, task_id: str, role: str) -> str:
         return ""
     wt = workspace.path(task_id)
     message = f"{task_id}: WIP-чекпоинт после таймаута шага {role}"
-    committed, sha = _commit_worktree_change(wt, message)
+    committed, sha = _commit_worktree_change(wt, message, task_id)
     if not committed:
         return ""
     detail = f"{message} (sha {sha})" if sha else message
@@ -128,7 +128,7 @@ def commit_abnormal_checkpoint(conn, task_id: str, role: str, cause: str) -> str
         return ""
     wt = workspace.path(task_id)
     message = f"{task_id}: WIP-чекпоинт после аварийного завершения шага {role} ({cause})"
-    committed, sha = _commit_worktree_change(wt, message)
+    committed, sha = _commit_worktree_change(wt, message, task_id)
     if not committed:
         return ""
     detail = f"{message} (sha {sha})" if sha else message
@@ -161,7 +161,7 @@ def commit_pause_now_checkpoint(conn, task_id: str, role: str) -> str:
         return ""
     wt = workspace.path(task_id)
     message = f"{task_id}: WIP-чекпоинт pause --now (шаг {role} прерван)"
-    committed, sha = _commit_worktree_change(wt, message)
+    committed, sha = _commit_worktree_change(wt, message, task_id)
     if not committed:
         return ""
     detail = f"{message} (sha {sha})" if sha else message
@@ -392,19 +392,40 @@ def _commit_external_step_artifacts(conn, task_id: str, role: str,
     return detail
 
 
-def _commit_worktree_change(wt: Path, message: str) -> tuple[bool, str]:
+def _commit_worktree_change(wt: Path, message: str,
+                            task_id: str | None = None) -> tuple[bool, str]:
     """(закоммичено, sha) — `add -A` + `commit` служебной идентичностью
     В ЗАДАННОМ worktree; `закоммичено=False` — нечего коммитить или git
-    не ответил на любом из трёх шагов.
+    не ответил на любом из шагов.
 
-    Общая обвязка `commit_timeout_checkpoint` и `commit_step_artifacts`
-    (SPEC T059) — обе отличаются только сообщением коммита и моментом
-    вызова, сама последовательность git-операций (и её деградация без
-    git) — одна на двоих.
+    Общая обвязка `commit_timeout_checkpoint`/`commit_abnormal_checkpoint`/
+    `commit_pause_now_checkpoint` (SPEC T041/T074) — все три отличаются
+    только сообщением коммита и моментом вызова, сама последовательность
+    git-операций (и её деградация без git) — одна на всех.
+
+    `task_id` исключает `tasks/<task_id>/` из индекса ПОСЛЕ `add -A`
+    (SPEC 01M1NKTF173WV5CPDZ1C3WW69K, R1-F1 ревью итерации 1): для self-
+    target `wt` — тот же git-worktree кодовой ветки, куда `runner.
+    role_cwd` материализует каталог задачи из артефактной ветки
+    (`artifact_branch.materialize_task_dir`) на СТАРТЕ каждого шага —
+    безусловный `add -A` этого чекпоинта иначе коммитит СВЕЖЕ
+    материализованный, ещё ничем не изменённый ролью артефакт прямо в
+    кодовую ветку `task/*`, нарушая требование 3/AC-9 (единственный путь
+    артефактов в git — автокоммит `_commit_external_step_artifacts` в
+    артефактную ветку). `git reset -- <путь>` после `add -A` снимает
+    путь с индекса независимо от того, был ли он уже отслежен (легаси-
+    копии из веток, заведённых до этой задачи, — SPEC «Не входит») или
+    добавлен только что: рабочее дерево не трогается, попадает в diff
+    коммита. `task_id is None` (нет задачи — офлайн-смоук изоляции) —
+    исключать нечего, ветка не срабатывает.
     """
     added = gitcmd.in_repo(wt, "add", "-A")
     if added.returncode != 0:
         return False, ""
+    if task_id is not None:
+        excluded = gitcmd.in_repo(wt, "reset", "--", f"tasks/{task_id}")
+        if excluded.returncode != 0:
+            return False, ""
     staged = gitcmd.in_repo(wt, "diff", "--cached", "--quiet")
     if staged.returncode != 1:  # 0 — нечего коммитить, иное — git не ответил
         return False, ""

@@ -18,7 +18,7 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from orchestrator import checkpoint, fixation, gitcmd, store, workspace  # noqa: E402
+from orchestrator import checkpoint, config, fixation, gitcmd, runner, store, workspace  # noqa: E402
 from tests.test_git_fixation import RealPultGitTest  # noqa: E402
 
 
@@ -94,8 +94,7 @@ class CommitTimeoutCheckpointTest(_WorktreeCheckpointTest):
 
     def test_dirty_tree_commits_with_message_sha_and_journal_entry(self):
         self.enter_in_dev()
-        (self.worktree_task_dir() / "wip.md").write_text(
-            "недописано\n", encoding="utf-8")
+        (self.wt / "wip.md").write_text("недописано\n", encoding="utf-8")
 
         detail = checkpoint.commit_timeout_checkpoint(
             store.db(), self.TASK, "developer")
@@ -111,6 +110,49 @@ class CommitTimeoutCheckpointTest(_WorktreeCheckpointTest):
         entries = self.orchestrator_steps()
         self.assertEqual(len(entries), 1)
         self.assertIn("таймаут", entries[0]["action"].lower())
+
+    def test_dirty_task_dir_alone_is_not_committed_to_the_code_branch(self):
+        """SPEC 01M1NKTF173WV5CPDZ1C3WW69K, R1-F1 (REVIEW.md итерации 1,
+        blocker): `tasks/<id>/`, свежематериализованный `runner.role_cwd`
+        из артефактной ветки в этот же worktree (требование 1), не
+        попадает в кодовую ветку `task/*` этим чекпоинтом — единственный
+        путь артефактов в git остаётся автокоммитом
+        `_commit_external_step_artifacts` в артефактную ветку (требование
+        3/AC-9). До фикса `wip.md` здесь коммитился наравне с любым
+        другим WIP (см. предыдущий тест) — регрессия к самому классу
+        бага, который эта SPEC чинит."""
+        self.enter_in_dev()
+        before = self.worktree_head()
+        (self.worktree_task_dir() / "wip.md").write_text(
+            "недописано\n", encoding="utf-8")
+
+        detail = checkpoint.commit_timeout_checkpoint(
+            store.db(), self.TASK, "developer")
+
+        self.assertEqual(detail, "")
+        self.assertEqual(self.worktree_head(), before)
+        self.assertEqual(self.orchestrator_steps(), [])
+        # Рабочее дерево не тронуто: файл остался, просто не в индексе.
+        self.assertTrue((self.worktree_task_dir() / "wip.md").exists())
+
+    def test_dirty_code_file_is_committed_even_with_dirty_task_dir(self):
+        """Конфликт по `tasks/<id>/` не блокирует перенос остального WIP
+        (тот же принцип, что AC-7 у конфликт-гварда автокоммита)."""
+        self.enter_in_dev()
+        (self.wt / "wip.md").write_text("недописано\n", encoding="utf-8")
+        (self.worktree_task_dir() / "SPEC.md").write_text(
+            "материализовано\n", encoding="utf-8")
+
+        detail = checkpoint.commit_timeout_checkpoint(
+            store.db(), self.TASK, "developer")
+
+        subject = self.worktree_git("log", "-1", "--format=%s").strip()
+        self.assertEqual(subject,
+                         f"{self.TASK}: WIP-чекпоинт после таймаута шага developer")
+        self.assertIn(subject, detail)
+        tracked = self.worktree_git("show", "--stat", "HEAD")
+        self.assertIn("wip.md", tracked)
+        self.assertNotIn("SPEC.md", tracked)
 
     def test_refixation_keeps_check_integrity_clean_after_the_commit(self):
         self.enter_in_dev()
@@ -221,8 +263,7 @@ class CommitAbnormalCheckpointTest(_WorktreeCheckpointTest):
 
     def test_dirty_tree_commits_with_cause_marker_in_message_and_journal(self):
         self.enter_in_dev()
-        (self.worktree_task_dir() / "wip.md").write_text(
-            "недописано\n", encoding="utf-8")
+        (self.wt / "wip.md").write_text("недописано\n", encoding="utf-8")
 
         detail = checkpoint.commit_abnormal_checkpoint(
             store.db(), self.TASK, "developer", "rc=1")
@@ -236,6 +277,21 @@ class CommitAbnormalCheckpointTest(_WorktreeCheckpointTest):
         entries = self.orchestrator_steps()
         self.assertEqual(len(entries), 1)
         self.assertIn("чекпоинт", entries[0]["action"].lower())
+
+    def test_dirty_task_dir_alone_is_not_committed_to_the_code_branch(self):
+        """SPEC 01M1NKTF173WV5CPDZ1C3WW69K, R1-F1 — см. докстринг того же
+        теста в `CommitTimeoutCheckpointTest`."""
+        self.enter_in_dev()
+        before = self.worktree_head()
+        (self.worktree_task_dir() / "wip.md").write_text(
+            "недописано\n", encoding="utf-8")
+
+        detail = checkpoint.commit_abnormal_checkpoint(
+            store.db(), self.TASK, "developer", "rc=1")
+
+        self.assertEqual(detail, "")
+        self.assertEqual(self.worktree_head(), before)
+        self.assertEqual(self.orchestrator_steps(), [])
 
     def test_refixation_keeps_check_integrity_clean_after_the_commit(self):
         self.enter_in_dev()
@@ -287,8 +343,7 @@ class CommitPauseNowCheckpointTest(_WorktreeCheckpointTest):
 
     def test_dirty_tree_commits_with_pause_now_marker(self):
         self.enter_in_dev()
-        (self.worktree_task_dir() / "wip.md").write_text(
-            "недописано\n", encoding="utf-8")
+        (self.wt / "wip.md").write_text("недописано\n", encoding="utf-8")
 
         detail = checkpoint.commit_pause_now_checkpoint(
             store.db(), self.TASK, "developer")
@@ -300,6 +355,21 @@ class CommitPauseNowCheckpointTest(_WorktreeCheckpointTest):
         entries = self.orchestrator_steps()
         self.assertEqual(len(entries), 1)
         self.assertIn("pause --now", entries[0]["action"])
+
+    def test_dirty_task_dir_alone_is_not_committed_to_the_code_branch(self):
+        """SPEC 01M1NKTF173WV5CPDZ1C3WW69K, R1-F1 — см. докстринг того же
+        теста в `CommitTimeoutCheckpointTest`."""
+        self.enter_in_dev()
+        before = self.worktree_head()
+        (self.worktree_task_dir() / "wip.md").write_text(
+            "недописано\n", encoding="utf-8")
+
+        detail = checkpoint.commit_pause_now_checkpoint(
+            store.db(), self.TASK, "developer")
+
+        self.assertEqual(detail, "")
+        self.assertEqual(self.worktree_head(), before)
+        self.assertEqual(self.orchestrator_steps(), [])
 
     def test_refixation_keeps_check_integrity_clean_after_the_commit(self):
         self.enter_in_dev()
@@ -329,6 +399,40 @@ class CommitPauseNowCheckpointTest(_WorktreeCheckpointTest):
         self.assertEqual(detail, "")
         self.assertEqual(self.worktree_head(), before)
         self.assertEqual(self.orchestrator_steps(), [])
+
+
+class RoleCwdMaterializationSurvivesTimeoutCheckpointTest(_WorktreeCheckpointTest):
+    """Регресс-тест на точную репродукцию R1-F1 (REVIEW.md итерации 1,
+    blocker): `artifact_branch.commit_files` сеет SPEC.md в артефактную
+    ветку → `runner.role_cwd` материализует его в worktree self-target'а
+    → `checkpoint.commit_timeout_checkpoint` — материализованный, ещё
+    ничем не изменённый ролью артефакт не обязан попасть в кодовую ветку
+    `task/*` этим коммитом (SPEC 01M1NKTF173WV5CPDZ1C3WW69K, требование
+    3/AC-9). До фикса `git ls-tree -r HEAD` этого worktree после
+    чекпоинта содержал `tasks/<TASK>/SPEC.md` — ровно тот сценарий,
+    которым дефект был живьём воспроизведён при ревью."""
+
+    def test_materialized_spec_is_absent_from_the_code_branch_after_timeout(self):
+        self.enter_in_dev()
+
+        materialized_path = runner.role_cwd(store.db(), self.TASK,
+                                            config.DEFAULT_TARGET)
+        self.assertEqual(materialized_path, self.wt)
+        self.assertTrue(
+            (self.wt / "tasks" / self.TASK / "SPEC.md").exists(),
+            "role_cwd обязан материализовать SPEC.md из артефактной ветки")
+        # Настоящий WIP вне tasks/<id>/, чтобы чекпоинт реально что-то
+        # закоммитил — иначе тест доказывал бы только «ничего не
+        # закоммичено», не саму фильтрацию (см. следующий коммент теста).
+        (self.wt / "wip.md").write_text("недописано\n", encoding="utf-8")
+
+        detail = checkpoint.commit_timeout_checkpoint(store.db(), self.TASK,
+                                                       "developer")
+
+        self.assertTrue(detail, "чекпоинт обязан закоммитить wip.md")
+        tracked = self.worktree_git("ls-tree", "-r", "--name-only", "HEAD")
+        self.assertNotIn(f"tasks/{self.TASK}/SPEC.md", tracked.splitlines())
+        self.assertIn("wip.md", tracked.splitlines())
 
 
 if __name__ == "__main__":

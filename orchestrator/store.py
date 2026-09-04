@@ -36,6 +36,7 @@ CREATE TABLE IF NOT EXISTS tasks (
   answer_baseline INTEGER, verifying_attempts INTEGER DEFAULT 0,
   draft_mr_created INTEGER DEFAULT 0,
   diff_bytes INTEGER, split_assessment TEXT,
+  materialized_artifact_sha TEXT,
   created_at TEXT, updated_at TEXT
 );
 CREATE TABLE IF NOT EXISTS steps (
