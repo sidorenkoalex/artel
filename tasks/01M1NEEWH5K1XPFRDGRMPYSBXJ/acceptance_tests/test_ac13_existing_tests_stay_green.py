@@ -1,4 +1,4 @@
-"""AC-17 (SPEC.md): существующий набор тестов (`tests/`) остаётся
+"""AC-13 (SPEC.md): существующий набор тестов (`tests/`) остаётся
 зелёным после изменений.
 
 Отдельный процесс (`subprocess`), не `unittest.TestLoader` в этом же
@@ -28,7 +28,7 @@ REPO_ROOT = Path(__file__).resolve().parents[3]
 
 class ExistingTestsStayGreenTest(unittest.TestCase):
 
-    def test_ac17_tests_directory_passes_in_a_clean_subprocess(self):
+    def test_ac13_tests_directory_passes_in_a_clean_subprocess(self):
         res = subprocess.run(
             [sys.executable, "-m", "unittest", "discover", "-s", "tests"],
             cwd=REPO_ROOT, capture_output=True, text=True, timeout=1800)

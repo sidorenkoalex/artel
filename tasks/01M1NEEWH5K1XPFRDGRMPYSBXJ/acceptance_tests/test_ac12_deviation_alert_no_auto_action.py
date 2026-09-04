@@ -1,4 +1,4 @@
-"""AC-16 (SPEC.md): отклонение метрик прогона от бейзлайна сверх порога
+"""AC-12 (SPEC.md): отклонение метрик прогона от бейзлайна сверх порога
 поднимает алерт Оператору — без автоматического исправления/действия.
 
 Порог — `config.CANARY_DEVIATION_RATIO` (существующая константа v1,
@@ -30,7 +30,7 @@ class DeviationAlertNoAutoActionTest(CanarySandbox):
         super().setUp()
         self.write_pool_templates(POOL_TEMPLATES)
 
-    def test_ac16_deviation_beyond_threshold_raises_an_alert_without_auto_action(self):
+    def test_ac12_deviation_beyond_threshold_raises_an_alert_without_auto_action(self):
         """Первый прогон (0 лишних ревью-раундов) пишет бейзлайн.
         Второй прогон того же единственного шаблона — с явно раздутым
         числом ревью-раундов (`config.LIMIT_REVIEW_ITERS`(3) − 1 = 2

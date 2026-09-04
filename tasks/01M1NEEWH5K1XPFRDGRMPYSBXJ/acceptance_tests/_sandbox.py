@@ -7,7 +7,10 @@ test_ac*.py). Расширяет приём `tasks/T065/acceptance_tests/_sandbo
 состоянию задачи (см. докстринг `SmartAgent` там же для обоснования
 приёма) — тот же приём, тот же список причин, здесь не повторяется.
 
-Три расширения под v2, которых не было у v1:
+Два расширения под v2, которых не было у v1 (третье, настоящий
+`origin`-remote пульта для гейта пина/отката, ушло вместе с частью 2
+задачи — деление принято Оператором 04.09, ANSWER-1: пин/`doctor`-
+триггер/откат — отдельная задача-потомок, не эта SPEC):
 
 1. Пул шаблонов ВНЕ корня пульта (`~/.artel-canary`, требование 1
    SPEC) — `Path.home()` подменена (и переменная окружения HOME — на
@@ -15,16 +18,7 @@ test_ac*.py). Расширяет приём `tasks/T065/acceptance_tests/_sandbo
    на ОТДЕЛЬНЫЙ временный каталог, не совпадающий с `self.root`:
    `write_pool_templates` сеет туда `*.md`.
 
-2. Настоящий `origin`-remote пульта (bare-репозиторий) — нужен
-   `pin.cmd_pin_update`/будущему `pin --to <sha>` (оба дёргают
-   настоящий `git fetch origin`/`git merge --ff-only`, ADR-0013 ч.3):
-   заглушкой `gitcmd.git` эту логику не проверить (прецедент T051,
-   «мок душил git» — `skills/test-authoring.md`), только настоящим
-   git. `advance_origin_main` двигает `origin` вперёд отдельным
-   рабочим клоном, не трогая `self.root`, — имитирует «main пульта
-   ушёл дальше» независимо от пина запущенной версии.
-
-3. `_EphemeralDirTracker` — перехватывает `tempfile.mkdtemp` и
+2. `_EphemeralDirTracker` — перехватывает `tempfile.mkdtemp` и
    `shutil.rmtree` (оба — единственные стандартные способы завести и
    убрать временный каталог в CPython; `tempfile.TemporaryDirectory`
    изнутри зовёт ИМЕННО их через атрибут модуля, не через `from
@@ -443,16 +437,6 @@ class CanarySandbox(unittest.TestCase):
         env_patcher.start()
         self.addCleanup(env_patcher.stop)
 
-        # --- настоящий origin (bare) пульта (AC-12, AC-13, AC-14, AC-15) -
-        origin_tmp = tempfile.TemporaryDirectory()
-        self.addCleanup(origin_tmp.cleanup)
-        self.origin_bare = Path(origin_tmp.name).resolve() / "origin.git"
-        subprocess.run(["git", "init", "-q", "--bare", "-b", "main",
-                       str(self.origin_bare)],
-                       check=True, capture_output=True, text=True)
-        self._git("remote", "add", "origin", str(self.origin_bare))
-        self._git("push", "-q", "origin", "main")
-
     # ------------------------------------------------------------ утилиты
 
     def _git(self, *args: str) -> subprocess.CompletedProcess:
@@ -464,48 +448,6 @@ class CanarySandbox(unittest.TestCase):
 
     def main_sha(self) -> str:
         return self._git("rev-parse", "main").stdout.strip()
-
-    def origin_main_sha(self) -> str:
-        res = subprocess.run(["git", "-C", str(self.origin_bare),
-                             "rev-parse", "main"],
-                             capture_output=True, text=True, encoding="utf-8")
-        self.assertEqual(res.returncode, 0, res.stderr)
-        return res.stdout.strip()
-
-    def advance_origin_main(self, n: int = 1) -> str:
-        """Двигает `origin` (bare) вперёд на `n` коммитов ОТДЕЛЬНЫМ
-        рабочим клоном — не трогая `self.root`/его HEAD (пин запущенной
-        версии не обязан следовать за origin автоматически, ADR-0013).
-        Возвращает итоговый sha `origin`'ского `main`."""
-        work_tmp = tempfile.mkdtemp()
-        try:
-            subprocess.run(["git", "clone", "-q", str(self.origin_bare), work_tmp],
-                           check=True, capture_output=True, text=True)
-            subprocess.run(["git", "-C", work_tmp, "config", "user.email",
-                           "artel-tests@example.invalid"], check=True,
-                           capture_output=True, text=True)
-            subprocess.run(["git", "-C", work_tmp, "config", "user.name",
-                           "artel tests"], check=True,
-                           capture_output=True, text=True)
-            for i in range(n):
-                marker = Path(work_tmp) / f"advance-{self._nonce_counter()}.txt"
-                marker.write_text(f"advance {i}\n", encoding="utf-8")
-                subprocess.run(["git", "-C", work_tmp, "add", "-A"], check=True,
-                               capture_output=True, text=True)
-                subprocess.run(["git", "-C", work_tmp, "commit", "-q", "-m",
-                               f"advance origin {i}"], check=True,
-                               capture_output=True, text=True)
-            subprocess.run(["git", "-C", work_tmp, "push", "-q", "origin", "main"],
-                           check=True, capture_output=True, text=True)
-        finally:
-            shutil.rmtree(work_tmp, ignore_errors=True)
-        return self.origin_main_sha()
-
-    _NONCE = [0]
-
-    def _nonce_counter(self) -> int:
-        CanarySandbox._NONCE[0] += 1
-        return CanarySandbox._NONCE[0]
 
     @staticmethod
     def capture(fn, *args) -> str:
@@ -551,17 +493,6 @@ class CanarySandbox(unittest.TestCase):
         назвать иначе, тогда красный тест будет красным по этой же
         причине (команда не узнаёт `--k`), не по опечатке песочницы."""
         return self.run_cli("canary", "--k", str(k), *extra_args)
-
-    def run_pin_update(self, sha: str) -> str:
-        return self.run_cli("pin-update", sha)
-
-    def run_pin_rollback(self, sha: str | None = None) -> str:
-        """`pin --to <sha>` (ADR-0013 ч.3, буквальная цитата в SPEC,
-        требование 14/AC-14) — без явного `<sha>` `--to` идёт БЕЗ
-        значения (откат на предыдущий зелёный по журналу канарейки)."""
-        if sha is None:
-            return self.run_cli("pin", "--to")
-        return self.run_cli("pin", "--to", sha)
 
     def task_ids(self) -> list[str]:
         return [t["id"] for t in store.all_tasks(store.db())]
