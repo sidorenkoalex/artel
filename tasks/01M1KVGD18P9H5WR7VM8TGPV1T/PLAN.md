@@ -236,6 +236,7 @@ index 3b8bd0e6..bd3196fd 100644
 +| 33 | Тесты не пишут в настоящий репозиторий пульта: полный прогон `tests/` не меняет набор ссылок (`refs/heads/*`, `refs/artifacts/*`) настоящего репозитория; вся плотницкая запись артефактной ветки (`artifact_branch.write_commit`/`commit_files`, `snapshot.py`, `pin.py`) идёт через единую точку подмены `gitcmd` (не `subprocess.run`/`Popen` напрямую), которую `tests/sandbox.py::TmpRootTest` патчит по умолчанию для всех наследников | `test_invariants.CarpentryGitCallsGoThroughGitcmdTest`; CI job `python` (сторож ссылок вокруг `unittest discover`, `.github/workflows/ci.yml`); `tasks/01M1KVGD18P9H5WR7VM8TGPV1T/acceptance_tests/test_ac1_full_suite_ref_isolation.py`, `test_ac2_previous_verdict_sha_test_migration.py`, `test_ac3_unified_git_choke_point.py` | tasks/01M1KVGD18P9H5WR7VM8TGPV1T/SPEC.md, требования 1-3 (класс-дефект: `tests.test_review_package.PreviousVerdictShaTest` заводил задачу через `cmd_new` без подмены `config.ROOT`, `artifact_branch.py` звал `subprocess.run` в обход `gitcmd` — сотни осиротевших веток `artifact/*` в настоящем репозитории пульта) |
  
  ## На ревью — тестом не выражаются
+ 
 ```
 
 ## tests/test_invariants.py
