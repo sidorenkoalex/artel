@@ -17,7 +17,14 @@ from pathlib import Path
 from scripts import guard
 
 from . import (acceptance, artifact_source, artifacts, config, fixation,
-              github_adapter, gitcmd, lease, store, workspace, yamlmini)
+              github_adapter, gitcmd, lease, review, store, workspace,
+              yamlmini)
+
+# Буквальная строка «сигналов нет» (ANSWER-2, tasks/01M1KS8K9RXWHX2PW3ZKB0P903,
+# AC-12) — снимок секции «Оценка объёма и деление» пустой/отсутствующей,
+# не «неизвестно» (NULL остаётся зарезервирован за «снимок не удался/
+# задача старше колонки», `report.py` различает эти два случая).
+SPLIT_ASSESSMENT_NONE = "сигналов нет"
 
 # Своя копия константы (та же строка, что и в orchestrator/fsm_postmerge.py
 # и orchestrator/brief.py — каждый модуль держит её по своему поводу):
@@ -288,6 +295,33 @@ def _read_branch_text_or_refuse(conn, task_id: str, branch: str,
                       "переход отклонён: дерево не на ветке задачи", detail)
         print(f"[{task_id}] переход отклонён: {detail}")
     return text
+
+
+def _snapshot_split_assessment(conn, task_id: str, t) -> None:
+    """Заполняет `diff_bytes`/`split_assessment` на входе в `merge_gate`
+    (tasks/01M1KS8K9RXWHX2PW3ZKB0P903, требование 6; ANSWER-1, ANSWER-2)
+    — материал для калибровки порогов `artel report`, не условие
+    перехода: сбой git по любой из двух колонок оставляет её NULL и НЕ
+    отказывает переходу (в отличие от `fsm_advance._capacity_gate_
+    refuses`, которая именно отказывает на том же diff).
+
+    Diff — только self target, тем же доводом, что и `_capacity_gate_
+    refuses`: `git diff` в `config.ROOT` не видит код внешнего target.
+    Секция «Оценка объёма и деление» читается с АРТЕФАКТНОЙ ветки —
+    `tasks/<id>/` живёт только там (A7, `artifact_source.resolve`),
+    независимо от target.
+    """
+    if store.task_target(conn, task_id) == config.DEFAULT_TARGET:
+        diff, _, reason = review.git_diff_part(config.MAIN_BRANCH, t["branch"])
+        if not reason:
+            store.update_task(conn, task_id, diff_bytes=len(diff.encode("utf-8")))
+
+    branch, _ = artifact_source.resolve(conn, task_id)
+    spec_text, _ = gitcmd.show(branch, f"tasks/{task_id}/SPEC.md")
+    if spec_text is not None:
+        body = guard.section_body(spec_text, "Оценка объёма и деление").strip()
+        store.update_task(conn, task_id,
+                          split_assessment=body or SPLIT_ASSESSMENT_NONE)
 
 
 def _answer_file_count(conn, task_id: str, tdir: Path) -> int | None:
@@ -629,6 +663,10 @@ def _cmd_approve(conn, task_id: str, sha: str | None, sid: str) -> None:
             return
         store.set_state(conn, task_id, "merge_gate", "operator",
                         expected_state=state, detail="приёмка пройдена")
+        # Снимок объёма (tasks/01M1KS8K9RXWHX2PW3ZKB0P903, требование 6,
+        # ANSWER-1/ANSWER-2): побочный эффект входа в merge_gate, не
+        # условие перехода — сбой git здесь не держит гейт.
+        _snapshot_split_assessment(conn, task_id, t)
         # Undraft Draft MR (SPEC T079, требование 2, AC-2): побочный
         # эффект входа в merge_gate, не условие перехода — отказ адаптера
         # не держит гейт (github_adapter.undraft_mr сама не бросает).

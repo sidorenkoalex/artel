@@ -17,7 +17,7 @@ from pathlib import Path
 # репозитория, поэтому корень кладётся руками: та же схема, что в artel.py.
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from orchestrator import yamlmini  # noqa: E402
+from orchestrator import config, yamlmini  # noqa: E402
 
 REQUIRED_META = {"task", "type", "author_role", "status"}
 
@@ -586,6 +586,157 @@ def registry_errors(path: Path | str, text: str, meta: dict) -> list[str]:
     return errors
 
 
+# --------------------------------------------------------------------------
+# Сигналы «подозрения на большой объём» на этапе SPEC
+# (tasks/01M1KS8K9RXWHX2PW3ZKB0P903, требования 1, 3; ANSWER-1 — правила
+# для AC-1 (константы, прогноз диффа) и AC-3 (пересечение зон с
+# docs/invariants.md) названы буквально ответом на эскалацию test_author).
+#
+# Проверка условная, не структурная в обычном смысле: срабатывает не для
+# каждого SPEC, а только когда содержимое само указывает на большой
+# объём — тот же класс, что «Влияние на систему» PLAN (инвариант 17), но
+# УСЛОВНЫЙ (AC-6: без единого сигнала секция не обязательна вовсе).
+SPLIT_ASSESSMENT_SECTION = "Оценка объёма и деление"
+ZONES_SECTION = "Зоны"
+
+# Три фразы требования 1/AC-2 — буквально из SPEC. Ищутся по ВСЕМУ тексту
+# SPEC, не только по разделу «Зоны»: SPEC не обязан держать «Зоны»
+# отдельной секцией (AC-4 требует только секцию «Оценка объёма и
+# деление»), а формулировка неопределённости может встретиться в любом
+# требовании.
+UNCERTAINTY_PHRASES = ("ориентировочно", "весь оркестратор",
+                       "по факту затронутых мест")
+
+# Путь вида `orchestrator/<имя>.py`/`scripts/<имя>.py» (ANSWER-1, AC-1/
+# AC-3) — источник для двух разных сигналов: числа файлов зоны и
+# пересечения с docs/invariants.md.
+ZONE_PATH = re.compile(r"(?:orchestrator|scripts)/\w+\.py")
+
+# Прогноз диффа строкой секции (ANSWER-1, AC-1) — запасной путь, когда
+# frontmatter `diff_forecast_kib` не задан.
+DIFF_FORECAST_LINE = re.compile(
+    r"Прогноз диффа:\s*(\d+(?:\.\d+)?)\s*КиБ")
+
+INVARIANTS_DOC_PATH = Path(__file__).resolve().parent.parent / "docs" / "invariants.md"
+
+
+def requires_split_assessment(meta: dict) -> bool:
+    """SPEC обязан нести проверку сигналов объёма (требования 1, 3).
+
+    Версия ниже 3 (или отсутствие поля — версия 1 по умолчанию) — формат
+    SPEC до этой задачи, `budget_usd`/структура которого не рассчитаны на
+    новый сигнал (например `budget_usd` выше нового порога в старом
+    беклоге без секции «Оценка объёма и деление» ещё не значит нарушение
+    ЭТОГО SPEC) — тот же приём версии-гейтинга, что `requires_ac_markup`
+    и `requires_registry` выше применяют к своим проверкам.
+    """
+    version = meta.get("schema_version", 1)
+    if not isinstance(version, int) or isinstance(version, bool):
+        return False
+    return version >= 3
+
+
+def _zone_text(text: str) -> str:
+    """Текст раздела «Зоны» SPEC; пусто — раздела нет (не обязателен)."""
+    return section_body(text, ZONES_SECTION)
+
+
+def _zone_paths(text: str) -> set[str]:
+    """Пути формата `orchestrator/<имя>.py`/`scripts/<имя>.py`, упомянутые
+    в разделе «Зоны» (ANSWER-1)."""
+    return set(ZONE_PATH.findall(_zone_text(text)))
+
+
+def _diff_forecast_kib(text: str, meta: dict) -> float | None:
+    """Прогноз диффа SPEC в КиБ — frontmatter `diff_forecast_kib` либо
+    строка «Прогноз диффа: N КиБ» секции «Оценка объёма и деление»
+    (ANSWER-1, AC-1). `None` — поле не задано ни там, ни там."""
+    value = meta.get("diff_forecast_kib")
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return float(value)
+    body = section_body(text, SPLIT_ASSESSMENT_SECTION)
+    match = DIFF_FORECAST_LINE.search(body)
+    return float(match.group(1)) if match else None
+
+
+def _invariants_doc_text() -> str:
+    """Текст `docs/invariants.md` по требованию, без кеша на импорте (тот
+    же приём, что `id_format_patterns` выше) — нечитаемый файл не должен
+    ронять guard, только гасить сигнал AC-3 (сравнивать не с чем)."""
+    try:
+        return INVARIANTS_DOC_PATH.read_text(encoding="utf-8")
+    except OSError:
+        return ""
+
+
+def split_signal_names(text: str, meta: dict) -> list[str]:
+    """Имена сработавших сигналов «подозрения на большой объём»
+    (требование 1, AC-1..AC-3) — пусто, если ни один не сработал (AC-6).
+
+    Порядок — порядок появления сигналов в требовании 1/критериях
+    приёмки SPEC этой задачи, не алфавитный: стабилен для читаемости
+    сообщения отказа, не для сравнения множеств.
+    """
+    names: list[str] = []
+
+    if len(_zone_paths(text)) >= config.SPLIT_SIGNAL_ZONE_FILES:
+        names.append("число затрагиваемых модулей/файлов")
+
+    ac_count = len(AC_ITEM.findall(section_body(text, "Критерии приёмки")))
+    if ac_count >= config.SPLIT_SIGNAL_AC_COUNT:
+        names.append("число критериев приёмки")
+
+    budget = meta.get("budget_usd")
+    if (isinstance(budget, (int, float)) and not isinstance(budget, bool)
+            and budget >= config.SPLIT_SIGNAL_BUDGET_USD):
+        names.append("бюджет")
+
+    if any(phrase in text for phrase in UNCERTAINTY_PHRASES):
+        names.append("формулировки неопределённости")
+
+    zone_paths = _zone_paths(text)
+    if zone_paths:
+        invariants_text = _invariants_doc_text()
+        if any(p in invariants_text for p in zone_paths):
+            names.append("затронут инвариантный механизм")
+
+    forecast_threshold_kib = ((config.REVIEW_SNAPSHOT_DIFF_MAX_BYTES / 1024)
+                              * config.SPLIT_SIGNAL_DIFF_FORECAST_RATIO)
+    forecast = _diff_forecast_kib(text, meta)
+    if forecast is not None and forecast > forecast_threshold_kib:
+        names.append("прогноз диффа")
+    elif forecast is None and names:
+        # Отсутствие прогноза — само по себе сигнал, но только когда уже
+        # сработал хотя бы один ДРУГОЙ (ANSWER-1, редактура Оператора
+        # 04.09) — «чистый» SPEC без единого реального сигнала не обязан
+        # вписывать прогноз просто по факту отсутствия поля (AC-6).
+        names.append("прогноз диффа не дан")
+
+    return names
+
+
+def split_assessment_errors(path: Path | str, text: str, meta: dict) -> list[str]:
+    """Секция «Оценка объёма и деление» заполнена, если сработал хотя бы
+    один сигнал (требование 3, AC-5/AC-7). `path` — только для текста
+    ошибок (см. `schema_errors`)."""
+    if (meta.get("type") or "") != "spec" or not requires_split_assessment(meta):
+        return []
+    signals = split_signal_names(text, meta)
+    if not signals:
+        return []
+    headers = set(re.findall(r"^##\s+(.+?)\s*$", text, re.M))
+    body = (section_body(text, SPLIT_ASSESSMENT_SECTION).strip()
+           if SPLIT_ASSESSMENT_SECTION in headers else "")
+    if body:
+        return []
+    return [f"{path}: сработали сигналы подозрения на большой объём "
+           f"({', '.join(signals)}), а секция '## {SPLIT_ASSESSMENT_SECTION}' "
+           f"пуста или отсутствует — заполни секцию нарезкой на 2-4 "
+           f"подзадачи (границы зон, порядок, обоснование мержимости "
+           f"каждой) либо обоснованием монолита (что нельзя разрезать и "
+           f"почему)"]
+
+
 def check_content(label: str, text: str) -> list[str]:
     """Ядро `check` — структурная проверка уже прочитанного текста, без
     чтения файла: `label` — путь или его подобие, только для текста
@@ -655,6 +806,9 @@ def check_content(label: str, text: str) -> list[str]:
 
     if atype == "spec" and "Критерии приёмки" in headers:
         errors.extend(spec_ac_errors(label, text, meta))
+
+    if atype == "spec":
+        errors.extend(split_assessment_errors(label, text, meta))
 
     if atype == "review":
         errors.extend(review_evidence_errors(label, text, meta))
