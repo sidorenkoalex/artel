@@ -259,3 +259,34 @@ R1-F1.
   `docs/codebase-map.md`, `tasks/01M1NEEYSP0QWPMXHG0BK591M7/{PLAN,
   REVIEW}.md` — ничего сверх замечаний реестра не менялось
   (ANSWER-3).
+
+## R4-F1 закрыт (ANSWER-4)
+
+REVIEW.md итерации 4 (`changes_requested`) держал единственный открытый
+блокер R4-F1: `python3 scripts/guard.py --all` падал на
+`tasks/01M1NEEYSP0QWPMXHG0BK591M7/SPEC.md` — обязательная секция
+«## Оценка объёма и деление» (новое правило `scripts/guard.py::
+split_assessment_errors`, принесено подтяжкой main задачи
+01M1KS8K9RXWHX2PW3ZKB0P903) отсутствовала. Правка SPEC.md — не зона
+developer; Оператор (ANSWER-4) внёс секцию сам (обоснование монолита,
+«монолит принят Оператором 04.09») в SPEC артефактной и кодовой ветки
+коммитом `0dbe7969`. Действие разработчика по ANSWER-4: подтянуть
+актуальный SPEC, убедиться, что `guard.py --all` зелёный, реестр
+REVIEW.md разметить `fixed` по R4-F1, PLAN в `ready`, сдать шаг —
+больше ничего.
+
+### Проверено исполнением (после ANSWER-4)
+
+- HEAD = `0dbe7969` — включает правку SPEC.md Оператором поверх
+  `383782d9` (REVIEW.md итерации 4).
+- `git diff artifact/01m1neeysp0qwpmxhg0bk591m7:tasks/01M1NEEYSP0QWPMXHG0BK591M7/SPEC.md
+  tasks/01M1NEEYSP0QWPMXHG0BK591M7/SPEC.md` — пусто: артефактная и
+  кодовая копии SPEC совпадают дословно.
+- `python3 scripts/guard.py --all` — «GUARD: ок (429 файлов)» — CI-джоб
+  «guard.py по всем артефактам задач» больше не падает.
+- `python3 -m pytest tasks/01M1NEEYSP0QWPMXHG0BK591M7/acceptance_tests/
+  -q` — 18 passed, состав не менялся (лок не тронут).
+- `python3 -m pytest tests/ -q` — полный набор без регрессов (см. REVIEW.md
+  «Проверено исполнением» для полного вывода прогона той же итерации).
+- Код фичи (`orchestrator/lease.py`/`pause.py`/`release.py` и их тесты)
+  этой правкой не тронут — диф ограничен SPEC.md, PLAN.md, REVIEW.md.
