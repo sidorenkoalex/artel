@@ -44,7 +44,7 @@ _journal_component`, вставка ANSWER-компонентов как обы�
 
 | id | статус | файл/строка | суть | последствие | решение |
 |---|---|---|---|---|---|
-| R1-F1 | open | tests/test_review_package.py:1011-1046,1087-1130 | 8 новых тестовых методов (`AnswerRelsTest`, `AnswerComponentsInReviewPackageTest`) без докстринга «Ловит мутацию» | ревью не может сверить тест с заявленной мутацией — конвенция test-authoring.md нарушена системно (все 8 методов) | добавить докстринг с заявкой «Ловит мутацию: …» каждому из 8 методов |
+| R1-F1 | fixed | tests/test_review_package.py:1011-1076,1087-1155 | 8 новых тестовых методов (`AnswerRelsTest`, `AnswerComponentsInReviewPackageTest`) без докстринга «Ловит мутацию» | ревью не может сверить тест с заявленной мутацией — конвенция test-authoring.md нарушена системно (все 8 методов) | добавлен докстринг с сценарием и конкретной заявкой «Ловит мутацию: …» каждому из 8 методов, по образцу `test_ac*.py` этой же задачи |
 
 ## Вердикт
 changes_requested — добавить докстринги «Ловит мутацию: …» ко всем 8 новым методам `AnswerRelsTest`/`AnswerComponentsInReviewPackageTest` в `tests/test_review_package.py` (R1-F1). Остальное — код `review.py`/`role_prompt.py`, `skills/review-checklist.md`, приёмочные тесты, влияние на систему, целостность — без замечаний.

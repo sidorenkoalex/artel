@@ -1009,6 +1009,13 @@ class AnswerRelsTest(unittest.TestCase):
     возрастанию `n` (tasks/01M1NBWRTAHSX9FQGTQWENY80A, AC-1)."""
 
     def test_sorted_by_number_not_by_ls_tree_order(self):
+        """`ls_tree_files` вернул ANSWER-файлы в произвольном порядке
+        (2, 10, 1) — результат обязан идти по возрастанию числового `n`.
+
+        Ловит мутацию: сортировка по текстовому имени файла вместо
+        `int(suffix)` — `ANSWER-10.md` встал бы перед `ANSWER-2.md`
+        (текстовое «10» < «2»).
+        """
         git = FakeGit(files={
             "tasks/T001/ANSWER-2.md": "second",
             "tasks/T001/ANSWER-10.md": "tenth",
@@ -1022,6 +1029,14 @@ class AnswerRelsTest(unittest.TestCase):
                          "числовая сортировка, не текстовая (10 не перед 2)")
 
     def test_non_answer_files_under_the_same_dir_are_ignored(self):
+        """Рядом с ANSWER-1.md лежат SPEC.md и ANSWER-x.md (нечисловой
+        суффикс) — оба обязаны быть отфильтрованы, в списке только
+        ANSWER-1.md.
+
+        Ловит мутацию: пропущенная проверка `name.startswith("ANSWER-")`
+        или `suffix.isdigit()` — SPEC.md и/или ANSWER-x.md попали бы в
+        результат.
+        """
         git = FakeGit(files={
             "tasks/T001/SPEC.md": "spec", "tasks/T001/ANSWER-1.md": "first",
             "tasks/T001/ANSWER-x.md": "не число",
@@ -1032,6 +1047,13 @@ class AnswerRelsTest(unittest.TestCase):
         self.assertEqual(rels, ["tasks/T001/ANSWER-1.md"])
 
     def test_git_failure_yields_no_answers(self):
+        """`git ls-tree` вернул ненулевой код возврата — пустой список,
+        не исключение.
+
+        Ловит мутацию: отсутствие `or []` после `gitcmd.ls_tree_files`
+        — при `None` от неё цикл `for p in paths` упал бы с `TypeError`
+        вместо возврата пустого списка.
+        """
         git = FakeGit(returncode=1, stderr="fatal: bad revision")
         with mock.patch.object(gitcmd, "git", git):
             rels = review._answer_rels("T001", "artifact/t001")
@@ -1039,6 +1061,13 @@ class AnswerRelsTest(unittest.TestCase):
         self.assertEqual(rels, [])
 
     def test_no_answer_files_at_all_yields_an_empty_list(self):
+        """Директория задачи существует, но ни одного ANSWER-n.md в ней
+        нет — пустой список, а не файлы, случайно совпавшие по префиксу
+        каталога.
+
+        Ловит мутацию: фильтр по имени файла (`ANSWER-`/`.isdigit()`)
+        снят или ослаблен — SPEC.md оказался бы в результате.
+        """
         git = FakeGit(files={"tasks/T001/SPEC.md": "spec"})
         with mock.patch.object(gitcmd, "git", git):
             rels = review._answer_rels("T001", "artifact/t001")
@@ -1085,6 +1114,16 @@ class AnswerComponentsInReviewPackageTest(unittest.TestCase):
             (self.TASK, action))]
 
     def test_all_answer_files_are_included_in_ascending_order(self):
+        """Задача несёт ANSWER-1.md и ANSWER-2.md, добавленные в обратном
+        порядке (2, затем 1) — оба маркера обязаны быть в тексте пакета,
+        ANSWER-1 обязан идти раньше ANSWER-2.
+
+        Ловит мутацию: пакет включает только последний ANSWER (как для
+        developer/analyst/test_author, `brief._latest_answer_rel`) или
+        вставляет компоненты в порядке добавления, а не по возрастанию
+        `n` — «маркер-b1» пропал бы вовсе или оказался бы после
+        «маркер-b2».
+        """
         self.add_answer(2, "второй батч маркер-b2")
         self.add_answer(1, "первый батч маркер-b1")
 
@@ -1096,6 +1135,15 @@ class AnswerComponentsInReviewPackageTest(unittest.TestCase):
         self.assertIn("маркер-b2", text)
 
     def test_each_answer_gets_its_own_journal_entry_with_its_own_sha256(self):
+        """Два ANSWER-компонента — каждый обязан дать СВОЮ запись в
+        журнале с sha256 СВОЕГО содержимого, не одну сводную запись на
+        оба.
+
+        Ловит мутацию: журналирование одной записью на весь набор
+        ANSWER (например, sha256 от конкатенации текстов) вместо
+        отдельного вызова `store.journal` на каждый `rel` — ни
+        `sha_1`, ни `sha_2` не нашлись бы по отдельности.
+        """
         self.add_answer(1, "батч один")
         self.add_answer(2, "батч два")
 
@@ -1112,6 +1160,15 @@ class AnswerComponentsInReviewPackageTest(unittest.TestCase):
                         f"нет записи про ANSWER-2.md: {entries}")
 
     def test_existing_package_components_get_no_new_journal_entries(self):
+        """Есть один ANSWER-файл — SPEC.md/PLAN.md/форма вердикта не
+        получают новых журнальных записей (AC-3): журналируются ТОЛЬКО
+        новые ANSWER-компоненты.
+
+        Ловит мутацию: журналирование по кругу для всех компонентов
+        `found` (включая уже существующие SPEC/PLAN/форму), а не только
+        для `answer_rels` — записи про SPEC.md/PLAN.md/
+        templates/REVIEW.md появились бы в журнале.
+        """
         self.add_answer(1, "батч")
 
         self.build()
@@ -1124,6 +1181,14 @@ class AnswerComponentsInReviewPackageTest(unittest.TestCase):
                 self.assertNotIn(path, detail)
 
     def test_no_answer_files_leaves_no_journal_entries_and_no_trace(self):
+        """Задача без единого ANSWER-n.md — ни одной новой записи в
+        журнале и ни следа «ANSWER» в тексте пакета (регресс AC-5).
+
+        Ловит мутацию: цикл журналирования/сборки компонентов выполняется
+        независимо от пустоты `answer_rels` (например, обходит `found`
+        целиком) — задача без ANSWER-файлов всё равно получила бы записи
+        в журнале.
+        """
         package = self.build()
 
         self.assertEqual(self.journal_details("бриф: компонент"), [])
