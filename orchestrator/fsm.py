@@ -17,7 +17,8 @@ from pathlib import Path
 from scripts import guard
 
 from . import (acceptance, artifact_source, artifacts, config, fixation,
-              github_adapter, gitcmd, lease, store, workspace, yamlmini)
+              github_adapter, gitcmd, lease, store, targets, workspace,
+              yamlmini)
 
 # Своя копия константы (та же строка, что и в orchestrator/fsm_postmerge.py
 # и orchestrator/brief.py — каждый модуль держит её по своему поводу):
@@ -124,12 +125,50 @@ def _auto_resolve_map_conflict(conn, task_id: str, wt_path) -> bool:
     return True
 
 
-def _origin_main_sha() -> str | None:
-    """sha текущего HEAD main артели на её `origin` (SPEC
-    01M1NBWPKNBXP9ZXXQDJM7AXPJ, AC-1/AC-2/AC-8) — своя копия узла
-    `orchestrator/fsm_merge_gate.py::_origin_main_sha` (тот же приём
-    дублирования по модулю, что уже несёт `MAP_REL` в начале файла):
-    `fsm_merge_gate` импортирует `fsm`, обратный импорт завёл бы цикл.
+def _origin_main_source(target_name: str) -> tuple[str, str] | None:
+    """(remote, ветка) main конкретного target'а (SPEC
+    01M1NBWPKNBXP9ZXXQDJM7AXPJ, требование 5, AC-10, ANSWER-1): источник
+    сверки/подтяжки берётся из конфигурации target задачи, не хардкожен
+    как `origin` пульта. `None` — запись target'а не читается (файл или
+    сама запись не годны): молчаливый откат на литерал `"origin"` был бы
+    ОПАСНЕЕ обычной деградации «git не ответил» — сравнил/смержил бы
+    задачу внешнего target против совсем другого репозитория (main
+    пульта), не «ничего не сделал»; вызывающий код обязан деградировать
+    так же, как при неответившем git (AC-8: расхождение/поломка
+    конфигурации не имеет права двигать ни сверку, ни merge).
+
+    Self-target (`config.DEFAULT_TARGET`) — прежний литерал `"origin"`
+    (её пульт всегда несёт именно такой remote, ANSWER-1 «для self-target
+    — origin пульта») БЕЗ обращения к `targets.yaml`: лёгкие песочницы
+    этой сверки (`tests/test_branch_freshness_gate.py`, приёмочные тесты
+    задачи) намеренно не заводят `config.TARGETS` для self-target
+    сценария — чтение файла здесь безусловно сломало бы их (требование 4,
+    AC-9). Любой другой target — `targets.target(name)["url"]` (адрес
+    репозитория) как remote, её же `["base"]` как ветка: `targets.yaml`
+    не несёт отдельного поля «имя remote» (протокол git одинаково
+    принимает и имя настроенного remote, и голый URL вторым аргументом
+    `git fetch`/`git merge`), а `["url"]` — уже существующее поле записи
+    (ADR-0003 п.2), в точности «конфигурация target», которую требует
+    AC-10.
+    """
+    if target_name == config.DEFAULT_TARGET:
+        return "origin", config.MAIN_BRANCH
+    try:
+        entry = targets.target(target_name)
+    except targets.TargetsError:
+        return None
+    return entry["url"], entry["base"]
+
+
+def _origin_main_sha(target_name: str) -> str | None:
+    """sha текущего HEAD main конкретного target'а на её удалённом
+    источнике (SPEC 01M1NBWPKNBXP9ZXXQDJM7AXPJ, AC-1/AC-2/AC-8/AC-10) —
+    своя копия узла `orchestrator/fsm_merge_gate.py::_origin_main_sha`
+    (тот же приём дублирования по модулю, что уже несёт `MAP_REL` в
+    начале файла): `fsm_merge_gate` импортирует `fsm`, обратный импорт
+    завёл бы цикл. `_origin_main_sha` там остаётся про main АРТЕЛИ
+    конкретно (плотницкий merge Stage0 — только self-target/`operator`
+    гейт), эта — про main ЗАДАННОГО target'а (`_origin_main_source`).
 
     `git fetch` пишет только в объектную базу и `FETCH_HEAD` репозитория,
     в котором исполнен (`config.ROOT` — здесь всегда так, `gitcmd.git`,
@@ -140,11 +179,16 @@ def _origin_main_sha() -> str | None:
     git 2.5 `FETCH_HEAD` — файл, приватный для каждого worktree (как
     HEAD/index) — литерал `"FETCH_HEAD"` там не резолвится в то, что
     только что зафетчил `config.ROOT`. `None` — git не ответил на fetch
-    или на `rev-parse` (тот же вырожденный случай, что у остальных
+    или на `rev-parse`, либо конфигурация target'а не читается
+    (`_origin_main_source`) — тот же вырожденный случай, что у остальных
     примитивов оркестратора: сверка ниже деградирует на «ничего не
-    делать»).
+    делать».
     """
-    fetch = gitcmd.git("fetch", "-q", "origin", config.MAIN_BRANCH)
+    source = _origin_main_source(target_name)
+    if source is None:
+        return None
+    remote, branch = source
+    fetch = gitcmd.git("fetch", "-q", remote, branch)
     if fetch is None or fetch.returncode != 0:
         return None
     res = gitcmd.git("rev-parse", "FETCH_HEAD")
@@ -159,14 +203,18 @@ def _pull_main_or_escalate(conn, task_id: str, t, state: str) -> str:
     тот же узел для всех трёх точек сверки (`in_dev -> review`,
     `acceptance -> merge_gate`, `merge_gate -> done`).
 
-    Сверка и merge идут против main артели на `origin`
-    (`_origin_main_sha`), НЕ против локального `config.MAIN_BRANCH`
-    (пина главной копии): между двумя мержами пин двигает только
-    отдельная операторская команда `pin-update` (A7), и решение по
-    устаревшему пину ложно отвечало «ветка не отстала», хотя origin ушёл
-    вперёд (инцидент 04.09, SPEC «Контекст»). `config.MAIN_BRANCH`
-    остаётся только ИМЕНЕМ ветки в origin, которую фетчим и с которой
-    сравниваем/мержим, не источником сравнения/merge самим по себе.
+    Сверка и merge идут против main НА УДАЛЁННОМ ИСТОЧНИКЕ target'а
+    задачи (`_origin_main_sha`/`_origin_main_source`, требование 5,
+    AC-10), НЕ против локального `config.MAIN_BRANCH` (пина главной
+    копии): между двумя мержами пин двигает только отдельная
+    операторская команда `pin-update` (A7), и решение по устаревшему
+    пину ложно отвечало «ветка не отстала», хотя origin ушёл вперёд
+    (инцидент 04.09, SPEC «Контекст»). Для self-target это буквально
+    `origin` пульта и `config.MAIN_BRANCH` (ANSWER-1); для любого другого
+    target — `url`/`base` его записи в `targets.yaml`. `config.
+    MAIN_BRANCH` остаётся только ИМЕНЕМ ветки self-target, которую
+    фетчим и с которой сравниваем/мержим, не источником сравнения/merge
+    самим по себе.
 
     Возврат — один из трёх исходов:
     - `"escalated"` — переход уже отклонён: задача уже эскалирована
@@ -208,7 +256,8 @@ def _pull_main_or_escalate(conn, task_id: str, t, state: str) -> str:
     байт-в-байт: `git merge --abort` + `"escalated"`.
     """
     branch = t["branch"]
-    base = _origin_main_sha() or "FETCH_HEAD"
+    target_name = t["target"] or config.DEFAULT_TARGET
+    base = _origin_main_sha(target_name) or "FETCH_HEAD"
     behind = gitcmd.commits_behind(branch, base=base)
     if not behind:
         return "fresh"

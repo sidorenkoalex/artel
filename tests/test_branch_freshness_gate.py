@@ -406,5 +406,123 @@ class BranchFreshnessGateTest(unittest.TestCase):
         self.assertIn("worktree", combined)
 
 
+# --------------------------------------------------------------------- AC-10
+
+
+class TargetSourcedRemoteTest(unittest.TestCase):
+    """SPEC 01M1NBWPKNBXP9ZXXQDJM7AXPJ, требование 5/AC-10 (ANSWER-1,
+    добавлено после лока приёмочной планки — юнит-тест здесь, не в
+    `tasks/01M1NBWPKNBXP9ZXXQDJM7AXPJ/acceptance_tests/`).
+
+    Источник сверки/подтяжки — конфигурация target'а задачи
+    (`targets.yaml`/`store.task_target`), не хардкод `origin` пульта:
+    задача с не-self target'ом фетчит `url` её записи, не литерал
+    `"origin"`. Self-target уже покрыт `BranchFreshnessGateTest` выше
+    (там `config.TARGETS` намеренно не заводится — AC-9); здесь отдельная
+    песочница ИМЕННО потому, что этот сценарий обязан завести файл.
+    """
+
+    TARGETS_YAML = """targets:
+  acme:
+    forge: github
+    url: https://example.invalid/acme-target.git
+    base: trunk
+    token_slot: artel-token
+    no_paths: []
+    project_skills: []
+    merge_gate: operator
+"""
+
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        root = Path(tmp.name)
+        shutil.copytree(REPO_ROOT / "templates", root / "templates")
+
+        for attr, value in (("DB", root / ".artel" / "state.db"),
+                            ("TASKS", root / "tasks"),
+                            ("LOGS", root / ".artel" / "logs"),
+                            ("ROOT", root),
+                            ("PROJECTS", root / ".artel" / "projects"),
+                            ("TARGETS", root / "targets.yaml"),
+                            ("ROLE_HOME", root / ".artel" / "home"),
+                            ("ROLE_CONFIG_DIR",
+                             root / ".artel" / "home" / ".claude"),
+                            ("BACKUP_MARKER", root / ".artel" / "backup-marker"),
+                            ("WORKTREES", root / ".artel" / "worktrees")):
+            patcher = mock.patch.object(config, attr, value)
+            patcher.start()
+            self.addCleanup(patcher.stop)
+        config.TARGETS.write_text(self.TARGETS_YAML, encoding="utf-8")
+
+        self.calls: list = []
+
+        def spying_git(*args):
+            self.calls.append(args)
+            return fake_git(*args)
+
+        patcher = mock.patch.object(gitcmd, "git", spying_git)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        spy_patcher = mock.patch.object(gitcmd.subprocess, "run", SpyRun())
+        spy_patcher.start()
+        self.addCleanup(spy_patcher.stop)
+        show_patcher = mock.patch.object(gitcmd, "show", disk_backed_show)
+        show_patcher.start()
+        self.addCleanup(show_patcher.stop)
+        ls_patcher = mock.patch.object(gitcmd, "ls_tree_files",
+                                       disk_backed_ls_tree_files)
+        ls_patcher.start()
+        self.addCleanup(ls_patcher.stop)
+
+        self.wt_path = root / "wt"
+        wt_patcher = mock.patch.object(
+            workspace, "ensure", lambda task_id, branch: (self.wt_path, None))
+        wt_patcher.start()
+        self.addCleanup(wt_patcher.stop)
+
+        self.capture = capture
+        self.capture(catalog.cmd_init)
+        self.TASK = catalog.cmd_new("Внешний target", target="acme")
+        self.tdir = config.TASKS / self.TASK
+        self.branch = store.db().execute(
+            "SELECT branch FROM tasks WHERE id=?",
+            (self.TASK,)).fetchone()["branch"]
+
+    def test_pull_freshness_fetches_target_url_not_pult_origin(self):
+        """Ветка не отстала (`commits_behind` -> 0) — сверке этого
+        достаточно, чтобы проявить свой источник: fetch обязан случиться
+        ДО самого сравнения (AC-1 для self-target, тот же порядок здесь),
+        и его remote — `url` записи `acme`, не `"origin"`; ветка фетча —
+        её `base` (`trunk`), не `config.MAIN_BRANCH` (`main`).
+        """
+        self.tdir.mkdir(parents=True, exist_ok=True)
+        (self.tdir / "PLAN.md").write_text(
+            PLAN_READY.format(task=self.TASK), encoding="utf-8")
+        conn = store.db()
+        conn.execute("UPDATE tasks SET state=? WHERE id=?",
+                     ("in_dev", self.TASK))
+        conn.commit()
+
+        with mock.patch.object(gitcmd, "commits_behind", return_value=0):
+            self.capture(fsm.cmd_advance, self.TASK)
+
+        fetch_calls = [c for c in self.calls if c and c[0] == "fetch"]
+        self.assertTrue(fetch_calls, "AC-10: сверка обязана фетчить "
+                        "источник target'а перед сравнением")
+        remote_args = fetch_calls[0]
+        self.assertNotIn("origin", remote_args,
+                         "AC-10: remote внешнего target — из его "
+                         "конфигурации, не хардкод origin пульта")
+        self.assertIn("https://example.invalid/acme-target.git", remote_args,
+                     "AC-10: remote — url записи target'а из targets.yaml")
+        self.assertIn("trunk", remote_args,
+                     "AC-10: ветка фетча — base записи target'а, не "
+                     "config.MAIN_BRANCH")
+        self.assertNotIn(config.MAIN_BRANCH, remote_args,
+                         "AC-10: config.MAIN_BRANCH — имя ветки self-"
+                         "target'а, не этого target'а")
+
+
 if __name__ == "__main__":
     unittest.main()

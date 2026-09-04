@@ -1,5 +1,5 @@
 ---
-built_at_sha: 1974bf5f4ef6b1428289fc09ea2d2577fc0953fe
+built_at_sha: 6acc6380232c319ef222430adc3850a248b4a1e2
 ---
 
 # Codebase-map пульта
@@ -388,7 +388,7 @@ built_at_sha: 1974bf5f4ef6b1428289fc09ea2d2577fc0953fe
 - `confirm_fixation`
 - `guard_refuses`
 
-**Импортирует:** `orchestrator/acceptance.py`, `orchestrator/artifact_source.py`, `orchestrator/artifacts.py`, `orchestrator/config.py`, `orchestrator/fixation.py`, `orchestrator/fsm_advance.py`, `orchestrator/fsm_merge_gate.py`, `orchestrator/gitcmd.py`, `orchestrator/github_adapter.py`, `orchestrator/lease.py`, `orchestrator/store.py`, `orchestrator/workspace.py`, `orchestrator/yamlmini.py`, `scripts/guard.py`
+**Импортирует:** `orchestrator/acceptance.py`, `orchestrator/artifact_source.py`, `orchestrator/artifacts.py`, `orchestrator/config.py`, `orchestrator/fixation.py`, `orchestrator/fsm_advance.py`, `orchestrator/fsm_merge_gate.py`, `orchestrator/gitcmd.py`, `orchestrator/github_adapter.py`, `orchestrator/lease.py`, `orchestrator/store.py`, `orchestrator/targets.py`, `orchestrator/workspace.py`, `orchestrator/yamlmini.py`, `scripts/guard.py`
 
 **Импортируется:** `orchestrator/artel.py`, `orchestrator/auto.py`, `orchestrator/canary.py`, `orchestrator/fsm_advance.py`, `orchestrator/fsm_merge_gate.py`, `tests/test_acceptance_tests_flow.py`, `tests/test_advance_guard.py`, `tests/test_agent_failure.py`, `tests/test_amend.py`, `tests/test_analyst_role.py`, `tests/test_answer.py`, `tests/test_answer_branch_reads.py`, `tests/test_answer_gate.py`, `tests/test_auto_cycle.py`, `tests/test_branch_freshness_gate.py`, `tests/test_ci_status_kind_gate.py`, `tests/test_fsm_branch_correct_status_reads.py`, `tests/test_fsm_draft_mr_reentry.py`, `tests/test_fsm_map_conflict_autoresolve.py`, `tests/test_git_fixation.py`, `tests/test_id_format_guard.py`, `tests/test_invariants.py`, `tests/test_merge_gate_ci_wait.py`, `tests/test_multitarget_invariants.py`, `tests/test_review_freshness.py`, `tests/test_review_registry_gate.py`, `tests/test_spec_budget.py`, `tests/test_step_cost.py`, `tests/test_step_refixation.py`, `tests/test_task_id_prefix_regression.py`, `tests/test_verifying_ceiling.py`
 
@@ -826,7 +826,7 @@ built_at_sha: 1974bf5f4ef6b1428289fc09ea2d2577fc0953fe
 
 **Импортирует:** `orchestrator/config.py`, `orchestrator/yamlmini.py`
 
-**Импортируется:** `orchestrator/doctor.py`, `orchestrator/github_adapter.py`, `orchestrator/projects.py`, `orchestrator/retro_corpus.py`, `orchestrator/store.py`, `tests/test_github_adapter.py`, `tests/test_multitarget.py`
+**Импортируется:** `orchestrator/doctor.py`, `orchestrator/fsm.py`, `orchestrator/github_adapter.py`, `orchestrator/projects.py`, `orchestrator/retro_corpus.py`, `orchestrator/store.py`, `tests/test_github_adapter.py`, `tests/test_multitarget.py`
 
 ## orchestrator/version.py
 
