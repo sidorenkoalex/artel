@@ -45,6 +45,7 @@ conventions-core). Валидация того, что само сравнени
 (`Ac2InvariantCheckSensitivityTest`), канареечной мутацией той же
 формы, что описывает AC-2.
 """
+import os
 import subprocess
 import sys
 import unittest
@@ -58,7 +59,21 @@ from _util import diff_refs, refs_snapshot  # noqa: E402
 
 FULL_SUITE_TIMEOUT_SECONDS = 1200
 
+# AC-1: manual — полный набор tests/ в подпроцессе идёт 280+ секунд и не
+# помещается в потолок автоматического прогона планки на гейте
+# (config.ACCEPTANCE_TIMEOUT_SEC = 300); Оператор исполняет тест на гейте
+# приёмки в тихом репозитории (без параллельных шагов ролей — чужие
+# неисправленные песочницы дают ложную утечку) командой
+# `ARTEL_MANUAL_AC1=1 python3 -m unittest discover -s
+# tasks/01M1KVGD18P9H5WR7VM8TGPV1T/acceptance_tests -p "test_ac1_*.py"`
+# и записывает итог в журнал; сторож того же инварианта на каждый пуш —
+# шаг CI из диффа для Оператора в PLAN.md (требование 1). Пометка внесена
+# Оператором 04.09 (мандат ANSWER-5, ADR-0012).
+MANUAL_RUN_ENV = "ARTEL_MANUAL_AC1"
 
+
+@unittest.skipUnless(os.environ.get(MANUAL_RUN_ENV),
+                     "AC-1: manual — исполняется Оператором на гейте, см. маркер")
 class Ac1FullSuiteDoesNotMutateRealRepoTest(unittest.TestCase):
     """Прогон `tests/` целиком не меняет ссылки настоящего репозитория пульта."""
 
