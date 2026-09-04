@@ -292,7 +292,8 @@ def _ratio_line(label: str, ratio: dict | None) -> str:
     )
 
 
-def _metrics_html(steps: list, tasks: list, total_spent: float) -> str:
+def _metrics_html(steps: list, tasks: list, total_spent: float,
+                  total_estimate: float) -> str:
     gate_ratio = _gate_ratio(steps)
     per_day = _operator_journal_by_day(steps)
     cost_per_task = _cost_per_done_task(tasks)
@@ -305,6 +306,9 @@ def _metrics_html(steps: list, tasks: list, total_spent: float) -> str:
     cost_line = (_usd(cost_per_task) if cost_per_task is not None
                 else "нет done-задач")
 
+    # Верхняя оценка (SPEC 01M1NWCM3TDY0YABEKE8DYQA1C, требование 6) —
+    # отдельная строка от точного расхода, не сложена с ним в одно число
+    # (иначе оценка перестала бы быть отличимой от факта, требование 6).
     return (
         '<div class="metrics">'
         '<h3>Доля acceptance: автогейт vs Оператор</h3>'
@@ -316,6 +320,8 @@ def _metrics_html(steps: list, tasks: list, total_spent: float) -> str:
         f'<div class="metric-row">$/задачу (done): {cost_line}</div>'
         f'<div class="metric-row">Суммарный расход программы: '
         f'{_usd(total_spent)}</div>'
+        f'<div class="metric-row">Суммарная верхняя оценка (курс роли не '
+        f'задан): {_usd(total_estimate)}</div>'
         '</div>'
     )
 
@@ -401,7 +407,8 @@ _STYLE = """
 """
 
 
-def _render(tasks: list, steps: list, alerts: list, total_spent: float) -> str:
+def _render(tasks: list, steps: list, alerts: list, total_spent: float,
+           total_estimate: float) -> str:
     return (
         "<!DOCTYPE html>\n"
         '<html lang="ru">\n'
@@ -420,7 +427,7 @@ def _render(tasks: list, steps: list, alerts: list, total_spent: float) -> str:
         '<section class="panel"><h2>Борд задач — состояния FSM</h2>'
         f"{_board_html(tasks)}</section>\n"
         '<section class="panel"><h2>Метрики гейтовой нагрузки</h2>'
-        f"{_metrics_html(steps, tasks, total_spent)}</section>\n"
+        f"{_metrics_html(steps, tasks, total_spent, total_estimate)}</section>\n"
         '<section class="panel"><h2>Метрика «трение»</h2>'
         f"{_friction_html(tasks, steps)}</section>\n"
         "</main>\n"
@@ -443,8 +450,9 @@ def cmd_report() -> None:
     steps = _all_steps(conn, tasks)
     alerts = store.open_alerts(conn)
     total_spent = store.total_spent(conn)
+    total_estimate = store.total_estimate(conn)
 
-    doc = _render(tasks, steps, alerts, total_spent)
+    doc = _render(tasks, steps, alerts, total_spent, total_estimate)
 
     path = config.ROOT / ".artel" / "report.html"
     path.parent.mkdir(parents=True, exist_ok=True)

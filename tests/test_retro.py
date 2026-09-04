@@ -289,6 +289,28 @@ class RetroGenerationTest(TmpRootTest):
 
         self.assertIn("причина не найдена в журнале", text)
 
+    def test_build_done_shows_the_upper_estimate_separately_from_the_total(self):
+        """SPEC 01M1NWCM3TDY0YABEKE8DYQA1C, требование 7 — юнит-угол на
+        `build_done`, дополняющий приёмочный
+        `tasks/01M1NWCM3TDY0YABEKE8DYQA1C/acceptance_tests/
+        test_ac7_retro_shows_estimate_separately.py`."""
+        store.update_task(self.conn, self.TASK, spent_usd=3.0,
+                          spent_estimate_usd=7.0)
+
+        text = retro.build_done(self.conn, self.TASK, "cafe" * 10)
+
+        self.assertIn("Стоимость итого: $3.00", text)
+        self.assertIn("$7.00", text)
+
+    def test_build_killed_without_an_estimate_says_nothing_about_it(self):
+        self.add_step("operator", "state -> killed", "kill switch")
+        store.update_task(self.conn, self.TASK, spent_usd=1.0,
+                          spent_estimate_usd=0.0)
+
+        text = retro.build_killed(self.conn, self.TASK)
+
+        self.assertNotIn("оцен", text.lower())
+
 
 class FirstSentenceTest(unittest.TestCase):
     """`_first_sentence` — обрезка по точке, не по строке/запятой
@@ -332,6 +354,25 @@ class FirstSentenceTest(unittest.TestCase):
     def test_cuts_at_trailing_dot_with_no_following_text(self):
         self.assertEqual(retro._first_sentence("Всё предложение целиком."),
                          "Всё предложение целиком.")
+
+
+class CostBlockTest(unittest.TestCase):
+    """`retro._cost_block` — строка оценки только при ненулевой
+    `spent_estimate_usd`, отдельно от «Стоимость итого» (SPEC
+    01M1NWCM3TDY0YABEKE8DYQA1C, требование 7)."""
+
+    def test_default_estimate_omits_the_estimate_line(self):
+        lines = retro._cost_block([], 3.0)
+
+        self.assertEqual(lines[0], "Стоимость итого: $3.00")
+        self.assertFalse(any("оцен" in line.lower() for line in lines))
+
+    def test_nonzero_estimate_adds_a_distinct_line(self):
+        lines = retro._cost_block([], 3.0, 7.0)
+
+        self.assertIn("Стоимость итого: $3.00", lines)
+        self.assertTrue(any("$7.00" in line for line in lines))
+        self.assertNotIn("Стоимость итого: $7.00", lines)
 
 
 class ParseTotalCostTest(unittest.TestCase):
