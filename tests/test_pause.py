@@ -107,6 +107,11 @@ class PauseTest(TmpRootTest):
         conn.commit()
 
     def test_pause_warns_on_foreign_live_lease(self):
+        """Ловит мутацию: если `cmd_pause` перестанет звать
+        `lease.warn_foreign_live` (или начнёт звать его ПОСЛЕ ветки
+        «уже на паузе»/`update_task`), вывод перестанет называть
+        держателя чужого живого lease — сквозной путь к уже
+        протестированной в изоляции логике `lease.py`."""
         self.insert_lease("sess-holder", os.getpid(), socket.gethostname(),
                           _ts_ago(5))
 
@@ -116,6 +121,10 @@ class PauseTest(TmpRootTest):
         self.assertIn("sess-holder", output)
 
     def test_pause_journals_the_warning_as_an_extra_entry(self):
+        """Ловит мутацию: если вызов `lease.warn_foreign_live` уберут из
+        `cmd_pause`, журнал `pause` понесёт только одну запись (сама
+        пауза) вместо двух — предупреждение перестанет дублироваться
+        событием журнала (требование 3)."""
         self.insert_lease("sess-holder", os.getpid(), socket.gethostname(),
                           _ts_ago(5))
 

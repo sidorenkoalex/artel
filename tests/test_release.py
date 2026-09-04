@@ -58,6 +58,11 @@ class ReleaseTest(TmpRootTest):
         self.assertIsNone(self.row())
 
     def test_journals_former_holder_with_numeric_heartbeat_age(self):
+        """HOLDER_HOST — чужой host с ещё свежим (123 сек) heartbeat:
+        после исправления R1-F1 `warn_foreign_live` тоже журналирует
+        отдельной записью ДО снятия — здесь проверяется именно запись
+        самого снятия (`action == "lease снят Оператором"`), а не первая
+        запись журнала."""
         stale_ts = _ts_ago(123)
         self.insert_lease(self.TASK, HOLDER_SESSION, HOLDER_PID,
                           HOLDER_HOST, stale_ts)
@@ -65,8 +70,9 @@ class ReleaseTest(TmpRootTest):
         capture(release.cmd_release, self.TASK)
 
         steps = self.journal()
-        self.assertEqual(len(steps), 1)
-        entry = steps[0]
+        release_steps = [s for s in steps if s["action"] == "lease снят Оператором"]
+        self.assertEqual(len(release_steps), 1, steps)
+        entry = release_steps[0]
         self.assertEqual(entry["actor"], "operator")
         self.assertIn(HOLDER_SESSION, entry["detail"])
         self.assertIn(str(HOLDER_PID), entry["detail"])
@@ -123,11 +129,19 @@ class ReleaseTest(TmpRootTest):
     # (SPEC 01M1NEEYSP0QWPMXHG0BK591M7) — сквозной путь AC-1..AC-7 уже
     # покрыт приёмочными тестами задачи; здесь — что вызов действительно
     # подключён к `lease.warn_foreign_live` (не дублирует его логику).
-    # Живая (не чужой-host, как HOLDER_HOST выше) лизинг-строка — иначе
-    # `foreign_live_lease` сочла бы pid непроверяемым и предупреждение не
-    # появилось бы вовсе.
+    # Своего host (не HOLDER_HOST выше) лизинг-строка нужна здесь только
+    # затем, чтобы pid реально был проверяем этим тестом через
+    # `liveness._pid_alive(os.getpid())` — `foreign_live_lease` после
+    # исправления R1-F1 сочла бы живой и лизинг-строку HOLDER_HOST'а
+    # (чужой host уже не требует проверки pid), но `os.getpid()` работает
+    # без риска флуктуаций между прогонами.
 
     def test_release_warns_on_foreign_live_lease(self):
+        """Ловит мутацию: если `cmd_release` перестанет звать
+        `lease.warn_foreign_live` (или начнёт звать его ПОСЛЕ снятия
+        lease), вывод перестанет называть держателя чужого живого
+        lease — сквозной путь к уже протестированной в изоляции логике
+        `lease.py`."""
         self.insert_lease(self.TASK, "sess-live-holder", os.getpid(),
                           socket.gethostname(), _ts_ago(5))
 
@@ -137,6 +151,10 @@ class ReleaseTest(TmpRootTest):
         self.assertIn("sess-live-holder", output)
 
     def test_release_journals_the_warning_as_an_extra_entry(self):
+        """Ловит мутацию: если вызов `lease.warn_foreign_live` уберут из
+        `cmd_release`, журнал понесёт только запись самого снятия lease
+        вместо двух записей — предупреждение перестанет дублироваться
+        событием журнала (требование 3)."""
         self.insert_lease(self.TASK, "sess-live-holder", os.getpid(),
                           socket.gethostname(), _ts_ago(5))
 
@@ -155,7 +173,13 @@ class ReleaseTest(TmpRootTest):
         картина, прочитанная `cmd_release`, не сносит уже новую строку.
 
         REVIEW T062, итерация 1, Замечание 1: no-op под гонкой не должен
-        выглядеть как успех — ни в журнале, ни в печатном сообщении."""
+        выглядеть как успех — ни в журнале, ни в печатном сообщении.
+        `store.lease_row` замокан на весь вызов `cmd_release`, поэтому
+        `warn_foreign_live` тоже видит устаревшую строку (HOLDER_HOST —
+        чужой host, heartbeat свежий) и после исправления R1-F1 честно
+        журналирует своё предупреждение — здесь проверяется отсутствие
+        именно записи о СНЯТИИ (`action == "lease снят Оператором"`), не
+        пустота журнала целиком."""
         self.insert_lease(self.TASK, HOLDER_SESSION, HOLDER_PID,
                           HOLDER_HOST, store.now())
         stale_row = store.lease_row(store.db(), self.TASK)
@@ -174,7 +198,9 @@ class ReleaseTest(TmpRootTest):
         row = self.row()
         self.assertIsNotNone(row, "release снял строку нового держателя")
         self.assertEqual(row["session_id"], "session-new-holder")
-        self.assertEqual(self.journal(), [],
+        release_steps = [s for s in self.journal()
+                        if s["action"] == "lease снят Оператором"]
+        self.assertEqual(release_steps, [],
                          "no-op под гонкой не должен журналироваться "
                          "как свершившееся снятие")
         self.assertNotIn("lease снят Оператором", output,
