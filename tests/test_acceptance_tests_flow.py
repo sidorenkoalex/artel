@@ -1163,6 +1163,32 @@ class LockTest(unittest.TestCase):
         self.assertEqual(self.state(), "in_dev", "переход не должен пройти")
         self.assertIn("не проверен", out)
 
+    def test_pyc_only_diff_after_lock_does_not_block_the_transition(self):
+        """SPEC 01M1KVG3KSCY47HWXWF5HM0E76, требование 3, AC-4: разница с
+        зафиксированным деревом только по файлу, игнорируемому `.gitignore`
+        пульта (`.pyc`, оставшийся после локального прогона приёмочных
+        тестов) — не спор с тестом, переход обязан пройти.
+
+        `git add -A -f` (не голый `-A`): гитигнор-правило `*.pyc`/
+        `__pycache__/` иначе тихо пропустит файл, и коммит без единого
+        добавленного пути упадёт кодом 1 (тот же приём, что `_sandbox.py`
+        приёмочных тестов этой задачи применяет к тому же сценарию).
+        """
+        self.enter_in_dev()
+        self.on_artifact_branch()
+        pycache = self.tdir / "acceptance_tests" / "__pycache__"
+        pycache.mkdir(parents=True, exist_ok=True)
+        (pycache / "test_ac.cpython-311.pyc").write_bytes(bytes(range(8)))
+        self.git("add", "-A", "-f", f"tasks/{self.TASK}")
+        self.git("commit", "-q", "-m", "прогон тестов оставил .pyc")
+        self.git("checkout", "-q", config.MAIN_BRANCH)
+
+        self.capture(fsm.cmd_advance, self.TASK)
+
+        self.assertEqual(self.state(), "review",
+                         "разница только по игнорируемому файлу не должна "
+                         "останавливать переход")
+
 
 if __name__ == "__main__":
     unittest.main()
