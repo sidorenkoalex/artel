@@ -38,7 +38,9 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
-from orchestrator import fsm, store  # noqa: E402
+from orchestrator import fsm, gitcmd, store  # noqa: E402
+from tests.sandbox import (disk_backed_ls_tree_files,  # noqa: E402
+                           disk_backed_show)
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from _sandbox import FakeAdvance, StallDetectionSandbox  # noqa: E402
@@ -116,6 +118,15 @@ class Ac19AlertClosesOnAManualOperatorTransitionOutsideAutoTest(
 
     def setUp(self):
         super().setUp()
+        # A7: `artifact_source.resolve` всегда `foreign=True` — ручной
+        # `advance` читает PLAN.md через `gitcmd.show`/`gitcmd.
+        # ls_tree_files`; заглушка `fake_git` песочницы вернула бы
+        # пустышку вместо PLAN.md, который `write_plan()` кладёт на диск.
+        # Подмены — по образцу tests/test_auto_cycle.py::AutoCycleTest,
+        # только для этого класса (ANSWER-2, ADR-0012: правка Оператора,
+        # утверждения тестов не меняются).
+        self.patch_object(gitcmd, "show", disk_backed_show)
+        self.patch_object(gitcmd, "ls_tree_files", disk_backed_ls_tree_files)
         self.write_plan()
         self.set_state("in_dev", draft_mr_created=1)
 
@@ -152,7 +163,12 @@ class Ac19AlertClosesOnAManualOperatorTransitionOutsideAutoTest(
         """`approve` из `escalated` (без `answer_baseline` — эскалация
         класса «упавший агент», не эскалация с вопросом) возвращает
         задачу в `in_dev` — переход, инициированный НЕ `auto` (auto
-        никогда не проходит гейт эскалации сама, требование 1)."""
+        никогда не проходит гейт эскалации сама, требование 1).
+
+        Ловит мутацию: хук закрытия алерта перенесён из общей точки
+        перехода (`store.set_state`) в `auto.py` — тогда `approve`
+        вне цикла оставит алерт открытым, `open_attention_alerts()`
+        вернёт непустой список."""
         self._open_alert_via_escalation()
 
         fsm.cmd_approve(self.TASK)
@@ -164,7 +180,11 @@ class Ac19AlertClosesOnAManualOperatorTransitionOutsideAutoTest(
         """`reject` из `merge_gate` возвращает задачу в `in_dev` —
         состояние сюда доставлено в обход (не тестируемый переход),
         чтобы проверить закрытие именно на `reject`, а не на пути к
-        `merge_gate`."""
+        `merge_gate`.
+
+        Ловит мутацию: хук закрытия алерта срабатывает только на
+        переходах «вперёд» (пропускает возвраты `reject`) — тогда
+        алерт останется открытым после `reject`."""
         self._open_alert_via_escalation()
         self.set_state("merge_gate")
 
