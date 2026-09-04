@@ -88,13 +88,22 @@ def apply_spec_budget(conn, t: sqlite3.Row, meta: dict) -> None:
     print(f"[{task_id}] бюджет из SPEC: {detail}")
 
 
+def spent_with_estimate(t: sqlite3.Row) -> float:
+    """`spent_usd + spent_estimate_usd` задачи (SPEC
+    01M1NWCM3TDY0YABEKE8DYQA1C, требование 5): бюджетный гейт сравнивает
+    с потолком эту сумму, а не только точный расход — иначе верхняя
+    оценка неучтённой стоимости (требование 3) не защищала бы потолок
+    ни от чего."""
+    return (t["spent_usd"] or 0.0) + (t["spent_estimate_usd"] or 0.0)
+
+
 def budget_block(t: sqlite3.Row) -> str | None:
     """Сообщение, почему `run` не стартует по бюджету, или None.
 
     Потолок ≤ 0 (или NULL в БД прошлых версий) — потолка нет: иначе задача
     без бюджета эскалировалась бы на первом же шаге при нулевом расходе.
     """
-    budget, spent = t["budget_usd"] or 0.0, t["spent_usd"] or 0.0
+    budget, spent = t["budget_usd"] or 0.0, spent_with_estimate(t)
     if budget <= 0 or spent < budget:
         return None
     return (f"[{t['id']}] бюджет исчерпан: ${spent:.2f} из ${budget:.2f} — "
@@ -109,7 +118,7 @@ def enforce_budget(conn, task_id: str, state: str) -> bool:
     Считает по свежим значениям из БД — стоимость шага туда уже прибавлена.
     """
     t = store.get_task(conn, task_id)
-    budget, spent = t["budget_usd"] or 0.0, t["spent_usd"] or 0.0
+    budget, spent = t["budget_usd"] or 0.0, spent_with_estimate(t)
     if budget <= 0:
         return False
 

@@ -17,7 +17,6 @@ acceptance_tests/test_ac16_retro_corpus_local_rebuild.py` кладёт тест�
 рабочей копии.
 """
 import os
-import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -65,45 +64,38 @@ def write_commit(repo: Path, files: dict, message: str, author_name: str,
     env = {**os.environ, "GIT_INDEX_FILE": str(index_file)}
     try:
         if parent:
-            read_tree = subprocess.run(
-                ["git", "read-tree", parent], cwd=repo, env=env,
-                capture_output=True, text=True)
+            read_tree = gitcmd.carpentry(repo, ["read-tree", parent], env)
             if read_tree.returncode != 0:
                 return ""
         for rel, content in files.items():
             data = content if isinstance(content, bytes) else content.encode("utf-8")
-            blob = subprocess.run(
-                ["git", "hash-object", "-w", "--stdin"], cwd=repo, env=env,
-                input=data, capture_output=True)
+            blob = gitcmd.carpentry(repo, ["hash-object", "-w", "--stdin"], env,
+                                    input=data, text=False)
             if blob.returncode != 0:
                 return ""
             blob_sha = blob.stdout.decode().strip()
-            upd = subprocess.run(
-                ["git", "update-index", "--add", "--cacheinfo",
-                 f"100644,{blob_sha},{rel}"],
-                cwd=repo, env=env, capture_output=True, text=True)
+            upd = gitcmd.carpentry(
+                repo, ["update-index", "--add", "--cacheinfo",
+                      f"100644,{blob_sha},{rel}"], env)
             if upd.returncode != 0:
                 return ""
         for rel in (remove or []):
-            rm = subprocess.run(
-                ["git", "update-index", "--force-remove", "--", rel],
-                cwd=repo, env=env, capture_output=True, text=True)
+            rm = gitcmd.carpentry(
+                repo, ["update-index", "--force-remove", "--", rel], env)
             if rm.returncode != 0:
                 return ""
-        tree = subprocess.run(["git", "write-tree"], cwd=repo, env=env,
-                              capture_output=True, text=True)
+        tree = gitcmd.carpentry(repo, ["write-tree"], env)
         if tree.returncode != 0:
             return ""
         tree_sha = tree.stdout.strip()
-        commit_args = ["git", "commit-tree", tree_sha, "-m", message]
+        commit_args = ["commit-tree", tree_sha, "-m", message]
         if parent:
             commit_args += ["-p", parent]
         commit_env = {**env, "GIT_AUTHOR_NAME": author_name,
                       "GIT_AUTHOR_EMAIL": author_email,
                       "GIT_COMMITTER_NAME": author_name,
                       "GIT_COMMITTER_EMAIL": author_email}
-        commit = subprocess.run(commit_args, cwd=repo, env=commit_env,
-                                capture_output=True, text=True)
+        commit = gitcmd.carpentry(repo, commit_args, commit_env)
         if commit.returncode != 0:
             return ""
         return commit.stdout.strip()
@@ -129,10 +121,8 @@ def commit_files(task_id: str, files: dict, message: str,
                               author_email, parent=parent, remove=remove)
     if not commit_sha:
         return ""
-    upd_ref = subprocess.run(
-        ["git", "update-ref", f"refs/heads/{branch}", commit_sha],
-        cwd=config.ROOT, capture_output=True, text=True)
-    if upd_ref.returncode != 0:
+    upd_ref = gitcmd.git("update-ref", f"refs/heads/{branch}", commit_sha)
+    if upd_ref is None or upd_ref.returncode != 0:
         return ""
     return commit_sha
 

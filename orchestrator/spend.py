@@ -140,6 +140,25 @@ def charge_step(conn, task_id: str, role: str, cost: dict | None,
     return f", {cost_note(cost)}"
 
 
+def partial_cost_usd(role: str, partial_tokens: int) -> float | None:
+    """Частичная стоимость `partial_tokens` токенов по курсу роли, или
+    `None` — курс для роли не задан (`config.TOKEN_RATES`).
+
+    `partial_tokens` — уже просуммированное число без разбивки на
+    входные/выходные (`step_tokens`/`stream_usage_tokens`): курс несёт
+    раздельную цену входного и выходного токена, но точной разбивки для
+    частичного потока нет — эффективная ставка берётся средним цены
+    входного и выходного токена роли (SPEC требование 2 не фиксирует
+    точную формулу пересчёта, только то, что сумма должна быть
+    ненулевой при известном курсе).
+    """
+    rate = config.TOKEN_RATES.get(role)
+    if rate is None:
+        return None
+    effective = (rate["input_usd_per_token"] + rate["output_usd_per_token"]) / 2
+    return partial_tokens * effective
+
+
 def charge_missing_result(conn, task_id: str, role: str, numbered: str,
                           cause: str, partial_tokens: int,
                           saw_usage_event: bool) -> str:
@@ -149,35 +168,59 @@ def charge_missing_result(conn, task_id: str, role: str, numbered: str,
     из-за таймаута шага или обрыва stdout-пайпа (tasks/T040) — обычный
     «тихий» путь `charge_step` (cost=None без этих причин) не трогается.
 
-    Восстановить точную сумму в долларах нечем: её считает сам CLI
-    только в финальном событии, курс токена в доллары нигде в кодовой
-    базе не задан (SPEC T040 — «не входит»: не изобретать прайс-лист).
-    Поэтому `store.charge` здесь не зовётся ни в одной из веток —
-    записывать в `spent_usd` непроверенную сумму хуже, чем честно
-    показать пробел (SPEC T040, требование 1).
+    Восстановить точную сумму в долларах, которую посчитал бы сам CLI в
+    финальном событии, всё равно нечем — есть только сумма токенов
+    промежуточных usage-событий. Курс роли (`config.TOKEN_RATES`, SPEC
+    01M1NWCM3TDY0YABEKE8DYQA1C, требование 1) переводит эту сумму в
+    доллары там, где он задан; исходное решение T040 «курса нигде нет»
+    осталось только для ролей БЕЗ записи в таблице.
 
-    `saw_usage_event=True` — до обрыва в потоке были usage-события
-    (`stream_usage_tokens`): в журнал идёт частичная сумма ТОКЕНОВ с
-    пометкой «частичная», алерт не заводится (AC-1/2 — «либо…либо»).
-    `saw_usage_event=False` — восстановить нечего вовсе: в журнал идёт
-    «стоимость шага неизвестна», и открывается алерт `alerts`
-    (`kind=incident`, `source=spend.unknown_cost`) — требование 3.
+    `saw_usage_event=True` — до обрыва в потоке были usage-события:
+    курс роли известен (`partial_cost_usd` не `None`) — частичная сумма
+    по курсу прибавляется к `spent_usd` (требование 2, AC-2), алерт не
+    заводится. Курс роли НЕ известен — прибавить нечего, вместо этого
+    заводится алерт `kind=threshold` и в `spent_estimate_usd` идёт
+    именованная верхняя оценка `config.STEP_COST_ESTIMATE_USD`
+    (требование 3, AC-3) — каждый повтор отказа прибавляет оценку
+    заново, недоучёт не должен копиться молча только потому, что алерт
+    уже открыт.
+    `saw_usage_event=False` — восстановить нечего вовсе, ни точно, ни
+    по курсу, ни оценкой: в журнал идёт «стоимость шага неизвестна», и
+    открывается алерт `alerts` (`kind=incident`,
+    `source=spend.unknown_cost`) — требование 4, поведение T040 без
+    изменений.
     """
-    if saw_usage_event:
+    if not saw_usage_event:
         detail = (f"{numbered}: {cause}, финальное событие потока "
-                  f"отсутствует — частичная сумма из промежуточных "
-                  f"usage-событий: {partial_tokens} токенов (курс в "
-                  f"доллары не задан) — spent_usd не изменён")
-        store.journal(conn, task_id, role, "agent cost PARTIAL", detail)
-        return f", частичная: {partial_tokens} токенов"
+                 f"отсутствует, промежуточных usage-событий тоже нет — "
+                 f"стоимость шага неизвестна, spent_usd не изменён")
+        store.journal(conn, task_id, role, "agent cost LOST", detail)
+        target = store.task_target(conn, task_id)
+        alerts.raise_alert(conn, target, "incident", "spend.unknown_cost",
+                           f"{task_id}/{role}: {numbered}, {cause} — "
+                           f"финальное событие потока отсутствует, "
+                           f"стоимость шага не восстановлена")
+        return ""
 
+    usd = partial_cost_usd(role, partial_tokens)
+    if usd is not None:
+        detail = (f"{numbered}: {cause}, финальное событие потока "
+                 f"отсутствует — частичная стоимость по курсу роли "
+                 f"{role!r}: ${usd:.4f}, {partial_tokens} токенов")
+        store.journal(conn, task_id, role, "agent cost PARTIAL", detail)
+        store.charge(conn, task_id, usd)
+        return f", частичная стоимость по курсу: ${usd:.4f}, {partial_tokens} токенов"
+
+    estimate = config.STEP_COST_ESTIMATE_USD
     detail = (f"{numbered}: {cause}, финальное событие потока "
-             f"отсутствует, промежуточных usage-событий тоже нет — "
-             f"стоимость шага неизвестна, spent_usd не изменён")
-    store.journal(conn, task_id, role, "agent cost LOST", detail)
+             f"отсутствует, курс роли {role!r} не задан — верхняя "
+             f"оценка стоимости шага: ${estimate:.4f}, {partial_tokens} "
+             f"токенов")
+    store.journal(conn, task_id, role, "agent cost ESTIMATED", detail)
+    store.charge_estimate(conn, task_id, estimate)
     target = store.task_target(conn, task_id)
-    alerts.raise_alert(conn, target, "incident", "spend.unknown_cost",
-                       f"{task_id}/{role}: {numbered}, {cause} — "
-                       f"финальное событие потока отсутствует, "
-                       f"стоимость шага не восстановлена")
-    return ""
+    alerts.raise_alert(conn, target, "threshold", "spend.step_cost_unknown_rate",
+                       f"{task_id}/{role}: {numbered}, {cause} — стоимость "
+                       f"шага не учтена (курс роли не задан), "
+                       f"{partial_tokens} токенов")
+    return f", верхняя оценка стоимости шага: ${estimate:.4f}"
