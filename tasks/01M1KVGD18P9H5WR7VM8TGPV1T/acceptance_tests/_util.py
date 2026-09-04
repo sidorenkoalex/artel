@@ -2,16 +2,24 @@
 «Изоляция тестов от настоящего репозитория: артефактная ветка из
 песочницы»).
 
-`refs_snapshot`/`cleanup_new_refs` дублируют механику, которую
-требование 1 SPEC описывает как «снимок git for-each-ref до и после
-прогона» (AC-1/AC-2): штатная реализация этого инварианта — правка
-защищённых путей (`tests/sandbox.py`, `tests/test_invariants.py`,
+`refs_snapshot`/`diff_refs` дублируют механику, которую требование 1
+SPEC описывает как «снимок git for-each-ref до и после прогона»
+(AC-1/AC-2): штатная реализация этого инварианта — правка защищённых
+путей (`tests/sandbox.py`, `tests/test_invariants.py`,
 `.github/workflows/ci.yml`), которые эта ветка не несёт (SPEC «Не
 входит», ANSWER-1 — поставляются unified-diff-приложением к PLAN.md,
 Оператор применяет их отдельно после `merge_gate`). Приёмочная планка
 не может импортировать код, которого здесь нет — та же логика снимка
 ссылок продублирована здесь напрямую и не зависит от того, применён ли
 уже диф.
+
+ANSWER-4: планка НЕ убирает за собой расхождение снимков (прежняя
+`cleanup_new_refs` удаляла/форс-ресетила ссылки в настоящем репозитории
+пульта — общем на все параллельные сессии — и могла задеть настоящую
+ветку чужой задачи, появившуюся/сдвинувшуюся во время дорогого прогона;
+REVIEW.md итерация 4, R4-F1). При расхождении тест просто падает и
+перечисляет разошедшиеся ссылки в сообщении об ошибке — без побочных
+эффектов на состояние репозитория.
 """
 import subprocess
 import sys
@@ -52,29 +60,3 @@ def diff_refs(before: dict, after: dict) -> dict:
     return {k: (before.get(k), after.get(k))
             for k in before.keys() | after.keys()
             if before.get(k) != after.get(k)}
-
-
-def cleanup_new_refs(before: dict, after: dict) -> None:
-    """Убирает ссылки, появившиеся между `before` и `after`, и восстанавливает
-    ссылки, которые СУЩЕСТВОВАЛИ раньше, но сдвинули sha, на снимок `before`
-    (ADR-0012, ANSWER-2 п.1, R1-F5).
-
-    Настоящий репозиторий пульта общий на все параллельные сессии —
-    приёмочный тест, диагностирующий утечку записи, не имеет права сам
-    оставлять после себя новый мусор сверх уже накопленного, который он
-    же и обнаружил (репозиторий на момент подготовки этой планки уже
-    нёс тысячи веток `artifact/*` от прошлых утечек — тот самый дефект,
-    который описывает SPEC «Контекст»), ни оставлять СУЩЕСТВОВАВШУЮ раньше
-    ссылку сдвинутой на чужой sha."""
-    for refname in sorted(after.keys() - before.keys()):
-        if refname.startswith("refs/heads/"):
-            subprocess.run(["git", "branch", "-D", refname[len("refs/heads/"):]],
-                           cwd=config.ROOT, capture_output=True, text=True)
-        elif refname.startswith("refs/artifacts/"):
-            subprocess.run(["git", "update-ref", "-d", refname],
-                           cwd=config.ROOT, capture_output=True, text=True)
-    shifted = before.keys() & after.keys()
-    for refname in sorted(refname for refname in shifted
-                          if before[refname] != after[refname]):
-        subprocess.run(["git", "update-ref", refname, before[refname]],
-                       cwd=config.ROOT, capture_output=True, text=True)
