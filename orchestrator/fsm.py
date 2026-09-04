@@ -124,21 +124,58 @@ def _auto_resolve_map_conflict(conn, task_id: str, wt_path) -> bool:
     return True
 
 
+def _origin_main_sha() -> str | None:
+    """sha текущего HEAD main артели на её `origin` (SPEC
+    01M1NBWPKNBXP9ZXXQDJM7AXPJ, AC-1/AC-2/AC-8) — своя копия узла
+    `orchestrator/fsm_merge_gate.py::_origin_main_sha` (тот же приём
+    дублирования по модулю, что уже несёт `MAP_REL` в начале файла):
+    `fsm_merge_gate` импортирует `fsm`, обратный импорт завёл бы цикл.
+
+    `git fetch` пишет только в объектную базу и `FETCH_HEAD` репозитория,
+    в котором исполнен (`config.ROOT` — здесь всегда так, `gitcmd.git`,
+    не `in_repo`), никогда в локальный `refs/heads/<MAIN_BRANCH>` — ни
+    рабочее дерево, ни HEAD `config.ROOT`, ни зафиксированный там пин не
+    задеты (AC-8). Возврат — конкретный sha, не литерал `"FETCH_HEAD"`:
+    merge ниже идёт в ДРУГОМ git-worktree (worktree задачи), а начиная с
+    git 2.5 `FETCH_HEAD` — файл, приватный для каждого worktree (как
+    HEAD/index) — литерал `"FETCH_HEAD"` там не резолвится в то, что
+    только что зафетчил `config.ROOT`. `None` — git не ответил на fetch
+    или на `rev-parse` (тот же вырожденный случай, что у остальных
+    примитивов оркестратора: сверка ниже деградирует на «ничего не
+    делать»).
+    """
+    fetch = gitcmd.git("fetch", "-q", "origin", config.MAIN_BRANCH)
+    if fetch is None or fetch.returncode != 0:
+        return None
+    res = gitcmd.git("rev-parse", "FETCH_HEAD")
+    return res.stdout.strip() if res is not None and res.returncode == 0 else None
+
+
 def _pull_main_or_escalate(conn, task_id: str, t, state: str) -> str:
     """Сверка свежести ветки задачи на входе в гейт (SPEC T051, требования
-    1-7, 10; ADR-0006 п.2) и, начиная с T053 требование 5, ВНУТРИ окна
-    `merge_gate` под мьютексом merge — один и тот же узел для всех трёх
-    точек сверки (`in_dev -> review`, `acceptance -> merge_gate`,
-    `merge_gate -> done`).
+    1-7, 10; ADR-0006 п.2; переведена на origin — SPEC
+    01M1NBWPKNBXP9ZXXQDJM7AXPJ, AC-1..AC-4/AC-8) и, начиная с T053
+    требование 5, ВНУТРИ окна `merge_gate` под мьютексом merge — один и
+    тот же узел для всех трёх точек сверки (`in_dev -> review`,
+    `acceptance -> merge_gate`, `merge_gate -> done`).
+
+    Сверка и merge идут против main артели на `origin`
+    (`_origin_main_sha`), НЕ против локального `config.MAIN_BRANCH`
+    (пина главной копии): между двумя мержами пин двигает только
+    отдельная операторская команда `pin-update` (A7), и решение по
+    устаревшему пину ложно отвечало «ветка не отстала», хотя origin ушёл
+    вперёд (инцидент 04.09, SPEC «Контекст»). `config.MAIN_BRANCH`
+    остаётся только ИМЕНЕМ ветки в origin, которую фетчим и с которой
+    сравниваем/мержим, не источником сравнения/merge самим по себе.
 
     Возврат — один из трёх исходов:
     - `"escalated"` — переход уже отклонён: задача уже эскалирована
       (состояние и диагностика уже записаны через `store.set_state`,
       требования 5-6); вызывающий код обязан немедленно вернуться, не
       выполняя сам переход;
-    - `"fresh"` — ветка не отстала от `config.MAIN_BRANCH` (требование 7:
-      поведение перехода прежнее байт-в-байт, никакой git-вызов не
-      сделан);
+    - `"fresh"` — ветка не отстала от main артели на origin (требование
+      7: поведение перехода прежнее байт-в-байт при отсутствии
+      отставания);
     - `"pulled"` — подтяжка прошла и приёмочные тесты в подтянутом
       дереве зелёные. Точки `in_dev -> review`/`acceptance -> merge_gate`
       обе продолжают штатный переход одинаково что при `"fresh"`, что при
@@ -150,16 +187,18 @@ def _pull_main_or_escalate(conn, task_id: str, t, state: str) -> str:
 
     Merge — единственный вне `merge_gate`, разрешённый ADR-0006 п.2: в
     worktree ЗАДАЧИ (`gitcmd.in_repo`, форма `-C`), вливает
-    `config.MAIN_BRANCH`, ветку задачи в аргументах не упоминает и не
-    трогает main ни байтом (требование 10) — не rebase (требование 3),
-    существующие sha ветки остаются валидными предками.
+    зафетченный origin-sha main артели, ветку задачи в аргументах не
+    упоминает и не трогает main ни байтом (требование 10) — не rebase
+    (требование 3), существующие sha ветки остаются валидными предками.
 
-    `gitcmd.commits_behind` вернул `None` — git не ответил (песочницы без
-    реального git: `fake_git` и аналоги, требование 9) — тот же
-    вырожденный случай деградации, что и у остальных git-примитивов
-    оркестратора: сверка молча пропускается, `bool(None)` ложно ровно как
-    и `bool(0)` (ветка не отстала) — оба ведут к одному и тому же
-    «ничего не делать».
+    `_origin_main_sha()` вернула `None` (git/fetch не ответили — песочницы
+    без реального git: `fake_git` и аналоги, требование 9) — `base`
+    деградирует на литерал `"FETCH_HEAD"`, на котором `gitcmd.commits_
+    behind` в этом же вырожденном случае тоже не разберёт число и вернёт
+    `None` — тот же вырожденный случай деградации, что и у остальных
+    git-примитивов оркестратора: сверка молча пропускается, `bool(None)`
+    ложно ровно как и `bool(0)` (ветка не отстала) — оба ведут к одному и
+    тому же «ничего не делать».
 
     Конфликт merge, где единственный конфликтующий файл —
     `docs/codebase-map.md` (SPEC T067), разрешается здесь же сам, не
@@ -169,7 +208,8 @@ def _pull_main_or_escalate(conn, task_id: str, t, state: str) -> str:
     байт-в-байт: `git merge --abort` + `"escalated"`.
     """
     branch = t["branch"]
-    behind = gitcmd.commits_behind(branch)
+    base = _origin_main_sha() or "FETCH_HEAD"
+    behind = gitcmd.commits_behind(branch, base=base)
     if not behind:
         return "fresh"
 
@@ -181,7 +221,7 @@ def _pull_main_or_escalate(conn, task_id: str, t, state: str) -> str:
             f"задачи не создан — {error}")
         return "escalated"
 
-    merge = gitcmd.in_repo(wt_path, "merge", "--no-ff", config.MAIN_BRANCH,
+    merge = gitcmd.in_repo(wt_path, "merge", "--no-ff", base,
                            "-m", f"{task_id}: подтяжка {config.MAIN_BRANCH}")
     if merge is None or merge.returncode != 0:
         resolved = False

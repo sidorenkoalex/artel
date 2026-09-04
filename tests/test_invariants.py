@@ -25,6 +25,7 @@ import socket
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -594,14 +595,36 @@ class MergeNeedsGreenCiTest(FsmTest):
         self.write_review("approved", 1)
 
     def test_no_merge_without_a_green_ci(self):
-        """Требование 6: не-зелёный и неизвестный статус merge не выполняют."""
+        """Требование 6: не-зелёный и неизвестный статус merge не выполняют.
+
+        `set_ci` держит ОДИН и тот же не-зелёный ответ на КАЖДЫЙ опрос —
+        с SPEC 01M1NBWPKNBXP9ZXXQDJM7AXPJ (AC-5..AC-7) путь "fresh"
+        ждёт такой статус циклом `_wait_for_branch_ci_green`, а не
+        отказывает по одному опросу; без заглушки часов цикл спал бы
+        РЕАЛЬНЫЕ `time.sleep` секунды вплоть до часового потолка на
+        каждый случай ниже. `time.sleep`/`time.monotonic` заглушены тем
+        же приёмом, что `tests/test_merge_gate_ci_wait.py::FakeClock` —
+        отказ по-прежнему приходит, просто после виртуального, не
+        настоящего, ожидания.
+        """
+        clock = {"value": 0.0}
+
+        def fake_sleep(seconds: float) -> None:
+            clock["value"] += seconds
+
+        def fake_monotonic() -> float:
+            return clock["value"]
+
         for name, stdout, returncode in self.NOT_GREEN:
             with self.subTest(случай=name):
                 self.set_state("merge_gate")
                 self.git_spy.calls.clear()
                 self.set_ci(stdout, returncode)
+                clock["value"] = 0.0
 
-                with self.assertRaises(SystemExit) as exit_:
+                with mock.patch.object(time, "sleep", fake_sleep), \
+                     mock.patch.object(time, "monotonic", fake_monotonic), \
+                     self.assertRaises(SystemExit) as exit_:
                     self.capture(fsm.cmd_approve, self.TASK)
 
                 self.assertNotIn("merge", self.git_spy.git_subcommands(),
@@ -619,9 +642,15 @@ class MergeNeedsGreenCiTest(FsmTest):
         with contextlib.suppress(SystemExit):
             self.capture(fsm.cmd_approve, self.TASK)
 
+        # SPEC 01M1NBWPKNBXP9ZXXQDJM7AXPJ, AC-5..AC-7: путь "fresh"
+        # больше не пишет отдельную запись action="статус CI ветки" сама
+        # — опрос и журналирование переехали в `_wait_for_branch_ci_green`
+        # (action="ожидание CI (цикл merge_gate)"/"статус CI ветки
+        # (ре-ран)"), тот же узел, что и путь "pulled"; здесь важен сам
+        # факт — причина попала в журнал ХОТЬ ПОД КАКИМ-ТО action, не имя
+        # конкретной записи.
         details = [r["detail"] for r in store.db().execute(
-            "SELECT detail FROM steps WHERE task_id=? AND action=?",
-            (self.TASK, "статус CI ветки"))]
+            "SELECT detail FROM steps WHERE task_id=?", (self.TASK,))]
         self.assertTrue(any("python=failure" in d for d in details), details)
 
     def test_green_ci_merges(self):

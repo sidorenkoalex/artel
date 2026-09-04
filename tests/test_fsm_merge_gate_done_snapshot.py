@@ -132,8 +132,17 @@ class DonePathSnapshotTest(RealGitSandbox):
     def test_done_transition_publishes_a_snapshot_like_killed_does(self):
         t = store.get_task(store.db(), TASK)
 
+        # SPEC 01M1NBWPKNBXP9ZXXQDJM7AXPJ, AC-5..AC-7: путь "fresh" без
+        # `confirmed_ci_note` теперь возвращает ("wait", branch) сам —
+        # опрос CI переехал в `_wait_for_branch_ci_green` вызывающего
+        # цикла. Тело вызывается напрямую (см. докстринг файла), поэтому
+        # `confirmed_ci_note` передаём явно — тот же самый узел, что
+        # реальный `_cmd_approve_merge_gate_cycle` подставил бы сюда сам
+        # после того, как цикл ожидания получил бы зелёный статус от
+        # замоканного `ci.branch_status` этим же setUp.
         result = fsm_merge_gate._cmd_approve_merge_gate(
-            store.db(), TASK, "merge_gate", t)
+            store.db(), TASK, "merge_gate", t,
+            confirmed_ci_note="зелёный (тест)")
 
         self.assertEqual(result, ("done",))
         row = store.db().execute("SELECT state FROM tasks WHERE id=?",
@@ -168,8 +177,11 @@ class DonePathSnapshotTest(RealGitSandbox):
         # (тот же приём, что уже проверяет `snapshot_pending` для killed).
         t = store.get_task(store.db(), TASK)
 
-        fsm_merge_gate._cmd_approve_merge_gate(store.db(), TASK,
-                                               "merge_gate", t)
+        # SPEC 01M1NBWPKNBXP9ZXXQDJM7AXPJ, AC-5..AC-7: см. пояснение в
+        # test_done_transition_publishes_a_snapshot_like_killed_does выше.
+        fsm_merge_gate._cmd_approve_merge_gate(
+            store.db(), TASK, "merge_gate", t,
+            confirmed_ci_note="зелёный (тест)")
 
         self.assertFalse(
             gitcmd.branch_exists(artifact_branch.branch_name(TASK)),

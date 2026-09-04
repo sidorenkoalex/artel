@@ -254,7 +254,15 @@ class BranchFreshnessGateTest(unittest.TestCase):
                          "не в рабочей копии пульта (ADR-0006 п.2)")
         self.assertEqual(args[0], "merge")
         self.assertIn("--no-ff", args, "подтяжка не rebase (требование 3)")
-        self.assertIn(config.MAIN_BRANCH, args)
+        # SPEC 01M1NBWPKNBXP9ZXXQDJM7AXPJ, AC-2: источник merge — origin
+        # (здесь, без реального git, `_origin_main_sha` деградирует на
+        # литерал "FETCH_HEAD" — та же деградация, что и коммит-сообщение
+        # ниже всё ещё называет `config.MAIN_BRANCH` информационно), НЕ
+        # локальный `config.MAIN_BRANCH` буквальным аргументом merge.
+        self.assertNotIn(config.MAIN_BRANCH, args,
+                         "AC-2: config.MAIN_BRANCH (локальный пин) не "
+                         "имеет права быть источником merge")
+        self.assertIn("FETCH_HEAD", args)
         self.assertNotIn(self.branch, args,
                          "ветка задачи не упоминается в аргументах merge")
         acc_run.assert_called_once_with(self.wt_path / "tasks" / self.TASK)
@@ -271,6 +279,43 @@ class BranchFreshnessGateTest(unittest.TestCase):
         self.assertEqual(self.state(), "merge_gate")
         self.assertEqual(len(self.merge_calls), 1)
         acc_run.assert_called_once_with(self.wt_path / "tasks" / self.TASK)
+
+    # --------------------------- AC-4 (эквивалент лёгкой песочницы) ---
+
+    def test_freshness_check_never_defaults_base_to_local_pin(self):
+        """SPEC 01M1NBWPKNBXP9ZXXQDJM7AXPJ, AC-4 — эквивалент в стиле
+        этого файла (лёгкая песочница без реального git не может честно
+        развести «ветка отстаёт от origin, но совпадает с локальным
+        пином» — тот сценарий кроют приёмочные тесты задачи,
+        `_sandbox.py::OriginDivergedSandbox::test_ac4_*`): узел сверки
+        обязан звать `gitcmd.commits_behind` с явным `base`, полученным
+        из fetch, а не оставлять параметр пустым — иначе `commits_behind`
+        сама подставила бы `config.MAIN_BRANCH` (локальный пин), ровно
+        дефект инцидента 04.09 из «Контекста» SPEC.
+        """
+        self.setup_recording()
+        behind_calls = []
+
+        def spying_commits_behind(branch, base=None):
+            behind_calls.append((branch, base))
+            return 3
+
+        with mock.patch.object(gitcmd, "commits_behind",
+                               side_effect=spying_commits_behind), \
+             mock.patch.object(gitcmd, "in_repo",
+                               side_effect=self._recording_ok), \
+             mock.patch.object(acceptance, "run", return_value=(True, "ok")):
+            self.advance_from_in_dev()
+
+        self.assertEqual(len(behind_calls), 1)
+        _, base = behind_calls[0]
+        self.assertTrue(
+            base, "AC-4: base обязан быть передан явно из origin-fetch, "
+            "не оставлен пустым/None (иначе commits_behind сама "
+            "подставит config.MAIN_BRANCH — локальный пин)")
+        self.assertNotEqual(
+            base, config.MAIN_BRANCH,
+            "AC-4: base не имеет права совпасть с локальным config.MAIN_BRANCH")
 
     # --------------------------------------------------- конфликт подтяжки
 
