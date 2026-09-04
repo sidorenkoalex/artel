@@ -1,14 +1,17 @@
-"""Юнит-тесты `orchestrator/canary.py` (tasks/T065/SPEC.md).
+"""Юнит-тесты `orchestrator/canary.py` v2 (SPEC 01M1NEEWH5K1XPFRDGRMPYSBXJ;
+v1 — tasks/T065/SPEC.md).
 
-Сквозной сценарий (заведение задач, прогон auto-циклом до гейтов,
-kill на merge_gate, sha main до/после) уже покрыт приёмочными тестами
-`tasks/T065/acceptance_tests/` (AC-1..AC-5, реальный git) — здесь только
-то, что они не изолируют: чистая арифметика отклонения от бейзлайна,
-сборка отчёта/метрик из журнала, поведение CLI на плохом вводе и факт
-пометки/учёта canary в `store`/`catalog`/`retro` без полного прогона
-конвейера.
+Сквозной сценарий (заведение задач в эфемерном клоне, прогон auto-циклом
+до гейтов, эскалация синтетическим ANSWER, kill на merge_gate, ноль
+следов в main) уже покрыт приёмочными тестами `tasks/
+01M1NEEWH5K1XPFRDGRMPYSBXJ/acceptance_tests/` (AC-1..AC-9, реальный
+git) — здесь только то, что они не изолируют: чистая арифметика
+отклонения от бейзлайна, парсинг маркера «ожидается эскалация»,
+выборка `k` из `N`, сборка метрик из журнала, пересчёт путей `config`
+под эфемерный клон (без реального git) и факт пометки/учёта canary в
+`store`/`catalog`/`retro` без полного прогона конвейера.
 """
-import json
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -22,7 +25,7 @@ from tests.sandbox import capture  # noqa: E402
 
 
 class DeviationTest(unittest.TestCase):
-    """`canary._deviation_exceeds` — чистая арифметика (SPEC, требование 5)."""
+    """`canary._deviation_exceeds` — чистая арифметика (SPEC, требование 12)."""
 
     def test_within_threshold_is_not_a_deviation(self):
         self.assertFalse(canary._deviation_exceeds(140, 100, 0.5))
@@ -44,25 +47,79 @@ class DeviationTest(unittest.TestCase):
         self.assertTrue(canary._deviation_exceeds(1, 0, 0.5))
 
 
-class BaselineWarningsTest(unittest.TestCase):
-    """`canary._baseline_warnings` — предупреждение печатается по каждому
-    измерению независимо и молчит, когда оба в пределах порога."""
+class TaskDeviationWarningsTest(unittest.TestCase):
+    """`canary._task_deviation_warnings` — отклонение ОДНОЙ задачи от ЕЁ
+    per-task бейзлайна (требование 9, 12), не суммы по набору (v1-регресс,
+    который и заменяет v2)."""
 
     def test_no_warning_when_both_metrics_within_threshold(self):
-        warnings = canary._baseline_warnings(
-            {"cost_usd": 10.0, "steps": 12}, {"cost_usd": 9.0, "steps": 10})
-        self.assertEqual(warnings, [])
+        metrics = {"steps": 12, "cost_usd": 10.0}
+        baseline = {"steps": 10, "cost_usd": 9.0}
+        self.assertEqual(canary._task_deviation_warnings(metrics, baseline, 0.5), [])
 
     def test_warns_on_steps_deviation_only(self):
-        warnings = canary._baseline_warnings(
-            {"cost_usd": 10.0, "steps": 20}, {"cost_usd": 10.0, "steps": 10})
+        metrics = {"steps": 20, "cost_usd": 10.0}
+        baseline = {"steps": 10, "cost_usd": 10.0}
+        warnings = canary._task_deviation_warnings(metrics, baseline, 0.5)
         self.assertEqual(len(warnings), 1)
         self.assertIn("шагам", warnings[0])
 
     def test_warns_on_both_metrics(self):
-        warnings = canary._baseline_warnings(
-            {"cost_usd": 30.0, "steps": 20}, {"cost_usd": 10.0, "steps": 10})
+        metrics = {"steps": 20, "cost_usd": 30.0}
+        baseline = {"steps": 10, "cost_usd": 10.0}
+        warnings = canary._task_deviation_warnings(metrics, baseline, 0.5)
         self.assertEqual(len(warnings), 2)
+
+
+class ExpectedEscalationMarkerTest(unittest.TestCase):
+    """`canary._expected_escalation` — разбор HTML-комментария маркера
+    (требование 8, AC-8)."""
+
+    def test_yes_marker_is_true(self):
+        self.assertTrue(canary._expected_escalation(
+            f"{canary.MARK_EXPECT_ESCALATION_YES}\nтекст шаблона"))
+
+    def test_no_marker_is_false(self):
+        self.assertFalse(canary._expected_escalation(
+            f"{canary.MARK_EXPECT_ESCALATION_NO}\nтекст шаблона"))
+
+    def test_missing_marker_is_none(self):
+        self.assertIsNone(canary._expected_escalation("просто текст без маркера"))
+
+
+class SamplePoolTemplatesTest(unittest.TestCase):
+    """`canary._sample_pool_templates` — выборка `k` из `N` (требование 1,
+    AC-1), без прогона FSM."""
+
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.pool_dir = Path(tmp.name)
+        for i in range(1, 6):
+            (self.pool_dir / f"shablon-{i}.md").write_text("x", encoding="utf-8")
+        (self.pool_dir / "не-шаблон.txt").write_text("x", encoding="utf-8")
+
+    def test_samples_exactly_k_of_n_md_files(self):
+        chosen = canary._sample_pool_templates(self.pool_dir, 2)
+        self.assertEqual(len(chosen), 2)
+        self.assertTrue(all(p.suffix == ".md" for p in chosen))
+        self.assertEqual(len(set(chosen)), 2)
+
+    def test_ignores_non_md_files_when_counting_n(self):
+        chosen = canary._sample_pool_templates(self.pool_dir, 5)
+        self.assertEqual(len(chosen), 5)
+
+    def test_k_greater_than_n_exits(self):
+        with self.assertRaises(SystemExit) as ctx:
+            canary._sample_pool_templates(self.pool_dir, 6)
+        self.assertIn("больше числа доступных шаблонов", str(ctx.exception))
+
+    def test_empty_pool_exits(self):
+        empty = self.pool_dir / "empty"
+        empty.mkdir()
+        with self.assertRaises(SystemExit) as ctx:
+            canary._sample_pool_templates(empty, 1)
+        self.assertIn("нет файлов", str(ctx.exception))
 
 
 class MetricsFromJournalTest(unittest.TestCase):
@@ -118,69 +175,147 @@ class MetricsFromJournalTest(unittest.TestCase):
         self.assertEqual(metrics["escalations"], [])
         self.assertEqual(metrics["outcome"], "killed")
 
-    def test_summary_sums_across_tasks(self):
-        metrics = {
-            "T900": {"steps": 3, "cost_usd": 1.5},
-            "T901": {"steps": 5, "cost_usd": 2.5},
-        }
-        self.assertEqual(canary._summary(metrics), {"cost_usd": 4.0, "steps": 8})
 
-
-class ReportAndBaselineIOTest(unittest.TestCase):
-    """`canary._write_report`/`_write_baseline`/`_read_baseline` — I/O в
-    `.artel/canary/`, без git."""
+class CanaryBaselineStoreRoundtripTest(unittest.TestCase):
+    """`store.canary_baseline`/`set_canary_baseline` — бейзлайн per-task,
+    ключ `title`, не `task_id` (требование 9)."""
 
     def setUp(self):
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
         self.root = Path(tmp.name)
-        patcher = mock.patch.object(config, "ROOT", self.root)
-        patcher.start()
-        self.addCleanup(patcher.stop)
+        for attr, value in (("ROOT", self.root),
+                            ("DB", self.root / ".artel" / "state.db")):
+            patcher = mock.patch.object(config, attr, value)
+            patcher.start()
+            self.addCleanup(patcher.stop)
+        store.create_schema(store.db())
+        self.conn = store.db()
 
-    def test_read_baseline_missing_file_is_none(self):
-        self.assertIsNone(canary._read_baseline())
+    def test_missing_baseline_is_none(self):
+        self.assertIsNone(store.canary_baseline(self.conn, "prostaya-pravka"))
 
-    def test_write_then_read_baseline_roundtrips(self):
-        canary._write_baseline({"cost_usd": 1.0, "steps": 2})
-        self.assertEqual(canary._read_baseline(), {"cost_usd": 1.0, "steps": 2})
+    def test_write_then_read_roundtrips(self):
+        store.set_canary_baseline(self.conn, "prostaya-pravka", steps=5,
+                                  cost_usd=1.5, review_iterations=0)
+        row = store.canary_baseline(self.conn, "prostaya-pravka")
+        self.assertEqual(row["steps"], 5)
+        self.assertEqual(row["cost_usd"], 1.5)
+        self.assertEqual(row["review_iterations"], 0)
 
-    def test_write_report_contains_tasks_and_summary(self):
-        metrics = {"T900": {"steps": 1, "cost_usd": 0.0,
-                            "review_iterations": 0, "escalations": [],
-                            "outcome": "killed"}}
-        summary = {"cost_usd": 0.0, "steps": 1}
+    def test_second_write_overwrites_the_same_title(self):
+        store.set_canary_baseline(self.conn, "t", steps=5, cost_usd=1.0,
+                                  review_iterations=0)
+        store.set_canary_baseline(self.conn, "t", steps=9, cost_usd=2.0,
+                                  review_iterations=1)
+        row = store.canary_baseline(self.conn, "t")
+        self.assertEqual(row["steps"], 9)
 
-        path = canary._write_report("20260101T000000Z", metrics, summary)
-
-        data = json.loads(path.read_text(encoding="utf-8"))
-        self.assertEqual(data["tasks"], metrics)
-        self.assertEqual(data["summary"], summary)
-        self.assertEqual(path, self.root / ".artel" / "canary" / "20260101T000000Z.json")
+    def test_insert_canary_run_is_a_separate_table_from_tasks_and_steps(self):
+        store.insert_canary_run(
+            self.conn, "20260101T000000Z", "prostaya-pravka", "01AAA",
+            steps=3, cost_usd=0.5, review_iterations=0, escalations=0,
+            outcome="killed", expected_escalation=None,
+            actual_escalation=False, marker_mismatch=False)
+        rows = self.conn.execute("SELECT * FROM canary_runs").fetchall()
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["title"], "prostaya-pravka")
+        self.assertEqual(store.all_tasks(self.conn), [])
 
 
 class CmdCanaryBadInputTest(unittest.TestCase):
-    """CLI-отказы `canary.cmd_canary` на плохом вводе (SPEC, требование 1:
-    команда обязана работать с любым переданным каталогом `*.md`, а
-    значит и явно отказывать на непригодном)."""
+    """CLI-отказы `canary.cmd_canary` на плохом вводе (требование 1) —
+    `Path.home()` подменена на пустой временный каталог, реальный
+    `~/.artel-canary` Оператора этот тест не трогает."""
 
     def setUp(self):
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
-        self.root = Path(tmp.name)
+        self.fake_home = Path(tmp.name)
+        patcher = mock.patch.object(Path, "home", return_value=self.fake_home)
+        patcher.start()
+        self.addCleanup(patcher.stop)
 
-    def test_missing_directory_exits(self):
+    def test_missing_pool_dir_exits(self):
         with self.assertRaises(SystemExit) as ctx:
-            canary.cmd_canary(str(self.root / "нет-такого"))
-        self.assertIn("каталог не найден", str(ctx.exception))
+            canary.cmd_canary(k=1)
+        self.assertIn("каталог пула не найден", str(ctx.exception))
 
-    def test_directory_without_md_files_exits(self):
-        empty = self.root / "empty"
-        empty.mkdir()
-        (empty / "не-тз.txt").write_text("x", encoding="utf-8")
+    def test_nonpositive_k_exits(self):
+        (self.fake_home / config.CANARY_POOL_DIRNAME).mkdir()
         with self.assertRaises(SystemExit) as ctx:
-            canary.cmd_canary(str(empty))
-        self.assertIn("нет файлов *.md", str(ctx.exception))
+            canary.cmd_canary(k=0)
+        self.assertIn("--k", str(ctx.exception))
+
+
+class EphemeralCloneConfigRemapTest(unittest.TestCase):
+    """`canary._ephemeral_clone` — пересчёт путей `config` под клон и их
+    восстановление по выходу, БЕЗ реального git (реальный git — приём
+    `_sandbox.py::_EphemeralDirTracker` в приёмочных тестах): каждый
+    патчнутый атрибут — буквально `ROOT / <подпуть>`, значит пересчёт
+    `dest / saved[attr].relative_to(outer_root)` обязан давать тот же
+    подпуть под новым корнем."""
+
+    def setUp(self):
+        self.real_root = config.ROOT
+        self.suffixes = {
+            attr: getattr(config, attr).relative_to(self.real_root)
+            for attr in canary._CLONE_CONFIG_ATTRS}
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.outer_root = Path(tmp.name) / "outer"
+        self.outer_root.mkdir()
+        for attr in canary._CLONE_CONFIG_ATTRS:
+            patcher = mock.patch.object(
+                config, attr, self.outer_root / self.suffixes[attr])
+            patcher.start()
+            self.addCleanup(patcher.stop)
+
+    def test_attrs_point_under_clone_inside_block_and_restore_after(self):
+        saved_before = {attr: getattr(config, attr)
+                        for attr in canary._CLONE_CONFIG_ATTRS}
+        fake_clone_dir = self.outer_root.parent / "clone"
+
+        def fake_run(cmd, **kw):
+            if cmd[:2] == ["git", "clone"]:
+                Path(cmd[-1]).mkdir(parents=True, exist_ok=True)
+            return subprocess.CompletedProcess(cmd, 0, "", "")
+
+        with mock.patch.object(canary.tempfile, "mkdtemp",
+                               return_value=str(fake_clone_dir)), \
+             mock.patch.object(canary.subprocess, "run", side_effect=fake_run), \
+             mock.patch.object(canary.catalog, "cmd_init", lambda: None):
+            with canary._ephemeral_clone() as dest:
+                self.assertEqual(dest, fake_clone_dir)
+                for attr in canary._CLONE_CONFIG_ATTRS:
+                    self.assertEqual(getattr(config, attr),
+                                     dest / self.suffixes[attr])
+
+        for attr in canary._CLONE_CONFIG_ATTRS:
+            self.assertEqual(getattr(config, attr), saved_before[attr])
+        self.assertFalse(fake_clone_dir.exists())
+
+    def test_config_restored_even_when_block_raises(self):
+        saved_before = {attr: getattr(config, attr)
+                        for attr in canary._CLONE_CONFIG_ATTRS}
+        fake_clone_dir = self.outer_root.parent / "clone2"
+
+        def fake_run(cmd, **kw):
+            if cmd[:2] == ["git", "clone"]:
+                Path(cmd[-1]).mkdir(parents=True, exist_ok=True)
+            return subprocess.CompletedProcess(cmd, 0, "", "")
+
+        with mock.patch.object(canary.tempfile, "mkdtemp",
+                               return_value=str(fake_clone_dir)), \
+             mock.patch.object(canary.subprocess, "run", side_effect=fake_run), \
+             mock.patch.object(canary.catalog, "cmd_init", lambda: None):
+            with self.assertRaises(ValueError):
+                with canary._ephemeral_clone():
+                    raise ValueError("boom")
+
+        for attr in canary._CLONE_CONFIG_ATTRS:
+            self.assertEqual(getattr(config, attr), saved_before[attr])
+        self.assertFalse(fake_clone_dir.exists())
 
 
 class StoreAndCatalogMarkingTest(unittest.TestCase):

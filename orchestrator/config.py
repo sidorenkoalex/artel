@@ -227,6 +227,14 @@ MAX_PARALLEL_TASKS = 10
 # |отклонение| суммарных стоимости/шагов текущего прогона от baseline.json,
 # после которого отчёт печатает предупреждение. Дефолт из SPEC — 50%.
 CANARY_DEVIATION_RATIO = 0.5
+# Каталог пула шаблонов канарейки v2 ВНЕ корня пульта (SPEC
+# 01M1NEEWH5K1XPFRDGRMPYSBXJ, требование 1) — под `Path.home()`, не под
+# `ROOT`: заводится и наполняется Оператором вручную («Не входит» той
+# же SPEC), код только читает уже существующий каталог. Имя — тот же
+# литерал, что несут: SPEC (буквально), `doctor.check_role_log_pool_leak`
+# (требование 13б), и `permissions.deny` курируемого слоя роли
+# (требование 13а, `docs/reference/role-home/claude/settings.json`).
+CANARY_POOL_DIRNAME = ".artel-canary"
 # Retention-политика (tasks/T073/SPEC.md, требование 1, docs/retention.md).
 # `.artel/logs/` — прунятся, только когда лог ОДНОВРЕМЕННО старше
 # LOG_RETENTION_DAYS И его задача вне последних LOG_RETENTION_KEEP_TASKS по

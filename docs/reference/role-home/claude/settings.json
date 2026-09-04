@@ -1,0 +1,10 @@
+{
+  "permissions": {
+    "deny": [
+      "Read(~/.artel-canary/**)",
+      "Bash(git clone:*)",
+      "Bash(gh repo clone:*)",
+      "Bash(git remote add:*)"
+    ]
+  }
+}
