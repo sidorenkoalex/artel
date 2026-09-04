@@ -114,6 +114,20 @@ class FakeGit:
                                      "invalid continuation byte")
         if args and args[0] == "show":
             return self.show(args)
+        if args and args[0] == "ls-tree":
+            # `ls-tree -r --name-only <ветка> -- <rel_dir>` — тоже несёт
+            # `--name-only`, но это СОВСЕМ ДРУГОЙ запрос, чем сверка
+            # свежести карты (`diff --name-only`, args[0] == "diff") — эта
+            # ветка обязана идти РАНЬШЕ generic-диспетчера ниже, иначе
+            # `--name-only in args` поймал бы её как diff (см. докстринг
+            # `AnswerAwareFakeGit` в tasks/01M1NBWRTAHSX9FQGTQWENY80A/
+            # acceptance_tests/_sandbox.py — тот же класс сбоя).
+            if self.returncode:
+                return subprocess.CompletedProcess(list(args), self.returncode,
+                                                   "", self.stderr)
+            rel_dir = args[-1].rstrip("/") + "/"
+            paths = [p for p in self.files if p.startswith(rel_dir)]
+            return subprocess.CompletedProcess(list(args), 0, "\n".join(paths), "")
         if (len(args) >= 3 and args[0] == "rev-parse" and args[1] == "--verify"
                 and args[-1].startswith("refs/heads/")):
             # SPEC T048: `cmd_new` решает по этому ответу, заводить ли
@@ -300,10 +314,19 @@ class ReviewPackageTest(unittest.TestCase):
         self.root = Path(tmp.name)
         self.tdir = self.root / "tasks" / self.TASK
         self.tdir.mkdir(parents=True)
-        for attr, value in (("ROOT", self.root), ("TASKS", self.root / "tasks")):
+        for attr, value in (("ROOT", self.root), ("TASKS", self.root / "tasks"),
+                            ("DB", self.root / ".artel" / "state.db")):
             patcher = mock.patch.object(config, attr, value)
             patcher.start()
             self.addCleanup(patcher.stop)
+        # `review_package` журналирует ANSWER-компоненты через `conn`
+        # (tasks/01M1NBWRTAHSX9FQGTQWENY80A) — своя песочная БД, чтобы не
+        # задеть настоящую `state.db` пульта. `migrate()` внутри `store.db()`
+        # выходит первой строкой на пустой БД («таблиц ещё нет — схему
+        # ставит init») — схему ставим явно, тем же приёмом, что
+        # `catalog.cmd_init`.
+        self.conn = store.db()
+        store.create_schema(self.conn)
 
         # Штатная картина: артефакты закоммичены в ветку задачи, а рабочее
         # дерево оркестратор оставил на main — в нём этих файлов нет.
@@ -330,7 +353,7 @@ class ReviewPackageTest(unittest.TestCase):
         return path
 
     def build(self) -> dict:
-        return review.review_package(self.TASK, "Ревью-пакет", self.BRANCH)
+        return review.review_package(self.conn, self.TASK, "Ревью-пакет", self.BRANCH)
 
     def order_of(self, text: str, *marks: str) -> list[int]:
         found = []
@@ -785,10 +808,11 @@ class CmdRunReviewPackageTest(unittest.TestCase):
 
         details = self.journal_details("ревью-пакет собран")
         self.assertEqual(len(details), 1)
-        package = review.review_package(self.TASK, "Ревью-пакет вместо свободного чтения",
-                                       store.db().execute(
-                                           "SELECT branch FROM tasks WHERE id=?",
-                                           (self.TASK,)).fetchone()[0])
+        package = review.review_package(
+            store.db(), self.TASK, "Ревью-пакет вместо свободного чтения",
+            store.db().execute(
+                "SELECT branch FROM tasks WHERE id=?",
+                (self.TASK,)).fetchone()[0])
         self.assertIn(f"символов {package['chars']}", details[0])
         self.assertIn(f"строк diff {package['diff_lines']}", details[0])
         self.assertIn("символов", self.capture(catalog.cmd_log, self.TASK))
@@ -928,7 +952,7 @@ class IncrementalReviewPackageTest(ReviewPackageTest):
     def build_incremental(self, iteration: int = 2, prev_sha: str | None = None
                           ) -> dict:
         return review.review_package(
-            self.TASK, "Ревью-пакет", self.BRANCH,
+            self.conn, self.TASK, "Ревью-пакет", self.BRANCH,
             iteration=iteration, prev_sha=self.PREV_SHA if prev_sha is None
             else prev_sha)
 
@@ -978,6 +1002,132 @@ class IncrementalReviewPackageTest(ReviewPackageTest):
             [c for c in self.git.calls if c[0] == "diff"],
             [["diff", "--stat", f"{config.MAIN_BRANCH}...{self.BRANCH}"],
              ["diff", f"{config.MAIN_BRANCH}...{self.BRANCH}"]])
+
+
+class AnswerRelsTest(unittest.TestCase):
+    """`review._answer_rels` — все `ANSWER-n.md` артефактной ветки, по
+    возрастанию `n` (tasks/01M1NBWRTAHSX9FQGTQWENY80A, AC-1)."""
+
+    def test_sorted_by_number_not_by_ls_tree_order(self):
+        git = FakeGit(files={
+            "tasks/T001/ANSWER-2.md": "second",
+            "tasks/T001/ANSWER-10.md": "tenth",
+            "tasks/T001/ANSWER-1.md": "first",
+        })
+        with mock.patch.object(gitcmd, "git", git):
+            rels = review._answer_rels("T001", "artifact/t001")
+
+        self.assertEqual(rels, ["tasks/T001/ANSWER-1.md", "tasks/T001/ANSWER-2.md",
+                                "tasks/T001/ANSWER-10.md"],
+                         "числовая сортировка, не текстовая (10 не перед 2)")
+
+    def test_non_answer_files_under_the_same_dir_are_ignored(self):
+        git = FakeGit(files={
+            "tasks/T001/SPEC.md": "spec", "tasks/T001/ANSWER-1.md": "first",
+            "tasks/T001/ANSWER-x.md": "не число",
+        })
+        with mock.patch.object(gitcmd, "git", git):
+            rels = review._answer_rels("T001", "artifact/t001")
+
+        self.assertEqual(rels, ["tasks/T001/ANSWER-1.md"])
+
+    def test_git_failure_yields_no_answers(self):
+        git = FakeGit(returncode=1, stderr="fatal: bad revision")
+        with mock.patch.object(gitcmd, "git", git):
+            rels = review._answer_rels("T001", "artifact/t001")
+
+        self.assertEqual(rels, [])
+
+    def test_no_answer_files_at_all_yields_an_empty_list(self):
+        git = FakeGit(files={"tasks/T001/SPEC.md": "spec"})
+        with mock.patch.object(gitcmd, "git", git):
+            rels = review._answer_rels("T001", "artifact/t001")
+
+        self.assertEqual(rels, [])
+
+
+class AnswerComponentsInReviewPackageTest(unittest.TestCase):
+    """ANSWER-n.md задачи — компоненты ревью-пакета (tasks/
+    01M1NBWRTAHSX9FQGTQWENY80A, AC-1/AC-2/AC-3/AC-5): все файлы, не
+    только последний, каждый со своей записью sha256 в журнале;
+    существующие компоненты пакета журнал не получают."""
+
+    TASK = "T001"
+    BRANCH = "task/t001-revyu-paket"
+
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.root = Path(tmp.name)
+        for attr, value in (("ROOT", self.root), ("TASKS", self.root / "tasks"),
+                            ("DB", self.root / ".artel" / "state.db")):
+            patcher = mock.patch.object(config, attr, value)
+            patcher.start()
+            self.addCleanup(patcher.stop)
+        self.conn = store.db()
+        store.create_schema(self.conn)
+        self.git = FakeGit(files={f"tasks/{self.TASK}/SPEC.md": SPEC_MD,
+                                  f"tasks/{self.TASK}/PLAN.md": PLAN_MD,
+                                  "templates/REVIEW.md": FORM_MD})
+        git_patcher = mock.patch.object(gitcmd, "git", self.git)
+        git_patcher.start()
+        self.addCleanup(git_patcher.stop)
+
+    def add_answer(self, n: int, text: str) -> None:
+        self.git.files[f"tasks/{self.TASK}/ANSWER-{n}.md"] = text
+
+    def build(self) -> dict:
+        return review.review_package(self.conn, self.TASK, "Ревью-пакет", self.BRANCH)
+
+    def journal_details(self, action: str) -> list[str]:
+        return [r["detail"] for r in self.conn.execute(
+            "SELECT detail FROM steps WHERE task_id=? AND action=? ORDER BY id",
+            (self.TASK, action))]
+
+    def test_all_answer_files_are_included_in_ascending_order(self):
+        self.add_answer(2, "второй батч маркер-b2")
+        self.add_answer(1, "первый батч маркер-b1")
+
+        text = self.build()["text"]
+
+        marks = [text.index(f"tasks/{self.TASK}/ANSWER-{n}.md") for n in (1, 2)]
+        self.assertEqual(marks, sorted(marks), "ANSWER-1 обязан идти перед ANSWER-2")
+        self.assertIn("маркер-b1", text)
+        self.assertIn("маркер-b2", text)
+
+    def test_each_answer_gets_its_own_journal_entry_with_its_own_sha256(self):
+        self.add_answer(1, "батч один")
+        self.add_answer(2, "батч два")
+
+        self.build()
+
+        entries = self.journal_details("бриф: компонент")
+        sha_1 = context_package.sha256_of("батч один")
+        sha_2 = context_package.sha256_of("батч два")
+        self.assertTrue(any(f"tasks/{self.TASK}/ANSWER-1.md" in d and
+                            f"sha256={sha_1}" in d for d in entries),
+                        f"нет записи про ANSWER-1.md: {entries}")
+        self.assertTrue(any(f"tasks/{self.TASK}/ANSWER-2.md" in d and
+                            f"sha256={sha_2}" in d for d in entries),
+                        f"нет записи про ANSWER-2.md: {entries}")
+
+    def test_existing_package_components_get_no_new_journal_entries(self):
+        self.add_answer(1, "батч")
+
+        self.build()
+
+        entries = self.journal_details("бриф: компонент")
+        forbidden = (f"tasks/{self.TASK}/SPEC.md", f"tasks/{self.TASK}/PLAN.md",
+                    "templates/REVIEW.md")
+        for detail in entries:
+            for path in forbidden:
+                self.assertNotIn(path, detail)
+
+    def test_no_answer_files_leaves_no_journal_entries_and_no_trace(self):
+        package = self.build()
+
+        self.assertEqual(self.journal_details("бриф: компонент"), [])
+        self.assertNotIn("ANSWER", package["text"])
 
 
 class PackageNoteDiffTypeTest(unittest.TestCase):
