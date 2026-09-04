@@ -252,6 +252,16 @@ class BranchFreshnessGateTest(unittest.TestCase):
     # ------------------------------------------------- успешная подтяжка
 
     def test_advance_pulls_main_and_advances_when_acceptance_green(self):
+        """Подтяжка использует зафетченный с origin sha как источник merge
+        (не литерал `config.MAIN_BRANCH`, не литерал `"FETCH_HEAD"`) и идёт
+        в worktree ЗАДАЧИ, не в рабочей копии пульта; после зелёной приёмки
+        переход в `review` состоится.
+
+        Ловит мутацию: `base` merge возвращён к литералу `config.
+        MAIN_BRANCH` или к `"FETCH_HEAD"` вместо зафетченного sha — AC-2/
+        R1-F1 тихо перестанут выполняться, а `assertNotIn`/`assertIn` по
+        аргументам merge здесь это поймают.
+        """
         self.setup_recording()
         with mock.patch.object(gitcmd, "commits_behind", return_value=3), \
              mock.patch.object(gitcmd, "in_repo",
@@ -312,6 +322,11 @@ class BranchFreshnessGateTest(unittest.TestCase):
         из fetch, а не оставлять параметр пустым — иначе `commits_behind`
         сама подставила бы `config.MAIN_BRANCH` (локальный пин), ровно
         дефект инцидента 04.09 из «Контекста» SPEC.
+
+        Ловит мутацию: `base` не передаётся в `commits_behind` явно
+        (аргумент опущен/`None`) — вызов молча упадёт на дефолт `config.
+        MAIN_BRANCH` внутри `commits_behind`, а `spying_commits_behind`
+        здесь это поймает пустым/`None` `base`.
         """
         self.setup_recording()
         behind_calls = []
@@ -348,6 +363,11 @@ class BranchFreshnessGateTest(unittest.TestCase):
         подстановка сравнивала/мержила ветку задачи против постороннего
         состояния `config.ROOT`/приватного `FETCH_HEAD` worktree'а — не
         «ничего не делала», как заявляла деградация.
+
+        Ловит мутацию: убранный ранний `if not base: return "fresh"` —
+        вызов дойдёт до `commits_behind`/`merge` с литералом `"FETCH_HEAD"`
+        вместо честного no-op, и моки `behind`/`self.merge_calls` здесь
+        это поймают непустым вызовом.
         """
         self.setup_recording()
         with mock.patch.object(fsm, "_origin_main_sha", return_value=None), \
@@ -544,6 +564,12 @@ class TargetSourcedRemoteTest(unittest.TestCase):
         ДО самого сравнения (AC-1 для self-target, тот же порядок здесь),
         и его remote — `url` записи `acme`, не `"origin"`; ветка фетча —
         её `base` (`trunk`), не `config.MAIN_BRANCH` (`main`).
+
+        Ловит мутацию: `_origin_main_source` для не-self target возвращает
+        `"origin"`/`config.MAIN_BRANCH` вместо `entry["url"]`/`entry["base"]`
+        — AC-10 тихо сломается, fetch уйдёт в репозиторий пульта вместо
+        `acme`, и `assertIn`/`assertNotIn` по `remote_args` здесь это
+        поймают.
         """
         self.tdir.mkdir(parents=True, exist_ok=True)
         (self.tdir / "PLAN.md").write_text(

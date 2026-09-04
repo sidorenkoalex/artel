@@ -136,6 +136,55 @@ schema_version: 3
    `rev-parse FETCH_HEAD` вместо `None`), получили явную truthy-заглушку
    `fsm._origin_main_sha` в `setUp` — не ослабление, тот же путь
    исполнения, что и раньше.
+6. REVIEW.md итерация 3 (ANSWER-2 Оператора: закрыть R2-F1 и R3-F1 по
+   леджеру, ничего сверх). R2-F1 (major, перенесено без изменений с
+   итерации 2 — регрессия шага developer между итерациями 2 и 3
+   потеряла текст итерации 2 в REVIEW.md на артефактной ветке, не
+   затронув код; вынесено в «Предложения системе» ревьювером итерации
+   3, здесь не чинится — вне права разработчика): всем 11 новым/
+   изменённым тестовым методам этой ветки (`tests/
+   test_branch_freshness_gate.py` — 4 метода, `tests/
+   test_merge_gate_ci_wait.py` — 1, `tests/test_ci_status_kind_gate.py`
+   — 2, `tests/test_invariants.py` — 2, `tests/
+   test_fsm_merge_gate_done_snapshot.py` — 2) добавлена строка `Ловит
+   мутацию: …` в докстринг — по образцу ретрофита `77c823a6`
+   (`tests/test_amend.py`), каждая называет конкретную правдоподобную
+   мутацию (перепутанный литерал вместо зафетченного sha, убранный
+   ранний возврат, смешение путей "running"/"unknown" с красным
+   статусом CI, пропущенная/переставленная публикация снапшота или
+   удаление артефактной ветки) и наблюдаемое расхождение, на котором
+   тест покраснеет. R3-F1 (minor): `_auto_resolve_map_conflict`
+   принимает `source_branch` параметром (использован в её
+   commit-сообщении, `fsm.py:116`); вычисление `source`/`source_branch`
+   в `_pull_main_or_escalate` поднято перед первой точкой
+   использования — сразу после `target_name`, до `_origin_main_sha`
+   (`fsm.py:266-267`); литерал `config.MAIN_BRANCH` заменён на
+   `source_branch` во всех оставшихся местах той же функции (докстринг,
+   эскалации «worktree не создан»/«конфликт подтяжки»/«приёмка красная
+   после подтяжки») — для self-target `source_branch == config.
+   MAIN_BRANCH` байт-в-байт, вывод не меняется. Правка изолирована в
+   `orchestrator/fsm.py` и `tests/`; `tests/
+   test_fsm_map_conflict_autoresolve.py` не звал
+   `_auto_resolve_map_conflict` напрямую (только через
+   `_pull_main_or_escalate`) — смена сигнатуры без правки этого файла.
+
+   Итоговые строки прогонов на финальном рабочем дереве этой итерации:
+   - `python3 -m unittest discover -s tasks/01M1NBWPKNBXP9ZXXQDJM7AXPJ/
+     acceptance_tests -p "test_ac*.py" -v` — `Ran 9 tests ... OK` (AC-1..
+     AC-9, планка не тронута).
+   - `python3 -m unittest tests.test_branch_freshness_gate
+     tests.test_fsm_map_conflict_autoresolve tests.test_gitcmd_branch_reads
+     tests.test_merge_gate_ci_wait tests.test_ci_status_kind_gate
+     tests.test_invariants tests.test_fsm_merge_gate_done_snapshot -v` —
+     `Ran 92 tests ... OK`.
+   - `python3 -m unittest discover -s tests -q` — полный набор, код
+     возврата 0 (`OK`, без `FAILED`/`ERROR`); те же 1391 тестов, что
+     видела итерация 3 REVIEW.md (`git diff` по задачным файлам с
+     `58f1a582` — пусто, кроме самой правки R2-F1/R3-F1).
+   - `python3 scripts/codebase_map.py` — diff с закоммиченным
+     `docs/codebase-map.md` отличается ТОЛЬКО строкой `built_at_sha`;
+     рабочее дерево возвращено `git checkout -- docs/codebase-map.md`,
+     регенерация/коммит карты этой правкой не требуются.
 
 ## Покрытие требований
 
@@ -152,11 +201,13 @@ schema_version: 3
 - Тронутые узлы — `fsm._pull_main_or_escalate`/новые `fsm.
   _origin_main_sha`/`fsm._origin_main_source` и `fsm_merge_gate.
   _cmd_approve_merge_gate` (одна ветка `if`). `doctor.py`, `pin.py`,
-  механика `pin-update` не затронуты (SPEC «Не входит»),
-  `_auto_resolve_map_conflict` не менялся, `targets.yaml`/
+  механика `pin-update` не затронуты (SPEC «Не входит»), `targets.yaml`/
   `orchestrator/targets.py` не менялись (используется только уже
   существующее поле `url`/`base` через уже существующий `targets.
-  target()`).
+  target()`). Шаг 6 (R3-F1) добавил параметр `source_branch` в
+  `_auto_resolve_map_conflict` — единственный вызывающий код
+  (`_pull_main_or_escalate`, тот же модуль) обновлён тем же коммитом,
+  внешних вызывающих нет (`grep` подтверждает).
 - Гейты/лимиты/инварианты не ослаблены: путь "fresh" после push теперь
   СТРОЖЕ прежнего (ждёт подтверждённого зелёного CI циклом вместо
   разового опроса), не слабее. Мьютекс merge-окна и его дисциплина

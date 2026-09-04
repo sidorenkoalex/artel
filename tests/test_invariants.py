@@ -606,6 +606,12 @@ class MergeNeedsGreenCiTest(FsmTest):
         же приёмом, что `tests/test_merge_gate_ci_wait.py::FakeClock` —
         отказ по-прежнему приходит, просто после виртуального, не
         настоящего, ожидания.
+
+        Ловит мутацию: цикл `_wait_for_branch_ci_green` по истечении
+        потолка ошибочно возвращает подтверждение вместо отказа (или
+        merge вызывается раньше подтверждения) — хотя бы один из семи
+        случаев `NOT_GREEN` дойдёт до `git merge`, и `assertNotIn("merge",
+        ...)` это поймает.
         """
         clock = {"value": 0.0}
 
@@ -634,7 +640,16 @@ class MergeNeedsGreenCiTest(FsmTest):
                 self.assertIn("merge отклонён", str(exit_.exception))
 
     def test_the_refusal_names_the_reason_in_the_journal(self):
-        """Отказ разбирают по журналу: причина в нём, а не только на экране."""
+        """Отказ разбирают по журналу: причина в нём, а не только на
+        экране — «python=failure» обязана попасть хоть под каким-то
+        `action`, даже когда путь "fresh" сам её больше не пишет (см.
+        комментарий ниже, AC-5..AC-7).
+
+        Ловит мутацию: причина не передана в `store.journal`/не долетает
+        через `_wait_for_branch_ci_green` до записи в `steps` — ни одна
+        `detail` не содержит «python=failure», и `assertTrue(any(...))`
+        здесь это поймает.
+        """
         self.set_state("merge_gate")
         self.set_ci(json.dumps({"check_runs": [
             {"name": "python", "status": "completed", "conclusion": "failure"}]}))

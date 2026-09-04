@@ -3,7 +3,7 @@ task: 01M1NBWPKNBXP9ZXXQDJM7AXPJ
 type: review
 author_role: reviewer
 status: changes_requested
-iteration: 1
+iteration: 3
 schema_version: 3
 ---
 
@@ -11,140 +11,199 @@ schema_version: 3
 
 ## Фаза A: гейт плана
 
-Таблица покрытия PLAN.md полна (требования 1–5 → шаги 1–3, включая
-дробление 5 на шаги 1+3). Шаги — единицы размера MR (три независимых
-узла: `fsm.py` сверка/подтяжка, `fsm_merge_gate.py` ветка `"fresh"`,
-`_origin_main_source`/`targets`), не микрооперации и не «сделать всё».
-Подход не конфликтует с существующей архитектурой: переиспользует
+PLAN.md на ветке задачи (16472 байт, sha256=c15156d5…36ea19 — совпадает
+с ревью-пакетом байт-в-байт) не менялся с итерации 2: шаг 5 (описание
+правок R1-F1/R1-F2) остаётся поверх шагов 1-4 итерации 1. Таблица
+покрытия требований 1-5 → шаги 1-3 (плюс дробление 5 на шаги 1+3)
+по-прежнему полна. Шаги — единицы размера MR (три независимых узла),
+не микрооперации. Подход не конфликтует с архитектурой — переиспользует
 `commits_behind(base=...)`, `confirmed_ci_note`, `_wait_for_branch_ci_green`,
-поле `url`/`base` записи target'а — новых абстракций, кроме двух функций,
-не вводит. Один системный риск в подходе не учтён явно ни в PLAN, ни в
-коде — см. замечание R1-F1 ниже (Фаза B).
+поле `url`/`base` записи target'а. Замечаний к плану нет.
 
 ## Соответствие SPEC
 
 | Требование | Вердикт | Комментарий |
 |---|---|---|
-| 1 (сверка/подтяжка против origin, не пина) | OK | `fsm._origin_main_sha`/`_pull_main_or_escalate` (fsm.py:128–261); AC-1/AC-4 приёмочные и юнит-тесты зелёные. |
-| 2 (гейт `merge_gate` ждёт CI циклом на пути "fresh" после push) | OK | `fsm_merge_gate.py:284–296` возвращает `("wait", branch)` вместо разового опроса; AC-5/AC-7 зелёные. |
-| 3 (расхождение пина не влияет ни на что, кроме `doctor`) | Реализовано не полностью | AC-8 (реальное расхождение пина, fetch УСПЕШЕН) — зелёный. Но путь деградации ЭТОЙ ЖЕ функции (fetch неудачен ИЛИ конфигурация target'а неисправна) не эквивалентен «ничего не делать», как заявляет докстринг — см. R1-F1. |
-| 4 (существующие тесты зелёные, расширены не переписаны) | OK | 1355/1355 тестов `tests/` зелёные, 9/9 приёмочных зелёные (см. «Проверено исполнением»). Единственная правка ВНУТРИ существующего теста protected-файла (`tests/test_branch_freshness_gate.py`, `assertIn(config.MAIN_BRANCH,...)` → `assertNotIn(...)+assertIn("FETCH_HEAD",...)`) — не ослабление: строгость сохранена/усилена, изменение неизбежно следует из того, что требование 1 разворачивает старое поведение на противоположное; прокомментировано ссылкой на AC-2. |
-| 5 (remote/репозиторий из конфигурации target'а) | OK (minor) | `_origin_main_source` (fsm.py:128–164); AC-10 юнит-тест зелёный. Тест кроет только путь «сверка», не путь «подтяжка/merge» для внешнего target'а — приемлемо, поскольку оба используют один и тот же `base` (см. «Проверено исполнением»); отдельно — R1-F2 (косметика commit message). |
+| 1 (сверка/подтяжка против origin, не пина) | OK | `fsm._origin_main_sha`/`_pull_main_or_escalate` (fsm.py:128-313); AC-1/AC-4 зелёные (см. «Проверено исполнением»). |
+| 2 (гейт `merge_gate` ждёт CI циклом на пути "fresh" после push) | OK | `fsm_merge_gate.py:284-296` — `("wait", branch)` вместо разового опроса; AC-5/AC-7 зелёные. |
+| 3 (расхождение пина не влияет ни на что, кроме `doctor`) | OK | R1-F1 закрыт: `_origin_main_sha() is None` → ранний `return "fresh"` (fsm.py:265-269) ДО `commits_behind`/`merge`; литерал `"FETCH_HEAD"` в сверке/merge отсутствует (`grep -n '"FETCH_HEAD"' orchestrator/fsm.py` — единственное вхождение вне докстрингов/комментариев это fsm.py:194, чтение результата ТОЛЬКО ЧТО сделанного fetch внутри `_origin_main_sha`, не подстановка в `base`). `doctor.py`/`pin.py` diff'ом не задеты. |
+| 4 (существующие тесты зелёные, расширены не переписаны) | Реализовано не полностью | 1391/1391 `tests/`, 92/92 целевых, 9/9 приёмочных — зелёные (см. «Проверено исполнением»). Но новые/изменённые тестовые методы этой ветки не несут докстринг-заявку `Ловит мутацию: …`, обязательную конвенцией `skills/test-authoring.md` с 2026-09-02 (раньше SPEC этой задачи) — см. R2-F1 ниже, статус не изменился со времени, когда замечание было заведено. |
+| 5 (remote/репозиторий из конфигурации target'а) | OK (minor) | `_origin_main_source` (fsm.py:128-160); AC-10 (`TargetSourcedRemoteTest`) зелёный. R1-F2 закрыт для основного пути merge (fsm.py:282-285, `source_branch`), но три соседних сообщения в той же функции и `_auto_resolve_map_conflict` всё ещё несут литерал `config.MAIN_BRANCH` — см. новое замечание R3-F1 (minor, тот же класс, что и закрытый R1-F2, другие места). |
 
 ## Замечания
 
-- major — `orchestrator/fsm.py:259-261,273-274` — деградация `base =
-  _origin_main_sha(target_name) or "FETCH_HEAD"` не эквивалентна
-  заявленному «ничего не делать» и не защищена от гонки между двумя
-  теперь-НЕ-под-мьютексом точками вызова — сценарий поломки ниже.
-  Предложение: на `_origin_main_sha() is None` (обе причины — `TargetsError`
-  И неудачный `git fetch`) `_pull_main_or_escalate` обязана вернуть
-  `"fresh"` немедленно (тот же путь, что и `not behind`), не подставлять
-  литерал `"FETCH_HEAD"` ни в `commits_behind`, ни в `merge` — по образцу
-  уже существующего в этом же PR узла `fsm_merge_gate._origin_main_sha`,
-  который на `None` явно `sys.exit`'ит, а не подставляет такой литерал.
+- major (carried, R2-F1, без изменений со времени заведения) — `tests/
+  test_branch_freshness_gate.py`, `tests/test_merge_gate_ci_wait.py`,
+  `tests/test_ci_status_kind_gate.py`, `tests/test_invariants.py`,
+  `tests/test_fsm_merge_gate_done_snapshot.py` — ни один новый/изменённый
+  в этой ветке тестовый метод не несёт докстринг-заявку `Ловит мутацию:
+  …` (`skills/test-authoring.md`, конвенция с коммита `ec80cd60`,
+  2026-09-02 — раньше SPEC этой задачи, `fdf31466`, 2026-09-04; проверено
+  повторно: `grep -rn "Ловит мутацию" <эти 5 файлов>` — пусто). Без
+  заявки ревьювер не может сверить чувствительность теста с конкретной
+  правдоподобной поломкой (review-checklist, Фаза B п.3). Полный список
+  задетых методов (имена и текущие строки подтверждены в рабочем
+  дереве):
+  - `tests/test_branch_freshness_gate.py:254` `BranchFreshnessGateTest::test_advance_pulls_main_and_advances_when_acceptance_green` (изменён)
+  - `tests/test_branch_freshness_gate.py:305` `BranchFreshnessGateTest::test_freshness_check_never_defaults_base_to_local_pin` (новый, AC-4)
+  - `tests/test_branch_freshness_gate.py:342` `BranchFreshnessGateTest::test_advance_treats_origin_fetch_failure_as_fresh` (новый, R1-F1)
+  - `tests/test_branch_freshness_gate.py:541` `TargetSourcedRemoteTest::test_pull_freshness_fetches_target_url_not_pult_origin` (новый, AC-10)
+  - `tests/test_merge_gate_ci_wait.py:256` `FreshPathDefersToWaitLoopTest::test_fresh_with_no_confirmed_note_returns_wait_without_polling_ci` (новый, AC-7)
+  - `tests/test_ci_status_kind_gate.py:90` `NonRedStatusSkipsRerunTest::test_still_running_does_not_trigger_a_rerun` (изменён)
+  - `tests/test_ci_status_kind_gate.py:101` `NonRedStatusSkipsRerunTest::test_unknown_status_does_not_trigger_a_rerun` (изменён)
+  - `tests/test_invariants.py:597` `MergeNeedsGreenCiTest::test_no_merge_without_a_green_ci` (изменён)
+  - `tests/test_invariants.py:636` `MergeNeedsGreenCiTest::test_the_refusal_names_the_reason_in_the_journal` (изменён)
+  - `tests/test_fsm_merge_gate_done_snapshot.py:132` `DonePathSnapshotTest::test_done_transition_publishes_a_snapshot_like_killed_does` (изменён)
+  - `tests/test_fsm_merge_gate_done_snapshot.py:174` `DonePathSnapshotTest::test_done_snapshot_removes_the_pult_artifact_branch` (изменён)
 
-- minor — `orchestrator/fsm.py:274` — commit-сообщение подтяжки жёстко
-  называет `config.MAIN_BRANCH` («подтяжка main») даже когда фактический
-  источник merge — `base` внешнего target'а (например, `trunk` из
-  `targets.yaml`, требование 5/AC-10). Не влияет ни на один AC, но вводит
-  в заблуждение при чтении истории коммитов внешнего target'а.
-  Предложение: подставлять реальное имя смерженной ветки (второй элемент
-  `_origin_main_source(target_name)`), не `config.MAIN_BRANCH` буквально.
+  Предложение (без изменений): добавить строку `Ловит мутацию: …` в
+  докстринг каждого перечисленного метода — по образцу ретрофита
+  `77c823a6` (`tests/test_amend.py`).
 
-### Сценарий поломки R1-F1
-
-`_origin_main_sha` докстринг (fsm.py:128 и далее) заявляет: «`None` —
-... вызывающий код обязан деградировать так же, как при неответившем
-git» и «сверка ниже деградирует на "ничего не делать"». На практике это
-не так для ОБОИХ путей к `None`:
-
-1. **Конкурентность, новая в этом PR.** До этой задачи `_pull_main_or_
-   escalate` не делала `git fetch` вовсе в двух из трёх точек вызова
-   (`in_dev -> review`, `acceptance -> merge_gate`) — только третья
-   (окно `merge_gate`) защищена `merge_lock` (единственный мьютекс на
-   весь пульт, `orchestrator/merge_lock.py:1-8`). Теперь ВСЕ три точки
-   делают `gitcmd.git("fetch", ...)` в общем `config.ROOT`
-   (`gitcmd.py:9-19` — `git()` всегда `cwd=config.ROOT`), а две из трёх
-   — БЕЗ какой-либо сериализации между разными задачами. Две разные
-   задачи, одновременно проходящие `in_dev -> review`, реалистично
-   могут столкнуться на `git fetch` в одном и том же репозитории (lock
-   ref-файлов) — один из двух `fetch` завершится ненулевым кодом.
-2. **`FETCH_HEAD` в `config.ROOT` — общее, устойчивое состояние, не
-   «пусто по умолчанию».** В живом пульте оно почти всегда содержит
-   что-то от ПРЕДЫДУЩЕГО успешного фетча (свой собственный —
-   self-target фетчится регулярно и этим узлом, и уже существующим
-   `fsm_merge_gate._origin_main_sha`; либо чужой — другого target'а).
-   Поэтому на `_origin_main_sha() is None` (сбой fetch ИЛИ
-   `targets.TargetsError` неисправной записи target'а) `base` —
-   литерал `"FETCH_HEAD"`, и `gitcmd.commits_behind(branch,
-   base="FETCH_HEAD")` (`gitcmd.py:47-66`, выполняется тоже в
-   `config.ROOT`) сравнивает ветку задачи НЕ «ни с чем», а с ЧЕМ
-   ПОПАЛО, что там сейчас лежит — в том числе, для внешнего target'а,
-   с main АРТЕЛИ (или наоборот). Заявленная докстрингом гарантия
-   «молчаливый откат ... был бы ОПАСНЕЕ обычной деградации» (PLAN,
-   узел 3) для этого случая НЕ выполняется — обычная деградация здесь
-   и есть тот опасный откат.
-3. **Merge внутри `wt_path` (fsm.py:273) той же строкой `"FETCH_HEAD"`
-   резолвится в СОВСЕМ ДРУГОЙ файл.** Начиная с git 2.5 `FETCH_HEAD`
-   приватен для каждого worktree (подтверждено `git worktree --help`:
-   «sharing everything except per-worktree files» и `git help
-   gitrepository-layout`: «most of files in $GIT_DIR are per-worktree
-   with a few known exceptions» — ровно тот факт, на который сам
-   докстринг `_origin_main_sha` (fsm.py, комментарий про «начиная с git
-   2.5») ссылается как на причину НЕ использовать литерал `"FETCH_HEAD"`
-   в обычном случае). `gitcmd.in_repo(wt_path, "merge", ...)` —
-   `git -C <wt_path> merge ...` (`gitcmd.py:104-115`) — то есть merge
-   резолвит `"FETCH_HEAD"` в приватном `FETCH_HEAD` `wt_path`, НЕ в том,
-   что только что (или год назад) зафетчил `config.ROOT`. В типичном
-   случае worktree задачи никогда сам не фетчил — merge отказывает
-   («not something we can merge»), задача ложно эскалируется на пустом
-   месте (шум, ложные эскалации по вине временного сбоя фетча). Худший
-   случай — worktree задачи когда-то нёс собственный `FETCH_HEAD»
-   (например, ролевой агент вручную гонял `git fetch`/`git pull` внутри
-   своего worktree в рамках разработки) — тогда merge молча вольёт
-   СТАРОЕ/ПОСТОРОННЕЕ содержимое этого приватного `FETCH_HEAD`, и задача
-   решит, что подтянула актуальный main, хотя это не так.
-
-Ни один AC не покрывает деградацию `_origin_main_sha() is None` внутри
-`_pull_main_or_escalate` (все AC-1..AC-10 проверяют путь, где
-`git fetch` реально успевает — приёмочная песочница `OriginDivergedSandbox`
-всегда исполняет настоящий git без искусственного сбоя фетча) — дефект
-не поймается существующим набором.
+- minor (новое, R3-F1) — `orchestrator/fsm.py:116` (`_auto_resolve_map_conflict`,
+  commit-сообщение авторазрешённого merge-конфликта карты),
+  `orchestrator/fsm.py:278` (детейл эскалации «worktree не создан»),
+  `orchestrator/fsm.py:300` (детейл эскалации «конфликт подтяжки»),
+  `orchestrator/fsm.py:308-309` (детейл эскалации «приёмка красная после
+  подтяжки») — все четыре места жёстко называют `config.MAIN_BRANCH` в
+  пользовательском/журнальном тексте, хотя реальный источник подтяжки
+  для не-self target'а — `source_branch` (например, `trunk`). R1-F2
+  (итерация 1) закрыл ровно ЭТУ ЖЕ проблему только для одного места —
+  сообщения успешного merge-коммита (fsm.py:283-285, `source_branch`
+  уже вычислен и используется там) — но не применил тот же приём к
+  соседним сообщениям в той же функции и к `_auto_resolve_map_conflict`,
+  куда `source_branch`/`target_name` вовсе не передаётся параметром.
+  Не влияет ни на один AC (SPEC «Не входит»: полный контур внешнего
+  target'а — отдельная задача; сегодня единственный target — self, для
+  которого `source_branch == config.MAIN_BRANCH` байт-в-байт, разницы в
+  выводе нет). Вводит в заблуждение при чтении эскалаций/журнала для
+  гипотетического внешнего target'а — тот же риск, что и у R1-F2.
+  Предложение: `_auto_resolve_map_conflict` принимает `source_branch`
+  параметром (вызывающий код на fsm.py:291 уже имеет `source_branch` в
+  области видимости к моменту вызова); в fsm.py:278 вычислить
+  `source = _origin_main_source(target_name)` до этой точки (сейчас
+  считается только строкой ниже, на fsm.py:282) и использовать тот же
+  `source_branch` во всех трёх местах вместо `config.MAIN_BRANCH`.
 
 ## Реестр замечаний
 
 | id | статус | файл/строка | суть | последствие | решение |
 |---|---|---|---|---|---|
-| R1-F1 | fixed | orchestrator/fsm.py:258-266 | Деградация `_origin_main_sha() is None` подставляет литерал `"FETCH_HEAD"` вместо истинного no-op | Сравнение/merge против постороннего состояния `config.ROOT`; для merge — против приватного `FETCH_HEAD` чужого worktree (ложная эскалация в типичном случае, риск тихого неверного merge в худшем) | `base = _origin_main_sha(target_name)`; `if not base: return "fresh"` — ранний выход ДО `commits_behind`/`merge`, литерал `"FETCH_HEAD"` убран целиком (fsm.py:258-266). Регресс-тест `tests/test_branch_freshness_gate.py::test_advance_treats_origin_fetch_failure_as_fresh` (вырожденная `_origin_main_sha` — `"fresh"`, `commits_behind`/`merge`/`acceptance.run` не звонятся); существующие тесты этого файла и `tests/test_fsm_map_conflict_autoresolve.py`, ранее полагавшиеся на falsy-деградацию `fake_git` (пустая строка из `rev-parse FETCH_HEAD`), адаптированы под truthy-заглушку `fsm._origin_main_sha` в `setUp` (не ослабление — тот же путь исполнения, что и раньше, просто явный мок вместо случайной пустой строки фейка) |
-| R1-F2 | fixed | orchestrator/fsm.py:273-276 | Commit-сообщение подтяжки жёстко называет `config.MAIN_BRANCH`, даже когда реальный источник merge — `base` внешнего target'а | Вводящее в заблуждение сообщение коммита для не-self target'а (не влияет ни на один AC) | `source_branch = _origin_main_source(target_name)[1]` (или `config.MAIN_BRANCH` — вырожденный случай, source уже подтверждён truthy выше), commit-сообщение — `f"подтяжка {source_branch}"` вместо литерала `config.MAIN_BRANCH` (fsm.py:273-276); для self-target `source_branch == config.MAIN_BRANCH` — поведение байт-в-байт не меняется |
+| R2-F1 | fixed | tests/test_branch_freshness_gate.py и ещё 4 файла (список выше) | Ни один новый/изменённый тест этой ветки не нёс докстринг-заявку `Ловит мутацию: …` | Ревьювер не мог сверить чувствительность теста с конкретной заявленной мутацией (Фаза B п.3) | Всем 11 перечисленным методам добавлена строка `Ловит мутацию: …` в докстринг (по образцу ретрофита `77c823a6`, `tests/test_amend.py`): каждая строка называет конкретную правдоподобную мутацию (перепутанный литерал `config.MAIN_BRANCH`/`"FETCH_HEAD"` вместо зафетченного sha, убранный ранний возврат, смешение веток "running"/"unknown" с красным статусом, пропущенная/переставленная публикация снапшота или удаление артефактной ветки) и наблюдаемое расхождение, на котором тест покраснеет |
+| R3-F1 | fixed | orchestrator/fsm.py:116,278,300,308-309 | Тот же класс, что и закрытый R1-F2 (жёсткий литерал `config.MAIN_BRANCH` в тексте вместо `source_branch`), но в трёх эскалационных сообщениях и `_auto_resolve_map_conflict` — R1-F2 закрыл только сообщение успешного merge-коммита | Вводящий в заблуждение текст эскалации/журнала для гипотетического внешнего target'а (не влияет ни на один AC, self-target не затронут байт-в-байт) | `_auto_resolve_map_conflict` теперь принимает `source_branch` параметром (используется в commit-сообщении, fsm.py:116); вычисление `source`/`source_branch` в `_pull_main_or_escalate` поднято перед первой точкой использования — сразу после определения `target_name`, до вызова `_origin_main_sha` (fsm.py:266-267); литерал `config.MAIN_BRANCH` заменён на `source_branch` во всех четырёх местах (fsm.py:94 докстринг, 116 commit-сообщение авторазрешения, 278 эскалация «worktree не создан», 300 эскалация «конфликт подтяжки», 308-309 эскалация «приёмка красная после подтяжки»); для self-target `source_branch == config.MAIN_BRANCH` байт-в-байт — вывод не меняется |
+
+R1-F1 и R1-F2 (итерация 1) уже `accepted` — подтверждено повторно в
+этом заходе прямым чтением кода (см. «Проверено исполнением»), в
+таблицу не повторяю (кумулятивное правило: `accepted` записи
+восстановимы из git-истории файла). R1-F2 закрыт для того ОДНОГО места,
+которое он называл явно (merge-сообщение) — R3-F1 не переоткрывает
+R1-F2, а заводит новую запись на соседние места того же класса, не
+охваченные его формулировкой.
 
 ## Вердикт
 
-changes_requested — один major (R1-F1): исправить деградацию
-`_origin_main_sha() is None` в `_pull_main_or_escalate`, не подставляя
-литерал `"FETCH_HEAD"` ни в сверку, ни в merge. R1-F2 — по возможности
-в этой же итерации, не блокирует.
+changes_requested — один major (R2-F1, перенесён без изменений): нет
+докстринг-заявки `Ловит мутацию: …` в 11 тестовых методах этой ветки.
+Один minor (R3-F1, новый): три эскалационных сообщения и коммит
+авторазрешения конфликта карты не подхватили `source_branch`,
+введённый R1-F2 для соседнего места. Minor не блокирует, но входит в
+тот же MR — по возможности исправить в этой же итерации.
 
 ## Проверено исполнением
 
-- Обнаружено: рабочее дерево на входе несло непроиндексированные
-  удаления всего `tasks/01M1NBWPKNBXP9ZXXQDJM7AXPJ/` (SPEC/PLAN/
-  acceptance_tests) — восстановлено `git checkout --
-  tasks/01M1NBWPKNBXP9ZXXQDJM7AXPJ/` (по прецеденту памяти, без
-  переписывания), `git status` после — чисто.
-- `python3 -m unittest discover -s tests -q` — 1355 тестов, `OK`
-  (включая полный `tests/test_branch_freshness_gate.py`,
-  `tests/test_merge_gate_ci_wait.py`, `tests/test_ci_status_kind_gate.py`,
-  `tests/test_invariants.py`, `tests/test_fsm_merge_gate_done_snapshot.py`,
-  `tests/test_fsm_map_conflict_autoresolve.py`,
-  `tests/test_gitcmd_branch_reads.py`).
-- `python3 -m unittest discover -s tasks/01M1NBWPKNBXP9ZXXQDJM7AXPJ/acceptance_tests -p "test_ac*.py" -v` (запущено из каталога приёмочных тестов) — 9 тестов (AC-1..AC-9-заглушка), `OK`.
-- `python3 scripts/codebase_map.py` (регенерация) — diff с закоммиченным `docs/codebase-map.md` отличается ТОЛЬКО строкой `built_at_sha` (сверено `git diff docs/codebase-map.md | grep -v '^[+-]built_at_sha'` — пусто, кроме заголовка); карта не устарела по содержимому. Рабочее дерево возвращено `git checkout -- docs/codebase-map.md`.
-- Прочитаны точечно (сверх пакета, для проверки R1-F1): `orchestrator/gitcmd.py` (`git`, `commits_behind`, `in_repo`, `head_sha`), `orchestrator/fsm_merge_gate.py:203-424` (существующий узел `_origin_main_sha`/`_cmd_approve_merge_gate_cycle`, эталон безопасной деградации через `sys.exit`, а не литерал), `orchestrator/merge_lock.py:1-40` (подтверждение: мьютекс — один на весь пульт, охватывает только окно `merge_gate`), `orchestrator/targets.py` (`target()`/`TargetsError`, поля `url`/`base`), `orchestrator/store.py` (поле `target` записи задачи), `orchestrator/config.py` (`MERGE_GATE_CI_WAIT_CEILING_SEC`/`_POLL_SEC`, `DEFAULT_TARGET`).
-- `git worktree --help` и `git help gitrepository-layout` (git 2.50.1) — подтверждён факт, на котором строится R1-F1: `FETCH_HEAD` — файл, приватный для каждого linked worktree, не общий.
-- `git log --oneline --all -- tasks/01M1NBWPKNBXP9ZXXQDJM7AXPJ/REVIEW.md` — пусто: подтверждено, что это первая итерация ревью (iteration: 1 корректен).
+- Обнаружено на входе: рабочее дерево несло непроиндексированные
+  удаления всего `tasks/01M1NBWPKNBXP9ZXXQDJM7AXPJ/` — восстановлено
+  `git checkout -- tasks/01M1NBWPKNBXP9ZXXQDJM7AXPJ/` (прецедент
+  памяти), `git status` после — чисто.
+- Ревью-пакет назвал sha `00e32aaf2c15059ffb72260275b29b9d2b53e8fe`
+  «предыдущим вердиктом» — этот sha не существует в репозитории
+  (`git cat-file -t` — fatal). Найдена фактическая история:
+  `git log --oneline --all -- tasks/01M1NBWPKNBXP9ZXXQDJM7AXPJ/REVIEW.md`
+  показал 5 коммитов, включая `43d05b4e` с `iteration: 2` (реестр:
+  R1-F1/R1-F2 → `accepted`, новый R2-F1 → `open`) — итерацию, которой НЕ
+  было ни в ревью-пакете (там дан только iteration:1 как «предыдущая»),
+  ни в истории текущей ветки задачи (`git merge-base --is-ancestor
+  43d05b4e HEAD` → не предок). `git branch --all --contains 43d05b4e` →
+  только `artifact/01m1nbwpknbxp9zxxqdjm7axpj` — коммит живёт на
+  артефактной ветке, задачная ветка её не подтянула (тот же класс, что
+  в памяти «tasks/<id>/ отсутствует во всей истории task-ветки», здесь —
+  не файл целиком, а конкретная итерация REVIEW.md). Дальнейшее
+  расследование (`git show 3b95c5a9 --name-status`, `git show
+  7034d453 --name-status`, оба на артефактной ветке) показало: коммит
+  `3b95c5a9` («артефакты шага developer») ИЗМЕНИЛ ТОЛЬКО REVIEW.md —
+  откатил его текст обратно к содержимому итерации 1 (`iteration: 1` во
+  фронтматтере), без единой правки кода/тестов; следующий `7034d453`
+  («артефакты шага developer») — пустой коммит (0 файлов). То есть шаг
+  developer после итерации 2 НЕ внёс правку R2-F1 в код и ПОТЕРЯЛ текст
+  итерации 2 в REVIEW.md — регрессия того же класса, что и «регрессия
+  №9» (роадмап, `9b4f4f09`), но на этот раз откату подвергся сам
+  REVIEW.md шагом developer, а не правка Оператора. Вынесено в
+  «Предложения системе». Итерация 3 этого REVIEW.md построена на
+  восстановленном реестре итерации 2 (R1-F1/R1-F2 accepted, R2-F1 open,
+  без изменений содержания) — не на стале-содержимом, которое лежало в
+  рабочем дереве задачной ветки на входе.
+- Независимая повторная проверка R1-F1/R1-F2 (не только доверие
+  реестру итерации 2): прочитан `orchestrator/fsm.py:128-313`
+  целиком — `_origin_main_source`, `_origin_main_sha`,
+  `_pull_main_or_escalate`. Литерал `"FETCH_HEAD"` в сверке/merge
+  отсутствует (`grep -n '"FETCH_HEAD"' orchestrator/fsm.py` — только
+  строка 194, легитимное чтение результата собственного fetch).
+  Merge-сообщение на fsm.py:285 использует `source_branch`, не литерал.
+  Прочитан `orchestrator/fsm_merge_gate.py:255-313` — путь `"fresh"`
+  возвращает `("wait", branch)` при `confirmed_ci_note is None`
+  (строки 295-296), не опрашивает `ci.branch_status` сама; строки
+  382-424 (внешний цикл `_cmd_approve_merge_gate_cycle`) не менялись —
+  `MERGE_GATE_CI_WAIT_CEILING_SEC` читается тем же циклом, что и путь
+  "pulled" (AC-6).
+- Новое замечание R3-F1 найдено этим же чтением `fsm.py` целиком —
+  `grep -n "MAIN_BRANCH" orchestrator/fsm.py orchestrator/fsm_merge_gate.py`
+  показал все вхождения; строки 116/278/300/308-309 в `fsm.py`
+  сверены построчно (`Read fsm.py` офсеты 85-130 и 263-315) — все три
+  используют литерал там, где строкой ниже/выше уже есть готовый
+  `source_branch`.
+- `python3 -m unittest discover -s tests -q` — 1391 тест, `OK` (полный
+  прогон, лог `Ran 1391 tests in 170.709s / OK`).
+- `python3 -m unittest tests.test_branch_freshness_gate
+  tests.test_fsm_map_conflict_autoresolve tests.test_gitcmd_branch_reads
+  tests.test_merge_gate_ci_wait tests.test_ci_status_kind_gate
+  tests.test_invariants tests.test_fsm_merge_gate_done_snapshot -v` — 92
+  теста, `OK`.
+- `python3 -m unittest discover -s
+  tasks/01M1NBWPKNBXP9ZXXQDJM7AXPJ/acceptance_tests -p "test_ac*.py" -v`
+  — 9 тестов (AC-1..AC-9), `OK`.
+- `python3 scripts/codebase_map.py` (регенерация) — diff с
+  закоммиченным `docs/codebase-map.md` отличается ТОЛЬКО строкой
+  `built_at_sha`; карта не устарела по содержимому. Рабочее дерево
+  возвращено `git checkout -- docs/codebase-map.md`.
+- `python3 -c "sha256(...)"` над локальными `PLAN.md`/`SPEC.md` — байт-в-
+  байт совпадают с описью ревью-пакета (16472/8838 байт, те же sha256):
+  расхождение регрессии затронуло только REVIEW.md, не эти два файла.
+- `git diff 58f1a582 HEAD -- orchestrator/fsm.py orchestrator/
+  fsm_merge_gate.py orchestrator/gitcmd.py orchestrator/github_adapter.py
+  orchestrator/targets.py <5 тестовых файлов из R2-F1>
+  tasks/01M1NBWPKNBXP9ZXXQDJM7AXPJ/ --stat` — пусто по задачным файлам
+  (единственная неотносящаяся к задаче правка — `gitcmd.check_ignore`/
+  `diff_names`, из другой задачи 01M1KVG3KSCY47HWXWF5HM0E76, влитой
+  через «подтяжку main»): реализация этой задачи не менялась с коммита
+  `58f1a582`, который закрыл R1-F1/R1-F2 в коде.
 
 ## Предложения системе
 
-(пусто)
+- Автокоммит шага `developer` (артефактная ветка
+  `artifact/01m1nbwpknbxp9zxxqdjm7axpj`, коммит `3b95c5a9`) откатил
+  REVIEW.md итерации 2 (реестр с `accepted`/`open`) обратно к тексту
+  итерации 1, не внеся при этом ни одной правки кода — тот же класс
+  бага, что и «регрессия №9» (роадмап `9b4f4f09`, откат правок
+  Оператора автокоммитом роли), но здесь жертва — не операторская
+  правка, а собственный артефакт роли reviewer предыдущего шага.
+  Дополнительно эта же итерация ни разу не попала в задачную ветку
+  (`task/01m1nbwpknbxp9zxxqdjm7axpj-...`) — ревью-пакет для итерации 3
+  был собран так, будто итерации 2 не существовало вовсе (описал sha
+  `00e32aaf...`, не существующий в репозитории, как «предыдущий
+  вердикт»). Если бы ревьювер этого захода не сверил `git log --all`,
+  замечание R2-F1 (major) было бы молча потеряно, а вердикт мог уйти в
+  `approved` на основании самого свежего файла в рабочем дереве. Стоит
+  завести отдельную задачу по сборке ревью-пакета: sha «предыдущего
+  вердикта» обязан проверяться на существование в репозитории перед
+  использованием, а не только в истории задачной ветки — сверка нужна
+  и против артефактной ветки.

@@ -88,6 +88,15 @@ class NonRedStatusSkipsRerunTest(FsmTest):
         return mocked
 
     def test_still_running_does_not_trigger_a_rerun(self):
+        """«CI ещё идёт» не подлежит ре-рану, но обязано ждать циклом
+        (несколько опросов `ci.branch_status`, не один) и не писать
+        flake-rate в журнал.
+
+        Ловит мутацию: путь "running" по ошибке смешан с веткой красного
+        статуса — `ci.trigger_rerun` позвонит (сработает страховочный
+        `AssertionError` в `rerun_patcher`), либо гейт откажет по ОДНОМУ
+        опросу вместо цикла ожидания (`mocked.call_count` не превысит 1).
+        """
         mocked = self.approve_with(RUNNING)
 
         self.assertGreater(
@@ -99,6 +108,15 @@ class NonRedStatusSkipsRerunTest(FsmTest):
         self.assertNotIn("flake-rate", self.journal_blob())
 
     def test_unknown_status_does_not_trigger_a_rerun(self):
+        """Статус «неизвестен» не подлежит ре-рану, но обязан ждать
+        циклом (несколько опросов `ci.branch_status`, не один) и не
+        писать flake-rate в журнал.
+
+        Ловит мутацию: путь "unknown" по ошибке смешан с веткой красного
+        статуса — `ci.trigger_rerun` позвонит (сработает страховочный
+        `AssertionError` в `rerun_patcher`), либо гейт откажет по ОДНОМУ
+        опросу вместо цикла ожидания (`mocked.call_count` не превысит 1).
+        """
         mocked = self.approve_with(UNKNOWN)
 
         self.assertGreater(

@@ -254,6 +254,14 @@ class FreshPathDefersToWaitLoopTest(MergeGateCiWaitUnitTest):
     """
 
     def test_fresh_with_no_confirmed_note_returns_wait_without_polling_ci(self):
+        """Путь "fresh" без `confirmed_ci_note` возвращает `("wait",
+        branch)` и не зовёт `ci.branch_status` сам ни разу.
+
+        Ловит мутацию: возврат старого разового опроса `ci.branch_status`
+        внутри тела на пути "fresh" вместо `("wait", ...)` —
+        `branch_status_calls` перестанет быть пустым, и AC-7 тихо
+        откатится к немедленному отказу по одному опросу.
+        """
         branch_status_calls = []
 
         def spying_branch_status(branch):

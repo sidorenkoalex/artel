@@ -83,13 +83,15 @@ def _conflicting_files(wt_path) -> list[str]:
     return sorted(set(res.stdout.split()))
 
 
-def _auto_resolve_map_conflict(conn, task_id: str, wt_path) -> bool:
+def _auto_resolve_map_conflict(conn, task_id: str, wt_path, source_branch: str) -> bool:
     """Единственный конфликтующий файл — `docs/codebase-map.md` (SPEC
     T067, требования 1-2, 5): `checkout --theirs` + регенерация
     генератором НА СЛИТОМ дереве worktree задачи (`cwd=wt_path`, не
     `config.ROOT` — карта, которую сверяют критерии приёмки, это карта
     ВЕТКИ задачи, не главной копии пульта) + `add` + `commit`, который
-    и завершает merge, начатый вызывающим кодом.
+    и завершает merge, начатый вызывающим кодом. `source_branch` — имя
+    ветки, из которой шла подтяжка (REVIEW.md R3-F1: коммит-сообщение
+    называет реальный источник, не жёсткий `config.MAIN_BRANCH`).
 
     `True` — merge завершён, подтяжка продолжается точно так же, как
     обычная удачная подтяжка без конфликта (требование 2); `False` —
@@ -113,7 +115,7 @@ def _auto_resolve_map_conflict(conn, task_id: str, wt_path) -> bool:
     if added is None or added.returncode != 0:
         return False
     commit = gitcmd.in_repo(wt_path, "commit", "-m",
-                            f"{task_id}: подтяжка {config.MAIN_BRANCH}")
+                            f"{task_id}: подтяжка {source_branch}")
     if commit is None or commit.returncode != 0:
         return False
     store.journal(
@@ -262,6 +264,8 @@ def _pull_main_or_escalate(conn, task_id: str, t, state: str) -> str:
     """
     branch = t["branch"]
     target_name = t["target"] or config.DEFAULT_TARGET
+    source = _origin_main_source(target_name)
+    source_branch = source[1] if source is not None else config.MAIN_BRANCH
     base = _origin_main_sha(target_name)
     if not base:
         # Вырожденная _origin_main_sha — см. докстринг выше (R1-F1):
@@ -275,12 +279,10 @@ def _pull_main_or_escalate(conn, task_id: str, t, state: str) -> str:
     if error is not None:
         store.set_state(
             conn, task_id, "escalated", "fsm", expected_state=state,
-            detail=f"подтяжка {config.MAIN_BRANCH} отменена: worktree "
+            detail=f"подтяжка {source_branch} отменена: worktree "
             f"задачи не создан — {error}")
         return "escalated"
 
-    source = _origin_main_source(target_name)
-    source_branch = source[1] if source is not None else config.MAIN_BRANCH
     merge = gitcmd.in_repo(wt_path, "merge", "--no-ff", base,
                            "-m", f"{task_id}: подтяжка {source_branch}")
     if merge is None or merge.returncode != 0:
@@ -288,7 +290,8 @@ def _pull_main_or_escalate(conn, task_id: str, t, state: str) -> str:
         if merge is not None:
             files = _conflicting_files(wt_path)
             if files == [MAP_REL]:
-                resolved = _auto_resolve_map_conflict(conn, task_id, wt_path)
+                resolved = _auto_resolve_map_conflict(conn, task_id, wt_path,
+                                                       source_branch)
         if not resolved:
             abort = gitcmd.in_repo(wt_path, "merge", "--abort")
             note = merge.stderr.strip()[:500] if merge is not None else "git не ответил"
@@ -297,7 +300,7 @@ def _pull_main_or_escalate(conn, task_id: str, t, state: str) -> str:
                         f"{abort.stderr.strip()[:200] if abort is not None else 'git не ответил'}")
             store.set_state(
                 conn, task_id, "escalated", "fsm", expected_state=state,
-                detail=f"конфликт подтяжки {config.MAIN_BRANCH} в ветку "
+                detail=f"конфликт подтяжки {source_branch} в ветку "
                 f"{branch}: {note}")
             return "escalated"
 
@@ -306,7 +309,7 @@ def _pull_main_or_escalate(conn, task_id: str, t, state: str) -> str:
         store.set_state(
             conn, task_id, "escalated", "fsm", expected_state=state,
             detail=f"приёмочные тесты красные после подтяжки "
-            f"{config.MAIN_BRANCH} (слияние сохранено, откат не "
+            f"{source_branch} (слияние сохранено, откат не "
             f"выполняется):\n{tail}")
         return "escalated"
 
