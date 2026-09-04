@@ -381,7 +381,13 @@ class ChargeMissingResultTest(TmpRootTest):
     def test_known_rate_charge_matches_partial_cost_usd(self):
         """Сумма, прибавленная к `spent_usd`, — ровно та, что считает
         `spend.partial_cost_usd` по той же роли и числу токенов: одна
-        формула на обе точки (учёт и отображение), не две рассинхронные."""
+        формула на обе точки (учёт и отображение), не две рассинхронные.
+
+        Ловит мутацию: `charge_missing_result` считает частичную сумму
+        своей отдельной формулой (например, только по цене входного
+        токена, без среднего) вместо вызова `partial_cost_usd` — тогда
+        `assertAlmostEqual` ниже разойдётся с независимо посчитанным
+        `expected`."""
         conn = store.db()
 
         spend.charge_missing_result(
@@ -395,7 +401,12 @@ class ChargeMissingResultTest(TmpRootTest):
         """Роль без записи в `config.TOKEN_RATES` (`verifier`, `executor:
         none`) не может получить частичную сумму по курсу — вместо неё
         верхняя оценка в `spent_estimate_usd` и алерт `kind=threshold`,
-        `spent_usd` не тронут."""
+        `spent_usd` не тронут.
+
+        Ловит мутацию: `charge_missing_result` при неизвестном курсе
+        всё равно прибавляет что-то к `spent_usd` (или не заводит
+        алерт `threshold`) — тогда `row["spent_usd"]` окажется
+        ненулевым, либо список `threshold_alerts` будет пуст."""
         conn = store.db()
 
         spend.charge_missing_result(
@@ -419,6 +430,10 @@ class PartialCostUsdTest(unittest.TestCase):
     БД (SPEC 01M1NWCM3TDY0YABEKE8DYQA1C, требование 1-2)."""
 
     def test_known_role_returns_a_positive_amount_proportional_to_tokens(self):
+        """Ловит мутацию: `partial_cost_usd` возвращает фиксированную
+        ставку роли, не умноженную на `partial_tokens` (например,
+        забывает `*` и просто отдаёт `effective`) — тогда `double`
+        останется равным `single`, а не удвоится."""
         role = next(iter(config.TOKEN_RATES))
 
         single = spend.partial_cost_usd(role, 1000)
@@ -428,11 +443,20 @@ class PartialCostUsdTest(unittest.TestCase):
         self.assertAlmostEqual(double, single * 2)
 
     def test_zero_tokens_is_zero_cost_even_with_a_known_rate(self):
+        """Ловит мутацию: `partial_cost_usd` трактует `partial_tokens=0`
+        как «токенов нет» наравне с отсутствующим курсом (например,
+        `if not partial_tokens: return None`) — тогда функция вернёт
+        `None` вместо честного 0.0 для известной роли."""
         role = next(iter(config.TOKEN_RATES))
 
         self.assertEqual(spend.partial_cost_usd(role, 0), 0.0)
 
     def test_unknown_role_returns_none(self):
+        """Ловит мутацию: `partial_cost_usd` возвращает 0.0 вместо
+        `None` для роли без курса — тогда `charge_missing_result`
+        принял бы отсутствие курса за «стоимость нулевая» и молча
+        начислил 0.0 в `spent_usd`, минуя ветку верхней оценки/алерта
+        (требование 3)."""
         self.assertIsNone(spend.partial_cost_usd("no-such-role", 1000))
 
 

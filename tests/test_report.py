@@ -154,6 +154,10 @@ class MetricsHtmlTest(unittest.TestCase):
     точного расхода (SPEC 01M1NWCM3TDY0YABEKE8DYQA1C, требование 6)."""
 
     def test_estimate_and_exact_spend_are_distinct_figures(self):
+        """Ловит мутацию: `_metrics_html` складывает `total_spent` и
+        `total_estimate` в одну сумму вместо двух раздельных строк —
+        тогда в HTML вместо «$3.00»/«$7.00» появится «$10.00», и
+        `assertNotIn` ниже упадёт."""
         html = report._metrics_html([], [], 3.0, 7.0)
 
         self.assertIn("$3.00", html)
@@ -163,7 +167,12 @@ class MetricsHtmlTest(unittest.TestCase):
     def test_zero_estimate_still_shows_its_own_zeroed_line(self):
         """В отличие от RETRO (условная строка, требование 7), report —
         всегда видимая метрика: нулевая оценка означает «пока нет
-        неучтённых шагов», а не «строка скрыта»."""
+        неучтённых шагов», а не «строка скрыта».
+
+        Ловит мутацию: `_metrics_html` копирует условие RETRO (строка
+        печатается только при `total_estimate > 0`) — тогда при
+        `total_estimate=0.0` «Суммарная верхняя оценка» пропадёт из
+        HTML, и первый `assertIn` ниже упадёт."""
         html = report._metrics_html([], [], 3.0, 0.0)
 
         self.assertIn("Суммарная верхняя оценка", html)
@@ -262,6 +271,9 @@ class CmdReportIntegrationTest(TmpRootTest):
         self.assertIn("T001", path.read_text(encoding="utf-8"))
 
     def test_report_sums_the_upper_estimate_across_tasks(self):
+        """Ловит мутацию: `cmd_report` считает панель метрик по
+        `spent_usd` и забывает просуммировать `spent_estimate_usd` по
+        задачам — тогда «$7.00» не появится в сгенерированном HTML."""
         store.update_task(store.db(), "T001", spent_estimate_usd=7.0)
 
         self.capture(report.cmd_report)

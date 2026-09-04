@@ -293,7 +293,12 @@ class RetroGenerationTest(TmpRootTest):
         """SPEC 01M1NWCM3TDY0YABEKE8DYQA1C, требование 7 — юнит-угол на
         `build_done`, дополняющий приёмочный
         `tasks/01M1NWCM3TDY0YABEKE8DYQA1C/acceptance_tests/
-        test_ac7_retro_shows_estimate_separately.py`."""
+        test_ac7_retro_shows_estimate_separately.py`.
+
+        Ловит мутацию: `build_done` передаёт в `_cost_block` сумму
+        `spent_usd + spent_estimate_usd` вместо двух раздельных
+        аргументов — тогда «Стоимость итого: $3.00» превратится в
+        «$10.00», и первый `assertIn` ниже упадёт."""
         store.update_task(self.conn, self.TASK, spent_usd=3.0,
                           spent_estimate_usd=7.0)
 
@@ -303,6 +308,11 @@ class RetroGenerationTest(TmpRootTest):
         self.assertIn("$7.00", text)
 
     def test_build_killed_without_an_estimate_says_nothing_about_it(self):
+        """Ловит мутацию: `build_killed` передаёт в `_cost_block`
+        оценку безусловно, минуя её собственную проверку `> 0` (или
+        печатает строку оценки отдельно от неё) — тогда при
+        `spent_estimate_usd=0.0` в тексте всё равно появится слово
+        «оцен», и `assertNotIn` ниже упадёт."""
         self.add_step("operator", "state -> killed", "kill switch")
         store.update_task(self.conn, self.TASK, spent_usd=1.0,
                           spent_estimate_usd=0.0)
@@ -362,12 +372,19 @@ class CostBlockTest(unittest.TestCase):
     01M1NWCM3TDY0YABEKE8DYQA1C, требование 7)."""
 
     def test_default_estimate_omits_the_estimate_line(self):
+        """Ловит мутацию: `_cost_block` теряет условие `spent_estimate_usd
+        > 0` и всегда добавляет строку оценки (даже нулевую) — тогда
+        «оцен» появится в `lines`, и `assertFalse` ниже упадёт."""
         lines = retro._cost_block([], 3.0)
 
         self.assertEqual(lines[0], "Стоимость итого: $3.00")
         self.assertFalse(any("оцен" in line.lower() for line in lines))
 
     def test_nonzero_estimate_adds_a_distinct_line(self):
+        """Ловит мутацию: `_cost_block` складывает `spent_usd` и
+        `spent_estimate_usd` в первую строку вместо отдельной второй —
+        тогда «Стоимость итого: $3.00» станет «$10.00»
+        (`assertNotIn`/`assertIn` ниже поймают оба направления порчи)."""
         lines = retro._cost_block([], 3.0, 7.0)
 
         self.assertIn("Стоимость итого: $3.00", lines)

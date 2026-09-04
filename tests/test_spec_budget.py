@@ -527,6 +527,9 @@ class SpentWithEstimateGateTest(TmpRootTest):
         self.conn.commit()
 
     def test_spent_with_estimate_adds_both_columns(self):
+        """Ловит мутацию: `spent_with_estimate` возвращает только
+        `spent_usd` (забывает прибавить `spent_estimate_usd`) — тогда
+        результат будет 3.0 вместо 7.0."""
         self.set_task(spent_usd=3.0, spent_estimate_usd=4.0)
 
         self.assertEqual(budget.spent_with_estimate(self.task_row()), 7.0)
@@ -534,7 +537,12 @@ class SpentWithEstimateGateTest(TmpRootTest):
     def test_spent_with_estimate_treats_null_estimate_as_zero(self):
         """Строки старше этой задачи (или свежие с NULL из ручного UPDATE)
         не должны ронять сумму — тот же приём деградации, что и у
-        `spent_usd or 0.0` рядом."""
+        `spent_usd or 0.0` рядом.
+
+        Ловит мутацию: `spent_with_estimate` складывает
+        `t["spent_estimate_usd"]` без `or 0.0` — тогда на строке с
+        NULL сложение `3.0 + None` бросит `TypeError` вместо того,
+        чтобы вернуть 3.0."""
         self.set_task(spent_usd=3.0, spent_estimate_usd=None)
 
         self.assertEqual(budget.spent_with_estimate(self.task_row()), 3.0)
@@ -542,12 +550,25 @@ class SpentWithEstimateGateTest(TmpRootTest):
     def test_budget_block_ignores_the_estimate_when_there_is_no_ceiling(self):
         """Потолок <= 0 — потолка нет вовсе, независимо от того, сколько
         стоит верхняя оценка (тот же вырожденный случай, что уже был у
-        одного только `spent_usd` до этой задачи)."""
+        одного только `spent_usd` до этой задачи).
+
+        Ловит мутацию: `budget_block` проверяет исчерпание раньше
+        вырожденного случая `budget <= 0` (или проверяет его по
+        одному `spent_usd`, без учёта того, что `spent_with_estimate`
+        уже >= 0) — тогда при `budget_usd=0.0` и
+        `spent_estimate_usd=999.0` функция всё равно вернёт сообщение
+        о блокировке вместо `None`."""
         self.set_task(budget_usd=0.0, spent_usd=0.0, spent_estimate_usd=999.0)
 
         self.assertIsNone(budget.budget_block(self.task_row()))
 
     def test_enforce_budget_does_not_escalate_below_the_combined_ceiling(self):
+        """Ловит мутацию: `enforce_budget` завышает сумму — например,
+        прибавляет `spent_estimate_usd` ещё раз поверх
+        `spent_with_estimate`, или сравнивает с потолком `spent_usd`
+        и `spent_estimate_usd` по отдельности через `or` — тогда
+        `3.0 + 4.0` ложно дотянется/превысит потолок $10.00, задача
+        уйдёт в `escalated`, и оба `assert` ниже упадут."""
         self.set_task(budget_usd=10.0, spent_usd=3.0, spent_estimate_usd=4.0)
 
         escalated = budget.enforce_budget(self.conn, self.TASK, "in_dev")
