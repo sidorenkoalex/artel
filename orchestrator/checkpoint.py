@@ -280,19 +280,35 @@ def _commit_external_step_artifacts(conn, task_id: str, role: str,
     task_dir = workspace_root / "tasks" / task_id
     if not task_dir.is_dir():
         return ""
-    files = {}
+    raw_files = {}
     for path in sorted(task_dir.rglob("*")):
         if not path.is_file():
             continue
         rel = path.relative_to(workspace_root).as_posix()
         try:
-            files[rel] = path.read_bytes()
+            raw_files[rel] = path.read_bytes()
         except OSError:
             continue
 
     branch = artifact_branch.branch_name(task_id)
-    message = f"{task_id}: артефакты шага {role} (автокоммит оркестратора)"
     existing = gitcmd.ls_tree_files(branch, f"tasks/{task_id}") or []
+    # Файлы, игнорируемые `.gitignore` пульта (SPEC 01M1KVG3KSCY47HWXWF5HM0E76,
+    # требования 1-2), никогда не участвуют в автокоммите — ни на добавление
+    # из рабочего каталога, ни на удаление уже зафиксированной ранее записи:
+    # исключаются из ОБЕИХ сторон сравнения `files`/`existing` ДО diff'а,
+    # симметрично для обоих направлений требования 2 (AC-3).
+    ignored = gitcmd.check_ignore(set(raw_files) | set(existing))
+    if ignored is None:
+        # git не ответил на сверку .gitignore — та же тихая деградация без
+        # git, что и у остального модуля (требование 6): не коммитить
+        # вслепую без гарантии фильтрации, не откатываться на
+        # безусловный rglob("*").
+        return ""
+    files = {rel: content for rel, content in raw_files.items()
+             if rel not in ignored}
+    existing = [rel for rel in existing if rel not in ignored]
+
+    message = f"{task_id}: артефакты шага {role} (автокоммит оркестратора)"
     removed = []
     for rel in sorted(set(existing) - set(files)):
         subject = gitcmd.git("log", "-1", "--format=%s", branch, "--", rel)
