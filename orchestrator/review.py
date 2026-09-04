@@ -1,7 +1,7 @@
 """Ревью-пакет: вход ревьювера собирает оркестратор, а не сам агент."""
 import re
 
-from . import brief, config, context_package, gitcmd, store
+from . import artifact_source, brief, config, context_package, gitcmd, store
 
 WORKTREE_NOTE = " (в ветке нет, показан файл из рабочего дерева)"
 
@@ -101,6 +101,25 @@ def git_diff_part(base: str, branch: str, *flags: str) -> tuple[str, int, str]:
     return res.stdout.strip() or "(изменений нет)", len(res.stdout.splitlines()), ""
 
 
+def _answer_rels(task_id: str, branch: str) -> list[str]:
+    """Пути ВСЕХ `tasks/<task_id>/ANSWER-n.md` артефактной ветки задачи, по
+    возрастанию `n` (tasks/01M1NBWRTAHSX9FQGTQWENY80A, AC-1) — не только
+    файл с наибольшим `n`, как `brief._latest_answer_rel`, обслуживающий
+    developer/analyst/test_author (SPEC T075): каждый батч ответа
+    Оператора — граница отдельного решения, обязательная к учёту при
+    вердикте, не только самый свежий."""
+    paths = gitcmd.ls_tree_files(branch, f"tasks/{task_id}") or []
+    numbered = []
+    for p in paths:
+        name = p.rsplit("/", 1)[-1]
+        if name.startswith("ANSWER-") and name.endswith(".md"):
+            suffix = name[len("ANSWER-"):-len(".md")]
+            if suffix.isdigit():
+                numbered.append((int(suffix), f"tasks/{task_id}/{name}"))
+    numbered.sort(key=lambda pair: pair[0])
+    return [rel for _, rel in numbered]
+
+
 def previous_verdict_sha(conn, task_id: str) -> str:
     """Sha, зафиксированный на переходе `review -> in_dev` прошлой итерации.
 
@@ -130,13 +149,13 @@ def previous_verdict_sha(conn, task_id: str) -> str:
     return match.group(1) if match else ""
 
 
-def review_package(task_id: str, title: str, branch: str, *,
+def review_package(conn, task_id: str, title: str, branch: str, *,
                    iteration: int = 1, prev_sha: str = "") -> dict:
     """Вход ревьювера одним куском: text, chars, bytes, diff_lines и признаки.
 
     Порядок частей фиксирован (задача, SPEC, PLAN, прошлый REVIEW, форма
-    вердикта, стат-список, diff) — по нему ревьювер ориентируется в пакете,
-    а тесты сравнивают сборку.
+    вердикта, ANSWER-n.md задачи, стат-список, diff) — по нему ревьювер
+    ориентируется в пакете, а тесты сравнивают сборку.
 
     `iteration == 1` — diff всегда от `config.MAIN_BRANCH` (T029, SPEC
     требование 1, без изменений). `iteration > 1` с непустым `prev_sha`
@@ -146,7 +165,13 @@ def review_package(task_id: str, title: str, branch: str, *,
 
     Границы недоверенных данных (tasks/01M1GV6H5DDDCWW4G3GW1D3A1X,
     AC-1/AC-2): один `run_id` на весь вызов оборачивает тело каждого
-    компонента пакета (SPEC/PLAN/прошлый REVIEW/форма/стат-список/diff).
+    компонента пакета (SPEC/PLAN/прошлый REVIEW/форма/ANSWER/стат-список/
+    diff).
+
+    `conn` — нужен только для журналирования ANSWER-компонентов
+    (tasks/01M1NBWRTAHSX9FQGTQWENY80A, AC-2): `artifact_source.resolve`
+    сам его не разыменовывает, а `store.journal` не вызывается ни разу,
+    если у задачи нет ни одного `ANSWER-n.md` (AC-5).
     """
     spec_rel = f"tasks/{task_id}/SPEC.md"
     plan_rel = f"tasks/{task_id}/PLAN.md"
@@ -157,6 +182,25 @@ def review_package(task_id: str, title: str, branch: str, *,
     form_rel = "templates/REVIEW.md"
     found = {rel: artifact_text(branch, rel)
              for rel in (spec_rel, plan_rel, review_rel, form_rel)}
+
+    # ANSWER-n.md живёт ИСКЛЮЧИТЕЛЬНО в артефактной ветке задачи
+    # (`orchestrator/answer.py::cmd_answer` коммитит его туда и только
+    # туда), не в кодовой ветке `branch`, которой читаются SPEC/PLAN/
+    # REVIEW выше (AC-3: их источник эта задача не трогает) — отдельное
+    # разрешение ветки, тем же резолвером, что уже пользуется `brief.py`
+    # для developer/analyst/test_author (SPEC T075).
+    answer_branch, _ = artifact_source.resolve(conn, task_id)
+    answer_rels = _answer_rels(task_id, answer_branch)
+    found.update({rel: artifact_text(answer_branch, rel) for rel in answer_rels})
+    for rel in answer_rels:
+        answer_text, _note = found[rel]
+        if answer_text is not None:
+            # Прямой вызов `store.journal`, не `brief._journal_component`
+            # (приватная функция чужого модуля — прецедента cross-module
+            # вызова таких функций в кодовой базе нет): та же форма записи
+            # («бриф: компонент», sha256 ИСХОДНОГО текста).
+            store.journal(conn, task_id, "reviewer", "бриф: компонент",
+                          f"{rel}: sha256={context_package.sha256_of(answer_text)}")
 
     incremental = iteration > 1 and bool(prev_sha)
     base = prev_sha if incremental else config.MAIN_BRANCH
@@ -187,6 +231,13 @@ def review_package(task_id: str, title: str, branch: str, *,
                                    *found[review_rel], run_id))
     parts.append(artifact_part(f"{form_rel} (форма вердикта)",
                                *found[form_rel], run_id))
+    for rel in answer_rels:
+        # Границы решений Оператора — после того, как у ревьювера уже на
+        # руках SPEC/PLAN/прошлый REVIEW/форма, но до diff (AC-1/AC-4:
+        # компонент как ЭЛЕМЕНТ `parts` — участвует в общем размере тела и
+        # делении на части наравне с остальными, не довеском после
+        # `discipline`).
+        parts.append(artifact_part(rel, *found[rel], run_id))
     parts.append(f"### Изменённые файлы (git diff --stat {base}...{branch})"
                  f"\n\n{brief.wrap_boundary(run_id, stat)}\n")
     parts.append(f"### Diff (git diff {base}...{branch})"

@@ -162,6 +162,54 @@ def is_clean(*paths: str, repo: Path | None = None) -> bool | None:
     return not res.stdout.strip()
 
 
+def check_ignore(paths) -> set[str] | None:
+    """Пути из `paths`, которые `.gitignore` ПУЛЬТА (`config.ROOT`) считает
+    игнорируемыми; `None` — git не ответил. Настоящий разбор `.gitignore`
+    (`git check-ignore`), не самодельный список расширений (SPEC
+    01M1KVG3KSCY47HWXWF5HM0E76, требование 1) — только так ловится
+    директорное правило (например, `__pycache__/`), которое списком
+    суффиксов не выразить.
+
+    Батч одним вызовом `--stdin -z` на весь список путей шага, не по
+    одному на файл. Путям не обязательно существовать на диске
+    `config.ROOT` — `check-ignore` матчит их как строки пути, не как
+    файлы (нужно для путей внешнего target, которых в рабочей копии
+    пульта нет вовсе).
+    """
+    paths = list(paths)
+    if not paths:
+        return set()
+    data = "".join(p + "\0" for p in paths).encode()
+    try:
+        res = subprocess.run(["git", "check-ignore", "-v", "-z", "--stdin"],
+                             cwd=config.ROOT, input=data, capture_output=True)
+    except OSError:
+        return None
+    if res.returncode not in (0, 1):
+        return None
+    fields = res.stdout.split(b"\0")
+    ignored = set()
+    i = 0
+    while i + 3 < len(fields):
+        pathname = fields[i + 3]
+        if pathname:
+            ignored.add(pathname.decode())
+        i += 4
+    return ignored
+
+
+def diff_names(a: str, b: str, *paths: str) -> list[str] | None:
+    """Пути, различающиеся между `a` и `b` под `paths`; `None` — git не
+    ответил. В отличие от `diff_paths` (голое да/нет), отдаёт сами пути —
+    нужно, чтобы отличить настоящую правку от разницы только в
+    игнорируемых `.gitignore` файлах (SPEC 01M1KVG3KSCY47HWXWF5HM0E76,
+    требование 3)."""
+    res = git("diff", "--name-only", a, b, "--", *paths)
+    if res is None or res.returncode != 0:
+        return None
+    return [p for p in res.stdout.splitlines() if p]
+
+
 def diff_paths(a: str, b: str, *paths: str) -> bool | None:
     """True — ревизии `a` и `b` расходятся по путям; None — git не ответил.
 

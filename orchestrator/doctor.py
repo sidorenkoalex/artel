@@ -58,8 +58,9 @@ import time
 from collections import namedtuple
 from pathlib import Path
 
-from . import (alerts, coldstart, config, gitcmd, liveness, projects, roles,
-              runner, snapshot, spend, store, targets, workspace)
+from . import (alerts, artifact_branch, coldstart, config, gitcmd, liveness,
+              projects, roles, runner, snapshot, spend, store, targets,
+              workspace)
 
 # status: "ok" | "warn" | "fail" | "skip" ("skip" — честный пропуск проверки,
 # требование 9: сверка forge-политики без `gh`/сети — не провал и не ок).
@@ -1048,6 +1049,51 @@ def sweep_orphan_artifact_branches(conn) -> list[str]:
             conn, None, "incident", ORPHAN_ARTIFACT_BRANCH_SOURCE,
             f"осиротевшие артефактные ветки удалены: {', '.join(orphans)}")
     return orphans
+# --- уборка игнорируемых файлов артефактных веток (SPEC ------------------
+# 01M1KVG3KSCY47HWXWF5HM0E76, требование 4, AC-5) -------------------------
+
+def _fix_ignored_artifact_files(conn) -> None:
+    """`doctor --fix`: убирает из артефактной ветки КАЖДОЙ живой задачи
+    файлы, которые `.gitignore` пульта (`config.ROOT`) считает
+    игнорируемыми (тот же критерий, что `checkpoint._commit_external_
+    step_artifacts` уже применяет к новым автокоммитам, `gitcmd.
+    check_ignore`) — легализация ADR-0013 «вариант A» для файлов,
+    занесённых ДО этой задачи (инцидент 03.09, SPEC «Контекст»).
+
+    Плотницкая запись (`artifact_branch.commit_files`, `remove=`) пишет
+    прямо в объектную базу `config.ROOT`, не в рабочее дерево — `main`
+    этим действием не трогается (AC-5, третья проверка). `done`/`killed`
+    задачи пропускаются — их артефактная ветка уже не «живая» (тот же
+    фильтр, что `check_branch_freshness`/`check_orphans` уже применяют к
+    активным задачам).
+
+    Задача без затронутых файлов — без изменений и без записи в журнал
+    (нечего убирать); `git check-ignore` не ответил — тихая деградация,
+    та же, что у `checkpoint` (не коммитить вслепую без фильтрации).
+    """
+    for row in store.all_tasks(conn):
+        if row["state"] in ("done", "killed"):
+            continue
+        task_id = row["id"]
+        branch = artifact_branch.branch_name(task_id)
+        existing = gitcmd.ls_tree_files(branch, f"tasks/{task_id}") or []
+        if not existing:
+            continue
+        ignored = gitcmd.check_ignore(existing)
+        if not ignored:
+            continue
+        to_remove = sorted(ignored)
+        message = (f"{task_id}: уборка игнорируемых файлов артефактной "
+                  f"ветки (doctor --fix)")
+        commit_sha = artifact_branch.commit_files(task_id, {}, message,
+                                                   remove=to_remove)
+        if not commit_sha:
+            continue
+        detail = f"{message} (sha {commit_sha}); убрано: {', '.join(to_remove)}"
+        store.journal(conn, task_id, "doctor",
+                      "уборка игнорируемых файлов артефактной ветки", detail)
+        print(f"  [FIX] {task_id}: убрано {len(to_remove)} игнорируемых "
+              f"файлов из артефактной ветки")
 
 
 # --- команда doctor -------------------------------------------------------
@@ -1102,6 +1148,8 @@ def cmd_doctor(restore: bool = False, fix: bool = False) -> None:
                 print(f"  {branch}")
         else:
             print("Осиротевших артефактных веток не найдено.")
+        print("Уборка игнорируемых файлов артефактных веток живых задач:")
+        _fix_ignored_artifact_files(conn)
     checks = all_checks(conn)
     for c in checks:
         print(f"  [{LABELS[c.status]}] {c.name}: {c.detail}")

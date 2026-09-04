@@ -502,9 +502,9 @@ def in_dev(conn, task_id: str, t, tdir, target: str, state: str) -> bool:
             # песочница без git) — прежнее поведение: `locked` из
             # `fixed_sha`, сверка по "HEAD" рабочего дерева main.
             lock_ref = branch if foreign else "HEAD"
-            diff = gitcmd.diff_paths(
+            names = gitcmd.diff_names(
                 locked, lock_ref, f"tasks/{task_id}/acceptance_tests")
-            if diff is None:
+            if names is None:
                 # git не ответил (недостижимый sha после rebase/squash,
                 # сбой команды) — сверять нечего, но это не «нечего
                 # сверять как задумано»: fail-closed тем же принципом,
@@ -520,7 +520,26 @@ def in_dev(conn, task_id: str, t, tdir, target: str, state: str) -> bool:
                       f"tests_locked_sha={locked}, и повтори "
                       f"artel.py advance {task_id}")
                 return False
-            if diff:
+            if names:
+                # Разница только по файлам, игнорируемым `.gitignore`
+                # пульта (SPEC 01M1KVG3KSCY47HWXWF5HM0E76, требование 3,
+                # AC-4) — не спор с локом, тот же критерий, что у
+                # `checkpoint._commit_external_step_artifacts`.
+                ignored = gitcmd.check_ignore(names)
+                if ignored is None:
+                    detail = (f"лок acceptance_tests/ не проверен: git не "
+                              f"ответил на проверку .gitignore — сверка "
+                              f"невозможна")
+                    store.journal(conn, task_id, "fsm",
+                                  "переход отклонён: лок приёмочных тестов",
+                                  detail)
+                    print(f"[{task_id}] переход отклонён: {detail}")
+                    print(f"  дальше: разберись, почему git не отвечает на "
+                          f"check-ignore, и повтори artel.py advance "
+                          f"{task_id}")
+                    return False
+                names = [n for n in names if n not in ignored]
+            if names:
                 detail = (f"acceptance_tests/ изменены после лока "
                           f"(sha {locked}) — спор с тестом = эскалация, "
                           f"не правка")

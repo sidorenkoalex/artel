@@ -1,12 +1,18 @@
 """Автогейт acceptance по политике gates.yaml (ADR-0007, SPEC T066).
 Перенесено из orchestrator/fsm.py без изменения поведения (T091,
-декомпозиция диспетчеров fsm/runner).
+декомпозиция диспетчеров fsm/runner). Условие «а» (планка и её
+AC-пометки) переведено на чтение через источник артефактов задачи
+(SPEC 01M1NBWWPJMHKJMYXRDCM0W0C5) — каталог `tasks/<id>/acceptance_tests/`
+на диске рабочей копии после переноса артефактов в артефактную ветку
+(A7) остаётся пустым, автогейт видел только это и не мог отличить
+«планки нет» от «планка живёт в ветке».
 """
 from pathlib import Path
 
 from scripts import guard
 
-from . import acceptance, budget, fixation, gates, store, workspace
+from . import (acceptance, artifact_source, budget, fixation, gates, gitcmd,
+              store, workspace)
 
 AUTOGATE_PASS_MESSAGE = "acceptance пройден автогейтом (политика gates.yaml)"
 
@@ -21,24 +27,50 @@ def _autogate_conditions(conn, task_id: str, t, acc_tdir: Path,
     проверкой: к этой точке код уже гарантированно прошёл `acceptance.run`
     зелёным (иначе переход не добрался бы до состояния `acceptance`
     вообще) — только записывается в перечень как выполненное.
+
+    Условие "а" (каталог `acceptance_tests/` и его AC-пометки
+    manual/skip) читается через источник артефактов задачи
+    (`artifact_source.resolve` + `gitcmd.ls_tree_files`/`gitcmd.show`,
+    SPEC 01M1NBWWPJMHKJMYXRDCM0W0C5) — тем же приёмом, что уже несёт
+    `fsm._tests_writing_ac_state` (SPEC T031): разбираются ВСЕ `*.py`
+    файлы каталога, не только `test_*.py` (расходится с дисковым
+    `guard.scan_acceptance_tests`, но повторяет прецедент, а не заводит
+    третий вариант разбора), общим ядром `guard.scan_ac_content`.
+    `acc_tdir` (диск рабочей копии) условия "а" больше не касается —
+    параметр сохранён ради сигнатуры, которую использует остальной код
+    функции (условия б/в/г/д, эта задача их не меняет) и вызывающий код.
     """
     ok: list[str] = []
 
-    tests_dir = acc_tdir / "acceptance_tests"
-    if not tests_dir.is_dir() or not any(tests_dir.glob("*.py")):
+    branch, _ = artifact_source.resolve(conn, task_id)
+    branch_sha = gitcmd.branch_head_sha(branch)
+    source_note = f"источник планки: ветка {branch}, sha {branch_sha}"
+
+    tests_rel = f"tasks/{task_id}/acceptance_tests"
+    paths = gitcmd.ls_tree_files(branch, tests_rel) or []
+    py_paths = [p for p in paths if p.endswith(".py")]
+    if not py_paths:
         return ok, ("автогейт: каталог приёмочных тестов пуст или "
-                    "отсутствует")
-    _, markers = guard.scan_acceptance_tests(acc_tdir)
+                    f"отсутствует ({source_note})")
+    sources = []
+    for p in py_paths:
+        text, _ = gitcmd.show(branch, p)
+        if text is not None:
+            sources.append(text)
+    _, markers = guard.scan_ac_content(sources)
     manual_ns = sorted(n for n, (kind, _) in markers.items() if kind == "manual")
     skip_ns = sorted(n for n, (kind, _) in markers.items() if kind == "skip")
     if manual_ns:
         return ok, (f"автогейт: критерии manual — "
-                    f"{', '.join(f'AC-{n}' for n in manual_ns)}")
+                    f"{', '.join(f'AC-{n}' for n in manual_ns)} "
+                    f"({source_note})")
     if skip_ns:
         return ok, (f"автогейт: критерии skip — "
-                    f"{', '.join(f'AC-{n}' for n in skip_ns)}")
+                    f"{', '.join(f'AC-{n}' for n in skip_ns)} "
+                    f"({source_note})")
     ok.append("каталог приёмочных тестов: 0 manual, 0 skip критериев")
     ok.append("приёмочные тесты задачи зелёные")
+    ok.append(source_note)
 
     wt_root = (workspace.path(task_id)
               if workspace.on_task_branch(task_id, t["branch"]) is True
