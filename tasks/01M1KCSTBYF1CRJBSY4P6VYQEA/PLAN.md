@@ -141,6 +141,26 @@ schema_version: 3
   (инвалидация по mtime исходника) — это некоммиченный дрейф рабочего
   дерева, не влияет на залоченное состояние ветки; сверено `git status`
   после прогона под `PYTHONDONTWRITEBYTECODE=1` — чисто.
+- Итерация 2 (возврат в `developer` после `ANSWER-3.md`): единственный
+  оставшийся приёмочный тест (`test_ac19_manual_advance_outside_auto_
+  closes_the_alert`) починен Оператором напрямую по каналу ADR-0012
+  (подмены `gitcmd.show`/`gitcmd.ls_tree_files` в `setUp` класса AC-19,
+  коммит артефактной ветки `1c4e19a7`) — вне зоны и без участия
+  developer, реализацию `orchestrator/*` эта правка не затронула. Закрыт
+  R1-F1 реестра REVIEW.md (единственное оставшееся по существу
+  замечание, зона developer): во все 17 юнит-тестов
+  `tests/test_stall_alerts.py` дописаны докстринги «Ловит мутацию: …» с
+  конкретной правдоподобной мутацией `alerts.py`/`store.py`/`auto.py`
+  на каждый метод, по образцу приёмочных тестов этой же задачи. Логика
+  и утверждения существующих тестов не менялись — только докстринги;
+  `python3 -m pytest tests/test_stall_alerts.py -q` — `17 passed, 9
+  subtests passed`. Полный `tests/` перепрогнан заново после обеих
+  правок: `python3 -m unittest discover -s tests` — `Ran 1324 tests in
+  132.410s`, `OK`. Планка задачи перепрогнана заново: `python3 -m
+  pytest tasks/01M1KCSTBYF1CRJBSY4P6VYQEA/acceptance_tests/ -q` —
+  `25 passed, 5 subtests passed` (все 25, включая ранее красный
+  `test_ac19_manual_advance_outside_auto_closes_the_alert`) — без
+  регрессов.
 
 ## Риски
 
@@ -165,121 +185,25 @@ schema_version: 3
   вне зоны и полномочий этой задачи, чинить не стал (замена по факту в
   этой сессии — восстановление блобов, см. «Влияние на систему»).
 
-## Эскалация
+## Эскалация (снята)
 
-Реализация (требования 1–4, шаги 2–5) готова, зелена на `tests/`
-(`python3 -m unittest discover -s tests` — `OK`) и на 24 из 25
-приёмочных тестов задачи. Один приёмочный тест красный по причине,
-которую я не имею права чинить (файл залочен, T023 требование 5):
-`spec: 01M1KCSTBYF1CRJBSY4P6VYQEA` /
-`tasks/01M1KCSTBYF1CRJBSY4P6VYQEA/acceptance_tests/
-test_ac18_ac19_attention_alert_closes_on_next_transition.py::
-Ac19AlertClosesOnAManualOperatorTransitionOutsideAutoTest::
-test_ac19_manual_advance_outside_auto_closes_the_alert`.
+Эскалация предыдущей итерации (единственный залоченный приёмочный
+тест `test_ac19_manual_advance_outside_auto_closes_the_alert` красный
+из-за отсутствующего в `_sandbox.py` патча `gitcmd.show`/`gitcmd.
+ls_tree_files` — полный диагноз см. историю REVIEW.md итерации 1 и
+`ANSWER-2.md`/`ANSWER-3.md`) решена Оператором напрямую по каналу
+ADR-0012, без участия `developer`: подмены `gitcmd.show`/`gitcmd.
+ls_tree_files` внесены в `setUp` класса
+`Ac19AlertClosesOnAManualOperatorTransitionOutsideAutoTest`
+(`test_ac18_ac19_attention_alert_closes_on_next_transition.py`,
+коммит артефактной ветки `1c4e19a7`), заодно дописаны заявки «Ловит
+мутацию» в двух тестах AC-19 (approve/reject). Утверждения тестов не
+менялись, реализацию `orchestrator/*` эта правка не затронула (см.
+`ANSWER-3.md`). Планка задачи теперь зелёная целиком — см. «Влияние
+на систему».
 
-### Вопросы
-
-1. (блокирует) Один залоченный приёмочный тест красен по причине вне
-   моей зоны (диагноз ниже) — что делать?
-   - **A** — вернуть задачу в `tests_writing` (T023 требование 5:
-     «правка залоченного теста = правка SPEC = только Оператор»),
-     `test_author` добавляет в `_sandbox.py` этой задачи патчи
-     `gitcmd.show`/`gitcmd.ls_tree_files` →
-     `tests.sandbox.disk_backed_show`/`disk_backed_ls_tree_files` —
-     установленный приём, уже несомый `tests/test_auto_cycle.py::
-     AutoCycleTest` (строки 186–194 того файла) для той же причины
-     (A7: `artifact_source.resolve` теперь всегда `foreign=True`).
-   - **B** — принять как задокументированное ограничение теста
-     (аналог REVIEW.md T101, R1-F1: реестр замечаний, `accepted`) —
-     сценарий требования 4 «закрытие алерта переходом ВНЕ `auto`»
-     остаётся доказанным транзитивно двумя соседними тестами этого же
-     файла, которые зелены (`test_ac19_manual_approve_outside_auto_
-     closes_the_alert`, `test_ac19_manual_reject_outside_auto_closes_
-     the_alert`) плюс прямым юнит-тестом
-     `tests/test_stall_alerts.py::SetStateClosesAttentionAlertTest::
-     test_a_transition_closes_the_open_attention_alert` — хук сидит в
-     `orchestrator/store.py::set_state` (строка 583), общей для ВСЕХ
-     вызывающих команд точке, а не в конкретном обработчике `advance`/
-     `approve`/`reject`; разница между тремя командами для самого хука
-     отсутствует.
-   - **Дефолт при молчании**: B — красный тест остаётся красным
-     (задокументированным), ветка не мержится без решения Оператора
-     по гейту `review → verifying` (см. «Блокирует» ниже) в любом
-     случае — молчание не проталкивает задачу дальше само по себе.
-
-### Контекст
-
-`tasks/01M1KCSTBYF1CRJBSY4P6VYQEA/acceptance_tests/_sandbox.py`
-патчит только `gitcmd.git` (генерическая заглушка `fake_git`: любой
-вызов → `rc=0`, пустой `stdout`, кроме `rev-parse --verify --quiet
-refs/heads/*` → отказ) и `runner.cmd_run` — НЕ патчит `gitcmd.show`/
-`gitcmd.ls_tree_files`.
-
-Тест `test_ac19_manual_advance_outside_auto_closes_the_alert`
-вызывает НАСТОЯЩИЙ `fsm.cmd_advance(self.TASK)` (не через `auto`, не
-через фейк) после `write_plan()` (`status: ready` на диске,
-`self.tdir`) и `set_state("in_dev")`. Обработчик `in_dev`
-(`orchestrator/fsm_advance.py:467-546`) читает `PLAN.md` через
-`artifact_source.resolve()` → всегда `foreign=True` (A7, «снятие
-особого случая догфуда» — `orchestrator/artifact_source.py:20-22`) →
-`fsm._read_branch_text_or_refuse` → `gitcmd.show(branch, "tasks/<id>/
-PLAN.md")` → патченный `fake_git("show", "<branch>:tasks/<id>/
-PLAN.md")` → `CompletedProcess(rc=0, stdout="", stderr="")` →
-`gitcmd.show` возвращает `("", "")` (`text=""`, НЕ `None` — файл
-«прочитан», просто пустой). `plan_meta = yamlmini.frontmatter("")` →
-`{}` → `status` не `ready`/`approved` → переход не происходит,
-печатается «PLAN.md не ready — разработчик ещё работает» (сверено
-прогоном: ровно это и печатается, `self.state()` остаётся `in_dev`).
-
-Диск (`self.tdir / "PLAN.md"`, куда пишет `write_plan()`) в этом
-сценарии не участвует вовсе — `gitcmd.show` в продакшн-коде
-принципиально не откатывается на диск (SPEC T031, AC-1/AC-2,
-докстринг `gitcmd.show`: «ветка — источник истины БЕЗ отката на
-дерево»), это существующий, не мой, инвариант, ослаблять который я не
-вправе (principle целостности) и не должен (не входит в SPEC этой
-задачи).
-
-Установленный приём для этого класса песочниц —
-`tests/sandbox.py::disk_backed_show`/`disk_backed_ls_tree_files`,
-уже применяемый `tests/test_auto_cycle.py::AutoCycleTest` (строки
-186-194, комментарий там прямо называет причину: «`foreign=True` —
-FSM читает SPEC/PLAN/REVIEW через `gitcmd.show`/`gitcmd.
-ls_tree_files`, заглушенный выше `fake_git` вернул бы [пусто]»).
-Соседний тест этого же файла, `Ac18...` (строки 56-76), обошёл ту же
-проблему иначе — переопределил сам `fsm.cmd_advance` на прямой вызов
-`store.set_state`, явно объяснив это в докстринге как «не
-завязываться на конкретный гейт-путь». Для `test_ac19_manual_advance`
-это же решение не годится буквально (тест обязан звать НАСТОЯЩИЙ
-`fsm.cmd_advance`, не подмену, — так велит докстринг класса, строки
-16-23), а вариант с `disk_backed_show` требует правки `_sandbox.py`.
-
-Ссылка в докстрине теста (строки 27-32) на
-`tasks/T034/acceptance_tests/test_auto_guard_refusal.py::
-Ac4NonGuardStateKeepsRunningTest::
-test_ac4_valid_ready_plan_still_advances_the_task` как на образец
-«того же минимального набора патчей» — стала неактуальной: тот тест
-из T034 предшествует A7 (`artifact_source.resolve` тогда возвращал
-`foreign` по факту чекаута, не безусловно) и сегодня сам красен по
-не связанной причине (`self.TASK = "T001"` — отменённый T094 формат
-id; прогнал отдельно: `SystemExit: Задача T001 не найдена`) — не
-регресс этой задачи, само T034 не входит в `tests/` (историческая
-песочница вне гоняемого набора), но как образец для копирования он
-недостоверен.
-
-Я НЕ правил `_sandbox.py` и файлы `test_*.py` каталога
-`acceptance_tests/` — это правка залоченного артефакта (T023
-требование 5), вне полномочий роли `developer`; не пытался обойти
-инвариант «ветка — источник истины» в продакшн-коде (`gitcmd.show`,
-`fsm._read_branch_text_or_refuse`) — единственный альтернативный путь
-сделать тест зелёным без правки теста, и он запрещён принципом
-целостности плюс вне зоны этой задачи (SPEC «Не входит» не упоминает
-`gitcmd.py`/`artifact_source.py`).
-
-### Блокирует
-
-Гейт `review → verifying` этой же задачи: на нём оркестратор
-прогоняет `tasks/01M1KCSTBYF1CRJBSY4P6VYQEA/acceptance_tests/`
-целиком (T023 требование 6) — с текущим состоянием файла прогон будет
-красным на этом одном тесте, переход откажет. Ревьюверу и Оператору
-стоит решить вопрос выше ДО итерации ревью, а не после красного
-прогона на гейте.
+Новых блокирующих вопросов эта итерация не поднимает. Единственное
+оставшееся по существу замечание ревьювера (R1-F1 реестра REVIEW.md
+итерации 1, докстринги «Ловит мутацию» в `tests/test_stall_alerts.py`,
+зона developer) закрыто этой же итерацией — см. «Влияние на систему»
+и обновлённый статус записи `R1-F1` в `REVIEW.md`.
