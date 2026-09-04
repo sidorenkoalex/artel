@@ -239,14 +239,19 @@ def _pull_main_or_escalate(conn, task_id: str, t, state: str) -> str:
     упоминает и не трогает main ни байтом (требование 10) — не rebase
     (требование 3), существующие sha ветки остаются валидными предками.
 
-    `_origin_main_sha()` вернула `None` (git/fetch не ответили — песочницы
-    без реального git: `fake_git` и аналоги, требование 9) — `base`
-    деградирует на литерал `"FETCH_HEAD"`, на котором `gitcmd.commits_
-    behind` в этом же вырожденном случае тоже не разберёт число и вернёт
-    `None` — тот же вырожденный случай деградации, что и у остальных
-    git-примитивов оркестратора: сверка молча пропускается, `bool(None)`
-    ложно ровно как и `bool(0)` (ветка не отстала) — оба ведут к одному и
-    тому же «ничего не делать».
+    `_origin_main_sha()` вернула вырожденное значение (`None`/пустая
+    строка — git/fetch/rev-parse не ответили, либо конфигурация
+    target'а не читается; песочницы без реального git: `fake_git` и
+    аналоги, требование 9) — функция возвращает `"fresh"` немедленно, не
+    вызывая `commits_behind`/`merge` вовсе (REVIEW.md R1-F1, итерация 1):
+    прежде на этом месте подставлялся литерал `"FETCH_HEAD"`, который
+    честным no-op'ом НЕ является — `FETCH_HEAD` в `config.ROOT` почти
+    всегда несёт результат чужого предыдущего фетча, а внутри worktree
+    задачи резолвится в СВОЙ приватный `FETCH_HEAD` (git 2.5+), не в
+    только что зафетченный `config.ROOT`. Ранний возврат — тот же
+    вырожденный случай деградации, что и у остальных git-примитивов
+    оркестратора: молча ничего не делает, как и `not behind` (ветка не
+    отстала).
 
     Конфликт merge, где единственный конфликтующий файл —
     `docs/codebase-map.md` (SPEC T067), разрешается здесь же сам, не
@@ -257,7 +262,11 @@ def _pull_main_or_escalate(conn, task_id: str, t, state: str) -> str:
     """
     branch = t["branch"]
     target_name = t["target"] or config.DEFAULT_TARGET
-    base = _origin_main_sha(target_name) or "FETCH_HEAD"
+    base = _origin_main_sha(target_name)
+    if not base:
+        # Вырожденная _origin_main_sha — см. докстринг выше (R1-F1):
+        # ранний выход, не литерал "FETCH_HEAD".
+        return "fresh"
     behind = gitcmd.commits_behind(branch, base=base)
     if not behind:
         return "fresh"
@@ -270,8 +279,10 @@ def _pull_main_or_escalate(conn, task_id: str, t, state: str) -> str:
             f"задачи не создан — {error}")
         return "escalated"
 
+    source = _origin_main_source(target_name)
+    source_branch = source[1] if source is not None else config.MAIN_BRANCH
     merge = gitcmd.in_repo(wt_path, "merge", "--no-ff", base,
-                           "-m", f"{task_id}: подтяжка {config.MAIN_BRANCH}")
+                           "-m", f"{task_id}: подтяжка {source_branch}")
     if merge is None or merge.returncode != 0:
         resolved = False
         if merge is not None:

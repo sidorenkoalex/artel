@@ -21,16 +21,23 @@ schema_version: 3
    `MAP_REL`): `fsm_merge_gate` импортирует `fsm`, обратный импорт завёл
    бы цикл; там `_origin_main_sha` остаётся про main АРТЕЛИ конкретно
    (плотницкий merge Stage0, только self-target/`operator` гейт) и этой
-   задачей не тронут. `base = fsm._origin_main_sha(target_name) or
-   "FETCH_HEAD"` идёт и в `gitcmd.commits_behind(branch, base=base)`
-   (сверка), и в `git merge --no-ff <base>` внутри worktree задачи
-   (подтяжка) — один и тот же `base` для обеих операций, `config.
-   MAIN_BRANCH` в коде узла остаётся только ИМЕНЕМ ветки self-target,
-   которую фетчим, не источником сравнения. `git fetch` пишет только в
-   объектную базу/`FETCH_HEAD` `config.ROOT` — ни рабочее дерево, ни
-   HEAD, ни зафиксированный там пин не трогает (AC-8); `gitcmd.commits_
-   behind` уже принимает `base` параметром (существующая сигнатура,
-   менять не пришлось).
+   задачей не тронут. `base = fsm._origin_main_sha(target_name)` идёт и
+   в `gitcmd.commits_behind(branch, base=base)` (сверка), и в `git merge
+   --no-ff <base>` внутри worktree задачи (подтяжка) — один и тот же
+   `base` для обеих операций, `config.MAIN_BRANCH` в коде узла остаётся
+   только ИМЕНЕМ ветки self-target, которую фетчим, не источником
+   сравнения. `git fetch` пишет только в объектную базу/`FETCH_HEAD`
+   `config.ROOT` — ни рабочее дерево, ни HEAD, ни зафиксированный там
+   пин не трогает (AC-8); `gitcmd.commits_behind` уже принимает `base`
+   параметром (существующая сигнатура, менять не пришлось). `base` не
+   ответила (`None`/пустая строка — git/fetch/rev-parse не ответили,
+   либо конфигурация target'а не читается) — переход возвращает
+   `"fresh"` немедленно, ДО вызова `commits_behind`/`merge` (REVIEW.md
+   R1-F1, итерация 1: литерал `"FETCH_HEAD"` в качестве `base` здесь
+   раньше подставлялся вместо честного no-op — небезопасно, `FETCH_HEAD`
+   `config.ROOT` почти никогда не пуст на живом пульте, а внутри
+   worktree задачи резолвится в СВОЙ приватный `FETCH_HEAD`, git 2.5+ —
+   ни то, ни другое не «ничего не делать»).
    Три точки вызова `_pull_main_or_escalate` (`in_dev -> review`,
    `acceptance -> merge_gate`, окно `merge_gate`) не тронуты — они уже
    зовут этот единственный узел, менять их незачем (AC-3 закрывается
@@ -115,6 +122,20 @@ schema_version: 3
    в них нет (ANSWER-1: добавлена после лока планки, тест — в `tests/`,
    дополнение планки под AC-10 вносит Оператор командой `amend-tests`
    после сдачи).
+5. REVIEW.md итерация 1 (R1-F1, major): `_pull_main_or_escalate`
+   (`orchestrator/fsm.py`) на вырожденной `_origin_main_sha() → None`/
+   пустая строка возвращает `"fresh"` немедленно вместо подстановки
+   литерала `"FETCH_HEAD"` в `commits_behind`/`merge` (тот литерал не
+   был честным no-op — см. «Подход», узел 1). R1-F2 (minor):
+   commit-сообщение merge несёт реальную ветку источника
+   (`_origin_main_source(target_name)[1]`), не литерал `config.
+   MAIN_BRANCH`. Новый регресс-тест `tests/test_branch_freshness_gate.
+   py::test_advance_treats_origin_fetch_failure_as_fresh` (R1-F1); тесты
+   этого файла и `tests/test_fsm_map_conflict_autoresolve.py`,
+   ранее полагавшиеся на falsy-деградацию `fake_git` (пустая строка из
+   `rev-parse FETCH_HEAD` вместо `None`), получили явную truthy-заглушку
+   `fsm._origin_main_sha` в `setUp` — не ослабление, тот же путь
+   исполнения, что и раньше.
 
 ## Покрытие требований
 

@@ -76,6 +76,17 @@ class MapConflictAutoResolveTest(unittest.TestCase):
         patcher = mock.patch.object(gitcmd, "git", fake_git)
         patcher.start()
         self.addCleanup(patcher.stop)
+        # `fake_git` без REVIEW.md R1-F1 (01M1NBWPKNBXP9ZXXQDJM7AXPJ,
+        # итерация 1) отвечает на "rev-parse FETCH_HEAD" пустой строкой —
+        # `_pull_main_or_escalate` деградировала бы на "fresh" немедленно
+        # и ни разу не позвала бы merge, хотя тесты этого файла кроют
+        # именно поведение НА merge-конфликте; truthy-заглушка держит
+        # прежний путь исполнения (тот же приём, что `tests/
+        # test_branch_freshness_gate.py`).
+        origin_sha_patcher = mock.patch.object(
+            fsm, "_origin_main_sha", return_value="deadbeefcafefeed")
+        origin_sha_patcher.start()
+        self.addCleanup(origin_sha_patcher.stop)
         # A7 (generic-путь заведения, AC-5): `cmd_new` коммитит артефакты
         # плотницки (`artifact_branch.write_commit`) — та функция зовёт
         # `subprocess.run` НАПРЯМУЮ, минуя `gitcmd.git`/фейк выше; `root`

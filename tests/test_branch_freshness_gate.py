@@ -74,6 +74,20 @@ class BranchFreshnessGateTest(unittest.TestCase):
         patcher = mock.patch.object(gitcmd, "git", fake_git)
         patcher.start()
         self.addCleanup(patcher.stop)
+        # `fake_git` отвечает на "rev-parse FETCH_HEAD" пустой строкой
+        # (нет настоящего git) — с REVIEW.md R1-F1 (итерация 1) вырожденный
+        # `_origin_main_sha` обязана деградировать на "fresh" немедленно,
+        # не на литерал "FETCH_HEAD". Тесты этого файла, которые кроют
+        # ветку "ветка отстала" (`commits_behind` замокан на ненулевое
+        # значение отдельно), нуждаются в настоящем truthy `base` — тем же
+        # приёмом стаба, что и `gitcmd.commits_behind` ниже по каждому
+        # тесту; `test_advance_treats_origin_fetch_failure_as_fresh`
+        # переопределяет этот патч на `None` для проверки самой
+        # деградации.
+        origin_sha_patcher = mock.patch.object(
+            fsm, "_origin_main_sha", return_value="deadbeefcafefeed")
+        origin_sha_patcher.start()
+        self.addCleanup(origin_sha_patcher.stop)
         # A7 (generic-путь заведения, AC-5): `cmd_new` коммитит артефакты
         # плотницки (`artifact_branch.write_commit`) — та функция зовёт
         # `subprocess.run` НАПРЯМУЮ, минуя `gitcmd.git`/фейк выше; `root`
@@ -254,15 +268,21 @@ class BranchFreshnessGateTest(unittest.TestCase):
                          "не в рабочей копии пульта (ADR-0006 п.2)")
         self.assertEqual(args[0], "merge")
         self.assertIn("--no-ff", args, "подтяжка не rebase (требование 3)")
-        # SPEC 01M1NBWPKNBXP9ZXXQDJM7AXPJ, AC-2: источник merge — origin
-        # (здесь, без реального git, `_origin_main_sha` деградирует на
-        # литерал "FETCH_HEAD" — та же деградация, что и коммит-сообщение
-        # ниже всё ещё называет `config.MAIN_BRANCH` информационно), НЕ
+        # SPEC 01M1NBWPKNBXP9ZXXQDJM7AXPJ, AC-2: источник merge — sha,
+        # зафетченный с origin (здесь замокан `fsm._origin_main_sha` ->
+        # "deadbeefcafefeed", REVIEW.md R1-F1 итерация 1: литерал
+        # "FETCH_HEAD" больше не подставляется НИКОГДА, даже когда
+        # `_origin_main_sha` вырождена — см.
+        # `test_advance_treats_origin_fetch_failure_as_fresh`), НЕ
         # локальный `config.MAIN_BRANCH` буквальным аргументом merge.
         self.assertNotIn(config.MAIN_BRANCH, args,
                          "AC-2: config.MAIN_BRANCH (локальный пин) не "
                          "имеет права быть источником merge")
-        self.assertIn("FETCH_HEAD", args)
+        self.assertIn("deadbeefcafefeed", args)
+        self.assertNotIn("FETCH_HEAD", args,
+                         "R1-F1: литерал FETCH_HEAD не подставляется — не "
+                         "честный no-op ни в config.ROOT (чужой предыдущий "
+                         "фетч), ни в приватном FETCH_HEAD worktree'а")
         self.assertNotIn(self.branch, args,
                          "ветка задачи не упоминается в аргументах merge")
         acc_run.assert_called_once_with(self.wt_path / "tasks" / self.TASK)
@@ -316,6 +336,35 @@ class BranchFreshnessGateTest(unittest.TestCase):
         self.assertNotEqual(
             base, config.MAIN_BRANCH,
             "AC-4: base не имеет права совпасть с локальным config.MAIN_BRANCH")
+
+    # ------------------------------- R1-F1 (REVIEW.md итерация 1, major)
+
+    def test_advance_treats_origin_fetch_failure_as_fresh(self):
+        """REVIEW.md 01M1NBWPKNBXP9ZXXQDJM7AXPJ итерация 1, замечание
+        R1-F1 (major): `_origin_main_sha` вырождена (git fetch/rev-parse
+        не ответили, либо конфигурация target'а неисправна) — переход
+        обязан деградировать на "fresh" немедленно, НЕ подставляя литерал
+        "FETCH_HEAD" ни в `commits_behind`, ни в `merge`. Прежде такая
+        подстановка сравнивала/мержила ветку задачи против постороннего
+        состояния `config.ROOT`/приватного `FETCH_HEAD` worktree'а — не
+        «ничего не делала», как заявляла деградация.
+        """
+        self.setup_recording()
+        with mock.patch.object(fsm, "_origin_main_sha", return_value=None), \
+             mock.patch.object(gitcmd, "commits_behind") as behind, \
+             mock.patch.object(gitcmd, "in_repo",
+                               side_effect=self._recording_ok), \
+             mock.patch.object(acceptance, "run") as acc_run:
+            self.advance_from_in_dev()
+
+        self.assertEqual(self.state(), "review",
+                         "вырожденная _origin_main_sha — тот же исход, что "
+                         "и «ветка не отстала» (требование 7)")
+        behind.assert_not_called()
+        self.assertEqual(self.merge_calls, [],
+                         "R1-F1: merge не имеет права звонить против "
+                         "постороннего FETCH_HEAD")
+        acc_run.assert_not_called()
 
     # --------------------------------------------------- конфликт подтяжки
 
