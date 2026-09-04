@@ -1225,7 +1225,15 @@ class PackageNoteDiffTypeTest(unittest.TestCase):
 
 class PreviousVerdictShaTest(unittest.TestCase):
     """`previous_verdict_sha` читает журнал hash-фиксации (T021), не изобретая
-    новый учёт sha (SPEC требование 3)."""
+    новый учёт sha (SPEC требование 3).
+
+    Фикстуры несут ОБА поля записи (`sha=` — фиксационный sha артефактного
+    репозитория target'а, `код=` — sha кодовой ветки, разными значениями)
+    — тем же приёмом, что и приёмочные AC-1/AC-4 (tasks/
+    01M1P9RJVYHTAC087J4B2CAR44): до этой задачи `previous_verdict_sha`
+    ошибочно читал `sha=`, эти тесты изначально несли только его и
+    покрывали регресс, который задача чинит (AC-7 явно называет такую
+    правку зоной разработчика)."""
 
     TASK = "T001"
 
@@ -1257,9 +1265,10 @@ class PreviousVerdictShaTest(unittest.TestCase):
 
     capture = staticmethod(capture)
 
-    def fixate(self, sha: str) -> None:
+    def fixate(self, code_sha: str, fixation_sha: str = "9999999") -> None:
         store.journal(self.conn, self.TASK, "fsm", "sha зафиксирован",
-                     f"target=dogfood, sha={sha}, чисто=True")
+                     f"target=dogfood, sha={fixation_sha}, чисто=True, "
+                     f"код={code_sha}")
 
     def test_no_fixation_history_is_empty(self):
         self.assertEqual(review.previous_verdict_sha(self.conn, self.TASK), "")
@@ -1273,20 +1282,25 @@ class PreviousVerdictShaTest(unittest.TestCase):
     def test_second_to_last_fixation_is_the_previous_verdict(self):
         """review -> in_dev (вердикт) фиксирует sha_a; in_dev -> review
         (правка) фиксирует sha_b, уже текущий `fixed_sha`. Искомый —
-        предпоследний, sha_a, не последний."""
-        self.fixate("1111111")  # in_dev -> review, итерация 1
-        self.fixate("2222222")  # review -> in_dev, вердикт итерации 1
-        self.fixate("3333333")  # in_dev -> review, итерация 2 (текущий)
+        предпоследний, sha_a, не последний. `fixation_sha` каждой записи —
+        отдельное значение, чтобы совпадение с ним доказывало регресс
+        (previous_verdict_sha прочитал `sha=`, а не `код=`)."""
+        self.fixate("1111111", fixation_sha="8888888")  # in_dev -> review, итерация 1
+        self.fixate("2222222", fixation_sha="7777777")  # review -> in_dev, вердикт итерации 1
+        self.fixate("3333333", fixation_sha="6666666")  # in_dev -> review, итерация 2 (текущий)
 
-        self.assertEqual(
-            review.previous_verdict_sha(self.conn, self.TASK), "2222222")
+        result = review.previous_verdict_sha(self.conn, self.TASK)
+        self.assertEqual(result, "2222222")
+        self.assertNotEqual(result, "7777777",
+                            "вернулся фиксационный sha артефактного "
+                            "репозитория target'а вместо sha кодовой ветки")
 
     def test_unrecognisable_sha_is_treated_as_missing(self):
         """git не ответил в момент той фиксации (T021, вырожденный случай) —
         не трейсбек, а откат на полный diff у вызывающего кода."""
         self.fixate("1111111")
         store.journal(self.conn, self.TASK, "fsm", "sha зафиксирован",
-                     "target=dogfood, sha=—, чисто=False")
+                     "target=dogfood, sha=9999999, чисто=False, код=—")
         self.fixate("3333333")
 
         self.assertEqual(review.previous_verdict_sha(self.conn, self.TASK), "")
