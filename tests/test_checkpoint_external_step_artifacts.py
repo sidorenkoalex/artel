@@ -220,6 +220,38 @@ class CommitExternalStepArtifactsTest(RealGitSandbox):
         self.assertIn(f"tasks/{self.TASK}/blob.bin", self.artifact_branch_files())
         self.assertFalse(self.task_dir.exists())
 
+    def test_timeout_marker_carried_and_deletion_still_matches_across_flavors(self):
+        """SPEC 01M1NBWTSXEJB24PXR417YF1VA, AC-5: `timeout=True` — вызов
+        из `checkpoint.commit_timeout_checkpoint` — несёт пометку «WIP
+        после таймаута» в сообщении/detail коммита артефактной ветки.
+
+        Второй шаг (тот же путь удаления, что `test_same_role_second_
+        step_drops_a_file_it_no_longer_writes` выше) вызван с
+        `timeout=True`, ПЕРВЫЙ — обычным `commit_step_artifacts`
+        (`timeout=False`): «последний коммит пути — автокоммит этой же
+        роли» обязан распознаваться независимо от того, какой из двух
+        вариантов сообщения его пометил (докстринг `_commit_external_
+        step_artifacts`, «Кандидат на удаление... сверяется ПРЕФИКСОМ»)
+        — иначе чередование обычного шага и обрыва по таймауту одной и
+        той же роли ломало бы удаление уже на второй итерации."""
+        self.write("QUESTIONS.md", QUESTIONS_MD)
+        checkpoint.commit_step_artifacts(store.db(), self.TASK, "analyst")
+        self.assertIn(f"tasks/{self.TASK}/QUESTIONS.md",
+                      self.artifact_branch_files())
+
+        self.task_dir.mkdir(parents=True)
+        self.write("SPEC.md", "спека готова")
+        detail = checkpoint._commit_external_step_artifacts(
+            store.db(), self.TASK, "analyst", TARGET, timeout=True)
+
+        self.assertIn("WIP после таймаута", detail)
+        files = self.artifact_branch_files()
+        self.assertIn(f"tasks/{self.TASK}/SPEC.md", files)
+        self.assertNotIn(f"tasks/{self.TASK}/QUESTIONS.md", files,
+                         "удаление обязано сработать и когда прежний "
+                         "коммит той же роли был обычным (без пометки "
+                         "таймаута), а этот — с ней")
+
     def test_journal_records_the_autocommit(self):
         self.write("PLAN.md", "черновик")
 
