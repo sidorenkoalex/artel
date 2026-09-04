@@ -4,7 +4,7 @@ type: review
 author_role: reviewer
 status: changes_requested
 iteration: 1
-schema_version: 4
+schema_version: 3
 ---
 
 # REVIEW: Механика зон, часть 1: машиночитаемое поле `zones` и общий список зон
