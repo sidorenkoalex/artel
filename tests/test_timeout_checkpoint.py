@@ -59,6 +59,19 @@ class _WorktreeCheckpointTest(RealPultGitTest):
         d.mkdir(parents=True, exist_ok=True)
         return d
 
+    def write_code_file(self, rel: str, text: str) -> Path:
+        """Файл кодовой ветки ВНЕ `tasks/<id>/` — путь мандата `developer`
+        (SPEC 01M1NBWTSXEJB24PXR417YF1VA, ANSWER-1): без него сценарии
+        `developer` ниже, где меняется только `tasks/<id>/`, не имеют ни
+        одного пути в мандате кода и код-коммит закономерно не
+        случается — тестам failure-веток `add`/`diff`/`commit` нужна
+        реальная правка вне `tasks/<id>/`, чтобы дойти до проверяемого
+        шага, а не выйти раньше по «нечего коммитить»."""
+        path = self.wt / rel
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text, encoding="utf-8")
+        return path
+
     def worktree_git(self, *args: str) -> str:
         res = subprocess.run(["git", "-C", str(self.wt), *args],
                              capture_output=True, text=True)
@@ -93,7 +106,21 @@ class CommitTimeoutCheckpointTest(_WorktreeCheckpointTest):
         self.assertEqual(self.orchestrator_steps(), [])
 
     def test_dirty_tree_commits_with_message_sha_and_journal_entry(self):
+        """Ловит мутацию: коммит чекпоинта пишется без сообщения/sha в
+        `detail` или без записи в журнал — следующий `run` не смог бы
+        объяснить Оператору, откуда взялся сдвиг HEAD ветки задачи после
+        обрыва по таймауту (AC-6).
+
+        Мандат `developer` — все пути кроме `tasks/<id>/`
+        (SPEC 01M1NBWTSXEJB24PXR417YF1VA, ANSWER-1): правка ВНЕ
+        `tasks/<id>/` нужна здесь, чтобы код-коммит вообще состоялся —
+        WIP, оставленный ТОЛЬКО в `tasks/<id>/`, из этого коммита
+        исключён (переносится в артефактную ветку отдельно, см.
+        `tasks/01M1NBWTSXEJB24PXR417YF1VA/acceptance_tests/
+        test_ac1_developer_mandate_all_paths_but_task_dir.py`)."""
         self.enter_in_dev()
+        self.write_code_file("orchestrator/new_module.py",
+                             "# правка разработчика\n")
         (self.worktree_task_dir() / "wip.md").write_text(
             "недописано\n", encoding="utf-8")
 
@@ -153,10 +180,21 @@ class CommitTimeoutCheckpointTest(_WorktreeCheckpointTest):
         self.assertEqual(self.orchestrator_steps(), [])
 
     def test_git_diff_failure_commits_nothing_and_journals_nothing(self):
-        """REVIEW.md T041 итерация 1, замечание minor: тот же класс отказа
+        """Ловит мутацию: возврат `git diff --cached --quiet` вне {0,1}
+        трактуется как «нечего коммитить» вместо «git не ответил» — код
+        пошёл бы на `git commit` вслепую, не зная, застейджено ли что-то
+        реально.
+
+        REVIEW.md T041 итерация 1, замечание minor: тот же класс отказа
         (`git diff --cached --quiet` вне {0,1} — git не ответил), что и у
-        `git add`, отдельным кейсом."""
+        `git add`, отдельным кейсом. Правка ВНЕ `tasks/<id>/` обязательна
+        (SPEC 01M1NBWTSXEJB24PXR417YF1VA, ANSWER-1, мандат `developer`) —
+        иначе после исключения `tasks/<id>/` стейджить нечего, и `git
+        diff` вообще не вызывается, а тест перестаёт проверять то, что
+        называет."""
         self.enter_in_dev()
+        self.write_code_file("orchestrator/new_module.py",
+                             "# правка разработчика\n")
         (self.worktree_task_dir() / "wip.md").write_text(
             "недописано\n", encoding="utf-8")
         before = self.worktree_head()
@@ -168,9 +206,19 @@ class CommitTimeoutCheckpointTest(_WorktreeCheckpointTest):
         self.assertEqual(self.orchestrator_steps(), [])
 
     def test_git_commit_failure_commits_nothing_and_journals_nothing(self):
-        """REVIEW.md T041 итерация 1, замечание minor: та же деградация
-        для отказа самого `git commit`."""
+        """Ловит мутацию: отказ `git commit` (код возврата != 0) не
+        проверяется — функция вернула бы `detail`/писала бы в журнал
+        коммит, которого на самом деле нет, и следующий `check_integrity`
+        сверялся бы с несуществующим sha.
+
+        REVIEW.md T041 итерация 1, замечание minor: та же деградация
+        для отказа самого `git commit`. Правка ВНЕ `tasks/<id>/` —
+        тем же доводом, что у `test_git_diff_failure_...` выше: без неё
+        `git diff --cached --quiet` сам вернул бы «нечего коммитить», и
+        `git commit` не вызвался бы даже без мока."""
         self.enter_in_dev()
+        self.write_code_file("orchestrator/new_module.py",
+                             "# правка разработчика\n")
         (self.worktree_task_dir() / "wip.md").write_text(
             "недописано\n", encoding="utf-8")
         before = self.worktree_head()
@@ -201,6 +249,111 @@ class CommitTimeoutCheckpointTest(_WorktreeCheckpointTest):
         self.assertEqual(detail, "")
         self.assertEqual(self.worktree_head(), before)
         self.assertEqual(self.orchestrator_steps(), [])
+
+    def test_developer_mandate_excludes_task_dir_from_code_commit(self):
+        """Ловит мутацию: `exclude` не передаётся в `_commit_worktree_
+        change` (или передаётся, но `reset -q -- exclude` не вызывается) —
+        `tasks/<id>/` попал бы в кодовый коммит `developer` наравне с
+        `orchestrator/new_module.py`, нарушая AC-1.
+
+        SPEC 01M1NBWTSXEJB24PXR417YF1VA, AC-1 — изолированная версия:
+        полное сценарное покрытие (правка отслеживаемого пути, новый
+        путь, `tasks/<id>/` одновременно) уже несёт `tasks/
+        01M1NBWTSXEJB24PXR417YF1VA/acceptance_tests/
+        test_ac1_developer_mandate_all_paths_but_task_dir.py` — здесь
+        только сама изоляция мандата `developer` как юнит-случай функции
+        чекпоинта, тем же приёмом, что у соседних тестов файла."""
+        self.enter_in_dev()
+        self.write_code_file("orchestrator/new_module.py",
+                             "# правка разработчика\n")
+        (self.worktree_task_dir() / "wip.md").write_text(
+            "недописанный артефакт\n", encoding="utf-8")
+
+        checkpoint.commit_timeout_checkpoint(store.db(), self.TASK, "developer")
+
+        after = self.worktree_head()
+        committed = self.worktree_git("show", "--name-only", "--format=", after)
+        committed_paths = [p for p in committed.splitlines() if p]
+        self.assertIn("orchestrator/new_module.py", committed_paths)
+        task_paths = [p for p in committed_paths
+                     if p.startswith(f"tasks/{self.TASK}/")]
+        self.assertEqual(task_paths, [],
+                         f"tasks/<id>/ не входит в мандат кода developer — "
+                         f"фактически закоммичено: {task_paths}")
+
+    def test_non_developer_role_discards_change_outside_task_dir(self):
+        """Ловит мутацию: `_discard_out_of_mandate_changes` не вызывается
+        для не-`developer` роли (или вызывается, но не реально откатывает
+        трекенный путь через `checkout --`) — правка `CLAUDE.md` осталась
+        бы в рабочем дереве незамеченной, AC-2 не выполняется.
+
+        SPEC 01M1NBWTSXEJB24PXR417YF1VA, AC-2/AC-3 — изолированная
+        версия (полный сценарий — `tasks/01M1NBWTSXEJB24PXR417YF1VA/
+        acceptance_tests/test_ac2_*.py`/`test_ac3_*.py`): правка
+        отслеживаемого `CLAUDE.md` откачена, HEAD не сдвинут, детальный
+        `commit_timeout_checkpoint` пуст (нечего коммитить в кодовую
+        ветку), журнал называет путь и число отброшенных строк."""
+        self.enter_in_dev()
+        claude_md = self.wt / "CLAUDE.md"
+        original = claude_md.read_text(encoding="utf-8")
+        claude_md.write_text(original + "строка 1\nстрока 2\n",
+                             encoding="utf-8")
+        before = self.worktree_head()
+
+        detail = checkpoint.commit_timeout_checkpoint(
+            store.db(), self.TASK, "reviewer")
+
+        self.assertEqual(detail, "")
+        self.assertEqual(self.worktree_head(), before)
+        self.assertEqual(claude_md.read_text(encoding="utf-8"), original)
+
+        entries = self.orchestrator_steps()
+        self.assertEqual(len(entries), 1)
+        marker = f"{entries[0]['action']} {entries[0]['detail']}"
+        self.assertIn("CLAUDE.md", marker)
+        self.assertIn("2", marker)
+
+    def test_discard_of_renamed_file_out_of_mandate_restores_the_source(self):
+        """Ловит мутацию: git-статус `R` (staged rename) обрабатывается как
+        трекенный путь (`checkout --` по НЕСУЩЕСТВУЮЩЕМУ в HEAD пути
+        назначения) вместо как новый — REVIEW.md итерация 3, R1-F1,
+        независимо воспроизведено там же: `git mv tasks/<id>/foo.py
+        orchestrator_new.py` → путь назначения остаётся на диске
+        незамеченным (`checkout` молча проваливается на pathspec без
+        истории), а путь ИСТОЧНИК внутри `tasks/<id>/` физически теряется
+        (git mv переместил файл, и без отдельного восстановления назад
+        он не возвращается) — порча самого каталога задачи в придачу к
+        невыполненному AC-2. Проверяется саму функцию `_discard_out_of_
+        mandate_changes` напрямую (изолированно, тем же приёмом, что и
+        REVIEW.md итерация 3, R1-F1 репро) — вызов через
+        `commit_timeout_checkpoint` следом отдельным шагом переносит
+        `tasks/<id>/` в артефактную ветку (AC-4, для любой роли) и
+        замёл бы восстановленный файл с локального диска, что не имеет
+        отношения к самому предмету этого замечания."""
+        self.enter_in_dev()
+        foo = self.worktree_task_dir() / "foo.py"
+        original = "# файл артефактов роли\n"
+        foo.write_text(original, encoding="utf-8")
+        self.worktree_git("add", f"tasks/{self.TASK}/foo.py")
+        self.worktree_git("commit", "-q", "-m", "seed foo.py")
+
+        self.worktree_git("mv", f"tasks/{self.TASK}/foo.py",
+                          "orchestrator_new.py")
+
+        discarded = checkpoint._discard_out_of_mandate_changes(
+            self.wt, self.TASK)
+
+        self.assertFalse((self.wt / "orchestrator_new.py").exists(),
+                         "путь назначения переименования вне мандата "
+                         "обязан быть отброшен")
+        self.assertTrue(foo.is_file(),
+                        "путь-источник внутри tasks/<id>/ обязан быть "
+                        "восстановлен, а не потерян физически")
+        self.assertEqual(foo.read_text(encoding="utf-8"), original)
+        self.assertIn("orchestrator_new.py", discarded)
+        self.assertNotIn("foo.py", discarded,
+                         "источник восстановлен, а не отброшен — не должен "
+                         "числиться в журнальной строке отброшенных путей")
 
 
 class CommitAbnormalCheckpointTest(_WorktreeCheckpointTest):
