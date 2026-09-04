@@ -198,6 +198,63 @@ schema_version: 3
   зелёными после обеих правок (см. REVIEW «Проверено исполнением»
   следующей итерации).
 
+### Подтяжка origin/main (ANSWER-1, возврат из эскалации «конфликт подтяжки main»)
+
+За время review-цикла в `main` смержена 01M1NBWTSXEJB24PXR417YF1VA
+(мандат-ориентированный WIP-чекпоинт таймаута: `developer` — код-коммит
+по всем путям, кроме `tasks/<id>/`, остальные роли — откат WIP вне
+`tasks/<id>/` через `_discard_out_of_mandate_changes`) — смысловой
+конфликт с точечным фиксом R1-F1 этой задачи (`_commit_worktree_change`
+с параметром `task_id`, безусловный `reset` для всех трёх WIP-чекпоинтов
+независимо от роли). Эскалация; ANSWER-1 — принять реализацию main как
+базовую.
+
+Разрешение (`orchestrator/checkpoint.py`):
+- `commit_timeout_checkpoint` — версия main целиком (мандат-ветвление
+  `developer`/остальные + вызов `_commit_external_step_artifacts(...,
+  timeout=True)`).
+- Дубль `_commit_worktree_change(wt, message, task_id=None)` убран,
+  восстановлен `exclude: str | None = None` — три вызова
+  (`commit_timeout_checkpoint`, `commit_abnormal_checkpoint`,
+  `commit_pause_now_checkpoint`) приведены к сигнатуре main: только
+  `commit_timeout_checkpoint`/`developer` передаёт
+  `exclude=f"tasks/{task_id}"`, `commit_abnormal_checkpoint`/
+  `commit_pause_now_checkpoint` — без `exclude` (как в main; расширение
+  мандата на эти два пути — вне зоны этой задачи).
+- Конфликт-гвард автокоммита (`t = store.get_task(...)`,
+  `baseline_sha`/`conflicted`/`alerts.raise_alert`, AC-6/AC-7) и лок
+  удаления `acceptance_tests/` до фиксации (`deletable`, AC-13/AC-14/
+  AC-15) в `_commit_external_step_artifacts` — сохранены поверх версии
+  main без изменений по существу; docstring функции объединён (оба
+  добавления, «Конфликт-гвард ...» и «`timeout=True` ...»).
+- `orchestrator/store.py::migrate` — обе колонки-миграции
+  (`materialized_artifact_sha`, `spent_estimate_usd`), обе уже и в
+  `CREATE TABLE tasks` (R1-F2 не пострадал).
+- `tests/test_timeout_checkpoint.py` — версия main целиком (тесты
+  мандата `test_developer_mandate_excludes_task_dir_from_code_commit`
+  и т.д.) плюс регресс-тест
+  `RoleCwdMaterializationSurvivesTimeoutCheckpointTest` (не дублирует
+  main, проверяет материализацию `runner.role_cwd` конкретно). Тест
+  `test_dirty_task_dir_alone_is_not_committed_to_the_code_branch` из
+  фикса R1-F1 НЕ перенесён (условие ANSWER-1 — «если проходит»): на
+  реализации main файл, оставленный ТОЛЬКО в `tasks/<id>/` при
+  таймауте `developer`, больше не остаётся на диске нетронутым — он
+  попадает автокоммитом `_commit_external_step_artifacts(...,
+  timeout=True)` в артефактную ветку под пометкой «WIP после таймаута»
+  и стирается с диска (`shutil.rmtree`) — это корректное, более полное
+  поведение из 01M1NBWTSXEJB24PXR417YF1VA (AC-4/AC-5), не регресс;
+  прогон подтвердил `AssertionError: False is not true` на
+  `assertTrue((self.worktree_task_dir() / "wip.md").exists())`, тест
+  убран целиком, не подогнан под новый факт.
+- Карта кодовой базы перегенерирована (`scripts/codebase_map.py`) тем
+  же коммитом подтяжки.
+
+Проверено исполнением: `python3 -m unittest discover -s tests` —
+1469 тестов, OK (передний план, ~182 с); `python3 -m unittest discover
+-s tasks/01M1NKTF173WV5CPDZ1C3WW69K/acceptance_tests` — 19 тестов, OK;
+`python3 scripts/guard.py tasks/01M1NKTF173WV5CPDZ1C3WW69K/{PLAN,REVIEW,SPEC}.md`
+— без нарушений. Бюджет задачи поднят Оператором до $60 (ANSWER-1).
+
 ## Риски
 
 - Регенерация карты кодовой базы этим коммитом (`orchestrator/*.py`,
