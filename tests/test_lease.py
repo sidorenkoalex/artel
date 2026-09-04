@@ -314,6 +314,106 @@ class RunLockedTest(TmpRootTest):
                                       "всё равно обязан быть отпущен")
 
 
+class ForeignLiveLeaseTest(TmpRootTest):
+    """SPEC 01M1NEEYSP0QWPMXHG0BK591M7, требование 1: `foreign_live_lease`/
+    `warn_foreign_live` в изоляции — сквозной путь через `pause`/`release`
+    покрыт приёмочными тестами AC-1..AC-7."""
+
+    TASK = "T001"
+
+    def setUp(self):
+        super().setUp()
+        capture(catalog.cmd_init)
+        store.insert_task(store.db(), self.TASK, "Задача", "in_dev",
+                          "task/t001-zadacha", config.DEFAULT_TARGET, 25.0)
+
+    def insert_lease(self, session_id: str, pid: int, hostname: str,
+                     heartbeat_ts: str) -> None:
+        conn = store.db()
+        conn.execute(
+            "INSERT INTO leases (task_id, session_id, pid, hostname,"
+            " heartbeat_ts) VALUES (?,?,?,?,?)",
+            (self.TASK, session_id, pid, hostname, heartbeat_ts))
+        conn.commit()
+
+    def steps(self):
+        return store.task_steps(store.db(), self.TASK)
+
+    def test_no_lease_returns_none(self):
+        self.assertIsNone(
+            lease.foreign_live_lease(store.db(), self.TASK, "sess-current"))
+
+    def test_own_live_lease_returns_none(self):
+        self.insert_lease("sess-current", os.getpid(), socket.gethostname(),
+                          store.now())
+
+        self.assertIsNone(
+            lease.foreign_live_lease(store.db(), self.TASK, "sess-current"))
+
+    def test_foreign_live_lease_returns_the_row(self):
+        self.insert_lease("sess-holder", os.getpid(), socket.gethostname(),
+                          _ts_ago(5))
+
+        row = lease.foreign_live_lease(store.db(), self.TASK, "sess-current")
+
+        self.assertIsNotNone(row)
+        self.assertEqual(row["session_id"], "sess-holder")
+
+    def test_foreign_stale_heartbeat_returns_none(self):
+        stale_ts = _ts_ago(config.LEASE_STALE_AFTER_SEC + 1)
+        self.insert_lease("sess-holder", os.getpid(), socket.gethostname(),
+                          stale_ts)
+
+        self.assertIsNone(
+            lease.foreign_live_lease(store.db(), self.TASK, "sess-current"))
+
+    def test_foreign_dead_pid_returns_none(self):
+        self.insert_lease("sess-holder", _dead_pid(), socket.gethostname(),
+                          _ts_ago(5))
+
+        self.assertIsNone(
+            lease.foreign_live_lease(store.db(), self.TASK, "sess-current"))
+
+    def test_warn_foreign_live_prints_holder_and_heartbeat_age(self):
+        self.insert_lease("sess-holder", os.getpid(), socket.gethostname(),
+                          _ts_ago(5))
+
+        output = capture(lease.warn_foreign_live, store.db(), self.TASK,
+                         "sess-current")
+
+        self.assertIn("sess-holder", output)
+        self.assertRegex(output, r"\d+\s*сек")
+
+    def test_warn_foreign_live_journals_with_holder_session_id(self):
+        self.insert_lease("sess-holder", os.getpid(), socket.gethostname(),
+                          _ts_ago(5))
+
+        capture(lease.warn_foreign_live, store.db(), self.TASK,
+               "sess-current")
+
+        new = self.steps()
+        self.assertEqual(len(new), 1)
+        self.assertEqual(new[0]["session_id"], "sess-holder")
+        self.assertIn("sess-holder", new[0]["detail"])
+
+    def test_warn_own_live_lease_prints_nothing_and_does_not_journal(self):
+        self.insert_lease("sess-current", os.getpid(), socket.gethostname(),
+                          store.now())
+
+        output = capture(lease.warn_foreign_live, store.db(), self.TASK,
+                         "sess-current")
+
+        self.assertEqual(output, "")
+        self.assertEqual(self.steps(), [])
+
+    def test_warn_no_lease_prints_nothing_and_does_not_journal(self):
+        output = capture(lease.warn_foreign_live, store.db(), self.TASK,
+                         "sess-current")
+
+        self.assertEqual(output, "")
+        self.assertEqual(self.steps(), [])
+
+
 class ConcurrentAcquireTest(TmpRootTest):
     """Ревью T044 (итерация 1), Замечание 1: read-then-write в `acquire()`
     (`lease_row` -> `insert_lease`/`update_lease`) должен быть атомарным

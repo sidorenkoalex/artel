@@ -1,5 +1,5 @@
 ---
-built_at_sha: 5321d2325f31efb15c16afff0e813f13a539285a
+built_at_sha: 8c543f11a717609b89c245987210e2bc3aa7d797
 ---
 
 # Codebase-map пульта
@@ -516,13 +516,15 @@ built_at_sha: 5321d2325f31efb15c16afff0e813f13a539285a
 
 **Публичные функции:**
 - `acquire`
+- `foreign_live_lease`
 - `release`
 - `release_any`
 - `run_locked`
+- `warn_foreign_live`
 
 **Импортирует:** `orchestrator/config.py`, `orchestrator/liveness.py`, `orchestrator/session.py`, `orchestrator/store.py`
 
-**Импортируется:** `orchestrator/amend.py`, `orchestrator/answer.py`, `orchestrator/auto.py`, `orchestrator/budget.py`, `orchestrator/cleanup.py`, `orchestrator/fsm.py`, `orchestrator/fsm_merge_gate.py`, `orchestrator/runner.py`, `orchestrator/workspace.py`, `tests/test_lease.py`, `tests/test_session.py`
+**Импортируется:** `orchestrator/amend.py`, `orchestrator/answer.py`, `orchestrator/auto.py`, `orchestrator/budget.py`, `orchestrator/cleanup.py`, `orchestrator/fsm.py`, `orchestrator/fsm_merge_gate.py`, `orchestrator/pause.py`, `orchestrator/release.py`, `orchestrator/runner.py`, `orchestrator/workspace.py`, `tests/test_lease.py`, `tests/test_session.py`
 
 ## orchestrator/liveness.py
 
@@ -569,7 +571,7 @@ built_at_sha: 5321d2325f31efb15c16afff0e813f13a539285a
 - `cmd_resume`
 - `is_paused`
 
-**Импортирует:** `orchestrator/agent_log.py`, `orchestrator/checkpoint.py`, `orchestrator/liveness.py`, `orchestrator/runner.py`, `orchestrator/spend.py`, `orchestrator/store.py`
+**Импортирует:** `orchestrator/agent_log.py`, `orchestrator/checkpoint.py`, `orchestrator/lease.py`, `orchestrator/liveness.py`, `orchestrator/runner.py`, `orchestrator/session.py`, `orchestrator/spend.py`, `orchestrator/store.py`
 
 **Импортируется:** `orchestrator/artel.py`, `orchestrator/auto.py`, `orchestrator/runner.py`, `tests/test_auto_cycle.py`, `tests/test_pause.py`, `tests/test_pause_now.py`
 
@@ -617,7 +619,7 @@ built_at_sha: 5321d2325f31efb15c16afff0e813f13a539285a
 **Публичные функции:**
 - `cmd_release`
 
-**Импортирует:** `orchestrator/liveness.py`, `orchestrator/store.py`
+**Импортирует:** `orchestrator/lease.py`, `orchestrator/liveness.py`, `orchestrator/session.py`, `orchestrator/store.py`
 
 **Импортируется:** `orchestrator/artel.py`, `tests/test_release.py`
 
@@ -728,7 +730,7 @@ built_at_sha: 5321d2325f31efb15c16afff0e813f13a539285a
 
 **Импортирует:** —
 
-**Импортируется:** `orchestrator/lease.py`, `orchestrator/store.py`, `tests/test_session.py`
+**Импортируется:** `orchestrator/lease.py`, `orchestrator/pause.py`, `orchestrator/release.py`, `orchestrator/store.py`, `tests/test_session.py`
 
 ## orchestrator/snapshot.py
 

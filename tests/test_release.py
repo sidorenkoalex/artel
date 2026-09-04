@@ -7,6 +7,8 @@
 строки и её удалением, тем же приёмом, что `tests/test_lease.py`/
 `tests/test_merge_lock.py` уже применили к своим модулям.
 """
+import os
+import socket
 import sys
 import unittest
 from pathlib import Path
@@ -116,6 +118,35 @@ class ReleaseTest(TmpRootTest):
 
         self.assertIsNotNone(self.row("T002"),
                              "release чужой задачи снял lease T002")
+
+    # ------------------------------------- предупреждение о чужом lease
+    # (SPEC 01M1NEEYSP0QWPMXHG0BK591M7) — сквозной путь AC-1..AC-7 уже
+    # покрыт приёмочными тестами задачи; здесь — что вызов действительно
+    # подключён к `lease.warn_foreign_live` (не дублирует его логику).
+    # Живая (не чужой-host, как HOLDER_HOST выше) лизинг-строка — иначе
+    # `foreign_live_lease` сочла бы pid непроверяемым и предупреждение не
+    # появилось бы вовсе.
+
+    def test_release_warns_on_foreign_live_lease(self):
+        self.insert_lease(self.TASK, "sess-live-holder", os.getpid(),
+                          socket.gethostname(), _ts_ago(5))
+
+        with mock.patch.dict(os.environ, {"ARTEL_SESSION_ID": "sess-current"}):
+            output = capture(release.cmd_release, self.TASK)
+
+        self.assertIn("sess-live-holder", output)
+
+    def test_release_journals_the_warning_as_an_extra_entry(self):
+        self.insert_lease(self.TASK, "sess-live-holder", os.getpid(),
+                          socket.gethostname(), _ts_ago(5))
+
+        with mock.patch.dict(os.environ, {"ARTEL_SESSION_ID": "sess-current"}):
+            capture(release.cmd_release, self.TASK)
+
+        steps = self.journal()
+        self.assertEqual(len(steps), 2, steps)
+        self.assertTrue(any("sess-live-holder" in s["detail"] for s in steps
+                            if s["detail"]))
 
     def test_row_replaced_between_read_and_delete_is_not_removed(self):
         """Гонка: строка сменила держателя между `lease_row` и удалением

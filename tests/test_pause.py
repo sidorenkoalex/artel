@@ -7,14 +7,17 @@
 задачи, тем же приёмом, что `tests/test_release.py` уже применил к
 своему модулю.
 """
+import os
+import socket
 import sys
 import unittest
 from pathlib import Path
+from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from orchestrator import catalog, config, pause, store  # noqa: E402
-from tests.sandbox import TmpRootTest, capture  # noqa: E402
+from tests.sandbox import TmpRootTest, _ts_ago, capture  # noqa: E402
 
 
 class PauseTest(TmpRootTest):
@@ -88,6 +91,41 @@ class PauseTest(TmpRootTest):
 
         self.assertFalse(pause.is_paused(self.row("T002")),
                          "pause одной задачи выставил пометку другой")
+
+    # ------------------------------------- предупреждение о чужом lease
+    # (SPEC 01M1NEEYSP0QWPMXHG0BK591M7) — сквозной путь AC-1..AC-7 уже
+    # покрыт приёмочными тестами задачи; здесь — что вызов действительно
+    # подключён к `lease.warn_foreign_live` (не дублирует его логику).
+
+    def insert_lease(self, session_id: str, pid: int, hostname: str,
+                     heartbeat_ts: str, task_id: str = None) -> None:
+        conn = store.db()
+        conn.execute(
+            "INSERT INTO leases (task_id, session_id, pid, hostname,"
+            " heartbeat_ts) VALUES (?,?,?,?,?)",
+            (task_id or self.TASK, session_id, pid, hostname, heartbeat_ts))
+        conn.commit()
+
+    def test_pause_warns_on_foreign_live_lease(self):
+        self.insert_lease("sess-holder", os.getpid(), socket.gethostname(),
+                          _ts_ago(5))
+
+        with mock.patch.dict(os.environ, {"ARTEL_SESSION_ID": "sess-current"}):
+            output = capture(pause.cmd_pause, self.TASK)
+
+        self.assertIn("sess-holder", output)
+
+    def test_pause_journals_the_warning_as_an_extra_entry(self):
+        self.insert_lease("sess-holder", os.getpid(), socket.gethostname(),
+                          _ts_ago(5))
+
+        with mock.patch.dict(os.environ, {"ARTEL_SESSION_ID": "sess-current"}):
+            capture(pause.cmd_pause, self.TASK)
+
+        steps = self.journal()
+        self.assertEqual(len(steps), 2, steps)
+        self.assertTrue(any("sess-holder" in s["detail"] for s in steps
+                            if s["detail"]))
 
     # ----------------------------------------------------------- cmd_resume
 

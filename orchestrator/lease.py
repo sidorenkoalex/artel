@@ -125,6 +125,54 @@ def release_any(conn, task_id: str, actor: str, action: str) -> str | None:
     return detail
 
 
+def foreign_live_lease(conn, task_id: str, session_id: str):
+    """Строка `leases`, если она принадлежит ДРУГОЙ сессии и «жива» (SPEC
+    01M1NEEYSP0QWPMXHG0BK591M7, требование 1): heartbeat не старше
+    `config.LEASE_STALE_AFTER_SEC` И pid адресуем — иначе `None` (lease
+    нет, lease свой, либо чужой мёртв/протух).
+
+    Адресуемость pid проверяется БЕЗ различения host — в отличие от
+    `catalog._lease_holder_suffix`/`acquire` выше (там неадресуемый pid
+    ЧУЖОГО host трактуется как «жив», потому что неопределённость там
+    безопаснее в сторону «не перехватывать/не показывать мёртвым чужой
+    активный lease»). Здесь наоборот: предупреждение обязано указывать на
+    РЕАЛЬНО проверяемый отсюда процесс, поэтому чужой host с
+    непроверяемым pid — не «адресуем», предупреждения не будет.
+    """
+    row = store.lease_row(conn, task_id)
+    if row is None or row["session_id"] == session_id:
+        return None
+    age = liveness._age_seconds(row["heartbeat_ts"])
+    if age > config.LEASE_STALE_AFTER_SEC:
+        return None
+    if not liveness._pid_alive(row["pid"]):
+        return None
+    return row
+
+
+def warn_foreign_live(conn, task_id: str, session_id: str) -> None:
+    """Предупреждение о чужом живом lease перед выполнением `pause`/
+    `release` (SPEC 01M1NEEYSP0QWPMXHG0BK591M7, требования 1, 3):
+    печатает держателя и числовой возраст heartbeat ДО тела вызывающей
+    команды, дублирует тем же событием журнала — с `session_id`
+    ДЕРЖАТЕЛЯ (требование 3 явно называет его, не текущую сессию). Не
+    блокирует и не запрашивает подтверждения — вызывающая команда
+    выполняется дальше как обычно (требование 1).
+    """
+    row = foreign_live_lease(conn, task_id, session_id)
+    if row is None:
+        return
+    age = int(liveness._age_seconds(row["heartbeat_ts"]))
+    detail = (f"session_id={row['session_id']}, pid={row['pid']}, "
+             f"hostname={row['hostname']}, heartbeat {age} сек назад")
+    print(f"[{task_id}] ВНИМАНИЕ: задачу прямо сейчас ведёт другая сессия "
+         f"({detail}) — вмешательство продолжится, но она может быть "
+         f"активно работать над задачей")
+    store.journal(conn, task_id, "operator",
+                 "чужой живой lease: предупреждение", detail,
+                 session_id=row["session_id"])
+
+
 def run_locked(conn, task_id: str, session_id: str | None, body,
                *, on_refusal: str = "exit"):
     """Общая точка обвязки мутирующих команд задачи (SPEC T057, требование
