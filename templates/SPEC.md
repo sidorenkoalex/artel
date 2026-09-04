@@ -3,7 +3,12 @@ task: TASK_ID
 type: spec
 author_role: analyst
 status: draft        # draft | ready | approved
-schema_version: 3    # версия формата артефакта, см. scripts/guard.py
+schema_version: 4    # версия формата артефакта, см. scripts/guard.py
+# Зоны задачи (01M1NKVPD2A79PQ6K0JVV1B2Q1) — список путей/масок (файлы/
+# каталоги), которые задача трогает: заполни из ТЗ, через запятую. guard
+# требует поле для schema_version >= 4. Общие зоны (пути, которые трогают
+# все задачи — orchestrator/config.py::COMMON_ZONES) не в счёт.
+# zones: orchestrator/store.py, orchestrator/config.py
 # Потолок задачи, $. Раскомментируй, если класс задачи виден сразу:
 # мелкий фикс ~15, типовая задача ~25, тестовый слой или широкий
 # рефакторинг ~50. Без поля — дефолт оркестратора.
