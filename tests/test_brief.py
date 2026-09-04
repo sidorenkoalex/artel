@@ -314,5 +314,52 @@ class AnswerComponentTest(BriefUnitTest):
         self.assertIn("МАРКЕР-ANSWER", text)
 
 
+class SkillsTextTest(BriefUnitTest):
+    """R1-F1 (REVIEW.md итерация 1, minor): `skills_text` журналирует
+    хэши скилов ОДНИМ проходом ПОСЛЕ подтверждения, что все скилы роли
+    прочитаны — отказ чтения скила N не должен оставлять в журнале
+    запись про скилы <N для шага, который так и не стартовал."""
+
+    def setUp(self):
+        super().setUp()
+        (self.root / "skills").mkdir(parents=True)
+
+    def test_journals_all_skills_after_all_succeed(self):
+        (self.root / "skills" / "a.md").write_text(
+            "# Скил A\n", encoding="utf-8")
+        (self.root / "skills" / "b.md").write_text(
+            "# Скил B\n", encoding="utf-8")
+        conn = store.db()
+
+        text, reason = brief.skills_text(conn, "T001", "developer",
+                                         ["a", "b"])
+
+        self.assertEqual(reason, "")
+        self.assertIn("Скил A", text)
+        self.assertIn("Скил B", text)
+        details = self.journal_details("developer")
+        self.assertEqual(len(details), 2)
+        self.assertTrue(any("skills/a.md" in d for d in details))
+        self.assertTrue(any("skills/b.md" in d for d in details))
+
+    def test_no_partial_journal_when_a_later_skill_fails(self):
+        (self.root / "skills" / "a.md").write_text(
+            "# Скил A\n", encoding="utf-8")
+        # skills/b.md намеренно отсутствует на диске — имитирует отказ
+        # чтения второго скила роли.
+        conn = store.db()
+
+        text, reason = brief.skills_text(conn, "T001", "developer",
+                                         ["a", "b"])
+
+        self.assertIsNone(text)
+        self.assertIn("skills/b.md", reason)
+        details = self.journal_details("developer")
+        self.assertEqual(
+            details, [],
+            "отказ чтения второго скила не должен оставлять в журнале "
+            "запись про первый — шаг так и не стартовал")
+
+
 if __name__ == "__main__":
     unittest.main()

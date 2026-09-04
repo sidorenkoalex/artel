@@ -1,5 +1,5 @@
 ---
-built_at_sha: 5291d9c988480f51d15a8cf63e38db9e1ea4cc5f
+built_at_sha: f9637c4f69e6b5833188dfc74ba83f1542360d5f
 ---
 
 # Codebase-map пульта
@@ -151,6 +151,7 @@ built_at_sha: 5291d9c988480f51d15a8cf63e38db9e1ea4cc5f
 - `fresh_map_text`
 - `mark_unclosed_parts`
 - `new_run_id`
+- `skills_text`
 - `test_author_answer_component`
 - `wrap_boundary`
 
