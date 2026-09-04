@@ -18,10 +18,11 @@ import subprocess
 import sys
 import unittest
 from pathlib import Path
+from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from orchestrator import checkpoint, config, gitcmd, store  # noqa: E402
+from orchestrator import artifact_branch, checkpoint, config, gitcmd, store  # noqa: E402
 from tests.sandbox import RealGitSandbox  # noqa: E402
 
 TARGET = "extproj"
@@ -230,6 +231,145 @@ class CommitExternalStepArtifactsTest(RealGitSandbox):
             (self.TASK, "автокоммит артефактов шага (артефактная ветка)"))]
         self.assertTrue(details)
         self.assertIn(self.TASK, details[-1])
+
+
+GITIGNORE_TEXT = "__pycache__/\n*.pyc\n*.log\ndropme/\n.artel/\n"
+
+
+class CommitExternalStepArtifactsGitignoreFilterTest(RealGitSandbox):
+    """SPEC 01M1KVG3KSCY47HWXWF5HM0E76, требования 1-2: файлы, игнорируемые
+    `.gitignore` пульта (`config.ROOT`), не участвуют в автокоммите — ни
+    на добавление, ни на удаление уже зафиксированной ранее записи.
+    """
+
+    def setUp(self):
+        super().setUp()
+        (self.root / ".gitignore").write_text(GITIGNORE_TEXT, encoding="utf-8")
+        self.git("add", ".gitignore")
+        self.git("commit", "-q", "-m", "gitignore")
+
+        self.TASK = "01EXTTASKGITIGNOREUT1"
+        conn = store.db()
+        store.insert_task(conn, self.TASK, "Задача внешнего target",
+                          "in_dev", f"task/{self.TASK.lower()}-x", TARGET,
+                          config.DEFAULT_BUDGET_USD)
+        self.workspace_root = config.PROJECTS / TARGET / "workspace"
+        self.task_dir = self.workspace_root / "tasks" / self.TASK
+        self.task_dir.mkdir(parents=True)
+
+    def write(self, rel: str, content) -> None:
+        path = self.task_dir / rel
+        path.parent.mkdir(parents=True, exist_ok=True)
+        if isinstance(content, bytes):
+            path.write_bytes(content)
+        else:
+            path.write_text(content, encoding="utf-8")
+
+    def artifact_branch_files(self) -> list[str]:
+        branch = f"artifact/{self.TASK.lower()}"
+        return gitcmd.ls_tree_files(branch, f"tasks/{self.TASK}") or []
+
+    def artifact_branch_text(self, rel: str):
+        branch = f"artifact/{self.TASK.lower()}"
+        text, _ = gitcmd.show(branch, rel)
+        return text
+
+    def test_pyc_from_workdir_is_not_committed_normal_file_is(self):
+        """Ловит мутацию: `_commit_external_step_artifacts` перестаёт
+        прогонять `raw_files` через `check_ignore` перед формированием
+        коммита (регрессия к старому поведению — обход `rglob("*")` без
+        фильтра) — `.pyc` из `__pycache__/` попал бы в артефактную ветку
+        наравне с `PLAN.md` (AC-2).
+        """
+        self.write("PLAN.md", "план")
+        self.write("acceptance_tests/__pycache__/x.cpython-311.pyc",
+                   bytes(range(8)))
+
+        checkpoint.commit_step_artifacts(store.db(), self.TASK, "developer")
+
+        files = self.artifact_branch_files()
+        self.assertIn(f"tasks/{self.TASK}/PLAN.md", files)
+        self.assertNotIn(
+            f"tasks/{self.TASK}/acceptance_tests/__pycache__/x.cpython-311.pyc",
+            files)
+
+    def test_directory_rule_excludes_a_file_extension_lists_would_miss(self):
+        """Ловит мутацию: фильтр в `checkpoint.py` реализован как самодельный
+        список суффиксов (`.pyc`, `.log`, ...) вместо настоящего
+        `check_ignore` — `dropme/notes.txt` не матчится ни одним суффиксом
+        и продолжил бы коммититься (SPEC, требование 1, критерий = git).
+        """
+        self.write("PLAN.md", "план")
+        self.write("dropme/notes.txt", "мусор")
+
+        checkpoint.commit_step_artifacts(store.db(), self.TASK, "developer")
+
+        files = self.artifact_branch_files()
+        self.assertIn(f"tasks/{self.TASK}/PLAN.md", files)
+        self.assertNotIn(f"tasks/{self.TASK}/dropme/notes.txt", files)
+
+    def test_preexisting_ignored_file_is_not_deleted_when_absent_from_workdir(self):
+        """Ловит мутацию: `existing` (пути уже в артефактной ветке) не
+        фильтруется через `check_ignore` перед вычислением `existing -
+        files` — игнорируемый `.pyc`, зафиксированный ранее, попал бы в
+        список на удаление просто потому, что отсутствует в текущем
+        рабочем каталоге (SPEC, требование 2).
+        """
+        pyc_rel = "acceptance_tests/__pycache__/x.pyc"
+        sha = artifact_branch.commit_files(
+            self.TASK,
+            {f"tasks/{self.TASK}/{pyc_rel}": b"OLD",
+             f"tasks/{self.TASK}/PLAN.md": "план\n"},
+            f"{self.TASK}: артефакты шага developer (автокоммит оркестратора)")
+        self.assertTrue(sha)
+        self.write("REVIEW.md", "ревью")
+
+        checkpoint.commit_step_artifacts(store.db(), self.TASK, "developer")
+
+        files = self.artifact_branch_files()
+        self.assertIn(f"tasks/{self.TASK}/{pyc_rel}", files,
+                      "игнорируемый файл не должен исчезать из-за своего "
+                      "отсутствия в рабочем каталоге")
+        self.assertIn(f"tasks/{self.TASK}/REVIEW.md", files)
+
+    def test_preexisting_ignored_file_is_not_updated_when_present_in_workdir(self):
+        """Ловит мутацию: `raw_files` (пути с диска) фильтруется через
+        `check_ignore`, но `existing` — нет (асимметричный фикс) — новое
+        содержимое `.pyc`, присутствующего в рабочем каталоге, перезаписало
+        бы зафиксированную запись в артефактной ветке вместо того, чтобы
+        остаться нетронутой (SPEC, требование 2, симметрия в обе стороны).
+        """
+        pyc_rel = "acceptance_tests/__pycache__/x.pyc"
+        sha = artifact_branch.commit_files(
+            self.TASK,
+            {f"tasks/{self.TASK}/{pyc_rel}": b"OLD",
+             f"tasks/{self.TASK}/PLAN.md": "план\n"},
+            f"{self.TASK}: артефакты шага developer (автокоммит оркестратора)")
+        self.assertTrue(sha)
+        self.write(pyc_rel, b"NEW")
+        self.write("REVIEW.md", "ревью")
+
+        checkpoint.commit_step_artifacts(store.db(), self.TASK, "developer")
+
+        text = self.artifact_branch_text(f"tasks/{self.TASK}/{pyc_rel}")
+        self.assertEqual(text, "OLD",
+                         "присутствие игнорируемого файла в рабочем "
+                         "каталоге не должно порождать запись/перезапись")
+
+    def test_check_ignore_failure_degrades_silently_without_committing(self):
+        """Ловит мутацию: на `check_ignore` вернувшем `None` (git не ответил)
+        код продолжает коммитить `raw_files` без фильтрации вместо fail-
+        closed отказа — `PLAN.md` попал бы в артефактную ветку вслепую,
+        нарушая тот же принцип, что уже несут остальные git-первичные
+        операции `checkpoint.py` (SPEC, требование 6).
+        """
+        self.write("PLAN.md", "план")
+        with mock.patch.object(gitcmd, "check_ignore", return_value=None):
+            detail = checkpoint.commit_step_artifacts(store.db(), self.TASK,
+                                                       "developer")
+
+        self.assertEqual(detail, "")
+        self.assertEqual(self.artifact_branch_files(), [])
 
 
 if __name__ == "__main__":
