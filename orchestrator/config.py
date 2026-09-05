@@ -420,6 +420,16 @@ TOKEN_RATE_DIVERGENCE_ALERT_THRESHOLD = 0.5
 # `enforce_budget`, требование 5) вместо нуля.
 STEP_COST_ESTIMATE_USD = 5.0
 
+# Ориентир числа вызовов инструментов роли `developer` за шаг для оценки
+# «стоимость карты за шаг developer» (`report.map_growth_cost_estimate`,
+# SPEC 01M1RGQV4DG2FX1B90W4EEETTR, требование 1, AC-3) — используется,
+# когда логов `developer` в выборке последних 10 задач нет вовсе (retention
+# уже вычистил файлы, либо ни одна из них ещё не дошла до этого шага).
+# Значение — тот же порядок величины, что типичный шаг `developer` по
+# наблюдению за живыми логами; не измеряется точно, поэтому оценка на этой
+# константе всегда явно помечена словом «оценка» в выводе `report`.
+MAP_GROWTH_CALLS_ESTIMATE = 40
+
 # Статусы REVIEW.md, которые FSM отрабатывает как вердикт ревьювера.
 REVIEW_VERDICTS = ("approved", "changes_requested", "escalate")
 
