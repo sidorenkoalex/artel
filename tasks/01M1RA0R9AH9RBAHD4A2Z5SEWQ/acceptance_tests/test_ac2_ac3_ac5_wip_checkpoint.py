@@ -165,7 +165,13 @@ class NonMapWipCheckpointTest(PullCleanupSandbox):
         self.assertEqual(
             self.state(), "review",
             "после чекпоинта подтяжка main обязана состояться штатно")
-        acc_run.assert_called_once_with(self.wt_path / "tasks" / self.TASK)
+        # Правка Оператора 06.09 (amend-tests): после hotfix регрессии №14
+        # (ADR-0013) контракт — `acceptance.run(tdir, code_root=<worktree>)`;
+        # проверяем и каталог планки, и код ветки, как
+        # tests/test_branch_freshness_gate.py.
+        acc_run.assert_called_once()
+        self.assertEqual(acc_run.call_args.args[0], self.wt_path / "tasks" / self.TASK)
+        self.assertEqual(acc_run.call_args.kwargs.get("code_root"), self.wt_path)
 
 
 if __name__ == "__main__":

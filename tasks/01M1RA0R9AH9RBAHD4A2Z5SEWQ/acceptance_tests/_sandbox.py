@@ -158,8 +158,38 @@ class PullCleanupSandbox(unittest.TestCase):
         (self.tdir / "PLAN.md").write_text(
             PLAN_READY.format(task=self.TASK), encoding="utf-8")
 
+    def write_acceptance_plank(self) -> None:
+        """Правка планки Оператором 06.09 (amend-tests): SPEC.md со
+        `schema_version: 2` без `skip_tests` + непустой `acceptance_tests/`
+        обязаны лежать на диске `self.tdir` ДО перехода — в лёгкой песочнице
+        `disk_backed_show`/`disk_backed_ls_tree_files` читают «ветку» с
+        диска, и без планки `_pull_main_or_escalate` честно отказывает
+        («планка не найдена в источнике», SPEC 01M1R9YEK08XEQWBFX0929WFVJ).
+        Тот же приём, что `tests/test_fsm_map_conflict_autoresolve.py::
+        write_acceptance_plank` и `tests/test_branch_freshness_gate.py`."""
+        self.tdir.mkdir(parents=True, exist_ok=True)
+        (self.tdir / "SPEC.md").write_text(
+            "---\n"
+            f"task: {self.TASK}\n"
+            "type: spec\n"
+            "author_role: analyst\n"
+            "status: ready\n"
+            "schema_version: 2\n"
+            "---\n\n"
+            "# SPEC: планка\n\n"
+            "## Критерии приёмки\n\nAC-1. ...\n",
+            encoding="utf-8")
+        tests_dir = self.tdir / "acceptance_tests"
+        tests_dir.mkdir(parents=True, exist_ok=True)
+        (tests_dir / "test_stub.py").write_text(
+            "import unittest\n\n\n"
+            "class StubTest(unittest.TestCase):\n\n"
+            "    def test_stub(self):\n        pass\n",
+            encoding="utf-8")
+
     def advance_from_in_dev(self) -> str:
         self.write_plan_ready()
+        self.write_acceptance_plank()
         self.set_state("in_dev")
         return self.capture(fsm.cmd_advance, self.TASK)
 
