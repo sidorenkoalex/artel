@@ -1,5 +1,5 @@
 ---
-built_at_sha: 3bb9211d8f41ccf01feb80f632aa662dfc3583a4
+built_at_sha: 6408d4420b4edcbbab9f4da6580c4dcbf9e7381c
 ---
 
 # Codebase-map пульта
@@ -908,6 +908,7 @@ built_at_sha: 3bb9211d8f41ccf01feb80f632aa662dfc3583a4
 
 **Публичные функции:**
 - `acceptance_traceability_errors`
+- `basic_frontmatter_errors`
 - `check`
 - `check_content`
 - `count_test_methods`
@@ -915,6 +916,7 @@ built_at_sha: 3bb9211d8f41ccf01feb80f632aa662dfc3583a4
 - `has_redness_marker`
 - `id_format_patterns`
 - `id_format_sample_errors`
+- `is_draft_lenient`
 - `main`
 - `module_docstring`
 - `redness_marker_errors_from_files`
