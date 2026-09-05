@@ -131,7 +131,8 @@ class ZoneLockTest(TmpRootTest):
         common = ()
         with mock.patch.object(config, "COMMON_ZONES", common, create=True):
             self.set_own_zones("src/")
-            self.seed_other("in_dev", "src/a.py")
+            occupier = self.seed_other("in_dev", "src/a.py")
+            self._mark_already_started(occupier)
 
             conflict = zone_lock.blocking_conflict(
                 store.db(), self.TASK, self.get_task())
@@ -164,7 +165,8 @@ class ZoneLockTest(TmpRootTest):
         common = ("src/common.py",)
         with mock.patch.object(config, "COMMON_ZONES", common, create=True):
             self.set_own_zones("src/")
-            self.seed_other("in_dev", "src/")
+            occupier = self.seed_other("in_dev", "src/")
+            self._mark_already_started(occupier)
 
             conflict = zone_lock.blocking_conflict(
                 store.db(), self.TASK, self.get_task())
@@ -191,6 +193,7 @@ class ZoneLockTest(TmpRootTest):
                 self._clear_other_tasks()
                 occupier = f"T9{state[:3]}"
                 self.seed_other(state, "a/b", task_id=occupier)
+                self._mark_already_started(occupier)
 
                 conflict = zone_lock.blocking_conflict(
                     store.db(), self.TASK, self.get_task())
@@ -216,12 +219,21 @@ class ZoneLockTest(TmpRootTest):
     # ------------------------------------------------------------ first-step
 
     def test_first_step_boundary_uses_current_in_dev_visit(self):
-        """Ловит мутацию: маркер `agent run started`, записанный ДО
-        перехода в текущий визит `in_dev` (например, в предыдущем визите
-        того же состояния), не освобождает от проверки — граница считается
-        от последней записи `"state -> in_dev"`."""
+        """Ловит мутацию (SPEC 01M1REVJ8AJDKAMK5VTKES5J6D, требование 2,
+        AC-3): маркер `agent run started` из ПРЕДЫДУЩЕГО визита `in_dev`
+        того же непрерывного пребывания перестаёт учитываться, если
+        граница вычисляется от последней записи `"state -> in_dev"`
+        (старое поведение частей 1-3, факт «б» SPEC «Контекст») — задача
+        после возврата `review -> in_dev` снова видит соседа конфликтом,
+        хотя её код уже стартовал раньше. Верная граница —
+        `_stay_since_id` (последняя `"state -> tests_writing"`), которую
+        промежуточный визит `in_dev` не сдвигает: результат — `None`, не
+        конфликт."""
         self.set_own_zones("a/b")
         self.seed_other("in_dev", "a/b")
+        store.journal(store.db(), self.TASK, "system",
+                     "state -> tests_writing", "")
+        store.journal(store.db(), self.TASK, "system", "state -> in_dev", "")
         store.journal(store.db(), self.TASK, "developer",
                      "agent run started", "визит #1")
         store.set_state(store.db(), self.TASK, "review", "system",
@@ -232,7 +244,7 @@ class ZoneLockTest(TmpRootTest):
         conflict = zone_lock.blocking_conflict(
             store.db(), self.TASK, self.get_task())
 
-        self.assertIsNotNone(conflict)
+        self.assertIsNone(conflict)
 
     def test_agent_started_after_in_dev_boundary_lifts_conflict(self):
         """Ловит мутацию: запись `agent run started` ПОСЛЕ границы визита
@@ -262,13 +274,16 @@ class ZoneLockTest(TmpRootTest):
             store.db(), self.TASK, self.get_task()))
 
     def test_release_before_boundary_does_not_lift_a_later_visit(self):
-        """Ловит мутацию: снятие ожидания в ПРЕДЫДУЩЕМ визите `in_dev`
-        переносится на новый визит — Оператор снимает риск конкретно для
-        того конфликта, что видел, не навсегда."""
+        """Ловит мутацию: снятие ожидания в ПРЕДЫДУЩЕМ пребывании
+        переносится на новое (следующая запись `"state -> tests_writing"`,
+        `_stay_since_id`) — Оператор снимает риск конкретно для того
+        конфликта, что видел, не навсегда."""
         self.set_own_zones("a/b")
-        self.seed_other("in_dev", "a/b")
+        occupier = self.seed_other("in_dev", "a/b")
+        self._mark_already_started(occupier)
         zone_lock.cmd_zone_release(self.TASK)
-        store.journal(store.db(), self.TASK, "system", "state -> in_dev", "")
+        store.journal(store.db(), self.TASK, "system",
+                     "state -> tests_writing", "")
 
         conflict = zone_lock.blocking_conflict(
             store.db(), self.TASK, self.get_task())
@@ -305,7 +320,8 @@ class ZoneLockTest(TmpRootTest):
         """Ловит мутацию: `refusal` возвращает общий текст «зона занята»
         без подстановки пути/id/состояния занявшей задачи (требование 2)."""
         self.set_own_zones("a/b")
-        self.seed_other("review", "a/b")
+        occupier = self.seed_other("review", "a/b")
+        self._mark_already_started(occupier)
 
         text = zone_lock.refusal(store.db(), self.TASK, self.get_task())
 
