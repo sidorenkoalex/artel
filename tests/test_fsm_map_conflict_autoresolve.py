@@ -238,6 +238,12 @@ class MapConflictAutoResolveTest(unittest.TestCase):
     # ------------------------------------------- авторазрешение — успех
 
     def test_map_only_conflict_autoresolves_without_escalation(self):
+        """Ловит мутацию (SPEC 01M1RNZ6V7TTTTYAHBMF8JBQQS, REVIEW.md
+        итерация 1, R1-F2): возврат материализации планки к временному
+        каталогу (регрессия №14) или к `cwd=config.ROOT` — `plank_root`/
+        `cwd`, сверяемые ниже с `self.wt_path`, перестали бы совпадать,
+        и `assertEqual` по ним это поймает.
+        """
         self.write_acceptance_plank()
         calls, side_effect = self.make_in_repo_side_effect([self.MAP_REL])
         with mock.patch.object(gitcmd, "commits_behind", return_value=3), \
@@ -260,11 +266,15 @@ class MapConflictAutoResolveTest(unittest.TestCase):
                          "worktree задачи, не главной копии пульта")
         acc_run.assert_called_once()
         plank_root = acc_run.call_args[0][0]
-        self.assertNotEqual(
+        self.assertEqual(
             plank_root, self.wt_path / "tasks" / self.TASK,
-            "SPEC 01M1R9YEK08XEQWBFX0929WFVJ AC-1/AC-2: источник планки — "
-            "материализация из артефактной ветки, не worktree кодовой "
-            "ветки")
+            "SPEC 01M1RNZ6V7TTTTYAHBMF8JBQQS AC-1: планка обязана "
+            "материализоваться в рабочий каталог кода задачи, не во "
+            "временный каталог")
+        self.assertEqual(
+            acc_run.call_args.kwargs.get("code_root"), self.wt_path,
+            "SPEC 01M1RNZ6V7TTTTYAHBMF8JBQQS AC-2: cwd прогона обязан "
+            "быть равен рабочему каталогу кода задачи")
 
         commit_calls = [c for c in calls if c[:1] == ("commit",)]
         self.assertEqual(len(commit_calls), 1,
