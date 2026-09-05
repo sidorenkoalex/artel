@@ -2,8 +2,8 @@
 task: 01M1RDCAFENSW2VVAPECHCVGMM
 type: review
 author_role: reviewer
-status: changes_requested
-iteration: 1
+status: approved
+iteration: 2
 schema_version: 4
 ---
 
@@ -15,36 +15,81 @@ schema_version: 4
 |---|---|---|
 | 1 (манифест `orchestrator/stack.py`) | OK | `REQUIRED_PYTHON=(3,11)`, `REQUIRED_TOOLS` (git/gh/claude, минимум+команда), `THIRD_PARTY_EXCEPTIONS=()` — все три части требования на месте. |
 | 2 (`docs/stack.md`) | OK | Ссылается на `orchestrator/stack.py` как источник, объясняет «только stdlib», числа версий не продублированы. |
-| 3 (инвариант stdlib-only в `tests/test_invariants.py`) | OK | `StdlibOnlyImportsInvariantTest` — `ast`-скан, сверка со `sys.stdlib_module_names` и `stack.THIRD_PARTY_EXCEPTIONS`. Тест функционально верен (см. «Проверено исполнением»), но докстринги двух его методов не несут заявку «Ловит мутацию» — см. замечание R1-F1. |
+| 3 (инвариант stdlib-only в `tests/test_invariants.py`) | OK | `StdlibOnlyImportsInvariantTest` — `ast`-скан, сверка со `sys.stdlib_module_names` и `stack.THIRD_PARTY_EXCEPTIONS`. Тест функционально верен; докстринги обоих методов теперь несут заявку «Ловит мутацию» (R1-F1 закрыт, см. «Реестр замечаний»). |
 | 4 (`check_stack()`) | OK | 4 проверки (python/git/gh/claude), WARN при заниженной версии, FAIL при отсутствии, без сети — проверено и тестами, и реальным прогоном. |
 | 5 (подключение в `doctor.py`) | OK | `checks.extend(stack.check_stack())` — одна строка, сравнение версий не продублировано (подтверждено AC-11-тестом: `REQUIRED_PYTHON` в `doctor.py` не встречается). |
 | 6 (вывод `version`) | OK | Добавлены строка версии Python и строки `check_stack()`, три существующие строки не тронуты — `tests/test_version.py` зелёный без правок. |
 
+Итерация 2: инкрементальный diff от sha предыдущего вердикта
+(`4b7843104c4cf811100bd810f9bf4a7d094874ea`) до HEAD (`344105fb`)
+трогает только `docs/roadmap.md` и `docs/triggers.md` — ни один файл
+зоны задачи (`orchestrator/stack.py, docs/stack.md,
+tests/test_invariants.py, tests/test_stack.py, orchestrator/doctor.py,
+orchestrator/version.py`) не менялся с прошлого вердикта (проверено
+`git diff 4b784310..HEAD --stat` по каждому файлу зоны — пусто).
+Изменение — не работа разработчика по задаче, а два коммита из main
+(`d48fafbd` — «оператор: триггер №27…», подтверждено
+`git merge-base --is-ancestor d48fafbd main`), затянутые в ветку двумя
+«подтяжками main» (`4b784310`, `344105fb`). Вне зоны задачи, docs-only,
+не конфликтует ни с одним требованием SPEC — не замечание.
+
 ## Замечания
 
-- major — `tests/test_stack.py:29,33,41,47,56,70,83` и `tests/test_invariants.py:1634,1642` — ни один из 7 новых тестовых методов в `tests/test_stack.py` не несёт докстринга вовсе (только докстринг модуля), и оба новых метода `StdlibOnlyImportsInvariantTest` в `tests/test_invariants.py` (`test_repo_tree_has_no_foreign_imports`, `test_planted_foreign_import_is_caught_on_a_synthetic_tree`) несут только короткую AC-ссылку без явной заявки «Ловит мутацию: …» (конвенция skills/test-authoring.md, требование review-checklist п.3: «заявки нет вовсе → замечание»). Для сравнения — все тесты `tasks/01M1RDCAFENSW2VVAPECHCVGMM/acceptance_tests/*.py` конвенцию соблюдают полностью (каждый метод несёт развёрнутый докстринг с явным «Ловит мутацию: …»), то есть разработчик применил конвенцию выборочно — только к приёмочной планке, не к постоянным юнит-тестам, которые эту планку переживут. Предложение: дописать в каждый из 9 методов докстринг с явной заявкой «Ловит мутацию: …» (сценарий + что именно она ловит), по образцу уже написанных докстрингов в `acceptance_tests/test_ac1_ac2_ac3_manifest.py` и `acceptance_tests/test_ac7_ac8_ac9_ac10_ac17_check_stack.py`, которые для тех же самых сценариев эту заявку уже формулируют — можно взять за основу, не придумывать с нуля.
+(пусто — единственное замечание прошлой итерации, R1-F1, закрыто; см.
+«Реестр замечаний».)
 
 ## Реестр замечаний
 
 | id | статус | файл/строка | суть | последствие | решение |
 |---|---|---|---|---|---|
-| R1-F1 | fixed | tests/test_stack.py:29,33,41,47,56,70,83; tests/test_invariants.py:1634,1642 | 9 новых тестовых методов без заявки «Ловит мутацию» в докстринге (конвенция test-authoring, скил review-checklist п.3) | будущий читатель/ревьювер не может свериться, какую мутацию тест ловит и ловит ли вообще — конвенция явно требует эту заявку для новых/изменённых тестов | дописан докстринг с явной заявкой «Ловит мутацию: …» во все 9 методов (7 в `tests/test_stack.py`, 2 в `tests/test_invariants.py::StdlibOnlyImportsInvariantTest`), формулировки взяты по образцу parallel acceptance_tests той же задачи, адаптированы под фактические ассерты каждого метода; прогнаны `tests.test_stack`, `tests.test_invariants`, `tests.test_doctor`, `tests.test_version` и вся приёмочная планка задачи (17 тестов) — все `ok` |
+| R1-F1 | accepted | tests/test_stack.py:29,33,41,47,56,70,83; tests/test_invariants.py:1634,1642 | 9 новых тестовых методов без заявки «Ловит мутацию» в докстринге (конвенция test-authoring, скил review-checklist п.3) | будущий читатель/ревьювер не может свериться, какую мутацию тест ловит и ловит ли вообще — конвенция явно требует эту заявку для новых/изменённых тестов | Прочитаны все 9 докстрингов на HEAD (коммит `404ac4a3`): каждый содержит явную формулировку «Ловит мутацию: …» с конкретным сценарием поломки (например `test_no_network_calls` — «реализация проверки версии инструмента вместо `subprocess`+CLI использует сетевой запрос»), а не пересказ имени метода. `git diff 4b784310..HEAD -- tests/test_stack.py tests/test_invariants.py` пуст — фикс уже был в дереве на момент прошлого вердикта, логика тестов при этом не менялась (ассерты идентичны прошлой итерации). Подтверждаю закрытие — **accepted**. |
 
 ## Вердикт
 
-changes_requested — единственное замечание (R1-F1) не мешает функциональной корректности (весь код и вся приёмочная планка зелёные), но конвенция test-authoring для постоянных юнит-тестов нарушена систематически по всему новому файлу и по новому классу инварианта. Исправление механическое: дописать докстринги, взяв формулировки из уже существующих acceptance_tests той же задачи для тех же сценариев.
+approved — единственное открытое замечание прошлой итерации (R1-F1)
+проверено и закрыто (докстринги на месте, содержательны, привязаны к
+конкретному сценарию поломки); все требования SPEC реализованы и
+подтверждены тестами; единственное изменение с прошлого вердикта —
+безобидная подтяжка main вне зоны задачи. Реестр замечаний закрыт
+целиком (единственная запись — `accepted`), гейт `review -> verifying`
+пройдёт.
 
 ## Проверено исполнением
 
-- Прогнан весь набор приёмочных тестов задачи (16 методов, AC-1..AC-3, AC-4..AC-17 кроме AC-18) — извлечены из `artifact/01m1rdcafensw2vvapechcvgmm:tasks/01M1RDCAFENSW2VVAPECHCVGMM/acceptance_tests/*` (в рабочем дереве этой роли их нет — сама планка проверяет ГОЛОВУ артефактной ветки на момент t0 задачи, а не то, что уже смержено; здесь применён тот же приём с `REPO_ROOT`, что и в оригиналах, чтобы прогнать их против кода этой ветки): все 16 — `ok` (`python3 -m unittest test_ac1_ac2_ac3_manifest test_ac4_docs_stack_md test_ac5_invariant_marker_present test_ac6_ac16_stdlib_only_scan_is_sound test_ac7_ac8_ac9_ac10_ac17_check_stack test_ac11_doctor_hookup test_ac12_ac13_version_output_new_lines test_ac15_manifest_regression_test_exists -v`).
-- AC-14 (сравнение существующих строк вывода `version` + подпроцесс `tests.test_version`) — прогнан отдельно тем же приёмом, `ok`.
-- `python3 -m unittest tests.test_version tests.test_stack -v` — 11 тестов, все `ok`.
-- `python3 -m unittest tests.test_invariants -v` — 45 тестов (весь файл, включая новый класс `StdlibOnlyImportsInvariantTest`), все `ok`.
-- `python3 -m unittest tests.test_doctor -v` — 95 тестов (весь файл, задет `all_checks`), все `ok` — регрессии от подключения `check_stack()` нет, в т.ч. `test_healthy_repo_prints_ok_and_does_not_exit` и `test_broken_repo_named_failures_and_nonzero_exit`.
-- `python3 -c "from orchestrator import stack; [print(c) for c in stack.check_stack()]"` — реальный прогон на машине роли: `python 3.13.12 ok`, `git 2.50.1 ok`, `gh 2.98.0 ok`, `claude 2.1.236 ok` — выбранные минимумы (git 2.30.0, gh 2.0.0, claude 1.0.0) не шумят на здоровой машине, как и заявлено в PLAN «Риски».
-- `python3 scripts/codebase_map.py` — прогнан и сверен: diff с текущим `docs/codebase-map.md` пуст, кроме строки `built_at_sha` (не признак дефекта, см. скил) — карта актуальна; файл возвращён в исходное состояние (`git checkout -- docs/codebase-map.md`) после сверки.
-- Полный набор `tests/` в шаге не гонял (решение Оператора 05.09) — за него отвечает CI-джоб на каждый пуш ветки; здесь прогнаны все затронутые модули (`test_stack`, `test_invariants`, `test_doctor`, `test_version`) плюс полная приёмочная планка задачи.
+- Прочитаны докстринги всех 9 методов (`tests/test_stack.py`: 7 методов
+  классов `ManifestConstantsTest`/`CheckStackTest`;
+  `tests/test_invariants.py::StdlibOnlyImportsInvariantTest`: 2 метода)
+  — у каждого явная заявка «Ловит мутацию: …» со сценарием, не пересказ
+  имени.
+- `python3 -m unittest tests.test_stack tests.test_invariants
+  tests.test_doctor tests.test_version -v` — 151 тест, все `ok`
+  (совпадает с суммой прошлой итерации: 11 + 45 + 95, регрессий нет).
+- `git diff 4b7843104c4cf811100bd810f9bf4a7d094874ea..HEAD --stat --
+  orchestrator/stack.py orchestrator/doctor.py orchestrator/version.py
+  docs/stack.md tests/test_stack.py tests/test_invariants.py` — пусто:
+  ни один файл зоны задачи не менялся с прошлого вердикта, повторный
+  прогон полной приёмочной планки (уже подтверждённой зелёной в
+  iteration 1 на том же состоянии кода) не требуется по существу.
+- `git diff 4b7843104c4cf811100bd810f9bf4a7d094874ea..HEAD --stat` (весь
+  diff) — только `docs/roadmap.md`, `docs/triggers.md`; `git
+  merge-base --is-ancestor d48fafbd main` — подтверждён источник
+  (main), не самодеятельная правка вне зоны.
+- Полный набор `tests/` в шаге не гонял (решение Оператора 05.09) — за
+  него отвечает CI-джоб на каждый пуш ветки; production-код зоны с
+  прошлой итерации не менялся, а тогда были прогнаны все затронутые
+  модули плюс полная приёмочная планка (16/16 ok) и ручной прогон
+  `check_stack()` на машине роли — актуальность этих результатов не
+  нарушена отсутствием изменений с тех пор.
 
 ## Предложения системе
 
-- Разрыв между дисциплиной acceptance_tests/ (образцовые докстринги «Ловит мутацию») и постоянными `tests/*.py` того же MR (докстринги отсутствуют вовсе) — уже задокументированный класс наблюдения ([[feedback_test_authoring_mutation_claim_gap]] в памяти ревьювера), повторился и в этой задаче почти буквально: удобный источник формулировок (parallel acceptance-тест на тот же AC) не был использован при переносе теста в постоянный файл.
+- Пакет ревью для этой итерации не показал ни SPEC.md, ни PLAN.md, ни
+  прошлый REVIEW.md (все три — «not found» и в ветке задачи, и в
+  рабочем дереве на момент сборки пакета), хотя `tasks/<id>/`
+  фактически материализован в рабочем дереве роли (правило
+  conventions-core — «на старте каждого шага из ГОЛОВЫ артефактной
+  ветки») и присутствует на `artifact/01m1rdcafensw2vvapechcvgmm`
+  целиком. Похоже на гонку между сборкой пакета ревью и материализацией
+  каталога задачи — стоит проверить порядок шагов, иначе ревьюверу
+  каждый раз придётся вручную идти в `artifact/<id>` (как в этом
+  прогоне).
