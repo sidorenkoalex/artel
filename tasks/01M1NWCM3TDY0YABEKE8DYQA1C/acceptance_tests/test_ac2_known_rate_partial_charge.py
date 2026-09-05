@@ -19,12 +19,17 @@
 курсу при известной роли) проверяется здесь ролью, не участвующей в
 правке T040 — она остаётся вне зоны этого файла.
 
-Тест не фиксирует ТОЧНУЮ формулу пересчёта токенов в доллары (курс
-несёт раздельную цену входного/выходного токена, а `partial_tokens` —
-уже просуммированное число без разбивки по типу — тот же набор
-счётчиков, что и сегодня отдают `stream_usage_tokens`/
-`partial_tokens_from_log`) — только то, что АС-2 требует буквально:
-сумма ненулевая и журнал несёт предписанный текст с $ и числом токенов.
+Тест не фиксирует ТОЧНУЮ формулу пересчёта токенов в доллары — только
+то, что АС-2 требует буквально: сумма ненулевая и журнал несёт
+предписанный текст с $ и числом токенов.
+
+`partial_tokens` передаётся словарём-разбивкой по видам
+(`{"input_tokens": 1000}`), не единым `int`, как раньше: интерфейс
+`spend.charge_missing_result`/`spend.partial_cost_usd` сменился на
+разбивку по `config.USAGE_TOKEN_KEYS` задачей 01M1PP0VYRT55WN8GGVG66X89Y
+(требование 2) — то же самое число токенов, что и раньше, только
+адресованное конкретному виду счётчика; поведение, которое проверяет
+этот тест (ненулевая сумма, текст журнала), не изменилось.
 
 Красен до реализации: `spend.charge_missing_result` (orchestrator/
 spend.py:143) сегодня НИКОГДА не зовёт `store.charge` — по докстрингу
@@ -60,7 +65,7 @@ class KnownRatePartialChargeTest(CostTmpRootTest):
 
         spend.charge_missing_result(
             conn, self.TASK, "test_author", "попытка 1/3", "таймаут шага",
-            partial_tokens=1000, saw_usage_event=True)
+            partial_tokens={"input_tokens": 1000}, saw_usage_event=True)
 
         row = self.task_row()
         self.assertGreater(row["spent_usd"], 0.0,
@@ -84,6 +89,6 @@ class KnownRatePartialChargeTest(CostTmpRootTest):
 
         spend.charge_missing_result(
             conn, self.TASK, "test_author", "попытка 1/3", "таймаут шага",
-            partial_tokens=1000, saw_usage_event=True)
+            partial_tokens={"input_tokens": 1000}, saw_usage_event=True)
 
         self.assertEqual(self.task_row()["spent_estimate_usd"] or 0.0, 0.0)

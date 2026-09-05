@@ -6,6 +6,14 @@ spent_usd задачи не изменился; открыт алерт kind=thr
 верхней оценки; в журнал шага записана строка «верхняя оценка стоимости
 шага» с суммой оценки.»
 
+`partial_tokens` передаётся словарём-разбивкой по видам
+(`{"input_tokens": 777}`), не единым `int`, как раньше: интерфейс
+`spend.charge_missing_result` сменился на разбивку по
+`config.USAGE_TOKEN_KEYS` задачей 01M1PP0VYRT55WN8GGVG66X89Y (требование
+2) — то же число токенов, что и раньше, только адресованное конкретному
+виду счётчика; поведение, которое проверяют тесты ниже (алерт, оценка,
+дедуп), не изменилось.
+
 Роль сценария — `verifier` (roles.yaml её несёт, но `executor: none`,
 и требование 1/AC-1 не называет её среди четырёх ролей с курсом) —
 роль, для которой курс заведомо не задан независимо от решения
@@ -56,7 +64,7 @@ class UnknownRateAlertAndEstimateTest(CostTmpRootTest):
 
         spend.charge_missing_result(
             conn, self.TASK, "verifier", "попытка 1/3", "обрыв stdout-пайпа",
-            partial_tokens=777, saw_usage_event=True)
+            partial_tokens={"input_tokens": 777}, saw_usage_event=True)
 
         self.assertEqual(self.task_row()["spent_usd"], 0.0)
 
@@ -73,7 +81,7 @@ class UnknownRateAlertAndEstimateTest(CostTmpRootTest):
 
         spend.charge_missing_result(
             conn, self.TASK, "verifier", "попытка 1/3", "обрыв stdout-пайпа",
-            partial_tokens=777, saw_usage_event=True)
+            partial_tokens={"input_tokens": 777}, saw_usage_event=True)
 
         found = self.threshold_alerts()
         self.assertEqual(len(found), 1)
@@ -96,7 +104,7 @@ class UnknownRateAlertAndEstimateTest(CostTmpRootTest):
 
         spend.charge_missing_result(
             conn, self.TASK, "verifier", "попытка 1/3", "обрыв stdout-пайпа",
-            partial_tokens=777, saw_usage_event=True)
+            partial_tokens={"input_tokens": 777}, saw_usage_event=True)
 
         self.assertAlmostEqual(self.task_row()["spent_estimate_usd"],
                                config.STEP_COST_ESTIMATE_USD)
@@ -121,7 +129,8 @@ class UnknownRateAlertAndEstimateTest(CostTmpRootTest):
         for _ in range(2):
             spend.charge_missing_result(
                 conn, self.TASK, "verifier", "попытка 1/3",
-                "обрыв stdout-пайпа", partial_tokens=777, saw_usage_event=True)
+                "обрыв stdout-пайпа", partial_tokens={"input_tokens": 777},
+                saw_usage_event=True)
 
         self.assertEqual(len(self.threshold_alerts()), 1)
         self.assertAlmostEqual(self.task_row()["spent_estimate_usd"],
