@@ -47,8 +47,16 @@ per-task бейзлайн (требование 9), а не сумма по на
 `canary_baseline` ключуется `title` (стабильное имя шаблона между
 прогонами, не одноразовый ULID задачи). SQL — только в `store.py`
 (ADR-0003 3ж), новые функции `insert_canary_run`/`canary_baseline`/
-`set_canary_baseline` рядом с остальными по тому же идиому (SCHEMA +
-блок в `migrate()`), не отдельная функция создания схемы в `canary.py`.
+`set_canary_baseline` рядом с остальными, но НЕ по идиому «SCHEMA +
+блок в `migrate()`»: обе таблицы заводятся ЛЕНИВО, приватным
+`_ensure_canary_tables(conn)` (`CREATE TABLE IF NOT EXISTS`), которого
+эти три функции зовут первой строкой — намеренно (уточнено после
+REVIEW.md итерации 1, R1-F2, текст этого раздела расходился с фактом):
+пульт, который ни разу не гонял канарейку, не несёт этих таблиц вовсе —
+физическая отдельность метрик от журнала живых задач (`tasks`/`steps`,
+AC-3) иначе была бы неотличима от «таблица просто пуста». Не отдельная
+функция создания схемы в `canary.py` — она в `store.py`, как и весь
+остальной SQL (ADR-0003 3ж), просто не в общем `migrate()`.
 
 Стдаут-«отчёт прогона» (AC-8/AC-9/AC-12 — «расхождение отражается в
 отчёте», «отклонение... поднимает алерт») печатается ПОСЛЕ вывода
@@ -66,11 +74,32 @@ per-task бейзлайн (требование 9), а не сумма по на
 самой canary (module docstring v1: «эта команда проходит гейт САМА,
 отдельным кодовым путём, не через `fsm.cmd_approve`»): синтетический
 ответ коммитится `answer.cmd_answer` (не требует sha/фиксации), а сам
-возврат из `escalated` — прямая копия ветки `elif state == "escalated"`
-`fsm._cmd_approve` (читает `answer_baseline`/`escalated_from`, пишет
-`store.set_state` на `back`), а не вызов `fsm.cmd_approve` — тот на
-`escalated` требует sha (`APPROVE_NEEDS_SHA`), которого при первом
-вызове ещё нет, и печатает «повтори с sha» вместо перехода.
+возврат из `escalated` повторяет эффект ветки `elif state ==
+"escalated"` `fsm._cmd_approve` (читает `answer_baseline`/
+`escalated_from`, пишет `store.set_state` на `back`), а не вызов
+`fsm.cmd_approve` — тот на `escalated` требует sha
+(`APPROVE_NEEDS_SHA`), которого при первом вызове ещё нет, и печатает
+«повтори с sha» вместо перехода. Не полная копия оригинала (уточнено
+после REVIEW.md итерации 1, R1-F3: докстринг раньше называл это
+«прямой копией», хотя проверка `answer_baseline` и вызов
+`_maybe_ensure_draft_mr` из оригинала здесь сознательно опущены —
+сегодня безвредно, но при будущей содержательной правке `fsm.py` стоит
+перепроверить).
+
+`_drive_task` не ведёт задачу через `escalated` бесконечно (REVIEW.md
+итерации 1, R1-F1, blocker): `review_iters` не сбрасывается при
+возврате из `escalated` (общее свойство FSM, `fsm.py:829`) — задача,
+чей лимит ревью уже исчерпан, эскалируется заново на первом же
+следующем `changes_requested`, а после исчерпания бюджета `auto.
+cmd_auto` вовсе перестаёт двигать состояние (`budget.budget_block`
+отказывает `SystemExit`'ом ДО смены состояния), и `_drive_task` крутил
+бы такую задачу вечно, вешая весь прогон `cmd_canary`. Два независимых
+потолка (`config.CANARY_MAX_ESCALATION_CYCLES` = 3,
+`config.CANARY_MAX_STALL_ITERS` = 3) ловят оба случая: превышение —
+`_kill_inconclusive` (журнал + алерт `kind=threshold`/`source=canary`,
+тот же вид, что и отклонение от бейзлайна, требование 12 — только
+сигнал, без автодействия + `cleanup.cmd_kill`), прогон остальных k-1
+задач набора не останавливается.
 
 Изоляция пула от ролей (требование 13) — новый check `doctor.
 check_role_log_pool_leak` (13б/AC-15, читает `config.LOGS/*.log` на
@@ -92,12 +121,17 @@ MR») — готовятся unified-диффами приложением к э
 ## Шаги
 
 1. `orchestrator/store.py` — таблицы `canary_runs`/`canary_baseline`
-   (SCHEMA + `migrate()`), функции `insert_canary_run`/`canary_baseline`/
+   (`_ensure_canary_tables`, ленивое `CREATE TABLE IF NOT EXISTS` — см.
+   «Подход»), функции `insert_canary_run`/`canary_baseline`/
    `set_canary_baseline`.
-2. `orchestrator/config.py` — константа `CANARY_POOL_DIRNAME`.
+2. `orchestrator/config.py` — константы `CANARY_POOL_DIRNAME`,
+   `CANARY_MAX_ESCALATION_CYCLES`, `CANARY_MAX_STALL_ITERS` (последние
+   две — REVIEW.md итерации 1, R1-F1).
 3. `orchestrator/canary.py` — полная переработка v1 → v2: пул/`--k`,
    `_ephemeral_clone`, эскалация синтетическим ответом, per-task
-   метрики/бейзлайн/отклонение, маркер «ожидается эскалация» (AC-8).
+   метрики/бейзлайн/отклонение, маркер «ожидается эскалация» (AC-8),
+   потолок повторных эскалаций и потолок проходов без прогресса в
+   `_drive_task`/`_kill_inconclusive` (R1-F1).
 4. `orchestrator/artel.py` — CLI `canary --k <N>` вместо `canary
    <каталог> [--rewrite-baseline]`; обновление докстринга команд.
 5. `orchestrator/doctor.py` — `check_role_log_pool_leak` (AC-15),
@@ -109,8 +143,9 @@ MR») — готовятся unified-диффами приложением к э
    13г (половина 1).
 8. Юнит-тесты: переработка `tests/test_canary.py` под v2 (сигнатура
    `cmd_canary(k=...)` вместо `cmd_canary(tz_dir, rewrite_baseline=...)`,
-   новые чистые функции); новые тесты `doctor.check_role_log_pool_leak`/
-   `check_token_repo_scope`.
+   новые чистые функции); новые тесты потолков `_drive_task`
+   (`DriveTaskEscalationCapTest`/`DriveTaskStallCapTest`, R1-F1); новые
+   тесты `doctor.check_role_log_pool_leak`/`check_token_repo_scope`.
 9. Защищённые пути (приложение к этому PLAN, Оператору): unified-дифф
    `skills/conventions-core.md` (13г половина 2) и unified-дифф
    `.github/workflows/ci.yml` (новый джоб `canary-guid-leak`, AC-7) —
@@ -128,7 +163,7 @@ MR») — готовятся unified-диффами приложением к э
 | 3 (ноль следов в main) | 3 |
 | 4 (клон удаляется по завершении) | 3 |
 | 5 (метрики — БД пульта, отдельная таблица) | 1, 3 |
-| 6 (эскалация — синтетический ANSWER) | 3 |
+| 6 (эскалация — синтетический ANSWER) | 2, 3 (потолки повторов/буксования — R1-F1) |
 | 7 (canary-GUID + CI-джоб утечки) | 9 |
 | 8 (маркер «ожидается эскалация» vs факт) | 3 |
 | 9 (per-task бейзлайн) | 1, 3 |
