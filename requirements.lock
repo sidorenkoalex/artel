@@ -1,0 +1,20 @@
+# Закреплённые версии сторонних пакетов пульта (SPEC
+# 01M1REVEZ1HESMJ7AFD5A9MEJ8, требование 1): pytest/pytest-timeout/
+# pytest-xdist и их транзитивные зависимости для Python >= REQUIRED_PYTHON
+# (orchestrator/stack.py, (3, 11) на сегодня). Единственный источник версий
+# для `.artel/venv` (orchestrator/venv.py::sync) и CI (.github/workflows/
+# ci.yml, джоб `python`) — версии не дублируются литералами ни в одном из
+# этих мест.
+#
+# Резолвлено фактической установкой (`pip download` полного дерева
+# зависимостей + разбор METADATA каждого колеса) 05.09.2026, не написано
+# руками: реальный `pip install -r` этим файлом в чистый venv проходит без
+# конфликтов версий (проверено локально).
+pytest==9.1.1
+pytest-timeout==2.4.0
+pytest-xdist==3.8.0
+execnet==2.1.2
+iniconfig==2.3.0
+packaging==26.3
+pluggy==1.6.0
+pygments==2.21.0
