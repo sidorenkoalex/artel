@@ -6,7 +6,7 @@ import sys
 from pathlib import Path
 
 from . import (alerts, artifact_branch, artifacts, budget, config, gitcmd,
-              idgen, liveness, store)
+              idgen, liveness, store, zone_lock)
 
 # ГОСТ-подобная транслитерация: только stdlib, без внешних зависимостей.
 # ъ/ь пропускаются; ё → yo; щ → sch; ю → yu; я → ya.
@@ -198,6 +198,28 @@ def _lease_holder_suffix(conn, task_id: str) -> str:
     return f"  [lease: {row['session_id']} {'жив' if alive else 'мёртв'}]"
 
 
+def _zone_wait_suffix(conn, t) -> str:
+    """Ожидание зоны, если ЭТА задача сейчас заблокирована первым шагом
+    developer (SPEC 01M1P9QAG65GVF69YJEV0V18D9, требование 4) — ДОБАВКОЙ
+    в конец строки `status`, тем же приёмом, что и `_lease_holder_suffix`.
+    Вычисление занятости берётся у `zone_lock.blocking_conflict` целиком —
+    та же проверка, что не пускает `run`/`auto` дальше, не отдельная копия.
+
+    Позиция в очереди (`zone_lock.queue_position`, R1-F3, REVIEW.md
+    итерация 1) — добавкой ПОСЛЕ держателя, только когда конкурентов по
+    ЭТОЙ зоне больше одного; иначе строка не меняется (единственный
+    заблокированный — очередь из одного не несёт новой информации).
+    """
+    conflict = zone_lock.blocking_conflict(conn, t["id"], t)
+    if conflict is None:
+        return ""
+    path, occupier_id, occupier_state = conflict
+    position, total = zone_lock.queue_position(conn, t["id"], path)
+    queue = f", очередь {position}/{total}" if total > 1 else ""
+    return (f"  [ждёт зоны {path}: занята {occupier_id} ({occupier_state})"
+            f"{queue}]")
+
+
 def cmd_status() -> None:
     conn = store.db()
     rows = store.all_tasks(conn)
@@ -211,11 +233,12 @@ def cmd_status() -> None:
         # Оператору, не роли внутри промпта шага.
         mark = "  [canary]" if r["is_canary"] else ""
         holder = _lease_holder_suffix(conn, r["id"])
+        zone = _zone_wait_suffix(conn, r)
         print(
             f"{r['id']}  {r['state']:<13} "
             f"ревью {r['review_iters']}/{config.LIMIT_REVIEW_ITERS}"
             f"  ${r['spent_usd']:.2f}/{r['budget_usd']:.2f}  {r['title']}"
-            f"{flag}{mark}{holder}"
+            f"{flag}{mark}{holder}{zone}"
         )
 
     # Требование 7 SPEC T022: триггеры docs/triggers.md — отдельная секция

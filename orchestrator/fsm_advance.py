@@ -474,6 +474,179 @@ def _capacity_gate_refuses(conn, task_id: str, t, state: str) -> bool:
     return True
 
 
+# Маркер мандата Оператора на расширение зон (SPEC 01M1P9QCHPHSCEA6TK13PV85SP,
+# ANSWER-1.md, п.2, канал ADR-0012) — строка в ЛЮБОМ ANSWER-n.md задачи,
+# разбирается только по этому префиксу; свободный текст ANSWER не
+# анализируется.
+_ZONES_MANDATE_MARKER = "Расширение зон разрешено:"
+
+
+def _split_zone_paths(raw) -> list[str]:
+    """Список путей через запятую — тот же формат, что несёт `zones:` части
+    1 (01M1NKVPD2A79PQ6K0JVV1B2Q1) и строки `Пути:`/`Расширение зон
+    разрешено:` ANSWER-1.md этой задачи. `raw` — `None`/пустая строка (поле
+    не заполнено) даёт пустой список, не ошибку."""
+    if not raw:
+        return []
+    return [p.strip() for p in raw.split(",") if p.strip()]
+
+
+def _touches_zone(path: str, zones: list[str]) -> bool:
+    # «Путь == зона или начинается с неё» — та же формула префикса, что
+    # `fsm_merge_gate._touches_protected_path` для `PROTECTED_PATHS`: зоны-
+    # директории несут trailing `/` (COMMON_ZONES: "tests/"), зоны-файлы —
+    # нет, сравниваются буквально.
+    return any(path == z or path.startswith(z) for z in zones)
+
+
+def _plan_zones_extension_paths(plan_text: str) -> list[str] | None:
+    """Пути раздела `## Расширение зон` PLAN.md (ANSWER-1.md, п.1: строка
+    `Пути: <путь1>, <путь2>`). `None` — раздела нет вовсе, либо в нём нет
+    строки `Пути:` — исключение AC-3 не применяется, дифф сверяется только
+    с `zones`/`zones_extension`/`COMMON_ZONES` (обычный AC-1)."""
+    body = guard.section_body(plan_text, "Расширение зон")
+    for line in body.splitlines():
+        line = line.strip()
+        if line.startswith("Пути:"):
+            return _split_zone_paths(line[len("Пути:"):])
+    return None
+
+
+# Префикс сообщения автокоммита артефактов шага РОЛИ (`checkpoint.
+# _commit_external_step_artifacts::own_commit_marker`) — общий для любой
+# роли и обеих формулировок (обычной/с пометкой таймаута): роль встроена
+# сразу после этого префикса, дальше в обоих случаях идёт «(автокоммит
+# оркестратора...)». Единственный текстовый признак, которым коммит,
+# заведомо НЕ бывший `cmd_answer` (тот коммитит отдельным сообщением
+# `f"{task_id}: ANSWER-{n} — ответ Оператора"`, `orchestrator/answer.py`),
+# узнаваем по подписи (REVIEW.md 01M1P9QCHPHSCEA6TK13PV85SP итерация 2,
+# R2-F1).
+_STEP_ARTIFACTS_COMMIT_PREFIX = "{task_id}: артефакты шага "
+
+
+def _answer_commit_is_role_step_autocommit(branch: str, task_id: str,
+                                           path: str) -> bool:
+    """`True` — последний коммит `path` на артефактной ветке доказанно НЕ
+    `cmd_answer` Оператора, а автокоммит шага роли (checkpoint.py) —
+    именно так developer мог бы подложить себе поддельный
+    `ANSWER-n.md` с маркером мандата в СВОЁМ ЖЕ шаге `in_dev` (R2-F1):
+    `tasks/<id>/` роли — обычная директория на диске, автокоммит шага
+    переносит в артефактную ветку любой файл без разбора по типу.
+
+    Git не ответил (сбой команды, недостижимый sha) ИЛИ сообщение не
+    совпало ни с одним известным маркером (лёгкая песочница без
+    реального коммита — `tests/test_zones_gate.py`, докстринг модуля:
+    «там git всегда отвечает» не про этот вызов) — `False`, не
+    «доказанный автокоммит роли»: положительный сигнал здесь —
+    ЕДИНСТВЕННОЕ основание отклонить мандат, симметрично тому, как
+    `checkpoint._commit_external_step_artifacts` использует ТОТ ЖЕ
+    признак (положительное совпадение с `own_commit_marker`) как
+    единственное основание для удаления, а не наоборот."""
+    res = gitcmd.git("log", "-1", "--format=%s", branch, "--", path)
+    if res is None or res.returncode != 0:
+        return False
+    subject = res.stdout.strip()
+    return subject.startswith(_STEP_ARTIFACTS_COMMIT_PREFIX.format(task_id=task_id))
+
+
+def _answer_zones_mandate(branch: str, task_id: str) -> set[str]:
+    """Объединение путей ВСЕХ маркеров `_ZONES_MANDATE_MARKER`, найденных в
+    ЛЮБОМ `tasks/<id>/ANSWER-n.md` ветки задачи (ANSWER-1.md, п.2) — перебор
+    файлов тем же приёмом, что `fsm._answer_file_count`.
+
+    Файл, последний коммит которого — доказанный автокоммит шага роли
+    (`_answer_commit_is_role_step_autocommit`), пропускается: это не
+    `cmd_answer`, значит не мандат Оператора, независимо от текста
+    внутри (R2-F1)."""
+    paths = gitcmd.ls_tree_files(branch, f"tasks/{task_id}") or []
+    mandate: set[str] = set()
+    for p in paths:
+        name = p.rsplit("/", 1)[-1]
+        if not (name.startswith("ANSWER-") and name.endswith(".md")):
+            continue
+        if _answer_commit_is_role_step_autocommit(branch, task_id, p):
+            continue
+        text, _reason = gitcmd.show(branch, p)
+        if text is None:
+            continue
+        for line in text.splitlines():
+            line = line.strip()
+            if line.startswith(_ZONES_MANDATE_MARKER):
+                mandate.update(_split_zone_paths(line[len(_ZONES_MANDATE_MARKER):]))
+    return mandate
+
+
+def _zones_gate_refuses(conn, task_id: str, t, branch: str,
+                        plan_text: str) -> bool:
+    """Сверка диффа ветки задачи с зонами на `in_dev -> review` (SPEC
+    01M1P9QCHPHSCEA6TK13PV85SP, AC-1/AC-2/AC-3/AC-6): дополнительное
+    предусловие существующего перехода, по образцу `_capacity_gate_refuses`
+    выше — не новое состояние FSM (AC-4), отказ ложится в тот же `store.
+    journal` под действием `"переход отклонён: ..."`, что и остальные отказы
+    этого перехода (AC-5, T078 подхватывает через `store.refusal_history`).
+
+    Внешний (не self) target — гейт не проверяется: тот же довод, что
+    `_capacity_gate_refuses` — `git diff` в `config.ROOT` не видит код
+    внешнего target.
+
+    Задача без ЗАЯВЛЕННОЙ зоны вовсе (`zones` и `zones_extension` оба
+    пусты) — гейт не звонится (AC-7): `zones` обязателен только для SPEC
+    `schema_version >= 4` (`guard.requires_zones`); задача старой версии
+    (или тестовая фикстура, заведённая мимо гейта SPEC) ничего не
+    заявляла — сравнивать дифф не с чем, и буквальное прочтение AC-1
+    («вне заявленных путей») отказало бы ей на КАЖДОМ файле вне
+    COMMON_ZONES, регрессия для всего, что не участвует в этой механике."""
+    if store.task_target(conn, task_id) != config.DEFAULT_TARGET:
+        return False
+    declared = _split_zone_paths(t["zones"]) + _split_zone_paths(t["zones_extension"])
+    if not declared:
+        return False
+    files = gitcmd.diff_names(config.MAIN_BRANCH, t["branch"])
+    if files is None:
+        detail = (f"гейт зон: git не ответил на список файлов диффа "
+                 f"({config.MAIN_BRANCH}...{t['branch']}) — сверка с "
+                 f"зонами невозможна")
+        store.journal(conn, task_id, "fsm", "переход отклонён: гейт зон",
+                      detail)
+        print(f"[{task_id}] переход отклонён: {detail}")
+        print(f"  дальше: разберись, почему git не отвечает на diff "
+              f"{config.MAIN_BRANCH}...{t['branch']}, и повтори "
+              f"artel.py advance {task_id}")
+        return True
+
+    zones = declared + list(config.COMMON_ZONES)
+    out_of_zone = [f for f in files if not _touches_zone(f, zones)]
+    if not out_of_zone:
+        return False
+
+    # Исключение AC-3: раздел «## Расширение зон» PLAN.md, подкреплённый
+    # мандатом Оператора на ТЕ ЖЕ пути в ANSWER-*.md (ANSWER-1.md, п.1-2).
+    extension_paths = _plan_zones_extension_paths(plan_text)
+    if extension_paths is not None:
+        mandate = _answer_zones_mandate(branch, task_id)
+        uncovered_by_mandate = [p for p in extension_paths if p not in mandate]
+        if not uncovered_by_mandate:
+            still_out = [f for f in out_of_zone
+                        if not _touches_zone(f, zones + extension_paths)]
+            if not still_out:
+                merged = sorted(set(_split_zone_paths(t["zones_extension"])
+                                    + extension_paths))
+                store.update_task(conn, task_id,
+                                  zones_extension=",".join(merged))
+                return False
+            out_of_zone = still_out
+
+    detail = (f"дифф трогает файлы вне заявленных zones и COMMON_ZONES: "
+             f"{', '.join(out_of_zone)}")
+    store.journal(conn, task_id, "fsm", "переход отклонён: гейт зон", detail)
+    print(f"[{task_id}] переход отклонён: {detail}")
+    print(f"  дальше: сократи дифф до заявленных zones либо оформи раздел "
+          f"«## Расширение зон» в PLAN.md с обоснованием и мандатом "
+          f"Оператора («{_ZONES_MANDATE_MARKER} <пути>» в ANSWER-n.md), и "
+          f"повтори artel.py advance {task_id}")
+    return True
+
+
 def in_dev(conn, task_id: str, t, tdir, target: str, state: str) -> bool:
     # разработчик закончил: PLAN ready и ветка запушена -> в ревью
     #
@@ -567,6 +740,10 @@ def in_dev(conn, task_id: str, t, tdir, target: str, state: str) -> bool:
         if fsm._pull_main_or_escalate(conn, task_id, t, state) == "escalated":
             return False
         if _capacity_gate_refuses(conn, task_id, t, state):
+            return False
+        full_plan_text = (plan_text if plan_text is not None
+                          else (tdir / "PLAN.md").read_text(encoding="utf-8"))
+        if _zones_gate_refuses(conn, task_id, t, branch, full_plan_text):
             return False
         store.set_state(conn, task_id, "review", "fsm",
                         expected_state=state, detail="MR готов — прогон ревьювера")

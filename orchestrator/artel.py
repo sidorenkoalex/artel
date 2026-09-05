@@ -95,7 +95,8 @@ workspace, tasks, knowledge, logs). БД одна на все проекты: с
   pause [--now] <id> | resume <id> | log <id> | budget <id> <usd> |
   target-init <target> | doctor [--restore] [--fix] | alert-ack <id> "<решение>" |
   version | canary --k <N> | prune [--execute] |
-  amend-tests <id> --reason "<основание>" | pin-update <sha main артели>
+  amend-tests <id> --reason "<основание>" | pin-update <sha main артели> |
+  zone-release <id> | zone-reorder <id1> <id2> ...
 
 `pin-update <sha>` (A7, Stage1) — обновляет пин запущенной версии:
 продвигает рабочее дерево и HEAD `config.ROOT` до `<sha>` main артели
@@ -149,6 +150,33 @@ v1, tasks/T065/SPEC.md) — синтетический прогон конвей
 отклонении сверх `config.CANARY_DEVIATION_RATIO` — без автоматического
 действия. Маркер шаблона «ожидается эскалация» сверяется с фактом,
 расхождение — в отчёте.
+
+Занятость зоны на старте кода (SPEC 01M1P9QAG65GVF69YJEV0V18D9): перед
+первым шагом `in_dev` зоны задачи (`zones:` SPEC, часть 1 —
+01M1NKVPD2A79PQ6K0JVV1B2Q1) сверяются с зонами всех задач в фазах
+`in_dev`…`merge_gate` — пересечение вне общего списка (`config.
+COMMON_ZONES`) отказывает шагу именованно («зона <путь> занята задачей
+<id> (<состояние>)»), `run`/`auto` не стартуют агента; `auto` останавливает
+цикл причиной «ждёт зоны» без алерта буксования, `status`/`doctor`
+показывают ожидание и держателя. Снимается само после `merge_gate ->
+done`/`kill` занявшей задачи либо явно: `zone-release <id>` (журналируется
+как осознанный риск). `zone-reorder <id1> <id2> ...` переставляет порядок
+очереди задач, заблокированных одной и той же зоной (естественный порядок
+— по времени approve их SPEC); `status`/`doctor` показывают позицию
+задачи в этой очереди («очередь N/M») рядом с держателем, когда
+конкурентов по зоне больше одного — очередь сама по себе ничего не
+решает (кто стартует первым, решает только занятость), только показывает
+Оператору порядок.
+
+`canary <каталог>` (tasks/T065/SPEC.md) — синтетический прогон конвейера:
+заводит по задаче на каждый `*.md` каталога (`catalog.cmd_new`, пометка
+canary ТОЛЬКО колонкой БД, не в title), ведёт их `auto`-циклом, сама
+проходит `spec_gate`/`acceptance` (отдельный от `cmd_approve`/`auto`
+кодовый путь — инвариант 18 не затронут) и убивает на `merge_gate`
+(никогда не approve, main не трогает). Отчёт — stdout и
+`.artel/canary/<таймстамп>.json`; первый прогон без `.artel/canary/
+baseline.json` пишет его, следующие сравнивают и предупреждают при
+отклонении >50%, не перезаписывая файл без `--rewrite-baseline`.
 
 `approve` на гейтах, где фиксация уже есть (A2b, ADR-0003 п.15),
 подтверждает КОНКРЕТНЫЙ sha: без него печатает текущий зафиксированный
@@ -224,6 +252,9 @@ worktree задачи, команда коммитит правку, сдвиг�
   amend     штатная правка зафиксированной планки приёмки: коммит,
             лок, журнал, порог «планка девальвируется» (ADR-0012,
             SPEC 01M1HNNHDMP2C1AJTH5QF1BTN2)
+  zone_lock занятость зоны на старте кода: предусловие первого шага
+            developer, снятие ожидания и очередь Оператором
+            (SPEC 01M1P9QAG65GVF69YJEV0V18D9)
 """
 import sys
 from pathlib import Path
@@ -238,7 +269,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from orchestrator import (amend, answer, auto, budget, canary, catalog,  # noqa: E402
                           cleanup, config, doctor, dry_run, fsm, pause, pin,
                           projects, prune, release, report, runner, version,
-                          workspace)
+                          workspace, zone_lock)
 
 
 def _refuse_if_worktree() -> None:
@@ -399,6 +430,8 @@ def main() -> None:
         "acceptance-dry-run": lambda: dry_run.cmd_acceptance_dry_run(rest[0]),
         "amend-tests": lambda: amend.cmd_amend_tests(rest[0], _reason_arg(rest)),
         "pin-update": lambda: pin.cmd_pin_update(rest[0]),
+        "zone-release": lambda: zone_lock.cmd_zone_release(rest[0]),
+        "zone-reorder": lambda: zone_lock.cmd_zone_reorder(rest),
     }
     fn = table.get(cmd)
     if fn is None:
