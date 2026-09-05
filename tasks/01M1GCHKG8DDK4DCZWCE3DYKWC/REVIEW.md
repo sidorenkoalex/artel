@@ -107,7 +107,7 @@ approved — реализация задачи (требования 1-6, AC-1..
   прямых совпадений «(см. эскалацию)» в файле не осталось.
 - `python3 -c "sqlite3... SELECT id, state, tests_locked_sha, fixed_sha
   FROM tasks WHERE id='01M1GCHKG8DDK4DCZWCE3DYKWC'"` на боевой
-  `/Users/al.sidorenko/projects/artel/.artel/state.db` (read-only) —
+  `/Users/operator/projects/artel/.artel/state.db` (read-only) —
   `state=review`, `tests_locked_sha=19a4031...`, `fixed_sha=44cabef`
   (=HEAD ветки) — гейт `in_dev -> review` фактически уже пройден,
   расхождения нет.

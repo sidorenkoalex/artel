@@ -12,9 +12,10 @@ import sys
 import time
 from pathlib import Path
 
-from . import (agent_log, brief, budget, checkpoint, config, failure_classification,
-              fixation, gitcmd, keychain, lease, parallel_limit, pause,
-              review, role_prompt, roles, spend, store, workspace)
+from . import (agent_log, alerts, brief, budget, checkpoint, config,
+              failure_classification, fixation, gitcmd, keychain, lease,
+              liveness, parallel_limit, pause, review, role_prompt, roles,
+              spend, store, workspace, zone_lock)
 
 # Идентичность коммитера, которую роль обязана унести с собой в свой HOME.
 # git читает эти переменные ПОВЕРХ конфига, поэтому перенос ровно двух пар
@@ -47,7 +48,17 @@ def spawn_agent(cmd: list[str], **kwargs) -> subprocess.Popen:
     тестах вместо прямой подмены `subprocess.Popen` (модуль общий на
     процесс — подмена ловила бы и системные вызовы вне запуска агента,
     SPEC T037, требование 2).
+
+    Новая сессия (SPEC 01M1PNBSHR2PMFECMP7C204MF1, AC-1): агентный
+    процесс становится лидером собственной группы (`pgid == pid`), а не
+    наследует pgid пульта — таймаут шага/`kill`/`pause --now`/`release`
+    (требование 2) бьют её целиком (`os.killpg`), включая
+    `pytest`/`unittest`, запущенные ролью и переходящие под launchd при
+    обычном `subprocess.Popen` без своей группы (инцидент 04.09, SPEC
+    «Контекст»). `setdefault` — явный `start_new_session` вызывающего
+    кода (если он вообще появится) сильнее дефолта этой обёртки.
     """
+    kwargs.setdefault("start_new_session", True)
     return subprocess.Popen(cmd, **kwargs)
 
 
@@ -147,6 +158,19 @@ def _cmd_run(conn, task_id: str) -> None:
             sys.exit(f"[{task_id}] SPEC пишет Оператор — TZ.md не заведён "
                      f"(`new \"...\" --tz <файл>` заведёт роль analyst)")
         sys.exit(f"[{task_id}] в состоянии {t['state']} агент не запускается")
+
+    # Занятость зоны на старте кода (SPEC 01M1P9QAG65GVF69YJEV0V18D9,
+    # требование 1): `STATE_ROLE` отображает `in_dev` исключительно на
+    # `developer` (`config.py`), поэтому `role == "developer"` здесь
+    # эквивалентно `t["state"] == "in_dev"` — единственная фаза, где
+    # действует этот отказ. Тот же `sys.exit`, что и бюджет/лимит
+    # параллельных задач выше: `auto` ловит `SystemExit` немедленно.
+    if role == "developer":
+        zone_refusal = zone_lock.refusal(conn, task_id, t)
+        if zone_refusal is not None:
+            store.journal(conn, task_id, role, zone_lock.REFUSAL_ACTION,
+                          zone_refusal)
+            sys.exit(zone_refusal)
 
     # Штатная пауза (SPEC T070, требование 2): пометка стоит — шаг не
     # начинается, но уже идущий шаг (эта же функция, стартовавшая раньше)
@@ -254,6 +278,16 @@ def _cmd_run(conn, task_id: str) -> None:
         store.journal(conn, task_id, role, "ревью-пакет собран",
                       review.package_note(package))
         print(f"[{task_id}] ревью-пакет: {review.package_note(package)}")
+        # Требование 3 (tasks/01M1P9RJVYHTAC087J4B2CAR44): «diff не
+        # собран» на итерации > 1 — алерт Оператору, не тихая строка
+        # журнала; на итерации 1 `not_collected` штатно пуст (полный diff
+        # всегда собирается), алерт не заводится и не трогается вовсе.
+        if package["iteration"] > 1:
+            if package["not_collected"]:
+                alerts.raise_diff_not_collected_alert(
+                    conn, task_id, package["not_collected"])
+            else:
+                alerts.close_diff_not_collected_alerts(conn, task_id)
         prompt = f"{prompt}\n\n--- РЕВЬЮ-ПАКЕТ ---\n\n{package['text']}"
 
     # Отказ advance доносится до следующего запуска роли (SPEC T078):
@@ -421,15 +455,35 @@ def role_cwd(conn, task_id: str, target: str) -> Path:
     внешнего target создаётся здесь же, как и курируемый слой ролей: до
     git-первички (A2b) он пуст, но роль обязана стартовать в НЁМ, а не
     тихо съехать на ROOT из-за отсутствия каталога.
+
+    Материализация `tasks/<id>/` из артефактной ветки (SPEC
+    01M1NKTF173WV5CPDZ1C3WW69K, требование 1, AC-1/AC-2, AC-8): на
+    каждом вызове каталог задачи здесь же перезаписывается ГОЛОВОЙ
+    артефактной ветки — правка Оператора на гейте между шагами доезжает
+    до диска следующего шага, а не остаётся стухшей копией с прошлого
+    (инцидент 04.09, «Контекст» SPEC). sha использованной головы —
+    baseline конфликт-гварда автокоммита (`checkpoint.
+    _commit_external_step_artifacts`, AC-6/AC-7), в колонку БД, не в
+    файл диска — переживает `shutil.rmtree` каталога, которым автокоммит
+    убирает `tasks/<id>/` после переноса. `task_id is None` — офлайн-смоук
+    изоляции (`doctor.isolation_smoke`, синтетический target без реальной
+    задачи) — материализация здесь бессмысленна, пропускается тихо, той
+    же деградацией, что и отсутствие артефактной ветки.
     """
     if target == config.DEFAULT_TARGET:
         branch = store.task_branch(conn, task_id)
         wt_path, error = workspace.ensure(task_id, branch)
         if error is not None:
             raise OSError(error)
-        return wt_path
-    path = config.PROJECTS / target / "workspace"
-    path.mkdir(parents=True, exist_ok=True)
+        path = wt_path
+    else:
+        path = config.PROJECTS / target / "workspace"
+        path.mkdir(parents=True, exist_ok=True)
+    if task_id is not None:
+        from . import artifact_branch
+        materialized_sha = artifact_branch.materialize_task_dir(task_id, path)
+        store.update_task(conn, task_id,
+                          materialized_artifact_sha=materialized_sha or None)
     return path
 
 
@@ -572,15 +626,39 @@ def run_agent_once(conn, task_id: str, role: str, prompt: str,
                   f"{prompt_path} — запусти роль вручную с ним.")
             return "skipped", "claude CLI не найден", None
 
+    # pgid агентного процесса — рядом с существующим pid держателя lease
+    # (SPEC 01M1PNBSHR2PMFECMP7C204MF1, AC-2): `spawn_agent` спавнит его
+    # лидером собственной сессии (AC-1), поэтому pgid всегда равен его
+    # же pid — запрос `os.getpgid` не нужен. Лизы может не быть вовсе
+    # (шаг запущен в обход `lease.acquire`, тесты) — `update_lease_pgid`
+    # тогда тихо не меняет ни одной строки. `agent_pid` — не всегда `int`:
+    # существующие тесты (T005/T007/…) мокают `spawn_agent` фейковым
+    # объектом БЕЗ реального OS-процесса (`FakeProc`/`mock.Mock`) — `pid`
+    # такого объекта либо отсутствует, либо сам `Mock`, и группу
+    # процессов, которой нет, снимать/записывать некуда и незачем
+    # (реальный `subprocess.Popen` продакшена таким никогда не бывает).
+    agent_pid = getattr(proc, "pid", None)
+    if isinstance(agent_pid, int):
+        store.update_lease_pgid(conn, task_id, agent_pid)
+
     # Перекачка в потоке: чтение строк блокируется, пока агент молчит, а
     # таймаут шага должен срабатывать и на замолчавшем агенте.
     pump = agent_log.OutputPump(proc.stdout, log_path)
     pump.start()
     timed_out = False
+    killed_group = None
     try:
         rc = proc.wait(timeout=config.AGENT_TIMEOUT_SEC)
     except subprocess.TimeoutExpired:
-        proc.kill()
+        if isinstance(agent_pid, int):
+            # Группа целиком (AC-3), не только сам процесс — потомок,
+            # заведённый ролью (`pytest`/`unittest`), иначе переживает
+            # завершение шага и виснет под launchd (инцидент 04.09, SPEC
+            # «Контекст»). `agent_pid` — pgid этой же группы (AC-1),
+            # запрос `os.getpgid` не нужен.
+            killed_group = liveness.terminate_process_group(agent_pid)
+        else:
+            proc.kill()
         rc = proc.wait()
         timed_out = True
 
@@ -619,8 +697,12 @@ def run_agent_once(conn, task_id: str, role: str, prompt: str,
         checkpoint.commit_timeout_checkpoint(conn, task_id, role)
         # «без ретрая» — чтобы читающий журнал не ждал попыток 2 и 3.
         timeout_min = f"{config.AGENT_TIMEOUT_SEC // 60} мин"
-        store.journal(conn, task_id, role, "agent run TIMEOUT",
-                      f"{timeout_min}, {numbered} (без ретрая){spent}")
+        detail = f"{timeout_min}, {numbered} (без ретрая){spent}"
+        if killed_group is not None:
+            # Только когда группа реально снята (AC-7) — `agent_pid`
+            # тестового дубля выше не участвовал в group-kill вовсе.
+            detail = f"{detail}; {liveness.group_kill_detail(agent_pid, killed_group)}"
+        store.journal(conn, task_id, role, "agent run TIMEOUT", detail)
         print(f"[{task_id}] таймаут шага ({timeout_min}) — разберись и "
               f"перезапусти run")
         return "timeout", f"таймаут шага ({timeout_min})", None

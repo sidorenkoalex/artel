@@ -11,9 +11,16 @@
 прочитать и удалить чужую строку `leases`, поэтому `lease.acquire`/
 `lease.run_locked`/`parallel_limit.refusal` здесь не вызываются вовсе.
 Свежесть lease не проверяется перед снятием (требование 2): решение
-снять живой замок — на совести Оператора, не на пульте.
+снять живой замок — на совести Оператора, не на пульте — но `cmd_release`
+(SPEC 01M1NEEYSP0QWPMXHG0BK591M7) теперь предупреждает о нём ДО снятия,
+если он ЖИВОЙ и принадлежит другой сессии (`lease.warn_foreign_live`):
+предупреждение только информирует, снятие не блокирует и подтверждения
+не запрашивает.
 """
-from . import liveness, store
+import socket
+
+from . import lease, liveness, store
+from .session import resolve_session_id
 
 
 def cmd_release(task_id: str) -> None:
@@ -28,9 +35,15 @@ def cmd_release(task_id: str) -> None:
 
     Префикс -> полный id (SPEC T094, требование 3, AC-3) резолвится ЗДЕСЬ,
     до чтения `leases` (REVIEW T094 итерация 1, замечание 1).
+
+    Предупреждение о чужом живом lease (SPEC 01M1NEEYSP0QWPMXHG0BK591M7,
+    требование 1) печатается ЗДЕСЬ же, до веток "нет lease"/снятия —
+    верно независимо от того, окажется ли сам `release` no-op'ом под
+    гонкой ниже.
     """
     conn = store.db()
     task_id = store.resolve_task_id(conn, task_id)
+    lease.warn_foreign_live(conn, task_id, resolve_session_id())
     row = store.lease_row(conn, task_id)
     if row is None:
         print(f"[{task_id}] lease не заведён — снимать нечего")
@@ -38,6 +51,18 @@ def cmd_release(task_id: str) -> None:
     age = int(liveness._age_seconds(row["heartbeat_ts"]))
     detail = (f"session_id={row['session_id']}, pid={row['pid']}, "
              f"hostname={row['hostname']}, heartbeat {age} сек назад")
+
+    # Остаточная группа процессов записанного AC-2 агентного шага (SPEC
+    # 01M1PNBSHR2PMFECMP7C204MF1, AC-6, ANSWER-1 вариант B): немедленный
+    # путь — без флага, в отличие от `doctor.check_leases`, где то же
+    # добивание мёртвого lease гейтуется `--fix`. Свой host — та же
+    # защита от случайного попадания в ЛОКАЛЬНЫЙ pgid, что уже применяет
+    # `pause.cmd_pause_now`/`cleanup._group_kill_lease_step` к чужому host.
+    if row["hostname"] == socket.gethostname() and row["pgid"]:
+        count = liveness.terminate_process_group(row["pgid"])
+        store.journal(conn, task_id, "operator",
+                      "release: группа процессов шага снята",
+                      liveness.group_kill_detail(row["pgid"], count))
     # `release_lease` сносит строку, только если session_id совпадает с
     # только что прочитанным — строка не поменялась своим держателем между
     # чтением и сносом (перехват другой сессией между `lease_row` и этим

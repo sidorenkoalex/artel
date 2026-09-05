@@ -30,12 +30,15 @@ CREATE TABLE IF NOT EXISTS tasks (
   id TEXT PRIMARY KEY, title TEXT, state TEXT, branch TEXT,
   review_iters INTEGER DEFAULT 0, accept_rejects INTEGER DEFAULT 0,
   reviewed_iter INTEGER DEFAULT 0, escalated_from TEXT,
-  budget_usd REAL, spent_usd REAL DEFAULT 0, budget_source TEXT,
+  budget_usd REAL, spent_usd REAL DEFAULT 0, spent_estimate_usd REAL DEFAULT 0,
+  budget_source TEXT,
   target TEXT DEFAULT '{config.DEFAULT_TARGET}', fixed_sha TEXT,
   tests_locked_sha TEXT, is_canary INTEGER DEFAULT 0, paused INTEGER DEFAULT 0,
   answer_baseline INTEGER, verifying_attempts INTEGER DEFAULT 0,
   draft_mr_created INTEGER DEFAULT 0,
-  diff_bytes INTEGER, split_assessment TEXT,
+  diff_bytes INTEGER, split_assessment TEXT, zones TEXT,
+  zones_extension TEXT,
+  materialized_artifact_sha TEXT, zone_queue_position INTEGER,
   created_at TEXT, updated_at TEXT
 );
 CREATE TABLE IF NOT EXISTS steps (
@@ -57,7 +60,7 @@ CREATE TABLE IF NOT EXISTS alerts_archive (
 );
 CREATE TABLE IF NOT EXISTS leases (
   task_id TEXT PRIMARY KEY, session_id TEXT, pid INTEGER, hostname TEXT,
-  heartbeat_ts TEXT
+  heartbeat_ts TEXT, pgid INTEGER
 );
 CREATE TABLE IF NOT EXISTS merge_locks (
   task_id TEXT, session_id TEXT, pid INTEGER, hostname TEXT,
@@ -203,12 +206,42 @@ def migrate(conn: sqlite3.Connection) -> None:
     # ровно один раз за жизненный цикл задачи — колонка, не запрос к
     # GitHub на каждый вход в in_dev (orchestrator/github_adapter.py).
     add_column(conn, "tasks", "draft_mr_created", "INTEGER DEFAULT 0")
+    # sha головы артефактной ветки на момент последней материализации
+    # `runner.role_cwd` (SPEC 01M1NKTF173WV5CPDZ1C3WW69K, AC-1/AC-6): NULL —
+    # материализации ещё не было (строка старше этой задачи либо у задачи
+    # нет артефактной ветки) — конфликт-гвард автокоммита сверять не с чем,
+    # тот же вырожденный случай, что и у fixed_sha/tests_locked_sha.
+    add_column(conn, "tasks", "materialized_artifact_sha", "TEXT")
+    # Верхняя оценка неучтённой стоимости шага (SPEC
+    # 01M1NWCM3TDY0YABEKE8DYQA1C, требование 1): накопительная, отдельная от
+    # `spent_usd` — таймаут шага роли БЕЗ курса токенов (`config.TOKEN_RATES`)
+    # прибавляет сюда именованную константу вместо точной суммы (требование
+    # 3). DEFAULT 0 — строки старше этой задачи не несут неучтённой
+    # стоимости задним числом (требование 9: пересчёт прошлых шагов не
+    # производится).
+    add_column(conn, "tasks", "spent_estimate_usd", "REAL DEFAULT 0")
     # Снимок объёма на входе в merge_gate (tasks/01M1KS8K9RXWHX2PW3ZKB0P903,
     # ANSWER-1/ANSWER-2): NULL — задача закрыта до появления колонки, либо
     # снимок не удался (сбой git — не блокирует переход) — `artel report`
     # читает `report._DASH` для обоих случаев одинаково.
     add_column(conn, "tasks", "diff_bytes", "INTEGER")
     add_column(conn, "tasks", "split_assessment", "TEXT")
+    # Значение frontmatter-поля `zones:` SPEC, сохранённое при `approve`
+    # на `spec_gate` (01M1NKVPD2A79PQ6K0JVV1B2Q1, AC-3) — то же поле,
+    # что механика «Оценка объёма и деление» уже структурирует для
+    # сигналов деления (SPEC, требование 1).
+    add_column(conn, "tasks", "zones", "TEXT")
+    # Расширение зон, одобренное мандатом Оператора при переходе
+    # `in_dev -> review` (01M1P9QCHPHSCEA6TK13PV85SP, ANSWER-1, п.3):
+    # список путей через запятую, тем же приёмом, что `zones` выше — NULL,
+    # пока расширения не было. Гейт зон (`fsm_advance._zones_gate_refuses`)
+    # считает зоной задачи объединение `zones` и `zones_extension`.
+    add_column(conn, "tasks", "zones_extension", "TEXT")
+    # Явная перестановка очереди ожидания зоны Оператором (SPEC
+    # 01M1P9QAG65GVF69YJEV0V18D9, требование 9, AC-9): NULL — очередь не
+    # переставлена, естественный порядок по времени approve (`updated_at`)
+    # решает (`orchestrator/zone_lock.py::queue_order`).
+    add_column(conn, "tasks", "zone_queue_position", "INTEGER")
     conn.executescript(
         "CREATE TABLE IF NOT EXISTS task_counters ("
         "  target TEXT PRIMARY KEY, next_number INTEGER NOT NULL);")
@@ -235,6 +268,12 @@ def migrate(conn: sqlite3.Connection) -> None:
         "CREATE TABLE IF NOT EXISTS leases ("
         "  task_id TEXT PRIMARY KEY, session_id TEXT, pid INTEGER,"
         "  hostname TEXT, heartbeat_ts TEXT);")
+    # pid группы (pgid) агентного шага (SPEC 01M1PNBSHR2PMFECMP7C204MF1,
+    # AC-2) — рядом с существующим `pid` (представляющим держателя lease,
+    # не спавненный агентный процесс): пути group-kill (timeout/kill/
+    # pause --now/release, AC-3..AC-6) читают его отсюда. NULL — лиза
+    # старше этой задачи либо шаг ещё не успел его записать.
+    add_column(conn, "leases", "pgid", "INTEGER")
     # Мьютекс merge-окна (SPEC T053, требование 1): один держатель на весь
     # пульт, не per-task, как `leases` — `task_id` здесь не ключ, а поле
     # «какую задачу держит сессия», по конвенции не более одной строки.
@@ -420,9 +459,28 @@ def charge(conn: sqlite3.Connection, task_id: str, usd: float) -> None:
     conn.commit()
 
 
+def charge_estimate(conn: sqlite3.Connection, task_id: str, usd: float) -> None:
+    """Прибавляет верхнюю оценку неучтённой стоимости шага к
+    `spent_estimate_usd` (SPEC 01M1NWCM3TDY0YABEKE8DYQA1C, требование 3) —
+    накопительно и отдельно от `charge`/`spent_usd`: оценка не заменяет
+    точную сумму, а называет то, что курс токенов роли посчитать не смог."""
+    conn.execute("UPDATE tasks SET spent_estimate_usd=spent_estimate_usd+?, "
+                 "updated_at=? WHERE id=?", (usd, now(), task_id))
+    conn.commit()
+
+
 def total_spent(conn: sqlite3.Connection) -> float:
     """Суммарный расход по всем задачам всех target'ов (roadmap §5)."""
     row = conn.execute("SELECT SUM(spent_usd) AS total FROM tasks").fetchone()
+    return row["total"] or 0.0
+
+
+def total_estimate(conn: sqlite3.Connection) -> float:
+    """Суммарная верхняя оценка неучтённой стоимости по всем задачам всех
+    target'ов (SPEC 01M1NWCM3TDY0YABEKE8DYQA1C, требование 6) — тот же
+    приём агрегации, что и `total_spent`, отдельная колонка."""
+    row = conn.execute(
+        "SELECT SUM(spent_estimate_usd) AS total FROM tasks").fetchone()
     return row["total"] or 0.0
 
 
@@ -660,7 +718,16 @@ def record_fixation(conn, task_id: str) -> None:
     sha, clean = fixation.fix(task_id, target)
     update_task(conn, task_id, fixed_sha=sha or None)
     if target == config.DEFAULT_TARGET:
-        detail = f"target={target}, sha={sha or '—'}, чисто={clean}"
+        # Поле `код=` — sha кодовой ветки, заводится для default target
+        # тем же именем, что и НЕ-default (ветка ниже) — tasks/
+        # 01M1P9RJVYHTAC087J4B2CAR44, требование 1: `sha=` выше — sha
+        # артефактного/фиксационного репо (`config.PROJECTS/<target>`),
+        # НЕ база инкрементального diff (`review.previous_verdict_sha`
+        # читает именно `код=`); `sha=` остаётся как есть — эта задача
+        # не убирает поле, только перестаёт быть базой diff.
+        code_sha = fixation.default_code_sha(conn, task_id)
+        detail = (f"target={target}, sha={sha or '—'}, чисто={clean}, "
+                  f"код={code_sha or '—'}")
     else:
         # Два sha (SPEC T094, требование 9, AC-10): голова кодовой ветки
         # ЦЕЛЕВОГО и голова артефактной ветки ПУЛЬТА — `sha`/`clean` выше
@@ -779,6 +846,17 @@ def update_lease(conn, task_id: str, session_id: str, pid: int,
     conn.commit()
 
 
+def update_lease_pgid(conn, task_id: str, pgid: int) -> None:
+    """Записывает pgid спавненного агентного процесса шага (SPEC
+    01M1PNBSHR2PMFECMP7C204MF1, AC-2) в уже существующую строку lease,
+    не трогая остальные поля (`pid` держателя lease обязан остаться
+    прежним — AC-2, `_sandbox.AgentStepSandbox.assert_lease_pid_unchanged`).
+    Лизы может не быть вовсе (шаг запущен в обход `lease.acquire`,
+    например тестами) — тогда `UPDATE` тихо не меняет ни одной строки."""
+    conn.execute("UPDATE leases SET pgid=? WHERE task_id=?", (pgid, task_id))
+    conn.commit()
+
+
 def release_lease(conn, task_id: str, session_id: str) -> bool:
     """Снимает lease задачи, если он всё ещё принадлежит этой сессии.
 
@@ -867,4 +945,75 @@ def ack_alert(conn, alert_id: int, actor: str, resolution: str) -> None:
     conn.execute(
         "UPDATE alerts SET ack_ts=?, ack_by=?, ack_resolution=? WHERE id=?",
         (now(), actor, resolution, alert_id))
+    conn.commit()
+
+
+def _ensure_canary_tables(conn) -> None:
+    """Таблицы метрик канарейки v2 — заведены ЛЕНИВО, при первом реальном
+    использовании, не в универсальной `SCHEMA`/`migrate()` (SPEC
+    01M1NEEWH5K1XPFRDGRMPYSBXJ, требование 5, AC-5): пульт, который ни
+    разу не гонял канарейку, не несёт этих таблиц вовсе — метрики
+    физически ОТДЕЛЬНЫ от журнала живых задач (`tasks`/`steps`, те
+    обязаны оставаться пустыми после прогона, AC-3), но не более того:
+    таблица, присутствующая в БД С РОЖДЕНИЯ пульта, неотличима от
+    «появилась после прогона» той же проверкой, которой AC-5 ловит
+    противоположную мутацию (буквальный перенос v1 — метрики только в
+    JSON на диске, `.artel/canary/*.json`, вовсе без таблицы БД).
+    `canary_baseline` ключуется `title` (стабильное имя шаблона пула
+    МЕЖДУ прогонами), не `task_id` (свежий ULID каждый прогон) —
+    требование 9: бейзлайн per-task, не суммой по набору."""
+    conn.executescript(
+        "CREATE TABLE IF NOT EXISTS canary_runs ("
+        "  id INTEGER PRIMARY KEY AUTOINCREMENT, run_stamp TEXT, title TEXT,"
+        "  task_id TEXT, steps INTEGER, cost_usd REAL, review_iterations INTEGER,"
+        "  escalations INTEGER, outcome TEXT, expected_escalation TEXT,"
+        "  actual_escalation INTEGER, marker_mismatch INTEGER, created_at TEXT);"
+        "CREATE TABLE IF NOT EXISTS canary_baseline ("
+        "  title TEXT PRIMARY KEY, steps INTEGER, cost_usd REAL,"
+        "  review_iterations INTEGER, updated_at TEXT);")
+
+
+def insert_canary_run(conn, run_stamp: str, title: str, task_id: str,
+                      steps: int, cost_usd: float, review_iterations: int,
+                      escalations: int, outcome: str,
+                      expected_escalation: str | None,
+                      actual_escalation: bool, marker_mismatch: bool) -> None:
+    """Строка метрик одной канареечной задачи одного прогона (SPEC
+    01M1NEEWH5K1XPFRDGRMPYSBXJ, требование 5, AC-5) — читатель:
+    `canary._run_one_task`."""
+    _ensure_canary_tables(conn)
+    conn.execute(
+        "INSERT INTO canary_runs (run_stamp, title, task_id, steps, cost_usd,"
+        " review_iterations, escalations, outcome, expected_escalation,"
+        " actual_escalation, marker_mismatch, created_at)"
+        " VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+        (run_stamp, title, task_id, steps, cost_usd, review_iterations,
+         escalations, outcome, expected_escalation, int(actual_escalation),
+         int(marker_mismatch), now()))
+    conn.commit()
+
+
+def canary_baseline(conn, title: str) -> sqlite3.Row | None:
+    """Бейзлайн канарейки по имени шаблона; None — прогона ещё не было
+    (SPEC 01M1NEEWH5K1XPFRDGRMPYSBXJ, требование 9-10)."""
+    _ensure_canary_tables(conn)
+    return conn.execute(
+        "SELECT * FROM canary_baseline WHERE title=?", (title,)).fetchone()
+
+
+def set_canary_baseline(conn, title: str, steps: int, cost_usd: float,
+                        review_iterations: int) -> None:
+    """Заводит либо перезаписывает бейзлайн шаблона (первый прогон
+    заводит его сам, требование 10 — не отдельная команда, как у v1
+    `--rewrite-baseline`: v2 бейзлайн per-task не редактируется руками
+    отдельным флагом, только рождается на первом прогоне шаблона)."""
+    _ensure_canary_tables(conn)
+    conn.execute(
+        "INSERT INTO canary_baseline (title, steps, cost_usd,"
+        " review_iterations, updated_at) VALUES (?,?,?,?,?)"
+        " ON CONFLICT(title) DO UPDATE SET steps=excluded.steps,"
+        " cost_usd=excluded.cost_usd,"
+        " review_iterations=excluded.review_iterations,"
+        " updated_at=excluded.updated_at",
+        (title, steps, cost_usd, review_iterations, now()))
     conn.commit()

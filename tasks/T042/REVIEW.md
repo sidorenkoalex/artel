@@ -63,7 +63,7 @@ T042 не требует.
   Перепроверено отдельно в этой итерации: `git checkout main` (чистый
   worktree) → `python3 -m unittest tests.test_multitarget.RoleEnvTest -v`
   → те же 3 теста падают с той же самой ассерцией
-  (`al.sidorenko@x5.ru != role@artel.invalid`), то есть падение
+  (`operator@example.invalid != role@artel.invalid`), то есть падение
   предсуществующее и не зависит от diff'а этой задачи. AC-5 выполнен.
 - `python3 scripts/codebase_map.py` вручную на HEAD ветки: разница с
   закоммиченной `docs/codebase-map.md` — только `built_at_sha`, карта

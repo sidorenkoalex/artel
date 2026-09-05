@@ -60,7 +60,7 @@ from pathlib import Path
 
 from . import (alerts, artifact_branch, coldstart, config, gitcmd, liveness,
               projects, roles, runner, snapshot, spend, store, targets,
-              workspace)
+              workspace, zone_lock)
 
 # status: "ok" | "warn" | "fail" | "skip" ("skip" — честный пропуск проверки,
 # требование 9: сверка forge-политики без `gh`/сети — не провал и не ок).
@@ -611,6 +611,113 @@ def check_orphans(conn) -> list[Check]:
     return results
 
 
+# --- изоляция пула канарейки от ролей (SPEC 01M1NEEWH5K1XPFRDGRMPYSBXJ,
+#     требование 13) ---------------------------------------------------
+
+def check_role_log_pool_leak(conn) -> Check:
+    """Требование 13б: логи шагов ролей проверяются на упоминание
+    каталога пула канарейки — совпадение поднимает incident-алерт
+    (AC-15). «На каждом doctor» — буквально из требования; второй
+    триггер требования 13б («после каждого прогона канарейки») — часть
+    механики `canary`, покрытой отдельно (AC-1..12), не этой проверки.
+
+    Из трёх сигналов утечки, названных требованием 13б (каталог пула,
+    имя его репозитория, GUID шаблона), проверяется только каталог пула
+    (`config.CANARY_POOL_DIRNAME`) — единственный, зафиксированный кодом
+    самого SPEC (требование 1); имя репозитория пула и GUID шаблонов —
+    содержимое пула, ручная настройка Оператора («Не входит» SPEC), не
+    значение, которое код мог бы знать заранее.
+
+    Не заводит `_auto_ack_gone`, в отличие от `check_orphans`: утечка
+    контекста роли — инцидент, требующий разбора Оператором, а не
+    состояние, самоустраняющееся ротацией логов (`prune`) без его
+    внимания.
+    """
+    if not config.LOGS.is_dir():
+        return Check("canary-pool-leak", "ok", "логов ролей ещё нет")
+    marker = config.CANARY_POOL_DIRNAME
+    leaking = []
+    for path in sorted(config.LOGS.glob("*.log")):
+        try:
+            text = path.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        if marker in text:
+            leaking.append(path.name)
+    if not leaking:
+        return Check("canary-pool-leak", "ok",
+                     "логи ролей не упоминают каталог пула канарейки")
+    for name in leaking:
+        alerts.raise_alert(
+            conn, None, "incident", "doctor.canary-pool-leak",
+            f"лог роли {name} упоминает каталог пула канарейки ({marker}) "
+            f"— утечка контекста роли (SPEC 01M1NEEWH5K1XPFRDGRMPYSBXJ, "
+            f"требование 13б)")
+    return Check("canary-pool-leak", "fail",
+                f"логи ролей упоминают каталог пула: {', '.join(leaking)}")
+
+
+def check_token_repo_scope() -> list[Check]:
+    """Требование 13в: предупреждает, если токен роли (слот keychain)
+    виден более чем в одном репозитории GitHub (AC-16).
+
+    Best-effort: единственный источник истины — реальный охват PAT на
+    GitHub прямо сейчас — недетерминирован и недоступен offline
+    (`markers.py`, AC-16 этой задачи, тот же класс зависимости, что и
+    `check_token_repo_scope`'s собственный сетевой поход) — `gh`/сеть
+    недоступны или токен не найден — честный `skip`, не блок доктора.
+    Токены дедуплицируются по значению: сегодня (Фаза 0, roles.yaml
+    `token_fallback`) все роли падают в один и тот же PAT — опрашивать
+    его охват от каждой роли отдельно значило бы платить одним и тем же
+    сетевым походом N раз.
+    """
+    if shutil.which("gh") is None:
+        return [Check("token-repo-scope", "skip", "gh CLI не найден")]
+    try:
+        role_names = sorted(
+            name for name, entry in roles.load().items()
+            if isinstance(entry, dict) and entry.get("executor") == "agent")
+    except roles.RolesError as exc:
+        return [Check("token-repo-scope", "skip", str(exc))]
+    seen: dict = {}
+    results = []
+    for role in role_names:
+        token = runner.role_token(role)
+        if not token or token in seen:
+            continue
+        seen[token] = role
+        try:
+            res = subprocess.run(
+                ["gh", "api", "user/repos", "--paginate", "-q",
+                 ".[].full_name"],
+                env={**os.environ, "GH_TOKEN": token},
+                capture_output=True, text=True, timeout=20)
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            results.append(Check("token-repo-scope", "skip",
+                                f"роль {role}: {exc}"))
+            continue
+        if res.returncode != 0:
+            results.append(Check(
+                "token-repo-scope", "skip",
+                f"роль {role}: область токена не опрошена — "
+                f"{res.stderr.strip()[:150]}"))
+            continue
+        repos = {line.strip() for line in res.stdout.splitlines() if line.strip()}
+        if len(repos) > 1:
+            results.append(Check(
+                "token-repo-scope", "warn",
+                f"роль {role}: токен виден в {len(repos)} репозиториях "
+                f"({', '.join(sorted(repos))}) — рекомендуется "
+                f"fine-grained токен на один репозиторий (SPEC "
+                f"01M1NEEWH5K1XPFRDGRMPYSBXJ, требование 13в)"))
+        else:
+            results.append(Check(
+                "token-repo-scope", "ok",
+                f"роль {role}: токен виден в {len(repos)} репозитории(ях)"))
+    return results or [Check("token-repo-scope", "skip",
+                             "ни у одной agent-роли не нашлось токена")]
+
+
 # --- свежесть ветки (SPEC T051, требование 8) -----------------------------
 
 def check_branch_freshness(conn) -> list[Check]:
@@ -866,6 +973,235 @@ def check_merge_lock(conn) -> list[Check]:
     return result
 
 
+# --- сторож зависших прогонов тестов --------------------------------------
+# (SPEC 01M1PNBSHR2PMFECMP7C204MF1, требование 3, AC-8..AC-12/AC-15)
+
+# `python -m unittest`/`pytest` в командной строке процесса (AC-8) — та
+# же пара инструментов, что оставила шесть висящих прогонов инцидента
+# 04.09 (SPEC «Контекст»).
+_HUNG_TEST_CMD_RE = re.compile(r"\bpytest\b|-m\s+unittest\b")
+# `ps -o etime=`: `[[дни-]часы:]минуты:секунды` (macOS/BSD и Linux —
+# общий формат).
+_ETIME_RE = re.compile(r"^(?:(\d+)-)?(?:(\d+):)?(\d+):(\d+)$")
+
+
+def _etime_to_seconds(etime: str) -> float | None:
+    match = _ETIME_RE.match(etime.strip())
+    if match is None:
+        return None
+    days, hours, minutes, seconds = match.groups()
+    total = int(minutes) * 60 + int(seconds)
+    if hours:
+        total += int(hours) * 3600
+    if days:
+        total += int(days) * 86400
+    return float(total)
+
+
+def _running_processes() -> list[tuple[int, float, str]]:
+    """(pid, возраст в секундах, командная строка) всех процессов машины;
+    пустой список — `ps` не ответил (тихая деградация, тот же приём, что
+    и у остальных OS-примитивов доктора). `-ww` — без обрезки длинной
+    командной строки (BSD `ps`, macOS)."""
+    try:
+        res = subprocess.run(["ps", "-axww", "-o", "pid=,etime=,command="],
+                             capture_output=True, text=True, timeout=10)
+    except (OSError, subprocess.TimeoutExpired):
+        return []
+    if res.returncode != 0:
+        return []
+    rows = []
+    for line in res.stdout.splitlines():
+        parts = line.strip().split(None, 2)
+        if len(parts) < 3:
+            continue
+        pid_s, etime_s, command = parts
+        try:
+            pid = int(pid_s)
+        except ValueError:
+            continue
+        age = _etime_to_seconds(etime_s)
+        if age is None:
+            continue
+        rows.append((pid, age, command))
+    return rows
+
+
+def _process_cwd(pid: int) -> str | None:
+    """cwd процесса `pid` по `lsof` (`ps` его не несёт вовсе) — `None`,
+    если `lsof` не ответил или процесс уже исчез."""
+    try:
+        res = subprocess.run(["lsof", "-a", "-p", str(pid), "-d", "cwd", "-Fn"],
+                             capture_output=True, text=True, timeout=10)
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if res.returncode != 0:
+        return None
+    for line in res.stdout.splitlines():
+        if line.startswith("n"):
+            return line[1:]
+    return None
+
+
+def _hung_test_run_task_id(cwd: str) -> str | None:
+    """id задачи по cwd процесса — первый сегмент относительно
+    `config.WORKTREES` (тот же критерий легитимности, что и
+    `_is_legit_task_worktree`); `.resolve()` на обеих сторонах — cwd,
+    отданный `lsof`, разрешает симлинки ОС (`/var` -> `/private/var` на
+    macOS), путь `config.WORKTREES` из песочницы теста иначе не совпал
+    бы с ним побайтово."""
+    try:
+        rel = Path(cwd).resolve().relative_to(config.WORKTREES.resolve())
+    except (ValueError, OSError):
+        return None
+    return rel.parts[0] if rel.parts else None
+
+
+def _hung_test_run_task_lease_alive(conn, task_id: str) -> bool:
+    """AC-9: «нет живого lease» — тот же критерий «мёртв», что и
+    `check_leases`'s кандидаты (свой host и pid не адресуем); лизы нет
+    вовсе, чужой host или pid жив — консервативно считается живым (не
+    трогать чужое, если есть хоть малейшее сомнение)."""
+    row = store.lease_row(conn, task_id)
+    if row is None:
+        return False
+    if row["hostname"] != socket.gethostname():
+        return True
+    return liveness._pid_alive(row["pid"])
+
+
+def _find_hung_test_runs(conn) -> list[dict]:
+    """Кандидаты сторожа (AC-8/AC-9): `python -m unittest`/`pytest` с cwd
+    внутри `.artel/worktrees/<id>`, старше `config.HUNG_TEST_RUN_AGE_SEC`,
+    чья задача не держит живой lease."""
+    found = []
+    for pid, age, command in _running_processes():
+        if age < config.HUNG_TEST_RUN_AGE_SEC:
+            continue
+        if not _HUNG_TEST_CMD_RE.search(command):
+            continue
+        cwd = _process_cwd(pid)
+        if cwd is None:
+            continue
+        task_id = _hung_test_run_task_id(cwd)
+        if task_id is None:
+            continue
+        if _hung_test_run_task_lease_alive(conn, task_id):
+            continue
+        found.append({"pid": pid, "age": age, "cwd": cwd, "task_id": task_id})
+    return found
+
+
+_HUNG_TEST_ALERT_RE = re.compile(
+    r"^зависший прогон тестов: pid (\d+), worktree .+, возраст \d+ сек$")
+
+
+def _hung_test_run_alert_live(message: str) -> bool:
+    match = _HUNG_TEST_ALERT_RE.match(message)
+    if match is None:
+        return True
+    return liveness._pid_alive(int(match.group(1)))
+
+
+def check_hung_test_runs(conn) -> list[Check]:
+    """AC-8..AC-10: только поиск и алерт — снятие живёт отдельно, под
+    `doctor --fix` (`_fix_hung_test_runs`, AC-11/AC-12): тот же водораздел
+    «наблюдение/действие», что `check_leases`/`_fix_dead_lease_groups`
+    уже применяют к мёртвому lease (ANSWER-1, вариант B)."""
+    candidates = _find_hung_test_runs(conn)
+    if not candidates:
+        results = [Check("hung-test-runs", "ok",
+                         "зависших прогонов тестов не найдено")]
+    else:
+        results = []
+        for c in candidates:
+            message = (f"зависший прогон тестов: pid {c['pid']}, worktree "
+                      f"{c['cwd']}, возраст {int(c['age'])} сек")
+            alerts.raise_alert(conn, store.task_target(conn, c["task_id"]),
+                               "incident", "doctor.hung_test_runs", message)
+            results.append(Check("hung-test-runs", "fail", message))
+    _auto_ack_gone(conn, "doctor.hung_test_runs", _hung_test_run_alert_live)
+    return results
+
+
+def _fix_hung_test_runs(conn) -> None:
+    """`doctor --fix` (AC-11): снимает найденные `check_hung_test_runs`
+    прогоны ГРУППОЙ (лидер + реальные потомки — аналог pytest-xdist
+    воркера) и пишет перечень снятых pid в алерт (не только в журнал
+    задачи — «в журнал алертов», AC-11). Обычный прогон (без `--fix`,
+    AC-12) сюда не заходит вовсе."""
+    candidates = _find_hung_test_runs(conn)
+    if not candidates:
+        return
+    fixed = []
+    for c in candidates:
+        try:
+            pgid = os.getpgid(c["pid"])
+        except ProcessLookupError:
+            continue
+        count = liveness.terminate_process_group(pgid)
+        fixed.append(f"{c['task_id']}: pid {c['pid']} "
+                    f"({count} процесс(ов) группы)")
+    if not fixed:
+        return
+    alerts.raise_alert(conn, None, "incident", "doctor.hung_test_runs.fix",
+                       f"зависшие прогоны тестов сняты (doctor --fix): "
+                       f"{'; '.join(fixed)}")
+    print(f"  зависшие прогоны тестов сняты: {'; '.join(fixed)}")
+
+
+def _fix_dead_lease_groups(conn) -> None:
+    """`doctor --fix` (SPEC 01M1PNBSHR2PMFECMP7C204MF1, AC-6, ANSWER-1
+    вариант B): остаточная группа процессов МЁРТВОГО lease — снимается
+    ТОЛЬКО здесь, под флагом; `check_leases` остаётся наблюдательным
+    (несёт только алерт, как и раньше, не предмет этой задачи)."""
+    host = socket.gethostname()
+    for row in store.all_leases(conn):
+        if row["hostname"] != host or liveness._pid_alive(row["pid"]):
+            continue
+        if not row["pgid"]:
+            continue
+        count = liveness.terminate_process_group(row["pgid"])
+        store.journal(conn, row["task_id"], "doctor",
+                      "doctor --fix: группа процессов мёртвого lease снята",
+                      liveness.group_kill_detail(row["pgid"], count))
+        print(f"  [FIX] {row['task_id']}: "
+              f"{liveness.group_kill_detail(row['pgid'], count)}")
+def check_zone_waits(conn) -> list[Check]:
+    """SPEC 01M1P9QAG65GVF69YJEV0V18D9, требование 4: задача, чей первый
+    шаг developer заблокирован занятостью зоны, — видимая проверка
+    doctor, по образцу `check_leases`/`check_orphans`, не только строка в
+    журнале САМОЙ заблокированной задачи. Вычисление занятости берётся у
+    `zone_lock.blocking_conflict` целиком — та же проверка, что не
+    пускает `run`/`auto` дальше, не отдельная копия.
+
+    Не incident-алерт (в отличие от `check_leases`): занятость зоны —
+    штатное ожидание, не операционный сбой, снимается сама после мержа/
+    kill занявшей задачи (AC-6) или явной командой Оператора (AC-7).
+
+    Позиция в очереди (`zone_lock.queue_position`, R1-F3, REVIEW.md
+    итерация 1) — в детали, только когда конкурентов по ЭТОЙ зоне больше
+    одного.
+    """
+    blocked = []
+    for row in store.all_tasks(conn):
+        if row["state"] != "in_dev":
+            continue
+        conflict = zone_lock.blocking_conflict(conn, row["id"], row)
+        if conflict is None:
+            continue
+        path, occupier_id, occupier_state = conflict
+        position, total = zone_lock.queue_position(conn, row["id"], path)
+        queue = f", очередь {position}/{total}" if total > 1 else ""
+        blocked.append(Check(
+            "zone-waits", "warn",
+            f"{row['id']} ждёт зоны {path} — занята {occupier_id} "
+            f"({occupier_state}){queue}"))
+    if not blocked:
+        return [Check("zone-waits", "ok", "нет задач, ожидающих зоны")]
+    return blocked
+
+
 # --- прочие проверки (требование 9) --------------------------------------
 
 def check_backup_age(conn) -> Check:
@@ -1020,6 +1356,60 @@ def check_root_pin() -> Check:
                  f"обнови: artel.py pin-update {origin_sha}")
 
 
+# --- уборка осиротевших артефактных веток (SPEC 01M1KVGD18P9H5WR7VM8TGPV1T,
+# требование 4/AC-4) --------------------------------------------------------
+
+ORPHAN_ARTIFACT_BRANCH_SOURCE = "doctor.cleanup.artifact_branches"
+
+
+def _orphan_artifact_branches(conn) -> list[str]:
+    """Ветки `artifact/<id>` пульта, для которых нет строки в БД
+    (регистронезависимо — `artifact_branch.branch_name` работает с
+    `task_id.lower()`). Только чтение, без удаления — общая часть между
+    `sweep_orphan_artifact_branches` (сама уборка) и `cmd_doctor`
+    (честный CLI-вывод R1-F3: нужно знать, были ли сироты, независимо от
+    того, удалось ли их удалить)."""
+    known_ids = {r["id"].lower() for r in store.all_tasks(conn)}
+    branches = gitcmd.list_branches("artifact/") or []
+    return sorted(b for b in branches if b[len("artifact/"):] not in known_ids)
+
+
+def sweep_orphan_artifact_branches(conn) -> list[str]:
+    """Удаляет ветки `artifact/<id>` пульта, для которых нет строки в БД
+    (SPEC «Контекст»: источник утечки — тест, заводящий задачу через
+    `cmd_new` без подмены `config.ROOT`, коммитивший артефакты прямиком
+    в НАСТОЯЩИЙ репозиторий пульта). Только по явному вызову Оператора
+    (`doctor --fix`), не автоматически — ветки живых задач не трогаются.
+
+    Ровно один incident-алерт на весь прогон уборки, с перечислением
+    удалённого в сообщении (не по алерту на каждую ветку — Оператору
+    нужна одна строка на уборку, не журнал по счётчику находок). Возврат
+    `git branch -D` проверяется (ANSWER-2 п.3, R1-F3): ветка, которую не
+    удалось удалить, не попадает ни в возвращаемый список, ни в текст
+    алерта как «удалено» — только в отдельную честную часть сообщения.
+    Возвращает список ФАКТИЧЕСКИ удалённых имён веток; пустой — либо
+    сирот не нашлось, либо ни одно удаление не удалось (`cmd_doctor`
+    различает эти два случая в CLI-выводе через `_orphan_artifact_
+    branches`, ANSWER-3 R1-F3).
+    """
+    orphans = _orphan_artifact_branches(conn)
+    deleted = []
+    failed = []
+    for branch in orphans:
+        res = gitcmd.git("branch", "-D", branch)
+        (deleted if res is not None and res.returncode == 0 else failed).append(branch)
+    if orphans:
+        parts = []
+        if deleted:
+            parts.append(f"удалены: {', '.join(deleted)}")
+        if failed:
+            parts.append(f"НЕ удалены (ошибка git branch -D): {', '.join(failed)}")
+        alerts.raise_alert(
+            conn, None, "incident", ORPHAN_ARTIFACT_BRANCH_SOURCE,
+            f"осиротевшие артефактные ветки: {'; '.join(parts)}")
+    return deleted
+
+
 # --- уборка игнорируемых файлов артефактных веток (SPEC ------------------
 # 01M1KVG3KSCY47HWXWF5HM0E76, требование 4, AC-5) -------------------------
 
@@ -1099,8 +1489,12 @@ def all_checks(conn) -> list[Check]:
     checks.extend(check_orphans(conn))
     checks.extend(check_leases(conn))
     checks.extend(check_merge_lock(conn))
+    checks.extend(check_hung_test_runs(conn))
+    checks.extend(check_zone_waits(conn))
     checks.extend(check_branch_freshness(conn))
     checks.append(check_root_pin())
+    checks.append(check_role_log_pool_leak(conn))
+    checks.extend(check_token_repo_scope())
     return checks
 
 
@@ -1112,8 +1506,24 @@ def cmd_doctor(restore: bool = False, fix: bool = False) -> None:
     if restore:
         print("Recovery-сверка после восстановления .artel/ из бэкапа:")
     if fix:
+        found_before = bool(_orphan_artifact_branches(conn))
+        removed = sweep_orphan_artifact_branches(conn)
+        if removed:
+            print("Осиротевшие артефактные ветки удалены:")
+            for branch in removed:
+                print(f"  {branch}")
+        elif found_before:
+            # R1-F3 (ANSWER-3): найдены, но НИ ОДНО удаление не прошло —
+            # честно об этом, не «не найдено» (расхождение с журналом
+            # алертов, который sweep уже честно ведёт).
+            print("Осиротевшие артефактные ветки найдены, но не удалены "
+                 "— см. журнал алертов (doctor.cleanup.artifact_branches).")
+        else:
+            print("Осиротевших артефактных веток не найдено.")
         print("Уборка игнорируемых файлов артефактных веток живых задач:")
         _fix_ignored_artifact_files(conn)
+        _fix_dead_lease_groups(conn)
+        _fix_hung_test_runs(conn)
     checks = all_checks(conn)
     for c in checks:
         print(f"  [{LABELS[c.status]}] {c.name}: {c.detail}")

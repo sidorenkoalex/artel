@@ -18,7 +18,8 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from orchestrator import catalog, ci, config, fsm_merge_gate, merge_lock, store  # noqa: E402
+from orchestrator import (catalog, ci, config, fsm, fsm_merge_gate,  # noqa: E402
+                          github_adapter, merge_lock, store)
 from tests.sandbox import TmpRootTest, capture  # noqa: E402
 
 RUNNING = (False, "CI коммита abc12345 ещё идёт: python")
@@ -239,6 +240,49 @@ class OuterCycleDeadlineTest(MergeGateCiWaitUnitTest):
             starts[0], starts[1],
             "AC-4: потолок обязан отсчитываться от ПЕРВОГО пуша — второй "
             "заход в ожидание не имеет права пересчитать `start`")
+
+
+class FreshPathDefersToWaitLoopTest(MergeGateCiWaitUnitTest):
+    """SPEC 01M1NBWPKNBXP9ZXXQDJM7AXPJ, AC-7 — эквивалент в стиле этого
+    файла (реальный сценарий «первый push, CI ещё не завёлся» кроют
+    приёмочные тесты задачи, `_sandbox.py::MergeGateFreshCiWaitSandbox`):
+    тело гейта на пути `pull_outcome == "fresh"` с `confirmed_ci_note is
+    None` обязано вернуть `("wait", branch)`, не опрашивать `ci.
+    branch_status` вовсе само — опрос и решение (ждать циклом или
+    отказать) целиком переехали в `_wait_for_branch_ci_green` вызывающего
+    цикла, как и на пути "pulled".
+    """
+
+    def test_fresh_with_no_confirmed_note_returns_wait_without_polling_ci(self):
+        """Путь "fresh" без `confirmed_ci_note` возвращает `("wait",
+        branch)` и не зовёт `ci.branch_status` сам ни разу.
+
+        Ловит мутацию: возврат старого разового опроса `ci.branch_status`
+        внутри тела на пути "fresh" вместо `("wait", ...)` —
+        `branch_status_calls` перестанет быть пустым, и AC-7 тихо
+        откатится к немедленному отказу по одному опросу.
+        """
+        branch_status_calls = []
+
+        def spying_branch_status(branch):
+            branch_status_calls.append(branch)
+            return (False, "у коммита abc12345 нет ни одной проверки CI")
+
+        self.patch_branch_status(spying_branch_status)
+
+        with mock.patch.object(fsm, "_pull_main_or_escalate",
+                               return_value="fresh"), \
+             mock.patch.object(github_adapter, "ensure_head_in_origin",
+                               return_value=(True, "")):
+            outcome = fsm_merge_gate._cmd_approve_merge_gate(
+                store.db(), self.TASK, "merge_gate",
+                {"branch": "task/t001-zadacha"})
+
+        self.assertEqual(outcome, ("wait", "task/t001-zadacha"))
+        self.assertEqual(
+            branch_status_calls, [],
+            "AC-7: путь fresh не имеет права опрашивать CI сам — опрос "
+            "переехал в цикл ожидания вызывающего кода")
 
 
 if __name__ == "__main__":

@@ -32,6 +32,16 @@ cleanup)` в обход этого модуля.
 (git-репозиторий с одним коммитом на main + патч `ALL_CONFIG_ATTRS`) —
 файл-специфичная надстройка (`head`/`write_and_commit` или
 `TASK`/`commit_on_branch`) остаётся локальным подклассом там, где нужна.
+
+`network_guarded_real_run`/`_network_git_command_denial`/
+`_is_local_git_address` (SPEC 01M1QHQ277PQQA894X97RVEX9Y, требование 1) —
+единая точка перехвата сетевых git-команд (`fetch`/`push`/`ls-remote`/
+`clone` с адресом не-`file://`/не-абсолютным путём): `SpyRun.__call__`
+зовёт её вместо прямого `_REAL_RUN` в ветке `passthrough_unknown`, и
+`tests/test_git_fixation.py::_GitFixationTmpRootTest` патчит ей
+`gitcmd.subprocess.run` вместо сырого модульного `subprocess.run` —
+без этого DNS-адрес фикстуры target'а (SPEC «Контекст») уходил в
+реальный резолвер и висел на таймауте при обрыве сети.
 """
 import errno
 import io
@@ -256,6 +266,74 @@ class FakeProc:
 _REAL_RUN = subprocess.run
 _REAL_POPEN = subprocess.Popen
 
+# Сетевые git-подкоманды (SPEC 01M1QHQ277PQQA894X97RVEX9Y, требование 1) —
+# единственные, которые реально обращаются наружу; остальные (init/add/
+# commit/status/remote/fsck/...) работают только с локальным репозиторием.
+_NETWORK_GIT_SUBCOMMANDS = ("fetch", "push", "ls-remote", "clone")
+# Хосты, которые НЕ считаются сетью для http(s)-адреса — точное сравнение
+# всей хост-части, не префикс (`127.0.0.1.evil.example` — DNS-имя, не
+# loopback, несмотря на общий префикс с исключённым `127.0.0.1`).
+_LOCAL_LOOPBACK_HOSTS = ("localhost", "127.0.0.1")
+
+
+def _is_local_git_address(address: str) -> bool:
+    """Локальный адрес — `file://`, абсолютный путь или голое имя
+    настроенного remote'а (например `origin`: git резолвит его САМ из
+    локального конфига репозитория, здесь это не URL и не адрес вовсе —
+    так адресуют локальные bare-фикстуры T048/T053, AC-2). Сеть — только
+    `http(s)://` с хостом, отличным от `localhost`/`127.0.0.1`.
+
+    Решает по ФОРМЕ адреса (текстовый префикс/хост), не резолвит его:
+    AC-9 требует отказа быстрее секунды и без обращения к резолверу даже
+    при подменённом `socket.getaddrinfo`."""
+    if address.startswith("file://") or address.startswith("/"):
+        return True
+    if address.startswith("http://") or address.startswith("https://"):
+        from urllib.parse import urlsplit
+        return urlsplit(address).hostname in _LOCAL_LOOPBACK_HOSTS
+    return True
+
+
+def _network_git_command_denial(cmd, want_text: bool):
+    """`CompletedProcess` именованного отказа (SPEC 01M1QHQ277PQQA894X97RVEX9Y,
+    AC-1), если `cmd` — сетевая git-команда (`fetch`/`push`/`ls-remote`/
+    `clone`, сквозь ведущие `-C <путь>` — тот же пропуск, что `SpyRun.
+    git_subcommands`) с адресом, который не является локальным путём;
+    `None` — команда не сетевая, адрес не найден или локален (AC-2:
+    перехватывать нечего, вызывающий код зовёт настоящий git как раньше)."""
+    if not cmd or cmd[0] != "git":
+        return None
+    i = 1
+    while i + 1 < len(cmd) and cmd[i] == "-C":
+        i += 2
+    if i >= len(cmd) or cmd[i] not in _NETWORK_GIT_SUBCOMMANDS:
+        return None
+    subcommand = cmd[i]
+    address = next((a for a in cmd[i + 1:] if not a.startswith("-")), None)
+    if address is None or _is_local_git_address(address):
+        return None
+    message = f"сеть в тестах запрещена: {subcommand} {address}"
+    empty = "" if want_text else b""
+    stderr = message if want_text else message.encode()
+    return subprocess.CompletedProcess(list(cmd), 1, empty, stderr)
+
+
+def network_guarded_real_run(cmd, *args, **kwargs) -> subprocess.CompletedProcess:
+    """Настоящий `subprocess.run`, но с именованным отказом сетевых
+    git-команд (см. `_network_git_command_denial`) — единая точка для
+    песочниц, которым нужен НАСТОЯЩИЙ git целиком (не фейковые плотницкие
+    примитивы `SpyRun`), но не сеть: `tests/test_git_fixation.py::
+    _GitFixationTmpRootTest` патчит этой функцией `gitcmd.subprocess.run`
+    вместо сырого модульного `subprocess.run` (SPEC
+    01M1QHQ277PQQA894X97RVEX9Y, «Контекст»: без неё DNS-адрес фикстуры
+    target'а там уходил в реальный fetch и висел на резолвере)."""
+    want_text = bool(kwargs.get("text") or kwargs.get("universal_newlines")
+                     or kwargs.get("encoding"))
+    denial = _network_git_command_denial(cmd, want_text)
+    if denial is not None:
+        return denial
+    return _REAL_RUN(cmd, *args, **kwargs)
+
 
 def claude_only_run(claude_stdout: str, claude_returncode: int = 0):
     """`subprocess.run` side_effect: отвечает только на `claude ...`, остальное
@@ -325,6 +403,12 @@ class SpyRun:
     test_ac2_doctor_generic_checks.py`/`test_ac3_recovery_check_scope.py`
     заводят репозиторий `projects.cmd_target_init` и коммитят в него
     по-настоящему — бланкетный фейк «успех на всё» их ложно зеленил).
+
+    Передача в настоящий `subprocess.run` идёт через
+    `network_guarded_real_run` (SPEC 01M1QHQ277PQQA894X97RVEX9Y,
+    требование 1): сетевая git-команда (`fetch`/`push`/`ls-remote`/
+    `clone`) с адресом не-`file://`/не-абсолютным путём получает
+    мгновенный именованный отказ вместо обращения к реальной сети.
     """
 
     def __init__(self, passthrough_unknown: bool = False):
@@ -370,7 +454,7 @@ class SpyRun:
         if len(cmd) >= 2 and cmd[1] in self._PLUMBING_OK:
             return subprocess.CompletedProcess(list(cmd), 0, empty, empty)
         if self.passthrough_unknown:
-            return _REAL_RUN(cmd, *args, **kwargs)
+            return network_guarded_real_run(cmd, *args, **kwargs)
         return subprocess.CompletedProcess(list(cmd), 0, empty, empty)
 
     def git_subcommands(self) -> list:
@@ -508,6 +592,9 @@ class RealGitSandbox(TmpRootTest):
     """
 
     def setUp(self):
+        # `super().setUp()` не зовётся — своего `setUp` целиком заменяет
+        # `TmpRootTest.setUp` (нужен свой порядок: git-репозиторий раньше
+        # патчей `ALL_CONFIG_ATTRS`).
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(resilient_tmp_cleanup, tmp)
         self.root = Path(tmp.name).resolve()

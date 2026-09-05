@@ -40,7 +40,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 TARGETS_YAML_DOGFOOD_ONLY = """targets:
   artel:
     forge: github
-    url: https://example.invalid/artel
+    url: file:///nonexistent/artel
     base: main
     token_slot: artel-token
     no_paths: []
@@ -51,7 +51,7 @@ TARGETS_YAML_DOGFOOD_ONLY = """targets:
 TARGETS_YAML_WITH_SLED = """targets:
   artel:
     forge: github
-    url: https://example.invalid/artel
+    url: file:///nonexistent/artel
     base: main
     token_slot: artel-token
     no_paths: []
@@ -59,7 +59,7 @@ TARGETS_YAML_WITH_SLED = """targets:
     merge_gate: operator
   sled:
     forge: github
-    url: https://example.invalid/sled
+    url: file:///nonexistent/sled
     base: main
     token_slot: sled-token
     no_paths: []
@@ -554,7 +554,7 @@ class BaseBranchCheckTest(unittest.TestCase):
 
     EXTERNAL_ENTRY = {
         "forge": "github",
-        "url": "https://example.invalid/sled",
+        "url": "file:///nonexistent/sled",
         "base": "main",
     }
 
@@ -562,7 +562,7 @@ class BaseBranchCheckTest(unittest.TestCase):
         """A7, требование 2 (AC-2): артель (`config.DEFAULT_TARGET`) —
         та же generic-логика, что и любой другой `forge: github` target
         (сверка с форджем через `gh`, не skip по имени)."""
-        entry = {"forge": "github", "url": "https://example.invalid/artel",
+        entry = {"forge": "github", "url": "file:///nonexistent/artel",
                  "base": "main"}
 
         def fake_run(args, **kwargs):
@@ -785,6 +785,154 @@ class OrphansTest(TmpRootTest):
 
         self.assertTrue(all(c.status == "ok" for c in checks))
         self.assertEqual(alerts.open_alerts(store.db(), "incident"), [])
+
+
+class OrphanArtifactBranchSweepTest(TmpRootTest):
+    """SPEC 01M1KVGD18P9H5WR7VM8TGPV1T, требование 4: `doctor --fix`
+    удаляет ветки `artifact/<id>` пульта без строки БД — уборка того
+    класса утечки, который SPEC «Контекст» описывает (тест, заводящий
+    задачу через `cmd_new` без подмены `config.ROOT`, коммитил в
+    НАСТОЯЩИЙ репозиторий пульта). Только по явному вызову, ровно один
+    incident-алерт на весь прогон, ветки живых задач не трогаются."""
+
+    def test_sweep_deletes_only_branches_without_a_db_row(self):
+        """Ловит мутацию: `sweep_orphan_artifact_branches` сверяет
+        `list_branches` с БД неверно (например, удаляет ВСЕ ветки
+        `artifact/*` без фильтра по известным id, или сравнивает без
+        `.lower()` и пропускает ветку живой задачи в другом регистре) —
+        тогда `artifact/t001` (живая задача) тоже попал бы в `deleted`
+        и был бы удалён `git branch -D`.
+        """
+        store.insert_task(store.db(), "T001", "Живая задача", "in_dev",
+                          "task/t001-zhivaya-zadacha", config.DEFAULT_TARGET, 25.0)
+        deleted_via_git = []
+
+        def fake_git(*args):
+            if len(args) >= 3 and args[0] == "branch" and args[1] == "-D":
+                deleted_via_git.append(args[2])
+            return subprocess.CompletedProcess(list(args), 0, "", "")
+
+        with mock.patch.object(
+                doctor.gitcmd, "list_branches",
+                lambda prefix="": ["artifact/t001", "artifact/t777"]), \
+                mock.patch.object(doctor.gitcmd, "git", fake_git):
+            deleted = doctor.sweep_orphan_artifact_branches(store.db())
+
+        self.assertEqual(deleted, ["artifact/t777"])
+        self.assertEqual(deleted_via_git, ["artifact/t777"])
+        incidents = [a for a in alerts.open_alerts(store.db(), "incident")
+                    if a["source"] == doctor.ORPHAN_ARTIFACT_BRANCH_SOURCE]
+        self.assertEqual(len(incidents), 1)
+        self.assertIn("artifact/t777", incidents[0]["message"])
+        self.assertNotIn("artifact/t001", incidents[0]["message"])
+
+    def test_failed_deletion_is_not_reported_as_deleted(self):
+        """R1-F3 (ANSWER-2 п.3): `git branch -D` неудачный на одной из
+        осиротевших веток — она не попадает ни в возвращаемый список, ни
+        в алерт как «удалены», только в честную часть «НЕ удалены».
+
+        Ловит мутацию: возврат `gitcmd.git("branch", "-D", ...)` не
+        проверяется — тогда ветка с ненулевым кодом возврата всё равно
+        попала бы в `deleted` и в алерт как успешно удалённая, хотя
+        `git branch -D` физически не удалил её.
+        """
+        def fake_git(*args):
+            if len(args) >= 3 and args[0] == "branch" and args[1] == "-D":
+                if args[2] == "artifact/t777":
+                    return subprocess.CompletedProcess(
+                        list(args), 1, "", "error: branch is checked out")
+                return subprocess.CompletedProcess(list(args), 0, "", "")
+            return subprocess.CompletedProcess(list(args), 0, "", "")
+
+        with mock.patch.object(
+                doctor.gitcmd, "list_branches",
+                lambda prefix="": ["artifact/t777", "artifact/t888"]), \
+                mock.patch.object(doctor.gitcmd, "git", fake_git):
+            deleted = doctor.sweep_orphan_artifact_branches(store.db())
+
+        self.assertEqual(deleted, ["artifact/t888"])
+        incidents = [a for a in alerts.open_alerts(store.db(), "incident")
+                    if a["source"] == doctor.ORPHAN_ARTIFACT_BRANCH_SOURCE]
+        self.assertEqual(len(incidents), 1)
+        self.assertIn("удалены: artifact/t888", incidents[0]["message"])
+        self.assertIn("НЕ удалены", incidents[0]["message"])
+        self.assertIn("artifact/t777", incidents[0]["message"])
+
+    def test_cmd_doctor_fix_reports_found_but_not_removed_honestly(self):
+        """R1-F3 (ANSWER-3): сироты найдены, но `git branch -D` провалился
+        на всех — `cmd_doctor(fix=True)` не должен печатать «не найдено»
+        (расходится с журналом алертов, который `sweep_orphan_artifact_
+        branches` уже честно ведёт), а отдельной честной строкой сказать,
+        что сироты найдены, но не удалены.
+
+        Ловит мутацию: `cmd_doctor` решает между «не найдено» и «найдены,
+        не удалены» только по пустоте возвращённого `sweep_orphan_
+        artifact_branches` списка (`removed`), не проверяя, были ли сироты
+        на самом деле, — тогда сценарий «найдены, все удаления
+        провалились» снова печатал бы обнадёживающее «не найдено».
+        """
+        def fake_git(*args):
+            if len(args) >= 3 and args[0] == "branch" and args[1] == "-D":
+                return subprocess.CompletedProcess(
+                    list(args), 1, "", "error: branch is checked out")
+            return subprocess.CompletedProcess(list(args), 0, "", "")
+
+        with mock.patch.object(doctor, "all_checks", lambda conn: []), \
+                mock.patch.object(doctor.gitcmd, "list_branches",
+                                  lambda prefix="": ["artifact/t777"]), \
+                mock.patch.object(doctor.gitcmd, "git", fake_git):
+            out = capture(lambda: doctor.cmd_doctor(fix=True))
+
+        self.assertNotIn("не найдено", out)
+        self.assertIn("найдены, но не удалены", out)
+
+    def test_no_orphans_raises_no_alert(self):
+        """Ловит мутацию: `sweep_orphan_artifact_branches` заводит
+        incident-алерт безусловно (не только `if orphans:`) — тогда
+        прогон уборки без единого сироты всё равно оставил бы запись в
+        журнале алертов, вводя Оператора в заблуждение о находке, которой
+        не было.
+        """
+        store.insert_task(store.db(), "T001", "Живая задача", "in_dev",
+                          "task/t001-zhivaya-zadacha", config.DEFAULT_TARGET, 25.0)
+
+        with mock.patch.object(doctor.gitcmd, "list_branches",
+                               lambda prefix="": ["artifact/t001"]), \
+                mock.patch.object(doctor.gitcmd, "git",
+                                  lambda *a: subprocess.CompletedProcess(
+                                      list(a), 0, "", "")):
+            deleted = doctor.sweep_orphan_artifact_branches(store.db())
+
+        self.assertEqual(deleted, [])
+        self.assertEqual(
+            [a for a in alerts.open_alerts(store.db(), "incident")
+             if a["source"] == doctor.ORPHAN_ARTIFACT_BRANCH_SOURCE], [])
+
+    def test_cmd_doctor_default_does_not_sweep(self):
+        """Ловит мутацию: `cmd_doctor` зовёт уборку сирот безусловно (не
+        только под `if fix:`) — тогда `doctor` без флага `--fix` тоже
+        удалял бы ветки, нарушая AC-4 («без явного вызова Оператора
+        уборка не запускается»).
+        """
+        with mock.patch.object(doctor, "all_checks", lambda conn: []), \
+                mock.patch.object(doctor, "sweep_orphan_artifact_branches") as sweep:
+            capture(doctor.cmd_doctor)
+
+        sweep.assert_not_called()
+
+    def test_cmd_doctor_fix_sweeps_once_and_lists_output(self):
+        """Ловит мутацию: `cmd_doctor(fix=True)` зовёт уборку сирот более
+        одного раза за прогон (например, внутри цикла по target'ам), или
+        не печатает имена удалённых веток в вывод — тогда AC-4 («перечень
+        удалённого в вывод», «ровно одна запись» уборки) был бы нарушен.
+        """
+        with mock.patch.object(doctor, "all_checks", lambda conn: []), \
+                mock.patch.object(doctor, "sweep_orphan_artifact_branches",
+                                  return_value=["artifact/t777"]) as sweep:
+            out = capture(lambda: doctor.cmd_doctor(fix=True))
+
+        sweep.assert_called_once()
+        self.assertIn("artifact/t777", out)
 
 
 class LeasesCheckTest(TmpRootTest):
