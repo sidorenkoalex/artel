@@ -635,6 +635,45 @@ def _commit_external_step_artifacts(conn, task_id: str, role: str,
     return detail
 
 
+def commit_pull_checkpoint(conn, task_id: str, wt: Path) -> str:
+    """WIP-чекпоинт worktree задачи перед `git merge` в `fsm._pull_main_or_
+    escalate` (SPEC 01M1RA0R9AH9RBAHD4A2Z5SEWQ, требование 2, AC-2/AC-3/
+    AC-5): незакоммиченный код вне `tasks/<id>/`, оставшийся после
+    отбрасывания `docs/codebase-map.md` (вызывающий код делает это
+    отдельным `checkout --` до вызова этой функции — иначе изменённая
+    карта попала бы в этот коммит вместо того, чтобы быть отброшенной),
+    коммитится тем же приёмом, что и остальные три WIP-чекпоинта
+    (`_commit_worktree_change`).
+
+    Мандат — безусловно `developer` (SPEC требование 2: «мандат кода в
+    этом worktree всегда у developer — единственной роли, чей WIP
+    попадает в кодовую ветку»): в отличие от `commit_timeout_checkpoint`/
+    `commit_abnormal_checkpoint`/`commit_pause_now_checkpoint`, здесь нет
+    параметра `role` и ветки отката для прочих ролей — подтяжка main
+    (все три точки вызова: `in_dev -> review`, `acceptance -> merge_gate`,
+    `merge_gate -> done`) идёт над worktree кодовой ветки задачи, куда
+    только код `developer` и попадает.
+
+    Не проверяет `store.task_target`/не разрешает `wt` сама — вызывающий
+    код (`fsm._pull_main_or_escalate`) уже получил `wt` от `workspace.
+    ensure` для КОНКРЕТНОГО target'а задачи, в отличие от остальных трёх
+    чекпоинтов, которые сами решают, чей worktree им коммитить (только
+    догфуд, PLAN «Риски» тех задач). Пустая строка — нечего коммитить или
+    git не ответил (та же тихая деградация, что и у остальных
+    WIP-чекпоинтов).
+    """
+    message = f"{task_id}: WIP-чекпоинт перед подтяжкой main"
+    committed, sha = _commit_worktree_change(wt, message,
+                                             exclude=f"tasks/{task_id}")
+    if not committed:
+        return ""
+    detail = f"{message} (sha {sha})" if sha else message
+    store.journal(conn, task_id, "orchestrator",
+                  "WIP-чекпоинт перед подтяжкой main", detail)
+    store.record_fixation(conn, task_id)
+    return detail
+
+
 def _commit_worktree_change(wt: Path, message: str,
                             exclude: str | None = None) -> tuple[bool, str]:
     """(закоммичено, sha) — `add -A` + `commit` служебной идентичностью
