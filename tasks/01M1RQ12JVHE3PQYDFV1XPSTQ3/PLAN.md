@@ -123,6 +123,72 @@ schema_version: 4
 `test_multitarget_invariants`, `test_step_autocommit`, `test_step_cost`,
 `test_step_refixation`, `test_timeout_checkpoint`) — все зелёные.
 
+### Правки итерации 2 (REVIEW.md итерация 1, R1-F1/R1-F2)
+
+R1-F2 — `docs/codebase-map.md` не была регенерирована после добавления
+`role_cwd_path` в `orchestrator/runner.py`: `python3
+scripts/codebase_map.py` прогнан, `role_cwd_path` теперь в перечне
+публичных функций модуля, `built_at_sha` обновлён.
+
+R1-F1 — новая проверка `_missing_required_artifact` (шаг 3) ломала 26
+тестов в 7 файлах существующего набора: они гоняют агентский шаг
+developer/reviewer через `FakeProc` с rc=0, не сажая на диск рабочего
+каталога роли обязательный артефакт — раньше это было неважно (rc=0
+всегда означал успех), теперь шаг честно ретраит и эскалирует. Сидирован
+маркер обязательного артефакта во всех 7 файлах, местом и приёмом,
+подходящим для песочницы каждого конкретно (расхождение между
+`config.TASKS`/`config.WORKTREES`/реальным git worktree в разных
+классах — не единая формула):
+
+- `tests/test_agent_failure.py::CmdRunFailureTest` — `_STEP_ARTIFACT`
+  по ТЕКУЩЕМУ состоянию задачи внутри `run_agent()` (класс переключает
+  state между тестами), маркер в `config.WORKTREES/<id>/tasks/<id>/`.
+- `tests/test_agent_log.py::CmdRunLoggingTest`,
+  `tests/test_doctor.py::PreflightBlocksMissingTokenTest`,
+  `tests/test_step_cost.py::CmdRunCostTest` — класс держит один и тот
+  же state='in_dev' на всём протяжении, PLAN.md сидируется один раз в
+  `setUp` по тому же адресу.
+- `tests/test_multitarget.py::RoleEnvTest` — этот класс подменяет
+  `workspace.ensure` на `lambda: (self.root, None)`, рабочий каталог
+  роли — `config.TASKS/<id>/`, не `config.WORKTREES/…`.
+- `tests/test_invariants.py::FsmTest` — новый общий хелпер
+  `seed_worktree_plan()`: маркер в `config.WORKTREES/<id>/tasks/<id>/`,
+  ОТДЕЛЬНО от `self.tdir` (`config.TASKS/<id>/`, откуда читает
+  FSM/бриф через `disk_backed_show`) — вызван в двух местах
+  (`ExhaustedBudgetIsNotBypassableTest`/`ParallelTaskLimitIsNotBypassableTest`),
+  где реально не хватало артефакта.
+- `tests/test_git_fixation.py` (`ExternalIntegrityIncidentBlocksRunTest`,
+  `RealPultGitTest`) — PLAN.md добавлен в СОДЕРЖИМОЕ коммита
+  артефактной ветки (`artifact_branch.commit_files`/
+  `_seed_artifact_branch`), а не только на диск репо фиксации: у этих
+  классов `runner.role_cwd` — настоящий git, `materialize_task_dir`
+  стирает с диска на каждом вызове любой файл, которого нет в ветке —
+  сидирование мимо ветки не пережило бы материализацию.
+
+Побочная находка при починке `test_agent_log.py`: тест
+`test_environment_fingerprint_is_journaled_on_start_and_finish` патчит
+`agent_log.subprocess.run` — тот же объект модуля `subprocess`, что и у
+`gitcmd.check_ignore`, а не только у сборщика fingerprint. Раньше это
+было незаметно (автокоммиту шага нечего было коммитить, `check_ignore`
+не вызывался); с сидированным PLAN.md автокоммит стал реально находить
+файл и звать `check_ignore`, попадая под чужой мок теста (текстовый
+`CompletedProcess` вместо байтового) и падая `TypeError`. Не дефект
+продакшен-кода — сузил `fake_run` этого теста до точного совпадения
+`["git", "--version"]`/`["claude", "--version"]`, всё остальное
+делегируется в `self.git_spy` (тот же `SpyRun`, что уже ставит
+`TmpRootTest.setUp`).
+
+Реестр замечаний REVIEW.md: R1-F1 и R1-F2 размечены `fixed`.
+
+Проверено исполнением: `python3 -m pytest` по каждому из 19
+файлов из первой итерации — все зелёные, включая полный перечень из 26
+тестов замечания R1-F1 (`test_agent_failure`, `test_agent_log`,
+`test_doctor`, `test_git_fixation`, `test_invariants`,
+`test_multitarget`, `test_step_cost`); `tasks/01M1RQ12JVHE3PQYDFV1XPSTQ3/
+acceptance_tests/` — 7/7 зелёные; `python3 scripts/guard.py
+tasks/01M1RQ12JVHE3PQYDFV1XPSTQ3/{SPEC,PLAN}.md` — «GUARD: ок (2
+файлов)»; `python3 scripts/codebase_map.py` — карта перегенерирована.
+
 ## Риски
 
 - Список обязательных артефактов по роли зашит в `runner.py`
