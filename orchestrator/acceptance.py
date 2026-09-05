@@ -80,13 +80,25 @@ def materialize_from_branch(task_id: str, branch: str, code_dir: Path) -> Path:
     умеют трактовать отсутствие `acceptance_tests/` как «тесты не
     заведены», не отказ.
 
+    Git не ответил на `ls_tree_files` (`None`, отдельно от легитимно
+    пустой ветки — `[]`, REVIEW.md итерация 1, R1-F1) — тихая деградация,
+    тем же приёмом, что `artifact_branch.materialize_task_dir`: диск не
+    трогается вовсе, уже материализованная планка остаётся как есть.
+    Иначе транзиентный сбой git на повторной материализации (второй
+    проход review, повторная подтяжка main) стирал бы прунингом ниже
+    уже реально лежащие на диске файлы планки, и `run()` красил бы
+    задачу диагнозом «acceptance_tests красные» вместо честного «git не
+    ответил, планка не проверена».
+
     Возврат — `code_dir / "tasks" / task_id` (совместим с `run()`,
     ожидающим `tdir / "acceptance_tests"`).
     """
     tdir = code_dir / "tasks" / task_id
     tests_dir = tdir / "acceptance_tests"
     prefix = f"tasks/{task_id}/acceptance_tests/"
-    paths = gitcmd.ls_tree_files(branch, f"tasks/{task_id}/acceptance_tests") or []
+    paths = gitcmd.ls_tree_files(branch, f"tasks/{task_id}/acceptance_tests")
+    if paths is None:
+        return tdir
     wanted: dict[str, str] = {}
     for rel in paths:
         if not rel.startswith(prefix):

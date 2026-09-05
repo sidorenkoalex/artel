@@ -238,6 +238,12 @@ class MapConflictAutoResolveTest(unittest.TestCase):
     # ------------------------------------------- авторазрешение — успех
 
     def test_map_only_conflict_autoresolves_without_escalation(self):
+        """Ловит мутацию (SPEC 01M1RNZ6V7TTTTYAHBMF8JBQQS, REVIEW.md
+        итерация 1, R1-F2): возврат материализации планки к временному
+        каталогу (регрессия №14) или к `cwd=config.ROOT` — `plank_root`/
+        `cwd`, сверяемые ниже с `self.wt_path`, перестали бы совпадать,
+        и `assertEqual` по ним это поймает.
+        """
         self.write_acceptance_plank()
         calls, side_effect = self.make_in_repo_side_effect([self.MAP_REL])
         with mock.patch.object(gitcmd, "commits_behind", return_value=3), \

@@ -291,6 +291,12 @@ class BranchFreshnessGateTest(unittest.TestCase):
         MAIN_BRANCH` или к `"FETCH_HEAD"` вместо зафетченного sha — AC-2/
         R1-F1 тихо перестанут выполняться, а `assertNotIn`/`assertIn` по
         аргументам merge здесь это поймают.
+
+        Ловит мутацию (SPEC 01M1RNZ6V7TTTTYAHBMF8JBQQS, REVIEW.md
+        итерация 1, R1-F2): возврат материализации планки к временному
+        каталогу (регрессия №14) или к `cwd=config.ROOT` — `plank_root`/
+        `cwd` ниже перестали бы совпадать с `self.wt_path`, и `assertEqual`
+        по ним это поймает.
         """
         self.setup_recording()
         self.write_acceptance_plank()
