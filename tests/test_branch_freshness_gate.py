@@ -540,6 +540,51 @@ class BranchFreshnessGateTest(unittest.TestCase):
         self.assertEqual(len(self.merge_calls), 1)
         self.assertEqual(self.abort_calls, [])
 
+    # --------- отказ AC-3 на сбое чтения SPEC.md (REVIEW.md R1-F1, ит. 4)
+
+    def test_approve_refuses_when_spec_read_fails_after_missing_plank(self):
+        """REVIEW.md 01M1R9YEK08XEQWBFX0929WFVJ итерация 4, замечание
+        major: R1-F1 (сбой чтения SPEC.md отказывает именованно, не
+        молчаливый "pulled") был исправлен по коду за три итерации, но
+        ни разу не закреплён тестом — единственной защитой от регресса
+        оставалась ручная эмпирическая проверка ревьювера на каждой
+        итерации. Планка не найдена в артефактной ветке
+        (`acceptance_tests/` отсутствует) легитимна ТОЛЬКО когда SPEC.md
+        реально прочитан и не несёт AC-разметки/несёт `skip_tests`; здесь
+        чтение самого SPEC.md проваливается (git не ответил) — узел
+        обязан отказать именованно (AC-3), не подставлять дефолт
+        `meta={}` (`guard.requires_ac_markup({}) == False`), который дал
+        бы молчаливый "pulled".
+
+        Ловит мутацию: возврат `_read_branch_text_or_refuse` к прямому
+        `gitcmd.show(...) or {}` — состояние осталось бы `merge_gate`
+        вместо `acceptance`, а именованный отказ пропал бы из журнала.
+        """
+        self.setup_recording()
+
+        def fake_show(branch, rel):
+            if rel.endswith("SPEC.md"):
+                return None, "git не ответил"
+            return disk_backed_show(branch, rel)
+
+        with mock.patch.object(gitcmd, "commits_behind", return_value=6), \
+             mock.patch.object(gitcmd, "in_repo",
+                               side_effect=self._recording_ok), \
+             mock.patch.object(gitcmd, "show", side_effect=fake_show), \
+             mock.patch.object(acceptance, "run") as acc_run:
+            out = self.approve_from_acceptance()
+
+        self.assertEqual(self.state(), "acceptance",
+                         "сбой чтения SPEC.md обязан отказать переход, "
+                         "не менять состояние")
+        combined = out + "\n".join(self.journal_details())
+        self.assertIn("не прочитан", combined,
+                      "R1-F1: отказ обязан быть именованным в журнале, "
+                      "не молчаливым проходом")
+        self.assertEqual(len(self.merge_calls), 1,
+                         "слияние подтяжки уже состоялось до сверки планки")
+        acc_run.assert_not_called()
+
     # ------------------------------------------------ worktree недоступен
 
     def test_advance_escalates_when_worktree_not_available(self):
