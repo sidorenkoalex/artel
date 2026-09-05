@@ -49,8 +49,11 @@ from tests.sandbox import TmpRootTest  # noqa: E402
 # SHA-256 `.artel/report.html`, сгенерированного `report.cmd_report()` на
 # фикстуре ниже сегодняшним (дорефакторинговым) `orchestrator/report.py` +
 # `orchestrator/store.py`.
+# Снимок обновлён Оператором 05.09 (amend-tests): исходный хэш снят до мержа
+# блока report наблюдателя роста карты (605efe46); main и ветка R6 дают
+# один и тот же хэш.
 _EXPECTED_SHA256 = (
-    "920f2ac5c41e17525a0845cfdf97ef5c44bf7d5093df2538d00c420af40fee68")
+    "3d45117130e12c7590a770d8897c86aa78cb019597e27c3bff46a2f105c13235")
 
 
 class ReportOutputByteParityTest(TmpRootTest):
