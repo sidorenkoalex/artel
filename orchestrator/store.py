@@ -695,7 +695,16 @@ def record_fixation(conn, task_id: str) -> None:
     sha, clean = fixation.fix(task_id, target)
     update_task(conn, task_id, fixed_sha=sha or None)
     if target == config.DEFAULT_TARGET:
-        detail = f"target={target}, sha={sha or '—'}, чисто={clean}"
+        # Поле `код=` — sha кодовой ветки, заводится для default target
+        # тем же именем, что и НЕ-default (ветка ниже) — tasks/
+        # 01M1P9RJVYHTAC087J4B2CAR44, требование 1: `sha=` выше — sha
+        # артефактного/фиксационного репо (`config.PROJECTS/<target>`),
+        # НЕ база инкрементального diff (`review.previous_verdict_sha`
+        # читает именно `код=`); `sha=` остаётся как есть — эта задача
+        # не убирает поле, только перестаёт быть базой diff.
+        code_sha = fixation.default_code_sha(conn, task_id)
+        detail = (f"target={target}, sha={sha or '—'}, чисто={clean}, "
+                  f"код={code_sha or '—'}")
     else:
         # Два sha (SPEC T094, требование 9, AC-10): голова кодовой ветки
         # ЦЕЛЕВОГО и голова артефактной ветки ПУЛЬТА — `sha`/`clean` выше

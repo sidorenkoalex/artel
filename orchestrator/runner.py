@@ -12,9 +12,10 @@ import sys
 import time
 from pathlib import Path
 
-from . import (agent_log, brief, budget, checkpoint, config, failure_classification,
-              fixation, gitcmd, keychain, lease, parallel_limit, pause,
-              review, role_prompt, roles, spend, store, workspace)
+from . import (agent_log, alerts, brief, budget, checkpoint, config,
+              failure_classification, fixation, gitcmd, keychain, lease,
+              parallel_limit, pause, review, role_prompt, roles, spend,
+              store, workspace)
 
 # Идентичность коммитера, которую роль обязана унести с собой в свой HOME.
 # git читает эти переменные ПОВЕРХ конфига, поэтому перенос ровно двух пар
@@ -254,6 +255,16 @@ def _cmd_run(conn, task_id: str) -> None:
         store.journal(conn, task_id, role, "ревью-пакет собран",
                       review.package_note(package))
         print(f"[{task_id}] ревью-пакет: {review.package_note(package)}")
+        # Требование 3 (tasks/01M1P9RJVYHTAC087J4B2CAR44): «diff не
+        # собран» на итерации > 1 — алерт Оператору, не тихая строка
+        # журнала; на итерации 1 `not_collected` штатно пуст (полный diff
+        # всегда собирается), алерт не заводится и не трогается вовсе.
+        if package["iteration"] > 1:
+            if package["not_collected"]:
+                alerts.raise_diff_not_collected_alert(
+                    conn, task_id, package["not_collected"])
+            else:
+                alerts.close_diff_not_collected_alerts(conn, task_id)
         prompt = f"{prompt}\n\n--- РЕВЬЮ-ПАКЕТ ---\n\n{package['text']}"
 
     # Отказ advance доносится до следующего запуска роли (SPEC T078):
