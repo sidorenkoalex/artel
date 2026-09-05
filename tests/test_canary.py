@@ -318,6 +318,138 @@ class EphemeralCloneConfigRemapTest(unittest.TestCase):
         self.assertFalse(fake_clone_dir.exists())
 
 
+class DriveTaskEscalationCapTest(unittest.TestCase):
+    """`canary._drive_task` — потолок повторных `escalated`-циклов
+    (REVIEW.md итерации 1, R1-F1, blocker): `review_iters` не
+    сбрасывается при возврате из `escalated` (общее свойство FSM) —
+    задача, чей лимит ревью уже исчерпан, эскалируется заново на первом
+    же следующем `changes_requested`. Без потолка `_drive_task` гонял
+    бы её по кругу бесконечно."""
+
+    TASK = "T910"
+
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.root = Path(tmp.name)
+        for attr, value in (("ROOT", self.root),
+                            ("DB", self.root / ".artel" / "state.db"),
+                            ("TASKS", self.root / "tasks")):
+            patcher = mock.patch.object(config, attr, value)
+            patcher.start()
+            self.addCleanup(patcher.stop)
+        store.create_schema(store.db())
+        self.conn = store.db()
+        store.insert_task(self.conn, self.TASK, "Канареечная задача",
+                          "escalated", "task/t910-x", config.DEFAULT_TARGET,
+                          50.0, is_canary=True)
+        store.update_task(self.conn, self.TASK, escalated_from="in_dev")
+
+        # Эмулирует реальный сценарий R1-F1: developer доработал,
+        # ревьювер снова дал changes_requested, лимит ревью уже
+        # исчерпан -> мгновенная повторная эскалация, без реального
+        # прогона агентов.
+        def fake_auto(task_id):
+            t = store.get_task(self.conn, task_id)
+            if t["state"] == "in_dev":
+                store.set_state(self.conn, task_id, "escalated", "test",
+                                expected_state="in_dev")
+
+        patcher = mock.patch.object(canary.auto, "cmd_auto",
+                                    side_effect=fake_auto)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+        # Синтетический ANSWER настоящий коммитит в git (answer.cmd_answer)
+        # — здесь заменён тем же эффектом перехода без git, сам переход
+        # `_drive_task` — предмет теста, не устройство ANSWER.
+        def fake_pass_escalated(conn, task_id):
+            store.update_task(conn, task_id, escalated_from=None,
+                              answer_baseline=None)
+            store.set_state(conn, task_id, "in_dev", "test",
+                            expected_state="escalated")
+
+        patcher = mock.patch.object(
+            canary, "_pass_escalated_with_synthetic_answer",
+            side_effect=fake_pass_escalated)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+        patcher = mock.patch.object(canary.cleanup, "cmd_kill")
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def test_repeated_escalation_is_capped_and_task_is_killed(self):
+        canary._drive_task(self.conn, self.TASK)
+
+        canary.cleanup.cmd_kill.assert_called_once_with(self.TASK)
+        rows = store.open_alerts(self.conn, "threshold")
+        self.assertTrue(any(r["target"] == self.TASK for r in rows))
+
+    def test_does_not_escalate_more_times_than_the_cap_allows(self):
+        canary._drive_task(self.conn, self.TASK)
+
+        journaled = store.task_steps(self.conn, self.TASK)
+        escalations = sum(1 for r in journaled if r["action"] == "state -> escalated")
+        # Первая эскалация уже стояла до входа в `_drive_task` (не
+        # журналирована этим тестом) — считаем только те, что случились
+        # внутри цикла: не больше потолка.
+        self.assertLessEqual(escalations, config.CANARY_MAX_ESCALATION_CYCLES)
+
+
+class DriveTaskStallCapTest(unittest.TestCase):
+    """`canary._drive_task` — потолок проходов без прогресса (REVIEW.md
+    итерации 1, R1-F1, blocker, второй сценарий): бюджет задачи
+    исчерпан, `runner.cmd_run` отказывает `SystemExit`'ом ДО смены
+    состояния на каждом вызове — `auto.cmd_auto` эту причину не
+    отличает от «шаг ещё не готов» и просто возвращается, не меняя
+    состояние. Без потолка `_drive_task` крутился бы здесь бесконечно."""
+
+    TASK = "T911"
+
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.root = Path(tmp.name)
+        for attr, value in (("ROOT", self.root),
+                            ("DB", self.root / ".artel" / "state.db"),
+                            ("TASKS", self.root / "tasks")):
+            patcher = mock.patch.object(config, attr, value)
+            patcher.start()
+            self.addCleanup(patcher.stop)
+        store.create_schema(store.db())
+        self.conn = store.db()
+        store.insert_task(self.conn, self.TASK, "Канареечная задача",
+                          "in_dev", "task/t911-x", config.DEFAULT_TARGET,
+                          50.0, is_canary=True)
+
+        # `auto.cmd_auto` при исчерпанном бюджете ничего не двигает —
+        # ровно как реальный вызов, поймавший `SystemExit` изнутри и
+        # молча вернувшийся (см. `auto._cmd_auto`).
+        patcher = mock.patch.object(canary.auto, "cmd_auto", return_value=None)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+        patcher = mock.patch.object(canary.cleanup, "cmd_kill")
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def test_no_progress_is_capped_and_task_is_killed(self):
+        canary._drive_task(self.conn, self.TASK)
+
+        canary.cleanup.cmd_kill.assert_called_once_with(self.TASK)
+        rows = store.open_alerts(self.conn, "threshold")
+        self.assertTrue(any(r["target"] == self.TASK for r in rows))
+
+    def test_state_is_untouched_while_stalled(self):
+        canary._drive_task(self.conn, self.TASK)
+
+        # `_drive_task` сам состояние не меняет в стагнирующем случае —
+        # только звонит `cleanup.cmd_kill` (замокан здесь), реальный
+        # переход в `killed` — его работа, не предмет этого теста.
+        self.assertEqual(store.get_task(self.conn, self.TASK)["state"], "in_dev")
+
+
 class StoreAndCatalogMarkingTest(unittest.TestCase):
     """`tasks.is_canary` — колонка БД, не `title` (требование 6): заведение,
     `total_spent`, пометка в `status`, пометка/её отсутствие в RETRO."""

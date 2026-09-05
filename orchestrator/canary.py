@@ -59,7 +59,7 @@ from pathlib import Path
 
 from scripts import guard
 
-from . import (answer, artifacts, auto, catalog, cleanup, config, fsm,
+from . import (alerts, answer, artifacts, auto, catalog, cleanup, config, fsm,
               gitcmd, runner, store, workspace, yamlmini)
 
 CANARY_MARK_ACTOR = "canary"
@@ -220,13 +220,20 @@ def _kill_at_verifying(conn, task_id: str) -> None:
 
 def _pass_escalated_with_synthetic_answer(conn, task_id: str) -> None:
     """Возврат из `escalated` синтетическим ANSWER Оператора-заглушки
-    (требование 6, AC-6) — прямая копия ветки `elif state == "escalated"`
-    `fsm._cmd_approve` (читает `answer_baseline`/`escalated_from`, пишет
-    `store.set_state`), НЕ вызов `fsm.cmd_approve`: тот на `escalated`
-    требует sha (`fsm.APPROVE_NEEDS_SHA`), которого у первого вызова ещё
-    нет, и печатает «повтори с sha» вместо перехода — тот же принцип,
-    что и остальные гейты этого модуля (не через `cmd_approve`, см.
-    модульный докстринг).
+    (требование 6, AC-6) — повторяет эффект ветки `elif state ==
+    "escalated"` `fsm._cmd_approve` (читает `answer_baseline`/
+    `escalated_from`, пишет `store.set_state`), НЕ вызов
+    `fsm.cmd_approve`: тот на `escalated` требует sha
+    (`fsm.APPROVE_NEEDS_SHA`), которого у первого вызова ещё нет, и
+    печатает «повтори с sha» вместо перехода — тот же принцип, что и
+    остальные гейты этого модуля (не через `cmd_approve`, см. модульный
+    докстринг). Не полная копия: не проверяет `answer_baseline`
+    (canary сама пишет ровно один новый ANSWER непосредственно перед
+    вызовом — проверка была бы тавтологией) и не зовёт
+    `_maybe_ensure_draft_mr` (для канареечных задач он и так no-op,
+    `github_adapter.py`, `is_canary`) — при будущей содержательной правке
+    оригинала в `fsm.py` это стоит перепроверить (REVIEW.md итерации 1,
+    R1-F3).
 
     `answer.cmd_answer` коммитит ANSWER-n.md в артефактную ветку
     (best-effort push уходит в origin-заглушку клона, требование 3) —
@@ -253,10 +260,39 @@ def _pass_escalated_with_synthetic_answer(conn, task_id: str) -> None:
                     "ANSWER — прогон продолжается без Оператора")
 
 
+def _kill_inconclusive(conn, task_id: str, detail: str) -> None:
+    """Убивает ОДНУ задачу как «не сошлась» вместо бесконечного цикла без
+    прогресса (REVIEW.md итерации 1, R1-F1) — журналирует причину,
+    поднимает Оператору тот же вид алерта, что и отклонение метрик от
+    бейзлайна (`kind=threshold`, `source=canary`; требование 12: реакция
+    — только сигнал, никакого автоисправления), и убивает штатным
+    `cleanup.cmd_kill`. Прогон `cmd_canary` остальных k-1 задач набора
+    это не останавливает — цикл `for` в `cmd_canary` последовательный и
+    не разделяет состояние между задачами."""
+    store.journal(conn, task_id, CANARY_MARK_ACTOR, detail,
+                 "прогон дальше эту задачу не ведёт — cleanup.cmd_kill")
+    alerts.raise_alert(conn, task_id, "threshold", "canary", detail)
+    cleanup.cmd_kill(task_id)
+
+
 def _drive_task(conn, task_id: str) -> None:
     """Ведёт ОДНУ заведённую канарейкой задачу до её конца (`killed`) или
     до состояния, дальше которого canary не умеет вести — не роняет
-    прогон остальных задач набора ни в одном случае."""
+    прогон остальных задач набора ни в одном случае.
+
+    Два независимых потолка (REVIEW.md итерации 1, R1-F1) не дают циклу
+    `while True` крутиться бесконечно: `escalation_cycles` — число
+    возвратов из `escalated` подряд (лимит ревью не сброшен — задача
+    эскалируется заново на первом же `changes_requested`, каждый круг
+    реально тратит бюджет); `stall_streak` — число проходов подряд без
+    ЛЮБОГО прогресса (ни смена состояния, ни расход бюджета) — сценарий
+    «бюджет исчерпан, состояние агентское»: `runner.cmd_run` отказывает
+    `SystemExit`'ом ДО смены состояния на каждом вызове, `auto.cmd_auto`
+    эту причину не отличает от «шаг ещё не готов» и просто возвращается.
+    """
+    escalation_cycles = 0
+    stall_streak = 0
+    prev_signature = None
     while True:
         auto.cmd_auto(task_id)
         t = store.get_task(conn, task_id)
@@ -274,12 +310,34 @@ def _drive_task(conn, task_id: str) -> None:
             _kill_at_verifying(conn, task_id)
             return
         if state == "escalated":
+            escalation_cycles += 1
+            if escalation_cycles > config.CANARY_MAX_ESCALATION_CYCLES:
+                _kill_inconclusive(
+                    conn, task_id,
+                    f"canary: {config.CANARY_MAX_ESCALATION_CYCLES} "
+                    "повторных эскалаций подряд — задача не сходится")
+                return
             _pass_escalated_with_synthetic_answer(conn, task_id)
             continue
         if runner.step_role(t) is not None:
             # `auto` остановился, не дойдя до гейта (лимит AUTO_MAX_STEPS
             # за один вызов) — задаче всё ещё есть кому работать, просто
-            # продолжаем цикл новым вызовом `auto.cmd_auto`.
+            # продолжаем цикл новым вызовом `auto.cmd_auto`. Отличаем это
+            # от «прогресса нет вовсе» по неизменности (состояние,
+            # потраченное) между проходами.
+            signature = (state, t["spent_usd"])
+            if signature == prev_signature:
+                stall_streak += 1
+                if stall_streak >= config.CANARY_MAX_STALL_ITERS:
+                    _kill_inconclusive(
+                        conn, task_id,
+                        f"canary: {config.CANARY_MAX_STALL_ITERS} "
+                        f"проходов подряд без прогресса в состоянии "
+                        f"{state} — задача не сходится")
+                    return
+            else:
+                stall_streak = 0
+                prev_signature = signature
             continue
         # done/killed или любое другое состояние без агентской роли и не
         # входящее в canary-гейты выше — canary дальше не ведёт.
@@ -398,7 +456,6 @@ def _run_one_task(template_path: Path, run_stamp: str, ratio: float) -> None:
         warnings = _task_deviation_warnings(metrics, baseline, ratio)
         if warnings:
             for w in warnings:
-                from . import alerts
                 alerts.raise_alert(
                     outer_conn, task_id, "threshold", "canary",
                     f"канарейка {title} ({task_id}): {w}")
