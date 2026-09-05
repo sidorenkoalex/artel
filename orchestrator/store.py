@@ -37,6 +37,7 @@ CREATE TABLE IF NOT EXISTS tasks (
   answer_baseline INTEGER, verifying_attempts INTEGER DEFAULT 0,
   draft_mr_created INTEGER DEFAULT 0,
   diff_bytes INTEGER, split_assessment TEXT, zones TEXT,
+  materialized_artifact_sha TEXT,
   created_at TEXT, updated_at TEXT
 );
 CREATE TABLE IF NOT EXISTS steps (
@@ -204,6 +205,12 @@ def migrate(conn: sqlite3.Connection) -> None:
     # ровно один раз за жизненный цикл задачи — колонка, не запрос к
     # GitHub на каждый вход в in_dev (orchestrator/github_adapter.py).
     add_column(conn, "tasks", "draft_mr_created", "INTEGER DEFAULT 0")
+    # sha головы артефактной ветки на момент последней материализации
+    # `runner.role_cwd` (SPEC 01M1NKTF173WV5CPDZ1C3WW69K, AC-1/AC-6): NULL —
+    # материализации ещё не было (строка старше этой задачи либо у задачи
+    # нет артефактной ветки) — конфликт-гвард автокоммита сверять не с чем,
+    # тот же вырожденный случай, что и у fixed_sha/tests_locked_sha.
+    add_column(conn, "tasks", "materialized_artifact_sha", "TEXT")
     # Верхняя оценка неучтённой стоимости шага (SPEC
     # 01M1NWCM3TDY0YABEKE8DYQA1C, требование 1): накопительная, отдельная от
     # `spent_usd` — таймаут шага роли БЕЗ курса токенов (`config.TOKEN_RATES`)
