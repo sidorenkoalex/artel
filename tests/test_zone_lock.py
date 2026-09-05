@@ -260,6 +260,36 @@ class ZoneLockTest(TmpRootTest):
         self.assertIsNone(zone_lock.blocking_conflict(
             store.db(), self.TASK, self.get_task()))
 
+    def test_non_developer_agent_start_in_same_stay_does_not_occupy(self):
+        """Регрессия 01M1REVJ8AJ (коммит d617c148, SPEC
+        01M1RR1PZC926T13NB1JSZ7F8T, требование 1, AC-7): граница текущего
+        пребывания пройдена (`"state -> tests_writing"`), в ТОМ ЖЕ
+        пребывании журналируется `"agent run started"` актором
+        `test_author` (симулирует реальный прогон роли test_author на
+        стадии `tests_writing`) — записи того же действия актором
+        `developer` нет вовсе. Сосед с пересекающейся зоной в `in_dev` не
+        должен блокироваться этой задачей.
+
+        Ловит мутацию: `_occupies`/`_visit_has_action` не сверяют `actor`
+        записи `"agent run started"` с ролью `developer` — без фикса эта
+        задача ложно считалась бы занявшей зону по одному факту старта
+        любой роли, и `blocking_conflict` соседа вернул бы конфликт
+        вместо `None`."""
+        self.set_own_zones("a/b")
+        self.seed_other("in_dev", "a/b")
+        store.journal(store.db(), self.TASK, "system",
+                     "state -> tests_writing", "")
+        store.journal(store.db(), self.TASK, "test_author",
+                     "agent run started", "прогон test_author (tests_writing)")
+
+        self.assertFalse(zone_lock._occupies(store.db(), self.TASK))
+
+        other_row = self.get_task(self.OTHER)
+        self.assertIsNone(zone_lock.blocking_conflict(
+            store.db(), self.OTHER, other_row))
+        self.assertIsNone(
+            zone_lock.refusal(store.db(), self.OTHER, other_row))
+
     def test_operator_release_after_boundary_lifts_conflict(self):
         """Ловит мутацию: `cmd_zone_release` не влияет на результат
         `blocking_conflict` — операторское снятие ожидания (требование 6)

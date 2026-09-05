@@ -9,7 +9,6 @@ acceptance — `orchestrator/fsm_autogate.py` (T091, декомпозиция
 `cmd_approve`, `cmd_reject`) и узлы, общие для нескольких состояний/
 гейтов (сверка свежести ветки, чтения с ветки задачи, guard-отказ).
 """
-import shutil
 import subprocess
 import sys
 from datetime import datetime, timezone
@@ -328,55 +327,51 @@ def _pull_main_or_escalate(conn, task_id: str, t, state: str) -> str:
     # НЕЙ трактовал пустой/непрочитанный каталог как красную планку и
     # эскалировал «приёмочные тесты красные после подтяжки main», хотя
     # тестов там попросту никогда не было (SPEC «Контекст», инцидент
-    # 01M1QHQ277PQQA894X97RVEX9Y). `materialize_from_branch` — тот же узел,
-    # что уже несёт автогейт acceptance (`fsm_autogate.py`).
+    # 01M1QHQ277PQQA894X97RVEX9Y). Материализуется НА МЕСТЕ, в тот же
+    # worktree `wt_path`, на котором только что прошёл merge (SPEC
+    # 01M1RNZ6V7TTTTYAHBMF8JBQQS, требование 1-2, AC-1/AC-2/AC-3):
+    # прогон обязан резолвить `orchestrator/` кодовой ветки задачи и
+    # через `__file__` (штатная вложенность `tasks/<id>/acceptance_tests/`
+    # ЭТОГО каталога), и через `cwd` (регрессия №14 — до этой задачи оба
+    # пути мимо кода ветки, во временный каталог с `cwd=config.ROOT`).
     artifact_branch_name, _ = artifact_source.resolve(conn, task_id)
-    plank_root = acceptance.materialize_from_branch(task_id,
-                                                     artifact_branch_name)
-    try:
-        if not (plank_root / "acceptance_tests").is_dir():
-            # Планка не найдена в артефактной ветке — легитимно ТОЛЬКО
-            # когда SPEC пропустила tests_writing (`skip_tests` задан) или
-            # не несёт AC-разметки вовсе (AC-5, вырожденный случай, не
-            # тронутый этой задачей); иначе — именованный отказ AC-3, не
-            # молчаливый зелёный проход и не эскалация AC-4 (та остаётся
-            # только для планки, которая реально прогналась и упала).
-            #
-            # SPEC.md читается общим узлом `_read_branch_text_or_refuse`
-            # (не голым `gitcmd.show`, REVIEW.md R1-F1, итерации 1-3):
-            # SPEC.md — обязательный артефакт, на артефактной ветке живой
-            # задачи он есть всегда, поэтому сбой чтения (git не ответил,
-            # ветка недоступна, гонка с материализацией) сам по себе уже
-            # ненормален и не должен схлопываться в дефолтный `meta={}` →
-            # `requires_ac_markup(...) == False` → молчаливый `"pulled"`
-            # — узел уже журналирует и печатает именованный отказ.
-            spec_text = _read_branch_text_or_refuse(
-                conn, task_id, artifact_branch_name, "SPEC.md")
-            if spec_text is None:
-                return "refused"
-            meta = yamlmini.frontmatter(spec_text) or {}
-            if guard.requires_ac_markup(meta):
-                detail = (
-                    f"планка не найдена в источнике: артефактная ветка "
-                    f"{artifact_branch_name} не несёт tasks/{task_id}/"
-                    f"acceptance_tests/, а tests_writing не пропущена "
-                    f"легитимно (skip_tests не задан в SPEC)")
-                store.journal(
-                    conn, task_id, "fsm",
-                    "переход отклонён: планка не найдена в источнике",
-                    detail)
-                print(f"[{task_id}] переход отклонён: {detail}")
-                return "refused"
-            return "pulled"
-        # Импорт пакета — из worktree кодовой ветки задачи, не из ROOT
-        # (пин старого кода): см. докстринг `acceptance.run`.
-        code_root = None
-        if (t["target"] == config.DEFAULT_TARGET
-                and workspace.on_task_branch(task_id, t["branch"]) is True):
-            code_root = workspace.path(task_id)
-        green, tail = acceptance.run(plank_root, code_root=code_root)
-    finally:
-        shutil.rmtree(plank_root, ignore_errors=True)
+    tdir = acceptance.materialize_from_branch(task_id, artifact_branch_name,
+                                              wt_path)
+    if not (tdir / "acceptance_tests").is_dir():
+        # Планка не найдена в артефактной ветке — легитимно ТОЛЬКО
+        # когда SPEC пропустила tests_writing (`skip_tests` задан) или
+        # не несёт AC-разметки вовсе (AC-5, вырожденный случай, не
+        # тронутый этой задачей); иначе — именованный отказ AC-3, не
+        # молчаливый зелёный проход и не эскалация AC-4 (та остаётся
+        # только для планки, которая реально прогналась и упала).
+        #
+        # SPEC.md читается общим узлом `_read_branch_text_or_refuse`
+        # (не голым `gitcmd.show`, REVIEW.md R1-F1, итерации 1-3):
+        # SPEC.md — обязательный артефакт, на артефактной ветке живой
+        # задачи он есть всегда, поэтому сбой чтения (git не ответил,
+        # ветка недоступна, гонка с материализацией) сам по себе уже
+        # ненормален и не должен схлопываться в дефолтный `meta={}` →
+        # `requires_ac_markup(...) == False` → молчаливый `"pulled"`
+        # — узел уже журналирует и печатает именованный отказ.
+        spec_text = _read_branch_text_or_refuse(
+            conn, task_id, artifact_branch_name, "SPEC.md")
+        if spec_text is None:
+            return "refused"
+        meta = yamlmini.frontmatter(spec_text) or {}
+        if guard.requires_ac_markup(meta):
+            detail = (
+                f"планка не найдена в источнике: артефактная ветка "
+                f"{artifact_branch_name} не несёт tasks/{task_id}/"
+                f"acceptance_tests/, а tests_writing не пропущена "
+                f"легитимно (skip_tests не задан в SPEC)")
+            store.journal(
+                conn, task_id, "fsm",
+                "переход отклонён: планка не найдена в источнике",
+                detail)
+            print(f"[{task_id}] переход отклонён: {detail}")
+            return "refused"
+        return "pulled"
+    green, tail = acceptance.run(tdir, code_root=wt_path)
 
     if not green:
         store.set_state(
