@@ -103,7 +103,7 @@ level-based, инвариант «догон без потерь» (сверка
 мин, health-check 5 неудач подряд = алерт ($25). C1 —
 gitlab-адаптер; критерий: полный цикл Draft-MR → комментарий → триаж
 → правка → undraft → merge руками → merge-событие поймано → done,
-на тестовом репо личного namespace scm.x5.ru ($50). C2 — подключение
+на тестовом репо личного namespace gitlab.corp.example ($50). C2 — подключение
 feedback: merge_gate=target-human (ADR-0003 п.7), узкий no_paths,
 генерация codebase-map, `verify: [ci]`, первые задачи безопасного
 класса; предусловия — B3, C0 (бриф готов — T028); плюс минимальный
