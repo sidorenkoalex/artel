@@ -101,6 +101,34 @@ jobs:
             echo "$ADDED"
             exit 1
           fi
+      - name: diff не добавляет значение GUID запечатанного пула в skills/, templates/, docs/
+        env:
+          BASE_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.event.before }}
+        run: |
+          if [ -z "$BASE_SHA" ] || [ "$BASE_SHA" = "0000000000000000000000000000000000000000" ] \
+             || ! git cat-file -e "$BASE_SHA" 2>/dev/null; then
+            echo "базы для диффа нет (новая ветка или принудительный пуш) — пропуск"
+            exit 0
+          fi
+          # SPEC 01M1NSR5M5THYRC0RFWPMVE2DW, требование 4/6: манифест
+          # canary/guids.txt — открытый список GUID запечатанного пула
+          # (ключа расшифровки в CI нет и не нужен — сравнение по
+          # значениям GUID, не по содержимому шаблонов). Появление
+          # любого значения манифеста в skills/, templates/ или docs/
+          # пульта — та же утечка контекста роли в пул, что и общий
+          # маркер canary-guid: выше, только по конкретному значению.
+          if [ ! -f canary/guids.txt ] || [ ! -s canary/guids.txt ]; then
+            echo "canary/guids.txt ещё нет или пуст — пропуск (пул ещё не запечатан)"
+            exit 0
+          fi
+          ADDED=$(git diff "$BASE_SHA"...HEAD -- 'skills/*' 'templates/*' 'docs/*' \
+            | grep -E '^\+' | grep -Ev '^\+\+\+' \
+            | grep -Ff <(grep -v '^[[:space:]]*$' canary/guids.txt) || true)
+          if [ -n "$ADDED" ]; then
+            echo "::error::диф добавляет значение GUID запечатанного пула канарейки в skills/, templates/ или docs/ — утечка (SPEC 01M1NSR5M5THYRC0RFWPMVE2DW, требование 4):"
+            echo "$ADDED"
+            exit 1
+          fi
 
   python:
     name: Синтаксис и тесты оркестратора
