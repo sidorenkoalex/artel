@@ -365,12 +365,13 @@ class OutputPump(threading.Thread):
         self.log_path = log_path
         self.error: Exception | None = None
         self.cost: dict | None = None
-        # Токены промежуточных usage-событий (tasks/T040): читать их после
-        # обрыва потока неоткуда, кроме как во время самого чтения, поэтому
-        # копятся здесь же, рядом с `cost`. `saw_usage_event` — отдельно от
-        # суммы: «увидели usage с нулём токенов» не должно выглядеть как
-        # «usage не видели вовсе».
-        self.partial_tokens = 0
+        # Токены промежуточных usage-событий (tasks/T040), разбивкой по
+        # видам (`config.USAGE_TOKEN_KEYS`, SPEC 01M1PP0VYRT55WN8GGVG66X89Y,
+        # требование 2) — читать их после обрыва потока неоткуда, кроме
+        # как во время самого чтения, поэтому копятся здесь же, рядом с
+        # `cost`. `saw_usage_event` — отдельно от суммы: «увидели usage с
+        # нулём токенов» не должно выглядеть как «usage не видели вовсе».
+        self.partial_tokens: dict = {}
         self.saw_usage_event = False
         # Трение шага (T095, ANSWER-1.md): персистентный лог несёт только
         # рендер, поэтому сигналы ТЗ нужно ловить здесь же, на сырых
@@ -390,10 +391,11 @@ class OutputPump(threading.Thread):
         cost = spend.parse_cost_event(raw_line)
         if cost is not None:
             self.cost = cost
-        tokens = spend.stream_usage_tokens(raw_line)
-        if tokens is not None:
+        tokens_by_type = spend.stream_usage_by_type(raw_line)
+        if tokens_by_type is not None:
             self.saw_usage_event = True
-            self.partial_tokens += tokens
+            for key, count in tokens_by_type.items():
+                self.partial_tokens[key] = self.partial_tokens.get(key, 0) + count
         event = _parse_stream_event(raw_line)
         if event is not None:
             self._friction_events.append(event)

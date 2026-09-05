@@ -13,9 +13,10 @@ report.py/artel.py). `steps.id` — сквозной autoincrement через в
 восстанавливает единую хронологию журнала без отдельного запроса.
 """
 import html as html_lib
+import re
 from datetime import datetime, timedelta, timezone
 
-from . import agent_log, config, store
+from . import agent_log, alerts, config, spend, store
 
 # Гейты, где решение принимает только Оператор, независимо от политики
 # `gates.yaml` (`orchestrator/gates.py` применяет её ТОЛЬКО к acceptance;
@@ -128,6 +129,110 @@ def _cost_per_done_task(tasks: list) -> float | None:
     if not done_spend:
         return None
     return sum(done_spend) / len(done_spend)
+
+
+# --------------------------------------- калибровка курса токенов (AC-6/AC-7)
+#
+# `spend.charge_step` журналирует действие "agent cost KNOWN" (SPEC
+# 01M1PP0VYRT55WN8GGVG66X89Y, требование 6, AC-8) с фактической ценой
+# запуска ($, полная точность — `actual_usd=<repr>`, не округлённое
+# отображение `cost_note`) и разбивкой usage по видам
+# (`spend._tokens_by_type_text`). Разбор здесь — обратная операция того
+# же формата; оба места держит один модуль (spend), но парсер живёт
+# здесь же, рядом с использованием, тем же приёмом, что
+# `_task_journal_friction` разбирает `agent_log.FRICTION_JOURNAL_ACTION`.
+_ACTUAL_USD_RE = re.compile(r"actual_usd=([0-9eE.+-]+)")
+_TOKEN_FIELD_RE = {key: re.compile(rf"(?<![a-z_]){re.escape(key)}=(\d+)")
+                   for key in config.USAGE_TOKEN_KEYS}
+
+KNOWN_COST_JOURNAL_ACTION = "agent cost KNOWN"
+
+
+def _known_cost_breakdown(detail: str) -> tuple:
+    """(фактическая_цена, разбивка_по_видам) из детали «agent cost
+    KNOWN», либо `(None, None)` — запись не несёт того, что нужно
+    (старый формат, повреждённая строка)."""
+    usd_match = _ACTUAL_USD_RE.search(detail or "")
+    if usd_match is None:
+        return None, None
+    try:
+        actual_usd = float(usd_match.group(1))
+    except ValueError:
+        return None, None
+    tokens_by_type = {}
+    for key, pattern in _TOKEN_FIELD_RE.items():
+        m = pattern.search(detail)
+        if m is not None:
+            tokens_by_type[key] = int(m.group(1))
+    return actual_usd, tokens_by_type
+
+
+def token_rate_divergence(conn) -> dict:
+    """Коэффициент расхождения курса роли с фактом CLI, по роли (SPEC
+    01M1PP0VYRT55WN8GGVG66X89Y, требования 4-5, AC-6/AC-7).
+
+    Источник — журнал: каждая запись `KNOWN_COST_JOURNAL_ACTION`
+    (`spend.charge_step`) несёт фактическую цену завершённого шага (из
+    `total_cost_usd` финального события потока) и разбивку usage по
+    видам. Расчётная цена той же разбивки — `spend.partial_cost_usd` по
+    курсу РОЛИ (не задачи, не target'а): коэффициент — суммарное
+    расхождение по всем известным шагам этой роли, не среднее по шагам
+    (несколько маленьких шагов не должны тонуть один крупный
+    расходящийся).
+
+    Роль без записей — отсутствует в результате вовсе, не 0.0
+    (требование AC-6 — «не считается расхождением по умолчанию»).
+    Курс роли неполон (`partial_cost_usd` бросает `ValueError`, AC-5) —
+    её шаги пропускаются молча: калибровка курса не обязана падать из-за
+    неполноты конфигурации, это дело `spend.partial_cost_usd` в её
+    собственной точке вызова.
+
+    Вычисление и алерт совмещены одним вызовом (тот же приём, что уже
+    сочетают `spend.charge_missing_result`/`budget.check_program_spend`)
+    — коэффициент выше `config.TOKEN_RATE_DIVERGENCE_ALERT_THRESHOLD`
+    поднимает `alerts` `kind=warning`, `target=None` (расхождение — по
+    роли поперёк всех задач и target'ов, не про одну задачу), через
+    `alerts.raise_token_rate_divergence_alert` — не `alerts.raise_alert`
+    напрямую: сообщение несёт растущие суммы/счётчики, дедуп по точному
+    тексту не сработал бы на повторных прогонах (REVIEW.md итерации 1,
+    R1-F2).
+    """
+    tasks = store.all_tasks(conn)
+    steps = _all_steps(conn, tasks)
+
+    pairs_by_role: dict = {}
+    for row in steps:
+        if row["action"] != KNOWN_COST_JOURNAL_ACTION:
+            continue
+        actual_usd, tokens_by_type = _known_cost_breakdown(row["detail"])
+        if actual_usd is None or not tokens_by_type:
+            continue
+        role = row["actor"]
+        try:
+            calculated_usd = spend.partial_cost_usd(role, tokens_by_type)
+        except ValueError:
+            continue
+        if calculated_usd is None:
+            continue
+        pairs_by_role.setdefault(role, []).append((calculated_usd, actual_usd))
+
+    result = {}
+    for role, pairs in pairs_by_role.items():
+        actual_sum = sum(actual for _, actual in pairs)
+        if actual_sum == 0:
+            continue
+        calculated_sum = sum(calc for calc, _ in pairs)
+        coefficient = abs(calculated_sum - actual_sum) / actual_sum
+        result[role] = coefficient
+        if coefficient > config.TOKEN_RATE_DIVERGENCE_ALERT_THRESHOLD:
+            alerts.raise_token_rate_divergence_alert(
+                conn, role,
+                f"{role}: коэффициент расхождения курса токенов "
+                f"{coefficient:.2f} выше порога "
+                f"{config.TOKEN_RATE_DIVERGENCE_ALERT_THRESHOLD} — расчётная "
+                f"цена ${calculated_sum:.4f} против фактической "
+                f"${actual_sum:.4f} по {len(pairs)} шагам")
+    return result
 
 
 def _task_step_logs(task_id: str) -> list:
@@ -330,8 +435,23 @@ def _ratio_line(label: str, ratio: dict | None) -> str:
     )
 
 
+def _divergence_html(divergence: dict) -> str:
+    """Коэффициент расхождения курса токенов по роли (SPEC
+    01M1PP0VYRT55WN8GGVG66X89Y, требование 4, AC-6) — часть панели
+    метрик `report`, не отдельная команда (выбор разработчика, требование
+    4 явно оставляет его на усмотрение)."""
+    if not divergence:
+        return ('<div class="metric-row">нет завершённых шагов с известной '
+                'стоимостью — коэффициент расхождения не считается</div>')
+    return "".join(
+        f'<div class="metric-row">{_esc(role)}: коэффициент расхождения '
+        f'{coefficient:.2f}</div>'
+        for role, coefficient in sorted(divergence.items())
+    )
+
+
 def _metrics_html(steps: list, tasks: list, total_spent: float,
-                  total_estimate: float) -> str:
+                  total_estimate: float, divergence: dict | None = None) -> str:
     gate_ratio = _gate_ratio(steps)
     per_day = _operator_journal_by_day(steps)
     cost_per_task = _cost_per_done_task(tasks)
@@ -360,6 +480,8 @@ def _metrics_html(steps: list, tasks: list, total_spent: float,
         f'{_usd(total_spent)}</div>'
         f'<div class="metric-row">Суммарная верхняя оценка (курс роли не '
         f'задан): {_usd(total_estimate)}</div>'
+        '<h3>Калибровка курса токенов</h3>'
+        f'{_divergence_html(divergence or {})}'
         '</div>'
     )
 
@@ -454,7 +576,7 @@ _STYLE = """
 
 
 def _render(tasks: list, steps: list, alerts: list, total_spent: float,
-           total_estimate: float) -> str:
+           total_estimate: float, divergence: dict | None = None) -> str:
     return (
         "<!DOCTYPE html>\n"
         '<html lang="ru">\n'
@@ -475,7 +597,7 @@ def _render(tasks: list, steps: list, alerts: list, total_spent: float,
         '<section class="panel"><h2>Закрытые задачи</h2>'
         f"{_closed_tasks_html(tasks, steps)}</section>\n"
         '<section class="panel"><h2>Метрики гейтовой нагрузки</h2>'
-        f"{_metrics_html(steps, tasks, total_spent, total_estimate)}</section>\n"
+        f"{_metrics_html(steps, tasks, total_spent, total_estimate, divergence)}</section>\n"
         '<section class="panel"><h2>Метрика «трение»</h2>'
         f"{_friction_html(tasks, steps)}</section>\n"
         "</main>\n"
@@ -489,18 +611,29 @@ def _render(tasks: list, steps: list, alerts: list, total_spent: float,
 
 def cmd_report() -> None:
     """Генерирует `.artel/report.html` из текущего состояния `state.db` и
-    печатает путь к файлу (SPEC требования 1-4, AC-1). Read-only: только
-    чтения через `store.py`, ни одной записи в БД и ни одного вызова git
-    (требование 9, AC-10). Перезаписывает прежний файл по тому же пути —
-    без истории версий (требование 10, AC-11)."""
+    печатает путь к файлу (SPEC требования 1-4, AC-1). Ни одного вызова
+    git (требование 9, AC-10). Перезаписывает прежний файл по тому же
+    пути — без истории версий (требование 10, AC-11).
+
+    Не полностью read-only с 01M1PP0VYRT55WN8GGVG66X89Y (требование 5):
+    `token_rate_divergence` попутно поднимает алерт `kind=warning` при
+    большом расхождении курса — осознанное, локализованное исключение
+    из read-only дизайна tasks/T092/SPEC.md, не общее правило для
+    остальной части этой команды."""
     conn = store.db()
     tasks = store.all_tasks(conn)
     steps = _all_steps(conn, tasks)
-    alerts = store.open_alerts(conn)
+    open_alerts_ = store.open_alerts(conn)
     total_spent = store.total_spent(conn)
     total_estimate = store.total_estimate(conn)
+    # Калибровка курса токенов (требование 4, AC-6) — единственное место
+    # в этой команде, которое пишет в `state.db` (алерт `kind=warning` при
+    # большом расхождении, `token_rate_divergence`), а не только читает:
+    # исключение из read-only дизайна `report` (tasks/T092/SPEC.md,
+    # требование 9) обосновано и локализовано этой же SPEC (требование 5).
+    divergence = token_rate_divergence(conn)
 
-    doc = _render(tasks, steps, alerts, total_spent, total_estimate)
+    doc = _render(tasks, steps, open_alerts_, total_spent, total_estimate, divergence)
 
     path = config.ROOT / ".artel" / "report.html"
     path.parent.mkdir(parents=True, exist_ok=True)
