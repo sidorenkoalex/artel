@@ -2,7 +2,7 @@
 task: 01M1NEEWH5K1XPFRDGRMPYSBXJ
 type: plan
 author_role: developer
-status: draft
+status: escalate
 schema_version: 3
 ---
 
@@ -260,6 +260,39 @@ index bb857f35..08be0762 100644
 T046/T047, `skills/conventions-core.md`): оба диффа выше — уже
 исправленная, реально проверенная версия.
 
+## Прогон приёмочной планки (05.09, по ANSWER-4)
+
+По одному файлу в переднем плане, каждый вызов с явным Bash-таймаутом
+(`python3 -m unittest tasks.01M1NEEWH5K1XPFRDGRMPYSBXJ.acceptance_tests.
+test_acN_...`), песочница — уже правленная Оператором версия
+`_sandbox.py` (ANSWER-3). Перед прогоном убран мёртвый отладочный принт
+`print(f"DEBUGTRACE state={state}", ...)` из `canary.py::_drive_task`
+(попал в код одним из прежних WIP-чекпоинтов после таймаута шага,
+к SPEC не относится) — единственная правка кода за этот шаг, ни на один
+исход теста не повлияла (перепрогонял до и после — одинаково).
+
+| Файл | Итог | Время |
+|---|---|---|
+| test_ac1_pool_dir_and_sampling.py | **FAIL** (см. «Эскалация») | 4.5с |
+| test_ac2_ac4_ephemeral_clone_lifecycle.py | OK (2 теста) | 8.5с |
+| test_ac3_no_traces_in_main_pult.py | OK | 4.5с |
+| test_ac5_metrics_separate_from_live_journal.py | OK | 4.3с |
+| test_ac6_escalation_synthetic_answer.py | OK | 3.7с |
+| test_ac8_escalation_marker_discrepancy.py | OK | 4.6с |
+| test_ac9_per_task_baseline.py | OK | 11.9с |
+| test_ac11_verifying_gate_bypassed.py | OK | 4.0с |
+| test_ac12_deviation_alert_no_auto_action.py | OK | 7.0с |
+| test_ac13_existing_tests_stay_green.py | OK (полный `tests/`, AC-13) | 230.1с |
+| test_ac14_ac15_role_pool_isolation.py | OK (2 теста) | 0.5с |
+| test_ac15_role_log_pool_leak_incident.py | OK (2 теста) | 1.2с |
+
+11 из 12 файлов зелёные, включая полный `tests/` (AC-13, 230с — в
+переднем плане, в пределах 10-минутного таймаута). Единственный красный
+— `test_ac1_pool_dir_and_sampling.py` — не дефект реализации, а
+противоречие МЕЖДУ ТРЕМЯ ЗАЛОЧЕННЫМИ файлами планки на одной и той же
+проверке (детали — «Эскалация» ниже); чинить код под один без порчи
+двух других — невозможно, обе стороны залочены (tasks/T023).
+
 ## Риски
 
 - Реальный `git clone` эфемерного клона на большом `config.ROOT`
@@ -273,3 +306,76 @@ T046/T047, `skills/conventions-core.md`): оба диффа выше — уже
   проверяет оба исхода на приёмке вручную.
 
 ## Предложения системе
+
+## Эскалация
+
+### Вопросы
+
+1. **Как разрешить противоречие между `test_ac1_pool_dir_and_sampling.py`
+   и `test_ac3_no_traces_in_main_pult.py`/
+   `test_ac5_metrics_separate_from_live_journal.py`?** Все три файла
+   залочены (tasks/T023). После `run_canary_pool(2)` все три сверяют
+   ОДНО И ТО ЖЕ выражение — `store.all_tasks(store.db())` на `self.root`/
+   `config.DB` СНАРУЖИ эфемерного клона (`CanarySandbox.task_ids()` в
+   `_sandbox.py:555-556` — тот же вызов, каким пользуется тест_ac1, и
+   прямой вызов в `test_ac3...py:104` / `test_ac5...py:64-67`) — но
+   ожидают ПРОТИВОПОЛОЖНОЕ:
+   - `test_ac1_five_templates_but_only_k_tasks_are_created` (файл
+     `test_ac1_pool_dir_and_sampling.py:50-56`): `len(task_ids) == 2`
+     (заведено k=2 задачи).
+   - `test_ac3_run_leaves_no_branches_tasks_alerts_or_snapshots_in_main_pult`
+     (файл `test_ac3_no_traces_in_main_pult.py:104-107`): `tasks_after
+     == []`.
+   - `test_ac5_run_writes_a_new_metrics_table_distinct_from_tasks_and_steps`
+     (файл `test_ac5_metrics_separate_from_live_journal.py:64-67`, тем
+     же прогоном k=2): `store.all_tasks(store.db()) == []` — докстринг
+     теста прямо формулирует почему: «живой журнал `tasks` не должен
+     нести канареечные задачи (AC-3)».
+
+   Фактический прогон (см. таблицу выше) подтверждает: с текущей
+   реализацией (`_ephemeral_clone` — весь FSM-цикл, включая строки
+   `tasks`/`steps`, живёт ТОЛЬКО в БД клона; снаружи, в БД пульта,
+   остаётся только запись `canary_runs`, требование 5) — test_ac3 и
+   test_ac5 зелёные, test_ac1 красный (`0 != 2`, при этом ОБЕ задачи
+   реально заведены, доведены циклом до `killed` и получили запись
+   `canary_runs`/бейзлайн — это видно в `out` из трассы теста). Эта
+   реализация — прямое прочтение требования 2 SPEC («своя БД
+   состояния») и требования 3 («ноль следов в main»).
+   Варианты:
+   - **A.** `test_ac1_pool_dir_and_sampling.py` несёт дефект: проверка
+     «заведено ровно k=2, не N=5» должна была идти по `canary_runs`
+     (или по количеству строк `[canary] ... заведена из ...` в stdout
+     прогона — оба сигнала уже присутствуют в реализации), а не по
+     `store.all_tasks()` главной БД. Правит test_author/Оператор, код
+     `canary.py` не меняется. **Дефолт при молчании** — этот вариант:
+     совпадает с явной формулировкой требования 2/3 SPEC и с двумя
+     другими залоченными тестами, а не с одним.
+   - **B.** Архитектура должна ДОПОЛНИТЕЛЬНО класть строку
+     `tasks`/`is_canary=1` (и, возможно, `steps`) также и в БД пульта
+     СНАРУЖИ клона — тогда `test_ac3`/`test_ac5` (обе явно и
+     мотивированно в докстринге проверяют пустоту `tasks` СНАРУЖИ клона
+     как формулировку самого AC-3) придётся чинить symmetричным
+     образом — тоже эскалация test_author, не developer.
+
+### Контекст
+
+Полный прогон планки — по одному файлу в переднем плане, каждый с
+явным Bash-таймаутом, как предписывает ANSWER-2/ANSWER-4: 11 из 12
+файлов зелёные (включая полный `tests/`, AC-13, 230с), красный только
+`test_ac1_pool_dir_and_sampling.py`, и красен он не сбоем/зависанием
+(файл укладывается в 4.5с), а логическим противоречием с двумя другими
+залоченными файлами планки той же задачи, показанным выше построчно.
+Убран мёртвый отладочный принт `DEBUGTRACE` из `orchestrator/canary.py`
+(`_drive_task`, не относился к SPEC, WIP-наследие) — единственная
+правка кода этого шага, результат прогонов не изменила (см. таблицу
+выше — сверено перепрогоном до/после правки).
+
+### Блокирует
+
+Постановку PLAN в `status: ready`: при текущем противоречии либо
+`test_ac1...` остаётся красным (гейт `acceptance`/`guard.py` это не
+пропустит), либо код, "исправленный" под его буквальный текст (вариант
+B выше), красит `test_ac3...`/`test_ac5...` вместо него — тот же
+результат другим файлом, не прогресс. Без решения Оператора, какой
+тест(ы) ошибочны и как их поправит test_author, developer не может
+продвинуть задачу дальше без порчи чьей-то из локальных проверок.
