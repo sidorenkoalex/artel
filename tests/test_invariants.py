@@ -17,6 +17,7 @@ main (сценарии уборки — test_kill_cleanup.py).
 при каких условиях оркестратор зовёт git, поэтому настоящая git-команда
 в рабочем репозитории им не нужна и запрещена.
 """
+import ast
 import contextlib
 import json
 import os
@@ -34,7 +35,7 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from orchestrator import (artel, budget, catalog, ci, cleanup,  # noqa: E402
-                          config, fsm, gitcmd, runner, store)
+                          config, fsm, gitcmd, runner, stack, store)
 from scripts import guard  # noqa: E402
 from tests.sandbox import (FakeProc, SpyRun, capture,  # noqa: E402
                            capture_new_task_id, disk_backed_ls_tree_files,
@@ -1579,6 +1580,91 @@ class NoNetworkAddressesInTestsTest(unittest.TestCase):
         url = f"{scheme}{host}/repo.git"
         hits = self._dns_addresses(f'url: "{url}"\n')
         self.assertEqual([url], hits)
+
+
+class StdlibOnlyImportsInvariantTest(unittest.TestCase):
+    """Требование 3 (tasks/01M1RDCAFENSW2VVAPECHCVGMM/SPEC.md): код пульта
+    импортирует только стандартную библиотеку — `orchestrator/`,
+    `scripts/`, `tests/` не несут импорт модуля вне
+    `sys.stdlib_module_names`, вне пакетов репозитория (`orchestrator`,
+    `scripts`, `tests`) и вне исключений манифеста
+    (`orchestrator.stack.THIRD_PARTY_EXCEPTIONS`, пуст на сегодня).
+
+    Только файлы верхнего уровня каждого каталога (`glob("*.py")`, не
+    `rglob`) — у orchestrator/scripts/tests сегодня нет вложенных
+    пакетов (тот же приём, что `scripts/codebase_map.py::
+    discover_module_paths`). Относительные импорты (`from . import x`,
+    `level > 0`) всегда внутрипакетные — не проверяются.
+    """
+
+    LOCAL_PACKAGES = ("orchestrator", "scripts", "tests")
+
+    def _foreign_imports(self, root: Path) -> list:
+        stdlib = frozenset(sys.stdlib_module_names)
+        exceptions = frozenset(name for name, _reason in
+                               stack.THIRD_PARTY_EXCEPTIONS)
+        allowed = stdlib | frozenset(self.LOCAL_PACKAGES) | exceptions
+        violations = []
+        for directory in self.LOCAL_PACKAGES:
+            d = root / directory
+            if not d.is_dir():
+                continue
+            for path in sorted(d.glob("*.py")):
+                try:
+                    tree = ast.parse(path.read_text(encoding="utf-8"),
+                                     filename=str(path))
+                except (SyntaxError, OSError, UnicodeDecodeError):
+                    continue
+                for node in ast.walk(tree):
+                    if isinstance(node, ast.Import):
+                        for alias in node.names:
+                            top = alias.name.split(".")[0]
+                            if top not in allowed:
+                                violations.append((str(path), top))
+                    elif isinstance(node, ast.ImportFrom):
+                        if node.level and node.level > 0:
+                            continue
+                        if node.module is None:
+                            continue
+                        top = node.module.split(".")[0]
+                        if top not in allowed:
+                            violations.append((str(path), top))
+        return violations
+
+    def test_repo_tree_has_no_foreign_imports(self):
+        """AC-6: сегодняшнее дерево репозитория чисто."""
+        violations = self._foreign_imports(config.ROOT)
+        self.assertEqual(
+            [], violations,
+            f"в дереве репозитория найдены импорты вне stdlib/пакетов "
+            f"репозитория/исключений манифеста: {violations}")
+
+    def test_planted_foreign_import_is_caught_on_a_synthetic_tree(self):
+        """AC-16: подсаженный сторонний импорт на синтетическом дереве
+        обязан быть пойман, чистое синтетическое дерево — нет.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "orchestrator").mkdir()
+            (root / "orchestrator" / "dirty.py").write_text(
+                "import totally_fake_third_party_package_xyz\n",
+                encoding="utf-8")
+            dirty_violations = self._foreign_imports(root)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "orchestrator").mkdir()
+            (root / "orchestrator" / "clean.py").write_text(
+                "import os\nfrom . import config\n", encoding="utf-8")
+            clean_violations = self._foreign_imports(root)
+
+        self.assertTrue(
+            dirty_violations,
+            "подсаженный сторонний импорт на синтетическом дереве не пойман")
+        self.assertEqual(
+            [], clean_violations,
+            f"чистое синтетическое дерево ошибочно помечено нарушением: "
+            f"{clean_violations}")
 
 
 if __name__ == "__main__":

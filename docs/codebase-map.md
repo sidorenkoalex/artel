@@ -1,5 +1,5 @@
 ---
-built_at_sha: 84efe4c6cb1ee08d96912572a42d19fbbdbda39b
+built_at_sha: 80c382459a56f19c3815a871defffd40fed08d51
 ---
 
 # Codebase-map пульта
@@ -343,7 +343,7 @@ built_at_sha: 84efe4c6cb1ee08d96912572a42d19fbbdbda39b
 - `recovery_check`
 - `sweep_orphan_artifact_branches`
 
-**Импортирует:** `orchestrator/alerts.py`, `orchestrator/artifact_branch.py`, `orchestrator/coldstart.py`, `orchestrator/config.py`, `orchestrator/gitcmd.py`, `orchestrator/liveness.py`, `orchestrator/projects.py`, `orchestrator/roles.py`, `orchestrator/runner.py`, `orchestrator/snapshot.py`, `orchestrator/spend.py`, `orchestrator/store.py`, `orchestrator/targets.py`, `orchestrator/workspace.py`, `orchestrator/zone_lock.py`
+**Импортирует:** `orchestrator/alerts.py`, `orchestrator/artifact_branch.py`, `orchestrator/coldstart.py`, `orchestrator/config.py`, `orchestrator/gitcmd.py`, `orchestrator/liveness.py`, `orchestrator/projects.py`, `orchestrator/roles.py`, `orchestrator/runner.py`, `orchestrator/snapshot.py`, `orchestrator/spend.py`, `orchestrator/stack.py`, `orchestrator/store.py`, `orchestrator/targets.py`, `orchestrator/workspace.py`, `orchestrator/zone_lock.py`
 
 **Импортируется:** `orchestrator/artel.py`, `orchestrator/runner.py`, `orchestrator/version.py`, `tests/test_coldstart.py`, `tests/test_doctor.py`, `tests/test_doctor_canary_pool.py`, `tests/test_doctor_fix_ignored_artifacts.py`, `tests/test_version.py`
 
@@ -779,6 +779,17 @@ built_at_sha: 84efe4c6cb1ee08d96912572a42d19fbbdbda39b
 
 **Импортируется:** `orchestrator/agent_log.py`, `orchestrator/budget.py`, `orchestrator/doctor.py`, `orchestrator/pause.py`, `orchestrator/report.py`, `orchestrator/runner.py`, `tests/test_doctor.py`, `tests/test_multitarget.py`, `tests/test_multitarget_invariants.py`, `tests/test_step_cost.py`
 
+## orchestrator/stack.py
+
+**Назначение:** Манифест объявленного стека пульта (SPEC 01M1RDCAFENSW2VVAPECHCVGMM,
+
+**Публичные функции:**
+- `check_stack`
+
+**Импортирует:** —
+
+**Импортируется:** `orchestrator/doctor.py`, `orchestrator/version.py`, `tests/test_invariants.py`, `tests/test_stack.py`
+
 ## orchestrator/store.py
 
 **Назначение:** Состояние задач: БД, миграции схемы, журнал шагов, смена состояния.
@@ -858,7 +869,7 @@ built_at_sha: 84efe4c6cb1ee08d96912572a42d19fbbdbda39b
 **Публичные функции:**
 - `cmd_version`
 
-**Импортирует:** `orchestrator/config.py`, `orchestrator/doctor.py`, `scripts/guard.py`
+**Импортирует:** `orchestrator/config.py`, `orchestrator/doctor.py`, `orchestrator/stack.py`, `scripts/guard.py`
 
 **Импортируется:** `orchestrator/artel.py`, `tests/test_version.py`
 
@@ -1530,7 +1541,7 @@ built_at_sha: 84efe4c6cb1ee08d96912572a42d19fbbdbda39b
 
 **Публичные функции:** (нет)
 
-**Импортирует:** `orchestrator/artel.py`, `orchestrator/budget.py`, `orchestrator/catalog.py`, `orchestrator/ci.py`, `orchestrator/cleanup.py`, `orchestrator/config.py`, `orchestrator/fsm.py`, `orchestrator/gitcmd.py`, `orchestrator/runner.py`, `orchestrator/store.py`, `scripts/guard.py`, `tests/sandbox.py`
+**Импортирует:** `orchestrator/artel.py`, `orchestrator/budget.py`, `orchestrator/catalog.py`, `orchestrator/ci.py`, `orchestrator/cleanup.py`, `orchestrator/config.py`, `orchestrator/fsm.py`, `orchestrator/gitcmd.py`, `orchestrator/runner.py`, `orchestrator/stack.py`, `orchestrator/store.py`, `scripts/guard.py`, `tests/sandbox.py`
 
 **Импортируется:** `tests/test_ci_status_kind_gate.py`, `tests/test_review_registry_gate.py`, `tests/test_verifying_ceiling.py`
 
@@ -1721,6 +1732,16 @@ built_at_sha: 84efe4c6cb1ee08d96912572a42d19fbbdbda39b
 
 **Импортируется:** —
 
+## tests/test_role_bash_guard.py
+
+**Назначение:** Сторож Bash-команд роли (`docs/reference/role-home/claude/hooks/
+
+**Публичные функции:** (нет)
+
+**Импортирует:** —
+
+**Импортируется:** —
+
 ## tests/test_sandbox.py
 
 **Назначение:** Юнит-тесты перехвата сетевых git-команд `tests/sandbox.py` (SPEC
@@ -1778,6 +1799,16 @@ built_at_sha: 84efe4c6cb1ee08d96912572a42d19fbbdbda39b
 **Публичные функции:** (нет)
 
 **Импортирует:** `orchestrator/artifact_branch.py`, `orchestrator/config.py`, `orchestrator/fsm.py`, `orchestrator/gitcmd.py`, `orchestrator/store.py`, `tests/sandbox.py`
+
+**Импортируется:** —
+
+## tests/test_stack.py
+
+**Назначение:** Юнит-тесты orchestrator/stack.py (SPEC 01M1RDCAFENSW2VVAPECHCVGMM,
+
+**Публичные функции:** (нет)
+
+**Импортирует:** `orchestrator/stack.py`
 
 **Импортируется:** —
 

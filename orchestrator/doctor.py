@@ -59,8 +59,8 @@ from collections import namedtuple
 from pathlib import Path
 
 from . import (alerts, artifact_branch, coldstart, config, gitcmd, liveness,
-              projects, roles, runner, snapshot, spend, store, targets,
-              workspace, zone_lock)
+              projects, roles, runner, snapshot, spend, stack, store,
+              targets, workspace, zone_lock)
 
 # status: "ok" | "warn" | "fail" | "skip" ("skip" — честный пропуск проверки,
 # требование 9: сверка forge-политики без `gh`/сети — не провал и не ок).
@@ -1300,6 +1300,7 @@ def all_checks(conn) -> list[Check]:
     checks.append(check_root_pin())
     checks.append(check_role_log_pool_leak(conn))
     checks.extend(check_token_repo_scope())
+    checks.extend(stack.check_stack())
     return checks
 
 
