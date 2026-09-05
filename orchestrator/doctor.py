@@ -60,7 +60,7 @@ from pathlib import Path
 
 from . import (alerts, artifact_branch, coldstart, config, gitcmd, liveness,
               projects, roles, runner, snapshot, spend, store, targets,
-              workspace)
+              workspace, zone_lock)
 
 # status: "ok" | "warn" | "fail" | "skip" ("skip" — честный пропуск проверки,
 # требование 9: сверка forge-политики без `gh`/сети — не провал и не ок).
@@ -866,6 +866,41 @@ def check_merge_lock(conn) -> list[Check]:
     return result
 
 
+def check_zone_waits(conn) -> list[Check]:
+    """SPEC 01M1P9QAG65GVF69YJEV0V18D9, требование 4: задача, чей первый
+    шаг developer заблокирован занятостью зоны, — видимая проверка
+    doctor, по образцу `check_leases`/`check_orphans`, не только строка в
+    журнале САМОЙ заблокированной задачи. Вычисление занятости берётся у
+    `zone_lock.blocking_conflict` целиком — та же проверка, что не
+    пускает `run`/`auto` дальше, не отдельная копия.
+
+    Не incident-алерт (в отличие от `check_leases`): занятость зоны —
+    штатное ожидание, не операционный сбой, снимается сама после мержа/
+    kill занявшей задачи (AC-6) или явной командой Оператора (AC-7).
+
+    Позиция в очереди (`zone_lock.queue_position`, R1-F3, REVIEW.md
+    итерация 1) — в детали, только когда конкурентов по ЭТОЙ зоне больше
+    одного.
+    """
+    blocked = []
+    for row in store.all_tasks(conn):
+        if row["state"] != "in_dev":
+            continue
+        conflict = zone_lock.blocking_conflict(conn, row["id"], row)
+        if conflict is None:
+            continue
+        path, occupier_id, occupier_state = conflict
+        position, total = zone_lock.queue_position(conn, row["id"], path)
+        queue = f", очередь {position}/{total}" if total > 1 else ""
+        blocked.append(Check(
+            "zone-waits", "warn",
+            f"{row['id']} ждёт зоны {path} — занята {occupier_id} "
+            f"({occupier_state}){queue}"))
+    if not blocked:
+        return [Check("zone-waits", "ok", "нет задач, ожидающих зоны")]
+    return blocked
+
+
 # --- прочие проверки (требование 9) --------------------------------------
 
 def check_backup_age(conn) -> Check:
@@ -1153,6 +1188,7 @@ def all_checks(conn) -> list[Check]:
     checks.extend(check_orphans(conn))
     checks.extend(check_leases(conn))
     checks.extend(check_merge_lock(conn))
+    checks.extend(check_zone_waits(conn))
     checks.extend(check_branch_freshness(conn))
     checks.append(check_root_pin())
     return checks
