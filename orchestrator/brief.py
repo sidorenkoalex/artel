@@ -38,6 +38,17 @@ CONVENTIONS_REL = "CLAUDE.md"
 # свежести карты (SPEC T028, требование 5).
 MAP_WATCH_GLOBS = ("orchestrator/*.py", "scripts/*.py", "tests/*.py")
 HEADER = "--- БРИФ РОЛИ ---"
+# Раздел «Причина возврата» (tasks/01M1SAA2AZX3ERQ779QJ5TS9J4, требования
+# 1-5): открывает бриф роли, чей текущий визит состояния начался
+# возвратом, дословной причиной этого возврата — вместо того, чтобы роль
+# искала её сама по остальным компонентам.
+RETURN_REASON_HEADER = "Причина возврата"
+RETURN_REASON_CLOSING = "шаг без правки, закрывающей причину, не засчитывается"
+# Состояния-предшественники, приход ИЗ которых в текущее состояние — это
+# возврат (требование 1 SPEC): review (changes_requested), acceptance/
+# verifying/merge_gate (reject Оператора), escalated (approve Оператора).
+_RETURN_TRIGGER_STATES = frozenset(
+    {"review", "acceptance", "verifying", "merge_gate", "escalated"})
 # Потолок записей в блоке отказов advance (SPEC T078, требование 3) —
 # мягкое значение кода, не инвариант: чтобы бриф не разбухал бесконтрольно
 # при частом топтании на одном состоянии.
@@ -614,7 +625,13 @@ def developer_brief(conn, task_id: str) -> str:
     projected_map_text = codebase_map.project_for_brief(map_text)
     conventions_text = _main_branch_text(task_id, CONVENTIONS_REL)
     _handle_map_size_alert(conn, task_id, projected_map_text)
-    parts = [
+    parts = []
+    return_reason_part = _return_reason_component(
+        conn, task_id, "developer", "in_dev", branch, foreign, run_id,
+        render=_manifest_component)
+    if return_reason_part:
+        parts.append(return_reason_part)
+    parts += [
         _manifest_component(conn, task_id, "developer",
                             f"tasks/{task_id}/SPEC.md", spec_text, run_id),
         map_note + MAP_PROJECTION_NOTE + _manifest_component(
@@ -658,6 +675,90 @@ def advance_refusal_history(conn, task_id: str, role: str, state: str) -> str:
                               "история отказов advance", text, run_id)
 
 
+def _previous_state_name(steps: list, before_id: int) -> str | None:
+    """Имя состояния из ближайшей записи `state -> X` этой задачи,
+    предшествующей записи с id `before_id` (не включая её) — то есть
+    состояние, ИЗ которого пришёл визит, начавшийся той записью.
+
+    `None` — такой более ранней записи нет вовсе (первый переход
+    задачи, зафиксированный журналом)."""
+    name = None
+    for row in steps:
+        if row["id"] >= before_id:
+            break
+        if row["action"].startswith("state -> "):
+            name = row["action"][len("state -> "):]
+    return name
+
+
+def _return_context(conn, task_id: str, state: str) -> dict | None:
+    """`None` — визит `state` не начался возвратом (первый визит этого
+    состояния или обычный advance из штатного предшественника, SPEC
+    01M1SAA2AZX3ERQ779QJ5TS9J4, требование 5/AC-6); иначе словарь
+    `{"detail": дословный текст причины, "is_escalation": bool}`.
+
+    «Возврат» определяется тем, ИЗ какого состояния пришла ПОСЛЕДНЯЯ
+    запись `state -> {state}` (требование 1) — не текстом её `detail`:
+    фиксированная фраза approve («эскалация разрешена, продолжаем»)
+    одинакова для всех трёх целевых состояний эскалации и сама по себе
+    не отличима от обычного перехода (AC-3).
+
+    `is_escalation` — предшественник `escalated`: `detail` в этом
+    случае — дословный текст записи `state -> escalated`, которой
+    задача вошла в ЭТОТ цикл эскалации (ближайшая перед возвратом, не
+    произвольная более ранняя — требование 2), а не фиксированная
+    фраза approve."""
+    steps = store.task_steps(conn, task_id)
+    marker = f"state -> {state}"
+    entry_row = None
+    for row in reversed(steps):
+        if row["action"] == marker:
+            entry_row = row
+            break
+    if entry_row is None:
+        return None
+    prev_state = _previous_state_name(steps, entry_row["id"])
+    if prev_state not in _RETURN_TRIGGER_STATES:
+        return None
+    if prev_state != "escalated":
+        return {"detail": entry_row["detail"], "is_escalation": False}
+    escalated_detail = None
+    for row in steps:
+        if row["id"] >= entry_row["id"]:
+            break
+        if row["action"] == "state -> escalated":
+            escalated_detail = row["detail"]
+    return {"detail": escalated_detail, "is_escalation": True}
+
+
+def _return_reason_component(conn, task_id: str, role: str, state: str,
+                             branch: str, foreign: bool, run_id: str,
+                             render=_journal_component) -> str:
+    """Раздел «Причина возврата» — первым пунктом брифа роли (SPEC
+    01M1SAA2AZX3ERQ779QJ5TS9J4, требования 1-4): пустая строка — визит
+    `state` не начался возвратом (`_return_context` вернул `None`),
+    вызывающий код не добавляет пустой раздел (требование 5/AC-6).
+
+    `render` — как оформить кусок брифа: `_manifest_component` для
+    developer (опись/дисциплина размера, как у соседних компонентов
+    этого брифа), `_journal_component` по умолчанию для analyst/
+    test_author — тот же выбор, что уже делают `_answer_component`/
+    `_plan_review_components`."""
+    ctx = _return_context(conn, task_id, state)
+    if ctx is None:
+        return ""
+    if ctx["is_escalation"]:
+        answer_rel = _latest_answer_rel(task_id, branch, foreign)
+        link = (f"tasks/{task_id}/{answer_rel}" if answer_rel
+                else "ответа Оператора ещё нет")
+        body = f"{ctx['detail']}\n\nОтвет Оператора: {link}"
+    else:
+        body = ctx["detail"]
+    text = (f"## {RETURN_REASON_HEADER}\n\n{body}\n\n"
+           f"{RETURN_REASON_CLOSING}.\n")
+    return render(conn, task_id, role, RETURN_REASON_HEADER, text, run_id)
+
+
 def analyst_map_component(conn, task_id: str) -> str:
     """Добавка к входу analyst: карта тем же механизмом, что у developer
     (требование 9) — TZ.md остаётся прежним, отдельно не читаемым здесь
@@ -680,8 +781,13 @@ def analyst_map_component(conn, task_id: str) -> str:
     branch, foreign = _artifact_source_branch(conn, task_id)
     run_id = new_run_id()
     map_text = codebase_map.project_for_brief(fresh_map_text(conn, task_id))
-    parts = [MAP_PROJECTION_NOTE + _journal_component(
-        conn, task_id, "analyst", MAP_PROJECTION_LABEL, map_text, run_id)]
+    parts = []
+    return_reason_part = _return_reason_component(
+        conn, task_id, "analyst", "spec_writing", branch, foreign, run_id)
+    if return_reason_part:
+        parts.append(return_reason_part)
+    parts.append(MAP_PROJECTION_NOTE + _journal_component(
+        conn, task_id, "analyst", MAP_PROJECTION_LABEL, map_text, run_id))
     q_part = _questions_component(conn, task_id, "analyst", branch, foreign,
                                   run_id)
     if q_part:
@@ -701,8 +807,12 @@ def test_author_answer_component(conn, task_id: str) -> str | None:
     ответов ещё нет, промпт шага остаётся прежним (без добавки)."""
     branch, foreign = _artifact_source_branch(conn, task_id)
     run_id = new_run_id()
+    return_reason_part = _return_reason_component(
+        conn, task_id, "test_author", "tests_writing", branch, foreign,
+        run_id)
     part = _answer_component(conn, task_id, "test_author", branch, foreign,
                              run_id)
-    if not part:
+    if not return_reason_part and not part:
         return None
-    return f"{HEADER}\n\n{BOUNDARY_INSTRUCTION}\n{part}"
+    return (f"{HEADER}\n\n{BOUNDARY_INSTRUCTION}\n"
+           f"{return_reason_part}{part}")
