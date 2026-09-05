@@ -439,6 +439,30 @@ def _allowlisted_env(source) -> dict:
            if name in stack.ROLE_ENV_ALLOWLIST or name.startswith(prefixes)}
 
 
+def _venv_interpreter_bin() -> str:
+    """Требование 4 (SPEC 01M1REVEZ1HESMJ7AFD5A9MEJ8, AC-12/AC-13): каталог
+    `<.artel/venv>/bin` — интерпретатор роли, если `.artel/venv` существует
+    и согласован с файлом закреплённых версий (та же проверка, что
+    `stack.check_stack()` уже даёт AC-7/AC-8 — не отдельная копия логики).
+
+    Зовёт ПОЛНЫЙ `check_stack()`, а не более узкую `stack.venv_checks()`,
+    хотя интересна только пара venv-проверок (REVIEW.md итерация 1,
+    R1-F2 — три лишних subprocess-вызова к `git`/`gh`/`claude` на каждый
+    шаг роли): планка приёмки (`tasks/01M1REVEZ1HESMJ7AFD5A9MEJ8/
+    acceptance_tests/test_ac12_ac13_role_env_venv_interpreter.py`, залочена
+    T023) мокает именно `runner.stack.check_stack` — сужение вызова здесь
+    без правки планки оставило бы мок без эффекта и уронило бы приёмку
+    реальным отсутствием venv по временному пути теста. Риск принят,
+    описан в PLAN.md «Риски».
+    """
+    checks = stack.check_stack()
+    warn = [c for c in checks if "venv" in c.name.lower() and c.status == "warn"]
+    if warn:
+        detail = "; ".join(c.detail for c in warn)
+        raise OSError(f"venv не готов для роли: {detail}")
+    return str(config.VENV_DIR / "bin")
+
+
 def role_env(role: str | None = None) -> dict:
     """Окружение процесса роли: PATH и переменные — из манифеста, не копия
     `os.environ` Оператора (SPEC 01M1RDCEF0JZ4AVQRE43JFH8TN, требования 1-3).
@@ -470,13 +494,22 @@ def role_env(role: str | None = None) -> dict:
 
     Каталог создаётся здесь же: CLI, не нашедший CLAUDE_CONFIG_DIR,
     создал бы его сам — и это был бы каталог, о котором пульт не знает.
+
+    Интерпретатор роли — `.artel/venv` (SPEC 01M1REVEZ1HESMJ7AFD5A9MEJ8,
+    требование 4), если он согласован с файлом закреплённых версий
+    (`_venv_interpreter_bin`, вызывается сразу после резолвинга
+    инструментов манифеста — тот же принцип «отказ до частичного
+    результата», что и у `_resolve_declared_tools` выше): его `bin/`
+    встаёт ПЕРВЫМ в PATH роли, раньше каталога `sys.executable` пульта —
+    голый `python3`/`pytest` внутри шага роли резолвится в venv.
     """
     resolved = _resolve_declared_tools()
+    venv_bin = _venv_interpreter_bin()
     config.ROLE_CONFIG_DIR.mkdir(parents=True, exist_ok=True)
     env = _allowlisted_env(os.environ)
     env["HOME"] = str(config.ROLE_HOME)
     env["CLAUDE_CONFIG_DIR"] = str(config.ROLE_CONFIG_DIR)
-    env["PATH"] = os.pathsep.join(_role_path_dirs(resolved))
+    env["PATH"] = os.pathsep.join([venv_bin] + _role_path_dirs(resolved))
     for name, value in git_identity().items():
         env.setdefault(name, value)
     # Аутентификация CLI живёт в user-слое Оператора (~/.claude.json +

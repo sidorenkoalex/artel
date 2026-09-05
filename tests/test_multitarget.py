@@ -838,5 +838,91 @@ class RoleEnvTest(TmpRootTest):
         self.assertTrue(details and "нет места" in details[0])
 
 
+def _stack_check(name: str, status: str, detail: str):
+    from types import SimpleNamespace
+    return SimpleNamespace(name=name, status=status, detail=detail)
+
+
+class RoleEnvVenvInterpreterTest(TmpRootTest):
+    """Требование 4 (SPEC 01M1REVEZ1HESMJ7AFD5A9MEJ8, AC-12/AC-13):
+    интерпретатор роли — `.artel/venv`, если он согласован с файлом
+    закреплённых версий (та же проверка, что `stack.check_stack()`),
+    иначе `role_env()` отказывает `OSError` без тихого отката на
+    системный python.
+
+    Постоянная регрессия — переживает закрытие `tasks/
+    01M1REVEZ1HESMJ7AFD5A9MEJ8/acceptance_tests/`."""
+
+    def test_consistent_venv_puts_its_bin_first_on_path(self):
+        """Требование 4/AC-12: venv существует и согласован (все
+        проверки `check_stack()` — `ok`) — PATH окружения роли начинается
+        с `<venv>/bin`, то есть голые вызовы `python3`/`pytest` внутри
+        шага роли резолвятся в интерпретатор venv, а не в системный.
+
+        Ловит мутацию: `role_env()` не трогает PATH вовсе при согласованном
+        venv (интерпретатор роли остаётся системным несмотря на готовый
+        venv) — `assertEqual(path_entries[0], ...)` откажет.
+        """
+        venv_dir = self.root / ".artel" / "venv"
+        ok_checks = [_stack_check("python", "ok", "Python 3.99.0"),
+                    _stack_check("venv", "ok", "venv согласован")]
+
+        with mock.patch.object(config, "VENV_DIR", venv_dir, create=True), \
+                mock.patch.object(runner.stack, "check_stack",
+                                  return_value=ok_checks), \
+                mock.patch.object(runner.gitcmd, "git", fake_git_config):
+            env = runner.role_env()
+
+        path_entries = env["PATH"].split(":")
+        self.assertEqual(str(venv_dir / "bin"), path_entries[0])
+
+    def test_inconsistent_venv_raises_instead_of_falling_back(self):
+        """Требование 4/AC-13: `.artel/venv` не согласован с файлом
+        закреплённых версий (`check_stack()` возвращает WARN про venv) —
+        `role_env()` отказывает поднятым `OSError` с именующей причиной,
+        а НЕ тихо возвращает окружение с системным PATH как ни в чём не
+        бывало.
+
+        Ловит мутацию: `role_env()` игнорирует WARN про venv и всё равно
+        возвращает обычное окружение (тихий откат на системный python) —
+        `assertRaises(OSError)` не сработает (исключения не будет);
+        либо исключение поднимается, но без упоминания venv в тексте —
+        `assertIn` в `str(exc)` откажет.
+        """
+        warn_checks = [_stack_check("python", "ok", "Python 3.99.0"),
+                      _stack_check("venv-packages", "warn",
+                                   "версии расходятся: pytest")]
+
+        with mock.patch.object(runner.stack, "check_stack",
+                               return_value=warn_checks), \
+                mock.patch.object(runner.gitcmd, "git", fake_git_config):
+            with self.assertRaises(OSError) as ctx:
+                runner.role_env()
+
+        self.assertIn("venv", str(ctx.exception).lower())
+
+    def test_missing_venv_also_raises_rather_than_falling_back(self):
+        """Требование 4/AC-13 — вторая ветка того же критерия: venv
+        вовсе ОТСУТСТВУЕТ (`check_stack()` возвращает WARN «venv» с
+        отсутствием, не только расхождением версий) — тот же отказ
+        `OSError`, не деградация до системного python.
+
+        Ловит мутацию: обработана только ветка «версии разошлись», а
+        ветка «venv вовсе нет» тихо пропускается (например код проверяет
+        только статус проверки `venv-packages`, забыв про `venv`) —
+        `assertRaises` не сработает.
+        """
+        warn_checks = [_stack_check("python", "ok", "Python 3.99.0"),
+                      _stack_check("venv", "warn",
+                                   "venv не создан — `python3 artel.py "
+                                   "venv-sync`")]
+
+        with mock.patch.object(runner.stack, "check_stack",
+                               return_value=warn_checks), \
+                mock.patch.object(runner.gitcmd, "git", fake_git_config):
+            with self.assertRaises(OSError):
+                runner.role_env()
+
+
 if __name__ == "__main__":
     unittest.main()

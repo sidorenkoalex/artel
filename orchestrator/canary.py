@@ -78,6 +78,27 @@ from . import (alerts, answer, artifacts, auto, catalog, cleanup, config, fsm,
 
 CANARY_MARK_ACTOR = "canary"
 
+# Причины `agent run SKIPPED` (`runner.role_cwd`/`runner.role_env`),
+# короткое замыкание холостых проходов `_drive_task` на них — SPEC
+# 01M1SC3Y20YBTTJVQDJBF2NDQW, требование 3/AC-3: воспроизведение боевого
+# прогона 05.09, где причина терялась внутри уже уничтоженного
+# эфемерного клона за `CANARY_MAX_STALL_ITERS` холостых проходов.
+_SKIP_SHORTCIRCUIT_REASONS = (
+    "рабочий каталог роли не создан",
+    "каталог окружения роли не создан",
+)
+
+# Литералы `action`, которыми `_kill_at_merge_gate`/`_kill_at_verifying`
+# журналируют убийство — узнаются `_kill_outcome_note` (требование 4,
+# AC-4) как «штатный» исход, не «не сошлась».
+_MERGE_GATE_KILL_ACTION = "canary: merge_gate не approve — задача убивается"
+_VERIFYING_KILL_ACTION = "canary: verifying не дожидается CI — задача убивается"
+
+# Литерал `detail`, которым `_kill_inconclusive` журналирует убийство —
+# `_kill_outcome_note` отличает эту запись от остальных записей
+# `CANARY_MARK_ACTOR` и берёт её `action` (сама причина) для отчёта.
+_INCONCLUSIVE_KILL_DETAIL = "прогон дальше эту задачу не ведёт — cleanup.cmd_kill"
+
 # Origin эфемерного клона (требование 2, AC-2) — заглушка ЯВНО, не то,
 # что `git clone` подставил бы сам (локальный путь до `config.ROOT`,
 # формально не http(s), но реально дотягивающийся до главного пульта):
@@ -553,6 +574,40 @@ def _pass_escalated_with_synthetic_answer(conn, task_id: str) -> None:
                     "ANSWER — прогон продолжается без Оператора")
 
 
+def _last_role_skip_reason(conn, task_id: str) -> str | None:
+    """Последняя запись журнала — `agent run SKIPPED` по одной из двух
+    причин ТЗ (требование 3/AC-3) -> её `detail` дословно; иначе `None`
+    (в том числе на пустом журнале — генуинная стагнация без единой
+    записи не должна замкнуться коротко, AC-7)."""
+    steps = store.task_steps(conn, task_id)
+    if not steps:
+        return None
+    last = steps[-1]
+    if last["action"] != "agent run SKIPPED":
+        return None
+    detail = last["detail"] or ""
+    if any(reason in detail for reason in _SKIP_SHORTCIRCUIT_REASONS):
+        return detail
+    return None
+
+
+def _kill_outcome_note(steps) -> str:
+    """Причина исхода `killed` для отчёта прогона (требование 4, AC-4):
+    «штатно» — `_kill_at_merge_gate`/`_kill_at_verifying` (эти пути и
+    раньше не были ошибкой конвейера), иначе — «не сошлась: <причина>»
+    с текстом причины из журнальной записи `_kill_inconclusive` (её
+    `detail` — фиксированный литерал-маркер, `action` несёт саму
+    причину — требование 3/AC-3 идёт этим же путём)."""
+    for r in reversed(steps):
+        if r["actor"] != CANARY_MARK_ACTOR:
+            continue
+        if r["action"] in (_MERGE_GATE_KILL_ACTION, _VERIFYING_KILL_ACTION):
+            return "штатно"
+        if r["detail"] == _INCONCLUSIVE_KILL_DETAIL:
+            return f"не сошлась: {r['action']}"
+    return "не сошлась"
+
+
 def _kill_inconclusive(conn, task_id: str, detail: str) -> None:
     """Убивает ОДНУ задачу как «не сошлась» вместо бесконечного цикла без
     прогресса (REVIEW.md итерации 1, R1-F1) — журналирует причину,
@@ -590,6 +645,14 @@ def _drive_task(conn, task_id: str) -> None:
         auto.cmd_auto(task_id)
         t = store.get_task(conn, task_id)
         state = t["state"]
+        skip_detail = _last_role_skip_reason(conn, task_id)
+        if skip_detail is not None:
+            # Требование 3/AC-3: не тратим холостые проходы до
+            # `CANARY_MAX_STALL_ITERS` — рабочий/окружения каталог роли
+            # не появится сам по себе на следующем проходе, причина
+            # известна СЕЙЧАС и не должна теряться после уборки клона.
+            _kill_inconclusive(conn, task_id, f"canary: {skip_detail}")
+            return
         if state == "spec_gate":
             _pass_spec_gate(conn, task_id)
             continue
@@ -658,6 +721,7 @@ def _task_metrics(conn, task_id: str) -> dict:
         "review_iterations": t["review_iters"],
         "escalations": _escalation_notes(steps),
         "outcome": t["state"],
+        "kill_note": _kill_outcome_note(steps) if t["state"] == "killed" else None,
     }
 
 
@@ -762,11 +826,12 @@ def _run_one_task(template_path: Path, run_stamp: str, ratio: float) -> None:
             f"{'эскалацию' if expected else 'без эскалации'}, по факту "
             f"{'эскалация была' if actual else 'эскалации не было'}]")
 
+    outcome_note = f" ({metrics['kill_note']})" if metrics["kill_note"] else ""
     print(f"  {task_id}: шагов={metrics['steps']}  "
          f"${metrics['cost_usd']:.2f}  "
          f"ревью-итераций={metrics['review_iterations']}  "
          f"эскалаций={len(metrics['escalations'])}  "
-         f"исход={metrics['outcome']}{mismatch_note}{note}")
+         f"исход={metrics['outcome']}{outcome_note}{mismatch_note}{note}")
 
 
 def cmd_canary(*, k: int) -> None:

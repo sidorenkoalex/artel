@@ -47,6 +47,19 @@ AGENT_SETTING_SOURCES = "user"
 # Рабочая поверхность задачи (SPEC T045): git worktree на её ветке в
 # стандартном месте — `orchestrator/workspace.py` эту норму несёт.
 WORKTREES = ROOT / ".artel" / "worktrees"
+# Файл закреплённых версий сторонних пакетов пульта — pytest/pytest-timeout/
+# pytest-xdist и их транзитивные зависимости, формат `pip` (SPEC
+# 01M1REVEZ1HESMJ7AFD5A9MEJ8, требование 1). Единственный источник версий
+# для `.artel/venv` (`orchestrator/venv.py::sync`) и для CI (джоб `python`,
+# `.github/workflows/ci.yml`, диф-приложение) — версии не дублируются
+# литералами ни в одном из этих мест.
+REQUIREMENTS_LOCK = ROOT / "requirements.lock"
+# Venv пульта (требование 2): создаётся `venv-sync`/`orchestrator/venv.py`
+# тем же интерпретатором, что и сам пульт (`REQUIRED_PYTHON`,
+# `orchestrator/stack.py`) — `check_stack()` сверяет его с
+# `REQUIREMENTS_LOCK` выше, `runner.role_env` отказывает без согласованного
+# venv (требование 4).
+VENV_DIR = ROOT / ".artel" / "venv"
 
 # 30 минут; временный подъём до 2700 на стройку M1 (02.09) возвращён
 # после мержа T094 тем же днём (класс «лимит», ADR-0002). Повторный
@@ -406,6 +419,16 @@ TOKEN_RATE_DIVERGENCE_ALERT_THRESHOLD = 0.5
 # ОДНОГО шага, которую видит бюджетный гейт (`budget.budget_block`/
 # `enforce_budget`, требование 5) вместо нуля.
 STEP_COST_ESTIMATE_USD = 5.0
+
+# Ориентир числа вызовов инструментов роли `developer` за шаг для оценки
+# «стоимость карты за шаг developer» (`report.map_growth_cost_estimate`,
+# SPEC 01M1RGQV4DG2FX1B90W4EEETTR, требование 1, AC-3) — используется,
+# когда логов `developer` в выборке последних 10 задач нет вовсе (retention
+# уже вычистил файлы, либо ни одна из них ещё не дошла до этого шага).
+# Значение — тот же порядок величины, что типичный шаг `developer` по
+# наблюдению за живыми логами; не измеряется точно, поэтому оценка на этой
+# константе всегда явно помечена словом «оценка» в выводе `report`.
+MAP_GROWTH_CALLS_ESTIMATE = 40
 
 # Статусы REVIEW.md, которые FSM отрабатывает как вердикт ревьювера.
 REVIEW_VERDICTS = ("approved", "changes_requested", "escalate")
