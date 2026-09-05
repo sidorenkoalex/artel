@@ -16,13 +16,14 @@ developer задачи 01M1PNBSHR2PMFECMP7C204MF1 дважды запустил�
 Что отклоняется (каждый сегмент команды, разделённой `;`, `&&`, `||`,
 `|`, проверяется отдельно):
 - `python3 -m unittest` без имён модулей/файлов (голый вызов = discover);
-- `python3 -m unittest discover …` в любой форме;
+- `python3 -m unittest discover` по всему дереву (`-s tests`, `-s .` или без `-s`);
 - `python3 -m pytest` / `pytest` без аргументов-путей, либо с каталогом
   `tests`, `tests/`, `.` в аргументах.
 
 Что проходит: конкретные модули (`python3 -m unittest tests.test_x`),
-файлы планки (`… tasks/<id>/acceptance_tests/test_ac1.py`), pytest по
-файлу, любые не-тестовые команды. Хук не вмешивается, если stdin не
+файлы планки (`… tasks/<id>/acceptance_tests/test_ac1.py`), discover по
+каталогу планки (`discover -s tasks/<id>/acceptance_tests`, как велит
+`skills/test-authoring.md`), pytest по файлу, любые не-тестовые команды. Хук не вмешивается, если stdin не
 разобрался как JSON, — молчаливый отказ был бы отказом без причины.
 """
 from __future__ import annotations
@@ -96,9 +97,24 @@ def _segment_verdict(segment: str) -> str | None:
     return None
 
 
+def _start_directory(rest: list[str]) -> str:
+    """Каталог discover: `-s X`, `--start-directory X`, `--start-directory=X`
+    или первый позиционный аргумент после `discover`; по умолчанию `.`."""
+    tokens = rest[rest.index("discover") + 1:]
+    for i, tok in enumerate(tokens):
+        if tok in ("-s", "--start-directory") and i + 1 < len(tokens):
+            return tokens[i + 1]
+        if tok.startswith("--start-directory="):
+            return tok.split("=", 1)[1]
+    positionals = _positionals(tokens, _UNITTEST_VALUE_FLAGS)
+    return positionals[0] if positionals else "."
+
+
 def _unittest_verdict(rest: list[str]) -> str | None:
     if "discover" in rest:
-        return REASON
+        # discover по каталогу планки задачи (`-s tasks/<id>/acceptance_tests`,
+        # skills/test-authoring.md) — адресный прогон; по всему дереву — нет.
+        return REASON if _start_directory(rest) in _WHOLE_TREE else None
     if not _positionals(rest, _UNITTEST_VALUE_FLAGS):
         return REASON
     return None
