@@ -237,7 +237,7 @@ def review(conn, task_id: str, t, tdir, target: str, state: str) -> bool:
         elif workspace.on_task_branch(task_id, t["branch"]) is True:
             run_cwd = workspace.path(task_id)
             acc_tdir = run_cwd / "tasks" / task_id
-        green, tail = acceptance.run(acc_tdir, cwd=run_cwd)
+        green, tail = acceptance.run(acc_tdir, code_root=run_cwd)
         # Fingerprint окружения (SPEC T101, требование 4б, AC-5) —
         # часть исхода прогона приёмочных тестов, тем же приёмом, что
         # и у события агентного шага (`runner.py`): значение поля

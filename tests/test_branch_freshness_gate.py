@@ -340,7 +340,7 @@ class BranchFreshnessGateTest(unittest.TestCase):
             "материализоваться в рабочий каталог кода задачи (worktree "
             "self-target), не во временный каталог")
         self.assertEqual(
-            acc_run.call_args.kwargs.get("cwd"), self.wt_path,
+            acc_run.call_args.kwargs.get("code_root"), self.wt_path,
             "SPEC 01M1RNZ6V7TTTTYAHBMF8JBQQS AC-2: cwd прогона обязан "
             "быть равен рабочему каталогу кода задачи, не config.ROOT")
 
@@ -373,7 +373,7 @@ class BranchFreshnessGateTest(unittest.TestCase):
             "SPEC 01M1RNZ6V7TTTTYAHBMF8JBQQS AC-1: планка материализуется "
             "в рабочий каталог кода задачи, не во временный каталог")
         self.assertEqual(
-            acc_run.call_args.kwargs.get("cwd"), self.wt_path,
+            acc_run.call_args.kwargs.get("code_root"), self.wt_path,
             "SPEC 01M1RNZ6V7TTTTYAHBMF8JBQQS AC-2: cwd прогона обязан "
             "быть равен рабочему каталогу кода задачи, не config.ROOT")
 
