@@ -11,8 +11,25 @@
 
 ```
 docs/reference/role-home/
-  claude/CLAUDE.md   -> .artel/home/.claude/CLAUDE.md  (переименовывается при деплое)
+  claude/CLAUDE.md          -> .artel/home/.claude/CLAUDE.md  (переименовывается при деплое)
+  claude/settings.json      -> .artel/home/.claude/settings.json  (deny-список и хуки роли)
+  claude/hooks/bash_guard.py -> .artel/home/.claude/hooks/bash_guard.py
 ```
+
+`settings.json` несёт два исполняемых правила периметра роли:
+`permissions.deny` (пул канарейки и клонирование — SPEC
+01M1NEEWH5K1XPFRDGRMPYSBXJ, требование 13а) и PreToolUse-хук `Bash` →
+`hooks/bash_guard.py`, который отклоняет полный прогон набора тестов
+внутри шага (голый `python3 -m unittest`, `unittest discover`, `pytest`
+по всему дереву) с причиной для роли; адресные прогоны проходят. Хук
+вызывается через `$CLAUDE_CONFIG_DIR`, поэтому не зависит от рабочего
+каталога роли и от target'а. Проверяется `tests/test_role_bash_guard.py`.
+
+Деплой референса происходит ТОЛЬКО при отсутствии `.artel/home`
+(холодный старт). На уже работающем пульте изменения референса в
+`.artel/home/.claude/` не попадают сами — Оператор копирует их руками
+(так 05.09 обнаружилось, что deny-список канарейки на этом пульте не
+был развёрнут).
 
 Каталог референса называется `claude/`, БЕЗ ведущей точки — в самом
 репозитории, чтобы не путать инструментарий (IDE, агентские харнессы),

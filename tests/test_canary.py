@@ -694,6 +694,158 @@ class MergesSinceLastGreenRunTest(RealGitSandbox):
         self.assertIsNone(
             canary.merges_since_last_green_run(self.conn, target))
 
+class PoolSerializationRoundtripTest(unittest.TestCase):
+    """`canary._serialize_pool`/`_deserialize_pool` (SPEC
+    01M1NSR5M5THYRC0RFWPMVE2DW) — байт-в-байт round trip самой
+    сериализации в изоляции от шифрования/диска: юникод, пустой файл,
+    пустой пул. Полный цикл seal -> restore уже покрыт приёмочными
+    тестами (AC-16) — здесь только эта прослойка."""
+
+    def test_roundtrip_preserves_names_and_bytes(self):
+        """Ловит мутацию: длина-префикс имени/содержимого перепутана
+        местами либо формат `struct` сужен (например, `>I` вместо `>Q`
+        для длины содержимого) — юникод-имя или байты содержимого
+        побьются на границе разбора, `restored` разойдётся с исходником
+        либо `_deserialize_pool` упадёт на смещении."""
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        root = Path(tmp.name)
+        (root / "a.md").write_text(
+            "тело А, юникод: üñïçødé\n", encoding="utf-8")
+        (root / "b.md").write_bytes(b"")
+        files = sorted(root.iterdir())
+
+        restored = canary._deserialize_pool(canary._serialize_pool(files))
+
+        self.assertEqual(set(restored), {"a.md", "b.md"})
+        self.assertEqual(restored["a.md"], (root / "a.md").read_bytes())
+        self.assertEqual(restored["b.md"], b"")
+
+    def test_empty_pool_serializes_to_empty_payload(self):
+        """Ловит мутацию: `_serialize_pool` пишет заголовок/счётчик даже
+        для пустого списка файлов — `_serialize_pool([])` перестал бы
+        быть пустой строкой байт, и `_deserialize_pool(b"")` либо упал
+        бы, либо вернул неверную форму словаря."""
+        self.assertEqual(canary._serialize_pool([]), b"")
+        self.assertEqual(canary._deserialize_pool(b""), {})
+
+
+class MacKeyTest(unittest.TestCase):
+    """`canary._mac_key` — ключ HMAC выводится из ключа пула
+    детерминированно (ANSWER-1 п.1): тот же вход -> тот же результат,
+    разный вход -> разный, и сам вывод не совпадает с исходным ключом
+    (иначе тег и шифрование делили бы один материал)."""
+
+    def test_same_input_gives_same_mac_key(self):
+        """Ловит мутацию: вывод подмешивает недетерминированную соль
+        (`os.urandom`/временную метку) — два вызова на тот же ключ
+        пула разошлись бы, и `_authorized_pool_payload` не смог бы
+        воспроизвести тег при восстановлении, посчитанный при seal."""
+        self.assertEqual(canary._mac_key("key-A"), canary._mac_key("key-A"))
+
+    def test_different_input_gives_different_mac_key(self):
+        """Ловит мутацию: `_mac_key` игнорирует аргумент и возвращает
+        константу (заглушка вместо реального вывода) — разные ключи
+        пула дали бы один и тот же MAC-ключ."""
+        self.assertNotEqual(canary._mac_key("key-A"), canary._mac_key("key-B"))
+
+    def test_mac_key_is_not_the_pool_key_itself(self):
+        """Ловит мутацию: `_mac_key` возвращает ключ пула без вывода
+        (забытый `hashlib.sha256(...)`) — тег и шифрование делили бы
+        один материал вопреки разделению ключей ANSWER-1 п.1."""
+        self.assertNotEqual(canary._mac_key("key-A"), "key-A")
+
+
+class AuthorizedPoolPayloadRoleEnvTest(unittest.TestCase):
+    """`canary._authorized_pool_payload` — рубеж role_env (требование 5,
+    AC-15) срабатывает ДО любого обращения к keychain: и restore, и
+    drift-warning идут через эту единую точку входа, поэтому проверяется
+    здесь один раз, а не в обоих вызывающих."""
+
+    def test_role_environment_refuses_before_touching_keychain(self):
+        """Ловит мутацию: проверка `runner.in_role_environment()`
+        переставлена ПОСЛЕ `keychain.token(...)` (или убрана вовсе) —
+        `token_mock` был бы вызван раньше отказа, требование 5/AC-15
+        («второй, независимый от permissions.deny рубеж») перестало бы
+        держаться этой единой точкой входа."""
+        with mock.patch.object(canary.runner, "in_role_environment",
+                               return_value=True):
+            with mock.patch.object(canary.keychain, "token") as token_mock:
+                payload, refusal = canary._authorized_pool_payload()
+
+        self.assertIsNone(payload)
+        self.assertIn("role_env", refusal)
+        token_mock.assert_not_called()
+
+
+class RestorePoolIfMissingNoOpTest(unittest.TestCase):
+    """`canary.restore_pool_if_missing` — каталог пула уже есть (AC-7):
+    no-op молча, keychain не спрашивается вовсе (нечего расшифровывать)."""
+
+    def test_existing_pool_dir_short_circuits_before_keychain(self):
+        """Ловит мутацию: проверка `pool_dir.exists()` убрана или
+        переставлена после обращения к keychain — `token_mock` был бы
+        вызван даже когда `~/.artel-canary` уже есть, нарушая AC-7
+        («при наличии каталога ничего не трогают»)."""
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        existing = Path(tmp.name)
+        with mock.patch.object(canary, "_pool_dir", return_value=existing):
+            with mock.patch.object(canary.keychain, "token") as token_mock:
+                result = canary.restore_pool_if_missing(conn=None)
+
+        self.assertIsNone(result)
+        token_mock.assert_not_called()
+
+
+class OpensslSecretPassingTest(unittest.TestCase):
+    """`canary._openssl_encrypt`/`_openssl_decrypt` — ключ передаётся
+    `openssl enc` через файловый дескриптор (`-pass fd:N`), не
+    аргументом командной строки (REVIEW.md итерации 1, R1-F1): аргумент
+    виден в выводе `ps`/`ps aux` любому процессу того же пользователя
+    на время жизни подпроцесса — ровно тот секрет, ради которого
+    существует вся задача."""
+
+    KEY = "unit-test-fd-key-98765"
+
+    @staticmethod
+    def _spy(calls):
+        def fake_run(cmd, **kw):
+            calls.append((list(cmd), kw))
+            return subprocess.CompletedProcess(cmd, 0, b"stub-output", b"")
+        return fake_run
+
+    def test_encrypt_argv_never_carries_the_raw_key(self):
+        """Ловит мутацию: регресс к `-pass pass:{key}` литералом в
+        argv — греп по буквальному значению ключа среди ВСЕХ элементов
+        вызова находит его; отсутствие `pass_fds` в kwargs тоже ловится
+        (без него дескриптор не переживает `exec`)."""
+        calls = []
+        with mock.patch.object(canary.subprocess, "run",
+                               side_effect=self._spy(calls)):
+            canary._openssl_encrypt(b"payload", self.KEY)
+
+        self.assertTrue(calls)
+        cmd, kw = calls[0]
+        self.assertNotIn(self.KEY, cmd, f"ключ найден буквально в argv: {cmd}")
+        self.assertTrue(
+            any(isinstance(a, str) and a.startswith("fd:") for a in cmd),
+            f"-pass не передан через fd:N: {cmd}")
+        self.assertIn("pass_fds", kw)
+
+    def test_decrypt_argv_never_carries_the_raw_key(self):
+        """Ловит мутацию: то же самое для расшифровки — регресс к
+        `-pass pass:{key}` в `_openssl_decrypt`."""
+        calls = []
+        with mock.patch.object(canary.subprocess, "run",
+                               side_effect=self._spy(calls)):
+            canary._openssl_decrypt(b"ciphertext-stub", self.KEY)
+
+        self.assertTrue(calls)
+        cmd, kw = calls[0]
+        self.assertNotIn(self.KEY, cmd, f"ключ найден буквально в argv: {cmd}")
+        self.assertIn("pass_fds", kw)
+
 
 if __name__ == "__main__":
     unittest.main()

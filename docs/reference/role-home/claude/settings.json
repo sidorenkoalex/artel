@@ -4,7 +4,25 @@
       "Read(~/.artel-canary/**)",
       "Bash(git clone:*)",
       "Bash(gh repo clone:*)",
-      "Bash(git remote add:*)"
+      "Bash(git remote add:*)",
+      "Bash(python3 orchestrator/artel.py init:*)",
+      "Bash(python3 orchestrator/artel.py doctor --restore:*)",
+      "Bash(openssl enc -d:*)",
+      "Bash(security find-generic-password:*)"
+    ]
+  },
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"$CLAUDE_CONFIG_DIR/hooks/bash_guard.py\"",
+            "timeout": 10
+          }
+        ]
+      }
     ]
   }
 }

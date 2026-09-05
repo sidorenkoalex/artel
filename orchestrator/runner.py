@@ -14,8 +14,8 @@ from pathlib import Path
 
 from . import (agent_log, alerts, brief, budget, checkpoint, config,
               failure_classification, fixation, gitcmd, keychain, lease,
-              parallel_limit, pause, review, role_prompt, roles, spend,
-              store, workspace, zone_lock)
+              liveness, parallel_limit, pause, review, role_prompt, roles,
+              spend, store, workspace, zone_lock)
 
 # Идентичность коммитера, которую роль обязана унести с собой в свой HOME.
 # git читает эти переменные ПОВЕРХ конфига, поэтому перенос ровно двух пар
@@ -48,7 +48,17 @@ def spawn_agent(cmd: list[str], **kwargs) -> subprocess.Popen:
     тестах вместо прямой подмены `subprocess.Popen` (модуль общий на
     процесс — подмена ловила бы и системные вызовы вне запуска агента,
     SPEC T037, требование 2).
+
+    Новая сессия (SPEC 01M1PNBSHR2PMFECMP7C204MF1, AC-1): агентный
+    процесс становится лидером собственной группы (`pgid == pid`), а не
+    наследует pgid пульта — таймаут шага/`kill`/`pause --now`/`release`
+    (требование 2) бьют её целиком (`os.killpg`), включая
+    `pytest`/`unittest`, запущенные ролью и переходящие под launchd при
+    обычном `subprocess.Popen` без своей группы (инцидент 04.09, SPEC
+    «Контекст»). `setdefault` — явный `start_new_session` вызывающего
+    кода (если он вообще появится) сильнее дефолта этой обёртки.
     """
+    kwargs.setdefault("start_new_session", True)
     return subprocess.Popen(cmd, **kwargs)
 
 
@@ -419,6 +429,18 @@ def role_env(role: str | None = None) -> dict:
     return env
 
 
+def in_role_environment() -> bool:
+    """Верно, если ТЕКУЩИЙ процесс сам исполняется в окружении роли —
+    те же два маркера, что `role_env()` ставит процессу роли (HOME/
+    CLAUDE_CONFIG_DIR на курируемый слой): единственное в кодовой базе
+    определение «окружения роли» читается здесь же, симметрично записи,
+    не задаётся заново (SPEC 01M1NSR5M5THYRC0RFWPMVE2DW, требование 5,
+    AC-15 — второй, независимый от `permissions.deny` рубеж отказа
+    расшифровки пула канарейки, если она вызвана из-под роли)."""
+    return (os.environ.get("HOME") == str(config.ROLE_HOME) and
+            os.environ.get("CLAUDE_CONFIG_DIR") == str(config.ROLE_CONFIG_DIR))
+
+
 def role_cwd(conn, task_id: str, target: str) -> Path:
     """Рабочий каталог роли: worktree задачи для self/артели, workspace
     target'а — иначе.
@@ -616,15 +638,39 @@ def run_agent_once(conn, task_id: str, role: str, prompt: str,
                   f"{prompt_path} — запусти роль вручную с ним.")
             return "skipped", "claude CLI не найден", None
 
+    # pgid агентного процесса — рядом с существующим pid держателя lease
+    # (SPEC 01M1PNBSHR2PMFECMP7C204MF1, AC-2): `spawn_agent` спавнит его
+    # лидером собственной сессии (AC-1), поэтому pgid всегда равен его
+    # же pid — запрос `os.getpgid` не нужен. Лизы может не быть вовсе
+    # (шаг запущен в обход `lease.acquire`, тесты) — `update_lease_pgid`
+    # тогда тихо не меняет ни одной строки. `agent_pid` — не всегда `int`:
+    # существующие тесты (T005/T007/…) мокают `spawn_agent` фейковым
+    # объектом БЕЗ реального OS-процесса (`FakeProc`/`mock.Mock`) — `pid`
+    # такого объекта либо отсутствует, либо сам `Mock`, и группу
+    # процессов, которой нет, снимать/записывать некуда и незачем
+    # (реальный `subprocess.Popen` продакшена таким никогда не бывает).
+    agent_pid = getattr(proc, "pid", None)
+    if isinstance(agent_pid, int):
+        store.update_lease_pgid(conn, task_id, agent_pid)
+
     # Перекачка в потоке: чтение строк блокируется, пока агент молчит, а
     # таймаут шага должен срабатывать и на замолчавшем агенте.
     pump = agent_log.OutputPump(proc.stdout, log_path)
     pump.start()
     timed_out = False
+    killed_group = None
     try:
         rc = proc.wait(timeout=config.AGENT_TIMEOUT_SEC)
     except subprocess.TimeoutExpired:
-        proc.kill()
+        if isinstance(agent_pid, int):
+            # Группа целиком (AC-3), не только сам процесс — потомок,
+            # заведённый ролью (`pytest`/`unittest`), иначе переживает
+            # завершение шага и виснет под launchd (инцидент 04.09, SPEC
+            # «Контекст»). `agent_pid` — pgid этой же группы (AC-1),
+            # запрос `os.getpgid` не нужен.
+            killed_group = liveness.terminate_process_group(agent_pid)
+        else:
+            proc.kill()
         rc = proc.wait()
         timed_out = True
 
@@ -663,8 +709,12 @@ def run_agent_once(conn, task_id: str, role: str, prompt: str,
         checkpoint.commit_timeout_checkpoint(conn, task_id, role)
         # «без ретрая» — чтобы читающий журнал не ждал попыток 2 и 3.
         timeout_min = f"{config.AGENT_TIMEOUT_SEC // 60} мин"
-        store.journal(conn, task_id, role, "agent run TIMEOUT",
-                      f"{timeout_min}, {numbered} (без ретрая){spent}")
+        detail = f"{timeout_min}, {numbered} (без ретрая){spent}"
+        if killed_group is not None:
+            # Только когда группа реально снята (AC-7) — `agent_pid`
+            # тестового дубля выше не участвовал в group-kill вовсе.
+            detail = f"{detail}; {liveness.group_kill_detail(agent_pid, killed_group)}"
+        store.journal(conn, task_id, role, "agent run TIMEOUT", detail)
         print(f"[{task_id}] таймаут шага ({timeout_min}) — разберись и "
               f"перезапусти run")
         return "timeout", f"таймаут шага ({timeout_min})", None

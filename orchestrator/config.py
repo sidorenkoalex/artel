@@ -205,6 +205,13 @@ AUTO_MAX_STEPS = 30
 # значение SPEC (требование 2); меняет только Оператор (ADR-0002, класс
 # «лимит»).
 AUTO_STALL_STEPS_LIMIT = 5
+# Возрастной порог сторожа зависших прогонов тестов (SPEC
+# 01M1PNBSHR2PMFECMP7C204MF1, требование 3, AC-8): процесс `python -m
+# unittest`/`pytest` с cwd внутри `.artel/worktrees/` старше этого
+# порога и без живого lease его задачи — инцидент (см.
+# `orchestrator/doctor.py::check_hung_test_runs`). Дефолт SPEC — 10 минут.
+HUNG_TEST_RUN_AGE_SEC = 600
+
 # Порог свежести heartbeat lease задачи (SPEC T044, требование 6): моложе —
 # lease держит замок, старше — перехватывается другой сессией (требование 5).
 # Значение — с запасом над худшим легитимным временем ОДНОГО `run` без
@@ -235,6 +242,12 @@ CANARY_DEVIATION_RATIO = 0.5
 # (требование 13б), и `permissions.deny` курируемого слоя роли
 # (требование 13а, `docs/reference/role-home/claude/settings.json`).
 CANARY_POOL_DIRNAME = ".artel-canary"
+# Слот keychain пульта, несущий симметричный ключ шифрования пула (SPEC
+# 01M1NSR5M5THYRC0RFWPMVE2DW, требование 1/AC-2) — тот же механизм, что
+# токены ролей (`orchestrator/keychain.py::token`), отдельный слот
+# (ANSWER-1 п.3). Заводит Оператор вручную (`security add-generic-
+# password`), код только читает.
+CANARY_POOL_KEY_SLOT = "artel-canary-pool-key"
 # Потолок ПОДРЯД идущих циклов возврата из `escalated` ОДНОЙ канареечной
 # задачи (REVIEW.md 01M1NEEWH5K1XPFRDGRMPYSBXJ итерации 1, R1-F1):
 # `review_iters` не сбрасывается при возврате из `escalated` (общее

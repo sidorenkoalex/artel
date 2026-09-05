@@ -16,6 +16,7 @@ from . import (acceptance, agent_log, artifact_source, artifacts, budget,
 # же модуль ниже определяет обработчик состояния `review` под тем же
 # именем `review` — `from . import review` тут вело бы к коллизии имён,
 # как только определение функции переопределит имя модуля.
+from .review import EMPTY_DIFF_TEXT as _EMPTY_DIFF_TEXT
 from .review import git_diff_part as _review_git_diff_part
 
 # Причина отказа гейта ёмкости — дословно (tasks/01M1GCN1FPSC1A6WK9WD1Q1V8X,
@@ -415,11 +416,17 @@ def tests_writing(conn, task_id: str, t, tdir, target: str, state: str) -> bool:
 
 def _capacity_gate_refuses(conn, task_id: str, t, state: str) -> bool:
     """Гейт ёмкости diff снимка на `in_dev -> review` (tasks/
-    01M1GCN1FPSC1A6WK9WD1Q1V8X, требование 5, AC-12..AC-16): полный diff
-    снимка (`git diff config.MAIN_BRANCH...<ветка задачи>`) — тот же
+    01M1GCN1FPSC1A6WK9WD1Q1V8X, требование 5, AC-12..AC-16): diff снимка
+    БЕЗ `tasks/<id>/` (`git diff config.MAIN_BRANCH...<ветка задачи> --
+    . ':!tasks/<id>/'`, tasks/01M1RA0N6FCFEQBB82K58GM12X, AC-1) — тот же
     расчёт, что и «полный» `diff_type` в `review.review_package` при
     `iteration == 1` (T029) — не имеет права превышать
-    `config.REVIEW_SNAPSHOT_DIFF_MAX_BYTES`. Пересчитывается заново на
+    `config.REVIEW_SNAPSHOT_DIFF_MAX_BYTES`. Копия артефактов задачи
+    (SPEC/PLAN/залоченная планка) в кодовой ветке исключена из меры
+    целиком — она не предмет ревью-диффа (ревьювер получает её отдельными
+    компонентами пакета) и не имеет права раздувать гейт (AC-1/AC-4);
+    diff кода сам по себе крупнее потолка отклоняет переход тем же
+    способом, что и до этой задачи (AC-5). Пересчитывается заново на
     КАЖДОМ входе в гейт, не по инкременту прошлой итерации (AC-15).
 
     `True` — переход отклонён, отказ уже журналирован (AC-13); гейт сам
@@ -432,7 +439,19 @@ def _capacity_gate_refuses(conn, task_id: str, t, state: str) -> bool:
     измерять байты именно этой строки значит пропускать переход, так и
     не выяснив фактический размер снимка — тот же принцип «неизвестный
     статус — это нельзя» (ADR-0002), что уже применён парой функций выше
-    в этом же файле для лока `acceptance_tests/`.
+    в этом же файле для лока `acceptance_tests/`. Второй diff (только
+    `tasks/<id>/`, только на пути уже подтверждённого отказа — нужен лишь
+    для второй цифры сообщения, AC-3) сбоем git отказ не отменяет: первая
+    цифра (код) уже превысила потолок — вторая цифра в сообщении в этом
+    случае явно названа «неизвестна», а не вымышленным числом.
+
+    Diff артефактов реально пуст (git ответил успешно, но пустой строкой) —
+    вторая цифра обязана быть 0, а не байтовым размером строки-плейсхолдера
+    `review.EMPTY_DIFF_TEXT`, которую `git_diff_part` подставляет для показа
+    (R1-F1, REVIEW.md итерации 1-3): сравнение с этой константой явно
+    отличает «пусто» от «есть содержимое» перед подсчётом байт — тем же
+    приёмом мерится и `code_size` ниже, хотя там пустой код-diff и так не
+    превысил бы потолок.
 
     Внешний (не self) target — гейт не проверяется вовсе, тем же
     доводом «сознательно вне объёма этой итерации», что уже
@@ -448,7 +467,9 @@ def _capacity_gate_refuses(conn, task_id: str, t, state: str) -> bool:
     любого внешнего target навсегда, а не редкий сбой git."""
     if store.task_target(conn, task_id) != config.DEFAULT_TARGET:
         return False
-    diff, _, reason = _review_git_diff_part(config.MAIN_BRANCH, t["branch"])
+    tasks_prefix = f"tasks/{task_id}/"
+    code_diff, _, reason = _review_git_diff_part(
+        config.MAIN_BRANCH, t["branch"], pathspec=(".", f":!{tasks_prefix}"))
     if reason:
         detail = (f"гейт ёмкости: git не ответил на diff снимка "
                  f"({config.MAIN_BRANCH}...{t['branch']}) — сверка "
@@ -460,12 +481,22 @@ def _capacity_gate_refuses(conn, task_id: str, t, state: str) -> bool:
               f"{config.MAIN_BRANCH}...{t['branch']}, и повтори "
               f"artel.py advance {task_id}")
         return True
-    size = len(diff.encode("utf-8"))
-    if size <= config.REVIEW_SNAPSHOT_DIFF_MAX_BYTES:
+    code_size = (0 if code_diff == _EMPTY_DIFF_TEXT
+                else len(code_diff.encode("utf-8")))
+    if code_size <= config.REVIEW_SNAPSHOT_DIFF_MAX_BYTES:
         return False
+    artifacts_diff, _, artifacts_reason = _review_git_diff_part(
+        config.MAIN_BRANCH, t["branch"], pathspec=(tasks_prefix,))
+    if artifacts_reason:
+        artifacts_note = f"неизвестен (git не ответил: {artifacts_reason})"
+    elif artifacts_diff == _EMPTY_DIFF_TEXT:
+        artifacts_note = "0 байт (изменений нет)"
+    else:
+        artifacts_note = f"{len(artifacts_diff.encode('utf-8'))} байт"
     detail = (f"{CAPACITY_GATE_REASON} ({task_id} «{t['title']}»): diff "
-             f"снимка {size} байт > потолка "
-             f"{config.REVIEW_SNAPSHOT_DIFF_MAX_BYTES} байт")
+             f"кода {code_size} байт > потолка "
+             f"{config.REVIEW_SNAPSHOT_DIFF_MAX_BYTES} байт (исключённые "
+             f"артефакты {tasks_prefix}: {artifacts_note})")
     store.journal(conn, task_id, "fsm",
                   "переход отклонён: гейт ёмкости diff", detail)
     print(f"[{task_id}] переход отклонён: {detail}")
@@ -666,12 +697,35 @@ def in_dev(conn, task_id: str, t, tdir, target: str, state: str) -> bool:
             return False
         plan_meta = yamlmini.frontmatter(plan_text) or {}
     else:
-        plan_meta = artifacts.frontmatter(tdir / "PLAN.md")
-    if plan_meta.get("status") in ("ready", "approved"):
+        plan_text = (tdir / "PLAN.md").read_text(encoding="utf-8")
+        plan_meta = yamlmini.frontmatter(plan_text) or {}
+    status = plan_meta.get("status")
+    if status in ("ready", "approved", "escalate"):
         if fsm._dirty_refuses(conn, task_id, target, "PLAN.md"):
             return False
         if fsm.guard_refuses(conn, task_id, tdir / "PLAN.md", text=plan_text):
             return True
+        if status == "escalate":
+            # PLAN.md status: escalate (01M1R8B3ZKXQT0Z0G6QQQDV906,
+            # требование 6) — тот же канал, что уже несёт REVIEW.md
+            # (`review()` выше, ветка `elif status == "escalate":`), для
+            # PLAN.md добавленный этой задачей: `in_dev` до сих пор понимал
+            # только `ready`/`approved`, любой другой статус (в т.ч.
+            # escalate) падал в «PLAN.md не ready — разработчик ещё
+            # работает», и `auto` продолжал звать `developer` заново
+            # вместо остановки на эскалации (регрессия №11, симптом 2).
+            answer_baseline = fsm._answer_baseline_or_refuse(conn, task_id, tdir)
+            if answer_baseline is None:
+                return False
+            store.update_task(conn, task_id, answer_baseline=answer_baseline)
+            escalation = guard.section_body(
+                plan_text, guard.ESCALATION_SECTION).strip()
+            detail = (f"эскалация от разработчика: {escalation}" if escalation
+                      else "эскалация от разработчика")
+            store.set_state(conn, task_id, "escalated", "fsm",
+                            expected_state=state, detail=detail)
+            print(f"[{task_id}] эскалация разработчика: {detail}")
+            return False
         locked = t["tests_locked_sha"]
         if locked:
             # `locked` (`tests_locked_sha`) — sha АРТЕФАКТНОЙ ВЕТКИ пульта
@@ -737,13 +791,12 @@ def in_dev(conn, task_id: str, t, tdir, target: str, state: str) -> bool:
         # последний шаг перед самим переходом — отставшая ветка либо
         # подтягивается и проходит приёмку, либо эскалирует и возврата
         # уже не будет.
-        if fsm._pull_main_or_escalate(conn, task_id, t, state) == "escalated":
+        if fsm._pull_main_or_escalate(conn, task_id, t, state) in (
+                "escalated", "refused"):
             return False
         if _capacity_gate_refuses(conn, task_id, t, state):
             return False
-        full_plan_text = (plan_text if plan_text is not None
-                          else (tdir / "PLAN.md").read_text(encoding="utf-8"))
-        if _zones_gate_refuses(conn, task_id, t, branch, full_plan_text):
+        if _zones_gate_refuses(conn, task_id, t, branch, plan_text):
             return False
         store.set_state(conn, task_id, "review", "fsm",
                         expected_state=state, detail="MR готов — прогон ревьювера")
