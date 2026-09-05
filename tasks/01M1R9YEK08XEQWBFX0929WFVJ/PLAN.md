@@ -119,6 +119,21 @@ schema_version: 4
    итерации 1 ожидал вызов `acceptance.run` с путём worktree — тем же
    классом дефекта, что чинит шаг 4 в `test_branch_freshness_gate.py`,
    просто в другом файле (тот же приём `write_acceptance_plank()`).
+7. REVIEW.md итерация 4, major (незарегистрированное замечание — R1-F1
+   исправлен по коду шагом 6, но не закреплён тестом): добавлен
+   `tests/test_branch_freshness_gate.py::
+   test_approve_refuses_when_spec_read_fails_after_missing_plank` —
+   мокает `gitcmd.show` на сбой чтения ИМЕННО `SPEC.md` (остальные пути
+   уходят в `disk_backed_show` как обычно), планка не заведена на диске
+   (`acceptance_tests/` отсутствует), проверяет, что переход из
+   `acceptance` через `approve` НЕ покидает состояние и журнал несёт
+   «не прочитан». Мутационная проверка сделана вручную (не оставлена в
+   коде): временный откат `_read_branch_text_or_refuse` к точному
+   историческому виду из коммита 6a220933 (`gitcmd.show(...) + (frontmatter
+   if spec_text is not None else None) or {}`) даёт `AssertionError:
+   'merge_gate' != 'acceptance'` — тест ловит регресс, не проходит
+   молча; после отката правки к committed-версии фикса тест снова
+   зелёный.
 
 ## Покрытие требований
 | Требование | Шаг |
