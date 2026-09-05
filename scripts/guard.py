@@ -41,7 +41,12 @@ REQUIRED_META = {"task", "type", "author_role", "status"}
 # id, статус (пятёрка значений), обязательные поля каждой записи.
 # Правило применяется только к version >= 3 (требование 6) — тем же
 # приёмом версии-гейтинга, что версия 2 выше применена к SPEC.
-SUPPORTED_SCHEMA_VERSION = 3
+#
+# Версия 4 (01M1NKVPD2A79PQ6K0JVV1B2Q1, часть 1 нарезки «Механика зон»):
+# SPEC несёт обязательное поле `zones:` — машиночитаемый список путей/
+# масок зоны задачи (требование 1, AC-1). Правило применяется только к
+# version >= 4 — тем же приёмом версии-гейтинга, что версии 2 и 3 выше.
+SUPPORTED_SCHEMA_VERSION = 4
 
 RULES = {
     "spec": {
@@ -822,6 +827,31 @@ def split_assessment_errors(path: Path | str, text: str, meta: dict) -> list[str
            f"почему)"]
 
 
+def requires_zones(meta: dict) -> bool:
+    """SPEC обязан нести поле `zones:` (01M1NKVPD2A79PQ6K0JVV1B2Q1, AC-1).
+
+    Версия ниже 4 — формат SPEC до этой задачи, поля не несёт и не
+    обязан: тот же приём версии-гейтинга, что `requires_ac_markup` и
+    `requires_split_assessment` выше применяют к своим проверкам.
+    """
+    version = meta.get("schema_version", 1)
+    if not isinstance(version, int) or isinstance(version, bool):
+        return False
+    return version >= 4
+
+
+def spec_zones_errors(path: Path | str, meta: dict) -> list[str]:
+    """Поле `zones:` заполнено для SPEC версии, которая его требует
+    (AC-1). `path` — только для текста ошибок (см. `schema_errors`)."""
+    if (meta.get("type") or "") != "spec" or not requires_zones(meta):
+        return []
+    if not meta.get("zones"):
+        return [f"{path}: SPEC schema_version {meta.get('schema_version')} "
+               f"обязан нести поле zones (список путей/масок) — добавь "
+               f"frontmatter-поле zones"]
+    return []
+
+
 def check_content(label: str, text: str) -> list[str]:
     """Ядро `check` — структурная проверка уже прочитанного текста, без
     чтения файла: `label` — путь или его подобие, только для текста
@@ -894,6 +924,7 @@ def check_content(label: str, text: str) -> list[str]:
 
     if atype == "spec":
         errors.extend(split_assessment_errors(label, text, meta))
+        errors.extend(spec_zones_errors(label, meta))
 
     if atype == "review":
         errors.extend(review_evidence_errors(label, text, meta))

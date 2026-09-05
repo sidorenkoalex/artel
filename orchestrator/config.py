@@ -345,6 +345,14 @@ REVIEW_VERDICTS = ("approved", "changes_requested", "escalate")
 PROTECTED_PATHS = ("gates.yaml", "roles.yaml", ".github/", "templates/",
                    "skills/")
 
+# Общие зоны вне конфликта (задача 01M1NKVPD2A79PQ6K0JVV1B2Q1, часть 1,
+# AC-4): пути, которые трогают все задачи, а конфликт по ним — текстовый,
+# не механический. Пересечение зон двух задач ТОЛЬКО по этим путям не
+# считается конфликтом ни на одной из проверок занятости/сверки диффа
+# (части 2/3 нарезки — orchestrator/auto.py, orchestrator/fsm_advance.py).
+COMMON_ZONES = ("orchestrator/config.py", "docs/codebase-map.md", "tests/",
+                "roles.yaml")
+
 STATE_ROLE = {"tests_writing": "test_author", "in_dev": "developer",
              "review": "reviewer"}
 
