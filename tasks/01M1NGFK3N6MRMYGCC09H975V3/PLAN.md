@@ -1,0 +1,175 @@
+---
+task: 01M1NGFK3N6MRMYGCC09H975V3
+type: plan
+author_role: developer
+status: ready
+schema_version: 4
+---
+
+# PLAN: Канарейка v2 (часть 2): привязка пина к зелёной канарейке, триггер doctor, откат пина
+
+## Подход
+
+Часть 1 (01M1NEEWH5K1XPFRDGRMPYSBXJ) завела журнал прогонов канарейки
+(`canary_runs`) без понятия «зелёный»/«старый» — эта задача привязывает
+к нему три существующие точки (`pin-update`, `doctor`, новую `pin --to`)
+ровно так, как это зафиксировал ANSWER-1 (Оператор, ответ на эскалацию
+test_author этой задачи).
+
+**Журнал становится зелёным/красным.** `store.insert_canary_run`
+получает два новых keyword-параметра, `main_sha`/`verdict`
+(по умолчанию `None` — сигнатура для вызывающих кода до этой задачи не
+меняется). Колонки добавлены `add_column`'ом ВНУТРИ `_ensure_canary_tables`
+(не в общем `migrate()`, ANSWER-1 п.2) — та же идемпотентная миграция,
+что и у прочих колонок `store.py`, но привязанная к тому же ленивому
+месту создания таблицы, каким уже заведена сама `canary_runs`
+(докстринг `_ensure_canary_tables`: таблица не входит в универсальную
+SCHEMA сознательно). `orchestrator/canary.py::_run_one_task` заполняет
+оба поля при записи строки: `main_sha` — HEAD `config.ROOT` СНАРУЖИ
+эфемерного клона (тот же момент, где уже пишется сама строка журнала —
+клон к этому времени закрыт, `config.ROOT` уже настоящий пульт, не
+подмена); `verdict` — `'green'`, если `_drive_task` дошла до
+`merge_gate`/`verifying` и была убита штатно ИМЕННО там (не потолком
+эскалаций/буксования), и маркер «ожидается эскалация» совпал с фактом
+— иначе `'red'`. Для этого `_drive_task` теперь ВОЗВРАЩАЕТ маркер
+исхода (`"merge_gate"`/`"verifying"`/`"inconclusive"`/`"other"`) вместо
+`None` — единственный способ различить «прошла приёмку» от
+«`_kill_inconclusive`», раз оба пути заканчиваются одним и тем же
+`t["state"] == "killed"` в `_task_metrics`.
+
+**Общая арифметика возраста — одна функция, не две копии.** AC-1
+(`pin-update`) и AC-3/AC-4 (`doctor`) сравнивают ОДНО и то же число
+(«сколько мержей main с последнего зелёного прогона») с ОДНИМ и тем же
+порогом `config.CANARY_MAX_MERGES_SINCE_GREEN` (новая именованная
+константа, дефолт 10 — ANSWER-1 п.3). Арифметика — новая функция
+`orchestrator/canary.py::merges_since_last_green_run(conn, target_sha)`:
+перебирает зелёные прогоны (`store.green_canary_runs`, самые свежие
+первыми), отбрасывает те, чей `main_sha` не предок `target_sha`
+(`gitcmd.is_ancestor`, новая обёртка над `merge-base --is-ancestor`),
+берёт МИНИМАЛЬНЫЙ возраст (`gitcmd.merges_between`, новая обёртка над
+`rev-list --count --merges S..T`) среди оставшихся; `None` — прогонов,
+подходящих под фильтр, нет вовсе (пустой журнал — тот же вырожденный
+случай, ANSWER-1 п.3: «сравнивать не с чем» ⇔ «порог всегда
+достигнут»). И `pin.cmd_pin_update` (гейт ДО fetch/merge, ANSWER-1 п.4),
+и `doctor.check_canary_trigger` (новый check, `all_checks`) зовут ЭТУ
+функцию — при будущей правке порога/алгоритма место одно, не два.
+Импорт `canary` в `pin.py`/`doctor.py` не создаёт цикл: ни `canary.py`,
+ни модули, которые оно импортирует на уровне модуля (`fsm`, `auto`,
+`runner`, `catalog`, ...), не импортируют `pin`/`doctor` на уровне
+модуля (`runner.py` импортирует `doctor` только ЛОКАЛЬНО внутри
+функции — проверено `python3 -c "import orchestrator.doctor"` и
+аналогично для `pin`/`canary`/`artel` без ошибок).
+
+`doctor.check_canary_trigger` возвращает статус `warn`, не `fail`: `fail`
+— единственный статус, из-за которого `cmd_doctor` завершается `sys.exit(1)`
+(см. хвост `cmd_doctor`), а триггер (docs/triggers.md: «ack обязан
+нести решение», не блокирует прогон как инцидент) иначе держал бы
+КАЖДЫЙ прогон doctor красным до самого первого прогона канарейки —
+тот же приём деградации до `warn`, что уже несёт соседний
+`check_root_pin`. Замечено регрессией `tests.test_doctor.
+DoctorCommandTest.test_healthy_repo_prints_ok_and_does_not_exit` при
+первой попытке со статусом `fail` — тест сам не менялся, изменена
+только реализация check'а.
+
+**`pin --to`** — новая функция `pin.cmd_pin_to(sha: str | None)`
+(ANSWER-1 п.5) и новая CLI-команда `pin` (не подформа `pin-update`,
+`orchestrator/artel.py::_cmd_pin`, тот же приём разбора флага, что уже
+несёт `_cmd_pause` для `pause --now`). Явный `sha` — обязан быть
+предком текущего HEAD (`gitcmd.is_ancestor`, та же обёртка, что и у
+гейта выше) — `git reset --hard <sha>` на `config.ROOT`, БЕЗ
+`fetch`/`push` (ADR-0013 ч.3: main пульта на origin не трогается ни в
+одном случае). Без `sha` — цель `store.latest_green_canary_run`
+(новая функция `store.py`, первая строка `green_canary_runs`, самый
+свежий по `created_at`) без фильтра по предковости/возрасту (AC-6 не
+требует такого фильтра для default-пути — только «последний ЗЕЛЁНЫЙ»,
+не «последний зелёный и достаточно свежий», это разные требования: AC-1
+про ПОРОГ обновления, AC-6 про ВЫБОР цели отката). Каждый вызов —
+ровно одна запись журнала (`_refuse_rollback`/успешная ветка), успешная
+или отказ — общий небольшой helper `_refuse_rollback` в `pin.py`
+journал'ит и `sys.exit`'ит одним вызовом, чтобы не дублировать пару
+строк на каждый из трёх отказов.
+
+## Шаги
+
+1. `orchestrator/config.py` — именованная константа
+   `CANARY_MAX_MERGES_SINCE_GREEN` (дефолт 10, ANSWER-1 п.3).
+2. `orchestrator/gitcmd.py` — `is_ancestor`/`merges_between`, тем же
+   стилем деградации на `None`/`False`, что и соседний `commits_behind`.
+3. `orchestrator/store.py` — `main_sha`/`verdict` в `_ensure_canary_tables`
+   (идемпотентный `add_column`) и `insert_canary_run`; новые
+   `green_canary_runs`/`latest_green_canary_run`.
+4. `orchestrator/canary.py` — `_drive_task` возвращает маркер исхода;
+   `merges_since_last_green_run` (общий guard); `_run_one_task`
+   вычисляет и передаёт `main_sha`/`verdict`.
+5. `orchestrator/pin.py` — гейт AC-1/AC-2 в `cmd_pin_update` (до
+   fetch/merge); новая `cmd_pin_to` (AC-5/AC-6/AC-7).
+6. `orchestrator/doctor.py` — новый `check_canary_trigger` (AC-3/AC-4),
+   включён в `all_checks`.
+7. `orchestrator/artel.py` — новая CLI-команда `pin --to [<sha>]`
+   (`_cmd_pin`), обновлён докстринг команд.
+8. Юнит-тесты (`tests/test_pin.py`, новый файл; `tests/test_gitcmd_branch_reads.py`,
+   `tests/test_canary.py`, `tests/test_doctor.py` — точечные добавления)
+   на всё из шагов 2-6, не покрытое приёмочными тестами дословно
+   (граничные случаи `is_ancestor`/`merges_between`, `_drive_task`
+   возвращает `"other"`/`"inconclusive"` отдельно от verdict-логики,
+   `check_canary_trigger` статус `warn`/дедуп алерта).
+9. `python3 scripts/codebase_map.py` (правка `.py` в `orchestrator/`) +
+   `scripts/guard.py` по артефактам задачи + прогон затронутых модулей
+   `tests/` (не полный набор — гоняет CI).
+
+## Покрытие требований
+
+| Требование (SPEC) | Шаг |
+|---|---|
+| 1 (`pin-update` отказывает без свежего зелёного прогона) | 1, 2, 3, 4, 5 |
+| 2 (`doctor` — триггер `kind=trigger` по тому же порогу) | 1, 2, 3, 4, 6 |
+| 3 (`pin --to <sha>`/`pin --to` — откат, main не трогается) | 3, 5, 7 |
+| 4 (каждый откат — отдельная запись журнала) | 5 |
+
+## Влияние на систему
+
+Затронуты: `orchestrator/store.py` (сигнатура `insert_canary_run`
+расширена двумя keyword-параметрами со значением по умолчанию `None` —
+существующий вызыватель `canary.py:441` передаёт их явно новой веткой
+кода этой же задачи, других вызывателей в кодовой базе нет, проверено
+`grep -rn "insert_canary_run" orchestrator/ tests/`); `orchestrator/
+canary.py` (`_drive_task` меняет тип возврата `None` → `str` —
+единственные вызыватели, `tests/test_canary.py`, не читают возврат,
+проверено); `orchestrator/pin.py` (`cmd_pin_update` получает
+ДОПОЛНИТЕЛЬНУЮ проверку ПЕРЕД существующим телом — тело не меняется,
+регресс AC-2 приёмочным тестом подтверждён зелёным); `orchestrator/
+doctor.py` (новый check аддитивен в `all_checks`, статус `warn` —
+не блокирует существующий контракт `cmd_doctor` exit-кода, регресс
+`tests.test_doctor.DoctorCommandTest` подтверждён зелёным);
+`orchestrator/artel.py` (новая команда `pin` — не пересекается с
+существующей `pin-update`, разные строки диспетчера).
+
+Инварианты/гейты рядом: инвариант 35 (без сети в тестах/офлайн-путях) —
+`check_canary_trigger`/`merges_since_last_green_run` читают только
+ЛОКАЛЬНЫЙ `config.ROOT` (`git merge-base`/`rev-list`, без `fetch`),
+ANSWER-1 п.3 буквально требует этого для `doctor`. Принцип целостности:
+ни один существующий тест/гейт/лимит не ослаблен — гейт `pin-update`
+СТРОЖЕ прежнего поведения (новый отказ добавлен, старый путь без
+изменений при пройденном гейте, AC-2 это явно требует и приёмочный
+тест это проверяет), `check_canary_trigger` — новый аддитивный check,
+`pin --to` — новая команда, не изменяющая поведение существующих.
+
+Откат: `git revert` коммита(ов) этой ветки — колонки `main_sha`/
+`verdict` в `canary_runs` остаются в схеме неиспользуемыми (тот же
+прецедент, что и у прочих аддитивных миграций `store.py` — колонки не
+удаляются откатом кода, только добавляются). `pin-update` без отката
+кода вернулся бы к поведению без гейта; `pin --to` как команда исчезнет
+из диспетчера `artel.py`.
+
+## Риски
+
+`_run_one_task` теперь вызывает `gitcmd.head_sha()` СНАРУЖИ
+`_ephemeral_clone()` (после его выхода) — тот же порядок, в котором уже
+читается `outer_conn = store.db()` парой строк выше; `_ephemeral_clone`
+восстанавливает атрибуты `config` в `finally` даже при исключении
+внутри блока, так что `config.ROOT` к этому моменту гарантированно
+настоящий пульт, не клон (проверено чтением `_ephemeral_clone`,
+дополнительно — зелёными `tests/test_canary.py`, которые уже
+покрывают этот контекстный менеджер).
+
+## Предложения системе
