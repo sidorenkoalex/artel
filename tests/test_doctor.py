@@ -40,7 +40,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 TARGETS_YAML_DOGFOOD_ONLY = """targets:
   artel:
     forge: github
-    url: https://example.invalid/artel
+    url: file:///nonexistent/artel
     base: main
     token_slot: artel-token
     no_paths: []
@@ -51,7 +51,7 @@ TARGETS_YAML_DOGFOOD_ONLY = """targets:
 TARGETS_YAML_WITH_SLED = """targets:
   artel:
     forge: github
-    url: https://example.invalid/artel
+    url: file:///nonexistent/artel
     base: main
     token_slot: artel-token
     no_paths: []
@@ -59,7 +59,7 @@ TARGETS_YAML_WITH_SLED = """targets:
     merge_gate: operator
   sled:
     forge: github
-    url: https://example.invalid/sled
+    url: file:///nonexistent/sled
     base: main
     token_slot: sled-token
     no_paths: []
@@ -554,7 +554,7 @@ class BaseBranchCheckTest(unittest.TestCase):
 
     EXTERNAL_ENTRY = {
         "forge": "github",
-        "url": "https://example.invalid/sled",
+        "url": "file:///nonexistent/sled",
         "base": "main",
     }
 
@@ -562,7 +562,7 @@ class BaseBranchCheckTest(unittest.TestCase):
         """A7, требование 2 (AC-2): артель (`config.DEFAULT_TARGET`) —
         та же generic-логика, что и любой другой `forge: github` target
         (сверка с форджем через `gh`, не skip по имени)."""
-        entry = {"forge": "github", "url": "https://example.invalid/artel",
+        entry = {"forge": "github", "url": "file:///nonexistent/artel",
                  "base": "main"}
 
         def fake_run(args, **kwargs):
