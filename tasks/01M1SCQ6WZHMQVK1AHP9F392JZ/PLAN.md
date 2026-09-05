@@ -54,6 +54,35 @@ schema_version: 4
    целиком) — дополнительно проверяют вырожденные случаи (git не ответил,
    REVIEW.md не найден) без поднятия настоящего git-репозитория.
 
+6. (ANSWER-3, повторный отказ приёмки итерации 2 — прогон планки
+   регрессии №13, `tasks/01M1RHFRQ2C0P4A57XJJ1WZV8N/acceptance_tests`,
+   красен на 3 тестах.) `_reviewer_verdict_baseline` возвращает `(None,
+   None)`, когда REVIEW.md закоммичен в обход `checkpoint.py` и без
+   журнальной записи роли reviewer — этой планкой такой сценарий и
+   строится. `_review_rework_gate_refuses` на `review_ts is None`
+   возвращала `False` безусловно — гейт открывался fail-open ровно там,
+   где ДО этой задачи он отказывал (`_commit_iso_date` последнего
+   коммита REVIEW.md). Фикс: `review_ts is None` — fallback на
+   `_commit_iso_date(branch, "tasks/<id>/REVIEW.md")` (источник
+   `"последний коммит REVIEW.md"`), опора `_reviewer_verdict_baseline`
+   остаётся приоритетной. Заодно вскрылось второе следствие того же
+   класса: планка регрессии №13 заводит задачу прямо в `in_dev` без
+   единой записи журнала `state -> in_dev` — вырожденный ответ
+   `auto._role_step_since_state_entry` на этот случай, `(True, None)`
+   (легитимный для auto.py, у которого другого сигнала вовсе нет),
+   безусловно принимался бы гейтом за «шаг developer состоялся» и
+   перекрывал бы уже посчитанный git-вердикт «код не менялся». Правка:
+   гейт засчитывает журнальный OR только когда `_detail is not None`
+   (реальная запись, не вырожденное отсутствие сигнала) — сама функция
+   `auto._role_step_since_state_entry` не менялась (AC-4 по-прежнему
+   держится, `tests/test_auto_cycle.py` не тронут). Юнит-тесты:
+   `ReviewReworkGateFallbackTest` в `tests/test_fsm_review_rework_gate.py`
+   (2 теста, мокают `gitcmd.git`/`gitcmd.show`, без настоящего git).
+   Проверка: `tasks/01M1RHFRQ2C0P4A57XJJ1WZV8N/acceptance_tests` — 10/10;
+   своя планка (`tasks/<id>/acceptance_tests`) — 9/9; юниты
+   `tests.test_fsm_review_rework_gate`/`tests.test_auto_cycle`/
+   `tests.test_advance_guard` — 56/56.
+
 ## Шаги
 
 1. `orchestrator/fsm_advance.py`: `_reviewer_verdict_baseline`,
@@ -66,6 +95,10 @@ schema_version: 4
 3. Прогон приёмочных тестов задачи (уже залочены) и юнитов затронутых
    модулей (`tests.test_fsm_review_rework_gate`, `tests.test_auto_cycle`,
    `tests.test_advance_guard`).
+4. (ANSWER-3) Fallback `review_ts` на `_commit_iso_date` и правка
+   условия OR-журнала (`_detail is not None`) в `_review_rework_gate_
+   refuses`; юнит-тесты `ReviewReworkGateFallbackTest`; повторный прогон
+   планки регрессии №13 и своей планки.
 
 ## Покрытие требований
 
