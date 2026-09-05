@@ -727,7 +727,8 @@ def in_dev(conn, task_id: str, t, tdir, target: str, state: str) -> bool:
         # последний шаг перед самим переходом — отставшая ветка либо
         # подтягивается и проходит приёмку, либо эскалирует и возврата
         # уже не будет.
-        if fsm._pull_main_or_escalate(conn, task_id, t, state) == "escalated":
+        if fsm._pull_main_or_escalate(conn, task_id, t, state) in (
+                "escalated", "refused"):
             return False
         if _capacity_gate_refuses(conn, task_id, t, state):
             return False

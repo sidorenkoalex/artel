@@ -148,6 +148,36 @@ class BranchFreshnessGateTest(unittest.TestCase):
         (self.tdir / "PLAN.md").write_text(
             PLAN_READY.format(task=self.TASK), encoding="utf-8")
 
+    def write_acceptance_plank(self) -> None:
+        """SPEC 01M1R9YEK08XEQWBFX0929WFVJ, AC-1/AC-2: планка теперь
+        читается через `acceptance.materialize_from_branch`, backed
+        (в этой лёгкой песочнице) тем же диском `self.tdir`, что и
+        `disk_backed_show`/`disk_backed_ls_tree_files` — SPEC.md со
+        `schema_version: 2` без `skip_tests` (tests_writing не пропущена
+        легитимно) + непустой `acceptance_tests/` обязаны быть на диске
+        ДО перехода, иначе материализация ничего не найдёт и переход
+        уйдёт по вырожденной ветке AC-3/AC-5, минуя `acceptance.run`
+        вовсе (которую тесты этого файла мокают и хотят видеть вызванной)."""
+        self.tdir.mkdir(parents=True, exist_ok=True)
+        (self.tdir / "SPEC.md").write_text(
+            "---\n"
+            f"task: {self.TASK}\n"
+            "type: spec\n"
+            "author_role: analyst\n"
+            "status: ready\n"
+            "schema_version: 2\n"
+            "---\n\n"
+            "# SPEC: планка\n\n"
+            "## Критерии приёмки\n\nAC-1. ...\n",
+            encoding="utf-8")
+        tests_dir = self.tdir / "acceptance_tests"
+        tests_dir.mkdir(parents=True, exist_ok=True)
+        (tests_dir / "test_stub.py").write_text(
+            "import unittest\n\n\n"
+            "class StubTest(unittest.TestCase):\n\n"
+            "    def test_stub(self):\n        pass\n",
+            encoding="utf-8")
+
     def advance_from_in_dev(self) -> str:
         self.write_plan_ready()
         self.set_state("in_dev")
@@ -263,6 +293,7 @@ class BranchFreshnessGateTest(unittest.TestCase):
         аргументам merge здесь это поймают.
         """
         self.setup_recording()
+        self.write_acceptance_plank()
         with mock.patch.object(gitcmd, "commits_behind", return_value=3), \
              mock.patch.object(gitcmd, "in_repo",
                                side_effect=self._recording_ok), \
@@ -295,10 +326,20 @@ class BranchFreshnessGateTest(unittest.TestCase):
                          "фетч), ни в приватном FETCH_HEAD worktree'а")
         self.assertNotIn(self.branch, args,
                          "ветка задачи не упоминается в аргументах merge")
-        acc_run.assert_called_once_with(self.wt_path / "tasks" / self.TASK)
+        acc_run.assert_called_once()
+        plank_root = acc_run.call_args[0][0]
+        self.assertNotEqual(
+            plank_root, self.wt_path / "tasks" / self.TASK,
+            "SPEC 01M1R9YEK08XEQWBFX0929WFVJ AC-1: источник планки — "
+            "материализация из артефактной ветки, не worktree кодовой "
+            "ветки")
+        self.assertIn("artel-acceptance-", plank_root.name,
+                      "планка обязана прийти из acceptance."
+                      "materialize_from_branch, не из worktree")
 
     def test_approve_pulls_main_and_advances_when_acceptance_green(self):
         self.setup_recording()
+        self.write_acceptance_plank()
         with mock.patch.object(gitcmd, "commits_behind", return_value=1), \
              mock.patch.object(gitcmd, "in_repo",
                                side_effect=self._recording_ok), \
@@ -308,7 +349,13 @@ class BranchFreshnessGateTest(unittest.TestCase):
 
         self.assertEqual(self.state(), "merge_gate")
         self.assertEqual(len(self.merge_calls), 1)
-        acc_run.assert_called_once_with(self.wt_path / "tasks" / self.TASK)
+        acc_run.assert_called_once()
+        plank_root = acc_run.call_args[0][0]
+        self.assertNotEqual(
+            plank_root, self.wt_path / "tasks" / self.TASK,
+            "SPEC 01M1R9YEK08XEQWBFX0929WFVJ AC-2: источник планки — "
+            "материализация из артефактной ветки, не worktree кодовой "
+            "ветки")
 
     # --------------------------- AC-4 (эквивалент лёгкой песочницы) ---
 
@@ -427,6 +474,7 @@ class BranchFreshnessGateTest(unittest.TestCase):
     def test_advance_escalates_on_red_acceptance_after_pull_keeps_merge(self):
         self.setup_recording()
         self.write_plan_ready()
+        self.write_acceptance_plank()
         self.set_state("in_dev")
         with mock.patch.object(gitcmd, "commits_behind", return_value=4), \
              mock.patch.object(gitcmd, "in_repo",
@@ -446,6 +494,7 @@ class BranchFreshnessGateTest(unittest.TestCase):
 
     def test_approve_escalates_on_red_acceptance_after_pull_keeps_merge(self):
         self.setup_recording()
+        self.write_acceptance_plank()
         self.set_state("acceptance")
         with mock.patch.object(gitcmd, "commits_behind", return_value=7), \
              mock.patch.object(gitcmd, "in_repo",

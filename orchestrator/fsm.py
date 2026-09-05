@@ -9,6 +9,7 @@ acceptance — `orchestrator/fsm_autogate.py` (T091, декомпозиция
 `cmd_approve`, `cmd_reject`) и узлы, общие для нескольких состояний/
 гейтов (сверка свежести ветки, чтения с ветки задачи, guard-отказ).
 """
+import shutil
 import subprocess
 import sys
 from datetime import datetime, timezone
@@ -224,22 +225,33 @@ def _pull_main_or_escalate(conn, task_id: str, t, state: str) -> str:
     фетчим и с которой сравниваем/мержим, не источником сравнения/merge
     самим по себе.
 
-    Возврат — один из трёх исходов:
+    Возврат — один из четырёх исходов:
     - `"escalated"` — переход уже отклонён: задача уже эскалирована
       (состояние и диагностика уже записаны через `store.set_state`,
       требования 5-6); вызывающий код обязан немедленно вернуться, не
       выполняя сам переход;
+    - `"refused"` — переход отклонён именованным отказом «планка не
+      найдена в источнике» (SPEC 01M1R9YEK08XEQWBFX0929WFVJ, AC-3):
+      артефактная ветка не несёт `tasks/<id>/acceptance_tests/`, а
+      `tests_writing` не пропущена легитимно (`skip_tests` не задан в
+      SPEC и SPEC несёт AC-разметку) — состояние НЕ меняется (задача
+      остаётся там, где была), в отличие от `"escalated"`; вызывающий
+      код обязан вернуться так же, как и на `"escalated"`;
     - `"fresh"` — ветка не отстала от main артели на origin (требование
       7: поведение перехода прежнее байт-в-байт при отсутствии
       отставания);
-    - `"pulled"` — подтяжка прошла и приёмочные тесты в подтянутом
-      дереве зелёные. Точки `in_dev -> review`/`acceptance -> merge_gate`
-      обе продолжают штатный переход одинаково что при `"fresh"`, что при
-      `"pulled"` (T051, не различали их и раньше — общий `bool`); третья
-      точка (`merge_gate -> done`, T053) обязана различать их сама: после
-      `"pulled"` merge в этом же вызове НЕ выполняется (SPEC T053,
-      требование 5) — сдвинутый головой ветки sha делает зафиксированный
-      снимок невалидным для merge (инвариант 19 не ослабляется).
+    - `"pulled"` — подтяжка прошла и приёмочные тесты, материализованные
+      из артефактной ветки задачи (не из worktree кодовой ветки, SPEC
+      01M1R9YEK08XEQWBFX0929WFVJ, AC-1/AC-2/AC-10), зелёные (в том числе
+      вырожденный случай легитимно пропущенной `tests_writing`, AC-5 —
+      планки нет в артефактной ветке, но это не отказ). Точки `in_dev ->
+      review`/`acceptance -> merge_gate` обе продолжают штатный переход
+      одинаково что при `"fresh"`, что при `"pulled"` (T051, не различали
+      их и раньше — общий `bool`); третья точка (`merge_gate -> done`,
+      T053) обязана различать их сама: после `"pulled"` merge в этом же
+      вызове НЕ выполняется (SPEC T053, требование 5) — сдвинутый головой
+      ветки sha делает зафиксированный снимок невалидным для merge
+      (инвариант 19 не ослабляется).
 
     Merge — единственный вне `merge_gate`, разрешённый ADR-0006 п.2: в
     worktree ЗАДАЧИ (`gitcmd.in_repo`, форма `-C`), вливает
@@ -310,7 +322,46 @@ def _pull_main_or_escalate(conn, task_id: str, t, state: str) -> str:
                 f"{branch}: {note}")
             return "escalated"
 
-    green, tail = acceptance.run(wt_path / "tasks" / task_id)
+    # Планка — из АРТЕФАКТНОЙ ветки задачи, не из worktree кодовой ветки
+    # (SPEC 01M1R9YEK08XEQWBFX0929WFVJ, требование 1, AC-1/AC-2): worktree
+    # кодовой ветки роли чистят по ходу шага (регрессия №9) — прогон по
+    # НЕЙ трактовал пустой/непрочитанный каталог как красную планку и
+    # эскалировал «приёмочные тесты красные после подтяжки main», хотя
+    # тестов там попросту никогда не было (SPEC «Контекст», инцидент
+    # 01M1QHQ277PQQA894X97RVEX9Y). `materialize_from_branch` — тот же узел,
+    # что уже несёт автогейт acceptance (`fsm_autogate.py`).
+    artifact_branch_name, _ = artifact_source.resolve(conn, task_id)
+    plank_root = acceptance.materialize_from_branch(task_id,
+                                                     artifact_branch_name)
+    try:
+        if not (plank_root / "acceptance_tests").is_dir():
+            # Планка не найдена в артефактной ветке — легитимно ТОЛЬКО
+            # когда SPEC пропустила tests_writing (`skip_tests` задан) или
+            # не несёт AC-разметки вовсе (AC-5, вырожденный случай, не
+            # тронутый этой задачей); иначе — именованный отказ AC-3, не
+            # молчаливый зелёный проход и не эскалация AC-4 (та остаётся
+            # только для планки, которая реально прогналась и упала).
+            spec_text, _ = gitcmd.show(artifact_branch_name,
+                                       f"tasks/{task_id}/SPEC.md")
+            meta = (yamlmini.frontmatter(spec_text)
+                    if spec_text is not None else None) or {}
+            if guard.requires_ac_markup(meta):
+                detail = (
+                    f"планка не найдена в источнике: артефактная ветка "
+                    f"{artifact_branch_name} не несёт tasks/{task_id}/"
+                    f"acceptance_tests/, а tests_writing не пропущена "
+                    f"легитимно (skip_tests не задан в SPEC)")
+                store.journal(
+                    conn, task_id, "fsm",
+                    "переход отклонён: планка не найдена в источнике",
+                    detail)
+                print(f"[{task_id}] переход отклонён: {detail}")
+                return "refused"
+            return "pulled"
+        green, tail = acceptance.run(plank_root)
+    finally:
+        shutil.rmtree(plank_root, ignore_errors=True)
+
     if not green:
         store.set_state(
             conn, task_id, "escalated", "fsm", expected_state=state,
@@ -766,7 +817,8 @@ def _cmd_approve(conn, task_id: str, sha: str | None, sid: str) -> None:
         # Сверка свежести ветки до гейта (SPEC T051, требования 1, 4):
         # тот же узел, что и на входе в review — approve не выносит на
         # merge_gate срез, который мог устареть, пока задача ждала приёмки.
-        if _pull_main_or_escalate(conn, task_id, t, state) == "escalated":
+        if _pull_main_or_escalate(conn, task_id, t, state) in (
+                "escalated", "refused"):
             return
         store.set_state(conn, task_id, "merge_gate", "operator",
                         expected_state=state, detail="приёмка пройдена")
