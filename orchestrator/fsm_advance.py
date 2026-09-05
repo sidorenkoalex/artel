@@ -5,7 +5,6 @@ if/elif `orchestrator/fsm.py::_cmd_advance`, перенесённое без и�
 `fsm.py` — эти функции не вызываются напрямую иначе, кроме тестов,
 идущих через публичный `fsm.cmd_advance`.
 """
-import shutil
 from datetime import datetime
 
 from scripts import guard
