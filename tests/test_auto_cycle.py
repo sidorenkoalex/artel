@@ -113,6 +113,21 @@ class FakeRun:
     пришпилить: холостой шаг состояние не двигает, поэтому цикл без рабочего
     `AUTO_MAX_STEPS` крутился бы вечно, и тест лимита не падал бы, а висел —
     в CI это шесть часов молчания вместо красного прогона.
+
+    Журналирует `agent run finished` под именем роли, активной на момент
+    вызова (SPEC «регрессия №13» 01M1RHFRQ2C0P4A57XJJ1WZV8N) — тем же
+    action/actor, что и настоящий `orchestrator/runner.py::_cmd_run`
+    (успешное завершение шага, `rc=0`): гейт возврата в состояние роли
+    (`orchestrator/auto.py::_role_step_since_state_entry`) ищет именно эту
+    запись, и без неё холостые шаги этого фейка выглядели бы для гейта так,
+    будто роль никогда не отрабатывала. Только если элемент сценария САМ
+    ещё не журналировал такую запись (`agent_step` в `tasks/
+    01M1RHFRQ2C0P4A57XJJ1WZV8N/acceptance_tests/_sandbox.py` делает это
+    сам, под ролью, прочитанной ДО своего же эффекта, — второй, наш,
+    журнал задвоил бы запись). Роль здесь тоже читается ДО эффекта
+    сценария, не после: эффект может сам сменить состояние задачи
+    (например, эскалировать её) — запись обязана называть роль ШАГА,
+    который «только что отработал».
     """
 
     def __init__(self):
@@ -129,8 +144,16 @@ class FakeRun:
             raise AssertionError(
                 f"цикл не остановился: шагов больше {config.AUTO_MAX_STEPS}")
         self.calls.append(task_id)
+        conn = store.db()
+        role = runner.step_role(store.get_task(conn, task_id))
+        journaled_before = len(store.task_steps(conn, task_id))
         if self.script:
             self.script.pop(0)()
+        already = any(row["action"] == "agent run finished"
+                     for row in store.task_steps(conn, task_id)[journaled_before:])
+        if not already:
+            store.journal(conn, task_id, role, "agent run finished",
+                          "rc=0, тестовая заглушка цикла auto")
 
 
 class SpyCommand:
@@ -609,6 +632,52 @@ class AutoStopsOnRepeatedAdvanceRefusalTest(AutoCycleTest):
         self.assertIn(f"лимит {config.AUTO_MAX_STEPS} шагов", out)
         self.assertNotIn(
             f"почини причину и повтори artel.py advance {self.TASK}", out)
+
+
+class PreAdvanceStillTriesOnLegitFirstEntryTest(AutoCycleTest):
+    """Регресс ANSWER-3 (SPEC «регрессия №13» 01M1RHFRQ2C0P4A57XJJ1WZV8N):
+    рубеж требований 1-2 (`auto._role_step_since_state_entry`) не должен
+    держать пред-advance на ЛЕГИТИМНОМ первом входе в `in_dev`
+    (`tests_writing -> in_dev`, детэйл «приёмочные тесты готовы —
+    трассируемость AC пройдена») — иначе журналируемый отказ ДРУГОГО
+    класса (требование 4 — лок `acceptance_tests/` и подобные) никогда не
+    встретится: developer стартует напрямую, минуя `advance` вовсе.
+
+    Регрессия обнаружена приёмочной планкой задачи 01M1R8B3ZKXQT0Z0G6QQQDV906
+    (AC-7, `test_ac7_lock_conflict_skips_developer_and_stops_on_the_repeat`)
+    ПОСЛЕ approve этого REVIEW.md — рубеж, применённый ко ВСЯКОМУ входу в
+    `in_dev` без разбора детэйла, ловил и этот класс тоже.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.patch_object(config, "AUTO_STALL_STEPS_LIMIT",
+                          config.AUTO_MAX_STEPS + 1)
+        self.write_plan("ready")
+        self.set_state("in_dev")
+        store.journal(store.db(), self.TASK, "fsm", "state -> in_dev",
+                      "приёмочные тесты готовы — трассируемость AC пройдена")
+        self.advance = FakeAdvance()
+        self.patch_object(fsm, "cmd_advance", self.advance)
+
+    def test_legit_first_entry_does_not_skip_the_pre_advance(self):
+        """Ловит мутацию: рубеж срабатывает по одному лишь факту «нет
+        завершённого шага developer с последней state -> in_dev», не
+        различая легитимный первый вход и возврат с неотработанным
+        основанием переделки — developer запустился бы напрямую,
+        `self.agent.calls` не остался бы пустым."""
+        text = "переход отклонён: лок приёмочных тестов"
+        self.advance.script = [text, text]
+
+        out = self.auto()
+
+        self.assertEqual(
+            self.agent.calls, [],
+            "developer запущен напрямую — рубеж перехватил легитимный "
+            "первый вход в in_dev, для которого advance не был вызван вовсе")
+        self.assertEqual(self.advance.calls, 2,
+                         "advance не был вызван — рубеж держал пред-advance")
+        self.assertIn(text, out)
 
 
 class AutoStopsOnBudgetRefusalTest(AutoCycleTest):
