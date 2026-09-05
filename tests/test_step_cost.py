@@ -148,12 +148,17 @@ class StreamUsageByTypeTest(unittest.TestCase):
     одной суммой, а по счётчикам `config.USAGE_TOKEN_KEYS` раздельно."""
 
     def test_assistant_event_usage_is_broken_down_by_type(self):
+        """Ловит мутацию: разбор `assistant`-события суммирует счётчики в
+        одно число вместо разбивки по видам (`input_tokens`/
+        `output_tokens` раздельно)."""
         tokens = spend.stream_usage_by_type(assistant_event(
             usage={"input_tokens": 10, "output_tokens": 5}))
 
         self.assertEqual(tokens, {"input_tokens": 10, "output_tokens": 5})
 
     def test_result_event_usage_still_works(self):
+        """Ловит мутацию: добавление ветки `assistant` в `stream_usage_by_type`
+        ломает уже работавший разбор `result`-события."""
         tokens = spend.stream_usage_by_type(result_event(
             usd=0.5, usage={"input_tokens": 7, "output_tokens": 3}))
 
@@ -187,6 +192,8 @@ class PartialTokensFromLogTest(unittest.TestCase):
         self.log_path.write_text("".join(lines), encoding="utf-8")
 
     def test_usage_events_are_summed_by_type(self):
+        """Ловит мутацию: несколько usage-событий лога схлопываются в одну
+        общую сумму вместо накопления по каждому виду счётчика отдельно."""
         self.write([
             "агент работает\n",
             assistant_event(usage={"input_tokens": 10, "output_tokens": 5}),
@@ -199,6 +206,8 @@ class PartialTokensFromLogTest(unittest.TestCase):
         self.assertTrue(saw)
 
     def test_no_usage_events_returns_empty_and_false(self):
+        """Ловит мутацию: отсутствие usage-событий в логе возвращает
+        непустой словарь или `saw=True` вместо честного `({}, False)`."""
         self.write(["агент работает, без usage\n"])
 
         tokens, saw = spend.partial_tokens_from_log(self.log_path)
@@ -207,6 +216,8 @@ class PartialTokensFromLogTest(unittest.TestCase):
         self.assertFalse(saw)
 
     def test_missing_file_returns_empty_and_false(self):
+        """Ловит мутацию: отсутствующий файл лога роняет исключение вместо
+        деградации до `({}, False)`."""
         tokens, saw = spend.partial_tokens_from_log(
             self.log_path.parent / "nope.log")
 
@@ -214,6 +225,8 @@ class PartialTokensFromLogTest(unittest.TestCase):
         self.assertFalse(saw)
 
     def test_result_event_in_log_counts_too(self):
+        """Ловит мутацию: разбор лога учитывает только `assistant`-события,
+        игнорируя usage финального `result`-события."""
         self.write([result_event(usd=0.5, usage={"input_tokens": 7,
                                                   "output_tokens": 3})])
 
@@ -265,6 +278,8 @@ class PumpCostTest(TmpRootTest):
         self.assertIsNone(self.pump(["просто вывод\n"]).cost)
 
     def test_partial_tokens_are_summed_across_events_by_type(self):
+        """Ловит мутацию: `OutputPump.partial_tokens` схлопывает несколько
+        usage-событий потока в одно число вместо накопления по видам."""
         pump = self.pump([
             assistant_event(usage={"input_tokens": 10, "output_tokens": 5}),
             "просто текст, не usage-событие\n",
@@ -276,6 +291,9 @@ class PumpCostTest(TmpRootTest):
         self.assertTrue(pump.saw_usage_event)
 
     def test_no_usage_events_leaves_partial_tokens_empty(self):
+        """Ловит мутацию: `partial_tokens` остаётся не словарём (например,
+        просто `0`) при отсутствии usage-событий — ломает `.get()`
+        вызывающего кода вместо честного пустого словаря."""
         pump = self.pump(["просто вывод, ни одного usage-события\n"])
 
         self.assertEqual(pump.partial_tokens, {})

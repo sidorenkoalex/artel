@@ -260,6 +260,15 @@ def charge_missing_result(conn, task_id: str, role: str, numbered: str,
     открывается алерт `alerts` (`kind=incident`,
     `source=spend.unknown_cost`) — требование 4, поведение T040 без
     изменений.
+
+    Курс роли ЕСТЬ в таблице, но не несёт одной из четырёх цен —
+    `partial_cost_usd` бросает `ValueError` (требование 3, AC-5); здесь
+    это ловится и деградирует на ту же ветку «курс роли не задан» ниже
+    (верхняя оценка + `threshold`-алерт), а не обрушивает вызывающего
+    (REVIEW.md итерации 1, R1-F1): этот путь зовётся ровно в момент
+    обработки таймаута шага/`pause --now`, до коммита чекпоинта и записи
+    журнала «agent run TIMEOUT» — необработанное исключение здесь
+    потеряло бы и то, и другое.
     """
     if not saw_usage_event:
         detail = (f"{numbered}: {cause}, финальное событие потока "
@@ -274,7 +283,13 @@ def charge_missing_result(conn, task_id: str, role: str, numbered: str,
         return ""
 
     total_tokens = sum(partial_tokens.values())
-    usd = partial_cost_usd(role, partial_tokens)
+    try:
+        usd = partial_cost_usd(role, partial_tokens)
+    except ValueError as exc:
+        usd = None
+        rate_reason = f"курс роли {role!r} неполон ({exc})"
+    else:
+        rate_reason = f"курс роли {role!r} не задан"
     if usd is not None:
         detail = (f"{numbered}: {cause}, финальное событие потока "
                  f"отсутствует — частичная стоимость по курсу роли "
@@ -286,7 +301,7 @@ def charge_missing_result(conn, task_id: str, role: str, numbered: str,
 
     estimate = config.STEP_COST_ESTIMATE_USD
     detail = (f"{numbered}: {cause}, финальное событие потока "
-             f"отсутствует, курс роли {role!r} не задан — верхняя "
+             f"отсутствует, {rate_reason} — верхняя "
              f"оценка стоимости шага: ${estimate:.4f}, {total_tokens} "
              f"токенов")
     store.journal(conn, task_id, role, "agent cost ESTIMATED", detail)
@@ -294,6 +309,6 @@ def charge_missing_result(conn, task_id: str, role: str, numbered: str,
     target = store.task_target(conn, task_id)
     alerts.raise_alert(conn, target, "threshold", "spend.step_cost_unknown_rate",
                        f"{task_id}/{role}: {numbered}, {cause} — стоимость "
-                       f"шага не учтена (курс роли не задан), "
+                       f"шага не учтена ({rate_reason}), "
                        f"{total_tokens} токенов")
     return f", верхняя оценка стоимости шага: ${estimate:.4f}"

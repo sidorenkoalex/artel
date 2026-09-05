@@ -191,7 +191,11 @@ def token_rate_divergence(conn) -> dict:
     сочетают `spend.charge_missing_result`/`budget.check_program_spend`)
     — коэффициент выше `config.TOKEN_RATE_DIVERGENCE_ALERT_THRESHOLD`
     поднимает `alerts` `kind=warning`, `target=None` (расхождение — по
-    роли поперёк всех задач и target'ов, не про одну задачу).
+    роли поперёк всех задач и target'ов, не про одну задачу), через
+    `alerts.raise_token_rate_divergence_alert` — не `alerts.raise_alert`
+    напрямую: сообщение несёт растущие суммы/счётчики, дедуп по точному
+    тексту не сработал бы на повторных прогонах (REVIEW.md итерации 1,
+    R1-F2).
     """
     tasks = store.all_tasks(conn)
     steps = _all_steps(conn, tasks)
@@ -221,8 +225,8 @@ def token_rate_divergence(conn) -> dict:
         coefficient = abs(calculated_sum - actual_sum) / actual_sum
         result[role] = coefficient
         if coefficient > config.TOKEN_RATE_DIVERGENCE_ALERT_THRESHOLD:
-            alerts.raise_alert(
-                conn, None, "warning", "report.token_rate_divergence",
+            alerts.raise_token_rate_divergence_alert(
+                conn, role,
                 f"{role}: коэффициент расхождения курса токенов "
                 f"{coefficient:.2f} выше порога "
                 f"{config.TOKEN_RATE_DIVERGENCE_ALERT_THRESHOLD} — расчётная "

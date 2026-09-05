@@ -1,5 +1,5 @@
 ---
-built_at_sha: 1ad15a15d50f268c899b9f1e1dc7eb11ddebb2d0
+built_at_sha: 43aa018982d2015b68195a58675cc6622e1fbb47
 ---
 
 # Codebase-map пульта
@@ -62,6 +62,7 @@ built_at_sha: 1ad15a15d50f268c899b9f1e1dc7eb11ddebb2d0
 - `raise_alert`
 - `raise_attention_alert`
 - `raise_diff_not_collected_alert`
+- `raise_token_rate_divergence_alert`
 
 **Импортирует:** `orchestrator/store.py`
 
