@@ -4,75 +4,15 @@ pool-seal`: берёт открытый пул из `~/.artel-canary`, клад�
 пульта, ничего сама не коммитит, печатает число шаблонов и отпечаток
 содержимого.
 
-# AC-1: escalate — половина критерия («один зашифрованный файл,
-# openssl внешней командой, не хранит открытый текст») протестирована
-# ниже (`test_ac1_...`) без цитаты конкретного шифра; вторая половина
-# буквы критерия («aes-256-gcm») ЭМПИРИЧЕСКИ ПРОВЕРЕНА неисполнимой —
-# см. секцию «## Эскалация» в конце этого докстринга.
-
-## Эскалация
-
-### Вопросы (батч общий с AC-13, `test_pool_role_isolation.py`)
-1. (САМЫЙ блокирующий, новый вопрос к контексту SPEC) `openssl enc`
-   НЕ умеет AEAD-шифры вообще — проверено эмпирически В ЭТОЙ рабочей
-   копии на ДВУХ реализациях `openssl` разом:
-   - `/usr/bin/openssl` (LibreSSL 3.3.6, штатный macOS без какой-либо
-     установки) — `openssl enc -aes-256-gcm ...` падает с `bad decrypt`
-     на ЧИСТОМ ШИФРОВАНИИ (не расшифровке), при любой комбинации флагов
-     (`-K`/`-iv` явным hex, `-pass`/`-pbkdf2`, с `-e`/без);
-   - `/opt/homebrew/bin/openssl` (настоящий OpenSSL 3.6.3, из Homebrew —
-     то есть уже ДОПОЛНИТЕЛЬНАЯ установка, которой требование 1 SPEC
-     явно хотело избежать) — падает ИНАЧЕ, но так же однозначно:
-     `enc: AEAD ciphers not supported` — команда `openssl enc`
-     СТРУКТУРНО не поддерживает AEAD-шифры (нет способа передать/
-     принять тег аутентификации через эту команду ни в одной из версий
-     OpenSSL начиная с 1.1.0, где `-aes-256-gcm` был помечен
-     experimental и позже явно отключён для `enc`).
-   Обоснование SPEC («openssl — стандартный CLI-инструмент без
-   дополнительной установки на macOS/Linux», требование выбора
-   инструмента) верно ТОЛЬКО для наличия самого `openssl`, но не для
-   конкретно `aes-256-gcm` через `enc` — эта комбинация не работает ни
-   на штатном macOS, ни даже на настоящем свежем OpenSSL. Что делать?
-   - (a) шифрование `openssl enc -aes-256-cbc -pbkdf2` (без AEAD) +
-     отдельная аутентификация конкатенацией `openssl dgst -sha256
-     -hmac <ключ>` (encrypt-then-MAC руками, тот же принцип, что дал
-     бы AEAD) — остаётся В ПРЕДЕЛАХ голого `openssl`, без новой
-     зависимости, ценой готового кода вместо одного флага;
-   - (b) `openssl enc -aes-256-cbc -pbkdf2` БЕЗ дополнительной
-     аутентификации — просто confidentiality, без целостности; проще,
-     но слабее свойства, которое требование 1 подразумевало словом
-     «AEAD»;
-   - (c) пересмотреть отклонение `age` (обоснование его отклонения —
-     «лишняя зависимость, openssl и так есть» — предполагало, что
-     голый `openssl` тривиально даёт AEAD; раз это не так, вес довода
-     меняется: `age` даёт AEAD «из коробки» одной командой, ценой
-     установки инструмента, которого сегодня в пульте действительно нет).
-   - Дефолт при молчании: вариант (a) — ближе всего к букве и духу
-     требования 1 (AEAD-эквивалентная целостность, только `openssl`,
-     без новой внешней зависимости), не самый простой в реализации.
-2. (см. `test_pool_role_isolation.py`) — литерал `permissions.deny`
-   для «команды расшифровки» (AC-13).
-
-### Контекст
-Обоснование выбора `openssl` в разделе «Контекст» SPEC написано
-аналитиком ДО проверки конкретной команды `enc -aes-256-gcm` на
-реальном инструменте — экспериментально это первая проверка данного
-факта во всём проекте (грep по кодовой базе на `aes-256-gcm`/`enc
--gcm` вне этой задачи пуст). Ошибка небольшая по объёму текста SPEC
-(один параметр одной команды), но меняет объём кода реализации
-(вариант (a) — рукописный encrypt-then-MAC, не однострочный вызов) и
-влияет на формулировку самого AC-1, которую тест обязан закрепить
-буквально.
-
-### Блокирует
-`test_ac1_...` в этом файле проверяет ТОЛЬКО ту часть AC-1, что не
-зависит от ответа (файл один, реально зашифрован, вызов внешнего
-`openssl`); утверждение «шифр — именно aes-256-gcm» тестом не
-закреплено до ответа на вопрос 1 — с любым из вариантов (a)/(b)/(c)
-годится РАЗНЫЙ `assertIn`/иной способ проверки (наличие HMAC-тега,
-иное имя шифра, другой внешний бинарник), закреплять один из них
-раньше решения — то самое «подгонка под свой вкус», которую
-escalation-rules запрещает.
+AC-1: `openssl enc` эмпирически не умеет AEAD-шифры (проверено 05.09
+на LibreSSL и OpenSSL 3, см. `## Эскалация` части 1 этого файла в
+истории git) — ANSWER-1 п.1 решил спор вариантом (a): шифрование
+`openssl enc -aes-256-cbc -pbkdf2` (без AEAD) плюс отдельный тег
+HMAC-SHA256 по шифртексту через `openssl dgst -sha256 -hmac`
+(encrypt-then-MAC руками); при восстановлении тег сверяется ДО
+расшифровки через `hmac.compare_digest`, файл с неверным тегом не
+расшифровывается. SPEC (требование 1, AC-1) уже несёт это решение
+буквально — тесты ниже закрепляют его дословно, не подгонкой.
 
 Красен до реализации: команды `canary pool-seal` сегодня нет — `canary`
 принимает только каталог ТЗ v1 (`orchestrator/canary.py::cmd_canary`,
@@ -83,7 +23,12 @@ escalation-rules запрещает.
 найден», либо (после мержа части 1) — «в пуле нет файлов *.md»; в
 обоих случаях `canary/pool.sealed` не появляется, и `test_ac1_.../
 test_ac4_...` падают на `assertTrue(self.sealed_path.exists())`/
-`assertRegex` соответственно.
+`assertRegex` соответственно. `test_ac1_tampered_hmac_tag_refuses_
+decryption_before_reading_ciphertext` падает даже раньше: без
+`pool.sealed` порчи одного байта устраивать негде, `self.sealed_path.
+read_bytes()` в подготовке теста падает `FileNotFoundError` — та же
+причина, просто проявляется на шаге подготовки, не на финальном
+`assertFalse`.
 
 `test_ac3_pool_seal_does_not_commit_the_sealed_file_itself` — честное
 исключение, ЗЕЛЁНОЕ С РОЖДЕНИЯ вакуозно: «pool-seal не вызывает git»
@@ -96,6 +41,7 @@ pool-seal» покраснила бы `self.git_spy.calls`), не раньше �
 что и в других файлах этой планки (см. `test_pool_restore.py`, AC-7).
 """
 import re
+import shutil
 import subprocess
 import sys
 import unittest
@@ -122,21 +68,22 @@ class PoolSealTest(PoolBaseSandbox):
     def test_ac1_pool_seal_writes_one_encrypted_file_via_external_openssl(self):
         """`canary pool-seal` кладёт РОВНО ОДИН файл `canary/pool.sealed`
         в корне репозитория пульта; его байты не несут открытого текста
-        шаблонов (реально зашифрован), а зашифровала его внешняя команда
-        `openssl` (требование 1 SPEC: `subprocess`, тот же приём, что
-        `keychain.py` для `security`), не питоновская крипто-библиотека
-        в обход требования. Конкретный ШИФР (`aes-256-gcm` в букве
-        AC-1) тестом НЕ закреплён — см. маркер эскалации в начале
-        файла: `openssl enc` эмпирически не умеет AEAD-шифры вообще,
-        нужно решение Оператора, каким именно способом добирать
-        аутентификацию средствами голого `openssl`.
+        шаблонов (реально зашифрован); шифрование — внешней командой
+        `openssl enc -aes-256-cbc -pbkdf2` (не AEAD — `openssl enc`
+        эмпирически не умеет AEAD-шифры, ANSWER-1 п.1), а целостность
+        шифртекста добирается ОТДЕЛЬНЫМ вызовом `openssl dgst -sha256
+        -hmac` (encrypt-then-MAC руками, то же решение) — не питоновской
+        крипто-библиотекой в обход требования 1 SPEC.
 
         Ловит мутацию: разработчик кладёт пул НЕзашифрованным (простое
         копирование каталога или конкатенация файлов) — `assertNotIn`
         по маркерам тела шаблонов ловит открытый текст; шифрование
         питоновской библиотекой (`cryptography`/`hashlib`+ручной XOR)
-        вместо внешней команды — `run_mock`/`self.git_spy` (тот же
-        `subprocess`) не увидели бы вызова `openssl` вовсе.
+        вместо внешней команды, либо шифрует, но не считает отдельный
+        HMAC-тег (оставляя пул без целостности) — `run_mock` не увидел
+        бы соответствующего вызова `openssl enc`/`openssl dgst`, либо
+        не нашёл бы в его аргументах `-aes-256-cbc`/`-pbkdf2`/`-sha256`/
+        `-hmac`.
         """
         with mock.patch.object(subprocess, "run",
                               wraps=subprocess.run) as run_mock:
@@ -163,15 +110,37 @@ class PoolSealTest(PoolBaseSandbox):
                 f"canary/pool.sealed несёт открытый текст шаблона "
                 f"({marker!r}) — пул не зашифрован")
 
-        openssl_calls = [
-            c for c in run_mock.call_args_list
+        openssl_argvs = [
+            c.args[0] for c in run_mock.call_args_list
             if c.args and isinstance(c.args[0], (list, tuple))
             and c.args[0] and Path(str(c.args[0][0])).name == "openssl"]
         self.assertTrue(
-            openssl_calls,
+            openssl_argvs,
             f"pool-seal не вызвал внешнюю команду `openssl` (требование 1 "
             f"SPEC): зафиксированные вызовы subprocess.run: "
             f"{run_mock.call_args_list}")
+
+        enc_argvs = [argv for argv in openssl_argvs if "enc" in argv]
+        self.assertTrue(
+            enc_argvs,
+            f"pool-seal не вызвал `openssl enc`: {openssl_argvs}")
+        enc_argv = " ".join(str(a) for a in enc_argvs[0])
+        self.assertIn(
+            "-aes-256-cbc", enc_argv,
+            f"pool-seal не использует `-aes-256-cbc` (ANSWER-1 п.1 — "
+            f"`openssl enc` не умеет AEAD-шифры): {enc_argv}")
+        self.assertIn(
+            "-pbkdf2", enc_argv,
+            f"pool-seal не использует `-pbkdf2`: {enc_argv}")
+
+        dgst_argvs = [argv for argv in openssl_argvs if "dgst" in argv]
+        self.assertTrue(
+            dgst_argvs,
+            f"pool-seal не вызвал `openssl dgst` для тега HMAC "
+            f"(ANSWER-1 п.1 — encrypt-then-MAC руками): {openssl_argvs}")
+        dgst_argv = " ".join(str(a) for a in dgst_argvs[0])
+        self.assertIn("-sha256", dgst_argv, f"тег не SHA-256: {dgst_argv}")
+        self.assertIn("-hmac", dgst_argv, f"тег не HMAC: {dgst_argv}")
 
     def test_ac3_pool_seal_does_not_commit_the_sealed_file_itself(self):
         """`pool-seal` кладёт файл на диск, но НЕ коммитит его сама —
@@ -212,6 +181,49 @@ class PoolSealTest(PoolBaseSandbox):
             hex_tokens,
             f"вывод pool-seal не несёт отпечатка (hex-хэша) содержимого "
             f"пула: {output!r}")
+
+    def test_ac1_tampered_hmac_tag_refuses_decryption_before_reading_ciphertext(self):
+        """Пул запечатан, каталог `~/.artel-canary` стёрт (тот же
+        сценарий восстановления, что AC-5); ОДИН байт файла `canary/
+        pool.sealed` испорчен ПОСЛЕ печати. Восстановление (`init`)
+        обязано сверить тег HMAC-SHA256 ДО попытки расшифровки
+        (`hmac.compare_digest`, ANSWER-1 п.1), обнаружить несовпадение
+        и НЕ расшифровывать (AC-1: «файл с неверным тегом не
+        расшифровывается», именованный отказ). Порча одного байта в
+        ЛЮБОМ месте файла обязана сделать тег недействительным
+        независимо от того, в каком порядке разработчик разложил тег и
+        шифртекст внутри единственного файла пула (AC-1: «один
+        зашифрованный файл»).
+
+        Ловит мутацию: разработчик расшифровывает файл БЕЗ проверки
+        тега, либо читает тег, но не влияет решением на расшифровку
+        (сравнение есть, но результат игнорируется, либо `==` вместо
+        `hmac.compare_digest`, что здесь эквивалентно наблюдаемому
+        поведению) — тогда `~/.artel-canary` после `init` появился бы
+        (пусть даже с мусором вместо исходных шаблонов) вместо того,
+        чтобы остаться отсутствующим.
+        """
+        self.write_pool_templates({"a.md": "тело А\n", "b.md": "тело Б\n"})
+        self.seal()
+        shutil.rmtree(self.pool_dir)
+
+        sealed_bytes = bytearray(self.sealed_path.read_bytes())
+        self.assertTrue(sealed_bytes, "canary/pool.sealed пуст после seal")
+        sealed_bytes[-1] ^= 0xFF
+        self.sealed_path.write_bytes(bytes(sealed_bytes))
+
+        output = self.restore_via_init()
+
+        self.assertFalse(
+            self.pool_dir.exists(),
+            f"`init` расшифровал пул с повреждённым тегом HMAC (файл "
+            f"canary/pool.sealed испорчен на 1 байт) — AC-1 нарушен: "
+            f"{output!r}")
+        lowered = output.lower()
+        self.assertTrue(
+            any(kw in lowered for kw in ("тег", "hmac")),
+            f"отказ `init` на повреждённом теге не называет причину "
+            f"явно (именованный отказ, AC-1): {output!r}")
 
 
 if __name__ == "__main__":
