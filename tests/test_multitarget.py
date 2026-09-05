@@ -845,6 +845,15 @@ class RoleEnvVenvInterpreterTest(TmpRootTest):
     01M1REVEZ1HESMJ7AFD5A9MEJ8/acceptance_tests/`."""
 
     def test_consistent_venv_puts_its_bin_first_on_path(self):
+        """Требование 4/AC-12: venv существует и согласован (все
+        проверки `check_stack()` — `ok`) — PATH окружения роли начинается
+        с `<venv>/bin`, то есть голые вызовы `python3`/`pytest` внутри
+        шага роли резолвятся в интерпретатор venv, а не в системный.
+
+        Ловит мутацию: `role_env()` не трогает PATH вовсе при согласованном
+        venv (интерпретатор роли остаётся системным несмотря на готовый
+        venv) — `assertEqual(path_entries[0], ...)` откажет.
+        """
         venv_dir = self.root / ".artel" / "venv"
         ok_checks = [_stack_check("python", "ok", "Python 3.99.0"),
                     _stack_check("venv", "ok", "venv согласован")]
@@ -859,6 +868,18 @@ class RoleEnvVenvInterpreterTest(TmpRootTest):
         self.assertEqual(str(venv_dir / "bin"), path_entries[0])
 
     def test_inconsistent_venv_raises_instead_of_falling_back(self):
+        """Требование 4/AC-13: `.artel/venv` не согласован с файлом
+        закреплённых версий (`check_stack()` возвращает WARN про venv) —
+        `role_env()` отказывает поднятым `OSError` с именующей причиной,
+        а НЕ тихо возвращает окружение с системным PATH как ни в чём не
+        бывало.
+
+        Ловит мутацию: `role_env()` игнорирует WARN про venv и всё равно
+        возвращает обычное окружение (тихий откат на системный python) —
+        `assertRaises(OSError)` не сработает (исключения не будет);
+        либо исключение поднимается, но без упоминания venv в тексте —
+        `assertIn` в `str(exc)` откажет.
+        """
         warn_checks = [_stack_check("python", "ok", "Python 3.99.0"),
                       _stack_check("venv-packages", "warn",
                                    "версии расходятся: pytest")]
@@ -872,6 +893,16 @@ class RoleEnvVenvInterpreterTest(TmpRootTest):
         self.assertIn("venv", str(ctx.exception).lower())
 
     def test_missing_venv_also_raises_rather_than_falling_back(self):
+        """Требование 4/AC-13 — вторая ветка того же критерия: venv
+        вовсе ОТСУТСТВУЕТ (`check_stack()` возвращает WARN «venv» с
+        отсутствием, не только расхождением версий) — тот же отказ
+        `OSError`, не деградация до системного python.
+
+        Ловит мутацию: обработана только ветка «версии разошлись», а
+        ветка «venv вовсе нет» тихо пропускается (например код проверяет
+        только статус проверки `venv-packages`, забыв про `venv`) —
+        `assertRaises` не сработает.
+        """
         warn_checks = [_stack_check("python", "ok", "Python 3.99.0"),
                       _stack_check("venv", "warn",
                                    "venv не создан — `python3 artel.py "

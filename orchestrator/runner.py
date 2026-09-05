@@ -445,9 +445,15 @@ def _venv_interpreter_bin() -> str:
     и согласован с файлом закреплённых версий (та же проверка, что
     `stack.check_stack()` уже даёт AC-7/AC-8 — не отдельная копия логики).
 
-    Отказывает `OSError`, называющим venv, если ЛЮБАЯ проверка манифеста с
-    «venv» в имени вернула WARN (отсутствие venv или расхождение версий) —
-    без тихого отката на системный python (AC-13).
+    Зовёт ПОЛНЫЙ `check_stack()`, а не более узкую `stack.venv_checks()`,
+    хотя интересна только пара venv-проверок (REVIEW.md итерация 1,
+    R1-F2 — три лишних subprocess-вызова к `git`/`gh`/`claude` на каждый
+    шаг роли): планка приёмки (`tasks/01M1REVEZ1HESMJ7AFD5A9MEJ8/
+    acceptance_tests/test_ac12_ac13_role_env_venv_interpreter.py`, залочена
+    T023) мокает именно `runner.stack.check_stack` — сужение вызова здесь
+    без правки планки оставило бы мок без эффекта и уронило бы приёмку
+    реальным отсутствием venv по временному пути теста. Риск принят,
+    описан в PLAN.md «Риски».
     """
     checks = stack.check_stack()
     warn = [c for c in checks if "venv" in c.name.lower() and c.status == "warn"]
