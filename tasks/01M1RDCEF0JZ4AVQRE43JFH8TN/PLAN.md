@@ -203,3 +203,84 @@ PLAN.md/REVIEW.md — без ошибок.
 совпадает по префиксу. Правка документная, поведение кода не затронуто.
 Мандат — ANSWER-1.md.
 
+## Итерация 3 — закрытие ANSWER-2 (CI красный на раннере без `gh`/`claude`)
+
+ANSWER-2.md Оператора: CI кодовой ветки красный (коммит `3d6bea81`,
+джоб «Синтаксис и тесты оркестратора») — `tests/test_step_cost.py::
+test_warning_at_seventy_percent`/`test_timeout_with_usage_events_
+charges_a_partial_token_sum`/`test_step_friction_lands_in_journal_
+from_the_live_stream`, `tests/test_step_refixation.py::
+test_no_integrity_incident_on_next_run` падали SKIPPED вместо
+ожидаемого запуска фейкового CLI: раннер GitHub не несёт исполняемых
+`gh`/`claude` физически, `runner._resolve_declared_tools()` (требования
+1/3 этой же SPEC, реализованные в итерации 1) резолвит их РЕАЛЬНЫМ
+`shutil.which` при СТАРТЕ КАЖДОГО шага роли — отсутствие любого
+объявленного инструмента останавливает `role_env()` `OSError`'ом ещё до
+того, как код доходит до подменённого `spawn_agent`/`Popen`, которым
+эти тесты (и десятки похожих) проверяют совсем другое поведение шага.
+
+Диагностика подтверждена эмпирически: симуляция отсутствия `gh`/`claude`
+(подмена `shutil.which` в песочнице так, чтобы для этих двух имён она
+всегда отвечала `None`, реальный `which` — для остального) уронила не
+только 4 названных Оператором теста, а 103 теста в 15+ файлах
+(`tests/test_multitarget.py::RoleEnvTest`, `tests/test_agent_log.py`,
+`tests/test_agent_failure.py`, `tests/test_agent_prompt.py`,
+`tests/test_review_package.py`, `tests/test_doctor.py`,
+`tests/test_analyst_role.py`, `tests/test_invariants.py` и другие) —
+названные Оператором 4 явно были только образцом вывода одного CI-рана,
+не исчерпывающим списком. Класс дефекта общий для всех: тест эксплуатирует
+`cmd_run`/`run_agent_once` с уже подменённым Popen/`spawn_agent`, но не
+подменяет разрешение инструментов манифеста — раньше (до этой SPEC)
+`role_env` не звала `shutil.which` вовсе, поэтому раньше зависимости не
+было.
+
+**Фикс (fixed) — общая фикстура в `tests/sandbox.py`** (ответ 2 ANSWER-2,
+дословно допускает «при необходимости — общая фикстура»): `shutil.which`
+подменяется на весь прогон тестового процесса ОДИН раз, при импорте
+`tests/sandbox.py` (модуль, который транзитивно импортируют все
+затронутые файлы, включая те, что не наследуют `TmpRootTest`, —
+`tests/test_agent_prompt.py::PromptChannelTest`,
+`tests/test_invariants.py::FsmTest`,
+`tests/test_review_package.py::CmdRunReviewPackageTest`,
+`tests/test_review_freshness.py::ReviewFreshnessScenarioTest` и т.п. —
+проверено `grep` по всем файлам из списка выше). Подмена (`tests/
+sandbox.py`, `_stub_which`) прозрачна для `git`/`python3` (резолвит их
+ВСЕГДА по-настоящему — часть тестов реально исполняет git-пробу
+идентичности `role_env`) и подменяет `gh`/`claude` фейковым абсолютным
+путём ТОЛЬКО когда настоящий `shutil.which` их не находит — то есть
+никак не влияет на прогон на машине разработчика (там все четыре есть
+физически, фейковая ветка не срабатывает вовсе) и не маскирует
+намеренный негативный тест `tests.test_multitarget.RoleEnvTest.
+test_role_path_is_built_from_declared_tools_not_copied` (он подменяет
+сам `PATH` роли на несуществующий каталог — под таким PATH настоящий
+`which` не находит и `python3`/`git` тоже, `OSError` по-прежнему
+поднимается, тест остаётся зелёным). `tests/test_doctor.py` уже отдельно
+патчит `doctor.shutil.which` внутри своих `with`-блоков (тот же
+разделяемый объект модуля `shutil`) — эти патчи полностью замещают
+функцию на время блока и корректно восстанавливаются, конфликта нет.
+
+Прогон после фикса — тем же способом, каким Оператор диагностировал
+красноту (эмуляция отсутствия `gh`/`claude` в тестовом процессе), плюс
+контрольный прогон с реальными `gh`/`claude` на машине разработчика:
+- Curated-подмножество из 27 файлов (все, что дают `grep -l "role_env\|
+  run_agent_once\|cmd_run\b\|spawn_agent" tests/*.py`, включая
+  `RoleEnvTest`/`CmdRunCostTest`/`CmdRunFailureTest` и оставшиеся
+  затронутые классы) — `python3 -m unittest` этих модулей: 802/802
+  зелёных и с реальными инструментами, и с симуляцией их отсутствия.
+- Все оставшиеся 64 файла `tests/` (не в списке выше — грепом не
+  зацепились за `role_env`/`cmd_run`/`spawn_agent`, но проверены на
+  отсутствие скрытой зависимости) — 855/855 зелёных, тем же двойным
+  прогоном (реальные инструменты / симуляция отсутствия).
+- Планка `tasks/01M1RDCEF0JZ4AVQRE43JFH8TN/acceptance_tests/` — 19/19
+  зелёных, без изменений (не трогал — фикс только в `tests/sandbox.py`).
+- `python3 scripts/guard.py` на PLAN.md/SPEC.md/REVIEW.md — без ошибок.
+- `python3 scripts/codebase_map.py` на чистом дереве — расхождение
+  только в строке `built_at_sha` (тот же не-дефект, что уже отмечало
+  REVIEW.md итерации 4), правка отменена `git checkout -- docs/
+  codebase-map.md`: `tests/sandbox.py` вне карты кодовой базы (карта
+  строится по `orchestrator/`/`scripts/`), регенерация не требуется.
+
+Приёмка ANSWER-2 (её собственный пункт 2) — зелёный CI ветки, а не
+локальный прогон; локальные прогоны выше воспроизводят условие красноты
+эмуляцией окружения раннера, а не заменяют сам CI.
+
