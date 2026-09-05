@@ -602,6 +602,15 @@ class RealGitSandbox(TmpRootTest):
         self.git("init", "-q", "-b", config.MAIN_BRANCH)
         self.git("config", "user.email", "artel@example.invalid")
         self.git("config", "user.name", "artel tests")
+        # `.artel/` в `.gitignore` ДО первого коммита (tasks/
+        # 01M1NGFK3N6MRMYGCC09H975V3, ANSWER-2): `store.create_schema`
+        # ниже кладёт настоящую sqlite-БД (WAL/SHM в комплекте) ВНУТРЬ
+        # `self.root` — того же дерева, которое подклассы коммитят через
+        # `git add -A`. Без этой строки любой подкласс, делающий больше
+        # одного коммита и сверяющий их разницу (`gitcmd.diff_names`),
+        # рискует поймать в диф WAL-файл БД — тот же приём, что уже несёт
+        # реальный `.gitignore` пульта (`.artel/` в корне репозитория).
+        (self.root / ".gitignore").write_text(".artel/\n", encoding="utf-8")
         (self.root / "marker.txt").write_text("main\n", encoding="utf-8")
         self.git("add", "-A")
         self.git("commit", "-q", "-m", "init")
