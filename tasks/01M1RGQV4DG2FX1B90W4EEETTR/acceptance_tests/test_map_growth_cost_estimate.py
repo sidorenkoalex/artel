@@ -159,7 +159,7 @@ class CallsMedianOfLastTenTasksGloballyTest(_CostEstimateTest):
         self.make_target("A0", "alpha")
         config.LOGS.mkdir(parents=True, exist_ok=True)
         for i in range(10):
-            task_id = f"T{i:02d}"
+            task_id = "T" + str(i).zfill(2)
             store.insert_task(self.conn, task_id, "Задача", "done",
                               f"task/{task_id.lower()}", "alpha", 10.0)
             (config.LOGS / f"{task_id}-reviewer-1.log").write_text(
@@ -214,7 +214,7 @@ class CallsFallbackConstantTest(_CostEstimateTest):
         self.make_target("A0", "alpha")
         config.LOGS.mkdir(parents=True, exist_ok=True)
         for i in range(10):
-            task_id = f"T{i:02d}"
+            task_id = "T" + str(i).zfill(2)
             store.insert_task(self.conn, task_id, "Задача", "done",
                               f"task/{task_id.lower()}", "alpha", 10.0)
             (config.LOGS / f"{task_id}-developer-1.log").write_text(
