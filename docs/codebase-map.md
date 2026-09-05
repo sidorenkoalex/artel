@@ -1,5 +1,5 @@
 ---
-built_at_sha: b0c71a4e2b497bacaa33cc1320d2bdeed40bec85
+built_at_sha: ee09fab618ee9c1c729ad462b67644c162b5fb37
 ---
 
 # Codebase-map пульта
@@ -928,6 +928,7 @@ built_at_sha: b0c71a4e2b497bacaa33cc1320d2bdeed40bec85
 
 **Публичные функции:**
 - `acceptance_traceability_errors`
+- `basic_frontmatter_errors`
 - `check`
 - `check_content`
 - `count_test_methods`
@@ -935,6 +936,7 @@ built_at_sha: b0c71a4e2b497bacaa33cc1320d2bdeed40bec85
 - `has_redness_marker`
 - `id_format_patterns`
 - `id_format_sample_errors`
+- `is_draft_lenient`
 - `main`
 - `module_docstring`
 - `redness_marker_errors_from_files`
@@ -961,7 +963,7 @@ built_at_sha: b0c71a4e2b497bacaa33cc1320d2bdeed40bec85
 
 **Импортирует:** `orchestrator/config.py`, `orchestrator/yamlmini.py`
 
-**Импортируется:** `orchestrator/acceptance.py`, `orchestrator/amend.py`, `orchestrator/canary.py`, `orchestrator/dry_run.py`, `orchestrator/fsm.py`, `orchestrator/fsm_advance.py`, `orchestrator/fsm_autogate.py`, `orchestrator/retro.py`, `orchestrator/version.py`, `tests/test_acceptance_tests_flow.py`, `tests/test_analyst_role.py`, `tests/test_answer.py`, `tests/test_artifact_materialization.py`, `tests/test_fsm_autogate.py`, `tests/test_guard_schema.py`, `tests/test_guard_split_signals.py`, `tests/test_guard_zones.py`, `tests/test_id_format_guard.py`, `tests/test_invariants.py`, `tests/test_review_registry_gate.py`, `tests/test_version.py`, `tests/test_yaml_parsing.py`
+**Импортируется:** `orchestrator/acceptance.py`, `orchestrator/amend.py`, `orchestrator/canary.py`, `orchestrator/dry_run.py`, `orchestrator/fsm.py`, `orchestrator/fsm_advance.py`, `orchestrator/fsm_autogate.py`, `orchestrator/retro.py`, `orchestrator/version.py`, `tests/test_acceptance_tests_flow.py`, `tests/test_analyst_role.py`, `tests/test_answer.py`, `tests/test_artifact_materialization.py`, `tests/test_fsm_autogate.py`, `tests/test_guard_artifact_branch_mode.py`, `tests/test_guard_schema.py`, `tests/test_guard_split_signals.py`, `tests/test_guard_zones.py`, `tests/test_id_format_guard.py`, `tests/test_invariants.py`, `tests/test_review_registry_gate.py`, `tests/test_version.py`, `tests/test_yaml_parsing.py`
 
 ## tests/__init__.py
 
@@ -1453,6 +1455,16 @@ built_at_sha: b0c71a4e2b497bacaa33cc1320d2bdeed40bec85
 - `task_row`
 
 **Импортирует:** `orchestrator/github_adapter.py`, `orchestrator/targets.py`
+
+**Импортируется:** —
+
+## tests/test_guard_artifact_branch_mode.py
+
+**Назначение:** Юнит-тесты режима артефактной ветки guard (01M1R66X5SMD3ZEDCVAJ0DR7K2,
+
+**Публичные функции:** (нет)
+
+**Импортирует:** `scripts/guard.py`
 
 **Импортируется:** —
 
