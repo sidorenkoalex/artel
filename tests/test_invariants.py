@@ -339,6 +339,18 @@ class FsmTest(unittest.TestCase):
         (self.tdir / "PLAN.md").write_text(
             PLAN_MD.format(task=self.TASK, status=status), encoding="utf-8")
 
+    def seed_worktree_plan(self) -> None:
+        """Обязательный артефакт роли developer (SPEC 01M1RQ12JVHE3PQYDFV1XPSTQ3,
+        требование 3) в РЕАЛЬНОМ рабочем каталоге роли (`runner.role_cwd`,
+        `config.WORKTREES/<id>/tasks/<id>/`) — не путать с `self.tdir`
+        (`config.TASKS/<id>/`, откуда читает FSM/бриф через `disk_backed_
+        show`): без файла именно здесь успешный (rc=0) прогон `run` честно
+        ретраится вместо одного запуска, которого ждут тесты этого класса
+        (они проверяют лимитеры run, не факт отказа без артефакта)."""
+        tdir = config.WORKTREES / self.TASK / "tasks" / self.TASK
+        tdir.mkdir(parents=True, exist_ok=True)
+        (tdir / "PLAN.md").write_text("маркер\n", encoding="utf-8")
+
     def write_review(self, status: str, iteration: int) -> None:
         (self.tdir / "REVIEW.md").write_text(
             REVIEW_MD.format(task=self.TASK, status=status, iteration=iteration),
@@ -854,6 +866,7 @@ class ExhaustedBudgetIsNotBypassableTest(FsmTest):
         # "T001"); ULID убрал совпадение, SPEC.md нужен явно.
         self.write_spec("ready")
         self.write_plan("ready")
+        self.seed_worktree_plan()
         self.set_state("in_dev", budget_usd=1.0, spent_usd=1.0)
 
     def try_run(self) -> tuple[str, mock.Mock]:
@@ -919,6 +932,7 @@ class ParallelTaskLimitIsNotBypassableTest(FsmTest):
         # неоткуда случайно найти чужой SPEC.md — свой нужен явно.
         self.write_spec("ready")
         self.write_plan("ready")
+        self.seed_worktree_plan()
         self.set_state("in_dev")
         conn = store.db()
         for i in range(config.MAX_PARALLEL_TASKS):
