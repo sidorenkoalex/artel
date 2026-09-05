@@ -2,8 +2,8 @@
 task: 01M1R66X5SMD3ZEDCVAJ0DR7K2
 type: review
 author_role: reviewer
-status: changes_requested
-iteration: 1
+status: approved
+iteration: 2
 schema_version: 4
 ---
 
@@ -11,59 +11,55 @@ schema_version: 4
 
 ## Фаза A — проверка плана
 
-1. **Покрытие.** Таблица «Покрытие требований» PLAN.md полна: все 6 требований
-   SPEC отображены на шаги 1–4 (требования 1–5 → шаг 1, требование 6 →
-   шаг 4 диф-приложением). Пробелов нет.
-2. **Размер шагов.** 4 шага — `scripts/guard.py` (одна атомарная правка одной
-   функции + CLI), новый тестовый файл, регенерация карты, диф-приложение
-   для Оператора. Не микрооперации и не «сделать всё» — размер MR
-   разумный, монолит обоснован PLAN.md явно (недостижимый код при разбиении
-   логики/CLI, несовместимый CI при разбиении guard.py/ci.yml).
-3. **Конвенции.** Подход не конфликтует с существующей архитектурой:
-   `.github/workflows/ci.yml` — защищённый путь, правится диффом-приложением
-   Оператору (`skills/conventions-core.md`), не напрямую; `*.py`-правка
-   сопровождена регенерацией `docs/codebase-map.md` тем же шагом
-   (`skills/conventions-core.md`). Замечаний к плану нет.
+PLAN.md не менялся со времени итерации 1 (диф этой итерации — только
+`tests/test_guard_artifact_branch_mode.py` докстринги, `docs/codebase-map.md`
+и подтяжка main). Оценка итерации 1 остаётся в силе: таблица покрытия
+требований 1–6 полна, шаги — проверяемые единицы разумного размера (монолит
+обоснован в PLAN.md явно), подход не конфликтует с конвенциями (защищённый
+путь `.github/workflows/ci.yml` правится диффом-приложением, не напрямую;
+`*.py`-правка сопровождена регенерацией `docs/codebase-map.md`). Замечаний к
+плану нет.
 
 ## Соответствие SPEC
 
 | Требование | Вердикт | Комментарий |
 |---|---|---|
-| 1 (без флага — поведение не меняется ни на бит) | OK | `check_content(label, text, artifact_branch_mode=False)` вызывает `_content_errors` напрямую; `check()` и `orchestrator/fsm.py:338` (`guard_refuses`) зовут `check`/`check_content` без нового параметра — не изменены ни строкой. AC-1: `test_ac1_default_call_unaffected.py` (2/2), `test_ac9_required_scenarios.py::DraftSpecStillBlocksAdvanceTest` — зелёные. |
-| 2 (draft spec/plan/review/test_report — только базовые условия frontmatter) | OK | `is_draft_lenient`/`basic_frontmatter_errors` реализуют предикат и базовую проверку буквально по требованию (`task`/`type`/`schema_version` на месте, `schema_version` не выше `SUPPORTED_SCHEMA_VERSION`). AC-2: `test_ac2_draft_downgraded_to_warning.py` (2/2) зелёные, для всех четырёх типов (юнит-тест `test_plan_review_test_report_draft_are_lenient` подтверждает не только `spec`). |
-| 3 (`tz`/`questions`/`answer` не меняются ни при каком статусе) | OK | `is_draft_lenient` возвращает `False` для типов вне `DRAFT_LENIENT_TYPES` независимо от `status`. AC-4: `test_ac4_tz_questions_answer_unaffected.py` (3/3) зелёные, включая `QUESTIONS.md` со `status: draft`. |
-| 4 (CLI-флаг `--all --artifact-branch`, семантика exit-кода) | OK | `ARTIFACT_BRANCH_FLAG` вынимается из `sys.argv` до сравнения `args == ["--all"]` — работает в любом порядке аргументов. AC-5/AC-6: `test_ac5_cli_flag_enables_mode.py` (2/2), `test_ac6_exit_code_by_status.py` (2/2) зелёные. |
-| 5 (первая строка — сводка «сдано N / черновиков M / нарушений K») | OK | Сводка печатается первой строкой до списков предупреждений/ошибок; `N`/`M` считаются по `status` независимо от типа (не сужено до четырёх типов). AC-7: `test_ac7_summary_line_format.py` (2/2) зелёные, включая проверку порядка строк. |
-| 6 (`ci.yml`: диф-приложение для Оператора, `git apply --check`) | OK | `.github/workflows/ci.yml` в кодовой ветке НЕ тронут (`git diff --stat` пуст) — верно для защищённого пути. Диф приложен в PLAN.md «Диф для Оператора»; извлечён и прогнан этим ревью: `git apply --check` на текущем дереве задачи проходит без конфликтов. `pull_request`-триггер учтён отдельно (не подпадает под `artifact/*`). AC-8 помечен `manual` в `test_scope_markers.py` с обоснованием «защищённый путь, диф проверяется Оператором на гейте PLAN» — легитимная причина (тот же класс, что уже применён в 01M1QHQ277PQQA894X97RVEX9Y). |
+| 1 (без флага — поведение не меняется ни на бит) | OK | Код не менялся с итерации 1 — `check_content(..., artifact_branch_mode=False)` зовёт `_content_errors` напрямую. `test_ac1_default_call_unaffected.py` (2/2) зелёный. |
+| 2 (draft spec/plan/review/test_report — только базовые условия frontmatter) | OK | `is_draft_lenient`/`basic_frontmatter_errors` без изменений в этой итерации. `test_ac2_draft_downgraded_to_warning.py` (2/2) зелёный. |
+| 3 (`tz`/`questions`/`answer` не меняются ни при каком статусе) | OK | `test_ac4_tz_questions_answer_unaffected.py` (3/3) зелёный. |
+| 4 (CLI-флаг, семантика exit-кода) | OK | `test_ac5_cli_flag_enables_mode.py` (2/2), `test_ac6_exit_code_by_status.py` (2/2) зелёные. |
+| 5 (сводка «сдано N / черновиков M / нарушений K» первой строкой) | OK | `test_ac7_summary_line_format.py` (2/2) зелёный. |
+| 6 (`ci.yml`: диф-приложение для Оператора, `git apply --check`) | OK | `.github/workflows/ci.yml` в кодовой ветке НЕ тронут (`git diff --stat main...HEAD -- .github/` пуст). Диф из PLAN.md «Диф для Оператора» перепроверен этим заходом: извлечён и `git apply --check` на текущем дереве задачи проходит без ошибок. AC-8 помечен `manual` в `test_scope_markers.py` с тем же обоснованием, что и итерация 1 (защищённый путь, легитимный прецедент 01M1QHQ277PQQA894X97RVEX9Y) — принято. |
 
 ## Замечания
 
-- major — `tests/test_guard_artifact_branch_mode.py:29,49,60,63,73,78,112,138,143` (нет докстринга вовсе) и `:41,55,149,157` (докстринг есть, но без заявки) — 13 из 16 тестовых методов файла не несут заявку `Ловит мутацию: …` (skills/test-authoring.md, `review-checklist.md` п. «Тесты»: «докстринг обязан описывать сценарий и наблюдаемое свойство… пустой или пересказывающий тоже замечание»). Только 3 метода (`test_plan_review_test_report_draft_are_lenient:32`, `test_missing_schema_version_is_an_error:83`, `test_schema_version_present_but_zero_is_not_reported_as_missing:97`) называют конкретную мутацию — эти три проверены и мутация в каждом правдоподобна и реально ловится (перепроверено чтением кода `is_draft_lenient`/`basic_frontmatter_errors`). Для остальных 13 нельзя установить, какую правдоподобную поломку `guard.py` (файл, несущий CI-гейт задачи 01M1R66X5SMD3ZEDCVAJ0DR7K2) тест реально ловит, а какую пропустит — например `test_missing_task_is_an_error:78` и `test_clean_meta_has_no_errors:73` вообще без единой строки пояснения. Прецедент того же класса замечания и той же оценки серьёзности (major) — `tasks/01M1H186VEVG6NF40YKH1338MD/REVIEW.md`, R1-F3. Предложение: добавить `Ловит мутацию: …` к каждому из 13 методов, по образцу уже написанных трёх.
+Новых замечаний нет.
 
 ## Реестр замечаний
 
 | id | статус | файл/строка | суть | последствие | решение |
 |---|---|---|---|---|---|
-| R1-F1 | fixed | `tests/test_guard_artifact_branch_mode.py:29,49,60,63,73,78,112,138,143,41,55,149,157` | 13/16 тестовых методов без заявки `Ловит мутацию: …` в докстринге | нельзя подтвердить, что тест ловит правдоподобную поломку CI-гейта guard.py, а не исполняет ритуал покрытия | добавлен содержательный докстринг с заявленной мутацией к каждому из 13 перечисленных методов, по образцу трёх уже имевшихся; полный набор `python3 -m unittest tests.test_guard_artifact_branch_mode -v` — 16/16 зелёные |
+| R1-F1 | accepted | `tests/test_guard_artifact_branch_mode.py` | 13/16 тестовых методов были без заявки `Ловит мутацию: …` в докстринге | нельзя было подтвердить, что тест ловит правдоподобную поломку CI-гейта guard.py | Проверено этой итерацией: все 16 методов файла теперь несут докстринг с конкретной заявленной мутацией (диф коммита `ee09fab6`). Прочитан код каждого метода против его заявки — заявки конкретны (называют функцию/поле/сравнение, которое могло бы сломаться: `DRAFT_LENIENT_TYPES`, `BASIC_META_FIELDS`, сравнение `== "draft"`, дефолт `artifact_branch_mode`, порядок вызова `schema_errors` внутри `basic_frontmatter_errors` и т.д.) и правдоподобны — каждая соответствует реальной ветке кода в `scripts/guard.py:963-1023`, ни одна не пересказывает имя метода. Полный прогон `python3 -m unittest tests.test_guard_artifact_branch_mode -v` — 16/16 зелёные. Закрыто. |
 
 ## Вердикт
 
-`changes_requested`. Единственная найденная проблема — процедурная (докстринги
-тестов), не функциональная: код `scripts/guard.py` реализует все 6 требований
-SPEC корректно, `.github/workflows/ci.yml` обработан верно как защищённый путь
-(диф применяется чисто), ни один существующий тест/гейт/инвариант не ослаблен.
-После добавления заявленных мутаций к 13 методам `tests/
-test_guard_artifact_branch_mode.py` задача готова к approve без повторной
-проверки логики (она уже полностью подтверждена этим заходом).
+`approved`. Единственное замечание итерации 1 (R1-F1, докстринги тестов)
+исправлено и подтверждено — код `scripts/guard.py` реализует все 6
+требований SPEC корректно (без изменений с итерации 1, где логика уже была
+полностью проверена), `.github/workflows/ci.yml` обработан верно как
+защищённый путь (диф применяется чисто, файл не тронут в кодовой ветке), ни
+один существующий тест/гейт/инвариант не ослаблен. Реестр замечаний закрыт
+целиком (0 записей со статусом, отличным от `accepted`).
 
 ## Проверено исполнением
 
 - `python3 -m unittest tests.test_guard_artifact_branch_mode tests.test_guard_schema tests.test_guard_split_signals tests.test_guard_zones tests.test_id_format_guard tests.test_invariants tests.test_review_registry_gate -v` — 159 тестов, `OK` (затронутые модули + инварианты, включая `GuardKeepsTheIntegritySectionTest`).
-- `python3 -m unittest discover -s tasks/01M1R66X5SMD3ZEDCVAJ0DR7K2/acceptance_tests -p 'test_ac*.py' -v` — 19 тестов, `OK` (AC-1..AC-7, AC-9 — все сценарии требования 6 закрывает manual-пометка AC-8, разобрана отдельно).
-- Диф `.github/workflows/ci.yml` извлечён из PLAN.md «Диф для Оператора» и прогнан `git apply --check` на текущем дереве задачи (после подтяжки main, коммит `d092ab75`) — применяется без конфликтов; `git diff --stat -- .github/` на кодовой ветке пуст (файл не тронут задачей напрямую, верно для защищённого пути).
-- `python3 scripts/codebase_map.py` перегенерирован во временном stash и сравнён с закоммиченной версией — расхождение только в строке `built_at_sha` (не дефект, см. `review-checklist.md`), остальное содержимое (новые публичные функции `basic_frontmatter_errors`/`is_draft_lenient`, новый файл `tests/test_guard_artifact_branch_mode.py` в списках «Импортируется») совпадает.
-- `grep -rn "check_content\b"` по репозиторию — публичная сигнатура `check_content(label, text)` (2 позиционных аргумента) не сломана: все существующие вызыватели в других задачах (`tasks/T100`, `tasks/T072`, `tasks/T075`, `tasks/01M1NKTF173WV5CPDZ1C3WW69K`, `tests/test_guard_schema.py` и др.) продолжают работать без изменений.
-- `git diff main...task/... -- tests/` вручную сверен на предмет удалённых/ослабленных ассертов в СУЩЕСТВУЮЩИХ файлах — правка добавляет только новый файл, ни одна существующая строка тестов не тронута.
-- Воспроизведён самораскрытый в PLAN.md риск «Риски» (задвоение текста предупреждения при одновременном отсутствии `task`/`type`) — фактически задвоение (разными формулировками) наступает уже при отсутствии ОДНОГО `task` (не обязательно обоих полей сразу, как написано в PLAN), но вывод PLAN о том, что это не влияет на корректность exit-кода — подтверждён: `task` в любом случае остаётся в `errors`, только избыточен текст предупреждения. Не заведено отдельной записью реестра — чисто текстовая неточность самораскрытого риска, не код и не поведение.
+- `python3 -m unittest discover -s tasks/01M1R66X5SMD3ZEDCVAJ0DR7K2/acceptance_tests -p 'test_ac*.py' -v` — 19 тестов, `OK` (AC-1..AC-7, AC-9; AC-8 закрыт легитимной manual-пометкой, см. выше).
+- Прочитан diff `d092ab75..ef6bfe96` (реальный диапазон изменений итерации — инкрементальный diff пакета от sha `ef6bfe96` до HEAD был пуст, т.к. HEAD ветки САМ есть `ef6bfe96`; настоящий коммит с прошлым вердиктом (`changes_requested`) обнаружен через `git log -- tasks/.../REVIEW.md` и `git merge-base main <ветка>` — совпадает с классом инцидента T087 из `review-checklist.md`, «Инкрементальный diff… пустой не значит без изменений»). Диф ограничен `docs/codebase-map.md`, `tests/test_guard_artifact_branch_mode.py` плюс подтяжка main (не относящиеся к задаче файлы других задач в `docs/codebase-map.md`-листингах импортов — следствие подтяжки, ожидаемо).
+- `git diff --stat 0fe22b6a(merge-base с main) ef6bfe96 -- scripts/ tests/ docs/codebase-map.md orchestrator/` — только `scripts/guard.py`, `tests/test_guard_artifact_branch_mode.py`, `docs/codebase-map.md` затронуты за всё время задачи; `orchestrator/` не тронут.
+- `git diff --stat main task/... -- .github/` — пусто, защищённый путь не тронут кодовой веткой.
+- `python3 scripts/codebase_map.py` перегенерирован и сравнён с закоммиченной версией (`git diff -- docs/codebase-map.md` после регенерации) — расхождение только в строке `built_at_sha` (не дефект, `review-checklist.md`); рабочее дерево восстановлено `git checkout -- docs/codebase-map.md` после сверки.
+- Извлечён диф `.github/workflows/ci.yml` из PLAN.md «Диф для Оператора» скриптом (парсинг блока ` ```diff `) и прогнан `git apply --check /tmp/ci_diff.patch` на текущем дереве задачи — применяется без ошибок.
+- Прочитан код `scripts/guard.py:963-1023` (`DRAFT_LENIENT_TYPES`, `BASIC_META_FIELDS`, `is_draft_lenient`, `basic_frontmatter_errors`, `check_content`) построчно против каждой из 16 заявок `Ловит мутацию:` в `tests/test_guard_artifact_branch_mode.py` — все заявки соответствуют реальным веткам кода, ни одна не пересказывает имя теста.
 
 ## Предложения системе
