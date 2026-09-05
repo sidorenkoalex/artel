@@ -184,12 +184,15 @@ class PrefixAdvanceRejectTest(unittest.TestCase):
         # префиксом обязан найти именно этот каталог, не
         # `tasks/<префикс>/`, которого не существует вовсе. Шаблонный
         # status по умолчанию `draft` — доводим до `ready` руками, как
-        # сделал бы analyst.
+        # сделал бы analyst; заодно заполняем `zones:` — schema_version 4
+        # (01M1NKVPD2A79PQ6K0JVV1B2Q1, AC-1) требует поле от analyst.
         spec_path = self.tdir / "SPEC.md"
         self.assertTrue(spec_path.exists())
         spec_path.write_text(
             spec_path.read_text(encoding="utf-8").replace(
-                "status: draft", "status: ready", 1),
+                "status: draft", "status: ready", 1).replace(
+                "# zones: orchestrator/store.py, orchestrator/config.py",
+                "zones: orchestrator/store.py, orchestrator/config.py", 1),
             encoding="utf-8")
 
         out = capture(fsm.cmd_advance, self.prefix)

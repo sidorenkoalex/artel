@@ -148,7 +148,7 @@ def _account_partial_cost(conn, task_id: str, role: str) -> None:
     """
     log_path = agent_log.last_agent_log(task_id, role)
     if log_path == "—":
-        tokens, saw_usage = 0, False
+        tokens, saw_usage = {}, False
     else:
         tokens, saw_usage = spend.partial_tokens_from_log(Path(log_path))
     spend.charge_missing_result(conn, task_id, role, "pause --now",

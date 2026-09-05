@@ -20,6 +20,7 @@ main (сценарии уборки — test_kill_cleanup.py).
 import contextlib
 import json
 import os
+import re
 import shutil
 import socket
 import subprocess
@@ -1494,6 +1495,90 @@ class CarpentryGitCallsGoThroughGitcmdTest(unittest.TestCase):
         self.assertEqual(
             {}, offenders,
             f"прямые вызовы subprocess.run/Popen вне единого модуля gitcmd: {offenders}")
+
+
+class NoNetworkAddressesInTestsTest(unittest.TestCase):
+    """Инвариант 35 (docs/invariants.md): тесты не читают сеть по DNS-имени.
+
+    Ни один файл `tests/**/*.py` не несёт адреса `http(s)://<DNS-имя>`,
+    кроме `localhost`/`127.0.0.1` (SPEC 01M1QHQ277PQQA894X97RVEX9Y,
+    требование 3, AC-6) — тот же класс защиты, что инвариант 33 (единая
+    точка подмены `gitcmd`), только про сетевое ЧТЕНИЕ, не про плотницкую
+    ЗАПИСЬ: реальный `git fetch` по такому адресу резолвит DNS настоящим
+    резолвером и виснет на таймауте при обрыве сети (инцидент 05.09,
+    «Контекст» той же SPEC — фикстурный адрес `sled`-target'а в `tests/
+    test_git_fixation.py` вешал полный прогон `tests/` на минуты).
+
+    Хост сравнивается ТОЧНО, не префиксом (`127.0.0.1.evil.example` —
+    DNS-имя, лишь начинающееся с исключённого `127.0.0.1`, не сам
+    loopback — обязан быть пойман, не пропущен).
+    """
+
+    _URL_RE = re.compile(r"https?://[^\s'\"]+")
+    _EXEMPT_HOSTS = ("localhost", "127.0.0.1")
+
+    # (имя файла, хост) -> обоснование: адрес — decorative/тестовый текст,
+    # никогда не передаётся реальному сетевому вызову, поэтому исключён
+    # из скана (SPEC 01M1QHQ277PQQA894X97RVEX9Y, требование 3).
+    _EXCEPTIONS = {
+        ("test_github_adapter.py", "github.com"):
+            "stdout уже замоканного `gh` (github_adapter.ci.gh подменена "
+            "лямбдой в setUp самого теста) — тест не открывает соединение "
+            "по этому адресу, строка лишь имитирует формат вывода "
+            "`gh pr create`",
+        ("test_ci_status.py", "api.github.com"):
+            "текст внутри сообщения об ошибке уже замоканного `ci.gh` "
+            "(`set_check_runs` подменяет ответ целиком) — адрес не "
+            "аргумент реального вызова, тест не обращается к сети",
+        ("test_sandbox.py", "example.invalid"):
+            "статические строки-фикстуры, проверяющие саму логику "
+            "распознавания DNS-адреса (`_is_local_git_address`/"
+            "`_network_git_command_denial`) — никогда не передаются "
+            "реальному `subprocess.run`, только сравниваются как текст",
+        ("test_sandbox.py", "127.0.0.1.evil.example"):
+            "та же статическая фикстура — хост, лишь НАЧИНАЮЩИЙСЯ с "
+            "loopback-адреса, проверяет точность сравнения хоста в "
+            "`_is_local_git_address`, тоже не передаётся `subprocess.run`",
+    }
+
+    @classmethod
+    def _host_of(cls, url: str) -> str:
+        rest = url.split("://", 1)[1]
+        return rest.split("/", 1)[0].split(":", 1)[0]
+
+    def _dns_addresses(self, text: str) -> list:
+        return [m.group(0) for m in self._URL_RE.finditer(text)
+                if self._host_of(m.group(0)) not in self._EXEMPT_HOSTS]
+
+    def test_no_dns_hostname_addresses_in_tests_tree(self):
+        offenders = {}
+        for path in sorted((config.ROOT / "tests").rglob("*.py")):
+            hits = [url for url in self._dns_addresses(
+                        path.read_text(encoding="utf-8"))
+                    if (path.name, self._host_of(url)) not in self._EXCEPTIONS]
+            if hits:
+                offenders[str(path.relative_to(config.ROOT))] = hits
+        self.assertEqual(
+            {}, offenders,
+            "tests/**/*.py несёт адрес http(s)://<DNS-имя> вне localhost/"
+            f"127.0.0.1 и вне именованных исключений: {offenders}")
+
+    def test_synthetic_dns_hostname_fixture_is_caught(self):
+        """AC-10: мутация — синтетическая фикстура с DNS-именем, которого
+        нет ни в одном реальном файле репозитория, обязана быть поймана
+        (доказательство, что сканер ловит нарушение, а не декорация).
+
+        Схема и хост собраны конкатенацией по частям (не одним смежным
+        литералом), чтобы исходный текст самого этого метода не нёс
+        адрес одной строкой и не попал под собственную проверку
+        требования 3 при сканировании `tests/**/*.py` (сканер читает
+        байты файла, не значение переменной в рантайме).
+        """
+        scheme = "http" + "s://"
+        host = "ci-mirror" + ".invariant-check.example"
+        url = f"{scheme}{host}/repo.git"
+        hits = self._dns_addresses(f'url: "{url}"\n')
+        self.assertEqual([url], hits)
 
 
 if __name__ == "__main__":
