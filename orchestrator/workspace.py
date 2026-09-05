@@ -36,7 +36,14 @@ def registered_paths() -> list[str]:
 
 
 def _registered(wt_path: Path) -> bool:
-    return str(wt_path) in registered_paths()
+    """Сравнение по `Path.resolve()` с обеих сторон (AC-2): регистрация
+    в `git worktree list` идёт по разрешённому пути (символическая
+    ссылка macOS `/var` -> `/private/var` в `tempfile.mkdtemp()` и
+    аналогичный случай алиас-каталога — SPEC 01M1SC3Y20YBTTJVQDJBF2NDQW),
+    а `wt_path` здесь строится из `config.WORKTREES`, который мог
+    остаться неразрешённым алиасом."""
+    resolved = wt_path.resolve()
+    return any(Path(p).resolve() == resolved for p in registered_paths())
 
 
 def ensure(task_id: str, branch: str) -> tuple[Path, str | None]:
