@@ -814,5 +814,6 @@ def test_author_answer_component(conn, task_id: str) -> str | None:
                              run_id)
     if not return_reason_part and not part:
         return None
+    sep = "\n" if return_reason_part and part else ""
     return (f"{HEADER}\n\n{BOUNDARY_INSTRUCTION}\n"
-           f"{return_reason_part}{part}")
+           f"{return_reason_part}{sep}{part}")

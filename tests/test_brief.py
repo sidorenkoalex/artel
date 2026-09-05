@@ -371,6 +371,9 @@ class ReturnReasonComponentTest(BriefUnitTest):
         store.journal(store.db(), "T001", actor, f"state -> {state}", detail)
 
     def test_developer_brief_carries_verbatim_reason_after_changes_requested(self):
+        """Ловит мутацию: раздел «Причина возврата» добавлен НЕ первым
+        элементом `parts` (например, после `_manifest_component` SPEC) —
+        порядок требования 3/AC-4 сломан, хотя текст детали присутствует."""
         conn = store.db()
         self.seed_state("fsm", "in_dev", "приёмочные тесты готовы")
         self.seed_state("operator", "review", "готово к ревью")
@@ -386,6 +389,10 @@ class ReturnReasonComponentTest(BriefUnitTest):
                         text.find("Маркер-текста-SPEC."))
 
     def test_developer_brief_unchanged_after_normal_advance_from_tests_writing(self):
+        """Ловит мутацию: предшественник `tests_writing` по ошибке добавлен
+        в `_RETURN_TRIGGER_STATES` — обычный первый заход `in_dev` (не
+        возврат) получил бы раздел «Причина возврата», хотя требование
+        5/AC-6 запрещают его для штатного advance."""
         conn = store.db()
         self.seed_state("operator", "tests_writing",
                         "гейт SPEC пройден — приёмочные тесты до кода")
@@ -398,6 +405,11 @@ class ReturnReasonComponentTest(BriefUnitTest):
         self.assertNotIn(brief.RETURN_REASON_HEADER, text)
 
     def test_developer_brief_after_escalation_return_shows_escalated_detail_not_fixed_phrase(self):
+        """Ловит мутацию: `_return_context` берёт `detail` записи
+        `state -> in_dev` (фиксированная фраза approve «эскалация
+        разрешена, продолжаем») вместо `detail` записи `state ->
+        escalated` — раздел нёс бы бессодержательную фразу вместо причины
+        эскалации (требование 2/AC-3)."""
         conn = store.db()
         self.seed_state("fsm", "in_dev", "приёмочные тесты готовы")
         self.seed_state("operator", "review", "готово к ревью")
@@ -423,6 +435,10 @@ class ReturnReasonComponentTest(BriefUnitTest):
                         "причина, не должна занимать место раздела")
 
     def test_analyst_brief_no_section_on_first_visit(self):
+        """Ловит мутацию: `_return_context` не возвращает `None`, когда
+        записи `state -> spec_writing` этой задачи нет вовсе (первый визит)
+        — раздел «Причина возврата» появился бы у analyst без реального
+        возврата (требование 5/AC-6)."""
         conn = store.db()
 
         with mock.patch.object(gitcmd, "git", fake_git):
@@ -431,6 +447,10 @@ class ReturnReasonComponentTest(BriefUnitTest):
         self.assertNotIn(brief.RETURN_REASON_HEADER, text)
 
     def test_test_author_brief_carries_return_reason_after_escalation(self):
+        """Ловит мутацию: `test_author_answer_component` не подключает
+        `_return_reason_component` вовсе (сборщик обновлён только для
+        developer/analyst) — раздел «Причина возврата» отсутствовал бы у
+        test_author при возврате из эскалации (требование 1)."""
         conn = store.db()
         self.seed_state("operator", "tests_writing",
                         "гейт SPEC пройден — приёмочные тесты до кода")
