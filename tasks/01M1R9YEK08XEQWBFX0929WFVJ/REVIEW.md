@@ -3,7 +3,7 @@ task: 01M1R9YEK08XEQWBFX0929WFVJ
 type: review
 author_role: reviewer
 status: changes_requested
-iteration: 1
+iteration: 2
 schema_version: 4
 ---
 
@@ -13,116 +13,111 @@ schema_version: 4
 
 | Требование | Вердикт | Комментарий |
 |---|---|---|
-| 1 (планка approve `acceptance` — из артефактной ветки) | OK | `fsm.py:333-335` — `acceptance.materialize_from_branch` вместо `acceptance.run(wt_path/...)`; приёмочный тест AC-1 зелёный. |
-| 2 (тот же источник в общем узле сверки свежести) | OK | Один и тот же узел `_pull_main_or_escalate` покрывает `in_dev->review`, `acceptance->merge_gate`, окно `merge_gate` — AC-2 зелёный. |
-| 3 (merge_gate->done несёт снимок артефактной ветки) | OK | `fsm_merge_gate.py::_overlay_artifact_snapshot`, вызван после merge до `merge_sha`; AC-6/AC-7/AC-8/AC-11 зелёные. |
-| 4 (CI guard не валидирует tasks/<id>/ на task/**) | реализовано не так — см. замечание R1-F1 | Diff `ci.yml` приложен к PLAN.md по протоколу защищённых путей (верно), `git apply --check` на текущем `main` (41ea4d4f) проверен мной — применяется чисто. Само требование 4 не относится к коду этой ветки. |
-| 5 (существующее поведение не ослаблено) | реализовано не так — см. замечание R1-F1 | Новый путь чтения SPEC.md с артефактной ветки (требования 1-2) вводит РЕГРЕСС относительно установленной конвенции `_read_branch_text_or_refuse` — см. замечание. |
+| 1 (планка approve `acceptance` — из артефактной ветки) | OK | `fsm.py:333-335` — без изменений с итерации 1, `acceptance.materialize_from_branch` вместо `acceptance.run(wt_path/...)`; приёмочный тест AC-1 зелёный. |
+| 2 (тот же источник в общем узле сверки свежести) | OK | Без изменений с итерации 1 — один узел `_pull_main_or_escalate` покрывает все три точки; AC-2 зелёный. |
+| 3 (merge_gate->done несёт снимок артефактной ветки) | OK | Без изменений с итерации 1 — `fsm_merge_gate.py::_overlay_artifact_snapshot`; AC-6/AC-7/AC-8/AC-11 зелёные. |
+| 4 (CI guard не валидирует tasks/<id>/ на task/**) | реализовано не так — см. R1-F1 контекст ниже (не блокирует само требование 4) | Дифф `ci.yml`, приложенный к PLAN.md, не изменился с итерации 1; перепроверил `git apply --check` на актуальном `main` (b1af094a) в отдельном detached-worktree — применяется чисто. |
+| 5 (существующее поведение не ослаблено) | реализовано не так — см. R1-F1 | Код с итерации 1 не изменился ни на строку — блокер R1-F1 воспроизводится дословно в тех же местах. |
+
+Код ветки идентичен состоянию, проверенному на итерации 1: единственный
+коммит, добавленный в ветку с прошлого вердикта (`6d37d944` → `e3d77d27`),
+— `01M1R9YEK08XEQWBFX0929WFVJ: подтяжка main`, принёсший три чужих коммита
+Оператора (`d48fafbd`, `41ea4d4f`, `b1af094a` — правки `docs/roadmap.md`,
+`docs/triggers.md`, `docs/backlog.md`, `docs/reference/role-home.md`),
+уже присутствующих в `main` как его собственная линейная история
+(`git merge-base main <ветка>` = `b1af094a`, `git branch --contains`
+подтверждает — это не работа этой задачи и не нарушение зон, а обычная
+подтяжка). Ни один файл из зон SPEC (`orchestrator/fsm.py`,
+`orchestrator/acceptance.py`, `orchestrator/fsm_merge_gate.py`,
+`orchestrator/fsm_postmerge.py`, `.github/workflows/ci.yml`) и
+расширения ANSWER-1 (`orchestrator/canary.py`, `orchestrator/
+fsm_advance.py`) с итерации 1 не тронут. Реестр замечаний итерации 1 при
+этом не получил ни одной отметки `fixed`/`rejected` от разработчика —
+обе записи так и остались `open`. Ниже — та же проверка блокера, что и на
+итерации 1, повторённая заново на текущем HEAD.
 
 ## Замечания
 
-- blocker — `orchestrator/fsm.py:344-347` (и, как следствие, все четыре
-  точки вызова `_pull_main_or_escalate`: `orchestrator/fsm.py:820-821`
-  `_cmd_approve`/state `acceptance`, `orchestrator/fsm_advance.py:763-764`
-  `in_dev`, `orchestrator/fsm_merge_gate.py:326-327`
-  `_cmd_approve_merge_gate`, `orchestrator/canary.py:191-192`
-  `_pass_acceptance_gate`) — чтение `SPEC.md` артефактной ветки для
-  различения «планка не найдена легитимно» (AC-5) от «планка не найдена,
-  отказ AC-3» сделано напрямую через `gitcmd.show`, а НЕ через
-  established-узел `_read_branch_text_or_refuse` (тот же файл,
-  `fsm.py:432-450`), который для ЭТОЙ ЖЕ операции — чтения артефакта с
-  чужой/артефактной ветки — существует именно затем, чтобы отличить
-  «файла на ветке нет легитимно» от «файл не прочитан из-за сбоя git»
-  (докстринг `_read_branch_text_or_refuse` прямо ссылается на инцидент
-  T030, журнал ~17:35 25.08.2026, «не молчаливый дефолт `schema_version 1
-  без AC-разметки`»). В новом коде оба случая схлопнуты: `spec_text, _ =
-  gitcmd.show(...)`; `meta = (yamlmini.frontmatter(spec_text) if
-  spec_text is not None else None) or {}` — если `gitcmd.show` вернула
-  `None` (ветка недоступна, транзиентный сбой git, гонка с материализацией
-  и т.п.), `meta` становится `{}`, `guard.requires_ac_markup({})`
-  возвращает `False` (дефолтный `schema_version` — 1), и функция уходит
-  в `return "pulled"` — переход продолжается штатно, БЕЗ прогона
-  приёмочной планки и БЕЗ единой записи в журнале о том, что чтение
-  вообще не удалось. Это ровно тот «молчаливый зелёный проход», который
-  SPEC «Критерии приёмки» AC-3/AC-4 прямо запрещают, — только для другого
-  входного условия (сбой чтения, а не «ветка не несёт acceptance_tests/
-  легитимно»), которое ACs SPEC не называют явно, но которое накрывает
-  тот же принцип требования 5 («существующее поведение... не
-  ослабляется») и напрямую конфликтует с прецедентом того же файла для
-  того же класса операции.
+- blocker — `orchestrator/fsm.py:344-347` (и все четыре точки вызова
+  `_pull_main_or_escalate`, строки те же, что на итерации 1:
+  `orchestrator/fsm.py:820` `_cmd_approve`/state `acceptance`,
+  `orchestrator/fsm_advance.py:763` `in_dev`,
+  `orchestrator/fsm_merge_gate.py:326` `_cmd_approve_merge_gate`,
+  `orchestrator/canary.py:191` `_pass_acceptance_gate`) — R1-F1 не
+  исправлен, код байт-в-байт совпадает с тем, что рецензировалось на
+  итерации 1. Чтение `SPEC.md` артефактной ветки для различения «планка
+  не найдена легитимно» (AC-5) от «планка не найдена, отказ AC-3»
+  по-прежнему идёт напрямую через `gitcmd.show`, а не через established
+  `_read_branch_text_or_refuse` (`fsm.py:432-450`), который для этой же
+  операции существует именно затем, чтобы отличить «файла на ветке нет
+  легитимно» от «файл не прочитан из-за сбоя git» (инцидент T030). Сбой
+  чтения (`gitcmd.show` вернула `None` — недоступность ветки, транзиентный
+  git-сбой, гонка с материализацией) по-прежнему схлопывается в
+  `meta = {}` → `guard.requires_ac_markup({}) == False` → `"pulled"` —
+  переход/merge продолжается штатно, без прогона планки и без единой
+  записи в журнале о сбое чтения. Это тот же «молчаливый зелёный проход»,
+  который AC-3/AC-4 SPEC прямо запрещают для соседнего условия.
 
-  Воспроизвёл эмпирически (лёгкая FSM-песочница, `gitcmd.show`/
-  `gitcmd.ls_tree_files` замокан на `(None, "git не ответил")`/`None`
-  вместо легитимного «файла/ветки нет», остальное — как в
-  `tests/test_branch_freshness_gate.py`): `fsm._pull_main_or_escalate`
-  вернула `"pulled"`, журнал шагов задачи не получил ни одной записи о
-  проблеме чтения (только `created: ...` от заведения задачи) — вызывающий
-  код (`_cmd_approve`, `in_dev`, `_cmd_approve_merge_gate`,
-  `_pass_acceptance_gate`) во всех четырёх местах трактует это как
-  штатный «pulled» и продолжает переход/merge.
+  Перепроверил эмпирически на текущем HEAD той же лёгкой FSM-песочницей,
+  что на итерации 1 (`gitcmd.show`/`gitcmd.ls_tree_files` замокан на
+  `(None, "git не ответил")`/`None`): `fsm._pull_main_or_escalate`
+  по-прежнему возвращает `"pulled"`, журнал не получает записи о сбое
+  чтения — воспроизводится один в один.
 
-  Предложение: заменить прямой `gitcmd.show(artifact_branch_name, ...)`
-  на `_read_branch_text_or_refuse(conn, task_id, artifact_branch_name,
-  "SPEC.md")` (или эквивалентный явный разбор `reason` из `gitcmd.show`),
-  чтобы сбой чтения давал СВОЙ именованный отказ (не эскалацию с
-  текстом «приёмочные тесты красные», не тихий «pulled»), симметрично
-  тому, что уже устроено для `spec_gate` (`fsm.py:786-791`).
+  Предложение то же, что на итерации 1: заменить прямой
+  `gitcmd.show(artifact_branch_name, ...)` на
+  `_read_branch_text_or_refuse(conn, task_id, artifact_branch_name,
+  "SPEC.md")` (или эквивалентный явный разбор `reason`), чтобы сбой
+  чтения давал именованный отказ, а не тихий `"pulled"`.
 
-- minor — `tests/test_branch_freshness_gate.py:340` (`test_approve_pulls_
-  main_and_advances_when_acceptance_green`), `:474`
+- minor — `tests/test_branch_freshness_gate.py:340`
+  (`test_approve_pulls_main_and_advances_when_acceptance_green`), `:474`
   (`test_advance_escalates_on_red_acceptance_after_pull_keeps_merge`),
   `:495` (`test_approve_escalates_on_red_acceptance_after_pull_keeps_
-  merge`) — три изменённых этой веткой теста не несут докстринг «Ловит
-  мутацию» (сам метод `write_acceptance_plank` докстринг несёt, но не
-  тела тестов, которые реально стали чувствительны к новому источнику
-  планки — без вызова `write_acceptance_plank()` они ушли бы по новой
-  ветке AC-3/AC-5, а не по проверяемому сценарию). Не блокирует: сами
-  критерии AC-1..AC-5 покрыты приёмочной планкой задачи
-  (`tasks/01M1R9YEK08XEQWBFX0929WFVJ/acceptance_tests/
-  test_ac1_ac2_pull_reads_plank_from_artifact_branch.py`,
-  `test_ac3_ac4_ac5_missing_plank_named_refusal.py`) с корректными
-  заявками «Ловит мутацию» — но тот же класс пробела в юнит-тестах уже
-  отмечался ранее (`feedback_test_authoring_mutation_claim_gap`),
-  повторяется третий раз подряд. Предложение: дописать по одной строке
-  докстринга в каждый из трёх тестов на будущей итерации, не обязательно
-  этой же.
+  merge`) — R1-F2 не исправлен, тела тестов те же, докстринг «Ловит
+  мутацию» по-прежнему отсутствует у самих тестовых методов (только у
+  вынесенного `write_acceptance_plank()`). Не блокирует по тем же
+  причинам, что на итерации 1 (критерии покрыты приёмочной планкой с
+  корректными заявками).
 
 ## Реестр замечаний
 
 | id | статус | файл/строка | суть | последствие | решение |
 |---|---|---|---|---|---|
-| R1-F1 | open | orchestrator/fsm.py:344-347 (+ orchestrator/fsm.py:820-821, orchestrator/fsm_advance.py:763-764, orchestrator/fsm_merge_gate.py:326-327, orchestrator/canary.py:191-192) | сбой чтения SPEC.md с артефактной ветки (`gitcmd.show` вернула `None`) схлопывается в дефолтный `meta={}` → `requires_ac_markup` → `False` → `"pulled"`, вместо именованного отказа | переход/merge продолжается без прогона приёмочной планки и без диагностики при транзиентном сбое git на чтении артефактной ветки — тот самый «молчаливый зелёный проход», который AC-3/AC-4 запрещают для соседнего условия | использовать `_read_branch_text_or_refuse` (или эквивалентный явный разбор ошибки `gitcmd.show`) вместо прямого `gitcmd.show` + `or {}` |
-| R1-F2 | open | tests/test_branch_freshness_gate.py:340,474,495 | три изменённых теста не обновили докстринг «Ловит мутацию» под новую чувствительность к источнику планки | придётся заново разбираться в намерении теста при следующей правке этого файла — не блокирует приёмку (см. «Замечания») | дописать докстринг с описанием мутации на следующей итерации |
+| R1-F1 | open | orchestrator/fsm.py:344-347 (+ orchestrator/fsm.py:820, orchestrator/fsm_advance.py:763, orchestrator/fsm_merge_gate.py:326, orchestrator/canary.py:191) | не исправлено с итерации 1: сбой чтения SPEC.md с артефактной ветки (`gitcmd.show` вернула `None`) схлопывается в дефолтный `meta={}` → `requires_ac_markup` → `False` → `"pulled"`, вместо именованного отказа | переход/merge продолжается без прогона приёмочной планки и без диагностики при транзиентном сбое git на чтении артефактной ветки — тот самый «молчаливый зелёный проход», который AC-3/AC-4 запрещают для соседнего условия | использовать `_read_branch_text_or_refuse` (или эквивалентный явный разбор ошибки `gitcmd.show`) вместо прямого `gitcmd.show` + `or {}` |
+| R1-F2 | open | tests/test_branch_freshness_gate.py:340,474,495 | не исправлено с итерации 1: три изменённых теста не несут докстринг «Ловит мутацию» под новую чувствительность к источнику планки | придётся заново разбираться в намерении теста при следующей правке этого файла — не блокирует приёмку | дописать докстринг с описанием мутации |
+
+Обе записи заведены на итерации 1 и с тех пор не получили ни `fixed`, ни
+`rejected` от разработчика — код не менялся, поэтому оценивать
+исправление/обоснование отказа не из чего; статус переносится как есть.
 
 ## Вердикт
 
-changes_requested — один blocker (R1-F1): узел, введённый ИМЕННО этой
-задачей ради устранения «молчаливого зелёного прохода» (регрессия №12),
-сам заводит новый вариант того же класса дефекта для случая сбоя чтения
-SPEC.md с артефактной ветки, расходясь с уже существующим в этом же файле
-прецедентом (`_read_branch_text_or_refuse`) для той же операции. Минорное
-замечание R1-F2 можно закрыть в этой же итерации или отложить — не
-блокирует.
+changes_requested — R1-F1 (blocker) не исправлен: код ветки идентичен
+состоянию итерации 1 буква в букву, единственное движение ветки с прошлого
+вердикта — подтяжка main (чужие doc-правки Оператора, не относящиеся к
+этой задаче). Разработчику нужно фактически внести правку из R1-F1 (и по
+возможности R1-F2), прежде чем сдавать следующую итерацию — повторная
+сдача без изменений кода не продвинет задачу дальше того же вердикта.
 
 ## Проверено исполнением
 
-- `python3 -m unittest discover -s tasks/01M1R9YEK08XEQWBFX0929WFVJ/acceptance_tests -v` (планка задачи, материализована из головы `artifact/01m1r9yek08xeqwbfx0929wfvj` через `git show` по файлам, прогнана и удалена из рабочего дерева после — не закоммичена) — 10 тестов (AC-1..AC-8, AC-10, AC-11), все зелёные; AC-9 — manual (обоснованно: правка `.github/workflows/ci.yml` не исполнима в песочнице, GitHub Actions рантайм недоступен), AC-12 — skip (обоснованно: регрессия существующего набора уже покрыта штатным CI-джобом `python` на каждый пуш).
-- `python3 -m unittest tests.test_branch_freshness_gate -v` — 12 тестов, все зелёные.
-- `python3 -m unittest tests.test_fsm_autogate tests.test_artifact_materialization tests.test_merge_gate_ci_wait tests.test_fsm_merge_gate_done_snapshot -v` — 21 тест, все зелёные (модули, затронутые требованием 5/«Влияние на систему»).
-- `python3 -m unittest tests.test_canary -v` — 36 тестов, все зелёные (зона расширения ANSWER-1).
-- Эмпирическое воспроизведение R1-F1: отдельный скрипт вне REVIEW.md/tests (scratchpad), лёгкая FSM-песочница с `gitcmd.show`/`gitcmd.ls_tree_files`, замоканными на сбой (`(None, "git не ответил")`/`None`) вместо легитимного «файла/ветки нет» — `fsm._pull_main_or_escalate` вернула `"pulled"` без единой записи в журнале о сбое чтения.
-- `python3 scripts/codebase_map.py` (регенерация вручную, изменения не оставлены в дереве) — расхождение с закоммиченной картой только в строке `built_at_sha` (не дефект, конвенция `docs/codebase-map.md` в скиле ревьювера).
-- `git apply --check` диффа `.github/workflows/ci.yml`, приложенного к PLAN.md, — на detached worktree от актуального `main` (41ea4d4f) — применяется чисто.
-- Сверил зоны: `orchestrator/canary.py`/`orchestrator/fsm_advance.py` действительно вне `zones:` SPEC.md (`orchestrator/fsm.py, orchestrator/acceptance.py, orchestrator/fsm_merge_gate.py, orchestrator/fsm_postmerge.py, .github/workflows/ci.yml`) — расширение легитимно по ANSWER-1.md.
-- Полный набор `tests/` не прогонял (штатно гоняет CI на каждый пуш, решение Оператора 05.09 — см. скил ревьювера); диффа `tests/` на предмет ослабления ассертов не нашёл (все изменения — новый helper и добавленные проверки, ни одна существующая проверка не удалена и не смягчена).
+- `python3 -m unittest tests.test_branch_freshness_gate tests.test_fsm_autogate tests.test_artifact_materialization tests.test_merge_gate_ci_wait tests.test_fsm_merge_gate_done_snapshot tests.test_canary -v` — 69 тестов, все зелёные (без изменений с итерации 1).
+- `python3 -m unittest discover -s tasks/01M1R9YEK08XEQWBFX0929WFVJ/acceptance_tests -v` (планка задачи, материализована из головы `artifact/01m1r9yek08xeqwbfx0929wfvj`) — 10 тестов (AC-1..AC-8, AC-10, AC-11), все зелёные; AC-9 manual, AC-12 skip (обоснования не изменились с итерации 1).
+- Перепроверил блокер R1-F1 эмпирически на текущем HEAD (лёгкая FSM-песочница, `gitcmd.show`/`gitcmd.ls_tree_files` замоканы на сбой вместо легитимного «файла/ветки нет») — `_pull_main_or_escalate` вернула `"pulled"` без записи в журнал, воспроизводится идентично итерации 1.
+- `git diff --stat 6d37d9448e3cc8de64770ab24334a16688df347e...HEAD` — только `docs/backlog.md`, `docs/reference/role-home.md`, `docs/roadmap.md`, `docs/triggers.md`; `git merge-base main HEAD` = `b1af094a`, `git branch --contains b1af094a/41ea4d4f/d48fafbd` показывает `main` — подтверждает, что это коммиты main, принесённые подтяжкой, не работа задачи; ни один файл зон SPEC/ANSWER-1 не изменился.
+- `grep -n "_pull_main_or_escalate"` во всех четырёх файлах вызова — строки те же, что зафиксированы в итерации 1 (`fsm.py:820`, `fsm_advance.py:763`, `fsm_merge_gate.py:326`, `canary.py:191`) — код не сдвинулся ни на строку.
+- `git apply --check` диффа `.github/workflows/ci.yml`, приложенного к PLAN.md, — в отдельном detached-worktree от актуального `main` (`b1af094a`) — применяется чисто.
+- Полный набор `tests/` не прогонял (штатно гоняет CI на каждый пуш, решение Оператора 05.09); диффа `tests/` на предмет ослабления с итерации 1 нет вовсе (файлы не менялись).
 
 ## Предложения системе
 
-- `feedback_test_authoring_mutation_claim_gap` (памятка) подтверждается
-  третий раз подряд этой же задачей (R1-F2): юнит-тесты в `tests/`,
-  модифицированные ради смены источника данных (не ради нового
-  критерия), стабильно не получают обновлённую заявку «Ловит мутацию»,
-  хотя приёмочные тесты той же задачи конвенцию соблюдают. Возможно,
-  стоит явно указать в `skills/test-authoring.md`, что «изменённый»
-  тест — это любое изменение тела/фикстуры, а не только новых
-  assertions, а не оставлять это на усмотрение автора.
+- Ветка ушла на повторную итерацию ревью, не внеся ни одного изменения в
+  код/тесты после `changes_requested` итерации 1 — единственное движение
+  было подтяжкой main. Реестр замечаний рассчитан на цикл
+  `reviewer -> developer (fixed/rejected) -> reviewer (accepted/
+  needs_work)`; сценарий «ревью запустили повторно без промежуточного
+  шага разработчика» скилом не описан явно и стоит уточнить (что должно
+  произойти на гейте: отказ раньше, чем задача снова попадёт к
+  ревьюверу, или это штатный повтор после внешнего вмешательства
+  Оператора — из пакета не видно, что именно инициировало этот прогон).
