@@ -35,6 +35,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from orchestrator import brief, catalog, config, fsm, gitcmd, store, workspace  # noqa: E402
 from tests.sandbox import (TmpRootTest, capture, capture_new_task_id,  # noqa: E402
+                           disk_backed_ls_tree_files, disk_backed_show,
                            fake_git)
 
 # Состав части 1 нарезки (01M1NKVPD2A79PQ6K0JVV1B2Q1, AC-4) — точные
@@ -62,6 +63,52 @@ schema_version: 1
 ## Покрытие требований
 
 ## Влияние на систему
+"""
+
+# AC-3 (ANSWER-1.md Оператора этой задачи, вариант (b) уточнённый):
+# раздел PLAN.md «## Расширение зон» со строкой «Пути: <путь1>, <путь2>»
+# — тот же приём через запятую, что поле `zones:` части 1.
+PLAN_WITH_ZONES_EXTENSION = """---
+task: {task}
+type: plan
+author_role: developer
+status: ready
+schema_version: 1
+---
+
+# PLAN: сверка диффа с зонами
+
+## Подход
+
+## Шаги
+
+## Покрытие требований
+
+## Влияние на систему
+
+## Расширение зон
+
+Пути: {paths}
+
+{justification}
+"""
+
+# AC-3 (ANSWER-1.md, п.2): мандат Оператора — строка в любом ANSWER-n.md
+# задачи, начинающаяся с маркера «Расширение зон разрешено:», далее
+# список путей через запятую.
+ANSWER_WITH_ZONES_MANDATE = """---
+task: {task}
+type: answer
+author_role: operator
+status: ready
+schema_version: 2
+---
+
+# ANSWER-{n}: ответ Оператора
+
+## Ответы
+
+Расширение зон разрешено: {paths}
 """
 
 
@@ -110,6 +157,26 @@ class ZonesGateSandbox(TmpRootTest):
         common_zones_patcher.start()
         self.addCleanup(common_zones_patcher.stop)
 
+        # AC-3: мандат Оператора живёт в ANSWER-n.md, обнаруживаемых
+        # перебором `gitcmd.ls_tree_files` (тот же узел, что уже несёт
+        # `orchestrator/fsm.py::_answer_file_count`) — `fake_git` в
+        # `advance_with_diff_files` не отвечает на подкоманду `ls-tree`
+        # содержательно (генерик-ветка отдаёт пустую строку), поэтому
+        # без прямого патча ЛЮБАЯ реализация, читающая список ANSWER-*.md
+        # тем же путём, что и существующий гейт возврата из эскалации,
+        # видела бы ноль файлов и не нашла бы мандат никогда — тест AC-3
+        # был бы недостижимо красным даже при верной реализации. Патч —
+        # тот же приём, что `tests/test_answer_gate.py` (`disk_backed_show`/
+        # `disk_backed_ls_tree_files` поверх `gitcmd.show`/`ls_tree_files`
+        # напрямую, в обход `gitcmd.git`).
+        show_patcher = mock.patch.object(gitcmd, "show", disk_backed_show)
+        show_patcher.start()
+        self.addCleanup(show_patcher.stop)
+        ls_patcher = mock.patch.object(gitcmd, "ls_tree_files",
+                                       disk_backed_ls_tree_files)
+        ls_patcher.start()
+        self.addCleanup(ls_patcher.stop)
+
     def task_row(self):
         return store.db().execute("SELECT * FROM tasks WHERE id=?",
                                   (self.TASK,)).fetchone()
@@ -130,12 +197,39 @@ class ZonesGateSandbox(TmpRootTest):
         (self.tdir / "PLAN.md").write_text(
             PLAN_READY.format(task=self.TASK), encoding="utf-8")
 
+    def write_plan_with_zones_extension(
+            self, paths: str, justification: str = "Обоснование расширения зон.") -> None:
+        """PLAN.md с разделом `## Расширение зон` (ANSWER-1.md, п.1):
+        строка `Пути: <paths>` (через запятую, как `zones:` части 1) и
+        свободный текст обоснования ниже."""
+        self.tdir.mkdir(parents=True, exist_ok=True)
+        (self.tdir / "PLAN.md").write_text(
+            PLAN_WITH_ZONES_EXTENSION.format(
+                task=self.TASK, paths=paths, justification=justification),
+            encoding="utf-8")
+
+    def write_answer_mandate(self, n: int, paths: str) -> None:
+        """ANSWER-{n}.md с маркером `Расширение зон разрешено: <paths>`
+        (ANSWER-1.md, п.2) — единственная строка, которую код обязан
+        разобрать по префиксу; свободный текст ANSWER не анализируется."""
+        self.tdir.mkdir(parents=True, exist_ok=True)
+        (self.tdir / f"ANSWER-{n}.md").write_text(
+            ANSWER_WITH_ZONES_MANDATE.format(task=self.TASK, n=n, paths=paths),
+            encoding="utf-8")
+
+    def zones_extension(self):
+        """Значение колонки `tasks.zones_extension` (ANSWER-1.md, п.3) —
+        `sqlite3.Row` кидает `IndexError` на отсутствующей колонке, что
+        ДО реализации этой задачи корректно (колонку заводит миграция
+        задачи, тем же приёмом, что и `zones` части 1)."""
+        return self.task_row()["zones_extension"]
+
     def _set_state(self, state: str) -> None:
         conn = store.db()
         conn.execute("UPDATE tasks SET state=? WHERE id=?", (state, self.TASK))
         conn.commit()
 
-    def advance_with_diff_files(self, files: list) -> str:
+    def advance_with_diff_files(self, files: list, write_plan: bool = True) -> str:
         """Прогон `advance` из `in_dev` с диффом ветки, трогающим ровно
         `files`; ветка не отстала от main (`commits_behind` = 0) —
         подтяжка не звонится. `git_stub` отвечает и на построчный
@@ -146,8 +240,14 @@ class ZonesGateSandbox(TmpRootTest):
         используется гейтом ёмкости на этом же переходе) синтетическим
         содержимым с теми же файлами: какой из двух способов получения
         списка файлов выберет реализация зон, заранее не известно, а
-        оба уже используются существующим кодом того же перехода."""
-        self.write_plan_ready()
+        оба уже используются существующим кодом того же перехода.
+
+        `write_plan=False` (AC-3) — PLAN.md уже написан вызывающим кодом
+        (`write_plan_with_zones_extension`) до этого вызова; писать поверх
+        него стандартный PLAN_READY стёрло бы раздел «## Расширение
+        зон»."""
+        if write_plan:
+            self.write_plan_ready()
         self._set_state("in_dev")
         full_diff = "".join(_diff_git_header(f) for f in files)
 
