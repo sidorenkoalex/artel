@@ -20,7 +20,9 @@ spent_estimate_usd не пересчитываются задним числом
 `test_ac6_calibration_reports_divergence_by_role.py`: `spend.charge_step`
 журналирует его, когда `cost` несёт непустой `tokens_by_type`.
 
-Красен до реализации (оба теста, по разным причинам):
+Красен до реализации: ни `partial_cost_usd`, ни `charge_step` ещё не
+знают про словарь-разбивку токенов по видам (детали по каждому тесту
+ниже — оба теста, по разным причинам).
 - Первый тест зовёт `spend.charge_missing_result` со словарём-разбивкой
   на месте `partial_tokens` (тот же интерфейс, что AC-2/AC-3/AC-5) —
   сегодняшняя `partial_cost_usd` делает `partial_tokens * effective`
