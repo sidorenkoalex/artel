@@ -113,6 +113,21 @@ class FakeRun:
     пришпилить: холостой шаг состояние не двигает, поэтому цикл без рабочего
     `AUTO_MAX_STEPS` крутился бы вечно, и тест лимита не падал бы, а висел —
     в CI это шесть часов молчания вместо красного прогона.
+
+    Журналирует `agent run finished` под именем роли, активной на момент
+    вызова (SPEC «регрессия №13» 01M1RHFRQ2C0P4A57XJJ1WZV8N) — тем же
+    action/actor, что и настоящий `orchestrator/runner.py::_cmd_run`
+    (успешное завершение шага, `rc=0`): гейт возврата в состояние роли
+    (`orchestrator/auto.py::_role_step_since_state_entry`) ищет именно эту
+    запись, и без неё холостые шаги этого фейка выглядели бы для гейта так,
+    будто роль никогда не отрабатывала. Только если элемент сценария САМ
+    ещё не журналировал такую запись (`agent_step` в `tasks/
+    01M1RHFRQ2C0P4A57XJJ1WZV8N/acceptance_tests/_sandbox.py` делает это
+    сам, под ролью, прочитанной ДО своего же эффекта, — второй, наш,
+    журнал задвоил бы запись). Роль здесь тоже читается ДО эффекта
+    сценария, не после: эффект может сам сменить состояние задачи
+    (например, эскалировать её) — запись обязана называть роль ШАГА,
+    который «только что отработал».
     """
 
     def __init__(self):
@@ -129,8 +144,16 @@ class FakeRun:
             raise AssertionError(
                 f"цикл не остановился: шагов больше {config.AUTO_MAX_STEPS}")
         self.calls.append(task_id)
+        conn = store.db()
+        role = runner.step_role(store.get_task(conn, task_id))
+        journaled_before = len(store.task_steps(conn, task_id))
         if self.script:
             self.script.pop(0)()
+        already = any(row["action"] == "agent run finished"
+                     for row in store.task_steps(conn, task_id)[journaled_before:])
+        if not already:
+            store.journal(conn, task_id, role, "agent run finished",
+                          "rc=0, тестовая заглушка цикла auto")
 
 
 class SpyCommand:

@@ -6,6 +6,7 @@ if/elif `orchestrator/fsm.py::_cmd_advance`, перенесённое без и�
 идущих через публичный `fsm.cmd_advance`.
 """
 import shutil
+from datetime import datetime
 
 from scripts import guard
 
@@ -647,6 +648,116 @@ def _zones_gate_refuses(conn, task_id: str, t, branch: str,
     return True
 
 
+# Именованная причина отказа (требование 4) — общий текст с
+# `orchestrator/auto.py::REWORK_REFUSAL_ACTION` (второй, независимый
+# рубеж того же класса регрессии).
+_REWORK_REFUSAL_ACTION = "переход отклонён: замечания ревью не отработаны"
+
+# Префикс сообщения автослияния «подтяжка main» на КОДОВОЙ ветке задачи
+# (`fsm._pull_main_or_escalate`/`fsm._auto_resolve_map_conflict`:
+# `f"{task_id}: подтяжка {source_branch}"`) — единственный вид коммита на
+# кодовой ветке, не являющийся работой developer'а (SPEC «Контекст»:
+# именно подтяжка была ЕДИНСТВЕННЫМ, что двигало кодовую ветку между
+# итерациями в реальном инциденте регрессии №12/№13) — гейт ниже обязан
+# его игнорировать, иначе рутинная подтяжка main маскировала бы
+# неотработанные замечания под настоящий шаг developer.
+_PULL_MAIN_COMMIT_INFIX = ": подтяжка "
+
+
+def _commit_iso_date(ref: str, *path: str):
+    """Дата последнего коммита `ref` (committer, `%cI`), затрагивающего
+    `path` (без него — голова `ref`) — `datetime` с часовым поясом; `None`
+    — git не ответил, коммитов нет, либо строка не разбирается как ISO8601
+    (лёгкие песочницы без настоящего git — `fake_git`/заглушки, тот же
+    вырожденный случай деградации, что и у `fsm._pull_main_or_escalate`)."""
+    args = ["log", "-1", "--format=%cI", ref]
+    if path:
+        args += ["--", *path]
+    res = gitcmd.git(*args)
+    if res is None or res.returncode != 0:
+        return None
+    line = res.stdout.strip()
+    if not line:
+        return None
+    try:
+        return datetime.fromisoformat(line)
+    except ValueError:
+        return None
+
+
+def _latest_developer_commit_iso_date(branch: str, task_id: str):
+    """Дата последнего коммита КОДОВОЙ ветки `branch`, который НЕ является
+    автослиянием «подтяжка main» (`_PULL_MAIN_COMMIT_INFIX`) — иначе гейт
+    принял бы рутинную подтяжку main за настоящий шаг developer (см.
+    докстринг `_PULL_MAIN_COMMIT_INFIX`). `None` — git не ответил, либо на
+    ветке нет ни одного коммита, кроме подтяжек."""
+    res = gitcmd.git("log", "--format=%cI\x1f%s", branch)
+    if res is None or res.returncode != 0:
+        return None
+    prefix = f"{task_id}{_PULL_MAIN_COMMIT_INFIX}"
+    for line in res.stdout.splitlines():
+        ts, sep, subject = line.partition("\x1f")
+        if not sep or subject.startswith(prefix):
+            continue
+        try:
+            return datetime.fromisoformat(ts)
+        except ValueError:
+            continue
+    return None
+
+
+def _review_rework_gate_refuses(conn, task_id: str, t, branch: str) -> bool:
+    """Гейт `in_dev -> review` (SPEC «регрессия №13» 01M1RHFRQ2C0P4A57XJJ1WZV8N,
+    требование 3, AC-3/AC-4/AC-6/AC-7): REVIEW.md текущей итерации ещё
+    `changes_requested`, а кодовая ветка не получила ни одного коммита
+    developer'а ПОСЛЕ его коммита — переделка не отработана. Независимый
+    от `auto.py` рубеж (по образцу `_capacity_gate_refuses` выше): держит
+    и ручной `advance` Оператора, который журнальный гейт `auto.py` не
+    видит вовсе.
+
+    Сверка по ВРЕМЕНИ коммитов (`%cI`), не по sha и не по тексту:
+    REVIEW.md живёт в АРТЕФАКТНОЙ ветке пульта, код — в ОТДЕЛЬНОЙ кодовой
+    ветке (`artifact_source.resolve`, `foreign` всегда `True`), общего
+    родителя у них нет — единственный осмысленный признак «после» здесь
+    время, не sha.
+
+    Внешний (не self) target — гейт не проверяется: тот же довод, что
+    `_capacity_gate_refuses`/`_zones_gate_refuses` выше — `git log`/`show`
+    в `config.ROOT` не видит код внешнего target.
+
+    Git не ответил, дата не разобрана, или REVIEW.md вовсе не существует
+    (легковесные песочницы без настоящего git — `fake_git`/`disk_backed_
+    show`, первый вход задачи в `in_dev` до первого ревью) — гейт НЕ
+    отказывает: тот же вырожденный случай деградации, что у
+    `fsm._pull_main_or_escalate` (`git не ответил -> "fresh"`) —
+    не найденный сигнал не значит «код не менялся», значит «сверить
+    нечем».
+    """
+    if store.task_target(conn, task_id) != config.DEFAULT_TARGET:
+        return False
+    review_text, _ = gitcmd.show(branch, f"tasks/{task_id}/REVIEW.md")
+    if review_text is None:
+        return False
+    meta = yamlmini.frontmatter(review_text) or {}
+    if meta.get("status") != "changes_requested":
+        return False
+    review_ts = _commit_iso_date(branch, f"tasks/{task_id}/REVIEW.md")
+    if review_ts is None:
+        return False
+    code_ts = _latest_developer_commit_iso_date(t["branch"], task_id)
+    if code_ts is None:
+        return False
+    if code_ts > review_ts:
+        return False
+    detail = (f"замечания ревью не отработаны: нет шага developer после "
+              f"итерации {meta.get('iteration', '—')}")
+    store.journal(conn, task_id, "fsm", _REWORK_REFUSAL_ACTION, detail)
+    print(f"[{task_id}] переход отклонён: {detail}")
+    print(f"  дальше: почини код (не спорь с ревью втихую) и повтори "
+          f"artel.py advance {task_id}")
+    return True
+
+
 def in_dev(conn, task_id: str, t, tdir, target: str, state: str) -> bool:
     # разработчик закончил: PLAN ready и ветка запушена -> в ревью
     #
@@ -765,6 +876,8 @@ def in_dev(conn, task_id: str, t, tdir, target: str, state: str) -> bool:
         if _capacity_gate_refuses(conn, task_id, t, state):
             return False
         if _zones_gate_refuses(conn, task_id, t, branch, plan_text):
+            return False
+        if _review_rework_gate_refuses(conn, task_id, t, branch):
             return False
         store.set_state(conn, task_id, "review", "fsm",
                         expected_state=state, detail="MR готов — прогон ревьювера")
