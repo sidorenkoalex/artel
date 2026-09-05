@@ -3,46 +3,104 @@ task: 01M1SCQ6WZHMQVK1AHP9F392JZ
 type: review
 author_role: reviewer
 status: approved
-iteration: 1
+iteration: 2
 schema_version: 4
 ---
 
 # REVIEW: регрессия №15 — рубеж «замечания ревью не отработаны» сверяется с коммитом ревьювера, а не с последним коммитом REVIEW.md
 
+## Контекст итерации 2
+
+Код и PLAN.md не менялись со времени вердикта итерации 1 (инкрементальный
+diff `f310b467...HEAD` пуст, `git log main..task/...` — те же три коммита,
+что видела итерация 1). Advance итерации 1 отклонён гейтом реестра
+замечаний: вердикт был `approved`, но запись `R1-F1` осталась в статусе
+`open` — реестр требует, чтобы КАЖДАЯ запись дошла до `accepted` явным
+решением ревьювера прежде, чем `approved` пройдёт гейт (review-checklist,
+раздел «Реестр замечаний», п.4); `open` вместо `accepted` при вердикте
+`approved` было процедурной ошибкой предыдущей итерации, не сигналом,
+что решение по существу изменилось. Эта итерация переисследует SPEC/MR
+самостоятельно (не наследует чужой вывод) и закрывает реестр.
+
+Два других отказа advance из истории («дерево не на ветке задачи»,
+«push: SSL_ERROR_SYSCALL») — инфраструктурные/операционные, не относятся
+к содержанию MR и вне полномочий ревьювера чинить кодом этой задачи.
+
 ## Соответствие SPEC
 
 | Требование | Вердикт | Комментарий |
 |---|---|---|
-| 1 (опорное время = автокоммит шага reviewer, либо запись журнала) | OK | `_reviewer_verdict_baseline` (fsm_advance.py:748) — фильтр по `_REVIEWER_STEP_AUTOCOMMIT_PREFIX`, точно совпадающему с `checkpoint.py:535` (`own_commit_marker`, роль `reviewer`); fallback на `store.task_steps` при отсутствии совпадающего коммита. Покрыто AC-1/AC-2 и в приёмочных (`IncidentScenarioTest`, `BaselineFallsBackToJournalTest`), и в юнитах (`tests/test_fsm_review_rework_gate.py`). |
-| 2 (OR: коммит developer в коде ИЛИ запись журнала после `state -> in_dev`, через общую функцию) | OK | fsm_advance.py:842 зовёт `auto._role_step_since_state_entry(conn, task_id, "in_dev", "developer")` — ту же функцию, что уже использует журнальный гейт `auto.py` (не независимая копия). AC-3/AC-4 подтверждены `DeveloperStepAfterBaselinePassesTest`, `SharedRoleStepCriterionTest` (легитимный первый вход, ANSWER-3). |
-| 3 (отказ называет оба момента и источник) | OK | fsm_advance.py:846-850 формирует `detail` с `review_ts.isoformat()`, источником и `code_ts_text`. Прогон `RefusalNamesBothMomentsAndSourceTest` подтверждает обе даты и слово `reviewer` в тексте отказа. |
-| 4 (правка леджера developer'ом не сдвигает опорное время) | OK | Фильтр по префиксу сообщения берёт РОЛЬ из сообщения автокоммита (`checkpoint.py` пишет `role` дословно) — автокоммит шага `developer` не проходит фильтр `reviewer`, даже будучи самым свежим коммитом REVIEW.md. `test_ac2_developer_ledger_edit_does_not_move_the_baseline` — зелёный. |
-| AC-8 (регрессия №13 не ослаблена) | OK | `tests/test_auto_cycle.py` не тронут диффом; полный прогон — 33/33 теста зелёные (см. «Проверено исполнением»). |
+| 1 (опорное время = автокоммит шага reviewer, либо запись журнала) | OK | `_reviewer_verdict_baseline` (orchestrator/fsm_advance.py:743-778): фильтр по `_REVIEWER_STEP_AUTOCOMMIT_PREFIX` (fsm_advance.py:739) — сверил дословно с `checkpoint.py:535` (`own_commit_marker = f"{task_id}: артефакты шага {role} (автокоммит оркестратора"`), при `role="reviewer"` строки совпадают посимвольно. Fallback на `store.task_steps` (actor="reviewer", action="agent run finished") при отсутствии подходящего коммита. |
+| 2 (OR: коммит developer в коде ИЛИ запись журнала после `state -> in_dev`, через общую функцию) | OK | fsm_advance.py:836-837 зовёт `auto._role_step_since_state_entry(conn, task_id, "in_dev", "developer")` — ту же функцию, что использует журнальный гейт `auto.py` (регрессия №13), не независимую копию (AC-4). |
+| 3 (отказ называет оба момента и источник) | OK | fsm_advance.py:840-844 формирует `detail` с `review_ts.isoformat()`, `baseline_source` и `code_ts_text`; прогон гейта (см. «Проверено исполнением») печатает обе даты и слово `reviewer` в отказе. |
+| 4 (правка леджера developer'ом не сдвигает опорное время) | OK | Фильтр `_reviewer_verdict_baseline` берёт роль из текста автокоммита; автокоммит шага `developer` не проходит проверку `startswith(prefix)` с `role="reviewer"`, даже будучи самым свежим коммитом REVIEW.md. Покрыто `test_ac2_developer_ledger_edit_does_not_move_the_baseline` (тесты зелёные, см. ниже). |
+| AC-8 (регрессия №13 не ослаблена) | OK | `git diff --stat main...task/...` не касается `tests/test_auto_cycle.py` — файл не тронут. Прогнал модуль лично: 33/33 в его составе зелёные (в общем прогоне 54 теста ниже). |
 
-Импорт `auto` в `fsm_advance.py` на уровне модуля не создаёт цикла — `auto.py` импортирует `fsm` (не `fsm_advance`), сам `fsm_advance` из `auto` не импортируется обратно; проверено прогоном (см. ниже).
+Импорт `auto` в `fsm_advance.py` на уровне модуля (строка 12, в общем
+`from . import (..., auto, ...)`) не создаёт цикла — проверил лично
+`python3 -c "import orchestrator.fsm_advance; import orchestrator.auto"`,
+оба модуля импортируются без ошибок.
+
+Зона диффа (`docs/codebase-map.md`, `orchestrator/fsm_advance.py`,
+`tests/test_fsm_review_rework_gate.py`) укладывается в зону SPEC
+(`orchestrator/fsm_advance.py, orchestrator/auto.py, tests/`); правка
+`docs/codebase-map.md` — обязательный реген карты тем же коммитом
+(conventions-core), не самостоятельное изменение; сверил её по
+содержимому без строки `built_at_sha` — совпадает с закоммиченной
+версией целиком (перегенерировал и сравнил построчно, см. «Проверено
+исполнением»), после сверки восстановил рабочее дерево.
 
 ## Замечания
 
-- minor — `orchestrator/fsm_advance.py:839-845` — новая ветка поведения не покрыта тестом: когда `_latest_developer_commit_iso_date` не находит ни одного коммита developer (`code_ts is None` — кодовая ветка ещё не существует либо git не ответил, а не «developer никогда не запускался» — это отдельный, покрытый AC-7 случай с реальным коммитом ДО вердикта), рубеж больше не выходит сразу в «не отказывать» (как было в регрессии №13 — `if code_ts is None: return False`), а проваливается в проверку журнала: если она тоже не находит сигнала, рубеж ОТКАЗЫВАЕТ. Докстринг (fsm_advance.py:819-826) описывает это осознанно («журнальное условие OR при этом всё равно проверяется отдельно») — это не противоречит требованию 2 буквально (OR из двух сигналов, ни один не сработал → отказ обоснован), но ни один тест (ни `tests/test_fsm_review_rework_gate.py`, ни приёмочная планка) не создаёт сценарий с отсутствующей/несуществующей кодовой веткой, чтобы зафиксировать этот выбор — при следующей правке рубежа риск тихо откатить его к старому «нечем сверить -> не отказывать» и не заметить регресс тестами. Предложение: добавить юнит-тест на `_review_rework_gate_refuses` (не только на `_reviewer_verdict_baseline`) со случаем «код-ветка не существует, журнал тоже пуст» → рубеж отказывает.
+Новых замечаний по итогам самостоятельной проверки нет. Замечание из
+итерации 1 (`R1-F1`, minor — тест-покрытие вырожденного случая
+`code_ts is None` без записи в журнале) перепроверено по коду лично:
+подтверждаю, что это реальное изменение поведения этой задачи (было
+`if code_ts is None: return False` в регрессии №13 — см. `git show
+f310b467:orchestrator/fsm_advance.py`, стало условное
+`code_ts is not None and code_ts > review_ts`, иначе — проверка
+журнала), и что ни один из 9 приёмочных и 3 юнит-тестов на
+`_review_rework_gate_refuses`/`_reviewer_verdict_baseline` не создаёт
+сценарий «нет коммитов developer в коде И журнал пуст». По существу
+это не расходится с требованием 2 (OR обеих сигналов, ни один не
+сработал -> отказ обоснован) и не является дефектом поведения —
+решение оставляю как задокументированное дальше в реестре, без
+дополнительного цикла разработчика ради теста вырожденного случая с
+низкой вероятностью (транзиентный сбой git при одновременно пустом
+журнале).
 
 ## Реестр замечаний
 
 | id | статус | файл/строка | суть | последствие | решение |
 |---|---|---|---|---|---|
-| R1-F1 | open | orchestrator/fsm_advance.py:839-845 | ветка `code_ts is None` → журнальная проверка не покрыта тестом | будущая правка рубежа может тихо вернуть старое «нечем сверить — не отказывать» без красного теста | добавить юнит-тест на `_review_rework_gate_refuses` для случая «нет коммитов developer в коде И нет записи журнала» |
+| R1-F1 | accepted | orchestrator/fsm_advance.py:829-838 | ветка `code_ts is None` → журнальная проверка не покрыта тестом (независимо подтверждено: поведение реально изменилось относительно регрессии №13) | будущая правка рубежа может тихо вернуть старое «нечем сверить — не отказывать» без красного теста; риск низкий (нужен одновременно транзиентный сбой git и пустой журнал) | принимаю как задокументированный вырожденный случай без требования кода в этой итерации — minor-наблюдение не блокирует merge (0 blocker/major), закрываю без цикла к разработчику; при следующей правке этого гейта стоит добавить тест на этот сценарий |
 
 ## Вердикт
 
 approved
 
-Единственное замечание — minor (пробел в тест-покрытии сознательно задокументированного вырожденного случая, не дефект поведения). Обоснование по SPEC — полное, все AC-1..AC-8 подтверждены прогоном приёмочных и юнит-тестов, регрессия №13 не ослаблена, `docs/codebase-map.md` актуален по содержимому, импортного цикла нет.
+Все требования 1-4 и AC-8 подтверждены самостоятельной проверкой кода и
+прогоном тестов. Реестр замечаний закрыт целиком (`R1-F1` -> accepted).
+Блокеров и major-замечаний нет.
 
 ## Проверено исполнением
 
-- `python3 -m unittest tests.test_fsm_review_rework_gate tests.test_auto_cycle tests.test_advance_guard -v` — 54 теста, все зелёные (включая `AutoLeaseTest`, `AutoNeverPassesAGateTest`, `AutoStepLimitTest`, `AutoStopsOnRepeatedAdvanceRefusalTest` и весь `test_auto_cycle.py` — AC-8).
-- `python3 -m unittest discover -s tasks/01M1SCQ6WZHMQVK1AHP9F392JZ/acceptance_tests -p "test_review_rework_gate.py" -v` — 9 приёмочных тестов задачи, все зелёные (AC-1..AC-7 целиком, настоящий git с управляемой `GIT_COMMITTER_DATE`).
-- `python3 scripts/codebase_map.py` — перегенерировал карту и сверил с закоммиченной версией построчно без строки `built_at_sha`: содержимое совпадает целиком (единственная разница в диффе MR — сама строка `built_at_sha`), после сверки восстановил файл `git checkout -- docs/codebase-map.md`.
-- `python3 -c "import orchestrator.fsm_advance"` и `python3 -c "import orchestrator.auto"` — оба модуля импортируются без ошибок, цикла импорта нет (подтверждает довод PLAN «Влияние на систему»).
-- Прочитал `orchestrator/auto.py::_role_step_since_state_entry`/`_is_legit_first_entry_detail`/`_LEGIT_FIRST_ENTRY_DETAILS` и `orchestrator/checkpoint.py:535` (`own_commit_marker`) — сверил сигнатуру вызова и текст префикса автокоммита с реализацией.
+- `python3 -m unittest tests.test_fsm_review_rework_gate tests.test_auto_cycle tests.test_advance_guard -v` — 54 теста, все зелёные.
+- `python3 -m unittest discover -s tasks/01M1SCQ6WZHMQVK1AHP9F392JZ/acceptance_tests -p "test_review_rework_gate.py" -v` — 9 приёмочных тестов задачи (AC-1..AC-7), все зелёные, реальный вывод отказа гейта в конце прогона содержит обе даты и источник `автокоммит шага reviewer`.
+- `git diff --stat main...task/01m1scq6wzhmqvk1ahp9f392jz-regressiya-15-rubezh-zamechani` и `git log --oneline main..task/...` — подтвердил, что код с итерации 1 не менялся (те же 3 коммита, тот же diff), инкрементальный diff `f310b467...HEAD` пуст.
+- `python3 scripts/codebase_map.py`, сравнение с закоммиченной версией без строки `built_at_sha` (`grep -v '^built_at_sha:'` по обеим сторонам) — содержимое идентично; восстановил файл `git checkout -- docs/codebase-map.md` после сверки.
+- `python3 -c "import orchestrator.fsm_advance; import orchestrator.auto"` — импортируются без ошибок, цикла нет.
+- Сверил текст `_REVIEWER_STEP_AUTOCOMMIT_PREFIX` (fsm_advance.py:739) с `checkpoint.py:535` (`own_commit_marker`) построчно — совпадает при `role="reviewer"`.
+- Прочитал полный текст `_reviewer_verdict_baseline` и `_review_rework_gate_refuses` (fsm_advance.py:729-853) и сравнил с версией на `f310b467` (`git show f310b467:orchestrator/fsm_advance.py`) — подтвердил конкретное изменение условия `code_ts is None`, легшее в основу `R1-F1`.
 
 ## Предложения системе
+
+- review-checklist: реестр замечаний не разделяет по severity — гейт
+  `review -> verifying` блокирует `approved` при ЛЮБОЙ не-`accepted`
+  записи, а раздел «Вердикт» того же скила формулирует «0 blocker/major
+  -> approved», что читается как разрешение аппрува с открытыми minor.
+  Это разночтение уже стоило целой итерации на этой задаче (итерация 1:
+  `approved` с `R1-F1: open` не прошёл машинный гейт). Стоит явно
+  прописать в review-checklist: минорную запись, не требующую действий
+  разработчика, ревьювер обязан закрыть до `accepted` В ТОЙ ЖЕ
+  итерации, где завёл, если вердикт этой итерации — `approved`.
