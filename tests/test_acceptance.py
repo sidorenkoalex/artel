@@ -74,5 +74,40 @@ class RunFullSuiteTest(unittest.TestCase):
         self.assertIn("превысил", tail)
 
 
+class MaterializeFromBranchGitFailureTest(unittest.TestCase):
+    """R2-F2 (REVIEW.md 01M1RNZ6V7TTTTYAHBMF8JBQQS итерации 2): фикс R1-F1
+    (`orchestrator/acceptance.py::materialize_from_branch`) до сих пор был
+    подтверждён только ручным репро в тексте REVIEW.md, не персистентным
+    тестом — по образцу
+    `tests/test_artifact_materialization.py::MaterializeTaskDirTest::
+    test_no_branch_returns_empty_sha_and_leaves_disk_untouched`, но для
+    `acceptance.materialize_from_branch`.
+    """
+
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.code_dir = Path(tmp.name)
+
+    def test_none_from_ls_tree_files_leaves_existing_plank_untouched(self):
+        """Ловит мутацию: `ls_tree_files(...) or []` смешивает `None`
+        (git не ответил) с легитимно пустой веткой (`[]`) — прунинг ниже
+        стирал бы уже материализованную планку транзиентным сбоем git."""
+        task_id = "01UTMATERIALIZEGITFAIL"
+        tests_dir = self.code_dir / "tasks" / task_id / "acceptance_tests"
+        tests_dir.mkdir(parents=True)
+        existing = tests_dir / "test_ac.py"
+        existing.write_text("реальный тест\n", encoding="utf-8")
+
+        with mock.patch.object(acceptance.gitcmd, "ls_tree_files",
+                               return_value=None):
+            tdir = acceptance.materialize_from_branch(
+                task_id, "artifact/does-not-matter", self.code_dir)
+
+        self.assertEqual(tdir, self.code_dir / "tasks" / task_id)
+        self.assertEqual(existing.read_text(encoding="utf-8"),
+                         "реальный тест\n")
+
+
 if __name__ == "__main__":
     unittest.main()

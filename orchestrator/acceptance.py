@@ -9,7 +9,6 @@
 (его докстринг) — прогон и сбор тестов поэтому здесь, не там.
 """
 import subprocess
-import tempfile
 from pathlib import Path
 
 from scripts import guard
@@ -18,66 +17,109 @@ from . import config, gitcmd
 
 
 def run(tdir: Path, code_root: Path | None = None) -> tuple[bool, str]:
-    """(зелёно, хвост вывода) — детерминированный прогон unittest'ом.
-
-    `code_root` — рабочий каталог прогона, откуда планка импортирует
-    пакет оркестратора: для self-target это worktree КОДОВОЙ ВЕТКИ
-    задачи, не `config.ROOT` (главная копия стоит на пине запущенной
-    версии — старом коде; планка, материализованная из артефактной
-    ветки во временный каталог, через `sys.path.insert(parents[3])`
-    попадает в случайный путь и импортирует пакет из cwd; hotfix
-    аварийного режима 05.09, регрессия №14 флоу A7: тесты hotfix зон
-    01M1RR1PZC красные из ROOT и зелёные из worktree). `None` — прежнее
-    поведение (`config.ROOT`): внешний target, песочницы без worktree.
+    """(зелёно, хвост вывода) — детерминированный прогон unittest'ом с
+    `code_root`, равным рабочему каталогу кода задачи (SPEC
+    01M1RNZ6V7TTTTYAHBMF8JBQQS, требование 2, AC-2/AC-3; контракт имени
+    параметра — hotfix 88b38022, ADR-0013): планка, резолвящая
+    `orchestrator/` и через `__file__` (материализация
+    `materialize_from_branch` кладёт её по штатному пути
+    `tasks/<id>/acceptance_tests/` ИМЕННО этого каталога), и через
+    неявную вставку `cwd` в `sys.path`, которую делает `python3 -m
+    unittest discover`, обязаны видеть один и тот же код. `code_root=None`
+    (вызовы вне зоны этой задачи, например `orchestrator/amend.py`) —
+    прежнее поведение, `config.ROOT`.
 
     Каталога нет (`skip_tests` либо задача старше T023) — прогонять
     нечего, переход не блокируется: тот же вырожденный случай, что
     и у fixation.read() без фиксации.
+
+    Отказ (красная планка) называет каталог планки и `cwd` прогона одной
+    строкой в начале хвоста вывода (SPEC требование 4, AC-6) — иначе
+    разбор класса дефекта регрессии №14 снова требовал бы ручной раскопки
+    кода вместо чтения журнала.
     """
     tests_dir = tdir / "acceptance_tests"
     if not tests_dir.is_dir():
         return True, "acceptance_tests/ нет — приёмочные тесты не заведены"
+    run_cwd = code_root if code_root is not None else config.ROOT
+    location_note = f"планка: {tests_dir}, cwd: {run_cwd}"
     try:
         res = subprocess.run(
             ["python3", "-m", "unittest", "discover", "-s", str(tests_dir)],
-            cwd=code_root or config.ROOT, capture_output=True, text=True,
+            cwd=run_cwd, capture_output=True, text=True,
             timeout=config.ACCEPTANCE_TIMEOUT_SEC)
     except subprocess.TimeoutExpired as exc:
         tail = ((exc.stdout or "") + (exc.stderr or ""))[-2000:]
-        return False, (f"прогон превысил {config.ACCEPTANCE_TIMEOUT_SEC}с "
-                       f"— завис или ждёт сетевой ответ\n{tail}")
+        return False, (f"{location_note}\nпрогон превысил "
+                       f"{config.ACCEPTANCE_TIMEOUT_SEC}с — завис или ждёт "
+                       f"сетевой ответ\n{tail}")
     tail = (res.stdout + res.stderr)[-2000:]
-    return res.returncode == 0, tail
+    return res.returncode == 0, f"{location_note}\n{tail}"
 
 
-def materialize_from_branch(task_id: str, branch: str) -> Path:
-    """Временный каталог с `tasks/<id>/acceptance_tests/`, вычитанным из
-    ВЕТКИ (SPEC T094, требование 10, реестр PLAN.md пункт 2 — «лок
-    acceptance_tests»): внешний target не несёт живого worktree с этим
-    каталогом на диске — `acceptance_tests/` живёт только в артефактной
-    ветке пульта (`orchestrator/fsm_advance.py::review`/`verifying`
-    зовут эту функцию перед `run()`/`summary()`/`guard.
-    scan_acceptance_tests`, тем же приёмом, что self читает с
-    worktree). Вызывающий код обязан убрать каталог сам (`shutil.
-    rmtree`) — эта функция только материализует, не чистит за собой.
+def materialize_from_branch(task_id: str, branch: str, code_dir: Path) -> Path:
+    """`tasks/<id>/acceptance_tests/` каталога `code_dir` (рабочего
+    каталога КОДА задачи — worktree self-target либо workspace внешнего
+    target, тот же узел выбора, что `orchestrator/runner.py::role_cwd`),
+    материализованный НА МЕСТЕ из ГОЛОВЫ ветки `branch` (SPEC
+    01M1RNZ6V7TTTTYAHBMF8JBQQS, требование 1, AC-1) — тот же приём, что
+    `artifact_branch.materialize_task_dir` уже применяет к `tasks/<id>/`
+    целиком: файл на диске, отсутствующий в ветке (устаревшая копия
+    предыдущего прогона — например, от ручного протокола Оператора на
+    время бага), убирается, не просто дополняется; поверх временного
+    каталога (`tempfile.mkdtemp`, регрессия №14) — планка, резолвящая
+    `orchestrator/` от `__file__`, промахивалась мимо кода ветки задачи
+    что через `__file__` (вложенность временного каталога не совпадала
+    со штатным `tasks/<id>/acceptance_tests/`), что через `cwd`.
+
+    Источник истины остаётся АРТЕФАКТНАЯ ветка задачи (`branch`, решение
+    регрессии №12, SPEC «Не входит») — читается всегда через git
+    (`gitcmd.ls_tree_files`/`gitcmd.show`), не с диска `code_dir`; меняется
+    только каталог, в который планка записывается перед прогоном.
 
     Ветки нет, или в ней нет `acceptance_tests/` — валидный исход
-    (пустой каталог): `run()`/`summary()` уже умеют трактовать
-    отсутствие `acceptance_tests/` как «тесты не заведены», не отказ.
+    (каталог не создаётся/остаётся нетронутым): `run()`/`summary()` уже
+    умеют трактовать отсутствие `acceptance_tests/` как «тесты не
+    заведены», не отказ.
+
+    Git не ответил на `ls_tree_files` (`None`, отдельно от легитимно
+    пустой ветки — `[]`, REVIEW.md итерация 1, R1-F1) — тихая деградация,
+    тем же приёмом, что `artifact_branch.materialize_task_dir`: диск не
+    трогается вовсе, уже материализованная планка остаётся как есть.
+    Иначе транзиентный сбой git на повторной материализации (второй
+    проход review, повторная подтяжка main) стирал бы прунингом ниже
+    уже реально лежащие на диске файлы планки, и `run()` красил бы
+    задачу диагнозом «acceptance_tests красные» вместо честного «git не
+    ответил, планка не проверена».
+
+    Возврат — `code_dir / "tasks" / task_id` (совместим с `run()`,
+    ожидающим `tdir / "acceptance_tests"`).
     """
-    tmp_root = Path(tempfile.mkdtemp(prefix=f"artel-acceptance-{task_id}-"))
+    tdir = code_dir / "tasks" / task_id
+    tests_dir = tdir / "acceptance_tests"
     prefix = f"tasks/{task_id}/acceptance_tests/"
-    paths = gitcmd.ls_tree_files(branch, f"tasks/{task_id}/acceptance_tests") or []
+    paths = gitcmd.ls_tree_files(branch, f"tasks/{task_id}/acceptance_tests")
+    if paths is None:
+        return tdir
+    wanted: dict[str, str] = {}
     for rel in paths:
         if not rel.startswith(prefix):
             continue
         text, _ = gitcmd.show(branch, rel)
-        if text is None:
-            continue
-        dest = tmp_root / "acceptance_tests" / rel[len(prefix):]
+        if text is not None:
+            wanted[rel[len(prefix):]] = text
+    if tests_dir.is_dir():
+        for path in sorted(tests_dir.rglob("*")):
+            if not path.is_file():
+                continue
+            rel = path.relative_to(tests_dir).as_posix()
+            if rel not in wanted:
+                path.unlink()
+    for rel, text in wanted.items():
+        dest = tests_dir / rel
         dest.parent.mkdir(parents=True, exist_ok=True)
         dest.write_text(text, encoding="utf-8")
-    return tmp_root
+    return tdir
 
 
 def run_full_suite(root: Path) -> tuple[bool, str]:
