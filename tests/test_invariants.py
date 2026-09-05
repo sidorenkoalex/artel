@@ -1600,7 +1600,8 @@ class StdlibOnlyImportsInvariantTest(unittest.TestCase):
     `scripts/`, `tests/` не несут импорт модуля вне
     `sys.stdlib_module_names`, вне пакетов репозитория (`orchestrator`,
     `scripts`, `tests`) и вне исключений манифеста
-    (`orchestrator.stack.THIRD_PARTY_EXCEPTIONS`, пуст на сегодня).
+    (`orchestrator.stack.THIRD_PARTY_EXCEPTIONS` — `pytest`/
+    `pytest_timeout`/`xdist`, SPEC 01M1REVEZ1HESMJ7AFD5A9MEJ8).
 
     Только файлы верхнего уровня каждого каталога (`glob("*.py")`, не
     `rglob`) — у orchestrator/scripts/tests сегодня нет вложенных
