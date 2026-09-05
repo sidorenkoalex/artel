@@ -3,7 +3,7 @@ task: TASK_ID
 type: plan
 author_role: developer
 status: draft        # draft | ready | approved
-schema_version: 3    # версия формата артефакта, см. scripts/guard.py
+schema_version: 4    # версия формата артефакта, см. scripts/guard.py
 ---
 
 # PLAN: <название задачи>

@@ -12,7 +12,7 @@ A7, Р4-переигровки, sled). Промпт: `docs/audits/roadmap-audit-
 `claude -p --setting-sources user --strict-mcp-config` в пустом каталоге,
 пользовательские настройки `~/.claude/*` (как источник, который роли наследуют),
 документация GitHub (draft PR, rulesets/branch protection) и GitLab (Draft MR),
-доступность `github.com/sidorenkoalex/sled`, `.gitlab-ci.yml` проекта feedback.
+доступность `github.com/sidorenkoalex/sled`, `.gitlab-ci.yml` проекта corp-project.
 
 ---
 
@@ -240,7 +240,7 @@ go/no-go (он и так после него). Открытый вопрос (§
 
 ### 2.9 D38/D05 — поллинг основной во всех эпохах (противоположное: вебхуки на сервере)
 *Адвокат противоположного:* «Аргумент за поллинг — “входящей связности
-к ноутбуку нет”. Корп-сервер в той же сети, что scm.x5.ru; вебхук GitLab —
+к ноутбуку нет”. Корп-сервер в той же сети, что gitlab.corp.example; вебхук GitLab —
 одна настройка проекта; лаг 10 минут исчезает. Роадмап сам держит вебхук
 “опцией”.»
 *Вердикт:* не симметрично: «догон без потерь» обязателен при любом канале,
@@ -430,7 +430,7 @@ Postgres — по триггеру), п.15 (носитель угрозы), эт
   проектных `.claude/.mcp.json` не достигает роли — A-спайк §1.
 - У PAT GitLab нет скоупа «писать, но не мержить»; свойство — у защиты
   ветки — A-спайк §2.
-- Поллинг MR scm.x5.ru из корп-сети, `updated_after`, `sha` — A-спайк §3.
+- Поллинг MR gitlab.corp.example из корп-сети, `updated_after`, `sha` — A-спайк §3.
 - Стоимости задач Фазы 0 «$2.4–34.8 учтённые» — state.db (подтверждено:
   T007 2.40 … T011 34.77).
 - «merge без проверки CI держится глазами» — fsm.py: `git merge --no-ff`
@@ -448,7 +448,7 @@ Postgres — по триггеру), п.15 (носитель угрозы), эт
 | Draft-MR на GitLab: «Draft снимается … мержит человек кнопкой» | L401–411 | Верно: Draft блокирует merge во всех тирах; «Mark as ready» — любой с правом update MR (Developer+). |
 | «окружение роли определяет только пульт» при `--setting-sources user --strict-mcp-config` | L538–543 | **Ложно по факту.** Прогон в пустом каталоге: роль (1) получает правила из `~/.claude/CLAUDE.md` Оператора (kubectl read-only, состав команды с e-mail'ами коллег), (2) MCP — нет (strict работает), (3) получает инъекцию SessionStart-хука плагина brewcode. В `~/.claude.json` у Оператора 17 MCP-серверов, включая gitlab (merge/delete), postgres-prod (execute_sql), grafana; текущий runner.py запускает роли **без** `--strict-mcp-config` — серверы присутствуют в сессии (allowlist `Bash(git:*),Bash(python3:*)` их не разрешает, но инвентарь инструментов в контексте есть). |
 | `--bare` как более сильная изоляция | — | Существует: пропускает хуки, плагины, CLAUDE.md-обнаружение, keychain; **OAuth не читает** — только `ANTHROPIC_API_KEY`/apiKeyHelper. Конфликт с Р6. |
-| «контейнерный запуск ролей» (B3) при текущем способе запуска | L527–530, L820 | Сейчас роли — `subprocess.Popen(["claude","-p",…], cwd=ROOT)` на хосте с keychain-OAuth. Dockerfile: `node:20-slim` + git + python3 + `npm i -g @anthropic-ai/claude-code` **без пина версии** (A3 пин не применён к образу). В контейнере keychain нет → нужен `CLAUDE_CODE_OAUTH_TOKEN` (`claude setup-token`, «requires Claude subscription») или API-ключ — роадмап молчит. Тулчейна целевого (feedback — Python-монолит с БД; sled — неизвестно) в образе нет, а тесты «неотъемлемая работа разработчика» (L548–550). Поля «образ/тулчейн» в targets.yaml нет. Сетевой белый список в Dockerfile — api.anthropic.com, github.com; scm.x5.ru, pypi, npm не названы. |
+| «контейнерный запуск ролей» (B3) при текущем способе запуска | L527–530, L820 | Сейчас роли — `subprocess.Popen(["claude","-p",…], cwd=ROOT)` на хосте с keychain-OAuth. Dockerfile: `node:20-slim` + git + python3 + `npm i -g @anthropic-ai/claude-code` **без пина версии** (A3 пин не применён к образу). В контейнере keychain нет → нужен `CLAUDE_CODE_OAUTH_TOKEN` (`claude setup-token`, «requires Claude subscription») или API-ключ — роадмап молчит. Тулчейна целевого (feedback — Python-монолит с БД; sled — неизвестно) в образе нет, а тесты «неотъемлемая работа разработчика» (L548–550). Поля «образ/тулчейн» в targets.yaml нет. Сетевой белый список в Dockerfile — api.anthropic.com, github.com; gitlab.corp.example, pypi, npm не названы. |
 | «SQLite — короткие транзакции хватит для N=2» | L832–833 | store.py: без WAL, без `busy_timeout` (дефолт 5 с). При демоне + CLI + поллере — три процесса-писателя. Для N=2 хватит, но `PRAGMA journal_mode=WAL` — обязательная строка A1, иначе «database is locked» при совпадении поллера с шагом. |
 | «CI не триггерится на ветку [artel]» | L174, L250 | **Ложно по умолчанию**: GitLab запускает пайплайн на любой пуш, если `rules`/`workflow` не ограничивают; `.gitlab-ci.yml` feedback (main) включает `base-pipeline.yaml` без ограничения веток. Отложено вместе с публикацией — в deferred переписать как «требует `workflow: rules` у целевого». |
 | `claude -p` читает промпт из stdin (A6б) | L753–756 | Верно: «Input must be provided either through stdin or as a prompt argument». |
@@ -588,7 +588,7 @@ Postgres — по триггеру), п.15 (носитель угрозы), эт
 13. **До B3 (фаза B) — B-спайк руками, как A-спайк**: (а) роль в контейнере
     с `CLAUDE_CODE_OAUTH_TOKEN` от `claude setup-token` (или API-ключ)
     доходит до модели; (б) тесты sled/панели запускаются в образе; (в) сеть:
-    белый список покрывает github.com, scm.x5.ru, реестры пакетов; (г) пин
+    белый список покрывает github.com, gitlab.corp.example, реестры пакетов; (г) пин
     версии CLI применён к образу (`npm i -g @anthropic-ai/claude-code@2.1.227`).
     Критерии провала и деградационные пути — как в A-спайке.
 14. **До подключения sled** — чек-лист §6 (CI на PR, бэклог 2–3 задач,

@@ -1457,5 +1457,44 @@ class MainCopyGuardTest(unittest.TestCase):
                 self.fail("guard отказал вне worktree и вне главной копии")
 
 
+class CarpentryGitCallsGoThroughGitcmdTest(unittest.TestCase):
+    """Инвариант 33 (docs/invariants.md): тесты не пишут в настоящий
+    репозиторий пульта — плотницкая запись артефактной ветки
+    (`artifact_branch.write_commit`/`commit_files`, `snapshot.py`,
+    `pin.py`) не зовёт `subprocess.run`/`subprocess.Popen` НАПРЯМУЮ, а
+    идёт через `gitcmd`, единую точку, которую `tests/sandbox.py::
+    TmpRootTest` подменяет одним патчем по умолчанию для всех наследников
+    (SPEC 01M1KVGD18P9H5WR7VM8TGPV1T, требования 2-3).
+
+    До этой задачи `artifact_branch.py` звал `subprocess.run` напрямую в
+    обход `gitcmd.git` и любой его подмены: тест, заводивший задачу через
+    `catalog.cmd_new` без подмены `config.ROOT` (`tests.test_review_
+    package.PreviousVerdictShaTest`), коммитил артефактную ветку прямиком
+    в НАСТОЯЩИЙ репозиторий пульта — сотни осиротевших веток `artifact/*`
+    (SPEC «Контекст»). Полный прогон `tests/` не меняющий набор ссылок
+    репозитория (первая половина инварианта) — дорогая проверка (минуты),
+    ведёт её CI job `python` (`.github/workflows/ci.yml`, сторож ссылок
+    вокруг `unittest discover`) и `tasks/01M1KVGD18P9H5WR7VM8TGPV1T/
+    acceptance_tests/test_ac1_full_suite_ref_isolation.py`; здесь —
+    дешёвая структурная половина, защищающая единую точку подмены от
+    регрессии в ЛЮБОЙ будущей задаче, не только этой.
+    """
+
+    CARPENTRY_FILES = ("artifact_branch.py", "snapshot.py", "pin.py")
+    RAW_CALL_MARKERS = ("subprocess.run(", "subprocess.Popen(")
+
+    def test_no_raw_subprocess_calls_in_carpentry_modules(self):
+        offenders = {}
+        for name in self.CARPENTRY_FILES:
+            src = (config.ROOT / "orchestrator" / name).read_text(encoding="utf-8")
+            hits = [ln.strip() for ln in src.splitlines()
+                    if any(marker in ln for marker in self.RAW_CALL_MARKERS)]
+            if hits:
+                offenders[name] = hits
+        self.assertEqual(
+            {}, offenders,
+            f"прямые вызовы subprocess.run/Popen вне единого модуля gitcmd: {offenders}")
+
+
 if __name__ == "__main__":
     unittest.main()

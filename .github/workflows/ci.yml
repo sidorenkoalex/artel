@@ -63,9 +63,24 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - run: python3 -m py_compile orchestrator/artel.py scripts/guard.py
+      - name: снимок ссылок репозитория до прогона тестов (SPEC 01M1KVGD18P9H5WR7VM8TGPV1T, требование 1)
+        run: git for-each-ref --format='%(refname) %(objectname)' refs/heads/ refs/artifacts/ > /tmp/refs-before.txt
       - name: unit-тесты (если появятся)
         run: |
           if [ -d tests ]; then python3 -m unittest discover -s tests -v; fi
+      - name: прогон tests/ не меняет набор ссылок репозитория (SPEC 01M1KVGD18P9H5WR7VM8TGPV1T, требование 1)
+        run: |
+          # Инвариант: полный прогон tests/ не пишет в объектную базу CI-
+          # чекаута (единая точка подмены gitcmd.carpentry — tests/sandbox.py
+          # ::TmpRootTest патчит её по умолчанию для всех наследников).
+          # Раньше тест, заводивший задачу через cmd_new без подмены
+          # config.ROOT, коммитил артефактную ветку прямиком в этот же
+          # чекаут (SPEC 01M1KVGD18P9H5WR7VM8TGPV1T, «Контекст»).
+          git for-each-ref --format='%(refname) %(objectname)' refs/heads/ refs/artifacts/ > /tmp/refs-after.txt
+          if ! diff -u /tmp/refs-before.txt /tmp/refs-after.txt; then
+            echo "::error::прогон tests/ изменил набор ссылок репозитория — см. diff выше"
+            exit 1
+          fi
 
   protected-paths:
     name: Enforcement, конфиги системы меняет только Оператор
