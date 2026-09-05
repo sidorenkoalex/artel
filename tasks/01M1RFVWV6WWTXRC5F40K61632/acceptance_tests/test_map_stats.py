@@ -142,30 +142,48 @@ class MapStatsFieldsTest(unittest.TestCase):
         self.assertNotIn(smallest_name, names)
 
 
-class MapStatsProjectionKeyAbsentTest(unittest.TestCase):
-    """AC-3: `bytes_projection` отсутствует, пока в модуле нет
-    `project_for_brief` (состояние на момент написания SPEC)."""
+class MapStatsProjectionKeyTest(unittest.TestCase):
+    """AC-3: `bytes_projection` присутствует ТОЛЬКО если в модуле есть
+    `project_for_brief`. На момент SPEC функции не было; после мержа
+    01M1RFQ52S0VD22J628TXX96XS (проекция карты для брифа) она есть —
+    правка планки по ADR-0012 (решение Оператора 05.09): критерий
+    проверяется в обеих половинах условия, а не по состоянию модуля
+    на дату написания SPEC."""
 
-    def test_ac3_bytes_projection_key_is_absent_not_zero_or_null(self):
-        """На сегодняшней версии `scripts/codebase_map.py` (без
-        `project_for_brief`, проверено `grep` при написании SPEC —
-        «Материалы») ключ `bytes_projection` в результате `map_stats`
-        отсутствует целиком: не `0`, не `None`.
+    def test_ac3_bytes_projection_key_absent_without_project_for_brief(self):
+        """Без `project_for_brief` в модуле ключа нет целиком: не `0`,
+        не `None`. Функция на время теста убирается из модуля и
+        возвращается в `finally`.
 
         Ловит мутацию: реализация всегда кладёт `bytes_projection`
-        (например, `0` «на всякий случай» или `None`-заглушку) —
-        `assertNotIn` поймает наличие ключа в обоих случаях, `in`-проверка
-        по значению его бы пропустила.
+        («на всякий случай» `0`/`None`) — `assertNotIn` поймает наличие
+        ключа в обоих случаях.
         """
-        self.assertFalse(
-            hasattr(codebase_map, "project_for_brief"),
-            "codebase_map уже содержит project_for_brief — предпосылка "
-            "AC-3 (SPEC, «Материалы») больше не верна, критерий в этой "
-            "формулировке не проверяем буквально, нужно решение Оператора")
-
-        result = codebase_map.map_stats(_six_sections_map())
+        saved = codebase_map.__dict__.pop("project_for_brief")
+        try:
+            result = codebase_map.map_stats(_six_sections_map())
+        finally:
+            codebase_map.project_for_brief = saved
 
         self.assertNotIn("bytes_projection", result)
+
+    def test_ac3_bytes_projection_key_present_with_project_for_brief(self):
+        """С `project_for_brief` в модуле ключ есть и равен байтам UTF-8
+        текста проекции той же карты.
+
+        Ловит мутацию: `bytes_projection` считается от полного текста
+        карты (равен `bytes_total`), а не от проекции.
+        """
+        self.assertTrue(hasattr(codebase_map, "project_for_brief"))
+        text = _six_sections_map()
+
+        result = codebase_map.map_stats(text)
+
+        self.assertIn("bytes_projection", result)
+        self.assertEqual(
+            result["bytes_projection"],
+            len(codebase_map.project_for_brief(text).encode("utf-8")))
+        self.assertLess(result["bytes_projection"], result["bytes_total"])
 
 
 class MapStatsJsonSerializableTest(unittest.TestCase):
