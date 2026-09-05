@@ -51,7 +51,7 @@ from unittest import mock
 REPO_ROOT = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(REPO_ROOT))
 
-from orchestrator import (artel, catalog, checkpoint, config,  # noqa: E402
+from orchestrator import (artel, ci, catalog, checkpoint, config,  # noqa: E402
                           gitcmd, runner, store)
 
 SPEC_READY = """---
@@ -308,7 +308,7 @@ def _snapshot_dir(p: Path, deep: bool = False) -> dict:
     has_git = git_dir.exists()
     origin_url = None
     if has_git:
-        res = subprocess.run(["git", "remote", "get-url", "origin"], cwd=p,
+        res = subprocess.run(["git", "remote", "get-url", "origin"], stdin=subprocess.DEVNULL, cwd=p,
                              capture_output=True, text=True)
         if res.returncode == 0:
             origin_url = res.stdout.strip()
@@ -450,6 +450,32 @@ class CanarySandbox(unittest.TestCase):
 
         self.capture(catalog.cmd_init)
 
+        # --- без реальных ожиданий CI (мандат Оператора ANSWER-3, 05.09) ---
+        # Цикл пульта в verifying/merge_gate опрашивает CI и ждёт до
+        # боевых потолков (90 мин и 60 мин): планка на этом висла часами.
+        # Заглушка: CI всегда зелёный, потолки и шаг опроса — секунды.
+        for attr, value in (
+            ("VERIFYING_CEILING_SEC", 5),
+            ("MERGE_GATE_CI_WAIT_CEILING_SEC", 5),
+            ("MERGE_GATE_CI_WAIT_POLL_SEC", 0),
+            ("CI_RERUN_WAIT_SEC", 0),
+        ):
+            patcher = mock.patch.object(config, attr, value)
+            patcher.start()
+            self.addCleanup(patcher.stop)
+        for name, value in (
+            ("verifying_status", ("green", "CI зелёный (заглушка песочницы)")),
+            ("branch_status", (True, "CI зелёный (заглушка песочницы)")),
+            ("trigger_rerun", "заглушка песочницы: перезапуск не нужен"),
+        ):
+            patcher = mock.patch.object(ci, name, return_value=value)
+            patcher.start()
+            self.addCleanup(patcher.stop)
+        gh_patcher = mock.patch.object(
+            ci, "gh", side_effect=AssertionError("песочница: вызов gh запрещён"))
+        gh_patcher.start()
+        self.addCleanup(gh_patcher.stop)
+
         self.agent = SmartAgent()
         agent_patcher = mock.patch.object(runner, "cmd_run", self.agent)
         agent_patcher.start()
@@ -472,7 +498,7 @@ class CanarySandbox(unittest.TestCase):
     # ------------------------------------------------------------ утилиты
 
     def _git(self, *args: str) -> subprocess.CompletedProcess:
-        res = subprocess.run(["git", *args], cwd=self.root, timeout=30,
+        res = subprocess.run(["git", *args], stdin=subprocess.DEVNULL, cwd=self.root, timeout=30,
                              capture_output=True, text=True, encoding="utf-8")
         self.assertEqual(res.returncode, 0,
                          f"git {' '.join(args)} упал: {res.stderr}")
