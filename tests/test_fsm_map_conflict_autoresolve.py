@@ -180,7 +180,13 @@ class MapConflictAutoResolveTest(unittest.TestCase):
                     ("git", "-C", str(repo), *args), 0,
                     "\n".join(conflict_files) + ("\n" if conflict_files else ""),
                     "")
-            if args[:1] in (("checkout",), ("add",), ("commit",)):
+            if args[:1] in (("checkout",), ("add",), ("commit",), ("reset",)):
+                # `reset` — часть новой очистки worktree перед merge (SPEC
+                # 01M1RA0R9AH9RBAHD4A2Z5SEWQ, требования 1-2, `checkpoint.
+                # commit_pull_checkpoint` исключает `tasks/<id>/` из
+                # WIP-коммита этим вызовом): нечего коммитить в этом
+                # сценарии («diff --cached» ниже отвечает «чисто»), поэтому
+                # безобидный no-op, как и остальные три вызова здесь.
                 return self._ok(repo, *args)
             # `fsm._dirty_refuses`/`store.record_fixation` (A7: self/артель
             # фиксируется тем же кодом, что и любой target, — эти вызовы

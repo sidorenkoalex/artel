@@ -186,6 +186,14 @@ class BranchFreshnessGateTest(unittest.TestCase):
                 ("git", "-C", str(repo), *args), 0, "", "")  # нечего коммитить
         if args[:1] == ("add",):
             return self._ok(repo, *args)
+        if args[:1] in (("checkout",), ("reset",)):
+            # Очистка worktree перед merge (SPEC 01M1RA0R9AH9RBAHD4A2Z5SEWQ,
+            # требования 1-2): отбрасывание карты (`checkout --`) и
+            # исключение `tasks/<id>/` из WIP-чекпоинта (`reset -q --`) —
+            # безобидный no-op здесь, как и `add`/`diff --cached` выше;
+            # песочница этого файла — не о самой очистке, «чисто, нечего
+            # коммитить» безусловно.
+            return self._ok(repo, *args)
         return None
 
     def _conflict_then_abort_ok(self, repo, *args) -> subprocess.CompletedProcess:
