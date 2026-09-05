@@ -230,6 +230,11 @@ def migrate(conn: sqlite3.Connection) -> None:
     # что механика «Оценка объёма и деление» уже структурирует для
     # сигналов деления (SPEC, требование 1).
     add_column(conn, "tasks", "zones", "TEXT")
+    # Явная перестановка очереди ожидания зоны Оператором (SPEC
+    # 01M1P9QAG65GVF69YJEV0V18D9, требование 9, AC-9): NULL — очередь не
+    # переставлена, естественный порядок по времени approve (`updated_at`)
+    # решает (`orchestrator/zone_lock.py::queue_order`).
+    add_column(conn, "tasks", "zone_queue_position", "INTEGER")
     conn.executescript(
         "CREATE TABLE IF NOT EXISTS task_counters ("
         "  target TEXT PRIMARY KEY, next_number INTEGER NOT NULL);")
