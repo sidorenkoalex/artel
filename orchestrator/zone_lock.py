@@ -22,7 +22,7 @@ advance_refusal_history` (SPEC T078) уже используют для «ист
 задачи (её пишет `store.set_state` на каждом переходе), а сам факт
 «старт уже был» читается по записи `"agent run started"` роли developer
 (её же журналирует `runner.run_agent_once`) после этой границы. Синтетика
-песочниц, что заводит задачи прямым `UPDATE tasks` без прохода через
+песочниц, что заводит задачи прямой правкой строки в обход
 `set_state` (`tests/test_invariants.py::FsmTest.set_state`), не пишет
 маркер `"state -> in_dev"` вовсе — граница остаётся `0` (весь журнал
 задачи), что для одного непрерывного тестового сценария поведенчески то
@@ -182,8 +182,6 @@ def cmd_zone_reorder(task_ids_in_order: list[str]) -> None:
     conn = store.db()
     resolved = [store.resolve_task_id(conn, tid) for tid in task_ids_in_order]
     for position, task_id in enumerate(resolved):
-        conn.execute("UPDATE tasks SET zone_queue_position=? WHERE id=?",
-                     (position, task_id))
-    conn.commit()
+        store.update_task(conn, task_id, zone_queue_position=position)
     print(f"[очередь ожидания зоны] переставлена Оператором: "
           f"{', '.join(resolved)}")
