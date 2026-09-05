@@ -37,6 +37,7 @@ CREATE TABLE IF NOT EXISTS tasks (
   answer_baseline INTEGER, verifying_attempts INTEGER DEFAULT 0,
   draft_mr_created INTEGER DEFAULT 0,
   diff_bytes INTEGER, split_assessment TEXT, zones TEXT,
+  zones_extension TEXT,
   materialized_artifact_sha TEXT,
   created_at TEXT, updated_at TEXT
 );
@@ -230,6 +231,12 @@ def migrate(conn: sqlite3.Connection) -> None:
     # что механика «Оценка объёма и деление» уже структурирует для
     # сигналов деления (SPEC, требование 1).
     add_column(conn, "tasks", "zones", "TEXT")
+    # Расширение зон, одобренное мандатом Оператора при переходе
+    # `in_dev -> review` (01M1P9QCHPHSCEA6TK13PV85SP, ANSWER-1, п.3):
+    # список путей через запятую, тем же приёмом, что `zones` выше — NULL,
+    # пока расширения не было. Гейт зон (`fsm_advance._zones_gate_refuses`)
+    # считает зоной задачи объединение `zones` и `zones_extension`.
+    add_column(conn, "tasks", "zones_extension", "TEXT")
     conn.executescript(
         "CREATE TABLE IF NOT EXISTS task_counters ("
         "  target TEXT PRIMARY KEY, next_number INTEGER NOT NULL);")
