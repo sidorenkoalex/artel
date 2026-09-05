@@ -148,6 +148,36 @@ class BranchFreshnessGateTest(unittest.TestCase):
         (self.tdir / "PLAN.md").write_text(
             PLAN_READY.format(task=self.TASK), encoding="utf-8")
 
+    def write_acceptance_plank(self) -> None:
+        """SPEC 01M1R9YEK08XEQWBFX0929WFVJ, AC-1/AC-2: планка теперь
+        читается через `acceptance.materialize_from_branch`, backed
+        (в этой лёгкой песочнице) тем же диском `self.tdir`, что и
+        `disk_backed_show`/`disk_backed_ls_tree_files` — SPEC.md со
+        `schema_version: 2` без `skip_tests` (tests_writing не пропущена
+        легитимно) + непустой `acceptance_tests/` обязаны быть на диске
+        ДО перехода, иначе материализация ничего не найдёт и переход
+        уйдёт по вырожденной ветке AC-3/AC-5, минуя `acceptance.run`
+        вовсе (которую тесты этого файла мокают и хотят видеть вызванной)."""
+        self.tdir.mkdir(parents=True, exist_ok=True)
+        (self.tdir / "SPEC.md").write_text(
+            "---\n"
+            f"task: {self.TASK}\n"
+            "type: spec\n"
+            "author_role: analyst\n"
+            "status: ready\n"
+            "schema_version: 2\n"
+            "---\n\n"
+            "# SPEC: планка\n\n"
+            "## Критерии приёмки\n\nAC-1. ...\n",
+            encoding="utf-8")
+        tests_dir = self.tdir / "acceptance_tests"
+        tests_dir.mkdir(parents=True, exist_ok=True)
+        (tests_dir / "test_stub.py").write_text(
+            "import unittest\n\n\n"
+            "class StubTest(unittest.TestCase):\n\n"
+            "    def test_stub(self):\n        pass\n",
+            encoding="utf-8")
+
     def advance_from_in_dev(self) -> str:
         self.write_plan_ready()
         self.set_state("in_dev")
@@ -261,8 +291,15 @@ class BranchFreshnessGateTest(unittest.TestCase):
         MAIN_BRANCH` или к `"FETCH_HEAD"` вместо зафетченного sha — AC-2/
         R1-F1 тихо перестанут выполняться, а `assertNotIn`/`assertIn` по
         аргументам merge здесь это поймают.
+
+        Ловит мутацию (SPEC 01M1RNZ6V7TTTTYAHBMF8JBQQS, REVIEW.md
+        итерация 1, R1-F2): возврат материализации планки к временному
+        каталогу (регрессия №14) или к `cwd=config.ROOT` — `plank_root`/
+        `cwd` ниже перестали бы совпадать с `self.wt_path`, и `assertEqual`
+        по ним это поймает.
         """
         self.setup_recording()
+        self.write_acceptance_plank()
         with mock.patch.object(gitcmd, "commits_behind", return_value=3), \
              mock.patch.object(gitcmd, "in_repo",
                                side_effect=self._recording_ok), \
@@ -295,10 +332,31 @@ class BranchFreshnessGateTest(unittest.TestCase):
                          "фетч), ни в приватном FETCH_HEAD worktree'а")
         self.assertNotIn(self.branch, args,
                          "ветка задачи не упоминается в аргументах merge")
-        acc_run.assert_called_once_with(self.wt_path / "tasks" / self.TASK)
+        acc_run.assert_called_once()
+        plank_root = acc_run.call_args[0][0]
+        self.assertEqual(
+            plank_root, self.wt_path / "tasks" / self.TASK,
+            "SPEC 01M1RNZ6V7TTTTYAHBMF8JBQQS AC-1: планка обязана "
+            "материализоваться в рабочий каталог кода задачи (worktree "
+            "self-target), не во временный каталог")
+        self.assertEqual(
+            acc_run.call_args.kwargs.get("code_root"), self.wt_path,
+            "SPEC 01M1RNZ6V7TTTTYAHBMF8JBQQS AC-2: cwd прогона обязан "
+            "быть равен рабочему каталогу кода задачи, не config.ROOT")
 
     def test_approve_pulls_main_and_advances_when_acceptance_green(self):
+        """SPEC 01M1RNZ6V7TTTTYAHBMF8JBQQS, AC-1/AC-2: approve из
+        `acceptance` гоняет планку, материализованную из артефактной ветки
+        НА МЕСТЕ в рабочий каталог кода задачи (`acceptance.
+        materialize_from_branch(..., wt_path)`, не во временный каталог) —
+        и при зелёном прогоне доходит до `merge_gate`.
+
+        Ловит мутацию: возврат к временному каталогу (регрессия №14) —
+        `plank_root`, переданный в `acceptance.run`, не совпал бы с путём
+        внутри `self.wt_path`, и `assertEqual` ниже это поймает.
+        """
         self.setup_recording()
+        self.write_acceptance_plank()
         with mock.patch.object(gitcmd, "commits_behind", return_value=1), \
              mock.patch.object(gitcmd, "in_repo",
                                side_effect=self._recording_ok), \
@@ -308,7 +366,16 @@ class BranchFreshnessGateTest(unittest.TestCase):
 
         self.assertEqual(self.state(), "merge_gate")
         self.assertEqual(len(self.merge_calls), 1)
-        acc_run.assert_called_once_with(self.wt_path / "tasks" / self.TASK)
+        acc_run.assert_called_once()
+        plank_root = acc_run.call_args[0][0]
+        self.assertEqual(
+            plank_root, self.wt_path / "tasks" / self.TASK,
+            "SPEC 01M1RNZ6V7TTTTYAHBMF8JBQQS AC-1: планка материализуется "
+            "в рабочий каталог кода задачи, не во временный каталог")
+        self.assertEqual(
+            acc_run.call_args.kwargs.get("code_root"), self.wt_path,
+            "SPEC 01M1RNZ6V7TTTTYAHBMF8JBQQS AC-2: cwd прогона обязан "
+            "быть равен рабочему каталогу кода задачи, не config.ROOT")
 
     # --------------------------- AC-4 (эквивалент лёгкой песочницы) ---
 
@@ -425,8 +492,20 @@ class BranchFreshnessGateTest(unittest.TestCase):
     # --------------------------------------- красные приёмочные после пула
 
     def test_advance_escalates_on_red_acceptance_after_pull_keeps_merge(self):
+        """SPEC 01M1R9YEK08XEQWBFX0929WFVJ, AC-4: планка, реально
+        материализованная из артефактной ветки и реально красная после
+        подтяжки main, обязана эскалировать (требование 6, T051), а не
+        схлопнуться в новый именованный отказ AC-3 — тот остаётся только
+        для планки, которая не найдена в источнике.
+
+        Ловит мутацию: подмена ветки «планка найдена и красная» на
+        новую ветку AC-3 «планка не найдена» — состояние осталось бы
+        `in_dev`/предыдущим вместо `escalated`, и `MARKER-RED` пропал бы
+        из журнала.
+        """
         self.setup_recording()
         self.write_plan_ready()
+        self.write_acceptance_plank()
         self.set_state("in_dev")
         with mock.patch.object(gitcmd, "commits_behind", return_value=4), \
              mock.patch.object(gitcmd, "in_repo",
@@ -445,7 +524,18 @@ class BranchFreshnessGateTest(unittest.TestCase):
         self.assertEqual(self.abort_calls, [])
 
     def test_approve_escalates_on_red_acceptance_after_pull_keeps_merge(self):
+        """SPEC 01M1R9YEK08XEQWBFX0929WFVJ, AC-4: тот же сценарий, что и
+        `test_advance_escalates_on_red_acceptance_after_pull_keeps_merge`,
+        со стороны `approve` из `acceptance` — красная планка эскалирует,
+        слияние сохраняется (не откатывается).
+
+        Ловит мутацию: подмена ветки «планка найдена и красная» на
+        новую ветку AC-3 «планка не найдена» — состояние осталось бы
+        `acceptance` вместо `escalated`, и `MARKER-RED` пропал бы из
+        журнала.
+        """
         self.setup_recording()
+        self.write_acceptance_plank()
         self.set_state("acceptance")
         with mock.patch.object(gitcmd, "commits_behind", return_value=7), \
              mock.patch.object(gitcmd, "in_repo",
@@ -459,6 +549,51 @@ class BranchFreshnessGateTest(unittest.TestCase):
         self.assertIn("MARKER-RED", combined)
         self.assertEqual(len(self.merge_calls), 1)
         self.assertEqual(self.abort_calls, [])
+
+    # --------- отказ AC-3 на сбое чтения SPEC.md (REVIEW.md R1-F1, ит. 4)
+
+    def test_approve_refuses_when_spec_read_fails_after_missing_plank(self):
+        """REVIEW.md 01M1R9YEK08XEQWBFX0929WFVJ итерация 4, замечание
+        major: R1-F1 (сбой чтения SPEC.md отказывает именованно, не
+        молчаливый "pulled") был исправлен по коду за три итерации, но
+        ни разу не закреплён тестом — единственной защитой от регресса
+        оставалась ручная эмпирическая проверка ревьювера на каждой
+        итерации. Планка не найдена в артефактной ветке
+        (`acceptance_tests/` отсутствует) легитимна ТОЛЬКО когда SPEC.md
+        реально прочитан и не несёт AC-разметки/несёт `skip_tests`; здесь
+        чтение самого SPEC.md проваливается (git не ответил) — узел
+        обязан отказать именованно (AC-3), не подставлять дефолт
+        `meta={}` (`guard.requires_ac_markup({}) == False`), который дал
+        бы молчаливый "pulled".
+
+        Ловит мутацию: возврат `_read_branch_text_or_refuse` к прямому
+        `gitcmd.show(...) or {}` — состояние осталось бы `merge_gate`
+        вместо `acceptance`, а именованный отказ пропал бы из журнала.
+        """
+        self.setup_recording()
+
+        def fake_show(branch, rel):
+            if rel.endswith("SPEC.md"):
+                return None, "git не ответил"
+            return disk_backed_show(branch, rel)
+
+        with mock.patch.object(gitcmd, "commits_behind", return_value=6), \
+             mock.patch.object(gitcmd, "in_repo",
+                               side_effect=self._recording_ok), \
+             mock.patch.object(gitcmd, "show", side_effect=fake_show), \
+             mock.patch.object(acceptance, "run") as acc_run:
+            out = self.approve_from_acceptance()
+
+        self.assertEqual(self.state(), "acceptance",
+                         "сбой чтения SPEC.md обязан отказать переход, "
+                         "не менять состояние")
+        combined = out + "\n".join(self.journal_details())
+        self.assertIn("не прочитан", combined,
+                      "R1-F1: отказ обязан быть именованным в журнале, "
+                      "не молчаливым проходом")
+        self.assertEqual(len(self.merge_calls), 1,
+                         "слияние подтяжки уже состоялось до сверки планки")
+        acc_run.assert_not_called()
 
     # ------------------------------------------------ worktree недоступен
 

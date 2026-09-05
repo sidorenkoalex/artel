@@ -3,6 +3,7 @@
 Крутится, пока в шаге работает агент (SPEC 01M1R8B3ZKXQT0Z0G6QQQDV906:
 предварительный advance пробует готовый артефакт до запуска роли, не
 после)."""
+import re
 import time
 
 from . import (agent_log, alerts, budget, ci, config, fixation, fsm, lease,
@@ -67,6 +68,117 @@ def _advance_refusal(conn, task_id: str, journaled_before: int) -> str | None:
         if row["actor"] == "fsm" and row["action"].startswith(REFUSAL_ACTION_PREFIX):
             return row["action"]
     return None
+
+
+# Состояния роли, где возврат с неотработанным основанием переделки
+# держит пред-advance до первого завершённого шага ТОЙ ЖЕ роли (SPEC
+# «регрессия №13» 01M1RHFRQ2C0P4A57XJJ1WZV8N, требования 1-2; ANSWER-1
+# п.2, ANSWER-2 п.1): developer (`in_dev`) — прямой предмет регрессии
+# №12/№13; analyst (`spec_writing`)/test_author (`tests_writing`) — тот
+# же класс, обобщённый на возврат из `escalated` (требование 2,
+# AC-2/AC-8). `review` намеренно не входит: свежесть ЕГО собственного
+# вердикта уже держит отдельный, куда более старый механизм
+# (`artifacts.fresh_verdict_iteration`/`reviewed_iter`), не предмет
+# этой задачи.
+_REWORK_GATE_STATES = ("in_dev", "spec_writing", "tests_writing")
+
+# Именованная причина отказа обоих рубежей (требование 4) — общий текст
+# с `orchestrator/fsm_advance.py::_review_rework_gate_refuses`.
+REWORK_REFUSAL_ACTION = "переход отклонён: замечания ревью не отработаны"
+
+# Номер итерации ревью в detail записи `state -> in_dev`, оставленной
+# `orchestrator/fsm_advance.py::review` (`f"замечания ревью, итерация
+# {iters}"`) — тем же текстом отвечает и тестовая фикстура, дописывающая
+# эту запись напрямую (`tasks/01M1RHFRQ2C0P4A57XJJ1WZV8N/acceptance_tests/`).
+_ITERATION_IN_DETAIL = re.compile(r"итерация (\d+)")
+
+# Тексты `detail` записи `state -> {state}`, которыми ЛЕГИТИМНЫЙ первый
+# вход роли в состояние отличается от возврата с неотработанным основанием
+# переделки (ANSWER-3, п.1-2 — регрессия против AC-7 приёмки
+# 01M1R8B3ZKXQT0Z0G6QQQDV906: рубеж требований 1-2, применённый ко ВСЯКОМУ
+# входу без разбора, держал пред-advance даже на первом же входе в
+# `in_dev` и звал developer напрямую — прежде чем предварительный
+# `advance` успевал наткнуться на лок `acceptance_tests/` и остановить
+# цикл существующим механизмом требования 4 без единого шага developer).
+# Единственные обработчики легитимного первого входа: `orchestrator/
+# fsm.py::_cmd_approve` (`spec_gate -> in_dev`/`tests_writing`) и
+# `orchestrator/fsm_advance.py::tests_writing` (`tests_writing -> in_dev`)
+# — тексты ниже дословно совпадают с их `detail=`. Возврат из `escalated`
+# несёт ОДИН и тот же общий текст независимо от основания эскалации
+# (`orchestrator/fsm.py::_cmd_approve`, «эскалация разрешена, продолжаем»)
+# и намеренно НЕ входит в этот список — ANSWER-2 п.2/AC-2/AC-8 требуют
+# держать рубеж и на нём (см. PLAN «Влияние на систему»: цена лишнего шага
+# роли на не-rework возврате из эскалации — сознательный компромисс).
+_LEGIT_FIRST_ENTRY_DETAILS = (
+    "гейт SPEC пройден — приёмочные тесты до кода",
+    "приёмочные тесты готовы — трассируемость AC пройдена",
+)
+_LEGIT_FIRST_ENTRY_PREFIXES = (
+    "тесты пропущены (skip_tests):",
+    "SPEC schema_version ",
+)
+
+
+def _is_legit_first_entry_detail(detail: str | None) -> bool:
+    """Прочитала выше — detail записи, отмечающей легитимный первый вход
+    в состояние роли, не возврат с неотработанным основанием переделки."""
+    if detail is None:
+        return False
+    if detail in _LEGIT_FIRST_ENTRY_DETAILS:
+        return True
+    return any(detail.startswith(prefix) for prefix in _LEGIT_FIRST_ENTRY_PREFIXES)
+
+
+def _role_step_since_state_entry(conn, task_id: str, state: str,
+                                 role: str) -> tuple[bool, str | None]:
+    """(был ли уже шаг `role` после ПОСЛЕДНЕЙ записи `state -> {state}`,
+    detail этой записи) — требование 1 («запись agent run finished роли
+    developer после записи state -> in_dev»), обобщённое на любое
+    состояние из `_REWORK_GATE_STATES` (требование 2).
+
+    Такой записи нет вовсе (легитимный первый вход в состояние в обход
+    FSM — тестовые песочницы, правящие `tasks.state` напрямую, либо
+    самый первый вход задачи в это состояние за всю её жизнь) — сверять
+    не с чем, тот же вырожденный случай деградации, что и у остальных
+    примитивов `auto.py`/`fsm_advance.py`: `(True, None)`, пред-advance
+    не держится. Запись ЕСТЬ, но её `detail` называет легитимный первый
+    вход (`_is_legit_first_entry_detail`, ANSWER-3) — та же деградация:
+    роль объективно не могла отработать шаг РАНЬШЕ собственного первого
+    входа в состояние, держать пред-advance здесь нечем, кроме уже
+    существующих проверок требования 3/4 (PLAN.md не готов, лок
+    `acceptance_tests/` и подобные).
+    """
+    rows = store.task_steps(conn, task_id)
+    marker = f"state -> {state}"
+    last_entry = None
+    for i, row in enumerate(rows):
+        if row["action"] == marker:
+            last_entry = i
+    if last_entry is None:
+        return True, None
+    detail = rows[last_entry]["detail"]
+    if _is_legit_first_entry_detail(detail):
+        return True, detail
+    ran = any(row["actor"] == role and row["action"] == "agent run finished"
+              for row in rows[last_entry + 1:])
+    return ran, detail
+
+
+def _rework_not_addressed_reason(detail: str | None, role: str) -> str:
+    """Именованная причина отказа (требование 4): буквальная фраза SPEC
+    («замечания ревью не отработаны: нет шага <роль> после итерации N»),
+    когда запись, вернувшая задачу в состояние, называет номер итерации
+    ревью (`review -> in_dev`/эскалация по тому же основанию — обе несут
+    «..., итерация N» в detail, см. `orchestrator/fsm_advance.py::
+    review`); иначе (`acceptance`/`merge_gate`/`verifying` reject,
+    эскалация по другому основанию, возврат в `spec_writing`/
+    `tests_writing`) — тот же класс причины без придуманного номера.
+    """
+    match = _ITERATION_IN_DETAIL.search(detail or "")
+    if match:
+        return (f"замечания ревью не отработаны: нет шага {role} "
+                f"после итерации {match.group(1)}")
+    return f"возврат не отработан: нет шага {role} после возврата"
 
 
 def _verifying_poll_note(conn, task_id: str, journaled_before: int) -> str | None:
@@ -288,119 +400,139 @@ def _cmd_auto(conn, task_id: str, session_id: str) -> None:
             return
         before = state
 
-        # Предварительный advance (SPEC 01M1R8B3ZKXQT0Z0G6QQQDV906,
-        # требования 1-4): пробуем перейти по уже готовым артефактам ДО
-        # шага роли — так цикл не тратит шаг ($1-6) на подтверждение
-        # очевидного (PLAN.md, поднятый ready ДО возврата из эскалации по
-        # бюджету; REVIEW.md, вердикт которого уже вынесен).
-        journaled_before = len(store.task_steps(conn, task_id))
-        if fsm.cmd_advance(task_id, session_id=session_id):
-            # guard отклонил артефакт-условие: тот же по характеру
-            # немедленный стоп, что и раньше был доступен только ПОСЛЕ
-            # шага роли, — цикл не зовёт cmd_run для того же состояния.
-            steps += 1
-            hint = f"почини артефакт и повтори artel.py advance {task_id}"
-            auto_stop(conn, task_id, state,
-                      f"advance отклонён guard'ом артефакта-условия — "
-                      f"{hint}", hint, alert=True)
-            return
-        t = store.get_task(conn, task_id)
-        state = t["state"]
-        if state != before:
-            # Требование 2: переход уже случился по готовым артефактам —
-            # шаг роли этой итерации не нужен, цикл продолжает уже с
-            # нового состояния. Не расходует `steps` (см. комментарий у
-            # проверки лимита выше, R1-F1) — ни один агент не звался.
-            note = f"шаг {role} не нужен: переход выполнен по готовым артефактам"
-            store.journal(conn, task_id, "operator", note, f"{before} -> {state}")
-            print(f"[{task_id}] {note} ({before} -> {state})")
-            idle_steps = 0
-            prev_refusal = None
-            role = runner.step_role(t)
-            continue
+        # Требования 1-2 (SPEC «регрессия №13» 01M1RHFRQ2C0P4A57XJJ1WZV8N,
+        # ANSWER-1 п.2, ANSWER-2 п.1): текущее пребывание в состоянии роли
+        # (`_REWORK_GATE_STATES`) началось переходом с основанием переделки
+        # (замечания ревью/reject/эскалация), ещё не отработанным — готовый
+        # артефакт роли мог существовать ещё ДО этого возврата (SPEC
+        # «Контекст», регрессия №12/№13), и предварительный advance ниже
+        # продвинул бы задачу мимо роли по нему же. Гейт держит именно
+        # ЭТОТ вызов advance — до первого завершённого шага той же роли
+        # ПОСЛЕ возврата; удовлетворив условие один раз, роль больше не
+        # блокируется этим гейтом до следующего такого возврата.
+        gated_role = role is not None and state in _REWORK_GATE_STATES
+        role_ran, entry_detail = (
+            _role_step_since_state_entry(conn, task_id, state, role)
+            if gated_role else (True, None))
 
-        refusal = _advance_refusal(conn, task_id, journaled_before)
-        # Требование 4 отказывает шагу роли только на отказах, которые
-        # ЧЕЛОВЕК обязан разобрать руками — лок acceptance_tests/,
-        # свежесть ветки, гейт ёмкости diff: примеры требования 4 (кроме
-        # «дерево не на ветке задачи», см. ниже) — из ПРОВЕРОК `in_dev`
-        # ПОВЕРХ готового артефакта (PLAN.md уже ready/approved), не из
-        # готовности самого артефакта роли. У `review`/`tests_writing` тот
-        # же журналируемый префикс несёт и «вердикт REVIEW.md уже учтён»
-        # (`artifacts.fresh_verdict_iteration`), и «не все AC покрыты
-        # тестом» (`fsm._tests_writing_ac_state`) — оба ЖДУТ именно НОВОГО
-        # прогона ЭТОЙ ЖЕ роли (тот же смысл, что и класс требования 3),
-        # только исторически журналируются. Скопировать требование 4 на
-        # них буквально значило бы, что `review`/`tests_writing` теряют
-        # гарантию «роль хотя бы раз получит шанс отработать» насовсем:
-        # текст отказа не меняется без нового прогона, стоп-кран T038 бьёт
-        # на второй же итерации, и роль так и не запускается ни разу —
-        # проверено прогоном `tests/test_auto_cycle.py::
-        # AutoStopsWhereTheOperatorIsNeededTest::
-        # test_review_iterations_are_passed_without_the_operator` (после
-        # ЛЮБОГО changes_requested ревьювер больше не может вынести новый
-        # вердикт) и `test_fresh_task_first_developer_step_still_runs`
-        # (свежая задача, ещё нет ни одного теста/PLAN.md — тот же
-        # стоп-кран до первого запуска test_author/developer). Оба —
-        # регресс тяжелее того, что чинит эта SPEC (см. PLAN «Влияние на
-        # систему»), поэтому «другой класс» здесь — только `in_dev`; для
-        # прочих состояний журналируемый отказ ведёт себя как класс
-        # требования 3 (роль всё равно запускается).
-        #
-        # «Дерево не на ветке задачи» (`fsm._read_branch_text_or_refuse`,
-        # общий узел ВСЕХ четырёх обработчиков) срабатывает ДО того, как
-        # handler вообще прочитал содержимое артефакта — файла нет НА
-        # ВЕТКЕ, а не «нет доступа к git»: у `in_dev` это ПЕРВЫЙ ЖЕ заход
-        # в состояние для КАЖДОЙ задачи (PLAN.md появляется только ВМЕСТЕ
-        # с первым прогоном developer, ничто не заводит его файл заранее)
-        # — тот же класс требования 3, что и «PLAN.md не ready» ниже по
-        # тому же handler'у, журналируется только по историческому
-        # совпадению реализации общего узла. Считать его «другим классом»
-        # даже для `in_dev` блокировало бы developer НАВСЕГДА уже на
-        # второй итерации ПЕРВОГО же вызова `auto` любой новой задачи
-        # (стоп-кран T038 бьёт по идентичному тексту раньше, чем developer
-        # получит хоть один шанс написать PLAN.md) — регрессия, которую
-        # ловит `test_fresh_task_first_developer_step_still_runs`.
-        tree_missing = refusal == "переход отклонён: дерево не на ветке задачи"
-        other_class_refusal = refusal if (refusal is not None
-                                          and state == "in_dev"
-                                          and not tree_missing) else None
-        if other_class_refusal is not None and other_class_refusal == prev_refusal:
-            # Требование 1 (инцидент T035, SPEC T038): два подряд отказа
-            # одним текстом — причина отказа вне зоны агента, прогон
-            # агента её не лечит.
-            steps += 1
-            hint = f"почини причину и повтори artel.py advance {task_id}"
-            auto_stop(conn, task_id, state, f"{other_class_refusal} — {hint}",
-                      hint, alert=True)
-            return
-        prev_refusal = other_class_refusal
-        idle_steps += 1
-        if idle_steps >= config.AUTO_STALL_STEPS_LIMIT:
-            # Требование 2: N шагов подряд без перехода — независимо от
-            # класса отказа (в отличие от стоп-крана требования 1 выше,
-            # который уже отсёк бы ДВА подряд отказа ОДНОГО класса раньше,
-            # чем счётчик успел бы дойти до N при дефолтных значениях).
-            # Хвост «, последний отказ: <класс>» — только если ПОСЛЕДНИЙ
-            # из N шагов журналировал отказ требования 4 (ANSWER-1,
-            # вопрос 3): его отсутствие само по себе несёт факт «агент
-            # продолжал работу».
-            steps += 1
-            tail = (f", последний отказ: {other_class_refusal}"
-                   if other_class_refusal is not None else "")
-            reason = f"цикл не сходится: {idle_steps} шагов без перехода{tail}"
-            hint = (f"artel.py log {task_id} — глянь, что происходит на "
-                    f"последних шагах, затем artel.py advance {task_id}")
-            auto_stop(conn, task_id, state, reason, hint, alert=True)
-            return
-        if other_class_refusal is not None:
-            # Требование 4: журналируемый отказ другого класса — шаг роли
-            # на этой итерации не запускается, цикл повторит advance
-            # следующей итерацией (та же реакция, что и раньше — после
-            # шага роли, — просто без самого шага). Расходует `steps`
-            # (не свободный переход — агент так и не получил шанса).
-            steps += 1
-            continue
+        if gated_role and not role_ran:
+            reason = _rework_not_addressed_reason(entry_detail, role)
+            store.journal(conn, task_id, "fsm", REWORK_REFUSAL_ACTION, reason)
+            print(f"[{task_id}] переход отклонён: {reason}")
+        else:
+            # Предварительный advance (SPEC 01M1R8B3ZKXQT0Z0G6QQQDV906,
+            # требования 1-4): пробуем перейти по уже готовым артефактам ДО
+            # шага роли — так цикл не тратит шаг ($1-6) на подтверждение
+            # очевидного (PLAN.md, поднятый ready ДО возврата из эскалации по
+            # бюджету; REVIEW.md, вердикт которого уже вынесен).
+            journaled_before = len(store.task_steps(conn, task_id))
+            if fsm.cmd_advance(task_id, session_id=session_id):
+                # guard отклонил артефакт-условие: тот же по характеру
+                # немедленный стоп, что и раньше был доступен только ПОСЛЕ
+                # шага роли, — цикл не зовёт cmd_run для того же состояния.
+                steps += 1
+                hint = f"почини артефакт и повтори artel.py advance {task_id}"
+                auto_stop(conn, task_id, state,
+                          f"advance отклонён guard'ом артефакта-условия — "
+                          f"{hint}", hint, alert=True)
+                return
+            t = store.get_task(conn, task_id)
+            state = t["state"]
+            if state != before:
+                # Требование 2: переход уже случился по готовым артефактам —
+                # шаг роли этой итерации не нужен, цикл продолжает уже с
+                # нового состояния. Не расходует `steps` (см. комментарий у
+                # проверки лимита выше, R1-F1) — ни один агент не звался.
+                note = f"шаг {role} не нужен: переход выполнен по готовым артефактам"
+                store.journal(conn, task_id, "operator", note, f"{before} -> {state}")
+                print(f"[{task_id}] {note} ({before} -> {state})")
+                idle_steps = 0
+                prev_refusal = None
+                role = runner.step_role(t)
+                continue
+
+            refusal = _advance_refusal(conn, task_id, journaled_before)
+            # Требование 4 отказывает шагу роли только на отказах, которые
+            # ЧЕЛОВЕК обязан разобрать руками — лок acceptance_tests/,
+            # свежесть ветки, гейт ёмкости diff: примеры требования 4 (кроме
+            # «дерево не на ветке задачи», см. ниже) — из ПРОВЕРОК `in_dev`
+            # ПОВЕРХ готового артефакта (PLAN.md уже ready/approved), не из
+            # готовности самого артефакта роли. У `review`/`tests_writing` тот
+            # же журналируемый префикс несёт и «вердикт REVIEW.md уже учтён»
+            # (`artifacts.fresh_verdict_iteration`), и «не все AC покрыты
+            # тестом» (`fsm._tests_writing_ac_state`) — оба ЖДУТ именно НОВОГО
+            # прогона ЭТОЙ ЖЕ роли (тот же смысл, что и класс требования 3),
+            # только исторически журналируются. Скопировать требование 4 на
+            # них буквально значило бы, что `review`/`tests_writing` теряют
+            # гарантию «роль хотя бы раз получит шанс отработать» насовсем:
+            # текст отказа не меняется без нового прогона, стоп-кран T038 бьёт
+            # на второй же итерации, и роль так и не запускается ни разу —
+            # проверено прогоном `tests/test_auto_cycle.py::
+            # AutoStopsWhereTheOperatorIsNeededTest::
+            # test_review_iterations_are_passed_without_the_operator` (после
+            # ЛЮБОГО changes_requested ревьювер больше не может вынести новый
+            # вердикт) и `test_fresh_task_first_developer_step_still_runs`
+            # (свежая задача, ещё нет ни одного теста/PLAN.md — тот же
+            # стоп-кран до первого запуска test_author/developer). Оба —
+            # регресс тяжелее того, что чинит эта SPEC (см. PLAN «Влияние на
+            # систему»), поэтому «другой класс» здесь — только `in_dev`; для
+            # прочих состояний журналируемый отказ ведёт себя как класс
+            # требования 3 (роль всё равно запускается).
+            #
+            # «Дерево не на ветке задачи» (`fsm._read_branch_text_or_refuse`,
+            # общий узел ВСЕХ четырёх обработчиков) срабатывает ДО того, как
+            # handler вообще прочитал содержимое артефакта — файла нет НА
+            # ВЕТКЕ, а не «нет доступа к git»: у `in_dev` это ПЕРВЫЙ ЖЕ заход
+            # в состояние для КАЖДОЙ задачи (PLAN.md появляется только ВМЕСТЕ
+            # с первым прогоном developer, ничто не заводит его файл заранее)
+            # — тот же класс требования 3, что и «PLAN.md не ready» ниже по
+            # тому же handler'у, журналируется только по историческому
+            # совпадению реализации общего узла. Считать его «другим классом»
+            # даже для `in_dev` блокировало бы developer НАВСЕГДА уже на
+            # второй итерации ПЕРВОГО же вызова `auto` любой новой задачи
+            # (стоп-кран T038 бьёт по идентичному тексту раньше, чем developer
+            # получит хоть один шанс написать PLAN.md) — регрессия, которую
+            # ловит `test_fresh_task_first_developer_step_still_runs`.
+            tree_missing = refusal == "переход отклонён: дерево не на ветке задачи"
+            other_class_refusal = refusal if (refusal is not None
+                                              and state == "in_dev"
+                                              and not tree_missing) else None
+            if other_class_refusal is not None and other_class_refusal == prev_refusal:
+                # Требование 1 (инцидент T035, SPEC T038): два подряд отказа
+                # одним текстом — причина отказа вне зоны агента, прогон
+                # агента её не лечит.
+                steps += 1
+                hint = f"почини причину и повтори artel.py advance {task_id}"
+                auto_stop(conn, task_id, state, f"{other_class_refusal} — {hint}",
+                          hint, alert=True)
+                return
+            prev_refusal = other_class_refusal
+            idle_steps += 1
+            if idle_steps >= config.AUTO_STALL_STEPS_LIMIT:
+                # Требование 2: N шагов подряд без перехода — независимо от
+                # класса отказа (в отличие от стоп-крана требования 1 выше,
+                # который уже отсёк бы ДВА подряд отказа ОДНОГО класса раньше,
+                # чем счётчик успел бы дойти до N при дефолтных значениях).
+                # Хвост «, последний отказ: <класс>» — только если ПОСЛЕДНИЙ
+                # из N шагов журналировал отказ требования 4 (ANSWER-1,
+                # вопрос 3): его отсутствие само по себе несёт факт «агент
+                # продолжал работу».
+                steps += 1
+                tail = (f", последний отказ: {other_class_refusal}"
+                       if other_class_refusal is not None else "")
+                reason = f"цикл не сходится: {idle_steps} шагов без перехода{tail}"
+                hint = (f"artel.py log {task_id} — глянь, что происходит на "
+                        f"последних шагах, затем artel.py advance {task_id}")
+                auto_stop(conn, task_id, state, reason, hint, alert=True)
+                return
+            if other_class_refusal is not None:
+                # Требование 4: журналируемый отказ другого класса — шаг роли
+                # на этой итерации не запускается, цикл повторит advance
+                # следующей итерацией (та же реакция, что и раньше — после
+                # шага роли, — просто без самого шага). Расходует `steps`
+                # (не свободный переход — агент так и не получил шанса).
+                steps += 1
+                continue
 
         # Требование 3: «артефакт роли не готов» (или, для `review`/
         # `tests_writing`, отказ, который лечится только новым прогоном

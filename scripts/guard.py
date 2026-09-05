@@ -24,6 +24,13 @@ frontmatter (task/type/schema_version) остаётся ошибкой. Для �
 статуса и для типов tz/questions/answer — поведение как без флага, без
 исключений. Первая строка вывода с флагом — сводка «сдано N / черновиков
 M / нарушений K». Без флага — поведение и формат вывода прежние.
+
+Посторонний файл в `acceptance_tests/` (режим `--all`, оба варианта — с
+`--artifact-branch` и без, SPEC 01M1SAA01YRRTWAVADT2F81RRQ): файл вне
+разрешённого набора первого уровня (`test_*.py`, `_sandbox.py`,
+`markers.py`, `__init__.py`, `*.md`/`*.txt`) — именованная ошибка
+«посторонний файл в каталоге планки», не попытка разбора его как
+артефакта с frontmatter.
 """
 import ast
 import re
@@ -395,6 +402,73 @@ def scan_id_format_samples(tdir: Path) -> list[str]:
         except (OSError, UnicodeDecodeError):
             continue
     return id_format_sample_errors(files)
+
+
+# --------------------------------------------------------------------------
+# Посторонний файл в каталоге планки (SPEC 01M1SAA01YRRTWAVADT2F81RRQ,
+# требование 2/AC-3/AC-6): инцидент 05.09 — `scripts/codebase_map.py`,
+# запущенный с cwd внутри `acceptance_tests/`, оставлял на диске
+# `acceptance_tests/docs/codebase-map.md`, и guard в режиме `--all`
+# честно пытался разобрать его как артефакт с frontmatter вместо
+# понятного нарушения структуры. Критерий допустимости — тот же список,
+# что называет SPEC (и независимо, той же регуляркой, реализует
+# `orchestrator/checkpoint.py::_is_stray_acceptance_test_file` для
+# автокоммита — общего модуля под критерий зона задачи не заводит,
+# guard сознательно лёгкий скрипт без зависимости на `orchestrator.
+# checkpoint`/`store`/`gitcmd`).
+EXTRANEOUS_ACCEPTANCE_FILE_REASON = "посторонний файл в каталоге планки"
+ACCEPTANCE_TESTS_ALLOWED_TOP_LEVEL = re.compile(
+    r"^(test_.*\.py|_sandbox\.py|markers\.py|__init__\.py|.+\.md|.+\.txt)$")
+
+
+def is_extraneous_acceptance_test_file(rel_to_acceptance_tests: str) -> bool:
+    """`rel_to_acceptance_tests` — путь файла относительно `acceptance_tests/`
+    (`/`-разделённый, например `test_x.py` или `docs/codebase-map.md`).
+    `True` — файл вне разрешённого набора первого уровня (AC-1 задачи
+    01M1SAA01YRRTWAVADT2F81RRQ)."""
+    if "/" in rel_to_acceptance_tests:
+        return True
+    return not ACCEPTANCE_TESTS_ALLOWED_TOP_LEVEL.match(rel_to_acceptance_tests)
+
+
+def scan_extraneous_acceptance_files(tasks_root: Path) -> list[Path]:
+    """Посторонние файлы под `<tasks_root>/*/acceptance_tests/` — по всем
+    каталогам задач сразу (режим `--all`, требование 2). `__pycache__/`
+    исключён на любой глубине — та же уже игнорируемая директория, что
+    `checkpoint.py` пропускает через `.gitignore` (AC-1: критерий
+    одинаков независимо от того, git это фильтрует или обычный обход
+    диска, каким сканирует guard).
+
+    Задача, уже закрытая ДО появления этого правила (несёт
+    `docs/retro/<id>.md`), не сканируется вовсе — тот же принцип, что и
+    `_closed_before_split_assessment` ниже (ANSWER-3 tasks/
+    01M1KS8K9RXWHX2PW3ZKB0P903, модульный докстринг выше: «новые правила
+    guard действуют на живые задачи, история не переписывается»).
+    Обнаружено эмпирически прогоном `--all` на реальном дереве пульта:
+    несколько давно закрытых задач несут легитимные вспомогательные
+    файлы вида `_util.py`/`_race.py` в `acceptance_tests/` — без этого
+    исключения новое правило красило бы `guard --all` на main для
+    ЛЮБОЙ последующей ветки, не только для задач, реально нарушающих
+    AC-1 сегодня.
+    """
+    if not tasks_root.is_dir():
+        return []
+    extraneous: list[Path] = []
+    for task_dir in sorted(tasks_root.iterdir()):
+        if (RETRO_DIR / f"{task_dir.name}.md").exists():
+            continue
+        tests_dir = task_dir / "acceptance_tests"
+        if not tests_dir.is_dir():
+            continue
+        for f in sorted(tests_dir.rglob("*")):
+            if not f.is_file():
+                continue
+            rel_parts = f.relative_to(tests_dir).parts
+            if "__pycache__" in rel_parts:
+                continue
+            if is_extraneous_acceptance_test_file("/".join(rel_parts)):
+                extraneous.append(f)
+    return extraneous
 
 
 def traceability_errors_from_content(spec_text: str, meta: dict, tested: set,
@@ -1088,13 +1162,26 @@ def main() -> int:
         print(__doc__)
         return 1
 
+    extraneous_errors: list[str] = []
     if args == ["--all"]:
         files = sorted(Path("tasks").rglob("*.md"))
+        # Посторонние файлы `acceptance_tests/` (SPEC
+        # 01M1SAA01YRRTWAVADT2F81RRQ, требование 2) — исключаются из
+        # обычного обхода `*.md` ДО `check`/`_artifact_branch_report`
+        # (иначе, например, инцидентный `acceptance_tests/docs/
+        # codebase-map.md` попал бы туда и получил ошибку разбора
+        # frontmatter вместо именованной причины ниже).
+        extraneous = scan_extraneous_acceptance_files(Path("tasks"))
+        extraneous_set = set(extraneous)
+        files = [f for f in files if f not in extraneous_set]
+        extraneous_errors = [f"{f}: {EXTRANEOUS_ACCEPTANCE_FILE_REASON}"
+                             for f in extraneous]
     else:
         files = [Path(a) for a in args]
 
     if artifact_branch_mode:
         errors, warnings, submitted, drafts = _artifact_branch_report(files)
+        errors = extraneous_errors + errors
         print(f"сдано {submitted} / черновиков {drafts} / "
               f"нарушений {len(errors) + len(warnings)}")
         if warnings:
@@ -1109,7 +1196,7 @@ def main() -> int:
         print(f"GUARD: ок ({len(files)} файлов)")
         return 0
 
-    all_errors: list[str] = []
+    all_errors: list[str] = list(extraneous_errors)
     for f in files:
         if not f.exists():
             all_errors.append(f"{f}: файл не найден")

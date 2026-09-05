@@ -149,6 +149,36 @@ class MapConflictAutoResolveTest(unittest.TestCase):
         (self.tdir / "PLAN.md").write_text(
             PLAN_READY.format(task=self.TASK), encoding="utf-8")
 
+    def write_acceptance_plank(self) -> None:
+        """SPEC 01M1R9YEK08XEQWBFX0929WFVJ, AC-1/AC-2: планка теперь
+        читается через `acceptance.materialize_from_branch`, backed (в
+        этой лёгкой песочнице) тем же диском `self.tdir`, что и
+        `disk_backed_show`/`disk_backed_ls_tree_files` — SPEC.md со
+        `schema_version: 2` без `skip_tests` + непустой
+        `acceptance_tests/` обязаны быть на диске ДО перехода, иначе
+        авторазрешение конфликта карты уйдёт по вырожденной ветке
+        AC-3/AC-5, минуя `acceptance.run` вовсе (тот же приём, что
+        `tests/test_branch_freshness_gate.py::write_acceptance_plank`)."""
+        self.tdir.mkdir(parents=True, exist_ok=True)
+        (self.tdir / "SPEC.md").write_text(
+            "---\n"
+            f"task: {self.TASK}\n"
+            "type: spec\n"
+            "author_role: analyst\n"
+            "status: ready\n"
+            "schema_version: 2\n"
+            "---\n\n"
+            "# SPEC: планка\n\n"
+            "## Критерии приёмки\n\nAC-1. ...\n",
+            encoding="utf-8")
+        tests_dir = self.tdir / "acceptance_tests"
+        tests_dir.mkdir(parents=True, exist_ok=True)
+        (tests_dir / "test_stub.py").write_text(
+            "import unittest\n\n\n"
+            "class StubTest(unittest.TestCase):\n\n"
+            "    def test_stub(self):\n        pass\n",
+            encoding="utf-8")
+
     def advance_from_in_dev(self) -> str:
         self.write_plan_ready()
         self.set_state("in_dev")
@@ -208,6 +238,13 @@ class MapConflictAutoResolveTest(unittest.TestCase):
     # ------------------------------------------- авторазрешение — успех
 
     def test_map_only_conflict_autoresolves_without_escalation(self):
+        """Ловит мутацию (SPEC 01M1RNZ6V7TTTTYAHBMF8JBQQS, REVIEW.md
+        итерация 1, R1-F2): возврат материализации планки к временному
+        каталогу (регрессия №14) или к `cwd=config.ROOT` — `plank_root`/
+        `cwd`, сверяемые ниже с `self.wt_path`, перестали бы совпадать,
+        и `assertEqual` по ним это поймает.
+        """
+        self.write_acceptance_plank()
         calls, side_effect = self.make_in_repo_side_effect([self.MAP_REL])
         with mock.patch.object(gitcmd, "commits_behind", return_value=3), \
              mock.patch.object(gitcmd, "in_repo", side_effect=side_effect), \
@@ -227,7 +264,17 @@ class MapConflictAutoResolveTest(unittest.TestCase):
         self.assertEqual(regen.call_args.kwargs.get("cwd"), self.wt_path,
                          "регенерация обязана идти на СЛИТОМ дереве "
                          "worktree задачи, не главной копии пульта")
-        acc_run.assert_called_once_with(self.wt_path / "tasks" / self.TASK)
+        acc_run.assert_called_once()
+        plank_root = acc_run.call_args[0][0]
+        self.assertEqual(
+            plank_root, self.wt_path / "tasks" / self.TASK,
+            "SPEC 01M1RNZ6V7TTTTYAHBMF8JBQQS AC-1: планка обязана "
+            "материализоваться в рабочий каталог кода задачи, не во "
+            "временный каталог")
+        self.assertEqual(
+            acc_run.call_args.kwargs.get("code_root"), self.wt_path,
+            "SPEC 01M1RNZ6V7TTTTYAHBMF8JBQQS AC-2: cwd прогона обязан "
+            "быть равен рабочему каталогу кода задачи")
 
         commit_calls = [c for c in calls if c[:1] == ("commit",)]
         self.assertEqual(len(commit_calls), 1,

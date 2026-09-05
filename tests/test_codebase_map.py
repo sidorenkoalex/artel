@@ -11,7 +11,10 @@
 """
 import ast
 import json
+import os
+import subprocess
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -157,16 +160,54 @@ class MapStatsTest(unittest.TestCase):
         self.assertEqual({entry["name"] for entry in top},
                          {"orchestrator/aaa.py", "scripts/bbb.py", "tests/ccc.py"})
 
-    def test_bytes_projection_key_absent_without_project_for_brief(self):
-        self.assertFalse(hasattr(codebase_map, "project_for_brief"))
+    def test_bytes_projection_key_present_with_project_for_brief(self):
+        """После подтяжки main `project_for_brief` существует (задача
+        01M1RFQ52S0VD22J628TXX96XS) — ключ обязан быть и равняться байтам
+        проекции (AC-3, вторая половина условия). Ловит мутацию: ключ
+        считается от полного текста, а не от проекции."""
+        self.assertTrue(hasattr(codebase_map, "project_for_brief"))
         result = codebase_map.map_stats(MAP_TEXT)
-        self.assertNotIn("bytes_projection", result)
+        self.assertEqual(
+            result["bytes_projection"],
+            len(codebase_map.project_for_brief(MAP_TEXT).encode("utf-8")))
 
     def test_result_is_compact_single_line_json_serializable(self):
         result = codebase_map.map_stats(MAP_TEXT)
         compact = json.dumps(result, ensure_ascii=False, separators=(",", ":"))
         self.assertNotIn("\n", compact)
         self.assertEqual(json.loads(compact), result)
+class RepoRootTest(unittest.TestCase):
+    """`codebase_map.repo_root` (SPEC 01M1SAA01YRRTWAVADT2F81RRQ, AC-4/AC-7):
+    приёмочные тесты залоченной планки уже гоняют её через `main()` на
+    двух глубинах подкаталога — здесь юниты на саму функцию, изолированно
+    от записи файла на диск и от `git_head_sha`."""
+
+    def test_resolves_to_git_top_level_not_the_given_subdir(self):
+        """Ловит мутацию: `repo_root` возвращает переданный `cwd` напрямую
+        вместо результата `git rev-parse --show-toplevel` — запуск из
+        подкаталога тогда пишет карту не в корень репозитория."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp).resolve()
+            subprocess.run(["git", "init", "-q"], cwd=root, check=True)
+            subdir = root / "a" / "b"
+            subdir.mkdir(parents=True)
+            self.assertEqual(codebase_map.repo_root(subdir), root)
+
+    def test_raises_when_cwd_is_outside_any_git_repository(self):
+        """Ловит мутацию: ошибка git-процесса подавляется (например,
+        `subprocess.run(..., check=False)`), и функция молча возвращает
+        некорректный путь вместо падения.
+
+        `GIT_CEILING_DIRECTORIES` — иначе git продолжил бы искать `.git`
+        выше по дереву и мог бы найти настоящий репозиторий пульта,
+        если временный каталог ОС окажется внутри его рабочей копии.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp).resolve()
+            with mock.patch.dict(os.environ,
+                                 {"GIT_CEILING_DIRECTORIES": str(root)}):
+                with self.assertRaises(subprocess.CalledProcessError):
+                    codebase_map.repo_root(root)
 
 
 if __name__ == "__main__":

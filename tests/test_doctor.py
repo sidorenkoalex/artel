@@ -32,12 +32,20 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from orchestrator import (alerts, budget, catalog, config, doctor,  # noqa: E402
                           gitcmd, liveness, projects, runner, spend, store)
+from tests import sandbox as sandbox_module  # noqa: E402
 from tests.sandbox import (FakeStream, TmpRootTest, capture,  # noqa: E402
                            capture_new_task_id, claude_only_popen,
                            claude_only_run, disk_backed_ls_tree_files,
                            disk_backed_show, fake_git, sync_spec_from_worktree)
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
+
+# Захвачен ДО любого мокинга `shutil.which` в тестах ниже (SPEC
+# 01M1RDCEF0JZ4AVQRE43JFH8TN): `orchestrator.runner.role_env` теперь тоже
+# резолвит инструменты манифеста через `shutil.which` — стабы doctor'а,
+# отвечающие только на `claude`, должны отвечать НАСТОЯЩИМИ путями и на
+# `git`/`gh`/`python3`, иначе `role_env` считает их отсутствующими.
+_REAL_WHICH = shutil.which
 
 TARGETS_YAML_DOGFOOD_ONLY = """targets:
   artel:
@@ -185,7 +193,13 @@ class DoctorCommandTest(TmpRootTest):
     """Критерий 1: здоровый репо — все проверки ок, код 0; сломанный — провалы, код ≠0."""
 
     def which(self, name):
-        return "/usr/bin/claude" if name == "claude" else None
+        if name == "claude":
+            return "/usr/bin/claude"
+        # git/gh/python3 — реальные пути (SPEC 01M1RDCEF0JZ4AVQRE43JFH8TN,
+        # AC-1/AC-6): `role_env` внутри `isolation_smoke`/`live_smoke`
+        # обязан находить их, иначе «здоровый репо» перестаёт быть
+        # здоровым по причине, не связанной с проверяемым сценарием.
+        return _REAL_WHICH(name)
 
     def healthy_mocks(self):
         """Контекст-менеджер, под которым все проверки doctor проходят чисто."""
@@ -927,14 +941,278 @@ class OrphanArtifactBranchSweepTest(TmpRootTest):
         одного раза за прогон (например, внутри цикла по target'ам), или
         не печатает имена удалённых веток в вывод — тогда AC-4 («перечень
         удалённого в вывод», «ровно одна запись» уборки) был бы нарушен.
+
+        `_remote_artifact_branch_names` замокан пустым множеством (SPEC
+        01M1REVP9WGRHDDNVEVE8BBH0Z, требование 1): `cmd_doctor` теперь
+        зовёт `_orphan_artifact_branches` ДО (замоканной здесь целиком)
+        `sweep_orphan_artifact_branches`, а этой песочнице (временный
+        каталог без `git init`) настоящий `git ls-remote` ответить не
+        может — без мока предпросмотр получил бы «origin недоступен» и
+        (по требованию 5) не дошёл бы до вызова уборки вовсе, хотя сам
+        этот тест — не про origin, а про то, что уборка зовётся один раз
+        и её результат виден в выводе.
         """
         with mock.patch.object(doctor, "all_checks", lambda conn: []), \
+                mock.patch.object(doctor, "_remote_artifact_branch_names",
+                                  return_value=set()), \
                 mock.patch.object(doctor, "sweep_orphan_artifact_branches",
                                   return_value=["artifact/t777"]) as sweep:
             out = capture(lambda: doctor.cmd_doctor(fix=True))
 
         sweep.assert_called_once()
         self.assertIn("artifact/t777", out)
+
+
+class RemoteArtifactBranchNamesTest(TmpRootTest):
+    """SPEC 01M1REVP9WGRHDDNVEVE8BBH0Z, требование 1: `_remote_artifact_
+    branch_names` — единственное место, зовущее `git ls-remote --heads
+    origin 'artifact/*'`; разбор ответа и вырождение при отказе git."""
+
+    def test_parses_branch_names_from_ls_remote_output(self):
+        """Ловит мутацию: из строки `<sha>\\trefs/heads/<name>` берётся не то
+        поле (например, sha вместо имени, или префикс `refs/heads/` не
+        срезается) — тогда множество имён не совпало бы с ожидаемым."""
+        stdout = ("aaaa\trefs/heads/artifact/t001\n"
+                 "bbbb\trefs/heads/artifact/t002\n")
+        with mock.patch.object(
+                doctor.gitcmd, "git",
+                lambda *a: subprocess.CompletedProcess(list(a), 0, stdout, "")):
+            names = doctor._remote_artifact_branch_names()
+
+        self.assertEqual(names, {"artifact/t001", "artifact/t002"})
+
+    def test_empty_response_is_an_empty_set_not_none(self):
+        """origin отвечает, но веток `artifact/*` там нет — легитимный
+        пустой ответ, не «origin не ответил» (не путать с провалом ниже).
+
+        Ловит мутацию: пустой stdout по ошибке трактуется как признак
+        отказа (`return None` вместо пустого множества) — тогда пустой
+        origin неотличим от недоступного, и предпросмотр/уборка отказали
+        бы там, где должны молча сказать «сирот на origin нет»."""
+        with mock.patch.object(
+                doctor.gitcmd, "git",
+                lambda *a: subprocess.CompletedProcess(list(a), 0, "", "")):
+            names = doctor._remote_artifact_branch_names()
+
+        self.assertEqual(names, set())
+
+    def test_nonzero_return_code_is_none(self):
+        """Ловит мутацию: код возврата git не проверяется — тогда отказ
+        origin (`fatal: ...`, код 128) читался бы как «веток нет»."""
+        with mock.patch.object(
+                doctor.gitcmd, "git",
+                lambda *a: subprocess.CompletedProcess(list(a), 128, "",
+                                                       "fatal: unreachable")):
+            names = doctor._remote_artifact_branch_names()
+
+        self.assertIsNone(names)
+
+    def test_git_not_answering_at_all_is_none(self):
+        """`res is None` — тот же вырожденный случай, что у остальных
+        примитивов `gitcmd` (заглушки в тестах, не связанных с git).
+
+        Ловит мутацию: код обращается к `res.returncode`/`res.stdout` без
+        предварительной проверки на `None` — тогда вместо осмысленного
+        `None` тест упал бы `AttributeError`, а не увидел вырожденный
+        случай отказа origin."""
+        with mock.patch.object(doctor.gitcmd, "git", lambda *a: None):
+            names = doctor._remote_artifact_branch_names()
+
+        self.assertIsNone(names)
+
+
+class OrphanArtifactBranchOriginFilterTest(TmpRootTest):
+    """SPEC 01M1REVP9WGRHDDNVEVE8BBH0Z, требования 1-2/AC-1/AC-2/AC-6 на
+    уровне юнит-теста (моки `gitcmd`, не настоящий git с bare origin —
+    та проверка уже покрыта локальными приёмочными
+    `tasks/01M1REVP9WGRHDDNVEVE8BBH0Z/acceptance_tests/
+    test_ac1_ac2_orphan_criterion.py`)."""
+
+    def test_present_on_origin_is_not_an_orphan_even_without_a_db_row(self):
+        """Ловит мутацию: критерий сравнивает только со `state.db` (старое
+        поведение) — ветка на origin без строки БД всё ещё попала бы в
+        кандидаты."""
+        with mock.patch.object(doctor.gitcmd, "list_branches",
+                               lambda prefix="": ["artifact/t888"]):
+            orphans = doctor._orphan_artifact_branches(
+                store.db(), remote={"artifact/t888"})
+
+        self.assertEqual(orphans, [])
+
+    def test_absent_from_both_is_an_orphan(self):
+        """Базовый случай требования 1: ни `state.db`, ни origin не знают
+        ветку — кандидат на удаление.
+
+        Ловит мутацию: фильтр по origin инвертирован (`b in remote`
+        вместо `b not in remote`) — тогда легитимный сирота выпал бы из
+        списка кандидатов вместе с этим тестом."""
+        with mock.patch.object(
+                doctor.gitcmd, "list_branches",
+                lambda prefix="": ["artifact/t777"]):
+            orphans = doctor._orphan_artifact_branches(store.db(), remote=set())
+
+        self.assertEqual(orphans, ["artifact/t777"])
+
+    def test_known_to_db_but_absent_from_origin_is_not_an_orphan(self):
+        """Требование 1: «сиротой считается, только если ОБА условия
+        верны» — известность БД одна уже снимает статус сироты,
+        независимо от origin.
+
+        Ловит мутацию: критерий «не в БД И не на origin» ослаблен до
+        «не в БД ИЛИ не на origin» — тогда известная БД ветка без строки
+        на origin (как в этом тесте) тоже попала бы в кандидаты."""
+        store.insert_task(store.db(), "T001", "Живая задача", "in_dev",
+                          "task/t001-zhivaya-zadacha", config.DEFAULT_TARGET, 25.0)
+        with mock.patch.object(
+                doctor.gitcmd, "list_branches",
+                lambda prefix="": ["artifact/t001"]):
+            orphans = doctor._orphan_artifact_branches(store.db(), remote=set())
+
+        self.assertEqual(orphans, [])
+
+    def test_remote_none_makes_the_whole_result_none(self):
+        """Требование 6: origin недоступен -> критерий целиком не
+        вычислим, не «сирот нет» (пустой список — легитимный отдельный
+        исход, см. `test_absent_from_both_is_an_orphan`).
+
+        Ловит мутацию: `remote is None` не проверяется отдельно от
+        `remote=set()` (например, `if not remote` вместо явного `is
+        None`) — пустое множество и недоступный origin дали бы
+        одинаковый ложный результат вместо `None`."""
+        with mock.patch.object(
+                doctor.gitcmd, "list_branches",
+                lambda prefix="": ["artifact/t777"]):
+            orphans = doctor._orphan_artifact_branches(store.db(), remote=None)
+
+        self.assertIsNone(orphans)
+
+    def test_default_argument_computes_remote_itself(self):
+        """Без явного `remote` (обратная совместимость: приёмочные тесты
+        и часть существующих юнит-тестов зовут функцию с одним
+        аргументом) — вычисляет его сам через `_remote_artifact_branch_
+        names`, а не требует его от вызывающего кода.
+
+        Ловит мутацию: сентинел-дефолт реализован как буквальный `remote
+        =None` — тогда вызов без аргумента читался бы как «origin
+        недоступен» и результат ошибочно стал бы `None` вместо списка
+        кандидатов."""
+        with mock.patch.object(
+                doctor, "_remote_artifact_branch_names", return_value=set()), \
+                mock.patch.object(
+                    doctor.gitcmd, "list_branches",
+                    lambda prefix="": ["artifact/t777"]):
+            orphans = doctor._orphan_artifact_branches(store.db())
+
+        self.assertEqual(orphans, ["artifact/t777"])
+
+
+class SweepOrphanArtifactBranchesOriginGateTest(TmpRootTest):
+    """SPEC 01M1REVP9WGRHDDNVEVE8BBH0Z, требование 5/AC-6: `orphans=None`
+    (origin недоступен) блокирует уборку целиком."""
+
+    def test_orphans_none_deletes_nothing_and_raises_no_incident(self):
+        """Требование 5/AC-6: `orphans=None` блокирует уборку целиком, без
+        побочных эффектов.
+
+        Ловит мутацию: `orphans is None` не проверяется до цикла удаления
+        — тогда `git branch -D` либо упал бы на итерации по `None`
+        (TypeError вместо явного отказа), либо (хуже) `None` молча читался
+        бы как пустой список, маскируя недоступность origin под «сирот
+        нет»."""
+        with mock.patch.object(doctor.gitcmd, "git") as git_mock:
+            deleted = doctor.sweep_orphan_artifact_branches(store.db(), orphans=None)
+
+        self.assertIsNone(deleted)
+        git_mock.assert_not_called()
+        self.assertEqual(
+            [a for a in alerts.open_alerts(store.db(), "incident")
+             if a["source"] == doctor.ORPHAN_ARTIFACT_BRANCH_SOURCE], [])
+
+    def test_default_argument_computes_orphans_itself(self):
+        """Обратная совместимость: прямой вызов с одним аргументом (как в
+        существующих тестах этого файла) вычисляет кандидатов сам.
+
+        Ловит мутацию: сентинел-дефолт `orphans` реализован как буквальный
+        `orphans=None` — тогда вызов без аргумента читался бы как «origin
+        недоступен» и уборка молча блокировалась бы вместо вычисления
+        кандидатов и удаления."""
+        with mock.patch.object(
+                doctor, "_orphan_artifact_branches", return_value=["artifact/t777"]), \
+                mock.patch.object(
+                    doctor.gitcmd, "git",
+                    lambda *a: subprocess.CompletedProcess(list(a), 0, "", "")):
+            deleted = doctor.sweep_orphan_artifact_branches(store.db())
+
+        self.assertEqual(deleted, ["artifact/t777"])
+
+
+class PrintOrphanBranchCandidatesTest(unittest.TestCase):
+    """SPEC 01M1REVP9WGRHDDNVEVE8BBH0Z, требования 3-4: превью — полное
+    число, но не более `config.DOCTOR_ORPHAN_PREVIEW_LIMIT` имён."""
+
+    def test_truncates_names_to_the_configured_limit(self):
+        """Ловит мутацию: срез списка кандидатов по `config.DOCTOR_
+        ORPHAN_PREVIEW_LIMIT` не применяется (печатаются все имена без
+        усечения) — тест ловит это явным `assertNotIn("artifact/t003",
+        out)` при лимите 2 из 3 кандидатов."""
+        with mock.patch.object(config, "DOCTOR_ORPHAN_PREVIEW_LIMIT", 2):
+            out = capture(doctor._print_orphan_branch_candidates,
+                          ["artifact/t001", "artifact/t002", "artifact/t003"])
+
+        self.assertIn("3", out)
+        self.assertIn("artifact/t001", out)
+        self.assertIn("artifact/t002", out)
+        self.assertNotIn("artifact/t003", out)
+        self.assertIn("--fix", out)
+
+    def test_empty_list_does_not_crash(self):
+        """Ловит мутацию: печать превью не обрабатывает пустой список
+        отдельно (например, обращение к первому элементу при
+        формировании строки) — падение вместо корректного «0
+        кандидатов»."""
+        out = capture(doctor._print_orphan_branch_candidates, [])
+
+        self.assertIn("0", out)
+
+
+class CmdDoctorOriginUnavailableTest(TmpRootTest):
+    """SPEC 01M1REVP9WGRHDDNVEVE8BBH0Z, требования 5-6/AC-6/AC-7 на уровне
+    юнит-теста (моки `gitcmd.git`, не настоящий git с недоступным bare
+    origin — та проверка уже покрыта локальным приёмочным
+    `tasks/01M1REVP9WGRHDDNVEVE8BBH0Z/acceptance_tests/
+    test_ac6_origin_unavailable_blocks_fix.py`)."""
+
+    def _unreachable_git(self, *a):
+        if len(a) >= 3 and a[0] == "ls-remote" and a[1] == "--heads":
+            return subprocess.CompletedProcess(list(a), 128, "",
+                                               "fatal: unreachable")
+        return subprocess.CompletedProcess(list(a), 0, "", "")
+
+    def test_fix_mode_fails_named_and_does_not_call_sweep(self):
+        """Ловит мутацию: `cmd_doctor(fix=True)` продолжает звать
+        `sweep_orphan_artifact_branches` даже когда `_orphan_artifact_
+        branches` вернула `None` (origin недоступен) — тогда `sweep`
+        был бы вызван и потенциально удалил бы ветки вместо FAIL с
+        `sys.exit(1)`."""
+        with mock.patch.object(doctor, "all_checks", lambda conn: []), \
+                mock.patch.object(doctor.gitcmd, "git", self._unreachable_git), \
+                mock.patch.object(doctor, "sweep_orphan_artifact_branches") as sweep:
+            with self.assertRaises(SystemExit) as cm:
+                capture(lambda: doctor.cmd_doctor(fix=True))
+
+        self.assertEqual(cm.exception.code, 1)
+        sweep.assert_not_called()
+
+    def test_preview_mode_reports_uncomputable_and_does_not_exit(self):
+        """Ловит мутацию: предпросмотр (`fix=False`) при недоступном
+        origin ошибочно завершается `sys.exit`/поднимает исключение вместо
+        печати «критерий не вычислим без origin» и штатного
+        завершения."""
+        with mock.patch.object(doctor, "all_checks", lambda conn: []), \
+                mock.patch.object(doctor.gitcmd, "git", self._unreachable_git):
+            out = capture(doctor.cmd_doctor)  # не должен поднять SystemExit
+
+        self.assertIn("критерий не вычислим без origin", out)
 
 
 class LeasesCheckTest(TmpRootTest):
@@ -1826,6 +2104,54 @@ class MapGrowthCheckTest(TmpRootTest):
 
     def test_all_checks_wires_in_check_map_growth(self):
         self.assertIn("check_map_growth", inspect.getsource(doctor.all_checks))
+class _RoleHomeReferenceTmpRootTest(sandbox_module.TmpRootTest):
+    """Сужение `TmpRootTest`: только `ROLE_HOME`/`ROLE_CONFIG_DIR` во
+    временном каталоге — `ROOT` остаётся настоящим деревом репозитория,
+    тот же приём, что и в приёмочном тесте AC-13 этой же задачи
+    (`tasks/01M1RDCEF0JZ4AVQRE43JFH8TN/acceptance_tests/
+    test_ac13_doctor_role_home_reference_diff.py`)."""
+
+    PATCHED_ATTRS = ("ROLE_HOME", "ROLE_CONFIG_DIR")
+
+    def setUp(self):
+        super().setUp()
+        self.reference = (config.ROOT / "docs" / "reference" / "role-home"
+                          / "claude")
+        shutil.copytree(self.reference, config.ROLE_CONFIG_DIR)
+
+
+class RoleHomeReferenceExtraFilesTest(_RoleHomeReferenceTmpRootTest):
+    """Регресс REVIEW.md 01M1RDCEF0JZ4AVQRE43JFH8TN итерации 1, R1-F1:
+    сравнение симметрической разностью деревьев файлов давало WARN на
+    ЛЮБОМ файле развёрнутого слоя, которого нет в референсе — а такое
+    разрастание легитимно (docs/reference/role-home.md, «Курирование»;
+    рантайм-файлы `claude` CLI внутри `CLAUDE_CONFIG_DIR`)."""
+
+    def test_extra_file_absent_from_reference_is_not_a_warn(self):
+        """Ловит мутацию: возврат к сравнению `ref_files ^ dep_files`
+        (симметрическая разность) вместо сверки только файлов
+        референса — та регрессия завела бы WARN на лишнем файле ниже."""
+        (config.ROLE_CONFIG_DIR / "session-cache.json").write_text(
+            "{}", encoding="utf-8")
+
+        check = doctor.check_role_home_reference()
+
+        self.assertNotEqual(check.status, "warn",
+                            f"лишний файл развёрнутого слоя не должен "
+                            f"давать WARN: {check.detail}")
+
+    def test_extra_subdirectory_is_not_a_warn(self):
+        """То же самое для целого поддерева, а не одного файла —
+        например, MCP-конфиг, добавленный Оператором вручную."""
+        extra_dir = config.ROLE_CONFIG_DIR / "mcp"
+        extra_dir.mkdir()
+        (extra_dir / "config.json").write_text("{}", encoding="utf-8")
+
+        check = doctor.check_role_home_reference()
+
+        self.assertNotEqual(check.status, "warn",
+                            f"лишнее поддерево не должно давать WARN: "
+                            f"{check.detail}")
 
 
 if __name__ == "__main__":

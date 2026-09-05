@@ -11,8 +11,18 @@
 
 ```
 docs/reference/role-home/
-  claude/CLAUDE.md   -> .artel/home/.claude/CLAUDE.md  (переименовывается при деплое)
+  claude/CLAUDE.md          -> .artel/home/.claude/CLAUDE.md  (переименовывается при деплое)
+  claude/settings.json      -> .artel/home/.claude/settings.json  (deny-список роли)
 ```
+
+`settings.json` несёт `permissions.deny` — периметр роли (пул канарейки и
+клонирование — SPEC 01M1NEEWH5K1XPFRDGRMPYSBXJ, требование 13а).
+
+Деплой референса происходит ТОЛЬКО при отсутствии `.artel/home`
+(холодный старт). На уже работающем пульте изменения референса в
+`.artel/home/.claude/` не попадают сами — Оператор копирует их руками
+(так 05.09 обнаружилось, что deny-список канарейки на этом пульте не
+был развёрнут).
 
 Каталог референса называется `claude/`, БЕЗ ведущей точки — в самом
 репозитории, чтобы не путать инструментарий (IDE, агентские харнессы),
