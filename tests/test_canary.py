@@ -505,5 +505,81 @@ class StoreAndCatalogMarkingTest(unittest.TestCase):
         self.assertNotIn("canary", product_retro.lower())
 
 
+class PoolSerializationRoundtripTest(unittest.TestCase):
+    """`canary._serialize_pool`/`_deserialize_pool` (SPEC
+    01M1NSR5M5THYRC0RFWPMVE2DW) — байт-в-байт round trip самой
+    сериализации в изоляции от шифрования/диска: юникод, пустой файл,
+    пустой пул. Полный цикл seal -> restore уже покрыт приёмочными
+    тестами (AC-16) — здесь только эта прослойка."""
+
+    def test_roundtrip_preserves_names_and_bytes(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        root = Path(tmp.name)
+        (root / "a.md").write_text(
+            "тело А, юникод: üñïçødé\n", encoding="utf-8")
+        (root / "b.md").write_bytes(b"")
+        files = sorted(root.iterdir())
+
+        restored = canary._deserialize_pool(canary._serialize_pool(files))
+
+        self.assertEqual(set(restored), {"a.md", "b.md"})
+        self.assertEqual(restored["a.md"], (root / "a.md").read_bytes())
+        self.assertEqual(restored["b.md"], b"")
+
+    def test_empty_pool_serializes_to_empty_payload(self):
+        self.assertEqual(canary._serialize_pool([]), b"")
+        self.assertEqual(canary._deserialize_pool(b""), {})
+
+
+class MacKeyTest(unittest.TestCase):
+    """`canary._mac_key` — ключ HMAC выводится из ключа пула
+    детерминированно (ANSWER-1 п.1): тот же вход -> тот же результат,
+    разный вход -> разный, и сам вывод не совпадает с исходным ключом
+    (иначе тег и шифрование делили бы один материал)."""
+
+    def test_same_input_gives_same_mac_key(self):
+        self.assertEqual(canary._mac_key("key-A"), canary._mac_key("key-A"))
+
+    def test_different_input_gives_different_mac_key(self):
+        self.assertNotEqual(canary._mac_key("key-A"), canary._mac_key("key-B"))
+
+    def test_mac_key_is_not_the_pool_key_itself(self):
+        self.assertNotEqual(canary._mac_key("key-A"), "key-A")
+
+
+class AuthorizedPoolPayloadRoleEnvTest(unittest.TestCase):
+    """`canary._authorized_pool_payload` — рубеж role_env (требование 5,
+    AC-15) срабатывает ДО любого обращения к keychain: и restore, и
+    drift-warning идут через эту единую точку входа, поэтому проверяется
+    здесь один раз, а не в обоих вызывающих."""
+
+    def test_role_environment_refuses_before_touching_keychain(self):
+        with mock.patch.object(canary.runner, "in_role_environment",
+                               return_value=True):
+            with mock.patch.object(canary.keychain, "token") as token_mock:
+                payload, refusal = canary._authorized_pool_payload()
+
+        self.assertIsNone(payload)
+        self.assertIn("role_env", refusal)
+        token_mock.assert_not_called()
+
+
+class RestorePoolIfMissingNoOpTest(unittest.TestCase):
+    """`canary.restore_pool_if_missing` — каталог пула уже есть (AC-7):
+    no-op молча, keychain не спрашивается вовсе (нечего расшифровывать)."""
+
+    def test_existing_pool_dir_short_circuits_before_keychain(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        existing = Path(tmp.name)
+        with mock.patch.object(canary, "_pool_dir", return_value=existing):
+            with mock.patch.object(canary.keychain, "token") as token_mock:
+                result = canary.restore_pool_if_missing(conn=None)
+
+        self.assertIsNone(result)
+        token_mock.assert_not_called()
+
+
 if __name__ == "__main__":
     unittest.main()

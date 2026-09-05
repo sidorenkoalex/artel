@@ -3,6 +3,12 @@
 напрямую, без полного `cmd_doctor` (тот прогон, включая AC-15 с реальным
 `config.LOGS`, покрыт приёмочными тестами `tasks/
 01M1NEEWH5K1XPFRDGRMPYSBXJ/acceptance_tests/`).
+
+`CanaryPoolDriftCheckTest` — `doctor.check_canary_pool_drift` (SPEC
+01M1NSR5M5THYRC0RFWPMVE2DW, требование 3/AC-8) вызовом функции напрямую;
+полный сценарий через `doctor` CLI и обе команды восстановления уже
+покрыт приёмочными тестами `tasks/01M1NSR5M5THYRC0RFWPMVE2DW/
+acceptance_tests/`.
 """
 import subprocess
 import sys
@@ -113,6 +119,49 @@ class TokenRepoScopeCheckTest(unittest.TestCase):
                                return_value=result) as run_mock:
             doctor.check_token_repo_scope()
         self.assertEqual(run_mock.call_count, 1)
+
+
+class CanaryPoolDriftCheckTest(unittest.TestCase):
+
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        root_patcher = mock.patch.object(config, "ROOT", Path(tmp.name))
+        root_patcher.start()
+        self.addCleanup(root_patcher.stop)
+
+        home_tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(home_tmp.cleanup)
+        self.fake_home = Path(home_tmp.name)
+        home_patcher = mock.patch.object(Path, "home",
+                                         return_value=self.fake_home)
+        home_patcher.start()
+        self.addCleanup(home_patcher.stop)
+
+        self.pool_dir = self.fake_home / config.CANARY_POOL_DIRNAME
+        self.pool_dir.mkdir()
+        (self.pool_dir / "a.md").write_text("тело А\n", encoding="utf-8")
+
+        kc_patcher = mock.patch.object(
+            doctor.canary.keychain, "token",
+            return_value="unit-test-drift-key")
+        kc_patcher.start()
+        self.addCleanup(kc_patcher.stop)
+
+    def test_no_sealed_file_is_ok(self):
+        self.assertEqual(doctor.check_canary_pool_drift().status, "ok")
+
+    def test_matching_pool_is_ok(self):
+        doctor.canary.cmd_pool_seal()
+        self.assertEqual(doctor.check_canary_pool_drift().status, "ok")
+
+    def test_diverging_pool_warns(self):
+        doctor.canary.cmd_pool_seal()
+        (self.pool_dir / "a.md").write_text(
+            "тело А, незапечатанная правка\n", encoding="utf-8")
+        check = doctor.check_canary_pool_drift()
+        self.assertEqual(check.status, "warn")
+        self.assertIn("пул", check.detail.lower())
 
 
 if __name__ == "__main__":

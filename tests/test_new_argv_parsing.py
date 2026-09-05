@@ -1,12 +1,17 @@
 """Юнит-тесты `orchestrator.artel._parse_new_args` (tasks/T102/SPEC.md):
 разбор argv команды `new` отклоняет нераспознанное ДО обращения к
 `catalog.cmd_new` — на этом уровне без сандбокса/git, т.к. функция
-только читает список аргументов и печатает/выходит."""
+только читает список аргументов и печатает/выходит.
+
+`_cmd_canary` (SPEC 01M1NSR5M5THYRC0RFWPMVE2DW, требование 2) — та же
+идея для подкоманды `canary`: `pool-seal` не должна обращаться к `--k`
+вовсе."""
 import io
 import sys
 import unittest
 from contextlib import redirect_stdout
 from pathlib import Path
+from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
@@ -68,6 +73,23 @@ class ParseNewArgsRejectsUnrecognizedTest(unittest.TestCase):
         with self.assertRaises(SystemExit) as ctx:
             artel._parse_new_args(["Название", "--tz"])
         self.assertIn("--tz", str(ctx.exception))
+
+
+class CmdCanaryDispatchTest(unittest.TestCase):
+
+    def test_pool_seal_routes_to_pool_seal_without_k_arg(self):
+        with mock.patch.object(artel.canary, "cmd_pool_seal") as seal_mock:
+            with mock.patch.object(artel.canary, "cmd_canary") as run_mock:
+                artel._cmd_canary(["pool-seal"])
+        seal_mock.assert_called_once_with()
+        run_mock.assert_not_called()
+
+    def test_k_flag_routes_to_the_run_command(self):
+        with mock.patch.object(artel.canary, "cmd_pool_seal") as seal_mock:
+            with mock.patch.object(artel.canary, "cmd_canary") as run_mock:
+                artel._cmd_canary(["--k", "3"])
+        run_mock.assert_called_once_with(k=3)
+        seal_mock.assert_not_called()
 
 
 if __name__ == "__main__":
