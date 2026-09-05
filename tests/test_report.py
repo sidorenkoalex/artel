@@ -482,6 +482,10 @@ class MapGrowthToolCallCountTest(TmpRootTest):
     01M1RGQV4DG2FX1B90W4EEETTR не включает agent_log.py)."""
 
     def test_counts_tool_use_blocks_across_lines(self):
+        """Ловит мутацию: `_map_growth_tool_call_count` перестаёт
+        накапливать `count` по всем строкам файла (например, выходит из
+        цикла после первой строки или переприсваивает `count` вместо
+        `+=`) — тогда для двух строк с `tool_use` результат не будет 2."""
         log_path = config.LOGS / "T001-developer-1.log"
         config.LOGS.mkdir(parents=True, exist_ok=True)
         log_path.write_text(
@@ -490,6 +494,11 @@ class MapGrowthToolCallCountTest(TmpRootTest):
         self.assertEqual(report._map_growth_tool_call_count(log_path), 2)
 
     def test_ignores_non_json_and_non_assistant_lines(self):
+        """Ловит мутацию: `_map_growth_tool_call_count` перестаёт
+        отбрасывать строку, не начинающуюся с `{` (падает
+        `json.JSONDecodeError` на нераспознанном выводе CLI), либо
+        начинает считать `tool_use` внутри событий с `role="user"` —
+        тогда результат для одного реального вызова не будет равен 1."""
         log_path = config.LOGS / "T001-developer-1.log"
         config.LOGS.mkdir(parents=True, exist_ok=True)
         log_path.write_text(
@@ -506,6 +515,10 @@ class MapGrowthCallsEstimateTest(TmpRootTest):
     лога на диске вовсе (retention уже вычистил `.artel/logs/`)."""
 
     def test_missing_logs_dir_falls_back_to_named_constant(self):
+        """Ловит мутацию: `_map_growth_calls_estimate` подставляет число
+        прямо литералом вместо чтения `config.MAP_GROWTH_CALLS_ESTIMATE`
+        (первый ассерт разойдётся при смене константы), либо возвращает
+        `is_estimate=False` при пустой выборке (второй ассерт упадёт)."""
         conn = store.db()
         store.create_schema(conn)
         store.insert_task(conn, "T001", "Задача", "done", "task/t001",
@@ -531,6 +544,11 @@ class MapSizeEntriesTest(TmpRootTest):
                           "alpha", 10.0)
 
     def test_unparsable_detail_json_is_skipped_not_raised(self):
+        """Ловит мутацию: `_map_size_entries` перестаёт ловить
+        `(TypeError, ValueError)` вокруг `json.loads(s["detail"])` —
+        нераспознаваемый `detail` роняет функцию исключением вместо
+        того, чтобы просто выпасть из выдачи, и `len(entries)` не будет
+        равен 1."""
         store.journal(self.conn, "T001", "orchestrator", report.MAP_SIZE_ACTION,
                      "не JSON вовсе")
         store.journal(self.conn, "T001", "orchestrator", report.MAP_SIZE_ACTION,
@@ -543,6 +561,11 @@ class MapSizeEntriesTest(TmpRootTest):
         self.assertEqual(entries[0]["bytes_total"], 1000)
 
     def test_ignores_entries_of_other_actions(self):
+        """Ловит мутацию: `_map_size_entries` ослабляет сравнение
+        `s["action"] != MAP_SIZE_ACTION` (например, до проверки
+        подстроки или отбрасывает фильтр вовсе) — тогда запись журнала
+        постороннего action попадёт в `entries` и список не будет
+        пустым."""
         store.journal(self.conn, "T001", "orchestrator", "не карта: размер",
                      json.dumps({"bytes_total": 999}))
 
@@ -563,11 +586,21 @@ class MapGrowthHtmlTest(TmpRootTest):
         self.conn = conn
 
     def test_no_tasks_at_all_reports_empty(self):
+        """Ловит мутацию: `_map_growth_html` теряет короткое замыкание
+        `if not targets: return ...` (падает на пустом множестве target
+        внутри `_map_growth_target_html` или возвращает пустую строку) —
+        тогда подстроки «Задач нет» не будет в результате."""
         html = report._map_growth_html(self.conn, [])
 
         self.assertIn("Задач нет", html)
 
     def test_target_without_a_single_record_shows_fixed_message(self):
+        """Ловит мутацию: `_map_growth_target_html` перестаёт коротко
+        замыкаться на пустом `rows` и пытается посчитать калибровку/
+        оценку до мержа части 1 (падает `AttributeError` на отсутствующей
+        `config.MAP_GROWTH_CALIBRATION_MERGES`) или теряет имя target в
+        разметке — тогда `report.NO_MEASUREMENTS_TEXT`/«ghost» не
+        появятся в выдаче."""
         store.insert_task(self.conn, "T001", "Задача", "done", "task/t001",
                           "ghost", 10.0)
 
