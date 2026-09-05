@@ -47,11 +47,24 @@ schema_version: 4
   проверке) либо финальный стоп после выхода из цикла, если у нового
   состояния роли уже нет.
 
-Числовой лимит (`AUTO_MAX_STEPS`) гейтит итерацию целиком (проверяется
-ДО предварительного `advance`, а не только перед `cmd_run`) — иначе с
+Числовой лимит (`AUTO_MAX_STEPS`) проверяется на входе в каждую итерацию
+(ДО предварительного `advance`, а не только перед `cmd_run` — иначе с
 `AUTO_MAX_STEPS == 1` цикл после единственной пары (advance, run) сделал
-бы ещё один вызов `advance` вместо остановки (AC-1 приёмки: ровно одна
-пара `("advance", "run")` при лимите 1).
+бы ещё один вызов `advance` вместо остановки, AC-1 приёмки: ровно одна
+пара `("advance", "run")` при лимите 1), но сам счётчик `steps`
+инкрементируется ТОЛЬКО там, где итерация либо зовёт `runner.cmd_run`,
+либо останавливает цикл/пропускает шаг роли журналируемым отказом
+требования 4 — НЕ на голом переходе, который предварительный `advance`
+выполнил сам без единого вызова агента (REVIEW.md итерации 1, R1-F1: до
+этой правки такой переход тратил единицу лимита ровно как настоящий шаг
+роли, вдвое ускоряя исчерпание `AUTO_MAX_STEPS` относительно старого
+поведения «run, затем advance», где переход по свежему результату шага
+был бесплатным довеском к тому же самому шагу). Регресс-тест
+`tests/test_auto_cycle.py::AutoStepLimitTest::
+test_transitions_by_advance_alone_do_not_consume_the_step_limit`
+прогоняет `AUTO_MAX_STEPS == 1` через ДВА подряд свободных перехода
+(`in_dev -> review -> verifying`, оба артефакта готовы заранее) — при
+прежнем счёте лимит был бы исчерпан на первом же переходе.
 
 ## Влияние на систему (регресс, который литеральное требование 4 внесло бы)
 
@@ -140,14 +153,18 @@ schema_version: 4
 1. `orchestrator/fsm_advance.py::in_dev` — ветка `status == "escalate"`
    (требование 6, AC-6).
 2. `orchestrator/auto.py::_cmd_auto` — перестановка `advance`/`run`,
-   разбор классов отказа, лимит шагов гейтит итерацию целиком
-   (требования 1-5, 7, AC-1..AC-5, AC-7).
+   разбор классов отказа, числовой лимит проверяется на входе в
+   итерацию, а счётчик `steps` инкрементируется точечно — не на голых
+   переходах (требования 1-5, 7, AC-1..AC-5, AC-7; R1-F1 REVIEW.md
+   итерации 1).
 3. Юнит-тесты: приёмочные `tasks/01M1R8B3ZKXQT0Z0G6QQQDV906/
    acceptance_tests/` (залочены test_author, AC-1..AC-8) + фикстуры
    `tests/test_auto_cycle.py`, потребовавшие правки под новый порядок
    вызовов (полномочие разработчика, AC-8 приёмки: «правка фикстур...
-   остаётся за разработчиком») + новый регрессионный
-   `test_fresh_task_first_developer_step_still_runs`.
+   остаётся за разработчиком») + новые регрессионные
+   `test_fresh_task_first_developer_step_still_runs` и (REVIEW.md
+   итерации 1, R1-F1) `AutoStepLimitTest::
+   test_transitions_by_advance_alone_do_not_consume_the_step_limit`.
 
 ## Покрытие требований
 
@@ -178,14 +195,18 @@ schema_version: 4
   (закрыто правкой `tests/test_auto_cycle.py::AutoReportsTheCycleTest`).
 - Полный набор тестов не прогонялся в шаге (скилы разработчика: гоняет
   CI); прогнаны точечно все файлы, реально касающиеся `auto.py`/
-  `fsm_advance.py::in_dev`/`review`: test_auto_cycle (39, зелёный),
-  test_review_freshness, test_invariants, test_advance_guard,
-  test_id_format_guard, test_fsm_draft_mr_reentry,
+  `fsm_advance.py::in_dev`/`review`: test_auto_cycle (40 после фикса
+  R1-F1, зелёный), test_review_freshness, test_invariants,
+  test_advance_guard, test_id_format_guard, test_fsm_draft_mr_reentry,
   test_review_registry_gate, test_split_assessment_merge_gate,
   test_acceptance_tests_flow, test_git_fixation, test_fsm_autogate,
   test_answer_gate, test_multitarget_invariants, test_answer,
   test_analyst_role, test_stall_alerts, test_capacity_gate,
-  test_branch_freshness_gate — все зелёные.
+  test_branch_freshness_gate — все зелёные (284 теста). Приёмочные
+  `tasks/01M1R8B3ZKXQT0Z0G6QQQDV906/acceptance_tests/` (AC-1..AC-7, 15
+  тестов) прогнаны заново после фикса R1-F1/R1-F2/R1-F3 — тоже зелёные;
+  `scripts/guard.py` на PLAN.md — ок; `scripts/codebase_map.py`
+  перегенерирован (R1-F2), закоммичен вместе с кодом.
 - Откат: правки локальны к телу `_cmd_auto` и одной ветке `in_dev` —
   откатывается одним `git revert` без побочных данных (нет миграций
   схемы, новых колонок).
