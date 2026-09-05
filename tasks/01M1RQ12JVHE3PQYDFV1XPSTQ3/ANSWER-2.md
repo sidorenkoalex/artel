@@ -8,7 +8,9 @@ schema_version: 2
 
 Расширение зон разрешено: orchestrator/review.py
 
-# ANSWER-2
+# ANSWER-2: ответ Оператора
+
+## Ответы
 
 Гейт зон отклонил переход в ревью: дифф трогает `orchestrator/review.py`
 вне заявленных `zones`. Правка (7 строк в `artifact_text`: отдельная ветка
