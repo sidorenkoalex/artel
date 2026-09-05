@@ -158,6 +158,8 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ steps.stack-python.outputs.version }}
+      - name: зависимости из файла закреплённых версий (01M1REVEZ1HESMJ7AFD5A9MEJ8, требование 3)
+        run: python3 -m pip install -r requirements.lock
       - run: python3 -m py_compile orchestrator/artel.py scripts/guard.py
       - name: снимок ссылок репозитория до прогона тестов (SPEC 01M1KVGD18P9H5WR7VM8TGPV1T, требование 1)
         run: git for-each-ref --format='%(refname) %(objectname)' refs/heads/ refs/artifacts/ > /tmp/refs-before.txt

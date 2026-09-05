@@ -5,7 +5,6 @@ if/elif `orchestrator/fsm.py::_cmd_advance`, перенесённое без и�
 `fsm.py` — эти функции не вызываются напрямую иначе, кроме тестов,
 идущих через публичный `fsm.cmd_advance`.
 """
-import shutil
 from datetime import datetime, timezone
 
 from scripts import guard
@@ -222,38 +221,40 @@ def review(conn, task_id: str, t, tdir, target: str, state: str) -> bool:
         # T094, требование 10, реестр PLAN.md пункт 2 «лок
         # acceptance_tests»): живого worktree с этим каталогом на диске
         # нет вовсе — `acceptance_tests/` живёт только в артефактной
-        # ветке пульта (`branch` уже резолвлен выше), материализуется во
-        # временный каталог на время прогона и убирается сразу после.
+        # ветке пульта (`branch` уже резолвлен выше); материализуется НА
+        # МЕСТЕ в workspace target'а (SPEC 01M1RNZ6V7TTTTYAHBMF8JBQQS,
+        # требование 1-2, AC-1/AC-2/AC-5 — не во временный каталог, тот
+        # же узел выбора рабочего каталога кода, что `runner.role_cwd`),
+        # прогон идёт с `cwd`, равным этому же каталогу.
         acc_tdir = tdir
-        cleanup_acc = None
+        run_cwd = config.ROOT
         if target != config.DEFAULT_TARGET:
-            acc_tdir = acceptance.materialize_from_branch(task_id, branch)
-            cleanup_acc = acc_tdir
+            run_cwd = config.PROJECTS / target / "workspace"
+            run_cwd.mkdir(parents=True, exist_ok=True)
+            acc_tdir = acceptance.materialize_from_branch(task_id, branch,
+                                                           run_cwd)
         elif workspace.on_task_branch(task_id, t["branch"]) is True:
-            acc_tdir = workspace.path(task_id) / "tasks" / task_id
-        try:
-            green, tail = acceptance.run(acc_tdir)
-            # Fingerprint окружения (SPEC T101, требование 4б, AC-5) —
-            # часть исхода прогона приёмочных тестов, тем же приёмом, что
-            # и у события агентного шага (`runner.py`): значение поля
-            # `detail` существующего журнального события, без новой
-            # таблицы/колонки.
-            fingerprint = agent_log.environment_fingerprint()
-            if not green:
-                detail = (f"acceptance_tests красные:\n{tail}\n"
-                          f"окружение: {fingerprint}")
-                store.journal(conn, task_id, "fsm",
-                              "переход отклонён: приёмочные тесты", detail)
-                print(f"[{task_id}] переход отклонён: приёмочные тесты "
-                      f"красные")
-                print(tail)
-                print(f"  дальше: почини код (не тест) и повтори "
-                      f"artel.py advance {task_id}")
-                return False
-            card = acceptance.summary(acc_tdir)
-        finally:
-            if cleanup_acc is not None:
-                shutil.rmtree(cleanup_acc, ignore_errors=True)
+            run_cwd = workspace.path(task_id)
+            acc_tdir = run_cwd / "tasks" / task_id
+        green, tail = acceptance.run(acc_tdir, code_root=run_cwd)
+        # Fingerprint окружения (SPEC T101, требование 4б, AC-5) —
+        # часть исхода прогона приёмочных тестов, тем же приёмом, что
+        # и у события агентного шага (`runner.py`): значение поля
+        # `detail` существующего журнального события, без новой
+        # таблицы/колонки.
+        fingerprint = agent_log.environment_fingerprint()
+        if not green:
+            detail = (f"acceptance_tests красные:\n{tail}\n"
+                      f"окружение: {fingerprint}")
+            store.journal(conn, task_id, "fsm",
+                          "переход отклонён: приёмочные тесты", detail)
+            print(f"[{task_id}] переход отклонён: приёмочные тесты "
+                  f"красные")
+            print(tail)
+            print(f"  дальше: почини код (не тест) и повтори "
+                  f"artel.py advance {task_id}")
+            return False
+        card = acceptance.summary(acc_tdir)
         store.journal(conn, task_id, "fsm", "приёмочные тесты пройдены",
                       f"{card}\nокружение: {fingerprint}")
         print(f"[{task_id}] {card}")
@@ -312,25 +313,22 @@ def verifying(conn, task_id: str, t, tdir, target: str, state: str) -> bool:
                         expected_state=state, detail=note)
         # Каталог acceptance_tests/ для автогейта (SPEC T094, требование
         # 10) — тем же приёмом, что `review()` выше: внешний target не
-        # несёт живого worktree, читаем из артефактной ветки пульта во
-        # временный каталог, чужой CI-запрос (`branch` = код-ветка,
-        # выше) этого не касается — материализация нужна только
-        # `acceptance_tests/`, не коду.
+        # несёт живого worktree, читаем из артефактной ветки пульта на
+        # МЕСТО workspace target'а (SPEC 01M1RNZ6V7TTTTYAHBMF8JBQQS,
+        # требования 1-2, AC-5 — не во временный каталог), чужой CI-запрос
+        # (`branch` = код-ветка, выше) этого не касается — материализация
+        # нужна только `acceptance_tests/`, не коду.
         acc_tdir = tdir
-        cleanup_acc = None
         if target != config.DEFAULT_TARGET:
             artifact_branch_name, _ = artifact_source.resolve(conn, task_id)
+            code_dir = config.PROJECTS / target / "workspace"
+            code_dir.mkdir(parents=True, exist_ok=True)
             acc_tdir = acceptance.materialize_from_branch(
-                task_id, artifact_branch_name)
-            cleanup_acc = acc_tdir
+                task_id, artifact_branch_name, code_dir)
         elif workspace.on_task_branch(task_id, t["branch"]) is True:
             acc_tdir = workspace.path(task_id) / "tasks" / task_id
-        try:
-            fsm_autogate._maybe_autogate_acceptance(conn, task_id, t, acc_tdir,
-                                                   t["reviewed_iter"])
-        finally:
-            if cleanup_acc is not None:
-                shutil.rmtree(cleanup_acc, ignore_errors=True)
+        fsm_autogate._maybe_autogate_acceptance(conn, task_id, t, acc_tdir,
+                                               t["reviewed_iter"])
         return False
     # Счётчик попыток остаётся информационной записью (требование 3,
     # AC-7) — эскалацию решает только прошедшее время с момента входа

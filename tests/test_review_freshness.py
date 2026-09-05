@@ -20,10 +20,10 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from orchestrator import (artifacts, catalog, config, fsm,  # noqa: E402
-                          gitcmd, review, runner, store)
-from tests.sandbox import (SpyRun, capture, capture_new_task_id,  # noqa: E402
-                           disk_backed_ls_tree_files, disk_backed_show,
-                           fake_git)
+                          gitcmd, review, runner, stack, store)
+from tests.sandbox import (SpyRun, _stub_check_stack, capture,  # noqa: E402
+                           capture_new_task_id, disk_backed_ls_tree_files,
+                           disk_backed_show, fake_git)
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
@@ -162,6 +162,14 @@ class ReviewFreshnessScenarioTest(unittest.TestCase):
             lambda role, target: [])
         pf_patcher.start()
         self.addCleanup(pf_patcher.stop)
+        # `runner.role_env` сверяет `.artel/venv` через `stack.check_stack()`
+        # (SPEC 01M1REVEZ1HESMJ7AFD5A9MEJ8, требование 4) — `root` этой
+        # песочницы не несёт согласованного venv (тот же приём, что
+        # `tests.sandbox.TmpRootTest.setUp`).
+        stack_patcher = mock.patch.object(stack, "check_stack",
+                                          _stub_check_stack)
+        stack_patcher.start()
+        self.addCleanup(stack_patcher.stop)
 
         self.capture(catalog.cmd_init)
         _, self.TASK = capture_new_task_id(

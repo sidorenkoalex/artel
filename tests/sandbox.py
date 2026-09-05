@@ -55,7 +55,7 @@ from contextlib import redirect_stdout
 from pathlib import Path
 from unittest import mock
 
-from orchestrator import config, gitcmd, store
+from orchestrator import config, gitcmd, stack, store
 
 # Все пути `config`, которые сегодня подменяет хотя бы одна песочница
 # (SPEC T037, AC-2) — порядок как в orchestrator/config.py.
@@ -93,6 +93,34 @@ def _stub_which(name, *args, **kwargs):
 
 
 shutil.which = _stub_which
+
+# Тот же класс риска, что и `_stub_which` выше, второй заход: `runner.
+# role_env` (SPEC 01M1REVEZ1HESMJ7AFD5A9MEJ8, требование 4) теперь зовёт
+# `stack.check_stack()` на КАЖДЫЙ вызов — а он, помимо новой венв-проверки,
+# ещё и реально спавнит `git --version`/`gh --version`/`claude --version`
+# субпроцессом и заведомо не найдёт согласованный `.artel/venv` во
+# временном каталоге песочницы. До этой задачи `role_env()` вообще не знал
+# о `check_stack()` — тесты, которые мокают `subprocess.Popen`/
+# `subprocess.run` УЗКО под свой сценарий (например `tests.test_doctor.
+# LiveSmokeTest`, ждущий РОВНО один спавн агента смоука), не были готовы к
+# побочным субпроцессам ИЗНУТРИ `role_env()`.
+#
+# В отличие от `_stub_which` (переменная модуля, патчится РОВНО ОДИН РАЗ
+# на весь процесс — `shutil.which` идемпотентна и не зависит от песочницы
+# теста), `stack.check_stack` подменяется ЛОКАЛЬНО, per-instance, в
+# `TmpRootTest.setUp()`, тем же приёмом, что и `ALL_CONFIG_ATTRS` ниже:
+# модульная переменная от import time до import time одна на весь
+# процесс — глобальная замена сломала бы `tests/test_stack.py`/
+# `tests.test_multitarget.RoleEnvVenvInterpreterTest`, которым нужен
+# РЕАЛЬНЫЙ `stack.check_stack()` и которые в ОДНОМ прогоне `unittest
+# discover` делят процесс с файлами, импортирующими эту песочницу.
+_STUB_STACK_CHECKS = tuple(
+    stack.StackCheck(name, "ok", f"тестовая песочница: {name} не проверяется")
+    for name in ("python", "git", "gh", "claude", "venv"))
+
+
+def _stub_check_stack():
+    return list(_STUB_STACK_CHECKS)
 
 
 def capture(fn, *args) -> str:
@@ -565,6 +593,16 @@ class TmpRootTest(unittest.TestCase):
             patcher = mock.patch.object(config, attr, self._patched_path(attr))
             patcher.start()
             self.addCleanup(patcher.stop)
+
+        # `runner.role_env` сверяет `.artel/venv` через `stack.check_stack()`
+        # (см. комментарий у `_stub_check_stack` выше) — без этого патча
+        # ЛЮБОЙ путь этой песочницы, доходящий до `role_env()` (напрямую
+        # или через `cmd_run`/`live_smoke`/`auto`), отказывал бы `OSError`:
+        # временный `self.root` не несёт согласованного `.artel/venv`.
+        stack_patcher = mock.patch.object(stack, "check_stack",
+                                          _stub_check_stack)
+        stack_patcher.start()
+        self.addCleanup(stack_patcher.stop)
 
         # `catalog.cmd_new` (A7, generic-путь, AC-5) для ЛЮБОГО target,
         # включая self/артель, коммитит артефакты плотницки
