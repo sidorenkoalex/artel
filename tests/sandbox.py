@@ -508,6 +508,9 @@ class RealGitSandbox(TmpRootTest):
     """
 
     def setUp(self):
+        # `super().setUp()` не зовётся — своего `setUp` целиком заменяет
+        # `TmpRootTest.setUp` (нужен свой порядок: git-репозиторий раньше
+        # патчей `ALL_CONFIG_ATTRS`).
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(resilient_tmp_cleanup, tmp)
         self.root = Path(tmp.name).resolve()

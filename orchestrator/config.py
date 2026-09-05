@@ -294,6 +294,47 @@ SPLIT_SIGNAL_DIFF_FORECAST_RATIO = 0.5
 USAGE_TOKEN_KEYS = ("input_tokens", "output_tokens",
                     "cache_creation_input_tokens", "cache_read_input_tokens")
 
+# Курс токенов в доллары по роли конвейера (SPEC 01M1NWCM3TDY0YABEKE8DYQA1C,
+# требование 1; решение Оператора ANSWER-1.md вопрос 2 вариант A, ANSWER-2.md
+# вопрос 1 вариант A — курс заводится на все четыре роли конвейера, включая
+# `developer`). Ключ — идентификатор роли ровно в том виде, в каком он есть
+# в `roles.yaml` сегодня; сам `roles.yaml` этой задачей не правится — курс
+# живёт только здесь. Одна и та же ставка на все четыре роли: `roles.yaml`
+# не несёт поля модели по роли сегодня, различать тариф по роли не от чего
+# (переход на тариф по модели — отдельная задача после появления такого
+# поля, ANSWER-1.md, бэклог 04.09). `calibrated_at` — дата последней
+# калибровки ставки.
+#
+# Калибровка Оператора 04.09 (первое боевое срабатывание): `step_tokens`
+# суммирует ВСЕ счётчики usage, включая чтения кэша (`cache_read_input_
+# tokens`), а они — почти весь объём шага и стоят в десять раз дешевле
+# входа. Прейскурантная ставка $3/$15 за миллион давала эффективные $9 за
+# миллион и завышала частичную стоимость шага в ~20 раз (таймаут
+# developer канарейки: $83.58 за 9,3 млн токенов при реальных ~$4). По
+# восьми завершённым шагам 04.09 фактическая цена CLI — $0.42–0.53 за
+# миллион суммарных токенов; ставка ниже — эта эмпирическая величина,
+# одинаковая на оба вида токена (формула `spend.partial_cost_usd` берёт
+# их среднее). Точный расчёт по видам токенов — бэклог 04.09.
+TOKEN_RATES = {
+    "analyst": {"input_usd_per_token": 0.00000045, "output_usd_per_token": 0.00000045,
+               "calibrated_at": "2026-09-04"},
+    "test_author": {"input_usd_per_token": 0.00000045, "output_usd_per_token": 0.00000045,
+                    "calibrated_at": "2026-09-04"},
+    "developer": {"input_usd_per_token": 0.00000045, "output_usd_per_token": 0.00000045,
+                 "calibrated_at": "2026-09-04"},
+    "reviewer": {"input_usd_per_token": 0.00000045, "output_usd_per_token": 0.00000045,
+                "calibrated_at": "2026-09-04"},
+}
+# Верхняя оценка стоимости шага, посчитанного без финального события потока,
+# для роли БЕЗ записи в TOKEN_RATES выше (SPEC требование 3, AC-3) — сегодня
+# это только `verifier` (`roles.yaml`: `executor: none`, ещё не запускает
+# агента). Курс применить не к чему — тишина здесь и утопила уже два среза
+# по ~47М токенов мимо spent_usd (SPEC, «Контекст»), поэтому вместо расчёта
+# по несуществующему курсу — фиксированная, заведомо не заниженная оценка
+# ОДНОГО шага, которую видит бюджетный гейт (`budget.budget_block`/
+# `enforce_budget`, требование 5) вместо нуля.
+STEP_COST_ESTIMATE_USD = 5.0
+
 # Статусы REVIEW.md, которые FSM отрабатывает как вердикт ревьювера.
 REVIEW_VERDICTS = ("approved", "changes_requested", "escalate")
 
@@ -303,6 +344,14 @@ REVIEW_VERDICTS = ("approved", "changes_requested", "escalate")
 # developer не вправе разрешать спор здесь сам.
 PROTECTED_PATHS = ("gates.yaml", "roles.yaml", ".github/", "templates/",
                    "skills/")
+
+# Общие зоны вне конфликта (задача 01M1NKVPD2A79PQ6K0JVV1B2Q1, часть 1,
+# AC-4): пути, которые трогают все задачи, а конфликт по ним — текстовый,
+# не механический. Пересечение зон двух задач ТОЛЬКО по этим путям не
+# считается конфликтом ни на одной из проверок занятости/сверки диффа
+# (части 2/3 нарезки — orchestrator/auto.py, orchestrator/fsm_advance.py).
+COMMON_ZONES = ("orchestrator/config.py", "docs/codebase-map.md", "tests/",
+                "roles.yaml")
 
 STATE_ROLE = {"tests_writing": "test_author", "in_dev": "developer",
              "review": "reviewer"}

@@ -802,6 +802,46 @@ class DogfoodTransitionJournalsShaTest(RealPultGitTest):
         self.assertTrue(refused, "отказ по грязной копии журналится отдельно")
 
 
+class DogfoodTransitionJournalsCodeBranchShaTest(RealPultGitTest):
+    """Требование 1 (tasks/01M1P9RJVYHTAC087J4B2CAR44): переход self/
+    артели журналит ТАКЖЕ поле `код=` — sha головы КОДОВОЙ ветки задачи
+    (`config.ROOT`, где для self реально живёт код), не путать с `sha=`
+    (голова репо фиксации `config.PROJECTS/artel`, `DogfoodTransitionJournals
+    ShaTest` выше — эта задача его не убирает, только перестаёт им
+    пользоваться как базой diff, требование 4)."""
+
+    def test_journal_carries_code_branch_sha_distinct_from_fixation_sha(self):
+        """Кодовая ветка задачи — реальная ветка в `config.ROOT`
+        (`self.root`), с отдельным коммитом, чтобы её sha заведомо
+        отличался от sha репо фиксации, который коммитит тот же переход
+        (`fixation._fix_external`) — совпадение значений сделало бы тест
+        неразличимым со старым (регрессным) поведением.
+
+        Ловит мутацию: `record_fixation` не добавляет `код=` для default
+        target (текущий регресс) — поле в `detail` отсутствует вовсе.
+        """
+        branch = store.task_branch(store.db(), self.TASK)
+        self.git("branch", branch)
+        self.git("checkout", branch)
+        (self.root / "module.py").write_text("код\n", encoding="utf-8")
+        self.git("add", "module.py")
+        self.git("commit", "-q", "-m", "код")
+        code_sha = self.git("rev-parse", "HEAD").strip()
+        self.git("checkout", config.MAIN_BRANCH)
+
+        fixation_sha = self.enter_spec_gate()
+
+        self.assertNotEqual(
+            code_sha, fixation_sha,
+            "sha кодовой ветки совпал со sha репо фиксации — тест ничего "
+            "не доказывает")
+        entries = [r["detail"] for r in store.task_steps(store.db(), self.TASK)
+                  if r["action"] == "sha зафиксирован"]
+        self.assertEqual(len(entries), 1)
+        self.assertIn(f"код={code_sha}", entries[0])
+        self.assertIn(fixation_sha, entries[0], "sha репо фиксации не убран")
+
+
 class ApproveByShaTest(RealPultGitTest):
     """Требование 4: approve с привязкой к sha."""
 

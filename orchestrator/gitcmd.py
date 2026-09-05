@@ -101,6 +101,28 @@ def list_branches(prefix: str = "") -> list[str] | None:
     return [b for b in res.stdout.splitlines() if b]
 
 
+def carpentry(repo: Path, args: list, env: dict, *,
+             input: bytes | None = None, text: bool = True
+             ) -> subprocess.CompletedProcess:
+    """Плотницкая git-команда (read-tree/hash-object/update-index/write-tree/
+    commit-tree — `artifact_branch.write_commit`) в `repo` со своим
+    окружением (`GIT_INDEX_FILE`, для `commit-tree` — ещё и `GIT_AUTHOR_*`/
+    `GIT_COMMITTER_*`): единая точка `subprocess.run` для всей плотницкой
+    записи артефактной ветки (SPEC 01M1KVGD18P9H5WR7VM8TGPV1T, требования
+    2-3) — раньше `artifact_branch.py` звал `subprocess.run` напрямую, в
+    обход `gitcmd` и любой его подмены, и утекал в НАСТОЯЩИЙ репозиторий
+    пульта из тестов, подменявших только `gitcmd.git` (SPEC «Контекст»).
+
+    `tests/sandbox.py::TmpRootTest` патчит не эту функцию отдельно, а сам
+    `gitcmd.subprocess.run` (тот же объект, что глобальный `subprocess.
+    run`, — общий модуль-синглтон): патч перехватывает и эти вызовы тоже,
+    без изменения точки подмены (`tests/01M1KVGD18P9H5WR7VM8TGPV1T/
+    acceptance_tests/test_ac3_sandbox_default_covers_carpentry.py`).
+    """
+    return subprocess.run(["git", *args], cwd=repo, env=env,
+                          capture_output=True, text=text, input=input)
+
+
 def in_repo(repo: Path, *args: str) -> subprocess.CompletedProcess:
     """git-команда в произвольном репозитории (не ROOT пульта) через `-C`.
 

@@ -130,6 +130,23 @@ def external_artifact_sha(task_id: str) -> str:
     return gitcmd.branch_head_sha(artifact_branch.branch_name(task_id))
 
 
+def default_code_sha(conn, task_id: str) -> str:
+    """sha головы кодовой ветки задачи self/артели (`config.DEFAULT_TARGET`,
+    tasks/01M1P9RJVYHTAC087J4B2CAR44, требование 1) — репозиторий пульта
+    (`config.ROOT`), где для self реально живёт код (`runner.role_cwd`:
+    собственный worktree задачи, T045), НЕ артефактный/фиксационный репо
+    `config.PROJECTS/<target>`, который коммитит `_fix_external` (SPEC
+    «Контекст»: именно его sha сегодня ошибочно уходит базой diff).
+
+    `gitcmd.branch_head_sha` — независимо от текущего чекаута, тем же
+    приёмом, что `external_artifact_sha` уже применяет к артефактной
+    ветке пульта. Пустая строка — задачи нет в БД (`store.task_branch`)
+    либо ветки ещё нет физически (вырожденный случай, как и у
+    `external_code_sha`/`external_artifact_sha`)."""
+    branch = store.task_branch(conn, task_id)
+    return gitcmd.branch_head_sha(branch) if branch else ""
+
+
 def read(task_id: str, target: str) -> tuple[str, bool]:
     """(sha, чисто) для сверки — не мутирует внешний target (единая
     логика для ЛЮБОГО target, A7 требование 2).
