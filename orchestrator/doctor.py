@@ -58,9 +58,9 @@ import time
 from collections import namedtuple
 from pathlib import Path
 
-from . import (alerts, artifact_branch, coldstart, config, gitcmd, liveness,
-              projects, roles, runner, snapshot, spend, store, targets,
-              workspace, zone_lock)
+from . import (alerts, artifact_branch, canary, coldstart, config, gitcmd,
+              liveness, projects, roles, runner, snapshot, spend, store,
+              targets, workspace, zone_lock)
 
 # status: "ok" | "warn" | "fail" | "skip" ("skip" — честный пропуск проверки,
 # требование 9: сверка forge-политики без `gh`/сети — не провал и не ок).
@@ -1162,6 +1162,47 @@ def check_root_pin() -> Check:
                  f"обнови: artel.py pin-update {origin_sha}")
 
 
+def check_canary_trigger(conn) -> Check:
+    """AC-3, AC-4 (tasks/01M1NGFK3N6MRMYGCC09H975V3/SPEC.md): триггер
+    `kind=trigger, source=canary`, когда число мержей main с последнего
+    ЗЕЛЁНОГО прогона канарейки достигает `config.
+    CANARY_MAX_MERGES_SINCE_GREEN` (та же арифметика и тот же порог, что
+    у guard'а `pin.cmd_pin_update`, AC-1/AC-2 — `canary.
+    merges_since_last_green_run`).
+
+    Возраст считается ЛОКАЛЬНО относительно локальной ветки main
+    `config.ROOT`, без обращения к сети (ANSWER-1 п.3, инвариант 35).
+    Пустой журнал зелёных прогонов — тот же порог, вырожденно всегда
+    достигнутый: «канарейка ни разу не прогонялась» (AC-3, второй
+    сценарий). Дедуп открытого алерта — заботa `alerts.raise_alert`
+    (не дублирует, пока прежний не подтверждён).
+
+    Статус `warn`, не `fail` (docs/triggers.md: триггер требует решения
+    Оператора с ack'ом, не блокирует прогон doctor как инцидент) — тем же
+    приёмом, что и `check_root_pin` выше: `cmd_doctor` завершается
+    ненулевым кодом только на `fail`, а триггер без прогнанной канарейки
+    иначе держал бы КАЖДЫЙ прогон doctor красным до первого прогона.
+    """
+    head = gitcmd.head_sha()
+    age = canary.merges_since_last_green_run(conn, head)
+    if age is None:
+        message = ("канарейка ни разу не прогонялась — обновление пина "
+                   "заблокировано до первого зелёного прогона (tasks/"
+                   "01M1NGFK3N6MRMYGCC09H975V3/SPEC.md)")
+    elif age >= config.CANARY_MAX_MERGES_SINCE_GREEN:
+        message = (f"последний зелёный прогон канарейки — {age} мержей "
+                   f"main назад (порог "
+                   f"{config.CANARY_MAX_MERGES_SINCE_GREEN}) — пора "
+                   "перепрогнать: artel.py canary --k 1")
+    else:
+        return Check("canary-trigger", "ok",
+                     f"последний зелёный прогон канарейки — {age} мержей "
+                     f"main назад (порог "
+                     f"{config.CANARY_MAX_MERGES_SINCE_GREEN})")
+    alerts.raise_alert(conn, None, "trigger", "canary", message)
+    return Check("canary-trigger", "warn", message)
+
+
 # --- уборка осиротевших артефактных веток (SPEC 01M1KVGD18P9H5WR7VM8TGPV1T,
 # требование 4/AC-4) --------------------------------------------------------
 
@@ -1298,6 +1339,7 @@ def all_checks(conn) -> list[Check]:
     checks.extend(check_zone_waits(conn))
     checks.extend(check_branch_freshness(conn))
     checks.append(check_root_pin())
+    checks.append(check_canary_trigger(conn))
     checks.append(check_role_log_pool_leak(conn))
     checks.extend(check_token_repo_scope())
     return checks

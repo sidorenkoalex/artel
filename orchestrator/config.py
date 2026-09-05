@@ -254,6 +254,14 @@ CANARY_MAX_ESCALATION_CYCLES = 3
 # Без этого потолка `_drive_task` крутился бы здесь бесконечно, вешая
 # весь прогон `cmd_canary` навсегда.
 CANARY_MAX_STALL_ITERS = 3
+# Привязка пина к зелёной канарейке (tasks/01M1NGFK3N6MRMYGCC09H975V3/
+# SPEC.md, требования 1-3; ADR-0013): `pin-update` отказывает и `doctor`
+# поднимает триггер `kind=trigger, source=canary`, когда число мержей
+# main с последнего ЗЕЛЁНОГО прогона канарейки достигает этого порога
+# (`canary.merges_since_last_green_run`). Значение по умолчанию — ответ
+# на эскалацию этой задачи (ANSWER-1 п.3); меняет только Оператор
+# (ADR-0002, класс «лимит»).
+CANARY_MAX_MERGES_SINCE_GREEN = 10
 # Retention-политика (tasks/T073/SPEC.md, требование 1, docs/retention.md).
 # `.artel/logs/` — прунятся, только когда лог ОДНОВРЕМЕННО старше
 # LOG_RETENTION_DAYS И его задача вне последних LOG_RETENTION_KEEP_TASKS по

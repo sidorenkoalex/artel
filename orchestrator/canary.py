@@ -275,10 +275,17 @@ def _kill_inconclusive(conn, task_id: str, detail: str) -> None:
     cleanup.cmd_kill(task_id)
 
 
-def _drive_task(conn, task_id: str) -> None:
+def _drive_task(conn, task_id: str) -> str:
     """Ведёт ОДНУ заведённую канарейкой задачу до её конца (`killed`) или
     до состояния, дальше которого canary не умеет вести — не роняет
     прогон остальных задач набора ни в одном случае.
+
+    Возвращает маркер того, КАК завершился прогон — источник verdict'а
+    привязки пина (tasks/01M1NGFK3N6MRMYGCC09H975V3/SPEC.md, ANSWER-1
+    п.2): `"merge_gate"`/`"verifying"` — задача дошла до приёмки и была
+    убита штатно там (только это и есть «прошла приёмку»); `"inconclusive"`
+    — один из потолков ниже; `"other"` — состояние без агентской роли и
+    не входящее в canary-гейты (не должно встречаться в норме).
 
     Два независимых потолка (REVIEW.md итерации 1, R1-F1) не дают циклу
     `while True` крутиться бесконечно: `escalation_cycles` — число
@@ -305,10 +312,10 @@ def _drive_task(conn, task_id: str) -> None:
             continue
         if state == "merge_gate":
             _kill_at_merge_gate(conn, task_id)
-            return
+            return "merge_gate"
         if state == "verifying":
             _kill_at_verifying(conn, task_id)
-            return
+            return "verifying"
         if state == "escalated":
             escalation_cycles += 1
             if escalation_cycles > config.CANARY_MAX_ESCALATION_CYCLES:
@@ -316,7 +323,7 @@ def _drive_task(conn, task_id: str) -> None:
                     conn, task_id,
                     f"canary: {config.CANARY_MAX_ESCALATION_CYCLES} "
                     "повторных эскалаций подряд — задача не сходится")
-                return
+                return "inconclusive"
             _pass_escalated_with_synthetic_answer(conn, task_id)
             continue
         if runner.step_role(t) is not None:
@@ -334,14 +341,43 @@ def _drive_task(conn, task_id: str) -> None:
                         f"canary: {config.CANARY_MAX_STALL_ITERS} "
                         f"проходов подряд без прогресса в состоянии "
                         f"{state} — задача не сходится")
-                    return
+                    return "inconclusive"
             else:
                 stall_streak = 0
                 prev_signature = signature
             continue
         # done/killed или любое другое состояние без агентской роли и не
         # входящее в canary-гейты выше — canary дальше не ведёт.
-        return
+        return "other"
+
+
+def merges_since_last_green_run(conn, target_sha: str) -> int | None:
+    """Возраст (в мержах main) самого свежего ЗЕЛЁНОГО прогона канарейки,
+    чей `main_sha` лежит на истории `target_sha` — общий guard AC-1/AC-3/
+    AC-4 (tasks/01M1NGFK3N6MRMYGCC09H975V3/SPEC.md, ANSWER-1 п.3):
+    `pin.cmd_pin_update` (AC-1/AC-2) и `doctor.check_canary_trigger`
+    (AC-3/AC-4) сравнивают ОДНО и то же число с ОДНИМ и тем же порогом
+    `config.CANARY_MAX_MERGES_SINCE_GREEN`, поэтому арифметика возраста
+    живёт в одном месте, не дублируется в двух.
+
+    Прогон, чей `main_sha` не предок `target_sha` (чужая, несвязанная
+    история — например, тупиковая ветка), не считается вовсе — берётся
+    наименьший возраст среди ОСТАЛЬНЫХ. `None` — журнал зелёных прогонов
+    пуст, либо ни один из них не лежит на истории `target_sha`
+    (вырожденный случай того же порога: «сравнивать не с чем» ⇔ «порог
+    всегда достигнут», AC-3 второй сценарий).
+    """
+    best = None
+    for row in store.green_canary_runs(conn):
+        main_sha = row["main_sha"]
+        if not main_sha or not gitcmd.is_ancestor(main_sha, target_sha):
+            continue
+        age = gitcmd.merges_between(main_sha, target_sha)
+        if age is None:
+            continue
+        if best is None or age < best:
+            best = age
+    return best
 
 
 def _step_count(steps) -> int:
@@ -430,20 +466,28 @@ def _run_one_task(template_path: Path, run_stamp: str, ratio: float) -> None:
             if wt_error is not None:
                 raise RuntimeError(
                     f"canary: worktree для {task_id} не создан: {wt_error}")
-            _drive_task(conn, task_id)
+            reached = _drive_task(conn, task_id)
         metrics = _task_metrics(conn, task_id)
 
     print(f"[canary] {task_id} заведена из {template_path.name}")
 
     outer_conn = store.db()
+    # `config.ROOT` уже вне эфемерного клона (см. `_ephemeral_clone`) —
+    # это HEAD главного пульта на момент прогона (ANSWER-1
+    # 01M1NGFK3N6MRMYGCC09H975V3 п.2), не клона, в котором велась задача.
+    main_sha = gitcmd.head_sha()
     actual = bool(metrics["escalations"])
     mismatch = expected is not None and expected != actual
+    # «Зелёный» прогон — задача дошла до приёмки (merge_gate/verifying) и
+    # была убита штатно там, И маркер эскалации совпал с фактом (ANSWER-1
+    # п.2); любой другой исход, включая расхождение маркера, — «красный».
+    verdict = "green" if reached in ("merge_gate", "verifying") and not mismatch else "red"
     store.insert_canary_run(
         outer_conn, run_stamp, title, task_id, metrics["steps"],
         metrics["cost_usd"], metrics["review_iterations"],
         len(metrics["escalations"]), metrics["outcome"],
         "yes" if expected else ("no" if expected is False else None),
-        actual, mismatch)
+        actual, mismatch, main_sha=main_sha, verdict=verdict)
 
     note = ""
     baseline = store.canary_baseline(outer_conn, title)

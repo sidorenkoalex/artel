@@ -167,6 +167,64 @@ class CommitsBehindTest(_GitcmdRealGitSandbox):
             self.assertIsNone(gitcmd.commits_behind("feature"))
 
 
+class IsAncestorTest(_GitcmdRealGitSandbox):
+    """`gitcmd.is_ancestor` (tasks/01M1NGFK3N6MRMYGCC09H975V3/SPEC.md,
+    ANSWER-1 п.3) — критерий, которым guard AC-1/AC-3/AC-4 отбрасывает
+    зелёные прогоны канарейки с чужой, несвязанной историей."""
+
+    def test_ancestor_commit_is_true(self):
+        base = self.head()
+        self.write_and_commit("a.txt", "1\n")
+
+        self.assertTrue(gitcmd.is_ancestor(base, self.head()))
+
+    def test_same_commit_is_true(self):
+        self.assertTrue(gitcmd.is_ancestor(self.head(), self.head()))
+
+    def test_descendant_as_ancestor_is_false(self):
+        base = self.head()
+        self.write_and_commit("a.txt", "1\n")
+
+        self.assertFalse(gitcmd.is_ancestor(self.head(), base))
+
+    def test_commit_on_an_unrelated_branch_is_false(self):
+        self.checkout("abandoned", create=True)
+        self.write_and_commit("x.txt", "x\n")
+        abandoned = self.head()
+        self.checkout(config.MAIN_BRANCH)
+
+        self.assertFalse(gitcmd.is_ancestor(abandoned, self.head()))
+
+    def test_nonexistent_sha_is_false(self):
+        self.assertFalse(gitcmd.is_ancestor("0" * 40, self.head()))
+
+
+class MergesBetweenTest(_GitcmdRealGitSandbox):
+    """`gitcmd.merges_between` — «возраст» зелёного прогона канарейки в
+    мержах main (ANSWER-1 01M1NGFK3N6MRMYGCC09H975V3 п.3): считает
+    только merge-коммиты диапазона, не любые."""
+
+    def test_counts_only_merge_commits_on_the_range(self):
+        base = self.head()
+        self.checkout("feature", create=True)
+        self.write_and_commit("f.txt", "1\n")
+        self.checkout(config.MAIN_BRANCH)
+        self.git("merge", "--no-ff", "-q", "-m", "merge feature", "feature")
+        self.write_and_commit("plain.txt", "2\n")  # обычный коммит — не merge
+
+        self.assertEqual(gitcmd.merges_between(base, self.head()), 1)
+
+    def test_zero_when_no_merges_on_the_range(self):
+        base = self.head()
+        self.write_and_commit("a.txt", "1\n")
+
+        self.assertEqual(gitcmd.merges_between(base, self.head()), 0)
+
+    def test_unresponsive_git_is_none(self):
+        with mock.patch.object(gitcmd, "git", lambda *a: None):
+            self.assertIsNone(gitcmd.merges_between("a", "b"))
+
+
 class RemoteBranchShaTest(_GitcmdRealGitSandbox):
     """`gitcmd.remote_branch_sha` (SPEC 01M1GS5HZ1JXFGKVR95HEW0AEZ, AC-2):
     sha ветки в origin по точному `refs/heads/<branch>`, не по факту

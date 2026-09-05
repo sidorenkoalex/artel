@@ -21,7 +21,7 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from orchestrator import canary, catalog, config, retro, store  # noqa: E402
-from tests.sandbox import capture  # noqa: E402
+from tests.sandbox import RealGitSandbox, capture  # noqa: E402
 
 
 class DeviationTest(unittest.TestCase):
@@ -222,6 +222,70 @@ class CanaryBaselineStoreRoundtripTest(unittest.TestCase):
         self.assertEqual(rows[0]["title"], "prostaya-pravka")
         self.assertEqual(store.all_tasks(self.conn), [])
 
+    def test_insert_canary_run_without_main_sha_or_verdict_defaults_to_none(self):
+        """Вызыватели кода до этой задачи (tasks/
+        01M1NGFK3N6MRMYGCC09H975V3, ANSWER-1 п.2) не передают
+        `main_sha`/`verdict` — сигнатура обязана остаться совместимой."""
+        store.insert_canary_run(
+            self.conn, "20260101T000000Z", "prostaya-pravka", "01AAA",
+            steps=3, cost_usd=0.5, review_iterations=0, escalations=0,
+            outcome="killed", expected_escalation=None,
+            actual_escalation=False, marker_mismatch=False)
+        row = self.conn.execute("SELECT * FROM canary_runs").fetchone()
+        self.assertIsNone(row["main_sha"])
+        self.assertIsNone(row["verdict"])
+
+
+class GreenCanaryRunsTest(unittest.TestCase):
+    """`store.green_canary_runs`/`latest_green_canary_run` (tasks/
+    01M1NGFK3N6MRMYGCC09H975V3, ANSWER-1 п.2/п.5) — источник guard'а
+    привязки пина и цели отката по умолчанию `pin --to`."""
+
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.root = Path(tmp.name)
+        for attr, value in (("ROOT", self.root),
+                            ("DB", self.root / ".artel" / "state.db")):
+            patcher = mock.patch.object(config, attr, value)
+            patcher.start()
+            self.addCleanup(patcher.stop)
+        store.create_schema(store.db())
+        self.conn = store.db()
+
+    def _insert(self, run_stamp, verdict, created_at, main_sha="sha"):
+        store.insert_canary_run(
+            self.conn, run_stamp, "t", f"01{run_stamp}", steps=1,
+            cost_usd=0.1, review_iterations=0, escalations=0,
+            outcome="killed", expected_escalation=None,
+            actual_escalation=False, marker_mismatch=False,
+            main_sha=main_sha, verdict=verdict)
+        self.conn.execute(
+            "UPDATE canary_runs SET created_at=? WHERE run_stamp=?",
+            (created_at, run_stamp))
+        self.conn.commit()
+
+    def test_empty_journal_has_no_green_runs(self):
+        self.assertEqual(store.green_canary_runs(self.conn), [])
+        self.assertIsNone(store.latest_green_canary_run(self.conn))
+
+    def test_red_runs_are_excluded(self):
+        self._insert("r1", "red", "2026-01-01 00:00:00Z")
+
+        self.assertEqual(store.green_canary_runs(self.conn), [])
+        self.assertIsNone(store.latest_green_canary_run(self.conn))
+
+    def test_latest_green_run_is_the_most_recent_by_created_at(self):
+        self._insert("r1", "green", "2026-01-01 00:00:00Z", main_sha="old")
+        self._insert("r2", "red", "2026-01-02 00:00:00Z", main_sha="mid")
+        self._insert("r3", "green", "2026-01-03 00:00:00Z", main_sha="new")
+
+        latest = store.latest_green_canary_run(self.conn)
+
+        self.assertEqual(latest["main_sha"], "new")
+        self.assertEqual([r["run_stamp"] for r in store.green_canary_runs(self.conn)],
+                         ["r3", "r1"])
+
 
 class CmdCanaryBadInputTest(unittest.TestCase):
     """CLI-отказы `canary.cmd_canary` на плохом вводе (требование 1) —
@@ -380,11 +444,16 @@ class DriveTaskEscalationCapTest(unittest.TestCase):
         self.addCleanup(patcher.stop)
 
     def test_repeated_escalation_is_capped_and_task_is_killed(self):
-        canary._drive_task(self.conn, self.TASK)
+        result = canary._drive_task(self.conn, self.TASK)
 
         canary.cleanup.cmd_kill.assert_called_once_with(self.TASK)
         rows = store.open_alerts(self.conn, "threshold")
         self.assertTrue(any(r["target"] == self.TASK for r in rows))
+        # Маркер возврата (tasks/01M1NGFK3N6MRMYGCC09H975V3, ANSWER-1
+        # п.2) — не "merge_gate"/"verifying": задача НЕ прошла приёмку,
+        # потолок эскалаций убил её раньше — verdict привязки пина
+        # обязан читать это как "red".
+        self.assertEqual(result, "inconclusive")
 
     def test_does_not_escalate_more_times_than_the_cap_allows(self):
         canary._drive_task(self.conn, self.TASK)
@@ -435,11 +504,12 @@ class DriveTaskStallCapTest(unittest.TestCase):
         self.addCleanup(patcher.stop)
 
     def test_no_progress_is_capped_and_task_is_killed(self):
-        canary._drive_task(self.conn, self.TASK)
+        result = canary._drive_task(self.conn, self.TASK)
 
         canary.cleanup.cmd_kill.assert_called_once_with(self.TASK)
         rows = store.open_alerts(self.conn, "threshold")
         self.assertTrue(any(r["target"] == self.TASK for r in rows))
+        self.assertEqual(result, "inconclusive")
 
     def test_state_is_untouched_while_stalled(self):
         canary._drive_task(self.conn, self.TASK)
@@ -503,6 +573,126 @@ class StoreAndCatalogMarkingTest(unittest.TestCase):
         self.assertIn("канареечная", canary_retro.lower())
         self.assertNotIn("канаре", product_retro.lower())
         self.assertNotIn("canary", product_retro.lower())
+
+
+class DriveTaskReachedGateMarkerTest(unittest.TestCase):
+    """`canary._drive_task` — маркер возврата (tasks/
+    01M1NGFK3N6MRMYGCC09H975V3, ANSWER-1 п.2): единственный способ
+    отличить «дошла до приёмки и убита штатно там» (verdict привязки
+    пина — «green», при совпавшем маркере эскалации) от прочих исходов,
+    раз оба пути одинаково заканчиваются `state == "killed"`."""
+
+    TASK = "T912"
+
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.root = Path(tmp.name)
+        for attr, value in (("ROOT", self.root),
+                            ("DB", self.root / ".artel" / "state.db"),
+                            ("TASKS", self.root / "tasks")):
+            patcher = mock.patch.object(config, attr, value)
+            patcher.start()
+            self.addCleanup(patcher.stop)
+        store.create_schema(store.db())
+        self.conn = store.db()
+
+    def _insert(self, state: str) -> None:
+        store.insert_task(self.conn, self.TASK, "Канареечная задача",
+                          state, "task/t912-x", config.DEFAULT_TARGET,
+                          50.0, is_canary=True)
+
+    def test_merge_gate_reached_and_killed_returns_merge_gate_marker(self):
+        self._insert("merge_gate")
+        with mock.patch.object(canary.auto, "cmd_auto"), \
+                mock.patch.object(canary.cleanup, "cmd_kill"):
+            result = canary._drive_task(self.conn, self.TASK)
+
+        self.assertEqual(result, "merge_gate")
+
+    def test_verifying_reached_and_killed_returns_verifying_marker(self):
+        self._insert("verifying")
+        with mock.patch.object(canary.auto, "cmd_auto"), \
+                mock.patch.object(canary.cleanup, "cmd_kill"):
+            result = canary._drive_task(self.conn, self.TASK)
+
+        self.assertEqual(result, "verifying")
+
+    def test_state_without_an_agent_role_returns_other_marker(self):
+        self._insert("done")
+        with mock.patch.object(canary.auto, "cmd_auto"):
+            result = canary._drive_task(self.conn, self.TASK)
+
+        self.assertEqual(result, "other")
+
+
+class MergesSinceLastGreenRunTest(RealGitSandbox):
+    """`canary.merges_since_last_green_run` (tasks/
+    01M1NGFK3N6MRMYGCC09H975V3, ANSWER-1 п.3) — общая арифметика
+    возраста guard'а AC-1/AC-3/AC-4. Реальный git: сама история мержей —
+    предмет проверки, заглушкой не изобразить (тот же приём, что
+    `CommitsBehindTest` в tests/test_gitcmd_branch_reads.py)."""
+
+    def setUp(self):
+        super().setUp()
+        self.conn = store.db()
+
+    def _merge(self, name: str) -> str:
+        self.checkout(name, create=True)
+        (self.root / f"{name}.txt").write_text("x\n", encoding="utf-8")
+        self.git("add", f"{name}.txt")
+        self.git("commit", "-q", "-m", f"работа {name}")
+        self.checkout(config.MAIN_BRANCH)
+        self.git("merge", "--no-ff", "-q", "-m", f"merge {name}", name)
+        return self.git("rev-parse", "HEAD").strip()
+
+    def _insert_green(self, run_stamp: str, main_sha: str) -> None:
+        store.insert_canary_run(
+            self.conn, run_stamp, "t", f"01{run_stamp}", steps=1,
+            cost_usd=0.1, review_iterations=0, escalations=0,
+            outcome="killed", expected_escalation=None,
+            actual_escalation=False, marker_mismatch=False,
+            main_sha=main_sha, verdict="green")
+
+    def test_empty_journal_is_none(self):
+        head = self.git("rev-parse", "HEAD").strip()
+
+        self.assertIsNone(canary.merges_since_last_green_run(self.conn, head))
+
+    def test_picks_the_minimum_age_among_several_valid_green_runs(self):
+        old_sha = self.git("rev-parse", "HEAD").strip()
+        mid_sha = self._merge("m1")
+        target = self._merge("m2")
+        self._insert_green("r1", old_sha)
+        self._insert_green("r2", mid_sha)
+
+        self.assertEqual(
+            canary.merges_since_last_green_run(self.conn, target), 1)
+
+    def test_red_verdict_is_ignored(self):
+        red_sha = self.git("rev-parse", "HEAD").strip()
+        target = self._merge("m1")
+        store.insert_canary_run(
+            self.conn, "r1", "t", "01AAA", steps=1, cost_usd=0.1,
+            review_iterations=0, escalations=0, outcome="killed",
+            expected_escalation=None, actual_escalation=False,
+            marker_mismatch=False, main_sha=red_sha, verdict="red")
+
+        self.assertIsNone(
+            canary.merges_since_last_green_run(self.conn, target))
+
+    def test_run_on_an_unrelated_branch_is_not_considered(self):
+        self.checkout("abandoned", create=True)
+        (self.root / "x.txt").write_text("x\n", encoding="utf-8")
+        self.git("add", "x.txt")
+        self.git("commit", "-q", "-m", "тупиковая ветка")
+        abandoned_sha = self.git("rev-parse", "HEAD").strip()
+        self.checkout(config.MAIN_BRANCH)
+        target = self._merge("m1")
+        self._insert_green("r1", abandoned_sha)
+
+        self.assertIsNone(
+            canary.merges_since_last_green_run(self.conn, target))
 
 
 if __name__ == "__main__":
