@@ -170,6 +170,55 @@ def check_disk_space() -> Check:
     return Check("disk-space", "ok", f"{free_mb:.0f} МБ свободно")
 
 
+def _role_home_diff(reference: Path, deployed: Path) -> set[str]:
+    """Пути (относительно референса), отличающиеся между референсом
+    курируемого слоя и его развёрнутой копией — по каждому файлу
+    РЕФЕРЕНСА: отсутствует в развёрнутом слое или отличается побайтово
+    (SPEC 01M1RDCEF0JZ4AVQRE43JFH8TN, AC-13).
+
+    Файлы, которых нет в референсе, но которые появились в развёрнутом
+    слое, — не расхождение: Оператор легитимно расширяет `.artel/home`
+    по ходу работы (docs/reference/role-home.md, «Курирование»), а
+    `claude` CLI пишет туда собственные рантайм-файлы на каждом шаге
+    роли (`CLAUDE_CONFIG_DIR`) — учёт этих файлов как расхождения дал
+    бы WARN постоянно, вне зависимости от реального состояния
+    курируемого слоя (REVIEW.md итерации 1, R1-F1)."""
+    diffs = set()
+    for path in reference.rglob("*"):
+        if not path.is_file():
+            continue
+        rel = path.relative_to(reference)
+        counterpart = deployed / rel
+        if not counterpart.is_file() or counterpart.read_bytes() != path.read_bytes():
+            diffs.add(str(rel))
+    return diffs
+
+
+def check_role_home_reference() -> Check:
+    """Сверка развёрнутого курируемого слоя роли (`config.ROLE_CONFIG_DIR`)
+    с референсом (`docs/reference/role-home/claude`) — WARN с перечнем
+    отличающихся файлов, без автоправки (SPEC 01M1RDCEF0JZ4AVQRE43JFH8TN,
+    требование 5, AC-13): деплой (`catalog._deploy_role_home_reference`)
+    копирует референс только при холодном старте, поэтому расхождение,
+    внесённое Оператором вручную позже, никак иначе не всплывает.
+    """
+    reference = config.ROOT / "docs" / "reference" / "role-home" / "claude"
+    deployed = config.ROLE_CONFIG_DIR
+    if not deployed.is_dir():
+        return Check("role-home-reference", "ok",
+                     "курируемый слой ещё не развёрнут")
+    if not reference.is_dir():
+        return Check("role-home-reference", "ok",
+                     "референс отсутствует — сверка невозможна")
+    diffs = _role_home_diff(reference, deployed)
+    if diffs:
+        return Check("role-home-reference", "warn",
+                     f"развёрнутый слой .artel/home/.claude отличается от "
+                     f"референса: {', '.join(sorted(diffs))}")
+    return Check("role-home-reference", "ok",
+                 "развёрнутый слой совпадает с референсом")
+
+
 def check_target_layout(target: str) -> Check:
     """workspace и артефактный репо target'а — единая логика для ЛЮБОГО
     объявленного target, включая артель (A7, требование 2, AC-2).
@@ -302,6 +351,13 @@ def isolation_smoke(role: str = "developer") -> Check:
         os.environ["HOME"] = fake_home
         try:
             env = runner.role_env(role)
+        except OSError as exc:
+            # Тот же класс отказа, что уже ловят `check_git_identity`/
+            # `_live_smoke_run` (SPEC 01M1RDCEF0JZ4AVQRE43JFH8TN, AC-6):
+            # объявленный инструмент манифеста не найден — не повод
+            # уронить весь `doctor` необработанным исключением.
+            return Check("isolation-smoke", "fail",
+                        f"окружение роли не подготовлено: {exc}")
         finally:
             if prior_home is None:
                 os.environ.pop("HOME", None)
@@ -1570,6 +1626,7 @@ def all_checks(conn) -> list[Check]:
         checks.append(check_token(role))
     checks.append(check_git_identity())
     checks.append(check_disk_space())
+    checks.append(check_role_home_reference())
     checks.append(check_backup_age(conn))
     checks.append(check_task_counters(conn))
     checks.append(isolation_smoke())
