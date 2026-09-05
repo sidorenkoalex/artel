@@ -266,16 +266,26 @@ class GreenCanaryRunsTest(unittest.TestCase):
         self.conn.commit()
 
     def test_empty_journal_has_no_green_runs(self):
+        """Ловит мутацию: `_ensure_canary_tables` не вызван до `SELECT`
+        (падение `sqlite3.OperationalError: no such table` на первом
+        обращении к пустой БД, до единственной строки журнала)."""
         self.assertEqual(store.green_canary_runs(self.conn), [])
         self.assertIsNone(store.latest_green_canary_run(self.conn))
 
     def test_red_runs_are_excluded(self):
+        """Ловит мутацию: фильтр `WHERE verdict='green'` пропущен или
+        перепутан на `verdict != 'red'` (совпадает и с `NULL`, который
+        обязан оставаться исключённым — вызыватели кода до этой задачи не
+        знают о `verdict` вовсе, AC-8)."""
         self._insert("r1", "red", "2026-01-01 00:00:00Z")
 
         self.assertEqual(store.green_canary_runs(self.conn), [])
         self.assertIsNone(store.latest_green_canary_run(self.conn))
 
     def test_latest_green_run_is_the_most_recent_by_created_at(self):
+        """Ловит мутацию: сортировка `ORDER BY created_at` без `DESC`
+        (или без учёта промежуточной красной строки `r2`) — вернула бы
+        самый старый зелёный прогон `r1` вместо самого свежего `r3`."""
         self._insert("r1", "green", "2026-01-01 00:00:00Z", main_sha="old")
         self._insert("r2", "red", "2026-01-02 00:00:00Z", main_sha="mid")
         self._insert("r3", "green", "2026-01-03 00:00:00Z", main_sha="new")
@@ -444,6 +454,10 @@ class DriveTaskEscalationCapTest(unittest.TestCase):
         self.addCleanup(patcher.stop)
 
     def test_repeated_escalation_is_capped_and_task_is_killed(self):
+        """Ловит мутацию: потолок `config.CANARY_MAX_ESCALATION_CYCLES`
+        не проверяется вовсе (или проверяется со сдвигом) — `_drive_task`
+        зациклился бы на бесконечном `escalated` <-> `in_dev` вместо
+        `cleanup.cmd_kill` через ограниченное число циклов."""
         result = canary._drive_task(self.conn, self.TASK)
 
         canary.cleanup.cmd_kill.assert_called_once_with(self.TASK)
@@ -504,6 +518,10 @@ class DriveTaskStallCapTest(unittest.TestCase):
         self.addCleanup(patcher.stop)
 
     def test_no_progress_is_capped_and_task_is_killed(self):
+        """Ловит мутацию: потолок проходов без прогресса не проверяется
+        (или сверяется с чужим счётчиком) — `_drive_task` крутился бы
+        здесь бесконечно вместо `cleanup.cmd_kill` через ограниченное
+        число проходов `auto.cmd_auto`, вернувших состояние без изменений."""
         result = canary._drive_task(self.conn, self.TASK)
 
         canary.cleanup.cmd_kill.assert_called_once_with(self.TASK)
@@ -603,6 +621,11 @@ class DriveTaskReachedGateMarkerTest(unittest.TestCase):
                           50.0, is_canary=True)
 
     def test_merge_gate_reached_and_killed_returns_merge_gate_marker(self):
+        """Ловит мутацию: `_drive_task` возвращает `None`/фиксированную
+        строку независимо от состояния задачи на момент убийства —
+        `_run_one_task` не смог бы отличить «дошла до приёмки» (verdict
+        `green`) от прочих исходов (`canary.merges_since_last_green_run`
+        читает это через `insert_canary_run(verdict=...)`)."""
         self._insert("merge_gate")
         with mock.patch.object(canary.auto, "cmd_auto"), \
                 mock.patch.object(canary.cleanup, "cmd_kill"):
@@ -611,6 +634,9 @@ class DriveTaskReachedGateMarkerTest(unittest.TestCase):
         self.assertEqual(result, "merge_gate")
 
     def test_verifying_reached_and_killed_returns_verifying_marker(self):
+        """Ловит мутацию: маркер `merge_gate` захардкожен как единственно
+        возможный «зелёный» исход — состояние `verifying` (второе штатное
+        место, где приёмка уже пройдена) вернуло бы неверный маркер."""
         self._insert("verifying")
         with mock.patch.object(canary.auto, "cmd_auto"), \
                 mock.patch.object(canary.cleanup, "cmd_kill"):
@@ -619,6 +645,10 @@ class DriveTaskReachedGateMarkerTest(unittest.TestCase):
         self.assertEqual(result, "verifying")
 
     def test_state_without_an_agent_role_returns_other_marker(self):
+        """Ловит мутацию: любое состояние без активной роли трактуется
+        как «прошла приёмку» (`merge_gate`/`verifying`) — `done` дошло бы
+        сюда только явным путём мержа, не через `_drive_task`, и должно
+        различаться от штатных исходов приёмки."""
         self._insert("done")
         with mock.patch.object(canary.auto, "cmd_auto"):
             result = canary._drive_task(self.conn, self.TASK)
@@ -655,11 +685,19 @@ class MergesSinceLastGreenRunTest(RealGitSandbox):
             main_sha=main_sha, verdict="green")
 
     def test_empty_journal_is_none(self):
+        """Ловит мутацию: пустой журнал трактуется как «возраст 0»
+        вместо `None` — вырожденный случай AC-3 («сравнивать не с чем» ⇔
+        «порог всегда достигнут») слился бы с «только что прогнали»."""
         head = self.git("rev-parse", "HEAD").strip()
 
         self.assertIsNone(canary.merges_since_last_green_run(self.conn, head))
 
     def test_picks_the_minimum_age_among_several_valid_green_runs(self):
+        """Ловит мутацию: берётся ПЕРВЫЙ подходящий прогон (порядок
+        `store.green_canary_runs`, свежие первыми) вместо МИНИМАЛЬНОГО
+        возраста среди всех валидных — здесь оба прогона валидны, но
+        `r2` (mid_sha) младше `r1` (old_sha); взятие не-минимума дало бы
+        2 вместо 1."""
         old_sha = self.git("rev-parse", "HEAD").strip()
         mid_sha = self._merge("m1")
         target = self._merge("m2")
@@ -670,6 +708,9 @@ class MergesSinceLastGreenRunTest(RealGitSandbox):
             canary.merges_since_last_green_run(self.conn, target), 1)
 
     def test_red_verdict_is_ignored(self):
+        """Ловит мутацию: `store.green_canary_runs` не фильтрует по
+        `verdict`, либо `merges_since_last_green_run` сам не проверяет
+        его — красный прогон посчитался бы валидным источником возраста."""
         red_sha = self.git("rev-parse", "HEAD").strip()
         target = self._merge("m1")
         store.insert_canary_run(
@@ -682,6 +723,10 @@ class MergesSinceLastGreenRunTest(RealGitSandbox):
             canary.merges_since_last_green_run(self.conn, target))
 
     def test_run_on_an_unrelated_branch_is_not_considered(self):
+        """Ловит мутацию: фильтр `gitcmd.is_ancestor(main_sha, target_sha)`
+        пропущен — прогон с чужой, несвязанной историей (тупиковая ветка)
+        посчитался бы валидным источником возраста вместо того, чтобы
+        быть отброшенным целиком (ANSWER-1 п.3)."""
         self.checkout("abandoned", create=True)
         (self.root / "x.txt").write_text("x\n", encoding="utf-8")
         self.git("add", "x.txt")

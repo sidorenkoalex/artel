@@ -1383,6 +1383,14 @@ def check_canary_trigger(conn) -> Check:
     сценарий). Дедуп открытого алерта — заботa `alerts.raise_alert`
     (не дублирует, пока прежний не подтверждён).
 
+    Текст алерта (`alert_message`), участвующий в дедупе, ФИКСИРОВАН —
+    не несёт текущее число мержей (REVIEW.md итерации 1, R1-F2):
+    `store.open_alert_exists` дедупит строгим совпадением `message`, а
+    возраст растёт с каждым следующим мержем main после срабатывания
+    порога — несли бы число в тексте, каждый такой мерж заводил бы НОВЫЙ
+    алерт вместо одного, ждущего ack Оператора. Конкретное число мержей
+    остаётся в `Check.detail`, который в алерт не идёт.
+
     Статус `warn`, не `fail` (docs/triggers.md: триггер требует решения
     Оператора с ack'ом, не блокирует прогон doctor как инцидент) — тем же
     приёмом, что и `check_root_pin` выше: `cmd_doctor` завершается
@@ -1392,21 +1400,25 @@ def check_canary_trigger(conn) -> Check:
     head = gitcmd.head_sha()
     age = canary.merges_since_last_green_run(conn, head)
     if age is None:
-        message = ("канарейка ни разу не прогонялась — обновление пина "
-                   "заблокировано до первого зелёного прогона (tasks/"
-                   "01M1NGFK3N6MRMYGCC09H975V3/SPEC.md)")
+        alert_message = ("канарейка ни разу не прогонялась — обновление "
+                         "пина заблокировано до первого зелёного прогона "
+                         "(tasks/01M1NGFK3N6MRMYGCC09H975V3/SPEC.md)")
+        detail = alert_message
     elif age >= config.CANARY_MAX_MERGES_SINCE_GREEN:
-        message = (f"последний зелёный прогон канарейки — {age} мержей "
-                   f"main назад (порог "
-                   f"{config.CANARY_MAX_MERGES_SINCE_GREEN}) — пора "
-                   "перепрогнать: artel.py canary --k 1")
+        alert_message = ("последний зелёный прогон канарейки устарел (порог "
+                         f"{config.CANARY_MAX_MERGES_SINCE_GREEN} мержей "
+                         "main) — пора перепрогнать: artel.py canary --k 1")
+        detail = (f"последний зелёный прогон канарейки — {age} мержей "
+                 f"main назад (порог "
+                 f"{config.CANARY_MAX_MERGES_SINCE_GREEN}) — пора "
+                 "перепрогнать: artel.py canary --k 1")
     else:
         return Check("canary-trigger", "ok",
                      f"последний зелёный прогон канарейки — {age} мержей "
                      f"main назад (порог "
                      f"{config.CANARY_MAX_MERGES_SINCE_GREEN})")
-    alerts.raise_alert(conn, None, "trigger", "canary", message)
-    return Check("canary-trigger", "warn", message)
+    alerts.raise_alert(conn, None, "trigger", "canary", alert_message)
+    return Check("canary-trigger", "warn", detail)
 
 
 # --- уборка осиротевших артефактных веток (SPEC 01M1KVGD18P9H5WR7VM8TGPV1T,
