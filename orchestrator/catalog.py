@@ -41,6 +41,13 @@ def cmd_init() -> None:
     store.seed_task_counters(conn)
     _deploy_role_home_reference()
     budget.reseed_program_spend(conn)
+    # Ленивый импорт — `canary.py` сам импортирует `catalog` (SPEC
+    # 01M1NSR5M5THYRC0RFWPMVE2DW, требование 3): импорт на уровне модуля
+    # дал бы цикл.
+    from . import canary
+    restore_msg = canary.restore_pool_if_missing(conn)
+    if restore_msg:
+        print(restore_msg)
     print(f"OK: состояние в {config.DB}")
     print("Задачи в полёте (ветки task/* без строки в БД) холодный старт "
          "не восстанавливает автоматически — пересборка по веткам "

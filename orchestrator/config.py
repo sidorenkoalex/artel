@@ -242,6 +242,12 @@ CANARY_DEVIATION_RATIO = 0.5
 # (требование 13б), и `permissions.deny` курируемого слоя роли
 # (требование 13а, `docs/reference/role-home/claude/settings.json`).
 CANARY_POOL_DIRNAME = ".artel-canary"
+# Слот keychain пульта, несущий симметричный ключ шифрования пула (SPEC
+# 01M1NSR5M5THYRC0RFWPMVE2DW, требование 1/AC-2) — тот же механизм, что
+# токены ролей (`orchestrator/keychain.py::token`), отдельный слот
+# (ANSWER-1 п.3). Заводит Оператор вручную (`security add-generic-
+# password`), код только читает.
+CANARY_POOL_KEY_SLOT = "artel-canary-pool-key"
 # Потолок ПОДРЯД идущих циклов возврата из `escalated` ОДНОЙ канареечной
 # задачи (REVIEW.md 01M1NEEWH5K1XPFRDGRMPYSBXJ итерации 1, R1-F1):
 # `review_iters` не сбрасывается при возврате из `escalated` (общее
