@@ -100,6 +100,25 @@ schema_version: 4
 5. Дифф `.github/workflows/ci.yml` (джоб `guard`) — приложен к этому
    PLAN.md, не коммитится в код-ветку; `git apply --check` прогнан на
    чистом `main` (см. «Дифф для Оператора»).
+6. REVIEW.md R1-F1 (итерации 1-3, blocker): чтение `SPEC.md` внутри
+   `_pull_main_or_escalate` (шаг 1 выше) шло напрямую через `gitcmd.show`
+   + `or {}` — сбой чтения (ветка недоступна, git не ответил, гонка с
+   материализацией) схлопывался в дефолтный `meta={}` →
+   `guard.requires_ac_markup({}) == False` → молчаливый `"pulled"`
+   вместо именованного отказа. Заменено на established
+   `_read_branch_text_or_refuse` (`orchestrator/fsm.py:432-450`, тот же
+   узел, что уже несёт `spec_gate`/`in_dev`/`review` для того же файла)
+   — сбой чтения теперь даёт `return "refused"` (узел сам журналирует и
+   печатает отказ), не завершая переход тихо. R1-F2 (minor): докстринги
+   «Ловит мутацию» добавлены к трём тестам шага 4
+   (`tests/test_branch_freshness_gate.py`). Попутно обнаружен и починен
+   регресс вне зоны замечаний реестра, не пойманный «Проверено
+   исполнением» ревьювера ни на одной из трёх итераций (файл не входит
+   в список AC-12): `tests/test_fsm_map_conflict_autoresolve.py::
+   test_map_only_conflict_autoresolves_without_escalation` уже с
+   итерации 1 ожидал вызов `acceptance.run` с путём worktree — тем же
+   классом дефекта, что чинит шаг 4 в `test_branch_freshness_gate.py`,
+   просто в другом файле (тот же приём `write_acceptance_plank()`).
 
 ## Покрытие требований
 | Требование | Шаг |

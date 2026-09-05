@@ -84,13 +84,23 @@ orchestrator/ tests/ .github/` (диапазон от базы итерации 
 
 | id | статус | файл/строка | суть | последствие | решение |
 |---|---|---|---|---|---|
-| R1-F1 | open | orchestrator/fsm.py:344-347 (+ orchestrator/fsm.py:820, orchestrator/fsm_advance.py:763, orchestrator/fsm_merge_gate.py:326, orchestrator/canary.py:191) | не исправлено третью итерацию подряд: сбой чтения SPEC.md с артефактной ветки (`gitcmd.show` вернула `None`) схлопывается в дефолтный `meta={}` → `requires_ac_markup` → `False` → `"pulled"`, вместо именованного отказа | переход/merge продолжается без прогона приёмочной планки и без диагностики при транзиентном сбое git на чтении артефактной ветки — тот самый «молчаливый зелёный проход», который AC-3/AC-4 запрещают для соседнего условия | использовать `_read_branch_text_or_refuse` (или эквивалентный явный разбор ошибки `gitcmd.show`) вместо прямого `gitcmd.show` + `or {}` |
-| R1-F2 | open | tests/test_branch_freshness_gate.py:340,474,495 | не исправлено третью итерацию подряд: три изменённых теста не несут докстринг «Ловит мутацию» под новую чувствительность к источнику планки | придётся заново разбираться в намерении теста при следующей правке этого файла — не блокирует приёмку | дописать докстринг с описанием мутации |
+| R1-F1 | fixed | orchestrator/fsm.py:344-347 (+ orchestrator/fsm.py:820, orchestrator/fsm_advance.py:763, orchestrator/fsm_merge_gate.py:326, orchestrator/canary.py:191) | не исправлено третью итерацию подряд: сбой чтения SPEC.md с артефактной ветки (`gitcmd.show` вернула `None`) схлопывается в дефолтный `meta={}` → `requires_ac_markup` → `False` → `"pulled"`, вместо именованного отказа | переход/merge продолжается без прогона приёмочной планки и без диагностики при транзиентном сбое git на чтении артефактной ветки — тот самый «молчаливый зелёный проход», который AC-3/AC-4 запрещают для соседнего условия | Исправлено буквально предложенным способом: прямой `gitcmd.show(artifact_branch_name, ...)` + `or {}` заменён на `_read_branch_text_or_refuse(conn, task_id, artifact_branch_name, "SPEC.md")` (`orchestrator/fsm.py:353-357`) — сбой/отсутствие чтения SPEC.md теперь даёт `return "refused"` из `_pull_main_or_escalate` (узел сам журналирует и печатает именованный отказ «дерево не на ветке задачи»), а не молчаливый дефолт `meta={}` → `"pulled"`. Четыре точки вызова уже проверяли `in ("escalated", "refused")` (без изменений). Проверил вручную (`gitcmd.show`/`ls_tree_files`, замоканные на сбой вместо легитимного «файла/ветки нет») — переход теперь отказывает именованно, журнал получает запись; `tests.test_branch_freshness_gate` и смежные (`test_fsm_autogate`, `test_artifact_materialization`, `test_merge_gate_ci_wait`, `test_fsm_merge_gate_done_snapshot`, `test_canary`, `test_fsm_map_conflict_autoresolve`) — зелёные. |
+| R1-F2 | fixed | tests/test_branch_freshness_gate.py:340,474,495 | не исправлено третью итерацию подряд: три изменённых теста не несут докстринг «Ловит мутацию» под новую чувствительность к источнику планки | придётся заново разбираться в намерении теста при следующей правке этого файла — не блокирует приёмку | Докстринг «Ловит мутацию» добавлен ко всем трём тестовым методам (`test_approve_pulls_main_and_advances_when_acceptance_green`, `test_advance_escalates_on_red_acceptance_after_pull_keeps_merge`, `test_approve_escalates_on_red_acceptance_after_pull_keeps_merge`) — каждый описывает конкретную мутацию, которую тест ловит. |
 
-Обе записи заведены на итерации 1 и с тех пор не получили ни `fixed`, ни
-`rejected` от разработчика ни на итерации 2, ни на этой — код не менялся
-ни разу, поэтому оценивать исправление/обоснование отказа не из чего;
-статус переносится как есть, `open`.
+Попутно обнаружен и починен регресс вне зоны замечаний реестра:
+`tests/test_fsm_map_conflict_autoresolve.py::test_map_only_conflict_autoresolves_without_escalation`
+падал уже ДО этой итерации (воспроизводится и на исходном коде итерации
+1 — не следствие правки R1-F1) — тест ожидал вызов `acceptance.run` с
+путём `wt_path / "tasks" / task_id`, хотя требование 1 SPEC этой задачи
+(итерация 1) уже переключило источник планки на
+`acceptance.materialize_from_branch` (временный каталог, не worktree).
+Тест не входит ни в один из файлов, что явно перечисляет AC-12, поэтому
+ревьювер не гонял его в «Проверено исполнением» ни на одной из трёх
+итераций. Починено: тест теперь сеет `SPEC.md`+`acceptance_tests/`
+фикстурой (`write_acceptance_plank()`, тот же приём, что уже был в
+`tests/test_branch_freshness_gate.py`) и сверяет, что `acc_run` позвана
+с материализованным `plank_root` (`!= wt_path / "tasks" / task_id`),
+не с конкретным путём worktree.
 
 ## Вердикт
 
