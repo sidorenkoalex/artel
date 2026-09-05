@@ -64,6 +64,36 @@ ALL_CONFIG_ATTRS = (
     "ROLE_HOME", "ROLE_CONFIG_DIR", "BACKUP_MARKER", "WORKTREES",
 )
 
+# `runner.role_env` (SPEC 01M1RDCEF0JZ4AVQRE43JFH8TN, требования 1-3)
+# резолвит объявленные манифестом инструменты РЕАЛЬНЫМ `shutil.which` при
+# старте каждого шага роли — отсутствие любого из них останавливает шаг
+# `OSError`'ом ещё до того, как код дойдёт до подменённого `spawn_agent`/
+# `Popen`. Машина разработчика несёт `gh`/`claude` физически, раннер CI —
+# не обязательно (ANSWER-2 Оператора: «на раннере GitHub нет исполняемых
+# claude и gh»): десятки тестов, которым важно поведение шага С УЖЕ
+# ПОДДЕЛЬНЫМ CLI (`FakeProc`/подмена `spawn_agent`), а не сам факт
+# присутствия этих двух бинарей на машине прогона, иначе ложно падали бы
+# на `OSError` до предмета своей проверки — ровно этот класс уводил
+# `tests/test_step_cost.py`/`tests/test_step_refixation.py` в красный CI,
+# будучи зелёным локально. `python3`/`git` — резолвятся по-настоящему
+# (часть тестов реально исполняет git: пробы идентичности `role_env`);
+# подмена PATH конкретным тестом (например `tests.test_multitarget.
+# RoleEnvTest.test_role_path_is_built_from_declared_tools_not_copied`)
+# по-прежнему валит резолвинг до `OSError` — стаб ниже маскирует только
+# отсутствие `gh`/`claude` НА МАШИНЕ, не отсутствие инструмента в
+# ПОДСУНУТОМ тестом PATH.
+_REAL_WHICH = shutil.which
+
+
+def _stub_which(name, *args, **kwargs):
+    found = _REAL_WHICH(name, *args, **kwargs)
+    if found is not None or name not in ("gh", "claude"):
+        return found
+    return f"/artel-test-stub-bin/{name}"
+
+
+shutil.which = _stub_which
+
 
 def capture(fn, *args) -> str:
     buf = io.StringIO()

@@ -14,6 +14,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - name: версия Python из манифеста стека (01M1RDCCKBQMJ5G2K9ANJP059H)
+        id: stack-python
+        run: echo "version=$(python3 scripts/stack_ci.py)" >> "$GITHUB_OUTPUT"
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ steps.stack-python.outputs.version }}
       - name: guard.py по всем артефактам задач
         run: |
           # Ветка task/** — не источник истины для tasks/<id>/ (SPEC
@@ -146,6 +152,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - name: версия Python из манифеста стека (01M1RDCCKBQMJ5G2K9ANJP059H)
+        id: stack-python
+        run: echo "version=$(python3 scripts/stack_ci.py)" >> "$GITHUB_OUTPUT"
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ steps.stack-python.outputs.version }}
       - run: python3 -m py_compile orchestrator/artel.py scripts/guard.py
       - name: снимок ссылок репозитория до прогона тестов (SPEC 01M1KVGD18P9H5WR7VM8TGPV1T, требование 1)
         run: git for-each-ref --format='%(refname) %(objectname)' refs/heads/ refs/artifacts/ > /tmp/refs-before.txt
@@ -165,6 +177,14 @@ jobs:
             echo "::error::прогон tests/ изменил набор ссылок репозитория — см. diff выше"
             exit 1
           fi
+      - name: минимальная версия Python из манифеста (01M1RDCCKBQMJ5G2K9ANJP059H, требование 2)
+        id: stack-python-min
+        run: echo "version=$(python3 scripts/stack_ci.py --min)" >> "$GITHUB_OUTPUT"
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ steps.stack-python-min.outputs.version }}
+      - name: tests.test_invariants на минимальной объявленной версии Python (AC-2)
+        run: python3 -m unittest tests.test_invariants -v
 
   protected-paths:
     name: Enforcement, конфиги системы меняет только Оператор
@@ -195,6 +215,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with: { fetch-depth: 0 }
+      - name: версия Python из манифеста стека (01M1RDCCKBQMJ5G2K9ANJP059H)
+        id: stack-python
+        run: echo "version=$(python3 scripts/stack_ci.py)" >> "$GITHUB_OUTPUT"
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ steps.stack-python.outputs.version }}
       - name: генератор отрабатывает без ошибок (AC-7, AC-8)
         run: python3 scripts/codebase_map.py
       - name: закоммиченная карта не стухла (AC-9; ред. Оператора 26.08 — сверка содержимым)
