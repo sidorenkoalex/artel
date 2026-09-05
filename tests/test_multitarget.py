@@ -563,7 +563,10 @@ class ProgramSpendTest(TmpRootTest):
         self.assertIn("ВНИМАНИЕ", out)
         self.assertEqual(len(self.events()), 1)
         self.assertIn("70%", self.events()[0])
-        self.assertIn("$1401.00", self.events()[0])
+        # Порог считается от config.PROGRAM_STOP_LOSS_USD, а не литералом:
+        # при $2000 это было "$1401.00", при $3000 (06.09) — "$2101.00".
+        self.assertIn(f"${config.PROGRAM_STOP_LOSS_USD * 0.7 + 1:.2f}",
+                      self.events()[0])
 
     def test_ninety_percent_is_a_second_event(self):
         self.spend_to(config.PROGRAM_STOP_LOSS_USD * 0.7 - 1)
