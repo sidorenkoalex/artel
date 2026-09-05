@@ -27,6 +27,10 @@ class IsDraftLenientTest(unittest.TestCase):
     `status: draft`."""
 
     def test_spec_draft_is_lenient(self):
+        """Ловит мутацию: `is_draft_lenient` возвращает константу `False`
+        (или роняет проверку `type`) — тогда ни один черновик, включая
+        базовый случай `spec`/`draft`, не получил бы льготный режим
+        требования 2."""
         self.assertTrue(guard.is_draft_lenient({"type": "spec", "status": "draft"}))
 
     def test_plan_review_test_report_draft_are_lenient(self):
@@ -40,13 +44,22 @@ class IsDraftLenientTest(unittest.TestCase):
 
     def test_tz_questions_answer_draft_are_not_lenient(self):
         """Требование 3: три типа вне DRAFT_LENIENT_TYPES не входят в
-        льготный режим ни при каком статусе, включая `draft`."""
+        льготный режим ни при каком статусе, включая `draft`.
+
+        Ловит мутацию: `DRAFT_LENIENT_TYPES` расширили до всех типов
+        (например, скопировали множество валидных `type` целиком) —
+        тогда `tz`/`questions`/`answer` со `status: draft` тоже стали бы
+        льготными вопреки требованию 3."""
         for atype in ("tz", "questions", "answer"):
             with self.subTest(тип=atype):
                 self.assertFalse(
                     guard.is_draft_lenient({"type": atype, "status": "draft"}))
 
     def test_non_draft_status_is_not_lenient(self):
+        """Ловит мутацию: сравнение статуса ослаблено до "не ready" вместо
+        буквального "== draft" (например, `status != "ready"`) — тогда
+        любой из этих "сданных" статусов ошибочно попал бы в льготный
+        режим требования 2."""
         for status in ("ready", "approved", "changes_requested", "escalate", ""):
             with self.subTest(status=status):
                 self.assertFalse(
@@ -54,13 +67,24 @@ class IsDraftLenientTest(unittest.TestCase):
 
     def test_missing_status_is_not_lenient(self):
         """Отсутствие поля `status` целиком — то же самое, что пустая
-        строка (`meta.get("status") or ""`), не `draft`."""
+        строка (`meta.get("status") or ""`), не `draft`.
+
+        Ловит мутацию: `meta["status"] == "draft"` вместо
+        `meta.get("status")` уронил бы `KeyError`, а не корректный
+        `False` — этот тест поймал бы и падение, и ошибочное
+        приравнивание отсутствия поля к `draft`."""
         self.assertFalse(guard.is_draft_lenient({"type": "spec"}))
 
     def test_missing_type_is_not_lenient(self):
+        """Ловит мутацию: `meta.get("type", "spec")` (подстановка
+        дефолтного типа вместо `None`) сделала бы артефакт без поля
+        `type` неотличимым от `spec`/`draft` и ошибочно льготным."""
         self.assertFalse(guard.is_draft_lenient({"status": "draft"}))
 
     def test_unknown_type_with_draft_status_is_not_lenient(self):
+        """Ловит мутацию: проверка членства в `DRAFT_LENIENT_TYPES`
+        заменена на "тип не пустой" (`bool(meta.get("type"))`) — тогда
+        любой тип, включая несуществующий, прошёл бы льготный режим."""
         self.assertFalse(
             guard.is_draft_lenient({"type": "nonsense", "status": "draft"}))
 
@@ -71,11 +95,18 @@ class BasicFrontmatterErrorsTest(unittest.TestCase):
     этого."""
 
     def test_clean_meta_has_no_errors(self):
+        """Ловит мутацию: базовая проверка ошибочно требует что-то сверх
+        task/type/schema_version (например, забытый `author_role` из
+        полной проверки `_content_errors`) — тогда даже корректный
+        черновик получил бы ложную ошибку."""
         meta = {"task": "T1", "type": "spec", "status": "draft",
                 "schema_version": 4}
         self.assertEqual(guard.basic_frontmatter_errors("label", meta), [])
 
     def test_missing_task_is_an_error(self):
+        """Ловит мутацию: `BASIC_META_FIELDS` растеряла `task` (осталось
+        только `type`) — тогда черновик без идентификатора задачи прошёл
+        бы базовую проверку молча, вопреки требованию 2."""
         meta = {"type": "spec", "status": "draft", "schema_version": 4}
         errors = guard.basic_frontmatter_errors("label", meta)
         self.assertTrue(any("task" in e for e in errors), errors)
@@ -110,6 +141,12 @@ class BasicFrontmatterErrorsTest(unittest.TestCase):
         self.assertNotIn("не заполнены", errors[0])
 
     def test_too_new_schema_version_is_an_error_with_the_version_named(self):
+        """Ловит мутацию: `basic_frontmatter_errors` не зовёт
+        `schema_errors` (переизобретает свою, более слабую проверку
+        границы) — тогда `schema_version` выше
+        `SUPPORTED_SCHEMA_VERSION` прошёл бы базовую проверку черновика
+        молча, вопреки требованию 2 («schema_version не выше
+        SUPPORTED_SCHEMA_VERSION остаётся ошибкой»)."""
         meta = {"task": "T1", "type": "spec", "status": "draft",
                 "schema_version": guard.SUPPORTED_SCHEMA_VERSION + 1}
         errors = guard.basic_frontmatter_errors("label", meta)
@@ -136,11 +173,21 @@ schema_version: 1
 """
 
     def test_default_call_reports_full_content_errors_for_a_draft(self):
+        """Ловит мутацию: `check_content` без явного параметра ошибочно
+        включает льготный режим по умолчанию (например, дефолт
+        `artifact_branch_mode: bool = True`) — тогда черновик без единой
+        обязательной секции прошёл бы вызов без нового параметра молча,
+        нарушая AC-1 (поведение без режима не меняется ни на бит)."""
         errors = guard.check_content("label", self.DRAFT_SPEC_NO_SECTIONS)
         self.assertTrue(
             any("отсутствует обязательная секция" in e for e in errors), errors)
 
     def test_explicit_false_matches_the_default(self):
+        """Ловит мутацию: значение параметра по умолчанию расходится с
+        явным `False` (например, дефолт — не `bool`, а `None`, который
+        где-то по пути трактуется иначе) — тогда AC-1 держался бы только
+        случайно, а два эквивалентных вызова расходились бы в
+        результате."""
         default = guard.check_content("label", self.DRAFT_SPEC_NO_SECTIONS)
         explicit = guard.check_content("label", self.DRAFT_SPEC_NO_SECTIONS,
                                        artifact_branch_mode=False)
@@ -149,14 +196,24 @@ schema_version: 1
     def test_mode_true_on_a_lenient_draft_returns_only_basic_errors(self):
         """Требование 2: с режимом включённым, тот же черновик без единой
         секции возвращает ТОЛЬКО базовые нарушения (здесь — ни одного,
-        frontmatter в порядке), не содержательные."""
+        frontmatter в порядке), не содержательные.
+
+        Ловит мутацию: `check_content(..., artifact_branch_mode=True)`
+        по-прежнему зовёт `_content_errors` напрямую, минуя ветвление
+        `is_draft_lenient` — тогда даже с включённым режимом черновик
+        получил бы полный список содержательных ошибок вместо пустого."""
         errors = guard.check_content("label", self.DRAFT_SPEC_NO_SECTIONS,
                                      artifact_branch_mode=True)
         self.assertEqual(errors, [])
 
     def test_mode_true_on_a_non_lenient_type_is_unaffected(self):
         """Требование 3: `questions` со `status: draft` — режим не меняет
-        результат `check_content` по сравнению с выключенным."""
+        результат `check_content` по сравнению с выключенным.
+
+        Ловит мутацию: ветвление на льготность применено ДО проверки
+        типа (то есть распространено на все типы, а не только
+        DRAFT_LENIENT_TYPES) — тогда `questions`/`draft` тоже получил бы
+        урезанный список ошибок вместо полного, нарушая требование 3."""
         text = """---
 task: T1
 type: questions
