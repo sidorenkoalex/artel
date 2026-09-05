@@ -51,7 +51,7 @@ from unittest import mock
 REPO_ROOT = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(REPO_ROOT))
 
-from orchestrator import (artel, catalog, config, fixation,  # noqa: E402
+from orchestrator import (artel, ci, catalog, checkpoint, config,  # noqa: E402
                           gitcmd, runner, store)
 
 SPEC_READY = """---
@@ -113,6 +113,11 @@ schema_version: 1
 
 ## Замечания
 
+## Проверено исполнением
+
+синтетический прогон канарейки: `python3 -m unittest` (заглушка агента,
+guard.py требует эту секцию для approved-ревью, SPEC T072).
+
 ## Вердикт
 """
 
@@ -172,7 +177,26 @@ MARK_EXPECT_ESCALATION_NO = "<!-- canary-expect-escalation: no -->"
 class SmartAgent:
     """Подмена `runner.cmd_run`, см. докстринг модуля выше и оригинал
     `tasks/T065/acceptance_tests/_sandbox.py::SmartAgent` — тот же приём,
-    дополненный веткой эскалации (AC-6/AC-8)."""
+    дополненный веткой эскалации (AC-6/AC-8).
+
+    Отличие от оригинала T065 (мандат ANSWER-3 — правка ТОЛЬКО этого
+    файла, песочница, не код задачи): `_commit` пишет файл на диск
+    рабочего каталога роли (`config.WORKTREES/<id>`, тот же путь, что
+    `runner.role_cwd` для self/артели, T045) и переносит его в
+    артефактную ветку тем же путём, что и реальный шаг —
+    `checkpoint.commit_step_artifacts` (SPEC T094, требование 8), а не
+    голым `git add`/`git commit` В РАБОЧЕМ ДЕРЕВЕ (это закоммитило бы
+    артефакт в КОДОВУЮ ветку задачи). T065 закоммитил бы там правильно —
+    до A7 self-задача сама была своей веткой-источником артефактов
+    (`foreign=False`); post-A7 `artifact_source.resolve` для ЛЮБОГО
+    target, включая self, всегда возвращает артефактную ветку пульта
+    (`foreign=True`, `orchestrator/artifact_source.py`) — `fsm_advance.
+    spec_writing`/`review`/`in_dev` читают статус SPEC.md/REVIEW.md
+    оттуда, а коммит в кодовую ветку эта ветка просто не видит: задача
+    вечно застревает на «SPEC.md ещё не ready — нечего продвигать»,
+    `_drive_task` крутит `auto.cmd_auto` до потолка `AUTO_STALL_STEPS_LIMIT`
+    и заново — часовой хват без единого интерактивного ожидания,
+    диагностирован ANSWER-2/ANSWER-3 (наблюдение Оператора 04-05.09)."""
 
     def __init__(self):
         self.calls: list[str] = []
@@ -193,20 +217,19 @@ class SmartAgent:
         conn = store.db()
         t = store.get_task(conn, task_id)
         state = t["state"]
-        branch = t["branch"]
         title = t["title"] or ""
 
         if state == "spec_writing":
             if (ESCALATE_TITLE_MARKER in title
                     and task_id not in self._escalated_once):
                 self._escalated_once.add(task_id)
-                self._commit(task_id, branch, "QUESTIONS.md",
+                self._commit(conn, task_id, "analyst", "QUESTIONS.md",
                             QUESTIONS_TEXT.format(task=task_id))
                 return
-            self._commit(task_id, branch, "SPEC.md",
+            self._commit(conn, task_id, "analyst", "SPEC.md",
                         SPEC_READY.format(task=task_id))
         elif state == "in_dev":
-            self._commit(task_id, branch, "PLAN.md",
+            self._commit(conn, task_id, "developer", "PLAN.md",
                         PLAN_READY.format(task=task_id))
         elif state == "review":
             done = self._review_rounds_done.get(task_id, 0)
@@ -222,26 +245,24 @@ class SmartAgent:
                 status = "changes_requested"
             else:
                 status = "approved"
-            self._commit(task_id, branch, "REVIEW.md",
+            self._commit(conn, task_id, "reviewer", "REVIEW.md",
                         REVIEW_MD.format(task=task_id, status=status,
                                          iteration=iteration))
         # Прочие агентские состояния (tests_writing и т.п.) вне охвата
         # песочницы (см. докстринг модуля).
 
-    def _commit(self, task_id: str, branch: str, name: str, text: str) -> None:
+    def _commit(self, conn, task_id: str, role: str, name: str, text: str) -> None:
+        """Пишет файл в рабочий каталог роли и переносит его в артефактную
+        ветку тем же приёмом, что и реальный шаг (см. докстринг класса
+        выше) — `checkpoint.commit_step_artifacts`, не голый `git commit`
+        в рабочем дереве кодовой ветки."""
         self._nonce += 1
         text = f"{text}\n<!-- agent stub, вызов {self._nonce} -->\n"
         wt_path = config.WORKTREES / task_id
         path = wt_path / "tasks" / task_id / name
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(text, encoding="utf-8")
-        subprocess.run(["git", "add", f"tasks/{task_id}/{name}"], cwd=wt_path,
-                       check=True, capture_output=True, text=True)
-        subprocess.run(
-            ["git", "-c", f"user.name={fixation.FIXATION_AUTHOR_NAME}",
-             "-c", f"user.email={fixation.FIXATION_AUTHOR_EMAIL}",
-             "commit", "-q", "-m", f"{task_id}: {name} (agent stub #{self._nonce})"],
-            cwd=wt_path, check=True, capture_output=True, text=True)
+        checkpoint.commit_step_artifacts(conn, task_id, role)
 
 
 def has_canary_mark(text: str) -> bool:
@@ -287,7 +308,7 @@ def _snapshot_dir(p: Path, deep: bool = False) -> dict:
     has_git = git_dir.exists()
     origin_url = None
     if has_git:
-        res = subprocess.run(["git", "remote", "get-url", "origin"], cwd=p,
+        res = subprocess.run(["git", "remote", "get-url", "origin"], stdin=subprocess.DEVNULL, cwd=p,
                              capture_output=True, text=True)
         if res.returncode == 0:
             origin_url = res.stdout.strip()
@@ -429,6 +450,32 @@ class CanarySandbox(unittest.TestCase):
 
         self.capture(catalog.cmd_init)
 
+        # --- без реальных ожиданий CI (мандат Оператора ANSWER-3, 05.09) ---
+        # Цикл пульта в verifying/merge_gate опрашивает CI и ждёт до
+        # боевых потолков (90 мин и 60 мин): планка на этом висла часами.
+        # Заглушка: CI всегда зелёный, потолки и шаг опроса — секунды.
+        for attr, value in (
+            ("VERIFYING_CEILING_SEC", 5),
+            ("MERGE_GATE_CI_WAIT_CEILING_SEC", 5),
+            ("MERGE_GATE_CI_WAIT_POLL_SEC", 0),
+            ("CI_RERUN_WAIT_SEC", 0),
+        ):
+            patcher = mock.patch.object(config, attr, value)
+            patcher.start()
+            self.addCleanup(patcher.stop)
+        for name, value in (
+            ("verifying_status", ("green", "CI зелёный (заглушка песочницы)")),
+            ("branch_status", (True, "CI зелёный (заглушка песочницы)")),
+            ("trigger_rerun", "заглушка песочницы: перезапуск не нужен"),
+        ):
+            patcher = mock.patch.object(ci, name, return_value=value)
+            patcher.start()
+            self.addCleanup(patcher.stop)
+        gh_patcher = mock.patch.object(
+            ci, "gh", side_effect=AssertionError("песочница: вызов gh запрещён"))
+        gh_patcher.start()
+        self.addCleanup(gh_patcher.stop)
+
         self.agent = SmartAgent()
         agent_patcher = mock.patch.object(runner, "cmd_run", self.agent)
         agent_patcher.start()
@@ -451,7 +498,7 @@ class CanarySandbox(unittest.TestCase):
     # ------------------------------------------------------------ утилиты
 
     def _git(self, *args: str) -> subprocess.CompletedProcess:
-        res = subprocess.run(["git", *args], cwd=self.root, timeout=30,
+        res = subprocess.run(["git", *args], stdin=subprocess.DEVNULL, cwd=self.root, timeout=30,
                              capture_output=True, text=True, encoding="utf-8")
         self.assertEqual(res.returncode, 0,
                          f"git {' '.join(args)} упал: {res.stderr}")
