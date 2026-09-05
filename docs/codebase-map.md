@@ -1,5 +1,5 @@
 ---
-built_at_sha: 1067d5a96f9f7b904239d251c68adf630eef935a
+built_at_sha: 404ac4a39511de536b435bda5dbcca0a7c0ec45f
 ---
 
 # Codebase-map пульта
@@ -145,7 +145,7 @@ built_at_sha: 1067d5a96f9f7b904239d251c68adf630eef935a
 
 ## orchestrator/auto.py
 
-**Назначение:** Цикл `auto`: run+advance, пока в шаге работает агент.
+**Назначение:** Цикл `auto`: advance до шага роли, затем — если роль ещё не закончила — run.
 
 **Публичные функции:**
 - `auto_stop`
