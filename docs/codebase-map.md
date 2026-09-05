@@ -1,5 +1,5 @@
 ---
-built_at_sha: e4a042f6724c2a935bc94acfacf4ffac4de5338a
+built_at_sha: ed1b3a8d3ffcc3e545d6d9823eabec381dba1cb1
 ---
 
 # Codebase-map пульта
@@ -740,6 +740,7 @@ built_at_sha: e4a042f6724c2a935bc94acfacf4ffac4de5338a
 - `in_role_environment`
 - `role_cmd`
 - `role_cwd`
+- `role_cwd_path`
 - `role_env`
 - `role_token`
 - `run_agent_once`

@@ -143,8 +143,21 @@ class CmdRunFailureTest(TmpRootTest):
         pf_patcher.start()
         self.addCleanup(pf_patcher.stop)
 
+    # Имя обязательного артефакта роли этого состояния (SPEC
+    # 01M1RQ12JVHE3PQYDFV1XPSTQ3, требование 3) — без него на диске
+    # рабочего каталога роли успешная попытка (rc=0) честно ретраится
+    # вместо одного тихого успеха, которого ждут тесты этого класса (они
+    # проверяют исход попытки агента, не факт отказа без артефакта).
+    _STEP_ARTIFACT = {"in_dev": "PLAN.md", "review": "REVIEW.md"}
+
     def run_agent(self, *attempts) -> str:
         """attempts: (rc, строки вывода) — по одной паре на попытку."""
+        state = self.task_row()["state"]
+        marker = self._STEP_ARTIFACT.get(state)
+        if marker is not None:
+            tdir = config.WORKTREES / self.TASK / "tasks" / self.TASK
+            tdir.mkdir(parents=True, exist_ok=True)
+            (tdir / marker).write_text("маркер\n", encoding="utf-8")
         procs = [FakeProc(lines, rc) for rc, lines in attempts]
         with mock.patch.object(runner, "spawn_agent", side_effect=procs) as popen:
             out = self.capture(runner.cmd_run, self.TASK)

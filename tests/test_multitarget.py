@@ -787,6 +787,16 @@ class RoleEnvTest(TmpRootTest):
         _, task_id = capture_new_task_id(catalog.cmd_new, "Окружение роли")
         store.update_task(store.db(), task_id, state="in_dev")
         sync_spec_from_worktree(task_id)
+        # Обязательный артефакт роли developer (SPEC 01M1RQ12JVHE3PQYDFV1XPSTQ3,
+        # требование 3) — без него на диске рабочего каталога роли успешная
+        # попытка (rc=0) честно ретраится вместо одного тихого предупреждения,
+        # которое проверяет этот тест. `workspace.ensure` этого класса
+        # подменена на `self.root` (см. `_MultitargetTmpRootTest.setUp`) —
+        # рабочий каталог роли здесь `config.TASKS/<id>/`, не `config.
+        # WORKTREES/<id>/tasks/<id>/`.
+        tdir = config.TASKS / task_id
+        tdir.mkdir(parents=True, exist_ok=True)
+        (tdir / "PLAN.md").write_text("маркер\n", encoding="utf-8")
 
         # `silent_git` роняет ЛЮБУЮ git-команду (returncode 1) — годится
         # для предмета теста (сверка git-идентичности), но брифу роли
