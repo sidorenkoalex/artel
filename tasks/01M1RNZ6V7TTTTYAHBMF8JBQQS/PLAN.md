@@ -75,6 +75,21 @@ schema_version: 4
    acceptance_tests/`, залочена test_author) прогнана целиком —
    зелёная (11/11, включая намеренно-красные AC-6/AC-7, которые
    красные по замыслу теста, не по сбою).
+6. Закрытие REVIEW.md итерации 1 (R1-F1, R1-F2):
+   - `orchestrator/acceptance.py::materialize_from_branch` — убран `or
+     []` на `gitcmd.ls_tree_files(...)`: `None` (git не ответил) и `[]`
+     (в ветке легитимно пусто) больше не смешиваются. При `None`
+     функция возвращает `tdir`, НЕ трогая диск (тем же приёмом, что
+     `artifact_branch.materialize_task_dir`), — прунинг ниже больше не
+     стирает уже материализованную планку транзиентным сбоем git на
+     повторном вызове.
+   - `tests/test_branch_freshness_gate.py::
+     test_advance_pulls_main_and_advances_when_acceptance_green` и
+     `tests/test_fsm_map_conflict_autoresolve.py::
+     test_map_only_conflict_autoresolves_without_escalation` — дописан
+     абзац «Ловит мутацию» под добавленные в этой задаче assert'ы по
+     `plank_root`/`cwd` (первый файл нёс докстринг про другую мутацию,
+     второй не нёс докстринга вовсе).
 
 ## Покрытие требований
 
@@ -116,6 +131,14 @@ autoresolve.py`) утверждали именно ту деталь реали�
 Откат — точечный revert трёх файлов (`acceptance.py`, `fsm.py`,
 `fsm_advance.py`) плюс двух тестов; лока приёмочной планки задачи это
 не касается.
+
+Реестр REVIEW.md итерации 1: R1-F1 (major) и R1-F2 (minor) закрыты
+шагом 6 — прогон `test_branch_freshness_gate`,
+`test_fsm_map_conflict_autoresolve`, `test_acceptance`,
+`test_fsm_autogate`, `test_artifact_materialization` (32/32) и прямой
+репро сценария R1-F1 (два вызова `materialize_from_branch`: первый
+кладёт реальный файл, второй с `ls_tree_files -> None` больше НЕ стирает
+его) подтверждают фикс.
 
 ## Риски
 
