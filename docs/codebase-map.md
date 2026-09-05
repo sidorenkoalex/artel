@@ -1,5 +1,5 @@
 ---
-built_at_sha: 39a7b07a0158ff413f6ed3c474a83ca37bff9107
+built_at_sha: d03a90a60986c767f886c56a9c816ebe5df9f583
 ---
 
 # Codebase-map пульта
@@ -333,6 +333,7 @@ built_at_sha: 39a7b07a0158ff413f6ed3c474a83ca37bff9107
 - `check_orphans`
 - `check_pending_snapshots`
 - `check_remote_empty`
+- `check_role_home_reference`
 - `check_role_log_pool_leak`
 - `check_root_pin`
 - `check_target_layout`
@@ -741,7 +742,7 @@ built_at_sha: 39a7b07a0158ff413f6ed3c474a83ca37bff9107
 - `spawn_agent`
 - `step_role`
 
-**Импортирует:** `orchestrator/agent_log.py`, `orchestrator/alerts.py`, `orchestrator/artifact_branch.py`, `orchestrator/artifact_source.py`, `orchestrator/brief.py`, `orchestrator/budget.py`, `orchestrator/checkpoint.py`, `orchestrator/config.py`, `orchestrator/doctor.py`, `orchestrator/failure_classification.py`, `orchestrator/fixation.py`, `orchestrator/gitcmd.py`, `orchestrator/keychain.py`, `orchestrator/lease.py`, `orchestrator/liveness.py`, `orchestrator/parallel_limit.py`, `orchestrator/pause.py`, `orchestrator/review.py`, `orchestrator/role_prompt.py`, `orchestrator/roles.py`, `orchestrator/spend.py`, `orchestrator/store.py`, `orchestrator/workspace.py`, `orchestrator/zone_lock.py`
+**Импортирует:** `orchestrator/agent_log.py`, `orchestrator/alerts.py`, `orchestrator/artifact_branch.py`, `orchestrator/artifact_source.py`, `orchestrator/brief.py`, `orchestrator/budget.py`, `orchestrator/checkpoint.py`, `orchestrator/config.py`, `orchestrator/doctor.py`, `orchestrator/failure_classification.py`, `orchestrator/fixation.py`, `orchestrator/gitcmd.py`, `orchestrator/keychain.py`, `orchestrator/lease.py`, `orchestrator/liveness.py`, `orchestrator/parallel_limit.py`, `orchestrator/pause.py`, `orchestrator/review.py`, `orchestrator/role_prompt.py`, `orchestrator/roles.py`, `orchestrator/spend.py`, `orchestrator/stack.py`, `orchestrator/store.py`, `orchestrator/workspace.py`, `orchestrator/zone_lock.py`
 
 **Импортируется:** `orchestrator/artel.py`, `orchestrator/auto.py`, `orchestrator/canary.py`, `orchestrator/doctor.py`, `orchestrator/lease.py`, `orchestrator/pause.py`, `tests/test_acceptance_tests_flow.py`, `tests/test_agent_failure.py`, `tests/test_agent_log.py`, `tests/test_agent_prompt.py`, `tests/test_analyst_role.py`, `tests/test_artifact_materialization.py`, `tests/test_auto_cycle.py`, `tests/test_doctor.py`, `tests/test_git_fixation.py`, `tests/test_invariants.py`, `tests/test_multitarget.py`, `tests/test_multitarget_invariants.py`, `tests/test_review_freshness.py`, `tests/test_review_package.py`, `tests/test_step_autocommit.py`, `tests/test_step_cost.py`, `tests/test_timeout_checkpoint.py`
 
@@ -795,10 +796,11 @@ built_at_sha: 39a7b07a0158ff413f6ed3c474a83ca37bff9107
 
 **Публичные функции:**
 - `check_stack`
+- `python_version_string`
 
 **Импортирует:** —
 
-**Импортируется:** `orchestrator/doctor.py`, `orchestrator/version.py`, `tests/test_invariants.py`, `tests/test_stack.py`
+**Импортируется:** `orchestrator/doctor.py`, `orchestrator/runner.py`, `orchestrator/version.py`, `scripts/stack_ci.py`, `tests/test_invariants.py`, `tests/test_stack.py`, `tests/test_stack_ci.py`
 
 ## orchestrator/store.py
 
@@ -992,6 +994,18 @@ built_at_sha: 39a7b07a0158ff413f6ed3c474a83ca37bff9107
 **Импортирует:** `orchestrator/config.py`, `orchestrator/yamlmini.py`
 
 **Импортируется:** `orchestrator/acceptance.py`, `orchestrator/amend.py`, `orchestrator/canary.py`, `orchestrator/dry_run.py`, `orchestrator/fsm.py`, `orchestrator/fsm_advance.py`, `orchestrator/fsm_autogate.py`, `orchestrator/retro.py`, `orchestrator/version.py`, `tests/test_acceptance_tests_flow.py`, `tests/test_analyst_role.py`, `tests/test_answer.py`, `tests/test_artifact_materialization.py`, `tests/test_fsm_autogate.py`, `tests/test_guard_artifact_branch_mode.py`, `tests/test_guard_schema.py`, `tests/test_guard_split_signals.py`, `tests/test_guard_zones.py`, `tests/test_id_format_guard.py`, `tests/test_invariants.py`, `tests/test_review_registry_gate.py`, `tests/test_version.py`, `tests/test_yaml_parsing.py`
+
+## scripts/stack_ci.py
+
+**Назначение:** CI-обвязка манифеста стека (01M1RDCCKBQMJ5G2K9ANJP059H, требования 1-3):
+
+**Публичные функции:**
+- `main`
+- `minimum_python_version_string`
+
+**Импортирует:** `orchestrator/stack.py`
+
+**Импортируется:** —
 
 ## tests/__init__.py
 
@@ -1764,16 +1778,6 @@ built_at_sha: 39a7b07a0158ff413f6ed3c474a83ca37bff9107
 
 **Импортируется:** —
 
-## tests/test_role_bash_guard.py
-
-**Назначение:** Сторож Bash-команд роли (`docs/reference/role-home/claude/hooks/
-
-**Публичные функции:** (нет)
-
-**Импортирует:** —
-
-**Импортируется:** —
-
 ## tests/test_sandbox.py
 
 **Назначение:** Юнит-тесты перехвата сетевых git-команд `tests/sandbox.py` (SPEC
@@ -1837,6 +1841,16 @@ built_at_sha: 39a7b07a0158ff413f6ed3c474a83ca37bff9107
 ## tests/test_stack.py
 
 **Назначение:** Юнит-тесты orchestrator/stack.py (SPEC 01M1RDCAFENSW2VVAPECHCVGMM,
+
+**Публичные функции:** (нет)
+
+**Импортирует:** `orchestrator/stack.py`
+
+**Импортируется:** —
+
+## tests/test_stack_ci.py
+
+**Назначение:** Юнит-тесты scripts/stack_ci.py (SPEC 01M1RDCCKBQMJ5G2K9ANJP059H,
 
 **Публичные функции:** (нет)
 
