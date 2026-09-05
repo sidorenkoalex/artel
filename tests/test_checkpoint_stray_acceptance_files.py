@@ -22,12 +22,18 @@ from orchestrator import checkpoint  # noqa: E402
 class IsStrayAcceptanceTestFileTest(unittest.TestCase):
 
     def test_files_outside_acceptance_tests_are_never_stray(self):
+        """Ловит мутацию: предикат перестаёт проверять префикс пути
+        `acceptance_tests/` и помечает посторонним любой файл вне каталога
+        планки."""
         for rel in ("PLAN.md", "SPEC.md", "acceptance_tests_notes.md",
                    "docs/notes.md"):
             with self.subTest(файл=rel):
                 self.assertFalse(checkpoint._is_stray_acceptance_test_file(rel))
 
     def test_each_allowed_top_level_name_is_not_stray(self):
+        """Ловит мутацию: из списка разрешённых имён/расширений выпадает
+        одно из них (например, `markers.py` или `.md`/`.txt`), и легитимный
+        файл планки ошибочно помечается посторонним."""
         for rel in ("acceptance_tests/test_x.py",
                    "acceptance_tests/test_ac1_something.py",
                    "acceptance_tests/_sandbox.py",
@@ -39,6 +45,9 @@ class IsStrayAcceptanceTestFileTest(unittest.TestCase):
                 self.assertFalse(checkpoint._is_stray_acceptance_test_file(rel))
 
     def test_disallowed_top_level_extension_is_stray(self):
+        """Ловит мутацию: проверка расширения ослабляется, и посторонний
+        файл первого уровня (`.json`, `.bak`, без расширения, `.pyc`)
+        перестаёт распознаваться как посторонний."""
         for rel in ("acceptance_tests/fixtures.json",
                    "acceptance_tests/helper.py.bak",
                    "acceptance_tests/notes",
@@ -47,12 +56,19 @@ class IsStrayAcceptanceTestFileTest(unittest.TestCase):
                 self.assertTrue(checkpoint._is_stray_acceptance_test_file(rel))
 
     def test_python_file_not_matching_test_prefix_is_stray(self):
-        # Только `test_*.py`/`_sandbox.py`/`markers.py`/`__init__.py` — не
-        # любой `.py` первого уровня.
+        """Ловит мутацию: префикс `test_` заменяется проверкой «любой
+        `.py`» — тогда произвольный `.py`-файл первого уровня перестаёт
+        считаться посторонним.
+
+        Только `test_*.py`/`_sandbox.py`/`markers.py`/`__init__.py` — не
+        любой `.py` первого уровня.
+        """
         self.assertTrue(
             checkpoint._is_stray_acceptance_test_file("acceptance_tests/helpers.py"))
 
     def test_any_nested_path_is_stray_even_with_allowed_extension(self):
+        """Ловит мутацию: проверка глубины пути убирается — допустимое имя
+        во вложенном подкаталоге ошибочно перестаёт считаться посторонним."""
         for rel in ("acceptance_tests/docs/codebase-map.md",
                    "acceptance_tests/helpers/util.py",
                    "acceptance_tests/nested/test_x.py"):

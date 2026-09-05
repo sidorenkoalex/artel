@@ -113,6 +113,9 @@ class RepoRootTest(unittest.TestCase):
     от записи файла на диск и от `git_head_sha`."""
 
     def test_resolves_to_git_top_level_not_the_given_subdir(self):
+        """Ловит мутацию: `repo_root` возвращает переданный `cwd` напрямую
+        вместо результата `git rev-parse --show-toplevel` — запуск из
+        подкаталога тогда пишет карту не в корень репозитория."""
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp).resolve()
             subprocess.run(["git", "init", "-q"], cwd=root, check=True)
@@ -121,9 +124,14 @@ class RepoRootTest(unittest.TestCase):
             self.assertEqual(codebase_map.repo_root(subdir), root)
 
     def test_raises_when_cwd_is_outside_any_git_repository(self):
-        # `GIT_CEILING_DIRECTORIES` — иначе git продолжил бы искать `.git`
-        # выше по дереву и мог бы найти настоящий репозиторий пульта,
-        # если временный каталог ОС окажется внутри его рабочей копии.
+        """Ловит мутацию: ошибка git-процесса подавляется (например,
+        `subprocess.run(..., check=False)`), и функция молча возвращает
+        некорректный путь вместо падения.
+
+        `GIT_CEILING_DIRECTORIES` — иначе git продолжил бы искать `.git`
+        выше по дереву и мог бы найти настоящий репозиторий пульта,
+        если временный каталог ОС окажется внутри его рабочей копии.
+        """
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp).resolve()
             with mock.patch.dict(os.environ,

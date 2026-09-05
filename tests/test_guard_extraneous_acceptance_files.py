@@ -24,16 +24,23 @@ from scripts import guard  # noqa: E402
 class IsExtraneousAcceptanceTestFileTest(unittest.TestCase):
 
     def test_allowed_top_level_names_are_not_extraneous(self):
+        """Ловит мутацию: из списка разрешённых имён/расширений guard'а
+        выпадает одно из них, и легитимный файл планки ошибочно
+        помечается посторонним."""
         for rel in ("test_x.py", "_sandbox.py", "markers.py", "__init__.py",
                    "NOTES.md", "README.txt"):
             with self.subTest(файл=rel):
                 self.assertFalse(guard.is_extraneous_acceptance_test_file(rel))
 
     def test_disallowed_top_level_extension_is_extraneous(self):
+        """Ловит мутацию: guard-предикат перестаёт отклонять неразрешённое
+        расширение первого уровня (`.json`)."""
         self.assertTrue(
             guard.is_extraneous_acceptance_test_file("fixtures.json"))
 
     def test_nested_path_is_extraneous_even_with_allowed_extension(self):
+        """Ловит мутацию: guard-предикат не проверяет глубину пути и
+        пропускает вложенный файл с разрешённым расширением (`.md`)."""
         self.assertTrue(
             guard.is_extraneous_acceptance_test_file("docs/codebase-map.md"))
 
@@ -41,12 +48,18 @@ class IsExtraneousAcceptanceTestFileTest(unittest.TestCase):
 class ScanExtraneousAcceptanceFilesTest(unittest.TestCase):
 
     def test_missing_tasks_root_returns_empty(self):
+        """Ловит мутацию: обход несуществующего каталога `tasks/` бросает
+        исключение вместо пустого списка (пропущена проверка
+        `.exists()`)."""
         with tempfile.TemporaryDirectory() as tmp:
             self.assertEqual(
                 guard.scan_extraneous_acceptance_files(Path(tmp) / "no-such-dir"),
                 [])
 
     def test_scans_multiple_task_directories_and_skips_pycache(self):
+        """Ловит мутацию: обход не проходит все `tasks/*/acceptance_tests/`
+        или не исключает `__pycache__`, и служебные `.pyc`-файлы попадают
+        в результат сканирования."""
         with tempfile.TemporaryDirectory() as tmp:
             tasks_root = Path(tmp)
             for task in ("T1", "T2"):
@@ -67,6 +80,9 @@ class ScanExtraneousAcceptanceFilesTest(unittest.TestCase):
                  "T2/acceptance_tests/extra.json"])
 
     def test_task_without_acceptance_tests_dir_is_skipped(self):
+        """Ловит мутацию: обход падает или возвращает ложный результат для
+        задачи без каталога `acceptance_tests/` (пропущена проверка
+        существования подкаталога перед сканированием)."""
         with tempfile.TemporaryDirectory() as tmp:
             tasks_root = Path(tmp)
             (tasks_root / "T1").mkdir(parents=True)
@@ -74,11 +90,16 @@ class ScanExtraneousAcceptanceFilesTest(unittest.TestCase):
                 guard.scan_extraneous_acceptance_files(tasks_root), [])
 
     def test_task_closed_before_this_rule_is_not_scanned(self):
-        # Найдено эмпирически: `guard --all` на реальном дереве пульта
-        # красил несколько давно закрытых задач с легитимными
-        # вспомогательными файлами вида `_util.py` в `acceptance_tests/`
-        # — то же исключение, что `_closed_before_split_assessment`
-        # (docs/retro/<id>.md на месте — задача не под этим правилом).
+        """Ловит мутацию: исключение для уже закрытых задач удаляется или
+        читает не тот путь к RETRO_DIR — правило начинает красить
+        исторические ветки с легитимными вспомогательными файлами.
+
+        Найдено эмпирически: `guard --all` на реальном дереве пульта
+        красил несколько давно закрытых задач с легитимными
+        вспомогательными файлами вида `_util.py` в `acceptance_tests/`
+        — то же исключение, что `_closed_before_split_assessment`
+        (docs/retro/<id>.md на месте — задача не под этим правилом).
+        """
         with tempfile.TemporaryDirectory() as tmp:
             tasks_root = Path(tmp) / "tasks"
             retro_dir = Path(tmp) / "retro"
