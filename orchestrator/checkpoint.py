@@ -243,6 +243,22 @@ def commit_abnormal_checkpoint(conn, task_id: str, role: str, cause: str) -> str
     свой сценарий; `commit_timeout_checkpoint` не тронут — таймаут
     остаётся отдельной веткой со своим прежним сообщением.
 
+    Мандат роли и перенос `tasks/<id>/` в артефактную ветку — дословно
+    `commit_timeout_checkpoint` (SPEC 01M1NKTF173WV5CPDZ1C3WW69K,
+    REVIEW.md итерация 2, R1-F1 — переоткрыт: правка `commit_timeout_
+    checkpoint` для мандата `developer`/отката вне мандата, полученная
+    подтяжкой main, не была применена сюда, и материализованный
+    `runner.role_cwd` артефакт любой роли, включая роли без мандата
+    кода, безусловно коммитился в кодовую ветку на аварийном
+    завершении шага — тот же класс, что итерация 1 уже закрывала для
+    всех трёх WIP-чекпоинтов). `developer` — код вне `tasks/<id>/`
+    (`exclude`), остальные роли — откат WIP вне `tasks/<id>/`
+    (`_discard_out_of_mandate_changes`); `tasks/<id>/`, материализованный
+    или изменённый на этом шаге, переносится в артефактную ветку
+    `_commit_external_step_artifacts` для ЛЮБОЙ роли, а не рукой этой
+    функции — единственный путь, каким `tasks/<id>/` попадает в git
+    (требование 3).
+
     Остальное поведение — дословно `commit_timeout_checkpoint`: только
     догфуд, коммитит, только если есть что коммитить, тихая деградация
     без git, общая обвязка `_commit_worktree_change` (SPEC T059), повторная
@@ -251,14 +267,26 @@ def commit_abnormal_checkpoint(conn, task_id: str, role: str, cause: str) -> str
     if store.task_target(conn, task_id) != config.DEFAULT_TARGET:
         return ""
     wt = workspace.path(task_id)
-    message = f"{task_id}: WIP-чекпоинт после аварийного завершения шага {role} ({cause})"
-    committed, sha = _commit_worktree_change(wt, message)
-    if not committed:
-        return ""
-    detail = f"{message} (sha {sha})" if sha else message
-    store.journal(conn, task_id, "orchestrator",
-                  "WIP-чекпоинт после аварийного завершения шага", detail)
-    store.record_fixation(conn, task_id)
+    detail = ""
+    if role == "developer":
+        message = f"{task_id}: WIP-чекпоинт после аварийного завершения шага {role} ({cause})"
+        committed, sha = _commit_worktree_change(
+            wt, message, exclude=f"tasks/{task_id}")
+        if committed:
+            detail = f"{message} (sha {sha})" if sha else message
+            store.journal(conn, task_id, "orchestrator",
+                          "WIP-чекпоинт после аварийного завершения шага", detail)
+            store.record_fixation(conn, task_id)
+    else:
+        discarded = _discard_out_of_mandate_changes(wt, task_id)
+        if discarded:
+            journal_detail = (f"{task_id}: WIP вне мандата роли {role} "
+                              f"после аварийного завершения шага откачен — {discarded}")
+            store.journal(conn, task_id, "orchestrator",
+                          "WIP-чекпоинт после аварийного завершения шага — откат вне мандата",
+                          journal_detail)
+
+    _commit_external_step_artifacts(conn, task_id, role, config.DEFAULT_TARGET)
     return detail
 
 
@@ -276,6 +304,17 @@ def commit_pause_now_checkpoint(conn, task_id: str, role: str) -> str:
     (`tasks/T074/acceptance_tests/
     test_ac2_ac3_ac4_ac5_interrupt_sequence.py`).
 
+    Мандат роли и перенос `tasks/<id>/` в артефактную ветку — дословно
+    `commit_timeout_checkpoint` (SPEC 01M1NKTF173WV5CPDZ1C3WW69K,
+    REVIEW.md итерация 2, R1-F1 — переоткрыт: та же правка, применённая
+    к `commit_timeout_checkpoint` подтяжкой main, сюда не долетела —
+    материализованный `runner.role_cwd` артефакт любой роли, включая
+    роли без мандата кода, безусловно коммитился в кодовую ветку на
+    `pause --now`). `developer` — код вне `tasks/<id>/` (`exclude`),
+    остальные роли — откат WIP вне `tasks/<id>/`
+    (`_discard_out_of_mandate_changes`); `tasks/<id>/` переносится в
+    артефактную ветку `_commit_external_step_artifacts` для ЛЮБОЙ роли.
+
     Остальное — общая обвязка `_commit_worktree_change` (только догфуд,
     коммитит только при реальном diff, тихая деградация без git,
     `store.record_fixation` — та же фиксация, что не даёт следующему
@@ -284,14 +323,26 @@ def commit_pause_now_checkpoint(conn, task_id: str, role: str) -> str:
     if store.task_target(conn, task_id) != config.DEFAULT_TARGET:
         return ""
     wt = workspace.path(task_id)
-    message = f"{task_id}: WIP-чекпоинт pause --now (шаг {role} прерван)"
-    committed, sha = _commit_worktree_change(wt, message)
-    if not committed:
-        return ""
-    detail = f"{message} (sha {sha})" if sha else message
-    store.journal(conn, task_id, "orchestrator", "WIP-чекпоинт pause --now",
-                  detail)
-    store.record_fixation(conn, task_id)
+    detail = ""
+    if role == "developer":
+        message = f"{task_id}: WIP-чекпоинт pause --now (шаг {role} прерван)"
+        committed, sha = _commit_worktree_change(
+            wt, message, exclude=f"tasks/{task_id}")
+        if committed:
+            detail = f"{message} (sha {sha})" if sha else message
+            store.journal(conn, task_id, "orchestrator", "WIP-чекпоинт pause --now",
+                          detail)
+            store.record_fixation(conn, task_id)
+    else:
+        discarded = _discard_out_of_mandate_changes(wt, task_id)
+        if discarded:
+            journal_detail = (f"{task_id}: WIP вне мандата роли {role} "
+                              f"pause --now откачен — {discarded}")
+            store.journal(conn, task_id, "orchestrator",
+                          "WIP-чекпоинт pause --now — откат вне мандата",
+                          journal_detail)
+
+    _commit_external_step_artifacts(conn, task_id, role, config.DEFAULT_TARGET)
     return detail
 
 
@@ -394,7 +445,23 @@ def _commit_external_step_artifacts(conn, task_id: str, role: str,
     последний раз тронутый ДРУГИМ автором (другая роль, PASSPORT.md
     переходов, ANSWER Оператора), или чей `type` не в списке (PLAN.md,
     REVIEW.md, SPEC.md) — никогда не кандидат на удаление здесь,
-    независимо от локального отсутствия.
+    независимо от локального отсутствия. Исключение — удаление файлов
+    `acceptance_tests/` ДО фиксации лока (см. блок ниже, SPEC
+    01M1NKTF173WV5CPDZ1C3WW69K, требование 7/AC-13/AC-14/AC-15): planка
+    приёмки ещё не зафиксирована, значит она ещё не «чужая», её меняет
+    сам test_author.
+
+    Конфликт-гвард (SPEC 01M1NKTF173WV5CPDZ1C3WW69K, требование 4,
+    AC-6/AC-7): файл, который на этом шаге НЕ поменялся на диске
+    относительно версии, материализованной `runner.role_cwd` на СТАРТЕ
+    шага (`tasks.materialized_artifact_sha`), но который в артефактной
+    ветке изменился ПОСЛЕ этого старта (правка Оператора на гейте между
+    стартом и концом шага, инцидент 04.09) — исключается из переноса,
+    заводит alert `kind=incident`, и НЕ рассматривается на удаление ниже
+    (правка Оператора — не сигнал «роль его убрала»). Файл, который роль
+    реально поменяла (диск разошёлся с baseline), — конфликта не ловит,
+    коммитится как обычно: конфликт по одному файлу не блокирует перенос
+    остальных (AC-7).
 
     `timeout=True` (SPEC 01M1NBWTSXEJB24PXR417YF1VA, AC-4/AC-5) —
     `commit_timeout_checkpoint` зовёт этой веткой: тот же перенос, что и
@@ -408,7 +475,7 @@ def _commit_external_step_artifacts(conn, task_id: str, role: str,
     чередование обычных шагов и обрывов по таймауту той же роли ломало
     бы удаление уже на второй итерации.
     """
-    from . import artifact_branch
+    from . import alerts, artifact_branch
     if target == config.DEFAULT_TARGET:
         workspace_root = workspace.path(task_id)
     else:
@@ -447,6 +514,32 @@ def _commit_external_step_artifacts(conn, task_id: str, role: str,
              if rel not in ignored}
     existing = [rel for rel in existing if rel not in ignored]
 
+    t = store.get_task(conn, task_id)
+    baseline_sha = t["materialized_artifact_sha"] or ""
+    if baseline_sha:
+        conflicted = []
+        for rel in sorted(set(files) & set(existing)):
+            baseline_text, _ = gitcmd.show(baseline_sha, rel)
+            if baseline_text is None:
+                continue  # файл появился на этом шаге — конфликтовать не с чем
+            content = files[rel]
+            try:
+                disk_text = (content.decode("utf-8")
+                            if isinstance(content, bytes) else content)
+            except UnicodeDecodeError:
+                continue  # бинарное содержимое — сравнение текстом бессмысленно
+            if disk_text != baseline_text:
+                continue  # роль сама поменяла файл — не конфликт, её правка идёт дальше
+            current_text, _ = gitcmd.show(branch, rel)
+            if current_text is not None and current_text != baseline_text:
+                conflicted.append(rel)
+        for rel in conflicted:
+            del files[rel]
+            alerts.raise_alert(
+                conn, task_id, "incident", "checkpoint",
+                f"конфликт артефактов: правка в ветке новее рабочего "
+                f"каталога — {rel}")
+
     removed = []
     for rel in sorted(set(existing) - set(files)):
         subject = gitcmd.git("log", "-1", "--format=%s", branch, "--", rel)
@@ -455,7 +548,20 @@ def _commit_external_step_artifacts(conn, task_id: str, role: str,
             continue
         content, _ = gitcmd.show(branch, rel)
         meta = yamlmini.frontmatter(content) if content is not None else None
-        if meta is not None and meta.get("type") in _DELETABLE_ARTIFACT_TYPES:
+        deletable = meta is not None and meta.get("type") in _DELETABLE_ARTIFACT_TYPES
+        if not deletable and role == "test_author" and t["state"] == "tests_writing" \
+                and not t["tests_locked_sha"] \
+                and rel.startswith(f"tasks/{task_id}/acceptance_tests/"):
+            # SPEC 01M1NKTF173WV5CPDZ1C3WW69K, требование 7/AC-13/AC-15:
+            # тесты `acceptance_tests/*.py` не несут frontmatter вовсе
+            # (`_DELETABLE_ARTIFACT_TYPES` их никогда не увидит), но до
+            # фиксации лока планка ещё правится самим test_author'ом —
+            # её удаление им же обязано доехать до ветки тем же коммитом,
+            # без повторной попытки (канарейка v2). После лока (AC-14)
+            # `tests_locked_sha` уже не пуст — эта ветка не срабатывает,
+            # прежнее правило (только `type: questions`) остаётся в силе.
+            deletable = True
+        if deletable:
             removed.append(rel)
 
     if not files and not removed:
@@ -489,11 +595,13 @@ def _commit_worktree_change(wt: Path, message: str,
     `exclude` — путь (пример: `tasks/<id>`), исключаемый из коммита ПОСЛЕ
     `add -A` через `git reset` (SPEC 01M1NBWTSXEJB24PXR417YF1VA, AC-1):
     мандат `developer` — все пути worktree, кроме `tasks/<id>/` (та часть
-    переносится в артефактную ветку отдельно, не через эту функцию).
-    `None` (по умолчанию) — прежнее поведение, весь worktree целиком;
-    остальные вызывающие (`commit_abnormal_checkpoint`,
-    `commit_pause_now_checkpoint`) мандата не несут и этот параметр не
-    передают.
+    переносится в артефактную ветку отдельно, не через эту функцию). Все
+    три WIP-чекпоинта роли `developer` (`commit_timeout_checkpoint`,
+    `commit_abnormal_checkpoint`, `commit_pause_now_checkpoint`, SPEC
+    01M1NKTF173WV5CPDZ1C3WW69K, REVIEW.md итерация 2, R1-F1) передают
+    его одинаково; `None` (по умолчанию) — для остальных ролей мандата
+    кода нет вовсе, эта функция для них не вызывается (см.
+    `_discard_out_of_mandate_changes`).
     """
     added = gitcmd.in_repo(wt, "add", "-A")
     if added.returncode != 0:

@@ -53,7 +53,7 @@ WORKTREES = ROOT / ".artel" / "worktrees"
 # временный подъём до 2700 на стройку A7 (03.09, решение Оператора:
 # developer дважды упёрся в таймаут срезами по ~47М токенов) —
 # возвращён 1800 после мержа 01M1H224X5A8W159MKF1Q24R5Y (03.09).
-AGENT_TIMEOUT_SEC = 1800
+AGENT_TIMEOUT_SEC = 2700  # решение Оператора 05.09: 1800 давал восемь таймаутов за сутки на шагах среднего размера
 # Предел ожидания `gh` на гейте merge (orchestrator/ci.py). Без него сетевой
 # столл (VPN или прокси приняли соединение и молчат) вешает `approve` без
 # вывода и без предела; истёкший предел — это «статус CI неизвестен», то есть
@@ -344,6 +344,14 @@ REVIEW_VERDICTS = ("approved", "changes_requested", "escalate")
 # developer не вправе разрешать спор здесь сам.
 PROTECTED_PATHS = ("gates.yaml", "roles.yaml", ".github/", "templates/",
                    "skills/")
+
+# Общие зоны вне конфликта (задача 01M1NKVPD2A79PQ6K0JVV1B2Q1, часть 1,
+# AC-4): пути, которые трогают все задачи, а конфликт по ним — текстовый,
+# не механический. Пересечение зон двух задач ТОЛЬКО по этим путям не
+# считается конфликтом ни на одной из проверок занятости/сверки диффа
+# (части 2/3 нарезки — orchestrator/auto.py, orchestrator/fsm_advance.py).
+COMMON_ZONES = ("orchestrator/config.py", "docs/codebase-map.md", "tests/",
+                "roles.yaml")
 
 STATE_ROLE = {"tests_writing": "test_author", "in_dev": "developer",
              "review": "reviewer"}

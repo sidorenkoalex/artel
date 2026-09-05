@@ -41,7 +41,12 @@ REQUIRED_META = {"task", "type", "author_role", "status"}
 # id, статус (пятёрка значений), обязательные поля каждой записи.
 # Правило применяется только к version >= 3 (требование 6) — тем же
 # приёмом версии-гейтинга, что версия 2 выше применена к SPEC.
-SUPPORTED_SCHEMA_VERSION = 3
+#
+# Версия 4 (01M1NKVPD2A79PQ6K0JVV1B2Q1, часть 1 нарезки «Механика зон»):
+# SPEC несёт обязательное поле `zones:` — машиночитаемый список путей/
+# масок зоны задачи (требование 1, AC-1). Правило применяется только к
+# version >= 4 — тем же приёмом версии-гейтинга, что версии 2 и 3 выше.
+SUPPORTED_SCHEMA_VERSION = 4
 
 RULES = {
     "spec": {
@@ -51,7 +56,11 @@ RULES = {
     "plan": {
         "sections": ["Подход", "Шаги", "Покрытие требований",
                      "Влияние на систему"],  # принцип целостности (ADR-0002)
-        "statuses": {"draft", "ready", "approved"},
+        # "escalate" (SPEC 01M1NKTF173WV5CPDZ1C3WW69K, требование 6, AC-12):
+        # единственный законный канал эскалации developer через PLAN.md —
+        # без него требование 6 неисполнимо для роли, для которой оно
+        # написано (см. «Контекст» SPEC).
+        "statuses": {"draft", "ready", "approved", "escalate"},
     },
     "review": {
         "sections": ["Соответствие SPEC", "Замечания", "Вердикт"],
@@ -592,6 +601,62 @@ def registry_errors(path: Path | str, text: str, meta: dict) -> list[str]:
 
 
 # --------------------------------------------------------------------------
+# Эскалация только статусом escalate (SPEC 01M1NKTF173WV5CPDZ1C3WW69K,
+# требование 6, AC-11/AC-12): PLAN/REVIEW/SPEC с текстом эскалации
+# (раздел «Эскалация» с непустыми «Вопросы» либо «Блокирует» —
+# skills/escalation-rules.md, «Как эскалировать») ОБЯЗАН нести
+# status: escalate — иначе роль ждёт человеческого прочтения текста,
+# которое структурно не гарантировано (класс инцидента 04.09: developer
+# держал эскалацию текстом в PLAN.md без смены статуса, `advance`
+# буксовал на одном и том же отказе гейта).
+ESCALATION_SECTION = "Эскалация"
+ESCALATION_STATUS_REASON = "эскалация текстом без статуса escalate"
+_ESCALATION_BULLET_TMPL = (
+    r"^-\s+\*\*{}\*\*\s*(?:[—-]+\s*)?(.*?)(?=\n-\s+\*\*|\Z)")
+
+
+def _escalation_bullet_text(body: str, label: str) -> str:
+    """Текст пункта `- **label** — ...` раздела «Эскалация» до следующего
+    такого же пункта верхнего уровня или конца раздела; пусто — пункта
+    нет вовсе."""
+    pattern = re.compile(_ESCALATION_BULLET_TMPL.format(re.escape(label)),
+                         re.M | re.S)
+    match = pattern.search(body)
+    return match.group(1).strip() if match else ""
+
+
+def escalation_status_errors(path: Path | str, text: str, meta: dict) -> list[str]:
+    """Раздел «Эскалация» с непустыми «Вопросы» либо «Блокирует», но
+    status, отличный от escalate — нарушение (AC-11); status: escalate —
+    легален (AC-12, позитивный кейс). `path` — только для текста ошибок
+    (см. `schema_errors`).
+
+    Применяется к `type` plan/review/spec (SPEC требование 6) — для
+    остальных типов канал эскалации не через этот раздел (analyst,
+    например, эскалирует QUESTIONS.md целиком, не разделом внутри
+    SPEC.md — см. «Контекст» SPEC: для type: spec это правило —
+    страховка от ошибки, не рабочий канал).
+    """
+    if meta.get("type") not in ("plan", "review", "spec"):
+        return []
+    status = meta.get("status") or ""
+    if status == "escalate":
+        return []
+    headers = set(re.findall(r"^##\s+(.+?)\s*$", text, re.M))
+    if ESCALATION_SECTION not in headers:
+        return []
+    body = section_body(text, ESCALATION_SECTION)
+    questions = _escalation_bullet_text(body, "Вопросы")
+    blocks = _escalation_bullet_text(body, "Блокирует")
+    if not questions and not blocks:
+        return []
+    return [f"{path}: {ESCALATION_STATUS_REASON} — раздел «{ESCALATION_SECTION}» "
+            f"несёт непустые «Вопросы» и/или «Блокирует», а status '{status}' "
+            f"— смени status на 'escalate' либо убери текст эскалации из "
+            f"артефакта"]
+
+
+# --------------------------------------------------------------------------
 # Сигналы «подозрения на большой объём» на этапе SPEC
 # (tasks/01M1KS8K9RXWHX2PW3ZKB0P903, требования 1, 3; ANSWER-1 — правила
 # для AC-1 (константы, прогноз диффа) и AC-3 (пересечение зон с
@@ -762,6 +827,31 @@ def split_assessment_errors(path: Path | str, text: str, meta: dict) -> list[str
            f"почему)"]
 
 
+def requires_zones(meta: dict) -> bool:
+    """SPEC обязан нести поле `zones:` (01M1NKVPD2A79PQ6K0JVV1B2Q1, AC-1).
+
+    Версия ниже 4 — формат SPEC до этой задачи, поля не несёт и не
+    обязан: тот же приём версии-гейтинга, что `requires_ac_markup` и
+    `requires_split_assessment` выше применяют к своим проверкам.
+    """
+    version = meta.get("schema_version", 1)
+    if not isinstance(version, int) or isinstance(version, bool):
+        return False
+    return version >= 4
+
+
+def spec_zones_errors(path: Path | str, meta: dict) -> list[str]:
+    """Поле `zones:` заполнено для SPEC версии, которая его требует
+    (AC-1). `path` — только для текста ошибок (см. `schema_errors`)."""
+    if (meta.get("type") or "") != "spec" or not requires_zones(meta):
+        return []
+    if not meta.get("zones"):
+        return [f"{path}: SPEC schema_version {meta.get('schema_version')} "
+               f"обязан нести поле zones (список путей/масок) — добавь "
+               f"frontmatter-поле zones"]
+    return []
+
+
 def check_content(label: str, text: str) -> list[str]:
     """Ядро `check` — структурная проверка уже прочитанного текста, без
     чтения файла: `label` — путь или его подобие, только для текста
@@ -834,10 +924,13 @@ def check_content(label: str, text: str) -> list[str]:
 
     if atype == "spec":
         errors.extend(split_assessment_errors(label, text, meta))
+        errors.extend(spec_zones_errors(label, meta))
 
     if atype == "review":
         errors.extend(review_evidence_errors(label, text, meta))
         errors.extend(registry_errors(label, text, meta))
+
+    errors.extend(escalation_status_errors(label, text, meta))
 
     return errors
 
