@@ -667,7 +667,7 @@ def in_dev(conn, task_id: str, t, tdir, target: str, state: str) -> bool:
         plan_meta = yamlmini.frontmatter(plan_text) or {}
     else:
         plan_text = (tdir / "PLAN.md").read_text(encoding="utf-8")
-        plan_meta = artifacts.frontmatter(tdir / "PLAN.md")
+        plan_meta = yamlmini.frontmatter(plan_text) or {}
     status = plan_meta.get("status")
     if status in ("ready", "approved", "escalate"):
         if fsm._dirty_refuses(conn, task_id, target, "PLAN.md"):
@@ -764,9 +764,7 @@ def in_dev(conn, task_id: str, t, tdir, target: str, state: str) -> bool:
             return False
         if _capacity_gate_refuses(conn, task_id, t, state):
             return False
-        full_plan_text = (plan_text if plan_text is not None
-                          else (tdir / "PLAN.md").read_text(encoding="utf-8"))
-        if _zones_gate_refuses(conn, task_id, t, branch, full_plan_text):
+        if _zones_gate_refuses(conn, task_id, t, branch, plan_text):
             return False
         store.set_state(conn, task_id, "review", "fsm",
                         expected_state=state, detail="MR готов — прогон ревьювера")

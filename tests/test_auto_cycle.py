@@ -800,6 +800,33 @@ class AutoStepLimitTest(AutoCycleTest):
 
         self.assertEqual(len(self.agent.calls), config.AUTO_MAX_STEPS * 2)
 
+    def test_transitions_by_advance_alone_do_not_consume_the_step_limit(self):
+        """Регресс REVIEW.md 01M1R8B3ZKXQT0Z0G6QQQDV906 итерации 1, R1-F1:
+        предварительный `advance`, который сам переводит задачу дальше
+        (артефакт уже готов — ни разу не позвал агента), не расходует
+        `AUTO_MAX_STEPS`. PLAN.md и REVIEW.md оба готовы с самого начала
+        вызова — цикл проходит ДВА перехода (in_dev -> review ->
+        verifying) без единого вызова агента, даже с лимитом
+        `AUTO_MAX_STEPS == 1`: реализация, которая всё ещё тратит `steps`
+        на переход-без-агента, исчерпала бы лимит на первом же свободном
+        переходе и не дошла бы до второго.
+
+        Ловит мутацию: `steps += 1` до предварительного `advance` (старое
+        место, до этого исправления) — цикл встал бы на «лимит 1 шагов
+        исчерпан», оставшись в `review`, вместо того чтобы дойти до
+        `verifying`.
+        """
+        self.patch_object(config, "AUTO_MAX_STEPS", 1)
+        self.write_plan("ready")
+        self.write_review("approved", 1)
+        self.set_state("in_dev")
+
+        out = self.auto()
+
+        self.assertEqual(self.agent.calls, [])
+        self.assertEqual(self.state(), "verifying")
+        self.assertNotIn("лимит 1 шагов за вызов исчерпан", out)
+
 
 class AutoReportsTheCycleTest(AutoCycleTest):
     """Требования 5, 6: журнал старта и остановки, сводка переходов и логи."""

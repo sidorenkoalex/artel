@@ -1,5 +1,5 @@
 ---
-built_at_sha: 7cd4abfa4abcd55663b3b7abc894a6fe9d66adee
+built_at_sha: 49f1abb1151afebd887a5d8b9b070ad51af1308b
 ---
 
 # Codebase-map пульта
@@ -145,7 +145,7 @@ built_at_sha: 7cd4abfa4abcd55663b3b7abc894a6fe9d66adee
 
 ## orchestrator/auto.py
 
-**Назначение:** Цикл `auto`: advance (по готовым артефактам), затем — если роль ещё
+**Назначение:** Цикл `auto`: advance до шага роли, затем — если роль ещё не закончила — run.
 
 **Публичные функции:**
 - `auto_stop`

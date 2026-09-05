@@ -1,6 +1,8 @@
-"""Цикл `auto`: advance (по готовым артефактам), затем — если роль ещё
-не закончила — run, пока в шаге работает агент (SPEC
-01M1R8B3ZKXQT0Z0G6QQQDV906: advance до шага роли, не после)."""
+"""Цикл `auto`: advance до шага роли, затем — если роль ещё не закончила — run.
+
+Крутится, пока в шаге работает агент (SPEC 01M1R8B3ZKXQT0Z0G6QQQDV906:
+предварительный advance пробует готовый артефакт до запуска роли, не
+после)."""
 import time
 
 from . import (agent_log, alerts, budget, ci, config, fixation, fsm, lease,
@@ -264,11 +266,19 @@ def _cmd_auto(conn, task_id: str, session_id: str) -> None:
             role = runner.step_role(t)
             continue
 
-        # Лимит шагов гейтит ИТЕРАЦИЮ целиком, не только те, что реально
-        # запускают роль (SPEC 01M1R8B3ZKXQT0Z0G6QQQDV906, требование 1):
-        # предварительный `advance` ниже тоже тратит вызов агента (пусть и
-        # не роли) — с `AUTO_MAX_STEPS == 1` цикл обязан сделать РОВНО одну
-        # пару (advance, run) и встать, не начиная третий вызов `advance`.
+        # Лимит шагов гейтит попытку РОЛИ (реальный `run` или отказ,
+        # который её замещает), не саму итерацию цикла (REVIEW.md итерации
+        # 1, R1-F1): переход, который предварительный `advance` выполняет
+        # САМ по уже готовому артефакту — без единого вызова `runner.
+        # cmd_run` — бесплатен для лимита ровно так же, как раньше был
+        # бесплатен для него advance, следовавший за `run` СРАЗУ внутри
+        # одной и той же итерации (SPEC T038, «run+advance»): та же работа,
+        # просто вызов сдвинулся на итерацию раньше. `steps` считает
+        # каждую попытку, которая ЛИБО зовёт `cmd_run`, ЛИБО останавливает
+        # цикл, ЛИБО пропускает шаг роли по отказу требования 4 — не
+        # голые переходы. C `AUTO_MAX_STEPS == 1` цикл всё равно обязан
+        # сделать РОВНО одну пару (advance, run) и встать (AC-1 приёмки):
+        # то же самое место проверки, только сам счётчик растёт реже.
         if steps >= config.AUTO_MAX_STEPS:
             auto_stop(conn, task_id, state,
                       f"лимит {config.AUTO_MAX_STEPS} шагов за вызов исчерпан",
@@ -276,7 +286,6 @@ def _cmd_auto(conn, task_id: str, session_id: str) -> None:
                       f"затем artel.py auto {task_id} — продолжит отсюда",
                       alert=True)
             return
-        steps += 1
         before = state
 
         # Предварительный advance (SPEC 01M1R8B3ZKXQT0Z0G6QQQDV906,
@@ -289,6 +298,7 @@ def _cmd_auto(conn, task_id: str, session_id: str) -> None:
             # guard отклонил артефакт-условие: тот же по характеру
             # немедленный стоп, что и раньше был доступен только ПОСЛЕ
             # шага роли, — цикл не зовёт cmd_run для того же состояния.
+            steps += 1
             hint = f"почини артефакт и повтори artel.py advance {task_id}"
             auto_stop(conn, task_id, state,
                       f"advance отклонён guard'ом артефакта-условия — "
@@ -299,7 +309,8 @@ def _cmd_auto(conn, task_id: str, session_id: str) -> None:
         if state != before:
             # Требование 2: переход уже случился по готовым артефактам —
             # шаг роли этой итерации не нужен, цикл продолжает уже с
-            # нового состояния.
+            # нового состояния. Не расходует `steps` (см. комментарий у
+            # проверки лимита выше, R1-F1) — ни один агент не звался.
             note = f"шаг {role} не нужен: переход выполнен по готовым артефактам"
             store.journal(conn, task_id, "operator", note, f"{before} -> {state}")
             print(f"[{task_id}] {note} ({before} -> {state})")
@@ -358,6 +369,7 @@ def _cmd_auto(conn, task_id: str, session_id: str) -> None:
             # Требование 1 (инцидент T035, SPEC T038): два подряд отказа
             # одним текстом — причина отказа вне зоны агента, прогон
             # агента её не лечит.
+            steps += 1
             hint = f"почини причину и повтори artel.py advance {task_id}"
             auto_stop(conn, task_id, state, f"{other_class_refusal} — {hint}",
                       hint, alert=True)
@@ -373,6 +385,7 @@ def _cmd_auto(conn, task_id: str, session_id: str) -> None:
             # из N шагов журналировал отказ требования 4 (ANSWER-1,
             # вопрос 3): его отсутствие само по себе несёт факт «агент
             # продолжал работу».
+            steps += 1
             tail = (f", последний отказ: {other_class_refusal}"
                    if other_class_refusal is not None else "")
             reason = f"цикл не сходится: {idle_steps} шагов без перехода{tail}"
@@ -384,12 +397,15 @@ def _cmd_auto(conn, task_id: str, session_id: str) -> None:
             # Требование 4: журналируемый отказ другого класса — шаг роли
             # на этой итерации не запускается, цикл повторит advance
             # следующей итерацией (та же реакция, что и раньше — после
-            # шага роли, — просто без самого шага).
+            # шага роли, — просто без самого шага). Расходует `steps`
+            # (не свободный переход — агент так и не получил шанса).
+            steps += 1
             continue
 
         # Требование 3: «артефакт роли не готов» (или, для `review`/
         # `tests_writing`, отказ, который лечится только новым прогоном
         # ЭТОЙ роли, см. комментарий выше) — запускаем роль как раньше.
+        steps += 1
         run_journaled_before = len(store.task_steps(conn, task_id))
         try:
             runner.cmd_run(task_id, session_id=session_id)
