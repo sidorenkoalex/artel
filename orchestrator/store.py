@@ -38,7 +38,7 @@ CREATE TABLE IF NOT EXISTS tasks (
   draft_mr_created INTEGER DEFAULT 0,
   diff_bytes INTEGER, split_assessment TEXT, zones TEXT,
   zones_extension TEXT,
-  materialized_artifact_sha TEXT,
+  materialized_artifact_sha TEXT, zone_queue_position INTEGER,
   created_at TEXT, updated_at TEXT
 );
 CREATE TABLE IF NOT EXISTS steps (
@@ -237,6 +237,11 @@ def migrate(conn: sqlite3.Connection) -> None:
     # пока расширения не было. Гейт зон (`fsm_advance._zones_gate_refuses`)
     # считает зоной задачи объединение `zones` и `zones_extension`.
     add_column(conn, "tasks", "zones_extension", "TEXT")
+    # Явная перестановка очереди ожидания зоны Оператором (SPEC
+    # 01M1P9QAG65GVF69YJEV0V18D9, требование 9, AC-9): NULL — очередь не
+    # переставлена, естественный порядок по времени approve (`updated_at`)
+    # решает (`orchestrator/zone_lock.py::queue_order`).
+    add_column(conn, "tasks", "zone_queue_position", "INTEGER")
     conn.executescript(
         "CREATE TABLE IF NOT EXISTS task_counters ("
         "  target TEXT PRIMARY KEY, next_number INTEGER NOT NULL);")
