@@ -17,6 +17,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+from orchestrator import store  # noqa: E402
 from _sandbox import CanarySandbox  # noqa: E402
 
 POOL_TEMPLATES = {
@@ -49,13 +50,20 @@ class PoolDirAndSamplingTest(CanarySandbox):
 
         out = self.run_canary_pool(2)
 
-        task_ids = self.task_ids()
+        # Мандат Оператора 05.09 (ANSWER-5, вариант A): заведённые
+        # канареечные задачи живут в БД эфемерного клона (SPEC требования
+        # 2 и 3, test_ac3/test_ac5 требуют пустой `tasks` снаружи), поэтому
+        # «заведено ровно k» читается по записям `canary_runs` в БД пульта
+        # — единственному следу прогона снаружи клона (требование 5).
+        runs = store.db().execute(
+            "SELECT title, task_id FROM canary_runs").fetchall()
+        task_ids = [r["task_id"] for r in runs]
         self.assertEqual(
             len(task_ids), 2,
             f"k=2 из N=5 шаблонов пула должно завести ровно 2 задачи, "
             f"заведено {len(task_ids)}: {task_ids}\nвывод команды:\n{out}")
 
-        titles = {self.task_row(tid)["title"] for tid in task_ids}
+        titles = {r["title"] for r in runs}
         pool_stems = {Path(name).stem for name in POOL_TEMPLATES}
         self.assertTrue(
             titles.issubset(pool_stems),
