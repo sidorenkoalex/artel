@@ -37,7 +37,7 @@ CREATE TABLE IF NOT EXISTS tasks (
   answer_baseline INTEGER, verifying_attempts INTEGER DEFAULT 0,
   draft_mr_created INTEGER DEFAULT 0,
   diff_bytes INTEGER, split_assessment TEXT, zones TEXT,
-  materialized_artifact_sha TEXT,
+  materialized_artifact_sha TEXT, zone_queue_position INTEGER,
   created_at TEXT, updated_at TEXT
 );
 CREATE TABLE IF NOT EXISTS steps (
@@ -230,6 +230,11 @@ def migrate(conn: sqlite3.Connection) -> None:
     # что механика «Оценка объёма и деление» уже структурирует для
     # сигналов деления (SPEC, требование 1).
     add_column(conn, "tasks", "zones", "TEXT")
+    # Явная перестановка очереди ожидания зоны Оператором (SPEC
+    # 01M1P9QAG65GVF69YJEV0V18D9, требование 9, AC-9): NULL — очередь не
+    # переставлена, естественный порядок по времени approve (`updated_at`)
+    # решает (`orchestrator/zone_lock.py::queue_order`).
+    add_column(conn, "tasks", "zone_queue_position", "INTEGER")
     conn.executescript(
         "CREATE TABLE IF NOT EXISTS task_counters ("
         "  target TEXT PRIMARY KEY, next_number INTEGER NOT NULL);")

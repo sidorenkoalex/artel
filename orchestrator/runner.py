@@ -15,7 +15,7 @@ from pathlib import Path
 from . import (agent_log, alerts, brief, budget, checkpoint, config,
               failure_classification, fixation, gitcmd, keychain, lease,
               parallel_limit, pause, review, role_prompt, roles, spend,
-              store, workspace)
+              store, workspace, zone_lock)
 
 # Идентичность коммитера, которую роль обязана унести с собой в свой HOME.
 # git читает эти переменные ПОВЕРХ конфига, поэтому перенос ровно двух пар
@@ -148,6 +148,19 @@ def _cmd_run(conn, task_id: str) -> None:
             sys.exit(f"[{task_id}] SPEC пишет Оператор — TZ.md не заведён "
                      f"(`new \"...\" --tz <файл>` заведёт роль analyst)")
         sys.exit(f"[{task_id}] в состоянии {t['state']} агент не запускается")
+
+    # Занятость зоны на старте кода (SPEC 01M1P9QAG65GVF69YJEV0V18D9,
+    # требование 1): `STATE_ROLE` отображает `in_dev` исключительно на
+    # `developer` (`config.py`), поэтому `role == "developer"` здесь
+    # эквивалентно `t["state"] == "in_dev"` — единственная фаза, где
+    # действует этот отказ. Тот же `sys.exit`, что и бюджет/лимит
+    # параллельных задач выше: `auto` ловит `SystemExit` немедленно.
+    if role == "developer":
+        zone_refusal = zone_lock.refusal(conn, task_id, t)
+        if zone_refusal is not None:
+            store.journal(conn, task_id, role, zone_lock.REFUSAL_ACTION,
+                          zone_refusal)
+            sys.exit(zone_refusal)
 
     # Штатная пауза (SPEC T070, требование 2): пометка стоит — шаг не
     # начинается, но уже идущий шаг (эта же функция, стартовавшая раньше)
