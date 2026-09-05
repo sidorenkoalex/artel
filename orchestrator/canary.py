@@ -480,7 +480,8 @@ def _pass_spec_gate(conn, task_id: str) -> None:
 
 def _pass_acceptance_gate(conn, task_id: str) -> None:
     t = store.get_task(conn, task_id)
-    if fsm._pull_main_or_escalate(conn, task_id, t, "acceptance") == "escalated":
+    if fsm._pull_main_or_escalate(conn, task_id, t, "acceptance") in (
+            "escalated", "refused"):
         return
     store.set_state(conn, task_id, "merge_gate", CANARY_MARK_ACTOR,
                     expected_state="acceptance",
