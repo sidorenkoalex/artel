@@ -70,15 +70,23 @@ jobs:
 
   canary-guid-leak:
     name: Линт — GUID канареечного пула не протекает в промпты ролей
-    if: github.event_name == 'pull_request'
+    # Мержи пульта идут пушем в main без pull request (merge_gate ->
+    # done), поэтому сторож работает и на push: база — sha до пуша
+    # (`github.event.before`); для новой ветки она нулевая — пропуск.
+    if: github.event_name == 'pull_request' || github.event_name == 'push'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with: { fetch-depth: 0 }
       - name: diff не добавляет отметку canary-guid в skills/, templates/, docs/
         env:
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          BASE_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.event.before }}
         run: |
+          if [ -z "$BASE_SHA" ] || [ "$BASE_SHA" = "0000000000000000000000000000000000000000" ] \
+             || ! git cat-file -e "$BASE_SHA" 2>/dev/null; then
+            echo "базы для диффа нет (новая ветка или принудительный пуш) — пропуск"
+            exit 0
+          fi
           # SPEC 01M1NEEWH5K1XPFRDGRMPYSBXJ, требование 7/AC-7: каждый
           # шаблон пула несёт машиночитаемую метку `canary-guid:` (см.
           # orchestrator/canary.py, модульный докстринг) — сама метка НЕ
