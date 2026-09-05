@@ -371,7 +371,7 @@ def _pull_main_or_escalate(conn, task_id: str, t, state: str) -> str:
             print(f"[{task_id}] переход отклонён: {detail}")
             return "refused"
         return "pulled"
-    green, tail = acceptance.run(tdir, cwd=wt_path)
+    green, tail = acceptance.run(tdir, code_root=wt_path)
 
     if not green:
         store.set_state(

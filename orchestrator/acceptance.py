@@ -16,14 +16,16 @@ from scripts import guard
 from . import config, gitcmd
 
 
-def run(tdir: Path, cwd: Path | None = None) -> tuple[bool, str]:
+def run(tdir: Path, code_root: Path | None = None) -> tuple[bool, str]:
     """(зелёно, хвост вывода) — детерминированный прогон unittest'ом с
-    `cwd`, равным рабочему каталогу кода задачи (SPEC 01M1RNZ6V7TTTTYAHBMF8JBQQS,
-    требование 2, AC-2/AC-3): планка, резолвящая `orchestrator/` и через
-    `__file__` (материализация `materialize_from_branch` кладёт её по
-    штатному пути `tasks/<id>/acceptance_tests/` ИМЕННО этого каталога),
-    и через неявную вставку `cwd` в `sys.path`, которую делает `python3
-    -m unittest discover`, обязаны видеть один и тот же код. `cwd=None`
+    `code_root`, равным рабочему каталогу кода задачи (SPEC
+    01M1RNZ6V7TTTTYAHBMF8JBQQS, требование 2, AC-2/AC-3; контракт имени
+    параметра — hotfix 88b38022, ADR-0013): планка, резолвящая
+    `orchestrator/` и через `__file__` (материализация
+    `materialize_from_branch` кладёт её по штатному пути
+    `tasks/<id>/acceptance_tests/` ИМЕННО этого каталога), и через
+    неявную вставку `cwd` в `sys.path`, которую делает `python3 -m
+    unittest discover`, обязаны видеть один и тот же код. `code_root=None`
     (вызовы вне зоны этой задачи, например `orchestrator/amend.py`) —
     прежнее поведение, `config.ROOT`.
 
@@ -39,7 +41,7 @@ def run(tdir: Path, cwd: Path | None = None) -> tuple[bool, str]:
     tests_dir = tdir / "acceptance_tests"
     if not tests_dir.is_dir():
         return True, "acceptance_tests/ нет — приёмочные тесты не заведены"
-    run_cwd = cwd if cwd is not None else config.ROOT
+    run_cwd = code_root if code_root is not None else config.ROOT
     location_note = f"планка: {tests_dir}, cwd: {run_cwd}"
     try:
         res = subprocess.run(
