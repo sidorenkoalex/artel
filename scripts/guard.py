@@ -160,9 +160,34 @@ TEST_AC = re.compile(r"def\s+test_ac(\d+)_\w*\s*\(")
 # from» — collect-only обязан быть статическим, не только по духу guard'а,
 # но и чтобы не зависеть от истории вызовов процесса.
 TEST_METHOD = re.compile(r"^\s*def\s+(test_\w+)\s*\(", re.M)
-# Пометка критерия без прямого теста: `# AC-n: manual|skip|escalate — причина`.
+# Пометка критерия без прямого теста: `# AC-n: manual|skip|escalate|ci —
+# причина`. `ci` (01M1SHJTT0V516BWHYXWS50F3G, требование 1): критерий
+# исполняется зелёным CI кодовой ветки (orchestrator/fsm_autogate.py),
+# не отдельным прогоном — допустима только для критериев про
+# существующие tests/ (см. `ci_marker_wording_ok` ниже).
 AC_MARKER = re.compile(
-    r"#\s*AC-(\d+):\s*(manual|skip|escalate)\b[^\S\n]*(?:[—-]+[^\S\n]*(.*))?")
+    r"#\s*AC-(\d+):\s*(manual|skip|escalate|ci)\b[^\S\n]*(?:[—-]+[^\S\n]*(.*))?")
+
+# Полный текст критерия `AC-n. <текст>` — от начала пункта до следующего
+# `AC-m.` в начале строки либо конца раздела. Тот же якорь, что AC_ITEM
+# выше, но захватывает содержимое целиком — нужен только для эвристики
+# `ci_marker_wording_ok` (сверка формулировки критерия с пометкой `ci`
+# того же номера), не для подсчёта номеров.
+AC_ITEM_FULL = re.compile(r"^AC-(\d+)\.\s+(.*?)(?=^AC-\d+\.\s|\Z)", re.M | re.S)
+
+# Ключевые слова требования 3/AC-2 (01M1SHJTT0V516BWHYXWS50F3G): пометка
+# `ci` допустима только для критерия про существующий набор `tests/`.
+# Case-insensitive substring match, fail-closed — ни одного слова не
+# нашлось, формулировка не распознана эвристикой.
+CI_MARKER_WORDING_KEYWORDS = ("существующ", "tests/", "зелён", "не ослаб")
+
+
+def ci_marker_wording_ok(criterion_text: str) -> bool:
+    """Формулировка критерия `criterion_text` (полный текст пункта
+    `AC-n.`, без номера) содержит хотя бы одно ключевое слово требования
+    3 — пометка `ci` для него допустима."""
+    lowered = criterion_text.lower()
+    return any(kw in lowered for kw in CI_MARKER_WORDING_KEYWORDS)
 
 # Маркер причины красноты в докстринге модуля приёмочного теста (SPEC
 # T064, требование 1): «Красен до реализации: <объяснение>» или «Зелёный
@@ -481,8 +506,9 @@ def traceability_errors_from_content(spec_text: str, meta: dict, tested: set,
     """
     if not requires_ac_markup(meta):
         return []
-    ac_numbers = {int(n) for n in
-                 AC_ITEM.findall(section_body(spec_text, "Критерии приёмки"))}
+    body = section_body(spec_text, "Критерии приёмки")
+    ac_numbers = {int(n) for n in AC_ITEM.findall(body)}
+    ac_texts = {int(n): text for n, text in AC_ITEM_FULL.findall(body)}
     errors: list[str] = []
     for n in sorted(ac_numbers):
         if n not in tested and n not in markers:
@@ -503,6 +529,12 @@ def traceability_errors_from_content(spec_text: str, meta: dict, tested: set,
                 f"AC-{n}: пометка {kind} без причины — впиши причину после "
                 f"тире в той же строке, например "
                 f"'# AC-{n}: {kind} — <причина>'")
+        elif kind == "ci" and not ci_marker_wording_ok(ac_texts.get(n, "")):
+            errors.append(
+                f"AC-{n}: пометка ci на критерий, формулировка которого не "
+                f"про существующие тесты (нет ни одного из ключевых слов "
+                f"«существующ», tests/, «зелён», «не ослаб») — замени "
+                f"пометку на 'manual' либо перефразируй критерий")
     for n in sorted(tested):
         if n not in ac_numbers:
             errors.append(
