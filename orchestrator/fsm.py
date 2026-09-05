@@ -368,7 +368,13 @@ def _pull_main_or_escalate(conn, task_id: str, t, state: str) -> str:
                 print(f"[{task_id}] переход отклонён: {detail}")
                 return "refused"
             return "pulled"
-        green, tail = acceptance.run(plank_root)
+        # Импорт пакета — из worktree кодовой ветки задачи, не из ROOT
+        # (пин старого кода): см. докстринг `acceptance.run`.
+        code_root = None
+        if (t["target"] == config.DEFAULT_TARGET
+                and workspace.on_task_branch(task_id, t["branch"]) is True):
+            code_root = workspace.path(task_id)
+        green, tail = acceptance.run(plank_root, code_root=code_root)
     finally:
         shutil.rmtree(plank_root, ignore_errors=True)
 

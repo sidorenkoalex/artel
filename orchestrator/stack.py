@@ -21,6 +21,11 @@ from collections import namedtuple
 # решение с запасом, не голый минимум для этого синтаксиса (TZ.md).
 REQUIRED_PYTHON = (3, 11)
 
+# Версия основных джобов CI и локальной разработки (01M1RDCCKBQMJ5G2K9
+# ANJP059H, ANSWER-1, вопрос 2) — отдельная от REQUIRED_PYTHON (минимум
+# поддержки): поднимается Оператором вместе с pyenv, не автоматически.
+CURRENT_STABLE_PYTHON = (3, 13)
+
 # Список допустимых исключений правила «сторонних пакетов нет» — записи
 # вида (модуль, причина); пуст на момент этой задачи (AC-3). Будущая
 # запись обязана нести причину вторым элементом пары.
@@ -109,6 +114,15 @@ def _tool_check(name: str, requirement: ToolRequirement) -> StackCheck:
     return StackCheck(
         name, "warn",
         f"{name} {match.group(0)} ниже минимальной {required_text}")
+
+
+def python_version_string() -> str:
+    """Версия для `actions/setup-python` (`python-version`) — текущая
+    стабильная версия основных джобов CI (01M1RDCCKBQMJ5G2K9ANJP059H,
+    требование 1): `CURRENT_STABLE_PYTHON` в формате `major.minor`, без
+    посторонних символов — так, как `setup-python` принимает значение.
+    """
+    return ".".join(str(part) for part in CURRENT_STABLE_PYTHON)
 
 
 def check_stack() -> list:

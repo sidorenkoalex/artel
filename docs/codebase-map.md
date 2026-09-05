@@ -1,5 +1,5 @@
 ---
-built_at_sha: 6d1120dbcca6950cead4799aae849c1aad205d31
+built_at_sha: 3fb2790fe55c7314630795d02c013d170bc52bd7
 ---
 
 # Codebase-map пульта
@@ -796,10 +796,11 @@ built_at_sha: 6d1120dbcca6950cead4799aae849c1aad205d31
 
 **Публичные функции:**
 - `check_stack`
+- `python_version_string`
 
 **Импортирует:** —
 
-**Импортируется:** `orchestrator/doctor.py`, `orchestrator/runner.py`, `orchestrator/version.py`, `tests/test_invariants.py`, `tests/test_stack.py`
+**Импортируется:** `orchestrator/doctor.py`, `orchestrator/runner.py`, `orchestrator/version.py`, `scripts/stack_ci.py`, `tests/test_invariants.py`, `tests/test_stack.py`, `tests/test_stack_ci.py`
 
 ## orchestrator/store.py
 
@@ -993,6 +994,18 @@ built_at_sha: 6d1120dbcca6950cead4799aae849c1aad205d31
 **Импортирует:** `orchestrator/config.py`, `orchestrator/yamlmini.py`
 
 **Импортируется:** `orchestrator/acceptance.py`, `orchestrator/amend.py`, `orchestrator/canary.py`, `orchestrator/dry_run.py`, `orchestrator/fsm.py`, `orchestrator/fsm_advance.py`, `orchestrator/fsm_autogate.py`, `orchestrator/retro.py`, `orchestrator/version.py`, `tests/test_acceptance_tests_flow.py`, `tests/test_analyst_role.py`, `tests/test_answer.py`, `tests/test_artifact_materialization.py`, `tests/test_fsm_autogate.py`, `tests/test_guard_artifact_branch_mode.py`, `tests/test_guard_schema.py`, `tests/test_guard_split_signals.py`, `tests/test_guard_zones.py`, `tests/test_id_format_guard.py`, `tests/test_invariants.py`, `tests/test_review_registry_gate.py`, `tests/test_version.py`, `tests/test_yaml_parsing.py`
+
+## scripts/stack_ci.py
+
+**Назначение:** CI-обвязка манифеста стека (01M1RDCCKBQMJ5G2K9ANJP059H, требования 1-3):
+
+**Публичные функции:**
+- `main`
+- `minimum_python_version_string`
+
+**Импортирует:** `orchestrator/stack.py`
+
+**Импортируется:** —
 
 ## tests/__init__.py
 
@@ -1828,6 +1841,16 @@ built_at_sha: 6d1120dbcca6950cead4799aae849c1aad205d31
 ## tests/test_stack.py
 
 **Назначение:** Юнит-тесты orchestrator/stack.py (SPEC 01M1RDCAFENSW2VVAPECHCVGMM,
+
+**Публичные функции:** (нет)
+
+**Импортирует:** `orchestrator/stack.py`
+
+**Импортируется:** —
+
+## tests/test_stack_ci.py
+
+**Назначение:** Юнит-тесты scripts/stack_ci.py (SPEC 01M1RDCCKBQMJ5G2K9ANJP059H,
 
 **Публичные функции:** (нет)
 
