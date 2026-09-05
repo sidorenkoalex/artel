@@ -224,6 +224,50 @@ worktree, так что `__file__`-путь резолвинга не менял
 11/11 (AC-1..AC-9). `docs/codebase-map.md` перегенерирована тем же
 шагом (только `built_at_sha`).
 
+## Подтяжка main #2 (ANSWER-3, hotfix 86673499)
+
+Пока задача ждала ANSWER-3, в main вошёл второй аварийный hotfix
+(86673499, продолжение 88b38022, ADR-0013): для self-target с worktree
+на ветке задачи он материализует ВСЮ `tasks/<id>/` через
+`artifact_branch.materialize_task_dir` прямо в worktree и гоняет
+`acceptance.run(..., code_root=workspace.path(task_id))`; для внешнего
+target и песочниц без worktree — прежний `materialize_from_branch` во
+временный каталог (без третьего параметра `code_dir`, без фикса R1-F1,
+без строки `location_note` в хвосте) с `shutil.rmtree` после прогона.
+Хотфикс писался поверх состояния main на момент 88b38022 — без учёта
+уже сделанного этой веткой (материализация `acceptance_tests/` НА
+МЕСТЕ через `materialize_from_branch(task_id, branch, code_dir)`, без
+временных каталогов вовсе, на всех трёх точках вызова).
+
+Слияние `origin/main` (merge-коммит 78551cc7) — конфликт только в
+`orchestrator/fsm.py::_pull_main_or_escalate` (единственный файл,
+изменённый main поверх общей базы 72a755a3 — `orchestrator/
+acceptance.py`/`fsm_advance.py`/тесты main не трогал вовсе, диф с ними
+только оттого, что эта ветка ушла вперёд). Разрешён в пользу ветки HEAD
+целиком: код hotfix (условная ветка `artifact_branch.
+materialize_task_dir`/temp-каталог с `shutil.rmtree`) отброшен как
+дублирующий уже реализованный этой задачей узел, `import artifact_branch`
+в `fsm.py` (внесённый мержем) убран как более неиспользуемый —
+`orchestrator/fsm.py` после разрешения побайтово совпал с версией ДО
+слияния (`git diff a6595d19 78551cc7 -- orchestrator/fsm.py` — пусто):
+поведение этой ветки уже покрывает то, что чинил hotfix (материализация
+и через `__file__`, и через `cwd` совпадают на код ветки задачи), без
+дублирования логики. Из main взято лишь непересекающееся:
+`canary/guids.txt`, `canary/pool.sealed`, `docs/backlog.md` (снятая
+строка), `docs/codebase-map.md` (перегенерирована этим же шагом).
+
+Прогон после слияния: `test_branch_freshness_gate`,
+`test_fsm_map_conflict_autoresolve`, `test_acceptance`,
+`test_fsm_autogate`, `test_artifact_materialization` — 33/33;
+`test_amend`, `test_dry_run`, `test_multitarget`,
+`test_multitarget_invariants`, `test_canary`, `test_zones_gate`,
+`test_capacity_gate`, `test_advance_guard`,
+`test_review_registry_gate`, `test_merge_gate_ci_wait`,
+`test_verifying_ceiling`, `test_fsm_draft_mr_reentry` — 191/191.
+Локальная приёмочная планка задачи — 11/11 (AC-1..AC-9, включая
+намеренно-красные AC-6/AC-7). `python3 scripts/guard.py` на PLAN.md —
+ок.
+
 ## Реестр замечаний
 
 | id | статус | комментарий |
