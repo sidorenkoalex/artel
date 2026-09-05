@@ -171,16 +171,25 @@ def check_disk_space() -> Check:
 
 
 def _role_home_diff(reference: Path, deployed: Path) -> set[str]:
-    """Пути (относительно каждого корня), отличающиеся между референсом
-    курируемого слоя и его развёрнутой копией — по составу файлов и по
-    байтовому содержимому (SPEC 01M1RDCEF0JZ4AVQRE43JFH8TN, AC-13)."""
-    ref_files = {p.relative_to(reference) for p in reference.rglob("*")
-                if p.is_file()}
-    dep_files = {p.relative_to(deployed) for p in deployed.rglob("*")
-                if p.is_file()}
-    diffs = {str(rel) for rel in ref_files ^ dep_files}
-    for rel in ref_files & dep_files:
-        if (reference / rel).read_bytes() != (deployed / rel).read_bytes():
+    """Пути (относительно референса), отличающиеся между референсом
+    курируемого слоя и его развёрнутой копией — по каждому файлу
+    РЕФЕРЕНСА: отсутствует в развёрнутом слое или отличается побайтово
+    (SPEC 01M1RDCEF0JZ4AVQRE43JFH8TN, AC-13).
+
+    Файлы, которых нет в референсе, но которые появились в развёрнутом
+    слое, — не расхождение: Оператор легитимно расширяет `.artel/home`
+    по ходу работы (docs/reference/role-home.md, «Курирование»), а
+    `claude` CLI пишет туда собственные рантайм-файлы на каждом шаге
+    роли (`CLAUDE_CONFIG_DIR`) — учёт этих файлов как расхождения дал
+    бы WARN постоянно, вне зависимости от реального состояния
+    курируемого слоя (REVIEW.md итерации 1, R1-F1)."""
+    diffs = set()
+    for path in reference.rglob("*"):
+        if not path.is_file():
+            continue
+        rel = path.relative_to(reference)
+        counterpart = deployed / rel
+        if not counterpart.is_file() or counterpart.read_bytes() != path.read_bytes():
             diffs.add(str(rel))
     return diffs
 

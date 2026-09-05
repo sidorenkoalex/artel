@@ -670,7 +670,13 @@ class RoleEnvTest(TmpRootTest):
         `role_env` тихо построить окружение с ним — падает `OSError`,
         а не подставляет операторский PATH как есть (замена теста
         «остальное окружение наследуется» — AC-14 этой же SPEC, критерий
-        8 T019 больше не в силе буквально)."""
+        8 T019 больше не в силе буквально).
+
+        Ловит мутацию: откат `role_env` к `env["PATH"] =
+        os.environ["PATH"]` (копия PATH Оператора целиком) — с таким
+        откатом каталог `/opt/operator-only-dir` из подложенного PATH
+        Оператора попал бы в PATH роли как есть, `OSError` не случился
+        бы вовсе."""
         with mock.patch.dict(runner.os.environ, {"PATH": "/opt/operator-only-dir"}), \
                 mock.patch.object(runner.gitcmd, "git", fake_git_config):
             with self.assertRaises(OSError):
@@ -679,7 +685,12 @@ class RoleEnvTest(TmpRootTest):
     def test_env_vars_outside_the_manifest_allowlist_do_not_reach_the_role(self):
         """Переменная Оператора вне белого списка манифеста
         (`orchestrator.stack.ROLE_ENV_ALLOWLIST`) не попадает в окружение
-        роли (SPEC 01M1RDCEF0JZ4AVQRE43JFH8TN, требование 2)."""
+        роли (SPEC 01M1RDCEF0JZ4AVQRE43JFH8TN, требование 2).
+
+        Ловит мутацию: откат `role_env` к `env = dict(os.environ)`
+        (копия всего окружения Оператора без фильтрации белым списком) —
+        с таким откатом `SOME_OPERATOR_ONLY_VAR` дошла бы до роли и
+        `assertNotIn` ниже упал бы."""
         with mock.patch.dict(runner.os.environ,
                              {"SOME_OPERATOR_ONLY_VAR": "утечка"}), \
                 mock.patch.object(runner.gitcmd, "git", fake_git_config):
