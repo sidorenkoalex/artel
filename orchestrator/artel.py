@@ -94,7 +94,7 @@ workspace, tasks, knowledge, logs). БД одна на все проекты: с
   answer <id> <файл-с-ответом> | kill <id> | release <id> |
   pause [--now] <id> | resume <id> | log <id> | budget <id> <usd> |
   target-init <target> | doctor [--restore] [--fix] | alert-ack <id> "<решение>" |
-  version | canary <каталог-ТЗ> [--rewrite-baseline] | prune [--execute] |
+  version | canary --k <N> | prune [--execute] |
   amend-tests <id> --reason "<основание>" | pin-update <sha main артели> |
   zone-release <id> | zone-reorder <id1> <id2> ...
 
@@ -129,6 +129,27 @@ lease задачи (pid, host); lease нет, его процесс мёртв �
 не берёт и лимитер `MAX_PARALLEL_TASKS` не проходит (инвариант 32,
 тот же класс, что `kill`/`status`/`approve`/`reject`/`budget`/`log`/
 `doctor`); задача без lease — не ошибка, код возврата 0.
+
+`canary --k <N>` (SPEC 01M1NEEWH5K1XPFRDGRMPYSBXJ, v2 — переработка
+v1, tasks/T065/SPEC.md) — синтетический прогон конвейера: отбирает `N`
+случайных шаблонов ТЗ из пула ВНЕ корня пульта (`~/.artel-canary`,
+Оператор заводит и наполняет его вручную), ведёт КАЖДУЮ выбранную
+задачу ПОЛНЫМ циклом в ОТДЕЛЬНОМ эфемерном клоне пульта (`git clone`
+во временный каталог + origin-заглушка — своя рабочая копия, своя БД,
+свой origin, ноль следов в главном пульте: ни веток, ни RETRO, ни
+алертов, ни снапшотов, ни для успешных, ни для убитых задач), сама
+проходит `spec_gate`/`acceptance` внутри клона (отдельный от
+`cmd_approve`/`auto` кодовый путь — инвариант 18 не затронут) и убивает
+на `merge_gate`/`verifying` (никогда не approve, main клона не
+трогает). Эскалация (`escalated`) закрывается синтетическим ANSWER
+Оператора-заглушки, прогон продолжается сам. Метрики (шаги, стоимость,
+итерации ревью, эскалации, исход) — БД пульта СНАРУЖИ клона, таблицы
+`canary_runs`/`canary_baseline`; бейзлайн — per-task (ключ — стабильное
+имя шаблона), не суммой по набору: первый прогон шаблона пишет его,
+следующие сравнивают и поднимают алерт (`kind=threshold`) при
+отклонении сверх `config.CANARY_DEVIATION_RATIO` — без автоматического
+действия. Маркер шаблона «ожидается эскалация» сверяется с фактом,
+расхождение — в отчёте.
 
 Занятость зоны на старте кода (SPEC 01M1P9QAG65GVF69YJEV0V18D9): перед
 первым шагом `in_dev` зоны задачи (`zones:` SPEC, часть 1 —
@@ -222,7 +243,9 @@ worktree задачи, команда коммитит правку, сдвиг�
   alerts    таблица alerts: incident|threshold|trigger, ack с решением (A3)
   doctor    pre-flight, recovery-сверка, сироты, смоук CLI/изоляции (A3)
   version   пин CLI, фактическая версия, версия схемы артефактов (T030)
-  canary    синтетический прогон конвейера, метрики, бейзлайн (T065)
+  canary    синтетический прогон конвейера в эфемерном клоне, метрики,
+            per-task бейзлайн, изоляция пула от ролей (v2,
+            01M1NEEWH5K1XPFRDGRMPYSBXJ; v1 — T065)
   prune     retention-политика: .artel/logs/, архивация alerts (T073)
   dry_run   сухой прогон приёмки: read-only предпросмотр без исполнения
             (SPEC 01M1GJ3ZP1YGG5QRB6FQ44NN8D)
@@ -317,6 +340,22 @@ def _parse_new_args(rest: list) -> tuple | None:
     return title, tz_path
 
 
+def _k_arg(rest: list) -> int:
+    """Значение флага `canary --k <N>` — тот же приём отказа, что и
+    `_tz_arg` (флаг без значения/нечисловое значение — именованный
+    отказ, не голый исключение)."""
+    if "--k" not in rest:
+        sys.exit("canary: нужен параметр --k <число> (SPEC "
+                 "01M1NEEWH5K1XPFRDGRMPYSBXJ, требование 1)")
+    idx = rest.index("--k")
+    if idx + 1 >= len(rest):
+        sys.exit("--k требует целое число следующим аргументом.")
+    try:
+        return int(rest[idx + 1])
+    except ValueError:
+        sys.exit(f"--k требует целое число, получено {rest[idx + 1]!r}.")
+
+
 def _cmd_new(rest: list) -> None:
     parsed = _parse_new_args(rest)
     if parsed is None:
@@ -385,8 +424,7 @@ def main() -> None:
         "alert-ack": lambda: doctor.cmd_alert_ack(
             rest[0], rest[1] if len(rest) > 1 else ""),
         "version": lambda: version.cmd_version(),
-        "canary": lambda: canary.cmd_canary(
-            rest[0], rewrite_baseline="--rewrite-baseline" in rest),
+        "canary": lambda: canary.cmd_canary(k=_k_arg(rest)),
         "prune": lambda: prune.cmd_prune("--execute" in rest),
         "report": lambda: report.cmd_report(),
         "acceptance-dry-run": lambda: dry_run.cmd_acceptance_dry_run(rest[0]),

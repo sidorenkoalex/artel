@@ -16,8 +16,19 @@ jobs:
       - uses: actions/checkout@v4
       - name: guard.py по всем артефактам задач
         run: |
+          # На артефактной ветке пульта задачи (`artifact/<id>`) каждый
+          # автокоммит шага роли несёт промежуточные, по определению
+          # неполные артефакты (01M1R66X5SMD3ZEDCVAJ0DR7K2, требование 6):
+          # `--artifact-branch` понижает нарушения содержания черновика
+          # до предупреждения, оставляя нарушения frontmatter и полную
+          # проверку «сданных» артефактов ошибкой. На `main`/`task/**` —
+          # вызов без флага, поведение прежнее.
+          GUARD_ARGS="--all"
+          if [[ "${GITHUB_REF#refs/heads/}" == artifact/* ]]; then
+            GUARD_ARGS="--all --artifact-branch"
+          fi
           if ls tasks/*/*.md >/dev/null 2>&1; then
-            python3 scripts/guard.py --all
+            python3 scripts/guard.py $GUARD_ARGS
           else
             echo "артефактов пока нет — ок"
           fi
@@ -53,6 +64,40 @@ jobs:
             | grep -E '^\+' | grep -Ev '^\+\+\+' | grep -Ef scripts/id_format_patterns.txt || true)
           if [ -n "$ADDED" ]; then
             echo "::error::диф добавляет парсинг формата id задачи вне orchestrator/idgen.py (SPEC T094, требование 4):"
+            echo "$ADDED"
+            exit 1
+          fi
+
+  canary-guid-leak:
+    name: Линт — GUID канареечного пула не протекает в промпты ролей
+    # Мержи пульта идут пушем в main без pull request (merge_gate ->
+    # done), поэтому сторож работает и на push: база — sha до пуша
+    # (`github.event.before`); для новой ветки она нулевая — пропуск.
+    if: github.event_name == 'pull_request' || github.event_name == 'push'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
+      - name: diff не добавляет отметку canary-guid в skills/, templates/, docs/
+        env:
+          BASE_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.event.before }}
+        run: |
+          if [ -z "$BASE_SHA" ] || [ "$BASE_SHA" = "0000000000000000000000000000000000000000" ] \
+             || ! git cat-file -e "$BASE_SHA" 2>/dev/null; then
+            echo "базы для диффа нет (новая ветка или принудительный пуш) — пропуск"
+            exit 0
+          fi
+          # SPEC 01M1NEEWH5K1XPFRDGRMPYSBXJ, требование 7/AC-7: каждый
+          # шаблон пула несёт машиночитаемую метку `canary-guid:` (см.
+          # orchestrator/canary.py, модульный докстринг) — сама метка НЕ
+          # существует нигде в коде пульта (пул живёт вне git), так что
+          # её появление в skills/, templates/ или docs/ пульта
+          # однозначно означает утечку контекста роли в пул (требование
+          # 13). Список конкретных GUID не нужен — паттерн общий.
+          ADDED=$(git diff "$BASE_SHA"...HEAD -- 'skills/*' 'templates/*' 'docs/*' \
+            | grep -E '^\+' | grep -Ev '^\+\+\+' | grep -Ei 'canary-guid:' || true)
+          if [ -n "$ADDED" ]; then
+            echo "::error::диф добавляет отметку canary-guid в skills/, templates/ или docs/ — утечка пула канарейки (SPEC 01M1NEEWH5K1XPFRDGRMPYSBXJ, требование 7):"
             echo "$ADDED"
             exit 1
           fi

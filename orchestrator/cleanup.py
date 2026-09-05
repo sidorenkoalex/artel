@@ -1,7 +1,8 @@
 """kill switch и уборка хвостов задачи: каталог артефактов и ветка."""
 import shutil
+import socket
 
-from . import config, gitcmd, lease, store, workspace
+from . import config, gitcmd, lease, liveness, store, workspace
 
 
 def artifacts_in_main(task_id: str) -> bool | None:
@@ -186,6 +187,32 @@ def _journal_tz_before_cleanup(conn, task_id: str, branch: str,
 TERMINAL_STATES = ("done", "killed")
 
 
+def _group_kill_lease_step(conn, task_id: str) -> None:
+    """AC-4 (SPEC 01M1PNBSHR2PMFECMP7C204MF1): при живом процессе лизы —
+    SIGTERM всей группе процессов записанного AC-2 агентного шага, после
+    грейса SIGKILL, ДО снятия lease и уборки worktree/ветки (вызывается
+    из `_cmd_kill` перед `lease.release_any`).
+
+    Свой host — та же защита, что уже применяет `pause.cmd_pause_now` к
+    межхостовой адресации: pid/pgid чужого host нельзя ни подтвердить,
+    ни безопасно сигналить локальным `os.killpg` (числовое совпадение
+    с ЛОКАЛЬНЫМ процессом было бы случайным попаданием, не адресацией).
+    Лиза мертва или без записанного pgid — нечего снимать (AC-6 берёт
+    на себя мёртвый lease отдельным путём, под `doctor --fix`).
+    """
+    row = store.lease_row(conn, task_id)
+    if row is None or not row["pgid"]:
+        return
+    if row["hostname"] != socket.gethostname():
+        return
+    if not liveness._pid_alive(row["pid"]):
+        return
+    count = liveness.terminate_process_group(row["pgid"])
+    store.journal(conn, task_id, "orchestrator",
+                  "kill: группа процессов шага снята",
+                  liveness.group_kill_detail(row["pgid"], count))
+
+
 def _cmd_kill(conn, task_id: str) -> None:
     """Kill switch: убивает задачу из ЛЮБОГО нетерминального состояния,
     даже если конкурентная сессия успела перейти между чтением состояния
@@ -215,6 +242,10 @@ def _cmd_kill(conn, task_id: str) -> None:
             state = exc.actual
     if not won:
         print(f"[{task_id}] уже {state} — kill не требуется")
+    # Группа процессов записанного AC-2 агентного шага — ДО снятия lease
+    # (AC-4): `lease.release_any` ниже уже не сможет прочитать pgid по
+    # ещё живому держателю после того, как строка исчезнет.
+    _group_kill_lease_step(conn, task_id)
     # kill обязан снять lease задачи безусловно, «любым путём» (SPEC
     # 01M1G..., требование 3, AC-6) — независимо от того, взял ли его
     # штатный `run_locked` этого же вызова «с нуля» (тот отпустил бы его
