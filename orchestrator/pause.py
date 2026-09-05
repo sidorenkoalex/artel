@@ -235,6 +235,18 @@ def cmd_pause_now(task_id: str) -> None:
                   f"pid {row['pid']} завершён сигналом ОС")
     print(f"[{task_id}] процесс pid {row['pid']} прерван")
 
+    # Группа процессов записанного AC-2 агентного шага (SPEC
+    # 01M1PNBSHR2PMFECMP7C204MF1, AC-5) — НЕ ТОЛЬКО pid держателя lease
+    # выше: `_terminate_pid` снимает сам процесс лизы (обычно — процесс
+    # пульта, ведущий шаг), но не его потомков в другой группе; group-kill
+    # закрывает именно их (`pytest`/`unittest`, запущенные ролью).
+    if row["pgid"]:
+        count = liveness.terminate_process_group(row["pgid"])
+        store.journal(conn, task_id, "operator",
+                      "pause --now: группа процессов шага снята",
+                      liveness.group_kill_detail(row["pgid"], count))
+        print(f"[{task_id}] {liveness.group_kill_detail(row['pgid'], count)}")
+
     _account_partial_cost(conn, task_id, role)
 
     checkpoint_detail = checkpoint.commit_pause_now_checkpoint(conn, task_id, role)

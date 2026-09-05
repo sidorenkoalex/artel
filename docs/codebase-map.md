@@ -1,5 +1,5 @@
 ---
-built_at_sha: 99fd7d1a6b24348f20d296d67ea5e6ecabd314c1
+built_at_sha: e6a11e6210cb4107c404d3f3f6d4c0f48d7594a5
 ---
 
 # Codebase-map пульта
@@ -265,7 +265,7 @@ built_at_sha: 99fd7d1a6b24348f20d296d67ea5e6ecabd314c1
 - `drop_task_branch`
 - `drop_task_dir`
 
-**Импортирует:** `orchestrator/artifact_branch.py`, `orchestrator/config.py`, `orchestrator/gitcmd.py`, `orchestrator/lease.py`, `orchestrator/snapshot.py`, `orchestrator/store.py`, `orchestrator/workspace.py`
+**Импортирует:** `orchestrator/artifact_branch.py`, `orchestrator/config.py`, `orchestrator/gitcmd.py`, `orchestrator/lease.py`, `orchestrator/liveness.py`, `orchestrator/snapshot.py`, `orchestrator/store.py`, `orchestrator/workspace.py`
 
 **Импортируется:** `orchestrator/artel.py`, `orchestrator/canary.py`, `orchestrator/fsm_merge_gate.py`, `orchestrator/retro.py`, `tests/test_done_branch_cleanup.py`, `tests/test_invariants.py`, `tests/test_kill_cleanup.py`, `tests/test_multitarget_invariants.py`, `tests/test_retro.py`, `tests/test_task_id_prefix_regression.py`
 
@@ -317,6 +317,7 @@ built_at_sha: 99fd7d1a6b24348f20d296d67ea5e6ecabd314c1
 - `check_cli_version`
 - `check_disk_space`
 - `check_git_identity`
+- `check_hung_test_runs`
 - `check_leases`
 - `check_merge_lock`
 - `check_orphans`
@@ -535,11 +536,13 @@ built_at_sha: 99fd7d1a6b24348f20d296d67ea5e6ecabd314c1
 
 **Назначение:** Возраст heartbeat и адресуемость pid — общие для lease/merge_lock/doctor.
 
-**Публичные функции:** (нет)
+**Публичные функции:**
+- `group_kill_detail`
+- `terminate_process_group`
 
 **Импортирует:** —
 
-**Импортируется:** `orchestrator/catalog.py`, `orchestrator/doctor.py`, `orchestrator/lease.py`, `orchestrator/merge_lock.py`, `orchestrator/parallel_limit.py`, `orchestrator/pause.py`, `orchestrator/release.py`, `tests/test_doctor.py`
+**Импортируется:** `orchestrator/catalog.py`, `orchestrator/cleanup.py`, `orchestrator/doctor.py`, `orchestrator/lease.py`, `orchestrator/merge_lock.py`, `orchestrator/parallel_limit.py`, `orchestrator/pause.py`, `orchestrator/release.py`, `orchestrator/runner.py`, `tests/test_doctor.py`
 
 ## orchestrator/merge_lock.py
 
@@ -722,7 +725,7 @@ built_at_sha: 99fd7d1a6b24348f20d296d67ea5e6ecabd314c1
 - `spawn_agent`
 - `step_role`
 
-**Импортирует:** `orchestrator/agent_log.py`, `orchestrator/artifact_source.py`, `orchestrator/brief.py`, `orchestrator/budget.py`, `orchestrator/checkpoint.py`, `orchestrator/config.py`, `orchestrator/doctor.py`, `orchestrator/failure_classification.py`, `orchestrator/fixation.py`, `orchestrator/gitcmd.py`, `orchestrator/keychain.py`, `orchestrator/lease.py`, `orchestrator/parallel_limit.py`, `orchestrator/pause.py`, `orchestrator/review.py`, `orchestrator/role_prompt.py`, `orchestrator/roles.py`, `orchestrator/spend.py`, `orchestrator/store.py`, `orchestrator/workspace.py`
+**Импортирует:** `orchestrator/agent_log.py`, `orchestrator/artifact_source.py`, `orchestrator/brief.py`, `orchestrator/budget.py`, `orchestrator/checkpoint.py`, `orchestrator/config.py`, `orchestrator/doctor.py`, `orchestrator/failure_classification.py`, `orchestrator/fixation.py`, `orchestrator/gitcmd.py`, `orchestrator/keychain.py`, `orchestrator/lease.py`, `orchestrator/liveness.py`, `orchestrator/parallel_limit.py`, `orchestrator/pause.py`, `orchestrator/review.py`, `orchestrator/role_prompt.py`, `orchestrator/roles.py`, `orchestrator/spend.py`, `orchestrator/store.py`, `orchestrator/workspace.py`
 
 **Импортируется:** `orchestrator/artel.py`, `orchestrator/auto.py`, `orchestrator/canary.py`, `orchestrator/doctor.py`, `orchestrator/lease.py`, `orchestrator/pause.py`, `tests/test_acceptance_tests_flow.py`, `tests/test_agent_failure.py`, `tests/test_agent_log.py`, `tests/test_agent_prompt.py`, `tests/test_analyst_role.py`, `tests/test_auto_cycle.py`, `tests/test_doctor.py`, `tests/test_git_fixation.py`, `tests/test_invariants.py`, `tests/test_multitarget.py`, `tests/test_multitarget_invariants.py`, `tests/test_review_freshness.py`, `tests/test_review_package.py`, `tests/test_step_autocommit.py`, `tests/test_step_cost.py`
 
@@ -819,6 +822,7 @@ built_at_sha: 99fd7d1a6b24348f20d296d67ea5e6ecabd314c1
 - `total_estimate`
 - `total_spent`
 - `update_lease`
+- `update_lease_pgid`
 - `update_task`
 
 **Импортирует:** `orchestrator/alerts.py`, `orchestrator/artifact_branch.py`, `orchestrator/coldstart.py`, `orchestrator/config.py`, `orchestrator/fixation.py`, `orchestrator/session.py`, `orchestrator/targets.py`
