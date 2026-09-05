@@ -3,9 +3,13 @@
 
 Использование:
     python3 scripts/codebase_map.py
-Cwd — корень дерева, которое картируется (в CI — корень пульта после
-checkout; тот же паттерн, что у scripts/guard.py, читающего Path("tasks")
-от cwd, а не от orchestrator.config.ROOT).
+Корень дерева, которое картируется, — `git rev-parse --show-toplevel` от
+cwd (SPEC 01M1SAA01YRRTWAVADT2F81RRQ, AC-4/AC-7), НЕ сам cwd: запуск из
+подкаталога (например, изнутри `tasks/<id>/acceptance_tests/` — реальный
+инцидент 05.09, где `scripts/codebase_map.py` запускался тестом планки
+приёмки) кладёт карту в корень репозитория, а не рядом с cwd запуска.
+В CI — корень пульта после checkout, тот же результат, что раньше давал
+голый `Path.cwd()`.
 
 Перебирает `orchestrator/*.py`, `scripts/*.py`, `tests/*.py` без захода во
 вложенные директории. Разбор — статический (`ast`), файлы не исполняются
@@ -208,6 +212,17 @@ def git_head_sha(root: Path) -> str:
     return result.stdout.strip()
 
 
+def repo_root(cwd: Path) -> Path:
+    """Корень git-дерева, содержащего `cwd` (SPEC 01M1SAA01YRRTWAVADT2F81RRQ,
+    AC-4/AC-7): `git rev-parse --show-toplevel`, не сам `cwd` — единственный
+    способ узнать корень, не зависящий от того, на какой глубине подкаталога
+    запущен генератор."""
+    result = subprocess.run(
+        ["git", "rev-parse", "--show-toplevel"], cwd=cwd,
+        capture_output=True, text=True, check=True)
+    return Path(result.stdout.strip()).resolve()
+
+
 def render(modules, resolved_imports, imported_by, sha: str) -> str:
     lines = ["---", f"built_at_sha: {sha}", "---", "",
              "# Codebase-map пульта", "",
@@ -242,7 +257,7 @@ def render(modules, resolved_imports, imported_by, sha: str) -> str:
 
 
 def main() -> int:
-    root = Path.cwd()
+    root = repo_root(Path.cwd())
     sha = git_head_sha(root)
     modules, resolved_imports, imported_by = build_modules(root)
     text = render(modules, resolved_imports, imported_by, sha)

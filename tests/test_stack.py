@@ -1,26 +1,34 @@
 """Юнит-тесты orchestrator/stack.py (SPEC 01M1RDCAFENSW2VVAPECHCVGMM,
-требования 1, 4): манифест стека и `check_stack()`.
+требования 1, 4; SPEC 01M1REVEZ1HESMJ7AFD5A9MEJ8, требования 1-2:
+исключения манифеста для pytest/pytest-timeout/pytest-xdist и сверка
+`.artel/venv` с файлом закреплённых версий): манифест стека и
+`check_stack()`.
 
-Постоянная регрессия (AC-15) — переживает закрытие
-`tasks/01M1RDCAFENSW2VVAPECHCVGMM/acceptance_tests/`, которая
-проверяла то же самое подробнее, но живёт только пока задача открыта.
+Постоянная регрессия (AC-15/AC-16) — переживает закрытие
+`tasks/01M1RDCAFENSW2VVAPECHCVGMM/acceptance_tests/` и
+`tasks/01M1REVEZ1HESMJ7AFD5A9MEJ8/acceptance_tests/`, которые проверяли
+то же самое подробнее, но живут только пока задача открыта.
 """
 import subprocess
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from orchestrator import stack  # noqa: E402
+from orchestrator import config, stack  # noqa: E402
 
 HIGH_VERSION = "999.999.999"
 LOW_VERSION = "0.0.1"
 OK_PYTHON_VERSION_INFO = (3, 99, 0, "final", 0)
+LOCK_CONTENT = "pytest==7.4.4\npytest-timeout==2.3.1\npytest-xdist==3.5.0\n"
 
 
 def _all_ok_run(args, **kwargs):
+    if "freeze" in args:
+        return subprocess.CompletedProcess(args, 0, LOCK_CONTENT, "")
     return subprocess.CompletedProcess(args, 0, f"{HIGH_VERSION}\n", "")
 
 
@@ -58,35 +66,51 @@ class ManifestConstantsTest(unittest.TestCase):
             self.assertEqual(requirement.command[0], tool)
             self.assertIn("--version", requirement.command)
 
-    def test_third_party_exceptions_list_is_empty(self):
-        """AC-3: список допустимых исключений правила «сторонних
-        пакетов нет» объявлен и пуст на момент этой задачи.
+    def test_third_party_exceptions_list_carries_the_pytest_family(self):
+        """AC-2 (tasks/01M1REVEZ1HESMJ7AFD5A9MEJ8/SPEC.md, требование 1):
+        переход на pytest несёт три записи исключений манифеста
+        (`pytest`, `pytest_timeout`, `xdist` — ИМПОРТИРУЕМЫЕ имена, не
+        написание PyPI), каждая с непустой причиной.
 
-        Ловит мутацию: `THIRD_PARTY_EXCEPTIONS` не заведён вовсе
-        (`AttributeError` до сравнения) либо заведён уже с записью
-        (не пуст) — `assertEqual` откажет в обоих случаях.
+        Ловит мутацию: одна из трёх записей отсутствует, либо у какой-то
+        из них причина — пустая строка — `assertIn`/`assertTrue` откажут.
         """
-        self.assertEqual((), stack.THIRD_PARTY_EXCEPTIONS)
+        by_name = dict(stack.THIRD_PARTY_EXCEPTIONS)
+        for name in ("pytest", "pytest_timeout", "xdist"):
+            self.assertIn(name, by_name)
+            self.assertTrue(by_name[name].strip())
 
 
 class CheckStackTest(unittest.TestCase):
 
     def test_ok_scenario_reports_ok_for_every_tool(self):
         """AC-7: по одной проверке на каждый инструмент манифеста
-        (python, git, gh, claude) — ровно 4 проверки, и все `ok`, когда
-        все версии заведомо проходят порог.
+        (python, git, gh, claude) плюс venv/venv-packages (SPEC
+        01M1REVEZ1HESMJ7AFD5A9MEJ8, требование 2) — 6 проверок, все `ok`,
+        когда все версии заведомо проходят порог и venv согласован с
+        файлом закреплённых версий.
 
-        Ловит мутацию: `check_stack()` пропускает инструмент или
-        задваивает проверку одного и того же — счётчик проверок
-        отклонится от 4, `assertEqual` откажет; либо какой-то из
-        заведомо высоких версий присвоен не `ok` — `assertEqual` на
-        множестве статусов откажет.
+        Ловит мутацию: `check_stack()` пропускает проверку или
+        задваивает проверку одной и той же — счётчик проверок
+        отклонится от 6, `assertEqual` откажет; либо какой-то из
+        заведомо согласованных проверок присвоен не `ok` — `assertEqual`
+        на множестве статусов откажет.
         """
-        with mock.patch.object(stack.subprocess, "run", side_effect=_all_ok_run), \
-             mock.patch.object(sys, "version_info", OK_PYTHON_VERSION_INFO):
-            checks = stack.check_stack()
+        with tempfile.TemporaryDirectory() as tmp:
+            venv_dir = Path(tmp) / "venv"
+            venv_dir.mkdir()
+            lock_file = Path(tmp) / "requirements.lock"
+            lock_file.write_text(LOCK_CONTENT, encoding="utf-8")
 
-        self.assertEqual(4, len(checks))
+            with mock.patch.object(config, "VENV_DIR", venv_dir, create=True), \
+                 mock.patch.object(config, "REQUIREMENTS_LOCK", lock_file,
+                                   create=True), \
+                 mock.patch.object(stack.subprocess, "run",
+                                   side_effect=_all_ok_run), \
+                 mock.patch.object(sys, "version_info", OK_PYTHON_VERSION_INFO):
+                checks = stack.check_stack()
+
+        self.assertEqual(6, len(checks))
         statuses = {c.status for c in checks}
         self.assertEqual({"ok"}, statuses)
 
@@ -156,6 +180,97 @@ class CheckStackTest(unittest.TestCase):
             checks = stack.check_stack()
 
         self.assertTrue(checks)
+
+
+class CheckStackVenvTest(unittest.TestCase):
+    """AC-7/AC-8 (tasks/01M1REVEZ1HESMJ7AFD5A9MEJ8/SPEC.md, требование 2):
+    `check_stack()` сверяет `.artel/venv` с файлом закреплённых версий."""
+
+    def setUp(self):
+        self.version_patcher = mock.patch.object(
+            sys, "version_info", OK_PYTHON_VERSION_INFO)
+        self.version_patcher.start()
+        self.addCleanup(self.version_patcher.stop)
+
+    def _check_with(self, venv_dir, lock_file, freeze_output):
+        with mock.patch.object(config, "VENV_DIR", venv_dir, create=True), \
+             mock.patch.object(config, "REQUIREMENTS_LOCK", lock_file,
+                               create=True), \
+             mock.patch.object(stack.subprocess, "run",
+                               side_effect=_all_ok_run_with_freeze(freeze_output)):
+            return stack.check_stack()
+
+    def test_missing_venv_gives_warn_naming_the_creation_command(self):
+        """AC-8: `.artel/venv` отсутствует — WARN называет `venv-sync`.
+
+        Ловит мутацию: отсутствие venv трактуется как `ok` (проверка не
+        смотрит на существование каталога) — `assertTrue`/`assertIn`
+        откажут.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            lock_file = Path(tmp) / "requirements.lock"
+            lock_file.write_text(LOCK_CONTENT, encoding="utf-8")
+            missing_venv = Path(tmp) / "no-such-venv"
+
+            checks = self._check_with(missing_venv, lock_file, "")
+
+        venv_checks = [c for c in checks if "venv" in c.name.lower()]
+        self.assertTrue(venv_checks)
+        warn = [c for c in venv_checks if c.status == "warn"]
+        self.assertTrue(warn)
+        self.assertIn("venv-sync", " ".join(c.detail for c in warn))
+
+    def test_version_mismatch_gives_warn_naming_the_package(self):
+        """AC-7: одна из версий venv расходится с файлом закреплённых
+        версий — WARN называет РАСХОДЯЩИЙСЯ пакет по имени.
+
+        Ловит мутацию: сверка версий не реализована (venv считается
+        согласованным всегда, пока каталог существует) — WARN не
+        появится; либо WARN не называет расходящийся пакет —
+        `assertIn` откажет.
+        """
+        freeze_output = ("pytest==7.0.0\npytest-timeout==2.3.1\n"
+                         "pytest-xdist==3.5.0\n")
+        with tempfile.TemporaryDirectory() as tmp:
+            venv_dir = Path(tmp) / "venv"
+            venv_dir.mkdir()
+            lock_file = Path(tmp) / "requirements.lock"
+            lock_file.write_text(LOCK_CONTENT, encoding="utf-8")
+
+            checks = self._check_with(venv_dir, lock_file, freeze_output)
+
+        warn = [c for c in checks
+               if "venv" in c.name.lower() and c.status == "warn"]
+        self.assertTrue(warn)
+        self.assertIn("pytest", " ".join(c.detail.lower() for c in warn))
+
+    def test_matching_versions_produce_no_venv_warn(self):
+        """AC-7 (контроль): все версии venv совпадают с файлом
+        закреплённых версий — ни одна venv-проверка не WARN.
+
+        Ловит мутацию: реализация безусловно даёт WARN для venv-пакетов
+        независимо от факта совпадения — `assertFalse` откажет.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            venv_dir = Path(tmp) / "venv"
+            venv_dir.mkdir()
+            lock_file = Path(tmp) / "requirements.lock"
+            lock_file.write_text(LOCK_CONTENT, encoding="utf-8")
+
+            checks = self._check_with(venv_dir, lock_file, LOCK_CONTENT)
+
+        warn = [c for c in checks
+               if "venv" in c.name.lower() and c.status == "warn"]
+        self.assertFalse(warn)
+
+
+def _all_ok_run_with_freeze(freeze_output: str):
+    def fake_run(args, **kwargs):
+        args = list(args)
+        if "freeze" in args:
+            return subprocess.CompletedProcess(args, 0, freeze_output, "")
+        return _all_ok_run(args, **kwargs)
+    return fake_run
 
 
 if __name__ == "__main__":
