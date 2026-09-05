@@ -46,7 +46,7 @@ schema_version: 2    # версия формата артефакта, см. scr
 
 Проверено дополнительно (не входит в замечания, для протокола):
 - Прогнаны приёмочные тесты `tasks/T036/acceptance_tests/test_merge_gitcmd.py` — 6/6 OK (AC-1..AC-3 поведенчески, AC-4 частично через docstring-обоснование manual).
-- Прогнан `unittest discover -s tests` — 599 тестов, 3 сбоя в `tests/test_multitarget.py::RoleEnvTest` (git-идентичность окружения машины разработчика: `Alexander Sidorenko`/`al.sidorenko@x5.ru` вместо `Роль Артели`/`role@artel.invalid`). Проверено на `main` (8cae15f) тем же прогоном — те же 3 сбоя, не связаны с этой задачей и не в файлах, которые задача трогает (`test_multitarget.py` не входит в diff). AC-4 не нарушен.
+- Прогнан `unittest discover -s tests` — 599 тестов, 3 сбоя в `tests/test_multitarget.py::RoleEnvTest` (git-идентичность окружения машины разработчика: `Оператор`/`operator@example.invalid` вместо `Роль Артели`/`role@artel.invalid`). Проверено на `main` (8cae15f) тем же прогоном — те же 3 сбоя, не связаны с этой задачей и не в файлах, которые задача трогает (`test_multitarget.py` не входит в diff). AC-4 не нарушен.
 - `python3 scripts/guard.py --all` — ок, 104 файла.
 - `python3 scripts/codebase_map.py` — карта актуальна с точностью до ожидаемого лага в один коммит (`built_at_sha` в закоммиченной версии указывает на родительский коммит 37a9672, т.к. карта строится и коммитится вместе с правкой; содержимое совпадает).
 - Изменённые файлы ограничены заявленной зоной: `orchestrator/fsm.py`, `tasks/T036/*`, `tests/test_invariants.py` (одна строка), `docs/codebase-map.md` (обязательная регенерация). Ничего вне `orchestrator/fsm.py` и путей патчей тестов, как и требует «Не входит» SPEC.
