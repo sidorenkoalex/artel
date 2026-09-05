@@ -2,7 +2,7 @@
 task: 01M1P9QAG65GVF69YJEV0V18D9
 type: plan
 author_role: developer
-status: draft
+status: ready
 schema_version: 4
 ---
 
@@ -64,8 +64,21 @@ schema_version: 4
 `runner.py`/`auto.py`/`catalog.py`/`doctor.py`/`config.py`/`store.py`/
 `artel.py`) уже реализована предыдущим шагом developer, прерванным
 таймаутом (WIP-чекпоинт 688e3ff1). Этот шаг — проверка того, что
-реализация покрывает все AC приёмочных тестов (18/18 зелёных), полный
-прогон `tests/` на регрессию (AC-10) и юнит-тесты на сам `zone_lock.py`.
+реализация покрывает все AC приёмочных тестов (18/18 зелёных),
+регрессия модулей, затронутых интеграцией (AC-10, разбита по модулям —
+конвенция запрещает гонять полный `tests/` в шаге), и юнит-тесты на сам
+`zone_lock.py`.
+
+Проверкой обнаружен и закрыт один реальный дефект унаследованной
+реализации: `zone_lock.cmd_zone_reorder` писал позицию очереди прямым
+`conn.execute("UPDATE tasks ...")`, нарушая ADR-0003 3ж («SQL живёт
+только в `store.py`») — тест `tests/test_multitarget.py::
+SqlOnlyInStoreTest::test_no_sql_outside_store` ловит это буквальным
+грепом ключевых слов SQL по `orchestrator/*.py`, кроме `store.py`.
+Заменено вызовом уже существующей единой точки `store.update_task`
+(`store.py:419`); заодно поправлен комментарий в докстринге
+`zone_lock.py` (абзац 3), случайно содержавший то же слово-триггер
+регэкспа теста.
 
 ## Шаги
 1. Проверить и (при необходимости) доработать реализацию занятости зоны
@@ -73,14 +86,29 @@ schema_version: 4
    `auto.py`, `catalog.py`, `doctor.py`, `config.py`, `store.py`,
    `artel.py`) — прогон приёмочных тестов `tasks/
    01M1P9QAG65GVF69YJEV0V18D9/acceptance_tests/` до зелёного состояния.
+   Найден и закрыт дефект: прямой SQL в `zone_lock.cmd_zone_reorder`
+   (ADR-0003 3ж) — заменён на `store.update_task`.
 2. Юнит-тесты `tests/test_zone_lock.py` на публичные функции
    `zone_lock.py` (диапазон блокирующих состояний, общие зоны, снятие по
    мержу/kill, очередь, CLI-команды) — расширяют покрытие сверх сценариев
    приёмочных тестов там, где это оправдано (граничные значения,
    `queue_order` со смешанным natural/explicit порядком).
-3. Регрессия: полный прогон `tests/` — ни один существующий тест не
-   ослаблен и не отключён (AC-10); регенерация `docs/codebase-map.md`
-   (новый модуль `zone_lock.py`).
+3. Регрессия по модулям, затронутым интеграцией (`tests/test_zone_lock.py`,
+   и все тесты, импортирующие `runner.py`/`auto.py`/`catalog.py`/
+   `doctor.py`/`store.py`, вызывающие `runner.cmd_run`/`run_agent_once` —
+   `test_acceptance_tests_flow`, `test_advance_refusal_history`,
+   `test_agent_failure`, `test_agent_log`, `test_agent_prompt`,
+   `test_analyst_role`, `test_auto_cycle`, `test_brief`,
+   `test_diff_not_collected_alerts`, `test_doctor`,
+   `test_failure_classification`, `test_git_fixation`, `test_invariants`,
+   `test_multitarget`, `test_multitarget_invariants`,
+   `test_review_freshness`, `test_review_package`, `test_step_cost`,
+   `test_step_refixation`, `test_stall_alerts`, `test_store_journal`,
+   `test_store_schema_migration_parity`, `test_store_db_connection_close`,
+   `test_catalog_status_log`, `test_catalog_new_race`,
+   `test_new_argv_parsing`) — все зелёные, ни один не ослаблен и не
+   отключён (AC-10); регенерация `docs/codebase-map.md` (новый модуль
+   `zone_lock.py`).
 
 ## Покрытие требований
 
