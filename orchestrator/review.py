@@ -5,6 +5,13 @@ from . import artifact_source, brief, config, context_package, gitcmd, store
 
 WORKTREE_NOTE = " (в ветке нет, показан файл из рабочего дерева)"
 
+# Плейсхолдер `git_diff_part` для реально пустого diff — вынесен в константу
+# (tasks/01M1RA0N6FCFEQBB82K58GM12X, R1-F1, REVIEW.md итерации 1-3): вызывающий
+# код, которому нужен именно БАЙТОВЫЙ РАЗМЕР diff'а (не текст для показа
+# ревьюверу), обязан отличать эту строку от настоящего содержимого — иначе
+# успешный-но-пустой diff меряется как N байт текста плейсхолдера вместо 0.
+EMPTY_DIFF_TEXT = "(изменений нет)"
+
 
 def artifact_text(branch: str, rel: str) -> tuple[str | None, str]:
     """Текст файла из ветки задачи и пометка об источнике.
@@ -111,7 +118,7 @@ def git_diff_part(base: str, branch: str, *flags: str,
     if res.returncode != 0:
         reason = res.stderr.strip()[:200] or f"git diff вернул {res.returncode}"
         return f"(не собран: {reason})", 0, reason
-    return res.stdout.strip() or "(изменений нет)", len(res.stdout.splitlines()), ""
+    return res.stdout.strip() or EMPTY_DIFF_TEXT, len(res.stdout.splitlines()), ""
 
 
 def _answer_rels(task_id: str, branch: str) -> list[str]:

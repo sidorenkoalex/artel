@@ -20,7 +20,7 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from orchestrator import fsm_advance, gitcmd, store  # noqa: E402
+from orchestrator import fsm_advance, gitcmd, review, store  # noqa: E402
 from tests.sandbox import TmpRootTest  # noqa: E402
 
 
@@ -137,6 +137,36 @@ class CapacityGateTwoNumbersMessageTest(TmpRootTest):
         self.assertIn(
             str(len(artifacts_body)), details,
             "журнал обязан назвать размер diff артефактов (tasks/<id>/)")
+
+    def test_empty_artifacts_diff_reports_zero_bytes_not_placeholder_size(self):
+        """R1-F1, REVIEW.md итерации 1-3: `tasks/<id>/` реально не менялся
+        — git отвечает пустым stdout, `git_diff_part` подставляет для показа
+        строку-плейсхолдер `review.EMPTY_DIFF_TEXT`. Вторая цифра сообщения
+        обязана быть 0, а не байтовым размером этого плейсхолдера."""
+        code_body = "x" * 300_000
+
+        def git_diff(*args) -> subprocess.CompletedProcess:
+            if args and args[0] == "diff":
+                if f":!tasks/{self.task_id}/" in args:
+                    return subprocess.CompletedProcess(
+                        list(args), 0, code_body, "")
+                if f"tasks/{self.task_id}/" in args:
+                    return subprocess.CompletedProcess(list(args), 0, "", "")
+            return subprocess.CompletedProcess(list(args), 0, "", "")
+
+        refused = self._refuses_with(git_diff)
+
+        self.assertTrue(refused)
+        details = "\n".join(self.journal_details())
+        self.assertIn(
+            "0 байт", details,
+            "diff артефактов реально пуст — вторая цифра обязана быть 0, "
+            "не размер строки-плейсхолдера")
+        placeholder_size = len(review.EMPTY_DIFF_TEXT.encode("utf-8"))
+        self.assertNotIn(
+            f"{placeholder_size} байт", details,
+            "вторая цифра не имеет права быть байтовым размером строки "
+            "«(изменений нет)» — это плейсхолдер для показа, не diff")
 
     def test_artifacts_diff_failure_does_not_invent_a_number(self):
         """Второй diff (только `tasks/<id>/`) не отвечает — отказ уже

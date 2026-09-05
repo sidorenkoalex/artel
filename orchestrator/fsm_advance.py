@@ -16,6 +16,7 @@ from . import (acceptance, agent_log, artifact_source, artifacts, budget,
 # же модуль ниже определяет обработчик состояния `review` под тем же
 # именем `review` — `from . import review` тут вело бы к коллизии имён,
 # как только определение функции переопределит имя модуля.
+from .review import EMPTY_DIFF_TEXT as _EMPTY_DIFF_TEXT
 from .review import git_diff_part as _review_git_diff_part
 
 # Причина отказа гейта ёмкости — дословно (tasks/01M1GCN1FPSC1A6WK9WD1Q1V8X,
@@ -444,6 +445,14 @@ def _capacity_gate_refuses(conn, task_id: str, t, state: str) -> bool:
     цифра (код) уже превысила потолок — вторая цифра в сообщении в этом
     случае явно названа «неизвестна», а не вымышленным числом.
 
+    Diff артефактов реально пуст (git ответил успешно, но пустой строкой) —
+    вторая цифра обязана быть 0, а не байтовым размером строки-плейсхолдера
+    `review.EMPTY_DIFF_TEXT`, которую `git_diff_part` подставляет для показа
+    (R1-F1, REVIEW.md итерации 1-3): сравнение с этой константой явно
+    отличает «пусто» от «есть содержимое» перед подсчётом байт — тем же
+    приёмом мерится и `code_size` ниже, хотя там пустой код-diff и так не
+    превысил бы потолок.
+
     Внешний (не self) target — гейт не проверяется вовсе, тем же
     доводом «сознательно вне объёма этой итерации», что уже
     зафиксирован парой функций выше в этом же файле для лока
@@ -472,13 +481,16 @@ def _capacity_gate_refuses(conn, task_id: str, t, state: str) -> bool:
               f"{config.MAIN_BRANCH}...{t['branch']}, и повтори "
               f"artel.py advance {task_id}")
         return True
-    code_size = len(code_diff.encode("utf-8"))
+    code_size = (0 if code_diff == _EMPTY_DIFF_TEXT
+                else len(code_diff.encode("utf-8")))
     if code_size <= config.REVIEW_SNAPSHOT_DIFF_MAX_BYTES:
         return False
     artifacts_diff, _, artifacts_reason = _review_git_diff_part(
         config.MAIN_BRANCH, t["branch"], pathspec=(tasks_prefix,))
     if artifacts_reason:
         artifacts_note = f"неизвестен (git не ответил: {artifacts_reason})"
+    elif artifacts_diff == _EMPTY_DIFF_TEXT:
+        artifacts_note = "0 байт (изменений нет)"
     else:
         artifacts_note = f"{len(artifacts_diff.encode('utf-8'))} байт"
     detail = (f"{CAPACITY_GATE_REASON} ({task_id} «{t['title']}»): diff "
