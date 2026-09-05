@@ -32,6 +32,13 @@ SPEC «Не входит») он останется зелёным ТОЛЬКО 
 без роли (шаг б); (2) стоп-кран повторного одинакового отказа `advance`
 (шаг г) с остановкой (шаг д); (3) исчерпание лимита шагов (шаг г) с
 остановкой (шаг д) при реально бегущей роли на каждом шаге (шаг в).
+
+Каждый сценарий несёт по два тестовых метода (`test_ac3_...`/
+`test_ac6_...`) на одной и той же паре setup/assert: guard
+(`scripts/guard.py::TEST_AC`) трассирует ровно один номер AC на имя
+метода, поэтому общий префикс `test_ac3_ac6_...` не даёт AC-6 отдельной
+трассируемой записи — раздельные имена нужны именно для трассируемости,
+не потому что сценарии проверяют разное поведение.
 """
 import re
 import sys
@@ -163,45 +170,27 @@ _FIXTURE_3_JOURNAL = [
 
 class RecordedScenariosMatchPreRefactorFixtureTest(AutoCycleTest):
     """AC-3/AC-6: три сценария цикла `auto`, сравненные буквально с
-    выводом дорефакторинговой реализации."""
+    выводом дорефакторинговой реализации.
 
-    def test_ac3_ac6_rework_gate_refusal_then_role_run_then_transition(self):
-        """Сценарий 1: `in_dev` со свежей записью «замечания ревью,
-        итерация 2» без завершённого шага developer после неё — рубеж
-        держит пред-advance (шаг а), роль всё равно получает шанс
-        отработать (шаг в), затем пред-advance следующей итерации
-        проходит по готовому PLAN.md мимо роли (шаг б), и цикл
-        останавливается стоп-краном буксования в `review` (шаг г/д).
+    Каждый сценарий несёт ДВА тестовых метода на разные критерии
+    (`test_ac3_...`/`test_ac6_...`, guard `scripts/guard.py::TEST_AC`
+    трассирует ровно один номер AC на имя метода — общий префикс
+    `test_ac3_ac6_` не даёт AC-6 отдельной трассируемой записи): AC-3 —
+    свойство буквального совпадения текстов, AC-6 — существование
+    самого теста-сравнения с записанной фикстурой. Проверка одна и та
+    же (сравнение с той же фикстурой) — это две стороны ОДНОГО факта:
+    тест ЕСТЬ (AC-6) и то, что он проверяет буквальное совпадение
+    (AC-3), не два разных наблюдаемых поведения.
+    """
 
-        Ловит мутацию: любая правка текста рубежа `_rework_not_addressed_
-        reason`/`REWORK_REFUSAL_ACTION`, сообщения «шаг X не нужен...»,
-        нумерации `auto шаг N/M` или причины стоп-крана буксования —
-        байт-в-байт сравнение с зафиксированной фикстурой покраснеет на
-        первой же разошедшейся строке.
-        """
+    def _scenario_1_setup(self):
         self.write_plan("ready")
         self.set_state("in_dev")
         store.journal(store.db(), self.TASK, "fsm", "state -> in_dev",
                       "замечания ревью, итерация 2")
         self.agent.script = [lambda: None]
 
-        out = self.auto()
-        rows = self.journal_rows()
-
-        self.assertEqual(_FIXTURE_1_STDOUT, _normalize(out, self.TASK))
-        self.assertEqual(_FIXTURE_1_JOURNAL, _normalized_journal(rows, self.TASK))
-
-    def test_ac3_ac6_identical_advance_refusal_twice_in_a_row_stops(self):
-        """Сценарий 2: `fsm.cmd_advance` дважды подряд журналирует ОДИН и
-        тот же текст отказа — стоп-кран требования 1 (SPEC T038, шаг г)
-        останавливает цикл (шаг д) до единого запуска роли.
-
-        Ловит мутацию: правка текста подсказки «почини причину и повтори
-        artel.py advance...», порядка причины/подсказки в `auto_stop`,
-        либо снятие самого стоп-крана (цикл дошёл бы до `runner.cmd_run` —
-        `self.agent.calls` в журнале появилась бы запись `agent run
-        finished`, которой в фикстуре нет) — сравнение покраснеет.
-        """
+    def _scenario_2_setup(self):
         self.patch_object(config, "AUTO_STALL_STEPS_LIMIT",
                           config.AUTO_MAX_STEPS + 1)
         self.write_plan("ready")
@@ -211,32 +200,100 @@ class RecordedScenariosMatchPreRefactorFixtureTest(AutoCycleTest):
         text = "переход отклонён: рабочая копия артефактов грязная"
         advance.script = [text, text]
 
+    def _scenario_3_setup(self):
+        self.patch_object(config, "AUTO_MAX_STEPS", 2)
+        self.write_plan("draft")
+        self.set_state("in_dev")
+        self.agent.script = [lambda: None, lambda: None]
+
+    def _assert_matches_fixture(self, stdout_fixture, journal_fixture):
         out = self.auto()
         rows = self.journal_rows()
+        self.assertEqual(stdout_fixture, _normalize(out, self.TASK))
+        self.assertEqual(journal_fixture, _normalized_journal(rows, self.TASK))
 
-        self.assertEqual(_FIXTURE_2_STDOUT, _normalize(out, self.TASK))
-        self.assertEqual(_FIXTURE_2_JOURNAL, _normalized_journal(rows, self.TASK))
+    def test_ac3_rework_gate_refusal_then_role_run_then_transition(self):
+        """Сценарий 1: `in_dev` со свежей записью «замечания ревью,
+        итерация 2» без завершённого шага developer после неё — рубеж
+        держит пред-advance (шаг а), роль всё равно получает шанс
+        отработать (шаг в), затем пред-advance следующей итерации
+        проходит по готовому PLAN.md мимо роли (шаг б), и цикл
+        останавливается стоп-краном буксования в `review` (шаг г/д).
+        Проверяет AC-3: тексты после рефакторинга буквально совпадают.
 
-    def test_ac3_ac6_step_limit_exhausted_with_the_role_running_each_step(self):
+        Ловит мутацию: любая правка текста рубежа `_rework_not_addressed_
+        reason`/`REWORK_REFUSAL_ACTION`, сообщения «шаг X не нужен...»,
+        нумерации `auto шаг N/M` или причины стоп-крана буксования —
+        байт-в-байт сравнение с зафиксированной фикстурой покраснеет на
+        первой же разошедшейся строке.
+        """
+        self._scenario_1_setup()
+        self._assert_matches_fixture(_FIXTURE_1_STDOUT, _FIXTURE_1_JOURNAL)
+
+    def test_ac6_rework_gate_refusal_then_role_run_then_transition(self):
+        """Сценарий 1 (см. `test_ac3_...` выше для описания сценария) —
+        тот же прогон, засчитанный на AC-6: сам факт существования теста,
+        сравнивающего вывод `auto` с фикстурой, записанной с
+        дорефакторинговой реализации, на этом сценарии.
+
+        Ловит мутацию: та же, что и у `test_ac3_...` — расхождение с
+        зафиксированной фикстурой на любой строке.
+        """
+        self._scenario_1_setup()
+        self._assert_matches_fixture(_FIXTURE_1_STDOUT, _FIXTURE_1_JOURNAL)
+
+    def test_ac3_identical_advance_refusal_twice_in_a_row_stops(self):
+        """Сценарий 2: `fsm.cmd_advance` дважды подряд журналирует ОДИН и
+        тот же текст отказа — стоп-кран требования 1 (SPEC T038, шаг г)
+        останавливает цикл (шаг д) до единого запуска роли. Проверяет
+        AC-3: тексты после рефакторинга буквально совпадают.
+
+        Ловит мутацию: правка текста подсказки «почини причину и повтори
+        artel.py advance...», порядка причины/подсказки в `auto_stop`,
+        либо снятие самого стоп-крана (цикл дошёл бы до `runner.cmd_run` —
+        `self.agent.calls` в журнале появилась бы запись `agent run
+        finished`, которой в фикстуре нет) — сравнение покраснеет.
+        """
+        self._scenario_2_setup()
+        self._assert_matches_fixture(_FIXTURE_2_STDOUT, _FIXTURE_2_JOURNAL)
+
+    def test_ac6_identical_advance_refusal_twice_in_a_row_stops(self):
+        """Сценарий 2 (см. `test_ac3_...` выше для описания сценария) —
+        тот же прогон, засчитанный на AC-6: сам факт существования теста,
+        сравнивающего вывод `auto` с фикстурой, записанной с
+        дорефакторинговой реализации, на этом сценарии.
+
+        Ловит мутацию: та же, что и у `test_ac3_...` — расхождение с
+        зафиксированной фикстурой, включая лишний запуск роли.
+        """
+        self._scenario_2_setup()
+        self._assert_matches_fixture(_FIXTURE_2_STDOUT, _FIXTURE_2_JOURNAL)
+
+    def test_ac3_step_limit_exhausted_with_the_role_running_each_step(self):
         """Сценарий 3: `AUTO_MAX_STEPS = 2`, PLAN.md ещё `draft` — роль
         реально запускается на каждом шаге (шаг в), и цикл останавливается
         ровно на исчерпании лимита (шаг г/д), не раньше и не позже.
+        Проверяет AC-3: тексты после рефакторинга буквально совпадают.
 
         Ловит мутацию: сдвиг нумерации `auto шаг N/M` (например, N с 0 или
         M без учёта текущего `AUTO_MAX_STEPS`), лишний или пропущенный шаг
         до остановки, либо правка формулировки «лимит N шагов за вызов
         исчерпан» — байт-в-байт сравнение с фикстурой покраснеет.
         """
-        self.patch_object(config, "AUTO_MAX_STEPS", 2)
-        self.write_plan("draft")
-        self.set_state("in_dev")
-        self.agent.script = [lambda: None, lambda: None]
+        self._scenario_3_setup()
+        self._assert_matches_fixture(_FIXTURE_3_STDOUT, _FIXTURE_3_JOURNAL)
 
-        out = self.auto()
-        rows = self.journal_rows()
+    def test_ac6_step_limit_exhausted_with_the_role_running_each_step(self):
+        """Сценарий 3 (см. `test_ac3_...` выше для описания сценария) —
+        тот же прогон, засчитанный на AC-6: сам факт существования теста,
+        сравнивающего вывод `auto` с фикстурой, записанной с
+        дорефакторинговой реализации, на этом сценарии.
 
-        self.assertEqual(_FIXTURE_3_STDOUT, _normalize(out, self.TASK))
-        self.assertEqual(_FIXTURE_3_JOURNAL, _normalized_journal(rows, self.TASK))
+        Ловит мутацию: та же, что и у `test_ac3_...` — сдвиг нумерации
+        шагов или лишний/пропущенный шаг до остановки.
+        """
+        self._scenario_3_setup()
+        self._assert_matches_fixture(_FIXTURE_3_STDOUT, _FIXTURE_3_JOURNAL)
 
 
 if __name__ == "__main__":
