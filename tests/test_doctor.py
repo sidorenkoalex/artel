@@ -30,12 +30,20 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from orchestrator import (alerts, budget, catalog, config, doctor,  # noqa: E402
                           gitcmd, liveness, projects, runner, spend, store)
+from tests import sandbox as sandbox_module  # noqa: E402
 from tests.sandbox import (FakeStream, TmpRootTest, capture,  # noqa: E402
                            capture_new_task_id, claude_only_popen,
                            claude_only_run, disk_backed_ls_tree_files,
                            disk_backed_show, fake_git, sync_spec_from_worktree)
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
+
+# Захвачен ДО любого мокинга `shutil.which` в тестах ниже (SPEC
+# 01M1RDCEF0JZ4AVQRE43JFH8TN): `orchestrator.runner.role_env` теперь тоже
+# резолвит инструменты манифеста через `shutil.which` — стабы doctor'а,
+# отвечающие только на `claude`, должны отвечать НАСТОЯЩИМИ путями и на
+# `git`/`gh`/`python3`, иначе `role_env` считает их отсутствующими.
+_REAL_WHICH = shutil.which
 
 TARGETS_YAML_DOGFOOD_ONLY = """targets:
   artel:
@@ -183,7 +191,13 @@ class DoctorCommandTest(TmpRootTest):
     """Критерий 1: здоровый репо — все проверки ок, код 0; сломанный — провалы, код ≠0."""
 
     def which(self, name):
-        return "/usr/bin/claude" if name == "claude" else None
+        if name == "claude":
+            return "/usr/bin/claude"
+        # git/gh/python3 — реальные пути (SPEC 01M1RDCEF0JZ4AVQRE43JFH8TN,
+        # AC-1/AC-6): `role_env` внутри `isolation_smoke`/`live_smoke`
+        # обязан находить их, иначе «здоровый репо» перестаёт быть
+        # здоровым по причине, не связанной с проверяемым сценарием.
+        return _REAL_WHICH(name)
 
     def healthy_mocks(self):
         """Контекст-менеджер, под которым все проверки doctor проходят чисто."""
@@ -1979,6 +1993,56 @@ class LiveSmokeTest(TmpRootTest):
     def test_command_exists_and_is_wired_into_doctor(self):
         self.assertTrue(callable(doctor.live_smoke))
         self.assertTrue(callable(doctor.cmd_doctor))
+
+
+class _RoleHomeReferenceTmpRootTest(sandbox_module.TmpRootTest):
+    """Сужение `TmpRootTest`: только `ROLE_HOME`/`ROLE_CONFIG_DIR` во
+    временном каталоге — `ROOT` остаётся настоящим деревом репозитория,
+    тот же приём, что и в приёмочном тесте AC-13 этой же задачи
+    (`tasks/01M1RDCEF0JZ4AVQRE43JFH8TN/acceptance_tests/
+    test_ac13_doctor_role_home_reference_diff.py`)."""
+
+    PATCHED_ATTRS = ("ROLE_HOME", "ROLE_CONFIG_DIR")
+
+    def setUp(self):
+        super().setUp()
+        self.reference = (config.ROOT / "docs" / "reference" / "role-home"
+                          / "claude")
+        shutil.copytree(self.reference, config.ROLE_CONFIG_DIR)
+
+
+class RoleHomeReferenceExtraFilesTest(_RoleHomeReferenceTmpRootTest):
+    """Регресс REVIEW.md 01M1RDCEF0JZ4AVQRE43JFH8TN итерации 1, R1-F1:
+    сравнение симметрической разностью деревьев файлов давало WARN на
+    ЛЮБОМ файле развёрнутого слоя, которого нет в референсе — а такое
+    разрастание легитимно (docs/reference/role-home.md, «Курирование»;
+    рантайм-файлы `claude` CLI внутри `CLAUDE_CONFIG_DIR`)."""
+
+    def test_extra_file_absent_from_reference_is_not_a_warn(self):
+        """Ловит мутацию: возврат к сравнению `ref_files ^ dep_files`
+        (симметрическая разность) вместо сверки только файлов
+        референса — та регрессия завела бы WARN на лишнем файле ниже."""
+        (config.ROLE_CONFIG_DIR / "session-cache.json").write_text(
+            "{}", encoding="utf-8")
+
+        check = doctor.check_role_home_reference()
+
+        self.assertNotEqual(check.status, "warn",
+                            f"лишний файл развёрнутого слоя не должен "
+                            f"давать WARN: {check.detail}")
+
+    def test_extra_subdirectory_is_not_a_warn(self):
+        """То же самое для целого поддерева, а не одного файла —
+        например, MCP-конфиг, добавленный Оператором вручную."""
+        extra_dir = config.ROLE_CONFIG_DIR / "mcp"
+        extra_dir.mkdir()
+        (extra_dir / "config.json").write_text("{}", encoding="utf-8")
+
+        check = doctor.check_role_home_reference()
+
+        self.assertNotEqual(check.status, "warn",
+                            f"лишнее поддерево не должно давать WARN: "
+                            f"{check.detail}")
 
 
 if __name__ == "__main__":
