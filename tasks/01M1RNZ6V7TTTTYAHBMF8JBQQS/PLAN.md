@@ -156,6 +156,44 @@ review/verifying) — риск минимален: смена `cwd` только
 кладёт планку по штатной вложенности `tasks/<id>/acceptance_tests/`
 worktree, так что `__file__`-путь резолвинга не менялся никогда.
 
+## Подтяжка main (ANSWER-2, hotfix 88b38022)
+
+Пока задача была в разработке, в main вошёл аварийный hotfix
+(88b38022, ADR-0013), частично закрывающий ту же регрессию:
+`acceptance.run(tdir, code_root=None)` — тот же смысл, что `cwd` этой
+задачи, но под именем `code_root`; `fsm._pull_main_or_escalate`
+передавал `workspace.path(task_id)` для self-target, без
+материализации на месте (планка читалась из временного каталога
+регрессии №12, только `cwd` был правильный).
+
+Влита `origin/main` (merge-коммит поверх R1-F1/R1-F2), два конфликта
+(`orchestrator/acceptance.py`, `orchestrator/fsm.py`) разрешены в
+пользу реализации этой ветки (материализация НА МЕСТЕ в рабочий
+каталог кода, без `tempfile`/`shutil.rmtree`) с переименованием
+публичного параметра `acceptance.run` с `cwd` на `code_root` — имя
+из hotfix, зафиксированное ANSWER-2 как контракт. Переименование
+докатано по всем вызывающим узлам одним отдельным коммитом:
+`fsm_advance.py::review` (`cwd=run_cwd` → `code_root=run_cwd`) и два
+теста (`test_branch_freshness_gate.py`,
+`test_fsm_map_conflict_autoresolve.py`: `kwargs.get("cwd")` →
+`kwargs.get("code_root")`). `fsm.py::_pull_main_or_escalate` уже
+использовал материализацию на месте (шаг 2 этого PLAN) — при
+разрешении конфликта её ветка HEAD взята целиком, только имя
+параметра приведено к `code_root`.
+
+Прогон после подтяжки: `test_branch_freshness_gate`,
+`test_fsm_map_conflict_autoresolve`, `test_acceptance`,
+`test_fsm_autogate`, `test_artifact_materialization`, `test_amend`,
+`test_dry_run`, `test_multitarget`, `test_multitarget_invariants` —
+122/122; `test_zones_gate`, `test_capacity_gate`, `test_advance_guard`,
+`test_review_registry_gate`, `test_merge_gate_ci_wait`,
+`test_verifying_ceiling`, `test_fsm_draft_mr_reentry`, `test_canary` —
+101/101. Локальная приёмочная планка задачи — 11/11 (AC-1..AC-9,
+включая намеренно-красные AC-6/AC-7). `docs/codebase-map.md`
+перегенерирована мерж-коммитом (только `built_at_sha`). R1-F1
+(различение `None`/`[]` у `ls_tree_files`) осталось в силе после
+слияния — HEAD-версия `materialize_from_branch` взята без изменений.
+
 ## Предложения системе
 
 Нет.
