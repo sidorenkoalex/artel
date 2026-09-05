@@ -1,5 +1,5 @@
 ---
-built_at_sha: 7166fb1c40afe019a2c0682954a8f13a88694b39
+built_at_sha: dbf2adb2a7a866e1c23c12d43831f18cca0e24c6
 ---
 
 # Codebase-map пульта
@@ -652,6 +652,10 @@ built_at_sha: 7166fb1c40afe019a2c0682954a8f13a88694b39
 
 **Публичные функции:**
 - `cmd_report`
+- `map_growth_calibration_median`
+- `map_growth_cost_estimate`
+- `map_growth_open_alerts`
+- `map_size_table_rows`
 - `token_rate_divergence`
 
 **Импортирует:** `orchestrator/agent_log.py`, `orchestrator/alerts.py`, `orchestrator/config.py`, `orchestrator/spend.py`, `orchestrator/store.py`
