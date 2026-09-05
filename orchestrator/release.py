@@ -17,6 +17,8 @@
 предупреждение только информирует, снятие не блокирует и подтверждения
 не запрашивает.
 """
+import socket
+
 from . import lease, liveness, store
 from .session import resolve_session_id
 
@@ -49,6 +51,18 @@ def cmd_release(task_id: str) -> None:
     age = int(liveness._age_seconds(row["heartbeat_ts"]))
     detail = (f"session_id={row['session_id']}, pid={row['pid']}, "
              f"hostname={row['hostname']}, heartbeat {age} сек назад")
+
+    # Остаточная группа процессов записанного AC-2 агентного шага (SPEC
+    # 01M1PNBSHR2PMFECMP7C204MF1, AC-6, ANSWER-1 вариант B): немедленный
+    # путь — без флага, в отличие от `doctor.check_leases`, где то же
+    # добивание мёртвого lease гейтуется `--fix`. Свой host — та же
+    # защита от случайного попадания в ЛОКАЛЬНЫЙ pgid, что уже применяет
+    # `pause.cmd_pause_now`/`cleanup._group_kill_lease_step` к чужому host.
+    if row["hostname"] == socket.gethostname() and row["pgid"]:
+        count = liveness.terminate_process_group(row["pgid"])
+        store.journal(conn, task_id, "operator",
+                      "release: группа процессов шага снята",
+                      liveness.group_kill_detail(row["pgid"], count))
     # `release_lease` сносит строку, только если session_id совпадает с
     # только что прочитанным — строка не поменялась своим держателем между
     # чтением и сносом (перехват другой сессией между `lease_row` и этим

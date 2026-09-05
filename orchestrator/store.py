@@ -60,7 +60,7 @@ CREATE TABLE IF NOT EXISTS alerts_archive (
 );
 CREATE TABLE IF NOT EXISTS leases (
   task_id TEXT PRIMARY KEY, session_id TEXT, pid INTEGER, hostname TEXT,
-  heartbeat_ts TEXT
+  heartbeat_ts TEXT, pgid INTEGER
 );
 CREATE TABLE IF NOT EXISTS merge_locks (
   task_id TEXT, session_id TEXT, pid INTEGER, hostname TEXT,
@@ -268,6 +268,12 @@ def migrate(conn: sqlite3.Connection) -> None:
         "CREATE TABLE IF NOT EXISTS leases ("
         "  task_id TEXT PRIMARY KEY, session_id TEXT, pid INTEGER,"
         "  hostname TEXT, heartbeat_ts TEXT);")
+    # pid группы (pgid) агентного шага (SPEC 01M1PNBSHR2PMFECMP7C204MF1,
+    # AC-2) — рядом с существующим `pid` (представляющим держателя lease,
+    # не спавненный агентный процесс): пути group-kill (timeout/kill/
+    # pause --now/release, AC-3..AC-6) читают его отсюда. NULL — лиза
+    # старше этой задачи либо шаг ещё не успел его записать.
+    add_column(conn, "leases", "pgid", "INTEGER")
     # Мьютекс merge-окна (SPEC T053, требование 1): один держатель на весь
     # пульт, не per-task, как `leases` — `task_id` здесь не ключ, а поле
     # «какую задачу держит сессия», по конвенции не более одной строки.
@@ -837,6 +843,17 @@ def update_lease(conn, task_id: str, session_id: str, pid: int,
     conn.execute(
         "UPDATE leases SET session_id=?, pid=?, hostname=?, heartbeat_ts=? "
         "WHERE task_id=?", (session_id, pid, hostname, heartbeat_ts, task_id))
+    conn.commit()
+
+
+def update_lease_pgid(conn, task_id: str, pgid: int) -> None:
+    """Записывает pgid спавненного агентного процесса шага (SPEC
+    01M1PNBSHR2PMFECMP7C204MF1, AC-2) в уже существующую строку lease,
+    не трогая остальные поля (`pid` держателя lease обязан остаться
+    прежним — AC-2, `_sandbox.AgentStepSandbox.assert_lease_pid_unchanged`).
+    Лизы может не быть вовсе (шаг запущен в обход `lease.acquire`,
+    например тестами) — тогда `UPDATE` тихо не меняет ни одной строки."""
+    conn.execute("UPDATE leases SET pgid=? WHERE task_id=?", (pgid, task_id))
     conn.commit()
 
 
