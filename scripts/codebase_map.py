@@ -190,6 +190,8 @@ def map_stats(map_text: str) -> dict:
         result["bytes_projection"] = len(
             project_for_brief(map_text).encode("utf-8"))
     return result
+
+
 _SECTION_START_RE = re.compile(r"(?m)^(?=## )")
 _SECTION_FIELDS = ("purpose", "functions", "imports", "imported_by")
 # Поля, оставляемые проекцией по виду секции (SPEC

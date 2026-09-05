@@ -131,6 +131,9 @@ MAP_TEXT = (
 
 class MapStatsTest(unittest.TestCase):
     def test_is_pure_no_disk_or_subprocess(self):
+        """Ловит мутацию: `map_stats` читает файл с диска или зовёт
+        subprocess (например, ходит в git за sha) вместо разбора только
+        переданного текста карты (AC-1: чистая функция)."""
         def boom(*a, **kw):
             raise AssertionError("не должна трогать диск/subprocess")
 
@@ -141,17 +144,27 @@ class MapStatsTest(unittest.TestCase):
         self.assertIsInstance(result, dict)
 
     def test_bytes_total_and_sections_total(self):
+        """Ловит мутацию: `bytes_total` считается по числу символов, а не
+        байт utf-8 входного текста; `sections_total` считает не секции
+        верхнего уровня (например, все `##`-заголовки без разбора уровня
+        вложенности) — на фикстуре из трёх секций дал бы иное число."""
         result = codebase_map.map_stats(MAP_TEXT)
         self.assertEqual(result["bytes_total"], len(MAP_TEXT.encode("utf-8")))
         self.assertEqual(result["sections_total"], 3)
 
     def test_bytes_by_dir_covers_three_directories(self):
+        """Ловит мутацию: `bytes_by_dir` пропускает один из трёх каталогов
+        перечня (`orchestrator/`, `scripts/`, `tests/`) или приписывает
+        секцию не тому каталогу — размер по каталогу останется нулевым."""
         result = codebase_map.map_stats(MAP_TEXT)
         self.assertEqual(set(result["bytes_by_dir"]),
                          {"orchestrator", "scripts", "tests"})
         self.assertTrue(all(v > 0 for v in result["bytes_by_dir"].values()))
 
     def test_top_sections_sorted_descending_with_name_and_bytes(self):
+        """Ловит мутацию: `top_sections` не отсортирован по убыванию
+        размера (например, по порядку появления в карте) или несёт не
+        все секции карты с их именами/размерами."""
         result = codebase_map.map_stats(MAP_TEXT)
         top = result["top_sections"]
         self.assertEqual(len(top), 3, "меньше пяти секций всего — все войдут")
@@ -172,10 +185,16 @@ class MapStatsTest(unittest.TestCase):
             len(codebase_map.project_for_brief(MAP_TEXT).encode("utf-8")))
 
     def test_result_is_compact_single_line_json_serializable(self):
+        """Ловит мутацию: результат несёт значение, несериализуемое в
+        компактный однострочный JSON (например, `set` вместо списка в
+        `top_sections`), или сериализация с дефолтными разделителями
+        `json.dumps` вносит переносы строк/лишние пробелы (AC-4)."""
         result = codebase_map.map_stats(MAP_TEXT)
         compact = json.dumps(result, ensure_ascii=False, separators=(",", ":"))
         self.assertNotIn("\n", compact)
         self.assertEqual(json.loads(compact), result)
+
+
 class RepoRootTest(unittest.TestCase):
     """`codebase_map.repo_root` (SPEC 01M1SAA01YRRTWAVADT2F81RRQ, AC-4/AC-7):
     приёмочные тесты залоченной планки уже гоняют её через `main()` на

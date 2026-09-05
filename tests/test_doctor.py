@@ -2031,6 +2031,10 @@ class MapGrowthCheckTest(TmpRootTest):
                       doctor.MAP_SIZE_ACTION, detail)
 
     def test_calibration_window_is_silent(self):
+        """Ловит мутацию: проверка заводит алерт или молчит с неверным
+        счётчиком уже на первой записи ряда, до заполнения окна
+        калибровки (AC-9) — статус должен остаться `ok` с текстом
+        «1/K измерений», без записи в `alerts`."""
         task = self.make_task()
         self.add_step(task, 100_000)
 
@@ -2042,7 +2046,35 @@ class MapGrowthCheckTest(TmpRootTest):
                       check.detail)
         self.assertEqual(alerts.open_alerts(self.conn, "trigger"), [])
 
+    def test_exact_calibration_length_is_still_silent(self):
+        """R1-F2: ровно на k-й записи (окно калибровки только что
+        заполнилось) проверка не должна оценивать эту же запись против
+        базы, посчитанной с её собственным участием — иначе сама
+        завершающая калибровку запись могла бы дать самоссылочный алерт.
+        Ловит мутацию: условие `len(series) < k` вместо `<= k` — k-я
+        запись (здесь — резкий выброс) оценивается против медианы окна,
+        включающего её саму, и молчание AC-9 нарушается на один ход
+        раньше срока."""
+        task = self.make_task()
+        k = config.MAP_GROWTH_CALIBRATION_MERGES
+        base = 1_000_000
+        for _ in range(k - 1):
+            self.add_step(task, base)
+        self.add_step(task, base * 10)
+
+        checks = {c.name: c for c in doctor.check_map_growth(self.conn)}
+
+        check = checks["map-growth:artel"]
+        self.assertEqual(check.status, "ok")
+        self.assertIn(f"{k}/{k}", check.detail)
+        self.assertEqual(alerts.open_alerts(self.conn, "trigger"), [])
+
     def test_creep_beyond_ratio_raises_a_trigger(self):
+        """Ловит мутацию: ползучий рост (последняя запись выше медианы
+        зафиксированного окна калибровки более чем на `MAP_GROWTH_RATIO`)
+        не сравнивается с медианой окна вовсе или сравнивается с неверной
+        величиной (например, с предыдущей записью вместо базы) — алерт
+        `map.growth` не заводится либо заводится не единожды."""
         task = self.make_task()
         k = config.MAP_GROWTH_CALIBRATION_MERGES
         base = 1_000_000
@@ -2058,6 +2090,11 @@ class MapGrowthCheckTest(TmpRootTest):
         self.assertEqual(len(triggers), 1)
 
     def test_jump_between_adjacent_records_raises_a_trigger(self):
+        """Ловит мутацию: скачок между двумя соседними записями
+        (`MAP_JUMP_RATIO` от предпоследней) сравнивается с медианой окна
+        калибровки вместо предпоследней записи — независимый от ползучего
+        роста сигнал перестал бы срабатывать на приросте ниже
+        `MAP_GROWTH_RATIO`, но выше `MAP_JUMP_RATIO`."""
         task = self.make_task()
         k = config.MAP_GROWTH_CALIBRATION_MERGES
         base = 1_000_000
@@ -2072,6 +2109,9 @@ class MapGrowthCheckTest(TmpRootTest):
         self.assertEqual(len(triggers), 1)
 
     def test_repeated_run_does_not_duplicate_the_alert(self):
+        """Ловит мутацию: повторный прогон `check_map_growth` без нового
+        измерения в ряду заводит вторую копию алерта вместо того, чтобы
+        положиться на встроенный дедуп `alerts.raise_alert` (AC-14)."""
         task = self.make_task()
         k = config.MAP_GROWTH_CALIBRATION_MERGES
         base = 1_000_000
@@ -2087,6 +2127,10 @@ class MapGrowthCheckTest(TmpRootTest):
         self.assertEqual(len(triggers), 1)
 
     def test_two_targets_series_are_independent(self):
+        """Ловит мутацию: ряд одного target читается/пересчитывается с
+        учётом записей другого target (например, запрос без `WHERE
+        target=?`) — срабатывание на `artel` не должно окрашивать
+        спокойный ряд `sled` (инвариант 22, AC-16)."""
         k = config.MAP_GROWTH_CALIBRATION_MERGES
         base = 1_000_000
         task_a = self.make_task("artel")
@@ -2103,7 +2147,12 @@ class MapGrowthCheckTest(TmpRootTest):
         self.assertEqual(checks["map-growth:sled"].status, "ok")
 
     def test_all_checks_wires_in_check_map_growth(self):
+        """Ловит мутацию: `check_map_growth` реализована, но забыта в
+        `all_checks` — doctor молчал бы о росте карты при обычном
+        прогоне, несмотря на наличие самой проверки (AC-8)."""
         self.assertIn("check_map_growth", inspect.getsource(doctor.all_checks))
+
+
 class _RoleHomeReferenceTmpRootTest(sandbox_module.TmpRootTest):
     """Сужение `TmpRootTest`: только `ROLE_HOME`/`ROLE_CONFIG_DIR` во
     временном каталоге — `ROOT` остаётся настоящим деревом репозитория,

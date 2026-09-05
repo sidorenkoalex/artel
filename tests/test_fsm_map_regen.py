@@ -256,6 +256,9 @@ class MapSizeJournalUnitTest(TmpRootTest):
                if r["action"] == fsm_postmerge.MAP_SIZE_ACTION]
 
     def test_content_changed_writes_size_entry_with_stats_and_new_sha(self):
+        """Ловит мутацию: запись «карта: размер» не пишется на ветке
+        изменения содержимого, либо несёт sha ДО коммита карты, а не
+        HEAD после его завершения (AC-5)."""
         regenerated = COMMITTED_MAP.replace("Содержимое A.", "Содержимое B.")
 
         def fake_git_commit(*args) -> subprocess.CompletedProcess:
@@ -281,6 +284,10 @@ class MapSizeJournalUnitTest(TmpRootTest):
                          len(regenerated.encode("utf-8")))
 
     def test_unchanged_content_still_writes_size_entry(self):
+        """Ловит мутацию: запись «карта: размер» пишется ТОЛЬКО на ветке
+        изменения содержимого — на ветке отката (нет содержательных
+        отличий) запись пропускается вместо того, чтобы описывать текст,
+        реально оставшийся на диске (AC-6, ряд без пропусков)."""
         regenerated = COMMITTED_MAP.replace(
             "aaaa000011112222333344445555666677778888",
             "dddd444455556666777788889999000011112222")
@@ -305,6 +312,9 @@ class MapSizeJournalUnitTest(TmpRootTest):
         self.assertEqual(json.loads(rows[0]["detail"])["sha"], "0" * 40)
 
     def test_regeneration_failure_writes_no_size_entry(self):
+        """Ловит мутацию: провал регенерации (путь `_map_regen_incident`)
+        всё равно пишет запись «карта: размер» — нарушило бы AC-6
+        («ряд без пропусков» превратился бы в ряд с шумом на провалах)."""
         fail = subprocess.CompletedProcess(["python3"], 1, "", "стенд: сбой")
 
         with mock.patch.object(gitcmd, "git", fake_git), \

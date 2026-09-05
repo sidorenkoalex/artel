@@ -1669,7 +1669,11 @@ def _map_growth_check(conn, target: str) -> Check:
     name = f"map-growth:{target}"
     series = _map_growth_series(conn, target)
     k = config.MAP_GROWTH_CALIBRATION_MERGES
-    if len(series) < k:
+    if len(series) <= k:
+        # Ровно на k-й записи окно калибровки (`series[:k]`) совпадает со
+        # всем рядом — сравнивать эту запись с базой, посчитанной с её
+        # же участием, самоссылочно (R1-F2); молчим ещё один ход, оценка
+        # стартует с (k+1)-й записи против уже зафиксированного окна.
         return Check(name, "ok", f"калибровка: {len(series)}/{k} измерений")
 
     window = series[:k]
