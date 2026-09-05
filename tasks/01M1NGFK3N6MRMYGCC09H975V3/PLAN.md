@@ -120,6 +120,9 @@ journал'ит и `sys.exit`'ит одним вызовом, чтобы не д�
 9. `python3 scripts/codebase_map.py` (правка `.py` в `orchestrator/`) +
    `scripts/guard.py` по артефактам задачи + прогон затронутых модулей
    `tests/` (не полный набор — гоняет CI).
+10. ANSWER-2 (Оператор, возврат из `verifying`): `tests/sandbox.py::
+    RealGitSandbox.setUp` — `.gitignore` (`.artel/`) в самом первом
+    коммите песочницы, ДО `store.create_schema(store.db())`.
 
 ## Покрытие требований
 
@@ -147,6 +150,40 @@ doctor.py` (новый check аддитивен в `all_checks`, статус `w
 `tests.test_doctor.DoctorCommandTest` подтверждён зелёным);
 `orchestrator/artel.py` (новая команда `pin` — не пересекается с
 существующей `pin-update`, разные строки диспетчера).
+
+ANSWER-2 (Оператор, шаг 10): `tests/sandbox.py::RealGitSandbox.setUp` —
+CI-репорт (коммит `231a7e0a`, джоб «Синтаксис и тесты оркестратора»)
+показал `tests/test_gitcmd_check_ignore.py::DiffNamesTest::
+test_lists_changed_paths` красным ТОЛЬКО в полном прогоне `tests/` — в
+списке изменённых путей появлялись `.artel/state.db(-shm/-wal)`.
+Причина структурная, не в конкретном новом тесте этой задачи (все
+новые классы `tests/test_pin.py`/`tests/test_doctor.py`/`tests/
+test_gitcmd_branch_reads.py`/`tests/test_canary.py` уже подменяют
+`config.ROOT`/`config.DB` — перечитано построчно): `RealGitSandbox.
+setUp` кладёт настоящую sqlite-БД (`store.create_schema`, WAL-режим —
+`store.enable_wal`) ВНУТРЬ `self.root`, того же git-дерева, которое
+подклассы коммитят `git add -A` — без `.gitignore` в песочнице (в
+отличие от настоящего пульта, где `.artel/` исключён корневым
+`.gitignore`) любой подкласс с БОЛЕЕ чем одним коммитом и сверкой их
+разницы (`gitcmd.diff_names`) рискует поймать в диф WAL/SHM-файл БД,
+если его содержимое на диске успело измениться между коммитами
+(гонка контрольной точки WAL — не воспроизвелась стабильно локально
+ни разу за несколько прогонов полного набора, но структурная причина
+одна и та же, что бы её ни триггерило на раннере CI). Один пример
+такой защиты УЖЕ был в кодовой базе точечно (`tests/
+test_gitcmd_check_ignore.py::CheckIgnoreTest.setUp` сама пишет
+`.gitignore` с `.artel/` до своих коммитов) — шаг 10 переносит ту же
+защиту в БАЗОВЫЙ класс, единожды, для всех подклассов `RealGitSandbox`
+(их больше 15 в `tests/`), а не полагается на то, что каждый новый
+подкласс вспомнит сделать это сам. Не является ослаблением/новым
+инвариантом — тестовая инфраструктура, не код продукта; поведение
+`gitcmd.diff_names`/`check_ignore` и самого продукта не меняется,
+только добавляется файл в git-дерево ВРЕМЕННОЙ песочницы теста.
+Регресс: полный `tests/discover` дважды подряд зелёный (кроме заранее
+известного нестабильного `tests.test_liveness.
+TerminateProcessGroupTest.test_kills_the_leader_and_returns_a_positive_count`
+— таймингового теста сигналов процесса, вне зоны этой задачи и не
+упомянутого в ANSWER-2).
 
 Инварианты/гейты рядом: инвариант 35 (без сети в тестах/офлайн-путях) —
 `check_canary_trigger`/`merges_since_last_green_run` читают только
