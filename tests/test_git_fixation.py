@@ -38,19 +38,14 @@ from orchestrator import (auto, catalog, config, fixation, fsm,  # noqa: E402
                           store)
 from tests.sandbox import (FakeProc, TmpRootTest, capture,  # noqa: E402
                            capture_new_task_id, claude_only_popen,
-                           resilient_tmp_cleanup)
-
-# Захвачен ДО любого mock.patch (порядок импорта модуля) — настоящий
-# subprocess.run, которым `_GitFixationTmpRootTest.setUp` перекрывает
-# `SpyRun` базового `TmpRootTest` (см. его докстринг ниже).
-_REAL_SUBPROCESS_RUN = subprocess.run
+                           network_guarded_real_run, resilient_tmp_cleanup)
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
 TARGETS_YAML = """targets:
   sled:
     forge: github
-    url: https://example.invalid/sled
+    url: file:///nonexistent/sled
     base: main
     token_slot: sled-token
     no_paths: []
@@ -64,7 +59,7 @@ TARGETS_YAML = """targets:
 ARTEL_TARGETS_YAML = f"""targets:
   {config.DEFAULT_TARGET}:
     forge: github
-    url: https://example.invalid/artel
+    url: file:///nonexistent/artel
     base: main
     token_slot: artel-token
     no_paths: []
@@ -125,9 +120,13 @@ class _GitFixationTmpRootTest(TmpRootTest):
         # Весь этот файл проверяет НАСТОЯЩИЙ git (см. докстринг модуля) —
         # `SpyRun` базового `TmpRootTest` (заглушка ради плотницкой записи
         # `cmd_new` без реального репозитория, tests/sandbox.py) перекрыт
-        # здесь настоящим `subprocess.run`, как и описывает комментарий
-        # `TmpRootTest.setUp` про подклассы с собственным моком git.
-        patcher = mock.patch.object(gitcmd.subprocess, "run", _REAL_SUBPROCESS_RUN)
+        # здесь настоящим git через `network_guarded_real_run` (SPEC
+        # 01M1QHQ277PQQA894X97RVEX9Y, требование 1) — тот же настоящий
+        # `subprocess.run` для всего, кроме сетевых fetch/push/ls-remote/
+        # clone с DNS-адресом, которые он отклоняет мгновенно вместо
+        # реального обращения к резолверу.
+        patcher = mock.patch.object(gitcmd.subprocess, "run",
+                                    network_guarded_real_run)
         patcher.start()
         self.addCleanup(patcher.stop)
 
@@ -185,7 +184,7 @@ class NoRemoteCheckTest(TmpRootTest):
     def test_repo_with_a_remote_is_detected(self):
         repo = config.PROJECTS / "sled"
         gitcmd.in_repo(repo, "remote", "add", "origin",
-                       "https://example.invalid/x")
+                       "file:///nonexistent/x")
 
         self.assertFalse(projects.artifact_repo_has_no_remote("sled"))
 

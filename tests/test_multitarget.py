@@ -34,7 +34,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 TARGETS_YAML = """targets:
   artel:
     forge: github
-    url: https://example.invalid/artel
+    url: file:///nonexistent/artel
     base: main
     token_slot: artel-token
     no_paths: [gates.yaml, .github/]
@@ -190,7 +190,7 @@ class TargetsFileTest(TmpRootTest):
         """Порядок записей файла виден коду: первая запись — сам пульт."""
         self.write_targets(TARGETS_YAML + """  sled:
     forge: github
-    url: https://example.invalid/sled
+    url: file:///nonexistent/sled
     base: main
     token_slot: sled-token
     no_paths: []

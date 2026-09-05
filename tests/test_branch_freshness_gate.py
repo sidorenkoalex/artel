@@ -494,7 +494,7 @@ class TargetSourcedRemoteTest(unittest.TestCase):
     TARGETS_YAML = """targets:
   acme:
     forge: github
-    url: https://example.invalid/acme-target.git
+    url: http://127.0.0.1:9/acme-target.git
     base: trunk
     token_slot: artel-token
     no_paths: []
@@ -589,7 +589,7 @@ class TargetSourcedRemoteTest(unittest.TestCase):
         self.assertNotIn("origin", remote_args,
                          "AC-10: remote внешнего target — из его "
                          "конфигурации, не хардкод origin пульта")
-        self.assertIn("https://example.invalid/acme-target.git", remote_args,
+        self.assertIn("http://127.0.0.1:9/acme-target.git", remote_args,
                      "AC-10: remote — url записи target'а из targets.yaml")
         self.assertIn("trunk", remote_args,
                      "AC-10: ветка фетча — base записи target'а, не "
