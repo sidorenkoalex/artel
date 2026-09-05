@@ -1,5 +1,5 @@
 ---
-built_at_sha: 0e2ce92894b9d93ed1c0e51cfbdcc7bbab598bc4
+built_at_sha: e4a042f6724c2a935bc94acfacf4ffac4de5338a
 ---
 
 # Codebase-map пульта
@@ -238,7 +238,7 @@ built_at_sha: 0e2ce92894b9d93ed1c0e51cfbdcc7bbab598bc4
 
 **Импортирует:** `orchestrator/alerts.py`, `orchestrator/artifact_branch.py`, `orchestrator/config.py`, `orchestrator/fixation.py`, `orchestrator/gitcmd.py`, `orchestrator/store.py`, `orchestrator/workspace.py`, `orchestrator/yamlmini.py`
 
-**Импортируется:** `orchestrator/pause.py`, `orchestrator/runner.py`, `tests/test_artifact_materialization.py`, `tests/test_checkpoint_external_step_artifacts.py`, `tests/test_pause_now.py`, `tests/test_step_autocommit.py`, `tests/test_timeout_checkpoint.py`
+**Импортируется:** `orchestrator/pause.py`, `orchestrator/runner.py`, `tests/test_artifact_materialization.py`, `tests/test_checkpoint_external_step_artifacts.py`, `tests/test_checkpoint_stray_acceptance_files.py`, `tests/test_pause_now.py`, `tests/test_step_autocommit.py`, `tests/test_timeout_checkpoint.py`
 
 ## orchestrator/ci.py
 
@@ -963,6 +963,7 @@ built_at_sha: 0e2ce92894b9d93ed1c0e51cfbdcc7bbab598bc4
 - `parse_module`
 - `project_for_brief`
 - `render`
+- `repo_root`
 
 **Импортирует:** —
 
@@ -983,6 +984,7 @@ built_at_sha: 0e2ce92894b9d93ed1c0e51cfbdcc7bbab598bc4
 - `id_format_patterns`
 - `id_format_sample_errors`
 - `is_draft_lenient`
+- `is_extraneous_acceptance_test_file`
 - `main`
 - `module_docstring`
 - `redness_marker_errors_from_files`
@@ -997,6 +999,7 @@ built_at_sha: 0e2ce92894b9d93ed1c0e51cfbdcc7bbab598bc4
 - `review_evidence_errors`
 - `scan_ac_content`
 - `scan_acceptance_tests`
+- `scan_extraneous_acceptance_files`
 - `scan_id_format_samples`
 - `scan_redness_markers`
 - `schema_errors`
@@ -1009,7 +1012,7 @@ built_at_sha: 0e2ce92894b9d93ed1c0e51cfbdcc7bbab598bc4
 
 **Импортирует:** `orchestrator/config.py`, `orchestrator/yamlmini.py`
 
-**Импортируется:** `orchestrator/acceptance.py`, `orchestrator/amend.py`, `orchestrator/canary.py`, `orchestrator/dry_run.py`, `orchestrator/fsm.py`, `orchestrator/fsm_advance.py`, `orchestrator/fsm_autogate.py`, `orchestrator/retro.py`, `orchestrator/version.py`, `tests/test_acceptance_tests_flow.py`, `tests/test_analyst_role.py`, `tests/test_answer.py`, `tests/test_artifact_materialization.py`, `tests/test_fsm_autogate.py`, `tests/test_guard_artifact_branch_mode.py`, `tests/test_guard_schema.py`, `tests/test_guard_split_signals.py`, `tests/test_guard_zones.py`, `tests/test_id_format_guard.py`, `tests/test_invariants.py`, `tests/test_review_registry_gate.py`, `tests/test_version.py`, `tests/test_yaml_parsing.py`
+**Импортируется:** `orchestrator/acceptance.py`, `orchestrator/amend.py`, `orchestrator/canary.py`, `orchestrator/dry_run.py`, `orchestrator/fsm.py`, `orchestrator/fsm_advance.py`, `orchestrator/fsm_autogate.py`, `orchestrator/retro.py`, `orchestrator/version.py`, `tests/test_acceptance_tests_flow.py`, `tests/test_analyst_role.py`, `tests/test_answer.py`, `tests/test_artifact_materialization.py`, `tests/test_fsm_autogate.py`, `tests/test_guard_artifact_branch_mode.py`, `tests/test_guard_extraneous_acceptance_files.py`, `tests/test_guard_schema.py`, `tests/test_guard_split_signals.py`, `tests/test_guard_zones.py`, `tests/test_id_format_guard.py`, `tests/test_invariants.py`, `tests/test_review_registry_gate.py`, `tests/test_version.py`, `tests/test_yaml_parsing.py`
 
 ## scripts/stack_ci.py
 
@@ -1282,6 +1285,16 @@ built_at_sha: 0e2ce92894b9d93ed1c0e51cfbdcc7bbab598bc4
 
 **Импортируется:** —
 
+## tests/test_checkpoint_stray_acceptance_files.py
+
+**Назначение:** Юнит-тесты `checkpoint._is_stray_acceptance_test_file` (SPEC
+
+**Публичные функции:** (нет)
+
+**Импортирует:** `orchestrator/checkpoint.py`
+
+**Импортируется:** —
+
 ## tests/test_ci_status.py
 
 **Назначение:** Тесты статуса CI ветки задачи (см. tasks/T017/SPEC.md, требование 6).
@@ -1529,6 +1542,16 @@ built_at_sha: 0e2ce92894b9d93ed1c0e51cfbdcc7bbab598bc4
 ## tests/test_guard_artifact_branch_mode.py
 
 **Назначение:** Юнит-тесты режима артефактной ветки guard (01M1R66X5SMD3ZEDCVAJ0DR7K2,
+
+**Публичные функции:** (нет)
+
+**Импортирует:** `scripts/guard.py`
+
+**Импортируется:** —
+
+## tests/test_guard_extraneous_acceptance_files.py
+
+**Назначение:** Юнит-тесты `guard.is_extraneous_acceptance_test_file`/`guard.
 
 **Публичные функции:** (нет)
 
