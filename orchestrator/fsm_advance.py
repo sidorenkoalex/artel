@@ -502,15 +502,59 @@ def _plan_zones_extension_paths(plan_text: str) -> list[str] | None:
     return None
 
 
+# Префикс сообщения автокоммита артефактов шага РОЛИ (`checkpoint.
+# _commit_external_step_artifacts::own_commit_marker`) — общий для любой
+# роли и обеих формулировок (обычной/с пометкой таймаута): роль встроена
+# сразу после этого префикса, дальше в обоих случаях идёт «(автокоммит
+# оркестратора...)». Единственный текстовый признак, которым коммит,
+# заведомо НЕ бывший `cmd_answer` (тот коммитит отдельным сообщением
+# `f"{task_id}: ANSWER-{n} — ответ Оператора"`, `orchestrator/answer.py`),
+# узнаваем по подписи (REVIEW.md 01M1P9QCHPHSCEA6TK13PV85SP итерация 2,
+# R2-F1).
+_STEP_ARTIFACTS_COMMIT_PREFIX = "{task_id}: артефакты шага "
+
+
+def _answer_commit_is_role_step_autocommit(branch: str, task_id: str,
+                                           path: str) -> bool:
+    """`True` — последний коммит `path` на артефактной ветке доказанно НЕ
+    `cmd_answer` Оператора, а автокоммит шага роли (checkpoint.py) —
+    именно так developer мог бы подложить себе поддельный
+    `ANSWER-n.md` с маркером мандата в СВОЁМ ЖЕ шаге `in_dev` (R2-F1):
+    `tasks/<id>/` роли — обычная директория на диске, автокоммит шага
+    переносит в артефактную ветку любой файл без разбора по типу.
+
+    Git не ответил (сбой команды, недостижимый sha) ИЛИ сообщение не
+    совпало ни с одним известным маркером (лёгкая песочница без
+    реального коммита — `tests/test_zones_gate.py`, докстринг модуля:
+    «там git всегда отвечает» не про этот вызов) — `False`, не
+    «доказанный автокоммит роли»: положительный сигнал здесь —
+    ЕДИНСТВЕННОЕ основание отклонить мандат, симметрично тому, как
+    `checkpoint._commit_external_step_artifacts` использует ТОТ ЖЕ
+    признак (положительное совпадение с `own_commit_marker`) как
+    единственное основание для удаления, а не наоборот."""
+    res = gitcmd.git("log", "-1", "--format=%s", branch, "--", path)
+    if res is None or res.returncode != 0:
+        return False
+    subject = res.stdout.strip()
+    return subject.startswith(_STEP_ARTIFACTS_COMMIT_PREFIX.format(task_id=task_id))
+
+
 def _answer_zones_mandate(branch: str, task_id: str) -> set[str]:
     """Объединение путей ВСЕХ маркеров `_ZONES_MANDATE_MARKER`, найденных в
     ЛЮБОМ `tasks/<id>/ANSWER-n.md` ветки задачи (ANSWER-1.md, п.2) — перебор
-    файлов тем же приёмом, что `fsm._answer_file_count`."""
+    файлов тем же приёмом, что `fsm._answer_file_count`.
+
+    Файл, последний коммит которого — доказанный автокоммит шага роли
+    (`_answer_commit_is_role_step_autocommit`), пропускается: это не
+    `cmd_answer`, значит не мандат Оператора, независимо от текста
+    внутри (R2-F1)."""
     paths = gitcmd.ls_tree_files(branch, f"tasks/{task_id}") or []
     mandate: set[str] = set()
     for p in paths:
         name = p.rsplit("/", 1)[-1]
         if not (name.startswith("ANSWER-") and name.endswith(".md")):
+            continue
+        if _answer_commit_is_role_step_autocommit(branch, task_id, p):
             continue
         text, _reason = gitcmd.show(branch, p)
         if text is None:

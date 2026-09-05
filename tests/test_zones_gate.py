@@ -6,6 +6,7 @@
 01M1P9QCHPHSCEA6TK13PV85SP/acceptance_tests/`) намеренно не бьёт: там git
 всегда отвечает.
 """
+import subprocess
 import sys
 import unittest
 from pathlib import Path
@@ -15,6 +16,18 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from orchestrator import config, fsm_advance, gitcmd, store  # noqa: E402
 from tests.sandbox import TmpRootTest  # noqa: E402
+
+
+def _git_log_subject(subject: str, returncode: int = 0):
+    """`gitcmd.git("log", "-1", "--format=%s", ...)` отвечающий `subject`
+    ровно на подкоманду `log`; всё остальное — заглушка успехом (в
+    тестах этого файла ей не пользуются)."""
+    def fake(*args):
+        if args and args[0] == "log":
+            return subprocess.CompletedProcess(list(args), returncode,
+                                               f"{subject}\n", "")
+        return subprocess.CompletedProcess(list(args), 0, "", "")
+    return fake
 
 
 class SplitZonePathsTest(unittest.TestCase):
@@ -194,6 +207,91 @@ class ZonesGateExternalTargetSkipsTest(TmpRootTest):
             refuses = fsm_advance._zones_gate_refuses(
                 conn, task_id, t, "task/t001-x", "PLAN\n")
         self.assertFalse(refuses)
+
+
+class AnswerCommitIsRoleStepAutocommitTest(unittest.TestCase):
+    """R2-F1 (REVIEW.md 01M1P9QCHPHSCEA6TK13PV85SP итерация 2, blocker):
+    `_answer_commit_is_role_step_autocommit` — единственный узел,
+    отличающий настоящий `cmd_answer` от подделки роли через автокоммит
+    шага."""
+
+    def test_role_step_autocommit_subject_is_detected(self):
+        """Ловит мутацию: префикс `own_commit_marker` (`checkpoint.py`)
+        не распознан — поддельный `ANSWER-99.md`, занесённый автокоммитом
+        шага developer, засчитывался бы мандатом Оператора."""
+        fake = _git_log_subject(
+            "T001: артефакты шага developer (автокоммит оркестратора)")
+        with mock.patch.object(gitcmd, "git", fake):
+            self.assertTrue(fsm_advance._answer_commit_is_role_step_autocommit(
+                "task/t001-x", "T001", "tasks/T001/ANSWER-99.md"))
+
+    def test_role_step_timeout_autocommit_subject_is_also_detected(self):
+        """Ловит мутацию: распознаётся только точная формулировка без
+        пометки таймаута — вариант `commit_timeout_checkpoint`
+        («WIP после таймаута», тот же префикс) проходил бы как настоящий
+        `cmd_answer`."""
+        fake = _git_log_subject(
+            "T001: артефакты шага developer (автокоммит оркестратора, "
+            "WIP после таймаута)")
+        with mock.patch.object(gitcmd, "git", fake):
+            self.assertTrue(fsm_advance._answer_commit_is_role_step_autocommit(
+                "task/t001-x", "T001", "tasks/T001/ANSWER-99.md"))
+
+    def test_cmd_answer_commit_subject_is_not_detected(self):
+        """Ловит мутацию: префикс сверяется настолько широко, что
+        совпадает и с настоящим сообщением `cmd_answer` — легитимный
+        мандат Оператора отклонялся бы как подделка."""
+        fake = _git_log_subject("T001: ANSWER-1 — ответ Оператора")
+        with mock.patch.object(gitcmd, "git", fake):
+            self.assertFalse(fsm_advance._answer_commit_is_role_step_autocommit(
+                "task/t001-x", "T001", "tasks/T001/ANSWER-1.md"))
+
+    def test_git_not_answering_is_not_treated_as_role_autocommit(self):
+        """Ловит мутацию: неответ git (`returncode != 0`, либо лёгкая
+        песочница без реального коммита — так отвечает акцептная планка
+        этой задачи, `_sandbox.py::write_answer_mandate`) трактуется как
+        доказанный автокоммит роли — легитимный мандат в такой песочнице
+        отклонялся бы всегда, ломая уже зелёный сценарий AC-3."""
+        fake = _git_log_subject("", returncode=1)
+        with mock.patch.object(gitcmd, "git", fake):
+            self.assertFalse(fsm_advance._answer_commit_is_role_step_autocommit(
+                "task/t001-x", "T001", "tasks/T001/ANSWER-1.md"))
+
+
+class AnswerZonesMandateOriginTest(unittest.TestCase):
+    """R2-F1: `_answer_zones_mandate` не засчитывает маркер из ANSWER-файла,
+    чей последний коммит — доказанный автокоммит шага роли."""
+
+    def test_marker_from_role_step_autocommit_is_not_counted(self):
+        """Ловит мутацию: проверка происхождения не подключена в цикле
+        перебора файлов — `_answer_zones_mandate` вернулся бы к прежнему
+        поведению R2-F1, засчитывая ЛЮБОЙ `ANSWER-*.md` с маркером."""
+        answer_text = ("---\ntype: answer\n---\n\n"
+                       "Расширение зон разрешено: docs/extra_module.md\n")
+        git_fake = _git_log_subject(
+            "T001: артефакты шага developer (автокоммит оркестратора)")
+        with mock.patch.object(gitcmd, "ls_tree_files",
+                               return_value=["tasks/T001/ANSWER-99.md"]), \
+                mock.patch.object(gitcmd, "show",
+                                  return_value=(answer_text, "")), \
+                mock.patch.object(gitcmd, "git", git_fake):
+            mandate = fsm_advance._answer_zones_mandate("task/t001-x", "T001")
+        self.assertEqual(mandate, set())
+
+    def test_marker_from_genuine_cmd_answer_commit_is_counted(self):
+        """Ловит мутацию: узел происхождения отклоняет ЛЮБОЙ ANSWER,
+        включая настоящий `cmd_answer` — исключение AC-3 стало бы
+        недостижимым даже с реальным мандатом Оператора."""
+        answer_text = ("---\ntype: answer\n---\n\n"
+                       "Расширение зон разрешено: docs/extra_module.md\n")
+        git_fake = _git_log_subject("T001: ANSWER-1 — ответ Оператора")
+        with mock.patch.object(gitcmd, "ls_tree_files",
+                               return_value=["tasks/T001/ANSWER-1.md"]), \
+                mock.patch.object(gitcmd, "show",
+                                  return_value=(answer_text, "")), \
+                mock.patch.object(gitcmd, "git", git_fake):
+            mandate = fsm_advance._answer_zones_mandate("task/t001-x", "T001")
+        self.assertEqual(mandate, {"docs/extra_module.md"})
 
 
 if __name__ == "__main__":
