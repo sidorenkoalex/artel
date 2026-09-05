@@ -96,7 +96,7 @@ workspace, tasks, knowledge, logs). БД одна на все проекты: с
   target-init <target> | doctor [--restore] [--fix] | alert-ack <id> "<решение>" |
   version | canary --k <N> | canary pool-seal | prune [--execute] |
   amend-tests <id> --reason "<основание>" | pin-update <sha main артели> |
-  zone-release <id> | zone-reorder <id1> <id2> ...
+  zone-release <id> | zone-reorder <id1> <id2> ... | venv-sync
 
 `pin-update <sha>` (A7, Stage1) — обновляет пин запущенной версии:
 продвигает рабочее дерево и HEAD `config.ROOT` до `<sha>` main артели
@@ -177,6 +177,15 @@ done`/`kill` занявшей задачи либо явно: `zone-release <id>
 конкурентов по зоне больше одного — очередь сама по себе ничего не
 решает (кто стартует первым, решает только занятость), только показывает
 Оператору порядок.
+
+`venv-sync` (SPEC 01M1REVEZ1HESMJ7AFD5A9MEJ8) — создаёт/обновляет
+`.artel/venv` средствами стандартной библиотеки (`python3 -m venv` тем же
+интерпретатором, что и сам пульт, затем `pip install -r requirements.lock`
+внутрь него), идемпотентно. `check_stack()` (`orchestrator/stack.py`)
+сверяет установленные там версии с `requirements.lock` и предупреждает
+на расхождении/отсутствии venv; `runner.role_env` берёт интерпретатором
+роли `.artel/venv`, если он согласован с `requirements.lock`, и отказывает
+шагу (`agent run SKIPPED`) без тихого отката на системный python иначе.
 
 `canary <каталог>` (tasks/T065/SPEC.md) — синтетический прогон конвейера:
 заводит по задаче на каждый `*.md` каталога (`catalog.cmd_new`, пометка
@@ -265,6 +274,9 @@ worktree задачи, команда коммитит правку, сдвиг�
   zone_lock занятость зоны на старте кода: предусловие первого шага
             developer, снятие ожидания и очередь Оператором
             (SPEC 01M1P9QAG65GVF69YJEV0V18D9)
+  venv      `.artel/venv` пульта: создание/синхронизация с
+            `requirements.lock`, идемпотентно (SPEC
+            01M1REVEZ1HESMJ7AFD5A9MEJ8)
 """
 import sys
 from pathlib import Path
@@ -278,8 +290,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from orchestrator import (amend, answer, auto, budget, canary, catalog,  # noqa: E402
                           cleanup, config, doctor, dry_run, fsm, pause, pin,
-                          projects, prune, release, report, runner, version,
-                          workspace, zone_lock)
+                          projects, prune, release, report, runner, venv,
+                          version, workspace, zone_lock)
 
 
 def _refuse_if_worktree() -> None:
@@ -452,6 +464,7 @@ def main() -> None:
         "pin-update": lambda: pin.cmd_pin_update(rest[0]),
         "zone-release": lambda: zone_lock.cmd_zone_release(rest[0]),
         "zone-reorder": lambda: zone_lock.cmd_zone_reorder(rest),
+        "venv-sync": lambda: venv.cmd_venv_sync(),
     }
     fn = table.get(cmd)
     if fn is None:

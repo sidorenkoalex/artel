@@ -467,5 +467,148 @@ class _frozen_today:
         self._patcher.stop()
 
 
+def _bash_call(call_id: str, command: str) -> str:
+    """Строка потока с одним вызовом Bash — тот же формат, что `_read_call`
+    выше, инструмент другой (наблюдатель роста карты не различает
+    инструменты, `_map_growth_tool_call_count` считает любой `tool_use`)."""
+    return _event(type="assistant", message={"role": "assistant", "content": [
+        {"type": "tool_use", "id": call_id, "name": "Bash",
+         "input": {"command": command}}]})
+
+
+class MapGrowthToolCallCountTest(TmpRootTest):
+    """`report._map_growth_tool_call_count` — независимая копия разбора
+    `--output-format stream-json` внутри report.py (зона задачи
+    01M1RGQV4DG2FX1B90W4EEETTR не включает agent_log.py)."""
+
+    def test_counts_tool_use_blocks_across_lines(self):
+        """Ловит мутацию: `_map_growth_tool_call_count` перестаёт
+        накапливать `count` по всем строкам файла (например, выходит из
+        цикла после первой строки или переприсваивает `count` вместо
+        `+=`) — тогда для двух строк с `tool_use` результат не будет 2."""
+        log_path = config.LOGS / "T001-developer-1.log"
+        config.LOGS.mkdir(parents=True, exist_ok=True)
+        log_path.write_text(
+            _bash_call("c1", "echo a") + _read_call("c2", "x.py"), encoding="utf-8")
+
+        self.assertEqual(report._map_growth_tool_call_count(log_path), 2)
+
+    def test_ignores_non_json_and_non_assistant_lines(self):
+        """Ловит мутацию: `_map_growth_tool_call_count` перестаёт
+        отбрасывать строку, не начинающуюся с `{` (падает
+        `json.JSONDecodeError` на нераспознанном выводе CLI), либо
+        начинает считать `tool_use` внутри событий с `role="user"` —
+        тогда результат для одного реального вызова не будет равен 1."""
+        log_path = config.LOGS / "T001-developer-1.log"
+        config.LOGS.mkdir(parents=True, exist_ok=True)
+        log_path.write_text(
+            "не JSON, вывод CLI на stderr\n"
+            + _event(type="user", message={"role": "user", "content": []})
+            + _bash_call("c1", "echo a"),
+            encoding="utf-8")
+
+        self.assertEqual(report._map_growth_tool_call_count(log_path), 1)
+
+
+class MapGrowthCallsEstimateTest(TmpRootTest):
+    """`report._map_growth_calls_estimate` — фолбэк AC-3 без единого файла
+    лога на диске вовсе (retention уже вычистил `.artel/logs/`)."""
+
+    def test_missing_logs_dir_falls_back_to_named_constant(self):
+        """Ловит мутацию: `_map_growth_calls_estimate` подставляет число
+        прямо литералом вместо чтения `config.MAP_GROWTH_CALLS_ESTIMATE`
+        (первый ассерт разойдётся при смене константы), либо возвращает
+        `is_estimate=False` при пустой выборке (второй ассерт упадёт)."""
+        conn = store.db()
+        store.create_schema(conn)
+        store.insert_task(conn, "T001", "Задача", "done", "task/t001",
+                          config.DEFAULT_TARGET, 10.0)
+        self.assertFalse(config.LOGS.exists())
+
+        calls, is_estimate = report._map_growth_calls_estimate(conn)
+
+        self.assertEqual(calls, config.MAP_GROWTH_CALLS_ESTIMATE)
+        self.assertTrue(is_estimate)
+
+
+class MapSizeEntriesTest(TmpRootTest):
+    """`report._map_size_entries` — внутренний помощник, разбирающий
+    JSON `detail` записей «карта: размер» этого target."""
+
+    def setUp(self):
+        super().setUp()
+        conn = store.db()
+        store.create_schema(conn)
+        self.conn = conn
+        store.insert_task(conn, "T001", "Задача", "done", "task/t001",
+                          "alpha", 10.0)
+
+    def test_unparsable_detail_json_is_skipped_not_raised(self):
+        """Ловит мутацию: `_map_size_entries` перестаёт ловить
+        `(TypeError, ValueError)` вокруг `json.loads(s["detail"])` —
+        нераспознаваемый `detail` роняет функцию исключением вместо
+        того, чтобы просто выпасть из выдачи, и `len(entries)` не будет
+        равен 1."""
+        store.journal(self.conn, "T001", "orchestrator", report.MAP_SIZE_ACTION,
+                     "не JSON вовсе")
+        store.journal(self.conn, "T001", "orchestrator", report.MAP_SIZE_ACTION,
+                     json.dumps({"bytes_total": 1000, "sections_total": 2,
+                               "bytes_by_dir": {}}))
+
+        entries = report._map_size_entries(self.conn, "alpha")
+
+        self.assertEqual(len(entries), 1)
+        self.assertEqual(entries[0]["bytes_total"], 1000)
+
+    def test_ignores_entries_of_other_actions(self):
+        """Ловит мутацию: `_map_size_entries` ослабляет сравнение
+        `s["action"] != MAP_SIZE_ACTION` (например, до проверки
+        подстроки или отбрасывает фильтр вовсе) — тогда запись журнала
+        постороннего action попадёт в `entries` и список не будет
+        пустым."""
+        store.journal(self.conn, "T001", "orchestrator", "не карта: размер",
+                     json.dumps({"bytes_total": 999}))
+
+        entries = report._map_size_entries(self.conn, "alpha")
+
+        self.assertEqual(entries, [])
+
+
+class MapGrowthHtmlTest(TmpRootTest):
+    """`report._map_growth_html` — блок «Рост карты кодовой базы»: одна
+    строка на каждый target, «измерений нет» без обращения к константам
+    части 1, ещё не объявленным в config.py до её мержа."""
+
+    def setUp(self):
+        super().setUp()
+        conn = store.db()
+        store.create_schema(conn)
+        self.conn = conn
+
+    def test_no_tasks_at_all_reports_empty(self):
+        """Ловит мутацию: `_map_growth_html` теряет короткое замыкание
+        `if not targets: return ...` (падает на пустом множестве target
+        внутри `_map_growth_target_html` или возвращает пустую строку) —
+        тогда подстроки «Задач нет» не будет в результате."""
+        html = report._map_growth_html(self.conn, [])
+
+        self.assertIn("Задач нет", html)
+
+    def test_target_without_a_single_record_shows_fixed_message(self):
+        """Ловит мутацию: `_map_growth_target_html` перестаёт коротко
+        замыкаться на пустом `rows` и пытается посчитать калибровку/
+        оценку до мержа части 1 (падает `AttributeError` на отсутствующей
+        `config.MAP_GROWTH_CALIBRATION_MERGES`) или теряет имя target в
+        разметке — тогда `report.NO_MEASUREMENTS_TEXT`/«ghost» не
+        появятся в выдаче."""
+        store.insert_task(self.conn, "T001", "Задача", "done", "task/t001",
+                          "ghost", 10.0)
+
+        html = report._map_growth_html(self.conn, store.all_tasks(self.conn))
+
+        self.assertIn(report.NO_MEASUREMENTS_TEXT, html)
+        self.assertIn("ghost", html)
+
+
 if __name__ == "__main__":
     unittest.main()
