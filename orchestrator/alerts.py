@@ -25,10 +25,16 @@ SQL самих операций — в store.py (ADR-0003 3ж: «единств�
   этой задачи, кем бы он ни был вызван (требование 4) —
   `close_attention_alerts`, зовётся из `store.set_state`, единственной
   точки любого перехода FSM.
+- `warning` — расхождение расчёта с фактом, не требующее остановки
+  конвейера (SPEC 01M1PP0VYRT55WN8GGVG66X89Y, требование 5): курс роли
+  (`config.TOKEN_RATES`) разошёлся с фактической ценой CLI сильнее
+  порога `config.TOKEN_RATE_DIVERGENCE_ALERT_THRESHOLD`. `target` —
+  `None`: расхождение считается по роли поперёк всех задач и target'ов,
+  не про одну задачу. Заводится `report.token_rate_divergence`.
 """
 from . import store
 
-KINDS = ("incident", "threshold", "trigger", "attention")
+KINDS = ("incident", "threshold", "trigger", "attention", "warning")
 
 
 def raise_alert(conn, target: str | None, kind: str, source: str,

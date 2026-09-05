@@ -89,18 +89,22 @@ class ParseCostEventTest(unittest.TestCase):
                                "cache_creation_input_tokens": 400,
                                "cache_read_input_tokens": 500}))
 
-        self.assertEqual(cost, {"usd": 0.1234, "tokens": 1000})
+        self.assertEqual(cost, {"usd": 0.1234, "tokens": 1000, "tokens_by_type": {
+            "input_tokens": 10, "output_tokens": 90,
+            "cache_creation_input_tokens": 400, "cache_read_input_tokens": 500}})
 
     def test_tokens_are_optional(self):
         cost = spend.parse_cost_event(result_event(usd=0.5))
 
-        self.assertEqual(cost, {"usd": 0.5, "tokens": None})
+        self.assertEqual(cost, {"usd": 0.5, "tokens": None, "tokens_by_type": None})
 
     def test_known_usage_counters_are_summed(self):
         cost = spend.parse_cost_event(result_event(
             usd=0.5, usage={"input_tokens": 7, "server_tool_use": {"a": 1}}))
 
         self.assertEqual(cost["tokens"], 7, "чужие поля usage не считаются")
+        self.assertEqual(cost["tokens_by_type"], {"input_tokens": 7},
+                         "чужие поля usage не попадают в разбивку")
 
     def test_failed_run_still_costs_money(self):
         cost = spend.parse_cost_event(event(
@@ -138,23 +142,25 @@ class ParseCostEventTest(unittest.TestCase):
         self.assertIn("1000", note)
 
 
-class StreamUsageTokensTest(unittest.TestCase):
-    """Токены usage любого события потока (tasks/T040) — не только `result`."""
+class StreamUsageByTypeTest(unittest.TestCase):
+    """Разбивка usage по видам любого события потока (tasks/T040, уточнено
+    01M1PP0VYRT55WN8GGVG66X89Y требованием 2) — не только `result`, и не
+    одной суммой, а по счётчикам `config.USAGE_TOKEN_KEYS` раздельно."""
 
-    def test_assistant_event_usage_is_summed(self):
-        tokens = spend.stream_usage_tokens(assistant_event(
+    def test_assistant_event_usage_is_broken_down_by_type(self):
+        tokens = spend.stream_usage_by_type(assistant_event(
             usage={"input_tokens": 10, "output_tokens": 5}))
 
-        self.assertEqual(tokens, 15)
+        self.assertEqual(tokens, {"input_tokens": 10, "output_tokens": 5})
 
     def test_result_event_usage_still_works(self):
-        tokens = spend.stream_usage_tokens(result_event(
+        tokens = spend.stream_usage_by_type(result_event(
             usd=0.5, usage={"input_tokens": 7, "output_tokens": 3}))
 
-        self.assertEqual(tokens, 10)
+        self.assertEqual(tokens, {"input_tokens": 7, "output_tokens": 3})
 
     def test_assistant_event_without_usage_is_none(self):
-        self.assertIsNone(spend.stream_usage_tokens(assistant_event()))
+        self.assertIsNone(spend.stream_usage_by_type(assistant_event()))
 
     def test_other_event_types_are_ignored(self):
         for raw in (event(type="system", subtype="init"),
@@ -163,13 +169,14 @@ class StreamUsageTokensTest(unittest.TestCase):
                     "простой текст без json\n",
                     '{"type": "assistant", "message":\n'):
             with self.subTest(raw=raw[:40]):
-                self.assertIsNone(spend.stream_usage_tokens(raw))
+                self.assertIsNone(spend.stream_usage_by_type(raw))
 
 
 class PartialTokensFromLogTest(unittest.TestCase):
-    """`spend.partial_tokens_from_log` (SPEC T074, требование 4) — тот же
-    разбор usage-событий, что `OutputPump.catch_cost` делает по потоку,
-    только постфактум по уже записанному на диск файлу лога."""
+    """`spend.partial_tokens_from_log` (SPEC T074, требование 4; разбивка
+    по видам — 01M1PP0VYRT55WN8GGVG66X89Y требование 2) — тот же разбор
+    usage-событий, что `OutputPump.catch_cost` делает по потоку, только
+    постфактум по уже записанному на диск файлу лога."""
 
     def setUp(self):
         tmp = tempfile.TemporaryDirectory()
@@ -179,7 +186,7 @@ class PartialTokensFromLogTest(unittest.TestCase):
     def write(self, lines: list) -> None:
         self.log_path.write_text("".join(lines), encoding="utf-8")
 
-    def test_usage_events_are_summed(self):
+    def test_usage_events_are_summed_by_type(self):
         self.write([
             "агент работает\n",
             assistant_event(usage={"input_tokens": 10, "output_tokens": 5}),
@@ -188,22 +195,22 @@ class PartialTokensFromLogTest(unittest.TestCase):
 
         tokens, saw = spend.partial_tokens_from_log(self.log_path)
 
-        self.assertEqual(tokens, 43)
+        self.assertEqual(tokens, {"input_tokens": 30, "output_tokens": 13})
         self.assertTrue(saw)
 
-    def test_no_usage_events_returns_zero_and_false(self):
+    def test_no_usage_events_returns_empty_and_false(self):
         self.write(["агент работает, без usage\n"])
 
         tokens, saw = spend.partial_tokens_from_log(self.log_path)
 
-        self.assertEqual(tokens, 0)
+        self.assertEqual(tokens, {})
         self.assertFalse(saw)
 
-    def test_missing_file_returns_zero_and_false(self):
+    def test_missing_file_returns_empty_and_false(self):
         tokens, saw = spend.partial_tokens_from_log(
             self.log_path.parent / "nope.log")
 
-        self.assertEqual(tokens, 0)
+        self.assertEqual(tokens, {})
         self.assertFalse(saw)
 
     def test_result_event_in_log_counts_too(self):
@@ -212,7 +219,7 @@ class PartialTokensFromLogTest(unittest.TestCase):
 
         tokens, saw = spend.partial_tokens_from_log(self.log_path)
 
-        self.assertEqual(tokens, 10)
+        self.assertEqual(tokens, {"input_tokens": 7, "output_tokens": 3})
         self.assertTrue(saw)
 
 
@@ -257,20 +264,21 @@ class PumpCostTest(TmpRootTest):
     def test_stream_without_cost_leaves_none(self):
         self.assertIsNone(self.pump(["просто вывод\n"]).cost)
 
-    def test_partial_tokens_are_summed_across_events(self):
+    def test_partial_tokens_are_summed_across_events_by_type(self):
         pump = self.pump([
             assistant_event(usage={"input_tokens": 10, "output_tokens": 5}),
             "просто текст, не usage-событие\n",
             assistant_event(usage={"input_tokens": 20, "output_tokens": 8}),
         ])
 
-        self.assertEqual(pump.partial_tokens, 43)
+        self.assertEqual(pump.partial_tokens,
+                         {"input_tokens": 30, "output_tokens": 13})
         self.assertTrue(pump.saw_usage_event)
 
-    def test_no_usage_events_leaves_partial_tokens_at_zero(self):
+    def test_no_usage_events_leaves_partial_tokens_empty(self):
         pump = self.pump(["просто вывод, ни одного usage-события\n"])
 
-        self.assertEqual(pump.partial_tokens, 0)
+        self.assertEqual(pump.partial_tokens, {})
         self.assertFalse(pump.saw_usage_event,
                          "0 токенов не должен выглядеть как «usage видели»")
 
@@ -283,7 +291,8 @@ class PumpCostTest(TmpRootTest):
         ])
 
         self.assertEqual(pump.cost["usd"], 0.5)
-        self.assertEqual(pump.partial_tokens, 15 + 24)
+        self.assertEqual(pump.partial_tokens,
+                         {"input_tokens": 25, "output_tokens": 14})
 
 
 class ChargeMissingResultTest(TmpRootTest):
@@ -335,7 +344,7 @@ class ChargeMissingResultTest(TmpRootTest):
 
         spent = spend.charge_missing_result(
             conn, self.TASK, "developer", "попытка 1/3", "таймаут шага",
-            partial_tokens=150, saw_usage_event=True)
+            partial_tokens={"input_tokens": 150}, saw_usage_event=True)
 
         self.assertGreater(self.task_row()["spent_usd"], 0.0)
         self.assertIn("150", spent)
@@ -354,7 +363,7 @@ class ChargeMissingResultTest(TmpRootTest):
 
         spent = spend.charge_missing_result(
             conn, self.TASK, "developer", "попытка 1/3", "обрыв stdout-пайпа",
-            partial_tokens=0, saw_usage_event=False)
+            partial_tokens={}, saw_usage_event=False)
 
         self.assertEqual(self.task_row()["spent_usd"], 0.0)
         self.assertEqual(spent, "")
@@ -373,7 +382,7 @@ class ChargeMissingResultTest(TmpRootTest):
         for _ in range(2):
             spend.charge_missing_result(
                 conn, self.TASK, "developer", "попытка 1/3", "таймаут шага",
-                partial_tokens=0, saw_usage_event=False)
+                partial_tokens={}, saw_usage_event=False)
 
         self.assertEqual(len(self.unknown_cost_alerts()), 1,
                          "дедуп alerts.raise_alert не даёт повторам плодить копии")
@@ -389,12 +398,13 @@ class ChargeMissingResultTest(TmpRootTest):
         `assertAlmostEqual` ниже разойдётся с независимо посчитанным
         `expected`."""
         conn = store.db()
+        tokens = {"input_tokens": 1000}
 
         spend.charge_missing_result(
             conn, self.TASK, "developer", "попытка 1/3", "таймаут шага",
-            partial_tokens=1000, saw_usage_event=True)
+            partial_tokens=tokens, saw_usage_event=True)
 
-        expected = spend.partial_cost_usd("developer", 1000)
+        expected = spend.partial_cost_usd("developer", tokens)
         self.assertAlmostEqual(self.task_row()["spent_usd"], expected)
 
     def test_unknown_rate_role_credits_the_estimate_and_raises_threshold_alert(self):
@@ -411,7 +421,7 @@ class ChargeMissingResultTest(TmpRootTest):
 
         spend.charge_missing_result(
             conn, self.TASK, "verifier", "попытка 1/3", "обрыв stdout-пайпа",
-            partial_tokens=42, saw_usage_event=True)
+            partial_tokens={"input_tokens": 42}, saw_usage_event=True)
 
         row = self.task_row()
         self.assertEqual(row["spent_usd"], 0.0)
@@ -426,30 +436,32 @@ class ChargeMissingResultTest(TmpRootTest):
 
 
 class PartialCostUsdTest(unittest.TestCase):
-    """`spend.partial_cost_usd` — курс роли -> доллары, чистая функция без
-    БД (SPEC 01M1NWCM3TDY0YABEKE8DYQA1C, требование 1-2)."""
+    """`spend.partial_cost_usd` — курс роли -> доллары по разбивке usage,
+    чистая функция без БД (SPEC 01M1NWCM3TDY0YABEKE8DYQA1C, требование
+    1-2; разбивка по видам — 01M1PP0VYRT55WN8GGVG66X89Y требование 2)."""
 
     def test_known_role_returns_a_positive_amount_proportional_to_tokens(self):
         """Ловит мутацию: `partial_cost_usd` возвращает фиксированную
-        ставку роли, не умноженную на `partial_tokens` (например,
-        забывает `*` и просто отдаёт `effective`) — тогда `double`
-        останется равным `single`, а не удвоится."""
+        ставку роли, не умноженную на количество токенов вида (например,
+        забывает `*`) — тогда `double` останется равным `single`, а не
+        удвоится."""
         role = next(iter(config.TOKEN_RATES))
 
-        single = spend.partial_cost_usd(role, 1000)
-        double = spend.partial_cost_usd(role, 2000)
+        single = spend.partial_cost_usd(role, {"input_tokens": 1000})
+        double = spend.partial_cost_usd(role, {"input_tokens": 2000})
 
         self.assertGreater(single, 0.0)
         self.assertAlmostEqual(double, single * 2)
 
     def test_zero_tokens_is_zero_cost_even_with_a_known_rate(self):
-        """Ловит мутацию: `partial_cost_usd` трактует `partial_tokens=0`
-        как «токенов нет» наравне с отсутствующим курсом (например,
-        `if not partial_tokens: return None`) — тогда функция вернёт
-        `None` вместо честного 0.0 для известной роли."""
+        """Ловит мутацию: `partial_cost_usd` трактует нулевую разбивку
+        как «курс не задан» (например, `if not tokens_by_type: return
+        None`) — тогда функция вернёт `None` вместо честного 0.0 для
+        известной роли."""
         role = next(iter(config.TOKEN_RATES))
+        zero = {k: 0 for k in config.USAGE_TOKEN_KEYS}
 
-        self.assertEqual(spend.partial_cost_usd(role, 0), 0.0)
+        self.assertEqual(spend.partial_cost_usd(role, zero), 0.0)
 
     def test_unknown_role_returns_none(self):
         """Ловит мутацию: `partial_cost_usd` возвращает 0.0 вместо
@@ -457,7 +469,24 @@ class PartialCostUsdTest(unittest.TestCase):
         принял бы отсутствие курса за «стоимость нулевая» и молча
         начислил 0.0 в `spent_usd`, минуя ветку верхней оценки/алерта
         (требование 3)."""
-        self.assertIsNone(spend.partial_cost_usd("no-such-role", 1000))
+        self.assertIsNone(spend.partial_cost_usd(
+            "no-such-role", {"input_tokens": 1000}))
+
+    def test_role_missing_one_of_the_four_prices_raises(self):
+        """SPEC 01M1PP0VYRT55WN8GGVG66X89Y, требование 3, AC-5: курс роли
+        ЕСТЬ, но не полон — явный отказ, не тихий ноль/пропуск вида
+        токена.
+
+        Ловит мутацию: расчёт использует `rate.get(field, 0)` вместо
+        прямого обращения к цене — тогда исключение не бросается, тест
+        падает на `assertRaises`."""
+        role = next(iter(config.TOKEN_RATES))
+        incomplete = {k: v for k, v in config.TOKEN_RATES[role].items()
+                     if k != "cache_read_usd_per_token"}
+
+        with mock.patch.dict(config.TOKEN_RATES, {role: incomplete}):
+            with self.assertRaises(Exception):
+                spend.partial_cost_usd(role, {"cache_read_input_tokens": 100})
 
 
 class CmdRunCostTest(TmpRootTest):

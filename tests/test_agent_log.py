@@ -350,7 +350,8 @@ class OutputPumpTest(TmpRootTest):
             pump.join(5)
 
         self.assertIsInstance(pump.error, OSError)
-        self.assertEqual(pump.partial_tokens, 42)
+        self.assertEqual(pump.partial_tokens,
+                         {"input_tokens": 30, "output_tokens": 12})
         self.assertTrue(pump.saw_usage_event)
 
     def test_no_usage_events_leaves_partial_tokens_at_zero(self):
@@ -361,7 +362,7 @@ class OutputPumpTest(TmpRootTest):
             pump.start()
             pump.join(5)
 
-        self.assertEqual(pump.partial_tokens, 0)
+        self.assertEqual(pump.partial_tokens, {})
         self.assertFalse(pump.saw_usage_event)
 
     def test_friction_is_computed_from_the_raw_stream_not_the_rendered_log(self):
