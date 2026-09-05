@@ -15,6 +15,26 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from orchestrator import catalog, config, parallel_limit, store  # noqa: E402
 from tests.sandbox import TmpRootTest, _dead_pid, _ts_ago, capture  # noqa: E402
 
+# Граница свежести heartbeat (01M1R5B570KMS26NQ6J2G2WXZB): запас ровно в
+# 1 секунду до/после `LEASE_STALE_AFTER_SEC` делал тест зависимым от
+# скорости прогона — просадка CI-раннера съедала секунду между посевом
+# lease и вызовом проверяемой функции быстрее, чем тест успевал
+# отработать (наблюдение 05.09, push-прогон ветки регрессии №10).
+# Запас в половину порога на порядки больше любой реалистичной просадки
+# и не завязан на конкретное числовое значение порога — переживёт его
+# будущую правку Оператором без изменений здесь.
+_MARGIN_SEC = config.LEASE_STALE_AFTER_SEC // 2
+
+
+def _fresh_edge_ts() -> str:
+    """Heartbeat моложе порога на `_MARGIN_SEC` — задача ещё занята."""
+    return _ts_ago(config.LEASE_STALE_AFTER_SEC - _MARGIN_SEC)
+
+
+def _stale_edge_ts() -> str:
+    """Heartbeat старше порога на `_MARGIN_SEC` — задача уже не занята."""
+    return _ts_ago(config.LEASE_STALE_AFTER_SEC + _MARGIN_SEC)
+
 
 class ParallelLimitTest(TmpRootTest):
     TASK = "T001"
@@ -58,14 +78,14 @@ class ParallelLimitTest(TmpRootTest):
         self.assertEqual([r["task_id"] for r in busy], ["T901"])
 
     def test_stale_heartbeat_is_excluded(self):
-        stale = _ts_ago(config.LEASE_STALE_AFTER_SEC + 1)
+        stale = _stale_edge_ts()
         self.seed_lease("T901", "sess-1", os.getpid(), socket.gethostname(),
                         stale)
 
         self.assertEqual(parallel_limit.busy_other_tasks(store.db(), self.TASK), [])
 
     def test_heartbeat_just_under_the_threshold_still_counts(self):
-        edge = _ts_ago(config.LEASE_STALE_AFTER_SEC - 1)
+        edge = _fresh_edge_ts()
         self.seed_lease("T901", "sess-1", os.getpid(), socket.gethostname(),
                         edge)
 
@@ -88,7 +108,7 @@ class ParallelLimitTest(TmpRootTest):
         self.assertEqual([r["task_id"] for r in busy], ["T901"])
 
     def test_foreign_host_with_stale_heartbeat_is_still_excluded(self):
-        stale = _ts_ago(config.LEASE_STALE_AFTER_SEC + 1)
+        stale = _stale_edge_ts()
         self.seed_lease("T901", "sess-1", _dead_pid(), "other-host", stale)
 
         self.assertEqual(parallel_limit.busy_other_tasks(store.db(), self.TASK), [])
@@ -126,7 +146,7 @@ class ParallelLimitTest(TmpRootTest):
         self.assertIn(str(config.MAX_PARALLEL_TASKS), text)
 
     def test_refusal_is_none_when_ceiling_only_reached_by_stale_or_dead(self):
-        stale = _ts_ago(config.LEASE_STALE_AFTER_SEC + 1)
+        stale = _stale_edge_ts()
         self.seed_lease("T901", "sess-stale", os.getpid(),
                         socket.gethostname(), stale)
         self.seed_lease("T902", "sess-dead", _dead_pid(),
