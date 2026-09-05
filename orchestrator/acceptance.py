@@ -17,8 +17,18 @@ from scripts import guard
 from . import config, gitcmd
 
 
-def run(tdir: Path) -> tuple[bool, str]:
+def run(tdir: Path, code_root: Path | None = None) -> tuple[bool, str]:
     """(зелёно, хвост вывода) — детерминированный прогон unittest'ом.
+
+    `code_root` — рабочий каталог прогона, откуда планка импортирует
+    пакет оркестратора: для self-target это worktree КОДОВОЙ ВЕТКИ
+    задачи, не `config.ROOT` (главная копия стоит на пине запущенной
+    версии — старом коде; планка, материализованная из артефактной
+    ветки во временный каталог, через `sys.path.insert(parents[3])`
+    попадает в случайный путь и импортирует пакет из cwd; hotfix
+    аварийного режима 05.09, регрессия №14 флоу A7: тесты hotfix зон
+    01M1RR1PZC красные из ROOT и зелёные из worktree). `None` — прежнее
+    поведение (`config.ROOT`): внешний target, песочницы без worktree.
 
     Каталога нет (`skip_tests` либо задача старше T023) — прогонять
     нечего, переход не блокируется: тот же вырожденный случай, что
@@ -30,7 +40,7 @@ def run(tdir: Path) -> tuple[bool, str]:
     try:
         res = subprocess.run(
             ["python3", "-m", "unittest", "discover", "-s", str(tests_dir)],
-            cwd=config.ROOT, capture_output=True, text=True,
+            cwd=code_root or config.ROOT, capture_output=True, text=True,
             timeout=config.ACCEPTANCE_TIMEOUT_SEC)
     except subprocess.TimeoutExpired as exc:
         tail = ((exc.stdout or "") + (exc.stderr or ""))[-2000:]
