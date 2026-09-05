@@ -531,11 +531,35 @@ def _handle_map_size_alert(conn, task_id: str, map_text: str) -> None:
             alerts.auto_ack(conn, row["id"])
 
 
+def _plan_review_components(conn, task_id: str, branch: str, foreign: bool,
+                            run_id: str) -> list[str]:
+    """PLAN.md/REVIEW.md артефактной ветки — в бриф developer, тем же
+    способом, каким он уже несёт SPEC.md (SPEC 01M1NKTF173WV5CPDZ1C3WW69K,
+    требование 2, AC-3): роль видит актуальный текст без отдельного
+    чтения диска, sha256 каждого — в журнал шага. Файла нет (PLAN.md
+    ещё не написан на первом шаге, REVIEW.md — до первого ревью) — не
+    отказ, тот же приём, что ANSWER/QUESTIONS (`_answer_component`/
+    `_questions_component`)."""
+    parts = []
+    for rel in ("PLAN.md", "REVIEW.md"):
+        text = _branch_or_disk_text(task_id, branch, rel, foreign)
+        if text is None:
+            continue
+        parts.append(_manifest_component(conn, task_id, "developer",
+                                         f"tasks/{task_id}/{rel}", text,
+                                         run_id))
+    return parts
+
+
 def developer_brief(conn, task_id: str) -> str:
     """Бриф роли developer: SPEC задачи + карта + конвенции проекта одним
     документом (требования 1, 3, 4, 8); ANSWER-n.md последней эскалации
     — если она была (SPEC T075, AC-6: ответ обязан дойти до роли, а не
-    только существовать в ветке).
+    только существовать в ветке). PLAN.md/REVIEW.md артефактной ветки —
+    тем же способом (SPEC 01M1NKTF173WV5CPDZ1C3WW69K, требование 2,
+    AC-3): на диске рабочего каталога роли (`runner.role_cwd`) лежит та
+    же версия, материализованная из ГОЛОВЫ артефактной ветки на старте
+    шага (требование 1) — бриф и диск не расходятся.
 
     Опись и дисциплина частей (tasks/01M1GCN1FPSC1A6WK9WD1Q1V8X,
     требования 1-3, 7): каждый компонент несёт путь/размер/sha256 или
@@ -571,6 +595,8 @@ def developer_brief(conn, task_id: str) -> str:
         _manifest_component(conn, task_id, "developer", CONVENTIONS_REL,
                             conventions_text, run_id),
     ]
+    parts.extend(_plan_review_components(conn, task_id, branch, foreign,
+                                         run_id))
     answer_part = _answer_component(conn, task_id, "developer", branch,
                                     foreign, run_id, render=_manifest_component)
     if answer_part:

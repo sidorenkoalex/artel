@@ -421,15 +421,35 @@ def role_cwd(conn, task_id: str, target: str) -> Path:
     внешнего target создаётся здесь же, как и курируемый слой ролей: до
     git-первички (A2b) он пуст, но роль обязана стартовать в НЁМ, а не
     тихо съехать на ROOT из-за отсутствия каталога.
+
+    Материализация `tasks/<id>/` из артефактной ветки (SPEC
+    01M1NKTF173WV5CPDZ1C3WW69K, требование 1, AC-1/AC-2, AC-8): на
+    каждом вызове каталог задачи здесь же перезаписывается ГОЛОВОЙ
+    артефактной ветки — правка Оператора на гейте между шагами доезжает
+    до диска следующего шага, а не остаётся стухшей копией с прошлого
+    (инцидент 04.09, «Контекст» SPEC). sha использованной головы —
+    baseline конфликт-гварда автокоммита (`checkpoint.
+    _commit_external_step_artifacts`, AC-6/AC-7), в колонку БД, не в
+    файл диска — переживает `shutil.rmtree` каталога, которым автокоммит
+    убирает `tasks/<id>/` после переноса. `task_id is None` — офлайн-смоук
+    изоляции (`doctor.isolation_smoke`, синтетический target без реальной
+    задачи) — материализация здесь бессмысленна, пропускается тихо, той
+    же деградацией, что и отсутствие артефактной ветки.
     """
     if target == config.DEFAULT_TARGET:
         branch = store.task_branch(conn, task_id)
         wt_path, error = workspace.ensure(task_id, branch)
         if error is not None:
             raise OSError(error)
-        return wt_path
-    path = config.PROJECTS / target / "workspace"
-    path.mkdir(parents=True, exist_ok=True)
+        path = wt_path
+    else:
+        path = config.PROJECTS / target / "workspace"
+        path.mkdir(parents=True, exist_ok=True)
+    if task_id is not None:
+        from . import artifact_branch
+        materialized_sha = artifact_branch.materialize_task_dir(task_id, path)
+        store.update_task(conn, task_id,
+                          materialized_artifact_sha=materialized_sha or None)
     return path
 
 

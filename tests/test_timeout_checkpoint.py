@@ -18,7 +18,7 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from orchestrator import checkpoint, fixation, gitcmd, store, workspace  # noqa: E402
+from orchestrator import checkpoint, config, fixation, gitcmd, runner, store, workspace  # noqa: E402
 from tests.test_git_fixation import RealPultGitTest  # noqa: E402
 
 
@@ -373,7 +373,14 @@ class CommitAbnormalCheckpointTest(_WorktreeCheckpointTest):
         self.assertEqual(self.orchestrator_steps(), [])
 
     def test_dirty_tree_commits_with_cause_marker_in_message_and_journal(self):
+        """Мандат `developer` — все пути кроме `tasks/<id>/` (см. докстринг
+        `commit_timeout_checkpoint`, тот же приём здесь: R1-F1, REVIEW.md
+        итерация 2): правка ВНЕ `tasks/<id>/` нужна, чтобы код-коммит
+        вообще состоялся — WIP, оставленный только в `tasks/<id>/`,
+        переносится в артефактную ветку отдельно (см. тест ниже)."""
         self.enter_in_dev()
+        self.write_code_file("orchestrator/new_module.py",
+                             "# правка разработчика\n")
         (self.worktree_task_dir() / "wip.md").write_text(
             "недописано\n", encoding="utf-8")
 
@@ -420,6 +427,75 @@ class CommitAbnormalCheckpointTest(_WorktreeCheckpointTest):
         self.assertEqual(self.worktree_head(), before)
         self.assertEqual(self.orchestrator_steps(), [])
 
+    def test_developer_mandate_excludes_task_dir_from_code_commit(self):
+        """Ловит мутацию: `exclude` не передаётся `_commit_worktree_change`
+        (REVIEW.md 01M1NKTF173WV5CPDZ1C3WW69K итерация 2, R1-F1 —
+        переоткрыт: правка `commit_timeout_checkpoint` не была применена
+        к этой функции, `tasks/<id>/` попадал в кодовый коммит `developer`
+        на аварийном завершении шага)."""
+        self.enter_in_dev()
+        self.write_code_file("orchestrator/new_module.py",
+                             "# правка разработчика\n")
+        (self.worktree_task_dir() / "wip.md").write_text(
+            "недописанный артефакт\n", encoding="utf-8")
+
+        checkpoint.commit_abnormal_checkpoint(
+            store.db(), self.TASK, "developer", "rc=1")
+
+        after = self.worktree_head()
+        committed = self.worktree_git("show", "--name-only", "--format=", after)
+        committed_paths = [p for p in committed.splitlines() if p]
+        self.assertIn("orchestrator/new_module.py", committed_paths)
+        task_paths = [p for p in committed_paths
+                     if p.startswith(f"tasks/{self.TASK}/")]
+        self.assertEqual(task_paths, [],
+                         f"tasks/<id>/ не входит в мандат кода developer — "
+                         f"фактически закоммичено: {task_paths}")
+
+    def test_non_developer_role_discards_change_outside_task_dir(self):
+        """Ловит мутацию: `_discard_out_of_mandate_changes` не вызывается
+        для не-`developer` роли на аварийном завершении шага (тот же класс
+        R1-F1, что и у `commit_timeout_checkpoint`, теперь и здесь)."""
+        self.enter_in_dev()
+        claude_md = self.wt / "CLAUDE.md"
+        original = claude_md.read_text(encoding="utf-8")
+        claude_md.write_text(original + "строка 1\nстрока 2\n",
+                             encoding="utf-8")
+        before = self.worktree_head()
+
+        detail = checkpoint.commit_abnormal_checkpoint(
+            store.db(), self.TASK, "reviewer", "rc=1")
+
+        self.assertEqual(detail, "")
+        self.assertEqual(self.worktree_head(), before)
+        self.assertEqual(claude_md.read_text(encoding="utf-8"), original)
+
+        entries = self.orchestrator_steps()
+        self.assertEqual(len(entries), 1)
+        marker = f"{entries[0]['action']} {entries[0]['detail']}"
+        self.assertIn("CLAUDE.md", marker)
+        self.assertIn("2", marker)
+
+    def test_materialized_spec_is_absent_from_the_code_branch_after_abnormal_end(self):
+        """Регресс-тест точного репро ревьювера (REVIEW.md итерация 2,
+        R1-F1, «Проверено исполнением»): материализованный `role_cwd`
+        SPEC.md роли `reviewer` (нет мандата кода) не обязан попасть в
+        кодовую ветку на аварийном завершении шага."""
+        self.enter_in_dev()
+
+        materialized_path = runner.role_cwd(store.db(), self.TASK,
+                                            config.DEFAULT_TARGET)
+        self.assertEqual(materialized_path, self.wt)
+        self.assertTrue(
+            (self.wt / "tasks" / self.TASK / "SPEC.md").exists(),
+            "role_cwd обязан материализовать SPEC.md из артефактной ветки")
+
+        checkpoint.commit_abnormal_checkpoint(
+            store.db(), self.TASK, "reviewer", "rc=1")
+
+        tracked = self.worktree_git("ls-tree", "-r", "--name-only", "HEAD")
+        self.assertNotIn(f"tasks/{self.TASK}/SPEC.md", tracked.splitlines())
+
 
 class CommitPauseNowCheckpointTest(_WorktreeCheckpointTest):
     """Юнит-тесты `checkpoint.commit_pause_now_checkpoint` (SPEC T074,
@@ -439,7 +515,13 @@ class CommitPauseNowCheckpointTest(_WorktreeCheckpointTest):
         self.assertEqual(self.orchestrator_steps(), [])
 
     def test_dirty_tree_commits_with_pause_now_marker(self):
+        """Мандат `developer` — все пути кроме `tasks/<id>/` (см. докстринг
+        `commit_timeout_checkpoint`, тот же приём здесь: R1-F1, REVIEW.md
+        итерация 2): правка ВНЕ `tasks/<id>/` нужна, чтобы код-коммит
+        вообще состоялся."""
         self.enter_in_dev()
+        self.write_code_file("orchestrator/new_module.py",
+                             "# правка разработчика\n")
         (self.worktree_task_dir() / "wip.md").write_text(
             "недописано\n", encoding="utf-8")
 
@@ -482,6 +564,108 @@ class CommitPauseNowCheckpointTest(_WorktreeCheckpointTest):
         self.assertEqual(detail, "")
         self.assertEqual(self.worktree_head(), before)
         self.assertEqual(self.orchestrator_steps(), [])
+
+    def test_developer_mandate_excludes_task_dir_from_code_commit(self):
+        """Ловит мутацию: `exclude` не передаётся `_commit_worktree_change`
+        (REVIEW.md 01M1NKTF173WV5CPDZ1C3WW69K итерация 2, R1-F1 —
+        переоткрыт: `tasks/<id>/` попадал в кодовый коммит `developer` на
+        `pause --now`)."""
+        self.enter_in_dev()
+        self.write_code_file("orchestrator/new_module.py",
+                             "# правка разработчика\n")
+        (self.worktree_task_dir() / "wip.md").write_text(
+            "недописанный артефакт\n", encoding="utf-8")
+
+        checkpoint.commit_pause_now_checkpoint(
+            store.db(), self.TASK, "developer")
+
+        after = self.worktree_head()
+        committed = self.worktree_git("show", "--name-only", "--format=", after)
+        committed_paths = [p for p in committed.splitlines() if p]
+        self.assertIn("orchestrator/new_module.py", committed_paths)
+        task_paths = [p for p in committed_paths
+                     if p.startswith(f"tasks/{self.TASK}/")]
+        self.assertEqual(task_paths, [],
+                         f"tasks/<id>/ не входит в мандат кода developer — "
+                         f"фактически закоммичено: {task_paths}")
+
+    def test_non_developer_role_discards_change_outside_task_dir(self):
+        """Ловит мутацию: `_discard_out_of_mandate_changes` не вызывается
+        для не-`developer` роли на `pause --now` (тот же класс R1-F1, что
+        и у `commit_timeout_checkpoint`, теперь и здесь)."""
+        self.enter_in_dev()
+        claude_md = self.wt / "CLAUDE.md"
+        original = claude_md.read_text(encoding="utf-8")
+        claude_md.write_text(original + "строка 1\nстрока 2\n",
+                             encoding="utf-8")
+        before = self.worktree_head()
+
+        detail = checkpoint.commit_pause_now_checkpoint(
+            store.db(), self.TASK, "reviewer")
+
+        self.assertEqual(detail, "")
+        self.assertEqual(self.worktree_head(), before)
+        self.assertEqual(claude_md.read_text(encoding="utf-8"), original)
+
+        entries = self.orchestrator_steps()
+        self.assertEqual(len(entries), 1)
+        marker = f"{entries[0]['action']} {entries[0]['detail']}"
+        self.assertIn("CLAUDE.md", marker)
+        self.assertIn("2", marker)
+
+    def test_materialized_spec_is_absent_from_the_code_branch_after_pause_now(self):
+        """Регресс-тест точного репро ревьювера (REVIEW.md итерация 2,
+        R1-F1, «Проверено исполнением»): материализованный `role_cwd`
+        SPEC.md роли `reviewer` (нет мандата кода) не обязан попасть в
+        кодовую ветку на `pause --now`."""
+        self.enter_in_dev()
+
+        materialized_path = runner.role_cwd(store.db(), self.TASK,
+                                            config.DEFAULT_TARGET)
+        self.assertEqual(materialized_path, self.wt)
+        self.assertTrue(
+            (self.wt / "tasks" / self.TASK / "SPEC.md").exists(),
+            "role_cwd обязан материализовать SPEC.md из артефактной ветки")
+
+        checkpoint.commit_pause_now_checkpoint(
+            store.db(), self.TASK, "reviewer")
+
+        tracked = self.worktree_git("ls-tree", "-r", "--name-only", "HEAD")
+        self.assertNotIn(f"tasks/{self.TASK}/SPEC.md", tracked.splitlines())
+
+
+class RoleCwdMaterializationSurvivesTimeoutCheckpointTest(_WorktreeCheckpointTest):
+    """Регресс-тест на точную репродукцию R1-F1 (REVIEW.md итерации 1,
+    blocker): `artifact_branch.commit_files` сеет SPEC.md в артефактную
+    ветку → `runner.role_cwd` материализует его в worktree self-target'а
+    → `checkpoint.commit_timeout_checkpoint` — материализованный, ещё
+    ничем не изменённый ролью артефакт не обязан попасть в кодовую ветку
+    `task/*` этим коммитом (SPEC 01M1NKTF173WV5CPDZ1C3WW69K, требование
+    3/AC-9). До фикса `git ls-tree -r HEAD` этого worktree после
+    чекпоинта содержал `tasks/<TASK>/SPEC.md` — ровно тот сценарий,
+    которым дефект был живьём воспроизведён при ревью."""
+
+    def test_materialized_spec_is_absent_from_the_code_branch_after_timeout(self):
+        self.enter_in_dev()
+
+        materialized_path = runner.role_cwd(store.db(), self.TASK,
+                                            config.DEFAULT_TARGET)
+        self.assertEqual(materialized_path, self.wt)
+        self.assertTrue(
+            (self.wt / "tasks" / self.TASK / "SPEC.md").exists(),
+            "role_cwd обязан материализовать SPEC.md из артефактной ветки")
+        # Настоящий WIP вне tasks/<id>/, чтобы чекпоинт реально что-то
+        # закоммитил — иначе тест доказывал бы только «ничего не
+        # закоммичено», не саму фильтрацию (см. следующий коммент теста).
+        (self.wt / "wip.md").write_text("недописано\n", encoding="utf-8")
+
+        detail = checkpoint.commit_timeout_checkpoint(store.db(), self.TASK,
+                                                       "developer")
+
+        self.assertTrue(detail, "чекпоинт обязан закоммитить wip.md")
+        tracked = self.worktree_git("ls-tree", "-r", "--name-only", "HEAD")
+        self.assertNotIn(f"tasks/{self.TASK}/SPEC.md", tracked.splitlines())
+        self.assertIn("wip.md", tracked.splitlines())
 
 
 if __name__ == "__main__":
