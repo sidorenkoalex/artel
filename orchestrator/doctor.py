@@ -47,10 +47,12 @@ subprocess-вызовов», см. `preflight_checks`).
 блокировки шага (preflight fail) в alerts не дублируются: они уже видны
 именованной причиной в журнале конкретной задачи.
 """
+import json
 import os
 import re
 import shutil
 import socket
+import statistics
 import subprocess
 import sys
 import tempfile
@@ -1457,6 +1459,92 @@ def _fix_ignored_artifact_files(conn) -> None:
               f"файлов из артефактной ветки")
 
 
+# --- наблюдатель роста карты кодовой базы (01M1RFVWV6WWTXRC5F40K61632,
+#     требование 3) -------------------------------------------------------
+
+MAP_SIZE_ACTION = "карта: размер"
+MAP_GROWTH_SOURCE = "map.growth"
+
+
+def _map_growth_reference_point(conn, target: str) -> str | None:
+    """Момент последнего подтверждённого алерта `map.growth` этого
+    target — `ack` переносит точку отсчёта и тем самым перекалибровывает
+    базу (AC-10); подтверждённых алертов нет — начало ряда (`None`)."""
+    row = conn.execute(
+        "SELECT ack_ts FROM alerts WHERE target=? AND kind='trigger' "
+        "AND source=? AND ack_ts IS NOT NULL ORDER BY ack_ts DESC LIMIT 1",
+        (target, MAP_GROWTH_SOURCE)).fetchone()
+    return row["ack_ts"] if row is not None else None
+
+
+def _map_growth_series(conn, target: str) -> list:
+    """Ряд `detail` (разобранных JSON) записей «карта: размер» этого
+    target ПОСЛЕ точки отсчёта, в порядке появления."""
+    reference = _map_growth_reference_point(conn, target)
+    if reference is None:
+        rows = conn.execute(
+            "SELECT detail FROM steps WHERE target=? AND action=? "
+            "ORDER BY id", (target, MAP_SIZE_ACTION)).fetchall()
+    else:
+        rows = conn.execute(
+            "SELECT detail FROM steps WHERE target=? AND action=? "
+            "AND ts > ? ORDER BY id",
+            (target, MAP_SIZE_ACTION, reference)).fetchall()
+    return [json.loads(row["detail"]) for row in rows]
+
+
+def _map_growth_message(compare_from: dict, last: dict) -> str:
+    """Текст алерта: каталог верхнего уровня с наибольшим приростом байт
+    между сравниваемыми записями и три самые крупные секции текущей
+    карты (AC-13) — без времени/id, детерминирован по данным ряда."""
+    last_dirs = last["bytes_by_dir"]
+    base_dirs = compare_from["bytes_by_dir"]
+    grown_dir = max(last_dirs, key=lambda d: last_dirs[d] - base_dirs.get(d, 0))
+    top3 = last["top_sections"][:3]
+    sections_txt = ", ".join(
+        f"{entry['name']} ({entry['bytes']} байт)" for entry in top3)
+    return (f"рост карты кодовой базы: сильнее всего вырос каталог "
+           f"{grown_dir}; крупнейшие секции карты — {sections_txt}")
+
+
+def _map_growth_check(conn, target: str) -> Check:
+    name = f"map-growth:{target}"
+    series = _map_growth_series(conn, target)
+    k = config.MAP_GROWTH_CALIBRATION_MERGES
+    if len(series) < k:
+        return Check(name, "ok", f"калибровка: {len(series)}/{k} измерений")
+
+    window = series[:k]
+    baseline = statistics.median(entry["bytes_total"] for entry in window)
+    last = series[-1]
+    prev = series[-2] if len(series) >= 2 else None
+
+    creep = last["bytes_total"] > baseline * (1 + config.MAP_GROWTH_RATIO)
+    jump = (prev is not None and last["bytes_total"] >
+           prev["bytes_total"] * (1 + config.MAP_JUMP_RATIO))
+    if not (creep or jump):
+        return Check(name, "ok", "рост в пределах нормы")
+
+    compare_from = prev if prev is not None else window[0]
+    message = _map_growth_message(compare_from, last)
+    alerts.raise_alert(conn, target, "trigger", MAP_GROWTH_SOURCE, message)
+    return Check(name, "warn", message)
+
+
+def check_map_growth(conn) -> list[Check]:
+    """Требование 3: по каждому target с хотя бы одной записью «карта:
+    размер» — самокалибрующийся относительный порог роста карты
+    кодовой базы (AC-8..AC-16). Абсолютный потолок брифа эта проверка не
+    читает и не меняет (AC-15) — только относительные сигналы (медиана
+    окна калибровки, прирост между соседними записями).
+    """
+    rows = conn.execute(
+        "SELECT DISTINCT target FROM steps WHERE action=? "
+        "AND target IS NOT NULL", (MAP_SIZE_ACTION,)).fetchall()
+    targets_with_series = sorted(row["target"] for row in rows)
+    return [_map_growth_check(conn, target) for target in targets_with_series]
+
+
 # --- команда doctor -------------------------------------------------------
 
 def all_checks(conn) -> list[Check]:
@@ -1495,6 +1583,7 @@ def all_checks(conn) -> list[Check]:
     checks.append(check_root_pin())
     checks.append(check_role_log_pool_leak(conn))
     checks.extend(check_token_repo_scope())
+    checks.extend(check_map_growth(conn))
     return checks
 
 

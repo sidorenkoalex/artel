@@ -13,7 +13,9 @@
 и keychain — подменены, кроме тестов recovery/orphans, которым нужен
 настоящий git (тот же приём, что `RealPultGitTest`).
 """
+import inspect
 import io
+import json
 import os
 import shutil
 import socket
@@ -1715,6 +1717,115 @@ class LiveSmokeTest(TmpRootTest):
     def test_command_exists_and_is_wired_into_doctor(self):
         self.assertTrue(callable(doctor.live_smoke))
         self.assertTrue(callable(doctor.cmd_doctor))
+
+
+class MapGrowthCheckTest(TmpRootTest):
+    """01M1RFVWV6WWTXRC5F40K61632, требование 3 — компактный юнит поверх
+    приёмочной планки задачи (`tasks/01M1RFVWV6WWTXRC5F40K61632/
+    acceptance_tests/test_doctor_map_growth.py`, покрывающей AC-8..AC-16
+    полно): здесь — по одному представителю на сигнал плюс инварианты,
+    прямо названные требованием 5 SPEC (независимость рядов target,
+    константы из config, не литералы)."""
+
+    def setUp(self):
+        super().setUp()
+        store.create_schema(store.db())
+        self.conn = store.db()
+        self._seq = 0
+
+    def make_task(self, target: str = "artel") -> str:
+        self._seq += 1
+        task_id = f"01M1DOCTORMAPGROWTH{self._seq:09d}"
+        store.insert_task(self.conn, task_id, "Задача", "in_dev",
+                          f"task/{task_id.lower()}", target, 25.0)
+        return task_id
+
+    def add_step(self, task_id: str, bytes_total: int) -> None:
+        detail = json.dumps({
+            "bytes_total": bytes_total, "sections_total": 1,
+            "bytes_by_dir": {"orchestrator": bytes_total, "scripts": 0,
+                            "tests": 0},
+            "top_sections": [{"name": "orchestrator/x.py",
+                             "bytes": bytes_total}],
+            "sha": "0" * 40,
+        }, ensure_ascii=False, separators=(",", ":"))
+        store.journal(self.conn, task_id, "orchestrator",
+                      doctor.MAP_SIZE_ACTION, detail)
+
+    def test_calibration_window_is_silent(self):
+        task = self.make_task()
+        self.add_step(task, 100_000)
+
+        checks = {c.name: c for c in doctor.check_map_growth(self.conn)}
+
+        check = checks["map-growth:artel"]
+        self.assertEqual(check.status, "ok")
+        self.assertIn(f"1/{config.MAP_GROWTH_CALIBRATION_MERGES}",
+                      check.detail)
+        self.assertEqual(alerts.open_alerts(self.conn, "trigger"), [])
+
+    def test_creep_beyond_ratio_raises_a_trigger(self):
+        task = self.make_task()
+        k = config.MAP_GROWTH_CALIBRATION_MERGES
+        base = 1_000_000
+        for _ in range(k):
+            self.add_step(task, base)
+        self.add_step(task, int(base * (1 + config.MAP_GROWTH_RATIO) * 1.5))
+
+        checks = {c.name: c for c in doctor.check_map_growth(self.conn)}
+
+        self.assertEqual(checks["map-growth:artel"].status, "warn")
+        triggers = [a for a in alerts.open_alerts(self.conn, "trigger")
+                   if a["source"] == "map.growth"]
+        self.assertEqual(len(triggers), 1)
+
+    def test_jump_between_adjacent_records_raises_a_trigger(self):
+        task = self.make_task()
+        k = config.MAP_GROWTH_CALIBRATION_MERGES
+        base = 1_000_000
+        for _ in range(k):
+            self.add_step(task, base)
+        self.add_step(task, int(base * (1 + config.MAP_JUMP_RATIO * 1.5)))
+
+        doctor.check_map_growth(self.conn)
+
+        triggers = [a for a in alerts.open_alerts(self.conn, "trigger")
+                   if a["source"] == "map.growth"]
+        self.assertEqual(len(triggers), 1)
+
+    def test_repeated_run_does_not_duplicate_the_alert(self):
+        task = self.make_task()
+        k = config.MAP_GROWTH_CALIBRATION_MERGES
+        base = 1_000_000
+        for _ in range(k):
+            self.add_step(task, base)
+        self.add_step(task, int(base * (1 + config.MAP_JUMP_RATIO * 1.5)))
+
+        doctor.check_map_growth(self.conn)
+        doctor.check_map_growth(self.conn)
+
+        triggers = [a for a in alerts.open_alerts(self.conn, "trigger")
+                   if a["source"] == "map.growth"]
+        self.assertEqual(len(triggers), 1)
+
+    def test_two_targets_series_are_independent(self):
+        k = config.MAP_GROWTH_CALIBRATION_MERGES
+        base = 1_000_000
+        task_a = self.make_task("artel")
+        task_b = self.make_task("sled")
+        for _ in range(k):
+            self.add_step(task_a, base)
+            self.add_step(task_b, base)
+        self.add_step(task_a, int(base * (1 + config.MAP_GROWTH_RATIO) * 1.5))
+        self.add_step(task_b, base)
+
+        checks = {c.name: c for c in doctor.check_map_growth(self.conn)}
+
+        self.assertEqual(checks["map-growth:artel"].status, "warn")
+        self.assertEqual(checks["map-growth:sled"].status, "ok")
+
+    def test_all_checks_wires_in_check_map_growth(self):
+        self.assertIn("check_map_growth", inspect.getsource(doctor.all_checks))
 
 
 if __name__ == "__main__":
