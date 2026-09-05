@@ -25,10 +25,21 @@ SQL самих операций — в store.py (ADR-0003 3ж: «единств�
   этой задачи, кем бы он ни был вызван (требование 4) —
   `close_attention_alerts`, зовётся из `store.set_state`, единственной
   точки любого перехода FSM.
+- `warning` — сигнал деградации, не блокирующий переход (tasks/
+  01M1P9RJVYHTAC087J4B2CAR44, требование 3): ревью-пакет итерации > 1 не
+  собрал diff («diff не собран») — раньше тихая строка журнала, теперь
+  видна Оператору без подъёма лога шага. `target` — id задачи. Заводится
+  `runner.cmd_run` (`raise_diff_not_collected_alert`), закрывается сам,
+  когда следующий сбор пакета той же задачи снова несёт diff
+  (`close_diff_not_collected_alerts`) — тем же приёмом авто-ack, что
+  `attention`, но без привязки к переходу FSM: подтверждение наступает
+  уже на следующем СБОРЕ ПАКЕТА, не на смене состояния задачи.
 """
 from . import store
 
-KINDS = ("incident", "threshold", "trigger", "attention")
+KINDS = ("incident", "threshold", "trigger", "attention", "warning")
+
+DIFF_NOT_COLLECTED_SOURCE = "review-diff"
 
 
 def raise_alert(conn, target: str | None, kind: str, source: str,
@@ -73,6 +84,27 @@ def close_attention_alerts(conn, task_id: str) -> None:
         if row["target"] == task_id:
             store.ack_alert(conn, row["id"], "auto",
                             "закрыт следующим переходом состояния задачи")
+
+
+def raise_diff_not_collected_alert(conn, task_id: str, reason: str) -> bool:
+    """Заводит `kind=warning` на «diff не собран» ревью-пакета итерации > 1
+    (tasks/01M1P9RJVYHTAC087J4B2CAR44, требование 3) — тонкая обёртка над
+    `raise_alert`: дедуп (target, kind, source, message) и решение
+    «заведён/уже открыт» остаются его же."""
+    message = f"{task_id}: ревью-пакет — diff не собран: {reason}"
+    return raise_alert(conn, task_id, "warning", DIFF_NOT_COLLECTED_SOURCE, message)
+
+
+def close_diff_not_collected_alerts(conn, task_id: str) -> None:
+    """Авто-подтверждает открытые `kind=warning` «diff не собран» этой
+    задачи (требование 3): следующий сбор ревью-пакета снова несёт diff —
+    условие, которое алерт представлял, ушло. Тот же приём, что
+    `close_attention_alerts`, но зовётся не переходом FSM, а самим
+    `runner.cmd_run` на успешном сборе пакета."""
+    for row in open_alerts(conn, "warning"):
+        if row["target"] == task_id and row["source"] == DIFF_NOT_COLLECTED_SOURCE:
+            store.ack_alert(conn, row["id"], "auto",
+                            "diff следующего сбора пакета собран")
 
 
 def auto_ack(conn, alert_id: int) -> None:
