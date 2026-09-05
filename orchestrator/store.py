@@ -1,10 +1,18 @@
-"""Состояние задач: БД, миграции схемы, журнал шагов, смена состояния.
+"""Состояние задач: БД, журнал шагов, смена состояния, запросы по областям.
 
-Единственный модуль, который пишет SQL (ADR-0003 3ж): остальные зовут
-здешние функции по имени. Смысл не в слое ради слоя, а в том, что смена
-движка (Postgres — по триггеру «второй писатель», не по эпохе) правит
-один файл, а не семь. Отсюда же и переносимость схемы: без
-SQLite-экзотики, кроме включения WAL — оно и есть настройка движка.
+Единственный модуль, который пишет SQL (ADR-0003 3ж) вместе с
+`orchestrator/schema.py` — туда вынесены DDL (`SCHEMA`) и `migrate`
+(roadmap §3, фаза R, пункт R6): раньше они жили вперемешку с запросами
+по задачам, журналу, lease, алертам, канарейке, зонам в одном файле, и
+каждая новая колонка правила его целиком, что регулярно конфликтовало
+на подтяжке. `create_schema`/`migrate`/`add_column`/`table_columns`
+здесь — реэкспорт объектов `schema.py` под прежними именами: вызовы и
+тестовые подмены (`mock.patch.object(store, "migrate", ...)`) продолжают
+работать без изменений.
+
+Остальные модули зовут здешние функции по имени. Смысл не в слое ради
+слоя, а в том, что смена движка (Postgres — по триггеру «второй
+писатель», не по эпохе) правит два файла, а не семь.
 
 БД одна на все target'ы: кошелёк Оператора один, суммарные лимиты
 и тренды считаются одним запросом. Принадлежность строки проекту
@@ -16,57 +24,7 @@ import sys
 from datetime import datetime, timezone
 
 from . import config, session
-
-# Схема БД. `target` в обеих таблицах: журнал не должен уметь разойтись
-# с каталогом задач по принадлежности проекту. `task_counters` — нумерация
-# задач per-target: персистентный счётчик, а не COUNT(*) (ADR-0003 3ж).
-#
-# DEFAULT колонки `target` — тот же литерал, что и в `migrate()`
-# (`add_column(..., "target", f"TEXT DEFAULT '{config.DEFAULT_TARGET}'")`):
-# свежая БД (эта схема) и БД, догнанная миграцией со старой версии, обязаны
-# давать одну и ту же схему колонки (SPEC T034, требование 6, ревью T019).
-SCHEMA = f"""
-CREATE TABLE IF NOT EXISTS tasks (
-  id TEXT PRIMARY KEY, title TEXT, state TEXT, branch TEXT,
-  review_iters INTEGER DEFAULT 0, accept_rejects INTEGER DEFAULT 0,
-  reviewed_iter INTEGER DEFAULT 0, escalated_from TEXT,
-  budget_usd REAL, spent_usd REAL DEFAULT 0, spent_estimate_usd REAL DEFAULT 0,
-  budget_source TEXT,
-  target TEXT DEFAULT '{config.DEFAULT_TARGET}', fixed_sha TEXT,
-  tests_locked_sha TEXT, is_canary INTEGER DEFAULT 0, paused INTEGER DEFAULT 0,
-  answer_baseline INTEGER, verifying_attempts INTEGER DEFAULT 0,
-  draft_mr_created INTEGER DEFAULT 0,
-  diff_bytes INTEGER, split_assessment TEXT, zones TEXT,
-  zones_extension TEXT,
-  materialized_artifact_sha TEXT, zone_queue_position INTEGER,
-  created_at TEXT, updated_at TEXT
-);
-CREATE TABLE IF NOT EXISTS steps (
-  id INTEGER PRIMARY KEY AUTOINCREMENT, task_id TEXT,
-  target TEXT DEFAULT '{config.DEFAULT_TARGET}', ts TEXT,
-  actor TEXT, action TEXT, detail TEXT, session_id TEXT
-);
-CREATE TABLE IF NOT EXISTS task_counters (
-  target TEXT PRIMARY KEY, next_number INTEGER NOT NULL
-);
-CREATE TABLE IF NOT EXISTS alerts (
-  id INTEGER PRIMARY KEY AUTOINCREMENT, target TEXT, kind TEXT, source TEXT,
-  message TEXT, ts TEXT, ack_ts TEXT, ack_by TEXT, ack_resolution TEXT
-);
-CREATE TABLE IF NOT EXISTS alerts_archive (
-  id INTEGER PRIMARY KEY, target TEXT, kind TEXT, source TEXT,
-  message TEXT, ts TEXT, ack_ts TEXT, ack_by TEXT, ack_resolution TEXT,
-  archived_ts TEXT
-);
-CREATE TABLE IF NOT EXISTS leases (
-  task_id TEXT PRIMARY KEY, session_id TEXT, pid INTEGER, hostname TEXT,
-  heartbeat_ts TEXT, pgid INTEGER
-);
-CREATE TABLE IF NOT EXISTS merge_locks (
-  task_id TEXT, session_id TEXT, pid INTEGER, hostname TEXT,
-  heartbeat_ts TEXT
-);
-"""
+from .schema import SCHEMA, add_column, create_schema, migrate, table_columns
 
 TASK_ID = re.compile(r"\AT(\d+)\Z")
 
@@ -131,157 +89,7 @@ def enable_wal(conn: sqlite3.Connection) -> str:
     return row[0] if row else "unknown"
 
 
-def create_schema(conn: sqlite3.Connection) -> None:
-    """Создаёт схему БД (команда `init`); повторный вызов ничего не ломает."""
-    conn.executescript(SCHEMA)
-    conn.commit()
-
-
-def table_columns(conn: sqlite3.Connection, table: str) -> set:
-    """Имена колонок таблицы; пустое множество — таблицы нет."""
-    return {r["name"] for r in conn.execute(f"PRAGMA table_info({table})")}
-
-
-def add_column(conn: sqlite3.Connection, table: str, column: str,
-               decl: str) -> None:
-    """Добавляет колонку, если её нет. Нет таблицы — нечего догонять."""
-    columns = table_columns(conn, table)
-    if not columns or column in columns:
-        return
-    conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {decl}")
-    conn.commit()
-
-
-def migrate(conn: sqlite3.Connection) -> None:
-    """Догоняет схему БД, созданной прошлой версией (Фаза 0: без alembic)."""
-    if not table_columns(conn, "tasks"):
-        return  # БД ещё не создана: схему ставит `init`
-    add_column(conn, "tasks", "reviewed_iter", "INTEGER DEFAULT 0")
-    add_column(conn, "tasks", "escalated_from", "TEXT")
-    # NULL в старых строках — «потолок никем не задан», то есть дефолт:
-    # значение из SPEC применится к ним на общих основаниях.
-    add_column(conn, "tasks", "budget_source", "TEXT")
-    # Строки, заведённые до мультитаргета, принадлежат догфуду. DEFAULT
-    # проставляет им 'artel' самой ALTER TABLE — отдельный UPDATE не нужен,
-    # и конструкция остаётся переносимой (ADR-0003 3ж).
-    for table in ("tasks", "steps"):
-        add_column(conn, table, "target",
-                   f"TEXT DEFAULT '{config.DEFAULT_TARGET}'")
-    # Identity сессии, записавшей запись журнала (SPEC 01M1G..., требование
-    # 2): NULL в старых строках — записаны до этой задачи, «кем» неизвестно
-    # и не восстановимо задним числом, читатели (`catalog.cmd_log`/
-    # `cmd_status`) обязаны деградировать на этом молча.
-    add_column(conn, "steps", "session_id", "TEXT")
-    # NULL — фиксации ещё не было (строка старше T021 или задача ни разу
-    # не переходила): approve/run читают это как «сверять не с чем»,
-    # не как нарушение (tasks/T021 SPEC, требование 3).
-    add_column(conn, "tasks", "fixed_sha", "TEXT")
-    # sha, зафиксированный на выходе tests_writing -> in_dev (tasks/T023,
-    # требование 5): NULL — задача tests_writing не проходила (skip_tests,
-    # SPEC версии 1, либо строка старше T023) — лок acceptance_tests/
-    # сверять не с чем, тот же вырожденный случай, что и у fixed_sha.
-    add_column(conn, "tasks", "tests_locked_sha", "TEXT")
-    # Пометка канареечной задачи (tasks/T065/SPEC.md, требование 6, правка
-    # Оператора 28.08): ТОЛЬКО колонка БД — title её не несёт (роль видит
-    # title в промпте, а канареечная задача обязана быть неотличимой от
-    # продуктовой ДЛЯ РОЛЕЙ). DEFAULT 0 — строки старше T065 не канареечные.
-    add_column(conn, "tasks", "is_canary", "INTEGER DEFAULT 0")
-    # Пометка штатной паузы задачи (tasks/T070/SPEC.md, требование 4): БД,
-    # не файл рабочего каталога — рабочих копий несколько, БД остаётся
-    # единственным источником правды (та же логика, что и у lease/
-    # merge-lock). DEFAULT 0 — строки старше T070 не на паузе.
-    add_column(conn, "tasks", "paused", "INTEGER DEFAULT 0")
-    # Снимок числа ANSWER-*.md на момент эскалации (tasks/T075, SPEC AC-3):
-    # NULL — эскалация класса «лимит», ответа не требует (как до этой
-    # задачи); не-NULL — approve из escalated обязан увидеть на ветке
-    # больше файлов ANSWER-*.md, чем было тут зафиксировано, иначе
-    # отказывает. Число, не булев флаг: гейт различает НОВЫЙ ответ от уже
-    # существующего файла прошлого раунда эскалации той же задачи.
-    add_column(conn, "tasks", "answer_baseline", "INTEGER")
-    # Счётчик попыток advance в verifying без зелёного CI (SPEC T079,
-    # требование 6) — потолок ожидания; сбрасывается на каждом входе в
-    # verifying (fsm.py), растёт на каждом не-зелёном advance оттуда же.
-    add_column(conn, "tasks", "verifying_attempts", "INTEGER DEFAULT 0")
-    # Идемпотентность Draft MR (SPEC T079, требование 1): MR заводится
-    # ровно один раз за жизненный цикл задачи — колонка, не запрос к
-    # GitHub на каждый вход в in_dev (orchestrator/github_adapter.py).
-    add_column(conn, "tasks", "draft_mr_created", "INTEGER DEFAULT 0")
-    # sha головы артефактной ветки на момент последней материализации
-    # `runner.role_cwd` (SPEC 01M1NKTF173WV5CPDZ1C3WW69K, AC-1/AC-6): NULL —
-    # материализации ещё не было (строка старше этой задачи либо у задачи
-    # нет артефактной ветки) — конфликт-гвард автокоммита сверять не с чем,
-    # тот же вырожденный случай, что и у fixed_sha/tests_locked_sha.
-    add_column(conn, "tasks", "materialized_artifact_sha", "TEXT")
-    # Верхняя оценка неучтённой стоимости шага (SPEC
-    # 01M1NWCM3TDY0YABEKE8DYQA1C, требование 1): накопительная, отдельная от
-    # `spent_usd` — таймаут шага роли БЕЗ курса токенов (`config.TOKEN_RATES`)
-    # прибавляет сюда именованную константу вместо точной суммы (требование
-    # 3). DEFAULT 0 — строки старше этой задачи не несут неучтённой
-    # стоимости задним числом (требование 9: пересчёт прошлых шагов не
-    # производится).
-    add_column(conn, "tasks", "spent_estimate_usd", "REAL DEFAULT 0")
-    # Снимок объёма на входе в merge_gate (tasks/01M1KS8K9RXWHX2PW3ZKB0P903,
-    # ANSWER-1/ANSWER-2): NULL — задача закрыта до появления колонки, либо
-    # снимок не удался (сбой git — не блокирует переход) — `artel report`
-    # читает `report._DASH` для обоих случаев одинаково.
-    add_column(conn, "tasks", "diff_bytes", "INTEGER")
-    add_column(conn, "tasks", "split_assessment", "TEXT")
-    # Значение frontmatter-поля `zones:` SPEC, сохранённое при `approve`
-    # на `spec_gate` (01M1NKVPD2A79PQ6K0JVV1B2Q1, AC-3) — то же поле,
-    # что механика «Оценка объёма и деление» уже структурирует для
-    # сигналов деления (SPEC, требование 1).
-    add_column(conn, "tasks", "zones", "TEXT")
-    # Расширение зон, одобренное мандатом Оператора при переходе
-    # `in_dev -> review` (01M1P9QCHPHSCEA6TK13PV85SP, ANSWER-1, п.3):
-    # список путей через запятую, тем же приёмом, что `zones` выше — NULL,
-    # пока расширения не было. Гейт зон (`fsm_advance._zones_gate_refuses`)
-    # считает зоной задачи объединение `zones` и `zones_extension`.
-    add_column(conn, "tasks", "zones_extension", "TEXT")
-    # Явная перестановка очереди ожидания зоны Оператором (SPEC
-    # 01M1P9QAG65GVF69YJEV0V18D9, требование 9, AC-9): NULL — очередь не
-    # переставлена, естественный порядок по времени approve (`updated_at`)
-    # решает (`orchestrator/zone_lock.py::queue_order`).
-    add_column(conn, "tasks", "zone_queue_position", "INTEGER")
-    conn.executescript(
-        "CREATE TABLE IF NOT EXISTS task_counters ("
-        "  target TEXT PRIMARY KEY, next_number INTEGER NOT NULL);")
-    seed_task_counters(conn)
-    # Носитель алертов (A3, tasks/T022/SPEC.md требование 7): БД прошлых
-    # версий её не имеют — догоняется тем же приёмом, что и task_counters.
-    conn.executescript(
-        "CREATE TABLE IF NOT EXISTS alerts ("
-        "  id INTEGER PRIMARY KEY AUTOINCREMENT, target TEXT, kind TEXT,"
-        "  source TEXT, message TEXT, ts TEXT, ack_ts TEXT, ack_by TEXT,"
-        "  ack_resolution TEXT);")
-    # Архивная таблица `prune` (tasks/T073/SPEC.md, требование 3): БД
-    # прошлых версий её не имеют — догоняется тем же приёмом, что и alerts.
-    # `id` без AUTOINCREMENT: `archive_alert` переносит исходный id
-    # архивируемой строки alerts, не заводит новый.
-    conn.executescript(
-        "CREATE TABLE IF NOT EXISTS alerts_archive ("
-        "  id INTEGER PRIMARY KEY, target TEXT, kind TEXT, source TEXT,"
-        "  message TEXT, ts TEXT, ack_ts TEXT, ack_by TEXT,"
-        "  ack_resolution TEXT, archived_ts TEXT);")
-    # Носитель advisory-lease задачи (SPEC T044, требование 1): БД прошлых
-    # версий её не имеют — догоняется тем же приёмом, что и alerts/task_counters.
-    conn.executescript(
-        "CREATE TABLE IF NOT EXISTS leases ("
-        "  task_id TEXT PRIMARY KEY, session_id TEXT, pid INTEGER,"
-        "  hostname TEXT, heartbeat_ts TEXT);")
-    # pid группы (pgid) агентного шага (SPEC 01M1PNBSHR2PMFECMP7C204MF1,
-    # AC-2) — рядом с существующим `pid` (представляющим держателя lease,
-    # не спавненный агентный процесс): пути group-kill (timeout/kill/
-    # pause --now/release, AC-3..AC-6) читают его отсюда. NULL — лиза
-    # старше этой задачи либо шаг ещё не успел его записать.
-    add_column(conn, "leases", "pgid", "INTEGER")
-    # Мьютекс merge-окна (SPEC T053, требование 1): один держатель на весь
-    # пульт, не per-task, как `leases` — `task_id` здесь не ключ, а поле
-    # «какую задачу держит сессия», по конвенции не более одной строки.
-    conn.executescript(
-        "CREATE TABLE IF NOT EXISTS merge_locks ("
-        "  task_id TEXT, session_id TEXT, pid INTEGER,"
-        "  hostname TEXT, heartbeat_ts TEXT);")
-    conn.commit()
+# ===== Задачи и переходы =====
 
 
 def task_number(task_id: str) -> int:
@@ -500,12 +308,6 @@ def closed_external_tasks(conn: sqlite3.Connection) -> list:
         (config.DEFAULT_TARGET,)).fetchall()
 
 
-def task_steps(conn: sqlite3.Connection, task_id: str) -> list:
-    """Журнал шагов задачи по порядку записи (команда `log`)."""
-    return conn.execute("SELECT * FROM steps WHERE task_id=? ORDER BY id",
-                        (task_id,)).fetchall()
-
-
 def task_target(conn: sqlite3.Connection, task_id: str) -> str:
     """Target задачи; для строки без него — target догфуда."""
     row = conn.execute("SELECT target FROM tasks WHERE id=?",
@@ -526,38 +328,6 @@ def task_branch(conn: sqlite3.Connection, task_id: str) -> str:
     row = conn.execute("SELECT branch FROM tasks WHERE id=?",
                        (task_id,)).fetchone()
     return (row["branch"] or "") if row is not None else ""
-
-
-def journal(conn, task_id: str, actor: str, action: str, detail: str = "",
-           *, session_id: str | None = None) -> None:
-    """Пишет запись журнала `steps` — каждая новая запись несёт identity
-    сессии, её записавшей (SPEC 01M1G..., требование 1-2, AC-1/AC-2).
-
-    `session_id` — keyword-only, `None` по умолчанию: тогда identity
-    резолвится ЗДЕСЬ, тем же источником, что и `lease.resolve_session_id`
-    (`session.resolve_session_id`) — identity ТЕКУЩЕГО процесса. Это и
-    есть единая точка требования 1: подавляющее большинство ~70
-    вызывающих мест `journal()` по всей кодовой базе сами не имеют дела с
-    чужой identity и не передают параметр вовсе — они уже исполняются
-    внутри одного и того же процесса CLI-вызова, чей `ARTEL_SESSION_ID`/
-    ppid не меняется по его ходу, так что дефолтный резолв здесь даёт ТУ
-    ЖЕ identity, что дала бы явная прокидка через десяток модулей.
-
-    Явный параметр — только для мест, уже владеющих ЧУЖОЙ или иначе
-    полученной identity, отличной от «резолвящейся из окружения этого же
-    процесса прямо сейчас» (`lease.acquire`: identity, взявшая/перехватившая
-    lease, — уже готовый аргумент функции, не обязана совпадать с тем, что
-    резолвил бы повторный вызов `resolve_session_id` в контексте теста).
-    """
-    if session_id is None:
-        session_id = session.resolve_session_id(None)
-    conn.execute(
-        "INSERT INTO steps (task_id, target, ts, actor, action, detail,"
-        " session_id) VALUES (?,?,?,?,?,?,?)",
-        (task_id, task_target(conn, task_id), now(), actor, action, detail,
-         session_id),
-    )
-    conn.commit()
 
 
 REFUSAL_ACTION_PREFIX = "переход отклонён"
@@ -790,34 +560,48 @@ def latest_fixed_sha(conn, target: str) -> sqlite3.Row:
         "ORDER BY updated_at DESC, id DESC LIMIT 1", (target,)).fetchone()
 
 
-def open_alert_exists(conn, target: str | None, kind: str, source: str,
-                      message: str) -> bool:
-    """Есть ли уже НЕподтверждённый алерт с тем же ключом (дедуп alerts.raise_alert)."""
-    row = conn.execute(
-        "SELECT 1 FROM alerts WHERE target IS ? AND kind=? AND source=? "
-        "AND message=? AND ack_ts IS NULL",
-        (target, kind, source, message)).fetchone()
-    return row is not None
+# ===== Журнал steps =====
 
 
-def insert_alert(conn, target: str | None, kind: str, source: str,
-                 message: str) -> None:
+def task_steps(conn: sqlite3.Connection, task_id: str) -> list:
+    """Журнал шагов задачи по порядку записи (команда `log`)."""
+    return conn.execute("SELECT * FROM steps WHERE task_id=? ORDER BY id",
+                        (task_id,)).fetchall()
+
+
+def journal(conn, task_id: str, actor: str, action: str, detail: str = "",
+           *, session_id: str | None = None) -> None:
+    """Пишет запись журнала `steps` — каждая новая запись несёт identity
+    сессии, её записавшей (SPEC 01M1G..., требование 1-2, AC-1/AC-2).
+
+    `session_id` — keyword-only, `None` по умолчанию: тогда identity
+    резолвится ЗДЕСЬ, тем же источником, что и `lease.resolve_session_id`
+    (`session.resolve_session_id`) — identity ТЕКУЩЕГО процесса. Это и
+    есть единая точка требования 1: подавляющее большинство ~70
+    вызывающих мест `journal()` по всей кодовой базе сами не имеют дела с
+    чужой identity и не передают параметр вовсе — они уже исполняются
+    внутри одного и того же процесса CLI-вызова, чей `ARTEL_SESSION_ID`/
+    ppid не меняется по его ходу, так что дефолтный резолв здесь даёт ТУ
+    ЖЕ identity, что дала бы явная прокидка через десяток модулей.
+
+    Явный параметр — только для мест, уже владеющих ЧУЖОЙ или иначе
+    полученной identity, отличной от «резолвящейся из окружения этого же
+    процесса прямо сейчас» (`lease.acquire`: identity, взявшая/перехватившая
+    lease, — уже готовый аргумент функции, не обязана совпадать с тем, что
+    резолвил бы повторный вызов `resolve_session_id` в контексте теста).
+    """
+    if session_id is None:
+        session_id = session.resolve_session_id(None)
     conn.execute(
-        "INSERT INTO alerts (target, kind, source, message, ts) "
-        "VALUES (?,?,?,?,?)",
-        (target, kind, source, message, now()))
+        "INSERT INTO steps (task_id, target, ts, actor, action, detail,"
+        " session_id) VALUES (?,?,?,?,?,?,?)",
+        (task_id, task_target(conn, task_id), now(), actor, action, detail,
+         session_id),
+    )
     conn.commit()
 
 
-def open_alerts(conn, kind: str | None = None) -> list:
-    """Неподтверждённые алерты, свежие сверху; kind — фильтр по типу."""
-    if kind is None:
-        return conn.execute(
-            "SELECT * FROM alerts WHERE ack_ts IS NULL "
-            "ORDER BY id DESC").fetchall()
-    return conn.execute(
-        "SELECT * FROM alerts WHERE ack_ts IS NULL AND kind=? "
-        "ORDER BY id DESC", (kind,)).fetchall()
+# ===== Lease =====
 
 
 def lease_row(conn, task_id: str) -> sqlite3.Row | None:
@@ -908,6 +692,9 @@ def release_merge_lock(conn, session_id: str) -> None:
     conn.commit()
 
 
+# ===== Алерты =====
+
+
 def get_alert(conn, alert_id: int) -> sqlite3.Row | None:
     return conn.execute("SELECT * FROM alerts WHERE id=?",
                         (alert_id,)).fetchone()
@@ -946,6 +733,39 @@ def ack_alert(conn, alert_id: int, actor: str, resolution: str) -> None:
         "UPDATE alerts SET ack_ts=?, ack_by=?, ack_resolution=? WHERE id=?",
         (now(), actor, resolution, alert_id))
     conn.commit()
+
+
+def open_alert_exists(conn, target: str | None, kind: str, source: str,
+                      message: str) -> bool:
+    """Есть ли уже НЕподтверждённый алерт с тем же ключом (дедуп alerts.raise_alert)."""
+    row = conn.execute(
+        "SELECT 1 FROM alerts WHERE target IS ? AND kind=? AND source=? "
+        "AND message=? AND ack_ts IS NULL",
+        (target, kind, source, message)).fetchone()
+    return row is not None
+
+
+def insert_alert(conn, target: str | None, kind: str, source: str,
+                 message: str) -> None:
+    conn.execute(
+        "INSERT INTO alerts (target, kind, source, message, ts) "
+        "VALUES (?,?,?,?,?)",
+        (target, kind, source, message, now()))
+    conn.commit()
+
+
+def open_alerts(conn, kind: str | None = None) -> list:
+    """Неподтверждённые алерты, свежие сверху; kind — фильтр по типу."""
+    if kind is None:
+        return conn.execute(
+            "SELECT * FROM alerts WHERE ack_ts IS NULL "
+            "ORDER BY id DESC").fetchall()
+    return conn.execute(
+        "SELECT * FROM alerts WHERE ack_ts IS NULL AND kind=? "
+        "ORDER BY id DESC", (kind,)).fetchall()
+
+
+# ===== Канарейка =====
 
 
 def _ensure_canary_tables(conn) -> None:
@@ -1017,3 +837,13 @@ def set_canary_baseline(conn, title: str, steps: int, cost_usd: float,
         " updated_at=excluded.updated_at",
         (title, steps, cost_usd, review_iterations, now()))
     conn.commit()
+
+
+# ===== Зоны и очередь =====
+
+# Зоны (`zones`/`zones_extension`/`zone_queue_position`) и позиция в
+# очереди ожидания живут колонками `tasks` (см. `SCHEMA` в
+# `orchestrator/schema.py`) — читаются и пишутся уже объявленными выше
+# универсальными функциями группы «Задачи и переходы» (`get_task`/
+# `all_tasks`/`update_task`), собственных SQL-запросов область не несёт;
+# логика зонного гейта и очереди — `orchestrator/zone_lock.py`.

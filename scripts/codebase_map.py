@@ -3,9 +3,13 @@
 
 Использование:
     python3 scripts/codebase_map.py
-Cwd — корень дерева, которое картируется (в CI — корень пульта после
-checkout; тот же паттерн, что у scripts/guard.py, читающего Path("tasks")
-от cwd, а не от orchestrator.config.ROOT).
+Корень дерева, которое картируется, — `git rev-parse --show-toplevel` от
+cwd (SPEC 01M1SAA01YRRTWAVADT2F81RRQ, AC-4/AC-7), НЕ сам cwd: запуск из
+подкаталога (например, изнутри `tasks/<id>/acceptance_tests/` — реальный
+инцидент 05.09, где `scripts/codebase_map.py` запускался тестом планки
+приёмки) кладёт карту в корень репозитория, а не рядом с cwd запуска.
+В CI — корень пульта после checkout, тот же результат, что раньше давал
+голый `Path.cwd()`.
 
 Перебирает `orchestrator/*.py`, `scripts/*.py`, `tests/*.py` без захода во
 вложенные директории. Разбор — статический (`ast`), файлы не исполняются
@@ -14,6 +18,7 @@ checkout; тот же паттерн, что у scripts/guard.py, читающе
 (ADR-0003 3б: карта никогда не выдаётся за актуальную молча).
 """
 import ast
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -144,11 +149,78 @@ def build_modules(root: Path) -> list:
     return modules, resolved_imports, imported_by
 
 
+_SECTION_START_RE = re.compile(r"(?m)^(?=## )")
+_SECTION_FIELDS = ("purpose", "functions", "imports", "imported_by")
+# Поля, оставляемые проекцией по виду секции (SPEC
+# 01M1RFQ52S0VD22J628TXX96XS, требование 1, AC-2/AC-3) — единственное
+# место правил проекции, таблица вместо регулярок по вызывающему коду.
+_KEPT_FIELDS_BY_KIND = {
+    "orchestrator": ("purpose", "functions", "imports"),
+    "scripts": ("purpose", "functions", "imports"),
+    "tests": ("purpose",),
+}
+
+
+def _section_kind(rel: str) -> str | None:
+    top = rel.split("/", 1)[0]
+    return top if top in _KEPT_FIELDS_BY_KIND else None
+
+
+def _project_section(section: str) -> str:
+    """Одна секция `## <путь>\\n\\n...` — блоки полей разделены пустой
+    строкой в том же порядке, в котором их пишет `render` (Назначение,
+    Публичные функции, Импортирует, Импортируется), без пустых строк
+    внутри блока (список функций — подряд идущие `- \\`имя\\``) — деление
+    по `\\n\\n` режет ровно по границам полей. `rstrip("\\n")` перед
+    делением снимает разницу в хвостовых переводах строк последней секции
+    файла (`render` завершает документ ровно одним `\\n`, а не секцию
+    отдельно) — иначе он прилипал бы к значению последнего поля и терялся
+    бы вместе с ним, когда это поле как раз отбрасывается проекцией."""
+    parts = section.rstrip("\n").split("\n\n")
+    heading, field_blocks = parts[0], parts[1:1 + len(_SECTION_FIELDS)]
+    rel = heading[len("## "):].strip()
+    kind = _section_kind(rel)
+    if kind is None or len(field_blocks) < len(_SECTION_FIELDS):
+        return section
+    fields = dict(zip(_SECTION_FIELDS, field_blocks))
+    kept = [heading] + [fields[name] for name in _KEPT_FIELDS_BY_KIND[kind]]
+    return "\n\n".join(kept) + "\n\n"
+
+
+def project_for_brief(map_text: str) -> str:
+    """Облегчённая проекция карты для брифа роли (SPEC
+    01M1RFQ52S0VD22J628TXX96XS, требование 1): чистая функция
+    строка-в-строку, без чтения диска и без git — вызывающий код
+    (`orchestrator/brief.py`) сам решает, какой текст ей передать (уже
+    сверенный на свежесть/регенерированный).
+
+    Шапка и порядок/заголовки секций не меняются (AC-4/AC-5). Для секций
+    `orchestrator/*`/`scripts/*` остаются блоки «Назначение»/«Публичные
+    функции»/«Импортирует», блок «Импортируется» удаляется (AC-2). Для
+    секций `tests/*` остаются только заголовок секции и «Назначение»
+    (AC-3). Идемпотентна (AC-7): секция короче четырёх полей (уже
+    спроецированная) возвращается как есть, а не режется повторно."""
+    chunks = _SECTION_START_RE.split(map_text)
+    header, sections = chunks[0], chunks[1:]
+    return header + "".join(_project_section(s) for s in sections)
+
+
 def git_head_sha(root: Path) -> str:
     result = subprocess.run(
         ["git", "rev-parse", "HEAD"], cwd=root,
         capture_output=True, text=True, check=True)
     return result.stdout.strip()
+
+
+def repo_root(cwd: Path) -> Path:
+    """Корень git-дерева, содержащего `cwd` (SPEC 01M1SAA01YRRTWAVADT2F81RRQ,
+    AC-4/AC-7): `git rev-parse --show-toplevel`, не сам `cwd` — единственный
+    способ узнать корень, не зависящий от того, на какой глубине подкаталога
+    запущен генератор."""
+    result = subprocess.run(
+        ["git", "rev-parse", "--show-toplevel"], cwd=cwd,
+        capture_output=True, text=True, check=True)
+    return Path(result.stdout.strip()).resolve()
 
 
 def render(modules, resolved_imports, imported_by, sha: str) -> str:
@@ -185,7 +257,7 @@ def render(modules, resolved_imports, imported_by, sha: str) -> str:
 
 
 def main() -> int:
-    root = Path.cwd()
+    root = repo_root(Path.cwd())
     sha = git_head_sha(root)
     modules, resolved_imports, imported_by = build_modules(root)
     text = render(modules, resolved_imports, imported_by, sha)

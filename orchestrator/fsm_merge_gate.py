@@ -20,8 +20,8 @@ import tempfile
 import time
 from pathlib import Path
 
-from . import (ci, cleanup, config, fsm, fsm_postmerge, gitcmd,
-              github_adapter, lease, merge_lock, store, workspace)
+from . import (artifact_branch, ci, cleanup, config, fsm, fsm_postmerge,
+              gitcmd, github_adapter, lease, merge_lock, store, workspace)
 
 
 def _touches_protected_path(path: str) -> bool:
@@ -200,73 +200,123 @@ def _wait_for_branch_ci_green(conn, task_id: str, branch: str,
         time.sleep(config.MERGE_GATE_CI_WAIT_POLL_SEC)
 
 
-def _cmd_approve_merge_gate(conn, task_id: str, state: str, t,
-                            confirmed_ci_note: str | None = None) -> tuple:
-    """Тело окна `merge_gate -> done`, исполняемое ПОД МЬЮТЕКСОМ merge
-    (SPEC T053, требование 1; SPEC T087, требования 1-2, 5-6): сверка
-    свежести ветки внутри окна (требования 5-8 T053) -> зелёный CI ->
-    плотницкий merge в scratch-worktree (Stage0, AC-8) -> карта/RETRO ->
-    push явным sha -> done.
+def _overlay_artifact_snapshot(conn, task_id: str, repo: Path) -> None:
+    """Накладывает `tasks/<id>/` из ГОЛОВЫ артефактной ветки поверх
+    результата обычного `git merge --no-ff branch` в `repo` (SPEC
+    01M1R9YEK08XEQWBFX0929WFVJ, требование 3; AC-6/AC-7/AC-8/AC-11):
+    содержимое `tasks/<id>/`, которое попадает в main, обязано быть
+    снимком АРТЕФАКТНОЙ ветки на момент `approve`, не тем, что принесла
+    легаси-копия кодовой ветки задачи (если она вообще есть — обычно её
+    нет, `checkpoint.py` исключает `tasks/<id>/` из коммитов кодовой
+    ветки всех ролей, кроме коммита в артефактную ветку).
 
-    Возврат — сигнал вызывающему циклу (`_cmd_approve_merge_gate_cycle`):
-    `"stopped"` — окно завершилось без merge (эскалация, красная главная
-    копия — дальше вызывающему циклу делать нечего); `"done"` — merge
-    выполнен; `("wait", branch)` — дальше вызывающий цикл ждёт CI ВНЕ
-    этого мьютекса циклом `_wait_for_branch_ci_green` (требование 2).
-    Два разных повода вернуть `("wait", ...)`: свежая подтяжка пушнута в
-    origin (`pull_outcome == "pulled"`, требование 1); либо голова не
-    сдвинулась (`"fresh"`) и статус CI ещё не подтверждён этим же вызовом
-    — путь `"fresh"` больше не отказывает по одному опросу немедленно
-    (SPEC 01M1NBWPKNBXP9ZXXQDJM7AXPJ, AC-5..AC-7): голова уже в origin в
-    обоих случаях, повторный push для `"fresh"` не нужен.
-
-    `confirmed_ci_note` — статус, уже подтверждённый зелёным циклом
-    ожидания предыдущего захода (требование 5): потребляется РОВНО когда
-    подтяжка на этом заходе снова вернула `"fresh"` (тот же head, статус
-    всё ещё актуален) — повторный `ci.branch_status` не зовётся. Новый
-    уход main вперёд (`"pulled"`, требование 6/AC-6) делает кэш
-    неактуальным для НОВОГО head — параметр просто отбрасывается, ветка
-    `"pulled"` ниже его не читает.
+    Материализация не удалась (`artifact_branch.materialize_task_dir`
+    вернула пустую строку — ветка не читается) — журналируется
+    предупреждение, main остаётся с тем, что уже принёс обычный merge
+    (деградация, не отказ перехода: требование 3 не разрешает провалу
+    materialize держать гейт). Наложение не поменяло НИ ОДНОГО файла
+    (`git status --porcelain` пуст — легаси-копия и снимок уже
+    совпадают, либо легаси не было и снимок пуст тоже) — коммитить
+    нечего. Иначе — новый коммит поверх merge; если ДО наложения
+    `tasks/<id>/` уже нёс файлы (легаси-копия кодовой ветки
+    существовала), расхождение с ней журналируется отдельным
+    предупреждением (AC-8) — переход не отказывает по этой причине.
     """
-    branch = t["branch"]
-    # AC-10 (ANSWER-1, вопрос 1): проверка «главная копия на main» убрана
-    # целиком — плотницкий merge (Stage0, ниже) не читает и не требует
-    # чекаута `config.ROOT` вовсе, ему структурно нечего защищать.
-    #
-    # Голова ветки задачи на origin — предусловие КАЖДОГО approve
-    # merge_gate (SPEC 01M1GS5HZ1JXFGKVR95HEW0AEZ, требование 7,
-    # AC-8/AC-9), самой первой строкой тела: расхождение может
-    # появиться уже ПОСЛЕ входа на гейт (новый коммит на ветке задачи
-    # между заходами approve/цикла ожидания CI), не только на самом
-    # входе. Провал — graceful возврат, задача остаётся на merge_gate
-    # без эскалации; повторный approve после починки origin продолжает
-    # штатно (AC-9). Эта проверка не зависит от чекаута `config.ROOT`
-    # (она про ветку ЗАДАЧИ в origin, не про главную копию) — Stage0 её
-    # не отменяет.
+    legacy_dir = repo / "tasks" / task_id
+    legacy_present = legacy_dir.is_dir() and any(
+        p.is_file() for p in legacy_dir.rglob("*"))
+
+    head = artifact_branch.materialize_task_dir(task_id, repo)
+    if not head:
+        store.journal(
+            conn, task_id, "orchestrator",
+            "снимок артефактной ветки не наложен",
+            "материализация tasks/<id>/ из артефактной ветки не удалась "
+            "— main понесёт содержимое обычного merge")
+        return
+
+    status = gitcmd.in_repo(repo, "status", "--porcelain", "--",
+                            f"tasks/{task_id}")
+    changed = bool(status.stdout.strip()) if (
+        status is not None and status.returncode == 0) else False
+    if not changed:
+        return
+
+    add = gitcmd.in_repo(repo, "add", "-A", "--", f"tasks/{task_id}")
+    if add is None or add.returncode != 0:
+        store.journal(
+            conn, task_id, "orchestrator",
+            "снимок артефактной ветки не наложен",
+            add.stderr.strip()[:300] if add is not None else "git не ответил")
+        return
+    commit = gitcmd.in_repo(repo, "commit", "-m",
+                            f"{task_id}: снимок артефактной ветки поверх merge")
+    if commit is None or commit.returncode != 0:
+        store.journal(
+            conn, task_id, "orchestrator",
+            "снимок артефактной ветки не наложен",
+            commit.stderr.strip()[:300] if commit is not None
+            else "git не ответил")
+        return
+    if legacy_present:
+        store.journal(
+            conn, task_id, "orchestrator",
+            "расхождение легаси-копии tasks/<id>/ и снимка артефактной ветки",
+            f"легаси-копия tasks/<id>/ кодовой ветки разошлась со снимком "
+            f"артефактной ветки {head} — наложен снимок артефактной ветки "
+            f"(main несёт его, не легаси-копию)")
+
+
+def _ensure_branch_head_published(conn, task_id: str, branch: str) -> str:
+    """Голова ветки задачи видна в origin — предусловие КАЖДОГО approve
+    merge_gate (SPEC 01M1GS5HZ1JXFGKVR95HEW0AEZ, требование 7,
+    AC-8/AC-9), самой первой проверкой тела гейта: расхождение может
+    появиться уже ПОСЛЕ входа на гейт (новый коммит на ветке задачи
+    между заходами approve/цикла ожидания CI), не только на самом
+    входе. Провал — graceful отказ, задача остаётся на merge_gate без
+    эскалации; повторный approve после починки origin продолжает
+    штатно (AC-9). AC-10 (ANSWER-1, вопрос 1): проверка «главная копия
+    на main» убрана целиком — плотницкий merge (Stage0, ниже) не читает
+    и не требует чекаута `config.ROOT` вовсе, эта проверка про ветку
+    ЗАДАЧИ в origin, не про главную копию.
+
+    `"ok"` — голова видна; `"refused"` — журнал/печать уже сделаны.
+    """
     push_ok, push_detail = github_adapter.ensure_head_in_origin(
         conn, task_id, branch)
     if not push_ok:
         store.journal(conn, task_id, "orchestrator",
                       "approve отклонён: голова не в origin", push_detail)
         print(f"[{task_id}] approve отклонён: {push_detail}")
-        return ("stopped",)
-    # Сверка свежести ветки ПОД МЬЮТЕКСОМ, до сверки CI (SPEC T053,
-    # требования 5-8): main мог уйти вперёд, пока задача стояла на гейте
-    # или ждала освобождения чужого merge-окна — дыра №2 из «Контекста»
-    # SPEC. Подтяжка сдвигает head ветки задачи, зафиксированный снимок
-    # инвалидируется — merge в main в ЭТОМ ЖЕ вызове не выполняется
-    # (инвариант 19 не ослабляется), задача остаётся на гейте.
+        return "refused"
+    return "ok"
+
+
+def _sync_main_or_wait(conn, task_id: str, t, state: str, branch: str):
+    """Подтяжка main и проверка свежести ветки ПОД МЬЮТЕКСОМ, до сверки
+    CI (SPEC T053, требования 5-8): main мог уйти вперёд, пока задача
+    стояла на гейте или ждала освобождения чужого merge-окна — дыра №2
+    из «Контекста» SPEC. Подтяжка сдвигает head ветки задачи,
+    зафиксированный снимок инвалидируется — merge в main в ЭТОМ ЖЕ
+    вызове не выполняется (инвариант 19 не ослабляется), задача
+    остаётся на гейте.
+
+    `"fresh"` — голова не сдвинулась, можно проверять CI дальше;
+    `("stopped",)` — эскалация/отказ подтяжки; `("wait", branch)` —
+    свежая подтяжка уже пушнута в origin (push нового head ДО начала
+    цикла ожидания CI, SPEC T087 требование 1), дальше вызывающий цикл
+    ждёт CI вне этого мьютекса.
+    """
     pull_outcome = fsm._pull_main_or_escalate(conn, task_id, t, state)
-    if pull_outcome == "escalated":
+    if pull_outcome in ("escalated", "refused"):
         return ("stopped",)
     if pull_outcome == "pulled":
-        # Push нового head в origin ДО начала цикла ожидания CI (SPEC
-        # T087, требование 1) — из главной копии пульта, не `wt_path`:
-        # ref ветки задачи общий для всех worktree одного репозитория
-        # (тот же приём, что уже использует `github_adapter.
-        # ensure_draft_mr`). Внутри окна мьютекса, до его освобождения
-        # (требование 2) — `_cmd_approve_merge_gate_cycle` отпускает
-        # мьютекс сразу после возврата этой функции.
+        # Push нового head в origin из главной копии пульта, не
+        # `wt_path`: ref ветки задачи общий для всех worktree одного
+        # репозитория (тот же приём, что уже использует
+        # `github_adapter.ensure_draft_mr`). Внутри окна мьютекса, до
+        # его освобождения (требование 2) — `_cmd_approve_merge_gate_
+        # cycle` отпускает мьютекс сразу после возврата тела.
         new_head = gitcmd.branch_head_sha(branch)
         push = gitcmd.git("push", "-u", "origin", branch)
         if push is None or push.returncode != 0:
@@ -281,28 +331,48 @@ def _cmd_approve_merge_gate(conn, task_id: str, state: str, t,
         print(f"[{task_id}] ветка подтянута к {config.MAIN_BRANCH} и "
               f"запушена (head {new_head}) — жду зелёного CI")
         return ("wait", branch)
-    # pull_outcome == "fresh": голова ветки не сдвинулась. SPEC
-    # 01M1NBWPKNBXP9ZXXQDJM7AXPJ (AC-5..AC-7): «нет проверок ещё» типично
-    # сразу после первой публикации головы (`ensure_head_in_origin` выше в
-    # этом же вызове могла её только что впервые запушить) — раньше этот
-    # путь опрашивал `ci.branch_status` РОВНО один раз и отказывал
-    # немедленно на любом не-зелёном ответе; теперь, как и путь "pulled",
-    # он ждёт циклом `_wait_for_branch_ci_green` вне этого мьютекса —
-    # голова уже в origin (push здесь не нужен, в отличие от "pulled").
-    # Зелёный CI — условие мержа, проверяемое кодом, а не глазами
-    # Оператора (SPEC T017, требование 6); цикл ожидания сам не считает
-    # неизвестный статус зелёным.
+    # pull_outcome == "fresh": голова ветки не сдвинулась.
+    return "fresh"
+
+
+def _ci_ready_or_wait(task_id: str, confirmed_ci_note: str | None,
+                      branch: str):
+    """SPEC 01M1NBWPKNBXP9ZXXQDJM7AXPJ (AC-5..AC-7): «нет проверок ещё»
+    типично сразу после первой публикации головы — раньше этот путь
+    опрашивал `ci.branch_status` РОВНО один раз и отказывал немедленно
+    на любом не-зелёном ответе; теперь, как и путь "pulled", он ждёт
+    циклом `_wait_for_branch_ci_green` вне мьютекса — голова уже в
+    origin (push здесь не нужен, в отличие от "pulled"). Зелёный CI —
+    условие мержа, проверяемое кодом, а не глазами Оператора (SPEC
+    T017, требование 6); цикл ожидания сам не считает неизвестный
+    статус зелёным.
+
+    `confirmed_ci_note` — статус, уже подтверждённый зелёным циклом
+    ожидания предыдущего захода (SPEC T087, требование 5): читается
+    РОВНО когда подтяжка на этом заходе снова вернула "fresh" (тот же
+    head, статус всё ещё актуален) — повторный `ci.branch_status` не
+    зовётся.
+
+    `("wait", branch)` — статус ещё не подтверждён этим вызовом;
+    `"ok"` — подтверждён, `note` уже напечатан.
+    """
     if confirmed_ci_note is None:
         return ("wait", branch)
-    # Цикл ожидания предыдущего захода уже подтвердил зелёный статус
-    # ЭТОГО ЖЕ head (свежесть выше вернула "fresh" — head не сдвинулась)
-    # — повторный `ci.branch_status` был бы лишним чтением того же самого
-    # факта (SPEC T087, требование 5).
-    note = confirmed_ci_note
-    print(f"[{task_id}] {note}")
-    # Плотницкий merge (Stage0, ANSWER-1 вопрос 1, вариант B; AC-8):
-    # текущий sha main артели (её origin) БЕЗ прикосновения к локальному
-    # refs/heads/<MAIN_BRANCH> — `_origin_main_sha` только фетчит.
+    print(f"[{task_id}] {confirmed_ci_note}")
+    return "ok"
+
+
+def _perform_carpentry_merge(conn, task_id: str, state: str, branch: str):
+    """Плотницкий merge (Stage0, ANSWER-1 вопрос 1, вариант B; AC-8):
+    текущий sha main артели (её origin) БЕЗ прикосновения к локальному
+    `refs/heads/<MAIN_BRANCH>` (`_origin_main_sha` только фетчит), затем
+    `git merge --no-ff` В SCRATCH-WORKTREE, не в `config.ROOT`.
+
+    `("ok", scratch)` — merge выполнен, scratch-дерево готово к
+    публикации артефактов; `("stopped", None)` — конфликт разобран
+    `_handle_merge_conflict` (защищённый путь -> escalated, иначе ->
+    in_dev), scratch-дерево уже убрано.
+    """
     origin_sha = _origin_main_sha()
     if origin_sha is None:
         sys.exit(f"[{task_id}] merge отклонён: git fetch origin "
@@ -319,27 +389,40 @@ def _cmd_approve_merge_gate(conn, task_id: str, state: str, t,
                                f"{task_id}: merge {branch}")
     if merge_res is None or merge_res.returncode != 0:
         _handle_merge_conflict(conn, task_id, state, branch, merge_res, scratch)
-        return ("stopped",)
-    # sha КОММИТА МЕРЖА — сразу после успешного merge, ДО любых
-    # последующих служебных коммитов (карты, RETRO): адрес артефактов
-    # RETRO (SPEC T043, требование 8) обязан указывать именно на этот
-    # коммит, а не на более поздний, который сдвинул бы HEAD дальше.
+        return ("stopped", None)
+    return ("ok", scratch)
+
+
+def _publish_merge_artifacts(conn, task_id: str, scratch: Path) -> str:
+    """Снимок артефактной ветки поверх обычного merge (SPEC
+    01M1R9YEK08XEQWBFX0929WFVJ, требование 3; AC-6/AC-7/AC-8/AC-11) —
+    ДО sha "коммита мержа" ниже: main обязан унести АРТЕФАКТНЫЙ снимок
+    tasks/<id>/, значит это часть содержимого, на которое указывает
+    `merge_sha`, а не служебная правка вроде карты/RETRO после него.
+
+    Карта кодовой базы (SPEC T042) и RETRO (SPEC T043, требование 8,
+    адресуется на `merge_sha` — сразу после merge/наложения снимка, ДО
+    любых последующих служебных коммитов) — оба провала некритичны, push
+    ниже выполняется независимо от их исхода. Оба служебных шага
+    работают В SCRATCH (AC-9) — не в `config.ROOT`.
+
+    Возврат — `final_sha` (после карты/RETRO) для push явным sha.
+    """
+    _overlay_artifact_snapshot(conn, task_id, scratch)
     merge_sha = gitcmd.head_sha(scratch)
-    # Карта кодовой базы (SPEC T042): после merge, до push; провал
-    # шага карты не отменяет merge (требование 5) — push ниже
-    # выполняется независимо от исхода `_regenerate_and_commit_map`.
-    # Оба служебных шага работают В SCRATCH (AC-9) — не в `config.ROOT`.
     fsm_postmerge._regenerate_and_commit_map(conn, task_id, repo=scratch)
-    # Дайджест задачи в main (SPEC T043): после карты, до push, тем же
-    # принципом некритичности — провал не отменяет переход.
     fsm_postmerge._generate_and_commit_retro(conn, task_id, merge_sha,
                                              repo=scratch)
     final_sha = gitcmd.head_sha(scratch)
     _drop_scratch_worktree(scratch)
-    # Push ЯВНОГО sha (не текущего чекаута) прямо в `refs/heads/
-    # <MAIN_BRANCH>` origin — из `config.ROOT`, чья объектная база уже
-    # несёт коммиты scratch-worktree (общий `.git`), но чей собственный
-    # чекаут/HEAD этот push не трогает вовсе (AC-8).
+    return final_sha
+
+
+def _push_merged_main(conn, task_id: str, final_sha: str) -> str:
+    """Push ЯВНОГО sha (не текущего чекаута) прямо в `refs/heads/
+    <MAIN_BRANCH>` origin — из `config.ROOT`, чья объектная база уже
+    несёт коммиты scratch-worktree (общий `.git`), но чей собственный
+    чекаут/HEAD этот push не трогает вовсе (AC-8)."""
     push = gitcmd.git("push", "origin",
                       f"{final_sha}:refs/heads/{config.MAIN_BRANCH}")
     if push is None or push.returncode != 0:
@@ -348,34 +431,84 @@ def _cmd_approve_merge_gate(conn, task_id: str, state: str, t,
                       else "git не ответил")
         sys.exit(f"merge упал на git push:\n"
                  f"{push.stderr if push is not None else '—'}")
+    return "ok"
+
+
+def _finalize_done_state(conn, task_id: str, state: str, branch: str) -> None:
+    """`state -> done`, затем безусловное снятие lease «любым путём»
+    (SPEC 01M1G..., требование 3, AC-6) — этот путь раньше lease не
+    трогал вовсе."""
     store.set_state(conn, task_id, "done", "orchestrator",
                     expected_state=state, detail=f"смержено: {branch}")
-    # Успешное закрытие задачи обязано снять lease безусловно, «любым
-    # путём» (SPEC 01M1G..., требование 3, AC-6) — этот путь раньше lease
-    # не трогал вовсе.
     lease.release_any(conn, task_id, "orchestrator", "lease снят: задача done")
-    # Снапшот закрытия (SPEC T094, требования 12-13, AC-13, AC-15) — ДО
-    # уборки веток ниже, тем же узлом, что и `cleanup._cmd_kill` для
-    # пути `killed`: внешний target, не канарейка (self/канарейка снапшот
-    # не заводят вовсе — `_publish_snapshot_if_pending` сама решает).
-    # Push снапшота не удался — `snapshot.pending` остаётся истинным, и
-    # уборка worktree/ветки задачи ниже пропускается (AC-15: переход в
-    # `done` уже совершён, ветки ждут следующего доверенного прогона).
+
+
+def _publish_closing_snapshot_or_wait(conn, task_id: str, t) -> str:
+    """Снапшот закрытия (SPEC T094, требования 12-13, AC-13, AC-15) — ДО
+    уборки веток ниже, тем же узлом, что и `cleanup._cmd_kill` для пути
+    `killed`: внешний target, не канарейка (self/канарейка снапшот не
+    заводят вовсе — `_publish_snapshot_if_pending` сама решает). Push
+    снапшота не удался — `snapshot.pending` остаётся истинным, и уборка
+    worktree/ветки задачи пропускается (AC-15: переход в `done` уже
+    совершён, ветки ждут следующего доверенного прогона).
+
+    `"done"` — уборку нужно отложить; `"ok"` — можно убирать worktree/
+    ветку сейчас.
+    """
     target = t["target"] or config.DEFAULT_TARGET
     is_canary = bool(t["is_canary"])
     cleanup._publish_snapshot_if_pending(conn, task_id, target, is_canary)
     if target != config.DEFAULT_TARGET and not is_canary:
         from . import snapshot
         if snapshot.pending(task_id):
-            return ("done",)
-    # Worktree задачи отслужил (SPEC T045, требование 5, AC-6):
-    # смержено, дальше агентным шагам там делать нечего.
+            return "done"
+    return "ok"
+
+
+def _cleanup_merged_task(conn, task_id: str, branch: str) -> None:
+    """Worktree задачи отслужил (SPEC T045, требование 5, AC-6):
+    смержено, дальше агентным шагам там делать нечего. Ветка задачи —
+    следом за worktree (tasks/T073/SPEC.md, требование 2): `-d` откажет,
+    пока ветку держит worktree, поэтому порядок обязателен."""
     note = workspace.remove(task_id)
     store.journal(conn, task_id, "orchestrator", "worktree убран", note)
-    # Ветка задачи — следом за worktree (tasks/T073/SPEC.md, требование 2):
-    # `-d` откажет, пока ветку держит worktree, поэтому порядок обязателен.
     branch_note = cleanup.drop_merged_task_branch(branch)
     store.journal(conn, task_id, "orchestrator", "ветка убрана", branch_note)
+
+
+def _cmd_approve_merge_gate(conn, task_id: str, state: str, t,
+                            confirmed_ci_note: str | None = None) -> tuple:
+    """Тело окна `merge_gate -> done`, исполняемое ПОД МЬЮТЕКСОМ merge
+    (SPEC T053, требование 1; SPEC T087, требования 1-2, 5-6): короткая
+    композиция шагов — публикация головы -> свежесть main -> зелёный CI
+    -> плотницкий merge в scratch-worktree (Stage0, AC-8) -> снимок
+    артефактов/карта/RETRO -> push явным sha -> done -> снапшот закрытия
+    -> уборка worktree/ветки.
+
+    Возврат — сигнал вызывающему циклу (`_cmd_approve_merge_gate_cycle`):
+    `("stopped",)` — окно завершилось без merge (отказ, эскалация,
+    конфликт — дальше вызывающему циклу делать нечего); `("done",)` —
+    merge выполнен; `("wait", branch)` — дальше вызывающий цикл ждёт CI
+    ВНЕ этого мьютекса циклом `_wait_for_branch_ci_green` (требование 2).
+    """
+    branch = t["branch"]
+    if _ensure_branch_head_published(conn, task_id, branch) != "ok":
+        return ("stopped",)
+    sync_outcome = _sync_main_or_wait(conn, task_id, t, state, branch)
+    if sync_outcome != "fresh":
+        return sync_outcome
+    ci_outcome = _ci_ready_or_wait(task_id, confirmed_ci_note, branch)
+    if ci_outcome != "ok":
+        return ci_outcome
+    merge_kind, scratch = _perform_carpentry_merge(conn, task_id, state, branch)
+    if merge_kind != "ok":
+        return ("stopped",)
+    final_sha = _publish_merge_artifacts(conn, task_id, scratch)
+    _push_merged_main(conn, task_id, final_sha)
+    _finalize_done_state(conn, task_id, state, branch)
+    if _publish_closing_snapshot_or_wait(conn, task_id, t) == "done":
+        return ("done",)
+    _cleanup_merged_task(conn, task_id, branch)
     return ("done",)
 
 

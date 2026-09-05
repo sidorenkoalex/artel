@@ -11,31 +11,39 @@ developer, снятие ожидания Оператором, порядок о
 кроме done/killed» — задача до `in_dev` (`tests_writing`) или уже закрытая
 (`done`) зону не держит.
 
-«Первый шаг» (требование 1, ключевое слово): без пометки — проверка
-блокировала бы КАЖДЫЙ последующий запуск `run`/`auto` этой задачи, пока
-она остаётся в `in_dev`, включая уже начатую разработку, если конфликт
-возник позже первого успешного старта агента — SPEC явно говорит «перед
-первым», не «на каждом». Признак «первый шаг уже был» — без новой
-колонки, тем же приёмом, что `store.refusal_history`/`brief.
-advance_refusal_history` (SPEC T078) уже используют для «истории ТЕКУЩЕГО
-визита состояния»: граница — id записи `"state -> in_dev"` в журнале
-задачи (её пишет `store.set_state` на каждом переходе), а сам факт
-«старт уже был» читается по записи `"agent run started"` роли developer
-(её же журналирует `runner.run_agent_once`) после этой границы. Синтетика
-песочниц, что заводит задачи прямой правкой строки в обход
-`set_state` (`tests/test_invariants.py::FsmTest.set_state`), не пишет
-маркер `"state -> in_dev"` вовсе — граница остаётся `0` (весь журнал
-задачи), что для одного непрерывного тестового сценария поведенчески то
-же самое: маркеров «уже стартовал»/«снято Оператором» в свежей задаче до
-первого вызова всё равно нет.
+«Занимает зону» (требования 1-2, SPEC 01M1REVJ8AJDKAMK5VTKES5J6D) —
+признак, который эта задача применяет к КАЖДОМУ кандидату цикла
+`blocking_conflict`, не только к самой проверяемой задаче (части 1-3
+проверяли только её): без этого условия любая задача диапазона
+`BLOCKING_STATES` с пересекающейся зоной считалась бы занявшей её, даже
+сама ни разу не начав код (факты «а»/«б» SPEC, «Контекст» — ждущая
+зону задача блокировала пять других). Граница признака — не последний
+визит `in_dev` буквально (`review -> in_dev` сдвигал бы её на каждый
+возврат, факт «б»), а начало ТЕКУЩЕГО непрерывного пребывания в
+диапазоне `in_dev`…`merge_gate`: id последней записи `"state ->
+tests_writing"` этой задачи (`_stay_since_id`) — `tests_writing`
+проходится ровно один раз за пребывание (предыдущая фаза диапазона), в
+отличие от `in_dev`, куда пребывание заходит повторно. Сам факт «занимает»
+(`_occupies`) — запись `"agent run started"` роли developer (её
+журналирует `runner.run_agent_once`) либо `RELEASE_ACTION` (см. ниже)
+ПОСЛЕ этой границы; без неё задача только ждёт — зон не держит ни для
+себя (как и в частях 1-3), ни (новое здесь) для остальных кандидатов,
+что её сканируют. Синтетика песочниц, заводящая задачи прямой правкой
+строки в обход `set_state` (`tests/test_invariants.py::FsmTest.
+set_state`), не пишет маркер `"state -> tests_writing"` вовсе — граница
+остаётся `0` (весь журнал задачи), что для одного непрерывного тестового
+сценария поведенчески то же самое: маркеров «занимает»/«снято
+Оператором» в свежей задаче до первого вызова всё равно нет.
 
 Оператор может снять ожидание явной командой (требование 6, AC-7) даже
 БЕЗ того, чтобы занявшая зону задача куда-то делась — иначе команда была
 бы неотличима от естественного снятия (требование 5, AC-6) и не давала бы
 никакого recourse (SPEC, «Оценка объёма и деление»). Снятие — тем же
-маркерным приёмом: запись `RELEASE_ACTION` после границы визита `in_dev`
-считается для этого визита равнозначной «первый шаг уже был» — обе
-записи одного семейства «этот визит больше не в режиме ожидания».
+маркерным приёмом: запись `RELEASE_ACTION` после границы текущего
+пребывания считается для него равнозначной «занимает зону» — обе записи
+одного семейства «это пребывание больше не в режиме ожидания»; граница не
+сдвигается промежуточными визитами `in_dev` (`review -> in_dev`), поэтому
+снятое ожидание не нужно снимать заново после возврата из ревью (AC-3).
 
 Очередь (требования 7-9, AC-8/AC-9) — чистая функция от переданных id, не
 от факта блокировки (это уже AC-1..AC-3): порядок по возрастанию
@@ -153,26 +161,68 @@ def _shared_zone(own: set[str], other: set[str]) -> str | None:
     return sorted(matches)[0]
 
 
-def _visit_since_id(conn, task_id: str, state: str) -> int:
-    """Id последней записи `"state -> {state}"` этой задачи — та же
-    граница «текущий визит состояния», что и `store.refusal_history`."""
-    marker = f"state -> {state}"
+def _stay_since_id(conn, task_id: str) -> int:
+    """Id последней записи `"state -> tests_writing"` этой задачи — начало
+    ТЕКУЩЕГО непрерывного пребывания в диапазоне `in_dev`…`merge_gate`
+    (SPEC 01M1REVJ8AJDKAMK5VTKES5J6D, требования 1-2): `tests_writing`
+    предшествует всему диапазону и проходится ровно один раз за
+    пребывание — в отличие от `_visit_since_id` частей 1-3 (последняя
+    запись `"state -> in_dev"` буквально), эта граница НЕ сдвигается
+    повторным визитом `in_dev` (`review -> in_dev`) внутри того же
+    пребывания. `0` — задача заведена в обход `set_state` (нет ни одной
+    записи `"state -> tests_writing"`) — весь журнал задачи считается
+    текущим пребыванием, тот же фолбэк, что и в частях 1-3."""
+    marker = "state -> tests_writing"
     for row in reversed(store.task_steps(conn, task_id)):
         if row["action"] == marker:
             return row["id"]
     return 0
 
 
-def _visit_has_action(conn, task_id: str, since_id: int, action: str) -> bool:
+def _visit_has_action(conn, task_id: str, since_id: int, action: str,
+                      actor: str | None = None) -> bool:
+    """Есть ли после `since_id` запись `action` — `actor` (если задан)
+    сверяется дополнительно (регрессия 01M1REVJ8AJ, требование 1): без
+    сверки любой актор того же действия (например `test_author` на
+    стадии `tests_writing`) ложно считался бы искомым событием."""
     return any(row["id"] > since_id and row["action"] == action
+              and (actor is None or row["actor"] == actor)
               for row in store.task_steps(conn, task_id))
+
+
+def _occupies(conn, task_id: str) -> bool:
+    """`task_id` занимает свои зоны в ТЕКУЩЕМ непрерывном пребывании
+    (требования 1-2, SPEC 01M1RR1PZC926T13NB1JSZ7F8T требование 1):
+    хотя бы один `"agent run started"` ИМЕННО РОЛИ `developer` либо
+    `RELEASE_ACTION` (любым актором) ПОСЛЕ границы `_stay_since_id`.
+
+    Фильтр по актору `developer` применяется только к `"agent run
+    started"` — эту же точку (`runner.run_agent_once`) журналирует
+    прогон ЛЮБОЙ роли шага (в т.ч. `test_author` на стадии
+    `tests_writing`, той же задачи, до первого шага developer вовсе);
+    без сверки актора `_occupies` ложно считала занятой ещё не начатую
+    developer'ом задачу (регрессия 01M1REVJ8AJ, коммит d617c148).
+    `RELEASE_ACTION` актора не сверяет — его журналирует только
+    `cmd_zone_release` (актором `operator`), сверка тут ничего не
+    закрывает и не входит в регрессию требования 1.
+
+    Без этого признака задача только ждёт — зон не держит ни для себя,
+    ни (требование 1 SPEC 01M1P9QAG65GVF69YJEV0V18D9, впервые здесь)
+    для остальных кандидатов `blocking_conflict`, что её сканируют как
+    потенциального владельца."""
+    since_id = _stay_since_id(conn, task_id)
+    return (_visit_has_action(conn, task_id, since_id,
+                              _AGENT_STARTED_ACTION, actor="developer")
+            or _visit_has_action(conn, task_id, since_id, RELEASE_ACTION))
 
 
 def blocking_conflict(conn, task_id: str, t) -> tuple[str, str, str] | None:
     """(путь, id занявшей задачи, её состояние) — конфликт зоны, который
-    блокирует ПЕРВЫЙ шаг developer этой задачи прямо сейчас, либо `None`
-    (нет конфликта, первый шаг уже состоялся в этом визите `in_dev`, либо
-    Оператор явно снял ожидание — требования 1-2, 5-6).
+    блокирует первый шаг developer этой задачи прямо сейчас, либо `None`
+    (нет конфликта: эта задача сама уже занимает свои зоны в текущем
+    пребывании — требования 1-2, 5-6 — либо ни один кандидат диапазона
+    `BLOCKING_STATES` с пересекающейся зоной её не занимает — требование
+    1, AC-1/AC-8).
 
     `t` — строка задачи, уже прочитанная вызывающим (`store.get_task`/
     `store.all_tasks`); функция не читает её сама — тот же приём, что
@@ -190,15 +240,14 @@ def blocking_conflict(conn, task_id: str, t) -> tuple[str, str, str] | None:
     own = _own_paths(t["zones"])
     if not own:
         return None
-    since_id = _visit_since_id(conn, task_id, "in_dev")
-    if _visit_has_action(conn, task_id, since_id, _AGENT_STARTED_ACTION):
-        return None
-    if _visit_has_action(conn, task_id, since_id, RELEASE_ACTION):
+    if _occupies(conn, task_id):
         return None
     for row in store.all_tasks(conn):
         if row["id"] == task_id or row["target"] != config.DEFAULT_TARGET:
             continue
         if row["state"] not in BLOCKING_STATES:
+            continue
+        if not _occupies(conn, row["id"]):
             continue
         shared = _shared_zone(own, _own_paths(row["zones"]))
         if shared is not None:

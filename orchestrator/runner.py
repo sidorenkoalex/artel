@@ -7,6 +7,7 @@ WIP-чекпоинты рабочего дерева — `orchestrator/checkpoin
 агента, окружение/cwd/argv шага и сам цикл попыток `cmd_run`.
 """
 import os
+import shutil
 import subprocess
 import sys
 import time
@@ -15,7 +16,7 @@ from pathlib import Path
 from . import (agent_log, alerts, brief, budget, checkpoint, config,
               failure_classification, fixation, gitcmd, keychain, lease,
               liveness, parallel_limit, pause, review, role_prompt, roles,
-              spend, store, workspace, zone_lock)
+              spend, stack, store, workspace, zone_lock)
 
 # Идентичность коммитера, которую роль обязана унести с собой в свой HOME.
 # git читает эти переменные ПОВЕРХ конфига, поэтому перенос ровно двух пар
@@ -390,15 +391,100 @@ def role_token(role: str | None) -> str | None:
     return None
 
 
+def _resolve_declared_tools() -> dict[str, str]:
+    """Абсолютные пути объявленных в манифесте инструментов (SPEC
+    01M1RDCEF0JZ4AVQRE43JFH8TN, требования 1, 3, AC-1, AC-2, AC-6):
+    `shutil.which` вызывается ровно один раз на инструмент, в окружении
+    Оператора (эта функция не трогает `os.environ`, только читает его через
+    `which`). Отсутствие ЛЮБОГО объявленного инструмента — `OSError`,
+    называющий его по имени, вместо тихой сборки окружения без него.
+    """
+    resolved = {}
+    missing = []
+    for name in stack.DECLARED_TOOLS:
+        path = shutil.which(name)
+        if path is None:
+            missing.append(name)
+        else:
+            resolved[name] = path
+    if missing:
+        raise OSError(
+            f"объявленный инструмент не найден в PATH: {', '.join(missing)}")
+    return resolved
+
+
+def _role_path_dirs(resolved: dict[str, str]) -> list[str]:
+    """PATH роли — каталоги объявленных инструментов, в порядке манифеста
+    (SPEC, AC-1, AC-3): для `python3` — каталог `sys.executable` пульта, а
+    не which-результат (тот каталог в PATH вообще не попадает), — иначе
+    первый `python3` на PATH мог бы оказаться pyenv-шимом Оператора, а не
+    интерпретатором пульта.
+    """
+    dirs = []
+    for name in stack.DECLARED_TOOLS:
+        directory = (str(Path(sys.executable).parent) if name == "python3"
+                    else str(Path(resolved[name]).parent))
+        if directory not in dirs:
+            dirs.append(directory)
+    return dirs
+
+
+def _allowlisted_env(source) -> dict:
+    """Копия `source`, суженная до белого списка манифеста (SPEC,
+    требования 2, 5, AC-4/AC-5): переменные Оператора вне списка (и вне
+    префиксов вроде `LC_*`) в окружение роли не попадают.
+    """
+    prefixes = tuple(stack.ROLE_ENV_ALLOWLIST_PREFIXES)
+    return {name: value for name, value in source.items()
+           if name in stack.ROLE_ENV_ALLOWLIST or name.startswith(prefixes)}
+
+
+def _venv_interpreter_bin() -> str:
+    """Требование 4 (SPEC 01M1REVEZ1HESMJ7AFD5A9MEJ8, AC-12/AC-13): каталог
+    `<.artel/venv>/bin` — интерпретатор роли, если `.artel/venv` существует
+    и согласован с файлом закреплённых версий (та же проверка, что
+    `stack.check_stack()` уже даёт AC-7/AC-8 — не отдельная копия логики).
+
+    Зовёт ПОЛНЫЙ `check_stack()`, а не более узкую `stack.venv_checks()`,
+    хотя интересна только пара venv-проверок (REVIEW.md итерация 1,
+    R1-F2 — три лишних subprocess-вызова к `git`/`gh`/`claude` на каждый
+    шаг роли): планка приёмки (`tasks/01M1REVEZ1HESMJ7AFD5A9MEJ8/
+    acceptance_tests/test_ac12_ac13_role_env_venv_interpreter.py`, залочена
+    T023) мокает именно `runner.stack.check_stack` — сужение вызова здесь
+    без правки планки оставило бы мок без эффекта и уронило бы приёмку
+    реальным отсутствием venv по временному пути теста. Риск принят,
+    описан в PLAN.md «Риски».
+    """
+    checks = stack.check_stack()
+    warn = [c for c in checks if "venv" in c.name.lower() and c.status == "warn"]
+    if warn:
+        detail = "; ".join(c.detail for c in warn)
+        raise OSError(f"venv не готов для роли: {detail}")
+    return str(config.VENV_DIR / "bin")
+
+
 def role_env(role: str | None = None) -> dict:
-    """Окружение процесса роли: HOME и CLAUDE_CONFIG_DIR задаёт пульт.
+    """Окружение процесса роли: PATH и переменные — из манифеста, не копия
+    `os.environ` Оператора (SPEC 01M1RDCEF0JZ4AVQRE43JFH8TN, требования 1-3).
 
     Роль не наследует user-слой Оператора (ADR-0003 п.14): его
     ~/.claude/CLAUDE.md, хуки его плагинов и его MCP исполнялись бы
     внутри шага — конфиг-инъекция, и заодно недетерминированное
-    окружение, зависящее от того, что Оператор поставил себе вчера.
-    Курируемый слой живёт в .artel/ пульта: что в нём лежит, решает
-    Оператор, но адрес слоя решает пульт.
+    окружение, зависящее от того, что Оператор поставил себе вчера. То же
+    самое верно для PATH (pyenv/shim'ы Оператора — сегодняшняя причина
+    217 логов шагов с чужим `pytest`, «Контекст» SPEC) и для остальных
+    переменных `os.environ`: роль видит только каталоги/переменные,
+    объявленные манифестом (`orchestrator.stack`), а не весь мир
+    Оператора. Курируемый слой живёт в .artel/ пульта: что в нём лежит,
+    решает Оператор, но адрес слоя решает пульт.
+
+    Резолвинг инструментов (`_resolve_declared_tools`) — ПЕРВАЯ операция
+    функции и единственное место, где вообще читается `os.environ`
+    Оператора (через `shutil.which`, до того, как PATH/HOME роли
+    подставлены хоть в один словарь) — AC-2. Отсутствие инструмента
+    останавливает сборку целиком (`OSError` наружу, без частичного
+    результата) — AC-6/AC-8: тихого отката на PATH/переменные Оператора
+    нет, `run_agent_once` ловит это исключение и не запускает агента.
 
     Курируемый слой обязан нести то, без чего шаг не выполним, — отсюда
     git-идентичность (см. `git_identity`). Ставится через `setdefault`:
@@ -408,11 +494,22 @@ def role_env(role: str | None = None) -> dict:
 
     Каталог создаётся здесь же: CLI, не нашедший CLAUDE_CONFIG_DIR,
     создал бы его сам — и это был бы каталог, о котором пульт не знает.
+
+    Интерпретатор роли — `.artel/venv` (SPEC 01M1REVEZ1HESMJ7AFD5A9MEJ8,
+    требование 4), если он согласован с файлом закреплённых версий
+    (`_venv_interpreter_bin`, вызывается сразу после резолвинга
+    инструментов манифеста — тот же принцип «отказ до частичного
+    результата», что и у `_resolve_declared_tools` выше): его `bin/`
+    встаёт ПЕРВЫМ в PATH роли, раньше каталога `sys.executable` пульта —
+    голый `python3`/`pytest` внутри шага роли резолвится в venv.
     """
+    resolved = _resolve_declared_tools()
+    venv_bin = _venv_interpreter_bin()
     config.ROLE_CONFIG_DIR.mkdir(parents=True, exist_ok=True)
-    env = dict(os.environ)
+    env = _allowlisted_env(os.environ)
     env["HOME"] = str(config.ROLE_HOME)
     env["CLAUDE_CONFIG_DIR"] = str(config.ROLE_CONFIG_DIR)
+    env["PATH"] = os.pathsep.join([venv_bin] + _role_path_dirs(resolved))
     for name, value in git_identity().items():
         env.setdefault(name, value)
     # Аутентификация CLI живёт в user-слое Оператора (~/.claude.json +
@@ -427,6 +524,18 @@ def role_env(role: str | None = None) -> dict:
         if token:
             env["CLAUDE_CODE_OAUTH_TOKEN"] = token
     return env
+
+
+def in_role_environment() -> bool:
+    """Верно, если ТЕКУЩИЙ процесс сам исполняется в окружении роли —
+    те же два маркера, что `role_env()` ставит процессу роли (HOME/
+    CLAUDE_CONFIG_DIR на курируемый слой): единственное в кодовой базе
+    определение «окружения роли» читается здесь же, симметрично записи,
+    не задаётся заново (SPEC 01M1NSR5M5THYRC0RFWPMVE2DW, требование 5,
+    AC-15 — второй, независимый от `permissions.deny` рубеж отказа
+    расшифровки пула канарейки, если она вызвана из-под роли)."""
+    return (os.environ.get("HOME") == str(config.ROLE_HOME) and
+            os.environ.get("CLAUDE_CONFIG_DIR") == str(config.ROLE_CONFIG_DIR))
 
 
 def role_cwd(conn, task_id: str, target: str) -> Path:

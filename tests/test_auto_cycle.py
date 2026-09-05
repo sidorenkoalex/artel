@@ -113,6 +113,21 @@ class FakeRun:
     пришпилить: холостой шаг состояние не двигает, поэтому цикл без рабочего
     `AUTO_MAX_STEPS` крутился бы вечно, и тест лимита не падал бы, а висел —
     в CI это шесть часов молчания вместо красного прогона.
+
+    Журналирует `agent run finished` под именем роли, активной на момент
+    вызова (SPEC «регрессия №13» 01M1RHFRQ2C0P4A57XJJ1WZV8N) — тем же
+    action/actor, что и настоящий `orchestrator/runner.py::_cmd_run`
+    (успешное завершение шага, `rc=0`): гейт возврата в состояние роли
+    (`orchestrator/auto.py::_role_step_since_state_entry`) ищет именно эту
+    запись, и без неё холостые шаги этого фейка выглядели бы для гейта так,
+    будто роль никогда не отрабатывала. Только если элемент сценария САМ
+    ещё не журналировал такую запись (`agent_step` в `tasks/
+    01M1RHFRQ2C0P4A57XJJ1WZV8N/acceptance_tests/_sandbox.py` делает это
+    сам, под ролью, прочитанной ДО своего же эффекта, — второй, наш,
+    журнал задвоил бы запись). Роль здесь тоже читается ДО эффекта
+    сценария, не после: эффект может сам сменить состояние задачи
+    (например, эскалировать её) — запись обязана называть роль ШАГА,
+    который «только что отработал».
     """
 
     def __init__(self):
@@ -129,8 +144,16 @@ class FakeRun:
             raise AssertionError(
                 f"цикл не остановился: шагов больше {config.AUTO_MAX_STEPS}")
         self.calls.append(task_id)
+        conn = store.db()
+        role = runner.step_role(store.get_task(conn, task_id))
+        journaled_before = len(store.task_steps(conn, task_id))
         if self.script:
             self.script.pop(0)()
+        already = any(row["action"] == "agent run finished"
+                     for row in store.task_steps(conn, task_id)[journaled_before:])
+        if not already:
+            store.journal(conn, task_id, role, "agent run finished",
+                          "rc=0, тестовая заглушка цикла auto")
 
 
 class SpyCommand:
@@ -398,6 +421,27 @@ class AutoStopsWhereTheOperatorIsNeededTest(AutoCycleTest):
         self.assertEqual(len(self.agent.calls), 4)
         self.assertEqual(self.task_row()["review_iters"], 1)
 
+    def test_fresh_task_first_developer_step_still_runs(self):
+        """Регресс SPEC 01M1R8B3ZKXQT0Z0G6QQQDV906: PLAN.md ещё НЕ
+        написан вовсе (свежая задача, developer ни разу не запускался) —
+        предварительный `advance` из `in_dev` читает его с ветки-
+        источника (`fsm._read_branch_text_or_refuse`) и журналирует
+        «переход отклонён: дерево не на ветке задачи» (файла там нет).
+        Это ТОТ ЖЕ класс, что и «PLAN.md не ready» (роль ещё не
+        закончила), не «другой класс» требования 4 — иначе стоп-кран
+        T038 остановил бы цикл на второй итерации ПЕРВОГО же вызова
+        `auto` любой новой задачи, ни разу не дав developer'у написать
+        план.
+        """
+        self.set_state("in_dev")
+        self.agent.script = [lambda: self.write_plan("ready"),
+                             lambda: self.write_review("approved", 1)]
+
+        self.auto()
+
+        self.assertEqual(self.state(), "verifying")
+        self.assertEqual(len(self.agent.calls), 2)
+
     def test_escalation_by_the_ceiling_names_budget(self):
         """Требование 2: у эскалации по потолку следующая команда — budget.
 
@@ -428,7 +472,16 @@ class AutoStopsWhereTheOperatorIsNeededTest(AutoCycleTest):
         self.assertNotIn(f"artel.py budget {self.TASK}", out)
 
     def test_escalation_inside_the_step_stops_the_cycle_before_advance(self):
-        """Упавший агент уводит задачу в escalated — двигать её нечем и незачем."""
+        """Упавший агент уводит задачу в escalated — двигать её нечем и незачем.
+
+        SPEC 01M1R8B3ZKXQT0Z0G6QQQDV906: `advance` теперь вызывается ДО
+        шага роли (предварительно, требование 1) — единственный вызов
+        `advance` этого сценария приходится именно на эту, предваряющую,
+        точку (PLAN.md ещё не ready, класс требования 3 — роль всё равно
+        запускается); после эскалации ВНУТРИ самого `cmd_run` роли у
+        `escalated` уже нет, и цикл выходит, не долетая до ВТОРОГО вызова
+        `advance`.
+        """
         self.write_plan("ready")
         self.set_state("in_dev")
         self.agent.script = [lambda: self.set_state("escalated")]
@@ -438,7 +491,9 @@ class AutoStopsWhereTheOperatorIsNeededTest(AutoCycleTest):
         out = self.auto()
 
         self.assertEqual(self.state(), "escalated")
-        self.assertEqual(advance.calls, [], "advance вызван из escalated")
+        self.assertEqual(len(advance.calls), 1,
+                         "advance обязан вызваться один раз — предварительно, "
+                         "до эскалации, не повторно уже из escalated")
         self.assertIn("эскалация — нужен Оператор", out)
 
 
@@ -579,6 +634,52 @@ class AutoStopsOnRepeatedAdvanceRefusalTest(AutoCycleTest):
             f"почини причину и повтори artel.py advance {self.TASK}", out)
 
 
+class PreAdvanceStillTriesOnLegitFirstEntryTest(AutoCycleTest):
+    """Регресс ANSWER-3 (SPEC «регрессия №13» 01M1RHFRQ2C0P4A57XJJ1WZV8N):
+    рубеж требований 1-2 (`auto._role_step_since_state_entry`) не должен
+    держать пред-advance на ЛЕГИТИМНОМ первом входе в `in_dev`
+    (`tests_writing -> in_dev`, детэйл «приёмочные тесты готовы —
+    трассируемость AC пройдена») — иначе журналируемый отказ ДРУГОГО
+    класса (требование 4 — лок `acceptance_tests/` и подобные) никогда не
+    встретится: developer стартует напрямую, минуя `advance` вовсе.
+
+    Регрессия обнаружена приёмочной планкой задачи 01M1R8B3ZKXQT0Z0G6QQQDV906
+    (AC-7, `test_ac7_lock_conflict_skips_developer_and_stops_on_the_repeat`)
+    ПОСЛЕ approve этого REVIEW.md — рубеж, применённый ко ВСЯКОМУ входу в
+    `in_dev` без разбора детэйла, ловил и этот класс тоже.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.patch_object(config, "AUTO_STALL_STEPS_LIMIT",
+                          config.AUTO_MAX_STEPS + 1)
+        self.write_plan("ready")
+        self.set_state("in_dev")
+        store.journal(store.db(), self.TASK, "fsm", "state -> in_dev",
+                      "приёмочные тесты готовы — трассируемость AC пройдена")
+        self.advance = FakeAdvance()
+        self.patch_object(fsm, "cmd_advance", self.advance)
+
+    def test_legit_first_entry_does_not_skip_the_pre_advance(self):
+        """Ловит мутацию: рубеж срабатывает по одному лишь факту «нет
+        завершённого шага developer с последней state -> in_dev», не
+        различая легитимный первый вход и возврат с неотработанным
+        основанием переделки — developer запустился бы напрямую,
+        `self.agent.calls` не остался бы пустым."""
+        text = "переход отклонён: лок приёмочных тестов"
+        self.advance.script = [text, text]
+
+        out = self.auto()
+
+        self.assertEqual(
+            self.agent.calls, [],
+            "developer запущен напрямую — рубеж перехватил легитимный "
+            "первый вход в in_dev, для которого advance не был вызван вовсе")
+        self.assertEqual(self.advance.calls, 2,
+                         "advance не был вызван — рубеж держал пред-advance")
+        self.assertIn(text, out)
+
+
 class AutoStopsOnBudgetRefusalTest(AutoCycleTest):
     """Требование 1: отказ `run` стартовать останавливает цикл, а не ретраится.
 
@@ -592,7 +693,12 @@ class AutoStopsOnBudgetRefusalTest(AutoCycleTest):
         # Поверх подмены базового класса — настоящая команда: до Popen она
         # не доходит, отказ случается на потолке.
         self.patch_object(runner, "cmd_run", REAL_CMD_RUN)
-        self.write_plan("ready")
+        # PLAN не ready (SPEC 01M1R8B3ZKXQT0Z0G6QQQDV906): предварительный
+        # advance этой задачи вызывается ДО `cmd_run` — `ready` с самого
+        # начала увёл бы задачу в `review` раньше, чем `run` вообще
+        # получит шанс отказать по бюджету, а предмет теста именно в этом
+        # отказе.
+        self.write_plan("draft")
         self.set_state("in_dev", budget_usd=1.0, spent_usd=1.0)
 
     def test_cycle_stops_and_no_agent_starts(self):
@@ -640,7 +746,10 @@ class AutoStopsOnPauseRefusalTest(AutoCycleTest):
         # Поверх подмены базового класса — настоящая команда: до Popen она
         # не доходит, отказ случается на пометке паузы.
         self.patch_object(runner, "cmd_run", REAL_CMD_RUN)
-        self.write_plan("ready")
+        # PLAN не ready — тот же довод, что и у AutoStopsOnBudgetRefusalTest:
+        # предварительный advance не имеет права увести задачу в `review`
+        # раньше, чем `run` получит шанс отказать по паузе.
+        self.write_plan("draft")
         self.set_state("in_dev")
         pause.cmd_pause(self.TASK)
 
@@ -695,7 +804,8 @@ class AutoStopsOnPauseAndBudgetTogetherTest(AutoCycleTest):
     def setUp(self):
         super().setUp()
         self.patch_object(runner, "cmd_run", REAL_CMD_RUN)
-        self.write_plan("ready")
+        # PLAN не ready — тот же довод, что и у AutoStopsOnBudgetRefusalTest.
+        self.write_plan("draft")
         self.set_state("in_dev", budget_usd=1.0, spent_usd=2.0)
         pause.cmd_pause(self.TASK)
 
@@ -759,28 +869,68 @@ class AutoStepLimitTest(AutoCycleTest):
 
         self.assertEqual(len(self.agent.calls), config.AUTO_MAX_STEPS * 2)
 
+    def test_transitions_by_advance_alone_do_not_consume_the_step_limit(self):
+        """Регресс REVIEW.md 01M1R8B3ZKXQT0Z0G6QQQDV906 итерации 1, R1-F1:
+        предварительный `advance`, который сам переводит задачу дальше
+        (артефакт уже готов — ни разу не позвал агента), не расходует
+        `AUTO_MAX_STEPS`. PLAN.md и REVIEW.md оба готовы с самого начала
+        вызова — цикл проходит ДВА перехода (in_dev -> review ->
+        verifying) без единого вызова агента, даже с лимитом
+        `AUTO_MAX_STEPS == 1`: реализация, которая всё ещё тратит `steps`
+        на переход-без-агента, исчерпала бы лимит на первом же свободном
+        переходе и не дошла бы до второго.
+
+        Ловит мутацию: `steps += 1` до предварительного `advance` (старое
+        место, до этого исправления) — цикл встал бы на «лимит 1 шагов
+        исчерпан», оставшись в `review`, вместо того чтобы дойти до
+        `verifying`.
+        """
+        self.patch_object(config, "AUTO_MAX_STEPS", 1)
+        self.write_plan("ready")
+        self.write_review("approved", 1)
+        self.set_state("in_dev")
+
+        out = self.auto()
+
+        self.assertEqual(self.agent.calls, [])
+        self.assertEqual(self.state(), "verifying")
+        self.assertNotIn("лимит 1 шагов за вызов исчерпан", out)
+
 
 class AutoReportsTheCycleTest(AutoCycleTest):
     """Требования 5, 6: журнал старта и остановки, сводка переходов и логи."""
 
     def setUp(self):
         super().setUp()
-        self.write_plan("ready")
         self.set_state("in_dev")
-        # Два шага до приёмки: разработчик и ревьювер. Цикл заканчивается
-        # осмысленной остановкой, а не лимитом — иначе тесты этого класса
-        # проверяли бы вывод холостых прогонов.
-        self.agent.script = [lambda: None,
+        # PLAN не ready с самого начала (SPEC 01M1R8B3ZKXQT0Z0G6QQQDV906):
+        # предварительный advance иначе увёл бы задачу в `review` раньше
+        # первого «настоящего» шага роли, который здесь и есть предмет
+        # проверки. Два шага до приёмки: разработчик пишет план, ревьювер
+        # одобряет. Цикл заканчивается осмысленной остановкой, а не
+        # лимитом — иначе тесты этого класса проверяли бы вывод холостых
+        # прогонов.
+        self.agent.script = [lambda: self.write_plan("ready"),
                              lambda: self.write_review("approved", 1)]
 
     def test_step_summary_names_the_transition_and_the_log(self):
+        """Требования 5, 6 (SPEC T038) + SPEC 01M1R8B3ZKXQT0Z0G6QQQDV906,
+        требование 5: переход теперь называется отдельной строкой
+        предварительного advance («шаг ... не нужен: переход выполнен...»,
+        следующая итерация) — строка «auto шаг N/M» несёт саму роль и её
+        лог; `before -> state` в ней совпадают, потому что advance по
+        СВЕЖЕМУ результату этого шага случится уже на следующей итерации,
+        не в этой же (AC-1 этой же задачи: `advance` — до `run`, не после).
+        """
         log = agent_log.new_agent_log(self.TASK, "developer")
 
         out = self.auto()
 
-        self.assertIn(f"шаг 1/{config.AUTO_MAX_STEPS}", out)
-        self.assertIn("developer in_dev -> review", out)
+        self.assertIn(f"шаг 1/{config.AUTO_MAX_STEPS}: developer in_dev -> "
+                      f"in_dev", out)
         self.assertIn(f"лог: {log}", out)
+        self.assertIn("шаг developer не нужен: переход выполнен по готовым "
+                      "артефактам (in_dev -> review)", out)
 
     def test_step_without_a_log_does_not_break_the_summary(self):
         """Прогонов роли ещё не было — сводка печатается, цикл идёт дальше."""
