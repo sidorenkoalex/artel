@@ -2,61 +2,140 @@
 task: 01M1NGFK3N6MRMYGCC09H975V3
 type: review
 author_role: reviewer
-status: changes_requested
-iteration: 1
+status: approved
+iteration: 2
 schema_version: 4
 ---
 
 # REVIEW: Канарейка v2 (часть 2): привязка пина к зелёной канарейке, триггер doctor, откат пина
 
+## Замечание к самому ревью-пакету
+
+Инкрементальный diff пакета (база `9c55cd47` → HEAD `9e1eac9e`) НЕ отражает
+фактические изменения этой итерации: `9c55cd47` — это сам коммит-фикс
+разработчика («правки по REVIEW итерации 1, R1-F1..R1-F4»), а не sha, на
+котором рендерился вердикт итерации 1 (тот стоял на `77378ee2`, ДО фикса).
+Взятый пакетом диапазон показывает только последующую подтяжку main
+(нёсшую целиком не относящуюся к этой задаче работу — мерж
+01M1REVP9WGRHDDNVEVE8BBH0Z, критерий сироты `doctor --fix`) и не
+показывает вообще ничего из `orchestrator/pin.py`/`orchestrator/doctor.py`/
+`tests/test_pin.py`/`tests/test_canary.py`/`tests/test_gitcmd_branch_reads.py`
+— то есть ни одной из строк, которые как раз и являются предметом этой
+итерации ревью (реакция на R1-F1..R1-F4). Также не была включена ни
+прошлая REVIEW.md (итерации 1), ни PLAN.md (путь на диске поиска был взят
+от корня основного репозитория, а не от этого worktree — тот же класс, что
+и уже известный «пути в брифе абсолютные от корня пульта»).
+
+Восстановил фактический diff вручную: `git log --oneline` показал
+`77378ee2` (исходная реализация разработчика) → `9c55cd47` (фикс R1-F1..
+R1-F4) → далее только подтяжки main; прочитал `git show 9c55cd47 --
+orchestrator/pin.py orchestrator/doctor.py tests/test_pin.py
+tests/test_canary.py tests/test_doctor.py tests/test_gitcmd_branch_reads.py`
+целиком, прошлую REVIEW.md — из артефактной ветки (`git show 63a2761a:
+tasks/01M1NGFK3N6MRMYGCC09H975V3/REVIEW.md`), PLAN.md — прямым чтением с
+диска этого worktree (файл там материализован и совпадает с текущей
+головой артефактной ветки). Ниже — вердикт по фактическому содержимому,
+не по пакету.
+
 ## Соответствие SPEC
 
 | Требование | Вердикт | Комментарий |
 |---|---|---|
-| 1 (`pin-update` отказывает без свежего зелёного прогона) | Реализовано не так | Гейт (`orchestrator/pin.py:31-39`) стоит ДО `git fetch` и обращается к аргументу `sha` git-командами `merge-base`/`rev-list`, которым нужен ЛОКАЛЬНЫЙ объект — для целевого sha, ради которого `pin-update` обычно и вызывают (свежий коммит main, ещё не притянутый в `config.ROOT`), это фейлит все git-вызовы гейта и превращает «нет зелёного прогона» в ложный, ПОСТОЯННЫЙ отказ. См. R1-F1. |
-| 2 (`doctor` — триггер `kind=trigger` по тому же порогу) | Реализовано не так | Критерии AC-3/AC-4 в узком смысле проходят, но `check_canary_trigger` (`orchestrator/doctor.py:1371-1409`) кладёт меняющееся число мержей прямо в дедуп-ключ алерта — при каждом новом мерже main после срабатывания порога заводится НОВЫЙ алерт вместо одного, вопреки собственному докстрингу функции. См. R1-F2. |
-| 3 (`pin --to <sha>`/`pin --to` — откат, main не трогается) | OK | Проверено акцептансом (AC-5/AC-6) и юнит-тестами; `git reset --hard` без `fetch`/`push`, явный sha обязан быть предком HEAD. |
-| 4 (каждый откат — отдельная запись журнала) | OK | `_refuse_rollback`/успешная ветка `cmd_pin_to` журналируют ровно один раз на вызов, включая отказ `git reset --hard` (см. `tests/test_pin.py::PinToResetFailureTest`). |
+| 1 (`pin-update` отказывает без свежего зелёного прогона) | OK | R1-F1 закрыт: гейт (`orchestrator/pin.py:37-57`) теперь стоит ПОСЛЕ `git fetch`, но ДО `git merge --ff-only` — `merges_since_last_green_run` резолвит уже притянутый объект `sha`. Новый регрессионный тест `tests/test_pin.py::PinUpdateGateAfterFetchTest::test_pin_update_succeeds_on_a_sha_not_yet_fetched_locally` воспроизводит ровно сценарий итерации 1 (bare origin + второй клон, sha ещё не локален) и проходит. |
+| 2 (`doctor` — триггер `kind=trigger` по тому же порогу) | OK | R1-F2 закрыт: `orchestrator/doctor.py:1402-1420` — текст, идущий в `alerts.raise_alert` (`alert_message`, дедуп-ключ), зафиксирован без переменного числа мержей; конкретный возраст остался только в `Check.detail`/`print`, в дедуп не участвует. Новый тест `tests/test_doctor.py::CanaryTriggerCheckTest::test_growing_age_between_calls_still_dedupes_the_alert` воспроизводит рост `age` между двумя прогонами `check_canary_trigger` и подтверждает ровно 1 открытый алерт. |
+| 3 (`pin --to <sha>`/`pin --to` — откат, main не трогается) | OK | Без изменений с итерации 1 (уже была `OK`) — `orchestrator/pin.py:74-108`, `git reset --hard` без fetch/push. |
+| 4 (каждый откат — отдельная запись журнала) | OK | Без изменений с итерации 1 (уже была `OK`) — `_refuse_rollback`/успешная ветка `cmd_pin_to` журналируют ровно один раз на вызов. |
 
 ## Замечания
 
-- **blocker** — `orchestrator/pin.py:31-39` — гейт AC-1/AC-2 вызывает `canary.merges_since_last_green_run(conn, sha)` ДО `git fetch`, а сама функция резолвит `sha` через `git merge-base --is-ancestor`/`git rev-list --count --merges` — оба нуждаются в том, чтобы `sha` уже был объектом в ЛОКАЛЬНОЙ базе `config.ROOT`. Но `pin-update <sha>` по смыслу команды (docstring в `orchestrator/artel.py:101-106`, ADR-0013) существует именно для того, чтобы продвинуть пин на sha, которого в `config.ROOT` ЕЩЁ НЕТ — его как раз должен принести идущий следом `git fetch`. Воспроизвёл эмпирически: bare `origin`, `config.ROOT` на старом sha, второй клон пушит новый коммит в origin (имитация «main ушёл вперёд»), в журнале — свежий зелёный прогон с `main_sha = <старый HEAD>` (0 мержей до старого HEAD, заведомо младше порога). Вызов `pin.cmd_pin_update(<новый sha>)` ОТКАЗЫВАЕТ сообщением «pin-update: нет зелёного прогона канарейки…», хотя валидный свежий зелёный прогон есть — просто git не может посчитать anсestry/count для ещё не притянутого объекта, `is_ancestor` возвращает `False` для всех строк, `merges_since_last_green_run` — `None`. HEAD при этом не двигается (это единственное, что осталось верным). Итог: с этой реализацией `pin-update` откажет практически при ЛЮБОМ реальном вызове с новым sha main — то есть в штатном сценарии применения команды AC-2 (гейт пропускает при наличии свежего зелёного прогона) не работает вовсе, хотя приёмочный тест `test_ac2_recent_green_run_allows_pin_update_as_before` зелёный: фикстура `_sandbox.py::CanaryPinSandbox.merge_commit` коммитит `target` НАПРЯМУЮ в `config.ROOT` (docstring самого файла это признаёт: «origin всегда синхронен с main»), то есть никогда не воспроизводит случай «sha ещё не в локальной базе» — приёмочная планка не покрывает ровно тот сценарий, где команда ломается. Предложение: развести «отказ до движения пина» (что ANSWER-1 п.4 требует буквально — «отказ не трогает HEAD») и «отказ до сетевого fetch» (что не требуется явно и ломает команду) — например, сделать `git fetch` первым шагом (fetch сам по себе не двигает HEAD/пин, только обновляет remote-tracking refs) и переставить гейт МЕЖДУ fetch и `merge --ff-only`, либо явно подтягивать/резолвить `sha` (`git fetch origin <sha>` / `git cat-file -e`) перед вызовом `merges_since_last_green_run`.
-
-- **major** — `orchestrator/doctor.py:1398-1408` — сообщение алерта триггера несёт текущее число мержей (`f"...— {age} мержей main назад..."`), а `alerts.raise_alert`/`store.open_alert_exists` (`orchestrator/store.py:793-800`) дедупят строго по совпадению ПОЛНОГО текста `message`. С каждым новым мержем main после пересечения порога `age` меняется — значит меняется и текст сообщения, и дедуп перестаёт срабатывать: вместо одного открытого алерта, ждущего ack Оператора, копится по новому алерту на каждый следующий мерж, пока никто не прогонит канарейку заново. Это прямо противоречит докстрингу самой функции («Дедуп открытого алерта… не дублирует, пока прежний не подтверждён», строка 1383-1384) и духу `docs/triggers.md` (триггер — единичный сигнал, ждущий решения, не поток дублей). Воспроизвёл эмпирически: довёл `age` до порога (10 мержей) → 1 открытый алерт; ещё один мерж → `check_canary_trigger` снова `warn` → 2 открытых алерта с разными числами («10 мержей…» и «11 мержей…»). Тест `tests/test_doctor.py::CanaryTriggerCheckTest::test_threshold_reached_is_warn_and_raises_a_deduped_trigger_alert` называет свойство «не дублирует», но вызывает `check_canary_trigger` дважды БЕЗ мержей между вызовами (тот же `age` оба раза) — заявленную мутацию (рост `age` между прогонами doctor, самый частый в реальности случай) он не ловит. Предложение: не класть меняющееся число в текст, который участвует в дедупе (например, дедуп-сообщение фиксированное — «порог достигнут», а конкретное число мержей — только в `print`/логе), либо проверять наличие уже открытого алерта по `(kind, source)` без сравнения текста перед тем как решать, заводить ли новый.
-
-- **major** — тест-конвенция «Ловит мутацию» (`skills/test-authoring.md`, раздел «Чувствительность») не соблюдена ни в одном из 23 новых/изменённых тестовых методов юнит-тестов этой задачи — в отличие от приёмочной планки (`tasks/01M1NGFK3N6MRMYGCC09H975V3/acceptance_tests/*.py`), которая конвенцию держит (проверено: количество вхождений `Ловит мутацию` там совпадает с числом тестовых методов в каждом файле). Список файлов и методов без заявки:
-  - `tests/test_pin.py` (новый файл целиком) — `PinUpdateGateOrderTest::test_refusal_calls_neither_fetch_nor_merge`, `PinToResetFailureTest::test_reset_failure_is_journaled_as_a_refusal`;
-  - `tests/test_canary.py` — `GreenCanaryRunsTest` (4 метода), `DriveTaskReachedGateMarkerTest` (3 метода), `MergesSinceLastGreenRunTest` (4 метода), и ДВА изменённых теста без единого докстринга даже после правки — `DriveTaskEscalationCapTest::test_repeated_escalation_is_capped_and_task_is_killed` (строка 446), `DriveTaskStallCapTest::test_no_progress_is_capped_and_task_is_killed` (строка 506);
-  - `tests/test_doctor.py` — `CanaryTriggerCheckTest` (3 метода, строки 652-677);
-  - `tests/test_gitcmd_branch_reads.py` — `IsAncestorTest` (5 методов), `MergesBetweenTest` (3 метода).
-  Докстринги этих классов/методов описывают СЦЕНАРИЙ (неплохо), но не называют конкретную правдоподобную мутацию реализации, на которой тест покраснеет — без неё ревьювер не может свериться с заявленной чувствительностью теста (тот же класс дефекта, что не позволил заметить пробел в `test_threshold_reached_is_warn_and_raises_a_deduped_trigger_alert` выше: тест НАЗЫВАЕТСЯ «дедуп», но не заявляет и не проверяет мутацию «age меняется между вызовами»). Предложение: дописать `Ловит мутацию: …` в докстринг каждого из перечисленных методов.
-
-- **minor** — `orchestrator/pin.py:19` — опечатка в докстринге: `ANСВЕР-1` (кириллическая «С», «В», «Е», «Р» вместо латинских) вместо `ANSWER-1`. Не влияет на выполнение, но затрудняет grep по ссылкам на артефакт.
+Новых замечаний в этой итерации не заведено — см. «Реестр замечаний»
+ниже: все четыре записи итерации 1 проверены и закрыты.
 
 ## Реестр замечаний
 
 | id | статус | файл/строка | суть | последствие | решение |
 |---|---|---|---|---|---|
-| R1-F1 | fixed | orchestrator/pin.py:31-48 | Гейт `cmd_pin_update` резолвит `sha` до `git fetch`, а `sha` обычно ещё не в локальной базе | `pin-update` отказывает практически при любом реальном вызове (AC-2 не работает вне приёмочной песочницы, где sha уже локален) | Гейт переставлен ПОСЛЕ `fetch`, но ДО `merge --ff-only` (`fetch` не двигает HEAD, ANSWER-1 п.4 соблюдён). Регрессия воспроизведена и закрыта тестом `tests/test_pin.py::PinUpdateGateAfterFetchTest::test_pin_update_succeeds_on_a_sha_not_yet_fetched_locally` (bare origin + второй клон, тот же приём, что у ревьювера) |
-| R1-F2 | fixed | orchestrator/doctor.py:1392-1409 | Дедуп-сообщение алерта триггера несёт меняющееся число мержей | Каждый новый мерж main после срабатывания порога заводит новый алерт вместо одного открытого — спам вместо единичного сигнала | Текст, идущий в `alerts.raise_alert` (дедуп-ключ), зафиксирован без числа мержей; конкретный возраст остался только в `Check.detail` (в алерт не попадает). Закрыто тестом `tests/test_doctor.py::CanaryTriggerCheckTest::test_growing_age_between_calls_still_dedupes_the_alert` (мерж между двумя вызовами `check_canary_trigger`, всё ещё 1 открытый алерт) |
-| R1-F3 | fixed | tests/test_pin.py, tests/test_canary.py, tests/test_doctor.py, tests/test_gitcmd_branch_reads.py | 23 новых/изменённых тестовых метода без докстринга «Ловит мутацию: …» (конвенция skills/test-authoring.md) | Ревьювер не может сверить тест с заявленной чувствительностью; ровно такой пробел скрыл дефект R1-F2 в собственном тесте | `Ловит мутацию: …` дописан во все 23 перечисленных метода плюс в 2 новых (R1-F1/R1-F2 регрессии) |
-| R1-F4 | fixed | orchestrator/pin.py:19 | Опечатка `ANСВЕР-1` (кириллица) вместо `ANSWER-1` | Косметика, затрудняет grep | Исправлено на латиницу |
+| R1-F1 | accepted | orchestrator/pin.py:37-57 | Гейт `cmd_pin_update` резолвил `sha` до `git fetch`, а `sha` обычно ещё не в локальной базе | `pin-update` отказывал практически при любом реальном вызове (AC-2 не работал вне приёмочной песочницы) | Проверено: гейт переставлен между `fetch` (строки 41-44) и `merge --ff-only` (строка 54); `fetch` не двигает HEAD, отказ по-прежнему не трогает пин (`ANSWER-1` п.4 соблюдён). Прочитан код целиком, прогнан `tests/test_pin.py::PinUpdateGateAfterFetchTest::test_pin_update_succeeds_on_a_sha_not_yet_fetched_locally` — зелёный, эмпирически подтверждает исчезновение дефекта на том же сценарии, что воспроизвёл ревьювер итерации 1 (bare origin + отдельный клон с непритянутым коммитом). Закрываю `accepted`. |
+| R1-F2 | accepted | orchestrator/doctor.py:1386-1420 | Дедуп-сообщение алерта триггера несло меняющееся число мержей | Каждый новый мерж main после срабатывания порога заводил новый алерт вместо одного открытого | Проверено: `alert_message` (идёт в `alerts.raise_alert`, участвует в дедупе через `store.open_alert_exists`) зафиксирован текстом без `age`; `age` остаётся только в `detail` (`Check.detail`, в алерт не идёт) — прочитан код (строки 1402-1420) построчно. Прогнан `tests/test_doctor.py::CanaryTriggerCheckTest::test_growing_age_between_calls_still_dedupes_the_alert` (мерж между двумя вызовами `check_canary_trigger`) — зелёный, 1 открытый алерт вместо 2. Закрываю `accepted`. |
+| R1-F3 | accepted | tests/test_pin.py, tests/test_canary.py, tests/test_doctor.py, tests/test_gitcmd_branch_reads.py | 23 новых/изменённых тестовых метода без докстринга «Ловит мутацию: …» | Ревьювер не мог сверить тест с заявленной чувствительностью | Проверено: перечитаны все классы, названные в итерации 1 (`PinUpdateGateOrderTest`, `PinToResetFailureTest`, `GreenCanaryRunsTest`, `DriveTaskEscalationCapTest`, `DriveTaskStallCapTest`, `MergesSinceLastGreenRunTest`, `DriveTaskReachedGateMarkerTest`, `CanaryTriggerCheckTest`, `IsAncestorTest`, `MergesBetweenTest`) — у каждого метода теперь есть докстринг с конкретной, правдоподобной мутацией реализации (не пересказ имени метода), плюс два новых регрессионных теста (R1-F1/R1-F2) тоже с заявкой. Единственное расхождение с итерацией 1 — `GreenCanaryRunsTest` фактически несёт 3 метода, не 4 (видимо, ошибка счёта в прошлой итерации) — не влияет на вывод: все 3 существующих докстринг несут. Закрываю `accepted`. |
+| R1-F4 | accepted | orchestrator/pin.py:19 | Опечатка `ANСВЕР-1` (кириллица) вместо `ANSWER-1` | Косметика, затрудняет grep | Проверено чтением файла — на месте `ANSWER-1` (латиница), `grep -rn "ANСВЕР" orchestrator/` не находит совпадений. Закрываю `accepted`. |
 
 ## Вердикт
 
-changes_requested — см. R1-F1 (blocker) и R1-F2/R1-F3 (major) выше. R1-F1 — критично: команда `pin-update` в текущем виде не выполняет свою основную функцию за пределами приёмочной песочницы.
+approved — все четыре замечания итерации 1 (R1-F1 blocker, R1-F2/R1-F3
+major, R1-F4 minor) исправлены по существу и закрыты `accepted` выше,
+новых blocker/major в этой итерации не найдено. Фаза A (PLAN) повторно не
+пересматривалась содержательно — подход и разбивка на шаги не менялись с
+итерации 1, где вопросов не было.
 
 ## Проверено исполнением
 
-- `python3 -m pytest tasks/01M1NGFK3N6MRMYGCC09H975V3/acceptance_tests/ -v` — 15 пройдено (все AC-1..AC-7 приёмочной планки).
-- `python3 -m pytest tests/test_pin.py tests/test_canary.py tests/test_doctor.py tests/test_gitcmd_branch_reads.py -v` — 188 пройдено, 3 subtests пройдено (затронутые модули; полный набор `tests/` не гонял — по решению Оператора от 05.09, гоняет CI).
-- `python3 scripts/codebase_map.py` и `git diff --stat -- docs/codebase-map.md` (после отката временного результата `git checkout -- docs/codebase-map.md`) — карта в ветке актуальна, расхождение только в строке `built_at_sha` (не дефект).
-- `python3 scripts/guard.py tasks/01M1NGFK3N6MRMYGCC09H975V3/SPEC.md tasks/01M1NGFK3N6MRMYGCC09H975V3/PLAN.md tasks/01M1NGFK3N6MRMYGCC09H975V3/ANSWER-1.md` — «GUARD: ок (3 файлов)».
-- `git diff --stat main...task/... -- .github gates.yaml roles.yaml templates skills` — пусто, защищённые пути не затронуты.
-- Эмпирическая репродукция R1-F1: bare `origin` + отдельный клон, пушащий новый коммит в origin без притяжки в `config.ROOT`; `pin.cmd_pin_update(<новый sha>)` при наличии валидного свежего зелёного прогона в журнале всё равно отказывает (скрипт в scratchpad сессии, не коммитился).
-- Эмпирическая репродукция R1-F2: довёл `age` до порога через серию `git merge --no-ff` в песочнице, вызвал `check_canary_trigger` дважды с одним дополнительным мержем между вызовами — получил 2 открытых алерта `kind=trigger, source=canary` вместо 1 (аналогичный скрипт, не коммитился).
-- `grep -c "Ловит мутацию"` по diff новых/изменённых тестов в `tests/test_pin.py`, `tests/test_canary.py`, `tests/test_doctor.py`, `tests/test_gitcmd_branch_reads.py` — 0 совпадений на 23 новых `def test_...`; тот же grep по `tasks/01M1NGFK3N6MRMYGCC09H975V3/acceptance_tests/*.py` — совпадения по числу тестовых методов в каждом файле (конвенция соблюдена там).
+- Реконструкция фактического diff вручную (пакет дал нерепрезентативный
+  диапазон, см. выше): `git log --oneline` по коду-ветке;
+  `git show 9c55cd47 -- orchestrator/pin.py orchestrator/doctor.py
+  tests/test_pin.py tests/test_canary.py tests/test_doctor.py
+  tests/test_gitcmd_branch_reads.py` — полный текст фикс-коммита прочитан
+  целиком; `git show 77378ee2 --stat` и построчно
+  `-- orchestrator/canary.py orchestrator/store.py orchestrator/gitcmd.py
+  orchestrator/artel.py orchestrator/config.py` — независимая проверка
+  исходной реализации (не только диффа фикса).
+- `git show 63a2761a:tasks/01M1NGFK3N6MRMYGCC09H975V3/REVIEW.md` — прошлый
+  вердикт (итерация 1, `changes_requested`, R1-F1..R1-F4) прочитан из
+  артефактной ветки, т.к. пакет его не включил.
+- `python3 -m pytest tests/test_pin.py tests/test_canary.py
+  tests/test_doctor.py tests/test_gitcmd_branch_reads.py -q` — 205 тестов
+  пройдено, 3 subtests пройдено, 0 отказов (затронутые модули).
+- `cd tasks/01M1NGFK3N6MRMYGCC09H975V3/acceptance_tests && python3 -m
+  pytest test_ac1_ac2_pin_update_canary_gate.py
+  test_ac3_ac4_doctor_canary_trigger.py test_ac5_ac6_ac7_pin_to_rollback.py
+  test_scope_markers.py -q` — 15 тестов, все зелёные (AC-1..AC-7, AC-8 —
+  легальный skip, ci-covered, из итерации 1 без изменений).
+- `python3 scripts/codebase_map.py` (из корня worktree) +
+  `git diff --stat -- docs/codebase-map.md` — пусто, карта уже актуальна
+  (включая `built_at_sha`, регенерация не изменила файл вовсе).
+- `python3 scripts/guard.py tasks/01M1NGFK3N6MRMYGCC09H975V3/SPEC.md
+  tasks/01M1NGFK3N6MRMYGCC09H975V3/PLAN.md
+  tasks/01M1NGFK3N6MRMYGCC09H975V3/ANSWER-1.md` — «GUARD: ок (3 файлов)».
+- `git diff --name-only main...HEAD -- .github gates.yaml roles.yaml
+  templates skills` — пусто, защищённые пути не затронуты; `git show
+  --stat 77378ee2 9c55cd47` — оба task-специфичных коммита ограничены
+  `orchestrator/*`/`tests/*`, зона задачи не нарушена.
+- Полный набор `tests/` не гонялся (решение Оператора 05.09,
+  review-checklist) — CI гоняет его на каждый пуш ветки.
 
 ## Предложения системе
 
-- Класс дефекта «гейт добавлен строго по формулировке ответа Оператора («до fetch/merge»), но формулировка была про порядок относительно ДВИЖЕНИЯ пина, а не про порядок относительно сетевого fetch, и это разошлось с фактической механикой git (объект должен быть локален для merge-base/rev-list)» — стоит явно проговаривать в ANSWER/SPEC, когда «до X» означает «до эффекта X», а не «до вызова X», если разница может сломать код.
+- Четвёртый подтверждённый случай класса «якорный sha пакета не отражает
+  фактический коммит вердикта» (ранее T082, T087, и в этом же прогоне —
+  соседняя задача 01M1REVP9WGRHDDNVEVE8BBH0Z независимо описала третий
+  случай в своей REVIEW.md). Здесь конкретный механизм новый и хуже
+  «пустого диффа»: взятый пакетом sha (`9c55cd47`) — это сам коммит-ФИКС
+  разработчика по итогам итерации 1, а не sha, на котором стоял код в
+  МОМЕНТ вынесения прошлого вердикта (`77378ee2`) — в результате
+  инкрементальный diff НЕ ПУСТ (что насторожило бы), а полон правдоподобно
+  выглядящего, но полностью постороннего содержимого (мерж чужой задачи из
+  main) — ложноположительная иллюзия «есть что ревьюить», хотя предмет
+  этой итерации (сам фикс R1-F1..R1-F4) в diff вообще не попал.
+  Стоит однозначно зафиксировать: анкор = sha, на котором артефактная
+  ветка стояла при вынесении ПРОШЛОГО вердикта reviewer'а (коммит
+  автокоммита REVIEW.md той итерации в артефактной ветке), а не
+  «последний известный коммит кода до какой-либо последующей подтяжки».
+- Путь материализации PLAN.md в брифе снова оказался абсолютным от корня
+  ОСНОВНОГО репозитория (`/Users/…/artel/tasks/…`), а не от этого
+  worktree — тот же класс, что уже дважды заведён в бэклоге («Бриф роли
+  называет артефакты абсолютным путём корня пульта», ТЗ готово). Здесь
+  сломалась не запись (Write), а именно СБОРКА пакета: PLAN.md по этому
+  неверному пути не нашёлся вовсе и не попал в пакет молча, хотя на диске
+  этого worktree файл был на месте.
+- `docs/codebase-map.md`/git-статус этой задачи несёт стороннюю деталь: в
+  индексе кодовой ветки на HEAD трекнут файл
+  `tasks/01M1NGFK3N6MRMYGCC09H975V3/acceptance_tests/test_pin_canary_binding.py`
+  (закоммичен на раннем шаге test_author, `19654d59`, до текущей планки),
+  которого уже нет на диске (заменён текущими `test_ac1_ac2_…`/`test_ac3_
+  ac4_…`/`test_ac5_ac6_ac7_…`) — `git status` числит его «deleted». Файл
+  вне зоны текущей проверки (не тронут ни одним коммитом разработчика) и
+  не блокирует эту задачу, но подтверждает, что артефакты `tasks/<id>/`
+  иногда всё же попадают в индекс кодовой ветки вопреки конвенции
+  «не коммитить» — стоит на досуге понять источник (вероятно, ранний
+  test_author-коммит до того, как конвенция закрепилась/стала соблюдаться
+  штатной автоматикой шага).
