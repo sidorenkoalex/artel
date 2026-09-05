@@ -17,7 +17,7 @@ from pathlib import Path
 
 from scripts import guard
 
-from . import (acceptance, artifact_source, artifacts, config, fixation,
+from . import (acceptance, artifact_branch, artifact_source, artifacts, config, fixation,
               github_adapter, gitcmd, lease, review, store, targets,
               workspace, yamlmini)
 
@@ -331,8 +331,31 @@ def _pull_main_or_escalate(conn, task_id: str, t, state: str) -> str:
     # 01M1QHQ277PQQA894X97RVEX9Y). `materialize_from_branch` — тот же узел,
     # что уже несёт автогейт acceptance (`fsm_autogate.py`).
     artifact_branch_name, _ = artifact_source.resolve(conn, task_id)
-    plank_root = acceptance.materialize_from_branch(task_id,
-                                                     artifact_branch_name)
+    # hotfix(аварийный режим) 05.09, регрессия №14 флоу A7 (легализация —
+    # ТЗ tz-legalize-acceptance-cwd-hotfix.md, п.3): для self-target с
+    # живым worktree на ветке задачи планка материализуется В worktree
+    # (`artifact_branch.materialize_task_dir` — тот же узел, что старт
+    # шага роли `runner.py` и merge_gate), а прогон идёт с cwd=worktree.
+    # Из временного каталога планка через `sys.path.insert(parents[3])`
+    # и пути «три уровня вверх от файла» попадала в случайный путь:
+    # импорт уходил в cwd=ROOT (код пина), файловые пути (`tests/…`)
+    # не находились вовсе (01M1RR1PZC, AC-6). Внешний target и песочницы
+    # без worktree — прежний временный каталог.
+    code_root = None
+    cleanup_root = None
+    if (t["target"] == config.DEFAULT_TARGET
+            and workspace.on_task_branch(task_id, t["branch"]) is True):
+        code_root = workspace.path(task_id)
+        if artifact_branch.materialize_task_dir(task_id, code_root):
+            plank_root = code_root / "tasks" / task_id
+        else:
+            plank_root = acceptance.materialize_from_branch(
+                task_id, artifact_branch_name)
+            cleanup_root = plank_root
+    else:
+        plank_root = acceptance.materialize_from_branch(task_id,
+                                                         artifact_branch_name)
+        cleanup_root = plank_root
     try:
         if not (plank_root / "acceptance_tests").is_dir():
             # Планка не найдена в артефактной ветке — легитимно ТОЛЬКО
@@ -368,15 +391,10 @@ def _pull_main_or_escalate(conn, task_id: str, t, state: str) -> str:
                 print(f"[{task_id}] переход отклонён: {detail}")
                 return "refused"
             return "pulled"
-        # Импорт пакета — из worktree кодовой ветки задачи, не из ROOT
-        # (пин старого кода): см. докстринг `acceptance.run`.
-        code_root = None
-        if (t["target"] == config.DEFAULT_TARGET
-                and workspace.on_task_branch(task_id, t["branch"]) is True):
-            code_root = workspace.path(task_id)
         green, tail = acceptance.run(plank_root, code_root=code_root)
     finally:
-        shutil.rmtree(plank_root, ignore_errors=True)
+        if cleanup_root is not None:
+            shutil.rmtree(cleanup_root, ignore_errors=True)
 
     if not green:
         store.set_state(
