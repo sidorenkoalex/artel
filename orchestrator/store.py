@@ -65,16 +65,6 @@ CREATE TABLE IF NOT EXISTS merge_locks (
   task_id TEXT, session_id TEXT, pid INTEGER, hostname TEXT,
   heartbeat_ts TEXT
 );
-CREATE TABLE IF NOT EXISTS canary_runs (
-  id INTEGER PRIMARY KEY AUTOINCREMENT, run_stamp TEXT, title TEXT,
-  task_id TEXT, steps INTEGER, cost_usd REAL, review_iterations INTEGER,
-  escalations INTEGER, outcome TEXT, expected_escalation TEXT,
-  actual_escalation INTEGER, marker_mismatch INTEGER, created_at TEXT
-);
-CREATE TABLE IF NOT EXISTS canary_baseline (
-  title TEXT PRIMARY KEY, steps INTEGER, cost_usd REAL,
-  review_iterations INTEGER, updated_at TEXT
-);
 """
 
 TASK_ID = re.compile(r"\AT(\d+)\Z")
@@ -273,23 +263,6 @@ def migrate(conn: sqlite3.Connection) -> None:
         "CREATE TABLE IF NOT EXISTS merge_locks ("
         "  task_id TEXT, session_id TEXT, pid INTEGER,"
         "  hostname TEXT, heartbeat_ts TEXT);")
-    # Метрики прогона канарейки v2 (SPEC 01M1NEEWH5K1XPFRDGRMPYSBXJ,
-    # требование 5, AC-5): отдельно от `tasks`/`steps` — те обязаны
-    # оставаться пустыми после прогона (AC-3), метрики переживают
-    # эфемерный клон снаружи него. `canary_baseline` ключуется `title`
-    # (стабильное имя шаблона пула МЕЖДУ прогонами), не `task_id`
-    # (свежий ULID каждый прогон) — требование 9: бейзлайн per-task,
-    # не суммой по набору.
-    conn.executescript(
-        "CREATE TABLE IF NOT EXISTS canary_runs ("
-        "  id INTEGER PRIMARY KEY AUTOINCREMENT, run_stamp TEXT, title TEXT,"
-        "  task_id TEXT, steps INTEGER, cost_usd REAL, review_iterations INTEGER,"
-        "  escalations INTEGER, outcome TEXT, expected_escalation TEXT,"
-        "  actual_escalation INTEGER, marker_mismatch INTEGER, created_at TEXT);")
-    conn.executescript(
-        "CREATE TABLE IF NOT EXISTS canary_baseline ("
-        "  title TEXT PRIMARY KEY, steps INTEGER, cost_usd REAL,"
-        "  review_iterations INTEGER, updated_at TEXT);")
     conn.commit()
 
 
@@ -946,6 +919,31 @@ def ack_alert(conn, alert_id: int, actor: str, resolution: str) -> None:
     conn.commit()
 
 
+def _ensure_canary_tables(conn) -> None:
+    """Таблицы метрик канарейки v2 — заведены ЛЕНИВО, при первом реальном
+    использовании, не в универсальной `SCHEMA`/`migrate()` (SPEC
+    01M1NEEWH5K1XPFRDGRMPYSBXJ, требование 5, AC-5): пульт, который ни
+    разу не гонял канарейку, не несёт этих таблиц вовсе — метрики
+    физически ОТДЕЛЬНЫ от журнала живых задач (`tasks`/`steps`, те
+    обязаны оставаться пустыми после прогона, AC-3), но не более того:
+    таблица, присутствующая в БД С РОЖДЕНИЯ пульта, неотличима от
+    «появилась после прогона» той же проверкой, которой AC-5 ловит
+    противоположную мутацию (буквальный перенос v1 — метрики только в
+    JSON на диске, `.artel/canary/*.json`, вовсе без таблицы БД).
+    `canary_baseline` ключуется `title` (стабильное имя шаблона пула
+    МЕЖДУ прогонами), не `task_id` (свежий ULID каждый прогон) —
+    требование 9: бейзлайн per-task, не суммой по набору."""
+    conn.executescript(
+        "CREATE TABLE IF NOT EXISTS canary_runs ("
+        "  id INTEGER PRIMARY KEY AUTOINCREMENT, run_stamp TEXT, title TEXT,"
+        "  task_id TEXT, steps INTEGER, cost_usd REAL, review_iterations INTEGER,"
+        "  escalations INTEGER, outcome TEXT, expected_escalation TEXT,"
+        "  actual_escalation INTEGER, marker_mismatch INTEGER, created_at TEXT);"
+        "CREATE TABLE IF NOT EXISTS canary_baseline ("
+        "  title TEXT PRIMARY KEY, steps INTEGER, cost_usd REAL,"
+        "  review_iterations INTEGER, updated_at TEXT);")
+
+
 def insert_canary_run(conn, run_stamp: str, title: str, task_id: str,
                       steps: int, cost_usd: float, review_iterations: int,
                       escalations: int, outcome: str,
@@ -954,6 +952,7 @@ def insert_canary_run(conn, run_stamp: str, title: str, task_id: str,
     """Строка метрик одной канареечной задачи одного прогона (SPEC
     01M1NEEWH5K1XPFRDGRMPYSBXJ, требование 5, AC-5) — читатель:
     `canary._run_one_task`."""
+    _ensure_canary_tables(conn)
     conn.execute(
         "INSERT INTO canary_runs (run_stamp, title, task_id, steps, cost_usd,"
         " review_iterations, escalations, outcome, expected_escalation,"
@@ -968,6 +967,7 @@ def insert_canary_run(conn, run_stamp: str, title: str, task_id: str,
 def canary_baseline(conn, title: str) -> sqlite3.Row | None:
     """Бейзлайн канарейки по имени шаблона; None — прогона ещё не было
     (SPEC 01M1NEEWH5K1XPFRDGRMPYSBXJ, требование 9-10)."""
+    _ensure_canary_tables(conn)
     return conn.execute(
         "SELECT * FROM canary_baseline WHERE title=?", (title,)).fetchone()
 
@@ -978,6 +978,7 @@ def set_canary_baseline(conn, title: str, steps: int, cost_usd: float,
     заводит его сам, требование 10 — не отдельная команда, как у v1
     `--rewrite-baseline`: v2 бейзлайн per-task не редактируется руками
     отдельным флагом, только рождается на первом прогоне шаблона)."""
+    _ensure_canary_tables(conn)
     conn.execute(
         "INSERT INTO canary_baseline (title, steps, cost_usd,"
         " review_iterations, updated_at) VALUES (?,?,?,?,?)"

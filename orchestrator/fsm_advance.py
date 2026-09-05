@@ -153,13 +153,23 @@ def review(conn, task_id: str, t, tdir, target: str, state: str) -> bool:
         print(f"  дальше: artel.py run {task_id}  (прогон ревьювера)")
         return False
 
-    if status == "approved":
+    if status == "approved" and not t["is_canary"]:
         # Голова ветки задачи на origin — предусловие входа в verifying
         # (SPEC 01M1GS5HZ1JXFGKVR95HEW0AEZ, требования 1-3, AC-1..AC-5):
         # ДО потребления свежести вердикта (`store.update_task` ниже) —
         # иначе провалившийся push съел бы свежесть первым же заходом и
         # заблокировал повторный advance после починки origin (AC-5)
         # тем же «вердикт уже учтён», что и рефьюзл выше.
+        #
+        # Канареечная задача (SPEC 01M1NEEWH5K1XPFRDGRMPYSBXJ, требование
+        # 11/AC-11) пропускается: её `verifying` не ждёт CI и не читает
+        # origin вовсе (`canary._kill_at_verifying` убивает задачу сразу
+        # по входу) — предусловие существует ТОЛЬКО ради последующего
+        # опроса CI на реальном origin, которого у эфемерного клона нет
+        # и не будет (origin-заглушка `canary.ORIGIN_STUB_URL`, требование
+        # 2/3): push туда гарантированно проваливается по построению, не
+        # по сбою — тот же принцип, каким уже пользуются
+        # `github_adapter.ensure_draft_mr`/`undraft_mr` (`t["is_canary"]`).
         push_ok, push_detail = github_adapter.ensure_head_in_origin(
             conn, task_id, t["branch"])
         if not push_ok:
