@@ -153,13 +153,23 @@ def review(conn, task_id: str, t, tdir, target: str, state: str) -> bool:
         print(f"  дальше: artel.py run {task_id}  (прогон ревьювера)")
         return False
 
-    if status == "approved":
+    if status == "approved" and not t["is_canary"]:
         # Голова ветки задачи на origin — предусловие входа в verifying
         # (SPEC 01M1GS5HZ1JXFGKVR95HEW0AEZ, требования 1-3, AC-1..AC-5):
         # ДО потребления свежести вердикта (`store.update_task` ниже) —
         # иначе провалившийся push съел бы свежесть первым же заходом и
         # заблокировал повторный advance после починки origin (AC-5)
         # тем же «вердикт уже учтён», что и рефьюзл выше.
+        #
+        # Канареечная задача (SPEC 01M1NEEWH5K1XPFRDGRMPYSBXJ, требование
+        # 11/AC-11) пропускается: её `verifying` не ждёт CI и не читает
+        # origin вовсе (`canary._kill_at_verifying` убивает задачу сразу
+        # по входу) — предусловие существует ТОЛЬКО ради последующего
+        # опроса CI на реальном origin, которого у эфемерного клона нет
+        # и не будет (origin-заглушка `canary.ORIGIN_STUB_URL`, требование
+        # 2/3): push туда гарантированно проваливается по построению, не
+        # по сбою — тот же принцип, каким уже пользуются
+        # `github_adapter.ensure_draft_mr`/`undraft_mr` (`t["is_canary"]`).
         push_ok, push_detail = github_adapter.ensure_head_in_origin(
             conn, task_id, t["branch"])
         if not push_ok:
@@ -675,12 +685,35 @@ def in_dev(conn, task_id: str, t, tdir, target: str, state: str) -> bool:
             return False
         plan_meta = yamlmini.frontmatter(plan_text) or {}
     else:
-        plan_meta = artifacts.frontmatter(tdir / "PLAN.md")
-    if plan_meta.get("status") in ("ready", "approved"):
+        plan_text = (tdir / "PLAN.md").read_text(encoding="utf-8")
+        plan_meta = yamlmini.frontmatter(plan_text) or {}
+    status = plan_meta.get("status")
+    if status in ("ready", "approved", "escalate"):
         if fsm._dirty_refuses(conn, task_id, target, "PLAN.md"):
             return False
         if fsm.guard_refuses(conn, task_id, tdir / "PLAN.md", text=plan_text):
             return True
+        if status == "escalate":
+            # PLAN.md status: escalate (01M1R8B3ZKXQT0Z0G6QQQDV906,
+            # требование 6) — тот же канал, что уже несёт REVIEW.md
+            # (`review()` выше, ветка `elif status == "escalate":`), для
+            # PLAN.md добавленный этой задачей: `in_dev` до сих пор понимал
+            # только `ready`/`approved`, любой другой статус (в т.ч.
+            # escalate) падал в «PLAN.md не ready — разработчик ещё
+            # работает», и `auto` продолжал звать `developer` заново
+            # вместо остановки на эскалации (регрессия №11, симптом 2).
+            answer_baseline = fsm._answer_baseline_or_refuse(conn, task_id, tdir)
+            if answer_baseline is None:
+                return False
+            store.update_task(conn, task_id, answer_baseline=answer_baseline)
+            escalation = guard.section_body(
+                plan_text, guard.ESCALATION_SECTION).strip()
+            detail = (f"эскалация от разработчика: {escalation}" if escalation
+                      else "эскалация от разработчика")
+            store.set_state(conn, task_id, "escalated", "fsm",
+                            expected_state=state, detail=detail)
+            print(f"[{task_id}] эскалация разработчика: {detail}")
+            return False
         locked = t["tests_locked_sha"]
         if locked:
             # `locked` (`tests_locked_sha`) — sha АРТЕФАКТНОЙ ВЕТКИ пульта
@@ -750,9 +783,7 @@ def in_dev(conn, task_id: str, t, tdir, target: str, state: str) -> bool:
             return False
         if _capacity_gate_refuses(conn, task_id, t, state):
             return False
-        full_plan_text = (plan_text if plan_text is not None
-                          else (tdir / "PLAN.md").read_text(encoding="utf-8"))
-        if _zones_gate_refuses(conn, task_id, t, branch, full_plan_text):
+        if _zones_gate_refuses(conn, task_id, t, branch, plan_text):
             return False
         store.set_state(conn, task_id, "review", "fsm",
                         expected_state=state, detail="MR готов — прогон ревьювера")
