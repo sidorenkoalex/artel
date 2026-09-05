@@ -183,6 +183,11 @@ DOCTOR_MIN_FREE_MB = 500
 # требование 8): активная задача, чья ветка отстала от MAIN_BRANCH больше
 # чем на столько коммитов, — warn. Дефолт «порядка 10» из SPEC.
 STALE_BRANCH_WARN_COMMITS = 10
+# Предпросмотр сирот-веток artifact/* в `doctor`/`doctor --fix` (SPEC
+# 01M1REVP9WGRHDDNVEVE8BBH0Z, требования 3-4): печатается число
+# кандидатов на удаление целиком, но их имён — только первые N. Значение
+# по аналогии с соседними лимитами превью-списков (CI_RUN_LIST_LIMIT).
+DOCTOR_ORPHAN_PREVIEW_LIMIT = 20
 # Маркер последнего бэкапа .artel/: механизм бэкапа — настройка Оператора
 # (Time Machine/rsync, ADR-0003 3к), если Оператор всё же решит его вести.
 # Отдельный бэкап .artel/ решением Оператора 27.08 не ведётся (ADR-0005
@@ -242,6 +247,12 @@ CANARY_DEVIATION_RATIO = 0.5
 # (требование 13б), и `permissions.deny` курируемого слоя роли
 # (требование 13а, `docs/reference/role-home/claude/settings.json`).
 CANARY_POOL_DIRNAME = ".artel-canary"
+# Слот keychain пульта, несущий симметричный ключ шифрования пула (SPEC
+# 01M1NSR5M5THYRC0RFWPMVE2DW, требование 1/AC-2) — тот же механизм, что
+# токены ролей (`orchestrator/keychain.py::token`), отдельный слот
+# (ANSWER-1 п.3). Заводит Оператор вручную (`security add-generic-
+# password`), код только читает.
+CANARY_POOL_KEY_SLOT = "artel-canary-pool-key"
 # Потолок ПОДРЯД идущих циклов возврата из `escalated` ОДНОЙ канареечной
 # задачи (REVIEW.md 01M1NEEWH5K1XPFRDGRMPYSBXJ итерации 1, R1-F1):
 # `review_iters` не сбрасывается при возврате из `escalated` (общее

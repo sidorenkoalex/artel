@@ -58,9 +58,9 @@ import time
 from collections import namedtuple
 from pathlib import Path
 
-from . import (alerts, artifact_branch, coldstart, config, gitcmd, liveness,
-              projects, roles, runner, snapshot, spend, stack, store,
-              targets, workspace, zone_lock)
+from . import (alerts, artifact_branch, canary, coldstart, config, gitcmd,
+              liveness, projects, roles, runner, snapshot, spend, stack,
+              store, targets, workspace, zone_lock)
 
 # status: "ok" | "warn" | "fail" | "skip" ("skip" — честный пропуск проверки,
 # требование 9: сверка forge-политики без `gh`/сети — не провал и не ок).
@@ -655,6 +655,18 @@ def check_role_log_pool_leak(conn) -> Check:
             f"требование 13б)")
     return Check("canary-pool-leak", "fail",
                 f"логи ролей упоминают каталог пула: {', '.join(leaking)}")
+
+
+def check_canary_pool_drift() -> Check:
+    """AC-8 (SPEC 01M1NSR5M5THYRC0RFWPMVE2DW, требование 3): предупреждает,
+    если открытый пул `~/.artel-canary` разошёлся с запечатанным
+    `canary/pool.sealed` — незапечатанные правки Оператора."""
+    warning = canary.pool_drift_warning()
+    if warning is None:
+        return Check("canary-pool-drift", "ok",
+                     "открытый пул канарейки не расходится с запечатанным "
+                     "(либо пул/pool.sealed не развёрнуты)")
+    return Check("canary-pool-drift", "warn", warning)
 
 
 def check_token_repo_scope() -> list[Check]:
@@ -1361,38 +1373,115 @@ def check_root_pin() -> Check:
 
 ORPHAN_ARTIFACT_BRANCH_SOURCE = "doctor.cleanup.artifact_branches"
 
+# `git ls-remote --heads origin 'artifact/*'` — сверка веток-кандидатов с
+# origin (SPEC 01M1REVP9WGRHDDNVEVE8BBH0Z, требование 1): один и тот же
+# glob на весь прогон уборки, не по одному запросу на ветку (AC-3).
+_REMOTE_ARTIFACT_GLOB = "artifact/*"
+# Сентинел «аргумент не передан», отличимый от легитимных значений
+# `None`/`set()`/`[]` (SPEC 01M1REVP9WGRHDDNVEVE8BBH0Z, «Подход» PLAN):
+# явно переданное `remote`/`orphans` (в т.ч. `None`) — используется как
+# есть, БЕЗ пересчёта; аргумент не передан — функция вычисляет его сама
+# (обратная совместимость с прямыми вызовами существующих юнит-тестов и
+# приёмочных `_sandbox.py`, где `doctor._orphan_artifact_branches(conn)`
+# зовётся с одним аргументом).
+_UNSET = object()
 
-def _orphan_artifact_branches(conn) -> list[str]:
-    """Ветки `artifact/<id>` пульта, для которых нет строки в БД
+
+def _remote_artifact_branch_names() -> set[str] | None:
+    """Имена веток `artifact/<id>`, присутствующих на `origin` (SPEC
+    01M1REVP9WGRHDDNVEVE8BBH0Z, требование 1): единственное место,
+    зовущее `git ls-remote --heads origin 'artifact/*'` — ровно один
+    запрос на весь прогон уборки, не по одному на ветку-кандидата (AC-3).
+
+    `None` — origin не ответил (git не ответил вовсе или вернул ненулевой
+    код возврата, требования 5-6): вызывающий код обязан трактовать это
+    как «критерий не вычислим», НЕ как «на origin ничего нет» — в
+    отличие от `gitcmd.list_branches`/`remote_branch_sha`, где та же
+    деградация к пустоте корректна, здесь пустота означала бы удалить
+    ЛЮБУЮ локальную ветку как сироту (fail-closed, принцип целостности).
+    """
+    res = gitcmd.git("ls-remote", "--heads", "origin", _REMOTE_ARTIFACT_GLOB)
+    if res is None or res.returncode != 0:
+        return None
+    prefix = "refs/heads/"
+    names = set()
+    for line in res.stdout.splitlines():
+        parts = line.split()
+        if len(parts) < 2:
+            continue
+        ref = parts[1]
+        if ref.startswith(prefix):
+            names.add(ref[len(prefix):])
+    return names
+
+
+def _orphan_artifact_branches(conn, remote=_UNSET) -> list[str] | None:
+    """Ветки `artifact/<id>` пульта, для которых НЕТ строки в БД
     (регистронезависимо — `artifact_branch.branch_name` работает с
-    `task_id.lower()`). Только чтение, без удаления — общая часть между
-    `sweep_orphan_artifact_branches` (сама уборка) и `cmd_doctor`
-    (честный CLI-вывод R1-F3: нужно знать, были ли сироты, независимо от
-    того, удалось ли их удалить)."""
+    `task_id.lower()`) И которых нет среди веток `artifact/*` на origin
+    (SPEC 01M1REVP9WGRHDDNVEVE8BBH0Z, требование 1, AC-1/AC-2: ОБА
+    условия обязаны быть верны — ветка, живая хотя бы по одному из двух
+    источников истины, сиротой не считается). Только чтение, без
+    удаления — общая часть между `sweep_orphan_artifact_branches` (сама
+    уборка) и `cmd_doctor` (честный CLI-вывод: нужно знать, были ли
+    сироты, независимо от того, удалось ли их удалить).
+
+    `remote` — предвычисленный набор веток origin (`_remote_artifact_
+    branch_names`); по умолчанию (аргумент не передан) вычисляется
+    здесь — вызывающий код, которому важно не делать второй запрос за
+    один прогон (`cmd_doctor`, AC-3), передаёт уже вычисленное значение
+    явно.
+
+    `None` — origin не ответил (требование 6): вся функция тоже
+    возвращает `None`, не пустой список — пустой список уже легитимно
+    означает «сирот нет», спутать эти два случая означало бы посчитать
+    origin пустым и удалить произвольную локальную ветку.
+    """
+    if remote is _UNSET:
+        remote = _remote_artifact_branch_names()
+    if remote is None:
+        return None
     known_ids = {r["id"].lower() for r in store.all_tasks(conn)}
     branches = gitcmd.list_branches("artifact/") or []
-    return sorted(b for b in branches if b[len("artifact/"):] not in known_ids)
+    return sorted(
+        b for b in branches
+        if b[len("artifact/"):] not in known_ids and b not in remote)
 
 
-def sweep_orphan_artifact_branches(conn) -> list[str]:
-    """Удаляет ветки `artifact/<id>` пульта, для которых нет строки в БД
-    (SPEC «Контекст»: источник утечки — тест, заводящий задачу через
-    `cmd_new` без подмены `config.ROOT`, коммитивший артефакты прямиком
-    в НАСТОЯЩИЙ репозиторий пульта). Только по явному вызову Оператора
-    (`doctor --fix`), не автоматически — ветки живых задач не трогаются.
+def sweep_orphan_artifact_branches(conn, orphans=_UNSET) -> list[str] | None:
+    """Удаляет ветки `artifact/<id>` пульта, отсутствующие И в БД, И на
+    origin (SPEC «Контекст»: источник утечки — тест, заводящий задачу
+    через `cmd_new` без подмены `config.ROOT`, коммитивший артефакты
+    прямиком в НАСТОЯЩИЙ репозиторий пульта; расширено требованием 1
+    задачи 01M1REVP9WGRHDDNVEVE8BBH0Z — на чужой копии, где локальной
+    строки БД у живой задачи просто нет, критерий «только БД» сносил бы
+    её). Только по явному вызову Оператора (`doctor --fix`), не
+    автоматически — ветки живых задач не трогаются.
 
-    Ровно один incident-алерт на весь прогон уборки, с перечислением
-    удалённого в сообщении (не по алерту на каждую ветку — Оператору
-    нужна одна строка на уборку, не журнал по счётчику находок). Возврат
-    `git branch -D` проверяется (ANSWER-2 п.3, R1-F3): ветка, которую не
-    удалось удалить, не попадает ни в возвращаемый список, ни в текст
-    алерта как «удалено» — только в отдельную честную часть сообщения.
-    Возвращает список ФАКТИЧЕСКИ удалённых имён веток; пустой — либо
-    сирот не нашлось, либо ни одно удаление не удалось (`cmd_doctor`
-    различает эти два случая в CLI-выводе через `_orphan_artifact_
-    branches`, ANSWER-3 R1-F3).
+    `orphans` — предвычисленный список кандидатов (`_orphan_artifact_
+    branches`); по умолчанию (аргумент не передан) вычисляется здесь —
+    `cmd_doctor` передаёт уже вычисленный список явно, чтобы не делать
+    второй запрос origin за один прогон уборки (AC-3).
+
+    `orphans is None` (origin недоступен, требование 5/AC-6): уборка НЕ
+    ВЫПОЛНЯЕТСЯ ВООБЩЕ — `git branch -D` не зовётся ни разу, incident не
+    заводится, возврат — `None` (fail-closed, принцип целостности).
+
+    Иначе — ровно один incident-алерт на весь прогон уборки, с
+    перечислением удалённого в сообщении (не по алерту на каждую ветку —
+    Оператору нужна одна строка на уборку, не журнал по счётчику
+    находок). Возврат `git branch -D` проверяется (ANSWER-2 п.3, R1-F3):
+    ветка, которую не удалось удалить, не попадает ни в возвращаемый
+    список, ни в текст алерта как «удалено» — только в отдельную честную
+    часть сообщения. Возвращает список ФАКТИЧЕСКИ удалённых имён веток;
+    пустой — либо сирот не нашлось, либо ни одно удаление не удалось
+    (`cmd_doctor` различает эти два случая в CLI-выводе через `orphans`,
+    ANSWER-3 R1-F3).
     """
-    orphans = _orphan_artifact_branches(conn)
+    if orphans is _UNSET:
+        orphans = _orphan_artifact_branches(conn)
+    if orphans is None:
+        return None
     deleted = []
     failed = []
     for branch in orphans:
@@ -1408,6 +1497,19 @@ def sweep_orphan_artifact_branches(conn) -> list[str]:
             conn, None, "incident", ORPHAN_ARTIFACT_BRANCH_SOURCE,
             f"осиротевшие артефактные ветки: {'; '.join(parts)}")
     return deleted
+
+
+def _print_orphan_branch_candidates(orphans: list[str]) -> None:
+    """Требования 3-4 (SPEC 01M1REVP9WGRHDDNVEVE8BBH0Z): число кандидатов
+    на удаление ПОЛНОСТЬЮ, но их имён — только первые `config.
+    DOCTOR_ORPHAN_PREVIEW_LIMIT`, с пометкой про `doctor --fix`. Общая
+    для режима предпросмотра (`doctor`) и для `--fix` (там — печатается
+    ДО удаления, требование 4/AC-5)."""
+    print(f"Осиротевшие артефактные ветки-кандидаты на удаление: "
+         f"{len(orphans)} (первые {config.DOCTOR_ORPHAN_PREVIEW_LIMIT} имён "
+         f"ниже; удалит `doctor --fix`)")
+    for branch in orphans[:config.DOCTOR_ORPHAN_PREVIEW_LIMIT]:
+        print(f"  {branch}")
 
 
 # --- уборка игнорируемых файлов артефактных веток (SPEC ------------------
@@ -1494,6 +1596,7 @@ def all_checks(conn) -> list[Check]:
     checks.extend(check_branch_freshness(conn))
     checks.append(check_root_pin())
     checks.append(check_role_log_pool_leak(conn))
+    checks.append(check_canary_pool_drift())
     checks.extend(check_token_repo_scope())
     checks.extend(stack.check_stack())
     return checks
@@ -1503,29 +1606,63 @@ LABELS = {"ok": "ok", "warn": "WARN", "fail": "FAIL", "skip": "skip"}
 
 
 def cmd_doctor(restore: bool = False, fix: bool = False) -> None:
+    """SPEC 01M1REVP9WGRHDDNVEVE8BBH0Z, требования 3-6: `_orphan_artifact_
+    branches(conn)` зовётся РОВНО ОДИН РАЗ за весь прогон (что в режиме
+    предпросмотра, что под `--fix`, AC-3) — результат передаётся явно в
+    `sweep_orphan_artifact_branches`, чтобы та не переспрашивала origin.
+
+    Origin недоступен (`orphans is None`): без `--fix` — информационная
+    строка вместо списка кандидатов (требование 6/AC-7, не FAIL — тем же
+    приёмом деградации, что `check_root_pin`); под `--fix` — именованный
+    `Check` со статусом `fail` вливается в общий список проверок (тот же
+    механизм печати `[FAIL]`/подсчёта провалов/`sys.exit(1)`, что и у
+    остальных доктор-проверок) — уборка веток при этом не запускается
+    вовсе (требование 5/AC-6). Уборка игнорируемых файлов/мёртвых
+    lease-групп/зависших тестов от origin не зависит и продолжает
+    работать независимо от исхода сверки веток-сирот.
+    """
     conn = store.db()
     if restore:
         print("Recovery-сверка после восстановления .artel/ из бэкапа:")
+        # SPEC 01M1NSR5M5THYRC0RFWPMVE2DW, требование 3/AC-6: тот же
+        # вход восстановления пула, что `catalog.cmd_init()`.
+        pool_restore_msg = canary.restore_pool_if_missing(conn)
+        if pool_restore_msg:
+            print(pool_restore_msg)
+    orphans = _orphan_artifact_branches(conn)
+    extra_checks = []
     if fix:
-        found_before = bool(_orphan_artifact_branches(conn))
-        removed = sweep_orphan_artifact_branches(conn)
-        if removed:
-            print("Осиротевшие артефактные ветки удалены:")
-            for branch in removed:
-                print(f"  {branch}")
-        elif found_before:
-            # R1-F3 (ANSWER-3): найдены, но НИ ОДНО удаление не прошло —
-            # честно об этом, не «не найдено» (расхождение с журналом
-            # алертов, который sweep уже честно ведёт).
-            print("Осиротевшие артефактные ветки найдены, но не удалены "
-                 "— см. журнал алертов (doctor.cleanup.artifact_branches).")
+        if orphans is None:
+            extra_checks.append(Check(
+                "orphan-branches-origin", "fail",
+                "origin недоступен (git ls-remote --heads origin "
+                "'artifact/*' не ответил) — критерий сироты артефактных "
+                "веток не вычислим, уборка artifact/*-веток не выполнена"))
         else:
-            print("Осиротевших артефактных веток не найдено.")
+            _print_orphan_branch_candidates(orphans)
+            removed = sweep_orphan_artifact_branches(conn, orphans)
+            if removed:
+                print(f"Осиротевшие артефактные ветки удалены ({len(removed)}):")
+                for branch in removed:
+                    print(f"  {branch}")
+            elif orphans:
+                # R1-F3 (ANSWER-3): найдены, но НИ ОДНО удаление не прошло —
+                # честно об этом, не «не найдено» (расхождение с журналом
+                # алертов, который sweep уже честно ведёт).
+                print("Осиротевшие артефактные ветки найдены, но не удалены "
+                     "— см. журнал алертов (doctor.cleanup.artifact_branches).")
+            else:
+                print("Осиротевших артефактных веток не найдено.")
         print("Уборка игнорируемых файлов артефактных веток живых задач:")
         _fix_ignored_artifact_files(conn)
         _fix_dead_lease_groups(conn)
         _fix_hung_test_runs(conn)
-    checks = all_checks(conn)
+    else:
+        if orphans is None:
+            print("критерий не вычислим без origin")
+        else:
+            _print_orphan_branch_candidates(orphans)
+    checks = extra_checks + all_checks(conn)
     for c in checks:
         print(f"  [{LABELS[c.status]}] {c.name}: {c.detail}")
 

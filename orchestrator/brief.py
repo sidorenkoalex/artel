@@ -18,9 +18,21 @@ import subprocess
 import sys
 from pathlib import Path
 
+from scripts import codebase_map
+
 from . import alerts, config, context_package, gitcmd, store
 
 MAP_REL = "docs/codebase-map.md"
+# Заголовок компонента карты в тексте брифа (SPEC 01M1RFQ52S0VD22J628TXX96XS,
+# требование 3, AC-12): называет содержимое проекцией явно — роль не должна
+# принять урезанный компонент за полную карту.
+MAP_PROJECTION_LABEL = f"{MAP_REL} (проекция для брифа)"
+# Одна строка-указатель на полную карту — вне текста, чей размер/sha256
+# идёт в опись/журнал (AC-13/AC-14): полная карта с блоком «Импортируется»
+# и секциями tests/* остаётся на диске рабочего каталога, читается адресно.
+MAP_PROJECTION_NOTE = (
+    "Полная карта — с блоком «Импортируется» и секциями tests/* — лежит "
+    f"в {MAP_REL} рабочего каталога и читается адресно.\n\n")
 CONVENTIONS_REL = "CLAUDE.md"
 # Те же три glob'а, что и у CI-джобы codebase-map — общий способ сверки
 # свежести карты (SPEC T028, требование 5).
@@ -516,6 +528,12 @@ def _handle_map_size_alert(conn, task_id: str, map_text: str) -> None:
     файла (AC-2) — не факт описи, как у остальных компонентов задачи
     (AC-22), а сигнал, что лимит пакета начал жать. Авто-закрывается тем
     же паттерном, что T035/T088, когда карта снова умещается в потолок.
+
+    `map_text` — текст, который РЕАЛЬНО идёт в бриф (SPEC
+    01M1RFQ52S0VD22J628TXX96XS, требование 2, AC-11): вызывающий код
+    обязан передавать сюда результат `codebase_map.project_for_brief`,
+    а не полный текст файла — иначе алерт срабатывал бы по объёму,
+    которого роль не видит.
     """
     target = store.task_target(conn, task_id)
     size = len(map_text.encode("utf-8"))
@@ -576,22 +594,32 @@ def developer_brief(conn, task_id: str) -> str:
     диска рабочей копии (tasks/01M1K7KP0D8ZKRM9KTE75DCCYR, AC-2/AC-4):
     `_main_branch_text`, не `config.ROOT / CONVENTIONS_REL`. SPEC.md —
     по-прежнему с ветки задачи (SPEC «Не входит»).
+
+    Карта — облегчённой проекцией (SPEC 01M1RFQ52S0VD22J628TXX96XS,
+    требования 2/3): `codebase_map.project_for_brief`, применённая к
+    тексту ПОСЛЕ сверки свежести/регенерации (`_fresh_map_text_and_note`)
+    — единственное место правил проекции остаётся в `scripts/
+    codebase_map.py`, этот модуль их не дублирует.
     """
     branch, foreign = _artifact_source_branch(conn, task_id)
     run_id = new_run_id()
     spec_text = _developer_spec_text(conn, task_id, branch, foreign)
     # Текст карты и пометка стухлости — раздельно (R1-F4): опись считает
-    # размер/sha256 по `map_text` как есть на диске, пометка (если карта
-    # стухла) идёт в текст брифа ПЕРЕД компонентом, но не участвует в его
-    # заголовке — иначе sha256 в описи разошёлся бы с sha256sum файла.
+    # размер/sha256 по тексту ПРОЕКЦИИ (SPEC 01M1RFQ52S0VD22J628TXX96XS,
+    # требование 2/3, AC-9/AC-13) как есть после сверки свежести, пометка
+    # (если карта стухла) идёт в текст брифа ПЕРЕД компонентом, но не
+    # участвует в его заголовке — иначе sha256 в описи разошёлся бы с
+    # sha256 фактически включённого текста.
     map_text, map_note = _fresh_map_text_and_note(conn, task_id)
+    projected_map_text = codebase_map.project_for_brief(map_text)
     conventions_text = _main_branch_text(task_id, CONVENTIONS_REL)
-    _handle_map_size_alert(conn, task_id, map_text)
+    _handle_map_size_alert(conn, task_id, projected_map_text)
     parts = [
         _manifest_component(conn, task_id, "developer",
                             f"tasks/{task_id}/SPEC.md", spec_text, run_id),
-        map_note + _manifest_component(conn, task_id, "developer", MAP_REL,
-                                       map_text, run_id),
+        map_note + MAP_PROJECTION_NOTE + _manifest_component(
+            conn, task_id, "developer", MAP_PROJECTION_LABEL,
+            projected_map_text, run_id),
         _manifest_component(conn, task_id, "developer", CONVENTIONS_REL,
                             conventions_text, run_id),
     ]
@@ -639,12 +667,21 @@ def analyst_map_component(conn, task_id: str) -> str:
 
     Границы недоверенных данных (tasks/01M1GV6H5DDDCWW4G3GW1D3A1X,
     AC-1/AC-5): один `run_id` на весь вызов оборачивает тело каждого
-    компонента (карта, QUESTIONS, ANSWER)."""
+    компонента (карта, QUESTIONS, ANSWER).
+
+    Карта — той же облегчённой проекцией, тем же способом, что у
+    developer (SPEC 01M1RFQ52S0VD22J628TXX96XS, требование 3, AC-10):
+    `codebase_map.project_for_brief` поверх `fresh_map_text` (сверка
+    свежести/регенерация — как есть, порядок «пометка стухлости раньше
+    заголовка компонента» у analyst не меняется — `fresh_map_text` уже
+    отдаёт пометку и текст одной строкой, проекция применяется к ней
+    целиком: пометка не начинается с «## », поэтому в шапку проекции
+    попадает без изменений, AC-4)."""
     branch, foreign = _artifact_source_branch(conn, task_id)
     run_id = new_run_id()
-    map_text = fresh_map_text(conn, task_id)
-    parts = [_journal_component(conn, task_id, "analyst", MAP_REL, map_text,
-                               run_id)]
+    map_text = codebase_map.project_for_brief(fresh_map_text(conn, task_id))
+    parts = [MAP_PROJECTION_NOTE + _journal_component(
+        conn, task_id, "analyst", MAP_PROJECTION_LABEL, map_text, run_id)]
     q_part = _questions_component(conn, task_id, "analyst", branch, foreign,
                                   run_id)
     if q_part:

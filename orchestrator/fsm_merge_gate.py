@@ -20,8 +20,8 @@ import tempfile
 import time
 from pathlib import Path
 
-from . import (ci, cleanup, config, fsm, fsm_postmerge, gitcmd,
-              github_adapter, lease, merge_lock, store, workspace)
+from . import (artifact_branch, ci, cleanup, config, fsm, fsm_postmerge,
+              gitcmd, github_adapter, lease, merge_lock, store, workspace)
 
 
 def _touches_protected_path(path: str) -> bool:
@@ -200,6 +200,73 @@ def _wait_for_branch_ci_green(conn, task_id: str, branch: str,
         time.sleep(config.MERGE_GATE_CI_WAIT_POLL_SEC)
 
 
+def _overlay_artifact_snapshot(conn, task_id: str, repo: Path) -> None:
+    """Накладывает `tasks/<id>/` из ГОЛОВЫ артефактной ветки поверх
+    результата обычного `git merge --no-ff branch` в `repo` (SPEC
+    01M1R9YEK08XEQWBFX0929WFVJ, требование 3; AC-6/AC-7/AC-8/AC-11):
+    содержимое `tasks/<id>/`, которое попадает в main, обязано быть
+    снимком АРТЕФАКТНОЙ ветки на момент `approve`, не тем, что принесла
+    легаси-копия кодовой ветки задачи (если она вообще есть — обычно её
+    нет, `checkpoint.py` исключает `tasks/<id>/` из коммитов кодовой
+    ветки всех ролей, кроме коммита в артефактную ветку).
+
+    Материализация не удалась (`artifact_branch.materialize_task_dir`
+    вернула пустую строку — ветка не читается) — журналируется
+    предупреждение, main остаётся с тем, что уже принёс обычный merge
+    (деградация, не отказ перехода: требование 3 не разрешает провалу
+    materialize держать гейт). Наложение не поменяло НИ ОДНОГО файла
+    (`git status --porcelain` пуст — легаси-копия и снимок уже
+    совпадают, либо легаси не было и снимок пуст тоже) — коммитить
+    нечего. Иначе — новый коммит поверх merge; если ДО наложения
+    `tasks/<id>/` уже нёс файлы (легаси-копия кодовой ветки
+    существовала), расхождение с ней журналируется отдельным
+    предупреждением (AC-8) — переход не отказывает по этой причине.
+    """
+    legacy_dir = repo / "tasks" / task_id
+    legacy_present = legacy_dir.is_dir() and any(
+        p.is_file() for p in legacy_dir.rglob("*"))
+
+    head = artifact_branch.materialize_task_dir(task_id, repo)
+    if not head:
+        store.journal(
+            conn, task_id, "orchestrator",
+            "снимок артефактной ветки не наложен",
+            "материализация tasks/<id>/ из артефактной ветки не удалась "
+            "— main понесёт содержимое обычного merge")
+        return
+
+    status = gitcmd.in_repo(repo, "status", "--porcelain", "--",
+                            f"tasks/{task_id}")
+    changed = bool(status.stdout.strip()) if (
+        status is not None and status.returncode == 0) else False
+    if not changed:
+        return
+
+    add = gitcmd.in_repo(repo, "add", "-A", "--", f"tasks/{task_id}")
+    if add is None or add.returncode != 0:
+        store.journal(
+            conn, task_id, "orchestrator",
+            "снимок артефактной ветки не наложен",
+            add.stderr.strip()[:300] if add is not None else "git не ответил")
+        return
+    commit = gitcmd.in_repo(repo, "commit", "-m",
+                            f"{task_id}: снимок артефактной ветки поверх merge")
+    if commit is None or commit.returncode != 0:
+        store.journal(
+            conn, task_id, "orchestrator",
+            "снимок артефактной ветки не наложен",
+            commit.stderr.strip()[:300] if commit is not None
+            else "git не ответил")
+        return
+    if legacy_present:
+        store.journal(
+            conn, task_id, "orchestrator",
+            "расхождение легаси-копии tasks/<id>/ и снимка артефактной ветки",
+            f"легаси-копия tasks/<id>/ кодовой ветки разошлась со снимком "
+            f"артефактной ветки {head} — наложен снимок артефактной ветки "
+            f"(main несёт его, не легаси-копию)")
+
+
 def _cmd_approve_merge_gate(conn, task_id: str, state: str, t,
                             confirmed_ci_note: str | None = None) -> tuple:
     """Тело окна `merge_gate -> done`, исполняемое ПОД МЬЮТЕКСОМ merge
@@ -257,7 +324,7 @@ def _cmd_approve_merge_gate(conn, task_id: str, state: str, t,
     # инвалидируется — merge в main в ЭТОМ ЖЕ вызове не выполняется
     # (инвариант 19 не ослабляется), задача остаётся на гейте.
     pull_outcome = fsm._pull_main_or_escalate(conn, task_id, t, state)
-    if pull_outcome == "escalated":
+    if pull_outcome in ("escalated", "refused"):
         return ("stopped",)
     if pull_outcome == "pulled":
         # Push нового head в origin ДО начала цикла ожидания CI (SPEC
@@ -320,6 +387,13 @@ def _cmd_approve_merge_gate(conn, task_id: str, state: str, t,
     if merge_res is None or merge_res.returncode != 0:
         _handle_merge_conflict(conn, task_id, state, branch, merge_res, scratch)
         return ("stopped",)
+    # Снимок артефактной ветки поверх обычного merge (SPEC
+    # 01M1R9YEK08XEQWBFX0929WFVJ, требование 3; AC-6/AC-7/AC-8/AC-11) —
+    # ДО sha "коммита мержа" ниже: main обязан унести АРТЕФАКТНЫЙ снимок
+    # tasks/<id>/, не легаси-копию кодовой ветки, значит это часть
+    # содержимого, на которое указывает merge_sha, а не служебная правка
+    # вроде карты/RETRO после него.
+    _overlay_artifact_snapshot(conn, task_id, scratch)
     # sha КОММИТА МЕРЖА — сразу после успешного merge, ДО любых
     # последующих служебных коммитов (карты, RETRO): адрес артефактов
     # RETRO (SPEC T043, требование 8) обязан указывать именно на этот

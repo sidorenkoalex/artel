@@ -381,9 +381,16 @@ class ReviewPackageTest(unittest.TestCase):
     def test_stat_and_diff_are_taken_against_main(self):
         self.build()
 
+        # tasks/01M1RA0N6FCFEQBB82K58GM12X (AC-2/AC-6): оба вызова несут
+        # исключающий pathspec `tasks/<id>/` — дубль артефактов в diff/
+        # стат-списке ревью-пакета раздувает контекст без нового сигнала,
+        # они уже идут в пакет своими компонентами.
+        exclude = ("--", ".", f":!tasks/{self.TASK}/")
         self.assertEqual([c for c in self.git.calls if c[0] == "diff"],
-                         [["diff", "--stat", f"{config.MAIN_BRANCH}...{self.BRANCH}"],
-                          ["diff", f"{config.MAIN_BRANCH}...{self.BRANCH}"]])
+                         [["diff", "--stat",
+                           f"{config.MAIN_BRANCH}...{self.BRANCH}", *exclude],
+                          ["diff", f"{config.MAIN_BRANCH}...{self.BRANCH}",
+                           *exclude]])
 
     def test_artifacts_are_read_from_the_same_point_as_the_diff(self):
         """Артефакты — из ветки задачи, а не из того, что сейчас в дереве."""
@@ -975,10 +982,13 @@ class IncrementalReviewPackageTest(ReviewPackageTest):
     def test_diff_and_stat_are_taken_against_the_previous_verdict_sha(self):
         self.build_incremental()
 
+        # tasks/01M1RA0N6FCFEQBB82K58GM12X (AC-2): исключение `tasks/<id>/`
+        # действует и на инкрементальный diff/stat, не только на полный.
+        exclude = ("--", ".", f":!tasks/{self.TASK}/")
         self.assertEqual(
             [c for c in self.git.calls if c[0] == "diff"],
-            [["diff", "--stat", f"{self.PREV_SHA}...{self.BRANCH}"],
-             ["diff", f"{self.PREV_SHA}...{self.BRANCH}"]],
+            [["diff", "--stat", f"{self.PREV_SHA}...{self.BRANCH}", *exclude],
+             ["diff", f"{self.PREV_SHA}...{self.BRANCH}", *exclude]],
             "iteration > 1 должен сравнивать не с main, а с sha "
             "предыдущего вердикта")
 
@@ -1014,10 +1024,12 @@ class IncrementalReviewPackageTest(ReviewPackageTest):
         package = self.build_incremental(prev_sha="")
 
         self.assertEqual(package["diff_type"], "полный")
+        exclude = ("--", ".", f":!tasks/{self.TASK}/")
         self.assertEqual(
             [c for c in self.git.calls if c[0] == "diff"],
-            [["diff", "--stat", f"{config.MAIN_BRANCH}...{self.BRANCH}"],
-             ["diff", f"{config.MAIN_BRANCH}...{self.BRANCH}"]])
+            [["diff", "--stat", f"{config.MAIN_BRANCH}...{self.BRANCH}",
+              *exclude],
+             ["diff", f"{config.MAIN_BRANCH}...{self.BRANCH}", *exclude]])
 
 
 class AnswerRelsTest(unittest.TestCase):
@@ -1237,6 +1249,37 @@ class PackageNoteDiffTypeTest(unittest.TestCase):
         note = self.note_of()
 
         self.assertNotIn("итерация", note)
+
+
+class GitDiffPartPathspecTest(unittest.TestCase):
+    """`git_diff_part(pathspec=...)` — tasks/01M1RA0N6FCFEQBB82K58GM12X,
+    требования 1-2: pathspec непустой добавляет `-- *pathspec` в конец
+    команды; пустой (по умолчанию) не меняет вызов вовсе — вызывающий код
+    вне зоны этой задачи (`fsm.py::_snapshot_split_assessment`) не несёт
+    исключения и не обязан его передавать."""
+
+    def _capturing_git(self, calls: list) -> callable:
+        def git(*args) -> subprocess.CompletedProcess:
+            calls.append(list(args))
+            return subprocess.CompletedProcess(list(args), 0, "diff --git a b", "")
+        return git
+
+    def test_no_pathspec_leaves_the_call_unchanged(self):
+        calls = []
+        with mock.patch.object(gitcmd, "git", self._capturing_git(calls)):
+            review.git_diff_part("main", "task/x")
+
+        self.assertEqual(calls, [["diff", "main...task/x"]])
+
+    def test_pathspec_is_appended_after_a_double_dash(self):
+        calls = []
+        with mock.patch.object(gitcmd, "git", self._capturing_git(calls)):
+            review.git_diff_part("main", "task/x", "--stat",
+                                 pathspec=(".", ":!tasks/T001/"))
+
+        self.assertEqual(
+            calls,
+            [["diff", "--stat", "main...task/x", "--", ".", ":!tasks/T001/"]])
 
 
 class PreviousVerdictShaTest(TmpRootTest):
