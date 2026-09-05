@@ -14,6 +14,7 @@
 настоящий git (тот же приём, что `RealPultGitTest`).
 """
 import io
+import json
 import os
 import shutil
 import socket
@@ -268,6 +269,14 @@ class PreflightBlocksMissingTokenTest(TmpRootTest):
         super().setUp()
         self.TASK = self.new_task_in_fake_git("Задача под pre-flight")
         store.update_task(store.db(), self.TASK, state="in_dev")
+        # Обязательный артефакт роли developer (SPEC 01M1RQ12JVHE3PQYDFV1XPSTQ3,
+        # требование 3) — без него на диске рабочего каталога роли успешная
+        # попытка (rc=0) честно ретраится вместо одного тихого успеха,
+        # которого ждут тесты этого класса (они проверяют pre-flight, не
+        # факт отказа без артефакта).
+        tdir = config.WORKTREES / self.TASK / "tasks" / self.TASK
+        tdir.mkdir(parents=True, exist_ok=True)
+        (tdir / "PLAN.md").write_text("маркер\n", encoding="utf-8")
         # CLI на машине прогона может отсутствовать (CI-раннер) — проверки
         # токена/идентичности не должны зависеть от cli-found: он тестируется
         # отдельно, здесь всегда ok.
@@ -2043,6 +2052,26 @@ class RoleHomeReferenceExtraFilesTest(_RoleHomeReferenceTmpRootTest):
         self.assertNotEqual(check.status, "warn",
                             f"лишнее поддерево не должно давать WARN: "
                             f"{check.detail}")
+
+
+class RoleHomeReferenceSettingsAutoMemoryTest(unittest.TestCase):
+    """SPEC 01M1SG9YKBFG2G5YQDVBR6BVC8, AC-2: референсный settings.json
+    отключает автопамять CLI ролям курируемого слоя."""
+
+    def test_settings_json_disables_auto_memory(self):
+        """Ловит мутацию: ключ `autoMemoryEnabled` в референсном
+        settings.json отсутствует, равен `true`, либо записан строкой
+        `"false"` вместо булева `false`."""
+        settings_path = (config.ROOT / "docs" / "reference" / "role-home"
+                          / "claude" / "settings.json")
+        data = json.loads(settings_path.read_text(encoding="utf-8"))
+
+        self.assertIn("autoMemoryEnabled", data,
+                      f"{settings_path}: нет ключа autoMemoryEnabled")
+        self.assertIs(data["autoMemoryEnabled"], False,
+                       f"{settings_path}: autoMemoryEnabled должен быть "
+                       f"булевым false, получено "
+                       f"{data['autoMemoryEnabled']!r}")
 
 
 if __name__ == "__main__":

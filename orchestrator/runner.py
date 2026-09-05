@@ -268,8 +268,9 @@ def _cmd_run(conn, task_id: str) -> None:
     skills, reason = brief.skills_text(conn, task_id, role, skill_names)
     if skills is None:
         sys.exit(f"[{task_id}] скил роли {role} не прочитан: {reason}")
+    cwd_for_prompt = role_cwd_path(task_id, target)
     mission, brief_text, package = role_prompt.mission_brief_package(
-        conn, task_id, t, role)
+        conn, task_id, t, role, cwd_for_prompt)
     prompt = f"{mission}\n\n--- СКИЛЫ РОЛИ ---\n\n{skills}"
     if brief_text is not None:
         prompt = f"{prompt}\n\n{brief_text}"
@@ -439,6 +440,30 @@ def _allowlisted_env(source) -> dict:
            if name in stack.ROLE_ENV_ALLOWLIST or name.startswith(prefixes)}
 
 
+def _venv_interpreter_bin() -> str:
+    """Требование 4 (SPEC 01M1REVEZ1HESMJ7AFD5A9MEJ8, AC-12/AC-13): каталог
+    `<.artel/venv>/bin` — интерпретатор роли, если `.artel/venv` существует
+    и согласован с файлом закреплённых версий (та же проверка, что
+    `stack.check_stack()` уже даёт AC-7/AC-8 — не отдельная копия логики).
+
+    Зовёт ПОЛНЫЙ `check_stack()`, а не более узкую `stack.venv_checks()`,
+    хотя интересна только пара venv-проверок (REVIEW.md итерация 1,
+    R1-F2 — три лишних subprocess-вызова к `git`/`gh`/`claude` на каждый
+    шаг роли): планка приёмки (`tasks/01M1REVEZ1HESMJ7AFD5A9MEJ8/
+    acceptance_tests/test_ac12_ac13_role_env_venv_interpreter.py`, залочена
+    T023) мокает именно `runner.stack.check_stack` — сужение вызова здесь
+    без правки планки оставило бы мок без эффекта и уронило бы приёмку
+    реальным отсутствием venv по временному пути теста. Риск принят,
+    описан в PLAN.md «Риски».
+    """
+    checks = stack.check_stack()
+    warn = [c for c in checks if "venv" in c.name.lower() and c.status == "warn"]
+    if warn:
+        detail = "; ".join(c.detail for c in warn)
+        raise OSError(f"venv не готов для роли: {detail}")
+    return str(config.VENV_DIR / "bin")
+
+
 def role_env(role: str | None = None) -> dict:
     """Окружение процесса роли: PATH и переменные — из манифеста, не копия
     `os.environ` Оператора (SPEC 01M1RDCEF0JZ4AVQRE43JFH8TN, требования 1-3).
@@ -470,13 +495,22 @@ def role_env(role: str | None = None) -> dict:
 
     Каталог создаётся здесь же: CLI, не нашедший CLAUDE_CONFIG_DIR,
     создал бы его сам — и это был бы каталог, о котором пульт не знает.
+
+    Интерпретатор роли — `.artel/venv` (SPEC 01M1REVEZ1HESMJ7AFD5A9MEJ8,
+    требование 4), если он согласован с файлом закреплённых версий
+    (`_venv_interpreter_bin`, вызывается сразу после резолвинга
+    инструментов манифеста — тот же принцип «отказ до частичного
+    результата», что и у `_resolve_declared_tools` выше): его `bin/`
+    встаёт ПЕРВЫМ в PATH роли, раньше каталога `sys.executable` пульта —
+    голый `python3`/`pytest` внутри шага роли резолвится в venv.
     """
     resolved = _resolve_declared_tools()
+    venv_bin = _venv_interpreter_bin()
     config.ROLE_CONFIG_DIR.mkdir(parents=True, exist_ok=True)
     env = _allowlisted_env(os.environ)
     env["HOME"] = str(config.ROLE_HOME)
     env["CLAUDE_CONFIG_DIR"] = str(config.ROLE_CONFIG_DIR)
-    env["PATH"] = os.pathsep.join(_role_path_dirs(resolved))
+    env["PATH"] = os.pathsep.join([venv_bin] + _role_path_dirs(resolved))
     for name, value in git_identity().items():
         env.setdefault(name, value)
     # Аутентификация CLI живёт в user-слое Оператора (~/.claude.json +
@@ -503,6 +537,18 @@ def in_role_environment() -> bool:
     расшифровки пула канарейки, если она вызвана из-под роли)."""
     return (os.environ.get("HOME") == str(config.ROLE_HOME) and
             os.environ.get("CLAUDE_CONFIG_DIR") == str(config.ROLE_CONFIG_DIR))
+
+
+def role_cwd_path(task_id: str, target: str) -> Path:
+    """Путь `role_cwd` этого шага без побочных эффектов (без `workspace.
+    ensure`/материализации `tasks/<id>/`) — та же формула, что и внутри
+    `role_cwd` ниже (SPEC 01M1RQ12JVHE3PQYDFV1XPSTQ3, требование 2):
+    промпт обязан назвать рабочий каталог шага буквальной строкой ДО
+    первой попытки агента, раньше первого реального вызова `role_cwd`
+    внутри `run_agent_once`."""
+    if target == config.DEFAULT_TARGET:
+        return workspace.path(task_id)
+    return config.PROJECTS / target / "workspace"
 
 
 def role_cwd(conn, task_id: str, target: str) -> Path:
@@ -553,7 +599,7 @@ def role_cwd(conn, task_id: str, target: str) -> Path:
             raise OSError(error)
         path = wt_path
     else:
-        path = config.PROJECTS / target / "workspace"
+        path = role_cwd_path(task_id, target)
         path.mkdir(parents=True, exist_ok=True)
     if task_id is not None:
         from . import artifact_branch
@@ -592,6 +638,34 @@ def role_cmd() -> list[str]:
         # резолвится — SPEC T069
         "--strict-mcp-config",
     ]
+
+
+def _missing_required_artifact(role: str, cwd: Path, task_id: str) -> str | None:
+    """Имя обязательного артефакта роли, отсутствующего в РЕАЛЬНОМ рабочем
+    каталоге шага (`cwd`, где роль пишет инструментом Write) — `None`,
+    если артефакт на месте либо роль не несёт обязательного выхода этого
+    шага (SPEC 01M1RQ12JVHE3PQYDFV1XPSTQ3, требование 3).
+
+    Проверяется диск рабочего каталога роли, не артефактная ветка: rc=0
+    без файла на диске — тот же класс отказа, что и rc != 0 (два
+    инцидента 05.09, «Контекст» SPEC) — headless-шаг не получает
+    подтверждения записи вне рабочего каталога и молча ничего не
+    оставляет там, где реально смотрит эта проверка."""
+    task_dir = cwd / "tasks" / task_id
+    if role == "reviewer":
+        return None if (task_dir / "REVIEW.md").is_file() else "REVIEW.md"
+    if role == "developer":
+        return None if (task_dir / "PLAN.md").is_file() else "PLAN.md"
+    if role == "analyst":
+        if (task_dir / "SPEC.md").is_file() or (task_dir / "QUESTIONS.md").is_file():
+            return None
+        return "SPEC.md/QUESTIONS.md"
+    if role == "test_author":
+        acc = task_dir / "acceptance_tests"
+        if acc.is_dir() and any(p.is_file() for p in acc.rglob("*")):
+            return None
+        return "acceptance_tests/"
+    return None
 
 
 def run_agent_once(conn, task_id: str, role: str, prompt: str,
@@ -805,6 +879,22 @@ def run_agent_once(conn, task_id: str, role: str, prompt: str,
         print(f"[{task_id}] {role}: агент упал (rc={rc}, {numbered}), "
               f"причина в {log_path}")
         return "failed", reason, failure_class
+
+    missing_artifact = _missing_required_artifact(role, cwd, task_id)
+    if missing_artifact is not None:
+        # Требование 3: rc=0, но роль не оставила обязательный артефакт в
+        # своём рабочем каталоге — тот же класс отказа, что rc != 0 выше
+        # (чекпоинт WIP, ретрай/эскалацию решает `cmd_run`), а не штатное
+        # «agent run finished» (иначе цикл ретраев съедает попытку и
+        # бюджет впустую — оба инцидента 05.09, «Контекст» SPEC).
+        checkpoint.commit_abnormal_checkpoint(
+            conn, task_id, role, f"без артефакта {missing_artifact}")
+        reason = (f"rc=0, {numbered}{spent}; шаг завершён без артефакта "
+                  f"{missing_artifact} в рабочем каталоге роли {cwd}")
+        store.journal(conn, task_id, role, "agent run FAILED", reason)
+        print(f"[{task_id}] {role}: шаг завершён без артефакта "
+              f"{missing_artifact} (rc=0, {numbered})")
+        return "failed", reason, None
 
     if pump.error is not None:
         # Обрыв stdout-пайпа без таймаута (rc=0, но перекачка сама поймала

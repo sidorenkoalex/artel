@@ -3,10 +3,35 @@
 артефактов успешного шага (SPEC T059). Перенесено из orchestrator/runner.py
 без изменения поведения (T091, декомпозиция диспетчеров fsm/runner).
 """
+import re
 import shutil
 from pathlib import Path
 
 from . import config, fixation, gitcmd, store, workspace, yamlmini
+
+# Критерий допустимости файла первого уровня `acceptance_tests/` (SPEC
+# 01M1SAA01YRRTWAVADT2F81RRQ, AC-1): планка приёмки несёт только эти
+# имена/расширения непосредственно в `acceptance_tests/` — вложенные
+# подкаталоги (кроме `__pycache__`, отфильтрованного раньше `.gitignore`,
+# см. `ignored` в `_commit_external_step_artifacts`) и прочие файлы —
+# посторонние, инцидент 05.09 (`acceptance_tests/docs/codebase-map.md` из
+# `scripts/codebase_map.py`, запущенного с cwd внутри каталога планки).
+_ACCEPTANCE_TESTS_DIR = "acceptance_tests/"
+_ACCEPTANCE_TESTS_ALLOWED_TOP_LEVEL = re.compile(
+    r"^(test_.*\.py|_sandbox\.py|markers\.py|__init__\.py|.+\.md|.+\.txt)$")
+
+
+def _is_stray_acceptance_test_file(task_rel: str) -> bool:
+    """`task_rel` — путь относительно `tasks/<id>/` (например
+    `acceptance_tests/docs/codebase-map.md` или `PLAN.md`). `True` — файл
+    внутри `acceptance_tests/`, не входящий в разрешённый набор первого
+    уровня; файлы вне `acceptance_tests/` этим правилом не задеты вовсе."""
+    if not task_rel.startswith(_ACCEPTANCE_TESTS_DIR):
+        return False
+    inner = task_rel[len(_ACCEPTANCE_TESTS_DIR):]
+    if "/" in inner:
+        return True
+    return not _ACCEPTANCE_TESTS_ALLOWED_TOP_LEVEL.match(inner)
 
 # Типы артефактов, для которых допустимо удаление правилом «последний
 # коммит пути на артефактной ветке — автокоммит ЭТОЙ ЖЕ роли» ниже
@@ -463,6 +488,19 @@ def _commit_external_step_artifacts(conn, task_id: str, role: str,
     коммитится как обычно: конфликт по одному файлу не блокирует перенос
     остальных (AC-7).
 
+    Посторонние файлы `acceptance_tests/` (SPEC 01M1SAA01YRRTWAVADT2F81RRQ,
+    требование 1, AC-1/AC-2) — критерий `_is_stray_acceptance_test_file`
+    (тот же список, что называет SPEC: `test_*.py`, `_sandbox.py`,
+    `markers.py`, `__init__.py`, `*.md`/`*.txt` первого уровня) исключает
+    их из `files` ПОСЛЕ фильтра `.gitignore` выше, ДО конфликт-гварда и
+    коммита — инцидент 05.09, `scripts/codebase_map.py` с cwd внутри
+    каталога планки оставлял `acceptance_tests/docs/codebase-map.md` на
+    диске, и он безусловно доезжал до артефактной ветки, откуда красил
+    `guard --all` попыткой разбора его как артефакта. Одна запись журнала
+    на весь список посторонних файлов шага, не по записи на файл
+    (требование 2, AC-2) — цикл только собирает `stray`, сам вызов
+    `store.journal` вне цикла.
+
     `timeout=True` (SPEC 01M1NBWTSXEJB24PXR417YF1VA, AC-4/AC-5) —
     `commit_timeout_checkpoint` зовёт этой веткой: тот же перенос, что и
     при штатном завершении шага, но сообщение коммита артефактной ветки
@@ -513,6 +551,22 @@ def _commit_external_step_artifacts(conn, task_id: str, role: str,
     files = {rel: content for rel, content in raw_files.items()
              if rel not in ignored}
     existing = [rel for rel in existing if rel not in ignored]
+
+    # Посторонние файлы `acceptance_tests/` (SPEC 01M1SAA01YRRTWAVADT2F81RRQ,
+    # AC-1/AC-2) — исключаются из переноса, ОДНА запись журнала на весь шаг
+    # (не по записи на файл): цикл ниже только собирает список, само
+    # журналирование — один вызов после цикла.
+    task_prefix = f"tasks/{task_id}/"
+    stray = sorted(
+        rel[len(task_prefix):] for rel in files
+        if _is_stray_acceptance_test_file(rel[len(task_prefix):]))
+    if stray:
+        files = {rel: content for rel, content in files.items()
+                 if rel[len(task_prefix):] not in stray}
+        store.journal(
+            conn, task_id, "orchestrator",
+            "посторонние файлы в каталоге планки",
+            f"в каталоге планки посторонние файлы: {', '.join(stray)}")
 
     t = store.get_task(conn, task_id)
     baseline_sha = t["materialized_artifact_sha"] or ""
@@ -577,6 +631,45 @@ def _commit_external_step_artifacts(conn, task_id: str, role: str,
         detail += f"; удалено: {', '.join(removed)}"
     store.journal(conn, task_id, "orchestrator",
                   "автокоммит артефактов шага (артефактная ветка)", detail)
+    store.record_fixation(conn, task_id)
+    return detail
+
+
+def commit_pull_checkpoint(conn, task_id: str, wt: Path) -> str:
+    """WIP-чекпоинт worktree задачи перед `git merge` в `fsm._pull_main_or_
+    escalate` (SPEC 01M1RA0R9AH9RBAHD4A2Z5SEWQ, требование 2, AC-2/AC-3/
+    AC-5): незакоммиченный код вне `tasks/<id>/`, оставшийся после
+    отбрасывания `docs/codebase-map.md` (вызывающий код делает это
+    отдельным `checkout --` до вызова этой функции — иначе изменённая
+    карта попала бы в этот коммит вместо того, чтобы быть отброшенной),
+    коммитится тем же приёмом, что и остальные три WIP-чекпоинта
+    (`_commit_worktree_change`).
+
+    Мандат — безусловно `developer` (SPEC требование 2: «мандат кода в
+    этом worktree всегда у developer — единственной роли, чей WIP
+    попадает в кодовую ветку»): в отличие от `commit_timeout_checkpoint`/
+    `commit_abnormal_checkpoint`/`commit_pause_now_checkpoint`, здесь нет
+    параметра `role` и ветки отката для прочих ролей — подтяжка main
+    (все три точки вызова: `in_dev -> review`, `acceptance -> merge_gate`,
+    `merge_gate -> done`) идёт над worktree кодовой ветки задачи, куда
+    только код `developer` и попадает.
+
+    Не проверяет `store.task_target`/не разрешает `wt` сама — вызывающий
+    код (`fsm._pull_main_or_escalate`) уже получил `wt` от `workspace.
+    ensure` для КОНКРЕТНОГО target'а задачи, в отличие от остальных трёх
+    чекпоинтов, которые сами решают, чей worktree им коммитить (только
+    догфуд, PLAN «Риски» тех задач). Пустая строка — нечего коммитить или
+    git не ответил (та же тихая деградация, что и у остальных
+    WIP-чекпоинтов).
+    """
+    message = f"{task_id}: WIP-чекпоинт перед подтяжкой main"
+    committed, sha = _commit_worktree_change(wt, message,
+                                             exclude=f"tasks/{task_id}")
+    if not committed:
+        return ""
+    detail = f"{message} (sha {sha})" if sha else message
+    store.journal(conn, task_id, "orchestrator",
+                  "WIP-чекпоинт перед подтяжкой main", detail)
     store.record_fixation(conn, task_id)
     return detail
 

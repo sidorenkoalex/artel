@@ -216,6 +216,14 @@ class BranchFreshnessGateTest(unittest.TestCase):
                 ("git", "-C", str(repo), *args), 0, "", "")  # нечего коммитить
         if args[:1] == ("add",):
             return self._ok(repo, *args)
+        if args[:1] in (("checkout",), ("reset",)):
+            # Очистка worktree перед merge (SPEC 01M1RA0R9AH9RBAHD4A2Z5SEWQ,
+            # требования 1-2): отбрасывание карты (`checkout --`) и
+            # исключение `tasks/<id>/` из WIP-чекпоинта (`reset -q --`) —
+            # безобидный no-op здесь, как и `add`/`diff --cached` выше;
+            # песочница этого файла — не о самой очистке, «чисто, нечего
+            # коммитить» безусловно.
+            return self._ok(repo, *args)
         return None
 
     def _conflict_then_abort_ok(self, repo, *args) -> subprocess.CompletedProcess:
@@ -291,6 +299,12 @@ class BranchFreshnessGateTest(unittest.TestCase):
         MAIN_BRANCH` или к `"FETCH_HEAD"` вместо зафетченного sha — AC-2/
         R1-F1 тихо перестанут выполняться, а `assertNotIn`/`assertIn` по
         аргументам merge здесь это поймают.
+
+        Ловит мутацию (SPEC 01M1RNZ6V7TTTTYAHBMF8JBQQS, REVIEW.md
+        итерация 1, R1-F2): возврат материализации планки к временному
+        каталогу (регрессия №14) или к `cwd=config.ROOT` — `plank_root`/
+        `cwd` ниже перестали бы совпадать с `self.wt_path`, и `assertEqual`
+        по ним это поймает.
         """
         self.setup_recording()
         self.write_acceptance_plank()
@@ -328,25 +342,26 @@ class BranchFreshnessGateTest(unittest.TestCase):
                          "ветка задачи не упоминается в аргументах merge")
         acc_run.assert_called_once()
         plank_root = acc_run.call_args[0][0]
-        self.assertNotEqual(
+        self.assertEqual(
             plank_root, self.wt_path / "tasks" / self.TASK,
-            "SPEC 01M1R9YEK08XEQWBFX0929WFVJ AC-1: источник планки — "
-            "материализация из артефактной ветки, не worktree кодовой "
-            "ветки")
-        self.assertIn("artel-acceptance-", plank_root.name,
-                      "планка обязана прийти из acceptance."
-                      "materialize_from_branch, не из worktree")
+            "SPEC 01M1RNZ6V7TTTTYAHBMF8JBQQS AC-1: планка обязана "
+            "материализоваться в рабочий каталог кода задачи (worktree "
+            "self-target), не во временный каталог")
+        self.assertEqual(
+            acc_run.call_args.kwargs.get("code_root"), self.wt_path,
+            "SPEC 01M1RNZ6V7TTTTYAHBMF8JBQQS AC-2: cwd прогона обязан "
+            "быть равен рабочему каталогу кода задачи, не config.ROOT")
 
     def test_approve_pulls_main_and_advances_when_acceptance_green(self):
-        """SPEC 01M1R9YEK08XEQWBFX0929WFVJ, AC-1/AC-2: approve из
-        `acceptance` гоняет планку из материализации артефактной ветки
-        (`acceptance.materialize_from_branch`), не из worktree кодовой
-        ветки задачи — и при зелёном прогоне доходит до `merge_gate`.
+        """SPEC 01M1RNZ6V7TTTTYAHBMF8JBQQS, AC-1/AC-2: approve из
+        `acceptance` гоняет планку, материализованную из артефактной ветки
+        НА МЕСТЕ в рабочий каталог кода задачи (`acceptance.
+        materialize_from_branch(..., wt_path)`, не во временный каталог) —
+        и при зелёном прогоне доходит до `merge_gate`.
 
-        Ловит мутацию: возврат к прежнему источнику
-        `acceptance.run(wt_path / "tasks" / task_id)` — `plank_root`,
-        переданный в `acceptance.run`, совпал бы с путём внутри
-        `self.wt_path`, и `assertNotEqual` ниже это поймает.
+        Ловит мутацию: возврат к временному каталогу (регрессия №14) —
+        `plank_root`, переданный в `acceptance.run`, не совпал бы с путём
+        внутри `self.wt_path`, и `assertEqual` ниже это поймает.
         """
         self.setup_recording()
         self.write_acceptance_plank()
@@ -361,11 +376,14 @@ class BranchFreshnessGateTest(unittest.TestCase):
         self.assertEqual(len(self.merge_calls), 1)
         acc_run.assert_called_once()
         plank_root = acc_run.call_args[0][0]
-        self.assertNotEqual(
+        self.assertEqual(
             plank_root, self.wt_path / "tasks" / self.TASK,
-            "SPEC 01M1R9YEK08XEQWBFX0929WFVJ AC-2: источник планки — "
-            "материализация из артефактной ветки, не worktree кодовой "
-            "ветки")
+            "SPEC 01M1RNZ6V7TTTTYAHBMF8JBQQS AC-1: планка материализуется "
+            "в рабочий каталог кода задачи, не во временный каталог")
+        self.assertEqual(
+            acc_run.call_args.kwargs.get("code_root"), self.wt_path,
+            "SPEC 01M1RNZ6V7TTTTYAHBMF8JBQQS AC-2: cwd прогона обязан "
+            "быть равен рабочему каталогу кода задачи, не config.ROOT")
 
     # --------------------------- AC-4 (эквивалент лёгкой песочницы) ---
 
