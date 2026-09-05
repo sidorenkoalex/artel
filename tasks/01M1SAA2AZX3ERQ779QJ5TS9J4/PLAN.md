@@ -90,6 +90,18 @@ test_author), с тем же общим `run_id` границ недоверен
 с действием `state -> X` для своих задач. Откат — удаление вызовов
 `_return_reason_component` из трёх сборщиков и самой функции.
 
+## Правки по REVIEW.md, итерация 1
+
+Реестр замечаний: R1-F1 (major), R1-F2 (minor) — обе `fixed`.
+
+- R1-F1: в каждый из 5 методов `ReturnReasonComponentTest`
+  (`tests/test_brief.py`) добавлен докстринг с заявкой «Ловит мутацию:
+  …» под конкретный сценарий метода.
+- R1-F2: `orchestrator/brief.py::test_author_answer_component` —
+  между `return_reason_part` и `part` теперь вставляется `\n`, когда
+  оба непусты, для единообразия с разделением компонентов у
+  `developer_brief`/`analyst_map_component`.
+
 ## Риски
 
 - Есть третий (кроме FSM-переходов и юнит-тестов) читатель истории
