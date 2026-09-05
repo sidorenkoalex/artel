@@ -22,9 +22,9 @@ REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO))
 
 from orchestrator import (catalog, config, context_package, gitcmd,  # noqa: E402
-                          review, runner, store)
-from tests.sandbox import (FakeProc, SpyRun, TmpRootTest, capture,  # noqa: E402
-                           capture_new_task_id)
+                          review, runner, stack, store)
+from tests.sandbox import (FakeProc, SpyRun, TmpRootTest, _stub_check_stack,  # noqa: E402
+                           capture, capture_new_task_id)
 
 SPEC_MD = """---
 task: T001
@@ -697,6 +697,14 @@ class CmdRunReviewPackageTest(unittest.TestCase):
             lambda role, target: [])
         pf_patcher.start()
         self.addCleanup(pf_patcher.stop)
+        # `runner.role_env` сверяет `.artel/venv` через `stack.check_stack()`
+        # (SPEC 01M1REVEZ1HESMJ7AFD5A9MEJ8, требование 4) — `root` этой
+        # песочницы не несёт согласованного venv (тот же приём, что
+        # `tests.sandbox.TmpRootTest.setUp`).
+        stack_patcher = mock.patch.object(stack, "check_stack",
+                                          _stub_check_stack)
+        stack_patcher.start()
+        self.addCleanup(stack_patcher.stop)
         # Этот модуль — про сборку ревью-пакета, не про worktree-механику
         # (SPEC T045): `FakeGit` отвечает на любую команду заготовкой diff,
         # не умеет осмысленно `worktree add/list`, а тесты (например,

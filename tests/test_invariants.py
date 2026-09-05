@@ -37,7 +37,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from orchestrator import (artel, budget, catalog, ci, cleanup,  # noqa: E402
                           config, fsm, gitcmd, runner, stack, store)
 from scripts import guard  # noqa: E402
-from tests.sandbox import (FakeProc, SpyRun, capture,  # noqa: E402
+from tests.sandbox import (FakeProc, SpyRun, _stub_check_stack, capture,  # noqa: E402
                            capture_new_task_id, disk_backed_ls_tree_files,
                            disk_backed_show, resilient_tmp_cleanup)
 
@@ -164,6 +164,18 @@ class FsmTest(unittest.TestCase):
             patcher = mock.patch.object(config, attr, value)
             patcher.start()
             self.addCleanup(patcher.stop)
+
+        # `runner.role_env` сверяет `.artel/venv` через `stack.check_stack()`
+        # (SPEC 01M1REVEZ1HESMJ7AFD5A9MEJ8, требование 4) — `ROOT` этого
+        # класса намеренно настоящий (см. ниже), где согласованного venv
+        # нет; без этого патча `cmd_run` через `role_env()` отказывал бы
+        # `OSError` вместо запуска подменённого агента (тот же приём, что
+        # `tests/sandbox.py::TmpRootTest.setUp`).
+        stack_patcher = mock.patch.object(stack, "check_stack",
+                                          _stub_check_stack)
+        stack_patcher.start()
+        self.addCleanup(stack_patcher.stop)
+
         # `TASKS` НЕ патчится отдельно (в отличие от прежней версии этого
         # файла): `brief._developer_spec_text` на «чужая ветка не найдена»
         # (`on_foreign_branch` здесь всегда False — SpyRun ниже отвечает
@@ -1588,7 +1600,8 @@ class StdlibOnlyImportsInvariantTest(unittest.TestCase):
     `scripts/`, `tests/` не несут импорт модуля вне
     `sys.stdlib_module_names`, вне пакетов репозитория (`orchestrator`,
     `scripts`, `tests`) и вне исключений манифеста
-    (`orchestrator.stack.THIRD_PARTY_EXCEPTIONS`, пуст на сегодня).
+    (`orchestrator.stack.THIRD_PARTY_EXCEPTIONS` — `pytest`/
+    `pytest_timeout`/`xdist`, SPEC 01M1REVEZ1HESMJ7AFD5A9MEJ8).
 
     Только файлы верхнего уровня каждого каталога (`glob("*.py")`, не
     `rglob`) — у orchestrator/scripts/tests сегодня нет вложенных
