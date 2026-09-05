@@ -1,5 +1,5 @@
 ---
-built_at_sha: 5ccfc3ce7c11ac91da3e575e82f720f8ee2018cc
+built_at_sha: 67765807d65b33f9ce338fbbfc9ed751e5eeadca
 ---
 
 # Codebase-map пульта
@@ -172,7 +172,7 @@ built_at_sha: 5ccfc3ce7c11ac91da3e575e82f720f8ee2018cc
 - `test_author_answer_component`
 - `wrap_boundary`
 
-**Импортирует:** `orchestrator/alerts.py`, `orchestrator/artifact_source.py`, `orchestrator/config.py`, `orchestrator/context_package.py`, `orchestrator/gitcmd.py`, `orchestrator/store.py`
+**Импортирует:** `orchestrator/alerts.py`, `orchestrator/artifact_source.py`, `orchestrator/config.py`, `orchestrator/context_package.py`, `orchestrator/gitcmd.py`, `orchestrator/store.py`, `scripts/codebase_map.py`
 
 **Импортируется:** `orchestrator/review.py`, `orchestrator/role_prompt.py`, `orchestrator/runner.py`, `tests/test_advance_refusal_history.py`, `tests/test_answer_branch_reads.py`, `tests/test_brief.py`
 
@@ -699,7 +699,7 @@ built_at_sha: 5ccfc3ce7c11ac91da3e575e82f720f8ee2018cc
 
 **Импортирует:** `orchestrator/artifact_source.py`, `orchestrator/brief.py`, `orchestrator/config.py`, `orchestrator/context_package.py`, `orchestrator/gitcmd.py`, `orchestrator/store.py`
 
-**Импортируется:** `orchestrator/fsm.py`, `orchestrator/fsm_advance.py`, `orchestrator/role_prompt.py`, `orchestrator/runner.py`, `tests/test_review_freshness.py`, `tests/test_review_package.py`
+**Импортируется:** `orchestrator/fsm.py`, `orchestrator/fsm_advance.py`, `orchestrator/role_prompt.py`, `orchestrator/runner.py`, `tests/test_capacity_gate.py`, `tests/test_review_freshness.py`, `tests/test_review_package.py`
 
 ## orchestrator/role_prompt.py
 
@@ -944,11 +944,12 @@ built_at_sha: 5ccfc3ce7c11ac91da3e575e82f720f8ee2018cc
 - `main`
 - `module_dotted_name`
 - `parse_module`
+- `project_for_brief`
 - `render`
 
 **Импортирует:** —
 
-**Импортируется:** `tests/test_codebase_map.py`
+**Импортируется:** `orchestrator/brief.py`, `tests/test_codebase_map.py`
 
 ## scripts/guard.py
 
@@ -1208,7 +1209,7 @@ built_at_sha: 5ccfc3ce7c11ac91da3e575e82f720f8ee2018cc
 
 **Публичные функции:** (нет)
 
-**Импортирует:** `orchestrator/fsm_advance.py`, `orchestrator/gitcmd.py`, `orchestrator/store.py`, `tests/sandbox.py`
+**Импортирует:** `orchestrator/fsm_advance.py`, `orchestrator/gitcmd.py`, `orchestrator/review.py`, `orchestrator/store.py`, `tests/sandbox.py`
 
 **Импортируется:** —
 
