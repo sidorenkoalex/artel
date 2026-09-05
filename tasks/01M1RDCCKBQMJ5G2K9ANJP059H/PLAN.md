@@ -2,7 +2,7 @@
 task: 01M1RDCCKBQMJ5G2K9ANJP059H
 type: plan
 author_role: developer
-status: escalate
+status: ready
 schema_version: 4
 ---
 
@@ -10,182 +10,226 @@ schema_version: 4
 
 ## Подход
 
-Часть 1 («манифест стека», `orchestrator/stack.py`) уже смержена в main
-(коммит `1067d5a9`) — рабочая ветка этой задачи была заведена ДО того
-мержа и отставала от main на 34 коммита; первым шагом подтянул main
-(`git merge origin/main`, коммит `dc96f256` этой ветки) и перегенерировал
-`docs/codebase-map.md` тем же коммитом (skills/conventions-core.md:
-подтяжка main, меняющая `*.py`, требует регенерации карты отдельным
-шагом).
+Эскалация предыдущей итерации закрыта ANSWER-1.md: Оператор дал мандат
+на минимальное расширение зон на `orchestrator/stack.py` (вариант (a)
+обоих вопросов) — раздел «## Расширение зон» ниже фиксирует это.
 
-Дальше по SPEC: `scripts/stack_ci.py` — единственное место, читающее
-`orchestrator/stack.py` и печатающее версию для `actions/setup-python`;
-`tests/test_stack_ci.py` сравнивает вывод скрипта с манифестом;
-диф-приложение к `.github/workflows/ci.yml` — минимальная обвязка
-(`setup-python` + `scripts/stack_ci.py`), без логики.
+Часть 1 («манифест стека») смержена в main; рабочая ветка была заведена
+до того мержа и позже ещё раз отстала (main продвинулся коммитами задач
+01M1R9YEK08XEQWBFX0929WFVJ/01M1RA0N6FCFEQBB82K58GM12X/др. после первой
+подтяжки этой ветки) — вторая подтяжка `git merge origin/main`
+(коммит `6c3a55eb`) довела ветку до актуального `main` (`1aed801c`);
+единственный конфликт (`docs/codebase-map.md`) разрешён регенерацией
+(`python3 scripts/codebase_map.py`) тем же коммитом
+(skills/conventions-core.md — подтяжка main, меняющая `*.py`, требует
+регенерации карты отдельным шагом).
 
-Прежде чем писать `scripts/stack_ci.py`, прочитал уже залоченные
-`tasks/01M1RDCCKBQMJ5G2K9ANJP059H/acceptance_tests/` (test_author, до
-кода) и обнаружил блокер вне моей зоны — раздел «Эскалация» ниже.
-Дальнейшая реализация (шаги ниже) описывает намеченный подход НА
-СЛУЧАЙ разрешения эскалации, код по нему не написан.
+Реализация:
+- `orchestrator/stack.py`: добавлены `CURRENT_STABLE_PYTHON = (3, 13)`
+  (ANSWER-1, ответ 2 — версия основных джобов CI/локальной разработки)
+  и `python_version_string()`, возвращающая её в формате `major.minor`
+  (идиома требования 1 SPEC: `from orchestrator import stack;
+  print(stack.python_version_string())`). Существующая публичная
+  поверхность части 1 (`REQUIRED_PYTHON`, `REQUIRED_TOOLS`,
+  `THIRD_PARTY_EXCEPTIONS`, `check_stack`) не тронута —
+  `tests/test_stack.py` (постоянная регрессия части 1) зелёный без
+  изменений.
+- `scripts/stack_ci.py` (новый): без флагов печатает
+  `stack.python_version_string()` (версия основных джобов CI, требование
+  1); с флагом `--min` печатает `stack.REQUIRED_PYTHON`, отформатированную
+  так же (`major.minor`) — вторая нога матрицы требования 2. Вся логика
+  чтения манифеста и форматирования — здесь, не в `ci.yml` (требование
+  3/AC-6): диф-приложение только вызывает скрипт и передаёт его вывод в
+  `actions/setup-python` через `$GITHUB_OUTPUT`.
+- `tests/test_stack_ci.py` (новый): сравнивает вывод скрипта (сабпроцессом,
+  оба режима) с `orchestrator.stack.python_version_string()`/
+  `REQUIRED_PYTHON`, вызванными в этом же процессе — расхождение (в т.ч.
+  через `mock.patch.object(stack, "python_version_string", ...)`) ловится
+  (AC-4; согласовано с уже залоченным `acceptance_tests/
+  test_ac4_stack_ci_matches_manifest.py`, который гоняет именно этот файл
+  как чёрный ящик и проверяет тот же контракт).
+- Диф-приложение к `.github/workflows/ci.yml` (раздел «Приложение» ниже):
+  во все три джоба, исполняющие `python3` (`guard`, `python`,
+  `codebase-map` — остальные джобы `id-format-greplint`/
+  `canary-guid-leak`/`protected-paths` используют только `git`/`grep`,
+  `python3` не исполняют), добавлен шаг чтения версии через
+  `python3 scripts/stack_ci.py` (output шага) и `actions/setup-python@v5`
+  перед первым `python3`-шагом джоба. Джоб `python` дополнительно, ПОСЛЕ
+  основного прогона `discover -s tests`, переключает интерпретатор на
+  минимальную версию (`scripts/stack_ci.py --min`) вторым вызовом
+  `actions/setup-python@v5` и гоняет `python3 -m unittest
+  tests.test_invariants -v` уже на ней (требование 2/AC-2: «шаг» —
+  прямой вызов на конкретной версии, без `strategy.matrix`, чтобы не
+  дублировать весь `discover -s tests` дважды сверх необходимого AC-2
+  минимума — тот же дух «минимально необходимого», что AC-6 явно требует
+  для самого диффа). Литерала версии Python в `ci.yml` нет нигде — обе
+  версии получены вызовом `scripts/stack_ci.py`/`scripts/stack_ci.py
+  --min`.
+
+`git apply --check` дифа на чистом `main` (отдельный `git worktree` от
+`main` @ `1aed801c`, без изменений рабочего дерева этой ветки) —
+пройден, `APPLY_CHECK_OK` (AC-5). Диф сгенерирован временной правкой
+`.github/workflows/ci.yml` в рабочем дереве этой роли с последующим
+`git checkout -- .github/workflows/ci.yml` — сам файл в код этой ветки
+НЕ закоммичен (защищённый путь, skills/conventions-core.md); применяет
+Оператор.
+
+## Расширение зон
+
+Пути: orchestrator/stack.py
+
+Мандат: ANSWER-1.md, вариант (a) обоих вопросов («Расширение зон
+разрешено: orchestrator/stack.py») — минимальное расширение на
+`python_version_string()` и `CURRENT_STABLE_PYTHON`, без изменения
+существующей публичной поверхности части 1.
 
 ## Шаги
 
-1. (заблокирован эскалацией) `scripts/stack_ci.py`: печатает одну
-   строку — версию для `actions/setup-python`, полученную из
-   `orchestrator.stack.python_version_string()` (после того, как эта
-   функция появится в манифесте — см. «Эскалация»); отдельная функция
-   для «минимальной» версии матрицы форматирует существующий
-   `orchestrator.stack.REQUIRED_PYTHON` (это чтение НЕ требует правки
-   `stack.py`, значит не требует расширения zones).
-2. `tests/test_stack_ci.py`: сравнивает вывод `scripts/stack_ci.py`
-   (сабпроцессом) с `orchestrator.stack.python_version_string()`,
-   падает при расхождении (AC-4; уже подтверждено залоченным
-   `acceptance_tests/test_ac4_stack_ci_matches_manifest.py`, который
-   гоняет именно этот файл как чёрный ящик).
-3. Диф-приложение к `.github/workflows/ci.yml` как приложение к этому
-   PLAN.md (после закрытия эскалации, отдельный проход): `setup-python`
-   перед каждым python3-джобом (`guard`, `python`, `codebase-map`),
-   версия из output шага `python3 scripts/stack_ci.py`; джоб `python`
-   получает матрицу из двух версий (минимум + текущая стабильная), обе
-   — из вывода `scripts/stack_ci.py`/манифеста, не литералом.
-   `git apply --check` на чистом `main` — обязательная проверка перед
-   сдачей (skills/conventions-core.md).
+1. `orchestrator/stack.py`: `CURRENT_STABLE_PYTHON` и
+   `python_version_string()` (см. «Подход», «Расширение зон»).
+2. `scripts/stack_ci.py`: `main()`/вывод версии, `--min` для нижней
+   границы матрицы.
+3. `tests/test_stack_ci.py`: сверка вывода скрипта с манифестом,
+   падение при расхождении (AC-4).
+4. Диф-приложение к `.github/workflows/ci.yml` (раздел «Приложение»):
+   `setup-python` перед каждым python3-джобом + шаг матрицы требования
+   2 в джобе `python`; `git apply --check` подтверждён.
 
 ## Покрытие требований
 
 | Требование | Шаг |
 |---|---|
-| 1 | 1, 3 (заблокировано эскалацией — вопрос 1) |
-| 2 | 1, 3 (заблокировано эскалацией — вопрос 2) |
-| 3 | 3 |
-| 4 | 1, 2 |
+| 1 | 1, 2, 4 |
+| 2 | 1, 2, 4 |
+| 3 | 2, 4 |
+| 4 | 2, 3 |
 
 ## Влияние на систему
 
-Подтяжка main в ветку задачи не меняет существующий код — только
-подтягивает уже смерженную часть 1 и синхронизирует
-`docs/codebase-map.md` с её фактическим содержимым (никаких файлов,
-кроме `built_at_sha`, не изменилось — сверено `git diff`). Дальнейшая
-реализация (после эскалации) — новый файл `scripts/stack_ci.py` и
-новый тестовый файл, оба не пересекаются с существующими гейтами;
-единственная точка, теоретически способная задеть инвариант «сторонних
-пакетов нет» (docs/invariants.md) — сам `scripts/stack_ci.py` — будет
-использовать только stdlib и `orchestrator.stack`, как и остальной
-код репозитория. Правка `.github/workflows/ci.yml` идёт диф-
-приложением и проверяется Оператором отдельно — не самостоятельный
-коммит этой роли.
+`orchestrator/stack.py`: расширение аддитивное — новая константа и новая
+функция, ни одна существующая публичная точка входа части 1
+(`REQUIRED_PYTHON`, `REQUIRED_TOOLS`, `THIRD_PARTY_EXCEPTIONS`,
+`check_stack`) не изменена и не переименована; `tests/test_stack.py`
+(постоянная регрессия части 1) прогнан зелёным без правок с его стороны.
+`scripts/stack_ci.py`/`tests/test_stack_ci.py` — новые файлы, не
+пересекаются с существующими гейтами; используют только stdlib и
+`orchestrator.stack` — не создают новую зависимость сверх инварианта
+«сторонних пакетов нет» (docs/invariants.md, подтверждено прогоном
+`tests.test_invariants::StdlibOnlyImportsInvariantTest` после добавления
+файлов — зелёный).
+
+Диф-приложение к `.github/workflows/ci.yml` не меняет ни одного
+существующего шага и не убирает ни одной существующей проверки — только
+добавляет шаги `setup-python`/чтения версии перед уже существующими
+python3-шагами трёх джобов и один дополнительный шаг проверки
+`tests.test_invariants` на нижней границе версии в джобе `python`;
+порядок и содержимое существующих шагов (guard.py, py_compile, discover
+-s tests, снимок/сверка ссылок репозитория, генератор карты и сверка
+свежести) не тронуты. Применяет диф Оператор отдельным MR — сам файл в
+этой ветке не менялся (см. `git status` в конце шага).
+
+Подтяжка main (коммит `6c3a55eb`) не меняла ничего, кроме объединения
+уже смерженных в main изменений и регенерации карты (сверено
+построчно — единственный конфликт был в `docs/codebase-map.md`,
+разрешён регенерацией).
 
 ## Риски
 
-- Возможное расширение zones на `orchestrator/stack.py` (если Оператор
-  выберет вариант (a) обоих вопросов эскалации) — это правка уже
-  ЗАКРЫТОЙ (смерженной) части 1 задним числом; минимизирую диапазон
-  правки одной новой функцией и, если понадобится, одной новой
-  константой, не трогая существующую публичную поверхность
-  (`REQUIRED_PYTHON`, `REQUIRED_TOOLS`, `THIRD_PARTY_EXCEPTIONS`,
-  `check_stack()`), чтобы не задеть `tests/test_stack.py` (постоянная
-  регрессия части 1).
+- Диф-приложение к `ci.yml` содержит `python3 scripts/stack_ci.py` —
+  до применения Оператором `scripts/stack_ci.py` уже должен быть в
+  main (эта же ветка его добавляет) — порядок применения (сначала мерж
+  этой задачи, затем диф Оператором) уже заложен в SPEC («Не входит»:
+  «Применение дифа к ci.yml… делает Оператор по диф-приложению из
+  PLAN.md» — после мержа кода задачи).
+- Второй `setup-python@v5` в джобе `python` (переключение на
+  минимальную версию) физически меняет активный интерпретатор для всех
+  ПОСЛЕДУЮЩИХ шагов джоба — в текущем дифе после него шагов больше нет
+  (это последний шаг джоба), поэтому побочных эффектов на остальные
+  шаги того же джоба нет; если в будущем в конец джоба `python` добавят
+  шаг после этого — он неожиданно окажется на минимальной версии, а не
+  на текущей стабильной. Отметил в диффе комментарием у последнего шага
+  нет — минимальность дифа (AC-6) не позволяет добавлять предупреждающий
+  комментарий сверх необходимого; фиксирую риск здесь для истории.
 
 ## Предложения системе
 
-- SPEC 01M1RDCCKBQMJ5G2K9ANJP059H объявляет zones без
-  `orchestrator/stack.py`, но требование 1 SPEC буквально фиксирует
-  идиому `stack.python_version_string()`, которой в части 1 нет —
-  класс «zones SPEC не покрывают маленькое расширение API модуля,
-  который требование того же SPEC подразумевает» стоит иметь в виду
-  analyst'у при нарезке многочастных задач, зависящих от API
-  предшественника: явно проверять, что вся используемая часть API уже
-  существует (или явно включена в zones), а не полагаться на будущее
-  чтение.
+- SPEC 01M1RDCCKBQMJ5G2K9ANJP059H объявляет `zones` без
+  `orchestrator/stack.py`, но требование 1 буквально задаёт идиому
+  `stack.python_version_string()`, которой в части 1 нет — класс «zones
+  SPEC не покрывают маленькое расширение API модуля, который требование
+  того же SPEC подразумевает» стоит иметь в виду analyst'у при нарезке
+  многочастных задач, зависящих от API предшественника.
+- За время работы над этой веткой main продвинулся ещё на десяток
+  коммитов дважды подряд (первая подтяжка — часть 1, вторая — уже после
+  неё) — для многочастных задач с паузой на эскалацию расстояние до
+  main успевает вырасти быстрее, чем ожидается: возможно, стоит явно
+  упомянуть в conventions-core.md, что подтяжка main перед сдачей — не
+  разовое действие «в начале шага», а то, что стоит повторить прямо
+  перед PLAN.md `status: ready`, если между началом работы и сдачей был
+  долгий блокирующий простой (эскалация).
 
-## Эскалация
+## Приложение: диф `.github/workflows/ci.yml`
 
-- **Вопросы** — блокирующие оба (без ответа на 1 невозможно писать
-  `scripts/stack_ci.py`, без ответа на 2 невозможна матрица требования
-  2):
+`git apply --check` на чистом `main` (`1aed801c`, отдельный
+`git worktree`) — пройден.
 
-  1. `orchestrator/stack.py` (часть 1, уже смержена в main) НЕ входит в
-     `zones:` этой задачи (`scripts/stack_ci.py, tests/test_stack_ci.py,
-     .github/workflows/ci.yml`), но требование 1 SPEC буквально задаёт
-     идиому чтения версии: `python3 -c "from orchestrator import stack;
-     print(stack.python_version_string())"`. Такой функции в
-     `orchestrator/stack.py` части 1 нет (проверил: `grep -rn
-     python_version_string orchestrator/` — ноль совпадений вне этой
-     задачи). Более того, уже ЗАЛОЧЕННЫЙ `tasks/01M1RDCCKBQMJ5G2K9ANJP059H/
-     acceptance_tests/test_ac4_stack_ci_matches_manifest.py`
-     (`test_ac4_dedicated_test_fails_when_manifest_diverges_from_script`)
-     делает `mock.patch.object(stack, "python_version_string",
-     return_value=...)` БЕЗ `create=True` — `unittest.mock` в этом режиме
-     требует, чтобы атрибут уже существовал на объекте до подмены, иначе
-     `AttributeError` вместо ожидаемого сценария. Расширить дифф на
-     `orchestrator/stack.py` без мандата Оператора запрещает гейт зон
-     (`orchestrator/fsm_advance.py::_zones_gate_refuses` — переход
-     `in_dev -> review` отказывает на файлах вне `zones`/`zones_extension`/
-     `COMMON_ZONES`, если только PLAN.md не несёт раздел «## Расширение
-     зон» с подтверждённым мандатом Оператора в ANSWER-n.md, маркер
-     «Расширение зон разрешено: <пути>»).
-     - Варианты:
-       - (a) Оператор даёт мандат на минимальное расширение zones этой
-         задачи на `orchestrator/stack.py` — я добавляю туда ТОЛЬКО
-         функцию `python_version_string()` (и, если нужно для вопроса 2,
-         одну новую константу), не трогая существующую публичную
-         поверхность части 1.
-       - (b) Идиома SPEC/TZ ошибочна — версию для `setup-python`
-         правильнее читать иначе (например, `scripts/stack_ci.py`
-         форматирует `orchestrator.stack.REQUIRED_PYTHON` напрямую, без
-         вызова несуществующего метода) — тогда залоченный
-         `test_ac4_stack_ci_matches_manifest.py` придётся переоткрыть
-         test_author'у отдельным решением Оператора (правка залоченной
-         планки — не моя роль).
-     - Дефолт при молчании: (a) — минимальное расширение на одну
-       функцию, без изменения существующего API части 1.
-
-  2. Что такое «текущая стабильная версия» Python (требование 2/AC-2:
-     матрица `tests.test_invariants` на «минимальной объявленной в
-     манифесте части 1 и текущей стабильной», обе — не литералом в
-     `ci.yml`)? В `orchestrator/stack.py` части 1 есть только
-     `REQUIRED_PYTHON = (3, 11)` (минимум) — понятия «текущая стабильная»
-     в манифесте нет вовсе, взять эту вторую версию для матрицы неоткуда
-     без новой константы.
-     - Варианты:
-       - (a) Новая константа в `orchestrator/stack.py` (тот же файл и
-         тот же мандат, что вопрос 1), например
-         `CURRENT_STABLE_PYTHON = (3, 13)` (значение 3.13 — версия
-         локальной разработки, упомянутая в «Контексте» SPEC), и
-         `python_version_string()` печатает именно её (не
-         `REQUIRED_PYTHON`) — вторая нога матрицы (минимум) читается
-         `scripts/stack_ci.py` напрямую из `REQUIRED_PYTHON`, отдельного
-         метода для неё не нужно.
-       - (b) Значение фиксируется литералом внутри `scripts/stack_ci.py`
-         (в зоне задачи, без правки `stack.py`) — не требует мандата, но
-         расходится с буквальным текстом требования 2: «обе версии тоже
-         читаются из манифеста (не литералом в ci.yml)» — литерал
-         переезжает из `ci.yml` в `stack_ci.py`, но остаётся литералом,
-         не значением манифеста.
-     - Дефолт при молчании: (a), вместе с мандатом вопроса 1, значение
-       3.13.
-
-- **Контекст** — сделано до блокера: подтянул `origin/main` в ветку
-  задачи (`git merge`, коммит `dc96f256`) — часть 1 (`orchestrator/
-  stack.py`) появилась в дереве только этим слиянием; тем же коммитом
-  перегенерировал `docs/codebase-map.md` (сверил `git diff` — менялась
-  только строка `built_at_sha`). Прочитал `orchestrator/stack.py`,
-  `docs/stack.md`, `tests/test_stack.py` (постоянная регрессия части
-  1), залоченные `tasks/01M1RDCCKBQMJ5G2K9ANJP059H/acceptance_tests/
-  test_ac3_stack_ci_script.py`, `test_ac4_stack_ci_matches_manifest.py`,
-  `test_scope_markers.py` и `TZ.md`. Ни `scripts/stack_ci.py`, ни
-  `tests/test_stack_ci.py` не написаны — код по требованиям 1/2
-  зависит от ответа на оба вопроса, писать его вслепую про
-  несуществующий API значило бы либо угадывать чужое решение (что
-  запрещено скилом эскалации), либо превышать zones без мандата.
-
-- **Блокирует** — реализацию `scripts/stack_ci.py` (что именно печатать
-  для `setup-python` и как формировать вторую ногу матрицы требования
-  2) и, соответственно, весь оставшийся объём SPEC (требования 1, 2 и
-  зависящий от них диф-приложения к `ci.yml`, требование 3). Требования
-  3 (частично, формальная сторона диф-приложения) и 4 (структура
-  тестового файла) не блокированы содержательно, но привязка их к
-  конкретному коду откладывается до того же ответа, чтобы не переписывать
-  тесты дважды.
+```diff
+diff --git a/.github/workflows/ci.yml b/.github/workflows/ci.yml
+index 3b662dff..ef5a705b 100644
+--- a/.github/workflows/ci.yml
++++ b/.github/workflows/ci.yml
+@@ -14,6 +14,12 @@ jobs:
+     runs-on: ubuntu-latest
+     steps:
+       - uses: actions/checkout@v4
++      - name: версия Python из манифеста стека (01M1RDCCKBQMJ5G2K9ANJP059H)
++        id: stack-python
++        run: echo "version=$(python3 scripts/stack_ci.py)" >> "$GITHUB_OUTPUT"
++      - uses: actions/setup-python@v5
++        with:
++          python-version: ${{ steps.stack-python.outputs.version }}
+       - name: guard.py по всем артефактам задач
+         run: |
+           # Ветка task/** — не источник истины для tasks/<id>/ (SPEC
+@@ -146,6 +152,12 @@ jobs:
+     runs-on: ubuntu-latest
+     steps:
+       - uses: actions/checkout@v4
++      - name: версия Python из манифеста стека (01M1RDCCKBQMJ5G2K9ANJP059H)
++        id: stack-python
++        run: echo "version=$(python3 scripts/stack_ci.py)" >> "$GITHUB_OUTPUT"
++      - uses: actions/setup-python@v5
++        with:
++          python-version: ${{ steps.stack-python.outputs.version }}
+       - run: python3 -m py_compile orchestrator/artel.py scripts/guard.py
+       - name: снимок ссылок репозитория до прогона тестов (SPEC 01M1KVGD18P9H5WR7VM8TGPV1T, требование 1)
+         run: git for-each-ref --format='%(refname) %(objectname)' refs/heads/ refs/artifacts/ > /tmp/refs-before.txt
+@@ -165,6 +177,14 @@ jobs:
+             echo "::error::прогон tests/ изменил набор ссылок репозитория — см. diff выше"
+             exit 1
+           fi
++      - name: минимальная версия Python из манифеста (01M1RDCCKBQMJ5G2K9ANJP059H, требование 2)
++        id: stack-python-min
++        run: echo "version=$(python3 scripts/stack_ci.py --min)" >> "$GITHUB_OUTPUT"
++      - uses: actions/setup-python@v5
++        with:
++          python-version: ${{ steps.stack-python-min.outputs.version }}
++      - name: tests.test_invariants на минимальной объявленной версии Python (AC-2)
++        run: python3 -m unittest tests.test_invariants -v
+ 
+   protected-paths:
+     name: Enforcement, конфиги системы меняет только Оператор
+@@ -195,6 +215,12 @@ jobs:
+     steps:
+       - uses: actions/checkout@v4
+         with: { fetch-depth: 0 }
++      - name: версия Python из манифеста стека (01M1RDCCKBQMJ5G2K9ANJP059H)
++        id: stack-python
++        run: echo "version=$(python3 scripts/stack_ci.py)" >> "$GITHUB_OUTPUT"
++      - uses: actions/setup-python@v5
++        with:
++          python-version: ${{ steps.stack-python.outputs.version }}
+       - name: генератор отрабатывает без ошибок (AC-7, AC-8)
+         run: python3 scripts/codebase_map.py
+       - name: закоммиченная карта не стухла (AC-9; ред. Оператора 26.08 — сверка содержимым)
+```
