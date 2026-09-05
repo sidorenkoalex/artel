@@ -37,6 +37,13 @@ from tests.sandbox import (FakeStream, TmpRootTest, capture,  # noqa: E402
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
+# Захвачен ДО любого мокинга `shutil.which` в тестах ниже (SPEC
+# 01M1RDCEF0JZ4AVQRE43JFH8TN): `orchestrator.runner.role_env` теперь тоже
+# резолвит инструменты манифеста через `shutil.which` — стабы doctor'а,
+# отвечающие только на `claude`, должны отвечать НАСТОЯЩИМИ путями и на
+# `git`/`gh`/`python3`, иначе `role_env` считает их отсутствующими.
+_REAL_WHICH = shutil.which
+
 TARGETS_YAML_DOGFOOD_ONLY = """targets:
   artel:
     forge: github
@@ -183,7 +190,13 @@ class DoctorCommandTest(TmpRootTest):
     """Критерий 1: здоровый репо — все проверки ок, код 0; сломанный — провалы, код ≠0."""
 
     def which(self, name):
-        return "/usr/bin/claude" if name == "claude" else None
+        if name == "claude":
+            return "/usr/bin/claude"
+        # git/gh/python3 — реальные пути (SPEC 01M1RDCEF0JZ4AVQRE43JFH8TN,
+        # AC-1/AC-6): `role_env` внутри `isolation_smoke`/`live_smoke`
+        # обязан находить их, иначе «здоровый репо» перестаёт быть
+        # здоровым по причине, не связанной с проверяемым сценарием.
+        return _REAL_WHICH(name)
 
     def healthy_mocks(self):
         """Контекст-менеджер, под которым все проверки doctor проходят чисто."""

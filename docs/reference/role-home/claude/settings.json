@@ -6,19 +6,5 @@
       "Bash(gh repo clone:*)",
       "Bash(git remote add:*)"
     ]
-  },
-  "hooks": {
-    "PreToolUse": [
-      {
-        "matcher": "Bash",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "python3 \"$CLAUDE_CONFIG_DIR/hooks/bash_guard.py\"",
-            "timeout": 10
-          }
-        ]
-      }
-    ]
   }
 }

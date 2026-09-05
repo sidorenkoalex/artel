@@ -34,6 +34,41 @@ REQUIRED_TOOLS = {
     "claude": ToolRequirement((1, 0, 0), ("claude", "--version")),
 }
 
+# Инструменты, чей абсолютный путь `orchestrator.runner.role_env` резолвит
+# через `shutil.which` для сборки PATH роли (SPEC
+# 01M1RDCEF0JZ4AVQRE43JFH8TN, требование 1, AC-1/AC-2): те же три внешних
+# CLI, что и `REQUIRED_TOOLS`, плюс `python3` — интерпретатор роли, для
+# которого сам which-путь не используется (роль получает каталог
+# `sys.executable` пульта, AC-3), но присутствие в PATH/системе всё равно
+# проверяется тем же способом (AC-6 — отсутствие ЛЮБОГО из четырёх обязано
+# останавливать шаг, включая python3).
+DECLARED_TOOLS = ("python3",) + tuple(REQUIRED_TOOLS.keys())
+
+# Белый список переменных окружения роли (SPEC 01M1RDCEF0JZ4AVQRE43JFH8TN,
+# требования 2, 5, AC-4/AC-5): единственный источник для
+# `orchestrator.runner.role_env` — роль не наследует `os.environ` Оператора
+# целиком, только эти имена, у каждого есть причина.
+ROLE_ENV_ALLOWLIST = {
+    "HOME": "домашний каталог курируемого слоя роли (git-конфиг, CLI claude)",
+    "CLAUDE_CONFIG_DIR": "путь курируемого `.claude/` роли (ADR-0003 п.14)",
+    "GIT_AUTHOR_NAME": "автор коммита роли — предписанный git commit шага",
+    "GIT_AUTHOR_EMAIL": "почта автора коммита роли",
+    "GIT_COMMITTER_NAME": "коммитер коммита роли — то же требование git",
+    "GIT_COMMITTER_EMAIL": "почта коммитера коммита роли",
+    "CLAUDE_CODE_OAUTH_TOKEN": "токен подписки CLI claude для роли",
+    "ANTHROPIC_API_KEY": "альтернативный канал токена CLI claude (ambient)",
+    "LANG": "локаль — предсказуемый разбор вывода CLI claude/git",
+    "TMPDIR": "временный каталог — CLI claude/git пишут туда рабочие файлы",
+    "TERM": "тип терминала — вывод CLI claude зависит от него",
+}
+
+# Семейство локали (LC_ALL, LC_CTYPE, ...) — префиксом, а не перечислением:
+# та же причина, что и у LANG выше, но имён в семействе много и заранее не
+# перечислить (требование 2 SPEC называет «LANG/LC_*» одной строкой).
+ROLE_ENV_ALLOWLIST_PREFIXES = {
+    "LC_": "семейство локали (LC_ALL и т.п.) — тот же повод, что и LANG",
+}
+
 VERSION_RE = re.compile(r"\d+\.\d+\.\d+")
 
 StackCheck = namedtuple("StackCheck", "name status detail")
