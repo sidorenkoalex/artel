@@ -341,10 +341,20 @@ def _pull_main_or_escalate(conn, task_id: str, t, state: str) -> str:
             # тронутый этой задачей); иначе — именованный отказ AC-3, не
             # молчаливый зелёный проход и не эскалация AC-4 (та остаётся
             # только для планки, которая реально прогналась и упала).
-            spec_text, _ = gitcmd.show(artifact_branch_name,
-                                       f"tasks/{task_id}/SPEC.md")
-            meta = (yamlmini.frontmatter(spec_text)
-                    if spec_text is not None else None) or {}
+            #
+            # SPEC.md читается общим узлом `_read_branch_text_or_refuse`
+            # (не голым `gitcmd.show`, REVIEW.md R1-F1, итерации 1-3):
+            # SPEC.md — обязательный артефакт, на артефактной ветке живой
+            # задачи он есть всегда, поэтому сбой чтения (git не ответил,
+            # ветка недоступна, гонка с материализацией) сам по себе уже
+            # ненормален и не должен схлопываться в дефолтный `meta={}` →
+            # `requires_ac_markup(...) == False` → молчаливый `"pulled"`
+            # — узел уже журналирует и печатает именованный отказ.
+            spec_text = _read_branch_text_or_refuse(
+                conn, task_id, artifact_branch_name, "SPEC.md")
+            if spec_text is None:
+                return "refused"
+            meta = yamlmini.frontmatter(spec_text) or {}
             if guard.requires_ac_markup(meta):
                 detail = (
                     f"планка не найдена в источнике: артефактная ветка "

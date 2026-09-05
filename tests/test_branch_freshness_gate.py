@@ -338,6 +338,16 @@ class BranchFreshnessGateTest(unittest.TestCase):
                       "materialize_from_branch, не из worktree")
 
     def test_approve_pulls_main_and_advances_when_acceptance_green(self):
+        """SPEC 01M1R9YEK08XEQWBFX0929WFVJ, AC-1/AC-2: approve из
+        `acceptance` гоняет планку из материализации артефактной ветки
+        (`acceptance.materialize_from_branch`), не из worktree кодовой
+        ветки задачи — и при зелёном прогоне доходит до `merge_gate`.
+
+        Ловит мутацию: возврат к прежнему источнику
+        `acceptance.run(wt_path / "tasks" / task_id)` — `plank_root`,
+        переданный в `acceptance.run`, совпал бы с путём внутри
+        `self.wt_path`, и `assertNotEqual` ниже это поймает.
+        """
         self.setup_recording()
         self.write_acceptance_plank()
         with mock.patch.object(gitcmd, "commits_behind", return_value=1), \
@@ -472,6 +482,17 @@ class BranchFreshnessGateTest(unittest.TestCase):
     # --------------------------------------- красные приёмочные после пула
 
     def test_advance_escalates_on_red_acceptance_after_pull_keeps_merge(self):
+        """SPEC 01M1R9YEK08XEQWBFX0929WFVJ, AC-4: планка, реально
+        материализованная из артефактной ветки и реально красная после
+        подтяжки main, обязана эскалировать (требование 6, T051), а не
+        схлопнуться в новый именованный отказ AC-3 — тот остаётся только
+        для планки, которая не найдена в источнике.
+
+        Ловит мутацию: подмена ветки «планка найдена и красная» на
+        новую ветку AC-3 «планка не найдена» — состояние осталось бы
+        `in_dev`/предыдущим вместо `escalated`, и `MARKER-RED` пропал бы
+        из журнала.
+        """
         self.setup_recording()
         self.write_plan_ready()
         self.write_acceptance_plank()
@@ -493,6 +514,16 @@ class BranchFreshnessGateTest(unittest.TestCase):
         self.assertEqual(self.abort_calls, [])
 
     def test_approve_escalates_on_red_acceptance_after_pull_keeps_merge(self):
+        """SPEC 01M1R9YEK08XEQWBFX0929WFVJ, AC-4: тот же сценарий, что и
+        `test_advance_escalates_on_red_acceptance_after_pull_keeps_merge`,
+        со стороны `approve` из `acceptance` — красная планка эскалирует,
+        слияние сохраняется (не откатывается).
+
+        Ловит мутацию: подмена ветки «планка найдена и красная» на
+        новую ветку AC-3 «планка не найдена» — состояние осталось бы
+        `acceptance` вместо `escalated`, и `MARKER-RED` пропал бы из
+        журнала.
+        """
         self.setup_recording()
         self.write_acceptance_plank()
         self.set_state("acceptance")
