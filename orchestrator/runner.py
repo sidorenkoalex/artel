@@ -12,9 +12,10 @@ import sys
 import time
 from pathlib import Path
 
-from . import (agent_log, brief, budget, checkpoint, config, failure_classification,
-              fixation, gitcmd, keychain, lease, parallel_limit, pause,
-              review, role_prompt, roles, spend, store, workspace)
+from . import (agent_log, alerts, brief, budget, checkpoint, config,
+              failure_classification, fixation, gitcmd, keychain, lease,
+              parallel_limit, pause, review, role_prompt, roles, spend,
+              store, workspace, zone_lock)
 
 # Идентичность коммитера, которую роль обязана унести с собой в свой HOME.
 # git читает эти переменные ПОВЕРХ конфига, поэтому перенос ровно двух пар
@@ -148,6 +149,19 @@ def _cmd_run(conn, task_id: str) -> None:
                      f"(`new \"...\" --tz <файл>` заведёт роль analyst)")
         sys.exit(f"[{task_id}] в состоянии {t['state']} агент не запускается")
 
+    # Занятость зоны на старте кода (SPEC 01M1P9QAG65GVF69YJEV0V18D9,
+    # требование 1): `STATE_ROLE` отображает `in_dev` исключительно на
+    # `developer` (`config.py`), поэтому `role == "developer"` здесь
+    # эквивалентно `t["state"] == "in_dev"` — единственная фаза, где
+    # действует этот отказ. Тот же `sys.exit`, что и бюджет/лимит
+    # параллельных задач выше: `auto` ловит `SystemExit` немедленно.
+    if role == "developer":
+        zone_refusal = zone_lock.refusal(conn, task_id, t)
+        if zone_refusal is not None:
+            store.journal(conn, task_id, role, zone_lock.REFUSAL_ACTION,
+                          zone_refusal)
+            sys.exit(zone_refusal)
+
     # Штатная пауза (SPEC T070, требование 2): пометка стоит — шаг не
     # начинается, но уже идущий шаг (эта же функция, стартовавшая раньше)
     # эта проверка не трогает — она стоит строго до всего, что реально
@@ -254,6 +268,16 @@ def _cmd_run(conn, task_id: str) -> None:
         store.journal(conn, task_id, role, "ревью-пакет собран",
                       review.package_note(package))
         print(f"[{task_id}] ревью-пакет: {review.package_note(package)}")
+        # Требование 3 (tasks/01M1P9RJVYHTAC087J4B2CAR44): «diff не
+        # собран» на итерации > 1 — алерт Оператору, не тихая строка
+        # журнала; на итерации 1 `not_collected` штатно пуст (полный diff
+        # всегда собирается), алерт не заводится и не трогается вовсе.
+        if package["iteration"] > 1:
+            if package["not_collected"]:
+                alerts.raise_diff_not_collected_alert(
+                    conn, task_id, package["not_collected"])
+            else:
+                alerts.close_diff_not_collected_alerts(conn, task_id)
         prompt = f"{prompt}\n\n--- РЕВЬЮ-ПАКЕТ ---\n\n{package['text']}"
 
     # Отказ advance доносится до следующего запуска роли (SPEC T078):
@@ -421,15 +445,35 @@ def role_cwd(conn, task_id: str, target: str) -> Path:
     внешнего target создаётся здесь же, как и курируемый слой ролей: до
     git-первички (A2b) он пуст, но роль обязана стартовать в НЁМ, а не
     тихо съехать на ROOT из-за отсутствия каталога.
+
+    Материализация `tasks/<id>/` из артефактной ветки (SPEC
+    01M1NKTF173WV5CPDZ1C3WW69K, требование 1, AC-1/AC-2, AC-8): на
+    каждом вызове каталог задачи здесь же перезаписывается ГОЛОВОЙ
+    артефактной ветки — правка Оператора на гейте между шагами доезжает
+    до диска следующего шага, а не остаётся стухшей копией с прошлого
+    (инцидент 04.09, «Контекст» SPEC). sha использованной головы —
+    baseline конфликт-гварда автокоммита (`checkpoint.
+    _commit_external_step_artifacts`, AC-6/AC-7), в колонку БД, не в
+    файл диска — переживает `shutil.rmtree` каталога, которым автокоммит
+    убирает `tasks/<id>/` после переноса. `task_id is None` — офлайн-смоук
+    изоляции (`doctor.isolation_smoke`, синтетический target без реальной
+    задачи) — материализация здесь бессмысленна, пропускается тихо, той
+    же деградацией, что и отсутствие артефактной ветки.
     """
     if target == config.DEFAULT_TARGET:
         branch = store.task_branch(conn, task_id)
         wt_path, error = workspace.ensure(task_id, branch)
         if error is not None:
             raise OSError(error)
-        return wt_path
-    path = config.PROJECTS / target / "workspace"
-    path.mkdir(parents=True, exist_ok=True)
+        path = wt_path
+    else:
+        path = config.PROJECTS / target / "workspace"
+        path.mkdir(parents=True, exist_ok=True)
+    if task_id is not None:
+        from . import artifact_branch
+        materialized_sha = artifact_branch.materialize_task_dir(task_id, path)
+        store.update_task(conn, task_id,
+                          materialized_artifact_sha=materialized_sha or None)
     return path
 
 

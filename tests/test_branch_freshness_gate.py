@@ -74,6 +74,20 @@ class BranchFreshnessGateTest(unittest.TestCase):
         patcher = mock.patch.object(gitcmd, "git", fake_git)
         patcher.start()
         self.addCleanup(patcher.stop)
+        # `fake_git` отвечает на "rev-parse FETCH_HEAD" пустой строкой
+        # (нет настоящего git) — с REVIEW.md R1-F1 (итерация 1) вырожденный
+        # `_origin_main_sha` обязана деградировать на "fresh" немедленно,
+        # не на литерал "FETCH_HEAD". Тесты этого файла, которые кроют
+        # ветку "ветка отстала" (`commits_behind` замокан на ненулевое
+        # значение отдельно), нуждаются в настоящем truthy `base` — тем же
+        # приёмом стаба, что и `gitcmd.commits_behind` ниже по каждому
+        # тесту; `test_advance_treats_origin_fetch_failure_as_fresh`
+        # переопределяет этот патч на `None` для проверки самой
+        # деградации.
+        origin_sha_patcher = mock.patch.object(
+            fsm, "_origin_main_sha", return_value="deadbeefcafefeed")
+        origin_sha_patcher.start()
+        self.addCleanup(origin_sha_patcher.stop)
         # A7 (generic-путь заведения, AC-5): `cmd_new` коммитит артефакты
         # плотницки (`artifact_branch.write_commit`) — та функция зовёт
         # `subprocess.run` НАПРЯМУЮ, минуя `gitcmd.git`/фейк выше; `root`
@@ -238,6 +252,16 @@ class BranchFreshnessGateTest(unittest.TestCase):
     # ------------------------------------------------- успешная подтяжка
 
     def test_advance_pulls_main_and_advances_when_acceptance_green(self):
+        """Подтяжка использует зафетченный с origin sha как источник merge
+        (не литерал `config.MAIN_BRANCH`, не литерал `"FETCH_HEAD"`) и идёт
+        в worktree ЗАДАЧИ, не в рабочей копии пульта; после зелёной приёмки
+        переход в `review` состоится.
+
+        Ловит мутацию: `base` merge возвращён к литералу `config.
+        MAIN_BRANCH` или к `"FETCH_HEAD"` вместо зафетченного sha — AC-2/
+        R1-F1 тихо перестанут выполняться, а `assertNotIn`/`assertIn` по
+        аргументам merge здесь это поймают.
+        """
         self.setup_recording()
         with mock.patch.object(gitcmd, "commits_behind", return_value=3), \
              mock.patch.object(gitcmd, "in_repo",
@@ -254,7 +278,21 @@ class BranchFreshnessGateTest(unittest.TestCase):
                          "не в рабочей копии пульта (ADR-0006 п.2)")
         self.assertEqual(args[0], "merge")
         self.assertIn("--no-ff", args, "подтяжка не rebase (требование 3)")
-        self.assertIn(config.MAIN_BRANCH, args)
+        # SPEC 01M1NBWPKNBXP9ZXXQDJM7AXPJ, AC-2: источник merge — sha,
+        # зафетченный с origin (здесь замокан `fsm._origin_main_sha` ->
+        # "deadbeefcafefeed", REVIEW.md R1-F1 итерация 1: литерал
+        # "FETCH_HEAD" больше не подставляется НИКОГДА, даже когда
+        # `_origin_main_sha` вырождена — см.
+        # `test_advance_treats_origin_fetch_failure_as_fresh`), НЕ
+        # локальный `config.MAIN_BRANCH` буквальным аргументом merge.
+        self.assertNotIn(config.MAIN_BRANCH, args,
+                         "AC-2: config.MAIN_BRANCH (локальный пин) не "
+                         "имеет права быть источником merge")
+        self.assertIn("deadbeefcafefeed", args)
+        self.assertNotIn("FETCH_HEAD", args,
+                         "R1-F1: литерал FETCH_HEAD не подставляется — не "
+                         "честный no-op ни в config.ROOT (чужой предыдущий "
+                         "фетч), ни в приватном FETCH_HEAD worktree'а")
         self.assertNotIn(self.branch, args,
                          "ветка задачи не упоминается в аргументах merge")
         acc_run.assert_called_once_with(self.wt_path / "tasks" / self.TASK)
@@ -271,6 +309,82 @@ class BranchFreshnessGateTest(unittest.TestCase):
         self.assertEqual(self.state(), "merge_gate")
         self.assertEqual(len(self.merge_calls), 1)
         acc_run.assert_called_once_with(self.wt_path / "tasks" / self.TASK)
+
+    # --------------------------- AC-4 (эквивалент лёгкой песочницы) ---
+
+    def test_freshness_check_never_defaults_base_to_local_pin(self):
+        """SPEC 01M1NBWPKNBXP9ZXXQDJM7AXPJ, AC-4 — эквивалент в стиле
+        этого файла (лёгкая песочница без реального git не может честно
+        развести «ветка отстаёт от origin, но совпадает с локальным
+        пином» — тот сценарий кроют приёмочные тесты задачи,
+        `_sandbox.py::OriginDivergedSandbox::test_ac4_*`): узел сверки
+        обязан звать `gitcmd.commits_behind` с явным `base`, полученным
+        из fetch, а не оставлять параметр пустым — иначе `commits_behind`
+        сама подставила бы `config.MAIN_BRANCH` (локальный пин), ровно
+        дефект инцидента 04.09 из «Контекста» SPEC.
+
+        Ловит мутацию: `base` не передаётся в `commits_behind` явно
+        (аргумент опущен/`None`) — вызов молча упадёт на дефолт `config.
+        MAIN_BRANCH` внутри `commits_behind`, а `spying_commits_behind`
+        здесь это поймает пустым/`None` `base`.
+        """
+        self.setup_recording()
+        behind_calls = []
+
+        def spying_commits_behind(branch, base=None):
+            behind_calls.append((branch, base))
+            return 3
+
+        with mock.patch.object(gitcmd, "commits_behind",
+                               side_effect=spying_commits_behind), \
+             mock.patch.object(gitcmd, "in_repo",
+                               side_effect=self._recording_ok), \
+             mock.patch.object(acceptance, "run", return_value=(True, "ok")):
+            self.advance_from_in_dev()
+
+        self.assertEqual(len(behind_calls), 1)
+        _, base = behind_calls[0]
+        self.assertTrue(
+            base, "AC-4: base обязан быть передан явно из origin-fetch, "
+            "не оставлен пустым/None (иначе commits_behind сама "
+            "подставит config.MAIN_BRANCH — локальный пин)")
+        self.assertNotEqual(
+            base, config.MAIN_BRANCH,
+            "AC-4: base не имеет права совпасть с локальным config.MAIN_BRANCH")
+
+    # ------------------------------- R1-F1 (REVIEW.md итерация 1, major)
+
+    def test_advance_treats_origin_fetch_failure_as_fresh(self):
+        """REVIEW.md 01M1NBWPKNBXP9ZXXQDJM7AXPJ итерация 1, замечание
+        R1-F1 (major): `_origin_main_sha` вырождена (git fetch/rev-parse
+        не ответили, либо конфигурация target'а неисправна) — переход
+        обязан деградировать на "fresh" немедленно, НЕ подставляя литерал
+        "FETCH_HEAD" ни в `commits_behind`, ни в `merge`. Прежде такая
+        подстановка сравнивала/мержила ветку задачи против постороннего
+        состояния `config.ROOT`/приватного `FETCH_HEAD` worktree'а — не
+        «ничего не делала», как заявляла деградация.
+
+        Ловит мутацию: убранный ранний `if not base: return "fresh"` —
+        вызов дойдёт до `commits_behind`/`merge` с литералом `"FETCH_HEAD"`
+        вместо честного no-op, и моки `behind`/`self.merge_calls` здесь
+        это поймают непустым вызовом.
+        """
+        self.setup_recording()
+        with mock.patch.object(fsm, "_origin_main_sha", return_value=None), \
+             mock.patch.object(gitcmd, "commits_behind") as behind, \
+             mock.patch.object(gitcmd, "in_repo",
+                               side_effect=self._recording_ok), \
+             mock.patch.object(acceptance, "run") as acc_run:
+            self.advance_from_in_dev()
+
+        self.assertEqual(self.state(), "review",
+                         "вырожденная _origin_main_sha — тот же исход, что "
+                         "и «ветка не отстала» (требование 7)")
+        behind.assert_not_called()
+        self.assertEqual(self.merge_calls, [],
+                         "R1-F1: merge не имеет права звонить против "
+                         "постороннего FETCH_HEAD")
+        acc_run.assert_not_called()
 
     # --------------------------------------------------- конфликт подтяжки
 
@@ -359,6 +473,130 @@ class BranchFreshnessGateTest(unittest.TestCase):
         self.assertEqual(self.state(), "escalated")
         combined = out + "\n".join(self.journal_details())
         self.assertIn("worktree", combined)
+
+
+# --------------------------------------------------------------------- AC-10
+
+
+class TargetSourcedRemoteTest(unittest.TestCase):
+    """SPEC 01M1NBWPKNBXP9ZXXQDJM7AXPJ, требование 5/AC-10 (ANSWER-1,
+    добавлено после лока приёмочной планки — юнит-тест здесь, не в
+    `tasks/01M1NBWPKNBXP9ZXXQDJM7AXPJ/acceptance_tests/`).
+
+    Источник сверки/подтяжки — конфигурация target'а задачи
+    (`targets.yaml`/`store.task_target`), не хардкод `origin` пульта:
+    задача с не-self target'ом фетчит `url` её записи, не литерал
+    `"origin"`. Self-target уже покрыт `BranchFreshnessGateTest` выше
+    (там `config.TARGETS` намеренно не заводится — AC-9); здесь отдельная
+    песочница ИМЕННО потому, что этот сценарий обязан завести файл.
+    """
+
+    TARGETS_YAML = """targets:
+  acme:
+    forge: github
+    url: http://127.0.0.1:9/acme-target.git
+    base: trunk
+    token_slot: artel-token
+    no_paths: []
+    project_skills: []
+    merge_gate: operator
+"""
+
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        root = Path(tmp.name)
+        shutil.copytree(REPO_ROOT / "templates", root / "templates")
+
+        for attr, value in (("DB", root / ".artel" / "state.db"),
+                            ("TASKS", root / "tasks"),
+                            ("LOGS", root / ".artel" / "logs"),
+                            ("ROOT", root),
+                            ("PROJECTS", root / ".artel" / "projects"),
+                            ("TARGETS", root / "targets.yaml"),
+                            ("ROLE_HOME", root / ".artel" / "home"),
+                            ("ROLE_CONFIG_DIR",
+                             root / ".artel" / "home" / ".claude"),
+                            ("BACKUP_MARKER", root / ".artel" / "backup-marker"),
+                            ("WORKTREES", root / ".artel" / "worktrees")):
+            patcher = mock.patch.object(config, attr, value)
+            patcher.start()
+            self.addCleanup(patcher.stop)
+        config.TARGETS.write_text(self.TARGETS_YAML, encoding="utf-8")
+
+        self.calls: list = []
+
+        def spying_git(*args):
+            self.calls.append(args)
+            return fake_git(*args)
+
+        patcher = mock.patch.object(gitcmd, "git", spying_git)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        spy_patcher = mock.patch.object(gitcmd.subprocess, "run", SpyRun())
+        spy_patcher.start()
+        self.addCleanup(spy_patcher.stop)
+        show_patcher = mock.patch.object(gitcmd, "show", disk_backed_show)
+        show_patcher.start()
+        self.addCleanup(show_patcher.stop)
+        ls_patcher = mock.patch.object(gitcmd, "ls_tree_files",
+                                       disk_backed_ls_tree_files)
+        ls_patcher.start()
+        self.addCleanup(ls_patcher.stop)
+
+        self.wt_path = root / "wt"
+        wt_patcher = mock.patch.object(
+            workspace, "ensure", lambda task_id, branch: (self.wt_path, None))
+        wt_patcher.start()
+        self.addCleanup(wt_patcher.stop)
+
+        self.capture = capture
+        self.capture(catalog.cmd_init)
+        self.TASK = catalog.cmd_new("Внешний target", target="acme")
+        self.tdir = config.TASKS / self.TASK
+        self.branch = store.db().execute(
+            "SELECT branch FROM tasks WHERE id=?",
+            (self.TASK,)).fetchone()["branch"]
+
+    def test_pull_freshness_fetches_target_url_not_pult_origin(self):
+        """Ветка не отстала (`commits_behind` -> 0) — сверке этого
+        достаточно, чтобы проявить свой источник: fetch обязан случиться
+        ДО самого сравнения (AC-1 для self-target, тот же порядок здесь),
+        и его remote — `url` записи `acme`, не `"origin"`; ветка фетча —
+        её `base` (`trunk`), не `config.MAIN_BRANCH` (`main`).
+
+        Ловит мутацию: `_origin_main_source` для не-self target возвращает
+        `"origin"`/`config.MAIN_BRANCH` вместо `entry["url"]`/`entry["base"]`
+        — AC-10 тихо сломается, fetch уйдёт в репозиторий пульта вместо
+        `acme`, и `assertIn`/`assertNotIn` по `remote_args` здесь это
+        поймают.
+        """
+        self.tdir.mkdir(parents=True, exist_ok=True)
+        (self.tdir / "PLAN.md").write_text(
+            PLAN_READY.format(task=self.TASK), encoding="utf-8")
+        conn = store.db()
+        conn.execute("UPDATE tasks SET state=? WHERE id=?",
+                     ("in_dev", self.TASK))
+        conn.commit()
+
+        with mock.patch.object(gitcmd, "commits_behind", return_value=0):
+            self.capture(fsm.cmd_advance, self.TASK)
+
+        fetch_calls = [c for c in self.calls if c and c[0] == "fetch"]
+        self.assertTrue(fetch_calls, "AC-10: сверка обязана фетчить "
+                        "источник target'а перед сравнением")
+        remote_args = fetch_calls[0]
+        self.assertNotIn("origin", remote_args,
+                         "AC-10: remote внешнего target — из его "
+                         "конфигурации, не хардкод origin пульта")
+        self.assertIn("http://127.0.0.1:9/acme-target.git", remote_args,
+                     "AC-10: remote — url записи target'а из targets.yaml")
+        self.assertIn("trunk", remote_args,
+                     "AC-10: ветка фетча — base записи target'а, не "
+                     "config.MAIN_BRANCH")
+        self.assertNotIn(config.MAIN_BRANCH, remote_args,
+                         "AC-10: config.MAIN_BRANCH — имя ветки self-"
+                         "target'а, не этого target'а")
 
 
 if __name__ == "__main__":

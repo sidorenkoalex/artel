@@ -38,19 +38,14 @@ from orchestrator import (auto, catalog, config, fixation, fsm,  # noqa: E402
                           store)
 from tests.sandbox import (FakeProc, TmpRootTest, capture,  # noqa: E402
                            capture_new_task_id, claude_only_popen,
-                           resilient_tmp_cleanup)
-
-# Захвачен ДО любого mock.patch (порядок импорта модуля) — настоящий
-# subprocess.run, которым `_GitFixationTmpRootTest.setUp` перекрывает
-# `SpyRun` базового `TmpRootTest` (см. его докстринг ниже).
-_REAL_SUBPROCESS_RUN = subprocess.run
+                           network_guarded_real_run, resilient_tmp_cleanup)
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
 TARGETS_YAML = """targets:
   sled:
     forge: github
-    url: https://example.invalid/sled
+    url: file:///nonexistent/sled
     base: main
     token_slot: sled-token
     no_paths: []
@@ -64,7 +59,7 @@ TARGETS_YAML = """targets:
 ARTEL_TARGETS_YAML = f"""targets:
   {config.DEFAULT_TARGET}:
     forge: github
-    url: https://example.invalid/artel
+    url: file:///nonexistent/artel
     base: main
     token_slot: artel-token
     no_paths: []
@@ -125,9 +120,13 @@ class _GitFixationTmpRootTest(TmpRootTest):
         # Весь этот файл проверяет НАСТОЯЩИЙ git (см. докстринг модуля) —
         # `SpyRun` базового `TmpRootTest` (заглушка ради плотницкой записи
         # `cmd_new` без реального репозитория, tests/sandbox.py) перекрыт
-        # здесь настоящим `subprocess.run`, как и описывает комментарий
-        # `TmpRootTest.setUp` про подклассы с собственным моком git.
-        patcher = mock.patch.object(gitcmd.subprocess, "run", _REAL_SUBPROCESS_RUN)
+        # здесь настоящим git через `network_guarded_real_run` (SPEC
+        # 01M1QHQ277PQQA894X97RVEX9Y, требование 1) — тот же настоящий
+        # `subprocess.run` для всего, кроме сетевых fetch/push/ls-remote/
+        # clone с DNS-адресом, которые он отклоняет мгновенно вместо
+        # реального обращения к резолверу.
+        patcher = mock.patch.object(gitcmd.subprocess, "run",
+                                    network_guarded_real_run)
         patcher.start()
         self.addCleanup(patcher.stop)
 
@@ -185,7 +184,7 @@ class NoRemoteCheckTest(TmpRootTest):
     def test_repo_with_a_remote_is_detected(self):
         repo = config.PROJECTS / "sled"
         gitcmd.in_repo(repo, "remote", "add", "origin",
-                       "https://example.invalid/x")
+                       "file:///nonexistent/x")
 
         self.assertFalse(projects.artifact_repo_has_no_remote("sled"))
 
@@ -800,6 +799,46 @@ class DogfoodTransitionJournalsShaTest(RealPultGitTest):
         refused = [r["detail"] for r in store.task_steps(store.db(), self.TASK)
                    if "не закоммичен" in r["detail"]]
         self.assertTrue(refused, "отказ по грязной копии журналится отдельно")
+
+
+class DogfoodTransitionJournalsCodeBranchShaTest(RealPultGitTest):
+    """Требование 1 (tasks/01M1P9RJVYHTAC087J4B2CAR44): переход self/
+    артели журналит ТАКЖЕ поле `код=` — sha головы КОДОВОЙ ветки задачи
+    (`config.ROOT`, где для self реально живёт код), не путать с `sha=`
+    (голова репо фиксации `config.PROJECTS/artel`, `DogfoodTransitionJournals
+    ShaTest` выше — эта задача его не убирает, только перестаёт им
+    пользоваться как базой diff, требование 4)."""
+
+    def test_journal_carries_code_branch_sha_distinct_from_fixation_sha(self):
+        """Кодовая ветка задачи — реальная ветка в `config.ROOT`
+        (`self.root`), с отдельным коммитом, чтобы её sha заведомо
+        отличался от sha репо фиксации, который коммитит тот же переход
+        (`fixation._fix_external`) — совпадение значений сделало бы тест
+        неразличимым со старым (регрессным) поведением.
+
+        Ловит мутацию: `record_fixation` не добавляет `код=` для default
+        target (текущий регресс) — поле в `detail` отсутствует вовсе.
+        """
+        branch = store.task_branch(store.db(), self.TASK)
+        self.git("branch", branch)
+        self.git("checkout", branch)
+        (self.root / "module.py").write_text("код\n", encoding="utf-8")
+        self.git("add", "module.py")
+        self.git("commit", "-q", "-m", "код")
+        code_sha = self.git("rev-parse", "HEAD").strip()
+        self.git("checkout", config.MAIN_BRANCH)
+
+        fixation_sha = self.enter_spec_gate()
+
+        self.assertNotEqual(
+            code_sha, fixation_sha,
+            "sha кодовой ветки совпал со sha репо фиксации — тест ничего "
+            "не доказывает")
+        entries = [r["detail"] for r in store.task_steps(store.db(), self.TASK)
+                  if r["action"] == "sha зафиксирован"]
+        self.assertEqual(len(entries), 1)
+        self.assertIn(f"код={code_sha}", entries[0])
+        self.assertIn(fixation_sha, entries[0], "sha репо фиксации не убран")
 
 
 class ApproveByShaTest(RealPultGitTest):

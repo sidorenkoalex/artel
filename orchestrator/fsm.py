@@ -17,7 +17,14 @@ from pathlib import Path
 from scripts import guard
 
 from . import (acceptance, artifact_source, artifacts, config, fixation,
-              github_adapter, gitcmd, lease, store, workspace, yamlmini)
+              github_adapter, gitcmd, lease, review, store, targets,
+              workspace, yamlmini)
+
+# Буквальная строка «сигналов нет» (ANSWER-2, tasks/01M1KS8K9RXWHX2PW3ZKB0P903,
+# AC-12) — снимок секции «Оценка объёма и деление» пустой/отсутствующей,
+# не «неизвестно» (NULL остаётся зарезервирован за «снимок не удался/
+# задача старше колонки», `report.py` различает эти два случая).
+SPLIT_ASSESSMENT_NONE = "сигналов нет"
 
 # Своя копия константы (та же строка, что и в orchestrator/fsm_postmerge.py
 # и orchestrator/brief.py — каждый модуль держит её по своему поводу):
@@ -82,13 +89,15 @@ def _conflicting_files(wt_path) -> list[str]:
     return sorted(set(res.stdout.split()))
 
 
-def _auto_resolve_map_conflict(conn, task_id: str, wt_path) -> bool:
+def _auto_resolve_map_conflict(conn, task_id: str, wt_path, source_branch: str) -> bool:
     """Единственный конфликтующий файл — `docs/codebase-map.md` (SPEC
     T067, требования 1-2, 5): `checkout --theirs` + регенерация
     генератором НА СЛИТОМ дереве worktree задачи (`cwd=wt_path`, не
     `config.ROOT` — карта, которую сверяют критерии приёмки, это карта
     ВЕТКИ задачи, не главной копии пульта) + `add` + `commit`, который
-    и завершает merge, начатый вызывающим кодом.
+    и завершает merge, начатый вызывающим кодом. `source_branch` — имя
+    ветки, из которой шла подтяжка (REVIEW.md R3-F1: коммит-сообщение
+    называет реальный источник, не жёсткий `config.MAIN_BRANCH`).
 
     `True` — merge завершён, подтяжка продолжается точно так же, как
     обычная удачная подтяжка без конфликта (требование 2); `False` —
@@ -112,7 +121,7 @@ def _auto_resolve_map_conflict(conn, task_id: str, wt_path) -> bool:
     if added is None or added.returncode != 0:
         return False
     commit = gitcmd.in_repo(wt_path, "commit", "-m",
-                            f"{task_id}: подтяжка {config.MAIN_BRANCH}")
+                            f"{task_id}: подтяжка {source_branch}")
     if commit is None or commit.returncode != 0:
         return False
     store.journal(
@@ -124,21 +133,105 @@ def _auto_resolve_map_conflict(conn, task_id: str, wt_path) -> bool:
     return True
 
 
+def _origin_main_source(target_name: str) -> tuple[str, str] | None:
+    """(remote, ветка) main конкретного target'а (SPEC
+    01M1NBWPKNBXP9ZXXQDJM7AXPJ, требование 5, AC-10, ANSWER-1): источник
+    сверки/подтяжки берётся из конфигурации target задачи, не хардкожен
+    как `origin` пульта. `None` — запись target'а не читается (файл или
+    сама запись не годны): молчаливый откат на литерал `"origin"` был бы
+    ОПАСНЕЕ обычной деградации «git не ответил» — сравнил/смержил бы
+    задачу внешнего target против совсем другого репозитория (main
+    пульта), не «ничего не сделал»; вызывающий код обязан деградировать
+    так же, как при неответившем git (AC-8: расхождение/поломка
+    конфигурации не имеет права двигать ни сверку, ни merge).
+
+    Self-target (`config.DEFAULT_TARGET`) — прежний литерал `"origin"`
+    (её пульт всегда несёт именно такой remote, ANSWER-1 «для self-target
+    — origin пульта») БЕЗ обращения к `targets.yaml`: лёгкие песочницы
+    этой сверки (`tests/test_branch_freshness_gate.py`, приёмочные тесты
+    задачи) намеренно не заводят `config.TARGETS` для self-target
+    сценария — чтение файла здесь безусловно сломало бы их (требование 4,
+    AC-9). Любой другой target — `targets.target(name)["url"]` (адрес
+    репозитория) как remote, её же `["base"]` как ветка: `targets.yaml`
+    не несёт отдельного поля «имя remote» (протокол git одинаково
+    принимает и имя настроенного remote, и голый URL вторым аргументом
+    `git fetch`/`git merge`), а `["url"]` — уже существующее поле записи
+    (ADR-0003 п.2), в точности «конфигурация target», которую требует
+    AC-10.
+    """
+    if target_name == config.DEFAULT_TARGET:
+        return "origin", config.MAIN_BRANCH
+    try:
+        entry = targets.target(target_name)
+    except targets.TargetsError:
+        return None
+    return entry["url"], entry["base"]
+
+
+def _origin_main_sha(target_name: str) -> str | None:
+    """sha текущего HEAD main конкретного target'а на её удалённом
+    источнике (SPEC 01M1NBWPKNBXP9ZXXQDJM7AXPJ, AC-1/AC-2/AC-8/AC-10) —
+    своя копия узла `orchestrator/fsm_merge_gate.py::_origin_main_sha`
+    (тот же приём дублирования по модулю, что уже несёт `MAP_REL` в
+    начале файла): `fsm_merge_gate` импортирует `fsm`, обратный импорт
+    завёл бы цикл. `_origin_main_sha` там остаётся про main АРТЕЛИ
+    конкретно (плотницкий merge Stage0 — только self-target/`operator`
+    гейт), эта — про main ЗАДАННОГО target'а (`_origin_main_source`).
+
+    `git fetch` пишет только в объектную базу и `FETCH_HEAD` репозитория,
+    в котором исполнен (`config.ROOT` — здесь всегда так, `gitcmd.git`,
+    не `in_repo`), никогда в локальный `refs/heads/<MAIN_BRANCH>` — ни
+    рабочее дерево, ни HEAD `config.ROOT`, ни зафиксированный там пин не
+    задеты (AC-8). Возврат — конкретный sha, не литерал `"FETCH_HEAD"`:
+    merge ниже идёт в ДРУГОМ git-worktree (worktree задачи), а начиная с
+    git 2.5 `FETCH_HEAD` — файл, приватный для каждого worktree (как
+    HEAD/index) — литерал `"FETCH_HEAD"` там не резолвится в то, что
+    только что зафетчил `config.ROOT`. `None` — git не ответил на fetch
+    или на `rev-parse`, либо конфигурация target'а не читается
+    (`_origin_main_source`) — тот же вырожденный случай, что у остальных
+    примитивов оркестратора: сверка ниже деградирует на «ничего не
+    делать».
+    """
+    source = _origin_main_source(target_name)
+    if source is None:
+        return None
+    remote, branch = source
+    fetch = gitcmd.git("fetch", "-q", remote, branch)
+    if fetch is None or fetch.returncode != 0:
+        return None
+    res = gitcmd.git("rev-parse", "FETCH_HEAD")
+    return res.stdout.strip() if res is not None and res.returncode == 0 else None
+
+
 def _pull_main_or_escalate(conn, task_id: str, t, state: str) -> str:
     """Сверка свежести ветки задачи на входе в гейт (SPEC T051, требования
-    1-7, 10; ADR-0006 п.2) и, начиная с T053 требование 5, ВНУТРИ окна
-    `merge_gate` под мьютексом merge — один и тот же узел для всех трёх
-    точек сверки (`in_dev -> review`, `acceptance -> merge_gate`,
-    `merge_gate -> done`).
+    1-7, 10; ADR-0006 п.2; переведена на origin — SPEC
+    01M1NBWPKNBXP9ZXXQDJM7AXPJ, AC-1..AC-4/AC-8) и, начиная с T053
+    требование 5, ВНУТРИ окна `merge_gate` под мьютексом merge — один и
+    тот же узел для всех трёх точек сверки (`in_dev -> review`,
+    `acceptance -> merge_gate`, `merge_gate -> done`).
+
+    Сверка и merge идут против main НА УДАЛЁННОМ ИСТОЧНИКЕ target'а
+    задачи (`_origin_main_sha`/`_origin_main_source`, требование 5,
+    AC-10), НЕ против локального `config.MAIN_BRANCH` (пина главной
+    копии): между двумя мержами пин двигает только отдельная
+    операторская команда `pin-update` (A7), и решение по устаревшему
+    пину ложно отвечало «ветка не отстала», хотя origin ушёл вперёд
+    (инцидент 04.09, SPEC «Контекст»). Для self-target это буквально
+    `origin` пульта и `config.MAIN_BRANCH` (ANSWER-1); для любого другого
+    target — `url`/`base` его записи в `targets.yaml`. `config.
+    MAIN_BRANCH` остаётся только ИМЕНЕМ ветки self-target, которую
+    фетчим и с которой сравниваем/мержим, не источником сравнения/merge
+    самим по себе.
 
     Возврат — один из трёх исходов:
     - `"escalated"` — переход уже отклонён: задача уже эскалирована
       (состояние и диагностика уже записаны через `store.set_state`,
       требования 5-6); вызывающий код обязан немедленно вернуться, не
       выполняя сам переход;
-    - `"fresh"` — ветка не отстала от `config.MAIN_BRANCH` (требование 7:
-      поведение перехода прежнее байт-в-байт, никакой git-вызов не
-      сделан);
+    - `"fresh"` — ветка не отстала от main артели на origin (требование
+      7: поведение перехода прежнее байт-в-байт при отсутствии
+      отставания);
     - `"pulled"` — подтяжка прошла и приёмочные тесты в подтянутом
       дереве зелёные. Точки `in_dev -> review`/`acceptance -> merge_gate`
       обе продолжают штатный переход одинаково что при `"fresh"`, что при
@@ -150,16 +243,23 @@ def _pull_main_or_escalate(conn, task_id: str, t, state: str) -> str:
 
     Merge — единственный вне `merge_gate`, разрешённый ADR-0006 п.2: в
     worktree ЗАДАЧИ (`gitcmd.in_repo`, форма `-C`), вливает
-    `config.MAIN_BRANCH`, ветку задачи в аргументах не упоминает и не
-    трогает main ни байтом (требование 10) — не rebase (требование 3),
-    существующие sha ветки остаются валидными предками.
+    зафетченный origin-sha main артели, ветку задачи в аргументах не
+    упоминает и не трогает main ни байтом (требование 10) — не rebase
+    (требование 3), существующие sha ветки остаются валидными предками.
 
-    `gitcmd.commits_behind` вернул `None` — git не ответил (песочницы без
-    реального git: `fake_git` и аналоги, требование 9) — тот же
+    `_origin_main_sha()` вернула вырожденное значение (`None`/пустая
+    строка — git/fetch/rev-parse не ответили, либо конфигурация
+    target'а не читается; песочницы без реального git: `fake_git` и
+    аналоги, требование 9) — функция возвращает `"fresh"` немедленно, не
+    вызывая `commits_behind`/`merge` вовсе (REVIEW.md R1-F1, итерация 1):
+    прежде на этом месте подставлялся литерал `"FETCH_HEAD"`, который
+    честным no-op'ом НЕ является — `FETCH_HEAD` в `config.ROOT` почти
+    всегда несёт результат чужого предыдущего фетча, а внутри worktree
+    задачи резолвится в СВОЙ приватный `FETCH_HEAD` (git 2.5+), не в
+    только что зафетченный `config.ROOT`. Ранний возврат — тот же
     вырожденный случай деградации, что и у остальных git-примитивов
-    оркестратора: сверка молча пропускается, `bool(None)` ложно ровно как
-    и `bool(0)` (ветка не отстала) — оба ведут к одному и тому же
-    «ничего не делать».
+    оркестратора: молча ничего не делает, как и `not behind` (ветка не
+    отстала).
 
     Конфликт merge, где единственный конфликтующий файл —
     `docs/codebase-map.md` (SPEC T067), разрешается здесь же сам, не
@@ -169,7 +269,15 @@ def _pull_main_or_escalate(conn, task_id: str, t, state: str) -> str:
     байт-в-байт: `git merge --abort` + `"escalated"`.
     """
     branch = t["branch"]
-    behind = gitcmd.commits_behind(branch)
+    target_name = t["target"] or config.DEFAULT_TARGET
+    source = _origin_main_source(target_name)
+    source_branch = source[1] if source is not None else config.MAIN_BRANCH
+    base = _origin_main_sha(target_name)
+    if not base:
+        # Вырожденная _origin_main_sha — см. докстринг выше (R1-F1):
+        # ранний выход, не литерал "FETCH_HEAD".
+        return "fresh"
+    behind = gitcmd.commits_behind(branch, base=base)
     if not behind:
         return "fresh"
 
@@ -177,18 +285,19 @@ def _pull_main_or_escalate(conn, task_id: str, t, state: str) -> str:
     if error is not None:
         store.set_state(
             conn, task_id, "escalated", "fsm", expected_state=state,
-            detail=f"подтяжка {config.MAIN_BRANCH} отменена: worktree "
+            detail=f"подтяжка {source_branch} отменена: worktree "
             f"задачи не создан — {error}")
         return "escalated"
 
-    merge = gitcmd.in_repo(wt_path, "merge", "--no-ff", config.MAIN_BRANCH,
-                           "-m", f"{task_id}: подтяжка {config.MAIN_BRANCH}")
+    merge = gitcmd.in_repo(wt_path, "merge", "--no-ff", base,
+                           "-m", f"{task_id}: подтяжка {source_branch}")
     if merge is None or merge.returncode != 0:
         resolved = False
         if merge is not None:
             files = _conflicting_files(wt_path)
             if files == [MAP_REL]:
-                resolved = _auto_resolve_map_conflict(conn, task_id, wt_path)
+                resolved = _auto_resolve_map_conflict(conn, task_id, wt_path,
+                                                       source_branch)
         if not resolved:
             abort = gitcmd.in_repo(wt_path, "merge", "--abort")
             note = merge.stderr.strip()[:500] if merge is not None else "git не ответил"
@@ -197,7 +306,7 @@ def _pull_main_or_escalate(conn, task_id: str, t, state: str) -> str:
                         f"{abort.stderr.strip()[:200] if abort is not None else 'git не ответил'}")
             store.set_state(
                 conn, task_id, "escalated", "fsm", expected_state=state,
-                detail=f"конфликт подтяжки {config.MAIN_BRANCH} в ветку "
+                detail=f"конфликт подтяжки {source_branch} в ветку "
                 f"{branch}: {note}")
             return "escalated"
 
@@ -206,7 +315,7 @@ def _pull_main_or_escalate(conn, task_id: str, t, state: str) -> str:
         store.set_state(
             conn, task_id, "escalated", "fsm", expected_state=state,
             detail=f"приёмочные тесты красные после подтяжки "
-            f"{config.MAIN_BRANCH} (слияние сохранено, откат не "
+            f"{source_branch} (слияние сохранено, откат не "
             f"выполняется):\n{tail}")
         return "escalated"
 
@@ -288,6 +397,33 @@ def _read_branch_text_or_refuse(conn, task_id: str, branch: str,
                       "переход отклонён: дерево не на ветке задачи", detail)
         print(f"[{task_id}] переход отклонён: {detail}")
     return text
+
+
+def _snapshot_split_assessment(conn, task_id: str, t) -> None:
+    """Заполняет `diff_bytes`/`split_assessment` на входе в `merge_gate`
+    (tasks/01M1KS8K9RXWHX2PW3ZKB0P903, требование 6; ANSWER-1, ANSWER-2)
+    — материал для калибровки порогов `artel report`, не условие
+    перехода: сбой git по любой из двух колонок оставляет её NULL и НЕ
+    отказывает переходу (в отличие от `fsm_advance._capacity_gate_
+    refuses`, которая именно отказывает на том же diff).
+
+    Diff — только self target, тем же доводом, что и `_capacity_gate_
+    refuses`: `git diff` в `config.ROOT` не видит код внешнего target.
+    Секция «Оценка объёма и деление» читается с АРТЕФАКТНОЙ ветки —
+    `tasks/<id>/` живёт только там (A7, `artifact_source.resolve`),
+    независимо от target.
+    """
+    if store.task_target(conn, task_id) == config.DEFAULT_TARGET:
+        diff, _, reason = review.git_diff_part(config.MAIN_BRANCH, t["branch"])
+        if not reason:
+            store.update_task(conn, task_id, diff_bytes=len(diff.encode("utf-8")))
+
+    branch, _ = artifact_source.resolve(conn, task_id)
+    spec_text, _ = gitcmd.show(branch, f"tasks/{task_id}/SPEC.md")
+    if spec_text is not None:
+        body = guard.section_body(spec_text, "Оценка объёма и деление").strip()
+        store.update_task(conn, task_id,
+                          split_assessment=body or SPLIT_ASSESSMENT_NONE)
 
 
 def _answer_file_count(conn, task_id: str, tdir: Path) -> int | None:
@@ -605,6 +741,11 @@ def _cmd_approve(conn, task_id: str, sha: str | None, sid: str) -> None:
             meta = yamlmini.frontmatter(spec_text) or {}
         else:
             meta = artifacts.frontmatter(config.TASKS / task_id / "SPEC.md")
+        # Значение zones (01M1NKVPD2A79PQ6K0JVV1B2Q1, AC-3) сохраняется тем
+        # же моментом входа approve на spec_gate, что и budget/split_
+        # assessment рядом — meta уже прочитана выше, поле отсутствует у
+        # SPEC старых версий (`meta.get` даёт None, колонка тогда NULL).
+        store.update_task(conn, task_id, zones=meta.get("zones"))
         skip_reason = meta.get("skip_tests")
         if skip_reason or not guard.requires_ac_markup(meta):
             detail = (f"тесты пропущены (skip_tests): {skip_reason}"
@@ -629,6 +770,10 @@ def _cmd_approve(conn, task_id: str, sha: str | None, sid: str) -> None:
             return
         store.set_state(conn, task_id, "merge_gate", "operator",
                         expected_state=state, detail="приёмка пройдена")
+        # Снимок объёма (tasks/01M1KS8K9RXWHX2PW3ZKB0P903, требование 6,
+        # ANSWER-1/ANSWER-2): побочный эффект входа в merge_gate, не
+        # условие перехода — сбой git здесь не держит гейт.
+        _snapshot_split_assessment(conn, task_id, t)
         # Undraft Draft MR (SPEC T079, требование 2, AC-2): побочный
         # эффект входа в merge_gate, не условие перехода — отказ адаптера
         # не держит гейт (github_adapter.undraft_mr сама не бросает).

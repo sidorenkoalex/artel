@@ -32,8 +32,9 @@ def mission_brief_package(conn, task_id: str, t, role: str):
             f"отсортированный по блокирующести, каждый — с вариантами "
             f"и дефолтом. SPEC.md в этом случае не трогай — сам файл "
             f"эскалирует задачу.\n"
-            f"4) Прогони scripts/guard.py на своём файле, закоммить в "
-            f"ветку. Код репозитория не трогай."
+            f"4) Прогони scripts/guard.py на своём файле. tasks/<id>/ "
+            f"коммитить не нужно — автокоммит оркестратора сам перенесёт "
+            f"написанное в артефактную ветку. Код репозитория не трогай."
         )
         brief_text = brief.analyst_map_component(conn, task_id)
     elif role == "test_author":
@@ -42,8 +43,9 @@ def mission_brief_package(conn, task_id: str, t, role: str):
             f"{t['branch']} — уже выписана в этом рабочем каталоге "
             f"(собственный worktree задачи). Разработчик увидит задачу "
             f"только после тебя —\n"
-            f"1) Прочитай {task_ref}/SPEC.md, раздел «Критерии приёмки» "
-            f"(AC-1, AC-2, …).\n"
+            f"1) {task_ref}/SPEC.md на диске — актуальная версия "
+            f"(материализована из артефактной ветки на старте шага). "
+            f"Изучи раздел «Критерии приёмки» (AC-1, AC-2, …).\n"
             f"2) Для каждого AC-n напиши unittest в "
             f"{task_ref}/acceptance_tests/test_*.py, метод test_ac<n>_... — "
             f"ТОЛЬКО из формулировки критерия.\n"
@@ -53,8 +55,9 @@ def mission_brief_package(conn, task_id: str, t, role: str):
             f"4) Критерий в принципе неисполним тестом — не изобретай "
             f"компромисс: `# AC-n: escalate — <вопрос Оператору>`.\n"
             f"5) Прогони `python3 -m unittest discover -s "
-            f"{task_ref}/acceptance_tests`, закоммить каталог в ветку. "
-            f"Код репозитория и SPEC.md НЕ трогай."
+            f"{task_ref}/acceptance_tests`. tasks/<id>/ коммитить не нужно "
+            f"— автокоммит оркестратора сам перенесёт написанное в "
+            f"артефактную ветку. Код репозитория и SPEC.md НЕ трогай."
         )
         brief_text = brief.test_author_answer_component(conn, task_id)
     elif role == "developer":
@@ -69,8 +72,10 @@ def mission_brief_package(conn, task_id: str, t, role: str):
             f"со статусом changes_requested — сначала закрой замечания. Если "
             f"есть {task_ref}/acceptance_tests/ — они залочены (tasks/T023): "
             f"код чинится под них, их правка — эскалация, не правка.\n"
-            f"4) Прогони scripts/guard.py на своих артефактах, закоммить всё "
-            f"в ветку, поставь PLAN.md status: ready. НЕ мержи."
+            f"4) Прогони scripts/guard.py на своих артефактах, закоммить код "
+            f"в ветку (tasks/<id>/ коммитить не нужно — автокоммит "
+            f"оркестратора сам перенесёт PLAN.md в артефактную ветку), "
+            f"поставь PLAN.md status: ready. НЕ мержи."
         )
         brief_text = brief.developer_brief(conn, task_id)
     else:
@@ -89,14 +94,15 @@ def mission_brief_package(conn, task_id: str, t, role: str):
             f"замечание.\n"
             f"Проведи обе фазы review-checklist (гейт плана + ревью MR) и "
             f"заполни {task_ref}/REVIEW.md по форме из пакета "
-            f"(iteration: {iteration}). Код НЕ правь — только "
-            f"REVIEW.md в ветке задачи."
+            f"(iteration: {iteration}). Код НЕ правь. Коммитить "
+            f"REVIEW.md не нужно — автокоммит оркестратора сам перенесёт "
+            f"его в артефактную ветку."
         )
         # Sha предыдущего вердикта нужен только для инкрементального diff
         # (iteration > 1) — на первой итерации журнал сравнивать не с чем,
         # и чтение не тратится зря (T029, SPEC требования 1, 2, 3).
         prev_sha = (review.previous_verdict_sha(conn, task_id)
                    if iteration > 1 else "")
-        package = review.review_package(task_id, t["title"], t["branch"],
+        package = review.review_package(conn, task_id, t["title"], t["branch"],
                                         iteration=iteration, prev_sha=prev_sha)
     return mission, brief_text, package
