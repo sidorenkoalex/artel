@@ -50,9 +50,13 @@ SCHEMA сознательно). `orchestrator/canary.py::_run_one_task` запо
 `rev-list --count --merges S..T`) среди оставшихся; `None` — прогонов,
 подходящих под фильтр, нет вовсе (пустой журнал — тот же вырожденный
 случай, ANSWER-1 п.3: «сравнивать не с чем» ⇔ «порог всегда
-достигнут»). И `pin.cmd_pin_update` (гейт ДО fetch/merge, ANSWER-1 п.4),
-и `doctor.check_canary_trigger` (новый check, `all_checks`) зовут ЭТУ
-функцию — при будущей правке порога/алгоритма место одно, не два.
+достигнут»). И `pin.cmd_pin_update` (гейт ПОСЛЕ `fetch`, но ДО `merge`
+— REVIEW.md итерации 1, R1-F1: `merge-base`/`rev-list` нуждаются в
+локальном объекте целевого `sha`, который обычно принесёт как раз
+`fetch`; `fetch` сам HEAD не двигает, так что «отказ не трогает HEAD»,
+ANSWER-1 п.4, соблюдено и в этом порядке), и `doctor.check_canary_trigger`
+(новый check, `all_checks`) зовут ЭТУ функцию — при будущей правке
+порога/алгоритма место одно, не два.
 Импорт `canary` в `pin.py`/`doctor.py` не создаёт цикл: ни `canary.py`,
 ни модули, которые оно импортирует на уровне модуля (`fsm`, `auto`,
 `runner`, `catalog`, ...), не импортируют `pin`/`doctor` на уровне
