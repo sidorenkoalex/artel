@@ -1,5 +1,5 @@
 ---
-built_at_sha: d7906b06863a5e7f6bd4999ed19e11aaf0d6a600
+built_at_sha: 4424e0d15a00e2ecd71d1c77ef0fbc63d40b3c1d
 ---
 
 # Codebase-map пульта
@@ -172,7 +172,7 @@ built_at_sha: d7906b06863a5e7f6bd4999ed19e11aaf0d6a600
 - `test_author_answer_component`
 - `wrap_boundary`
 
-**Импортирует:** `orchestrator/alerts.py`, `orchestrator/artifact_source.py`, `orchestrator/config.py`, `orchestrator/context_package.py`, `orchestrator/gitcmd.py`, `orchestrator/store.py`
+**Импортирует:** `orchestrator/alerts.py`, `orchestrator/artifact_source.py`, `orchestrator/config.py`, `orchestrator/context_package.py`, `orchestrator/gitcmd.py`, `orchestrator/store.py`, `scripts/codebase_map.py`
 
 **Импортируется:** `orchestrator/review.py`, `orchestrator/role_prompt.py`, `orchestrator/runner.py`, `tests/test_advance_refusal_history.py`, `tests/test_answer_branch_reads.py`, `tests/test_brief.py`
 
@@ -943,11 +943,12 @@ built_at_sha: d7906b06863a5e7f6bd4999ed19e11aaf0d6a600
 - `main`
 - `module_dotted_name`
 - `parse_module`
+- `project_for_brief`
 - `render`
 
 **Импортирует:** —
 
-**Импортируется:** `tests/test_codebase_map.py`
+**Импортируется:** `orchestrator/brief.py`, `tests/test_codebase_map.py`
 
 ## scripts/guard.py
 
