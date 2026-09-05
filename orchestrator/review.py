@@ -71,12 +71,22 @@ def artifact_part(label: str, text: str | None, note: str,
     return f"### {label}{note} — {size} байт, sha256={sha}\n\n{body}\n"
 
 
-def git_diff_part(base: str, branch: str, *flags: str) -> tuple[str, int, str]:
-    """Вывод `git diff [flags] base...branch`, число строк и причина сбоя.
+def git_diff_part(base: str, branch: str, *flags: str,
+                  pathspec: tuple[str, ...] = ()) -> tuple[str, int, str]:
+    """Вывод `git diff [flags] base...branch [-- pathspec...]`, число строк
+    и причина сбоя.
 
     `base` — `config.MAIN_BRANCH` для полного diff ветки или sha
     предыдущего вердикта для инкрементального (T029) — вызывающий код
     решает, какой из них подставить, сама функция об этом не знает.
+
+    `pathspec` (tasks/01M1RA0N6FCFEQBB82K58GM12X, требования 1-2) — сырые
+    аргументы pathspec ПОСЛЕ разделителя `--`: пустой кортеж (по
+    умолчанию) не добавляет `--` вовсе — вызов и посчитанный размер
+    byte-for-byte как до этой задачи (`orchestrator/fsm.py::
+    _snapshot_split_assessment` вне зоны задачи и не передаёт его).
+    Смысл содержимого (исключить каталог, ограничиться каталогом) решает
+    вызывающий код — сама функция им не интересуется.
 
     git не ответил — это часть пакета с причиной, а не пустой diff:
     молча показать ревьюверу «изменений нет» значит выпросить аппрув
@@ -84,8 +94,11 @@ def git_diff_part(base: str, branch: str, *flags: str) -> tuple[str, int, str]:
     у не собранного и у пустого diff выглядит одинаково, а разбирать
     странный вердикт Оператор будет именно по журналу (T011, ревью 1).
     """
+    args = ["diff", *flags, f"{base}...{branch}"]
+    if pathspec:
+        args += ["--", *pathspec]
     try:
-        res = gitcmd.git("diff", *flags, f"{base}...{branch}")
+        res = gitcmd.git(*args)
     except UnicodeDecodeError as exc:
         # git считает файл бинарным по NUL-байту в первых 8 КБ, поэтому
         # текст в cp1251/latin-1 выкладывается в diff байтами как есть, а
@@ -217,8 +230,17 @@ def review_package(conn, task_id: str, title: str, branch: str, *,
     base = prev_sha if incremental else config.MAIN_BRANCH
     diff_type = "инкрементальный" if incremental else "полный"
 
-    stat, _, stat_failed = git_diff_part(base, branch, "--stat")
-    diff, diff_lines, diff_failed = git_diff_part(base, branch)
+    # `tasks/<task_id>/` (SPEC, PLAN, залоченная планка) уже идёт в пакет
+    # своими компонентами выше (artifact_part/answer_rels) — дубль внутри
+    # diff/стат-списка только раздувает контекст ревьювера без нового
+    # сигнала (регрессия №10, T029; tasks/01M1RA0N6FCFEQBB82K58GM12X,
+    # AC-2/AC-6). Правило одно для полного и инкрементального diff'а —
+    # оба вызова ниже несут один и тот же исключающий pathspec.
+    tasks_dir_exclude = (".", f":!tasks/{task_id}/")
+    stat, _, stat_failed = git_diff_part(base, branch, "--stat",
+                                         pathspec=tasks_dir_exclude)
+    diff, diff_lines, diff_failed = git_diff_part(base, branch,
+                                                  pathspec=tasks_dir_exclude)
 
     run_id = brief.new_run_id()
     parts = [

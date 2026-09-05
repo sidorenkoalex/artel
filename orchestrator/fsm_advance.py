@@ -405,11 +405,17 @@ def tests_writing(conn, task_id: str, t, tdir, target: str, state: str) -> bool:
 
 def _capacity_gate_refuses(conn, task_id: str, t, state: str) -> bool:
     """Гейт ёмкости diff снимка на `in_dev -> review` (tasks/
-    01M1GCN1FPSC1A6WK9WD1Q1V8X, требование 5, AC-12..AC-16): полный diff
-    снимка (`git diff config.MAIN_BRANCH...<ветка задачи>`) — тот же
+    01M1GCN1FPSC1A6WK9WD1Q1V8X, требование 5, AC-12..AC-16): diff снимка
+    БЕЗ `tasks/<id>/` (`git diff config.MAIN_BRANCH...<ветка задачи> --
+    . ':!tasks/<id>/'`, tasks/01M1RA0N6FCFEQBB82K58GM12X, AC-1) — тот же
     расчёт, что и «полный» `diff_type` в `review.review_package` при
     `iteration == 1` (T029) — не имеет права превышать
-    `config.REVIEW_SNAPSHOT_DIFF_MAX_BYTES`. Пересчитывается заново на
+    `config.REVIEW_SNAPSHOT_DIFF_MAX_BYTES`. Копия артефактов задачи
+    (SPEC/PLAN/залоченная планка) в кодовой ветке исключена из меры
+    целиком — она не предмет ревью-диффа (ревьювер получает её отдельными
+    компонентами пакета) и не имеет права раздувать гейт (AC-1/AC-4);
+    diff кода сам по себе крупнее потолка отклоняет переход тем же
+    способом, что и до этой задачи (AC-5). Пересчитывается заново на
     КАЖДОМ входе в гейт, не по инкременту прошлой итерации (AC-15).
 
     `True` — переход отклонён, отказ уже журналирован (AC-13); гейт сам
@@ -422,7 +428,11 @@ def _capacity_gate_refuses(conn, task_id: str, t, state: str) -> bool:
     измерять байты именно этой строки значит пропускать переход, так и
     не выяснив фактический размер снимка — тот же принцип «неизвестный
     статус — это нельзя» (ADR-0002), что уже применён парой функций выше
-    в этом же файле для лока `acceptance_tests/`.
+    в этом же файле для лока `acceptance_tests/`. Второй diff (только
+    `tasks/<id>/`, только на пути уже подтверждённого отказа — нужен лишь
+    для второй цифры сообщения, AC-3) сбоем git отказ не отменяет: первая
+    цифра (код) уже превысила потолок — вторая цифра в сообщении в этом
+    случае явно названа «неизвестна», а не вымышленным числом.
 
     Внешний (не self) target — гейт не проверяется вовсе, тем же
     доводом «сознательно вне объёма этой итерации», что уже
@@ -438,7 +448,9 @@ def _capacity_gate_refuses(conn, task_id: str, t, state: str) -> bool:
     любого внешнего target навсегда, а не редкий сбой git."""
     if store.task_target(conn, task_id) != config.DEFAULT_TARGET:
         return False
-    diff, _, reason = _review_git_diff_part(config.MAIN_BRANCH, t["branch"])
+    tasks_prefix = f"tasks/{task_id}/"
+    code_diff, _, reason = _review_git_diff_part(
+        config.MAIN_BRANCH, t["branch"], pathspec=(".", f":!{tasks_prefix}"))
     if reason:
         detail = (f"гейт ёмкости: git не ответил на diff снимка "
                  f"({config.MAIN_BRANCH}...{t['branch']}) — сверка "
@@ -450,12 +462,19 @@ def _capacity_gate_refuses(conn, task_id: str, t, state: str) -> bool:
               f"{config.MAIN_BRANCH}...{t['branch']}, и повтори "
               f"artel.py advance {task_id}")
         return True
-    size = len(diff.encode("utf-8"))
-    if size <= config.REVIEW_SNAPSHOT_DIFF_MAX_BYTES:
+    code_size = len(code_diff.encode("utf-8"))
+    if code_size <= config.REVIEW_SNAPSHOT_DIFF_MAX_BYTES:
         return False
+    artifacts_diff, _, artifacts_reason = _review_git_diff_part(
+        config.MAIN_BRANCH, t["branch"], pathspec=(tasks_prefix,))
+    if artifacts_reason:
+        artifacts_note = f"неизвестен (git не ответил: {artifacts_reason})"
+    else:
+        artifacts_note = f"{len(artifacts_diff.encode('utf-8'))} байт"
     detail = (f"{CAPACITY_GATE_REASON} ({task_id} «{t['title']}»): diff "
-             f"снимка {size} байт > потолка "
-             f"{config.REVIEW_SNAPSHOT_DIFF_MAX_BYTES} байт")
+             f"кода {code_size} байт > потолка "
+             f"{config.REVIEW_SNAPSHOT_DIFF_MAX_BYTES} байт (исключённые "
+             f"артефакты {tasks_prefix}: {artifacts_note})")
     store.journal(conn, task_id, "fsm",
                   "переход отклонён: гейт ёмкости diff", detail)
     print(f"[{task_id}] переход отклонён: {detail}")

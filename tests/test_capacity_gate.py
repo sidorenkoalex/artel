@@ -91,6 +91,78 @@ class CapacityGateGitFailureTest(TmpRootTest):
             "как и раньше (AC-16 не регрессирует)")
 
 
+class CapacityGateTwoNumbersMessageTest(TmpRootTest):
+    """tasks/01M1RA0N6FCFEQBB82K58GM12X, AC-1/AC-3: гейт мерит diff кода
+    БЕЗ `tasks/<id>/` (mock различает вызов по pathspec-хвосту команды)
+    и, при отказе, называет обе цифры — код и исключённые артефакты."""
+
+    def setUp(self):
+        super().setUp()
+        store.create_schema(store.db())
+        self.conn = store.db()
+        self.task_id = "T001"
+        self.t = {"title": "Тест двух цифр", "branch": "task/t001-x"}
+
+    def journal_details(self) -> list:
+        return [r["detail"] for r in self.conn.execute(
+            "SELECT detail FROM steps WHERE task_id=? ORDER BY id",
+            (self.task_id,))]
+
+    def _refuses_with(self, git_diff) -> bool:
+        with mock.patch.object(gitcmd, "git", git_diff):
+            return fsm_advance._capacity_gate_refuses(
+                self.conn, self.task_id, self.t, "in_dev")
+
+    def test_refusal_message_names_code_size_and_artifacts_size_separately(self):
+        code_body = "x" * 300_000
+        artifacts_body = "y" * 500
+
+        def git_diff(*args) -> subprocess.CompletedProcess:
+            if args and args[0] == "diff":
+                if f":!tasks/{self.task_id}/" in args:
+                    return subprocess.CompletedProcess(
+                        list(args), 0, code_body, "")
+                if f"tasks/{self.task_id}/" in args:
+                    return subprocess.CompletedProcess(
+                        list(args), 0, artifacts_body, "")
+            return subprocess.CompletedProcess(list(args), 0, "", "")
+
+        refused = self._refuses_with(git_diff)
+
+        self.assertTrue(refused)
+        details = "\n".join(self.journal_details())
+        self.assertIn(
+            str(len(code_body)), details,
+            "журнал обязан назвать размер diff кода (без tasks/<id>/)")
+        self.assertIn(
+            str(len(artifacts_body)), details,
+            "журнал обязан назвать размер diff артефактов (tasks/<id>/)")
+
+    def test_artifacts_diff_failure_does_not_invent_a_number(self):
+        """Второй diff (только `tasks/<id>/`) не отвечает — отказ уже
+        решён первой цифрой (код выше потолка), гейт не выдаёт вымышленное
+        число вместо честного «неизвестен»."""
+        code_body = "x" * 300_000
+
+        def git_diff(*args) -> subprocess.CompletedProcess:
+            if args and args[0] == "diff":
+                if f":!tasks/{self.task_id}/" in args:
+                    return subprocess.CompletedProcess(
+                        list(args), 0, code_body, "")
+                if f"tasks/{self.task_id}/" in args:
+                    return subprocess.CompletedProcess(
+                        list(args), 128, "", "fatal: bad revision")
+            return subprocess.CompletedProcess(list(args), 0, "", "")
+
+        refused = self._refuses_with(git_diff)
+
+        self.assertTrue(
+            refused, "первая цифра (код) уже выше потолка — отказ не "
+            "имеет права зависеть от сбоя второго diff'а")
+        details = "\n".join(self.journal_details())
+        self.assertIn("неизвестен", details)
+
+
 class CapacityGateExternalTargetTest(TmpRootTest):
     """Гейт ёмкости не применяется к внешнему (не self) target —
     `tests.test_git_fixation.ExternalTargetAdvanceIgnoresDirtyCheckTest.
