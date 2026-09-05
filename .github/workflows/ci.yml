@@ -14,10 +14,38 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - name: версия Python из манифеста стека (01M1RDCCKBQMJ5G2K9ANJP059H)
+        id: stack-python
+        run: echo "version=$(python3 scripts/stack_ci.py)" >> "$GITHUB_OUTPUT"
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ steps.stack-python.outputs.version }}
       - name: guard.py по всем артефактам задач
         run: |
+          # Ветка task/** — не источник истины для tasks/<id>/ (SPEC
+          # 01M1R9YEK08XEQWBFX0929WFVJ, требование 4/AC-9): роли коммитят
+          # артефакты только в артефактную ветку (artifact/**), кодовая
+          # ветка задачи несёт в лучшем случае устаревшую легаси-копию —
+          # guard по ней красил CI на расхождении, которого в источнике
+          # истины не было (SPEC «Контекст», 01M1PP0VYRT55WN8GGVG66X89Y).
+          # Источник истины — свой собственный прогон на пуше artifact/**.
+          if [[ "${GITHUB_REF#refs/heads/}" == task/* ]]; then
+            echo "ветка task/** — tasks/<id>/ не источник истины здесь, источник — artifact/** (SPEC 01M1R9YEK08XEQWBFX0929WFVJ)"
+            exit 0
+          fi
+          # На артефактной ветке пульта задачи (`artifact/<id>`) каждый
+          # автокоммит шага роли несёт промежуточные, по определению
+          # неполные артефакты (01M1R66X5SMD3ZEDCVAJ0DR7K2, требование 6):
+          # `--artifact-branch` понижает нарушения содержания черновика
+          # до предупреждения, оставляя нарушения frontmatter и полную
+          # проверку «сданных» артефактов ошибкой. На `main` — вызов без
+          # флага, поведение прежнее.
+          GUARD_ARGS="--all"
+          if [[ "${GITHUB_REF#refs/heads/}" == artifact/* ]]; then
+            GUARD_ARGS="--all --artifact-branch"
+          fi
           if ls tasks/*/*.md >/dev/null 2>&1; then
-            python3 scripts/guard.py --all
+            python3 scripts/guard.py $GUARD_ARGS
           else
             echo "артефактов пока нет — ок"
           fi
@@ -57,11 +85,81 @@ jobs:
             exit 1
           fi
 
+  canary-guid-leak:
+    name: Линт — GUID канареечного пула не протекает в промпты ролей
+    # Мержи пульта идут пушем в main без pull request (merge_gate ->
+    # done), поэтому сторож работает и на push: база — sha до пуша
+    # (`github.event.before`); для новой ветки она нулевая — пропуск.
+    if: github.event_name == 'pull_request' || github.event_name == 'push'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
+      - name: diff не добавляет отметку canary-guid в skills/, templates/, docs/
+        env:
+          BASE_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.event.before }}
+        run: |
+          if [ -z "$BASE_SHA" ] || [ "$BASE_SHA" = "0000000000000000000000000000000000000000" ] \
+             || ! git cat-file -e "$BASE_SHA" 2>/dev/null; then
+            echo "базы для диффа нет (новая ветка или принудительный пуш) — пропуск"
+            exit 0
+          fi
+          # SPEC 01M1NEEWH5K1XPFRDGRMPYSBXJ, требование 7/AC-7: каждый
+          # шаблон пула несёт машиночитаемую метку `canary-guid:` (см.
+          # orchestrator/canary.py, модульный докстринг) — сама метка НЕ
+          # существует нигде в коде пульта (пул живёт вне git), так что
+          # её появление в skills/, templates/ или docs/ пульта
+          # однозначно означает утечку контекста роли в пул (требование
+          # 13). Список конкретных GUID не нужен — паттерн общий.
+          ADDED=$(git diff "$BASE_SHA"...HEAD -- 'skills/*' 'templates/*' 'docs/*' \
+            | grep -E '^\+' | grep -Ev '^\+\+\+' | grep -Ei 'canary-guid:' || true)
+          if [ -n "$ADDED" ]; then
+            echo "::error::диф добавляет отметку canary-guid в skills/, templates/ или docs/ — утечка пула канарейки (SPEC 01M1NEEWH5K1XPFRDGRMPYSBXJ, требование 7):"
+            echo "$ADDED"
+            exit 1
+          fi
+      - name: diff не добавляет значение GUID запечатанного пула в skills/, templates/, docs/
+        env:
+          BASE_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.event.before }}
+        run: |
+          if [ -z "$BASE_SHA" ] || [ "$BASE_SHA" = "0000000000000000000000000000000000000000" ] \
+             || ! git cat-file -e "$BASE_SHA" 2>/dev/null; then
+            echo "базы для диффа нет (новая ветка или принудительный пуш) — пропуск"
+            exit 0
+          fi
+          # SPEC 01M1NSR5M5THYRC0RFWPMVE2DW, требование 4/6: манифест
+          # canary/guids.txt — открытый список GUID запечатанного пула
+          # (ключа расшифровки в CI нет и не нужен — сравнение по
+          # значениям GUID, не по содержимому шаблонов). Появление
+          # любого значения манифеста в skills/, templates/ или docs/
+          # пульта — та же утечка контекста роли в пул, что и общий
+          # маркер canary-guid: выше, только по конкретному значению.
+          if [ ! -f canary/guids.txt ] || [ ! -s canary/guids.txt ]; then
+            echo "canary/guids.txt ещё нет или пуст — пропуск (пул ещё не запечатан)"
+            exit 0
+          fi
+          ADDED=$(git diff "$BASE_SHA"...HEAD -- 'skills/*' 'templates/*' 'docs/*' \
+            | grep -E '^\+' | grep -Ev '^\+\+\+' \
+            | grep -Ff <(grep -v '^[[:space:]]*$' canary/guids.txt) || true)
+          if [ -n "$ADDED" ]; then
+            echo "::error::диф добавляет значение GUID запечатанного пула канарейки в skills/, templates/ или docs/ — утечка (SPEC 01M1NSR5M5THYRC0RFWPMVE2DW, требование 4):"
+            echo "$ADDED"
+            exit 1
+          fi
+
   python:
     name: Синтаксис и тесты оркестратора
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - name: версия Python из манифеста стека (01M1RDCCKBQMJ5G2K9ANJP059H)
+        id: stack-python
+        run: echo "version=$(python3 scripts/stack_ci.py)" >> "$GITHUB_OUTPUT"
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ steps.stack-python.outputs.version }}
+      - name: зависимости из файла закреплённых версий (01M1REVEZ1HESMJ7AFD5A9MEJ8, требование 3)
+        run: python3 -m pip install -r requirements.lock
       - run: python3 -m py_compile orchestrator/artel.py scripts/guard.py
       - name: снимок ссылок репозитория до прогона тестов (SPEC 01M1KVGD18P9H5WR7VM8TGPV1T, требование 1)
         run: git for-each-ref --format='%(refname) %(objectname)' refs/heads/ refs/artifacts/ > /tmp/refs-before.txt
@@ -81,6 +179,14 @@ jobs:
             echo "::error::прогон tests/ изменил набор ссылок репозитория — см. diff выше"
             exit 1
           fi
+      - name: минимальная версия Python из манифеста (01M1RDCCKBQMJ5G2K9ANJP059H, требование 2)
+        id: stack-python-min
+        run: echo "version=$(python3 scripts/stack_ci.py --min)" >> "$GITHUB_OUTPUT"
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ steps.stack-python-min.outputs.version }}
+      - name: tests.test_invariants на минимальной объявленной версии Python (AC-2)
+        run: python3 -m unittest tests.test_invariants -v
 
   protected-paths:
     name: Enforcement, конфиги системы меняет только Оператор
@@ -111,6 +217,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with: { fetch-depth: 0 }
+      - name: версия Python из манифеста стека (01M1RDCCKBQMJ5G2K9ANJP059H)
+        id: stack-python
+        run: echo "version=$(python3 scripts/stack_ci.py)" >> "$GITHUB_OUTPUT"
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ steps.stack-python.outputs.version }}
       - name: генератор отрабатывает без ошибок (AC-7, AC-8)
         run: python3 scripts/codebase_map.py
       - name: закоммиченная карта не стухла (AC-9; ред. Оператора 26.08 — сверка содержимым)

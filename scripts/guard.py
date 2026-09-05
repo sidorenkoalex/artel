@@ -10,7 +10,27 @@
 Использование:
     python3 scripts/guard.py tasks/T001/SPEC.md [ещё файлы...]
     python3 scripts/guard.py --all          # все артефакты в tasks/
+    python3 scripts/guard.py --all --artifact-branch   # режим артефактной
+                                                        # ветки (ниже)
 Выход: 0 — ок, 1 — есть нарушения (список в stdout).
+
+Режим артефактной ветки (`--artifact-branch`, 01M1R66X5SMD3ZEDCVAJ0DR7K2):
+CI на пуш ветки `artifact/<id>` видит промежуточные, по определению
+неполные артефакты каждого автокоммита шага роли. С этим флагом для
+черновика (`status: draft`) типов spec/plan/review/test_report найденное
+нарушение содержания (обязательные секции, zones, AC-разметка и т.п.) не
+роняет процесс — только печатается предупреждением; нарушение
+frontmatter (task/type/schema_version) остаётся ошибкой. Для «сданного»
+статуса и для типов tz/questions/answer — поведение как без флага, без
+исключений. Первая строка вывода с флагом — сводка «сдано N / черновиков
+M / нарушений K». Без флага — поведение и формат вывода прежние.
+
+Посторонний файл в `acceptance_tests/` (режим `--all`, оба варианта — с
+`--artifact-branch` и без, SPEC 01M1SAA01YRRTWAVADT2F81RRQ): файл вне
+разрешённого набора первого уровня (`test_*.py`, `_sandbox.py`,
+`markers.py`, `__init__.py`, `*.md`/`*.txt`) — именованная ошибка
+«посторонний файл в каталоге планки», не попытка разбора его как
+артефакта с frontmatter.
 """
 import ast
 import re
@@ -382,6 +402,73 @@ def scan_id_format_samples(tdir: Path) -> list[str]:
         except (OSError, UnicodeDecodeError):
             continue
     return id_format_sample_errors(files)
+
+
+# --------------------------------------------------------------------------
+# Посторонний файл в каталоге планки (SPEC 01M1SAA01YRRTWAVADT2F81RRQ,
+# требование 2/AC-3/AC-6): инцидент 05.09 — `scripts/codebase_map.py`,
+# запущенный с cwd внутри `acceptance_tests/`, оставлял на диске
+# `acceptance_tests/docs/codebase-map.md`, и guard в режиме `--all`
+# честно пытался разобрать его как артефакт с frontmatter вместо
+# понятного нарушения структуры. Критерий допустимости — тот же список,
+# что называет SPEC (и независимо, той же регуляркой, реализует
+# `orchestrator/checkpoint.py::_is_stray_acceptance_test_file` для
+# автокоммита — общего модуля под критерий зона задачи не заводит,
+# guard сознательно лёгкий скрипт без зависимости на `orchestrator.
+# checkpoint`/`store`/`gitcmd`).
+EXTRANEOUS_ACCEPTANCE_FILE_REASON = "посторонний файл в каталоге планки"
+ACCEPTANCE_TESTS_ALLOWED_TOP_LEVEL = re.compile(
+    r"^(test_.*\.py|_sandbox\.py|markers\.py|__init__\.py|.+\.md|.+\.txt)$")
+
+
+def is_extraneous_acceptance_test_file(rel_to_acceptance_tests: str) -> bool:
+    """`rel_to_acceptance_tests` — путь файла относительно `acceptance_tests/`
+    (`/`-разделённый, например `test_x.py` или `docs/codebase-map.md`).
+    `True` — файл вне разрешённого набора первого уровня (AC-1 задачи
+    01M1SAA01YRRTWAVADT2F81RRQ)."""
+    if "/" in rel_to_acceptance_tests:
+        return True
+    return not ACCEPTANCE_TESTS_ALLOWED_TOP_LEVEL.match(rel_to_acceptance_tests)
+
+
+def scan_extraneous_acceptance_files(tasks_root: Path) -> list[Path]:
+    """Посторонние файлы под `<tasks_root>/*/acceptance_tests/` — по всем
+    каталогам задач сразу (режим `--all`, требование 2). `__pycache__/`
+    исключён на любой глубине — та же уже игнорируемая директория, что
+    `checkpoint.py` пропускает через `.gitignore` (AC-1: критерий
+    одинаков независимо от того, git это фильтрует или обычный обход
+    диска, каким сканирует guard).
+
+    Задача, уже закрытая ДО появления этого правила (несёт
+    `docs/retro/<id>.md`), не сканируется вовсе — тот же принцип, что и
+    `_closed_before_split_assessment` ниже (ANSWER-3 tasks/
+    01M1KS8K9RXWHX2PW3ZKB0P903, модульный докстринг выше: «новые правила
+    guard действуют на живые задачи, история не переписывается»).
+    Обнаружено эмпирически прогоном `--all` на реальном дереве пульта:
+    несколько давно закрытых задач несут легитимные вспомогательные
+    файлы вида `_util.py`/`_race.py` в `acceptance_tests/` — без этого
+    исключения новое правило красило бы `guard --all` на main для
+    ЛЮБОЙ последующей ветки, не только для задач, реально нарушающих
+    AC-1 сегодня.
+    """
+    if not tasks_root.is_dir():
+        return []
+    extraneous: list[Path] = []
+    for task_dir in sorted(tasks_root.iterdir()):
+        if (RETRO_DIR / f"{task_dir.name}.md").exists():
+            continue
+        tests_dir = task_dir / "acceptance_tests"
+        if not tests_dir.is_dir():
+            continue
+        for f in sorted(tests_dir.rglob("*")):
+            if not f.is_file():
+                continue
+            rel_parts = f.relative_to(tests_dir).parts
+            if "__pycache__" in rel_parts:
+                continue
+            if is_extraneous_acceptance_test_file("/".join(rel_parts)):
+                extraneous.append(f)
+    return extraneous
 
 
 def traceability_errors_from_content(spec_text: str, meta: dict, tested: set,
@@ -852,7 +939,7 @@ def spec_zones_errors(path: Path | str, meta: dict) -> list[str]:
     return []
 
 
-def check_content(label: str, text: str) -> list[str]:
+def _content_errors(label: str, text: str) -> list[str]:
     """Ядро `check` — структурная проверка уже прочитанного текста, без
     чтения файла: `label` — путь или его подобие, только для текста
     ошибок (не обязательно существующий `Path`).
@@ -861,6 +948,13 @@ def check_content(label: str, text: str) -> list[str]:
     задачи при чужом чекауте рабочей копии (SPEC T031, `orchestrator/
     fsm.py`, `guard_refuses`) — сама структурная проверка не должна
     раздваиваться по источнику текста.
+
+    Полная проверка независимо от `status` — режим артефактной ветки
+    (01M1R66X5SMD3ZEDCVAJ0DR7K2) применяет к её результату послабление
+    для черновиков СНАРУЖИ, в `check_content`, не здесь: эта функция
+    сама ничего не знает о режиме и не должна — единственный источник
+    правды о правилах содержания, которым пользуется и старый путь
+    (без режима), и «сдан»-ветка нового.
     """
     errors: list[str] = []
     meta = yamlmini.frontmatter(text)
@@ -935,6 +1029,74 @@ def check_content(label: str, text: str) -> list[str]:
     return errors
 
 
+# --------------------------------------------------------------------------
+# Режим артефактной ветки (01M1R66X5SMD3ZEDCVAJ0DR7K2): черновик четырёх
+# типов ниже красит CI только нарушением frontmatter, не содержания —
+# автокоммит промежуточного шага не должен гасить каждый прогон CI на
+# `artifact/**` (требования 1-3 SPEC).
+DRAFT_LENIENT_TYPES = {"spec", "plan", "review", "test_report"}
+
+# Поля, которые режим артефактной ветки проверяет у черновика (требование
+# 2): task/type — идентификация артефакта, schema_version — обязана быть
+# НА МЕСТЕ здесь (в отличие от `_content_errors`, где её отсутствие —
+# версия 1 по умолчанию, не ошибка): без версии нельзя судить, какие
+# ПОЗЖЕ, на "сдан", правила content к этому черновику применятся.
+BASIC_META_FIELDS = ("task", "type")
+
+
+def is_draft_lenient(meta: dict) -> bool:
+    """Черновик одного из DRAFT_LENIENT_TYPES — правила содержания к нему
+    в режиме артефактной ветки не применяются (требование 2), только
+    базовые условия frontmatter (`basic_frontmatter_errors`)."""
+    return (meta.get("type") in DRAFT_LENIENT_TYPES
+            and (meta.get("status") or "") == "draft")
+
+
+def basic_frontmatter_errors(label: str, meta: dict) -> list[str]:
+    """Базовые условия режима артефактной ветки для черновика (требование
+    2): frontmatter уже прочитан вызывающим кодом (`check_content`) —
+    здесь только task/type/schema_version на месте и schema_version не
+    выше `SUPPORTED_SCHEMA_VERSION` (`schema_errors`, та же функция, что
+    и полная проверка). Остальные правила содержания (обязательные
+    секции, zones, AC-разметка, split-assessment, реестр, эскалация) для
+    черновика этой проверкой не покрываются — их по-прежнему находит
+    `_content_errors`, а `main()` печатает результат как предупреждение
+    (требование 5), не как ошибку выхода.
+    """
+    errors = list(schema_errors(label, meta))
+    missing = [f for f in BASIC_META_FIELDS if meta.get(f) in (None, "")]
+    if "schema_version" not in meta:
+        missing.append("schema_version")
+    if missing:
+        errors.append(f"{label}: базовая проверка черновика в режиме "
+                      f"артефактной ветки — не заполнены обязательные "
+                      f"поля frontmatter: {', '.join(missing)}")
+    return errors
+
+
+def check_content(label: str, text: str, artifact_branch_mode: bool = False) -> list[str]:
+    """Структурная проверка уже прочитанного текста (см. `_content_errors`).
+
+    `artifact_branch_mode=False` (по умолчанию) — поведение идентично
+    `_content_errors` без единого исключения (требование 1, AC-1): все
+    существующие вызыватели (`check`, `orchestrator/fsm.py::guard_refuses`
+    и переходы FSM через него, тесты) не передают этот параметр и не
+    видят разницы.
+
+    `artifact_branch_mode=True` — режим артефактной ветки (требование
+    1): для черновика (`is_draft_lenient`) возвращает только базовые
+    нарушения frontmatter (`basic_frontmatter_errors`); для всех
+    остальных случаев (не черновик, либо тип вне DRAFT_LENIENT_TYPES,
+    т.е. tz/questions/answer — требование 3) — тот же полный список, что
+    и без режима (требование 2, вторая часть; требование 3).
+    """
+    if artifact_branch_mode:
+        meta = yamlmini.frontmatter(text)
+        if meta is not None and is_draft_lenient(meta):
+            return basic_frontmatter_errors(label, meta)
+    return _content_errors(label, text)
+
+
 def check(path: Path) -> list[str]:
     try:
         text = path.read_text(encoding="utf-8")
@@ -946,18 +1108,95 @@ def check(path: Path) -> list[str]:
     return check_content(str(path), text)
 
 
+ARTIFACT_BRANCH_FLAG = "--artifact-branch"
+
+
+def _artifact_branch_report(files: list[Path]) -> tuple[list[str], list[str], int, int]:
+    """(ошибки, предупреждения, сдано, черновиков) по набору файлов в
+    режиме артефактной ветки (требования 2, 4, 5): для черновика
+    DRAFT_LENIENT_TYPES найденные нарушения содержания уходят в
+    предупреждения, для всех остальных случаев — в ошибки, тем же
+    правилом, что и `check_content(..., artifact_branch_mode=True)`.
+    """
+    errors: list[str] = []
+    warnings: list[str] = []
+    submitted = 0
+    drafts = 0
+    for f in files:
+        if not f.exists():
+            errors.append(f"{f}: файл не найден")
+            continue
+        try:
+            text = f.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError) as exc:
+            errors.append(f"{f}: не прочитан: {exc}")
+            continue
+
+        label = str(f)
+        meta = yamlmini.frontmatter(text)
+        status = (meta or {}).get("status") or ""
+        if status == "draft":
+            drafts += 1
+        else:
+            submitted += 1
+
+        full = _content_errors(label, text)
+        if meta is not None and is_draft_lenient(meta):
+            file_errors = basic_frontmatter_errors(label, meta)
+            file_warnings = [e for e in full if e not in file_errors]
+        else:
+            file_errors = full
+            file_warnings = []
+        errors.extend(file_errors)
+        warnings.extend(file_warnings)
+    return errors, warnings, submitted, drafts
+
+
 def main() -> int:
     args = sys.argv[1:]
+    artifact_branch_mode = ARTIFACT_BRANCH_FLAG in args
+    if artifact_branch_mode:
+        args = [a for a in args if a != ARTIFACT_BRANCH_FLAG]
+
     if not args:
         print(__doc__)
         return 1
 
+    extraneous_errors: list[str] = []
     if args == ["--all"]:
         files = sorted(Path("tasks").rglob("*.md"))
+        # Посторонние файлы `acceptance_tests/` (SPEC
+        # 01M1SAA01YRRTWAVADT2F81RRQ, требование 2) — исключаются из
+        # обычного обхода `*.md` ДО `check`/`_artifact_branch_report`
+        # (иначе, например, инцидентный `acceptance_tests/docs/
+        # codebase-map.md` попал бы туда и получил ошибку разбора
+        # frontmatter вместо именованной причины ниже).
+        extraneous = scan_extraneous_acceptance_files(Path("tasks"))
+        extraneous_set = set(extraneous)
+        files = [f for f in files if f not in extraneous_set]
+        extraneous_errors = [f"{f}: {EXTRANEOUS_ACCEPTANCE_FILE_REASON}"
+                             for f in extraneous]
     else:
         files = [Path(a) for a in args]
 
-    all_errors: list[str] = []
+    if artifact_branch_mode:
+        errors, warnings, submitted, drafts = _artifact_branch_report(files)
+        errors = extraneous_errors + errors
+        print(f"сдано {submitted} / черновиков {drafts} / "
+              f"нарушений {len(errors) + len(warnings)}")
+        if warnings:
+            print("GUARD: предупреждения (черновики артефактной ветки):")
+            for w in warnings:
+                print(f"  - {w}")
+        if errors:
+            print("GUARD: нарушения структуры артефактов (сдано):")
+            for e in errors:
+                print(f"  - {e}")
+            return 1
+        print(f"GUARD: ок ({len(files)} файлов)")
+        return 0
+
+    all_errors: list[str] = list(extraneous_errors)
     for f in files:
         if not f.exists():
             all_errors.append(f"{f}: файл не найден")

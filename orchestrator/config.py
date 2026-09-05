@@ -47,6 +47,19 @@ AGENT_SETTING_SOURCES = "user"
 # Рабочая поверхность задачи (SPEC T045): git worktree на её ветке в
 # стандартном месте — `orchestrator/workspace.py` эту норму несёт.
 WORKTREES = ROOT / ".artel" / "worktrees"
+# Файл закреплённых версий сторонних пакетов пульта — pytest/pytest-timeout/
+# pytest-xdist и их транзитивные зависимости, формат `pip` (SPEC
+# 01M1REVEZ1HESMJ7AFD5A9MEJ8, требование 1). Единственный источник версий
+# для `.artel/venv` (`orchestrator/venv.py::sync`) и для CI (джоб `python`,
+# `.github/workflows/ci.yml`, диф-приложение) — версии не дублируются
+# литералами ни в одном из этих мест.
+REQUIREMENTS_LOCK = ROOT / "requirements.lock"
+# Venv пульта (требование 2): создаётся `venv-sync`/`orchestrator/venv.py`
+# тем же интерпретатором, что и сам пульт (`REQUIRED_PYTHON`,
+# `orchestrator/stack.py`) — `check_stack()` сверяет его с
+# `REQUIREMENTS_LOCK` выше, `runner.role_env` отказывает без согласованного
+# venv (требование 4).
+VENV_DIR = ROOT / ".artel" / "venv"
 
 # 30 минут; временный подъём до 2700 на стройку M1 (02.09) возвращён
 # после мержа T094 тем же днём (класс «лимит», ADR-0002). Повторный
@@ -183,6 +196,11 @@ DOCTOR_MIN_FREE_MB = 500
 # требование 8): активная задача, чья ветка отстала от MAIN_BRANCH больше
 # чем на столько коммитов, — warn. Дефолт «порядка 10» из SPEC.
 STALE_BRANCH_WARN_COMMITS = 10
+# Предпросмотр сирот-веток artifact/* в `doctor`/`doctor --fix` (SPEC
+# 01M1REVP9WGRHDDNVEVE8BBH0Z, требования 3-4): печатается число
+# кандидатов на удаление целиком, но их имён — только первые N. Значение
+# по аналогии с соседними лимитами превью-списков (CI_RUN_LIST_LIMIT).
+DOCTOR_ORPHAN_PREVIEW_LIMIT = 20
 # Маркер последнего бэкапа .artel/: механизм бэкапа — настройка Оператора
 # (Time Machine/rsync, ADR-0003 3к), если Оператор всё же решит его вести.
 # Отдельный бэкап .artel/ решением Оператора 27.08 не ведётся (ADR-0005
@@ -205,6 +223,13 @@ AUTO_MAX_STEPS = 30
 # значение SPEC (требование 2); меняет только Оператор (ADR-0002, класс
 # «лимит»).
 AUTO_STALL_STEPS_LIMIT = 5
+# Возрастной порог сторожа зависших прогонов тестов (SPEC
+# 01M1PNBSHR2PMFECMP7C204MF1, требование 3, AC-8): процесс `python -m
+# unittest`/`pytest` с cwd внутри `.artel/worktrees/` старше этого
+# порога и без живого lease его задачи — инцидент (см.
+# `orchestrator/doctor.py::check_hung_test_runs`). Дефолт SPEC — 10 минут.
+HUNG_TEST_RUN_AGE_SEC = 600
+
 # Порог свежести heartbeat lease задачи (SPEC T044, требование 6): моложе —
 # lease держит замок, старше — перехватывается другой сессией (требование 5).
 # Значение — с запасом над худшим легитимным временем ОДНОГО `run` без
@@ -227,6 +252,39 @@ MAX_PARALLEL_TASKS = 10
 # |отклонение| суммарных стоимости/шагов текущего прогона от baseline.json,
 # после которого отчёт печатает предупреждение. Дефолт из SPEC — 50%.
 CANARY_DEVIATION_RATIO = 0.5
+# Каталог пула шаблонов канарейки v2 ВНЕ корня пульта (SPEC
+# 01M1NEEWH5K1XPFRDGRMPYSBXJ, требование 1) — под `Path.home()`, не под
+# `ROOT`: заводится и наполняется Оператором вручную («Не входит» той
+# же SPEC), код только читает уже существующий каталог. Имя — тот же
+# литерал, что несут: SPEC (буквально), `doctor.check_role_log_pool_leak`
+# (требование 13б), и `permissions.deny` курируемого слоя роли
+# (требование 13а, `docs/reference/role-home/claude/settings.json`).
+CANARY_POOL_DIRNAME = ".artel-canary"
+# Слот keychain пульта, несущий симметричный ключ шифрования пула (SPEC
+# 01M1NSR5M5THYRC0RFWPMVE2DW, требование 1/AC-2) — тот же механизм, что
+# токены ролей (`orchestrator/keychain.py::token`), отдельный слот
+# (ANSWER-1 п.3). Заводит Оператор вручную (`security add-generic-
+# password`), код только читает.
+CANARY_POOL_KEY_SLOT = "artel-canary-pool-key"
+# Потолок ПОДРЯД идущих циклов возврата из `escalated` ОДНОЙ канареечной
+# задачи (REVIEW.md 01M1NEEWH5K1XPFRDGRMPYSBXJ итерации 1, R1-F1):
+# `review_iters` не сбрасывается при возврате из `escalated` (общее
+# свойство FSM, orchestrator/fsm.py:829 и копия в orchestrator/canary.py)
+# — задача, чей лимит ревью уже исчерпан, эскалируется заново на первом
+# же следующем `changes_requested`. Без потолка `canary._drive_task`
+# гонял бы такую задачу по кругу — каждый круг реально тратит бюджет
+# задачи — пока он не исчерпается сам; потолок останавливает это раньше
+# и алертом, не молча.
+CANARY_MAX_ESCALATION_CYCLES = 3
+# Потолок ПОДРЯД идущих проходов внутреннего цикла `canary._drive_task`
+# без прогресса — ни смена состояния, ни расход бюджета (REVIEW.md
+# 01M1NEEWH5K1XPFRDGRMPYSBXJ итерации 1, R1-F1, второй сценарий: бюджет
+# задачи исчерпан, состояние агентское — `runner.cmd_run` отказывает
+# `SystemExit`'ом ДО смены состояния на каждом вызове, `auto.cmd_auto`
+# эту причину не отличает от «шаг ещё не готов» и просто возвращается.
+# Без этого потолка `_drive_task` крутился бы здесь бесконечно, вешая
+# весь прогон `cmd_canary` навсегда.
+CANARY_MAX_STALL_ITERS = 3
 # Retention-политика (tasks/T073/SPEC.md, требование 1, docs/retention.md).
 # `.artel/logs/` — прунятся, только когда лог ОДНОВРЕМЕННО старше
 # LOG_RETENTION_DAYS И его задача вне последних LOG_RETENTION_KEEP_TASKS по
@@ -361,6 +419,16 @@ TOKEN_RATE_DIVERGENCE_ALERT_THRESHOLD = 0.5
 # ОДНОГО шага, которую видит бюджетный гейт (`budget.budget_block`/
 # `enforce_budget`, требование 5) вместо нуля.
 STEP_COST_ESTIMATE_USD = 5.0
+
+# Ориентир числа вызовов инструментов роли `developer` за шаг для оценки
+# «стоимость карты за шаг developer» (`report.map_growth_cost_estimate`,
+# SPEC 01M1RGQV4DG2FX1B90W4EEETTR, требование 1, AC-3) — используется,
+# когда логов `developer` в выборке последних 10 задач нет вовсе (retention
+# уже вычистил файлы, либо ни одна из них ещё не дошла до этого шага).
+# Значение — тот же порядок величины, что типичный шаг `developer` по
+# наблюдению за живыми логами; не измеряется точно, поэтому оценка на этой
+# константе всегда явно помечена словом «оценка» в выводе `report`.
+MAP_GROWTH_CALLS_ESTIMATE = 40
 
 # Статусы REVIEW.md, которые FSM отрабатывает как вердикт ревьювера.
 REVIEW_VERDICTS = ("approved", "changes_requested", "escalate")

@@ -58,9 +58,9 @@ import time
 from collections import namedtuple
 from pathlib import Path
 
-from . import (alerts, artifact_branch, coldstart, config, gitcmd, liveness,
-              projects, roles, runner, snapshot, spend, store, targets,
-              workspace, zone_lock)
+from . import (alerts, artifact_branch, canary, coldstart, config, gitcmd,
+              liveness, projects, roles, runner, snapshot, spend, stack,
+              store, targets, workspace, zone_lock)
 
 # status: "ok" | "warn" | "fail" | "skip" ("skip" — честный пропуск проверки,
 # требование 9: сверка forge-политики без `gh`/сети — не провал и не ок).
@@ -168,6 +168,55 @@ def check_disk_space() -> Check:
                      f"{free_mb:.0f} МБ свободно — меньше порога "
                      f"{config.DOCTOR_MIN_FREE_MB} МБ, освободи место")
     return Check("disk-space", "ok", f"{free_mb:.0f} МБ свободно")
+
+
+def _role_home_diff(reference: Path, deployed: Path) -> set[str]:
+    """Пути (относительно референса), отличающиеся между референсом
+    курируемого слоя и его развёрнутой копией — по каждому файлу
+    РЕФЕРЕНСА: отсутствует в развёрнутом слое или отличается побайтово
+    (SPEC 01M1RDCEF0JZ4AVQRE43JFH8TN, AC-13).
+
+    Файлы, которых нет в референсе, но которые появились в развёрнутом
+    слое, — не расхождение: Оператор легитимно расширяет `.artel/home`
+    по ходу работы (docs/reference/role-home.md, «Курирование»), а
+    `claude` CLI пишет туда собственные рантайм-файлы на каждом шаге
+    роли (`CLAUDE_CONFIG_DIR`) — учёт этих файлов как расхождения дал
+    бы WARN постоянно, вне зависимости от реального состояния
+    курируемого слоя (REVIEW.md итерации 1, R1-F1)."""
+    diffs = set()
+    for path in reference.rglob("*"):
+        if not path.is_file():
+            continue
+        rel = path.relative_to(reference)
+        counterpart = deployed / rel
+        if not counterpart.is_file() or counterpart.read_bytes() != path.read_bytes():
+            diffs.add(str(rel))
+    return diffs
+
+
+def check_role_home_reference() -> Check:
+    """Сверка развёрнутого курируемого слоя роли (`config.ROLE_CONFIG_DIR`)
+    с референсом (`docs/reference/role-home/claude`) — WARN с перечнем
+    отличающихся файлов, без автоправки (SPEC 01M1RDCEF0JZ4AVQRE43JFH8TN,
+    требование 5, AC-13): деплой (`catalog._deploy_role_home_reference`)
+    копирует референс только при холодном старте, поэтому расхождение,
+    внесённое Оператором вручную позже, никак иначе не всплывает.
+    """
+    reference = config.ROOT / "docs" / "reference" / "role-home" / "claude"
+    deployed = config.ROLE_CONFIG_DIR
+    if not deployed.is_dir():
+        return Check("role-home-reference", "ok",
+                     "курируемый слой ещё не развёрнут")
+    if not reference.is_dir():
+        return Check("role-home-reference", "ok",
+                     "референс отсутствует — сверка невозможна")
+    diffs = _role_home_diff(reference, deployed)
+    if diffs:
+        return Check("role-home-reference", "warn",
+                     f"развёрнутый слой .artel/home/.claude отличается от "
+                     f"референса: {', '.join(sorted(diffs))}")
+    return Check("role-home-reference", "ok",
+                 "развёрнутый слой совпадает с референсом")
 
 
 def check_target_layout(target: str) -> Check:
@@ -302,6 +351,13 @@ def isolation_smoke(role: str = "developer") -> Check:
         os.environ["HOME"] = fake_home
         try:
             env = runner.role_env(role)
+        except OSError as exc:
+            # Тот же класс отказа, что уже ловят `check_git_identity`/
+            # `_live_smoke_run` (SPEC 01M1RDCEF0JZ4AVQRE43JFH8TN, AC-6):
+            # объявленный инструмент манифеста не найден — не повод
+            # уронить весь `doctor` необработанным исключением.
+            return Check("isolation-smoke", "fail",
+                        f"окружение роли не подготовлено: {exc}")
         finally:
             if prior_home is None:
                 os.environ.pop("HOME", None)
@@ -611,6 +667,125 @@ def check_orphans(conn) -> list[Check]:
     return results
 
 
+# --- изоляция пула канарейки от ролей (SPEC 01M1NEEWH5K1XPFRDGRMPYSBXJ,
+#     требование 13) ---------------------------------------------------
+
+def check_role_log_pool_leak(conn) -> Check:
+    """Требование 13б: логи шагов ролей проверяются на упоминание
+    каталога пула канарейки — совпадение поднимает incident-алерт
+    (AC-15). «На каждом doctor» — буквально из требования; второй
+    триггер требования 13б («после каждого прогона канарейки») — часть
+    механики `canary`, покрытой отдельно (AC-1..12), не этой проверки.
+
+    Из трёх сигналов утечки, названных требованием 13б (каталог пула,
+    имя его репозитория, GUID шаблона), проверяется только каталог пула
+    (`config.CANARY_POOL_DIRNAME`) — единственный, зафиксированный кодом
+    самого SPEC (требование 1); имя репозитория пула и GUID шаблонов —
+    содержимое пула, ручная настройка Оператора («Не входит» SPEC), не
+    значение, которое код мог бы знать заранее.
+
+    Не заводит `_auto_ack_gone`, в отличие от `check_orphans`: утечка
+    контекста роли — инцидент, требующий разбора Оператором, а не
+    состояние, самоустраняющееся ротацией логов (`prune`) без его
+    внимания.
+    """
+    if not config.LOGS.is_dir():
+        return Check("canary-pool-leak", "ok", "логов ролей ещё нет")
+    marker = config.CANARY_POOL_DIRNAME
+    leaking = []
+    for path in sorted(config.LOGS.glob("*.log")):
+        try:
+            text = path.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        if marker in text:
+            leaking.append(path.name)
+    if not leaking:
+        return Check("canary-pool-leak", "ok",
+                     "логи ролей не упоминают каталог пула канарейки")
+    for name in leaking:
+        alerts.raise_alert(
+            conn, None, "incident", "doctor.canary-pool-leak",
+            f"лог роли {name} упоминает каталог пула канарейки ({marker}) "
+            f"— утечка контекста роли (SPEC 01M1NEEWH5K1XPFRDGRMPYSBXJ, "
+            f"требование 13б)")
+    return Check("canary-pool-leak", "fail",
+                f"логи ролей упоминают каталог пула: {', '.join(leaking)}")
+
+
+def check_canary_pool_drift() -> Check:
+    """AC-8 (SPEC 01M1NSR5M5THYRC0RFWPMVE2DW, требование 3): предупреждает,
+    если открытый пул `~/.artel-canary` разошёлся с запечатанным
+    `canary/pool.sealed` — незапечатанные правки Оператора."""
+    warning = canary.pool_drift_warning()
+    if warning is None:
+        return Check("canary-pool-drift", "ok",
+                     "открытый пул канарейки не расходится с запечатанным "
+                     "(либо пул/pool.sealed не развёрнуты)")
+    return Check("canary-pool-drift", "warn", warning)
+
+
+def check_token_repo_scope() -> list[Check]:
+    """Требование 13в: предупреждает, если токен роли (слот keychain)
+    виден более чем в одном репозитории GitHub (AC-16).
+
+    Best-effort: единственный источник истины — реальный охват PAT на
+    GitHub прямо сейчас — недетерминирован и недоступен offline
+    (`markers.py`, AC-16 этой задачи, тот же класс зависимости, что и
+    `check_token_repo_scope`'s собственный сетевой поход) — `gh`/сеть
+    недоступны или токен не найден — честный `skip`, не блок доктора.
+    Токены дедуплицируются по значению: сегодня (Фаза 0, roles.yaml
+    `token_fallback`) все роли падают в один и тот же PAT — опрашивать
+    его охват от каждой роли отдельно значило бы платить одним и тем же
+    сетевым походом N раз.
+    """
+    if shutil.which("gh") is None:
+        return [Check("token-repo-scope", "skip", "gh CLI не найден")]
+    try:
+        role_names = sorted(
+            name for name, entry in roles.load().items()
+            if isinstance(entry, dict) and entry.get("executor") == "agent")
+    except roles.RolesError as exc:
+        return [Check("token-repo-scope", "skip", str(exc))]
+    seen: dict = {}
+    results = []
+    for role in role_names:
+        token = runner.role_token(role)
+        if not token or token in seen:
+            continue
+        seen[token] = role
+        try:
+            res = subprocess.run(
+                ["gh", "api", "user/repos", "--paginate", "-q",
+                 ".[].full_name"],
+                env={**os.environ, "GH_TOKEN": token},
+                capture_output=True, text=True, timeout=20)
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            results.append(Check("token-repo-scope", "skip",
+                                f"роль {role}: {exc}"))
+            continue
+        if res.returncode != 0:
+            results.append(Check(
+                "token-repo-scope", "skip",
+                f"роль {role}: область токена не опрошена — "
+                f"{res.stderr.strip()[:150]}"))
+            continue
+        repos = {line.strip() for line in res.stdout.splitlines() if line.strip()}
+        if len(repos) > 1:
+            results.append(Check(
+                "token-repo-scope", "warn",
+                f"роль {role}: токен виден в {len(repos)} репозиториях "
+                f"({', '.join(sorted(repos))}) — рекомендуется "
+                f"fine-grained токен на один репозиторий (SPEC "
+                f"01M1NEEWH5K1XPFRDGRMPYSBXJ, требование 13в)"))
+        else:
+            results.append(Check(
+                "token-repo-scope", "ok",
+                f"роль {role}: токен виден в {len(repos)} репозитории(ях)"))
+    return results or [Check("token-repo-scope", "skip",
+                             "ни у одной agent-роли не нашлось токена")]
+
+
 # --- свежесть ветки (SPEC T051, требование 8) -----------------------------
 
 def check_branch_freshness(conn) -> list[Check]:
@@ -866,6 +1041,200 @@ def check_merge_lock(conn) -> list[Check]:
     return result
 
 
+# --- сторож зависших прогонов тестов --------------------------------------
+# (SPEC 01M1PNBSHR2PMFECMP7C204MF1, требование 3, AC-8..AC-12/AC-15)
+
+# `python -m unittest`/`pytest` в командной строке процесса (AC-8) — та
+# же пара инструментов, что оставила шесть висящих прогонов инцидента
+# 04.09 (SPEC «Контекст»).
+_HUNG_TEST_CMD_RE = re.compile(r"\bpytest\b|-m\s+unittest\b")
+# `ps -o etime=`: `[[дни-]часы:]минуты:секунды` (macOS/BSD и Linux —
+# общий формат).
+_ETIME_RE = re.compile(r"^(?:(\d+)-)?(?:(\d+):)?(\d+):(\d+)$")
+
+
+def _etime_to_seconds(etime: str) -> float | None:
+    match = _ETIME_RE.match(etime.strip())
+    if match is None:
+        return None
+    days, hours, minutes, seconds = match.groups()
+    total = int(minutes) * 60 + int(seconds)
+    if hours:
+        total += int(hours) * 3600
+    if days:
+        total += int(days) * 86400
+    return float(total)
+
+
+def _running_processes() -> list[tuple[int, float, str]]:
+    """(pid, возраст в секундах, командная строка) всех процессов машины;
+    пустой список — `ps` не ответил (тихая деградация, тот же приём, что
+    и у остальных OS-примитивов доктора). `-ww` — без обрезки длинной
+    командной строки (BSD `ps`, macOS)."""
+    try:
+        res = subprocess.run(["ps", "-axww", "-o", "pid=,etime=,command="],
+                             capture_output=True, text=True, timeout=10)
+    except (OSError, subprocess.TimeoutExpired):
+        return []
+    if res.returncode != 0:
+        return []
+    rows = []
+    for line in res.stdout.splitlines():
+        parts = line.strip().split(None, 2)
+        if len(parts) < 3:
+            continue
+        pid_s, etime_s, command = parts
+        try:
+            pid = int(pid_s)
+        except ValueError:
+            continue
+        age = _etime_to_seconds(etime_s)
+        if age is None:
+            continue
+        rows.append((pid, age, command))
+    return rows
+
+
+def _process_cwd(pid: int) -> str | None:
+    """cwd процесса `pid` по `lsof` (`ps` его не несёт вовсе) — `None`,
+    если `lsof` не ответил или процесс уже исчез."""
+    try:
+        res = subprocess.run(["lsof", "-a", "-p", str(pid), "-d", "cwd", "-Fn"],
+                             capture_output=True, text=True, timeout=10)
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if res.returncode != 0:
+        return None
+    for line in res.stdout.splitlines():
+        if line.startswith("n"):
+            return line[1:]
+    return None
+
+
+def _hung_test_run_task_id(cwd: str) -> str | None:
+    """id задачи по cwd процесса — первый сегмент относительно
+    `config.WORKTREES` (тот же критерий легитимности, что и
+    `_is_legit_task_worktree`); `.resolve()` на обеих сторонах — cwd,
+    отданный `lsof`, разрешает симлинки ОС (`/var` -> `/private/var` на
+    macOS), путь `config.WORKTREES` из песочницы теста иначе не совпал
+    бы с ним побайтово."""
+    try:
+        rel = Path(cwd).resolve().relative_to(config.WORKTREES.resolve())
+    except (ValueError, OSError):
+        return None
+    return rel.parts[0] if rel.parts else None
+
+
+def _hung_test_run_task_lease_alive(conn, task_id: str) -> bool:
+    """AC-9: «нет живого lease» — тот же критерий «мёртв», что и
+    `check_leases`'s кандидаты (свой host и pid не адресуем); лизы нет
+    вовсе, чужой host или pid жив — консервативно считается живым (не
+    трогать чужое, если есть хоть малейшее сомнение)."""
+    row = store.lease_row(conn, task_id)
+    if row is None:
+        return False
+    if row["hostname"] != socket.gethostname():
+        return True
+    return liveness._pid_alive(row["pid"])
+
+
+def _find_hung_test_runs(conn) -> list[dict]:
+    """Кандидаты сторожа (AC-8/AC-9): `python -m unittest`/`pytest` с cwd
+    внутри `.artel/worktrees/<id>`, старше `config.HUNG_TEST_RUN_AGE_SEC`,
+    чья задача не держит живой lease."""
+    found = []
+    for pid, age, command in _running_processes():
+        if age < config.HUNG_TEST_RUN_AGE_SEC:
+            continue
+        if not _HUNG_TEST_CMD_RE.search(command):
+            continue
+        cwd = _process_cwd(pid)
+        if cwd is None:
+            continue
+        task_id = _hung_test_run_task_id(cwd)
+        if task_id is None:
+            continue
+        if _hung_test_run_task_lease_alive(conn, task_id):
+            continue
+        found.append({"pid": pid, "age": age, "cwd": cwd, "task_id": task_id})
+    return found
+
+
+_HUNG_TEST_ALERT_RE = re.compile(
+    r"^зависший прогон тестов: pid (\d+), worktree .+, возраст \d+ сек$")
+
+
+def _hung_test_run_alert_live(message: str) -> bool:
+    match = _HUNG_TEST_ALERT_RE.match(message)
+    if match is None:
+        return True
+    return liveness._pid_alive(int(match.group(1)))
+
+
+def check_hung_test_runs(conn) -> list[Check]:
+    """AC-8..AC-10: только поиск и алерт — снятие живёт отдельно, под
+    `doctor --fix` (`_fix_hung_test_runs`, AC-11/AC-12): тот же водораздел
+    «наблюдение/действие», что `check_leases`/`_fix_dead_lease_groups`
+    уже применяют к мёртвому lease (ANSWER-1, вариант B)."""
+    candidates = _find_hung_test_runs(conn)
+    if not candidates:
+        results = [Check("hung-test-runs", "ok",
+                         "зависших прогонов тестов не найдено")]
+    else:
+        results = []
+        for c in candidates:
+            message = (f"зависший прогон тестов: pid {c['pid']}, worktree "
+                      f"{c['cwd']}, возраст {int(c['age'])} сек")
+            alerts.raise_alert(conn, store.task_target(conn, c["task_id"]),
+                               "incident", "doctor.hung_test_runs", message)
+            results.append(Check("hung-test-runs", "fail", message))
+    _auto_ack_gone(conn, "doctor.hung_test_runs", _hung_test_run_alert_live)
+    return results
+
+
+def _fix_hung_test_runs(conn) -> None:
+    """`doctor --fix` (AC-11): снимает найденные `check_hung_test_runs`
+    прогоны ГРУППОЙ (лидер + реальные потомки — аналог pytest-xdist
+    воркера) и пишет перечень снятых pid в алерт (не только в журнал
+    задачи — «в журнал алертов», AC-11). Обычный прогон (без `--fix`,
+    AC-12) сюда не заходит вовсе."""
+    candidates = _find_hung_test_runs(conn)
+    if not candidates:
+        return
+    fixed = []
+    for c in candidates:
+        try:
+            pgid = os.getpgid(c["pid"])
+        except ProcessLookupError:
+            continue
+        count = liveness.terminate_process_group(pgid)
+        fixed.append(f"{c['task_id']}: pid {c['pid']} "
+                    f"({count} процесс(ов) группы)")
+    if not fixed:
+        return
+    alerts.raise_alert(conn, None, "incident", "doctor.hung_test_runs.fix",
+                       f"зависшие прогоны тестов сняты (doctor --fix): "
+                       f"{'; '.join(fixed)}")
+    print(f"  зависшие прогоны тестов сняты: {'; '.join(fixed)}")
+
+
+def _fix_dead_lease_groups(conn) -> None:
+    """`doctor --fix` (SPEC 01M1PNBSHR2PMFECMP7C204MF1, AC-6, ANSWER-1
+    вариант B): остаточная группа процессов МЁРТВОГО lease — снимается
+    ТОЛЬКО здесь, под флагом; `check_leases` остаётся наблюдательным
+    (несёт только алерт, как и раньше, не предмет этой задачи)."""
+    host = socket.gethostname()
+    for row in store.all_leases(conn):
+        if row["hostname"] != host or liveness._pid_alive(row["pid"]):
+            continue
+        if not row["pgid"]:
+            continue
+        count = liveness.terminate_process_group(row["pgid"])
+        store.journal(conn, row["task_id"], "doctor",
+                      "doctor --fix: группа процессов мёртвого lease снята",
+                      liveness.group_kill_detail(row["pgid"], count))
+        print(f"  [FIX] {row['task_id']}: "
+              f"{liveness.group_kill_detail(row['pgid'], count)}")
 def check_zone_waits(conn) -> list[Check]:
     """SPEC 01M1P9QAG65GVF69YJEV0V18D9, требование 4: задача, чей первый
     шаг developer заблокирован занятостью зоны, — видимая проверка
@@ -1060,38 +1429,115 @@ def check_root_pin() -> Check:
 
 ORPHAN_ARTIFACT_BRANCH_SOURCE = "doctor.cleanup.artifact_branches"
 
+# `git ls-remote --heads origin 'artifact/*'` — сверка веток-кандидатов с
+# origin (SPEC 01M1REVP9WGRHDDNVEVE8BBH0Z, требование 1): один и тот же
+# glob на весь прогон уборки, не по одному запросу на ветку (AC-3).
+_REMOTE_ARTIFACT_GLOB = "artifact/*"
+# Сентинел «аргумент не передан», отличимый от легитимных значений
+# `None`/`set()`/`[]` (SPEC 01M1REVP9WGRHDDNVEVE8BBH0Z, «Подход» PLAN):
+# явно переданное `remote`/`orphans` (в т.ч. `None`) — используется как
+# есть, БЕЗ пересчёта; аргумент не передан — функция вычисляет его сама
+# (обратная совместимость с прямыми вызовами существующих юнит-тестов и
+# приёмочных `_sandbox.py`, где `doctor._orphan_artifact_branches(conn)`
+# зовётся с одним аргументом).
+_UNSET = object()
 
-def _orphan_artifact_branches(conn) -> list[str]:
-    """Ветки `artifact/<id>` пульта, для которых нет строки в БД
+
+def _remote_artifact_branch_names() -> set[str] | None:
+    """Имена веток `artifact/<id>`, присутствующих на `origin` (SPEC
+    01M1REVP9WGRHDDNVEVE8BBH0Z, требование 1): единственное место,
+    зовущее `git ls-remote --heads origin 'artifact/*'` — ровно один
+    запрос на весь прогон уборки, не по одному на ветку-кандидата (AC-3).
+
+    `None` — origin не ответил (git не ответил вовсе или вернул ненулевой
+    код возврата, требования 5-6): вызывающий код обязан трактовать это
+    как «критерий не вычислим», НЕ как «на origin ничего нет» — в
+    отличие от `gitcmd.list_branches`/`remote_branch_sha`, где та же
+    деградация к пустоте корректна, здесь пустота означала бы удалить
+    ЛЮБУЮ локальную ветку как сироту (fail-closed, принцип целостности).
+    """
+    res = gitcmd.git("ls-remote", "--heads", "origin", _REMOTE_ARTIFACT_GLOB)
+    if res is None or res.returncode != 0:
+        return None
+    prefix = "refs/heads/"
+    names = set()
+    for line in res.stdout.splitlines():
+        parts = line.split()
+        if len(parts) < 2:
+            continue
+        ref = parts[1]
+        if ref.startswith(prefix):
+            names.add(ref[len(prefix):])
+    return names
+
+
+def _orphan_artifact_branches(conn, remote=_UNSET) -> list[str] | None:
+    """Ветки `artifact/<id>` пульта, для которых НЕТ строки в БД
     (регистронезависимо — `artifact_branch.branch_name` работает с
-    `task_id.lower()`). Только чтение, без удаления — общая часть между
-    `sweep_orphan_artifact_branches` (сама уборка) и `cmd_doctor`
-    (честный CLI-вывод R1-F3: нужно знать, были ли сироты, независимо от
-    того, удалось ли их удалить)."""
+    `task_id.lower()`) И которых нет среди веток `artifact/*` на origin
+    (SPEC 01M1REVP9WGRHDDNVEVE8BBH0Z, требование 1, AC-1/AC-2: ОБА
+    условия обязаны быть верны — ветка, живая хотя бы по одному из двух
+    источников истины, сиротой не считается). Только чтение, без
+    удаления — общая часть между `sweep_orphan_artifact_branches` (сама
+    уборка) и `cmd_doctor` (честный CLI-вывод: нужно знать, были ли
+    сироты, независимо от того, удалось ли их удалить).
+
+    `remote` — предвычисленный набор веток origin (`_remote_artifact_
+    branch_names`); по умолчанию (аргумент не передан) вычисляется
+    здесь — вызывающий код, которому важно не делать второй запрос за
+    один прогон (`cmd_doctor`, AC-3), передаёт уже вычисленное значение
+    явно.
+
+    `None` — origin не ответил (требование 6): вся функция тоже
+    возвращает `None`, не пустой список — пустой список уже легитимно
+    означает «сирот нет», спутать эти два случая означало бы посчитать
+    origin пустым и удалить произвольную локальную ветку.
+    """
+    if remote is _UNSET:
+        remote = _remote_artifact_branch_names()
+    if remote is None:
+        return None
     known_ids = {r["id"].lower() for r in store.all_tasks(conn)}
     branches = gitcmd.list_branches("artifact/") or []
-    return sorted(b for b in branches if b[len("artifact/"):] not in known_ids)
+    return sorted(
+        b for b in branches
+        if b[len("artifact/"):] not in known_ids and b not in remote)
 
 
-def sweep_orphan_artifact_branches(conn) -> list[str]:
-    """Удаляет ветки `artifact/<id>` пульта, для которых нет строки в БД
-    (SPEC «Контекст»: источник утечки — тест, заводящий задачу через
-    `cmd_new` без подмены `config.ROOT`, коммитивший артефакты прямиком
-    в НАСТОЯЩИЙ репозиторий пульта). Только по явному вызову Оператора
-    (`doctor --fix`), не автоматически — ветки живых задач не трогаются.
+def sweep_orphan_artifact_branches(conn, orphans=_UNSET) -> list[str] | None:
+    """Удаляет ветки `artifact/<id>` пульта, отсутствующие И в БД, И на
+    origin (SPEC «Контекст»: источник утечки — тест, заводящий задачу
+    через `cmd_new` без подмены `config.ROOT`, коммитивший артефакты
+    прямиком в НАСТОЯЩИЙ репозиторий пульта; расширено требованием 1
+    задачи 01M1REVP9WGRHDDNVEVE8BBH0Z — на чужой копии, где локальной
+    строки БД у живой задачи просто нет, критерий «только БД» сносил бы
+    её). Только по явному вызову Оператора (`doctor --fix`), не
+    автоматически — ветки живых задач не трогаются.
 
-    Ровно один incident-алерт на весь прогон уборки, с перечислением
-    удалённого в сообщении (не по алерту на каждую ветку — Оператору
-    нужна одна строка на уборку, не журнал по счётчику находок). Возврат
-    `git branch -D` проверяется (ANSWER-2 п.3, R1-F3): ветка, которую не
-    удалось удалить, не попадает ни в возвращаемый список, ни в текст
-    алерта как «удалено» — только в отдельную честную часть сообщения.
-    Возвращает список ФАКТИЧЕСКИ удалённых имён веток; пустой — либо
-    сирот не нашлось, либо ни одно удаление не удалось (`cmd_doctor`
-    различает эти два случая в CLI-выводе через `_orphan_artifact_
-    branches`, ANSWER-3 R1-F3).
+    `orphans` — предвычисленный список кандидатов (`_orphan_artifact_
+    branches`); по умолчанию (аргумент не передан) вычисляется здесь —
+    `cmd_doctor` передаёт уже вычисленный список явно, чтобы не делать
+    второй запрос origin за один прогон уборки (AC-3).
+
+    `orphans is None` (origin недоступен, требование 5/AC-6): уборка НЕ
+    ВЫПОЛНЯЕТСЯ ВООБЩЕ — `git branch -D` не зовётся ни разу, incident не
+    заводится, возврат — `None` (fail-closed, принцип целостности).
+
+    Иначе — ровно один incident-алерт на весь прогон уборки, с
+    перечислением удалённого в сообщении (не по алерту на каждую ветку —
+    Оператору нужна одна строка на уборку, не журнал по счётчику
+    находок). Возврат `git branch -D` проверяется (ANSWER-2 п.3, R1-F3):
+    ветка, которую не удалось удалить, не попадает ни в возвращаемый
+    список, ни в текст алерта как «удалено» — только в отдельную честную
+    часть сообщения. Возвращает список ФАКТИЧЕСКИ удалённых имён веток;
+    пустой — либо сирот не нашлось, либо ни одно удаление не удалось
+    (`cmd_doctor` различает эти два случая в CLI-выводе через `orphans`,
+    ANSWER-3 R1-F3).
     """
-    orphans = _orphan_artifact_branches(conn)
+    if orphans is _UNSET:
+        orphans = _orphan_artifact_branches(conn)
+    if orphans is None:
+        return None
     deleted = []
     failed = []
     for branch in orphans:
@@ -1107,6 +1553,19 @@ def sweep_orphan_artifact_branches(conn) -> list[str]:
             conn, None, "incident", ORPHAN_ARTIFACT_BRANCH_SOURCE,
             f"осиротевшие артефактные ветки: {'; '.join(parts)}")
     return deleted
+
+
+def _print_orphan_branch_candidates(orphans: list[str]) -> None:
+    """Требования 3-4 (SPEC 01M1REVP9WGRHDDNVEVE8BBH0Z): число кандидатов
+    на удаление ПОЛНОСТЬЮ, но их имён — только первые `config.
+    DOCTOR_ORPHAN_PREVIEW_LIMIT`, с пометкой про `doctor --fix`. Общая
+    для режима предпросмотра (`doctor`) и для `--fix` (там — печатается
+    ДО удаления, требование 4/AC-5)."""
+    print(f"Осиротевшие артефактные ветки-кандидаты на удаление: "
+         f"{len(orphans)} (первые {config.DOCTOR_ORPHAN_PREVIEW_LIMIT} имён "
+         f"ниже; удалит `doctor --fix`)")
+    for branch in orphans[:config.DOCTOR_ORPHAN_PREVIEW_LIMIT]:
+        print(f"  {branch}")
 
 
 # --- уборка игнорируемых файлов артефактных веток (SPEC ------------------
@@ -1167,6 +1626,7 @@ def all_checks(conn) -> list[Check]:
         checks.append(check_token(role))
     checks.append(check_git_identity())
     checks.append(check_disk_space())
+    checks.append(check_role_home_reference())
     checks.append(check_backup_age(conn))
     checks.append(check_task_counters(conn))
     checks.append(isolation_smoke())
@@ -1188,9 +1648,14 @@ def all_checks(conn) -> list[Check]:
     checks.extend(check_orphans(conn))
     checks.extend(check_leases(conn))
     checks.extend(check_merge_lock(conn))
+    checks.extend(check_hung_test_runs(conn))
     checks.extend(check_zone_waits(conn))
     checks.extend(check_branch_freshness(conn))
     checks.append(check_root_pin())
+    checks.append(check_role_log_pool_leak(conn))
+    checks.append(check_canary_pool_drift())
+    checks.extend(check_token_repo_scope())
+    checks.extend(stack.check_stack())
     return checks
 
 
@@ -1198,27 +1663,63 @@ LABELS = {"ok": "ok", "warn": "WARN", "fail": "FAIL", "skip": "skip"}
 
 
 def cmd_doctor(restore: bool = False, fix: bool = False) -> None:
+    """SPEC 01M1REVP9WGRHDDNVEVE8BBH0Z, требования 3-6: `_orphan_artifact_
+    branches(conn)` зовётся РОВНО ОДИН РАЗ за весь прогон (что в режиме
+    предпросмотра, что под `--fix`, AC-3) — результат передаётся явно в
+    `sweep_orphan_artifact_branches`, чтобы та не переспрашивала origin.
+
+    Origin недоступен (`orphans is None`): без `--fix` — информационная
+    строка вместо списка кандидатов (требование 6/AC-7, не FAIL — тем же
+    приёмом деградации, что `check_root_pin`); под `--fix` — именованный
+    `Check` со статусом `fail` вливается в общий список проверок (тот же
+    механизм печати `[FAIL]`/подсчёта провалов/`sys.exit(1)`, что и у
+    остальных доктор-проверок) — уборка веток при этом не запускается
+    вовсе (требование 5/AC-6). Уборка игнорируемых файлов/мёртвых
+    lease-групп/зависших тестов от origin не зависит и продолжает
+    работать независимо от исхода сверки веток-сирот.
+    """
     conn = store.db()
     if restore:
         print("Recovery-сверка после восстановления .artel/ из бэкапа:")
+        # SPEC 01M1NSR5M5THYRC0RFWPMVE2DW, требование 3/AC-6: тот же
+        # вход восстановления пула, что `catalog.cmd_init()`.
+        pool_restore_msg = canary.restore_pool_if_missing(conn)
+        if pool_restore_msg:
+            print(pool_restore_msg)
+    orphans = _orphan_artifact_branches(conn)
+    extra_checks = []
     if fix:
-        found_before = bool(_orphan_artifact_branches(conn))
-        removed = sweep_orphan_artifact_branches(conn)
-        if removed:
-            print("Осиротевшие артефактные ветки удалены:")
-            for branch in removed:
-                print(f"  {branch}")
-        elif found_before:
-            # R1-F3 (ANSWER-3): найдены, но НИ ОДНО удаление не прошло —
-            # честно об этом, не «не найдено» (расхождение с журналом
-            # алертов, который sweep уже честно ведёт).
-            print("Осиротевшие артефактные ветки найдены, но не удалены "
-                 "— см. журнал алертов (doctor.cleanup.artifact_branches).")
+        if orphans is None:
+            extra_checks.append(Check(
+                "orphan-branches-origin", "fail",
+                "origin недоступен (git ls-remote --heads origin "
+                "'artifact/*' не ответил) — критерий сироты артефактных "
+                "веток не вычислим, уборка artifact/*-веток не выполнена"))
         else:
-            print("Осиротевших артефактных веток не найдено.")
+            _print_orphan_branch_candidates(orphans)
+            removed = sweep_orphan_artifact_branches(conn, orphans)
+            if removed:
+                print(f"Осиротевшие артефактные ветки удалены ({len(removed)}):")
+                for branch in removed:
+                    print(f"  {branch}")
+            elif orphans:
+                # R1-F3 (ANSWER-3): найдены, но НИ ОДНО удаление не прошло —
+                # честно об этом, не «не найдено» (расхождение с журналом
+                # алертов, который sweep уже честно ведёт).
+                print("Осиротевшие артефактные ветки найдены, но не удалены "
+                     "— см. журнал алертов (doctor.cleanup.artifact_branches).")
+            else:
+                print("Осиротевших артефактных веток не найдено.")
         print("Уборка игнорируемых файлов артефактных веток живых задач:")
         _fix_ignored_artifact_files(conn)
-    checks = all_checks(conn)
+        _fix_dead_lease_groups(conn)
+        _fix_hung_test_runs(conn)
+    else:
+        if orphans is None:
+            print("критерий не вычислим без origin")
+        else:
+            _print_orphan_branch_candidates(orphans)
+    checks = extra_checks + all_checks(conn)
     for c in checks:
         print(f"  [{LABELS[c.status]}] {c.name}: {c.detail}")
 
