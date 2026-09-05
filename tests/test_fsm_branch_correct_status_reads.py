@@ -104,6 +104,9 @@ class RealGitBranchTest(TmpRootTest):
     main."""
 
     def setUp(self):
+        # Свой `setUp` целиком заменяет `TmpRootTest.setUp`,
+        # `super().setUp()` не зовётся — нужен свой порядок (git-репозиторий
+        # с шаблонами раньше патчей `ALL_CONFIG_ATTRS`).
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(resilient_tmp_cleanup, tmp)
         self.root = Path(tmp.name).resolve()

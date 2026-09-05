@@ -58,8 +58,9 @@ import time
 from collections import namedtuple
 from pathlib import Path
 
-from . import (alerts, coldstart, config, gitcmd, liveness, projects, roles,
-              runner, snapshot, spend, store, targets, workspace)
+from . import (alerts, artifact_branch, coldstart, config, gitcmd, liveness,
+              projects, roles, runner, snapshot, spend, store, targets,
+              workspace)
 
 # status: "ok" | "warn" | "fail" | "skip" ("skip" — честный пропуск проверки,
 # требование 9: сверка forge-политики без `gh`/сети — не провал и не ок).
@@ -1126,6 +1127,107 @@ def check_root_pin() -> Check:
                  f"обнови: artel.py pin-update {origin_sha}")
 
 
+# --- уборка осиротевших артефактных веток (SPEC 01M1KVGD18P9H5WR7VM8TGPV1T,
+# требование 4/AC-4) --------------------------------------------------------
+
+ORPHAN_ARTIFACT_BRANCH_SOURCE = "doctor.cleanup.artifact_branches"
+
+
+def _orphan_artifact_branches(conn) -> list[str]:
+    """Ветки `artifact/<id>` пульта, для которых нет строки в БД
+    (регистронезависимо — `artifact_branch.branch_name` работает с
+    `task_id.lower()`). Только чтение, без удаления — общая часть между
+    `sweep_orphan_artifact_branches` (сама уборка) и `cmd_doctor`
+    (честный CLI-вывод R1-F3: нужно знать, были ли сироты, независимо от
+    того, удалось ли их удалить)."""
+    known_ids = {r["id"].lower() for r in store.all_tasks(conn)}
+    branches = gitcmd.list_branches("artifact/") or []
+    return sorted(b for b in branches if b[len("artifact/"):] not in known_ids)
+
+
+def sweep_orphan_artifact_branches(conn) -> list[str]:
+    """Удаляет ветки `artifact/<id>` пульта, для которых нет строки в БД
+    (SPEC «Контекст»: источник утечки — тест, заводящий задачу через
+    `cmd_new` без подмены `config.ROOT`, коммитивший артефакты прямиком
+    в НАСТОЯЩИЙ репозиторий пульта). Только по явному вызову Оператора
+    (`doctor --fix`), не автоматически — ветки живых задач не трогаются.
+
+    Ровно один incident-алерт на весь прогон уборки, с перечислением
+    удалённого в сообщении (не по алерту на каждую ветку — Оператору
+    нужна одна строка на уборку, не журнал по счётчику находок). Возврат
+    `git branch -D` проверяется (ANSWER-2 п.3, R1-F3): ветка, которую не
+    удалось удалить, не попадает ни в возвращаемый список, ни в текст
+    алерта как «удалено» — только в отдельную честную часть сообщения.
+    Возвращает список ФАКТИЧЕСКИ удалённых имён веток; пустой — либо
+    сирот не нашлось, либо ни одно удаление не удалось (`cmd_doctor`
+    различает эти два случая в CLI-выводе через `_orphan_artifact_
+    branches`, ANSWER-3 R1-F3).
+    """
+    orphans = _orphan_artifact_branches(conn)
+    deleted = []
+    failed = []
+    for branch in orphans:
+        res = gitcmd.git("branch", "-D", branch)
+        (deleted if res is not None and res.returncode == 0 else failed).append(branch)
+    if orphans:
+        parts = []
+        if deleted:
+            parts.append(f"удалены: {', '.join(deleted)}")
+        if failed:
+            parts.append(f"НЕ удалены (ошибка git branch -D): {', '.join(failed)}")
+        alerts.raise_alert(
+            conn, None, "incident", ORPHAN_ARTIFACT_BRANCH_SOURCE,
+            f"осиротевшие артефактные ветки: {'; '.join(parts)}")
+    return deleted
+
+
+# --- уборка игнорируемых файлов артефактных веток (SPEC ------------------
+# 01M1KVG3KSCY47HWXWF5HM0E76, требование 4, AC-5) -------------------------
+
+def _fix_ignored_artifact_files(conn) -> None:
+    """`doctor --fix`: убирает из артефактной ветки КАЖДОЙ живой задачи
+    файлы, которые `.gitignore` пульта (`config.ROOT`) считает
+    игнорируемыми (тот же критерий, что `checkpoint._commit_external_
+    step_artifacts` уже применяет к новым автокоммитам, `gitcmd.
+    check_ignore`) — легализация ADR-0013 «вариант A» для файлов,
+    занесённых ДО этой задачи (инцидент 03.09, SPEC «Контекст»).
+
+    Плотницкая запись (`artifact_branch.commit_files`, `remove=`) пишет
+    прямо в объектную базу `config.ROOT`, не в рабочее дерево — `main`
+    этим действием не трогается (AC-5, третья проверка). `done`/`killed`
+    задачи пропускаются — их артефактная ветка уже не «живая» (тот же
+    фильтр, что `check_branch_freshness`/`check_orphans` уже применяют к
+    активным задачам).
+
+    Задача без затронутых файлов — без изменений и без записи в журнал
+    (нечего убирать); `git check-ignore` не ответил — тихая деградация,
+    та же, что у `checkpoint` (не коммитить вслепую без фильтрации).
+    """
+    for row in store.all_tasks(conn):
+        if row["state"] in ("done", "killed"):
+            continue
+        task_id = row["id"]
+        branch = artifact_branch.branch_name(task_id)
+        existing = gitcmd.ls_tree_files(branch, f"tasks/{task_id}") or []
+        if not existing:
+            continue
+        ignored = gitcmd.check_ignore(existing)
+        if not ignored:
+            continue
+        to_remove = sorted(ignored)
+        message = (f"{task_id}: уборка игнорируемых файлов артефактной "
+                  f"ветки (doctor --fix)")
+        commit_sha = artifact_branch.commit_files(task_id, {}, message,
+                                                   remove=to_remove)
+        if not commit_sha:
+            continue
+        detail = f"{message} (sha {commit_sha}); убрано: {', '.join(to_remove)}"
+        store.journal(conn, task_id, "doctor",
+                      "уборка игнорируемых файлов артефактной ветки", detail)
+        print(f"  [FIX] {task_id}: убрано {len(to_remove)} игнорируемых "
+              f"файлов из артефактной ветки")
+
+
 # --- команда doctor -------------------------------------------------------
 
 def all_checks(conn) -> list[Check]:
@@ -1168,10 +1270,27 @@ def all_checks(conn) -> list[Check]:
 LABELS = {"ok": "ok", "warn": "WARN", "fail": "FAIL", "skip": "skip"}
 
 
-def cmd_doctor(restore: bool = False) -> None:
+def cmd_doctor(restore: bool = False, fix: bool = False) -> None:
     conn = store.db()
     if restore:
         print("Recovery-сверка после восстановления .artel/ из бэкапа:")
+    if fix:
+        found_before = bool(_orphan_artifact_branches(conn))
+        removed = sweep_orphan_artifact_branches(conn)
+        if removed:
+            print("Осиротевшие артефактные ветки удалены:")
+            for branch in removed:
+                print(f"  {branch}")
+        elif found_before:
+            # R1-F3 (ANSWER-3): найдены, но НИ ОДНО удаление не прошло —
+            # честно об этом, не «не найдено» (расхождение с журналом
+            # алертов, который sweep уже честно ведёт).
+            print("Осиротевшие артефактные ветки найдены, но не удалены "
+                 "— см. журнал алертов (doctor.cleanup.artifact_branches).")
+        else:
+            print("Осиротевших артефактных веток не найдено.")
+        print("Уборка игнорируемых файлов артефактных веток живых задач:")
+        _fix_ignored_artifact_files(conn)
     checks = all_checks(conn)
     for c in checks:
         print(f"  [{LABELS[c.status]}] {c.name}: {c.detail}")

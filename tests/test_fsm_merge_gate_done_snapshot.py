@@ -130,10 +130,29 @@ class DonePathSnapshotTest(RealGitSandbox):
         return res.stdout
 
     def test_done_transition_publishes_a_snapshot_like_killed_does(self):
+        """Успешный `done` публикует снапшот задачи в `refs/artifacts/<id>`
+        origin целевого — тем же путём, что и `killed` (AC-13), и с
+        frontmatter (`operator`/`model`/`artel_sha`) хотя бы в одном файле.
+
+        Ловит мутацию: путь `done` перестаёт звать публикацию снапшота
+        (или зовёт её ПОСЛЕ удаления артефактной ветки, когда содержимое
+        уже недоступно) — `refs/artifacts/{TASK}` не появится в
+        `self.target_origin`, и `_snapshot_ref_exists`/`assertTrue` здесь
+        это поймают.
+        """
         t = store.get_task(store.db(), TASK)
 
+        # SPEC 01M1NBWPKNBXP9ZXXQDJM7AXPJ, AC-5..AC-7: путь "fresh" без
+        # `confirmed_ci_note` теперь возвращает ("wait", branch) сам —
+        # опрос CI переехал в `_wait_for_branch_ci_green` вызывающего
+        # цикла. Тело вызывается напрямую (см. докстринг файла), поэтому
+        # `confirmed_ci_note` передаём явно — тот же самый узел, что
+        # реальный `_cmd_approve_merge_gate_cycle` подставил бы сюда сам
+        # после того, как цикл ожидания получил бы зелёный статус от
+        # замоканного `ci.branch_status` этим же setUp.
         result = fsm_merge_gate._cmd_approve_merge_gate(
-            store.db(), TASK, "merge_gate", t)
+            store.db(), TASK, "merge_gate", t,
+            confirmed_ci_note="зелёный (тест)")
 
         self.assertEqual(result, ("done",))
         row = store.db().execute("SELECT state FROM tasks WHERE id=?",
@@ -163,13 +182,22 @@ class DonePathSnapshotTest(RealGitSandbox):
             f"operator/model/artel_sha (AC-13): {files}")
 
     def test_done_snapshot_removes_the_pult_artifact_branch(self):
-        # AC-13: снапшот публикуется ДО удаления кодовой и артефактной
-        # веток — после успешного done артефактная ветка пульта убрана
-        # (тот же приём, что уже проверяет `snapshot_pending` для killed).
+        """AC-13: снапшот публикуется ДО удаления кодовой и артефактной
+        веток — после успешного `done` артефактная ветка пульта убрана
+        (тот же приём, что уже проверяет `snapshot_pending` для killed).
+
+        Ловит мутацию: удаление артефактной ветки пульта (`artifact/<id>`)
+        после `done` пропущено или переставлено раньше публикации снапшота
+        — `gitcmd.branch_exists(artifact_branch.branch_name(TASK))`
+        останется `True`, и `assertFalse` здесь это поймает.
+        """
         t = store.get_task(store.db(), TASK)
 
-        fsm_merge_gate._cmd_approve_merge_gate(store.db(), TASK,
-                                               "merge_gate", t)
+        # SPEC 01M1NBWPKNBXP9ZXXQDJM7AXPJ, AC-5..AC-7: см. пояснение в
+        # test_done_transition_publishes_a_snapshot_like_killed_does выше.
+        fsm_merge_gate._cmd_approve_merge_gate(
+            store.db(), TASK, "merge_gate", t,
+            confirmed_ci_note="зелёный (тест)")
 
         self.assertFalse(
             gitcmd.branch_exists(artifact_branch.branch_name(TASK)),

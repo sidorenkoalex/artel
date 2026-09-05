@@ -30,11 +30,14 @@ CREATE TABLE IF NOT EXISTS tasks (
   id TEXT PRIMARY KEY, title TEXT, state TEXT, branch TEXT,
   review_iters INTEGER DEFAULT 0, accept_rejects INTEGER DEFAULT 0,
   reviewed_iter INTEGER DEFAULT 0, escalated_from TEXT,
-  budget_usd REAL, spent_usd REAL DEFAULT 0, budget_source TEXT,
+  budget_usd REAL, spent_usd REAL DEFAULT 0, spent_estimate_usd REAL DEFAULT 0,
+  budget_source TEXT,
   target TEXT DEFAULT '{config.DEFAULT_TARGET}', fixed_sha TEXT,
   tests_locked_sha TEXT, is_canary INTEGER DEFAULT 0, paused INTEGER DEFAULT 0,
   answer_baseline INTEGER, verifying_attempts INTEGER DEFAULT 0,
   draft_mr_created INTEGER DEFAULT 0,
+  diff_bytes INTEGER, split_assessment TEXT, zones TEXT,
+  materialized_artifact_sha TEXT,
   created_at TEXT, updated_at TEXT
 );
 CREATE TABLE IF NOT EXISTS steps (
@@ -212,6 +215,31 @@ def migrate(conn: sqlite3.Connection) -> None:
     # ровно один раз за жизненный цикл задачи — колонка, не запрос к
     # GitHub на каждый вход в in_dev (orchestrator/github_adapter.py).
     add_column(conn, "tasks", "draft_mr_created", "INTEGER DEFAULT 0")
+    # sha головы артефактной ветки на момент последней материализации
+    # `runner.role_cwd` (SPEC 01M1NKTF173WV5CPDZ1C3WW69K, AC-1/AC-6): NULL —
+    # материализации ещё не было (строка старше этой задачи либо у задачи
+    # нет артефактной ветки) — конфликт-гвард автокоммита сверять не с чем,
+    # тот же вырожденный случай, что и у fixed_sha/tests_locked_sha.
+    add_column(conn, "tasks", "materialized_artifact_sha", "TEXT")
+    # Верхняя оценка неучтённой стоимости шага (SPEC
+    # 01M1NWCM3TDY0YABEKE8DYQA1C, требование 1): накопительная, отдельная от
+    # `spent_usd` — таймаут шага роли БЕЗ курса токенов (`config.TOKEN_RATES`)
+    # прибавляет сюда именованную константу вместо точной суммы (требование
+    # 3). DEFAULT 0 — строки старше этой задачи не несут неучтённой
+    # стоимости задним числом (требование 9: пересчёт прошлых шагов не
+    # производится).
+    add_column(conn, "tasks", "spent_estimate_usd", "REAL DEFAULT 0")
+    # Снимок объёма на входе в merge_gate (tasks/01M1KS8K9RXWHX2PW3ZKB0P903,
+    # ANSWER-1/ANSWER-2): NULL — задача закрыта до появления колонки, либо
+    # снимок не удался (сбой git — не блокирует переход) — `artel report`
+    # читает `report._DASH` для обоих случаев одинаково.
+    add_column(conn, "tasks", "diff_bytes", "INTEGER")
+    add_column(conn, "tasks", "split_assessment", "TEXT")
+    # Значение frontmatter-поля `zones:` SPEC, сохранённое при `approve`
+    # на `spec_gate` (01M1NKVPD2A79PQ6K0JVV1B2Q1, AC-3) — то же поле,
+    # что механика «Оценка объёма и деление» уже структурирует для
+    # сигналов деления (SPEC, требование 1).
+    add_column(conn, "tasks", "zones", "TEXT")
     conn.executescript(
         "CREATE TABLE IF NOT EXISTS task_counters ("
         "  target TEXT PRIMARY KEY, next_number INTEGER NOT NULL);")
@@ -440,9 +468,28 @@ def charge(conn: sqlite3.Connection, task_id: str, usd: float) -> None:
     conn.commit()
 
 
+def charge_estimate(conn: sqlite3.Connection, task_id: str, usd: float) -> None:
+    """Прибавляет верхнюю оценку неучтённой стоимости шага к
+    `spent_estimate_usd` (SPEC 01M1NWCM3TDY0YABEKE8DYQA1C, требование 3) —
+    накопительно и отдельно от `charge`/`spent_usd`: оценка не заменяет
+    точную сумму, а называет то, что курс токенов роли посчитать не смог."""
+    conn.execute("UPDATE tasks SET spent_estimate_usd=spent_estimate_usd+?, "
+                 "updated_at=? WHERE id=?", (usd, now(), task_id))
+    conn.commit()
+
+
 def total_spent(conn: sqlite3.Connection) -> float:
     """Суммарный расход по всем задачам всех target'ов (roadmap §5)."""
     row = conn.execute("SELECT SUM(spent_usd) AS total FROM tasks").fetchone()
+    return row["total"] or 0.0
+
+
+def total_estimate(conn: sqlite3.Connection) -> float:
+    """Суммарная верхняя оценка неучтённой стоимости по всем задачам всех
+    target'ов (SPEC 01M1NWCM3TDY0YABEKE8DYQA1C, требование 6) — тот же
+    приём агрегации, что и `total_spent`, отдельная колонка."""
+    row = conn.execute(
+        "SELECT SUM(spent_estimate_usd) AS total FROM tasks").fetchone()
     return row["total"] or 0.0
 
 
@@ -680,7 +727,16 @@ def record_fixation(conn, task_id: str) -> None:
     sha, clean = fixation.fix(task_id, target)
     update_task(conn, task_id, fixed_sha=sha or None)
     if target == config.DEFAULT_TARGET:
-        detail = f"target={target}, sha={sha or '—'}, чисто={clean}"
+        # Поле `код=` — sha кодовой ветки, заводится для default target
+        # тем же именем, что и НЕ-default (ветка ниже) — tasks/
+        # 01M1P9RJVYHTAC087J4B2CAR44, требование 1: `sha=` выше — sha
+        # артефактного/фиксационного репо (`config.PROJECTS/<target>`),
+        # НЕ база инкрементального diff (`review.previous_verdict_sha`
+        # читает именно `код=`); `sha=` остаётся как есть — эта задача
+        # не убирает поле, только перестаёт быть базой diff.
+        code_sha = fixation.default_code_sha(conn, task_id)
+        detail = (f"target={target}, sha={sha or '—'}, чисто={clean}, "
+                  f"код={code_sha or '—'}")
     else:
         # Два sha (SPEC T094, требование 9, AC-10): голова кодовой ветки
         # ЦЕЛЕВОГО и голова артефактной ветки ПУЛЬТА — `sha`/`clean` выше

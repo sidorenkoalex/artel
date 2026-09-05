@@ -2,6 +2,11 @@
 """Guard: валидатор СТРУКТУРЫ артефактов задач (frontmatter + обязательные
 секции). Содержательность не проверяет — это работа гейтов и людей (§04).
 
+Новые правила guard действуют на живые задачи; история не переписывается —
+задача, уже закрытая до появления правила (несёт `docs/retro/<id>.md`), под
+это правило задним числом не подпадает (ANSWER-3 tasks/01M1KS8K9RXWHX2PW3ZKB0P903,
+пример — `_closed_before_split_assessment`).
+
 Использование:
     python3 scripts/guard.py tasks/T001/SPEC.md [ещё файлы...]
     python3 scripts/guard.py --all          # все артефакты в tasks/
@@ -17,7 +22,7 @@ from pathlib import Path
 # репозитория, поэтому корень кладётся руками: та же схема, что в artel.py.
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from orchestrator import yamlmini  # noqa: E402
+from orchestrator import config, yamlmini  # noqa: E402
 
 REQUIRED_META = {"task", "type", "author_role", "status"}
 
@@ -36,7 +41,12 @@ REQUIRED_META = {"task", "type", "author_role", "status"}
 # id, статус (пятёрка значений), обязательные поля каждой записи.
 # Правило применяется только к version >= 3 (требование 6) — тем же
 # приёмом версии-гейтинга, что версия 2 выше применена к SPEC.
-SUPPORTED_SCHEMA_VERSION = 3
+#
+# Версия 4 (01M1NKVPD2A79PQ6K0JVV1B2Q1, часть 1 нарезки «Механика зон»):
+# SPEC несёт обязательное поле `zones:` — машиночитаемый список путей/
+# масок зоны задачи (требование 1, AC-1). Правило применяется только к
+# version >= 4 — тем же приёмом версии-гейтинга, что версии 2 и 3 выше.
+SUPPORTED_SCHEMA_VERSION = 4
 
 RULES = {
     "spec": {
@@ -46,7 +56,11 @@ RULES = {
     "plan": {
         "sections": ["Подход", "Шаги", "Покрытие требований",
                      "Влияние на систему"],  # принцип целостности (ADR-0002)
-        "statuses": {"draft", "ready", "approved"},
+        # "escalate" (SPEC 01M1NKTF173WV5CPDZ1C3WW69K, требование 6, AC-12):
+        # единственный законный канал эскалации developer через PLAN.md —
+        # без него требование 6 неисполнимо для роли, для которой оно
+        # написано (см. «Контекст» SPEC).
+        "statuses": {"draft", "ready", "approved", "escalate"},
     },
     "review": {
         "sections": ["Соответствие SPEC", "Замечания", "Вердикт"],
@@ -586,6 +600,258 @@ def registry_errors(path: Path | str, text: str, meta: dict) -> list[str]:
     return errors
 
 
+# --------------------------------------------------------------------------
+# Эскалация только статусом escalate (SPEC 01M1NKTF173WV5CPDZ1C3WW69K,
+# требование 6, AC-11/AC-12): PLAN/REVIEW/SPEC с текстом эскалации
+# (раздел «Эскалация» с непустыми «Вопросы» либо «Блокирует» —
+# skills/escalation-rules.md, «Как эскалировать») ОБЯЗАН нести
+# status: escalate — иначе роль ждёт человеческого прочтения текста,
+# которое структурно не гарантировано (класс инцидента 04.09: developer
+# держал эскалацию текстом в PLAN.md без смены статуса, `advance`
+# буксовал на одном и том же отказе гейта).
+ESCALATION_SECTION = "Эскалация"
+ESCALATION_STATUS_REASON = "эскалация текстом без статуса escalate"
+_ESCALATION_BULLET_TMPL = (
+    r"^-\s+\*\*{}\*\*\s*(?:[—-]+\s*)?(.*?)(?=\n-\s+\*\*|\Z)")
+
+
+def _escalation_bullet_text(body: str, label: str) -> str:
+    """Текст пункта `- **label** — ...` раздела «Эскалация» до следующего
+    такого же пункта верхнего уровня или конца раздела; пусто — пункта
+    нет вовсе."""
+    pattern = re.compile(_ESCALATION_BULLET_TMPL.format(re.escape(label)),
+                         re.M | re.S)
+    match = pattern.search(body)
+    return match.group(1).strip() if match else ""
+
+
+def escalation_status_errors(path: Path | str, text: str, meta: dict) -> list[str]:
+    """Раздел «Эскалация» с непустыми «Вопросы» либо «Блокирует», но
+    status, отличный от escalate — нарушение (AC-11); status: escalate —
+    легален (AC-12, позитивный кейс). `path` — только для текста ошибок
+    (см. `schema_errors`).
+
+    Применяется к `type` plan/review/spec (SPEC требование 6) — для
+    остальных типов канал эскалации не через этот раздел (analyst,
+    например, эскалирует QUESTIONS.md целиком, не разделом внутри
+    SPEC.md — см. «Контекст» SPEC: для type: spec это правило —
+    страховка от ошибки, не рабочий канал).
+    """
+    if meta.get("type") not in ("plan", "review", "spec"):
+        return []
+    status = meta.get("status") or ""
+    if status == "escalate":
+        return []
+    headers = set(re.findall(r"^##\s+(.+?)\s*$", text, re.M))
+    if ESCALATION_SECTION not in headers:
+        return []
+    body = section_body(text, ESCALATION_SECTION)
+    questions = _escalation_bullet_text(body, "Вопросы")
+    blocks = _escalation_bullet_text(body, "Блокирует")
+    if not questions and not blocks:
+        return []
+    return [f"{path}: {ESCALATION_STATUS_REASON} — раздел «{ESCALATION_SECTION}» "
+            f"несёт непустые «Вопросы» и/или «Блокирует», а status '{status}' "
+            f"— смени status на 'escalate' либо убери текст эскалации из "
+            f"артефакта"]
+
+
+# --------------------------------------------------------------------------
+# Сигналы «подозрения на большой объём» на этапе SPEC
+# (tasks/01M1KS8K9RXWHX2PW3ZKB0P903, требования 1, 3; ANSWER-1 — правила
+# для AC-1 (константы, прогноз диффа) и AC-3 (пересечение зон с
+# docs/invariants.md) названы буквально ответом на эскалацию test_author).
+#
+# Проверка условная, не структурная в обычном смысле: срабатывает не для
+# каждого SPEC, а только когда содержимое само указывает на большой
+# объём — тот же класс, что «Влияние на систему» PLAN (инвариант 17), но
+# УСЛОВНЫЙ (AC-6: без единого сигнала секция не обязательна вовсе).
+SPLIT_ASSESSMENT_SECTION = "Оценка объёма и деление"
+
+# Три фразы требования 1/AC-2 — буквально из SPEC. Ищутся по ВСЕМУ тексту
+# SPEC, не только по разделу «Зоны»: SPEC не обязан держать «Зоны»
+# отдельной секцией (AC-4 требует только секцию «Оценка объёма и
+# деление»), а формулировка неопределённости может встретиться в любом
+# требовании.
+UNCERTAINTY_PHRASES = ("ориентировочно", "весь оркестратор",
+                       "по факту затронутых мест")
+
+# Путь вида `orchestrator/<имя>.py`/`scripts/<имя>.py» (ANSWER-1, AC-1/
+# AC-3) — источник для двух разных сигналов: числа файлов зоны и
+# пересечения с docs/invariants.md. Ищется по ВСЕМУ тексту SPEC, тем же
+# доводом, что UNCERTAINTY_PHRASES выше: ни `templates/SPEC.md`, ни
+# существующая практика 105 задач не несут отдельного раздела «## Зоны»
+# — заголовок, привязка к которому оставляла бы сигнал мёртвым кодом
+# (REVIEW.md, итерация 1, замечание R1-F1).
+ZONE_PATH = re.compile(r"(?:orchestrator|scripts)/\w+\.py")
+
+# Прогноз диффа строкой секции (ANSWER-1, AC-1) — запасной путь, когда
+# frontmatter `diff_forecast_kib` не задан.
+DIFF_FORECAST_LINE = re.compile(
+    r"Прогноз диффа:\s*(\d+(?:\.\d+)?)\s*КиБ")
+
+INVARIANTS_DOC_PATH = Path(__file__).resolve().parent.parent / "docs" / "invariants.md"
+
+# Задача, уже закрытая ДО появления этой проверки (несёт docs/retro/<id>.md),
+# под split_assessment_errors не подпадает (ANSWER-3, вариант b): новые
+# правила guard действуют на живые задачи, история не переписывается —
+# docs/retention.md объявляет SPEC/PLAN/REVIEW смерженных задач вечными,
+# backfill секции в них задним числом не требуется.
+RETRO_DIR = Path(__file__).resolve().parent.parent / "docs" / "retro"
+TASK_ID_FROM_PATH = re.compile(r"(?:^|/)tasks/([^/]+)/")
+
+
+def _closed_before_split_assessment(path: Path | str) -> bool:
+    """`True`, если `path` указывает на SPEC задачи, для которой уже есть
+    `docs/retro/<id>.md` — задача закрыта раньше, чем появилась эта
+    проверка."""
+    match = TASK_ID_FROM_PATH.search(str(path))
+    if not match:
+        return False
+    return (RETRO_DIR / f"{match.group(1)}.md").exists()
+
+
+def requires_split_assessment(meta: dict) -> bool:
+    """SPEC обязан нести проверку сигналов объёма (требования 1, 3).
+
+    Версия ниже 3 (или отсутствие поля — версия 1 по умолчанию) — формат
+    SPEC до этой задачи, `budget_usd`/структура которого не рассчитаны на
+    новый сигнал (например `budget_usd` выше нового порога в старом
+    беклоге без секции «Оценка объёма и деление» ещё не значит нарушение
+    ЭТОГО SPEC) — тот же приём версии-гейтинга, что `requires_ac_markup`
+    и `requires_registry` выше применяют к своим проверкам.
+    """
+    version = meta.get("schema_version", 1)
+    if not isinstance(version, int) or isinstance(version, bool):
+        return False
+    return version >= 3
+
+
+def _zone_paths(text: str) -> set[str]:
+    """Пути формата `orchestrator/<имя>.py`/`scripts/<имя>.py`, упомянутые
+    в тексте SPEC (ANSWER-1) — по ВСЕМУ тексту, не по разделу «Зоны»,
+    которого не несёт ни `templates/SPEC.md`, ни существующая практика
+    (REVIEW.md, итерация 1, R1-F1)."""
+    return set(ZONE_PATH.findall(text))
+
+
+def _diff_forecast_kib(text: str, meta: dict) -> float | None:
+    """Прогноз диффа SPEC в КиБ — frontmatter `diff_forecast_kib` либо
+    строка «Прогноз диффа: N КиБ» секции «Оценка объёма и деление»
+    (ANSWER-1, AC-1). `None` — поле не задано ни там, ни там."""
+    value = meta.get("diff_forecast_kib")
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return float(value)
+    body = section_body(text, SPLIT_ASSESSMENT_SECTION)
+    match = DIFF_FORECAST_LINE.search(body)
+    return float(match.group(1)) if match else None
+
+
+def _invariants_doc_text() -> str:
+    """Текст `docs/invariants.md` по требованию, без кеша на импорте (тот
+    же приём, что `id_format_patterns` выше) — нечитаемый файл не должен
+    ронять guard, только гасить сигнал AC-3 (сравнивать не с чем)."""
+    try:
+        return INVARIANTS_DOC_PATH.read_text(encoding="utf-8")
+    except OSError:
+        return ""
+
+
+def split_signal_names(text: str, meta: dict) -> list[str]:
+    """Имена сработавших сигналов «подозрения на большой объём»
+    (требование 1, AC-1..AC-3) — пусто, если ни один не сработал (AC-6).
+
+    Порядок — порядок появления сигналов в требовании 1/критериях
+    приёмки SPEC этой задачи, не алфавитный: стабилен для читаемости
+    сообщения отказа, не для сравнения множеств.
+    """
+    names: list[str] = []
+
+    if len(_zone_paths(text)) >= config.SPLIT_SIGNAL_ZONE_FILES:
+        names.append("число затрагиваемых модулей/файлов")
+
+    ac_count = len(AC_ITEM.findall(section_body(text, "Критерии приёмки")))
+    if ac_count >= config.SPLIT_SIGNAL_AC_COUNT:
+        names.append("число критериев приёмки")
+
+    budget = meta.get("budget_usd")
+    if (isinstance(budget, (int, float)) and not isinstance(budget, bool)
+            and budget >= config.SPLIT_SIGNAL_BUDGET_USD):
+        names.append("бюджет")
+
+    if any(phrase in text for phrase in UNCERTAINTY_PHRASES):
+        names.append("формулировки неопределённости")
+
+    zone_paths = _zone_paths(text)
+    if zone_paths:
+        invariants_text = _invariants_doc_text()
+        if any(p in invariants_text for p in zone_paths):
+            names.append("затронут инвариантный механизм")
+
+    forecast_threshold_kib = ((config.REVIEW_SNAPSHOT_DIFF_MAX_BYTES / 1024)
+                              * config.SPLIT_SIGNAL_DIFF_FORECAST_RATIO)
+    forecast = _diff_forecast_kib(text, meta)
+    if forecast is not None and forecast > forecast_threshold_kib:
+        names.append("прогноз диффа")
+    elif forecast is None and names:
+        # Отсутствие прогноза — само по себе сигнал, но только когда уже
+        # сработал хотя бы один ДРУГОЙ (ANSWER-1, редактура Оператора
+        # 04.09) — «чистый» SPEC без единого реального сигнала не обязан
+        # вписывать прогноз просто по факту отсутствия поля (AC-6).
+        names.append("прогноз диффа не дан")
+
+    return names
+
+
+def split_assessment_errors(path: Path | str, text: str, meta: dict) -> list[str]:
+    """Секция «Оценка объёма и деление» заполнена, если сработал хотя бы
+    один сигнал (требование 3, AC-5/AC-7). `path` — только для текста
+    ошибок (см. `schema_errors`)."""
+    if (meta.get("type") or "") != "spec" or not requires_split_assessment(meta):
+        return []
+    if _closed_before_split_assessment(path):
+        return []
+    signals = split_signal_names(text, meta)
+    if not signals:
+        return []
+    headers = set(re.findall(r"^##\s+(.+?)\s*$", text, re.M))
+    body = (section_body(text, SPLIT_ASSESSMENT_SECTION).strip()
+           if SPLIT_ASSESSMENT_SECTION in headers else "")
+    if body:
+        return []
+    return [f"{path}: сработали сигналы подозрения на большой объём "
+           f"({', '.join(signals)}), а секция '## {SPLIT_ASSESSMENT_SECTION}' "
+           f"пуста или отсутствует — заполни секцию нарезкой на 2-4 "
+           f"подзадачи (границы зон, порядок, обоснование мержимости "
+           f"каждой) либо обоснованием монолита (что нельзя разрезать и "
+           f"почему)"]
+
+
+def requires_zones(meta: dict) -> bool:
+    """SPEC обязан нести поле `zones:` (01M1NKVPD2A79PQ6K0JVV1B2Q1, AC-1).
+
+    Версия ниже 4 — формат SPEC до этой задачи, поля не несёт и не
+    обязан: тот же приём версии-гейтинга, что `requires_ac_markup` и
+    `requires_split_assessment` выше применяют к своим проверкам.
+    """
+    version = meta.get("schema_version", 1)
+    if not isinstance(version, int) or isinstance(version, bool):
+        return False
+    return version >= 4
+
+
+def spec_zones_errors(path: Path | str, meta: dict) -> list[str]:
+    """Поле `zones:` заполнено для SPEC версии, которая его требует
+    (AC-1). `path` — только для текста ошибок (см. `schema_errors`)."""
+    if (meta.get("type") or "") != "spec" or not requires_zones(meta):
+        return []
+    if not meta.get("zones"):
+        return [f"{path}: SPEC schema_version {meta.get('schema_version')} "
+               f"обязан нести поле zones (список путей/масок) — добавь "
+               f"frontmatter-поле zones"]
+    return []
+
+
 def check_content(label: str, text: str) -> list[str]:
     """Ядро `check` — структурная проверка уже прочитанного текста, без
     чтения файла: `label` — путь или его подобие, только для текста
@@ -656,9 +922,15 @@ def check_content(label: str, text: str) -> list[str]:
     if atype == "spec" and "Критерии приёмки" in headers:
         errors.extend(spec_ac_errors(label, text, meta))
 
+    if atype == "spec":
+        errors.extend(split_assessment_errors(label, text, meta))
+        errors.extend(spec_zones_errors(label, meta))
+
     if atype == "review":
         errors.extend(review_evidence_errors(label, text, meta))
         errors.extend(registry_errors(label, text, meta))
+
+    errors.extend(escalation_status_errors(label, text, meta))
 
     return errors
 

@@ -54,6 +54,14 @@ def _usd(value) -> str:
     return f"${(value or 0.0):.2f}"
 
 
+# Прочерк-заглушка «неизвестно» — колонка NULL, будь то задача старше
+# появления `diff_bytes`/`split_assessment` или снимок, которому не
+# ответил git (tasks/01M1KS8K9RXWHX2PW3ZKB0P903, требование 6, AC-12;
+# ANSWER-1/ANSWER-2) — не путать с «сигналов нет» ниже, буквальным
+# значением заполненной колонки, а не заглушкой отсутствия данных.
+_DASH = "—"
+
+
 # --------------------------------------------------------------- чтение
 
 def _all_steps(conn, tasks: list) -> list:
@@ -267,6 +275,36 @@ def _gate_queue_html(tasks: list) -> str:
     return rows
 
 
+def _closed_tasks_html(tasks: list, steps: list) -> str:
+    """Закрытые задачи: диф/шаги/стоимость рядом с секцией «Оценка объёма
+    и деление» (tasks/01M1KS8K9RXWHX2PW3ZKB0P903, требование 6, AC-12) —
+    материал для пересмотра порогов Оператором по факту, без какой-либо
+    автоматической корректировки. `diff_bytes`/`split_assessment` — уже
+    прочитанные полем `all_tasks`, число шагов — из уже собранного
+    `steps` (`_all_steps`), ни одного нового обращения к БД."""
+    done = [row for row in tasks if row["state"] == "done"]
+    if not done:
+        return '<p class="empty">Закрытых задач нет.</p>'
+    step_counts: dict = {}
+    for s in steps:
+        step_counts[s["task_id"]] = step_counts.get(s["task_id"], 0) + 1
+    rows = "".join(
+        f'<div class="closed-row">'
+        f'<span class="closed-id">{_esc(row["id"])}</span>'
+        f'<span class="closed-field">Диф: '
+        f'{_esc(row["diff_bytes"]) if row["diff_bytes"] is not None else _DASH}'
+        f' байт</span>'
+        f'<span class="closed-field">Шагов: {step_counts.get(row["id"], 0)}</span>'
+        f'<span class="closed-field">Стоимость: {_usd(row["spent_usd"])}</span>'
+        f'<span class="closed-field">Оценка объёма: '
+        f'{_esc(row["split_assessment"]) if row["split_assessment"] is not None else _DASH}'
+        f'</span>'
+        f'</div>'
+        for row in done
+    )
+    return f'<div class="closed-list">{rows}</div>'
+
+
 def _alerts_html(alerts: list) -> str:
     if not alerts:
         return '<p class="empty">Незакрытых алертов нет.</p>'
@@ -292,7 +330,8 @@ def _ratio_line(label: str, ratio: dict | None) -> str:
     )
 
 
-def _metrics_html(steps: list, tasks: list, total_spent: float) -> str:
+def _metrics_html(steps: list, tasks: list, total_spent: float,
+                  total_estimate: float) -> str:
     gate_ratio = _gate_ratio(steps)
     per_day = _operator_journal_by_day(steps)
     cost_per_task = _cost_per_done_task(tasks)
@@ -305,6 +344,9 @@ def _metrics_html(steps: list, tasks: list, total_spent: float) -> str:
     cost_line = (_usd(cost_per_task) if cost_per_task is not None
                 else "нет done-задач")
 
+    # Верхняя оценка (SPEC 01M1NWCM3TDY0YABEKE8DYQA1C, требование 6) —
+    # отдельная строка от точного расхода, не сложена с ним в одно число
+    # (иначе оценка перестала бы быть отличимой от факта, требование 6).
     return (
         '<div class="metrics">'
         '<h3>Доля acceptance: автогейт vs Оператор</h3>'
@@ -316,6 +358,8 @@ def _metrics_html(steps: list, tasks: list, total_spent: float) -> str:
         f'<div class="metric-row">$/задачу (done): {cost_line}</div>'
         f'<div class="metric-row">Суммарный расход программы: '
         f'{_usd(total_spent)}</div>'
+        f'<div class="metric-row">Суммарная верхняя оценка (курс роли не '
+        f'задан): {_usd(total_estimate)}</div>'
         '</div>'
     )
 
@@ -397,11 +441,20 @@ _STYLE = """
   .tile-escalation { color: #c22b2b; font-weight: 600; }
   .metrics { font-size: 13px; }
   .metric-row { padding: 2px 0; }
+  .closed-list { display: flex; flex-direction: column; gap: 6px; }
+  .closed-row {
+    display: flex; flex-wrap: wrap; gap: 14px; align-items: baseline;
+    padding: 6px 8px; border: 1px solid var(--border); border-radius: 6px;
+    font-size: 12px;
+  }
+  .closed-id { font-family: ui-monospace, Menlo, Consolas, monospace; font-weight: 700; }
+  .closed-field { color: var(--muted); }
   footer { padding: 0 24px 30px; font-size: 11px; color: var(--muted); }
 """
 
 
-def _render(tasks: list, steps: list, alerts: list, total_spent: float) -> str:
+def _render(tasks: list, steps: list, alerts: list, total_spent: float,
+           total_estimate: float) -> str:
     return (
         "<!DOCTYPE html>\n"
         '<html lang="ru">\n'
@@ -419,8 +472,10 @@ def _render(tasks: list, steps: list, alerts: list, total_spent: float) -> str:
         f"{_gate_queue_html(tasks)}</section>\n"
         '<section class="panel"><h2>Борд задач — состояния FSM</h2>'
         f"{_board_html(tasks)}</section>\n"
+        '<section class="panel"><h2>Закрытые задачи</h2>'
+        f"{_closed_tasks_html(tasks, steps)}</section>\n"
         '<section class="panel"><h2>Метрики гейтовой нагрузки</h2>'
-        f"{_metrics_html(steps, tasks, total_spent)}</section>\n"
+        f"{_metrics_html(steps, tasks, total_spent, total_estimate)}</section>\n"
         '<section class="panel"><h2>Метрика «трение»</h2>'
         f"{_friction_html(tasks, steps)}</section>\n"
         "</main>\n"
@@ -443,8 +498,9 @@ def cmd_report() -> None:
     steps = _all_steps(conn, tasks)
     alerts = store.open_alerts(conn)
     total_spent = store.total_spent(conn)
+    total_estimate = store.total_estimate(conn)
 
-    doc = _render(tasks, steps, alerts, total_spent)
+    doc = _render(tasks, steps, alerts, total_spent, total_estimate)
 
     path = config.ROOT / ".artel" / "report.html"
     path.parent.mkdir(parents=True, exist_ok=True)

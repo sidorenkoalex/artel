@@ -25,6 +25,7 @@ import socket
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -594,14 +595,42 @@ class MergeNeedsGreenCiTest(FsmTest):
         self.write_review("approved", 1)
 
     def test_no_merge_without_a_green_ci(self):
-        """Требование 6: не-зелёный и неизвестный статус merge не выполняют."""
+        """Требование 6: не-зелёный и неизвестный статус merge не выполняют.
+
+        `set_ci` держит ОДИН и тот же не-зелёный ответ на КАЖДЫЙ опрос —
+        с SPEC 01M1NBWPKNBXP9ZXXQDJM7AXPJ (AC-5..AC-7) путь "fresh"
+        ждёт такой статус циклом `_wait_for_branch_ci_green`, а не
+        отказывает по одному опросу; без заглушки часов цикл спал бы
+        РЕАЛЬНЫЕ `time.sleep` секунды вплоть до часового потолка на
+        каждый случай ниже. `time.sleep`/`time.monotonic` заглушены тем
+        же приёмом, что `tests/test_merge_gate_ci_wait.py::FakeClock` —
+        отказ по-прежнему приходит, просто после виртуального, не
+        настоящего, ожидания.
+
+        Ловит мутацию: цикл `_wait_for_branch_ci_green` по истечении
+        потолка ошибочно возвращает подтверждение вместо отказа (или
+        merge вызывается раньше подтверждения) — хотя бы один из семи
+        случаев `NOT_GREEN` дойдёт до `git merge`, и `assertNotIn("merge",
+        ...)` это поймает.
+        """
+        clock = {"value": 0.0}
+
+        def fake_sleep(seconds: float) -> None:
+            clock["value"] += seconds
+
+        def fake_monotonic() -> float:
+            return clock["value"]
+
         for name, stdout, returncode in self.NOT_GREEN:
             with self.subTest(случай=name):
                 self.set_state("merge_gate")
                 self.git_spy.calls.clear()
                 self.set_ci(stdout, returncode)
+                clock["value"] = 0.0
 
-                with self.assertRaises(SystemExit) as exit_:
+                with mock.patch.object(time, "sleep", fake_sleep), \
+                     mock.patch.object(time, "monotonic", fake_monotonic), \
+                     self.assertRaises(SystemExit) as exit_:
                     self.capture(fsm.cmd_approve, self.TASK)
 
                 self.assertNotIn("merge", self.git_spy.git_subcommands(),
@@ -611,7 +640,16 @@ class MergeNeedsGreenCiTest(FsmTest):
                 self.assertIn("merge отклонён", str(exit_.exception))
 
     def test_the_refusal_names_the_reason_in_the_journal(self):
-        """Отказ разбирают по журналу: причина в нём, а не только на экране."""
+        """Отказ разбирают по журналу: причина в нём, а не только на
+        экране — «python=failure» обязана попасть хоть под каким-то
+        `action`, даже когда путь "fresh" сам её больше не пишет (см.
+        комментарий ниже, AC-5..AC-7).
+
+        Ловит мутацию: причина не передана в `store.journal`/не долетает
+        через `_wait_for_branch_ci_green` до записи в `steps` — ни одна
+        `detail` не содержит «python=failure», и `assertTrue(any(...))`
+        здесь это поймает.
+        """
         self.set_state("merge_gate")
         self.set_ci(json.dumps({"check_runs": [
             {"name": "python", "status": "completed", "conclusion": "failure"}]}))
@@ -619,9 +657,15 @@ class MergeNeedsGreenCiTest(FsmTest):
         with contextlib.suppress(SystemExit):
             self.capture(fsm.cmd_approve, self.TASK)
 
+        # SPEC 01M1NBWPKNBXP9ZXXQDJM7AXPJ, AC-5..AC-7: путь "fresh"
+        # больше не пишет отдельную запись action="статус CI ветки" сама
+        # — опрос и журналирование переехали в `_wait_for_branch_ci_green`
+        # (action="ожидание CI (цикл merge_gate)"/"статус CI ветки
+        # (ре-ран)"), тот же узел, что и путь "pulled"; здесь важен сам
+        # факт — причина попала в журнал ХОТЬ ПОД КАКИМ-ТО action, не имя
+        # конкретной записи.
         details = [r["detail"] for r in store.db().execute(
-            "SELECT detail FROM steps WHERE task_id=? AND action=?",
-            (self.TASK, "статус CI ветки"))]
+            "SELECT detail FROM steps WHERE task_id=?", (self.TASK,))]
         self.assertTrue(any("python=failure" in d for d in details), details)
 
     def test_green_ci_merges(self):
@@ -1411,6 +1455,45 @@ class MainCopyGuardTest(unittest.TestCase):
                 artel._refuse_if_worktree()
             except SystemExit:
                 self.fail("guard отказал вне worktree и вне главной копии")
+
+
+class CarpentryGitCallsGoThroughGitcmdTest(unittest.TestCase):
+    """Инвариант 33 (docs/invariants.md): тесты не пишут в настоящий
+    репозиторий пульта — плотницкая запись артефактной ветки
+    (`artifact_branch.write_commit`/`commit_files`, `snapshot.py`,
+    `pin.py`) не зовёт `subprocess.run`/`subprocess.Popen` НАПРЯМУЮ, а
+    идёт через `gitcmd`, единую точку, которую `tests/sandbox.py::
+    TmpRootTest` подменяет одним патчем по умолчанию для всех наследников
+    (SPEC 01M1KVGD18P9H5WR7VM8TGPV1T, требования 2-3).
+
+    До этой задачи `artifact_branch.py` звал `subprocess.run` напрямую в
+    обход `gitcmd.git` и любой его подмены: тест, заводивший задачу через
+    `catalog.cmd_new` без подмены `config.ROOT` (`tests.test_review_
+    package.PreviousVerdictShaTest`), коммитил артефактную ветку прямиком
+    в НАСТОЯЩИЙ репозиторий пульта — сотни осиротевших веток `artifact/*`
+    (SPEC «Контекст»). Полный прогон `tests/` не меняющий набор ссылок
+    репозитория (первая половина инварианта) — дорогая проверка (минуты),
+    ведёт её CI job `python` (`.github/workflows/ci.yml`, сторож ссылок
+    вокруг `unittest discover`) и `tasks/01M1KVGD18P9H5WR7VM8TGPV1T/
+    acceptance_tests/test_ac1_full_suite_ref_isolation.py`; здесь —
+    дешёвая структурная половина, защищающая единую точку подмены от
+    регрессии в ЛЮБОЙ будущей задаче, не только этой.
+    """
+
+    CARPENTRY_FILES = ("artifact_branch.py", "snapshot.py", "pin.py")
+    RAW_CALL_MARKERS = ("subprocess.run(", "subprocess.Popen(")
+
+    def test_no_raw_subprocess_calls_in_carpentry_modules(self):
+        offenders = {}
+        for name in self.CARPENTRY_FILES:
+            src = (config.ROOT / "orchestrator" / name).read_text(encoding="utf-8")
+            hits = [ln.strip() for ln in src.splitlines()
+                    if any(marker in ln for marker in self.RAW_CALL_MARKERS)]
+            if hits:
+                offenders[name] = hits
+        self.assertEqual(
+            {}, offenders,
+            f"прямые вызовы subprocess.run/Popen вне единого модуля gitcmd: {offenders}")
 
 
 if __name__ == "__main__":

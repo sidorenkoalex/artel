@@ -101,6 +101,28 @@ def list_branches(prefix: str = "") -> list[str] | None:
     return [b for b in res.stdout.splitlines() if b]
 
 
+def carpentry(repo: Path, args: list, env: dict, *,
+             input: bytes | None = None, text: bool = True
+             ) -> subprocess.CompletedProcess:
+    """Плотницкая git-команда (read-tree/hash-object/update-index/write-tree/
+    commit-tree — `artifact_branch.write_commit`) в `repo` со своим
+    окружением (`GIT_INDEX_FILE`, для `commit-tree` — ещё и `GIT_AUTHOR_*`/
+    `GIT_COMMITTER_*`): единая точка `subprocess.run` для всей плотницкой
+    записи артефактной ветки (SPEC 01M1KVGD18P9H5WR7VM8TGPV1T, требования
+    2-3) — раньше `artifact_branch.py` звал `subprocess.run` напрямую, в
+    обход `gitcmd` и любой его подмены, и утекал в НАСТОЯЩИЙ репозиторий
+    пульта из тестов, подменявших только `gitcmd.git` (SPEC «Контекст»).
+
+    `tests/sandbox.py::TmpRootTest` патчит не эту функцию отдельно, а сам
+    `gitcmd.subprocess.run` (тот же объект, что глобальный `subprocess.
+    run`, — общий модуль-синглтон): патч перехватывает и эти вызовы тоже,
+    без изменения точки подмены (`tests/01M1KVGD18P9H5WR7VM8TGPV1T/
+    acceptance_tests/test_ac3_sandbox_default_covers_carpentry.py`).
+    """
+    return subprocess.run(["git", *args], cwd=repo, env=env,
+                          capture_output=True, text=text, input=input)
+
+
 def in_repo(repo: Path, *args: str) -> subprocess.CompletedProcess:
     """git-команда в произвольном репозитории (не ROOT пульта) через `-C`.
 
@@ -138,6 +160,54 @@ def is_clean(*paths: str, repo: Path | None = None) -> bool | None:
     if res is None or res.returncode != 0:
         return None
     return not res.stdout.strip()
+
+
+def check_ignore(paths) -> set[str] | None:
+    """Пути из `paths`, которые `.gitignore` ПУЛЬТА (`config.ROOT`) считает
+    игнорируемыми; `None` — git не ответил. Настоящий разбор `.gitignore`
+    (`git check-ignore`), не самодельный список расширений (SPEC
+    01M1KVG3KSCY47HWXWF5HM0E76, требование 1) — только так ловится
+    директорное правило (например, `__pycache__/`), которое списком
+    суффиксов не выразить.
+
+    Батч одним вызовом `--stdin -z` на весь список путей шага, не по
+    одному на файл. Путям не обязательно существовать на диске
+    `config.ROOT` — `check-ignore` матчит их как строки пути, не как
+    файлы (нужно для путей внешнего target, которых в рабочей копии
+    пульта нет вовсе).
+    """
+    paths = list(paths)
+    if not paths:
+        return set()
+    data = "".join(p + "\0" for p in paths).encode()
+    try:
+        res = subprocess.run(["git", "check-ignore", "-v", "-z", "--stdin"],
+                             cwd=config.ROOT, input=data, capture_output=True)
+    except OSError:
+        return None
+    if res.returncode not in (0, 1):
+        return None
+    fields = res.stdout.split(b"\0")
+    ignored = set()
+    i = 0
+    while i + 3 < len(fields):
+        pathname = fields[i + 3]
+        if pathname:
+            ignored.add(pathname.decode())
+        i += 4
+    return ignored
+
+
+def diff_names(a: str, b: str, *paths: str) -> list[str] | None:
+    """Пути, различающиеся между `a` и `b` под `paths`; `None` — git не
+    ответил. В отличие от `diff_paths` (голое да/нет), отдаёт сами пути —
+    нужно, чтобы отличить настоящую правку от разницы только в
+    игнорируемых `.gitignore` файлах (SPEC 01M1KVG3KSCY47HWXWF5HM0E76,
+    требование 3)."""
+    res = git("diff", "--name-only", a, b, "--", *paths)
+    if res is None or res.returncode != 0:
+        return None
+    return [p for p in res.stdout.splitlines() if p]
 
 
 def diff_paths(a: str, b: str, *paths: str) -> bool | None:

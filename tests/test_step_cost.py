@@ -288,8 +288,11 @@ class PumpCostTest(TmpRootTest):
 
 class ChargeMissingResultTest(TmpRootTest):
     """`spend.charge_missing_result` — учёт попытки без финального события
-    потока (tasks/T040): частичная сумма токенов либо алерт неизвестной
-    стоимости, `spent_usd` не трогается ни в одной ветке."""
+    потока (tasks/T040, курс токенов — SPEC 01M1NWCM3TDY0YABEKE8DYQA1C):
+    известный курс роли (`config.TOKEN_RATES`) прибавляет частичную сумму
+    к `spent_usd`; курс не задан — верхняя оценка в `spent_estimate_usd` и
+    алерт `kind=threshold`; ни одного usage-события вовсе — `spent_usd`/
+    `spent_estimate_usd` не трогаются, алерт `kind=incident`."""
 
     def setUp(self):
         super().setUp()
@@ -317,22 +320,34 @@ class ChargeMissingResultTest(TmpRootTest):
             "source='spend.unknown_cost'").fetchall()
 
     def test_partial_tokens_are_journaled_without_touching_spent(self):
+        """Имя метода унаследовано от T040 — ANSWER-2.md (эскалация AC-1/
+        AC-2 задачи 01M1NWCM3TDY0YABEKE8DYQA1C, вариант A) переписывает его
+        ожидание на ПРОТИВОПОЛОЖНОЕ: роль `developer` теперь несёт курс
+        токенов (`config.TOKEN_RATES`), и частичная сумма по курсу
+        прибавляется к `spent_usd`, а не остаётся в стороне (решение
+        Оператора, ADR-0002 — правка локнутого теста санкционирована этим
+        же ANSWER).
+
+        Ловит мутацию: разработчик оставляет прежнее поведение T040 без
+        курса для `developer` — `assertGreater` ниже упадёт на 0.0.
+        """
         conn = store.db()
 
         spent = spend.charge_missing_result(
             conn, self.TASK, "developer", "попытка 1/3", "таймаут шага",
             partial_tokens=150, saw_usage_event=True)
 
-        self.assertEqual(self.task_row()["spent_usd"], 0.0)
-        self.assertIn(", частичная: 150 токенов", spent)
+        self.assertGreater(self.task_row()["spent_usd"], 0.0)
+        self.assertIn("150", spent)
+        self.assertIn("$", spent)
         actions = [(a, action) for a, action, _ in self.journal()]
         self.assertIn(("developer", "agent cost PARTIAL"), actions)
         detail = self.journal()[-1][2]
-        self.assertIn("частичная", detail)
-        self.assertIn("150 токенов", detail)
+        self.assertIn("частичная стоимость по курсу", detail)
+        self.assertIn("150", detail)
         self.assertIn("таймаут шага", detail)
         self.assertEqual(self.unknown_cost_alerts(), [],
-                         "частичная сумма — алерт не заводится (AC-1/2 «либо…либо»)")
+                         "известный курс — алерт неизвестной стоимости не заводится")
 
     def test_unrecoverable_cost_journals_and_raises_an_alert(self):
         conn = store.db()
@@ -362,6 +377,87 @@ class ChargeMissingResultTest(TmpRootTest):
 
         self.assertEqual(len(self.unknown_cost_alerts()), 1,
                          "дедуп alerts.raise_alert не даёт повторам плодить копии")
+
+    def test_known_rate_charge_matches_partial_cost_usd(self):
+        """Сумма, прибавленная к `spent_usd`, — ровно та, что считает
+        `spend.partial_cost_usd` по той же роли и числу токенов: одна
+        формула на обе точки (учёт и отображение), не две рассинхронные.
+
+        Ловит мутацию: `charge_missing_result` считает частичную сумму
+        своей отдельной формулой (например, только по цене входного
+        токена, без среднего) вместо вызова `partial_cost_usd` — тогда
+        `assertAlmostEqual` ниже разойдётся с независимо посчитанным
+        `expected`."""
+        conn = store.db()
+
+        spend.charge_missing_result(
+            conn, self.TASK, "developer", "попытка 1/3", "таймаут шага",
+            partial_tokens=1000, saw_usage_event=True)
+
+        expected = spend.partial_cost_usd("developer", 1000)
+        self.assertAlmostEqual(self.task_row()["spent_usd"], expected)
+
+    def test_unknown_rate_role_credits_the_estimate_and_raises_threshold_alert(self):
+        """Роль без записи в `config.TOKEN_RATES` (`verifier`, `executor:
+        none`) не может получить частичную сумму по курсу — вместо неё
+        верхняя оценка в `spent_estimate_usd` и алерт `kind=threshold`,
+        `spent_usd` не тронут.
+
+        Ловит мутацию: `charge_missing_result` при неизвестном курсе
+        всё равно прибавляет что-то к `spent_usd` (или не заводит
+        алерт `threshold`) — тогда `row["spent_usd"]` окажется
+        ненулевым, либо список `threshold_alerts` будет пуст."""
+        conn = store.db()
+
+        spend.charge_missing_result(
+            conn, self.TASK, "verifier", "попытка 1/3", "обрыв stdout-пайпа",
+            partial_tokens=42, saw_usage_event=True)
+
+        row = self.task_row()
+        self.assertEqual(row["spent_usd"], 0.0)
+        self.assertAlmostEqual(row["spent_estimate_usd"],
+                               config.STEP_COST_ESTIMATE_USD)
+        threshold_alerts = store.db().execute(
+            "SELECT * FROM alerts WHERE kind='threshold'").fetchall()
+        self.assertEqual(len(threshold_alerts), 1)
+        self.assertIn("42", threshold_alerts[0]["message"])
+        detail = self.journal()[-1][2]
+        self.assertIn("верхняя оценка стоимости шага", detail)
+
+
+class PartialCostUsdTest(unittest.TestCase):
+    """`spend.partial_cost_usd` — курс роли -> доллары, чистая функция без
+    БД (SPEC 01M1NWCM3TDY0YABEKE8DYQA1C, требование 1-2)."""
+
+    def test_known_role_returns_a_positive_amount_proportional_to_tokens(self):
+        """Ловит мутацию: `partial_cost_usd` возвращает фиксированную
+        ставку роли, не умноженную на `partial_tokens` (например,
+        забывает `*` и просто отдаёт `effective`) — тогда `double`
+        останется равным `single`, а не удвоится."""
+        role = next(iter(config.TOKEN_RATES))
+
+        single = spend.partial_cost_usd(role, 1000)
+        double = spend.partial_cost_usd(role, 2000)
+
+        self.assertGreater(single, 0.0)
+        self.assertAlmostEqual(double, single * 2)
+
+    def test_zero_tokens_is_zero_cost_even_with_a_known_rate(self):
+        """Ловит мутацию: `partial_cost_usd` трактует `partial_tokens=0`
+        как «токенов нет» наравне с отсутствующим курсом (например,
+        `if not partial_tokens: return None`) — тогда функция вернёт
+        `None` вместо честного 0.0 для известной роли."""
+        role = next(iter(config.TOKEN_RATES))
+
+        self.assertEqual(spend.partial_cost_usd(role, 0), 0.0)
+
+    def test_unknown_role_returns_none(self):
+        """Ловит мутацию: `partial_cost_usd` возвращает 0.0 вместо
+        `None` для роли без курса — тогда `charge_missing_result`
+        принял бы отсутствие курса за «стоимость нулевая» и молча
+        начислил 0.0 в `spent_usd`, минуя ветку верхней оценки/алерта
+        (требование 3)."""
+        self.assertIsNone(spend.partial_cost_usd("no-such-role", 1000))
 
 
 class CmdRunCostTest(TmpRootTest):
@@ -632,6 +728,16 @@ class CmdRunPartialCostTest(TmpRootTest):
             "source='spend.unknown_cost'").fetchall()
 
     def test_timeout_with_usage_events_charges_a_partial_token_sum(self):
+        """ANSWER-2.md (эскалация AC-1/AC-2 задачи
+        01M1NWCM3TDY0YABEKE8DYQA1C, вариант A) переписывает ожидание этого
+        теста на ПРОТИВОПОЛОЖНОЕ прежнему T040: роль `developer` (state
+        `in_dev` этого сценария) теперь несёт курс токенов
+        (`config.TOKEN_RATES`) — частичная сумма по курсу прибавляется к
+        `spent_usd`, а не остаётся в стороне (решение Оператора, ADR-0002).
+
+        Ловит мутацию: разработчик оставляет прежнее поведение T040 без
+        курса для `developer` — `assertGreater` ниже упадёт на 0.0.
+        """
         proc = timeout_then_killed_proc([
             assistant_event(usage={"input_tokens": 100, "output_tokens": 50}),
             assistant_event(usage={"input_tokens": 40, "output_tokens": 10}),
@@ -640,10 +746,10 @@ class CmdRunPartialCostTest(TmpRootTest):
         with mock.patch.object(runner, "spawn_agent", return_value=proc):
             out = self.capture(runner.cmd_run, self.TASK)
 
-        self.assertEqual(self.task_row()["spent_usd"], 0.0)
+        self.assertGreater(self.task_row()["spent_usd"], 0.0)
         text = self.journal_text()
-        self.assertIn("частичная", text)
-        self.assertIn("200 токенов", text)
+        self.assertIn("частичная стоимость по курсу", text)
+        self.assertIn("200", text)
         self.assertNotIn("стоимость шага неизвестна", text)
         self.assertEqual(self.unknown_cost_alerts(), [],
                          "usage-события были — алерт неизвестной стоимости не нужен")

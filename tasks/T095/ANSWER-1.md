@@ -26,7 +26,7 @@ JSON-события потока). Реальные файлы `.artel/logs/<id>
 файлах не бывает. Требование SPEC (AC-11 manual) «формат
 соответствует реальному» — не выполнено.
 
-Убедись сам до правки: `grep -c '^\s*{' /Users/al.sidorenko/projects/
+Убедись сам до правки: `grep -c '^\s*{' /Users/operator/projects/
 artel/.artel/logs/T096-developer-1.log` → 0.
 
 ## Что сделать
