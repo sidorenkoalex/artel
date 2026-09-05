@@ -16,6 +16,23 @@ schema_version: 4
 `tasks/01M1REVEZ1HESMJ7AFD5A9MEJ8/acceptance_tests/`), устранение
 найденных огрехов и оформление плана.
 
+Итерация 2 (закрытие REVIEW.md changes_requested, итерация 1): R1-F1
+(major) закрыт — докстринги «Ловит мутацию» скопированы дословно из
+`tasks/01M1REVEZ1HESMJ7AFD5A9MEJ8/acceptance_tests/
+test_ac12_ac13_role_env_venv_interpreter.py` в три метода
+`tests/test_multitarget.py::RoleEnvVenvInterpreterTest` (строки
+847/861/874 до правки). R1-F2 (minor) — пробовал сузить
+`_venv_interpreter_bin()` до отдельной `stack.venv_checks()` (только
+две venv-проверки, без трёх лишних subprocess к `git`/`gh`/`claude`),
+но приёмочный `test_ac12_ac13_role_env_venv_interpreter.py::
+test_ac12_consistent_venv_puts_its_bin_first_on_path` (планка залочена
+T023) мокает именно `runner.stack.check_stack` — сужение вызова без
+правки локнутой планки роняет её реальным отсутствием venv по
+временному пути теста (проверено запуском: `ERROR ... OSError: venv не
+готов для роли`). Откатил сужение, принял вторую альтернативу самого
+замечания — риск явно описан в «Риски» ниже. Реестр замечаний REVIEW.md
+размечен (R1-F1: fixed, R1-F2: rejected — код не менялся).
+
 Реализация (по факту в ветке, требование за требованием):
 
 - `orchestrator/stack.py`: `THIRD_PARTY_EXCEPTIONS` несёт три записи
@@ -185,6 +202,21 @@ acceptance_tests/`) — зелёные на унаследованном код�
 
 ## Риски
 
+- Принят (REVIEW.md итерация 1, R1-F2 — rejected, код не менялся):
+  `_venv_interpreter_bin()` зовёт ПОЛНЫЙ `stack.check_stack()` (Python +
+  `git`/`gh`/`claude` — три живых subprocess с таймаутом 10 c каждый —
+  плюс venv/venv-packages), хотя интересна только пара venv-проверок;
+  `role_env()` зовётся минимум дважды за шаг роли (`doctor.
+  check_git_identity` в preflight и сам `run_agent_once`) — то есть
+  каждый шаг ЛЮБОЙ роли тянет до 6 лишних subprocess-вызовов
+  инструментов, не относящихся к вопросу «venv согласован». В обычном
+  случае это доли секунды, но при зависании/деградации `git`/`gh`/
+  `claude` — источник задержки шага. Сужение до отдельной
+  `stack.venv_checks()` опробовано и отклонено на этой итерации:
+  приёмочный тест `test_ac12_ac13_role_env_venv_interpreter.py::
+  test_ac12_consistent_venv_puts_its_bin_first_on_path` (планка залочена
+  T023) мокает именно `runner.stack.check_stack` — сужение вызова без
+  правки локнутой планки (эскалация, не в объёме этого шага) роняет её.
 - Операционный риск мержа (см. «Влияние на систему»): Оператору нужно
   прогнать `python3 orchestrator/artel.py venv-sync` сразу после мержа
   этой задачи — до первого успешного прогона все шаги ролей будут

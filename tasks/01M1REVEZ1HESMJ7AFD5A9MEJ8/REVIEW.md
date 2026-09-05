@@ -87,8 +87,8 @@ workflows/ci.yml` byte-for-byte в районе строк 158-166) — патч
 
 | id | статус | файл/строка | суть | последствие | решение |
 |---|---|---|---|---|---|
-| R1-F1 | open | tests/test_multitarget.py:847,861,874 | 3 новых теста без докстринга «Ловит мутацию» | ревьювер не может сверить тест с заявленной мутацией — конвенция test-authoring нарушена | скопировать докстринги из tasks/.../acceptance_tests/test_ac12_ac13_role_env_venv_interpreter.py (те же 3 сценария) |
-| R1-F2 | open | orchestrator/runner.py:448-457 | `_venv_interpreter_bin` зовёт весь `check_stack()` (3 лишних subprocess) ради venv-статуса | лишняя задержка/поверхность отказа на каждом шаге любой роли, не описанная в Рисках PLAN | сузить проверку до venv/venv-packages, либо явно принять риск и дописать его в «Риски» PLAN.md |
+| R1-F1 | fixed | tests/test_multitarget.py:847,861,874 | 3 новых теста без докстринга «Ловит мутацию» | ревьювер не может сверить тест с заявленной мутацией — конвенция test-authoring нарушена | скопированы докстринги из tasks/.../acceptance_tests/test_ac12_ac13_role_env_venv_interpreter.py дословно (те же 3 сценария) |
+| R1-F2 | rejected | orchestrator/runner.py:448-457 | `_venv_interpreter_bin` зовёт весь `check_stack()` (3 лишних subprocess) ради venv-статуса | лишняя задержка/поверхность отказа на каждом шаге любой роли, не описанная в Рисках PLAN | не сужено кодом: планка приёмки test_ac12_ac13_role_env_venv_interpreter.py (залочена T023) мокает именно `runner.stack.check_stack` — сужение до отдельной venv-функции оставило бы мок без эффекта и уронило бы приёмку; выбрана вторая альтернатива самого замечания — риск явно описан в PLAN.md «Риски» |
 
 ## Вердикт
 
