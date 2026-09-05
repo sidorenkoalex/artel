@@ -4,11 +4,21 @@
 `orchestrator/config.COMMON_ZONES` (AC-1); отказ называет конкретные
 файлы диффа, лежащие вне зон, а не общую формулировку (AC-2).
 
+`Ac1PreviouslyRecordedExtensionCountsAsZoneTest` — тоже AC-1, уточнённое
+ANSWER-1.md (п.4, канал ADR-0012): отказ AC-1 считает зоной ОБЪЕДИНЕНИЕ
+`zones` и `zones_extension` (колонка расширения зон, AC-3) — путь, уже
+одобренный расширением в прошлом раунде, не должен снова считаться «вне
+зон» без нового мандата.
+
 Красен до реализации: `orchestrator/fsm_advance.py::in_dev` сегодня не
 сверяет дифф с `zones` вовсе — переход в `review` проходит для ЛЮБОГО
 диффа, пока PLAN.md ready и лок/свежесть/ёмкость в порядке; ни один из
-тестов ниже не проходит без новой сверки.
-"""
+тестов ниже не проходит без новой сверки. Последний тест файла падает
+ещё раньше — `ValueError: tasks: нет колонок zones_extension` на
+`store.update_task(..., zones_extension=...)` (`table_columns` сверяет
+поля с реальной схемой): колонки `zones_extension` в `tasks` не
+существует до реализации этой задачи (заводит её миграция AC-3, тем же
+приёмом, что `zones` части 1)."""
 import sys
 import unittest
 from pathlib import Path
@@ -17,6 +27,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from _sandbox import ZonesGateSandbox  # noqa: E402
+
+from orchestrator import store  # noqa: E402
 
 
 class Ac1OutOfZoneDiffRefusesTest(ZonesGateSandbox):
@@ -82,6 +94,34 @@ class Ac2RefusalNamesTheFilesTest(ZonesGateSandbox):
             any("docs/unrelated_note.md" in d for d in details),
             f"отказ гейта зон обязан лечь в store.journal с именем файла: "
             f"{details}")
+
+
+class Ac1PreviouslyRecordedExtensionCountsAsZoneTest(ZonesGateSandbox):
+
+    def test_ac1_previously_recorded_zones_extension_counts_as_zone_on_later_advance(self):
+        """`tasks.zones_extension` уже несёт путь, одобренный расширением в
+        прошлом цикле (ANSWER-1.md, п.4: «отказ AC-1 после расширения
+        считает зоной объединение zones и zones_extension») — дифф
+        трогает ТОЛЬКО этот путь, PLAN.md на этот раз БЕЗ раздела
+        «## Расширение зон» вовсе (обычный ready PLAN) — переход обязан
+        пройти: путь уже часть зоны задачи, повторный мандат не нужен.
+
+        Ловит мутацию: сверка AC-1 сравнивает дифф только с `zones`
+        задачи, не объединяя с `zones_extension` (забытое требование
+        ANSWER-1, п.4) — путь, уже одобренный Оператором в прошлом
+        раунде ревью, снова считался бы «вне зон», и переход отказал бы
+        вопреки зафиксированному решению Оператора."""
+        self.set_zones("orchestrator/store.py")
+        store.update_task(store.db(), self.TASK,
+                          zones_extension="docs/extra_module.md")
+
+        self.advance_with_diff_files(["docs/extra_module.md"])
+
+        self.assertEqual(
+            self.state(), "review",
+            "docs/extra_module.md уже в zones_extension с прошлого "
+            "одобренного расширения — переход обязан пройти без нового "
+            "мандата (ANSWER-1, п.4)")
 
 
 if __name__ == "__main__":

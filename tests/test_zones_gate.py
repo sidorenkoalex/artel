@@ -20,6 +20,9 @@ from tests.sandbox import TmpRootTest  # noqa: E402
 class SplitZonePathsTest(unittest.TestCase):
 
     def test_comma_separated_paths_are_trimmed(self):
+        """Ловит мутацию: `.strip()` на элементе убран/сломан — вокруг
+        пути остаются пробелы (` b.py `), и он не совпадает с реальным
+        путём диффа при сверке зон."""
         self.assertEqual(
             fsm_advance._split_zone_paths("a.py, b.py ,c/"),
             ["a.py", "b.py", "c/"])
@@ -30,9 +33,16 @@ class SplitZonePathsTest(unittest.TestCase):
         self.assertEqual(fsm_advance._split_zone_paths(None), [])
 
     def test_empty_string_gives_empty_list(self):
+        """Ловит мутацию: проверка `if not raw` убрана/ослаблена — пустая
+        строка идёт в `"".split(",")` и даёт список из одного пустого
+        пути вместо пустого списка (та же ловушка, что и `None`)."""
         self.assertEqual(fsm_advance._split_zone_paths(""), [])
 
     def test_blank_entries_are_dropped(self):
+        """Ловит мутацию: фильтр `if p.strip()` убран — двойная запятая
+        (пустой элемент между `a.py` и `b.py`) попадает в список как
+        пустая строка, и пустой путь ложно матчит любой файл диффа
+        (`_touches_zone` — `path.startswith("")` истинно всегда)."""
         self.assertEqual(fsm_advance._split_zone_paths("a.py,, b.py"),
                          ["a.py", "b.py"])
 
@@ -40,14 +50,18 @@ class SplitZonePathsTest(unittest.TestCase):
 class TouchesZoneTest(unittest.TestCase):
 
     def test_exact_file_match(self):
+        """Ловит мутацию: сравнение `path == z` убрано (осталось только
+        `startswith`, испорченное, например, разворотом операндов) —
+        путь, буквально совпадающий с зоной-файлом, обязан матчиться."""
         self.assertTrue(
             fsm_advance._touches_zone("orchestrator/store.py",
                                       ["orchestrator/store.py"]))
 
     def test_directory_zone_matches_file_under_it(self):
-        """Зона-директория несёт trailing `/` (COMMON_ZONES: `"tests/"`) —
-        путь под ней матчится префиксом, не только листингом каталога
-        буквально."""
+        """Ловит мутацию: `startswith` заменён на строгое равенство —
+        зона-директория несёт trailing `/` (COMMON_ZONES: `"tests/"`) —
+        путь под ней обязан матчиться префиксом, не только листингом
+        каталога буквально."""
         self.assertTrue(
             fsm_advance._touches_zone("tests/test_x.py", ["tests/"]))
 
@@ -58,21 +72,25 @@ class TouchesZoneTest(unittest.TestCase):
         self.assertFalse(
             fsm_advance._touches_zone("docs/x.py", ["orchestrator/"]))
 
-    def test_file_zone_does_not_match_as_prefix_of_unrelated_file(self):
-        """Зона-файл без trailing `/` не должна матчить чужой файл с тем же
-        префиксом имени (`orchestrator/store.py` не покрывает
-        `orchestrator/store.py.bak` неявно расширенным правилом)."""
+    def test_file_zone_matches_as_prefix_of_unrelated_file(self):
+        """Ловит мутацию: намеренное поведение (тот же `startswith`, что и
+        `config.PROTECTED_PATHS`/`_touches_protected_path`) заменено на
+        точное сравнение путей — зона-файл без trailing `/`
+        (`orchestrator/store.py`) СОВПАДАЕТ по префиксу с чужим файлом
+        того же имени (`orchestrator/store.py.bak`); список зон
+        намеренно не эксклюзивный, а не баг, который стоит чинить здесь."""
         self.assertTrue(
             fsm_advance._touches_zone("orchestrator/store.py.bak",
-                                      ["orchestrator/store.py"]),
-            "тот же startswith, что и config.PROTECTED_PATHS — намеренно "
-            "не эксклюзивный список, поведение идентично существующему "
-            "_touches_protected_path")
+                                      ["orchestrator/store.py"]))
 
 
 class PlanZonesExtensionPathsTest(unittest.TestCase):
 
     def test_no_section_gives_none(self):
+        """Ловит мутацию: `guard.section_body` на отсутствующей секции
+        возвращает не пустую строку, а весь текст (или проверка `is
+        None` заменена на falsy-проверку) — исключение AC-3 открылось бы
+        для PLAN, вовсе не заявлявшего расширение зон."""
         text = "# PLAN\n\n## Подход\n\nтекст\n"
         self.assertIsNone(fsm_advance._plan_zones_extension_paths(text))
 
@@ -83,6 +101,10 @@ class PlanZonesExtensionPathsTest(unittest.TestCase):
         self.assertIsNone(fsm_advance._plan_zones_extension_paths(text))
 
     def test_section_with_paths_line_is_parsed(self):
+        """Ловит мутацию: срез `line[len("Пути:"):]` сдвинут (обрезает
+        первый символ пути или оставляет сам префикс `Пути:`) — список
+        путей исключения AC-3 выходит искажённым, и мандат Оператора на
+        реальные пути перестаёт совпадать."""
         text = ("## Расширение зон\n\nПути: docs/a.md, docs/b.md\n\n"
                "Обоснование ниже.\n")
         self.assertEqual(
@@ -105,6 +127,10 @@ class ZonesGateGitFailureTest(TmpRootTest):
                  "zones": "orchestrator/store.py", "zones_extension": None}
 
     def test_git_not_answering_diff_names_refuses(self):
+        """Ловит мутацию: проверка `if files is None: ... return True`
+        убрана/заменена на `return False` — `diff_names`, не ответивший
+        списком файлов, молча пропустил бы переход вместо явного отказа
+        (fail-open вместо fail-closed, ADR-0002)."""
         with mock.patch.object(gitcmd, "diff_names", return_value=None):
             refuses = fsm_advance._zones_gate_refuses(
                 self.conn, self.task_id, self.t, "task/t001-x", "PLAN\n")
