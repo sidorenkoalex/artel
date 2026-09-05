@@ -39,9 +39,14 @@ SETTINGS_FILE = ROLE_HOME_CLAUDE / "settings.json"
 GUARD_TEST_FILE = _REPO_ROOT / "tests" / "test_role_bash_guard.py"
 ROLE_HOME_MD = _REPO_ROOT / "docs" / "reference" / "role-home.md"
 
-# Список `permissions.deny`, действующий на момент написания планки —
-# требование 4 SPEC явно требует, чтобы снятие хука его НЕ тронуло
-# (не только «не опустело», а байт-в-байт то же содержимое).
+# Список `permissions.deny`, действовавший на момент написания планки —
+# требование 4 SPEC требует, чтобы снятие хука его НЕ тронуло. Сверка —
+# «ни одна из этих записей не исчезла», а не байт-в-байт: другие,
+# независимо смерженные задачи вправе РАСШИРЯТЬ deny (пул канарейки
+# 01M1NSR5M5THYRC0RFWPMVE2DW добавил четыре записи между написанием
+# планки и мержем этой задачи — правка планки Оператора по ADR-0012,
+# amend-tests 05.09; чувствительность к собственной правке этой задачи
+# не ослаблена: удаление любого запрета по-прежнему краснит).
 EXPECTED_DENY = [
     "Read(~/.artel-canary/**)",
     "Bash(git clone:*)",
@@ -95,10 +100,14 @@ class SettingsJsonPreToolUseRemovedTest(unittest.TestCase):
 
         Ловит мутацию: попутная «уборка» списка запретов вместе с
         удалением хука (например, снятие `git clone`-запрета заодно) —
-        `assertEqual` покраснеет на первом же расхождении списков.
+        проверка подмножества покраснеет на первой же пропавшей записи.
+        Расширение списка другой задачей мутацией не считается.
         """
         deny = self.settings.get("permissions", {}).get("deny")
-        self.assertEqual(deny, EXPECTED_DENY)
+        self.assertIsInstance(deny, list)
+        missing = [d for d in EXPECTED_DENY if d not in deny]
+        self.assertEqual(missing, [],
+                         f"из permissions.deny пропали записи: {missing}")
 
 
 class RoleHomeDocNoLongerMentionsTheHookTest(unittest.TestCase):
