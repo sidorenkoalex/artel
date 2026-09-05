@@ -498,14 +498,23 @@ class JournalModeTest(TmpRootTest):
 
 
 class SqlOnlyInStoreTest(unittest.TestCase):
-    """Критерий 6: прямых запросов вне store.py в orchestrator/ не осталось."""
+    """Критерий 6: прямых запросов вне store.py/schema.py в orchestrator/
+    не осталось.
+
+    `schema.py` — рядом со `store.py` в списке исключений с
+    01M1SD5NZ79MWCEJDJ9JP6EPWS (R6): DDL/`migrate` переехали туда из
+    `store.py`, и по определению несут `CREATE TABLE`/`ALTER TABLE` —
+    ADR-0003 3ж («SQL только в store.py») по тексту самого ADR остаётся
+    целью, не пунктом docs/invariants.md, поэтому расширение списка
+    исключений не ослабляет защищаемый инвариант.
+    """
 
     SQL = re.compile(r"\b(SELECT|INSERT|UPDATE|DELETE|PRAGMA|ALTER|CREATE)\b")
 
     def test_no_sql_outside_store(self):
         offenders = []
         for path in sorted((REPO_ROOT / "orchestrator").glob("*.py")):
-            if path.name == "store.py":
+            if path.name in ("store.py", "schema.py"):
                 continue
             for number, line in enumerate(
                     path.read_text(encoding="utf-8").splitlines(), 1):
