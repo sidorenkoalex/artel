@@ -37,7 +37,8 @@ CREATE TABLE IF NOT EXISTS tasks (
   answer_baseline INTEGER, verifying_attempts INTEGER DEFAULT 0,
   draft_mr_created INTEGER DEFAULT 0,
   diff_bytes INTEGER, split_assessment TEXT, zones TEXT,
-  materialized_artifact_sha TEXT,
+  zones_extension TEXT,
+  materialized_artifact_sha TEXT, zone_queue_position INTEGER,
   created_at TEXT, updated_at TEXT
 );
 CREATE TABLE IF NOT EXISTS steps (
@@ -230,6 +231,17 @@ def migrate(conn: sqlite3.Connection) -> None:
     # что механика «Оценка объёма и деление» уже структурирует для
     # сигналов деления (SPEC, требование 1).
     add_column(conn, "tasks", "zones", "TEXT")
+    # Расширение зон, одобренное мандатом Оператора при переходе
+    # `in_dev -> review` (01M1P9QCHPHSCEA6TK13PV85SP, ANSWER-1, п.3):
+    # список путей через запятую, тем же приёмом, что `zones` выше — NULL,
+    # пока расширения не было. Гейт зон (`fsm_advance._zones_gate_refuses`)
+    # считает зоной задачи объединение `zones` и `zones_extension`.
+    add_column(conn, "tasks", "zones_extension", "TEXT")
+    # Явная перестановка очереди ожидания зоны Оператором (SPEC
+    # 01M1P9QAG65GVF69YJEV0V18D9, требование 9, AC-9): NULL — очередь не
+    # переставлена, естественный порядок по времени approve (`updated_at`)
+    # решает (`orchestrator/zone_lock.py::queue_order`).
+    add_column(conn, "tasks", "zone_queue_position", "INTEGER")
     conn.executescript(
         "CREATE TABLE IF NOT EXISTS task_counters ("
         "  target TEXT PRIMARY KEY, next_number INTEGER NOT NULL);")
@@ -916,4 +928,75 @@ def ack_alert(conn, alert_id: int, actor: str, resolution: str) -> None:
     conn.execute(
         "UPDATE alerts SET ack_ts=?, ack_by=?, ack_resolution=? WHERE id=?",
         (now(), actor, resolution, alert_id))
+    conn.commit()
+
+
+def _ensure_canary_tables(conn) -> None:
+    """Таблицы метрик канарейки v2 — заведены ЛЕНИВО, при первом реальном
+    использовании, не в универсальной `SCHEMA`/`migrate()` (SPEC
+    01M1NEEWH5K1XPFRDGRMPYSBXJ, требование 5, AC-5): пульт, который ни
+    разу не гонял канарейку, не несёт этих таблиц вовсе — метрики
+    физически ОТДЕЛЬНЫ от журнала живых задач (`tasks`/`steps`, те
+    обязаны оставаться пустыми после прогона, AC-3), но не более того:
+    таблица, присутствующая в БД С РОЖДЕНИЯ пульта, неотличима от
+    «появилась после прогона» той же проверкой, которой AC-5 ловит
+    противоположную мутацию (буквальный перенос v1 — метрики только в
+    JSON на диске, `.artel/canary/*.json`, вовсе без таблицы БД).
+    `canary_baseline` ключуется `title` (стабильное имя шаблона пула
+    МЕЖДУ прогонами), не `task_id` (свежий ULID каждый прогон) —
+    требование 9: бейзлайн per-task, не суммой по набору."""
+    conn.executescript(
+        "CREATE TABLE IF NOT EXISTS canary_runs ("
+        "  id INTEGER PRIMARY KEY AUTOINCREMENT, run_stamp TEXT, title TEXT,"
+        "  task_id TEXT, steps INTEGER, cost_usd REAL, review_iterations INTEGER,"
+        "  escalations INTEGER, outcome TEXT, expected_escalation TEXT,"
+        "  actual_escalation INTEGER, marker_mismatch INTEGER, created_at TEXT);"
+        "CREATE TABLE IF NOT EXISTS canary_baseline ("
+        "  title TEXT PRIMARY KEY, steps INTEGER, cost_usd REAL,"
+        "  review_iterations INTEGER, updated_at TEXT);")
+
+
+def insert_canary_run(conn, run_stamp: str, title: str, task_id: str,
+                      steps: int, cost_usd: float, review_iterations: int,
+                      escalations: int, outcome: str,
+                      expected_escalation: str | None,
+                      actual_escalation: bool, marker_mismatch: bool) -> None:
+    """Строка метрик одной канареечной задачи одного прогона (SPEC
+    01M1NEEWH5K1XPFRDGRMPYSBXJ, требование 5, AC-5) — читатель:
+    `canary._run_one_task`."""
+    _ensure_canary_tables(conn)
+    conn.execute(
+        "INSERT INTO canary_runs (run_stamp, title, task_id, steps, cost_usd,"
+        " review_iterations, escalations, outcome, expected_escalation,"
+        " actual_escalation, marker_mismatch, created_at)"
+        " VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+        (run_stamp, title, task_id, steps, cost_usd, review_iterations,
+         escalations, outcome, expected_escalation, int(actual_escalation),
+         int(marker_mismatch), now()))
+    conn.commit()
+
+
+def canary_baseline(conn, title: str) -> sqlite3.Row | None:
+    """Бейзлайн канарейки по имени шаблона; None — прогона ещё не было
+    (SPEC 01M1NEEWH5K1XPFRDGRMPYSBXJ, требование 9-10)."""
+    _ensure_canary_tables(conn)
+    return conn.execute(
+        "SELECT * FROM canary_baseline WHERE title=?", (title,)).fetchone()
+
+
+def set_canary_baseline(conn, title: str, steps: int, cost_usd: float,
+                        review_iterations: int) -> None:
+    """Заводит либо перезаписывает бейзлайн шаблона (первый прогон
+    заводит его сам, требование 10 — не отдельная команда, как у v1
+    `--rewrite-baseline`: v2 бейзлайн per-task не редактируется руками
+    отдельным флагом, только рождается на первом прогоне шаблона)."""
+    _ensure_canary_tables(conn)
+    conn.execute(
+        "INSERT INTO canary_baseline (title, steps, cost_usd,"
+        " review_iterations, updated_at) VALUES (?,?,?,?,?)"
+        " ON CONFLICT(title) DO UPDATE SET steps=excluded.steps,"
+        " cost_usd=excluded.cost_usd,"
+        " review_iterations=excluded.review_iterations,"
+        " updated_at=excluded.updated_at",
+        (title, steps, cost_usd, review_iterations, now()))
     conn.commit()

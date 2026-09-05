@@ -21,10 +21,17 @@
 
 Тест не фиксирует ТОЧНУЮ формулу пересчёта токенов в доллары (курс
 несёт раздельную цену входного/выходного токена, а `partial_tokens` —
-уже просуммированное число без разбивки по типу — тот же набор
-счётчиков, что и сегодня отдают `stream_usage_tokens`/
-`partial_tokens_from_log`) — только то, что АС-2 требует буквально:
-сумма ненулевая и журнал несёт предписанный текст с $ и числом токенов.
+разбивка по видам счётчиков, тот же набор, что и сегодня отдают
+`stream_usage_by_type`/`partial_tokens_from_log`) — только то, что
+АС-2 требует буквально: сумма ненулевая и журнал несёт предписанный
+текст с $ и числом токенов.
+
+Правка формы (SPEC 01M1PP0VYRT55WN8GGVG66X89Y, требование 2/AC-2,
+ADR-0012 п.1б): `partial_tokens` записывается литералом-разбивкой
+`{"input_tokens": N}`, а не плоским `int` — новая сигнатура
+`spend.charge_missing_result` требует словарь буквально (было решено
+этой же SPEC намеренно, не косметика), проверяемое свойство (сумма
+ненулевая, текст журнала) не меняется.
 
 Красен до реализации: `spend.charge_missing_result` (orchestrator/
 spend.py:143) сегодня НИКОГДА не зовёт `store.charge` — по докстрингу
@@ -60,7 +67,7 @@ class KnownRatePartialChargeTest(CostTmpRootTest):
 
         spend.charge_missing_result(
             conn, self.TASK, "test_author", "попытка 1/3", "таймаут шага",
-            partial_tokens=1000, saw_usage_event=True)
+            partial_tokens={"input_tokens": 1000}, saw_usage_event=True)
 
         row = self.task_row()
         self.assertGreater(row["spent_usd"], 0.0,
@@ -84,6 +91,6 @@ class KnownRatePartialChargeTest(CostTmpRootTest):
 
         spend.charge_missing_result(
             conn, self.TASK, "test_author", "попытка 1/3", "таймаут шага",
-            partial_tokens=1000, saw_usage_event=True)
+            partial_tokens={"input_tokens": 1000}, saw_usage_event=True)
 
         self.assertEqual(self.task_row()["spent_estimate_usd"] or 0.0, 0.0)

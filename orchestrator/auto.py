@@ -4,7 +4,7 @@
 import time
 
 from . import (agent_log, alerts, budget, ci, config, fixation, fsm, lease,
-              pause, runner, store)
+              pause, runner, store, zone_lock)
 
 # Действие журнала, которым отказ `advance` узнаётся вне зависимости от
 # конкретной причины (SPEC T038, требование 1): каждая точка `cmd_advance`
@@ -38,6 +38,16 @@ def _run_paused_refusal(conn, task_id: str, journaled_before: int) -> bool:
     """
     for row in store.task_steps(conn, task_id)[journaled_before:]:
         if row["action"] == pause.REFUSAL_ACTION:
+            return True
+    return False
+
+
+def _run_zone_wait_refusal(conn, task_id: str, journaled_before: int) -> bool:
+    """Отказал ли `run` ИМЕННО этим вызовом из-за занятости зоны (SPEC
+    01M1P9QAG65GVF69YJEV0V18D9, требование 3) — тот же приём отсечки, что
+    `_run_paused_refusal` уже применяет к штатной паузе."""
+    for row in store.task_steps(conn, task_id)[journaled_before:]:
+        if row["action"] == zone_lock.REFUSAL_ACTION:
             return True
     return False
 
@@ -233,7 +243,19 @@ def _cmd_auto(conn, task_id: str, session_id: str) -> None:
     # обычного шага изнутри цикла (review -> verifying при approved
     # вердикте, ADR-0009) — второе разрешает войти в опрос, даже если
     # `role` к этому моменту уже `None`.
-    while role is not None or state == "verifying":
+    #
+    # Канареечная задача (SPEC 01M1NEEWH5K1XPFRDGRMPYSBXJ, требование
+    # 11/AC-11) в опрос НЕ входит вовсе: `_advance_verifying_poll` ждёт
+    # реальный CI ветки, которого у неё нет и не будет (нет Draft MR,
+    # нет origin) — без этого исключения цикл спал бы внутри ЭТОГО ЖЕ
+    # вызова `AUTO_MAX_STEPS`-независимым `time.sleep` до самого потолка
+    # `config.VERIFYING_CEILING_SEC` (боевое значение — часы), и только
+    # тогда возвращал бы управление `canary._drive_task` — тот убивает
+    # задачу на `verifying` сразу (`_kill_at_verifying`), но не успевает
+    # даже начать: весь прогон канарейки блокируется здесь первым же
+    # входом в `verifying` (диагностировано ANSWER-2/ANSWER-3, инцидент
+    # 04-05.09 — часовые «зависания» шагов developer этой же задачи).
+    while role is not None or (state == "verifying" and not t["is_canary"]):
         if state == "verifying":
             if _advance_verifying_poll(conn, task_id, session_id):
                 return
@@ -391,6 +413,15 @@ def _cmd_auto(conn, task_id: str, session_id: str) -> None:
                 # Пауза — действие самого Оператора (ANSWER-1, вопрос 2):
                 # он уже знает о причине остановки, алерт был бы
                 # уведомлением о собственном же решении.
+                auto_stop(conn, task_id, state, reason, hint.format(id=task_id),
+                          alert=False)
+                return
+            # Занятость зоны (SPEC 01M1P9QAG65GVF69YJEV0V18D9, требование
+            # 3) — причина внешняя (держит другая задача), не буксование
+            # ЭТОГО агента: `status`/`doctor` берут на себя объяснение, кто
+            # держит зону (требование 4), алерт буксования не открывается.
+            if _run_zone_wait_refusal(conn, task_id, run_journaled_before):
+                reason, hint = config.AUTO_STOP_ZONE_WAIT
                 auto_stop(conn, task_id, state, reason, hint.format(id=task_id),
                           alert=False)
                 return

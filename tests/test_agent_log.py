@@ -336,7 +336,10 @@ class OutputPumpTest(TmpRootTest):
 
     def test_partial_tokens_survive_a_broken_pipe(self):
         """tasks/T040, AC-2: usage-события до обрыва пайпа не теряются —
-        читать их после обрыва больше неоткуда."""
+        читать их после обрыва больше неоткуда. Ловит мутацию: несколько
+        видов токена (`input_tokens`/`output_tokens`) схлопываются в одну
+        сумму вместо разбивки по видам (01M1PP0VYRT55WN8GGVG66X89Y,
+        требование 2)."""
         log = agent_log.new_agent_log("T005", "developer")
         stream = BrokenPipeStream([
             event(type="assistant",
@@ -350,10 +353,14 @@ class OutputPumpTest(TmpRootTest):
             pump.join(5)
 
         self.assertIsInstance(pump.error, OSError)
-        self.assertEqual(pump.partial_tokens, 42)
+        self.assertEqual(pump.partial_tokens,
+                         {"input_tokens": 30, "output_tokens": 12})
         self.assertTrue(pump.saw_usage_event)
 
     def test_no_usage_events_leaves_partial_tokens_at_zero(self):
+        """Ловит мутацию: `partial_tokens` остаётся плоским `0`, а не
+        пустым словарём, при отсутствии usage-событий — ломает `.get()`
+        вызывающего кода (01M1PP0VYRT55WN8GGVG66X89Y, требование 2)."""
         pump = agent_log.OutputPump(iter(["просто вывод\n"]),
                                     agent_log.new_agent_log("T005", "developer"))
 
@@ -361,7 +368,7 @@ class OutputPumpTest(TmpRootTest):
             pump.start()
             pump.join(5)
 
-        self.assertEqual(pump.partial_tokens, 0)
+        self.assertEqual(pump.partial_tokens, {})
         self.assertFalse(pump.saw_usage_event)
 
     def test_friction_is_computed_from_the_raw_stream_not_the_rendered_log(self):
