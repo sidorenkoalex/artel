@@ -498,14 +498,23 @@ class JournalModeTest(TmpRootTest):
 
 
 class SqlOnlyInStoreTest(unittest.TestCase):
-    """Критерий 6: прямых запросов вне store.py в orchestrator/ не осталось."""
+    """Критерий 6: прямых запросов вне store.py/schema.py в orchestrator/
+    не осталось.
+
+    `schema.py` — рядом со `store.py` в списке исключений с
+    01M1SD5NZ79MWCEJDJ9JP6EPWS (R6): DDL/`migrate` переехали туда из
+    `store.py`, и по определению несут `CREATE TABLE`/`ALTER TABLE` —
+    ADR-0003 3ж («SQL только в store.py») по тексту самого ADR остаётся
+    целью, не пунктом docs/invariants.md, поэтому расширение списка
+    исключений не ослабляет защищаемый инвариант.
+    """
 
     SQL = re.compile(r"\b(SELECT|INSERT|UPDATE|DELETE|PRAGMA|ALTER|CREATE)\b")
 
     def test_no_sql_outside_store(self):
         offenders = []
         for path in sorted((REPO_ROOT / "orchestrator").glob("*.py")):
-            if path.name == "store.py":
+            if path.name in ("store.py", "schema.py"):
                 continue
             for number, line in enumerate(
                     path.read_text(encoding="utf-8").splitlines(), 1):
@@ -554,7 +563,10 @@ class ProgramSpendTest(TmpRootTest):
         self.assertIn("ВНИМАНИЕ", out)
         self.assertEqual(len(self.events()), 1)
         self.assertIn("70%", self.events()[0])
-        self.assertIn("$1401.00", self.events()[0])
+        # Порог считается от config.PROGRAM_STOP_LOSS_USD, а не литералом:
+        # при $2000 это было "$1401.00", при $3000 (06.09) — "$2101.00".
+        self.assertIn(f"${config.PROGRAM_STOP_LOSS_USD * 0.7 + 1:.2f}",
+                      self.events()[0])
 
     def test_ninety_percent_is_a_second_event(self):
         self.spend_to(config.PROGRAM_STOP_LOSS_USD * 0.7 - 1)
