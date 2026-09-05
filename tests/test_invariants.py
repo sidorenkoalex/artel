@@ -1632,7 +1632,16 @@ class StdlibOnlyImportsInvariantTest(unittest.TestCase):
         return violations
 
     def test_repo_tree_has_no_foreign_imports(self):
-        """AC-6: сегодняшнее дерево репозитория чисто."""
+        """AC-6: сегодняшнее дерево `orchestrator/`, `scripts/`,
+        `tests/` не содержит сторонних импортов — прогон сканера прямо
+        сейчас, на настоящем дереве репозитория, без исключений (список
+        манифеста пуст, AC-3).
+
+        Ловит мутацию: в дереве репозитория появился настоящий
+        сторонний импорт (например кто-то по ошибке добавил `import
+        requests` в `orchestrator/`) — список перестанет быть пустым,
+        `assertEqual([], ...)` откажет.
+        """
         violations = self._foreign_imports(config.ROOT)
         self.assertEqual(
             [], violations,
@@ -1642,6 +1651,13 @@ class StdlibOnlyImportsInvariantTest(unittest.TestCase):
     def test_planted_foreign_import_is_caught_on_a_synthetic_tree(self):
         """AC-16: подсаженный сторонний импорт на синтетическом дереве
         обязан быть пойман, чистое синтетическое дерево — нет.
+
+        Ловит мутацию: правило проверяет модуль целиком без разбиения
+        на вершину пути (`import foo.bar` не сведён к `foo`), либо не
+        видит импорт через `ast.walk` (только `tree.body`) — синтетика
+        ниже кладёт нарушение простым `import` верхнего уровня, а
+        чистая — только stdlib и относительный внутрипакетный импорт;
+        `assertTrue`/`assertEqual` откажут при неверном разборе.
         """
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
