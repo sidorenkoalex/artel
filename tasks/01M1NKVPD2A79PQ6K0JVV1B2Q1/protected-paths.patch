@@ -1,0 +1,75 @@
+diff --git a/skills/spec-authoring.md b/skills/spec-authoring.md
+index e50644fe..184d7dc9 100644
+--- a/skills/spec-authoring.md
++++ b/skills/spec-authoring.md
+@@ -30,7 +30,12 @@
+   задача ~25, широкий рефакторинг/новый тестовый слой ~50) и **только
+   вниз от дефолта оркестратора** — значение выше дефолта система молча
+   отклонит, поднять его может только Оператор командой `budget`.
+-  `status: ready` в конце.
++  Заполни frontmatter-поле `zones:` — список путей/масок (файлы/
++  каталоги), которые задача трогает, через запятую — из ТЗ (задача
++  01M1NKVPD2A79PQ6K0JVV1B2Q1, AC-2): то же поле, что раздел «Оценка
++  объёма и деление» уже использует для сигналов деления, одна разметка
++  зон на обе механики. `guard.py` требует поле для `schema_version >=
++  4`. `status: ready` в конце.
+ - **Недостаточно.** Один батч — не переписка по одному вопросу за раз:
+   `tasks/<id>/QUESTIONS.md` по `templates/QUESTIONS.md`, все неясности
+   разом, отсортированные по блокирующести (то, без чего вообще нельзя
+diff --git a/templates/PLAN.md b/templates/PLAN.md
+index 1ebf6fcd..be18721c 100644
+--- a/templates/PLAN.md
++++ b/templates/PLAN.md
+@@ -3,7 +3,7 @@ task: TASK_ID
+ type: plan
+ author_role: developer
+ status: draft        # draft | ready | approved
+-schema_version: 3    # версия формата артефакта, см. scripts/guard.py
++schema_version: 4    # версия формата артефакта, см. scripts/guard.py
+ ---
+
+ # PLAN: <название задачи>
+diff --git a/templates/REVIEW.md b/templates/REVIEW.md
+index eecfdb2f..e62513c3 100644
+--- a/templates/REVIEW.md
++++ b/templates/REVIEW.md
+@@ -4,7 +4,7 @@ type: review
+ author_role: reviewer
+ status: draft        # draft | approved | changes_requested | escalate
+ iteration: 1
+-schema_version: 3    # версия формата артефакта, см. scripts/guard.py
++schema_version: 4    # версия формата артефакта, см. scripts/guard.py
+ ---
+
+ # REVIEW: <название задачи>
+diff --git a/templates/SPEC.md b/templates/SPEC.md
+index 46fbeaa0..b978b631 100644
+--- a/templates/SPEC.md
++++ b/templates/SPEC.md
+@@ -3,7 +3,12 @@ task: TASK_ID
+ type: spec
+ author_role: analyst
+ status: draft        # draft | ready | approved
+-schema_version: 3    # версия формата артефакта, см. scripts/guard.py
++schema_version: 4    # версия формата артефакта, см. scripts/guard.py
++# Зоны задачи (01M1NKVPD2A79PQ6K0JVV1B2Q1) — список путей/масок (файлы/
++# каталоги), которые задача трогает: заполни из ТЗ, через запятую. guard
++# требует поле для schema_version >= 4. Общие зоны (пути, которые трогают
++# все задачи — orchestrator/config.py::COMMON_ZONES) не в счёт.
++# zones: orchestrator/store.py, orchestrator/config.py
+ # Потолок задачи, $. Раскомментируй, если класс задачи виден сразу:
+ # мелкий фикс ~15, типовая задача ~25, тестовый слой или широкий
+ # рефакторинг ~50. Без поля — дефолт оркестратора.
+diff --git a/templates/TEST_REPORT.md b/templates/TEST_REPORT.md
+index 8a7062c7..c5cfa429 100644
+--- a/templates/TEST_REPORT.md
++++ b/templates/TEST_REPORT.md
+@@ -3,7 +3,7 @@ task: TASK_ID
+ type: test_report
+ author_role: verifier
+ status: draft        # draft | passed | failed
+-schema_version: 3    # версия формата артефакта, см. scripts/guard.py
++schema_version: 4    # версия формата артефакта, см. scripts/guard.py
+ ---
+
+ # TEST_REPORT: <название задачи>

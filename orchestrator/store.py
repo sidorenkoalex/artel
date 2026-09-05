@@ -36,7 +36,8 @@ CREATE TABLE IF NOT EXISTS tasks (
   tests_locked_sha TEXT, is_canary INTEGER DEFAULT 0, paused INTEGER DEFAULT 0,
   answer_baseline INTEGER, verifying_attempts INTEGER DEFAULT 0,
   draft_mr_created INTEGER DEFAULT 0,
-  diff_bytes INTEGER, split_assessment TEXT,
+  diff_bytes INTEGER, split_assessment TEXT, zones TEXT,
+  materialized_artifact_sha TEXT,
   created_at TEXT, updated_at TEXT
 );
 CREATE TABLE IF NOT EXISTS steps (
@@ -204,6 +205,12 @@ def migrate(conn: sqlite3.Connection) -> None:
     # ровно один раз за жизненный цикл задачи — колонка, не запрос к
     # GitHub на каждый вход в in_dev (orchestrator/github_adapter.py).
     add_column(conn, "tasks", "draft_mr_created", "INTEGER DEFAULT 0")
+    # sha головы артефактной ветки на момент последней материализации
+    # `runner.role_cwd` (SPEC 01M1NKTF173WV5CPDZ1C3WW69K, AC-1/AC-6): NULL —
+    # материализации ещё не было (строка старше этой задачи либо у задачи
+    # нет артефактной ветки) — конфликт-гвард автокоммита сверять не с чем,
+    # тот же вырожденный случай, что и у fixed_sha/tests_locked_sha.
+    add_column(conn, "tasks", "materialized_artifact_sha", "TEXT")
     # Верхняя оценка неучтённой стоимости шага (SPEC
     # 01M1NWCM3TDY0YABEKE8DYQA1C, требование 1): накопительная, отдельная от
     # `spent_usd` — таймаут шага роли БЕЗ курса токенов (`config.TOKEN_RATES`)
@@ -218,6 +225,11 @@ def migrate(conn: sqlite3.Connection) -> None:
     # читает `report._DASH` для обоих случаев одинаково.
     add_column(conn, "tasks", "diff_bytes", "INTEGER")
     add_column(conn, "tasks", "split_assessment", "TEXT")
+    # Значение frontmatter-поля `zones:` SPEC, сохранённое при `approve`
+    # на `spec_gate` (01M1NKVPD2A79PQ6K0JVV1B2Q1, AC-3) — то же поле,
+    # что механика «Оценка объёма и деление» уже структурирует для
+    # сигналов деления (SPEC, требование 1).
+    add_column(conn, "tasks", "zones", "TEXT")
     conn.executescript(
         "CREATE TABLE IF NOT EXISTS task_counters ("
         "  target TEXT PRIMARY KEY, next_number INTEGER NOT NULL);")
@@ -688,7 +700,16 @@ def record_fixation(conn, task_id: str) -> None:
     sha, clean = fixation.fix(task_id, target)
     update_task(conn, task_id, fixed_sha=sha or None)
     if target == config.DEFAULT_TARGET:
-        detail = f"target={target}, sha={sha or '—'}, чисто={clean}"
+        # Поле `код=` — sha кодовой ветки, заводится для default target
+        # тем же именем, что и НЕ-default (ветка ниже) — tasks/
+        # 01M1P9RJVYHTAC087J4B2CAR44, требование 1: `sha=` выше — sha
+        # артефактного/фиксационного репо (`config.PROJECTS/<target>`),
+        # НЕ база инкрементального diff (`review.previous_verdict_sha`
+        # читает именно `код=`); `sha=` остаётся как есть — эта задача
+        # не убирает поле, только перестаёт быть базой diff.
+        code_sha = fixation.default_code_sha(conn, task_id)
+        detail = (f"target={target}, sha={sha or '—'}, чисто={clean}, "
+                  f"код={code_sha or '—'}")
     else:
         # Два sha (SPEC T094, требование 9, AC-10): голова кодовой ветки
         # ЦЕЛЕВОГО и голова артефактной ветки ПУЛЬТА — `sha`/`clean` выше
