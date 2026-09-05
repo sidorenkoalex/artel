@@ -238,3 +238,14 @@ index ef5a705b..cd4110ae 100644
        - name: снимок ссылок репозитория до прогона тестов (SPEC 01M1KVGD18P9H5WR7VM8TGPV1T, требование 1)
          run: git for-each-ref --format='%(refname) %(objectname)' refs/heads/ refs/artifacts/ > /tmp/refs-before.txt
 ```
+
+## Расширение зон
+
+Пути: orchestrator/artel.py
+
+Обоснование (Оператор, 05.09): требование 2 SPEC вводит команду пульта
+`venv-sync`; подключение подкоманды в диспетчере `orchestrator/artel.py`
+(таблица команд и строка usage) — единственный способ сделать команду
+доступной, зона SPEC его не назвала. Правка — одна строка таблицы и
+одна строка usage. Мандат — ANSWER-2.md.
+
