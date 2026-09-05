@@ -194,6 +194,45 @@ worktree, так что `__file__`-путь резолвинга не менял
 (различение `None`/`[]` у `ls_tree_files`) осталось в силе после
 слияния — HEAD-версия `materialize_from_branch` взята без изменений.
 
+## Закрытие REVIEW.md итерации 2 (R2-F1, R2-F2)
+
+- R2-F1 (minor, мёртвый `import shutil` в `orchestrator/fsm_advance.py:8`,
+  оставшийся после удаления обоих `shutil.rmtree` в шаге 2/3 этого
+  PLAN) — статус `fixed`: строка импорта убрана
+  (`orchestrator/fsm_advance.py`); `grep -c shutil
+  orchestrator/fsm_advance.py` → 0.
+- R2-F2 (minor, фикс R1-F1 подтверждён только ручным репро в тексте
+  прошлого REVIEW.md, не персистентным тестом) — статус `fixed`:
+  добавлен `tests/test_acceptance.py::
+  MaterializeFromBranchGitFailureTest::
+  test_none_from_ls_tree_files_leaves_existing_plank_untouched` — по
+  образцу `tests/test_artifact_materialization.py::MaterializeTaskDirTest::
+  test_no_branch_returns_empty_sha_and_leaves_disk_untouched`, но для
+  `acceptance.materialize_from_branch` с `gitcmd.ls_tree_files`
+  замоканной на `None`. Ловит мутацию: временно вернул `or []` на
+  месте фикса R1-F1 — тест падает `FileNotFoundError` (реальный файл
+  планки стёрт прунингом), вернул фикс — тест снова зелёный.
+
+Прогон после закрытия: `test_acceptance` (6/6, включая новый тест),
+`test_branch_freshness_gate`, `test_fsm_map_conflict_autoresolve`,
+`test_fsm_autogate`, `test_artifact_materialization`, `test_amend`,
+`test_dry_run` — 65/65; `test_zones_gate`, `test_capacity_gate`,
+`test_advance_guard`, `test_review_registry_gate`,
+`test_merge_gate_ci_wait`, `test_verifying_ceiling`,
+`test_fsm_draft_mr_reentry`, `test_canary`, `test_multitarget`,
+`test_multitarget_invariants` — 159/159. Локальная приёмочная планка —
+11/11 (AC-1..AC-9). `docs/codebase-map.md` перегенерирована тем же
+шагом (только `built_at_sha`).
+
+## Реестр замечаний
+
+| id | статус | комментарий |
+|---|---|---|
+| R1-F1 | fixed | закрыт итерацией 1, подтверждён ревьювером (accepted) в итерации 2 |
+| R1-F2 | fixed | закрыт итерацией 1, подтверждён ревьювером (accepted) в итерации 2 |
+| R2-F1 | fixed | мёртвый `import shutil` убран из `orchestrator/fsm_advance.py:8` |
+| R2-F2 | fixed | добавлен персистентный unit-тест на фикс R1-F1 (`tests/test_acceptance.py::MaterializeFromBranchGitFailureTest`), мутация проверена вручную |
+
 ## Предложения системе
 
 Нет.
