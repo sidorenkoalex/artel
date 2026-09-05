@@ -1,3 +1,11 @@
+---
+task: 01M1RQ12JVHE3PQYDFV1XPSTQ3
+type: answer
+author_role: operator
+status: ready
+schema_version: 2
+---
+
 Расширение зон разрешено: orchestrator/review.py
 
 # ANSWER-2
