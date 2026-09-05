@@ -23,19 +23,14 @@ ANSWER-1 (tasks/01M1PNBSHR2PMFECMP7C204MF1/ANSWER-1.md), Вопрос 2,
 строку `leases`, не трогая ни один OS-процесс; `doctor.check_leases` не
 трогает OS-процессы вовсе (только incident-алерт) ни с `--fix`, ни без.
 """
-import shutil
 import sys
 import unittest
 from pathlib import Path
-from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from _sandbox import (AgentStepSandbox, config, doctor, release,  # noqa: E402
-                      wait_while_alive)
-from tests.sandbox import claude_only_popen, claude_only_run  # noqa: E402
-
-REPO_ROOT = Path(__file__).resolve().parents[3]
+from _sandbox import (AgentStepSandbox, fake_claude_cli, release,  # noqa: E402
+                      run_doctor, wait_while_alive)
 
 
 class DeadLeaseGroupCleanupTest(AgentStepSandbox):
@@ -80,23 +75,7 @@ class DeadLeaseGroupCleanupTest(AgentStepSandbox):
         жив после прогона без `--fix`) покраснеет вместо ожидаемого
         сценария «жив -> снят только после --fix».
         """
-        shutil.copytree(REPO_ROOT / "skills", self.root / "skills",
-                        dirs_exist_ok=True)
-        shutil.copytree(REPO_ROOT / "templates", self.root / "templates",
-                        dirs_exist_ok=True)
-        (self.root / "docs").mkdir(exist_ok=True)
-        (self.root / "docs" / "codebase-map.md").write_text(
-            "---\nbuilt_at_sha: 0000000000000000000000000000000000000000\n"
-            "---\n\n# Карта\n", encoding="utf-8")
-        (self.root / "CLAUDE.md").write_text("# Конвенции\n", encoding="utf-8")
-        config.TARGETS.write_text(
-            "targets:\n  artel:\n    forge: github\n"
-            "    url: https://example.invalid/artel\n    base: main\n"
-            "    token_slot: artel-token\n    no_paths: []\n"
-            "    project_skills: []\n    merge_gate: operator\n",
-            encoding="utf-8")
-        config.BACKUP_MARKER.parent.mkdir(parents=True, exist_ok=True)
-        config.BACKUP_MARKER.write_text("ok", encoding="utf-8")
+        self.bootstrap_doctor_environment()
 
         dead = self.dead_pid()
         self.install_dummy_lease(dead, session_id=self.SESSION)
@@ -104,47 +83,24 @@ class DeadLeaseGroupCleanupTest(AgentStepSandbox):
             out_name="pids_fix.txt"))
         agent_pid, child_pid = self.read_agent_and_child_pid("pids_fix.txt")
 
-        with mock.patch.object(doctor.shutil, "which",
-                               lambda name: "/usr/bin/claude" if name == "claude" else None), \
-             mock.patch.object(doctor.subprocess, "run",
-                               side_effect=claude_only_run("0.0.1 (Claude Code)\n")), \
-             mock.patch.object(doctor.subprocess, "Popen",
-                               side_effect=claude_only_popen(_ok_live_smoke())):
-            doctor.cmd_doctor(fix=False)
+        with fake_claude_cli():
+            # `run_doctor` глотает `SystemExit` — на этой мёртвой лизе
+            # `check_leases` честно и легитимно возвращает `fail`
+            # (существующее поведение, не предмет AC-6), а `cmd_doctor`
+            # завершается `sys.exit(1)` на ЛЮБОМ провале; здесь важны
+            # только побочные эффекты (живость потомка), не код возврата
+            # всей команды `doctor`.
+            run_doctor(fix=False)
             still_alive = not wait_while_alive(child_pid, timeout=1.0)
             self.assertTrue(still_alive,
                             "потомок агентного шага снят ПРОСТЫМ `doctor` "
                             "(без --fix) — снятие мёртвого lease обязано "
                             "быть под флагом (ANSWER-1)")
 
-            doctor.cmd_doctor(fix=True)
+            run_doctor(fix=True)
             thread.join(timeout=10)
             self.assertTrue(wait_while_alive(child_pid, timeout=5.0),
                             "потомок агентного шага пережил `doctor --fix`")
-
-
-class _FakeLiveSmokeProc:
-    """Замена `subprocess.Popen` для `doctor.live_smoke` — только
-    `.communicate` (по образцу `tests/test_doctor.py::FakeLiveSmokeProc`,
-    не общий `tests.sandbox` — определён локально там же, где и
-    используется)."""
-
-    def __init__(self, output: str, returncode: int = 0):
-        self.output = output
-        self.returncode = returncode
-
-    def communicate(self, timeout=None):
-        return self.output, None
-
-    def kill(self) -> None:
-        pass
-
-    def wait(self, timeout=None) -> int:
-        return self.returncode
-
-
-def _ok_live_smoke():
-    return _FakeLiveSmokeProc('{"type":"result","total_cost_usd":0.0,"usage":{}}\n')
 
 
 if __name__ == "__main__":
