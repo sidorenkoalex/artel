@@ -3,62 +3,135 @@ task: 01M1RHFRQ2C0P4A57XJJ1WZV8N
 type: review
 author_role: reviewer
 status: approved        # draft | approved | changes_requested | escalate
-iteration: 1
+iteration: 2
 schema_version: 4    # версия формата артефакта, см. scripts/guard.py
 ---
 
 # REVIEW: регрессия №13 — после замечаний ревью `auto` запускает разработчика, а не переход
 
+## Служебное замечание к ревью-пакету
+
+Пакетный diff (заявлен как «от sha предыдущего вердикта
+`03612076f463e3cd8b022ffc98d18296b912c301` до HEAD») содержит НЕ код
+этой итерации, а последующую подтяжку main (`3fb2790f`, чужая, уже
+смерженная в main работа задачи 01M1RDCEF0JZ4AVQRE43JFH8TN — `stack.py`/
+`runner.py`/`doctor.py`/снятие `bash_guard`). Причина: якорь пакета
+(`03612076`) — это САМ коммит, который нужно было ревьюить в этой
+итерации (фикс по ANSWER-3), а не коммит ДО него. `git show 03612076
+--stat`: коммит правит ровно `orchestrator/auto.py`, `tests/
+test_auto_cycle.py`, `docs/codebase-map.md` (сообщение оканчивается
+на «сужает рубеж на три известных нерабочих (не-rework) перехода») —
+то есть предмет ревью полностью отсутствовал в показанном diff. Тот же
+класс дефекта, что уже отмечали T082/T087 (см. «Предложения системе»),
+но здесь якорь совпал не с HEAD, а буквально с ревьюируемым коммитом —
+инкрементальный diff в такой конфигурации гарантированно пуст по
+содержанию, даже когда формально не пуст (несёт подтяжку).
+
+Восстановил фактический предмет ревью вручную:
+`git log 32019911..03612076 -- orchestrator/ tests/` — между коммитом,
+одобренным в REVIEW.md итерации 1 (32019911), и `03612076` нет ни
+одного чужого кодового коммита этой задачи — только «подтяжка main» от
+других задач. `03612076` — единственный код-коммит итерации 2. Diff
+`03612076` целиком приведён и разобран ниже.
+
+## Фаза A: гейт плана
+
+PLAN.md дополнен разделом 4 «Фикс по ANSWER-3» (в «Подходе» и «Шагах»,
+без выделения в отдельную «Итерацию N» — приемлемый стиль: правка не
+закрывает замечание REVIEW.md, а отвечает на ANSWER-3 Оператора,
+поэтому не подчиняется механике реестра замечаний). Шаг — проверяемая
+единица размера MR (одна функция + константа + регресс-тест), таблица
+покрытия требований дополнена строкой AC-10 → шаг 4. Подход обоснован:
+раздел «Влияние на систему» честно называет цену компромисса (лишний
+шаг роли на не-rework возврате из `escalated`) и явно перечисляет ВСЕ
+точки кода, переводящие задачу в состояния `_REWORK_GATE_STATES`
+(`grep -n 'set_state(conn, task_id, "in_dev"' orchestrator/*.py` и
+аналоги) — проверил этот список сам (см. «Проверено исполнением»),
+полнота подтверждена. Замечаний к плану нет.
+
 ## Соответствие SPEC
-
-Фаза A (гейт плана): требования SPEC 1-5 покрыты шагами 1-3 PLAN.md
-таблицей покрытия полностью, шаги — проверяемые единицы размера MR
-(журнальный рубеж в `auto.py`, git-based рубеж в `fsm_advance.py`,
-инфраструктура тестов), подход не конфликтует с конвенциями
-(`_capacity_gate_refuses`/`_zones_gate_refuses` — тот же паттерн
-независимого гейта в `in_dev()`, `_pull_main_or_escalate` — тот же
-паттерн деградации «git не ответил»). Замечаний к плану нет.
-
-Фаза B (ревью MR), по критериям приёмки:
 
 | Требование | Вердикт | Комментарий |
 |---|---|---|
-| AC-1 (пред-advance не пропускает `in_dev` с неотработанным `review→in_dev`/`acceptance→in_dev`/`merge_gate→in_dev`/`verifying→in_dev`) | OK | `_REWORK_GATE_STATES`/`_role_step_since_state_entry` (`auto.py:83,96-120`); тест `test_ac1_ac4_ac9_...py::PreAdvanceYieldsToDeveloperAfterReviewReworkTest` зелёный |
-| AC-2 (то же для возврата из `escalated`, включая `spec_writing`/`tests_writing`) | OK | проверка не смотрит на источник перехода — только на факт `agent run finished` после последней `state -> X`, что закрывает и прямой reject, и возврат через `escalated` одним кодом; тест `test_ac2_ac8_...py::EscalatedReturnToInDevStillNeedsADeveloperStepTest` зелёный |
-| AC-3 (гейт `in_dev -> review` не пропускает переход на неизменённом коде после `changes_requested`) | OK | `_review_rework_gate_refuses` (`fsm_advance.py:740-789`), сверка по времени коммитов (`%cI`), не по sha/тексту; тест `test_ac3_ac4_ac6_ac7_...py::GateRefusesUnchangedCodeAfterChangesRequestedTest` зелёный |
-| AC-4 (отказ обоих рубежей именован с номером итерации) | OK | оба рубежа несут буквальную фразу «замечания ревью не отработаны: нет шага developer после итерации N» (`auto.py:123-137`, `fsm_advance.py:783-784`); тесты `NamedAndJournaledAutoRefusalTest`/`GateNamesTheIterationInTheJournalTest` зелёные |
-| AC-5 (сценарий «замечания ревью → auto» запускает developer, не advance по готовому PLAN.md) | OK | тест воспроизводит переход `review -> in_dev` РЕАЛЬНЫМ `fsm.cmd_advance` внутри цикла — `test_ac5_review_remarks_runs_developer_step.py` зелёный |
-| AC-6 (шаг developer после возврата снимает оба рубежа, следующий advance проходит штатно) | OK | `test_ac3...py::DeveloperCommitAfterTheVerdictUnblocksTheGateTest` — коммит после вердикта + журнал `agent run finished` → переход в `review` состоялся, developer повторно не звался |
-| AC-7 (ручной `advance` Оператора на неизменённом коде — именованный отказ, не переход) | OK | рубеж встроен в САМ `fsm_advance.in_dev()` (`fsm_advance.py:912`), не только в обёртку `auto.py` — `test_ac3...py::ManualAdvanceOnUnchangedCodeIsNamedNotSilentTest` вызывает `fsm.cmd_advance` напрямую, минуя `auto`, и получает отказ |
-| AC-8 (возврат из `escalated` по ANSWER — `auto` запускает роль, не повторяет эскалацию по старому артефакту) | OK | `test_ac2_ac8_...py::EscalatedReturnByAnswerRunsTheRoleNotTheOldEscalationTest` воспроизводит реальный второй инцидент 05.09 (QUESTIONS.md раунда 1 остаётся на диске) — analyst получает шаг, не повторная эскалация |
-| AC-9 (регресс: `tests_writing` после отказа трассируемости даёт test_author шаг на каждой итерации) | OK | `review` и `tests_writing` намеренно вне `_REWORK_GATE_STATES`/стоп-крана требования 4 (уже так было, не тронуто); `TestsWritingTraceabilityRefusalRegressionTest` зелёный, 3 шага подряд |
-| AC-10 (существующие regression-suite `test_auto_cycle.py`/`test_advance_guard.py` и планка 01M1R8B3ZKXQT0Z0G6QQQDV906 зелёные без ослабления) | manual (обоснованно) | половина (два файла tests/) прогнана мной лично — зелёные (см. «Проверено исполнением»), не ослаблены (diff — только добавления, 0 удалений); вторая половина (чужая уже смерженная планка) физически недоступна из этого дерева — `test_scope_markers.py` документирует это с проверкой `git log --all`/`git branch -a`, тот же класс, что уже разбирал Оператор в аудитах v6/v7 (ADR-0007) |
+| 1 (пред-advance не пропускает `in_dev` с неотработанным rework-основанием) | OK | Не тронуто этим коммитом по существу — сужено только на 3 буквальных легитимных detail-текста (`_LEGIT_FIRST_ENTRY_DETAILS`/`_LEGIT_FIRST_ENTRY_PREFIXES`, `auto.py:112-119`); rework-детали (`возврат из merge_gate: …`, `возврат из verifying: …`, `приёмка отклонена: …`, `содержательный конфликт merge…`, `замечания ревью, итерация N`) в список не входят и по-прежнему держат рубеж — проверил построчно (см. ниже). |
+| 2 (то же для возврата из `escalated`) | OK | `эскалация разрешена, продолжаем` (`fsm.py:893`) — общий текст для ЛЮБОГО основания эскалации — сознательно НЕ в белом списке (докстринг `auto.py:106-111` и PLAN «Влияние на систему» описывают это как компромисс, не пропуск). |
+| 3 (гейт `in_dev -> review`, git-based) | OK | Не задет этим коммитом (diff `03612076` не касается `fsm_advance.py`); косвенно подтверждён отдельным прогоном `tests.test_fsm_autogate` и смежных гейтов — 150/150 зелёных. |
+| 4 (именованный отказ с номером итерации) | OK | Не задет. |
+| 5 / AC-9 (`tests_writing` после отказа трассируемости не меняется) | OK | Регресс-тест приёмки (`TestsWritingTraceabilityRefusalRegressionTest`) по-прежнему зелёный, код `tests_writing` этим коммитом не тронут. |
+| AC-10 (планка 01M1R8B3ZKXQT0Z0G6QQQDV906 зелёная — предмет ANSWER-3) | OK, ПРЕДМЕТ ИТЕРАЦИИ | Воспроизвёл регрессию из ANSWER-3 и подтвердил фикс эмпирически: `test_ac7_lock_conflict_skips_developer_and_stops_on_the_repeat` и остальные 14 тестов планки 01M1R8B3ZKXQT0Z0G6QQQDV906 — зелёные на текущем коде (см. «Проверено исполнением»). |
+
+Разбор самого фикса (`orchestrator/auto.py`, коммит `03612076`):
+
+- `_is_legit_first_entry_detail` сверяет `detail` записи `state ->
+  {state}` с ДВУМЯ точными строками и ДВУМЯ префиксами. Проверил
+  дословное совпадение с реальным кодом-источником: `"гейт SPEC пройден
+  — приёмочные тесты до кода"` — `fsm.py:824`; `"приёмочные тесты
+  готовы — трассируемость AC пройдена"` — `fsm_advance.py:394`; префикс
+  `"тесты пропущены (skip_tests):"` — `fsm.py:812`; префикс `"SPEC
+  schema_version "` — `fsm.py:814`. Все четыре совпадают буквально —
+  докстринг не расходится с кодом.
+- Полнота списка (заявлена в PLAN как исчерпывающая, по grep всех
+  `set_state(conn, task_id, "in_dev"/"tests_writing"/"spec_writing"`)
+  — перепроверил тем же grep сам: единственные обработчики,
+  переводящие задачу в одно из трёх состояний `_REWORK_GATE_STATES`, —
+  `fsm.py:817,822` (spec_gate approve, оба легитимных detail-текста),
+  `fsm_advance.py:393` (AC-трассировка пройдена, легитимный
+  detail-текст), и rework-случаи — `fsm.py:893` (escalated, сознательно
+  вне списка), `fsm.py:922,935,950` (merge_gate/verifying/acceptance
+  reject, все три с явно другим текстом), `fsm_advance.py:279`
+  (review changes_requested), `fsm_merge_gate.py:125` (конфликт merge).
+  Ни один rework-detail не совпадает ни с одной из 4 whitelist-строк —
+  список не создаёт дыру назад в исходную регрессию №13.
+- Нет ни одного места, устанавливающего `spec_writing` через
+  `set_state` (только начальная вставка задачи `catalog.py:156`, не
+  журнальная запись `state -> spec_writing`) — единственный вход в это
+  состояние через FSM-переход — возврат из `escalated` с общим
+  detail'ом, который корректно НЕ в списке; регрессия №13 для
+  `spec_writing` (второй инцидент 05.09, ANSWER-2 п.1) остаётся
+  закрытой этим фиксом без исключений.
+- Новый регресс-тест `PreAdvanceStillTriesOnLegitFirstEntryTest`
+  (`tests/test_auto_cycle.py`) воспроизводит РЕАЛЬНЫЙ сценарий ANSWER-3
+  (журнал `state -> in_dev` с detail «приёмочные тесты готовы —
+  трассируемость AC пройдена», `advance` дважды отказывает локом) и
+  проверяет ИМЕННО то, что регрессировало: `advance` вызван (не
+  пропущен), developer не запущен напрямую. Докстринг несёт «Ловит
+  мутацию: …», сценарий и наблюдаемое свойство описаны конкретно, не
+  пересказом имени метода — соответствует конвенции test-authoring.
 
 ## Замечания
 
-Пусто — 0 blocker/major/minor.
+Нет — 0 blocker/major/minor.
 
 ## Реестр замечаний
 
-| id | статус | файл/строка | суть | последствие | решение |
-|---|---|---|---|---|---|
-
-Пусто — замечаний в этой итерации не заведено.
+Пусто в обеих итерациях (в итерации 1 замечаний не заводилось,
+реестр был пуст). Новых замечаний в этой итерации нет.
 
 ## Вердикт
 
-approved
+approved — 0 blocker/major. Единственный код-коммит этой итерации
+(`03612076`, восстановлен вручную из-за неверного якоря пакета — см.
+«Служебное замечание») закрывает регрессию AC-7 из ANSWER-3 точечно:
+сужает журнальный рубеж на 4 буквальных, проверенных grep'ом
+исчерпывающих легитимных detail-текста, не открывая обратно ни один
+из путей исходной регрессии №13/№14 (rework-возвраты и возврат из
+`escalated` по-прежнему держат пред-advance). Подтверждено не только
+чтением кода, но и прогоном исторической планки, которая изначально
+поймала регрессию.
 
 ## Проверено исполнением
 
-- `python3 -m unittest discover -s tasks/01M1RHFRQ2C0P4A57XJJ1WZV8N/acceptance_tests -p 'test_*.py' -v` — 10 тестов (AC-1, AC-2, AC-4×2, AC-5, AC-6, AC-7, AC-8, AC-9), все `ok`.
-- `python3 -m unittest tests.test_auto_cycle tests.test_advance_guard -v` — 47 тестов (AC-10, часть а), все зелёные, ноль ослабленных ассертов (diff файла — только добавления).
-- `python3 -m unittest tests.test_zones_gate tests.test_capacity_gate tests.test_branch_freshness_gate tests.test_review_freshness tests.test_review_registry_gate tests.test_answer_gate tests.test_answer tests.test_invariants tests.test_fsm_branch_correct_status_reads tests.test_fsm_draft_mr_reentry tests.test_step_refixation tests.test_fsm_autogate tests.test_advance_refusal_history` — 150 тестов, все зелёные (соседние гейты `in_dev`/`review`, которым PLAN.md заявляет незатронутость, — подтверждено прогоном, не пересказом).
-- `python3 scripts/codebase_map.py --check` — без вывода (карта содержательно свежа; `built_at_sha` — единственная строка диффа `docs/codebase-map.md`, что и ожидается по конвенции).
-- Прочитан код `orchestrator/auto.py` (60-200, 280-556) и `orchestrator/fsm_advance.py` (120-352, 682-918) целиком, сверен с diff построчно — рефакторинг предварительного advance в `if gated_role and not role_ran: ... else: ...` не меняет логику для состояний вне `_REWORK_GATE_STATES` и не теряет `steps`/`idle_steps`/`prev_refusal` учёт.
-- Отдельно прослежен путь исключения коммитов «подтяжка main» (`_PULL_MAIN_COMMIT_INFIX`) — префикс `f"{task_id}: подтяжка "` совпадает буквально с обоими местами, что пишут такие коммиты (`orchestrator/fsm.py:125,305`).
-- Отдельно проверено, что реальный `orchestrator/runner.py::_cmd_run` (строка 757) журналирует `agent run finished` безусловно при rc=0 без ошибки пайпа — правка `FakeRun` в `tests/test_auto_cycle.py` (журналирование на каждый холостой вызов) корректно моделирует это поведение, не подгоняет тест под код.
+- `git show 03612076 --stat` / `git show 03612076 -- orchestrator/auto.py tests/test_auto_cycle.py` — восстановил фактический diff итерации (пакет его пропустил, см. «Служебное замечание»).
+- `git log 32019911..03612076 -- orchestrator/ tests/` — подтвердил: между одобренным код-коммитом итерации 1 и этим коммитом нет ни одного чужого кодового коммита этой задачи, только подтяжки main.
+- `grep -n 'set_state(conn, task_id, "in_dev"\|"tests_writing"\|"spec_writing"' orchestrator/*.py` (по частям) и построчное чтение каждого найденного места (`fsm.py:817,822,893,922,935,950`, `fsm_advance.py:279,393`, `fsm_merge_gate.py:125`) — подтвердил полноту и точность белого списка `_LEGIT_FIRST_ENTRY_DETAILS`/`_LEGIT_FIRST_ENTRY_PREFIXES`, ни один rework-detail не совпадает с легитимным.
+- `python3 -m unittest discover -s tasks/01M1RHFRQ2C0P4A57XJJ1WZV8N/acceptance_tests -p 'test_*.py' -v` — 10 тестов, все `ok` (планка не тронута этой итерацией).
+- `python3 -m unittest tests.test_auto_cycle tests.test_advance_guard -v` — 48 тестов, все `ok` (включая новый `PreAdvanceStillTriesOnLegitFirstEntryTest`), diff файла — только добавления, ассерты не ослаблены.
+- Воспроизвёл регрессию ANSWER-3: `git archive --output=... refs/artifacts/01M1R8B3ZKXQT0Z0G6QQQDV906 tasks/01M1R8B3ZKXQT0Z0G6QQQDV906/acceptance_tests`, распаковка python3-`tarfile` во временный каталог worktree, `python3 -m unittest discover -s <каталог> -p 'test_*.py' -v` — 15 тестов, все `ok`, включая `test_ac7_lock_conflict_skips_developer_and_stops_on_the_repeat` (именно тот тест, что ANSWER-3 назвал красным на предыдущем коде). Временный каталог и архив удалены после прогона, `git status` в дереве чист.
+- `python3 -m unittest tests.test_zones_gate tests.test_capacity_gate tests.test_branch_freshness_gate tests.test_review_freshness tests.test_review_registry_gate tests.test_answer_gate tests.test_answer tests.test_invariants tests.test_fsm_branch_correct_status_reads tests.test_fsm_draft_mr_reentry tests.test_step_refixation tests.test_fsm_autogate tests.test_advance_refusal_history` — 150 тестов, все `ok` (требование 3/AC-3 и соседние гейты не задеты этим коммитом — подтверждено прогоном).
+- `python3 scripts/codebase_map.py --check` — без вывода после отката тестового прогона (`git checkout -- docs/codebase-map.md`); расхождение — только строка `built_at_sha` (не дефект, конвенция); содержательно карта свежа — `_is_legit_first_entry_detail` приватная функция, в список публичных не попадает, что и объясняет отсутствие контентных изменений в диффе `03612076`.
+- `git show 3fb2790f --stat` и поиск `^<<<<<<<` — последующая подтяжка main прошла чистым merge-коммитом (два родителя), не затрагивает `orchestrator/auto.py`/`fsm.py`/`fsm_advance.py`/`tests/test_auto_cycle.py`, конфликтов не осталось.
+- Полный набор `tests/` в этом шаге не гонял (решение Оператора 05.09) — CI гоняет его на каждый пуш ветки.
 
 ## Предложения системе
 
-Пусто.
+- Четвёртый подтверждённый случай класса «якорь пакета ревью не совпадает с фактическим коммитом вердикта» (ранее T082, T087, и REVIEW.md 01M1RDCEF0JZ4AVQRE43JFH8TN итерации 5 — тот же класс, другая задача). Здесь якорь совпал буквально с ревьюируемым коммитом, из-за чего инкрементальный diff был формально непустым (нёс подтяжку main), но по содержанию пустым для предмета ревью — этот подслучай легче принять за «ничего не менялось», чем пустой diff, который сразу настораживает. Стоит явно фиксировать в построении пакета инвариант «якорь = коммит, на котором REVIEW.md прошлой итерации получил свой status», а не «последний известный код-коммит задачи» — расхождение между ними растёт именно после approve, за которым следует эскалация/ANSWER и новый код-коммит до переписывания REVIEW.md.
