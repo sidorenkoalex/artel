@@ -261,6 +261,7 @@ def _drive_task(conn, task_id: str) -> None:
         auto.cmd_auto(task_id)
         t = store.get_task(conn, task_id)
         state = t["state"]
+        print(f"DEBUGTRACE state={state}", file=sys.stderr, flush=True)
         if state == "spec_gate":
             _pass_spec_gate(conn, task_id)
             continue
