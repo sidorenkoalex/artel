@@ -10,8 +10,9 @@ schema_version: 2
 
 ## Ответы
 
-1. Расширение зон разрешено: orchestrator/canary.py, orchestrator/fsm_advance.py
-   Основание — раздел «Расширение зон» PLAN.md: два вызова
+Расширение зон разрешено: orchestrator/canary.py, orchestrator/fsm_advance.py
+
+1. Основание — раздел «Расширение зон» PLAN.md: два вызова
    `fsm._pull_main_or_escalate` вне зон задачи обязаны различать новый
    исход `"refused"`; правки по одной строке условия в каждом файле.
    Зоны SPEC не меняются, расширение действует только на эту задачу.
