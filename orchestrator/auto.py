@@ -92,6 +92,42 @@ REWORK_REFUSAL_ACTION = "переход отклонён: замечания р�
 # эту запись напрямую (`tasks/01M1RHFRQ2C0P4A57XJJ1WZV8N/acceptance_tests/`).
 _ITERATION_IN_DETAIL = re.compile(r"итерация (\d+)")
 
+# Тексты `detail` записи `state -> {state}`, которыми ЛЕГИТИМНЫЙ первый
+# вход роли в состояние отличается от возврата с неотработанным основанием
+# переделки (ANSWER-3, п.1-2 — регрессия против AC-7 приёмки
+# 01M1R8B3ZKXQT0Z0G6QQQDV906: рубеж требований 1-2, применённый ко ВСЯКОМУ
+# входу без разбора, держал пред-advance даже на первом же входе в
+# `in_dev` и звал developer напрямую — прежде чем предварительный
+# `advance` успевал наткнуться на лок `acceptance_tests/` и остановить
+# цикл существующим механизмом требования 4 без единого шага developer).
+# Единственные обработчики легитимного первого входа: `orchestrator/
+# fsm.py::_cmd_approve` (`spec_gate -> in_dev`/`tests_writing`) и
+# `orchestrator/fsm_advance.py::tests_writing` (`tests_writing -> in_dev`)
+# — тексты ниже дословно совпадают с их `detail=`. Возврат из `escalated`
+# несёт ОДИН и тот же общий текст независимо от основания эскалации
+# (`orchestrator/fsm.py::_cmd_approve`, «эскалация разрешена, продолжаем»)
+# и намеренно НЕ входит в этот список — ANSWER-2 п.2/AC-2/AC-8 требуют
+# держать рубеж и на нём (см. PLAN «Влияние на систему»: цена лишнего шага
+# роли на не-rework возврате из эскалации — сознательный компромисс).
+_LEGIT_FIRST_ENTRY_DETAILS = (
+    "гейт SPEC пройден — приёмочные тесты до кода",
+    "приёмочные тесты готовы — трассируемость AC пройдена",
+)
+_LEGIT_FIRST_ENTRY_PREFIXES = (
+    "тесты пропущены (skip_tests):",
+    "SPEC schema_version ",
+)
+
+
+def _is_legit_first_entry_detail(detail: str | None) -> bool:
+    """Прочитала выше — detail записи, отмечающей легитимный первый вход
+    в состояние роли, не возврат с неотработанным основанием переделки."""
+    if detail is None:
+        return False
+    if detail in _LEGIT_FIRST_ENTRY_DETAILS:
+        return True
+    return any(detail.startswith(prefix) for prefix in _LEGIT_FIRST_ENTRY_PREFIXES)
+
 
 def _role_step_since_state_entry(conn, task_id: str, state: str,
                                  role: str) -> tuple[bool, str | None]:
@@ -105,7 +141,12 @@ def _role_step_since_state_entry(conn, task_id: str, state: str,
     самый первый вход задачи в это состояние за всю её жизнь) — сверять
     не с чем, тот же вырожденный случай деградации, что и у остальных
     примитивов `auto.py`/`fsm_advance.py`: `(True, None)`, пред-advance
-    не держится.
+    не держится. Запись ЕСТЬ, но её `detail` называет легитимный первый
+    вход (`_is_legit_first_entry_detail`, ANSWER-3) — та же деградация:
+    роль объективно не могла отработать шаг РАНЬШЕ собственного первого
+    входа в состояние, держать пред-advance здесь нечем, кроме уже
+    существующих проверок требования 3/4 (PLAN.md не готов, лок
+    `acceptance_tests/` и подобные).
     """
     rows = store.task_steps(conn, task_id)
     marker = f"state -> {state}"
@@ -115,9 +156,12 @@ def _role_step_since_state_entry(conn, task_id: str, state: str,
             last_entry = i
     if last_entry is None:
         return True, None
+    detail = rows[last_entry]["detail"]
+    if _is_legit_first_entry_detail(detail):
+        return True, detail
     ran = any(row["actor"] == role and row["action"] == "agent run finished"
               for row in rows[last_entry + 1:])
-    return ran, rows[last_entry]["detail"]
+    return ran, detail
 
 
 def _rework_not_addressed_reason(detail: str | None, role: str) -> str:
