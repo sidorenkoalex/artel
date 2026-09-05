@@ -2203,5 +2203,25 @@ class RoleHomeReferenceExtraFilesTest(_RoleHomeReferenceTmpRootTest):
                             f"{check.detail}")
 
 
+class RoleHomeReferenceSettingsAutoMemoryTest(unittest.TestCase):
+    """SPEC 01M1SG9YKBFG2G5YQDVBR6BVC8, AC-2: референсный settings.json
+    отключает автопамять CLI ролям курируемого слоя."""
+
+    def test_settings_json_disables_auto_memory(self):
+        """Ловит мутацию: ключ `autoMemoryEnabled` в референсном
+        settings.json отсутствует, равен `true`, либо записан строкой
+        `"false"` вместо булева `false`."""
+        settings_path = (config.ROOT / "docs" / "reference" / "role-home"
+                          / "claude" / "settings.json")
+        data = json.loads(settings_path.read_text(encoding="utf-8"))
+
+        self.assertIn("autoMemoryEnabled", data,
+                      f"{settings_path}: нет ключа autoMemoryEnabled")
+        self.assertIs(data["autoMemoryEnabled"], False,
+                       f"{settings_path}: autoMemoryEnabled должен быть "
+                       f"булевым false, получено "
+                       f"{data['autoMemoryEnabled']!r}")
+
+
 if __name__ == "__main__":
     unittest.main()
