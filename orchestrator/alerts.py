@@ -25,6 +25,21 @@ SQL самих операций — в store.py (ADR-0003 3ж: «единств�
   этой задачи, кем бы он ни был вызван (требование 4) —
   `close_attention_alerts`, зовётся из `store.set_state`, единственной
   точки любого перехода FSM.
+- `warning` — расхождение расчёта с фактом, не требующее остановки
+  конвейера (SPEC 01M1PP0VYRT55WN8GGVG66X89Y, требование 5): курс роли
+  (`config.TOKEN_RATES`) разошёлся с фактической ценой CLI сильнее
+  порога `config.TOKEN_RATE_DIVERGENCE_ALERT_THRESHOLD`. `target` —
+  `None`: расхождение считается по роли поперёк всех задач и target'ов,
+  не про одну задачу. Заводится `report.token_rate_divergence` через
+  `raise_token_rate_divergence_alert` — НЕ через `raise_alert` напрямую:
+  сообщение несёт растущие суммы/счётчики, поэтому дедуп по точному
+  тексту `message` (см. докстрок `raise_alert` выше) для этого алерта не
+  работает — дедуп здесь по роли, не по тексту (REVIEW.md
+  01M1PP0VYRT55WN8GGVG66X89Y итерации 1, R1-F2). Дедуп по точному
+  `message` пригоден только для алертов «по шагу/задаче» (текст
+  естественно идентичен при повторе того же отказа) — для алертов-
+  АГРЕГАТОВ, чей текст меняется между прогонами, нужен отдельный ключ
+  дедупа, как здесь.
 - `warning` — сигнал деградации, не блокирующий переход (tasks/
   01M1P9RJVYHTAC087J4B2CAR44, требование 3): ревью-пакет итерации > 1 не
   собрал diff («diff не собран») — раньше тихая строка журнала, теперь
@@ -40,6 +55,8 @@ from . import store
 KINDS = ("incident", "threshold", "trigger", "attention", "warning")
 
 DIFF_NOT_COLLECTED_SOURCE = "review-diff"
+
+TOKEN_RATE_DIVERGENCE_SOURCE = "report.token_rate_divergence"
 
 
 def raise_alert(conn, target: str | None, kind: str, source: str,
@@ -105,6 +122,32 @@ def close_diff_not_collected_alerts(conn, task_id: str) -> None:
         if row["target"] == task_id and row["source"] == DIFF_NOT_COLLECTED_SOURCE:
             store.ack_alert(conn, row["id"], "auto",
                             "diff следующего сбора пакета собран")
+
+
+def raise_token_rate_divergence_alert(conn, role: str, message: str) -> bool:
+    """Заводит `kind=warning` расхождения курса токенов роли `role`; True —
+    заведён, False — по этой роли уже открыт такой алерт.
+
+    Не тонкая обёртка над `raise_alert` (в отличие от
+    `raise_diff_not_collected_alert`): дедуп там — по точному совпадению
+    `message`, а `message` здесь несёт коэффициент/суммы, которые растут
+    с каждым новым «agent cost KNOWN» шагом этой роли — почти НИКОГДА не
+    совпадают между двумя прогонами `report.token_rate_divergence`
+    (REVIEW.md итерации 1, R1-F2: два последовательных прогона заводили
+    два разных открытых алерта вместо одного устойчивого сигнала).
+    Дедуп здесь — по (`target=None`, `kind=warning`, `source`, роль),
+    роль читается из префикса `message` (`_role_prefix`) без изменения
+    его текста, назначенного вызывающим для чтения Оператором."""
+    prefix = _role_prefix(role)
+    for row in open_alerts(conn, "warning"):
+        if (row["target"] is None and row["source"] == TOKEN_RATE_DIVERGENCE_SOURCE
+                and row["message"].startswith(prefix)):
+            return False
+    return raise_alert(conn, None, "warning", TOKEN_RATE_DIVERGENCE_SOURCE, message)
+
+
+def _role_prefix(role: str) -> str:
+    return f"{role}: "
 
 
 def auto_ack(conn, alert_id: int) -> None:

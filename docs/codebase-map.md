@@ -1,5 +1,5 @@
 ---
-built_at_sha: 1f5982027b927c90dcdde06d7681bb5c217dba61
+built_at_sha: ee09fab618ee9c1c729ad462b67644c162b5fb37
 ---
 
 # Codebase-map пульта
@@ -62,10 +62,11 @@ built_at_sha: 1f5982027b927c90dcdde06d7681bb5c217dba61
 - `raise_alert`
 - `raise_attention_alert`
 - `raise_diff_not_collected_alert`
+- `raise_token_rate_divergence_alert`
 
 **Импортирует:** `orchestrator/store.py`
 
-**Импортируется:** `orchestrator/amend.py`, `orchestrator/auto.py`, `orchestrator/brief.py`, `orchestrator/budget.py`, `orchestrator/catalog.py`, `orchestrator/checkpoint.py`, `orchestrator/doctor.py`, `orchestrator/failure_classification.py`, `orchestrator/fsm_postmerge.py`, `orchestrator/github_adapter.py`, `orchestrator/runner.py`, `orchestrator/spend.py`, `orchestrator/store.py`, `tests/test_coldstart.py`, `tests/test_diff_not_collected_alerts.py`, `tests/test_doctor.py`, `tests/test_fsm_map_regen.py`, `tests/test_fsm_retro.py`, `tests/test_prune.py`, `tests/test_stall_alerts.py`
+**Импортируется:** `orchestrator/amend.py`, `orchestrator/auto.py`, `orchestrator/brief.py`, `orchestrator/budget.py`, `orchestrator/catalog.py`, `orchestrator/checkpoint.py`, `orchestrator/doctor.py`, `orchestrator/failure_classification.py`, `orchestrator/fsm_postmerge.py`, `orchestrator/github_adapter.py`, `orchestrator/report.py`, `orchestrator/runner.py`, `orchestrator/spend.py`, `orchestrator/store.py`, `tests/test_coldstart.py`, `tests/test_diff_not_collected_alerts.py`, `tests/test_doctor.py`, `tests/test_fsm_map_regen.py`, `tests/test_fsm_retro.py`, `tests/test_prune.py`, `tests/test_stall_alerts.py`
 
 ## orchestrator/amend.py
 
@@ -639,8 +640,9 @@ built_at_sha: 1f5982027b927c90dcdde06d7681bb5c217dba61
 
 **Публичные функции:**
 - `cmd_report`
+- `token_rate_divergence`
 
-**Импортирует:** `orchestrator/agent_log.py`, `orchestrator/config.py`, `orchestrator/store.py`
+**Импортирует:** `orchestrator/agent_log.py`, `orchestrator/alerts.py`, `orchestrator/config.py`, `orchestrator/spend.py`, `orchestrator/store.py`
 
 **Импортируется:** `orchestrator/artel.py`, `tests/test_report.py`
 
@@ -768,11 +770,12 @@ built_at_sha: 1f5982027b927c90dcdde06d7681bb5c217dba61
 - `partial_cost_usd`
 - `partial_tokens_from_log`
 - `step_tokens`
-- `stream_usage_tokens`
+- `stream_usage_by_type`
+- `usage_tokens_by_type`
 
 **Импортирует:** `orchestrator/alerts.py`, `orchestrator/config.py`, `orchestrator/store.py`
 
-**Импортируется:** `orchestrator/agent_log.py`, `orchestrator/budget.py`, `orchestrator/doctor.py`, `orchestrator/pause.py`, `orchestrator/runner.py`, `tests/test_doctor.py`, `tests/test_multitarget.py`, `tests/test_multitarget_invariants.py`, `tests/test_step_cost.py`
+**Импортируется:** `orchestrator/agent_log.py`, `orchestrator/budget.py`, `orchestrator/doctor.py`, `orchestrator/pause.py`, `orchestrator/report.py`, `orchestrator/runner.py`, `tests/test_doctor.py`, `tests/test_multitarget.py`, `tests/test_multitarget_invariants.py`, `tests/test_step_cost.py`
 
 ## orchestrator/store.py
 
