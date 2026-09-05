@@ -877,6 +877,10 @@ def check_zone_waits(conn) -> list[Check]:
     Не incident-алерт (в отличие от `check_leases`): занятость зоны —
     штатное ожидание, не операционный сбой, снимается сама после мержа/
     kill занявшей задачи (AC-6) или явной командой Оператора (AC-7).
+
+    Позиция в очереди (`zone_lock.queue_position`, R1-F3, REVIEW.md
+    итерация 1) — в детали, только когда конкурентов по ЭТОЙ зоне больше
+    одного.
     """
     blocked = []
     for row in store.all_tasks(conn):
@@ -886,10 +890,12 @@ def check_zone_waits(conn) -> list[Check]:
         if conflict is None:
             continue
         path, occupier_id, occupier_state = conflict
+        position, total = zone_lock.queue_position(conn, row["id"], path)
+        queue = f", очередь {position}/{total}" if total > 1 else ""
         blocked.append(Check(
             "zone-waits", "warn",
             f"{row['id']} ждёт зоны {path} — занята {occupier_id} "
-            f"({occupier_state})"))
+            f"({occupier_state}){queue}"))
     if not blocked:
         return [Check("zone-waits", "ok", "нет задач, ожидающих зоны")]
     return blocked

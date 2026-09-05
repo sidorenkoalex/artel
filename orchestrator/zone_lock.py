@@ -39,11 +39,26 @@ advance_refusal_history` (SPEC T078) уже используют для «ист
 
 Очередь (требования 7-9, AC-8/AC-9) — чистая функция от переданных id, не
 от факта блокировки (это уже AC-1..AC-3): порядок по возрастанию
-`tasks.updated_at` (естественная отметка approve — докстринг `_sandbox.py`
-задачи, раздел «Допущения интерфейса»), если Оператор явно не переставил
-её `cmd_zone_reorder` — тогда позиция, записанная им, решает раньше
-времени approve (колонка `zone_queue_position`, `NULL` — переставлено не
-было).
+времени approve, если Оператор явно не переставил её `cmd_zone_reorder`
+— тогда позиция, записанная им, решает раньше времени approve (колонка
+`zone_queue_position`, `NULL` — переставлено не было).
+
+Источник времени approve (R1-F2, REVIEW.md итерация 1) — id записи
+журнала `"state -> {X}"`, первой ПОСЛЕ последней `"state -> spec_gate"`
+этой задачи (тот же приём границы, что и выше): `set_state` пишет её
+буквально в момент `cmd_approve` на гейте SPEC, независимо от того, в
+какое состояние ведёт переход (штатно `tests_writing`) — в отличие от
+`tasks.updated_at`, которую двигает и следующий переход `tests_writing
+-> in_dev`, никак не привязанный к моменту approve. `steps.id` — общий
+монотонный счётчик по ВСЕМ задачам одной БД (докстринг `store.py`: «БД
+одна на все target'ы»), так что порядок этих id между задачами и есть
+порядок approve во времени, без коллизий secondной точности `steps.ts`.
+Задача, заведённая в обход `set_state` (приёмочная песочница `_sandbox.
+ZoneSandbox.seed_task`, докстринг «Допущения интерфейса»: обе задачи
+входят в `in_dev` НАПРЯМУЮ, без `state -> spec_gate` вовсе) — такой
+записи не несёт; `queue_order` в этом случае деградирует к
+`tasks.updated_at`, тот же фолбэк, что приёмочные тесты AC-8/AC-9 уже
+фиксируют для этого случая буквально.
 """
 from . import config, store
 
@@ -69,13 +84,73 @@ RELEASE_ACTION = "ждёт зоны — снято Оператором (осо�
 _AGENT_STARTED_ACTION = "agent run started"
 
 
+def _paths_overlap(a: str, b: str) -> bool:
+    """`a` и `b` пересекаются с учётом вложенности файл/каталог (R1-F1,
+    REVIEW.md итерация 1): точное совпадение, либо одна из зон — каталог
+    (оканчивается на `"/"`, конвенция `config.COMMON_ZONES`), под который
+    попадает другая. Симметрично — порядок аргументов не важен."""
+    if a == b:
+        return True
+    if a.endswith("/") and b.startswith(a):
+        return True
+    if b.endswith("/") and a.startswith(b):
+        return True
+    return False
+
+
+def _narrower(a: str, b: str) -> str:
+    """Более узкий (глубже вложенный) из пары пересекающихся `a`/`b` —
+    конкретное место конфликта для сообщения, не всё дерево каталога,
+    который его покрывает."""
+    if a == b:
+        return a
+    if a.endswith("/") and b.startswith(a):
+        return b
+    if b.endswith("/") and a.startswith(b):
+        return a
+    return min(a, b)
+
+
+def _covered_by(path: str, common: str) -> bool:
+    """`path` целиком покрыт зоной `common`: точное совпадение, либо
+    `common` — каталог (оканчивается на `"/"`), под который попадает
+    `path`. НЕ симметрично (в отличие от `_paths_overlap`): своя зона-
+    каталог, лишь СОДЕРЖАЩАЯ где-то внутри общий файл (`orchestrator/`
+    содержит общий `orchestrator/config.py`), этим не «покрыта» — общей
+    считается только зона, целиком лежащая ВНУТРИ общей."""
+    if path == common:
+        return True
+    return common.endswith("/") and path.startswith(common)
+
+
+def _is_common_zone(path: str) -> bool:
+    """`path` покрыт общим списком зон (`config.COMMON_ZONES`, требование
+    2) — с учётом вложенности (R1-F1): путь внутри общей директории
+    (например, `tests/test_zone_lock.py` внутри общей `tests/`) тоже
+    общий, даже если сам путь не встречается в `COMMON_ZONES` буквально."""
+    return any(_covered_by(path, common) for common in config.COMMON_ZONES)
+
+
 def _own_paths(zones: str | None) -> set[str]:
     """Список путей/масок `zones` (часть 1: строка через запятую) —
-    множеством, без общих зон (`config.COMMON_ZONES`, требование 2)."""
+    множеством, без путей, покрытых общими зонами (`config.COMMON_ZONES`,
+    требование 2) — с учётом вложенности файл/каталог (R1-F1)."""
     if not zones:
         return set()
     paths = {p.strip() for p in zones.split(",") if p.strip()}
-    return paths - set(config.COMMON_ZONES)
+    return {p for p in paths if not _is_common_zone(p)}
+
+
+def _shared_zone(own: set[str], other: set[str]) -> str | None:
+    """Первый (по алфавиту, для детерминизма) путь пересечения `own` и
+    `other`, с учётом вложенности файл/каталог (R1-F1): для пары,
+    пересекающейся через вложенность, сообщается более узкий путь — он
+    и есть конкретное место конфликта."""
+    matches = {_narrower(p, q) for p in own for q in other
+              if _paths_overlap(p, q)}
+    if not matches:
+        return None
+    return sorted(matches)[0]
 
 
 def _visit_since_id(conn, task_id: str, state: str) -> int:
@@ -125,9 +200,9 @@ def blocking_conflict(conn, task_id: str, t) -> tuple[str, str, str] | None:
             continue
         if row["state"] not in BLOCKING_STATES:
             continue
-        shared = sorted(own & _own_paths(row["zones"]))
-        if shared:
-            return shared[0], row["id"], row["state"]
+        shared = _shared_zone(own, _own_paths(row["zones"]))
+        if shared is not None:
+            return shared, row["id"], row["state"]
     return None
 
 
@@ -148,7 +223,13 @@ def cmd_zone_release(task_id: str) -> None:
     (требование 6, AC-7): следующий `run`/`auto` этой задачи проходит,
     даже если занявшая зону задача осталась в прежней фазе. Пишется в
     журнал задачи как осознанный риск — не пытается снять/выяснить
-    занятость ещё раз, решение целиком на Операторе."""
+    занятость ещё раз, решение целиком на Операторе.
+
+    Не проверяет, что для `task_id` СЕЙЧАС вообще есть активный конфликт
+    зоны (минорное замечание REVIEW.md итерации 1) — вызов на
+    незаблокированной задаче тихо пишет ту же запись «осознанный риск»;
+    решение полностью на Операторе, как и остальная семантика этой
+    команды."""
     conn = store.db()
     task_id = store.resolve_task_id(conn, task_id)
     store.journal(conn, task_id, "operator", RELEASE_ACTION,
@@ -157,22 +238,77 @@ def cmd_zone_release(task_id: str) -> None:
     print(f"[{task_id}] ожидание зоны снято Оператором (осознанный риск)")
 
 
+def _approve_marker_id(conn, task_id: str) -> int | None:
+    """Id записи журнала — момент approve SPEC задачи (требование 7,
+    R1-F2): первая запись `"state -> {X}"` ПОСЛЕ последней `"state ->
+    spec_gate"` этой задачи — `set_state` пишет её буквально в момент
+    `cmd_approve` на гейте SPEC, независимо от того, в какое состояние
+    ведёт переход (штатно `tests_writing`).
+
+    `None` — такой записи нет (задача заведена в обход `set_state`:
+    приёмочная песочница `_sandbox.ZoneSandbox.seed_task` заводит обе
+    сравниваемые задачи НАПРЯМУЮ в `in_dev`, без единой записи `"state ->
+    ..."`) — `queue_order` в этом случае деградирует к `tasks.updated_at`
+    (см. её докстринг)."""
+    steps = store.task_steps(conn, task_id)
+    since_id = 0
+    for row in reversed(steps):
+        if row["action"] == "state -> spec_gate":
+            since_id = row["id"]
+            break
+    for row in steps:
+        if row["id"] > since_id and row["action"].startswith("state -> "):
+            return row["id"]
+    return None
+
+
 def queue_order(conn, task_ids: list[str]) -> list[str]:
     """`task_ids`, отсортированные по очереди ожидания зоны (требования
     7-9): задачи, чью позицию Оператор переставил явно
     (`cmd_zone_reorder`), — по этой позиции; остальные — по возрастанию
-    `tasks.updated_at` (момент approve их SPEC — допущение источника
-    времени, докстринг `_sandbox.py` этой задачи, раздел «Допущения
-    интерфейса»). Переставленные вперёд позиций естественного порядка —
+    момента approve их SPEC (`_approve_marker_id`, R1-F2), либо, если
+    журнал не несёт маркера approve (задача заведена в обход `set_state`
+    — приёмочная песочница этой задачи), по возрастанию `tasks.updated_at`
+    — фолбэк, зафиксированный приёмочными тестами AC-8/AC-9 буквально для
+    этого случая. Переставленные вперёд позиций естественного порядка —
     иначе `cmd_zone_reorder` был бы виден только пока НИ у одной задачи
     очереди нет естественного порядка вовсе."""
     def sort_key(task_id: str):
         row = store.get_task(conn, task_id)
         position = row["zone_queue_position"]
         if position is not None:
-            return (0, position)
-        return (1, row["updated_at"])
+            return (0, 0, position)
+        marker = _approve_marker_id(conn, task_id)
+        if marker is not None:
+            return (1, 0, marker)
+        return (1, 1, row["updated_at"])
     return sorted(task_ids, key=sort_key)
+
+
+def queue_position(conn, task_id: str, path: str) -> tuple[int, int]:
+    """(позиция, всего) — место `task_id` в очереди задач, СЕЙЧАС
+    заблокированных пересечением ИМЕННО зоны `path` (требование 7:
+    очередь — среди конкурентов по ОДНОЙ и той же зоне, не глобально
+    среди всех ожидающих чего угодно). Наблюдаемость (R1-F3, REVIEW.md
+    итерация 1): `queue_order`/`zone_queue_position`/`cmd_zone_reorder`
+    сами по себе ничего не решают — кто реально стартует первым, решает
+    исключительно занятость (`blocking_conflict`/`refusal`), не эта
+    функция; она только показывает Оператору текущий порядок среди
+    конкурентов по конкретной зоне (`catalog.cmd_status`,
+    `doctor.check_zone_waits`), прежде чем он решит подождать, снять
+    ожидание (`cmd_zone_release`) или переставить очередь
+    (`cmd_zone_reorder`)."""
+    competitors = []
+    for row in store.all_tasks(conn):
+        if row["state"] != "in_dev" or row["target"] != config.DEFAULT_TARGET:
+            continue
+        conflict = blocking_conflict(conn, row["id"], row)
+        if conflict is not None and conflict[0] == path:
+            competitors.append(row["id"])
+    ordered = queue_order(conn, competitors)
+    if task_id not in ordered:
+        return 0, len(ordered)
+    return ordered.index(task_id) + 1, len(ordered)
 
 
 def cmd_zone_reorder(task_ids_in_order: list[str]) -> None:

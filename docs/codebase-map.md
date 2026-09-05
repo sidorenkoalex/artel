@@ -1,5 +1,5 @@
 ---
-built_at_sha: 0b56574af26e9ecd075fea6fb992048505c2045e
+built_at_sha: c4a6106d713ec0ae893509ddef99c1e40e47a856
 ---
 
 # Codebase-map пульта
@@ -892,6 +892,7 @@ built_at_sha: 0b56574af26e9ecd075fea6fb992048505c2045e
 - `cmd_zone_release`
 - `cmd_zone_reorder`
 - `queue_order`
+- `queue_position`
 - `refusal`
 
 **Импортирует:** `orchestrator/config.py`, `orchestrator/store.py`

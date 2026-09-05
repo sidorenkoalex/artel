@@ -204,12 +204,20 @@ def _zone_wait_suffix(conn, t) -> str:
     в конец строки `status`, тем же приёмом, что и `_lease_holder_suffix`.
     Вычисление занятости берётся у `zone_lock.blocking_conflict` целиком —
     та же проверка, что не пускает `run`/`auto` дальше, не отдельная копия.
+
+    Позиция в очереди (`zone_lock.queue_position`, R1-F3, REVIEW.md
+    итерация 1) — добавкой ПОСЛЕ держателя, только когда конкурентов по
+    ЭТОЙ зоне больше одного; иначе строка не меняется (единственный
+    заблокированный — очередь из одного не несёт новой информации).
     """
     conflict = zone_lock.blocking_conflict(conn, t["id"], t)
     if conflict is None:
         return ""
     path, occupier_id, occupier_state = conflict
-    return f"  [ждёт зоны {path}: занята {occupier_id} ({occupier_state})]"
+    position, total = zone_lock.queue_position(conn, t["id"], path)
+    queue = f", очередь {position}/{total}" if total > 1 else ""
+    return (f"  [ждёт зоны {path}: занята {occupier_id} ({occupier_state})"
+            f"{queue}]")
 
 
 def cmd_status() -> None:
