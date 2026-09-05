@@ -1,7 +1,9 @@
 """Манифест объявленного стека пульта (SPEC 01M1RDCAFENSW2VVAPECHCVGMM,
 требование 1): минимальная версия Python, внешние инструменты (`git`,
 `gh`, `claude`) с минимальной версией и способом проверки, список
-допустимых исключений правила «сторонних пакетов нет» (пуст).
+допустимых исключений правила «сторонних пакетов нет» (`pytest`/
+`pytest-timeout`/`pytest-xdist` — SPEC 01M1REVEZ1HESMJ7AFD5A9MEJ8,
+требование 1).
 
 Единственный источник значений — этот модуль; `docs/stack.md` описывает
 то же самое человекочитаемо и ссылается сюда, не дублируя числа.
@@ -14,6 +16,9 @@ import re
 import subprocess
 import sys
 from collections import namedtuple
+from pathlib import Path
+
+from . import config
 
 # `X | None` в аннотациях кода пульта (например,
 # orchestrator/doctor.py::cli_version) требует Python 3.10+ без
@@ -27,9 +32,23 @@ REQUIRED_PYTHON = (3, 11)
 CURRENT_STABLE_PYTHON = (3, 13)
 
 # Список допустимых исключений правила «сторонних пакетов нет» — записи
-# вида (модуль, причина); пуст на момент этой задачи (AC-3). Будущая
-# запись обязана нести причину вторым элементом пары.
-THIRD_PARTY_EXCEPTIONS = ()
+# вида (модуль, причина). Первое расширение (SPEC 01M1REVEZ1HESMJ7AFD5A9MEJ8,
+# требование 1, AC-2): переход на pytest (роадмап §3, фаза S, решение
+# Оператора 05.09) требует трёх сторонних пакетов, воспроизводимо
+# закреплённых `config.REQUIREMENTS_LOCK`. Имена — ИМПОРТИРУЕМЫЕ (не
+# написание PyPI: дефис в имени пакета не бывает валидным идентификатором
+# Python) — ровно то, что реально встретится в `import`-операторе, который
+# ловит сканер `tests/test_invariants.py::StdlibOnlyImportsInvariantTest`.
+THIRD_PARTY_EXCEPTIONS = (
+    ("pytest", "переход на pytest (роадмап §3, фаза S, решение Оператора "
+               "05.09) — тестовый фреймворк вместо unittest; сам раннер "
+               "пульта на pytest — P1, вне этой задачи"),
+    ("pytest_timeout", "плагин pytest — таймаут прогона одного теста, тот "
+                       "же переход на pytest, что и запись выше"),
+    ("xdist", "плагин pytest-xdist — параллельный прогон тестов, тот же "
+             "переход на pytest; сам параллельный прогон в пульте — P2, "
+             "вне этой задачи"),
+)
 
 ToolRequirement = namedtuple("ToolRequirement", "minimum command")
 
@@ -125,12 +144,90 @@ def python_version_string() -> str:
     return ".".join(str(part) for part in CURRENT_STABLE_PYTHON)
 
 
+PINNED_LINE_RE = re.compile(
+    r"^\s*([A-Za-z0-9][A-Za-z0-9_.-]*)\s*==\s*([A-Za-z0-9][A-Za-z0-9_.+-]*)\s*$")
+
+
+def _normalize_package_name(name: str) -> str:
+    """`PyTest-XDist` -> `pytest-xdist`: `_`/`-` и регистр взаимозаменяемы
+    в написании имени пакета pip (PEP 503) — без нормализации сверка
+    `requirements.lock` с выводом `pip freeze` ловила бы написание, не
+    расхождение версии."""
+    return re.sub(r"[-_.]+", "-", name).lower()
+
+
+def _parse_pinned_versions(text: str) -> dict:
+    """{нормализованное_имя: версия} из текста в формате `pip`
+    (`name==version` построчно, остальное — комментарии/пустые строки —
+    игнорируется). Общий разбор для файла закреплённых версий и вывода
+    `pip freeze` — оба несут один и тот же формат строк."""
+    pinned = {}
+    for line in text.splitlines():
+        match = PINNED_LINE_RE.match(line)
+        if match is None:
+            continue
+        name, version = match.groups()
+        pinned[_normalize_package_name(name)] = version
+    return pinned
+
+
+def _venv_exists_check() -> StackCheck:
+    """Требование 2/AC-8: `.artel/venv` отсутствует — WARN, называющий
+    команду создания (`venv-sync`), а не молчаливая деградация."""
+    if Path(config.VENV_DIR).is_dir():
+        return StackCheck("venv", "ok", f"venv существует: {config.VENV_DIR}")
+    return StackCheck(
+        "venv", "warn",
+        f"venv не создан ({config.VENV_DIR}) — `python3 artel.py venv-sync`")
+
+
+def _venv_packages_check() -> StackCheck:
+    """Требование 2/AC-7: версии пакетов `.artel/venv` сверены с файлом
+    закреплённых версий (`pip freeze` внутри venv против
+    `config.REQUIREMENTS_LOCK`) — WARN с именами РАСХОДЯЩИХСЯ пакетов, не
+    общей фразой. Зовётся, только когда `_venv_exists_check` уже нашла
+    venv на диске (иначе сверять нечего)."""
+    try:
+        pinned = _parse_pinned_versions(
+            Path(config.REQUIREMENTS_LOCK).read_text(encoding="utf-8"))
+    except OSError as exc:
+        return StackCheck(
+            "venv-packages", "warn",
+            f"файл закреплённых версий не прочитан ({config.REQUIREMENTS_LOCK}): {exc}")
+
+    python = Path(config.VENV_DIR) / "bin" / "python"
+    try:
+        result = subprocess.run([str(python), "-m", "pip", "freeze"],
+                                capture_output=True, text=True, timeout=30)
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        return StackCheck("venv-packages", "warn",
+                          f"версии venv не прочитаны (`pip freeze`): {exc}")
+    installed = _parse_pinned_versions(result.stdout)
+
+    mismatched = sorted(name for name, version in pinned.items()
+                        if installed.get(name) != version)
+    if mismatched:
+        return StackCheck(
+            "venv-packages", "warn",
+            f"версии расходятся с файлом закреплённых версий: "
+            f"{', '.join(mismatched)}")
+    return StackCheck("venv-packages", "ok",
+                      "venv согласован с файлом закреплённых версий")
+
+
 def check_stack() -> list:
     """Требование 4: по одной проверке на каждый инструмент манифеста
     (Python + `git`/`gh`/`claude`) — WARN при заниженной версии, FAIL при
-    отсутствии инструмента.
+    отсутствии инструмента. Требование 2 (SPEC 01M1REVEZ1HESMJ7AFD5A9MEJ8,
+    AC-7/AC-8) добавляет проверку `.artel/venv`: существование и, если он
+    есть, согласованность его пакетов с файлом закреплённых версий —
+    вторая проверка не запускается без первой (нечего сверять без venv).
     """
     checks = [_python_check()]
     for name, requirement in REQUIRED_TOOLS.items():
         checks.append(_tool_check(name, requirement))
+    venv_check = _venv_exists_check()
+    checks.append(venv_check)
+    if venv_check.status == "ok":
+        checks.append(_venv_packages_check())
     return checks
