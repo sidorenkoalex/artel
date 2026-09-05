@@ -802,6 +802,17 @@ def _review_rework_gate_refuses(conn, task_id: str, t, branch: str) -> bool:
     входа в состояние» — та же деградация на легитимный первый вход
     (ANSWER-3), что уже применяет журнальный гейт `auto.py`.
 
+    `_role_step_since_state_entry` возвращает `(True, None)` и на
+    легитимный первый вход, И на «записи `state -> in_dev` нет вовсе» —
+    для `auto.py` оба вырожденных случая означают одно и то же: сверять
+    нечем, не блокировать. Для ЭТОГО рубежа второй случай (`detail is
+    None`) — не сигнал «шаг developer состоялся», а отсутствие
+    журнальной информации вовсе, при уже посчитанном git-условии
+    (`code_ts`/`review_ts` выше) — переиспользование функции целиком, но
+    без слепого доверия её вырожденному «да» там, где есть более
+    надёжный git-сигнал (планка регрессии №13 заводит задачу прямо в
+    `in_dev` без единой записи журнала — ANSWER-3 повторной приёмки).
+
     Помимо журнального условия, рубеж по-прежнему независим от `auto.py`
     (по образцу `_capacity_gate_refuses` выше): держит и ручной `advance`
     Оператора, минуя цикл `auto`.
@@ -824,6 +835,17 @@ def _review_rework_gate_refuses(conn, task_id: str, t, branch: str) -> bool:
     «git не ответил -> "fresh"» — не найденный сигнал не значит «код не
     менялся», значит «сверить нечем»); журнальное условие OR при этом
     всё равно проверяется отдельно.
+
+    `_reviewer_verdict_baseline` не нашла ни автокоммита шага reviewer,
+    ни записи журнала (ANSWER-3, повторный отказ приёмки регрессии №13
+    итерации 2: планка `01M1RHFRQ2C0P4A57XJJ1WZV8N/acceptance_tests`
+    коммитит REVIEW.md вне `checkpoint.py`, без журнальной записи роли
+    reviewer вовсе) — опорное время не остаётся пустым (что открывало бы
+    рубеж нараспашку, fail open): fallback на дату последнего коммита
+    REVIEW.md (`_commit_iso_date`), тем же способом, каким рубеж сверял
+    ДО этой задачи. Опора `_reviewer_verdict_baseline`, если она нашлась,
+    по-прежнему приоритетна — этот fallback работает только на её
+    `(None, None)`.
     """
     if store.task_target(conn, task_id) != config.DEFAULT_TARGET:
         return False
@@ -835,13 +857,16 @@ def _review_rework_gate_refuses(conn, task_id: str, t, branch: str) -> bool:
         return False
     review_ts, baseline_source = _reviewer_verdict_baseline(conn, task_id, branch)
     if review_ts is None:
+        review_ts = _commit_iso_date(branch, f"tasks/{task_id}/REVIEW.md")
+        baseline_source = "последний коммит REVIEW.md"
+    if review_ts is None:
         return False
     code_ts = _latest_developer_commit_iso_date(t["branch"], task_id)
     if code_ts is not None and code_ts > review_ts:
         return False
     ran, _detail = auto._role_step_since_state_entry(conn, task_id, "in_dev",
                                                       "developer")
-    if ran:
+    if ran and _detail is not None:
         return False
     code_ts_text = code_ts.isoformat() if code_ts is not None else "нет коммитов"
     detail = (f"замечания ревью не отработаны: нет шага developer после "
