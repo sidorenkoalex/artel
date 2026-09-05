@@ -51,7 +51,11 @@ RULES = {
     "plan": {
         "sections": ["Подход", "Шаги", "Покрытие требований",
                      "Влияние на систему"],  # принцип целостности (ADR-0002)
-        "statuses": {"draft", "ready", "approved"},
+        # "escalate" (SPEC 01M1NKTF173WV5CPDZ1C3WW69K, требование 6, AC-12):
+        # единственный законный канал эскалации developer через PLAN.md —
+        # без него требование 6 неисполнимо для роли, для которой оно
+        # написано (см. «Контекст» SPEC).
+        "statuses": {"draft", "ready", "approved", "escalate"},
     },
     "review": {
         "sections": ["Соответствие SPEC", "Замечания", "Вердикт"],
@@ -592,6 +596,62 @@ def registry_errors(path: Path | str, text: str, meta: dict) -> list[str]:
 
 
 # --------------------------------------------------------------------------
+# Эскалация только статусом escalate (SPEC 01M1NKTF173WV5CPDZ1C3WW69K,
+# требование 6, AC-11/AC-12): PLAN/REVIEW/SPEC с текстом эскалации
+# (раздел «Эскалация» с непустыми «Вопросы» либо «Блокирует» —
+# skills/escalation-rules.md, «Как эскалировать») ОБЯЗАН нести
+# status: escalate — иначе роль ждёт человеческого прочтения текста,
+# которое структурно не гарантировано (класс инцидента 04.09: developer
+# держал эскалацию текстом в PLAN.md без смены статуса, `advance`
+# буксовал на одном и том же отказе гейта).
+ESCALATION_SECTION = "Эскалация"
+ESCALATION_STATUS_REASON = "эскалация текстом без статуса escalate"
+_ESCALATION_BULLET_TMPL = (
+    r"^-\s+\*\*{}\*\*\s*(?:[—-]+\s*)?(.*?)(?=\n-\s+\*\*|\Z)")
+
+
+def _escalation_bullet_text(body: str, label: str) -> str:
+    """Текст пункта `- **label** — ...` раздела «Эскалация» до следующего
+    такого же пункта верхнего уровня или конца раздела; пусто — пункта
+    нет вовсе."""
+    pattern = re.compile(_ESCALATION_BULLET_TMPL.format(re.escape(label)),
+                         re.M | re.S)
+    match = pattern.search(body)
+    return match.group(1).strip() if match else ""
+
+
+def escalation_status_errors(path: Path | str, text: str, meta: dict) -> list[str]:
+    """Раздел «Эскалация» с непустыми «Вопросы» либо «Блокирует», но
+    status, отличный от escalate — нарушение (AC-11); status: escalate —
+    легален (AC-12, позитивный кейс). `path` — только для текста ошибок
+    (см. `schema_errors`).
+
+    Применяется к `type` plan/review/spec (SPEC требование 6) — для
+    остальных типов канал эскалации не через этот раздел (analyst,
+    например, эскалирует QUESTIONS.md целиком, не разделом внутри
+    SPEC.md — см. «Контекст» SPEC: для type: spec это правило —
+    страховка от ошибки, не рабочий канал).
+    """
+    if meta.get("type") not in ("plan", "review", "spec"):
+        return []
+    status = meta.get("status") or ""
+    if status == "escalate":
+        return []
+    headers = set(re.findall(r"^##\s+(.+?)\s*$", text, re.M))
+    if ESCALATION_SECTION not in headers:
+        return []
+    body = section_body(text, ESCALATION_SECTION)
+    questions = _escalation_bullet_text(body, "Вопросы")
+    blocks = _escalation_bullet_text(body, "Блокирует")
+    if not questions and not blocks:
+        return []
+    return [f"{path}: {ESCALATION_STATUS_REASON} — раздел «{ESCALATION_SECTION}» "
+            f"несёт непустые «Вопросы» и/или «Блокирует», а status '{status}' "
+            f"— смени status на 'escalate' либо убери текст эскалации из "
+            f"артефакта"]
+
+
+# --------------------------------------------------------------------------
 # Сигналы «подозрения на большой объём» на этапе SPEC
 # (tasks/01M1KS8K9RXWHX2PW3ZKB0P903, требования 1, 3; ANSWER-1 — правила
 # для AC-1 (константы, прогноз диффа) и AC-3 (пересечение зон с
@@ -838,6 +898,8 @@ def check_content(label: str, text: str) -> list[str]:
     if atype == "review":
         errors.extend(review_evidence_errors(label, text, meta))
         errors.extend(registry_errors(label, text, meta))
+
+    errors.extend(escalation_status_errors(label, text, meta))
 
     return errors
 
