@@ -76,8 +76,15 @@ class ParseNewArgsRejectsUnrecognizedTest(unittest.TestCase):
 
 
 class CmdCanaryDispatchTest(unittest.TestCase):
+    """`artel._cmd_canary` — маршрутизация `canary pool-seal` до
+    `cmd_pool_seal` БЕЗ разбора `--k` (SPEC 01M1NSR5M5THYRC0RFWPMVE2DW,
+    требование 2), `canary --k N` — до `cmd_canary` как раньше."""
 
     def test_pool_seal_routes_to_pool_seal_without_k_arg(self):
+        """Ловит мутацию: `pool-seal` падает в общую ветку разбора `--k`
+        (например, пытается распарсить `--k` из отсутствующих
+        аргументов) вместо прямого вызова `cmd_pool_seal` — либо
+        `cmd_canary` был бы вызван вместо/вместе с `cmd_pool_seal`."""
         with mock.patch.object(artel.canary, "cmd_pool_seal") as seal_mock:
             with mock.patch.object(artel.canary, "cmd_canary") as run_mock:
                 artel._cmd_canary(["pool-seal"])
@@ -85,6 +92,10 @@ class CmdCanaryDispatchTest(unittest.TestCase):
         run_mock.assert_not_called()
 
     def test_k_flag_routes_to_the_run_command(self):
+        """Ловит мутацию: `--k` ошибочно маршрутизируется в
+        `cmd_pool_seal` (регресс существовавшего до этой задачи
+        поведения `canary --k N`) — `run_mock` не получил бы вызова с
+        разобранным `k=3`."""
         with mock.patch.object(artel.canary, "cmd_pool_seal") as seal_mock:
             with mock.patch.object(artel.canary, "cmd_canary") as run_mock:
                 artel._cmd_canary(["--k", "3"])

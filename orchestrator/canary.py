@@ -59,6 +59,7 @@ approve никогда — задача убивается штатным `clean
 import hashlib
 import hmac
 import io
+import os
 import random
 import shutil
 import struct
@@ -146,7 +147,37 @@ def _mac_key(pool_key: str) -> str:
     return hashlib.sha256((pool_key + ":mac").encode("utf-8")).hexdigest()
 
 
+@contextmanager
+def _secret_fd(secret: str):
+    """Отдаёт значение через файловый дескриптор наследуемого пайпа
+    (`fd:N` — `openssl enc -pass fd:N`), не аргументом командной строки:
+    REVIEW.md итерации 1, R1-F1 — секрет-аргумент виден в выводе
+    `ps`/`ps aux` любому процессу того же пользователя на время жизни
+    подпроцесса. Проверено эмпирически на этой машине (`openssl enc
+    -pass fd:N` роундтрипит корректно, LibreSSL)."""
+    r, w = os.pipe()
+    os.write(w, secret.encode("utf-8"))
+    os.close(w)
+    try:
+        yield r
+    finally:
+        os.close(r)
+
+
 def _hmac_tag_hex(data: bytes, mac_key: str) -> str:
+    """`openssl dgst -hmac key` — единственный CLI-путь на этой машине,
+    добавляющий тег HMAC-SHA256 внешней командой (ANSWER-1 п.1): в
+    отличие от `openssl enc`, `dgst` не несёт `-passin`/`fd:`/`env:`-
+    аналога для `-hmac` (проверено эмпирически: `openssl dgst -help` не
+    называет такой опции; `openssl mac` — команда OpenSSL 3.x, на этой
+    LibreSSL её нет вовсе), а локальный приёмочный тест `tasks/
+    01M1NSR5M5THYRC0RFWPMVE2DW/acceptance_tests/test_pool_seal.py::
+    test_ac1_...` (залочен) буквально требует подстроку `-hmac` в argv
+    вызова. Значение `mac_key` поэтому неизбежно видно в `ps`/`ps aux`
+    на время жизни этого подпроцесса (REVIEW.md итерации 1, R1-F1,
+    открытый остаток) — сам ключ пула здесь не используется (только
+    производный `_mac_key`), сужая практическую цену утечки до подделки
+    тега целостности, не расшифровки пула."""
     proc = subprocess.run(
         ["openssl", "dgst", "-sha256", "-hmac", mac_key, "-r"],
         input=data, capture_output=True)
@@ -158,9 +189,10 @@ def _hmac_tag_hex(data: bytes, mac_key: str) -> str:
 
 
 def _openssl_encrypt(data: bytes, key: str) -> bytes:
-    proc = subprocess.run(
-        ["openssl", "enc", "-aes-256-cbc", "-pbkdf2", "-pass", f"pass:{key}"],
-        input=data, capture_output=True)
+    with _secret_fd(key) as fd:
+        proc = subprocess.run(
+            ["openssl", "enc", "-aes-256-cbc", "-pbkdf2", "-pass", f"fd:{fd}"],
+            input=data, capture_output=True, pass_fds=(fd,))
     if proc.returncode != 0:
         raise RuntimeError(
             f"canary: openssl enc отказал: "
@@ -171,10 +203,11 @@ def _openssl_encrypt(data: bytes, key: str) -> bytes:
 def _openssl_decrypt(data: bytes, key: str) -> bytes | None:
     """None — openssl отказал (неверный ключ/битые данные): решает
     вызывающий, у которого есть контекст для именованного отказа."""
-    proc = subprocess.run(
-        ["openssl", "enc", "-d", "-aes-256-cbc", "-pbkdf2", "-pass",
-         f"pass:{key}"],
-        input=data, capture_output=True)
+    with _secret_fd(key) as fd:
+        proc = subprocess.run(
+            ["openssl", "enc", "-d", "-aes-256-cbc", "-pbkdf2", "-pass",
+             f"fd:{fd}"],
+            input=data, capture_output=True, pass_fds=(fd,))
     if proc.returncode != 0:
         return None
     return proc.stdout
@@ -292,8 +325,14 @@ def pool_drift_warning() -> str | None:
     if refusal is not None or payload is None:
         return None
     sealed_files = _deserialize_pool(payload)
+    # Тот же фильтр, что и `cmd_pool_seal`/`_sample_pool_templates`
+    # (REVIEW.md итерации 1, R1-F2): без него посторонний файл в
+    # `~/.artel-canary` без расширения `.md` (например, `.DS_Store`,
+    # который macOS Finder кладёт в любой просмотренный каталог) даёт
+    # ложное "незапечатанные правки" даже когда набор `*.md`-шаблонов
+    # не менялся.
     current_files = {p.name: p.read_bytes() for p in pool_dir.iterdir()
-                     if p.is_file()}
+                     if p.is_file() and p.suffix == ".md"}
     if sealed_files == current_files:
         return None
     return ("открытый пул канарейки (~/.artel-canary) разошёлся с "

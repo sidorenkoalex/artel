@@ -122,6 +122,9 @@ class TokenRepoScopeCheckTest(unittest.TestCase):
 
 
 class CanaryPoolDriftCheckTest(unittest.TestCase):
+    """`doctor.check_canary_pool_drift` (SPEC 01M1NSR5M5THYRC0RFWPMVE2DW,
+    требование 3/AC-8) — предупреждение о незапечатанных правках через
+    прямой вызов функции, без полного `doctor` CLI."""
 
     def setUp(self):
         tmp = tempfile.TemporaryDirectory()
@@ -149,19 +152,47 @@ class CanaryPoolDriftCheckTest(unittest.TestCase):
         self.addCleanup(kc_patcher.stop)
 
     def test_no_sealed_file_is_ok(self):
+        """Ловит мутацию: `check_canary_pool_drift` не проверяет
+        существование `canary/pool.sealed` до сравнения и падает/
+        предупреждает раньше времени, когда сравнивать ещё нечего."""
         self.assertEqual(doctor.check_canary_pool_drift().status, "ok")
 
     def test_matching_pool_is_ok(self):
+        """Ловит мутацию: сравнение множеств файлов пула сломано
+        (например, сверка по количеству файлов, а не по имени+
+        содержимому) — совпадающий пул ложно дал бы `warn`."""
         doctor.canary.cmd_pool_seal()
         self.assertEqual(doctor.check_canary_pool_drift().status, "ok")
 
     def test_diverging_pool_warns(self):
+        """Ловит мутацию: расхождение открытого пула с запечатанным не
+        замечено (сравнение всегда `ok` либо сравнивает не то поле) —
+        `warn` не наступил бы даже при реальной незапечатанной правке."""
         doctor.canary.cmd_pool_seal()
         (self.pool_dir / "a.md").write_text(
             "тело А, незапечатанная правка\n", encoding="utf-8")
         check = doctor.check_canary_pool_drift()
         self.assertEqual(check.status, "warn")
         self.assertIn("пул", check.detail.lower())
+
+    def test_foreign_non_md_file_in_pool_dir_is_not_a_false_drift(self):
+        """REVIEW.md итерации 1, R1-F2: `cmd_pool_seal` берёт в payload
+        только `*.md`, значит сравнение обязано применять тот же
+        фильтр — иначе любой посторонний файл в `~/.artel-canary`
+        (например, `.DS_Store`, который macOS Finder кладёт в любой
+        просмотренный каталог) даёт ложное "незапечатанные правки" даже
+        когда набор `*.md`-шаблонов не менялся ни на байт.
+
+        Ловит мутацию: `check_canary_pool_drift`/`pool_drift_warning`
+        сравнивает ВСЕ файлы каталога без фильтра по `.md` — добавление
+        `.DS_Store` после seal ложно покраснило бы этот тест в `warn`.
+        """
+        doctor.canary.cmd_pool_seal()
+        (self.pool_dir / ".DS_Store").write_bytes(b"\x00\x01macos-junk")
+
+        check = doctor.check_canary_pool_drift()
+
+        self.assertEqual(check.status, "ok")
 
 
 if __name__ == "__main__":
