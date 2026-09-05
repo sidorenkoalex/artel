@@ -1,5 +1,5 @@
 ---
-built_at_sha: 3ebc932a48edd928bc9bff4e3d2958705f5eb20b
+built_at_sha: d5fcc84cd1465d02389bff8164e6f0554be9d844
 ---
 
 # Codebase-map пульта
@@ -172,7 +172,7 @@ built_at_sha: 3ebc932a48edd928bc9bff4e3d2958705f5eb20b
 - `test_author_answer_component`
 - `wrap_boundary`
 
-**Импортирует:** `orchestrator/alerts.py`, `orchestrator/artifact_source.py`, `orchestrator/config.py`, `orchestrator/context_package.py`, `orchestrator/gitcmd.py`, `orchestrator/store.py`
+**Импортирует:** `orchestrator/alerts.py`, `orchestrator/artifact_source.py`, `orchestrator/config.py`, `orchestrator/context_package.py`, `orchestrator/gitcmd.py`, `orchestrator/store.py`, `scripts/codebase_map.py`
 
 **Импортируется:** `orchestrator/review.py`, `orchestrator/role_prompt.py`, `orchestrator/runner.py`, `tests/test_advance_refusal_history.py`, `tests/test_answer_branch_reads.py`, `tests/test_brief.py`
 
@@ -200,10 +200,15 @@ built_at_sha: 3ebc932a48edd928bc9bff4e3d2958705f5eb20b
 
 **Публичные функции:**
 - `cmd_canary`
+- `cmd_pool_seal`
+- `guids_path`
+- `pool_drift_warning`
+- `restore_pool_if_missing`
+- `sealed_path`
 
-**Импортирует:** `orchestrator/alerts.py`, `orchestrator/answer.py`, `orchestrator/artifacts.py`, `orchestrator/auto.py`, `orchestrator/catalog.py`, `orchestrator/cleanup.py`, `orchestrator/config.py`, `orchestrator/fsm.py`, `orchestrator/gitcmd.py`, `orchestrator/runner.py`, `orchestrator/store.py`, `orchestrator/workspace.py`, `orchestrator/yamlmini.py`, `scripts/guard.py`
+**Импортирует:** `orchestrator/alerts.py`, `orchestrator/answer.py`, `orchestrator/artifacts.py`, `orchestrator/auto.py`, `orchestrator/catalog.py`, `orchestrator/cleanup.py`, `orchestrator/config.py`, `orchestrator/fsm.py`, `orchestrator/gitcmd.py`, `orchestrator/keychain.py`, `orchestrator/runner.py`, `orchestrator/store.py`, `orchestrator/workspace.py`, `orchestrator/yamlmini.py`, `scripts/guard.py`
 
-**Импортируется:** `orchestrator/artel.py`, `tests/test_canary.py`
+**Импортируется:** `orchestrator/artel.py`, `orchestrator/catalog.py`, `orchestrator/doctor.py`, `tests/test_canary.py`
 
 ## orchestrator/catalog.py
 
@@ -217,7 +222,7 @@ built_at_sha: 3ebc932a48edd928bc9bff4e3d2958705f5eb20b
 - `cmd_status`
 - `slugify`
 
-**Импортирует:** `orchestrator/alerts.py`, `orchestrator/artifact_branch.py`, `orchestrator/artifacts.py`, `orchestrator/budget.py`, `orchestrator/config.py`, `orchestrator/gitcmd.py`, `orchestrator/idgen.py`, `orchestrator/liveness.py`, `orchestrator/store.py`, `orchestrator/yamlmini.py`, `orchestrator/zone_lock.py`
+**Импортирует:** `orchestrator/alerts.py`, `orchestrator/artifact_branch.py`, `orchestrator/artifacts.py`, `orchestrator/budget.py`, `orchestrator/canary.py`, `orchestrator/config.py`, `orchestrator/gitcmd.py`, `orchestrator/idgen.py`, `orchestrator/liveness.py`, `orchestrator/store.py`, `orchestrator/yamlmini.py`, `orchestrator/zone_lock.py`
 
 **Импортируется:** `orchestrator/artel.py`, `orchestrator/canary.py`, `tests/test_acceptance_tests_flow.py`, `tests/test_advance_guard.py`, `tests/test_agent_failure.py`, `tests/test_agent_log.py`, `tests/test_agent_prompt.py`, `tests/test_amend.py`, `tests/test_analyst_role.py`, `tests/test_answer_gate.py`, `tests/test_auto_cycle.py`, `tests/test_branch_freshness_gate.py`, `tests/test_canary.py`, `tests/test_catalog_new_race.py`, `tests/test_catalog_status_log.py`, `tests/test_coldstart.py`, `tests/test_doctor.py`, `tests/test_fsm_branch_correct_status_reads.py`, `tests/test_fsm_map_conflict_autoresolve.py`, `tests/test_fsm_merge_gate_done_snapshot.py`, `tests/test_git_fixation.py`, `tests/test_invariants.py`, `tests/test_kill_cleanup.py`, `tests/test_lease.py`, `tests/test_merge_gate_ci_wait.py`, `tests/test_merge_lock.py`, `tests/test_multitarget.py`, `tests/test_multitarget_invariants.py`, `tests/test_parallel_limit.py`, `tests/test_pause.py`, `tests/test_pause_now.py`, `tests/test_prune.py`, `tests/test_release.py`, `tests/test_review_freshness.py`, `tests/test_review_package.py`, `tests/test_slugify.py`, `tests/test_spec_budget.py`, `tests/test_step_cost.py`, `tests/test_store_journal.py`, `tests/test_task_id_prefix_regression.py`, `tests/test_workspace.py`, `tests/test_zone_lock.py`
 
@@ -317,6 +322,7 @@ built_at_sha: 3ebc932a48edd928bc9bff4e3d2958705f5eb20b
 - `check_backup_age`
 - `check_base_branch`
 - `check_branch_freshness`
+- `check_canary_pool_drift`
 - `check_cli_found`
 - `check_cli_version`
 - `check_disk_space`
@@ -344,7 +350,7 @@ built_at_sha: 3ebc932a48edd928bc9bff4e3d2958705f5eb20b
 - `recovery_check`
 - `sweep_orphan_artifact_branches`
 
-**Импортирует:** `orchestrator/alerts.py`, `orchestrator/artifact_branch.py`, `orchestrator/coldstart.py`, `orchestrator/config.py`, `orchestrator/gitcmd.py`, `orchestrator/liveness.py`, `orchestrator/projects.py`, `orchestrator/roles.py`, `orchestrator/runner.py`, `orchestrator/snapshot.py`, `orchestrator/spend.py`, `orchestrator/stack.py`, `orchestrator/store.py`, `orchestrator/targets.py`, `orchestrator/workspace.py`, `orchestrator/zone_lock.py`
+**Импортирует:** `orchestrator/alerts.py`, `orchestrator/artifact_branch.py`, `orchestrator/canary.py`, `orchestrator/coldstart.py`, `orchestrator/config.py`, `orchestrator/gitcmd.py`, `orchestrator/liveness.py`, `orchestrator/projects.py`, `orchestrator/roles.py`, `orchestrator/runner.py`, `orchestrator/snapshot.py`, `orchestrator/spend.py`, `orchestrator/stack.py`, `orchestrator/store.py`, `orchestrator/targets.py`, `orchestrator/workspace.py`, `orchestrator/zone_lock.py`
 
 **Импортируется:** `orchestrator/artel.py`, `orchestrator/runner.py`, `orchestrator/version.py`, `tests/test_coldstart.py`, `tests/test_doctor.py`, `tests/test_doctor_canary_pool.py`, `tests/test_doctor_fix_ignored_artifacts.py`, `tests/test_version.py`
 
@@ -522,7 +528,7 @@ built_at_sha: 3ebc932a48edd928bc9bff4e3d2958705f5eb20b
 
 **Импортирует:** —
 
-**Импортируется:** `orchestrator/runner.py`
+**Импортируется:** `orchestrator/canary.py`, `orchestrator/runner.py`
 
 ## orchestrator/lease.py
 
@@ -692,7 +698,7 @@ built_at_sha: 3ebc932a48edd928bc9bff4e3d2958705f5eb20b
 
 **Импортирует:** `orchestrator/artifact_source.py`, `orchestrator/brief.py`, `orchestrator/config.py`, `orchestrator/context_package.py`, `orchestrator/gitcmd.py`, `orchestrator/store.py`
 
-**Импортируется:** `orchestrator/fsm.py`, `orchestrator/fsm_advance.py`, `orchestrator/role_prompt.py`, `orchestrator/runner.py`, `tests/test_review_freshness.py`, `tests/test_review_package.py`
+**Импортируется:** `orchestrator/fsm.py`, `orchestrator/fsm_advance.py`, `orchestrator/role_prompt.py`, `orchestrator/runner.py`, `tests/test_capacity_gate.py`, `tests/test_review_freshness.py`, `tests/test_review_package.py`
 
 ## orchestrator/role_prompt.py
 
@@ -726,6 +732,7 @@ built_at_sha: 3ebc932a48edd928bc9bff4e3d2958705f5eb20b
 - `close_pump`
 - `cmd_run`
 - `git_identity`
+- `in_role_environment`
 - `role_cmd`
 - `role_cwd`
 - `role_env`
@@ -936,11 +943,12 @@ built_at_sha: 3ebc932a48edd928bc9bff4e3d2958705f5eb20b
 - `main`
 - `module_dotted_name`
 - `parse_module`
+- `project_for_brief`
 - `render`
 
 **Импортирует:** —
 
-**Импортируется:** `tests/test_codebase_map.py`
+**Импортируется:** `orchestrator/brief.py`, `tests/test_codebase_map.py`
 
 ## scripts/guard.py
 
@@ -1200,7 +1208,7 @@ built_at_sha: 3ebc932a48edd928bc9bff4e3d2958705f5eb20b
 
 **Публичные функции:** (нет)
 
-**Импортирует:** `orchestrator/fsm_advance.py`, `orchestrator/gitcmd.py`, `orchestrator/store.py`, `tests/sandbox.py`
+**Импортирует:** `orchestrator/fsm_advance.py`, `orchestrator/gitcmd.py`, `orchestrator/review.py`, `orchestrator/store.py`, `tests/sandbox.py`
 
 **Импортируется:** —
 
