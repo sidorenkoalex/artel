@@ -58,9 +58,9 @@ import time
 from collections import namedtuple
 from pathlib import Path
 
-from . import (alerts, artifact_branch, coldstart, config, gitcmd, liveness,
-              projects, roles, runner, snapshot, spend, stack, store,
-              targets, workspace, zone_lock)
+from . import (alerts, artifact_branch, canary, coldstart, config, gitcmd,
+              liveness, projects, roles, runner, snapshot, spend, stack,
+              store, targets, workspace, zone_lock)
 
 # status: "ok" | "warn" | "fail" | "skip" ("skip" — честный пропуск проверки,
 # требование 9: сверка forge-политики без `gh`/сети — не провал и не ок).
@@ -711,6 +711,18 @@ def check_role_log_pool_leak(conn) -> Check:
             f"требование 13б)")
     return Check("canary-pool-leak", "fail",
                 f"логи ролей упоминают каталог пула: {', '.join(leaking)}")
+
+
+def check_canary_pool_drift() -> Check:
+    """AC-8 (SPEC 01M1NSR5M5THYRC0RFWPMVE2DW, требование 3): предупреждает,
+    если открытый пул `~/.artel-canary` разошёлся с запечатанным
+    `canary/pool.sealed` — незапечатанные правки Оператора."""
+    warning = canary.pool_drift_warning()
+    if warning is None:
+        return Check("canary-pool-drift", "ok",
+                     "открытый пул канарейки не расходится с запечатанным "
+                     "(либо пул/pool.sealed не развёрнуты)")
+    return Check("canary-pool-drift", "warn", warning)
 
 
 def check_token_repo_scope() -> list[Check]:
@@ -1551,6 +1563,7 @@ def all_checks(conn) -> list[Check]:
     checks.extend(check_branch_freshness(conn))
     checks.append(check_root_pin())
     checks.append(check_role_log_pool_leak(conn))
+    checks.append(check_canary_pool_drift())
     checks.extend(check_token_repo_scope())
     checks.extend(stack.check_stack())
     return checks
@@ -1563,6 +1576,11 @@ def cmd_doctor(restore: bool = False, fix: bool = False) -> None:
     conn = store.db()
     if restore:
         print("Recovery-сверка после восстановления .artel/ из бэкапа:")
+        # SPEC 01M1NSR5M5THYRC0RFWPMVE2DW, требование 3/AC-6: тот же
+        # вход восстановления пула, что `catalog.cmd_init()`.
+        pool_restore_msg = canary.restore_pool_if_missing(conn)
+        if pool_restore_msg:
+            print(pool_restore_msg)
     if fix:
         found_before = bool(_orphan_artifact_branches(conn))
         removed = sweep_orphan_artifact_branches(conn)

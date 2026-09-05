@@ -493,6 +493,18 @@ def role_env(role: str | None = None) -> dict:
     return env
 
 
+def in_role_environment() -> bool:
+    """Верно, если ТЕКУЩИЙ процесс сам исполняется в окружении роли —
+    те же два маркера, что `role_env()` ставит процессу роли (HOME/
+    CLAUDE_CONFIG_DIR на курируемый слой): единственное в кодовой базе
+    определение «окружения роли» читается здесь же, симметрично записи,
+    не задаётся заново (SPEC 01M1NSR5M5THYRC0RFWPMVE2DW, требование 5,
+    AC-15 — второй, независимый от `permissions.deny` рубеж отказа
+    расшифровки пула канарейки, если она вызвана из-под роли)."""
+    return (os.environ.get("HOME") == str(config.ROLE_HOME) and
+            os.environ.get("CLAUDE_CONFIG_DIR") == str(config.ROLE_CONFIG_DIR))
+
+
 def role_cwd(conn, task_id: str, target: str) -> Path:
     """Рабочий каталог роли: worktree задачи для self/артели, workspace
     target'а — иначе.

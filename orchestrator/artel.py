@@ -94,7 +94,7 @@ workspace, tasks, knowledge, logs). БД одна на все проекты: с
   answer <id> <файл-с-ответом> | kill <id> | release <id> |
   pause [--now] <id> | resume <id> | log <id> | budget <id> <usd> |
   target-init <target> | doctor [--restore] [--fix] | alert-ack <id> "<решение>" |
-  version | canary --k <N> | prune [--execute] |
+  version | canary --k <N> | canary pool-seal | prune [--execute] |
   amend-tests <id> --reason "<основание>" | pin-update <sha main артели> |
   zone-release <id> | zone-reorder <id1> <id2> ...
 
@@ -150,6 +150,16 @@ v1, tasks/T065/SPEC.md) — синтетический прогон конвей
 отклонении сверх `config.CANARY_DEVIATION_RATIO` — без автоматического
 действия. Маркер шаблона «ожидается эскалация» сверяется с фактом,
 расхождение — в отчёте.
+
+`canary pool-seal` (SPEC 01M1NSR5M5THYRC0RFWPMVE2DW) — хранит пул
+`~/.artel-canary` в репозитории пульта ОДНИМ зашифрованным файлом
+(`canary/pool.sealed`, `openssl enc -aes-256-cbc -pbkdf2` + тег
+HMAC-SHA256), ключ — в keychain пульта; манифест GUID шаблонов
+(`canary/guids.txt`) — открыт, для CI-сторожа утечки выше. `init`/
+`doctor --restore` расшифровывают пул обратно в `~/.artel-canary`, если
+каталог отсутствует; `doctor` предупреждает о незапечатанных правках.
+Расшифровка недоступна ролям — запрет в курируемом слое роли и отказ
+самого пульта, если вызван из окружения роли (`role_env`).
 
 Занятость зоны на старте кода (SPEC 01M1P9QAG65GVF69YJEV0V18D9): перед
 первым шагом `in_dev` зоны задачи (`zones:` SPEC, часть 1 —
@@ -356,6 +366,16 @@ def _k_arg(rest: list) -> int:
         sys.exit(f"--k требует целое число, получено {rest[idx + 1]!r}.")
 
 
+def _cmd_canary(rest: list) -> None:
+    """`canary pool-seal` (SPEC 01M1NSR5M5THYRC0RFWPMVE2DW, требование 2)
+    — отдельная подкоманда семейства `canary`, разбирается ДО `--k`:
+    `pool-seal` не берёт `--k` и не заводит прогон."""
+    if rest and rest[0] == "pool-seal":
+        canary.cmd_pool_seal()
+        return
+    canary.cmd_canary(k=_k_arg(rest))
+
+
 def _cmd_new(rest: list) -> None:
     parsed = _parse_new_args(rest)
     if parsed is None:
@@ -424,7 +444,7 @@ def main() -> None:
         "alert-ack": lambda: doctor.cmd_alert_ack(
             rest[0], rest[1] if len(rest) > 1 else ""),
         "version": lambda: version.cmd_version(),
-        "canary": lambda: canary.cmd_canary(k=_k_arg(rest)),
+        "canary": lambda: _cmd_canary(rest),
         "prune": lambda: prune.cmd_prune("--execute" in rest),
         "report": lambda: report.cmd_report(),
         "acceptance-dry-run": lambda: dry_run.cmd_acceptance_dry_run(rest[0]),
