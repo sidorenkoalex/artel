@@ -12,7 +12,7 @@ AC-11. Файл `tests/test_role_bash_guard.py` удалён.
 AC-12. `docs/reference/role-home.md` не содержит упоминаний снятого
 хука (`bash_guard.py`, `PreToolUse`).
 
-Красен до реализации (AC-9, AC-10, AC-11): временный хук ещё на месте —
+Красен до реализации: временный хук ещё на месте (AC-9, AC-10, AC-11) —
 `docs/reference/role-home/claude/hooks/bash_guard.py` и
 `tests/test_role_bash_guard.py` существуют, `settings.json` несёт
 `hooks.PreToolUse` — все три `assertFalse`/сверки ниже падают на
