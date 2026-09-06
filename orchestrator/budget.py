@@ -88,6 +88,54 @@ def apply_spec_budget(conn, t: sqlite3.Row, meta: dict) -> None:
     print(f"[{task_id}] бюджет из SPEC: {detail}")
 
 
+def recommended_budget_usd(ac_count: int, zone_files: int) -> float:
+    """Ориентир потолка задачи по калибровочной таблице
+    (`config.BUDGET_CALIBRATION_TABLE`, ADR-0014 п.7) — по числу
+    критериев приёмки SPEC и числу файлов зоны (SPEC
+    01M1TQ11K4WJZD7ZE3MR0J4ZK4, требование 1).
+
+    Таблица проверяется по порядку: первый уровень, чьи оба потолка
+    (критериев приёмки, файлов зоны) не превышены, и даёт ответ;
+    последний уровень таблицы не ограничен ни тем, ни другим — функция
+    всегда возвращает значение.
+    """
+    for amount, max_ac, max_zone_files in config.BUDGET_CALIBRATION_TABLE:
+        if max_ac is not None and ac_count > max_ac:
+            continue
+        if max_zone_files is not None and zone_files > max_zone_files:
+            continue
+        return max(amount, config.BUDGET_CALIBRATION_FLOOR_USD)
+    return config.BUDGET_CALIBRATION_FLOOR_USD
+
+
+def calibration_warning(actual_usd: float, orientir_usd: float) -> str | None:
+    """«рамка ниже калибровки: $N против ~$M» (SPEC
+    01M1TQ11K4WJZD7ZE3MR0J4ZK4, AC-6/AC-10) — `actual_usd` ниже
+    `orientir_usd` больше чем на треть; иначе `None`.
+
+    Общий узел для `catalog.cmd_new` (требование 2) и гейта SPEC
+    (требование 3, `fsm._cmd_approve`) — SPEC требует буквально одну и
+    ту же строку в обеих точках.
+    """
+    if actual_usd < orientir_usd * 2 / 3:
+        return (f"рамка ниже калибровки: ${actual_usd:.2f} против "
+                f"~${orientir_usd:.2f}")
+    return None
+
+
+def count_zone_paths(text: str | None) -> int:
+    """Число непустых путей в строке зон через запятую (SPEC
+    01M1TQ11K4WJZD7ZE3MR0J4ZK4, требования 2-3) — общий разбор и для
+    frontmatter `zones:` SPEC (гейт SPEC), и для строки «Зоны: ...» ТЗ
+    (`new`, где текст предложения может нести завершающую точку сразу
+    за последним путём)."""
+    if not text:
+        return 0
+    return len([p for p in
+               (piece.strip().rstrip(".") for piece in text.split(","))
+               if p])
+
+
 def spent_with_estimate(t: sqlite3.Row) -> float:
     """`spent_usd + spent_estimate_usd` задачи (SPEC
     01M1NWCM3TDY0YABEKE8DYQA1C, требование 5): бюджетный гейт сравнивает

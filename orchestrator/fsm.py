@@ -16,9 +16,9 @@ from pathlib import Path
 
 from scripts import guard
 
-from . import (acceptance, alerts, artifact_source, artifacts, checkpoint,
-              config, fixation, github_adapter, gitcmd, lease, review, store,
-              targets, workspace, yamlmini)
+from . import (acceptance, alerts, artifact_source, artifacts, budget,
+              checkpoint, config, fixation, github_adapter, gitcmd, lease,
+              review, store, targets, workspace, yamlmini)
 
 # Буквальная строка «сигналов нет» (ANSWER-2, tasks/01M1KS8K9RXWHX2PW3ZKB0P903,
 # AC-12) — снимок секции «Оценка объёма и деление» пустой/отсутствующей,
@@ -561,6 +561,27 @@ def _snapshot_split_assessment(conn, task_id: str, t) -> None:
                           split_assessment=body or SPLIT_ASSESSMENT_NONE)
 
 
+def _print_spec_gate_calibration_hint(conn, task_id: str, budget_usd: float,
+                                      meta: dict, spec_text: str) -> None:
+    """Печатает ориентир калибровки и действующий `budget_usd` рядом со
+    строкой «дальше:» гейта SPEC и, при занижении больше чем на треть,
+    предупреждение + запись в журнал (SPEC 01M1TQ11K4WJZD7ZE3MR0J4ZK4,
+    требование 3, AC-9/AC-10). Не отказывает и не меняет потолок
+    (AC-11) — только печатает и, при срабатывании, журналирует.
+    """
+    ac_count = len(guard.AC_ITEM.findall(
+        guard.section_body(spec_text, "Критерии приёмки")))
+    zone_files = budget.count_zone_paths(meta.get("zones"))
+    orientir = budget.recommended_budget_usd(ac_count, zone_files)
+    print(f"[{task_id}] калибровка: ориентир ~${orientir:.2f} "
+         f"({ac_count} AC-n, {zone_files} файлов zones) — действующий "
+         f"потолок ${budget_usd:.2f}")
+    warning = budget.calibration_warning(budget_usd, orientir)
+    if warning is not None:
+        store.journal(conn, task_id, "fsm", "калибровка бюджета", warning)
+        print(f"[{task_id}] ВНИМАНИЕ: {warning}")
+
+
 def _answer_file_count(conn, task_id: str, tdir: Path) -> int | None:
     """Число `ANSWER-*.md` задачи — с ВЕТКИ-ИСТОЧНИКА `tasks/<id>/`
     (`artifact_source.resolve`, SPEC T031/T047/T094 требование 10, тот же
@@ -876,11 +897,14 @@ def _cmd_approve(conn, task_id: str, sha: str | None, sid: str) -> None:
             meta = yamlmini.frontmatter(spec_text) or {}
         else:
             meta = artifacts.frontmatter(config.TASKS / task_id / "SPEC.md")
+            spec_text = ""
         # Значение zones (01M1NKVPD2A79PQ6K0JVV1B2Q1, AC-3) сохраняется тем
         # же моментом входа approve на spec_gate, что и budget/split_
         # assessment рядом — meta уже прочитана выше, поле отсутствует у
         # SPEC старых версий (`meta.get` даёт None, колонка тогда NULL).
         store.update_task(conn, task_id, zones=meta.get("zones"))
+        _print_spec_gate_calibration_hint(conn, task_id, t["budget_usd"] or 0.0,
+                                          meta, spec_text)
         skip_reason = meta.get("skip_tests")
         if skip_reason or not guard.requires_ac_markup(meta):
             detail = (f"тесты пропущены (skip_tests): {skip_reason}"
