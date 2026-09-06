@@ -191,3 +191,57 @@ schema_version: 4
   collect-only (без исполнения тестов, тем же принципом «не исполнять
   содержимое», что уже документирован в guard.py) на выходе из
   `tests_writing` мог бы поймать это раньше.
+
+## Возврат — конфликт подтяжки main
+
+Причина возврата: подтяжка `origin/main` в ветку задачи конфликтовала
+в двух файлах — `orchestrator/acceptance.py` и `docs/codebase-map.md`
+(со стороны main прилетел коммит 1d8a1b6b, задача 01M1SHJTT0V5…:
+обработка критерия `ci` в `acceptance.summary()`). Разрешено по
+ANSWER-5, обе стороны сохранены целиком, ни одна ветка логики не
+выброшена:
+
+- `orchestrator/acceptance.py` — конфликт был только в блоке `import`:
+  HEAD нёс `from . import config, gitcmd, stack` (раннер pytest этой
+  задачи), main — `from . import ci, config, gitcmd` (критерий `ci`
+  автогейта). Слито в один импорт `from . import ci, config, gitcmd,
+  stack` — обе стороны используют разные имена модуля, конфликта смысла
+  нет, только текстовое совпадение строки импорта. Тело функций
+  (`run()`, `run_full_suite()`, `_pytest_command()`, `_timeout_text()`
+  этой задачи; `summary()` с обработкой `ci_ns`/`ci.verifying_status()`
+  из main) не конфликтовало — auto-merge принял обе стороны без правки.
+- `docs/codebase-map.md` — автосгенерированный файл, конфликт из-за
+  разошедшихся снапшотов (main успел смержить деление `orchestrator/
+  doctor.py` на пакет `orchestrator/doctor/*.py` и добавить
+  `orchestrator/pull.py`, эта ветка — переход `acceptance.py` на
+  pytest). Взята сторона main целиком (`git checkout --theirs`), затем
+  карта перегенерирована `python3 scripts/codebase_map.py` заново по
+  правилам скила (подтяжка main меняет `*.py` не через Edit — тот же
+  случай, что и described в conventions-core) — итоговый файл несёт
+  ОБЕ стороны: секция `doctor/*` от main и обновлённые импорты
+  `acceptance.py` (`ci`, `stack`) от этой задачи.
+- `tests/test_amend.py` — авто-merge разрешил конфликт без маркеров
+  (изменения в разных участках файла), проверено `grep` на маркеры
+  конфликта — чисто.
+
+Слияние закоммичено (`a221645f`, "Merge remote-tracking branch
+'origin/main'..."). Прогон после слияния (все — в переднем плане,
+синхронно, по правилу скила — полный `tests/` НЕ гонялся):
+
+- Планка задачи целиком: `python3 -m pytest tasks/
+  01M1TKP6AAY4W8GDGZNA9R0JZT/acceptance_tests -p no:cacheprovider` —
+  28 passed за 125.59с.
+- `tests/test_acceptance.py`, `tests/test_amend.py`,
+  `tests/test_stack.py` — 41 passed.
+- `tests/test_acceptance.py`, `tests/test_acceptance_tests_flow.py` —
+  77 passed (модули критерия `ci`, названные ANSWER-5 прямо).
+- Все `tests/test_guard*.py` (6 файлов) — 120 passed, 39 subtests
+  passed.
+- `tests/test_pull.py`, `tests/test_fsm_autogate.py`,
+  `tests/test_fsm_map_conflict_autoresolve.py`,
+  `tests/test_fsm_map_regen.py`, `tests/test_codebase_map.py`
+  (модули, затронутые слиянием со стороны main) — 57 passed.
+
+Код задачи (`orchestrator/acceptance.py`, `orchestrator/amend.py`,
+`orchestrator/stack.py`, `pyproject.toml`) после слияния не менялся —
+только разрешение конфликта импорта и регенерация карты.
