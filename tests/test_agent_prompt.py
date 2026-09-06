@@ -125,9 +125,21 @@ class PromptChannelTest(unittest.TestCase):
         conn.execute("UPDATE tasks SET state=? WHERE id=?", (state, self.TASK))
         conn.commit()
 
+    # Имя обязательного артефакта роли этого состояния (SPEC
+    # 01M1RQ12JVHE3PQYDFV1XPSTQ3, требование 3) — без него на диске
+    # рабочего каталога роли `runner.run_agent_once` честно ретраит шаг
+    # вместо одного тихого успеха, которого ждут остальные тесты этого
+    # файла (они проверяют канал промпта, не отказ без артефакта).
+    _STEP_ARTIFACT = {"in_dev": "PLAN.md", "review": "REVIEW.md"}
+
     def run_agent(self, state: str = "in_dev") -> mock.Mock:
         """Прогон шага с подменённым процессом; возвращает мок Popen."""
         self.set_state(state)
+        marker = self._STEP_ARTIFACT.get(state)
+        if marker is not None:
+            tdir = config.WORKTREES / self.TASK / "tasks" / self.TASK
+            tdir.mkdir(parents=True, exist_ok=True)
+            (tdir / marker).write_text("маркер\n", encoding="utf-8")
         with mock.patch.object(runner, "spawn_agent") as popen:
             popen.return_value = FakeProc(["готово\n"])
             self.capture(runner.cmd_run, self.TASK)

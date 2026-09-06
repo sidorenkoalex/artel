@@ -668,5 +668,99 @@ class RoleCwdMaterializationSurvivesTimeoutCheckpointTest(_WorktreeCheckpointTes
         self.assertIn("wip.md", tracked.splitlines())
 
 
+class CommitPullCheckpointTest(_WorktreeCheckpointTest):
+    """Юнит-тесты `checkpoint.commit_pull_checkpoint` (SPEC
+    01M1RA0R9AH9RBAHD4A2Z5SEWQ, требование 2): WIP-чекпоинт worktree
+    задачи перед `git merge` в `fsm._pull_main_or_escalate` — сценарное
+    покрытие целиком (очистка карты + классификация отказа merge) уже
+    несут `tasks/01M1RA0R9AH9RBAHD4A2Z5SEWQ/acceptance_tests/`; здесь —
+    изолированные случаи самой функции чекпоинта, тем же приёмом, что и
+    соседние классы файла."""
+
+    def test_clean_tree_commits_nothing_and_journals_nothing(self):
+        self.enter_in_dev()
+        before = self.worktree_head()
+
+        detail = checkpoint.commit_pull_checkpoint(store.db(), self.TASK, self.wt)
+
+        self.assertEqual(detail, "")
+        self.assertEqual(self.worktree_head(), before)
+        self.assertEqual(self.orchestrator_steps(), [])
+
+    def test_dirty_tree_commits_with_message_sha_and_journal_entry(self):
+        """Мандат `developer` — все пути кроме `tasks/<id>/` (тот же приём,
+        что у `commit_timeout_checkpoint`): правка ВНЕ `tasks/<id>/` нужна,
+        чтобы код-коммит вообще состоялся."""
+        self.enter_in_dev()
+        self.write_code_file("orchestrator/new_module.py",
+                             "# правка разработчика\n")
+        (self.worktree_task_dir() / "wip.md").write_text(
+            "недописано\n", encoding="utf-8")
+
+        detail = checkpoint.commit_pull_checkpoint(store.db(), self.TASK, self.wt)
+
+        subject = self.worktree_git("log", "-1", "--format=%s").strip()
+        self.assertEqual(subject, f"{self.TASK}: WIP-чекпоинт перед подтяжкой main")
+        self.assertIn(subject, detail)
+        self.assertIn(self.worktree_head(), detail)
+
+        entries = self.orchestrator_steps()
+        self.assertEqual(len(entries), 1)
+        self.assertIn("подтяжк", entries[0]["action"].lower())
+
+    def test_refixation_keeps_check_integrity_clean_after_the_commit(self):
+        self.enter_in_dev()
+        (self.worktree_task_dir() / "wip.md").write_text(
+            "недописано\n", encoding="utf-8")
+
+        checkpoint.commit_pull_checkpoint(store.db(), self.TASK, self.wt)
+
+        conn = store.db()
+        self.assertIsNone(fixation.check_integrity(conn, self.TASK))
+        self.assertEqual(store.get_task(conn, self.TASK)["fixed_sha"],
+                         self.head())
+
+    def test_excludes_task_dir_from_code_commit(self):
+        """Ловит мутацию: `exclude` не передаётся `_commit_worktree_change` —
+        `tasks/<id>/` попал бы в кодовый коммит перед подтяжкой наравне с
+        `orchestrator/new_module.py`."""
+        self.enter_in_dev()
+        self.write_code_file("orchestrator/new_module.py",
+                             "# правка разработчика\n")
+        (self.worktree_task_dir() / "wip.md").write_text(
+            "недописанный артефакт\n", encoding="utf-8")
+
+        checkpoint.commit_pull_checkpoint(store.db(), self.TASK, self.wt)
+
+        after = self.worktree_head()
+        committed = self.worktree_git("show", "--name-only", "--format=", after)
+        committed_paths = [p for p in committed.splitlines() if p]
+        self.assertIn("orchestrator/new_module.py", committed_paths)
+        task_paths = [p for p in committed_paths
+                     if p.startswith(f"tasks/{self.TASK}/")]
+        self.assertEqual(task_paths, [],
+                         f"tasks/<id>/ не входит в мандат кода — "
+                         f"фактически закоммичено: {task_paths}")
+
+    def test_git_add_failure_commits_nothing_and_journals_nothing(self):
+        self.enter_in_dev()
+        (self.worktree_task_dir() / "wip.md").write_text(
+            "недописано\n", encoding="utf-8")
+        before = self.worktree_head()
+        real_git = gitcmd.git
+
+        def side_effect(*args):
+            if "add" in args:
+                return subprocess.CompletedProcess(list(args), 1, "", "boom")
+            return real_git(*args)
+
+        with mock.patch.object(gitcmd, "git", side_effect=side_effect):
+            detail = checkpoint.commit_pull_checkpoint(store.db(), self.TASK, self.wt)
+
+        self.assertEqual(detail, "")
+        self.assertEqual(self.worktree_head(), before)
+        self.assertEqual(self.orchestrator_steps(), [])
+
+
 if __name__ == "__main__":
     unittest.main()

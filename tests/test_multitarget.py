@@ -498,14 +498,23 @@ class JournalModeTest(TmpRootTest):
 
 
 class SqlOnlyInStoreTest(unittest.TestCase):
-    """Критерий 6: прямых запросов вне store.py в orchestrator/ не осталось."""
+    """Критерий 6: прямых запросов вне store.py/schema.py в orchestrator/
+    не осталось.
+
+    `schema.py` — рядом со `store.py` в списке исключений с
+    01M1SD5NZ79MWCEJDJ9JP6EPWS (R6): DDL/`migrate` переехали туда из
+    `store.py`, и по определению несут `CREATE TABLE`/`ALTER TABLE` —
+    ADR-0003 3ж («SQL только в store.py») по тексту самого ADR остаётся
+    целью, не пунктом docs/invariants.md, поэтому расширение списка
+    исключений не ослабляет защищаемый инвариант.
+    """
 
     SQL = re.compile(r"\b(SELECT|INSERT|UPDATE|DELETE|PRAGMA|ALTER|CREATE)\b")
 
     def test_no_sql_outside_store(self):
         offenders = []
         for path in sorted((REPO_ROOT / "orchestrator").glob("*.py")):
-            if path.name == "store.py":
+            if path.name in ("store.py", "schema.py"):
                 continue
             for number, line in enumerate(
                     path.read_text(encoding="utf-8").splitlines(), 1):
@@ -790,6 +799,16 @@ class RoleEnvTest(TmpRootTest):
         _, task_id = capture_new_task_id(catalog.cmd_new, "Окружение роли")
         store.update_task(store.db(), task_id, state="in_dev")
         sync_spec_from_worktree(task_id)
+        # Обязательный артефакт роли developer (SPEC 01M1RQ12JVHE3PQYDFV1XPSTQ3,
+        # требование 3) — без него на диске рабочего каталога роли успешная
+        # попытка (rc=0) честно ретраится вместо одного тихого предупреждения,
+        # которое проверяет этот тест. `workspace.ensure` этого класса
+        # подменена на `self.root` (см. `_MultitargetTmpRootTest.setUp`) —
+        # рабочий каталог роли здесь `config.TASKS/<id>/`, не `config.
+        # WORKTREES/<id>/tasks/<id>/`.
+        tdir = config.TASKS / task_id
+        tdir.mkdir(parents=True, exist_ok=True)
+        (tdir / "PLAN.md").write_text("маркер\n", encoding="utf-8")
 
         # `silent_git` роняет ЛЮБУЮ git-команду (returncode 1) — годится
         # для предмета теста (сверка git-идентичности), но брифу роли
