@@ -55,7 +55,7 @@ REAL_CMD_RUN = runner.cmd_run
 
 # Все состояния FSM Фазы 0 — тот же список, что в tests/test_invariants.py:
 # реестра состояний в коде нет, а свипы этого модуля должны идти по всем.
-FSM_STATES = ("spec_writing", "spec_gate", "in_dev", "review", "verifying",
+FSM_STATES = ("spec_writing", "spec_gate", "in_dev", "verifying", "review",
               "acceptance", "merge_gate", "done", "escalated", "killed")
 
 # Заготовки валидны по guard: с T017 он вызывается на каждом переходе
@@ -358,16 +358,19 @@ class AutoStopsWhereTheOperatorIsNeededTest(AutoCycleTest):
     def test_cycle_runs_the_task_from_dev_to_verifying(self):
         """Критерий приёмки 1: от in_dev до verifying без ручных run и advance.
 
-        SPEC T079 вставила verifying между review и acceptance: verifying
-        не агентское состояние (нет роли, ждёт CI). С SPEC T086 auto не
+        ADR-0015 переставила `verifying` перед `review` (было — между
+        `review` и `acceptance`, SPEC T079): PLAN уже `ready` с самого
+        начала — предварительный advance проходит все семь переехавших
+        рубежей `in_dev -> verifying` (роли не нужны) одним свободным
+        переходом, роль `developer` не запускается вовсе. `verifying` не
+        агентское состояние (нет роли, ждёт CI). С SPEC T086 auto не
         просто останавливается на входе в него — сам опрашивает CI циклом
         (`orchestrator/auto.py`); дефолт CI-фикстуры этого файла красный
         (см. комментарий у модуля), так что опрос стопорит цикл сразу же,
-        тем же по наблюдаемому итогу поведением, что и раньше (задача
-        остаётся в verifying, ни одного лишнего вызова агента) — только
-        подсказка теперь называет `reject`, не общий текст `AUTO_STOP`
-        (та запись для `verifying` удалена, см. `test_stop_table_
-        covers_every_state_outside_state_role`).
+        не успев дойти до `review` (script для реценьювера не звучит) —
+        только подсказка теперь называет `reject`, не общий текст
+        `AUTO_STOP` (та запись для `verifying` удалена, см.
+        `test_stop_table_covers_every_state_outside_state_role`).
         """
         self.write_plan("ready")
         self.set_state("in_dev")
@@ -376,7 +379,7 @@ class AutoStopsWhereTheOperatorIsNeededTest(AutoCycleTest):
         out = self.auto()
 
         self.assertEqual(self.state(), "verifying")
-        self.assertEqual(len(self.agent.calls), 2)
+        self.assertEqual(len(self.agent.calls), 0)
         self.assertIn(config.AUTO_STOP_VERIFYING_RED[0], out)
 
     def test_cycle_runs_the_task_from_dev_to_acceptance_when_ci_is_green(self):
@@ -405,7 +408,16 @@ class AutoStopsWhereTheOperatorIsNeededTest(AutoCycleTest):
         self.assertIn("приёмка — решение Оператора", out)
 
     def test_review_iterations_are_passed_without_the_operator(self):
-        """Замечания ревью — тоже агентские шаги: цикл их отрабатывает сам."""
+        """Замечания ревью — тоже агентские шаги: цикл их отрабатывает сам.
+
+        CI зелёный мокается явно (SPEC T086 дефолт песочницы — красный):
+        ADR-0015 поставила `verifying` перед `review` — без зелёного CI
+        цикл встал бы на первом же входе в `verifying`, ни разу не дойдя
+        до реценьювера, а предмет теста — именно повтор итерации ревью,
+        не опрос CI."""
+        self.patch_object(ci, "verifying_status",
+                          lambda branch: (ci.VERIFYING_GREEN,
+                                          "CI коммита aaaaaaaa зелёный (2 проверок)"))
         self.write_plan("ready")
         self.set_state("in_dev")
         self.agent.script = [
@@ -417,7 +429,7 @@ class AutoStopsWhereTheOperatorIsNeededTest(AutoCycleTest):
 
         self.auto()
 
-        self.assertEqual(self.state(), "verifying")
+        self.assertEqual(self.state(), "acceptance")
         self.assertEqual(len(self.agent.calls), 4)
         self.assertEqual(self.task_row()["review_iters"], 1)
 
@@ -432,7 +444,13 @@ class AutoStopsWhereTheOperatorIsNeededTest(AutoCycleTest):
         T038 остановил бы цикл на второй итерации ПЕРВОГО же вызова
         `auto` любой новой задачи, ни разу не дав developer'у написать
         план.
-        """
+
+        ADR-0015: после того как developer напишет PLAN (единственный
+        реальный вызов агента), предварительный advance следующей
+        итерации проходит все переехавшие на `in_dev -> verifying`
+        рубежи одним свободным переходом — `review` эта задача больше
+        не посещает по пути, реценьювер не запускается (второй элемент
+        `script` не звучит)."""
         self.set_state("in_dev")
         self.agent.script = [lambda: self.write_plan("ready"),
                              lambda: self.write_review("approved", 1)]
@@ -440,15 +458,18 @@ class AutoStopsWhereTheOperatorIsNeededTest(AutoCycleTest):
         self.auto()
 
         self.assertEqual(self.state(), "verifying")
-        self.assertEqual(len(self.agent.calls), 2)
+        self.assertEqual(len(self.agent.calls), 1)
 
     def test_escalation_by_the_ceiling_names_budget(self):
         """Требование 2: у эскалации по потолку следующая команда — budget.
 
         approve здесь увёл бы Оператора по кругу: задача вернулась бы в работу,
         а следующий run снова отказался бы стартовать по тому же потолку.
+
+        PLAN НЕ ready с самого начала (ADR-0015): `ready` увёл бы задачу
+        свободным переходом в `verifying`, минуя саму роль developer, чей
+        шаг и роняет бюджет — предмет теста именно в отказе ВНУТРИ шага.
         """
-        self.write_plan("ready")
         self.set_state("in_dev", budget_usd=25.0, spent_usd=0.0)
         # Так задачу роняет enforce_budget: шаг стоил больше остатка потолка.
         self.agent.script = [lambda: self.set_state("escalated", spent_usd=26.0)]
@@ -460,8 +481,10 @@ class AutoStopsWhereTheOperatorIsNeededTest(AutoCycleTest):
         self.assertNotIn(f"artel.py approve {self.TASK}", out)
 
     def test_escalation_with_the_ceiling_intact_names_approve(self):
-        """Вторая ветка: потолок цел (упал агент) — разбор через log и approve."""
-        self.write_plan("ready")
+        """Вторая ветка: потолок цел (упал агент) — разбор через log и approve.
+
+        PLAN НЕ ready с самого начала — тот же довод, что и у
+        `test_escalation_by_the_ceiling_names_budget` (ADR-0015)."""
         self.set_state("in_dev", budget_usd=25.0, spent_usd=1.0)
         self.agent.script = [lambda: self.set_state("escalated")]
 
@@ -695,9 +718,9 @@ class AutoStopsOnBudgetRefusalTest(AutoCycleTest):
         self.patch_object(runner, "cmd_run", REAL_CMD_RUN)
         # PLAN не ready (SPEC 01M1R8B3ZKXQT0Z0G6QQQDV906): предварительный
         # advance этой задачи вызывается ДО `cmd_run` — `ready` с самого
-        # начала увёл бы задачу в `review` раньше, чем `run` вообще
-        # получит шанс отказать по бюджету, а предмет теста именно в этом
-        # отказе.
+        # начала увёл бы задачу в `verifying` (ADR-0015) раньше, чем `run`
+        # вообще получит шанс отказать по бюджету, а предмет теста именно
+        # в этом отказе.
         self.write_plan("draft")
         self.set_state("in_dev", budget_usd=1.0, spent_usd=1.0)
 
@@ -747,7 +770,7 @@ class AutoStopsOnPauseRefusalTest(AutoCycleTest):
         # не доходит, отказ случается на пометке паузы.
         self.patch_object(runner, "cmd_run", REAL_CMD_RUN)
         # PLAN не ready — тот же довод, что и у AutoStopsOnBudgetRefusalTest:
-        # предварительный advance не имеет права увести задачу в `review`
+        # предварительный advance не имеет права увести задачу в `verifying`
         # раньше, чем `run` получит шанс отказать по паузе.
         self.write_plan("draft")
         self.set_state("in_dev")
@@ -873,16 +896,19 @@ class AutoStepLimitTest(AutoCycleTest):
         """Регресс REVIEW.md 01M1R8B3ZKXQT0Z0G6QQQDV906 итерации 1, R1-F1:
         предварительный `advance`, который сам переводит задачу дальше
         (артефакт уже готов — ни разу не позвал агента), не расходует
-        `AUTO_MAX_STEPS`. PLAN.md и REVIEW.md оба готовы с самого начала
-        вызова — цикл проходит ДВА перехода (in_dev -> review ->
-        verifying) без единого вызова агента, даже с лимитом
-        `AUTO_MAX_STEPS == 1`: реализация, которая всё ещё тратит `steps`
-        на переход-без-агента, исчерпала бы лимит на первом же свободном
-        переходе и не дошла бы до второго.
+        `AUTO_MAX_STEPS`. PLAN.md готов с самого начала вызова (ADR-0015:
+        все семь рубежей `in_dev -> verifying` переехали сюда и пройдены
+        без роли) — цикл доходит до `verifying` без единого вызова агента,
+        даже с лимитом `AUTO_MAX_STEPS == 1`: реализация, которая всё ещё
+        тратит `steps` на переход-без-агента, исчерпала бы лимит на этом
+        же свободном переходе и осталась бы в `in_dev`. REVIEW.md написан
+        заранее — задел на случай, если CI окажется зелёным и цикл
+        продолжит движение; красный дефолт песочницы (см. комментарий у
+        модуля) держит задачу на `verifying`.
 
         Ловит мутацию: `steps += 1` до предварительного `advance` (старое
         место, до этого исправления) — цикл встал бы на «лимит 1 шагов
-        исчерпан», оставшись в `review`, вместо того чтобы дойти до
+        исчерпан», оставшись в `in_dev`, вместо того чтобы дойти до
         `verifying`.
         """
         self.patch_object(config, "AUTO_MAX_STEPS", 1)
@@ -930,7 +956,7 @@ class AutoReportsTheCycleTest(AutoCycleTest):
                       f"in_dev", out)
         self.assertIn(f"лог: {log}", out)
         self.assertIn("шаг developer не нужен: переход выполнен по готовым "
-                      "артефактам (in_dev -> review)", out)
+                      "артефактам (in_dev -> verifying)", out)
 
     def test_step_without_a_log_does_not_break_the_summary(self):
         """Прогонов роли ещё не было — сводка печатается, цикл идёт дальше."""

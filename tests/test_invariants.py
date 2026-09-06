@@ -767,6 +767,14 @@ class FreshVerdictGuardsAcceptanceTest(FsmTest):
         self.capture(fsm.cmd_approve, self.TASK)
         self.write_plan("ready")
         self.capture(fsm.cmd_advance, self.TASK)
+        # ADR-0015: маршрут in_dev -> verifying -> review -> acceptance
+        # (переставлены местами `review` и `verifying` относительно
+        # прежнего T079-маршрута) — CI подтянутой головы проверяется
+        # раньше ревьювера, не после.
+        self.assertEqual(self.state(), "verifying")
+
+        self.set_ci(GREEN_CI)
+        self.capture(fsm.cmd_advance, self.TASK)
         self.assertEqual(self.state(), "review")
 
         # A7: `review` теперь читает REVIEW.md с артефактной ветки пульта
@@ -786,15 +794,15 @@ class FreshVerdictGuardsAcceptanceTest(FsmTest):
 
         self.write_review("approved", 1)
         self.capture(fsm.cmd_advance, self.TASK)
-        # ADR-0009: маршрут review -> verifying -> acceptance (B1b, T079);
-        # остановка в verifying обязательна — ужесточено после мержа T079
-        # (ADR-0009 п.3, второй шаг). Охраняемое: свежесть вердикта,
-        # счётчики и обязательность промежуточной остановки.
-        self.assertEqual(self.state(), "verifying")
-        self.capture(fsm.cmd_advance, self.TASK)
+        # ADR-0015: `verifying` уже пройден ДО `review` — свежий approved
+        # ведёт прямиком в `acceptance`, не в `verifying` повторно.
+        # Охраняемое здесь не изменилось: свежесть вердикта и счётчики.
         self.assertEqual(self.state(), "acceptance")
 
         self.capture(fsm.cmd_reject, self.TASK, "критерий 2 не выполнен")
+        self.capture(fsm.cmd_advance, self.TASK)
+        self.assertEqual(self.state(), "verifying")
+
         self.capture(fsm.cmd_advance, self.TASK)
         self.assertEqual(self.state(), "review")
 
@@ -803,8 +811,6 @@ class FreshVerdictGuardsAcceptanceTest(FsmTest):
         self.assertIn("уже учтён", out)
 
         self.write_review("approved", 2)
-        self.capture(fsm.cmd_advance, self.TASK)
-        self.assertEqual(self.state(), "verifying")
         self.capture(fsm.cmd_advance, self.TASK)
         self.assertEqual(self.state(), "acceptance")
 
@@ -816,7 +822,10 @@ class FreshVerdictGuardsAcceptanceTest(FsmTest):
         self.capture(fsm.cmd_advance, self.TASK)
         self.capture(fsm.cmd_reject, self.TASK, "доработать")
         self.capture(fsm.cmd_advance, self.TASK)
-        self.assertEqual(self.state(), "review")
+        # ADR-0015: возврат из `acceptance` (`reject`) уводит в `in_dev`,
+        # а следующий `advance` оттуда ведёт в `verifying`, не в `review`
+        # напрямую — CI проверяется раньше ревьювера.
+        self.assertEqual(self.state(), "verifying")
 
         for name, call in self.commands():
             if name == "kill":  # kill switch — отдельный инвариант
@@ -836,12 +845,16 @@ class FreshVerdictGuardsAcceptanceTest(FsmTest):
         self.write_review("approved", 1)
         self.set_state("review")
         self.capture(fsm.cmd_advance, self.TASK)
-        self.assertEqual(self.state(), "verifying")
-        self.capture(fsm.cmd_advance, self.TASK)
+        # ADR-0015: `verifying` уже пройден до входа в `review` — свежий
+        # approved ведёт прямиком в `acceptance`.
         self.assertEqual(self.state(), "acceptance")
 
         self.set_state("escalated")
         self.capture(fsm.cmd_approve, self.TASK)
+        self.capture(fsm.cmd_advance, self.TASK)
+        self.assertEqual(self.state(), "verifying")
+
+        self.set_ci(GREEN_CI)
         self.capture(fsm.cmd_advance, self.TASK)
         self.assertEqual(self.state(), "review")
 
@@ -884,7 +897,7 @@ class ExhaustedBudgetIsNotBypassableTest(FsmTest):
 
     def test_advance_does_not_unblock_the_run(self):
         self.capture(fsm.cmd_advance, self.TASK)
-        self.assertEqual(self.state(), "review")
+        self.assertEqual(self.state(), "verifying")
 
         _, popen = self.try_run()
 
@@ -1048,7 +1061,7 @@ class ParallelTaskLimitIsNotBypassableTest(FsmTest):
         связан: продвижение состояния не снимает и не обходит его отказ."""
         self.try_run()
         self.capture(fsm.cmd_advance, self.TASK)
-        self.assertEqual(self.state(), "review")
+        self.assertEqual(self.state(), "verifying")
 
         _, popen = self.try_run()
 
@@ -1144,9 +1157,16 @@ class CountersNeverResetTest(FsmTest):
 
     def test_no_transition_of_the_full_cycle_resets_a_counter(self):
         """Требование 2.4: цикл с эскалациями, возвратами и лимитами."""
+        # ADR-0015: маршрут теперь in_dev -> verifying -> review ->
+        # acceptance — каждый возврат в in_dev перед новым вердиктом
+        # снова проходит через verifying, зелёный CI мокается один раз
+        # на весь сценарий (предмет теста — счётчики, не опрос CI).
+        self.set_ci(GREEN_CI)
+
         self.verdict("changes_requested", 1)
         self.assertEqual(self.state(), "in_dev")
-        self.step("in_dev -> review", fsm.cmd_advance, self.TASK)
+        self.step("in_dev -> verifying", fsm.cmd_advance, self.TASK)
+        self.step("verifying -> review", fsm.cmd_advance, self.TASK)
 
         self.verdict("escalate", 2)
         self.assertEqual(self.state(), "escalated")
@@ -1155,18 +1175,19 @@ class CountersNeverResetTest(FsmTest):
         # из escalated требует ANSWER-n.md, иначе отказывает.
         self.write_answer(1)
         self.step("возврат из эскалации", fsm.cmd_approve, self.TASK)
-        self.step("in_dev -> review", fsm.cmd_advance, self.TASK)
+        self.step("in_dev -> verifying", fsm.cmd_advance, self.TASK)
+        self.step("verifying -> review", fsm.cmd_advance, self.TASK)
 
         self.verdict("approved", 3)
-        self.assertEqual(self.state(), "verifying")
-        self.step("verifying -> acceptance", fsm.cmd_advance, self.TASK)
+        # ADR-0015: `verifying` уже пройден до `review` — approved ведёт
+        # прямиком в `acceptance`.
         self.assertEqual(self.state(), "acceptance")
         self.step("отказ приёмки", fsm.cmd_reject, self.TASK, "не то")
-        self.step("in_dev -> review", fsm.cmd_advance, self.TASK)
+        self.step("in_dev -> verifying", fsm.cmd_advance, self.TASK)
+        self.step("verifying -> review", fsm.cmd_advance, self.TASK)
 
         self.verdict("approved", 4)
-        self.assertEqual(self.state(), "verifying")
-        self.step("verifying -> acceptance", fsm.cmd_advance, self.TASK)
+        self.assertEqual(self.state(), "acceptance")
         self.step("лимит отказов приёмки", fsm.cmd_reject, self.TASK,
                   "снова не то")
         self.assertEqual(self.state(), "escalated")
@@ -1190,6 +1211,7 @@ class CountersNeverResetTest(FsmTest):
 
     def test_exhausted_review_limit_is_not_reopened_by_escalation(self):
         """Эскалация по лимиту и возврат из неё не выдают новых итераций."""
+        self.set_ci(GREEN_CI)
         self.set_state("review", review_iters=config.LIMIT_REVIEW_ITERS - 1)
 
         self.verdict("changes_requested", 1)
@@ -1198,7 +1220,8 @@ class CountersNeverResetTest(FsmTest):
                          config.LIMIT_REVIEW_ITERS - 1)
 
         self.step("возврат из эскалации", fsm.cmd_approve, self.TASK)
-        self.step("in_dev -> review", fsm.cmd_advance, self.TASK)
+        self.step("in_dev -> verifying", fsm.cmd_advance, self.TASK)
+        self.step("verifying -> review", fsm.cmd_advance, self.TASK)
         self.verdict("changes_requested", 2)
 
         self.assertEqual(self.state(), "escalated", "лимит остался исчерпанным")

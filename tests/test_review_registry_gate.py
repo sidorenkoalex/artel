@@ -81,7 +81,7 @@ class AllUnresolvedIdsAreNamedTest(RegistryGateUnitTest):
 
         out = self.capture(fsm.cmd_advance, self.TASK)
 
-        self.assertNotEqual(self.state(), "verifying")
+        self.assertNotEqual(self.state(), "acceptance")
         blob = out + self.journal_text()
         self.assertIn("R1-F1", blob)
         self.assertIn("R1-F2", blob)
@@ -105,7 +105,7 @@ class GateSilentWhenNoRecordsTest(RegistryGateUnitTest):
 
         self.capture(fsm.cmd_advance, self.TASK)
 
-        self.assertEqual(self.state(), "verifying")
+        self.assertEqual(self.state(), "acceptance")
 
 
 if __name__ == "__main__":
