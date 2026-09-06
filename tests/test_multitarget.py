@@ -498,14 +498,23 @@ class JournalModeTest(TmpRootTest):
 
 
 class SqlOnlyInStoreTest(unittest.TestCase):
-    """Критерий 6: прямых запросов вне store.py в orchestrator/ не осталось."""
+    """Критерий 6: прямых запросов вне store.py/schema.py в orchestrator/
+    не осталось.
+
+    `schema.py` — рядом со `store.py` в списке исключений с
+    01M1SD5NZ79MWCEJDJ9JP6EPWS (R6): DDL/`migrate` переехали туда из
+    `store.py`, и по определению несут `CREATE TABLE`/`ALTER TABLE` —
+    ADR-0003 3ж («SQL только в store.py») по тексту самого ADR остаётся
+    целью, не пунктом docs/invariants.md, поэтому расширение списка
+    исключений не ослабляет защищаемый инвариант.
+    """
 
     SQL = re.compile(r"\b(SELECT|INSERT|UPDATE|DELETE|PRAGMA|ALTER|CREATE)\b")
 
     def test_no_sql_outside_store(self):
         offenders = []
         for path in sorted((REPO_ROOT / "orchestrator").glob("*.py")):
-            if path.name == "store.py":
+            if path.name in ("store.py", "schema.py"):
                 continue
             for number, line in enumerate(
                     path.read_text(encoding="utf-8").splitlines(), 1):
@@ -554,7 +563,10 @@ class ProgramSpendTest(TmpRootTest):
         self.assertIn("ВНИМАНИЕ", out)
         self.assertEqual(len(self.events()), 1)
         self.assertIn("70%", self.events()[0])
-        self.assertIn("$1401.00", self.events()[0])
+        # Порог считается от config.PROGRAM_STOP_LOSS_USD, а не литералом:
+        # при $2000 это было "$1401.00", при $3000 (06.09) — "$2101.00".
+        self.assertIn(f"${config.PROGRAM_STOP_LOSS_USD * 0.7 + 1:.2f}",
+                      self.events()[0])
 
     def test_ninety_percent_is_a_second_event(self):
         self.spend_to(config.PROGRAM_STOP_LOSS_USD * 0.7 - 1)
@@ -787,6 +799,16 @@ class RoleEnvTest(TmpRootTest):
         _, task_id = capture_new_task_id(catalog.cmd_new, "Окружение роли")
         store.update_task(store.db(), task_id, state="in_dev")
         sync_spec_from_worktree(task_id)
+        # Обязательный артефакт роли developer (SPEC 01M1RQ12JVHE3PQYDFV1XPSTQ3,
+        # требование 3) — без него на диске рабочего каталога роли успешная
+        # попытка (rc=0) честно ретраится вместо одного тихого предупреждения,
+        # которое проверяет этот тест. `workspace.ensure` этого класса
+        # подменена на `self.root` (см. `_MultitargetTmpRootTest.setUp`) —
+        # рабочий каталог роли здесь `config.TASKS/<id>/`, не `config.
+        # WORKTREES/<id>/tasks/<id>/`.
+        tdir = config.TASKS / task_id
+        tdir.mkdir(parents=True, exist_ok=True)
+        (tdir / "PLAN.md").write_text("маркер\n", encoding="utf-8")
 
         # `silent_git` роняет ЛЮБУЮ git-команду (returncode 1) — годится
         # для предмета теста (сверка git-идентичности), но брифу роли
@@ -827,6 +849,92 @@ class RoleEnvTest(TmpRootTest):
         details = [r["detail"] for r in store.task_steps(store.db(), task_id)
                    if r["action"] == "agent run SKIPPED"]
         self.assertTrue(details and "нет места" in details[0])
+
+
+def _stack_check(name: str, status: str, detail: str):
+    from types import SimpleNamespace
+    return SimpleNamespace(name=name, status=status, detail=detail)
+
+
+class RoleEnvVenvInterpreterTest(TmpRootTest):
+    """Требование 4 (SPEC 01M1REVEZ1HESMJ7AFD5A9MEJ8, AC-12/AC-13):
+    интерпретатор роли — `.artel/venv`, если он согласован с файлом
+    закреплённых версий (та же проверка, что `stack.check_stack()`),
+    иначе `role_env()` отказывает `OSError` без тихого отката на
+    системный python.
+
+    Постоянная регрессия — переживает закрытие `tasks/
+    01M1REVEZ1HESMJ7AFD5A9MEJ8/acceptance_tests/`."""
+
+    def test_consistent_venv_puts_its_bin_first_on_path(self):
+        """Требование 4/AC-12: venv существует и согласован (все
+        проверки `check_stack()` — `ok`) — PATH окружения роли начинается
+        с `<venv>/bin`, то есть голые вызовы `python3`/`pytest` внутри
+        шага роли резолвятся в интерпретатор venv, а не в системный.
+
+        Ловит мутацию: `role_env()` не трогает PATH вовсе при согласованном
+        venv (интерпретатор роли остаётся системным несмотря на готовый
+        venv) — `assertEqual(path_entries[0], ...)` откажет.
+        """
+        venv_dir = self.root / ".artel" / "venv"
+        ok_checks = [_stack_check("python", "ok", "Python 3.99.0"),
+                    _stack_check("venv", "ok", "venv согласован")]
+
+        with mock.patch.object(config, "VENV_DIR", venv_dir, create=True), \
+                mock.patch.object(runner.stack, "check_stack",
+                                  return_value=ok_checks), \
+                mock.patch.object(runner.gitcmd, "git", fake_git_config):
+            env = runner.role_env()
+
+        path_entries = env["PATH"].split(":")
+        self.assertEqual(str(venv_dir / "bin"), path_entries[0])
+
+    def test_inconsistent_venv_raises_instead_of_falling_back(self):
+        """Требование 4/AC-13: `.artel/venv` не согласован с файлом
+        закреплённых версий (`check_stack()` возвращает WARN про venv) —
+        `role_env()` отказывает поднятым `OSError` с именующей причиной,
+        а НЕ тихо возвращает окружение с системным PATH как ни в чём не
+        бывало.
+
+        Ловит мутацию: `role_env()` игнорирует WARN про venv и всё равно
+        возвращает обычное окружение (тихий откат на системный python) —
+        `assertRaises(OSError)` не сработает (исключения не будет);
+        либо исключение поднимается, но без упоминания venv в тексте —
+        `assertIn` в `str(exc)` откажет.
+        """
+        warn_checks = [_stack_check("python", "ok", "Python 3.99.0"),
+                      _stack_check("venv-packages", "warn",
+                                   "версии расходятся: pytest")]
+
+        with mock.patch.object(runner.stack, "check_stack",
+                               return_value=warn_checks), \
+                mock.patch.object(runner.gitcmd, "git", fake_git_config):
+            with self.assertRaises(OSError) as ctx:
+                runner.role_env()
+
+        self.assertIn("venv", str(ctx.exception).lower())
+
+    def test_missing_venv_also_raises_rather_than_falling_back(self):
+        """Требование 4/AC-13 — вторая ветка того же критерия: venv
+        вовсе ОТСУТСТВУЕТ (`check_stack()` возвращает WARN «venv» с
+        отсутствием, не только расхождением версий) — тот же отказ
+        `OSError`, не деградация до системного python.
+
+        Ловит мутацию: обработана только ветка «версии разошлись», а
+        ветка «venv вовсе нет» тихо пропускается (например код проверяет
+        только статус проверки `venv-packages`, забыв про `venv`) —
+        `assertRaises` не сработает.
+        """
+        warn_checks = [_stack_check("python", "ok", "Python 3.99.0"),
+                      _stack_check("venv", "warn",
+                                   "venv не создан — `python3 artel.py "
+                                   "venv-sync`")]
+
+        with mock.patch.object(runner.stack, "check_stack",
+                               return_value=warn_checks), \
+                mock.patch.object(runner.gitcmd, "git", fake_git_config):
+            with self.assertRaises(OSError):
+                runner.role_env()
 
 
 if __name__ == "__main__":

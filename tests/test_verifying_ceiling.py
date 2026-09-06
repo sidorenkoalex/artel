@@ -105,13 +105,17 @@ class VerifyingCeilingTest(FsmTest):
     def test_green_ci_moves_on_regardless_of_elapsed_time(self):
         """Зелёный CI не завязан на потолок вовсе — трогает только не-зелёные
         исходы (требование 2 не меняется). `FsmTest.setUp` уже держит CI
-        зелёным по умолчанию (`GREEN_CI`) — здесь только состариваем вход."""
+        зелёным по умолчанию (`GREEN_CI`) — здесь только состариваем вход.
+
+        Целевое состояние — `review`, не `acceptance` (ADR-0015, требование
+        2: переход `verifying -> review` по зелёному CI, вместо прежнего
+        `verifying -> acceptance` — AC-20, правка ассерта старого порядка)."""
         self.enter_verifying()
         self.age_entry(timedelta(seconds=config.VERIFYING_CEILING_SEC + 60))
 
         self.capture(fsm.cmd_advance, self.TASK)
 
-        self.assertEqual(self.state(), "acceptance")
+        self.assertEqual(self.state(), "review")
 
 
 if __name__ == "__main__":

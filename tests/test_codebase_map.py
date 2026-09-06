@@ -10,9 +10,14 @@
 строками, импорт под `if`, относительный `from . import x`.
 """
 import ast
+import json
+import os
+import subprocess
 import sys
+import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
@@ -100,6 +105,128 @@ class ModuleDottedNameTest(unittest.TestCase):
         self.assertEqual(
             codebase_map.module_dotted_name(Path("orchestrator/__init__.py")),
             "orchestrator")
+
+
+# --- map_stats (01M1RFVWV6WWTXRC5F40K61632, требование 1, AC-1..AC-4) ---
+#
+# Планка приёмки (tasks/01M1RFVWV6WWTXRC5F40K61632/acceptance_tests/
+# test_map_stats.py) уже покрывает эти критерии исчерпывающе на карте,
+# построенной настоящим `render()`; здесь — компактный юнит на карте
+# трёх каталогов ровно по тексту требования 5 SPEC, без дублирования
+# всего объёма приёмочной планки.
+MAP_TEXT = (
+    "---\nbuilt_at_sha: " + "a" * 40 + "\n---\n\n"
+    "# Карта кодовой базы\n\n"
+    "## orchestrator/aaa.py\n\n**Назначение:** А.\n\n"
+    "**Публичные функции:** (нет)\n\n**Импортирует:** —\n\n"
+    "**Импортируется:** —\n\n"
+    "## scripts/bbb.py\n\n**Назначение:** Б, подлиннее описание модуля.\n\n"
+    "**Публичные функции:**\n- `f`\n- `g`\n\n**Импортирует:** —\n\n"
+    "**Импортируется:** —\n\n"
+    "## tests/ccc.py\n\n**Назначение:** Ц.\n\n"
+    "**Публичные функции:** (нет)\n\n**Импортирует:** —\n\n"
+    "**Импортируется:** —\n"
+)
+
+
+class MapStatsTest(unittest.TestCase):
+    def test_is_pure_no_disk_or_subprocess(self):
+        """Ловит мутацию: `map_stats` читает файл с диска или зовёт
+        subprocess (например, ходит в git за sha) вместо разбора только
+        переданного текста карты (AC-1: чистая функция)."""
+        def boom(*a, **kw):
+            raise AssertionError("не должна трогать диск/subprocess")
+
+        with mock.patch.object(Path, "read_text", side_effect=boom), \
+                mock.patch("subprocess.run", side_effect=boom):
+            result = codebase_map.map_stats(MAP_TEXT)
+
+        self.assertIsInstance(result, dict)
+
+    def test_bytes_total_and_sections_total(self):
+        """Ловит мутацию: `bytes_total` считается по числу символов, а не
+        байт utf-8 входного текста; `sections_total` считает не секции
+        верхнего уровня (например, все `##`-заголовки без разбора уровня
+        вложенности) — на фикстуре из трёх секций дал бы иное число."""
+        result = codebase_map.map_stats(MAP_TEXT)
+        self.assertEqual(result["bytes_total"], len(MAP_TEXT.encode("utf-8")))
+        self.assertEqual(result["sections_total"], 3)
+
+    def test_bytes_by_dir_covers_three_directories(self):
+        """Ловит мутацию: `bytes_by_dir` пропускает один из трёх каталогов
+        перечня (`orchestrator/`, `scripts/`, `tests/`) или приписывает
+        секцию не тому каталогу — размер по каталогу останется нулевым."""
+        result = codebase_map.map_stats(MAP_TEXT)
+        self.assertEqual(set(result["bytes_by_dir"]),
+                         {"orchestrator", "scripts", "tests"})
+        self.assertTrue(all(v > 0 for v in result["bytes_by_dir"].values()))
+
+    def test_top_sections_sorted_descending_with_name_and_bytes(self):
+        """Ловит мутацию: `top_sections` не отсортирован по убыванию
+        размера (например, по порядку появления в карте) или несёт не
+        все секции карты с их именами/размерами."""
+        result = codebase_map.map_stats(MAP_TEXT)
+        top = result["top_sections"]
+        self.assertEqual(len(top), 3, "меньше пяти секций всего — все войдут")
+        sizes = [entry["bytes"] for entry in top]
+        self.assertEqual(sizes, sorted(sizes, reverse=True))
+        self.assertEqual({entry["name"] for entry in top},
+                         {"orchestrator/aaa.py", "scripts/bbb.py", "tests/ccc.py"})
+
+    def test_bytes_projection_key_present_with_project_for_brief(self):
+        """После подтяжки main `project_for_brief` существует (задача
+        01M1RFQ52S0VD22J628TXX96XS) — ключ обязан быть и равняться байтам
+        проекции (AC-3, вторая половина условия). Ловит мутацию: ключ
+        считается от полного текста, а не от проекции."""
+        self.assertTrue(hasattr(codebase_map, "project_for_brief"))
+        result = codebase_map.map_stats(MAP_TEXT)
+        self.assertEqual(
+            result["bytes_projection"],
+            len(codebase_map.project_for_brief(MAP_TEXT).encode("utf-8")))
+
+    def test_result_is_compact_single_line_json_serializable(self):
+        """Ловит мутацию: результат несёт значение, несериализуемое в
+        компактный однострочный JSON (например, `set` вместо списка в
+        `top_sections`), или сериализация с дефолтными разделителями
+        `json.dumps` вносит переносы строк/лишние пробелы (AC-4)."""
+        result = codebase_map.map_stats(MAP_TEXT)
+        compact = json.dumps(result, ensure_ascii=False, separators=(",", ":"))
+        self.assertNotIn("\n", compact)
+        self.assertEqual(json.loads(compact), result)
+
+
+class RepoRootTest(unittest.TestCase):
+    """`codebase_map.repo_root` (SPEC 01M1SAA01YRRTWAVADT2F81RRQ, AC-4/AC-7):
+    приёмочные тесты залоченной планки уже гоняют её через `main()` на
+    двух глубинах подкаталога — здесь юниты на саму функцию, изолированно
+    от записи файла на диск и от `git_head_sha`."""
+
+    def test_resolves_to_git_top_level_not_the_given_subdir(self):
+        """Ловит мутацию: `repo_root` возвращает переданный `cwd` напрямую
+        вместо результата `git rev-parse --show-toplevel` — запуск из
+        подкаталога тогда пишет карту не в корень репозитория."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp).resolve()
+            subprocess.run(["git", "init", "-q"], cwd=root, check=True)
+            subdir = root / "a" / "b"
+            subdir.mkdir(parents=True)
+            self.assertEqual(codebase_map.repo_root(subdir), root)
+
+    def test_raises_when_cwd_is_outside_any_git_repository(self):
+        """Ловит мутацию: ошибка git-процесса подавляется (например,
+        `subprocess.run(..., check=False)`), и функция молча возвращает
+        некорректный путь вместо падения.
+
+        `GIT_CEILING_DIRECTORIES` — иначе git продолжил бы искать `.git`
+        выше по дереву и мог бы найти настоящий репозиторий пульта,
+        если временный каталог ОС окажется внутри его рабочей копии.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp).resolve()
+            with mock.patch.dict(os.environ,
+                                 {"GIT_CEILING_DIRECTORIES": str(root)}):
+                with self.assertRaises(subprocess.CalledProcessError):
+                    codebase_map.repo_root(root)
 
 
 if __name__ == "__main__":

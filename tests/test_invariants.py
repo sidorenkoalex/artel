@@ -37,9 +37,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from orchestrator import (artel, budget, catalog, ci, cleanup,  # noqa: E402
                           config, fsm, gitcmd, runner, stack, store)
 from scripts import guard  # noqa: E402
-from tests.sandbox import (FakeProc, SpyRun, capture,  # noqa: E402
-                           capture_new_task_id, disk_backed_ls_tree_files,
-                           disk_backed_show, resilient_tmp_cleanup)
+from tests.sandbox import (FakeProc, SpyRun, TmpRootTest, _stub_check_stack,  # noqa: E402
+                           capture, capture_new_task_id,
+                           disk_backed_ls_tree_files, disk_backed_show,
+                           resilient_tmp_cleanup)
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
@@ -164,6 +165,18 @@ class FsmTest(unittest.TestCase):
             patcher = mock.patch.object(config, attr, value)
             patcher.start()
             self.addCleanup(patcher.stop)
+
+        # `runner.role_env` сверяет `.artel/venv` через `stack.check_stack()`
+        # (SPEC 01M1REVEZ1HESMJ7AFD5A9MEJ8, требование 4) — `ROOT` этого
+        # класса намеренно настоящий (см. ниже), где согласованного venv
+        # нет; без этого патча `cmd_run` через `role_env()` отказывал бы
+        # `OSError` вместо запуска подменённого агента (тот же приём, что
+        # `tests/sandbox.py::TmpRootTest.setUp`).
+        stack_patcher = mock.patch.object(stack, "check_stack",
+                                          _stub_check_stack)
+        stack_patcher.start()
+        self.addCleanup(stack_patcher.stop)
+
         # `TASKS` НЕ патчится отдельно (в отличие от прежней версии этого
         # файла): `brief._developer_spec_text` на «чужая ветка не найдена»
         # (`on_foreign_branch` здесь всегда False — SpyRun ниже отвечает
@@ -326,6 +339,18 @@ class FsmTest(unittest.TestCase):
     def write_plan(self, status: str) -> None:
         (self.tdir / "PLAN.md").write_text(
             PLAN_MD.format(task=self.TASK, status=status), encoding="utf-8")
+
+    def seed_worktree_plan(self) -> None:
+        """Обязательный артефакт роли developer (SPEC 01M1RQ12JVHE3PQYDFV1XPSTQ3,
+        требование 3) в РЕАЛЬНОМ рабочем каталоге роли (`runner.role_cwd`,
+        `config.WORKTREES/<id>/tasks/<id>/`) — не путать с `self.tdir`
+        (`config.TASKS/<id>/`, откуда читает FSM/бриф через `disk_backed_
+        show`): без файла именно здесь успешный (rc=0) прогон `run` честно
+        ретраится вместо одного запуска, которого ждут тесты этого класса
+        (они проверяют лимитеры run, не факт отказа без артефакта)."""
+        tdir = config.WORKTREES / self.TASK / "tasks" / self.TASK
+        tdir.mkdir(parents=True, exist_ok=True)
+        (tdir / "PLAN.md").write_text("маркер\n", encoding="utf-8")
 
     def write_review(self, status: str, iteration: int) -> None:
         (self.tdir / "REVIEW.md").write_text(
@@ -742,6 +767,14 @@ class FreshVerdictGuardsAcceptanceTest(FsmTest):
         self.capture(fsm.cmd_approve, self.TASK)
         self.write_plan("ready")
         self.capture(fsm.cmd_advance, self.TASK)
+        # ADR-0015: маршрут in_dev -> verifying -> review -> acceptance
+        # (переставлены местами `review` и `verifying` относительно
+        # прежнего T079-маршрута) — CI подтянутой головы проверяется
+        # раньше ревьювера, не после.
+        self.assertEqual(self.state(), "verifying")
+
+        self.set_ci(GREEN_CI)
+        self.capture(fsm.cmd_advance, self.TASK)
         self.assertEqual(self.state(), "review")
 
         # A7: `review` теперь читает REVIEW.md с артефактной ветки пульта
@@ -761,15 +794,15 @@ class FreshVerdictGuardsAcceptanceTest(FsmTest):
 
         self.write_review("approved", 1)
         self.capture(fsm.cmd_advance, self.TASK)
-        # ADR-0009: маршрут review -> verifying -> acceptance (B1b, T079);
-        # остановка в verifying обязательна — ужесточено после мержа T079
-        # (ADR-0009 п.3, второй шаг). Охраняемое: свежесть вердикта,
-        # счётчики и обязательность промежуточной остановки.
-        self.assertEqual(self.state(), "verifying")
-        self.capture(fsm.cmd_advance, self.TASK)
+        # ADR-0015: `verifying` уже пройден ДО `review` — свежий approved
+        # ведёт прямиком в `acceptance`, не в `verifying` повторно.
+        # Охраняемое здесь не изменилось: свежесть вердикта и счётчики.
         self.assertEqual(self.state(), "acceptance")
 
         self.capture(fsm.cmd_reject, self.TASK, "критерий 2 не выполнен")
+        self.capture(fsm.cmd_advance, self.TASK)
+        self.assertEqual(self.state(), "verifying")
+
         self.capture(fsm.cmd_advance, self.TASK)
         self.assertEqual(self.state(), "review")
 
@@ -778,8 +811,6 @@ class FreshVerdictGuardsAcceptanceTest(FsmTest):
         self.assertIn("уже учтён", out)
 
         self.write_review("approved", 2)
-        self.capture(fsm.cmd_advance, self.TASK)
-        self.assertEqual(self.state(), "verifying")
         self.capture(fsm.cmd_advance, self.TASK)
         self.assertEqual(self.state(), "acceptance")
 
@@ -791,7 +822,10 @@ class FreshVerdictGuardsAcceptanceTest(FsmTest):
         self.capture(fsm.cmd_advance, self.TASK)
         self.capture(fsm.cmd_reject, self.TASK, "доработать")
         self.capture(fsm.cmd_advance, self.TASK)
-        self.assertEqual(self.state(), "review")
+        # ADR-0015: возврат из `acceptance` (`reject`) уводит в `in_dev`,
+        # а следующий `advance` оттуда ведёт в `verifying`, не в `review`
+        # напрямую — CI проверяется раньше ревьювера.
+        self.assertEqual(self.state(), "verifying")
 
         for name, call in self.commands():
             if name == "kill":  # kill switch — отдельный инвариант
@@ -811,12 +845,16 @@ class FreshVerdictGuardsAcceptanceTest(FsmTest):
         self.write_review("approved", 1)
         self.set_state("review")
         self.capture(fsm.cmd_advance, self.TASK)
-        self.assertEqual(self.state(), "verifying")
-        self.capture(fsm.cmd_advance, self.TASK)
+        # ADR-0015: `verifying` уже пройден до входа в `review` — свежий
+        # approved ведёт прямиком в `acceptance`.
         self.assertEqual(self.state(), "acceptance")
 
         self.set_state("escalated")
         self.capture(fsm.cmd_approve, self.TASK)
+        self.capture(fsm.cmd_advance, self.TASK)
+        self.assertEqual(self.state(), "verifying")
+
+        self.set_ci(GREEN_CI)
         self.capture(fsm.cmd_advance, self.TASK)
         self.assertEqual(self.state(), "review")
 
@@ -842,6 +880,7 @@ class ExhaustedBudgetIsNotBypassableTest(FsmTest):
         # "T001"); ULID убрал совпадение, SPEC.md нужен явно.
         self.write_spec("ready")
         self.write_plan("ready")
+        self.seed_worktree_plan()
         self.set_state("in_dev", budget_usd=1.0, spent_usd=1.0)
 
     def try_run(self) -> tuple[str, mock.Mock]:
@@ -858,7 +897,7 @@ class ExhaustedBudgetIsNotBypassableTest(FsmTest):
 
     def test_advance_does_not_unblock_the_run(self):
         self.capture(fsm.cmd_advance, self.TASK)
-        self.assertEqual(self.state(), "review")
+        self.assertEqual(self.state(), "verifying")
 
         _, popen = self.try_run()
 
@@ -894,6 +933,90 @@ class ExhaustedBudgetIsNotBypassableTest(FsmTest):
         popen.assert_called_once()
 
 
+class SpecCeilingRespectsRoleBudgetCapTest(TmpRootTest):
+    """Инвариант 10 (ADR-0014): поднять потолок выше `ROLE_BUDGET_CAP`
+    может только Оператор командой `budget`; в пределах потолка ролей
+    потолок задаёт SPEC на гейте SPEC.
+
+    Два независимых сценария, обе — защита потолка ролей от разных
+    точек входа: guard отказывает завышенный SPEC ДО того, как значение
+    вообще дойдёт до строки задачи (первая линия защиты), а потолок,
+    выставленный Оператором, не перебивается значением из SPEC, даже
+    если такой SPEC всё же дошёл до `apply_spec_budget` — например,
+    старый беклог версии ниже 5, которую новая проверка guard не ловит
+    (вторая, независимая линия защиты).
+    """
+
+    TASK = "T900"
+
+    def setUp(self):
+        super().setUp()
+        store.create_schema(store.db())
+        self.conn = store.db()
+        store.insert_task(self.conn, self.TASK, "Задача для потолка ролей",
+                          "spec_writing", "task/t900-x",
+                          config.DEFAULT_TARGET, config.DEFAULT_BUDGET_USD)
+
+    def task_row(self):
+        return store.db().execute(
+            "SELECT * FROM tasks WHERE id=?", (self.TASK,)).fetchone()
+
+    def set_task(self, **fields) -> None:
+        assignments = ", ".join(f"{k}=?" for k in fields)
+        self.conn.execute(f"UPDATE tasks SET {assignments} WHERE id=?",
+                          (*fields.values(), self.TASK))
+        self.conn.commit()
+
+    def test_guard_refuses_the_spec_before_any_ceiling_change(self):
+        """Сценарий 1: SPEC со значением выше `ROLE_BUDGET_CAP` потолок не
+        поднимает — отказ guard блокирует сам переход, значение никогда не
+        доходит до строки задачи.
+
+        Ловит мутацию: сравнение `> ROLE_BUDGET_CAP` подменено на `>=`
+        дефолт или снято вовсе — SPEC с завышенным `budget_usd` прошёл бы
+        `check_content` без ошибки."""
+        over_cap = config.ROLE_BUDGET_CAP + 1
+        text = (
+            "---\n"
+            f"task: {self.TASK}\n"
+            "type: spec\n"
+            "author_role: analyst\n"
+            "status: ready\n"
+            "schema_version: 5\n"
+            f"budget_usd: {over_cap:g}\n"
+            "zones: orchestrator/config.py\n"
+            "---\n\n"
+            "# SPEC: потолок ролей\n\n"
+            "## Контекст\nТест.\n\n"
+            "## Требования\n1. Тест.\n\n"
+            "## Критерии приёмки\nAC-1. Тест.\n\n"
+            "## Не входит\n- Всё.\n")
+
+        errors = guard.check_content("SPEC.md", text)
+
+        self.assertTrue(errors, f"guard обязан отказать SPEC с "
+                                f"budget_usd={over_cap} (потолок ролей "
+                                f"{config.ROLE_BUDGET_CAP})")
+
+    def test_operator_ceiling_survives_a_spec_value_within_cap(self):
+        """Сценарий 2: потолок Оператора не перебивается значением из SPEC,
+        даже когда это значение само по себе в пределах потолка ролей.
+
+        Ловит мутацию: `apply_spec_budget` перестаёт проверять
+        `budget_source == BUDGET_SOURCE_OPERATOR` перед применением
+        значения из SPEC — потолок Оператора $60 был бы тихо заменён на
+        $25 из SPEC."""
+        self.set_task(budget_usd=60.0,
+                      budget_source=config.BUDGET_SOURCE_OPERATOR)
+
+        budget.apply_spec_budget(self.conn, self.task_row(),
+                                 {"budget_usd": "25"})
+
+        row = self.task_row()
+        self.assertAlmostEqual(row["budget_usd"], 60.0)
+        self.assertEqual(row["budget_source"], config.BUDGET_SOURCE_OPERATOR)
+
+
 class ParallelTaskLimitIsNotBypassableTest(FsmTest):
     """Инвариант: `MAX_PARALLEL_TASKS` блокирует старт агентного шага, пока
     число других задач с живым lease не опустится ниже потолка — не
@@ -907,6 +1030,7 @@ class ParallelTaskLimitIsNotBypassableTest(FsmTest):
         # неоткуда случайно найти чужой SPEC.md — свой нужен явно.
         self.write_spec("ready")
         self.write_plan("ready")
+        self.seed_worktree_plan()
         self.set_state("in_dev")
         conn = store.db()
         for i in range(config.MAX_PARALLEL_TASKS):
@@ -937,7 +1061,7 @@ class ParallelTaskLimitIsNotBypassableTest(FsmTest):
         связан: продвижение состояния не снимает и не обходит его отказ."""
         self.try_run()
         self.capture(fsm.cmd_advance, self.TASK)
-        self.assertEqual(self.state(), "review")
+        self.assertEqual(self.state(), "verifying")
 
         _, popen = self.try_run()
 
@@ -1033,9 +1157,16 @@ class CountersNeverResetTest(FsmTest):
 
     def test_no_transition_of_the_full_cycle_resets_a_counter(self):
         """Требование 2.4: цикл с эскалациями, возвратами и лимитами."""
+        # ADR-0015: маршрут теперь in_dev -> verifying -> review ->
+        # acceptance — каждый возврат в in_dev перед новым вердиктом
+        # снова проходит через verifying, зелёный CI мокается один раз
+        # на весь сценарий (предмет теста — счётчики, не опрос CI).
+        self.set_ci(GREEN_CI)
+
         self.verdict("changes_requested", 1)
         self.assertEqual(self.state(), "in_dev")
-        self.step("in_dev -> review", fsm.cmd_advance, self.TASK)
+        self.step("in_dev -> verifying", fsm.cmd_advance, self.TASK)
+        self.step("verifying -> review", fsm.cmd_advance, self.TASK)
 
         self.verdict("escalate", 2)
         self.assertEqual(self.state(), "escalated")
@@ -1044,18 +1175,19 @@ class CountersNeverResetTest(FsmTest):
         # из escalated требует ANSWER-n.md, иначе отказывает.
         self.write_answer(1)
         self.step("возврат из эскалации", fsm.cmd_approve, self.TASK)
-        self.step("in_dev -> review", fsm.cmd_advance, self.TASK)
+        self.step("in_dev -> verifying", fsm.cmd_advance, self.TASK)
+        self.step("verifying -> review", fsm.cmd_advance, self.TASK)
 
         self.verdict("approved", 3)
-        self.assertEqual(self.state(), "verifying")
-        self.step("verifying -> acceptance", fsm.cmd_advance, self.TASK)
+        # ADR-0015: `verifying` уже пройден до `review` — approved ведёт
+        # прямиком в `acceptance`.
         self.assertEqual(self.state(), "acceptance")
         self.step("отказ приёмки", fsm.cmd_reject, self.TASK, "не то")
-        self.step("in_dev -> review", fsm.cmd_advance, self.TASK)
+        self.step("in_dev -> verifying", fsm.cmd_advance, self.TASK)
+        self.step("verifying -> review", fsm.cmd_advance, self.TASK)
 
         self.verdict("approved", 4)
-        self.assertEqual(self.state(), "verifying")
-        self.step("verifying -> acceptance", fsm.cmd_advance, self.TASK)
+        self.assertEqual(self.state(), "acceptance")
         self.step("лимит отказов приёмки", fsm.cmd_reject, self.TASK,
                   "снова не то")
         self.assertEqual(self.state(), "escalated")
@@ -1079,6 +1211,7 @@ class CountersNeverResetTest(FsmTest):
 
     def test_exhausted_review_limit_is_not_reopened_by_escalation(self):
         """Эскалация по лимиту и возврат из неё не выдают новых итераций."""
+        self.set_ci(GREEN_CI)
         self.set_state("review", review_iters=config.LIMIT_REVIEW_ITERS - 1)
 
         self.verdict("changes_requested", 1)
@@ -1087,7 +1220,8 @@ class CountersNeverResetTest(FsmTest):
                          config.LIMIT_REVIEW_ITERS - 1)
 
         self.step("возврат из эскалации", fsm.cmd_approve, self.TASK)
-        self.step("in_dev -> review", fsm.cmd_advance, self.TASK)
+        self.step("in_dev -> verifying", fsm.cmd_advance, self.TASK)
+        self.step("verifying -> review", fsm.cmd_advance, self.TASK)
         self.verdict("changes_requested", 2)
 
         self.assertEqual(self.state(), "escalated", "лимит остался исчерпанным")
@@ -1588,7 +1722,8 @@ class StdlibOnlyImportsInvariantTest(unittest.TestCase):
     `scripts/`, `tests/` не несут импорт модуля вне
     `sys.stdlib_module_names`, вне пакетов репозитория (`orchestrator`,
     `scripts`, `tests`) и вне исключений манифеста
-    (`orchestrator.stack.THIRD_PARTY_EXCEPTIONS`, пуст на сегодня).
+    (`orchestrator.stack.THIRD_PARTY_EXCEPTIONS` — `pytest`/
+    `pytest_timeout`/`xdist`, SPEC 01M1REVEZ1HESMJ7AFD5A9MEJ8).
 
     Только файлы верхнего уровня каждого каталога (`glob("*.py")`, не
     `rglob`) — у orchestrator/scripts/tests сегодня нет вложенных
@@ -1685,3 +1820,116 @@ class StdlibOnlyImportsInvariantTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class CiJobsByPushClassInvariantTest(unittest.TestCase):
+    """Инвариант 36 (docs/invariants.md, ADR-0016): прогон CI существует
+    для каждого пуша в `main`, `task/**`, `artifact/**` — лишние проверки
+    снимаются условием на job (статус `skipped`, зелёный для `ci.GREEN`),
+    не сужением триггера.
+
+    Почему это инвариант, а не вкус: `ci.verifying_status` и
+    `ci.branch_status` читают check-runs головы кодовой ветки; пуш, для
+    которого прогона НЕТ, они читают как «проверок нет вовсе» /
+    «статус неизвестен, мержить нельзя» (инвариант 19), и задача висит до
+    потолка ожидания. Три проверяемых свойства файла:
+
+    1. под `on:` нет ключей `paths` / `paths-ignore`;
+    2. job `python` не несёт условия, исключающего `refs/heads/task/`,
+       и не построен как `== 'true'` по output соседнего job (упавший
+       `changes` дал бы пустой output и молча снял тесты — fail-open);
+    3. job `guard` не несёт условия, исключающего `refs/heads/artifact/`
+       (ради этой ветки триггер и заводился, SPEC T094, требование 7).
+
+    Полного YAML в пульте нет намеренно (`orchestrator/yamlmini.py`,
+    блочные списки не читаются), поэтому разбор — по блокам отступов:
+    top-level ключ — строка без отступа, job — ключ с отступом 2 под
+    `jobs:`, его собственные поля — отступ 4. Этого достаточно, чтобы не
+    спутать `if:` шага (отступ 8) с `if:` самого job.
+    """
+
+    CI_REL = Path(".github/workflows/ci.yml")
+
+    @staticmethod
+    def _top_block(text: str, key: str) -> list[str]:
+        out, inside = [], False
+        for ln in text.splitlines():
+            if ln and not ln[0].isspace():
+                inside = ln.split(":")[0] == key
+                continue
+            if inside:
+                out.append(ln)
+        return out
+
+    @classmethod
+    def _job_block(cls, text: str, job: str) -> list[str]:
+        out, inside = [], False
+        for ln in cls._top_block(text, "jobs"):
+            if ln.startswith("  ") and not ln[2].isspace():
+                inside = ln.strip().split(":")[0] == job
+                continue
+            if inside:
+                out.append(ln)
+        return out
+
+    @classmethod
+    def violations(cls, text: str) -> list[str]:
+        found = []
+        on = cls._top_block(text, "on")
+        if not on:
+            found.append("нет секции on:")
+        for ln in on:
+            if re.match(r"\s+paths(-ignore)?:", ln):
+                found.append(f"фильтр путей под on: — {ln.strip()}")
+        for job, forbidden in (("python", "task/"), ("guard", "artifact/")):
+            block = cls._job_block(text, job)
+            if not block:
+                found.append(f"job {job} не найден")
+                continue
+            own_if = [ln for ln in block if re.match(r"    if:", ln)]
+            for ln in own_if:
+                if forbidden in ln:
+                    found.append(f"job {job}: условие исключает {forbidden!r} — {ln.strip()}")
+                if job == "python" and "== 'true'" in ln:
+                    found.append(f"job python: условие fail-open (== 'true') — {ln.strip()}")
+        return found
+
+    def test_repo_ci_workflow_keeps_a_run_for_every_push(self):
+        text = (REPO_ROOT / self.CI_REL).read_text(encoding="utf-8")
+        self.assertEqual([], self.violations(text))
+
+    def test_planted_paths_ignore_is_caught(self):
+        text = (REPO_ROOT / self.CI_REL).read_text(encoding="utf-8")
+        planted = text.replace("  pull_request:\n",
+                               "    paths-ignore: ['docs/**']\n  pull_request:\n", 1)
+        self.assertNotEqual(text, planted)
+        self.assertTrue(any("paths-ignore" in v for v in self.violations(planted)),
+                        self.violations(planted))
+
+    def test_planted_task_exclusion_on_python_job_is_caught(self):
+        text = (REPO_ROOT / self.CI_REL).read_text(encoding="utf-8")
+        planted = text.replace(
+            "  python:\n    name: Синтаксис и тесты оркестратора\n",
+            "  python:\n    name: Синтаксис и тесты оркестратора\n"
+            "    if: ${{ !startsWith(github.ref, 'refs/heads/task/') }}\n", 1)
+        self.assertNotEqual(text, planted)
+        self.assertTrue(any("исключает 'task/'" in v for v in self.violations(planted)),
+                        self.violations(planted))
+
+    def test_planted_fail_open_condition_is_caught(self):
+        text = (REPO_ROOT / self.CI_REL).read_text(encoding="utf-8")
+        planted = text.replace("needs.changes.outputs.code != 'false'",
+                               "needs.changes.outputs.code == 'true'", 1)
+        self.assertNotEqual(text, planted)
+        self.assertTrue(any("fail-open" in v for v in self.violations(planted)),
+                        self.violations(planted))
+
+    def test_planted_artifact_exclusion_on_guard_job_is_caught(self):
+        text = (REPO_ROOT / self.CI_REL).read_text(encoding="utf-8")
+        planted = text.replace(
+            "  guard:\n    name: Валидация артефактов\n",
+            "  guard:\n    name: Валидация артефактов\n"
+            "    if: ${{ !startsWith(github.ref, 'refs/heads/artifact/') }}\n", 1)
+        self.assertNotEqual(text, planted)
+        self.assertTrue(any("исключает 'artifact/'" in v for v in self.violations(planted)),
+                        self.violations(planted))

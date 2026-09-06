@@ -55,7 +55,7 @@ from contextlib import redirect_stdout
 from pathlib import Path
 from unittest import mock
 
-from orchestrator import config, gitcmd, store
+from orchestrator import catalog, config, fsm, gitcmd, stack, store, workspace
 
 # Все пути `config`, которые сегодня подменяет хотя бы одна песочница
 # (SPEC T037, AC-2) — порядок как в orchestrator/config.py.
@@ -93,6 +93,34 @@ def _stub_which(name, *args, **kwargs):
 
 
 shutil.which = _stub_which
+
+# Тот же класс риска, что и `_stub_which` выше, второй заход: `runner.
+# role_env` (SPEC 01M1REVEZ1HESMJ7AFD5A9MEJ8, требование 4) теперь зовёт
+# `stack.check_stack()` на КАЖДЫЙ вызов — а он, помимо новой венв-проверки,
+# ещё и реально спавнит `git --version`/`gh --version`/`claude --version`
+# субпроцессом и заведомо не найдёт согласованный `.artel/venv` во
+# временном каталоге песочницы. До этой задачи `role_env()` вообще не знал
+# о `check_stack()` — тесты, которые мокают `subprocess.Popen`/
+# `subprocess.run` УЗКО под свой сценарий (например `tests.test_doctor.
+# LiveSmokeTest`, ждущий РОВНО один спавн агента смоука), не были готовы к
+# побочным субпроцессам ИЗНУТРИ `role_env()`.
+#
+# В отличие от `_stub_which` (переменная модуля, патчится РОВНО ОДИН РАЗ
+# на весь процесс — `shutil.which` идемпотентна и не зависит от песочницы
+# теста), `stack.check_stack` подменяется ЛОКАЛЬНО, per-instance, в
+# `TmpRootTest.setUp()`, тем же приёмом, что и `ALL_CONFIG_ATTRS` ниже:
+# модульная переменная от import time до import time одна на весь
+# процесс — глобальная замена сломала бы `tests/test_stack.py`/
+# `tests.test_multitarget.RoleEnvVenvInterpreterTest`, которым нужен
+# РЕАЛЬНЫЙ `stack.check_stack()` и которые в ОДНОМ прогоне `unittest
+# discover` делят процесс с файлами, импортирующими эту песочницу.
+_STUB_STACK_CHECKS = tuple(
+    stack.StackCheck(name, "ok", f"тестовая песочница: {name} не проверяется")
+    for name in ("python", "git", "gh", "claude", "venv"))
+
+
+def _stub_check_stack():
+    return list(_STUB_STACK_CHECKS)
 
 
 def capture(fn, *args) -> str:
@@ -566,6 +594,16 @@ class TmpRootTest(unittest.TestCase):
             patcher.start()
             self.addCleanup(patcher.stop)
 
+        # `runner.role_env` сверяет `.artel/venv` через `stack.check_stack()`
+        # (см. комментарий у `_stub_check_stack` выше) — без этого патча
+        # ЛЮБОЙ путь этой песочницы, доходящий до `role_env()` (напрямую
+        # или через `cmd_run`/`live_smoke`/`auto`), отказывал бы `OSError`:
+        # временный `self.root` не несёт согласованного `.artel/venv`.
+        stack_patcher = mock.patch.object(stack, "check_stack",
+                                          _stub_check_stack)
+        stack_patcher.start()
+        self.addCleanup(stack_patcher.stop)
+
         # `catalog.cmd_new` (A7, generic-путь, AC-5) для ЛЮБОГО target,
         # включая self/артель, коммитит артефакты плотницки
         # (`artifact_branch.write_commit`) — та функция зовёт
@@ -674,3 +712,189 @@ class RealGitSandbox(TmpRootTest):
             args.append("-b")
         args.append(branch)
         self.git(*args)
+
+
+def assert_acceptance_run_called(acc_run, tdir: Path, code_root: Path) -> None:
+    """`acc_run` (мок `acceptance.run`) обязан быть позван РОВНО с этим
+    `tdir` (первый позиционный аргумент) и этим `code_root` (именованный) —
+    оба сверяются отдельно, не связкой (SPEC 01M1TKP45EM16ZMJGQKNZA5T7J,
+    требование 1, AC-4): узел материализации планки (SPEC
+    01M1RNZ6V7TTTTYAHBMF8JBQQS) не имеет права спутать рабочий каталог
+    кода задачи с временным каталогом ни по одному из двух аргументов."""
+    acc_run.assert_called_once()
+    called_tdir = acc_run.call_args[0][0]
+    called_code_root = acc_run.call_args.kwargs.get("code_root")
+    assert called_tdir == tdir, (
+        f"acceptance.run вызван с tdir={called_tdir!r}, ожидался {tdir!r}")
+    assert called_code_root == code_root, (
+        f"acceptance.run вызван с code_root={called_code_root!r}, ожидался "
+        f"code_root={code_root!r}")
+
+
+_PLAN_READY_TEMPLATE = """---
+task: {task}
+type: plan
+author_role: developer
+status: ready
+schema_version: 1
+---
+
+# PLAN: сценарий лёгкой песочницы переходов
+
+## Подход
+
+## Шаги
+
+## Покрытие требований
+
+## Влияние на систему
+"""
+
+_ACCEPTANCE_PLANK_SPEC_TEMPLATE = """---
+task: {task}
+type: spec
+author_role: analyst
+status: ready
+schema_version: 2
+---
+
+# SPEC: планка
+
+## Критерии приёмки
+
+AC-1. ...
+"""
+
+_ACCEPTANCE_PLANK_STUB_TEST = """import unittest
+
+
+class StubTest(unittest.TestCase):
+
+    def test_stub(self):
+        pass
+"""
+
+
+class LightTransitionSandbox(TmpRootTest):
+    """Эталонная лёгкая песочница переходов FSM (SPEC
+    01M1TKP45EM16ZMJGQKNZA5T7J, требование 1) — три копии одного и того же
+    набора патчей/помощников устаревали одинаково («карта и подтяжка»
+    01M1RA0R9A, «причина конфликта подтяжки» 01M1REVMB5, «свежесть ветки»
+    01M1NBWP): здесь общий источник, локальный `_sandbox.py`/тестовый файл
+    планки несёт только тонкую надстройку сценария (`skills/
+    test-authoring.md`).
+
+    Поверх `TmpRootTest` (десять путей `config`, `stack.check_stack`,
+    плотницкий `SpyRun(passthrough_unknown=True)` на `gitcmd.subprocess.
+    run` — довольно и для плотницких вызовов `catalog.cmd_new` здесь,
+    настоящего `gitcmd.git`-трафика в этой песочнице нет ни одного:
+    `gitcmd.git` подменён целиком, см. ниже) добавляет:
+
+    - git-идентичность без реального репозитория (`gitcmd.git` ->
+      `fake_git`);
+    - диск как источник артефактов задачи (`gitcmd.show`/`gitcmd.
+      ls_tree_files` -> `disk_backed_show`/`disk_backed_ls_tree_files` —
+      `artifact_source.resolve` теперь всегда `foreign=True`, читает
+      через эту пару);
+    - рабочее дерево задачи как временный подкаталог, не боевой `git
+      worktree add` (`workspace.ensure` -> `(self.wt_path, None)`);
+    - заведомо не вырожденный origin (`fsm._origin_main_sha` -> константный
+      sha) — сценарий «ветка не отстала» подключается через `gitcmd.
+      commits_behind`, замокан отдельно каждым тестом, не здесь;
+    - белый список безобидных `gitcmd.in_repo` (AC-3) с точкой расширения
+      `self.in_repo_handlers` — список хуков `(repo, *args) ->
+      CompletedProcess | None`, проверяемых ДО дефолтного ответа: не
+      подошёл ни один хук — дефолт делегирует в уже подменённый
+      `gitcmd.git("-C", str(repo), *args)` (`fake_git`, тот же приём, что
+      настоящий необмокнутый `gitcmd.in_repo`), безусловный успех на
+      `checkout`/`commit`/`add`/`reset`/`diff --cached`/`status
+      --porcelain` — и на любой другой вызов, которого сценарий не
+      предвидел, той же деградацией, что и у остального `gitcmd` (не
+      падает «неожиданный вызов» на новом безобидном примитиве, класс
+      дефекта из «Контекста» SPEC).
+    """
+
+    TASK_TITLE = "Лёгкая песочница переходов"
+
+    def setUp(self):
+        super().setUp()
+
+        git_patcher = mock.patch.object(gitcmd, "git", fake_git)
+        git_patcher.start()
+        self.addCleanup(git_patcher.stop)
+
+        origin_sha_patcher = mock.patch.object(
+            fsm, "_origin_main_sha", return_value="deadbeefcafefeed")
+        origin_sha_patcher.start()
+        self.addCleanup(origin_sha_patcher.stop)
+
+        show_patcher = mock.patch.object(gitcmd, "show", disk_backed_show)
+        show_patcher.start()
+        self.addCleanup(show_patcher.stop)
+        ls_patcher = mock.patch.object(gitcmd, "ls_tree_files",
+                                       disk_backed_ls_tree_files)
+        ls_patcher.start()
+        self.addCleanup(ls_patcher.stop)
+
+        self.wt_path = self.root / "wt"
+        wt_patcher = mock.patch.object(
+            workspace, "ensure", lambda task_id, branch: (self.wt_path, None))
+        wt_patcher.start()
+        self.addCleanup(wt_patcher.stop)
+
+        self.in_repo_handlers: list = []
+        in_repo_patcher = mock.patch.object(
+            gitcmd, "in_repo", side_effect=self._in_repo_side_effect)
+        in_repo_patcher.start()
+        self.addCleanup(in_repo_patcher.stop)
+
+        self.capture(catalog.cmd_init)
+        _, self.TASK = capture_new_task_id(catalog.cmd_new, self.TASK_TITLE)
+        self.tdir = config.TASKS / self.TASK
+        self.branch = self.task_row()["branch"]
+
+    def _in_repo_side_effect(self, repo, *args) -> subprocess.CompletedProcess:
+        for handler in self.in_repo_handlers:
+            result = handler(repo, *args)
+            if result is not None:
+                return result
+        return gitcmd.git("-C", str(repo), *args)
+
+    def task_row(self):
+        return store.db().execute(
+            "SELECT * FROM tasks WHERE id=?", (self.TASK,)).fetchone()
+
+    def state(self) -> str:
+        return self.task_row()["state"]
+
+    def set_state(self, state: str) -> None:
+        conn = store.db()
+        conn.execute("UPDATE tasks SET state=? WHERE id=?", (state, self.TASK))
+        conn.commit()
+
+    def write_plan_ready(self) -> None:
+        self.tdir.mkdir(parents=True, exist_ok=True)
+        (self.tdir / "PLAN.md").write_text(
+            _PLAN_READY_TEMPLATE.format(task=self.TASK), encoding="utf-8")
+
+    def write_acceptance_plank(self) -> None:
+        """Кладёт `acceptance_tests/` c `SPEC.md` `schema_version: 2` без
+        `skip_tests` + непустой `acceptance_tests/` (минимум один
+        stub-тест) — обязаны быть на диске ДО перехода (`disk_backed_show`/
+        `disk_backed_ls_tree_files` читают ИМЕННО диск, не настоящий git),
+        иначе материализация планки (`acceptance.materialize_from_branch`)
+        ничего не найдёт и переход уйдёт по вырожденной ветке «планка не
+        найдена в источнике», минуя `acceptance.run` вовсе."""
+        self.tdir.mkdir(parents=True, exist_ok=True)
+        (self.tdir / "SPEC.md").write_text(
+            _ACCEPTANCE_PLANK_SPEC_TEMPLATE.format(task=self.TASK),
+            encoding="utf-8")
+        tests_dir = self.tdir / "acceptance_tests"
+        tests_dir.mkdir(parents=True, exist_ok=True)
+        (tests_dir / "test_stub.py").write_text(
+            _ACCEPTANCE_PLANK_STUB_TEST, encoding="utf-8")
+
+    def advance_from_in_dev(self) -> str:
+        self.write_plan_ready()
+        self.set_state("in_dev")
+        return self.capture(fsm.cmd_advance, self.TASK)

@@ -20,10 +20,10 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from orchestrator import (artifacts, catalog, config, fsm,  # noqa: E402
-                          gitcmd, review, runner, store)
-from tests.sandbox import (SpyRun, capture, capture_new_task_id,  # noqa: E402
-                           disk_backed_ls_tree_files, disk_backed_show,
-                           fake_git)
+                          gitcmd, review, runner, stack, store)
+from tests.sandbox import (SpyRun, _stub_check_stack, capture,  # noqa: E402
+                           capture_new_task_id, disk_backed_ls_tree_files,
+                           disk_backed_show, fake_git)
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
@@ -162,6 +162,14 @@ class ReviewFreshnessScenarioTest(unittest.TestCase):
             lambda role, target: [])
         pf_patcher.start()
         self.addCleanup(pf_patcher.stop)
+        # `runner.role_env` сверяет `.artel/venv` через `stack.check_stack()`
+        # (SPEC 01M1REVEZ1HESMJ7AFD5A9MEJ8, требование 4) — `root` этой
+        # песочницы не несёт согласованного venv (тот же приём, что
+        # `tests.sandbox.TmpRootTest.setUp`).
+        stack_patcher = mock.patch.object(stack, "check_stack",
+                                          _stub_check_stack)
+        stack_patcher.start()
+        self.addCleanup(stack_patcher.stop)
 
         self.capture(catalog.cmd_init)
         _, self.TASK = capture_new_task_id(
@@ -203,28 +211,33 @@ class ReviewFreshnessScenarioTest(unittest.TestCase):
             "SELECT action, detail FROM steps WHERE task_id=? ORDER BY id",
             (self.TASK,))]
 
-    def back_to_review_after_verifying_reject(self) -> None:
-        """review(approved #1) → verifying → reject → in_dev → review.
+    def back_to_review_after_acceptance_reject(self) -> None:
+        """review(approved #1) → acceptance → reject → in_dev → verifying
+        → review (verifying пропущен прямой установкой состояния — CI не
+        мокается в этом модуле, а предмет теста — свежесть вердикта в
+        `review()`, не опрос CI; тот же приём, что `setUp` уже применяет
+        к начальному состоянию).
 
-        SPEC T079 вставила `verifying` между `review` и `acceptance`
-        (requirement 4): свежий approved-вердикт больше не ведёт
-        напрямую в `acceptance`, и `reject` (requirement 8, AC-10) с
-        T079 применим и к `verifying`, не только к `acceptance` —
-        реализует ту же проверку «возврат требует нового вердикта» без
-        необходимости зеленить CI веткой ради захода в `acceptance`.
+        ADR-0015 переставила `verifying` перед `review` (было — между
+        `review` и `acceptance`, SPEC T079): свежий approved-вердикт
+        теперь ведёт прямиком в `acceptance`, а не в `verifying`; `reject`
+        (requirement 8, AC-10, этой задачей не меняется) по-прежнему
+        применим к `acceptance` — та же проверка «возврат требует нового
+        вердикта», без необходимости зеленить CI веткой.
         """
         self.write_review("approved", 1)
         self.capture(fsm.cmd_advance, self.TASK)
-        self.assertEqual(self.task_row()["state"], "verifying")
+        self.assertEqual(self.task_row()["state"], "acceptance")
         self.capture(fsm.cmd_reject, self.TASK, "критерий 2 не выполнен")
         self.assertEqual(self.task_row()["state"], "in_dev")
-        self.capture(fsm.cmd_advance, self.TASK)
-        self.assertEqual(self.task_row()["state"], "review")
+        self.capture(fsm.cmd_advance, self.TASK)  # in_dev -> verifying, PLAN ready
+        self.assertEqual(self.task_row()["state"], "verifying")
+        self.set_state("review")
 
     # ----------------------------------------------------------- сценарии
 
-    def test_stale_approved_does_not_pass_after_verifying_reject(self):
-        self.back_to_review_after_verifying_reject()
+    def test_stale_approved_does_not_pass_after_acceptance_reject(self):
+        self.back_to_review_after_acceptance_reject()
 
         out = self.capture(fsm.cmd_advance, self.TASK)
 
@@ -233,7 +246,7 @@ class ReviewFreshnessScenarioTest(unittest.TestCase):
         self.assertIn("iteration: 2", out)
 
     def test_stale_verdict_is_journaled(self):
-        self.back_to_review_after_verifying_reject()
+        self.back_to_review_after_acceptance_reject()
 
         self.capture(fsm.cmd_advance, self.TASK)
 
@@ -241,14 +254,14 @@ class ReviewFreshnessScenarioTest(unittest.TestCase):
         self.assertEqual(len(rejected), 1)
         self.assertIn("уже учтён", rejected[0])
 
-    def test_fresh_verdict_passes_to_verifying(self):
-        self.back_to_review_after_verifying_reject()
+    def test_fresh_verdict_passes_to_acceptance(self):
+        self.back_to_review_after_acceptance_reject()
         self.capture(fsm.cmd_advance, self.TASK)  # старый вердикт не провозит
 
         self.write_review("approved", 2)
         self.capture(fsm.cmd_advance, self.TASK)
 
-        self.assertEqual(self.task_row()["state"], "verifying")
+        self.assertEqual(self.task_row()["state"], "acceptance")
 
     def test_changes_requested_counted_once(self):
         self.write_review("changes_requested", 1)
@@ -256,7 +269,9 @@ class ReviewFreshnessScenarioTest(unittest.TestCase):
         self.assertEqual(self.task_row()["state"], "in_dev")
         self.assertEqual(self.task_row()["review_iters"], 1)
 
-        self.capture(fsm.cmd_advance, self.TASK)  # in_dev -> review, PLAN ready
+        self.capture(fsm.cmd_advance, self.TASK)  # in_dev -> verifying, PLAN ready
+        self.assertEqual(self.task_row()["state"], "verifying")
+        self.set_state("review")  # CI не мокается в этом модуле — минуем опрос напрямую
         out = self.capture(fsm.cmd_advance, self.TASK)
 
         self.assertEqual(self.task_row()["state"], "review")
@@ -264,14 +279,16 @@ class ReviewFreshnessScenarioTest(unittest.TestCase):
         # лимит итераций тот же вердикт второй раз не съедает
         self.assertEqual(self.task_row()["review_iters"], 1)
 
-    def test_first_verdict_passes_to_verifying(self):
-        """SPEC T079, требование 4: review->acceptance напрямую больше
-        нет — свежий approved ведёт в verifying (ждёт зелёного CI)."""
+    def test_first_verdict_passes_to_acceptance(self):
+        """ADR-0015: `verifying` теперь стоит ДО `review`, не между
+        `review` и `acceptance` (было — SPEC T079, требование 4) —
+        свежий approved ведёт прямиком в `acceptance`, CI уже проверен
+        раньше."""
         self.write_review("approved", 1)
 
         self.capture(fsm.cmd_advance, self.TASK)
 
-        self.assertEqual(self.task_row()["state"], "verifying")
+        self.assertEqual(self.task_row()["state"], "acceptance")
         self.assertEqual(self.task_row()["reviewed_iter"], 1)
 
     def test_draft_review_still_waits_for_verdict(self):
@@ -283,7 +300,7 @@ class ReviewFreshnessScenarioTest(unittest.TestCase):
         self.assertIn("жду вердикта", out)
 
     def test_reviewer_prompt_asks_for_next_iteration(self):
-        self.back_to_review_after_verifying_reject()
+        self.back_to_review_after_acceptance_reject()
 
         with mock.patch("orchestrator.runner.spawn_agent") as popen_mock:
             proc = mock.MagicMock(**{"wait.return_value": 0})

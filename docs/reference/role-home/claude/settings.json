@@ -1,4 +1,5 @@
 {
+  "autoMemoryEnabled": false,
   "permissions": {
     "deny": [
       "Read(~/.artel-canary/**)",
@@ -9,6 +10,20 @@
       "Bash(python3 orchestrator/artel.py doctor --restore:*)",
       "Bash(openssl enc -d:*)",
       "Bash(security find-generic-password:*)"
+    ]
+  },
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"$CLAUDE_CONFIG_DIR/hooks/bash_guard.py\"",
+            "timeout": 10
+          }
+        ]
+      }
     ]
   }
 }

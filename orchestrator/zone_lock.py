@@ -179,20 +179,40 @@ def _stay_since_id(conn, task_id: str) -> int:
     return 0
 
 
-def _visit_has_action(conn, task_id: str, since_id: int, action: str) -> bool:
+def _visit_has_action(conn, task_id: str, since_id: int, action: str,
+                      actor: str | None = None) -> bool:
+    """Есть ли после `since_id` запись `action` — `actor` (если задан)
+    сверяется дополнительно (регрессия 01M1REVJ8AJ, требование 1): без
+    сверки любой актор того же действия (например `test_author` на
+    стадии `tests_writing`) ложно считался бы искомым событием."""
     return any(row["id"] > since_id and row["action"] == action
+              and (actor is None or row["actor"] == actor)
               for row in store.task_steps(conn, task_id))
 
 
 def _occupies(conn, task_id: str) -> bool:
     """`task_id` занимает свои зоны в ТЕКУЩЕМ непрерывном пребывании
-    (требования 1-2): хотя бы один `"agent run started"` роли developer
-    либо `RELEASE_ACTION` ПОСЛЕ границы `_stay_since_id`. Без этого задача
-    только ждёт — зон не держит ни для себя, ни (требование 1, впервые
-    здесь) для остальных кандидатов `blocking_conflict`, что её сканируют
-    как потенциального владельца."""
+    (требования 1-2, SPEC 01M1RR1PZC926T13NB1JSZ7F8T требование 1):
+    хотя бы один `"agent run started"` ИМЕННО РОЛИ `developer` либо
+    `RELEASE_ACTION` (любым актором) ПОСЛЕ границы `_stay_since_id`.
+
+    Фильтр по актору `developer` применяется только к `"agent run
+    started"` — эту же точку (`runner.run_agent_once`) журналирует
+    прогон ЛЮБОЙ роли шага (в т.ч. `test_author` на стадии
+    `tests_writing`, той же задачи, до первого шага developer вовсе);
+    без сверки актора `_occupies` ложно считала занятой ещё не начатую
+    developer'ом задачу (регрессия 01M1REVJ8AJ, коммит d617c148).
+    `RELEASE_ACTION` актора не сверяет — его журналирует только
+    `cmd_zone_release` (актором `operator`), сверка тут ничего не
+    закрывает и не входит в регрессию требования 1.
+
+    Без этого признака задача только ждёт — зон не держит ни для себя,
+    ни (требование 1 SPEC 01M1P9QAG65GVF69YJEV0V18D9, впервые здесь)
+    для остальных кандидатов `blocking_conflict`, что её сканируют как
+    потенциального владельца."""
     since_id = _stay_since_id(conn, task_id)
-    return (_visit_has_action(conn, task_id, since_id, _AGENT_STARTED_ACTION)
+    return (_visit_has_action(conn, task_id, since_id,
+                              _AGENT_STARTED_ACTION, actor="developer")
             or _visit_has_action(conn, task_id, since_id, RELEASE_ACTION))
 
 

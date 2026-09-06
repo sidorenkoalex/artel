@@ -361,5 +361,115 @@ class SkillsTextTest(BriefUnitTest):
             "запись про первый — шаг так и не стартовал")
 
 
+class ReturnReasonComponentTest(BriefUnitTest):
+    """tasks/01M1SAA2AZX3ERQ779QJ5TS9J4, требования 1-5: раздел «Причина
+    возврата» — юнит-покрытие поверх приёмочных тестов задачи
+    (`tasks/01M1SAA2AZX3ERQ779QJ5TS9J4/acceptance_tests/`, залоченных
+    tasks/T023), тем же приёмом сырой сеянной истории журнала."""
+
+    def seed_state(self, actor: str, state: str, detail: str = "") -> None:
+        store.journal(store.db(), "T001", actor, f"state -> {state}", detail)
+
+    def test_developer_brief_carries_verbatim_reason_after_changes_requested(self):
+        """Ловит мутацию: раздел «Причина возврата» добавлен НЕ первым
+        элементом `parts` (например, после `_manifest_component` SPEC) —
+        порядок требования 3/AC-4 сломан, хотя текст детали присутствует."""
+        conn = store.db()
+        self.seed_state("fsm", "in_dev", "приёмочные тесты готовы")
+        self.seed_state("operator", "review", "готово к ревью")
+        self.seed_state("fsm", "in_dev", "замечания ревью, итерация 1")
+
+        with mock.patch.object(gitcmd, "git", fake_git):
+            text = brief.developer_brief(conn, "T001")
+
+        self.assertIn(brief.RETURN_REASON_HEADER, text)
+        self.assertIn("замечания ревью, итерация 1", text)
+        self.assertIn(brief.RETURN_REASON_CLOSING, text)
+        self.assertLess(text.find(brief.RETURN_REASON_HEADER),
+                        text.find("Маркер-текста-SPEC."))
+
+    def test_developer_brief_unchanged_after_normal_advance_from_tests_writing(self):
+        """Ловит мутацию: предшественник `tests_writing` по ошибке добавлен
+        в `_RETURN_TRIGGER_STATES` — обычный первый заход `in_dev` (не
+        возврат) получил бы раздел «Причина возврата», хотя требование
+        5/AC-6 запрещают его для штатного advance."""
+        conn = store.db()
+        self.seed_state("operator", "tests_writing",
+                        "гейт SPEC пройден — приёмочные тесты до кода")
+        self.seed_state("fsm", "in_dev",
+                        "приёмочные тесты готовы — трассируемость AC пройдена")
+
+        with mock.patch.object(gitcmd, "git", fake_git):
+            text = brief.developer_brief(conn, "T001")
+
+        self.assertNotIn(brief.RETURN_REASON_HEADER, text)
+
+    def test_developer_brief_after_escalation_return_shows_escalated_detail_not_fixed_phrase(self):
+        """Ловит мутацию: `_return_context` берёт `detail` записи
+        `state -> in_dev` (фиксированная фраза approve «эскалация
+        разрешена, продолжаем») вместо `detail` записи `state ->
+        escalated` — раздел нёс бы бессодержательную фразу вместо причины
+        эскалации (требование 2/AC-3)."""
+        conn = store.db()
+        self.seed_state("fsm", "in_dev", "приёмочные тесты готовы")
+        self.seed_state("operator", "review", "готово к ревью")
+        self.seed_state("fsm", "escalated",
+                        "лимит ревью 3 исчерпан")
+        (config.TASKS / "T001" / "ANSWER-1.md").write_text(
+            "---\ntask: T001\ntype: answer\nauthor_role: operator\n"
+            "status: ready\nschema_version: 2\n---\n\n# ANSWER-1\n\nОК.\n",
+            encoding="utf-8")
+        self.seed_state("operator", "in_dev", "эскалация разрешена, продолжаем")
+
+        with mock.patch.object(gitcmd, "git", fake_git):
+            text = brief.developer_brief(conn, "T001")
+
+        self.assertIn(brief.RETURN_REASON_HEADER, text)
+        self.assertIn("лимит ревью 3 исчерпан", text)
+        self.assertIn("tasks/T001/ANSWER-1.md", text)
+        span_start = text.find(brief.RETURN_REASON_HEADER)
+        span_end = text.find(brief.RETURN_REASON_CLOSING, span_start)
+        self.assertNotIn("эскалация разрешена, продолжаем",
+                        text[span_start:span_end],
+                        "фиксированная фраза approve — не содержательная "
+                        "причина, не должна занимать место раздела")
+
+    def test_analyst_brief_no_section_on_first_visit(self):
+        """Ловит мутацию: `_return_context` не возвращает `None`, когда
+        записи `state -> spec_writing` этой задачи нет вовсе (первый визит)
+        — раздел «Причина возврата» появился бы у analyst без реального
+        возврата (требование 5/AC-6)."""
+        conn = store.db()
+
+        with mock.patch.object(gitcmd, "git", fake_git):
+            text = brief.analyst_map_component(conn, "T001")
+
+        self.assertNotIn(brief.RETURN_REASON_HEADER, text)
+
+    def test_test_author_brief_carries_return_reason_after_escalation(self):
+        """Ловит мутацию: `test_author_answer_component` не подключает
+        `_return_reason_component` вовсе (сборщик обновлён только для
+        developer/analyst) — раздел «Причина возврата» отсутствовал бы у
+        test_author при возврате из эскалации (требование 1)."""
+        conn = store.db()
+        self.seed_state("operator", "tests_writing",
+                        "гейт SPEC пройден — приёмочные тесты до кода")
+        self.seed_state("fsm", "escalated",
+                        "test_author: критерий неисполним тестом — AC-7")
+        (config.TASKS / "T001" / "ANSWER-1.md").write_text(
+            "---\ntask: T001\ntype: answer\nauthor_role: operator\n"
+            "status: ready\nschema_version: 2\n---\n\n# ANSWER-1\n\nОК.\n",
+            encoding="utf-8")
+        self.seed_state("operator", "tests_writing",
+                        "эскалация разрешена, продолжаем")
+
+        with mock.patch.object(gitcmd, "git", fake_git):
+            text = brief.test_author_answer_component(conn, "T001")
+
+        self.assertIsNotNone(text)
+        self.assertIn(brief.RETURN_REASON_HEADER, text)
+        self.assertIn("test_author: критерий неисполним тестом — AC-7", text)
+
+
 if __name__ == "__main__":
     unittest.main()

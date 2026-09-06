@@ -24,8 +24,16 @@ frontmatter (task/type/schema_version) остаётся ошибкой. Для �
 статуса и для типов tz/questions/answer — поведение как без флага, без
 исключений. Первая строка вывода с флагом — сводка «сдано N / черновиков
 M / нарушений K». Без флага — поведение и формат вывода прежние.
+
+Посторонний файл в `acceptance_tests/` (режим `--all`, оба варианта — с
+`--artifact-branch` и без, SPEC 01M1SAA01YRRTWAVADT2F81RRQ): файл вне
+разрешённого набора первого уровня (`test_*.py`, `_sandbox.py`,
+`markers.py`, `__init__.py`, `*.md`/`*.txt`) — именованная ошибка
+«посторонний файл в каталоге планки», не попытка разбора его как
+артефакта с frontmatter.
 """
 import ast
+import math
 import re
 import sys
 from pathlib import Path
@@ -35,7 +43,7 @@ from pathlib import Path
 # репозитория, поэтому корень кладётся руками: та же схема, что в artel.py.
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from orchestrator import config, yamlmini  # noqa: E402
+from orchestrator import config, spend, yamlmini  # noqa: E402
 
 REQUIRED_META = {"task", "type", "author_role", "status"}
 
@@ -59,7 +67,16 @@ REQUIRED_META = {"task", "type", "author_role", "status"}
 # SPEC несёт обязательное поле `zones:` — машиночитаемый список путей/
 # масок зоны задачи (требование 1, AC-1). Правило применяется только к
 # version >= 4 — тем же приёмом версии-гейтинга, что версии 2 и 3 выше.
-SUPPORTED_SCHEMA_VERSION = 4
+#
+# Версия 5 (01M1THKTJ7YT1K410G1KS17MK6, ADR-0014 часть 1 «потолок ролей»):
+# SPEC несёт обязательное поле `budget_usd`, разбираемое как число
+# (требование 2, AC-2). Правило применяется только к version >= 5 — тем
+# же приёмом версии-гейтинга, что версии 2-4 выше. Отдельно и НЕЗАВИСИМО
+# от schema_version — SPEC/PLAN любой версии с `budget_usd` выше
+# `config.ROLE_BUDGET_CAP` отказаны (требование 3, AC-3): это проверка
+# значения уже существующего необязательного поля, не факта его
+# присутствия, версия-гейтинг к ней не применяется.
+SUPPORTED_SCHEMA_VERSION = 5
 
 RULES = {
     "spec": {
@@ -153,9 +170,45 @@ TEST_AC = re.compile(r"def\s+test_ac(\d+)_\w*\s*\(")
 # from» — collect-only обязан быть статическим, не только по духу guard'а,
 # но и чтобы не зависеть от истории вызовов процесса.
 TEST_METHOD = re.compile(r"^\s*def\s+(test_\w+)\s*\(", re.M)
-# Пометка критерия без прямого теста: `# AC-n: manual|skip|escalate — причина`.
+# Пометка критерия без прямого теста: `# AC-n: manual|skip|escalate|ci —
+# причина`. `ci` (01M1SHJTT0V516BWHYXWS50F3G, требование 1): критерий
+# исполняется зелёным CI кодовой ветки (orchestrator/fsm_autogate.py),
+# не отдельным прогоном — допустима только для критериев про
+# существующие tests/ (см. `ci_marker_wording_ok` ниже).
+#
+# Заякорена на начало строки (`^`, `re.M`, без ведущих пробелов — тот же
+# приём, что AC_ITEM/AC_ITEM_FULL выше): REVIEW.md этой задачи итерации
+# 1, R1-F2 — незаякоренный поиск по всему тексту находил буквальный
+# пример синтаксиса пометки внутри докстроки/комментария (например,
+# `# (см. ...): буквальный текст "# AC-9: ci — …"`) как настоящую
+# пометку постороннего критерия AC-9. Реальные пометки во всех
+# acceptance_tests/ пульта сегодня стоят строго в начале строки —
+# сужение не отсекает ни одного легитимного случая (проверено grep'ом
+# по репозиторию при разборе R1-F2).
 AC_MARKER = re.compile(
-    r"#\s*AC-(\d+):\s*(manual|skip|escalate)\b[^\S\n]*(?:[—-]+[^\S\n]*(.*))?")
+    r"^#\s*AC-(\d+):\s*(manual|skip|escalate|ci)\b[^\S\n]*(?:[—-]+[^\S\n]*(.*))?",
+    re.M)
+
+# Полный текст критерия `AC-n. <текст>` — от начала пункта до следующего
+# `AC-m.` в начале строки либо конца раздела. Тот же якорь, что AC_ITEM
+# выше, но захватывает содержимое целиком — нужен только для эвристики
+# `ci_marker_wording_ok` (сверка формулировки критерия с пометкой `ci`
+# того же номера), не для подсчёта номеров.
+AC_ITEM_FULL = re.compile(r"^AC-(\d+)\.\s+(.*?)(?=^AC-\d+\.\s|\Z)", re.M | re.S)
+
+# Ключевые слова требования 3/AC-2 (01M1SHJTT0V516BWHYXWS50F3G): пометка
+# `ci` допустима только для критерия про существующий набор `tests/`.
+# Case-insensitive substring match, fail-closed — ни одного слова не
+# нашлось, формулировка не распознана эвристикой.
+CI_MARKER_WORDING_KEYWORDS = ("существующ", "tests/", "зелён", "не ослаб")
+
+
+def ci_marker_wording_ok(criterion_text: str) -> bool:
+    """Формулировка критерия `criterion_text` (полный текст пункта
+    `AC-n.`, без номера) содержит хотя бы одно ключевое слово требования
+    3 — пометка `ci` для него допустима."""
+    lowered = criterion_text.lower()
+    return any(kw in lowered for kw in CI_MARKER_WORDING_KEYWORDS)
 
 # Маркер причины красноты в докстринге модуля приёмочного теста (SPEC
 # T064, требование 1): «Красен до реализации: <объяснение>» или «Зелёный
@@ -397,6 +450,190 @@ def scan_id_format_samples(tdir: Path) -> list[str]:
     return id_format_sample_errors(files)
 
 
+# --------------------------------------------------------------------------
+# Копия лёгкой песочницы переходов вместо импорта из tests/sandbox.py (SPEC
+# 01M1TKP45EM16ZMJGQKNZA5T7J, требование 3, AC-8): копилка 06.09 — три
+# планки упали за один вечер из-за устаревшей копии, которую тест-автор
+# каждый раз переписывал заново вместо импорта эталона (skills/
+# test-authoring.md). Предупреждение, не ошибка — планка написана до
+# появления эталона (или до правки скила у test_author) не обязана
+# ретроактивно переписываться, только новые копии подсвечиваются.
+SANDBOX_OWN_DEFINITION_RE = re.compile(
+    r"^\s*def\s+(disk_backed_\w+|advance_from_in_dev)\s*\(", re.M)
+
+
+def sandbox_reuse_check(tdir: Path) -> dict:
+    """`{"errors": [], "warnings": [...]}` — предупреждение, если
+    `<tdir>/acceptance_tests/_sandbox.py` определяет собственные функции
+    `disk_backed_*`/`advance_from_in_dev` вместо импорта их из `tests/
+    sandbox.py`. Ищет буквальное `def disk_backed_*`/`def
+    advance_from_in_dev` — `from tests.sandbox import (disk_backed_show,
+    ...)` тем же именем в импорте не попадает под собственное
+    определение. Файла нет вовсе (сценарий не нуждается в локальной
+    надстройке) — ни ошибки, ни предупреждения."""
+    sandbox_path = tdir / "acceptance_tests" / "_sandbox.py"
+    if not sandbox_path.is_file():
+        return {"errors": [], "warnings": []}
+    try:
+        text = sandbox_path.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        return {"errors": [], "warnings": []}
+    if SANDBOX_OWN_DEFINITION_RE.search(text):
+        return {"errors": [], "warnings": [
+            f"{sandbox_path}: определяет собственные disk_backed_*/"
+            f"advance_from_in_dev вместо импорта из tests/sandbox.py "
+            f"(skills/test-authoring.md)"]}
+    return {"errors": [], "warnings": []}
+
+
+# --------------------------------------------------------------------------
+# Посторонний файл в каталоге планки (SPEC 01M1SAA01YRRTWAVADT2F81RRQ,
+# требование 2/AC-3/AC-6): инцидент 05.09 — `scripts/codebase_map.py`,
+# запущенный с cwd внутри `acceptance_tests/`, оставлял на диске
+# `acceptance_tests/docs/codebase-map.md`, и guard в режиме `--all`
+# честно пытался разобрать его как артефакт с frontmatter вместо
+# понятного нарушения структуры. Критерий допустимости — тот же список,
+# что называет SPEC (и независимо, той же регуляркой, реализует
+# `orchestrator/checkpoint.py::_is_stray_acceptance_test_file` для
+# автокоммита — общего модуля под критерий зона задачи не заводит,
+# guard сознательно лёгкий скрипт без зависимости на `orchestrator.
+# checkpoint`/`store`/`gitcmd`).
+EXTRANEOUS_ACCEPTANCE_FILE_REASON = "посторонний файл в каталоге планки"
+ACCEPTANCE_TESTS_ALLOWED_TOP_LEVEL = re.compile(
+    r"^(test_.*\.py|_[A-Za-z0-9_]+\.py|markers\.py|__init__\.py|.+\.md|.+\.txt)$")
+
+
+def is_extraneous_acceptance_test_file(rel_to_acceptance_tests: str) -> bool:
+    """`rel_to_acceptance_tests` — путь файла относительно `acceptance_tests/`
+    (`/`-разделённый, например `test_x.py` или `docs/codebase-map.md`).
+    `True` — файл вне разрешённого набора первого уровня (AC-1 задачи
+    01M1SAA01YRRTWAVADT2F81RRQ)."""
+    if "/" in rel_to_acceptance_tests:
+        return True
+    return not ACCEPTANCE_TESTS_ALLOWED_TOP_LEVEL.match(rel_to_acceptance_tests)
+
+
+def scan_extraneous_acceptance_files(tasks_root: Path) -> list[Path]:
+    """Посторонние файлы под `<tasks_root>/*/acceptance_tests/` — по всем
+    каталогам задач сразу (режим `--all`, требование 2). `__pycache__/`
+    исключён на любой глубине — та же уже игнорируемая директория, что
+    `checkpoint.py` пропускает через `.gitignore` (AC-1: критерий
+    одинаков независимо от того, git это фильтрует или обычный обход
+    диска, каким сканирует guard).
+
+    Задача, уже закрытая ДО появления этого правила (несёт
+    `docs/retro/<id>.md`), не сканируется вовсе — тот же принцип, что и
+    `_closed_before_split_assessment` ниже (ANSWER-3 tasks/
+    01M1KS8K9RXWHX2PW3ZKB0P903, модульный докстринг выше: «новые правила
+    guard действуют на живые задачи, история не переписывается»).
+    Обнаружено эмпирически прогоном `--all` на реальном дереве пульта:
+    несколько давно закрытых задач несут легитимные вспомогательные
+    файлы вида `_util.py`/`_race.py` в `acceptance_tests/` — без этого
+    исключения новое правило красило бы `guard --all` на main для
+    ЛЮБОЙ последующей ветки, не только для задач, реально нарушающих
+    AC-1 сегодня.
+    """
+    if not tasks_root.is_dir():
+        return []
+    extraneous: list[Path] = []
+    for task_dir in sorted(tasks_root.iterdir()):
+        if (RETRO_DIR / f"{task_dir.name}.md").exists():
+            continue
+        tests_dir = task_dir / "acceptance_tests"
+        if not tests_dir.is_dir():
+            continue
+        for f in sorted(tests_dir.rglob("*")):
+            if not f.is_file():
+                continue
+            rel_parts = f.relative_to(tests_dir).parts
+            if "__pycache__" in rel_parts:
+                continue
+            if is_extraneous_acceptance_test_file("/".join(rel_parts)):
+                extraneous.append(f)
+    return extraneous
+
+
+# --------------------------------------------------------------------------
+# Посторонний файл в корне каталога задачи (SPEC 01M1TNN4TMWAQSQ9Y1PW37J5H0,
+# требование 1/AC-1/AC-2; формулировка по ANSWER-1, tasks/
+# 01M1TNN4TMWAQSQ9Y1PW37J5H0/ANSWER-1.md, вариант A): инцидент 06.09 —
+# рабочие файлы роли (пять копий карты кодовой базы вида `_head_map.md`) в
+# корне `tasks/<id>/` без единой проверки доехали до артефактной ветки и
+# main. Белый список действует ТОЛЬКО для `.md`-имён первого уровня: любой
+# `.md`-файл вне перечня — посторонний. Файл ЛЮБОГО другого расширения —
+# легальное вложение без ограничений имени (ANSWER-1: буквальный единый
+# список без различия расширений конфликтовал с уже залоченными `tests/
+# test_checkpoint_external_step_artifacts.py::test_binary_file_is_not_lost`
+# и `::test_all_files_binary_still_commits_and_clears_the_dir`). Скрытые
+# файлы/каталоги (`.`-префикс любого сегмента пути) и `__pycache__/` —
+# посторонние независимо от расширения. `acceptance_tests/` — по
+# собственным правилам (см. выше), этим правилом не задета. Единственный
+# разрешённый каталог первого уровня — `acceptance_tests/`: файл внутри
+# ЛЮБОГО другого, впервые заведённого каталога первого уровня (например
+# `wip/_head_map.md`) — посторонний независимо от расширения, тем же
+# классом инцидента на один уровень вложенности глубже (REVIEW.md
+# итерации 1, замечание R1-F1: критерий проверял только путь ровно из
+# одного сегмента и молчал на файле внутри новой поддиректории).
+EXTRANEOUS_TASK_ROOT_FILE_REASON = "посторонний файл в каталоге задачи"
+TASK_ROOT_ALLOWED_MD = re.compile(
+    r"^(SPEC|PLAN|REVIEW|TEST_REPORT|QUESTIONS|TZ|ANSWER-\d+)\.md$")
+
+
+def is_extraneous_task_root_file(rel_to_task_dir: str) -> bool:
+    """`rel_to_task_dir` — путь файла относительно `tasks/<id>/` (`/`-
+    разделённый, например `_head_map.md`, `__pycache__/junk.pyc` или
+    `wip/_head_map.md`). `True` — файл посторонний (требование 1,
+    ANSWER-1, R1-F1): `.md` первого уровня вне `TASK_ROOT_ALLOWED_MD`,
+    любой скрытый файл/каталог (`.`-префикс любого сегмента пути), файл
+    внутри `__pycache__/` первого уровня, либо файл внутри ЛЮБОЙ другой
+    поддиректории первого уровня (единственная легальная поддиректория —
+    `acceptance_tests/`, по собственным правилам
+    `is_extraneous_acceptance_test_file` выше, не этой функцией)."""
+    parts = rel_to_task_dir.split("/")
+    if parts[0] == "acceptance_tests":
+        return False
+    if any(p.startswith(".") for p in parts):
+        return True
+    if parts[0] == "__pycache__":
+        return True
+    if len(parts) == 1:
+        if parts[0].endswith(".md"):
+            return not TASK_ROOT_ALLOWED_MD.match(parts[0])
+        return False
+    return True
+
+
+def extraneous_task_root_files_in(task_dir: Path) -> list[Path]:
+    """Посторонние файлы первого уровня ОДНОГО `tasks/<id>/` — ядро,
+    используемое `scan_extraneous_task_root_files` (обход `--all` по всем
+    задачам сразу) и `orchestrator/fsm_merge_gate.py` (проверка ОДНОЙ
+    задачи в scratch-репозитории ДО push, SPEC 01M1TNN4TMWAQSQ9Y1PW37J5H0,
+    AC-7) — один и тот же критерий допустимости, не независимая копия."""
+    if not task_dir.is_dir():
+        return []
+    extraneous: list[Path] = []
+    for f in sorted(task_dir.rglob("*")):
+        if not f.is_file():
+            continue
+        rel = "/".join(f.relative_to(task_dir).parts)
+        if is_extraneous_task_root_file(rel):
+            extraneous.append(f)
+    return extraneous
+
+
+def scan_extraneous_task_root_files(tasks_root: Path) -> list[Path]:
+    """Посторонние файлы первого уровня `<tasks_root>/*/` — по всем
+    каталогам задач сразу (режим `--all`, требование 1/AC-1/AC-2)."""
+    if not tasks_root.is_dir():
+        return []
+    extraneous: list[Path] = []
+    for task_dir in sorted(tasks_root.iterdir()):
+        if not task_dir.is_dir():
+            continue
+        extraneous.extend(extraneous_task_root_files_in(task_dir))
+    return extraneous
+
+
 def traceability_errors_from_content(spec_text: str, meta: dict, tested: set,
                                      markers: dict) -> list[str]:
     """Ядро проверки трассируемости AC -> тест (SPEC T023, требование 4) по
@@ -407,8 +644,9 @@ def traceability_errors_from_content(spec_text: str, meta: dict, tested: set,
     """
     if not requires_ac_markup(meta):
         return []
-    ac_numbers = {int(n) for n in
-                 AC_ITEM.findall(section_body(spec_text, "Критерии приёмки"))}
+    body = section_body(spec_text, "Критерии приёмки")
+    ac_numbers = {int(n) for n in AC_ITEM.findall(body)}
+    ac_texts = {int(n): text for n, text in AC_ITEM_FULL.findall(body)}
     errors: list[str] = []
     for n in sorted(ac_numbers):
         if n not in tested and n not in markers:
@@ -424,11 +662,17 @@ def traceability_errors_from_content(spec_text: str, meta: dict, tested: set,
                 f"AC-{n}: пометка на критерий, которого нет в SPEC — убери "
                 f"эту пометку либо добавь критерий AC-{n} в раздел «Критерии "
                 f"приёмки» SPEC")
-        elif kind in ("skip", "escalate") and not reason:
+        elif kind in ("skip", "escalate", "ci") and not reason:
             errors.append(
                 f"AC-{n}: пометка {kind} без причины — впиши причину после "
                 f"тире в той же строке, например "
                 f"'# AC-{n}: {kind} — <причина>'")
+        elif kind == "ci" and not ci_marker_wording_ok(ac_texts.get(n, "")):
+            errors.append(
+                f"AC-{n}: пометка ci на критерий, формулировка которого не "
+                f"про существующие тесты (нет ни одного из ключевых слов "
+                f"«существующ», tests/, «зелён», «не ослаб») — замени "
+                f"пометку на 'manual' либо перефразируй критерий")
     for n in sorted(tested):
         if n not in ac_numbers:
             errors.append(
@@ -865,6 +1109,86 @@ def spec_zones_errors(path: Path | str, meta: dict) -> list[str]:
     return []
 
 
+# --------------------------------------------------------------------------
+# Потолок ролей и обязательное поле budget_usd в SPEC (ADR-0014 часть 1,
+# 01M1THKTJ7YT1K410G1KS17MK6): аналитик обязан назвать сумму (требование 2),
+# а ни SPEC, ни PLAN не вправе назвать сумму выше ROLE_BUDGET_CAP без
+# участия Оператора (требование 3) — две независимые проверки, версия-
+# гейтинг применяется только к первой.
+
+def requires_budget_field(meta: dict) -> bool:
+    """SPEC обязан нести поле `budget_usd` (ADR-0014, требование 2).
+
+    Версия ниже 5 — формат SPEC до этой задачи, поля не несёт и не обязан:
+    тот же приём версии-гейтинга, что `requires_ac_markup`/
+    `requires_registry`/`requires_split_assessment`/`requires_zones` выше
+    применяют к своим проверкам.
+    """
+    version = meta.get("schema_version", 1)
+    if not isinstance(version, int) or isinstance(version, bool):
+        return False
+    return version >= 5
+
+
+def _budget_usd_number(meta: dict) -> float | None:
+    """Число `budget_usd` тем же разбором, что и `budget.spec_budget`/
+    `spend.cli_number` — `None`, если поля нет, оно `bool`/пусто, или не
+    разбирается как положительное конечное число.
+
+    `yamlmini.frontmatter` типизирует незакавыченные числа сам (int/float)
+    — значение приходит уже числом в частом случае (`budget_usd: 25`) и
+    строкой только в кавычках или при мусоре (`budget_usd: дорого`);
+    обе формы приводятся к одному разбору.
+    """
+    if "budget_usd" not in meta:
+        return None
+    raw = meta["budget_usd"]
+    if isinstance(raw, bool) or raw is None:
+        return None
+    if isinstance(raw, (int, float)):
+        return float(raw) if math.isfinite(raw) and raw > 0 else None
+    value = spend.cli_number(str(raw).strip())
+    return value if value is not None and value > 0 else None
+
+
+def spec_budget_field_errors(path: Path | str, meta: dict) -> list[str]:
+    """`budget_usd` присутствует и разбирается как число для SPEC версии,
+    которая его требует (ADR-0014, требование 2, AC-2). `path` — только
+    для текста ошибок (см. `schema_errors`).
+    """
+    if (meta.get("type") or "") != "spec" or not requires_budget_field(meta):
+        return []
+    if "budget_usd" not in meta:
+        return [f"{path}: SPEC schema_version {meta.get('schema_version')} "
+               f"обязан нести поле budget_usd (сумма в долларах) — добавь "
+               f"frontmatter-поле budget_usd"]
+    if _budget_usd_number(meta) is None:
+        return [f"{path}: budget_usd '{meta.get('budget_usd')}' не "
+               f"разбирается как число — впиши сумму в долларах, "
+               f"например budget_usd: 35"]
+    return []
+
+
+ROLE_BUDGET_CAP_HINT = ("раздели задачу (оценка объёма, "
+                        "01M1KS8K9RXWHX2PW3ZKB0P903) либо эскалируй вопрос "
+                        "бюджета Оператору")
+
+
+def role_budget_cap_errors(path: Path | str, meta: dict) -> list[str]:
+    """`budget_usd` SPEC или PLAN не выше `config.ROLE_BUDGET_CAP`
+    (ADR-0014, требование 3, AC-3) — независимо от `schema_version`:
+    проверка значения уже существующего необязательного поля, не факта
+    его присутствия. `path` — только для текста ошибок.
+    """
+    if (meta.get("type") or "") not in ("spec", "plan"):
+        return []
+    value = _budget_usd_number(meta)
+    if value is None or value <= config.ROLE_BUDGET_CAP:
+        return []
+    return [f"{path}: budget_usd ${value:.2f} выше потолка ролей "
+           f"${config.ROLE_BUDGET_CAP:.2f} — {ROLE_BUDGET_CAP_HINT}"]
+
+
 def _content_errors(label: str, text: str) -> list[str]:
     """Ядро `check` — структурная проверка уже прочитанного текста, без
     чтения файла: `label` — путь или его подобие, только для текста
@@ -945,6 +1269,10 @@ def _content_errors(label: str, text: str) -> list[str]:
     if atype == "spec":
         errors.extend(split_assessment_errors(label, text, meta))
         errors.extend(spec_zones_errors(label, meta))
+        errors.extend(spec_budget_field_errors(label, meta))
+
+    if atype in ("spec", "plan"):
+        errors.extend(role_budget_cap_errors(label, meta))
 
     if atype == "review":
         errors.extend(review_evidence_errors(label, text, meta))
@@ -1088,13 +1416,40 @@ def main() -> int:
         print(__doc__)
         return 1
 
+    extraneous_errors: list[str] = []
+    sandbox_reuse_warnings: list[str] = []
     if args == ["--all"]:
         files = sorted(Path("tasks").rglob("*.md"))
+        # Посторонние файлы `acceptance_tests/` (SPEC
+        # 01M1SAA01YRRTWAVADT2F81RRQ, требование 2) и посторонние `.md`
+        # первого уровня `tasks/<id>/` (SPEC 01M1TNN4TMWAQSQ9Y1PW37J5H0,
+        # требование 1) — исключаются из обычного обхода `*.md` ДО
+        # `check`/`_artifact_branch_report` (иначе, например, инцидентный
+        # `_head_map.md` попал бы туда и получил ошибку разбора
+        # frontmatter вместо именованной причины ниже).
+        extraneous = scan_extraneous_acceptance_files(Path("tasks"))
+        task_root_extraneous = scan_extraneous_task_root_files(Path("tasks"))
+        extraneous_set = set(extraneous) | set(task_root_extraneous)
+        files = [f for f in files if f not in extraneous_set]
+        extraneous_errors = (
+            [f"{f}: {EXTRANEOUS_ACCEPTANCE_FILE_REASON}" for f in extraneous]
+            + [f"{f}: {EXTRANEOUS_TASK_ROOT_FILE_REASON}"
+              for f in task_root_extraneous])
+        # Копия лёгкой песочницы переходов (SPEC 01M1TKP45EM16ZMJGQKNZA5T7J,
+        # требование 3, AC-8) — предупреждение, не ошибка, собирается по
+        # всем каталогам задач сразу, тем же приёмом, что посторонние
+        # файлы выше.
+        for task_dir in sorted(Path("tasks").iterdir()):
+            if task_dir.is_dir():
+                sandbox_reuse_warnings.extend(
+                    sandbox_reuse_check(task_dir)["warnings"])
     else:
         files = [Path(a) for a in args]
 
     if artifact_branch_mode:
         errors, warnings, submitted, drafts = _artifact_branch_report(files)
+        errors = extraneous_errors + errors
+        warnings = warnings + sandbox_reuse_warnings
         print(f"сдано {submitted} / черновиков {drafts} / "
               f"нарушений {len(errors) + len(warnings)}")
         if warnings:
@@ -1109,12 +1464,17 @@ def main() -> int:
         print(f"GUARD: ок ({len(files)} файлов)")
         return 0
 
-    all_errors: list[str] = []
+    all_errors: list[str] = list(extraneous_errors)
     for f in files:
         if not f.exists():
             all_errors.append(f"{f}: файл не найден")
             continue
         all_errors.extend(check(f))
+
+    if sandbox_reuse_warnings:
+        print("GUARD: предупреждения (не блокируют переход гейта):")
+        for w in sandbox_reuse_warnings:
+            print(f"  - {w}")
 
     if all_errors:
         print("GUARD: нарушения структуры артефактов:")

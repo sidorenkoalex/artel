@@ -15,3 +15,37 @@
 Эскалации: 4 (последняя): потолок ожидания CI в verifying исчерпан (5400с) — последний статус: CI коммита 7a60674d ещё идёт: Валидация артефактов, Синтаксис и тесты оркестратора
 
 Приёмочные тесты: 0 тест(ов), 0 manual, 0 skip
+
+## Правка планки (amend-tests) — 01M1TKP45EM16ZMJGQKNZA5T7J
+
+`tasks/01M1NBWPKNBXP9ZXXQDJM7AXPJ/acceptance_tests/_sandbox.py`:
+`OriginDivergedSandbox` заводила задачу голым `catalog.cmd_new` без
+материализованной приёмочной планки — черновой SPEC.md по умолчанию
+(`schema_version: 4`, без `skip_tests`) требовал AC-разметку
+(`guard.requires_ac_markup`), а `acceptance_tests/` не нёс ни файла:
+`_pull_main_or_escalate` отказывала «планка не найдена в источнике» до
+предмета проверки самих тестов (6 из 9 тестов планки красны). Контракт
+изменился ПОСЛЕ того, как эта планка была написана (SPEC
+01M1R9YEK08XEQWBFX0929WFVJ добавила материализацию/сверку планки узлу
+подтяжки) — класс дефекта (б) из «Контекста» SPEC
+01M1TKP45EM16ZMJGQKNZA5T7J. Правка: `OriginDivergedSandbox` коммитит
+непустую `acceptance_tests/` со SPEC.md `schema_version: 2` без
+`skip_tests` в артефактную ветку задачи плотницки (`artifact_branch.
+commit_files`, тот же приём, что уже несёт `write_plan_ready`) до
+запуска сценариев тестов. Ни один существующий assert не ослаблен —
+только исправлена подготовка песочницы под уже сдвинувшийся контракт.
+
+## Правка планки (amend-tests), продолжение — подтяжка main в 01M1TKP45EM16ZMJGQKNZA5T7J
+
+Подтяжка main в ветку 01M1TKP45EM16ZMJGQKNZA5T7J (конфликт по
+`docs/codebase-map.md`/`scripts/guard.py`/`tests/test_fsm_map_conflict_
+autoresolve.py`) принесла ADR-0015 («приёмка прогоняется в `in_dev` до
+`verifying`, не после в `review`»): `test_ac3_entry_points_ignore_local_
+pin.py::test_ac3_in_dev_to_review_pulls_despite_matching_local_pin`
+ожидал состояние `review` после `fsm.cmd_advance` из `in_dev` — контракт
+сдвинулся ПОСЛЕ того, как планка и SPEC 01M1TKP45EM16ZMJGQKNZA5T7J были
+написаны, тем же классом (б) («планка красна не по коду, а по устаревшей
+ожидаемой семантике перехода»), что и первая правка выше. Правка:
+ассерт состояния изменён на `verifying`; докстринг теста уточнён.
+Второй тест того же файла (`acceptance -> merge_gate`) контракт не
+затронул — не менялся.

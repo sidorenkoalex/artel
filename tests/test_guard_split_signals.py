@@ -277,8 +277,17 @@ class RequiresSplitAssessmentTest(unittest.TestCase):
         """Ловит мутацию: версия-гейтинг не проведён до конца в
         `split_assessment_errors`/`check_content` (проверяется
         `requires_split_assessment`, но результат не используется) —
-        сквозной путь через `check_content`, не только сам предикат."""
-        text = spec_text(budget=500, volume_section=None,
+        сквозной путь через `check_content`, не только сам предикат.
+
+        Бюджет фикстуры — ровно потолок ролей (ADR-0014,
+        `config.ROLE_BUDGET_CAP`), не любое большое число: выше него
+        `guard.role_budget_cap_errors` отказывает НЕЗАВИСИМО от
+        `schema_version` (другая, намеренно версия-НЕ-гейтингованная
+        проверка) — тест же проверяет версия-гейтинг именно
+        `split_assessment_errors`, и не должен путать эти два разных
+        правила отказа.
+        """
+        text = spec_text(budget=config.ROLE_BUDGET_CAP, volume_section=None,
                          extra_meta="").replace("schema_version: 3",
                                                 "schema_version: 1")
 

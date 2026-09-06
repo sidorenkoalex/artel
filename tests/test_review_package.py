@@ -22,9 +22,9 @@ REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO))
 
 from orchestrator import (catalog, config, context_package, gitcmd,  # noqa: E402
-                          review, runner, store)
-from tests.sandbox import (FakeProc, SpyRun, TmpRootTest, capture,  # noqa: E402
-                           capture_new_task_id)
+                          review, runner, stack, store)
+from tests.sandbox import (FakeProc, SpyRun, TmpRootTest, _stub_check_stack,  # noqa: E402
+                           capture, capture_new_task_id)
 
 SPEC_MD = """---
 task: T001
@@ -136,6 +136,25 @@ class FakeGit:
             # успехом на любой git-вызов, как ниже, значило бы «ветка уже
             # существует» для ЛЮБОГО имени и отказ `cmd_new` всегда.
             return subprocess.CompletedProcess(list(args), 1, "", "")
+        if (len(args) >= 3 and args[0] == "rev-parse" and args[1] == "--verify"
+                and args[-1].startswith("refs/remotes/origin/")):
+            # tasks/01M1SG9T962WJJ31S282GWM0EN: `gitcmd.diff_base` проверяет
+            # этим вызовом наличие `refs/remotes/origin/<MAIN_BRANCH>` —
+            # песочница этого файла не моделирует настоящий remote, ref
+            # заведомо отсутствует, фолбэк идёт на локальный
+            # `config.MAIN_BRANCH` (тот же путь, что и до этой задачи).
+            return subprocess.CompletedProcess(list(args), 1, "", "")
+        if args and args[0] == "merge-base":
+            # `gitcmd.diff_base` берёт merge-base ветки с базой, уже
+            # известной по ответу на rev-parse выше (здесь всегда локальный
+            # `config.MAIN_BRANCH`, ref origin отсутствует) — этот фейк не
+            # моделирует настоящий граф коммитов, поэтому просто отдаёт
+            # запрошенную базу как есть (второй аргумент), byte-for-byte
+            # сохраняя литерал `config.MAIN_BRANCH`, на который опираются
+            # существующие ассерты диапазона diff по всему файлу.
+            return subprocess.CompletedProcess(
+                list(args), self.returncode,
+                "" if self.returncode else args[1], self.stderr)
         if args and args[0] == "rev-parse":
             # T031: `gitcmd.on_foreign_branch` спрашивает текущую ветку и
             # существование ветки задачи вне пакета — пустой ответ, тот же
@@ -697,6 +716,14 @@ class CmdRunReviewPackageTest(unittest.TestCase):
             lambda role, target: [])
         pf_patcher.start()
         self.addCleanup(pf_patcher.stop)
+        # `runner.role_env` сверяет `.artel/venv` через `stack.check_stack()`
+        # (SPEC 01M1REVEZ1HESMJ7AFD5A9MEJ8, требование 4) — `root` этой
+        # песочницы не несёт согласованного venv (тот же приём, что
+        # `tests.sandbox.TmpRootTest.setUp`).
+        stack_patcher = mock.patch.object(stack, "check_stack",
+                                          _stub_check_stack)
+        stack_patcher.start()
+        self.addCleanup(stack_patcher.stop)
         # Этот модуль — про сборку ревью-пакета, не про worktree-механику
         # (SPEC T045): `FakeGit` отвечает на любую команду заготовкой diff,
         # не умеет осмысленно `worktree add/list`, а тесты (например,
@@ -740,6 +767,16 @@ class CmdRunReviewPackageTest(unittest.TestCase):
         conn.execute("UPDATE tasks SET state=? WHERE id=?", (state, self.TASK))
         conn.commit()
 
+    # Имя обязательного артефакта роли этого состояния (SPEC
+    # 01M1RQ12JVHE3PQYDFV1XPSTQ3, требование 3): `run_agent` кладёт его на
+    # диск, имитируя «роль уже написала», — иначе `runner.run_agent_once`
+    # честно не находит файл в рабочем каталоге роли и ретраит шаг вместо
+    # одного тихого успеха, которого ждут остальные тесты этого класса
+    # (они проверяют промпт/пакет, не факт отказа без артефакта — та
+    # проверка отдельно живёт в tasks/01M1RQ12JVHE3PQYDFV1XPSTQ3/
+    # acceptance_tests/).
+    _STEP_ARTIFACT = {"in_dev": "PLAN.md", "review": "REVIEW.md"}
+
     def run_agent(self, state: str) -> tuple[str, list[str]]:
         """Прогон шага; возвращает вывод и argv запущенного CLI.
 
@@ -748,6 +785,10 @@ class CmdRunReviewPackageTest(unittest.TestCase):
         `prompt`.
         """
         self.set_state(state)
+        marker = self._STEP_ARTIFACT.get(state)
+        if marker is not None:
+            self.tdir.mkdir(parents=True, exist_ok=True)
+            (self.tdir / marker).write_text("маркер\n", encoding="utf-8")
         with mock.patch.object(runner, "spawn_agent") as popen:
             popen.return_value = FakeProc(["готово\n"])
             out = self.capture(runner.cmd_run, self.TASK)
@@ -804,8 +845,15 @@ class CmdRunReviewPackageTest(unittest.TestCase):
 
         _, argv = self.run_agent("review")
 
-        self.assertIn("не из ветки, а из рабочего дерева: templates/REVIEW.md",
-                      self.journal_details("ревью-пакет собран")[0])
+        # Не требуем, чтобы `templates/REVIEW.md` шёл в списке первым: сама
+        # запись `run_agent` кладёт на диск маркер `tasks/<id>/REVIEW.md`
+        # (обязательный артефакт роли reviewer, SPEC 01M1RQ12JVHE3PQYDFV1XPSTQ3,
+        # требование 3) — он тоже честно попадает в `from_worktree` и может
+        # стоять раньше по алфавиту; поведение, которое ловит этот тест
+        # (расхождение источника журналируется), от порядка не зависит.
+        note = self.journal_details("ревью-пакет собран")[0]
+        self.assertIn("не из ветки, а из рабочего дерева", note)
+        self.assertIn("templates/REVIEW.md", note)
         self.assertIn(review.WORKTREE_NOTE.strip(), self.prompt(),
                       "источник назван и в самом пакете, не только в журнале")
 

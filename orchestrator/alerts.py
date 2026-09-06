@@ -12,6 +12,21 @@ SQL самих операций — в store.py (ADR-0003 3ж: «единств�
 
 `kind`:
 - `incident` — целостность/гигиена (recovery-сверка, сироты, гряз. репо);
+  сюда же — стоп-кран волны (01M1THKPNZ11DBZAQDMJ33EMJR, требование 3):
+  `WAVE_BREAKER_TASKS` РАЗНЫХ задач target self отказали ОДНИМ классом
+  (`failure_classification.TRANSIENT_SYSTEM_CLASSES` плюс «таймаут
+  шага») в пределах `WAVE_BREAKER_WINDOW_SEC` — `target=config.
+  DEFAULT_TARGET`, `source=WAVE_BREAKER_SOURCE`. Заводится
+  `check_wave_breaker_failure`/`check_wave_breaker_timeout`, зовущимися
+  из ДВУХ точек `orchestrator/runner.py`, уже журналирующих
+  классифицированный отказ и таймаут шага в `steps` — счётчик читает
+  ТОЛЬКО этот журнал (не открытые алерты: сторож зависших прогонов
+  тестов, `doctor.check_hung_test_runs`, заводит `kind=incident` своим,
+  не пересекающимся источником и в счётчик не входит, требование 4).
+  Дедуп — по (target, kind, source, класс), не по буквальному тексту
+  сообщения (число задач и минуты меняются от срабатывания к
+  срабатыванию) — тем же приёмом, что `raise_token_rate_divergence_alert`
+  ниже.
 - `threshold` — вычислимый порог программы (roadmap §5), переведён
   с журнальных событий сюда;
 - `trigger` — реестр docs/triggers.md; ack обязан нести решение
@@ -50,13 +65,28 @@ SQL самих операций — в store.py (ADR-0003 3ж: «единств�
   `attention`, но без привязки к переходу FSM: подтверждение наступает
   уже на следующем СБОРЕ ПАКЕТА, не на смене состояния задачи.
 """
-from . import store
+from datetime import datetime, timedelta, timezone
+
+from . import config, store
 
 KINDS = ("incident", "threshold", "trigger", "attention", "warning")
 
 DIFF_NOT_COLLECTED_SOURCE = "review-diff"
 
 TOKEN_RATE_DIVERGENCE_SOURCE = "report.token_rate_divergence"
+
+# Стоп-кран волны, часть 1 (01M1THKPNZ11DBZAQDMJ33EMJR, требования 2-3).
+WAVE_BREAKER_SOURCE = "wave_breaker"
+# Действия журнала `steps`, ровно те же строки, что журналируют две точки
+# вызова требования 3 (`failure_classification._record_failure_
+# classification` и `orchestrator/runner.py:855`) — счётчик не изобретает
+# собственный формат события, а читает уже существующий.
+WAVE_BREAKER_FAILURE_ACTION = "agent failure classified"
+WAVE_BREAKER_TIMEOUT_ACTION = "agent run TIMEOUT"
+# Метка класса «таймаут шага» в тексте алерта (требование 2): у него нет
+# записи в `failure_classification.CLASS_LABELS` — это не отказ попытки
+# агента, а обрыв самого шага по времени, отдельная точка журнала.
+WAVE_BREAKER_TIMEOUT_LABEL = "класс «таймаут шага»"
 
 
 def raise_alert(conn, target: str | None, kind: str, source: str,
@@ -148,6 +178,96 @@ def raise_token_rate_divergence_alert(conn, role: str, message: str) -> bool:
 
 def _role_prefix(role: str) -> str:
     return f"{role}: "
+
+
+def _wave_breaker_task_count(conn, action: str, detail_contains: str | None) -> int:
+    """Число РАЗНЫХ задач target self с записью журнала `steps.action=
+    action` (и, если задан, `detail_contains` подстрокой `detail`) не
+    старше `config.WAVE_BREAKER_WINDOW_SEC` (01M1THKPNZ11DBZAQDMJ33EMJR,
+    требования 2, 5): `set` схлопывает несколько отказов ОДНОЙ и той же
+    задачи в одну запись (требование/AC-5) — считаются задачи, не строки
+    журнала.
+
+    Читает `store.all_tasks`/`store.task_steps` (обе уже возвращают
+    готовые строки) вместо нового SQL-запроса здесь: SQL живёт только в
+    `store.py` (ADR-0003 3ж), а `store.py` вне зон этой задачи."""
+    cutoff = datetime.now(timezone.utc) - timedelta(
+        seconds=config.WAVE_BREAKER_WINDOW_SEC)
+    task_ids = set()
+    for t in store.all_tasks(conn):
+        if (t["target"] or config.DEFAULT_TARGET) != config.DEFAULT_TARGET:
+            continue
+        for row in store.task_steps(conn, t["id"]):
+            if row["action"] != action:
+                continue
+            if (detail_contains is not None
+                    and detail_contains not in (row["detail"] or "")):
+                continue
+            ts = _parse_step_ts(row["ts"])
+            if ts is not None and ts >= cutoff:
+                task_ids.add(t["id"])
+                break
+    return len(task_ids)
+
+
+def _parse_step_ts(ts: str) -> datetime | None:
+    try:
+        return datetime.strptime(ts, "%Y-%m-%d %H:%M:%SZ").replace(
+            tzinfo=timezone.utc)
+    except (TypeError, ValueError):
+        return None
+
+
+def _raise_wave_breaker_alert(conn, class_label: str, task_count: int) -> bool:
+    """Заводит `kind=incident` стоп-крана волны для `class_label`, если
+    для него ещё нет открытого (требование 3, AC-8): дедуп по префиксу
+    сообщения (target+kind+source+класс), не по буквальному тексту — число
+    задач и минуты меняются от срабатывания к срабатыванию, тот же приём,
+    что `raise_token_rate_divergence_alert` выше."""
+    window_min = config.WAVE_BREAKER_WINDOW_SEC // 60
+    prefix = f"стоп-кран волны: {class_label} у "
+    message = f"{prefix}{task_count} задач за {window_min} минут"
+    for row in open_alerts(conn, "incident"):
+        if (row["target"] == config.DEFAULT_TARGET
+                and row["source"] == WAVE_BREAKER_SOURCE
+                and row["message"].startswith(prefix)):
+            return False
+    return raise_alert(conn, config.DEFAULT_TARGET, "incident",
+                       WAVE_BREAKER_SOURCE, message)
+
+
+def check_wave_breaker_failure(conn, failure_class: str | None) -> bool:
+    """Стоп-кран волны для попытки, классифицированной
+    `failure_classification._record_failure_classification` (требования
+    2-3): считает только классы `TRANSIENT_SYSTEM_CLASSES` (1а/1б/
+    системный кандидат) — «обрыв потока»/session_limit уже несут
+    собственные алерты (`_record_failure_classification`) и волной не
+    считаются. `failure_class=None` (текст попытки не распознан) —
+    не в счётчике, `False` сразу.
+
+    Отложенный импорт (тот же приём, что `store._close_attention_alert`):
+    `failure_classification` сама читает `alerts` — прямой импорт на
+    уровне модуля дал бы цикл."""
+    from . import failure_classification
+    if failure_class not in failure_classification.TRANSIENT_SYSTEM_CLASSES:
+        return False
+    class_label = failure_classification.CLASS_LABELS[failure_class]
+    count = _wave_breaker_task_count(conn, WAVE_BREAKER_FAILURE_ACTION, class_label)
+    if count < config.WAVE_BREAKER_TASKS:
+        return False
+    return _raise_wave_breaker_alert(conn, class_label, count)
+
+
+def check_wave_breaker_timeout(conn) -> bool:
+    """Стоп-кран волны для класса «таймаут шага» (требования 2, 6):
+    действует наравне с `TRANSIENT_SYSTEM_CLASSES`, но читает журнал
+    `WAVE_BREAKER_TIMEOUT_ACTION` — таймаут шага журналируется до
+    классификации (нет текста попытки, которым занимался бы
+    `failure_classification`)."""
+    count = _wave_breaker_task_count(conn, WAVE_BREAKER_TIMEOUT_ACTION, None)
+    if count < config.WAVE_BREAKER_TASKS:
+        return False
+    return _raise_wave_breaker_alert(conn, WAVE_BREAKER_TIMEOUT_LABEL, count)
 
 
 def auto_ack(conn, alert_id: int) -> None:

@@ -5,10 +5,18 @@
 шагами не думает никто. Все гейты Фазы 0 — ручные (approve/reject из CLI).
 
 Состояния:
-  spec_writing -> spec_gate -> tests_writing -> in_dev -> review -> acceptance -> merge_gate -> done
-                     |                             ^________|  (changes_requested, <=3)
-                     |                             ^___________ (acceptance reject, <=1)
+  spec_writing -> spec_gate -> tests_writing -> in_dev -> verifying -> review -> acceptance -> merge_gate -> done
+                                                   ^______________________|  (changes_requested, <=3)
+                                                   ^__________________________________|  (acceptance reject, <=1)
   из любого: escalated (вопрос Оператору), killed.
+
+`verifying` (ADR-0015): CI подтянутой головы кодовой ветки проверяется ДО
+ревьювера, не после — рубежи перехода `in_dev -> review` (подтяжка main,
+прогон приёмочной планки, гейт зон/ёмкости, лок планки, гейт «замечания
+не отработаны», сверка головы на origin) стоят теперь на `in_dev ->
+verifying`; из `verifying` в `review` ведёт только зелёный CI. Возврат
+`changes_requested` — снова в `in_dev`, повторный вход в `review` — опять
+через `verifying`.
 
 `tests_writing` (A4, tasks/T023) — приёмочные тесты до кода, роль
 test_author: `spec_gate` заводит её при approve, если SPEC не помечен
@@ -17,7 +25,7 @@ approve идёт прямо в `in_dev`, как до T023. Выход из `test
 каждый AC-n получил тест либо пометку manual/skip/escalate
 (`tasks/<id>/acceptance_tests/`); `escalate` уводит задачу в `escalated`
 немедленно. После выхода каталог `acceptance_tests/` залочен фиксацией
-(T021): правка после лока — отказ перехода `in_dev -> review`.
+(T021): правка после лока — отказ перехода `in_dev -> verifying`.
 
 `approve` из escalated возвращает задачу в in_dev, а если эскалировал упавший
 агент — в тот шаг, на котором он упал (см. escalated_from): чинить надо шаг,
@@ -30,11 +38,16 @@ approve идёт прямо в `in_dev`, как до T023. Выход из `test
 
 Потолок по умолчанию один на все задачи, но класс задачи виден аналитику
 при постановке: `budget_usd` в frontmatter SPEC применяется к задаче один
-раз, на переходе spec_writing -> spec_gate. Понижать потолок так можно,
-поднимать — нет: значение выше DEFAULT_BUDGET_USD отвергается с
-предупреждением, потому что поднять потолок вправе только Оператор
-командой `budget` (инвариант 10). Ручное поднятие сильнее значения из
-SPEC; кто задал потолок, помнит колонка budget_source.
+раз, на переходе spec_writing -> spec_gate, потолком в обе стороны — и
+выше, и ниже дефолта — в пределах потолка ролей (`ROLE_BUDGET_CAP`,
+ADR-0014). Значение, не разбираемое как число (мусор в поле), —
+предупреждение, переход продолжается с прежним потолком. Значение выше
+потолка ролей — другой случай: guard отказывает сам переход целиком
+(`spec_writing -> spec_gate`), задача остаётся в `spec_writing`, пока
+аналитик не поправит число либо не разделит задачу; поднять потолок
+выше `ROLE_BUDGET_CAP` вправе только Оператор командой `budget`
+(инвариант 10). Ручное поднятие сильнее значения из SPEC; кто задал
+потолок, помнит колонка budget_source.
 
 `kill` не только переводит задачу в `killed`, но и убирает её хвосты в
 рабочем дереве: каталог `tasks/<id>/`, не попавший в main, и локальную
@@ -96,7 +109,9 @@ workspace, tasks, knowledge, logs). БД одна на все проекты: с
   target-init <target> | doctor [--restore] [--fix] | alert-ack <id> "<решение>" |
   version | canary --k <N> | canary pool-seal | prune [--execute] |
   amend-tests <id> --reason "<основание>" | pin-update <sha main артели> |
-  pin --to [<sha>] | zone-release <id> | zone-reorder <id1> <id2> ...
+  pin --to [<sha>] | zone-release <id> | zone-reorder <id1> <id2> ... |
+  venv-sync | note (копилка|бэклог|очередь) --text "<строка>" |
+  note --append <ключ> --text "<текст>" | note --flush
 
 `pin-update <sha>` (A7, Stage1) — обновляет пин запущенной версии:
 продвигает рабочее дерево и HEAD `config.ROOT` до `<sha>` main артели
@@ -190,6 +205,15 @@ done`/`kill` занявшей задачи либо явно: `zone-release <id>
 решает (кто стартует первым, решает только занятость), только показывает
 Оператору порядок.
 
+`venv-sync` (SPEC 01M1REVEZ1HESMJ7AFD5A9MEJ8) — создаёт/обновляет
+`.artel/venv` средствами стандартной библиотеки (`python3 -m venv` тем же
+интерпретатором, что и сам пульт, затем `pip install -r requirements.lock`
+внутрь него), идемпотентно. `check_stack()` (`orchestrator/stack.py`)
+сверяет установленные там версии с `requirements.lock` и предупреждает
+на расхождении/отсутствии venv; `runner.role_env` берёт интерпретатором
+роли `.artel/venv`, если он согласован с `requirements.lock`, и отказывает
+шагу (`agent run SKIPPED`) без тихого отката на системный python иначе.
+
 `canary <каталог>` (tasks/T065/SPEC.md) — синтетический прогон конвейера:
 заводит по задаче на каждый `*.md` каталога (`catalog.cmd_new`, пометка
 canary ТОЛЬКО колонкой БД, не в title), ведёт их `auto`-циклом, сама
@@ -277,6 +301,12 @@ worktree задачи, команда коммитит правку, сдвиг�
   zone_lock занятость зоны на старте кода: предусловие первого шага
             developer, снятие ожидания и очередь Оператором
             (SPEC 01M1P9QAG65GVF69YJEV0V18D9)
+  venv      `.artel/venv` пульта: создание/синхронизация с
+            `requirements.lock`, идемпотентно (SPEC
+            01M1REVEZ1HESMJ7AFD5A9MEJ8)
+  notes     команда `note`: строка в копилку/бэклог/очередь изолированным
+            коммитом от origin/main, повтор non-fast-forward, удержание
+            коммита при сетевом отказе (tasks/01M1VBEHTDYPK3E4RRFHWYYYW3)
 """
 import sys
 from pathlib import Path
@@ -289,9 +319,9 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from orchestrator import (amend, answer, auto, budget, canary, catalog,  # noqa: E402
-                          cleanup, config, doctor, dry_run, fsm, pause, pin,
-                          projects, prune, release, report, runner, version,
-                          workspace, zone_lock)
+                          cleanup, config, doctor, dry_run, fsm, notes, pause,
+                          pin, projects, prune, release, report, runner,
+                          venv, version, workspace, zone_lock)
 
 
 def _refuse_if_worktree() -> None:
@@ -475,6 +505,8 @@ def main() -> None:
         "pin": lambda: _cmd_pin(rest),
         "zone-release": lambda: zone_lock.cmd_zone_release(rest[0]),
         "zone-reorder": lambda: zone_lock.cmd_zone_reorder(rest),
+        "venv-sync": lambda: venv.cmd_venv_sync(),
+        "note": lambda: notes.cmd_note(rest),
     }
     fn = table.get(cmd)
     if fn is None:

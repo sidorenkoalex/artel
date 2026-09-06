@@ -3,7 +3,12 @@ task: TASK_ID
 type: plan
 author_role: developer
 status: draft        # draft | ready | approved
-schema_version: 4    # версия формата артефакта, см. scripts/guard.py
+schema_version: 5    # версия формата артефакта, см. scripts/guard.py
+# Однократная переоценка потолка задачи (ADR-0014 часть 2) — раскомментируй,
+# только если PLAN расходится с оценкой SPEC (по числу файлов/шагов), с
+# обоснованием в «Влиянии на систему». Применяется один раз, только вверх,
+# в пределах потолка ролей (ROLE_BUDGET_CAP).
+# budget_usd: 25
 ---
 
 # PLAN: <название задачи>

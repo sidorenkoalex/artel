@@ -5,12 +5,12 @@ if/elif `orchestrator/fsm.py::_cmd_advance`, перенесённое без и�
 `fsm.py` — эти функции не вызываются напрямую иначе, кроме тестов,
 идущих через публичный `fsm.cmd_advance`.
 """
-import shutil
-from datetime import datetime
+from datetime import datetime, timezone
+from typing import NamedTuple
 
 from scripts import guard
 
-from . import (acceptance, agent_log, artifact_source, artifacts, budget,
+from . import (acceptance, agent_log, artifact_source, artifacts, auto, budget,
               ci, config, fsm, fsm_autogate, gitcmd, github_adapter, store,
               workspace, yamlmini)
 # Функция, не модуль (SPEC 01M1GCN1FPSC1A6WK9WD1Q1V8X, требование 5): этот
@@ -26,6 +26,37 @@ from .review import git_diff_part as _review_git_diff_part
 # ненадёжен по построению, решение (разделить задачу или поднять потолок)
 # — только Оператора (AC-14).
 CAPACITY_GATE_REASON = "снимок не помещается в один контекст ревью — разделить задачу"
+
+class GateRefusal(NamedTuple):
+    """Единый неизменяемый исход гейта (SPEC R2 01M1TKNXX5YN5KT4WHG4T44JWV,
+    требование 1): `action` — второй позиционный аргумент store.journal
+    (текст "переход отклонён: ..."), `detail` — третий, `hint` — строка для
+    "  дальше: {hint}" (пустая — подсказка не печатается). Гейт пройден —
+    `None`, не экземпляр этого типа."""
+    action: str
+    detail: str
+    hint: str
+
+
+def _run_gates(conn, task_id: str, gates) -> bool:
+    """Каркас гейтов (требования 2-4): `gates` — список вызываемых без
+    аргументов предикатов `() -> GateRefusal | None`, применяется по
+    порядку, останавливаясь на первом отказе — последующие гейты списка
+    не вызываются (AC-3). Отказ — ровно один `store.journal` под
+    действием `refusal.action`, печать `[{task_id}] переход отклонён:
+    {detail}` и (если есть) подсказки; переход не происходит (`True`,
+    AC-4). Все гейты списка пройдены — `False`, без единой записи в
+    журнал и без печати (AC-4)."""
+    for gate in gates:
+        refusal = gate()
+        if refusal is None:
+            continue
+        store.journal(conn, task_id, "fsm", refusal.action, refusal.detail)
+        print(f"[{task_id}] переход отклонён: {refusal.detail}")
+        if refusal.hint:
+            print(f"  дальше: {refusal.hint}")
+        return True
+    return False
 
 
 def spec_writing(conn, task_id: str, t, tdir, target: str, state: str) -> bool:
@@ -117,6 +148,180 @@ def spec_writing(conn, task_id: str, t, tdir, target: str, state: str) -> bool:
     return False
 
 
+def _freshness_refuses(conn, task_id: str, t, meta, status: str) -> bool:
+    """Свежесть вердикта REVIEW.md — НЕ через каркас `_run_gates`
+    (PLAN «Подход»): исторический формат `action` (`"переход отклонён"`,
+    без суффикса) и печати (`f"[{task_id}] {detail}"`, без префикса
+    «переход отклонён: ») отличается от остальных гейтов этого модуля —
+    самостоятельный случай, не копия того же шаблона."""
+    iteration = artifacts.fresh_verdict_iteration(meta, t["reviewed_iter"])
+    if iteration is not None:
+        return False
+    detail = (
+        f"вердикт REVIEW.md (status={status}, "
+        f"iteration={meta.get('iteration', '—')}) уже учтён — "
+        f"жду новый прогон ревьювера с iteration: {t['reviewed_iter'] + 1}"
+    )
+    store.journal(conn, task_id, "fsm", "переход отклонён", detail)
+    print(f"[{task_id}] {detail}")
+    print(f"  дальше: artel.py run {task_id}  (прогон ревьювера)")
+    return True
+
+
+def _origin_push_gate(conn, task_id: str, t) -> GateRefusal | None:
+    """Голова ветки задачи на origin — предусловие входа в verifying
+    (SPEC 01M1GS5HZ1JXFGKVR95HEW0AEZ, требования 1-3, AC-1..AC-5; ADR-0015,
+    требование 2 — рубеж переехал с входа `review()` на вход `in_dev ->
+    verifying` целиком, без дублирования на новом месте), вызывается
+    только для не-канареечных задач, в `in_dev()` ниже.
+
+    Канареечная задача (SPEC 01M1NEEWH5K1XPFRDGRMPYSBXJ, требование
+    11/AC-11) не зовёт этот гейт вовсе (см. `in_dev()`): её `verifying`
+    не ждёт CI и не читает origin (`canary._kill_at_verifying` убивает
+    задачу сразу по входу) — push на origin-заглушку
+    (`canary.ORIGIN_STUB_URL`) гарантированно проваливается по
+    построению, не по сбою."""
+    push_ok, push_detail = github_adapter.ensure_head_in_origin(
+        conn, task_id, t["branch"])
+    if push_ok:
+        return None
+    hint = f"почини доступ к origin и повтори artel.py advance {task_id}"
+    return GateRefusal("переход отклонён: голова не в origin", push_detail, hint)
+
+
+def _code_sha_at_review_escalation(conn, task_id: str) -> str | None:
+    """sha кода, зафиксированный `budget.enforce_budget` в момент
+    ПОСЛЕДНЕЙ эскалации ПО БЮДЖЕТУ из `review` (SPEC
+    01M1VBEDGMEXHVGWAH42FTDZ4X, требование 3, `budget.
+    REVIEW_ESCALATION_CODE_SHA_ACTION`) — `None`, если такой записи нет
+    вовсе, либо она относится к ПРЕДЫДУЩЕМУ циклу ревью (запись СТАРШЕ
+    последнего `"agent run finished"` роли `reviewer` — новый прогон
+    reviewer уже перекрыл её собой, сверять с ней текущий вердикт нельзя,
+    тот же приём отсечки, что и у `auto._role_step_since_state_entry`)."""
+    rows = store.task_steps(conn, task_id)
+    last_reviewer_run = None
+    last_escalation_sha = None
+    for i, row in enumerate(rows):
+        if row["actor"] == "reviewer" and row["action"] == "agent run finished":
+            last_reviewer_run = i
+        if row["action"] == budget.REVIEW_ESCALATION_CODE_SHA_ACTION:
+            last_escalation_sha = (i, row["detail"])
+    if last_escalation_sha is None:
+        return None
+    idx, sha = last_escalation_sha
+    if last_reviewer_run is not None and last_reviewer_run >= idx:
+        return None
+    return sha or None
+
+
+def _review_escalation_sha_gate(conn, task_id: str, t) -> GateRefusal | None:
+    """Требование 3 (SPEC 01M1VBEDGMEXHVGWAH42FTDZ4X): budget-эскалация,
+    поймавшая уже вынесенный approved-вердикт reviewer (эскалация ИЗ
+    `review`), не должна пропускать переход в `acceptance` по устаревшему
+    вердикту, если код кодовой ветки СМЕНИЛСЯ, пока задача стояла
+    `escalated` — нужен новый прогон reviewer.
+
+    Отметки эскалации нет вовсе (обычный approved без эскалации по
+    бюджету, либо она относится к предыдущему циклу ревью,
+    `_code_sha_at_review_escalation`), текущий `gitcmd.branch_head_sha`
+    не ответил, либо совпадает с зафиксированным — гейт пропускает
+    (fail-open, тот же принцип, что и у `_review_rework_gate` рядом:
+    неотвеченный git не значит «код сменился», значит «сверить нечем»)."""
+    escalation_sha = _code_sha_at_review_escalation(conn, task_id)
+    if escalation_sha is None:
+        return None
+    current_sha = gitcmd.branch_head_sha(t["branch"])
+    if not current_sha or current_sha == escalation_sha:
+        return None
+    detail = (f"код кодовой ветки сменился, пока задача стояла escalated "
+             f"по бюджету: на момент вердикта reviewer было "
+             f"{escalation_sha}, сейчас {current_sha} — вердикт относится "
+             f"к уже неактуальному коду")
+    hint = f"новый прогон reviewer, затем artel.py advance {task_id}"
+    return GateRefusal("переход отклонён: код сменился после вердикта",
+                       detail, hint)
+
+
+def _registry_gate(conn, task_id: str, tdir, review_text, meta) -> GateRefusal | None:
+    """Реестр замечаний (SPEC T100, требование 5): вердикт approved не
+    проходит этот гейт, пока в реестре есть запись со статусом отличным
+    от accepted — ни fixed, ни rejected сами по себе не закрывают
+    замечание (ANSWER-1, симметрия). Вызывается только когда
+    `guard.requires_registry(meta)` истинно (schema_version >= 3, см.
+    `_review_approved`); guard уже подтвердил структуру этого REVIEW.md
+    (`fsm.guard_refuses` в `review()`) — здесь читается тот же текст,
+    отдельного чтения не заводится."""
+    registry_text = review_text
+    if registry_text is None:
+        registry_text = (tdir / "REVIEW.md").read_text(encoding="utf-8")
+    unresolved = [r["id"] for r in guard.registry_records(registry_text)
+                 if r.get("status") != "accepted"]
+    if not unresolved:
+        return None
+    detail = (f"реестр замечаний не закрыт: "
+             f"{', '.join(unresolved)} — каждая запись обязана "
+             f"дойти до status: accepted явным решением "
+             f"ревьювера, прежде чем approved пройдёт гейт")
+    hint = (f"доведи записи {', '.join(unresolved)} до "
+           f"accepted и повтори artel.py advance {task_id}")
+    return GateRefusal("переход отклонён: реестр замечаний", detail, hint)
+
+
+def _review_approved(conn, task_id: str, t, tdir, target: str, state: str,
+                     branch: str, review_text, meta) -> bool:
+    if guard.requires_registry(meta):
+        if _run_gates(conn, task_id,
+                      [lambda: _registry_gate(conn, task_id, tdir, review_text, meta)]):
+            return False
+    # Прогон приёмки и сверка головы на origin переехали на переход
+    # `in_dev -> verifying` (ADR-0015, требование 2; `fsm_advance.in_dev`
+    # выше) — approved с зелёным CI ведёт прямиком в acceptance, второй
+    # раз ничего из этого не проверяется.
+    store.set_state(conn, task_id, "acceptance", "fsm", expected_state=state,
+                    detail="ревью пройдено — вход в приёмку")
+    # Автогейт acceptance (ADR-0007, SPEC T066) — тем же приёмом, что
+    # раньше стоял на входе `verifying -> acceptance` (`verifying()`
+    # ниже, до ADR-0015): каталог планки резолвится тем же способом,
+    # что и прогон приёмки в `in_dev` выше (worktree self-target либо
+    # workspace внешнего, SPEC 01M1RNZ6V7TTTTYAHBMF8JBQQS).
+    acc_tdir = tdir
+    if target != config.DEFAULT_TARGET:
+        code_dir = config.PROJECTS / target / "workspace"
+        code_dir.mkdir(parents=True, exist_ok=True)
+        acc_tdir = acceptance.materialize_from_branch(task_id, branch, code_dir)
+    elif workspace.on_task_branch(task_id, t["branch"]) is True:
+        acc_tdir = workspace.path(task_id) / "tasks" / task_id
+    fsm_autogate._maybe_autogate_acceptance(conn, task_id, t, acc_tdir,
+                                           t["reviewed_iter"])
+    return False
+
+
+def _review_changes_requested(conn, task_id: str, t, state: str) -> bool:
+    iters = t["review_iters"] + 1
+    if iters >= config.LIMIT_REVIEW_ITERS:
+        store.set_state(conn, task_id, "escalated", "fsm",
+                        expected_state=state,
+                        detail=f"лимит ревью "
+                        f"{config.LIMIT_REVIEW_ITERS} исчерпан")
+    else:
+        store.update_task(conn, task_id, review_iters=iters)
+        store.set_state(conn, task_id, "in_dev", "fsm",
+                        expected_state=state,
+                        detail=f"замечания ревью, итерация {iters}")
+        fsm._maybe_ensure_draft_mr(conn, task_id)
+    return False
+
+
+def _review_escalate(conn, task_id: str, t, tdir, state: str) -> bool:
+    answer_baseline = fsm._answer_baseline_or_refuse(conn, task_id, tdir)
+    if answer_baseline is None:
+        return False
+    store.update_task(conn, task_id, answer_baseline=answer_baseline)
+    store.set_state(conn, task_id, "escalated", "fsm",
+                    expected_state=state, detail="эскалация от ревьювера")
+    return False
+
+
 def review(conn, task_id: str, t, tdir, target: str, state: str) -> bool:
     # Рабочее дерево точно на чужой ветке-источнике `tasks/<id>/` (SPEC
     # T047, требование 2; T094 требование 10) — вердикт REVIEW.md
@@ -142,158 +347,31 @@ def review(conn, task_id: str, t, tdir, target: str, state: str) -> bool:
         return False
     if fsm.guard_refuses(conn, task_id, tdir / "REVIEW.md", text=review_text):
         return True
-
-    iteration = artifacts.fresh_verdict_iteration(meta, t["reviewed_iter"])
-    if iteration is None:
-        detail = (
-            f"вердикт REVIEW.md (status={status}, "
-            f"iteration={meta.get('iteration', '—')}) уже учтён — "
-            f"жду новый прогон ревьювера с iteration: {t['reviewed_iter'] + 1}"
-        )
-        store.journal(conn, task_id, "fsm", "переход отклонён", detail)
-        print(f"[{task_id}] {detail}")
-        print(f"  дальше: artel.py run {task_id}  (прогон ревьювера)")
+    if _freshness_refuses(conn, task_id, t, meta, status):
         return False
 
-    if status == "approved" and not t["is_canary"]:
-        # Голова ветки задачи на origin — предусловие входа в verifying
-        # (SPEC 01M1GS5HZ1JXFGKVR95HEW0AEZ, требования 1-3, AC-1..AC-5):
-        # ДО потребления свежести вердикта (`store.update_task` ниже) —
-        # иначе провалившийся push съел бы свежесть первым же заходом и
-        # заблокировал повторный advance после починки origin (AC-5)
-        # тем же «вердикт уже учтён», что и рефьюзл выше.
-        #
-        # Канареечная задача (SPEC 01M1NEEWH5K1XPFRDGRMPYSBXJ, требование
-        # 11/AC-11) пропускается: её `verifying` не ждёт CI и не читает
-        # origin вовсе (`canary._kill_at_verifying` убивает задачу сразу
-        # по входу) — предусловие существует ТОЛЬКО ради последующего
-        # опроса CI на реальном origin, которого у эфемерного клона нет
-        # и не будет (origin-заглушка `canary.ORIGIN_STUB_URL`, требование
-        # 2/3): push туда гарантированно проваливается по построению, не
-        # по сбою — тот же принцип, каким уже пользуются
-        # `github_adapter.ensure_draft_mr`/`undraft_mr` (`t["is_canary"]`).
-        push_ok, push_detail = github_adapter.ensure_head_in_origin(
-            conn, task_id, t["branch"])
-        if not push_ok:
-            store.journal(conn, task_id, "fsm",
-                          "переход отклонён: голова не в origin", push_detail)
-            print(f"[{task_id}] переход отклонён: {push_detail}")
-            print(f"  дальше: почини доступ к origin и повтори "
-                  f"artel.py advance {task_id}")
+    if status == "approved":
+        if _run_gates(conn, task_id,
+                      [lambda: _review_escalation_sha_gate(conn, task_id, t)]):
             return False
 
+    iteration = artifacts.fresh_verdict_iteration(meta, t["reviewed_iter"])
     store.update_task(conn, task_id, reviewed_iter=iteration)
 
     if status == "approved":
-        # Реестр замечаний (SPEC T100, требование 5): вердикт approved
-        # не проходит этот гейт, пока в реестре есть запись со статусом
-        # отличным от accepted — ни fixed, ни rejected сами по себе не
-        # закрывают замечание (ANSWER-1, симметрия). Применяется только
-        # при schema_version >= 3 (требование 6); guard уже подтвердил
-        # структуру этого REVIEW.md выше по функции (fsm.guard_refuses)
-        # — здесь читается тот же текст, отдельного чтения не заводится.
-        if guard.requires_registry(meta):
-            registry_text = review_text
-            if registry_text is None:
-                registry_text = (tdir / "REVIEW.md").read_text(encoding="utf-8")
-            unresolved = [r["id"] for r in guard.registry_records(registry_text)
-                         if r.get("status") != "accepted"]
-            if unresolved:
-                detail = (f"реестр замечаний не закрыт: "
-                          f"{', '.join(unresolved)} — каждая запись обязана "
-                          f"дойти до status: accepted явным решением "
-                          f"ревьювера, прежде чем approved пройдёт гейт")
-                store.journal(conn, task_id, "fsm",
-                              "переход отклонён: реестр замечаний", detail)
-                print(f"[{task_id}] переход отклонён: {detail}")
-                print(f"  дальше: доведи записи {', '.join(unresolved)} до "
-                      f"accepted и повтори artel.py advance {task_id}")
-                return False
-        # Прогон приёмки (SPEC T023, требование 6): красный
-        # acceptance-тест чинит код разработчик, не переписывает тест
-        # (тесты залочены — см. ветку in_dev выше).
-        #
-        # SPEC T045, побочная находка (PLAN, «Подход»): после T045
-        # главная копия пульта остаётся на main, не на ветке задачи —
-        # `tasks/<id>/acceptance_tests` читается из worktree задачи,
-        # если он заведён и стоит на своей ветке; иначе (легаси-
-        # песочницы без реального git, worktree ещё не заведён)
-        # прежний путь — с диска главной копии. Внешний target (SPEC
-        # T094, требование 10, реестр PLAN.md пункт 2 «лок
-        # acceptance_tests»): живого worktree с этим каталогом на диске
-        # нет вовсе — `acceptance_tests/` живёт только в артефактной
-        # ветке пульта (`branch` уже резолвлен выше), материализуется во
-        # временный каталог на время прогона и убирается сразу после.
-        acc_tdir = tdir
-        cleanup_acc = None
-        if target != config.DEFAULT_TARGET:
-            acc_tdir = acceptance.materialize_from_branch(task_id, branch)
-            cleanup_acc = acc_tdir
-        elif workspace.on_task_branch(task_id, t["branch"]) is True:
-            acc_tdir = workspace.path(task_id) / "tasks" / task_id
-        try:
-            green, tail = acceptance.run(acc_tdir)
-            # Fingerprint окружения (SPEC T101, требование 4б, AC-5) —
-            # часть исхода прогона приёмочных тестов, тем же приёмом, что
-            # и у события агентного шага (`runner.py`): значение поля
-            # `detail` существующего журнального события, без новой
-            # таблицы/колонки.
-            fingerprint = agent_log.environment_fingerprint()
-            if not green:
-                detail = (f"acceptance_tests красные:\n{tail}\n"
-                          f"окружение: {fingerprint}")
-                store.journal(conn, task_id, "fsm",
-                              "переход отклонён: приёмочные тесты", detail)
-                print(f"[{task_id}] переход отклонён: приёмочные тесты "
-                      f"красные")
-                print(tail)
-                print(f"  дальше: почини код (не тест) и повтори "
-                      f"artel.py advance {task_id}")
-                return False
-            card = acceptance.summary(acc_tdir)
-        finally:
-            if cleanup_acc is not None:
-                shutil.rmtree(cleanup_acc, ignore_errors=True)
-        store.journal(conn, task_id, "fsm", "приёмочные тесты пройдены",
-                      f"{card}\nокружение: {fingerprint}")
-        print(f"[{task_id}] {card}")
-        # Вставка verifying между review и acceptance (SPEC T079,
-        # требование 4; ADR-0003 п.10): свежий approved + зелёные
-        # acceptance_tests раньше вели напрямую в acceptance — теперь
-        # ждут ещё и зелёного CI головного коммита ветки. Автогейт
-        # acceptance (_maybe_autogate_acceptance) переехал на вход
-        # `verifying -> acceptance` ниже — тот же вызов, новая точка.
-        store.update_task(conn, task_id, verifying_attempts=0)
-        store.set_state(conn, task_id, "verifying", "fsm",
-                        expected_state=state,
-                        detail="ревью пройдено — жду зелёного CI ветки")
-    elif status == "changes_requested":
-        iters = t["review_iters"] + 1
-        if iters >= config.LIMIT_REVIEW_ITERS:
-            store.set_state(conn, task_id, "escalated", "fsm",
-                            expected_state=state,
-                            detail=f"лимит ревью "
-                            f"{config.LIMIT_REVIEW_ITERS} исчерпан")
-        else:
-            store.update_task(conn, task_id, review_iters=iters)
-            store.set_state(conn, task_id, "in_dev", "fsm",
-                            expected_state=state,
-                            detail=f"замечания ревью, итерация {iters}")
-            fsm._maybe_ensure_draft_mr(conn, task_id)
-    elif status == "escalate":
-        answer_baseline = fsm._answer_baseline_or_refuse(conn, task_id, tdir)
-        if answer_baseline is None:
-            return False
-        store.update_task(conn, task_id, answer_baseline=answer_baseline)
-        store.set_state(conn, task_id, "escalated", "fsm",
-                        expected_state=state, detail="эскалация от ревьювера")
-    return False
+        return _review_approved(conn, task_id, t, tdir, target, state,
+                                branch, review_text, meta)
+    if status == "changes_requested":
+        return _review_changes_requested(conn, task_id, t, state)
+    return _review_escalate(conn, task_id, t, tdir, state)
 
 
 def verifying(conn, task_id: str, t, tdir, target: str, state: str) -> bool:
     # Ожидание зелёного CI головного коммита ветки задачи (SPEC T079,
-    # требования 5-7 + SPEC T086, требования 2-4). Четыре исхода
-    # различает `ci.verifying_status` (роадмап P3, T040): зелёный,
+    # требования 5-7 + SPEC T086, требования 2-4; ADR-0015, требования
+    # 1-2 — переход теперь ведёт в `review`, не в `acceptance`: CI
+    # подтянутой головы проверяется ДО ревьювера, не после). Четыре
+    # исхода различает `ci.verifying_status` (роадмап P3, T040): зелёный,
     # «проверок нет вовсе», «проверки идут» (в т.ч. по gh run list),
     # CI красный — трактовка не меняется относительно T079/ADR-0009:
     # только зелёный двигает задачу, остальные три ждут, различаясь
@@ -308,29 +386,8 @@ def verifying(conn, task_id: str, t, tdir, target: str, state: str) -> bool:
                   fsm.VERIFYING_STATUS_ACTION, note)
     if outcome == ci.VERIFYING_GREEN:
         print(f"[{task_id}] {note}")
-        store.set_state(conn, task_id, "acceptance", "fsm",
+        store.set_state(conn, task_id, "review", "fsm",
                         expected_state=state, detail=note)
-        # Каталог acceptance_tests/ для автогейта (SPEC T094, требование
-        # 10) — тем же приёмом, что `review()` выше: внешний target не
-        # несёт живого worktree, читаем из артефактной ветки пульта во
-        # временный каталог, чужой CI-запрос (`branch` = код-ветка,
-        # выше) этого не касается — материализация нужна только
-        # `acceptance_tests/`, не коду.
-        acc_tdir = tdir
-        cleanup_acc = None
-        if target != config.DEFAULT_TARGET:
-            artifact_branch_name, _ = artifact_source.resolve(conn, task_id)
-            acc_tdir = acceptance.materialize_from_branch(
-                task_id, artifact_branch_name)
-            cleanup_acc = acc_tdir
-        elif workspace.on_task_branch(task_id, t["branch"]) is True:
-            acc_tdir = workspace.path(task_id) / "tasks" / task_id
-        try:
-            fsm_autogate._maybe_autogate_acceptance(conn, task_id, t, acc_tdir,
-                                                   t["reviewed_iter"])
-        finally:
-            if cleanup_acc is not None:
-                shutil.rmtree(cleanup_acc, ignore_errors=True)
         return False
     # Счётчик попыток остаётся информационной записью (требование 3,
     # AC-7) — эскалацию решает только прошедшее время с момента входа
@@ -415,11 +472,13 @@ def tests_writing(conn, task_id: str, t, tdir, target: str, state: str) -> bool:
     return False
 
 
-def _capacity_gate_refuses(conn, task_id: str, t, state: str) -> bool:
+def _capacity_gate(conn, task_id: str, t) -> GateRefusal | None:
     """Гейт ёмкости diff снимка на `in_dev -> review` (tasks/
     01M1GCN1FPSC1A6WK9WD1Q1V8X, требование 5, AC-12..AC-16): diff снимка
-    БЕЗ `tasks/<id>/` (`git diff config.MAIN_BRANCH...<ветка задачи> --
-    . ':!tasks/<id>/'`, tasks/01M1RA0N6FCFEQBB82K58GM12X, AC-1) — тот же
+    БЕЗ `tasks/<id>/` (`git diff gitcmd.diff_base(ветка)...<ветка задачи>
+    -- . ':!tasks/<id>/'`, tasks/01M1RA0N6FCFEQBB82K58GM12X, AC-1; база —
+    точка расхождения с origin/main или локальным main, не голый
+    `config.MAIN_BRANCH`, tasks/01M1SG9T962WJJ31S282GWM0EN) — тот же
     расчёт, что и «полный» `diff_type` в `review.review_package` при
     `iteration == 1` (T029) — не имеет права превышать
     `config.REVIEW_SNAPSHOT_DIFF_MAX_BYTES`. Копия артефактов задачи
@@ -430,9 +489,10 @@ def _capacity_gate_refuses(conn, task_id: str, t, state: str) -> bool:
     способом, что и до этой задачи (AC-5). Пересчитывается заново на
     КАЖДОМ входе в гейт, не по инкременту прошлой итерации (AC-15).
 
-    `True` — переход отклонён, отказ уже журналирован (AC-13); гейт сам
-    не эскалирует и не делает ничего автоматически (AC-14) — задача
-    остаётся в `in_dev` до решения Оператора.
+    `GateRefusal` — переход отклонён, отказ журналируется каркасом
+    `_run_gates` (AC-13); гейт сам не эскалирует и не делает ничего
+    автоматически (AC-14) — задача остаётся в `in_dev` до решения
+    Оператора.
 
     git не ответил на сам diff — fail-closed, не fail-open (R1-F2,
     REVIEW.md итерация 1, major): `git_diff_part` в этом случае отдаёт
@@ -467,43 +527,60 @@ def _capacity_gate_refuses(conn, task_id: str, t, state: str) -> bool:
     заблокировал бы КАЖДЫЙ переход `in_dev -> review` для КАЖДОЙ задачи
     любого внешнего target навсегда, а не редкий сбой git."""
     if store.task_target(conn, task_id) != config.DEFAULT_TARGET:
-        return False
+        return None
     tasks_prefix = f"tasks/{task_id}/"
+    # База сравнения — merge-base с origin/main или локальным main (tasks/
+    # 01M1SG9T962WJJ31S282GWM0EN, AC-1/AC-3), не голый `config.MAIN_BRANCH`:
+    # локальный пин по построению отстаёт от origin/main, которую ветка
+    # задачи подтягивает, и раздувает снимок чужими коммитами.
+    base = gitcmd.diff_base(t["branch"])
+    action = "переход отклонён: гейт ёмкости diff"
+    if base is None:
+        detail = (f"гейт ёмкости: git не ответил на определение базы "
+                 f"сравнения (merge-base с origin/{config.MAIN_BRANCH} "
+                 f"либо локальным {config.MAIN_BRANCH}) для ветки "
+                 f"{t['branch']} — сверка размера невозможна")
+        hint = (f"разберись, почему git не отвечает на merge-base "
+               f"для {t['branch']}, и повтори artel.py advance {task_id}")
+        return GateRefusal(action, detail, hint)
     code_diff, _, reason = _review_git_diff_part(
-        config.MAIN_BRANCH, t["branch"], pathspec=(".", f":!{tasks_prefix}"))
+        base, t["branch"], pathspec=(".", f":!{tasks_prefix}"))
     if reason:
         detail = (f"гейт ёмкости: git не ответил на diff снимка "
-                 f"({config.MAIN_BRANCH}...{t['branch']}) — сверка "
-                 f"размера невозможна: {reason}")
-        store.journal(conn, task_id, "fsm",
-                      "переход отклонён: гейт ёмкости diff", detail)
-        print(f"[{task_id}] переход отклонён: {detail}")
-        print(f"  дальше: разберись, почему git не отвечает на diff "
-              f"{config.MAIN_BRANCH}...{t['branch']}, и повтори "
-              f"artel.py advance {task_id}")
-        return True
+                 f"({base}...{t['branch']}) — сверка размера невозможна: "
+                 f"{reason}")
+        hint = (f"разберись, почему git не отвечает на diff "
+               f"{base}...{t['branch']}, и повтори "
+               f"artel.py advance {task_id}")
+        return GateRefusal(action, detail, hint)
     code_size = (0 if code_diff == _EMPTY_DIFF_TEXT
                 else len(code_diff.encode("utf-8")))
     if code_size <= config.REVIEW_SNAPSHOT_DIFF_MAX_BYTES:
-        return False
+        return None
     artifacts_diff, _, artifacts_reason = _review_git_diff_part(
-        config.MAIN_BRANCH, t["branch"], pathspec=(tasks_prefix,))
+        base, t["branch"], pathspec=(tasks_prefix,))
     if artifacts_reason:
         artifacts_note = f"неизвестен (git не ответил: {artifacts_reason})"
     elif artifacts_diff == _EMPTY_DIFF_TEXT:
         artifacts_note = "0 байт (изменений нет)"
     else:
         artifacts_note = f"{len(artifacts_diff.encode('utf-8'))} байт"
-    detail = (f"{CAPACITY_GATE_REASON} ({task_id} «{t['title']}»): diff "
-             f"кода {code_size} байт > потолка "
-             f"{config.REVIEW_SNAPSHOT_DIFF_MAX_BYTES} байт (исключённые "
-             f"артефакты {tasks_prefix}: {artifacts_note})")
-    store.journal(conn, task_id, "fsm",
-                  "переход отклонён: гейт ёмкости diff", detail)
-    print(f"[{task_id}] переход отклонён: {detail}")
-    print(f"  дальше: решение Оператора — разделить задачу или поднять "
-          f"потолок (ADR-0002)")
-    return True
+    # Источник базы в сообщении (требование 4/AC-6) — Оператор видит, с чем
+    # реально сравнивали, не только литерал diff-диапазона.
+    source = gitcmd.diff_base_source(t["branch"])
+    detail = (f"{CAPACITY_GATE_REASON} ({task_id} «{t['title']}», база "
+             f"сравнения {base} от {source}): diff кода {code_size} байт "
+             f"> потолка {config.REVIEW_SNAPSHOT_DIFF_MAX_BYTES} байт "
+             f"(исключённые артефакты {tasks_prefix}: {artifacts_note})")
+    hint = "решение Оператора — разделить задачу или поднять потолок (ADR-0002)"
+    return GateRefusal(action, detail, hint)
+
+
+def _capacity_gate_refuses(conn, task_id: str, t, state: str) -> bool:
+    """Сохранённая публичная обёртка (тесты `tests/test_capacity_gate.py`
+    зовут её напрямую и читают журнал/stdout) — тот же единственный гейт
+    `_capacity_gate`, применённый через каркас `_run_gates`."""
+    return _run_gates(conn, task_id, [lambda: _capacity_gate(conn, task_id, t)])
 
 
 # Маркер мандата Оператора на расширение зон (SPEC 01M1P9QCHPHSCEA6TK13PV85SP,
@@ -608,18 +685,18 @@ def _answer_zones_mandate(branch: str, task_id: str) -> set[str]:
     return mandate
 
 
-def _zones_gate_refuses(conn, task_id: str, t, branch: str,
-                        plan_text: str) -> bool:
+def _zones_gate(conn, task_id: str, t, branch: str,
+                plan_text: str) -> GateRefusal | None:
     """Сверка диффа ветки задачи с зонами на `in_dev -> review` (SPEC
     01M1P9QCHPHSCEA6TK13PV85SP, AC-1/AC-2/AC-3/AC-6): дополнительное
-    предусловие существующего перехода, по образцу `_capacity_gate_refuses`
+    предусловие существующего перехода, по образцу `_capacity_gate`
     выше — не новое состояние FSM (AC-4), отказ ложится в тот же `store.
     journal` под действием `"переход отклонён: ..."`, что и остальные отказы
     этого перехода (AC-5, T078 подхватывает через `store.refusal_history`).
 
     Внешний (не self) target — гейт не проверяется: тот же довод, что
-    `_capacity_gate_refuses` — `git diff` в `config.ROOT` не видит код
-    внешнего target.
+    `_capacity_gate` — `git diff` в `config.ROOT` не видит код внешнего
+    target.
 
     Задача без ЗАЯВЛЕННОЙ зоны вовсе (`zones` и `zones_extension` оба
     пусты) — гейт не звонится (AC-7): `zones` обязателен только для SPEC
@@ -629,27 +706,37 @@ def _zones_gate_refuses(conn, task_id: str, t, branch: str,
     («вне заявленных путей») отказало бы ей на КАЖДОМ файле вне
     COMMON_ZONES, регрессия для всего, что не участвует в этой механике."""
     if store.task_target(conn, task_id) != config.DEFAULT_TARGET:
-        return False
+        return None
     declared = _split_zone_paths(t["zones"]) + _split_zone_paths(t["zones_extension"])
     if not declared:
-        return False
-    files = gitcmd.diff_names(config.MAIN_BRANCH, t["branch"])
+        return None
+    # База сравнения — merge-base с origin/main или локальным main (tasks/
+    # 01M1SG9T962WJJ31S282GWM0EN, AC-1/AC-2), не голый `config.MAIN_BRANCH`:
+    # иначе коммит main, ещё не влитый в ветку задачи, выглядит правкой
+    # самой задачи и ложно отказывает переход как «вне зон».
+    base = gitcmd.diff_base(t["branch"])
+    if base is None:
+        detail = (f"гейт зон: git не ответил на определение базы сравнения "
+                 f"(merge-base с origin/{config.MAIN_BRANCH} либо "
+                 f"локальным {config.MAIN_BRANCH}) для ветки {t['branch']} "
+                 f"— сверка с зонами невозможна")
+        hint = (f"разберись, почему git не отвечает на merge-base "
+               f"для {t['branch']}, и повтори artel.py advance {task_id}")
+        return GateRefusal("переход отклонён: гейт зон", detail, hint)
+    files = gitcmd.diff_names(base, t["branch"])
     if files is None:
         detail = (f"гейт зон: git не ответил на список файлов диффа "
-                 f"({config.MAIN_BRANCH}...{t['branch']}) — сверка с "
-                 f"зонами невозможна")
-        store.journal(conn, task_id, "fsm", "переход отклонён: гейт зон",
-                      detail)
-        print(f"[{task_id}] переход отклонён: {detail}")
-        print(f"  дальше: разберись, почему git не отвечает на diff "
-              f"{config.MAIN_BRANCH}...{t['branch']}, и повтори "
-              f"artel.py advance {task_id}")
-        return True
+                 f"(база {base}...{t['branch']}) — сверка с зонами "
+                 f"невозможна")
+        hint = (f"разберись, почему git не отвечает на diff "
+               f"{base}...{t['branch']}, и повтори "
+               f"artel.py advance {task_id}")
+        return GateRefusal("переход отклонён: гейт зон", detail, hint)
 
     zones = declared + list(config.COMMON_ZONES)
     out_of_zone = [f for f in files if not _touches_zone(f, zones)]
     if not out_of_zone:
-        return False
+        return None
 
     # Исключение AC-3: раздел «## Расширение зон» PLAN.md, подкреплённый
     # мандатом Оператора на ТЕ ЖЕ пути в ANSWER-*.md (ANSWER-1.md, п.1-2).
@@ -665,18 +752,29 @@ def _zones_gate_refuses(conn, task_id: str, t, branch: str,
                                     + extension_paths))
                 store.update_task(conn, task_id,
                                   zones_extension=",".join(merged))
-                return False
+                return None
             out_of_zone = still_out
 
-    detail = (f"дифф трогает файлы вне заявленных zones и COMMON_ZONES: "
+    # Источник базы в сообщении (требование 4/AC-6) — Оператор видит, с чем
+    # реально сравнивали, не только литерал diff-диапазона.
+    source = gitcmd.diff_base_source(t["branch"])
+    detail = (f"дифф трогает файлы вне заявленных zones и COMMON_ZONES "
+             f"(база сравнения {base} от {source}): "
              f"{', '.join(out_of_zone)}")
-    store.journal(conn, task_id, "fsm", "переход отклонён: гейт зон", detail)
-    print(f"[{task_id}] переход отклонён: {detail}")
-    print(f"  дальше: сократи дифф до заявленных zones либо оформи раздел "
-          f"«## Расширение зон» в PLAN.md с обоснованием и мандатом "
-          f"Оператора («{_ZONES_MANDATE_MARKER} <пути>» в ANSWER-n.md), и "
-          f"повтори artel.py advance {task_id}")
-    return True
+    hint = (f"сократи дифф до заявленных zones либо оформи раздел "
+           f"«## Расширение зон» в PLAN.md с обоснованием и мандатом "
+           f"Оператора («{_ZONES_MANDATE_MARKER} <пути>» в ANSWER-n.md), и "
+           f"повтори artel.py advance {task_id}")
+    return GateRefusal("переход отклонён: гейт зон", detail, hint)
+
+
+def _zones_gate_refuses(conn, task_id: str, t, branch: str,
+                        plan_text: str) -> bool:
+    """Сохранённая публичная обёртка (тесты `tests/test_zones_gate.py`
+    зовут её напрямую и читают журнал/stdout) — тот же единственный гейт
+    `_zones_gate`, применённый через каркас `_run_gates`."""
+    return _run_gates(conn, task_id,
+                      [lambda: _zones_gate(conn, task_id, t, branch, plan_text)])
 
 
 # Именованная причина отказа (требование 4) — общий текст с
@@ -737,182 +835,354 @@ def _latest_developer_commit_iso_date(branch: str, task_id: str):
     return None
 
 
-def _review_rework_gate_refuses(conn, task_id: str, t, branch: str) -> bool:
-    """Гейт `in_dev -> review` (SPEC «регрессия №13» 01M1RHFRQ2C0P4A57XJJ1WZV8N,
-    требование 3, AC-3/AC-4/AC-6/AC-7): REVIEW.md текущей итерации ещё
-    `changes_requested`, а кодовая ветка не получила ни одного коммита
-    developer'а ПОСЛЕ его коммита — переделка не отработана. Независимый
-    от `auto.py` рубеж (по образцу `_capacity_gate_refuses` выше): держит
-    и ручной `advance` Оператора, который журнальный гейт `auto.py` не
-    видит вовсе.
+# Префикс сообщения автокоммита артефактов шага ИМЕННО `reviewer` (сужение
+# `_STEP_ARTIFACTS_COMMIT_PREFIX` до конкретной роли, checkpoint.py::
+# _commit_external_step_artifacts::own_commit_marker) — единственный
+# текстовый признак, которым коммит REVIEW.md, несущий вердикт ревьювера,
+# отличим от более позднего автокоммита артефактов шага DEVELOPER,
+# тронувшего тот же файл (правка леджера замечаний, T100) — регрессия №15,
+# «Контекст» SPEC 01M1SCQ6WZHMQVK1AHP9F392JZ.
+_REVIEWER_STEP_AUTOCOMMIT_PREFIX = "{task_id}: артефакты шага reviewer (автокоммит оркестратора"
 
-    Сверка по ВРЕМЕНИ коммитов (`%cI`), не по sha и не по тексту:
-    REVIEW.md живёт в АРТЕФАКТНОЙ ветке пульта, код — в ОТДЕЛЬНОЙ кодовой
-    ветке (`artifact_source.resolve`, `foreign` всегда `True`), общего
-    родителя у них нет — единственный осмысленный признак «после» здесь
-    время, не sha.
+
+def _reviewer_verdict_baseline(conn, task_id: str, branch: str):
+    """(момент вердикта ревьювера текущей итерации, источник) — опорное
+    время рубежа `_review_rework_gate_refuses` (регрессия №15, требование
+    1, AC-1): САМЫЙ СВЕЖИЙ коммит `REVIEW.md`, чьё сообщение — автокоммит
+    артефактов шага именно `reviewer` (`_REVIEWER_STEP_AUTOCOMMIT_PREFIX`),
+    а не любой более поздний коммит того же файла. Автокоммит шага
+    developer (правка леджера замечаний, T100) несёт в сообщении другую
+    роль и этим фильтром не проходит, даже будучи самым свежим коммитом
+    REVIEW.md — этим закрывается AC-2.
+
+    Такого коммита нет вовсе (REVIEW.md правился в обход checkpoint.py —
+    вручную Оператором, либо лёгкая песочница без настоящего git) —
+    fallback на последнюю по времени запись журнала `agent run finished`
+    роли `reviewer` (вторая часть требования 1): её момент — тот же
+    реальный вердикт, просто без git-подписи.
+
+    `(None, None)` — ни коммита, ни записи журнала: гейту сверять не с
+    чем, та же деградация, что у `_commit_iso_date`."""
+    path = f"tasks/{task_id}/REVIEW.md"
+    prefix = _REVIEWER_STEP_AUTOCOMMIT_PREFIX.format(task_id=task_id)
+    res = gitcmd.git("log", "--format=%cI\x1f%s", branch, "--", path)
+    if res is not None and res.returncode == 0:
+        for line in res.stdout.splitlines():
+            ts, sep, subject = line.partition("\x1f")
+            if not sep or not subject.startswith(prefix):
+                continue
+            try:
+                return datetime.fromisoformat(ts), "автокоммит шага reviewer"
+            except ValueError:
+                continue
+    for row in reversed(store.task_steps(conn, task_id)):
+        if row["actor"] == "reviewer" and row["action"] == "agent run finished":
+            try:
+                ts = datetime.strptime(row["ts"], "%Y-%m-%d %H:%M:%SZ").replace(
+                    tzinfo=timezone.utc)
+            except ValueError:
+                continue
+            return ts, "запись журнала agent run finished роли reviewer"
+    return None, None
+
+
+def _review_rework_gate(conn, task_id: str, t, branch: str) -> GateRefusal | None:
+    """Гейт `in_dev -> review` (SPEC «регрессия №13» 01M1RHFRQ2C0P4A57XJJ1WZV8N,
+    требование 3, AC-3/AC-4/AC-6/AC-7; SPEC «регрессия №15»
+    01M1SCQ6WZHMQVK1AHP9F392JZ, требования 1-4): REVIEW.md текущей
+    итерации ещё `changes_requested`, а после момента вердикта ревьювера
+    (`_reviewer_verdict_baseline`, не любого более позднего коммита
+    REVIEW.md) не было ни коммита developer в кодовой ветке, ни записи
+    журнала `agent run finished` роли developer после входа в `in_dev`
+    этого визита — переделка не отработана.
+
+    Второе (журнальное) условие OR — ОБЩАЯ с `auto.py` функция
+    `auto._role_step_since_state_entry` (регрессия №15, требование 2,
+    AC-3/AC-4): не независимая копия критерия «был ли шаг developer после
+    входа в состояние» — та же деградация на легитимный первый вход
+    (ANSWER-3), что уже применяет журнальный гейт `auto.py`.
+
+    `_role_step_since_state_entry` возвращает `(True, None)` и на
+    легитимный первый вход, И на «записи `state -> in_dev` нет вовсе» —
+    для `auto.py` оба вырожденных случая означают одно и то же: сверять
+    нечем, не блокировать. Для ЭТОГО рубежа второй случай (`detail is
+    None`) — не сигнал «шаг developer состоялся», а отсутствие
+    журнальной информации вовсе, при уже посчитанном git-условии
+    (`code_ts`/`review_ts` выше) — переиспользование функции целиком, но
+    без слепого доверия её вырожденному «да» там, где есть более
+    надёжный git-сигнал (планка регрессии №13 заводит задачу прямо в
+    `in_dev` без единой записи журнала — ANSWER-3 повторной приёмки).
+
+    Помимо журнального условия, рубеж по-прежнему независим от `auto.py`
+    (по образцу `_capacity_gate_refuses` выше): держит и ручной `advance`
+    Оператора, минуя цикл `auto`.
+
+    Сверка git-условия — по ВРЕМЕНИ коммитов (`%cI`), не по sha и не по
+    тексту: REVIEW.md живёт в АРТЕФАКТНОЙ ветке пульта, код — в ОТДЕЛЬНОЙ
+    кодовой ветке (`artifact_source.resolve`, `foreign` всегда `True`),
+    общего родителя у них нет — единственный осмысленный признак «после»
+    здесь время, не sha.
 
     Внешний (не self) target — гейт не проверяется: тот же довод, что
     `_capacity_gate_refuses`/`_zones_gate_refuses` выше — `git log`/`show`
     в `config.ROOT` не видит код внешнего target.
 
-    Git не ответил, дата не разобрана, или REVIEW.md вовсе не существует
-    (легковесные песочницы без настоящего git — `fake_git`/`disk_backed_
-    show`, первый вход задачи в `in_dev` до первого ревью) — гейт НЕ
-    отказывает: тот же вырожденный случай деградации, что у
-    `fsm._pull_main_or_escalate` (`git не ответил -> "fresh"`) —
-    не найденный сигнал не значит «код не менялся», значит «сверить
-    нечем».
+    Git не ответил, дата не разобрана, REVIEW.md вовсе не существует, или
+    на кодовой ветке нет ни одного коммита developer (легковесные
+    песочницы без настоящего git — `fake_git`/`disk_backed_show`, первый
+    вход задачи в `in_dev` до первого ревью) — гейт НЕ отказывает по
+    git-условию (та же деградация, что у `fsm._pull_main_or_escalate`:
+    «git не ответил -> "fresh"» — не найденный сигнал не значит «код не
+    менялся», значит «сверить нечем»); журнальное условие OR при этом
+    всё равно проверяется отдельно.
+
+    `_reviewer_verdict_baseline` не нашла ни автокоммита шага reviewer,
+    ни записи журнала (ANSWER-3, повторный отказ приёмки регрессии №13
+    итерации 2: планка `01M1RHFRQ2C0P4A57XJJ1WZV8N/acceptance_tests`
+    коммитит REVIEW.md вне `checkpoint.py`, без журнальной записи роли
+    reviewer вовсе) — опорное время не остаётся пустым (что открывало бы
+    рубеж нараспашку, fail open): fallback на дату последнего коммита
+    REVIEW.md (`_commit_iso_date`), тем же способом, каким рубеж сверял
+    ДО этой задачи. Опора `_reviewer_verdict_baseline`, если она нашлась,
+    по-прежнему приоритетна — этот fallback работает только на её
+    `(None, None)`.
     """
     if store.task_target(conn, task_id) != config.DEFAULT_TARGET:
-        return False
+        return None
     review_text, _ = gitcmd.show(branch, f"tasks/{task_id}/REVIEW.md")
     if review_text is None:
-        return False
+        return None
     meta = yamlmini.frontmatter(review_text) or {}
     if meta.get("status") != "changes_requested":
-        return False
-    review_ts = _commit_iso_date(branch, f"tasks/{task_id}/REVIEW.md")
+        return None
+    review_ts, baseline_source = _reviewer_verdict_baseline(conn, task_id, branch)
     if review_ts is None:
-        return False
+        review_ts = _commit_iso_date(branch, f"tasks/{task_id}/REVIEW.md")
+        baseline_source = "последний коммит REVIEW.md"
+    if review_ts is None:
+        return None
     code_ts = _latest_developer_commit_iso_date(t["branch"], task_id)
-    if code_ts is None:
-        return False
-    if code_ts > review_ts:
-        return False
+    if code_ts is not None and code_ts > review_ts:
+        return None
+    ran, _detail = auto._role_step_since_state_entry(conn, task_id, "in_dev",
+                                                      "developer")
+    if ran and _detail is not None:
+        return None
+    code_ts_text = code_ts.isoformat() if code_ts is not None else "нет коммитов"
     detail = (f"замечания ревью не отработаны: нет шага developer после "
-              f"итерации {meta.get('iteration', '—')}")
-    store.journal(conn, task_id, "fsm", _REWORK_REFUSAL_ACTION, detail)
-    print(f"[{task_id}] переход отклонён: {detail}")
-    print(f"  дальше: почини код (не спорь с ревью втихую) и повтори "
-          f"artel.py advance {task_id}")
-    return True
+              f"итерации {meta.get('iteration', '—')} (опорное время "
+              f"{review_ts.isoformat()} — {baseline_source}; последний "
+              f"коммит developer {code_ts_text})")
+    hint = (f"почини код (не спорь с ревью втихую) и повтори "
+           f"artel.py advance {task_id}")
+    return GateRefusal(_REWORK_REFUSAL_ACTION, detail, hint)
+
+
+def _review_rework_gate_refuses(conn, task_id: str, t, branch: str) -> bool:
+    """Сохранённая публичная обёртка (тесты
+    `tests/test_fsm_review_rework_gate.py` зовут её напрямую и читают
+    журнал/stdout) — тот же единственный гейт `_review_rework_gate`,
+    применённый через каркас `_run_gates`."""
+    return _run_gates(conn, task_id,
+                      [lambda: _review_rework_gate(conn, task_id, t, branch)])
+
+
+def _in_dev_plan_escalate(conn, task_id: str, tdir, plan_text: str,
+                          state: str) -> bool:
+    """PLAN.md status: escalate (01M1R8B3ZKXQT0Z0G6QQQDV906, требование 6) —
+    тот же канал, что несёт REVIEW.md (`_review_escalate`); до этой задачи
+    `in_dev` понимал только `ready`/`approved`, любой другой статус (в т.ч.
+    escalate) падал в «PLAN.md не ready — разработчик ещё работает», и
+    `auto` продолжал звать `developer` заново вместо остановки на
+    эскалации (регрессия №11, симптом 2)."""
+    answer_baseline = fsm._answer_baseline_or_refuse(conn, task_id, tdir)
+    if answer_baseline is None:
+        return False
+    store.update_task(conn, task_id, answer_baseline=answer_baseline)
+    escalation = guard.section_body(plan_text, guard.ESCALATION_SECTION).strip()
+    detail = (f"эскалация от разработчика: {escalation}" if escalation
+              else "эскалация от разработчика")
+    store.set_state(conn, task_id, "escalated", "fsm",
+                    expected_state=state, detail=detail)
+    print(f"[{task_id}] эскалация разработчика: {detail}")
+    return False
+
+
+def _acceptance_lock_refuses(conn, task_id: str, t, branch: str,
+                             foreign: bool) -> bool:
+    """Лок `acceptance_tests/` на `in_dev -> review` (требование 5,
+    SPEC T023-семьи): планка, залоченная `tests_writing`
+    (`tests_locked_sha`), не имеет права измениться после лока — спор с
+    тестом решается эскалацией, не правкой. `locked` — sha АРТЕФАКТНОЙ
+    ВЕТКИ пульта (`config.ROOT`, настоящий git) на момент лока, когда
+    `foreign` (A7, требование 2 — единая логика для ЛЮБОГО target, теперь
+    всегда True) — сверяется ТАМ ЖЕ против текущей головы ТОЙ ЖЕ ветки
+    (`branch`), не «HEAD» рабочего дерева (чужой чекаут не должен
+    сверять лок с чужой веткой вместо своей). Не-foreign (сегодня
+    недостижимо после генерализации self — песочница без git) — прежнее
+    поведение: сверка по "HEAD" рабочего дерева main.
+
+    `False` — лока нет вовсе либо он не нарушен."""
+    locked = t["tests_locked_sha"]
+    if not locked:
+        return False
+    lock_ref = branch if foreign else "HEAD"
+    names = gitcmd.diff_names(locked, lock_ref, f"tasks/{task_id}/acceptance_tests")
+    if names is None:
+        # git не ответил (недостижимый sha после rebase/squash, сбой
+        # команды) — fail-closed тем же принципом, что и
+        # fixation.check_integrity() при неответившем git (ADR-0002).
+        detail = (f"лок acceptance_tests/ не проверен: git не "
+                  f"ответил на sha {locked} — сверка невозможна")
+        store.journal(conn, task_id, "fsm",
+                      "переход отклонён: лок приёмочных тестов", detail)
+        print(f"[{task_id}] переход отклонён: {detail}")
+        print(f"  дальше: разберись, почему git не отвечает на "
+              f"tests_locked_sha={locked}, и повтори "
+              f"artel.py advance {task_id}")
+        return True
+    if names:
+        # Разница только по файлам, игнорируемым `.gitignore` пульта
+        # (SPEC 01M1KVG3KSCY47HWXWF5HM0E76, требование 3, AC-4) — не
+        # спор с локом, тот же критерий, что у
+        # `checkpoint._commit_external_step_artifacts`.
+        ignored = gitcmd.check_ignore(names)
+        if ignored is None:
+            detail = (f"лок acceptance_tests/ не проверен: git не "
+                      f"ответил на проверку .gitignore — сверка "
+                      f"невозможна")
+            store.journal(conn, task_id, "fsm",
+                          "переход отклонён: лок приёмочных тестов", detail)
+            print(f"[{task_id}] переход отклонён: {detail}")
+            print(f"  дальше: разберись, почему git не отвечает на "
+                  f"check-ignore, и повтори artel.py advance "
+                  f"{task_id}")
+            return True
+        names = [n for n in names if n not in ignored]
+    if names:
+        detail = (f"acceptance_tests/ изменены после лока "
+                  f"(sha {locked}) — спор с тестом = эскалация, "
+                  f"не правка")
+        store.journal(conn, task_id, "fsm",
+                      "переход отклонён: лок приёмочных тестов", detail)
+        print(f"[{task_id}] переход отклонён: {detail}")
+        print(f"  дальше: верни acceptance_tests/ как было, "
+              f"либо эскалируй разногласие Оператору")
+        return True
+    return False
+
+
+def _acceptance_run_refuses(conn, task_id: str, t, tdir, target: str,
+                            branch: str) -> bool:
+    """Прогон приёмки после подтяжки (SPEC T023, требование 6; ADR-0015,
+    требование 2 — переехал с `in_dev -> review` на `in_dev -> verifying`,
+    вместе с остальными шестью рубежами того же перехода): красный
+    acceptance-тест чинит код разработчик, не переписывает тест (тесты
+    залочены — см. `_acceptance_lock_refuses` выше). Не через `_run_gates`
+    (PLAN «Подход») — `acc_tdir` нужен ПОСЛЕ прохода для
+    `acceptance.summary`, пересчитывать его ценой повторного
+    `acceptance.materialize_from_branch` не нужно, а печать здесь — три
+    строки (сообщение, сырой `tail`, подсказка), не формат
+    «сообщение+подсказка» остальных гейтов.
+
+    SPEC T045, побочная находка: `tasks/<id>/acceptance_tests` читается
+    из worktree задачи, если он заведён и стоит на своей ветке; иначе —
+    прежний путь с диска главной копии. Внешний target (SPEC T094,
+    требование 10): живого worktree нет вовсе — `acceptance_tests/`
+    живёт только в артефактной ветке пульта (`branch` уже резолвлен),
+    материализуется НА МЕСТЕ в workspace target'а (SPEC
+    01M1RNZ6V7TTTTYAHBMF8JBQQS, требование 1-2, AC-1/AC-2/AC-5).
+
+    `True` — переход отклонён (планка красная)."""
+    acc_tdir = tdir
+    run_cwd = config.ROOT
+    if target != config.DEFAULT_TARGET:
+        run_cwd = config.PROJECTS / target / "workspace"
+        run_cwd.mkdir(parents=True, exist_ok=True)
+        acc_tdir = acceptance.materialize_from_branch(task_id, branch, run_cwd)
+    elif workspace.on_task_branch(task_id, t["branch"]) is True:
+        run_cwd = workspace.path(task_id)
+        acc_tdir = run_cwd / "tasks" / task_id
+    green, tail = acceptance.run(acc_tdir, code_root=run_cwd)
+    # Fingerprint окружения (SPEC T101, требование 4б, AC-5) — часть
+    # исхода прогона приёмочных тестов, значение поля `detail`
+    # существующего журнального события, без новой таблицы/колонки.
+    fingerprint = agent_log.environment_fingerprint()
+    if not green:
+        detail = f"acceptance_tests красные:\n{tail}\nокружение: {fingerprint}"
+        store.journal(conn, task_id, "fsm",
+                      "переход отклонён: приёмочные тесты", detail)
+        print(f"[{task_id}] переход отклонён: приёмочные тесты красные")
+        print(tail)
+        print(f"  дальше: почини код (не тест) и повтори "
+              f"artel.py advance {task_id}")
+        return True
+    card = acceptance.summary(acc_tdir, branch=t["branch"])
+    store.journal(conn, task_id, "fsm", "приёмочные тесты пройдены",
+                  f"{card}\nокружение: {fingerprint}")
+    print(f"[{task_id}] {card}")
+    return False
 
 
 def in_dev(conn, task_id: str, t, tdir, target: str, state: str) -> bool:
-    # разработчик закончил: PLAN ready и ветка запушена -> в ревью
-    #
-    # Рабочее дерево точно на чужой ветке-источнике `tasks/<id>/` (SPEC
-    # T031; T094 требование 10) — PLAN.md читается С НЕЁ (иначе гейт
-    # «PLAN.md не ready» молча держит переход и на чужом чекауте нечего
-    # проверять дальше — без этого лок ниже никогда не достигается со
-    # стороны AC-3); иначе прежний путь через диск, не тронутый T031.
-    # Чтение — общий узел `_read_branch_text_or_refuse` (T047), тот же
-    # приём теперь и у SPEC.md/REVIEW.md выше.
+    # Разработчик закончил: PLAN ready и ветка запушена -> в verifying
+    # (ADR-0015, требования 1-2: CI подтянутой головы проверяется ДО
+    # ревьювера, не после — все семь рубежей этого перехода стоят здесь
+    # целиком, ревью их повторно не звонит). PLAN.md читается С ВЕТКИ
+    # задачи (SPEC T031/T094 требование 10), тем же приёмом
+    # `_read_branch_text_or_refuse` (T047), что и SPEC.md/REVIEW.md.
     branch, foreign = artifact_source.resolve(conn, task_id)
-    plan_text = None
     if foreign:
         plan_text = fsm._read_branch_text_or_refuse(conn, task_id, branch,
                                                      "PLAN.md")
         if plan_text is None:
             return False
-        plan_meta = yamlmini.frontmatter(plan_text) or {}
     else:
         plan_text = (tdir / "PLAN.md").read_text(encoding="utf-8")
-        plan_meta = yamlmini.frontmatter(plan_text) or {}
+    plan_meta = yamlmini.frontmatter(plan_text) or {}
     status = plan_meta.get("status")
-    if status in ("ready", "approved", "escalate"):
-        if fsm._dirty_refuses(conn, task_id, target, "PLAN.md"):
-            return False
-        if fsm.guard_refuses(conn, task_id, tdir / "PLAN.md", text=plan_text):
-            return True
-        if status == "escalate":
-            # PLAN.md status: escalate (01M1R8B3ZKXQT0Z0G6QQQDV906,
-            # требование 6) — тот же канал, что уже несёт REVIEW.md
-            # (`review()` выше, ветка `elif status == "escalate":`), для
-            # PLAN.md добавленный этой задачей: `in_dev` до сих пор понимал
-            # только `ready`/`approved`, любой другой статус (в т.ч.
-            # escalate) падал в «PLAN.md не ready — разработчик ещё
-            # работает», и `auto` продолжал звать `developer` заново
-            # вместо остановки на эскалации (регрессия №11, симптом 2).
-            answer_baseline = fsm._answer_baseline_or_refuse(conn, task_id, tdir)
-            if answer_baseline is None:
-                return False
-            store.update_task(conn, task_id, answer_baseline=answer_baseline)
-            escalation = guard.section_body(
-                plan_text, guard.ESCALATION_SECTION).strip()
-            detail = (f"эскалация от разработчика: {escalation}" if escalation
-                      else "эскалация от разработчика")
-            store.set_state(conn, task_id, "escalated", "fsm",
-                            expected_state=state, detail=detail)
-            print(f"[{task_id}] эскалация разработчика: {detail}")
-            return False
-        locked = t["tests_locked_sha"]
-        if locked:
-            # `locked` (`tests_locked_sha`) — sha АРТЕФАКТНОЙ ВЕТКИ пульта
-            # (`config.ROOT`, настоящий git) на момент лока, когда
-            # `foreign` (`tests_writing`, A7 требование 2 — единая логика
-            # для ЛЮБОГО target, включая артель, теперь всегда True) —
-            # сверяется ТАМ ЖЕ, в `config.ROOT`, против текущей головы
-            # ТОЙ ЖЕ ветки (`branch`), не «HEAD» рабочего дерева (чужой
-            # чекаут не должен сверять лок с чужой веткой вместо своей).
-            # Не-foreign (сегодня недостижимо после генерализации self —
-            # песочница без git) — прежнее поведение: `locked` из
-            # `fixed_sha`, сверка по "HEAD" рабочего дерева main.
-            lock_ref = branch if foreign else "HEAD"
-            names = gitcmd.diff_names(
-                locked, lock_ref, f"tasks/{task_id}/acceptance_tests")
-            if names is None:
-                # git не ответил (недостижимый sha после rebase/squash,
-                # сбой команды) — сверять нечего, но это не «нечего
-                # сверять как задумано»: fail-closed тем же принципом,
-                # что и fixation.check_integrity() при неответившем git
-                # (ADR-0002, «неизвестный статус — это нельзя»).
-                detail = (f"лок acceptance_tests/ не проверен: git не "
-                          f"ответил на sha {locked} — сверка невозможна")
-                store.journal(conn, task_id, "fsm",
-                              "переход отклонён: лок приёмочных тестов",
-                              detail)
-                print(f"[{task_id}] переход отклонён: {detail}")
-                print(f"  дальше: разберись, почему git не отвечает на "
-                      f"tests_locked_sha={locked}, и повтори "
-                      f"artel.py advance {task_id}")
-                return False
-            if names:
-                # Разница только по файлам, игнорируемым `.gitignore`
-                # пульта (SPEC 01M1KVG3KSCY47HWXWF5HM0E76, требование 3,
-                # AC-4) — не спор с локом, тот же критерий, что у
-                # `checkpoint._commit_external_step_artifacts`.
-                ignored = gitcmd.check_ignore(names)
-                if ignored is None:
-                    detail = (f"лок acceptance_tests/ не проверен: git не "
-                              f"ответил на проверку .gitignore — сверка "
-                              f"невозможна")
-                    store.journal(conn, task_id, "fsm",
-                                  "переход отклонён: лок приёмочных тестов",
-                                  detail)
-                    print(f"[{task_id}] переход отклонён: {detail}")
-                    print(f"  дальше: разберись, почему git не отвечает на "
-                          f"check-ignore, и повтори artel.py advance "
-                          f"{task_id}")
-                    return False
-                names = [n for n in names if n not in ignored]
-            if names:
-                detail = (f"acceptance_tests/ изменены после лока "
-                          f"(sha {locked}) — спор с тестом = эскалация, "
-                          f"не правка")
-                store.journal(conn, task_id, "fsm",
-                              "переход отклонён: лок приёмочных тестов",
-                              detail)
-                print(f"[{task_id}] переход отклонён: {detail}")
-                print(f"  дальше: верни acceptance_tests/ как было, "
-                      f"либо эскалируй разногласие Оператору")
-                return False
-        # Сверка свежести ветки до гейта (SPEC T051, требования 1, 4):
-        # последний шаг перед самим переходом — отставшая ветка либо
-        # подтягивается и проходит приёмку, либо эскалирует и возврата
-        # уже не будет.
-        if fsm._pull_main_or_escalate(conn, task_id, t, state) in (
-                "escalated", "refused"):
-            return False
-        if _capacity_gate_refuses(conn, task_id, t, state):
-            return False
-        if _zones_gate_refuses(conn, task_id, t, branch, plan_text):
-            return False
-        if _review_rework_gate_refuses(conn, task_id, t, branch):
-            return False
-        store.set_state(conn, task_id, "review", "fsm",
-                        expected_state=state, detail="MR готов — прогон ревьювера")
-    else:
+    if status not in ("ready", "approved", "escalate"):
         print(f"[{task_id}] PLAN.md не ready — разработчик ещё работает")
+        return False
+    if fsm._dirty_refuses(conn, task_id, target, "PLAN.md"):
+        return False
+    if fsm.guard_refuses(conn, task_id, tdir / "PLAN.md", text=plan_text):
+        return True
+    if status == "escalate":
+        return _in_dev_plan_escalate(conn, task_id, tdir, plan_text, state)
+    if _acceptance_lock_refuses(conn, task_id, t, branch, foreign):
+        return False
+    # Сверка свежести ветки до гейта (SPEC T051, требования 1, 4).
+    if fsm._pull_main_or_escalate(conn, task_id, t, state) in (
+            "escalated", "refused"):
+        return False
+    # Порядок и обёртки — прежние, зафиксированные R2 (01M1TKNXX5YN5KT4WHG4T
+    # 44JWV, AC-5/AC-6): каждый гейт вызывается через свою «сохранённую
+    # публичную обёртку» (`_xxx_gate_refuses`) отдельным вызовом, не одним
+    # списком через `_run_gates` — обёртки остаются наблюдаемой единицей
+    # снаружи (тесты `tests/test_zones_gate.py`/`test_capacity_gate.py`/
+    # `test_fsm_review_rework_gate.py` зовут их напрямую), а поведение
+    # (журнал/печать/остановка на первом отказе) не меняется — каждая
+    # обёртка сама оборачивает свой единственный гейт `_run_gates`.
+    if _capacity_gate_refuses(conn, task_id, t, state):
+        return False
+    if _zones_gate_refuses(conn, task_id, t, branch, plan_text):
+        return False
+    if _review_rework_gate_refuses(conn, task_id, t, branch):
+        return False
+    # Сверка головы на origin (ADR-0015, требование 2) — не для канареечной
+    # задачи (SPEC 01M1NEEWH5K1XPFRDGRMPYSBXJ, требование 11/AC-11): её
+    # `verifying` не ждёт CI и не читает origin (`canary._kill_at_verifying`
+    # убивает задачу сразу по входу) — push на origin-заглушку
+    # (`canary.ORIGIN_STUB_URL`) гарантированно проваливается по
+    # построению, не по сбою, тем же исключением, что раньше стояло на
+    # входе `review()`.
+    if not t["is_canary"]:
+        if _run_gates(conn, task_id, [lambda: _origin_push_gate(conn, task_id, t)]):
+            return False
+    if _acceptance_run_refuses(conn, task_id, t, tdir, target, branch):
+        return False
+    store.update_task(conn, task_id, verifying_attempts=0)
+    store.set_state(conn, task_id, "verifying", "fsm",
+                    expected_state=state, detail="MR готов — жду зелёного CI ветки")
     return False
