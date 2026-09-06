@@ -1,5 +1,5 @@
 ---
-built_at_sha: ea0bba682986c75a56a608d5d0832e4121919e93
+built_at_sha: c4956dd5744d6e4e166a999c36f48352786265d8
 ---
 
 # Codebase-map пульта
@@ -26,7 +26,7 @@ built_at_sha: ea0bba682986c75a56a608d5d0832e4121919e93
 - `run_full_suite`
 - `summary`
 
-**Импортирует:** `orchestrator/config.py`, `orchestrator/gitcmd.py`, `scripts/guard.py`
+**Импортирует:** `orchestrator/ci.py`, `orchestrator/config.py`, `orchestrator/gitcmd.py`, `scripts/guard.py`
 
 **Импортируется:** `orchestrator/amend.py`, `orchestrator/fsm_advance.py`, `orchestrator/fsm_autogate.py`, `orchestrator/pull.py`, `tests/test_acceptance.py`, `tests/test_acceptance_tests_flow.py`, `tests/test_branch_freshness_gate.py`, `tests/test_fsm_autogate.py`, `tests/test_fsm_map_conflict_autoresolve.py`, `tests/test_pull.py`
 
@@ -260,7 +260,7 @@ built_at_sha: ea0bba682986c75a56a608d5d0832e4121919e93
 
 **Импортирует:** `orchestrator/config.py`, `orchestrator/gitcmd.py`
 
-**Импортируется:** `orchestrator/auto.py`, `orchestrator/fsm_advance.py`, `orchestrator/fsm_merge_gate.py`, `orchestrator/github_adapter.py`, `tests/test_auto_cycle.py`, `tests/test_ci_status.py`, `tests/test_ci_status_kind_gate.py`, `tests/test_fsm_merge_gate_done_snapshot.py`, `tests/test_invariants.py`, `tests/test_merge_gate_ci_wait.py`, `tests/test_verifying_ceiling.py`
+**Импортируется:** `orchestrator/acceptance.py`, `orchestrator/auto.py`, `orchestrator/fsm_advance.py`, `orchestrator/fsm_autogate.py`, `orchestrator/fsm_merge_gate.py`, `orchestrator/github_adapter.py`, `tests/test_acceptance.py`, `tests/test_auto_cycle.py`, `tests/test_ci_status.py`, `tests/test_ci_status_kind_gate.py`, `tests/test_fsm_autogate.py`, `tests/test_fsm_merge_gate_done_snapshot.py`, `tests/test_invariants.py`, `tests/test_merge_gate_ci_wait.py`, `tests/test_verifying_ceiling.py`
 
 ## orchestrator/cleanup.py
 
@@ -330,6 +330,7 @@ built_at_sha: ea0bba682986c75a56a608d5d0832e4121919e93
 - `check_git_identity`
 - `check_hung_test_runs`
 - `check_leases`
+- `check_map_growth`
 - `check_merge_lock`
 - `check_orphans`
 - `check_pending_snapshots`
@@ -432,7 +433,7 @@ built_at_sha: ea0bba682986c75a56a608d5d0832e4121919e93
 
 **Публичные функции:** (нет)
 
-**Импортирует:** `orchestrator/acceptance.py`, `orchestrator/artifact_source.py`, `orchestrator/budget.py`, `orchestrator/fixation.py`, `orchestrator/gates.py`, `orchestrator/gitcmd.py`, `orchestrator/store.py`, `orchestrator/workspace.py`, `scripts/guard.py`
+**Импортирует:** `orchestrator/acceptance.py`, `orchestrator/artifact_source.py`, `orchestrator/budget.py`, `orchestrator/ci.py`, `orchestrator/fixation.py`, `orchestrator/gates.py`, `orchestrator/gitcmd.py`, `orchestrator/store.py`, `orchestrator/workspace.py`, `scripts/guard.py`
 
 **Импортируется:** `orchestrator/fsm_advance.py`, `tests/test_fsm_autogate.py`, `tests/test_git_fixation.py`
 
@@ -452,7 +453,7 @@ built_at_sha: ea0bba682986c75a56a608d5d0832e4121919e93
 
 **Публичные функции:** (нет)
 
-**Импортирует:** `orchestrator/alerts.py`, `orchestrator/config.py`, `orchestrator/gitcmd.py`, `orchestrator/retro.py`, `orchestrator/store.py`
+**Импортирует:** `orchestrator/alerts.py`, `orchestrator/config.py`, `orchestrator/gitcmd.py`, `orchestrator/retro.py`, `orchestrator/store.py`, `scripts/codebase_map.py`
 
 **Импортируется:** `orchestrator/fsm_merge_gate.py`, `tests/test_fsm_map_regen.py`, `tests/test_fsm_retro.py`
 
@@ -982,6 +983,7 @@ built_at_sha: ea0bba682986c75a56a608d5d0832e4121919e93
 - `extract_purpose`
 - `git_head_sha`
 - `main`
+- `map_stats`
 - `module_dotted_name`
 - `parse_module`
 - `project_for_brief`
@@ -990,7 +992,7 @@ built_at_sha: ea0bba682986c75a56a608d5d0832e4121919e93
 
 **Импортирует:** —
 
-**Импортируется:** `orchestrator/brief.py`, `tests/test_codebase_map.py`
+**Импортируется:** `orchestrator/brief.py`, `orchestrator/fsm_postmerge.py`, `tests/test_codebase_map.py`
 
 ## scripts/guard.py
 
@@ -1001,6 +1003,7 @@ built_at_sha: ea0bba682986c75a56a608d5d0832e4121919e93
 - `basic_frontmatter_errors`
 - `check`
 - `check_content`
+- `ci_marker_wording_ok`
 - `count_test_methods`
 - `escalation_status_errors`
 - `has_redness_marker`
@@ -1087,7 +1090,7 @@ built_at_sha: ea0bba682986c75a56a608d5d0832e4121919e93
 
 **Публичные функции:** (нет)
 
-**Импортирует:** `orchestrator/acceptance.py`, `orchestrator/config.py`
+**Импортирует:** `orchestrator/acceptance.py`, `orchestrator/ci.py`, `orchestrator/config.py`
 
 **Импортируется:** —
 
@@ -1447,7 +1450,7 @@ built_at_sha: ea0bba682986c75a56a608d5d0832e4121919e93
 
 **Публичные функции:** (нет)
 
-**Импортирует:** `orchestrator/acceptance.py`, `orchestrator/artifact_source.py`, `orchestrator/budget.py`, `orchestrator/fsm_autogate.py`, `orchestrator/gitcmd.py`, `orchestrator/workspace.py`, `scripts/guard.py`
+**Импортирует:** `orchestrator/acceptance.py`, `orchestrator/artifact_source.py`, `orchestrator/budget.py`, `orchestrator/ci.py`, `orchestrator/fsm_autogate.py`, `orchestrator/gitcmd.py`, `orchestrator/workspace.py`, `scripts/guard.py`
 
 **Импортируется:** —
 
