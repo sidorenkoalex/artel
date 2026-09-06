@@ -65,7 +65,11 @@ class CheckWaveBreakerFailureTest(WaveBreakerTestBase):
 
     def test_three_distinct_tasks_reach_threshold(self):
         """Три разные задачи класса 1б — алерт заводится, называет класс
-        и число задач."""
+        и число задач.
+
+        Ловит мутацию: `>=` заменено на `>`, либо класс/число задач не
+        подставлены в текст сообщения — тогда алерт не откроется на ровно
+        трёх задачах, либо в тексте не будет «1б» или «3»."""
         for i in range(3):
             task = f"T00{i}"
             self.make_task(task)
@@ -166,7 +170,11 @@ class CheckWaveBreakerFailureTest(WaveBreakerTestBase):
     def test_non_transient_class_is_ignored(self):
         """«Обрыв потока»/session_limit не входят в связку
         `TRANSIENT_SYSTEM_CLASSES` — вызов с ними не считает и не заводит
-        алерт, даже если журнал уже несёт три задачи такого класса."""
+        алерт, даже если журнал уже несёт три задачи такого класса.
+
+        Ловит мутацию: фильтр по `TRANSIENT_SYSTEM_CLASSES` снят или
+        `stream_broken` ошибочно включён в связку — тогда три задачи
+        этого класса подняли бы алерт наравне с 1а/1б."""
         for i in range(3):
             task = f"T00{i}"
             self.make_task(task)
@@ -179,7 +187,11 @@ class CheckWaveBreakerFailureTest(WaveBreakerTestBase):
 
     def test_none_failure_class_is_ignored(self):
         """`failure_class=None` (текст попытки не распознан классификатором)
-        — вызов не падает и не заводит алерт."""
+        — вызов не падает и не заводит алерт.
+
+        Ловит мутацию: убрана ранняя проверка на `None` — тогда обращение
+        к `CLASS_LABELS[None]`/`TRANSIENT_SYSTEM_CLASSES` упадёт
+        исключением либо ошибочно откроет алерт."""
         opened = alerts.check_wave_breaker_failure(store.db(), None)
 
         self.assertFalse(opened)
@@ -211,7 +223,12 @@ class CheckWaveBreakerFailureTest(WaveBreakerTestBase):
 
     def test_message_names_the_configured_window_in_minutes(self):
         """Текст алерта называет окно в минутах, посчитанных из
-        `config.WAVE_BREAKER_WINDOW_SEC`, не зашитое число."""
+        `config.WAVE_BREAKER_WINDOW_SEC`, не зашитое число.
+
+        Ловит мутацию: минуты в сообщении зашиты константой (например,
+        15) вместо вычисления из `config.WAVE_BREAKER_WINDOW_SEC` —
+        тогда при окне 120 сек (2 минуты) в тексте осталось бы «15»,
+        не «2»."""
         from unittest import mock
         with mock.patch.object(config, "WAVE_BREAKER_WINDOW_SEC", 120):
             for i in range(3):
@@ -228,6 +245,13 @@ class CheckWaveBreakerFailureTest(WaveBreakerTestBase):
 class CheckWaveBreakerTimeoutTest(WaveBreakerTestBase):
 
     def test_three_distinct_timeouts_raise_incident_naming_timeout(self):
+        """Три разные задачи с таймаутом шага — алерт заводится, сообщение
+        называет класс «таймаут».
+
+        Ловит мутацию: класс «таймаут шага» не выделен отдельно от
+        `check_wave_breaker_failure`, либо текст сообщения не называет
+        таймаут — тогда `assertIn("таймаут", ...)` не пройдёт, либо алерт
+        не откроется на трёх задачах."""
         for i in range(3):
             task = f"T00{i}"
             self.make_task(task)
@@ -241,6 +265,11 @@ class CheckWaveBreakerTimeoutTest(WaveBreakerTestBase):
         self.assertIn("таймаут", found[0]["message"].lower())
 
     def test_two_distinct_timeouts_below_threshold_no_alert(self):
+        """Две разные задачи с таймаутом — порог не достигнут, алерт не
+        заводится.
+
+        Ловит мутацию: порог занижен или сравнение `>=` заменено на `>`
+        — тогда алерт открылся бы уже на двух задачах."""
         for i in range(2):
             task = f"T00{i}"
             self.make_task(task)
@@ -252,7 +281,11 @@ class CheckWaveBreakerTimeoutTest(WaveBreakerTestBase):
 
     def test_timeout_is_not_summed_with_failure_classes(self):
         """Один таймаут плюс один отказ 1б у другой задачи — ни счётчик
-        таймаута, ни счётчик 1б не достигают порога сами по себе."""
+        таймаута, ни счётчик 1б не достигают порога сами по себе.
+
+        Ловит мутацию: счётчик таймаута и счётчик отказа делят один и тот
+        же ключ/множество задач — тогда таймаут и отказ 1б суммировались
+        бы в общий счёт и один из вызовов ошибочно вернул бы True."""
         timeout_task = "T-TIMEOUT"
         self.make_task(timeout_task)
         self.log_timeout(timeout_task)

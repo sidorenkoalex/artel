@@ -1,5 +1,5 @@
 ---
-built_at_sha: 10c291a04e0fd1d7ef15ee36d028853f0c4255b0
+built_at_sha: bdd91acbe0be3ed2ee470956219c47998b51a8d4
 ---
 
 # Codebase-map пульта
