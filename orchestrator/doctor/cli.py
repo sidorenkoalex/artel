@@ -50,6 +50,7 @@ def all_checks(conn) -> list[doctor.Check]:
     checks.append(doctor.check_root_pin())
     checks.append(doctor.check_role_log_pool_leak(conn))
     checks.append(doctor.check_canary_pool_drift())
+    checks.append(doctor.check_pending_notes())
     checks.extend(doctor.check_token_repo_scope())
     checks.extend(doctor.stack.check_stack())
     checks.extend(doctor.check_map_growth(conn))
