@@ -2,8 +2,8 @@
 task: 01M1SG9T962WJJ31S282GWM0EN
 type: review
 author_role: reviewer
-status: changes_requested
-iteration: 1
+status: approved
+iteration: 2
 schema_version: 4
 ---
 
@@ -11,38 +11,69 @@ schema_version: 4
 
 ## Соответствие SPEC
 
+Реализация подхода (`diff_base`/`diff_base_source`, переключение трёх
+потребителей) не менялась со времени итерации 1 — все девять
+требований остаются закрыты тем же кодом и приёмочными тестами. В
+итерации 2 проверялось только закрытие R1-F1/R1-F2; таблица ниже
+подтверждена повторным прогоном (не переоценена «на глаз»).
+
 | Требование | Вердикт | Комментарий |
 |---|---|---|
-| 1 (одна точка правды `gitcmd.diff_base`/`diff_base_source`, без сети) | OK | `orchestrator/gitcmd.py:229-279`; `_origin_main_ref_exists` — только `rev-parse --verify --quiet` локального ref, `diff_base` — `merge-base`, ни одной сетевой подкоманды. `None` на сбое обоих шагов. AC-1 закрыт `test_ac1_diff_base.py` (4 теста, все зелёные). |
-| 2 (гейт зон/ёмкости/полный diff пакета — новая база; инкремент не тронут) | OK | `_zones_gate_refuses` (fsm_advance.py:656), `_capacity_gate_refuses` (fsm_advance.py:476, 505) и `review_package` при `iteration==1` (review.py:246-258) берут `gitcmd.diff_base`; инкрементальная ветка (`base = prev_sha`) и вырожденный откат `iteration>1` без `prev_sha` (`base = config.MAIN_BRANCH`) не изменены — подтверждено `test_ac4_incremental_review_unchanged.py` (мок `diff_base` роняет `AssertionError` при вызове, тест зелёный). |
-| 3 (fail-closed на `None`) | OK | Оба гейта проверяют `if base is None: ... return True` до какого-либо `git diff`/`diff_names` (fsm_advance.py:477, 657). AC-5 закрыт двумя тестами (`test_ac5_fail_closed_on_none_base.py`). |
-| 4 (журнал называет sha и источник базы) | OK | Финальные сообщения отказа обоих гейтов зовут `gitcmd.diff_base_source` и вставляют его вместе с sha (fsm_advance.py:511-521, 706-711). AC-6 закрыт 4 тестами. |
-| 5 (внешний target вне объёма) | OK | В обоих гейтах проверка `store.task_target(...) != config.DEFAULT_TARGET` стоит раньше вызова `gitcmd.diff_base` (fsm_advance.py:469, 649) — внешний target не доходит до новой базы вовсе. Подтверждено `CapacityGateExternalTargetTest`/`ZonesGateExternalTargetSkipsTest` (обе зелёные) без правки. |
+| 1 (одна точка правды `gitcmd.diff_base`/`diff_base_source`, без сети) | OK | без изменений с итерации 1; `test_ac1_diff_base.py` зелёный (см. «Проверено исполнением»). |
+| 2 (гейт зон/ёмкости/полный diff пакета — новая база; инкремент не тронут) | OK | без изменений с итерации 1; `test_ac4_incremental_review_unchanged.py` зелёный. |
+| 3 (fail-closed на `None`) | OK | без изменений с итерации 1; `test_ac5_fail_closed_on_none_base.py` зелёный. |
+| 4 (журнал называет sha и источник базы) | OK | без изменений с итерации 1; `test_ac6_journal_names_base_source.py` зелёный. |
+| 5 (внешний target вне объёма) | OK | без изменений с итерации 1; тесты внешнего target зелёные без правки. |
+
+Диапазон реального изменения ветки за итерацию — `git diff main...HEAD`
+(6 файлов: `orchestrator/{fsm_advance,gitcmd,review}.py`,
+`tests/{test_review_package,test_zones_gate}.py`,
+`docs/codebase-map.md`) — совпадает с зонами задачи, out-of-zone файлов
+нет. Инкрементальный пакет (05a22d02...HEAD) показывает только
+`docs/adr/0015-ci-before-review.md` и `docs/operator-session.md` —
+это подтяжка main (коммит 3dda4bba, merge 05a22d02+fa6bec2c), оба файла
+уже существуют на main (коммит Оператора fa6bec2c) и не войдут в diff
+самой задачи при итоговом мерже; `git show --stat 3dda4bba` совпадает
+байт-в-байт с этим списком — подтяжка чистая, лишних правок в
+merge-коммите нет.
 
 ## Замечания
 
-- major — `tests/test_zones_gate.py:142-153` (`ZonesGateGitFailureTest.test_git_not_answering_diff_names_refuses`) — тест мокает `gitcmd.diff_names` на `None`, чтобы поймать мутацию «проверка `if files is None: ... return True` убрана» (докстринг теста). Но `_zones_gate_refuses` теперь ЗОВЁТ `gitcmd.diff_base(branch)` раньше `diff_names` (fsm_advance.py:656), а `TmpRootTest`-песочница этого файла не несёт настоящего git-репозитория — реальные `rev-parse`/`merge-base` внутри `diff_base` отвечают «not a git repository» и `diff_base` возвращает `None` ДО того, как выполнение вообще доходит до мокнутого `diff_names`. Проверено запуском теста изолированно: журнальное сообщение — «гейт зон: git не ответил на определение базы сравнения» (новая ветка `base is None`, fsm_advance.py:657-666), а не «...список файлов диффа» (старая ветка, которую тест должен ловить). Тест зелёный (обе фразы содержат подстроку «гейт зон», по которой бьёт `assertTrue(any(...))`), но фактически НЕ ловит заявленную мутацию — сними её проверку сегодня, и тест этого не заметит, потому что до неё уже не доходит. Тот же класс риска относится к любому будущему тесту `TmpRootTest`, бьющему по «git не ответил» именно на `diff_names`/`git diff` этих двух гейтов через мок отдельной `gitcmd`-функции, а не через `gitcmd.git` целиком (в `tests/test_capacity_gate.py` мокается `gitcmd.git` целиком, поэтому там `diff_base` съезжает на пустую базу, но реальный вызов `git diff` — намеренная точка сбоя теста — всё равно достигается и остаётся тем, что тест проверяет; в `test_zones_gate.py` иначе — мок стоит на уровне `gitcmd.diff_names`, до которого код теперь не доходит). Предложение: замокать также `gitcmd.diff_base` (например, `return_value="deadbeef"`) рядом с `gitcmd.diff_names=None` в этом тесте, чтобы выполнение реально достигало проверяемой строки.
-- minor — `orchestrator/review.py:319` — подсказка ревьюверу в инкрементальном пакете («если для оценки замечания недостаточно — посмотри полный diff ветки отдельно») называет буквально `git diff {config.MAIN_BRANCH}...{branch}` — тот же устаревший локальный `main`, из-за которого эта задача заведена (бэклог 05.09: чужие уже влитые коммиты раздувают diff). Ревьювер, последовавший этой подсказке дословно, получит ровно тот диф с шумом, который вся задача устраняет для самого пакета. Предложение: заменить литерал на команду через актуальную базу (`gitcmd.diff_base`-эквивалент) либо явно пометить, что это заведомо более широкий diff, чем даёт актуальная база.
+Замечаний нет — обе открытые записи реестра проверены исполнением и
+закрываются.
 
 ## Реестр замечаний
 
 | id | статус | файл/строка | суть | последствие | решение |
 |---|---|---|---|---|---|
-| R1-F1 | fixed | tests/test_zones_gate.py:142-165 | тест `test_git_not_answering_diff_names_refuses` не доходит до мокнутого `diff_names` — `diff_base` отказывает раньше в этой песочнице | тест даёт ложную уверенность: сломай `if files is None: return True`, тест не заметит | добавлен `mock.patch.object(gitcmd, "diff_base", return_value="deadbeef")` рядом с `diff_names=None` — выполнение теперь реально достигает проверяемой ветки `diff_names is None` (проверено изолированным прогоном: журнал называет «...список файлов диффа», не «...определение базы сравнения») |
-| R1-F2 | fixed | orchestrator/review.py:312-328 | подсказка ревьюверу для инкрементального пакета называет `git diff {config.MAIN_BRANCH}...{branch}` — устаревшую локальную базу | ревьювер, использовавший подсказку, получит diff с шумом чужих коммитов — тот самый класс проблем, который чинит эта задача | вызов `gitcmd.diff_base` здесь запрещён AC-4 (залоченный `test_ac4_incremental_review_unchanged.py` роняет `AssertionError` на любой вызов `diff_base` в инкрементальной ветке) — выбран второй вариант предложения ревью: команда-литерал `config.MAIN_BRANCH` оставлена, но подсказка явно называет несоответствие («диапазон от локального main, заведомо шире актуальной базы сравнения этой ветки — может содержать уже влитые чужие коммиты») |
+| R1-F1 | accepted | tests/test_zones_gate.py:142-165 | тест `test_git_not_answering_diff_names_refuses` не доходил до мокнутого `diff_names` — `diff_base` отказывал раньше в песочнице без git-репозитория | тест давал ложную уверенность | исправлено коммитом 05a22d02: добавлен `mock.patch.object(gitcmd, "diff_base", return_value="deadbeef")` рядом с `diff_names=None`. Проверено изолированным прогоном итерации 2: журнал отказа теперь называет «гейт зон: git не ответил на список файлов диффа (база deadbeef...task/t001-x)» — именно ветку `diff_names is None`, а не «...определение базы сравнения». Тест реально ловит заявленную мутацию. |
+| R1-F2 | accepted | orchestrator/review.py:312-328 | подсказка ревьюверу для инкрементального пакета называла устаревшую локальную базу `config.MAIN_BRANCH` без оговорки | ревьювер, использовавший подсказку дословно, получил бы diff с шумом чужих коммитов | исправлено коммитом 05a22d02: вызов `gitcmd.diff_base` в инкрементальной ветке остаётся запрещён AC-4 (тест `test_ac4_incremental_review_unchanged.py` роняет `AssertionError` при любом вызове `diff_base` здесь — прогнан повторно, зелёный), команда-литерал сохранена с явной оговоркой о несоответствии диапазона актуальной базе. Оговорка read-only, не меняет наблюдаемое поведение AC-4 — решение корректно. |
 
 ## Вердикт
 
-changes_requested — исправить R1-F1 (тест не ловит заявленную мутацию из-за нового порядка вызовов в `_zones_gate_refuses`) и R1-F2 (устаревшая подсказка в тексте пакета). Оба замечания локальны, без переделки подхода: сама реализация `diff_base`/`diff_base_source` и переключение трёх потребителей соответствуют SPEC и покрыты приёмочными тестами (AC-1..AC-8 зелёные, AC-9 обоснованно skip).
+approved — обе записи реестра итерации 1 закрыты (`accepted`), новых
+замечаний нет. Реестр не содержит записей со статусом, отличным от
+`accepted`.
 
 ## Проверено исполнением
 
-- `python3 -m unittest tests.test_zones_gate tests.test_capacity_gate tests.test_review_package -v` — 117 тестов, все зелёные (регрессия затронутых модулей не нарушена).
+- `python3 -m unittest tests.test_zones_gate tests.test_capacity_gate tests.test_review_package -v` — 117 тестов, все зелёные.
+- `python3 -m unittest tests.test_zones_gate.ZonesGateGitFailureTest.test_git_not_answering_diff_names_refuses -v` — зелёный; журнал отказа: «гейт зон: git не ответил на список файлов диффа (база deadbeef...task/t001-x) — сверка с зонами невозможна» — подтверждает закрытие R1-F1 (ветка `diff_names is None` реально достигнута, не ветка `diff_base is None`).
 - `python3 -m unittest discover -s tasks/01M1SG9T962WJJ31S282GWM0EN/acceptance_tests -v` — 21 тест, все зелёные (AC-1..AC-8 исполняемые, AC-9 legit skip — ci-covered класс).
-- `python3 -m unittest tests.test_zones_gate.ZonesGateGitFailureTest.test_git_not_answering_diff_names_refuses -v` — тест зелёный, но журнал отказа называет «git не ответил на определение базы сравнения» вместо ожидаемого «...список файлов диффа» — подтверждает R1-F1 (тест не бьёт по заявленной мутации).
-- `python3 scripts/codebase_map.py` — регенерация чистая: diff после regen отличается только строкой `built_at_sha` (не признак дефекта), содержимое совпадает с закоммиченным; откатил регенерированный файл (`git checkout -- docs/codebase-map.md`), рабочее дерево не изменено.
-- Сверка diff `tests/` (git diff --stat/полный diff из пакета) — новых ослаблений существующих ассертов не найдено, единственная правка (`tests/test_review_package.py::FakeGit`) только добавляет две новые ветки диспетчера под `rev-parse .../refs/remotes/origin/...` и `merge-base`, не трогая старые.
+- `python3 scripts/codebase_map.py` — regen чистый: diff после regen отличается только строкой `built_at_sha`, содержимое совпадает с закоммиченным; рабочее дерево восстановлено (`git checkout -- docs/codebase-map.md`).
+- `git show --stat 05a22d02...` — подтверждён состав фикса R1-F1/R1-F2 (3 файла: `orchestrator/review.py`, `tests/test_zones_gate.py`, `docs/codebase-map.md`), содержимое сверено построчно (`git show 05a22d02 -- tests/test_zones_gate.py orchestrator/review.py`).
+- `git show --stat 3dda4bba` и `git diff --stat main...HEAD` — подтверждено, что подтяжка main чистая (только два документных файла Оператора) и что фактический diff задачи (6 файлов) не выходит за зоны.
 
 ## Предложения системе
 
-- `tests/test_zones_gate.py` и `tests/test_capacity_gate.py` не были достроены под новый вызов `gitcmd.diff_base` внутри проверяемых функций (в отличие от `tests/test_review_package.py::FakeGit`, который разработчик обновил осознанно, см. PLAN.md шаг 4) — класс «добавил вызов git-примитива в середину проверяемой функции, забыл один из нескольких моков-потребителей» стоит держать в чек-листе разработчика при следующей правке `gitcmd.py`, раз уже сам разработчик независимо отметил родственную проблему («третий по счёту частный диспетчер git-заглушки») в PLAN.md, «Предложения системе».
+- Инкрементальный diff ревью-пакета (база — sha предыдущего вердикта)
+  в этой задаче совпал с коммитом, где сам фикс R1-F1/R1-F2 уже вошёл
+  В БАЗУ сравнения (05a22d02 — это и есть коммит фикса, и он же взят
+  как sha предыдущего вердикта), поэтому инкрементальный пакет итерации
+  2 не показал изменений по существу — пришлось поднимать `git show
+  05a22d02` отдельно, чтобы вообще увидеть код фикса. Общий класс уже
+  описан в skills/review-checklist.md («Инкрементальный diff пакета —
+  пустой не значит "без изменений"») — этот случай не пустой, но
+  вводящий в заблуждение по той же причине (sha предыдущего вердикта
+  указывает на коммит, СОДЕРЖАЩИЙ разбираемый фикс, а не предшествующий
+  ему); стоит явно упомянуть в скиле как отдельный подслучай.
