@@ -12,6 +12,7 @@
 import subprocess
 import sys
 import tempfile
+import tomllib
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -79,6 +80,25 @@ class ManifestConstantsTest(unittest.TestCase):
         for name in ("pytest", "pytest_timeout", "xdist"):
             self.assertIn(name, by_name)
             self.assertTrue(by_name[name].strip())
+
+    def test_per_test_timeout_matches_pyproject_toml(self):
+        """R1-F1 (REVIEW.md 01M1TKP6AAY4W8GDGZNA9R0JZT итерация 1):
+        `pyproject.toml` (`[tool.pytest.ini_options] timeout`) несёт
+        таймаут отдельного теста тем же числом, что
+        `stack.PER_TEST_TIMEOUT_SEC` — TOML не умеет читать константу
+        оттуда, оба места синхронизированы руками; без этого теста
+        комментарии рядом с обоими числами ссылались на защиту, которой
+        не существовало.
+
+        Ловит мутацию: `PER_TEST_TIMEOUT_SEC` меняется без правки
+        `timeout` в `pyproject.toml` (или наоборот) — `assertEqual`
+        откажет.
+        """
+        pyproject = Path(config.ROOT) / "pyproject.toml"
+        with pyproject.open("rb") as f:
+            data = tomllib.load(f)
+        configured_timeout = data["tool"]["pytest"]["ini_options"]["timeout"]
+        self.assertEqual(stack.PER_TEST_TIMEOUT_SEC, configured_timeout)
 
 
 class CheckStackTest(unittest.TestCase):
