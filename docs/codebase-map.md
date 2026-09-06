@@ -1,5 +1,5 @@
 ---
-built_at_sha: c3a519277faf88a4a2f59f24ff82437d1cd6cc02
+built_at_sha: 60a6778276d034e69ce8884c23a0444b9322a6bd
 ---
 
 # Codebase-map пульта
@@ -26,7 +26,7 @@ built_at_sha: c3a519277faf88a4a2f59f24ff82437d1cd6cc02
 - `run_full_suite`
 - `summary`
 
-**Импортирует:** `orchestrator/ci.py`, `orchestrator/config.py`, `orchestrator/gitcmd.py`, `scripts/guard.py`
+**Импортирует:** `orchestrator/ci.py`, `orchestrator/config.py`, `orchestrator/gitcmd.py`, `orchestrator/stack.py`, `scripts/guard.py`
 
 **Импортируется:** `orchestrator/amend.py`, `orchestrator/fsm_advance.py`, `orchestrator/fsm_autogate.py`, `orchestrator/pull.py`, `tests/test_acceptance.py`, `tests/test_acceptance_tests_flow.py`, `tests/test_branch_freshness_gate.py`, `tests/test_fsm_autogate.py`, `tests/test_fsm_map_conflict_autoresolve.py`, `tests/test_pull.py`
 
@@ -806,11 +806,12 @@ built_at_sha: c3a519277faf88a4a2f59f24ff82437d1cd6cc02
 
 **Публичные функции:**
 - `check_stack`
+- `pytest_python_executable`
 - `python_version_string`
 
 **Импортирует:** `orchestrator/config.py`
 
-**Импортируется:** `orchestrator/runner.py`, `orchestrator/version.py`, `scripts/stack_ci.py`, `tests/sandbox.py`, `tests/test_agent_prompt.py`, `tests/test_invariants.py`, `tests/test_review_freshness.py`, `tests/test_review_package.py`, `tests/test_stack.py`, `tests/test_stack_ci.py`
+**Импортируется:** `orchestrator/acceptance.py`, `orchestrator/runner.py`, `orchestrator/version.py`, `scripts/stack_ci.py`, `tests/sandbox.py`, `tests/test_agent_prompt.py`, `tests/test_invariants.py`, `tests/test_review_freshness.py`, `tests/test_review_package.py`, `tests/test_stack.py`, `tests/test_stack_ci.py`
 
 ## orchestrator/store.py
 
@@ -1068,7 +1069,7 @@ built_at_sha: c3a519277faf88a4a2f59f24ff82437d1cd6cc02
 
 **Импортирует:** `orchestrator/catalog.py`, `orchestrator/config.py`, `orchestrator/fsm.py`, `orchestrator/gitcmd.py`, `orchestrator/stack.py`, `orchestrator/store.py`, `orchestrator/workspace.py`
 
-**Импортируется:** `tests/test_acceptance_tests_flow.py`, `tests/test_advance_guard.py`, `tests/test_advance_refusal_history.py`, `tests/test_agent_failure.py`, `tests/test_agent_log.py`, `tests/test_agent_prompt.py`, `tests/test_alerts_wave_breaker.py`, `tests/test_amend.py`, `tests/test_analyst_role.py`, `tests/test_answer_branch_reads.py`, `tests/test_answer_gate.py`, `tests/test_artifact_branch_new_parent.py`, `tests/test_artifact_branch_push.py`, `tests/test_artifact_materialization.py`, `tests/test_auto_cycle.py`, `tests/test_auto_escalated_return_rework_gate.py`, `tests/test_branch_freshness_gate.py`, `tests/test_brief.py`, `tests/test_budget_live_lease_and_escalation.py`, `tests/test_canary.py`, `tests/test_capacity_gate.py`, `tests/test_cas_set_state.py`, `tests/test_catalog_new_race.py`, `tests/test_catalog_status_log.py`, `tests/test_checkpoint_external_step_artifacts.py`, `tests/test_cmd_approve_dispatch.py`, `tests/test_coldstart.py`, `tests/test_diff_not_collected_alerts.py`, `tests/test_doctor.py`, `tests/test_doctor_artifact_branch_ci.py`, `tests/test_doctor_artifact_branch_sync.py`, `tests/test_doctor_fix_ignored_artifacts.py`, `tests/test_done_branch_cleanup.py`, `tests/test_dry_run.py`, `tests/test_fsm_advance_gate_framework.py`, `tests/test_fsm_advance_gate_smoke.py`, `tests/test_fsm_branch_correct_status_reads.py`, `tests/test_fsm_draft_mr_reentry.py`, `tests/test_fsm_map_conflict_autoresolve.py`, `tests/test_fsm_map_regen.py`, `tests/test_fsm_merge_gate_done_snapshot.py`, `tests/test_fsm_retro.py`, `tests/test_fsm_review_rework_gate.py`, `tests/test_fsm_review_rework_sha_gate.py`, `tests/test_git_fixation.py`, `tests/test_gitcmd_branch_reads.py`, `tests/test_gitcmd_check_ignore.py`, `tests/test_guard_task_root_subdirectory.py`, `tests/test_invariants.py`, `tests/test_kill_cleanup.py`, `tests/test_lease.py`, `tests/test_lease_pgid_store.py`, `tests/test_merge_gate_ci_wait.py`, `tests/test_merge_lock.py`, `tests/test_multitarget.py`, `tests/test_multitarget_invariants.py`, `tests/test_notes.py`, `tests/test_parallel_limit.py`, `tests/test_pause.py`, `tests/test_pause_now.py`, `tests/test_program_spend_reseed.py`, `tests/test_prune.py`, `tests/test_pull.py`, `tests/test_release.py`, `tests/test_report.py`, `tests/test_retro.py`, `tests/test_review_freshness.py`, `tests/test_review_package.py`, `tests/test_sandbox.py`, `tests/test_spec_budget.py`, `tests/test_spent_estimate_store.py`, `tests/test_split_assessment_merge_gate.py`, `tests/test_stall_alerts.py`, `tests/test_step_cost.py`, `tests/test_store_db_connection_close.py`, `tests/test_store_journal.py`, `tests/test_task_id_prefix_regression.py`, `tests/test_workspace.py`, `tests/test_zone_lock.py`, `tests/test_zones_approve.py`, `tests/test_zones_gate.py`
+**Импортируется:** `tests/test_acceptance_tests_flow.py`, `tests/test_advance_guard.py`, `tests/test_advance_refusal_history.py`, `tests/test_agent_failure.py`, `tests/test_agent_log.py`, `tests/test_agent_prompt.py`, `tests/test_alerts_wave_breaker.py`, `tests/test_amend.py`, `tests/test_analyst_role.py`, `tests/test_answer_branch_reads.py`, `tests/test_answer_gate.py`, `tests/test_artifact_branch_new_parent.py`, `tests/test_artifact_branch_push.py`, `tests/test_artifact_materialization.py`, `tests/test_auto_cycle.py`, `tests/test_auto_escalated_return_rework_gate.py`, `tests/test_branch_freshness_gate.py`, `tests/test_brief.py`, `tests/test_budget_live_lease_and_escalation.py`, `tests/test_canary.py`, `tests/test_capacity_gate.py`, `tests/test_cas_set_state.py`, `tests/test_catalog_new_race.py`, `tests/test_catalog_status_log.py`, `tests/test_checkpoint_external_step_artifacts.py`, `tests/test_cmd_approve_dispatch.py`, `tests/test_coldstart.py`, `tests/test_diff_not_collected_alerts.py`, `tests/test_doctor.py`, `tests/test_doctor_artifact_branch_ci.py`, `tests/test_doctor_artifact_branch_sync.py`, `tests/test_doctor_fix_ignored_artifacts.py`, `tests/test_done_branch_cleanup.py`, `tests/test_dry_run.py`, `tests/test_fsm_advance_gate_framework.py`, `tests/test_fsm_advance_gate_smoke.py`, `tests/test_fsm_branch_correct_status_reads.py`, `tests/test_fsm_draft_mr_reentry.py`, `tests/test_fsm_map_conflict_autoresolve.py`, `tests/test_fsm_map_regen.py`, `tests/test_fsm_merge_gate_done_snapshot.py`, `tests/test_fsm_retro.py`, `tests/test_fsm_review_rework_gate.py`, `tests/test_fsm_review_rework_sha_gate.py`, `tests/test_git_fixation.py`, `tests/test_gitcmd_branch_reads.py`, `tests/test_gitcmd_check_ignore.py`, `tests/test_guard_task_root_subdirectory.py`, `tests/test_invariants.py`, `tests/test_kill_cleanup.py`, `tests/test_lease.py`, `tests/test_lease_pgid_store.py`, `tests/test_merge_gate_ci_wait.py`, `tests/test_merge_lock.py`, `tests/test_multitarget.py`, `tests/test_multitarget_invariants.py`, `tests/test_notes.py`, `tests/test_parallel_limit.py`, `tests/test_pause.py`, `tests/test_pause_now.py`, `tests/test_program_spend_reseed.py`, `tests/test_prune.py`, `tests/test_pull.py`, `tests/test_release.py`, `tests/test_report.py`, `tests/test_retro.py`, `tests/test_review_freshness.py`, `tests/test_review_package.py`, `tests/test_sandbox.py`, `tests/test_spec_budget.py`, `tests/test_spent_estimate_store.py`, `tests/test_split_assessment_merge_gate.py`, `tests/test_stack.py`, `tests/test_stall_alerts.py`, `tests/test_step_cost.py`, `tests/test_store_db_connection_close.py`, `tests/test_store_journal.py`, `tests/test_task_id_prefix_regression.py`, `tests/test_workspace.py`, `tests/test_zone_lock.py`, `tests/test_zones_approve.py`, `tests/test_zones_gate.py`
 
 ## tests/test_acceptance.py
 
@@ -2075,7 +2076,7 @@ built_at_sha: c3a519277faf88a4a2f59f24ff82437d1cd6cc02
 
 **Публичные функции:** (нет)
 
-**Импортирует:** `orchestrator/config.py`, `orchestrator/stack.py`
+**Импортирует:** `orchestrator/config.py`, `orchestrator/stack.py`, `tests/sandbox.py`
 
 **Импортируется:** —
 

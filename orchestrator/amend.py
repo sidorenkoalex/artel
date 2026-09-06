@@ -44,8 +44,15 @@ DEVALUATION_ALERT_SOURCE = "amend_tests.window_threshold"
 WINDOW_SIZE = 5
 WINDOW_THRESHOLD = 1
 
+# Итоговая строка pytest (SPEC 01M1TKP6AAY4W8GDGZNA9R0JZT, требование 2):
+# «N passed in Xs» / «M failed, N passed in Xs», в любом порядке категорий
+# (failed/passed/skipped/error/xfailed/xpassed/warning) через запятую,
+# завершается «in <секунды>s» — тем же местом, где pytest печатает сводку
+# независимо от порядка category-групп в конкретном прогоне.
 _RUN_SUMMARY = re.compile(
-    r"Ran \d+ tests? in [\d.]+s\s*\n+\s*(?:OK\b.*|FAILED\b[^\n]*)")
+    r"\d+ (?:passed|failed|error(?:s)?|skipped|xfailed|xpassed|warnings?)"
+    r"(?:, \d+ (?:passed|failed|error(?:s)?|skipped|xfailed|xpassed|warnings?))*"
+    r" in [\d.]+s")
 
 
 def cmd_amend_tests(task_id: str, reason: str | None,
@@ -171,11 +178,11 @@ def _artifact_tests_snapshot(task_id: str, rel_tests_dir: str) -> dict[str, byte
 
 
 def _run_summary(tail: str) -> str:
-    """Итоговая строка прогона unittest (`Ran N ... \\n\\n OK`/`FAILED`)
-    из хвоста вывода `acceptance.run` — для журнала (AC-11), не только
-    «прошло/не прошло» одним словом. Регулярка не найдена (вывод
-    truncated иначе, чем ожидается) — весь хвост как есть, без потери
-    диагностики."""
+    """Итоговая строка прогона pytest (`N passed in Xs`/`M failed, N
+    passed in Xs`) из хвоста вывода `acceptance.run` — для журнала
+    (AC-11), не только «прошло/не прошло» одним словом. Регулярка не
+    найдена (вывод truncated иначе, чем ожидается) — весь хвост как есть,
+    без потери диагностики."""
     match = _RUN_SUMMARY.search(tail)
     return match.group(0).strip() if match else tail.strip()
 

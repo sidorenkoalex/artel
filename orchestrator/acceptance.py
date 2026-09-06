@@ -13,21 +13,72 @@ from pathlib import Path
 
 from scripts import guard
 
-from . import ci, config, gitcmd
+from . import ci, config, gitcmd, stack
+
+
+def _pytest_command(*args: str) -> list[str]:
+    """Общая часть команды pytest обоих раннеров: интерпретатор venv
+    пульта (`stack.pytest_python_executable()` — не голый `"python3"`,
+    резолвящийся по PATH ВЫЗЫВАЮЩЕГО процесса, а не роли: гейты/
+    `amend-tests` пульт зовёт из собственного окружения, не из
+    `runner.role_env`, тот PATH только у роли — ANSWER-4, диагноз AC-7),
+    без кеша (требование 5), и ЯВНАЯ загрузка `pytest-timeout` по
+    каноническому имени точки входа `timeout` (не `pytest_timeout` — имя
+    импортируемого модуля: `-p pytest_timeout` заставляет pytest
+    импортировать его как отдельный плагин ДО разбора точек входа
+    setuptools, и последующая автозагрузка того же модуля под именем
+    `timeout` падает `ValueError: Plugin already registered under a
+    different name` — эмпирически найдено этим же прогоном). Явная
+    загрузка по имени `timeout` — тот же плагин, что и так подключился бы
+    автоматически (никакого эффекта, если он уже установлен), но при ЕГО
+    ОТСУТСТВИИ в интерпретаторе даёт громкий `ImportError`/красный
+    returncode вместо тихого пропуска таймаута отдельного теста."""
+    return [stack.pytest_python_executable(), "-m", "pytest", *args,
+            "-p", "no:cacheprovider", "-p", "timeout",
+            "-o", f"timeout={stack.PER_TEST_TIMEOUT_SEC}"]
+
+
+def _timeout_text(value: bytes | str | None) -> str:
+    """`subprocess.TimeoutExpired.stdout`/`.stderr` отдаёт `bytes` ДАЖЕ
+    при `text=True`, если процесс успел вывести хоть что-то до самого
+    таймаута (наблюдаемое поведение `subprocess.run`, не документированный
+    контракт `text=`) — с unittest discover это молчало (тест виснет
+    раньше первого вывода), pytest печатает заголовок сессии сразу и
+    обнажает несовпадение типов."""
+    if value is None:
+        return ""
+    return value.decode("utf-8", errors="replace") if isinstance(value, bytes) else value
 
 
 def run(tdir: Path, code_root: Path | None = None) -> tuple[bool, str]:
-    """(зелёно, хвост вывода) — детерминированный прогон unittest'ом с
-    `code_root`, равным рабочему каталогу кода задачи (SPEC
-    01M1RNZ6V7TTTTYAHBMF8JBQQS, требование 2, AC-2/AC-3; контракт имени
-    параметра — hotfix 88b38022, ADR-0013): планка, резолвящая
-    `orchestrator/` и через `__file__` (материализация
-    `materialize_from_branch` кладёт её по штатному пути
-    `tasks/<id>/acceptance_tests/` ИМЕННО этого каталога), и через
-    неявную вставку `cwd` в `sys.path`, которую делает `python3 -m
-    unittest discover`, обязаны видеть один и тот же код. `code_root=None`
-    (вызовы вне зоны этой задачи, например `orchestrator/amend.py`) —
-    прежнее поведение, `config.ROOT`.
+    """(зелёно, хвост вывода) — детерминированный прогон pytest'ом (SPEC
+    01M1TKP6AAY4W8GDGZNA9R0JZT, требование 1) с `code_root`, равным
+    рабочему каталогу кода задачи (SPEC 01M1RNZ6V7TTTTYAHBMF8JBQQS,
+    требование 2, AC-2/AC-3; контракт имени параметра — hotfix 88b38022,
+    ADR-0013): `cwd` прогона — единственный способ, которым pytest
+    находит и `orchestrator/`-код ветки задачи (материализация
+    `materialize_from_branch` кладёт планку по штатному пути
+    `tasks/<id>/acceptance_tests/` ИМЕННО этого каталога), и
+    `pyproject.toml` корня репозитория (таймаут отдельного теста,
+    требования 4/6) — pytest ищет конфигурацию, поднимаясь от `cwd`, тем
+    же приёмом, каким раньше unittest discover неявно вставлял `cwd` в
+    `sys.path`. `code_root=None` (вызовы вне зоны этой задачи, например
+    `orchestrator/amend.py`) — прежнее поведение, `config.ROOT`.
+
+    `-p no:cacheprovider` (требование 5) — `.pytest_cache/` не создаётся
+    вовсе, автокоммиту артефактов задачи (`checkpoint.py`) нечего
+    случайно подобрать.
+
+    `-o timeout=…` (требование 4, AC-7) передаёт таймаут отдельного теста
+    ЯВНО, не полагаясь на то, что pytest сам найдёт `pyproject.toml` по
+    `cwd`: планка задачи (`tests_dir`, `materialize_from_branch`) лежит
+    ВНЕ дерева `run_cwd`, и pytest определяет rootdir/inifile по общему
+    предку АРГУМЕНТОВ пути, а не по `cwd`, когда путь теста передан
+    отдельным аргументом (эмпирически подтверждено ANSWER-3.md — `cwd`
+    оказался кандидатом для поиска конфигурации НЕ во всех версиях
+    поведения, вопреки прежнему предположению; без явного `-o` таймаут
+    отдельного теста тихо не применялся, зависший тест не резался раньше
+    общего таймаута всего прогона).
 
     Каталога нет (`skip_tests` либо задача старше T023) — прогонять
     нечего, переход не блокируется: тот же вырожденный случай, что
@@ -45,11 +96,11 @@ def run(tdir: Path, code_root: Path | None = None) -> tuple[bool, str]:
     location_note = f"планка: {tests_dir}, cwd: {run_cwd}"
     try:
         res = subprocess.run(
-            ["python3", "-m", "unittest", "discover", "-s", str(tests_dir)],
+            _pytest_command(str(tests_dir)),
             cwd=run_cwd, capture_output=True, text=True,
             timeout=config.ACCEPTANCE_TIMEOUT_SEC)
     except subprocess.TimeoutExpired as exc:
-        tail = ((exc.stdout or "") + (exc.stderr or ""))[-2000:]
+        tail = (_timeout_text(exc.stdout) + _timeout_text(exc.stderr))[-2000:]
         return False, (f"{location_note}\nпрогон превысил "
                        f"{config.ACCEPTANCE_TIMEOUT_SEC}с — завис или ждёт "
                        f"сетевой ответ\n{tail}")
@@ -124,25 +175,32 @@ def materialize_from_branch(task_id: str, branch: str, code_dir: Path) -> Path:
 
 def run_full_suite(root: Path) -> tuple[bool, str]:
     """(зелено, хвост вывода) — прогон ПОЛНОГО пакета `tests/` каталога
-    `root` (SPEC T066, требование 2в): условие автогейта acceptance,
-    тем же приёмом discover, что штатный CI-джоб `python`
-    (`.github/workflows/ci.yml`) и `run()` выше для acceptance_tests/.
+    `root` через pytest (SPEC T066, требование 2в; переход раннера —
+    SPEC 01M1TKP6AAY4W8GDGZNA9R0JZT, требование 1): условие автогейта
+    acceptance; штатный CI-джоб `python` (`.github/workflows/ci.yml`)
+    остаётся на unittest — переход CI вне зоны этой задачи (SPEC, «Не
+    входит»).
 
     `tests/` нет вовсе — не «зелено»: в отличие от `run()` (отсутствие
     acceptance_tests/ — легитимный «нечего гонять»), отсутствие ПОЛНОГО
     набора в worktree ветки задачи ничего не проверяет и не имеет права
     сойти за пройденное условие автогейта.
+
+    `-p no:cacheprovider` — тот же довод, что у `run()` выше (требование 5).
+    `-o timeout=…` — тот же довод, что у `run()` выше (требование 4, AC-7):
+    таймаут отдельного теста передаётся явно, не через обнаружение
+    `pyproject.toml` pytest'ом самостоятельно.
     """
     tests_dir = root / "tests"
     if not tests_dir.is_dir():
         return False, "tests/ нет в worktree — полный набор не проверен"
     try:
         res = subprocess.run(
-            ["python3", "-m", "unittest", "discover", "-s", "tests"],
+            _pytest_command("tests"),
             cwd=root, capture_output=True, text=True,
             timeout=config.FULL_SUITE_TIMEOUT_SEC)
     except subprocess.TimeoutExpired as exc:
-        tail = ((exc.stdout or "") + (exc.stderr or ""))[-2000:]
+        tail = (_timeout_text(exc.stdout) + _timeout_text(exc.stderr))[-2000:]
         return False, (f"прогон полного набора tests/ превысил "
                        f"{config.FULL_SUITE_TIMEOUT_SEC}с — завис или ждёт "
                        f"сетевой ответ\n{tail}")
