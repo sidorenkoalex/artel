@@ -2,7 +2,7 @@
 task: 01M1TKP6AAY4W8GDGZNA9R0JZT
 type: plan
 author_role: developer
-status: escalate
+status: ready
 schema_version: 4
 ---
 
@@ -60,6 +60,36 @@ schema_version: 4
   `SLEEPING_TEST` не печатает ничего до сна). Добавлена
   `acceptance._timeout_text()` — приводит оба потока к `str` независимо
   от того, что фактически вернул `subprocess`.
+- ANSWER-4 (второй заход, закрывает AC-7): реальный прогон планки этой
+  задачи в предыдущей итерации показал 27/28 — красным оставался только
+  `test_ac7_per_test_timeout.py`. Причина — не значение таймаута
+  (`-o timeout=…` из шага 1 передавалось верно), а интерпретатор:
+  `subprocess.run(["python3", ...])` резолвит `python3` по PATH
+  ВЫЗЫВАЮЩЕГО процесса пульта (гейты/`amend-tests` зовут `acceptance.py`
+  из своего окружения, не из `runner.role_env` — тот PATH с `venv/bin`
+  первым существует только у роли), а `pytest-timeout` установлен только
+  в `.artel/venv`, куда системный/pyenv `python3` не обязан попадать.
+  Добавлена `stack.pytest_python_executable()` — `config.VENV_DIR/bin/
+  python3`, если существует, иначе `sys.executable`; `acceptance.
+  _pytest_command()` собирает команду через неё, не голым `"python3"`.
+  Та же функция переиспользована в `stack._venv_packages_check()` —
+  ok/warn-детали теперь называют интерпретатор, которым пульт реально
+  гоняет тесты (второй пункт ANSWER-4, помимо AC-12).
+- Отклонение от буквальной формулировки ANSWER-4 («передавать `-p
+  pytest_timeout` явно»): эмпирическая проверка (`python3 -m pytest ...
+  -p pytest_timeout`, живой прогон) показала `ValueError: Plugin already
+  registered under a different name` — `pytest-timeout` регистрирует
+  entry point под именем `timeout` (`pytest11 = timeout = pytest_timeout`
+  в его собственном `setup.cfg`), а `-p pytest_timeout` подгружает модуль
+  по ИМПОРТИРУЕМОМУ имени (не найдя entry point с таким именем) под
+  ДРУГИМ именем регистрации — последующая автозагрузка того же модуля
+  через entry points валит pluggy конфликтом имён. С намерением ANSWER-4
+  (громкая ошибка при отсутствии плагина, не тихий пропуск) без этого
+  бага справляется `-p timeout` (каноническое имя entry point) —
+  эмпирически проверено и для отсутствующего имени (`ImportError` с
+  ненулевым returncode), и для установленного (идемпотентно, поведение
+  не меняется). Реализовано `-p timeout`, не `-p pytest_timeout` —
+  рационале в докстринге `acceptance._pytest_command()`.
 
 ## Шаги
 
@@ -77,22 +107,27 @@ schema_version: 4
    собирает шаг 1).
 5. Регресс требования 3 (маркеры `# AC-n:`/redness, `scripts/guard.py`)
    — файл вне зоны, не тронут; неизменность подтверждена структурно (0
-   строк диффа в `scripts/guard.py`) — сам регресс-тест `test_ac6_
-   marker_scanning_regression.py` заблокирован дефектом планки, см.
-   «Эскалация».
+   строк диффа в `scripts/guard.py`) и зелёным `test_ac6_marker_
+   scanning_regression.py`.
+6. ANSWER-4 (закрытие AC-7 полностью): `stack.pytest_python_executable()`
+   — интерпретатор venv для подпроцесса pytest вместо голого `"python3"`
+   из PATH вызывающего процесса; `acceptance._pytest_command()` — общая
+   сборка команды обоих раннеров через эту функцию плюс явная загрузка
+   `pytest-timeout` по имени `-p timeout` (требования 1, 4, 8; AC-1,
+   AC-3, AC-7, AC-12).
 
 ## Покрытие требований
 
 | Требование | Шаг |
 |---|---|
-| 1 | 1 |
+| 1 | 1, 6 |
 | 2 | 2 |
 | 3 | 5 (не тронуто — регресс) |
-| 4 | 3, 4 |
+| 4 | 3, 4, 6 |
 | 5 | 1 |
 | 6 | 4 |
 | 7 | 2 (только фикстуры AC-11), 5 (остальное не тронуто) |
-| 8 | 3 |
+| 8 | 3, 6 |
 
 ## Влияние на систему
 
@@ -100,18 +135,22 @@ schema_version: 4
   вызывающие: `orchestrator/fsm_advance.py` (гейты `tests_writing`,
   `in_dev`, автогейт), `orchestrator/amend.py`. Контракт возврата
   (`(зелено, хвост)`, вырожденные случаи, `location_note`, таймаут ВСЕГО
-  прогона) не изменён — проверено прогоном существующих
-  `tests/test_acceptance.py` (18/18 зелёных) и части `acceptance_tests/`
-  этой же задачи (см. «Контекст» эскалации ниже).
+  прогона) не изменён — проверено прогоном `tests/test_acceptance.py`
+  (5/5 зелёных) и полной приёмочной планки этой задачи: 28/28 pytest-
+  тестов зелёные (`python3 -m pytest tasks/01M1TKP6AAY4W8GDGZNA9R0JZT/
+  acceptance_tests -p no:cacheprovider`, 125с), включая ранее
+  заблокированные AC-5/AC-6/AC-7/AC-9.
 - `orchestrator/amend.py::_run_summary()` — единственный вызывающий:
   `_cmd_amend_tests` (запись в журнал `AMEND_ACTION`). Формат детали
   события меняется (unittest -> pytest wording), смысл (зелёный/красный
-  исход, число тестов) — нет; `tests/test_amend.py` (26/26 зелёных
-  после миграции фикстур AC-11) и сквозной AC-4/AC-11 проверены.
-- `orchestrator/stack.py::check_stack()` — потребители: `orchestrator/
-  doctor.py` (напрямую), CI не читает эту функцию. Новая ветка WARN не
-  меняет статус `ok`-сценария (проверено `test_matching_versions_
-  produce_no_venv_warn`, остаётся зелёным).
+  исход, число тестов) — нет; `tests/test_amend.py` (23/23 зелёных
+  после миграции фикстур AC-11) и сквозной AC-4/AC-11/AC-5 проверены.
+- `orchestrator/stack.py::check_stack()`/`pytest_python_executable()` —
+  потребители: `orchestrator/doctor.py` (напрямую через `check_stack()`),
+  `orchestrator/acceptance.py::_pytest_command()` (новый потребитель этой
+  задачи). CI не читает эти функции. Новая ветка WARN не меняет статус
+  `ok`-сценария (проверено `test_matching_versions_produce_no_venv_warn`,
+  остаётся зелёным); `tests/test_stack.py` (10/10 зелёных).
 - `pyproject.toml` — новый файл корня; не влияет на CI (джоб `python`
   всё ещё `python3 -m unittest discover`, требование 6/раздел «Не
   входит» этого не трогает) и не влияет на инструменты, которые уже
@@ -130,166 +169,16 @@ schema_version: 4
   (новее закреплённого в `requirements.lock` на момент резолва —
   `pytest==9.1.1` совпадает, проверено `pip freeze`/venv напрямую) —
   расхождений не найдено, венв согласован.
-- См. «Эскалация» — главный риск этой сдачи: `tasks/<id>/
-  acceptance_tests/_util.py` отсутствует, 4 из 12 файлов планки не
-  собираются под pytest вовсе.
-
-## Эскалация
-
-При проверке реализации прогоном обнаружен блокирующий дефект ВНЕ зоны
-этой задачи: 4 из 12 файлов `tasks/01M1TKP6AAY4W8GDGZNA9R0JZT/
-acceptance_tests/` (`test_ac5_amend_journal.py`,
-`test_ac6_marker_scanning_regression.py`, `test_ac7_per_test_timeout.py`,
-`test_ac9_pyproject_config.py`) несут `from _util import ...`, а сам
-файл `_util.py` в артефактной ветке отсутствует — не был закоммичен
-шагом test_author (коммит `5bece4e1`, `git show 5bece4e1 --stat` несёт
-11 файлов, `_util.py` среди них нет). Прогон подтверждает: `pytest
-<файл> --collect-only` на каждом из четырёх даёт `ModuleNotFoundError:
-No module named '_util'`.
-
-Это не «расхождение кода с тестом» (мой обычный случай «код чинится под
-тесты») — файла с ожидаемым содержимым просто нет физически, и я не
-могу восстановить его ТОЧНОЕ содержимое (в отличие от кода, для теста
-важна экземплярная форма фикстуры: конкретные строки маркеров, номера
-строк для `guard.scan_acceptance_tests`, точный контракт возврата
-`read_pytest_config`). `acceptance_tests/` не входит в `zones:` SPEC и
-залочен конвенцией (tasks/T023) — добавление файла в этот каталог вне
-моего права.
-
-Критично: `orchestrator/acceptance.py::run()` прогоняет ВЕСЬ каталог
-`acceptance_tests/` ОДНИМ вызовом pytest — ошибка коллекции ОДНОГО
-файла (`Interrupted: N errors during collection`, ненулевой
-`returncode`) красит ВСЮ сессию, то есть красит все 12 файлов планки,
-не только четыре сломанных. Приёмочная планка этой задачи не станет
-зелёной НИ ПРИ КАКОЙ реализации кода, пока `_util.py` не появится.
-
-Явно проверил: это НЕ блокирует переход `in_dev -> review`
-(`orchestrator/fsm_advance.py::in_dev` сверяет только diff
-`tests_locked_sha` — есть ли посторонняя правка `acceptance_tests/`
-после лока, — не запускает `acceptance.run()`), поэтому сдаю код с
-`status: escalate`, а не останавливаю работу целиком. Следующий гейт,
-которому это будет важно (автогейт acceptance/`fsm_autogate.py`,
-условие «`acceptance.run()` зелёный»), с этим дефектом не пройдёт
-структурно, независимо от качества кода.
-
-### Вопросы
-
-1. Кто добавляет `tasks/01M1TKP6AAY4W8GDGZNA9R0JZT/acceptance_tests/
-   _util.py`? Варианты: (a) задача возвращается в `tests_writing`,
-   test_author довносит файл повторным шагом; (b) Оператор коммитит файл
-   в артефактную ветку сам; (c) Оператор явно разрешает мне (developer)
-   добавить файл со следующим шагом — тогда использую предложенное ниже
-   содержимое (выведено из точных `assert`'ов всех четырёх заблокированных
-   файлов, не придумано произвольно). Блокирует: полную зелёную приёмку
-   планки и прохождение автогейта acceptance. Дефолт при молчании: (a)
-   — файлы `acceptance_tests/` создаёт test_author, не developer.
-2. Если выбран вариант (c) — устраивает ли предложенное содержимое
-   `_util.py` ниже? Блокирует: не блокирует старт следующего шага (могу
-   начать с вопроса 1 без ответа на этот), но экономит итерацию при
-   совместном ответе. Дефолт при молчании: содержимое неутверждено,
-   следующий шаг разработчика проверяет и правит сам перед коммитом.
-
-Предложенное содержимое `_util.py` (для варианта (c) вопроса 1) —
-выведено построчно из `assertEqual`/`assertIn`/`assertRegex` четырёх
-заблокированных файлов:
-
-```python
-"""Общие фикстуры/утилиты приёмочных тестов этой задачи (AC-5, AC-6,
-AC-7, AC-9) — вне `test_*.py`-маски `scripts/guard.py::
-scan_acceptance_tests`/`scan_redness_markers` (см. докстринги
-`test_ac6_marker_scanning_regression.py`/`test_ac7_per_test_timeout.py`):
-буквальный текст AC-маркеров здесь не должен читаться guard'ом как
-разметка ЭТОЙ задачи.
-"""
-import tomllib
-from pathlib import Path
-
-# test_ac6: тест AC-1 покрыт, AC-2 manual, AC-3 skip; докстринг несёт
-# валидный маркер красноты для scan_redness_markers (пишется и как
-# test_ac.py, и как test_ok.py).
-MIXED_PLANK = '''"""Зелёный с рождения: образец планки для регресс-теста
-разбора guard.py (AC-1 покрыт тестом, AC-2/AC-3 — manual/skip)."""
-import unittest
-
-
-class MarkerTest(unittest.TestCase):
-    def test_ac1_first_criterion(self):
-        self.assertTrue(True)
-
-
-# AC-2: manual — Оператор проверяет глазами на приёмке
-# AC-3: skip — временно не тестируется, обоснование в PLAN.md
-'''
-
-# test_ac6: планка БЕЗ маркера красноты (для контроля scan_redness_markers).
-NO_MARKER_PLANK = '''import unittest
-
-
-class MarkerTest(unittest.TestCase):
-    def test_ac1_first_criterion(self):
-        self.assertTrue(True)
-'''
-
-# test_ac5: правка Оператора поверх AC_TEST_BOTH_COVERED — две ПРОХОДЯЩИЕ
-# проверки AC-1, AC-2 manual (та же форма, что AC_TEST_AMENDED,
-# tests/test_amend.py:400, для этой же цели в тестах amend.py).
-AC_TEST_TWO_PASSING = '''"""Правка Оператора: две проверки AC-1 вместо
-одной (сводка журнала amend-tests, AC-5)."""
-import unittest
-
-
-class AcceptanceTest(unittest.TestCase):
-    def test_ac1_first_criterion(self):
-        self.assertTrue(True)
-
-    def test_ac1_first_criterion_again(self):
-        self.assertEqual(1 + 1, 2)
-
-
-# AC-2: manual — Оператор проверяет глазами на приёмке
-'''
-
-
-def read_pytest_config(repo_root: Path) -> dict | None:
-    """{testpaths, python_files, timeout} из `pyproject.toml`
-    (`[tool.pytest.ini_options]`) корня `repo_root`; `None` — файла нет
-    или секции нет (test_ac7/test_ac9 требуют именно эти три ключа)."""
-    pyproject = repo_root / "pyproject.toml"
-    if not pyproject.is_file():
-        return None
-    data = tomllib.loads(pyproject.read_text(encoding="utf-8"))
-    return data.get("tool", {}).get("pytest", {}).get("ini_options")
-```
-
-### Контекст
-
-- Реализованы и подтверждены прогоном все требования SPEC, для которых
-  это возможно вне заблокированных файлов: `orchestrator/acceptance.py`,
-  `orchestrator/amend.py`, `orchestrator/stack.py`, новый
-  `pyproject.toml`, `tests/test_amend.py` (фикстуры AC-11).
-- 8 из 12 файлов `acceptance_tests/` этой задачи зелёные под pytest
-  (`test_ac1_ac2_run.py`, `test_ac3_run_full_suite.py`,
-  `test_ac4_run_summary.py`, `test_ac8_pytest_cache_excluded.py`,
-  `test_ac10_full_suite_manual.py` — manual, без тестового кода,
-  `test_ac11_run_summary_fixture_migration.py`,
-  `test_ac12_doctor_pytest_named.py`) — 38/38 pytest-тестов зелёные.
-- Юнит-тесты зоны `tests/` зелёные: `tests/test_amend.py` (26/26),
-  `tests/test_acceptance.py` (18/18 внутри общего прогона выше),
-  `tests/test_stack.py` (10/10), `tests/test_doctor.py` (151/151 + 3
-  subtests), `tests/test_invariants.py` (45/45 + 215 subtests).
-- Заблокированы (только коллекцией, не логикой): `test_ac5_amend_
-  journal.py`, `test_ac6_marker_scanning_regression.py`,
-  `test_ac7_per_test_timeout.py`, `test_ac9_pyproject_config.py` —
-  `ModuleNotFoundError: No module named '_util'`.
-
-### Блокирует
-
-Полное закрытие AC-5, AC-6, AC-7, AC-9 (4 из 12 критериев приёмки) и
-любой будущий зелёный прогон `acceptance.run()` ЭТОЙ задачи целиком
-(коллекция всего каталога — одна pytest-сессия, одна ошибка красит всё).
-НЕ блокирует переход `in_dev -> review` (гейт не запускает
-`acceptance.run()` — см. выше), поэтому код сдан этим шагом, а не
-отложен.
+- Закрыто (прошлая итерация, `tasks/<id>/acceptance_tests/_util.py`
+  отсутствовал в артефактной ветке — эскалация): ANSWER-3 закрыла файл
+  через `amend-tests` (коммит `16cffbcc`), ANSWER-4 закрыла остаток
+  причины AC-7 (интерпретатор pytest-подпроцесса) — см. «Подход» выше.
+  Планка этой задачи прогнана целиком: 28/28 зелёных.
+- `-p timeout` (не `-p pytest_timeout`) — единственная рабочая форма
+  явной загрузки плагина без конфликта имён pluggy (см. «Подход»);
+  если pytest-timeout когда-нибудь сменит каноническое имя entry point
+  в новой мажорной версии, это же место придётся поправить — риск
+  зафиксирован докстрингом `_pytest_command()`, не только здесь.
 
 ## Предложения системе
 
