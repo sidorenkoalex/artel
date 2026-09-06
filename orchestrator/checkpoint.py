@@ -512,6 +512,11 @@ def _commit_external_step_artifacts(conn, task_id: str, role: str,
     как «последний коммит пути — автокоммит этой же роли», иначе
     чередование обычных шагов и обрывов по таймауту той же роли ломало
     бы удаление уже на второй итерации.
+
+    Push артефактной ветки в origin (`artifact_branch.push`, ниже) теперь
+    классифицирует причину отказа и журналирует и успех, и отказ (SPEC
+    01M1TQ0X14Y5B3C87WC0Q31PK2, требования 1-2) — раньше отказ push
+    молча пропадал (`bool` результат никем не читался).
     """
     from . import alerts, artifact_branch
     if target == config.DEFAULT_TARGET:
