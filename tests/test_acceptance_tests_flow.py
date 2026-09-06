@@ -26,7 +26,8 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from orchestrator import (acceptance, agent_log, artifact_branch, catalog,  # noqa: E402
-                          config, fsm, gitcmd, runner, store, workspace)
+                          config, fsm, github_adapter, gitcmd, runner, store,
+                          workspace)
 from scripts import guard  # noqa: E402
 from tests.sandbox import (FakeProc, TmpRootTest, capture,  # noqa: E402
                            capture_new_task_id, disk_backed_ls_tree_files,
@@ -100,27 +101,6 @@ schema_version: 2
 ## Влияние на систему
 """
 
-REVIEW_MD = """---
-task: {task}
-type: review
-author_role: reviewer
-status: approved
-iteration: 1
-schema_version: 2
----
-
-# REVIEW: приёмочные тесты до кода
-
-## Соответствие SPEC
-
-## Замечания
-
-## Вердикт
-approved
-
-## Проверено исполнением
-`python3 -m unittest discover -s tests` — зелёный.
-"""
 
 # Маркер красноты (SPEC T064) — обязателен на выходе из tests_writing;
 # эта фикстура проезжает этот выход в TraceabilityTest/LockTest, не только
@@ -814,23 +794,26 @@ class RednessMarkerFsmTest(TmpRootTest):
 
 class AcceptanceRunTest(TmpRootTest):
 
-    def enter_review(self) -> None:
+    def enter_in_dev(self) -> None:
+        # ADR-0015: прогон приёмочной планки (SPEC T023, требование 6)
+        # переехал с перехода `review -> acceptance` на `in_dev ->
+        # verifying` — эта песочница заводит задачу сразу в `in_dev` с
+        # готовым PLAN.md, REVIEW.md ей для этого гейта не нужен вовсе.
         self.write_spec(SPEC_V2)
         self.write("PLAN.md", PLAN_MD)
-        self.write("REVIEW.md", REVIEW_MD)
-        self.set_state("review")
+        self.set_state("in_dev")
 
     def test_red_acceptance_tests_block_the_transition(self):
-        self.enter_review()
+        self.enter_in_dev()
         self.write_acceptance_tests(AC_TEST_RED)
 
         out = self.capture(fsm.cmd_advance, self.TASK)
 
-        self.assertEqual(self.state(), "review")
+        self.assertEqual(self.state(), "in_dev")
         self.assertIn("красные", out)
 
     def test_red_acceptance_tests_are_journaled(self):
-        self.enter_review()
+        self.enter_in_dev()
         self.write_acceptance_tests(AC_TEST_RED)
 
         self.capture(fsm.cmd_advance, self.TASK)
@@ -841,7 +824,7 @@ class AcceptanceRunTest(TmpRootTest):
     def test_environment_fingerprint_lands_in_the_red_journal_entry(self):
         """SPEC T101, требование 4б/AC-5 — fingerprint в исходе прогона
         приёмочных тестов, ветка «красный прогон»."""
-        self.enter_review()
+        self.enter_in_dev()
         self.write_acceptance_tests(AC_TEST_RED)
         agent_log._environment_fingerprint_cache = None
         self.addCleanup(setattr, agent_log, "_environment_fingerprint_cache", None)
@@ -855,7 +838,7 @@ class AcceptanceRunTest(TmpRootTest):
         self.assertIn(config.CLI_VERSION_PIN, details[0])
 
     def test_green_acceptance_tests_transition_and_print_summary(self):
-        self.enter_review()
+        self.enter_in_dev()
         self.write_acceptance_tests(AC_TEST_BOTH_COVERED)
 
         out = self.capture(fsm.cmd_advance, self.TASK)
@@ -865,7 +848,7 @@ class AcceptanceRunTest(TmpRootTest):
         self.assertIn("AC-2", out, "manual-критерий назван в карточке гейта")
 
     def test_summary_is_journaled_on_green_run(self):
-        self.enter_review()
+        self.enter_in_dev()
         self.write_acceptance_tests(AC_TEST_BOTH_COVERED)
 
         self.capture(fsm.cmd_advance, self.TASK)
@@ -876,7 +859,7 @@ class AcceptanceRunTest(TmpRootTest):
     def test_environment_fingerprint_lands_in_the_green_journal_entry(self):
         """SPEC T101, требование 4б/AC-5 — та же fingerprint, ветка
         «зелёный прогон» (журнал «приёмочные тесты пройдены»)."""
-        self.enter_review()
+        self.enter_in_dev()
         self.write_acceptance_tests(AC_TEST_BOTH_COVERED)
         agent_log._environment_fingerprint_cache = None
         self.addCleanup(setattr, agent_log, "_environment_fingerprint_cache", None)
@@ -891,7 +874,7 @@ class AcceptanceRunTest(TmpRootTest):
 
     def test_no_acceptance_tests_directory_does_not_block_legacy_tasks(self):
         """Задачи без acceptance_tests/ (skip_tests, либо старше T023)."""
-        self.enter_review()
+        self.enter_in_dev()
 
         self.capture(fsm.cmd_advance, self.TASK)
 
@@ -900,9 +883,9 @@ class AcceptanceRunTest(TmpRootTest):
     def test_missing_redness_marker_does_not_block_review_to_verifying(self):
         """Маркер красноты (SPEC T064) проверяется только на выходе из
         `tests_writing` — задача уже прошла его (симулирует задачу,
-        заведённую сразу в `review`), отсутствие маркера здесь не имеет
-        права заблокировать существующий переход review -> verifying."""
-        self.enter_review()
+        заведённую сразу в `in_dev`), отсутствие маркера здесь не имеет
+        права заблокировать существующий переход in_dev -> verifying."""
+        self.enter_in_dev()
         self.write_acceptance_tests(AC_TEST_BOTH_COVERED_NO_MARKER)
 
         self.capture(fsm.cmd_advance, self.TASK)
@@ -914,7 +897,7 @@ class AcceptanceRunTest(TmpRootTest):
         (orchestrator/acceptance.py:run) не была codified тестом — прогон
         без сна, тем же приёмом, что и test_timeout_is_not_retried в
         tests/test_agent_failure.py (мок с side_effect=TimeoutExpired)."""
-        self.enter_review()
+        self.enter_in_dev()
         self.write_acceptance_tests(AC_TEST_GREEN)
         exc = subprocess.TimeoutExpired(cmd="unittest",
                                         timeout=config.ACCEPTANCE_TIMEOUT_SEC)
@@ -930,7 +913,7 @@ class AcceptanceRunTest(TmpRootTest):
         # что run() действительно передаёт timeout=ACCEPTANCE_TIMEOUT_SEC.
         self.assertEqual(run_mock.call_args.kwargs.get("timeout"),
                          config.ACCEPTANCE_TIMEOUT_SEC)
-        self.assertEqual(self.state(), "review", "переход не должен пройти")
+        self.assertEqual(self.state(), "in_dev", "переход не должен пройти")
         self.assertIn(f"превысил {config.ACCEPTANCE_TIMEOUT_SEC}с", out)
         details = self.journal_details("переход отклонён: приёмочные тесты")
         self.assertEqual(len(details), 1)
@@ -1133,9 +1116,15 @@ class LockTest(unittest.TestCase):
     def test_untouched_tests_pass_the_transition(self):
         self.enter_in_dev()
 
-        self.capture(fsm.cmd_advance, self.TASK)
+        # ADR-0015: сверка головы на origin переехала на `in_dev ->
+        # verifying` — эта песочница не заводит настоящий push к origin,
+        # предмет теста — лок acceptance_tests/, не origin-push (у него
+        # свои тесты, `tests/test_github_adapter.py`).
+        with mock.patch.object(github_adapter, "ensure_head_in_origin",
+                              return_value=(True, "")):
+            self.capture(fsm.cmd_advance, self.TASK)
 
-        self.assertEqual(self.state(), "review")
+        self.assertEqual(self.state(), "verifying")
 
     def test_new_unrelated_file_does_not_trip_the_lock(self):
         """Лок реагирует на acceptance_tests/, а не на любой коммит задачи."""
@@ -1145,9 +1134,11 @@ class LockTest(unittest.TestCase):
                                             encoding="utf-8")
         self.commit_task_dir("заметка вне тестов")
 
-        self.capture(fsm.cmd_advance, self.TASK)
+        with mock.patch.object(github_adapter, "ensure_head_in_origin",
+                              return_value=(True, "")):
+            self.capture(fsm.cmd_advance, self.TASK)
 
-        self.assertEqual(self.state(), "review")
+        self.assertEqual(self.state(), "verifying")
 
     def test_unreachable_locked_sha_fails_closed(self):
         """git не может сравнить sha (rebase/squash увёл коммит из истории)
@@ -1177,8 +1168,8 @@ class LockTest(unittest.TestCase):
         Ловит мутацию: лок `fsm_advance.in_dev` использует `gitcmd.
         diff_paths` (голое да/нет) вместо `diff_names` с вычитанием
         игнорируемых путей — разница только по `.pyc` была бы засчитана
-        как спор с зафиксированным деревом, переход `in_dev -> review`
-        отклонился бы вместо `review`.
+        как спор с зафиксированным деревом, переход `in_dev -> verifying`
+        отклонился бы вместо прохождения.
         """
         self.enter_in_dev()
         self.on_artifact_branch()
@@ -1189,9 +1180,11 @@ class LockTest(unittest.TestCase):
         self.git("commit", "-q", "-m", "прогон тестов оставил .pyc")
         self.git("checkout", "-q", config.MAIN_BRANCH)
 
-        self.capture(fsm.cmd_advance, self.TASK)
+        with mock.patch.object(github_adapter, "ensure_head_in_origin",
+                              return_value=(True, "")):
+            self.capture(fsm.cmd_advance, self.TASK)
 
-        self.assertEqual(self.state(), "review",
+        self.assertEqual(self.state(), "verifying",
                          "разница только по игнорируемому файлу не должна "
                          "останавливать переход")
 
