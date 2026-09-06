@@ -190,6 +190,59 @@ def _origin_push_gate(conn, task_id: str, t) -> GateRefusal | None:
     return GateRefusal("переход отклонён: голова не в origin", push_detail, hint)
 
 
+def _code_sha_at_review_escalation(conn, task_id: str) -> str | None:
+    """sha кода, зафиксированный `budget.enforce_budget` в момент
+    ПОСЛЕДНЕЙ эскалации ПО БЮДЖЕТУ из `review` (SPEC
+    01M1VBEDGMEXHVGWAH42FTDZ4X, требование 3, `budget.
+    REVIEW_ESCALATION_CODE_SHA_ACTION`) — `None`, если такой записи нет
+    вовсе, либо она относится к ПРЕДЫДУЩЕМУ циклу ревью (запись СТАРШЕ
+    последнего `"agent run finished"` роли `reviewer` — новый прогон
+    reviewer уже перекрыл её собой, сверять с ней текущий вердикт нельзя,
+    тот же приём отсечки, что и у `auto._role_step_since_state_entry`)."""
+    rows = store.task_steps(conn, task_id)
+    last_reviewer_run = None
+    last_escalation_sha = None
+    for i, row in enumerate(rows):
+        if row["actor"] == "reviewer" and row["action"] == "agent run finished":
+            last_reviewer_run = i
+        if row["action"] == budget.REVIEW_ESCALATION_CODE_SHA_ACTION:
+            last_escalation_sha = (i, row["detail"])
+    if last_escalation_sha is None:
+        return None
+    idx, sha = last_escalation_sha
+    if last_reviewer_run is not None and last_reviewer_run >= idx:
+        return None
+    return sha or None
+
+
+def _review_escalation_sha_gate(conn, task_id: str, t) -> GateRefusal | None:
+    """Требование 3 (SPEC 01M1VBEDGMEXHVGWAH42FTDZ4X): budget-эскалация,
+    поймавшая уже вынесенный approved-вердикт reviewer (эскалация ИЗ
+    `review`), не должна пропускать переход в `verifying` по устаревшему
+    вердикту, если код кодовой ветки СМЕНИЛСЯ, пока задача стояла
+    `escalated` — нужен новый прогон reviewer.
+
+    Отметки эскалации нет вовсе (обычный approved без эскалации по
+    бюджету, либо она относится к предыдущему циклу ревью,
+    `_code_sha_at_review_escalation`), текущий `gitcmd.branch_head_sha`
+    не ответил, либо совпадает с зафиксированным — гейт пропускает
+    (fail-open, тот же принцип, что и у `_review_rework_gate` рядом:
+    неотвеченный git не значит «код сменился», значит «сверить нечем»)."""
+    escalation_sha = _code_sha_at_review_escalation(conn, task_id)
+    if escalation_sha is None:
+        return None
+    current_sha = gitcmd.branch_head_sha(t["branch"])
+    if not current_sha or current_sha == escalation_sha:
+        return None
+    detail = (f"код кодовой ветки сменился, пока задача стояла escalated "
+             f"по бюджету: на момент вердикта reviewer было "
+             f"{escalation_sha}, сейчас {current_sha} — вердикт относится "
+             f"к уже неактуальному коду")
+    hint = f"новый прогон reviewer, затем artel.py advance {task_id}"
+    return GateRefusal("переход отклонён: код сменился после вердикта",
+                       detail, hint)
+
+
 def _registry_gate(conn, task_id: str, tdir, review_text, meta) -> GateRefusal | None:
     """Реестр замечаний (SPEC T100, требование 5): вердикт approved не
     проходит этот гейт, пока в реестре есть запись со статусом отличным
@@ -328,9 +381,14 @@ def review(conn, task_id: str, t, tdir, target: str, state: str) -> bool:
     if _freshness_refuses(conn, task_id, t, meta, status):
         return False
 
-    if status == "approved" and not t["is_canary"]:
-        if _run_gates(conn, task_id, [lambda: _origin_push_gate(conn, task_id, t)]):
+    if status == "approved":
+        if _run_gates(conn, task_id,
+                      [lambda: _review_escalation_sha_gate(conn, task_id, t)]):
             return False
+        if not t["is_canary"]:
+            if _run_gates(conn, task_id,
+                          [lambda: _origin_push_gate(conn, task_id, t)]):
+                return False
 
     iteration = artifacts.fresh_verdict_iteration(meta, t["reviewed_iter"])
     store.update_task(conn, task_id, reviewed_iter=iteration)
