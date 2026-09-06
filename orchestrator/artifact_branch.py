@@ -116,12 +116,20 @@ def _new_branch_parent(task_id: str) -> str:
     уже удалённые на `origin/main` черновики — предпочтение origin, когда
     он доступен, закрывает этот путь.
 
-    `origin` недоступен (нет сети, `origin` не настроен, песочница) —
+    Ни одного `remote` в репозитории вовсе (`gitcmd.has_no_remote`: нет
+    сети/`origin` никогда не настраивался/лёгкая тестовая песочница) —
+    сразу голова локального `config.MAIN_BRANCH`, БЕЗ сетевого вызова и
+    БЕЗ записи в журнал (решение Оператора по возврату 06.09: безусловный
+    `fetch` красил `tests/test_branch_freshness_gate.py` посторонним
+    `fetch`-вызовом при заведении задачи с внешним target'ом). Remote
+    есть, но сам `fetch` не удался (недостижим/сеть недоступна) —
     фолбэк на голову локального `config.MAIN_BRANCH` (AC-2, поведение до
     этой задачи), с записью причины в журнал задачи (AC-7): молчаливая
     деградация иначе прячет от Оператора, что артефактная ветка унаследовала
     устаревший пин, тот же класс дефекта, что и сам инцидент.
     """
+    if gitcmd.has_no_remote(config.ROOT):
+        return gitcmd.branch_head_sha(config.MAIN_BRANCH)
     origin_head, reason = gitcmd.fetch_head_sha("origin", config.MAIN_BRANCH)
     if origin_head:
         return origin_head
