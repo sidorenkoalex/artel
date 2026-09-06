@@ -5,8 +5,8 @@ if/elif `orchestrator/fsm.py::_cmd_advance`, перенесённое без и�
 `fsm.py` — эти функции не вызываются напрямую иначе, кроме тестов,
 идущих через публичный `fsm.cmd_advance`.
 """
-from collections import namedtuple
 from datetime import datetime, timezone
+from typing import NamedTuple
 
 from scripts import guard
 
@@ -27,12 +27,15 @@ from .review import git_diff_part as _review_git_diff_part
 # — только Оператора (AC-14).
 CAPACITY_GATE_REASON = "снимок не помещается в один контекст ревью — разделить задачу"
 
-# Единый неизменяемый исход гейта (SPEC R2 01M1TKNXX5YN5KT4WHG4T44JWV,
-# требование 1): `action` — второй позиционный аргумент store.journal
-# (текст "переход отклонён: ..."), `detail` — третий, `hint` — строка для
-# "  дальше: {hint}" (пустая — подсказка не печатается). Гейт пройден —
-# `None`, не экземпляр этого типа.
-GateRefusal = namedtuple("GateRefusal", ["action", "detail", "hint"])
+class GateRefusal(NamedTuple):
+    """Единый неизменяемый исход гейта (SPEC R2 01M1TKNXX5YN5KT4WHG4T44JWV,
+    требование 1): `action` — второй позиционный аргумент store.journal
+    (текст "переход отклонён: ..."), `detail` — третий, `hint` — строка для
+    "  дальше: {hint}" (пустая — подсказка не печатается). Гейт пройден —
+    `None`, не экземпляр этого типа."""
+    action: str
+    detail: str
+    hint: str
 
 
 def _run_gates(conn, task_id: str, gates) -> bool:
