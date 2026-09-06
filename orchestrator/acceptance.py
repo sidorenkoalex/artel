@@ -13,7 +13,29 @@ from pathlib import Path
 
 from scripts import guard
 
-from . import config, gitcmd
+from . import config, gitcmd, stack
+
+
+def _pytest_command(*args: str) -> list[str]:
+    """Общая часть команды pytest обоих раннеров: интерпретатор venv
+    пульта (`stack.pytest_python_executable()` — не голый `"python3"`,
+    резолвящийся по PATH ВЫЗЫВАЮЩЕГО процесса, а не роли: гейты/
+    `amend-tests` пульт зовёт из собственного окружения, не из
+    `runner.role_env`, тот PATH только у роли — ANSWER-4, диагноз AC-7),
+    без кеша (требование 5), и ЯВНАЯ загрузка `pytest-timeout` по
+    каноническому имени точки входа `timeout` (не `pytest_timeout` — имя
+    импортируемого модуля: `-p pytest_timeout` заставляет pytest
+    импортировать его как отдельный плагин ДО разбора точек входа
+    setuptools, и последующая автозагрузка того же модуля под именем
+    `timeout` падает `ValueError: Plugin already registered under a
+    different name` — эмпирически найдено этим же прогоном). Явная
+    загрузка по имени `timeout` — тот же плагин, что и так подключился бы
+    автоматически (никакого эффекта, если он уже установлен), но при ЕГО
+    ОТСУТСТВИИ в интерпретаторе даёт громкий `ImportError`/красный
+    returncode вместо тихого пропуска таймаута отдельного теста."""
+    return [stack.pytest_python_executable(), "-m", "pytest", *args,
+            "-p", "no:cacheprovider", "-p", "timeout",
+            "-o", f"timeout={stack.PER_TEST_TIMEOUT_SEC}"]
 
 
 def _timeout_text(value: bytes | str | None) -> str:
@@ -47,6 +69,17 @@ def run(tdir: Path, code_root: Path | None = None) -> tuple[bool, str]:
     вовсе, автокоммиту артефактов задачи (`checkpoint.py`) нечего
     случайно подобрать.
 
+    `-o timeout=…` (требование 4, AC-7) передаёт таймаут отдельного теста
+    ЯВНО, не полагаясь на то, что pytest сам найдёт `pyproject.toml` по
+    `cwd`: планка задачи (`tests_dir`, `materialize_from_branch`) лежит
+    ВНЕ дерева `run_cwd`, и pytest определяет rootdir/inifile по общему
+    предку АРГУМЕНТОВ пути, а не по `cwd`, когда путь теста передан
+    отдельным аргументом (эмпирически подтверждено ANSWER-3.md — `cwd`
+    оказался кандидатом для поиска конфигурации НЕ во всех версиях
+    поведения, вопреки прежнему предположению; без явного `-o` таймаут
+    отдельного теста тихо не применялся, зависший тест не резался раньше
+    общего таймаута всего прогона).
+
     Каталога нет (`skip_tests` либо задача старше T023) — прогонять
     нечего, переход не блокируется: тот же вырожденный случай, что
     и у fixation.read() без фиксации.
@@ -63,7 +96,7 @@ def run(tdir: Path, code_root: Path | None = None) -> tuple[bool, str]:
     location_note = f"планка: {tests_dir}, cwd: {run_cwd}"
     try:
         res = subprocess.run(
-            ["python3", "-m", "pytest", str(tests_dir), "-p", "no:cacheprovider"],
+            _pytest_command(str(tests_dir)),
             cwd=run_cwd, capture_output=True, text=True,
             timeout=config.ACCEPTANCE_TIMEOUT_SEC)
     except subprocess.TimeoutExpired as exc:
@@ -154,13 +187,16 @@ def run_full_suite(root: Path) -> tuple[bool, str]:
     сойти за пройденное условие автогейта.
 
     `-p no:cacheprovider` — тот же довод, что у `run()` выше (требование 5).
+    `-o timeout=…` — тот же довод, что у `run()` выше (требование 4, AC-7):
+    таймаут отдельного теста передаётся явно, не через обнаружение
+    `pyproject.toml` pytest'ом самостоятельно.
     """
     tests_dir = root / "tests"
     if not tests_dir.is_dir():
         return False, "tests/ нет в worktree — полный набор не проверен"
     try:
         res = subprocess.run(
-            ["python3", "-m", "pytest", "tests", "-p", "no:cacheprovider"],
+            _pytest_command("tests"),
             cwd=root, capture_output=True, text=True,
             timeout=config.FULL_SUITE_TIMEOUT_SEC)
     except subprocess.TimeoutExpired as exc:

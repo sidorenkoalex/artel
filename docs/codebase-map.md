@@ -1,5 +1,5 @@
 ---
-built_at_sha: ea0bba682986c75a56a608d5d0832e4121919e93
+built_at_sha: 696a7f9e3e607bf38a230adf8b4244f1c7e30da1
 ---
 
 # Codebase-map пульта
@@ -26,7 +26,7 @@ built_at_sha: ea0bba682986c75a56a608d5d0832e4121919e93
 - `run_full_suite`
 - `summary`
 
-**Импортирует:** `orchestrator/config.py`, `orchestrator/gitcmd.py`, `scripts/guard.py`
+**Импортирует:** `orchestrator/config.py`, `orchestrator/gitcmd.py`, `orchestrator/stack.py`, `scripts/guard.py`
 
 **Импортируется:** `orchestrator/amend.py`, `orchestrator/fsm.py`, `orchestrator/fsm_advance.py`, `orchestrator/fsm_autogate.py`, `tests/test_acceptance.py`, `tests/test_acceptance_tests_flow.py`, `tests/test_branch_freshness_gate.py`, `tests/test_fsm_autogate.py`, `tests/test_fsm_map_conflict_autoresolve.py`
 
@@ -816,11 +816,12 @@ built_at_sha: ea0bba682986c75a56a608d5d0832e4121919e93
 
 **Публичные функции:**
 - `check_stack`
+- `pytest_python_executable`
 - `python_version_string`
 
 **Импортирует:** `orchestrator/config.py`
 
-**Импортируется:** `orchestrator/doctor.py`, `orchestrator/runner.py`, `orchestrator/version.py`, `scripts/stack_ci.py`, `tests/sandbox.py`, `tests/test_agent_prompt.py`, `tests/test_invariants.py`, `tests/test_review_freshness.py`, `tests/test_review_package.py`, `tests/test_stack.py`, `tests/test_stack_ci.py`
+**Импортируется:** `orchestrator/acceptance.py`, `orchestrator/doctor.py`, `orchestrator/runner.py`, `orchestrator/version.py`, `scripts/stack_ci.py`, `tests/sandbox.py`, `tests/test_agent_prompt.py`, `tests/test_invariants.py`, `tests/test_review_freshness.py`, `tests/test_review_package.py`, `tests/test_stack.py`, `tests/test_stack_ci.py`
 
 ## orchestrator/store.py
 

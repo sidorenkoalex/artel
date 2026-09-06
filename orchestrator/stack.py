@@ -179,6 +179,20 @@ def _parse_pinned_versions(text: str) -> dict:
     return pinned
 
 
+def pytest_python_executable() -> str:
+    """Интерпретатор, которым пульт запускает pytest
+    (`orchestrator/acceptance.py::run()`/`run_full_suite()`, требование 8/
+    AC-12) — `config.VENV_DIR/bin/python3`, если venv существует, иначе
+    `sys.executable` (интерпретатор самого процесса пульта): голый
+    `python3` резолвился бы по PATH ВЫЗЫВАЮЩЕГО процесса (гейты/
+    `amend-tests` пульт зовёт из собственного окружения, не из
+    `runner.role_env` — тот PATH только у роли), где сторонние пакеты
+    пульта (`pytest-timeout` и т.п., `THIRD_PARTY_EXCEPTIONS` выше) могут
+    отсутствовать (ANSWER-4, диагноз AC-7)."""
+    venv_python = Path(config.VENV_DIR) / "bin" / "python3"
+    return str(venv_python) if venv_python.is_file() else sys.executable
+
+
 def _venv_exists_check() -> StackCheck:
     """Требование 2/AC-8: `.artel/venv` отсутствует — WARN, называющий
     команду создания (`venv-sync`), а не молчаливая деградация."""
@@ -227,9 +241,12 @@ def _venv_packages_check() -> StackCheck:
         if "pytest" in mismatched:
             detail += ("; pytest недоступен ролям/пульту требуемой версии "
                       "в этом venv — пересобери venv-sync")
+        detail += f"; тесты пульта запускает {pytest_python_executable()}"
         return StackCheck("venv-packages", "warn", detail)
-    return StackCheck("venv-packages", "ok",
-                      "venv согласован с файлом закреплённых версий")
+    return StackCheck(
+        "venv-packages", "ok",
+        f"venv согласован с файлом закреплённых версий; тесты пульта "
+        f"запускает {pytest_python_executable()}")
 
 
 def check_stack() -> list:
