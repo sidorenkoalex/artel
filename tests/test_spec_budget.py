@@ -96,26 +96,45 @@ class SpecBudgetParseTest(unittest.TestCase):
             with self.subTest(raw=raw):
                 self.assertEqual(budget.spec_budget({"budget_usd": raw})[0], 25.0)
 
-    def test_value_above_the_default_is_refused(self):
-        """Требование 1: потолок отсюда только понижается (инвариант 10).
+    def test_value_above_the_role_cap_is_refused(self):
+        """Требование 1 (ADR-0014): потолок ролей — верхняя граница, не
+        дефолт; выше него потолок отсюда не поднимается (инвариант 10).
 
         Причина отказа обязана отличаться от «не сумма в долларах»: число
-        корректно, нельзя именно поднятие, и Оператор должен видеть разницу.
+        корректно, нельзя именно поднятие выше потолка ролей, и Оператор
+        должен видеть разницу.
         """
-        for raw in (f"{config.DEFAULT_BUDGET_USD + 1:g}",
-                    f"{config.DEFAULT_BUDGET_USD * 10:g}"):
+        for raw in (f"{config.ROLE_BUDGET_CAP + 1:g}",
+                    f"{config.ROLE_BUDGET_CAP * 10:g}"):
             with self.subTest(raw=raw):
                 value, refused = budget.spec_budget({"budget_usd": raw})
                 self.assertIsNone(value)
-                self.assertIn("выше дефолта", refused)
+                self.assertIn("выше потолка ролей", refused)
                 self.assertIn("budget", refused, "сказано, чем поднимают потолок")
                 self.assertNotIn("не сумма", refused)
 
+    def test_value_above_the_default_but_within_the_role_cap_is_taken(self):
+        """Требование 4 (ADR-0014): в пределах потолка ролей значение
+        применяется и когда оно выше дефолта, не только ниже."""
+        value = (config.DEFAULT_BUDGET_USD + config.ROLE_BUDGET_CAP) / 2
+        self.assertGreater(value, config.DEFAULT_BUDGET_USD,
+                           "фикстура: значение обязано быть выше дефолта")
+
+        self.assertEqual(budget.spec_budget({"budget_usd": f"{value:g}"}),
+                         (value, ""))
+
     def test_value_equal_to_the_default_is_taken(self):
-        """Граница строгая: SPEC говорит «не выше», сам дефолт ещё можно."""
+        """Граница дефолта больше не отказная — потолок ролей выше него."""
         self.assertEqual(
             budget.spec_budget({"budget_usd": f"{config.DEFAULT_BUDGET_USD:g}"}),
             (config.DEFAULT_BUDGET_USD, ""))
+
+    def test_value_equal_to_the_role_cap_is_taken(self):
+        """Граница строгая: SPEC говорит «не выше», сам потолок ролей ещё
+        можно (AC-4: «выше», а не «начиная с»)."""
+        self.assertEqual(
+            budget.spec_budget({"budget_usd": f"{config.ROLE_BUDGET_CAP:g}"}),
+            (config.ROLE_BUDGET_CAP, ""))
 
 
 class SpecBudgetOnTheGateTest(unittest.TestCase):
@@ -312,36 +331,50 @@ class SpecBudgetOnTheGateTest(unittest.TestCase):
                     f"остаётся потолок ${config.DEFAULT_BUDGET_USD:.2f}",
                     self.journal("бюджет из SPEC отклонён")[0])
 
-    def test_value_above_the_default_keeps_the_default_and_warns(self):
-        """Требование 1: значение выше дефолта потолок не поднимает.
+    def test_value_above_the_role_cap_blocks_the_transition(self):
+        """Требование 3 (ADR-0014): значение выше потолка ролей — отказ
+        guard (не тихое усечение), независимо от schema_version SPEC.
 
-        Инвариант 10 («поднять потолок может только Оператор командой
-        budget») не должен обходиться числом, которое пишет агент-аналитик:
-        предупреждение, прежний потолок и обычный переход на гейт.
+        Guard теперь ловит завышенное значение РАНЬШЕ, чем переход вообще
+        дойдёт до `apply_spec_budget` (AC-8, сценарий 1) — задача остаётся
+        в spec_writing, а не переходит на гейт с тихо применённым дефолтом,
+        как было бы при старой семантике «выше дефолта — предупреждение и
+        обычный переход».
         """
-        for usd in (config.DEFAULT_BUDGET_USD + 1,
-                    config.DEFAULT_BUDGET_USD * 10):
+        for usd in (config.ROLE_BUDGET_CAP + 1,
+                    config.ROLE_BUDGET_CAP * 10):
             with self.subTest(usd=usd):
                 self.reset_task()
                 self.write_spec(budget_usd=f"{usd:g}")
 
-                out = self.capture(fsm.cmd_advance, self.TASK)
+                self.capture(fsm.cmd_advance, self.TASK)
 
                 row = self.task_row()
+                self.assertEqual(row["state"], "spec_writing",
+                                 "guard обязан заблокировать переход")
                 self.assertAlmostEqual(row["budget_usd"],
-                                       config.DEFAULT_BUDGET_USD,
-                                       msg="потолок задачи не поднялся")
-                self.assertIsNone(row["budget_source"],
-                                  "отвергнутое значение источником не стало")
-                self.assertEqual(row["state"], "spec_gate",
-                                 "задача не заблокирована")
-                self.assertIn("ВНИМАНИЕ", out)
-                refusals = self.journal("бюджет из SPEC отклонён")
-                self.assertEqual(len(refusals), 1)
-                self.assertIn("выше дефолта", refusals[0])
-                self.assertIn("budget", refusals[0])
-                self.assertEqual(self.journal("бюджет из SPEC"), [],
-                                 "записи о применении нет — применять нечего")
+                                       config.DEFAULT_BUDGET_USD)
+                self.assertIsNone(row["budget_source"])
+                self.assertEqual(
+                    len(self.journal("переход отклонён guard'ом")), 1)
+                self.assertEqual(self.journal("бюджет из SPEC"), [])
+                self.assertEqual(self.journal("бюджет из SPEC отклонён"), [],
+                                 "guard блокирует переход раньше "
+                                 "apply_spec_budget — до него не дошло")
+
+    def test_value_above_the_default_but_within_the_role_cap_becomes_the_ceiling(self):
+        """Требование 4 (ADR-0014): значение выше дефолта, но в пределах
+        потолка ролей, применяется на гейте как обычно — потолок отсюда
+        уже не только понижается."""
+        value = (config.DEFAULT_BUDGET_USD + config.ROLE_BUDGET_CAP) / 2
+        self.write_spec(budget_usd=f"{value:g}")
+
+        self.capture(fsm.cmd_advance, self.TASK)
+
+        row = self.task_row()
+        self.assertAlmostEqual(row["budget_usd"], value)
+        self.assertEqual(row["budget_source"], config.BUDGET_SOURCE_SPEC)
+        self.assertEqual(row["state"], "spec_gate")
 
     def test_value_equal_to_the_default_is_applied(self):
         """Граница: ровно дефолт — это «не выше», значение применяется.

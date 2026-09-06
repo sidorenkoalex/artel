@@ -137,6 +137,13 @@ TRANSIENT_SYSTEM_BACKOFF_SEC = 120
 LOG_TAIL_LINES = 15
 LOG_TAIL_CHARS = 1000
 DEFAULT_BUDGET_USD = 50.0  # решение Оператора 20.08.2026: $10 буксовал на T010/T011 (многоитерационные циклы)
+# Потолок ролей (ADR-0014, 05.09.2026): верхняя граница, в пределах
+# которой SPEC вправе двигать потолок задачи САМ, без участия Оператора
+# — и вверх, и вниз от DEFAULT_BUDGET_USD (`budget.spec_budget`/
+# `apply_spec_budget`, `scripts/guard.py`). Выше неё потолок поднимает
+# только Оператор командой `budget` (инвариант 10) — DEFAULT_BUDGET_USD
+# сам не меняется, он остаётся потолком задачи ДО применения SPEC.
+ROLE_BUDGET_CAP = 100.0
 # Бюджет — жёсткий лимит с алертом на 70% (docs/design.md §6, §7).
 BUDGET_ALERT_RATIO = 0.7
 # Стоп-лосс программы (roadmap §5) — отчётная веха учёта поверх потолков
@@ -344,7 +351,13 @@ REVIEW_SNAPSHOT_DIFF_MAX_BYTES = 262_144
 # только Оператор (ADR-0002, класс «лимит»).
 SPLIT_SIGNAL_ZONE_FILES = 5
 SPLIT_SIGNAL_AC_COUNT = 10
-SPLIT_SIGNAL_BUDGET_USD = 30
+# Пересчитан ADR-0014 (05.09.2026, введение потолка ролей ROLE_BUDGET_CAP)
+# — старое значение 30 сигналило уже на типовой калибровке скила аналитика
+# (до 5 AC ~$35, задача 01M1THKTJ7YT1K410G1KS17MK6). Новое значение строго
+# между $45 (типовая задача 6-10 AC этой же калибровки — сигнал не
+# поднимает) и $70 (класс «>10 AC или ≥5 файлов зоны» — по-прежнему
+# поднимает), включая верхнюю границу.
+SPLIT_SIGNAL_BUDGET_USD = 60
 # Доля от REVIEW_SNAPSHOT_DIFF_MAX_BYTES, с которой прогноз диффа SPEC
 # (`diff_forecast_kib`) считается сигналом (ANSWER-1).
 SPLIT_SIGNAL_DIFF_FORECAST_RATIO = 0.5

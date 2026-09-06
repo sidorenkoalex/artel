@@ -1,5 +1,5 @@
 ---
-built_at_sha: f4dffe0032fc33260326a9d05d8df38fd4669fcd
+built_at_sha: 8df189fbd9e8b0355aafda0f74a1298c629a7af7
 ---
 
 # Codebase-map пульта
@@ -808,7 +808,7 @@ built_at_sha: f4dffe0032fc33260326a9d05d8df38fd4669fcd
 
 **Импортирует:** `orchestrator/alerts.py`, `orchestrator/config.py`, `orchestrator/store.py`
 
-**Импортируется:** `orchestrator/agent_log.py`, `orchestrator/budget.py`, `orchestrator/doctor.py`, `orchestrator/pause.py`, `orchestrator/report.py`, `orchestrator/runner.py`, `tests/test_doctor.py`, `tests/test_multitarget.py`, `tests/test_multitarget_invariants.py`, `tests/test_step_cost.py`
+**Импортируется:** `orchestrator/agent_log.py`, `orchestrator/budget.py`, `orchestrator/doctor.py`, `orchestrator/pause.py`, `orchestrator/report.py`, `orchestrator/runner.py`, `scripts/guard.py`, `tests/test_doctor.py`, `tests/test_multitarget.py`, `tests/test_multitarget_invariants.py`, `tests/test_step_cost.py`
 
 ## orchestrator/stack.py
 
@@ -1005,10 +1005,12 @@ built_at_sha: f4dffe0032fc33260326a9d05d8df38fd4669fcd
 - `registry_records`
 - `registry_table_rows`
 - `requires_ac_markup`
+- `requires_budget_field`
 - `requires_registry`
 - `requires_split_assessment`
 - `requires_zones`
 - `review_evidence_errors`
+- `role_budget_cap_errors`
 - `scan_ac_content`
 - `scan_acceptance_tests`
 - `scan_extraneous_acceptance_files`
@@ -1017,12 +1019,13 @@ built_at_sha: f4dffe0032fc33260326a9d05d8df38fd4669fcd
 - `schema_errors`
 - `section_body`
 - `spec_ac_errors`
+- `spec_budget_field_errors`
 - `spec_zones_errors`
 - `split_assessment_errors`
 - `split_signal_names`
 - `traceability_errors_from_content`
 
-**Импортирует:** `orchestrator/config.py`, `orchestrator/yamlmini.py`
+**Импортирует:** `orchestrator/config.py`, `orchestrator/spend.py`, `orchestrator/yamlmini.py`
 
 **Импортируется:** `orchestrator/acceptance.py`, `orchestrator/amend.py`, `orchestrator/canary.py`, `orchestrator/dry_run.py`, `orchestrator/fsm.py`, `orchestrator/fsm_advance.py`, `orchestrator/fsm_autogate.py`, `orchestrator/retro.py`, `orchestrator/version.py`, `tests/test_acceptance_tests_flow.py`, `tests/test_analyst_role.py`, `tests/test_answer.py`, `tests/test_artifact_materialization.py`, `tests/test_fsm_autogate.py`, `tests/test_guard_artifact_branch_mode.py`, `tests/test_guard_extraneous_acceptance_files.py`, `tests/test_guard_schema.py`, `tests/test_guard_split_signals.py`, `tests/test_guard_zones.py`, `tests/test_id_format_guard.py`, `tests/test_invariants.py`, `tests/test_review_registry_gate.py`, `tests/test_version.py`, `tests/test_yaml_parsing.py`
 
