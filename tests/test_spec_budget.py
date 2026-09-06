@@ -35,7 +35,7 @@ task: {task}
 type: spec
 author_role: analyst
 status: {status}
-schema_version: 1
+schema_version: {schema_version}
 {extra}---
 
 # SPEC: бюджет из SPEC
@@ -45,6 +45,7 @@ schema_version: 1
 ## Требования
 
 ## Критерии приёмки
+AC-1. Тест.
 
 ## Не входит
 """
@@ -227,10 +228,12 @@ class SpecBudgetOnTheGateTest(unittest.TestCase):
 
     capture = staticmethod(capture)
 
-    def write_spec(self, status: str = "ready", **fields) -> None:
+    def write_spec(self, status: str = "ready", schema_version: int = 1,
+                   **fields) -> None:
         extra = "".join(f"{k}: {v}\n" for k, v in fields.items())
         (self.tdir / "SPEC.md").write_text(
-            SPEC_MD.format(task=self.TASK, status=status, extra=extra),
+            SPEC_MD.format(task=self.TASK, status=status,
+                           schema_version=schema_version, extra=extra),
             encoding="utf-8")
 
     def task_row(self):
@@ -298,24 +301,24 @@ class SpecBudgetOnTheGateTest(unittest.TestCase):
         self.assertAlmostEqual(self.task_row()["budget_usd"], 15.0)
 
     def test_spec_without_the_field_keeps_the_default_silently(self):
-        """Требование 2: SPEC из шаблона — дефолт и ни одной записи о бюджете.
+        """Требование 2: SPEC schema_version 4 (до ADR-0014) без поля
+        `budget_usd` — дефолт и ни одной записи о бюджете. Поле стало
+        обязательным только с schema_version 5 (`requires_budget_field`);
+        версия 4 — беклог, открытый до этой задачи, задним числом не
+        ловится (тот же приём версии-гейтинга, что и у `requires_zones`
+        рядом).
 
-        SPEC здесь ровно тот, что создала `new` из templates/SPEC.md, —
-        значит закомментированная подсказка аналитику (требование 5)
-        полем не притворяется.
+        С applied-приложением PLAN.md (`templates/SPEC.md` schema_version
+        5) свежесозданный `new` SPEC уже несёт `budget_usd` не
+        закомментированным — сценарий «SPEC из шаблона без поля» для
+        актуального шаблона больше не существует; здесь фикстура
+        собирается вручную под конкретную (устаревшую) версию.
+
+        Ловит мутацию: `requires_budget_field` требует поле начиная с
+        версии ниже 5 (например, с 4) — SPEC версии 4 без `budget_usd`
+        отказывался бы guard'ом вместо тихого дефолта.
         """
-        # schema_version 4 (шаблон с этой задачи) требует поле `zones:`
-        # (01M1NKVPD2A79PQ6K0JVV1B2Q1, AC-1) — заполняем закомментированную
-        # подсказку шаблона, как сделал бы analyst; сам тест — про бюджет,
-        # не про зоны.
-        spec = self.tdir / "SPEC.md"
-        spec.write_text(spec.read_text(encoding="utf-8")
-                        .replace("status: draft", "status: ready")
-                        .replace("# zones: orchestrator/store.py, "
-                                 "orchestrator/config.py",
-                                 "zones: orchestrator/store.py, "
-                                 "orchestrator/config.py"),
-                        encoding="utf-8")
+        self.write_spec(schema_version=4, zones="orchestrator/config.py")
 
         self.capture(fsm.cmd_advance, self.TASK)
 
@@ -324,6 +327,28 @@ class SpecBudgetOnTheGateTest(unittest.TestCase):
         self.assertIsNone(row["budget_source"])
         self.assertEqual(self.budget_records(), [])
         self.assertEqual(row["state"], "spec_gate")
+
+    def test_v5_spec_without_the_field_is_refused_by_guard(self):
+        """Требование 2 (ADR-0014), AC-2: SPEC schema_version >= 5 без
+        поля `budget_usd` — отказ guard, переход не срывается тихим
+        дефолтом, как это ещё разрешено версии 4 (тест выше).
+
+        Ловит мутацию: `requires_budget_field`/`spec_budget_field_errors`
+        не подключены в `_content_errors`, либо версия-гейтинг сравнивает
+        не с 5 (например, с 6) — SPEC версии 5 без поля прошёл бы
+        переход до гейта с тихим дефолтом.
+        """
+        self.write_spec(schema_version=5, zones="orchestrator/config.py")
+
+        self.capture(fsm.cmd_advance, self.TASK)
+
+        row = self.task_row()
+        self.assertEqual(row["state"], "spec_writing",
+                         "guard обязан заблокировать переход")
+        self.assertAlmostEqual(row["budget_usd"], config.DEFAULT_BUDGET_USD)
+        self.assertIsNone(row["budget_source"])
+        self.assertEqual(len(self.journal("переход отклонён guard'ом")), 1)
+        self.assertEqual(self.budget_records(), [])
 
     def test_garbage_warns_and_does_not_block_the_task(self):
         """Требование 3: мусор — предупреждение, дефолт и обычный переход."""
