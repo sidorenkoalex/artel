@@ -262,6 +262,24 @@ DEFAULT_BUDGET_USD` в `config.py` возвращает прежнее пове�
   слово («version-gated» / «always»), а не полагаться на то, что
   читающий каждый раз откроет докстринг конкретной функции.
 
+## Расширение зон
+
+Пути: templates/SPEC.md, templates/PLAN.md, templates/REVIEW.md, templates/TEST_REPORT.md, skills/spec-authoring.md
+
+Обоснование: приложение PLAN (дифы этих пяти файлов, секции «Приложение»
+ниже) применено Оператором прямо на кодовой ветке задачи коммитом
+`979023a8` — без немедленного подъёма `schema_version` в шаблонах тест
+`TemplatesCarryTheVersionTest` красил CI ветки, а перенос применения на
+момент после мержа оставил бы main с красным CI на время между мержем и
+следующим шагом Оператора. Правка защищённых путей не входит в
+объявленные `zones` этой задачи (`orchestrator/config.py, scripts/
+guard.py, orchestrator/budget.py, orchestrator/artel.py, docs/
+invariants.md, tests/`) — гейт зон `in_dev -> review` иначе отказывает
+переход как «дифф вне заявленных zones» (история отказов advance).
+Мандат подтверждён строкой `Расширение зон разрешено: <те же пять
+путей>` в `tasks/01M1THKTJ7YT1K410G1KS17MK6/ANSWER-1.md` (коммит
+`cmd_answer` Оператора, не автокоммит шага роли).
+
 ## Приложение: диф `templates/{SPEC,PLAN,REVIEW,TEST_REPORT}.md`
 
 `git apply --check` на чистом дереве (голова ветки задачи ДО правок
