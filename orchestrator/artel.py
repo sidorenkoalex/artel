@@ -5,10 +5,18 @@
 шагами не думает никто. Все гейты Фазы 0 — ручные (approve/reject из CLI).
 
 Состояния:
-  spec_writing -> spec_gate -> tests_writing -> in_dev -> review -> acceptance -> merge_gate -> done
-                     |                             ^________|  (changes_requested, <=3)
-                     |                             ^___________ (acceptance reject, <=1)
+  spec_writing -> spec_gate -> tests_writing -> in_dev -> verifying -> review -> acceptance -> merge_gate -> done
+                                                   ^______________________|  (changes_requested, <=3)
+                                                   ^__________________________________|  (acceptance reject, <=1)
   из любого: escalated (вопрос Оператору), killed.
+
+`verifying` (ADR-0015): CI подтянутой головы кодовой ветки проверяется ДО
+ревьювера, не после — рубежи перехода `in_dev -> review` (подтяжка main,
+прогон приёмочной планки, гейт зон/ёмкости, лок планки, гейт «замечания
+не отработаны», сверка головы на origin) стоят теперь на `in_dev ->
+verifying`; из `verifying` в `review` ведёт только зелёный CI. Возврат
+`changes_requested` — снова в `in_dev`, повторный вход в `review` — опять
+через `verifying`.
 
 `tests_writing` (A4, tasks/T023) — приёмочные тесты до кода, роль
 test_author: `spec_gate` заводит её при approve, если SPEC не помечен
@@ -17,7 +25,7 @@ approve идёт прямо в `in_dev`, как до T023. Выход из `test
 каждый AC-n получил тест либо пометку manual/skip/escalate
 (`tasks/<id>/acceptance_tests/`); `escalate` уводит задачу в `escalated`
 немедленно. После выхода каталог `acceptance_tests/` залочен фиксацией
-(T021): правка после лока — отказ перехода `in_dev -> review`.
+(T021): правка после лока — отказ перехода `in_dev -> verifying`.
 
 `approve` из escalated возвращает задачу в in_dev, а если эскалировал упавший
 агент — в тот шаг, на котором он упал (см. escalated_from): чинить надо шаг,

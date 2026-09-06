@@ -32,7 +32,7 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from orchestrator import (amend, artel, artifact_branch, catalog, config,  # noqa: E402
-                          fsm, gitcmd, store, workspace)
+                          fsm, github_adapter, gitcmd, store, workspace)
 from tests.sandbox import RealGitSandbox, TmpRootTest, capture  # noqa: E402
 from tests.sandbox import capture_new_task_id  # noqa: E402
 from tests.test_acceptance_tests_flow import (  # noqa: E402
@@ -493,12 +493,19 @@ class AmendThenReviewGateTest(RealGitSandbox):
                       "исправлена опечатка (регресс ANSWER-3, вопрос 2)")
         self.assertEqual(self.state(), "in_dev", f"amend-tests отказал: {out}")
 
-        capture(fsm.cmd_advance, self.TASK)
+        # ADR-0015: сверка головы на origin переехала на `in_dev ->
+        # verifying` — эта песочница не заводит настоящий push к origin,
+        # предмет теста — лок acceptance_tests/ после amend-tests, не
+        # origin-push (у него свои тесты, `tests/test_github_adapter.py`).
+        with mock.patch.object(github_adapter, "ensure_head_in_origin",
+                              return_value=(True, "")):
+            capture(fsm.cmd_advance, self.TASK)
 
         self.assertEqual(
-            self.state(), "review",
-            "гейт in_dev -> review обязан пройти сразу после успешной "
-            "правки планки")
+            self.state(), "verifying",
+            "гейт in_dev -> verifying обязан пройти сразу после успешной "
+            "правки планки (ADR-0015 — цель перехода in_dev теперь "
+            "verifying, не review)")
 
 
 class ReasonArgTest(unittest.TestCase):
