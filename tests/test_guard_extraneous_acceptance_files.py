@@ -27,7 +27,7 @@ class IsExtraneousAcceptanceTestFileTest(unittest.TestCase):
         """Ловит мутацию: из списка разрешённых имён/расширений guard'а
         выпадает одно из них, и легитимный файл планки ошибочно
         помечается посторонним."""
-        for rel in ("test_x.py", "_sandbox.py", "markers.py", "__init__.py",
+        for rel in ("test_x.py", "_sandbox.py", "_util.py", "markers.py", "__init__.py",
                    "NOTES.md", "README.txt"):
             with self.subTest(файл=rel):
                 self.assertFalse(guard.is_extraneous_acceptance_test_file(rel))

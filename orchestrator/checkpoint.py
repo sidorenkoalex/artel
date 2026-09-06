@@ -18,9 +18,12 @@ from . import config, fixation, gitcmd, store, workspace, yamlmini
 # см. `ignored` в `_commit_external_step_artifacts`) и прочие файлы —
 # посторонние, инцидент 05.09 (`acceptance_tests/docs/codebase-map.md` из
 # `scripts/codebase_map.py`, запущенного с cwd внутри каталога планки).
+# Вспомогательные модули планки `_*.py` (`_sandbox.py`, `_util.py`, …) —
+# легитимны: регрессия №18 (06.09) — `_util.py` тест-автора P1a был
+# вычищен как посторонний, планка стала неисполнимой. hotfix Оператора.
 _ACCEPTANCE_TESTS_DIR = "acceptance_tests/"
 _ACCEPTANCE_TESTS_ALLOWED_TOP_LEVEL = re.compile(
-    r"^(test_.*\.py|_sandbox\.py|markers\.py|__init__\.py|.+\.md|.+\.txt)$")
+    r"^(test_.*\.py|_[A-Za-z0-9_]+\.py|markers\.py|__init__\.py|.+\.md|.+\.txt)$")
 
 
 def _is_stray_acceptance_test_file(task_rel: str) -> bool:
