@@ -4,7 +4,7 @@ type: spec
 author_role: analyst
 status: ready
 schema_version: 4
-zones: orchestrator/artifact_branch.py, orchestrator/checkpoint.py, orchestrator/doctor.py, orchestrator/catalog.py, tests/
+zones: orchestrator/artifact_branch.py, orchestrator/checkpoint.py, orchestrator/doctor.py, orchestrator/catalog.py, orchestrator/answer.py, tests/
 budget_usd: 25
 ---
 
