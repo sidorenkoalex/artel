@@ -223,6 +223,36 @@ ANSWER-1: взята версия main целиком, поверх неё пе�
 - `scripts/guard.py` на `PLAN.md`/`SPEC.md`/`ANSWER-1.md` — ок.
 - `git push` из этого шага не выполнялся: рабочая копия без токена git (не через `runner.role_env`) — коммит слияния (`94b89600`) в ветке, push делает штатный механизм оркестратора.
 
+### Возврат: замечания ревью итерации 1 (R1-F1, R1-F2)
+
+R1-F1 (`_TZ_ZONES_RE` ловит прозаическое упоминание «Зоны:» раньше
+настоящей строки и обрезает перенос) — исправлено коммитом `e306e185`:
+регэксп заякорен на начало строки (`re.M`) и продолжает захват за
+перенос до пустой строки/следующей метки-раздела, добавлен
+`tests/test_catalog_tz_zones_parsing.py` (2 теста). Перепроверено в
+этом шаге вручную на реальном `tasks/01M1TQ11K4WJZD7ZE3MR0J4ZK4/TZ.md`:
+`catalog._tz_calibration_inputs(...)` -> `(20.0, 4, 5)` (было `zone_files=1`),
+`budget.recommended_budget_usd(4, 5)` -> `70.0`,
+`budget.calibration_warning(20.0, 70.0)` -> строка предупреждения — тот
+класс ошибки, ради которого заведена задача, больше не воспроизводится.
+
+R1-F2 (диф-приложение на `skills/spec-authoring.md` не применялся после
+мержа main) — диф в разделе «Приложение» выше перегенерирован против
+актуального текста файла (взят `git diff` реального точечного
+редактирования строк 30–39 с последующим `git checkout --` файла —
+правка в код НЕ попала, `skills/` защищённый путь применяет только
+Оператор): `git apply --check` на новый диф против чистого дерева этой
+головы ветки — пройден непосредственно перед сдачей шага.
+
+Перепрогон после обеих правок — зелёные (без повторного изменения
+ассертов):
+- `python3 -m unittest tests.test_catalog_tz_zones_parsing` — 2 теста.
+- `python3 -m unittest tasks.01M1TQ11K4WJZD7ZE3MR0J4ZK4.acceptance_tests.test_ac1_ac2_calibration_table tasks.01M1TQ11K4WJZD7ZE3MR0J4ZK4.acceptance_tests.test_ac5_ac6_ac7_ac8_new_hint tasks.01M1TQ11K4WJZD7ZE3MR0J4ZK4.acceptance_tests.test_ac9_ac10_ac11_gate_hint tasks.01M1TQ11K4WJZD7ZE3MR0J4ZK4.acceptance_tests.test_ac_manual_and_skip_markers` — 19 тестов.
+- `python3 -m unittest tests.test_catalog_new_race tests.test_catalog_status_log tests.test_zones_approve tests.test_zones_gate tests.test_split_assessment_merge_gate tests.test_new_argv_parsing tests.test_spec_budget` — 87 тестов.
+- `python3 -m unittest tests.test_invariants tests.test_cmd_approve_dispatch tests.test_pull tests.test_review_package tests.test_guard_split_signals` — 173 теста.
+- `python3 -m unittest tests.test_fsm_autogate tests.test_fsm_branch_correct_status_reads tests.test_fsm_draft_mr_reentry tests.test_fsm_map_conflict_autoresolve tests.test_fsm_map_regen tests.test_fsm_merge_conflict_note tests.test_fsm_merge_gate_done_snapshot tests.test_fsm_retro tests.test_fsm_review_rework_gate tests.test_fsm_advance_gate_framework tests.test_fsm_advance_gate_smoke` — 76 тестов.
+- `python3 scripts/codebase_map.py` (скрипт не поддерживает `--check`, пишет безусловно) — диф только по `built_at_sha` (текущий HEAD, коммит `e306e185`), содержимое карты не изменилось; `git checkout -- docs/codebase-map.md` — эта итерация `.py` не меняла, коммитить нечего.
+
 ## Предложения системе
 
 - Три задачи подряд (эта, 01M1THKTJ7, 01M1THKWFX) готовят диф-приложения
@@ -237,26 +267,35 @@ ANSWER-1: взята версия main целиком, поверх неё пе�
 
 ## Приложение: диф `skills/spec-authoring.md`
 
-`git apply --check` на чистом дереве (голова этой ветки задачи, файл
-не тронут) — пройден.
+Диф ниже перегенерирован против ТЕКУЩЕЙ головы ветки задачи (после
+слияния main, коммит `979023a8` задачи 01M1THKTJ7 уже внутри этой
+ветки и уже переписал базовый уровень «~25»→«~35» и добавил
+«Планка не ниже $25 ни для одной задачи» — R1-F2, реестр замечаний
+REVIEW.md итерации 1): предыдущая версия диффа в этом разделе была
+подготовлена ДО мержа и переставала применяться после него, что и
+поймало ревью. `git apply --check` на этот диф против чистого дерева
+головы ветки — пройден (прогон непосредственно перед сдачей шага, см.
+«Проверено исполнением»).
 
 ```diff
 diff --git a/skills/spec-authoring.md b/skills/spec-authoring.md
-index 67dd39ac..6c107174 100644
+index 44df9cff..a9d710d3 100644
 --- a/skills/spec-authoring.md
 +++ b/skills/spec-authoring.md
-@@ -29,9 +29,10 @@
-   — по классу задачи, откалиброванному на факте 28.08–05.09 (цена
-   шага стабильна: analyst ~$2, reviewer ~$2.3, developer ~$3.5,
-   test_author ~$6; цену задачи задаёт число шагов, а его — объём и
--  итерации ревью): до 5 критериев и до 3 файлов зоны — ~25; 6–10
--  критериев — ~45; больше 10 критериев или 5 и более файлов — ~70 либо
--  деление (сигналы «Оценки объёма» это же и ловят). Закладывай две
-+  итерации ревью): ориентир — `config.BUDGET_CALIBRATION_TABLE`
-+  (`orchestrator/config.py`) по числу критериев приёмки и числу файлов
-+  зоны, пол — `config.BUDGET_CALIBRATION_FLOOR_USD` (сигналы «Оценки
-+  объёма» те же числа и ловят). Закладывай две
-   итерации ревью, не одну (+~$6 на итерацию). Прежние ощущения «~15
-   / ~25 / ~50» занижали факт в 2–3 раза (решение Оператора 05.09,
-   роадмап §4 копилка). Ставка — **только
+@@ -30,10 +30,11 @@
+   классу задачи, откалиброванному на факте 28.08–05.09 (цена шага
+   стабильна: analyst ~$2, reviewer ~$2.3, developer ~$3.5, test_author
+   ~$6; цену задачи задаёт число шагов, а его — объём и итерации ревью):
+-  до 5 критериев и до 3 файлов зоны — ~35; 6–10 критериев — ~45; больше
+-  10 критериев или 5 и более файлов — ~70 либо деление (сигналы «Оценки
+-  объёма» это же и ловят). Планка не ниже $25 ни для одной задачи.
+-  Закладывай две итерации ревью, не одну (+~$6 на итерацию). Прежние
++  ориентир — `config.BUDGET_CALIBRATION_TABLE` (`orchestrator/
++  config.py`) по числу критериев приёмки и числу файлов зоны, пол —
++  `config.BUDGET_CALIBRATION_FLOOR_USD` (сигналы «Оценки объёма» те же
++  числа и ловят) либо деление задачи. Закладывай две итерации ревью,
++  не одну (+~$6 на итерацию). Прежние
+   ощущения «~15 / ~25 / ~50» занижали факт в 2–3 раза (решение Оператора
+   05.09, роадмап §4 копилка). Ставка применяется потолком задачи в ОБЕ
+   стороны (и выше, и ниже дефолта оркестратора) в пределах потолка ролей
 ```
