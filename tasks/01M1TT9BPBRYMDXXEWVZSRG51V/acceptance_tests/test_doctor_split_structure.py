@@ -27,7 +27,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from orchestrator import doctor  # noqa: E402
 
-from _shared import (ALL_REQUIRED_FACADE_NAMES, DOCTOR_PKG_DIR,  # noqa: E402
+from _sandbox import (ALL_REQUIRED_FACADE_NAMES, DOCTOR_PKG_DIR,  # noqa: E402
                      FUNCTION_LOGIC_HASHES, SECTION_MARKERS, logic_hash,
                      package_py_files)
 

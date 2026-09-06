@@ -32,7 +32,7 @@ from tests.sandbox import claude_only_popen, claude_only_run  # noqa: E402
 from tests.test_doctor import (FakeLiveSmokeProc, TmpRootTest,  # noqa: E402
                                _REAL_WHICH, result_event)
 
-from _shared import ALL_REQUIRED_FACADE_NAMES, EXPECTED_CHECKS_IN_ORDER  # noqa: E402
+from _sandbox import ALL_REQUIRED_FACADE_NAMES, EXPECTED_CHECKS_IN_ORDER  # noqa: E402
 
 
 class ImportCompatibilityTest(unittest.TestCase):
