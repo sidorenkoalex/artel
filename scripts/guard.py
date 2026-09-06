@@ -531,7 +531,13 @@ def scan_extraneous_acceptance_files(tasks_root: Path) -> list[Path]:
 # и `::test_all_files_binary_still_commits_and_clears_the_dir`). Скрытые
 # файлы/каталоги (`.`-префикс любого сегмента пути) и `__pycache__/` —
 # посторонние независимо от расширения. `acceptance_tests/` — по
-# собственным правилам (см. выше), этим правилом не задета.
+# собственным правилам (см. выше), этим правилом не задета. Единственный
+# разрешённый каталог первого уровня — `acceptance_tests/`: файл внутри
+# ЛЮБОГО другого, впервые заведённого каталога первого уровня (например
+# `wip/_head_map.md`) — посторонний независимо от расширения, тем же
+# классом инцидента на один уровень вложенности глубже (REVIEW.md
+# итерации 1, замечание R1-F1: критерий проверял только путь ровно из
+# одного сегмента и молчал на файле внутри новой поддиректории).
 EXTRANEOUS_TASK_ROOT_FILE_REASON = "посторонний файл в каталоге задачи"
 TASK_ROOT_ALLOWED_MD = re.compile(
     r"^(SPEC|PLAN|REVIEW|TEST_REPORT|QUESTIONS|TZ|ANSWER-\d+)\.md$")
@@ -539,12 +545,14 @@ TASK_ROOT_ALLOWED_MD = re.compile(
 
 def is_extraneous_task_root_file(rel_to_task_dir: str) -> bool:
     """`rel_to_task_dir` — путь файла относительно `tasks/<id>/` (`/`-
-    разделённый, например `_head_map.md` или `__pycache__/junk.pyc`).
-    `True` — файл посторонний (требование 1, ANSWER-1): `.md` первого
-    уровня вне `TASK_ROOT_ALLOWED_MD`, любой скрытый файл/каталог
-    (`.`-префикс любого сегмента пути) или файл внутри `__pycache__/`
-    первого уровня. `acceptance_tests/` — по собственным правилам
-    (`is_extraneous_acceptance_test_file` выше), не этой функцией."""
+    разделённый, например `_head_map.md`, `__pycache__/junk.pyc` или
+    `wip/_head_map.md`). `True` — файл посторонний (требование 1,
+    ANSWER-1, R1-F1): `.md` первого уровня вне `TASK_ROOT_ALLOWED_MD`,
+    любой скрытый файл/каталог (`.`-префикс любого сегмента пути), файл
+    внутри `__pycache__/` первого уровня, либо файл внутри ЛЮБОЙ другой
+    поддиректории первого уровня (единственная легальная поддиректория —
+    `acceptance_tests/`, по собственным правилам
+    `is_extraneous_acceptance_test_file` выше, не этой функцией)."""
     parts = rel_to_task_dir.split("/")
     if parts[0] == "acceptance_tests":
         return False
@@ -552,9 +560,11 @@ def is_extraneous_task_root_file(rel_to_task_dir: str) -> bool:
         return True
     if parts[0] == "__pycache__":
         return True
-    if len(parts) == 1 and parts[0].endswith(".md"):
-        return not TASK_ROOT_ALLOWED_MD.match(parts[0])
-    return False
+    if len(parts) == 1:
+        if parts[0].endswith(".md"):
+            return not TASK_ROOT_ALLOWED_MD.match(parts[0])
+        return False
+    return True
 
 
 def extraneous_task_root_files_in(task_dir: Path) -> list[Path]:
