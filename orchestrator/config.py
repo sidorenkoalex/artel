@@ -367,8 +367,8 @@ CONTEXT_PART_MAX_BYTES = 65_536
 # ADR-0002): разрез orchestrator/doctor.py на пакет (01M1TT9BPBRYMDXXEWVZSRG51V)
 # — перенос 1856 строк в 18 файлов, diff 320 909 байт при неизменной
 # логике; ревьюверу ~80 тыс. токенов, помещается. ВЕРНУТЬ 262_144
-# после мержа 01M1TT9BPB.
-REVIEW_SNAPSHOT_DIFF_MAX_BYTES = 393_216
+# после мержа 01M1TT9BPB — возвращён 06.09 (мерж 7759a248).
+REVIEW_SNAPSHOT_DIFF_MAX_BYTES = 262_144
 
 # Пороги сигналов «подозрения на большой объём» на этапе SPEC
 # (tasks/01M1KS8K9RXWHX2PW3ZKB0P903, требование 1, 7; ANSWER-1 — имена и
