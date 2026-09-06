@@ -167,6 +167,19 @@ class DetachedCycleSandbox(RealPultGitTest):
         claude_path.write_text(FAKE_CLAUDE_SH, encoding="utf-8")
         claude_path.chmod(claude_path.stat().st_mode | stat.S_IEXEC
                           | stat.S_IXGRP | stat.S_IXOTH)
+        # Правка планки Оператором 06.09.2026 (amend-tests, ADR-0012): после
+        # стека ч.3 (01M1RDCEF0JZ4AVQRE43JFH8TN) PATH роли собирается из
+        # КАТАЛОГОВ объявленных инструментов в порядке манифеста (python3,
+        # git, gh, claude), а не наследуется от процесса; каталог `gh`
+        # (например /opt/homebrew/bin) может содержать настоящий `claude`,
+        # который затеняет подставной. Символические ссылки на настоящие
+        # `git` и `gh` в подставном каталоге делают его каталогом ВСЕХ
+        # инструментов манифеста, кроме python3 (тот берётся из
+        # sys.executable), — и подставной `claude` снова первый.
+        for tool in ("git", "gh"):
+            real = shutil.which(tool)
+            if real:
+                (self._bin_dir / tool).symlink_to(real)
 
         caller_home = Path(tempfile.mkdtemp(prefix="artel-fake-home-"))
         self.addCleanup(shutil.rmtree, caller_home, True)
