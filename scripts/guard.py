@@ -747,6 +747,7 @@ REGISTRY_FIELD_LABELS = ("id", "статус", "файл/строка", "сут�
 REGISTRY_FIELD_KEYS = ("id", "status", "location", "gist", "consequence",
                        "decision")
 REGISTRY_SEPARATOR_CELL = re.compile(r"^:?-{1,}:?$")
+REGISTRY_CELL_SPLIT = re.compile(r"(?<!\\)\|")  # черта, не экранированная `\`
 
 
 def requires_registry(meta: dict) -> bool:
@@ -774,7 +775,12 @@ def registry_table_rows(body: str) -> list[list[str]]:
         line = line.strip()
         if not line.startswith("|"):
             continue
-        cells = [c.strip() for c in line.strip("|").split("|")]
+        # Hotfix №19 (06.09): черта внутри ячейки экранируется по Markdown
+        # как `\|` — режем только по НЕэкранированным чертам и снимаем
+        # экранирование; иначе пример команды `a \| b` в ячейке давал
+        # «8 колонок вместо 6» (канарейка 20260906T194847Z, третий случай).
+        cells = [c.strip().replace("\\|", "|")
+                 for c in REGISTRY_CELL_SPLIT.split(line.strip("|"))]
         if cells and cells[0].lower() == "id":
             continue  # строка заголовка таблицы
         if all(REGISTRY_SEPARATOR_CELL.fullmatch(c) for c in cells):
