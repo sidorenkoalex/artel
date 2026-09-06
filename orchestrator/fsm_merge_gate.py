@@ -20,6 +20,8 @@ import tempfile
 import time
 from pathlib import Path
 
+from scripts import guard
+
 from . import (artifact_branch, ci, cleanup, config, fsm, fsm_postmerge,
               gitcmd, github_adapter, lease, merge_lock, store, workspace)
 
@@ -267,6 +269,38 @@ def _overlay_artifact_snapshot(conn, task_id: str, repo: Path) -> None:
             f"(main несёт его, не легаси-копию)")
 
 
+def _guard_task_root_or_refuse(conn, task_id: str, scratch: Path) -> None:
+    """Guard на `tasks/<id>/` СНИМКА артефактной ветки в scratch-дереве —
+    ДО push в main (SPEC 01M1TNN4TMWAQSQ9Y1PW37J5H0, AC-7/AC-8): вызывается
+    ПОСЛЕ `_overlay_artifact_snapshot` (снимок артефактной ветки к этому
+    моменту уже наложен на `tasks/<id>/` `scratch`, не легаси-копия
+    кодовой ветки), ДО `_push_merged_main` — единственный способ поймать
+    посторонний файл (инцидент 06.09), уже проникший в артефактную ветку
+    В ОБХОД автокоммита (правка Оператора на гейте, старая ветка,
+    отставшая от фильтра `checkpoint.py`).
+
+    Критерий — тот же `scripts.guard`, что `checkpoint.py` уже применяет
+    на автокоммите (единый источник истины, не независимая копия).
+    Посторонний файл — отказ той же журнальной записью, что и прочие
+    отказы `merge_gate` (`"merge FAILED"` — CI красный, конфликт merge,
+    push FAILED): `sys.exit` именованной причиной, задача остаётся на
+    `merge_gate` БЕЗ эскалации (`store.set_state` не вызывается), main не
+    тронут — `_push_merged_main` этой веткой ещё не достигнут.
+    """
+    task_dir = scratch / "tasks" / task_id
+    extraneous = guard.extraneous_task_root_files_in(task_dir)
+    if not extraneous:
+        return
+    rel_names = [str(p.relative_to(scratch)) for p in extraneous]
+    detail = (f"guard: {guard.EXTRANEOUS_TASK_ROOT_FILE_REASON} в снимке "
+             f"артефактной ветки: {', '.join(rel_names)}")
+    store.journal(conn, task_id, "orchestrator", "merge FAILED", detail)
+    _drop_scratch_worktree(scratch)
+    sys.exit(f"[{task_id}] merge отклонён: {detail}\n"
+             f"  задача осталась на гейте merge; почини нарушения и "
+             f"повтори: artel.py approve {task_id}")
+
+
 def _ensure_branch_head_published(conn, task_id: str, branch: str) -> str:
     """Голова ветки задачи видна в origin — предусловие КАЖДОГО approve
     merge_gate (SPEC 01M1GS5HZ1JXFGKVR95HEW0AEZ, требование 7,
@@ -406,9 +440,15 @@ def _publish_merge_artifacts(conn, task_id: str, scratch: Path) -> str:
     ниже выполняется независимо от их исхода. Оба служебных шага
     работают В SCRATCH (AC-9) — не в `config.ROOT`.
 
+    `_guard_task_root_or_refuse` (SPEC 01M1TNN4TMWAQSQ9Y1PW37J5H0,
+    AC-7/AC-8) — сразу после наложения снимка, ДО карты/RETRO/push:
+    посторонний файл `tasks/<id>/` отказывает переходу `sys.exit`'ом,
+    дальше этой функции выполнение не идёт.
+
     Возврат — `final_sha` (после карты/RETRO) для push явным sha.
     """
     _overlay_artifact_snapshot(conn, task_id, scratch)
+    _guard_task_root_or_refuse(conn, task_id, scratch)
     merge_sha = gitcmd.head_sha(scratch)
     fsm_postmerge._regenerate_and_commit_map(conn, task_id, repo=scratch)
     fsm_postmerge._generate_and_commit_retro(conn, task_id, merge_sha,
