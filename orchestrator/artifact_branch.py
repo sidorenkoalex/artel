@@ -20,7 +20,7 @@ import os
 from datetime import datetime, timezone
 from pathlib import Path
 
-from . import config, fixation, gitcmd
+from . import config, fixation, gitcmd, store
 
 PASSPORT_REL_TMPL = "tasks/{task_id}/PASSPORT.md"
 
@@ -106,17 +106,45 @@ def write_commit(repo: Path, files: dict, message: str, author_name: str,
             pass
 
 
+def _new_branch_parent(task_id: str) -> str:
+    """Родитель ПЕРВОГО коммита артефактной ветки задачи (SPEC
+    01M1TQ0ZCYJ6TESZ2KGJ6AWYNH, требование 1, AC-1/AC-2/AC-6): голова
+    `origin/main` после `git fetch origin main` — HEAD главной копии не
+    двигается (`gitcmd.fetch_head_sha` — простой `git fetch`, не
+    `pull`/чекаут). Инцидент 06.09: `tasks/` новой ветки, унаследованный
+    от отставшего локального пина `config.MAIN_BRANCH`, тащил за собой
+    уже удалённые на `origin/main` черновики — предпочтение origin, когда
+    он доступен, закрывает этот путь.
+
+    `origin` недоступен (нет сети, `origin` не настроен, песочница) —
+    фолбэк на голову локального `config.MAIN_BRANCH` (AC-2, поведение до
+    этой задачи), с записью причины в журнал задачи (AC-7): молчаливая
+    деградация иначе прячет от Оператора, что артефактная ветка унаследовала
+    устаревший пин, тот же класс дефекта, что и сам инцидент.
+    """
+    origin_head, reason = gitcmd.fetch_head_sha("origin", config.MAIN_BRANCH)
+    if origin_head:
+        return origin_head
+    local_head = gitcmd.branch_head_sha(config.MAIN_BRANCH)
+    if local_head:
+        store.journal(
+            store.db(), task_id, "orchestrator",
+            "артефактная ветка: fallback на локальный main",
+            f"артефактная ветка от локального main: {reason}")
+    return local_head
+
+
 def commit_files(task_id: str, files: dict, message: str,
                  author_name: str = fixation.FIXATION_AUTHOR_NAME,
                  author_email: str = fixation.FIXATION_AUTHOR_EMAIL,
                  remove: list | None = None) -> str:
     """Коммитит `files` в артефактную ветку задачи (создаёт её, если ещё
-    нет — от головы `config.MAIN_BRANCH`, тем же принципом, что кодовая
-    ветка `task/*`). Возвращает sha нового коммита; пустая строка — git
-    не ответил. `remove` — см. `write_commit`."""
+    нет — родитель первого коммита см. `_new_branch_parent`, требование 1;
+    для ЛЮБОГО target, включая внешний — ветка физически коммитится
+    здесь, в `config.ROOT`, AC-3). Возвращает sha нового коммита; пустая
+    строка — git не ответил. `remove` — см. `write_commit`."""
     branch = branch_name(task_id)
-    parent = gitcmd.branch_head_sha(branch) or gitcmd.branch_head_sha(
-        config.MAIN_BRANCH) or None
+    parent = gitcmd.branch_head_sha(branch) or _new_branch_parent(task_id) or None
     commit_sha = write_commit(config.ROOT, files, message, author_name,
                               author_email, parent=parent, remove=remove)
     if not commit_sha:

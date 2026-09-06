@@ -60,9 +60,9 @@ import time
 from collections import namedtuple
 from pathlib import Path
 
-from . import (alerts, artifact_branch, canary, coldstart, config, gitcmd,
-              liveness, projects, roles, runner, snapshot, spend, stack,
-              store, targets, workspace, zone_lock)
+from . import (alerts, artifact_branch, canary, coldstart, config, fixation,
+              gitcmd, liveness, projects, roles, runner, snapshot, spend,
+              stack, store, targets, workspace, zone_lock)
 
 # status: "ok" | "warn" | "fail" | "skip" ("skip" — честный пропуск проверки,
 # требование 9: сверка forge-политики без `gh`/сети — не провал и не ок).
@@ -822,6 +822,80 @@ def check_branch_freshness(conn) -> list[Check]:
                   f"{t['id']}: ветка {t['branch']} отстала от "
                   f"{config.MAIN_BRANCH} на {behind} коммитов")
            for t, behind in stale]
+
+
+def _artifact_branch_first_commit_parent(branch: str) -> str:
+    """Родитель самого раннего коммита `branch`, целиком авторства
+    плотницкой записи артефактной ветки (`fixation.FIXATION_AUTHOR_EMAIL`
+    — единственный автор, которым `artifact_branch.write_commit` подписывает
+    ЛЮБОЙ коммит этой ветки, ни один вызывающий код не переопределяет его):
+    граница между собственной историей ветки и унаследованным `main`/
+    `origin` на момент её создания (SPEC 01M1TQ0ZCYJ6TESZ2KGJ6AWYNH,
+    AC-5). Обход — от головы `branch` назад по первому родителю, пока автор
+    совпадает; последний совпавший — искомый ранний коммит, его родитель и
+    есть ответ.
+
+    Пустая строка — `branch` пуста, ни один коммит не авторства плотницкой
+    записи, либо git не ответил.
+    """
+    res = gitcmd.git("log", "--format=%H %ae", "--first-parent", branch)
+    if res is None or res.returncode != 0:
+        return ""
+    boundary = ""
+    for line in res.stdout.splitlines():
+        sha, _, email = line.partition(" ")
+        if email != fixation.FIXATION_AUTHOR_EMAIL:
+            break
+        boundary = sha
+    if not boundary:
+        return ""
+    parent = gitcmd.git("rev-parse", "--verify", "--quiet", f"{boundary}^")
+    if parent is None or parent.returncode != 0:
+        return ""
+    return parent.stdout.strip()
+
+
+def check_artifact_branch_parent_ancestry(conn) -> list[Check]:
+    """Родитель первого коммита артефактной ветки живой задачи обязан быть
+    предком `origin/main` (SPEC 01M1TQ0ZCYJ6TESZ2KGJ6AWYNH, требование 3,
+    AC-5) — иначе ветка заведена от устаревшего/расходящегося пина главной
+    копии (инцидент 06.09) и несёт в `tasks/` содержимое, которого уже
+    могло не быть в `origin` (в т.ч. удалённые оттуда черновики).
+
+    `origin` недоступен (нет сети, `origin` не настроен, песочница) —
+    `skip` целиком: сверять не с чем (тот же приём деградации, что и у
+    `check_branch_freshness`, когда `gitcmd.commits_behind` вернул `None`).
+    Не incident (тем же доводом, что `check_branch_freshness`/
+    `check_target_layout`): расхождение — состояние, требующее внимания
+    Оператора, не операционный дефект с жизненным циклом ack.
+    """
+    origin_head, reason = gitcmd.fetch_head_sha("origin", config.MAIN_BRANCH)
+    if not origin_head:
+        return [Check("artifact-branch-parent-ancestry", "skip",
+                      f"origin недоступен: {reason}")]
+    warnings = []
+    for t in store.all_tasks(conn):
+        if t["state"] in ("done", "killed"):
+            continue
+        branch = artifact_branch.branch_name(t["id"])
+        if not gitcmd.branch_exists(branch):
+            continue
+        parent = _artifact_branch_first_commit_parent(branch)
+        if not parent:
+            continue
+        res = gitcmd.git("merge-base", "--is-ancestor", parent, origin_head)
+        if res is None or res.returncode not in (0, 1):
+            continue
+        if res.returncode == 1:
+            warnings.append(Check(
+                "artifact-branch-parent-ancestry", "warn",
+                f"{t['id']}: родитель первого коммита артефактной ветки "
+                f"{parent[:12]} не предок origin/main {origin_head[:12]}"))
+    if warnings:
+        return warnings
+    return [Check("artifact-branch-parent-ancestry", "ok",
+                  "родитель первого коммита артефактной ветки каждой живой "
+                  "задачи — предок origin/main")]
 
 
 # --- lease с мёртвым pid (SPEC T044, требование 11) ----------------------
@@ -1758,6 +1832,7 @@ def all_checks(conn) -> list[Check]:
     checks.extend(check_hung_test_runs(conn))
     checks.extend(check_zone_waits(conn))
     checks.extend(check_branch_freshness(conn))
+    checks.extend(check_artifact_branch_parent_ancestry(conn))
     checks.append(check_root_pin())
     checks.append(check_role_log_pool_leak(conn))
     checks.append(check_canary_pool_drift())
