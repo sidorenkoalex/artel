@@ -132,6 +132,7 @@ class OriginDivergedSandbox(unittest.TestCase):
         # первому шагу роли-разработчика (ADR-0005 п.9) и не трогает
         # чекаут песочницы (остаётся на `config.MAIN_BRANCH`).
         self.git("branch", self.branch)
+        self.write_acceptance_plank()
 
     capture = staticmethod(capture)
 
@@ -204,6 +205,44 @@ class OriginDivergedSandbox(unittest.TestCase):
         text = PLAN_READY.format(task=self.TASK)
         sha = artifact_branch.commit_files(
             self.TASK, {f"tasks/{self.TASK}/PLAN.md": text}, "PLAN ready")
+        self.assertTrue(sha, "artifact_branch.commit_files не сработал")
+        return sha
+
+    def write_acceptance_plank(self) -> str:
+        """Коммитит непустой `acceptance_tests/` со SPEC.md
+        `schema_version: 2` без `skip_tests` в артефактную ветку пульта
+        плотницки (`artifact_branch.commit_files`, тем же механизмом, что
+        `write_plan_ready`) — заменяет черновой SPEC.md по умолчанию
+        (`catalog.cmd_new` коммитит `templates/SPEC.md` буквально:
+        `schema_version: 4`, без `skip_tests`), который требует
+        AC-разметку (`guard.requires_ac_markup`) при пустом
+        `acceptance_tests/`.
+
+        Без этого узла `_pull_main_or_escalate` (SPEC
+        01M1R9YEK08XEQWBFX0929WFVJ, добавлено ПОСЛЕ того, как эта планка
+        уже была написана) отказывает «планка не найдена в источнике»
+        ДО того, как дойдёт до предмета проверки этих тестов — контракт
+        изменился под ногами планки (SPEC 01M1TKP45EM16ZMJGQKNZA5T7J,
+        требование 4, класс дефекта (б))."""
+        spec_text = (
+            "---\n"
+            f"task: {self.TASK}\n"
+            "type: spec\n"
+            "author_role: analyst\n"
+            "status: ready\n"
+            "schema_version: 2\n"
+            "---\n\n"
+            "# SPEC: планка\n\n"
+            "## Критерии приёмки\n\nAC-1. ...\n")
+        stub_test = (
+            "import unittest\n\n\n"
+            "class StubTest(unittest.TestCase):\n\n"
+            "    def test_stub(self):\n        pass\n")
+        sha = artifact_branch.commit_files(
+            self.TASK,
+            {f"tasks/{self.TASK}/SPEC.md": spec_text,
+             f"tasks/{self.TASK}/acceptance_tests/test_stub.py": stub_test},
+            "приёмочная планка")
         self.assertTrue(sha, "artifact_branch.commit_files не сработал")
         return sha
 
