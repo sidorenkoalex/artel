@@ -94,7 +94,7 @@ from collections import namedtuple
 from pathlib import Path
 
 from .. import (alerts, artifact_branch, canary, ci, coldstart, config,
-                fixation, gitcmd, liveness, projects, roles, runner,
+                fixation, gitcmd, liveness, notes, projects, roles, runner,
                 snapshot, spend, stack, store, targets, workspace, zone_lock)
 
 # status: "ok" | "warn" | "fail" | "skip" ("skip" — честный пропуск проверки,
@@ -148,9 +148,9 @@ from .hung_test_watchdog import (_HUNG_TEST_CMD_RE, _ETIME_RE,
                                  _hung_test_run_alert_live,
                                  check_hung_test_runs, _fix_hung_test_runs,
                                  _fix_dead_lease_groups, check_zone_waits)
-from .misc_checks import (check_backup_age, check_task_counters,
-                          check_pending_snapshots, check_remote_empty,
-                          check_base_branch)
+from .misc_checks import (check_backup_age, check_pending_notes,
+                          check_task_counters, check_pending_snapshots,
+                          check_remote_empty, check_base_branch)
 from .root_pin import check_root_pin
 from .orphan_branches import (ORPHAN_ARTIFACT_BRANCH_SOURCE,
                               _REMOTE_ARTIFACT_GLOB, _UNSET,

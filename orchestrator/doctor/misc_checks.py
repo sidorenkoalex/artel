@@ -32,6 +32,19 @@ def check_backup_age(conn) -> doctor.Check:
                  f"(ADR-0005 п.3, бэкап .artel/ не обязателен)")
 
 
+def check_pending_notes() -> doctor.Check:
+    """Требование 6 SPEC 01M1VBEHTDYPK3E4RRFHWYYYW3: заметки `note`,
+    удержанные из-за сетевого отказа push либо исчерпания повторов
+    non-fast-forward (`notes.pending_notes()`), — предупреждение, пока
+    Оператор/следующий вызов `note`/`note --flush` не допушит их."""
+    pending = doctor.notes.pending_notes()
+    if not pending:
+        return doctor.Check("pending-notes", "ok", "нет удержанных заметок note")
+    return doctor.Check("pending-notes", "warn",
+                 f"{len(pending)} удержанных заметок note — "
+                 f"artel.py note --flush отправит их в origin")
+
+
 def check_task_counters(conn) -> doctor.Check:
     """Контур счётчика номеров задач — замороженный legacy (SPEC T094,
     требование 6; ADR-0005 п.5 правки этой же задачи): генератором id
