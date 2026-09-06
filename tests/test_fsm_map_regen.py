@@ -5,6 +5,7 @@
 (AC-1..AC-3) уже покрывают приёмочные тесты
 `tasks/T042/acceptance_tests/test_map_regen_on_merge.py`.
 """
+import json
 import subprocess
 import sys
 import unittest
@@ -234,6 +235,93 @@ class RegenerateAndCommitMapTest(TmpRootTest):
         incidents = self.incidents()
         self.assertEqual(len(incidents), 1)
         self.assertTrue(incidents[0]["source"].startswith("fsm.map_regen"))
+
+
+class MapSizeJournalUnitTest(TmpRootTest):
+    """01M1RFVWV6WWTXRC5F40K61632, требования 2, 5; AC-5..AC-7 — компактный
+    юнит поверх приёмочной планки задачи (`tasks/
+    01M1RFVWV6WWTXRC5F40K61632/acceptance_tests/
+    test_fsm_map_size_journal.py`, покрывающей эти же критерии полно)."""
+
+    def setUp(self):
+        super().setUp()
+        (self.root / "docs").mkdir(parents=True)
+        self.map_path = self.root / "docs" / "codebase-map.md"
+        self.map_path.write_text(COMMITTED_MAP, encoding="utf-8")
+        store.create_schema(store.db())
+        self.conn = store.db()
+
+    def size_steps(self, task_id: str) -> list:
+        return [r for r in store.task_steps(self.conn, task_id)
+               if r["action"] == fsm_postmerge.MAP_SIZE_ACTION]
+
+    def test_content_changed_writes_size_entry_with_stats_and_new_sha(self):
+        """Ловит мутацию: запись «карта: размер» не пишется на ветке
+        изменения содержимого, либо несёт sha ДО коммита карты, а не
+        HEAD после его завершения (AC-5)."""
+        regenerated = COMMITTED_MAP.replace("Содержимое A.", "Содержимое B.")
+
+        def fake_git_commit(*args) -> subprocess.CompletedProcess:
+            if args[:1] == ("commit",):
+                return subprocess.CompletedProcess(list(args), 0, "", "")
+            if args[:2] == ("rev-parse", "HEAD"):
+                return subprocess.CompletedProcess(list(args), 0, "1" * 40, "")
+            return subprocess.CompletedProcess(list(args), 0, "", "")
+
+        def fake_run(cmd, **kwargs) -> subprocess.CompletedProcess:
+            self.map_path.write_text(regenerated, encoding="utf-8")
+            return subprocess.CompletedProcess(cmd, 0, "", "")
+
+        with mock.patch.object(gitcmd, "git", fake_git_commit), \
+                mock.patch("subprocess.run", side_effect=fake_run):
+            fsm_postmerge._regenerate_and_commit_map(self.conn, "T001")
+
+        rows = self.size_steps("T001")
+        self.assertEqual(len(rows), 1)
+        detail = json.loads(rows[0]["detail"])
+        self.assertEqual(detail["sha"], "1" * 40)
+        self.assertEqual(detail["bytes_total"],
+                         len(regenerated.encode("utf-8")))
+
+    def test_unchanged_content_still_writes_size_entry(self):
+        """Ловит мутацию: запись «карта: размер» пишется ТОЛЬКО на ветке
+        изменения содержимого — на ветке отката (нет содержательных
+        отличий) запись пропускается вместо того, чтобы описывать текст,
+        реально оставшийся на диске (AC-6, ряд без пропусков)."""
+        regenerated = COMMITTED_MAP.replace(
+            "aaaa000011112222333344445555666677778888",
+            "dddd444455556666777788889999000011112222")
+
+        def fake_git_checkout(*args) -> subprocess.CompletedProcess:
+            if args and args[0] == "checkout":
+                self.map_path.write_text(COMMITTED_MAP, encoding="utf-8")
+            if args[:2] == ("rev-parse", "HEAD"):
+                return subprocess.CompletedProcess(list(args), 0, "0" * 40, "")
+            return subprocess.CompletedProcess(list(args), 0, "", "")
+
+        def fake_run(cmd, **kwargs) -> subprocess.CompletedProcess:
+            self.map_path.write_text(regenerated, encoding="utf-8")
+            return subprocess.CompletedProcess(cmd, 0, "", "")
+
+        with mock.patch.object(gitcmd, "git", fake_git_checkout), \
+                mock.patch("subprocess.run", side_effect=fake_run):
+            fsm_postmerge._regenerate_and_commit_map(self.conn, "T001")
+
+        rows = self.size_steps("T001")
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(json.loads(rows[0]["detail"])["sha"], "0" * 40)
+
+    def test_regeneration_failure_writes_no_size_entry(self):
+        """Ловит мутацию: провал регенерации (путь `_map_regen_incident`)
+        всё равно пишет запись «карта: размер» — нарушило бы AC-6
+        («ряд без пропусков» превратился бы в ряд с шумом на провалах)."""
+        fail = subprocess.CompletedProcess(["python3"], 1, "", "стенд: сбой")
+
+        with mock.patch.object(gitcmd, "git", fake_git), \
+                mock.patch("subprocess.run", return_value=fail):
+            fsm_postmerge._regenerate_and_commit_map(self.conn, "T001")
+
+        self.assertEqual(self.size_steps("T001"), [])
 
 
 if __name__ == "__main__":

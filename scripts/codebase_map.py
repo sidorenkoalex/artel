@@ -149,6 +149,49 @@ def build_modules(root: Path) -> list:
     return modules, resolved_imports, imported_by
 
 
+def map_stats(map_text: str) -> dict:
+    """Статистика уже готового текста карты — чистая функция, без диска
+    и git (01M1RFVWV6WWTXRC5F40K61632, требование 1, AC-1).
+
+    Секция — тот же структурный разбор, что и сам формат `render()`:
+    `## <путь>` до следующего `## ` или до конца текста. `bytes_by_dir`
+    суммирует байты секций по каталогу верхнего уровня их пути;
+    `top_sections` — пять самых крупных по убыванию размера.
+    `bytes_projection` кладётся только если в модуле уже есть
+    `project_for_brief` (AC-3) — на сегодня нет, ключ отсутствует
+    целиком.
+    """
+    headers = re.findall(r"^## (.+)$", map_text, re.M)
+    bytes_by_dir = {d: 0 for d in MODULE_DIRS}
+    sizes = []
+    search_start = 0
+    for header in headers:
+        marker = f"## {header}"
+        start = map_text.index(marker, search_start)
+        rest = map_text[start + len(marker):]
+        next_marker = rest.find("\n## ")
+        block = marker + (rest if next_marker == -1 else rest[:next_marker])
+        size = len(block.encode("utf-8"))
+        top_dir = header.split("/")[0]
+        bytes_by_dir[top_dir] = bytes_by_dir.get(top_dir, 0) + size
+        sizes.append((header, size))
+        search_start = start + len(marker)
+
+    top_sections = sorted(sizes, key=lambda item: -item[1])[:5]
+    result = {
+        "bytes_total": len(map_text.encode("utf-8")),
+        "sections_total": len(headers),
+        "bytes_by_dir": bytes_by_dir,
+        "top_sections": [{"name": name, "bytes": size}
+                         for name, size in top_sections],
+    }
+    project_for_brief = globals().get("project_for_brief")
+    if project_for_brief is not None:
+        result["bytes_projection"] = len(
+            project_for_brief(map_text).encode("utf-8"))
+    return result
+
+
 _SECTION_START_RE = re.compile(r"(?m)^(?=## )")
 _SECTION_FIELDS = ("purpose", "functions", "imports", "imported_by")
 # Поля, оставляемые проекцией по виду секции (SPEC
