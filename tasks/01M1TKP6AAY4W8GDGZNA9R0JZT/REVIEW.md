@@ -62,7 +62,7 @@ schema_version: 5
 
 | id | статус | файл/строка | суть | последствие | решение |
 |---|---|---|---|---|---|
-| R1-F1 | open | orchestrator/stack.py:53-58, pyproject.toml:1-9 | Комментарии утверждают, что `tests/test_stack.py` ловит рассинхронизацию `PER_TEST_TIMEOUT_SEC`/`pyproject.toml[timeout]`, такого теста нет | Будущий дрейф значения тихо не ловится, комментарий вводит в заблуждение | Добавить реальный тест синхронизации в `tests/test_stack.py` либо переписать комментарии без ложной ссылки на несуществующую защиту |
+| R1-F1 | fixed | orchestrator/stack.py:53-58, pyproject.toml:1-9 | Комментарии утверждают, что `tests/test_stack.py` ловит рассинхронизацию `PER_TEST_TIMEOUT_SEC`/`pyproject.toml[timeout]`, такого теста нет | Будущий дрейф значения тихо не ловится, комментарий вводит в заблуждение | Добавлен `tests/test_stack.py::ManifestConstantsTest::test_per_test_timeout_matches_pyproject_toml` — читает `pyproject.toml` через `tomllib`, сверяет `[tool.pytest.ini_options].timeout` с `stack.PER_TEST_TIMEOUT_SEC`; проверено принудительной рассинхронизацией (тест падает на 120 != 180). Комментарии `stack.py`/`pyproject.toml` оставлены как есть — их ссылка на `tests/test_stack.py` теперь верна |
 
 ## Вердикт
 

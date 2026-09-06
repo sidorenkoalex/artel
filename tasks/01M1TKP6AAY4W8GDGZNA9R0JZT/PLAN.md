@@ -245,3 +245,48 @@ ANSWER-5, обе стороны сохранены целиком, ни одна
 Код задачи (`orchestrator/acceptance.py`, `orchestrator/amend.py`,
 `orchestrator/stack.py`, `pyproject.toml`) после слияния не менялся —
 только разрешение конфликта импорта и регенерация карты.
+
+## Возврат — замечания ревью, итерация 1 (R1-F1)
+
+Причина возврата: REVIEW.md итерации 1 — замечание major R1-F1.
+Комментарии `orchestrator/stack.py:53-58` и `pyproject.toml:1-9`
+утверждали, что «расхождение [`PER_TEST_TIMEOUT_SEC`] и `pyproject.
+toml[timeout]`] ловит `tests/test_stack.py`», но такого теста не было
+— грепом подтверждено ревьювером, ни один тест `tests/` не сравнивал
+эти два числа.
+
+Закрыто добавлением реального теста, а не переписыванием комментариев
+(первый вариант предложения ревью, не второй — защита реальнее
+формулировки без неё): `tests/test_stack.py::ManifestConstantsTest::
+test_per_test_timeout_matches_pyproject_toml` читает `pyproject.toml`
+через стандартный `tomllib` (доступен без внешних зависимостей —
+`stack.REQUIRED_PYTHON = (3, 11)`, `tomllib` в stdlib с 3.11) и
+сравнивает `[tool.pytest.ini_options].timeout` с `stack.
+PER_TEST_TIMEOUT_SEC`. Существующая формулировка комментариев в
+`stack.py`/`pyproject.toml` («расхождение ловит `tests/test_stack.
+py`») теперь ссылается на реально существующую защиту — сами
+комментарии не тронуты, только их утверждение стало истинным.
+
+Проверено принудительной рассинхронизацией: временная правка
+`pyproject.toml` (`timeout = 120` -> `180`) даёт красный
+`test_per_test_timeout_matches_pyproject_toml` (`AssertionError: 120
+!= 180`), откат через `git checkout -- pyproject.toml` возвращает
+дерево к исходному состоянию.
+
+Прогон после правки (в переднем плане, синхронно):
+- `tests/test_stack.py` — 11 passed (было 10, добавлен один тест).
+- `tests/test_stack.py`, `tests/test_amend.py`, `tests/test_acceptance.
+  py` — 42 passed.
+- Планка задачи целиком (`tasks/01M1TKP6AAY4W8GDGZNA9R0JZT/
+  acceptance_tests`, `-p no:cacheprovider`) — 28 passed за 124.84с
+  (AC-9 не задет правкой — `pyproject.toml` не менялся, только
+  `tests/test_stack.py`).
+- `python3 scripts/codebase_map.py` — перегенерирован (правка
+  `tests/test_stack.py` подпадает под правило скила «правишь `*.py` в
+  `tests/` — регенерируй карту»); диф — только `built_at_sha` (карта
+  структурно не изменилась, тесты не входят в карту модулей верхнего
+  уровня).
+
+REVIEW.md — реестр замечаний: `R1-F1` размечен `fixed` с описанием
+добавленного теста (перевод в `accepted` — решение ревьювера следующей
+итерации, не самозакрытие).
