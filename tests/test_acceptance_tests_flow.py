@@ -1116,7 +1116,13 @@ class LockTest(unittest.TestCase):
     def test_untouched_tests_pass_the_transition(self):
         self.enter_in_dev()
 
-        self.capture(fsm.cmd_advance, self.TASK)
+        # ADR-0015: сверка головы на origin переехала на `in_dev ->
+        # verifying` — эта песочница не заводит настоящий push к origin,
+        # предмет теста — лок acceptance_tests/, не origin-push (у него
+        # свои тесты, `tests/test_github_adapter.py`).
+        with mock.patch.object(github_adapter, "ensure_head_in_origin",
+                              return_value=(True, "")):
+            self.capture(fsm.cmd_advance, self.TASK)
 
         self.assertEqual(self.state(), "verifying")
 
@@ -1128,7 +1134,9 @@ class LockTest(unittest.TestCase):
                                             encoding="utf-8")
         self.commit_task_dir("заметка вне тестов")
 
-        self.capture(fsm.cmd_advance, self.TASK)
+        with mock.patch.object(github_adapter, "ensure_head_in_origin",
+                              return_value=(True, "")):
+            self.capture(fsm.cmd_advance, self.TASK)
 
         self.assertEqual(self.state(), "verifying")
 
@@ -1172,7 +1180,9 @@ class LockTest(unittest.TestCase):
         self.git("commit", "-q", "-m", "прогон тестов оставил .pyc")
         self.git("checkout", "-q", config.MAIN_BRANCH)
 
-        self.capture(fsm.cmd_advance, self.TASK)
+        with mock.patch.object(github_adapter, "ensure_head_in_origin",
+                              return_value=(True, "")):
+            self.capture(fsm.cmd_advance, self.TASK)
 
         self.assertEqual(self.state(), "verifying",
                          "разница только по игнорируемому файлу не должна "
