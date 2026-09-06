@@ -143,8 +143,18 @@ class ZonesGateGitFailureTest(TmpRootTest):
         """Ловит мутацию: проверка `if files is None: ... return True`
         убрана/заменена на `return False` — `diff_names`, не ответивший
         списком файлов, молча пропустил бы переход вместо явного отказа
-        (fail-open вместо fail-closed, ADR-0002)."""
-        with mock.patch.object(gitcmd, "diff_names", return_value=None):
+        (fail-open вместо fail-closed, ADR-0002).
+
+        `diff_base` замокан отдельно на успешный sha (R1-F1, REVIEW.md
+        итерация 1): без этого в песочнице `TmpRootTest` (без настоящего
+        git-репозитория) `_zones_gate_refuses` отказывал бы РАНЬШЕ, на
+        собственной проверке `base is None` (fsm_advance.py, ветка
+        `diff_base`), и выполнение не доходило бы до мокнутого
+        `diff_names` вовсе — тест был бы зелёным, но не ловил заявленную
+        мутацию."""
+        with mock.patch.object(gitcmd, "diff_base",
+                               return_value="deadbeef"), \
+             mock.patch.object(gitcmd, "diff_names", return_value=None):
             refuses = fsm_advance._zones_gate_refuses(
                 self.conn, self.task_id, self.t, "task/t001-x", "PLAN\n")
         self.assertTrue(refuses)

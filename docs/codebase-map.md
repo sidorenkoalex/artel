@@ -1,5 +1,5 @@
 ---
-built_at_sha: 335af75405340e975981e9bda4c8c65793204753
+built_at_sha: 6cbe131886166481feffca6c136ba3cd4c16e064
 ---
 
 # Codebase-map пульта
@@ -481,6 +481,8 @@ built_at_sha: 335af75405340e975981e9bda4c8c65793204753
 - `commit_committer_dates`
 - `commits_behind`
 - `current_branch`
+- `diff_base`
+- `diff_base_source`
 - `diff_names`
 - `diff_paths`
 - `git`
