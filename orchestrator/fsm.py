@@ -9,35 +9,25 @@ acceptance — `orchestrator/fsm_autogate.py` (T091, декомпозиция
 `cmd_approve`, `cmd_reject`) и узлы, общие для нескольких состояний/
 гейтов (сверка свежести ветки, чтения с ветки задачи, guard-отказ).
 """
-import subprocess
+import subprocess  # шов для tests/test_ac3_ac9_pull_message_fixtures.py:
+                    # mock.patch.object(fsm.subprocess, "run", ...) —
+                    # сам fsm.py вызовов subprocess не делает (они в pull.py)
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
 from scripts import guard
 
-from . import (acceptance, alerts, artifact_source, artifacts, budget,
-              checkpoint, config, fixation, github_adapter, gitcmd, lease,
-              review, store, targets, workspace, yamlmini)
+from . import (artifact_source, artifacts, budget, config, fixation,
+              github_adapter, gitcmd, lease, pull, review, store, targets,
+              yamlmini)
+from .pull import _merge_conflict_note
 
 # Буквальная строка «сигналов нет» (ANSWER-2, tasks/01M1KS8K9RXWHX2PW3ZKB0P903,
 # AC-12) — снимок секции «Оценка объёма и деление» пустой/отсутствующей,
 # не «неизвестно» (NULL остаётся зарезервирован за «снимок не удался/
 # задача старше колонки», `report.py` различает эти два случая).
 SPLIT_ASSESSMENT_NONE = "сигналов нет"
-
-# Своя копия константы (та же строка, что и в orchestrator/fsm_postmerge.py
-# и orchestrator/brief.py — каждый модуль держит её по своему поводу):
-# здесь она нужна авторазрешению конфликта подтяжки (`_auto_resolve_map_
-# conflict`), там — регенерации/коммиту карты после merge.
-MAP_REL = "docs/codebase-map.md"
-
-# Подстрока реального отказа git на грязном рабочем дереве ДО начала
-# merge (SPEC 01M1RA0R9AH9RBAHD4A2Z5SEWQ, требование 4) — «Your local
-# changes to the following files would be overwritten by merge: ...».
-# Отличает отказ очистки/git от содержательного конфликта («CONFLICT
-# (content): ...»), который остаётся прежней веткой «конфликт подтяжки».
-PULL_OVERWRITE_MARKER = "would be overwritten by merge"
 
 # Action журнала статуса CI, прочитанного в ветке `verifying` — общий
 # текст с `orchestrator/auto.py` (SPEC T086, требование 1):
@@ -76,69 +66,6 @@ def _maybe_ensure_draft_mr(conn, task_id: str) -> None:
 
 
 # --- сверка свежести ветки до гейта (SPEC T051) ---------------------------
-
-def _conflicting_files(wt_path) -> list[str]:
-    """Файлы с неразрешённым конфликтом в worktree после неудачного `git
-    merge` (SPEC T067, требование 1) — тем же приёмом, что уже читает
-    `_handle_merge_conflict` для ДРУГОГО merge (main <- ветка задачи,
-    T052), только здесь список нужен ДО решения абортить или разрешать
-    самому, а не только для диагностики.
-
-    Пустой список — git не ответил осмысленно (заглушки без реального
-    git, инфраструктурный сбой самой команды `diff`) — вызывающий код
-    в этом случае не находит РОВНО `[MAP_REL]` и уходит в прежний
-    безусловный abort+escalate (требование 4, тот же вырожденный случай
-    деградации, что у остальных примитивов подтяжки).
-    """
-    res = gitcmd.in_repo(wt_path, "diff", "--name-only", "--diff-filter=U")
-    if res is None or res.returncode != 0:
-        return []
-    return sorted(set(res.stdout.split()))
-
-
-def _auto_resolve_map_conflict(conn, task_id: str, wt_path, source_branch: str) -> bool:
-    """Единственный конфликтующий файл — `docs/codebase-map.md` (SPEC
-    T067, требования 1-2, 5): `checkout --theirs` + регенерация
-    генератором НА СЛИТОМ дереве worktree задачи (`cwd=wt_path`, не
-    `config.ROOT` — карта, которую сверяют критерии приёмки, это карта
-    ВЕТКИ задачи, не главной копии пульта) + `add` + `commit`, который
-    и завершает merge, начатый вызывающим кодом. `source_branch` — имя
-    ветки, из которой шла подтяжка (REVIEW.md R3-F1: коммит-сообщение
-    называет реальный источник, не жёсткий `config.MAIN_BRANCH`).
-
-    `True` — merge завершён, подтяжка продолжается точно так же, как
-    обычная удачная подтяжка без конфликта (требование 2); `False` —
-    любой шаг не удался (checkout/регенерация/add/commit) — merge НЕ
-    завершён, вызывающий код обязан сам сделать `git merge --abort` и
-    эскалировать тем же путём, что и неразрешаемый конфликт (требование
-    5, AC-5): здесь нарочно нет своего abort — единая точка отката
-    ближе к месту, где решение «разрешать или нет» уже принято.
-    """
-    checkout = gitcmd.in_repo(wt_path, "checkout", "--theirs", MAP_REL)
-    if checkout is None or checkout.returncode != 0:
-        return False
-    try:
-        regen = subprocess.run(["python3", "scripts/codebase_map.py"],
-                               cwd=wt_path, capture_output=True, text=True)
-    except OSError:
-        return False
-    if regen.returncode != 0:
-        return False
-    added = gitcmd.in_repo(wt_path, "add", MAP_REL)
-    if added is None or added.returncode != 0:
-        return False
-    commit = gitcmd.in_repo(wt_path, "commit", "-m",
-                            f"{task_id}: подтяжка {source_branch}")
-    if commit is None or commit.returncode != 0:
-        return False
-    store.journal(
-        conn, task_id, "orchestrator",
-        "конфликт подтяжки: карта авторазрешена регенерацией",
-        f"{MAP_REL} — единственный конфликтующий файл, разрешён "
-        f"checkout --theirs + регенерация scripts/codebase_map.py на "
-        f"слитом дереве worktree задачи")
-    return True
-
 
 def _origin_main_source(target_name: str) -> tuple[str, str] | None:
     """(remote, ветка) main конкретного target'а (SPEC
@@ -180,8 +107,8 @@ def _origin_main_sha(target_name: str) -> str | None:
     источнике (SPEC 01M1NBWPKNBXP9ZXXQDJM7AXPJ, AC-1/AC-2/AC-8/AC-10) —
     своя копия узла `orchestrator/fsm_merge_gate.py::_origin_main_sha`
     (тот же приём дублирования по модулю, что уже несёт `MAP_REL` в
-    начале файла): `fsm_merge_gate` импортирует `fsm`, обратный импорт
-    завёл бы цикл. `_origin_main_sha` там остаётся про main АРТЕЛИ
+    `orchestrator/pull.py`): `fsm_merge_gate` импортирует `fsm`, обратный
+    импорт завёл бы цикл. `_origin_main_sha` там остаётся про main АРТЕЛИ
     конкретно (плотницкий merge Stage0 — только self-target/`operator`
     гейт), эта — про main ЗАДАННОГО target'а (`_origin_main_source`).
 
@@ -210,33 +137,6 @@ def _origin_main_sha(target_name: str) -> str | None:
     return res.stdout.strip() if res is not None and res.returncode == 0 else None
 
 
-def _merge_conflict_note(files: list[str], merge) -> str:
-    """`detail` эскалации неразрешённого конфликта подтяжки (SPEC
-    01M1REVMB50SND1KJ3CYQMV2ST, требование 1, AC-1..AC-3): список
-    конфликтных файлов (`files` — снят вызывающим кодом ДО `merge
-    --abort`) одной строкой «конфликтные файлы: a, b», затем хвосты
-    `stdout`/`stderr` `git merge` (по 500 символов каждый — git пишет
-    «CONFLICT (content): …»/«Automatic merge failed» в `stdout`, не в
-    `stderr`, прежний код читал только `stderr`). Части, которых нет
-    (пустой список файлов, пустой `stdout`/`stderr`), в результат не
-    попадают вовсе — наивная склейка с пустыми частями оставляла бы
-    висящие «; »/пустое «конфликтные файлы:» (AC-3).
-    """
-    parts = []
-    if files:
-        parts.append("конфликтные файлы: " + ", ".join(files))
-    if merge is not None:
-        stdout_tail = merge.stdout.strip()[:500]
-        if stdout_tail:
-            parts.append(stdout_tail)
-        stderr_tail = merge.stderr.strip()[:500]
-        if stderr_tail:
-            parts.append(stderr_tail)
-    if not parts:
-        return "git не ответил осмысленно" if merge is not None else "git не ответил"
-    return "; ".join(parts)
-
-
 def _pull_main_or_escalate(conn, task_id: str, t, state: str) -> str:
     """Сверка свежести ветки задачи на входе в гейт (SPEC T051, требования
     1-7, 10; ADR-0006 п.2; переведена на origin — SPEC
@@ -245,216 +145,42 @@ def _pull_main_or_escalate(conn, task_id: str, t, state: str) -> str:
     тот же узел для всех трёх точек сверки (`in_dev -> review`,
     `acceptance -> merge_gate`, `merge_gate -> done`).
 
-    Сверка и merge идут против main НА УДАЛЁННОМ ИСТОЧНИКЕ target'а
-    задачи (`_origin_main_sha`/`_origin_main_source`, требование 5,
-    AC-10), НЕ против локального `config.MAIN_BRANCH` (пина главной
-    копии): между двумя мержами пин двигает только отдельная
-    операторская команда `pin-update` (A7), и решение по устаревшему
-    пину ложно отвечало «ветка не отстала», хотя origin ушёл вперёд
-    (инцидент 04.09, SPEC «Контекст»). Для self-target это буквально
-    `origin` пульта и `config.MAIN_BRANCH` (ANSWER-1); для любого другого
-    target — `url`/`base` его записи в `targets.yaml`. `config.
-    MAIN_BRANCH` остаётся только ИМЕНЕМ ветки self-target, которую
-    фетчим и с которой сравниваем/мержим, не источником сравнения/merge
-    самим по себе.
+    Вычисление исхода (сверка `base`/`behind` против origin, `git merge`,
+    авторазрешение конфликта карты, детализация неразрешённого конфликта,
+    WIP-чекпоинт, материализация и прогон приёмочной планки) — целиком
+    `orchestrator/pull.py::evaluate` (роадмап §3, фаза R, R3): эта функция
+    остаётся точкой входа с прежней сигнатурой/контрактом возврата,
+    переводя исход `pull.evaluate` (`Fresh`/`Pulled`/`Conflict`/`Refused`)
+    в прежние строки `"fresh"`/`"pulled"`/`"escalated"`/`"refused"` —
+    записи журнала/эскалации для каждого исхода несёт сам `pull.py`.
 
-    Возврат — один из четырёх исходов:
-    - `"escalated"` — переход уже отклонён: задача уже эскалирована
-      (состояние и диагностика уже записаны через `store.set_state`,
-      требования 5-6); вызывающий код обязан немедленно вернуться, не
-      выполняя сам переход;
-    - `"refused"` — переход отклонён именованным отказом «планка не
-      найдена в источнике» (SPEC 01M1R9YEK08XEQWBFX0929WFVJ, AC-3):
-      артефактная ветка не несёт `tasks/<id>/acceptance_tests/`, а
-      `tests_writing` не пропущена легитимно (`skip_tests` не задан в
-      SPEC и SPEC несёт AC-разметку) — состояние НЕ меняется (задача
-      остаётся там, где была), в отличие от `"escalated"`; вызывающий
-      код обязан вернуться так же, как и на `"escalated"`;
-    - `"fresh"` — ветка не отстала от main артели на origin (требование
-      7: поведение перехода прежнее байт-в-байт при отсутствии
-      отставания);
-    - `"pulled"` — подтяжка прошла и приёмочные тесты, материализованные
-      из артефактной ветки задачи (не из worktree кодовой ветки, SPEC
-      01M1R9YEK08XEQWBFX0929WFVJ, AC-1/AC-2/AC-10), зелёные (в том числе
-      вырожденный случай легитимно пропущенной `tests_writing`, AC-5 —
-      планки нет в артефактной ветке, но это не отказ). Точки `in_dev ->
-      review`/`acceptance -> merge_gate` обе продолжают штатный переход
-      одинаково что при `"fresh"`, что при `"pulled"` (T051, не различали
-      их и раньше — общий `bool`); третья точка (`merge_gate -> done`,
-      T053) обязана различать их сама: после `"pulled"` merge в этом же
-      вызове НЕ выполняется (SPEC T053, требование 5) — сдвинутый головой
-      ветки sha делает зафиксированный снимок невалидным для merge
-      (инвариант 19 не ослабляется).
+    `_origin_main_source`/`_origin_main_sha` (сверка свежести против
+    origin target'а задачи, не локального `config.MAIN_BRANCH` — см. их
+    докстринги) и `_read_branch_text_or_refuse` (чтение SPEC.md с чужой
+    ветки, общее с другими функциями этого модуля) передаются в
+    `pull.evaluate` ПАРАМЕТРАМИ, не импортом `fsm` тем модулем: так
+    `mock.patch.object(fsm, "_origin_main_sha", ...)` (существующие
+    тесты, AC-5) продолжает долетать до реального `git merge` — патч
+    меняет ИМЕННО то имя, которое эта функция передаёт дальше как
+    значение, вычисленное в момент вызова.
 
-    Merge — единственный вне `merge_gate`, разрешённый ADR-0006 п.2: в
-    worktree ЗАДАЧИ (`gitcmd.in_repo`, форма `-C`), вливает
-    зафетченный origin-sha main артели, ветку задачи в аргументах не
-    упоминает и не трогает main ни байтом (требование 10) — не rebase
-    (требование 3), существующие sha ветки остаются валидными предками.
-
-    `_origin_main_sha()` вернула вырожденное значение (`None`/пустая
-    строка — git/fetch/rev-parse не ответили, либо конфигурация
-    target'а не читается; песочницы без реального git: `fake_git` и
-    аналоги, требование 9) — функция возвращает `"fresh"` немедленно, не
-    вызывая `commits_behind`/`merge` вовсе (REVIEW.md R1-F1, итерация 1):
-    прежде на этом месте подставлялся литерал `"FETCH_HEAD"`, который
-    честным no-op'ом НЕ является — `FETCH_HEAD` в `config.ROOT` почти
-    всегда несёт результат чужого предыдущего фетча, а внутри worktree
-    задачи резолвится в СВОЙ приватный `FETCH_HEAD` (git 2.5+), не в
-    только что зафетченный `config.ROOT`. Ранний возврат — тот же
-    вырожденный случай деградации, что и у остальных git-примитивов
-    оркестратора: молча ничего не делает, как и `not behind` (ветка не
-    отстала).
-
-    Конфликт merge, где единственный конфликтующий файл —
-    `docs/codebase-map.md` (SPEC T067), разрешается здесь же сам, не
-    эскалируя: `_conflicting_files` + `_auto_resolve_map_conflict`. Любой
-    другой конфликт (карта вместе с другим файлом, без карты вовсе, или
-    авторазрешение само не удалось) — прежнее поведение T051/T052
-    байт-в-байт: `git merge --abort` + `"escalated"`.
-
-    Перед самим `git merge` (SPEC 01M1RA0R9AH9RBAHD4A2Z5SEWQ, требования
-    1-4): worktree задачи приводится в чистое состояние — незакоммиченная
-    `docs/codebase-map.md` отбрасывается (`git checkout --`, карту всё
-    равно перегенерирует и закоммитит сам merge), прочий незакоммиченный
-    WIP вне `tasks/<id>/` фиксируется чекпоинтом
-    `checkpoint.commit_pull_checkpoint` — без этого git честно отказывал
-    бы merge'у отдельно от содержательного конфликта («Your local changes
-    ... would be overwritten by merge», SPEC «Контекст»), и задача уходила
-    в `escalated` как «конфликт подтяжки», хотя спора версий содержимого
-    не было вовсе. Если этот отказ («would be overwritten by merge»)
-    всё-таки происходит (сама очистка не удалась — git не ответил на одном
-    из своих шагов), это отдельная категория отказа от содержательного
-    конфликта: инцидент очистки, не спор версий — эскалация без
-    формулировки «конфликт подтяжки» и с alert'ом `kind=incident`
-    (требование 4, AC-6), не через ветку `_conflicting_files`/`_auto_
-    resolve_map_conflict`/`--abort` ниже, которая остаётся только про
-    настоящие конфликты содержимого (требование 5, AC-7).
+    Возврат — один из четырёх исходов, контракт которых не меняется этой
+    задачей (AC-2): `"escalated"`/`"refused"`/`"fresh"`/`"pulled"` — их
+    семантика (когда состояние меняется, что означает каждый) описана в
+    `orchestrator/pull.py` докстринге `evaluate`/классов исходов.
     """
-    branch = t["branch"]
-    target_name = t["target"] or config.DEFAULT_TARGET
-    source = _origin_main_source(target_name)
-    source_branch = source[1] if source is not None else config.MAIN_BRANCH
-    base = _origin_main_sha(target_name)
-    if not base:
-        # Вырожденная _origin_main_sha — см. докстринг выше (R1-F1):
-        # ранний выход, не литерал "FETCH_HEAD".
+    outcome = pull.evaluate(
+        conn, task_id, t, state,
+        origin_main_source=_origin_main_source,
+        origin_main_sha=_origin_main_sha,
+        read_branch_text_or_refuse=_read_branch_text_or_refuse)
+    if isinstance(outcome, pull.Fresh):
         return "fresh"
-    behind = gitcmd.commits_behind(branch, base=base)
-    if not behind:
-        return "fresh"
-
-    wt_path, error = workspace.ensure(task_id, branch)
-    if error is not None:
-        store.set_state(
-            conn, task_id, "escalated", "fsm", expected_state=state,
-            detail=f"подтяжка {source_branch} отменена: worktree "
-            f"задачи не создан — {error}")
-        return "escalated"
-
-    # Требования 1-2: очистка worktree ДО merge — отбросить карту (её всё
-    # равно перегенерирует сам merge/авторазрешение), закоммитить
-    # чекпоинтом остальной WIP по мандату developer.
-    gitcmd.in_repo(wt_path, "checkout", "--", MAP_REL)
-    checkpoint.commit_pull_checkpoint(conn, task_id, wt_path)
-
-    merge = gitcmd.in_repo(wt_path, "merge", "--no-ff", base,
-                           "-m", f"{task_id}: подтяжка {source_branch}")
-    if merge is None or merge.returncode != 0:
-        stderr = merge.stderr if merge is not None else ""
-        if PULL_OVERWRITE_MARKER in stderr:
-            # Требование 4/AC-6: очистка выше не устранила отказ — это
-            # инцидент самой очистки/git, не спор версий содержимого.
-            # Merge здесь не стартовал (git отказал ДО начала слияния,
-            # нечего абортить) — эскалация сразу, без "конфликт подтяжки".
-            note = stderr.strip()[:500]
-            store.set_state(
-                conn, task_id, "escalated", "fsm", expected_state=state,
-                detail=f"подтяжка {source_branch} в ветку {branch} отказала "
-                f"после попытки очистки worktree — {note}")
-            alerts.raise_alert(
-                conn, task_id, "incident", "fsm",
-                f"подтяжка {branch} отказала после очистки worktree: {note}")
-            return "escalated"
-
-        resolved = False
-        files = _conflicting_files(wt_path) if merge is not None else []
-        if merge is not None and files == [MAP_REL]:
-            resolved = _auto_resolve_map_conflict(conn, task_id, wt_path,
-                                                   source_branch)
-        if not resolved:
-            abort = gitcmd.in_repo(wt_path, "merge", "--abort")
-            note = _merge_conflict_note(files, merge)
-            if abort is None or abort.returncode != 0:
-                note += (f"; git merge --abort не удался: "
-                        f"{abort.stderr.strip()[:200] if abort is not None else 'git не ответил'}")
-            store.set_state(
-                conn, task_id, "escalated", "fsm", expected_state=state,
-                detail=f"конфликт подтяжки {source_branch} в ветку "
-                f"{branch}: {note}")
-            return "escalated"
-
-    # Планка — из АРТЕФАКТНОЙ ветки задачи, не из worktree кодовой ветки
-    # (SPEC 01M1R9YEK08XEQWBFX0929WFVJ, требование 1, AC-1/AC-2): worktree
-    # кодовой ветки роли чистят по ходу шага (регрессия №9) — прогон по
-    # НЕЙ трактовал пустой/непрочитанный каталог как красную планку и
-    # эскалировал «приёмочные тесты красные после подтяжки main», хотя
-    # тестов там попросту никогда не было (SPEC «Контекст», инцидент
-    # 01M1QHQ277PQQA894X97RVEX9Y). Материализуется НА МЕСТЕ, в тот же
-    # worktree `wt_path`, на котором только что прошёл merge (SPEC
-    # 01M1RNZ6V7TTTTYAHBMF8JBQQS, требование 1-2, AC-1/AC-2/AC-3):
-    # прогон обязан резолвить `orchestrator/` кодовой ветки задачи и
-    # через `__file__` (штатная вложенность `tasks/<id>/acceptance_tests/`
-    # ЭТОГО каталога), и через `cwd` (регрессия №14 — до этой задачи оба
-    # пути мимо кода ветки, во временный каталог с `cwd=config.ROOT`).
-    artifact_branch_name, _ = artifact_source.resolve(conn, task_id)
-    tdir = acceptance.materialize_from_branch(task_id, artifact_branch_name,
-                                              wt_path)
-    if not (tdir / "acceptance_tests").is_dir():
-        # Планка не найдена в артефактной ветке — легитимно ТОЛЬКО
-        # когда SPEC пропустила tests_writing (`skip_tests` задан) или
-        # не несёт AC-разметки вовсе (AC-5, вырожденный случай, не
-        # тронутый этой задачей); иначе — именованный отказ AC-3, не
-        # молчаливый зелёный проход и не эскалация AC-4 (та остаётся
-        # только для планки, которая реально прогналась и упала).
-        #
-        # SPEC.md читается общим узлом `_read_branch_text_or_refuse`
-        # (не голым `gitcmd.show`, REVIEW.md R1-F1, итерации 1-3):
-        # SPEC.md — обязательный артефакт, на артефактной ветке живой
-        # задачи он есть всегда, поэтому сбой чтения (git не ответил,
-        # ветка недоступна, гонка с материализацией) сам по себе уже
-        # ненормален и не должен схлопываться в дефолтный `meta={}` →
-        # `requires_ac_markup(...) == False` → молчаливый `"pulled"`
-        # — узел уже журналирует и печатает именованный отказ.
-        spec_text = _read_branch_text_or_refuse(
-            conn, task_id, artifact_branch_name, "SPEC.md")
-        if spec_text is None:
-            return "refused"
-        meta = yamlmini.frontmatter(spec_text) or {}
-        if guard.requires_ac_markup(meta):
-            detail = (
-                f"планка не найдена в источнике: артефактная ветка "
-                f"{artifact_branch_name} не несёт tasks/{task_id}/"
-                f"acceptance_tests/, а tests_writing не пропущена "
-                f"легитимно (skip_tests не задан в SPEC)")
-            store.journal(
-                conn, task_id, "fsm",
-                "переход отклонён: планка не найдена в источнике",
-                detail)
-            print(f"[{task_id}] переход отклонён: {detail}")
-            return "refused"
+    if isinstance(outcome, pull.Pulled):
         return "pulled"
-    green, tail = acceptance.run(tdir, code_root=wt_path)
-
-    if not green:
-        store.set_state(
-            conn, task_id, "escalated", "fsm", expected_state=state,
-            detail=f"приёмочные тесты красные после подтяжки "
-            f"{source_branch} (слияние сохранено, откат не "
-            f"выполняется):\n{tail}")
-        return "escalated"
-
-    return "pulled"
+    if isinstance(outcome, pull.Refused):
+        return "refused"
+    return "escalated"
 
 
 def guard_refuses(conn, task_id: str, path: Path, text: str | None = None) -> bool:
@@ -866,134 +592,154 @@ def cmd_approve(task_id: str, sha: str | None = None,
                      lambda sid: _cmd_approve(conn, task_id, sha, sid))
 
 
+def _approve_spec_gate(conn, task_id: str, t, state: str, sid: str) -> None:
+    # tests_writing до кода (SPEC T023, требование 1): пропускается
+    # только явным skip_tests либо SPEC версии ниже 2 (без AC-разметки,
+    # весь беклог T001–T022 — требование 7); иначе тесты пишутся
+    # раньше, чем задачу увидит разработчик.
+    #
+    # Рабочее дерево точно на чужой ветке-источнике `tasks/<id>/`
+    # (SPEC T031, AC-1; T094 требование 10 — ветка-источник теперь
+    # артефактная ветка пульта для внешнего target, `artifact_source.
+    # resolve`) — SPEC.md читается с НЕЁ (не молчаливый дефолт
+    # «schema_version 1 без AC-разметки», журнал T030 ~17:35
+    # 25.08.2026); иначе прежний путь через диск, не тронутый T031.
+    # Чтение — общий узел `_read_branch_text_or_refuse` (T047, SPEC
+    # T071): узел сам журналирует и печатает именованный отказ,
+    # дублировать его текст отдельным `sys.exit` не нужно — `return`
+    # останавливает попытку approve без смены состояния тем же
+    # способом, что и остальные вызовы узла в `_cmd_advance`.
+    branch, foreign = artifact_source.resolve(conn, task_id)
+    if foreign:
+        spec_text = _read_branch_text_or_refuse(conn, task_id, branch,
+                                                 "SPEC.md")
+        if spec_text is None:
+            return
+        meta = yamlmini.frontmatter(spec_text) or {}
+    else:
+        meta = artifacts.frontmatter(config.TASKS / task_id / "SPEC.md")
+        spec_text = ""
+    # Значение zones (01M1NKVPD2A79PQ6K0JVV1B2Q1, AC-3) сохраняется тем
+    # же моментом входа approve на spec_gate, что и budget/split_
+    # assessment рядом — meta уже прочитана выше, поле отсутствует у
+    # SPEC старых версий (`meta.get` даёт None, колонка тогда NULL).
+    store.update_task(conn, task_id, zones=meta.get("zones"))
+    _print_spec_gate_calibration_hint(conn, task_id, t["budget_usd"] or 0.0,
+                                      meta, spec_text)
+    skip_reason = meta.get("skip_tests")
+    if skip_reason or not guard.requires_ac_markup(meta):
+        detail = (f"тесты пропущены (skip_tests): {skip_reason}"
+                  if skip_reason else
+                  f"SPEC schema_version "
+                  f"{meta.get('schema_version', 1)} — без AC-разметки, "
+                  f"tests_writing недоступна")
+        store.set_state(conn, task_id, "in_dev", "operator",
+                        expected_state=state, detail=detail)
+        _maybe_ensure_draft_mr(conn, task_id)
+        print(f"  дальше: artel.py run {task_id}  (запуск разработчика)")
+    else:
+        store.set_state(conn, task_id, "tests_writing", "operator",
+                        expected_state=state,
+                        detail="гейт SPEC пройден — приёмочные тесты до кода")
+        print(f"  дальше: artel.py run {task_id}  (запуск test_author)")
+
+
+def _approve_acceptance(conn, task_id: str, t, state: str, sid: str) -> None:
+    # Сверка свежести ветки до гейта (SPEC T051, требования 1, 4):
+    # тот же узел, что и на входе в review — approve не выносит на
+    # merge_gate срез, который мог устареть, пока задача ждала приёмки.
+    if _pull_main_or_escalate(conn, task_id, t, state) in (
+            "escalated", "refused"):
+        return
+    store.set_state(conn, task_id, "merge_gate", "operator",
+                    expected_state=state, detail="приёмка пройдена")
+    # Снимок объёма (tasks/01M1KS8K9RXWHX2PW3ZKB0P903, требование 6,
+    # ANSWER-1/ANSWER-2): побочный эффект входа в merge_gate, не
+    # условие перехода — сбой git здесь не держит гейт.
+    _snapshot_split_assessment(conn, task_id, t)
+    # Undraft Draft MR (SPEC T079, требование 2, AC-2): побочный
+    # эффект входа в merge_gate, не условие перехода — отказ адаптера
+    # не держит гейт (github_adapter.undraft_mr сама не бросает).
+    github_adapter.undraft_mr(conn, task_id, store.get_task(conn, task_id))
+    # Sha, зафиксированный ЭТИМ переходом (SPEC «approve: полный sha в
+    # подсказках», требование 1) — готовая к копированию команда,
+    # вместо голого `<id>`, которое Оператору иначе пришлось бы
+    # достраивать по памяти (инцидент 02.09, мерж T101).
+    sha_hint = fixation.approve_sha_hint(task_id, store.task_target(conn, task_id))
+    print(f"  дальше: artel.py approve {task_id}{sha_hint}  (выполнит merge)")
+
+
+def _approve_merge_gate(conn, task_id: str, t, state: str, sid: str) -> None:
+    # Мьютекс merge-окна (SPEC T053, требования 1-3): один держатель
+    # на весь пульт, не на задачу — вторая сессия, вызвавшая approve
+    # из merge_gate, пока мьютекс занят, получает немедленный
+    # именованный отказ (`sys.exit`, тем же стилем, что и отказ lease
+    # выше) вместо ожидания. С SPEC T087 мьютекс не удерживается на
+    # время ожидания CI после подтяжки (требование 2) — тело гейта и
+    # его внешний цикл — orchestrator/fsm_merge_gate.py (SPEC T091):
+    # берёт/отпускает мьютекс сама вокруг каждого захода в тело гейта,
+    # а не единым `merge_lock.run_window` на весь вызов.
+    from . import fsm_merge_gate
+    fsm_merge_gate._cmd_approve_merge_gate_cycle(conn, task_id, sid, t,
+                                                  state)
+
+
+def _approve_escalated(conn, task_id: str, t, state: str, sid: str) -> None:
+    # Ответ Оператора (SPEC T075, AC-3): эскалация со структурированным
+    # вопросом роли (QUESTIONS.md/spec_writing, `AC-n: escalate`/
+    # tests_writing, REVIEW.md `status: escalate`/review) зафиксировала
+    # `answer_baseline` — число ANSWER-*.md на момент эскалации — в
+    # том же месте кода, что и сам факт эскалации (не позже,
+    # содержательным разбором артефактов здесь: `escalated_from`
+    # неоднозначен между классами, докстрин AC-5 приёмочных тестов).
+    # `None` — эскалация класса «лимит»/инцидент, ответа не требует,
+    # как и до этой задачи.
+    baseline = t["answer_baseline"]
+    if baseline is not None:
+        tdir = config.TASKS / task_id
+        count = _answer_file_count(conn, task_id, tdir)
+        if count is None or count <= baseline:
+            expected = f"tasks/{task_id}/ANSWER-{baseline + 1}.md"
+            detail = (f"approve отклонён: не хватает {expected} — "
+                      f"ответь Оператором (artel.py answer {task_id} "
+                      f"<файл-с-ответом>) перед возвратом из эскалации")
+            store.journal(conn, task_id, "fsm",
+                          "approve отклонён: нет ANSWER", detail)
+            print(f"[{task_id}] {detail}")
+            return
+    # Куда возвращать — знает только тот, кто эскалировал: провал агента
+    # (cmd_run) пишет в escalated_from состояние своего шага, потому что
+    # чинить надо этот шаг, а не начинать разработку заново. Эскалации по
+    # вердикту ревьювера и по исчерпанным лимитам его не пишут и, как
+    # раньше, уходят в in_dev: там работа и продолжается.
+    back = t["escalated_from"] or "in_dev"
+    store.update_task(conn, task_id, escalated_from=None, answer_baseline=None)
+    store.set_state(conn, task_id, back, "operator",
+                    expected_state=state, detail="эскалация разрешена, продолжаем")
+    if back == "in_dev":
+        _maybe_ensure_draft_mr(conn, task_id)
+    print(f"  дальше: artel.py run {task_id}")
+
+
 def _cmd_approve(conn, task_id: str, sha: str | None, sid: str) -> None:
     t = store.get_task(conn, task_id)
     state = t["state"]
     if state in APPROVE_NEEDS_SHA and not confirm_fixation(conn, task_id, sha):
         return
-    if state == "spec_gate":
-        # tests_writing до кода (SPEC T023, требование 1): пропускается
-        # только явным skip_tests либо SPEC версии ниже 2 (без AC-разметки,
-        # весь беклог T001–T022 — требование 7); иначе тесты пишутся
-        # раньше, чем задачу увидит разработчик.
-        #
-        # Рабочее дерево точно на чужой ветке-источнике `tasks/<id>/`
-        # (SPEC T031, AC-1; T094 требование 10 — ветка-источник теперь
-        # артефактная ветка пульта для внешнего target, `artifact_source.
-        # resolve`) — SPEC.md читается с НЕЁ (не молчаливый дефолт
-        # «schema_version 1 без AC-разметки», журнал T030 ~17:35
-        # 25.08.2026); иначе прежний путь через диск, не тронутый T031.
-        # Чтение — общий узел `_read_branch_text_or_refuse` (T047, SPEC
-        # T071): узел сам журналирует и печатает именованный отказ,
-        # дублировать его текст отдельным `sys.exit` не нужно — `return`
-        # останавливает попытку approve без смены состояния тем же
-        # способом, что и остальные вызовы узла в `_cmd_advance`.
-        branch, foreign = artifact_source.resolve(conn, task_id)
-        if foreign:
-            spec_text = _read_branch_text_or_refuse(conn, task_id, branch,
-                                                     "SPEC.md")
-            if spec_text is None:
-                return
-            meta = yamlmini.frontmatter(spec_text) or {}
-        else:
-            meta = artifacts.frontmatter(config.TASKS / task_id / "SPEC.md")
-            spec_text = ""
-        # Значение zones (01M1NKVPD2A79PQ6K0JVV1B2Q1, AC-3) сохраняется тем
-        # же моментом входа approve на spec_gate, что и budget/split_
-        # assessment рядом — meta уже прочитана выше, поле отсутствует у
-        # SPEC старых версий (`meta.get` даёт None, колонка тогда NULL).
-        store.update_task(conn, task_id, zones=meta.get("zones"))
-        _print_spec_gate_calibration_hint(conn, task_id, t["budget_usd"] or 0.0,
-                                          meta, spec_text)
-        skip_reason = meta.get("skip_tests")
-        if skip_reason or not guard.requires_ac_markup(meta):
-            detail = (f"тесты пропущены (skip_tests): {skip_reason}"
-                      if skip_reason else
-                      f"SPEC schema_version "
-                      f"{meta.get('schema_version', 1)} — без AC-разметки, "
-                      f"tests_writing недоступна")
-            store.set_state(conn, task_id, "in_dev", "operator",
-                            expected_state=state, detail=detail)
-            _maybe_ensure_draft_mr(conn, task_id)
-            print(f"  дальше: artel.py run {task_id}  (запуск разработчика)")
-        else:
-            store.set_state(conn, task_id, "tests_writing", "operator",
-                            expected_state=state,
-                            detail="гейт SPEC пройден — приёмочные тесты до кода")
-            print(f"  дальше: artel.py run {task_id}  (запуск test_author)")
-    elif state == "acceptance":
-        # Сверка свежести ветки до гейта (SPEC T051, требования 1, 4):
-        # тот же узел, что и на входе в review — approve не выносит на
-        # merge_gate срез, который мог устареть, пока задача ждала приёмки.
-        if _pull_main_or_escalate(conn, task_id, t, state) in (
-                "escalated", "refused"):
-            return
-        store.set_state(conn, task_id, "merge_gate", "operator",
-                        expected_state=state, detail="приёмка пройдена")
-        # Снимок объёма (tasks/01M1KS8K9RXWHX2PW3ZKB0P903, требование 6,
-        # ANSWER-1/ANSWER-2): побочный эффект входа в merge_gate, не
-        # условие перехода — сбой git здесь не держит гейт.
-        _snapshot_split_assessment(conn, task_id, t)
-        # Undraft Draft MR (SPEC T079, требование 2, AC-2): побочный
-        # эффект входа в merge_gate, не условие перехода — отказ адаптера
-        # не держит гейт (github_adapter.undraft_mr сама не бросает).
-        github_adapter.undraft_mr(conn, task_id, store.get_task(conn, task_id))
-        # Sha, зафиксированный ЭТИМ переходом (SPEC «approve: полный sha в
-        # подсказках», требование 1) — готовая к копированию команда,
-        # вместо голого `<id>`, которое Оператору иначе пришлось бы
-        # достраивать по памяти (инцидент 02.09, мерж T101).
-        sha_hint = fixation.approve_sha_hint(task_id, store.task_target(conn, task_id))
-        print(f"  дальше: artel.py approve {task_id}{sha_hint}  (выполнит merge)")
-    elif state == "merge_gate":
-        # Мьютекс merge-окна (SPEC T053, требования 1-3): один держатель
-        # на весь пульт, не на задачу — вторая сессия, вызвавшая approve
-        # из merge_gate, пока мьютекс занят, получает немедленный
-        # именованный отказ (`sys.exit`, тем же стилем, что и отказ lease
-        # выше) вместо ожидания. С SPEC T087 мьютекс не удерживается на
-        # время ожидания CI после подтяжки (требование 2) — тело гейта и
-        # его внешний цикл — orchestrator/fsm_merge_gate.py (SPEC T091):
-        # берёт/отпускает мьютекс сама вокруг каждого захода в тело гейта,
-        # а не единым `merge_lock.run_window` на весь вызов.
-        from . import fsm_merge_gate
-        fsm_merge_gate._cmd_approve_merge_gate_cycle(conn, task_id, sid, t,
-                                                      state)
-    elif state == "escalated":
-        # Ответ Оператора (SPEC T075, AC-3): эскалация со структурированным
-        # вопросом роли (QUESTIONS.md/spec_writing, `AC-n: escalate`/
-        # tests_writing, REVIEW.md `status: escalate`/review) зафиксировала
-        # `answer_baseline` — число ANSWER-*.md на момент эскалации — в
-        # том же месте кода, что и сам факт эскалации (не позже,
-        # содержательным разбором артефактов здесь: `escalated_from`
-        # неоднозначен между классами, докстрин AC-5 приёмочных тестов).
-        # `None` — эскалация класса «лимит»/инцидент, ответа не требует,
-        # как и до этой задачи.
-        baseline = t["answer_baseline"]
-        if baseline is not None:
-            tdir = config.TASKS / task_id
-            count = _answer_file_count(conn, task_id, tdir)
-            if count is None or count <= baseline:
-                expected = f"tasks/{task_id}/ANSWER-{baseline + 1}.md"
-                detail = (f"approve отклонён: не хватает {expected} — "
-                          f"ответь Оператором (artel.py answer {task_id} "
-                          f"<файл-с-ответом>) перед возвратом из эскалации")
-                store.journal(conn, task_id, "fsm",
-                              "approve отклонён: нет ANSWER", detail)
-                print(f"[{task_id}] {detail}")
-                return
-        # Куда возвращать — знает только тот, кто эскалировал: провал агента
-        # (cmd_run) пишет в escalated_from состояние своего шага, потому что
-        # чинить надо этот шаг, а не начинать разработку заново. Эскалации по
-        # вердикту ревьювера и по исчерпанным лимитам его не пишут и, как
-        # раньше, уходят в in_dev: там работа и продолжается.
-        back = t["escalated_from"] or "in_dev"
-        store.update_task(conn, task_id, escalated_from=None, answer_baseline=None)
-        store.set_state(conn, task_id, back, "operator",
-                        expected_state=state, detail="эскалация разрешена, продолжаем")
-        if back == "in_dev":
-            _maybe_ensure_draft_mr(conn, task_id)
-        print(f"  дальше: artel.py run {task_id}")
-    else:
+    # Таблица «состояние -> обработчик» (SPEC требование 3): каждый
+    # обработчик — прежнее тело своей ветки `if state == ...` (переход
+    # без изменения поведения); ветка «иначе» ниже несёт прежний текст
+    # отказа. Тем же приёмом, что и `_cmd_advance` (SPEC T091).
+    handler = {
+        "spec_gate": _approve_spec_gate,
+        "acceptance": _approve_acceptance,
+        "merge_gate": _approve_merge_gate,
+        "escalated": _approve_escalated,
+    }.get(state)
+    if handler is None:
         print(f"[{task_id}] в состоянии {state} нечего подтверждать")
+        return
+    handler(conn, task_id, t, state, sid)
 
 
 def cmd_reject(task_id: str, reason: str, session_id: str | None = None) -> None:
