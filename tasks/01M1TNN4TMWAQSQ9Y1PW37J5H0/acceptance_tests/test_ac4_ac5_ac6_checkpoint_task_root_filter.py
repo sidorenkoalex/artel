@@ -1,11 +1,14 @@
-"""AC-4/AC-5/AC-6 (SPEC 01M1TNN4TMWAQSQ9Y1PW37J5H0): автокоммит артефактов
-шага (`checkpoint.commit_step_artifacts`, тот же путь, которым идут
-чекпоинты таймаута/аварии/паузы) переносит в артефактную ветку только
-файлы из белого списка требования 1 (AC-4); посторонние файлы первого
-уровня `tasks/<id>/` не проваливают шаг роли, а отбрасываются с ОДНОЙ
-записью в журнал на весь список отброшенных путей, не по записи на файл
-(AC-5); критерий допустимости `checkpoint.py` берёт ИЗ `scripts/guard.py`
-(AC-6) — не дублирует его независимой регуляркой, как уже сделано для
+"""AC-4/AC-5/AC-6 (SPEC 01M1TNN4TMWAQSQ9Y1PW37J5H0), формулировка по
+ANSWER-1 (tasks/01M1TNN4TMWAQSQ9Y1PW37J5H0/ANSWER-1.md, вариант A):
+автокоммит артефактов шага (`checkpoint.commit_step_artifacts`, тот же
+путь, которым идут чекпоинты таймаута/аварии/паузы) переносит в
+артефактную ветку только `.md`-файлы из белого списка требования 1 плюс
+ЛЮБЫЕ вложения других расширений (AC-4); посторонние `.md`-файлы первого
+уровня `tasks/<id>/` (и скрытые файлы/`__pycache__`, ANSWER-1) не
+проваливают шаг роли, а отбрасываются с ОДНОЙ записью в журнал на весь
+список отброшенных путей, не по записи на файл (AC-5); критерий
+допустимости `checkpoint.py` берёт ИЗ `scripts/guard.py` (AC-6) — не
+дублирует его независимой регуляркой, как уже сделано для
 `acceptance_tests/` этим же модулем (`_is_stray_acceptance_test_file`,
 которая, по докстрингу `guard.py` рядом, СОЗНАТЕЛЬНО дублирует список
 независимо от guard'а — SPEC 01M1SAA01YRRTWAVADT2F81RRQ прямо разрешала
@@ -21,21 +24,42 @@ AC-6 разбита на два теста намеренно (см. докст�
 угадывания имени новой функции/константы (SPEC называет только ОБРАЗЕЦ
 существующих имён, не имя новой сущности).
 
+## История: конфликт AC-9 эскалирован и разрешён ANSWER-1
+
+Первый заход этой планки использовал `scratch.log`/`debug.tmp`/
+`junk.bin` как примеры «посторонних» файлов первого уровня и
+эскалировал AC-9: буквальный белый список AC-1 (без понятия «вложение»)
+конфликтовал с уже залоченными `tests/
+test_checkpoint_external_step_artifacts.py::test_binary_file_is_not_lost`
+(стр.180) и `::test_all_files_binary_still_commits_and_clears_the_dir`
+(стр.206), которые требуют, чтобы `screenshot.png`/`blob.bin` доезжали
+до артефактной ветки как есть. ANSWER-1 (вариант A) разрешил конфликт:
+белый список AC-1 действует ТОЛЬКО для `.md` первого уровня; вложения
+любого другого расширения проходят молча, без ограничения имени.
+Следствие для этой планки: `.log`/`.tmp`/`.bin` бывшие «посторонние»
+фикстуры сами становятся легальными вложениями по новому правилу — они
+заменены на посторонние `.md`-копии (`_head_map.md`/`compare.md`, тот
+же класс инцидента 06.09), а `screenshot.png` теперь фигурирует как
+ПОЗИТИВНЫЙ пример (обязан доехать, не быть отброшенным) — см.
+`test_ac4_non_md_attachment_is_transferred_not_dropped` ниже, прямой
+регресс-тест против повторения того же конфликта.
+
 Красен до реализации: checkpoint сегодня фильтрует только посторонние файлы ВНУТРИ acceptance_tests/ и не содержит импорта scripts.guard — test_ac4/test_ac5/test_ac6_checkpoint_module_imports_scripts_guard падают по прямым наблюдаемым следствиям этого.
 
 Подробности: `checkpoint._commit_external_step_artifacts` сегодня
 фильтрует ТОЛЬКО `_is_stray_acceptance_test_file` (посторонние файлы ВНУТРИ
 `acceptance_tests/`) — файл первого уровня `tasks/<id>/` вроде
-`notes.txt`/`debug.tmp` сегодня благополучно уезжает в артефактную ветку
-целиком, никакой записи в журнал про «посторонние» не появляется вовсе, а
-`orchestrator/checkpoint.py` не содержит ни одного импорта `scripts.guard`
-(проверено `grep`). `test_ac4_...` красный по присутствию постороннего
-файла в артефактной ветке после коммита; `test_ac5_...` красный по нулю
-подходящих записей журнала вместо одной; `Ac6ImportsFromGuardTest::
-test_ac6_checkpoint_module_imports_scripts_guard` красный, потому что
-такого импорта в дереве разбора `checkpoint.py` сегодня нет.
+`_head_map.md`/`compare.md` сегодня благополучно уезжает в артефактную
+ветку целиком, никакой записи в журнал про «посторонние» не появляется
+вовсе, а `orchestrator/checkpoint.py` не содержит ни одного импорта
+`scripts.guard` (проверено `grep`). `test_ac4_...` красный по
+присутствию постороннего файла в артефактной ветке после коммита;
+`test_ac5_...` красный по нулю подходящих записей журнала вместо одной;
+`Ac6ImportsFromGuardTest::test_ac6_checkpoint_module_imports_scripts_guard`
+красный, потому что такого импорта в дереве разбора `checkpoint.py`
+сегодня нет.
 
-Зелёный с рождения: сегодня guard.py и checkpoint.py оба пропускают любое имя первого уровня без разбора, поэтому пустые множества классификации совпадают по построению, не по согласованности критерия.
+Зелёный с рождения: test_ac4_non_md_attachment_is_transferred_not_dropped проходит уже сегодня (checkpoint переносит любой файл диска без разбора расширения) — регресс-контроль на будущее правило AC-1/AC-4/ANSWER-1, не тавтология: как только правило появится, ему запрещено начать отбрасывать вложение только по «странному» расширению/имени.
 
 Подробности: `Ac6ChecksAgreeOnClassificationTest::
 test_ac6_checkpoint_drops_exactly_what_guard_calls_extraneous` — сегодня ОБЕ
@@ -46,47 +70,14 @@ test_ac6_checkpoint_drops_exactly_what_guard_calls_extraneous` — сегодн�
 переписывать тест под сегодняшнюю вырожденность не нужно.
 
 Провалидировано стабом (решение Оператора 03.09): временная реализация
-критерия допустимости ОДНИМ списком, импортируемым `checkpoint.py` из
-`scripts.guard` и применяемым в `_commit_external_step_artifacts` тем же
-приёмом, что уже применяет `_is_stray_acceptance_test_file` (собрать
-`stray`, исключить из `files`, одна запись `store.journal` на весь
-список) — зеленила все тесты этого файла. Стаб убран, репозиторий не
-тронут.
-
-## AC-9: обнаружено противоречие AC-1/AC-4 с уже залоченным поведением
-`tests/test_checkpoint_external_step_artifacts.py`
-
-При валидации стаба выше тем же прогоном обнаружено: белый список AC-1
-— БУКВАЛЬНОЕ перечисление (`SPEC.md`/`PLAN.md`/`REVIEW.md`/
-`TEST_REPORT.md`/`QUESTIONS.md`/`TZ.md`/`ANSWER-<n>.md`/
-`acceptance_tests/`/`*.patch`), без места для произвольных бинарных
-приложений. Но `tests/test_checkpoint_external_step_artifacts.py`
-(строка 180, `test_binary_file_is_not_lost`, и строка 206,
-`test_all_files_binary_still_commits_and_clears_the_dir`) — уже
-существующие, зелёные, никем не помеченные как подлежащие правке тесты
-— ЖЁСТКО требуют, чтобы `screenshot.png`/`blob.bin`, лежащие в
-`tasks/<id>/` роли ПРЯМО РЯДОМ с `PLAN.md`, доехали до артефактной
-ветки как есть (`assertIn(".../screenshot.png", committed)`).
-
-Буквальная реализация AC-1 + AC-4 (checkpoint отбрасывает всё вне
-белого списка) неизбежно превращает `screenshot.png`/`blob.bin` в
-«посторонние» и красит оба этих теста — не гипотетической мутацией, а
-прямым следствием ЛЮБОЙ добросовестной реализации требования 1/2. Это
-проверено тем же стабом, которым выше провалидированы `test_ac4_...`/
-`test_ac5_...`/`test_ac6_...`: временно применённый к `checkpoint.py`
-белый список AC-1 (без каких-либо специальных исключений под `.png`/
-`.bin`) даёт `FAILED` именно на этих двух существующих тестах, прогнанных
-`python3 -m unittest tests.test_checkpoint_external_step_artifacts` тем
-же стабом.
-
-AC-9 требует «остаются зелёными БЕЗ ПРАВКИ АССЕРТОВ» — а любой выход из
-противоречия, который я вижу, требует либо ослабить буквальность AC-1
-(разрешить произвольные бинарные приложения помимо перечня), либо
-поправить ассерты двух существующих тестов (запрещено без ADR/решения
-Оператора — conventions-core.md, ADR-0002). Ни то, ни другое не в праве
-решить test_author единолично — маркер эскалации ниже, вне докстроки
-(guard читает его текстом из `test_*.py` планки, сюда положен рядом с
-файлами, чьи AC-4/AC-5/AC-6 он же и покрывает).
+критерия допустимости ОДНИМ списком (только `.md`-имена AC-1, ANSWER-1),
+импортируемым `checkpoint.py` из `scripts.guard` и применяемым в
+`_commit_external_step_artifacts` тем же приёмом, что уже применяет
+`_is_stray_acceptance_test_file` (собрать `stray`, исключить из `files`,
+одна запись `store.journal` на весь список) — зеленила все тесты этого
+файла, включая `test_ac4_non_md_attachment_is_transferred_not_dropped`
+(вложения `.png`/`.bin` переносились как есть). Стаб убран, репозиторий
+не тронут.
 """
 import sys
 import tempfile
@@ -97,17 +88,27 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 from orchestrator import artifact_branch, checkpoint, config, gitcmd, store  # noqa: E402
 from tests.sandbox import RealGitSandbox  # noqa: E402
 
-# Полный разбор находки — в докстринге модуля выше. Однострочный маркер
-# ниже — то, что реально читает сканер AC-разметки (regex, без переноса
-# причины на следующую строку, тот же формат, что REDNESS_MARKER).
-# AC-9: escalate — буквальный белый список AC-1 (SPEC.md/PLAN.md/REVIEW.md/TEST_REPORT.md/QUESTIONS.md/TZ.md/ANSWER-<n>.md/acceptance_tests//*.patch) конфликтует с залоченными tests/test_checkpoint_external_step_artifacts.py::test_binary_file_is_not_lost (стр.180) и ::test_all_files_binary_still_commits_and_clears_the_dir (стр.206), требующими произвольных бинарных вложений (screenshot.png/blob.bin) в артефактной ветке — варианты: A (дефолт) расширить AC-1 правилом «произвольное вложение вне генераторных .md-паттернов инцидента 06.09 разрешено»; B — ADR на правку фикстур этих тестов; C — иное решение Оператора
+# AC-9: manual — критерий требует, чтобы отдельные уже существующие
+# tests/test_guard*.py, tests/test_checkpoint*.py, tests/test_fsm_merge_gate*.py
+# остались зелёными на реализации разработчика; skill test-authoring
+# запрещает test_author гонять полный tests/ в шаге (эту работу делает
+# CI/ревью), поэтому это не отдельный тест acceptance_tests/. Вторая
+# половина AC-9 (каждый новый тест ловит заявленную мутацию) обеспечена
+# докстринками «Ловит мутацию:» тестов AC-1/AC-2/AC-4/AC-5/AC-6/AC-7/AC-8
+# этой планки, отдельного теста не требует. Конфликт, из-за которого
+# предыдущий заход эскалировал именно AC-9 (буквальный белый список
+# ломал test_binary_file_is_not_lost/test_all_files_binary_still_commits_and_clears_the_dir),
+# разрешён ANSWER-1 и закрыт регресс-тестом
+# test_ac4_non_md_attachment_is_transferred_not_dropped ниже.
 
 TARGET = "extproj"
 
-# Одновременно валидные (per AC-1) и заведомо посторонние имена первого
+# Валидные (per AC-1/ANSWER-1) и заведомо посторонние `.md`-имена первого
 # уровня — общий набор для checkpoint- и guard-прогонов AC-6 ниже.
+# `.log`/`.tmp`/`.bin` НЕ используются как посторонние примеры — по
+# ANSWER-1 это легальные вложения (см. «История» в докстринге модуля).
 ALLOWED_NAMES = ("PLAN.md", "TZ.md", "ANSWER-3.md", "x.patch")
-STRAY_NAMES = ("notes.txt", "junk.bin")
+STRAY_NAMES = ("_head_map.md", "compare.md")
 
 
 class _CheckpointTaskRootStrayTest(RealGitSandbox):
@@ -140,22 +141,24 @@ class _CheckpointTaskRootStrayTest(RealGitSandbox):
 
 
 class Ac4StrayFilesExcludedFromCommitTest(_CheckpointTaskRootStrayTest):
-    """AC-4: посторонние файлы первого уровня исключены из переноса,
-    разрешённые — переносятся, шаг роли не проваливается."""
+    """AC-4: посторонние `.md`-файлы первого уровня исключены из
+    переноса, разрешённые и любые вложения — переносятся, шаг роли не
+    проваливается."""
 
-    def test_ac4_allowed_file_transferred_stray_file_dropped_step_does_not_fail(self):
-        """`PLAN.md` (в белом списке AC-1) и `scratch.log` (посторонний)
-        лежат в `tasks/<id>/` роли одновременно; после
-        `commit_step_artifacts` артефактная ветка несёт `PLAN.md`, но не
-        несёт `scratch.log`, и вызов не бросает исключение.
+    def test_ac4_allowed_file_transferred_stray_md_file_dropped_step_does_not_fail(self):
+        """`PLAN.md` (в белом списке AC-1) и `_head_map.md` (посторонняя
+        копия карты кодовой базы, инцидент 06.09) лежат в `tasks/<id>/`
+        роли одновременно; после `commit_step_artifacts` артефактная
+        ветка несёт `PLAN.md`, но не несёт `_head_map.md`, и вызов не
+        бросает исключение.
 
-        Ловит мутацию: фильтр посторонних файлов первого уровня не
-        реализован (сегодняшнее поведение) — `scratch.log` попадёт в
+        Ловит мутацию: фильтр посторонних `.md`-файлов первого уровня не
+        реализован (сегодняшнее поведение) — `_head_map.md` попадёт в
         артефактную ветку наравне с `PLAN.md`, `assertNotIn` ниже это
         поймает.
         """
         self.write("PLAN.md", "план")
-        self.write("scratch.log", "мусор роли")
+        self.write("_head_map.md", "черновая копия карты кодовой базы")
 
         detail = checkpoint.commit_step_artifacts(store.db(), self.TASK,
                                                    "developer")
@@ -163,39 +166,62 @@ class Ac4StrayFilesExcludedFromCommitTest(_CheckpointTaskRootStrayTest):
         self.assertTrue(detail)
         files = self.artifact_branch_files()
         self.assertIn(f"tasks/{self.TASK}/PLAN.md", files)
-        self.assertNotIn(f"tasks/{self.TASK}/scratch.log", files)
+        self.assertNotIn(f"tasks/{self.TASK}/_head_map.md", files)
+
+    def test_ac4_non_md_attachment_is_transferred_not_dropped(self):
+        """Вложение `screenshot.png` (расширение, не входящее в `.md`
+        белого списка) рядом с `PLAN.md` — доезжает до артефактной ветки
+        как есть, не отбрасывается фильтром постороннего (ANSWER-1: белый
+        список AC-1 действует только для `.md`; регресс-тест против
+        конфликта, из-за которого предыдущий заход эскалировал AC-9 —
+        буквальный белый список ломал залоченные `tests/
+        test_checkpoint_external_step_artifacts.py::test_binary_file_is_not_lost`).
+
+        Ловит мутацию: разработчик реализует фильтр `checkpoint.py`
+        буквальным списком AC-1 ДО правки ANSWER-1 (без понятия
+        «вложение», отбрасывающим всё вне перечисленных `.md`-имён и
+        `*.patch`) — тогда `screenshot.png` попадёт в `stray` наравне с
+        `_head_map.md`, и `assertIn` ниже это поймает.
+        """
+        self.write("PLAN.md", "план")
+        self.write("screenshot.png", "не настоящий png, но не суть")
+
+        checkpoint.commit_step_artifacts(store.db(), self.TASK, "developer")
+
+        files = self.artifact_branch_files()
+        self.assertIn(f"tasks/{self.TASK}/screenshot.png", files)
 
 
 class Ac5SingleJournalEntryForAllStrayPathsTest(_CheckpointTaskRootStrayTest):
     """AC-5: ровно ОДНА запись в журнал шага на весь список отброшенных
     путей, не по записи на файл."""
 
-    def test_ac5_two_stray_files_produce_exactly_one_journal_entry_listing_both(self):
-        """Два посторонних файла первого уровня (`scratch.log`,
-        `debug.tmp`) рядом с одним разрешённым (`PLAN.md`) — журнал шага
+    def test_ac5_two_stray_md_files_produce_exactly_one_journal_entry_listing_both(self):
+        """Два посторонних `.md`-файла первого уровня (`_head_map.md`,
+        `compare.md`) рядом с одним разрешённым (`PLAN.md`) — журнал шага
         несёт РОВНО одну новую запись, упоминающую ОБА отброшенных пути,
         не две отдельные записи.
 
         Ловит мутацию: журналирование сделано ПО ФАЙЛУ (цикл вызывает
         `store.journal` на каждой итерации вместо накопления списка и
         одного вызова после цикла) — тогда записей, упоминающих
-        `scratch.log`/`debug.tmp`, будет две, не одна, и `assertEqual(...,
-        1)` ниже это поймает.
+        `_head_map.md`/`compare.md`, будет две, не одна, и
+        `assertEqual(..., 1)` ниже это поймает.
         """
         self.write("PLAN.md", "план")
-        self.write("scratch.log", "мусор 1")
-        self.write("debug.tmp", "мусор 2")
+        self.write("_head_map.md", "черновая копия карты 1")
+        self.write("compare.md", "")
 
         checkpoint.commit_step_artifacts(store.db(), self.TASK, "developer")
 
         rows = self.journal_rows()
         stray_rows = [r for r in rows
-                     if "scratch.log" in (r["detail"] or "")
-                     or "scratch.log" in (r["action"] or "")]
+                     if "_head_map.md" in (r["detail"] or "")
+                     or "_head_map.md" in (r["action"] or "")]
         self.assertEqual(len(stray_rows), 1, [dict(r) for r in rows])
         combined = stray_rows[0]["action"] + " " + stray_rows[0]["detail"]
-        self.assertIn("scratch.log", combined)
-        self.assertIn("debug.tmp", combined)
+        self.assertIn("_head_map.md", combined)
+        self.assertIn("compare.md", combined)
 
 
 class Ac6ImportsFromGuardTest(_CheckpointTaskRootStrayTest):
@@ -295,17 +321,19 @@ class Ac6ChecksAgreeOnClassificationTest(_CheckpointTaskRootStrayTest):
         return flagged
 
     def test_ac6_checkpoint_drops_exactly_what_guard_calls_extraneous(self):
-        """Один и тот же набор имён (валидные + посторонние вперемешку)
-        классифицируется ОДИНАКОВО guard'ом и checkpoint'ом: множество
-        имён, отброшенных `commit_step_artifacts`, совпадает с
+        """Один и тот же набор имён (валидные + посторонние `.md`
+        вперемешку) классифицируется ОДИНАКОВО guard'ом и checkpoint'ом:
+        множество имён, отброшенных `commit_step_artifacts`, совпадает с
         множеством, которое `guard --all` называет посторонним, — ни
         одним именем больше, ни одним меньше.
 
         Ловит мутацию: `checkpoint.py` реализует критерий НЕЗАВИСИМОЙ
         регуляркой, разошедшейся со списком guard'а (например, забывает
-        разрешить `TZ.md` или ошибочно разрешает `.log`) — тогда множество
-        отброшенных checkpoint'ом имён разойдётся с множеством,
-        помеченным guard'ом, и сравнение множеств ниже упадёт.
+        разрешить `TZ.md` или ошибочно считает посторонним любой `.md`,
+        не входящий в буквальный перечень, включая корректно
+        сформированный `ANSWER-3.md`) — тогда множество отброшенных
+        checkpoint'ом имён разойдётся с множеством, помеченным guard'ом,
+        и сравнение множеств ниже упадёт.
         """
         names = list(ALLOWED_NAMES) + list(STRAY_NAMES)
         for name in names:

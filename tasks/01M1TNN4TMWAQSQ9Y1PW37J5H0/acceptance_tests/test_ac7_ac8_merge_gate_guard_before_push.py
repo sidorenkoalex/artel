@@ -1,9 +1,17 @@
-"""AC-7/AC-8 (SPEC 01M1TNN4TMWAQSQ9Y1PW37J5H0): шаг наложения снимка
-артефактной ветки поверх merge (`orchestrator/fsm_merge_gate.py`)
+"""AC-7/AC-8 (SPEC 01M1TNN4TMWAQSQ9Y1PW37J5H0), формулировка по ANSWER-1
+(tasks/01M1TNN4TMWAQSQ9Y1PW37J5H0/ANSWER-1.md, вариант A): шаг наложения
+снимка артефактной ветки поверх merge (`orchestrator/fsm_merge_gate.py`)
 прогоняет guard на каталог `tasks/<id>/` в scratch-репозитории ДО `git
 push` в main (AC-7); красный guard отказывает переходу именованной
 причиной, задача остаётся на `merge_gate` без эскалации, `git push` в
 main не выполняется, main не изменён (AC-8).
+
+Посторонний файл сценария ниже — `.md`-копия вне белого списка AC-1
+(`_head_map.md`, класс инцидента 06.09), не файл произвольного
+расширения: по ANSWER-1 белый список AC-1 действует только для `.md`
+первого уровня `tasks/<id>/`, вложения других расширений (например,
+`.log`, использованный первым заходом этой планки до эскалации AC-9)
+проходят молча и не годятся для проверки отказа гейта.
 
 `_overlay_artifact_snapshot` (`orchestrator/fsm_merge_gate.py`)
 материализует `tasks/<id>/` scratch-репозитория ИЗ ГОЛОВЫ АРТЕФАКТНОЙ
@@ -45,7 +53,7 @@ from _sandbox import ArtelSelfTargetSandbox  # noqa: E402
 from orchestrator import artifact_branch, fsm_merge_gate, store  # noqa: E402
 
 TASK = "01MERGEGATEGUARDBEFOREPUSH1"
-STRAY_NAME = "scratch.log"
+STRAY_NAME = "_head_map.md"
 
 
 class Ac7GuardChecksTheOverlaidArtifactSnapshotTest(ArtelSelfTargetSandbox):
