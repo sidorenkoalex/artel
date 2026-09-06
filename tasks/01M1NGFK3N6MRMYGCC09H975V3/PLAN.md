@@ -213,4 +213,81 @@ ANSWER-1 п.3 буквально требует этого для `doctor`. Пр
 дополнительно — зелёными `tests/test_canary.py`, которые уже
 покрывают этот контекстный менеджер).
 
+## Возврат — подтяжка после 01M1TKP269 и разреза doctor
+
+Возврат из `merge_gate` (решение Оператора 06.09): ветка отстала от
+main на 445+ коммитов, три зоны задачи (`canary.py`, `doctor.py`,
+`pin.py`) за это время переписаны независимыми задачами. `git merge
+origin/main` — конфликты только в четырёх местах (`docs/codebase-map.md`
+— взят origin, перегенерирован отдельно шагом 9 методики; `orchestrator/
+artel.py` — докстринг списка команд, объединены обе половины;
+`orchestrator/canary.py` — три хунка; `orchestrator/doctor.py` —
+modify/delete). `config.py`, `store.py`, `gitcmd.py`, `pin.py`,
+`tests/sandbox.py`, `tests/test_canary.py`, `tests/test_doctor.py`
+смержились автоматически без конфликта — наши добавления (`CANARY_MAX_
+MERGES_SINCE_GREEN`, `is_ancestor`/`merges_between`, `green_canary_runs`/
+`latest_green_canary_run`/`insert_canary_run(main_sha=, verdict=)`,
+`cmd_pin_to`, ANSWER-2 `.gitignore` в `RealGitSandbox`) физически не
+пересекались построчно с параллельной работой на main.
+
+Три правки причины возврата:
+
+1. **Разрез `doctor.py` → пакет `orchestrator/doctor/`**
+   (01M1TT9BPBRYMDXXEWVZSRG51V, уже смерженная в main задача): взял
+   пакет `orchestrator/doctor/` origin/main целиком (`git checkout
+   origin/main -- orchestrator/doctor/`), удалил монолитный `orchestrator/
+   doctor.py`. `check_canary_trigger` (AC-3/AC-4) перенесён дословно (та
+   же арифметика, тот же фиксированный текст алерта для дедупа — REVIEW.md
+   итерации 1, R1-F2) в `orchestrator/doctor/canary_pool.py` (тематически
+   соседствует с `check_canary_pool_drift`/`check_role_log_pool_leak` —
+   тоже канареечные проверки), обращения к коллаборантам переписаны на
+   фасадный приём пакета (`doctor.gitcmd`, `doctor.canary`, `doctor.
+   config`, `doctor.alerts`, `doctor.Check` — не отдельный импорт в
+   подмодуле, докстринг `orchestrator/doctor/__init__.py`). Зарегистрирован
+   в `orchestrator/doctor/__init__.py` (импорт из `.canary_pool`) и в
+   `orchestrator/doctor/cli.py::all_checks` (рядом с `check_canary_pool_
+   drift`). Тесты `tests/test_doctor.py::CanaryTriggerCheckTest`
+   обращаются к `doctor.check_canary_trigger` — атрибут пакета, путь
+   вызова не изменился с точки зрения теста.
+
+2. **Verdict через смерженное понятие штатного исхода, не через
+   `reached in (merge_gate, verifying)`**: `_drive_task` (ANSWER-1 п.2,
+   исходная реализация) возвращал маркер `"merge_gate"`/`"verifying"`/
+   `"inconclusive"`/`"other"` — на main за это время `_drive_task` вообще
+   перестал возвращать что-либо осмысленное (ADR-0015: `verifying`
+   переставлен ПЕРЕД ревьювером и с тех пор проходится синтетически,
+   `_pass_verifying`, не убивает задачу), а различение штатного исхода
+   от «не сошлась» переехало в отдельную пару `_kill_outcome_note`/
+   `_needs_diagnostics` (уже покрыты `NeedsDiagnosticsTest`, 4/4 сочетаний
+   истинности). Правка: `_drive_task` вернулась к сигнатуре `-> None` без
+   маркеров (все `return "..."` — на голый `return`), `state ==
+   "verifying"` ведёт через `_pass_verifying`/`continue` (не через
+   старую `_kill_at_verifying`/`return`). `_run_one_task` считает
+   `verdict = "green" if not _needs_diagnostics(normal_outcome, mismatch)
+   else "red"` — `normal_outcome`/`mismatch` уже вычислены той же
+   функцией для собственной логики диагностики/бейзлайна двумя строками
+   выше, переиспользованы, не задублированы.
+
+3. **`verifying` не конечная точка — не считать зелёным**: прямое
+   следствие пункта 2 — раз `_pass_verifying` не убивает задачу, а ведёт
+   её дальше в `review`, реальное вождение канарейки сегодня может
+   закончиться штатным killed ТОЛЬКО на `merge_gate`
+   (`_kill_outcome_note` признаёт «штатно» ещё и недостижимый из
+   `_drive_task` `_kill_at_verifying` — оставлен нетронутым ради чужой
+   залоченной планки, REVIEW.md 01M1TKP269W9JN3NBJCR5Q6C3B итерации 2,
+   R2-F1, править её эта задача не вправе). Отдельного кода для этого
+   пункта не потребовалось — устраняется тем же изменением, что и пункт 2.
+
+Обновлённые тесты `tests/test_canary.py`: `DriveTaskReachedGateMarkerTest`
+(тестировал сам убранный маркер) заменён на `RunOneTaskVerdictUsesNormal
+OutcomeTest` (таблица истинности verdict = `not _needs_diagnostics(...)`
+— та же матрица, что и `NeedsDiagnosticsTest`, явно как формула verdict'а);
+две ссылки на `result = canary._drive_task(...)` /
+`assertEqual(result, "inconclusive")` в `DriveTaskEscalationCapTest`/
+`DriveTaskStallCapTest` убраны — функция больше ничего не возвращает.
+
+Требования SPEC 1-4/AC-1..AC-8 — без изменений, реализация не
+пересматривалась по существу, только адаптирована под изменившиеся
+зоны main.
+
 ## Предложения системе
