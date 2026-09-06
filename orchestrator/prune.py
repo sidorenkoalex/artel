@@ -72,6 +72,22 @@ def _log_candidates(conn) -> list:
     return candidates
 
 
+def _canary_diag_candidates() -> list:
+    """Файлы `.artel/canary/**` старше `config.LOG_RETENTION_DAYS` (SPEC
+    01M1TKP269W9JN3NBJCR5Q6C3B, требование 4/AC-9) — тот же порог
+    давности, что и `.artel/logs/` выше, БЕЗ учёта «последних N закрытых
+    задач»: канареечный `task_id` в имени пути — id задачи ЭФЕМЕРНОГО
+    клона (`canary._ephemeral_clone`), уже уничтоженного к моменту
+    `prune` и никогда не попадающего в `store.all_tasks` пульта, поэтому
+    датовый отбор `_kept_task_ids` для него бессмыслен."""
+    root = config.ROOT / ".artel" / "canary"
+    if not root.is_dir():
+        return []
+    cutoff = time.time() - config.LOG_RETENTION_DAYS * 86400
+    return [path for path in sorted(root.rglob("*"))
+           if path.is_file() and path.stat().st_mtime < cutoff]
+
+
 def _alert_cutoff_ts() -> str:
     when = datetime.now(timezone.utc) - timedelta(days=config.ALERT_ARCHIVE_DAYS)
     return when.strftime("%Y-%m-%d %H:%M:%SZ")
@@ -83,15 +99,20 @@ def _alert_candidates(conn) -> list:
     return store.alerts_older_than(conn, _alert_cutoff_ts())
 
 
-def _print_report(mode: str, logs: list, alert_rows: list) -> None:
+def _print_report(mode: str, logs: list, alert_rows: list,
+                  diag_files: list = ()) -> None:
     log_verb = "удалён" if mode == "исполнено" else "будет удалён"
+    diag_verb = "убрана" if mode == "исполнено" else "будет убрана"
     alert_verb = "заархивирован" if mode == "исполнено" else "будет заархивирован"
     print(f"prune ({mode}):")
-    if not logs and not alert_rows:
+    if not logs and not alert_rows and not diag_files:
         print("  нечего убирать")
         return
     for path in logs:
         print(f"  лог {path.name} {log_verb}")
+    for path in diag_files:
+        rel = path.relative_to(config.ROOT / ".artel" / "canary")
+        print(f"  диагностика канарейки {rel} {diag_verb}")
     for row in alert_rows:
         print(f"  alert «{row['message']}» {alert_verb}")
 
@@ -100,13 +121,15 @@ def cmd_prune(execute: bool = False) -> None:
     """dry-run по умолчанию (AC-4): без `execute=True` ничего не удаляет
     и не архивирует, только печатает план. С `execute=True` (AC-5, AC-6)
     исполняет retention-политику `docs/retention.md` и печатает отчёт
-    о фактически убранном (AC-7)."""
+    о фактически убранном (AC-7); AC-9 (01M1TKP269W9JN3NBJCR5Q6C3B) —
+    та же политика давности для диагностики канарейки `.artel/canary/`."""
     conn = store.db()
     logs = _log_candidates(conn)
+    diag_files = _canary_diag_candidates()
     alert_rows = _alert_candidates(conn)
 
     if not execute:
-        _print_report("план", logs, alert_rows)
+        _print_report("план", logs, alert_rows, diag_files)
         return
 
     removed: list[Path] = []
@@ -118,9 +141,18 @@ def cmd_prune(execute: bool = False) -> None:
             continue
         removed.append(path)
 
+    removed_diag: list[Path] = []
+    for path in diag_files:
+        try:
+            path.unlink()
+        except OSError as exc:
+            print(f"  диагностика канарейки {path} не убрана: {exc}")
+            continue
+        removed_diag.append(path)
+
     archived = []
     for row in alert_rows:
         store.archive_alert(conn, row["id"])
         archived.append(row)
 
-    _print_report("исполнено", removed, archived)
+    _print_report("исполнено", removed, archived, removed_diag)
