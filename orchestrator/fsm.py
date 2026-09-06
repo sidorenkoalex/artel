@@ -210,6 +210,33 @@ def _origin_main_sha(target_name: str) -> str | None:
     return res.stdout.strip() if res is not None and res.returncode == 0 else None
 
 
+def _merge_conflict_note(files: list[str], merge) -> str:
+    """`detail` эскалации неразрешённого конфликта подтяжки (SPEC
+    01M1REVMB50SND1KJ3CYQMV2ST, требование 1, AC-1..AC-3): список
+    конфликтных файлов (`files` — снят вызывающим кодом ДО `merge
+    --abort`) одной строкой «конфликтные файлы: a, b», затем хвосты
+    `stdout`/`stderr` `git merge` (по 500 символов каждый — git пишет
+    «CONFLICT (content): …»/«Automatic merge failed» в `stdout`, не в
+    `stderr`, прежний код читал только `stderr`). Части, которых нет
+    (пустой список файлов, пустой `stdout`/`stderr`), в результат не
+    попадают вовсе — наивная склейка с пустыми частями оставляла бы
+    висящие «; »/пустое «конфликтные файлы:» (AC-3).
+    """
+    parts = []
+    if files:
+        parts.append("конфликтные файлы: " + ", ".join(files))
+    if merge is not None:
+        stdout_tail = merge.stdout.strip()[:500]
+        if stdout_tail:
+            parts.append(stdout_tail)
+        stderr_tail = merge.stderr.strip()[:500]
+        if stderr_tail:
+            parts.append(stderr_tail)
+    if not parts:
+        return "git не ответил осмысленно" if merge is not None else "git не ответил"
+    return "; ".join(parts)
+
+
 def _pull_main_or_escalate(conn, task_id: str, t, state: str) -> str:
     """Сверка свежести ветки задачи на входе в гейт (SPEC T051, требования
     1-7, 10; ADR-0006 п.2; переведена на origin — SPEC
@@ -351,14 +378,13 @@ def _pull_main_or_escalate(conn, task_id: str, t, state: str) -> str:
             return "escalated"
 
         resolved = False
-        if merge is not None:
-            files = _conflicting_files(wt_path)
-            if files == [MAP_REL]:
-                resolved = _auto_resolve_map_conflict(conn, task_id, wt_path,
-                                                       source_branch)
+        files = _conflicting_files(wt_path) if merge is not None else []
+        if merge is not None and files == [MAP_REL]:
+            resolved = _auto_resolve_map_conflict(conn, task_id, wt_path,
+                                                   source_branch)
         if not resolved:
             abort = gitcmd.in_repo(wt_path, "merge", "--abort")
-            note = merge.stderr.strip()[:500] if merge is not None else "git не ответил"
+            note = _merge_conflict_note(files, merge)
             if abort is None or abort.returncode != 0:
                 note += (f"; git merge --abort не удался: "
                         f"{abort.stderr.strip()[:200] if abort is not None else 'git не ответил'}")
