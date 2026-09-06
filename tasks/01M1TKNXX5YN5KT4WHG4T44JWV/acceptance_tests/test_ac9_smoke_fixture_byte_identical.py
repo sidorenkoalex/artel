@@ -3,6 +3,11 @@
 отработаны» регрессий №13/№15) дают тот же журнал (`store.journal`) и
 вывод stdout, байт-в-байт, что и ДО рефакторинга.
 
+Правка Оператора 06.09 (amend-tests): после мержа 01M1SG9T962WJJ31S282GWM0EN
+(база сравнения — merge-base с origin/main) отказы гейтов ёмкости/зон несут
+«база сравнения <sha> от <источник>»; `gitcmd.diff_base`/`diff_base_source`
+здесь замоканы (deadbeef / origin/main), как в tests/test_fsm_advance_gate_smoke.py.
+
 Фикстура (строки-константы `_EXPECTED_*` ниже) снята прогоном РОВНО этих
 трёх сценариев на сегодняшнем (нерефакторенном) `orchestrator/
 fsm_advance.py` — `_capacity_gate_refuses`/`_zones_gate_refuses`/
@@ -56,12 +61,14 @@ class Ac9CapacityGateSmokeTest(TmpRootTest):
 
     _EXPECTED_DETAIL = (
         "снимок не помещается в один контекст ревью — разделить задачу "
-        "(T001 «Тест двух цифр»): diff кода 300000 байт > потолка 262144 "
+        "(T001 «Тест двух цифр», база сравнения deadbeef от origin/main): "
+        "diff кода 300000 байт > потолка 262144 "
         "байт (исключённые артефакты tasks/T001/: 500 байт)")
     _EXPECTED_ACTION = "переход отклонён: гейт ёмкости diff"
     _EXPECTED_STDOUT = (
         "[T001] переход отклонён: снимок не помещается в один контекст "
-        "ревью — разделить задачу (T001 «Тест двух цифр»): diff кода "
+        "ревью — разделить задачу (T001 «Тест двух цифр», база сравнения "
+        "deadbeef от origin/main): diff кода "
         "300000 байт > потолка 262144 байт (исключённые артефакты "
         "tasks/T001/: 500 байт)\n"
         "  дальше: решение Оператора — разделить задачу или поднять "
@@ -92,7 +99,10 @@ class Ac9CapacityGateSmokeTest(TmpRootTest):
                     return subprocess.CompletedProcess(list(args), 0, artifacts_body, "")
             return subprocess.CompletedProcess(list(args), 0, "", "")
 
-        with mock.patch.object(gitcmd, "git", git_diff):
+        with mock.patch.object(gitcmd, "git", git_diff), \
+             mock.patch.object(gitcmd, "diff_base", return_value="deadbeef"), \
+             mock.patch.object(gitcmd, "diff_base_source",
+                               return_value="origin/main"):
             refused, out = _run(lambda: fsm_advance._capacity_gate_refuses(
                 self.conn, self.task_id, self.t, "in_dev"))
 
@@ -110,12 +120,13 @@ class Ac9ZonesGateSmokeTest(TmpRootTest):
     `COMMON_ZONES`."""
 
     _EXPECTED_DETAIL = (
-        "дифф трогает файлы вне заявленных zones и COMMON_ZONES: "
-        "docs/other.py")
+        "дифф трогает файлы вне заявленных zones и COMMON_ZONES "
+        "(база сравнения deadbeef от origin/main): docs/other.py")
     _EXPECTED_ACTION = "переход отклонён: гейт зон"
     _EXPECTED_STDOUT = (
         "[T002] переход отклонён: дифф трогает файлы вне заявленных "
-        "zones и COMMON_ZONES: docs/other.py\n"
+        "zones и COMMON_ZONES (база сравнения deadbeef от origin/main): "
+        "docs/other.py\n"
         "  дальше: сократи дифф до заявленных zones либо оформи раздел "
         "«## Расширение зон» в PLAN.md с обоснованием и мандатом "
         "Оператора («Расширение зон разрешено: <пути>» в ANSWER-n.md), "
@@ -138,7 +149,10 @@ class Ac9ZonesGateSmokeTest(TmpRootTest):
         расхождение хотя бы одним символом провалит сравнение.
         """
         with mock.patch.object(gitcmd, "diff_names",
-                              return_value=["docs/other.py"]):
+                              return_value=["docs/other.py"]), \
+             mock.patch.object(gitcmd, "diff_base", return_value="deadbeef"), \
+             mock.patch.object(gitcmd, "diff_base_source",
+                               return_value="origin/main"):
             refused, out = _run(lambda: fsm_advance._zones_gate_refuses(
                 self.conn, self.task_id, self.t, "task/t002-x", "PLAN\n"))
 
