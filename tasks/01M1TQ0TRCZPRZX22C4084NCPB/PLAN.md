@@ -27,8 +27,11 @@ R2, модуль `pull.py` R3).
    обнуляется тут же.
 2. **`fsm_advance.review`**: ветка `status == "approved"` лишена
    push-проверки и прогона `acceptance.run` (переехали в `in_dev`,
-   см. п.1); реестр замечаний (`guard.requires_registry`) — без
-   изменений (не один из семи рубежей). После реестра — прямой переход
+   см. п.1; правка сверки на origin — итерация 2, см. ниже, REVIEW.md
+   R1-F1: в итерации 1 push-проверка была ДОБАВЛЕНА в `in_dev`, но по
+   ошибке не убрана со старого места здесь — дубль); реестр замечаний
+   (`guard.requires_registry`) — без изменений (не один из семи
+   рубежей). После реестра — прямой переход
    в `"acceptance"` с материализацией `acc_tdir` и вызовом автогейта
    acceptance (`fsm_autogate._maybe_autogate_acceptance`), той же
    логикой, что раньше стояла на входе `verifying -> acceptance`.
@@ -71,6 +74,39 @@ SPEC 01M1RNZ6V7TTTTYAHBMF8JBQQS/`pull.py`, вне зон этой задачи) 
 `tests/test_branch_freshness_gate.py::test_advance_pulls_main_and_advances_when_acceptance_green`
 (правка этого шага). См. «Предложения системе».
 
+### Итерация 2 — закрытие REVIEW.md, iteration 1, замечание R1-F1 (blocker)
+
+Ревьювер поймал ровно то, что описано выше в п.2 скобкой: рубеж
+«сверка головы на origin» (`_origin_push_gate`) был добавлен в
+`in_dev()` (строки 1123-1125), но старая точка вызова в `review()`
+(строки 301-303, ветка `status == "approved" and not t["is_canary"]`)
+не была удалена — дублирование, прямо запрещённое требованием 1.
+Исправлено:
+
+- блок строк 301-303 убран из `review()` целиком (сама сверка
+  свежести вердикта, `_freshness_refuses`/`fresh_verdict_iteration`, не
+  трогалась — она не входит в семь переехавших рубежей);
+- докстринг `_origin_push_gate` (`fsm_advance.py:171-184`) и докстринг
+  `github_adapter.ensure_head_in_origin` (`github_adapter.py:114-116`)
+  переписаны — оба называют `in_dev()` единственным местом вызова, а не
+  `review()`;
+- расширение локального `test_ac02_ac08_gates_moved_to_verifying.py`
+  (просьба ревьювера) НЕ сделано: этот файл — часть
+  `tasks/01M1TQ0TRCZPRZX22C4084NCPB/acceptance_tests/`, залоченной
+  приёмочной планки (SPEC T023: «код чинится под них, их правка —
+  эскалация, не правка», conventions-core) — правка залоченного файла
+  силами developer не входит в допустимые действия этой роли. Вместо
+  этого тот же класс регрессии («рубеж оставлен на старом месте после
+  переноса») закрыт НОВЫМ тестом в незалоченной зоне `tests/`:
+  `tests/test_auto_cycle.py::AutoStopsWhereTheOperatorIsNeededTest::
+  test_origin_push_check_runs_once_not_twice_on_the_way_to_acceptance`
+  — шпион (`mock.MagicMock(wraps=...)`) на
+  `github_adapter.ensure_head_in_origin`, цикл `auto` от `in_dev` через
+  `verifying` (зелёный CI) и `review` (approved) до `acceptance`,
+  `assertEqual(spy.call_count, 1)`. Проверено разрезом на
+  дореформенном коде (`git stash` только по `fsm_advance.py`): тест
+  падает `2 != 1`; на исправленном — зелёный.
+
 ## Шаги
 
 1. Дождаться мержа R2/R3 (сделано Оператором, 06.09) — снято.
@@ -84,6 +120,11 @@ SPEC 01M1RNZ6V7TTTTYAHBMF8JBQQS/`pull.py`, вне зон этой задачи) 
    предыдущей итерации, сверено в этой.
 5. Убрать housekeeping-мусор (п.7 «Подхода»), прогнать `scripts/
    guard.py` на артефактах, закоммитить код.
+6. Итерация 2: закрыть REVIEW.md R1-F1 (см. «Итерация 2» выше) —
+   убрать дубль `_origin_push_gate` из `review()`, поправить два
+   докстринга, добавить регрессионный тест в `tests/test_auto_cycle.py`,
+   пересчитать `docs/codebase-map.md`, разметить реестр замечаний
+   `fixed`, закоммитить код.
 
 ## Покрытие требований
 
@@ -180,6 +221,17 @@ CI — все остались на месте, только на новых и�
 `test_step_cost`, `test_zone_lock`), все зелёные; 20 приёмочных тестов
 этой задачи — зелёные.
 
+Итерация 2 (закрытие R1-F1): `python3 -m unittest tests.test_acceptance_tests_flow
+tests.test_advance_guard tests.test_amend tests.test_auto_cycle
+tests.test_branch_freshness_gate tests.test_fsm_map_conflict_autoresolve
+tests.test_git_fixation tests.test_invariants tests.test_review_freshness
+tests.test_review_registry_gate tests.test_verifying_ceiling
+tests.test_github_adapter tests.test_merge_gate_ci_wait` — 296 тестов,
+все зелёные (~178с); 20 приёмочных тестов задачи — зелёные (без
+изменений); `python3 scripts/codebase_map.py` — пересчитан (новая
+запись «Импортируется» у `github_adapter.py`/`ci.py` за счёт нового
+импорта в `tests/test_auto_cycle.py`).
+
 ## Риски
 
 - Диф трогает `orchestrator/artel.py` вне заявленных `zones` — гейт
@@ -210,3 +262,17 @@ CI — все остались на месте, только на новых и�
   для `orchestrator/answer.py`: аналитику стоит сверять `zones:` не
   только с текстом требований, но и с фактическим местом их реализации
   в коде, раз этот класс пробела повторился второй раз.
+- REVIEW.md итерации 1 (R1-F1) попросил расширить сценарий ИМЕННО в
+  залоченном `tasks/<id>/acceptance_tests/test_ac02_ac08_gates_moved_
+  to_verifying.py` — но conventions-core прямо запрещает developer
+  править файлы под `acceptance_tests/` (SPEC T023, «код чинится под
+  них, их правка — эскалация, не правка»). Реестр замечаний
+  (schema_version >= 3) сегодня не различает «замечание с решением,
+  требующим правки залоченного файла» от обычного — ревьюверу нечем
+  пометить такое решение иначе, чем как обычный текст «предложения»,
+  и developer при выполнении молча упирается в запрет своей же роли.
+  Разошлось предложением-заменой в незалоченной зоне `tests/` в этой
+  задаче (см. «Итерация 2» выше) — но в общем случае стоит явно
+  оговорить в coding-standards.md, что «решение» реестра, адресующее
+  залоченный акцептанс-файл, для developer не императив, а сигнал
+  подобрать эквивалентную незалоченную проверку или эскалировать.
