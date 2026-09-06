@@ -28,6 +28,15 @@ map_conflict`) — переиспользуем то же значение дл�
 не тронуты — задача только читает уже собранный список, не меняет
 логику разрешения (SPEC «Не входит»).
 
+Итерация 2 (закрытие REVIEW.md changes_requested, итерация 1): R1-F1
+(major, единственное замечание) закрыт — всем 7 методам
+`tests/test_fsm_merge_conflict_note.py` добавлен докстринг «Ловит
+мутацию: …» по образцу `tasks/01M1REVMB50SND1KJ3CYQMV2ST/
+acceptance_tests/test_pull_conflict_detail.py`; сами тесты, их ассерты
+и код `orchestrator/fsm.py` не менялись — ревью подтвердило, что логика
+и покрытие по существу верны. Реестр замечаний REVIEW.md размечен
+(R1-F1: fixed).
+
 ## Шаги
 
 1. `orchestrator/fsm.py`: `files = _conflicting_files(wt_path)` теперь
