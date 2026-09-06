@@ -853,6 +853,10 @@ def run_agent_once(conn, task_id: str, role: str, prompt: str,
             # тестового дубля выше не участвовал в group-kill вовсе.
             detail = f"{detail}; {liveness.group_kill_detail(agent_pid, killed_group)}"
         store.journal(conn, task_id, role, "agent run TIMEOUT", detail)
+        # Стоп-кран волны (01M1THKPNZ11DBZAQDMJ33EMJR, требование 3, вторая
+        # точка вызова): считает только СЕЙЧАС записанное событие и все
+        # прежние в пределах окна — журнал выше уже несёт эту попытку.
+        alerts.check_wave_breaker_timeout(conn)
         print(f"[{task_id}] таймаут шага ({timeout_min}) — разберись и "
               f"перезапусти run")
         return "timeout", f"таймаут шага ({timeout_min})", None
@@ -873,6 +877,11 @@ def run_agent_once(conn, task_id: str, role: str, prompt: str,
         failure_class = failure_classification._record_failure_classification(
             conn, task_id, role, numbered,
             failure_classification._attempt_output_text(log_path))
+        # Стоп-кран волны (01M1THKPNZ11DBZAQDMJ33EMJR, требование 3, первая
+        # точка вызова): без действия для классов вне TRANSIENT_SYSTEM_
+        # CLASSES (в т.ч. failure_class=None) — фильтр внутри check_wave_
+        # breaker_failure.
+        alerts.check_wave_breaker_failure(conn, failure_class)
         # В консоли хвост не повторяем: эти строки Оператор только что видел
         # вживую (перекачка пишет и в stdout, и в лог). В журнале он нужен —
         # `log <id>` читают потом, когда вывода на экране уже нет.
