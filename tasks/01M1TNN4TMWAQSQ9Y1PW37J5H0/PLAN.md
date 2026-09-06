@@ -72,6 +72,28 @@ AC-7/AC-8.
 закрыт (`docs/retro/T080.md` на месте) — независимо от правила
 расширения, guard молчит по нему.
 
+**Правка итерации 2 (REVIEW.md итерация 1, замечание R1-F1, blocker)** —
+`is_extraneous_task_root_file` (`scripts/guard.py:548-557`) в первой
+итерации проверял допустимость `.md`-имени только для пути РОВНО из
+одного сегмента (`len(parts) == 1`); файл в ЛЮБОЙ другой, впервые
+заведённой поддиректории первого уровня (например
+`tasks/<id>/wip/_head_map.md`) молча проходил все три точки контроля —
+ровно класс инцидента 06.09 на один уровень вложенности глубже.
+Починено: для `len(parts) == 1` поведение не изменилось; для
+`len(parts) > 1` (любой путь глубже, `parts[0] != "acceptance_tests"`) —
+файл посторонний БЕЗУСЛОВНО, независимо от расширения (единственная
+легальная поддиректория первого уровня — `acceptance_tests/`).
+`checkpoint.py`/`fsm_merge_gate.py` чинятся автоматически — оба
+импортируют этот же предикат (требование 2/AC-6, один источник
+истины). Регресс-тест `tests/test_guard_task_root_subdirectory.py`
+(6 тестов) добавлен в `tests/`, не в залоченную планку приёмки (её
+правка — эскалация, не правка разработчика): покрывает предикат
+напрямую и все три точки контроля (`guard --all`,
+`checkpoint.commit_step_artifacts`,
+`fsm_merge_gate._guard_task_root_or_refuse`) на файле в новой
+поддиректории; проверено даунгрейдом фикса (временный откат — 4 из 6
+новых тестов красные) и восстановлением, см. «Проверено исполнением».
+
 **Скилы (требование 5)** — unified-диф приложением
 `tasks/01M1TNN4TMWAQSQ9Y1PW37J5H0/skills-note.patch` добавляет по одной
 секции/пункту в `skills/coding-standards.md` (разработчик) и
@@ -105,15 +127,21 @@ AC-7/AC-8.
    (unified-диф `skills/coding-standards.md` +
    `skills/review-checklist.md`), `git apply --check` подтверждён на
    чистом дереве.
+6. (итерация 2, R1-F1) `scripts/guard.py::is_extraneous_task_root_file` —
+   критерий постороннего файла проверяет допустимость ПЕРВОГО сегмента
+   пути независимо от глубины остального пути, не только путь ровно из
+   одного сегмента; новый файл `tests/test_guard_task_root_subdirectory.py`
+   (6 тестов) — регрессия на файл в новой поддиректории первого уровня
+   для всех трёх точек контроля.
 
 ## Покрытие требований
 
 | Требование | Шаг |
 |---|---|
-| 1 | 1 |
-| 2 | 2 |
-| 3 | 3 |
-| 4 | 4 |
+| 1 | 1, 6 |
+| 2 | 2, 6 |
+| 3 | 3, 6 |
+| 4 | 4, 6 |
 | 5 | 5 |
 
 ## Влияние на систему
@@ -194,5 +222,15 @@ fsm_merge_gate.py) — откат любой правки убирает тол�
 - `python3 -m unittest tests.test_acceptance_tests_flow -v` — 69 ok (в т.ч. `test_new_unrelated_file_does_not_trip_the_lock`, проверяющий посторонний `notes.md` вне зоны нового правила — `cmd_advance` не гоняет `guard --all` по всему дереву).
 - `python3 -m py_compile scripts/guard.py orchestrator/checkpoint.py orchestrator/fsm_merge_gate.py tests/test_step_autocommit.py` — ок.
 - `git apply --check tasks/01M1TNN4TMWAQSQ9Y1PW37J5H0/skills-note.patch` на чистом дереве — ок (патч применён во временную правку для генерации диффа и отменён `git checkout --`, рабочее дерево `skills/` чисто).
+
+### Итерация 2 (правка R1-F1)
+
+- `python3 -c "from scripts import guard; print(guard.is_extraneous_task_root_file('wip/_head_map.md'))"` — `True` (было `False` до правки).
+- `python3 -m unittest tests.test_guard_task_root_subdirectory -v` — 6 ok; даунгрейд фикса (временный откат правки predicate) — 4 из 6 красные, восстановление — снова 6 ok (тесты ловят заявленную мутацию R1-F1).
+- `python3 -m unittest tasks.01M1TNN4TMWAQSQ9Y1PW37J5H0.acceptance_tests.test_ac1_ac2_guard_task_root_whitelist tasks.01M1TNN4TMWAQSQ9Y1PW37J5H0.acceptance_tests.test_ac3_mockup_html_exception tasks.01M1TNN4TMWAQSQ9Y1PW37J5H0.acceptance_tests.test_ac4_ac5_ac6_checkpoint_task_root_filter tasks.01M1TNN4TMWAQSQ9Y1PW37J5H0.acceptance_tests.test_ac7_ac8_merge_gate_guard_before_push` — 16 ok (залоченная планка без правки ассертов).
+- `python3 -m unittest tests.test_guard_task_root_subdirectory tests.test_guard_extraneous_acceptance_files tests.test_guard_artifact_branch_mode tests.test_guard_schema tests.test_guard_split_signals tests.test_guard_zones tests.test_advance_guard tests.test_step_autocommit tests.test_timeout_checkpoint tests.test_checkpoint_stray_acceptance_files tests.test_checkpoint_external_step_artifacts tests.test_fsm_merge_gate_done_snapshot tests.test_merge_gate_ci_wait tests.test_split_assessment_merge_gate tests.test_ci_status_kind_gate tests.test_fsm_map_regen tests.test_fsm_retro tests.test_fsm_map_conflict_autoresolve tests.test_fsm_merge_conflict_note tests.test_capacity_gate tests.test_acceptance_tests_flow` — 329 ok суммарно (AC-9 не нарушен).
+- `python3 -m py_compile scripts/guard.py orchestrator/checkpoint.py orchestrator/fsm_merge_gate.py tests/test_guard_task_root_subdirectory.py` — ок.
+- `python3 scripts/guard.py --all` на реальном дереве `tasks/` — «GUARD: ок (607 файлов)» (правка не задевает штатное дерево задачи, включая `tasks/T080/mockup.html` и `.md`-набор из «Влияния на систему»).
+- `python3 scripts/codebase_map.py` — карта регенерирована этим же коммитом (правка `*.py` в зоне `scripts/`/`tests/`), diff — новый `built_at_sha` и запись `tests/test_guard_task_root_subdirectory.py` в графе импортов.
 
 ## Предложения системе
