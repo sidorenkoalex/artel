@@ -20,6 +20,15 @@ from pathlib import Path
 
 from . import config
 
+# Расположение копии кода, которой ЭТОТ модуль реально исполняется
+# (ANSWER-7, 01M1TKP6AAY4W8GDGZNA9R0JZT) — вычислено один раз при
+# импорте, отдельной именованной константой, а не инлайн в
+# `_main_copy_root()`: тесты подменяют её тем же приёмом, что и
+# `config.ROOT`/`config.VENV_DIR` (`mock.patch.object(stack,
+# "_MODULE_ROOT", ...)`), не трогая при этом реальное значение
+# `__file__` модуля.
+_MODULE_ROOT = Path(__file__).resolve().parent.parent
+
 # `X | None` в аннотациях кода пульта (например,
 # orchestrator/doctor.py::cli_version) требует Python 3.10+ без
 # `from __future__ import annotations` — 3.11 фиксирует уже принятое
@@ -180,21 +189,30 @@ def _parse_pinned_versions(text: str) -> dict:
 
 
 def _main_copy_root() -> Path | None:
-    """Корень ГЛАВНОЙ копии репозитория, если `config.ROOT` — git-worktree
-    (ANSWER-6, 01M1TKP6AAY4W8GDGZNA9R0JZT): `git rev-parse
-    --git-common-dir` из `config.ROOT` называет ОБЩИЙ `.git`-каталог
-    (`<главная копия>/.git`) независимо от того, worktree это или сама
-    главная копия — родитель этого каталога и есть искомый корень.
-    Для самой главной копии совпадает с `config.ROOT` (вырожденный, но
-    безопасный случай — вызывающий код всё равно проверяет venv там же,
-    где уже проверил его через `config.VENV_DIR`).
+    """Корень ГЛАВНОЙ копии репозитория, если копия кода, которой ЭТОТ
+    модуль реально исполняется, — git-worktree (ANSWER-6/ANSWER-7,
+    01M1TKP6AAY4W8GDGZNA9R0JZT): `git rev-parse --git-common-dir`
+    называет ОБЩИЙ `.git`-каталог (`<главная копия>/.git`) независимо от
+    того, worktree это или сама главная копия — родитель этого каталога
+    и есть искомый корень. Для самой главной копии совпадает с корнем
+    кода (вырожденный, но безопасный случай — вызывающий код всё равно
+    проверяет venv там же, где уже проверил его через `config.VENV_DIR`).
+
+    Отправная точка — `_MODULE_ROOT` (расположение самого модуля), НЕ
+    `config.ROOT` (ANSWER-7): `tests/sandbox.py::RealGitSandbox`
+    подменяет `config.ROOT` на временный git-репозиторий, никак не
+    связанный с настоящей копией пульта — `git rev-parse` из НЕГО не
+    находит venv главной копии вообще (временный репозиторий её не
+    несёт), хотя исполняемый код физически лежит в настоящей копии.
+    `_MODULE_ROOT` не подменяется песочницами и указывает на копию
+    кода, которая реально работает — ровно ту, чей venv нужен.
 
     `None` — git не ответил или ответ пуст: fail-closed, вызывающий код
     падает дальше на `sys.executable`, не гадает путь по несуществующему
     ответу."""
     try:
         res = subprocess.run(
-            ["git", "rev-parse", "--git-common-dir"], cwd=config.ROOT,
+            ["git", "rev-parse", "--git-common-dir"], cwd=_MODULE_ROOT,
             capture_output=True, text=True, timeout=10)
     except (OSError, subprocess.TimeoutExpired):
         return None
@@ -205,7 +223,7 @@ def _main_copy_root() -> Path | None:
         return None
     git_dir = Path(text)
     if not git_dir.is_absolute():
-        git_dir = (Path(config.ROOT) / git_dir).resolve()
+        git_dir = (_MODULE_ROOT / git_dir).resolve()
     return git_dir.parent
 
 

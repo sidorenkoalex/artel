@@ -294,6 +294,37 @@ def _all_ok_run_with_freeze(freeze_output: str):
     return fake_run
 
 
+class MainCopyRootTest(unittest.TestCase):
+    """ANSWER-7 (01M1TKP6AAY4W8GDGZNA9R0JZT, возврат «venv по расположению
+    кода»): `tests/sandbox.py::RealGitSandbox` подменяет `config.ROOT` на
+    временный git-репозиторий, никак не связанный с настоящей копией
+    пульта — `_main_copy_root()` обязана искать `--git-common-dir` от
+    расположения кода (`stack._MODULE_ROOT`), не от `config.ROOT`,
+    иначе поиск venv уходит в несуществующий временный репозиторий
+    вместо настоящей главной копии.
+    """
+
+    def test_uses_module_root_not_config_root(self):
+        """Ловит мутацию: отправная точка снова `config.ROOT` —
+        записанный `cwd` совпал бы с подменённым (фейковым) путём вместо
+        `_MODULE_ROOT`, `assertEqual`/`assertNotEqual` откажут."""
+        recorded = {}
+
+        def fake_run(args, **kwargs):
+            recorded["cwd"] = kwargs.get("cwd")
+            return subprocess.CompletedProcess(args, 1, "", "")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            fake_root = Path(tmp)
+            with mock.patch.object(config, "ROOT", fake_root), \
+                 mock.patch.object(stack.subprocess, "run",
+                                   side_effect=fake_run):
+                stack._main_copy_root()
+
+        self.assertEqual(recorded["cwd"], stack._MODULE_ROOT)
+        self.assertNotEqual(Path(recorded["cwd"]), fake_root)
+
+
 class PytestPythonExecutableWorktreeTest(unittest.TestCase):
     """ANSWER-6 (01M1TKP6AAY4W8GDGZNA9R0JZT, возврат «интерпретатор venv
     из worktree»): планку пульт гоняет против worktree'а задачи, где
@@ -330,12 +361,17 @@ class PytestPythonExecutableWorktreeTest(unittest.TestCase):
     def test_falls_back_to_main_copy_venv_when_worktree_has_none(self):
         """Ловит мутацию: шаг 2 (поиск venv главной копии через
         `_main_copy_root()`) убран — функция ушла бы прямиком на
-        `sys.executable`, `assertEqual` откажет."""
+        `sys.executable`, `assertEqual` откажет.
+
+        Отправная точка `_main_copy_root()` — `stack._MODULE_ROOT`, не
+        `config.ROOT` (ANSWER-7): подменяем именно `_MODULE_ROOT` на
+        сконструированный worktree — тем же приёмом, что и раньше
+        `config.ROOT`, только через актуальный якорь."""
         main_venv_python = self.main_root / ".artel" / "venv" / "bin" / "python3"
         main_venv_python.parent.mkdir(parents=True)
         main_venv_python.touch()
 
-        with mock.patch.object(config, "ROOT", self.worktree_root), \
+        with mock.patch.object(stack, "_MODULE_ROOT", self.worktree_root), \
              mock.patch.object(config, "VENV_DIR", self.missing_venv,
                                create=True):
             executable = stack.pytest_python_executable()
@@ -345,7 +381,7 @@ class PytestPythonExecutableWorktreeTest(unittest.TestCase):
     def test_falls_back_to_sys_executable_when_main_copy_has_no_venv_either(self):
         """Контроль: главная копия тоже не несёт venv — шаг 3, не пустой
         путь и не исключение."""
-        with mock.patch.object(config, "ROOT", self.worktree_root), \
+        with mock.patch.object(stack, "_MODULE_ROOT", self.worktree_root), \
              mock.patch.object(config, "VENV_DIR", self.missing_venv,
                                create=True):
             executable = stack.pytest_python_executable()
