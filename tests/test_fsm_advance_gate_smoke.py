@@ -7,6 +7,16 @@
 `tests/test_fsm_review_rework_gate.py` для каждого гейта по отдельности
 — этот файл фиксирует буквальные строки как эталон снимка, не переносит
 их логику).
+
+Фикстуры гейтов ёмкости/зон обновлены при подтяжке main (ANSWER-1.md):
+`01M1SG9T962WJJ31S282GWM0EN` сменила базу сравнения обоих гейтов на
+`gitcmd.diff_base`/`diff_base_source` и добавила «база сравнения ... от
+...» в тексты отказов — снимок «до правки» этой задачи предшествовал
+той подтяжке, поэтому байт-в-байт сверяется уже с объединённым
+поведением (структура каркаса этой задачи + база сравнения main),
+`diff_base`/`diff_base_source` замокан явно на детерминированное
+значение, тем же приёмом, что `tests/test_zones_gate.py::
+GitFailureTest.test_git_not_answering_diff_names_refuses`.
 """
 import contextlib
 import io
@@ -49,7 +59,10 @@ class CapacityGateSmokeTest(TmpRootTest):
                     return subprocess.CompletedProcess(list(args), 0, "", "")
             return subprocess.CompletedProcess(list(args), 0, "", "")
 
-        with mock.patch.object(gitcmd, "git", git_diff):
+        with mock.patch.object(gitcmd, "git", git_diff), \
+             mock.patch.object(gitcmd, "diff_base", return_value="deadbeef"), \
+             mock.patch.object(gitcmd, "diff_base_source",
+                               return_value="origin/main"):
             refused, out = _capture(
                 fsm_advance._capacity_gate_refuses, conn, task_id, t, "in_dev")
 
@@ -57,9 +70,10 @@ class CapacityGateSmokeTest(TmpRootTest):
         self.assertEqual(
             out,
             "[T001] переход отклонён: снимок не помещается в один "
-            "контекст ревью — разделить задачу (T001 «Тест смоука»): "
-            "diff кода 262244 байт > потолка 262144 байт (исключённые "
-            "артефакты tasks/T001/: 0 байт (изменений нет))\n"
+            "контекст ревью — разделить задачу (T001 «Тест смоука», "
+            "база сравнения deadbeef от origin/main): diff кода 262244 "
+            "байт > потолка 262144 байт (исключённые артефакты "
+            "tasks/T001/: 0 байт (изменений нет))\n"
             "  дальше: решение Оператора — разделить задачу или "
             "поднять потолок (ADR-0002)\n")
         rows = conn.execute(
@@ -71,9 +85,9 @@ class CapacityGateSmokeTest(TmpRootTest):
         self.assertEqual(
             rows[0]["detail"],
             "снимок не помещается в один контекст ревью — разделить "
-            "задачу (T001 «Тест смоука»): diff кода 262244 байт > "
-            "потолка 262144 байт (исключённые артефакты tasks/T001/: "
-            "0 байт (изменений нет))")
+            "задачу (T001 «Тест смоука», база сравнения deadbeef от "
+            "origin/main): diff кода 262244 байт > потолка 262144 байт "
+            "(исключённые артефакты tasks/T001/: 0 байт (изменений нет))")
 
 
 class ZonesGateSmokeTest(TmpRootTest):
@@ -93,7 +107,10 @@ class ZonesGateSmokeTest(TmpRootTest):
                     list(args), 0, "orchestrator/bar.py\n", "")
             return subprocess.CompletedProcess(list(args), 0, "", "")
 
-        with mock.patch.object(gitcmd, "git", git_diff_names):
+        with mock.patch.object(gitcmd, "git", git_diff_names), \
+             mock.patch.object(gitcmd, "diff_base", return_value="deadbeef"), \
+             mock.patch.object(gitcmd, "diff_base_source",
+                               return_value="origin/main"):
             refused, out = _capture(
                 fsm_advance._zones_gate_refuses, conn, task_id, t,
                 "artifact/t002", "# PLAN\n")
@@ -102,7 +119,8 @@ class ZonesGateSmokeTest(TmpRootTest):
         self.assertEqual(
             out,
             "[T002] переход отклонён: дифф трогает файлы вне заявленных "
-            "zones и COMMON_ZONES: orchestrator/bar.py\n"
+            "zones и COMMON_ZONES (база сравнения deadbeef от "
+            "origin/main): orchestrator/bar.py\n"
             "  дальше: сократи дифф до заявленных zones либо оформи "
             "раздел «## Расширение зон» в PLAN.md с обоснованием и "
             "мандатом Оператора («Расширение зон разрешено: <пути>» "
@@ -115,7 +133,8 @@ class ZonesGateSmokeTest(TmpRootTest):
         self.assertEqual(rows[0]["action"], "переход отклонён: гейт зон")
         self.assertEqual(
             rows[0]["detail"],
-            "дифф трогает файлы вне заявленных zones и COMMON_ZONES: "
+            "дифф трогает файлы вне заявленных zones и COMMON_ZONES "
+            "(база сравнения deadbeef от origin/main): "
             "orchestrator/bar.py")
 
 
