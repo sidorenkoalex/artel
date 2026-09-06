@@ -143,7 +143,7 @@ FUNCTION_LOGIC_HASHES = {
     "check_root_pin": "aec0bd051dc330f3",
     "sweep_orphan_artifact_branches": "c8a8e21253d095a4",
     "check_map_growth": "5f374bf88a5da4b3",
-    "all_checks": "1ed701f9c757c996",
+    "all_checks": "305087f91fb8fdf9",  # было 1ed701f9c757c996 — до мержей 01M1TQ0X14/01M1TQ0ZCY (три новые строки all_checks); правка Оператора 06.09
     "cmd_doctor": "6702583d007e78e3",
     "cmd_alert_ack": "9b189b6a138e42d5",
     "_auto_ack_gone": "1f246e305730ef52",
@@ -177,8 +177,24 @@ EXPECTED_CHECKS_IN_ORDER = [
 ]
 
 
+class _FacadeCollapser(ast.NodeTransformer):
+    """Схлопывает `doctor.<имя>` обратно в `<имя>` перед хешированием —
+    иначе хеш меняется от единственной механической правки переноса
+    (ленивый доступ к коллаборанту через фасад, требование 3 SPEC), даже
+    если логика тела не изменилась ни на символ. Правка планки Оператором
+    06.09 по эскалации разработчика (ANSWER-3), ADR-0012."""
+
+    def visit_Attribute(self, node):
+        self.generic_visit(node)
+        if isinstance(node.value, ast.Name) and node.value.id == "doctor":
+            return ast.copy_location(ast.Name(id=node.attr, ctx=node.ctx), node)
+        return node
+
+
 def logic_hash(fn) -> str:
     tree = ast.parse(inspect.getsource(fn))
+    tree = _FacadeCollapser().visit(tree)
+    ast.fix_missing_locations(tree)
     return hashlib.sha256(ast.dump(tree).encode()).hexdigest()[:16]
 
 
