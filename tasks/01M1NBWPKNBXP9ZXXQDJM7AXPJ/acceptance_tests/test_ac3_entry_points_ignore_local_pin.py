@@ -45,11 +45,13 @@ class Ac3EntryPointsIgnoreLocalPinTest(OriginDivergedSandbox):
         вперёд. Переход обязан подтянуть свежий origin, а не молча
         пройти мимо сверки, приняв совпадение с пином за «не отстала».
 
-        Ловит мутацию: `in_dev -> review` зовёт `_pull_main_or_escalate`
-        так, что её внутренняя сверка снова падает на локальный пин
-        (например, копия узла с забытым `base`/`fetch`) — переход в
-        review случится БЕЗ подтяжки, и в worktree задачи никогда не
-        появится апстрим-файл.
+        Ловит мутацию: `in_dev -> verifying` (ADR-0015; узел сверки
+        по-прежнему называется `in_dev -> review` в докстринге
+        `fsm._pull_main_or_escalate`, конечное состояние сменилось)
+        зовёт `_pull_main_or_escalate` так, что её внутренняя сверка
+        снова падает на локальный пин (например, копия узла с забытым
+        `base`/`fetch`) — переход в verifying случится БЕЗ подтяжки, и
+        в worktree задачи никогда не появится апстрим-файл.
         """
         self.advance_origin_only()
         self.write_plan_ready()
@@ -58,7 +60,7 @@ class Ac3EntryPointsIgnoreLocalPinTest(OriginDivergedSandbox):
         with mock.patch.object(acceptance, "run", return_value=(True, "ok")):
             self.capture(fsm.cmd_advance, self.TASK)
 
-        self.assertEqual(self.state(), "review",
+        self.assertEqual(self.state(), "verifying",
                          "переход обязан состояться после подтяжки")
         self.assertTrue(
             self.worktree_file(UPSTREAM_MARKER_REL).exists(),

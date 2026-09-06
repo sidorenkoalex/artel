@@ -451,6 +451,42 @@ def scan_id_format_samples(tdir: Path) -> list[str]:
 
 
 # --------------------------------------------------------------------------
+# Копия лёгкой песочницы переходов вместо импорта из tests/sandbox.py (SPEC
+# 01M1TKP45EM16ZMJGQKNZA5T7J, требование 3, AC-8): копилка 06.09 — три
+# планки упали за один вечер из-за устаревшей копии, которую тест-автор
+# каждый раз переписывал заново вместо импорта эталона (skills/
+# test-authoring.md). Предупреждение, не ошибка — планка написана до
+# появления эталона (или до правки скила у test_author) не обязана
+# ретроактивно переписываться, только новые копии подсвечиваются.
+SANDBOX_OWN_DEFINITION_RE = re.compile(
+    r"^\s*def\s+(disk_backed_\w+|advance_from_in_dev)\s*\(", re.M)
+
+
+def sandbox_reuse_check(tdir: Path) -> dict:
+    """`{"errors": [], "warnings": [...]}` — предупреждение, если
+    `<tdir>/acceptance_tests/_sandbox.py` определяет собственные функции
+    `disk_backed_*`/`advance_from_in_dev` вместо импорта их из `tests/
+    sandbox.py`. Ищет буквальное `def disk_backed_*`/`def
+    advance_from_in_dev` — `from tests.sandbox import (disk_backed_show,
+    ...)` тем же именем в импорте не попадает под собственное
+    определение. Файла нет вовсе (сценарий не нуждается в локальной
+    надстройке) — ни ошибки, ни предупреждения."""
+    sandbox_path = tdir / "acceptance_tests" / "_sandbox.py"
+    if not sandbox_path.is_file():
+        return {"errors": [], "warnings": []}
+    try:
+        text = sandbox_path.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        return {"errors": [], "warnings": []}
+    if SANDBOX_OWN_DEFINITION_RE.search(text):
+        return {"errors": [], "warnings": [
+            f"{sandbox_path}: определяет собственные disk_backed_*/"
+            f"advance_from_in_dev вместо импорта из tests/sandbox.py "
+            f"(skills/test-authoring.md)"]}
+    return {"errors": [], "warnings": []}
+
+
+# --------------------------------------------------------------------------
 # Посторонний файл в каталоге планки (SPEC 01M1SAA01YRRTWAVADT2F81RRQ,
 # требование 2/AC-3/AC-6): инцидент 05.09 — `scripts/codebase_map.py`,
 # запущенный с cwd внутри `acceptance_tests/`, оставлял на диске
@@ -1381,6 +1417,7 @@ def main() -> int:
         return 1
 
     extraneous_errors: list[str] = []
+    sandbox_reuse_warnings: list[str] = []
     if args == ["--all"]:
         files = sorted(Path("tasks").rglob("*.md"))
         # Посторонние файлы `acceptance_tests/` (SPEC
@@ -1398,12 +1435,21 @@ def main() -> int:
             [f"{f}: {EXTRANEOUS_ACCEPTANCE_FILE_REASON}" for f in extraneous]
             + [f"{f}: {EXTRANEOUS_TASK_ROOT_FILE_REASON}"
               for f in task_root_extraneous])
+        # Копия лёгкой песочницы переходов (SPEC 01M1TKP45EM16ZMJGQKNZA5T7J,
+        # требование 3, AC-8) — предупреждение, не ошибка, собирается по
+        # всем каталогам задач сразу, тем же приёмом, что посторонние
+        # файлы выше.
+        for task_dir in sorted(Path("tasks").iterdir()):
+            if task_dir.is_dir():
+                sandbox_reuse_warnings.extend(
+                    sandbox_reuse_check(task_dir)["warnings"])
     else:
         files = [Path(a) for a in args]
 
     if artifact_branch_mode:
         errors, warnings, submitted, drafts = _artifact_branch_report(files)
         errors = extraneous_errors + errors
+        warnings = warnings + sandbox_reuse_warnings
         print(f"сдано {submitted} / черновиков {drafts} / "
               f"нарушений {len(errors) + len(warnings)}")
         if warnings:
@@ -1424,6 +1470,11 @@ def main() -> int:
             all_errors.append(f"{f}: файл не найден")
             continue
         all_errors.extend(check(f))
+
+    if sandbox_reuse_warnings:
+        print("GUARD: предупреждения (не блокируют переход гейта):")
+        for w in sandbox_reuse_warnings:
+            print(f"  - {w}")
 
     if all_errors:
         print("GUARD: нарушения структуры артефактов:")

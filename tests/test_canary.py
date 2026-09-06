@@ -176,6 +176,136 @@ class MetricsFromJournalTest(unittest.TestCase):
         self.assertEqual(metrics["outcome"], "killed")
 
 
+class NeedsDiagnosticsTest(unittest.TestCase):
+    """`canary._needs_diagnostics` — ANSWER-1.md, правило 1 (требование 1,
+    AC-1/AC-4): диагностика сохраняется во всех случаях, кроме «штатно
+    И без расхождения» одновременно."""
+
+    def test_normal_without_mismatch_does_not_need_diagnostics(self):
+        """Ловит мутацию: `_needs_diagnostics` возвращает `True`
+        безусловно (или роняет проверку `not mismatch`) — единственная
+        комбинация, где диагностика НЕ нужна (штатный исход без
+        расхождения, ANSWER-1.md правило 1), ошибочно попала бы под
+        сохранение."""
+        self.assertFalse(canary._needs_diagnostics(True, False))
+
+    def test_not_normal_without_mismatch_needs_diagnostics(self):
+        """Ловит мутацию: `and` в выражении подменён на `or` (или
+        проверка `normal_outcome` инвертирована) — нештатный исход без
+        расхождения маркера ошибочно классифицировался бы как
+        «диагностика не нужна», теряя ту самую диагностику, ради
+        которой SPEC затевался (AC-1)."""
+        self.assertTrue(canary._needs_diagnostics(False, False))
+
+    def test_normal_with_mismatch_needs_diagnostics(self):
+        """Ловит мутацию: проверка `mismatch` выпала из выражения
+        (например, `not normal_outcome` вместо `not (normal_outcome
+        and not mismatch)`) — штатный исход С расхождением маркера
+        ошибочно посчитался бы «диагностика не нужна», хотя расхождение
+        — как раз то, что требуется расследовать."""
+        self.assertTrue(canary._needs_diagnostics(True, True))
+
+    def test_not_normal_with_mismatch_needs_diagnostics(self):
+        """Ловит мутацию: функция всегда возвращает `False` (или обе
+        проверки инвертированы одновременно, компенсируя друг друга) —
+        худший случай (и не штатно, и расхождение) остался бы без
+        диагностики."""
+        self.assertTrue(canary._needs_diagnostics(False, True))
+
+
+class JournalExcerptLinesTest(unittest.TestCase):
+    """`canary._journal_excerpt_lines` (требование 2, AC-6) — переходы
+    состояний и записи «переход отклонён»/«auto остановлен», не
+    произвольные записи журнала, с потолком по числу строк."""
+
+    TASK = "T901"
+
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.root = Path(tmp.name)
+        for attr, value in (("ROOT", self.root),
+                            ("DB", self.root / ".artel" / "state.db"),
+                            ("TASKS", self.root / "tasks")):
+            patcher = mock.patch.object(config, attr, value)
+            patcher.start()
+            self.addCleanup(patcher.stop)
+        store.create_schema(store.db())
+        self.conn = store.db()
+        store.insert_task(self.conn, self.TASK, "Канареечная задача",
+                          "killed", "task/t901-x", config.DEFAULT_TARGET,
+                          50.0, is_canary=True)
+
+    def _steps(self):
+        return store.task_steps(self.conn, self.TASK)
+
+    def test_keeps_state_transitions_refusals_and_auto_stopped(self):
+        """Ловит мутацию: фильтр по префиксам `state -> `/`store.
+        REFUSAL_ACTION_PREFIX`/`_AUTO_STOPPED_ACTION` сужен или порядок
+        строк перепутан — любая из трёх целевых записей журнала выпала
+        бы из выдержки или оказалась не на своём месте, срывая
+        требование 2 (переходы состояний и «эскалация»/«переход
+        отклонён»/«auto остановлен» обязаны попасть в вывод)."""
+        store.journal(self.conn, self.TASK, "canary", "state -> in_dev", "")
+        store.journal(self.conn, self.TASK, "fsm",
+                      "переход отклонён: замечания ревью не отработаны", "")
+        store.journal(self.conn, self.TASK, "operator", "auto остановлен",
+                      "лимит шагов")
+
+        lines = canary._journal_excerpt_lines(self._steps())
+
+        self.assertEqual(len(lines), 3)
+        self.assertIn("state -> in_dev", lines[0])
+        self.assertIn("переход отклонён", lines[1])
+        self.assertIn("auto остановлен", lines[2])
+
+    def test_drops_unrelated_journal_rows(self):
+        """Ловит мутацию: условие `continue` для нецелевых действий
+        убрано или инвертировано — служебные записи runner (`agent run
+        started`/`finished`) просочились бы в выдержку журнала, раздувая
+        вывод сверх требования 2."""
+        store.journal(self.conn, self.TASK, "runner", "agent run started", "")
+        store.journal(self.conn, self.TASK, "runner", "agent run finished", "")
+
+        self.assertEqual(canary._journal_excerpt_lines(self._steps()), [])
+
+    def test_caps_at_the_given_limit_keeping_the_most_recent(self):
+        """Ловит мутацию: срез `lines[-limit:]` заменён на `lines[:limit]`
+        (или лимит не применяется вовсе) — вместо самых СВЕЖИХ записей
+        (причина финального исхода) в выдержке остались бы самые
+        старые, либо потолок в 20 строк на задачу (требование 2) был
+        бы сорван."""
+        for i in range(5):
+            store.journal(self.conn, self.TASK, "canary", f"state -> s{i}", "")
+
+        lines = canary._journal_excerpt_lines(self._steps(), limit=2)
+
+        self.assertEqual(len(lines), 2)
+        self.assertIn("state -> s3", lines[0])
+        self.assertIn("state -> s4", lines[1])
+
+
+class DiagnosticsDirTest(unittest.TestCase):
+    """`canary._diagnostics_dir` — путь диагностики строится от каталога
+    СНАРУЖИ клона (`outer_root`), не от текущего (возможно, патченного
+    на клон) `config.ROOT` (требование 1, AC-1)."""
+
+    def test_path_shape(self):
+        """Ловит мутацию: путь строится от текущего (возможно,
+        патченного на клон) `config.ROOT` вместо переданного
+        `outer_root`, либо сегменты `.artel/canary/<run_stamp>/
+        <task_id>` переставлены/пропущены — диагностика писалась бы
+        ВНУТРЬ эфемерного клона и была бы уничтожена `shutil.rmtree`
+        вместе с ним (требование 1, AC-1)."""
+        outer_root = Path("/tmp/artel-outer")
+
+        result = canary._diagnostics_dir(outer_root, "20260906T000000Z", "T902")
+
+        self.assertEqual(
+            result,
+            outer_root / ".artel" / "canary" / "20260906T000000Z" / "T902")
+
+
 class CanaryBaselineStoreRoundtripTest(unittest.TestCase):
     """`store.canary_baseline`/`set_canary_baseline` — бейзлайн per-task,
     ключ `title`, не `task_id` (требование 9)."""
@@ -448,6 +578,170 @@ class DriveTaskStallCapTest(unittest.TestCase):
         # только звонит `cleanup.cmd_kill` (замокан здесь), реальный
         # переход в `killed` — его работа, не предмет этого теста.
         self.assertEqual(store.get_task(self.conn, self.TASK)["state"], "in_dev")
+
+
+class PassVerifyingTest(unittest.TestCase):
+    """`canary._pass_verifying` (ANSWER-3.md 06.09, задача
+    01M1TKP269W9JN3NBJCR5Q6C3B): ADR-0015 переставил `verifying` перед
+    ревьювером — приравнивание к финальному kill (старое `_kill_at_
+    verifying`) убивало канареечную задачу раньше, чем прогон успевал
+    дойти до сценариев «не сошлась»/эскалации (6 из 18 приёмочных тестов
+    планки покраснели после подтяжки main по этой причине)."""
+
+    TASK = "T912"
+
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.root = Path(tmp.name)
+        for attr, value in (("ROOT", self.root),
+                            ("DB", self.root / ".artel" / "state.db"),
+                            ("TASKS", self.root / "tasks")):
+            patcher = mock.patch.object(config, attr, value)
+            patcher.start()
+            self.addCleanup(patcher.stop)
+        store.create_schema(store.db())
+        self.conn = store.db()
+        store.insert_task(self.conn, self.TASK, "Канареечная задача",
+                          "verifying", "task/t912-x", config.DEFAULT_TARGET,
+                          50.0, is_canary=True)
+        patcher = mock.patch.object(canary.cleanup, "cmd_kill")
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def test_transitions_to_review_instead_of_killing(self):
+        """Ловит мутацию: `_pass_verifying` зовёт `cleanup.cmd_kill`
+        вместо `store.set_state(..., "review", ...)` (старое поведение
+        `_kill_at_verifying`) — задача осталась бы убитой на `verifying`,
+        не дойдя до ревьювера, ровно дефект ANSWER-3.md."""
+        canary._pass_verifying(self.conn, self.TASK)
+
+        self.assertEqual(
+            store.get_task(self.conn, self.TASK)["state"], "review")
+        canary.cleanup.cmd_kill.assert_not_called()
+
+    def test_journals_synthetic_pass_with_canary_actor(self):
+        """Ловит мутацию: журнальная запись зовётся другим actor'ом или
+        без своего текста вовсе — `_kill_outcome_note`/диагностика
+        теряют след того, что переход был синтетическим, не реальным
+        зелёным CI ветки."""
+        canary._pass_verifying(self.conn, self.TASK)
+
+        steps = store.task_steps(self.conn, self.TASK)
+        self.assertTrue(any(
+            r["actor"] == canary.CANARY_MARK_ACTOR
+            and "verifying пройден синтетически" in r["action"]
+            for r in steps))
+
+
+class DriveTaskPassesVerifyingSyntheticallyTest(unittest.TestCase):
+    """`canary._drive_task` — `verifying` больше не завершает вождение
+    задачи (ANSWER-3.md 06.09): проходится синтетически, и цикл продолжает
+    вести задачу дальше вместо того, чтобы считать её законченной здесь."""
+
+    TASK = "T913"
+
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.root = Path(tmp.name)
+        for attr, value in (("ROOT", self.root),
+                            ("DB", self.root / ".artel" / "state.db"),
+                            ("TASKS", self.root / "tasks")):
+            patcher = mock.patch.object(config, attr, value)
+            patcher.start()
+            self.addCleanup(patcher.stop)
+        store.create_schema(store.db())
+        self.conn = store.db()
+        store.insert_task(self.conn, self.TASK, "Канареечная задача",
+                          "verifying", "task/t913-x", config.DEFAULT_TARGET,
+                          50.0, is_canary=True)
+
+        # `auto.cmd_auto` реально не входит в опрос `verifying` для
+        # канареечных задач (auto.py, условие цикла с `is_canary`) — здесь
+        # то же самое: no-op, всё решение — за `_drive_task` самим.
+        patcher = mock.patch.object(canary.auto, "cmd_auto", return_value=None)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+        # После синтетического прохода в `review` у состояния нет
+        # агентской роли в этом тесте (реального ревьювера не заводим) —
+        # `_drive_task` обязан остановиться сам, не убивая задачу.
+        patcher = mock.patch.object(canary.runner, "step_role", return_value=None)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+        patcher = mock.patch.object(canary.cleanup, "cmd_kill")
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def test_moves_past_verifying_into_review_without_killing(self):
+        """Ловит мутацию: `_drive_task` при `state == "verifying"` снова
+        зовёт `cleanup.cmd_kill`/`return` вместо `_pass_verifying`/
+        `continue` (старое `_kill_at_verifying`) — задача осталась бы
+        `killed` на `verifying`, тот же дефект, из-за которого 6 из 18
+        тестов планки покраснели после подтяжки main (ADR-0015)."""
+        canary._drive_task(self.conn, self.TASK)
+
+        self.assertEqual(
+            store.get_task(self.conn, self.TASK)["state"], "review")
+        canary.cleanup.cmd_kill.assert_not_called()
+
+
+class KillAtVerifyingCompatTest(unittest.TestCase):
+    """`canary._kill_at_verifying` — `_drive_task` её больше не зовёт
+    (см. `PassVerifyingTest`/`DriveTaskPassesVerifyingSyntheticallyTest`
+    выше), но функция и признание её литерала «штатным» в
+    `_kill_outcome_note` остаются нетронутыми: `tasks/
+    01M1SC3Y20YBTTJVQDJBF2NDQW/acceptance_tests/
+    test_canary_report_kill_reason.py::
+    test_ac4_verifying_kill_is_also_reported_as_normal` (залоченная
+    планка ДРУГОЙ, уже смерженной задачи) зовёт её напрямую и сверяет
+    вывод — REVIEW.md 01M1TKP269W9JN3NBJCR5Q6C3B итерации 2, R2-F1."""
+
+    TASK = "T914"
+
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.root = Path(tmp.name)
+        for attr, value in (("ROOT", self.root),
+                            ("DB", self.root / ".artel" / "state.db"),
+                            ("TASKS", self.root / "tasks")):
+            patcher = mock.patch.object(config, attr, value)
+            patcher.start()
+            self.addCleanup(patcher.stop)
+        store.create_schema(store.db())
+        self.conn = store.db()
+        store.insert_task(self.conn, self.TASK, "Канареечная задача",
+                          "verifying", "task/t914-x", config.DEFAULT_TARGET,
+                          50.0, is_canary=True)
+        patcher = mock.patch.object(canary.cleanup, "cmd_kill")
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def test_journals_verifying_kill_action(self):
+        """Ловит мутацию: `_kill_at_verifying` перестаёт журналировать
+        `_VERIFYING_KILL_ACTION` (переименован/убран литерал) — чужая
+        планка теряет след, по которому `_kill_outcome_note` узнаёт
+        «штатно»."""
+        canary._kill_at_verifying(self.conn, self.TASK)
+
+        steps = store.task_steps(self.conn, self.TASK)
+        self.assertTrue(any(
+            r["actor"] == canary.CANARY_MARK_ACTOR
+            and r["action"] == canary._VERIFYING_KILL_ACTION
+            for r in steps))
+        canary.cleanup.cmd_kill.assert_called_once_with(self.TASK)
+
+    def test_kill_outcome_note_still_classifies_it_as_normal(self):
+        """Ловит мутацию: `_kill_outcome_note` перестаёт узнавать
+        `_VERIFYING_KILL_ACTION` (например, если признание сузили обратно
+        до одного лишь `_MERGE_GATE_KILL_ACTION`) — чужая планка красна."""
+        canary._kill_at_verifying(self.conn, self.TASK)
+
+        steps = store.task_steps(self.conn, self.TASK)
+        self.assertEqual(canary._kill_outcome_note(steps), "штатно")
 
 
 class StoreAndCatalogMarkingTest(unittest.TestCase):
