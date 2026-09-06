@@ -178,18 +178,28 @@ approved-ветке `review()`:
 
 ## Расширение зон
 
-Пути: orchestrator/artel.py
+Пути: orchestrator/artel.py, orchestrator/github_adapter.py
 
-Обоснование: AC-19 требует, чтобы текст схемы состояний в выводе
-`artel.py --help` отражал новый порядок — `cmd_help` печатает
-`__doc__` этого же модуля (`orchestrator/artel.py:443`), других мест
-вывода `--help` нет. SPEC `zones:` называет `orchestrator/fsm.py,
-fsm_advance.py, auto.py, review.py, config.py, docs/invariants.md,
-docs/roadmap.md, tests/` — `orchestrator/artel.py` в списке не
-назван, хотя единственный способ выполнить AC-19 буквально — править
-именно его. Правка — модульный докстринг (схема состояний, абзац про
-`verifying`, название рубежа лока `acceptance_tests/`), без изменений
-кода.
+Обоснование (orchestrator/artel.py): AC-19 требует, чтобы текст схемы
+состояний в выводе `artel.py --help` отражал новый порядок —
+`cmd_help` печатает `__doc__` этого же модуля
+(`orchestrator/artel.py:443`), других мест вывода `--help` нет. SPEC
+`zones:` называет `orchestrator/fsm.py, fsm_advance.py, auto.py,
+review.py, config.py, docs/invariants.md, docs/roadmap.md, tests/` —
+`orchestrator/artel.py` в списке не назван, хотя единственный способ
+выполнить AC-19 буквально — править именно его. Правка — модульный
+докстринг (схема состояний, абзац про `verifying`, название рубежа
+лока `acceptance_tests/`), без изменений кода. Подтверждено
+Оператором (ANSWER-2.md).
+
+Обоснование (orchestrator/github_adapter.py): закрытие REVIEW.md R1-F1
+(итерация 2, см. «Итерация 2» выше) — докстринг
+`ensure_head_in_origin` (`github_adapter.py:114-116`) называл
+`review()` местом вызова рубежа «сверка головы на origin», хотя после
+переноса рубежа единственное место вызова — `in_dev()`; докстринг
+переписан двумя строками под фактическое место вызова, без изменений
+кода. `github_adapter.py` не входит в `zones:` SPEC. Подтверждено
+Оператором (ANSWER-3.md).
 
 ## Влияние на систему
 
@@ -234,12 +244,13 @@ tests.test_github_adapter tests.test_merge_gate_ci_wait` — 296 тестов,
 
 ## Риски
 
-- Диф трогает `orchestrator/artel.py` вне заявленных `zones` — гейт
-  зон (`fsm_advance._zones_gate`) откажет `in_dev -> verifying` до
-  тех пор, пока Оператор не подтвердит расширение строкой «Расширение
-  зон разрешено: orchestrator/artel.py» в новом `ANSWER-n.md` (раздел
-  «## Расширение зон» выше уже называет путь и обоснование) — это
-  ожидаемый штатный отказ гейта, не авария.
+- Диф трогает `orchestrator/artel.py` и `orchestrator/github_adapter.py`
+  вне заявленных `zones` — гейт зон (`fsm_advance._zones_gate`) откажет
+  `in_dev -> verifying` до тех пор, пока Оператор не подтвердит
+  расширение (раздел «## Расширение зон» выше называет оба пути и
+  обоснование) — это ожидаемый штатный отказ гейта, не авария. Снято:
+  ANSWER-2.md подтверждает `orchestrator/artel.py`, ANSWER-3.md
+  подтверждает `orchestrator/github_adapter.py`.
 - Двойной прогон `acceptance.run` внутри `in_dev` на реальной подтяжке
   main (см. «Подход») — не корректностный баг, но лишняя работа; вне
   зоны этой задачи (`pull.py` не в `zones`, «Не входит» SPEC не
