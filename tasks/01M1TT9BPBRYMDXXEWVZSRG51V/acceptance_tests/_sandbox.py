@@ -37,6 +37,9 @@ PUBLIC_FUNC_NAMES = [
     "check_remote_empty", "check_base_branch", "check_root_pin",
     "sweep_orphan_artifact_branches", "check_map_growth", "all_checks",
     "cmd_doctor", "cmd_alert_ack",
+    # main после 01M1TQ0X14 / 01M1TQ0ZCY (06.09): три новые проверки
+    "check_artifact_branch_sync", "check_artifact_branch_ci",
+    "check_artifact_branch_parent_ancestry",
 ]
 PUBLIC_CONST_NAMES = [
     "Check", "VERSION_RE", "ISOLATION_MARKER", "ISOLATION_SMOKE_TARGET",
@@ -48,6 +51,7 @@ COLLABORATOR_NAMES = [
     "alerts", "artifact_branch", "canary", "coldstart", "config", "gitcmd",
     "liveness", "projects", "roles", "runner", "snapshot", "spend", "stack",
     "store", "targets", "workspace", "zone_lock", "subprocess", "shutil",
+    "ci",  # импорт main с 01M1TQ0X14 (06.09)
 ]
 # Приватные помощники, к которым тесты обращаются НАПРЯМУЮ через
 # `doctor._имя(...)` (не докстринг-упоминания вроде `doctor._orphan_worktrees`
@@ -63,7 +67,10 @@ ALL_REQUIRED_FACADE_NAMES = (
     + PRIVATE_HELPER_NAMES
 )
 
-# --- перечень AC-3: 17 комментариев-разделителей сегодняшнего doctor.py
+# --- перечень AC-3: 18 комментариев-разделителей doctor.py на main к моменту
+# разреза (17 сняты 06.09 07:52Z; 18-й — «сверка артефактной ветки с origin/CI»,
+# пришёл в main задачей 01M1TQ0X14 06.09 11:15Z — правка планки Оператором
+# 06.09 по ADR-0012, состав проверок main до разреза)
 # (tasks/01M1TT9BPBRYMDXXEWVZSRG51V/SPEC.md, «Материалы», строки 83, 298,
 # 412, 478, 539, 590, 672, 791, 827, 868, 1046, 1275, 1396, 1429, 1573,
 # 1620, 1725) — сняты дословно 06.09.
@@ -84,6 +91,7 @@ SECTION_MARKERS = [
     "# --- уборка осиротевших артефактных веток (SPEC 01M1KVGD18P9H5WR7VM8TGPV1T,",
     "# --- уборка игнорируемых файлов артефактных веток (SPEC ------------------",
     "# --- наблюдатель роста карты кодовой базы (01M1RFVWV6WWTXRC5F40K61632,",
+    "# --- сверка артефактной ветки с origin/CI (SPEC ---------------------------",
     "# --- команда doctor -------------------------------------------------------",
 ]
 
@@ -96,6 +104,15 @@ SECTION_MARKERS = [
 # как строковый литерал, так что и её правка меняет хэш; комментарии и
 # пробелы вне докстроки на дерево не влияют).
 FUNCTION_LOGIC_HASHES = {
+    # main после 01M1TQ0X14 / 01M1TQ0ZCY (06.09), сняты с doctor.py main до разреза
+    "check_artifact_branch_sync": "5caf200ad060ba08",
+    "check_artifact_branch_ci": "3f015bf0bcadab32",
+    "check_artifact_branch_parent_ancestry": "a46e1239c182eb0c",
+    "_artifact_branch_candidates": "0e203d57115ba8d6",
+    "_is_ancestor": "d3e932176d6105c1",
+    "_sync_direction": "21486112c1f51f5d",
+    "_artifact_branch_ci_runs": "51cb017fbde30ea1",
+    "_artifact_branch_first_commit_parent": "9346055c81f53cee",
     "check_cli_found": "5157ec0cfeb3d491",
     "cli_version": "e97973855a21652b",
     "check_cli_version": "72a047662b1d49d2",
@@ -151,7 +168,9 @@ EXPECTED_CHECKS_IN_ORDER = [
     ("orphans-dirs", "ok"), ("orphans-branches", "ok"),
     ("orphans-worktrees", "ok"), ("leases", "ok"), ("merge-lock", "ok"),
     ("hung-test-runs", "ok"), ("zone-waits", "ok"),
-    ("branch-freshness", "ok"), ("root-pin", "ok"),
+    ("branch-freshness", "ok"),
+    ("artifact-branch-parent-ancestry", "skip"),  # main с 01M1TQ0ZCY (06.09)
+    ("root-pin", "ok"),
     ("canary-pool-leak", "ok"), ("canary-pool-drift", "ok"),
     ("token-repo-scope", "skip"), ("python", "ok"), ("git", "ok"),
     ("gh", "ok"), ("claude", "ok"), ("venv", "ok"),
