@@ -39,6 +39,13 @@ def artifact_text(branch: str, rel: str) -> tuple[str | None, str]:
         in_branch = f"не прочитан: {exc}"
     try:
         return (config.ROOT / rel).read_text(encoding="utf-8"), WORKTREE_NOTE
+    except FileNotFoundError:
+        # Без абсолютного пути (SPEC 01M1RQ12JVHE3PQYDFV1XPSTQ3, требование 1):
+        # `str(FileNotFoundError)` несёт `str(config.ROOT / rel)` целиком —
+        # для `rel`, начинающегося с `tasks/<id>/`, это буквально
+        # `str(config.TASKS / task_id / ...)`, и эта строка утекала бы в
+        # ревью-пакет, а с ним и в промпт ревьювера.
+        return None, f"(не показан: в ветке — {in_branch}; в дереве — файл не найден)"
     except (OSError, UnicodeDecodeError) as exc:
         return None, f"(не показан: в ветке — {in_branch}; в дереве — {exc})"
 

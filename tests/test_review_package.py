@@ -767,6 +767,16 @@ class CmdRunReviewPackageTest(unittest.TestCase):
         conn.execute("UPDATE tasks SET state=? WHERE id=?", (state, self.TASK))
         conn.commit()
 
+    # Имя обязательного артефакта роли этого состояния (SPEC
+    # 01M1RQ12JVHE3PQYDFV1XPSTQ3, требование 3): `run_agent` кладёт его на
+    # диск, имитируя «роль уже написала», — иначе `runner.run_agent_once`
+    # честно не находит файл в рабочем каталоге роли и ретраит шаг вместо
+    # одного тихого успеха, которого ждут остальные тесты этого класса
+    # (они проверяют промпт/пакет, не факт отказа без артефакта — та
+    # проверка отдельно живёт в tasks/01M1RQ12JVHE3PQYDFV1XPSTQ3/
+    # acceptance_tests/).
+    _STEP_ARTIFACT = {"in_dev": "PLAN.md", "review": "REVIEW.md"}
+
     def run_agent(self, state: str) -> tuple[str, list[str]]:
         """Прогон шага; возвращает вывод и argv запущенного CLI.
 
@@ -775,6 +785,10 @@ class CmdRunReviewPackageTest(unittest.TestCase):
         `prompt`.
         """
         self.set_state(state)
+        marker = self._STEP_ARTIFACT.get(state)
+        if marker is not None:
+            self.tdir.mkdir(parents=True, exist_ok=True)
+            (self.tdir / marker).write_text("маркер\n", encoding="utf-8")
         with mock.patch.object(runner, "spawn_agent") as popen:
             popen.return_value = FakeProc(["готово\n"])
             out = self.capture(runner.cmd_run, self.TASK)
@@ -831,8 +845,15 @@ class CmdRunReviewPackageTest(unittest.TestCase):
 
         _, argv = self.run_agent("review")
 
-        self.assertIn("не из ветки, а из рабочего дерева: templates/REVIEW.md",
-                      self.journal_details("ревью-пакет собран")[0])
+        # Не требуем, чтобы `templates/REVIEW.md` шёл в списке первым: сама
+        # запись `run_agent` кладёт на диск маркер `tasks/<id>/REVIEW.md`
+        # (обязательный артефакт роли reviewer, SPEC 01M1RQ12JVHE3PQYDFV1XPSTQ3,
+        # требование 3) — он тоже честно попадает в `from_worktree` и может
+        # стоять раньше по алфавиту; поведение, которое ловит этот тест
+        # (расхождение источника журналируется), от порядка не зависит.
+        note = self.journal_details("ревью-пакет собран")[0]
+        self.assertIn("не из ветки, а из рабочего дерева", note)
+        self.assertIn("templates/REVIEW.md", note)
         self.assertIn(review.WORKTREE_NOTE.strip(), self.prompt(),
                       "источник назван и в самом пакете, не только в журнале")
 

@@ -16,9 +16,9 @@ from pathlib import Path
 
 from scripts import guard
 
-from . import (acceptance, artifact_source, artifacts, config, fixation,
-              github_adapter, gitcmd, lease, review, store, targets,
-              workspace, yamlmini)
+from . import (acceptance, alerts, artifact_source, artifacts, checkpoint,
+              config, fixation, github_adapter, gitcmd, lease, review, store,
+              targets, workspace, yamlmini)
 
 # Буквальная строка «сигналов нет» (ANSWER-2, tasks/01M1KS8K9RXWHX2PW3ZKB0P903,
 # AC-12) — снимок секции «Оценка объёма и деление» пустой/отсутствующей,
@@ -31,6 +31,13 @@ SPLIT_ASSESSMENT_NONE = "сигналов нет"
 # здесь она нужна авторазрешению конфликта подтяжки (`_auto_resolve_map_
 # conflict`), там — регенерации/коммиту карты после merge.
 MAP_REL = "docs/codebase-map.md"
+
+# Подстрока реального отказа git на грязном рабочем дереве ДО начала
+# merge (SPEC 01M1RA0R9AH9RBAHD4A2Z5SEWQ, требование 4) — «Your local
+# changes to the following files would be overwritten by merge: ...».
+# Отличает отказ очистки/git от содержательного конфликта («CONFLICT
+# (content): ...»), который остаётся прежней веткой «конфликт подтяжки».
+PULL_OVERWRITE_MARKER = "would be overwritten by merge"
 
 # Action журнала статуса CI, прочитанного в ветке `verifying` — общий
 # текст с `orchestrator/auto.py` (SPEC T086, требование 1):
@@ -203,6 +210,33 @@ def _origin_main_sha(target_name: str) -> str | None:
     return res.stdout.strip() if res is not None and res.returncode == 0 else None
 
 
+def _merge_conflict_note(files: list[str], merge) -> str:
+    """`detail` эскалации неразрешённого конфликта подтяжки (SPEC
+    01M1REVMB50SND1KJ3CYQMV2ST, требование 1, AC-1..AC-3): список
+    конфликтных файлов (`files` — снят вызывающим кодом ДО `merge
+    --abort`) одной строкой «конфликтные файлы: a, b», затем хвосты
+    `stdout`/`stderr` `git merge` (по 500 символов каждый — git пишет
+    «CONFLICT (content): …»/«Automatic merge failed» в `stdout`, не в
+    `stderr`, прежний код читал только `stderr`). Части, которых нет
+    (пустой список файлов, пустой `stdout`/`stderr`), в результат не
+    попадают вовсе — наивная склейка с пустыми частями оставляла бы
+    висящие «; »/пустое «конфликтные файлы:» (AC-3).
+    """
+    parts = []
+    if files:
+        parts.append("конфликтные файлы: " + ", ".join(files))
+    if merge is not None:
+        stdout_tail = merge.stdout.strip()[:500]
+        if stdout_tail:
+            parts.append(stdout_tail)
+        stderr_tail = merge.stderr.strip()[:500]
+        if stderr_tail:
+            parts.append(stderr_tail)
+    if not parts:
+        return "git не ответил осмысленно" if merge is not None else "git не ответил"
+    return "; ".join(parts)
+
+
 def _pull_main_or_escalate(conn, task_id: str, t, state: str) -> str:
     """Сверка свежести ветки задачи на входе в гейт (SPEC T051, требования
     1-7, 10; ADR-0006 п.2; переведена на origin — SPEC
@@ -278,6 +312,24 @@ def _pull_main_or_escalate(conn, task_id: str, t, state: str) -> str:
     другой конфликт (карта вместе с другим файлом, без карты вовсе, или
     авторазрешение само не удалось) — прежнее поведение T051/T052
     байт-в-байт: `git merge --abort` + `"escalated"`.
+
+    Перед самим `git merge` (SPEC 01M1RA0R9AH9RBAHD4A2Z5SEWQ, требования
+    1-4): worktree задачи приводится в чистое состояние — незакоммиченная
+    `docs/codebase-map.md` отбрасывается (`git checkout --`, карту всё
+    равно перегенерирует и закоммитит сам merge), прочий незакоммиченный
+    WIP вне `tasks/<id>/` фиксируется чекпоинтом
+    `checkpoint.commit_pull_checkpoint` — без этого git честно отказывал
+    бы merge'у отдельно от содержательного конфликта («Your local changes
+    ... would be overwritten by merge», SPEC «Контекст»), и задача уходила
+    в `escalated` как «конфликт подтяжки», хотя спора версий содержимого
+    не было вовсе. Если этот отказ («would be overwritten by merge»)
+    всё-таки происходит (сама очистка не удалась — git не ответил на одном
+    из своих шагов), это отдельная категория отказа от содержательного
+    конфликта: инцидент очистки, не спор версий — эскалация без
+    формулировки «конфликт подтяжки» и с alert'ом `kind=incident`
+    (требование 4, AC-6), не через ветку `_conflicting_files`/`_auto_
+    resolve_map_conflict`/`--abort` ниже, которая остаётся только про
+    настоящие конфликты содержимого (требование 5, AC-7).
     """
     branch = t["branch"]
     target_name = t["target"] or config.DEFAULT_TARGET
@@ -300,18 +352,39 @@ def _pull_main_or_escalate(conn, task_id: str, t, state: str) -> str:
             f"задачи не создан — {error}")
         return "escalated"
 
+    # Требования 1-2: очистка worktree ДО merge — отбросить карту (её всё
+    # равно перегенерирует сам merge/авторазрешение), закоммитить
+    # чекпоинтом остальной WIP по мандату developer.
+    gitcmd.in_repo(wt_path, "checkout", "--", MAP_REL)
+    checkpoint.commit_pull_checkpoint(conn, task_id, wt_path)
+
     merge = gitcmd.in_repo(wt_path, "merge", "--no-ff", base,
                            "-m", f"{task_id}: подтяжка {source_branch}")
     if merge is None or merge.returncode != 0:
+        stderr = merge.stderr if merge is not None else ""
+        if PULL_OVERWRITE_MARKER in stderr:
+            # Требование 4/AC-6: очистка выше не устранила отказ — это
+            # инцидент самой очистки/git, не спор версий содержимого.
+            # Merge здесь не стартовал (git отказал ДО начала слияния,
+            # нечего абортить) — эскалация сразу, без "конфликт подтяжки".
+            note = stderr.strip()[:500]
+            store.set_state(
+                conn, task_id, "escalated", "fsm", expected_state=state,
+                detail=f"подтяжка {source_branch} в ветку {branch} отказала "
+                f"после попытки очистки worktree — {note}")
+            alerts.raise_alert(
+                conn, task_id, "incident", "fsm",
+                f"подтяжка {branch} отказала после очистки worktree: {note}")
+            return "escalated"
+
         resolved = False
-        if merge is not None:
-            files = _conflicting_files(wt_path)
-            if files == [MAP_REL]:
-                resolved = _auto_resolve_map_conflict(conn, task_id, wt_path,
-                                                       source_branch)
+        files = _conflicting_files(wt_path) if merge is not None else []
+        if merge is not None and files == [MAP_REL]:
+            resolved = _auto_resolve_map_conflict(conn, task_id, wt_path,
+                                                   source_branch)
         if not resolved:
             abort = gitcmd.in_repo(wt_path, "merge", "--abort")
-            note = merge.stderr.strip()[:500] if merge is not None else "git не ответил"
+            note = _merge_conflict_note(files, merge)
             if abort is None or abort.returncode != 0:
                 note += (f"; git merge --abort не удался: "
                         f"{abort.stderr.strip()[:200] if abort is not None else 'git не ответил'}")
