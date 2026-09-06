@@ -114,14 +114,55 @@ def write_commit(repo: Path, files: dict, message: str, author_name: str,
             pass
 
 
+def _new_branch_parent(task_id: str) -> str:
+    """Родитель ПЕРВОГО коммита артефактной ветки задачи (SPEC
+    01M1TQ0ZCYJ6TESZ2KGJ6AWYNH, требование 1, AC-1/AC-2/AC-6): голова
+    `origin/main` после `git fetch origin main` — HEAD главной копии не
+    двигается (`gitcmd.fetch_head_sha` — простой `git fetch`, не
+    `pull`/чекаут). Инцидент 06.09: `tasks/` новой ветки, унаследованный
+    от отставшего локального пина `config.MAIN_BRANCH`, тащил за собой
+    уже удалённые на `origin/main` черновики — предпочтение origin, когда
+    он доступен, закрывает этот путь.
+
+    Ни одного `remote` в репозитории вовсе (`gitcmd.has_no_remote`: нет
+    сети/`origin` никогда не настраивался/лёгкая тестовая песочница) —
+    сразу голова локального `config.MAIN_BRANCH`, БЕЗ сетевого вызова и
+    БЕЗ записи в журнал: попытка распространить запись и на этот случай
+    (эскалация тем же коммитом — «## Эскалация» в PLAN.md) сломала бы
+    `tests/test_doctor_fix_ignored_artifacts.py` (существующий тест вне
+    зоны этой задачи, ожидающий пустой журнал для задачи без затронутых
+    файлов — журнал наполнялся бы уже на `seed_task`, до самого предмета
+    того теста) вдобавок к прежде выявленному конфликту с `tests/
+    test_branch_freshness_gate.py::TargetSourcedRemoteTest`. Remote есть,
+    но сам `fetch` не удался (недостижим/сеть недоступна) —
+    фолбэк на голову локального `config.MAIN_BRANCH` (AC-2, поведение до
+    этой задачи), с записью причины в журнал задачи (AC-7): молчаливая
+    деградация иначе прячет от Оператора, что артефактная ветка унаследовала
+    устаревший пин, тот же класс дефекта, что и сам инцидент.
+    """
+    if gitcmd.has_no_remote(config.ROOT):
+        return gitcmd.branch_head_sha(config.MAIN_BRANCH)
+    origin_head, reason = gitcmd.fetch_head_sha("origin", config.MAIN_BRANCH)
+    if origin_head:
+        return origin_head
+    local_head = gitcmd.branch_head_sha(config.MAIN_BRANCH)
+    if local_head:
+        store.journal(
+            store.db(), task_id, "orchestrator",
+            "артефактная ветка: fallback на локальный main",
+            f"артефактная ветка от локального main: {reason}")
+    return local_head
+
+
 def commit_files(task_id: str, files: dict, message: str,
                  author_name: str = fixation.FIXATION_AUTHOR_NAME,
                  author_email: str = fixation.FIXATION_AUTHOR_EMAIL,
                  remove: list | None = None) -> str:
     """Коммитит `files` в артефактную ветку задачи (создаёт её, если ещё
-    нет — от головы `config.MAIN_BRANCH`, тем же принципом, что кодовая
-    ветка `task/*`). Возвращает sha нового коммита; пустая строка — git
-    не ответил. `remove` — см. `write_commit`.
+    нет — родитель первого коммита см. `_new_branch_parent`, требование 1;
+    для ЛЮБОГО target, включая внешний — ветка физически коммитится
+    здесь, в `config.ROOT`, AC-3). Возвращает sha нового коммита; пустая
+    строка — git не ответил. `remove` — см. `write_commit`.
 
     НЕ зовёт `push` сама — push остаётся явным действием вызывающего
     кода (`checkpoint._commit_external_step_artifacts`, `catalog.
@@ -133,8 +174,7 @@ def commit_files(task_id: str, files: dict, message: str,
     внутри этой функции сделал бы такую фикстуру невоспроизводимой
     (коммит уезжал бы в origin тем же вызовом, который её строит)."""
     branch = branch_name(task_id)
-    parent = gitcmd.branch_head_sha(branch) or gitcmd.branch_head_sha(
-        config.MAIN_BRANCH) or None
+    parent = gitcmd.branch_head_sha(branch) or _new_branch_parent(task_id) or None
     commit_sha = write_commit(config.ROOT, files, message, author_name,
                               author_email, parent=parent, remove=remove)
     if not commit_sha:

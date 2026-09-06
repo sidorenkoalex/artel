@@ -71,8 +71,9 @@ class CapacityGateSmokeTest(TmpRootTest):
             out,
             "[T001] переход отклонён: снимок не помещается в один "
             "контекст ревью — разделить задачу (T001 «Тест смоука», "
-            "база сравнения deadbeef от origin/main): diff кода 262244 "
-            "байт > потолка 262144 байт (исключённые артефакты "
+            f"база сравнения deadbeef от origin/main): diff кода "
+            f"{config.REVIEW_SNAPSHOT_DIFF_MAX_BYTES + 100} "
+            f"байт > потолка {config.REVIEW_SNAPSHOT_DIFF_MAX_BYTES} байт (исключённые артефакты "
             "tasks/T001/: 0 байт (изменений нет))\n"
             "  дальше: решение Оператора — разделить задачу или "
             "поднять потолок (ADR-0002)\n")
@@ -86,7 +87,8 @@ class CapacityGateSmokeTest(TmpRootTest):
             rows[0]["detail"],
             "снимок не помещается в один контекст ревью — разделить "
             "задачу (T001 «Тест смоука», база сравнения deadbeef от "
-            "origin/main): diff кода 262244 байт > потолка 262144 байт "
+            f"origin/main): diff кода {config.REVIEW_SNAPSHOT_DIFF_MAX_BYTES + 100} байт "
+            f"> потолка {config.REVIEW_SNAPSHOT_DIFF_MAX_BYTES} байт "
             "(исключённые артефакты tasks/T001/: 0 байт (изменений нет))")
 
 
