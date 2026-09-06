@@ -83,7 +83,7 @@ class UnchangedShaSkipsANewReviewerRunTest(_ReviewSandbox):
 
         self.capture(fsm.cmd_advance, self.TASK)
 
-        self.assertEqual(self.state(), "verifying")
+        self.assertEqual(self.state(), "acceptance")
 
 
 class ChangedShaBlocksTheTransitionTest(_ReviewSandbox):
@@ -133,7 +133,7 @@ class UnchangedShaAutoCycleSkipsTheReviewerTest(_ReviewSandbox):
         self.agent.script = [lambda: None]
         self.auto()
 
-        self.assertEqual(self.state(), "verifying")
+        self.assertEqual(self.state(), "acceptance")
         reviewer_steps = [a for a in agent_run_finished_actors(conn, self.TASK)
                          if a == "reviewer"]
         self.assertEqual(len(reviewer_steps), 1)

@@ -19,7 +19,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from _sandbox import (AutoCycleTest, agent_run_finished_actors,  # noqa: E402
                       journal_agent_run_finished)
-from orchestrator import auto, budget, fsm, store  # noqa: E402
+from orchestrator import auto, budget, ci, fsm, store  # noqa: E402
 
 
 class ReturnAfterAnAlreadyFinishedDeveloperStepAdvancesTest(AutoCycleTest):
@@ -41,6 +41,9 @@ class ReturnAfterAnAlreadyFinishedDeveloperStepAdvancesTest(AutoCycleTest):
         застрянет в `in_dev`, повторно позвав developer, и не дойдёт до
         `review` в границах одного вызова `auto`.
         """
+        self.patch_object(ci, "verifying_status",
+                          lambda branch: (ci.VERIFYING_GREEN,
+                                          "CI коммита aaaaaaaa зелёный (2 проверок)"))
         conn = store.db()
         self.write_plan("ready")
         self.set_state("review")
