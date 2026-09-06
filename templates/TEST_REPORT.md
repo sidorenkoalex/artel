@@ -3,7 +3,7 @@ task: TASK_ID
 type: test_report
 author_role: verifier
 status: draft        # draft | passed | failed
-schema_version: 4    # версия формата артефакта, см. scripts/guard.py
+schema_version: 5    # версия формата артефакта, см. scripts/guard.py
 ---
 
 # TEST_REPORT: <название задачи>

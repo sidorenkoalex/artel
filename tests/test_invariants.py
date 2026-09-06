@@ -37,9 +37,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from orchestrator import (artel, budget, catalog, ci, cleanup,  # noqa: E402
                           config, fsm, gitcmd, runner, stack, store)
 from scripts import guard  # noqa: E402
-from tests.sandbox import (FakeProc, SpyRun, _stub_check_stack, capture,  # noqa: E402
-                           capture_new_task_id, disk_backed_ls_tree_files,
-                           disk_backed_show, resilient_tmp_cleanup)
+from tests.sandbox import (FakeProc, SpyRun, TmpRootTest, _stub_check_stack,  # noqa: E402
+                           capture, capture_new_task_id,
+                           disk_backed_ls_tree_files, disk_backed_show,
+                           resilient_tmp_cleanup)
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
@@ -917,6 +918,90 @@ class ExhaustedBudgetIsNotBypassableTest(FsmTest):
         _, popen = self.try_run()
 
         popen.assert_called_once()
+
+
+class SpecCeilingRespectsRoleBudgetCapTest(TmpRootTest):
+    """Инвариант 10 (ADR-0014): поднять потолок выше `ROLE_BUDGET_CAP`
+    может только Оператор командой `budget`; в пределах потолка ролей
+    потолок задаёт SPEC на гейте SPEC.
+
+    Два независимых сценария, обе — защита потолка ролей от разных
+    точек входа: guard отказывает завышенный SPEC ДО того, как значение
+    вообще дойдёт до строки задачи (первая линия защиты), а потолок,
+    выставленный Оператором, не перебивается значением из SPEC, даже
+    если такой SPEC всё же дошёл до `apply_spec_budget` — например,
+    старый беклог версии ниже 5, которую новая проверка guard не ловит
+    (вторая, независимая линия защиты).
+    """
+
+    TASK = "T900"
+
+    def setUp(self):
+        super().setUp()
+        store.create_schema(store.db())
+        self.conn = store.db()
+        store.insert_task(self.conn, self.TASK, "Задача для потолка ролей",
+                          "spec_writing", "task/t900-x",
+                          config.DEFAULT_TARGET, config.DEFAULT_BUDGET_USD)
+
+    def task_row(self):
+        return store.db().execute(
+            "SELECT * FROM tasks WHERE id=?", (self.TASK,)).fetchone()
+
+    def set_task(self, **fields) -> None:
+        assignments = ", ".join(f"{k}=?" for k in fields)
+        self.conn.execute(f"UPDATE tasks SET {assignments} WHERE id=?",
+                          (*fields.values(), self.TASK))
+        self.conn.commit()
+
+    def test_guard_refuses_the_spec_before_any_ceiling_change(self):
+        """Сценарий 1: SPEC со значением выше `ROLE_BUDGET_CAP` потолок не
+        поднимает — отказ guard блокирует сам переход, значение никогда не
+        доходит до строки задачи.
+
+        Ловит мутацию: сравнение `> ROLE_BUDGET_CAP` подменено на `>=`
+        дефолт или снято вовсе — SPEC с завышенным `budget_usd` прошёл бы
+        `check_content` без ошибки."""
+        over_cap = config.ROLE_BUDGET_CAP + 1
+        text = (
+            "---\n"
+            f"task: {self.TASK}\n"
+            "type: spec\n"
+            "author_role: analyst\n"
+            "status: ready\n"
+            "schema_version: 5\n"
+            f"budget_usd: {over_cap:g}\n"
+            "zones: orchestrator/config.py\n"
+            "---\n\n"
+            "# SPEC: потолок ролей\n\n"
+            "## Контекст\nТест.\n\n"
+            "## Требования\n1. Тест.\n\n"
+            "## Критерии приёмки\nAC-1. Тест.\n\n"
+            "## Не входит\n- Всё.\n")
+
+        errors = guard.check_content("SPEC.md", text)
+
+        self.assertTrue(errors, f"guard обязан отказать SPEC с "
+                                f"budget_usd={over_cap} (потолок ролей "
+                                f"{config.ROLE_BUDGET_CAP})")
+
+    def test_operator_ceiling_survives_a_spec_value_within_cap(self):
+        """Сценарий 2: потолок Оператора не перебивается значением из SPEC,
+        даже когда это значение само по себе в пределах потолка ролей.
+
+        Ловит мутацию: `apply_spec_budget` перестаёт проверять
+        `budget_source == BUDGET_SOURCE_OPERATOR` перед применением
+        значения из SPEC — потолок Оператора $60 был бы тихо заменён на
+        $25 из SPEC."""
+        self.set_task(budget_usd=60.0,
+                      budget_source=config.BUDGET_SOURCE_OPERATOR)
+
+        budget.apply_spec_budget(self.conn, self.task_row(),
+                                 {"budget_usd": "25"})
+
+        row = self.task_row()
+        self.assertAlmostEqual(row["budget_usd"], 60.0)
+        self.assertEqual(row["budget_source"], config.BUDGET_SOURCE_OPERATOR)
 
 
 class ParallelTaskLimitIsNotBypassableTest(FsmTest):

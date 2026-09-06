@@ -51,10 +51,10 @@ subprocess-вызовов», см. `preflight_checks`).
 `orchestrator/doctor.py` (1856 строк) разъехались по подмодулям этого
 пакета — один раздел (граница комментария-разделителя) на файл, тело
 функций не переписано, только перенесено. Этот файл (фасад) — ЕДИНСТВЕННОЕ
-место, где коллаборанты (`alerts`, `artifact_branch`, `canary`,
-`coldstart`, `config`, `gitcmd`, `liveness`, `projects`, `roles`,
-`runner`, `snapshot`, `spend`, `stack`, `store`, `targets`, `workspace`,
-`zone_lock`, `subprocess`, `shutil`) импортируются напрямую — подмодули
+место, где коллаборанты (`alerts`, `artifact_branch`, `canary`, `ci`,
+`coldstart`, `config`, `fixation`, `gitcmd`, `liveness`, `projects`,
+`roles`, `runner`, `snapshot`, `spend`, `stack`, `store`, `targets`,
+`workspace`, `zone_lock`, `subprocess`, `shutil`) импортируются напрямую — подмодули
 их не импортируют (AC-9: сканирующий тест красит любой прямой
 `import subprocess`/`import shutil`/`from orchestrator import gitcmd` в
 подмодуле). Единый приём на весь пакет (AC-4): каждый подмодуль делает
@@ -93,9 +93,9 @@ import time
 from collections import namedtuple
 from pathlib import Path
 
-from .. import (alerts, artifact_branch, canary, coldstart, config, gitcmd,
-                liveness, projects, roles, runner, snapshot, spend, stack,
-                store, targets, workspace, zone_lock)
+from .. import (alerts, artifact_branch, canary, ci, coldstart, config,
+                fixation, gitcmd, liveness, projects, roles, runner,
+                snapshot, spend, stack, store, targets, workspace, zone_lock)
 
 # status: "ok" | "warn" | "fail" | "skip" ("skip" — честный пропуск проверки,
 # требование 9: сверка forge-политики без `gh`/сети — не провал и не ок).
@@ -127,6 +127,13 @@ from .orphans import _is_legit_task_worktree, _orphan_worktrees, check_orphans
 from .canary_pool import (check_role_log_pool_leak, check_canary_pool_drift,
                           check_token_repo_scope)
 from .branch_freshness import check_branch_freshness
+from .artifact_branches import (_artifact_branch_first_commit_parent,
+                                check_artifact_branch_parent_ancestry,
+                                _artifact_branch_candidates, _is_ancestor,
+                                _sync_direction, check_artifact_branch_sync,
+                                _ARTIFACT_BRANCH_CI_JSON_FIELDS,
+                                _artifact_branch_ci_runs,
+                                check_artifact_branch_ci)
 from .lease_alerts import (_LEASE_ALERT_RE, _MERGE_LOCK_ALERT_RE,
                            _lease_alert_live, _merge_lock_alert_live)
 from .leases import (_STEP_TERMINAL_ACTIONS, _ORPHAN_ACTION_MARKER,

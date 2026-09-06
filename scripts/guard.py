@@ -33,6 +33,7 @@ M / нарушений K». Без флага — поведение и форм
 артефакта с frontmatter.
 """
 import ast
+import math
 import re
 import sys
 from pathlib import Path
@@ -42,7 +43,7 @@ from pathlib import Path
 # репозитория, поэтому корень кладётся руками: та же схема, что в artel.py.
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from orchestrator import config, yamlmini  # noqa: E402
+from orchestrator import config, spend, yamlmini  # noqa: E402
 
 REQUIRED_META = {"task", "type", "author_role", "status"}
 
@@ -66,7 +67,16 @@ REQUIRED_META = {"task", "type", "author_role", "status"}
 # SPEC несёт обязательное поле `zones:` — машиночитаемый список путей/
 # масок зоны задачи (требование 1, AC-1). Правило применяется только к
 # version >= 4 — тем же приёмом версии-гейтинга, что версии 2 и 3 выше.
-SUPPORTED_SCHEMA_VERSION = 4
+#
+# Версия 5 (01M1THKTJ7YT1K410G1KS17MK6, ADR-0014 часть 1 «потолок ролей»):
+# SPEC несёт обязательное поле `budget_usd`, разбираемое как число
+# (требование 2, AC-2). Правило применяется только к version >= 5 — тем
+# же приёмом версии-гейтинга, что версии 2-4 выше. Отдельно и НЕЗАВИСИМО
+# от schema_version — SPEC/PLAN любой версии с `budget_usd` выше
+# `config.ROLE_BUDGET_CAP` отказаны (требование 3, AC-3): это проверка
+# значения уже существующего необязательного поля, не факта его
+# присутствия, версия-гейтинг к ней не применяется.
+SUPPORTED_SCHEMA_VERSION = 5
 
 RULES = {
     "spec": {
@@ -504,6 +514,87 @@ def scan_extraneous_acceptance_files(tasks_root: Path) -> list[Path]:
                 continue
             if is_extraneous_acceptance_test_file("/".join(rel_parts)):
                 extraneous.append(f)
+    return extraneous
+
+
+# --------------------------------------------------------------------------
+# Посторонний файл в корне каталога задачи (SPEC 01M1TNN4TMWAQSQ9Y1PW37J5H0,
+# требование 1/AC-1/AC-2; формулировка по ANSWER-1, tasks/
+# 01M1TNN4TMWAQSQ9Y1PW37J5H0/ANSWER-1.md, вариант A): инцидент 06.09 —
+# рабочие файлы роли (пять копий карты кодовой базы вида `_head_map.md`) в
+# корне `tasks/<id>/` без единой проверки доехали до артефактной ветки и
+# main. Белый список действует ТОЛЬКО для `.md`-имён первого уровня: любой
+# `.md`-файл вне перечня — посторонний. Файл ЛЮБОГО другого расширения —
+# легальное вложение без ограничений имени (ANSWER-1: буквальный единый
+# список без различия расширений конфликтовал с уже залоченными `tests/
+# test_checkpoint_external_step_artifacts.py::test_binary_file_is_not_lost`
+# и `::test_all_files_binary_still_commits_and_clears_the_dir`). Скрытые
+# файлы/каталоги (`.`-префикс любого сегмента пути) и `__pycache__/` —
+# посторонние независимо от расширения. `acceptance_tests/` — по
+# собственным правилам (см. выше), этим правилом не задета. Единственный
+# разрешённый каталог первого уровня — `acceptance_tests/`: файл внутри
+# ЛЮБОГО другого, впервые заведённого каталога первого уровня (например
+# `wip/_head_map.md`) — посторонний независимо от расширения, тем же
+# классом инцидента на один уровень вложенности глубже (REVIEW.md
+# итерации 1, замечание R1-F1: критерий проверял только путь ровно из
+# одного сегмента и молчал на файле внутри новой поддиректории).
+EXTRANEOUS_TASK_ROOT_FILE_REASON = "посторонний файл в каталоге задачи"
+TASK_ROOT_ALLOWED_MD = re.compile(
+    r"^(SPEC|PLAN|REVIEW|TEST_REPORT|QUESTIONS|TZ|ANSWER-\d+)\.md$")
+
+
+def is_extraneous_task_root_file(rel_to_task_dir: str) -> bool:
+    """`rel_to_task_dir` — путь файла относительно `tasks/<id>/` (`/`-
+    разделённый, например `_head_map.md`, `__pycache__/junk.pyc` или
+    `wip/_head_map.md`). `True` — файл посторонний (требование 1,
+    ANSWER-1, R1-F1): `.md` первого уровня вне `TASK_ROOT_ALLOWED_MD`,
+    любой скрытый файл/каталог (`.`-префикс любого сегмента пути), файл
+    внутри `__pycache__/` первого уровня, либо файл внутри ЛЮБОЙ другой
+    поддиректории первого уровня (единственная легальная поддиректория —
+    `acceptance_tests/`, по собственным правилам
+    `is_extraneous_acceptance_test_file` выше, не этой функцией)."""
+    parts = rel_to_task_dir.split("/")
+    if parts[0] == "acceptance_tests":
+        return False
+    if any(p.startswith(".") for p in parts):
+        return True
+    if parts[0] == "__pycache__":
+        return True
+    if len(parts) == 1:
+        if parts[0].endswith(".md"):
+            return not TASK_ROOT_ALLOWED_MD.match(parts[0])
+        return False
+    return True
+
+
+def extraneous_task_root_files_in(task_dir: Path) -> list[Path]:
+    """Посторонние файлы первого уровня ОДНОГО `tasks/<id>/` — ядро,
+    используемое `scan_extraneous_task_root_files` (обход `--all` по всем
+    задачам сразу) и `orchestrator/fsm_merge_gate.py` (проверка ОДНОЙ
+    задачи в scratch-репозитории ДО push, SPEC 01M1TNN4TMWAQSQ9Y1PW37J5H0,
+    AC-7) — один и тот же критерий допустимости, не независимая копия."""
+    if not task_dir.is_dir():
+        return []
+    extraneous: list[Path] = []
+    for f in sorted(task_dir.rglob("*")):
+        if not f.is_file():
+            continue
+        rel = "/".join(f.relative_to(task_dir).parts)
+        if is_extraneous_task_root_file(rel):
+            extraneous.append(f)
+    return extraneous
+
+
+def scan_extraneous_task_root_files(tasks_root: Path) -> list[Path]:
+    """Посторонние файлы первого уровня `<tasks_root>/*/` — по всем
+    каталогам задач сразу (режим `--all`, требование 1/AC-1/AC-2)."""
+    if not tasks_root.is_dir():
+        return []
+    extraneous: list[Path] = []
+    for task_dir in sorted(tasks_root.iterdir()):
+        if not task_dir.is_dir():
+            continue
+        extraneous.extend(extraneous_task_root_files_in(task_dir))
     return extraneous
 
 
@@ -982,6 +1073,86 @@ def spec_zones_errors(path: Path | str, meta: dict) -> list[str]:
     return []
 
 
+# --------------------------------------------------------------------------
+# Потолок ролей и обязательное поле budget_usd в SPEC (ADR-0014 часть 1,
+# 01M1THKTJ7YT1K410G1KS17MK6): аналитик обязан назвать сумму (требование 2),
+# а ни SPEC, ни PLAN не вправе назвать сумму выше ROLE_BUDGET_CAP без
+# участия Оператора (требование 3) — две независимые проверки, версия-
+# гейтинг применяется только к первой.
+
+def requires_budget_field(meta: dict) -> bool:
+    """SPEC обязан нести поле `budget_usd` (ADR-0014, требование 2).
+
+    Версия ниже 5 — формат SPEC до этой задачи, поля не несёт и не обязан:
+    тот же приём версии-гейтинга, что `requires_ac_markup`/
+    `requires_registry`/`requires_split_assessment`/`requires_zones` выше
+    применяют к своим проверкам.
+    """
+    version = meta.get("schema_version", 1)
+    if not isinstance(version, int) or isinstance(version, bool):
+        return False
+    return version >= 5
+
+
+def _budget_usd_number(meta: dict) -> float | None:
+    """Число `budget_usd` тем же разбором, что и `budget.spec_budget`/
+    `spend.cli_number` — `None`, если поля нет, оно `bool`/пусто, или не
+    разбирается как положительное конечное число.
+
+    `yamlmini.frontmatter` типизирует незакавыченные числа сам (int/float)
+    — значение приходит уже числом в частом случае (`budget_usd: 25`) и
+    строкой только в кавычках или при мусоре (`budget_usd: дорого`);
+    обе формы приводятся к одному разбору.
+    """
+    if "budget_usd" not in meta:
+        return None
+    raw = meta["budget_usd"]
+    if isinstance(raw, bool) or raw is None:
+        return None
+    if isinstance(raw, (int, float)):
+        return float(raw) if math.isfinite(raw) and raw > 0 else None
+    value = spend.cli_number(str(raw).strip())
+    return value if value is not None and value > 0 else None
+
+
+def spec_budget_field_errors(path: Path | str, meta: dict) -> list[str]:
+    """`budget_usd` присутствует и разбирается как число для SPEC версии,
+    которая его требует (ADR-0014, требование 2, AC-2). `path` — только
+    для текста ошибок (см. `schema_errors`).
+    """
+    if (meta.get("type") or "") != "spec" or not requires_budget_field(meta):
+        return []
+    if "budget_usd" not in meta:
+        return [f"{path}: SPEC schema_version {meta.get('schema_version')} "
+               f"обязан нести поле budget_usd (сумма в долларах) — добавь "
+               f"frontmatter-поле budget_usd"]
+    if _budget_usd_number(meta) is None:
+        return [f"{path}: budget_usd '{meta.get('budget_usd')}' не "
+               f"разбирается как число — впиши сумму в долларах, "
+               f"например budget_usd: 35"]
+    return []
+
+
+ROLE_BUDGET_CAP_HINT = ("раздели задачу (оценка объёма, "
+                        "01M1KS8K9RXWHX2PW3ZKB0P903) либо эскалируй вопрос "
+                        "бюджета Оператору")
+
+
+def role_budget_cap_errors(path: Path | str, meta: dict) -> list[str]:
+    """`budget_usd` SPEC или PLAN не выше `config.ROLE_BUDGET_CAP`
+    (ADR-0014, требование 3, AC-3) — независимо от `schema_version`:
+    проверка значения уже существующего необязательного поля, не факта
+    его присутствия. `path` — только для текста ошибок.
+    """
+    if (meta.get("type") or "") not in ("spec", "plan"):
+        return []
+    value = _budget_usd_number(meta)
+    if value is None or value <= config.ROLE_BUDGET_CAP:
+        return []
+    return [f"{path}: budget_usd ${value:.2f} выше потолка ролей "
+           f"${config.ROLE_BUDGET_CAP:.2f} — {ROLE_BUDGET_CAP_HINT}"]
+
+
 def _content_errors(label: str, text: str) -> list[str]:
     """Ядро `check` — структурная проверка уже прочитанного текста, без
     чтения файла: `label` — путь или его подобие, только для текста
@@ -1062,6 +1233,10 @@ def _content_errors(label: str, text: str) -> list[str]:
     if atype == "spec":
         errors.extend(split_assessment_errors(label, text, meta))
         errors.extend(spec_zones_errors(label, meta))
+        errors.extend(spec_budget_field_errors(label, meta))
+
+    if atype in ("spec", "plan"):
+        errors.extend(role_budget_cap_errors(label, meta))
 
     if atype == "review":
         errors.extend(review_evidence_errors(label, text, meta))
@@ -1209,16 +1384,20 @@ def main() -> int:
     if args == ["--all"]:
         files = sorted(Path("tasks").rglob("*.md"))
         # Посторонние файлы `acceptance_tests/` (SPEC
-        # 01M1SAA01YRRTWAVADT2F81RRQ, требование 2) — исключаются из
-        # обычного обхода `*.md` ДО `check`/`_artifact_branch_report`
-        # (иначе, например, инцидентный `acceptance_tests/docs/
-        # codebase-map.md` попал бы туда и получил ошибку разбора
+        # 01M1SAA01YRRTWAVADT2F81RRQ, требование 2) и посторонние `.md`
+        # первого уровня `tasks/<id>/` (SPEC 01M1TNN4TMWAQSQ9Y1PW37J5H0,
+        # требование 1) — исключаются из обычного обхода `*.md` ДО
+        # `check`/`_artifact_branch_report` (иначе, например, инцидентный
+        # `_head_map.md` попал бы туда и получил ошибку разбора
         # frontmatter вместо именованной причины ниже).
         extraneous = scan_extraneous_acceptance_files(Path("tasks"))
-        extraneous_set = set(extraneous)
+        task_root_extraneous = scan_extraneous_task_root_files(Path("tasks"))
+        extraneous_set = set(extraneous) | set(task_root_extraneous)
         files = [f for f in files if f not in extraneous_set]
-        extraneous_errors = [f"{f}: {EXTRANEOUS_ACCEPTANCE_FILE_REASON}"
-                             for f in extraneous]
+        extraneous_errors = (
+            [f"{f}: {EXTRANEOUS_ACCEPTANCE_FILE_REASON}" for f in extraneous]
+            + [f"{f}: {EXTRANEOUS_TASK_ROOT_FILE_REASON}"
+              for f in task_root_extraneous])
     else:
         files = [Path(a) for a in args]
 
