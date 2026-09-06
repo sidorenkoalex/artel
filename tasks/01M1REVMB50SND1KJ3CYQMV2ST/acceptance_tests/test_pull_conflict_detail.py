@@ -163,8 +163,37 @@ class PullConflictDetailTest(unittest.TestCase):
         (self.tdir / "PLAN.md").write_text(
             PLAN_READY.format(task=self.TASK), encoding="utf-8")
 
+    def write_acceptance_plank(self) -> None:
+        """Правка планки Оператором 06.09 (amend-tests, вторая): после мержа
+        «карты и подтяжки» (01M1RA0R9AH9RBAHD4A2Z5SEWQ) путь успеха AC-5
+        доходит до чтения SPEC.md «ветки», а лёгкая песочница читает ветку
+        с диска (`disk_backed_show`) — без SPEC.md и непустого
+        `acceptance_tests/` переход отказывает «SPEC.md ветки не прочитан».
+        Тот же приём, что `tests/test_fsm_map_conflict_autoresolve.py::
+        write_acceptance_plank`."""
+        self.tdir.mkdir(parents=True, exist_ok=True)
+        (self.tdir / "SPEC.md").write_text(
+            "---\n"
+            f"task: {self.TASK}\n"
+            "type: spec\n"
+            "author_role: analyst\n"
+            "status: ready\n"
+            "schema_version: 2\n"
+            "---\n\n"
+            "# SPEC: планка\n\n"
+            "## Критерии приёмки\n\nAC-1. ...\n",
+            encoding="utf-8")
+        tests_dir = self.tdir / "acceptance_tests"
+        tests_dir.mkdir(parents=True, exist_ok=True)
+        (tests_dir / "test_stub.py").write_text(
+            "import unittest\n\n\n"
+            "class StubTest(unittest.TestCase):\n\n"
+            "    def test_stub(self):\n        pass\n",
+            encoding="utf-8")
+
     def advance_from_in_dev(self) -> str:
         self.write_plan_ready()
+        self.write_acceptance_plank()
         self.set_state("in_dev")
         return self.capture(fsm.cmd_advance, self.TASK)
 
