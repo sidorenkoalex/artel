@@ -5,6 +5,12 @@ on:
     # "artifact/**" — артефактная ветка пульта задачи внешнего target'а
     # (SPEC T094, требование 7): guard обязан валидировать структуру
     # tasks/<id>/ и там же, не только на кодовых ветках self.
+    #
+    # Фильтры `paths`/`paths-ignore` здесь ЗАПРЕЩЕНЫ (ADR-0016, инвариант
+    # 36): пуш без прогона пульт читает как «проверок нет вовсе»
+    # (`ci.verifying_status`/`ci.branch_status`) и висит до потолка
+    # ожидания. Лишние проверки снимаются условием на job (статус
+    # `skipped`, зелёный для `ci.GREEN`), не сужением триггера.
     branches: ["main", "task/**", "artifact/**"]
   pull_request:
 
@@ -90,7 +96,9 @@ jobs:
     # Мержи пульта идут пушем в main без pull request (merge_gate ->
     # done), поэтому сторож работает и на push: база — sha до пуша
     # (`github.event.before`); для новой ветки она нулевая — пропуск.
-    if: github.event_name == 'pull_request' || github.event_name == 'push'
+    # ADR-0016: artifact/** несёт только tasks/<id>/ — skills/, templates/,
+    # docs/ там не меняются, диффу нечего проверять.
+    if: ${{ (github.event_name == 'pull_request' || github.event_name == 'push') && !startsWith(github.ref, 'refs/heads/artifact/') }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -147,8 +155,53 @@ jobs:
             exit 1
           fi
 
+  changes:
+    name: Класс пуша — менялся ли код (ADR-0016)
+    runs-on: ubuntu-latest
+    outputs:
+      code: ${{ steps.classify.outputs.code }}
+    steps:
+      - uses: actions/checkout@v4
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        with: { fetch-depth: 0 }
+      - id: classify
+        env:
+          BEFORE: ${{ github.event.before }}
+        run: |
+          # ADR-0016: job `python` (семь минут) идёт только там, где может
+          # что-то найти. Fail-closed: любое сомнение — `code=true`.
+          #   artifact/**  — только tasks/<id>/, код равен родителю: false.
+          #   main         — документный пуш (все файлы под docs/, tasks/
+          #                  или *.md в корне): false; нет базы диффа,
+          #                  принудительный пуш, пустой дифф: true.
+          #   task/**, PR  — всегда true (этот sha ждёт пульт).
+          code=true
+          ref="${GITHUB_REF#refs/heads/}"
+          if [ "$GITHUB_EVENT_NAME" = "push" ]; then
+            case "$ref" in
+              artifact/*)
+                code=false ;;
+              main)
+                if [ -n "$BEFORE" ] \
+                   && [ "$BEFORE" != "0000000000000000000000000000000000000000" ] \
+                   && git cat-file -e "$BEFORE" 2>/dev/null; then
+                  files=$(git diff --name-only "$BEFORE" HEAD)
+                  if [ -n "$files" ] \
+                     && ! printf '%s\n' "$files" | grep -Ev '^(docs/|tasks/|[^/]+\.md$)' >/dev/null; then
+                    code=false
+                  fi
+                fi ;;
+            esac
+          fi
+          echo "класс пуша: ref=$ref event=$GITHUB_EVENT_NAME code=$code"
+          echo "code=$code" >> "$GITHUB_OUTPUT"
+
   python:
     name: Синтаксис и тесты оркестратора
+    needs: changes
+    # ADR-0016: `!= 'false'`, не `== 'true'` — упавший или отменённый
+    # `changes` даёт пустой output, и тесты ИДУТ (fail-closed).
+    if: ${{ !cancelled() && needs.changes.outputs.code != 'false' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

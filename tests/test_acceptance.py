@@ -10,7 +10,7 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from orchestrator import acceptance, config  # noqa: E402
+from orchestrator import acceptance, ci, config  # noqa: E402
 
 PASSING_TEST = """import unittest
 
@@ -107,6 +107,51 @@ class MaterializeFromBranchGitFailureTest(unittest.TestCase):
         self.assertEqual(tdir, self.code_dir / "tasks" / task_id)
         self.assertEqual(existing.read_text(encoding="utf-8"),
                          "реальный тест\n")
+
+
+class SummaryCiCriteriaTest(unittest.TestCase):
+    """`acceptance.summary` — категория `ci` в сводке гейта приёмки
+    (01M1SHJTT0V516BWHYXWS50F3G, требование 4/AC-6): показывается вместе
+    с результатом проверки CI, так же явно, как manual-критерии."""
+
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.tdir = Path(tmp.name)
+        tests_dir = self.tdir / "acceptance_tests"
+        tests_dir.mkdir(parents=True)
+        (tests_dir / "test_marker.py").write_text(
+            '"""Планка с единственной пометкой ci."""\n'
+            "# AC-1: ci — CI ветки уже подтверждает зелёный набор.\n",
+            encoding="utf-8")
+
+    def test_ci_criterion_is_counted_in_the_header_line(self):
+        summary = acceptance.summary(self.tdir)
+
+        self.assertIn("1 ci", summary)
+
+    def test_without_a_branch_ci_criteria_are_named_but_not_polled(self):
+        """`branch=None` (вызывающий не назвал ветку) — критерии `ci`
+        всё равно называются, но CI не опрашивается (нечем)."""
+        with mock.patch.object(
+                ci, "verifying_status",
+                side_effect=AssertionError("CI не должен опрашиваться "
+                                           "без ветки")):
+            summary = acceptance.summary(self.tdir)
+
+        self.assertIn("AC-1", summary)
+        self.assertIn("ветка не названа", summary)
+
+    def test_with_a_branch_ci_criteria_show_the_verifying_status(self):
+        with mock.patch.object(
+                ci, "verifying_status",
+                return_value=(ci.VERIFYING_GREEN,
+                              "CI коммита abc12345 зелёный (2 проверок)")):
+            summary = acceptance.summary(self.tdir, branch="task/t001-x")
+
+        self.assertIn("AC-1", summary)
+        self.assertIn("CI ветки уже подтверждает зелёный набор", summary)
+        self.assertIn("CI коммита abc12345 зелёный (2 проверок)", summary)
 
 
 if __name__ == "__main__":

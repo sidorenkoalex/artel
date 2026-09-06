@@ -14,7 +14,10 @@ merge (`orchestrator/fsm_merge_gate.py::_cmd_approve_merge_gate`)
 передаёт свой scratch-worktree — рабочее дерево и HEAD `config.ROOT` не
 имеют права двигаться этим переходом (AC-8/AC-9).
 """
+import json
 import subprocess
+
+from scripts import codebase_map
 
 from . import alerts, config, gitcmd, retro, store
 
@@ -23,6 +26,21 @@ from . import alerts, config, gitcmd, retro, store
 # и orchestrator/fsm.py (branch freshness, docs/codebase-map.md там нужен
 # по другому поводу — авторазрешение конфликта подтяжки).
 MAP_REL = "docs/codebase-map.md"
+
+# Запись журнала «наблюдатель роста карты» на каждом успешном мерже
+# (01M1RFVWV6WWTXRC5F40K61632, требования 2, AC-5..AC-7) — читает
+# `orchestrator/doctor.py::check_map_growth`.
+MAP_SIZE_ACTION = "карта: размер"
+
+
+def _journal_map_size(conn, task_id: str, text: str, repo) -> None:
+    """detail = `map_stats(text)` + sha HEAD ПОСЛЕ завершения git-операций
+    этого вызова (новый коммит карты, если он был сделан; иначе — тот же
+    sha, что стоял до вызова, AC-5)."""
+    stats = codebase_map.map_stats(text)
+    stats["sha"] = gitcmd.head_sha(repo)
+    detail = json.dumps(stats, ensure_ascii=False, separators=(",", ":"))
+    store.journal(conn, task_id, "orchestrator", MAP_SIZE_ACTION, detail)
 
 
 def _map_content_without_sha(text: str) -> str:
@@ -91,6 +109,8 @@ def _regenerate_and_commit_map(conn, task_id: str, repo=None) -> None:
                 conn, task_id,
                 f"откат {MAP_REL} без содержательных отличий не удался: "
                 f"{restore.stderr.strip()[:200]}")
+            return
+        _journal_map_size(conn, task_id, committed, repo)
         return
     added = _git(repo, "add", MAP_REL)
     if added.returncode != 0:
@@ -105,6 +125,8 @@ def _regenerate_and_commit_map(conn, task_id: str, repo=None) -> None:
         _map_regen_incident(conn, task_id,
                             f"коммит {MAP_REL} не удался: "
                             f"{commit.stderr.strip()[:200]}")
+        return
+    _journal_map_size(conn, task_id, regenerated, repo)
 
 
 # Дайджест задачи в main на переходе в done/killed (SPEC T043). killed-RETRO

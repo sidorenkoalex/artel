@@ -5,6 +5,8 @@ import socket
 import sys
 from pathlib import Path
 
+from scripts import guard
+
 from . import (alerts, artifact_branch, artifacts, budget, config, gitcmd,
               idgen, liveness, store, zone_lock)
 
@@ -96,6 +98,67 @@ def _tz_document(task_id: str, title: str, raw: str) -> str:
     )
 
 
+# Подсказка калибровки потолка при `new` (SPEC 01M1TQ11K4WJZD7ZE3MR0J4ZK4,
+# требование 2): активна только если ТЗ несёт буквальную строку «Рамка:
+# $N» — иначе Оператор просто не выразил рамку в этом формате, и
+# подсказывать не о чем.
+_TZ_RAMA_RE = re.compile(r"Рамка:\s*\$(\d+(?:\.\d+)?)")
+# Раздел «Требуется:» — до первой пустой строки (тот же формат, что и
+# нумерованный список без AC-разметки, `guard.PLAIN_NUMBERED_ITEM`).
+_TZ_TREBUETSYA_RE = re.compile(r"Требуется:[ \t]*\n(.*?)(?:\n[ \t]*\n|\Z)",
+                              re.S)
+# Заякорен на начало строки (`re.M`) — иначе первое по тексту вхождение
+# «Зоны:» в прозе (например, в пояснении требования 2 самого ТЗ) даёт
+# ложное совпадение раньше настоящей строки «Зоны: ...» (REVIEW.md
+# итерации 1, R1-F1). Захват продолжается за перенос строки (`re.S` +
+# `.*?`) до пустой строки, следующей метки-раздела (Cyrillic-слово с
+# двоеточием на новой строке — «Порядок:», «Не входит:» и т.п. могут
+# идти сразу за «Зоны:» без пустой строки между ними) или конца текста.
+_TZ_LABEL_LINE = r"[ \t]*[А-ЯЁ][А-Яа-яЁё]*:"
+_TZ_ZONES_RE = re.compile(
+    r"^Зоны:[ \t]*(.*?)(?:\n[ \t]*\n|\n(?=" + _TZ_LABEL_LINE + r")|\Z)",
+    re.M | re.S)
+
+
+def _tz_calibration_inputs(tz_raw: str) -> tuple[float, int, int] | None:
+    """(рамка, число пунктов «Требуется:», число путей «Зоны:») из
+    свободного текста ТЗ — `None`, если ТЗ не несёт строку «Рамка: $N»
+    (требование 2: подсказка активна только при этом условии)."""
+    rama_match = _TZ_RAMA_RE.search(tz_raw)
+    if rama_match is None:
+        return None
+    rama = float(rama_match.group(1))
+
+    trebuetsya_match = _TZ_TREBUETSYA_RE.search(tz_raw)
+    ac_count = (len(guard.PLAIN_NUMBERED_ITEM.findall(trebuetsya_match.group(1)))
+               if trebuetsya_match else 0)
+
+    zones_match = _TZ_ZONES_RE.search(tz_raw)
+    zone_files = budget.count_zone_paths(
+        zones_match.group(1) if zones_match else None)
+
+    return rama, ac_count, zone_files
+
+
+def _print_new_calibration_hint(conn, task_id: str, tz_raw: str) -> None:
+    """Печатает ориентир калибровки против «Рамки: $N» ТЗ и, при
+    занижении больше чем на треть, предупреждение + запись в журнал
+    (требования 2, AC-5/AC-6/AC-7). Не отказывает и не меняет потолок
+    задачи (AC-8) — только печатает и, при срабатывании, журналирует."""
+    calib = _tz_calibration_inputs(tz_raw)
+    if calib is None:
+        return
+    rama, ac_count, zone_files = calib
+    orientir = budget.recommended_budget_usd(ac_count, zone_files)
+    print(f"[{task_id}] калибровка: ориентир ~${orientir:.2f} по ТЗ "
+         f"({ac_count} «Требуется:», {zone_files} «Зоны:») против рамки "
+         f"${rama:.2f}")
+    warning = budget.calibration_warning(rama, orientir)
+    if warning is not None:
+        store.journal(conn, task_id, "operator", "калибровка бюджета", warning)
+        print(f"[{task_id}] ВНИМАНИЕ: {warning}")
+
+
 def cmd_new(title: str, tz_path: str | None = None, *,
            canary: bool = False, target: str | None = None) -> str:
     """Заводит задачу: ТЗ/SPEC рождаются сразу в её ветке (ADR-0005 п.9,
@@ -119,7 +182,9 @@ def cmd_new(title: str, tz_path: str | None = None, *,
     либо, для артели, в `config.ROOT` напрямую; эта функция туда не
     пишет вовсе, AC-9). Push артефактной ветки в origin пульта —
     best-effort (требование 7, AC-8): отказ сети не отменяет заведение
-    задачи. До A7 self/догфуд заводил worktree и кодовую ветку сама
+    задачи, но журналируется классифицированной причиной (SPEC
+    01M1TQ0X14Y5B3C87WC0Q31PK2, требование 1). До A7 self/догфуд
+    заводил worktree и кодовую ветку сама
     (требование 16/AC-18 M1) — этот путь (`_new_dogfood`) убран вместе
     со особым случаем (A7, AC-5): исторические задачи в `tasks/`
     пульта, заведённые им, не трогаются, но новые задачи артели идут
@@ -158,6 +223,8 @@ def cmd_new(title: str, tz_path: str | None = None, *,
     store.journal(conn, task_id, "operator", "created", title)
     print(f"[{task_id}] «{title}» создана (target {target}, артефактная "
          f"ветка пульта {artifact_branch.branch_name(task_id)})")
+    if tz_raw is not None:
+        _print_new_calibration_hint(conn, task_id, tz_raw)
     if tz_path is not None:
         print(f"  затем: artel.py run {task_id}  (запуск analyst)")
     else:
@@ -171,7 +238,9 @@ def _new_external_artifact_branch(task_id: str, title: str, spec: str,
     в артефактную ветку пульта плотницки (`artifact_branch.commit_files`),
     рабочая копия/worktree пульта не трогаются вовсе. Push в origin —
     best-effort (требование 7): отказ не прерывает заведение задачи и не
-    превращает его в ошибку команды (AC-8)."""
+    превращает его в ошибку команды (AC-8), но журналируется
+    классифицированной причиной (SPEC 01M1TQ0X14Y5B3C87WC0Q31PK2,
+    требования 1-2, AC-1/AC-2)."""
     files = {f"tasks/{task_id}/SPEC.md": spec}
     if tz_doc is not None:
         files[f"tasks/{task_id}/TZ.md"] = tz_doc

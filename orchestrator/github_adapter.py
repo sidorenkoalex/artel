@@ -112,7 +112,8 @@ def ensure_draft_mr(conn, task_id: str, t) -> None:
 
 def ensure_head_in_origin(conn, task_id: str, branch: str) -> tuple[bool, str]:
     """Голова `branch` видна в origin — предусловие входа в `verifying`
-    (`fsm_advance.py::review`) и КАЖДОГО approve `merge_gate`
+    (`fsm_advance.py::in_dev`, ADR-0015 требование 2 — рубеж переехал с
+    входа `review()`) и КАЖДОГО approve `merge_gate`
     (`fsm_merge_gate.py::_cmd_approve_merge_gate`) (SPEC
     01M1GS5HZ1JXFGKVR95HEW0AEZ, требования 1-3, 7): опрос CI по sha,
     которого origin не видел, висит до потолка ожидания вместо
