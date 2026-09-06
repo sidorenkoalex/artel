@@ -215,7 +215,11 @@ class PullConflictDetailTest(unittest.TestCase):
                        ("\n" if conflict_files else ""))
                 return subprocess.CompletedProcess(
                     ("git", "-C", str(repo), *args), 0, text, "")
-            if args[:1] in (("checkout",), ("commit",)):
+            if args[:1] in (("checkout",), ("commit",), ("reset",)):
+                # `reset -q -- tasks/<id>` — очистка worktree перед merge
+                # (задача 01M1RA0R9AH9RBAHD4A2Z5SEWQ, смержена 06.09 после
+                # лока этой планки); в песочнике — безобидный no-op, как
+                # checkout/commit. Правка Оператора (amend-tests, 06.09).
                 return self._ok(repo, *args)
             raise AssertionError(f"неожиданный gitcmd.in_repo вызов: {args}")
 
