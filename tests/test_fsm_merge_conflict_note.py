@@ -26,17 +26,35 @@ def _merge(returncode: int, stdout: str = "", stderr: str = ""):
 class MergeConflictNoteTest(unittest.TestCase):
 
     def test_files_and_stdout_conflict_line(self):
+        """Один конфликтный файл — note называет его и несёт строку
+        `CONFLICT` из `stdout` (git пишет её туда, не в `stderr`).
+
+        Ловит мутацию: сборка note по-прежнему читает только
+        `merge.stderr` (пуст здесь) — оба `assertIn` упадут.
+        """
         merge = _merge(1, stdout="CONFLICT (content): Merge conflict in module.py\n")
         note = fsm._merge_conflict_note(["module.py"], merge)
         self.assertIn("конфликтные файлы: module.py", note)
         self.assertIn("CONFLICT (content): Merge conflict in module.py", note)
 
     def test_multiple_files_joined_by_comma(self):
+        """Несколько конфликтных файлов — все имена в одной строке через
+        `, ` (AC-2).
+
+        Ловит мутацию: список файлов усечён до первого элемента —
+        `other.py` пропадёт из note, `assertIn` упадёт.
+        """
         merge = _merge(1, stdout="CONFLICT ...\n")
         note = fsm._merge_conflict_note(["docs/codebase-map.md", "other.py"], merge)
         self.assertIn("конфликтные файлы: docs/codebase-map.md, other.py", note)
 
     def test_stdout_truncated_to_500_chars(self):
+        """Хвост `stdout` обрезается до 500 символов — тем же приёмом,
+        что уже применяется к `stderr`.
+
+        Ловит мутацию: обрезка убрана или лимит другой — маркер за
+        500-м символом просочится в note, `assertNotIn` упадёт.
+        """
         marker = "TAIL_END_MARKER"
         merge = _merge(1, stdout="CONFLICT (content): Merge conflict in module.py\n"
                                  + ("Z" * 600) + marker)
@@ -45,6 +63,12 @@ class MergeConflictNoteTest(unittest.TestCase):
         self.assertIn("CONFLICT (content): Merge conflict in module.py", note)
 
     def test_nonempty_stderr_kept_alongside_stdout(self):
+        """Непустой `stderr` несётся в note наряду с хвостом `stdout`, не
+        заменяется им.
+
+        Ловит мутацию: обработка `stderr` выброшена при переходе на
+        список файлов/`stdout` — `STDERR_MARKER` не попадёт в note.
+        """
         merge = _merge(1, stdout="CONFLICT (content): Merge conflict in module.py\n",
                        stderr="STDERR_MARKER: warning\n")
         note = fsm._merge_conflict_note(["module.py"], merge)
@@ -52,12 +76,25 @@ class MergeConflictNoteTest(unittest.TestCase):
         self.assertIn("CONFLICT", note)
 
     def test_stderr_truncated_to_500_chars(self):
+        """Хвост `stderr` тоже обрезается до 500 символов.
+
+        Ловит мутацию: обрезка `stderr` убрана или лимит другой —
+        маркер за 500-м символом просочится в note.
+        """
         marker = "TAIL_END_MARKER"
         merge = _merge(1, stdout="x", stderr=("Z" * 600) + marker)
         note = fsm._merge_conflict_note(["module.py"], merge)
         self.assertNotIn(marker, note, "stderr не обрезан до 500 символов")
 
     def test_all_empty_has_no_dangling_separators(self):
+        """Пустые список файлов/`stdout`/`stderr` — note не содержит
+        висящих разделителей и не пишет «конфликтные файлы:» без имён
+        (AC-3).
+
+        Ловит мутацию: части note склеиваются без фильтрации пустых
+        значений — на пустых входах остаётся висящий `": "`/`"; "` или
+        голое «конфликтные файлы:».
+        """
         merge = _merge(1, stdout="", stderr="")
         note = fsm._merge_conflict_note([], merge)
         self.assertFalse(note.rstrip().endswith((":", ";", ",")),
@@ -68,6 +105,12 @@ class MergeConflictNoteTest(unittest.TestCase):
                          "строку 'конфликтные файлы:' без имён")
 
     def test_merge_none_degrades_to_git_did_not_answer(self):
+        """Вырожденный случай — `merge` не передан (git не ответил
+        осмысленно) — note деградирует в фиксированную строку.
+
+        Ловит мутацию: деградация заменена на пустую строку/исключение
+        вместо «git не ответил» — `assertEqual` упадёт.
+        """
         note = fsm._merge_conflict_note([], None)
         self.assertEqual(note, "git не ответил")
 
