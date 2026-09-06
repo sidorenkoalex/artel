@@ -25,7 +25,8 @@ from . import config, liveness, store
 from .session import resolve_session_id  # noqa: F401 — единая функция identity (SPEC 01M1G..., требование 1): lease.resolve_session_id остаётся тем же объектом, что и session.resolve_session_id.
 
 
-def acquire(conn, task_id: str, session_id: str) -> tuple[str | None, bool]:
+def acquire(conn, task_id: str, session_id: str, *,
+           same_host_ok: bool = False) -> tuple[str | None, bool]:
     """(отказ, взят_с_нуля). `отказ` — None, если можно продолжать.
 
     Требования 3-5: свободен или свой session_id -> взять/продлить; чужой
@@ -34,6 +35,18 @@ def acquire(conn, task_id: str, session_id: str) -> tuple[str | None, bool]:
     hostname/heartbeat переписываются на вызывающую сторону) с отдельной
     записью в журнале задачи. `взят_с_нуля` — True, только если до этого
     вызова строки не было вовсе (см. модульный докстринг про `release`).
+
+    `same_host_ok` (SPEC 01M1VBEDGMEXHVGWAH42FTDZ4X, требование 1) —
+    keyword-only, дефолт `False` сохраняет поведение ВСЕХ существующих
+    вызывателей `run_locked` дословно (SPEC «Не входит»: исключение из
+    отказа по живому lease распространяется только на `budget`, который
+    один во всём пакете передаёт `True`). При `True` живой чужой lease
+    ТОГО ЖЕ hostname не отказывает и НЕ перехватывается (строка чужой
+    сессии остаётся как есть — это не взятие lease, а разрешение
+    работать параллельно с ним): `(None, False)`. Живой чужой lease
+    ДРУГОГО hostname отказывает всегда, независимо от `same_host_ok`
+    (SPEC AC-4, инцидент 02.09.2026 — «другой Оператор физически» не
+    исключение).
 
     Чтение строки (`store.lease_row`) и её запись (`insert_lease`/
     `update_lease`) выполняются внутри одной транзакции `BEGIN IMMEDIATE`:
@@ -60,6 +73,8 @@ def acquire(conn, task_id: str, session_id: str) -> tuple[str | None, bool]:
             return None, False
         age = liveness._age_seconds(row["heartbeat_ts"])
         if age <= config.LEASE_STALE_AFTER_SEC:
+            if same_host_ok and row["hostname"] == hostname:
+                return None, False
             refusal = (f"[{task_id}] задачу ведёт сессия {row['session_id']} "
                       f"с host {row['hostname']}, heartbeat {int(age)} сек "
                       f"назад — подожди её или разберись, что с ней")
@@ -187,7 +202,7 @@ def warn_foreign_live(conn, task_id: str, session_id: str) -> None:
 
 
 def run_locked(conn, task_id: str, session_id: str | None, body,
-               *, on_refusal: str = "exit"):
+               *, on_refusal: str = "exit", same_host_ok: bool = False):
     """Общая точка обвязки мутирующих команд задачи (SPEC T057, требование
     2): `resolve_session_id` -> `acquire` -> отказ -> `body(sid)` ->
     `release`-если-`fresh` в `finally`. Прежде эта пятишаговая связка была
@@ -205,9 +220,13 @@ def run_locked(conn, task_id: str, session_id: str | None, body,
     бросая исключение, — эти два вызывателя сами решают исход отказанного
     пути (`False`/пустой возврат), а не проваливаются наружу через
     `SystemExit`.
+
+    `same_host_ok` — пробрасывается в `acquire()` без изменений (см. её
+    докстринг); дефолт `False` сохраняет поведение всех вызывателей, кроме
+    `budget.cmd_budget` (SPEC 01M1VBEDGMEXHVGWAH42FTDZ4X, требование 1).
     """
     sid = resolve_session_id(session_id)
-    refusal, fresh = acquire(conn, task_id, sid)
+    refusal, fresh = acquire(conn, task_id, sid, same_host_ok=same_host_ok)
     if refusal is not None:
         if on_refusal == "exit":
             sys.exit(refusal)
@@ -218,3 +237,21 @@ def run_locked(conn, task_id: str, session_id: str | None, body,
     finally:
         if fresh:
             release(conn, task_id, sid)
+
+
+def is_live(conn, task_id: str) -> bool:
+    """Есть ли СЕЙЧАС живой (heartbeat не протухший) lease задачи —
+    независимо от того, чья это сессия (SPEC 01M1VBEDGMEXHVGWAH42FTDZ4X,
+    требование 1, AC-2/AC-10): `budget.cmd_budget` читает это ДО
+    `run_locked`, чтобы отличить «меняю потолок во время активного шага
+    роли (своего или чужого — auto держит lease весь цикл)» от обычного
+    вызова без какой-либо активной работы над задачей. Никогда не
+    мутирует строку — чистое чтение, тем же приёмом, что и
+    `foreign_live_lease` (см. её докстринг про адресуемость pid: здесь
+    она не нужна, вопрос не «доступен ли ДЕРЖАТЕЛЬ», а «идёт ли шаг
+    прямо сейчас», а протухший heartbeat уже отвечает на него сам по
+    себе)."""
+    row = store.lease_row(conn, task_id)
+    if row is None:
+        return False
+    return liveness._age_seconds(row["heartbeat_ts"]) <= config.LEASE_STALE_AFTER_SEC
