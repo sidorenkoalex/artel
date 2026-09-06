@@ -170,14 +170,13 @@ def _freshness_refuses(conn, task_id: str, t, meta, status: str) -> bool:
 
 def _origin_push_gate(conn, task_id: str, t) -> GateRefusal | None:
     """Голова ветки задачи на origin — предусловие входа в verifying
-    (SPEC 01M1GS5HZ1JXFGKVR95HEW0AEZ, требования 1-3, AC-1..AC-5), вызывается
-    только для approved не-канареечных задач, ДО потребления свежести
-    вердикта (`review()`: иначе провалившийся push съел бы свежесть первым
-    же заходом и заблокировал повторный advance после починки origin,
-    AC-5 — тем же «вердикт уже учтён», что и `_freshness_refuses`).
+    (SPEC 01M1GS5HZ1JXFGKVR95HEW0AEZ, требования 1-3, AC-1..AC-5; ADR-0015,
+    требование 2 — рубеж переехал с входа `review()` на вход `in_dev ->
+    verifying` целиком, без дублирования на новом месте), вызывается
+    только для не-канареечных задач, в `in_dev()` ниже.
 
     Канареечная задача (SPEC 01M1NEEWH5K1XPFRDGRMPYSBXJ, требование
-    11/AC-11) не зовёт этот гейт вовсе (см. `review()`): её `verifying`
+    11/AC-11) не зовёт этот гейт вовсе (см. `in_dev()`): её `verifying`
     не ждёт CI и не читает origin (`canary._kill_at_verifying` убивает
     задачу сразу по входу) — push на origin-заглушку
     (`canary.ORIGIN_STUB_URL`) гарантированно проваливается по
@@ -274,56 +273,26 @@ def _review_approved(conn, task_id: str, t, tdir, target: str, state: str,
         if _run_gates(conn, task_id,
                       [lambda: _registry_gate(conn, task_id, tdir, review_text, meta)]):
             return False
-    # Прогон приёмки (SPEC T023, требование 6): красный acceptance-тест
-    # чинит код разработчик, не переписывает тест (тесты залочены — см.
-    # ветку in_dev). Не через `_run_gates` (PLAN «Подход») — `acc_tdir`
-    # нужен ПОСЛЕ прохода для `acceptance.summary`, пересчитывать его
-    # ценой повторного `acceptance.materialize_from_branch` не нужно, а
-    # печать здесь — три строки (сообщение, сырой `tail`, подсказка), не
-    # формат «сообщение+подсказка» остальных гейтов.
-    #
-    # SPEC T045, побочная находка: `tasks/<id>/acceptance_tests` читается
-    # из worktree задачи, если он заведён и стоит на своей ветке; иначе —
-    # прежний путь с диска главной копии. Внешний target (SPEC T094,
-    # требование 10): живого worktree нет вовсе — `acceptance_tests/`
-    # живёт только в артефактной ветке пульта (`branch` уже резолвлен),
-    # материализуется НА МЕСТЕ в workspace target'а (SPEC
-    # 01M1RNZ6V7TTTTYAHBMF8JBQQS, требование 1-2, AC-1/AC-2/AC-5).
+    # Прогон приёмки и сверка головы на origin переехали на переход
+    # `in_dev -> verifying` (ADR-0015, требование 2; `fsm_advance.in_dev`
+    # выше) — approved с зелёным CI ведёт прямиком в acceptance, второй
+    # раз ничего из этого не проверяется.
+    store.set_state(conn, task_id, "acceptance", "fsm", expected_state=state,
+                    detail="ревью пройдено — вход в приёмку")
+    # Автогейт acceptance (ADR-0007, SPEC T066) — тем же приёмом, что
+    # раньше стоял на входе `verifying -> acceptance` (`verifying()`
+    # ниже, до ADR-0015): каталог планки резолвится тем же способом,
+    # что и прогон приёмки в `in_dev` выше (worktree self-target либо
+    # workspace внешнего, SPEC 01M1RNZ6V7TTTTYAHBMF8JBQQS).
     acc_tdir = tdir
-    run_cwd = config.ROOT
     if target != config.DEFAULT_TARGET:
-        run_cwd = config.PROJECTS / target / "workspace"
-        run_cwd.mkdir(parents=True, exist_ok=True)
-        acc_tdir = acceptance.materialize_from_branch(task_id, branch, run_cwd)
+        code_dir = config.PROJECTS / target / "workspace"
+        code_dir.mkdir(parents=True, exist_ok=True)
+        acc_tdir = acceptance.materialize_from_branch(task_id, branch, code_dir)
     elif workspace.on_task_branch(task_id, t["branch"]) is True:
-        run_cwd = workspace.path(task_id)
-        acc_tdir = run_cwd / "tasks" / task_id
-    green, tail = acceptance.run(acc_tdir, code_root=run_cwd)
-    # Fingerprint окружения (SPEC T101, требование 4б, AC-5) — часть
-    # исхода прогона приёмочных тестов, значение поля `detail`
-    # существующего журнального события, без новой таблицы/колонки.
-    fingerprint = agent_log.environment_fingerprint()
-    if not green:
-        detail = f"acceptance_tests красные:\n{tail}\nокружение: {fingerprint}"
-        store.journal(conn, task_id, "fsm",
-                      "переход отклонён: приёмочные тесты", detail)
-        print(f"[{task_id}] переход отклонён: приёмочные тесты красные")
-        print(tail)
-        print(f"  дальше: почини код (не тест) и повтори "
-              f"artel.py advance {task_id}")
-        return False
-    card = acceptance.summary(acc_tdir, branch=t["branch"])
-    store.journal(conn, task_id, "fsm", "приёмочные тесты пройдены",
-                  f"{card}\nокружение: {fingerprint}")
-    print(f"[{task_id}] {card}")
-    # Вставка verifying между review и acceptance (SPEC T079, требование
-    # 4; ADR-0003 п.10): свежий approved + зелёные acceptance_tests
-    # раньше вели напрямую в acceptance — теперь ждут ещё и зелёного CI
-    # головного коммита ветки. Автогейт acceptance переехал на вход
-    # `verifying -> acceptance` (`verifying()` ниже), новая точка.
-    store.update_task(conn, task_id, verifying_attempts=0)
-    store.set_state(conn, task_id, "verifying", "fsm", expected_state=state,
-                    detail="ревью пройдено — жду зелёного CI ветки")
+        acc_tdir = workspace.path(task_id) / "tasks" / task_id
+    fsm_autogate._maybe_autogate_acceptance(conn, task_id, t, acc_tdir,
+                                           t["reviewed_iter"])
     return False
 
 
@@ -385,10 +354,6 @@ def review(conn, task_id: str, t, tdir, target: str, state: str) -> bool:
         if _run_gates(conn, task_id,
                       [lambda: _review_escalation_sha_gate(conn, task_id, t)]):
             return False
-        if not t["is_canary"]:
-            if _run_gates(conn, task_id,
-                          [lambda: _origin_push_gate(conn, task_id, t)]):
-                return False
 
     iteration = artifacts.fresh_verdict_iteration(meta, t["reviewed_iter"])
     store.update_task(conn, task_id, reviewed_iter=iteration)
@@ -403,8 +368,10 @@ def review(conn, task_id: str, t, tdir, target: str, state: str) -> bool:
 
 def verifying(conn, task_id: str, t, tdir, target: str, state: str) -> bool:
     # Ожидание зелёного CI головного коммита ветки задачи (SPEC T079,
-    # требования 5-7 + SPEC T086, требования 2-4). Четыре исхода
-    # различает `ci.verifying_status` (роадмап P3, T040): зелёный,
+    # требования 5-7 + SPEC T086, требования 2-4; ADR-0015, требования
+    # 1-2 — переход теперь ведёт в `review`, не в `acceptance`: CI
+    # подтянутой головы проверяется ДО ревьювера, не после). Четыре
+    # исхода различает `ci.verifying_status` (роадмап P3, T040): зелёный,
     # «проверок нет вовсе», «проверки идут» (в т.ч. по gh run list),
     # CI красный — трактовка не меняется относительно T079/ADR-0009:
     # только зелёный двигает задачу, остальные три ждут, различаясь
@@ -419,26 +386,8 @@ def verifying(conn, task_id: str, t, tdir, target: str, state: str) -> bool:
                   fsm.VERIFYING_STATUS_ACTION, note)
     if outcome == ci.VERIFYING_GREEN:
         print(f"[{task_id}] {note}")
-        store.set_state(conn, task_id, "acceptance", "fsm",
+        store.set_state(conn, task_id, "review", "fsm",
                         expected_state=state, detail=note)
-        # Каталог acceptance_tests/ для автогейта (SPEC T094, требование
-        # 10) — тем же приёмом, что `review()` выше: внешний target не
-        # несёт живого worktree, читаем из артефактной ветки пульта на
-        # МЕСТО workspace target'а (SPEC 01M1RNZ6V7TTTTYAHBMF8JBQQS,
-        # требования 1-2, AC-5 — не во временный каталог), чужой CI-запрос
-        # (`branch` = код-ветка, выше) этого не касается — материализация
-        # нужна только `acceptance_tests/`, не коду.
-        acc_tdir = tdir
-        if target != config.DEFAULT_TARGET:
-            artifact_branch_name, _ = artifact_source.resolve(conn, task_id)
-            code_dir = config.PROJECTS / target / "workspace"
-            code_dir.mkdir(parents=True, exist_ok=True)
-            acc_tdir = acceptance.materialize_from_branch(
-                task_id, artifact_branch_name, code_dir)
-        elif workspace.on_task_branch(task_id, t["branch"]) is True:
-            acc_tdir = workspace.path(task_id) / "tasks" / task_id
-        fsm_autogate._maybe_autogate_acceptance(conn, task_id, t, acc_tdir,
-                                               t["reviewed_iter"])
         return False
     # Счётчик попыток остаётся информационной записью (требование 3,
     # AC-7) — эскалацию решает только прошедшее время с момента входа
@@ -1123,10 +1072,65 @@ def _acceptance_lock_refuses(conn, task_id: str, t, branch: str,
     return False
 
 
+def _acceptance_run_refuses(conn, task_id: str, t, tdir, target: str,
+                            branch: str) -> bool:
+    """Прогон приёмки после подтяжки (SPEC T023, требование 6; ADR-0015,
+    требование 2 — переехал с `in_dev -> review` на `in_dev -> verifying`,
+    вместе с остальными шестью рубежами того же перехода): красный
+    acceptance-тест чинит код разработчик, не переписывает тест (тесты
+    залочены — см. `_acceptance_lock_refuses` выше). Не через `_run_gates`
+    (PLAN «Подход») — `acc_tdir` нужен ПОСЛЕ прохода для
+    `acceptance.summary`, пересчитывать его ценой повторного
+    `acceptance.materialize_from_branch` не нужно, а печать здесь — три
+    строки (сообщение, сырой `tail`, подсказка), не формат
+    «сообщение+подсказка» остальных гейтов.
+
+    SPEC T045, побочная находка: `tasks/<id>/acceptance_tests` читается
+    из worktree задачи, если он заведён и стоит на своей ветке; иначе —
+    прежний путь с диска главной копии. Внешний target (SPEC T094,
+    требование 10): живого worktree нет вовсе — `acceptance_tests/`
+    живёт только в артефактной ветке пульта (`branch` уже резолвлен),
+    материализуется НА МЕСТЕ в workspace target'а (SPEC
+    01M1RNZ6V7TTTTYAHBMF8JBQQS, требование 1-2, AC-1/AC-2/AC-5).
+
+    `True` — переход отклонён (планка красная)."""
+    acc_tdir = tdir
+    run_cwd = config.ROOT
+    if target != config.DEFAULT_TARGET:
+        run_cwd = config.PROJECTS / target / "workspace"
+        run_cwd.mkdir(parents=True, exist_ok=True)
+        acc_tdir = acceptance.materialize_from_branch(task_id, branch, run_cwd)
+    elif workspace.on_task_branch(task_id, t["branch"]) is True:
+        run_cwd = workspace.path(task_id)
+        acc_tdir = run_cwd / "tasks" / task_id
+    green, tail = acceptance.run(acc_tdir, code_root=run_cwd)
+    # Fingerprint окружения (SPEC T101, требование 4б, AC-5) — часть
+    # исхода прогона приёмочных тестов, значение поля `detail`
+    # существующего журнального события, без новой таблицы/колонки.
+    fingerprint = agent_log.environment_fingerprint()
+    if not green:
+        detail = f"acceptance_tests красные:\n{tail}\nокружение: {fingerprint}"
+        store.journal(conn, task_id, "fsm",
+                      "переход отклонён: приёмочные тесты", detail)
+        print(f"[{task_id}] переход отклонён: приёмочные тесты красные")
+        print(tail)
+        print(f"  дальше: почини код (не тест) и повтори "
+              f"artel.py advance {task_id}")
+        return True
+    card = acceptance.summary(acc_tdir, branch=t["branch"])
+    store.journal(conn, task_id, "fsm", "приёмочные тесты пройдены",
+                  f"{card}\nокружение: {fingerprint}")
+    print(f"[{task_id}] {card}")
+    return False
+
+
 def in_dev(conn, task_id: str, t, tdir, target: str, state: str) -> bool:
-    # Разработчик закончил: PLAN ready и ветка запушена -> в ревью. PLAN.md
-    # читается С ВЕТКИ задачи (SPEC T031/T094 требование 10), тем же
-    # приёмом `_read_branch_text_or_refuse` (T047), что и SPEC.md/REVIEW.md.
+    # Разработчик закончил: PLAN ready и ветка запушена -> в verifying
+    # (ADR-0015, требования 1-2: CI подтянутой головы проверяется ДО
+    # ревьювера, не после — все семь рубежей этого перехода стоят здесь
+    # целиком, ревью их повторно не звонит). PLAN.md читается С ВЕТКИ
+    # задачи (SPEC T031/T094 требование 10), тем же приёмом
+    # `_read_branch_text_or_refuse` (T047), что и SPEC.md/REVIEW.md.
     branch, foreign = artifact_source.resolve(conn, task_id)
     if foreign:
         plan_text = fsm._read_branch_text_or_refuse(conn, task_id, branch,
@@ -1152,13 +1156,33 @@ def in_dev(conn, task_id: str, t, tdir, target: str, state: str) -> bool:
     if fsm._pull_main_or_escalate(conn, task_id, t, state) in (
             "escalated", "refused"):
         return False
-    gates = [
-        lambda: _capacity_gate(conn, task_id, t),
-        lambda: _zones_gate(conn, task_id, t, branch, plan_text),
-        lambda: _review_rework_gate(conn, task_id, t, branch),
-    ]
-    if _run_gates(conn, task_id, gates):
+    # Порядок и обёртки — прежние, зафиксированные R2 (01M1TKNXX5YN5KT4WHG4T
+    # 44JWV, AC-5/AC-6): каждый гейт вызывается через свою «сохранённую
+    # публичную обёртку» (`_xxx_gate_refuses`) отдельным вызовом, не одним
+    # списком через `_run_gates` — обёртки остаются наблюдаемой единицей
+    # снаружи (тесты `tests/test_zones_gate.py`/`test_capacity_gate.py`/
+    # `test_fsm_review_rework_gate.py` зовут их напрямую), а поведение
+    # (журнал/печать/остановка на первом отказе) не меняется — каждая
+    # обёртка сама оборачивает свой единственный гейт `_run_gates`.
+    if _capacity_gate_refuses(conn, task_id, t, state):
         return False
-    store.set_state(conn, task_id, "review", "fsm",
-                    expected_state=state, detail="MR готов — прогон ревьювера")
+    if _zones_gate_refuses(conn, task_id, t, branch, plan_text):
+        return False
+    if _review_rework_gate_refuses(conn, task_id, t, branch):
+        return False
+    # Сверка головы на origin (ADR-0015, требование 2) — не для канареечной
+    # задачи (SPEC 01M1NEEWH5K1XPFRDGRMPYSBXJ, требование 11/AC-11): её
+    # `verifying` не ждёт CI и не читает origin (`canary._kill_at_verifying`
+    # убивает задачу сразу по входу) — push на origin-заглушку
+    # (`canary.ORIGIN_STUB_URL`) гарантированно проваливается по
+    # построению, не по сбою, тем же исключением, что раньше стояло на
+    # входе `review()`.
+    if not t["is_canary"]:
+        if _run_gates(conn, task_id, [lambda: _origin_push_gate(conn, task_id, t)]):
+            return False
+    if _acceptance_run_refuses(conn, task_id, t, tdir, target, branch):
+        return False
+    store.update_task(conn, task_id, verifying_attempts=0)
+    store.set_state(conn, task_id, "verifying", "fsm",
+                    expected_state=state, detail="MR готов — жду зелёного CI ветки")
     return False

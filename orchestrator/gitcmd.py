@@ -356,6 +356,32 @@ def remote_branch_sha(branch: str) -> str:
     return res.stdout.split()[0]
 
 
+def fetch_head_sha(remote: str, ref: str) -> tuple[str, str]:
+    """(sha, "") — голова `ref` в `remote` ПОСЛЕ `git fetch <remote> <ref>`
+    (SPEC 01M1TQ0ZCYJ6TESZ2KGJ6AWYNH, требование 1): `git fetch` не
+    трогает HEAD и рабочее дерево ни при каком исходе, так что HEAD
+    главной копии остаётся на месте. ("", причина) — `remote` недоступен
+    (нет сети, `remote` не настроен, песочница) или git не ответил;
+    причина — первые 200 символов stderr, тем же приёмом, что и у
+    `show`/`drop`.
+
+    Не `ls_remote`/`remote_branch_sha` (голый sha без объектов): вызывающему
+    коду (`artifact_branch`, `doctor`) нужен РЕАЛЬНО присутствующий локально
+    коммит — родитель плотницкой записи (`write_commit`, `read-tree
+    parent`) обязан существовать в объектной базе, не только числиться sha
+    на удалённой стороне.
+    """
+    res = git("fetch", remote, ref)
+    if res is None:
+        return "", "git не ответил"
+    if res.returncode != 0:
+        return "", (res.stderr.strip()[:200] or "git fetch вернул ненулевой код")
+    head = git("rev-parse", "--verify", "--quiet", "FETCH_HEAD")
+    if head is None or head.returncode != 0 or not head.stdout.strip():
+        return "", "FETCH_HEAD не разрешён"
+    return head.stdout.strip(), ""
+
+
 def ls_tree_files(branch: str, rel_dir: str) -> list[str] | None:
     """Пути файлов под `rel_dir` в дереве `branch`; None — git не ответил.
 

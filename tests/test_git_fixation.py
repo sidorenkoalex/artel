@@ -34,8 +34,8 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from orchestrator import (auto, catalog, config, fixation, fsm,  # noqa: E402
-                          fsm_autogate, gates, gitcmd, projects, runner,
-                          store)
+                          fsm_autogate, gates, github_adapter, gitcmd,
+                          projects, runner, store)
 from tests.sandbox import (FakeProc, TmpRootTest, capture,  # noqa: E402
                            capture_new_task_id, claude_only_popen,
                            network_guarded_real_run, resilient_tmp_cleanup)
@@ -290,10 +290,17 @@ class ExternalTargetAdvanceIgnoresDirtyCheckTest(TmpRootTest):
             f"{self.TASK}: PLAN заглушка")
 
     def test_uncommitted_plan_still_advances_for_external_target(self):
-        out = capture(fsm.cmd_advance, self.TASK)
+        # ADR-0015: сверка головы на origin переехала на `in_dev ->
+        # verifying` — эта песочница не заводит настоящую кодовую ветку
+        # `task/sled-t001` (только артефактную PLAN-заглушку), а предмет
+        # теста — сверка чистоты, не origin-push (у него свои тесты,
+        # `tests/test_github_adapter.py`).
+        with mock.patch.object(github_adapter, "ensure_head_in_origin",
+                              return_value=(True, "")):
+            out = capture(fsm.cmd_advance, self.TASK)
 
         self.assertEqual(store.get_task(store.db(), self.TASK)["state"],
-                         "review",
+                         "verifying",
                          "внешний target не блокируется сверкой чистоты")
         self.assertNotIn("не закоммичен", out)
 

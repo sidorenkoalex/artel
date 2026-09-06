@@ -20,8 +20,8 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from orchestrator import (acceptance, catalog, config, fsm, gitcmd,  # noqa: E402
-                          store, workspace)
+from orchestrator import (acceptance, agent_log, catalog, config, fsm,  # noqa: E402
+                          gitcmd, store, workspace)
 from tests.sandbox import (SpyRun, capture, capture_new_task_id,  # noqa: E402
                            disk_backed_ls_tree_files, disk_backed_show,
                            fake_git)
@@ -259,10 +259,20 @@ class MapConflictAutoResolveTest(unittest.TestCase):
                                    ["python3", "scripts/codebase_map.py"],
                                    0, "", "")) as regen, \
              mock.patch.object(acceptance, "run",
-                               return_value=(True, "ok")) as acc_run:
+                               return_value=(True, "ok")) as acc_run, \
+             mock.patch.object(agent_log, "environment_fingerprint",
+                               return_value="env-fp-stub"):
+            # ADR-0015: приёмка теперь прогоняется прямо в `in_dev` (эта
+            # же функция, до перехода в `verifying`) — журнал зелёного
+            # прогона несёт fingerprint окружения (`agent_log.
+            # environment_fingerprint`), который иначе позвал бы РЕАЛЬНЫЕ
+            # `git --version`/`claude --version` через тот же глобальный
+            # `subprocess.run`, замоканный строкой выше только под ответ
+            # регенератора карты — без этой заглушки `regen` ловил бы
+            # чужие вызовы и `assert_called_once()` ниже падал бы.
             out = self.advance_from_in_dev()
 
-        self.assertEqual(self.state(), "review",
+        self.assertEqual(self.state(), "verifying",
                          "конфликт только по карте не имеет права "
                          "эскалировать — переход обязан состояться")
         self.assertNotIn("эскалац", out.lower())
@@ -270,15 +280,23 @@ class MapConflictAutoResolveTest(unittest.TestCase):
         self.assertEqual(regen.call_args.kwargs.get("cwd"), self.wt_path,
                          "регенерация обязана идти на СЛИТОМ дереве "
                          "worktree задачи, не главной копии пульта")
-        acc_run.assert_called_once()
-        plank_root = acc_run.call_args[0][0]
+        # ADR-0015: с этой задачи `in_dev` зовёт `acceptance.run` дважды —
+        # раз внутри `pull.evaluate` (рубеж «прогон планки после
+        # подтяжки», SPEC 01M1RNZ6V7TTTTYAHBMF8JBQQS, этот тест изначально
+        # про НЕГО) и второй раз своим отдельным рубежом
+        # `_acceptance_run_refuses` (SPEC T023, требование 6, переехавшим
+        # из `review()`) — оба легитимны и стояли в системе ДО этой задачи
+        # (просто на двух разных вызовах `advance`, не в одном); первый
+        # вызов в списке — от `pull.evaluate`, его и проверяет этот тест.
+        self.assertEqual(acc_run.call_count, 2)
+        plank_root = acc_run.call_args_list[0][0][0]
         self.assertEqual(
             plank_root, self.wt_path / "tasks" / self.TASK,
             "SPEC 01M1RNZ6V7TTTTYAHBMF8JBQQS AC-1: планка обязана "
             "материализоваться в рабочий каталог кода задачи, не во "
             "временный каталог")
         self.assertEqual(
-            acc_run.call_args.kwargs.get("code_root"), self.wt_path,
+            acc_run.call_args_list[0].kwargs.get("code_root"), self.wt_path,
             "SPEC 01M1RNZ6V7TTTTYAHBMF8JBQQS AC-2: cwd прогона обязан "
             "быть равен рабочему каталогу кода задачи")
 
