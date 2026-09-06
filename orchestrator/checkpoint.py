@@ -7,6 +7,8 @@ import re
 import shutil
 from pathlib import Path
 
+from scripts import guard
+
 from . import config, fixation, gitcmd, store, workspace, yamlmini
 
 # Критерий допустимости файла первого уровня `acceptance_tests/` (SPEC
@@ -501,6 +503,14 @@ def _commit_external_step_artifacts(conn, task_id: str, role: str,
     (требование 2, AC-2) — цикл только собирает `stray`, сам вызов
     `store.journal` вне цикла.
 
+    Посторонние файлы первого уровня `tasks/<id>/` (SPEC
+    01M1TNN4TMWAQSQ9Y1PW37J5H0, требование 2, AC-4/AC-5/AC-6) — тот же
+    приём, но критерий (`guard.is_extraneous_task_root_file`) не
+    независимая копия, а импорт из `scripts.guard` (единый источник
+    истины с `guard --all`, требование 2): инцидент 06.09, рабочие файлы
+    роли (копии карты кодовой базы) в корне `tasks/<id>/` доехали до
+    артефактной ветки и main без единой проверки.
+
     `timeout=True` (SPEC 01M1NBWTSXEJB24PXR417YF1VA, AC-4/AC-5) —
     `commit_timeout_checkpoint` зовёт этой веткой: тот же перенос, что и
     при штатном завершении шага, но сообщение коммита артефактной ветки
@@ -572,6 +582,22 @@ def _commit_external_step_artifacts(conn, task_id: str, role: str,
             conn, task_id, "orchestrator",
             "посторонние файлы в каталоге планки",
             f"в каталоге планки посторонние файлы: {', '.join(stray)}")
+
+    # Посторонние файлы первого уровня tasks/<id>/ (SPEC
+    # 01M1TNN4TMWAQSQ9Y1PW37J5H0, требование 2, AC-4/AC-5/AC-6) —
+    # критерий допустимости импортирован из scripts.guard (один источник
+    # истины с guard --all, не независимая копия): исключаются из
+    # переноса, ОДНА запись журнала на весь список отброшенных путей.
+    task_root_stray = sorted(
+        rel[len(task_prefix):] for rel in files
+        if guard.is_extraneous_task_root_file(rel[len(task_prefix):]))
+    if task_root_stray:
+        files = {rel: content for rel, content in files.items()
+                 if rel[len(task_prefix):] not in task_root_stray}
+        store.journal(
+            conn, task_id, "orchestrator",
+            "посторонние файлы в каталоге задачи",
+            f"в каталоге задачи посторонние файлы: {', '.join(task_root_stray)}")
 
     t = store.get_task(conn, task_id)
     baseline_sha = t["materialized_artifact_sha"] or ""
