@@ -1,20 +1,15 @@
-"""Приёмочный тест AC-7 задачи 01M1TQ0ZCYJ6TESZ2KGJ6AWYNH: `origin`
-настроен, но недостижим (fetch падает) — в журнал задачи
-(`store.journal`) добавлена запись с причиной вида «артефактная ветка
-от локального main: <причина>» (требование 1/AC-2, тестовый пункт 4б).
+"""Приёмочный тест AC-7 задачи 01M1TQ0ZCYJ6TESZ2KGJ6AWYNH: песочница без
+`origin` — в журнал задачи (`store.journal`) добавлена запись с
+причиной вида «артефактная ветка от локального main: <причина>»
+(требование 1/AC-2, тестовый пункт 4б).
 
-Решение Оператора по возврату 06.09 (CI красный на `tests/
-test_branch_freshness_gate.py::TargetSourcedRemoteTest`): запись в
-журнал пишется, только когда remote `origin` СУЩЕСТВУЕТ, а сам `fetch`
-не удался — песочница вовсе БЕЗ `origin` (как было в этом файле до
-правки) молча остаётся на локальном `main`, без записи (тот же случай,
-что `test_ac2_local_main_fallback_parent.py`, где запись не
-проверяется). Без этого разделения ЛЮБОЙ вызов `commit_files` первым
-коммитом в репозитории без `origin` (в т.ч. лёгкие тестовые песочницы
-`fake_git`, где `git remote` тоже пуст) писал бы в журнал — включая
-`cmd_new` в `tests/test_branch_freshness_gate.py`, что и красило CI.
+Красен до реализации: `artifact_branch.commit_files`
+(`orchestrator/artifact_branch.py`) сегодня НЕ пишет ни одной записи в
+`store.journal` вовсе — модуль даже не импортирует `store`. Журнал
+задачи `TASK` после вызова остаётся пуст, тест ждёт запись с текстом
+причины — несовпадение (пустой список против непустого) красит тест
+до появления кода журналирования.
 """
-import shutil
 import sys
 import unittest
 from pathlib import Path
@@ -32,21 +27,16 @@ REASON_PREFIX = "артефактная ветка от локального mai
 class JournalRecordsFallbackReasonTest(ArtifactBranchOriginSandbox):
 
     def test_ac7_journal_contains_local_main_fallback_reason(self):
-        """`origin` заведён (`add_origin`), но его bare-репозиторий
-        уничтожен ДО коммита — `git fetch origin main` обязан упасть.
-        После первого коммита артефактной ветки задачи `TASK` журнал
-        задачи (`store.task_steps`) содержит запись, чей `detail`
-        начинается с «артефактная ветка от локального main:» и несёт
-        непустую причину после двоеточия.
+        """Песочница без `origin`: после первого коммита артефактной
+        ветки задачи `TASK` журнал задачи (`store.task_steps`) содержит
+        запись, чей `detail` начинается с «артефактная ветка от
+        локального main:» и несёт непустую причину после двоеточия.
 
         Ловит мутацию: фолбэк на локальный `main` работает (коммит
         создаётся), но запись в журнал не пишется, либо пишется без
         текста причины (пустая строка после «:») — тест ловит и
         отсутствие записи, и пустую причину.
         """
-        self.add_origin()
-        shutil.rmtree(self.bare, ignore_errors=True)
-
         sha = artifact_branch.commit_files(
             TASK, {f"tasks/{TASK}/SPEC.md": "спек"}, f"{TASK}: тест")
         self.assertTrue(sha, "коммит артефактной ветки не создан")
