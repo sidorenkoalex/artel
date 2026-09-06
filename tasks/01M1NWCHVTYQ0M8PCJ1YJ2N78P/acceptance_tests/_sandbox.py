@@ -105,8 +105,9 @@ for a in "$@"; do
     exit 0
   fi
 done
-sleep "${FAKE_CLAUDE_SLEEP:-4}"
-cat <<'JSON'
+# /bin/… абсолютно: PATH роли после стека ч.3 не содержит /bin
+/bin/sleep "${FAKE_CLAUDE_SLEEP:-4}"
+/bin/cat <<'JSON'
 {"type":"result","subtype":"success","is_error":false,"total_cost_usd":0.001,"duration_ms":100,"num_turns":1,"result":"готово (sandbox stub)"}
 JSON
 """
@@ -336,6 +337,16 @@ class DetachedCycleSandbox(RealPultGitTest):
         self.capture(fsm.cmd_approve, task_id, sha)
         self.assertEqual(
             store.get_task(store.db(), task_id)["state"], "in_dev")
+        # Правка планки Оператором 06.09.2026 (amend-tests): гейт ёмкости
+        # диффа (05.09) сверяет `main...<кодовая ветка>` ещё до запуска
+        # роли; у задачи, доведённой до in_dev мимо шага developer, кодовой
+        # ветки нет — «git не ответил» останавливал цикл fail-closed.
+        # Ветка заводится здесь, как её завёл бы workspace.ensure.
+        import subprocess as _sp
+        branch = store.get_task(store.db(), task_id)["branch"]
+        if branch:
+            _sp.run(["git", "branch", "-f", branch, config.MAIN_BRANCH],
+                    cwd=self.repo(), check=True, capture_output=True)
         return task_id
 
 
