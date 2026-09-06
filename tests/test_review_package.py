@@ -136,6 +136,25 @@ class FakeGit:
             # успехом на любой git-вызов, как ниже, значило бы «ветка уже
             # существует» для ЛЮБОГО имени и отказ `cmd_new` всегда.
             return subprocess.CompletedProcess(list(args), 1, "", "")
+        if (len(args) >= 3 and args[0] == "rev-parse" and args[1] == "--verify"
+                and args[-1].startswith("refs/remotes/origin/")):
+            # tasks/01M1SG9T962WJJ31S282GWM0EN: `gitcmd.diff_base` проверяет
+            # этим вызовом наличие `refs/remotes/origin/<MAIN_BRANCH>` —
+            # песочница этого файла не моделирует настоящий remote, ref
+            # заведомо отсутствует, фолбэк идёт на локальный
+            # `config.MAIN_BRANCH` (тот же путь, что и до этой задачи).
+            return subprocess.CompletedProcess(list(args), 1, "", "")
+        if args and args[0] == "merge-base":
+            # `gitcmd.diff_base` берёт merge-base ветки с базой, уже
+            # известной по ответу на rev-parse выше (здесь всегда локальный
+            # `config.MAIN_BRANCH`, ref origin отсутствует) — этот фейк не
+            # моделирует настоящий граф коммитов, поэтому просто отдаёт
+            # запрошенную базу как есть (второй аргумент), byte-for-byte
+            # сохраняя литерал `config.MAIN_BRANCH`, на который опираются
+            # существующие ассерты диапазона diff по всему файлу.
+            return subprocess.CompletedProcess(
+                list(args), self.returncode,
+                "" if self.returncode else args[1], self.stderr)
         if args and args[0] == "rev-parse":
             # T031: `gitcmd.on_foreign_branch` спрашивает текущую ветку и
             # существование ветки задачи вне пакета — пустой ответ, тот же

@@ -1,5 +1,5 @@
 ---
-built_at_sha: 36c424c94ffaa625af4851de99906a221653032f
+built_at_sha: 879838603dbcc98ffdeaeedb1b375d8dac78ba0d
 ---
 
 # Codebase-map пульта
@@ -481,6 +481,8 @@ built_at_sha: 36c424c94ffaa625af4851de99906a221653032f
 - `commit_committer_dates`
 - `commits_behind`
 - `current_branch`
+- `diff_base`
+- `diff_base_source`
 - `diff_names`
 - `diff_paths`
 - `git`
@@ -1880,6 +1882,16 @@ built_at_sha: 36c424c94ffaa625af4851de99906a221653032f
 - `row`
 
 **Импортирует:** `orchestrator/fsm.py`, `orchestrator/store.py`, `scripts/guard.py`, `tests/test_invariants.py`
+
+**Импортируется:** —
+
+## tests/test_role_bash_guard.py
+
+**Назначение:** Сторож Bash-команд роли (`docs/reference/role-home/claude/hooks/
+
+**Публичные функции:** (нет)
+
+**Импортирует:** —
 
 **Импортируется:** —
 
