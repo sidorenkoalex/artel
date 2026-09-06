@@ -463,7 +463,11 @@ class PullConflictDetailTest(unittest.TestCase):
                          "конфликт только по карте по-прежнему "
                          "разрешается сам, без эскалации")
         regen.assert_called_once()
-        acc_run.assert_called_once_with(self.wt_path / "tasks" / self.TASK)
+        # Правка Оператора 06.09 (amend-tests): после hotfix регрессии №14
+        # контракт — acceptance.run(tdir, code_root=<worktree>).
+        acc_run.assert_called_once()
+        self.assertEqual(acc_run.call_args.args[0], self.wt_path / "tasks" / self.TASK)
+        self.assertEqual(acc_run.call_args.kwargs.get("code_root"), self.wt_path)
 
     def test_ac5_map_only_conflict_regen_failure_escalates_with_conflict_list(self):
         """Единственный конфликтующий файл — карта, но регенерация не
