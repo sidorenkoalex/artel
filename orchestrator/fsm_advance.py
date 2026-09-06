@@ -217,7 +217,7 @@ def _code_sha_at_review_escalation(conn, task_id: str) -> str | None:
 def _review_escalation_sha_gate(conn, task_id: str, t) -> GateRefusal | None:
     """Требование 3 (SPEC 01M1VBEDGMEXHVGWAH42FTDZ4X): budget-эскалация,
     поймавшая уже вынесенный approved-вердикт reviewer (эскалация ИЗ
-    `review`), не должна пропускать переход в `verifying` по устаревшему
+    `review`), не должна пропускать переход в `acceptance` по устаревшему
     вердикту, если код кодовой ветки СМЕНИЛСЯ, пока задача стояла
     `escalated` — нужен новый прогон reviewer.
 
