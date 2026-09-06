@@ -290,3 +290,70 @@ py`») теперь ссылается на реально существующ�
 REVIEW.md — реестр замечаний: `R1-F1` размечен `fixed` с описанием
 добавленного теста (перевод в `accepted` — решение ревьювера следующей
 итерации, не самозакрытие).
+
+## Возврат — интерпретатор venv из worktree
+
+Причина возврата: приёмочная планка задачи красна (9 из 28) при прогоне
+пультом после подтяжки main — `ImportError: Error importing plugin
+"timeout": No module named 'timeout'`, трассировка называет
+`.pyenv/versions/3.13.12` вместо `.artel/venv`. Слияние с main ни при
+чём — красна среда прогона, диагноз и требуемый фикс — ANSWER-6.
+
+Причина (ANSWER-6): `stack.pytest_python_executable()` искала venv
+только рядом с `config.ROOT` (`config.VENV_DIR/bin/python3`). Пульт
+гоняет планку против worktree'а задачи (`acceptance.run(tdir,
+code_root=<worktree>)`), где `.artel/venv` не существует (там только
+`.artel/projects`) — функция уходила в запасной `sys.executable`,
+процесс планки пульт главной копии запускал голым `python3` из своего
+PATH (pyenv 3.13, без `pytest-timeout`), и явная загрузка `-p timeout`
+честно падала.
+
+Исправлено `orchestrator/stack.py`:
+- `_main_copy_root()` (новая функция) — корень ГЛАВНОЙ копии
+  репозитория через `git rev-parse --git-common-dir` из `config.ROOT`:
+  общий `.git`-каталог называется независимо от того, worktree это или
+  сама главная копия (для главной копии совпадает с `config.ROOT`,
+  вырожденный, но безопасный случай); `None` — git не ответил или
+  ответ пуст, fail-closed на `sys.executable` дальше по цепочке, путь
+  не гадается.
+- `pytest_python_executable()` — порядок поиска расширен до трёх
+  шагов, ровно как в ANSWER-6: (1) `config.VENV_DIR/bin/python3` —
+  прежнее поведение; (2) иначе venv главной копии через
+  `_main_copy_root()`; (3) иначе `sys.executable` с предупреждением в
+  stderr (venv не найден нигде) — раньше третий шаг молчал, теперь
+  называет причину смены интерпретатора тем же принципом, что и WARN
+  `_venv_exists_check`.
+
+`tests/test_stack.py::PytestPythonExecutableWorktreeTest` (новый класс,
+ANSWER-6 п.2, тест реальным git, по образцу `tests/test_workspace.py`):
+временный репозиторий с настоящим `git worktree add`, venv-заглушка
+(`bin/python3` пустым файлом) только в главной копии — функция из
+worktree возвращает путь именно главной копии; контрольный тест —
+venv нет нигде, функция возвращает `sys.executable`, не пустую строку и
+не исключение. Мутация «шаг 2 убран» ловится первым тестом:
+`assertEqual` откажет, функция ушла бы прямиком на `sys.executable`
+мимо venv главной копии.
+
+Проверено ровно способом ANSWER-6 (пыеnv `python3`, НЕ venv пульта):
+- `python3 -m unittest tests.test_stack -v` — 13 passed (было 11,
+  добавлен новый класс из двух тестов); stderr явно печатает новое
+  предупреждение там, где venv главной копии реально не найден
+  (временные каталоги тестов) — `check_stack`/`_venv_packages_check`
+  сценарии остались зелёными, предупреждение не меняет их вердикт.
+- `python3 -m unittest discover -s tasks/01M1TKP6AAY4W8GDGZNA9R0JZT/
+  acceptance_tests -v` — 28 passed за 126.6с (все 28, включая ранее
+  красный класс AC-7/интерпретатор — планка гоняется голым pyenv
+  `python3`, тем же способом, каким её раньше валил пульт).
+- `python3 -m unittest tests.test_stack tests.test_amend
+  tests.test_acceptance -v` — 44 passed (регресс затронутых модулей).
+- `python3 scripts/codebase_map.py` — перегенерирован (правка
+  `orchestrator/stack.py` и новый импорт `tests.sandbox` в
+  `tests/test_stack.py`); диф — `built_at_sha`, список «Импортируется»
+  `orchestrator/config.py` и «Импортирует» `tests/test_stack.py`
+  (`tests/sandbox.py` добавлен).
+- `python3 scripts/guard.py tasks/01M1TKP6AAY4W8GDGZNA9R0JZT/SPEC.md
+  tasks/01M1TKP6AAY4W8GDGZNA9R0JZT/PLAN.md
+  tasks/01M1TKP6AAY4W8GDGZNA9R0JZT/REVIEW.md` — «ок (3 файлов)».
+
+Код задачи вне `orchestrator/stack.py`/`tests/test_stack.py`/
+`docs/codebase-map.md` этим возвратом не менялся.
