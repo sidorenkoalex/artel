@@ -183,6 +183,28 @@ PLAIN_NUMBERED_ITEM` — читаются, не переопределяются
 - `python3 -m unittest tests.test_new_argv_parsing tests.test_invariants` — 56 тестов, зелёные.
 - `python3 scripts/codebase_map.py` — карта перегенерирована, диф только по затронутым модулям (`budget.py`, `catalog.py`, `fsm.py` — новые публичные функции/новые рёбра импорта).
 
+### Возврат: конфликт подтяжки main (коммит 94b89600)
+
+Сведён конфликт `git merge main`, описанный в ANSWER-1: `orchestrator/
+fsm.py` на main декомпозирован (SPEC 01M1TKP08PKB87K8772H69GCXJ) —
+`_cmd_approve` стал таблицей `{"spec_gate": _approve_spec_gate, ...}`,
+подтяжка вынесена в `orchestrator/pull.py`. Разрешение — по инструкции
+ANSWER-1: взята версия main целиком, поверх неё перенесены три наши
+правки (импорт `budget`, функция `_print_spec_gate_calibration_hint`,
+её вызов + `spec_text = ""` в ветке `else` внутри `_approve_spec_gate`,
+в ту же точку — после `store.update_task(..., zones=...)`, до
+`skip_reason = meta.get("skip_tests")`). `docs/codebase-map.md` —
+версия main, затем `python3 scripts/codebase_map.py` поверх слияния.
+
+Перепрогон после слияния — все зелёные:
+- `python3 -m unittest tasks.01M1TQ11K4WJZD7ZE3MR0J4ZK4.acceptance_tests.test_ac1_ac2_calibration_table tasks.01M1TQ11K4WJZD7ZE3MR0J4ZK4.acceptance_tests.test_ac5_ac6_ac7_ac8_new_hint tasks.01M1TQ11K4WJZD7ZE3MR0J4ZK4.acceptance_tests.test_ac9_ac10_ac11_gate_hint tasks.01M1TQ11K4WJZD7ZE3MR0J4ZK4.acceptance_tests.test_ac_manual_and_skip_markers` — 19 тестов.
+- `python3 -m unittest tests.test_fsm_autogate tests.test_fsm_branch_correct_status_reads tests.test_fsm_draft_mr_reentry tests.test_fsm_map_conflict_autoresolve tests.test_fsm_map_regen tests.test_fsm_merge_conflict_note tests.test_fsm_merge_gate_done_snapshot tests.test_fsm_retro tests.test_fsm_review_rework_gate` — 66 тестов (новый набор main после декомпозиции T091/01M1TKP08P — `test_fsm_merge_conflict_note`/`test_fsm_map_regen` теперь бьют по `pull.py`, не по монолиту `fsm.py`).
+- `python3 -m unittest tests.test_catalog_new_race tests.test_catalog_status_log tests.test_zones_approve tests.test_zones_gate tests.test_split_assessment_merge_gate tests.test_new_argv_parsing tests.test_spec_budget` — 87 тестов.
+- `python3 -m unittest tests.test_invariants` — 47 тестов (в т.ч. `StdlibOnlyImportsInvariantTest` — новый импорт `budget` в `fsm.py` циклов не заводит).
+- `python3 -m unittest tests.test_cmd_approve_dispatch tests.test_pull tests.test_review_package tests.test_guard_split_signals` — 126 тестов (новые модули/тесты main, декомпозиция `_cmd_approve` не задета нашей правкой).
+- `scripts/guard.py` на `PLAN.md`/`SPEC.md`/`ANSWER-1.md` — ок.
+- `git push` из этого шага не выполнялся: рабочая копия без токена git (не через `runner.role_env`) — коммит слияния (`94b89600`) в ветке, push делает штатный механизм оркестратора.
+
 ## Предложения системе
 
 - Три задачи подряд (эта, 01M1THKTJ7, 01M1THKWFX) готовят диф-приложения
