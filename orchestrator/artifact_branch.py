@@ -24,6 +24,14 @@ from . import config, fixation, gitcmd, store
 
 PASSPORT_REL_TMPL = "tasks/{task_id}/PASSPORT.md"
 
+# Классификация отказа push (SPEC 01M1TQ0X14Y5B3C87WC0Q31PK2, требование 1):
+# три причины, которые Оператору нужно различать — «заведение без origin»
+# не то же самое действие, что «сеть моргнула», не то же самое, что
+# «кто-то коммитил в origin мимо пульта» (инцидент 06.09, SPEC «Контекст»).
+PUSH_REASON_NO_ORIGIN = "нет origin"
+PUSH_REASON_NETWORK = "сеть"
+PUSH_REASON_NON_FAST_FORWARD = "non-fast-forward"
+
 
 def branch_name(task_id: str) -> str:
     """Имя артефактной ветки пульта задачи (реестр PLAN.md, требование 1:
@@ -154,7 +162,17 @@ def commit_files(task_id: str, files: dict, message: str,
     нет — родитель первого коммита см. `_new_branch_parent`, требование 1;
     для ЛЮБОГО target, включая внешний — ветка физически коммитится
     здесь, в `config.ROOT`, AC-3). Возвращает sha нового коммита; пустая
-    строка — git не ответил. `remove` — см. `write_commit`."""
+    строка — git не ответил. `remove` — см. `write_commit`.
+
+    НЕ зовёт `push` сама — push остаётся явным действием вызывающего
+    кода (`checkpoint._commit_external_step_artifacts`, `catalog.
+    _new_external_artifact_branch`, `answer._cmd_answer`): песочница
+    doctor-проверки `check_artifact_branch_sync` (SPEC
+    01M1TQ0X14Y5B3C87WC0Q31PK2, тесты `test_ac6_doctor_artifact_branch_
+    sync.py`) намеренно строит расхождение локального ref и origin ЧЕРЕЗ
+    голый `commit_files` без последующего push — автоматический push
+    внутри этой функции сделал бы такую фикстуру невоспроизводимой
+    (коммит уезжал бы в origin тем же вызовом, который её строит)."""
     branch = branch_name(task_id)
     parent = gitcmd.branch_head_sha(branch) or _new_branch_parent(task_id) or None
     commit_sha = write_commit(config.ROOT, files, message, author_name,
@@ -167,14 +185,77 @@ def commit_files(task_id: str, files: dict, message: str,
     return commit_sha
 
 
+def _classify_push_failure(stderr: str) -> str:
+    """Три причины отказа push, различаемые по подстроке `stderr` git
+    (SPEC требование 1). Non-fast-forward различён вживую (бэйр-репозиторий,
+    два клона, второй push после первого) — реальный git не несёт литерала
+    «non-fast-forward» в этой версии, а несёт `[rejected] ... (fetch
+    first)` — обе подстроки и проверяются. «Нет origin» здесь не нужен
+    (перехватывается раньше `_attempt_push`, до попытки реального push) —
+    остаток, не подошедший под non-fast-forward, классифицируется как
+    «сеть» (единственная оставшаяся причина требования 1)."""
+    lowered = stderr.lower()
+    if ("rejected" in lowered or "fetch first" in lowered
+            or "non-fast-forward" in lowered):
+        return PUSH_REASON_NON_FAST_FORWARD
+    return PUSH_REASON_NETWORK
+
+
+def _attempt_push(branch: str) -> tuple[bool, str, str]:
+    """(успех, причина отказа, stderr git) — причина/stderr пустые при
+    успехе. Отсутствие origin проверяется ДО попытки реального push
+    (`gitcmd.has_no_remote`) — не по тексту stderr: `git push` без
+    настроенного origin отвечает по-разному в зависимости от версии git,
+    а отсутствие remote проверяется напрямую и надёжно."""
+    if gitcmd.has_no_remote(config.ROOT):
+        return False, PUSH_REASON_NO_ORIGIN, ""
+    res = gitcmd.git("push", "-q", "origin",
+                     f"refs/heads/{branch}:refs/heads/{branch}")
+    if res is not None and res.returncode == 0:
+        return True, "", ""
+    stderr = (res.stderr or "").strip() if res is not None else "git не ответил"
+    return False, _classify_push_failure(stderr), stderr
+
+
+def _journal_push_outcome(task_id: str, branch: str, ok: bool, reason: str,
+                          stderr: str) -> None:
+    """Запись журнала задачи об исходе push — успех и отказ ОБА (AC-3:
+    повторная попытка на следующем автокоммите обязана оставить СВОЮ
+    запись про исход, успешный или нет, не молчать так же, как молчал бы
+    код до этой задачи). Свежее `store.db()`-соединение — та же цена,
+    что уже платят `answer.py`/`amend.py`/`catalog.py` в похожих местах,
+    не имеющих под рукой чужого `conn`; циклического импорта не образует
+    — `store.py` тянет `artifact_branch` только отложенным импортом
+    внутри функции (`store.record_fixation`), не на уровне модуля."""
+    conn = store.db()
+    if ok:
+        store.journal(conn, task_id, "orchestrator", "push артефактной ветки",
+                      f"push артефактной ветки {branch} — успех")
+        return
+    detail = reason + (f": {stderr[:300]}" if stderr else "")
+    if reason == PUSH_REASON_NON_FAST_FORWARD:
+        local_sha = gitcmd.branch_head_sha(branch)
+        origin_sha = gitcmd.remote_branch_sha(branch)
+        detail += (f"; локальный sha {local_sha}, origin sha {origin_sha} "
+                  f"— свести merge-коммитом")
+    store.journal(conn, task_id, "orchestrator",
+                  "push артефактной ветки FAILED", detail)
+
+
 def push(task_id: str) -> bool:
-    """Push best-effort артефактной ветки в origin пульта (SPEC требование
-    7, AC-8): отказ (нет origin, сеть недоступна) — `False`, не исключение
-    — вызывающий код (`catalog.cmd_new`) не имеет права из-за этого
-    отказать в заведении задачи."""
+    """Push артефактной ветки в origin пульта — best-effort в смысле
+    возврата (SPEC требование 7, AC-8: `False`, не исключение — вызывающий
+    код, включая `catalog.cmd_new`, не имеет права из-за отказа push
+    отказать в заведении задачи или прервать шаг), но НЕ молчаливый:
+    каждый исход, успех и отказ, классифицируется и журналируется (SPEC
+    01M1TQ0X14Y5B3C87WC0Q31PK2, требования 1-2). `--force`/`-f`/
+    `--force-with-lease` здесь не появляется НИКОГДА, включая
+    non-fast-forward (AC-4) — единственный аргумент ветки после `origin`
+    в команде push буквальный, без условных путей."""
     branch = branch_name(task_id)
-    res = gitcmd.git("push", "-q", "origin", f"refs/heads/{branch}:refs/heads/{branch}")
-    return res is not None and res.returncode == 0
+    ok, reason, stderr = _attempt_push(branch)
+    _journal_push_outcome(task_id, branch, ok, reason, stderr)
+    return ok
 
 
 def read_tree(task_id: str) -> dict:

@@ -18,6 +18,12 @@ worktree кодовой ветки задачи, которую эта кома�
 (`checkpoint._commit_external_step_artifacts`, «образец» из SPEC
 «Материалы»): плотницкая запись не завязана ни на чей git-конфиг, читать
 identity вызывающей сессии здесь уже нечего.
+
+Push артефактной ветки после коммита ANSWER (SPEC
+01M1TQ0X14Y5B3C87WC0Q31PK2, требование 1, AC-1) — тем же
+`artifact_branch.push`, что уже зовут автокоммит шага и `cmd_new`:
+классификация причины отказа и журналирование — внутри самой `push`,
+здесь только вызов.
 """
 import sys
 from pathlib import Path
@@ -92,6 +98,7 @@ def _cmd_answer(conn, task_id: str, file_path: str) -> None:
     if not commit_sha:
         sys.exit(f"[{task_id}] {rel_answer} не закоммичен в артефактную "
                  f"ветку {branch}")
+    artifact_branch.push(task_id)
 
     store.journal(conn, task_id, "operator", "ANSWER создан", rel_answer)
     print(f"[{task_id}] {rel_answer} создан и закоммичен в артефактную "
