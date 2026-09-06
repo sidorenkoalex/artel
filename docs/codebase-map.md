@@ -1,5 +1,5 @@
 ---
-built_at_sha: 534853f6083466edcb0da8de9a7439ff073a4945
+built_at_sha: 545ecb70ae0219f28383235ec57c061dd8413bcb
 ---
 
 # Codebase-map пульта
@@ -1863,6 +1863,16 @@ built_at_sha: 534853f6083466edcb0da8de9a7439ff073a4945
 - `row`
 
 **Импортирует:** `orchestrator/fsm.py`, `orchestrator/store.py`, `scripts/guard.py`, `tests/test_invariants.py`
+
+**Импортируется:** —
+
+## tests/test_role_bash_guard.py
+
+**Назначение:** Сторож Bash-команд роли (`docs/reference/role-home/claude/hooks/
+
+**Публичные функции:** (нет)
+
+**Импортирует:** —
 
 **Импортируется:** —
 
