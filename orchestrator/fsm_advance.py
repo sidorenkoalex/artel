@@ -254,7 +254,7 @@ def review(conn, task_id: str, t, tdir, target: str, state: str) -> bool:
             print(f"  дальше: почини код (не тест) и повтори "
                   f"artel.py advance {task_id}")
             return False
-        card = acceptance.summary(acc_tdir)
+        card = acceptance.summary(acc_tdir, branch=t["branch"])
         store.journal(conn, task_id, "fsm", "приёмочные тесты пройдены",
                       f"{card}\nокружение: {fingerprint}")
         print(f"[{task_id}] {card}")

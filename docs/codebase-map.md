@@ -1,5 +1,5 @@
 ---
-built_at_sha: 23074062e18d4009bba583a1e7e098d2d7173718
+built_at_sha: 8e3a8ce8410da461f74ec70fb8a5012f2eb90fa4
 ---
 
 # Codebase-map пульта
@@ -26,7 +26,7 @@ built_at_sha: 23074062e18d4009bba583a1e7e098d2d7173718
 - `run_full_suite`
 - `summary`
 
-**Импортирует:** `orchestrator/config.py`, `orchestrator/gitcmd.py`, `scripts/guard.py`
+**Импортирует:** `orchestrator/ci.py`, `orchestrator/config.py`, `orchestrator/gitcmd.py`, `scripts/guard.py`
 
 **Импортируется:** `orchestrator/amend.py`, `orchestrator/fsm.py`, `orchestrator/fsm_advance.py`, `orchestrator/fsm_autogate.py`, `tests/test_acceptance.py`, `tests/test_acceptance_tests_flow.py`, `tests/test_branch_freshness_gate.py`, `tests/test_fsm_autogate.py`, `tests/test_fsm_map_conflict_autoresolve.py`
 
@@ -260,7 +260,7 @@ built_at_sha: 23074062e18d4009bba583a1e7e098d2d7173718
 
 **Импортирует:** `orchestrator/config.py`, `orchestrator/gitcmd.py`
 
-**Импортируется:** `orchestrator/auto.py`, `orchestrator/fsm_advance.py`, `orchestrator/fsm_merge_gate.py`, `orchestrator/github_adapter.py`, `tests/test_auto_cycle.py`, `tests/test_ci_status.py`, `tests/test_ci_status_kind_gate.py`, `tests/test_fsm_merge_gate_done_snapshot.py`, `tests/test_invariants.py`, `tests/test_merge_gate_ci_wait.py`, `tests/test_verifying_ceiling.py`
+**Импортируется:** `orchestrator/acceptance.py`, `orchestrator/auto.py`, `orchestrator/fsm_advance.py`, `orchestrator/fsm_autogate.py`, `orchestrator/fsm_merge_gate.py`, `orchestrator/github_adapter.py`, `tests/test_acceptance.py`, `tests/test_auto_cycle.py`, `tests/test_ci_status.py`, `tests/test_ci_status_kind_gate.py`, `tests/test_fsm_autogate.py`, `tests/test_fsm_merge_gate_done_snapshot.py`, `tests/test_invariants.py`, `tests/test_merge_gate_ci_wait.py`, `tests/test_verifying_ceiling.py`
 
 ## orchestrator/cleanup.py
 
@@ -433,7 +433,7 @@ built_at_sha: 23074062e18d4009bba583a1e7e098d2d7173718
 
 **Публичные функции:** (нет)
 
-**Импортирует:** `orchestrator/acceptance.py`, `orchestrator/artifact_source.py`, `orchestrator/budget.py`, `orchestrator/fixation.py`, `orchestrator/gates.py`, `orchestrator/gitcmd.py`, `orchestrator/store.py`, `orchestrator/workspace.py`, `scripts/guard.py`
+**Импортирует:** `orchestrator/acceptance.py`, `orchestrator/artifact_source.py`, `orchestrator/budget.py`, `orchestrator/ci.py`, `orchestrator/fixation.py`, `orchestrator/gates.py`, `orchestrator/gitcmd.py`, `orchestrator/store.py`, `orchestrator/workspace.py`, `scripts/guard.py`
 
 **Импортируется:** `orchestrator/fsm_advance.py`, `tests/test_fsm_autogate.py`, `tests/test_git_fixation.py`
 
@@ -994,6 +994,7 @@ built_at_sha: 23074062e18d4009bba583a1e7e098d2d7173718
 - `basic_frontmatter_errors`
 - `check`
 - `check_content`
+- `ci_marker_wording_ok`
 - `count_test_methods`
 - `escalation_status_errors`
 - `has_redness_marker`
@@ -1080,7 +1081,7 @@ built_at_sha: 23074062e18d4009bba583a1e7e098d2d7173718
 
 **Публичные функции:** (нет)
 
-**Импортирует:** `orchestrator/acceptance.py`, `orchestrator/config.py`
+**Импортирует:** `orchestrator/acceptance.py`, `orchestrator/ci.py`, `orchestrator/config.py`
 
 **Импортируется:** —
 
@@ -1430,7 +1431,7 @@ built_at_sha: 23074062e18d4009bba583a1e7e098d2d7173718
 
 **Публичные функции:** (нет)
 
-**Импортирует:** `orchestrator/acceptance.py`, `orchestrator/artifact_source.py`, `orchestrator/budget.py`, `orchestrator/fsm_autogate.py`, `orchestrator/gitcmd.py`, `orchestrator/workspace.py`, `scripts/guard.py`
+**Импортирует:** `orchestrator/acceptance.py`, `orchestrator/artifact_source.py`, `orchestrator/budget.py`, `orchestrator/ci.py`, `orchestrator/fsm_autogate.py`, `orchestrator/gitcmd.py`, `orchestrator/workspace.py`, `scripts/guard.py`
 
 **Импортируется:** —
 
