@@ -195,11 +195,15 @@ def review_package(conn, task_id: str, title: str, branch: str, *,
     вердикта, ANSWER-n.md задачи, стат-список, diff) — по нему ревьювер
     ориентируется в пакете, а тесты сравнивают сборку.
 
-    `iteration == 1` — diff всегда от `config.MAIN_BRANCH` (T029, SPEC
-    требование 1, без изменений). `iteration > 1` с непустым `prev_sha`
-    (обычно из `previous_verdict_sha`) — diff и стат-список берутся от
-    этого sha, а не от `main` (требование 2); нет `prev_sha` — тот же
-    вырожденный откат на полный diff, что и в самой `previous_verdict_sha`.
+    `iteration == 1` — diff от `gitcmd.diff_base(branch)` (merge-base с
+    origin/main или локальным main, tasks/01M1SG9T962WJJ31S282GWM0EN,
+    требование 3/AC-3; T029, SPEC требование 1 — сам факт полного diff на
+    первой итерации не меняется, меняется только база). `iteration > 1` с
+    непустым `prev_sha` (обычно из `previous_verdict_sha`) — diff и
+    стат-список берутся от этого sha, а не от `main` (требование 2, этой
+    задачей не меняется); нет `prev_sha` — тот же вырожденный откат на
+    полный diff от `config.MAIN_BRANCH`, что и в самой
+    `previous_verdict_sha` (требование 2, тоже не меняется этой задачей).
 
     Границы недоверенных данных (tasks/01M1GV6H5DDDCWW4G3GW1D3A1X,
     AC-1/AC-2): один `run_id` на весь вызов оборачивает тело каждого
@@ -241,7 +245,23 @@ def review_package(conn, task_id: str, title: str, branch: str, *,
                           f"{rel}: sha256={context_package.sha256_of(answer_text)}")
 
     incremental = iteration > 1 and bool(prev_sha)
-    base = prev_sha if incremental else config.MAIN_BRANCH
+    if incremental:
+        base = prev_sha
+    elif iteration == 1:
+        # tasks/01M1SG9T962WJJ31S282GWM0EN, требование 3/AC-3: полный diff
+        # первой итерации — от merge-base с origin/main (или локальным
+        # main, если ref отсутствует), не от голого `config.MAIN_BRANCH` —
+        # тот же довод, что у гейтов зон/ёмкости (устаревший локальный пин
+        # тащит в дифф чужие, уже слитые коммиты). git не ответил на само
+        # определение базы — откат на прежний `config.MAIN_BRANCH`
+        # (пакет — не гейт, отказать переходу вместо ревьювера некому).
+        base = gitcmd.diff_base(branch) or config.MAIN_BRANCH
+    else:
+        # Требование 2/AC-4: iteration > 1 без prev_sha (вырожденный
+        # случай — sha предыдущего вердикта не найден) — прежний откат на
+        # полный diff от config.MAIN_BRANCH, diff_base здесь не звонится
+        # вовсе (инкрементальная ветка этой задачей не меняется).
+        base = config.MAIN_BRANCH
     diff_type = "инкрементальный" if incremental else "полный"
 
     # `tasks/<task_id>/` (SPEC, PLAN, залоченная планка) уже идёт в пакет
@@ -292,11 +312,26 @@ def review_package(conn, task_id: str, title: str, branch: str, *,
     if incremental:
         # Требование 5: инструкция, не переключатель — называет команду,
         # но не запускает её и не заводит отдельный CLI-режим («не входит»).
+        # `gitcmd.diff_base` здесь НЕ звонится (AC-4, tasks/
+        # 01M1SG9T962WJJ31S282GWM0EN, требование 2 — «инкрементальный diff
+        # этой задачей не меняется», закреплено залоченным
+        # `acceptance_tests/test_ac4_incremental_review_unchanged.py`):
+        # команда подсказки поэтому по-прежнему называет литерал
+        # `config.MAIN_BRANCH`, а не актуальную базу расхождения с
+        # origin/main. Оговорка ниже — заплата за это R1-F2 (REVIEW.md
+        # итерация 1, minor): без неё ревьювер, последовавший подсказке
+        # дословно, получил бы ровно тот diff с шумом чужих уже влитых
+        # коммитов, который вся эта задача устраняет для самого пакета —
+        # оговорка явно называет это несоответствие вместо молчаливой
+        # команды.
         parts.append(
             f"Diff выше — инкрементальный: от sha предыдущего вердикта "
             f"({prev_sha}) до HEAD ветки, не вся ветка целиком. Если для "
             f"оценки замечания недостаточно — посмотри полный diff ветки "
-            f"отдельно: `git diff {config.MAIN_BRANCH}...{branch}`.\n")
+            f"отдельно: `git diff {config.MAIN_BRANCH}...{branch}` "
+            f"(диапазон от локального {config.MAIN_BRANCH}, заведомо шире "
+            f"актуальной базы сравнения этой ветки — может содержать уже "
+            f"влитые чужие коммиты).\n")
     elif iteration > 1:
         # Требование 2/AC-5: итерация > 1, но базу определить нельзя (sha
         # предыдущего вердикта не найден в журнале или не распознан) —
