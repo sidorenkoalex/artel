@@ -464,7 +464,7 @@ def scan_id_format_samples(tdir: Path) -> list[str]:
 # checkpoint`/`store`/`gitcmd`).
 EXTRANEOUS_ACCEPTANCE_FILE_REASON = "посторонний файл в каталоге планки"
 ACCEPTANCE_TESTS_ALLOWED_TOP_LEVEL = re.compile(
-    r"^(test_.*\.py|_sandbox\.py|markers\.py|__init__\.py|.+\.md|.+\.txt)$")
+    r"^(test_.*\.py|_[A-Za-z0-9_]+\.py|markers\.py|__init__\.py|.+\.md|.+\.txt)$")
 
 
 def is_extraneous_acceptance_test_file(rel_to_acceptance_tests: str) -> bool:
