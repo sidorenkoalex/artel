@@ -1,0 +1,122 @@
+test_role_environment_refuses_before_touching_keychain (tests.test_canary.AuthorizedPoolPayloadRoleEnvTest.test_role_environment_refuses_before_touching_keychain)
+Ловит мутацию: проверка `runner.in_role_environment()` ... ok
+test_insert_canary_run_is_a_separate_table_from_tasks_and_steps (tests.test_canary.CanaryBaselineStoreRoundtripTest.test_insert_canary_run_is_a_separate_table_from_tasks_and_steps) ... ok
+test_missing_baseline_is_none (tests.test_canary.CanaryBaselineStoreRoundtripTest.test_missing_baseline_is_none) ... ok
+test_second_write_overwrites_the_same_title (tests.test_canary.CanaryBaselineStoreRoundtripTest.test_second_write_overwrites_the_same_title) ... ok
+test_write_then_read_roundtrips (tests.test_canary.CanaryBaselineStoreRoundtripTest.test_write_then_read_roundtrips) ... ok
+test_missing_pool_dir_exits (tests.test_canary.CmdCanaryBadInputTest.test_missing_pool_dir_exits) ... ok
+test_nonpositive_k_exits (tests.test_canary.CmdCanaryBadInputTest.test_nonpositive_k_exits) ... ok
+test_deviation_is_symmetric_below_baseline (tests.test_canary.DeviationTest.test_deviation_is_symmetric_below_baseline) ... ok
+test_exactly_at_threshold_is_not_a_deviation (tests.test_canary.DeviationTest.test_exactly_at_threshold_is_not_a_deviation) ... ok
+test_over_threshold_is_a_deviation (tests.test_canary.DeviationTest.test_over_threshold_is_a_deviation) ... ok
+test_within_threshold_is_not_a_deviation (tests.test_canary.DeviationTest.test_within_threshold_is_not_a_deviation) ... ok
+test_zero_baseline_and_nonzero_current_is_full_deviation (tests.test_canary.DeviationTest.test_zero_baseline_and_nonzero_current_is_full_deviation) ... ok
+test_zero_baseline_and_zero_current_is_no_deviation (tests.test_canary.DeviationTest.test_zero_baseline_and_zero_current_is_no_deviation) ... ok
+test_path_shape (tests.test_canary.DiagnosticsDirTest.test_path_shape)
+Ловит мутацию: путь строится от текущего (возможно, ... ok
+test_does_not_escalate_more_times_than_the_cap_allows (tests.test_canary.DriveTaskEscalationCapTest.test_does_not_escalate_more_times_than_the_cap_allows) ... ok
+test_repeated_escalation_is_capped_and_task_is_killed (tests.test_canary.DriveTaskEscalationCapTest.test_repeated_escalation_is_capped_and_task_is_killed) ... ok
+test_moves_past_verifying_into_review_without_killing (tests.test_canary.DriveTaskPassesVerifyingSyntheticallyTest.test_moves_past_verifying_into_review_without_killing)
+Ловит мутацию: `_drive_task` при `state == "verifying"` снова ... ok
+test_no_progress_is_capped_and_task_is_killed (tests.test_canary.DriveTaskStallCapTest.test_no_progress_is_capped_and_task_is_killed) ... ok
+test_state_is_untouched_while_stalled (tests.test_canary.DriveTaskStallCapTest.test_state_is_untouched_while_stalled) ... ok
+test_attrs_point_under_clone_inside_block_and_restore_after (tests.test_canary.EphemeralCloneConfigRemapTest.test_attrs_point_under_clone_inside_block_and_restore_after) ... ok
+test_config_restored_even_when_block_raises (tests.test_canary.EphemeralCloneConfigRemapTest.test_config_restored_even_when_block_raises) ... ok
+test_missing_marker_is_none (tests.test_canary.ExpectedEscalationMarkerTest.test_missing_marker_is_none) ... ok
+test_no_marker_is_false (tests.test_canary.ExpectedEscalationMarkerTest.test_no_marker_is_false) ... ok
+test_yes_marker_is_true (tests.test_canary.ExpectedEscalationMarkerTest.test_yes_marker_is_true) ... ok
+test_caps_at_the_given_limit_keeping_the_most_recent (tests.test_canary.JournalExcerptLinesTest.test_caps_at_the_given_limit_keeping_the_most_recent)
+Ловит мутацию: срез `lines[-limit:]` заменён на `lines[:limit]` ... ok
+test_drops_unrelated_journal_rows (tests.test_canary.JournalExcerptLinesTest.test_drops_unrelated_journal_rows)
+Ловит мутацию: условие `continue` для нецелевых действий ... ok
+test_keeps_state_transitions_refusals_and_auto_stopped (tests.test_canary.JournalExcerptLinesTest.test_keeps_state_transitions_refusals_and_auto_stopped)
+Ловит мутацию: фильтр по префиксам `state -> `/`store. ... ok
+test_journals_verifying_kill_action (tests.test_canary.KillAtVerifyingCompatTest.test_journals_verifying_kill_action)
+Ловит мутацию: `_kill_at_verifying` перестаёт журналировать ... ok
+test_kill_outcome_note_still_classifies_it_as_normal (tests.test_canary.KillAtVerifyingCompatTest.test_kill_outcome_note_still_classifies_it_as_normal)
+Ловит мутацию: `_kill_outcome_note` перестаёт узнавать ... ok
+test_different_input_gives_different_mac_key (tests.test_canary.MacKeyTest.test_different_input_gives_different_mac_key)
+Ловит мутацию: `_mac_key` игнорирует аргумент и возвращает ... ok
+test_mac_key_is_not_the_pool_key_itself (tests.test_canary.MacKeyTest.test_mac_key_is_not_the_pool_key_itself)
+Ловит мутацию: `_mac_key` возвращает ключ пула без вывода ... ok
+test_same_input_gives_same_mac_key (tests.test_canary.MacKeyTest.test_same_input_gives_same_mac_key)
+Ловит мутацию: вывод подмешивает недетерминированную соль ... ok
+test_escalation_notes_collect_every_episode_in_order (tests.test_canary.MetricsFromJournalTest.test_escalation_notes_collect_every_episode_in_order) ... ok
+test_steps_counts_only_state_transitions (tests.test_canary.MetricsFromJournalTest.test_steps_counts_only_state_transitions) ... ok
+test_task_metrics_shape_and_values (tests.test_canary.MetricsFromJournalTest.test_task_metrics_shape_and_values) ... ok
+test_normal_with_mismatch_needs_diagnostics (tests.test_canary.NeedsDiagnosticsTest.test_normal_with_mismatch_needs_diagnostics)
+Ловит мутацию: проверка `mismatch` выпала из выражения ... ok
+test_normal_without_mismatch_does_not_need_diagnostics (tests.test_canary.NeedsDiagnosticsTest.test_normal_without_mismatch_does_not_need_diagnostics)
+Ловит мутацию: `_needs_diagnostics` возвращает `True` ... ok
+test_not_normal_with_mismatch_needs_diagnostics (tests.test_canary.NeedsDiagnosticsTest.test_not_normal_with_mismatch_needs_diagnostics)
+Ловит мутацию: функция всегда возвращает `False` (или обе ... ok
+test_not_normal_without_mismatch_needs_diagnostics (tests.test_canary.NeedsDiagnosticsTest.test_not_normal_without_mismatch_needs_diagnostics)
+Ловит мутацию: `and` в выражении подменён на `or` (или ... ok
+test_decrypt_argv_never_carries_the_raw_key (tests.test_canary.OpensslSecretPassingTest.test_decrypt_argv_never_carries_the_raw_key)
+Ловит мутацию: то же самое для расшифровки — регресс к ... ok
+test_encrypt_argv_never_carries_the_raw_key (tests.test_canary.OpensslSecretPassingTest.test_encrypt_argv_never_carries_the_raw_key)
+Ловит мутацию: регресс к `-pass pass:{key}` литералом в ... ok
+test_journals_synthetic_pass_with_canary_actor (tests.test_canary.PassVerifyingTest.test_journals_synthetic_pass_with_canary_actor)
+Ловит мутацию: журнальная запись зовётся другим actor'ом или ... ok
+test_transitions_to_review_instead_of_killing (tests.test_canary.PassVerifyingTest.test_transitions_to_review_instead_of_killing)
+Ловит мутацию: `_pass_verifying` зовёт `cleanup.cmd_kill` ... ok
+test_empty_pool_serializes_to_empty_payload (tests.test_canary.PoolSerializationRoundtripTest.test_empty_pool_serializes_to_empty_payload)
+Ловит мутацию: `_serialize_pool` пишет заголовок/счётчик даже ... ok
+test_roundtrip_preserves_names_and_bytes (tests.test_canary.PoolSerializationRoundtripTest.test_roundtrip_preserves_names_and_bytes)
+Ловит мутацию: длина-префикс имени/содержимого перепутана ... ok
+test_existing_pool_dir_short_circuits_before_keychain (tests.test_canary.RestorePoolIfMissingNoOpTest.test_existing_pool_dir_short_circuits_before_keychain)
+Ловит мутацию: проверка `pool_dir.exists()` убрана или ... ok
+test_empty_pool_exits (tests.test_canary.SamplePoolTemplatesTest.test_empty_pool_exits) ... ok
+test_ignores_non_md_files_when_counting_n (tests.test_canary.SamplePoolTemplatesTest.test_ignores_non_md_files_when_counting_n) ... ok
+test_k_greater_than_n_exits (tests.test_canary.SamplePoolTemplatesTest.test_k_greater_than_n_exits) ... ok
+test_samples_exactly_k_of_n_md_files (tests.test_canary.SamplePoolTemplatesTest.test_samples_exactly_k_of_n_md_files) ... ok
+test_is_canary_defaults_to_false (tests.test_canary.StoreAndCatalogMarkingTest.test_is_canary_defaults_to_false) ... ok
+test_retro_marks_only_the_canary_task (tests.test_canary.StoreAndCatalogMarkingTest.test_retro_marks_only_the_canary_task) ... ok
+test_status_marks_only_the_canary_row (tests.test_canary.StoreAndCatalogMarkingTest.test_status_marks_only_the_canary_row) ... ok
+test_title_never_carries_the_mark (tests.test_canary.StoreAndCatalogMarkingTest.test_title_never_carries_the_mark) ... ok
+test_total_spent_counts_canary_task_alongside_product (tests.test_canary.StoreAndCatalogMarkingTest.test_total_spent_counts_canary_task_alongside_product) ... ok
+test_no_warning_when_both_metrics_within_threshold (tests.test_canary.TaskDeviationWarningsTest.test_no_warning_when_both_metrics_within_threshold) ... ok
+test_warns_on_both_metrics (tests.test_canary.TaskDeviationWarningsTest.test_warns_on_both_metrics) ... ok
+test_warns_on_steps_deviation_only (tests.test_canary.TaskDeviationWarningsTest.test_warns_on_steps_deviation_only) ... ok
+test_alerts_older_than_excludes_recent_and_includes_old (tests.test_prune.PruneAlertArchiveStoreTest.test_alerts_older_than_excludes_recent_and_includes_old) ... ok
+test_archive_alert_moves_row_and_keeps_original_id (tests.test_prune.PruneAlertArchiveStoreTest.test_archive_alert_moves_row_and_keeps_original_id) ... ok
+test_archive_alert_on_unknown_id_is_a_no_op (tests.test_prune.PruneAlertArchiveStoreTest.test_archive_alert_on_unknown_id_is_a_no_op) ... ok
+test_execute_removes_old_diagnostics_and_reports_it (tests.test_prune.PruneCanaryDiagCandidatesTest.test_execute_removes_old_diagnostics_and_reports_it)
+Ловит мутацию: `_canary_diag_candidates` собирается, но не ... ok
+test_fresh_diagnostics_file_is_not_a_candidate (tests.test_prune.PruneCanaryDiagCandidatesTest.test_fresh_diagnostics_file_is_not_a_candidate)
+Ловит мутацию: отбор по давности инвертирован или выпал ... ok
+test_no_canary_dir_yields_no_candidates (tests.test_prune.PruneCanaryDiagCandidatesTest.test_no_canary_dir_yields_no_candidates)
+Ловит мутацию: проверка `root.is_dir()` убрана — отсутствие ... ok
+test_old_diagnostics_file_is_a_candidate (tests.test_prune.PruneCanaryDiagCandidatesTest.test_old_diagnostics_file_is_a_candidate)
+Ловит мутацию: сравнение `st_mtime < cutoff` инвертировано ... ok
+test_log_of_orphan_task_survives_while_recent (tests.test_prune.PruneLogCandidatesTest.test_log_of_orphan_task_survives_while_recent) ... ok
+test_log_of_task_missing_from_db_is_a_candidate_when_old (tests.test_prune.PruneLogCandidatesTest.test_log_of_task_missing_from_db_is_a_candidate_when_old)
+Задачи с этим task_id в БД нет вовсе (осиротевший лог) — она ... ok
+test_no_logs_directory_yields_no_candidates (tests.test_prune.PruneLogCandidatesTest.test_no_logs_directory_yields_no_candidates) ... ok
+test_repeated_execute_on_already_pruned_state_is_a_no_op (tests.test_prune.PruneLogCandidatesTest.test_repeated_execute_on_already_pruned_state_is_a_no_op) ... ok
+test_dry_run_report_says_nothing_to_clean_up_when_nothing_qualifies (tests.test_prune.PruneReportEmptyStateTest.test_dry_run_report_says_nothing_to_clean_up_when_nothing_qualifies) ... ok
+test_execute_report_says_nothing_to_clean_up_when_nothing_qualifies (tests.test_prune.PruneReportEmptyStateTest.test_execute_report_says_nothing_to_clean_up_when_nothing_qualifies) ... ok
+
+----------------------------------------------------------------------
+Ran 71 tests in 1.609s
+
+OK
+[T910] -> in_dev
+[T910] -> escalated
+[T910] -> in_dev
+[T910] -> escalated
+[T910] -> in_dev
+[T910] -> escalated
+[T910] -> in_dev
+[T910] -> escalated
+[T910] -> in_dev
+[T910] -> escalated
+[T910] -> in_dev
+[T910] -> escalated
+[T913] -> review  (canary: verifying пройден синтетически)
+[T912] -> review  (canary: verifying пройден синтетически)
+[T912] -> review  (canary: verifying пройден синтетически)
+[T900] -> killed  (kill switch)
+[T901] -> killed  (kill switch)
+prune (исполнено):
+  нечего убирать

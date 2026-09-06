@@ -52,9 +52,25 @@ workflows/ci.yml`, приложение к PLAN.md этой задачи — п�
 `canary` завела (тот же принцип, что и v1). `merge_gate` canary не
 approve никогда — задача убивается штатным `cleanup.cmd_kill` (main
 этим путём не трогается — kill не мержит; здесь «main» — main клона,
-не главного пульта). `verifying` (SPEC T079) канарейка тоже не
-дожидается — CI ветки, которого у неё нет и не будет (канареечные
-задачи не заводят Draft MR), задача убивается тем же приёмом.
+не главного пульта) — единственный штатный kill во всём прогоне.
+`verifying` (SPEC T079; ADR-0015 переставил его перед ревьювером) тоже
+не дожидается — CI ветки, которого у неё нет и не будет (канареечные
+задачи не заводят Draft MR), но, в отличие от `merge_gate`, не убивает
+задачу: проходится синтетически (`_pass_verifying`) в `review`, тем же
+приёмом, что `spec_gate`/`acceptance` — ANSWER-3.md 06.09, задача
+01M1TKP269W9JN3NBJCR5Q6C3B (до ADR-0015 `verifying` шёл ПОСЛЕ ревью и
+его kill был штатным финалом; теперь он стоит до первого ревью и
+приравнивание к финалу убивало прогон раньше, чем он успевал дойти до
+сценариев «не сошлась»/эскалации). Старая `_kill_at_verifying` (v1-эпоха,
+SPEC 01M1SC3Y20YBTTJVQDJBF2NDQW) `_drive_task` больше не зовёт никогда —
+но сама функция и её классификация «штатно» в `_kill_outcome_note`
+остаются: `tasks/01M1SC3Y20YBTTJVQDJBF2NDQW/acceptance_tests/
+test_canary_report_kill_reason.py` (залоченная планка ДРУГОЙ, уже
+смерженной задачи) зовёт её напрямую и сверяет вывод — правка чужой
+планки требует отдельного мандата Оператора (REVIEW.md 01M1TKP269W9JN3
+NBJCR5Q6C3B итерации 2, R2-F1), которого эта задача не получала; функция
+живёт как чистый совместимый alias, не участвующий в реальном вождении
+канарейки.
 """
 import hashlib
 import hmac
@@ -73,8 +89,9 @@ from pathlib import Path
 
 from scripts import guard
 
-from . import (alerts, answer, artifacts, auto, catalog, cleanup, config, fsm,
-              gitcmd, keychain, runner, store, workspace, yamlmini)
+from . import (alerts, answer, artifact_branch, artifacts, auto, catalog,
+              cleanup, config, fsm, gitcmd, keychain, runner, store,
+              workspace, yamlmini)
 
 CANARY_MARK_ACTOR = "canary"
 
@@ -88,10 +105,26 @@ _SKIP_SHORTCIRCUIT_REASONS = (
     "каталог окружения роли не создан",
 )
 
-# Литералы `action`, которыми `_kill_at_merge_gate`/`_kill_at_verifying`
-# журналируют убийство — узнаются `_kill_outcome_note` (требование 4,
-# AC-4) как «штатный» исход, не «не сошлась».
+# Литерал `action`, которым `_kill_at_merge_gate` журналирует убийство —
+# узнаётся `_kill_outcome_note` (требование 4, AC-4) как «штатный» исход,
+# не «не сошлась». `verifying` больше не убивает задачу в РЕАЛЬНОМ
+# вождении (ADR-0015 сдвинул его перед ревьювером — ANSWER-3.md 06.09):
+# канарейка проходит его синтетически (`_pass_verifying`), единственный
+# штатный kill живого прогона — `merge_gate`. `_VERIFYING_KILL_ACTION`
+# ниже классифицируется так же «штатно» ради чужой залоченной планки
+# (`_kill_at_verifying`, REVIEW.md итерации 2, R2-F1) — не потому, что
+# `_drive_task` ещё может её достичь.
 _MERGE_GATE_KILL_ACTION = "canary: merge_gate не approve — задача убивается"
+
+# Литерал `action`, которым `_kill_at_verifying` (v1-эпоха, ныне
+# недостижимая из `_drive_task` — см. `_pass_verifying`) журналировала
+# убийство: `_kill_outcome_note` узнаёт его как «штатно» тем же приёмом,
+# что и `_MERGE_GATE_KILL_ACTION` — совместимость с
+# `tasks/01M1SC3Y20YBTTJVQDJBF2NDQW/acceptance_tests/
+# test_canary_report_kill_reason.py::test_ac4_verifying_kill_is_also_
+# reported_as_normal` (залоченная планка ДРУГОЙ, уже смерженной задачи —
+# правка её планки требует отдельного мандата Оператора, которого эта
+# задача не получала).
 _VERIFYING_KILL_ACTION = "canary: verifying не дожидается CI — задача убивается"
 
 # Литерал `detail`, которым `_kill_inconclusive` журналирует убийство —
@@ -519,17 +552,47 @@ def _kill_at_merge_gate(conn, task_id: str) -> None:
 
 
 def _kill_at_verifying(conn, task_id: str) -> None:
-    """`verifying` (SPEC T079) ждёт реального CI ветки — у канареечной
-    задачи его никогда не будет. Ждать здесь потолок `advance` (SPEC
-    T079, требование 6) — платить реальным временем прогона canary за
-    заведомо недостижимый зелёный CI; убиваем сразу, тем же приёмом, что
-    `_kill_at_merge_gate` (требование 11, AC-11)."""
+    """v1-эпоха (SPEC T079) — `_drive_task` эту функцию больше НЕ зовёт
+    (ADR-0015 переставил `verifying` перед ревьювером, реальное вождение
+    идёт через `_pass_verifying`, см. её докстринг). Функция и признание
+    её литерала «штатным» в `_kill_outcome_note` оставлены нетронутыми
+    ЧИСТО ради совместимости с залоченной планкой ДРУГОЙ, уже смерженной
+    задачи (`tasks/01M1SC3Y20YBTTJVQDJBF2NDQW/acceptance_tests/
+    test_canary_report_kill_reason.py::
+    test_ac4_verifying_kill_is_also_reported_as_normal` зовёт её
+    напрямую) — правка чужой планки требует отдельного мандата Оператора
+    (REVIEW.md 01M1TKP269W9JN3NBJCR5Q6C3B итерации 2, R2-F1), которого
+    эта задача не получала."""
     store.journal(conn, task_id, CANARY_MARK_ACTOR,
-                 "canary: verifying не дожидается CI — задача убивается",
+                 _VERIFYING_KILL_ACTION,
                  "канареечная задача не заводит Draft MR и не имеет "
                  "реального CI ветки (tasks/T079/SPEC.md, требование 1 — "
                  "canary вне объёма адаптера)")
     cleanup.cmd_kill(task_id)
+
+
+def _pass_verifying(conn, task_id: str) -> None:
+    """`verifying` (SPEC T079; ADR-0015 переставил его перед ревьювером,
+    `in_dev -> verifying -> review`) ждёт реального CI ветки — у
+    канареечной задачи его никогда не будет, а Draft MR она не заводит
+    (tasks/T079/SPEC.md, требование 1 — canary вне объёма адаптера).
+    Раньше (до ADR-0015) это состояние шло ПОСЛЕ ревью и её убийство
+    здесь было штатным финалом прогона; теперь оно стоит ДО первого
+    ревью, и приравнивание к финальному kill убивало канарейку прежде,
+    чем сценарий «не сошлась»/эскалация вообще успевали случиться
+    (ANSWER-3.md, 06.09: 6 из 18 приёмочных тестов планки покраснели
+    после подтяжки main по этой причине). Проходим синтетически, тем же
+    приёмом, что `_pass_spec_gate`/`_pass_acceptance_gate` — единственный
+    штатный kill канарейки остаётся `_kill_at_merge_gate`."""
+    store.journal(conn, task_id, CANARY_MARK_ACTOR,
+                 "canary: verifying пройден синтетически — CI у "
+                 "эфемерного клона нет",
+                 "канареечная задача не заводит Draft MR и не имеет "
+                 "реального CI ветки (tasks/T079/SPEC.md, требование 1 — "
+                 "canary вне объёма адаптера)")
+    store.set_state(conn, task_id, "review", CANARY_MARK_ACTOR,
+                    expected_state="verifying",
+                    detail="canary: verifying пройден синтетически")
 
 
 def _pass_escalated_with_synthetic_answer(conn, task_id: str) -> None:
@@ -593,9 +656,13 @@ def _last_role_skip_reason(conn, task_id: str) -> str | None:
 
 def _kill_outcome_note(steps) -> str:
     """Причина исхода `killed` для отчёта прогона (требование 4, AC-4):
-    «штатно» — `_kill_at_merge_gate`/`_kill_at_verifying` (эти пути и
-    раньше не были ошибкой конвейера), иначе — «не сошлась: <причина>»
-    с текстом причины из журнальной записи `_kill_inconclusive` (её
+    «штатно» — `_kill_at_merge_gate` (единственный путь, которым
+    РЕАЛЬНОЕ вождение `_drive_task` убивает задачу сегодня — `verifying`
+    теперь проходится синтетически, не убивает, `_pass_verifying`) и
+    `_kill_at_verifying` (недостижима из `_drive_task`, распознаётся
+    здесь только ради совместимости с чужой залоченной планкой — см.
+    докстринг `_kill_at_verifying`), иначе — «не сошлась: <причина>» с
+    текстом причины из журнальной записи `_kill_inconclusive` (её
     `detail` — фиксированный литерал-маркер, `action` несёт саму
     причину — требование 3/AC-3 идёт этим же путём)."""
     for r in reversed(steps):
@@ -663,8 +730,8 @@ def _drive_task(conn, task_id: str) -> None:
             _kill_at_merge_gate(conn, task_id)
             return
         if state == "verifying":
-            _kill_at_verifying(conn, task_id)
-            return
+            _pass_verifying(conn, task_id)
+            continue
         if state == "escalated":
             escalation_cycles += 1
             if escalation_cycles > config.CANARY_MAX_ESCALATION_CYCLES:
@@ -753,22 +820,115 @@ def _task_deviation_warnings(metrics: dict, baseline, ratio: float) -> list:
     return warnings
 
 
+# Литерал `action`, которым `auto.cmd_auto` журналирует остановку цикла
+# (`orchestrator/auto.py:291`) — та же строка узнаётся выдержкой журнала
+# (требование 2, AC-6), без отдельной разделяемой константы: `auto.py` не
+# экспортирует её как публичное имя, а дублирование одного литерала
+# третьей копией — тот же принцип, что уже есть у `store.
+# REFUSAL_ACTION_PREFIX`/`auto.REFUSAL_ACTION_PREFIX`.
+_AUTO_STOPPED_ACTION = "auto остановлен"
+
+# Потолок строк выдержки журнала (требование 2, AC-6) — с запасом под
+# итоговую строку метрик и строку пути диагностики, которые печатаются
+# ниже: суммарный вывод по задаче не должен вылезать за 20 строк
+# целиком, не только сама выдержка.
+_JOURNAL_EXCERPT_LIMIT = 18
+
+
+def _journal_excerpt_lines(steps, limit: int = _JOURNAL_EXCERPT_LIMIT) -> list:
+    """Выдержка журнала задачи (требование 2, AC-6): переходы состояний
+    (`state -> ...`) и записи «переход отклонён»/«auto остановлен» —
+    вместо одной итоговой строки исхода. Последние `limit` записей по
+    времени — самые информативные для итога прогона (причина
+    финального kill журналируется непосредственно перед ним).
+
+    `detail` схлопывается в одну строку (`" ".join(...split())`): текст
+    некоторых записей (эскалация от разработчика несёт содержимое
+    секции «Эскалация» PLAN.md целиком) содержит переводы строк — без
+    схлопывания ОДНА запись журнала печаталась бы НЕСКОЛЬКИМИ
+    физическими строками вывода, срывая потолок в 20 строк на задачу
+    (требование 2) числом записей, укладывающимся в лимит `limit`."""
+    lines = []
+    for row in steps:
+        action = row["action"]
+        if not (action.startswith("state -> ")
+               or action.startswith(store.REFUSAL_ACTION_PREFIX)
+               or action == _AUTO_STOPPED_ACTION):
+            continue
+        detail = " ".join((row["detail"] or "").split())
+        suffix = f" — {detail}" if detail else ""
+        lines.append(f"{row['ts']} {row['actor']}: {action}{suffix}")
+    return lines[-limit:]
+
+
+def _needs_diagnostics(normal_outcome: bool, mismatch: bool) -> bool:
+    """ANSWER-1.md, правило 1 (требование 1, AC-1/AC-4): диагностика
+    сохраняется во всех случаях, КРОМЕ штатного исхода БЕЗ расхождения
+    маркера — единственная комбинация, где сохранять нечего расследовать."""
+    return not (normal_outcome and not mismatch)
+
+
+def _diagnostics_dir(outer_root: Path, run_stamp: str, task_id: str) -> Path:
+    return outer_root / ".artel" / "canary" / run_stamp / task_id
+
+
+def _save_diagnostics(outer_root: Path, run_stamp: str, task_id: str,
+                      steps) -> Path:
+    """Сохраняет диагностику незелёного/расходящегося исхода канареечной
+    задачи ДО удаления эфемерного клона (требование 1, AC-1..AC-3):
+    журнал задачи (`steps`) текстом, логи ролей клона, последние
+    PLAN.md/REVIEW.md из артефактной ветки клона, если они там есть.
+
+    Зовётся ИЗНУТРИ `with _ephemeral_clone()` — `config.LOGS`/`gitcmd.show`
+    в этот момент читают клон (`_CLONE_CONFIG_ATTRS` уже подменены), не
+    внешний пульт; `outer_root` — путь СНАРУЖИ клона (`config.ROOT` до
+    входа в блок), под который складывается результат, чтобы диагностика
+    пережила `shutil.rmtree` клона на выходе из блока."""
+    diag_dir = _diagnostics_dir(outer_root, run_stamp, task_id)
+    diag_dir.mkdir(parents=True, exist_ok=True)
+
+    lines = [f"{r['ts']} {r['actor']}: {r['action']}"
+            + (f" — {r['detail']}" if r["detail"] else "")
+            for r in steps]
+    (diag_dir / "steps.txt").write_text(
+        "\n".join(lines) + ("\n" if lines else ""), encoding="utf-8")
+
+    if config.LOGS.is_dir():
+        for log_path in sorted(config.LOGS.glob(f"{task_id}-*.log")):
+            shutil.copy2(log_path, diag_dir / log_path.name)
+
+    branch = artifact_branch.branch_name(task_id)
+    for name in ("PLAN.md", "REVIEW.md"):
+        text, _reason = gitcmd.show(branch, f"tasks/{task_id}/{name}")
+        if text is not None:
+            (diag_dir / name).write_text(text, encoding="utf-8")
+
+    return diag_dir
+
+
 def _run_one_task(template_path: Path, run_stamp: str, ratio: float) -> None:
     """Полный цикл одной канареечной задачи: заводит, ведёт в собственном
     эфемерном клоне (требование 2), пишет метрики/бейзлайн в БД пульта
     СНАРУЖИ клона (требование 5, 9) и печатает итог.
 
     Создание задачи и её вождение — с подавленным stdout
-    (`redirect_stdout`): между строкой «заведена» и итоговой сводкой
-    иначе ложится десяток строк `store.set_state`/`cleanup.cmd_kill` —
-    планка ищет слово расхождения/отклонения рядом с ПЕРВЫМ вхождением
-    `task_id` в вывод (требование 8, 12), и шум между ними эту проверку
-    ломает. Две короткие строки на задачу («заведена» + сводка) держат
-    это гарантированно рядом.
+    (`redirect_stdout`): между строкой «заведена» и остальным выводом
+    иначе ложится десяток строк `store.set_state`/`cleanup.cmd_kill`.
+
+    «Штатный исход без расхождения» (ANSWER-1.md, вариант Б) — ЕДИНСТВЕННЫЙ
+    случай, где диагностика не сохраняется (требование 1, AC-4) и где
+    бейзлайн/сравнение отклонений вообще применяются (требование 3,
+    AC-7/AC-8): `_kill_outcome_note` отличает штатный kill на
+    `merge_gate` (единственный штатный kill РЕАЛЬНОГО вождения —
+    `verifying` теперь проходится синтетически, ANSWER-3.md 06.09; см.
+    также недостижимую из `_drive_task` `_kill_at_verifying`, оставленную
+    ради чужой планки, REVIEW.md итерации 2 R2-F1) от «не сошлась»,
+    `mismatch` — расхождение маркера ожидания эскалации с фактом.
     """
     raw = template_path.read_text(encoding="utf-8")
     title = template_path.stem
     expected = _expected_escalation(raw)
+    outer_root = config.ROOT
 
     with _ephemeral_clone():
         conn = store.db()
@@ -788,13 +948,18 @@ def _run_one_task(template_path: Path, run_stamp: str, ratio: float) -> None:
                 raise RuntimeError(
                     f"canary: worktree для {task_id} не создан: {wt_error}")
             _drive_task(conn, task_id)
+        steps = store.task_steps(conn, task_id)
         metrics = _task_metrics(conn, task_id)
+        actual = bool(metrics["escalations"])
+        mismatch = expected is not None and expected != actual
+        normal_outcome = metrics["kill_note"] == "штатно"
+        diag_dir = None
+        if _needs_diagnostics(normal_outcome, mismatch):
+            diag_dir = _save_diagnostics(outer_root, run_stamp, task_id, steps)
 
     print(f"[canary] {task_id} заведена из {template_path.name}")
 
     outer_conn = store.db()
-    actual = bool(metrics["escalations"])
-    mismatch = expected is not None and expected != actual
     store.insert_canary_run(
         outer_conn, run_stamp, title, task_id, metrics["steps"],
         metrics["cost_usd"], metrics["review_iterations"],
@@ -803,21 +968,27 @@ def _run_one_task(template_path: Path, run_stamp: str, ratio: float) -> None:
         actual, mismatch)
 
     note = ""
-    baseline = store.canary_baseline(outer_conn, title)
-    if baseline is None:
-        store.set_canary_baseline(outer_conn, title, metrics["steps"],
-                                  metrics["cost_usd"],
-                                  metrics["review_iterations"])
-        note = "  [бейзлайн создан]"
-    else:
-        warnings = _task_deviation_warnings(metrics, baseline, ratio)
-        if warnings:
-            for w in warnings:
-                alerts.raise_alert(
-                    outer_conn, task_id, "threshold", "canary",
-                    f"канарейка {title} ({task_id}): {w}")
-            note = "  [ВНИМАНИЕ: отклонение от бейзлайна: " + \
-                "; ".join(warnings) + "]"
+    if not _needs_diagnostics(normal_outcome, mismatch):
+        # Требование 3/AC-7/AC-8: бейзлайн заводится и сравнение отклонений
+        # применяется ТОЛЬКО для штатного исхода без расхождения маркера —
+        # прогон, снятый как «не сошлась», или с расхождением, в это
+        # сравнение не попадает, даже если он первый для шаблона (копилка
+        # 06.09: killed-прогон дважды за день ложно завёл бейзлайн).
+        baseline = store.canary_baseline(outer_conn, title)
+        if baseline is None:
+            store.set_canary_baseline(outer_conn, title, metrics["steps"],
+                                      metrics["cost_usd"],
+                                      metrics["review_iterations"])
+            note = "  [бейзлайн создан]"
+        else:
+            warnings = _task_deviation_warnings(metrics, baseline, ratio)
+            if warnings:
+                for w in warnings:
+                    alerts.raise_alert(
+                        outer_conn, task_id, "threshold", "canary",
+                        f"канарейка {title} ({task_id}): {w}")
+                note = "  [ВНИМАНИЕ: отклонение от бейзлайна: " + \
+                    "; ".join(warnings) + "]"
 
     mismatch_note = ""
     if mismatch:
@@ -827,11 +998,15 @@ def _run_one_task(template_path: Path, run_stamp: str, ratio: float) -> None:
             f"{'эскалация была' if actual else 'эскалации не было'}]")
 
     outcome_note = f" ({metrics['kill_note']})" if metrics["kill_note"] else ""
+    for line in _journal_excerpt_lines(steps):
+        print(f"  {line}")
     print(f"  {task_id}: шагов={metrics['steps']}  "
          f"${metrics['cost_usd']:.2f}  "
          f"ревью-итераций={metrics['review_iterations']}  "
          f"эскалаций={len(metrics['escalations'])}  "
          f"исход={metrics['outcome']}{outcome_note}{mismatch_note}{note}")
+    if diag_dir is not None:
+        print(f"  диагностика: {diag_dir}")
 
 
 def cmd_canary(*, k: int) -> None:
