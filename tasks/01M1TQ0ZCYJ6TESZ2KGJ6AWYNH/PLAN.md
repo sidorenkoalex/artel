@@ -264,6 +264,43 @@ MAIN_BRANCH)` — короткое замыкание `or` уже гаранти
   `test_doctor.py` — 273 passed, 17 subtests passed. `python3 scripts/
   codebase_map.py` регенерирован (новый файл `tests/`), `scripts/
   guard.py` на артефактах задачи — `GUARD: ок`.
+- Возврат «конфликт подтяжки main» (06.09, конфликтные файлы `docs/
+  codebase-map.md`, `orchestrator/artifact_branch.py`, `orchestrator/
+  doctor.py`): конфликт возник не из работы этой задачи, а из того, что
+  в `main` параллельно смёржена задача 01M1TQ0X14Y5B3C87WC0Q31PK2
+  (журнал push артефактной ветки, `check_artifact_branch_sync`/
+  `check_artifact_branch_ci` в `orchestrator/doctor.py`) — оба
+  разрешающих коммита (`ab4f138a` — слияние `main`, `4ea79328` —
+  слияние ветки 01M1TQ0X14 поверх) уже сведены Оператором ДО этого
+  шага (сообщения коммитов: «сведение Оператором: импорт ci и
+  all_checks в doctor.py, докстринг commit_files»). Этот шаг —
+  проверка результата, а не повторное разрешение: сверил `git diff
+  fbc398e0 HEAD -- orchestrator/artifact_branch.py orchestrator/
+  gitcmd.py orchestrator/doctor.py` на предмет кода ИМЕННО этой задачи
+  (`_new_branch_parent`, `fetch_head_sha`, `check_artifact_branch_
+  parent_ancestry`/`_artifact_branch_first_commit_parent`) — все три
+  функции пережили оба слияния без потерь (`grep` подтверждает
+  наличие), `check_artifact_branch_parent_ancestry` по-прежнему
+  отдельная запись в `all_checks`, не растворилась в новой `check_
+  artifact_branch_sync` соседней задачи (что и предсказывал PLAN
+  «Подход» — разные вопросы, разные проверки).
+  `docs/codebase-map.md` после слияний остался нерегенерированным
+  (`built_at_sha` отставал от HEAD на два коммита; конвенция
+  conventions-core требует регенерации отдельным шагом сразу после
+  разрешения конфликтов подтяжки, если она не сделана тем же коммитом)
+  — перегенерирован (`python3 scripts/codebase_map.py`) и закоммичен
+  этим шагом. Прогон после слияний: 7/7 приёмочных тестов задачи;
+  `tests/test_doctor.py` + `tests/test_artifact_branch_new_parent.py`
+  + `tests/test_artifact_branch_push.py` + `tests/
+  test_doctor_artifact_branch_sync.py` + `tests/
+  test_doctor_artifact_branch_ci.py` — 142 passed, 3 subtests passed;
+  `tests/test_gitcmd_branch_reads.py` + `test_gitcmd_carpentry.py` +
+  `test_gitcmd_check_ignore.py` + `test_git_fixation.py` +
+  `test_catalog_new_race.py` + `test_catalog_status_log.py` +
+  `test_artifact_materialization.py` + `test_multitarget.py` +
+  `test_multitarget_invariants.py` + `test_branch_freshness_gate.py` +
+  `test_doctor_fix_ignored_artifacts.py` — 169 passed, 14 subtests
+  passed. `scripts/guard.py` на артефактах задачи — `GUARD: ок`.
 
 ## Предложения системе
 
