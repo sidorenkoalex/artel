@@ -1,0 +1,20 @@
+---
+operator: Alexander Sidorenko
+model: unknown
+artel_sha: 8df189fbd9e8b0355aafda0f74a1298c629a7af7
+---
+
+# RETRO: 01M1SHDCW7FGJPTMD0FSFWGZ5S — бюджет задачи по ADR-0014: дефолт, потолок ролей, обязательный budget_usd в SPEC, переоценка на PLAN
+
+Итог: killed — причина: kill switch
+Адрес артефактов: артефакты не сохранены (ветка удалена при kill)
+Суть: бюджет задачи по ADR-0014: дефолт, потолок ролей, обязательный budget_usd в SPEC, переоценка на PLAN — --- task: 01M1SHDCW7FGJPTMD0FSFWGZ5S type: tz author_role: operator status: draft schema_version: 2 --- # ТЗ: бюджет задачи по ADR-0014: дефолт, потолок ролей, обязательный budget_usd в SPEC, переоценка на PLAN # ТЗ: дефолт, потолок ролей и статическая оценка бюджета задачи (ADR-0014) Источник: ADR-0014 (`docs/adr/0014-budget-default-and-role-cap.md`, принят Оператором 05.09), бэклог 05.09 приоритет 2.
+
+Стоимость итого: $3.86
+  analyst: $2.38, 2633682 токенов
+
+Ревью: 0 итераций; приёмка: 0 отказ(ов)
+
+Эскалации: нет
+
+Приёмочные тесты: 0 тест(ов), 0 manual, 0 skip
