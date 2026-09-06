@@ -2,7 +2,7 @@
 task: 01M1VBEDGMEXHVGWAH42FTDZ4X
 type: plan
 author_role: developer
-status: ready
+status: escalate
 schema_version: 5
 ---
 
@@ -81,6 +81,33 @@ detail, совпадающим с одним из двух известных т
 приёмочным тестом на управляемое значение — обе ветки корректно
 дают fail-open/сравнение на существующих тестах (AC-16).
 
+**Возврат по причине конфликта подтяжки main (см. ANSWER-1).** Ветка
+задачи стартовала от c4f89371 — ДО того, как в main смержился ADR-0015
+«CI до ревью» (01M1TQ0TRC), поменявший местами `review` и `verifying`
+в порядке состояний: было `in_dev -> review -> verifying -> acceptance`,
+стало `in_dev -> verifying -> review -> acceptance` (сверка головы на
+origin и прогон acceptance_tests переехали с входа `review()` на вход
+`in_dev()`, `review()` approved теперь ведёт прямиком в `acceptance`,
+не в `verifying`). `git merge origin/main` — конфликт в
+`orchestrator/fsm_advance.py::review()` (мой гейт
+`_review_escalation_sha_gate` вставлен в блок, который ADR-0015 убрал
+целиком) и `docs/codebase-map.md`; разрешено по точному месту, данному
+ANSWER-1: гейт вставлен один, без `_origin_push_gate`/`is_canary` (та
+проверка уже переехала в `in_dev()`, строка ~1180), карта взята с
+main и перегенерирована. Юнит-тесты (`tests/test_budget*.py`,
+`tests/test_auto*.py`, `tests/test_fsm_review_rework*.py`,
+`tests/test_fsm_advance*.py`, `tests/test_advance_guard.py`,
+`tests/test_review_freshness.py`, `tests/test_review_registry_gate.py`,
+`tests/test_zones_gate.py`, `tests/test_capacity_gate.py`,
+`tests/test_branch_freshness_gate.py`, `tests/test_verifying_ceiling.py`,
+`tests/test_cmd_approve_dispatch.py` — 171 тестов) зелёные без правки
+утверждений: они не завязаны на конкретное имя состояния после
+`review`, только на журнал/детали отказов. См. раздел «Эскалация» ниже
+— свежая планка `tasks/<id>/acceptance_tests/` (обнаружено ТОЛЬКО
+после завершения подтяжки, прогоном планки) буквально проверяет имя
+состояния `verifying`/`review`, зафиксированное ДО переезда ADR-0015,
+и теперь не совпадает с фактическим (корректным) поведением.
+
 ## Шаги
 
 1. `orchestrator/lease.py`: `same_host_ok` в `acquire()`/`run_locked()`;
@@ -93,7 +120,11 @@ detail, совпадающим с одним из двух известных т
    записи возврата из эскалации при поиске анкера.
 4. `orchestrator/fsm_advance.py`: `_review_escalation_sha_gate` +
    `_code_sha_at_review_escalation`, вызов гейта в `review()` для
-   `status == "approved"` до `_origin_push_gate`.
+   `status == "approved"` (после подтяжки main/ADR-0015 — сразу после
+   `_freshness_refuses`, до `iteration = artifacts.
+   fresh_verdict_iteration(...)`; `_origin_push_gate` этой веткой не
+   вызывается — переехал в `in_dev()` ДО начала работы над этой
+   задачей, см. «Подход»).
 5. Юнит-тесты: `tests/test_budget_live_lease_and_escalation.py` (шаги
    1-2), `tests/test_auto_escalated_return_rework_gate.py` (шаг 3),
    `tests/test_fsm_review_rework_sha_gate.py` (шаг 4) — имена под маски
@@ -123,7 +154,10 @@ detail, совпадающим с одним из двух известных т
   одновременно и осознанно (это и есть требование 2) — не побочный
   эффект.
 - Гейт `_review_escalation_sha_gate` — НОВАЯ точка отказа перехода
-  `review -> verifying`, но срабатывает только при выполнении ВСЕХ
+  `review -> acceptance` (имя цели уточнено после подтяжки main —
+  ADR-0015 переставил `review` и `verifying` местами, см. выше; на
+  момент написания SPEC этого раздела цель называлась `verifying`),
+  но срабатывает только при выполнении ВСЕХ
   условий: эскалация из `review` была именно по бюджету
   (`enforce_budget`, не по вердикту `escalate`/лимиту ревью — те не
   проходят через `enforce_budget`), эта запись новее последнего прогона
@@ -156,4 +190,134 @@ detail, совпадающим с одним из двух известных т
 
 ## Предложения системе
 
-(пусто)
+- Класс «планка `tasks/<id>/acceptance_tests/` фиксирует буквальное имя
+  состояния FSM, а состояние переставляют местами последующим ADR,
+  смерженным в main, пока задача стояла эскалированной» — см.
+  «Эскалация» ниже; кандидат в copilka/backlog.md, тот же тип проблемы,
+  что П2 06.09 (отставание ветки от main до первого шага developer), но
+  на уровне ЛОКАЛЬНОЙ планки конкретной задачи, не только кода.
+
+## Эскалация
+
+### Вопросы
+
+1. (блокирует) Три сценария локальной планки `tasks/01M1VBEDGMEXHVGWAH42FTDZ4X/acceptance_tests/`
+   буквально проверяют имя состояния FSM (`"verifying"`/`"review"`),
+   зафиксированное ДО того, как ADR-0015 (01M1TQ0TRC, уже смержен в
+   main) поменял `review` и `verifying` местами в порядке состояний
+   (см. «Подход»/«Влияние на систему» выше). После честной подтяжки
+   main (см. ANSWER-1) факт таков:
+   - AC-8 (`test_ac8_ac9_ac14_ac15_review_verdict_sha.py:86`) и AC-14
+     (там же, `:136`) ожидают `self.state() == "verifying"` сразу после
+     возврата в `review` с approved-вердиктом и неизменным sha; по
+     факту (корректно, по ADR-0015) задача идёт в `"acceptance"` —
+     `review -> verifying` в новом порядке вообще не существует как
+     переход (verifying стоит ДО review, не после).
+   - AC-12 (`test_ac12_ac13_escalated_return_regression.py:64`) ожидает
+     `self.state() == "review"` после `auto()` от уже готового
+     `PLAN.md`, без мока `ci.verifying_status` — по факту (тоже
+     корректно) `auto` останавливается на новом промежуточном
+     `"verifying"` (CI не отвечает зелёным по дефолту песочницы),
+     не дойдя до `review` за один вызов.
+   Все 171 юнит-тест (`tests/test_budget*.py`, `tests/test_auto*.py`,
+   `tests/test_fsm_review_rework*.py`, `tests/test_fsm_advance*.py` и
+   ещё 8 планок, см. «Подход») и оставшиеся 13 из 16 сценариев планки —
+   зелёные; сама механика требований 1-3 SPEC работает по всем AC,
+   расхождение только в трёх буквальных именах состояния плюс
+   отсутствующем моке CI. Я не могу это починить сам: `tasks/<id>/
+   acceptance_tests/` залочены для разработчика (conventions-core) —
+   правка требует эскалации, не самостоятельного решения; вернуть
+   ADR-0015 к старому порядку состояний, чтобы планка совпала буквально,
+   я тоже не вправе (принцип целостности — решение Оператора через ADR,
+   и это отменило бы уже смерженный и не относящийся к этой задаче
+   ADR).
+   Проверенный (прогнан на временных копиях в `_scratch_verify/`, потом
+   удалённых, планка не тронута) минимальный патч — правит только три
+   точки, не переписывает сценарии:
+
+   ```diff
+   --- a/tasks/01M1VBEDGMEXHVGWAH42FTDZ4X/acceptance_tests/test_ac8_ac9_ac14_ac15_review_verdict_sha.py
+   +++ b/tasks/01M1VBEDGMEXHVGWAH42FTDZ4X/acceptance_tests/test_ac8_ac9_ac14_ac15_review_verdict_sha.py
+   @@ -83,7 +83,7 @@ class UnchangedShaSkipsANewReviewerRunTest(_ReviewSandbox):
+
+            self.capture(fsm.cmd_advance, self.TASK)
+
+   -        self.assertEqual(self.state(), "verifying")
+   +        self.assertEqual(self.state(), "acceptance")
+
+
+    class ChangedShaBlocksTheTransitionTest(_ReviewSandbox):
+   @@ -133,7 +133,7 @@ class UnchangedShaAutoCycleSkipsTheReviewerTest(_ReviewSandbox):
+            self.agent.script = [lambda: None]
+            self.auto()
+
+   -        self.assertEqual(self.state(), "verifying")
+   +        self.assertEqual(self.state(), "acceptance")
+            reviewer_steps = [a for a in agent_run_finished_actors(conn, self.TASK)
+                             if a == "reviewer"]
+            self.assertEqual(len(reviewer_steps), 1)
+   --- a/tasks/01M1VBEDGMEXHVGWAH42FTDZ4X/acceptance_tests/test_ac12_ac13_escalated_return_regression.py
+   +++ b/tasks/01M1VBEDGMEXHVGWAH42FTDZ4X/acceptance_tests/test_ac12_ac13_escalated_return_regression.py
+   @@ -19,7 +19,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+    from _sandbox import (AutoCycleTest, agent_run_finished_actors,  # noqa: E402
+                          journal_agent_run_finished)
+   -from orchestrator import auto, budget, fsm, store  # noqa: E402
+   +from orchestrator import auto, budget, ci, fsm, store  # noqa: E402
+
+
+    class ReturnAfterAnAlreadyFinishedDeveloperStepAdvancesTest(AutoCycleTest):
+   @@ -41,6 +41,9 @@ class ReturnAfterAnAlreadyFinishedDeveloperStepAdvancesTest(AutoCycleTest):
+            застрянет в `in_dev`, повторно позвав developer, и не дойдёт до
+            `review` в границах одного вызова `auto`.
+            """
+   +        self.patch_object(ci, "verifying_status",
+   +                          lambda branch: (ci.VERIFYING_GREEN,
+   +                                          "CI коммита aaaaaaaa зелёный (2 проверок)"))
+            conn = store.db()
+            self.write_plan("ready")
+            self.set_state("review")
+   ```
+
+   Варианты:
+   a) Оператор применяет патч выше (`amend-tests` либо правкой в
+      артефактной ветке) — я продолжаю с шага 4 (прогон планки,
+      guard, коммит, PLAN.md status: ready) следующим шагом.
+   b) Оператор считает планку/SPEC устаревшими иначе (другая замена
+      имени состояния, другой мок) — жду точных строк для применения.
+   c) Оператор решает, что механика ДОЛЖНА буквально попадать в
+      `verifying`/`review` (то есть требование 3/2 этой задачи имели в
+      виду что-то отличное от «сразу после review» в терминах СТАРОГО
+      порядка ADR-0015, а не переименование) — прошу уточнить, что
+      именно тогда должно измениться в реализации требований 2/3 (см.
+      «Подход»), раз текущая реализация уже проходит все AC SPEC
+      функционально, кроме буквального имени состояния.
+   Дефолт при молчании: (a) — применить патч выше как есть.
+
+### Контекст
+
+- Merge с `origin/main` завершён и закоммичен (`git merge origin/main`,
+  коммит «подтяжка origin/main…» этой сессии): конфликты
+  `orchestrator/fsm_advance.py` (гейт `_review_escalation_sha_gate`
+  вставлен по месту, данному ANSWER-1) и `docs/codebase-map.md` (взята
+  версия main, перегенерирована `scripts/codebase_map.py`) разрешены.
+- 171 юнит-тест зелёные (см. список файлов в «Подход»), `scripts/
+  guard.py` на SPEC.md/PLAN.md/ANSWER-1.md — без замечаний.
+- Планка `tasks/01M1VBEDGMEXHVGWAH42FTDZ4X/acceptance_tests/` — 13 из
+  16 тестов зелёные; 3 падают строго по причине переименования/
+  перестановки состояний ADR-0015 (см. «Вопросы» п.1), не по ошибке
+  реализации требований 1-3 — красная строка изолирована к трём
+  `assertEqual`/одному отсутствующему моку, дифф выше.
+- Диф проверен: применён к временным копиям файлов планки в
+  `tasks/01M1VBEDGMEXHVGWAH42FTDZ4X/_scratch_verify/` (не в самой
+  планке), прогнан `python3 -m unittest` — все 6 тестов файлов
+  AC8/AC12 зелёные с патчем; каталог `_scratch_verify/` удалён после
+  проверки, планка на диске не тронута ни байтом.
+
+### Блокирует
+
+Не могу поставить `status: ready` и закоммитить весь шаг как готовый:
+планка красна тремя тестами, а её правка вне полномочий роли developer
+(conventions-core: «их правка — эскалация, не правка»). Код и юнит-тесты
+уже в ветке (коммит подтяжки этой сессии) — при ответе (a) следующий
+шаг завершает PLAN без новой работы над самой логикой требований 1-3.
