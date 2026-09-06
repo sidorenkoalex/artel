@@ -85,15 +85,28 @@ logs/`, но БЕЗ фильтра «последние N закрытых за�
    на задачу. Юнит-тесты чистых функций в `tests/test_canary.py`.
 2. `orchestrator/prune.py`: `_canary_diag_candidates`, интеграция в
    `cmd_prune`/`_print_report`. Юнит-тесты в `tests/test_prune.py`.
-3. (ANSWER-3.md, 06.09) `orchestrator/canary.py`: `_kill_at_verifying`
-   заменена на `_pass_verifying` (журналирует «canary: verifying
-   пройден синтетически» и переводит задачу в `review` вместо kill);
-   `_VERIFYING_KILL_ACTION` убран, `_kill_outcome_note` узнаёт «штатно»
-   только по `_MERGE_GATE_KILL_ACTION`; `_drive_task` на `state ==
-   "verifying"` зовёт `_pass_verifying` и продолжает цикл (`continue`),
-   не возвращается. Юнит-тесты — `PassVerifyingTest`,
-   `DriveTaskPassesVerifyingSyntheticallyTest` в `tests/test_canary.py`.
-4. Прогон приёмочных тестов задачи (`tasks/01M1TKP269W9JN3NBJCR5Q6C3B/
+3. (ANSWER-3.md, 06.09) `orchestrator/canary.py`: `_drive_task` на
+   `state == "verifying"` теперь зовёт `_pass_verifying` (журналирует
+   «canary: verifying пройден синтетически» и переводит задачу в
+   `review`) и продолжает цикл (`continue`), не возвращается — реальное
+   вождение канарейки больше НЕ убивает задачу на `verifying`. Юнит-тесты
+   — `PassVerifyingTest`, `DriveTaskPassesVerifyingSyntheticallyTest` в
+   `tests/test_canary.py`.
+4. (REVIEW.md итерации 2, R2-F1) `_kill_at_verifying`/
+   `_VERIFYING_KILL_ACTION` ВОССТАНОВЛЕНЫ как совместимый alias, не
+   участвующий в реальном вождении (`_drive_task` их больше не зовёт) —
+   итерация 2 их убрала целиком, что сломало залоченную планку ДРУГОЙ,
+   уже смерженной задачи (`tasks/01M1SC3Y20YBTTJVQDJBF2NDQW/
+   acceptance_tests/test_canary_report_kill_reason.py::
+   test_ac4_verifying_kill_is_also_reported_as_normal` зовёт функцию
+   напрямую и сверяет классификацию «штатно»). `_kill_outcome_note`
+   снова узнаёт `_VERIFYING_KILL_ACTION` как «штатно», наравне с
+   `_MERGE_GATE_KILL_ACTION` — оба литерала теперь проверяются `in
+   (...)`. Юнит-тесты — `KillAtVerifyingCompatTest` в
+   `tests/test_canary.py` (журналирование литерала + классификация).
+   Подробности решения и разбор второй половины R2-F1 (AC-11, не
+   регрессия этой задачи) — «Влияние на систему» ниже.
+5. Прогон приёмочных тестов задачи (`tasks/01M1TKP269W9JN3NBJCR5Q6C3B/
    acceptance_tests/`) и целевых юнит-модулей.
 
 ## Покрытие требований
@@ -132,7 +145,7 @@ SPEC.
 SPEC. `_pass_verifying` — тот же приём, что и у уже существующих
 `_pass_spec_gate`/`_pass_acceptance_gate` (журнал + `store.set_state`),
 не новый механизм; `_kill_at_merge_gate` не тронута — единственный
-штатный kill во всём прогоне канарейки. Комментарии в
+штатный kill РЕАЛЬНОГО вождения канарейки. Комментарии в
 `orchestrator/fsm_advance.py`/`orchestrator/auto.py`, упоминающие
 старое имя `_kill_at_verifying`, оставлены без изменений — эти файлы
 вне зоны SPEC (`orchestrator/canary.py, orchestrator/prune.py, tests/,
@@ -141,6 +154,58 @@ SPEC. `_pass_verifying` — тот же приём, что и у уже суще
 правкой не затронуто: `t["is_canary"]` по-прежнему заводит канарейку
 мимо обоих путей независимо от того, что происходит на `verifying`
 дальше внутри `canary._drive_task`.
+
+**Разбор R2-F1 (REVIEW.md итерации 2).** Формулировка «Никакой
+существующий тест/гейт/лимит не ослаблен» в предыдущей версии этого
+раздела была неверна для ОДНОГО конкретного случая — ревьювер поймал
+это верно (спасибо за grep по `_kill_at_verifying`/
+`_VERIFYING_KILL_ACTION`, R2-F1 п.1): итерация 2 удалила
+`_kill_at_verifying`/`_VERIFYING_KILL_ACTION` целиком по букве
+ANSWER-3.md («снять... вместе с её литералом»), не заметив, что имя
+`_kill_at_verifying` — публичное ПО ФАКТУ вызова его тестом другой,
+уже смерженной задачи (`tasks/01M1SC3Y20YBTTJVQDJBF2NDQW/
+acceptance_tests/test_canary_report_kill_reason.py`, залоченная
+планка). Решение — шаг 4 выше, вариант (а) из самого REVIEW.md:
+функция и её признание «штатной» восстановлены как чистый alias, не
+участвующий в `_drive_task` (реальное вождение канарейки по-прежнему
+не убивает на `verifying` — функциональное требование ANSWER-3.md
+выполнено полностью, «вместе с литералом» было деталью реализации, не
+самим требованием). Правка другой планки не потребовалась — эта задача
+не получала на неё мандата.
+
+Вторая половина R2-F1 (`tasks/01M1NEEWH5K1XPFRDGRMPYSBXJ/
+acceptance_tests/test_ac11_verifying_gate_bypassed.py`, 43-55с вместо
+потолка 30с) расследована и НЕ является регрессией этой задачи —
+воспроизведена БЕЗ единой правки `_pass_verifying`/`_kill_at_verifying`
+(проверено прогоном теста против `orchestrator/canary.py` версии
+df61246f, последнего коммита этой же задачи ДО ANSWER-3.md, где
+`_kill_at_verifying` ещё жива и `_drive_task` её зовёт как раньше —
+тот же результат: ~49с, тот же журнал). Инструментированный прогон
+(патч `subprocess.run`/`store.set_state`/`artifact_branch.write_commit`
+на время профилирования, не коммит) показывает: задача НИКОГДА не
+доходит до `verifying` — она застревает и убивается «не сошлась» ВНУТРИ
+`in_dev`, после ~121 холостого повторного шага роли developer
+(`SmartAgent`), каждый раз отклонённого рубежом `orchestrator/
+auto.py::_rework_gate_blocks` с сообщением «замечания ревью не
+отработаны — возврат не отработан: нет шага developer после возврата».
+Причина — `orchestrator/auto.py::_role_step_since_state_entry` считает
+переход `spec_gate -> in_dev` ЛЕГИТИМНЫМ первым входом только если его
+`detail` — один из двух литералов, дословно совпадающих с текстом
+`orchestrator/fsm.py::_cmd_approve` (`_LEGIT_FIRST_ENTRY_DETAILS`,
+добавлен задачей 01M1RHFRQ2C0P4A57XJJ1WZV8N); `canary._pass_spec_gate`
+(код этой же функции, не тронутый ни этой, ни какой-либо частью этой
+задачи — последняя правка этой строки старше всех коммитов данной
+задачи) журналирует СВОИМ текстом («canary: гейт SPEC пройден
+автоматически…»), не совпадающим ни с одним литералом белого списка —
+рубеж принимает легитимный первый вход канарейки за неотработанный
+возврат с ревью и блокирует его до потолка `AUTO_MAX_STEPS`/
+`CANARY_MAX_STALL_ITERS`. Это реальный дефект, но: (а) он живёт в
+`orchestrator/auto.py` — вне зоны этой SPEC; (б) он воспроизводится
+одинаково что до, что после правки `_pass_verifying`, то есть НЕ
+регрессия этой задачи, а дефект, обнажившийся тем, что канарейка
+впервые за долгое время реально доходит до `in_dev` в этом тесте.
+Зафиксировано строкой «Предложения системе» ниже (аномалия — решение
+Оператора 06.09, «фиксируется сразу»).
 
 ## Риски
 
@@ -152,7 +217,41 @@ SPEC. `_pass_verifying` — тот же приём, что и у уже суще
 
 ## Предложения системе
 
-(пусто)
+- `orchestrator/auto.py::_role_step_since_state_entry`/
+  `_LEGIT_FIRST_ENTRY_DETAILS`/`_LEGIT_FIRST_ENTRY_PREFIXES` (введены
+  задачей 01M1RHFRQ2C0P4A57XJJ1WZV8N) узнают легитимный первый вход в
+  `in_dev`/`spec_writing`/`tests_writing` ТОЛЬКО по дословному совпадению
+  `detail` записи `state -> {state}` с текстом `orchestrator/fsm.py`/
+  `orchestrator/fsm_advance.py`. `orchestrator/canary.py::
+  _pass_spec_gate` (и, по той же логике, `_pass_acceptance_gate`)
+  журналирует СВОИМ текстом («canary: гейт SPEC пройден
+  автоматически…») — не входит в белый список, и рубеж принимает
+  легитимный первый вход канареечной задачи в `in_dev` за неотработанный
+  возврат с ревью, блокируя его до потолка `AUTO_MAX_STEPS`/
+  `CANARY_MAX_STALL_ITERS` (~121 холостой шаг роли developer, ~45с
+  реального времени — см. «Влияние на систему», разбор R2-F1). Живой
+  репро: `tasks/01M1NEEWH5K1XPFRDGRMPYSBXJ/acceptance_tests/
+  test_ac11_verifying_gate_bypassed.py` — воспроизводится и БЕЗ единой
+  правки этой задачи (проверено на `orchestrator/canary.py` версии
+  df61246f). Класс дефекта: белый список легитимности в одном модуле
+  (`auto.py`) захардкожен под конкретные литералы ДРУГОГО модуля
+  (`fsm.py`/`fsm_advance.py`) и не расширяется при появлении третьего
+  источника легитимных переходов (`canary.py`) — нужна задача с зоной
+  `orchestrator/auto.py`, либо для расширения белого списка
+  канареечными литералами, либо для замены проверки по тексту на
+  проверку по `actor` (`CANARY_MARK_ACTOR`/`"fsm"`), что устойчивее к
+  будущим формулировкам detail.
+
+- (REVIEW.md итерации 2, R2-F2, minor) `orchestrator/fsm_advance.py:180`
+  и `:1117`, `orchestrator/auto.py:633` — комментарии по-прежнему
+  утверждают, что `canary._kill_at_verifying` убивает канареечную
+  задачу сразу по входу в `verifying`; с ANSWER-3.md (06.09) это
+  фактически неверно — реальное вождение проходит `verifying`
+  синтетически (`_pass_verifying`), `_kill_at_verifying` — недостижимый
+  из `_drive_task` alias (см. R2-F1 выше). Правка этих трёх мест — вне
+  зоны SPEC этой задачи (`orchestrator/canary.py, orchestrator/
+  prune.py, tests/, .gitignore`); адрес зафиксирован здесь для задачи,
+  которая в следующий раз будет держать зону `fsm_advance.py`/`auto.py`.
 
 ## Расширение зон
 
