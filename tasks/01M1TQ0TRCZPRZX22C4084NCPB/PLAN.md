@@ -142,6 +142,44 @@ conventions-core («подтяжка main меняет `*.py`, но не чер�
 "in_dev -> review"` по дереву `acceptance_tests/` их артефактных
 веток), 6+5+2 места, ни один файл не тронут.
 
+### Итерация 5 — закрытие причины возврата: конфликт подтяжки main
+
+Причина возврата этого шага — конфликт подтяжки main в кодовую ветку
+(конфликтный файл `docs/roadmap.md`), возникший после Итерации 4.
+Конфликт содержательный (оба берега правили §2 роадмапа: main — статус
+A7 «выполнена», ветка — пункт про ADR-0015) и лежит в защищённом пути
+вне зон этой роли — сведение сделал Оператор коммитом `a29e0782`
+(«подтяжка main (сведение Оператором: docs/roadmap.md §2 — A7
+«выполнена» из main, пункт ADR-0015 из ветки)»); код этой итерацией не
+менялся. Эта итерация — тот самый «шаг developer после возврата»,
+которого не хватало по истории отказов advance:
+
+- `git status`/`git log -1` — рабочее дерево чистое, конфликт-маркеров
+  нет, HEAD — `a29e0782`, слияние с main завершено полностью
+  (`git merge-base --is-ancestor main HEAD` истинно).
+- `git show --stat a29e0782` — сведение тронуло только
+  `docs/adr/0010-stop-loss-as-milestone.md` и `docs/roadmap.md`, `*.py`
+  не затронуты — регенерация `docs/codebase-map.md` не требуется
+  (проверено: `python3 scripts/codebase_map.py` + `git diff` дают
+  расхождение только в строке `built_at_sha`, откачено `git checkout
+  --`).
+- Чтением: `docs/roadmap.md:75-82` и `docs/invariants.md:54,61,63`
+  по-прежнему называют порядок `in_dev -> verifying -> review ->
+  acceptance -> merge_gate` (AC-17/AC-18) — сведение конфликта не
+  потеряло формулировку ADR-0015.
+- `python3 scripts/guard.py tasks/01M1TQ0TRCZPRZX22C4084NCPB/SPEC.md
+  tasks/01M1TQ0TRCZPRZX22C4084NCPB/PLAN.md` — «GUARD: ок (2 файлов)».
+- `python3 -m unittest tests.test_fsm_advance_gate_smoke
+  tests.test_advance_guard tests.test_auto_cycle
+  tests.test_review_freshness tests.test_invariants
+  tests.test_codebase_map` — 134 теста, все зелёные (~131с).
+
+Кода в кодовую ветку эта итерация не коммитит — коммитить нечего:
+диф ветки от main (сведённый Оператором) идентичен тому, что уже
+проверило и одобрило REVIEW.md итерации 3 (`approved`); задача этого
+шага — подтвердить сведение и дать оркестратору журнальную запись шага
+developer, снимающую отказ «возврат не отработан».
+
 ## Шаги
 
 1. Дождаться мержа R2/R3 (сделано Оператором, 06.09) — снято.
