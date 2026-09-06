@@ -134,6 +134,14 @@ RETRY_BACKOFF_SEC = 5
 # сгорали за 15 с, не пережидая ничего. Число попыток не меняется
 # (инвариант 3) — увеличивается только пауза между ними.
 TRANSIENT_SYSTEM_BACKOFF_SEC = 120
+# Стоп-кран волны, часть 1 (01M1THKPNZ11DBZAQDMJ33EMJR, требование 1):
+# окно и порог числа РАЗНЫХ задач target self, отказавших ОДНИМ классом
+# (`TRANSIENT_SYSTEM_CLASSES` плюс «таймаут шага»), за которые
+# `alerts.check_wave_breaker_failure`/`check_wave_breaker_timeout` заводят
+# `kind=incident`. 900с/15 минут и 3 задачи — значения SPEC; меняет
+# только Оператор (ADR-0002, класс «лимит»).
+WAVE_BREAKER_WINDOW_SEC = 900
+WAVE_BREAKER_TASKS = 3
 LOG_TAIL_LINES = 15
 LOG_TAIL_CHARS = 1000
 DEFAULT_BUDGET_USD = 50.0  # решение Оператора 20.08.2026: $10 буксовал на T010/T011 (многоитерационные циклы)
