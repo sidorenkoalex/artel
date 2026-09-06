@@ -56,17 +56,23 @@ notes()` читает эти файлы — единственная точка,
 (флага раздела у `--append` нет ни в ТЗ, ни в тестах) и требует ровно
 одного совпадения среди строк данных (не шапки/разделителя).
 
-`orchestrator/doctor.py` получает `check_pending_notes()` (без `conn`,
-как `check_root_pin`/`check_canary_pool_drift`) — `warn` при непустом
-`notes.pending_notes()`, регистрируется в `all_checks`. `docs/operator-
-session.md` получает правку абзаца «Копилка и бэклог пополняются»:
-называет `note` исполняющей правило (упоминаний scratch-worktree в
-файле и так не было — самостоятельно проверено, `assertNotIn` пройдёт
-без правки этой части).
+`orchestrator/doctor/misc_checks.py` (после подтяжки main — пакет,
+не монолит, см. «Расширение зон» ниже) получает `check_pending_notes()`
+(без `conn`, как `check_root_pin`/`check_canary_pool_drift`) — `warn`
+при непустом `notes.pending_notes()`, реэкспортируется фасадом
+`orchestrator/doctor/__init__.py` и регистрируется в
+`orchestrator/doctor/cli.py::all_checks`. `docs/operator-session.md`
+получает правку абзаца «Копилка и бэклог пополняются»: называет `note`
+исполняющей правило (упоминаний scratch-worktree в файле и так не было
+— самостоятельно проверено, `assertNotIn` пройдёт без правки этой
+части).
 
 Решение Оператора 06.09 на гейте SPEC приняло монолит (разрез отменён,
 мотив снят мержем 01M1TT9BPB) — эта задача закрывает SPEC целиком,
 включая часть, ранее размеченную как «часть 2» (doctor + документ).
+Мотив разреза `orchestrator/doctor.py` → `orchestrator/doctor/`
+вернулся отдельно, из main, между заведением задачи и первым шагом
+developer — см. «Расширение зон».
 
 ## Шаги
 1. `orchestrator/notes.py` (новый): `cmd_note(argv)`, `pending_notes()`,
@@ -74,8 +80,9 @@ session.md` получает правку абзаца «Копилка и бэ�
    с повтором и удержанием, журнал. Юнит-тесты модуля.
 2. `orchestrator/artel.py`: команда `note` в таблице диспетчера,
    импорт `notes`.
-3. `orchestrator/doctor.py`: `check_pending_notes()` + регистрация в
-   `all_checks`. Юнит-тест.
+3. `orchestrator/doctor/misc_checks.py` (пакет, после подтяжки main):
+   `check_pending_notes()` + реэкспорт фасадом + регистрация в
+   `orchestrator/doctor/cli.py::all_checks`. Юнит-тест.
 4. `docs/operator-session.md`: абзац правила «копилка сразу» называет
    `note`.
 5. Прогон приёмочных тестов задачи (`tasks/01M1VBEHTDYPK3E4RRFHWYYYW3/
@@ -127,13 +134,34 @@ session.md` получает правку абзаца «Копилка и бэ�
 проверен приёмочным тестом AC-10 напрямую через `steps WHERE task_id IS
 NULL`.
 
-Существующие тесты `tests/test_doctor.py` не меняют поведения других
-проверок — новая добавляется в конец `all_checks`, не меняет порядок
-существующих вызовов.
+Существующие тесты `tests/test_doctor*.py` не меняют поведения других
+проверок — новая добавляется в конец `all_checks` (сразу после
+`check_canary_pool_drift()`, как в исходном монолите), не меняет
+порядок и статусы существующих вызовов.
 
 Откат: модуль `notes.py`, запись в диспетчере `artel.py` и проверка
 doctor — независимые, обратимые правки (revert коммита); правка
 `docs/operator-session.md` — текстовая, обратимая тем же путём.
+
+## Расширение зон
+Пути: orchestrator/doctor/
+
+Между заведением этой задачи и её первым шагом developer main смержил
+разрез `orchestrator/doctor.py` на пакет `orchestrator/doctor/`
+(01M1TT9BPBRYMDXXEWVZSRG51V, merge 7759a248): монолит удалён, тело
+`check_backup_age`/`all_checks` и соседей разъехалось по подмодулям
+пакета, фасад — `orchestrator/doctor/__init__.py`. Подтяжка `origin/main`
+пришла как modify/delete-конфликт (кодовая ветка стартовала от коммита
+до разреза). `orchestrator/doctor/` — тот же модуль, что зона SPEC
+`orchestrator/doctor.py` (требование 6), просто под новым путём после
+чужого мержа: `check_pending_notes()` перенесён в
+`orchestrator/doctor/misc_checks.py` рядом с `check_backup_age`
+(тот же стиль — коллаборанты через фасад `doctor.notes`/`doctor.Check`,
+без прямого импорта), реэкспортирован фасадом, зарегистрирован в
+`orchestrator/doctor/cli.py::all_checks` сразу после
+`check_canary_pool_drift()` — на том же месте, что в монолите до
+разреза. Мандат — `tasks/01M1VBEHTDYPK3E4RRFHWYYYW3/ANSWER-1.md`
+(«Расширение зон разрешено: orchestrator/doctor/»).
 
 ## Риски
 - `--append` ищет совпадение по всем трём разделам сразу (SPEC не даёт
