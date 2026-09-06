@@ -128,6 +128,24 @@ target читаются `WHERE target=?` — не пересекаются (AC-1
   записи; добавлен юнит `test_exact_calibration_length_is_still_silent`
   (`tests/test_doctor.py`, класс `MapGrowthCheckTest`), воспроизводящий
   сценарий ревью и подтверждающий отсутствие алерта на k-й записи.
+- (снят после возврата из verifying, CI: `tests/test_multitarget
+  SqlOnlyInStoreTest`) `_map_growth_reference_point`/`_map_growth_series`
+  и `check_map_growth` читали `alerts`/`steps` прямой SQL в
+  `orchestrator/doctor.py` — нарушение инварианта «SQL только в
+  store.py» (ADR-0003 3ж); `store.py` вне зон этой задачи, поэтому
+  новую функцию туда не добавляли. Решение: три места переписаны на
+  композицию уже существующих функций store в Python —
+  `store.all_tasks`/`store.task_steps` (собрать записи «карта: размер»
+  по всем задачам, отфильтровать по target и action в Python; порядок
+  сохраняется сортировкой по общему автоинкременту `steps.id`) и
+  `store.alerts_older_than(conn, <sentinel в будущем>)` (получить все
+  алерты и отфильтровать по target/kind/source/ack_ts в Python — приём
+  предложен в причине возврата). Прямой SQL в `orchestrator/*.py` вне
+  `store.py` отсутствует (`SqlOnlyInStoreTest.test_no_sql_outside_store`
+  зелёный); поведение не изменилось — вся приёмочная планка
+  (`tests/test_doctor.py`, `tests/test_fsm_map_regen.py`,
+  `tests/test_codebase_map.py`, `tests/test_multitarget_invariants.py`,
+  `tasks/01M1RFVWV6WWTXRC5F40K61632/acceptance_tests/`) зелёная.
 
 ## Предложения системе
 (пусто)
