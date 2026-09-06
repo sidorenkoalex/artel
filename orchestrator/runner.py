@@ -268,8 +268,9 @@ def _cmd_run(conn, task_id: str) -> None:
     skills, reason = brief.skills_text(conn, task_id, role, skill_names)
     if skills is None:
         sys.exit(f"[{task_id}] скил роли {role} не прочитан: {reason}")
+    cwd_for_prompt = role_cwd_path(task_id, target)
     mission, brief_text, package = role_prompt.mission_brief_package(
-        conn, task_id, t, role)
+        conn, task_id, t, role, cwd_for_prompt)
     prompt = f"{mission}\n\n--- СКИЛЫ РОЛИ ---\n\n{skills}"
     if brief_text is not None:
         prompt = f"{prompt}\n\n{brief_text}"
@@ -538,6 +539,18 @@ def in_role_environment() -> bool:
             os.environ.get("CLAUDE_CONFIG_DIR") == str(config.ROLE_CONFIG_DIR))
 
 
+def role_cwd_path(task_id: str, target: str) -> Path:
+    """Путь `role_cwd` этого шага без побочных эффектов (без `workspace.
+    ensure`/материализации `tasks/<id>/`) — та же формула, что и внутри
+    `role_cwd` ниже (SPEC 01M1RQ12JVHE3PQYDFV1XPSTQ3, требование 2):
+    промпт обязан назвать рабочий каталог шага буквальной строкой ДО
+    первой попытки агента, раньше первого реального вызова `role_cwd`
+    внутри `run_agent_once`."""
+    if target == config.DEFAULT_TARGET:
+        return workspace.path(task_id)
+    return config.PROJECTS / target / "workspace"
+
+
 def role_cwd(conn, task_id: str, target: str) -> Path:
     """Рабочий каталог роли: worktree задачи для self/артели, workspace
     target'а — иначе.
@@ -586,7 +599,7 @@ def role_cwd(conn, task_id: str, target: str) -> Path:
             raise OSError(error)
         path = wt_path
     else:
-        path = config.PROJECTS / target / "workspace"
+        path = role_cwd_path(task_id, target)
         path.mkdir(parents=True, exist_ok=True)
     if task_id is not None:
         from . import artifact_branch
@@ -625,6 +638,34 @@ def role_cmd() -> list[str]:
         # резолвится — SPEC T069
         "--strict-mcp-config",
     ]
+
+
+def _missing_required_artifact(role: str, cwd: Path, task_id: str) -> str | None:
+    """Имя обязательного артефакта роли, отсутствующего в РЕАЛЬНОМ рабочем
+    каталоге шага (`cwd`, где роль пишет инструментом Write) — `None`,
+    если артефакт на месте либо роль не несёт обязательного выхода этого
+    шага (SPEC 01M1RQ12JVHE3PQYDFV1XPSTQ3, требование 3).
+
+    Проверяется диск рабочего каталога роли, не артефактная ветка: rc=0
+    без файла на диске — тот же класс отказа, что и rc != 0 (два
+    инцидента 05.09, «Контекст» SPEC) — headless-шаг не получает
+    подтверждения записи вне рабочего каталога и молча ничего не
+    оставляет там, где реально смотрит эта проверка."""
+    task_dir = cwd / "tasks" / task_id
+    if role == "reviewer":
+        return None if (task_dir / "REVIEW.md").is_file() else "REVIEW.md"
+    if role == "developer":
+        return None if (task_dir / "PLAN.md").is_file() else "PLAN.md"
+    if role == "analyst":
+        if (task_dir / "SPEC.md").is_file() or (task_dir / "QUESTIONS.md").is_file():
+            return None
+        return "SPEC.md/QUESTIONS.md"
+    if role == "test_author":
+        acc = task_dir / "acceptance_tests"
+        if acc.is_dir() and any(p.is_file() for p in acc.rglob("*")):
+            return None
+        return "acceptance_tests/"
+    return None
 
 
 def run_agent_once(conn, task_id: str, role: str, prompt: str,
@@ -838,6 +879,22 @@ def run_agent_once(conn, task_id: str, role: str, prompt: str,
         print(f"[{task_id}] {role}: агент упал (rc={rc}, {numbered}), "
               f"причина в {log_path}")
         return "failed", reason, failure_class
+
+    missing_artifact = _missing_required_artifact(role, cwd, task_id)
+    if missing_artifact is not None:
+        # Требование 3: rc=0, но роль не оставила обязательный артефакт в
+        # своём рабочем каталоге — тот же класс отказа, что rc != 0 выше
+        # (чекпоинт WIP, ретрай/эскалацию решает `cmd_run`), а не штатное
+        # «agent run finished» (иначе цикл ретраев съедает попытку и
+        # бюджет впустую — оба инцидента 05.09, «Контекст» SPEC).
+        checkpoint.commit_abnormal_checkpoint(
+            conn, task_id, role, f"без артефакта {missing_artifact}")
+        reason = (f"rc=0, {numbered}{spent}; шаг завершён без артефакта "
+                  f"{missing_artifact} в рабочем каталоге роли {cwd}")
+        store.journal(conn, task_id, role, "agent run FAILED", reason)
+        print(f"[{task_id}] {role}: шаг завершён без артефакта "
+              f"{missing_artifact} (rc=0, {numbered})")
+        return "failed", reason, None
 
     if pump.error is not None:
         # Обрыв stdout-пайпа без таймаута (rc=0, но перекачка сама поймала

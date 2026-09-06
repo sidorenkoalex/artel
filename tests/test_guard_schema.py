@@ -403,6 +403,91 @@ class TraceabilityMessagesTest(unittest.TestCase):
              "«Критерии приёмки» SPEC"])
 
 
+class CiMarkerTraceabilityTest(unittest.TestCase):
+    """Пометка `ci` критерия (01M1SHJTT0V516BWHYXWS50F3G, требования 1-3):
+    распознаётся `scan_ac_content`, принимается трассируемостью для
+    формулировки про существующие `tests/`, отклоняется для другой
+    формулировки, требует причины так же, как skip/escalate."""
+
+    META = {"schema_version": 2}
+    EXISTING_TESTS_CRITERION = ("## Критерии приёмки\n"
+                                "AC-1. Существующие тесты `tests/` "
+                                "остаются зелёными.\n")
+    UNRELATED_CRITERION = ("## Критерии приёмки\n"
+                           "AC-1. Кнопка становится синей при наведении.\n")
+
+    def test_scan_ac_content_parses_ci_kind_and_reason(self):
+        """Ловит мутацию: альтернатива `AC_MARKER`, расширенная не
+        строкой `ci` (опечатка, другой регистр без `re.I`), нашла бы ноль
+        пометок — `markers` остался бы пуст."""
+        _, markers = guard.scan_ac_content(
+            ["# AC-1: ci — CI ветки уже подтверждает зелёный набор.\n"])
+
+        self.assertEqual(
+            markers.get(1),
+            ("ci", "CI ветки уже подтверждает зелёный набор."))
+
+    def test_ci_marker_on_existing_tests_criterion_is_accepted(self):
+        errors = guard.traceability_errors_from_content(
+            self.EXISTING_TESTS_CRITERION, self.META, set(),
+            {1: ("ci", "CI ветки уже подтверждает зелёный набор")})
+
+        self.assertEqual(errors, [])
+
+    def test_ci_marker_on_unrelated_criterion_is_rejected(self):
+        """Требование 3/AC-2: эвристика по ключевым словам fail-closed —
+        формулировка без «существующ»/tests//«зелён»/«не ослаб» не
+        допускает пометку `ci`."""
+        errors = guard.traceability_errors_from_content(
+            self.UNRELATED_CRITERION, self.META, set(),
+            {1: ("ci", "тест не нужен")})
+
+        joined = " ".join(errors)
+        self.assertIn("AC-1", joined)
+        self.assertIn("manual", joined,
+                      "ошибка обязана подсказывать замену на manual")
+
+    def test_ci_marker_without_reason_is_rejected(self):
+        """R1-F4 (REVIEW.md итерации 1): пометка `ci` без причины должна
+        отказывать так же, как skip/escalate без причины — до этой правки
+        guard молча пропускал `ci` без причины."""
+        errors = guard.traceability_errors_from_content(
+            self.EXISTING_TESTS_CRITERION, self.META, set(), {1: ("ci", "")})
+
+        self.assertEqual(
+            errors,
+            ["AC-1: пометка ci без причины — впиши причину после тире "
+             "в той же строке, например '# AC-1: ci — <причина>'"])
+
+
+class AcMarkerLineAnchorTest(unittest.TestCase):
+    """`AC_MARKER` заякорена на начало строки (R1-F2, REVIEW.md
+    01M1SHJTT0V516BWHYXWS50F3G итерации 1): незаякоренный поиск по всему
+    тексту находил буквальный пример синтаксиса пометки внутри докстроки/
+    комментария (не в начале физической строки) как настоящую пометку.
+    """
+
+    def test_marker_syntax_mentioned_mid_line_in_prose_is_not_a_marker(self):
+        """Ловит мутацию: возврат `AC_MARKER` к варианту без `^`/`re.M`
+        снова нашёл бы эту пометку — тест поймает пустой `markers`,
+        ожидая непустой при регрессе."""
+        content = ('"""Пример синтаксиса: `# AC-9: ci — <причина>` — '
+                  'здесь только текст, не настоящая пометка.\n"""\n')
+
+        _, markers = guard.scan_ac_content([content])
+
+        self.assertEqual(markers, {})
+
+    def test_marker_at_the_actual_start_of_line_is_still_found(self):
+        """Сужение не должно отсечь легитимную пометку в начале строки."""
+        content = ("# просто комментарий, не относящийся к пометке\n"
+                   "# AC-1: manual — причина\n")
+
+        _, markers = guard.scan_ac_content([content])
+
+        self.assertEqual(markers, {1: ("manual", "причина")})
+
+
 class RednessMarkerMessageTest(unittest.TestCase):
     """Сообщение `redness_marker_errors_from_files` называет требование
     «на той же строке после двоеточия» и говорит, что сделать (SPEC T077

@@ -6,11 +6,17 @@
 from . import brief, review
 
 
-def mission_brief_package(conn, task_id: str, t, role: str):
+def mission_brief_package(conn, task_id: str, t, role: str, cwd):
     """(mission, brief_text, package) — `brief_text`/`package` — `None`,
     когда роли соответствующий компонент не положен (та же комбинация,
     что и раньше в теле `_cmd_run`: только `role == "review"` собирает
-    `package`, у остальных трёх ролей он всегда `None`)."""
+    `package`, у остальных трёх ролей он всегда `None`).
+
+    `cwd` — рабочий каталог ЭТОГО шага (`runner.role_cwd_path`, тот же
+    путь, что реально вернул бы `runner.role_cwd`, SPEC
+    01M1RQ12JVHE3PQYDFV1XPSTQ3, требование 2): миссия каждой из четырёх
+    ролей заканчивается буквальной строкой рабочего каталога — роль не
+    обязана домысливать, где именно ей можно писать файлы Write."""
     task_ref = f"tasks/{task_id}"
     package = None
     brief_text = None
@@ -105,4 +111,6 @@ def mission_brief_package(conn, task_id: str, t, role: str):
                    if iteration > 1 else "")
         package = review.review_package(conn, task_id, t["title"], t["branch"],
                                         iteration=iteration, prev_sha=prev_sha)
+    mission = (f"{mission}\n\nрабочий каталог шага — {cwd}; все пути ниже "
+              f"относительно него; запись вне него недоступна.")
     return mission, brief_text, package

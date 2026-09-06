@@ -5,6 +5,7 @@
 после)."""
 import re
 import time
+from dataclasses import dataclass
 
 from . import (agent_log, alerts, budget, ci, config, fixation, fsm, lease,
               pause, runner, store, zone_lock)
@@ -331,7 +332,279 @@ def cmd_auto(task_id: str, session_id: str | None = None) -> None:
                      on_refusal="print")
 
 
+@dataclass
+class _CycleState:
+    """Состояние, разделяемое между итерациями цикла (AC-2): не локальные
+    флаги `_cmd_auto`, а поля объекта, которым владеет и который мутирует
+    только шаг (б) — `_pre_advance_step`. `idle_steps` — число шагов
+    подряд без смены состояния (требование 2, сбрасывается любым
+    переходом); `prev_refusal` — текст отказа `advance` предыдущего шага
+    без смены состояния, `None` — предыдущий шаг не был таким отказом
+    (SPEC T038, требование 1)."""
+    idle_steps: int = 0
+    prev_refusal: str | None = None
+
+
+@dataclass(frozen=True)
+class Advanced:
+    """Исход шага (б): переход выполнен предварительным advance по уже
+    готовому артефакту роли — сам шаг роли этой итерации не нужен, не
+    расходует `steps`."""
+    before: str
+    after: str
+
+
+@dataclass(frozen=True)
+class RoleRan:
+    """Исход шага (в): `runner.cmd_run` отработал (успешно или с
+    эффектом вроде эскалации внутри самого шага) — `after` уже отражает
+    этот эффект."""
+    role: str
+    before: str
+    after: str
+
+
+@dataclass(frozen=True)
+class Refused:
+    """Исход, которым итерация журналирует отказ и не продвигает
+    задачу — холостой шаг без немедленной остановки цикла; `reason` —
+    текст отказа, по которому следующая такая же итерация ловит стоп-кран
+    «два подряд одинаковых»."""
+    reason: str | None
+
+
+@dataclass(frozen=True)
+class Stop:
+    """Исход шага (г): цикл обязан остановиться этой же итерацией — поля
+    ровно те, что принимает `auto_stop` (шаг д)."""
+    state: str
+    reason: str
+    hint: str
+    alert: bool
+
+
+def _step_limit_stop(task_id: str, state: str, steps: int) -> Stop | None:
+    """Стоп-кран (г) — лимит шагов за вызов. Гейтит попытку РОЛИ (реальный
+    `run` или отказ, который её замещает), не саму итерацию цикла
+    (REVIEW.md итерации 1, R1-F1): переход, который предварительный
+    `advance` выполняет САМ по уже готовому артефакту — без единого
+    вызова `runner.cmd_run` — бесплатен для лимита ровно так же, как
+    раньше был бесплатен для него advance, следовавший за `run` СРАЗУ
+    внутри одной и той же итерации (SPEC T038, «run+advance»): та же
+    работа, просто вызов сдвинулся на итерацию раньше. C
+    `AUTO_MAX_STEPS == 1` цикл всё равно обязан сделать РОВНО одну пару
+    (advance, run) и встать (AC-1 приёмки): то же самое место проверки,
+    только сам счётчик растёт реже."""
+    if steps >= config.AUTO_MAX_STEPS:
+        hint = (f"artel.py log {task_id} (что происходит), "
+                f"затем artel.py auto {task_id} — продолжит отсюда")
+        return Stop(state, f"лимит {config.AUTO_MAX_STEPS} шагов за вызов исчерпан",
+                    hint, True)
+    return None
+
+
+def _rework_gate_blocks(conn, task_id: str, state: str, role: str) -> bool:
+    """Шаг (а) — решение «нужен ли пред-advance» (требования 1-2, SPEC
+    «регрессия №13» 01M1RHFRQ2C0P4A57XJJ1WZV8N, ANSWER-1 п.2, ANSWER-2
+    п.1): текущее пребывание в состоянии роли (`_REWORK_GATE_STATES`)
+    началось переходом с основанием переделки (замечания ревью/reject/
+    эскалация), ещё не отработанным — готовый артефакт роли мог
+    существовать ещё ДО этого возврата (SPEC «Контекст», регрессия
+    №12/№13), и предварительный advance продвинул бы задачу мимо роли по
+    нему же. Гейт держит именно вызов advance — до первого завершённого
+    шага той же роли ПОСЛЕ возврата; удовлетворив условие один раз, роль
+    больше не блокируется этим гейтом до следующего такого возврата."""
+    gated_role = role is not None and state in _REWORK_GATE_STATES
+    role_ran, entry_detail = (
+        _role_step_since_state_entry(conn, task_id, state, role)
+        if gated_role else (True, None))
+    if gated_role and not role_ran:
+        reason = _rework_not_addressed_reason(entry_detail, role)
+        store.journal(conn, task_id, "fsm", REWORK_REFUSAL_ACTION, reason)
+        print(f"[{task_id}] переход отклонён: {reason}")
+        return True
+    return False
+
+
+def _pre_advance_step(conn, task_id: str, session_id: str, role: str,
+                      state: str, before: str,
+                      cycle: _CycleState) -> Advanced | Refused | Stop | None:
+    """Шаг (б) — предварительный advance по уже готовым артефактам (SPEC
+    01M1R8B3ZKXQT0Z0G6QQQDV906, требования 1-4): пробуем перейти по уже
+    готовым артефактам ДО шага роли — так цикл не тратит шаг на
+    подтверждение очевидного (PLAN.md, поднятый ready ДО возврата из
+    эскалации по бюджету; REVIEW.md, вердикт которого уже вынесен).
+    Разбор исхода включает часть стоп-кранов (г) — «два подряд
+    одинаковых отказа» и «N шагов без перехода» — они считаются по факту
+    именно ЭТОЙ попытки, поэтому естественно живут здесь же, не в
+    отдельной функции.
+
+    `None` — advance не отказал и не перевёл состояние (артефакт роли
+    ещё не готов, либо журналируемый отказ того же класса, что «роль ещё
+    не закончила», требование 3): вызывающий запускает роль как обычно.
+    """
+    journaled_before = len(store.task_steps(conn, task_id))
+    if fsm.cmd_advance(task_id, session_id=session_id):
+        # guard отклонил артефакт-условие: тот же по характеру немедленный
+        # стоп, что и раньше был доступен только ПОСЛЕ шага роли, — цикл
+        # не зовёт cmd_run для того же состояния.
+        hint = f"почини артефакт и повтори artel.py advance {task_id}"
+        return Stop(state,
+                    f"advance отклонён guard'ом артефакта-условия — {hint}",
+                    hint, True)
+
+    t = store.get_task(conn, task_id)
+    new_state = t["state"]
+    if new_state != before:
+        # Требование 2: переход уже случился по готовым артефактам — шаг
+        # роли этой итерации не нужен, цикл продолжает уже с нового
+        # состояния. Не расходует `steps` — ни один агент не звался.
+        note = f"шаг {role} не нужен: переход выполнен по готовым артефактам"
+        store.journal(conn, task_id, "operator", note, f"{before} -> {new_state}")
+        print(f"[{task_id}] {note} ({before} -> {new_state})")
+        cycle.idle_steps = 0
+        cycle.prev_refusal = None
+        return Advanced(before, new_state)
+
+    refusal = _advance_refusal(conn, task_id, journaled_before)
+    # Требование 4 отказывает шагу роли только на отказах, которые
+    # ЧЕЛОВЕК обязан разобрать руками — лок acceptance_tests/, свежесть
+    # ветки, гейт ёмкости diff: примеры требования 4 (кроме «дерево не на
+    # ветке задачи», см. ниже) — из ПРОВЕРОК `in_dev` ПОВЕРХ готового
+    # артефакта (PLAN.md уже ready/approved), не из готовности самого
+    # артефакта роли. У `review`/`tests_writing` тот же журналируемый
+    # префикс несёт и «вердикт REVIEW.md уже учтён»
+    # (`artifacts.fresh_verdict_iteration`), и «не все AC покрыты тестом»
+    # (`fsm._tests_writing_ac_state`) — оба ЖДУТ именно НОВОГО прогона
+    # ЭТОЙ ЖЕ роли (тот же смысл, что и класс требования 3), только
+    # исторически журналируются. Скопировать требование 4 на них
+    # буквально значило бы, что `review`/`tests_writing` теряют гарантию
+    # «роль хотя бы раз получит шанс отработать» насовсем: текст отказа
+    # не меняется без нового прогона, стоп-кран T038 бьёт на второй же
+    # итерации, и роль так и не запускается ни разу — проверено прогоном
+    # `tests/test_auto_cycle.py::AutoStopsWhereTheOperatorIsNeededTest::
+    # test_review_iterations_are_passed_without_the_operator` (после
+    # ЛЮБОГО changes_requested ревьювер больше не может вынести новый
+    # вердикт) и `test_fresh_task_first_developer_step_still_runs`
+    # (свежая задача, ещё нет ни одного теста/PLAN.md — тот же стоп-кран
+    # до первого запуска test_author/developer). Оба — регресс тяжелее
+    # того, что чинит эта SPEC, поэтому «другой класс» здесь — только
+    # `in_dev`; для прочих состояний журналируемый отказ ведёт себя как
+    # класс требования 3 (роль всё равно запускается).
+    #
+    # «Дерево не на ветке задачи» (`fsm._read_branch_text_or_refuse`,
+    # общий узел ВСЕХ четырёх обработчиков) срабатывает ДО того, как
+    # handler вообще прочитал содержимое артефакта — файла нет НА ВЕТКЕ,
+    # а не «нет доступа к git»: у `in_dev` это ПЕРВЫЙ ЖЕ заход в
+    # состояние для КАЖДОЙ задачи (PLAN.md появляется только ВМЕСТЕ с
+    # первым прогоном developer, ничто не заводит его файл заранее) —
+    # тот же класс требования 3, что и «PLAN.md не ready» ниже по тому же
+    # handler'у, журналируется только по историческому совпадению
+    # реализации общего узла. Считать его «другим классом» даже для
+    # `in_dev` блокировало бы developer НАВСЕГДА уже на второй итерации
+    # ПЕРВОГО же вызова `auto` любой новой задачи (стоп-кран T038 бьёт по
+    # идентичному тексту раньше, чем developer получит хоть один шанс
+    # написать PLAN.md) — регрессия, которую ловит
+    # `test_fresh_task_first_developer_step_still_runs`.
+    tree_missing = refusal == "переход отклонён: дерево не на ветке задачи"
+    other_class_refusal = refusal if (refusal is not None
+                                      and state == "in_dev"
+                                      and not tree_missing) else None
+    if other_class_refusal is not None and other_class_refusal == cycle.prev_refusal:
+        # Требование 1 (инцидент T035, SPEC T038): два подряд отказа одним
+        # текстом — причина отказа вне зоны агента, прогон агента её не
+        # лечит.
+        hint = f"почини причину и повтори artel.py advance {task_id}"
+        return Stop(state, f"{other_class_refusal} — {hint}", hint, True)
+    cycle.prev_refusal = other_class_refusal
+    cycle.idle_steps += 1
+    if cycle.idle_steps >= config.AUTO_STALL_STEPS_LIMIT:
+        # Требование 2: N шагов подряд без перехода — независимо от
+        # класса отказа (в отличие от стоп-крана требования 1 выше,
+        # который уже отсёк бы ДВА подряд отказа ОДНОГО класса раньше,
+        # чем счётчик успел бы дойти до N при дефолтных значениях). Хвост
+        # «, последний отказ: <класс>» — только если ПОСЛЕДНИЙ из N шагов
+        # журналировал отказ требования 4 (ANSWER-1, вопрос 3): его
+        # отсутствие само по себе несёт факт «агент продолжал работу».
+        tail = (f", последний отказ: {other_class_refusal}"
+               if other_class_refusal is not None else "")
+        reason = f"цикл не сходится: {cycle.idle_steps} шагов без перехода{tail}"
+        hint = (f"artel.py log {task_id} — глянь, что происходит на "
+                f"последних шагах, затем artel.py advance {task_id}")
+        return Stop(state, reason, hint, True)
+    if other_class_refusal is not None:
+        # Требование 4: журналируемый отказ другого класса — шаг роли на
+        # этой итерации не запускается, цикл повторит advance следующей
+        # итерацией (та же реакция, что и раньше — после шага роли, —
+        # просто без самого шага). Расходует `steps` (не свободный
+        # переход — агент так и не получил шанса).
+        return Refused(other_class_refusal)
+    return None
+
+
+def _role_run_step(conn, task_id: str, session_id: str, role: str,
+                   state: str, before: str, steps: int) -> RoleRan | Stop:
+    """Шаг (в) — запуск шага роли и разбор исхода: успешное завершение
+    (включая эффект вроде эскалации внутри самого шага) против отказа
+    `run` стартовать (пауза, занятость зоны, бюджет, лимит
+    параллельности). Отказ стартовать `cmd_run` сообщает единственным
+    способом — `sys.exit` с текстом; в цикле текст печатаем сами:
+    пойманный `SystemExit` нигде не покажется."""
+    run_journaled_before = len(store.task_steps(conn, task_id))
+    try:
+        runner.cmd_run(task_id, session_id=session_id)
+    except SystemExit as exc:
+        print(str(exc))
+        # Пауза (SPEC T070, требование 2) — не «эскалация по бюджету»:
+        # причина должна быть видна Оператору в итоговом сообщении, а не
+        # потеряться среди прочих отказов `run`. Причина — по тому, что
+        # реально журналировал ИМЕННО этот вызов `cmd_run`
+        # (`_run_paused_refusal`), а не по независимому текущему опросу
+        # `pause.is_paused`: тот путал бы паузу с ОДНОВРЕМЕННЫМ отказом по
+        # бюджету/лимиту параллельных задач, если Оператор выставил оба
+        # (REVIEW.md T070, итерация 2, замечание 1).
+        if _run_paused_refusal(conn, task_id, run_journaled_before):
+            reason, hint = config.AUTO_STOP_PAUSE
+            # Пауза — действие самого Оператора (ANSWER-1, вопрос 2): он
+            # уже знает о причине остановки, алерт был бы уведомлением о
+            # собственном же решении.
+            return Stop(state, reason, hint.format(id=task_id), False)
+        # Занятость зоны (SPEC 01M1P9QAG65GVF69YJEV0V18D9, требование 3) —
+        # причина внешняя (держит другая задача), не буксование ЭТОГО
+        # агента: `status`/`doctor` берут на себя объяснение, кто держит
+        # зону (требование 4), алерт буксования не открывается.
+        if _run_zone_wait_refusal(conn, task_id, run_journaled_before):
+            reason, hint = config.AUTO_STOP_ZONE_WAIT
+            return Stop(state, reason, hint.format(id=task_id), False)
+        return Stop(state, "run отказался стартовать",
+                    f"artel.py budget {task_id} <usd> или artel.py kill {task_id}",
+                    True)
+
+    # Состояние перечитываем: упавший агент и исчерпанный потолок уводят
+    # задачу в escalated изнутри run — `before`/`state` здесь ещё след
+    # предыдущей роли (для сообщения ниже), не текущего перечитанного
+    # состояния.
+    t = store.get_task(conn, task_id)
+    new_state = t["state"]
+    # Живой вывод агента уже был на экране и в логе — здесь только сводка
+    # шага и ссылка на лог прогона (требование 6). Advance по СВЕЖЕМУ
+    # результату этого шага цикл не зовёт отдельно — тем же вызовом
+    # займётся предварительный `advance` следующей итерации (или, если
+    # роли в новом состоянии больше нет, финальный стоп ниже цикла).
+    print(f"[{task_id}] auto шаг {steps}/{config.AUTO_MAX_STEPS}: {role} "
+          f"{before} -> {new_state}, "
+          f"лог: {agent_log.last_agent_log(task_id, role)}")
+    return RoleRan(role, before, new_state)
+
+
 def _cmd_auto(conn, task_id: str, session_id: str) -> None:
+    """Цикл advance+run, пока в шаге работает агент, — до места, где нужен
+    человек. После разбора (SPEC «R1» 01M1SC40NT8T1WFKKKJ67CK96Z) —
+    короткая композиция именованных шагов: (а) `_rework_gate_blocks`, (б)
+    `_pre_advance_step`, (в) `_role_run_step`, (г) `_step_limit_stop` (и
+    часть стоп-кранов внутри (б)), (д) `auto_stop` — вызывается на каждом
+    `Stop` и ниже цикла на финальной остановке.
+    """
     t = store.get_task(conn, task_id)
     state = t["state"]
     store.journal(conn, task_id, "operator", "auto старт",
@@ -341,16 +614,8 @@ def _cmd_auto(conn, task_id: str, session_id: str) -> None:
 
     steps = 0
     role = runner.step_role(t)
-    # Текст отказа `advance` предыдущего шага без смены состояния; `None` —
-    # предыдущий шаг не был таким отказом, или это первый шаг цикла
-    # (SPEC T038, требование 1).
-    prev_refusal = None
-    # Число шагов ПОДРЯД без смены состояния (требование 2): сбрасывается
-    # на 0 любым переходом, независимо от стоп-крана требования 1 (тот
-    # считает только повтор ОДНОГО класса отказа, этот — каждый холостой
-    # шаг). Опрос `verifying` (`_advance_verifying_poll`) не расходует
-    # счётчик — не агентный шаг конвейера (см. `continue` ниже).
-    idle_steps = 0
+    cycle = _CycleState()
+
     # `verifying` не входит в STATE_ROLE (нет агентской роли, SPEC T086) —
     # условие цикла держит его отдельным дизъюнктом, не значением `role`:
     # состояние достижимо и как стартовое для всего вызова, и как исход
@@ -378,220 +643,38 @@ def _cmd_auto(conn, task_id: str, session_id: str) -> None:
             role = runner.step_role(t)
             continue
 
-        # Лимит шагов гейтит попытку РОЛИ (реальный `run` или отказ,
-        # который её замещает), не саму итерацию цикла (REVIEW.md итерации
-        # 1, R1-F1): переход, который предварительный `advance` выполняет
-        # САМ по уже готовому артефакту — без единого вызова `runner.
-        # cmd_run` — бесплатен для лимита ровно так же, как раньше был
-        # бесплатен для него advance, следовавший за `run` СРАЗУ внутри
-        # одной и той же итерации (SPEC T038, «run+advance»): та же работа,
-        # просто вызов сдвинулся на итерацию раньше. `steps` считает
-        # каждую попытку, которая ЛИБО зовёт `cmd_run`, ЛИБО останавливает
-        # цикл, ЛИБО пропускает шаг роли по отказу требования 4 — не
-        # голые переходы. C `AUTO_MAX_STEPS == 1` цикл всё равно обязан
-        # сделать РОВНО одну пару (advance, run) и встать (AC-1 приёмки):
-        # то же самое место проверки, только сам счётчик растёт реже.
-        if steps >= config.AUTO_MAX_STEPS:
-            auto_stop(conn, task_id, state,
-                      f"лимит {config.AUTO_MAX_STEPS} шагов за вызов исчерпан",
-                      f"artel.py log {task_id} (что происходит), "
-                      f"затем artel.py auto {task_id} — продолжит отсюда",
-                      alert=True)
+        limit_stop = _step_limit_stop(task_id, state, steps)
+        if limit_stop is not None:
+            auto_stop(conn, task_id, limit_stop.state, limit_stop.reason,
+                      limit_stop.hint, alert=limit_stop.alert)
             return
         before = state
 
-        # Требования 1-2 (SPEC «регрессия №13» 01M1RHFRQ2C0P4A57XJJ1WZV8N,
-        # ANSWER-1 п.2, ANSWER-2 п.1): текущее пребывание в состоянии роли
-        # (`_REWORK_GATE_STATES`) началось переходом с основанием переделки
-        # (замечания ревью/reject/эскалация), ещё не отработанным — готовый
-        # артефакт роли мог существовать ещё ДО этого возврата (SPEC
-        # «Контекст», регрессия №12/№13), и предварительный advance ниже
-        # продвинул бы задачу мимо роли по нему же. Гейт держит именно
-        # ЭТОТ вызов advance — до первого завершённого шага той же роли
-        # ПОСЛЕ возврата; удовлетворив условие один раз, роль больше не
-        # блокируется этим гейтом до следующего такого возврата.
-        gated_role = role is not None and state in _REWORK_GATE_STATES
-        role_ran, entry_detail = (
-            _role_step_since_state_entry(conn, task_id, state, role)
-            if gated_role else (True, None))
-
-        if gated_role and not role_ran:
-            reason = _rework_not_addressed_reason(entry_detail, role)
-            store.journal(conn, task_id, "fsm", REWORK_REFUSAL_ACTION, reason)
-            print(f"[{task_id}] переход отклонён: {reason}")
-        else:
-            # Предварительный advance (SPEC 01M1R8B3ZKXQT0Z0G6QQQDV906,
-            # требования 1-4): пробуем перейти по уже готовым артефактам ДО
-            # шага роли — так цикл не тратит шаг ($1-6) на подтверждение
-            # очевидного (PLAN.md, поднятый ready ДО возврата из эскалации по
-            # бюджету; REVIEW.md, вердикт которого уже вынесен).
-            journaled_before = len(store.task_steps(conn, task_id))
-            if fsm.cmd_advance(task_id, session_id=session_id):
-                # guard отклонил артефакт-условие: тот же по характеру
-                # немедленный стоп, что и раньше был доступен только ПОСЛЕ
-                # шага роли, — цикл не зовёт cmd_run для того же состояния.
-                steps += 1
-                hint = f"почини артефакт и повтори artel.py advance {task_id}"
-                auto_stop(conn, task_id, state,
-                          f"advance отклонён guard'ом артефакта-условия — "
-                          f"{hint}", hint, alert=True)
+        if not _rework_gate_blocks(conn, task_id, state, role):
+            outcome = _pre_advance_step(conn, task_id, session_id, role,
+                                        state, before, cycle)
+            if isinstance(outcome, Stop):
+                auto_stop(conn, task_id, outcome.state, outcome.reason,
+                          outcome.hint, alert=outcome.alert)
                 return
-            t = store.get_task(conn, task_id)
-            state = t["state"]
-            if state != before:
-                # Требование 2: переход уже случился по готовым артефактам —
-                # шаг роли этой итерации не нужен, цикл продолжает уже с
-                # нового состояния. Не расходует `steps` (см. комментарий у
-                # проверки лимита выше, R1-F1) — ни один агент не звался.
-                note = f"шаг {role} не нужен: переход выполнен по готовым артефактам"
-                store.journal(conn, task_id, "operator", note, f"{before} -> {state}")
-                print(f"[{task_id}] {note} ({before} -> {state})")
-                idle_steps = 0
-                prev_refusal = None
+            if isinstance(outcome, Advanced):
+                t = store.get_task(conn, task_id)
+                state = t["state"]
                 role = runner.step_role(t)
                 continue
-
-            refusal = _advance_refusal(conn, task_id, journaled_before)
-            # Требование 4 отказывает шагу роли только на отказах, которые
-            # ЧЕЛОВЕК обязан разобрать руками — лок acceptance_tests/,
-            # свежесть ветки, гейт ёмкости diff: примеры требования 4 (кроме
-            # «дерево не на ветке задачи», см. ниже) — из ПРОВЕРОК `in_dev`
-            # ПОВЕРХ готового артефакта (PLAN.md уже ready/approved), не из
-            # готовности самого артефакта роли. У `review`/`tests_writing` тот
-            # же журналируемый префикс несёт и «вердикт REVIEW.md уже учтён»
-            # (`artifacts.fresh_verdict_iteration`), и «не все AC покрыты
-            # тестом» (`fsm._tests_writing_ac_state`) — оба ЖДУТ именно НОВОГО
-            # прогона ЭТОЙ ЖЕ роли (тот же смысл, что и класс требования 3),
-            # только исторически журналируются. Скопировать требование 4 на
-            # них буквально значило бы, что `review`/`tests_writing` теряют
-            # гарантию «роль хотя бы раз получит шанс отработать» насовсем:
-            # текст отказа не меняется без нового прогона, стоп-кран T038 бьёт
-            # на второй же итерации, и роль так и не запускается ни разу —
-            # проверено прогоном `tests/test_auto_cycle.py::
-            # AutoStopsWhereTheOperatorIsNeededTest::
-            # test_review_iterations_are_passed_without_the_operator` (после
-            # ЛЮБОГО changes_requested ревьювер больше не может вынести новый
-            # вердикт) и `test_fresh_task_first_developer_step_still_runs`
-            # (свежая задача, ещё нет ни одного теста/PLAN.md — тот же
-            # стоп-кран до первого запуска test_author/developer). Оба —
-            # регресс тяжелее того, что чинит эта SPEC (см. PLAN «Влияние на
-            # систему»), поэтому «другой класс» здесь — только `in_dev`; для
-            # прочих состояний журналируемый отказ ведёт себя как класс
-            # требования 3 (роль всё равно запускается).
-            #
-            # «Дерево не на ветке задачи» (`fsm._read_branch_text_or_refuse`,
-            # общий узел ВСЕХ четырёх обработчиков) срабатывает ДО того, как
-            # handler вообще прочитал содержимое артефакта — файла нет НА
-            # ВЕТКЕ, а не «нет доступа к git»: у `in_dev` это ПЕРВЫЙ ЖЕ заход
-            # в состояние для КАЖДОЙ задачи (PLAN.md появляется только ВМЕСТЕ
-            # с первым прогоном developer, ничто не заводит его файл заранее)
-            # — тот же класс требования 3, что и «PLAN.md не ready» ниже по
-            # тому же handler'у, журналируется только по историческому
-            # совпадению реализации общего узла. Считать его «другим классом»
-            # даже для `in_dev` блокировало бы developer НАВСЕГДА уже на
-            # второй итерации ПЕРВОГО же вызова `auto` любой новой задачи
-            # (стоп-кран T038 бьёт по идентичному тексту раньше, чем developer
-            # получит хоть один шанс написать PLAN.md) — регрессия, которую
-            # ловит `test_fresh_task_first_developer_step_still_runs`.
-            tree_missing = refusal == "переход отклонён: дерево не на ветке задачи"
-            other_class_refusal = refusal if (refusal is not None
-                                              and state == "in_dev"
-                                              and not tree_missing) else None
-            if other_class_refusal is not None and other_class_refusal == prev_refusal:
-                # Требование 1 (инцидент T035, SPEC T038): два подряд отказа
-                # одним текстом — причина отказа вне зоны агента, прогон
-                # агента её не лечит.
-                steps += 1
-                hint = f"почини причину и повтори artel.py advance {task_id}"
-                auto_stop(conn, task_id, state, f"{other_class_refusal} — {hint}",
-                          hint, alert=True)
-                return
-            prev_refusal = other_class_refusal
-            idle_steps += 1
-            if idle_steps >= config.AUTO_STALL_STEPS_LIMIT:
-                # Требование 2: N шагов подряд без перехода — независимо от
-                # класса отказа (в отличие от стоп-крана требования 1 выше,
-                # который уже отсёк бы ДВА подряд отказа ОДНОГО класса раньше,
-                # чем счётчик успел бы дойти до N при дефолтных значениях).
-                # Хвост «, последний отказ: <класс>» — только если ПОСЛЕДНИЙ
-                # из N шагов журналировал отказ требования 4 (ANSWER-1,
-                # вопрос 3): его отсутствие само по себе несёт факт «агент
-                # продолжал работу».
-                steps += 1
-                tail = (f", последний отказ: {other_class_refusal}"
-                       if other_class_refusal is not None else "")
-                reason = f"цикл не сходится: {idle_steps} шагов без перехода{tail}"
-                hint = (f"artel.py log {task_id} — глянь, что происходит на "
-                        f"последних шагах, затем artel.py advance {task_id}")
-                auto_stop(conn, task_id, state, reason, hint, alert=True)
-                return
-            if other_class_refusal is not None:
-                # Требование 4: журналируемый отказ другого класса — шаг роли
-                # на этой итерации не запускается, цикл повторит advance
-                # следующей итерацией (та же реакция, что и раньше — после
-                # шага роли, — просто без самого шага). Расходует `steps`
-                # (не свободный переход — агент так и не получил шанса).
+            if isinstance(outcome, Refused):
                 steps += 1
                 continue
 
-        # Требование 3: «артефакт роли не готов» (или, для `review`/
-        # `tests_writing`, отказ, который лечится только новым прогоном
-        # ЭТОЙ роли, см. комментарий выше) — запускаем роль как раньше.
         steps += 1
-        run_journaled_before = len(store.task_steps(conn, task_id))
-        try:
-            runner.cmd_run(task_id, session_id=session_id)
-        except SystemExit as exc:
-            # Отказ стартовать `cmd_run` сообщает единственным способом —
-            # sys.exit с текстом (исчерпанный бюджет, лимит параллельных
-            # задач, штатная пауза). В цикле текст печатаем сами: пойманный
-            # SystemExit нигде не покажется.
-            print(str(exc))
-            # Пауза (SPEC T070, требование 2) — не «эскалация по бюджету»:
-            # причина должна быть видна Оператору в итоговом сообщении, а
-            # не потеряться среди прочих отказов `run`. Причина — по тому,
-            # что реально журналировал ИМЕННО этот вызов `cmd_run`
-            # (`_run_paused_refusal`), а не по независимому текущему опросу
-            # `pause.is_paused`: тот путал бы паузу с ОДНОВРЕМЕННЫМ отказом
-            # по бюджету/лимиту параллельных задач, если Оператор выставил
-            # оба (REVIEW.md T070, итерация 2, замечание 1) — тот же приём
-            # различения, что уже несёт `_advance_refusal` выше.
-            if _run_paused_refusal(conn, task_id, run_journaled_before):
-                reason, hint = config.AUTO_STOP_PAUSE
-                # Пауза — действие самого Оператора (ANSWER-1, вопрос 2):
-                # он уже знает о причине остановки, алерт был бы
-                # уведомлением о собственном же решении.
-                auto_stop(conn, task_id, state, reason, hint.format(id=task_id),
-                          alert=False)
-                return
-            # Занятость зоны (SPEC 01M1P9QAG65GVF69YJEV0V18D9, требование
-            # 3) — причина внешняя (держит другая задача), не буксование
-            # ЭТОГО агента: `status`/`doctor` берут на себя объяснение, кто
-            # держит зону (требование 4), алерт буксования не открывается.
-            if _run_zone_wait_refusal(conn, task_id, run_journaled_before):
-                reason, hint = config.AUTO_STOP_ZONE_WAIT
-                auto_stop(conn, task_id, state, reason, hint.format(id=task_id),
-                          alert=False)
-                return
-            auto_stop(conn, task_id, state, "run отказался стартовать",
-                      f"artel.py budget {task_id} <usd> или artel.py kill {task_id}",
-                      alert=True)
+        outcome = _role_run_step(conn, task_id, session_id, role, state,
+                                 before, steps)
+        if isinstance(outcome, Stop):
+            auto_stop(conn, task_id, outcome.state, outcome.reason,
+                      outcome.hint, alert=outcome.alert)
             return
-
-        # Состояние перечитываем: упавший агент и исчерпанный потолок
-        # уводят задачу в escalated изнутри run — след предыдущей роли
-        # (для сообщения ниже), не текущего перечитанного состояния.
         t = store.get_task(conn, task_id)
         state = t["state"]
-        # Живой вывод агента уже был на экране и в логе — здесь только
-        # сводка шага и ссылка на лог прогона (требование 6). Advance по
-        # СВЕЖЕМУ результату этого шага цикл не зовёт отдельно — тем же
-        # вызовом займётся предварительный `advance` следующей итерации
-        # (или, если роли в новом состоянии больше нет, финальный стоп
-        # ниже цикла).
-        print(f"[{task_id}] auto шаг {steps}/{config.AUTO_MAX_STEPS}: {role} "
-              f"{before} -> {state}, "
-              f"лог: {agent_log.last_agent_log(task_id, role)}")
         role = runner.step_role(t)
 
     reason, hint = auto_stop_advice(conn, task_id, state)

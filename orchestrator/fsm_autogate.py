@@ -11,8 +11,8 @@ from pathlib import Path
 
 from scripts import guard
 
-from . import (acceptance, artifact_source, budget, fixation, gates, gitcmd,
-              store, workspace)
+from . import (acceptance, artifact_source, budget, ci, fixation, gates,
+              gitcmd, store, workspace)
 
 AUTOGATE_PASS_MESSAGE = "acceptance пройден автогейтом (политика gates.yaml)"
 
@@ -29,7 +29,7 @@ def _autogate_conditions(conn, task_id: str, t, acc_tdir: Path,
     вообще) — только записывается в перечень как выполненное.
 
     Условие "а" (каталог `acceptance_tests/` и его AC-пометки
-    manual/skip) читается через источник артефактов задачи
+    manual/skip/ci) читается через источник артефактов задачи
     (`artifact_source.resolve` + `gitcmd.ls_tree_files`/`gitcmd.show`,
     SPEC 01M1NBWWPJMHKJMYXRDCM0W0C5) — тем же приёмом, что уже несёт
     `fsm._tests_writing_ac_state` (SPEC T031): разбираются ВСЕ `*.py`
@@ -39,6 +39,13 @@ def _autogate_conditions(conn, task_id: str, t, acc_tdir: Path,
     `acc_tdir` (диск рабочей копии) условия "а" больше не касается —
     параметр сохранён ради сигнатуры, которую использует остальной код
     функции (условия б/в/г/д, эта задача их не меняет) и вызывающий код.
+
+    Пометка `ci` (01M1SHJTT0V516BWHYXWS50F3G) — отдельная от
+    manual/skip категория: не блокирует автогейт самим фактом
+    присутствия, а исполняется по зелёному CI ГОЛОВЫ КОДОВОЙ ветки
+    задачи (`t["branch"]`, не той `branch` артефактов чуть выше) —
+    `ci.verifying_status`, та же функция, что уже опрашивает
+    `orchestrator/fsm_advance.py::verifying`.
     """
     ok: list[str] = []
 
@@ -68,6 +75,23 @@ def _autogate_conditions(conn, task_id: str, t, acc_tdir: Path,
         return ok, (f"автогейт: критерии skip — "
                     f"{', '.join(f'AC-{n}' for n in skip_ns)} "
                     f"({source_note})")
+    # Пометка `ci` (01M1SHJTT0V516BWHYXWS50F3G, требования 2-3): не
+    # manual/skip — отдельная категория (fail-closed: не смешивается со
+    # списками выше). Исполнена, если CI ГОЛОВЫ КОДОВОЙ ветки задачи
+    # (`t["branch"]`, не артефактной) зелёный — `ci.verifying_status`
+    # сама берёт sha из головы этой ветки и спрашивает CI именно этого
+    # sha, так что «sha головы обязан совпасть со sha, для которого CI
+    # зелёный» (требование 2) — свойство самой этой функции, не
+    # отдельная проверка здесь.
+    ci_ns = sorted(n for n, (kind, _) in markers.items() if kind == "ci")
+    if ci_ns:
+        ci_kind, ci_note = ci.verifying_status(t["branch"])
+        if ci_kind != ci.VERIFYING_GREEN:
+            return ok, (f"автогейт: критерий ci не пройден — "
+                        f"{', '.join(f'AC-{n}' for n in ci_ns)} "
+                        f"({ci_note}; {source_note})")
+        ok.append(f"критерии ci подтверждены зелёным CI кодовой ветки — "
+                  f"{', '.join(f'AC-{n}' for n in ci_ns)} ({ci_note})")
     ok.append("каталог приёмочных тестов: 0 manual, 0 skip критериев")
     ok.append("приёмочные тесты задачи зелёные")
     ok.append(source_note)

@@ -465,6 +465,16 @@ class CmdRunLoggingTest(TmpRootTest):
             lambda role, target: [])
         pf_patcher.start()
         self.addCleanup(pf_patcher.stop)
+        # Обязательный артефакт роли этого состояния (SPEC
+        # 01M1RQ12JVHE3PQYDFV1XPSTQ3, требование 3) — без него на диске
+        # рабочего каталога роли успешная попытка (rc=0) честно ретраится
+        # вместо одного тихого успеха, которого ждёт этот класс (все тесты
+        # здесь — про лог/журнал шага, не про факт отказа без артефакта).
+        # Класс держит один и тот же state='in_dev' на всём протяжении —
+        # сидирование один раз в setUp достаточно.
+        tdir = config.WORKTREES / self.TASK / "tasks" / self.TASK
+        tdir.mkdir(parents=True, exist_ok=True)
+        (tdir / "PLAN.md").write_text("маркер\n", encoding="utf-8")
 
     def run_agent(self, lines, returncode: int = 0):
         with mock.patch.object(runner, "spawn_agent") as popen:
@@ -508,10 +518,16 @@ class CmdRunLoggingTest(TmpRootTest):
         журнальных событиях агентного шага, значением ОДНОГО и того же
         сбора (AC-6 проверяется отдельно — здесь только присутствие)."""
         def fake_run(cmd, **kw):
-            if cmd[0] == "git":
+            # Только `--version`: `check_ignore` (SPEC 01M1RQ12JVHE3PQYDFV1XPSTQ3,
+            # PLAN.md маркер в setUp теперь даёт автокоммиту что переносить)
+            # тоже зовёт `subprocess.run` с командой `git ...` — ей нужен
+            # настоящий `self.git_spy` (байты, не текстовая версия).
+            if cmd[:2] == ["git", "--version"]:
                 return subprocess.CompletedProcess(cmd, 0, "git version 9.9.9\n", "")
-            return subprocess.CompletedProcess(
-                cmd, 0, f"{config.CLI_VERSION_PIN} (Claude Code)\n", "")
+            if cmd[:2] == ["claude", "--version"]:
+                return subprocess.CompletedProcess(
+                    cmd, 0, f"{config.CLI_VERSION_PIN} (Claude Code)\n", "")
+            return self.git_spy(cmd, **kw)
 
         agent_log._environment_fingerprint_cache = None
         self.addCleanup(setattr, agent_log, "_environment_fingerprint_cache", None)

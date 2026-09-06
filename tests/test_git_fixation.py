@@ -384,8 +384,16 @@ class ExternalIntegrityIncidentBlocksRunTest(TmpRootTest):
         # мирная площадка (ADR-0003 3д, «особый случай») с этой задачи
         # остаётся только за self/догфудом (требование 16).
         from orchestrator import artifact_branch
+        # PLAN.md — тоже в артефактную ветку, не только на диск `tdir`
+        # выше: `runner.role_cwd` для внешнего target материализует
+        # `tasks/<id>/` РОВНО из этой ветки (`materialize_task_dir`) в
+        # РАБОЧИЙ каталог роли (`.../workspace/tasks/<id>/`, не в `tdir`)
+        # — без записи сюда обязательный артефакт роли developer (SPEC
+        # 01M1RQ12JVHE3PQYDFV1XPSTQ3, требование 3) на месте материализации
+        # отсутствует, и штатный (rc=0) прогон честно ретраится.
         artifact_branch.commit_files(
-            task_id, {f"tasks/{task_id}/SPEC.md": "# SPEC заглушка\n"},
+            task_id, {f"tasks/{task_id}/SPEC.md": "# SPEC заглушка\n",
+                     f"tasks/{task_id}/PLAN.md": "# PLAN заглушка\n"},
             f"{task_id}: SPEC заглушка")
         capture(lambda: store.set_state(
             store.db(), task_id, "in_dev", "operator",
@@ -721,6 +729,16 @@ class RealPultGitTest(_GitFixationTmpRootTest):
         sha = self.enter_spec_gate()
         self.capture(fsm.cmd_approve, self.TASK, sha)
         self.assertEqual(store.get_task(store.db(), self.TASK)["state"], "in_dev")
+        # Обязательный артефакт роли developer (SPEC 01M1RQ12JVHE3PQYDFV1XPSTQ3,
+        # требование 3) — в артефактную ветку, не только в репо фиксации
+        # (`task_dir()`): `runner.role_cwd` материализует `tasks/<id>/` в
+        # рабочий каталог роли РОВНО из этой ветки на каждом вызове
+        # (`materialize_task_dir`), стирая любой файл, которого там нет —
+        # без него штатный (rc=0) прогон `run_faked` честно ретраится
+        # вместо одного запуска.
+        self._seed_artifact_branch(f"tasks/{self.TASK}/PLAN.md",
+                                   PLAN_READY.format(task=self.TASK),
+                                   f"{self.TASK}: PLAN заглушка")
         return sha
 
     def run_faked(self):
