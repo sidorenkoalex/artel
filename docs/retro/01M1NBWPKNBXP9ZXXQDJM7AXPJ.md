@@ -34,3 +34,18 @@
 commit_files`, тот же приём, что уже несёт `write_plan_ready`) до
 запуска сценариев тестов. Ни один существующий assert не ослаблен —
 только исправлена подготовка песочницы под уже сдвинувшийся контракт.
+
+## Правка планки (amend-tests), продолжение — подтяжка main в 01M1TKP45EM16ZMJGQKNZA5T7J
+
+Подтяжка main в ветку 01M1TKP45EM16ZMJGQKNZA5T7J (конфликт по
+`docs/codebase-map.md`/`scripts/guard.py`/`tests/test_fsm_map_conflict_
+autoresolve.py`) принесла ADR-0015 («приёмка прогоняется в `in_dev` до
+`verifying`, не после в `review`»): `test_ac3_entry_points_ignore_local_
+pin.py::test_ac3_in_dev_to_review_pulls_despite_matching_local_pin`
+ожидал состояние `review` после `fsm.cmd_advance` из `in_dev` — контракт
+сдвинулся ПОСЛЕ того, как планка и SPEC 01M1TKP45EM16ZMJGQKNZA5T7J были
+написаны, тем же классом (б) («планка красна не по коду, а по устаревшей
+ожидаемой семантике перехода»), что и первая правка выше. Правка:
+ассерт состояния изменён на `verifying`; докстринг теста уточнён.
+Второй тест того же файла (`acceptance -> merge_gate`) контракт не
+затронул — не менялся.
