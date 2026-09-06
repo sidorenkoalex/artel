@@ -182,15 +182,34 @@ class NeedsDiagnosticsTest(unittest.TestCase):
     И без расхождения» одновременно."""
 
     def test_normal_without_mismatch_does_not_need_diagnostics(self):
+        """Ловит мутацию: `_needs_diagnostics` возвращает `True`
+        безусловно (или роняет проверку `not mismatch`) — единственная
+        комбинация, где диагностика НЕ нужна (штатный исход без
+        расхождения, ANSWER-1.md правило 1), ошибочно попала бы под
+        сохранение."""
         self.assertFalse(canary._needs_diagnostics(True, False))
 
     def test_not_normal_without_mismatch_needs_diagnostics(self):
+        """Ловит мутацию: `and` в выражении подменён на `or` (или
+        проверка `normal_outcome` инвертирована) — нештатный исход без
+        расхождения маркера ошибочно классифицировался бы как
+        «диагностика не нужна», теряя ту самую диагностику, ради
+        которой SPEC затевался (AC-1)."""
         self.assertTrue(canary._needs_diagnostics(False, False))
 
     def test_normal_with_mismatch_needs_diagnostics(self):
+        """Ловит мутацию: проверка `mismatch` выпала из выражения
+        (например, `not normal_outcome` вместо `not (normal_outcome
+        and not mismatch)`) — штатный исход С расхождением маркера
+        ошибочно посчитался бы «диагностика не нужна», хотя расхождение
+        — как раз то, что требуется расследовать."""
         self.assertTrue(canary._needs_diagnostics(True, True))
 
     def test_not_normal_with_mismatch_needs_diagnostics(self):
+        """Ловит мутацию: функция всегда возвращает `False` (или обе
+        проверки инвертированы одновременно, компенсируя друг друга) —
+        худший случай (и не штатно, и расхождение) остался бы без
+        диагностики."""
         self.assertTrue(canary._needs_diagnostics(False, True))
 
 
@@ -221,6 +240,12 @@ class JournalExcerptLinesTest(unittest.TestCase):
         return store.task_steps(self.conn, self.TASK)
 
     def test_keeps_state_transitions_refusals_and_auto_stopped(self):
+        """Ловит мутацию: фильтр по префиксам `state -> `/`store.
+        REFUSAL_ACTION_PREFIX`/`_AUTO_STOPPED_ACTION` сужен или порядок
+        строк перепутан — любая из трёх целевых записей журнала выпала
+        бы из выдержки или оказалась не на своём месте, срывая
+        требование 2 (переходы состояний и «эскалация»/«переход
+        отклонён»/«auto остановлен» обязаны попасть в вывод)."""
         store.journal(self.conn, self.TASK, "canary", "state -> in_dev", "")
         store.journal(self.conn, self.TASK, "fsm",
                       "переход отклонён: замечания ревью не отработаны", "")
@@ -235,12 +260,21 @@ class JournalExcerptLinesTest(unittest.TestCase):
         self.assertIn("auto остановлен", lines[2])
 
     def test_drops_unrelated_journal_rows(self):
+        """Ловит мутацию: условие `continue` для нецелевых действий
+        убрано или инвертировано — служебные записи runner (`agent run
+        started`/`finished`) просочились бы в выдержку журнала, раздувая
+        вывод сверх требования 2."""
         store.journal(self.conn, self.TASK, "runner", "agent run started", "")
         store.journal(self.conn, self.TASK, "runner", "agent run finished", "")
 
         self.assertEqual(canary._journal_excerpt_lines(self._steps()), [])
 
     def test_caps_at_the_given_limit_keeping_the_most_recent(self):
+        """Ловит мутацию: срез `lines[-limit:]` заменён на `lines[:limit]`
+        (или лимит не применяется вовсе) — вместо самых СВЕЖИХ записей
+        (причина финального исхода) в выдержке остались бы самые
+        старые, либо потолок в 20 строк на задачу (требование 2) был
+        бы сорван."""
         for i in range(5):
             store.journal(self.conn, self.TASK, "canary", f"state -> s{i}", "")
 
@@ -257,6 +291,12 @@ class DiagnosticsDirTest(unittest.TestCase):
     на клон) `config.ROOT` (требование 1, AC-1)."""
 
     def test_path_shape(self):
+        """Ловит мутацию: путь строится от текущего (возможно,
+        патченного на клон) `config.ROOT` вместо переданного
+        `outer_root`, либо сегменты `.artel/canary/<run_stamp>/
+        <task_id>` переставлены/пропущены — диагностика писалась бы
+        ВНУТРЬ эфемерного клона и была бы уничтожена `shutil.rmtree`
+        вместе с ним (требование 1, AC-1)."""
         outer_root = Path("/tmp/artel-outer")
 
         result = canary._diagnostics_dir(outer_root, "20260906T000000Z", "T902")

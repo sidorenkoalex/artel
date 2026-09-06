@@ -98,20 +98,34 @@ class PruneCanaryDiagCandidatesTest(TmpRootTest):
         return path
 
     def test_no_canary_dir_yields_no_candidates(self):
+        """Ловит мутацию: проверка `root.is_dir()` убрана — отсутствие
+        `.artel/canary/` привело бы к исключению вместо пустого списка
+        кандидатов."""
         self.assertEqual(prune._canary_diag_candidates(), [])
 
     def test_old_diagnostics_file_is_a_candidate(self):
+        """Ловит мутацию: сравнение `st_mtime < cutoff` инвертировано
+        или `config.LOG_RETENTION_DAYS` не используется — файл
+        диагностики старше порога давности не попал бы в кандидаты на
+        удаление."""
         old = self._diag("20200101T000000Z", "T00001",
                          config.LOG_RETENTION_DAYS + 1)
 
         self.assertIn(old, prune._canary_diag_candidates())
 
     def test_fresh_diagnostics_file_is_not_a_candidate(self):
+        """Ловит мутацию: отбор по давности инвертирован или выпал
+        вовсе — свежий файл диагностики моложе `config.LOG_RETENTION_
+        DAYS` ошибочно попал бы под удаление."""
         fresh = self._diag("20260101T000000Z", "T00002", 1)
 
         self.assertNotIn(fresh, prune._canary_diag_candidates())
 
     def test_execute_removes_old_diagnostics_and_reports_it(self):
+        """Ловит мутацию: `_canary_diag_candidates` собирается, но не
+        подключена к удалению/отчёту `cmd_prune --execute` — старый
+        файл диагностики пережил бы `prune --execute`, либо отчёт
+        молчал бы о найденной диагностике канарейки."""
         old = self._diag("20200101T000000Z", "T00003",
                          config.LOG_RETENTION_DAYS + 1)
 
