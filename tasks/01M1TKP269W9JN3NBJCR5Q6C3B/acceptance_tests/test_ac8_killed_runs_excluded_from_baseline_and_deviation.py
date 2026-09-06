@@ -14,10 +14,10 @@ store.set_canary_baseline(...)` — сегодня без всякого усл�
 
 Сценарий — тот же класс «не сошлась», что и `test_ac1_ac2_ac3_
 diagnostics_on_inconclusive_outcome.py`: ревью один раз запрашивает
-доработку, повторный вход в `in_dev` держит rework-гейт («регрессия
-№13», `orchestrator/auto.py::_role_step_since_state_entry` — тестовая
-заглушка агента не журналирует `agent run finished`), задача убивается
-«не сошлась».
+доработку, каждый следующий вход в `in_dev` эскалирует по-настоящему
+(`_sandbox._EscalatesOnReworkAgent`, `PLAN.md status: escalate`) —
+задача убивается «не сошлась» реальным исчерпанием `config.
+CANARY_MAX_ESCALATION_CYCLES` (`orchestrator/canary.py::_drive_task`).
 
 Красен до реализации: сегодняшний код создаёт `canary_baseline` из
 ПЕРВОГО прогона шаблона независимо от его исхода — `store.canary_
@@ -31,7 +31,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from _sandbox import CanarySandbox  # noqa: E402
+from _sandbox import CanarySandbox, _EscalatesOnReworkAgent  # noqa: E402
 
 from orchestrator import store  # noqa: E402
 
@@ -43,6 +43,8 @@ class KilledRunDoesNotCreateBaselineTest(CanarySandbox):
     """Ни разу не было бейзлайна для этого шаблона (`store.canary_
     baseline` — `None`) — ровно сценарий реального инцидента: первый
     прогон шаблона оказался killed."""
+
+    AGENT_CLASS = _EscalatesOnReworkAgent
 
     def setUp(self):
         super().setUp()
@@ -80,10 +82,11 @@ class KilledRunDoesNotCreateBaselineTest(CanarySandbox):
             f"{TITLE_NO_PRIOR_BASELINE}: {rows}")
         self.assertEqual(rows[0]["outcome"], "killed", dict(rows[0]))
 
+        baseline_after = store.canary_baseline(self.conn, TITLE_NO_PRIOR_BASELINE)
         self.assertIsNone(
-            store.canary_baseline(self.conn, TITLE_NO_PRIOR_BASELINE),
+            baseline_after,
             f"killed-прогон завёл бейзлайн вопреки AC-8/AC-7: "
-            f"{dict(store.canary_baseline(self.conn, TITLE_NO_PRIOR_BASELINE))}")
+            f"{dict(baseline_after) if baseline_after is not None else None}")
 
 
 class KilledRunDoesNotRaiseDeviationAlertTest(CanarySandbox):
@@ -92,6 +95,8 @@ class KilledRunDoesNotRaiseDeviationAlertTest(CanarySandbox):
     значения, чтобы метрики killed-прогона гарантированно
     превышали `config.CANARY_DEVIATION_RATIO`, будь сравнение
     включено."""
+
+    AGENT_CLASS = _EscalatesOnReworkAgent
 
     def setUp(self):
         super().setUp()

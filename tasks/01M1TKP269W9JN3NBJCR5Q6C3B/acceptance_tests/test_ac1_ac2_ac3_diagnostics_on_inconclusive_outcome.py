@@ -7,21 +7,33 @@ AC-2. Логи ролей клона (`.artel/logs/<task_id>-*.log`).
 AC-3. Последние PLAN.md/REVIEW.md из артефактной ветки клона, если они
 там есть; их отсутствие в клоне не приводит к отказу команды `canary`.
 
-Сценарий «не сошлась»: ревью один раз просит доработку
-(`changes_requested`) — задача возвращается в `in_dev`, но ВТОРОЙ вход
-туда натыкается на pre-advance rework-гейт («регрессия №13»,
-`orchestrator/auto.py::_role_step_since_state_entry`): переход дальше
-держится до записи `agent run finished` роли developer ПОСЛЕ этого
-входа, которую `SmartAgent`-заглушка этой песочницы принципиально не
-пишет (она подменяет `runner.cmd_run` целиком, минуя его собственное
-журналирование). Три холостых прохода `auto.cmd_auto` без прогресса —
-`_kill_inconclusive` убивает задачу «не сошлась» (`config.
-CANARY_MAX_STALL_ITERS`) — тот же класс бага и буквально та же причина
-(«3 прохода без прогресса»), что и наблюдение копилки 06.09
-«canary-usage-invariant», прогон `canary --k 2` 20260905T191514Z.
-Исход `killed`, заведомо НЕ `done` при любом прочтении границы `outcome
-== done` (см. `markers.py`, эскалация AC-4/AC-7) — тесты этого файла не
-зависят от той трактовки.
+Сценарий «не сошлась» (`InconclusiveReviewLoopTest`): ревью один раз
+просит доработку (`changes_requested`) — задача возвращается в `in_dev`
+С РЕАЛЬНЫМ артефактом (PLAN.md/REVIEW.md уже существуют в артефактной
+ветке клона, AC-3), но КАЖДЫЙ следующий вход в `in_dev`
+(`_sandbox._EscalatesOnReworkAgent`) эскалирует по-настоящему (`PLAN.md
+status: escalate`, `orchestrator/fsm_advance.py`) — синтетический
+ANSWER canary возвращает в `in_dev`, разработчик эскалирует снова:
+ГЕНУИННЫЙ бесконечный цикл эскалаций, оборванный настоящим исчерпанием
+`config.CANARY_MAX_ESCALATION_CYCLES` (`canary._drive_task`), а не
+имитацией стагнации через отсутствующее журналирование. Исход `killed`,
+заведомо НЕ «штатно» (`canary._kill_outcome_note` вернёт «не сошлась: …»,
+never «штатно») при любом прочтении границы «done»/«штатный исход» из
+ANSWER-1.md — тесты этого файла не зависят от той трактовки.
+
+(Историческая заметка: до фиксации `_sandbox.py` — расширение 2
+докстринга модуля — этот же сценарий имитировал «не сошлась» побочным
+эффектом отсутствующего у `SmartAgent` журналирования `agent run
+finished`: pre-advance rework-гейт («регрессия №13»,
+`orchestrator/auto.py::_role_step_since_state_entry`) держал бы
+предварительный `advance` НАВСЕГДА уже на первом входе в `in_dev`, а не
+только на возврате после доработки, и задача убивалась бы `_kill_
+inconclusive` («3 прохода без прогресса», `config.CANARY_MAX_STALL_
+ITERS`) до единого визита в `review` — `REVIEW.md` в артефактной ветке
+клона не появлялся бы вовсе, что молча ломало бы AC-3 этого же файла.
+После починки сандбокса «штатный» исход (`merge_gate`) стал достижим
+(нужен `test_ac4_ac7_normal_outcome_baseline_and_diagnostics.py`), и
+старый сценарий пришлось заменить на генуинный цикл эскалаций выше.)
 
 Красен до реализации: `.artel/canary/<run_stamp>/<task_id>/` после
 прогона не существует вовсе (код диагностики ещё не написан) —
@@ -33,8 +45,9 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from _sandbox import (CanarySandbox, _NeverSpecsAgent, ROLE_LOG_MARKER,  # noqa: E402
-                      extract_run_stamp, extract_task_ids)
+from _sandbox import (CanarySandbox, _EscalatesOnReworkAgent,  # noqa: E402
+                      _NeverSpecsAgent, ROLE_LOG_MARKER, extract_run_stamp,
+                      extract_task_ids)
 
 TITLE_NEVER_APPROVED = "nikogda-ne-odobrennaya-pravka"
 TITLE_NEVER_SPECCED = "nikogda-ne-specennaya-pravka"
@@ -42,11 +55,13 @@ TITLE_NEVER_SPECCED = "nikogda-ne-specennaya-pravka"
 
 class InconclusiveReviewLoopTest(CanarySandbox):
     """Общий сценарий для AC-1/AC-2/AC-3 (presence-половина): один
-    канареечный прогон, ревью которого запрашивает доработку хотя бы
-    раз — задача гарантированно упирается в rework-гейт при повторном
-    входе в `in_dev` (см. докстринг модуля) и убивается «не сошлась»,
-    пройдя через `in_dev` (PLAN.md) и `review` (REVIEW.md) хотя бы по
-    разу до убийства."""
+    канареечный прогон, ревью которого запрашивает доработку один раз,
+    после чего разработчик эскалирует на каждом следующем входе в
+    `in_dev` (см. докстринг модуля) — задача убивается «не сошлась»
+    генуинным исчерпанием лимита эскалаций, пройдя через `in_dev`
+    (PLAN.md) и `review` (REVIEW.md) хотя бы по разу до убийства."""
+
+    AGENT_CLASS = _EscalatesOnReworkAgent
 
     def setUp(self):
         super().setUp()
@@ -55,11 +70,12 @@ class InconclusiveReviewLoopTest(CanarySandbox):
                 "Синтетическая правка, ревью которой никогда не "
                 "одобряется.",
         })
-        # Одного запроса доработки достаточно — второй вход в in_dev
-        # уже держится rework-гейтом независимо от того, сколько ещё
-        # раундов «нужно было бы» пройти по замыслу шаблона (см.
-        # докстринг модуля); нуль означал бы мгновенное «approved» без
-        # единого changes_requested вовсе.
+        # Одного запроса доработки достаточно — `_EscalatesOnReworkAgent`
+        # эскалирует на КАЖДОМ следующем входе в in_dev независимо от
+        # того, сколько ещё раундов «нужно было бы» пройти по замыслу
+        # шаблона (см. докстринг модуля); нуль означал бы мгновенное
+        # «approved» без единого changes_requested вовсе — REVIEW.md
+        # никогда не появился бы (AC-3 нечего было бы проверять).
         self.agent.extra_review_rounds_default = 1
 
     def _run_and_get_diag_dir(self):
@@ -80,14 +96,14 @@ class InconclusiveReviewLoopTest(CanarySandbox):
     def test_ac1_task_journal_saved_as_text(self):
         """Диагностика несёт журнал задачи (`steps`) целиком, не только
         последнюю строку — узнаваемая причина «не сошлась»
-        (`_kill_inconclusive`'s жалоба на холостые проходы без
-        прогресса) и несколько разных переходов состояний присутствуют
-        текстом в сохранённых файлах.
+        (`_kill_inconclusive`'s жалоба на повторные эскалации подряд) и
+        несколько разных переходов состояний присутствуют текстом в
+        сохранённых файлах.
 
         Ловит мутацию: разработчик сохраняет только последнюю строку
         журнала (например, финальный `state -> killed`) вместо полного
-        `store.task_steps` — узнаваемая причина «проходов подряд без
-        прогресса» (журналируется ДО финального перехода в killed, см.
+        `store.task_steps` — узнаваемая причина «повторных эскалаций
+        подряд» (журналируется ДО финального перехода в killed, см.
         `canary._kill_inconclusive`) в сохранённом файле не найдётся.
         """
         out, task_id, diag_dir = self._run_and_get_diag_dir()
@@ -97,7 +113,7 @@ class InconclusiveReviewLoopTest(CanarySandbox):
 
         combined = self._diag_texts(diag_dir)
         self.assertIn(
-            "проходов подряд без прогресса", combined,
+            "повторных эскалаций подряд", combined,
             f"журнал задачи в диагностике не несёт причину «не сошлась»: "
             f"{combined!r}")
         self.assertGreaterEqual(

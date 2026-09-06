@@ -9,14 +9,15 @@ AC-6. Вывод `canary` несёт для каждой задачи набор
 
 Сценарий — тот же класс «не сошлась», что и `test_ac1_ac2_ac3_
 diagnostics_on_inconclusive_outcome.py`: ревью один раз запрашивает
-доработку, повторный вход в `in_dev` держит rework-гейт (`orchestrator/
-auto.py::_role_step_since_state_entry`, «регрессия №13» — тестовая
-заглушка агента не журналирует `agent run finished`), три холостых
-прохода без прогресса убивают задачу «не сошлась». Гарантированно даёт
-и путь диагностики (AC-5 без диагностики нечего было бы печатать), и
-как минимум одну запись «переход отклонён» в журнале (AC-6 — сама
-запись rework-гейта: «переход отклонён: замечания ревью не
-отработаны»).
+доработку, каждый следующий вход в `in_dev` эскалирует по-настоящему
+(`_sandbox._EscalatesOnReworkAgent`, `PLAN.md status: escalate`) —
+задача убивается «не сошлась» реальным исчерпанием `config.
+CANARY_MAX_ESCALATION_CYCLES`. Гарантированно даёт и путь диагностики
+(AC-5 без диагностики нечего было бы печатать — «не сошлась» ЗАВЕДОМО
+не «штатный исход без расхождения», ANSWER-1.md, при любом прочтении
+границы), и как минимум одну запись «переход отклонён» в журнале (AC-6
+— сама запись rework-гейта на возврате в `in_dev`: «переход отклонён:
+замечания ревью не отработаны»).
 
 Красен до реализации: вывод `canary` — прежний однострочный формат
 (`шагов=... исход=...`) без пути диагностики вовсе — обе проверки этого
@@ -28,12 +29,15 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from _sandbox import CanarySandbox, extract_run_stamp, extract_task_ids  # noqa: E402
+from _sandbox import (CanarySandbox, _EscalatesOnReworkAgent,  # noqa: E402
+                      extract_run_stamp, extract_task_ids)
 
 TITLE_NEVER_APPROVED = "vyvod-nikogda-ne-odobrennaya-pravka"
 
 
 class OutputPathAndJournalExcerptTest(CanarySandbox):
+
+    AGENT_CLASS = _EscalatesOnReworkAgent
 
     def setUp(self):
         super().setUp()

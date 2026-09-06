@@ -11,14 +11,37 @@
 каталог другой, уже смерженной задачи не гарантированно доступен на
 диске рабочей копии разработчика этой задачи.
 
-Единственное содержательное расширение относительно оригинала:
-`SmartAgent._commit` теперь пишет ЕЩЁ и файл лога роли
-(`orchestrator.agent_log.new_agent_log`) с узнаваемым маркером в
-содержимом — оригинал полностью подменяет `runner.cmd_run`, поэтому
-реальный `.artel/logs/<task_id>-*.log` в эфемерном клоне никогда не
-появляется сам по себе; без этого расширения проверка AC-2 (копирование
-логов ролей клона до его удаления) не имела бы что копировать и была бы
-тавтологией (пустой каталог логов копируется в пустой каталог логов).
+Два содержательных расширения относительно оригинала:
+
+1. `SmartAgent._commit` пишет ЕЩЁ и файл лога роли (`orchestrator.
+   agent_log.new_agent_log`) с узнаваемым маркером в содержимом —
+   оригинал полностью подменяет `runner.cmd_run`, поэтому реальный
+   `.artel/logs/<task_id>-*.log` в эфемерном клоне никогда не появляется
+   сам по себе; без этого расширения проверка AC-2 (копирование логов
+   ролей клона до его удаления) не имела бы что копировать и была бы
+   тавтологией (пустой каталог логов копируется в пустой каталог логов).
+
+2. `SmartAgent._commit` журналирует `actor=role, action="agent run
+   finished"` (тем же текстом, что и настоящий `runner.cmd_run`,
+   `orchestrator/runner.py:911`, СРАЗУ после `checkpoint.
+   commit_step_artifacts` — тем же порядком) — без этого расширения
+   `orchestrator/auto.py::_role_step_since_state_entry` (pre-advance
+   rework-гейт, «регрессия №13») не находит этой записи НИ РАЗУ, потому
+   что оригинал полностью подменяет `runner.cmd_run` и его собственное
+   журналирование вместе с ним: гейт держал бы КАЖДЫЙ (не только
+   повторный) вход в `in_dev`/`spec_writing`/`tests_writing` НАВСЕГДА
+   (detail первого входа, которым канарейка сама проходит гейты —
+   `canary._pass_spec_gate`, — не совпадает ни с одной строкой
+   `auto._LEGIT_FIRST_ENTRY_DETAILS`/`_PREFIXES`, писанных под настоящий
+   `fsm._cmd_approve`) — задача стопорилась бы в `in_dev` уже на первом
+   входе, `_drive_task` убивал бы её «не сошлась» до единого визита в
+   `review`/`merge_gate` НЕЗАВИСИМО от того, сколько раз шаблон просит
+   доработку, что ломает сами сценарии тестов этого каталога (обнаружено
+   при валидации стаба AC-4/AC-7/ANSWER-1.md: без этой строки исход
+   «штатно» через `merge_gate` недостижим вообще, а сценарий «не сошлась
+   после ОДНОГО changes_requested» ловил стагнацию раньше замысла — на
+   первом входе, а не на возврате из ревью, — из-за чего `REVIEW.md` в
+   артефактной ветке клона не появлялся НИ РАЗУ).
 """
 import io
 import re
@@ -79,6 +102,33 @@ schema_version: 1
 ## Покрытие требований
 
 ## Влияние на систему
+"""
+
+PLAN_ESCALATE = """---
+task: {task}
+type: plan
+author_role: developer
+status: escalate
+schema_version: 1
+---
+
+# PLAN: канареечная задача — диагностика
+
+## Подход
+
+## Шаги
+
+## Покрытие требований
+
+## Влияние на систему
+
+## Эскалация
+
+Синтетическая эскалация песочницы (`_EscalatesOnReworkAgent`):
+разработчик не может продолжить без ответа Оператора — намеренно
+никогда не отработанное основание, чтобы прогон исчерпал
+`config.CANARY_MAX_ESCALATION_CYCLES` по-настоящему (`orchestrator/
+fsm_advance.py`, ветка `status == "escalate"` для PLAN.md).
 """
 
 REVIEW_MD = """---
@@ -202,6 +252,52 @@ class SmartAgent:
             f"{ROLE_LOG_MARKER} роль={role} задача={task_id} вызов={self._nonce}\n",
             encoding="utf-8")
         checkpoint.commit_step_artifacts(conn, task_id, role)
+        # См. докстринг модуля, расширение 2: без этой записи
+        # pre-advance rework-гейт (`auto._role_step_since_state_entry`)
+        # держал бы КАЖДЫЙ вход в состояние роли навсегда, не только
+        # повторный.
+        store.journal(conn, task_id, role, "agent run finished",
+                     f"песочница: синтетический шаг {role}, вызов "
+                     f"{self._nonce}")
+
+
+class _EscalatesOnReworkAgent(SmartAgent):
+    """Вариант `SmartAgent` для генуинного (не побочного эффекта
+    отсутствующего «agent run finished» — см. докстринг модуля,
+    расширение 2) исхода «не сошлась» ЧЕРЕЗ реальный цикл эскалаций:
+    ПЕРВЫЙ вход в `in_dev` — обычный готовый PLAN.md; ревью запрашивает
+    доработку (`extra_review_rounds*`) — задача возвращается в `in_dev`;
+    КАЖДЫЙ следующий вход в `in_dev` эскалирует (`PLAN.md status:
+    escalate`, `orchestrator/fsm_advance.py` — та же ветка кода, что и
+    `status: escalate` REVIEW.md, добавленная для PLAN.md отдельной
+    задачей 01M1R8B3ZKXQT0Z0G6QQQDV906) — синтетический ANSWER canary
+    (`canary._pass_escalated_with_synthetic_answer`) возвращает в
+    `in_dev`, разработчик эскалирует СНОВА — бесконечный цикл, который
+    `_drive_task` обрывает по-настоящему исчерпанным `escalation_cycles
+    > config.CANARY_MAX_ESCALATION_CYCLES` (`canary.py`), не имитацией
+    стагнации. К этому моменту PLAN.md (первый, ready) и REVIEW.md
+    (changes_requested) реально существуют в артефактной ветке клона —
+    ровно то, что нужно AC-3."""
+
+    def __init__(self):
+        super().__init__()
+        self._in_dev_visits: dict[str, int] = {}
+
+    def __call__(self, task_id: str, session_id: str | None = None) -> None:
+        self.calls.append(task_id)
+        conn = store.db()
+        t = store.get_task(conn, task_id)
+        if t["state"] == "in_dev":
+            visits = self._in_dev_visits.get(task_id, 0) + 1
+            self._in_dev_visits[task_id] = visits
+            if visits == 1:
+                self._commit(conn, task_id, "developer", "PLAN.md",
+                            PLAN_READY.format(task=task_id))
+            else:
+                self._commit(conn, task_id, "developer", "PLAN.md",
+                            PLAN_ESCALATE.format(task=task_id))
+            return
+        super().__call__(task_id, session_id)
 
 
 class _NeverSpecsAgent(SmartAgent):
