@@ -765,6 +765,28 @@ def open_alerts(conn, kind: str | None = None) -> list:
         "ORDER BY id DESC", (kind,)).fetchall()
 
 
+def max_alert_id(conn) -> int:
+    """Наибольший id таблицы `alerts`; 0 — таблица пуста.
+
+    Базовый снимок наблюдателя `watch` (SPEC 01M1VBEKRN0GA029J98S0K2DAQ,
+    AC-3/AC-8) перед первым чтением: без него не отличить «алерт уже
+    существовал до старта» от «появился только что» — `open_alerts`
+    (фильтр `ack_ts IS NULL`) для этого не годится, подтверждённый за
+    время работы `watch` алерт должен остаться в потоке.
+    """
+    row = conn.execute("SELECT MAX(id) AS m FROM alerts").fetchone()
+    return row["m"] or 0
+
+
+def alerts_since(conn, min_id: int) -> list:
+    """Алерты с `id > min_id`, по возрастанию `id` — независимо от
+    `ack_ts`/`kind` (наблюдатель `watch`, SPEC 01M1VBEKRN0GA029J98S0K2DAQ,
+    AC-3: `kind` не фильтруется, подтверждение алерта не убирает его из
+    потока новых записей)."""
+    return conn.execute(
+        "SELECT * FROM alerts WHERE id > ? ORDER BY id", (min_id,)).fetchall()
+
+
 # ===== Канарейка =====
 
 
