@@ -39,8 +39,8 @@ schema_version: 5
 
 | id | статус | файл/строка | суть | последствие | решение |
 |---|---|---|---|---|---|
-| R1-F1 | open | tasks/01M1VBEDGMEXHVGWAH42FTDZ4X/acceptance_tests/test_ac8_ac9_ac14_ac15_review_verdict_sha.py:93-112 | AC-9 не ловит заявленную мутацию требования 3 (assertion унаследована из порядка состояний до ADR-0015) | регресс гейта на ручном пути advance останется незамеченным этим тестом | новый amend-tests (ADR-0012): assertEqual(state(), "review") вместо assertNotEqual(state(), "verifying") |
-| R1-F2 | open | orchestrator/fsm_advance.py:220 и test_ac8_ac9_ac14_ac15_review_verdict_sha.py (докстринги) | докстринги называют целью перехода `verifying`, фактически — `acceptance` (после ADR-0015) | вводит в заблуждение будущего читателя, не влияет на поведение | поправить формулировку на `acceptance` |
+| R1-F1 | fixed | tasks/01M1VBEDGMEXHVGWAH42FTDZ4X/acceptance_tests/test_ac8_ac9_ac14_ac15_review_verdict_sha.py:93-112 | AC-9 не ловит заявленную мутацию требования 3 (assertion унаследована из порядка состояний до ADR-0015) | регресс гейта на ручном пути advance останется незамеченным этим тестом | Оператор применил amend-tests (ANSWER-3.md): assertion заменена на assertEqual(state(), "review", ...), лок планки сдвинут; прогон планки — 16 из 16 зелёных |
+| R1-F2 | fixed | orchestrator/fsm_advance.py:220 и test_ac8_ac9_ac14_ac15_review_verdict_sha.py (докстринги) | докстринги называют целью перехода `verifying`, фактически — `acceptance` (после ADR-0015) | вводит в заблуждение будущего читателя, не влияет на поведение | код: коммит 33e963b5 (докстринг `_review_escalation_sha_gate` — `acceptance` вместо `verifying`); планка: тем же amend-tests, что и R1-F1 (ANSWER-3.md) |
 
 ## Вердикт
 
