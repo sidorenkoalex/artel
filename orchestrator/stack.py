@@ -50,6 +50,14 @@ THIRD_PARTY_EXCEPTIONS = (
              "вне этой задачи"),
 )
 
+# Таймаут ОТДЕЛЬНОГО теста pytest-timeout (SPEC 01M1TKP6AAY4W8GDGZNA9R0JZT,
+# требование 4) — не таймаут ВСЕГО прогона (те остаются `config.py`:
+# `ACCEPTANCE_TIMEOUT_SEC`/`FULL_SUITE_TIMEOUT_SEC`). `pyproject.toml`
+# (`[tool.pytest.ini_options] timeout`, требование 6) несёт то же число
+# литералом — TOML не умеет читать значение отсюда, синхронность двух
+# мест сверяет `tests/test_stack.py`.
+PER_TEST_TIMEOUT_SEC = 120
+
 ToolRequirement = namedtuple("ToolRequirement", "minimum command")
 
 REQUIRED_TOOLS = {
@@ -186,7 +194,14 @@ def _venv_packages_check() -> StackCheck:
     закреплённых версий (`pip freeze` внутри venv против
     `config.REQUIREMENTS_LOCK`) — WARN с именами РАСХОДЯЩИХСЯ пакетов, не
     общей фразой. Зовётся, только когда `_venv_exists_check` уже нашла
-    venv на диске (иначе сверять нечего)."""
+    venv на диске (иначе сверять нечего).
+
+    `pytest` среди расходящихся пакетов (отсутствует вовсе или версия не
+    та) — требование 8 (SPEC 01M1TKP6AAY4W8GDGZNA9R0JZT, AC-12) требует
+    явного упоминания ЕГО доступности ролям/пульту отдельной фразой, не
+    растворённого в общем перечне имён через запятую: раннер пульта сам
+    на pytest (эта же задача) — его отсутствие в venv роли не «один из
+    пакетов», а прямая невозможность прогнать приёмку/полный набор."""
     try:
         pinned = _parse_pinned_versions(
             Path(config.REQUIREMENTS_LOCK).read_text(encoding="utf-8"))
@@ -207,10 +222,12 @@ def _venv_packages_check() -> StackCheck:
     mismatched = sorted(name for name, version in pinned.items()
                         if installed.get(name) != version)
     if mismatched:
-        return StackCheck(
-            "venv-packages", "warn",
-            f"версии расходятся с файлом закреплённых версий: "
-            f"{', '.join(mismatched)}")
+        detail = (f"версии расходятся с файлом закреплённых версий: "
+                  f"{', '.join(mismatched)}")
+        if "pytest" in mismatched:
+            detail += ("; pytest недоступен ролям/пульту требуемой версии "
+                      "в этом venv — пересобери venv-sync")
+        return StackCheck("venv-packages", "warn", detail)
     return StackCheck("venv-packages", "ok",
                       "venv согласован с файлом закреплённых версий")
 
