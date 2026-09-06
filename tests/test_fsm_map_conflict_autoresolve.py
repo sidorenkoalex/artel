@@ -10,179 +10,29 @@
 FSM-песочницы без реального git, что и `tests/test_branch_freshness_
 gate.py` (T051).
 """
-import shutil
 import subprocess
 import sys
-import tempfile
 import unittest
 from pathlib import Path
 from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from orchestrator import (acceptance, agent_log, catalog, config, fsm,  # noqa: E402
-                          gitcmd, store, workspace)
-from tests.sandbox import (SpyRun, capture, capture_new_task_id,  # noqa: E402
-                           disk_backed_ls_tree_files, disk_backed_show,
-                           fake_git)
-
-REPO_ROOT = Path(__file__).resolve().parent.parent
-
-PLAN_READY = """---
-task: {task}
-type: plan
-author_role: developer
-status: ready
-schema_version: 1
----
-
-# PLAN: авторазрешение конфликта карты
-
-## Подход
-
-## Шаги
-
-## Покрытие требований
-
-## Влияние на систему
-"""
+from orchestrator import acceptance, agent_log, fsm, gitcmd, store  # noqa: E402
+from tests.sandbox import LightTransitionSandbox  # noqa: E402
 
 
-class MapConflictAutoResolveTest(unittest.TestCase):
+class MapConflictAutoResolveTest(LightTransitionSandbox):
 
     MAP_REL = "docs/codebase-map.md"
 
-    def setUp(self):
-        tmp = tempfile.TemporaryDirectory()
-        self.addCleanup(tmp.cleanup)
-        root = Path(tmp.name)
-        shutil.copytree(REPO_ROOT / "templates", root / "templates")
-
-        for attr, value in (("DB", root / ".artel" / "state.db"),
-                            ("TASKS", root / "tasks"),
-                            ("LOGS", root / ".artel" / "logs"),
-                            ("ROOT", root),
-                            ("PROJECTS", root / ".artel" / "projects"),
-                            ("TARGETS", root / "targets.yaml"),
-                            ("ROLE_HOME", root / ".artel" / "home"),
-                            ("ROLE_CONFIG_DIR",
-                             root / ".artel" / "home" / ".claude"),
-                            ("BACKUP_MARKER", root / ".artel" / "backup-marker"),
-                            ("WORKTREES", root / ".artel" / "worktrees")):
-            patcher = mock.patch.object(config, attr, value)
-            patcher.start()
-            self.addCleanup(patcher.stop)
-
-        patcher = mock.patch.object(gitcmd, "git", fake_git)
-        patcher.start()
-        self.addCleanup(patcher.stop)
-        # `fake_git` без REVIEW.md R1-F1 (01M1NBWPKNBXP9ZXXQDJM7AXPJ,
-        # итерация 1) отвечает на "rev-parse FETCH_HEAD" пустой строкой —
-        # `_pull_main_or_escalate` деградировала бы на "fresh" немедленно
-        # и ни разу не позвала бы merge, хотя тесты этого файла кроют
-        # именно поведение НА merge-конфликте; truthy-заглушка держит
-        # прежний путь исполнения (тот же приём, что `tests/
-        # test_branch_freshness_gate.py`).
-        origin_sha_patcher = mock.patch.object(
-            fsm, "_origin_main_sha", return_value="deadbeefcafefeed")
-        origin_sha_patcher.start()
-        self.addCleanup(origin_sha_patcher.stop)
-        # A7 (generic-путь заведения, AC-5): `cmd_new` коммитит артефакты
-        # плотницки (`artifact_branch.write_commit`) — та функция зовёт
-        # `subprocess.run` НАПРЯМУЮ, минуя `gitcmd.git`/фейк выше; `root`
-        # здесь не настоящий git-репозиторий — без этого патча `cmd_new`
-        # падает `sys.exit` («git не ответил») ещё до сценария, который
-        # тест проверяет (тот же приём, что `tests.sandbox.TmpRootTest.
-        # setUp`/`tests.test_spec_budget`).
-        spy_patcher = mock.patch.object(gitcmd.subprocess, "run", SpyRun())
-        spy_patcher.start()
-        self.addCleanup(spy_patcher.stop)
-        # `artifact_source.resolve` теперь ВСЕГДА возвращает `foreign=True`
-        # — FSM читает SPEC/PLAN через `gitcmd.show`/`ls_tree_files`, не с
-        # диска напрямую; эта песочница без настоящего git ведёт один
-        # источник истины — диск `self.tdir` (тот же приём, что
-        # `tests.test_invariants.FsmTest`).
-        show_patcher = mock.patch.object(gitcmd, "show", disk_backed_show)
-        show_patcher.start()
-        self.addCleanup(show_patcher.stop)
-        ls_patcher = mock.patch.object(gitcmd, "ls_tree_files",
-                                       disk_backed_ls_tree_files)
-        ls_patcher.start()
-        self.addCleanup(ls_patcher.stop)
-
-        self.wt_path = root / "wt"
-        wt_patcher = mock.patch.object(
-            workspace, "ensure", lambda task_id, branch: (self.wt_path, None))
-        wt_patcher.start()
-        self.addCleanup(wt_patcher.stop)
-
-        self.capture(catalog.cmd_init)
-        _, self.TASK = capture_new_task_id(
-            catalog.cmd_new, "Авторазрешение конфликта карты")
-        self.tdir = config.TASKS / self.TASK
-        self.branch = self.task_row()["branch"]
-
     # ------------------------------------------------------------ утилиты
-
-    capture = staticmethod(capture)
-
-    def task_row(self):
-        return store.db().execute("SELECT * FROM tasks WHERE id=?",
-                                  (self.TASK,)).fetchone()
-
-    def state(self) -> str:
-        return self.task_row()["state"]
-
-    def set_state(self, state: str) -> None:
-        conn = store.db()
-        conn.execute("UPDATE tasks SET state=? WHERE id=?", (state, self.TASK))
-        conn.commit()
 
     def journal_rows(self) -> list:
         return store.task_steps(store.db(), self.TASK)
 
     def journal_details(self) -> list[str]:
         return [r["detail"] for r in self.journal_rows()]
-
-    def write_plan_ready(self) -> None:
-        self.tdir.mkdir(parents=True, exist_ok=True)
-        (self.tdir / "PLAN.md").write_text(
-            PLAN_READY.format(task=self.TASK), encoding="utf-8")
-
-    def write_acceptance_plank(self) -> None:
-        """SPEC 01M1R9YEK08XEQWBFX0929WFVJ, AC-1/AC-2: планка теперь
-        читается через `acceptance.materialize_from_branch`, backed (в
-        этой лёгкой песочнице) тем же диском `self.tdir`, что и
-        `disk_backed_show`/`disk_backed_ls_tree_files` — SPEC.md со
-        `schema_version: 2` без `skip_tests` + непустой
-        `acceptance_tests/` обязаны быть на диске ДО перехода, иначе
-        авторазрешение конфликта карты уйдёт по вырожденной ветке
-        AC-3/AC-5, минуя `acceptance.run` вовсе (тот же приём, что
-        `tests/test_branch_freshness_gate.py::write_acceptance_plank`)."""
-        self.tdir.mkdir(parents=True, exist_ok=True)
-        (self.tdir / "SPEC.md").write_text(
-            "---\n"
-            f"task: {self.TASK}\n"
-            "type: spec\n"
-            "author_role: analyst\n"
-            "status: ready\n"
-            "schema_version: 2\n"
-            "---\n\n"
-            "# SPEC: планка\n\n"
-            "## Критерии приёмки\n\nAC-1. ...\n",
-            encoding="utf-8")
-        tests_dir = self.tdir / "acceptance_tests"
-        tests_dir.mkdir(parents=True, exist_ok=True)
-        (tests_dir / "test_stub.py").write_text(
-            "import unittest\n\n\n"
-            "class StubTest(unittest.TestCase):\n\n"
-            "    def test_stub(self):\n        pass\n",
-            encoding="utf-8")
-
-    def advance_from_in_dev(self) -> str:
-        self.write_plan_ready()
-        self.set_state("in_dev")
-        return self.capture(fsm.cmd_advance, self.TASK)
 
     @staticmethod
     def _ok(repo, *args) -> subprocess.CompletedProcess:
