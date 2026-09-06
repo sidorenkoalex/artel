@@ -24,7 +24,8 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from orchestrator import (agent_log, auto, budget, catalog,  # noqa: E402
-                          ci, config, fsm, gitcmd, pause, runner, store)
+                          ci, config, fsm, gitcmd, github_adapter, pause,
+                          runner, store)
 from tests.sandbox import (SpyRun, capture,  # noqa: E402
                            capture_new_task_id, disk_backed_ls_tree_files,
                            disk_backed_show, fake_git)
@@ -406,6 +407,33 @@ class AutoStopsWhereTheOperatorIsNeededTest(AutoCycleTest):
         self.assertEqual(self.state(), "acceptance")
         self.assertEqual(len(self.agent.calls), 2)
         self.assertIn("приёмка — решение Оператора", out)
+
+    def test_origin_push_check_runs_once_not_twice_on_the_way_to_acceptance(self):
+        """Регресс REVIEW.md 01M1TQ0TRCZPRZX22C4084NCPB, итерация 1,
+        замечание R1-F1 (blocker): сверка головы на origin
+        (`github_adapter.ensure_head_in_origin`) — один из семи рубежей,
+        переехавших с `in_dev -> review` на `in_dev -> verifying`
+        (ADR-0015, требование 1) — должна звониться РОВНО один раз за
+        весь проход `in_dev -> verifying -> review(approved) ->
+        acceptance`, а не ещё раз на approved-ветке `review()`.
+
+        Ловит мутацию: рубеж оставлен на старом месте (в `review()`)
+        одновременно с новым (в `in_dev()`) — `call_count` вырос бы до 2.
+        """
+        spy = mock.MagicMock(wraps=github_adapter.ensure_head_in_origin)
+        self.patch_object(github_adapter, "ensure_head_in_origin", spy)
+        self.patch_object(ci, "verifying_status",
+                          lambda branch: (ci.VERIFYING_GREEN,
+                                          "CI коммита aaaaaaaa зелёный (2 проверок)"))
+        self.write_plan("ready")
+        self.set_state("in_dev")
+        self.agent.script = [lambda: None, lambda: self.write_review("approved", 1)]
+
+        self.auto()
+
+        self.assertEqual(self.state(), "acceptance")
+        self.assertEqual(spy.call_count, 1,
+                         "сверка головы на origin вызвана не ровно один раз")
 
     def test_review_iterations_are_passed_without_the_operator(self):
         """Замечания ревью — тоже агентские шаги: цикл их отрабатывает сам.

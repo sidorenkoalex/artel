@@ -170,14 +170,13 @@ def _freshness_refuses(conn, task_id: str, t, meta, status: str) -> bool:
 
 def _origin_push_gate(conn, task_id: str, t) -> GateRefusal | None:
     """Голова ветки задачи на origin — предусловие входа в verifying
-    (SPEC 01M1GS5HZ1JXFGKVR95HEW0AEZ, требования 1-3, AC-1..AC-5), вызывается
-    только для approved не-канареечных задач, ДО потребления свежести
-    вердикта (`review()`: иначе провалившийся push съел бы свежесть первым
-    же заходом и заблокировал повторный advance после починки origin,
-    AC-5 — тем же «вердикт уже учтён», что и `_freshness_refuses`).
+    (SPEC 01M1GS5HZ1JXFGKVR95HEW0AEZ, требования 1-3, AC-1..AC-5; ADR-0015,
+    требование 2 — рубеж переехал с входа `review()` на вход `in_dev ->
+    verifying` целиком, без дублирования на новом месте), вызывается
+    только для не-канареечных задач, в `in_dev()` ниже.
 
     Канареечная задача (SPEC 01M1NEEWH5K1XPFRDGRMPYSBXJ, требование
-    11/AC-11) не зовёт этот гейт вовсе (см. `review()`): её `verifying`
+    11/AC-11) не зовёт этот гейт вовсе (см. `in_dev()`): её `verifying`
     не ждёт CI и не читает origin (`canary._kill_at_verifying` убивает
     задачу сразу по входу) — push на origin-заглушку
     (`canary.ORIGIN_STUB_URL`) гарантированно проваливается по
@@ -297,10 +296,6 @@ def review(conn, task_id: str, t, tdir, target: str, state: str) -> bool:
         return True
     if _freshness_refuses(conn, task_id, t, meta, status):
         return False
-
-    if status == "approved" and not t["is_canary"]:
-        if _run_gates(conn, task_id, [lambda: _origin_push_gate(conn, task_id, t)]):
-            return False
 
     iteration = artifacts.fresh_verdict_iteration(meta, t["reviewed_iter"])
     store.update_task(conn, task_id, reviewed_iter=iteration)
