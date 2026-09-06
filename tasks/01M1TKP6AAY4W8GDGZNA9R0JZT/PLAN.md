@@ -357,3 +357,71 @@ venv нет нигде, функция возвращает `sys.executable`, н
 
 Код задачи вне `orchestrator/stack.py`/`tests/test_stack.py`/
 `docs/codebase-map.md` этим возвратом не менялся.
+
+## Возврат — venv по расположению кода
+
+Причина возврата: планка задачи всё ещё красна одним тестом после
+ANSWER-6 — `test_ac5_amend_journal.py::test_ac5_journal_entry_names_
+pytest_style_green_summary`, та же ошибка `Error importing plugin
+"timeout": No module named 'timeout'` (Оператор воспроизвёл прогоном
+голым `python3` из PATH против worktree — 28 тестов, 1 красный).
+Диагноз и требуемый фикс — ANSWER-7.
+
+Причина (ANSWER-7): AC-5 строит песочницу `RealGitSandbox` (`tests/
+sandbox.py`), подменяющую `config.ROOT` на временный git-репозиторий,
+никак не связанный с настоящей копией пульта. `stack._main_copy_root()`
+(ANSWER-6) делала `git rev-parse --git-common-dir` с `cwd=config.ROOT`
+— в этой песочнице `config.ROOT` указывает на временный репозиторий без
+venv ни у «worktree», ни у «главной копии» (сам временный репозиторий
+её не несёт) — запасной `sys.executable` снова уходил на pyenv, хотя
+исполняемый код `stack.py` физически лежит в настоящей копии пульта.
+
+Исправлено `orchestrator/stack.py` ровно как в ANSWER-7: отправная
+точка `git rev-parse --git-common-dir` — расположение САМОГО МОДУЛЯ, не
+`config.ROOT`. Вынесено именованной константой `_MODULE_ROOT =
+Path(__file__).resolve().parent.parent`, вычисленной один раз при
+импорте (а не инлайн в `_main_copy_root()`) — так тесты подменяют её
+тем же приёмом, что и `config.ROOT`/`config.VENV_DIR`
+(`mock.patch.object(stack, "_MODULE_ROOT", ...)`), не трогая реальный
+`__file__` модуля. `_main_copy_root()` зовёт `git rev-parse` с
+`cwd=_MODULE_ROOT`; относительный ответ git резолвится от того же
+якоря. Порядок поиска `pytest_python_executable()` (`config.VENV_DIR`
+→ venv главной копии → `sys.executable`) не менялся.
+
+`tests/test_stack.py`:
+- `MainCopyRootTest::test_uses_module_root_not_config_root` (новый) —
+  ровно сценарий ANSWER-7/AC-5: `config.ROOT` подменён на временный
+  каталог без venv, `subprocess.run` замокан и записывает переданный
+  `cwd` — он равен `stack._MODULE_ROOT`, не подменённому `config.ROOT`.
+  Мутация «отправная точка снова `config.ROOT`» — красный
+  (`assertEqual`/`assertNotEqual` откажут).
+- `PytestPythonExecutableWorktreeTest` (класс ANSWER-6) — оба теста
+  адаптированы под новый якорь: подменяют `stack._MODULE_ROOT` вместо
+  `config.ROOT` (единственное, что реально влияет на
+  `_main_copy_root()` теперь), сценарий и мутационное покрытие не
+  изменились — без адаптации оба теста либо ловили ложный `FAIL`
+  (первый — сравнение с фейковым путём против настоящей главной копии,
+  найденной по `_MODULE_ROOT`), либо превращались в тест, ничего не
+  проверяющий по существу (второй — совпадение с `sys.executable`
+  оказывалось случайным для этого конкретного окружения, а не
+  результатом настоящего шага 3).
+
+Проверено прогоном (в переднем плане, синхронно, по правилу скила —
+полный `tests/` не гонялся):
+- `python3 -m unittest tests.test_stack -v` — 14 passed (было 13,
+  добавлен `MainCopyRootTest`).
+- `python3 -m pytest tasks/01M1TKP6AAY4W8GDGZNA9R0JZT/acceptance_tests
+  -p no:cacheprovider -p timeout -o timeout=120` — 28 passed за 125.98с
+  (все 28, включая ранее красный `test_ac5_amend_journal.py`).
+- `python3 -m unittest tests.test_stack tests.test_amend
+  tests.test_acceptance -v` — 45 passed (регресс затронутых модулей).
+- `python3 scripts/codebase_map.py` — перегенерирован (правка
+  `orchestrator/stack.py`/`tests/test_stack.py`); диф — только
+  `built_at_sha`, структура модулей не изменилась (публичные функции и
+  список импортов те же).
+- `python3 scripts/guard.py tasks/01M1TKP6AAY4W8GDGZNA9R0JZT/SPEC.md
+  tasks/01M1TKP6AAY4W8GDGZNA9R0JZT/PLAN.md
+  tasks/01M1TKP6AAY4W8GDGZNA9R0JZT/REVIEW.md` — «ок (3 файлов)».
+
+Код задачи вне `orchestrator/stack.py`/`tests/test_stack.py`/
+`docs/codebase-map.md` этим возвратом не менялся.
