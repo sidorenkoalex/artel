@@ -23,19 +23,18 @@ AC-6/AC-10 «рамка ниже калибровки: $N против ~$M» о�
 поведение на 4 файлах зоны (единственный зазор между «до 3» и «5 и
 более»), тесты его не трогают.
 
-Красен до реализации, по двум разным причинам:
+Красен до реализации: `CalibrationTableIsNamedInConfigTest` — `orchestrator.config`
+сегодня не несёт атрибут `BUDGET_CALIBRATION_TABLE` (grep по
+`orchestrator/config.py` на «CALIBRATION» пуст) — `hasattr` падает
+первым же `assertTrue`.
 
-- `CalibrationTableIsNamedInConfigTest` — `orchestrator.config` сегодня
-  не несёт атрибут `BUDGET_CALIBRATION_TABLE` (grep по `orchestrator/
-  config.py` на «CALIBRATION» пуст) — `hasattr` падает первым же
-  `assertTrue`.
-- Все остальные тесты файла (`CalibrationTableValuesTest`/
-  `CalibrationBoundariesTest`) — `orchestrator/fsm.py::_cmd_approve` на
-  `spec_gate` сегодня печатает только строку «дальше: …» (grep по
-  `orchestrator/fsm.py` и `orchestrator/budget.py` на «калибровки»/
-  «ориентир» пуст). `WARNING_RE.search(out)` вернёт `None` для КАЖДОГО
-  сценария, `assertIsNotNone` упадёт на первой же строке тела
-  `_orientir`, ни один тест не дойдёт до сравнения чисел.
+Красен до реализации: `CalibrationTableValuesTest`/`CalibrationBoundariesTest` —
+`orchestrator/fsm.py::_cmd_approve` на `spec_gate` сегодня печатает
+только строку «дальше: …» (grep по `orchestrator/fsm.py` и
+`orchestrator/budget.py` на «калибровки»/«ориентир» пуст).
+`WARNING_RE.search(out)` вернёт `None` для КАЖДОГО сценария,
+`assertIsNotNone` упадёт на первой же строке тела `_orientir`, ни один
+тест не дойдёт до сравнения чисел.
 """
 import sys
 import unittest
