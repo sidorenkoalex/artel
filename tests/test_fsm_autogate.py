@@ -16,11 +16,12 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from orchestrator import acceptance, artifact_source, budget, fsm_autogate, gitcmd, workspace
+from orchestrator import acceptance, artifact_source, budget, ci, fsm_autogate, gitcmd, workspace
 from scripts import guard
 
 BRANCH = "artifact/T001"
 SHA = "a" * 40
+CODE_BRANCH = "task/t001-x"
 
 
 class _AutogateConditionsUnitTest(unittest.TestCase):
@@ -31,14 +32,20 @@ class _AutogateConditionsUnitTest(unittest.TestCase):
     TASK = "T001"
 
     def call(self, *, ls_tree_files=None, show_map=None, acc_tdir=None,
-             iteration=1):
+             iteration=1, verifying_status=(ci.VERIFYING_GREEN, "зелёный")):
         acc_tdir = acc_tdir if acc_tdir is not None else Path("/no/such/dir")
         show_map = show_map or {}
-        t = {"branch": "task/t001-x", "spent_usd": 0.0, "budget_usd": 5.0}
+        t = {"branch": CODE_BRANCH, "spent_usd": 0.0, "budget_usd": 5.0}
 
         def fake_show(branch, rel):
             self.assertEqual(branch, BRANCH)
             return (show_map[rel], "") if rel in show_map else (None, "нет файла")
+
+        def fake_verifying_status(branch):
+            self.assertEqual(branch, CODE_BRANCH,
+                             "ci-критерий обязан спрашивать статус КОДОВОЙ "
+                             "ветки задачи, не артефактной")
+            return verifying_status
 
         with mock.patch.object(artifact_source, "resolve",
                                return_value=(BRANCH, True)), \
@@ -52,7 +59,9 @@ class _AutogateConditionsUnitTest(unittest.TestCase):
                                return_value=Path("/wt")), \
              mock.patch.object(acceptance, "run_full_suite",
                                return_value=(True, "")), \
-             mock.patch.object(budget, "budget_block", return_value=None):
+             mock.patch.object(budget, "budget_block", return_value=None), \
+             mock.patch.object(ci, "verifying_status",
+                               side_effect=fake_verifying_status):
             return fsm_autogate._autogate_conditions(object(), self.TASK, t,
                                                       acc_tdir, iteration)
 
@@ -181,6 +190,88 @@ class DiskAccTdirIgnoredForConditionATest(_AutogateConditionsUnitTest):
                 side_effect=AssertionError(
                     "condition A must not touch the disk-based scan")):
             ok, reason = self.call(ls_tree_files=[rel], show_map={rel: content})
+
+        self.assertIsNone(reason)
+
+
+def _ci_marker_planka(task: str, n: int, reason: str) -> tuple[str, str]:
+    rel = f"tasks/{task}/acceptance_tests/test_marker.py"
+    content = (f'"""Планка с единственной пометкой ci."""\n'
+              f"# AC-{n}: ci — {reason}\n")
+    return rel, content
+
+
+class CiMarkerConditionTest(_AutogateConditionsUnitTest):
+    """Пометка `ci` (01M1SHJTT0V516BWHYXWS50F3G, требования 2, 3): не
+    смешивается с manual/skip (AC-3), исполняется по зелёному CI ГОЛОВЫ
+    КОДОВОЙ ветки задачи `t["branch"]`, не артефактной ветки планки
+    (AC-4, AC-5)."""
+
+    def test_green_ci_satisfies_the_ci_marker(self):
+        """Ловит мутацию: код, не добавляющий `ok`-запись на зелёном CI
+        (или добавляющий её, но не пропускающий дальше к условиям б/в/г/д),
+        уронил бы либо непустой `reason`, либо отсутствие строки про
+        ci-критерии в перечне выполненных условий."""
+        rel, content = _ci_marker_planka(self.TASK, 1, "CI ветки зелёный")
+
+        ok, reason = self.call(
+            ls_tree_files=[rel], show_map={rel: content},
+            verifying_status=(ci.VERIFYING_GREEN, "CI коммита abc12345 "
+                              "зелёный (2 проверок)"))
+
+        self.assertIsNone(reason)
+        self.assertTrue(any("критерии ci подтверждены" in line and "AC-1" in line
+                            for line in ok))
+
+    def test_red_ci_blocks_the_ci_marker(self):
+        """AC-5: CI красный — критерий `ci` не засчитан, автогейт
+        отказывает с причиной, называющей критерий и статус CI."""
+        rel, content = _ci_marker_planka(self.TASK, 1, "CI ветки зелёный")
+
+        ok, reason = self.call(
+            ls_tree_files=[rel], show_map={rel: content},
+            verifying_status=(ci.VERIFYING_RED, "CI коммита abc12345 не "
+                              "зелёный: python=failure"))
+
+        self.assertIsNotNone(reason)
+        self.assertIn("AC-1", reason)
+        self.assertIn("python=failure", reason)
+
+    def test_missing_ci_data_blocks_the_ci_marker(self):
+        """AC-5: данных CI нет вовсе (`VERIFYING_NONE`) — тот же fail-
+        closed отказ, что и для явно красного CI, не автопроход."""
+        rel, content = _ci_marker_planka(self.TASK, 1, "CI ветки зелёный")
+
+        ok, reason = self.call(
+            ls_tree_files=[rel], show_map={rel: content},
+            verifying_status=(ci.VERIFYING_NONE, "проверок нет вовсе"))
+
+        self.assertIsNotNone(reason)
+        self.assertIn("AC-1", reason)
+
+    def test_ci_marker_is_not_reported_as_manual_or_skip(self):
+        """AC-3: присутствие пометки `ci` само по себе не отправляет
+        задачу на ручной гейт — отказ (когда он есть) обязан звучать про
+        статус CI, а не «критерии manual»/«критерии skip»."""
+        rel, content = _ci_marker_planka(self.TASK, 1, "CI ветки зелёный")
+
+        ok, reason = self.call(
+            ls_tree_files=[rel], show_map={rel: content},
+            verifying_status=(ci.VERIFYING_NONE, "проверок нет вовсе"))
+
+        self.assertIsNotNone(reason)
+        self.assertNotIn("критерии manual", reason)
+        self.assertNotIn("критерии skip", reason)
+
+    def test_ci_marker_queries_the_code_branch_not_the_artifact_branch(self):
+        """Требование 2: sha головы КОДОВОЙ ветки (`t["branch"]`), не
+        артефактной ветки планки (`BRANCH`, откуда читается сама
+        пометка) — `fake_verifying_status` в `call()` уже требует это
+        через `assertEqual`, здесь фиксируется явным тестом, чтобы
+        регресс не потерялся при рефакторинге."""
+        rel, content = _ci_marker_planka(self.TASK, 1, "CI ветки зелёный")
+
+        ok, reason = self.call(ls_tree_files=[rel], show_map={rel: content})
 
         self.assertIsNone(reason)
 

@@ -256,7 +256,7 @@ def _review_approved(conn, task_id: str, t, tdir, target: str, state: str,
         print(f"  дальше: почини код (не тест) и повтори "
               f"artel.py advance {task_id}")
         return False
-    card = acceptance.summary(acc_tdir)
+    card = acceptance.summary(acc_tdir, branch=t["branch"])
     store.journal(conn, task_id, "fsm", "приёмочные тесты пройдены",
                   f"{card}\nокружение: {fingerprint}")
     print(f"[{task_id}] {card}")
@@ -465,8 +465,10 @@ def tests_writing(conn, task_id: str, t, tdir, target: str, state: str) -> bool:
 def _capacity_gate(conn, task_id: str, t) -> GateRefusal | None:
     """Гейт ёмкости diff снимка на `in_dev -> review` (tasks/
     01M1GCN1FPSC1A6WK9WD1Q1V8X, требование 5, AC-12..AC-16): diff снимка
-    БЕЗ `tasks/<id>/` (`git diff config.MAIN_BRANCH...<ветка задачи> --
-    . ':!tasks/<id>/'`, tasks/01M1RA0N6FCFEQBB82K58GM12X, AC-1) — тот же
+    БЕЗ `tasks/<id>/` (`git diff gitcmd.diff_base(ветка)...<ветка задачи>
+    -- . ':!tasks/<id>/'`, tasks/01M1RA0N6FCFEQBB82K58GM12X, AC-1; база —
+    точка расхождения с origin/main или локальным main, не голый
+    `config.MAIN_BRANCH`, tasks/01M1SG9T962WJJ31S282GWM0EN) — тот же
     расчёт, что и «полный» `diff_type` в `review.review_package` при
     `iteration == 1` (T029) — не имеет права превышать
     `config.REVIEW_SNAPSHOT_DIFF_MAX_BYTES`. Копия артефактов задачи
@@ -517,15 +519,28 @@ def _capacity_gate(conn, task_id: str, t) -> GateRefusal | None:
     if store.task_target(conn, task_id) != config.DEFAULT_TARGET:
         return None
     tasks_prefix = f"tasks/{task_id}/"
-    code_diff, _, reason = _review_git_diff_part(
-        config.MAIN_BRANCH, t["branch"], pathspec=(".", f":!{tasks_prefix}"))
+    # База сравнения — merge-base с origin/main или локальным main (tasks/
+    # 01M1SG9T962WJJ31S282GWM0EN, AC-1/AC-3), не голый `config.MAIN_BRANCH`:
+    # локальный пин по построению отстаёт от origin/main, которую ветка
+    # задачи подтягивает, и раздувает снимок чужими коммитами.
+    base = gitcmd.diff_base(t["branch"])
     action = "переход отклонён: гейт ёмкости diff"
+    if base is None:
+        detail = (f"гейт ёмкости: git не ответил на определение базы "
+                 f"сравнения (merge-base с origin/{config.MAIN_BRANCH} "
+                 f"либо локальным {config.MAIN_BRANCH}) для ветки "
+                 f"{t['branch']} — сверка размера невозможна")
+        hint = (f"разберись, почему git не отвечает на merge-base "
+               f"для {t['branch']}, и повтори artel.py advance {task_id}")
+        return GateRefusal(action, detail, hint)
+    code_diff, _, reason = _review_git_diff_part(
+        base, t["branch"], pathspec=(".", f":!{tasks_prefix}"))
     if reason:
         detail = (f"гейт ёмкости: git не ответил на diff снимка "
-                 f"({config.MAIN_BRANCH}...{t['branch']}) — сверка "
-                 f"размера невозможна: {reason}")
+                 f"({base}...{t['branch']}) — сверка размера невозможна: "
+                 f"{reason}")
         hint = (f"разберись, почему git не отвечает на diff "
-               f"{config.MAIN_BRANCH}...{t['branch']}, и повтори "
+               f"{base}...{t['branch']}, и повтори "
                f"artel.py advance {task_id}")
         return GateRefusal(action, detail, hint)
     code_size = (0 if code_diff == _EMPTY_DIFF_TEXT
@@ -533,17 +548,20 @@ def _capacity_gate(conn, task_id: str, t) -> GateRefusal | None:
     if code_size <= config.REVIEW_SNAPSHOT_DIFF_MAX_BYTES:
         return None
     artifacts_diff, _, artifacts_reason = _review_git_diff_part(
-        config.MAIN_BRANCH, t["branch"], pathspec=(tasks_prefix,))
+        base, t["branch"], pathspec=(tasks_prefix,))
     if artifacts_reason:
         artifacts_note = f"неизвестен (git не ответил: {artifacts_reason})"
     elif artifacts_diff == _EMPTY_DIFF_TEXT:
         artifacts_note = "0 байт (изменений нет)"
     else:
         artifacts_note = f"{len(artifacts_diff.encode('utf-8'))} байт"
-    detail = (f"{CAPACITY_GATE_REASON} ({task_id} «{t['title']}»): diff "
-             f"кода {code_size} байт > потолка "
-             f"{config.REVIEW_SNAPSHOT_DIFF_MAX_BYTES} байт (исключённые "
-             f"артефакты {tasks_prefix}: {artifacts_note})")
+    # Источник базы в сообщении (требование 4/AC-6) — Оператор видит, с чем
+    # реально сравнивали, не только литерал diff-диапазона.
+    source = gitcmd.diff_base_source(t["branch"])
+    detail = (f"{CAPACITY_GATE_REASON} ({task_id} «{t['title']}», база "
+             f"сравнения {base} от {source}): diff кода {code_size} байт "
+             f"> потолка {config.REVIEW_SNAPSHOT_DIFF_MAX_BYTES} байт "
+             f"(исключённые артефакты {tasks_prefix}: {artifacts_note})")
     hint = "решение Оператора — разделить задачу или поднять потолок (ADR-0002)"
     return GateRefusal(action, detail, hint)
 
@@ -682,13 +700,26 @@ def _zones_gate(conn, task_id: str, t, branch: str,
     declared = _split_zone_paths(t["zones"]) + _split_zone_paths(t["zones_extension"])
     if not declared:
         return None
-    files = gitcmd.diff_names(config.MAIN_BRANCH, t["branch"])
+    # База сравнения — merge-base с origin/main или локальным main (tasks/
+    # 01M1SG9T962WJJ31S282GWM0EN, AC-1/AC-2), не голый `config.MAIN_BRANCH`:
+    # иначе коммит main, ещё не влитый в ветку задачи, выглядит правкой
+    # самой задачи и ложно отказывает переход как «вне зон».
+    base = gitcmd.diff_base(t["branch"])
+    if base is None:
+        detail = (f"гейт зон: git не ответил на определение базы сравнения "
+                 f"(merge-base с origin/{config.MAIN_BRANCH} либо "
+                 f"локальным {config.MAIN_BRANCH}) для ветки {t['branch']} "
+                 f"— сверка с зонами невозможна")
+        hint = (f"разберись, почему git не отвечает на merge-base "
+               f"для {t['branch']}, и повтори artel.py advance {task_id}")
+        return GateRefusal("переход отклонён: гейт зон", detail, hint)
+    files = gitcmd.diff_names(base, t["branch"])
     if files is None:
         detail = (f"гейт зон: git не ответил на список файлов диффа "
-                 f"({config.MAIN_BRANCH}...{t['branch']}) — сверка с "
-                 f"зонами невозможна")
+                 f"(база {base}...{t['branch']}) — сверка с зонами "
+                 f"невозможна")
         hint = (f"разберись, почему git не отвечает на diff "
-               f"{config.MAIN_BRANCH}...{t['branch']}, и повтори "
+               f"{base}...{t['branch']}, и повтори "
                f"artel.py advance {task_id}")
         return GateRefusal("переход отклонён: гейт зон", detail, hint)
 
@@ -714,7 +745,11 @@ def _zones_gate(conn, task_id: str, t, branch: str,
                 return None
             out_of_zone = still_out
 
-    detail = (f"дифф трогает файлы вне заявленных zones и COMMON_ZONES: "
+    # Источник базы в сообщении (требование 4/AC-6) — Оператор видит, с чем
+    # реально сравнивали, не только литерал diff-диапазона.
+    source = gitcmd.diff_base_source(t["branch"])
+    detail = (f"дифф трогает файлы вне заявленных zones и COMMON_ZONES "
+             f"(база сравнения {base} от {source}): "
              f"{', '.join(out_of_zone)}")
     hint = (f"сократи дифф до заявленных zones либо оформи раздел "
            f"«## Расширение зон» в PLAN.md с обоснованием и мандатом "
