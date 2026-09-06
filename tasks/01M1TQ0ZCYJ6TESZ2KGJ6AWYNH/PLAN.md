@@ -32,17 +32,42 @@ MAIN_BRANCH)` — короткое замыкание `or` уже гаранти
   чекаута и добивается). Отказ (нет сети/нет origin/git не ответил) —
   `("", причина)`, не исключение — вызывающий код сам решает деградацию.
 
-- `artifact_branch._new_branch_parent(task_id)` — предпочитает голову
-  `origin/main` (`fetch_head_sha("origin", config.MAIN_BRANCH)`); если
-  origin недоступен — фолбэк на `gitcmd.branch_head_sha(config.
-  MAIN_BRANCH)` (текущее поведение, требование 1/AC-2) с записью в
-  журнал задачи (`store.journal`, действие «артефактная ветка: fallback
-  на локальный main», detail `"артефактная ветка от локального main:
-  <причина>"` — ровно префикс, который ищет тест AC-7). Журнал пишется,
-  только если фолбэк реально состоялся (`local_head` непусто) — в
-  лёгких песочницах без git-репозитория вовсе (`fake_git`/светлый
-  `TmpRootTest`) оба источника пусты, поведение не меняется (parent
-  остаётся `None`, как и до этой задачи).
+- `artifact_branch._new_branch_parent(task_id)` — СНАЧАЛА
+  `gitcmd.has_no_remote(config.ROOT)`: ни одного `remote` вовсе (нет
+  сети/`origin` никогда не настраивался/лёгкая тестовая песочница) —
+  сразу голова локального `config.MAIN_BRANCH`, БЕЗ `git fetch` и БЕЗ
+  записи в журнал (Решение Оператора по возврату 06.09, «Причина
+  возврата»: «репозиторий без origin — молча локальный main»). Иначе
+  (remote есть, хотя бы один) — предпочитает голову `origin/main`
+  (`fetch_head_sha("origin", config.MAIN_BRANCH)`); если САМ `fetch` не
+  удался (remote настроен, но недостижим/сеть недоступна) — фолбэк на
+  `gitcmd.branch_head_sha(config.MAIN_BRANCH)` (текущее поведение,
+  требование 1/AC-2) с записью в журнал задачи (`store.journal`,
+  действие «артефактная ветка: fallback на локальный main», detail
+  `"артефактная ветка от локального main: <причина>"` — ровно префикс,
+  который ищет тест AC-7).
+
+  Правка этого возврата: до неё `_new_branch_parent` всегда пыталась
+  `git fetch origin main`, даже без единого `remote` в репозитории.
+  `tests/test_branch_freshness_gate.py::TargetSourcedRemoteTest::
+  test_pull_freshness_fetches_target_url_not_pult_origin` создаёт
+  задачу с внешним target'ом в лёгкой песочнице (`gitcmd.git`
+  подменена на `fake_git`, ни одного настоящего `remote`) и проверяет,
+  что ПЕРВЫЙ записанный `fetch`-вызов — это фетч источника target'а на
+  гейте свежести (`("fetch", url, base)`), а не пульта; безусловный
+  `fetch_head_sha("origin", config.MAIN_BRANCH)` при заведении задачи
+  (`cmd_new` → `commit_files` → `_new_branch_parent`, первый коммит)
+  оказывался ПЕРВЫМ вызовом `fetch` в этой песочнице и красил
+  `assertNotIn("origin", remote_args)` — CI-красный, зафиксированный
+  возвратом. `has_no_remote` для этой песочницы (и для АНАЛОГИЧНЫХ
+  лёгких `fake_git`-песочниц, и для настоящих git-репозиториев без
+  `origin`) возвращает True (`git remote` пуст) — фетч и журнал
+  пропускаются целиком, стороннего `fetch`-вызова больше не возникает.
+  Тест AC-7 этой же задачи опирался на СТАРОЕ поведение (журнал пишется
+  даже вовсе без `origin`) — переписан на сценарий «`origin` заведён
+  (`add_origin`), но недостижим» (bare-репозиторий уничтожен ДО
+  коммита), что и есть теперь настоящий критерий записи в журнал; см.
+  «Риски» ниже.
 
 - Требование 2/AC-3 не требует отдельного кода (ANSWER-1, вариант A):
   `commit_files` уже коммитит ЛЮБОЙ target в `config.ROOT` — правка
@@ -171,6 +196,45 @@ MAIN_BRANCH)` — короткое замыкание `or` уже гаранти
   (72 теста) — все зелёные, и `scripts/guard.py` на артефактах задачи
   (`GUARD: ок`). Правка этого шага — фиксация факта повторной проверки
   здесь, закрывающая причину возврата.
+- Возврат из `verifying` (CI красный, 4 теста): корневая причина —
+  `_new_branch_parent` безусловно звала `git fetch origin main` даже в
+  репозитории вовсе БЕЗ `remote` (нет сети/`origin` не настроен/лёгкая
+  тестовая песочница), тем самым (а) полируя список git-вызовов
+  первым посторонним `fetch` в `tests/test_branch_freshness_gate.py::
+  TargetSourcedRemoteTest` (внешний target, `cmd_new` → первый коммит
+  артефактной ветки пульта → наш `fetch` раньше собственного фетча
+  гейта свежести на target) и (б) писала бы в журнал задачи запись
+  «fallback на локальный main» при КАЖДОМ заведении задачи без origin,
+  включая любые лёгкие песочницы. Решение Оператора по возврату (текст
+  «Причина возврата»): запись в журнал — только когда `remote origin`
+  СУЩЕСТВУЕТ, а сам `fetch` не удался; репозиторий вовсе без `origin` —
+  молча локальный `main`, без сетевого вызова и без записи. Правка:
+  `_new_branch_parent` (`orchestrator/artifact_branch.py`) — новая
+  первая проверка `gitcmd.has_no_remote(config.ROOT)`, при True —
+  сразу `branch_head_sha(config.MAIN_BRANCH)`, минуя `fetch_head_sha`
+  и `store.journal` целиком.
+- Правка задела тест AC-7 этой же задачи (не «существующий» тест вне
+  зоны — собственный приёмочный тест, залоченный для code-фиксов, но
+  редактируемый под явное решение Оператора о переинтерпретации AC-2,
+  см. выше): его прежний сценарий («вовсе без origin») по новому
+  правилу больше не пишет в журнал — переписан на «`origin` заведён
+  (`add_origin()`), но bare-репозиторий уничтожен ДО коммита» (`fetch`
+  падает, remote при этом существует) — ровно тот случай, для которого
+  запись в журнал теперь и предназначена. Прогнаны все 7 приёмочных
+  тестов задачи (зелёные) и widely-затронутая батарея (`tests/
+  test_branch_freshness_gate.py`, `test_doctor.py`, `test_gitcmd_
+  branch_reads.py`, `test_gitcmd_carpentry.py`, `test_gitcmd_check_
+  ignore.py`, `test_git_fixation.py`, `test_catalog_new_race.py`,
+  `test_catalog_status_log.py`, `test_artifact_materialization.py`,
+  `test_multitarget.py`, `test_multitarget_invariants.py`,
+  `test_zones_gate.py`, `test_review_package.py`, `test_answer_
+  branch_reads.py`, `test_amend.py`, `test_doctor_fix_ignored_
+  artifacts.py`, `test_fsm_merge_gate_done_snapshot.py`, `test_zones_
+  approve.py`, `test_dry_run.py`, `test_checkpoint_external_step_
+  artifacts.py`, `test_acceptance_tests_flow.py`, `test_answer_gate.py`,
+  `test_analyst_role.py` — 557 тестов + 17 subtests, все зелёные,
+  включая ранее красный `test_pull_freshness_fetches_target_url_not_
+  pult_origin`).
 
 ## Предложения системе
 
@@ -185,3 +249,17 @@ MAIN_BRANCH)` — короткое замыкание `or` уже гаранти
   второго случая формулировка отказа вводит в заблуждение (адресует
   разработчика к несуществующему REVIEW.md вместо факта прерывания по
   бюджету).
+- Класс дефекта, повторившийся здесь: новый код на горячем пути
+  `cmd_new`/`commit_files` (любой первый коммит артефактной ветки)
+  проверен точечно списком заведомо релевантных тестовых файлов
+  (`test_gitcmd_*`, `test_catalog_*`, `test_multitarget*`,
+  `test_doctor.py` и т.п.), но `tests/test_branch_freshness_gate.py`
+  в этот список не попал ни разу, хотя тоже заводит задачу через
+  `catalog.cmd_new` в лёгкой `fake_git`-песочнице и чувствителен к
+  ЛЮБОМУ новому git-вызову на этом пути. Точечный список «тестов
+  затронутых модулей» составлялся по ИМЕНИ модуля (`gitcmd`/
+  `artifact_branch`/`doctor`), не по факту прохождения кода через
+  `cmd_new` — для правок хот-пути заведения задачи стоит явно искать
+  `grep -l "cmd_new\|capture_new_task_id" tests/*.py` вместо интуиции
+  по названию файла, иначе тесты вроде этого систематически выпадают
+  из точечного прогона и красят только CI.
