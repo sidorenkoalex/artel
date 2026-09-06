@@ -74,18 +74,53 @@ class CmdApproveDispatchTest(TmpRootTest):
             self.assertEqual(args[4], "sid")
 
     def test_spec_gate_routes_to_its_own_handler(self):
+        """`state == "spec_gate"` — таблица обязана вызвать РОВНО
+        `_approve_spec_gate` и ни один другой обработчик.
+
+        Ловит мутацию: таблица путает `spec_gate` с соседним
+        состоянием (например, попадает под `_approve_acceptance`) или
+        вызывает несколько обработчиков разом — `assert_called_once()`/
+        `assert_not_called()` по остальным именам это поймают."""
         self._assert_routes_to("spec_gate", "_approve_spec_gate")
 
     def test_acceptance_routes_to_its_own_handler(self):
+        """`state == "acceptance"` — таблица обязана вызвать РОВНО
+        `_approve_acceptance` и ни один другой обработчик.
+
+        Ловит мутацию: таблица путает `acceptance` с `merge_gate`/
+        `spec_gate` или вызывает несколько обработчиков разом —
+        `assert_called_once()`/`assert_not_called()` по остальным
+        именам это поймают."""
         self._assert_routes_to("acceptance", "_approve_acceptance")
 
     def test_merge_gate_routes_to_its_own_handler(self):
+        """`state == "merge_gate"` — таблица обязана вызвать РОВНО
+        `_approve_merge_gate` и ни один другой обработчик.
+
+        Ловит мутацию: таблица путает `merge_gate` с `escalated`/
+        `acceptance` или вызывает несколько обработчиков разом —
+        `assert_called_once()`/`assert_not_called()` по остальным
+        именам это поймают."""
         self._assert_routes_to("merge_gate", "_approve_merge_gate")
 
     def test_escalated_routes_to_its_own_handler(self):
+        """`state == "escalated"` — таблица обязана вызвать РОВНО
+        `_approve_escalated` и ни один другой обработчик.
+
+        Ловит мутацию: таблица путает `escalated` с `merge_gate` или
+        вызывает несколько обработчиков разом — `assert_called_once()`/
+        `assert_not_called()` по остальным именам это поймают."""
         self._assert_routes_to("escalated", "_approve_escalated")
 
     def test_state_outside_table_calls_no_handler_and_keeps_previous_text(self):
+        """`state == "review"` — вне таблицы состояний approve: ни
+        один обработчик не вызывается, печатается и остаётся прежний
+        текст отказа, состояние задачи не меняется.
+
+        Ловит мутацию: таблица получает `"review"` по ошибке (например,
+        синоним `"acceptance"`) и вызывает обработчик, либо меняется
+        текст отказа или состояние задачи — `assert_not_called()` по
+        обработчикам и `assertEqual` по тексту/`state` это поймают."""
         self.insert("review")
         with ExitStack() as stack:
             mocks = {

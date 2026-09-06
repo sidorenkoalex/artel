@@ -136,7 +136,12 @@ class PullEvaluateTest(TmpRootTest):
     def test_fresh_when_origin_sha_missing(self):
         """`origin_main_sha` выродилась (git fetch/rev-parse не ответили) —
         `evaluate` обязан вернуть `Fresh()` немедленно, не вызывая
-        `commits_behind`/merge вовсе."""
+        `commits_behind`/merge вовсе.
+
+        Ловит мутацию: `evaluate` перестаёт коротко замыкать на пустом
+        origin sha и идёт дальше к `commits_behind`/merge —
+        `assertEqual` поймает не-`Fresh` исход,
+        `behind.assert_not_called()` поймает сам факт лишнего вызова."""
         self.origin_main_sha.return_value = None
         with mock.patch.object(gitcmd, "commits_behind") as behind:
             outcome = self.evaluate()
@@ -144,6 +149,12 @@ class PullEvaluateTest(TmpRootTest):
         behind.assert_not_called()
 
     def test_fresh_when_branch_not_behind(self):
+        """`commits_behind` вернула 0 — ветка не отстаёт от origin/main,
+        свежа.
+
+        Ловит мутацию: `evaluate` трактует `commits_behind == 0` как
+        «есть чем подтягивать» и уходит в merge вместо `Fresh` —
+        `assertEqual` поймает не-`Fresh` исход."""
         with mock.patch.object(gitcmd, "commits_behind", return_value=0):
             outcome = self.evaluate()
         self.assertEqual(outcome, pull.Fresh())
@@ -151,6 +162,15 @@ class PullEvaluateTest(TmpRootTest):
     # -------------------------------------------------------------- Pulled
 
     def test_pulled_on_clean_merge_and_green_acceptance(self):
+        """Чистый merge (без конфликтов) и зелёная приёмочная планка
+        после подтяжки — исход `Pulled` со sha конца `origin/main`,
+        состояние задачи не меняется (остаётся `in_dev`).
+
+        Ловит мутацию: `evaluate` после успешного merge и зелёной
+        приёмки всё равно возвращает `Conflict`/`Refused`, либо теряет
+        sha в `Pulled`, либо меняет состояние задачи — `assertIsInstance`/
+        `assertEqual` по `outcome.sha`/`task_row()["state"]` это
+        поймают."""
         self.write_acceptance_plank()
         with mock.patch.object(gitcmd, "commits_behind", return_value=3), \
              mock.patch.object(gitcmd, "in_repo",
@@ -164,7 +184,12 @@ class PullEvaluateTest(TmpRootTest):
     def test_pulled_when_plank_missing_but_skip_tests_legitimate(self):
         """Планка не найдена, но SPEC без AC-разметки — легитимный
         вырожденный случай (AC-5 SPEC 01M1R9YEK08XEQWBFX0929WFVJ):
-        `Pulled`, не `Refused`."""
+        `Pulled`, не `Refused`.
+
+        Ловит мутацию: `evaluate` требует планку безусловно (теряет
+        проверку «AC-разметка вообще есть в SPEC») и возвращает
+        `Refused` даже для легитимного вырожденного случая —
+        `assertIsInstance` по `pull.Pulled` это поймает."""
         self.read_branch_text_or_refuse.return_value = (
             "---\ntask: x\ntype: spec\nauthor_role: analyst\n"
             "status: ready\nschema_version: 1\n---\n\n# SPEC\n")
@@ -177,6 +202,17 @@ class PullEvaluateTest(TmpRootTest):
     # ------------------------------------------------------------ Conflict
 
     def test_conflict_on_two_file_unresolved_merge_conflict(self):
+        """Merge конфликтует по двум файлам (карта — не единственный
+        конфликтующий) — авторазрешение не применяется, исход
+        `Conflict` со списком файлов и note, задача уходит в
+        `escalated`.
+
+        Ловит мутацию: `evaluate` трактует многофайловый конфликт как
+        авторазрешаемый (потому что среди файлов есть карта) и
+        возвращает `Pulled`/`Fresh`, либо теряет список файлов/note,
+        либо не переводит задачу в `escalated` — `assertIsInstance`/
+        `assertEqual` по `outcome.files`/`outcome.note`/`state` это
+        поймают."""
         with mock.patch.object(gitcmd, "commits_behind", return_value=4), \
              mock.patch.object(
                  gitcmd, "in_repo",
@@ -188,6 +224,14 @@ class PullEvaluateTest(TmpRootTest):
         self.assertEqual(self.task_row()["state"], "escalated")
 
     def test_conflict_when_worktree_not_available(self):
+        """`workspace.ensure` вернула ошибку («worktree add упал») —
+        `Conflict` с note, содержащей причину, задача уходит в
+        `escalated`.
+
+        Ловит мутацию: `evaluate` игнорирует отказ `workspace.ensure`
+        и продолжает merge на непригодном worktree вместо немедленного
+        `Conflict` — `assertIsInstance`/`assertIn` по `outcome.note`
+        это поймают."""
         from orchestrator import workspace
         with mock.patch.object(gitcmd, "commits_behind", return_value=1), \
              mock.patch.object(workspace, "ensure",
@@ -198,6 +242,14 @@ class PullEvaluateTest(TmpRootTest):
         self.assertEqual(self.task_row()["state"], "escalated")
 
     def test_conflict_on_red_acceptance_after_clean_merge(self):
+        """Merge прошёл чисто, но приёмочная планка после подтяжки
+        красная — `Conflict` с note, содержащей маркер причины, задача
+        уходит в `escalated`.
+
+        Ловит мутацию: `evaluate` игнорирует красный результат
+        `acceptance.run` и возвращает `Pulled`, как если бы планка
+        была зелёной — `assertIsInstance`/`assertIn` по `outcome.note`
+        это поймают."""
         self.write_acceptance_plank()
         with mock.patch.object(gitcmd, "commits_behind", return_value=5), \
              mock.patch.object(gitcmd, "in_repo",
@@ -212,6 +264,15 @@ class PullEvaluateTest(TmpRootTest):
     # ------------------------------------------------------------- Refused
 
     def test_refused_when_plank_missing_and_ac_required(self):
+        """SPEC с AC-разметкой требует приёмочную планку, но
+        ветка-источник после подтяжки её не содержит — `Refused` с
+        текстом причины, состояние задачи НЕ меняется (`Refused` не
+        имеет права трогать `state`).
+
+        Ловит мутацию: `evaluate` трактует отсутствующую планку как
+        `Pulled` (теряет отказ) или меняет `state` задачи из
+        `Refused`-ветки — `assertIsInstance`/`assertIn`/`assertEqual`
+        по `outcome.reason`/`state` это поймают."""
         self.write_spec_requiring_ac_without_plank()
         self.read_branch_text_or_refuse.return_value = (
             SPEC_WITH_AC_MARKUP.format(task=self.TASK))
@@ -228,7 +289,12 @@ class PullEvaluateTest(TmpRootTest):
     def test_refused_none_when_branch_text_read_already_refused(self):
         """`read_branch_text_or_refuse` уже журналировала/напечатала свой
         именованный отказ (вернула `None`) — `evaluate` не добавляет
-        второй, несёт `Refused(None)` как сигнал «уже сделано»."""
+        второй, несёт `Refused(None)` как сигнал «уже сделано».
+
+        Ловит мутацию: `evaluate` не различает «отказ уже сделан
+        снаружи» и трактует `None` как «планка есть, всё ок»,
+        возвращая `Pulled`/`Fresh` — `assertEqual` с `pull.Refused(None)`
+        это поймает."""
         self.read_branch_text_or_refuse.return_value = None
         with mock.patch.object(gitcmd, "commits_behind", return_value=2), \
              mock.patch.object(gitcmd, "in_repo",

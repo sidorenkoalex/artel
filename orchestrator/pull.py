@@ -12,7 +12,7 @@ _pull_main_or_escalate` (218 строк — сверка свежести, `git 
 `fsm._origin_main_source`/`fsm._origin_main_sha` остаются в fsm.py —
 общие с другими её функциями/`fsm_merge_gate.py`) и передаёт их сюда,
 в `evaluate()`, вместе с этими же двумя узлами КАК ПАРАМЕТРАМИ
-(`origin_main_source`/`origin_main_sha`) — не бере`т их отсюда бare-именем:
+(`origin_main_source`/`origin_main_sha`) — не берёт их отсюда bare-именем:
 `mock.patch.object(fsm, "_origin_main_sha", ...)` (существующие тесты,
 AC-5) патчит имя в ПРОСТРАНСТВЕ ИМЁН `fsm`, а не здесь; читая его
 оттуда параметром в момент вызова, `evaluate()` видит именно то

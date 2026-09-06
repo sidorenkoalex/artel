@@ -9,7 +9,9 @@ acceptance — `orchestrator/fsm_autogate.py` (T091, декомпозиция
 `cmd_approve`, `cmd_reject`) и узлы, общие для нескольких состояний/
 гейтов (сверка свежести ветки, чтения с ветки задачи, guard-отказ).
 """
-import subprocess
+import subprocess  # шов для tests/test_ac3_ac9_pull_message_fixtures.py:
+                    # mock.patch.object(fsm.subprocess, "run", ...) —
+                    # сам fsm.py вызовов subprocess не делает (они в pull.py)
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
