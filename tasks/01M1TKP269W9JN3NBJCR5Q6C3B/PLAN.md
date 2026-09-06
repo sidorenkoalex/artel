@@ -21,6 +21,24 @@ _kill_outcome_note` уже умеет отличать как «штатно» �
 это «штатно И без расхождения маркера» одновременно; во всех остальных
 случаях (не штатно, ИЛИ расхождение маркера, ИЛИ оба) — наоборот.
 
+ANSWER-3.md (06.09) исправляет предпосылку абзаца выше после подтяжки
+main: ADR-0015 (01M1TQ0TRCZPRZX22C4084NCPB), смерженный в main уже
+после написания исходного PLAN, переставил порядок состояний на
+`in_dev -> verifying -> review` (было — после ревью). Канареечная
+`_kill_at_verifying` считала kill на `verifying` штатным финалом — с
+новым порядком она стала убивать задачу ДО первого ревью, то есть
+раньше, чем прогон успевал дойти до сценариев «не сошлась»/эскалации, и
+`_kill_outcome_note` во всех этих случаях ошибочно возвращала «штатно»
+(6 из 18 приёмочных тестов планки покраснели ровно по этой причине:
+AC-1..AC-3/AC-5/AC-8 читают исход как «не штатный», а он таким уже
+никогда не становился). Исправление — `verifying` теперь проходится
+СИНТЕТИЧЕСКИ (`canary._pass_verifying`, тем же приёмом, что уже был у
+`_pass_spec_gate`/`_pass_acceptance_gate`: журнал + `store.set_state`
+в `review`), не убивает задачу; единственный штатный kill во всём
+прогоне канарейки остался `_kill_at_merge_gate`. Симметрия правила
+выше не изменилась — изменилось только то, ЧТО считается «штатным
+исходом» технически.
+
 Реализовано одной точкой принятия решения — `canary._needs_diagnostics
 (normal_outcome, mismatch)` — переиспользуемой в обоих местах
 `_run_one_task` (решение сохранять диагностику и решение применять
@@ -67,16 +85,24 @@ logs/`, но БЕЗ фильтра «последние N закрытых за�
    на задачу. Юнит-тесты чистых функций в `tests/test_canary.py`.
 2. `orchestrator/prune.py`: `_canary_diag_candidates`, интеграция в
    `cmd_prune`/`_print_report`. Юнит-тесты в `tests/test_prune.py`.
-3. Прогон приёмочных тестов задачи (`tasks/01M1TKP269W9JN3NBJCR5Q6C3B/
+3. (ANSWER-3.md, 06.09) `orchestrator/canary.py`: `_kill_at_verifying`
+   заменена на `_pass_verifying` (журналирует «canary: verifying
+   пройден синтетически» и переводит задачу в `review` вместо kill);
+   `_VERIFYING_KILL_ACTION` убран, `_kill_outcome_note` узнаёт «штатно»
+   только по `_MERGE_GATE_KILL_ACTION`; `_drive_task` на `state ==
+   "verifying"` зовёт `_pass_verifying` и продолжает цикл (`continue`),
+   не возвращается. Юнит-тесты — `PassVerifyingTest`,
+   `DriveTaskPassesVerifyingSyntheticallyTest` в `tests/test_canary.py`.
+4. Прогон приёмочных тестов задачи (`tasks/01M1TKP269W9JN3NBJCR5Q6C3B/
    acceptance_tests/`) и целевых юнит-модулей.
 
 ## Покрытие требований
 
 | Требование | Шаг |
 |---|---|
-| 1 (AC-1, AC-2, AC-3) | 1 |
+| 1 (AC-1, AC-2, AC-3) | 1, 3 |
 | 2 (AC-5, AC-6) | 1 |
-| 3 (AC-7, AC-8) | 1 |
+| 3 (AC-7, AC-8) | 1, 3 |
 | 4 (AC-9) | 1, 2 |
 
 ## Влияние на систему
@@ -100,6 +126,21 @@ FSM ни одной боевой задачи — инвариант 16 не з�
 `docs/retention.md` дополнен разделом `.artel/canary/`, аналогичным
 существующему разделу `.artel/logs/` — по образцу, на который ссылается
 SPEC.
+
+Правка ANSWER-3.md (шаг 3) не меняет схему БД и не расширяет зону —
+целиком внутри `orchestrator/canary.py`/`tests/`, уже заявленных зон
+SPEC. `_pass_verifying` — тот же приём, что и у уже существующих
+`_pass_spec_gate`/`_pass_acceptance_gate` (журнал + `store.set_state`),
+не новый механизм; `_kill_at_merge_gate` не тронута — единственный
+штатный kill во всём прогоне канарейки. Комментарии в
+`orchestrator/fsm_advance.py`/`orchestrator/auto.py`, упоминающие
+старое имя `_kill_at_verifying`, оставлены без изменений — эти файлы
+вне зоны SPEC (`orchestrator/canary.py, orchestrator/prune.py, tests/,
+.gitignore`), а поведение самого `fsm_advance`/`auto` (гейт
+`_origin_push_gate`, цикл опроса `_advance_verifying_poll`) этой
+правкой не затронуто: `t["is_canary"]` по-прежнему заводит канарейку
+мимо обоих путей независимо от того, что происходит на `verifying`
+дальше внутри `canary._drive_task`.
 
 ## Риски
 
