@@ -20,6 +20,7 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from orchestrator import config, stack  # noqa: E402
+from tests.sandbox import resilient_tmp_cleanup  # noqa: E402
 
 HIGH_VERSION = "999.999.999"
 LOW_VERSION = "0.0.1"
@@ -291,6 +292,65 @@ def _all_ok_run_with_freeze(freeze_output: str):
             return subprocess.CompletedProcess(args, 0, freeze_output, "")
         return _all_ok_run(args, **kwargs)
     return fake_run
+
+
+class PytestPythonExecutableWorktreeTest(unittest.TestCase):
+    """ANSWER-6 (01M1TKP6AAY4W8GDGZNA9R0JZT, возврат «интерпретатор venv
+    из worktree»): планку пульт гоняет против worktree'а задачи, где
+    `.artel/venv` рядом с `config.ROOT` не существует — только ГЛАВНАЯ
+    копия несёт venv пульта. Git настоящий (по образцу
+    tests/test_workspace.py): суть проверки — реальный `git rev-parse
+    --git-common-dir` из worktree'а, заглушкой не проверить.
+    """
+
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(resilient_tmp_cleanup, tmp)
+        self.main_root = Path(tmp.name).resolve()
+        self._git(self.main_root, "init", "-q", "-b", "main")
+        self._git(self.main_root, "config", "user.email",
+                 "artel-tests@example.invalid")
+        self._git(self.main_root, "config", "user.name", "artel tests")
+        (self.main_root / "README.md").write_text("x", encoding="utf-8")
+        self._git(self.main_root, "add", "-A")
+        self._git(self.main_root, "commit", "-q", "-m", "init")
+
+        self.worktree_root = self.main_root / "worktree"
+        self._git(self.main_root, "worktree", "add", "-b", "task/x",
+                 str(self.worktree_root))
+        self.missing_venv = self.worktree_root / ".artel" / "venv"
+
+    def _git(self, cwd, *args):
+        res = subprocess.run(["git", *args], cwd=cwd, capture_output=True,
+                             text=True)
+        self.assertEqual(res.returncode, 0,
+                         f"git {' '.join(args)} упал: {res.stderr}")
+        return res
+
+    def test_falls_back_to_main_copy_venv_when_worktree_has_none(self):
+        """Ловит мутацию: шаг 2 (поиск venv главной копии через
+        `_main_copy_root()`) убран — функция ушла бы прямиком на
+        `sys.executable`, `assertEqual` откажет."""
+        main_venv_python = self.main_root / ".artel" / "venv" / "bin" / "python3"
+        main_venv_python.parent.mkdir(parents=True)
+        main_venv_python.touch()
+
+        with mock.patch.object(config, "ROOT", self.worktree_root), \
+             mock.patch.object(config, "VENV_DIR", self.missing_venv,
+                               create=True):
+            executable = stack.pytest_python_executable()
+
+        self.assertEqual(executable, str(main_venv_python))
+
+    def test_falls_back_to_sys_executable_when_main_copy_has_no_venv_either(self):
+        """Контроль: главная копия тоже не несёт venv — шаг 3, не пустой
+        путь и не исключение."""
+        with mock.patch.object(config, "ROOT", self.worktree_root), \
+             mock.patch.object(config, "VENV_DIR", self.missing_venv,
+                               create=True):
+            executable = stack.pytest_python_executable()
+
+        self.assertEqual(executable, sys.executable)
 
 
 if __name__ == "__main__":

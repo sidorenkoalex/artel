@@ -179,18 +179,70 @@ def _parse_pinned_versions(text: str) -> dict:
     return pinned
 
 
+def _main_copy_root() -> Path | None:
+    """Корень ГЛАВНОЙ копии репозитория, если `config.ROOT` — git-worktree
+    (ANSWER-6, 01M1TKP6AAY4W8GDGZNA9R0JZT): `git rev-parse
+    --git-common-dir` из `config.ROOT` называет ОБЩИЙ `.git`-каталог
+    (`<главная копия>/.git`) независимо от того, worktree это или сама
+    главная копия — родитель этого каталога и есть искомый корень.
+    Для самой главной копии совпадает с `config.ROOT` (вырожденный, но
+    безопасный случай — вызывающий код всё равно проверяет venv там же,
+    где уже проверил его через `config.VENV_DIR`).
+
+    `None` — git не ответил или ответ пуст: fail-closed, вызывающий код
+    падает дальше на `sys.executable`, не гадает путь по несуществующему
+    ответу."""
+    try:
+        res = subprocess.run(
+            ["git", "rev-parse", "--git-common-dir"], cwd=config.ROOT,
+            capture_output=True, text=True, timeout=10)
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if res.returncode != 0:
+        return None
+    text = res.stdout.strip()
+    if not text:
+        return None
+    git_dir = Path(text)
+    if not git_dir.is_absolute():
+        git_dir = (Path(config.ROOT) / git_dir).resolve()
+    return git_dir.parent
+
+
 def pytest_python_executable() -> str:
     """Интерпретатор, которым пульт запускает pytest
     (`orchestrator/acceptance.py::run()`/`run_full_suite()`, требование 8/
-    AC-12) — `config.VENV_DIR/bin/python3`, если venv существует, иначе
-    `sys.executable` (интерпретатор самого процесса пульта): голый
-    `python3` резолвился бы по PATH ВЫЗЫВАЮЩЕГО процесса (гейты/
-    `amend-tests` пульт зовёт из собственного окружения, не из
+    AC-12) — голый `python3` резолвился бы по PATH ВЫЗЫВАЮЩЕГО процесса
+    (гейты/`amend-tests` пульт зовёт из собственного окружения, не из
     `runner.role_env` — тот PATH только у роли), где сторонние пакеты
     пульта (`pytest-timeout` и т.п., `THIRD_PARTY_EXCEPTIONS` выше) могут
-    отсутствовать (ANSWER-4, диагноз AC-7)."""
+    отсутствовать (ANSWER-4, диагноз AC-7).
+
+    Порядок поиска (ANSWER-6: планку пульт гоняет против worktree задачи,
+    `acceptance.run(tdir, code_root=<worktree>)`, где `.artel/venv` не
+    существует — этому venv соответствует только ГЛАВНАЯ копия, из
+    которой worktree создан):
+
+    1. `config.VENV_DIR/bin/python3` — venv рядом с `config.ROOT`, как
+       у главной копии (прежнее поведение).
+    2. иначе venv главной копии, найденный через `_main_copy_root()`.
+    3. иначе `sys.executable` (интерпретатор самого процесса пульта) с
+       предупреждением в stderr — venv не найден нигде, тот же принцип,
+       что и WARN `_venv_exists_check` ниже, но для точки, где отсутствие
+       venv молча меняет интерпретатор, а не просто печатает диагностику.
+    """
     venv_python = Path(config.VENV_DIR) / "bin" / "python3"
-    return str(venv_python) if venv_python.is_file() else sys.executable
+    if venv_python.is_file():
+        return str(venv_python)
+    main_root = _main_copy_root()
+    if main_root is not None:
+        main_venv_python = main_root / ".artel" / "venv" / "bin" / "python3"
+        if main_venv_python.is_file():
+            return str(main_venv_python)
+    print(f"[stack] venv не найден ни в {config.VENV_DIR}, ни в главной "
+         f"копии репозитория — тесты пульта пойдут интерпретатором "
+         f"{sys.executable}", file=sys.stderr)
+    return sys.executable
 
 
 def _venv_exists_check() -> StackCheck:
