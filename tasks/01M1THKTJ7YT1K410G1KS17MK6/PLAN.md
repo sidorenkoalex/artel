@@ -99,6 +99,24 @@ schema_version: 4    # версия формата артефакта, см. scr
      ортогональным правилом.
    - `tasks/01M1THKTJ7YT1K410G1KS17MK6/acceptance_tests/` (locked,
      tests_writing) прогнаны как есть — не редактировались.
+   - Возврат из verifying (Оператор 06.09, после применения диф-
+     приложения к `templates/*.md`): `tests/test_spec_budget.py`,
+     `SpecBudgetOnTheGateTest.test_spec_without_the_field_keeps_the_default_silently`
+     и её наследник в `LegacyDbMigrationTest` собирали SPEC через
+     `cmd_new` из реального `templates/SPEC.md` — после применения
+     патча тот шаблон уже несёт `budget_usd: 25` НЕ закомментированным
+     (поле обязательно, требование 2), сценарий «SPEC из шаблона без
+     поля» для него больше не существует. `SPEC_MD`/`write_spec` этого
+     файла параметризованы полем `schema_version` (было хардкожено в
+     1); тест переписан на явную фикстуру `schema_version=4` (старая
+     семантика — поле ещё не обязательно, дефолт молча); добавлен
+     `test_v5_spec_without_the_field_is_refused_by_guard` —
+     `schema_version=5` без поля отказывается guard'ом (закрывает
+     фактический пробел в планке: AC-2 раньше проверялся только через
+     `tasks/.../acceptance_tests/test_ac2_schema_v5_requires_budget_field.py`,
+     не через `tests/`). Прогон: `python3 -m unittest
+     tests.test_spec_budget tests.test_guard_schema` — зелёный (96
+     тестов).
 
 7. **Диф-приложение** (защищённые пути, применяет Оператор) —
    `templates/{SPEC,PLAN,REVIEW,TEST_REPORT}.md` (schema_version 4 -> 5
