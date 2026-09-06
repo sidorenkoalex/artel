@@ -20,7 +20,7 @@ AC-9/AC-15 — меняют, симулируя посторонний коммi
 не сравнивает sha вовсе — свежесть держит только `reviewed_iter`
 (итерация REVIEW.md), который в этом сценарии ещё не тронут ни при каком
 исходе сверки. AC-9/AC-15 покраснеют: возврат пройдёт прямиком в
-`verifying` даже при сменившемся sha (проверено прогоном на
+`acceptance` даже при сменившемся sha (проверено прогоном на
 немодифицированном коде — см. журнал разработки этой планки). AC-8/AC-14
 уже сегодня проходят (сверка sha ещё не введена — блокировать ей нечего)
 — зелёные с рождения, они фиксируют, что requirement 3 не должен
@@ -65,12 +65,12 @@ class _ReviewSandbox(AutoCycleTest):
 
 class UnchangedShaSkipsANewReviewerRunTest(_ReviewSandbox):
     """AC-8: код не менялся с момента вердикта — возврат в `review`
-    переходит в `verifying` без нового прогона ревьювера."""
+    переходит в `acceptance` без нового прогона ревьювера."""
 
     def test_ac8_manual_advance_reaches_verifying_on_unchanged_sha(self):
         """sha кодовой ветки в момент возврата совпадает со sha на момент
         вердикта — ручной `advance` после `budget` обязан довести задачу
-        до `verifying`.
+        до `acceptance`.
 
         Ловит мутацию: сверка sha реализована «наоборот» (блокирует
         РАВЕНСТВО вместо различия) — переход не случится, задача
@@ -88,15 +88,15 @@ class UnchangedShaSkipsANewReviewerRunTest(_ReviewSandbox):
 
 class ChangedShaBlocksTheTransitionTest(_ReviewSandbox):
     """AC-9: код сменился ПОСЛЕ вердикта — возврат в `review` не переходит
-    в `verifying` без нового вердикта ревьювера."""
+    в `acceptance` без нового вердикта ревьювера."""
 
     def test_ac9_manual_advance_does_not_reach_verifying_on_changed_sha(self):
         """sha кодовой ветки на момент возврата ОТЛИЧАЕТСЯ от sha на
         момент вердикта — ручной `advance` обязан отказать переходу в
-        `verifying`, несмотря на статус `approved` в REVIEW.md.
+        `acceptance`, несмотря на статус `approved` в REVIEW.md.
 
         Ловит мутацию: требование 3 не реализовано вовсе (сегодняшнее
-        поведение) — advance доведёт задачу до `verifying` по старому
+        поведение) — advance доведёт задачу до `acceptance` по старому
         вердикту, написанному для уже неактуального кода.
         """
         sha_box = self.escalate_with_approved_verdict("a" * 40)
@@ -107,9 +107,9 @@ class ChangedShaBlocksTheTransitionTest(_ReviewSandbox):
 
         self.capture(fsm.cmd_advance, self.TASK)
 
-        self.assertNotEqual(
-            self.state(), "verifying",
-            "переход в verifying случился несмотря на сменившийся sha кода")
+        self.assertEqual(
+            self.state(), "review",
+            "переход в acceptance не должен был случиться — гейт обязан отказать")
 
 
 class UnchangedShaAutoCycleSkipsTheReviewerTest(_ReviewSandbox):
@@ -118,7 +118,7 @@ class UnchangedShaAutoCycleSkipsTheReviewerTest(_ReviewSandbox):
 
     def test_ac14_auto_reaches_verifying_without_a_second_reviewer_step(self):
         """`auto` после подъёма потолка обязан довести задачу до
-        `verifying`, не потратив ни одного нового шага ревьювера.
+        `acceptance`, не потратив ни одного нового шага ревьювера.
 
         Ловит мутацию: пред-advance `auto` (или сама сверка sha) требует
         нового прогона ревьювера даже при неизменном коде — `agent.calls`
@@ -150,7 +150,7 @@ class ChangedShaAutoCycleForcesANewReviewerStepTest(_ReviewSandbox):
         устаревшему вердикту.
 
         Ловит мутацию: требование 3 не реализовано — `auto` доводит
-        задачу прямиком до `verifying` (проверено прогоном на
+        задачу прямиком до `acceptance` (проверено прогоном на
         немодифицированном коде), ни разу не вызвав ревьювера повторно;
         `self.agent.calls` останется пустым.
         """
