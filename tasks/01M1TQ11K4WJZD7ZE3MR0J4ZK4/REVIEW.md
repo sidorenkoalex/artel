@@ -2,46 +2,97 @@
 task: 01M1TQ11K4WJZD7ZE3MR0J4ZK4
 type: review
 author_role: reviewer
-status: changes_requested        # draft | approved | changes_requested | escalate
-iteration: 1
-schema_version: 5    # версия формата артефакта, см. scripts/guard.py
+status: approved
+iteration: 2
+schema_version: 5
 ---
 
 # REVIEW: подсказка потолка по калибровке при new и на гейте SPEC
+
+## Замечание к пакету ревью (диагностика перед вердиктом)
+
+Diff в пакете (база `e306e1858cfb369220a4d41c641a87bd2df09ab3` →
+HEAD `d6b1efa6`) почти целиком состоит из содержимого ЧУЖОЙ задачи
+(01M1TQ0ZCYJ6TESZ2KGJ6AWYNH, артефактная ветка от `origin/main`) —
+пришло commit'ом «подтяжка main» (d6b1efa6). Причина: база диффа
+(`e306e185`) — это САМ коммит фикса R1-F1
+(«01M1TQ11K4WJZD7ZE3MR0J4ZK4: замечания ревью итерации 1 — фикс
+разбора «Зоны:» в ТЗ (R1-F1)»), сделанный разработчиком ПОСЛЕ вердикта
+итерации 1 (`changes_requested`). Взяв этот коммит границей, пакет
+скрыл собственно фикс, ради проверки которого и идёт эта итерация —
+пустой diff по зоне задачи создавал бы неверное впечатление «ничего не
+изменилось» (класс, описанный в review-checklist: «Инкрементальный
+diff пакета — пустой не значит «без изменений»»).
+
+Проверено вручную (не по пакету):
+- `git show e306e185 -- orchestrator/catalog.py
+  tests/test_catalog_tz_zones_parsing.py` — содержимое фикса R1-F1
+  (см. «Реестр замечаний» ниже).
+- `git diff e306e1858cfb369220a4d41c641a87bd2df09ab3..HEAD --stat --
+  orchestrator/config.py orchestrator/catalog.py orchestrator/budget.py
+  orchestrator/fsm.py docs/adr/0014-budget-default-and-role-cap.md
+  tasks/01M1TQ11K4WJZD7ZE3MR0J4ZK4/` — пусто: ни один файл зоны этой
+  задачи не менялся после фикса R1-F1; commit `d6b1efa6` («подтяжка
+  main») принёс только чужой код (01M1TQ0ZCYJ6TESZ2KGJ6AWYNH) и не
+  затронул зону этой задачи.
+- `docs/adr/0014-budget-default-and-role-cap.md` — правка AC-3
+  (`config.BUDGET_CALIBRATION_TABLE`/`config.
+  BUDGET_CALIBRATION_FLOOR_USD`) сделана ещё в исходном коммите
+  `0490e10b`, до итерации 1, и с тех пор не менялась — без изменений.
+
+## Фаза A: проверка плана
+
+PLAN.md не менялся с итерации 1 в части «Подход»/«Шаги»/«Покрытие
+требований»/«Влияние на систему» — только добавлены разделы «Возврат:
+замечания ревью итерации 1 (R1-F1, R1-F2)» с описанием обеих правок и
+перепрогонов. Замечаний к плану нет.
 
 ## Соответствие SPEC
 
 | Требование | Вердикт | Комментарий |
 |---|---|---|
-| 1 (таблица `config.BUDGET_CALIBRATION_TABLE` + пол $25, ADR-0014 п.7 ссылается на константу) | OK | Значения и граничные условия проверены прогоном `test_ac1_ac2_calibration_table.py` (все 9 тестов зелёные) и вручную по логике `budget.recommended_budget_usd`; `docs/adr/0014-budget-default-and-role-cap.md` п.7 ссылается на имя константы, чисел не дублирует (AC-3, manual). |
-| 2 (`new`: ориентир+рамка, предупреждение при занижении >1/3, не отказывает) | реализовано не так | Механика (печать, порог 2/3, журнал, отсутствие отказа/изменения потолка) сама по себе верна и покрыта тестами AC-5..AC-8 — но разбор поля «Зоны:» из ТЗ (`_TZ_ZONES_RE`) даёт неверное число файлов на РЕАЛЬНОМ ТЗ этой же задачи (см. R1-F1) — итоговый ориентир, который увидел бы Оператор, был бы просто неверным числом. |
-| 3 (гейт SPEC: ориентир+`budget_usd` рядом с «дальше:», предупреждение при занижении >1/3, не отказывает) | OK | Проверено прогоном `test_ac9_ac10_ac11_gate_hint.py` (5/5 зелёные) и чтением `_approve_spec_gate`: вызов подсказки — единой точкой до ветвления `skip_reason`, `budget_usd`/переход не меняются. |
-| 4 (тесты: границы таблицы, появление/отсутствие предупреждения в обеих точках, отсутствие отказа, регрессия test_catalog*/test_budget*/test_fsm*) | OK | 19 приёмочных тестов зелёные; `tests/test_catalog*.py`, `tests/test_fsm*.py` (test_budget*.py не существует) и смежные (`test_zones_*`, `test_invariants`, `test_cmd_approve_dispatch`, `test_pull`, `test_review_package`, `test_guard_split_signals`) — 326 тестов, все зелёные, без правки ассертов. |
+| 1 (таблица `config.BUDGET_CALIBRATION_TABLE` + пол $25, ADR-0014 п.7 ссылается на константу) | OK | Без изменений с итерации 1 — `docs/adr/0014-budget-default-and-role-cap.md:68-70` ссылается на имена констант, чисел не дублирует. |
+| 2 (`new`: ориентир+рамка, предупреждение при занижении >1/3, не отказывает) | OK | R1-F1 исправлен: `_TZ_ZONES_RE` (`orchestrator/catalog.py:110-121`) заякорен на начало строки (`re.M`) и продолжает захват до пустой строки/следующей метки-раздела. Прогнано на реальном `TZ.md` этой же задачи: `catalog._tz_calibration_inputs(...)` -> `(20.0, 4, 5)` (было `zone_files=1`) — верно отражает 5 путей зоны из ТЗ. |
+| 3 (гейт SPEC: ориентир+`budget_usd` рядом с «дальше:», предупреждение при занижении >1/3, не отказывает) | OK | Без изменений с итерации 1. |
+| 4 (тесты: границы таблицы, появление/отсутствие предупреждения в обеих точках, отсутствие отказа, регрессия test_catalog*/test_budget*/test_fsm*) | OK | Новый `tests/test_catalog_tz_zones_parsing.py` (2 теста, оба сценария R1-F1) зелёный; 21 приёмочный+юнит тест зоны задачи и 336 тестов смежных модулей (`test_catalog*`, `test_zones_*`, `test_fsm*`, `test_invariants`, `test_cmd_approve_dispatch`, `test_pull`, `test_review_package`, `test_guard_split_signals`, `test_split_assessment_merge_gate`, `test_new_argv_parsing`, `test_spec_budget`) — все зелёные, без правки существующих ассертов. |
 
 ## Замечания
 
-- major — `orchestrator/catalog.py:110` (`_TZ_ZONES_RE = re.compile(r"Зоны:\s*(.*)")`) и `orchestrator/catalog.py:126` (её использование в `_tz_calibration_inputs`) — регэксп ищет ПЕРВОЕ по тексту буквальное вхождение «Зоны:» через `.search()` без привязки к началу строки, и без `re.S` захватывает только до ближайшего `\n`. Оба свойства ломаются на РЕАЛЬНОМ ТЗ этой же задачи (`tasks/01M1TQ11K4WJZD7ZE3MR0J4ZK4/TZ.md`): требование 2 ТЗ ещё до самой строки `Зоны: ...` упоминает формат в прозе — «...число путей в «Зоны:») и разницу...» — и именно это вхождение регэксп ловит первым; отдельно сама строка `Зоны: orchestrator/config.py, orchestrator/catalog.py,\norchestrator/budget.py, ...` физически перенесена на вторую строку (обычный перенос длинной строки), что тоже обрезало бы счёт файлов даже без первой проблемы. Проверено исполнением напрямую: `catalog._tz_calibration_inputs(open("tasks/01M1TQ11K4WJZD7ZE3MR0J4ZK4/TZ.md").read())` возвращает `zone_files=1` вместо фактических 5 путей зоны, из-за чего `recommended_budget_usd` посчитал бы ориентир `$35` вместо верных `$70` — при Рамке $20 предупреждение в этом конкретном случае всё равно срабатывает (оба ориентира выше порога 2/3), но число `~$M`, которое увидит Оператор, было бы попросту неверным — то есть ИМЕННО тот класс ошибки (двукратное занижение ориентира калибровки), ради устранения которого эта задача заведена. Приёмочные фикстуры (`_sandbox.py::tz_text`) не ловят ни один из двух сценариев: тестовое ТЗ никогда не упоминает слово «Зоны» второй раз в прозе и держит саму строку `Зоны: ...` короткой (не переносится). Предложение: заякорить регэксп на начало строки (`re.compile(r"^Зоны:\s*(.*)", re.M)`), и продлить захват на строки-продолжения переноса тем же приёмом, что уже применяет `_TZ_TREBUETSYA_RE` (до пустой строки/новой метки), плюс приёмочный тест на ТЗ, где «Зоны:» упомянуто в прозе раньше самой строки и/или строка «Зоны:» переносится на вторую физическую строку.
-- major — `tasks/01M1TQ11K4WJZD7ZE3MR0J4ZK4/PLAN.md`, раздел «Приложение: диф `skills/spec-authoring.md`» — самопроверка «`git apply --check` на чистом дереве ... — Пройден» не подтверждается на актуальной голове ветки: `git apply --check` на этот диф прямо сейчас отказывает (`error: patch failed: skills/spec-authoring.md:29`, `patch does not apply`). Причина — коммит `979023a8` (задача 01M1THKTJ7, уже влитая в main и подтянутая в эту ветку тем самым мержем main, который PLAN описывает в разделе «Возврат: конфликт подтяжки main») уже переписал те же строки `skills/spec-authoring.md` (базовый уровень `~25` → `~35`, добавлено предложение «Планка не ниже $25 ни для одной задачи») — именно тот класс коллизии, который сам разработчик предсказал в «Предложения системе» этого же PLAN.md, но не перепроверил `git apply --check` заново ПОСЛЕ разрешения конфликта подтяжки main. Применить это диф-приложение Оператору сейчас не удастся ни на PLAN-гейте, ни позже. Предложение: перегенерировать диф против текущего содержимого `skills/spec-authoring.md` (после мержа) и заново прогнать `git apply --check` перед сдачей PLAN.
+Новых замечаний нет.
 
 ## Реестр замечаний
 
 | id | статус | файл/строка | суть | последствие | решение |
 |---|---|---|---|---|---|
-| R1-F1 | fixed | orchestrator/catalog.py:110,126 | `_TZ_ZONES_RE` ловит первое по тексту вхождение «Зоны:» (в т.ч. в прозе) и обрезается по первому `\n` | ориентир калибровки на `new` считается по неверному числу файлов зоны — вплоть до 2х занижения (демонстрировано на реальном TZ.md задачи: 1 вместо 5 файлов, $35 вместо $70) | `_TZ_ZONES_RE` заякорен на начало строки (`re.M`) и продолжает захват за перенос строки до пустой строки/следующей метки-раздела (`_TZ_LABEL_LINE`) — тот же приём, что у `_TZ_TREBUETSYA_RE`. Добавлен `tests/test_catalog_tz_zones_parsing.py` (2 теста: прозаическое упоминание «Зоны:» игнорируется, перенос строки не обрезает счёт). Проверено на реальном TZ.md задачи: `zone_files=5` (было 1), ориентир `$70.00` (было бы `$35`) — коммит `e306e185` |
-| R1-F2 | fixed | tasks/01M1TQ11K4WJZD7ZE3MR0J4ZK4/PLAN.md (раздел «Приложение») | диф-приложение на `skills/spec-authoring.md` не применяется к текущей голове ветки (`git apply --check` падает) — самопроверка PLAN устарела после мержа main (коммит 979023a8 уже переписал те же строки) | Оператор не сможет применить диф-приложение как есть — требование 1 (AC-3/AC-4 по духу — синхронизация скила с ADR) останется невыполненным для `skills/spec-authoring.md` | Диф-приложение в PLAN.md перегенерирован против текущего содержимого `skills/spec-authoring.md` (голова ветки после мержа 979023a8): та же замена чисел на ссылку на константу, но базой взят актуальный текст строк 29–39 (уже несущий «~35»/«Планка не ниже $25»). `git apply --check` на новый диф против чистого дерева — пройден (см. «Проверено исполнением» PLAN.md) |
+| R1-F1 | accepted | orchestrator/catalog.py:110-121 | `_TZ_ZONES_RE` ловил первое по тексту вхождение «Зоны:» (в т.ч. в прозе) и обрезался по первому `\n` | ориентир калибровки на `new` считался по неверному числу файлов зоны (до 2х занижения) | Проверено: regexp заякорен на начало строки (`re.M`), захват продолжается за перенос до пустой строки/метки-раздела; на реальном `tasks/01M1TQ11K4WJZD7ZE3MR0J4ZK4/TZ.md` даёт верные `(20.0, 4, 5)`. `tests/test_catalog_tz_zones_parsing.py` (2 теста, оба сценария — прозаическое упоминание и перенос строки) зелёный. Класс дефекта закрыт полностью, второго вхождения «Зоны:» или другого варианта переноса в diff не найдено. |
+| R1-F2 | accepted | tasks/01M1TQ11K4WJZD7ZE3MR0J4ZK4/PLAN.md, раздел «Приложение» | диф-приложение на `skills/spec-authoring.md` не применялся к актуальной голове ветки (`git apply --check` падал) | Оператор не смог бы применить диф-приложение как есть | Проверено: диф в PLAN.md перегенерирован против текущего содержимого `skills/spec-authoring.md` (учитывает уже влитую правку `979023a8`, задача 01M1THKTJ7). `git apply --check` на диф из PLAN.md против чистого дерева текущей головы ветки — пройден (воспроизведено этим шагом: извлёк блок `diff` из PLAN.md, применил `git apply --check` — успех). |
+
+Реестр закрыт целиком (пуст незакрытых записей).
 
 ## Вердикт
 
-changes_requested — почини оба замечания реестра (R1-F1: разбор «Зоны:» в `catalog.py`, с приёмочным тестом на реалистичный ТЗ; R1-F2: перегенерируй диф-приложение на `skills/spec-authoring.md` против текущей головы ветки и заново подтверди `git apply --check`), остальная реализация (требования 1, 3, 4) замечаний не вызывает.
+approved
 
 ## Проверено исполнением
 
-- `python3 -m unittest tasks.01M1TQ11K4WJZD7ZE3MR0J4ZK4.acceptance_tests.test_ac1_ac2_calibration_table tasks.01M1TQ11K4WJZD7ZE3MR0J4ZK4.acceptance_tests.test_ac5_ac6_ac7_ac8_new_hint tasks.01M1TQ11K4WJZD7ZE3MR0J4ZK4.acceptance_tests.test_ac9_ac10_ac11_gate_hint` — 19 тестов, все зелёные.
-- `python3 -m unittest tests.test_catalog_new_race tests.test_catalog_status_log tests.test_zones_approve tests.test_zones_gate tests.test_split_assessment_merge_gate tests.test_new_argv_parsing tests.test_spec_budget tests.test_fsm_autogate tests.test_fsm_branch_correct_status_reads tests.test_fsm_draft_mr_reentry tests.test_fsm_map_conflict_autoresolve tests.test_fsm_map_regen tests.test_fsm_merge_conflict_note tests.test_fsm_merge_gate_done_snapshot tests.test_fsm_retro tests.test_fsm_review_rework_gate tests.test_invariants tests.test_cmd_approve_dispatch tests.test_pull tests.test_review_package tests.test_guard_split_signals` — 326 тестов, все зелёные (в т.ч. `StdlibOnlyImportsInvariantTest` — новые импорты `budget` в `fsm.py` и `scripts.guard` в `catalog.py` циклов не заводят).
-- `python3 scripts/codebase_map.py --check` — карта актуальна (без учёта `built_at_sha`).
-- `python3 -c "..."` — ручной прогон `orchestrator.catalog._tz_calibration_inputs` и `orchestrator.budget.recommended_budget_usd`/`calibration_warning` на реальном `tasks/01M1TQ11K4WJZD7ZE3MR0J4ZK4/TZ.md` — воспроизвёл R1-F1 (`zone_files=1` вместо 5, ориентир $35 вместо $70).
-- `git apply --check` на диф-приложение из «Приложение» PLAN.md против текущей головы ветки — отказ (`patch does not apply`), воспроизвёл R1-F2; `git merge-base --is-ancestor 979023a8 HEAD` подтвердил, что конфликтующий коммит уже в ветке.
+- `python3 -c "..."` — прямой вызов `orchestrator.catalog._tz_calibration_inputs` на реальном `tasks/01M1TQ11K4WJZD7ZE3MR0J4ZK4/TZ.md` → `(20.0, 4, 5)` (было `zone_files=1` до фикса R1-F1).
+- Извлёк diff-блок из `PLAN.md` («Приложение: диф `skills/spec-authoring.md`») в отдельный файл и прогнал `git apply --check` на нём против чистого дерева текущей головы ветки — успех (R1-F2 подтверждён).
+- `python3 -m unittest tests.test_catalog_tz_zones_parsing tasks.01M1TQ11K4WJZD7ZE3MR0J4ZK4.acceptance_tests.test_ac1_ac2_calibration_table tasks.01M1TQ11K4WJZD7ZE3MR0J4ZK4.acceptance_tests.test_ac5_ac6_ac7_ac8_new_hint tasks.01M1TQ11K4WJZD7ZE3MR0J4ZK4.acceptance_tests.test_ac9_ac10_ac11_gate_hint tasks.01M1TQ11K4WJZD7ZE3MR0J4ZK4.acceptance_tests.test_ac_manual_and_skip_markers` — 21 тест, все зелёные.
+- `python3 -m unittest tests.test_catalog_new_race tests.test_catalog_status_log tests.test_zones_approve tests.test_zones_gate tests.test_split_assessment_merge_gate tests.test_new_argv_parsing tests.test_spec_budget tests.test_fsm_autogate tests.test_fsm_branch_correct_status_reads tests.test_fsm_draft_mr_reentry tests.test_fsm_map_conflict_autoresolve tests.test_fsm_map_regen tests.test_fsm_merge_conflict_note tests.test_fsm_merge_gate_done_snapshot tests.test_fsm_retro tests.test_fsm_review_rework_gate tests.test_invariants tests.test_cmd_approve_dispatch tests.test_pull tests.test_review_package tests.test_guard_split_signals tests.test_fsm_advance_gate_framework tests.test_fsm_advance_gate_smoke` — 336 тестов, все зелёные (134.65s).
+- `git diff e306e1858cfb369220a4d41c641a87bd2df09ab3..HEAD --stat -- orchestrator/config.py orchestrator/catalog.py orchestrator/budget.py orchestrator/fsm.py docs/adr/0014-budget-default-and-role-cap.md tasks/01M1TQ11K4WJZD7ZE3MR0J4ZK4/` — пусто (подтверждает, что после фикса R1-F1 зона задачи не менялась; «подтяжка main» принесла только чужой код).
+- `python3 scripts/codebase_map.py` (регенерация на месте) + `git diff --stat -- docs/codebase-map.md` — расходится только `built_at_sha` (не признак дефекта, review-checklist); `git checkout -- docs/codebase-map.md` вернул дерево в чистое состояние.
+- `python3 scripts/guard.py tasks/01M1TQ11K4WJZD7ZE3MR0J4ZK4/SPEC.md tasks/01M1TQ11K4WJZD7ZE3MR0J4ZK4/PLAN.md tasks/01M1TQ11K4WJZD7ZE3MR0J4ZK4/ANSWER-1.md tasks/01M1TQ11K4WJZD7ZE3MR0J4ZK4/ANSWER-2.md tasks/01M1TQ11K4WJZD7ZE3MR0J4ZK4/TZ.md` — «GUARD: ок (5 файлов)».
+- `git status --short` — чисто (кроме материализованных untracked `tasks/`).
+- Полный набор `tests/` не гонял (решение Оператора 05.09 — гоняет CI на каждый пуш) — прогнаны планка задачи и все модули, пересекающиеся с зоной задачи (`catalog`, `fsm`, `budget`/`config`-потребители, `zones_*`, `invariants`, `guard_split_signals`).
 
 ## Предложения системе
 
-- Класс «диф-приложение на защищённый путь подготовлен ДО мержа main, `git apply --check` подтверждён, но не перепроверен ПОСЛЕ последующего разрешения конфликта подтяжки main» — конвенция требует проверки «на чистом дереве», но не уточняет, что дерево обязано быть АКТУАЛЬНЫМ на момент сдачи шага, а не на момент написания диффа; в этой задаче разработчик даже предсказал коллизию в «Предложения системе», но не связал это с необходимостью перепроверки уже подготовленного приложения после своего же `git merge main`.
+- Класс «база инкрементального диффа пакета указывает на коммит-фикс
+  ревьюверского замечания, а не на коммит, зафиксировавший ПРЕДЫДУЩИЙ
+  вердикт ревью» — здесь диф скрыл собственно то, ради чего идёт
+  итерация (сам фикс R1-F1), и одновременно раздул пакет содержимым
+  чужой задачи, пришедшим позже подтяжкой main. Тот же класс, что уже
+  отмечен в копилке review-checklist («Инкрементальный diff пакета —
+  пустой не значит «без изменений»», T082/T087) — здесь дифф не пуст,
+  но вводит в заблуждение симметрично: не «пусто, хотя менялось», а
+  «полно, но не тем».
