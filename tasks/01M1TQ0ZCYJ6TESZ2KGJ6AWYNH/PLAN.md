@@ -2,7 +2,7 @@
 task: 01M1TQ0ZCYJ6TESZ2KGJ6AWYNH
 type: plan
 author_role: developer
-status: escalate
+status: ready
 schema_version: 4
 ---
 
@@ -235,6 +235,35 @@ MAIN_BRANCH)` — короткое замыкание `or` уже гаранти
   `test_analyst_role.py` — 557 тестов + 17 subtests, все зелёные,
   включая ранее красный `test_pull_freshness_fetches_target_url_not_
   pult_origin`).
+- Закрытие эскалации ANSWER-2 (`tasks/01M1TQ0ZCYJ6TESZ2KGJ6AWYNH/
+  ANSWER-2.md`): вопрос 1 — вариант A (AC-2 переинтерпретирован каналом
+  ANSWER, код `_new_branch_parent` не менялся — уже в состоянии
+  `9f8b3f2f`, которое ANSWER-2 подтверждает как целевое). Вопрос 2 —
+  вариант A с уточнением: правка `test_ac7_journal_records_fallback_
+  reason.py` (коммит 2da2eb9e) легализована прямым сдвигом
+  `tests_locked_sha` Оператором (`3ffa8655 → 2da2eb9e`), а не задним
+  числом через `amend-tests`. Этим шагом файл `test_ac7_...` (который
+  предыдущий шаг ошибочно откатил к оригиналу test_author, разойдясь с
+  уже легализованной версией) восстановлен обратно к содержимому
+  2da2eb9e — сценарий «origin настроен, `fetch` недостижим». Пункт 3
+  ANSWER-2 (прямая проверка отсутствия записи журнала при origin вовсе
+  без настройки, R2-F3) закрыт новым файлом `tests/
+  test_artifact_branch_new_parent.py` (общий набор, не
+  `acceptance_tests/` — как и предписано ANSWER-2). Реестр замечаний
+  REVIEW.md итерации 2 размечен: R2-F1/R2-F2/R2-F3 — `fixed`, со
+  ссылкой на соответствующий пункт ANSWER-2 в колонке «решение».
+  Прогнано повторно: 7/7 приёмочных тестов задачи, `tests/
+  test_artifact_branch_new_parent.py` (1/1), `tests/
+  test_doctor_fix_ignored_artifacts.py` + `tests/
+  test_branch_freshness_gate.py` (18/18 — обе стороны прежнего
+  конфликта зелёные одновременно), `tests/test_gitcmd_branch_reads.py`
+  + `test_gitcmd_carpentry.py` + `test_gitcmd_check_ignore.py` +
+  `test_git_fixation.py` + `test_catalog_new_race.py` +
+  `test_catalog_status_log.py` + `test_artifact_materialization.py` +
+  `test_multitarget.py` + `test_multitarget_invariants.py` +
+  `test_doctor.py` — 273 passed, 17 subtests passed. `python3 scripts/
+  codebase_map.py` регенерирован (новый файл `tests/`), `scripts/
+  guard.py` на артефактах задачи — `GUARD: ок`.
 
 ## Предложения системе
 
@@ -323,7 +352,14 @@ MAIN_BRANCH)` — короткое замыкание `or` уже гаранти
     одного подхода не удалась» эскалирую, а не пробую четвёртый
     вариант интерпретации сам.
 
-## Эскалация
+## Эскалация (закрыта ANSWER-2 — история)
+
+Решение Оператора: `tasks/01M1TQ0ZCYJ6TESZ2KGJ6AWYNH/ANSWER-2.md` —
+вопрос 1 закрыт вариантом A, вопрос 2 закрыт вариантом A с уточнением
+(правка планки легализована прямым сдвигом `tests_locked_sha`, не
+`amend-tests`). Что сделано этим шагом по итогам ответа — раздел
+«Риски» выше. Текст вопросов ниже сохранён как история батча, не как
+действующий блокер (status артефакта — `ready`, не `escalate`).
 
 ### Вопросы
 
