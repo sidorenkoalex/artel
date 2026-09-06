@@ -1,4 +1,14 @@
+---
+task: 01M1SHJTT0V516BWHYXWS50F3G
+type: answer
+author_role: operator
+status: ready
+schema_version: 2
+---
+
 # ANSWER-1: расширение зон задачи 01M1SHJTT0V516BWHYXWS50F3G
+
+## Ответы
 
 Мост Оператора 06.09.2026 (задача в in_dev, переход `in_dev -> review`
 отклонён гейтом зон: дифф трогает `orchestrator/fsm_advance.py` вне
