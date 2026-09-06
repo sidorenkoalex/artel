@@ -52,9 +52,16 @@ workflows/ci.yml`, приложение к PLAN.md этой задачи — п�
 `canary` завела (тот же принцип, что и v1). `merge_gate` canary не
 approve никогда — задача убивается штатным `cleanup.cmd_kill` (main
 этим путём не трогается — kill не мержит; здесь «main» — main клона,
-не главного пульта). `verifying` (SPEC T079) канарейка тоже не
-дожидается — CI ветки, которого у неё нет и не будет (канареечные
-задачи не заводят Draft MR), задача убивается тем же приёмом.
+не главного пульта) — единственный штатный kill во всём прогоне.
+`verifying` (SPEC T079; ADR-0015 переставил его перед ревьювером) тоже
+не дожидается — CI ветки, которого у неё нет и не будет (канареечные
+задачи не заводят Draft MR), но, в отличие от `merge_gate`, не убивает
+задачу: проходится синтетически (`_pass_verifying`) в `review`, тем же
+приёмом, что `spec_gate`/`acceptance` — ANSWER-3.md 06.09, задача
+01M1TKP269W9JN3NBJCR5Q6C3B (до ADR-0015 `verifying` шёл ПОСЛЕ ревью и
+его kill был штатным финалом; теперь он стоит до первого ревью и
+приравнивание к финалу убивало прогон раньше, чем он успевал дойти до
+сценариев «не сошлась»/эскалации).
 """
 import hashlib
 import hmac
@@ -89,11 +96,13 @@ _SKIP_SHORTCIRCUIT_REASONS = (
     "каталог окружения роли не создан",
 )
 
-# Литералы `action`, которыми `_kill_at_merge_gate`/`_kill_at_verifying`
-# журналируют убийство — узнаются `_kill_outcome_note` (требование 4,
-# AC-4) как «штатный» исход, не «не сошлась».
+# Литерал `action`, которым `_kill_at_merge_gate` журналирует убийство —
+# узнаётся `_kill_outcome_note` (требование 4, AC-4) как «штатный» исход,
+# не «не сошлась». `verifying` больше не убивает задачу (ADR-0015
+# сдвинул его перед ревьювером — ANSWER-3.md 06.09): канарейка проходит
+# его синтетически (`_pass_verifying`), единственный штатный kill —
+# `merge_gate`.
 _MERGE_GATE_KILL_ACTION = "canary: merge_gate не approve — задача убивается"
-_VERIFYING_KILL_ACTION = "canary: verifying не дожидается CI — задача убивается"
 
 # Литерал `detail`, которым `_kill_inconclusive` журналирует убийство —
 # `_kill_outcome_note` отличает эту запись от остальных записей
@@ -519,18 +528,28 @@ def _kill_at_merge_gate(conn, task_id: str) -> None:
     cleanup.cmd_kill(task_id)
 
 
-def _kill_at_verifying(conn, task_id: str) -> None:
-    """`verifying` (SPEC T079) ждёт реального CI ветки — у канареечной
-    задачи его никогда не будет. Ждать здесь потолок `advance` (SPEC
-    T079, требование 6) — платить реальным временем прогона canary за
-    заведомо недостижимый зелёный CI; убиваем сразу, тем же приёмом, что
-    `_kill_at_merge_gate` (требование 11, AC-11)."""
+def _pass_verifying(conn, task_id: str) -> None:
+    """`verifying` (SPEC T079; ADR-0015 переставил его перед ревьювером,
+    `in_dev -> verifying -> review`) ждёт реального CI ветки — у
+    канареечной задачи его никогда не будет, а Draft MR она не заводит
+    (tasks/T079/SPEC.md, требование 1 — canary вне объёма адаптера).
+    Раньше (до ADR-0015) это состояние шло ПОСЛЕ ревью и её убийство
+    здесь было штатным финалом прогона; теперь оно стоит ДО первого
+    ревью, и приравнивание к финальному kill убивало канарейку прежде,
+    чем сценарий «не сошлась»/эскалация вообще успевали случиться
+    (ANSWER-3.md, 06.09: 6 из 18 приёмочных тестов планки покраснели
+    после подтяжки main по этой причине). Проходим синтетически, тем же
+    приёмом, что `_pass_spec_gate`/`_pass_acceptance_gate` — единственный
+    штатный kill канарейки остаётся `_kill_at_merge_gate`."""
     store.journal(conn, task_id, CANARY_MARK_ACTOR,
-                 "canary: verifying не дожидается CI — задача убивается",
+                 "canary: verifying пройден синтетически — CI у "
+                 "эфемерного клона нет",
                  "канареечная задача не заводит Draft MR и не имеет "
                  "реального CI ветки (tasks/T079/SPEC.md, требование 1 — "
                  "canary вне объёма адаптера)")
-    cleanup.cmd_kill(task_id)
+    store.set_state(conn, task_id, "review", CANARY_MARK_ACTOR,
+                    expected_state="verifying",
+                    detail="canary: verifying пройден синтетически")
 
 
 def _pass_escalated_with_synthetic_answer(conn, task_id: str) -> None:
@@ -594,15 +613,16 @@ def _last_role_skip_reason(conn, task_id: str) -> str | None:
 
 def _kill_outcome_note(steps) -> str:
     """Причина исхода `killed` для отчёта прогона (требование 4, AC-4):
-    «штатно» — `_kill_at_merge_gate`/`_kill_at_verifying` (эти пути и
-    раньше не были ошибкой конвейера), иначе — «не сошлась: <причина>»
-    с текстом причины из журнальной записи `_kill_inconclusive` (её
-    `detail` — фиксированный литерал-маркер, `action` несёт саму
+    «штатно» — только `_kill_at_merge_gate` (единственный путь, который и
+    раньше не был ошибкой конвейера; `verifying` теперь проходится
+    синтетически, не убивает — `_pass_verifying`), иначе — «не сошлась:
+    <причина>» с текстом причины из журнальной записи `_kill_inconclusive`
+    (её `detail` — фиксированный литерал-маркер, `action` несёт саму
     причину — требование 3/AC-3 идёт этим же путём)."""
     for r in reversed(steps):
         if r["actor"] != CANARY_MARK_ACTOR:
             continue
-        if r["action"] in (_MERGE_GATE_KILL_ACTION, _VERIFYING_KILL_ACTION):
+        if r["action"] == _MERGE_GATE_KILL_ACTION:
             return "штатно"
         if r["detail"] == _INCONCLUSIVE_KILL_DETAIL:
             return f"не сошлась: {r['action']}"
@@ -664,8 +684,8 @@ def _drive_task(conn, task_id: str) -> None:
             _kill_at_merge_gate(conn, task_id)
             return
         if state == "verifying":
-            _kill_at_verifying(conn, task_id)
-            return
+            _pass_verifying(conn, task_id)
+            continue
         if state == "escalated":
             escalation_cycles += 1
             if escalation_cycles > config.CANARY_MAX_ESCALATION_CYCLES:
@@ -853,8 +873,9 @@ def _run_one_task(template_path: Path, run_stamp: str, ratio: float) -> None:
     случай, где диагностика не сохраняется (требование 1, AC-4) и где
     бейзлайн/сравнение отклонений вообще применяются (требование 3,
     AC-7/AC-8): `_kill_outcome_note` отличает штатный kill на
-    `merge_gate`/`verifying` от «не сошлась», `mismatch` — расхождение
-    маркера ожидания эскалации с фактом.
+    `merge_gate` (единственный штатный kill — `verifying` теперь
+    проходится синтетически, ANSWER-3.md 06.09) от «не сошлась»,
+    `mismatch` — расхождение маркера ожидания эскалации с фактом.
     """
     raw = template_path.read_text(encoding="utf-8")
     title = template_path.stem

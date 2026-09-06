@@ -580,6 +580,114 @@ class DriveTaskStallCapTest(unittest.TestCase):
         self.assertEqual(store.get_task(self.conn, self.TASK)["state"], "in_dev")
 
 
+class PassVerifyingTest(unittest.TestCase):
+    """`canary._pass_verifying` (ANSWER-3.md 06.09, задача
+    01M1TKP269W9JN3NBJCR5Q6C3B): ADR-0015 переставил `verifying` перед
+    ревьювером — приравнивание к финальному kill (старое `_kill_at_
+    verifying`) убивало канареечную задачу раньше, чем прогон успевал
+    дойти до сценариев «не сошлась»/эскалации (6 из 18 приёмочных тестов
+    планки покраснели после подтяжки main по этой причине)."""
+
+    TASK = "T912"
+
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.root = Path(tmp.name)
+        for attr, value in (("ROOT", self.root),
+                            ("DB", self.root / ".artel" / "state.db"),
+                            ("TASKS", self.root / "tasks")):
+            patcher = mock.patch.object(config, attr, value)
+            patcher.start()
+            self.addCleanup(patcher.stop)
+        store.create_schema(store.db())
+        self.conn = store.db()
+        store.insert_task(self.conn, self.TASK, "Канареечная задача",
+                          "verifying", "task/t912-x", config.DEFAULT_TARGET,
+                          50.0, is_canary=True)
+        patcher = mock.patch.object(canary.cleanup, "cmd_kill")
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def test_transitions_to_review_instead_of_killing(self):
+        """Ловит мутацию: `_pass_verifying` зовёт `cleanup.cmd_kill`
+        вместо `store.set_state(..., "review", ...)` (старое поведение
+        `_kill_at_verifying`) — задача осталась бы убитой на `verifying`,
+        не дойдя до ревьювера, ровно дефект ANSWER-3.md."""
+        canary._pass_verifying(self.conn, self.TASK)
+
+        self.assertEqual(
+            store.get_task(self.conn, self.TASK)["state"], "review")
+        canary.cleanup.cmd_kill.assert_not_called()
+
+    def test_journals_synthetic_pass_with_canary_actor(self):
+        """Ловит мутацию: журнальная запись зовётся другим actor'ом или
+        без своего текста вовсе — `_kill_outcome_note`/диагностика
+        теряют след того, что переход был синтетическим, не реальным
+        зелёным CI ветки."""
+        canary._pass_verifying(self.conn, self.TASK)
+
+        steps = store.task_steps(self.conn, self.TASK)
+        self.assertTrue(any(
+            r["actor"] == canary.CANARY_MARK_ACTOR
+            and "verifying пройден синтетически" in r["action"]
+            for r in steps))
+
+
+class DriveTaskPassesVerifyingSyntheticallyTest(unittest.TestCase):
+    """`canary._drive_task` — `verifying` больше не завершает вождение
+    задачи (ANSWER-3.md 06.09): проходится синтетически, и цикл продолжает
+    вести задачу дальше вместо того, чтобы считать её законченной здесь."""
+
+    TASK = "T913"
+
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.root = Path(tmp.name)
+        for attr, value in (("ROOT", self.root),
+                            ("DB", self.root / ".artel" / "state.db"),
+                            ("TASKS", self.root / "tasks")):
+            patcher = mock.patch.object(config, attr, value)
+            patcher.start()
+            self.addCleanup(patcher.stop)
+        store.create_schema(store.db())
+        self.conn = store.db()
+        store.insert_task(self.conn, self.TASK, "Канареечная задача",
+                          "verifying", "task/t913-x", config.DEFAULT_TARGET,
+                          50.0, is_canary=True)
+
+        # `auto.cmd_auto` реально не входит в опрос `verifying` для
+        # канареечных задач (auto.py, условие цикла с `is_canary`) — здесь
+        # то же самое: no-op, всё решение — за `_drive_task` самим.
+        patcher = mock.patch.object(canary.auto, "cmd_auto", return_value=None)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+        # После синтетического прохода в `review` у состояния нет
+        # агентской роли в этом тесте (реального ревьювера не заводим) —
+        # `_drive_task` обязан остановиться сам, не убивая задачу.
+        patcher = mock.patch.object(canary.runner, "step_role", return_value=None)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+        patcher = mock.patch.object(canary.cleanup, "cmd_kill")
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def test_moves_past_verifying_into_review_without_killing(self):
+        """Ловит мутацию: `_drive_task` при `state == "verifying"` снова
+        зовёт `cleanup.cmd_kill`/`return` вместо `_pass_verifying`/
+        `continue` (старое `_kill_at_verifying`) — задача осталась бы
+        `killed` на `verifying`, тот же дефект, из-за которого 6 из 18
+        тестов планки покраснели после подтяжки main (ADR-0015)."""
+        canary._drive_task(self.conn, self.TASK)
+
+        self.assertEqual(
+            store.get_task(self.conn, self.TASK)["state"], "review")
+        canary.cleanup.cmd_kill.assert_not_called()
+
+
 class StoreAndCatalogMarkingTest(unittest.TestCase):
     """`tasks.is_canary` — колонка БД, не `title` (требование 6): заведение,
     `total_spent`, пометка в `status`, пометка/её отсутствие в RETRO."""
