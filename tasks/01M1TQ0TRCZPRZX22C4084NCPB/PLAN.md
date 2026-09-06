@@ -128,6 +128,20 @@ conventions-core («подтяжка main меняет `*.py`, но не чер�
 - `git diff` после регенерации сверен построчно — расхождений с
   ожиданием (только два перечисленных места + `built_at_sha`) нет.
 
+### Итерация 4 — закрытие причины возврата приёмки (AC-20, AC-22)
+
+Приёмка отклонила предыдущую сдачу: AC-20 требовал перечисления КАЖДОЙ
+правки ассерта старого порядка с обоснованием (семь файлов были
+названы одной строкой без разбора — «сделано предыдущей итерацией» не
+обоснование), AC-22 требовал списка (файл/строки) планок живых задач,
+фиксирующих старый порядок, вместо их правки. Код этой итерацией НЕ
+менялся (причина возврата явно требует «кода не менять») — исправлены
+только разделы «AC-20»/«AC-22» выше: по каждому из семи файлов —
+конкретный ассерт и почему он фиксировал старый порядок (см. AC-20,
+пп.5-11); для AC-22 — точный список из трёх живых задач (`git grep -n
+"in_dev -> review"` по дереву `acceptance_tests/` их артефактных
+веток), 6+5+2 места, ни один файл не тронут.
+
 ## Шаги
 
 1. Дождаться мержа R2/R3 (сделано Оператором, 06.09) — снято.
@@ -149,6 +163,11 @@ conventions-core («подтяжка main меняет `*.py`, но не чер�
 7. Итерация 3: закрыть REVIEW.md R2-F1 (см. «Итерация 3» выше) —
    перегенерировать `docs/codebase-map.md` после подтяжки main
    (`d9893cd3`), разметить реестр замечаний `fixed`, закоммитить.
+8. Итерация 4: закрыть причину возврата приёмки (см. «Итерация 4»
+   выше) — расписать AC-20 по каждому из семи файлов с обоснованием,
+   найти и перечислить (файл/строки) планки трёх живых задач для
+   AC-22; кода не менять, коммита в кодовую ветку не требуется (правка
+   только `tasks/<id>/PLAN.md`).
 
 ## Покрытие требований
 
@@ -162,43 +181,190 @@ conventions-core («подтяжка main меняет `*.py`, но не чер�
 | 6 | 4 |
 | 7 | 1 (эскалация вместо правки чужой планки — снята Оператором) |
 
-### AC-20 — правки ассертов старого порядка (с обоснованием)
+### AC-20 — правки ассертов старого порядка (с обоснованием, по каждому файлу)
 
-Все перечисленные тесты фиксировали поведение ДО ADR-0015
-(`in_dev -> review`, `verifying -> acceptance`) либо не учитывали, что
-рубежи «прогон приёмки»/«сверка головы на origin» переехали в `in_dev`
-и теперь звонятся на КАЖДОМ входе в этот переход, а не только на
-approved-ветке `review()`:
+Причина возврата (приёмка) указала, что семь файлов ниже (п.5-11) были
+упомянуты в предыдущей редакции PLAN.md одной строкой («сделаны
+предыдущей итерацией... без дополнительных правок») без обоснования —
+«сделано предыдущей итерацией» не обоснование, почему именно этот
+ассерт фиксировал старый порядок. Ниже — по каждому файлу отдельно, с
+конкретным ассертом/фикстурой и причиной правки. Все правки сделаны
+одним и тем же диффом (WIP-чекпоинт `0f19be5c`, до первого выхода этого
+шага на ревью) — эта итерация только документирует их, кода не меняет.
 
-- `tests/test_verifying_ceiling.py::test_green_ci_moves_on_regardless_of_elapsed_time`
-  — целевое состояние на зелёном CI сменено с `"acceptance"` на
-  `"review"` (AC-9).
-- `tests/test_branch_freshness_gate.py` — три теста
-  (`test_advance_skips_pull_when_branch_not_behind`,
-  `test_advance_treats_origin_fetch_failure_as_fresh`,
-  `test_advance_pulls_main_and_advances_when_acceptance_green`):
-  целевое состояние `in_dev -> {review->verifying}`; плюс
-  `acceptance.run` теперь звонится безусловно как часть `in_dev`
-  (`assert_not_called()` → сконфигурированный `return_value=(True,
-  "ok")` + `assert_called_once()`/`call_count == 2`, где пул реально
-  сработал — см. «Подход», известная двойная планка).
-- `tests/test_acceptance_tests_flow.py::LockTest` — три теста
-  (`test_untouched_tests_pass_the_transition`,
-  `test_new_unrelated_file_does_not_trip_the_lock`,
-  `test_pyc_only_diff_after_lock_does_not_block_the_transition`):
-  реальный git без origin — добавлен `mock.patch.object(github_adapter,
-  "ensure_head_in_origin", return_value=(True, ""))` вокруг
-  `cmd_advance`, тем же приёмом, что уже применён в
-  `tests/test_git_fixation.py` (предыдущей итерацией).
-- `tests/test_amend.py::AmendThenReviewGateTest::test_amend_then_advance_passes_lock_gate`
-  — тот же приём (мок `ensure_head_in_origin`) + целевое состояние
-  `"review"` → `"verifying"`.
+1. `tests/test_verifying_ceiling.py::test_green_ci_moves_on_regardless_of_elapsed_time`
+   — целевое состояние на зелёном CI сменено с `"acceptance"` на
+   `"review"` (AC-9): по старому порядку `verifying` вело в
+   `acceptance`, по новому — в `review`.
+2. `tests/test_branch_freshness_gate.py` — три теста
+   (`test_advance_skips_pull_when_branch_not_behind`,
+   `test_advance_treats_origin_fetch_failure_as_fresh`,
+   `test_advance_pulls_main_and_advances_when_acceptance_green`):
+   целевое состояние `in_dev -> {review->verifying}`; плюс
+   `acceptance.run` теперь звонится безусловно как часть `in_dev`
+   (`assert_not_called()` → сконфигурированный `return_value=(True,
+   "ok")` + `assert_called_once()`/`call_count == 2`, где пул реально
+   сработал — см. «Подход», известная двойная планка): рубеж «прогон
+   приёмки» переехал из approved-ветки `review()` в `in_dev`, где
+   звонится безусловно на каждом входе, а не только при approved.
+3. `tests/test_acceptance_tests_flow.py::LockTest` — три теста
+   (`test_untouched_tests_pass_the_transition`,
+   `test_new_unrelated_file_does_not_trip_the_lock`,
+   `test_pyc_only_diff_after_lock_does_not_block_the_transition`):
+   реальный git без origin — добавлен `mock.patch.object(github_adapter,
+   "ensure_head_in_origin", return_value=(True, ""))` вокруг
+   `cmd_advance`: рубеж «сверка головы на origin» переехал в `in_dev`,
+   где звонится безусловно, а песочница этих тестов не заводит
+   настоящий origin — без мока рубеж отказал бы транзиту, которого
+   раньше на этом пути не было.
+4. `tests/test_amend.py::AmendThenReviewGateTest::test_amend_then_advance_passes_lock_gate`
+   — тот же приём (мок `ensure_head_in_origin`, тот же довод, что в
+   п.3) + целевое состояние `"review"` → `"verifying"` (AC-1: `in_dev`
+   теперь ведёт в `verifying`, не в `review`).
+5. `tests/test_advance_guard.py:92-94,285` — таблица `TRANSITIONS`
+   (строки 92-94, генерик-сценарная фикстура переходов для ВСЕХ
+   состояний) держала `"in_dev": (..., "review")` и `"review": (...,
+   "verifying")` — переписана в `"in_dev": (..., "verifying")` и
+   `"review": (..., "acceptance")`, ровно новый маршрут (AC-1); итоговый
+   ассерт `self.assertEqual(self.state(), "acceptance")` (строка 285)
+   после advance из `review` — было `"verifying"`, approved из `review`
+   теперь идёт прямиком в `acceptance` (verifying уже пройден раньше,
+   AC-9/AC-10).
+6. `tests/test_auto_cycle.py` — шесть точек:
+   - `FSM_STATES` (строка 59): порядок кортежа `in_dev, review,
+     verifying` → `in_dev, verifying, review` — этим кортежем идут
+     свипы по ВСЕМ состояниям, порядок обязан отражать реальный маршрут
+     (иначе свипы проверяли бы несуществующий с этой задачи порядок);
+   - `test_cycle_runs_the_task_from_dev_to_verifying` (строка 383):
+     `len(self.agent.calls)` `2 → 0` — PLAN.md готов с самого начала;
+     по старому порядку до `verifying` задача проходила ЧЕРЕЗ `review`
+     и звала агента-ревьювера дважды (нулевой шаг без перехода +
+     approve), по новому — все семь рубежей `in_dev -> verifying`
+     свободны, `review` эта задача вообще не посещает (CI дефолтно
+     красный, цикл стопорится на входе в `verifying`), агент не
+     звонится ни разу;
+   - `test_review_iterations_are_passed_without_the_operator` (строки
+     398-407): добавлен явный мок `ci.verifying_status` (зелёный) и
+     итоговое состояние `"verifying"` → `"acceptance"` — раньше
+     `verifying` стоял ПОСЛЕ `review`, опрос CI не мешал сценарию
+     повтора итераций ревью; теперь `verifying` стоит ДО `review` —
+     без зелёного мока цикл встал бы на самом входе, ни разу не дойдя
+     до ревьювера, а после отработки итераций ревью с зелёным CI
+     задача идёт в `acceptance`, не остаётся в `verifying`;
+   - `test_first_real_step_uses_a_free_transition_first` (строки
+     425-434, 446-461) — тот же приём и тот же довод, что в предыдущем
+     пункте: явный зелёный мок `ci.verifying_status` + целевое
+     состояние `"acceptance"`;
+   - `test_escalation_by_the_ceiling_names_budget` /
+     `test_escalation_with_the_ceiling_intact_names_approve` — убран
+     вызов `self.write_plan("ready")` в начале теста: с ADR-0015
+     `ready` с самого начала увёл бы задачу свободным переходом сразу в
+     `verifying`, минуя сам шаг developer, чей отказ по бюджету/паузе и
+     есть предмет теста;
+   - `AutoReportsTheCycleTest` (строка 987): строка ожидаемого текста
+     сводки `"...переход выполнен по готовым артефактам (in_dev ->
+     review)"` → `"...(in_dev -> verifying)"` — сводка называет
+     реальное имя свободного перехода, которым он теперь и является.
+7. `tests/test_fsm_map_conflict_autoresolve.py:275,291-292` — целевое
+   состояние конфликта карты `"review"` → `"verifying"` (строка 275:
+   конфликт только по карте не имеет права эскалировать, переход
+   обязан состояться — теперь этот переход ведёт в `verifying`, не в
+   `review`); `acc_run.call_count` `1 → 2` и `plank_root =
+   acc_run.call_args[0][0]` → `acc_run.call_args_list[0][0][0]` (строки
+   291-292) — с ADR-0015 `in_dev` зовёт `acceptance.run` дважды за один
+   вызов (рубеж `pull.evaluate` + отдельный рубеж
+   `_acceptance_run_refuses`, переехавший из `review()`, см.
+   «Подход»), тест изначально проверял именно первый (от
+   `pull.evaluate`) вызов — понадобилась индексация по списку вызовов
+   вместо единственного `call_args`.
+8. `tests/test_git_fixation.py:298-302` — обёрнут
+   `mock.patch.object(github_adapter, "ensure_head_in_origin",
+   return_value=(True, ""))` вокруг `fsm.cmd_advance`, целевое
+   состояние `"review"` → `"verifying"` — рубеж «сверка головы на
+   origin» переехал на `in_dev -> verifying`, а песочница этого теста
+   не заводит настоящую кодовую ветку с origin (только артефактную
+   PLAN-заглушку); предмет теста — сверка чистоты дерева для внешнего
+   target, не origin-push (у него свой тест, `test_github_adapter.py`).
+9. `tests/test_invariants.py::FreshVerdictGuardsAcceptanceTest` (строки
+   774-859) и три соседних теста
+   (`ExhaustedBudgetIsNotBypassableTest.test_advance_does_not_unblock_the_run`
+   строка 900, `ParallelTaskLimitIsNotBypassableTest...` строка 1064,
+   `CountersNeverResetTest.test_no_transition_of_the_full_cycle_resets_a_counter`
+   /`test_exhausted_review_limit_is_not_reopened_by_escalation` строки
+   1167-1223) — везде один и тот же класс правки: целевое состояние
+   после `in_dev -> advance` сменено с `"review"` на `"verifying"`
+   (AC-1), а после approved-`review` — с `"verifying"` на `"acceptance"`
+   (AC-9/AC-10); там, где сценарий должен дойти до `review`, добавлен
+   явный `self.set_ci(GREEN_CI)` перед advance — иначе `verifying`
+   держит задачу по дефолтно красному CI фикстуры и до `review` она не
+   доходит.
+10. `tests/test_review_freshness.py` — хелпер-метод переименован
+    `back_to_review_after_verifying_reject` →
+    `back_to_review_after_acceptance_reject` (строка 214) и переписан:
+    сценарий `review(approved) → verifying → reject` заменён на
+    `review(approved) → acceptance → reject → in_dev → verifying →
+    review` (последний шаг — прямая установка `self.set_state
+    ("review")`, CI в этом модуле не мокается, а предмет тестов —
+    свежесть вердикта в `review()`, не опрос CI); пять тестов,
+    использующих хелпер и целевые состояния
+    (`test_stale_approved_does_not_pass_after_acceptance_reject`,
+    `test_stale_verdict_is_journaled`,
+    `test_fresh_verdict_passes_to_acceptance` строка 264,
+    `test_changes_requested_counted_once` строка 273,
+    `test_first_verdict_passes_to_acceptance` строка 291) —
+    переименованы и/или целевое состояние `"verifying"` →
+    `"acceptance"`, тем же доводом: approved теперь ведёт прямиком в
+    `acceptance`, не в `verifying`.
+11. `tests/test_review_registry_gate.py:84,108` —
+    `self.assertNotEqual(self.state(), "verifying")` → `"acceptance"`
+    (строка 84: гейт реестра держит задачу НЕ в `acceptance`, а не НЕ в
+    `verifying` — `verifying` уже пройден раньше по маршруту) и
+    `self.assertEqual(self.state(), "verifying")` → `"acceptance"`
+    (строка 108: пустой реестр не держит переход, конечная точка теперь
+    `acceptance`).
 
-Остальные правки (`test_advance_guard.py`, `test_auto_cycle.py`,
-`test_fsm_map_conflict_autoresolve.py`, `test_git_fixation.py`, `test_invariants.py`,
-`test_review_freshness.py`, `test_review_registry_gate.py`) сделаны
-предыдущей итерацией этого же шага (до таймаута) — сверены в этой
-итерации прогоном, без дополнительных правок.
+### AC-22 — эскалация: планки живых задач со старым порядком (не правятся)
+
+Требование 7/AC-22: приёмочная планка живой (не закрытой) задачи,
+фиксирующая старый порядок состояний, не правится этой задачей —
+эскалируется списком (файл, строка). Поиск — по точной подстроке
+`in_dev -> review` (буквальное имя перехода СТАРОГО маршрута,
+замененного этой задачей на `in_dev -> verifying`, AC-1) в дереве
+`acceptance_tests/` артефактной ветки каждой задачи:
+`git grep -n "in_dev -> review" artifact/<id> -- tasks/<ID>/acceptance_tests`.
+Совпадение означает, что планка либо прогоняет сценарий через этот
+несуществующий с этой задачи переход, либо докстрингом/сообщением
+ассерта утверждает факт о том, где стоит гейт/рубеж, для которого
+теперь верно другое имя перехода.
+
+- **01M1R5B33CC7E6BZK085XV3ZCX** (6 мест) —
+  `tasks/01M1R5B33CC7E6BZK085XV3ZCX/acceptance_tests/test_ac15_ac16_ac17_end_to_end.py`,
+  строки 6, 12, 43, 93, 118, 202 (докстринг модуля и метода, ассерт
+  `test_ac15_full_flow_merges_into_the_target_origin_only` — код
+  дословно ожидает `store.get_task(...)["state"] == "review"` сразу
+  после `fsm.cmd_advance` из `in_dev`, плюс `store.set_state(...,
+  expected_state="verifying")` строкой ниже — оба сломались бы под
+  ADR-0015, т.к. `in_dev` теперь ведёт в `verifying`, не в `review`;
+  гейт ёмкости AC-16, `CapacityGateThroughAdvanceTest`, тоже описан
+  через этот переход).
+- **01M1THKWFXFYNW28HDJGYHQWH6** (5 мест) —
+  `tasks/01M1THKWFXFYNW28HDJGYHQWH6/acceptance_tests/_sandbox.py:171`;
+  `tasks/01M1THKWFXFYNW28HDJGYHQWH6/acceptance_tests/test_ac1_ac2_ac3_first_submission.py:8,62`;
+  `tasks/01M1THKWFXFYNW28HDJGYHQWH6/acceptance_tests/test_ac6_over_cap_blocks_transition.py:14,36`
+  (эта планка держит `self.assertEqual(self.state(), "review")` сразу
+  после advance из `in_dev` в нескольких файлах — та же ловушка).
+- **01M1TNMBY8G3AH3MYCB07RW14N** (2 места) —
+  `tasks/01M1TNMBY8G3AH3MYCB07RW14N/acceptance_tests/_sandbox.py:30,39`
+  (только докстринг-обоснование дизайна песочницы — сценарий этой
+  планки нарочно НИКОГДА не доходит до `in_dev`/`review`, код не
+  исполняет этот переход, но факт «гейт ёмкости живёт на `in_dev ->
+  review`» текстом устарел).
+
+Ни один из перечисленных файлов не тронут этой задачей: все три задачи
+живы (`git merge-base --is-ancestor artifact/<id> main` → not an
+ancestor для всех трёх на момент этого шага, т.е. не смержены и не
+`done`) — правку их планок делает только их собственный developer в
+рамках их СВОИХ задач, не эта (AC-21, «Не входит» SPEC).
 
 ## Расширение зон
 
