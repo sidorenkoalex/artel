@@ -130,6 +130,21 @@ def _is_legit_first_entry_detail(detail: str | None) -> bool:
     return any(detail.startswith(prefix) for prefix in _LEGIT_FIRST_ENTRY_PREFIXES)
 
 
+# detail записи `state -> {state}`, оставленной ИМЕННО возвратом из
+# `escalated` (SPEC 01M1VBEDGMEXHVGWAH42FTDZ4X, требование 2): текст
+# `fsm.py::_approve_escalated` — общий для ЛЮБОГО основания эскалации
+# (провал агента, лимит, budget); текст `budget.py::_cmd_budget` — тот же
+# самый исход, вынесенный поднятием потолка отдельной командой. Ни один из
+# них не несёт своего собственного основания переделки (это ВОЗВРАТ к
+# работе, прерванной эскалацией, не новое замечание ревью/reject) — запись
+# с таким detail не может служить анкером рубежа «возврат не отработан»:
+# она моложе настоящего анкера (возврата review/reject) и маскировала бы
+# его собой, из-за чего шаг роли, отработанный ДО эскалации, ошибочно не
+# засчитывался бы (SPEC «Контекст», регрессия AC-5).
+_ESCALATED_RETURN_DETAILS = ("эскалация разрешена, продолжаем",
+                            "бюджет поднят, продолжаем")
+
+
 def _role_step_since_state_entry(conn, task_id: str, state: str,
                                  role: str) -> tuple[bool, str | None]:
     """(был ли уже шаг `role` после ПОСЛЕДНЕЙ записи `state -> {state}`,
@@ -148,12 +163,22 @@ def _role_step_since_state_entry(conn, task_id: str, state: str,
     входа в состояние, держать пред-advance здесь нечем, кроме уже
     существующих проверок требования 3/4 (PLAN.md не готов, лок
     `acceptance_tests/` и подобные).
+
+    Записи возврата ИЗ `escalated` (`_ESCALATED_RETURN_DETAILS`,
+    01M1VBEDGMEXHVGWAH42FTDZ4X, требование 2) пропускаются при поиске
+    анкера — они не несут собственного основания переделки и не должны
+    маскировать более раннюю запись, которая его несёт (см. её
+    докстринг): анкером остаётся ПОСЛЕДНЯЯ запись `state -> {state}`
+    среди ОСТАЛЬНЫХ, а «был ли шаг роли» проверяется от НЕЁ — в том
+    числе через любые промежуточные записи возврата из эскалации
+    (шаг роли, отработанный между анкером и эскалацией, засчитывается
+    точно так же, как отработанный уже после возврата).
     """
     rows = store.task_steps(conn, task_id)
     marker = f"state -> {state}"
     last_entry = None
     for i, row in enumerate(rows):
-        if row["action"] == marker:
+        if row["action"] == marker and row["detail"] not in _ESCALATED_RETURN_DETAILS:
             last_entry = i
     if last_entry is None:
         return True, None

@@ -2,7 +2,15 @@
 import sqlite3
 import sys
 
-from . import alerts, config, lease, retro, spend, store
+from . import alerts, config, gitcmd, lease, retro, spend, store
+
+# Действие журнала, которым `enforce_budget` фиксирует sha головы кодовой
+# ветки в момент эскалации ПО БЮДЖЕТУ из состояния `review` (SPEC
+# 01M1VBEDGMEXHVGWAH42FTDZ4X, требование 3): `fsm_advance.py::review()`
+# читает эту запись, чтобы решить, нужен ли новый прогон reviewer при
+# возврате (см. её докстринг про отсечку «новее последнего прогона
+# reviewer»).
+REVIEW_ESCALATION_CODE_SHA_ACTION = "эскалация review: sha кода зафиксирован"
 
 
 def spec_budget(meta: dict) -> tuple[float | None, str]:
@@ -176,6 +184,16 @@ def enforce_budget(conn, task_id: str, state: str) -> bool:
         # Точка возврата (T006): шаг мог отработать успешно, и возвращать
         # задачу из escalated надо туда, где она стояла, а не в разработку.
         store.update_task(conn, task_id, escalated_from=state)
+        if state == "review":
+            # Требование 3: sha кода на момент эскалации ИЗ review — до
+            # смены состояния, чтобы момент записи однозначно предшествовал
+            # самой эскалации. Пусто (git не ответил) — не журналируем
+            # вовсе, тот же вырожденный случай, что и у соседних sha-примитивов
+            # (`fixation.py`): нечему быть опорой сравнения.
+            code_sha = gitcmd.branch_head_sha(t["branch"])
+            if code_sha:
+                store.journal(conn, task_id, "fsm",
+                              REVIEW_ESCALATION_CODE_SHA_ACTION, code_sha)
         store.set_state(conn, task_id, "escalated", "fsm",
                         expected_state=state,
                         detail=f"бюджет исчерпан: ${spent:.2f} из ${budget:.2f}")
@@ -301,18 +319,31 @@ def cmd_budget(task_id: str, raw_usd: str, session_id: str | None = None) -> Non
     """Меняет потолок задачи — единственный способ снять блокировку по бюджету.
 
     Берёт lease задачи перед работой (SPEC T044, требование 2) — обёртка
-    вокруг `_cmd_budget`, см. `orchestrator/lease.py`.
+    вокруг `_cmd_budget`, см. `orchestrator/lease.py`. `same_host_ok=True`
+    (SPEC 01M1VBEDGMEXHVGWAH42FTDZ4X, требование 1): `budget` — ЕДИНСТВЕННАЯ
+    команда, которой разрешено менять потолок под живым lease того же
+    hostname чужой сессии (другой терминал того же Оператора) — «Не
+    входит» SPEC прямо ограничивает исключение этой командой.
+
+    `mid_step` читается ДО `run_locked` — живая (в момент вызова, до
+    какой-либо мутации lease самим `acquire`) lease-строка задачи, чья бы
+    сессия её ни держала, означает «прямо сейчас идёт шаг роли» (требование
+    1, AC-2/AC-10): auto держит lease весь цикл, поэтому и собственная
+    сессия внутри `auto`, и чужая сессия того же хоста — оба случая «во
+    время шага».
 
     Префикс -> полный id (SPEC T094, требование 3, AC-3) резолвится ЗДЕСЬ,
     до lease (REVIEW T094 итерация 1, замечание 1).
     """
     conn = store.db()
     task_id = store.resolve_task_id(conn, task_id)
+    mid_step = lease.is_live(conn, task_id)
     lease.run_locked(conn, task_id, session_id,
-                     lambda sid: _cmd_budget(conn, task_id, raw_usd))
+                     lambda sid: _cmd_budget(conn, task_id, raw_usd, mid_step),
+                     same_host_ok=True)
 
 
-def _cmd_budget(conn, task_id: str, raw_usd: str) -> None:
+def _cmd_budget(conn, task_id: str, raw_usd: str, mid_step: bool = False) -> None:
     t = store.get_task(conn, task_id)
     new_budget = spend.cli_number(raw_usd)
     if new_budget is None or new_budget <= 0:
@@ -326,8 +357,17 @@ def _cmd_budget(conn, task_id: str, raw_usd: str) -> None:
     store.update_task(conn, task_id, budget_usd=new_budget,
                       budget_source=config.BUDGET_SOURCE_OPERATOR,
                       updated_at=store.now())
-    store.journal(conn, task_id, "operator", "бюджет изменён",
-                  f"${old:.2f} -> ${new_budget:.2f}, израсходовано ${spent:.2f}")
+    detail = f"${old:.2f} -> ${new_budget:.2f}, израсходовано ${spent:.2f}"
+    if mid_step:
+        # Отложенный импорт (тот же приём, что `lease.warn_foreign_live`
+        # уже применяет к `runner`): `runner.py` на уровне модуля
+        # импортирует `budget` — обратный импорт на уровне модуля был бы
+        # циклом.
+        from . import runner
+        role = runner.step_role(t)
+        if role is not None:
+            detail += f", во время шага {role}"
+    store.journal(conn, task_id, "operator", "бюджет изменён", detail)
     print(f"[{task_id}] бюджет: ${old:.2f} -> ${new_budget:.2f} "
           f"(израсходовано ${spent:.2f})")
 
