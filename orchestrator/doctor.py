@@ -61,8 +61,8 @@ from collections import namedtuple
 from pathlib import Path
 
 from . import (alerts, artifact_branch, canary, ci, coldstart, config,
-              gitcmd, liveness, projects, roles, runner, snapshot, spend,
-              stack, store, targets, workspace, zone_lock)
+              gitcmd, liveness, notes, projects, roles, runner, snapshot,
+              spend, stack, store, targets, workspace, zone_lock)
 
 # status: "ok" | "warn" | "fail" | "skip" ("skip" — честный пропуск проверки,
 # требование 9: сверка forge-политики без `gh`/сети — не провал и не ок).
@@ -1296,6 +1296,19 @@ def check_backup_age(conn) -> Check:
                  f"(ADR-0005 п.3, бэкап .artel/ не обязателен)")
 
 
+def check_pending_notes() -> Check:
+    """Требование 6 SPEC 01M1VBEHTDYPK3E4RRFHWYYYW3: заметки `note`,
+    удержанные из-за сетевого отказа push либо исчерпания повторов
+    non-fast-forward (`notes.pending_notes()`), — предупреждение, пока
+    Оператор/следующий вызов `note`/`note --flush` не допушит их."""
+    pending = notes.pending_notes()
+    if not pending:
+        return Check("pending-notes", "ok", "нет удержанных заметок note")
+    return Check("pending-notes", "warn",
+                 f"{len(pending)} удержанных заметок note — "
+                 f"artel.py note --flush отправит их в origin")
+
+
 def check_task_counters(conn) -> Check:
     """Контур счётчика номеров задач — замороженный legacy (SPEC T094,
     требование 6; ADR-0005 п.5 правки этой же задачи): генератором id
@@ -1942,6 +1955,7 @@ def all_checks(conn) -> list[Check]:
     checks.append(check_root_pin())
     checks.append(check_role_log_pool_leak(conn))
     checks.append(check_canary_pool_drift())
+    checks.append(check_pending_notes())
     checks.extend(check_token_repo_scope())
     checks.extend(stack.check_stack())
     checks.extend(check_map_growth(conn))

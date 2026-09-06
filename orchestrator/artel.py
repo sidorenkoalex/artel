@@ -101,7 +101,9 @@ workspace, tasks, knowledge, logs). БД одна на все проекты: с
   target-init <target> | doctor [--restore] [--fix] | alert-ack <id> "<решение>" |
   version | canary --k <N> | canary pool-seal | prune [--execute] |
   amend-tests <id> --reason "<основание>" | pin-update <sha main артели> |
-  zone-release <id> | zone-reorder <id1> <id2> ... | venv-sync
+  zone-release <id> | zone-reorder <id1> <id2> ... | venv-sync |
+  note (копилка|бэклог|очередь) --text "<строка>" | note --append <ключ>
+  --text "<текст>" | note --flush
 
 `pin-update <sha>` (A7, Stage1) — обновляет пин запущенной версии:
 продвигает рабочее дерево и HEAD `config.ROOT` до `<sha>` main артели
@@ -282,6 +284,9 @@ worktree задачи, команда коммитит правку, сдвиг�
   venv      `.artel/venv` пульта: создание/синхронизация с
             `requirements.lock`, идемпотентно (SPEC
             01M1REVEZ1HESMJ7AFD5A9MEJ8)
+  notes     команда `note`: строка в копилку/бэклог/очередь изолированным
+            коммитом от origin/main, повтор non-fast-forward, удержание
+            коммита при сетевом отказе (tasks/01M1VBEHTDYPK3E4RRFHWYYYW3)
 """
 import sys
 from pathlib import Path
@@ -294,9 +299,9 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from orchestrator import (amend, answer, auto, budget, canary, catalog,  # noqa: E402
-                          cleanup, config, doctor, dry_run, fsm, pause, pin,
-                          projects, prune, release, report, runner, venv,
-                          version, workspace, zone_lock)
+                          cleanup, config, doctor, dry_run, fsm, notes, pause,
+                          pin, projects, prune, release, report, runner,
+                          venv, version, workspace, zone_lock)
 
 
 def _refuse_if_worktree() -> None:
@@ -470,6 +475,7 @@ def main() -> None:
         "zone-release": lambda: zone_lock.cmd_zone_release(rest[0]),
         "zone-reorder": lambda: zone_lock.cmd_zone_reorder(rest),
         "venv-sync": lambda: venv.cmd_venv_sync(),
+        "note": lambda: notes.cmd_note(rest),
     }
     fn = table.get(cmd)
     if fn is None:
