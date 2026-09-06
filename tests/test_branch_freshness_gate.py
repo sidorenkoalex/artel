@@ -265,13 +265,19 @@ class BranchFreshnessGateTest(unittest.TestCase):
         with mock.patch.object(gitcmd, "commits_behind", return_value=0), \
              mock.patch.object(gitcmd, "in_repo",
                                side_effect=self._recording_ok), \
-             mock.patch.object(acceptance, "run") as acc_run:
+             mock.patch.object(acceptance, "run",
+                               return_value=(True, "ok")) as acc_run:
             self.advance_from_in_dev()
 
-        self.assertEqual(self.state(), "review",
-                         "переход обязан пройти как и до T051 (требование 7)")
+        self.assertEqual(self.state(), "verifying",
+                         "переход обязан пройти как и до T051 (требование 7); "
+                         "ADR-0015 — цель перехода in_dev теперь verifying, "
+                         "не review")
         self.assertEqual(self.merge_calls, [], "не отставшая ветка — merge не звонится")
-        acc_run.assert_not_called()
+        # ADR-0015: прогон приёмки теперь часть ЭТОГО ЖЕ перехода
+        # `in_dev -> verifying` (был отдельным гейтом `review -> verifying`
+        # до этой задачи) — звонится независимо от того, отставала ли ветка.
+        acc_run.assert_called_once()
 
     def test_approve_skips_pull_when_branch_not_behind(self):
         self.setup_recording()
@@ -315,8 +321,9 @@ class BranchFreshnessGateTest(unittest.TestCase):
                                return_value=(True, "ok")) as acc_run:
             self.advance_from_in_dev()
 
-        self.assertEqual(self.state(), "review",
-                         "переход обязан состояться после успешной подтяжки")
+        self.assertEqual(self.state(), "verifying",
+                         "переход обязан состояться после успешной подтяжки "
+                         "(ADR-0015 — цель перехода in_dev теперь verifying)")
         self.assertEqual(len(self.merge_calls), 1)
         repo, args = self.merge_calls[0]
         self.assertEqual(repo, self.wt_path, "merge — в worktree ЗАДАЧИ, "
@@ -340,15 +347,24 @@ class BranchFreshnessGateTest(unittest.TestCase):
                          "фетч), ни в приватном FETCH_HEAD worktree'а")
         self.assertNotIn(self.branch, args,
                          "ветка задачи не упоминается в аргументах merge")
-        acc_run.assert_called_once()
-        plank_root = acc_run.call_args[0][0]
+        # ADR-0015: с этой задачи `in_dev` зовёт `acceptance.run` дважды —
+        # раз внутри `pull.evaluate` (рубеж «прогон планки после
+        # подтяжки», SPEC 01M1RNZ6V7TTTTYAHBMF8JBQQS, этот тест изначально
+        # про НЕГО) и второй раз своим отдельным рубежом
+        # `_acceptance_run_refuses` (SPEC T023, требование 6, переехавшим
+        # из `review()`) — оба легитимны и стояли в системе ДО этой задачи
+        # (просто на двух разных вызовах `advance`, не в одном); первый
+        # вызов в списке — от `pull.evaluate`, его и проверяет этот тест
+        # (тот же приём, что `tests/test_fsm_map_conflict_autoresolve.py`).
+        self.assertEqual(acc_run.call_count, 2)
+        plank_root = acc_run.call_args_list[0][0][0]
         self.assertEqual(
             plank_root, self.wt_path / "tasks" / self.TASK,
             "SPEC 01M1RNZ6V7TTTTYAHBMF8JBQQS AC-1: планка обязана "
             "материализоваться в рабочий каталог кода задачи (worktree "
             "self-target), не во временный каталог")
         self.assertEqual(
-            acc_run.call_args.kwargs.get("code_root"), self.wt_path,
+            acc_run.call_args_list[0].kwargs.get("code_root"), self.wt_path,
             "SPEC 01M1RNZ6V7TTTTYAHBMF8JBQQS AC-2: cwd прогона обязан "
             "быть равен рабочему каталогу кода задачи, не config.ROOT")
 
@@ -449,17 +465,22 @@ class BranchFreshnessGateTest(unittest.TestCase):
              mock.patch.object(gitcmd, "commits_behind") as behind, \
              mock.patch.object(gitcmd, "in_repo",
                                side_effect=self._recording_ok), \
-             mock.patch.object(acceptance, "run") as acc_run:
+             mock.patch.object(acceptance, "run",
+                               return_value=(True, "ok")) as acc_run:
             self.advance_from_in_dev()
 
-        self.assertEqual(self.state(), "review",
+        self.assertEqual(self.state(), "verifying",
                          "вырожденная _origin_main_sha — тот же исход, что "
-                         "и «ветка не отстала» (требование 7)")
+                         "и «ветка не отстала» (требование 7); ADR-0015 — "
+                         "цель перехода in_dev теперь verifying, не review")
         behind.assert_not_called()
         self.assertEqual(self.merge_calls, [],
                          "R1-F1: merge не имеет права звонить против "
                          "постороннего FETCH_HEAD")
-        acc_run.assert_not_called()
+        # ADR-0015: прогон приёмки теперь часть ЭТОГО ЖЕ перехода
+        # `in_dev -> verifying` — звонится независимо от исхода сверки
+        # свежести, вырожденной или нет.
+        acc_run.assert_called_once()
 
     # --------------------------------------------------- конфликт подтяжки
 

@@ -20,7 +20,7 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from orchestrator import fsm_advance, gitcmd, review, store  # noqa: E402
+from orchestrator import config, fsm_advance, gitcmd, review, store  # noqa: E402
 from tests.sandbox import TmpRootTest  # noqa: E402
 
 
@@ -114,7 +114,7 @@ class CapacityGateTwoNumbersMessageTest(TmpRootTest):
                 self.conn, self.task_id, self.t, "in_dev")
 
     def test_refusal_message_names_code_size_and_artifacts_size_separately(self):
-        code_body = "x" * 300_000
+        code_body = "x" * (config.REVIEW_SNAPSHOT_DIFF_MAX_BYTES + 37_856)
         artifacts_body = "y" * 500
 
         def git_diff(*args) -> subprocess.CompletedProcess:
@@ -143,7 +143,7 @@ class CapacityGateTwoNumbersMessageTest(TmpRootTest):
         — git отвечает пустым stdout, `git_diff_part` подставляет для показа
         строку-плейсхолдер `review.EMPTY_DIFF_TEXT`. Вторая цифра сообщения
         обязана быть 0, а не байтовым размером этого плейсхолдера."""
-        code_body = "x" * 300_000
+        code_body = "x" * (config.REVIEW_SNAPSHOT_DIFF_MAX_BYTES + 37_856)
 
         def git_diff(*args) -> subprocess.CompletedProcess:
             if args and args[0] == "diff":
@@ -172,7 +172,7 @@ class CapacityGateTwoNumbersMessageTest(TmpRootTest):
         """Второй diff (только `tasks/<id>/`) не отвечает — отказ уже
         решён первой цифрой (код выше потолка), гейт не выдаёт вымышленное
         число вместо честного «неизвестен»."""
-        code_body = "x" * 300_000
+        code_body = "x" * (config.REVIEW_SNAPSHOT_DIFF_MAX_BYTES + 37_856)
 
         def git_diff(*args) -> subprocess.CompletedProcess:
             if args and args[0] == "diff":

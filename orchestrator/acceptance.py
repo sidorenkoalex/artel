@@ -13,7 +13,7 @@ from pathlib import Path
 
 from scripts import guard
 
-from . import config, gitcmd, stack
+from . import ci, config, gitcmd, stack
 
 
 def _pytest_command(*args: str) -> list[str]:
@@ -208,8 +208,8 @@ def run_full_suite(root: Path) -> tuple[bool, str]:
     return res.returncode == 0, tail
 
 
-def summary(tdir: Path) -> str:
-    """Сводка в карточку гейта acceptance: пройдено/manual/skip.
+def summary(tdir: Path, branch: str | None = None) -> str:
+    """Сводка в карточку гейта acceptance: пройдено/manual/skip/ci.
 
     Число тестов — статический счёт (`guard.count_test_methods`), не
     запуск: второй документ-сводка не заводится (требование 3), а
@@ -217,6 +217,15 @@ def summary(tdir: Path) -> str:
     модуль по голому имени файла в `sys.modules` процесса, и второй
     прогон на другом каталоге с файлом того же имени падает ImportError
     (обычное дело: разные задачи, один и тот же `test_ac.py`).
+
+    `branch` (01M1SHJTT0V516BWHYXWS50F3G, требование 4/AC-6) — имя
+    КОДОВОЙ ветки задачи, тот же параметр, что уже несёт
+    `materialize_from_branch(task_id, branch, code_dir)`: критерии с
+    пометкой `ci` показываются вместе с результатом
+    `ci.verifying_status(branch)`, так же явно, как manual-критерии
+    сегодня. `None` (вызывающий не назвал ветку) — критерии `ci`
+    называются без опроса CI: сводка не имеет права молчать про их
+    существование только потому, что вызывающий не передал `branch`.
     """
     tests_dir = tdir / "acceptance_tests"
     if not tests_dir.is_dir():
@@ -224,12 +233,21 @@ def summary(tdir: Path) -> str:
     _, markers = guard.scan_acceptance_tests(tdir)
     manual = sorted(n for n, (kind, _) in markers.items() if kind == "manual")
     skip = sorted(n for n, (kind, _) in markers.items() if kind == "skip")
+    ci_ns = sorted(n for n, (kind, _) in markers.items() if kind == "ci")
     count = guard.count_test_methods(tdir)
     lines = [f"приёмочные тесты: {count} тест(ов), "
-             f"{len(manual)} manual, {len(skip)} skip"]
+             f"{len(manual)} manual, {len(skip)} skip, {len(ci_ns)} ci"]
     if manual:
         lines.append("manual-критерии (проверяет Оператор на приёмке):")
         for n in manual:
             reason = markers[n][1]
             lines.append(f"  AC-{n}" + (f": {reason}" if reason else ""))
+    if ci_ns:
+        lines.append("ci-критерии (доказательство — CI кодовой ветки):")
+        ci_note = ("статус CI не проверен — ветка не названа" if branch is None
+                  else ci.verifying_status(branch)[1])
+        for n in ci_ns:
+            reason = markers[n][1]
+            lines.append(f"  AC-{n}" + (f": {reason}" if reason else "")
+                        + f" — {ci_note}")
     return "\n".join(lines)
