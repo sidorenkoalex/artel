@@ -919,8 +919,10 @@ def _run_one_task(template_path: Path, run_stamp: str, ratio: float) -> None:
     случай, где диагностика не сохраняется (требование 1, AC-4) и где
     бейзлайн/сравнение отклонений вообще применяются (требование 3,
     AC-7/AC-8): `_kill_outcome_note` отличает штатный kill на
-    `merge_gate` (единственный штатный kill — `verifying` теперь
-    проходится синтетически, ANSWER-3.md 06.09) от «не сошлась»,
+    `merge_gate` (единственный штатный kill РЕАЛЬНОГО вождения —
+    `verifying` теперь проходится синтетически, ANSWER-3.md 06.09; см.
+    также недостижимую из `_drive_task` `_kill_at_verifying`, оставленную
+    ради чужой планки, REVIEW.md итерации 2 R2-F1) от «не сошлась»,
     `mismatch` — расхождение маркера ожидания эскалации с фактом.
     """
     raw = template_path.read_text(encoding="utf-8")
