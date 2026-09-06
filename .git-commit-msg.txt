@@ -1,0 +1,10 @@
+01M1TQ0TRCZPRZX22C4084NCPB: чиним ассерты старого порядка FSM после ADR-0015, убираем мусор
+
+Гейт origin-push и прогон acceptance.run переехали из review() в in_dev
+(предыдущей итерацией шага) — точечно правим тесты, которые фиксировали
+старый порядок in_dev -> review или не учитывали новый безусловный вызов
+этих рубежей: tests/test_verifying_ceiling.py, tests/test_branch_freshness_gate.py,
+tests/test_acceptance_tests_flow.py::LockTest, tests/test_amend.py.
+Удалён baseline_fsm_advance_tmp.py — случайный рабочий снимок,
+оставленный прерванной таймаутом предыдущей итерацией. Карта кодовой
+базы перегенерирована.
