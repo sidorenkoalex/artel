@@ -104,6 +104,10 @@ class SpecBudgetParseTest(unittest.TestCase):
         Причина отказа обязана отличаться от «не сумма в долларах»: число
         корректно, нельзя именно поднятие выше потолка ролей, и Оператор
         должен видеть разницу.
+
+        Ловит мутацию: сравнение с потолком ролей заменено сравнением с
+        `DEFAULT_BUDGET_USD` (старая семантика) или снято вовсе — значение
+        выше `ROLE_BUDGET_CAP` было бы принято как валидное число.
         """
         for raw in (f"{config.ROLE_BUDGET_CAP + 1:g}",
                     f"{config.ROLE_BUDGET_CAP * 10:g}"):
@@ -116,7 +120,12 @@ class SpecBudgetParseTest(unittest.TestCase):
 
     def test_value_above_the_default_but_within_the_role_cap_is_taken(self):
         """Требование 4 (ADR-0014): в пределах потолка ролей значение
-        применяется и когда оно выше дефолта, не только ниже."""
+        применяется и когда оно выше дефолта, не только ниже.
+
+        Ловит мутацию: `spec_budget` по-прежнему сравнивает с
+        `DEFAULT_BUDGET_USD` (старая семантика «только вниз от дефолта») —
+        значение между дефолтом и потолком ролей отвергалось бы, а не
+        принималось."""
         value = (config.DEFAULT_BUDGET_USD + config.ROLE_BUDGET_CAP) / 2
         self.assertGreater(value, config.DEFAULT_BUDGET_USD,
                            "фикстура: значение обязано быть выше дефолта")
@@ -125,14 +134,21 @@ class SpecBudgetParseTest(unittest.TestCase):
                          (value, ""))
 
     def test_value_equal_to_the_default_is_taken(self):
-        """Граница дефолта больше не отказная — потолок ролей выше него."""
+        """Граница дефолта больше не отказная — потолок ролей выше него.
+
+        Ловит мутацию: старая граница `> DEFAULT_BUDGET_USD` осталась на
+        месте (не заменена на `> ROLE_BUDGET_CAP`) — значение ровно в
+        дефолт отвергалось бы вместо принятия."""
         self.assertEqual(
             budget.spec_budget({"budget_usd": f"{config.DEFAULT_BUDGET_USD:g}"}),
             (config.DEFAULT_BUDGET_USD, ""))
 
     def test_value_equal_to_the_role_cap_is_taken(self):
         """Граница строгая: SPEC говорит «не выше», сам потолок ролей ещё
-        можно (AC-4: «выше», а не «начиная с»)."""
+        можно (AC-4: «выше», а не «начиная с»).
+
+        Ловит мутацию: сравнение `> ROLE_BUDGET_CAP` подменено на `>=` —
+        значение ровно в потолок ролей отвергалось бы вместо принятия."""
         self.assertEqual(
             budget.spec_budget({"budget_usd": f"{config.ROLE_BUDGET_CAP:g}"}),
             (config.ROLE_BUDGET_CAP, ""))
@@ -341,6 +357,10 @@ class SpecBudgetOnTheGateTest(unittest.TestCase):
         в spec_writing, а не переходит на гейт с тихо применённым дефолтом,
         как было бы при старой семантике «выше дефолта — предупреждение и
         обычный переход».
+
+        Ловит мутацию: `role_budget_cap_errors` не подключена в
+        `_content_errors` (или подключена только для `type: spec` версии
+        >= 5) — переход на завышенном значении прошёл бы до гейта.
         """
         for usd in (config.ROLE_BUDGET_CAP + 1,
                     config.ROLE_BUDGET_CAP * 10):
@@ -366,7 +386,12 @@ class SpecBudgetOnTheGateTest(unittest.TestCase):
     def test_value_above_the_default_but_within_the_role_cap_becomes_the_ceiling(self):
         """Требование 4 (ADR-0014): значение выше дефолта, но в пределах
         потолка ролей, применяется на гейте как обычно — потолок отсюда
-        уже не только понижается."""
+        уже не только понижается.
+
+        Ловит мутацию: `apply_spec_budget` по-прежнему сравнивает верхнюю
+        границу с `DEFAULT_BUDGET_USD` — значение между дефолтом и
+        потолком ролей на полном пути через `cmd_advance` было бы
+        отклонено guard'ом вместо того, чтобы стать потолком задачи."""
         value = (config.DEFAULT_BUDGET_USD + config.ROLE_BUDGET_CAP) / 2
         self.write_spec(budget_usd=f"{value:g}")
 

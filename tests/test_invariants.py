@@ -957,7 +957,11 @@ class SpecCeilingRespectsRoleBudgetCapTest(TmpRootTest):
     def test_guard_refuses_the_spec_before_any_ceiling_change(self):
         """Сценарий 1: SPEC со значением выше `ROLE_BUDGET_CAP` потолок не
         поднимает — отказ guard блокирует сам переход, значение никогда не
-        доходит до строки задачи."""
+        доходит до строки задачи.
+
+        Ловит мутацию: сравнение `> ROLE_BUDGET_CAP` подменено на `>=`
+        дефолт или снято вовсе — SPEC с завышенным `budget_usd` прошёл бы
+        `check_content` без ошибки."""
         over_cap = config.ROLE_BUDGET_CAP + 1
         text = (
             "---\n"
@@ -983,7 +987,12 @@ class SpecCeilingRespectsRoleBudgetCapTest(TmpRootTest):
 
     def test_operator_ceiling_survives_a_spec_value_within_cap(self):
         """Сценарий 2: потолок Оператора не перебивается значением из SPEC,
-        даже когда это значение само по себе в пределах потолка ролей."""
+        даже когда это значение само по себе в пределах потолка ролей.
+
+        Ловит мутацию: `apply_spec_budget` перестаёт проверять
+        `budget_source == BUDGET_SOURCE_OPERATOR` перед применением
+        значения из SPEC — потолок Оператора $60 был бы тихо заменён на
+        $25 из SPEC."""
         self.set_task(budget_usd=60.0,
                       budget_source=config.BUDGET_SOURCE_OPERATOR)
 
