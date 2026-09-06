@@ -2211,6 +2211,30 @@ class RoleHomeReferenceExtraFilesTest(_RoleHomeReferenceTmpRootTest):
                             f"{check.detail}")
 
 
+class RoleHomeReferenceHooksDirTest(_RoleHomeReferenceTmpRootTest):
+    """Регресс SPEC 01M1SG9WPVN8P3S4X7975N9T69, AC-5: каталог `hooks/`
+    референса (восстановленный `hooks/bash_guard.py`) обязан быть частью
+    сверки `check_role_home_reference`, как `CLAUDE.md`/`settings.json`."""
+
+    def test_hooks_bash_guard_missing_is_a_warn(self):
+        (config.ROLE_CONFIG_DIR / "hooks" / "bash_guard.py").unlink()
+
+        check = doctor.check_role_home_reference()
+
+        self.assertEqual(check.status, "warn")
+        self.assertIn("hooks/bash_guard.py", check.detail)
+
+    def test_hooks_bash_guard_diverging_is_a_warn(self):
+        hook = config.ROLE_CONFIG_DIR / "hooks" / "bash_guard.py"
+        hook.write_text(hook.read_text(encoding="utf-8") + "\n# правка\n",
+                        encoding="utf-8")
+
+        check = doctor.check_role_home_reference()
+
+        self.assertEqual(check.status, "warn")
+        self.assertIn("hooks/bash_guard.py", check.detail)
+
+
 class RoleHomeReferenceSettingsAutoMemoryTest(unittest.TestCase):
     """SPEC 01M1SG9YKBFG2G5YQDVBR6BVC8, AC-2: референсный settings.json
     отключает автопамять CLI ролям курируемого слоя."""
