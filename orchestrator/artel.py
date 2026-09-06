@@ -109,9 +109,9 @@ workspace, tasks, knowledge, logs). БД одна на все проекты: с
   target-init <target> | doctor [--restore] [--fix] | alert-ack <id> "<решение>" |
   version | canary --k <N> | canary pool-seal | prune [--execute] |
   amend-tests <id> --reason "<основание>" | pin-update <sha main артели> |
-  zone-release <id> | zone-reorder <id1> <id2> ... | venv-sync |
-  note (копилка|бэклог|очередь) --text "<строка>" | note --append <ключ>
-  --text "<текст>" | note --flush
+  pin --to [<sha>] | zone-release <id> | zone-reorder <id1> <id2> ... |
+  venv-sync | note (копилка|бэклог|очередь) --text "<строка>" |
+  note --append <ключ> --text "<текст>" | note --flush
 
 `pin-update <sha>` (A7, Stage1) — обновляет пин запущенной версии:
 продвигает рабочее дерево и HEAD `config.ROOT` до `<sha>` main артели
@@ -119,6 +119,18 @@ workspace, tasks, knowledge, logs). БД одна на все проекты: с
 идентичность и оба sha. `merge_gate -> done` (Stage0) НЕ двигает
 `config.ROOT` сам — это единственный способ его продвинуть; `doctor`
 только сообщает о расхождении (`check_root_pin`), не обновляет пин сам.
+С tasks/01M1NGFK3N6MRMYGCC09H975V3 отказывает без зелёного прогона
+канарейки не старше `config.CANARY_MAX_MERGES_SINCE_GREEN` мержей main
+на целевом sha (ADR-0013) — `doctor` поднимает триггер по тому же
+порогу заранее.
+
+`pin --to [<sha>]` (tasks/01M1NGFK3N6MRMYGCC09H975V3, ADR-0013 ч.3) —
+откат пина: с явным `<sha>` (обязан быть предком текущего HEAD) —
+`git reset --hard` на него; без аргумента — на sha последнего зелёного
+прогона канарейки по журналу. Main пульта на origin не трогается ни в
+одном случае (ни fetch, ни push) — откат касается только `config.ROOT`
+этой машины. Каждый вызов журналируется отдельной записью, успешной или
+отказом.
 
 `pause <id>` (SPEC T070) — штатная приостановка: помечает задачу в БД,
 не заводя нового состояния FSM; `run`/`auto` перед стартом агентного
@@ -428,6 +440,16 @@ def _reason_arg(rest: list) -> str | None:
     return rest[idx + 1]
 
 
+def _cmd_pin(rest: list) -> None:
+    """`pin --to <sha>` / `pin --to` (tasks/01M1NGFK3N6MRMYGCC09H975V3,
+    ANSWER-1 п.5) — откат пина; отдельная команда от `pin-update`, не
+    его подформа (`--to` — единственный поддерживаемый режим сегодня)."""
+    if not rest or rest[0] != "--to":
+        sys.exit('pin: используется как `pin --to <sha>` либо `pin --to` '
+                 '(откат на последний зелёный прогон канарейки).')
+    pin.cmd_pin_to(rest[1] if len(rest) > 1 else None)
+
+
 def _cmd_pause(rest: list) -> None:
     """`pause <id>` (T070) либо `pause --now <id>` (T074) — флаг перед id,
     тем же местом разбора, что уже держит команду `pause` в таблице
@@ -480,6 +502,7 @@ def main() -> None:
         "acceptance-dry-run": lambda: dry_run.cmd_acceptance_dry_run(rest[0]),
         "amend-tests": lambda: amend.cmd_amend_tests(rest[0], _reason_arg(rest)),
         "pin-update": lambda: pin.cmd_pin_update(rest[0]),
+        "pin": lambda: _cmd_pin(rest),
         "zone-release": lambda: zone_lock.cmd_zone_release(rest[0]),
         "zone-reorder": lambda: zone_lock.cmd_zone_reorder(rest),
         "venv-sync": lambda: venv.cmd_venv_sync(),

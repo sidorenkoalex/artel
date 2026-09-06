@@ -127,3 +127,59 @@ def check_token_repo_scope() -> list[doctor.Check]:
                              "ни у одной agent-роли не нашлось токена")]
 
 
+# --- триггер устаревшего зелёного прогона канарейки (tasks/
+#     01M1NGFK3N6MRMYGCC09H975V3/SPEC.md, требования 2-3) -----------------
+
+def check_canary_trigger(conn) -> doctor.Check:
+    """AC-3, AC-4 (tasks/01M1NGFK3N6MRMYGCC09H975V3/SPEC.md): триггер
+    `kind=trigger, source=canary`, когда число мержей main с последнего
+    ЗЕЛЁНОГО прогона канарейки достигает `config.
+    CANARY_MAX_MERGES_SINCE_GREEN` (та же арифметика и тот же порог, что
+    у guard'а `pin.cmd_pin_update`, AC-1/AC-2 — `canary.
+    merges_since_last_green_run`).
+
+    Возраст считается ЛОКАЛЬНО относительно локальной ветки main
+    `config.ROOT`, без обращения к сети (ANSWER-1 п.3, инвариант 35).
+    Пустой журнал зелёных прогонов — тот же порог, вырожденно всегда
+    достигнутый: «канарейка ни разу не прогонялась» (AC-3, второй
+    сценарий). Дедуп открытого алерта — заботa `alerts.raise_alert`
+    (не дублирует, пока прежний не подтверждён).
+
+    Текст алерта (`alert_message`), участвующий в дедупе, ФИКСИРОВАН —
+    не несёт текущее число мержей (REVIEW.md итерации 1, R1-F2):
+    `store.open_alert_exists` дедупит строгим совпадением `message`, а
+    возраст растёт с каждым следующим мержем main после срабатывания
+    порога — несли бы число в тексте, каждый такой мерж заводил бы НОВЫЙ
+    алерт вместо одного, ждущего ack Оператора. Конкретное число мержей
+    остаётся в `Check.detail`, который в алерт не идёт.
+
+    Статус `warn`, не `fail` (docs/triggers.md: триггер требует решения
+    Оператора с ack'ом, не блокирует прогон doctor как инцидент) — тем же
+    приёмом, что и `check_root_pin`: `cmd_doctor` завершается ненулевым
+    кодом только на `fail`, а триггер без прогнанной канарейки иначе
+    держал бы КАЖДЫЙ прогон doctor красным до первого прогона.
+    """
+    head = doctor.gitcmd.head_sha()
+    age = doctor.canary.merges_since_last_green_run(conn, head)
+    if age is None:
+        alert_message = ("канарейка ни разу не прогонялась — обновление "
+                         "пина заблокировано до первого зелёного прогона "
+                         "(tasks/01M1NGFK3N6MRMYGCC09H975V3/SPEC.md)")
+        detail = alert_message
+    elif age >= doctor.config.CANARY_MAX_MERGES_SINCE_GREEN:
+        alert_message = ("последний зелёный прогон канарейки устарел (порог "
+                         f"{doctor.config.CANARY_MAX_MERGES_SINCE_GREEN} мержей "
+                         "main) — пора перепрогнать: artel.py canary --k 1")
+        detail = (f"последний зелёный прогон канарейки — {age} мержей "
+                 f"main назад (порог "
+                 f"{doctor.config.CANARY_MAX_MERGES_SINCE_GREEN}) — пора "
+                 "перепрогнать: artel.py canary --k 1")
+    else:
+        return doctor.Check("canary-trigger", "ok",
+                     f"последний зелёный прогон канарейки — {age} мержей "
+                     f"main назад (порог "
+                     f"{doctor.config.CANARY_MAX_MERGES_SINCE_GREEN})")
+    doctor.alerts.raise_alert(conn, None, "trigger", "canary", alert_message)
+    return doctor.Check("canary-trigger", "warn", detail)
+
+

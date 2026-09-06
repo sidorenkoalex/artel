@@ -767,6 +767,35 @@ def _drive_task(conn, task_id: str) -> None:
         return
 
 
+def merges_since_last_green_run(conn, target_sha: str) -> int | None:
+    """Возраст (в мержах main) самого свежего ЗЕЛЁНОГО прогона канарейки,
+    чей `main_sha` лежит на истории `target_sha` — общий guard AC-1/AC-3/
+    AC-4 (tasks/01M1NGFK3N6MRMYGCC09H975V3/SPEC.md, ANSWER-1 п.3):
+    `pin.cmd_pin_update` (AC-1/AC-2) и `doctor.check_canary_trigger`
+    (AC-3/AC-4) сравнивают ОДНО и то же число с ОДНИМ и тем же порогом
+    `config.CANARY_MAX_MERGES_SINCE_GREEN`, поэтому арифметика возраста
+    живёт в одном месте, не дублируется в двух.
+
+    Прогон, чей `main_sha` не предок `target_sha` (чужая, несвязанная
+    история — например, тупиковая ветка), не считается вовсе — берётся
+    наименьший возраст среди ОСТАЛЬНЫХ. `None` — журнал зелёных прогонов
+    пуст, либо ни один из них не лежит на истории `target_sha`
+    (вырожденный случай того же порога: «сравнивать не с чем» ⇔ «порог
+    всегда достигнут», AC-3 второй сценарий).
+    """
+    best = None
+    for row in store.green_canary_runs(conn):
+        main_sha = row["main_sha"]
+        if not main_sha or not gitcmd.is_ancestor(main_sha, target_sha):
+            continue
+        age = gitcmd.merges_between(main_sha, target_sha)
+        if age is None:
+            continue
+        if best is None or age < best:
+            best = age
+    return best
+
+
 def _step_count(steps) -> int:
     """«Шаги» задачи — число переходов FSM в её журнале, не число
     прогонов агента: устойчиво к подмене `runner.cmd_run` (приёмочная
@@ -960,12 +989,22 @@ def _run_one_task(template_path: Path, run_stamp: str, ratio: float) -> None:
     print(f"[canary] {task_id} заведена из {template_path.name}")
 
     outer_conn = store.db()
+    # `config.ROOT` уже вне эфемерного клона (см. `_ephemeral_clone`) —
+    # это HEAD главного пульта на момент прогона (ANSWER-1
+    # 01M1NGFK3N6MRMYGCC09H975V3 п.2), не клона, в котором велась задача.
+    main_sha = gitcmd.head_sha()
+    # Возврат из merge_gate (06.09, п.2): вердикт зелёности выражен через
+    # уже смерженное понятие штатного исхода прогона (`normal_outcome`/
+    # `_needs_diagnostics`, вычислены выше), не через «дошла до состояния
+    # merge_gate/verifying» — `verifying` с ADR-0015 не конечная точка
+    # реального вождения вовсе (проходится синтетически, `_pass_verifying`).
+    verdict = "green" if not _needs_diagnostics(normal_outcome, mismatch) else "red"
     store.insert_canary_run(
         outer_conn, run_stamp, title, task_id, metrics["steps"],
         metrics["cost_usd"], metrics["review_iterations"],
         len(metrics["escalations"]), metrics["outcome"],
         "yes" if expected else ("no" if expected is False else None),
-        actual, mismatch)
+        actual, mismatch, main_sha=main_sha, verdict=verdict)
 
     note = ""
     if not _needs_diagnostics(normal_outcome, mismatch):

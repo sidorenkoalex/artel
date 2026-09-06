@@ -791,26 +791,61 @@ def _ensure_canary_tables(conn) -> None:
         "CREATE TABLE IF NOT EXISTS canary_baseline ("
         "  title TEXT PRIMARY KEY, steps INTEGER, cost_usd REAL,"
         "  review_iterations INTEGER, updated_at TEXT);")
+    # Привязка пина к зелёной канарейке (tasks/01M1NGFK3N6MRMYGCC09H975V3/
+    # SPEC.md, ANSWER-1 п.2): `main_sha` — HEAD `config.ROOT` на момент
+    # прогона, `verdict` — 'green'/'red' задачи-канарейки. `add_column`
+    # держит миграцию идемпотентной для БД, заведших `canary_runs` до этой
+    # задачи (как и прочие миграции store — см. `migrate()`); отдельная
+    # табличная схема этой задачи не входит, потому что таблица уже
+    # заведена лениво, не универсальной SCHEMA/`migrate()` (см. докстринг
+    # функции выше).
+    add_column(conn, "canary_runs", "main_sha", "TEXT")
+    add_column(conn, "canary_runs", "verdict", "TEXT")
 
 
 def insert_canary_run(conn, run_stamp: str, title: str, task_id: str,
                       steps: int, cost_usd: float, review_iterations: int,
                       escalations: int, outcome: str,
                       expected_escalation: str | None,
-                      actual_escalation: bool, marker_mismatch: bool) -> None:
+                      actual_escalation: bool, marker_mismatch: bool,
+                      main_sha: str | None = None,
+                      verdict: str | None = None) -> None:
     """Строка метрик одной канареечной задачи одного прогона (SPEC
     01M1NEEWH5K1XPFRDGRMPYSBXJ, требование 5, AC-5) — читатель:
-    `canary._run_one_task`."""
+    `canary._run_one_task`.
+
+    `main_sha`/`verdict` (ANSWER-1 01M1NGFK3N6MRMYGCC09H975V3 п.2) —
+    привязка пина к зелёной канарейке: `None` по умолчанию сохраняет
+    сигнатуру для вызывающих кода до этой задачи."""
     _ensure_canary_tables(conn)
     conn.execute(
         "INSERT INTO canary_runs (run_stamp, title, task_id, steps, cost_usd,"
         " review_iterations, escalations, outcome, expected_escalation,"
-        " actual_escalation, marker_mismatch, created_at)"
-        " VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+        " actual_escalation, marker_mismatch, main_sha, verdict, created_at)"
+        " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
         (run_stamp, title, task_id, steps, cost_usd, review_iterations,
          escalations, outcome, expected_escalation, int(actual_escalation),
-         int(marker_mismatch), now()))
+         int(marker_mismatch), main_sha, verdict, now()))
     conn.commit()
+
+
+def green_canary_runs(conn) -> list:
+    """Зелёные прогоны канарейки, самые свежие первыми по `created_at`
+    (ANSWER-1 01M1NGFK3N6MRMYGCC09H975V3 п.2/п.5) — общий источник и для
+    guard'а привязки пина (`canary.merges_since_last_green_run`, AC-1/
+    AC-3/AC-4), и для отката пина по умолчанию (`pin.cmd_pin_to`, AC-6:
+    первая строка результата — самый свежий)."""
+    _ensure_canary_tables(conn)
+    return conn.execute(
+        "SELECT * FROM canary_runs WHERE verdict='green' "
+        "ORDER BY created_at DESC, id DESC").fetchall()
+
+
+def latest_green_canary_run(conn):
+    """Самый свежий зелёный прогон канарейки; `None` — журнал не несёт
+    ни одного (`pin.cmd_pin_to`, AC-6)."""
+    rows = green_canary_runs(conn)
+    return rows[0] if rows else None
 
 
 def canary_baseline(conn, title: str) -> sqlite3.Row | None:
