@@ -61,7 +61,16 @@ approve никогда — задача убивается штатным `clean
 01M1TKP269W9JN3NBJCR5Q6C3B (до ADR-0015 `verifying` шёл ПОСЛЕ ревью и
 его kill был штатным финалом; теперь он стоит до первого ревью и
 приравнивание к финалу убивало прогон раньше, чем он успевал дойти до
-сценариев «не сошлась»/эскалации).
+сценариев «не сошлась»/эскалации). Старая `_kill_at_verifying` (v1-эпоха,
+SPEC 01M1SC3Y20YBTTJVQDJBF2NDQW) `_drive_task` больше не зовёт никогда —
+но сама функция и её классификация «штатно» в `_kill_outcome_note`
+остаются: `tasks/01M1SC3Y20YBTTJVQDJBF2NDQW/acceptance_tests/
+test_canary_report_kill_reason.py` (залоченная планка ДРУГОЙ, уже
+смерженной задачи) зовёт её напрямую и сверяет вывод — правка чужой
+планки требует отдельного мандата Оператора (REVIEW.md 01M1TKP269W9JN3
+NBJCR5Q6C3B итерации 2, R2-F1), которого эта задача не получала; функция
+живёт как чистый совместимый alias, не участвующий в реальном вождении
+канарейки.
 """
 import hashlib
 import hmac
@@ -98,11 +107,25 @@ _SKIP_SHORTCIRCUIT_REASONS = (
 
 # Литерал `action`, которым `_kill_at_merge_gate` журналирует убийство —
 # узнаётся `_kill_outcome_note` (требование 4, AC-4) как «штатный» исход,
-# не «не сошлась». `verifying` больше не убивает задачу (ADR-0015
-# сдвинул его перед ревьювером — ANSWER-3.md 06.09): канарейка проходит
-# его синтетически (`_pass_verifying`), единственный штатный kill —
-# `merge_gate`.
+# не «не сошлась». `verifying` больше не убивает задачу в РЕАЛЬНОМ
+# вождении (ADR-0015 сдвинул его перед ревьювером — ANSWER-3.md 06.09):
+# канарейка проходит его синтетически (`_pass_verifying`), единственный
+# штатный kill живого прогона — `merge_gate`. `_VERIFYING_KILL_ACTION`
+# ниже классифицируется так же «штатно» ради чужой залоченной планки
+# (`_kill_at_verifying`, REVIEW.md итерации 2, R2-F1) — не потому, что
+# `_drive_task` ещё может её достичь.
 _MERGE_GATE_KILL_ACTION = "canary: merge_gate не approve — задача убивается"
+
+# Литерал `action`, которым `_kill_at_verifying` (v1-эпоха, ныне
+# недостижимая из `_drive_task` — см. `_pass_verifying`) журналировала
+# убийство: `_kill_outcome_note` узнаёт его как «штатно» тем же приёмом,
+# что и `_MERGE_GATE_KILL_ACTION` — совместимость с
+# `tasks/01M1SC3Y20YBTTJVQDJBF2NDQW/acceptance_tests/
+# test_canary_report_kill_reason.py::test_ac4_verifying_kill_is_also_
+# reported_as_normal` (залоченная планка ДРУГОЙ, уже смерженной задачи —
+# правка её планки требует отдельного мандата Оператора, которого эта
+# задача не получала).
+_VERIFYING_KILL_ACTION = "canary: verifying не дожидается CI — задача убивается"
 
 # Литерал `detail`, которым `_kill_inconclusive` журналирует убийство —
 # `_kill_outcome_note` отличает эту запись от остальных записей
@@ -528,6 +551,26 @@ def _kill_at_merge_gate(conn, task_id: str) -> None:
     cleanup.cmd_kill(task_id)
 
 
+def _kill_at_verifying(conn, task_id: str) -> None:
+    """v1-эпоха (SPEC T079) — `_drive_task` эту функцию больше НЕ зовёт
+    (ADR-0015 переставил `verifying` перед ревьювером, реальное вождение
+    идёт через `_pass_verifying`, см. её докстринг). Функция и признание
+    её литерала «штатным» в `_kill_outcome_note` оставлены нетронутыми
+    ЧИСТО ради совместимости с залоченной планкой ДРУГОЙ, уже смерженной
+    задачи (`tasks/01M1SC3Y20YBTTJVQDJBF2NDQW/acceptance_tests/
+    test_canary_report_kill_reason.py::
+    test_ac4_verifying_kill_is_also_reported_as_normal` зовёт её
+    напрямую) — правка чужой планки требует отдельного мандата Оператора
+    (REVIEW.md 01M1TKP269W9JN3NBJCR5Q6C3B итерации 2, R2-F1), которого
+    эта задача не получала."""
+    store.journal(conn, task_id, CANARY_MARK_ACTOR,
+                 _VERIFYING_KILL_ACTION,
+                 "канареечная задача не заводит Draft MR и не имеет "
+                 "реального CI ветки (tasks/T079/SPEC.md, требование 1 — "
+                 "canary вне объёма адаптера)")
+    cleanup.cmd_kill(task_id)
+
+
 def _pass_verifying(conn, task_id: str) -> None:
     """`verifying` (SPEC T079; ADR-0015 переставил его перед ревьювером,
     `in_dev -> verifying -> review`) ждёт реального CI ветки — у
@@ -613,16 +656,19 @@ def _last_role_skip_reason(conn, task_id: str) -> str | None:
 
 def _kill_outcome_note(steps) -> str:
     """Причина исхода `killed` для отчёта прогона (требование 4, AC-4):
-    «штатно» — только `_kill_at_merge_gate` (единственный путь, который и
-    раньше не был ошибкой конвейера; `verifying` теперь проходится
-    синтетически, не убивает — `_pass_verifying`), иначе — «не сошлась:
-    <причина>» с текстом причины из журнальной записи `_kill_inconclusive`
-    (её `detail` — фиксированный литерал-маркер, `action` несёт саму
+    «штатно» — `_kill_at_merge_gate` (единственный путь, которым
+    РЕАЛЬНОЕ вождение `_drive_task` убивает задачу сегодня — `verifying`
+    теперь проходится синтетически, не убивает, `_pass_verifying`) и
+    `_kill_at_verifying` (недостижима из `_drive_task`, распознаётся
+    здесь только ради совместимости с чужой залоченной планкой — см.
+    докстринг `_kill_at_verifying`), иначе — «не сошлась: <причина>» с
+    текстом причины из журнальной записи `_kill_inconclusive` (её
+    `detail` — фиксированный литерал-маркер, `action` несёт саму
     причину — требование 3/AC-3 идёт этим же путём)."""
     for r in reversed(steps):
         if r["actor"] != CANARY_MARK_ACTOR:
             continue
-        if r["action"] == _MERGE_GATE_KILL_ACTION:
+        if r["action"] in (_MERGE_GATE_KILL_ACTION, _VERIFYING_KILL_ACTION):
             return "штатно"
         if r["detail"] == _INCONCLUSIVE_KILL_DETAIL:
             return f"не сошлась: {r['action']}"

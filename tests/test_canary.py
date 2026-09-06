@@ -688,6 +688,62 @@ class DriveTaskPassesVerifyingSyntheticallyTest(unittest.TestCase):
         canary.cleanup.cmd_kill.assert_not_called()
 
 
+class KillAtVerifyingCompatTest(unittest.TestCase):
+    """`canary._kill_at_verifying` — `_drive_task` её больше не зовёт
+    (см. `PassVerifyingTest`/`DriveTaskPassesVerifyingSyntheticallyTest`
+    выше), но функция и признание её литерала «штатным» в
+    `_kill_outcome_note` остаются нетронутыми: `tasks/
+    01M1SC3Y20YBTTJVQDJBF2NDQW/acceptance_tests/
+    test_canary_report_kill_reason.py::
+    test_ac4_verifying_kill_is_also_reported_as_normal` (залоченная
+    планка ДРУГОЙ, уже смерженной задачи) зовёт её напрямую и сверяет
+    вывод — REVIEW.md 01M1TKP269W9JN3NBJCR5Q6C3B итерации 2, R2-F1."""
+
+    TASK = "T914"
+
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.root = Path(tmp.name)
+        for attr, value in (("ROOT", self.root),
+                            ("DB", self.root / ".artel" / "state.db"),
+                            ("TASKS", self.root / "tasks")):
+            patcher = mock.patch.object(config, attr, value)
+            patcher.start()
+            self.addCleanup(patcher.stop)
+        store.create_schema(store.db())
+        self.conn = store.db()
+        store.insert_task(self.conn, self.TASK, "Канареечная задача",
+                          "verifying", "task/t914-x", config.DEFAULT_TARGET,
+                          50.0, is_canary=True)
+        patcher = mock.patch.object(canary.cleanup, "cmd_kill")
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def test_journals_verifying_kill_action(self):
+        """Ловит мутацию: `_kill_at_verifying` перестаёт журналировать
+        `_VERIFYING_KILL_ACTION` (переименован/убран литерал) — чужая
+        планка теряет след, по которому `_kill_outcome_note` узнаёт
+        «штатно»."""
+        canary._kill_at_verifying(self.conn, self.TASK)
+
+        steps = store.task_steps(self.conn, self.TASK)
+        self.assertTrue(any(
+            r["actor"] == canary.CANARY_MARK_ACTOR
+            and r["action"] == canary._VERIFYING_KILL_ACTION
+            for r in steps))
+        canary.cleanup.cmd_kill.assert_called_once_with(self.TASK)
+
+    def test_kill_outcome_note_still_classifies_it_as_normal(self):
+        """Ловит мутацию: `_kill_outcome_note` перестаёт узнавать
+        `_VERIFYING_KILL_ACTION` (например, если признание сузили обратно
+        до одного лишь `_MERGE_GATE_KILL_ACTION`) — чужая планка красна."""
+        canary._kill_at_verifying(self.conn, self.TASK)
+
+        steps = store.task_steps(self.conn, self.TASK)
+        self.assertEqual(canary._kill_outcome_note(steps), "штатно")
+
+
 class StoreAndCatalogMarkingTest(unittest.TestCase):
     """`tasks.is_canary` — колонка БД, не `title` (требование 6): заведение,
     `total_spent`, пометка в `status`, пометка/её отсутствие в RETRO."""
