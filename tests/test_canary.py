@@ -176,6 +176,96 @@ class MetricsFromJournalTest(unittest.TestCase):
         self.assertEqual(metrics["outcome"], "killed")
 
 
+class NeedsDiagnosticsTest(unittest.TestCase):
+    """`canary._needs_diagnostics` — ANSWER-1.md, правило 1 (требование 1,
+    AC-1/AC-4): диагностика сохраняется во всех случаях, кроме «штатно
+    И без расхождения» одновременно."""
+
+    def test_normal_without_mismatch_does_not_need_diagnostics(self):
+        self.assertFalse(canary._needs_diagnostics(True, False))
+
+    def test_not_normal_without_mismatch_needs_diagnostics(self):
+        self.assertTrue(canary._needs_diagnostics(False, False))
+
+    def test_normal_with_mismatch_needs_diagnostics(self):
+        self.assertTrue(canary._needs_diagnostics(True, True))
+
+    def test_not_normal_with_mismatch_needs_diagnostics(self):
+        self.assertTrue(canary._needs_diagnostics(False, True))
+
+
+class JournalExcerptLinesTest(unittest.TestCase):
+    """`canary._journal_excerpt_lines` (требование 2, AC-6) — переходы
+    состояний и записи «переход отклонён»/«auto остановлен», не
+    произвольные записи журнала, с потолком по числу строк."""
+
+    TASK = "T901"
+
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.root = Path(tmp.name)
+        for attr, value in (("ROOT", self.root),
+                            ("DB", self.root / ".artel" / "state.db"),
+                            ("TASKS", self.root / "tasks")):
+            patcher = mock.patch.object(config, attr, value)
+            patcher.start()
+            self.addCleanup(patcher.stop)
+        store.create_schema(store.db())
+        self.conn = store.db()
+        store.insert_task(self.conn, self.TASK, "Канареечная задача",
+                          "killed", "task/t901-x", config.DEFAULT_TARGET,
+                          50.0, is_canary=True)
+
+    def _steps(self):
+        return store.task_steps(self.conn, self.TASK)
+
+    def test_keeps_state_transitions_refusals_and_auto_stopped(self):
+        store.journal(self.conn, self.TASK, "canary", "state -> in_dev", "")
+        store.journal(self.conn, self.TASK, "fsm",
+                      "переход отклонён: замечания ревью не отработаны", "")
+        store.journal(self.conn, self.TASK, "operator", "auto остановлен",
+                      "лимит шагов")
+
+        lines = canary._journal_excerpt_lines(self._steps())
+
+        self.assertEqual(len(lines), 3)
+        self.assertIn("state -> in_dev", lines[0])
+        self.assertIn("переход отклонён", lines[1])
+        self.assertIn("auto остановлен", lines[2])
+
+    def test_drops_unrelated_journal_rows(self):
+        store.journal(self.conn, self.TASK, "runner", "agent run started", "")
+        store.journal(self.conn, self.TASK, "runner", "agent run finished", "")
+
+        self.assertEqual(canary._journal_excerpt_lines(self._steps()), [])
+
+    def test_caps_at_the_given_limit_keeping_the_most_recent(self):
+        for i in range(5):
+            store.journal(self.conn, self.TASK, "canary", f"state -> s{i}", "")
+
+        lines = canary._journal_excerpt_lines(self._steps(), limit=2)
+
+        self.assertEqual(len(lines), 2)
+        self.assertIn("state -> s3", lines[0])
+        self.assertIn("state -> s4", lines[1])
+
+
+class DiagnosticsDirTest(unittest.TestCase):
+    """`canary._diagnostics_dir` — путь диагностики строится от каталога
+    СНАРУЖИ клона (`outer_root`), не от текущего (возможно, патченного
+    на клон) `config.ROOT` (требование 1, AC-1)."""
+
+    def test_path_shape(self):
+        outer_root = Path("/tmp/artel-outer")
+
+        result = canary._diagnostics_dir(outer_root, "20260906T000000Z", "T902")
+
+        self.assertEqual(
+            result,
+            outer_root / ".artel" / "canary" / "20260906T000000Z" / "T902")
+
+
 class CanaryBaselineStoreRoundtripTest(unittest.TestCase):
     """`store.canary_baseline`/`set_canary_baseline` — бейзлайн per-task,
     ключ `title`, не `task_id` (требование 9)."""
