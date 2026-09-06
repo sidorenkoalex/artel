@@ -5,11 +5,11 @@ if/elif `orchestrator/fsm.py::_cmd_advance`, перенесённое без и�
 `fsm.py` — эти функции не вызываются напрямую иначе, кроме тестов,
 идущих через публичный `fsm.cmd_advance`.
 """
-from datetime import datetime
+from datetime import datetime, timezone
 
 from scripts import guard
 
-from . import (acceptance, agent_log, artifact_source, artifacts, budget,
+from . import (acceptance, agent_log, artifact_source, artifacts, auto, budget,
               ci, config, fsm, fsm_autogate, gitcmd, github_adapter, store,
               workspace, yamlmini)
 # Функция, не модуль (SPEC 01M1GCN1FPSC1A6WK9WD1Q1V8X, требование 5): этот
@@ -254,7 +254,7 @@ def review(conn, task_id: str, t, tdir, target: str, state: str) -> bool:
             print(f"  дальше: почини код (не тест) и повтори "
                   f"artel.py advance {task_id}")
             return False
-        card = acceptance.summary(acc_tdir)
+        card = acceptance.summary(acc_tdir, branch=t["branch"])
         store.journal(conn, task_id, "fsm", "приёмочные тесты пройдены",
                       f"{card}\nокружение: {fingerprint}")
         print(f"[{task_id}] {card}")
@@ -735,32 +735,117 @@ def _latest_developer_commit_iso_date(branch: str, task_id: str):
     return None
 
 
+# Префикс сообщения автокоммита артефактов шага ИМЕННО `reviewer` (сужение
+# `_STEP_ARTIFACTS_COMMIT_PREFIX` до конкретной роли, checkpoint.py::
+# _commit_external_step_artifacts::own_commit_marker) — единственный
+# текстовый признак, которым коммит REVIEW.md, несущий вердикт ревьювера,
+# отличим от более позднего автокоммита артефактов шага DEVELOPER,
+# тронувшего тот же файл (правка леджера замечаний, T100) — регрессия №15,
+# «Контекст» SPEC 01M1SCQ6WZHMQVK1AHP9F392JZ.
+_REVIEWER_STEP_AUTOCOMMIT_PREFIX = "{task_id}: артефакты шага reviewer (автокоммит оркестратора"
+
+
+def _reviewer_verdict_baseline(conn, task_id: str, branch: str):
+    """(момент вердикта ревьювера текущей итерации, источник) — опорное
+    время рубежа `_review_rework_gate_refuses` (регрессия №15, требование
+    1, AC-1): САМЫЙ СВЕЖИЙ коммит `REVIEW.md`, чьё сообщение — автокоммит
+    артефактов шага именно `reviewer` (`_REVIEWER_STEP_AUTOCOMMIT_PREFIX`),
+    а не любой более поздний коммит того же файла. Автокоммит шага
+    developer (правка леджера замечаний, T100) несёт в сообщении другую
+    роль и этим фильтром не проходит, даже будучи самым свежим коммитом
+    REVIEW.md — этим закрывается AC-2.
+
+    Такого коммита нет вовсе (REVIEW.md правился в обход checkpoint.py —
+    вручную Оператором, либо лёгкая песочница без настоящего git) —
+    fallback на последнюю по времени запись журнала `agent run finished`
+    роли `reviewer` (вторая часть требования 1): её момент — тот же
+    реальный вердикт, просто без git-подписи.
+
+    `(None, None)` — ни коммита, ни записи журнала: гейту сверять не с
+    чем, та же деградация, что у `_commit_iso_date`."""
+    path = f"tasks/{task_id}/REVIEW.md"
+    prefix = _REVIEWER_STEP_AUTOCOMMIT_PREFIX.format(task_id=task_id)
+    res = gitcmd.git("log", "--format=%cI\x1f%s", branch, "--", path)
+    if res is not None and res.returncode == 0:
+        for line in res.stdout.splitlines():
+            ts, sep, subject = line.partition("\x1f")
+            if not sep or not subject.startswith(prefix):
+                continue
+            try:
+                return datetime.fromisoformat(ts), "автокоммит шага reviewer"
+            except ValueError:
+                continue
+    for row in reversed(store.task_steps(conn, task_id)):
+        if row["actor"] == "reviewer" and row["action"] == "agent run finished":
+            try:
+                ts = datetime.strptime(row["ts"], "%Y-%m-%d %H:%M:%SZ").replace(
+                    tzinfo=timezone.utc)
+            except ValueError:
+                continue
+            return ts, "запись журнала agent run finished роли reviewer"
+    return None, None
+
+
 def _review_rework_gate_refuses(conn, task_id: str, t, branch: str) -> bool:
     """Гейт `in_dev -> review` (SPEC «регрессия №13» 01M1RHFRQ2C0P4A57XJJ1WZV8N,
-    требование 3, AC-3/AC-4/AC-6/AC-7): REVIEW.md текущей итерации ещё
-    `changes_requested`, а кодовая ветка не получила ни одного коммита
-    developer'а ПОСЛЕ его коммита — переделка не отработана. Независимый
-    от `auto.py` рубеж (по образцу `_capacity_gate_refuses` выше): держит
-    и ручной `advance` Оператора, который журнальный гейт `auto.py` не
-    видит вовсе.
+    требование 3, AC-3/AC-4/AC-6/AC-7; SPEC «регрессия №15»
+    01M1SCQ6WZHMQVK1AHP9F392JZ, требования 1-4): REVIEW.md текущей
+    итерации ещё `changes_requested`, а после момента вердикта ревьювера
+    (`_reviewer_verdict_baseline`, не любого более позднего коммита
+    REVIEW.md) не было ни коммита developer в кодовой ветке, ни записи
+    журнала `agent run finished` роли developer после входа в `in_dev`
+    этого визита — переделка не отработана.
 
-    Сверка по ВРЕМЕНИ коммитов (`%cI`), не по sha и не по тексту:
-    REVIEW.md живёт в АРТЕФАКТНОЙ ветке пульта, код — в ОТДЕЛЬНОЙ кодовой
-    ветке (`artifact_source.resolve`, `foreign` всегда `True`), общего
-    родителя у них нет — единственный осмысленный признак «после» здесь
-    время, не sha.
+    Второе (журнальное) условие OR — ОБЩАЯ с `auto.py` функция
+    `auto._role_step_since_state_entry` (регрессия №15, требование 2,
+    AC-3/AC-4): не независимая копия критерия «был ли шаг developer после
+    входа в состояние» — та же деградация на легитимный первый вход
+    (ANSWER-3), что уже применяет журнальный гейт `auto.py`.
+
+    `_role_step_since_state_entry` возвращает `(True, None)` и на
+    легитимный первый вход, И на «записи `state -> in_dev` нет вовсе» —
+    для `auto.py` оба вырожденных случая означают одно и то же: сверять
+    нечем, не блокировать. Для ЭТОГО рубежа второй случай (`detail is
+    None`) — не сигнал «шаг developer состоялся», а отсутствие
+    журнальной информации вовсе, при уже посчитанном git-условии
+    (`code_ts`/`review_ts` выше) — переиспользование функции целиком, но
+    без слепого доверия её вырожденному «да» там, где есть более
+    надёжный git-сигнал (планка регрессии №13 заводит задачу прямо в
+    `in_dev` без единой записи журнала — ANSWER-3 повторной приёмки).
+
+    Помимо журнального условия, рубеж по-прежнему независим от `auto.py`
+    (по образцу `_capacity_gate_refuses` выше): держит и ручной `advance`
+    Оператора, минуя цикл `auto`.
+
+    Сверка git-условия — по ВРЕМЕНИ коммитов (`%cI`), не по sha и не по
+    тексту: REVIEW.md живёт в АРТЕФАКТНОЙ ветке пульта, код — в ОТДЕЛЬНОЙ
+    кодовой ветке (`artifact_source.resolve`, `foreign` всегда `True`),
+    общего родителя у них нет — единственный осмысленный признак «после»
+    здесь время, не sha.
 
     Внешний (не self) target — гейт не проверяется: тот же довод, что
     `_capacity_gate_refuses`/`_zones_gate_refuses` выше — `git log`/`show`
     в `config.ROOT` не видит код внешнего target.
 
-    Git не ответил, дата не разобрана, или REVIEW.md вовсе не существует
-    (легковесные песочницы без настоящего git — `fake_git`/`disk_backed_
-    show`, первый вход задачи в `in_dev` до первого ревью) — гейт НЕ
-    отказывает: тот же вырожденный случай деградации, что у
-    `fsm._pull_main_or_escalate` (`git не ответил -> "fresh"`) —
-    не найденный сигнал не значит «код не менялся», значит «сверить
-    нечем».
+    Git не ответил, дата не разобрана, REVIEW.md вовсе не существует, или
+    на кодовой ветке нет ни одного коммита developer (легковесные
+    песочницы без настоящего git — `fake_git`/`disk_backed_show`, первый
+    вход задачи в `in_dev` до первого ревью) — гейт НЕ отказывает по
+    git-условию (та же деградация, что у `fsm._pull_main_or_escalate`:
+    «git не ответил -> "fresh"» — не найденный сигнал не значит «код не
+    менялся», значит «сверить нечем»); журнальное условие OR при этом
+    всё равно проверяется отдельно.
+
+    `_reviewer_verdict_baseline` не нашла ни автокоммита шага reviewer,
+    ни записи журнала (ANSWER-3, повторный отказ приёмки регрессии №13
+    итерации 2: планка `01M1RHFRQ2C0P4A57XJJ1WZV8N/acceptance_tests`
+    коммитит REVIEW.md вне `checkpoint.py`, без журнальной записи роли
+    reviewer вовсе) — опорное время не остаётся пустым (что открывало бы
+    рубеж нараспашку, fail open): fallback на дату последнего коммита
+    REVIEW.md (`_commit_iso_date`), тем же способом, каким рубеж сверял
+    ДО этой задачи. Опора `_reviewer_verdict_baseline`, если она нашлась,
+    по-прежнему приоритетна — этот fallback работает только на её
+    `(None, None)`.
     """
     if store.task_target(conn, task_id) != config.DEFAULT_TARGET:
         return False
@@ -770,16 +855,24 @@ def _review_rework_gate_refuses(conn, task_id: str, t, branch: str) -> bool:
     meta = yamlmini.frontmatter(review_text) or {}
     if meta.get("status") != "changes_requested":
         return False
-    review_ts = _commit_iso_date(branch, f"tasks/{task_id}/REVIEW.md")
+    review_ts, baseline_source = _reviewer_verdict_baseline(conn, task_id, branch)
+    if review_ts is None:
+        review_ts = _commit_iso_date(branch, f"tasks/{task_id}/REVIEW.md")
+        baseline_source = "последний коммит REVIEW.md"
     if review_ts is None:
         return False
     code_ts = _latest_developer_commit_iso_date(t["branch"], task_id)
-    if code_ts is None:
+    if code_ts is not None and code_ts > review_ts:
         return False
-    if code_ts > review_ts:
+    ran, _detail = auto._role_step_since_state_entry(conn, task_id, "in_dev",
+                                                      "developer")
+    if ran and _detail is not None:
         return False
+    code_ts_text = code_ts.isoformat() if code_ts is not None else "нет коммитов"
     detail = (f"замечания ревью не отработаны: нет шага developer после "
-              f"итерации {meta.get('iteration', '—')}")
+              f"итерации {meta.get('iteration', '—')} (опорное время "
+              f"{review_ts.isoformat()} — {baseline_source}; последний "
+              f"коммит developer {code_ts_text})")
     store.journal(conn, task_id, "fsm", _REWORK_REFUSAL_ACTION, detail)
     print(f"[{task_id}] переход отклонён: {detail}")
     print(f"  дальше: почини код (не спорь с ревью втихую) и повтори "
