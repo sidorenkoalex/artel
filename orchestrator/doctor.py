@@ -47,10 +47,12 @@ subprocess-вызовов», см. `preflight_checks`).
 блокировки шага (preflight fail) в alerts не дублируются: они уже видны
 именованной причиной в журнале конкретной задачи.
 """
+import json
 import os
 import re
 import shutil
 import socket
+import statistics
 import subprocess
 import sys
 import tempfile
@@ -58,9 +60,9 @@ import time
 from collections import namedtuple
 from pathlib import Path
 
-from . import (alerts, artifact_branch, canary, coldstart, config, gitcmd,
-              liveness, projects, roles, runner, snapshot, spend, stack,
-              store, targets, workspace, zone_lock)
+from . import (alerts, artifact_branch, canary, ci, coldstart, config,
+              gitcmd, liveness, projects, roles, runner, snapshot, spend,
+              stack, store, targets, workspace, zone_lock)
 
 # status: "ok" | "warn" | "fail" | "skip" ("skip" — честный пропуск проверки,
 # требование 9: сверка forge-политики без `gh`/сети — не провал и не ок).
@@ -1615,6 +1617,290 @@ def _fix_ignored_artifact_files(conn) -> None:
               f"файлов из артефактной ветки")
 
 
+# --- наблюдатель роста карты кодовой базы (01M1RFVWV6WWTXRC5F40K61632,
+#     требование 3) -------------------------------------------------------
+
+MAP_SIZE_ACTION = "карта: размер"
+MAP_GROWTH_SOURCE = "map.growth"
+
+# Sentinel заведомо позже любого реального `ts`/`ack_ts` (формат
+# store.now(), лексикографическое сравнение) — использован как cutoff
+# `store.alerts_older_than`, чтобы получить ВСЕ алерты существующей
+# функцией store, без новой SQL здесь (ADR-0003 3ж): store.py вне зон
+# этой задачи, фильтрация target/kind/source/ack_ts — в Python.
+_FAR_FUTURE_TS = "9999-12-31 23:59:59Z"
+
+
+def _all_map_size_steps(conn) -> list:
+    """Все записи журнала «карта: размер» по всем задачам, в порядке
+    появления (`id` — единый автоинкремент таблицы `steps`, поэтому
+    сортировка по нему хронологична и через границы задач). Собрано из
+    `store.all_tasks`/`store.task_steps` — существующих функций store,
+    без прямой SQL здесь (ADR-0003 3ж)."""
+    steps = []
+    for task in store.all_tasks(conn):
+        steps.extend(store.task_steps(conn, task["id"]))
+    steps.sort(key=lambda row: row["id"])
+    return [row for row in steps if row["action"] == MAP_SIZE_ACTION]
+
+
+def _map_growth_reference_point(conn, target: str) -> str | None:
+    """Момент последнего подтверждённого алерта `map.growth` этого
+    target — `ack` переносит точку отсчёта и тем самым перекалибровывает
+    базу (AC-10); подтверждённых алертов нет — начало ряда (`None`)."""
+    candidates = [
+        row["ack_ts"] for row in store.alerts_older_than(conn, _FAR_FUTURE_TS)
+        if row["target"] == target and row["kind"] == "trigger"
+        and row["source"] == MAP_GROWTH_SOURCE and row["ack_ts"] is not None
+    ]
+    return max(candidates) if candidates else None
+
+
+def _map_growth_series(conn, target: str) -> list:
+    """Ряд `detail` (разобранных JSON) записей «карта: размер» этого
+    target ПОСЛЕ точки отсчёта, в порядке появления."""
+    reference = _map_growth_reference_point(conn, target)
+    rows = [row for row in _all_map_size_steps(conn) if row["target"] == target]
+    if reference is not None:
+        rows = [row for row in rows if row["ts"] > reference]
+    return [json.loads(row["detail"]) for row in rows]
+
+
+def _map_growth_message(compare_from: dict, last: dict) -> str:
+    """Текст алерта: каталог верхнего уровня с наибольшим приростом байт
+    между сравниваемыми записями и три самые крупные секции текущей
+    карты (AC-13) — без времени/id, детерминирован по данным ряда."""
+    last_dirs = last["bytes_by_dir"]
+    base_dirs = compare_from["bytes_by_dir"]
+    grown_dir = max(last_dirs, key=lambda d: last_dirs[d] - base_dirs.get(d, 0))
+    top3 = last["top_sections"][:3]
+    sections_txt = ", ".join(
+        f"{entry['name']} ({entry['bytes']} байт)" for entry in top3)
+    return (f"рост карты кодовой базы: сильнее всего вырос каталог "
+           f"{grown_dir}; крупнейшие секции карты — {sections_txt}")
+
+
+def _map_growth_check(conn, target: str) -> Check:
+    name = f"map-growth:{target}"
+    series = _map_growth_series(conn, target)
+    k = config.MAP_GROWTH_CALIBRATION_MERGES
+    if len(series) <= k:
+        # Ровно на k-й записи окно калибровки (`series[:k]`) совпадает со
+        # всем рядом — сравнивать эту запись с базой, посчитанной с её
+        # же участием, самоссылочно (R1-F2); молчим ещё один ход, оценка
+        # стартует с (k+1)-й записи против уже зафиксированного окна.
+        return Check(name, "ok", f"калибровка: {len(series)}/{k} измерений")
+
+    window = series[:k]
+    baseline = statistics.median(entry["bytes_total"] for entry in window)
+    last = series[-1]
+    prev = series[-2] if len(series) >= 2 else None
+
+    creep = last["bytes_total"] > baseline * (1 + config.MAP_GROWTH_RATIO)
+    jump = (prev is not None and last["bytes_total"] >
+           prev["bytes_total"] * (1 + config.MAP_JUMP_RATIO))
+    if not (creep or jump):
+        return Check(name, "ok", "рост в пределах нормы")
+
+    compare_from = prev if prev is not None else window[0]
+    message = _map_growth_message(compare_from, last)
+    alerts.raise_alert(conn, target, "trigger", MAP_GROWTH_SOURCE, message)
+    return Check(name, "warn", message)
+
+
+def check_map_growth(conn) -> list[Check]:
+    """Требование 3: по каждому target с хотя бы одной записью «карта:
+    размер» — самокалибрующийся относительный порог роста карты
+    кодовой базы (AC-8..AC-16). Абсолютный потолок брифа эта проверка не
+    читает и не меняет (AC-15) — только относительные сигналы (медиана
+    окна калибровки, прирост между соседними записями).
+    """
+    targets_with_series = sorted({
+        row["target"] for row in _all_map_size_steps(conn)
+        if row["target"] is not None
+    })
+    return [_map_growth_check(conn, target) for target in targets_with_series]
+
+
+# --- сверка артефактной ветки с origin/CI (SPEC ---------------------------
+# 01M1TQ0X14Y5B3C87WC0Q31PK2, требования 3-4) ------------------------------
+
+def _artifact_branch_candidates(conn):
+    """Нетерминальные задачи target artel (требования 3-4: обе новые
+    проверки касаются только их — терминальная задача уже не живёт, а
+    внешний target пушит и гоняет CI своей веткой, не этой)."""
+    return [t for t in store.all_tasks(conn)
+           if t["target"] == config.DEFAULT_TARGET
+           and t["state"] not in ("done", "killed")]
+
+
+def _is_ancestor(maybe_ancestor: str, descendant: str) -> bool | None:
+    """`True`/`False` — является ли `maybe_ancestor` предком `descendant`
+    в истории git; `None` — git не ответил (сбой процесса, а не «нет» —
+    `merge-base --is-ancestor` отвечает кодом 1 на честное «нет», не
+    ошибкой)."""
+    res = gitcmd.git("merge-base", "--is-ancestor", maybe_ancestor, descendant)
+    if res is None:
+        return None
+    if res.returncode == 0:
+        return True
+    if res.returncode == 1:
+        return False
+    return None
+
+
+def _sync_direction(branch: str, local_sha: str, origin_sha: str) -> str:
+    """Направление расхождения `artifact/<id>` (SPEC требование 3, AC-6):
+    «локальный отстаёт» — origin ушёл вперёд (Оператор коммитил прямо в
+    origin, инцидент 06.09); «origin отстаёт» — локальный ушёл вперёд
+    (роль закоммитила, push ещё не случился/отказал); «разошлись» — ни
+    один не предок другого (независимые коммиты от общего предка).
+
+    `origin_sha` получен `ls-remote` (`gitcmd.remote_branch_sha`) — сам
+    коммит-объект origin при этом может отсутствовать в локальной
+    объектной базе пульта (внешний коммит Оператора мимо пульта никогда
+    сюда не приезжал), и `merge-base --is-ancestor` без него откажет
+    кодом 128 на обеих сверках, что без разбора выглядело бы как
+    «разошлись» даже для чисто линейного расхождения. `fetch -q origin
+    <branch>` подтягивает нужные объекты БЕЗ подвижки локального ref
+    (пишет только `FETCH_HEAD`) — сверка ancestry дальше идёт по самим
+    sha, не по `FETCH_HEAD`. Отказ fetch (сеть/`gh` недоступны) —
+    деградация в «разошлись» та же, что и у отказа самого merge-base
+    (риск, PLAN «Риски»)."""
+    gitcmd.git("fetch", "-q", "origin", branch)
+    if _is_ancestor(local_sha, origin_sha) is True:
+        return "локальный отстаёт"
+    if _is_ancestor(origin_sha, local_sha) is True:
+        return "origin отстаёт"
+    return "разошлись"
+
+
+def check_artifact_branch_sync(conn) -> list[Check]:
+    """«Артефактная ветка синхронна» (SPEC требование 3, AC-6): сравнивает
+    локальный `artifact/<id>` и `origin/artifact/<id>` для каждой
+    нетерминальной задачи target artel — источник инцидента 06.09
+    («расхождение происходит между локальным `refs/heads/artifact/<id>`
+    пульта и его же origin»). `gitcmd.remote_branch_sha` читает origin
+    ЖИВЫМ `ls-remote`, не локальный tracking-ref — ровно то, что нужно
+    против внешнего коммита Оператора мимо пульта, о котором локальный
+    tracking-ref не узнал бы без `git fetch`.
+
+    Задача без локальной артефактной ветки вовсе (ещё не создана) —
+    молча пропускается: сверять нечего, не отказ. Origin недоступен
+    (`gitcmd.has_no_remote`) или ветки там ещё нет/ответа не было —
+    `skip` с причиной, не `ok`/`warn` по несуществующим данным (AC-6,
+    тест `test_ac6_skip_without_origin_with_a_reason` — недоступность
+    origin не имеет права трактоваться как «совпадает», fail-open)."""
+    checks = []
+    for t in _artifact_branch_candidates(conn):
+        task_id = t["id"]
+        branch = artifact_branch.branch_name(task_id)
+        local_sha = gitcmd.branch_head_sha(branch)
+        if not local_sha:
+            continue
+        if gitcmd.has_no_remote(config.ROOT):
+            checks.append(Check(
+                "artifact-branch-sync", "skip",
+                f"{task_id}: origin пульта не настроен — сверка "
+                f"артефактной ветки {branch} невозможна"))
+            continue
+        origin_sha = gitcmd.remote_branch_sha(branch)
+        if not origin_sha:
+            checks.append(Check(
+                "artifact-branch-sync", "skip",
+                f"{task_id}: origin/{branch} недоступен или не ответил"))
+            continue
+        if local_sha == origin_sha:
+            checks.append(Check(
+                "artifact-branch-sync", "ok",
+                f"{task_id}: артефактная ветка {branch} синхронна с "
+                f"origin (sha {local_sha})"))
+            continue
+        direction = _sync_direction(branch, local_sha, origin_sha)
+        checks.append(Check(
+            "artifact-branch-sync", "warn",
+            f"{task_id}: артефактная ветка {branch} разошлась с origin — "
+            f"локальный {local_sha}, origin {origin_sha} ({direction})"))
+    return checks
+
+
+# Поля `--json`, которые запрашивает эта проверка у `gh run list` — те же
+# `headBranch,status,conclusion`, что уже читает `ci.run_list` (SPEC
+# требование 4: «через gh run list, как уже делает verifying»), плюс
+# `name`/`workflowName` — имя упавшей джобы для `warn` (AC-7). Отдельный
+# запрос, не правка `ci.run_list` — `orchestrator/ci.py` не входит в зону
+# этой задачи (PLAN «Подход»), а `ci.gh` уже публичная точка входа,
+# которую подменяют и приёмочные тесты этой задачи, и `ci.run_list` сама.
+_ARTIFACT_BRANCH_CI_JSON_FIELDS = "headBranch,status,conclusion,name,workflowName"
+
+
+def _artifact_branch_ci_runs(branch: str) -> tuple[list | None, str]:
+    """Прогоны `gh run list` по ветке `branch`; (None, причина) — `gh`/сеть
+    недоступны или ответ не разобрать (тот же разбор, что `ci.run_list`)."""
+    res = ci.gh("run", "list", "--branch", branch, "--json",
+               _ARTIFACT_BRANCH_CI_JSON_FIELDS, "--limit",
+               str(config.CI_RUN_LIST_LIMIT))
+    if res.returncode != 0:
+        detail = (res.stderr or res.stdout).strip()[:200]
+        return None, f"gh run list не ответил: {detail or f'код {res.returncode}'}"
+    try:
+        payload = json.loads(res.stdout)
+    except (json.JSONDecodeError, TypeError) as exc:
+        return None, f"ответ gh run list не разобран: {exc}"
+    if not isinstance(payload, list):
+        return None, "в ответе gh run list нет списка запусков"
+    return payload, ""
+
+
+def check_artifact_branch_ci(conn) -> list[Check]:
+    """«CI артефактной ветки» (SPEC требование 4, AC-7): последний прогон
+    `gh run list` по ветке `artifact/<id>` для каждой нетерминальной
+    задачи target artel — источник инцидента 06.09 («CI артефактных
+    веток семи задач был красный... и это ни на что не повлияло:
+    зелёность CI артефактной ветки нигде не читается»). Чисто
+    информационная (PLAN «Влияние на систему»): ни одна ветка кода не
+    зовёт эту функцию из гейта FSM — красный исход здесь никогда не
+    блокирует переход, только видимость Оператору через `doctor`.
+
+    `gh`/сеть недоступны, прогонов нет вовсе или последний ещё не
+    завершился — `skip` (недоступность/отсутствие ответа не может стать
+    ни `ok`, ни `warn` — fail-open по несуществующим данным ровно
+    воспроизвёл бы инцидент, AC-7 «gh/сеть недоступны — skip»)."""
+    checks = []
+    for t in _artifact_branch_candidates(conn):
+        task_id = t["id"]
+        branch = artifact_branch.branch_name(task_id)
+        runs, why = _artifact_branch_ci_runs(branch)
+        if runs is None:
+            checks.append(Check(
+                "artifact-branch-ci", "skip",
+                f"{task_id}: CI ветки {branch} не проверен — {why}"))
+            continue
+        if not runs:
+            checks.append(Check(
+                "artifact-branch-ci", "skip",
+                f"{task_id}: у ветки {branch} нет ни одного прогона CI"))
+            continue
+        run = runs[0]
+        if run.get("status") != "completed":
+            checks.append(Check(
+                "artifact-branch-ci", "skip",
+                f"{task_id}: CI ветки {branch} ещё идёт"))
+            continue
+        sha = gitcmd.branch_head_sha(branch)
+        if run.get("conclusion") in ci.GREEN:
+            checks.append(Check(
+                "artifact-branch-ci", "ok",
+                f"{task_id}: CI ветки {branch} зелёный (sha {sha})"))
+        else:
+            job = run.get("name") or run.get("workflowName") or "?"
+            checks.append(Check(
+                "artifact-branch-ci", "warn",
+                f"{task_id}: CI ветки {branch} не зелёный (sha {sha}), "
+                f"джоба {job}"))
+    return checks
+
+
 # --- команда doctor -------------------------------------------------------
 
 def all_checks(conn) -> list[Check]:
@@ -1651,11 +1937,14 @@ def all_checks(conn) -> list[Check]:
     checks.extend(check_hung_test_runs(conn))
     checks.extend(check_zone_waits(conn))
     checks.extend(check_branch_freshness(conn))
+    checks.extend(check_artifact_branch_sync(conn))
+    checks.extend(check_artifact_branch_ci(conn))
     checks.append(check_root_pin())
     checks.append(check_role_log_pool_leak(conn))
     checks.append(check_canary_pool_drift())
     checks.extend(check_token_repo_scope())
     checks.extend(stack.check_stack())
+    checks.extend(check_map_growth(conn))
     return checks
 
 
