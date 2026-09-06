@@ -1623,31 +1623,46 @@ def _fix_ignored_artifact_files(conn) -> None:
 MAP_SIZE_ACTION = "карта: размер"
 MAP_GROWTH_SOURCE = "map.growth"
 
+# Sentinel заведомо позже любого реального `ts`/`ack_ts` (формат
+# store.now(), лексикографическое сравнение) — использован как cutoff
+# `store.alerts_older_than`, чтобы получить ВСЕ алерты существующей
+# функцией store, без новой SQL здесь (ADR-0003 3ж): store.py вне зон
+# этой задачи, фильтрация target/kind/source/ack_ts — в Python.
+_FAR_FUTURE_TS = "9999-12-31 23:59:59Z"
+
+
+def _all_map_size_steps(conn) -> list:
+    """Все записи журнала «карта: размер» по всем задачам, в порядке
+    появления (`id` — единый автоинкремент таблицы `steps`, поэтому
+    сортировка по нему хронологична и через границы задач). Собрано из
+    `store.all_tasks`/`store.task_steps` — существующих функций store,
+    без прямой SQL здесь (ADR-0003 3ж)."""
+    steps = []
+    for task in store.all_tasks(conn):
+        steps.extend(store.task_steps(conn, task["id"]))
+    steps.sort(key=lambda row: row["id"])
+    return [row for row in steps if row["action"] == MAP_SIZE_ACTION]
+
 
 def _map_growth_reference_point(conn, target: str) -> str | None:
     """Момент последнего подтверждённого алерта `map.growth` этого
     target — `ack` переносит точку отсчёта и тем самым перекалибровывает
     базу (AC-10); подтверждённых алертов нет — начало ряда (`None`)."""
-    row = conn.execute(
-        "SELECT ack_ts FROM alerts WHERE target=? AND kind='trigger' "
-        "AND source=? AND ack_ts IS NOT NULL ORDER BY ack_ts DESC LIMIT 1",
-        (target, MAP_GROWTH_SOURCE)).fetchone()
-    return row["ack_ts"] if row is not None else None
+    candidates = [
+        row["ack_ts"] for row in store.alerts_older_than(conn, _FAR_FUTURE_TS)
+        if row["target"] == target and row["kind"] == "trigger"
+        and row["source"] == MAP_GROWTH_SOURCE and row["ack_ts"] is not None
+    ]
+    return max(candidates) if candidates else None
 
 
 def _map_growth_series(conn, target: str) -> list:
     """Ряд `detail` (разобранных JSON) записей «карта: размер» этого
     target ПОСЛЕ точки отсчёта, в порядке появления."""
     reference = _map_growth_reference_point(conn, target)
-    if reference is None:
-        rows = conn.execute(
-            "SELECT detail FROM steps WHERE target=? AND action=? "
-            "ORDER BY id", (target, MAP_SIZE_ACTION)).fetchall()
-    else:
-        rows = conn.execute(
-            "SELECT detail FROM steps WHERE target=? AND action=? "
-            "AND ts > ? ORDER BY id",
-            (target, MAP_SIZE_ACTION, reference)).fetchall()
+    rows = [row for row in _all_map_size_steps(conn) if row["target"] == target]
+    if reference is not None:
+        rows = [row for row in rows if row["ts"] > reference]
     return [json.loads(row["detail"]) for row in rows]
 
 
@@ -1700,10 +1715,10 @@ def check_map_growth(conn) -> list[Check]:
     читает и не меняет (AC-15) — только относительные сигналы (медиана
     окна калибровки, прирост между соседними записями).
     """
-    rows = conn.execute(
-        "SELECT DISTINCT target FROM steps WHERE action=? "
-        "AND target IS NOT NULL", (MAP_SIZE_ACTION,)).fetchall()
-    targets_with_series = sorted(row["target"] for row in rows)
+    targets_with_series = sorted({
+        row["target"] for row in _all_map_size_steps(conn)
+        if row["target"] is not None
+    })
     return [_map_growth_check(conn, target) for target in targets_with_series]
 
 

@@ -1,5 +1,5 @@
 ---
-built_at_sha: 3023c5fd886c3f4632dc6395476ff8b8f2177fd7
+built_at_sha: 78f66cffe2139e7831e49ff818ad03185dffa161
 ---
 
 # Codebase-map пульта
@@ -329,6 +329,7 @@ built_at_sha: 3023c5fd886c3f4632dc6395476ff8b8f2177fd7
 - `check_git_identity`
 - `check_hung_test_runs`
 - `check_leases`
+- `check_map_growth`
 - `check_merge_lock`
 - `check_orphans`
 - `check_pending_snapshots`
@@ -451,7 +452,7 @@ built_at_sha: 3023c5fd886c3f4632dc6395476ff8b8f2177fd7
 
 **Публичные функции:** (нет)
 
-**Импортирует:** `orchestrator/alerts.py`, `orchestrator/config.py`, `orchestrator/gitcmd.py`, `orchestrator/retro.py`, `orchestrator/store.py`
+**Импортирует:** `orchestrator/alerts.py`, `orchestrator/config.py`, `orchestrator/gitcmd.py`, `orchestrator/retro.py`, `orchestrator/store.py`, `scripts/codebase_map.py`
 
 **Импортируется:** `orchestrator/fsm_merge_gate.py`, `tests/test_fsm_map_regen.py`, `tests/test_fsm_retro.py`
 
@@ -959,6 +960,7 @@ built_at_sha: 3023c5fd886c3f4632dc6395476ff8b8f2177fd7
 - `extract_purpose`
 - `git_head_sha`
 - `main`
+- `map_stats`
 - `module_dotted_name`
 - `parse_module`
 - `project_for_brief`
@@ -967,7 +969,7 @@ built_at_sha: 3023c5fd886c3f4632dc6395476ff8b8f2177fd7
 
 **Импортирует:** —
 
-**Импортируется:** `orchestrator/brief.py`, `tests/test_codebase_map.py`
+**Импортируется:** `orchestrator/brief.py`, `orchestrator/fsm_postmerge.py`, `tests/test_codebase_map.py`
 
 ## scripts/guard.py
 
