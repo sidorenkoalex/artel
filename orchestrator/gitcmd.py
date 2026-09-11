@@ -66,6 +66,30 @@ def commits_behind(branch: str, base: str | None = None) -> int | None:
     return int(text) if text.isdigit() else None
 
 
+def is_ancestor(ancestor: str, descendant: str) -> bool:
+    """`ancestor` — предок `descendant` (или тот же коммит) тем же
+    критерием, каким это понимает сам git (`merge-base --is-ancestor`).
+
+    Несуществующий/несвязанный sha даёт ненулевой код возврата — тот же
+    `False`, что и «не предок» (ANSWER-1
+    01M1NGFK3N6MRMYGCC09H975V3 п.3: прогон с чужой историей не считается
+    вовсе, не «бесконечно старый»)."""
+    res = git("merge-base", "--is-ancestor", ancestor, descendant)
+    return res is not None and res.returncode == 0
+
+
+def merges_between(sha_from: str, sha_to: str) -> int | None:
+    """Число merge-коммитов на отрезке `sha_from..sha_to` (ANSWER-1
+    01M1NGFK3N6MRMYGCC09H975V3 п.3: «возраст» зелёного прогона канарейки
+    относительно целевого sha) — тот же вырожденный случай `None`, что и
+    `commits_behind`: git не ответил, либо ответ не разобрать числом."""
+    res = git("rev-list", "--count", "--merges", f"{sha_from}..{sha_to}")
+    if res is None or res.returncode != 0:
+        return None
+    text = res.stdout.strip()
+    return int(text) if text.isdigit() else None
+
+
 def commit_committer_dates(since: str, until: str,
                            repo: Path | None = None) -> list[str] | None:
     """ISO8601 committer-даты (`%cI`, со смещением) коммитов диапазона
@@ -226,6 +250,59 @@ def diff_paths(a: str, b: str, *paths: str) -> bool | None:
     return res.returncode == 1
 
 
+def _origin_main_ref_exists() -> bool | None:
+    """`refs/remotes/origin/<MAIN_BRANCH>` заведён в репозитории; `None` —
+    git не ответил на саму проверку. Только чтение уже существующего
+    локального ref — без `fetch`/`ls-remote`, никаких сетевых обращений
+    (тесты не выходят в сеть, 01M1QHQ277…): ref обновляется механикой
+    подтяжки и входа в `verifying`, эта функция его не актуализирует."""
+    res = git("rev-parse", "--verify", "--quiet",
+             f"refs/remotes/origin/{config.MAIN_BRANCH}")
+    return None if res is None else res.returncode == 0
+
+
+def diff_base(branch: str) -> str | None:
+    """Одна точка правды для базы сравнения ветки задачи (tasks/
+    01M1SG9T962WJJ31S282GWM0EN): merge-base `branch` с `refs/remotes/
+    origin/<MAIN_BRANCH>`, если такой ref есть в репозитории; иначе —
+    merge-base с локальным `config.MAIN_BRANCH`. Замена двухточечного
+    сравнения с локальным `config.MAIN_BRANCH` целиком (гейт зон) и
+    трёхточечного, но с той же устаревшей базой (гейт ёмкости, полный
+    diff ревью-пакета) — локальный пин по построению отстаёт от
+    `origin/main`, которую ветка задачи как раз подтягивает: точка
+    расхождения с локальным main старее и тащит в дифф чужие коммиты.
+
+    `None` — git не ответил ни на проверку существования ref, ни на саму
+    команду `merge-base`: вызывающий код обязан отказать fail-closed
+    (ADR-0002), не подставлять `None` дальше как базу diff'а.
+    """
+    exists = _origin_main_ref_exists()
+    if exists is None:
+        return None
+    base_ref = (f"refs/remotes/origin/{config.MAIN_BRANCH}" if exists
+               else config.MAIN_BRANCH)
+    res = git("merge-base", base_ref, branch)
+    if res is None or res.returncode != 0:
+        return None
+    return res.stdout.strip()
+
+
+def diff_base_source(branch: str) -> str:
+    """Название источника базы `diff_base(branch)` для журнала: `"origin/
+    <MAIN_BRANCH>"` — ref заведён и был использован; иначе — локальный
+    `config.MAIN_BRANCH` (tasks/01M1SG9T962WJJ31S282GWM0EN, требование 4:
+    отказы гейтов зон/ёмкости обязаны называть, откуда взята база, не
+    только её sha). Не зовёт `diff_base` повторно и не переиспользует её
+    результат — только независимо повторяет тот же критерий наличия ref;
+    git не ответивший на эту проверку — локальный `config.MAIN_BRANCH` тем
+    же вырожденным откатом, что и у `diff_base` в этом случае (вызывающий
+    код сюда доходит только когда `diff_base` уже вернула не-`None` базу,
+    так что расхождение возможно только при флапе git между двумя
+    вызовами)."""
+    return (f"origin/{config.MAIN_BRANCH}" if _origin_main_ref_exists()
+           else config.MAIN_BRANCH)
+
+
 def has_no_remote(repo: Path) -> bool:
     """True — `git remote` пуст: ни одной записи (ADR-0003 3д, требование 7).
 
@@ -301,6 +378,32 @@ def remote_branch_sha(branch: str) -> str:
     if res is None or res.returncode != 0 or not res.stdout.strip():
         return ""
     return res.stdout.split()[0]
+
+
+def fetch_head_sha(remote: str, ref: str) -> tuple[str, str]:
+    """(sha, "") — голова `ref` в `remote` ПОСЛЕ `git fetch <remote> <ref>`
+    (SPEC 01M1TQ0ZCYJ6TESZ2KGJ6AWYNH, требование 1): `git fetch` не
+    трогает HEAD и рабочее дерево ни при каком исходе, так что HEAD
+    главной копии остаётся на месте. ("", причина) — `remote` недоступен
+    (нет сети, `remote` не настроен, песочница) или git не ответил;
+    причина — первые 200 символов stderr, тем же приёмом, что и у
+    `show`/`drop`.
+
+    Не `ls_remote`/`remote_branch_sha` (голый sha без объектов): вызывающему
+    коду (`artifact_branch`, `doctor`) нужен РЕАЛЬНО присутствующий локально
+    коммит — родитель плотницкой записи (`write_commit`, `read-tree
+    parent`) обязан существовать в объектной базе, не только числиться sha
+    на удалённой стороне.
+    """
+    res = git("fetch", remote, ref)
+    if res is None:
+        return "", "git не ответил"
+    if res.returncode != 0:
+        return "", (res.stderr.strip()[:200] or "git fetch вернул ненулевой код")
+    head = git("rev-parse", "--verify", "--quiet", "FETCH_HEAD")
+    if head is None or head.returncode != 0 or not head.stdout.strip():
+        return "", "FETCH_HEAD не разрешён"
+    return head.stdout.strip(), ""
 
 
 def ls_tree_files(branch: str, rel_dir: str) -> list[str] | None:

@@ -1,0 +1,13 @@
+# Конфигурация pytest — раннер пульта (SPEC 01M1TKP6AAY4W8GDGZNA9R0JZT,
+# требование 6). `testpaths`/`python_files` — те же соглашения, что уже
+# действуют для `tests/*.py` (`unittest.TestCase`, файлы `test_*.py`);
+# `timeout` — таймаут ОТДЕЛЬНОГО теста плагина pytest-timeout, значение
+# синхронизировано руками с `orchestrator/stack.py::PER_TEST_TIMEOUT_SEC`
+# (TOML не умеет читать значение оттуда; расхождение ловит
+# `tests/test_stack.py`) — не путать с таймаутами ВСЕГО прогона
+# (`config.ACCEPTANCE_TIMEOUT_SEC`/`FULL_SUITE_TIMEOUT_SEC`), которые
+# эта задача не меняет.
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+timeout = 120

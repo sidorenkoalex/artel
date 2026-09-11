@@ -13,7 +13,9 @@
 и keychain — подменены, кроме тестов recovery/orphans, которым нужен
 настоящий git (тот же приём, что `RealPultGitTest`).
 """
+import inspect
 import io
+import json
 import os
 import shutil
 import socket
@@ -28,11 +30,12 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from orchestrator import (alerts, budget, catalog, config, doctor,  # noqa: E402
-                          gitcmd, liveness, projects, runner, spend, store)
+from orchestrator import (alerts, budget, canary, catalog, config,  # noqa: E402
+                          doctor, gitcmd, liveness, projects, runner, spend,
+                          store)
 from tests import sandbox as sandbox_module  # noqa: E402
-from tests.sandbox import (FakeStream, TmpRootTest, capture,  # noqa: E402
-                           capture_new_task_id, claude_only_popen,
+from tests.sandbox import (FakeStream, RealGitSandbox, TmpRootTest,  # noqa: E402
+                           capture, capture_new_task_id, claude_only_popen,
                            claude_only_run, disk_backed_ls_tree_files,
                            disk_backed_show, fake_git, sync_spec_from_worktree)
 
@@ -268,6 +271,14 @@ class PreflightBlocksMissingTokenTest(TmpRootTest):
         super().setUp()
         self.TASK = self.new_task_in_fake_git("Задача под pre-flight")
         store.update_task(store.db(), self.TASK, state="in_dev")
+        # Обязательный артефакт роли developer (SPEC 01M1RQ12JVHE3PQYDFV1XPSTQ3,
+        # требование 3) — без него на диске рабочего каталога роли успешная
+        # попытка (rc=0) честно ретраится вместо одного тихого успеха,
+        # которого ждут тесты этого класса (они проверяют pre-flight, не
+        # факт отказа без артефакта).
+        tdir = config.WORKTREES / self.TASK / "tasks" / self.TASK
+        tdir.mkdir(parents=True, exist_ok=True)
+        (tdir / "PLAN.md").write_text("маркер\n", encoding="utf-8")
         # CLI на машине прогона может отсутствовать (CI-раннер) — проверки
         # токена/идентичности не должны зависеть от cli-found: он тестируется
         # отдельно, здесь всегда ok.
@@ -627,6 +638,111 @@ class BaseBranchCheckTest(unittest.TestCase):
             check = doctor.check_base_branch("sled", self.EXTERNAL_ENTRY)
 
         self.assertEqual(check.status, "warn")
+
+
+class CanaryTriggerCheckTest(RealGitSandbox):
+    """`doctor.check_canary_trigger` (tasks/01M1NGFK3N6MRMYGCC09H975V3/
+    SPEC.md, AC-3/AC-4) — реальный git: сам предмет проверки, возраст в
+    мержах main, заглушкой `gitcmd.git` не изобразить (тот же приём, что
+    `CommitsBehindTest` в tests/test_gitcmd_branch_reads.py).
+
+    Статус — `warn`, не `fail` (см. соседний `check_root_pin`): триггер
+    требует ack Оператора с решением (docs/triggers.md), не блокирует
+    `cmd_doctor` как инцидент — регресс этого стал бы КАЖДЫЙ прогон
+    doctor красным до первого зелёного прогона канарейки.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.conn = store.db()
+
+    def _merge(self, name: str) -> str:
+        self.checkout(name, create=True)
+        (self.root / f"{name}.txt").write_text("x\n", encoding="utf-8")
+        self.git("add", f"{name}.txt")
+        self.git("commit", "-q", "-m", f"работа {name}")
+        self.checkout(config.MAIN_BRANCH)
+        self.git("merge", "--no-ff", "-q", "-m", f"merge {name}", name)
+        return self.git("rev-parse", "HEAD").strip()
+
+    def _insert_green(self, main_sha: str) -> None:
+        store.insert_canary_run(
+            self.conn, "20260101T000000Z", "t", "01AAA", steps=1,
+            cost_usd=0.1, review_iterations=0, escalations=0,
+            outcome="killed", expected_escalation=None,
+            actual_escalation=False, marker_mismatch=False,
+            main_sha=main_sha, verdict="green")
+
+    def test_never_ran_is_warn_not_fail(self):
+        """Ловит мутацию: статус `fail` вместо `warn` — держал бы КАЖДЫЙ
+        прогон doctor красным (`cmd_doctor` завершается ненулевым кодом
+        только на `fail`) до самого первого прогона канарейки."""
+        check = doctor.check_canary_trigger(self.conn)
+
+        self.assertEqual(check.status, "warn")
+        self.assertIn("ни разу не прогонялась", check.detail)
+
+    def test_threshold_reached_is_warn_and_raises_a_deduped_trigger_alert(self):
+        """Ловит мутацию: `open_alert_exists` не находит совпадения из-за
+        различия сообщений между вызовами (например, случайный элемент в
+        тексте) — второй прогон doctor завёл бы второй открытый алерт
+        вместо дедупа по одному и тому же `(kind, source, message)`."""
+        stale_sha = self.git("rev-parse", "HEAD").strip()
+        self._insert_green(stale_sha)
+        for i in range(config.CANARY_MAX_MERGES_SINCE_GREEN):
+            self._merge(f"m{i}")
+
+        first = doctor.check_canary_trigger(self.conn)
+        second = doctor.check_canary_trigger(self.conn)
+
+        self.assertEqual(first.status, "warn")
+        found = [a for a in alerts.open_alerts(self.conn, "trigger")
+                if a["source"] == "canary"]
+        self.assertEqual(len(found), 1,
+                         "повторный прогон doctor не должен дублировать алерт")
+
+    def test_growing_age_between_calls_still_dedupes_the_alert(self):
+        """Регрессия R1-F2 (REVIEW.md итерации 1): текущее число мержей
+        когда-то шло прямо в текст алерта,
+        участвующий в дедупе (`store.open_alert_exists` сравнивает
+        `message` строго) — каждый следующий мерж main после срабатывания
+        порога менял текст и заводил НОВЫЙ алерт вместо одного открытого.
+        Ловит мутацию: `age`/любое меняющееся число возвращается в текст,
+        передаваемый в `alerts.raise_alert` — второй вызов (после ЕЩЁ
+        одного мержа, age вырос) завёл бы второй открытый алерт."""
+        stale_sha = self.git("rev-parse", "HEAD").strip()
+        self._insert_green(stale_sha)
+        for i in range(config.CANARY_MAX_MERGES_SINCE_GREEN):
+            self._merge(f"m{i}")
+
+        first = doctor.check_canary_trigger(self.conn)
+        self._merge("extra-after-threshold")
+        second = doctor.check_canary_trigger(self.conn)
+
+        self.assertEqual(first.status, "warn")
+        self.assertEqual(second.status, "warn")
+        found = [a for a in alerts.open_alerts(self.conn, "trigger")
+                if a["source"] == "canary"]
+        self.assertEqual(len(found), 1,
+                         "рост возраста между прогонами doctor не должен "
+                         "заводить второй алерт")
+
+    def test_below_threshold_is_ok_and_raises_no_alert(self):
+        """Ловит мутацию: сравнение `age >= порог` заменено на `age >
+        порог` (пропущенный пограничный случай) — прогон РОВНО на пороге
+        минус один мерж (последний перед срабатыванием) ошибочно завёл
+        бы алерт при возрасте, который ещё не достиг порога."""
+        stale_sha = self.git("rev-parse", "HEAD").strip()
+        self._insert_green(stale_sha)
+        for i in range(config.CANARY_MAX_MERGES_SINCE_GREEN - 1):
+            self._merge(f"m{i}")
+
+        check = doctor.check_canary_trigger(self.conn)
+
+        self.assertEqual(check.status, "ok")
+        found = [a for a in alerts.open_alerts(self.conn, "trigger")
+                if a["source"] == "canary"]
+        self.assertEqual(found, [])
 
 
 class ProgramThresholdAlertTest(TmpRootTest):
@@ -1995,6 +2111,162 @@ class LiveSmokeTest(TmpRootTest):
         self.assertTrue(callable(doctor.cmd_doctor))
 
 
+class MapGrowthCheckTest(TmpRootTest):
+    """01M1RFVWV6WWTXRC5F40K61632, требование 3 — компактный юнит поверх
+    приёмочной планки задачи (`tasks/01M1RFVWV6WWTXRC5F40K61632/
+    acceptance_tests/test_doctor_map_growth.py`, покрывающей AC-8..AC-16
+    полно): здесь — по одному представителю на сигнал плюс инварианты,
+    прямо названные требованием 5 SPEC (независимость рядов target,
+    константы из config, не литералы)."""
+
+    def setUp(self):
+        super().setUp()
+        store.create_schema(store.db())
+        self.conn = store.db()
+        self._seq = 0
+
+    def make_task(self, target: str = "artel") -> str:
+        self._seq += 1
+        task_id = f"01M1DOCTORMAPGROWTH{self._seq:09d}"
+        store.insert_task(self.conn, task_id, "Задача", "in_dev",
+                          f"task/{task_id.lower()}", target, 25.0)
+        return task_id
+
+    def add_step(self, task_id: str, bytes_total: int) -> None:
+        detail = json.dumps({
+            "bytes_total": bytes_total, "sections_total": 1,
+            "bytes_by_dir": {"orchestrator": bytes_total, "scripts": 0,
+                            "tests": 0},
+            "top_sections": [{"name": "orchestrator/x.py",
+                             "bytes": bytes_total}],
+            "sha": "0" * 40,
+        }, ensure_ascii=False, separators=(",", ":"))
+        store.journal(self.conn, task_id, "orchestrator",
+                      doctor.MAP_SIZE_ACTION, detail)
+
+    def test_calibration_window_is_silent(self):
+        """Ловит мутацию: проверка заводит алерт или молчит с неверным
+        счётчиком уже на первой записи ряда, до заполнения окна
+        калибровки (AC-9) — статус должен остаться `ok` с текстом
+        «1/K измерений», без записи в `alerts`."""
+        task = self.make_task()
+        self.add_step(task, 100_000)
+
+        checks = {c.name: c for c in doctor.check_map_growth(self.conn)}
+
+        check = checks["map-growth:artel"]
+        self.assertEqual(check.status, "ok")
+        self.assertIn(f"1/{config.MAP_GROWTH_CALIBRATION_MERGES}",
+                      check.detail)
+        self.assertEqual(alerts.open_alerts(self.conn, "trigger"), [])
+
+    def test_exact_calibration_length_is_still_silent(self):
+        """R1-F2: ровно на k-й записи (окно калибровки только что
+        заполнилось) проверка не должна оценивать эту же запись против
+        базы, посчитанной с её собственным участием — иначе сама
+        завершающая калибровку запись могла бы дать самоссылочный алерт.
+        Ловит мутацию: условие `len(series) < k` вместо `<= k` — k-я
+        запись (здесь — резкий выброс) оценивается против медианы окна,
+        включающего её саму, и молчание AC-9 нарушается на один ход
+        раньше срока."""
+        task = self.make_task()
+        k = config.MAP_GROWTH_CALIBRATION_MERGES
+        base = 1_000_000
+        for _ in range(k - 1):
+            self.add_step(task, base)
+        self.add_step(task, base * 10)
+
+        checks = {c.name: c for c in doctor.check_map_growth(self.conn)}
+
+        check = checks["map-growth:artel"]
+        self.assertEqual(check.status, "ok")
+        self.assertIn(f"{k}/{k}", check.detail)
+        self.assertEqual(alerts.open_alerts(self.conn, "trigger"), [])
+
+    def test_creep_beyond_ratio_raises_a_trigger(self):
+        """Ловит мутацию: ползучий рост (последняя запись выше медианы
+        зафиксированного окна калибровки более чем на `MAP_GROWTH_RATIO`)
+        не сравнивается с медианой окна вовсе или сравнивается с неверной
+        величиной (например, с предыдущей записью вместо базы) — алерт
+        `map.growth` не заводится либо заводится не единожды."""
+        task = self.make_task()
+        k = config.MAP_GROWTH_CALIBRATION_MERGES
+        base = 1_000_000
+        for _ in range(k):
+            self.add_step(task, base)
+        self.add_step(task, int(base * (1 + config.MAP_GROWTH_RATIO) * 1.5))
+
+        checks = {c.name: c for c in doctor.check_map_growth(self.conn)}
+
+        self.assertEqual(checks["map-growth:artel"].status, "warn")
+        triggers = [a for a in alerts.open_alerts(self.conn, "trigger")
+                   if a["source"] == "map.growth"]
+        self.assertEqual(len(triggers), 1)
+
+    def test_jump_between_adjacent_records_raises_a_trigger(self):
+        """Ловит мутацию: скачок между двумя соседними записями
+        (`MAP_JUMP_RATIO` от предпоследней) сравнивается с медианой окна
+        калибровки вместо предпоследней записи — независимый от ползучего
+        роста сигнал перестал бы срабатывать на приросте ниже
+        `MAP_GROWTH_RATIO`, но выше `MAP_JUMP_RATIO`."""
+        task = self.make_task()
+        k = config.MAP_GROWTH_CALIBRATION_MERGES
+        base = 1_000_000
+        for _ in range(k):
+            self.add_step(task, base)
+        self.add_step(task, int(base * (1 + config.MAP_JUMP_RATIO * 1.5)))
+
+        doctor.check_map_growth(self.conn)
+
+        triggers = [a for a in alerts.open_alerts(self.conn, "trigger")
+                   if a["source"] == "map.growth"]
+        self.assertEqual(len(triggers), 1)
+
+    def test_repeated_run_does_not_duplicate_the_alert(self):
+        """Ловит мутацию: повторный прогон `check_map_growth` без нового
+        измерения в ряду заводит вторую копию алерта вместо того, чтобы
+        положиться на встроенный дедуп `alerts.raise_alert` (AC-14)."""
+        task = self.make_task()
+        k = config.MAP_GROWTH_CALIBRATION_MERGES
+        base = 1_000_000
+        for _ in range(k):
+            self.add_step(task, base)
+        self.add_step(task, int(base * (1 + config.MAP_JUMP_RATIO * 1.5)))
+
+        doctor.check_map_growth(self.conn)
+        doctor.check_map_growth(self.conn)
+
+        triggers = [a for a in alerts.open_alerts(self.conn, "trigger")
+                   if a["source"] == "map.growth"]
+        self.assertEqual(len(triggers), 1)
+
+    def test_two_targets_series_are_independent(self):
+        """Ловит мутацию: ряд одного target читается/пересчитывается с
+        учётом записей другого target (например, запрос без `WHERE
+        target=?`) — срабатывание на `artel` не должно окрашивать
+        спокойный ряд `sled` (инвариант 22, AC-16)."""
+        k = config.MAP_GROWTH_CALIBRATION_MERGES
+        base = 1_000_000
+        task_a = self.make_task("artel")
+        task_b = self.make_task("sled")
+        for _ in range(k):
+            self.add_step(task_a, base)
+            self.add_step(task_b, base)
+        self.add_step(task_a, int(base * (1 + config.MAP_GROWTH_RATIO) * 1.5))
+        self.add_step(task_b, base)
+
+        checks = {c.name: c for c in doctor.check_map_growth(self.conn)}
+
+        self.assertEqual(checks["map-growth:artel"].status, "warn")
+        self.assertEqual(checks["map-growth:sled"].status, "ok")
+
+    def test_all_checks_wires_in_check_map_growth(self):
+        """Ловит мутацию: `check_map_growth` реализована, но забыта в
+        `all_checks` — doctor молчал бы о росте карты при обычном
+        прогоне, несмотря на наличие самой проверки (AC-8)."""
+        self.assertIn("check_map_growth", inspect.getsource(doctor.all_checks))
+
+
 class _RoleHomeReferenceTmpRootTest(sandbox_module.TmpRootTest):
     """Сужение `TmpRootTest`: только `ROLE_HOME`/`ROLE_CONFIG_DIR` во
     временном каталоге — `ROOT` остаётся настоящим деревом репозитория,
@@ -2043,6 +2315,50 @@ class RoleHomeReferenceExtraFilesTest(_RoleHomeReferenceTmpRootTest):
         self.assertNotEqual(check.status, "warn",
                             f"лишнее поддерево не должно давать WARN: "
                             f"{check.detail}")
+
+
+class RoleHomeReferenceHooksDirTest(_RoleHomeReferenceTmpRootTest):
+    """Регресс SPEC 01M1SG9WPVN8P3S4X7975N9T69, AC-5: каталог `hooks/`
+    референса (восстановленный `hooks/bash_guard.py`) обязан быть частью
+    сверки `check_role_home_reference`, как `CLAUDE.md`/`settings.json`."""
+
+    def test_hooks_bash_guard_missing_is_a_warn(self):
+        (config.ROLE_CONFIG_DIR / "hooks" / "bash_guard.py").unlink()
+
+        check = doctor.check_role_home_reference()
+
+        self.assertEqual(check.status, "warn")
+        self.assertIn("hooks/bash_guard.py", check.detail)
+
+    def test_hooks_bash_guard_diverging_is_a_warn(self):
+        hook = config.ROLE_CONFIG_DIR / "hooks" / "bash_guard.py"
+        hook.write_text(hook.read_text(encoding="utf-8") + "\n# правка\n",
+                        encoding="utf-8")
+
+        check = doctor.check_role_home_reference()
+
+        self.assertEqual(check.status, "warn")
+        self.assertIn("hooks/bash_guard.py", check.detail)
+
+
+class RoleHomeReferenceSettingsAutoMemoryTest(unittest.TestCase):
+    """SPEC 01M1SG9YKBFG2G5YQDVBR6BVC8, AC-2: референсный settings.json
+    отключает автопамять CLI ролям курируемого слоя."""
+
+    def test_settings_json_disables_auto_memory(self):
+        """Ловит мутацию: ключ `autoMemoryEnabled` в референсном
+        settings.json отсутствует, равен `true`, либо записан строкой
+        `"false"` вместо булева `false`."""
+        settings_path = (config.ROOT / "docs" / "reference" / "role-home"
+                          / "claude" / "settings.json")
+        data = json.loads(settings_path.read_text(encoding="utf-8"))
+
+        self.assertIn("autoMemoryEnabled", data,
+                      f"{settings_path}: нет ключа autoMemoryEnabled")
+        self.assertIs(data["autoMemoryEnabled"], False,
+                       f"{settings_path}: autoMemoryEnabled должен быть "
+                       f"булевым false, получено "
+                       f"{data['autoMemoryEnabled']!r}")
 
 
 if __name__ == "__main__":

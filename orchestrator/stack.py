@@ -20,6 +20,15 @@ from pathlib import Path
 
 from . import config
 
+# Расположение копии кода, которой ЭТОТ модуль реально исполняется
+# (ANSWER-7, 01M1TKP6AAY4W8GDGZNA9R0JZT) — вычислено один раз при
+# импорте, отдельной именованной константой, а не инлайн в
+# `_main_copy_root()`: тесты подменяют её тем же приёмом, что и
+# `config.ROOT`/`config.VENV_DIR` (`mock.patch.object(stack,
+# "_MODULE_ROOT", ...)`), не трогая при этом реальное значение
+# `__file__` модуля.
+_MODULE_ROOT = Path(__file__).resolve().parent.parent
+
 # `X | None` в аннотациях кода пульта (например,
 # orchestrator/doctor.py::cli_version) требует Python 3.10+ без
 # `from __future__ import annotations` — 3.11 фиксирует уже принятое
@@ -49,6 +58,14 @@ THIRD_PARTY_EXCEPTIONS = (
              "переход на pytest; сам параллельный прогон в пульте — P2, "
              "вне этой задачи"),
 )
+
+# Таймаут ОТДЕЛЬНОГО теста pytest-timeout (SPEC 01M1TKP6AAY4W8GDGZNA9R0JZT,
+# требование 4) — не таймаут ВСЕГО прогона (те остаются `config.py`:
+# `ACCEPTANCE_TIMEOUT_SEC`/`FULL_SUITE_TIMEOUT_SEC`). `pyproject.toml`
+# (`[tool.pytest.ini_options] timeout`, требование 6) несёт то же число
+# литералом — TOML не умеет читать значение отсюда, синхронность двух
+# мест сверяет `tests/test_stack.py`.
+PER_TEST_TIMEOUT_SEC = 120
 
 ToolRequirement = namedtuple("ToolRequirement", "minimum command")
 
@@ -171,6 +188,81 @@ def _parse_pinned_versions(text: str) -> dict:
     return pinned
 
 
+def _main_copy_root() -> Path | None:
+    """Корень ГЛАВНОЙ копии репозитория, если копия кода, которой ЭТОТ
+    модуль реально исполняется, — git-worktree (ANSWER-6/ANSWER-7,
+    01M1TKP6AAY4W8GDGZNA9R0JZT): `git rev-parse --git-common-dir`
+    называет ОБЩИЙ `.git`-каталог (`<главная копия>/.git`) независимо от
+    того, worktree это или сама главная копия — родитель этого каталога
+    и есть искомый корень. Для самой главной копии совпадает с корнем
+    кода (вырожденный, но безопасный случай — вызывающий код всё равно
+    проверяет venv там же, где уже проверил его через `config.VENV_DIR`).
+
+    Отправная точка — `_MODULE_ROOT` (расположение самого модуля), НЕ
+    `config.ROOT` (ANSWER-7): `tests/sandbox.py::RealGitSandbox`
+    подменяет `config.ROOT` на временный git-репозиторий, никак не
+    связанный с настоящей копией пульта — `git rev-parse` из НЕГО не
+    находит venv главной копии вообще (временный репозиторий её не
+    несёт), хотя исполняемый код физически лежит в настоящей копии.
+    `_MODULE_ROOT` не подменяется песочницами и указывает на копию
+    кода, которая реально работает — ровно ту, чей venv нужен.
+
+    `None` — git не ответил или ответ пуст: fail-closed, вызывающий код
+    падает дальше на `sys.executable`, не гадает путь по несуществующему
+    ответу."""
+    try:
+        res = subprocess.run(
+            ["git", "rev-parse", "--git-common-dir"], cwd=_MODULE_ROOT,
+            capture_output=True, text=True, timeout=10)
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if res.returncode != 0:
+        return None
+    text = res.stdout.strip()
+    if not text:
+        return None
+    git_dir = Path(text)
+    if not git_dir.is_absolute():
+        git_dir = (_MODULE_ROOT / git_dir).resolve()
+    return git_dir.parent
+
+
+def pytest_python_executable() -> str:
+    """Интерпретатор, которым пульт запускает pytest
+    (`orchestrator/acceptance.py::run()`/`run_full_suite()`, требование 8/
+    AC-12) — голый `python3` резолвился бы по PATH ВЫЗЫВАЮЩЕГО процесса
+    (гейты/`amend-tests` пульт зовёт из собственного окружения, не из
+    `runner.role_env` — тот PATH только у роли), где сторонние пакеты
+    пульта (`pytest-timeout` и т.п., `THIRD_PARTY_EXCEPTIONS` выше) могут
+    отсутствовать (ANSWER-4, диагноз AC-7).
+
+    Порядок поиска (ANSWER-6: планку пульт гоняет против worktree задачи,
+    `acceptance.run(tdir, code_root=<worktree>)`, где `.artel/venv` не
+    существует — этому venv соответствует только ГЛАВНАЯ копия, из
+    которой worktree создан):
+
+    1. `config.VENV_DIR/bin/python3` — venv рядом с `config.ROOT`, как
+       у главной копии (прежнее поведение).
+    2. иначе venv главной копии, найденный через `_main_copy_root()`.
+    3. иначе `sys.executable` (интерпретатор самого процесса пульта) с
+       предупреждением в stderr — venv не найден нигде, тот же принцип,
+       что и WARN `_venv_exists_check` ниже, но для точки, где отсутствие
+       venv молча меняет интерпретатор, а не просто печатает диагностику.
+    """
+    venv_python = Path(config.VENV_DIR) / "bin" / "python3"
+    if venv_python.is_file():
+        return str(venv_python)
+    main_root = _main_copy_root()
+    if main_root is not None:
+        main_venv_python = main_root / ".artel" / "venv" / "bin" / "python3"
+        if main_venv_python.is_file():
+            return str(main_venv_python)
+    print(f"[stack] venv не найден ни в {config.VENV_DIR}, ни в главной "
+         f"копии репозитория — тесты пульта пойдут интерпретатором "
+         f"{sys.executable}", file=sys.stderr)
+    return sys.executable
+
+
 def _venv_exists_check() -> StackCheck:
     """Требование 2/AC-8: `.artel/venv` отсутствует — WARN, называющий
     команду создания (`venv-sync`), а не молчаливая деградация."""
@@ -186,7 +278,14 @@ def _venv_packages_check() -> StackCheck:
     закреплённых версий (`pip freeze` внутри venv против
     `config.REQUIREMENTS_LOCK`) — WARN с именами РАСХОДЯЩИХСЯ пакетов, не
     общей фразой. Зовётся, только когда `_venv_exists_check` уже нашла
-    venv на диске (иначе сверять нечего)."""
+    venv на диске (иначе сверять нечего).
+
+    `pytest` среди расходящихся пакетов (отсутствует вовсе или версия не
+    та) — требование 8 (SPEC 01M1TKP6AAY4W8GDGZNA9R0JZT, AC-12) требует
+    явного упоминания ЕГО доступности ролям/пульту отдельной фразой, не
+    растворённого в общем перечне имён через запятую: раннер пульта сам
+    на pytest (эта же задача) — его отсутствие в venv роли не «один из
+    пакетов», а прямая невозможность прогнать приёмку/полный набор."""
     try:
         pinned = _parse_pinned_versions(
             Path(config.REQUIREMENTS_LOCK).read_text(encoding="utf-8"))
@@ -207,12 +306,17 @@ def _venv_packages_check() -> StackCheck:
     mismatched = sorted(name for name, version in pinned.items()
                         if installed.get(name) != version)
     if mismatched:
-        return StackCheck(
-            "venv-packages", "warn",
-            f"версии расходятся с файлом закреплённых версий: "
-            f"{', '.join(mismatched)}")
-    return StackCheck("venv-packages", "ok",
-                      "venv согласован с файлом закреплённых версий")
+        detail = (f"версии расходятся с файлом закреплённых версий: "
+                  f"{', '.join(mismatched)}")
+        if "pytest" in mismatched:
+            detail += ("; pytest недоступен ролям/пульту требуемой версии "
+                      "в этом venv — пересобери venv-sync")
+        detail += f"; тесты пульта запускает {pytest_python_executable()}"
+        return StackCheck("venv-packages", "warn", detail)
+    return StackCheck(
+        "venv-packages", "ok",
+        f"venv согласован с файлом закреплённых версий; тесты пульта "
+        f"запускает {pytest_python_executable()}")
 
 
 def check_stack() -> list:

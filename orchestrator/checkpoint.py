@@ -7,6 +7,8 @@ import re
 import shutil
 from pathlib import Path
 
+from scripts import guard
+
 from . import config, fixation, gitcmd, store, workspace, yamlmini
 
 # Критерий допустимости файла первого уровня `acceptance_tests/` (SPEC
@@ -16,9 +18,12 @@ from . import config, fixation, gitcmd, store, workspace, yamlmini
 # см. `ignored` в `_commit_external_step_artifacts`) и прочие файлы —
 # посторонние, инцидент 05.09 (`acceptance_tests/docs/codebase-map.md` из
 # `scripts/codebase_map.py`, запущенного с cwd внутри каталога планки).
+# Вспомогательные модули планки `_*.py` (`_sandbox.py`, `_util.py`, …) —
+# легитимны: регрессия №18 (06.09) — `_util.py` тест-автора P1a был
+# вычищен как посторонний, планка стала неисполнимой. hotfix Оператора.
 _ACCEPTANCE_TESTS_DIR = "acceptance_tests/"
 _ACCEPTANCE_TESTS_ALLOWED_TOP_LEVEL = re.compile(
-    r"^(test_.*\.py|_sandbox\.py|markers\.py|__init__\.py|.+\.md|.+\.txt)$")
+    r"^(test_.*\.py|_[A-Za-z0-9_]+\.py|markers\.py|__init__\.py|.+\.md|.+\.txt)$")
 
 
 def _is_stray_acceptance_test_file(task_rel: str) -> bool:
@@ -501,6 +506,14 @@ def _commit_external_step_artifacts(conn, task_id: str, role: str,
     (требование 2, AC-2) — цикл только собирает `stray`, сам вызов
     `store.journal` вне цикла.
 
+    Посторонние файлы первого уровня `tasks/<id>/` (SPEC
+    01M1TNN4TMWAQSQ9Y1PW37J5H0, требование 2, AC-4/AC-5/AC-6) — тот же
+    приём, но критерий (`guard.is_extraneous_task_root_file`) не
+    независимая копия, а импорт из `scripts.guard` (единый источник
+    истины с `guard --all`, требование 2): инцидент 06.09, рабочие файлы
+    роли (копии карты кодовой базы) в корне `tasks/<id>/` доехали до
+    артефактной ветки и main без единой проверки.
+
     `timeout=True` (SPEC 01M1NBWTSXEJB24PXR417YF1VA, AC-4/AC-5) —
     `commit_timeout_checkpoint` зовёт этой веткой: тот же перенос, что и
     при штатном завершении шага, но сообщение коммита артефактной ветки
@@ -512,6 +525,11 @@ def _commit_external_step_artifacts(conn, task_id: str, role: str,
     как «последний коммит пути — автокоммит этой же роли», иначе
     чередование обычных шагов и обрывов по таймауту той же роли ломало
     бы удаление уже на второй итерации.
+
+    Push артефактной ветки в origin (`artifact_branch.push`, ниже) теперь
+    классифицирует причину отказа и журналирует и успех, и отказ (SPEC
+    01M1TQ0X14Y5B3C87WC0Q31PK2, требования 1-2) — раньше отказ push
+    молча пропадал (`bool` результат никем не читался).
     """
     from . import alerts, artifact_branch
     if target == config.DEFAULT_TARGET:
@@ -567,6 +585,22 @@ def _commit_external_step_artifacts(conn, task_id: str, role: str,
             conn, task_id, "orchestrator",
             "посторонние файлы в каталоге планки",
             f"в каталоге планки посторонние файлы: {', '.join(stray)}")
+
+    # Посторонние файлы первого уровня tasks/<id>/ (SPEC
+    # 01M1TNN4TMWAQSQ9Y1PW37J5H0, требование 2, AC-4/AC-5/AC-6) —
+    # критерий допустимости импортирован из scripts.guard (один источник
+    # истины с guard --all, не независимая копия): исключаются из
+    # переноса, ОДНА запись журнала на весь список отброшенных путей.
+    task_root_stray = sorted(
+        rel[len(task_prefix):] for rel in files
+        if guard.is_extraneous_task_root_file(rel[len(task_prefix):]))
+    if task_root_stray:
+        files = {rel: content for rel, content in files.items()
+                 if rel[len(task_prefix):] not in task_root_stray}
+        store.journal(
+            conn, task_id, "orchestrator",
+            "посторонние файлы в каталоге задачи",
+            f"в каталоге задачи посторонние файлы: {', '.join(task_root_stray)}")
 
     t = store.get_task(conn, task_id)
     baseline_sha = t["materialized_artifact_sha"] or ""
@@ -631,6 +665,45 @@ def _commit_external_step_artifacts(conn, task_id: str, role: str,
         detail += f"; удалено: {', '.join(removed)}"
     store.journal(conn, task_id, "orchestrator",
                   "автокоммит артефактов шага (артефактная ветка)", detail)
+    store.record_fixation(conn, task_id)
+    return detail
+
+
+def commit_pull_checkpoint(conn, task_id: str, wt: Path) -> str:
+    """WIP-чекпоинт worktree задачи перед `git merge` в `fsm._pull_main_or_
+    escalate` (SPEC 01M1RA0R9AH9RBAHD4A2Z5SEWQ, требование 2, AC-2/AC-3/
+    AC-5): незакоммиченный код вне `tasks/<id>/`, оставшийся после
+    отбрасывания `docs/codebase-map.md` (вызывающий код делает это
+    отдельным `checkout --` до вызова этой функции — иначе изменённая
+    карта попала бы в этот коммит вместо того, чтобы быть отброшенной),
+    коммитится тем же приёмом, что и остальные три WIP-чекпоинта
+    (`_commit_worktree_change`).
+
+    Мандат — безусловно `developer` (SPEC требование 2: «мандат кода в
+    этом worktree всегда у developer — единственной роли, чей WIP
+    попадает в кодовую ветку»): в отличие от `commit_timeout_checkpoint`/
+    `commit_abnormal_checkpoint`/`commit_pause_now_checkpoint`, здесь нет
+    параметра `role` и ветки отката для прочих ролей — подтяжка main
+    (все три точки вызова: `in_dev -> review`, `acceptance -> merge_gate`,
+    `merge_gate -> done`) идёт над worktree кодовой ветки задачи, куда
+    только код `developer` и попадает.
+
+    Не проверяет `store.task_target`/не разрешает `wt` сама — вызывающий
+    код (`fsm._pull_main_or_escalate`) уже получил `wt` от `workspace.
+    ensure` для КОНКРЕТНОГО target'а задачи, в отличие от остальных трёх
+    чекпоинтов, которые сами решают, чей worktree им коммитить (только
+    догфуд, PLAN «Риски» тех задач). Пустая строка — нечего коммитить или
+    git не ответил (та же тихая деградация, что и у остальных
+    WIP-чекпоинтов).
+    """
+    message = f"{task_id}: WIP-чекпоинт перед подтяжкой main"
+    committed, sha = _commit_worktree_change(wt, message,
+                                             exclude=f"tasks/{task_id}")
+    if not committed:
+        return ""
+    detail = f"{message} (sha {sha})" if sha else message
+    store.journal(conn, task_id, "orchestrator",
+                  "WIP-чекпоинт перед подтяжкой main", detail)
     store.record_fixation(conn, task_id)
     return detail
 

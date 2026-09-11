@@ -3,8 +3,9 @@
 Приёмочные тесты (tasks/01M1HNNHDMP2C1AJTH5QF1BTN2/acceptance_tests/)
 кроют AC-1..AC-12 сквозным путём через настоящий git; здесь — чистые
 хелперы в изоляции: разбор `git status --porcelain` (модификация,
-untracked, переименование), извлечение итоговой строки прогона
-(`Ran N`/`OK`/`FAILED`), окно из НЕСКОЛЬКИХ залоченных задач program-wide
+untracked, переименование), извлечение итоговой строки прогона (сводка
+pytest — `N passed`/`M failed, N passed`), окно из НЕСКОЛЬКИХ залоченных
+задач program-wide
 (сценарий, которого приёмочные тесты сознательно не покрывают — там
 окно всегда из одной задачи, см. докстринг
 `acceptance_tests/test_ac9_threshold_alert.py`) и счёт событий строго по
@@ -32,7 +33,7 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from orchestrator import (amend, artel, artifact_branch, catalog, config,  # noqa: E402
-                          fsm, gitcmd, store, workspace)
+                          fsm, github_adapter, gitcmd, store, workspace)
 from tests.sandbox import RealGitSandbox, TmpRootTest, capture  # noqa: E402
 from tests.sandbox import capture_new_task_id  # noqa: E402
 from tests.test_acceptance_tests_flow import (  # noqa: E402
@@ -42,33 +43,38 @@ from tests.test_acceptance_tests_flow import (  # noqa: E402
 class RunSummaryTest(unittest.TestCase):
 
     def test_extracts_ran_line_and_ok(self):
-        """Из типичного хвоста unittest-прогона извлекается только итоговая
-        строка `Ran N ... OK`, без предшествующих точек прогресса.
+        """Из типичного хвоста pytest-прогона извлекается только итоговая
+        строка сводки («N passed in Xs»), без предшествующих строк
+        session-заголовка и прогресс-точек.
 
-        Ловит мутацию: регулярка `_RUN_SUMMARY` теряет якорь на `OK`/`FAILED`
-        и вместо итоговой строки в журнал (AC-11) уходит весь хвост целиком."""
-        tail = ("..\n"
-               "----------------------------------------------------------------------\n"
-               "Ran 2 tests in 0.001s\n\nOK\n")
-        self.assertEqual(amend._run_summary(tail), "Ran 2 tests in 0.001s\n\nOK")
+        Ловит мутацию: регулярка `_RUN_SUMMARY` теряет якорь на «passed»/
+        «failed» и вместо итоговой строки в журнал (AC-11) уходит весь
+        хвост целиком."""
+        tail = ("============================= test session starts "
+               "==============================\n"
+               "collected 2 items\n\n"
+               "test_ac.py ..                                                       "
+               "[100%]\n\n"
+               "============================== 2 passed in 0.01s "
+               "===============================\n")
+        self.assertEqual(amend._run_summary(tail), "2 passed in 0.01s")
 
     def test_extracts_ran_line_and_failed_with_count(self):
-        """Итоговая строка проваленного прогона несёт число падений
-        (`FAILED (failures=1)`), но не тащит traceback конкретного теста.
+        """Итоговая строка проваленного прогона несёт число упавших и
+        прошедших тестов (`M failed, N passed in Xs`), но не тащит
+        traceback конкретного теста.
 
-        Ловит мутацию: регулярка захватывает весь блок от первого `FAIL:`
-        (не только итоговую строку) — журнал AC-11 раздувается диагностикой
-        вместо краткого итога."""
-        tail = ("F\n"
-               "======================================================================\n"
-               "FAIL: test_ac1_first_criterion\n"
-               "----------------------------------------------------------------------\n"
+        Ловит мутацию: регулярка захватывает весь блок FAILURES (не только
+        итоговую строку) — журнал AC-11 раздувается диагностикой вместо
+        краткого итога."""
+        tail = ("=================================== FAILURES "
+               "===================================\n"
+               "____________________________ test_ac1_first _____________________________\n"
                "AssertionError: намеренно красный тест без маркера\n\n"
-               "----------------------------------------------------------------------\n"
-               "Ran 1 test in 0.000s\n\nFAILED (failures=1)\n")
+               "========================= 1 failed, 0 passed in 0.00s "
+               "=========================\n")
         summary = amend._run_summary(tail)
-        self.assertIn("Ran 1 test in 0.000s", summary)
-        self.assertIn("FAILED (failures=1)", summary)
+        self.assertIn("1 failed, 0 passed in 0.00s", summary)
         self.assertNotIn("AssertionError", summary,
                          "итоговая строка не обязана тащить весь traceback")
 
@@ -493,12 +499,19 @@ class AmendThenReviewGateTest(RealGitSandbox):
                       "исправлена опечатка (регресс ANSWER-3, вопрос 2)")
         self.assertEqual(self.state(), "in_dev", f"amend-tests отказал: {out}")
 
-        capture(fsm.cmd_advance, self.TASK)
+        # ADR-0015: сверка головы на origin переехала на `in_dev ->
+        # verifying` — эта песочница не заводит настоящий push к origin,
+        # предмет теста — лок acceptance_tests/ после amend-tests, не
+        # origin-push (у него свои тесты, `tests/test_github_adapter.py`).
+        with mock.patch.object(github_adapter, "ensure_head_in_origin",
+                              return_value=(True, "")):
+            capture(fsm.cmd_advance, self.TASK)
 
         self.assertEqual(
-            self.state(), "review",
-            "гейт in_dev -> review обязан пройти сразу после успешной "
-            "правки планки")
+            self.state(), "verifying",
+            "гейт in_dev -> verifying обязан пройти сразу после успешной "
+            "правки планки (ADR-0015 — цель перехода in_dev теперь "
+            "verifying, не review)")
 
 
 class ReasonArgTest(unittest.TestCase):

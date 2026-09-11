@@ -5,10 +5,18 @@
 шагами не думает никто. Все гейты Фазы 0 — ручные (approve/reject из CLI).
 
 Состояния:
-  spec_writing -> spec_gate -> tests_writing -> in_dev -> review -> acceptance -> merge_gate -> done
-                     |                             ^________|  (changes_requested, <=3)
-                     |                             ^___________ (acceptance reject, <=1)
+  spec_writing -> spec_gate -> tests_writing -> in_dev -> verifying -> review -> acceptance -> merge_gate -> done
+                                                   ^______________________|  (changes_requested, <=3)
+                                                   ^__________________________________|  (acceptance reject, <=1)
   из любого: escalated (вопрос Оператору), killed.
+
+`verifying` (ADR-0015): CI подтянутой головы кодовой ветки проверяется ДО
+ревьювера, не после — рубежи перехода `in_dev -> review` (подтяжка main,
+прогон приёмочной планки, гейт зон/ёмкости, лок планки, гейт «замечания
+не отработаны», сверка головы на origin) стоят теперь на `in_dev ->
+verifying`; из `verifying` в `review` ведёт только зелёный CI. Возврат
+`changes_requested` — снова в `in_dev`, повторный вход в `review` — опять
+через `verifying`.
 
 `tests_writing` (A4, tasks/T023) — приёмочные тесты до кода, роль
 test_author: `spec_gate` заводит её при approve, если SPEC не помечен
@@ -17,7 +25,7 @@ approve идёт прямо в `in_dev`, как до T023. Выход из `test
 каждый AC-n получил тест либо пометку manual/skip/escalate
 (`tasks/<id>/acceptance_tests/`); `escalate` уводит задачу в `escalated`
 немедленно. После выхода каталог `acceptance_tests/` залочен фиксацией
-(T021): правка после лока — отказ перехода `in_dev -> review`.
+(T021): правка после лока — отказ перехода `in_dev -> verifying`.
 
 `approve` из escalated возвращает задачу в in_dev, а если эскалировал упавший
 агент — в тот шаг, на котором он упал (см. escalated_from): чинить надо шаг,
@@ -30,11 +38,16 @@ approve идёт прямо в `in_dev`, как до T023. Выход из `test
 
 Потолок по умолчанию один на все задачи, но класс задачи виден аналитику
 при постановке: `budget_usd` в frontmatter SPEC применяется к задаче один
-раз, на переходе spec_writing -> spec_gate. Понижать потолок так можно,
-поднимать — нет: значение выше DEFAULT_BUDGET_USD отвергается с
-предупреждением, потому что поднять потолок вправе только Оператор
-командой `budget` (инвариант 10). Ручное поднятие сильнее значения из
-SPEC; кто задал потолок, помнит колонка budget_source.
+раз, на переходе spec_writing -> spec_gate, потолком в обе стороны — и
+выше, и ниже дефолта — в пределах потолка ролей (`ROLE_BUDGET_CAP`,
+ADR-0014). Значение, не разбираемое как число (мусор в поле), —
+предупреждение, переход продолжается с прежним потолком. Значение выше
+потолка ролей — другой случай: guard отказывает сам переход целиком
+(`spec_writing -> spec_gate`), задача остаётся в `spec_writing`, пока
+аналитик не поправит число либо не разделит задачу; поднять потолок
+выше `ROLE_BUDGET_CAP` вправе только Оператор командой `budget`
+(инвариант 10). Ручное поднятие сильнее значения из SPEC; кто задал
+потолок, помнит колонка budget_source.
 
 `kill` не только переводит задачу в `killed`, но и убирает её хвосты в
 рабочем дереве: каталог `tasks/<id>/`, не попавший в main, и локальную
@@ -96,7 +109,9 @@ workspace, tasks, knowledge, logs). БД одна на все проекты: с
   target-init <target> | doctor [--restore] [--fix] | alert-ack <id> "<решение>" |
   version | canary --k <N> | canary pool-seal | prune [--execute] |
   amend-tests <id> --reason "<основание>" | pin-update <sha main артели> |
-  zone-release <id> | zone-reorder <id1> <id2> ... | venv-sync
+  pin --to [<sha>] | zone-release <id> | zone-reorder <id1> <id2> ... |
+  venv-sync | note (копилка|бэклог|очередь) --text "<строка>" |
+  note --append <ключ> --text "<текст>" | note --flush
 
 `pin-update <sha>` (A7, Stage1) — обновляет пин запущенной версии:
 продвигает рабочее дерево и HEAD `config.ROOT` до `<sha>` main артели
@@ -104,6 +119,18 @@ workspace, tasks, knowledge, logs). БД одна на все проекты: с
 идентичность и оба sha. `merge_gate -> done` (Stage0) НЕ двигает
 `config.ROOT` сам — это единственный способ его продвинуть; `doctor`
 только сообщает о расхождении (`check_root_pin`), не обновляет пин сам.
+С tasks/01M1NGFK3N6MRMYGCC09H975V3 отказывает без зелёного прогона
+канарейки не старше `config.CANARY_MAX_MERGES_SINCE_GREEN` мержей main
+на целевом sha (ADR-0013) — `doctor` поднимает триггер по тому же
+порогу заранее.
+
+`pin --to [<sha>]` (tasks/01M1NGFK3N6MRMYGCC09H975V3, ADR-0013 ч.3) —
+откат пина: с явным `<sha>` (обязан быть предком текущего HEAD) —
+`git reset --hard` на него; без аргумента — на sha последнего зелёного
+прогона канарейки по журналу. Main пульта на origin не трогается ни в
+одном случае (ни fetch, ни push) — откат касается только `config.ROOT`
+этой машины. Каждый вызов журналируется отдельной записью, успешной или
+отказом.
 
 `pause <id>` (SPEC T070) — штатная приостановка: помечает задачу в БД,
 не заводя нового состояния FSM; `run`/`auto` перед стартом агентного
@@ -277,6 +304,9 @@ worktree задачи, команда коммитит правку, сдвиг�
   venv      `.artel/venv` пульта: создание/синхронизация с
             `requirements.lock`, идемпотентно (SPEC
             01M1REVEZ1HESMJ7AFD5A9MEJ8)
+  notes     команда `note`: строка в копилку/бэклог/очередь изолированным
+            коммитом от origin/main, повтор non-fast-forward, удержание
+            коммита при сетевом отказе (tasks/01M1VBEHTDYPK3E4RRFHWYYYW3)
 """
 import sys
 from pathlib import Path
@@ -289,9 +319,9 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from orchestrator import (amend, answer, auto, budget, canary, catalog,  # noqa: E402
-                          cleanup, config, doctor, dry_run, fsm, pause, pin,
-                          projects, prune, release, report, runner, venv,
-                          version, workspace, zone_lock)
+                          cleanup, config, doctor, dry_run, fsm, notes, pause,
+                          pin, projects, prune, release, report, runner,
+                          venv, version, workspace, zone_lock)
 
 
 def _refuse_if_worktree() -> None:
@@ -410,6 +440,16 @@ def _reason_arg(rest: list) -> str | None:
     return rest[idx + 1]
 
 
+def _cmd_pin(rest: list) -> None:
+    """`pin --to <sha>` / `pin --to` (tasks/01M1NGFK3N6MRMYGCC09H975V3,
+    ANSWER-1 п.5) — откат пина; отдельная команда от `pin-update`, не
+    его подформа (`--to` — единственный поддерживаемый режим сегодня)."""
+    if not rest or rest[0] != "--to":
+        sys.exit('pin: используется как `pin --to <sha>` либо `pin --to` '
+                 '(откат на последний зелёный прогон канарейки).')
+    pin.cmd_pin_to(rest[1] if len(rest) > 1 else None)
+
+
 def _cmd_pause(rest: list) -> None:
     """`pause <id>` (T070) либо `pause --now <id>` (T074) — флаг перед id,
     тем же местом разбора, что уже держит команду `pause` в таблице
@@ -462,9 +502,11 @@ def main() -> None:
         "acceptance-dry-run": lambda: dry_run.cmd_acceptance_dry_run(rest[0]),
         "amend-tests": lambda: amend.cmd_amend_tests(rest[0], _reason_arg(rest)),
         "pin-update": lambda: pin.cmd_pin_update(rest[0]),
+        "pin": lambda: _cmd_pin(rest),
         "zone-release": lambda: zone_lock.cmd_zone_release(rest[0]),
         "zone-reorder": lambda: zone_lock.cmd_zone_reorder(rest),
         "venv-sync": lambda: venv.cmd_venv_sync(),
+        "note": lambda: notes.cmd_note(rest),
     }
     fn = table.get(cmd)
     if fn is None:

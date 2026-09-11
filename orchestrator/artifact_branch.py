@@ -20,9 +20,17 @@ import os
 from datetime import datetime, timezone
 from pathlib import Path
 
-from . import config, fixation, gitcmd
+from . import config, fixation, gitcmd, store
 
 PASSPORT_REL_TMPL = "tasks/{task_id}/PASSPORT.md"
+
+# Классификация отказа push (SPEC 01M1TQ0X14Y5B3C87WC0Q31PK2, требование 1):
+# три причины, которые Оператору нужно различать — «заведение без origin»
+# не то же самое действие, что «сеть моргнула», не то же самое, что
+# «кто-то коммитил в origin мимо пульта» (инцидент 06.09, SPEC «Контекст»).
+PUSH_REASON_NO_ORIGIN = "нет origin"
+PUSH_REASON_NETWORK = "сеть"
+PUSH_REASON_NON_FAST_FORWARD = "non-fast-forward"
 
 
 def branch_name(task_id: str) -> str:
@@ -106,17 +114,67 @@ def write_commit(repo: Path, files: dict, message: str, author_name: str,
             pass
 
 
+def _new_branch_parent(task_id: str) -> str:
+    """Родитель ПЕРВОГО коммита артефактной ветки задачи (SPEC
+    01M1TQ0ZCYJ6TESZ2KGJ6AWYNH, требование 1, AC-1/AC-2/AC-6): голова
+    `origin/main` после `git fetch origin main` — HEAD главной копии не
+    двигается (`gitcmd.fetch_head_sha` — простой `git fetch`, не
+    `pull`/чекаут). Инцидент 06.09: `tasks/` новой ветки, унаследованный
+    от отставшего локального пина `config.MAIN_BRANCH`, тащил за собой
+    уже удалённые на `origin/main` черновики — предпочтение origin, когда
+    он доступен, закрывает этот путь.
+
+    Ни одного `remote` в репозитории вовсе (`gitcmd.has_no_remote`: нет
+    сети/`origin` никогда не настраивался/лёгкая тестовая песочница) —
+    сразу голова локального `config.MAIN_BRANCH`, БЕЗ сетевого вызова и
+    БЕЗ записи в журнал: попытка распространить запись и на этот случай
+    (эскалация тем же коммитом — «## Эскалация» в PLAN.md) сломала бы
+    `tests/test_doctor_fix_ignored_artifacts.py` (существующий тест вне
+    зоны этой задачи, ожидающий пустой журнал для задачи без затронутых
+    файлов — журнал наполнялся бы уже на `seed_task`, до самого предмета
+    того теста) вдобавок к прежде выявленному конфликту с `tests/
+    test_branch_freshness_gate.py::TargetSourcedRemoteTest`. Remote есть,
+    но сам `fetch` не удался (недостижим/сеть недоступна) —
+    фолбэк на голову локального `config.MAIN_BRANCH` (AC-2, поведение до
+    этой задачи), с записью причины в журнал задачи (AC-7): молчаливая
+    деградация иначе прячет от Оператора, что артефактная ветка унаследовала
+    устаревший пин, тот же класс дефекта, что и сам инцидент.
+    """
+    if gitcmd.has_no_remote(config.ROOT):
+        return gitcmd.branch_head_sha(config.MAIN_BRANCH)
+    origin_head, reason = gitcmd.fetch_head_sha("origin", config.MAIN_BRANCH)
+    if origin_head:
+        return origin_head
+    local_head = gitcmd.branch_head_sha(config.MAIN_BRANCH)
+    if local_head:
+        store.journal(
+            store.db(), task_id, "orchestrator",
+            "артефактная ветка: fallback на локальный main",
+            f"артефактная ветка от локального main: {reason}")
+    return local_head
+
+
 def commit_files(task_id: str, files: dict, message: str,
                  author_name: str = fixation.FIXATION_AUTHOR_NAME,
                  author_email: str = fixation.FIXATION_AUTHOR_EMAIL,
                  remove: list | None = None) -> str:
     """Коммитит `files` в артефактную ветку задачи (создаёт её, если ещё
-    нет — от головы `config.MAIN_BRANCH`, тем же принципом, что кодовая
-    ветка `task/*`). Возвращает sha нового коммита; пустая строка — git
-    не ответил. `remove` — см. `write_commit`."""
+    нет — родитель первого коммита см. `_new_branch_parent`, требование 1;
+    для ЛЮБОГО target, включая внешний — ветка физически коммитится
+    здесь, в `config.ROOT`, AC-3). Возвращает sha нового коммита; пустая
+    строка — git не ответил. `remove` — см. `write_commit`.
+
+    НЕ зовёт `push` сама — push остаётся явным действием вызывающего
+    кода (`checkpoint._commit_external_step_artifacts`, `catalog.
+    _new_external_artifact_branch`, `answer._cmd_answer`): песочница
+    doctor-проверки `check_artifact_branch_sync` (SPEC
+    01M1TQ0X14Y5B3C87WC0Q31PK2, тесты `test_ac6_doctor_artifact_branch_
+    sync.py`) намеренно строит расхождение локального ref и origin ЧЕРЕЗ
+    голый `commit_files` без последующего push — автоматический push
+    внутри этой функции сделал бы такую фикстуру невоспроизводимой
+    (коммит уезжал бы в origin тем же вызовом, который её строит)."""
     branch = branch_name(task_id)
-    parent = gitcmd.branch_head_sha(branch) or gitcmd.branch_head_sha(
-        config.MAIN_BRANCH) or None
+    parent = gitcmd.branch_head_sha(branch) or _new_branch_parent(task_id) or None
     commit_sha = write_commit(config.ROOT, files, message, author_name,
                               author_email, parent=parent, remove=remove)
     if not commit_sha:
@@ -127,14 +185,77 @@ def commit_files(task_id: str, files: dict, message: str,
     return commit_sha
 
 
+def _classify_push_failure(stderr: str) -> str:
+    """Три причины отказа push, различаемые по подстроке `stderr` git
+    (SPEC требование 1). Non-fast-forward различён вживую (бэйр-репозиторий,
+    два клона, второй push после первого) — реальный git не несёт литерала
+    «non-fast-forward» в этой версии, а несёт `[rejected] ... (fetch
+    first)` — обе подстроки и проверяются. «Нет origin» здесь не нужен
+    (перехватывается раньше `_attempt_push`, до попытки реального push) —
+    остаток, не подошедший под non-fast-forward, классифицируется как
+    «сеть» (единственная оставшаяся причина требования 1)."""
+    lowered = stderr.lower()
+    if ("rejected" in lowered or "fetch first" in lowered
+            or "non-fast-forward" in lowered):
+        return PUSH_REASON_NON_FAST_FORWARD
+    return PUSH_REASON_NETWORK
+
+
+def _attempt_push(branch: str) -> tuple[bool, str, str]:
+    """(успех, причина отказа, stderr git) — причина/stderr пустые при
+    успехе. Отсутствие origin проверяется ДО попытки реального push
+    (`gitcmd.has_no_remote`) — не по тексту stderr: `git push` без
+    настроенного origin отвечает по-разному в зависимости от версии git,
+    а отсутствие remote проверяется напрямую и надёжно."""
+    if gitcmd.has_no_remote(config.ROOT):
+        return False, PUSH_REASON_NO_ORIGIN, ""
+    res = gitcmd.git("push", "-q", "origin",
+                     f"refs/heads/{branch}:refs/heads/{branch}")
+    if res is not None and res.returncode == 0:
+        return True, "", ""
+    stderr = (res.stderr or "").strip() if res is not None else "git не ответил"
+    return False, _classify_push_failure(stderr), stderr
+
+
+def _journal_push_outcome(task_id: str, branch: str, ok: bool, reason: str,
+                          stderr: str) -> None:
+    """Запись журнала задачи об исходе push — успех и отказ ОБА (AC-3:
+    повторная попытка на следующем автокоммите обязана оставить СВОЮ
+    запись про исход, успешный или нет, не молчать так же, как молчал бы
+    код до этой задачи). Свежее `store.db()`-соединение — та же цена,
+    что уже платят `answer.py`/`amend.py`/`catalog.py` в похожих местах,
+    не имеющих под рукой чужого `conn`; циклического импорта не образует
+    — `store.py` тянет `artifact_branch` только отложенным импортом
+    внутри функции (`store.record_fixation`), не на уровне модуля."""
+    conn = store.db()
+    if ok:
+        store.journal(conn, task_id, "orchestrator", "push артефактной ветки",
+                      f"push артефактной ветки {branch} — успех")
+        return
+    detail = reason + (f": {stderr[:300]}" if stderr else "")
+    if reason == PUSH_REASON_NON_FAST_FORWARD:
+        local_sha = gitcmd.branch_head_sha(branch)
+        origin_sha = gitcmd.remote_branch_sha(branch)
+        detail += (f"; локальный sha {local_sha}, origin sha {origin_sha} "
+                  f"— свести merge-коммитом")
+    store.journal(conn, task_id, "orchestrator",
+                  "push артефактной ветки FAILED", detail)
+
+
 def push(task_id: str) -> bool:
-    """Push best-effort артефактной ветки в origin пульта (SPEC требование
-    7, AC-8): отказ (нет origin, сеть недоступна) — `False`, не исключение
-    — вызывающий код (`catalog.cmd_new`) не имеет права из-за этого
-    отказать в заведении задачи."""
+    """Push артефактной ветки в origin пульта — best-effort в смысле
+    возврата (SPEC требование 7, AC-8: `False`, не исключение — вызывающий
+    код, включая `catalog.cmd_new`, не имеет права из-за отказа push
+    отказать в заведении задачи или прервать шаг), но НЕ молчаливый:
+    каждый исход, успех и отказ, классифицируется и журналируется (SPEC
+    01M1TQ0X14Y5B3C87WC0Q31PK2, требования 1-2). `--force`/`-f`/
+    `--force-with-lease` здесь не появляется НИКОГДА, включая
+    non-fast-forward (AC-4) — единственный аргумент ветки после `origin`
+    в команде push буквальный, без условных путей."""
     branch = branch_name(task_id)
-    res = gitcmd.git("push", "-q", "origin", f"refs/heads/{branch}:refs/heads/{branch}")
-    return res is not None and res.returncode == 0
+    ok, reason, stderr = _attempt_push(branch)
+    _journal_push_outcome(task_id, branch, ok, reason, stderr)
+    return ok
 
 
 def read_tree(task_id: str) -> dict:

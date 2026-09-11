@@ -526,6 +526,14 @@ class CmdRunCostTest(TmpRootTest):
         _, self.TASK = capture_new_task_id(catalog.cmd_new, "Учёт стоимости шага")
         sync_spec_from_worktree(self.TASK)
         self.set_task(state="in_dev")
+        # Обязательный артефакт роли developer (SPEC 01M1RQ12JVHE3PQYDFV1XPSTQ3,
+        # требование 3) — без него на диске рабочего каталога роли успешная
+        # попытка (rc=0) честно ретраится вместо одного тихого прогона,
+        # которого ждут тесты этого класса (они проверяют учёт денег, не
+        # факт отказа без артефакта).
+        tdir = config.WORKTREES / self.TASK / "tasks" / self.TASK
+        tdir.mkdir(parents=True, exist_ok=True)
+        (tdir / "PLAN.md").write_text("маркер\n", encoding="utf-8")
 
         patcher = mock.patch.object(runner.time, "sleep", lambda _: None)
         patcher.start()
