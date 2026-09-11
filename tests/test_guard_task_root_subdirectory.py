@@ -43,6 +43,17 @@ class IsExtraneousTaskRootFilePredicateTest(unittest.TestCase):
         self.assertTrue(
             guard.is_extraneous_task_root_file("tmp/screenshot.png"))
 
+    def test_pult_passport_in_task_root_is_legal(self):
+        """Hotfix №21 (11.09): `PASSPORT.md` пишет сам пульт на каждом
+        переходе задачи внешнего target (T094 требование 11) — не
+        посторонний. Ловит мутацию: имя выпало из белого списка — мерж
+        любой задачи внешнего target отказывал бы на гейте (планка B2
+        01M1R5B33C, AC-15). Черновик с похожим именем — по-прежнему
+        посторонний."""
+        self.assertFalse(guard.is_extraneous_task_root_file("PASSPORT.md"))
+        self.assertTrue(guard.is_extraneous_task_root_file("PASSPORT_draft.md"))
+        self.assertTrue(guard.is_extraneous_task_root_file("wip/PASSPORT.md"))
+
     def test_file_inside_acceptance_tests_subdirectory_stays_legal(self):
         """Единственная легальная поддиректория первого уровня —
         `acceptance_tests/` — не задета правилом R1-F1 (по собственным

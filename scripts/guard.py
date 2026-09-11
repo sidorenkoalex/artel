@@ -575,8 +575,13 @@ def scan_extraneous_acceptance_files(tasks_root: Path) -> list[Path]:
 # итерации 1, замечание R1-F1: критерий проверял только путь ровно из
 # одного сегмента и молчал на файле внутри новой поддиректории).
 EXTRANEOUS_TASK_ROOT_FILE_REASON = "посторонний файл в каталоге задачи"
+# Hotfix №21 (11.09): PASSPORT.md — паспорт живой задачи, который пишет
+# САМ пульт на каждом переходе задачи внешнего target (T094 требование 11,
+# `store._append_passport_line`); белый список 01M1TNN4 (06.09) его не
+# знал — мерж любой задачи внешнего target отказывал бы «посторонним
+# файлом» (нашла планка B2 01M1R5B33C, AC-15).
 TASK_ROOT_ALLOWED_MD = re.compile(
-    r"^(SPEC|PLAN|REVIEW|TEST_REPORT|QUESTIONS|TZ|ANSWER-\d+)\.md$")
+    r"^(SPEC|PLAN|REVIEW|TEST_REPORT|QUESTIONS|TZ|PASSPORT|ANSWER-\d+)\.md$")
 
 
 def is_extraneous_task_root_file(rel_to_task_dir: str) -> bool:
