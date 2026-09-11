@@ -37,7 +37,7 @@ class ResolveExternalTargetTest(TmpRootTest):
             "targets:\n"
             "  sled:\n"
             "    forge: github\n"
-            "    url: https://example.invalid/sled\n"
+            "    url: http://localhost/sled\n"
             "    base: trunk\n"
             "    token_slot: sled-token\n"
             "    no_paths: []\n"
@@ -49,7 +49,7 @@ class ResolveExternalTargetTest(TmpRootTest):
         ctx = repo_context.resolve("sled")
 
         self.assertEqual(ctx.path, config.PROJECTS / "sled" / "workspace")
-        self.assertEqual(ctx.remote, "https://example.invalid/sled")
+        self.assertEqual(ctx.remote, "http://localhost/sled")
         self.assertEqual(ctx.base, "trunk")
 
     def test_unknown_target_degrades_to_none(self):
@@ -73,7 +73,7 @@ class PathOrNoneTest(unittest.TestCase):
 
     def test_external_context_is_its_path(self):
         path = config.PROJECTS / "sled" / "workspace"
-        ctx = repo_context.RepoContext(path=path, remote="https://x", base="trunk")
+        ctx = repo_context.RepoContext(path=path, remote="http://localhost/x", base="trunk")
         self.assertEqual(repo_context.path_or_none(ctx), path)
 
 
@@ -91,7 +91,7 @@ class GitHelperTest(unittest.TestCase):
 
     def test_external_context_calls_in_repo(self):
         path = config.PROJECTS / "sled" / "workspace"
-        ctx = repo_context.RepoContext(path=path, remote="https://x", base="trunk")
+        ctx = repo_context.RepoContext(path=path, remote="http://localhost/x", base="trunk")
         with mock.patch.object(gitcmd, "git") as git_mock, \
              mock.patch.object(gitcmd, "in_repo") as in_repo_mock:
             repo_context.git(ctx, "status")

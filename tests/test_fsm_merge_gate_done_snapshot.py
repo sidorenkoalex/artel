@@ -89,7 +89,7 @@ class DonePathSnapshotTest(RealGitSandbox):
             "targets:\n"
             f"  {TARGET}:\n"
             "    forge: github\n"
-            f"    url: https://example.invalid/{TARGET}\n"
+            f"    url: http://localhost/{TARGET}\n"
             f"    base: {config.MAIN_BRANCH}\n"
             f"    token_slot: {TARGET}-token\n"
             "    no_paths: []\n"
