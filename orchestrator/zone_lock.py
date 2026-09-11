@@ -67,7 +67,20 @@ ZoneSandbox.seed_task`, докстринг «Допущения интерфей
 записи не несёт; `queue_order` в этом случае деградирует к
 `tasks.updated_at`, тот же фолбэк, что приёмочные тесты AC-8/AC-9 уже
 фиксируют для этого случая буквально.
-"""
+
+Проверка конфликта и запись занятости — атомарно (SPEC
+01M28NWPS3PJHJAT4APXRY7MF7, требования 1-2): раньше `runner._cmd_run`
+проверял `blocking_conflict`, а занятость появлялась в журнале только
+глубоко внутри `runner.run_agent_once` (`"agent run started"`, после
+сборки промпта/брифа/скилов/окружения) — секунды разнесения, в которые
+два параллельных `cmd_run` успевали оба пройти проверку. `claim()`
+закрывает это окно: проверка и запись `CLAIM_ACTION` — в одной
+транзакции SQLite (`BEGIN IMMEDIATE`), тем же приёмом, что уже применяют
+`store.next_task_number`/CAS `store.set_state` к своим гонкам. `_occupies`
+считает `CLAIM_ACTION` наравне с `"agent run started"`/`RELEASE_ACTION`
+(латест-wins по id журнала — снимающий маркер `"zone claim released"`,
+`release_claim`, откатывает занятость, если `runner._cmd_run` решит не
+продолжать шаг после захвата)."""
 from datetime import datetime
 
 from . import config, store
@@ -154,6 +167,21 @@ def wait_minutes(conn, task_id: str) -> int | None:
 # используется здесь только как ЧТЕНИЕ (маркер «первый шаг уже был»), не
 # журналируется этим модулем.
 _AGENT_STARTED_ACTION = "agent run started"
+
+# Атомарный захват зоны (SPEC 01M28NWPS3PJHJAT4APXRY7MF7, требование 1,
+# AC-1) — единственное имя, которое SPEC называет буквально: журналируется
+# `claim()` актором `developer`, ДО сборки промпта и спавна агента, в той
+# же транзакции SQLite, что и проверка `blocking_conflict` — закрывает
+# гонку между двумя параллельными `cmd_run`, раньше проверявшими конфликт
+# секундами раньше фактической записи занятости (`"agent run started"`
+# журналируется глубоко внутри `run_agent_once`, после сборки промпта).
+CLAIM_ACTION = "zone claimed"
+
+# Снятие атомарного захвата (требование 2, AC-3/AC-4) — SPEC называет его
+# только буквальным текстом действия, без имени константы (приёмочные
+# тесты сверяют журнал по этой литеральной строке напрямую); имя здесь —
+# ради единственного места записи (`release_claim`), не публичный контракт.
+_CLAIM_RELEASED_ACTION = "zone claim released"
 
 
 def _paths_overlap(a: str, b: str) -> bool:
@@ -243,41 +271,53 @@ def _stay_since_id(conn, task_id: str) -> int:
     return 0
 
 
-def _visit_has_action(conn, task_id: str, since_id: int, action: str,
-                      actor: str | None = None) -> bool:
-    """Есть ли после `since_id` запись `action` — `actor` (если задан)
-    сверяется дополнительно (регрессия 01M1REVJ8AJ, требование 1): без
-    сверки любой актор того же действия (например `test_author` на
-    стадии `tests_writing`) ложно считался бы искомым событием."""
-    return any(row["id"] > since_id and row["action"] == action
-              and (actor is None or row["actor"] == actor)
-              for row in store.task_steps(conn, task_id))
-
-
 def _occupies(conn, task_id: str) -> bool:
     """`task_id` занимает свои зоны в ТЕКУЩЕМ непрерывном пребывании
-    (требования 1-2, SPEC 01M1RR1PZC926T13NB1JSZ7F8T требование 1):
-    хотя бы один `"agent run started"` ИМЕННО РОЛИ `developer` либо
-    `RELEASE_ACTION` (любым актором) ПОСЛЕ границы `_stay_since_id`.
+    (требования 1-2, SPEC 01M1RR1PZC926T13NB1JSZ7F8T требование 1;
+    SPEC 01M28NWPS3PJHJAT4APXRY7MF7 требования 1-2, AC-2/AC-4): «последний
+    по id маркер после `_stay_since_id` решает» (латест-wins) — однопроходный
+    обсчёт журнала по возрастанию id вместо старого `OR` двух признаков,
+    расширенного парой захват/снятие атомарного захвата.
 
-    Фильтр по актору `developer` применяется только к `"agent run
-    started"` — эту же точку (`runner.run_agent_once`) журналирует
-    прогон ЛЮБОЙ роли шага (в т.ч. `test_author` на стадии
-    `tests_writing`, той же задачи, до первого шага developer вовсе);
-    без сверки актора `_occupies` ложно считала занятой ещё не начатую
-    developer'ом задачу (регрессия 01M1REVJ8AJ, коммит d617c148).
-    `RELEASE_ACTION` актора не сверяет — его журналирует только
-    `cmd_zone_release` (актором `operator`), сверка тут ничего не
-    закрывает и не входит в регрессию требования 1.
+    Маркеры, поднимающие occupied: `"agent run started"` ИМЕННО РОЛИ
+    `developer` (эту же точку — `runner.run_agent_once` — журналирует
+    прогон ЛЮБОЙ роли шага, в т.ч. `test_author` на стадии
+    `tests_writing`; без сверки актора `_occupies` ложно считала занятой
+    ещё не начатую developer'ом задачу, регрессия 01M1REVJ8AJ, коммит
+    d617c148); `RELEASE_ACTION` (операторское снятие ЧУЖОГО ожидания,
+    актора не сверяет — журналирует только `cmd_zone_release` актором
+    `operator`); `CLAIM_ACTION` ИМЕННО актора `developer` (атомарный
+    захват, требование 1 — та же регрессия класса, что и у «agent run
+    started»: захват, ошибочно записанный не от его имени, не должен
+    считаться занятием).
 
-    Без этого признака задача только ждёт — зон не держит ни для себя,
-    ни (требование 1 SPEC 01M1P9QAG65GVF69YJEV0V18D9, впервые здесь)
-    для остальных кандидатов `blocking_conflict`, что её сканируют как
-    потенциального владельца."""
+    Маркер, опускающий occupied: `_CLAIM_RELEASED_ACTION` (любым
+    актором — журналирует `runner._cmd_run`/`release_claim` актором
+    `fsm`, решение снять принимает оркестраторный код, не сам
+    разработчик) — снимает занятость, установленную предшествующим
+    `CLAIM_ACTION`, ТОЛЬКО если он не перекрыт более поздним (по id)
+    `CLAIM_ACTION`/`"agent run started"` (AC-4: захват после старого
+    снятия снова занимает).
+
+    Без хотя бы одного поднимающего маркера ПОСЛЕ снимающего задача
+    только ждёт — зон не держит ни для себя, ни (требование 1 SPEC
+    01M1P9QAG65GVF69YJEV0V18D9) для остальных кандидатов
+    `blocking_conflict`, что её сканируют как потенциального владельца."""
     since_id = _stay_since_id(conn, task_id)
-    return (_visit_has_action(conn, task_id, since_id,
-                              _AGENT_STARTED_ACTION, actor="developer")
-            or _visit_has_action(conn, task_id, since_id, RELEASE_ACTION))
+    occupied = False
+    for row in store.task_steps(conn, task_id):
+        if row["id"] <= since_id:
+            continue
+        action = row["action"]
+        if action == _CLAIM_RELEASED_ACTION:
+            occupied = False
+        elif action == RELEASE_ACTION:
+            occupied = True
+        elif action == CLAIM_ACTION and row["actor"] == "developer":
+            occupied = True
+        elif action == _AGENT_STARTED_ACTION and row["actor"] == "developer":
+            occupied = True
+    return occupied
 
 
 def blocking_conflict(conn, task_id: str, t) -> tuple[str, str, str] | None:
@@ -319,16 +359,88 @@ def blocking_conflict(conn, task_id: str, t) -> tuple[str, str, str] | None:
     return None
 
 
+def _refusal_text(task_id: str, conflict: tuple[str, str, str]) -> str:
+    """Текст именованного отказа вида «зона <путь> занята задачей <id>
+    (<состояние>)» (требование 2, AC-2) — общий для `refusal()` (обычный,
+    не гоночный конфликт) и `claim()` (SPEC 01M28NWPS3PJHJAT4APXRY7MF7,
+    AC-1/AC-6: проигравший гонку получает то же наблюдаемое сообщение)."""
+    path, occupier_id, occupier_state = conflict
+    return (f"[{task_id}] зона {path} занята задачей {occupier_id} "
+            f"({occupier_state}) — ждёт зоны, первый шаг разработчика не "
+            f"запускается")
+
+
 def refusal(conn, task_id: str, t) -> str | None:
     """Именованный отказ вида «зона <путь> занята задачей <id>
     (<состояние>)» (требование 2, AC-2), либо `None` — конфликта нет."""
     conflict = blocking_conflict(conn, task_id, t)
     if conflict is None:
         return None
-    path, occupier_id, occupier_state = conflict
-    return (f"[{task_id}] зона {path} занята задачей {occupier_id} "
-            f"({occupier_state}) — ждёт зоны, первый шаг разработчика не "
-            f"запускается")
+    return _refusal_text(task_id, conflict)
+
+
+def claim(conn, task_id: str, t) -> tuple[str | None, bool]:
+    """Атомарный захват зоны (SPEC 01M28NWPS3PJHJAT4APXRY7MF7, требование
+    1, AC-1): проверка `blocking_conflict` и запись `CLAIM_ACTION` — в
+    ОДНОЙ транзакции SQLite (`BEGIN IMMEDIATE`, тот же приём, что
+    `store.next_task_number`/CAS `store.set_state`). `BEGIN IMMEDIATE`
+    берёт эксклюзивную запись-блокировку сразу при входе — вторая
+    параллельная `claim()` не может начать свою транзакцию, пока первая
+    не закоммитит (или не откатит) свою, поэтому гарантированно видит уже
+    записанный этой `CLAIM_ACTION` и получает отказ (закрывает гонку SPEC
+    «Контекст»: два `cmd_run`, проверяющие конфликт до того, как хоть один
+    записал что-либо о занятости).
+
+    Возвращает `(отказ | None, записан_ли_новый_захват_этим_вызовом)`.
+    Второй элемент — `False` и при отказе (снимать нечего), и когда
+    задача УЖЕ занимает зону сама (`_occupies` до записи — новый маркер
+    не изменил бы её, писать незачем: иначе `release_claim` при
+    неудачном старте снял бы occupancy, реально установленную БОЛЕЕ
+    РАННИМ стартом этого же пребывания). Вызывающий (`runner._cmd_run`)
+    держит второй элемент и снимает захват, только если он записан
+    ИМЕННО этим вызовом (`claimed_but_not_started`, требование 2, AC-2/
+    AC-3)."""
+    conn.commit()  # чужая незакрытая транзакция не даст взять свою
+    conn.execute("BEGIN IMMEDIATE")
+    try:
+        if _occupies(conn, task_id):
+            conn.rollback()
+            return None, False
+        conflict = blocking_conflict(conn, task_id, t)
+        if conflict is not None:
+            conn.rollback()
+            return _refusal_text(task_id, conflict), False
+        store.journal(conn, task_id, "developer", CLAIM_ACTION,
+                     "зона захвачена атомарно с проверкой конфликта — "
+                     "закрывает гонку с параллельным cmd_run (AC-1)")
+        return None, True
+    except BaseException:
+        conn.rollback()
+        raise
+
+
+def claimed_but_not_started(conn, task_id: str) -> bool:
+    """Разработчик фактически не стартовал (`"agent run started"` актором
+    `developer`) в ТЕКУЩЕМ пребывании — сигнал `runner._cmd_run`
+    (требование 2, AC-2/AC-3), что захват (`claim`) можно/нужно снять,
+    если шаг решил не продолжаться по ЛЮБОЙ причине (отказ бюджета,
+    паузы, лимита параллельности, ошибка окружения — что угодно, из-за
+    чего `_cmd_run` завершается раньше фактического запуска агента)."""
+    since_id = _stay_since_id(conn, task_id)
+    return not any(row["id"] > since_id
+                  and row["action"] == _AGENT_STARTED_ACTION
+                  and row["actor"] == "developer"
+                  for row in store.task_steps(conn, task_id))
+
+
+def release_claim(conn, task_id: str) -> None:
+    """Снимает атомарный захват зоны (требование 2, AC-3): пишется
+    актором `fsm` — решение снять принимает оркестраторный код
+    `runner._cmd_run`, не сам разработчик; отличает эту запись от
+    `RELEASE_ACTION` (`cmd_zone_release`, актор `operator`, другая
+    семантика — осознанный риск снятия ЧУЖОГО ожидания)."""
+    store.journal(conn, task_id, "fsm", _CLAIM_RELEASED_ACTION,
+                 "шаг не стартовал после захвата зоны — снято автоматически")
 
 
 def cmd_zone_release(task_id: str) -> None:

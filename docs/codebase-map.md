@@ -1,5 +1,5 @@
 ---
-built_at_sha: 7cdc680215a6214ee1d13902ec004f561b98dbb0
+built_at_sha: b45aee8c371f00a19ccff6f17adc8bc801346e94
 ---
 
 # Codebase-map пульта
@@ -975,11 +975,14 @@ built_at_sha: 7cdc680215a6214ee1d13902ec004f561b98dbb0
 
 **Публичные функции:**
 - `blocking_conflict`
+- `claim`
+- `claimed_but_not_started`
 - `cmd_zone_release`
 - `cmd_zone_reorder`
 - `queue_order`
 - `queue_position`
 - `refusal`
+- `release_claim`
 - `wait_enter_action`
 - `wait_exit_action`
 - `wait_minutes`
