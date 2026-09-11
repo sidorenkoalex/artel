@@ -239,3 +239,58 @@ index cfaf9b8b..a1ab155d 100644
   пометить в `coding-standards.md`, что такие «модули-листья» — не
   вечная гарантия, а текущее состояние: следующая правка, тоже
   расширяющая его зависимости, не обязана заново обосновывать это с нуля.
+- `tests/test_lease.py::ResolveSessionIdTest` дублировал сценарии
+  `tests/test_session.py::ResolveSessionIdTest` (обе зовут один и тот же
+  объект функции, AC-1 SPEC T044), но на голом `unittest.TestCase`, не
+  `TmpRootTest` — итерация 2 этой задачи нашла и починила расхождение
+  вручную (см. «Итерация 2» ниже). Стоит явно искать такие копии тестов
+  через разные точки входа (`lease.resolve_session_id` vs
+  `session.resolve_session_id`) при миграции общей зависимости на
+  файловое состояние — обычный `grep` по имени функции их не находит,
+  если сигнатура вызова отличается (`lease.` вместо `session.`).
+
+## Итерация 2 — закрытие REVIEW итерации 1 (changes_requested)
+
+major (`orchestrator/session.py:53-68`, R1-F1, гонка записи
+`.artel/session-id`) — исправлено. `_persisted_session_id` теперь
+создаёт файл эксклюзивно (`os.open(path, os.O_CREAT | os.O_EXCL |
+os.O_WRONLY)`); процесс, проигравший гонку между чтением
+(`FileNotFoundError`) и созданием, ловит `FileExistsError` и
+перечитывает уже записанное победителем значение вместо того, чтобы
+писать своё расходящееся — обе стороны гонки возвращают из вызова одну
+и ту же identity. Новый тест `tests/test_session.py::
+SessionIdentityFileRaceTest::
+test_concurrent_first_access_returns_winners_identity_not_own_fresh_value`
+симулирует гонку моком `os.open` (первый вызов пишет «чужую» identity и
+поднимает `FileExistsError`) и проверяет, что вызывающий вернул именно
+её, не собственный свежий `ppid`.
+
+Этот же фикс обнажил пробел вне зоны исходного анализа «Влияние на
+систему»: `tests/test_lease.py::ResolveSessionIdTest` (старый тест SPEC
+T044) наследовал голый `unittest.TestCase`, а не `TmpRootTest`, и падал
+на РЕАЛЬНОМ `config.ROOT` (`ppid-55894` из ранее заведённого файла !=
+живой `os.getppid()` теста), если в рабочем дереве уже лежал
+`.artel/session-id` от предыдущего вызова CLI/тестов — тот же класс
+проблемы, ради которого `ResolveSessionIdTest`/`SessionIdentityFileTest`
+в `tests/test_session.py` уже наследуют `TmpRootTest` (см. её
+докстринг), просто не проверенный на этой дублирующей копии тех же
+сценариев. Исправлено тем же приёмом — класс переведён на `TmpRootTest`,
+докстринг класса объясняет, почему. Целенаправленный grep
+(`ppid-{os.getppid` по `tests/`) подтвердил, что это единственное такое
+место: `tests/test_store_journal.py::JournalSessionIdTest` уже наследовал
+`TmpRootTest` заранее.
+
+minor (`tests/test_watch.py`/`tests/test_session.py`, R1-F2, отсутствие
+заявок `Ловит мутацию: …`) — исправлено. Каждому из перечисленных в
+реестре REVIEW.md методов (11 в `test_watch.py`, 8 в `test_session.py`)
+дописан абзац докстринга `Ловит мутацию: …`, называющий конкретную
+мутацию исходного кода и наблюдаемый эффект её необнаружения; логика и
+ассерты существующих тестов не менялись.
+
+Перепроверено: `python3 -m pytest tests/test_session.py tests/test_watch.py
+tests/test_lease.py tests/test_store_journal.py tests/test_pause.py
+tests/test_release.py tests/test_detached_cycle.py -q` — 109 passed;
+`python3 -m unittest discover -s tasks/01M290PP4KBTG1KYS1PWKQJH6T/acceptance_tests`
+— 18 tests, OK; `python3 scripts/guard.py --all` — ок (773 файлов);
+`python3 scripts/codebase_map.py` — диф с `docs/codebase-map.md` только
+по `built_at_sha` (регенерирован и закоммичен этим же коммитом).
