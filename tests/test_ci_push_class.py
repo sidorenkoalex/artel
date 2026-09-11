@@ -38,52 +38,69 @@ class AdrClassificationTest(unittest.TestCase):
         self.assertFalse(code)
 
     def test_artifact_branch_code_is_false(self):
+        """Ловит мутацию: правило artifact/** перестаёт выставлять
+        code=false, или причина теряет слово "артефактная"."""
         code, reason = ci_push_class.classify(
             "push", "refs/heads/artifact/01m1abc", PARENT_SHA, HEAD_SHA)
         self.assertFalse(code)
         self.assertIn("артефактная", reason)
 
     def test_task_branch_is_always_code_true(self):
-        """AC-2: task/** — всегда code=true, без исключений (SPEC «Не входит»)."""
+        """Ловит мутацию: ветка task/** с исключительно документным диффом
+        ошибочно получает code=false — правило «task/** всегда true»
+        должно игнорировать содержимое диффа."""
         code, reason = ci_push_class.classify(
             "push", "refs/heads/task/01m1abc-slug", PARENT_SHA, HEAD_SHA,
             changed_files=["docs/backlog.md"])
         self.assertTrue(code)
 
     def test_pull_request_is_always_code_true(self):
+        """Ловит мутацию: событие pull_request ошибочно классифицируется
+        как документный пуш и получает code=false вместо безусловного
+        code=true."""
         code, reason = ci_push_class.classify(
             "pull_request", "refs/heads/task/01m1abc-slug", PARENT_SHA, HEAD_SHA,
             changed_files=["docs/backlog.md"])
         self.assertTrue(code)
 
     def test_main_code_change_is_code_true(self):
+        """Ловит мутацию: пуш в main с изменением кода (файл вне docs/
+        tasks/*.md) ошибочно признаётся документным и получает
+        code=false."""
         code, reason = ci_push_class.classify(
             "push", "refs/heads/main", PARENT_SHA, HEAD_SHA,
             changed_files=["orchestrator/config.py"])
         self.assertTrue(code)
 
     def test_main_mixed_doc_and_code_is_code_true(self):
-        """Один файл вне docs/tasks/*.md в корне — весь дифф не документный
-        (та же логика, что `grep -Ev` в исходном bash: любое совпадение
-        "не документ" ломает весь документный класс)."""
+        """Ловит мутацию: смешанный дифф (документный файл + кодовый файл)
+        ошибочно признаётся полностью документным — единственный файл вне
+        docs/tasks/*.md должен ломать весь документный класс, та же
+        логика, что `grep -Ev` в исходном bash."""
         code, reason = ci_push_class.classify(
             "push", "refs/heads/main", PARENT_SHA, HEAD_SHA,
             changed_files=["docs/backlog.md", "orchestrator/config.py"])
         self.assertTrue(code)
 
     def test_main_no_diff_base_is_code_true(self):
-        """AC-2: нет базы диффа — fail-closed code=true."""
+        """Ловит мутацию: пустая база диффа (before="") трактуется как
+        повод разрешить code=false вместо fail-closed code=true."""
         code, reason = ci_push_class.classify(
             "push", "refs/heads/main", "", HEAD_SHA)
         self.assertTrue(code)
 
     def test_main_forced_push_null_before_is_code_true(self):
+        """Ловит мутацию: нулевой sha родителя (принудительный пуш) не
+        распознаётся как «нет базы диффа» и получает code=false вместо
+        fail-closed code=true."""
         code, reason = ci_push_class.classify(
             "push", "refs/heads/main", "0" * 40, HEAD_SHA)
         self.assertTrue(code)
 
     def test_main_diff_error_is_code_true(self):
-        """AC-2: ошибка диффа (git отказал) — fail-closed."""
+        """Ловит мутацию: ненулевой код возврата `git diff --name-only`
+        трактуется как пустой (документный) дифф вместо fail-closed
+        code=true."""
         with mock.patch("subprocess.run") as run:
             run.side_effect = [
                 _completed(returncode=0),   # git cat-file -e before
@@ -104,6 +121,9 @@ class DocPushParentInheritanceTest(unittest.TestCase):
         return _completed(returncode=0, stdout=json.dumps(payload))
 
     def test_green_parent_gives_code_false(self):
+        """Ловит мутацию: зелёный родитель (conclusion=success) не даёт
+        документному пушу code=false, либо строка причины не называет sha
+        родителя дословно."""
         with mock.patch("subprocess.run", return_value=self._gh_response("success")):
             code, reason = ci_push_class.classify(
                 "push", "refs/heads/main", PARENT_SHA, HEAD_SHA,
@@ -114,6 +134,9 @@ class DocPushParentInheritanceTest(unittest.TestCase):
             reason)
 
     def test_red_parent_gives_code_true(self):
+        """Ловит мутацию: красный родитель (conclusion=failure) ошибочно
+        даёт code=false вместо fail-closed code=true, либо причина не
+        называет sha родителя."""
         with mock.patch("subprocess.run", return_value=self._gh_response("failure")):
             code, reason = ci_push_class.classify(
                 "push", "refs/heads/main", PARENT_SHA, HEAD_SHA,
@@ -122,6 +145,8 @@ class DocPushParentInheritanceTest(unittest.TestCase):
         self.assertEqual(f"родитель {PARENT_SHA} красный — тесты идут", reason)
 
     def test_no_run_for_parent_gives_code_true(self):
+        """Ловит мутацию: пустой список прогонов (нет данных о родителе)
+        ошибочно трактуется как зелёный родитель и даёт code=false."""
         with mock.patch("subprocess.run",
                         return_value=_completed(returncode=0,
                                                 stdout=json.dumps({"workflow_runs": []}))):
@@ -132,6 +157,8 @@ class DocPushParentInheritanceTest(unittest.TestCase):
         self.assertEqual("нет данных о родителе — тесты идут", reason)
 
     def test_api_error_gives_code_true(self):
+        """Ловит мутацию: ненулевой код возврата `gh api` (ошибка запроса)
+        не переводит классификатор в fail-closed code=true."""
         with mock.patch("subprocess.run",
                         return_value=_completed(returncode=1, stderr="rate limited")):
             code, reason = ci_push_class.classify(
@@ -141,6 +168,8 @@ class DocPushParentInheritanceTest(unittest.TestCase):
         self.assertEqual("нет данных о родителе — тесты идут", reason)
 
     def test_api_bad_json_gives_code_true(self):
+        """Ловит мутацию: битый JSON в stdout `gh api` не перехватывается
+        и валит классификатор исключением вместо fail-closed code=true."""
         with mock.patch("subprocess.run",
                         return_value=_completed(returncode=0, stdout="не json")):
             code, reason = ci_push_class.classify(
@@ -150,7 +179,8 @@ class DocPushParentInheritanceTest(unittest.TestCase):
         self.assertEqual("нет данных о родителе — тесты идут", reason)
 
     def test_gh_not_found_gives_code_true(self):
-        """`gh` недоступен (OSError) — тот же fail-closed путь, что у
+        """Ловит мутацию: OSError при вызове `gh` (бинарь не найден) не
+        перехватывается и не сводится к fail-closed code=true, как у
         `orchestrator/ci.py::gh`."""
         with mock.patch("subprocess.run", side_effect=OSError("no such file")):
             code, reason = ci_push_class.classify(
@@ -160,8 +190,9 @@ class DocPushParentInheritanceTest(unittest.TestCase):
         self.assertEqual("нет данных о родителе — тесты идут", reason)
 
     def test_ignores_run_of_other_workflow(self):
-        """Прогон другого workflow с тем же head_sha не считается: берётся
-        только запись с name == 'ci'."""
+        """Ловит мутацию: фильтр по name == "ci" пропадает, и зелёный
+        прогон СТОРОННЕГО workflow на том же head_sha ошибочно даёт
+        code=false вместо учёта красного прогона `ci`."""
         payload = {"workflow_runs": [
             {"name": "other", "status": "completed", "conclusion": "success"},
             {"name": "ci", "status": "completed", "conclusion": "failure"},
@@ -188,6 +219,10 @@ class OutputFormatTest(unittest.TestCase):
         return env
 
     def test_script_prints_code_and_reason_lines(self):
+        """Ловит мутацию: точка входа `main()` печатает не ровно две
+        строки, строка `code=` не идёт первой, либо причина не содержит
+        слово "артефактная" — контракт вызова из ci.yml/приёмочных тестов
+        расходится."""
         result = subprocess.run(
             [sys.executable, str(SCRIPT)],
             env=self._env(GITHUB_EVENT_NAME="push",
@@ -202,6 +237,9 @@ class OutputFormatTest(unittest.TestCase):
         self.assertIn("артефактная", lines[1])
 
     def test_script_reads_before_and_head_from_env_on_task_branch(self):
+        """Ловит мутацию: `main()` не читает BEFORE/GITHUB_SHA из
+        окружения (например, падает на None) — ветка task/** не даёт
+        code=true, ломая контракт входа без CLI-аргументов."""
         result = subprocess.run(
             [sys.executable, str(SCRIPT)],
             env=self._env(GITHUB_EVENT_NAME="push",
