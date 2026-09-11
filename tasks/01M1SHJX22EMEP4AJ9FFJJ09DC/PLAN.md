@@ -2,7 +2,7 @@
 task: 01M1SHJX22EMEP4AJ9FFJJ09DC
 type: plan
 author_role: developer
-status: escalate
+status: ready
 schema_version: 4
 ---
 
@@ -316,3 +316,74 @@ unified-диффом приложением к PLAN, применяет Опер
 задачи не полностью зелёная, а её правка (даже одной строки) требует
 явного решения Оператора (правило `tasks/T023`) и штатно идёт каналом
 `amend-tests`, которым распоряжается не разработчик.
+
+## Возврат — правка планки AC-6 (ADR-0014)
+
+Ответ Оператора (`ANSWER-2.md`): вариант (а) — планка поправлена штатным
+каналом `amend-tests` самим Оператором (11.09, лок сдвинут `db814ba3` ->
+`45c18dee`): в `test_ac6_spec_gate_approve_rereads_budget.py:82` строка
+`assertIn("выше дефолта", out)` заменена на `assertIn("выше потолка
+ролей", out)` — единственная правка планки, код (`apply_spec_budget`/
+`spec_budget`) не тронут, как и было заложено в SPEC («Не входит»).
+Никакой правки кода в этом ходе не потребовалось — код с прошлого хода
+(`d4cd1ecd`, слияние `79b26a6f`) не менялся.
+
+Прогон приёмочной планки задачи синхронно, пофайлово (12 файлов, из них
+2 — `test_ac5_operator_session_diff.py` и `test_ac9_invariant_wording_
+and_regression.py` — manual/0 тестов по конструкции самой планки, см.
+их докстринги; 14 исполняемых методов):
+
+- `test_ac1_diverged_or_dirty_live_sha_blocks_approve.py` — 2/2 OK
+- `test_ac1_matching_live_sha_lets_approve_through.py` — 1/1 OK
+- `test_ac2_matching_fixation_auto_confirms.py` — 2/2 OK
+- `test_ac3_diverged_or_dirty_refuses_named.py` — 2/2 OK
+- `test_ac4_explicit_sha_semantics_unchanged.py` — 3/3 OK
+- `test_ac5_operator_session_diff.py` — 0 тестов (manual), зелёный
+- `test_ac6_spec_gate_approve_rereads_budget.py` — **2/2 OK** (после
+  правки планки — оба метода, включая ранее красный
+  `test_ac6_applied_value_uses_apply_spec_budget_bounds`)
+- `test_ac7_differing_spec_budget_does_not_override.py` — 1/1 OK
+- `test_ac7_matching_spec_budget_does_not_override.py` — 1/1 OK
+- `test_ac8_changed_value_is_journaled.py` — 1/1 OK
+- `test_ac8_unchanged_value_no_duplicate_journal_record.py` — 1/1 OK
+- `test_ac9_invariant_wording_and_regression.py` — 0 тестов (manual),
+  зелёный
+
+Итого: 16/16 (14 исполняемых + 2 manual) — планка полностью зелёная.
+
+Регрессия по правилам скила (модули, затронутые диффом задачи: `git
+diff --stat 9ba3bf62 HEAD -- orchestrator/ tests/ docs/` называет только
+`orchestrator/fsm.py` и `tests/test_git_fixation.py`; `budget.py` в
+диффе задачи нет — только новая точка вызова уже существующей функции
+из `fsm.py`), каждый модуль отдельным прогоном в переднем плане:
+
+- `tests/test_git_fixation.py` (ADR-0002-защищённый, класс
+  approve-по-sha) — 39/39 OK
+- `tests/test_spec_budget.py` (класс потолка задачи, который теперь
+  дополнительно перечитывается на approve spec_gate) — 42/42 OK
+- `tests/test_cmd_approve_dispatch.py` + `tests/test_zones_approve.py`
+  (диспетчер `_cmd_approve`, куда включена правка) — 9/9 OK
+- `tests/test_fsm_advance_gate_smoke.py` + `tests/test_invariants.py`
+  (смоук гейтов R2/R3 и инварианты, включая
+  `SpecCeilingRespectsRoleBudgetCapTest` — независимое покрытие того же
+  потолка ролей) — 55/55 OK
+
+Полный набор `tests/` в шаге не гонял (запрещено скилом — гоняет CI на
+каждый пуш ветки); гонял планку задачи целиком плюс тесты всех модулей,
+затронутых диффом.
+
+`python3 scripts/codebase_map.py` прогнан для проверки — карта не
+меняется по существу (в этом ходе не было ни одной правки `*.py`,
+только правка теста через `amend-tests` Оператором и обновление этого
+PLAN.md); единственное отличие — `built_at_sha` на текущий HEAD, что
+является побочным эффектом самого запуска генератора после предыдущего
+коммита карты, а не следствием кода этой задачи — не коммичу этот
+файл, чтобы не гоняться за собственным хвостом (карту на merge
+регенерирует и коммитит оркестратор из своей точки, ADR-0003/T042).
+
+Код в кодовую ветку не коммичу — коммитить нечего: правка теста ушла
+отдельным коммитом Оператора через `amend-tests` (лок `45c18dee`), а
+код задачи (`orchestrator/fsm.py`, `tests/test_git_fixation.py`) уже
+закоммичен в предыдущем ходе (`d4cd1ecd`).
+
+`status: ready`.
