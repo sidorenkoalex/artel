@@ -62,16 +62,14 @@ class Ac7InvariantTenMentionsPlanChannelTest(unittest.TestCase):
         self.assertIn("ROLE_BUDGET_CAP", self.row,
                      f"инвариант 10 обязан называть ROLE_BUDGET_CAP: {self.row!r}")
 
-    def test_ac7_invariant_ten_names_plan_as_a_channel(self):
-        """Строка инварианта 10 называет PLAN как канал, вправе задающий
-        потолок в пределах `ROLE_BUDGET_CAP` (не только SPEC).
-
-        Ловит мутацию: разработчик мержит только формулировку части 1
-        (SPEC-канал) и забывает дописать PLAN — эта задача (часть 2)
-        именно это и добавляет.
-        """
-        self.assertIn("PLAN", self.row,
-                     f"инвариант 10 обязан называть PLAN как канал потолка: {self.row!r}")
+    # AC-7: manual — формулировка инварианта 10 с каналом PLAN (amend-tests
+    # 11.09): с 11.09 docs/invariants.md правит только Оператор своим
+    # коммитом, код-ветка задачи файл не несёт; предлагаемая строка —
+    # приложение «## Приложение: инвариант 10» PLAN.md, Оператор вносит
+    # после мержа. Бывший test_ac7_invariant_ten_names_plan_as_a_channel
+    # (assertIn("PLAN", строка инварианта 10)) исполняется Оператором
+    # по тексту приложения; остальные три метода проверяют формулировку,
+    # уже присутствующую в main, и остаются исполняемыми.
 
     def test_ac7_invariant_ten_names_spec_as_a_channel_too(self):
         """Формулировка explicit «не только SPEC на гейте SPEC» — ряд
