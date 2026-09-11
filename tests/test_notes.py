@@ -87,6 +87,72 @@ class ApplyAppendTest(unittest.TestCase):
             notes._apply_append(BACKLOG_TEXT, "ПОВТОРКЛЮЧ", "текст")
 
 
+class ApplyDropTest(unittest.TestCase):
+
+    def test_removes_matched_row_only_neighbours_untouched(self):
+        new_text, section_key, observation = notes._apply_drop(
+            BACKLOG_TEXT, "УНИКАЛЬНЫЙКЛЮЧ")
+        self.assertEqual(section_key, "копилка")
+        self.assertNotIn("УНИКАЛЬНЫЙКЛЮЧ", new_text)
+        self.assertIn("orchestrator/x.py", observation)
+        # Соседние строки раздела остаются байт-в-байт прежними.
+        for marker in ("ПОВТОРКЛЮЧ один", "ПОВТОРКЛЮЧ два"):
+            untouched = [ln for ln in BACKLOG_TEXT.splitlines()
+                        if marker in ln][0]
+            self.assertIn(untouched, new_text)
+        # Другой раздел не задет.
+        self.assertIn("Кандидат A", new_text)
+
+    def test_zero_matches_refuses_without_changing_text(self):
+        with self.assertRaises(SystemExit):
+            notes._apply_drop(BACKLOG_TEXT, "НЕТТАКОГОКЛЮЧА")
+
+    def test_multiple_matches_refuses_without_changing_text(self):
+        with self.assertRaises(SystemExit):
+            notes._apply_drop(BACKLOG_TEXT, "ПОВТОРКЛЮЧ")
+
+
+class ApplySetStateTest(unittest.TestCase):
+
+    def test_replaces_last_column_entirely_not_appends(self):
+        new_text, section_key = notes._apply_set_state(
+            BACKLOG_TEXT, "УНИКАЛЬНЫЙКЛЮЧ", "новое состояние")
+        self.assertEqual(section_key, "копилка")
+        matched = [ln for ln in new_text.splitlines()
+                  if "УНИКАЛЬНЫЙКЛЮЧ" in ln][0]
+        cells = notes._row_cells(matched)
+        self.assertEqual(cells[-1], "новое состояние")
+        self.assertNotIn("orchestrator/x.py", cells[-1])
+
+    def test_multiple_matches_refuses_without_changing_text(self):
+        with self.assertRaises(SystemExit):
+            notes._apply_set_state(BACKLOG_TEXT, "ПОВТОРКЛЮЧ", "текст")
+
+
+class ApplySetPriorityTest(unittest.TestCase):
+
+    def test_replaces_first_column_with_valid_value(self):
+        new_text, section_key = notes._apply_set_priority(
+            BACKLOG_TEXT, "УНИКАЛЬНЫЙКЛЮЧ", "3")
+        self.assertEqual(section_key, "копилка")
+        matched = [ln for ln in new_text.splitlines()
+                  if "УНИКАЛЬНЫЙКЛЮЧ" in ln][0]
+        cells = notes._row_cells(matched)
+        self.assertEqual(cells[0], "3")
+
+    def test_value_above_range_refuses_without_changing_text(self):
+        with self.assertRaises(SystemExit):
+            notes._apply_set_priority(BACKLOG_TEXT, "УНИКАЛЬНЫЙКЛЮЧ", "5")
+
+    def test_value_below_range_refuses_without_changing_text(self):
+        with self.assertRaises(SystemExit):
+            notes._apply_set_priority(BACKLOG_TEXT, "УНИКАЛЬНЫЙКЛЮЧ", "0")
+
+    def test_non_numeric_value_refuses_without_changing_text(self):
+        with self.assertRaises(SystemExit):
+            notes._apply_set_priority(BACKLOG_TEXT, "УНИКАЛЬНЫЙКЛЮЧ", "х")
+
+
 class PendingNotesStorageTest(TmpRootTest):
 
     def test_empty_by_default(self):
@@ -120,6 +186,14 @@ class CmdNoteArgumentValidationTest(TmpRootTest):
     def test_append_without_text_refuses(self):
         with self.assertRaises(SystemExit):
             notes.cmd_note(["--append", "ключ"])
+
+    def test_set_state_without_text_refuses(self):
+        with self.assertRaises(SystemExit):
+            notes.cmd_note(["--set-state", "ключ"])
+
+    def test_set_priority_without_text_refuses(self):
+        with self.assertRaises(SystemExit):
+            notes.cmd_note(["--set-priority", "ключ"])
 
     def test_flush_with_nothing_pending_is_a_noop(self):
         notes.cmd_note(["--flush"])  # не должно поднять исключение

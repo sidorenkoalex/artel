@@ -3,13 +3,12 @@
 артефактов успешного шага (SPEC T059). Перенесено из orchestrator/runner.py
 без изменения поведения (T091, декомпозиция диспетчеров fsm/runner).
 """
-import re
 import shutil
 from pathlib import Path
 
 from scripts import guard
 
-from . import config, fixation, gitcmd, store, workspace, yamlmini
+from . import config, fixation, gitcmd, store, workspace, yamlmini, zone_lock
 
 # Критерий допустимости файла первого уровня `acceptance_tests/` (SPEC
 # 01M1SAA01YRRTWAVADT2F81RRQ, AC-1): планка приёмки несёт только эти
@@ -21,9 +20,13 @@ from . import config, fixation, gitcmd, store, workspace, yamlmini
 # Вспомогательные модули планки `_*.py` (`_sandbox.py`, `_util.py`, …) —
 # легитимны: регрессия №18 (06.09) — `_util.py` тест-автора P1a был
 # вычищен как посторонний, планка стала неисполнимой. hotfix Оператора.
+#
+# Критерий сам — `guard.is_extraneous_acceptance_test_file` (SPEC
+# 01M290PVYG2VJK6442H5BAX9MA, AC-5): раньше здесь жила независимая копия
+# той же регулярки, байт-в-байт совпадающая, но не вызов функции —
+# подмена `guard.is_extraneous_acceptance_test_file` в тестах (например,
+# на время миграции правила) не долетала бы досюда.
 _ACCEPTANCE_TESTS_DIR = "acceptance_tests/"
-_ACCEPTANCE_TESTS_ALLOWED_TOP_LEVEL = re.compile(
-    r"^(test_.*\.py|_[A-Za-z0-9_]+\.py|markers\.py|__init__\.py|.+\.md|.+\.txt)$")
 
 
 def _is_stray_acceptance_test_file(task_rel: str) -> bool:
@@ -34,9 +37,19 @@ def _is_stray_acceptance_test_file(task_rel: str) -> bool:
     if not task_rel.startswith(_ACCEPTANCE_TESTS_DIR):
         return False
     inner = task_rel[len(_ACCEPTANCE_TESTS_DIR):]
-    if "/" in inner:
-        return True
-    return not _ACCEPTANCE_TESTS_ALLOWED_TOP_LEVEL.match(inner)
+    return guard.is_extraneous_acceptance_test_file(inner)
+
+
+# RETRO.md первого уровня `tasks/<id>/` — легитимный наравне с
+# `guard.TASK_ROOT_ALLOWED_MD` (SPEC 01M290PVYG2VJK6442H5BAX9MA, AC-5):
+# сам список guard его не несёт (белый список планки — зона задачи
+# 01M28NX43E, не меняется), поэтому исключение — здесь, поверх вызова
+# guard, не правкой самого списка.
+def _is_extraneous_task_root_file(rel: str) -> bool:
+    if rel == "RETRO.md":
+        return False
+    return guard.is_extraneous_task_root_file(rel)
+
 
 # Типы артефактов, для которых допустимо удаление правилом «последний
 # коммит пути на артефактной ветке — автокоммит ЭТОЙ ЖЕ роли» ниже
@@ -140,8 +153,8 @@ def commit_timeout_checkpoint(conn, task_id: str, role: str) -> str:
     detail = ""
     if role == "developer":
         message = f"{task_id}: WIP-чекпоинт после таймаута шага {role}"
-        committed, sha = _commit_worktree_change(
-            wt, message, exclude=f"tasks/{task_id}")
+        committed, sha, _stray = _commit_worktree_change(
+            conn, task_id, wt, message, exclude=f"tasks/{task_id}")
         if committed:
             detail = f"{message} (sha {sha})" if sha else message
             store.journal(conn, task_id, "orchestrator",
@@ -300,8 +313,8 @@ def commit_abnormal_checkpoint(conn, task_id: str, role: str, cause: str) -> str
     detail = ""
     if role == "developer":
         message = f"{task_id}: WIP-чекпоинт после аварийного завершения шага {role} ({cause})"
-        committed, sha = _commit_worktree_change(
-            wt, message, exclude=f"tasks/{task_id}")
+        committed, sha, _stray = _commit_worktree_change(
+            conn, task_id, wt, message, exclude=f"tasks/{task_id}")
         if committed:
             detail = f"{message} (sha {sha})" if sha else message
             store.journal(conn, task_id, "orchestrator",
@@ -356,8 +369,8 @@ def commit_pause_now_checkpoint(conn, task_id: str, role: str) -> str:
     detail = ""
     if role == "developer":
         message = f"{task_id}: WIP-чекпоинт pause --now (шаг {role} прерван)"
-        committed, sha = _commit_worktree_change(
-            wt, message, exclude=f"tasks/{task_id}")
+        committed, sha, _stray = _commit_worktree_change(
+            conn, task_id, wt, message, exclude=f"tasks/{task_id}")
         if committed:
             detail = f"{message} (sha {sha})" if sha else message
             store.journal(conn, task_id, "orchestrator", "WIP-чекпоинт pause --now",
@@ -376,28 +389,23 @@ def commit_pause_now_checkpoint(conn, task_id: str, role: str) -> str:
     return detail
 
 
-def _staged_change_summary(wt: Path, exclude: str) -> str:
-    """«путь, путь (N строк)» по индексу ПОСЛЕ `git add -A` + `git reset
-    -- exclude` — тот же индекс, что `_commit_worktree_change` соберёт
-    следом для самого коммита (SPEC 01M283NC4JJXK7QS68Y9ET8TBK, AC-3).
-    Повторный `add -A`/`reset` в `_commit_worktree_change` после этого
-    вызова идемпотентен — тот же индекс, лишний git-вызов, не лишний
-    эффект.
+def _commit_summary(wt: Path, sha: str) -> str:
+    """«путь, путь (N строк)» ФАКТИЧЕСКИ закоммиченного `sha` — считает
+    `git show --numstat` УЖЕ ПОСЛЕ того, как `_commit_worktree_change`
+    применила `exclude` и зонный фильтр (SPEC 01M290PVYG2VJK6442H5BAX9MA,
+    R1-F1): предыдущая версия (`_staged_change_summary`) снимала слепок
+    индекса ДО зонного фильтра и называла посторонний файл, снятый со
+    стейджа и не попавший в коммит, «закоммиченным» — расхождение с
+    соседней записью журнала `STRAY_WORKTREE_FILES_ACTION` о том же
+    файле. Считать по уже сделанному коммиту, а не по предварительному
+    индексу, устраняет расхождение по построению: `sha` называет ровно
+    те пути, что реально вошли в дерево коммита.
 
-    Число строк — сумма добавленных и удалённых по `git diff --cached
-    --numstat` (для нового файла показывает его длину как «добавлено»,
-    для правки трекенного — обычный add+del) — то же значение, что
-    покажет `git show --stat` после коммита, посчитанное до коммита,
-    потому что вызывающему коду нужен текст ДЛЯ журнала, не факт
-    коммита. Пустая строка — нечего коммитить или git не ответил
-    (та же тихая деградация, что у `_commit_worktree_change`)."""
-    added = gitcmd.in_repo(wt, "add", "-A")
-    if added.returncode != 0:
-        return ""
-    reset = gitcmd.in_repo(wt, "reset", "-q", "--", exclude)
-    if reset.returncode != 0:
-        return ""
-    numstat = gitcmd.in_repo(wt, "diff", "--cached", "--numstat")
+    Число строк — сумма добавленных и удалённых по `git show --numstat`
+    (для нового файла показывает его длину как «добавлено», для правки
+    трекенного — обычный add+del). Пустая строка — git не ответил (та
+    же тихая деградация, что у `_commit_worktree_change`)."""
+    numstat = gitcmd.in_repo(wt, "show", "--numstat", "--format=", sha)
     if numstat.returncode != 0:
         return ""
     paths = []
@@ -441,9 +449,12 @@ def commit_success_checkpoint(conn, task_id: str, role: str) -> str:
     Сообщение коммита и действие журнала — буквальные строки SPEC
     (AC-2/AC-3), не текст соседних WIP-чекпоинтов (та же оговорка, что
     у `commit_abnormal_checkpoint` про `cause`, только здесь текст
-    целиком фиксирован, без параметра). `detail` — вывод
-    `_staged_change_summary` (список файлов + число строк, AC-3) плюс
-    `sha`, тем же приёмом, что у остальных WIP-чекпоинтов.
+    целиком фиксирован, без параметра). `detail` — вывод `_commit_summary`
+    ПОСЛЕ коммита (список файлов + число строк, AC-3) плюс `sha`, тем же
+    приёмом, что у остальных WIP-чекпоинтов; считается по уже сделанному
+    коммиту, а не по индексу до зонного фильтра — иначе посторонний файл,
+    снятый со стейджа `_commit_worktree_change`, попал бы в `detail` как
+    закоммиченный (SPEC 01M290PVYG2VJK6442H5BAX9MA, R1-F1).
 
     Только догфуд, коммитит, только если реально есть что коммитить
     (`_commit_worktree_change` сам отказывает на пустом diff), тихая
@@ -455,12 +466,13 @@ def commit_success_checkpoint(conn, task_id: str, role: str) -> str:
         return ""
     wt = workspace.path(task_id)
     exclude = f"tasks/{task_id}"
-    summary = _staged_change_summary(wt, exclude)
     message = (f"{task_id}: код закоммичен пультом за роль developer — "
               "шаг завершён с незакоммиченным кодом")
-    committed, sha = _commit_worktree_change(wt, message, exclude=exclude)
+    committed, sha, _stray = _commit_worktree_change(
+        conn, task_id, wt, message, exclude=exclude)
     if not committed:
         return ""
+    summary = _commit_summary(wt, sha)
     detail = f"{summary} (sha {sha})" if sha else summary
     store.journal(conn, task_id, "orchestrator", "код закоммичен пультом за роль",
                   detail)
@@ -600,11 +612,14 @@ def _commit_external_step_artifacts(conn, task_id: str, role: str,
 
     Посторонние файлы первого уровня `tasks/<id>/` (SPEC
     01M1TNN4TMWAQSQ9Y1PW37J5H0, требование 2, AC-4/AC-5/AC-6) — тот же
-    приём, но критерий (`guard.is_extraneous_task_root_file`) не
-    независимая копия, а импорт из `scripts.guard` (единый источник
-    истины с `guard --all`, требование 2): инцидент 06.09, рабочие файлы
-    роли (копии карты кодовой базы) в корне `tasks/<id>/` доехали до
-    артефактной ветки и main без единой проверки.
+    приём, но критерий (`_is_extraneous_task_root_file`, тонкая обёртка
+    над `guard.is_extraneous_task_root_file`) не независимая копия, а
+    вызов `scripts.guard` (единый источник истины с `guard --all`,
+    требование 2, AC-5 задачи 01M290PVYG2VJK6442H5BAX9MA — с
+    исключением `RETRO.md`, которого сам список guard не несёт):
+    инцидент 06.09, рабочие файлы роли (копии карты кодовой базы) в
+    корне `tasks/<id>/` доехали до артефактной ветки и main без единой
+    проверки.
 
     `timeout=True` (SPEC 01M1NBWTSXEJB24PXR417YF1VA, AC-4/AC-5) —
     `commit_timeout_checkpoint` зовёт этой веткой: тот же перенос, что и
@@ -685,7 +700,7 @@ def _commit_external_step_artifacts(conn, task_id: str, role: str,
     # переноса, ОДНА запись журнала на весь список отброшенных путей.
     task_root_stray = sorted(
         rel[len(task_prefix):] for rel in files
-        if guard.is_extraneous_task_root_file(rel[len(task_prefix):]))
+        if _is_extraneous_task_root_file(rel[len(task_prefix):]))
     if task_root_stray:
         files = {rel: content for rel, content in files.items()
                  if rel[len(task_prefix):] not in task_root_stray}
@@ -787,10 +802,23 @@ def commit_pull_checkpoint(conn, task_id: str, wt: Path) -> str:
     догфуд, PLAN «Риски» тех задач). Пустая строка — нечего коммитить или
     git не ответил (та же тихая деградация, что и у остальных
     WIP-чекпоинтов).
+
+    Посторонний файл вне зон задачи (SPEC 01M290PVYG2VJK6442H5BAX9MA,
+    AC-1/AC-3) отменяет коммит ЦЕЛИКОМ, не только сам посторонний путь —
+    `_commit_worktree_change(..., refuse_on_stray=True)`: вызывающий код
+    (`orchestrator/pull.py::_clean_worktree_before_merge`) обязан отказать
+    всей подтяжке, не просто исключить файл, как остальные три
+    WIP-чекпоинта. Возврат всё равно `str` (пустая строка и на «нечего
+    коммитить», и на этот отказ) — контракт зафиксирован существующими
+    `tests/test_timeout_checkpoint.py::CommitPullCheckpointTest`; сам факт
+    отказа и список посторонних путей вызывающий код читает по СВЕЖЕЙ
+    записи журнала `STRAY_WORKTREE_FILES_ACTION` (тот же приём отсечки,
+    что `auto._run_paused_refusal`), не по возврату этой функции.
     """
     message = f"{task_id}: WIP-чекпоинт перед подтяжкой main"
-    committed, sha = _commit_worktree_change(wt, message,
-                                             exclude=f"tasks/{task_id}")
+    committed, sha, _stray = _commit_worktree_change(
+        conn, task_id, wt, message, exclude=f"tasks/{task_id}",
+        refuse_on_stray=True)
     if not committed:
         return ""
     detail = f"{message} (sha {sha})" if sha else message
@@ -800,42 +828,119 @@ def commit_pull_checkpoint(conn, task_id: str, wt: Path) -> str:
     return detail
 
 
-def _commit_worktree_change(wt: Path, message: str,
-                            exclude: str | None = None) -> tuple[bool, str]:
-    """(закоммичено, sha) — `add -A` + `commit` служебной идентичностью
-    В ЗАДАННОМ worktree; `закоммичено=False` — нечего коммитить или git
-    не ответил на любом из шагов.
+# Действие журнала «посторонние файлы в worktree» (SPEC
+# 01M290PVYG2VJK6442H5BAX9MA, AC-2): единая запись на шаг, не по записи
+# на файл — `_commit_worktree_change` пишет её сама, все четыре
+# WIP-чекпоинта делят один и тот же текст. Публичное имя — `pull.py`
+# читает его же, отличая отказ AC-3 от прочих исходов журнала (её
+# собственный контракт возврата не меняется, см. `commit_pull_checkpoint`).
+STRAY_WORKTREE_FILES_ACTION = "посторонние файлы в worktree"
 
-    Общая обвязка `commit_timeout_checkpoint` и `commit_step_artifacts`
-    (SPEC T059) — обе отличаются только сообщением коммита и моментом
-    вызова, сама последовательность git-операций (и её деградация без
-    git) — одна на двоих.
+
+def _zone_paths(conn, task_id: str) -> list[str]:
+    """Зоны, в пределах которых WIP-чекпоинт вправе коммитить путь
+    worktree (SPEC 01M290PVYG2VJK6442H5BAX9MA, AC-1): объявленные `zones`
+    + `zones_extension` задачи, `config.COMMON_ZONES` и собственный
+    каталог `tasks/<id>/`.
+
+    Задача, ни разу не заявившая зону (`zones` и `zones_extension` оба
+    пусты — SPEC старой версии до `guard.requires_zones`, либо тестовая
+    фикстура мимо гейта SPEC) — пустой список: `_stray_staged_paths`
+    в этом случае не применяет фильтр вовсе, тем же доводом, что уже
+    несёт `fsm_advance._zones_gate` («задача без заявленной зоны вовсе —
+    гейт не звонится») — иначе любой путь старой задачи, ничего не
+    заявившей, стал бы посторонним."""
+    t = store.get_task(conn, task_id)
+    raw = ",".join(p for p in (t["zones"], t["zones_extension"]) if p)
+    declared = [p.strip() for p in raw.split(",") if p.strip()]
+    if not declared:
+        return []
+    return declared + list(config.COMMON_ZONES) + [f"tasks/{task_id}/"]
+
+
+def _stray_staged_paths(wt: Path, zones: list[str]) -> list[str] | None:
+    """Застейдженные пути (`git diff --cached --name-only`), не покрытые
+    ни одной зоной `zones` — с учётом вложенности файл/каталог, тем же
+    правилом, что `zone_lock._paths_overlap` (SPEC 01M290PVYG2VJK6442H5BAX9MA,
+    AC-1). `zones` пуст — пустой список без единого вызова git: фильтр не
+    применяется вовсе (см. `_zone_paths`). `None` — git не ответил на сам
+    `diff --cached`."""
+    if not zones:
+        return []
+    res = gitcmd.in_repo(wt, "diff", "--cached", "--name-only")
+    if res is None or res.returncode != 0:
+        return None
+    stray = []
+    for rel in res.stdout.splitlines():
+        rel = rel.strip()
+        if rel and not any(zone_lock._paths_overlap(rel, z) for z in zones):
+            stray.append(rel)
+    return stray
+
+
+def _commit_worktree_change(conn, task_id: str, wt: Path, message: str,
+                            exclude: str | None = None,
+                            refuse_on_stray: bool = False
+                            ) -> tuple[bool, str, list[str]]:
+    """(закоммичено, sha, посторонние) — `add -A` + фильтр по зонам задачи
+    + `commit` служебной идентичностью В ЗАДАННОМ worktree;
+    `закоммичено=False` — нечего коммитить, git не ответил на любом из
+    шагов, либо (`refuse_on_stray=True`) найден посторонний путь.
+
+    Общая обвязка всех четырёх WIP-чекпоинтов (SPEC
+    01M290PVYG2VJK6442H5BAX9MA, AC-1) — `commit_timeout_checkpoint`/
+    `commit_abnormal_checkpoint`/`commit_pause_now_checkpoint`/
+    `commit_pull_checkpoint` отличаются только сообщением коммита,
+    моментом вызова и `refuse_on_stray`; сама последовательность
+    git-операций (и её деградация без git) — одна на четверых.
 
     `exclude` — путь (пример: `tasks/<id>`), исключаемый из коммита ПОСЛЕ
     `add -A` через `git reset` (SPEC 01M1NBWTSXEJB24PXR417YF1VA, AC-1):
     мандат `developer` — все пути worktree, кроме `tasks/<id>/` (та часть
-    переносится в артефактную ветку отдельно, не через эту функцию). Все
-    три WIP-чекпоинта роли `developer` (`commit_timeout_checkpoint`,
-    `commit_abnormal_checkpoint`, `commit_pause_now_checkpoint`, SPEC
-    01M1NKTF173WV5CPDZ1C3WW69K, REVIEW.md итерация 2, R1-F1) передают
-    его одинаково; `None` (по умолчанию) — для остальных ролей мандата
-    кода нет вовсе, эта функция для них не вызывается (см.
-    `_discard_out_of_mandate_changes`).
+    переносится в артефактную ветку отдельно, не через эту функцию).
+    `None` (по умолчанию) — для остальных ролей мандата кода нет вовсе,
+    эта функция для них не вызывается (см. `_discard_out_of_mandate_changes`).
+
+    После `exclude` застейдженный дифф сверяется с `_zone_paths` (AC-1):
+    посторонний путь пишет ОДНУ запись журнала `STRAY_WORKTREE_FILES_ACTION`
+    на весь список (AC-2), общую для обоих режимов ниже.
+
+    `refuse_on_stray=False` (по умолчанию, три обычных WIP-чекпоинта) —
+    посторонние пути снимаются со стейджа (`git reset -- <path>...`) и НЕ
+    коммитятся, остальное коммитится как обычно.
+
+    `refuse_on_stray=True` (только `commit_pull_checkpoint`, AC-3) — при
+    непустом списке посторонних коммита не происходит ВООБЩЕ (весь стейдж
+    снимается `git reset -q` без пути): вызывающий код обязан отказать
+    переходу целиком, не просто исключить файл.
     """
     added = gitcmd.in_repo(wt, "add", "-A")
     if added.returncode != 0:
-        return False, ""
+        return False, "", []
     if exclude is not None:
         reset = gitcmd.in_repo(wt, "reset", "-q", "--", exclude)
         if reset.returncode != 0:
-            return False, ""
+            return False, "", []
+    stray = _stray_staged_paths(wt, _zone_paths(conn, task_id))
+    if stray is None:
+        return False, "", []
+    if stray:
+        store.journal(conn, task_id, "orchestrator",
+                      STRAY_WORKTREE_FILES_ACTION,
+                      f"{STRAY_WORKTREE_FILES_ACTION}: {', '.join(stray)}")
+        if refuse_on_stray:
+            gitcmd.in_repo(wt, "reset", "-q")
+            return False, "", stray
+        unstage = gitcmd.in_repo(wt, "reset", "-q", "--", *stray)
+        if unstage.returncode != 0:
+            return False, "", stray
     staged = gitcmd.in_repo(wt, "diff", "--cached", "--quiet")
     if staged.returncode != 1:  # 0 — нечего коммитить, иное — git не ответил
-        return False, ""
+        return False, "", stray
     commit = gitcmd.in_repo(
         wt, "-c", f"user.name={fixation.FIXATION_AUTHOR_NAME}",
         "-c", f"user.email={fixation.FIXATION_AUTHOR_EMAIL}",
         "commit", "-q", "-m", message)
     if commit.returncode != 0:
-        return False, ""
-    return True, gitcmd.head_sha(wt)
+        return False, "", stray
+    return True, gitcmd.head_sha(wt), stray
