@@ -1175,7 +1175,8 @@ def _apply_plan_budget(conn, task_id: str, t, meta: dict) -> None:
     store.update_task(conn, task_id, budget_usd=value,
                       budget_source=config.BUDGET_SOURCE_PLAN,
                       updated_at=store.now())
-    detail = f"${value:.2f} (прежний потолок ${old:.2f})"
+    detail = (f"${value:.2f} (прежний потолок ${old:.2f}, "
+             f"источник {config.BUDGET_SOURCE_PLAN})")
     store.journal(conn, task_id, "fsm", "бюджет из PLAN", detail)
     print(f"[{task_id}] бюджет из PLAN: {detail}")
 
