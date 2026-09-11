@@ -588,8 +588,15 @@ def confirm_fixation(conn, task_id: str, sha: str | None) -> bool:
                   f"грязная копия артефактов при sha {current}")
         store.journal(conn, task_id, "operator", "approve отклонён", reason)
         print(f"[{task_id}] approve отклонён: {reason}")
+        # Живой sha (`current`), не зафиксированный (`fixed`, REVIEW.md
+        # 01M1SHJX22EMEP4AJ9FFJJ09DC итерация 1, R1-F2): явный путь ниже
+        # (`matches = current.startswith(sha)`) сравнивает переданный sha
+        # с ЖИВЫМ, значит и подсказанная команда обязана называть живой
+        # sha — подсказка `fixed` детерминированно проваливалась бы
+        # повторно на той же сверке. В ветке «грязная копия» current ==
+        # fixed, подстановка не меняется.
         print(f"  перепроверь артефакты и повтори: artel.py approve "
-              f"{task_id} {fixed or current}")
+              f"{task_id} {current}")
         return False
     if len(sha) < APPROVE_SHA_PREFIX_MIN:
         reason = (f"sha {sha!r} короче минимальной длины "

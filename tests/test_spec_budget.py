@@ -507,6 +507,51 @@ class SpecBudgetOnTheGateTest(unittest.TestCase):
         self.assertEqual(self.journal("бюджет из SPEC не применён"),
                          ["$25.00 — уже применён, остаётся $25.00"])
 
+    def test_approve_on_spec_gate_reapplies_a_changed_spec_value(self):
+        """SPEC 01M1SHJX22EMEP4AJ9FFJJ09DC, требования 4-5 (постоянное
+        покрытие — REVIEW.md итерации 1, R1-F1/R1-F3: приёмочная планка
+        задачи эфемерна, без этого теста регрессия осталась бы без
+        защиты после мержа). Оператор правит SPEC ПРЯМО на гейте, уже
+        ПОСЛЕ того, как `spec_writing -> spec_gate` применил исходное
+        значение (`budget_source=spec`) — approve на `spec_gate` обязан
+        перечитать SPEC и подхватить новое значение, а не отказать как
+        «уже применён» только потому, что источник уже `spec`.
+
+        Ловит мутацию: сравнение `source is not None` без сравнения
+        самого значения (регресс R1-F1) оставило бы потолок прежним —
+        `assertAlmostEqual` ниже не пройдёт."""
+        self.write_spec(budget_usd=45)
+        self.capture(fsm.cmd_advance, self.TASK)
+        self.assertAlmostEqual(self.task_row()["budget_usd"], 45.0)
+        self.assertEqual(self.task_row()["budget_source"],
+                         config.BUDGET_SOURCE_SPEC)
+
+        self.write_spec(budget_usd=35)
+        out = self.capture(fsm.cmd_approve, self.TASK)
+
+        self.assertAlmostEqual(self.task_row()["budget_usd"], 35.0,
+                               "approve не подхватил новое значение SPEC")
+        self.assertEqual(self.task_row()["budget_source"],
+                         config.BUDGET_SOURCE_SPEC)
+        self.assertIn("$35.00", out)
+        self.assertEqual(self.journal("бюджет из SPEC")[-1],
+                         "$35.00 (прежний потолок $45.00, дефолт $50.00)")
+
+    def test_approve_on_spec_gate_does_not_reapply_an_unchanged_spec_value(self):
+        """Тот же повторный проход approve, но значение SPEC не менялось —
+        идемпотентность (AC-8: без дублей журнала) обязана сохраняться и
+        на ВТОРОЙ точке чтения (approve), не только на `advance`."""
+        self.write_spec(budget_usd=45)
+        self.capture(fsm.cmd_advance, self.TASK)
+
+        out = self.capture(fsm.cmd_approve, self.TASK)
+
+        self.assertAlmostEqual(self.task_row()["budget_usd"], 45.0)
+        self.assertIn("уже применён", out)
+        self.assertEqual(self.journal("бюджет из SPEC"), ["$45.00 (прежний "
+                         "потолок $50.00, дефолт $50.00)"],
+                         "повтор не создал вторую запись об изменении")
+
 
 class LegacyDbMigrationTest(SpecBudgetOnTheGateTest):
     """БД, созданная до T012: колонки источника нет, задача уже заведена.

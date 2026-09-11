@@ -892,6 +892,54 @@ class ApproveByShaTest(RealPultGitTest):
                          "in_dev", "живое совпадение и чистая копия "
                          "обязаны переводить состояние без ручного sha")
 
+    def test_approve_without_sha_on_diverged_fixation_is_refused_and_names_both_shas(self):
+        """SPEC 01M1SHJX22EMEP4AJ9FFJJ09DC, AC-3 (постоянное покрытие —
+        REVIEW.md итерации 1, R1-F3: приёмочная планка задачи эфемерна,
+        `confirm_fixation` без такого теста в `tests/` осталась бы без
+        регрессионной защиты после мержа). Посторонний коммит поверх
+        зафиксированного sha — approve без sha обязан отказать, назвав
+        ОБА значения, и не трогать состояние.
+
+        Заодно регрессия R1-F2 (та же итерация): подсказка повтора
+        обязана называть ЖИВОЙ sha (с которым явный путь `approve <id>
+        <sha>` реально сравнивает — `current.startswith(sha)`), а не
+        зафиксированный — иначе подсказанная команда детерминированно
+        проваливается второй раз."""
+        fixed_sha = self.enter_spec_gate()
+        (self.task_dir() / "SPEC.md").write_text(
+            "подмена мимо гейта\n", encoding="utf-8")
+        self.commit_task_dir("посторонняя правка мимо approve")
+        live_sha = self.head()
+        self.assertNotEqual(fixed_sha, live_sha,
+                            "тест ничего не докажет без реального расхождения")
+
+        out = self.capture(fsm.cmd_approve, self.TASK)
+
+        self.assertIn(fixed_sha, out, "зафиксированный sha не назван в отказе")
+        self.assertIn(live_sha, out, "живой sha не назван в отказе")
+        self.assertIn(f"approve {self.TASK} {live_sha}", out,
+                      "подсказка повтора обязана называть живой sha")
+        self.assertEqual(store.get_task(store.db(), self.TASK)["state"],
+                         "spec_gate", "отклонённый approve не двигает состояние")
+
+    def test_approve_without_sha_on_dirty_copy_is_refused_and_state_unchanged(self):
+        """SPEC 01M1SHJX22EMEP4AJ9FFJJ09DC, AC-3 (постоянное покрытие,
+        R1-F3) — живой sha совпадает с зафиксированным, но рабочая копия
+        репо фиксации грязная (правка без коммита): approve без sha
+        обязан отказать по грязноте, а не пройти только по совпадению
+        sha."""
+        fixed_sha = self.enter_spec_gate()
+        (self.task_dir() / "SPEC.md").write_text(
+            "правка без коммита\n", encoding="utf-8")
+        self.assertEqual(self.head(), fixed_sha,
+                         "sha не должен был сдвинуться без коммита")
+
+        out = self.capture(fsm.cmd_approve, self.TASK)
+
+        self.assertIn("грязн", out, "отказ обязан называть грязную копию")
+        self.assertEqual(store.get_task(store.db(), self.TASK)["state"],
+                         "spec_gate", "отклонённый approve не двигает состояние")
+
     def test_approve_with_a_mismatched_sha_is_refused(self):
         self.enter_spec_gate()
         wrong = "0" * 40
