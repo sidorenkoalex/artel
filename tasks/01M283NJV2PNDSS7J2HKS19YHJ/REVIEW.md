@@ -9,14 +9,88 @@ schema_version: 5
 
 # REVIEW: регрессия №16 — планка на переходе `in_dev -> verifying` гоняется и при свежей ветке
 
+## Фаза A: проверка плана
+
+1. Покрытие требований в PLAN.md полное: таблица «Покрытие требований»
+   закрывает все 4 требования SPEC одним шагом (материализация +
+   тесты); требование 4 явно закрыто уже залоченной приёмочной планкой
+   задачи, дополнительных unit-тестов не заведено — обосновано (планка
+   T023 дословно покрывает AC-1..AC-5, доработка избыточна).
+2. Шаг — проверяемая единица размера MR: правка одной функции
+   (`_acceptance_run_refuses`, +локальный хелпер) в
+   `orchestrator/fsm_advance.py` и фикстура одного существующего теста
+   в `tests/test_git_fixation.py`. Соответствует фактическому diff (57
+   строк, 3 файла, из них 2 — код/тест).
+3. Подход не конфликтует с конвенциями: переиспользует существующий
+   приём (`acceptance.materialize_from_branch` + `guard.
+   requires_ac_markup`), буквально копируя прецедент
+   `orchestrator/pull.py::_materialize_and_run_plank` (тот же текст
+   отказа, тот же порядок чтения SPEC.md артефактной ветки) — не вводит
+   параллельное правило легитимности планки.
+
+Замечаний к плану нет.
+
 ## Соответствие SPEC
 
 | Требование | Вердикт | Комментарий |
 |---|---|---|
-| 1. Материализация планки для собственного target ДО `acceptance.run`, независимо от исхода подтяжки | OK | `orchestrator/fsm_advance.py:1159-1163` — `elif workspace.on_task_branch(...)` теперь вызывает `acceptance.materialize_from_branch(task_id, branch, run_cwd)` тем же приёмом, что уже стоял на ветке внешнего target (строки 1153-1158). |
-| 2. Именованный отказ «планка не найдена в источнике» вместо зелёного «не заведены» | OK | `_missing_plank_refuses()` (`fsm_advance.py:1131-1149`) читает SPEC.md артефактной ветки через `fsm._read_branch_text_or_refuse` и решает по `guard.requires_ac_markup(meta)` — тот же предикат, что у `pull.py::_materialize_and_run_plank`; текст отказа дословно «планка не найдена в источнике». |
-| 3. Повторный прогон на `Pulled` не ослаблен | OK | Материализация звонится безусловно (не зависит от исхода подтяжки), `acceptance.run` вызывается тем же кодом ниже — второй прогон на `Pulled` (первый внутри `pull.evaluate`) сохранён. Подтверждено тестом AC-4 приёмочной планки (`acc_run.call_count == 2`). |
-| 4. Тесты регрессии (Fresh + пустой `tasks/<id>` + лок → материализация и прогон; отсутствие в источнике при локе → отказ; `skip_tests` → переход проходит; существующие тесты без правки ассертов) | OK | Покрыто приёмочной планкой задачи `tasks/01M283NJV2PNDSS7J2HKS19YHJ/acceptance_tests/test_fresh_plank_materializes.py` (AC-1/AC-2/AC-3/AC-4/AC-5). Существующий тест `tests/test_git_fixation.py::ExternalTargetAdvanceIgnoresDirtyCheckTest` донастроен фикстурой SPEC-заглушки (`skip_tests`) без правки ассертов — см. «Проверено исполнением». |
+| 1. Материализация планки для собственного target ДО `acceptance.run`, независимо от исхода подтяжки | OK | `orchestrator/fsm_advance.py:1159-1163` — ветка `elif workspace.on_task_branch(...)` теперь зовёт `acceptance.materialize_from_branch(task_id, branch, run_cwd)` тем же приёмом, что уже стоял на ветке внешнего target (1153-1158). Мутационная проверка (ручной откат этой строки к прежнему `acc_tdir = run_cwd / "tasks" / task_id`) красит AC-1/AC-2/AC-5 приёмочной планки — см. «Проверено исполнением». |
+| 2. Именованный отказ «планка не найдена в источнике» вместо зелёного «не заведены» | OK | `_missing_plank_refuses()` (`fsm_advance.py:1131-1149`) читает SPEC.md артефактной ветки (`fsm._read_branch_text_or_refuse`) и решает по `guard.requires_ac_markup(meta)` — тот же предикат и тот же текст отказа, что у `pull.py::_materialize_and_run_plank`; вызывается на ОБЕИХ ветках (внешний и собственный target). |
+| 3. Повторный прогон на `Pulled` не ослаблен | OK | Материализация и `_missing_plank_refuses` звонятся безусловно (не по исходу подтяжки), `acceptance.run` ниже вызывается тем же кодом — второй прогон на `Pulled` (первый внутри `pull.evaluate`) сохранён; AC-4 приёмочной планки (`acc_run.call_count == 2`) зелёный. |
+| 4. Тест регрессии №16 (Fresh + пустой `tasks/<id>` + лок → материализация и прогон; отсутствие в источнике при локе → отказ; `skip_tests` → переход проходит; существующие тесты без правки ассертов) | OK | Покрыто залоченной приёмочной планкой `tasks/01M283NJV2PNDSS7J2HKS19YHJ/acceptance_tests/test_fresh_plank_materializes.py` (AC-1..AC-5, каждый тест с докстрингом «Ловит мутацию: …», сценарий и наблюдаемое свойство описаны, не пересказ имени метода). Существующий `tests/test_git_fixation.py::ExternalTargetAdvanceIgnoresDirtyCheckTest` донастроен фикстурой SPEC-заглушки (`skip_tests`) без правки ни одного ассерта — проверено построчно по diff. |
+
+### Корректность
+- Побочный путь `_review_approved` (`fsm_advance.py:287-293`, автогейт
+  acceptance на переходе `review -> acceptance`) сохраняет старый
+  небезопасный расчёт `acc_tdir = workspace.path(task_id) / "tasks" /
+  task_id` без материализации — тот же класс бага в принципе, но SPEC
+  прямо выносит «автогейт приёмки» в «Не входит». Проверено, что это
+  действительно нейтрально: `fsm_autogate._autogate_conditions`
+  условие «а» (планка/AC-пометки) читает через
+  `artifact_source.resolve` + `gitcmd.ls_tree_files`/`show` напрямую из
+  артефактной ветки (докстринг `fsm_autogate.py:31-41`), `acc_tdir` там
+  для условия «а» уже не используется (`grep acc_tdir
+  orchestrator/fsm_autogate.py` — единственные упоминания в сигнатурах
+  и докстринге). Функциональной дыры нет, исключение из SPEC
+  обосновано фактическим кодом, не только словами PLAN.
+- Условие «планка не найдена в источнике» при сбое git
+  (`gitcmd.ls_tree_files` вернул `None`) молча трактуется как
+  «отсутствует» тем же способом, что и у `pull.py` — не новый класс
+  дефекта этой задачи, точный повтор существующего прецедента.
+
+### Тесты
+Пять тестов приёмочной планки задачи прогнаны самостоятельно и
+провалидированы мутацией (см. «Проверено исполнением») — каждый
+докстринг «Ловит мутацию: …» сверен с фактическим поведением теста, не
+принят на веру. Фикстура `SPEC_SKIP_TESTS` в `tests/test_git_fixation.py`
+проверена тем же приёмом: без неё `ExternalTargetAdvanceIgnoresDirtyCheckTest`
+падает (см. «Проверено исполнением») — правка не декоративная.
+
+### Простота
+Решение — переиспользование одного и того же приёма
+(`materialize_from_branch` + `requires_ac_markup`) на втором из двух
+путей, где приём частично уже стоял; `_missing_plank_refuses` —
+локальный хелпер без новой публичной поверхности. Лишних абстракций
+нет.
+
+### Безопасность
+Изменения вне заявленной зоны нет: diff — `orchestrator/fsm_advance.py`,
+`tests/test_git_fixation.py`, `docs/codebase-map.md` (только
+`built_at_sha`, легитимная перегенерация тем же коммитом). `ci/`,
+`.github/`, `gates.yaml`, `skills/` не тронуты.
+
+### Системная целостность (ADR-0002)
+- Существующие тесты/гейты/лимиты не ослаблены: `tests/test_git_fixation.py`
+  правка — только новая фикстура для существующего теста, ни один
+  ассерт не удалён и не смягчён (сверено по diff и повторным прогоном).
+  `_missing_plank_refuses` строго УЖЕСТОЧАЕТ переход (раньше молчаливое
+  зелёное «не заведены», теперь именованный отказ там, где лок/AC-
+  разметка требуют планку) — не ослабление.
+- Раздел PLAN «Влияние на систему» соответствует фактическому diff:
+  затронут ровно один гейт (`_acceptance_run_refuses`), порядок
+  состояний ADR-0015 не тронут, побочных эффектов вне зоны нет.
+- Изменение обратимо: `git revert` коммита правки возвращает прежнее
+  (ошибочное) поведение, как явно описано в PLAN.
 
 ## Замечания
 
@@ -26,7 +100,8 @@ schema_version: 5
 
 | id | статус | файл/строка | суть | последствие | решение |
 |---|---|---|---|---|---|
-| — | — | — | замечаний в этой итерации не заведено | — | — |
+
+Пусто — замечаний в этой итерации не заведено, реестр закрыт целиком.
 
 ## Вердикт
 
@@ -35,12 +110,19 @@ approved
 ## Проверено исполнением
 
 - `python3 -m pytest tasks/01M283NJV2PNDSS7J2HKS19YHJ/acceptance_tests/test_fresh_plank_materializes.py -v` — 5 тестов (AC-1..AC-5), все зелёные.
-- `python3 -m unittest tests.test_git_fixation tests.test_branch_freshness_gate tests.test_fsm_autogate tests.test_fsm_branch_correct_status_reads tests.test_fsm_map_conflict_autoresolve tests.test_id_format_guard tests.test_review_package tests.test_workspace -v` — 198 тестов, все зелёные (модули, затронутые диффом и вызывающие `_acceptance_run_refuses`/`workspace.on_task_branch`).
-- Мутационная проверка вручную: временно откатил материализацию для собственного target в `_acceptance_run_refuses` (убрал вызов `acceptance.materialize_from_branch` на ветке `elif workspace.on_task_branch(...)`, вернул прежний `acc_tdir = run_cwd / "tasks" / task_id`) и перезапустил приёмочную планку — `test_ac1_...`, `test_ac2_...`, `test_ac5_...` покраснели ровно так, как заявлено в их докстрингах («Ловит мутацию»), `test_ac3_...`/`test_ac4_...` остались зелёными. Файл `orchestrator/fsm_advance.py` возвращён `git checkout --` (подтверждено `git status --short` — чисто).
-- `docs/codebase-map.md`: перегенерировал `python3 scripts/codebase_map.py` и сравнил с версией в диффе построчно без `built_at_sha` (`grep -v '^built_at_sha:'`) — расхождений в содержимом нет, только легитимная метка коммита (правило скила: `built_at_sha` не признак дефекта). Файл возвращён `git checkout --`.
-- Сверка diff `tests/`: изменения только в `tests/test_git_fixation.py` — добавлена фикстура `SPEC_SKIP_TESTS` и передача её в `commit_files` существующего теста `ExternalTargetAdvanceIgnoresDirtyCheckTest`; ни один существующий ассерт не тронут и не ослаблен (проверено построчно по diff и зелёным прогоном модуля).
-- Проверено адресно: единственный вызов `_acceptance_run_refuses` — из `in_dev()` (`fsm_advance.py:1298`); соседний путь `_review_approved` (approve → acceptance, `fsm_advance.py:287-293`) не материализует планку для собственного target, но не задет тем же классом бага — `fsm_autogate._autogate_conditions` читает условие «а» (наличие/AC-разметка планки) напрямую из артефактной ветки (`gitcmd.ls_tree_files`/`gitcmd.show`), не с диска `acc_tdir` (см. докстринг `orchestrator/fsm_autogate.py:1-9,31-41` — уже вынесено отдельной задачей 01M1NBWWPJMHKJMYXRDCM0W0C5); побочных эффектов вне заявленного PLAN «Влияние на систему» нет.
+- Мутация вручную: временно откатил ветку `elif workspace.on_task_branch(...)` в `_acceptance_run_refuses` к прежнему `acc_tdir = run_cwd / "tasks" / task_id` (без материализации) — приёмочная планка красит ровно `test_ac1_...`, `test_ac2_...`, `test_ac5_...` (3 failed, 2 passed), `test_ac3_...`/`test_ac4_...` остаются зелёными — совпадает с докстрингами «Ловит мутацию» каждого теста. Файл `orchestrator/fsm_advance.py` возвращён `git checkout --` (`git status --short` подтверждает чистоту).
+- `python3 -m pytest tests/test_git_fixation.py tests/test_branch_freshness_gate.py tests/test_fsm_autogate.py -v` — 64 теста, все зелёные (модули, вызывающие `_acceptance_run_refuses`/`workspace.on_task_branch`/`_autogate_conditions`).
+- Мутация фикстуры: убрал добавленный `tasks/{TASK}/SPEC.md` (SPEC_SKIP_TESTS) из `commit_files` в `ExternalTargetAdvanceIgnoresDirtyCheckTest.setUp` — тест падает (`'in_dev' != 'verifying'`), подтверждает, что правка теста не декоративна. Файл `tests/test_git_fixation.py` возвращён `git checkout --`.
+- `docs/codebase-map.md`: перегенерировал `python3 scripts/codebase_map.py`, сравнил с версией из diff — расхождение только в строке `built_at_sha` (легитимная метка коммита, класс T053/T072, не дефект). Файл возвращён `git checkout --`.
+- Адресно проверен побочный путь `_review_approved`/`fsm_autogate._autogate_conditions` (`fsm_advance.py:287-293`, `fsm_autogate.py:20-41,119-154`) — `acc_tdir` для условия «а» там не используется вовсе (только в сигнатуре/докстринге), поэтому невправленный старый расчёт `acc_tdir` в `_review_approved` не создаёт функциональной дыры класса регрессии №16; исключение SPEC «Автогейт приёмки» из объёма подтверждено кодом, не только текстом PLAN.
+- CI коммита fa9056f2 зелёный (14 проверок, «Статус CI» пакета). Полный набор `tests/` в шаге ревью не прогонялся (решение Оператора 05.09 — гоняет CI на каждый пуш).
 
 ## Предложения системе
 
-Нет.
+- `orchestrator/fsm_advance.py::_review_approved` (287-293) считает
+  `acc_tdir` старым небезопасным способом для собственного target, хотя
+  этот путь давно не используется `_autogate_conditions` условием «а»
+  (см. `fsm_autogate.py:31-41`) — параметр и расчёт стали вестижиальными.
+  Не блокер этой задачи (SPEC явно выносит автогейт приёмки за скобки),
+  но стоит адресной задачей убрать мёртвый расчёт, чтобы следующий
+  ревьювер не тратил время на повторную проверку той же нейтральности.
