@@ -389,28 +389,23 @@ def commit_pause_now_checkpoint(conn, task_id: str, role: str) -> str:
     return detail
 
 
-def _staged_change_summary(wt: Path, exclude: str) -> str:
-    """«путь, путь (N строк)» по индексу ПОСЛЕ `git add -A` + `git reset
-    -- exclude` — тот же индекс, что `_commit_worktree_change` соберёт
-    следом для самого коммита (SPEC 01M283NC4JJXK7QS68Y9ET8TBK, AC-3).
-    Повторный `add -A`/`reset` в `_commit_worktree_change` после этого
-    вызова идемпотентен — тот же индекс, лишний git-вызов, не лишний
-    эффект.
+def _commit_summary(wt: Path, sha: str) -> str:
+    """«путь, путь (N строк)» ФАКТИЧЕСКИ закоммиченного `sha` — считает
+    `git show --numstat` УЖЕ ПОСЛЕ того, как `_commit_worktree_change`
+    применила `exclude` и зонный фильтр (SPEC 01M290PVYG2VJK6442H5BAX9MA,
+    R1-F1): предыдущая версия (`_staged_change_summary`) снимала слепок
+    индекса ДО зонного фильтра и называла посторонний файл, снятый со
+    стейджа и не попавший в коммит, «закоммиченным» — расхождение с
+    соседней записью журнала `STRAY_WORKTREE_FILES_ACTION` о том же
+    файле. Считать по уже сделанному коммиту, а не по предварительному
+    индексу, устраняет расхождение по построению: `sha` называет ровно
+    те пути, что реально вошли в дерево коммита.
 
-    Число строк — сумма добавленных и удалённых по `git diff --cached
-    --numstat` (для нового файла показывает его длину как «добавлено»,
-    для правки трекенного — обычный add+del) — то же значение, что
-    покажет `git show --stat` после коммита, посчитанное до коммита,
-    потому что вызывающему коду нужен текст ДЛЯ журнала, не факт
-    коммита. Пустая строка — нечего коммитить или git не ответил
-    (та же тихая деградация, что у `_commit_worktree_change`)."""
-    added = gitcmd.in_repo(wt, "add", "-A")
-    if added.returncode != 0:
-        return ""
-    reset = gitcmd.in_repo(wt, "reset", "-q", "--", exclude)
-    if reset.returncode != 0:
-        return ""
-    numstat = gitcmd.in_repo(wt, "diff", "--cached", "--numstat")
+    Число строк — сумма добавленных и удалённых по `git show --numstat`
+    (для нового файла показывает его длину как «добавлено», для правки
+    трекенного — обычный add+del). Пустая строка — git не ответил (та
+    же тихая деградация, что у `_commit_worktree_change`)."""
+    numstat = gitcmd.in_repo(wt, "show", "--numstat", "--format=", sha)
     if numstat.returncode != 0:
         return ""
     paths = []
@@ -454,9 +449,12 @@ def commit_success_checkpoint(conn, task_id: str, role: str) -> str:
     Сообщение коммита и действие журнала — буквальные строки SPEC
     (AC-2/AC-3), не текст соседних WIP-чекпоинтов (та же оговорка, что
     у `commit_abnormal_checkpoint` про `cause`, только здесь текст
-    целиком фиксирован, без параметра). `detail` — вывод
-    `_staged_change_summary` (список файлов + число строк, AC-3) плюс
-    `sha`, тем же приёмом, что у остальных WIP-чекпоинтов.
+    целиком фиксирован, без параметра). `detail` — вывод `_commit_summary`
+    ПОСЛЕ коммита (список файлов + число строк, AC-3) плюс `sha`, тем же
+    приёмом, что у остальных WIP-чекпоинтов; считается по уже сделанному
+    коммиту, а не по индексу до зонного фильтра — иначе посторонний файл,
+    снятый со стейджа `_commit_worktree_change`, попал бы в `detail` как
+    закоммиченный (SPEC 01M290PVYG2VJK6442H5BAX9MA, R1-F1).
 
     Только догфуд, коммитит, только если реально есть что коммитить
     (`_commit_worktree_change` сам отказывает на пустом diff), тихая
@@ -468,13 +466,13 @@ def commit_success_checkpoint(conn, task_id: str, role: str) -> str:
         return ""
     wt = workspace.path(task_id)
     exclude = f"tasks/{task_id}"
-    summary = _staged_change_summary(wt, exclude)
     message = (f"{task_id}: код закоммичен пультом за роль developer — "
               "шаг завершён с незакоммиченным кодом")
     committed, sha, _stray = _commit_worktree_change(
         conn, task_id, wt, message, exclude=exclude)
     if not committed:
         return ""
+    summary = _commit_summary(wt, sha)
     detail = f"{summary} (sha {sha})" if sha else summary
     store.journal(conn, task_id, "orchestrator", "код закоммичен пультом за роль",
                   detail)
@@ -931,13 +929,11 @@ def _commit_worktree_change(conn, task_id: str, wt: Path, message: str,
                       STRAY_WORKTREE_FILES_ACTION,
                       f"{STRAY_WORKTREE_FILES_ACTION}: {', '.join(stray)}")
         if refuse_on_stray:
-            unstage_all = gitcmd.in_repo(wt, "reset", "-q")
-            if unstage_all.returncode != 0:
-                return False, "", stray
+            gitcmd.in_repo(wt, "reset", "-q")
             return False, "", stray
         unstage = gitcmd.in_repo(wt, "reset", "-q", "--", *stray)
         if unstage.returncode != 0:
-            return False, "", []
+            return False, "", stray
     staged = gitcmd.in_repo(wt, "diff", "--cached", "--quiet")
     if staged.returncode != 1:  # 0 — нечего коммитить, иное — git не ответил
         return False, "", stray

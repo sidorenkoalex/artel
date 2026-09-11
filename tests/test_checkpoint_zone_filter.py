@@ -66,6 +66,64 @@ class ZonePathsTest(_WorktreeCheckpointTest):
         self.assertIn(f"tasks/{self.TASK}/", zones)
 
 
+class CommitSuccessCheckpointSummaryTest(_WorktreeCheckpointTest):
+    """Регресс на R1-F1 (REVIEW.md 01M290PVYG2VJK6442H5BAX9MA, итерация 1,
+    major): `_staged_change_summary` считала список файлов/строк ДО того,
+    как `_commit_worktree_change` снимает посторонний путь со стейджа —
+    `detail`/журнал «код закоммичен пультом за роль» называли его
+    закоммиченным, хотя реальный коммит его не содержал (противоречило
+    соседней записи `STRAY_WORKTREE_FILES_ACTION` о том же файле).
+    `_commit_summary` считает сводку ПОСЛЕ коммита, по `git show
+    --numstat` над готовым `sha` — расхождение исключено по построению."""
+
+    def test_stray_file_outside_zones_is_not_listed_as_committed(self):
+        self.enter_in_dev()
+        conn = store.db()
+        store.update_task(conn, self.TASK,
+                          zones="orchestrator/allowed_module.py")
+        self.write_code_file("orchestrator/allowed_module.py",
+                             "строка 1\nстрока 2\nстрока 3\n")
+        self.write_code_file("docs/stray_note.md", "посторонний\n")
+
+        detail = checkpoint.commit_success_checkpoint(
+            conn, self.TASK, "developer")
+
+        self.assertIn("orchestrator/allowed_module.py", detail)
+        self.assertNotIn(
+            "stray_note.md", detail,
+            "R1-F1: посторонний файл не должен значиться закоммиченным")
+        committed = self.worktree_git(
+            "show", "--name-only", "--format=", self.worktree_head())
+        committed_paths = [p for p in committed.splitlines() if p]
+        self.assertNotIn("docs/stray_note.md", committed_paths)
+        self.assertIn("orchestrator/allowed_module.py", committed_paths)
+
+
+class CommitSummaryTest(_WorktreeCheckpointTest):
+
+    def test_lists_paths_and_total_line_count_of_the_given_commit(self):
+        self.enter_in_dev()
+        self.write_code_file("orchestrator/new_module.py",
+                             "строка 1\nстрока 2\nстрока 3\nстрока 4\n")
+        self.worktree_git("add", "-A")
+        self.worktree_git("commit", "-q", "-m", "тестовый коммит")
+
+        summary = checkpoint._commit_summary(self.wt, self.worktree_head())
+
+        self.assertIn("orchestrator/new_module.py", summary)
+        self.assertIn("4", summary)
+
+    def test_git_failure_degrades_to_empty_string(self):
+        self.enter_in_dev()
+
+        with mock.patch.object(gitcmd, "git",
+                               return_value=subprocess.CompletedProcess(
+                                   [], 1, "", "boom")):
+            summary = checkpoint._commit_summary(self.wt, "deadbeef")
+
+        self.assertEqual(summary, "")
+
+
 class StrayStagedPathsGitFailureTest(_WorktreeCheckpointTest):
 
     def test_git_diff_failure_degrades_to_none_not_empty_list(self):
