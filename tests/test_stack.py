@@ -203,6 +203,45 @@ class CheckStackTest(unittest.TestCase):
         self.assertTrue(checks)
 
 
+class PythonCheckProvenanceTest(unittest.TestCase):
+    """Требование 7 (SPEC 01M1SHK3MD4ZF9NYXSCT67J8AP, AC-7): проверка
+    `python` несёт дополнительную строку про фактический интерпретатор и
+    `.artel/venv`, не меняя свой статус. Регрессия постоянная — переживает
+    закрытие tasks/01M1SHK3MD4ZF9NYXSCT67J8AP/acceptance_tests/, которые
+    проверяли то же самое подробнее, но живут только пока задача открыта.
+    """
+
+    def test_detail_names_executable_and_venv_presence(self):
+        """Ловит мутацию: `sys.executable`/путь `.artel/venv` не попадают
+        в `detail` — `assertIn` откажет."""
+        with tempfile.TemporaryDirectory() as tmp:
+            venv_dir = Path(tmp) / "venv"
+            venv_dir.mkdir()
+            with mock.patch.object(config, "VENV_DIR", venv_dir, create=True), \
+                 mock.patch.object(sys, "version_info", OK_PYTHON_VERSION_INFO):
+                check = stack._python_check()
+
+        self.assertIn(sys.executable, check.detail)
+        self.assertIn(str(venv_dir), check.detail)
+
+    def test_status_unaffected_by_venv_presence(self):
+        """Ловит мутацию: добавление сведений о venv заодно меняет статус
+        проверки `python` — `assertEqual` статусов между прогонами
+        (venv есть/нет) откажет."""
+        with tempfile.TemporaryDirectory() as tmp:
+            with mock.patch.object(sys, "version_info", OK_PYTHON_VERSION_INFO):
+                existing = Path(tmp) / "venv"
+                existing.mkdir()
+                with mock.patch.object(config, "VENV_DIR", existing, create=True):
+                    with_venv = stack._python_check()
+                missing = Path(tmp) / "missing"
+                with mock.patch.object(config, "VENV_DIR", missing, create=True):
+                    without_venv = stack._python_check()
+
+        self.assertEqual("ok", with_venv.status)
+        self.assertEqual(with_venv.status, without_venv.status)
+
+
 class CheckStackVenvTest(unittest.TestCase):
     """AC-7/AC-8 (tasks/01M1REVEZ1HESMJ7AFD5A9MEJ8/SPEC.md, требование 2):
     `check_stack()` сверяет `.artel/venv` с файлом закреплённых версий."""

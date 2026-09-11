@@ -330,6 +330,8 @@ worktree задачи, команда коммитит правку, сдвиг�
   watch     дозор событий журнала (steps/alerts) для сессии Оператора,
             read-only, без lease (SPEC 01M1VBEKRN0GA029J98S0K2DAQ)
 """
+import os
+import subprocess
 import sys
 from pathlib import Path
 
@@ -340,8 +342,85 @@ from pathlib import Path
 # у запущенного файла в нём лежит orchestrator/, а не корень.
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+from orchestrator import config, stack  # noqa: E402
+
+# Самовыбор интерпретатора (SPEC 01M1SHK3MD4ZF9NYXSCT67J8AP): `python3` из
+# PATH зависит от профиля оболочки (pyenv инициализируется только в
+# интерактивном шелле) — в неинтерактивной login-оболочке (ассистент, cron,
+# хуки) он резолвится в системный интерпретатор ниже `stack.REQUIRED_PYTHON`,
+# и безусловный импорт модулей пульта ниже (синтаксис 3.10+, например
+# `X | None` в `orchestrator/doctor.py`) падает `TypeError` из глубины
+# импорта вместо именованного отказа. Проверка стоит ЗДЕСЬ — до этого
+# импорта и до исполнения любого `def` этого файла с таким синтаксисом
+# (`_tz_arg` ниже несёт `-> str | None`) — код проверки сам не использует
+# `X | None`/`match` (требование 1).
+#
+# `stack.REQUIRED_PYTHON` читается прямым импортом, не дублируется: сам
+# `stack.py` (и `config.py`, от которого он зависит) держится 3.9-совместимым
+# специально ради этого (требование 2, комментарий у `stack.REQUIRED_PYTHON`).
+_REEXEC_MARKER_ENV = "ARTEL_PYTHON_REEXEC"
+
+
+def _venv_python_path():
+    return Path(config.VENV_DIR) / "bin" / "python"
+
+
+def _venv_python_version(python_path):
+    """Версия интерпретатора `python_path` парой (major, minor) — `None`,
+    если вызов не удался или вывод не разобрался (venv битый/чужой)."""
+    try:
+        result = subprocess.run(
+            [str(python_path), "-c",
+             "import sys; print(sys.version_info[0], sys.version_info[1])"],
+            capture_output=True, text=True, timeout=10)
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if result.returncode != 0:
+        return None
+    parts = result.stdout.split()
+    if len(parts) != 2:
+        return None
+    try:
+        return (int(parts[0]), int(parts[1]))
+    except ValueError:
+        return None
+
+
+def _refuse_unsupported_interpreter():
+    """Требование 4: именованный отказ одной строкой, код выхода 2 — не
+    молчаливый `TypeError` из глубины импорта."""
+    version_text = ".".join(str(p) for p in sys.version_info[:3])
+    required_text = ".".join(str(p) for p in stack.REQUIRED_PYTHON)
+    print(
+        "нужен Python {0}+, найден {1} ({2}): создай venv: artel.py "
+        "venv-sync".format(required_text, version_text, sys.executable),
+        file=sys.stderr)
+    sys.exit(2)
+
+
+def _ensure_supported_interpreter():
+    """Требования 3-5: текущий интерпретатор ниже `stack.REQUIRED_PYTHON` —
+    перезапуск под `.artel/venv/bin/python`, если он пригоден и рекурсии ещё
+    не было; иначе именованный отказ вместо `TypeError`."""
+    if tuple(sys.version_info[:2]) >= stack.REQUIRED_PYTHON:
+        return
+    if os.environ.get(_REEXEC_MARKER_ENV):
+        _refuse_unsupported_interpreter()
+        return
+    venv_python = _venv_python_path()
+    venv_version = (_venv_python_version(venv_python)
+                    if venv_python.is_file() else None)
+    if venv_version is None or venv_version < stack.REQUIRED_PYTHON:
+        _refuse_unsupported_interpreter()
+        return
+    os.environ[_REEXEC_MARKER_ENV] = "1"
+    os.execv(str(venv_python), [str(venv_python), sys.argv[0]] + sys.argv[1:])
+
+
+_ensure_supported_interpreter()
+
 from orchestrator import (amend, answer, auto, budget, canary, catalog,  # noqa: E402
-                          cleanup, config, doctor, dry_run, fsm, notes, pause,
+                          cleanup, doctor, dry_run, fsm, notes, pause,
                           pin, projects, prune, release, report, runner,
                           venv, version, watch, workspace, zone_lock)
 
