@@ -1,5 +1,7 @@
 """kill switch и уборка хвостов задачи: каталог артефактов и ветка."""
+import os
 import shutil
+import signal
 import socket
 
 from . import config, gitcmd, lease, liveness, store, workspace
@@ -145,8 +147,19 @@ def cmd_kill(task_id: str, session_id: str | None = None) -> None:
     репро — `cmd_kill` с уникальным префиксом зависал бесконечно)."""
     conn = store.db()
     task_id = store.resolve_task_id(conn, task_id)
+    # Снимок lease ДО `run_locked` (SPEC 01M1NWCHVTYQ0M8PCJ1YJ2N78P,
+    # AC-10) — `force=True` ниже перезаписывает pid/session строки НА
+    # СВОЙ ПРОЦЕСС (kill сам становится «держателем»), поэтому pid
+    # живого отвязанного цикла нужно поймать раньше, иначе к моменту,
+    # когда `_cmd_kill` его читает, там уже лежит pid самого kill.
+    holder_before = store.lease_row(conn, task_id)
+    # `force=True` — kill обязан прервать задачу немедленно, даже если
+    # lease сейчас держит живой отвязанный цикл со свежим heartbeat
+    # (иначе kill отказал бы «сессия занята», ровно тем же текстом,
+    # каким сегодня отказывает run/advance при живом конкуренте).
     lease.run_locked(conn, task_id, session_id,
-                     lambda sid: _cmd_kill(conn, task_id))
+                     lambda sid: _cmd_kill(conn, task_id, holder_before),
+                     force=True)
 
 
 
@@ -199,6 +212,13 @@ def _group_kill_lease_step(conn, task_id: str) -> None:
     с ЛОКАЛЬНЫМ процессом было бы случайным попаданием, не адресацией).
     Лиза мертва или без записанного pgid — нечего снимать (AC-6 берёт
     на себя мёртвый lease отдельным путём, под `doctor --fix`).
+
+    Отдельно и независимо от `_cmd_kill`'а снимка `holder_before`/SIGKILL
+    отвязанного цикла (SPEC 01M1NWCHVTYQ0M8PCJ1YJ2N78P, AC-10) — `pgid`
+    здесь несёт группу АГЕНТСКОГО подпроцесса конкретного шага (`runner.
+    spawn_agent`, собственная сессия), не группу самого процесса цикла
+    (`auto`/`run`, `leases.pid`): это две независимые группы процессов,
+    убить нужно обе, иначе одна из них осиротеет.
     """
     row = store.lease_row(conn, task_id)
     if row is None or not row["pgid"]:
@@ -213,7 +233,7 @@ def _group_kill_lease_step(conn, task_id: str) -> None:
                   liveness.group_kill_detail(row["pgid"], count))
 
 
-def _cmd_kill(conn, task_id: str) -> None:
+def _cmd_kill(conn, task_id: str, holder_before=None) -> None:
     """Kill switch: убивает задачу из ЛЮБОГО нетерминального состояния,
     даже если конкурентная сессия успела перейти между чтением состояния
     и CAS-попыткой (SPEC T050, требования 6-7, инвариант №14).
@@ -246,6 +266,23 @@ def _cmd_kill(conn, task_id: str) -> None:
     # (AC-4): `lease.release_any` ниже уже не сможет прочитать pgid по
     # ещё живому держателю после того, как строка исчезнет.
     _group_kill_lease_step(conn, task_id)
+    # SPEC 01M1NWCHVTYQ0M8PCJ1YJ2N78P, требование 6, AC-10: `kill` обязан
+    # прервать НЕМЕДЛЕННО, включая живой отвязанный процесс цикла, если
+    # тот ещё несёт lease. `holder_before` — снимок lease,
+    # снятый ДО того, как `run_locked(force=True)` (вызыватель) уже
+    # перезаписал строку СВОИМ pid/session — читать lease заново здесь
+    # адресовало бы уже не тот процесс. Чужой host не трогаем — тем же
+    # приёмом различения, что уже применяют `doctor.check_leases`/
+    # `check_merge_lock`. Независимо от `_group_kill_lease_step` выше —
+    # тот снимает группу АГЕНТСКОГО подпроцесса шага, эта ветка отдельно
+    # снимает сам процесс цикла (`auto`/`run`), не входящий в ту группу.
+    if (holder_before is not None
+            and holder_before["hostname"] == socket.gethostname()
+            and liveness._pid_alive(holder_before["pid"])):
+        try:
+            os.kill(holder_before["pid"], signal.SIGKILL)
+        except OSError:
+            pass
     # kill обязан снять lease задачи безусловно, «любым путём» (SPEC
     # 01M1G..., требование 3, AC-6) — независимо от того, взял ли его
     # штатный `run_locked` этого же вызова «с нуля» (тот отпустил бы его
