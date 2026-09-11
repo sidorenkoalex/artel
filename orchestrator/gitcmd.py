@@ -90,7 +90,13 @@ def merges_between(sha_from: str, sha_to: str) -> int | None:
     01M1NGFK3N6MRMYGCC09H975V3 п.3: «возраст» зелёного прогона канарейки
     относительно целевого sha) — тот же вырожденный случай `None`, что и
     `commits_behind`: git не ответил, либо ответ не разобрать числом."""
-    res = git("rev-list", "--count", "--merges", f"{sha_from}..{sha_to}")
+    # Hotfix №20 (11.09): только мержи В main — по первой родительской
+    # линии. Без `--first-parent` считались и merge-коммиты внутри ветки
+    # задачи (подтяжка main, слияние разработчика, снимок артефактов):
+    # один мерж задачи давал 4 «мержа», гейт pin-update (порог 10)
+    # срабатывал через 2–3 задачи.
+    res = git("rev-list", "--count", "--first-parent", "--merges",
+              f"{sha_from}..{sha_to}")
     if res is None or res.returncode != 0:
         return None
     text = res.stdout.strip()

@@ -1,5 +1,5 @@
 ---
-built_at_sha: 5ae39a7135000b48f4bdbf4fb150c7c0ed7f38b7
+built_at_sha: 6e8af90b56739c4dcf033e9dd66bc68f2e1eb9bc
 ---
 
 # Codebase-map пульта
@@ -978,10 +978,13 @@ built_at_sha: 5ae39a7135000b48f4bdbf4fb150c7c0ed7f38b7
 - `queue_order`
 - `queue_position`
 - `refusal`
+- `wait_enter_action`
+- `wait_exit_action`
+- `wait_minutes`
 
 **Импортирует:** `orchestrator/config.py`, `orchestrator/store.py`
 
-**Импортируется:** `orchestrator/artel.py`, `orchestrator/auto.py`, `orchestrator/catalog.py`, `orchestrator/runner.py`, `tests/test_zone_lock.py`
+**Импортируется:** `orchestrator/artel.py`, `orchestrator/auto.py`, `orchestrator/catalog.py`, `orchestrator/runner.py`, `tests/test_catalog_status_log.py`, `tests/test_zone_lock.py`
 
 ## scripts/codebase_map.py
 
@@ -1377,7 +1380,7 @@ built_at_sha: 5ae39a7135000b48f4bdbf4fb150c7c0ed7f38b7
 
 **Публичные функции:** (нет)
 
-**Импортирует:** `orchestrator/catalog.py`, `orchestrator/config.py`, `orchestrator/store.py`, `tests/sandbox.py`
+**Импортирует:** `orchestrator/catalog.py`, `orchestrator/config.py`, `orchestrator/store.py`, `orchestrator/zone_lock.py`, `tests/sandbox.py`
 
 **Импортируется:** —
 

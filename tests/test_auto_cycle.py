@@ -1183,5 +1183,116 @@ class AutoLeaseTest(AutoCycleTest):
                           "cmd_auto не отпустила взятый ею с нуля lease")
 
 
+class WaitForZoneTest(AutoCycleTest):
+    """`auto._wait_for_zone` (SPEC 01M1VBEAWZW4EBZHKMGNBBK648, требования
+    1-3, AC-1..AC-4, AC-8а/б) в изоляции от остального цикла `_cmd_auto`:
+    опрос, атрибуция держателя при передаче зоны между конкурентами,
+    потолок ожидания и потеря lease во время ожидания.
+
+    Приёмочные тесты (tasks/01M1VBEAWZW4EBZHKMGNBBK648/acceptance_tests)
+    кроют AC-1..AC-4/AC-8а/б сквозным путём через `auto`/`status`, но ни
+    один из десяти файлов не заводит сценарий передачи зоны между ДВУМЯ
+    конкурентами одновременно (REVIEW.md, R1-F1 — воспроизведено там
+    вручную, не тестом) — этот класс ловит именно его.
+    """
+
+    def _seed_occupier(self, task_id: str, zones: str) -> str:
+        store.insert_task(store.db(), task_id, f"Другая {task_id}", "in_dev",
+                          f"task/{task_id.lower()}-fake", config.DEFAULT_TARGET,
+                          config.DEFAULT_BUDGET_USD)
+        store.update_task(store.db(), task_id, zones=zones)
+        store.journal(store.db(), task_id, "developer", "agent run started", "")
+        return task_id
+
+    def setUp(self):
+        super().setUp()
+        self.set_state("in_dev")
+        store.update_task(store.db(), self.TASK, zones="a/b")
+
+    def test_exit_record_names_the_actual_last_holder_on_handoff(self):
+        """Ловит мутацию R1-F1: `occupier_id` не обновляется на каждой
+        итерации опроса — запись выхода назвала бы ПЕРВОНАЧАЛЬНОГО
+        держателя (T9AAA), хотя зону последним держал и освободил T9BBB."""
+        first = self._seed_occupier("T9AAA", "a/b")
+        second = self._seed_occupier("T9BBB", "a/b")
+        calls = {"n": 0}
+
+        def fake_sleep(_):
+            calls["n"] += 1
+            conn = store.db()
+            released = first if calls["n"] == 1 else second
+            conn.execute("UPDATE tasks SET state='done' WHERE id=?", (released,))
+            conn.commit()
+
+        self.patch_object(auto.time, "sleep", fake_sleep)
+
+        result = auto._wait_for_zone(store.db(), self.TASK, "sess-1", "in_dev")
+
+        self.assertIsNone(result)
+        exit_actions = [action for _, action, _ in self.journal_rows()
+                        if action.startswith("зона свободна через")]
+        self.assertEqual(len(exit_actions), 1, exit_actions)
+        self.assertIn(second, exit_actions[0])
+        self.assertNotIn(first, exit_actions[0])
+
+    def test_enter_and_exit_are_journaled_exactly_once(self):
+        """AC-2/AC-3: ровно одна запись входа и ровно одна запись выхода —
+        независимо от числа опросов внутри ожидания."""
+        occupier = self._seed_occupier("T9AAA", "a/b")
+        calls = {"n": 0}
+
+        def fake_sleep(_):
+            calls["n"] += 1
+            if calls["n"] >= 3:
+                conn = store.db()
+                conn.execute("UPDATE tasks SET state='done' WHERE id=?", (occupier,))
+                conn.commit()
+
+        self.patch_object(auto.time, "sleep", fake_sleep)
+
+        auto._wait_for_zone(store.db(), self.TASK, "sess-1", "in_dev")
+
+        actions = [action for _, action, _ in self.journal_rows()]
+        enters = [a for a in actions if a.startswith("ждёт зоны ")]
+        exits = [a for a in actions if a.startswith("зона свободна через")]
+        self.assertEqual(len(enters), 1, actions)
+        self.assertEqual(len(exits), 1, actions)
+
+    def test_ceiling_stops_the_cycle_without_escalating(self):
+        """AC-4/AC-8б: потолок исчерпан — цикл останавливается именованной
+        причиной, задача остаётся в переданном состоянии (не эскалирует)."""
+        self._seed_occupier("T9AAA", "a/b")
+        self.patch_object(config, "ZONE_WAIT_MAX_SEC", 0)
+
+        result = auto._wait_for_zone(store.db(), self.TASK, "sess-1", "in_dev")
+
+        self.assertIsInstance(result, auto.Stop)
+        self.assertEqual(result.state, "in_dev")
+        self.assertIn("потолок ожидания зоны исчерпан", result.reason)
+        self.assertEqual(self.state(), "in_dev")
+
+    def test_lease_lost_during_wait_stops_the_cycle_named(self):
+        """R1-F2: чужая живая сессия перехватывает lease этой задачи прямо
+        во время ожидания — цикл обязан остановиться именованной причиной,
+        не продолжать опрос как ни в чём не бывало."""
+        self._seed_occupier("T9AAA", "a/b")
+
+        def fake_sleep(_):
+            conn = store.db()
+            conn.execute(
+                "INSERT INTO leases (task_id, session_id, pid, hostname,"
+                " heartbeat_ts) VALUES (?,?,?,?,?)",
+                (self.TASK, "sess-other", 999, "other-host", store.now()))
+            conn.commit()
+
+        self.patch_object(auto.time, "sleep", fake_sleep)
+
+        result = auto._wait_for_zone(store.db(), self.TASK, "sess-mine", "in_dev")
+
+        self.assertIsInstance(result, auto.Stop)
+        self.assertIn("lease", result.reason)
+        self.assertIn("sess-other", result.reason)
+
+
 if __name__ == "__main__":
     unittest.main()

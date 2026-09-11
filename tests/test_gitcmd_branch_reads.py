@@ -234,6 +234,24 @@ class MergesBetweenTest(_GitcmdRealGitSandbox):
 
         self.assertEqual(gitcmd.merges_between(base, self.head()), 1)
 
+    def test_merges_inside_the_branch_are_not_counted(self):
+        """Hotfix №20 (11.09): merge-коммиты ВНУТРИ ветки задачи (подтяжка
+        main в ветку перед мержем) не считаются мержами main — иначе один
+        мерж задачи давал 2–4 «мержа», и гейт pin-update (порог 10, ADR-0013)
+        срабатывал через 2–3 задачи. Ловит мутацию: пропущенный
+        `--first-parent` — посчитал бы 2 вместо 1."""
+        base = self.head()
+        self.checkout("feature", create=True)
+        self.write_and_commit("f.txt", "1\n")
+        self.checkout(config.MAIN_BRANCH)
+        self.write_and_commit("m.txt", "2\n")
+        self.checkout("feature")
+        self.git("merge", "--no-ff", "-q", "-m", "pull main", config.MAIN_BRANCH)
+        self.checkout(config.MAIN_BRANCH)
+        self.git("merge", "--no-ff", "-q", "-m", "merge feature", "feature")
+
+        self.assertEqual(gitcmd.merges_between(base, self.head()), 1)
+
     def test_zero_when_no_merges_on_the_range(self):
         """Ловит мутацию: пустой диапазон мержей (`rev-list` отвечает
         `"0\\n"`) спутан с «git не ответил» и возвращён `None` вместо
