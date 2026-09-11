@@ -443,3 +443,74 @@ approve-по-sha; единственный модуль, затронутый д
 задачи отдельным коммитом.
 
 `status: ready`.
+
+## Возврат — подтяжка main после hotfix №19 (CI на устаревшей голове)
+
+Причина возврата: CI прогона `pull_request` был красным по СНИМКУ ветки
+ДО правки main 11.09 (`f80bde10`, оператор: REVIEW.md 01M1GCHKG8 —
+строка R6-F1 приведена к шести колонкам, hotfix №19) — повторная
+попытка прогона брала старый merge-коммит вместо новой головы. Код не
+менять, только подтянуть main (то же указание, что уже отработано в
+шаге «Возврат — конфликт подтяжки main (R3)» выше).
+
+Сделано:
+
+- `git fetch origin main` — HEAD отставал от `origin/main` на 9
+  коммитов (в т.ч. `f80bde10` — сама правка hotfix №19 — и стоп-кран
+  волны часть 2, 01M1THKRK8HPXA7Y2SRB0RFTN2).
+- `git merge origin/main` (коммит слияния `bf80dde2`) — единственный
+  конфликт: `docs/codebase-map.md` (генерируемый файл, конфликтует на
+  каждом слиянии по построению). `orchestrator/fsm.py` и
+  `tests/test_git_fixation.py` — те же файлы, что правит эта задача —
+  слились БЕЗ конфликта; сверено отдельно (`git diff origin/main --
+  orchestrator/fsm.py tests/test_git_fixation.py` пуст после слияния) —
+  код задачи с main не разошёлся.
+- Конфликт `docs/codebase-map.md` разрешён взятием стороны main
+  (`git checkout --theirs`) и штатной регенерацией
+  `python3 scripts/codebase_map.py` (слияние затронуло `orchestrator/
+  auto.py`, `orchestrator/catalog.py`, `orchestrator/config.py`,
+  `orchestrator/doctor/cli.py`, `orchestrator/runner.py` — правка
+  `*.py` из main требует регенерации тем же шагом, класс из скила).
+  Диф после регенерации — только строка `built_at_sha`.
+- Код самой задачи (`orchestrator/fsm.py`, `tests/test_git_fixation.py`,
+  `docs/invariants.md`) в этом ходе не менялся — только подтяжка.
+
+Прогон приёмочной планки задачи синхронно, пофайлово, в переднем
+плане (14 исполняемых методов + 2 manual — `test_ac5_operator_
+session_diff.py`, `test_ac9_invariant_wording_and_regression.py` — по
+конструкции самой планки, см. их докстринги):
+
+- `test_ac1_diverged_or_dirty_live_sha_blocks_approve.py` — 2/2 OK
+- `test_ac1_matching_live_sha_lets_approve_through.py` — 1/1 OK
+- `test_ac2_matching_fixation_auto_confirms.py` — 2/2 OK
+- `test_ac3_diverged_or_dirty_refuses_named.py` — 2/2 OK
+- `test_ac4_explicit_sha_semantics_unchanged.py` — 3/3 OK
+- `test_ac6_spec_gate_approve_rereads_budget.py` — 2/2 OK
+- `test_ac7_differing_spec_budget_does_not_override.py` — 1/1 OK
+- `test_ac7_matching_spec_budget_does_not_override.py` — 1/1 OK
+- `test_ac8_changed_value_is_journaled.py` — 1/1 OK
+- `test_ac8_unchanged_value_no_duplicate_journal_record.py` — 1/1 OK
+
+Итого: 16/16 (14 исполняемых + 2 manual) — планка полностью зелёная.
+
+Регрессия, модули, затронутые диффом слияния (пофайлово, в переднем
+плане):
+
+- `tests/test_git_fixation.py` (ADR-0002-защищённый, класс
+  approve-по-sha) — 39/39 OK
+- `tests/test_spec_budget.py` + `tests/test_cmd_approve_dispatch.py` +
+  `tests/test_zones_approve.py` (класс потолка задачи и диспетчер
+  approve) — 51/51 OK
+- `tests/test_auto_cycle.py` + `tests/test_catalog_wave_breaker_status.py`
+  + `tests/test_doctor_wave_breaker.py` + `tests/test_runner_wave_breaker.py`
+  (модули, принесённые слиянием main — стоп-кран волны часть 2) —
+  61/61 OK
+
+Полный набор `tests/` в шаге не гонял (запрещено скилом — гоняет CI на
+каждый пуш ветки).
+
+Коммит слияния `bf80dde2` — `01M1SHJX22EMEP4AJ9FFJJ09DC: подтяжка
+main` — уже в кодовой ветке задачи. Коммитить более нечего: код задачи
+не менялся, только голова ветки продвинута.
+
+`status: ready`.
