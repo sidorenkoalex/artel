@@ -2,6 +2,7 @@
 tasks/T066/SPEC.md, требование 2в — условие "полный набор tests/ в
 worktree ветки зелёный" автогейта acceptance).
 """
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -72,6 +73,52 @@ class RunFullSuiteTest(unittest.TestCase):
             green, tail = acceptance.run_full_suite(self.root)
         self.assertFalse(green)
         self.assertIn("превысил", tail)
+
+
+class RunFullSuiteUsesWorkersAndXdistTest(unittest.TestCase):
+    """01M291M2Z76M84GVP25J387A66, требование 1/AC-1/AC-7(а): полный набор
+    гонится через pytest-xdist — `-n <config.FULL_SUITE_WORKERS>` и явная
+    загрузка `-p xdist`, тем же приёмом, что `_pytest_command` уже несёт
+    для `-p timeout`.
+    """
+
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.root = Path(tmp.name)
+        (self.root / "tests").mkdir()
+
+    def test_command_carries_worker_count_and_explicit_xdist_plugin(self):
+        """Ловит мутацию: параллель снята из `run_full_suite` (`-n`/
+        `-p xdist` отсутствуют в команде) — полный набор снова гонится
+        последовательно без предупреждения."""
+        with mock.patch.object(acceptance.subprocess, "run") as run_:
+            run_.return_value = subprocess.CompletedProcess([], 0, "3 passed", "")
+            acceptance.run_full_suite(self.root)
+
+        command = run_.call_args.args[0]
+        self.assertIn("-n", command, f"команда без -n: {command}")
+        n_pos = command.index("-n")
+        self.assertEqual(
+            command[n_pos + 1], str(config.FULL_SUITE_WORKERS),
+            f"-n несёт не значение config.FULL_SUITE_WORKERS: {command}")
+        p_values = [command[i + 1] for i, token in enumerate(command)
+                   if token == "-p" and i + 1 < len(command)]
+        self.assertIn("xdist", p_values,
+                      f"нет явной загрузки -p xdist в команде: {command}")
+
+    def test_full_suite_workers_set_to_one_is_still_a_valid_command(self):
+        """AC-7(б): `config.FULL_SUITE_WORKERS = 1` — команда остаётся
+        валидной (`-n 1`), параллель не выключается тихо."""
+        with mock.patch.object(config, "FULL_SUITE_WORKERS", 1), \
+             mock.patch.object(acceptance.subprocess, "run") as run_:
+            run_.return_value = subprocess.CompletedProcess([], 0, "3 passed", "")
+            green, _ = acceptance.run_full_suite(self.root)
+
+        command = run_.call_args.args[0]
+        n_pos = command.index("-n")
+        self.assertEqual(command[n_pos + 1], "1", f"-n не несёт '1': {command}")
+        self.assertTrue(green)
 
 
 class MaterializeFromBranchGitFailureTest(unittest.TestCase):
