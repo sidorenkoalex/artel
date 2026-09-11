@@ -13,6 +13,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
@@ -176,6 +177,70 @@ class AnswerMandateMarkerOutsideInDevOrReviewStillRefusesTest(_ArtifactBranchAns
         self.assertIn("escalated", str(ctx.exception))
         self.assertNotIn(f"tasks/{self.TASK}/ANSWER-1.md",
                          self.artifact_branch_files())
+
+
+class RoleEnvironmentRefusalTest(_ArtifactBranchAnswerTest):
+    """REVIEW 01M287TPG0HAVXS8CHBCY679WN итерация 1, замечание R1-F1:
+    `answer` (ветка `in_dev`/`review`) и `zones-extend` отказывают, если
+    ТЕКУЩИЙ процесс сам исполняется в окружении роли
+    (`runner.in_role_environment`) — без этого рубежа developer/reviewer,
+    ведущий свой же активный шаг, мог бы вызвать эти команды за
+    «Оператора» и сам себе выдать мандат на расширение зон. Тот же
+    приём, что `tests/test_canary.py::
+    AuthorizedPoolPayloadRoleEnvTest.test_role_environment_refuses_before_touching_keychain`
+    уже проверяет для `canary._authorized_pool_payload`."""
+
+    def _enter_in_dev(self) -> None:
+        store.set_state(store.db(), self.TASK, "in_dev", "operator",
+                        expected_state="spec_writing")
+
+    def test_answer_in_dev_refuses_from_role_environment(self):
+        """Ловит мутацию: рубеж `runner.in_role_environment()` убран из
+        ветки `in_dev`/`review` `_cmd_answer` (или переставлен ПОСЛЕ
+        чтения файла/коммита) — вызов из-под роли создал бы ANSWER-n.md
+        как если бы это сделал сам Оператор."""
+        self._enter_in_dev()
+        answer_file = self._answer_file(
+            "Расширение зон разрешено: docs/a.md\n")
+
+        with mock.patch.object(answer.runner, "in_role_environment",
+                               return_value=True):
+            with self.assertRaises(SystemExit) as ctx:
+                answer.cmd_answer(self.TASK, answer_file)
+
+        self.assertIn("role_env", str(ctx.exception))
+        self.assertNotIn(f"tasks/{self.TASK}/ANSWER-1.md",
+                         self.artifact_branch_files())
+
+    def test_answer_in_dev_succeeds_outside_role_environment(self):
+        """Симметричный положительный контроль: тот же вызов, что выше,
+        без окружения роли — путь `in_dev`/`review` остаётся рабочим
+        (регресс AC-1 не сломан новым рубежом)."""
+        self._enter_in_dev()
+        answer_file = self._answer_file(
+            "Расширение зон разрешено: docs/a.md\n")
+
+        with mock.patch.object(answer.runner, "in_role_environment",
+                               return_value=False):
+            answer.cmd_answer(self.TASK, answer_file)
+
+        self.assertIn(f"tasks/{self.TASK}/ANSWER-1.md",
+                      self.artifact_branch_files())
+
+    def test_zones_extend_refuses_from_role_environment(self):
+        """Тот же рубеж — `zones-extend` не коммитит ANSWER и не трогает
+        `zones_extension`, если вызвана из-под роли."""
+        with mock.patch.object(answer.runner, "in_role_environment",
+                               return_value=True):
+            with self.assertRaises(SystemExit) as ctx:
+                answer.cmd_zones_extend(self.TASK, "docs/a.md")
+
+        self.assertIn("role_env", str(ctx.exception))
+        self.assertNotIn(f"tasks/{self.TASK}/ANSWER-1.md",
+                         self.artifact_branch_files())
+        self.assertIsNone(
+            store.db().execute("SELECT zones_extension FROM tasks WHERE id=?",
+                               (self.TASK,)).fetchone()["zones_extension"])
 
 
 class AnswerCommandDoesNotDisturbOtherArtifactsTest(_ArtifactBranchAnswerTest):

@@ -28,7 +28,8 @@ Push артефактной ветки после коммита ANSWER (SPEC
 import sys
 from pathlib import Path
 
-from . import artifact_branch, artifact_source, fsm_advance, gitcmd, lease, store
+from . import (artifact_branch, artifact_source, fsm_advance, gitcmd, lease,
+              runner, store)
 
 
 def _next_answer_number(names) -> int:
@@ -105,13 +106,28 @@ def _cmd_answer(conn, task_id: str, file_path: str) -> None:
     ...») — состояние задачи не меняется, журнал получает отдельную
     запись с путями мандата (AC-1). Файл без маркера в этих состояниях,
     как и любое другое состояние вне `escalated`, — прежний отказ,
-    прежнее сообщение (AC-2)."""
+    прежнее сообщение (AC-2).
+
+    Ветка `in_dev`/`review` отказывает ещё до чтения файла, если ТЕКУЩИЙ
+    процесс сам исполняется в окружении роли (`runner.in_role_environment`)
+    — рубеж, симметричный `canary._authorized_pool_payload`
+    (`orchestrator/canary.py:317`): без него developer/reviewer, ведущий
+    свой же активный шаг `in_dev`/`review` (где `role_cmd()` даёт процессу
+    безусловный `Bash(python3:*)`), мог бы вызвать эту же команду CLI за
+    «Оператора» и сам себе выдать мандат на расширение зон (REVIEW
+    01M287TPG0HAVXS8CHBCY679WN итерация 1, замечание R1-F1). `escalated`
+    рубеж не несёт: в этом состоянии шаг роли уже завершён, действующего
+    процесса роли для задачи нет."""
     t = store.get_task(conn, task_id)
     state = t["state"]
     mandate_paths: list[str] = []
     if state == "escalated":
         raw = _read_answer_file(task_id, file_path)
     elif state in ("in_dev", "review"):
+        if runner.in_role_environment():
+            sys.exit(f"[{task_id}] answer отказана — вызов из окружения "
+                     f"роли (role_env), требование 5 SPEC "
+                     f"01M1NSR5M5THYRC0RFWPMVE2DW")
         raw = _read_answer_file(task_id, file_path)
         mandate_paths = _zones_mandate_marker_paths(raw)
         if not mandate_paths:
@@ -156,6 +172,16 @@ def cmd_zones_extend(task_id: str, paths_arg: str,
 
 
 def _cmd_zones_extend(conn, task_id: str, paths_arg: str) -> None:
+    """Тот же рубеж `runner.in_role_environment()`, что и ветка
+    `in_dev`/`review` `_cmd_answer` выше, и по той же причине (REVIEW
+    01M287TPG0HAVXS8CHBCY679WN итерация 1, замечание R1-F1) — эта команда
+    несёт ту же чувствительность (мандат Оператора на расширение зоны
+    задачи), доступна из тех же активных состояний роли, и должна
+    отказывать симметрично."""
+    if runner.in_role_environment():
+        sys.exit(f"[{task_id}] zones-extend отказана — вызов из окружения "
+                 f"роли (role_env), требование 5 SPEC "
+                 f"01M1NSR5M5THYRC0RFWPMVE2DW")
     paths = fsm_advance._split_zone_paths(paths_arg)
     if not paths:
         sys.exit(f"[{task_id}] zones-extend: отказ — пустой список путей")
