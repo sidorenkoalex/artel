@@ -113,15 +113,19 @@ class EndToEndExternalTargetFlowTest(ExternalTargetGitSandbox):
             "коммит фичи потерян")
 
         fsm.cmd_advance(TASK)
+        # amend-tests 11.09: после ADR-0015 порядок in_dev -> verifying ->
+        # review (планка написана до ADR-0015); ревью переводится тем же
+        # CAS-приёмом, что и остальные переходы вне реестра точек ниже.
         self.assertEqual(
-            store.get_task(conn, TASK)["state"], "review",
-            "переход in_dev -> review не состоялся — гейт ёмкости либо "
+            store.get_task(conn, TASK)["state"], "verifying",
+            "переход in_dev -> verifying не состоялся — гейт ёмкости либо "
             "ошибочно отказал небольшому diff'у, либо PLAN.md/лок не "
             "прошли")
+        store.set_state(conn, TASK, "review", "fsm",
+                        expected_state="verifying",
+                        detail="test bypass: CI зелёный")
 
         write_review_approved(TASK)
-        fsm.cmd_advance(TASK)
-        self.assertEqual(store.get_task(conn, TASK)["state"], "verifying")
         ref = self.origin_git("show-ref", "--verify", "--quiet",
                               f"refs/heads/{self.branch}")
         self.assertEqual(
@@ -133,7 +137,7 @@ class EndToEndExternalTargetFlowTest(ExternalTargetGitSandbox):
         # названы в AC-15 явно): переводятся напрямую, тем же
         # CAS-приёмом, что и остальные переходы `store.set_state`.
         store.set_state(conn, TASK, "acceptance", "fsm",
-                        expected_state="verifying",
+                        expected_state="review",
                         detail="test bypass: CI зелёный")
         store.set_state(conn, TASK, "merge_gate", "fsm",
                         expected_state="acceptance",

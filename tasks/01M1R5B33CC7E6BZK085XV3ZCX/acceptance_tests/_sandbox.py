@@ -32,8 +32,27 @@ from pathlib import Path
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(_REPO_ROOT))
 
-from orchestrator import config, store  # noqa: E402
-from tests.sandbox import RealGitSandbox, resilient_tmp_cleanup  # noqa: E402
+from orchestrator import artifact_branch, config, store  # noqa: E402
+from tests.sandbox import (  # noqa: E402
+    _ACCEPTANCE_PLANK_SPEC_TEMPLATE, _ACCEPTANCE_PLANK_STUB_TEST,
+    RealGitSandbox, resilient_tmp_cleanup)
+
+
+def commit_minimal_plank(task_id: str) -> None:
+    """Правка планки Оператором (amend-tests 11.09): подтяжка main
+    (`pull._materialize_and_run_plank`, SPEC 01M1R9YEK08XEQWBFX0929WFVJ,
+    06.09) требует в артефактной ветке `SPEC.md` (schema_version 2, без
+    skip_tests) и непустую `acceptance_tests/` — иначе `Refused` до
+    предмета проверки. Фикстуры этой планки заводили задачу без единого
+    коммита в артефактную ветку (контракт сдвинулся ПОСЛЕ написания
+    планки). Те же шаблоны, что у `tests/sandbox.py::write_acceptance_plank`,
+    но настоящим git: песочница здесь реальная."""
+    artifact_branch.commit_files(task_id, {
+        f"tasks/{task_id}/SPEC.md":
+            _ACCEPTANCE_PLANK_SPEC_TEMPLATE.format(task=task_id),
+        f"tasks/{task_id}/acceptance_tests/test_stub.py":
+            _ACCEPTANCE_PLANK_STUB_TEST,
+    }, f"{task_id}: минимальная планка (фикстура)")
 
 EXTERNAL_TARGET = "extproj"
 

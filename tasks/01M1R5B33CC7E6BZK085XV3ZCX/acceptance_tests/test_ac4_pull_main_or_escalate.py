@@ -28,7 +28,7 @@ sys.path.insert(0, str(_REPO_ROOT))
 from orchestrator import config, fsm, store  # noqa: E402
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from _sandbox import ExternalTargetGitSandbox  # noqa: E402
+from _sandbox import ExternalTargetGitSandbox, commit_minimal_plank  # noqa: E402
 
 TASK = "01AC4PULLMAINTASK00001"
 
@@ -58,6 +58,7 @@ class ExternalTargetPullMainTest(ExternalTargetGitSandbox):
         self.wgit("checkout", "-q", self.branch)
 
         self.insert_external_task(TASK, self.branch, state="in_dev")
+        commit_minimal_plank(TASK)  # amend-tests 11.09: планка в артефактной ветке
 
     def test_ac4_external_target_branch_gets_merged_in_the_target_clone(self):
         """`_pull_main_or_escalate` для внешнего target подтягивает main
@@ -138,6 +139,7 @@ class SelfTargetPullMainUnchangedTest(ExternalTargetGitSandbox):
         store.insert_task(conn, self.TASK, "Задача self", "in_dev",
                           self.branch, config.DEFAULT_TARGET,
                           config.DEFAULT_BUDGET_USD)
+        commit_minimal_plank(self.TASK)  # amend-tests 11.09
 
     def test_ac4_self_target_still_merges_in_the_pult_worktree(self):
         """Self-target: `config.WORKTREES/<id>` заводится и получает
