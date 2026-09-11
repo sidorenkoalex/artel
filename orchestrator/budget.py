@@ -2,7 +2,15 @@
 import sqlite3
 import sys
 
-from . import alerts, config, lease, retro, spend, store
+from . import alerts, config, gitcmd, lease, retro, spend, store
+
+# Действие журнала, которым `enforce_budget` фиксирует sha головы кодовой
+# ветки в момент эскалации ПО БЮДЖЕТУ из состояния `review` (SPEC
+# 01M1VBEDGMEXHVGWAH42FTDZ4X, требование 3): `fsm_advance.py::review()`
+# читает эту запись, чтобы решить, нужен ли новый прогон reviewer при
+# возврате (см. её докстринг про отсечку «новее последнего прогона
+# reviewer»).
+REVIEW_ESCALATION_CODE_SHA_ACTION = "эскалация review: sha кода зафиксирован"
 
 
 def spec_budget(meta: dict) -> tuple[float | None, str]:
@@ -90,6 +98,54 @@ def apply_spec_budget(conn, t: sqlite3.Row, meta: dict) -> None:
     print(f"[{task_id}] бюджет из SPEC: {detail}")
 
 
+def recommended_budget_usd(ac_count: int, zone_files: int) -> float:
+    """Ориентир потолка задачи по калибровочной таблице
+    (`config.BUDGET_CALIBRATION_TABLE`, ADR-0014 п.7) — по числу
+    критериев приёмки SPEC и числу файлов зоны (SPEC
+    01M1TQ11K4WJZD7ZE3MR0J4ZK4, требование 1).
+
+    Таблица проверяется по порядку: первый уровень, чьи оба потолка
+    (критериев приёмки, файлов зоны) не превышены, и даёт ответ;
+    последний уровень таблицы не ограничен ни тем, ни другим — функция
+    всегда возвращает значение.
+    """
+    for amount, max_ac, max_zone_files in config.BUDGET_CALIBRATION_TABLE:
+        if max_ac is not None and ac_count > max_ac:
+            continue
+        if max_zone_files is not None and zone_files > max_zone_files:
+            continue
+        return max(amount, config.BUDGET_CALIBRATION_FLOOR_USD)
+    return config.BUDGET_CALIBRATION_FLOOR_USD
+
+
+def calibration_warning(actual_usd: float, orientir_usd: float) -> str | None:
+    """«рамка ниже калибровки: $N против ~$M» (SPEC
+    01M1TQ11K4WJZD7ZE3MR0J4ZK4, AC-6/AC-10) — `actual_usd` ниже
+    `orientir_usd` больше чем на треть; иначе `None`.
+
+    Общий узел для `catalog.cmd_new` (требование 2) и гейта SPEC
+    (требование 3, `fsm._cmd_approve`) — SPEC требует буквально одну и
+    ту же строку в обеих точках.
+    """
+    if actual_usd < orientir_usd * 2 / 3:
+        return (f"рамка ниже калибровки: ${actual_usd:.2f} против "
+                f"~${orientir_usd:.2f}")
+    return None
+
+
+def count_zone_paths(text: str | None) -> int:
+    """Число непустых путей в строке зон через запятую (SPEC
+    01M1TQ11K4WJZD7ZE3MR0J4ZK4, требования 2-3) — общий разбор и для
+    frontmatter `zones:` SPEC (гейт SPEC), и для строки «Зоны: ...» ТЗ
+    (`new`, где текст предложения может нести завершающую точку сразу
+    за последним путём)."""
+    if not text:
+        return 0
+    return len([p for p in
+               (piece.strip().rstrip(".") for piece in text.split(","))
+               if p])
+
+
 def spent_with_estimate(t: sqlite3.Row) -> float:
     """`spent_usd + spent_estimate_usd` задачи (SPEC
     01M1NWCM3TDY0YABEKE8DYQA1C, требование 5): бюджетный гейт сравнивает
@@ -128,6 +184,16 @@ def enforce_budget(conn, task_id: str, state: str) -> bool:
         # Точка возврата (T006): шаг мог отработать успешно, и возвращать
         # задачу из escalated надо туда, где она стояла, а не в разработку.
         store.update_task(conn, task_id, escalated_from=state)
+        if state == "review":
+            # Требование 3: sha кода на момент эскалации ИЗ review — до
+            # смены состояния, чтобы момент записи однозначно предшествовал
+            # самой эскалации. Пусто (git не ответил) — не журналируем
+            # вовсе, тот же вырожденный случай, что и у соседних sha-примитивов
+            # (`fixation.py`): нечему быть опорой сравнения.
+            code_sha = gitcmd.branch_head_sha(t["branch"])
+            if code_sha:
+                store.journal(conn, task_id, "fsm",
+                              REVIEW_ESCALATION_CODE_SHA_ACTION, code_sha)
         store.set_state(conn, task_id, "escalated", "fsm",
                         expected_state=state,
                         detail=f"бюджет исчерпан: ${spent:.2f} из ${budget:.2f}")
@@ -253,18 +319,31 @@ def cmd_budget(task_id: str, raw_usd: str, session_id: str | None = None) -> Non
     """Меняет потолок задачи — единственный способ снять блокировку по бюджету.
 
     Берёт lease задачи перед работой (SPEC T044, требование 2) — обёртка
-    вокруг `_cmd_budget`, см. `orchestrator/lease.py`.
+    вокруг `_cmd_budget`, см. `orchestrator/lease.py`. `same_host_ok=True`
+    (SPEC 01M1VBEDGMEXHVGWAH42FTDZ4X, требование 1): `budget` — ЕДИНСТВЕННАЯ
+    команда, которой разрешено менять потолок под живым lease того же
+    hostname чужой сессии (другой терминал того же Оператора) — «Не
+    входит» SPEC прямо ограничивает исключение этой командой.
+
+    `mid_step` читается ДО `run_locked` — живая (в момент вызова, до
+    какой-либо мутации lease самим `acquire`) lease-строка задачи, чья бы
+    сессия её ни держала, означает «прямо сейчас идёт шаг роли» (требование
+    1, AC-2/AC-10): auto держит lease весь цикл, поэтому и собственная
+    сессия внутри `auto`, и чужая сессия того же хоста — оба случая «во
+    время шага».
 
     Префикс -> полный id (SPEC T094, требование 3, AC-3) резолвится ЗДЕСЬ,
     до lease (REVIEW T094 итерация 1, замечание 1).
     """
     conn = store.db()
     task_id = store.resolve_task_id(conn, task_id)
+    mid_step = lease.is_live(conn, task_id)
     lease.run_locked(conn, task_id, session_id,
-                     lambda sid: _cmd_budget(conn, task_id, raw_usd))
+                     lambda sid: _cmd_budget(conn, task_id, raw_usd, mid_step),
+                     same_host_ok=True)
 
 
-def _cmd_budget(conn, task_id: str, raw_usd: str) -> None:
+def _cmd_budget(conn, task_id: str, raw_usd: str, mid_step: bool = False) -> None:
     t = store.get_task(conn, task_id)
     new_budget = spend.cli_number(raw_usd)
     if new_budget is None or new_budget <= 0:
@@ -278,8 +357,17 @@ def _cmd_budget(conn, task_id: str, raw_usd: str) -> None:
     store.update_task(conn, task_id, budget_usd=new_budget,
                       budget_source=config.BUDGET_SOURCE_OPERATOR,
                       updated_at=store.now())
-    store.journal(conn, task_id, "operator", "бюджет изменён",
-                  f"${old:.2f} -> ${new_budget:.2f}, израсходовано ${spent:.2f}")
+    detail = f"${old:.2f} -> ${new_budget:.2f}, израсходовано ${spent:.2f}"
+    if mid_step:
+        # Отложенный импорт (тот же приём, что `lease.warn_foreign_live`
+        # уже применяет к `runner`): `runner.py` на уровне модуля
+        # импортирует `budget` — обратный импорт на уровне модуля был бы
+        # циклом.
+        from . import runner
+        role = runner.step_role(t)
+        if role is not None:
+            detail += f", во время шага {role}"
+    store.journal(conn, task_id, "operator", "бюджет изменён", detail)
     print(f"[{task_id}] бюджет: ${old:.2f} -> ${new_budget:.2f} "
           f"(израсходовано ${spent:.2f})")
 

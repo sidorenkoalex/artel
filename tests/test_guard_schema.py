@@ -631,6 +631,35 @@ class RegistryTableRowsTest(unittest.TestCase):
         self.assertEqual(guard.registry_table_rows(""), [])
 
 
+class RegistryEscapedPipeTest(unittest.TestCase):
+    """Hotfix №19 (06.09): черта внутри ячейки, экранированная по Markdown
+    как `\\|`, — часть ячейки, а не граница колонки. Ревьювер канарейки
+    20260906T194847Z написал в решении пример `budget <id> <usd>\\ | +N%\\ | N%`,
+    и guard насчитал 8 колонок вместо 6 — третий случай класса за день.
+    Мутация «разрез по любой черте» — красный."""
+
+    ROW = ("| R1-F1 | open | orchestrator/artel.py:108 | usage без `+N%` "
+           "| оператор не узнает | дополнить: `budget <id> <usd>\\| +N%\\| N%` |")
+
+    def test_escaped_pipe_stays_inside_the_cell(self):
+        rows = guard.registry_table_rows(self.ROW)
+
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(len(rows[0]), 6, rows[0])
+        self.assertEqual(rows[0][5], "дополнить: `budget <id> <usd>| +N%| N%`")
+
+    def test_escaped_pipe_row_passes_record_errors(self):
+        rows = guard.registry_table_rows(self.ROW)
+
+        self.assertEqual(guard.registry_record_errors("label", rows[0]), [])
+
+    def test_unescaped_pipe_is_still_a_column_boundary(self):
+        rows = guard.registry_table_rows(
+            "| R1-F1 | open | a.py:1 | суть | последствие | a | b |")
+
+        self.assertEqual(len(rows[0]), 7)
+
+
 class RegistryRecordsTest(unittest.TestCase):
     """`registry_records` — записи из well-formed строк как словари."""
 

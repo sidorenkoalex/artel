@@ -22,9 +22,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from orchestrator import (acceptance, catalog, config, fsm, gitcmd,  # noqa: E402
                           store, workspace)
-from tests.sandbox import (SpyRun, capture, capture_new_task_id,  # noqa: E402
-                           disk_backed_ls_tree_files, disk_backed_show,
-                           fake_git)
+from tests.sandbox import (LightTransitionSandbox, SpyRun,  # noqa: E402
+                           capture, disk_backed_ls_tree_files,
+                           disk_backed_show, fake_git)
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
@@ -48,140 +48,14 @@ schema_version: 1
 """
 
 
-class BranchFreshnessGateTest(unittest.TestCase):
-
-    def setUp(self):
-        tmp = tempfile.TemporaryDirectory()
-        self.addCleanup(tmp.cleanup)
-        root = Path(tmp.name)
-        shutil.copytree(REPO_ROOT / "templates", root / "templates")
-
-        for attr, value in (("DB", root / ".artel" / "state.db"),
-                            ("TASKS", root / "tasks"),
-                            ("LOGS", root / ".artel" / "logs"),
-                            ("ROOT", root),
-                            ("PROJECTS", root / ".artel" / "projects"),
-                            ("TARGETS", root / "targets.yaml"),
-                            ("ROLE_HOME", root / ".artel" / "home"),
-                            ("ROLE_CONFIG_DIR",
-                             root / ".artel" / "home" / ".claude"),
-                            ("BACKUP_MARKER", root / ".artel" / "backup-marker"),
-                            ("WORKTREES", root / ".artel" / "worktrees")):
-            patcher = mock.patch.object(config, attr, value)
-            patcher.start()
-            self.addCleanup(patcher.stop)
-
-        patcher = mock.patch.object(gitcmd, "git", fake_git)
-        patcher.start()
-        self.addCleanup(patcher.stop)
-        # `fake_git` отвечает на "rev-parse FETCH_HEAD" пустой строкой
-        # (нет настоящего git) — с REVIEW.md R1-F1 (итерация 1) вырожденный
-        # `_origin_main_sha` обязана деградировать на "fresh" немедленно,
-        # не на литерал "FETCH_HEAD". Тесты этого файла, которые кроют
-        # ветку "ветка отстала" (`commits_behind` замокан на ненулевое
-        # значение отдельно), нуждаются в настоящем truthy `base` — тем же
-        # приёмом стаба, что и `gitcmd.commits_behind` ниже по каждому
-        # тесту; `test_advance_treats_origin_fetch_failure_as_fresh`
-        # переопределяет этот патч на `None` для проверки самой
-        # деградации.
-        origin_sha_patcher = mock.patch.object(
-            fsm, "_origin_main_sha", return_value="deadbeefcafefeed")
-        origin_sha_patcher.start()
-        self.addCleanup(origin_sha_patcher.stop)
-        # A7 (generic-путь заведения, AC-5): `cmd_new` коммитит артефакты
-        # плотницки (`artifact_branch.write_commit`) — та функция зовёт
-        # `subprocess.run` НАПРЯМУЮ, минуя `gitcmd.git`/фейк выше; `root`
-        # здесь не настоящий git-репозиторий — без этого патча `cmd_new`
-        # падает `sys.exit` («git не ответил») ещё до сценария, который
-        # тест проверяет (тот же приём, что `tests.sandbox.TmpRootTest.
-        # setUp`).
-        spy_patcher = mock.patch.object(gitcmd.subprocess, "run", SpyRun())
-        spy_patcher.start()
-        self.addCleanup(spy_patcher.stop)
-        # `artifact_source.resolve` теперь ВСЕГДА возвращает `foreign=True`
-        # — FSM читает PLAN/SPEC через `gitcmd.show`/`ls_tree_files`, не с
-        # диска напрямую; эта песочница без настоящего git ведёт один
-        # источник истины — диск `self.tdir` (тот же приём, что
-        # `tests.test_invariants.FsmTest`).
-        show_patcher = mock.patch.object(gitcmd, "show", disk_backed_show)
-        show_patcher.start()
-        self.addCleanup(show_patcher.stop)
-        ls_patcher = mock.patch.object(gitcmd, "ls_tree_files",
-                                       disk_backed_ls_tree_files)
-        ls_patcher.start()
-        self.addCleanup(ls_patcher.stop)
-
-        self.wt_path = root / "wt"
-        wt_patcher = mock.patch.object(
-            workspace, "ensure", lambda task_id, branch: (self.wt_path, None))
-        wt_patcher.start()
-        self.addCleanup(wt_patcher.stop)
-
-        self.capture(catalog.cmd_init)
-        _, self.TASK = capture_new_task_id(catalog.cmd_new, "Сверка свежести")
-        self.tdir = config.TASKS / self.TASK
-        self.branch = self.task_row()["branch"]
+class BranchFreshnessGateTest(LightTransitionSandbox):
 
     # ------------------------------------------------------------ утилиты
-
-    capture = staticmethod(capture)
-
-    def task_row(self):
-        return store.db().execute("SELECT * FROM tasks WHERE id=?",
-                                  (self.TASK,)).fetchone()
-
-    def state(self) -> str:
-        return self.task_row()["state"]
-
-    def set_state(self, state: str) -> None:
-        conn = store.db()
-        conn.execute("UPDATE tasks SET state=? WHERE id=?", (state, self.TASK))
-        conn.commit()
 
     def journal_details(self) -> list[str]:
         return [r["detail"] for r in store.db().execute(
             "SELECT detail FROM steps WHERE task_id=? ORDER BY id",
             (self.TASK,))]
-
-    def write_plan_ready(self) -> None:
-        self.tdir.mkdir(parents=True, exist_ok=True)
-        (self.tdir / "PLAN.md").write_text(
-            PLAN_READY.format(task=self.TASK), encoding="utf-8")
-
-    def write_acceptance_plank(self) -> None:
-        """SPEC 01M1R9YEK08XEQWBFX0929WFVJ, AC-1/AC-2: планка теперь
-        читается через `acceptance.materialize_from_branch`, backed
-        (в этой лёгкой песочнице) тем же диском `self.tdir`, что и
-        `disk_backed_show`/`disk_backed_ls_tree_files` — SPEC.md со
-        `schema_version: 2` без `skip_tests` (tests_writing не пропущена
-        легитимно) + непустой `acceptance_tests/` обязаны быть на диске
-        ДО перехода, иначе материализация ничего не найдёт и переход
-        уйдёт по вырожденной ветке AC-3/AC-5, минуя `acceptance.run`
-        вовсе (которую тесты этого файла мокают и хотят видеть вызванной)."""
-        self.tdir.mkdir(parents=True, exist_ok=True)
-        (self.tdir / "SPEC.md").write_text(
-            "---\n"
-            f"task: {self.TASK}\n"
-            "type: spec\n"
-            "author_role: analyst\n"
-            "status: ready\n"
-            "schema_version: 2\n"
-            "---\n\n"
-            "# SPEC: планка\n\n"
-            "## Критерии приёмки\n\nAC-1. ...\n",
-            encoding="utf-8")
-        tests_dir = self.tdir / "acceptance_tests"
-        tests_dir.mkdir(parents=True, exist_ok=True)
-        (tests_dir / "test_stub.py").write_text(
-            "import unittest\n\n\n"
-            "class StubTest(unittest.TestCase):\n\n"
-            "    def test_stub(self):\n        pass\n",
-            encoding="utf-8")
-
-    def advance_from_in_dev(self) -> str:
-        self.write_plan_ready()
-        self.set_state("in_dev")
-        return self.capture(fsm.cmd_advance, self.TASK)
 
     def approve_from_acceptance(self) -> str:
         self.set_state("acceptance")
@@ -265,13 +139,19 @@ class BranchFreshnessGateTest(unittest.TestCase):
         with mock.patch.object(gitcmd, "commits_behind", return_value=0), \
              mock.patch.object(gitcmd, "in_repo",
                                side_effect=self._recording_ok), \
-             mock.patch.object(acceptance, "run") as acc_run:
+             mock.patch.object(acceptance, "run",
+                               return_value=(True, "ok")) as acc_run:
             self.advance_from_in_dev()
 
-        self.assertEqual(self.state(), "review",
-                         "переход обязан пройти как и до T051 (требование 7)")
+        self.assertEqual(self.state(), "verifying",
+                         "переход обязан пройти как и до T051 (требование 7); "
+                         "ADR-0015 — цель перехода in_dev теперь verifying, "
+                         "не review")
         self.assertEqual(self.merge_calls, [], "не отставшая ветка — merge не звонится")
-        acc_run.assert_not_called()
+        # ADR-0015: прогон приёмки теперь часть ЭТОГО ЖЕ перехода
+        # `in_dev -> verifying` (был отдельным гейтом `review -> verifying`
+        # до этой задачи) — звонится независимо от того, отставала ли ветка.
+        acc_run.assert_called_once()
 
     def test_approve_skips_pull_when_branch_not_behind(self):
         self.setup_recording()
@@ -315,8 +195,9 @@ class BranchFreshnessGateTest(unittest.TestCase):
                                return_value=(True, "ok")) as acc_run:
             self.advance_from_in_dev()
 
-        self.assertEqual(self.state(), "review",
-                         "переход обязан состояться после успешной подтяжки")
+        self.assertEqual(self.state(), "verifying",
+                         "переход обязан состояться после успешной подтяжки "
+                         "(ADR-0015 — цель перехода in_dev теперь verifying)")
         self.assertEqual(len(self.merge_calls), 1)
         repo, args = self.merge_calls[0]
         self.assertEqual(repo, self.wt_path, "merge — в worktree ЗАДАЧИ, "
@@ -340,15 +221,24 @@ class BranchFreshnessGateTest(unittest.TestCase):
                          "фетч), ни в приватном FETCH_HEAD worktree'а")
         self.assertNotIn(self.branch, args,
                          "ветка задачи не упоминается в аргументах merge")
-        acc_run.assert_called_once()
-        plank_root = acc_run.call_args[0][0]
+        # ADR-0015: с этой задачи `in_dev` зовёт `acceptance.run` дважды —
+        # раз внутри `pull.evaluate` (рубеж «прогон планки после
+        # подтяжки», SPEC 01M1RNZ6V7TTTTYAHBMF8JBQQS, этот тест изначально
+        # про НЕГО) и второй раз своим отдельным рубежом
+        # `_acceptance_run_refuses` (SPEC T023, требование 6, переехавшим
+        # из `review()`) — оба легитимны и стояли в системе ДО этой задачи
+        # (просто на двух разных вызовах `advance`, не в одном); первый
+        # вызов в списке — от `pull.evaluate`, его и проверяет этот тест
+        # (тот же приём, что `tests/test_fsm_map_conflict_autoresolve.py`).
+        self.assertEqual(acc_run.call_count, 2)
+        plank_root = acc_run.call_args_list[0][0][0]
         self.assertEqual(
             plank_root, self.wt_path / "tasks" / self.TASK,
             "SPEC 01M1RNZ6V7TTTTYAHBMF8JBQQS AC-1: планка обязана "
             "материализоваться в рабочий каталог кода задачи (worktree "
             "self-target), не во временный каталог")
         self.assertEqual(
-            acc_run.call_args.kwargs.get("code_root"), self.wt_path,
+            acc_run.call_args_list[0].kwargs.get("code_root"), self.wt_path,
             "SPEC 01M1RNZ6V7TTTTYAHBMF8JBQQS AC-2: cwd прогона обязан "
             "быть равен рабочему каталогу кода задачи, не config.ROOT")
 
@@ -449,17 +339,22 @@ class BranchFreshnessGateTest(unittest.TestCase):
              mock.patch.object(gitcmd, "commits_behind") as behind, \
              mock.patch.object(gitcmd, "in_repo",
                                side_effect=self._recording_ok), \
-             mock.patch.object(acceptance, "run") as acc_run:
+             mock.patch.object(acceptance, "run",
+                               return_value=(True, "ok")) as acc_run:
             self.advance_from_in_dev()
 
-        self.assertEqual(self.state(), "review",
+        self.assertEqual(self.state(), "verifying",
                          "вырожденная _origin_main_sha — тот же исход, что "
-                         "и «ветка не отстала» (требование 7)")
+                         "и «ветка не отстала» (требование 7); ADR-0015 — "
+                         "цель перехода in_dev теперь verifying, не review")
         behind.assert_not_called()
         self.assertEqual(self.merge_calls, [],
                          "R1-F1: merge не имеет права звонить против "
                          "постороннего FETCH_HEAD")
-        acc_run.assert_not_called()
+        # ADR-0015: прогон приёмки теперь часть ЭТОГО ЖЕ перехода
+        # `in_dev -> verifying` — звонится независимо от исхода сверки
+        # свежести, вырожденной или нет.
+        acc_run.assert_called_once()
 
     # --------------------------------------------------- конфликт подтяжки
 

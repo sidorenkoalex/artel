@@ -89,8 +89,11 @@ approved
 # состояние -> (артефакт-условие перехода, заготовка, состояние после)
 TRANSITIONS = {
     "spec_writing": ("SPEC.md", SPEC_MD, "spec_gate"),
-    "in_dev": ("PLAN.md", PLAN_MD, "review"),
-    "review": ("REVIEW.md", REVIEW_MD, "verifying"),
+    # ADR-0015: `verifying` теперь стоит ДО `review` — PLAN.md ready ведёт
+    # в `verifying`, а свежий approved из `review` идёт прямиком в
+    # `acceptance` (CI уже проверен раньше).
+    "in_dev": ("PLAN.md", PLAN_MD, "verifying"),
+    "review": ("REVIEW.md", REVIEW_MD, "acceptance"),
 }
 
 
@@ -279,7 +282,7 @@ class AdvanceGuardTest(unittest.TestCase):
         name, template = self.prepare("review")
         self.write(name, template)
         self.capture(fsm.cmd_advance, self.TASK)
-        self.assertEqual(self.state(), "verifying")
+        self.assertEqual(self.state(), "acceptance")
 
         self.set_state("review")
         out = self.capture(fsm.cmd_advance, self.TASK)

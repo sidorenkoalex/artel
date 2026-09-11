@@ -37,6 +37,7 @@ class IsStrayAcceptanceTestFileTest(unittest.TestCase):
         for rel in ("acceptance_tests/test_x.py",
                    "acceptance_tests/test_ac1_something.py",
                    "acceptance_tests/_sandbox.py",
+                   "acceptance_tests/_util.py",
                    "acceptance_tests/markers.py",
                    "acceptance_tests/__init__.py",
                    "acceptance_tests/NOTES.md",
@@ -60,8 +61,9 @@ class IsStrayAcceptanceTestFileTest(unittest.TestCase):
         `.py`» — тогда произвольный `.py`-файл первого уровня перестаёт
         считаться посторонним.
 
-        Только `test_*.py`/`_sandbox.py`/`markers.py`/`__init__.py` — не
-        любой `.py` первого уровня.
+        Только `test_*.py`/`_*.py` (вспомогательные модули планки:
+        `_sandbox.py`, `_util.py` — регрессия №18)/`markers.py`/`__init__.py`
+        — не любой `.py` первого уровня.
         """
         self.assertTrue(
             checkpoint._is_stray_acceptance_test_file("acceptance_tests/helpers.py"))

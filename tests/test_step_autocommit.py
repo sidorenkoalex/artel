@@ -81,7 +81,7 @@ class CommitStepArtifactsTest(RealPultGitTest):
 
     def test_dirty_tree_commits_to_artifact_branch_and_journals(self):
         self.enter_in_dev()
-        (self.workspace_task_dir() / "wip.md").write_text(
+        (self.workspace_task_dir() / "PLAN.md").write_text(
             "недописанный артефакт роли\n", encoding="utf-8")
 
         detail = checkpoint.commit_step_artifacts(
@@ -90,7 +90,7 @@ class CommitStepArtifactsTest(RealPultGitTest):
         # Коммит автокоммита — в артефактную ветку ПУЛЬТА (M1), не в репо
         # фиксации и не в рабочий каталог роли (SPEC T094, требование 8).
         tree = artifact_branch.read_tree(self.TASK)
-        self.assertEqual(tree.get(f"tasks/{self.TASK}/wip.md"),
+        self.assertEqual(tree.get(f"tasks/{self.TASK}/PLAN.md"),
                          "недописанный артефакт роли\n")
         self.assertIn(f"{self.TASK}: артефакты шага developer "
                       f"(автокоммит оркестратора)", detail)
@@ -112,7 +112,7 @@ class CommitStepArtifactsTest(RealPultGitTest):
         рабочий каталог роли — те два коммита автокоммита её не касаются
         (PLAN «Предложения системе»: несвязанные механизмы)."""
         self.enter_in_dev()
-        (self.workspace_task_dir() / "wip.md").write_text(
+        (self.workspace_task_dir() / "PLAN.md").write_text(
             "недописанный артефакт роли\n", encoding="utf-8")
 
         checkpoint.commit_step_artifacts(store.db(), self.TASK, "developer")
@@ -128,7 +128,7 @@ class CommitStepArtifactsTest(RealPultGitTest):
         деградация: ничего не коммитится, рабочий каталог роли не
         убирается (он и не был перенесён), журнал не пишется."""
         self.enter_in_dev()
-        (self.workspace_task_dir() / "wip.md").write_text(
+        (self.workspace_task_dir() / "PLAN.md").write_text(
             "недописанный артефакт роли\n", encoding="utf-8")
         before = self.head()
 
@@ -140,7 +140,7 @@ class CommitStepArtifactsTest(RealPultGitTest):
         self.assertEqual(detail, "")
         self.assertEqual(self.head(), before)
         self.assertEqual(self.orchestrator_steps(), [])
-        self.assertTrue((self.workspace_task_dir() / "wip.md").exists(),
+        self.assertTrue((self.workspace_task_dir() / "PLAN.md").exists(),
                         "неудачный перенос не должен стирать WIP роли")
 
     def test_update_ref_failure_commits_nothing_and_journals_nothing(self):
@@ -148,7 +148,7 @@ class CommitStepArtifactsTest(RealPultGitTest):
         artifact_branch.py) — тот же класс тихой деградации, отдельная
         точка отказа от самой плотницкой записи."""
         self.enter_in_dev()
-        (self.workspace_task_dir() / "wip.md").write_text(
+        (self.workspace_task_dir() / "PLAN.md").write_text(
             "недописанный артефакт роли\n", encoding="utf-8")
         before = self.head()
 
@@ -160,7 +160,7 @@ class CommitStepArtifactsTest(RealPultGitTest):
         self.assertEqual(detail, "")
         self.assertEqual(self.head(), before)
         self.assertEqual(self.orchestrator_steps(), [])
-        self.assertTrue((self.workspace_task_dir() / "wip.md").exists())
+        self.assertTrue((self.workspace_task_dir() / "PLAN.md").exists())
 
 class RoleCwdVsCommitSourceGapTest(RealPultGitTest):
     """Регресс-тест по рекомендации REVIEW.md T-A7 итерации 1, R1-F2

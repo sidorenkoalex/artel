@@ -30,11 +30,12 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from orchestrator import (alerts, budget, catalog, config, doctor,  # noqa: E402
-                          gitcmd, liveness, projects, runner, spend, store)
+from orchestrator import (alerts, budget, canary, catalog, config,  # noqa: E402
+                          doctor, gitcmd, liveness, projects, runner, spend,
+                          store)
 from tests import sandbox as sandbox_module  # noqa: E402
-from tests.sandbox import (FakeStream, TmpRootTest, capture,  # noqa: E402
-                           capture_new_task_id, claude_only_popen,
+from tests.sandbox import (FakeStream, RealGitSandbox, TmpRootTest,  # noqa: E402
+                           capture, capture_new_task_id, claude_only_popen,
                            claude_only_run, disk_backed_ls_tree_files,
                            disk_backed_show, fake_git, sync_spec_from_worktree)
 
@@ -637,6 +638,111 @@ class BaseBranchCheckTest(unittest.TestCase):
             check = doctor.check_base_branch("sled", self.EXTERNAL_ENTRY)
 
         self.assertEqual(check.status, "warn")
+
+
+class CanaryTriggerCheckTest(RealGitSandbox):
+    """`doctor.check_canary_trigger` (tasks/01M1NGFK3N6MRMYGCC09H975V3/
+    SPEC.md, AC-3/AC-4) — реальный git: сам предмет проверки, возраст в
+    мержах main, заглушкой `gitcmd.git` не изобразить (тот же приём, что
+    `CommitsBehindTest` в tests/test_gitcmd_branch_reads.py).
+
+    Статус — `warn`, не `fail` (см. соседний `check_root_pin`): триггер
+    требует ack Оператора с решением (docs/triggers.md), не блокирует
+    `cmd_doctor` как инцидент — регресс этого стал бы КАЖДЫЙ прогон
+    doctor красным до первого зелёного прогона канарейки.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.conn = store.db()
+
+    def _merge(self, name: str) -> str:
+        self.checkout(name, create=True)
+        (self.root / f"{name}.txt").write_text("x\n", encoding="utf-8")
+        self.git("add", f"{name}.txt")
+        self.git("commit", "-q", "-m", f"работа {name}")
+        self.checkout(config.MAIN_BRANCH)
+        self.git("merge", "--no-ff", "-q", "-m", f"merge {name}", name)
+        return self.git("rev-parse", "HEAD").strip()
+
+    def _insert_green(self, main_sha: str) -> None:
+        store.insert_canary_run(
+            self.conn, "20260101T000000Z", "t", "01AAA", steps=1,
+            cost_usd=0.1, review_iterations=0, escalations=0,
+            outcome="killed", expected_escalation=None,
+            actual_escalation=False, marker_mismatch=False,
+            main_sha=main_sha, verdict="green")
+
+    def test_never_ran_is_warn_not_fail(self):
+        """Ловит мутацию: статус `fail` вместо `warn` — держал бы КАЖДЫЙ
+        прогон doctor красным (`cmd_doctor` завершается ненулевым кодом
+        только на `fail`) до самого первого прогона канарейки."""
+        check = doctor.check_canary_trigger(self.conn)
+
+        self.assertEqual(check.status, "warn")
+        self.assertIn("ни разу не прогонялась", check.detail)
+
+    def test_threshold_reached_is_warn_and_raises_a_deduped_trigger_alert(self):
+        """Ловит мутацию: `open_alert_exists` не находит совпадения из-за
+        различия сообщений между вызовами (например, случайный элемент в
+        тексте) — второй прогон doctor завёл бы второй открытый алерт
+        вместо дедупа по одному и тому же `(kind, source, message)`."""
+        stale_sha = self.git("rev-parse", "HEAD").strip()
+        self._insert_green(stale_sha)
+        for i in range(config.CANARY_MAX_MERGES_SINCE_GREEN):
+            self._merge(f"m{i}")
+
+        first = doctor.check_canary_trigger(self.conn)
+        second = doctor.check_canary_trigger(self.conn)
+
+        self.assertEqual(first.status, "warn")
+        found = [a for a in alerts.open_alerts(self.conn, "trigger")
+                if a["source"] == "canary"]
+        self.assertEqual(len(found), 1,
+                         "повторный прогон doctor не должен дублировать алерт")
+
+    def test_growing_age_between_calls_still_dedupes_the_alert(self):
+        """Регрессия R1-F2 (REVIEW.md итерации 1): текущее число мержей
+        когда-то шло прямо в текст алерта,
+        участвующий в дедупе (`store.open_alert_exists` сравнивает
+        `message` строго) — каждый следующий мерж main после срабатывания
+        порога менял текст и заводил НОВЫЙ алерт вместо одного открытого.
+        Ловит мутацию: `age`/любое меняющееся число возвращается в текст,
+        передаваемый в `alerts.raise_alert` — второй вызов (после ЕЩЁ
+        одного мержа, age вырос) завёл бы второй открытый алерт."""
+        stale_sha = self.git("rev-parse", "HEAD").strip()
+        self._insert_green(stale_sha)
+        for i in range(config.CANARY_MAX_MERGES_SINCE_GREEN):
+            self._merge(f"m{i}")
+
+        first = doctor.check_canary_trigger(self.conn)
+        self._merge("extra-after-threshold")
+        second = doctor.check_canary_trigger(self.conn)
+
+        self.assertEqual(first.status, "warn")
+        self.assertEqual(second.status, "warn")
+        found = [a for a in alerts.open_alerts(self.conn, "trigger")
+                if a["source"] == "canary"]
+        self.assertEqual(len(found), 1,
+                         "рост возраста между прогонами doctor не должен "
+                         "заводить второй алерт")
+
+    def test_below_threshold_is_ok_and_raises_no_alert(self):
+        """Ловит мутацию: сравнение `age >= порог` заменено на `age >
+        порог` (пропущенный пограничный случай) — прогон РОВНО на пороге
+        минус один мерж (последний перед срабатыванием) ошибочно завёл
+        бы алерт при возрасте, который ещё не достиг порога."""
+        stale_sha = self.git("rev-parse", "HEAD").strip()
+        self._insert_green(stale_sha)
+        for i in range(config.CANARY_MAX_MERGES_SINCE_GREEN - 1):
+            self._merge(f"m{i}")
+
+        check = doctor.check_canary_trigger(self.conn)
+
+        self.assertEqual(check.status, "ok")
+        found = [a for a in alerts.open_alerts(self.conn, "trigger")
+                if a["source"] == "canary"]
+        self.assertEqual(found, [])
 
 
 class ProgramThresholdAlertTest(TmpRootTest):

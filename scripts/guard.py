@@ -451,6 +451,42 @@ def scan_id_format_samples(tdir: Path) -> list[str]:
 
 
 # --------------------------------------------------------------------------
+# Копия лёгкой песочницы переходов вместо импорта из tests/sandbox.py (SPEC
+# 01M1TKP45EM16ZMJGQKNZA5T7J, требование 3, AC-8): копилка 06.09 — три
+# планки упали за один вечер из-за устаревшей копии, которую тест-автор
+# каждый раз переписывал заново вместо импорта эталона (skills/
+# test-authoring.md). Предупреждение, не ошибка — планка написана до
+# появления эталона (или до правки скила у test_author) не обязана
+# ретроактивно переписываться, только новые копии подсвечиваются.
+SANDBOX_OWN_DEFINITION_RE = re.compile(
+    r"^\s*def\s+(disk_backed_\w+|advance_from_in_dev)\s*\(", re.M)
+
+
+def sandbox_reuse_check(tdir: Path) -> dict:
+    """`{"errors": [], "warnings": [...]}` — предупреждение, если
+    `<tdir>/acceptance_tests/_sandbox.py` определяет собственные функции
+    `disk_backed_*`/`advance_from_in_dev` вместо импорта их из `tests/
+    sandbox.py`. Ищет буквальное `def disk_backed_*`/`def
+    advance_from_in_dev` — `from tests.sandbox import (disk_backed_show,
+    ...)` тем же именем в импорте не попадает под собственное
+    определение. Файла нет вовсе (сценарий не нуждается в локальной
+    надстройке) — ни ошибки, ни предупреждения."""
+    sandbox_path = tdir / "acceptance_tests" / "_sandbox.py"
+    if not sandbox_path.is_file():
+        return {"errors": [], "warnings": []}
+    try:
+        text = sandbox_path.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        return {"errors": [], "warnings": []}
+    if SANDBOX_OWN_DEFINITION_RE.search(text):
+        return {"errors": [], "warnings": [
+            f"{sandbox_path}: определяет собственные disk_backed_*/"
+            f"advance_from_in_dev вместо импорта из tests/sandbox.py "
+            f"(skills/test-authoring.md)"]}
+    return {"errors": [], "warnings": []}
+
+
+# --------------------------------------------------------------------------
 # Посторонний файл в каталоге планки (SPEC 01M1SAA01YRRTWAVADT2F81RRQ,
 # требование 2/AC-3/AC-6): инцидент 05.09 — `scripts/codebase_map.py`,
 # запущенный с cwd внутри `acceptance_tests/`, оставлял на диске
@@ -464,7 +500,7 @@ def scan_id_format_samples(tdir: Path) -> list[str]:
 # checkpoint`/`store`/`gitcmd`).
 EXTRANEOUS_ACCEPTANCE_FILE_REASON = "посторонний файл в каталоге планки"
 ACCEPTANCE_TESTS_ALLOWED_TOP_LEVEL = re.compile(
-    r"^(test_.*\.py|_sandbox\.py|markers\.py|__init__\.py|.+\.md|.+\.txt)$")
+    r"^(test_.*\.py|_[A-Za-z0-9_]+\.py|markers\.py|__init__\.py|.+\.md|.+\.txt)$")
 
 
 def is_extraneous_acceptance_test_file(rel_to_acceptance_tests: str) -> bool:
@@ -514,6 +550,87 @@ def scan_extraneous_acceptance_files(tasks_root: Path) -> list[Path]:
                 continue
             if is_extraneous_acceptance_test_file("/".join(rel_parts)):
                 extraneous.append(f)
+    return extraneous
+
+
+# --------------------------------------------------------------------------
+# Посторонний файл в корне каталога задачи (SPEC 01M1TNN4TMWAQSQ9Y1PW37J5H0,
+# требование 1/AC-1/AC-2; формулировка по ANSWER-1, tasks/
+# 01M1TNN4TMWAQSQ9Y1PW37J5H0/ANSWER-1.md, вариант A): инцидент 06.09 —
+# рабочие файлы роли (пять копий карты кодовой базы вида `_head_map.md`) в
+# корне `tasks/<id>/` без единой проверки доехали до артефактной ветки и
+# main. Белый список действует ТОЛЬКО для `.md`-имён первого уровня: любой
+# `.md`-файл вне перечня — посторонний. Файл ЛЮБОГО другого расширения —
+# легальное вложение без ограничений имени (ANSWER-1: буквальный единый
+# список без различия расширений конфликтовал с уже залоченными `tests/
+# test_checkpoint_external_step_artifacts.py::test_binary_file_is_not_lost`
+# и `::test_all_files_binary_still_commits_and_clears_the_dir`). Скрытые
+# файлы/каталоги (`.`-префикс любого сегмента пути) и `__pycache__/` —
+# посторонние независимо от расширения. `acceptance_tests/` — по
+# собственным правилам (см. выше), этим правилом не задета. Единственный
+# разрешённый каталог первого уровня — `acceptance_tests/`: файл внутри
+# ЛЮБОГО другого, впервые заведённого каталога первого уровня (например
+# `wip/_head_map.md`) — посторонний независимо от расширения, тем же
+# классом инцидента на один уровень вложенности глубже (REVIEW.md
+# итерации 1, замечание R1-F1: критерий проверял только путь ровно из
+# одного сегмента и молчал на файле внутри новой поддиректории).
+EXTRANEOUS_TASK_ROOT_FILE_REASON = "посторонний файл в каталоге задачи"
+TASK_ROOT_ALLOWED_MD = re.compile(
+    r"^(SPEC|PLAN|REVIEW|TEST_REPORT|QUESTIONS|TZ|ANSWER-\d+)\.md$")
+
+
+def is_extraneous_task_root_file(rel_to_task_dir: str) -> bool:
+    """`rel_to_task_dir` — путь файла относительно `tasks/<id>/` (`/`-
+    разделённый, например `_head_map.md`, `__pycache__/junk.pyc` или
+    `wip/_head_map.md`). `True` — файл посторонний (требование 1,
+    ANSWER-1, R1-F1): `.md` первого уровня вне `TASK_ROOT_ALLOWED_MD`,
+    любой скрытый файл/каталог (`.`-префикс любого сегмента пути), файл
+    внутри `__pycache__/` первого уровня, либо файл внутри ЛЮБОЙ другой
+    поддиректории первого уровня (единственная легальная поддиректория —
+    `acceptance_tests/`, по собственным правилам
+    `is_extraneous_acceptance_test_file` выше, не этой функцией)."""
+    parts = rel_to_task_dir.split("/")
+    if parts[0] == "acceptance_tests":
+        return False
+    if any(p.startswith(".") for p in parts):
+        return True
+    if parts[0] == "__pycache__":
+        return True
+    if len(parts) == 1:
+        if parts[0].endswith(".md"):
+            return not TASK_ROOT_ALLOWED_MD.match(parts[0])
+        return False
+    return True
+
+
+def extraneous_task_root_files_in(task_dir: Path) -> list[Path]:
+    """Посторонние файлы первого уровня ОДНОГО `tasks/<id>/` — ядро,
+    используемое `scan_extraneous_task_root_files` (обход `--all` по всем
+    задачам сразу) и `orchestrator/fsm_merge_gate.py` (проверка ОДНОЙ
+    задачи в scratch-репозитории ДО push, SPEC 01M1TNN4TMWAQSQ9Y1PW37J5H0,
+    AC-7) — один и тот же критерий допустимости, не независимая копия."""
+    if not task_dir.is_dir():
+        return []
+    extraneous: list[Path] = []
+    for f in sorted(task_dir.rglob("*")):
+        if not f.is_file():
+            continue
+        rel = "/".join(f.relative_to(task_dir).parts)
+        if is_extraneous_task_root_file(rel):
+            extraneous.append(f)
+    return extraneous
+
+
+def scan_extraneous_task_root_files(tasks_root: Path) -> list[Path]:
+    """Посторонние файлы первого уровня `<tasks_root>/*/` — по всем
+    каталогам задач сразу (режим `--all`, требование 1/AC-1/AC-2)."""
+    if not tasks_root.is_dir():
+        return []
+    extraneous: list[Path] = []
+    for task_dir in sorted(tasks_root.iterdir()):
+        if not task_dir.is_dir():
+            continue
+        extraneous.extend(extraneous_task_root_files_in(task_dir))
     return extraneous
 
 
@@ -630,6 +747,7 @@ REGISTRY_FIELD_LABELS = ("id", "статус", "файл/строка", "сут�
 REGISTRY_FIELD_KEYS = ("id", "status", "location", "gist", "consequence",
                        "decision")
 REGISTRY_SEPARATOR_CELL = re.compile(r"^:?-{1,}:?$")
+REGISTRY_CELL_SPLIT = re.compile(r"(?<!\\)\|")  # черта, не экранированная `\`
 
 
 def requires_registry(meta: dict) -> bool:
@@ -657,7 +775,12 @@ def registry_table_rows(body: str) -> list[list[str]]:
         line = line.strip()
         if not line.startswith("|"):
             continue
-        cells = [c.strip() for c in line.strip("|").split("|")]
+        # Hotfix №19 (06.09): черта внутри ячейки экранируется по Markdown
+        # как `\|` — режем только по НЕэкранированным чертам и снимаем
+        # экранирование; иначе пример команды `a \| b` в ячейке давал
+        # «8 колонок вместо 6» (канарейка 20260906T194847Z, третий случай).
+        cells = [c.strip().replace("\\|", "|")
+                 for c in REGISTRY_CELL_SPLIT.split(line.strip("|"))]
         if cells and cells[0].lower() == "id":
             continue  # строка заголовка таблицы
         if all(REGISTRY_SEPARATOR_CELL.fullmatch(c) for c in cells):
@@ -1300,25 +1423,39 @@ def main() -> int:
         return 1
 
     extraneous_errors: list[str] = []
+    sandbox_reuse_warnings: list[str] = []
     if args == ["--all"]:
         files = sorted(Path("tasks").rglob("*.md"))
         # Посторонние файлы `acceptance_tests/` (SPEC
-        # 01M1SAA01YRRTWAVADT2F81RRQ, требование 2) — исключаются из
-        # обычного обхода `*.md` ДО `check`/`_artifact_branch_report`
-        # (иначе, например, инцидентный `acceptance_tests/docs/
-        # codebase-map.md` попал бы туда и получил ошибку разбора
+        # 01M1SAA01YRRTWAVADT2F81RRQ, требование 2) и посторонние `.md`
+        # первого уровня `tasks/<id>/` (SPEC 01M1TNN4TMWAQSQ9Y1PW37J5H0,
+        # требование 1) — исключаются из обычного обхода `*.md` ДО
+        # `check`/`_artifact_branch_report` (иначе, например, инцидентный
+        # `_head_map.md` попал бы туда и получил ошибку разбора
         # frontmatter вместо именованной причины ниже).
         extraneous = scan_extraneous_acceptance_files(Path("tasks"))
-        extraneous_set = set(extraneous)
+        task_root_extraneous = scan_extraneous_task_root_files(Path("tasks"))
+        extraneous_set = set(extraneous) | set(task_root_extraneous)
         files = [f for f in files if f not in extraneous_set]
-        extraneous_errors = [f"{f}: {EXTRANEOUS_ACCEPTANCE_FILE_REASON}"
-                             for f in extraneous]
+        extraneous_errors = (
+            [f"{f}: {EXTRANEOUS_ACCEPTANCE_FILE_REASON}" for f in extraneous]
+            + [f"{f}: {EXTRANEOUS_TASK_ROOT_FILE_REASON}"
+              for f in task_root_extraneous])
+        # Копия лёгкой песочницы переходов (SPEC 01M1TKP45EM16ZMJGQKNZA5T7J,
+        # требование 3, AC-8) — предупреждение, не ошибка, собирается по
+        # всем каталогам задач сразу, тем же приёмом, что посторонние
+        # файлы выше.
+        for task_dir in sorted(Path("tasks").iterdir()):
+            if task_dir.is_dir():
+                sandbox_reuse_warnings.extend(
+                    sandbox_reuse_check(task_dir)["warnings"])
     else:
         files = [Path(a) for a in args]
 
     if artifact_branch_mode:
         errors, warnings, submitted, drafts = _artifact_branch_report(files)
         errors = extraneous_errors + errors
+        warnings = warnings + sandbox_reuse_warnings
         print(f"сдано {submitted} / черновиков {drafts} / "
               f"нарушений {len(errors) + len(warnings)}")
         if warnings:
@@ -1339,6 +1476,11 @@ def main() -> int:
             all_errors.append(f"{f}: файл не найден")
             continue
         all_errors.extend(check(f))
+
+    if sandbox_reuse_warnings:
+        print("GUARD: предупреждения (не блокируют переход гейта):")
+        for w in sandbox_reuse_warnings:
+            print(f"  - {w}")
 
     if all_errors:
         print("GUARD: нарушения структуры артефактов:")

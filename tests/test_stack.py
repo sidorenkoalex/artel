@@ -12,6 +12,7 @@
 import subprocess
 import sys
 import tempfile
+import tomllib
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -19,6 +20,7 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from orchestrator import config, stack  # noqa: E402
+from tests.sandbox import resilient_tmp_cleanup  # noqa: E402
 
 HIGH_VERSION = "999.999.999"
 LOW_VERSION = "0.0.1"
@@ -79,6 +81,25 @@ class ManifestConstantsTest(unittest.TestCase):
         for name in ("pytest", "pytest_timeout", "xdist"):
             self.assertIn(name, by_name)
             self.assertTrue(by_name[name].strip())
+
+    def test_per_test_timeout_matches_pyproject_toml(self):
+        """R1-F1 (REVIEW.md 01M1TKP6AAY4W8GDGZNA9R0JZT итерация 1):
+        `pyproject.toml` (`[tool.pytest.ini_options] timeout`) несёт
+        таймаут отдельного теста тем же числом, что
+        `stack.PER_TEST_TIMEOUT_SEC` — TOML не умеет читать константу
+        оттуда, оба места синхронизированы руками; без этого теста
+        комментарии рядом с обоими числами ссылались на защиту, которой
+        не существовало.
+
+        Ловит мутацию: `PER_TEST_TIMEOUT_SEC` меняется без правки
+        `timeout` в `pyproject.toml` (или наоборот) — `assertEqual`
+        откажет.
+        """
+        pyproject = Path(config.ROOT) / "pyproject.toml"
+        with pyproject.open("rb") as f:
+            data = tomllib.load(f)
+        configured_timeout = data["tool"]["pytest"]["ini_options"]["timeout"]
+        self.assertEqual(stack.PER_TEST_TIMEOUT_SEC, configured_timeout)
 
 
 class CheckStackTest(unittest.TestCase):
@@ -271,6 +292,101 @@ def _all_ok_run_with_freeze(freeze_output: str):
             return subprocess.CompletedProcess(args, 0, freeze_output, "")
         return _all_ok_run(args, **kwargs)
     return fake_run
+
+
+class MainCopyRootTest(unittest.TestCase):
+    """ANSWER-7 (01M1TKP6AAY4W8GDGZNA9R0JZT, возврат «venv по расположению
+    кода»): `tests/sandbox.py::RealGitSandbox` подменяет `config.ROOT` на
+    временный git-репозиторий, никак не связанный с настоящей копией
+    пульта — `_main_copy_root()` обязана искать `--git-common-dir` от
+    расположения кода (`stack._MODULE_ROOT`), не от `config.ROOT`,
+    иначе поиск venv уходит в несуществующий временный репозиторий
+    вместо настоящей главной копии.
+    """
+
+    def test_uses_module_root_not_config_root(self):
+        """Ловит мутацию: отправная точка снова `config.ROOT` —
+        записанный `cwd` совпал бы с подменённым (фейковым) путём вместо
+        `_MODULE_ROOT`, `assertEqual`/`assertNotEqual` откажут."""
+        recorded = {}
+
+        def fake_run(args, **kwargs):
+            recorded["cwd"] = kwargs.get("cwd")
+            return subprocess.CompletedProcess(args, 1, "", "")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            fake_root = Path(tmp)
+            with mock.patch.object(config, "ROOT", fake_root), \
+                 mock.patch.object(stack.subprocess, "run",
+                                   side_effect=fake_run):
+                stack._main_copy_root()
+
+        self.assertEqual(recorded["cwd"], stack._MODULE_ROOT)
+        self.assertNotEqual(Path(recorded["cwd"]), fake_root)
+
+
+class PytestPythonExecutableWorktreeTest(unittest.TestCase):
+    """ANSWER-6 (01M1TKP6AAY4W8GDGZNA9R0JZT, возврат «интерпретатор venv
+    из worktree»): планку пульт гоняет против worktree'а задачи, где
+    `.artel/venv` рядом с `config.ROOT` не существует — только ГЛАВНАЯ
+    копия несёт venv пульта. Git настоящий (по образцу
+    tests/test_workspace.py): суть проверки — реальный `git rev-parse
+    --git-common-dir` из worktree'а, заглушкой не проверить.
+    """
+
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(resilient_tmp_cleanup, tmp)
+        self.main_root = Path(tmp.name).resolve()
+        self._git(self.main_root, "init", "-q", "-b", "main")
+        self._git(self.main_root, "config", "user.email",
+                 "artel-tests@example.invalid")
+        self._git(self.main_root, "config", "user.name", "artel tests")
+        (self.main_root / "README.md").write_text("x", encoding="utf-8")
+        self._git(self.main_root, "add", "-A")
+        self._git(self.main_root, "commit", "-q", "-m", "init")
+
+        self.worktree_root = self.main_root / "worktree"
+        self._git(self.main_root, "worktree", "add", "-b", "task/x",
+                 str(self.worktree_root))
+        self.missing_venv = self.worktree_root / ".artel" / "venv"
+
+    def _git(self, cwd, *args):
+        res = subprocess.run(["git", *args], cwd=cwd, capture_output=True,
+                             text=True)
+        self.assertEqual(res.returncode, 0,
+                         f"git {' '.join(args)} упал: {res.stderr}")
+        return res
+
+    def test_falls_back_to_main_copy_venv_when_worktree_has_none(self):
+        """Ловит мутацию: шаг 2 (поиск venv главной копии через
+        `_main_copy_root()`) убран — функция ушла бы прямиком на
+        `sys.executable`, `assertEqual` откажет.
+
+        Отправная точка `_main_copy_root()` — `stack._MODULE_ROOT`, не
+        `config.ROOT` (ANSWER-7): подменяем именно `_MODULE_ROOT` на
+        сконструированный worktree — тем же приёмом, что и раньше
+        `config.ROOT`, только через актуальный якорь."""
+        main_venv_python = self.main_root / ".artel" / "venv" / "bin" / "python3"
+        main_venv_python.parent.mkdir(parents=True)
+        main_venv_python.touch()
+
+        with mock.patch.object(stack, "_MODULE_ROOT", self.worktree_root), \
+             mock.patch.object(config, "VENV_DIR", self.missing_venv,
+                               create=True):
+            executable = stack.pytest_python_executable()
+
+        self.assertEqual(executable, str(main_venv_python))
+
+    def test_falls_back_to_sys_executable_when_main_copy_has_no_venv_either(self):
+        """Контроль: главная копия тоже не несёт venv — шаг 3, не пустой
+        путь и не исключение."""
+        with mock.patch.object(stack, "_MODULE_ROOT", self.worktree_root), \
+             mock.patch.object(config, "VENV_DIR", self.missing_venv,
+                               create=True):
+            executable = stack.pytest_python_executable()
+
+        self.assertEqual(executable, sys.executable)
 
 
 if __name__ == "__main__":
