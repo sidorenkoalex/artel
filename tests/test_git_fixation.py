@@ -25,6 +25,7 @@ T001–T020 остаются зелёными без правок — они и�
 """
 import contextlib
 import shutil
+import stat
 import subprocess
 import sys
 import unittest
@@ -65,6 +66,26 @@ ARTEL_TARGETS_YAML = f"""targets:
     no_paths: []
     project_skills: []
     merge_gate: operator
+"""
+
+# REVIEW.md-заглушка со статусом ВНЕ config.REVIEW_VERDICTS (SPEC
+# 01M1NWCHVTYQ0M8PCJ1YJ2N78P): `fsm_advance.review` читает `status` из
+# фронтматтера и, не найдя его среди `REVIEW_VERDICTS`, отказывает
+# переходу МОЛЧА (`return False`, без journal-записи) — та же
+# «вердикта ещё нет» деградация, на которую и рассчитан этот плейсхолдер
+# (см. докстринг `enter_in_dev` — симметрично `PLAN_READY` для in_dev).
+REVIEW_DRAFT = """---
+task: {task}
+type: review
+author_role: reviewer
+status: draft
+schema_version: 1
+iteration: 1
+---
+
+# REVIEW: git-фиксация — внешний target
+
+## Вердикт
 """
 
 # SPEC.md минимальный и валидный по guard (образец test_multitarget_invariants.py).
@@ -627,6 +648,49 @@ class ExternalApproveDoesNotCommitOthersWorkInProgressTest(TmpRootTest):
         self.assertEqual(store.get_task(store.db(), self.TASK)["state"], "in_dev")
 
 
+_STUB_VENV_PYTHON_PY = """#!{real_python}
+import sys, subprocess
+if sys.argv[1:4] == ["-m", "pip", "freeze"]:
+    sys.stdout.write(open({lock!r}, encoding="utf-8").read())
+    sys.exit(0)
+sys.exit(subprocess.run([{real_python!r}] + sys.argv[1:]).returncode)
+"""
+
+
+def _provision_stub_venv(root: Path) -> None:
+    """`.artel/venv` + `requirements.lock` для `root`, согласованные друг с
+    другом (SPEC 01M1NWCHVTYQ0M8PCJ1YJ2N78P): `orchestrator.runner.role_env`
+    (SPEC 01M1REVEZ1HESMJ7AFD5A9MEJ8, требование 4) с недавних пор
+    ОТКАЗЫВАЕТ шагу роли без согласованного `.artel/venv` — той же
+    проверкой (`orchestrator.stack.check_stack`), что уже гасит
+    `RealPultGitTest`'овский in-process `doctor.preflight_checks` (см.
+    `mock.patch` в `RealPultGitTest.setUp` — работает только ВНУТРИ этого
+    интерпретатора, не пересекает границу `subprocess.Popen`, которой
+    пользуется, например, `tasks/01M1NWCHVTYQ0M8PCJ1YJ2N78P/
+    acceptance_tests/_sandbox.py` для настоящего отдельного процесса
+    роли). Без этой заглушки шаг роли этой песочницы отказывает раньше,
+    чем успевает начаться, — не по причине, которую проверяет тест.
+
+    `bin/python`/`bin/python3` — не настоящий venv, а python-обёртка (не
+    `sh`: PATH подставного окружения роли не обязан нести `cat`/`sh` —
+    `_allowlisted_env` сужает его до манифеста стека): `-m pip freeze`
+    отвечает буквальным содержимым СВОЕГО ЖЕ `requirements.lock` (сверка
+    версий тривиально совпадает), любой другой вызов делегируется
+    реальному `sys.executable` — код роли, и правда позвавший `python3`,
+    получает рабочий интерпретатор, а не сломанную заглушку.
+    """
+    lock = root / "requirements.lock"
+    shutil.copy(REPO_ROOT / "requirements.lock", lock)
+    venv_bin = root / ".artel" / "venv" / "bin"
+    venv_bin.mkdir(parents=True)
+    script = _STUB_VENV_PYTHON_PY.format(lock=str(lock), real_python=sys.executable)
+    for name in ("python", "python3"):
+        path = venv_bin / name
+        path.write_text(script, encoding="utf-8")
+        path.chmod(path.stat().st_mode | stat.S_IEXEC | stat.S_IXGRP
+                  | stat.S_IXOTH)
+
+
 class RealPultGitTest(_GitFixationTmpRootTest):
     """Песочница self/артель (A7, generic-путь, ANSWER-1 вопрос 1): self
     (`config.DEFAULT_TARGET`) фиксируется тем же кодом, что и ЛЮБОЙ
@@ -664,6 +728,13 @@ class RealPultGitTest(_GitFixationTmpRootTest):
             "---\nbuilt_at_sha: 0000000000000000000000000000000000000000\n"
             "---\n\n# Карта\n", encoding="utf-8")
         (config.ROOT / "CLAUDE.md").write_text("# Конвенции\n", encoding="utf-8")
+        # SPEC 01M1NWCHVTYQ0M8PCJ1YJ2N78P: `.artel/venv` согласованный с
+        # `requirements.lock` — иначе `runner.role_env` отказывает шагу
+        # роли ДО его начала любому потребителю этой песочницы, кто
+        # реально исполняет шаг отдельным процессом (см. докстринг
+        # `_provision_stub_venv`). `.gitignore` уже скопирован выше —
+        # `.artel/` в коммит ниже не попадёт, как и в настоящем пульте.
+        _provision_stub_venv(config.ROOT)
         subprocess.run(["git", "add", "-A"], cwd=config.ROOT, check=True)
         subprocess.run(["git", "commit", "-q", "-m", "init"],
                        cwd=config.ROOT, check=True)
@@ -756,6 +827,52 @@ class RealPultGitTest(_GitFixationTmpRootTest):
         self._seed_artifact_branch(f"tasks/{self.TASK}/PLAN.md",
                                    PLAN_READY.format(task=self.TASK),
                                    f"{self.TASK}: PLAN заглушка")
+        # `PLAN.md` выше уже `status: ready` — «легитимный первый вход»
+        # (`auto._is_legit_first_entry_detail`, detail «SPEC schema_version
+        # …» записи `state -> in_dev` от `cmd_approve` выше) не держит
+        # рубеж переделки для готового артефакта (`auto._rework_gate_
+        # blocks`), и потребитель, доводящий цикл ДО реального `auto`
+        # (не только `run_faked`), продвигается по нему СРАЗУ, без единого
+        # шага developer, — до `review` (`_pre_advance_step`, требование 2
+        # SPEC 01M1R8B3ZKXQT0Z0G6QQQDV906). Без `REVIEW.md` в артефактной
+        # ветке та же деградация из докстринга выше повторяется для роли
+        # reviewer уже НА review — заглушка того же класса, что и PLAN.md,
+        # закрывает её: `status: draft` вне `config.REVIEW_VERDICTS` не
+        # даёт `review` перейти дальше молча (не расходует лишний прогон
+        # роли), а файл уже на месте в рабочем каталоге роли к моменту
+        # проверки обязательного артефакта (обнаружено
+        # 01M1NWCHVTYQ0M8PCJ1YJ2N78P: без него reviewer ретраился так же,
+        # как developer до правки PLAN.md выше).
+        self._seed_artifact_branch(f"tasks/{self.TASK}/REVIEW.md",
+                                   REVIEW_DRAFT.format(task=self.TASK),
+                                   f"{self.TASK}: REVIEW заглушка")
+        # Гейт ёмкости diff (05.09, fsm_advance._capacity_gate_refuses)
+        # сверяет `MAIN_BRANCH...t["branch"]` в `config.ROOT` (`gitcmd.git`
+        # всегда работает там, не в `self.repo()` — тот отдельный
+        # git-репозиторий фиксации `config.PROJECTS/<target>`, см.
+        # докстринг `RealPultGitTest`) уже на входе в `in_dev -> review`;
+        # в реальном потоке ветка задачи к этому моменту всегда существует
+        # (её заводит `workspace.ensure` первым же реальным шагом роли), но
+        # этот хелпер доводит задачу до `in_dev` в обход роли — без ветки
+        # `git diff` отвечает `fatal: bad revision`, и гейт fail-closed
+        # отказывает КАЖДОМУ переходу из `in_dev` (обнаружено
+        # 01M1NWCHVTYQ0M8PCJ1YJ2N78P: `auto` останавливался раньше, чем
+        # успевал начать шаг роли). `git branch` на `MAIN_BRANCH` — то же
+        # самое действие, каким `workspace.ensure` завела бы её сама
+        # (`workspace.py::ensure`, ветка ещё не в git — "заводится от
+        # config.MAIN_BRANCH тем же действием, что и сам worktree").
+        # Только если ветки ЕЩЁ нет: некоторые потребители этого хелпера
+        # (`tests/test_timeout_checkpoint.py::_WorktreeCheckpointTest`)
+        # заводят worktree САМИ, ДО вызова `enter_in_dev` — ветка тогда
+        # уже существует и стоит checked out в этом worktree; `git branch
+        # -f` на такой ветке отказывает (128: «cannot force update the
+        # branch... checked out»). `branch_exists` — та же проверка, что
+        # уже применяет сама `workspace.ensure` для решения между `add -b`
+        # и `add` без него.
+        branch = store.get_task(store.db(), self.TASK)["branch"]
+        if branch and not gitcmd.branch_exists(branch):
+            subprocess.run(["git", "branch", branch, config.MAIN_BRANCH],
+                           cwd=config.ROOT, check=True, capture_output=True)
         return sha
 
     def run_faked(self):

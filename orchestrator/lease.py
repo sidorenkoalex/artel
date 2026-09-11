@@ -26,7 +26,8 @@ from .session import resolve_session_id  # noqa: F401 — единая функ�
 
 
 def acquire(conn, task_id: str, session_id: str, *,
-           same_host_ok: bool = False) -> tuple[str | None, bool]:
+           same_host_ok: bool = False,
+           force: bool = False) -> tuple[str | None, bool]:
     """(отказ, взят_с_нуля). `отказ` — None, если можно продолжать.
 
     Требования 3-5: свободен или свой session_id -> взять/продлить; чужой
@@ -47,6 +48,14 @@ def acquire(conn, task_id: str, session_id: str, *,
     ДРУГОГО hostname отказывает всегда, независимо от `same_host_ok`
     (SPEC AC-4, инцидент 02.09.2026 — «другой Оператор физически» не
     исключение).
+
+    `force=True` (SPEC 01M1NWCHVTYQ0M8PCJ1YJ2N78P, AC-10; используется
+    ТОЛЬКО `kill`) перешагивает именованный отказ «сессия свежая» — kill
+    switch обязан прерывать работу немедленно, включая свежий lease
+    живого отвязанного цикла, а не ждать её (SPEC требование 6), приоритетнее
+    `same_host_ok` (эти два флага у разных вызывателей не пересекаются).
+    Все прочие вызыватели передают `force` по умолчанию `False` —
+    поведение отказа для них не меняется вовсе.
 
     Чтение строки (`store.lease_row`) и её запись (`insert_lease`/
     `update_lease`) выполняются внутри одной транзакции `BEGIN IMMEDIATE`:
@@ -72,7 +81,7 @@ def acquire(conn, task_id: str, session_id: str, *,
             store.update_lease(conn, task_id, session_id, pid, hostname, store.now())
             return None, False
         age = liveness._age_seconds(row["heartbeat_ts"])
-        if age <= config.LEASE_STALE_AFTER_SEC:
+        if not force and age <= config.LEASE_STALE_AFTER_SEC:
             if same_host_ok and row["hostname"] == hostname:
                 return None, False
             refusal = (f"[{task_id}] задачу ведёт сессия {row['session_id']} "
@@ -85,7 +94,9 @@ def acquire(conn, task_id: str, session_id: str, *,
         # иначе (чужой host — pid непроверяем, либо pid ещё жив) причина
         # остаётся прежней «heartbeat протух» — триггер перехвата (возраст
         # heartbeat выше) не меняется, меняется только текст причины.
-        if row["hostname"] == hostname and not liveness._pid_alive(row["pid"]):
+        if force and age <= config.LEASE_STALE_AFTER_SEC:
+            cause = "kill switch (принудительно, сессия ещё свежая)"
+        elif row["hostname"] == hostname and not liveness._pid_alive(row["pid"]):
             cause = f"pid держателя мёртв (pid {row['pid']})"
         else:
             cause = (f"heartbeat протух ({int(age)} сек > порог "
@@ -202,7 +213,8 @@ def warn_foreign_live(conn, task_id: str, session_id: str) -> None:
 
 
 def run_locked(conn, task_id: str, session_id: str | None, body,
-               *, on_refusal: str = "exit", same_host_ok: bool = False):
+               *, on_refusal: str = "exit", same_host_ok: bool = False,
+               force: bool = False):
     """Общая точка обвязки мутирующих команд задачи (SPEC T057, требование
     2): `resolve_session_id` -> `acquire` -> отказ -> `body(sid)` ->
     `release`-если-`fresh` в `finally`. Прежде эта пятишаговая связка была
@@ -224,9 +236,14 @@ def run_locked(conn, task_id: str, session_id: str | None, body,
     `same_host_ok` — пробрасывается в `acquire()` без изменений (см. её
     докстринг); дефолт `False` сохраняет поведение всех вызывателей, кроме
     `budget.cmd_budget` (SPEC 01M1VBEDGMEXHVGWAH42FTDZ4X, требование 1).
+
+    `force` — пробрасывается в `acquire()` без изменений (см. её докстринг);
+    дефолт `False` сохраняет поведение всех вызывателей, кроме `kill`
+    (SPEC 01M1NWCHVTYQ0M8PCJ1YJ2N78P, требование 6).
     """
     sid = resolve_session_id(session_id)
-    refusal, fresh = acquire(conn, task_id, sid, same_host_ok=same_host_ok)
+    refusal, fresh = acquire(conn, task_id, sid, same_host_ok=same_host_ok,
+                             force=force)
     if refusal is not None:
         if on_refusal == "exit":
             sys.exit(refusal)
