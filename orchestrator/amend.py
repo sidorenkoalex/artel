@@ -56,14 +56,25 @@ _RUN_SUMMARY = re.compile(
 
 
 def cmd_amend_tests(task_id: str, reason: str | None,
-                    session_id: str | None = None) -> None:
+                    session_id: str | None = None,
+                    from_branch: bool = False) -> None:
     """Берёт lease задачи перед работой — тем же приёмом, что и остальные
     мутирующие команды задачи (`answer.cmd_answer`/`fsm.cmd_approve`).
 
     Префикс -> полный id резолвится ЗДЕСЬ, до lease (тот же порядок,
-    что у `answer.cmd_answer`/`workspace.cmd_workspace`)."""
+    что у `answer.cmd_answer`/`workspace.cmd_workspace`).
+
+    `from_branch` (SPEC 01M287TPG0HAVXS8CHBCY679WN, требование 3) —
+    источник правки не worktree, а расхождение содержимого
+    `acceptance_tests/` между `tests_locked_sha` и головой артефактной
+    ветки; `False` (дефолт) — прежнее поведение без изменений (AC-9)."""
     conn = store.db()
     task_id = store.resolve_task_id(conn, task_id)
+    if from_branch:
+        lease.run_locked(
+            conn, task_id, session_id,
+            lambda sid: _cmd_amend_tests_from_branch(conn, task_id, reason))
+        return
     lease.run_locked(conn, task_id, session_id,
                      lambda sid: _cmd_amend_tests(conn, task_id, reason))
 
@@ -284,6 +295,89 @@ def _cmd_amend_tests(conn, task_id: str, reason: str | None) -> None:
     store.journal(conn, task_id, "operator", AMEND_ACTION, detail)
     print(f"[{task_id}] {AMEND_ACTION}: {old_locked} -> {new_locked} "
          f"(ветка {artifact_branch.branch_name(task_id)})")
+
+    window_ids = _locked_window_task_ids(conn)
+    count = _amend_events_in_window(conn, window_ids)
+    if count > WINDOW_THRESHOLD:
+        message = (
+            f"планка девальвируется: {count} правок планки в скользящем "
+            f"окне последних {len(window_ids)} задач(и), дошедших до "
+            f"фиксации лока (порог — больше {WINDOW_THRESHOLD})")
+        alerts.raise_alert(conn, None, "threshold", DEVALUATION_ALERT_SOURCE,
+                           message)
+        print(f"[{task_id}] ВНИМАНИЕ: {message}")
+
+
+def _branch_tests_snapshot(rev: str, rel_tests_dir: str) -> dict[str, str] | None:
+    """{путь: текст} `rel_tests_dir` на git-ревизии `rev` — `rev` может
+    быть именем ветки ИЛИ голым sha, `gitcmd.ls_tree_files`/`gitcmd.show`
+    принимают любую git-ревизию одинаково (тот же приём, каким
+    `fsm_advance._zones_gate` уже сравнивает дерево на разных точках
+    истории). `None` — git не ответил на любой из двух вызовов."""
+    paths = gitcmd.ls_tree_files(rev, rel_tests_dir)
+    if paths is None:
+        return None
+    files = {}
+    for rel in paths:
+        text, _reason = gitcmd.show(rev, rel)
+        if text is None:
+            return None
+        files[rel] = text
+    return files
+
+
+def _cmd_amend_tests_from_branch(conn, task_id: str, reason: str | None) -> None:
+    """`amend-tests <id> --reason "<основание>" --from-branch` (SPEC
+    01M287TPG0HAVXS8CHBCY679WN, требование 3): источник правки —
+    расхождение содержимого `acceptance_tests/` МЕЖДУ `tests_locked_sha`
+    и головой артефактной ветки, не worktree (AC-7/AC-8). Содержимое уже
+    закоммичено на ветке (например автокоммитом шага роли, минуя
+    `amend-tests`, — SPEC «Контекст») — новый коммит здесь не нужен,
+    команда только сдвигает `tests_locked_sha` на уже существующий sha
+    головы."""
+    t = store.get_task(conn, task_id)
+
+    if not (reason or "").strip():
+        sys.exit(f"[{task_id}] amend-tests: отказ — основание (--reason) "
+                 f"пустое, правка планки требует непустой причины")
+
+    old_locked = t["tests_locked_sha"]
+    if not old_locked:
+        sys.exit(f"[{task_id}] amend-tests: отказ — задача ещё не проходила "
+                 f"фиксацию лока приёмочных тестов (tests_locked_sha пуст) "
+                 f"— сверять правку не с чем")
+
+    branch = artifact_branch.branch_name(task_id)
+    rel_tests_dir = f"tasks/{task_id}/acceptance_tests"
+
+    new_sha = gitcmd.branch_head_sha(branch)
+    if not new_sha:
+        sys.exit(f"[{task_id}] amend-tests: отказ — git не ответил на "
+                 f"голову артефактной ветки {branch}")
+
+    old_snapshot = _branch_tests_snapshot(old_locked, rel_tests_dir)
+    new_snapshot = _branch_tests_snapshot(new_sha, rel_tests_dir)
+    if old_snapshot is None or new_snapshot is None:
+        sys.exit(f"[{task_id}] amend-tests: отказ — git не ответил на "
+                 f"содержимое {rel_tests_dir}/")
+
+    if old_snapshot == new_snapshot:
+        sys.exit(f"[{task_id}] amend-tests: отказ — нет расхождения в "
+                 f"{rel_tests_dir}/ между {old_locked} и головой ветки "
+                 f"{branch}")
+
+    changed_files = sorted(
+        p for p in set(old_snapshot) | set(new_snapshot)
+        if old_snapshot.get(p) != new_snapshot.get(p))
+
+    store.update_task(conn, task_id, tests_locked_sha=new_sha)
+
+    detail = (f"старый sha={old_locked}, новый sha={new_sha}, "
+             f"основание: {reason}\nотличаются файлы: "
+             f"{', '.join(changed_files)}")
+    store.journal(conn, task_id, "operator", AMEND_ACTION, detail)
+    print(f"[{task_id}] {AMEND_ACTION}: {old_locked} -> {new_sha} "
+         f"(ветка {branch}, источник — голова артефактной ветки)")
 
     window_ids = _locked_window_task_ids(conn)
     count = _amend_events_in_window(conn, window_ids)

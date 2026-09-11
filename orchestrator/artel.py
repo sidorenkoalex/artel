@@ -120,11 +120,12 @@ workspace, tasks, knowledge, logs). БД одна на все проекты: с
   init | new "<название>" [--tz <файл>] | status | show <id> | advance <id> |
   run <id> [--attach] | auto <id> [--attach] | stop <id> |
   approve <id> [sha] | reject <id> "<причина>" |
-  answer <id> <файл-с-ответом> | kill <id> | release <id> |
+  answer <id> <файл-с-ответом> | zones-extend <id> <путь>[, <путь>...] |
+  kill <id> | release <id> |
   pause [--now] <id> | resume <id> | log <id> | budget <id> <usd> |
   target-init <target> | doctor [--restore] [--fix] | alert-ack <id> "<решение>" |
   version | canary --k <N> | canary pool-seal | prune [--execute] |
-  amend-tests <id> --reason "<основание>" | pin-update <sha main артели> |
+  amend-tests <id> --reason "<основание>" [--from-branch] | pin-update <sha main артели> |
   pin --to [<sha>] | zone-release <id> | zone-reorder <id1> <id2> ... |
   venv-sync | note (копилка|бэклог|очередь) --text "<строка>" |
   note --append <ключ> --text "<текст>" | note --flush |
@@ -276,6 +277,20 @@ escalate` из `tests_writing`, вердикт REVIEW.md `status: escalate` из
 требуют, как и до этой задачи. Следующий запуск роли получает ответ
 (и исходный вопрос, если он был) в своём брифе (`orchestrator/brief.py`).
 
+`answer <id> <файл>` для задачи в `in_dev`/`review` (SPEC
+01M287TPG0HAVXS8CHBCY679WN) — принимается ТОЛЬКО если текст файла
+несёт строку «Расширение зон разрешено: <пути>»: коммитит
+`ANSWER-n.md` тем же путём, что и для `escalated`, состояние задачи не
+меняется. Файл без этой строки в `in_dev`/`review` отказывает так же,
+как любое состояние вне `escalated`.
+
+`zones-extend <id> <путь1>[, <путь2>]` (SPEC 01M287TPG0HAVXS8CHBCY679WN)
+— коммитит `ANSWER-n.md` с той же строкой маркера и текстом «мандат
+Оператора: <пути>»; если PLAN.md головы артефактной ветки уже несёт
+раздел «## Расширение зон» с РОВНО теми же путями — сразу обновляет
+`tasks.zones_extension` (гейт зон пропускает дифф без отдельного
+`answer`), иначе БД не трогает и журналирует, что раздела PLAN нет.
+
 Структуру артефакта на переходах проверяет код: `advance` прогоняет guard
 по тому артефакту, статус которого и есть условие перехода (SPEC — на гейт
 SPEC, PLAN — в ревью, REVIEW — из ревью). Нарушение структуры отказывает
@@ -297,6 +312,15 @@ worktree задачи, команда коммитит правку, сдвиг�
 агентов. Больше одной правки в скользящем окне последних 5 задач
 пульта, дошедших до фиксации лока (program-wide), поднимает алерт
 «планка девальвируется» (kind=threshold) сразу после записи события.
+
+`amend-tests <id> --reason "<основание>" --from-branch` (SPEC
+01M287TPG0HAVXS8CHBCY679WN) — источник правки не worktree, а
+расхождение содержимого `acceptance_tests/` между `tests_locked_sha` и
+головой артефактной ветки (правка, унесённую автокоммитом шага роли в
+обход `amend-tests`, легализует эта форма): при расхождении журналирует
+отличающиеся файлы и сдвигает лок на голову ветки без нового коммита
+(содержимое уже там); без расхождения отказывает («нет расхождения»).
+Без флага `--from-branch` поведение команды прежнее (сверка с worktree).
 
 Модули пакета (T015; здесь — только разбор argv и таблица команд):
   config    пути и константы; все обращения к ним идут через модуль
@@ -732,6 +756,7 @@ def main() -> None:
         "reject": lambda: fsm.cmd_reject(rest[0],
                                          rest[1] if len(rest) > 1 else ""),
         "answer": lambda: answer.cmd_answer(rest[0], rest[1]),
+        "zones-extend": lambda: answer.cmd_zones_extend(rest[0], rest[1]),
         "kill": lambda: cleanup.cmd_kill(rest[0]),
         "release": lambda: release.cmd_release(rest[0]),
         "pause": lambda: _cmd_pause(rest),
@@ -748,7 +773,8 @@ def main() -> None:
         "prune": lambda: prune.cmd_prune("--execute" in rest),
         "report": lambda: report.cmd_report(),
         "acceptance-dry-run": lambda: dry_run.cmd_acceptance_dry_run(rest[0]),
-        "amend-tests": lambda: amend.cmd_amend_tests(rest[0], _reason_arg(rest)),
+        "amend-tests": lambda: amend.cmd_amend_tests(
+            rest[0], _reason_arg(rest), from_branch="--from-branch" in rest),
         "pin-update": lambda: pin.cmd_pin_update(rest[0]),
         "pin": lambda: _cmd_pin(rest),
         "zone-release": lambda: zone_lock.cmd_zone_release(rest[0]),

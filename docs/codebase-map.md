@@ -1,5 +1,5 @@
 ---
-built_at_sha: 702c8bb8ec55ffe18554b7ff5352961f19ff8a52
+built_at_sha: cb122d2171a96bf4dc856a8a95718c8eb89e6dcc
 ---
 
 # Codebase-map пульта
@@ -87,8 +87,9 @@ built_at_sha: 702c8bb8ec55ffe18554b7ff5352961f19ff8a52
 
 **Публичные функции:**
 - `cmd_answer`
+- `cmd_zones_extend`
 
-**Импортирует:** `orchestrator/artifact_branch.py`, `orchestrator/artifact_source.py`, `orchestrator/gitcmd.py`, `orchestrator/lease.py`, `orchestrator/store.py`
+**Импортирует:** `orchestrator/artifact_branch.py`, `orchestrator/artifact_source.py`, `orchestrator/fsm_advance.py`, `orchestrator/gitcmd.py`, `orchestrator/lease.py`, `orchestrator/store.py`
 
 **Импортируется:** `orchestrator/artel.py`, `orchestrator/canary.py`, `tests/test_answer.py`
 
@@ -389,7 +390,7 @@ built_at_sha: 702c8bb8ec55ffe18554b7ff5352961f19ff8a52
 
 **Импортирует:** `orchestrator/acceptance.py`, `orchestrator/agent_log.py`, `orchestrator/artifact_source.py`, `orchestrator/artifacts.py`, `orchestrator/auto.py`, `orchestrator/budget.py`, `orchestrator/ci.py`, `orchestrator/config.py`, `orchestrator/fsm.py`, `orchestrator/fsm_autogate.py`, `orchestrator/gitcmd.py`, `orchestrator/github_adapter.py`, `orchestrator/repo_context.py`, `orchestrator/review.py`, `orchestrator/store.py`, `orchestrator/workspace.py`, `orchestrator/yamlmini.py`, `scripts/guard.py`
 
-**Импортируется:** `orchestrator/fsm.py`, `tests/test_capacity_gate.py`, `tests/test_fsm_advance_gate_framework.py`, `tests/test_fsm_advance_gate_smoke.py`, `tests/test_fsm_review_rework_gate.py`, `tests/test_fsm_review_rework_sha_gate.py`, `tests/test_git_fixation.py`, `tests/test_zones_gate.py`
+**Импортируется:** `orchestrator/answer.py`, `orchestrator/fsm.py`, `tests/test_capacity_gate.py`, `tests/test_fsm_advance_gate_framework.py`, `tests/test_fsm_advance_gate_smoke.py`, `tests/test_fsm_review_rework_gate.py`, `tests/test_fsm_review_rework_sha_gate.py`, `tests/test_git_fixation.py`, `tests/test_zones_gate.py`
 
 ## orchestrator/fsm_autogate.py
 
