@@ -57,6 +57,21 @@ ANSWER-3 (вариант (a)): Оператор через `amend-tests` пер�
 этот шаг не менял. Перепрогон `tasks/01M1THKWFXFYNW28HDJGYHQWH6/
 acceptance_tests/` целиком: 12 из 12 исполняемых методов зелёные.
 
+REVIEW.md итерации 1, замечание R1-F1 (major): 5 из 8 методов
+`PlanBudgetOneTimeReassessmentTest` не несли заявку `Ловит мутацию: …`
+в докстринге (`test_ac2_missing_field_leaves_ceiling_untouched` — вовсе
+без докстринга). Закрыто: все 5 методов
+(`test_ac2_missing_field_leaves_ceiling_untouched`,
+`test_ac4_return_from_review_closes_the_channel`,
+`test_ac4_return_from_acceptance_reject_closes_the_channel`,
+`test_ac8b_fires_only_once_across_a_full_cycle`,
+`test_ac8a_value_above_role_cap_does_not_raise_ceiling`) получили строку
+`Ловит мутацию: …` по образцу трёх уже оформленных методов того же
+класса — формулировки взяты из предложений самого REVIEW.md.
+`python3 -m unittest tests.test_invariants` — 60 passed;
+приёмочная планка задачи — 12 из 12 исполняемых зелёные (см. «Реестр
+замечаний» REVIEW.md — R1-F1 размечена `fixed`).
+
 ## Шаги
 1. `orchestrator/config.py` — константа `BUDGET_SOURCE_PLAN = "plan"`.
 2. `orchestrator/fsm_advance.py` — `_apply_plan_budget` (требования 1-6)
