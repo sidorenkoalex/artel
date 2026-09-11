@@ -35,7 +35,8 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from orchestrator import (artel, budget, catalog, ci, cleanup,  # noqa: E402
-                          config, fsm, gitcmd, runner, stack, store)
+                          config, fsm, fsm_advance, gitcmd, runner, stack,
+                          store)
 from scripts import guard  # noqa: E402
 from tests.sandbox import (FakeProc, SpyRun, TmpRootTest, _stub_check_stack,  # noqa: E402
                            capture, capture_new_task_id,
@@ -1015,6 +1016,147 @@ class SpecCeilingRespectsRoleBudgetCapTest(TmpRootTest):
         row = self.task_row()
         self.assertAlmostEqual(row["budget_usd"], 60.0)
         self.assertEqual(row["budget_source"], config.BUDGET_SOURCE_OPERATOR)
+
+
+class PlanBudgetOneTimeReassessmentTest(TmpRootTest):
+    """Инвариант 10 (ADR-0014 п.3, задача 01M1THKWFXFYNW28HDJGYHQWH6): PLAN
+    вправе поднять потолок задачи — один раз за всю жизнь задачи, только
+    вверх, в пределах `ROLE_BUDGET_CAP`; потолок Оператора не перебивается.
+
+    Прямые вызовы `fsm_advance._apply_plan_budget` (тот же уровень, каким
+    `SpecCeilingRespectsRoleBudgetCapTest` выше проверяет `apply_spec_
+    budget`) — сквозной путь через `in_dev` целиком гоняет `_zones_gate`/
+    `_capacity_gate`/приёмку/origin-push и т.д., которые уже свипует
+    остальной этот файл; предмет здесь — только сама переоценка.
+    """
+
+    TASK = "T901"
+
+    def setUp(self):
+        super().setUp()
+        store.create_schema(store.db())
+        self.conn = store.db()
+        store.insert_task(self.conn, self.TASK, "Задача для переоценки PLAN",
+                          "in_dev", "task/t901-x",
+                          config.DEFAULT_TARGET, 45.0)
+
+    def task_row(self):
+        return store.db().execute(
+            "SELECT * FROM tasks WHERE id=?", (self.TASK,)).fetchone()
+
+    def set_task(self, **fields) -> None:
+        assignments = ", ".join(f"{k}=?" for k in fields)
+        self.conn.execute(f"UPDATE tasks SET {assignments} WHERE id=?",
+                          (*fields.values(), self.TASK))
+        self.conn.commit()
+
+    def journal_actions(self) -> list[str]:
+        return [row["action"] for row in store.task_steps(self.conn, self.TASK)]
+
+    def apply(self, budget_usd) -> None:
+        meta = {} if budget_usd is None else {"budget_usd": budget_usd}
+        fsm_advance._apply_plan_budget(self.conn, self.TASK, self.task_row(), meta)
+
+    def test_ac1_first_submission_raises_ceiling_within_role_cap(self):
+        """Ловит мутацию: сравнение с текущим потолком снято или перевёрнуто
+        — значение $90 обязано поднять потолок $45, не остаться на месте."""
+        self.apply("90")
+
+        row = self.task_row()
+        self.assertAlmostEqual(row["budget_usd"], 90.0)
+        self.assertEqual(row["budget_source"], config.BUDGET_SOURCE_PLAN)
+        self.assertIn("бюджет из PLAN", self.journal_actions())
+
+    def test_ac2_missing_field_leaves_ceiling_untouched(self):
+        self.apply(None)
+
+        row = self.task_row()
+        self.assertAlmostEqual(row["budget_usd"], 45.0)
+        self.assertIsNone(row["budget_source"])
+        self.assertEqual(self.journal_actions(), [])
+
+    def test_ac3_value_not_above_ceiling_journals_not_applied(self):
+        """Ловит мутацию: сравнение `<=` заменено на `<` — значение,
+        равное текущему потолку, было бы принято за «выше» и переприменено."""
+        self.apply("30")
+
+        row = self.task_row()
+        self.assertAlmostEqual(row["budget_usd"], 45.0)
+        self.assertIsNone(row["budget_source"])
+        steps = store.task_steps(self.conn, self.TASK)
+        detail = next(s["detail"] for s in steps
+                     if s["action"] == "бюджет из PLAN не применён")
+        self.assertIn("ниже потолка", detail)
+
+    def test_ac4_return_from_review_closes_the_channel(self):
+        """Возврат из ревью (`changes_requested`) растит `review_iters`
+        (`_review_changes_requested`) — повторная сдача с более высоким
+        значением потолок больше не двигает, даже если поднять его ещё
+        никогда не удавалось."""
+        self.set_task(review_iters=1)
+
+        self.apply("100")
+
+        row = self.task_row()
+        self.assertAlmostEqual(row["budget_usd"], 45.0)
+        self.assertIsNone(row["budget_source"])
+
+    def test_ac4_return_from_acceptance_reject_closes_the_channel(self):
+        """Возврат из приёмки (`reject`) растит `accept_rejects`, не
+        `review_iters` (`fsm._cmd_reject`) — канал обязан закрыться и по
+        этому счётчику; проверка только на `review_iters == 0` пропустила
+        бы этот путь возврата."""
+        self.set_task(accept_rejects=1)
+
+        self.apply("100")
+
+        row = self.task_row()
+        self.assertAlmostEqual(row["budget_usd"], 45.0)
+        self.assertIsNone(row["budget_source"])
+
+    def test_ac8b_fires_only_once_across_a_full_cycle(self):
+        """AC-8(b): первая сдача поднимает потолок; после возврата в
+        `in_dev` (рост `review_iters`, как после `changes_requested`)
+        повторная сдача с ещё большим значением потолок больше не
+        двигает — переоценка срабатывает не более одного раза за всю
+        жизнь задачи."""
+        self.apply("90")
+        self.assertAlmostEqual(self.task_row()["budget_usd"], 90.0)
+
+        self.set_task(review_iters=1)
+        self.apply("100")
+
+        self.assertAlmostEqual(self.task_row()["budget_usd"], 90.0)
+
+    def test_ac5_operator_ceiling_is_not_overridden_by_plan(self):
+        """AC-8(c): потолок, заданный Оператором, значением из PLAN не
+        перебивается ни на первой, ни на любой последующей сдаче.
+
+        Ловит мутацию: `_apply_plan_budget` перестаёт проверять
+        `budget_source == BUDGET_SOURCE_OPERATOR` перед применением —
+        потолок Оператора $60 был бы тихо заменён на $90 из PLAN."""
+        self.set_task(budget_usd=60.0,
+                      budget_source=config.BUDGET_SOURCE_OPERATOR)
+
+        self.apply("90")
+
+        row = self.task_row()
+        self.assertAlmostEqual(row["budget_usd"], 60.0)
+        self.assertEqual(row["budget_source"], config.BUDGET_SOURCE_OPERATOR)
+
+    def test_ac8a_value_above_role_cap_does_not_raise_ceiling(self):
+        """AC-8(a): значение выше `ROLE_BUDGET_CAP` потолок задачи не
+        поднимает — на живой FSM это отказ guard'а до всякого вызова
+        (требование 6); здесь — вторая, независимая линия защиты внутри
+        самого парсера (`budget.spec_budget`), тем же приёмом, что и у
+        `apply_spec_budget`."""
+        over_cap = config.ROLE_BUDGET_CAP + 1
+
+        self.apply(f"{over_cap:g}")
+
+        row = self.task_row()
+        self.assertAlmostEqual(row["budget_usd"], 45.0)
+        self.assertIsNone(row["budget_source"])
 
 
 class ParallelTaskLimitIsNotBypassableTest(FsmTest):

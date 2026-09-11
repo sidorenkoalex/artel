@@ -182,6 +182,9 @@ PIN_UPDATE_JOURNAL_TASK_ID = "PIN-UPDATED"
 # Кто задал потолок задачи (tasks.budget_source). NULL — никто, стоит дефолт.
 BUDGET_SOURCE_SPEC = "spec"
 BUDGET_SOURCE_OPERATOR = "operator"
+# Однократная переоценка потолка на PLAN (ADR-0014 п.3, задача
+# 01M1THKWFXFYNW28HDJGYHQWH6): `orchestrator/fsm_advance.py::_apply_plan_budget`.
+BUDGET_SOURCE_PLAN = "plan"
 LIMIT_REVIEW_ITERS = 3
 LIMIT_ACCEPT_REJECTS = 1
 # Опрос CI в `verifying` (SPEC T086, требование 1): `auto` — владелец
