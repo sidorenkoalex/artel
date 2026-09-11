@@ -1,5 +1,5 @@
 ---
-built_at_sha: 7cdc680215a6214ee1d13902ec004f561b98dbb0
+built_at_sha: b45aee8c371f00a19ccff6f17adc8bc801346e94
 ---
 
 # Codebase-map пульта
@@ -988,6 +988,18 @@ built_at_sha: 7cdc680215a6214ee1d13902ec004f561b98dbb0
 
 **Импортируется:** `orchestrator/artel.py`, `orchestrator/auto.py`, `orchestrator/catalog.py`, `orchestrator/runner.py`, `scripts/guard.py`, `tests/test_catalog_status_log.py`, `tests/test_zone_lock.py`
 
+## scripts/ci_push_class.py
+
+**Назначение:** Классификатор класса пуша CI (ADR-0016) — вынесен из bash-логики job
+
+**Публичные функции:**
+- `classify`
+- `main`
+
+**Импортирует:** —
+
+**Импортируется:** `tests/test_ci_push_class.py`
+
 ## scripts/codebase_map.py
 
 **Назначение:** Codebase-map пульта: детерминированная карта модулей верхнего уровня.
@@ -1435,6 +1447,16 @@ built_at_sha: 7cdc680215a6214ee1d13902ec004f561b98dbb0
 **Публичные функции:** (нет)
 
 **Импортирует:** `orchestrator/checkpoint.py`
+
+**Импортируется:** —
+
+## tests/test_ci_push_class.py
+
+**Назначение:** Юнит-тесты scripts/ci_push_class.py (01M28NWK5X10J139Z8TD69HFAC):
+
+**Публичные функции:** (нет)
+
+**Импортирует:** `scripts/ci_push_class.py`
 
 **Импортируется:** —
 
