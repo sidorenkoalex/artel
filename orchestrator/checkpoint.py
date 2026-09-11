@@ -389,6 +389,98 @@ def commit_pause_now_checkpoint(conn, task_id: str, role: str) -> str:
     return detail
 
 
+def _staged_change_summary(wt: Path, exclude: str) -> str:
+    """«путь, путь (N строк)» по индексу ПОСЛЕ `git add -A` + `git reset
+    -- exclude` — тот же индекс, что `_commit_worktree_change` соберёт
+    следом для самого коммита (SPEC 01M283NC4JJXK7QS68Y9ET8TBK, AC-3).
+    Повторный `add -A`/`reset` в `_commit_worktree_change` после этого
+    вызова идемпотентен — тот же индекс, лишний git-вызов, не лишний
+    эффект.
+
+    Число строк — сумма добавленных и удалённых по `git diff --cached
+    --numstat` (для нового файла показывает его длину как «добавлено»,
+    для правки трекенного — обычный add+del) — то же значение, что
+    покажет `git show --stat` после коммита, посчитанное до коммита,
+    потому что вызывающему коду нужен текст ДЛЯ журнала, не факт
+    коммита. Пустая строка — нечего коммитить или git не ответил
+    (та же тихая деградация, что у `_commit_worktree_change`)."""
+    added = gitcmd.in_repo(wt, "add", "-A")
+    if added.returncode != 0:
+        return ""
+    reset = gitcmd.in_repo(wt, "reset", "-q", "--", exclude)
+    if reset.returncode != 0:
+        return ""
+    numstat = gitcmd.in_repo(wt, "diff", "--cached", "--numstat")
+    if numstat.returncode != 0:
+        return ""
+    paths = []
+    total_lines = 0
+    for line in numstat.stdout.splitlines():
+        if not line.strip():
+            continue
+        parts = line.split("\t")
+        if len(parts) != 3:
+            continue
+        added_n, deleted_n, path = parts
+        for n in (added_n, deleted_n):
+            if n.isdigit():
+                total_lines += int(n)
+        paths.append(path)
+    if not paths:
+        return ""
+    return f"{', '.join(paths)} ({total_lines} строк)"
+
+
+def commit_success_checkpoint(conn, task_id: str, role: str) -> str:
+    """WIP-коммит кода пультом за роль `developer` на обычном успешном
+    (`rc=0`, без таймаута/провала/обрыва потока — эти три случая уже
+    покрыты `commit_timeout_checkpoint`/`commit_abnormal_checkpoint`)
+    завершении шага, если рабочее дерево осталось грязным вне
+    `tasks/<id>/` (SPEC 01M283NC4JJXK7QS68Y9ET8TBK, требования 1-3):
+    до этой задачи роль полагалась на то, что закоммитит сама, и при
+    невыполнении следующий переход `in_dev -> verifying` отказывал по
+    грязной копии с вводящим в заблуждение текстом «PLAN.md не
+    закоммичен» (SPEC «Контекст»).
+
+    Мандат — строго `developer` (AC-5), и, В ОТЛИЧИЕ от трёх аварийных
+    WIP-чекпоинтов, роль без мандата кода не получает здесь НИ отката
+    (`_discard_out_of_mandate_changes`), НИ коммита — немедленный
+    `return ""`. Причина: «прежнее поведение» для обычного успешного
+    пути (что и требует сохранить AC-5) — это ПОЛНОЕ отсутствие эффекта,
+    ни один из трёх аварийных чекпоинтов сегодня не вызывается вне
+    таймаута/`rc!=0`/обрыва потока, значит откатывать здесь нечего
+    имитировать — до этой задачи тут не было и отката.
+
+    Сообщение коммита и действие журнала — буквальные строки SPEC
+    (AC-2/AC-3), не текст соседних WIP-чекпоинтов (та же оговорка, что
+    у `commit_abnormal_checkpoint` про `cause`, только здесь текст
+    целиком фиксирован, без параметра). `detail` — вывод
+    `_staged_change_summary` (список файлов + число строк, AC-3) плюс
+    `sha`, тем же приёмом, что у остальных WIP-чекпоинтов.
+
+    Только догфуд, коммитит, только если реально есть что коммитить
+    (`_commit_worktree_change` сам отказывает на пустом diff), тихая
+    деградация без git — дословно `commit_timeout_checkpoint`.
+    """
+    if role != "developer":
+        return ""
+    if store.task_target(conn, task_id) != config.DEFAULT_TARGET:
+        return ""
+    wt = workspace.path(task_id)
+    exclude = f"tasks/{task_id}"
+    summary = _staged_change_summary(wt, exclude)
+    message = (f"{task_id}: код закоммичен пультом за роль developer — "
+              "шаг завершён с незакоммиченным кодом")
+    committed, sha = _commit_worktree_change(wt, message, exclude=exclude)
+    if not committed:
+        return ""
+    detail = f"{summary} (sha {sha})" if sha else summary
+    store.journal(conn, task_id, "orchestrator", "код закоммичен пультом за роль",
+                  detail)
+    store.record_fixation(conn, task_id)
+    return detail
+
+
 def commit_step_artifacts(conn, task_id: str, role: str) -> str:
     """Автокоммит незакоммиченных артефактов роли по завершении успешного
     шага (rc=0), до advance-логики (SPEC T059, требования 1-3).
