@@ -302,3 +302,16 @@ test_ac15_full_flow_merges_into_the_target_origin_only` вставлен
 Требование 6 (сквозной тест) закрыто полностью: AC-15/AC-16/AC-17 —
 все три тестовых класса `test_ac15_ac16_ac17_end_to_end.py` зелёные.
 Все 17 AC зелёные без исключений.
+
+## Расширение зон
+
+Пути: orchestrator/repo_context.py, orchestrator/pull.py, orchestrator/doctor/, orchestrator/stack.py
+
+Обоснование: зоны SPEC заявлены 05.09 по адресам того дня. После этого
+R3 (01M1TKP08P, 06.09) вынес подтяжку main из `fsm.py` в `pull.py` (точка 1
+реестра), R5 (01M1TT9BPB) разрезал `doctor.py` в пакет `orchestrator/doctor/`
+(точка 2 — `branch_freshness.py`). `repo_context.py` — новый модуль с самим
+понятием «репозиторный контекст target» (требование 1 SPEC), место его
+объявления SPEC не фиксировала. `stack.py` — одна строка докстринга с
+переименованным параметром `acceptance.run` (точка 10). Мандат Оператора —
+ANSWER-2 этой задачи (11.09).
