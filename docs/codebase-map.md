@@ -1,5 +1,5 @@
 ---
-built_at_sha: 7cdc680215a6214ee1d13902ec004f561b98dbb0
+built_at_sha: b45aee8c371f00a19ccff6f17adc8bc801346e94
 ---
 
 # Codebase-map пульта
@@ -1028,6 +1028,7 @@ built_at_sha: 7cdc680215a6214ee1d13902ec004f561b98dbb0
 - `has_redness_marker`
 - `id_format_patterns`
 - `id_format_sample_errors`
+- `indented_ac_marker_errors_from_files`
 - `is_draft_lenient`
 - `is_extraneous_acceptance_test_file`
 - `is_extraneous_task_root_file`
@@ -1052,6 +1053,7 @@ built_at_sha: 7cdc680215a6214ee1d13902ec004f561b98dbb0
 - `scan_extraneous_acceptance_files`
 - `scan_extraneous_task_root_files`
 - `scan_id_format_samples`
+- `scan_indented_ac_markers`
 - `scan_redness_markers`
 - `schema_errors`
 - `section_body`
