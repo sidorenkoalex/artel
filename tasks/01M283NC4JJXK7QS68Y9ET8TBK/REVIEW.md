@@ -3,30 +3,73 @@ task: 01M283NC4JJXK7QS68Y9ET8TBK
 type: review
 author_role: reviewer
 status: approved
-iteration: 1
+iteration: 2
 schema_version: 5
 ---
 
 # REVIEW: выход шага developer при грязном дереве — WIP-коммит кода пультом за роль
 
+## Служебное: почему новая итерация без нового замечания
+
+Гейт `review -> verifying` отклонил предыдущий advance: вердикт
+REVIEW.md (`approved`, `iteration: 1`) уже был учтён, требуется новый
+прогон с `iteration: 2`. Пакет ревью посчитал инкрементальный diff от
+sha `44e0dd8c` (текущий HEAD) до HEAD и получил «изменений нет» —
+формально верно, но по классу T087 (скил review-checklist, раздел
+«Инкрементальный diff пакета — пустой не значит без изменений»): sha
+предыдущего вердикта в пакете совпал с текущим HEAD, что не является
+надёжным ориентиром. Проверено вручную:
+
+- REVIEW.md итерации 1 (`approved`) закоммичен в артефактную ветку
+  дважды: `657f49c1` (20:06:40) и повторно `0cb294b0` (20:11:56, тот же
+  iteration: 1 — вторая попытка сдачи, содержательно ревизия текста, не
+  новый вердикт). Второй прогон явно ссылается на «CI коммита 15fad202»
+  — код-ветка на момент утверждённого вердикта стояла на `15fad202`.
+- От `15fad202` до текущего HEAD (`44e0dd8c`) — один смёрженный `git
+  diff --stat`: единственное изменение вне `tasks/` — `docs/backlog.md`
+  (+4/-1, три новые строки копилки Оператора и одна правка старой
+  записи, все — наблюдения про систему, не про код задачи; см. `git
+  diff 15fad202 44e0dd8c -- docs/backlog.md`). Ни `orchestrator/
+  checkpoint.py`, ни `orchestrator/runner.py`, ни `tests/`, ни
+  `skills/` этой подтяжкой не тронуты.
+- Полный diff зоны задачи от общей базы с main (`464b6c68`, откуда обе
+  стороны истории расходятся) до HEAD — те же 5 файлов, 296 строк, что
+  видела итерация 1 (`orchestrator/checkpoint.py`,
+  `orchestrator/runner.py`, `tests/test_timeout_checkpoint.py`,
+  `tests/test_review_package.py`, `docs/codebase-map.md`).
+
+Итог: код, ревизованный и одобренный в итерации 1, не менялся. Ниже —
+самостоятельная переоценка того же MR (не пересказ итерации 1), плюс
+адресная проверка пункта, который в прошлый раз был причиной возврата
+приёмки (unified-дифф `skills/coding-standards.md` в PLAN.md).
+
 ## Фаза A: проверка плана
 
 1. Покрытие требований в PLAN.md полное: таблица «Покрытие требований»
-   закрывает все 6 требований SPEC одним шагом (монолит обоснован в
-   разделе «Оценка объёма и деление» SPEC — новая функция без вызова из
-   `runner.py` не работает и не мержится отдельно, вызов без функции не
-   компилируется; делить действительно нечем).
-2. Шаг — проверяемая единица размера MR: одна новая функция + хелпер в
-   `orchestrator/checkpoint.py`, одна точка встройки в
-   `orchestrator/runner.py`, юнит-тесты в существующем файле
-   `tests/test_timeout_checkpoint.py`. Соответствует фактическому diff
-   (296 строк, 5 файлов).
-3. Подход не конфликтует с конвенциями: переиспользует существующую
-   обвязку `_commit_worktree_change` без изменения сигнатуры (три
-   старых вызывающих места не тронуты), повторяет мандатную модель
-   (`developer`-only, только догфуд-target, тихая деградация без git) —
-   архитектурно идентичен трём соседним WIP-чекпоинтам
-   (`commit_timeout_checkpoint`, `orchestrator/checkpoint.py:61-135`).
+   закрывает все 6 требований SPEC одним шагом; монолит обоснован в
+   разделе SPEC «Оценка объёма и деление» — функция чекпоинта без
+   вызова из `runner.py` не работает и не мержится отдельно, вызов без
+   функции не компилируется, делить действительно нечем.
+2. Шаг — проверяемая единица размера MR: одна функция + приватный
+   хелпер в `orchestrator/checkpoint.py`, одна точка встройки в
+   `orchestrator/runner.py`, тесты в существующих файлах. Соответствует
+   фактическому diff (296 строк, 5 файлов).
+3. Подход не конфликтует с конвенциями: переиспользует
+   `_commit_worktree_change` без изменения сигнатуры (три старых
+   вызывающих места не тронуты), архитектурно идентичен трём соседним
+   WIP-чекпоинтам.
+4. PLAN.md итерации 2 несёт дополнительно перегенерированный
+   unified-дифф `skills/coding-standards.md` взамен дефектного диффа
+   итерации 1 (причина возврата приёмки 11.09: фиктивный `index
+   0000000..0000000` и хедер хунка без диапазонов, `git apply --check`
+   отвечал «patch with only garbage at line 5» — задокументировано в
+   `docs/backlog.md`, копилка П2 11.09). Перепроверено самостоятельно:
+   `git apply --check` на новый дифф из PLAN.md, применённый к текущему
+   `skills/coding-standards.md` (46ab4f51.. — файл действительно на
+   этом состоянии, дифф не тронут этим MR) — **применяется чисто**.
+   Место вставки (после раздела про фоновые прогоны, перед
+   «## Комментарии») подтверждено чтением файла — не разрывает
+   существующий раздел.
 
 Замечаний к плану нет.
 
@@ -34,92 +77,95 @@ schema_version: 5
 
 | Требование | Вердикт | Комментарий |
 |---|---|---|
-| 1 (WIP-коммит кода developer вне tasks/<id>/ на rc=0 успешном пути) | OK | `orchestrator/checkpoint.py::commit_success_checkpoint` (строки 421-468), вызов в `orchestrator/runner.py:963` — строго в ветке `rc=0` без `pump.error`, ДО `commit_step_artifacts`; ветки `rc≠0`/таймаут/отсутствие обязательного артефакта/обрыв потока не затронуты (проверено чтением `runner.py:900-967`: `rc != 0` — `return` раньше, `missing_artifact` — `return` раньше, `pump.error is not None` — отдельная ветка `commit_abnormal_checkpoint`, новый вызов только в `else`) |
-| 2 (буквальное сообщение коммита) | OK | `checkpoint.py:459-460` — дословно строка AC-2; проверено юнит-тестом `test_dirty_tree_commits_with_literal_message_and_journal_entry` и приёмочным `test_ac2_*` (прогнаны, зелёные) |
-| 3 (журнал: actor=orchestrator, действие, detail с файлами и числом строк) | OK | `checkpoint.py:462-466`, хелпер `_staged_change_summary` (строки 379-418) считает сумму added+deleted по `git diff --cached --numstat`; бинарные файлы (`-`/`-` в numstat) корректно исключены из суммы через `isdigit()`, путь остаётся в списке — не крашит, не искажает. Покрыто `test_ac3_*` и юнит-тестом |
-| 4 (роль без мандата — прежнее поведение, т.е. НИ отката, НИ коммита) | OK | `if role != "developer": return ""` (checkpoint.py:452-453), без вызова `_discard_out_of_mandate_changes` — согласуется с доводом PLAN/SPEC, что ни один из трёх аварийных чекпоинтов не срабатывает на обычном `rc=0`; тест `test_non_developer_role_is_left_untouched_not_discarded` явно проверяет отсутствие отката правки вне `tasks/<id>/` |
-| 5 (чистое дерево — ни коммита, ни журнала) | OK | `_commit_worktree_change` отказывает на пустом diff (`diff --cached --quiet` возвращает 0); `test_ac4_clean_tree_no_commit_no_journal` зелёный |
-| 6 (правило в skills/coding-standards.md) | OK (manual) | Критерий явно помечен manual решением Оператора на гейте SPEC 11.09 (защищённый путь) — unified-дифф приложен в PLAN.md «Покрытие требований», сам `skills/coding-standards.md` этим MR не тронут (подтверждено `git diff --stat` пакета — файла в списке изменённых нет), применение — за Оператором; автотест `test_ac6_*` формален и обоснованно не проверяет код |
+| 1 (WIP-коммит кода developer вне tasks/<id>/ на rc=0 успешном пути) | OK | `orchestrator/checkpoint.py::commit_success_checkpoint`, вызов в `orchestrator/runner.py:963` — строго в ветке `rc=0` без `pump.error`, ДО `commit_step_artifacts`. Перепроверено чтением `runner.py:900-967`: ветки `rc!=0`/таймаут/отсутствие артефакта возвращаются раньше, `pump.error is not None` — отдельная ветка `commit_abnormal_checkpoint`, новый вызов только в `else`. |
+| 2 (буквальное сообщение коммита) | OK | Строка в коде совпадает дословно с AC-2; юнит-тест `test_dirty_tree_commits_with_literal_message_and_journal_entry` сравнивает `git log -1 --format=%s` с ожидаемой строкой посимвольно. Приёмочный `test_ac2_*` зелёный (прогнан самостоятельно). |
+| 3 (журнал: actor=orchestrator, действие, detail с файлами и числом строк) | OK | `_staged_change_summary` считает сумму added+deleted по `git diff --cached --numstat`, бинарные записи (`-`/`-`) отфильтрованы `isdigit()` — не крашит на бинарниках, путь остаётся в списке. Покрыто `test_ac3_*` и юнит-тестами. |
+| 4 (роль без мандата — прежнее поведение) | OK | `if role != "developer": return ""` без вызова `_discard_out_of_mandate_changes`. Перепроверено независимо: `_discard_out_of_mandate_changes` в коде вызывается ТОЛЬКО из трёх аварийных чекпоинтов (`grep` — строки 151/311/367 checkpoint.py), ни один из них не срабатывает на обычном успешном `rc=0` — то есть до этой задачи для non-developer роли в этом пути отката не было и сейчас нет: SPEC требование 4 «поведение не меняется» выполнено буквально, не по аналогии. Тест `test_non_developer_role_is_left_untouched_not_discarded` подтверждает отсутствие отката. |
+| 5 (чистое дерево — ни коммита, ни журнала) | OK | `_commit_worktree_change` отказывает на пустом diff (`diff --cached --quiet` = 0); `test_ac4_*` и юнит-тест `test_clean_tree_commits_nothing_and_journals_nothing` зелёные. |
+| 6 (правило в skills/coding-standards.md) | OK (manual) | Критерий помечен manual решением Оператора на гейте SPEC 11.09 (защищённый путь). `skills/coding-standards.md` этим MR не тронут (`git diff --stat` зоны задачи файла не содержит). Unified-дифф в PLAN.md перегенерирован в этой итерации и **проверен `git apply --check` самостоятельно — применяется чисто** (закрывает причину прошлого возврата приёмки). Применение — по-прежнему за Оператором. |
 
 ### Корректность
 - Порядок вызова в `runner.py` (код сначала, `commit_step_artifacts`
-  потом) сохраняет инвариант «`tasks/<id>/` ещё материализован на диске
-  на момент вызова нового чекпоинта» — `exclude` обязателен и учтён
-  (`checkpoint.py:456-457`), проверено тестом
+  потом) сохраняет `tasks/<id>/` материализованным на момент вызова
+  нового чекпоинта — `exclude` обязателен и передан
+  (`_commit_worktree_change(wt, message, exclude=exclude)`); покрыто
   `test_excludes_task_dir_from_code_commit` и приёмочным `test_ac1_*`.
-- Тихая деградация без записи при отказе git на любом шаге
-  (`_staged_change_summary` и `_commit_worktree_change`) — проверено
+- Тихая деградация без журнала на отказе git на любом шаге —
   `test_git_add_failure_commits_nothing_and_journals_nothing` и
-  `test_git_commit_failure_commits_nothing_and_journals_nothing`; в
-  обоих случаях HEAD не сдвигается и запись в журнал не появляется.
-- Мандат по target (`store.task_target != config.DEFAULT_TARGET` →
-  `return ""` без единого git-вызова) — покрыт
+  `test_git_commit_failure_commits_nothing_and_journals_nothing`: HEAD
+  не сдвигается, запись в журнал не появляется.
+- Мандат по target (`store.task_target(...) != config.DEFAULT_TARGET`
+  → `return ""` без единого git-вызова) — покрыт
   `test_non_dogfood_target_skips_checkpoint` с явным
   `git_mock.assert_not_called()`.
 - Двойной `git add -A`/`git reset` (в `_staged_change_summary`, затем
-  внутри `_commit_worktree_change`) — избыточные, но идемпотентные
-  вызовы; риск явно признан в PLAN «Риски», покрыт точным списком
-  git-вызовов в `tests/test_review_package.py` (прогнан, зелёный) —
-  индекс не расходится с фактическим коммитом.
-- `store.record_fixation` вызывается после успешного коммита
-  (`checkpoint.py:467`), тем же приёмом, что у трёх соседних
-  чекпоинтов — следующий `fixation.check_integrity` не примет сдвиг
-  HEAD за инцидент целостности.
+  повторно внутри `_commit_worktree_change`) — избыточные, но
+  идемпотентные вызовы (второй `add -A` не меняет уже приведённый в
+  порядок индекс). Риск признан в PLAN «Риски». `tests/
+  test_review_package.py::CmdRunReviewPackageTest` пином точного
+  списка git-вызовов (шесть вызовов: `add -A`/`reset`/`numstat`, затем
+  повтор `add -A`/`reset`/`diff --quiet`) фиксирует именно это — тест
+  сломается, если кто-то «оптимизирует» вызов и случайно потеряет
+  `exclude` на одном из проходов.
+- `store.record_fixation` вызывается после успешного коммита — тем же
+  приёмом, что у трёх соседних чекпоинтов, следующий
+  `fixation.check_integrity` не примет сдвиг HEAD за инцидент.
 
 ### Тесты
-- Юнит-тесты `CommitSuccessCheckpointTest` (8 сценариев,
-  `tests/test_timeout_checkpoint.py`) несут заявку «Ловит мутацию: …»
-  там, где это методологически уместно (сообщение коммита/detail —
-  `test_dirty_tree_commits_with_literal_message_and_journal_entry`;
-  exclude tasks/<id>/ — `test_excludes_task_dir_from_code_commit`);
-  остальные сценарии (clean tree, non-dogfood, git failures,
-  non-developer, refixation) описательны по имени метода без
-  докстринга — это тот же стиль, что уже несут соседние три класса
-  того же файла (`CommitTimeoutCheckpointTest` и др.), не регрессия
-  этой задачи.
+- `CommitSuccessCheckpointTest` (8 сценариев,
+  `tests/test_timeout_checkpoint.py:765-933`) закрывает: чистое дерево,
+  буквальные сообщение/detail, exclude tasks/<id>/, refixation, роль
+  без мандата, non-dogfood target, отказ `git add`, отказ `git commit`.
+  Докстринги «Ловит мутацию: …» есть там, где формулировка
+  содержательна (буквальное сообщение/detail — сверено с фактическим
+  телом теста: сравнение subject через `git log --format=%s`, проверка
+  наличия имени файла и числа строк в `detail`; exclude — сверено:
+  тест реально проверяет отсутствие `tasks/<id>/` в списке
+  закоммиченных путей). Остальные сценарии описательны по имени метода
+  без докстринга — тот же стиль, что уже несут три соседних класса
+  файла (`CommitTimeoutCheckpointTest` и др.), не регрессия этой
+  задачи.
 - Приёмочная планка (5 файлов, AC-1..AC-5) прогнана самостоятельно:
   `python3 -m pytest tasks/01M283NC4JJXK7QS68Y9ET8TBK/acceptance_tests -v`
-  — 5 passed. AC-6 — легитимный `manual` с обоснованием «защищённый
-  путь, правит Оператор» (соответствует критерию из review-checklist:
-  не «долго» — «нет тестового контура для правки чужого мандата»).
-- `tests/test_review_package.py` расширен точным списком новых
-  git-вызовов (`add -A`/`reset`/`numstat`, затем повтор
-  `add -A`/`reset`/`diff --quiet`) — соответствует фактическому коду
-  `_staged_change_summary` + `_commit_worktree_change`; прогнан вместе
-  с `tests/test_timeout_checkpoint.py`, 127 passed.
+  — 5 passed. AC-6 (`test_ac6_coding_standards_skill_update.py`) — файл
+  без исполняемых тестов (0 collected), помечен `# AC-6: manual` с
+  обоснованием «защищённый путь, правит Оператор» — легитимно
+  (соответствует критерию скила: не «долго», а «нет мандата на правку
+  чужой защищённой зоны»).
+- `tests/test_review_package.py::CmdRunReviewPackageTest` расширен
+  точным списком новых git-вызовов чекпоинта — прогнан вместе с
+  `tests/test_timeout_checkpoint.py`, 127 passed (см. «Проверено
+  исполнением»).
 
 ### Простота
-Решение не вводит новых абстракций — переиспользует существующую
-`_commit_worktree_change` без изменения сигнатуры, паттерн идентичен
-трём соседним чекпоинтам. `_staged_change_summary` — минимальный
-хелпер ровно под нужды AC-3 (список файлов + сумма строк), не
+Новых абстракций нет — переиспользует `_commit_worktree_change` без
+изменения сигнатуры, паттерн идентичен трём соседним чекпоинтам.
+`_staged_change_summary` — минимальный хелпер под нужды AC-3, не
 универсальный diff-рендерер.
 
 ### Безопасность
-Изменений вне заявленной зоны нет. `ci/`, `.github/`, `gates.yaml`,
-`skills/` не тронуты (диф `skills/coding-standards.md` приложен
-отдельно как патч для Оператора, не применён этой ролью). Инъекций/
-недоверенного ввода нет — все пути идут через `gitcmd.in_repo`,
-идентичность коммита служебная (`fixation.FIXATION_AUTHOR_*`), как у
-соседних чекпоинтов.
+Изменений вне заявленной зоны нет (проверено `git diff --stat` от
+общей базы с main). `ci/`, `.github/`, `gates.yaml`, `skills/` не
+тронуты этим MR. Инъекций/недоверенного ввода нет — все пути идут через
+`gitcmd.in_repo`, идентичность коммита служебная
+(`fixation.FIXATION_AUTHOR_*`), как у соседних чекпоинтов.
 
 ### Системная целостность (ADR-0002)
 - Существующие тесты/гейты/лимиты не ослаблены: три старых
-  WIP-чекпоинта и `commit_pull_checkpoint` не изменены (diff их не
-  касается, их тесты не тронуты).
-- `docs/codebase-map.md` регенерирован тем же коммитом, что правит
-  `orchestrator/checkpoint.py` (по конвенции); перепрогнал
-  `scripts/codebase_map.py` локально сам — результат контентно
-  идентичен закоммиченной версии, расхождение только в строке
-  `built_at_sha` (не дефект, правило скила), рабочее дерево после
-  проверки возвращено `git checkout -- docs/codebase-map.md`.
+  WIP-чекпоинта и `commit_pull_checkpoint` не изменены, их тесты не
+  тронуты (сверено по diff зоны задачи).
+- `docs/codebase-map.md` перегенерирован тем же коммитом, что правит
+  `orchestrator/checkpoint.py`, — контентно совпадает с ожидаемым
+  результатом (сверка по содержимому без строки `built_at_sha`, класс
+  T053/T072, не дефект).
 - Раздел PLAN «Влияние на систему» соответствует фактическому diff:
   затронуты ровно `orchestrator/checkpoint.py`, `orchestrator/runner.py`,
-  тесты, карта — side effects вне зоны нет.
+  тесты, карта — side effects вне зоны нет; `docs/backlog.md`, попавший
+  подтяжкой main, — не часть diff этой задачи (правка Оператора,
+  никак не связана с зоной SPEC).
 - Изменение обратимо: откат — удалить вызов в `runner.py` и функцию в
-  `checkpoint.py` (PLAN «Влияние на систему»), что действительно
-  вернёт систему к состоянию до задачи, поскольку гейт `fsm.py`
-  (вторая линия защиты по грязной копии) не изменён.
+  `checkpoint.py` (PLAN «Влияние на систему»); гейт `fsm.py` (вторая
+  линия защиты по грязной копии) не изменён и не ослаблен.
 
 ## Замечания
 
@@ -130,7 +176,9 @@ schema_version: 5
 | id | статус | файл/строка | суть | последствие | решение |
 |---|---|---|---|---|---|
 
-Пусто — первая итерация, замечаний не заведено.
+Пусто — в итерации 1 замечаний не заводилось, в этой итерации новых
+дефектов не найдено. Реестр закрыт целиком (гейт `review -> verifying`
+проходит).
 
 ## Вердикт
 
@@ -139,22 +187,44 @@ approved
 ## Проверено исполнением
 
 - `python3 -m pytest tasks/01M283NC4JJXK7QS68Y9ET8TBK/acceptance_tests -v`
-  — 5 passed (AC-1..AC-5 зелёные; AC-6 — manual, не тест).
+  — 5 passed (AC-1..AC-5 зелёные; AC-6 — manual, 0 исполняемых тестов
+  файла, обоснованно).
 - `python3 -m pytest tests/test_timeout_checkpoint.py tests/test_review_package.py -q`
-  — 127 passed (включая новый класс `CommitSuccessCheckpointTest`,
-  8 сценариев, и обновлённый `CmdRunReviewPackageTest` с точным списком
-  git-вызовов).
-- `python3 scripts/codebase_map.py` (локальный прогон, затем
-  `git checkout -- docs/codebase-map.md` для отката пробного файла) —
-  диф ограничен строкой `built_at_sha`, контент идентичен.
-- Чтение `orchestrator/checkpoint.py:379-468, 803-842` и
-  `orchestrator/runner.py:900-967` — код на диске совпадает с diff
-  пакета, вызов `commit_success_checkpoint` действительно стоит только
-  в ветке `rc=0` без `pump.error`, до `commit_step_artifacts`.
-- CI коммита 15fad202 зелёный (14 проверок, см. «Статус CI» пакета).
-  Полный набор `tests/` в шаге ревью не прогонялся (решение Оператора
-  05.09 — гоняет CI на каждый пуш).
+  — 127 passed (включая `CommitSuccessCheckpointTest`, 8 сценариев, и
+  обновлённый `CmdRunReviewPackageTest` с точным списком git-вызовов).
+- Unified-дифф `skills/coding-standards.md` из PLAN.md перенесён в
+  файл и прогнан `git apply --check` на текущей голове ветки — патч
+  применяется чисто (0 ошибок), закрывает причину прошлого возврата
+  приёмки (фиктивный index/хедер хунка без диапазонов).
+- `git diff --stat` от sha, на котором реально стоял утверждённый
+  вердикт итерации 1 (`15fad202`, восстановлен по журналу
+  `git log -- tasks/01M283NC4JJXK7QS68Y9ET8TBK/REVIEW.md` на
+  артефактной ветке), до текущего HEAD (`44e0dd8c`) — единственное
+  отличие: `docs/backlog.md` (+4/-1, копилка Оператора, вне зоны
+  задачи). Код зоны задачи не менялся с момента утверждённого вердикта.
+- `git diff --stat` от точки расхождения с main (`464b6c68`) до HEAD —
+  296 строк, 5 файлов (`orchestrator/checkpoint.py`,
+  `orchestrator/runner.py`, `tests/test_timeout_checkpoint.py`,
+  `tests/test_review_package.py`, `docs/codebase-map.md`) — совпадает
+  с диффом, разобранным построчно выше.
+- Чтение `orchestrator/checkpoint.py:379-468` и
+  `orchestrator/runner.py:954-967` — код на диске совпадает с
+  разобранным diff, вызов `commit_success_checkpoint` стоит только в
+  ветке `rc=0` без `pump.error`, до `commit_step_artifacts`.
+- `grep -rn "_discard_out_of_mandate_changes" orchestrator/ tests/` —
+  подтверждён вызов только из трёх аварийных чекпоинтов, не из нового.
+- CI коммита 44e0dd8c зелёный (14 проверок, «Статус CI» пакета). Полный
+  набор `tests/` в шаге ревью не прогонялся (решение Оператора 05.09 —
+  гоняет CI на каждый пуш).
 
 ## Предложения системе
 
-Нет.
+- Сам этот шаг — живой пример класса из копилки П2 11.09
+  (`docs/backlog.md`): пакет ревью посчитал sha предыдущего вердикта
+  равным текущему HEAD и дал «изменений нет» там, где реальный
+  диапазон (`15fad202..HEAD`) содержал только не относящуюся к задаче
+  подтяжку `docs/backlog.md`. Скил `review-checklist.md` уже несёт
+  предупреждение про этот класс (T087) — пакет ревью пока нет: стоит
+  чтобы построитель пакета сверял sha вердикта по `git log --follow --
+  tasks/<id>/REVIEW.md` на артефактной ветке, а не брал текущий HEAD
+  кодовой ветки как приближение.
