@@ -142,7 +142,11 @@ class AlertsSurviveDynamicSelectionDropTest(_WatchThreadTestCase):
         зависел бы от гонки «успел ли `_emit_alerts` увидеть алерт до
         выхода из цикла» — не от самого свойства R1-F1 (алерт, заведённый
         уже ПОСЛЕ того, как задача покинула выборку, обязан быть замечен
-        на любой из ПОСЛЕДУЮЩИХ итераций, не только в момент ухода)."""
+        на любой из ПОСЛЕДУЮЩИХ итераций, не только в момент ухода).
+
+        Ловит мутацию: `_emit_alerts` вернётся к фильтру по ТЕКУЩЕЙ
+        динамической выборке вместо объединения с `known_ids` — алерт
+        W001 не появился бы в потоке вовсе."""
         conn = store.db()
         self._insert_task("W001")
         self._insert_task("W002")
@@ -176,6 +180,9 @@ class StopsAndCiClassesTest(_WatchThreadTestCase):
     вердикта (только «не зелёный»)."""
 
     def test_stops_prints_regardless_of_actor_and_reason(self):
+        """Ловит мутацию: `_matches_class` сузит класс `stops` до одного
+        конкретного `actor` (например только `"operator"`) — запись с
+        `actor="fsm"` перестала бы печататься."""
         conn = store.db()
         self._insert_task("S001")
 
@@ -195,6 +202,9 @@ class StopsAndCiClassesTest(_WatchThreadTestCase):
         self.assertEqual(self._watch_outcome.get("exit_code"), 0)
 
     def test_ci_prints_only_the_non_green_verdict(self):
+        """Ловит мутацию: `_matches_class` перестанет звать
+        `ci.verifying_is_red(detail)` (либо инвертирует её результат) —
+        зелёная запись fff0001 тоже попала бы в поток."""
         conn = store.db()
         self._insert_task("S002")
 
@@ -218,6 +228,9 @@ class StopsAndCiClassesTest(_WatchThreadTestCase):
 class UnknownEventsMessageListsAllClassesTest(_WatchThreadTestCase):
 
     def test_unknown_class_message_names_stops_and_ci_among_available(self):
+        """Ловит мутацию: `_parse_event_set` перестанет перечислять ВСЕ
+        `_EVENT_CLASSES` в тексте отказа (например, вернёт только сам
+        неизвестный класс) — `stops`/`ci` пропали бы из сообщения."""
         self._insert_task("S003")
         with self.assertRaises(SystemExit) as cm:
             watch.cmd_watch(["--tasks", "S003", "--events", "made-up"])
@@ -233,6 +246,9 @@ class PreAdvanceRefusalsFilteredTest(_WatchThreadTestCase):
     классом `refusals`; отказ другого текста — печатается."""
 
     def test_pre_advance_texts_hidden_other_refusal_visible(self):
+        """Ловит мутацию: фильтр `action not in _PRE_ADVANCE_REFUSAL_ACTIONS`
+        снят из `_matches_class` — «скрыт-1»/«скрыт-2» попали бы в поток
+        наравне с обычным отказом."""
         conn = store.db()
         self._insert_task("S004")
 
@@ -263,6 +279,9 @@ class PreAdvanceRefusalsFilteredTest(_WatchThreadTestCase):
 class ExitOnAndOnceTest(_WatchThreadTestCase):
 
     def test_exit_on_stops_immediately_after_matching_class(self):
+        """Ловит мутацию: `_emit_steps` перестанет возвращать `True` на
+        строке класса из `exit_on` — `cmd_watch` не вышел бы из цикла до
+        `_force_stop`, и `_join(timeout=3.0)` упал бы по таймауту."""
         conn = store.db()
         self._insert_task("S005")
 
@@ -277,6 +296,9 @@ class ExitOnAndOnceTest(_WatchThreadTestCase):
         self.assertEqual(self._watch_outcome.get("exit_code"), 0)
 
     def test_once_exits_after_first_default_class_line(self):
+        """Ловит мутацию: `--once` перестанет разворачиваться в
+        `set(_DEFAULT_EVENTS)` (например, останется `None`) — `cmd_watch`
+        не завершился бы на первой строке класса `steps`."""
         conn = store.db()
         self._insert_task("S006")
 
@@ -288,6 +310,9 @@ class ExitOnAndOnceTest(_WatchThreadTestCase):
         self.assertEqual(self._watch_outcome.get("exit_code"), 0)
 
     def test_without_exit_on_a_printed_line_does_not_terminate(self):
+        """Ловит мутацию: `cmd_watch` завершится на первой напечатанной
+        строке даже без `--exit-on`/`--once` — регресс поведения «как
+        до этой задачи» (AC-7)."""
         conn = store.db()
         self._insert_task("S007")
 
@@ -302,6 +327,9 @@ class ExitOnAndOnceTest(_WatchThreadTestCase):
         self._join()
 
     def test_once_and_exit_on_together_are_rejected(self):
+        """Ловит мутацию: проверка `if once and exit_on_raw is not None`
+        снята из `_parse_args` — оба флага вместе перестали бы давать
+        именованный отказ."""
         self._insert_task("S008")
         with self.assertRaises(SystemExit):
             watch.cmd_watch(["--tasks", "S008", "--once", "--exit-on", "refusals"])
@@ -310,6 +338,9 @@ class ExitOnAndOnceTest(_WatchThreadTestCase):
 class EmptySelectionRefusesTest(_WatchThreadTestCase):
 
     def test_empty_mine_refuses_named_and_nonzero(self):
+        """Ловит мутацию: `if opts["mine"] and not selection` снята из
+        `cmd_watch` — пустая выборка `--mine` тихо ушла бы в бесконечный
+        цикл вместо именованного `sys.exit`."""
         conn = store.db()
         self._insert_task("S009")
         store.journal(conn, "S009", "lease", "lease взят", "",
@@ -325,6 +356,9 @@ class EmptySelectionRefusesTest(_WatchThreadTestCase):
         self.assertIn("чужая-сессия", message)
 
     def test_unknown_tasks_id_refuses_not_silently(self):
+        """Ловит мутацию: проверка `missing` по `known_ids` снята из
+        `cmd_watch` — неизвестный `--tasks` id ушёл бы в бесконечный
+        пустой цикл вместо именованного `sys.exit`."""
         self._insert_task("S010")
         with self.assertRaises(SystemExit) as cm:
             watch.cmd_watch(["--tasks", "НЕТТАКОЙ"])

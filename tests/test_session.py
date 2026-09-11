@@ -33,20 +33,28 @@ def _env_without_session_var() -> dict:
 class ResolveSessionIdTest(TmpRootTest):
 
     def test_explicit_argument_wins(self):
+        """Ловит мутацию: `if session_id:` заменят на игнорирование
+        аргумента (например, всегда читать `ARTEL_SESSION_ID` первым)."""
         with mock.patch.dict(os.environ, {"ARTEL_SESSION_ID": "env-sess"}):
             self.assertEqual(session.resolve_session_id("explicit"), "explicit")
 
     def test_env_var_wins_over_ppid_fallback(self):
+        """Ловит мутацию: чтение `ARTEL_SESSION_ID` выпадет из
+        `resolve_session_id`, и вернётся `ppid-<n>` вместо `env-sess`."""
         with mock.patch.dict(os.environ, {"ARTEL_SESSION_ID": "env-sess"}):
             self.assertEqual(session.resolve_session_id(None), "env-sess")
 
     def test_falls_back_to_parent_pid_when_no_var_and_no_file_yet(self):
+        """Ловит мутацию: fallback перестанет считать `os.getppid()` живым
+        значением (например, застынет на значении первого вызова)."""
         with mock.patch.dict(os.environ, _env_without_session_var(),
                              clear=True):
             self.assertEqual(session.resolve_session_id(None),
                              f"ppid-{os.getppid()}")
 
     def test_no_argument_defaults_to_none(self):
+        """Ловит мутацию: `session_id: str | None = None` заменят на
+        обязательный параметр или другое значение по умолчанию."""
         with mock.patch.dict(os.environ, _env_without_session_var(),
                              clear=True):
             self.assertEqual(session.resolve_session_id(),
@@ -54,7 +62,10 @@ class ResolveSessionIdTest(TmpRootTest):
 
     def test_lease_module_re_exports_the_same_function_object(self):
         """AC-1: `lease.resolve_session_id` — тот же объект функции, не
-        вторая копия, которая могла бы разойтись именем источника."""
+        вторая копия, которая могла бы разойтись именем источника.
+
+        Ловит мутацию: `lease.py` заведёт собственную функцию-обёртку
+        вместо `from .session import resolve_session_id`."""
         self.assertIs(lease.resolve_session_id, session.resolve_session_id)
 
 
@@ -67,6 +78,9 @@ class SessionIdentityFileTest(TmpRootTest):
     """
 
     def test_first_access_creates_session_file_under_dot_artel(self):
+        """Ловит мутацию: `_persisted_session_id` перестанет создавать файл
+        при первом обращении (AC-4) — `session_file.exists()` останется
+        `False` после вызова."""
         session_file = config.ROOT / ".artel" / "session-id"
         self.assertFalse(session_file.exists())
 
@@ -81,7 +95,10 @@ class SessionIdentityFileTest(TmpRootTest):
         """Ровно механизм, которым отвязанный `auto` (другой `ppid` после
         репарентинга на init) и `watch --mine`, вызванный из той же
         сессии, видят одну и ту же identity (AC-5): второй вызов читает
-        уже записанное значение, не пересчитывает живой `os.getppid()`."""
+        уже записанное значение, не пересчитывает живой `os.getppid()`.
+
+        Ловит мутацию: `_persisted_session_id` перечитает `os.getppid()`
+        вместо ранее записанного файла — `second` стал бы `ppid-222`."""
         with mock.patch.dict(os.environ, _env_without_session_var(),
                              clear=True):
             with mock.patch("os.getppid", return_value=111):
@@ -94,7 +111,10 @@ class SessionIdentityFileTest(TmpRootTest):
 
     def test_explicit_argument_and_env_var_still_beat_the_file(self):
         """Порядок приоритета не меняется — файл только последний источник
-        ПЕРЕД `ppid`-fallback'ом, не первый."""
+        ПЕРЕД `ppid`-fallback'ом, не первый.
+
+        Ловит мутацию: явный аргумент/`ARTEL_SESSION_ID` перестанут
+        перебивать уже записанный файл identity."""
         with mock.patch.dict(os.environ, _env_without_session_var(),
                              clear=True):
             file_identity = session.resolve_session_id(None)
@@ -106,6 +126,37 @@ class SessionIdentityFileTest(TmpRootTest):
 
         self.assertNotEqual(file_identity, "явный-аргумент")
         self.assertNotEqual(file_identity, "env-value")
+
+
+class SessionIdentityFileRaceTest(TmpRootTest):
+    """REVIEW.md 01M290PP4KBTG1KYS1PWKQJH6T итерация 1, R1-F1 —
+    эксклюзивное создание файла identity: процесс, проигравший гонку
+    записи на самом первом обращении, обязан вернуть identity ПОБЕДИТЕЛЯ,
+    не собственное расходящееся значение."""
+
+    def test_concurrent_first_access_returns_winners_identity_not_own_fresh_value(self):
+        """Ловит мутацию: `os.open(path, os.O_CREAT | os.O_EXCL | ...)`
+        заменят обратно на голый `path.write_text(fresh, ...)` — гонка
+        перестанет обнаруживаться, и вызов вернёт СВОЁ значение
+        (`ppid-222`), разойдясь с файлом на диске (`ppid-111`)."""
+        session_file = config.ROOT / ".artel" / "session-id"
+        self.assertFalse(session_file.exists())
+
+        def racing_open(path, flags, *args, **kwargs):
+            # Симулирует другой процесс, записавший файл в промежутке
+            # между нашим `FileNotFoundError` при чтении и попыткой
+            # эксклюзивного создания.
+            session_file.write_text("ppid-111", encoding="utf-8")
+            raise FileExistsError(17, "File exists")
+
+        with mock.patch.dict(os.environ, _env_without_session_var(),
+                             clear=True):
+            with mock.patch("os.getppid", return_value=222):
+                with mock.patch("os.open", side_effect=racing_open):
+                    result = session.resolve_session_id(None)
+
+        self.assertEqual(result, "ppid-111")
+        self.assertNotEqual(result, "ppid-222")
 
 
 if __name__ == "__main__":

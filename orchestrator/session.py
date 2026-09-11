@@ -46,6 +46,17 @@ def _persisted_session_id() -> str | None:
     `ppid`, видят одну и ту же identity — обе читают уже существующий
     файл, а не пересчитывают живой `ppid`).
 
+    Создание файла — эксклюзивное (`O_CREAT | O_EXCL`, REVIEW.md
+    01M290PP4KBTG1KYS1PWKQJH6T итерация 1, R1-F1): на самом первом
+    обращении конкретной рабочей копии два процесса могут увидеть
+    `FileNotFoundError` конкурентно (пульт штатно держит параллельные
+    циклы `auto`, `parallel_limit.py`) — без эксклюзивности оба вычислили
+    бы РАЗНЫЙ `fresh` (разный `ppid`, в этом весь смысл задачи) и оба
+    записали бы файл, а проигравший гонку процесс продолжил бы работать
+    под identity, которая уже разошлась с диском. С `O_EXCL` проигравший
+    получает `FileExistsError` и перечитывает уже записанное победителем
+    значение — обе стороны гонки возвращают из этого вызова ОДНО и то же.
+
     `None` — файл недоступен ни на чтение, ни на запись (ФС только для
     чтения, `.artel/` нет и не завести): вызывающий код сам деградирует
     к живому `ppid-<n>`, как и раньше при отсутствии переменной/файла.
@@ -62,9 +73,19 @@ def _persisted_session_id() -> str | None:
     fresh = f"ppid-{os.getppid()}"
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(fresh, encoding="utf-8")
+        fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+    except FileExistsError:
+        try:
+            winner = path.read_text(encoding="utf-8").strip()
+        except OSError:
+            return None
+        return winner or None
     except OSError:
         return None
+    try:
+        os.write(fd, fresh.encode("utf-8"))
+    finally:
+        os.close(fd)
     return fresh
 
 
