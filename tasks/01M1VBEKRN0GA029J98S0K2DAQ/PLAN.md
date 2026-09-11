@@ -164,3 +164,53 @@ test_watch.py`): сам разбирает сырой `argv` без argparse —
 
 - Ни одного наблюдения про саму систему за пределами задачи — секция
   пуста осознанно.
+
+## Возврат — конфликт подтяжки main
+
+Ветка отставала от main на пять дней (ANSWER-2.md): конфликт при
+`git merge origin/main` на двух файлах — `orchestrator/artel.py`
+(докстринг-справочник команд, таблица импорта модулей пакета, таблица
+диспетчера `main()`) и `docs/codebase-map.md` (автосгенерированная
+карта). `orchestrator/store.py` и `docs/operator-session.md` слились
+автоматически, без конфликта.
+
+Разрешение — сохранены ОБЕ стороны, не одна:
+
+- `orchestrator/artel.py`: в докстринге (`Команды:` и таблица
+  `Модули пакета`) и в таблице диспетчера `main()` рядом с `watch` этой
+  задачи оставлена `pin --to`/`note` (01M1VBEHTDYPK3E4RRFHWYYYW3) — обе
+  команды main, смерженные за время отставания ветки. Импорт пакета
+  `orchestrator` объединён (`notes`, `watch` — оба); `doctor` теперь
+  пакет (`orchestrator/doctor/`, был модулем) — принят как есть, вне
+  зоны задачи.
+- `docs/codebase-map.md`: взята сторона main (`git checkout --theirs`),
+  затем перегенерирована штатной командой `python3
+  scripts/codebase_map.py` (конвенция скила `conventions-core` — карта
+  регенерируется тем же коммитом при правке `*.py`, включая случай
+  подтяжки main, а не Edit). После регенерации в карте видны и `watch`,
+  и `note`/`doctor`-пакет — сверено `grep`.
+- `docs/operator-session.md`: конфликта не было; сверено `grep` — п.4
+  «Поставить дозор» этой задачи (`artel.py watch --mine`) и остальные
+  правки main в том же файле присутствуют одновременно, без потерь ни
+  с одной стороны.
+- `canary_test_output_tmp.txt` — новый файл, появившийся из истории
+  main (коммит `bb13e950`, WIP-чекпоинт другой задачи), уже был в
+  `origin/main` HEAD до этого слияния; не часть конфликта этой задачи,
+  руками не трогался.
+
+Прогон после разрешения (все команды синхронно, в переднем плане,
+без фоновых прогонов):
+
+- `python3 -m unittest tests.test_store_journal tests.test_session
+  tests.test_new_argv_parsing` — 19 тестов, OK.
+- `python3 -m unittest tasks.01M1VBEKRN0GA029J98S0K2DAQ.acceptance_tests.test_watch`
+  — 14 тестов (AC-1..AC-14), OK — код `watch` пережил подтяжку main
+  без правки.
+- `python3 -m unittest tests.test_notes tests.test_doctor` — 142
+  теста, OK (модули, задетые слиянием со стороны main).
+- `python3 scripts/guard.py tasks/01M1VBEKRN0GA029J98S0K2DAQ/PLAN.md
+  tasks/01M1VBEKRN0GA029J98S0K2DAQ/SPEC.md
+  tasks/01M1VBEKRN0GA029J98S0K2DAQ/ANSWER-2.md` — ок.
+
+Полный набор `tests/` в шаге не гонялся (конвенция скила
+`coding-standards`, раздел «Тесты») — его прогонит CI на пуш ветки.
