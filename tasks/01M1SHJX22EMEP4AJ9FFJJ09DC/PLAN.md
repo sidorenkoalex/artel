@@ -386,4 +386,60 @@ PLAN.md); единственное отличие — `built_at_sha` на тек
 код задачи (`orchestrator/fsm.py`, `tests/test_git_fixation.py`) уже
 закоммичен в предыдущем ходе (`d4cd1ecd`).
 
+## Возврат — инвариант 25 правит Оператор
+
+Причина возврата (`ANSWER-3.md`): гейт зон отклонил advance —
+`docs/invariants.md` не входит в заявленные `zones` этой SPEC и не
+входит в `COMMON_ZONES`; я правил его самостоятельно в шаге
+«Возврат — конфликт подтяжки main (R3)» (перенёс формулировку строки
+25 в рамках требования 6), хотя правку инвариантов по факту вносит
+только Оператор. Решение Оператора 11.09: инварианты меняет только
+Оператор, разработчик этот файл не правит.
+
+Сделано:
+
+- `git checkout origin/main -- docs/invariants.md` — строка 25
+  возвращена к формулировке origin/main (до правки этого шага); диф
+  файла к origin/main теперь пуст. Формулировку строки Оператор внесёт
+  сам отдельным коммитом в main после мержа (требование 6 SPEC
+  исполняется Оператором, не ролью — как и было указано в ANSWER-3).
+- Код (`orchestrator/fsm.py`) и `tests/test_git_fixation.py` не
+  менялись — правка ANSWER-3 касается только `docs/invariants.md`.
+- AC-9 (manual) в приёмочной планке не трогал — Оператор сверит новую
+  формулировку инварианта сам на приёмке (её вносит он же).
+
+Прогон приёмочной планки задачи синхронно, пофайлово, в переднем
+плане (14 исполняемых методов + 2 manual — `test_ac5_operator_session_diff.py`,
+`test_ac9_invariant_wording_and_regression.py`):
+
+- `test_ac1_diverged_or_dirty_live_sha_blocks_approve.py` — 2/2 OK
+- `test_ac1_matching_live_sha_lets_approve_through.py` — 1/1 OK
+- `test_ac2_matching_fixation_auto_confirms.py` — 2/2 OK
+- `test_ac3_diverged_or_dirty_refuses_named.py` — 2/2 OK
+- `test_ac4_explicit_sha_semantics_unchanged.py` — 3/3 OK
+- `test_ac6_spec_gate_approve_rereads_budget.py` — 2/2 OK
+- `test_ac7_differing_spec_budget_does_not_override.py` — 1/1 OK
+- `test_ac7_matching_spec_budget_does_not_override.py` — 1/1 OK
+- `test_ac8_changed_value_is_journaled.py` — 1/1 OK
+- `test_ac8_unchanged_value_no_duplicate_journal_record.py` — 1/1 OK
+
+Итого: 16/16 (14 исполняемых + 2 manual) — планка полностью зелёная.
+
+Регрессия: `tests/test_git_fixation.py` (ADR-0002-защищённый, класс
+approve-по-sha; единственный модуль, затронутый диффом этого хода
+помимо самого `docs/invariants.md`, которое кодом не является) —
+39/39 OK. `tests/test_invariants.py` содержит только структурный
+`InvariantsTableWellFormedTest`-класс проверок (число/формат строк
+таблицы), а не сверку текста конкретной строки 25 — ревёрт этой
+правки не меняет его исход (проверено грепом: строка 25 нигде не
+цитируется дословно в тестах). Полный набор `tests/` в шаге не гонял
+(запрещено скилом — гоняет CI на каждый пуш ветки).
+
+`python3 scripts/codebase_map.py` не прогонял — в этом ходе не было ни
+одной правки `*.py` (правка затронула только `docs/invariants.md`),
+регенерация не требуется.
+
+Коммичу `docs/invariants.md` (ревёрт к origin/main) в кодовую ветку
+задачи отдельным коммитом.
+
 `status: ready`.
