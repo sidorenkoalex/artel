@@ -1068,6 +1068,9 @@ class PlanBudgetOneTimeReassessmentTest(TmpRootTest):
         self.assertIn("бюджет из PLAN", self.journal_actions())
 
     def test_ac2_missing_field_leaves_ceiling_untouched(self):
+        """Ловит мутацию: поле отсутствует, но код всё равно трактует
+        `None` как валидное значение и подставляет 0 — потолок был бы
+        тихо обнулён вместо того, чтобы остаться прежним."""
         self.apply(None)
 
         row = self.task_row()
@@ -1092,7 +1095,12 @@ class PlanBudgetOneTimeReassessmentTest(TmpRootTest):
         """Возврат из ревью (`changes_requested`) растит `review_iters`
         (`_review_changes_requested`) — повторная сдача с более высоким
         значением потолок больше не двигает, даже если поднять его ещё
-        никогда не удавалось."""
+        никогда не удавалось.
+
+        Ловит мутацию: `_apply_plan_budget` перестаёт проверять
+        `review_iters` условием `if t["review_iters"] or
+        t["accept_rejects"]` — канал остался бы открытым и после
+        возврата из ревью."""
         self.set_task(review_iters=1)
 
         self.apply("100")
@@ -1105,7 +1113,12 @@ class PlanBudgetOneTimeReassessmentTest(TmpRootTest):
         """Возврат из приёмки (`reject`) растит `accept_rejects`, не
         `review_iters` (`fsm._cmd_reject`) — канал обязан закрыться и по
         этому счётчику; проверка только на `review_iters == 0` пропустила
-        бы этот путь возврата."""
+        бы этот путь возврата.
+
+        Ловит мутацию: `_apply_plan_budget` перестаёт проверять
+        `accept_rejects` условием `if t["review_iters"] or
+        t["accept_rejects"]` — канал остался бы открытым и после
+        возврата из приёмки."""
         self.set_task(accept_rejects=1)
 
         self.apply("100")
@@ -1119,7 +1132,12 @@ class PlanBudgetOneTimeReassessmentTest(TmpRootTest):
         `in_dev` (рост `review_iters`, как после `changes_requested`)
         повторная сдача с ещё большим значением потолок больше не
         двигает — переоценка срабатывает не более одного раза за всю
-        жизнь задачи."""
+        жизнь задачи.
+
+        Ловит мутацию: функция перестаёт проверять `review_iters`/
+        `accept_rejects` и срабатывает на каждой сдаче — второй `apply`
+        поднял бы потолок с $90 до $100 вместо того, чтобы оставить его
+        прежним."""
         self.apply("90")
         self.assertAlmostEqual(self.task_row()["budget_usd"], 90.0)
 
@@ -1149,7 +1167,11 @@ class PlanBudgetOneTimeReassessmentTest(TmpRootTest):
         поднимает — на живой FSM это отказ guard'а до всякого вызова
         (требование 6); здесь — вторая, независимая линия защиты внутри
         самого парсера (`budget.spec_budget`), тем же приёмом, что и у
-        `apply_spec_budget`."""
+        `apply_spec_budget`.
+
+        Ловит мутацию: сравнение с `ROLE_BUDGET_CAP` снято внутри
+        `_apply_plan_budget` — вторая линия защиты пропала бы, и значение
+        выше потолка ролей поднимало бы потолок задачи."""
         over_cap = config.ROLE_BUDGET_CAP + 1
 
         self.apply(f"{over_cap:g}")
