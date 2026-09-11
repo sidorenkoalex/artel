@@ -1,5 +1,5 @@
 ---
-built_at_sha: d6436f9260ae4cf85b1da0341af58ecc9b5c83a7
+built_at_sha: 3fff9044a99a9a184daa1720766960a6bc5c4da2
 ---
 
 # Codebase-map пульта
@@ -99,7 +99,7 @@ built_at_sha: d6436f9260ae4cf85b1da0341af58ecc9b5c83a7
 **Публичные функции:**
 - `main`
 
-**Импортирует:** `orchestrator/amend.py`, `orchestrator/answer.py`, `orchestrator/auto.py`, `orchestrator/budget.py`, `orchestrator/canary.py`, `orchestrator/catalog.py`, `orchestrator/cleanup.py`, `orchestrator/config.py`, `orchestrator/dry_run.py`, `orchestrator/fsm.py`, `orchestrator/liveness.py`, `orchestrator/notes.py`, `orchestrator/pause.py`, `orchestrator/pin.py`, `orchestrator/projects.py`, `orchestrator/prune.py`, `orchestrator/release.py`, `orchestrator/report.py`, `orchestrator/runner.py`, `orchestrator/stack.py`, `orchestrator/store.py`, `orchestrator/venv.py`, `orchestrator/version.py`, `orchestrator/watch.py`, `orchestrator/workspace.py`, `orchestrator/zone_lock.py`
+**Импортирует:** `orchestrator/amend.py`, `orchestrator/answer.py`, `orchestrator/auto.py`, `orchestrator/budget.py`, `orchestrator/canary.py`, `orchestrator/catalog.py`, `orchestrator/cleanup.py`, `orchestrator/config.py`, `orchestrator/dry_run.py`, `orchestrator/fsm.py`, `orchestrator/lease.py`, `orchestrator/liveness.py`, `orchestrator/notes.py`, `orchestrator/pause.py`, `orchestrator/pin.py`, `orchestrator/projects.py`, `orchestrator/prune.py`, `orchestrator/release.py`, `orchestrator/report.py`, `orchestrator/runner.py`, `orchestrator/stack.py`, `orchestrator/store.py`, `orchestrator/venv.py`, `orchestrator/version.py`, `orchestrator/watch.py`, `orchestrator/workspace.py`, `orchestrator/zone_lock.py`
 
 **Импортируется:** `tests/test_amend.py`, `tests/test_analyst_role.py`, `tests/test_artel_bootstrap.py`, `tests/test_detached_cycle.py`, `tests/test_invariants.py`, `tests/test_new_argv_parsing.py`
 
@@ -516,7 +516,7 @@ built_at_sha: d6436f9260ae4cf85b1da0341af58ecc9b5c83a7
 
 **Импортирует:** `orchestrator/config.py`, `orchestrator/liveness.py`, `orchestrator/runner.py`, `orchestrator/session.py`, `orchestrator/store.py`
 
-**Импортируется:** `orchestrator/amend.py`, `orchestrator/answer.py`, `orchestrator/auto.py`, `orchestrator/budget.py`, `orchestrator/cleanup.py`, `orchestrator/fsm.py`, `orchestrator/fsm_merge_gate.py`, `orchestrator/pause.py`, `orchestrator/release.py`, `orchestrator/runner.py`, `orchestrator/workspace.py`, `tests/test_budget_live_lease_and_escalation.py`, `tests/test_detached_cycle.py`, `tests/test_lease.py`, `tests/test_session.py`
+**Импортируется:** `orchestrator/amend.py`, `orchestrator/answer.py`, `orchestrator/artel.py`, `orchestrator/auto.py`, `orchestrator/budget.py`, `orchestrator/cleanup.py`, `orchestrator/fsm.py`, `orchestrator/fsm_merge_gate.py`, `orchestrator/pause.py`, `orchestrator/release.py`, `orchestrator/runner.py`, `orchestrator/workspace.py`, `tests/test_budget_live_lease_and_escalation.py`, `tests/test_detached_cycle.py`, `tests/test_lease.py`, `tests/test_session.py`
 
 ## orchestrator/liveness.py
 

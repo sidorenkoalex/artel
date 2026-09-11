@@ -50,25 +50,42 @@ def _terminating_calls(kill_mock) -> list:
 class TaskIdAndAttachTest(unittest.TestCase):
 
     def test_bare_task_id_is_not_attach(self):
+        """Ловит мутацию: `attach` по умолчанию `True` (или парсинг вообще
+        игнорирует отсутствие флага) — тест красен, если голый id без
+        `--attach` даёт что-то, кроме `False`."""
         self.assertEqual(artel._task_id_and_attach(["T001"], "usage"),
                          ("T001", False))
 
     def test_trailing_attach_flag_is_detected(self):
+        """Ловит мутацию: `--attach` ищется только в фиксированной позиции
+        (например, только первым аргументом) — тест красен, если флаг
+        последним элементом `rest` не распознаётся."""
         self.assertEqual(
             artel._task_id_and_attach(["T001", "--attach"], "usage"),
             ("T001", True))
 
     def test_leading_attach_flag_is_detected(self):
+        """Ловит мутацию: разбор ищет `--attach` только среди хвостовых
+        аргументов — тест красен, если флаг ПЕРЕД id остаётся
+        незамеченным (например, ошибочно принят за сам task_id)."""
         self.assertEqual(
             artel._task_id_and_attach(["--attach", "T001"], "usage"),
             ("T001", True))
 
     def test_missing_task_id_exits_with_usage(self):
+        """Ловит мутацию: пустой `rest` не завершается `sys.exit` (падает
+        позже на `positional[0]` из пустого списка) либо текст usage не
+        попадает в сообщение — тест красен на отсутствии `SystemExit`
+        или на потере строки usage."""
         with self.assertRaises(SystemExit) as ctx:
             artel._task_id_and_attach([], "auto <id> [--attach]")
         self.assertIn("auto <id> [--attach]", str(ctx.exception))
 
     def test_bare_attach_flag_without_task_id_exits(self):
+        """Ловит мутацию: `--attach` без id не отфильтровывается из
+        позиционных аргументов раньше проверки на пустоту — тест красен,
+        если такой вызов НЕ кидает `SystemExit` (флаг ошибочно принят за
+        task_id)."""
         with self.assertRaises(SystemExit):
             artel._task_id_and_attach(["--attach"], "usage")
 
@@ -88,6 +105,13 @@ class LaunchDetachedTest(TmpRootTest):
         return mock.patch.object(artel.subprocess, "Popen", return_value=proc)
 
     def test_spawns_itself_with_attach_and_detached_session(self):
+        """Ловит мутацию: детач зовёт `Popen` без `start_new_session=True`
+        (процесс не переживёт SIGHUP родителя, AC-5), без `-u` (stdout
+        буферизуется, лог выглядит пустым живьём, AC-3), не тем
+        executable/файлом (перезапуск не себя же) или не дописывает
+        `--attach` последними тремя аргументами (самозапуск зациклился бы
+        на повторный детач) — любое из этого красит соответствующий
+        assert."""
         with self._popen_mock(pid=4242) as popen:
             out = capture(artel._launch_detached, "auto", self.TASK)
 
@@ -107,6 +131,12 @@ class LaunchDetachedTest(TmpRootTest):
         self.assertIn(f"artel.py log {self.TASK}", out)
 
     def test_log_path_follows_task_cmd_n_pattern_and_is_created(self):
+        """Ловит мутацию: лог создаётся ЛЕНИВО (открывается только внутри
+        отвязанного процесса, не до `Popen` вызывающей командой) — тест
+        красен на `expected.exists()`, потому что мок `Popen` не создаёт
+        реального дочернего процесса, файл появился бы только от кода
+        `_launch_detached` самого. Мутация имени файла (не
+        `<id>-<cmd>-<n>.log`) красит `assertIn` на пути."""
         with self._popen_mock():
             out = capture(artel._launch_detached, "auto", self.TASK)
 
@@ -117,6 +147,10 @@ class LaunchDetachedTest(TmpRootTest):
                         "лениво отвязанным процессом")
 
     def test_second_launch_increments_the_log_number(self):
+        """Ловит мутацию: номер лога не растёт от уже существующих файлов
+        (хардкод `n=1` или счётчик не читает `config.LOGS.glob`) — второй
+        вызов переписал бы лог первого поверх, тест красен на имени
+        файла второго вызова."""
         with self._popen_mock():
             capture(artel._launch_detached, "auto", self.TASK)
         with self._popen_mock():
@@ -125,6 +159,10 @@ class LaunchDetachedTest(TmpRootTest):
         self.assertIn(str(config.LOGS / f"{self.TASK}-auto-2.log"), out2)
 
     def test_run_and_auto_logs_do_not_collide(self):
+        """Ловит мутацию: счётчик номера лога общий на задачу, не отдельный
+        на префикс `<id>-<cmd>-` — `run` и `auto` одной задачи писали бы
+        в один и тот же путь (`-1.log` у обоих) вместо раздельных
+        `run-1.log`/`auto-1.log`, тест красен на пути второго вызова."""
         with self._popen_mock():
             out_run = capture(artel._launch_detached, "run", self.TASK)
         with self._popen_mock():
@@ -134,6 +172,11 @@ class LaunchDetachedTest(TmpRootTest):
         self.assertIn(str(config.LOGS / f"{self.TASK}-auto-1.log"), out_auto)
 
     def test_task_id_prefix_is_resolved_to_full_id_before_spawning(self):
+        """Ловит мутацию: `_launch_detached` передаёт дочернему процессу
+        сырой (возможно, префиксный) `task_id`, не результат
+        `store.resolve_task_id` — тест красен, если argv содержит
+        исходный префикс вместо полного id (гонка с новой задачей того
+        же префикса адресовала бы не ту задачу)."""
         prefix = self.TASK[:4]
         with self._popen_mock() as popen:
             capture(artel._launch_detached, "auto", prefix)
@@ -143,6 +186,26 @@ class LaunchDetachedTest(TmpRootTest):
                          "дочерний процесс обязан получить полный id, не "
                          "префикс — иначе гонка с новой задачей того же "
                          "префикса адресует не ту задачу")
+
+    def test_refuses_to_spawn_when_a_live_lease_already_exists(self):
+        """R1-F3 (REVIEW.md итерации 1): дешёвая проверка занятости ДО
+        спавна — без неё повторный `run`/`auto` при уже идущем цикле
+        молча печатал бы «отвязан: pid …» и падал бы только внутри
+        свежего процесса, отказ был бы виден лишь в его логе.
+
+        Ловит мутацию: предспавновая проверка `lease.is_live` отсутствует
+        или не останавливает запуск — тест красен, если `Popen`
+        вызывается, несмотря на уже живой lease задачи (повторный запуск
+        молча плодил бы второй отвязанный процесс поверх идущего цикла)."""
+        store.insert_lease(store.db(), self.TASK, "cycle-session", 4242,
+                           socket.gethostname(), store.now())
+
+        with self._popen_mock() as popen:
+            with self.assertRaises(SystemExit) as ctx:
+                artel._launch_detached("auto", self.TASK)
+
+        popen.assert_not_called()
+        self.assertIn("живой lease", str(ctx.exception))
 
 
 class CmdStopTest(TmpRootTest):
@@ -159,6 +222,10 @@ class CmdStopTest(TmpRootTest):
                            hostname, store.now())
 
     def test_sends_sigterm_to_the_lease_holder_pid(self):
+        """Ловит мутацию: `_cmd_stop` шлёт не `SIGTERM` (например
+        `SIGKILL`, смешение с `kill`) или адресует не pid держателя lease
+        — `_terminating_calls` не совпал бы с ожидаемым единственным
+        `mock.call(os.getpid(), signal.SIGTERM)`."""
         self._seed_lease(os.getpid(), socket.gethostname())
 
         with _signal_only_kill(artel) as kill:
@@ -169,6 +236,11 @@ class CmdStopTest(TmpRootTest):
         self.assertIn(str(os.getpid()), out)
 
     def test_no_lease_exits_without_signalling(self):
+        """Ловит мутацию: отсутствие проверки `row is None` — код упал бы
+        на `row["hostname"]` необработанным `TypeError` вместо дружелюбного
+        `sys.exit`, либо (что опаснее) послал бы сигнал произвольному pid
+        по умолчанию; тест красен на отсутствии `SystemExit` или на
+        непустом списке отправленных сигналов."""
         with _signal_only_kill(artel) as kill:
             with self.assertRaises(SystemExit) as ctx:
                 artel._cmd_stop(self.TASK)
@@ -177,6 +249,10 @@ class CmdStopTest(TmpRootTest):
         self.assertIn("нечего останавливать", str(ctx.exception))
 
     def test_foreign_host_holder_is_refused_without_signalling(self):
+        """Ловит мутацию: проверка `hostname` пропущена или сравнивает не
+        с `socket.gethostname()` — код послал бы `SIGTERM` числу `4242`
+        на ЭТОЙ машине по случайному совпадению pid, адресуя посторонний
+        процесс; тест красен на непустом списке отправленных сигналов."""
         self._seed_lease(4242, "other-host.invalid")
 
         with _signal_only_kill(artel) as kill:
@@ -187,6 +263,11 @@ class CmdStopTest(TmpRootTest):
         self.assertIn("other-host.invalid", str(ctx.exception))
 
     def test_already_dead_holder_pid_is_reported_without_signalling(self):
+        """Ловит мутацию: проверка `liveness._pid_alive` перед отправкой
+        сигнала пропущена — код попытался бы `os.kill` уже мёртвого pid
+        (шумный `ProcessLookupError` или, хуже, молчаливое попадание в
+        переиспользованный чужой pid); тест красен на непустом списке
+        отправленных сигналов или на отсутствии узнаваемого текста отказа."""
         self._seed_lease(_dead_pid(), socket.gethostname())
 
         with _signal_only_kill(artel) as kill:
@@ -198,7 +279,12 @@ class CmdStopTest(TmpRootTest):
 
     def test_process_lookup_error_race_is_reported_not_raised(self):
         """Pid жив по проверке `liveness`, но успевает умереть между ней и
-        самим `os.kill` — гонка, а не отказ, репортится тем же текстом."""
+        самим `os.kill` — гонка, а не отказ, репортится тем же текстом.
+
+        Ловит мутацию: `ProcessLookupError` из `os.kill` не перехвачен —
+        исключение всплыло бы необработанным вместо дружелюбного
+        `sys.exit`; тест красен на отсутствии узнаваемого текста отказа
+        в сообщении `SystemExit`."""
         self._seed_lease(os.getpid(), socket.gethostname())
 
         def fake(pid, sig):
@@ -231,6 +317,10 @@ class LeaseForceTest(TmpRootTest):
         conn.commit()
 
     def test_without_force_a_fresh_foreign_lease_refuses(self):
+        """Ловит мутацию: `force` по умолчанию `True` (или отказ проверки
+        свежести lease пропущен, когда `force` не передан) — тест красен,
+        если вызов БЕЗ `force` всё равно захватывает свежий чужой lease
+        (`refusal` вернулось бы `None`)."""
         self._seed_foreign_fresh_lease()
 
         refusal, fresh = lease.acquire(store.db(), self.TASK, "sess-kill")
@@ -240,7 +330,11 @@ class LeaseForceTest(TmpRootTest):
 
     def test_force_overrides_a_fresh_foreign_lease(self):
         """AC-10: `kill` обязан прервать задачу немедленно, даже если lease
-        держит живой отвязанный цикл со свежим heartbeat."""
+        держит живой отвязанный цикл со свежим heartbeat.
+
+        Ловит мутацию: `force=True` не реализован (параметр принимается,
+        но не меняет исход) — тест красен на `refusal is not None` или на
+        том, что `leases.session_id` не переписан на `sess-kill`."""
         self._seed_foreign_fresh_lease()
 
         refusal, fresh = lease.acquire(store.db(), self.TASK, "sess-kill",
@@ -251,6 +345,11 @@ class LeaseForceTest(TmpRootTest):
         self.assertEqual(row["session_id"], "sess-kill")
 
     def test_force_intercept_names_kill_switch_in_the_journal(self):
+        """Ловит мутацию: перехват СВЕЖЕГО чужого lease через `force`
+        журналируется той же безликой причиной, что и обычный перехват
+        протухшего/мёртвого держателя (требование 6 — особая причина
+        «kill switch» именно для этого случая) — тест красен, если
+        `detail` не содержит «kill switch»."""
         self._seed_foreign_fresh_lease()
 
         lease.acquire(store.db(), self.TASK, "sess-kill", force=True)
@@ -261,7 +360,12 @@ class LeaseForceTest(TmpRootTest):
     def test_force_on_a_stale_lease_keeps_the_pid_dead_cause(self):
         """`force=True` не подменяет причину, когда перехват и без него
         законен (протухший/мёртвый держатель) — специальная причина
-        «kill switch» только для СВЕЖЕГО lease (требование 6)."""
+        «kill switch» только для СВЕЖЕГО lease (требование 6).
+
+        Ловит мутацию: причина «kill switch» пишется безусловно при
+        `force=True`, не только для свежего lease — тест красен, если
+        `detail` для СТАРОГО lease содержит «kill switch» вместо
+        «мёртв»."""
         conn = store.db()
         stale_ts = _ts_ago(config.LEASE_STALE_AFTER_SEC + 1)
         conn.execute(
@@ -288,6 +392,11 @@ class KillSignalsDetachedHolderTest(TmpRepoTest):
                            hostname, store.now())
 
     def test_kill_sends_sigkill_to_the_live_same_host_holder(self):
+        """Ловит мутацию: снимок держателя (`holder_before`) берётся ПОСЛЕ
+        `lease.acquire(force=True)`, когда строка уже переписана на
+        сессию `kill`, — сигнал ушёл бы не тому pid (себе) или не ушёл
+        бы вовсе; тест красен, если `_terminating_calls` не содержит
+        ровно `mock.call(os.getpid(), signal.SIGKILL)`."""
         self._seed_lease(os.getpid(), socket.gethostname())
 
         with _signal_only_kill(cleanup) as kill:
@@ -298,6 +407,10 @@ class KillSignalsDetachedHolderTest(TmpRepoTest):
         self.assertEqual(self.task_row()["state"], "killed")
 
     def test_kill_does_not_signal_a_foreign_host_holder(self):
+        """Ловит мутацию: `cmd_kill` не сверяет `hostname` держателя перед
+        SIGKILL — отправил бы сигнал числу `4242` на ЭТОЙ машине по
+        случайному совпадению pid, адресуя посторонний процесс; тест
+        красен на непустом списке отправленных сигналов."""
         self._seed_lease(4242, "other-host.invalid")
 
         with _signal_only_kill(cleanup) as kill:
@@ -307,6 +420,10 @@ class KillSignalsDetachedHolderTest(TmpRepoTest):
         self.assertEqual(self.task_row()["state"], "killed")
 
     def test_kill_does_not_signal_an_already_dead_holder(self):
+        """Ловит мутацию: `cmd_kill` не проверяет живость держателя перед
+        SIGKILL — попытался бы убить уже мёртвый (возможно, переиспользо-
+        ванный чужим процессом) pid; тест красен на непустом списке
+        отправленных сигналов."""
         self._seed_lease(_dead_pid(), socket.gethostname())
 
         with _signal_only_kill(cleanup) as kill:
@@ -316,6 +433,11 @@ class KillSignalsDetachedHolderTest(TmpRepoTest):
         self.assertEqual(self.task_row()["state"], "killed")
 
     def test_kill_completes_even_if_the_signal_itself_fails(self):
+        """Ловит мутацию: `OSError` из `os.kill` (SIGKILL держателя) не
+        перехвачен внутри `cmd_kill` — уборка (снятие lease, смена
+        состояния на `killed`) упала бы вместе с исключением вместо
+        того, чтобы завершиться штатно; тест красен, если состояние
+        задачи не стало `killed`."""
         self._seed_lease(os.getpid(), socket.gethostname())
 
         def fake(pid, sig):
@@ -329,6 +451,10 @@ class KillSignalsDetachedHolderTest(TmpRepoTest):
         self.assertEqual(self.task_row()["state"], "killed")
 
     def test_kill_without_any_lease_does_not_crash(self):
+        """Ловит мутацию: снимок держателя (`holder_before`) не
+        учитывает отсутствие lease (`None`) — обращение к его полям
+        (`pid`/`hostname`) упало бы `TypeError` вместо штатного
+        перехода в `killed` без единого сигнала."""
         self.capture(cleanup.cmd_kill, self.TASK)
 
         self.assertEqual(self.task_row()["state"], "killed")

@@ -94,9 +94,13 @@ AUTO_MAX_STEPS шагов за вызов. Решений auto не приним
 и подсказку `artel.py log <id>`; цикл переживает обрыв породившей его
 сессии. `--attach` — прежнее (до этой задачи) поведение: передний план
 вызывающего процесса, без отвязки. `stop <id>` шлёт отвязанному циклу
-SIGTERM — тот доигрывает уже начатый шаг и завершается сам между шагами;
-`kill <id>` прерывает немедленно, включая принудительное завершение
-самого цикла.
+SIGTERM; гарантия «доигрывает уже начатый шаг и завершается сам между
+шагами» — про `auto` (у него есть граница между шагами, на которой
+сигнал проверяется). У отвязанного `run` границы нет — один шаг и
+естественный выход, обработчика `SIGTERM` он не ставит, `stop` для него
+обрывает процесс немедленно, как и до этой задачи. `kill <id>` прерывает
+немедленно в обоих случаях, включая принудительное завершение самого
+цикла.
 
 Целевые проекты объявляются в targets.yaml (ADR-0003 п.2), каталог
 проекта заводит `target-init <target>` (.artel/projects/<target>/ —
@@ -434,10 +438,10 @@ def _ensure_supported_interpreter():
 _ensure_supported_interpreter()
 
 from orchestrator import (amend, answer, auto, budget, canary, catalog,  # noqa: E402
-                          cleanup, doctor, dry_run, fsm, liveness, notes,
-                          pause, pin, projects, prune, release, report,
-                          runner, store, venv, version, watch, workspace,
-                          zone_lock)
+                          cleanup, doctor, dry_run, fsm, lease, liveness,
+                          notes, pause, pin, projects, prune, release,
+                          report, runner, store, venv, version, watch,
+                          workspace, zone_lock)
 
 
 # Отвязка `run`/`auto` от процесса сессии Оператора (SPEC
@@ -455,8 +459,24 @@ def _task_id_and_attach(rest: list, usage: str) -> tuple:
 
 
 def _launch_detached(cmd: str, task_id: str) -> None:
+    """R1-F3 (REVIEW.md итерации 1): до отвязки — дешёвая проверка
+    `lease.is_live`, не авторитетное взятие lease (тем ниже и остаётся,
+    внутри спавненного процесса, через `lease.run_locked`). Без неё
+    повторный `run`/`auto` при уже идущем цикле раньше отказывал СИНХРОННО
+    прямо на экране, а после детача молча печатал бы «отвязан: pid …» и
+    сразу же падал бы внутри свежего процесса — отказ был бы виден только
+    в его логе. Гонка (lease освобождается/занимается между этой проверкой
+    и спавном) не авторитетна и не обязана быть — тело `run_locked` внутри
+    спавненного процесса решает по факту, эта проверка только возвращает
+    немедленную обратную связь на очевидный случай."""
     conn = store.db()
     task_id = store.resolve_task_id(conn, task_id)
+    if lease.is_live(conn, task_id):
+        row = store.lease_row(conn, task_id)
+        sys.exit(f"[{task_id}] задачу уже ведёт живой lease "
+                 f"(session_id={row['session_id']}, pid={row['pid']}, "
+                 f"host={row['hostname']}) — не запускаю второй отвязанный "
+                 f"процесс; подожди её или `artel.py stop {task_id}`")
     config.LOGS.mkdir(parents=True, exist_ok=True)
     prefix = f"{task_id}-{cmd}-"
     used = [int(p.stem[len(prefix):]) for p in config.LOGS.glob(f"{prefix}*.log")
@@ -506,7 +526,14 @@ def _cmd_stop(task_id: str) -> None:
     Чужой host не трогаем — тем же приёмом различения, что уже применяют
     `cleanup._cmd_kill`/`doctor.check_leases`: pid на другом хосте не наш
     для отправки сигнала, даже случайное числовое совпадение адресовало
-    бы посторонний процесс."""
+    бы посторонний процесс.
+
+    Адресация — по lease, не по имени команды: `_cmd_stop` не знает и не
+    спрашивает, `run` держит lease или `auto` — доигровка текущего шага
+    гарантирована только для `auto` (`orchestrator/auto.py::_on_sigterm`
+    ставит обработчик на границе между шагами), голый отвязанный `run`
+    такого обработчика не ставит и обрывается немедленно тем же
+    сигналом (см. модульный докстринг выше и `docs/operator-session.md`)."""
     conn = store.db()
     task_id = store.resolve_task_id(conn, task_id)
     row = store.lease_row(conn, task_id)
@@ -523,8 +550,9 @@ def _cmd_stop(task_id: str) -> None:
     except ProcessLookupError:
         sys.exit(f"[{task_id}] процесс цикла (pid={row['pid']}) уже не "
                  f"существует")
-    print(f"[{task_id}] stop: SIGTERM отправлен pid={row['pid']} — цикл "
-          f"доиграет текущий шаг и завершится сам")
+    print(f"[{task_id}] stop: SIGTERM отправлен pid={row['pid']} — "
+          f"`auto` доиграет текущий шаг и завершится сам; голый `run` "
+          f"обработчика не ставит и завершится немедленно")
 
 
 def _refuse_if_worktree() -> None:
