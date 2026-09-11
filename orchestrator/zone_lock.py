@@ -68,12 +68,29 @@ ZoneSandbox.seed_task`, докстринг «Допущения интерфей
 `tasks.updated_at`, тот же фолбэк, что приёмочные тесты AC-8/AC-9 уже
 фиксируют для этого случая буквально.
 """
+from datetime import datetime
+
 from . import config, store
 
 # SPEC требование 1: диапазон фаз FSM, в которых занятость зоны другой
 # задачи блокирует первый шаг developer этой — `in_dev`…`merge_gate`
 # буквально (тот же порядок состояний, что `report.STATE_ORDER`).
-BLOCKING_STATES = ("in_dev", "review", "verifying", "acceptance", "merge_gate")
+#
+# `escalated` (SPEC 01M1VBEAWZW4EBZHKMGNBBK648, требование 5, AC-7/
+# AC-8в): та же занимающая природа, что и остальные состояния диапазона
+# — эскалация (бюджет, вопрос, конфликт подтяжки) не заканчивает код,
+# уже начатый в текущем пребывании, она его временно прерывает. Без
+# `escalated` здесь `_occupies` для эскалированного держателя никогда не
+# проверяется вовсе (`blocking_conflict` отсеивает его раньше, по
+# `row["state"] not in BLOCKING_STATES`) — задача, уже написавшая код,
+# молча отпускала зону на время эскалации (SPEC «Контекст», факт «а»:
+# 06.09, конфликт подтяжки main двух пар задач по `doctor.py`). Фильтр
+# `_occupies` (старт developer ПОСЛЕ `_stay_since_id`) применяется к
+# `escalated`-кандидату ТАК ЖЕ, как и к остальным — держит зону, только
+# если код уже начат в текущем пребывании; эскалация ДО первого шага
+# developer зону не держит и здесь (AC-7 второй сценарий).
+BLOCKING_STATES = ("in_dev", "review", "verifying", "acceptance",
+                   "merge_gate", "escalated")
 
 # Actor/action журнала отказа `run`/`auto` по занятости зоны (требования
 # 2-3): `auto._run_zone_wait_refusal` ищет это действие буквально, тем же
@@ -85,6 +102,53 @@ REFUSAL_ACTION = "run отклонён: ждёт зоны"
 # буквально несущий «осознанный риск» — Оператор должен увидеть в журнале,
 # что решение сознательное, а не автоматическое снятие по AC-6.
 RELEASE_ACTION = "ждёт зоны — снято Оператором (осознанный риск)"
+
+# Маркеры входа/выхода цикла `auto --wait-zone` (SPEC
+# 01M1VBEAWZW4EBZHKMGNBBK648, требования 1-2, 4; AC-1..AC-4, AC-6,
+# AC-8): живут здесь, не в `auto.py` — `wait_minutes`/`catalog.
+# cmd_status` (требование 4) читают их как самостоятельный снимок,
+# независимый от того, крутится ли `auto` прямо сейчас (тот же довод,
+# что уже развёл REFUSAL_ACTION/RELEASE_ACTION по этому модулю).
+_WAIT_ENTER_PREFIX = "ждёт зоны "
+_WAIT_EXIT_PREFIX = "зона свободна через"
+
+
+def wait_enter_action(path: str, occupier_id: str, occupier_state: str) -> str:
+    """Текст входа в ожидание (требование 2, AC-2), буквально."""
+    return f"{_WAIT_ENTER_PREFIX}{path}: держит {occupier_id} ({occupier_state})"
+
+
+def wait_exit_action(occupier_id: str, minutes: int) -> str:
+    """Текст выхода из ожидания (требование 2, AC-3), буквально."""
+    return f"{_WAIT_EXIT_PREFIX} {minutes} мин, держал {occupier_id}"
+
+
+def wait_minutes(conn, task_id: str) -> int | None:
+    """Минуты, прошедшие с последнего незакрытого входа в ожидание зоны
+    (требование 4, AC-6) — `catalog.cmd_status` добавляет их к уже
+    показанному держателю. Снимок читает журнал заново на каждый вызов,
+    тем же приёмом, что и `blocking_conflict`/`queue_position` — не кеш,
+    не зависит от того, жив ли прямо сейчас процесс `auto`.
+
+    `None` — последняя запись входа уже закрыта парной записью выхода
+    (либо входа не было вовсе): задача не в цикле ожидания сейчас, даже
+    если она заблокирована зоной (`run`/`auto` без `--wait-zone`
+    останавливаются немедленно и этой записи не оставляют)."""
+    last_enter_ts = None
+    last_exit_id = -1
+    last_enter_id = -1
+    for row in store.task_steps(conn, task_id):
+        if row["action"].startswith(_WAIT_ENTER_PREFIX):
+            last_enter_ts = row["ts"]
+            last_enter_id = row["id"]
+        elif row["action"].startswith(_WAIT_EXIT_PREFIX):
+            last_exit_id = row["id"]
+    if last_enter_ts is None or last_enter_id < last_exit_id:
+        return None
+    started = datetime.strptime(last_enter_ts, "%Y-%m-%d %H:%M:%SZ")
+    now = datetime.strptime(store.now(), "%Y-%m-%d %H:%M:%SZ")
+    return max(0, int((now - started).total_seconds() // 60))
+
 
 # Действие, которым `runner.run_agent_once` журналирует старт агента —
 # используется здесь только как ЧТЕНИЕ (маркер «первый шаг уже был»), не

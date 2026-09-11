@@ -1,5 +1,5 @@
 ---
-built_at_sha: 250d3886bc35f80d0f9f791f6fd4325cb89a520c
+built_at_sha: 39afa6b924a54b1dc6ddded27ab107d81f001993
 ---
 
 # Codebase-map пульта
@@ -965,6 +965,9 @@ built_at_sha: 250d3886bc35f80d0f9f791f6fd4325cb89a520c
 - `queue_order`
 - `queue_position`
 - `refusal`
+- `wait_enter_action`
+- `wait_exit_action`
+- `wait_minutes`
 
 **Импортирует:** `orchestrator/config.py`, `orchestrator/store.py`
 

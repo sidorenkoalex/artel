@@ -56,6 +56,65 @@ def _run_zone_wait_refusal(conn, task_id: str, journaled_before: int) -> bool:
     return False
 
 
+# Причина остановки цикла по исчерпанному потолку ожидания (требование
+# 3, AC-4/AC-8б) — задача остаётся в `state`, НЕ эскалирует. Тексты
+# входа/выхода самого ожидания (AC-1..AC-3) живут в `zone_lock.
+# wait_enter_action`/`wait_exit_action` — `catalog.cmd_status`
+# (требование 4, AC-6) читает те же записи независимо от `auto`, единый
+# словарь, тот же приём, что уже развёл REFUSAL_ACTION/RELEASE_ACTION.
+_ZONE_WAIT_CEILING_REASON = "потолок ожидания зоны исчерпан"
+
+
+def _wait_for_zone(conn, task_id: str, session_id: str, state: str) -> "Stop | None":
+    """Цикл ожидания зоны требования 1 (AC-1..AC-4, AC-8а/б): опрашивает
+    `zone_lock.blocking_conflict` целиком (та же проверка, что не пускает
+    `run` дальше, не отдельная копия — `done`/`killed` держателя
+    освобождают зону ровно так же, как и любой другой исход, AC-8а) с
+    интервалом `config.ZONE_WAIT_POLL_SEC`, продлевая heartbeat lease
+    (`lease.acquire` тем же `session_id`, что уже держит lease весь цикл
+    `_cmd_auto`) на каждом опросе.
+
+    Потолок `config.ZONE_WAIT_MAX_SEC` — НАКОПЛЕННОЕ время опросов
+    (счётчик внутри самой функции), не разница `store.now()`: секундная
+    точность `store.now()` не различает несколько РЕАЛЬНЫХ опросов
+    внутри одного вызова (AC-8б, доли секунды) — счётчик верен
+    независимо от того, подменяет ли вызывающий код источник времени.
+
+    `None` — зона свободна (либо не была занята вовсе — вызывающий уже
+    убедился в конфликте до вызова). `Stop` — потолок исчерпан: задача
+    остаётся `state` (обычно `in_dev`), НЕ эскалирует (требование 3).
+    """
+    t = store.get_task(conn, task_id)
+    conflict = zone_lock.blocking_conflict(conn, task_id, t)
+    if conflict is None:
+        return None
+    path, occupier_id, occupier_state = conflict
+    entry = zone_lock.wait_enter_action(path, occupier_id, occupier_state)
+    store.journal(conn, task_id, "operator", entry, "")
+    print(f"[{task_id}] {entry}")
+
+    elapsed_sec = 0.0
+    while True:
+        if elapsed_sec >= config.ZONE_WAIT_MAX_SEC:
+            hint = (f"artel.py status  (кто держит зону) — дождись мержа/kill "
+                    f"занявшей задачи либо artel.py zone-release {task_id}, "
+                    f"затем artel.py auto {task_id} --wait-zone")
+            return Stop(state, _ZONE_WAIT_CEILING_REASON, hint, False)
+        time.sleep(config.ZONE_WAIT_POLL_SEC)
+        elapsed_sec += config.ZONE_WAIT_POLL_SEC
+        lease.acquire(conn, task_id, session_id)
+        t = store.get_task(conn, task_id)
+        conflict = zone_lock.blocking_conflict(conn, task_id, t)
+        if conflict is None:
+            break
+
+    minutes = int(elapsed_sec // 60)
+    exit_action = zone_lock.wait_exit_action(occupier_id, minutes)
+    store.journal(conn, task_id, "operator", exit_action, "")
+    print(f"[{task_id}] {exit_action}")
+    return None
+
+
 def _run_wave_breaker_refusal(conn, task_id: str, journaled_before: int) -> bool:
     """Отказал ли `run` ИМЕННО этим вызовом из-за открытого алерта
     стоп-крана волны self (01M1THKRK8HPXA7Y2SRB0RFTN2, требование 1) —
@@ -334,8 +393,15 @@ def auto_stop(conn, task_id: str, state: str, reason: str, hint: str, *,
             conn, task_id, f"[{task_id}] auto остановлен: {state}: {reason}")
 
 
-def cmd_auto(task_id: str, session_id: str | None = None) -> None:
+def cmd_auto(task_id: str, session_id: str | None = None,
+            wait_zone: bool = False) -> None:
     """Цикл advance+run, пока в шаге работает агент, — до места, где нужен человек.
+
+    `wait_zone` (SPEC 01M1VBEAWZW4EBZHKMGNBBK648, требования 1, 3,
+    AC-1..AC-5): `True` (либо `config.AUTO_WAIT_ZONE_DEFAULT`, AC-5) —
+    отказ занятости зоны не останавливает цикл, а ждёт освобождения
+    (`_wait_for_zone`) и продолжает тем же вызовом (AC-3); дефолт
+    `False` не меняет сегодняшнее поведение (немедленная остановка).
 
     Механику шага команда не дублирует: внутри те же `cmd_run` и
     `cmd_advance`, которые Оператор зовёт руками, — бюджет, ретраи, журнал
@@ -364,7 +430,7 @@ def cmd_auto(task_id: str, session_id: str | None = None) -> None:
     conn = store.db()
     task_id = store.resolve_task_id(conn, task_id)
     lease.run_locked(conn, task_id, session_id,
-                     lambda sid: _cmd_auto(conn, task_id, sid),
+                     lambda sid: _cmd_auto(conn, task_id, sid, wait_zone),
                      on_refusal="print")
 
 
@@ -579,49 +645,69 @@ def _pre_advance_step(conn, task_id: str, session_id: str, role: str,
 
 
 def _role_run_step(conn, task_id: str, session_id: str, role: str,
-                   state: str, before: str, steps: int) -> RoleRan | Stop:
+                   state: str, before: str, steps: int,
+                   wait_zone: bool) -> RoleRan | Stop:
     """Шаг (в) — запуск шага роли и разбор исхода: успешное завершение
     (включая эффект вроде эскалации внутри самого шага) против отказа
     `run` стартовать (пауза, занятость зоны, бюджет, лимит
     параллельности). Отказ стартовать `cmd_run` сообщает единственным
     способом — `sys.exit` с текстом; в цикле текст печатаем сами:
-    пойманный `SystemExit` нигде не покажется."""
-    run_journaled_before = len(store.task_steps(conn, task_id))
-    try:
-        runner.cmd_run(task_id, session_id=session_id)
-    except SystemExit as exc:
-        print(str(exc))
-        # Пауза (SPEC T070, требование 2) — не «эскалация по бюджету»:
-        # причина должна быть видна Оператору в итоговом сообщении, а не
-        # потеряться среди прочих отказов `run`. Причина — по тому, что
-        # реально журналировал ИМЕННО этот вызов `cmd_run`
-        # (`_run_paused_refusal`), а не по независимому текущему опросу
-        # `pause.is_paused`: тот путал бы паузу с ОДНОВРЕМЕННЫМ отказом по
-        # бюджету/лимиту параллельных задач, если Оператор выставил оба
-        # (REVIEW.md T070, итерация 2, замечание 1).
-        if _run_paused_refusal(conn, task_id, run_journaled_before):
-            reason, hint = config.AUTO_STOP_PAUSE
-            # Пауза — действие самого Оператора (ANSWER-1, вопрос 2): он
-            # уже знает о причине остановки, алерт был бы уведомлением о
-            # собственном же решении.
-            return Stop(state, reason, hint.format(id=task_id), False)
-        # Занятость зоны (SPEC 01M1P9QAG65GVF69YJEV0V18D9, требование 3) —
-        # причина внешняя (держит другая задача), не буксование ЭТОГО
-        # агента: `status`/`doctor` берут на себя объяснение, кто держит
-        # зону (требование 4), алерт буксования не открывается.
-        if _run_zone_wait_refusal(conn, task_id, run_journaled_before):
-            reason, hint = config.AUTO_STOP_ZONE_WAIT
-            return Stop(state, reason, hint.format(id=task_id), False)
-        # Стоп-кран волны, часть 2 (01M1THKRK8HPXA7Y2SRB0RFTN2, требования
-        # 1, 3-4) — причина уже видна первой строкой `doctor` и пометкой
-        # `status` у каждой задачи target self: алерт буксования здесь
-        # был бы дублем уже открытого incident-алерта.
-        if _run_wave_breaker_refusal(conn, task_id, run_journaled_before):
-            reason, hint = config.AUTO_STOP_WAVE_BREAKER
-            return Stop(state, reason, hint.format(id=task_id), False)
-        return Stop(state, "run отказался стартовать",
-                    f"artel.py budget {task_id} <usd> или artel.py kill {task_id}",
-                    True)
+    пойманный `SystemExit` нигде не покажется.
+
+    `wait_zone` (SPEC 01M1VBEAWZW4EBZHKMGNBBK648, требования 1, 3,
+    AC-1..AC-4, AC-8): эффективный режим — `wait_zone or config.
+    AUTO_WAIT_ZONE_DEFAULT` (AC-5). Отказ занятости зоны в этом режиме
+    не останавливает цикл — `_wait_for_zone` ждёт освобождения (либо
+    возвращает `Stop` по исчерпанному потолку, требование 3) и, если
+    зона освободилась, ЭТА ЖЕ функция повторяет `runner.cmd_run` тем же
+    вызовом (AC-3) — без выхода наружу и без ручного перезапуска.
+    """
+    while True:
+        run_journaled_before = len(store.task_steps(conn, task_id))
+        try:
+            runner.cmd_run(task_id, session_id=session_id)
+        except SystemExit as exc:
+            print(str(exc))
+            # Пауза (SPEC T070, требование 2) — не «эскалация по бюджету»:
+            # причина должна быть видна Оператору в итоговом сообщении, а не
+            # потеряться среди прочих отказов `run`. Причина — по тому, что
+            # реально журналировал ИМЕННО этот вызов `cmd_run`
+            # (`_run_paused_refusal`), а не по независимому текущему опросу
+            # `pause.is_paused`: тот путал бы паузу с ОДНОВРЕМЕННЫМ отказом по
+            # бюджету/лимиту параллельных задач, если Оператор выставил оба
+            # (REVIEW.md T070, итерация 2, замечание 1).
+            if _run_paused_refusal(conn, task_id, run_journaled_before):
+                reason, hint = config.AUTO_STOP_PAUSE
+                # Пауза — действие самого Оператора (ANSWER-1, вопрос 2): он
+                # уже знает о причине остановки, алерт был бы уведомлением о
+                # собственном же решении.
+                return Stop(state, reason, hint.format(id=task_id), False)
+            # Занятость зоны (SPEC 01M1P9QAG65GVF69YJEV0V18D9, требование 3) —
+            # причина внешняя (держит другая задача), не буксование ЭТОГО
+            # агента: `status`/`doctor` берут на себя объяснение, кто держит
+            # зону (требование 4), алерт буксования не открывается.
+            if _run_zone_wait_refusal(conn, task_id, run_journaled_before):
+                if wait_zone or config.AUTO_WAIT_ZONE_DEFAULT:
+                    wait_outcome = _wait_for_zone(conn, task_id, session_id, state)
+                    if wait_outcome is not None:
+                        return wait_outcome
+                    # Зона освободилась — повторяем run тем же вызовом
+                    # (AC-3), без выхода из этой функции.
+                    continue
+                reason, hint = config.AUTO_STOP_ZONE_WAIT
+                return Stop(state, reason, hint.format(id=task_id), False)
+            # Стоп-кран волны, часть 2 (01M1THKRK8HPXA7Y2SRB0RFTN2, требования
+            # 1, 3-4) — причина уже видна первой строкой `doctor` и пометкой
+            # `status` у каждой задачи target self: алерт буксования здесь
+            # был бы дублем уже открытого incident-алерта.
+            if _run_wave_breaker_refusal(conn, task_id, run_journaled_before):
+                reason, hint = config.AUTO_STOP_WAVE_BREAKER
+                return Stop(state, reason, hint.format(id=task_id), False)
+            return Stop(state, "run отказался стартовать",
+                        f"artel.py budget {task_id} <usd> или artel.py kill {task_id}",
+                        True)
+        else:
+            break
 
     # Состояние перечитываем: упавший агент и исчерпанный потолок уводят
     # задачу в escalated изнутри run — `before`/`state` здесь ещё след
@@ -640,7 +726,7 @@ def _role_run_step(conn, task_id: str, session_id: str, role: str,
     return RoleRan(role, before, new_state)
 
 
-def _cmd_auto(conn, task_id: str, session_id: str) -> None:
+def _cmd_auto(conn, task_id: str, session_id: str, wait_zone: bool = False) -> None:
     """Цикл advance+run, пока в шаге работает агент, — до места, где нужен
     человек. После разбора (SPEC «R1» 01M1SC40NT8T1WFKKKJ67CK96Z) —
     короткая композиция именованных шагов: (а) `_rework_gate_blocks`, (б)
@@ -711,7 +797,7 @@ def _cmd_auto(conn, task_id: str, session_id: str) -> None:
 
         steps += 1
         outcome = _role_run_step(conn, task_id, session_id, role, state,
-                                 before, steps)
+                                 before, steps, wait_zone)
         if isinstance(outcome, Stop):
             auto_stop(conn, task_id, outcome.state, outcome.reason,
                       outcome.hint, alert=outcome.alert)
