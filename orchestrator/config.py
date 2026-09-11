@@ -543,18 +543,28 @@ STATE_ROLE = {"tests_writing": "test_author", "in_dev": "developer",
 # `<id>`, которую Оператору иначе приходится достраивать вручную
 # (инцидент 02.09, мерж T101). Пусто — фиксации ещё нет, подсказка
 # остаётся байт-в-байт прежней.
+# `_BOTH_COMMANDS` (SPEC 01M28NX0M2WTVC38XVN75N01XD, требование 4/5,
+# AC-4/AC-5) — литеральная фраза, называющая обе команды на ручном
+# гейте/ожидании зоны: убить цикл (`kill`) — не то же, что штатно
+# остановить его (`stop`), инцидент 11.09 (zones-extend, $14.42 потеряны
+# из-за `kill` вместо `stop`). Общая строка, не дублируется по месту —
+# `.format(id=...)`, как и остальные хинты этого словаря.
+_BOTH_COMMANDS = ("stop {id} — остановить цикл; "
+                  "kill {id} — ликвидировать задачу")
+
 AUTO_STOP = {
     "spec_writing": ("SPEC ещё пишется",
                      "доведи SPEC.md до status: ready, затем artel.py advance {id}"),
     "spec_gate": ("гейт SPEC — решение Оператора",
-                  "прочитай SPEC и: artel.py approve {id}{sha}"),
+                  "прочитай SPEC и: artel.py approve {id}{sha}; " + _BOTH_COMMANDS),
     "acceptance": ("приёмка — решение Оператора",
                    "проведи приёмку по критериям SPEC: artel.py approve {id}{sha} "
-                   "или artel.py reject {id} \"причина\""),
+                   "или artel.py reject {id} \"причина\"; " + _BOTH_COMMANDS),
     "merge_gate": ("гейт merge — решение Оператора",
-                   "artel.py approve {id}{sha}  (выполнит merge)"),
+                   "artel.py approve {id}{sha}  (выполнит merge); " + _BOTH_COMMANDS),
     "escalated": ("эскалация — нужен Оператор",
-                  "разберись: artel.py log {id}, затем artel.py approve {id}{sha}"),
+                  "разберись: artel.py log {id}, затем artel.py approve {id}{sha}; "
+                  + _BOTH_COMMANDS),
     "done": ("задача закрыта", "ничего не требуется"),
     "killed": ("задача снята", "ничего не требуется"),
 }
@@ -589,7 +599,8 @@ AUTO_STOP_PAUSE = ("задача на паузе",
 # подсказка на явное снятие Оператором.
 AUTO_STOP_ZONE_WAIT = ("ждёт зоны",
                       "artel.py status  (кто держит зону) — дождись мержа/"
-                      "kill занявшей задачи либо artel.py zone-release {id}")
+                      "kill занявшей задачи либо artel.py zone-release {id}; "
+                      + _BOTH_COMMANDS)
 
 # Штатное ожидание зоны внутри `auto` (SPEC 01M1VBEAWZW4EBZHKMGNBBK648,
 # требования 1, 3): `--wait-zone` (либо этот дефолт для ВСЕХ вызовов,
