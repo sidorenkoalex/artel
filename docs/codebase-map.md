@@ -1,5 +1,5 @@
 ---
-built_at_sha: a6fb259dc0eb21dab92edaf1a04b66e5cb8bab14
+built_at_sha: 269e5b71bef4f60bec32deba239e162375e862c1
 ---
 
 # Codebase-map пульта
@@ -243,6 +243,7 @@ built_at_sha: a6fb259dc0eb21dab92edaf1a04b66e5cb8bab14
 - `commit_pause_now_checkpoint`
 - `commit_pull_checkpoint`
 - `commit_step_artifacts`
+- `commit_success_checkpoint`
 - `commit_timeout_checkpoint`
 
 **Импортирует:** `orchestrator/alerts.py`, `orchestrator/artifact_branch.py`, `orchestrator/config.py`, `orchestrator/fixation.py`, `orchestrator/gitcmd.py`, `orchestrator/store.py`, `orchestrator/workspace.py`, `orchestrator/yamlmini.py`, `scripts/guard.py`
@@ -988,6 +989,18 @@ built_at_sha: a6fb259dc0eb21dab92edaf1a04b66e5cb8bab14
 
 **Импортируется:** `orchestrator/artel.py`, `orchestrator/auto.py`, `orchestrator/catalog.py`, `orchestrator/runner.py`, `scripts/guard.py`, `tests/test_catalog_status_log.py`, `tests/test_zone_lock.py`
 
+## scripts/ci_push_class.py
+
+**Назначение:** Классификатор класса пуша CI (ADR-0016) — вынесен из bash-логики job
+
+**Публичные функции:**
+- `classify`
+- `main`
+
+**Импортирует:** —
+
+**Импортируется:** `tests/test_ci_push_class.py`
+
 ## scripts/codebase_map.py
 
 **Назначение:** Codebase-map пульта: детерминированная карта модулей верхнего уровня.
@@ -1028,6 +1041,7 @@ built_at_sha: a6fb259dc0eb21dab92edaf1a04b66e5cb8bab14
 - `has_redness_marker`
 - `id_format_patterns`
 - `id_format_sample_errors`
+- `indented_ac_marker_errors_from_files`
 - `is_draft_lenient`
 - `is_extraneous_acceptance_test_file`
 - `is_extraneous_task_root_file`
@@ -1052,6 +1066,7 @@ built_at_sha: a6fb259dc0eb21dab92edaf1a04b66e5cb8bab14
 - `scan_extraneous_acceptance_files`
 - `scan_extraneous_task_root_files`
 - `scan_id_format_samples`
+- `scan_indented_ac_markers`
 - `scan_redness_markers`
 - `schema_errors`
 - `section_body`
@@ -1435,6 +1450,16 @@ built_at_sha: a6fb259dc0eb21dab92edaf1a04b66e5cb8bab14
 **Публичные функции:** (нет)
 
 **Импортирует:** `orchestrator/checkpoint.py`
+
+**Импортируется:** —
+
+## tests/test_ci_push_class.py
+
+**Назначение:** Юнит-тесты scripts/ci_push_class.py (01M28NWK5X10J139Z8TD69HFAC):
+
+**Публичные функции:** (нет)
+
+**Импортирует:** `scripts/ci_push_class.py`
 
 **Импортируется:** —
 
