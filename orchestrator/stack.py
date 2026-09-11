@@ -17,6 +17,7 @@ import subprocess
 import sys
 from collections import namedtuple
 from pathlib import Path
+from typing import Optional
 
 from . import config
 
@@ -33,6 +34,14 @@ _MODULE_ROOT = Path(__file__).resolve().parent.parent
 # orchestrator/doctor.py::cli_version) требует Python 3.10+ без
 # `from __future__ import annotations` — 3.11 фиксирует уже принятое
 # решение с запасом, не голый минимум для этого синтаксиса (TZ.md).
+#
+# Сам этот модуль (и `config.py`, от которого он зависит) держится
+# ЗАВЕДОМО 3.9-совместимым (SPEC 01M1SHK3MD4ZF9NYXSCT67J8AP, требование
+# 2): `_main_copy_root()` ниже несёт `Optional[Path]`, не `Path | None`
+# — точка входа `orchestrator/artel.py` читает `REQUIRED_PYTHON` прямым
+# импортом ДО того, как проверить версию интерпретатора, и падение на
+# разборе аннотации здесь было бы тем же классом отказа, от которого
+# спасает вся эта проверка.
 REQUIRED_PYTHON = (3, 11)
 
 # Версия основных джобов CI и локальной разработки (01M1RDCCKBQMJ5G2K9
@@ -115,15 +124,26 @@ VERSION_RE = re.compile(r"\d+\.\d+\.\d+")
 StackCheck = namedtuple("StackCheck", "name status detail")
 
 
+def _interpreter_provenance_text() -> str:
+    """Требование 7/AC-7: фактический путь исполняемого интерпретатора и
+    факт существования `.artel/venv` — ДОПОЛНИТЕЛЬНАЯ строка проверки
+    `python`, не влияющая на её статус (тот остаётся функцией только
+    версии, см. `_python_check` ниже)."""
+    venv_dir = Path(config.VENV_DIR)
+    venv_state = "существует" if venv_dir.is_dir() else "не существует"
+    return f"запущен {sys.executable}, .artel/venv ({venv_dir}) {venv_state}"
+
+
 def _python_check() -> StackCheck:
     running = tuple(sys.version_info[:2])
     version_text = ".".join(str(part) for part in sys.version_info[:3])
+    provenance = _interpreter_provenance_text()
     if running >= REQUIRED_PYTHON:
-        return StackCheck("python", "ok", f"Python {version_text}")
+        return StackCheck("python", "ok", f"Python {version_text}; {provenance}")
     required_text = ".".join(str(part) for part in REQUIRED_PYTHON)
     return StackCheck(
         "python", "warn",
-        f"Python {version_text} ниже минимальной {required_text}")
+        f"Python {version_text} ниже минимальной {required_text}; {provenance}")
 
 
 def _tool_check(name: str, requirement: ToolRequirement) -> StackCheck:
@@ -188,7 +208,7 @@ def _parse_pinned_versions(text: str) -> dict:
     return pinned
 
 
-def _main_copy_root() -> Path | None:
+def _main_copy_root() -> Optional[Path]:
     """Корень ГЛАВНОЙ копии репозитория, если копия кода, которой ЭТОТ
     модуль реально исполняется, — git-worktree (ANSWER-6/ANSWER-7,
     01M1TKP6AAY4W8GDGZNA9R0JZT): `git rev-parse --git-common-dir`
