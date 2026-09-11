@@ -22,7 +22,8 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from orchestrator import checkpoint, config, fsm_merge_gate, gitcmd, store  # noqa: E402
+from orchestrator import (checkpoint, config, fsm_merge_gate, gitcmd,  # noqa: E402
+                          repo_context, store)
 from scripts import guard  # noqa: E402
 from tests.sandbox import RealGitSandbox, TmpRootTest  # noqa: E402
 
@@ -183,7 +184,8 @@ class MergeGateGuardRefusesSubdirectoryFileTest(TmpRootTest):
 
         with self.assertRaises(SystemExit) as exit_:
             fsm_merge_gate._guard_task_root_or_refuse(
-                store.db(), self.TASK, scratch)
+                store.db(), self.TASK, scratch,
+                repo_context.resolve(config.DEFAULT_TARGET))
 
         message = str(exit_.exception)
         self.assertIn(NESTED_STRAY, message)

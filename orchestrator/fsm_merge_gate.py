@@ -76,13 +76,23 @@ def _scratch_worktree(ctx: repo_context.RepoContext,
     return scratch, None
 
 
-def _drop_scratch_worktree(repo: Path) -> None:
-    gitcmd.git("worktree", "remove", "--force", str(repo))
+def _drop_scratch_worktree(ctx: repo_context.RepoContext, repo: Path) -> None:
+    """Дерегистрация scratch-worktree ИМЕННО там, где `_scratch_worktree`
+    его завёл (SPEC 01M1R5B33CC7E6BZK085XV3ZCX, R1-F1): `git worktree
+    remove` — административная команда репозитория-ВЛАДЕЛЬЦА worktree
+    (`ctx.path/.git/worktrees/<name>/`), не голая `gitcmd.git` (та всегда
+    бьёт в `config.ROOT`) — для внешнего target это чужой репозиторий,
+    команда отказала бы `fatal: '<path>' is not a working tree` (код 128)
+    и оставляла бы висящую запись `.git/worktrees/` в клоне target'а на
+    каждом approve. `repo_context.git(ctx, ...)` для self — байт-в-байт
+    прежний вызов (`gitcmd.git`, `cwd=config.ROOT`)."""
+    repo_context.git(ctx, "worktree", "remove", "--force", str(repo))
     shutil.rmtree(repo, ignore_errors=True)
 
 
 def _handle_merge_conflict(conn, task_id: str, state: str, branch: str,
-                           merge_res, repo: Path) -> None:
+                           merge_res, repo: Path,
+                           ctx: repo_context.RepoContext) -> None:
     """Разбор провала `git merge --no-ff <branch>` при `approve` из
     `merge_gate` (SPEC T052, требования 2-3; AC-3, AC-4, AC-5) — merge
     идёт в scratch-worktree `repo` (Stage0, AC-8), не в `config.ROOT`.
@@ -112,7 +122,7 @@ def _handle_merge_conflict(conn, task_id: str, state: str, branch: str,
     files = sorted(set(conflicts.stdout.split())) \
         if conflicts is not None and conflicts.returncode == 0 else []
     if not files:
-        _drop_scratch_worktree(repo)
+        _drop_scratch_worktree(ctx, repo)
         sys.exit(f"merge упал на git merge --no-ff {branch}:\n"
                  f"{merge_res.stderr if merge_res is not None else '—'}")
 
@@ -127,7 +137,7 @@ def _handle_merge_conflict(conn, task_id: str, state: str, branch: str,
                  f"({abort_err}); дерево оставлено для разбора Оператором "
                  f"(config.ROOT не задет); задача осталась в merge_gate")
 
-    _drop_scratch_worktree(repo)
+    _drop_scratch_worktree(ctx, repo)
     file_list = ", ".join(files)
     protected = [f for f in files if _touches_protected_path(f)]
     if protected:
@@ -284,7 +294,8 @@ def _overlay_artifact_snapshot(conn, task_id: str, repo: Path) -> None:
             f"(main несёт его, не легаси-копию)")
 
 
-def _guard_task_root_or_refuse(conn, task_id: str, scratch: Path) -> None:
+def _guard_task_root_or_refuse(conn, task_id: str, scratch: Path,
+                               ctx: repo_context.RepoContext) -> None:
     """Guard на `tasks/<id>/` СНИМКА артефактной ветки в scratch-дереве —
     ДО push в main (SPEC 01M1TNN4TMWAQSQ9Y1PW37J5H0, AC-7/AC-8): вызывается
     ПОСЛЕ `_overlay_artifact_snapshot` (снимок артефактной ветки к этому
@@ -310,7 +321,7 @@ def _guard_task_root_or_refuse(conn, task_id: str, scratch: Path) -> None:
     detail = (f"guard: {guard.EXTRANEOUS_TASK_ROOT_FILE_REASON} в снимке "
              f"артефактной ветки: {', '.join(rel_names)}")
     store.journal(conn, task_id, "orchestrator", "merge FAILED", detail)
-    _drop_scratch_worktree(scratch)
+    _drop_scratch_worktree(ctx, scratch)
     sys.exit(f"[{task_id}] merge отклонён: {detail}\n"
              f"  задача осталась на гейте merge; почини нарушения и "
              f"повтори: artel.py approve {task_id}")
@@ -446,13 +457,14 @@ def _perform_carpentry_merge(conn, task_id: str, state: str, branch: str,
     merge_res = gitcmd.in_repo(scratch, "merge", "--no-ff", branch, "-m",
                                f"{task_id}: merge {branch}")
     if merge_res is None or merge_res.returncode != 0:
-        _handle_merge_conflict(conn, task_id, state, branch, merge_res, scratch)
+        _handle_merge_conflict(conn, task_id, state, branch, merge_res,
+                               scratch, ctx)
         return ("stopped", None)
     return ("ok", scratch)
 
 
 def _publish_merge_artifacts(conn, task_id: str, scratch: Path,
-                             is_self: bool) -> str:
+                             ctx: repo_context.RepoContext) -> str:
     """Снимок артефактной ветки поверх обычного merge (SPEC
     01M1R9YEK08XEQWBFX0929WFVJ, требование 3; AC-6/AC-7/AC-8/AC-11) —
     ДО sha "коммита мержа" ниже: main обязан унести АРТЕФАКТНЫЙ снимок
@@ -462,7 +474,8 @@ def _publish_merge_artifacts(conn, task_id: str, scratch: Path,
     Карта кодовой базы (SPEC T042) и RETRO (SPEC T043, требование 8,
     адресуется на `merge_sha` — сразу после merge/наложения снимка, ДО
     любых последующих служебных коммитов) — оба шага ТОЛЬКО для self
-    (`is_self`): SPEC 01M1R5B33CC7E6BZK085XV3ZCX, требование 4, AC-13 —
+    (`ctx.path == config.ROOT`): SPEC 01M1R5B33CC7E6BZK085XV3ZCX,
+    требование 4, AC-13 —
     «в пульте — только кухня пульта», для внешнего target ни карта, ни
     RETRO в её main НЕ коммитятся вовсе (RETRO внешнего target остаётся
     только в снапшоте закрытия, `orchestrator/snapshot.py`). Для self —
@@ -477,14 +490,14 @@ def _publish_merge_artifacts(conn, task_id: str, scratch: Path,
     Возврат — `final_sha` (после карты/RETRO для self) для push явным sha.
     """
     _overlay_artifact_snapshot(conn, task_id, scratch)
-    _guard_task_root_or_refuse(conn, task_id, scratch)
+    _guard_task_root_or_refuse(conn, task_id, scratch, ctx)
     merge_sha = gitcmd.head_sha(scratch)
-    if is_self:
+    if ctx.path == config.ROOT:
         fsm_postmerge._regenerate_and_commit_map(conn, task_id, repo=scratch)
         fsm_postmerge._generate_and_commit_retro(conn, task_id, merge_sha,
                                                  repo=scratch)
     final_sha = gitcmd.head_sha(scratch)
-    _drop_scratch_worktree(scratch)
+    _drop_scratch_worktree(ctx, scratch)
     return final_sha
 
 
@@ -594,8 +607,7 @@ def _cmd_approve_merge_gate(conn, task_id: str, state: str, t,
                                                     branch, ctx)
     if merge_kind != "ok":
         return ("stopped",)
-    final_sha = _publish_merge_artifacts(conn, task_id, scratch,
-                                         ctx.path == config.ROOT)
+    final_sha = _publish_merge_artifacts(conn, task_id, scratch, ctx)
     _push_merged_main(conn, task_id, final_sha, ctx)
     _finalize_done_state(conn, task_id, state, branch)
     if _publish_closing_snapshot_or_wait(conn, task_id, t) == "done":
