@@ -127,4 +127,23 @@ does_not_reach_into_subdirectories`).
 
 ## Предложения системе
 
-(пусто)
+`fsm_advance._answer_zones_mandate` (строка 701) разбирает маркер
+`Расширение зон разрешено:` только как НАЧАЛО строки (`line.
+startswith`); в ANSWER-1.md этой задачи (строки 26-27) Оператор дал
+мандат прозой с переносом строки посреди неё — маркер оказался в конце
+строки 26, путь `orchestrator/pull.py` — на следующей строке 27, и
+`_answer_zones_mandate` на реальном тексте этого файла возвращает
+пустое множество (проверено вызовом функции: `set()`). Раздел ниже
+«## Расширение зон» без ДОПОЛНИТЕЛЬНОГО мандата с маркером НАЧАЛОМ
+строки (например, через `zones-extend`) гейт `in_dev -> verifying` не
+пропустит.
+
+## Расширение зон
+
+Пути: orchestrator/pull.py
+
+Обоснование: ANSWER-1.md, п.2 — отказ подтяжки при постороннем файле
+(AC-3/AC-4) реализован в `orchestrator/pull.py::_clean_worktree_before_
+merge`/`evaluate`, вне заявленных зон задачи (`orchestrator/
+checkpoint.py`, `orchestrator/fsm_advance.py`, `.gitignore`, `tests/`).
+Мандат Оператора — ANSWER-1.md.
