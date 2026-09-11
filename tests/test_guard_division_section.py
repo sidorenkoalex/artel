@@ -21,6 +21,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from orchestrator import config  # noqa: E402
 from scripts import guard  # noqa: E402
 
+ROOT = Path(__file__).resolve().parents[1]
+
 SPEC_TEMPLATE = """---
 task: T900
 type: spec
@@ -259,3 +261,34 @@ class DivisionSectionErrorsTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TemplatePlaceholderDivisionHotfix23Test(unittest.TestCase):
+    """Hotfix №23 (11.09): секция «## Деление» шаблона templates/SPEC.md —
+    один заполнитель `<...>` с примером подразделов внутри; SPEC из
+    шаблона с нетронутой секцией не является заявкой на деление."""
+
+    def _spec_from_template(self) -> str:
+        text = (ROOT / "templates" / "SPEC.md").read_text(encoding="utf-8")
+        return text.replace("status: draft", "status: ready", 1).replace(
+            "# zones: orchestrator/store.py, orchestrator/config.py",
+            "zones: orchestrator/store.py, orchestrator/config.py", 1)
+
+    def test_untouched_template_division_section_is_not_a_request(self):
+        """Ловит мутацию: заполнитель разбирается как подразделы —
+        guard отказывает каждому SPEC, заведённому cmd_new из шаблона."""
+        text = self._spec_from_template()
+        self.assertIn("## Деление", text)
+        meta = {"type": "spec", "zones": "orchestrator/store.py, orchestrator/config.py"}
+        self.assertEqual(guard.division_section_errors("SPEC.md", text, meta), [])
+        self.assertEqual(guard.parse_division_subsections(text), [])
+
+    def test_filled_division_section_is_still_parsed(self):
+        """Ловит мутацию: проверка заполнителя срабатывает на любом теле,
+        начинающемся с '<' — реальная заявка с '<' в тексте ТЗ не теряется."""
+        body = ("## Деление\n\n### Часть А\n\nЗоны: orchestrator/store.py\n"
+                "Порядок: первая, без зависимостей\n\n<описание> части А\n\n"
+                "### Часть Б\n\nЗоны: orchestrator/config.py\n"
+                "Порядок: после части 1\n\nТекст части Б\n\n## Не входит\n")
+        text = self._spec_from_template().split("## Деление")[0] + body
+        self.assertEqual(len(guard.parse_division_subsections(text)), 2)
