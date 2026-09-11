@@ -37,16 +37,33 @@ t["accept_rejects"] == 0` (новая функция `_apply_plan_budget`,
 frontmatter этого PLAN не заполнено, переоценка своего же потолка не
 применяется.
 
+Журнальная запись «бюджет из PLAN» (замечание ANSWER-1/2 п.2, AC-1)
+теперь явно называет источник: `f"${value:.2f} (прежний потолок
+${old:.2f}, источник {config.BUDGET_SOURCE_PLAN})"` — старый потолок,
+новый потолок и слово `plan` в одной строке, буквально как того требует
+AC-1 и проверяет `test_ac1_higher_plan_budget_raises_ceiling_on_first_
+submission` (`assertIn("plan", tail)`).
+
+`docs/invariants.md` (инвариант 10) этим PLAN в код-ветку НЕ вносится
+(ANSWER-1/2 п.3: «роль инварианты не правит — с 11.09 инварианты и ADR
+меняет только Оператор своим коммитом») — предлагаемая формулировка
+вынесена приложением «## Приложение: инвариант 10» ниже, Оператор вносит
+её сам после мержа. Диф `skills/coding-standards.md` — тем же приёмом,
+приложением «## Приложение: unified-диф skills/coding-standards.md»,
+в код-ветку не попадает (защищённый путь).
+
 ## Шаги
 1. `orchestrator/config.py` — константа `BUDGET_SOURCE_PLAN = "plan"`.
 2. `orchestrator/fsm_advance.py` — `_apply_plan_budget` (требования 1-6)
-   и её вызов в `in_dev` перед переходом в `verifying`.
-3. `docs/invariants.md` — инвариант 10, формулировка канала PLAN
-   (требование 7).
-4. `tests/test_invariants.py` — `PlanBudgetOneTimeReassessmentTest`,
+   и её вызов в `in_dev` перед переходом в `verifying`; журнальная запись
+   «бюджет из PLAN» называет источник явным словом `plan` (ANSWER-1/2 п.2).
+3. `tests/test_invariants.py` — `PlanBudgetOneTimeReassessmentTest`,
    8 методов на AC-1..AC-5, AC-8(a/b/c) (требование 8).
-5. `docs/codebase-map.md` — перегенерирована (`scripts/codebase_map.py`)
+4. `docs/codebase-map.md` — перегенерирована (`scripts/codebase_map.py`)
    после правки `.py`-файлов.
+
+Формулировка инварианта 10 (требование 7) — НЕ шаг этого PLAN: вносится
+Оператором из приложения «## Приложение: инвариант 10» (ANSWER-1/2 п.3).
 
 ## Покрытие требований
 
@@ -58,9 +75,9 @@ frontmatter этого PLAN не заполнено, переоценка сво
 | 4 | 2 |
 | 5 | 2 |
 | 6 | 2 (эта задача не добавляет отдельной обработки — см. «Не входит» SPEC) |
-| 7 | 3 |
-| 8 | 4 |
-| 9 | приложение диффа ниже |
+| 7 | приложение «## Приложение: инвариант 10» — Оператор вносит после мержа (ANSWER-1/2 п.3), не код-ветка этой задачи |
+| 8 | 3 |
+| 9 | приложение «## Приложение: unified-диф skills/coding-standards.md» |
 
 ## Влияние на систему
 Новая колонка БД не вводится — переоценка держится на существующих
@@ -78,6 +95,11 @@ guard с версией этой проверки. Откат: удалить в
 перестанет реагировать на `budget_usd` PLAN, поведение вернётся к
 состоянию части 1 (только SPEC и Оператор).
 
+Текст инварианта 10 и код при этом временно расходятся (код уже умеет
+канал PLAN, таблица инвариантов ещё называет только SPEC) — до тех пор,
+пока Оператор не внесёт формулировку из приложения ниже своим коммитом;
+это сознательное следствие ANSWER-1/2 п.3, не дефект этой задачи.
+
 ## Риски
 Точечный — без ADR-0009/из этой задачи.
 
@@ -91,6 +113,43 @@ guard с версией этой проверки. Откат: удалить в
   структурного изменения порядка состояний FSM (ADR-класса), должна
   либо пере-фиксироваться той же подтяжкой, либо нести явную пометку
   «подлежит проверке на актуальность порядка состояний».
+- Тот же класс риска повторился в этой же задаче ВТОРОЙ раз другой
+  гранью: `test_ac7_invariant_wording.py` (акт приёмки этой задачи)
+  писан test_author'ом, когда `docs/invariants.md` ещё считался обычным
+  документом зоны SPEC (докстринг теста прямо это фиксирует: «не
+  защищённый путь — обычный документ»); решение Оператора «с 11.09
+  инварианты и ADR меняет только Оператор» (ANSWER-1/2 п.3) сделало этот
+  документ протектед-путём ПОСЛЕ фиксации планки — тест теперь красный
+  структурно, не по дефекту кода (см. «Эскалация» ниже). Наблюдение: не
+  только «порядок состояний FSM» (первый пункт), а любое расширение
+  списка protected-путей задним числом бьёт по уже зафиксированным
+  локальным приёмочным планкам, которые эти пути читали как обычный
+  документ, — стоит фиксировать общим правилом, не по одному прецеденту
+  на класс.
+
+## Приложение: инвариант 10
+Предлагаемая замена строки 10 таблицы `docs/invariants.md` (роль эту
+правку в код-ветку не коммитит — ANSWER-1/2 п.3, Оператор вносит после
+мержа):
+
+```diff
+diff --git a/docs/invariants.md b/docs/invariants.md
+index d7d4c75d..fc5ca892 100644
+--- a/docs/invariants.md
++++ b/docs/invariants.md
+@@ -34,7 +34,7 @@ docs/adr/0002-integrity-principle.md, CLAUDE.md.
+ | 7 | Гейт (spec_gate, acceptance, merge_gate) проходит `approve`/`reject` Оператора ЛИБО автогейт по политике `gates.yaml` — только при выполнении ВСЕХ условий этой политики для данного гейта (ADR-0007); дефолт политики каждого гейта — manual, при нём поведение не отличается от исходного | `test_invariants.ManualGatesNeedTheOperatorTest`; `tasks/T066/acceptance_tests/test_ac1_ac2_ac3_autogate_success.py` | design §4; ADR-0007 |
+ | 8 | Потолок задачи = её денежный бюджет: жёсткий, с алертом на 70% | `test_step_cost.CmdRunCostTest` | README 5; design §6, §10 |
+ | 9 | Исчерпанный бюджет блокирует запуск агента и не обходится переходами FSM | `test_invariants.ExhaustedBudgetIsNotBypassableTest` | design §6 |
+-| 10 | Поднять потолок выше `ROLE_BUDGET_CAP` может только Оператор командой `budget`; в пределах потолка ролей потолок задаёт SPEC на гейте SPEC | `test_invariants.ExhaustedBudgetIsNotBypassableTest.test_only_the_operator_ceiling_unblocks_the_run`; `test_invariants.SpecCeilingRespectsRoleBudgetCapTest`; `test_step_cost.CmdBudgetTest` | design §4 («увеличение лимитов — manual всегда»); ADR-0014 |
++| 10 | Поднять потолок выше `ROLE_BUDGET_CAP` может только Оператор командой `budget`; в пределах потолка ролей потолок задаёт SPEC на гейте SPEC и один раз PLAN при первой сдаче | `test_invariants.ExhaustedBudgetIsNotBypassableTest.test_only_the_operator_ceiling_unblocks_the_run`; `test_invariants.SpecCeilingRespectsRoleBudgetCapTest`; `test_invariants.PlanBudgetOneTimeReassessmentTest`; `test_step_cost.CmdBudgetTest` | design §4 («увеличение лимитов — manual всегда»); ADR-0014 |
+ | 11 | Журнал шагов пишется всегда: запуск, исход, стоимость, сбой лога, уборка | `test_agent_log.CmdRunLoggingTest`; `test_step_cost.CmdRunCostTest.test_step_cost_lands_in_spent_and_journal`; `test_kill_cleanup.KillCleanupTest.test_cleanup_is_listed_in_the_journal` | README 5; design §6, §7 |
+ | 12 | В main мержит только `approve` из merge_gate — другого пути влить что-либо в main нет. Единственный merge вне гейта — актуализация ветки задачи от main (сверка свежести T051): в worktree задачи (`-C`), вливает main, ветку задачи в аргументах не упоминает, main не изменяет | `test_invariants.MergeOnlyFromMergeGateTest` | design §2, §4; CLAUDE.md; ADR-0006 |
+ | 13 | Переход review → acceptance невозможен без свежего вердикта ревьювера | `test_invariants.FreshVerdictGuardsAcceptanceTest`; `test_review_freshness.FreshVerdictIterationTest` | design §4; artifacts.py `fresh_verdict_iteration` |
+```
+
+`git apply --check` этого диффа на чистом дереве main проходит — проверено
+этим шагом временным файлом (удалён после проверки, в задачу не входит).
 
 ## Приложение: unified-диф skills/coding-standards.md
 Диф проверен `git apply --check` на чистом дереве ветки — применяется
@@ -127,73 +186,64 @@ index 6b57b9ab..46ab4f51 100644
 ## Эскалация
 
 - **Вопросы** —
-  1. (блокирует приёмку) `tasks/01M1THKWFXFYNW28HDJGYHQWH6/acceptance_tests/`
-     залочен под порядок состояний FSM `in_dev -> review -> verifying
-     -> acceptance` (одна `advance` = один переход `in_dev` прямиком в
-     `review`; `_sandbox.py::reach_acceptance` дальше ждёт `verifying`
-     ПОСЛЕ `review`). Сегодняшний код ветки несёт уже смерженный
-     ADR-0015 («CI до ревью»): порядок `in_dev -> verifying -> review ->
-     acceptance` (docs/invariants.md, инвариант 36; `orchestrator/
-     fsm_advance.py:1244-1247` — переход из `in_dev` ведёт в
-     `verifying`, не в `review`; `verifying()`, строки 369-391, — в
-     `review` только по зелёному CI ОТДЕЛЬНЫМ вызовом `advance`).
-     Расхождение подтверждено прогоном: `submit_plan()` (одна `advance`)
-     после моей реализации останавливается в `verifying` (не в
-     `review`) — семь из восьми исполняемых методов 3 файлов
-     (`test_ac1_ac2_ac3_first_submission.py`,
-     `test_ac4_no_repeat_after_return.py`,
-     `test_ac5_operator_ceiling_not_overridden.py`) падают РОВНО на
-     `assertEqual(self.state(), "review")`, и только на этом — я
-     проверил отдельным прогоном (не закоммичен, только для
-     диагностики): второй вызов `fsm.cmd_advance` сразу после первого
-     доводит `verifying -> review`, и дальше ВСЕ содержательные
-     ассерты (`budget_usd`, `budget_source`, текст журнала) проходят
-     буквально как того требует критерий. Правка кода этой задачи под
-     старый порядок означала бы либо вернуть `in_dev` к прямому
-     переходу в `review` (откат ADR-0015 — чужой, уже принятый и
-     протестированный инвариант 36, вне зоны и полномочий этой задачи),
-     либо руками звать `verifying()` изнутри `in_dev` (слияние двух
-     состояний FSM в одно — тот же запрет). Правка самой фикстуры мне
-     недоступна (`acceptance_tests/` залочен, tasks/T023) — варианты:
-     - **(a)** Оператор поручает test_author (или использует
-       `amend-tests`) обновить `_sandbox.py` (`submit_plan`/
-       `reach_acceptance`) под текущий порядок `in_dev -> verifying ->
-       review -> acceptance` (лишний `fsm.cmd_advance` между `in_dev` и
-       `review`; `review -> acceptance` — без `verifying` посередине,
-       он уже позади), я перепрогоняю приёмку без изменений в
-       `orchestrator/`.
-     - **(b)** Оператор признаёт фикстуру устаревшей относительно
-       мержа ADR-0015 в main ПОСЛЕ её фиксации (сама ветка задачи явно
-       моложе задачи ADR-0015 по ULID: `01M1THKW...` < `01M1TQ0T...`,
-       то есть заведена раньше, чем ADR-0015 решился) и принимает
-       покрытие AC-8(a/b/c) `tests/test_invariants.py::
-       PlanBudgetOneTimeReassessmentTest` (8 методов, все зелёные) как
-       достаточное для этой задачи, закрывая/обходя приёмку вручную.
-     - Дефолт при молчании: **(a)** — лок `acceptance_tests/` существует
-       именно для того, чтобы спор с тестом решался пересмотром теста
-       по каналу T023, а не тихим ослаблением кода; `amend-tests`
-       (`orchestrator/amend.py`) — штатный канал для этого класса
-       правки.
-- **Контекст** — Код полностью реализован и закоммичен в ветку:
-  `orchestrator/config.py` (`BUDGET_SOURCE_PLAN`), `orchestrator/
-  fsm_advance.py` (`_apply_plan_budget`, вызов перед переходом в
-  `verifying`), `docs/invariants.md` (инвариант 10), `tests/
-  test_invariants.py` (`PlanBudgetOneTimeReassessmentTest`, 8/8
-  зелёных), `docs/codebase-map.md` (перегенерирована). Юнит-тесты
-  прогнаны: `python3 -m unittest tests.test_invariants` — 60/60
-  зелёных; `tests.test_spec_budget`, `tests.test_step_cost`,
-  `tests.test_zones_gate`, `tests.test_capacity_gate`, `tests.
-  test_fsm_review_rework_gate`, `tests.test_acceptance_tests_flow`,
-  `tests.test_guard_split_signals`, `tests.test_guard_zones`, `tests.
-  test_guard_schema` — все зелёные, регрессий не обнаружено.
-  Приёмочные тесты `tasks/01M1THKWFXFYNW28HDJGYHQWH6/acceptance_tests/`:
-  `test_ac6_over_cap_blocks_transition.py` (1/1) и
-  `test_ac7_invariant_wording.py` (4/4) зелёные без изменений; три
-  остальных файла падают исключительно на описанном выше расхождении
-  порядка состояний. Унифицированный дифф `skills/coding-standards.md`
-  приложен выше, `git apply --check` на чистом дереве прошёл.
-- **Блокирует** — Довести PLAN.md до `status: ready` (и тем самым
-  переход `in_dev -> verifying`, который проверяет `acceptance_tests/`
-  целиком) без ответа по вопросу выше нельзя: `_acceptance_run_refuses`
-  прогоняет РОВНО эту планку, и без её починки переход не пройдёт
-  структурно, независимо от корректности кода части 2.
+  1. (блокирует переход `in_dev -> verifying`) Снятие правки
+     `docs/invariants.md` из код-ветки (ANSWER-1/2 п.3, выполнено этим
+     шагом) делает КРАСНЫМ ровно один метод локальной планки приёмки:
+     `tasks/01M1THKWFXFYNW28HDJGYHQWH6/acceptance_tests/
+     test_ac7_invariant_wording.py::Ac7InvariantTenMentionsPlanChannelTest::
+     test_ac7_invariant_ten_names_plan_as_a_channel` — он читает
+     `docs/invariants.md` напрямую с код-ветки (не через приложение
+     PLAN.md) и требует, чтобы строка инварианта 10 называла `PLAN` как
+     канал (докстрин теста: «не защищённый путь — обычный документ, зона
+     этой задачи по SPEC» — планка писалась ДО решения Оператора «с
+     11.09 инварианты и ADR меняет только Оператор», ANSWER-1/2 п.3, тем
+     же классом расхождения, что и первая эскалация этой задачи про
+     порядок состояний FSM — см. «Предложения системе» выше, второй
+     пункт). Прогон подтверждён: 12/13 методов планки зелёные (включая
+     исправленный этим шагом AC-1), красен только этот один метод.
+     Начать код-ветку под этот тест (вернуть правку `docs/invariants.md`
+     в ветку) значило бы прямо нарушить явную инструкцию ANSWER-1/2 п.3
+     — конфликт между двумя явными указаниями, решить который может
+     только Оператор. Варианты:
+     - **(a)** Оператор через `amend-tests` переводит
+       `test_ac7_invariant_ten_names_plan_as_a_channel` (и только его —
+       три остальных метода этого файла проверяют формулировку, уже
+       присутствующую в `docs/invariants.md` main, и остаются
+       исполняемыми) в manual-маркер по прецеденту AC-9 этого же набора
+       (`test_ac8_ac9_manual_markers.py`: «формат применения диффа/
+       правки protected-пути Оператором после мержа — предмет ревью, не
+       автоматической проверки текста файла»); я не меняю код, перепрогон
+       планки без этого метода даёт 13/13.
+     - **(b)** Оператор явно разрешает ИСКЛЮЧЕНИЕ из правила п.3
+       ИМЕННО для этой правки (SPEC этой задачи заявляла
+       `docs/invariants.md` в `zones:` ДО решения «с 11.09» — правка
+       правомерна как часть уже согласованного SPEC), я возвращаю правку
+       инварианта 10 в код-ветку тем же диффом, что в приложении выше,
+       без изменений в `acceptance_tests/`.
+     - Дефолт при молчании: **(a)** — п.3 ANSWER-1/2 сформулирован как
+       общее правило без даты истечения и без оговорки про уже
+       согласованные SPEC, применяю его буквально; расхождение планки с
+       новым правилом — тот же класс, что и у AC-9 (protected-путь,
+       содержимое которого код-ветка не несёт), решается тем же
+       приёмом.
+- **Контекст** — Замечания ANSWER-1/2 п.1 (порядок состояний FSM) и п.2
+  (журнал «источник plan») закрыты этим шагом: `orchestrator/
+  fsm_advance.py::_apply_plan_budget` теперь пишет `f"${value:.2f}
+  (прежний потолок ${old:.2f}, источник {config.BUDGET_SOURCE_PLAN})"`.
+  `docs/invariants.md` возвращён к состоянию main (`git checkout main --
+  docs/invariants.md`) по п.3; предлагаемая формулировка — в приложении
+  «## Приложение: инвариант 10» выше. `docs/codebase-map.md`
+  перегенерирована (`built_at_sha` на голову ветки). Юнит-тесты:
+  `python3 -m unittest tests.test_invariants` — 60/60 зелёных (включая
+  журнал «бюджет из PLAN | $90.00 (прежний потолок $45.00, источник
+  plan)» в выводе). Приёмочные тесты `tasks/01M1THKWFXFYNW28HDJGYHQWH6/
+  acceptance_tests/` целиком: 12 из 13 методов зелёные (AC-1 из ANSWER-1/2
+  п.2 исправлен и зелёный), красен только
+  `test_ac7_invariant_ten_names_plan_as_a_channel` — предмет вопроса
+  выше, новый код это требование не трогает и не мог бы сделать зелёным,
+  не нарушив п.3 того же ответа.
+- **Блокирует** — Без ответа по вопросу выше PLAN.md нельзя доводить до
+  `status: ready`: переход `in_dev -> verifying` прогоняет
+  `acceptance_tests/` целиком (`_acceptance_run_refuses`) и откажет на
+  красном методе структурно, независимо от корректности остального кода
+  части 2 — то же ограничение, что и у первой эскалации этой задачи.
