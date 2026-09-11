@@ -1,7 +1,8 @@
 """Ревью-пакет: вход ревьювера собирает оркестратор, а не сам агент."""
 import re
 
-from . import artifact_source, brief, config, context_package, gitcmd, store
+from . import (artifact_source, brief, config, context_package, gitcmd,
+              repo_context, store)
 
 WORKTREE_NOTE = " (в ветке нет, показан файл из рабочего дерева)"
 
@@ -86,7 +87,8 @@ def artifact_part(label: str, text: str | None, note: str,
 
 
 def git_diff_part(base: str, branch: str, *flags: str,
-                  pathspec: tuple[str, ...] = ()) -> tuple[str, int, str]:
+                  pathspec: tuple[str, ...] = (),
+                  repo=None) -> tuple[str, int, str]:
     """Вывод `git diff [flags] base...branch [-- pathspec...]`, число строк
     и причина сбоя.
 
@@ -102,6 +104,11 @@ def git_diff_part(base: str, branch: str, *flags: str,
     Смысл содержимого (исключить каталог, ограничиться каталогом) решает
     вызывающий код — сама функция им не интересуется.
 
+    `repo` (SPEC 01M1R5B33CC7E6BZK085XV3ZCX, AC-9) — клон, в котором
+    считается diff, не всегда `config.ROOT`: внешний target живёт в
+    своём клоне (`orchestrator/repo_context.py`), не в репозитории
+    пульта. `None` (по умолчанию) — прежнее поведение байт-в-байт.
+
     git не ответил — это часть пакета с причиной, а не пустой diff:
     молча показать ревьюверу «изменений нет» значит выпросить аппрув
     вслепую. Причину возвращаем отдельно от текста: в журнале «строк diff 0»
@@ -112,7 +119,7 @@ def git_diff_part(base: str, branch: str, *flags: str,
     if pathspec:
         args += ["--", *pathspec]
     try:
-        res = gitcmd.git(*args)
+        res = gitcmd.in_repo(repo, *args) if repo else gitcmd.git(*args)
     except UnicodeDecodeError as exc:
         # git считает файл бинарным по NUL-байту в первых 8 КБ, поэтому
         # текст в cp1251/latin-1 выкладывается в diff байтами как есть, а
@@ -281,10 +288,16 @@ def review_package(conn, task_id: str, title: str, branch: str, *,
     # AC-2/AC-6). Правило одно для полного и инкрементального diff'а —
     # оба вызова ниже несут один и тот же исключающий pathspec.
     tasks_dir_exclude = (".", f":!tasks/{task_id}/")
+    # Репозиторный контекст target'а (SPEC 01M1R5B33CC7E6BZK085XV3ZCX,
+    # AC-9): diff внешнего target считается в его клоне, не в
+    # `config.ROOT`; для self — прежнее поведение (repo=None).
+    repo = repo_context.path_or_none(
+        repo_context.resolve(store.task_target(conn, task_id)))
     stat, _, stat_failed = git_diff_part(base, branch, "--stat",
-                                         pathspec=tasks_dir_exclude)
+                                         pathspec=tasks_dir_exclude, repo=repo)
     diff, diff_lines, diff_failed = git_diff_part(base, branch,
-                                                  pathspec=tasks_dir_exclude)
+                                                  pathspec=tasks_dir_exclude,
+                                                  repo=repo)
 
     # Статус CI подтянутой головы (ADR-0015, требование 4/AC-13) — см.
     # докстринг функции выше.

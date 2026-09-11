@@ -716,19 +716,21 @@ class RealGitSandbox(TmpRootTest):
 
 def assert_acceptance_run_called(acc_run, tdir: Path, code_root: Path) -> None:
     """`acc_run` (мок `acceptance.run`) обязан быть позван РОВНО с этим
-    `tdir` (первый позиционный аргумент) и этим `code_root` (именованный) —
-    оба сверяются отдельно, не связкой (SPEC 01M1TKP45EM16ZMJGQKNZA5T7J,
-    требование 1, AC-4): узел материализации планки (SPEC
-    01M1RNZ6V7TTTTYAHBMF8JBQQS) не имеет права спутать рабочий каталог
-    кода задачи с временным каталогом ни по одному из двух аргументов."""
+    `tdir` (первый позиционный аргумент) и этим `cwd` (именованный —
+    `code_root` переименован в `cwd` задачей SPEC
+    01M1R5B33CC7E6BZK085XV3ZCX, AC-11) — оба сверяются отдельно, не
+    связкой (SPEC 01M1TKP45EM16ZMJGQKNZA5T7J, требование 1, AC-4): узел
+    материализации планки (SPEC 01M1RNZ6V7TTTTYAHBMF8JBQQS) не имеет
+    права спутать рабочий каталог кода задачи с временным каталогом ни
+    по одному из двух аргументов."""
     acc_run.assert_called_once()
     called_tdir = acc_run.call_args[0][0]
-    called_code_root = acc_run.call_args.kwargs.get("code_root")
+    called_cwd = acc_run.call_args.kwargs.get("cwd")
     assert called_tdir == tdir, (
         f"acceptance.run вызван с tdir={called_tdir!r}, ожидался {tdir!r}")
-    assert called_code_root == code_root, (
-        f"acceptance.run вызван с code_root={called_code_root!r}, ожидался "
-        f"code_root={code_root!r}")
+    assert called_cwd == code_root, (
+        f"acceptance.run вызван с cwd={called_cwd!r}, ожидался "
+        f"cwd={code_root!r}")
 
 
 _PLAN_READY_TEMPLATE = """---

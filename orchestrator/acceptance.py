@@ -50,19 +50,22 @@ def _timeout_text(value: bytes | str | None) -> str:
     return value.decode("utf-8", errors="replace") if isinstance(value, bytes) else value
 
 
-def run(tdir: Path, code_root: Path | None = None) -> tuple[bool, str]:
+def run(tdir: Path, cwd: Path | None = None) -> tuple[bool, str]:
     """(зелёно, хвост вывода) — детерминированный прогон pytest'ом (SPEC
-    01M1TKP6AAY4W8GDGZNA9R0JZT, требование 1) с `code_root`, равным
+    01M1TKP6AAY4W8GDGZNA9R0JZT, требование 1) с `cwd`, равным
     рабочему каталогу кода задачи (SPEC 01M1RNZ6V7TTTTYAHBMF8JBQQS,
     требование 2, AC-2/AC-3; контракт имени параметра — hotfix 88b38022,
-    ADR-0013): `cwd` прогона — единственный способ, которым pytest
-    находит и `orchestrator/`-код ветки задачи (материализация
+    ADR-0013; переименован `code_root` -> `cwd` задачей SPEC
+    01M1R5B33CC7E6BZK085XV3ZCX, AC-11 — клон контекста target'а, не
+    обязательно рабочая копия КОДА в узком смысле прежнего имени):
+    `cwd` прогона — единственный способ, которым pytest находит и
+    `orchestrator/`-код ветки задачи (материализация
     `materialize_from_branch` кладёт планку по штатному пути
     `tasks/<id>/acceptance_tests/` ИМЕННО этого каталога), и
     `pyproject.toml` корня репозитория (таймаут отдельного теста,
     требования 4/6) — pytest ищет конфигурацию, поднимаясь от `cwd`, тем
     же приёмом, каким раньше unittest discover неявно вставлял `cwd` в
-    `sys.path`. `code_root=None` (вызовы вне зоны этой задачи, например
+    `sys.path`. `cwd=None` (вызовы вне зоны этой задачи, например
     `orchestrator/amend.py`) — прежнее поведение, `config.ROOT`.
 
     `-p no:cacheprovider` (требование 5) — `.pytest_cache/` не создаётся
@@ -92,7 +95,7 @@ def run(tdir: Path, code_root: Path | None = None) -> tuple[bool, str]:
     tests_dir = tdir / "acceptance_tests"
     if not tests_dir.is_dir():
         return True, "acceptance_tests/ нет — приёмочные тесты не заведены"
-    run_cwd = code_root if code_root is not None else config.ROOT
+    run_cwd = cwd if cwd is not None else config.ROOT
     location_note = f"планка: {tests_dir}, cwd: {run_cwd}"
     try:
         res = subprocess.run(

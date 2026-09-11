@@ -35,8 +35,8 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from orchestrator import (auto, catalog, config, fixation, fsm,  # noqa: E402
-                          fsm_autogate, gates, github_adapter, gitcmd,
-                          projects, runner, store)
+                          fsm_advance, fsm_autogate, gates, github_adapter,
+                          gitcmd, projects, runner, store)
 from tests.sandbox import (FakeProc, TmpRootTest, capture,  # noqa: E402
                            capture_new_task_id, claude_only_popen,
                            network_guarded_real_run, resilient_tmp_cleanup)
@@ -316,8 +316,18 @@ class ExternalTargetAdvanceIgnoresDirtyCheckTest(TmpRootTest):
         # `task/sled-t001` (только артефактную PLAN-заглушку), а предмет
         # теста — сверка чистоты, не origin-push (у него свои тесты,
         # `tests/test_github_adapter.py`).
+        #
+        # Гейт ёмкости (SPEC 01M1R5B33CC7E6BZK085XV3ZCX, AC-10) теперь
+        # считает diff в клоне контекста target'а для ЛЮБОГО target —
+        # `config.PROJECTS/sled/workspace` здесь пустой каталог, не
+        # настоящий git-клон (`cmd_target_init` его не заводит, это ТЗ-2,
+        # вне зоны этой задачи), и гейт fail-closed отказал бы переходу
+        # по не отвечающему git — предмет ЭТОГО теста (сверка чистоты),
+        # не гейт ёмкости, поэтому он замокан отдельно.
         with mock.patch.object(github_adapter, "ensure_head_in_origin",
-                              return_value=(True, "")):
+                              return_value=(True, "")), \
+             mock.patch.object(fsm_advance, "_capacity_gate_refuses",
+                               return_value=False):
             out = capture(fsm.cmd_advance, self.TASK)
 
         self.assertEqual(store.get_task(store.db(), self.TASK)["state"],

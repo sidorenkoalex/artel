@@ -14,14 +14,14 @@ test_ac13_ac14_snapshot_on_close.py`; путь `done`
 гейта) — минуя lease/мьютекс/sha-подтверждение `cmd_approve`, которые
 это тело не касаются.
 
-Кодовая ветка задачи внешнего target сегодня (до A7 — SPEC «Не входит»)
-мержится в main ПУЛЬТА тем же кодом, что и self: A7 ещё не развела
-семантику мержа внешнего кода на его собственном фордже — заводим
-реальную ветку `t["branch"]` прямо в репозитории пульта (`self.root`),
-иначе `_cmd_approve_merge_gate` не смог бы её смержить вовсе. Артефактная
-ветка пульта и bare-репозиторий `origin` целевого — то же самое, что уже
-использует `tasks/T094/acceptance_tests/_sandbox.py::
-ExternalTargetGitSandbox` для AC-13/AC-14 на пути `killed`.
+Кодовая ветка задачи внешнего target мержится в её СОБСТВЕННЫЙ клон и
+origin (`config.PROJECTS/<target>/workspace`, её bare `origin`), не в
+main ПУЛЬТА — репозиторный контекст target'а (SPEC
+01M1R5B33CC7E6BZK085XV3ZCX, orchestrator/repo_context.py) переведён на
+это этой задачей; артефактная ветка (`tasks/<id>/`) остаётся в пульте
+(`self.root`) — то же самое, что уже использует `tasks/T094/
+acceptance_tests/_sandbox.py::ExternalTargetGitSandbox` для AC-13/AC-14
+на пути `killed`.
 """
 import shutil
 import subprocess
@@ -69,10 +69,10 @@ class DonePathSnapshotTest(RealGitSandbox):
         capture(catalog.cmd_init)
 
         # Bare-remote пульта без сети (тот же приём, что tasks/T053/
-        # acceptance_tests/_sandbox.py): `_cmd_approve_merge_gate` делает
-        # безусловный `git pull --ff-only` на main ДО merge — без
-        # настроенного `origin`/tracking git отказывает раньше, чем тест
-        # успевает проверить снапшот.
+        # acceptance_tests/_sandbox.py): артефактная ветка (`tasks/<id>/`)
+        # и снапшот публикуются через её origin — без настроенного
+        # `origin`/tracking git отказывает раньше, чем тест успевает
+        # проверить снапшот.
         pult_origin = Path(tempfile.mkdtemp())
         self.addCleanup(shutil.rmtree, pult_origin, ignore_errors=True)
         self.git("init", "-q", "--bare", str(pult_origin))
@@ -80,16 +80,22 @@ class DonePathSnapshotTest(RealGitSandbox):
         self.git("push", "-q", "-u", "origin", config.MAIN_BRANCH)
 
         self.branch = f"task/{TASK.lower()}-x"
-        self.git("checkout", "-b", self.branch)
-        (self.root / "feature.txt").write_text("код фичи\n", encoding="utf-8")
-        # `add` ограничен ИМЕННО этим файлом (не `-A`): `.artel/state.db`
-        # — незакоммиченный побочный продукт `store.create_schema` — при
-        # `-A` был бы застейджен вместе с ним, закоммичен на этой ветке и
-        # СНЕСЁН с диска следующим `checkout main` (main его не отслеживает
-        # вовсе) — вырожденный дефект песочницы, обойдён точным `add`.
-        self.git("add", "feature.txt")
-        self.git("commit", "-q", "-m", f"{TASK}: код фичи")
-        self.git("checkout", config.MAIN_BRANCH)
+
+        # Репозиторный контекст target'а (SPEC 01M1R5B33CC7E6BZK085XV3ZCX):
+        # объявление "extproj" в targets.yaml — предпосылка
+        # `repo_context.resolve`, без которой merge_gate теперь отказывает
+        # ДО какого-либо merge (targets.yaml не читается — fail-closed).
+        config.TARGETS.write_text(
+            "targets:\n"
+            f"  {TARGET}:\n"
+            "    forge: github\n"
+            f"    url: http://localhost/{TARGET}\n"
+            f"    base: {config.MAIN_BRANCH}\n"
+            f"    token_slot: {TARGET}-token\n"
+            "    no_paths: []\n"
+            "    project_skills: []\n"
+            "    merge_gate: operator\n",
+            encoding="utf-8")
 
         store.insert_task(store.db(), TASK, "Задача внешнего target",
                           "merge_gate", self.branch, TARGET,
@@ -98,25 +104,39 @@ class DonePathSnapshotTest(RealGitSandbox):
             TASK, {f"tasks/{TASK}/PLAN.md": "план\n"}, f"{TASK}: план")
 
         # bare-репозиторий целевого — то же, что `_sandbox.
-        # ExternalTargetGitSandbox` (снапшот пушится в его `refs/artifacts/*`).
+        # ExternalTargetGitSandbox` (снапшот пушится в его `refs/artifacts/*`,
+        # а теперь и код задачи мержится в его `refs/heads/<base>`,
+        # SPEC 01M1R5B33CC7E6BZK085XV3ZCX, AC-12).
         bare_tmp = tempfile.TemporaryDirectory()
         self.addCleanup(resilient_tmp_cleanup, bare_tmp)
         self.target_origin = Path(bare_tmp.name) / "origin.git"
         subprocess.run(["git", "init", "-q", "--bare", "-b", config.MAIN_BRANCH,
                         str(self.target_origin)], check=True,
                        capture_output=True, text=True)
-        target_workspace = config.PROJECTS / TARGET / "workspace"
-        target_workspace.mkdir(parents=True)
-        self.wgit(target_workspace, "init", "-q", "-b", config.MAIN_BRANCH)
-        self.wgit(target_workspace, "remote", "add", "origin",
+        self.target_workspace = config.PROJECTS / TARGET / "workspace"
+        self.target_workspace.mkdir(parents=True)
+        self.wgit(self.target_workspace, "init", "-q", "-b", config.MAIN_BRANCH)
+        self.wgit(self.target_workspace, "remote", "add", "origin",
                   str(self.target_origin))
-        self.wgit(target_workspace, "config", "user.email",
+        self.wgit(self.target_workspace, "config", "user.email",
                   "artel@example.invalid")
-        self.wgit(target_workspace, "config", "user.name", "artel tests")
-        (target_workspace / "marker.txt").write_text("main\n", encoding="utf-8")
-        self.wgit(target_workspace, "add", "-A")
-        self.wgit(target_workspace, "commit", "-q", "-m", "init")
-        self.wgit(target_workspace, "push", "-q", "origin", config.MAIN_BRANCH)
+        self.wgit(self.target_workspace, "config", "user.name", "artel tests")
+        (self.target_workspace / "marker.txt").write_text(
+            "main\n", encoding="utf-8")
+        self.wgit(self.target_workspace, "add", "-A")
+        self.wgit(self.target_workspace, "commit", "-q", "-m", "init")
+        self.wgit(self.target_workspace, "push", "-q", "origin",
+                  config.MAIN_BRANCH)
+
+        # Ветка задачи — В КЛОНЕ ЦЕЛЕВОГО (не в `self.root`, SPEC
+        # 01M1R5B33CC7E6BZK085XV3ZCX): merge_gate внешнего target теперь
+        # мержит эту ветку прямо там, не код пульта.
+        self.wgit(self.target_workspace, "checkout", "-q", "-b", self.branch)
+        (self.target_workspace / "feature.txt").write_text(
+            "код фичи\n", encoding="utf-8")
+        self.wgit(self.target_workspace, "add", "feature.txt")
+        self.wgit(self.target_workspace, "commit", "-q", "-m",
+                  f"{TASK}: код фичи")
 
         ci_patcher = mock.patch.object(
             ci, "branch_status", lambda branch: (True, "зелёный (тест)"))

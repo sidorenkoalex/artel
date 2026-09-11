@@ -238,7 +238,7 @@ class BranchFreshnessGateTest(LightTransitionSandbox):
             "материализоваться в рабочий каталог кода задачи (worktree "
             "self-target), не во временный каталог")
         self.assertEqual(
-            acc_run.call_args_list[0].kwargs.get("code_root"), self.wt_path,
+            acc_run.call_args_list[0].kwargs.get("cwd"), self.wt_path,
             "SPEC 01M1RNZ6V7TTTTYAHBMF8JBQQS AC-2: cwd прогона обязан "
             "быть равен рабочему каталогу кода задачи, не config.ROOT")
 
@@ -271,7 +271,7 @@ class BranchFreshnessGateTest(LightTransitionSandbox):
             "SPEC 01M1RNZ6V7TTTTYAHBMF8JBQQS AC-1: планка материализуется "
             "в рабочий каталог кода задачи, не во временный каталог")
         self.assertEqual(
-            acc_run.call_args.kwargs.get("code_root"), self.wt_path,
+            acc_run.call_args.kwargs.get("cwd"), self.wt_path,
             "SPEC 01M1RNZ6V7TTTTYAHBMF8JBQQS AC-2: cwd прогона обязан "
             "быть равен рабочему каталогу кода задачи, не config.ROOT")
 
@@ -296,7 +296,7 @@ class BranchFreshnessGateTest(LightTransitionSandbox):
         self.setup_recording()
         behind_calls = []
 
-        def spying_commits_behind(branch, base=None):
+        def spying_commits_behind(branch, base=None, repo=None):
             behind_calls.append((branch, base))
             return 3
 
@@ -596,18 +596,28 @@ class TargetSourcedRemoteTest(unittest.TestCase):
             "SELECT branch FROM tasks WHERE id=?",
             (self.TASK,)).fetchone()["branch"]
 
-    def test_pull_freshness_fetches_target_url_not_pult_origin(self):
+    def test_pull_freshness_fetches_inside_the_target_clone_not_the_pult(self):
         """Ветка не отстала (`commits_behind` -> 0) — сверке этого
         достаточно, чтобы проявить свой источник: fetch обязан случиться
         ДО самого сравнения (AC-1 для self-target, тот же порядок здесь),
-        и его remote — `url` записи `acme`, не `"origin"`; ветка фетча —
-        её `base` (`trunk`), не `config.MAIN_BRANCH` (`main`).
+        внутри клона контекста target'а (`config.PROJECTS/acme/workspace`,
+        `-C`), не в `config.ROOT`; ветка фетча — её `base` (`trunk`), не
+        `config.MAIN_BRANCH` (`main`).
 
-        Ловит мутацию: `_origin_main_source` для не-self target возвращает
-        `"origin"`/`config.MAIN_BRANCH` вместо `entry["url"]`/`entry["base"]`
-        — AC-10 тихо сломается, fetch уйдёт в репозиторий пульта вместо
-        `acme`, и `assertIn`/`assertNotIn` по `remote_args` здесь это
-        поймают.
+        Переведено на клон контекста target'а задачей SPEC
+        01M1R5B33CC7E6BZK085XV3ZCX (AC-4, требование 3): remote внешнего
+        target на git-уровне — литеральное имя `"origin"` (клон несёт
+        свой git remote `origin` по тому же соглашению, что и
+        `config.ROOT` пульта, `orchestrator/repo_context.py` докстринг),
+        не голый `url` записи — тот недостижим без настоящего remote
+        (эта же логика раньше уходила в `config.ROOT` литералом
+        `"fetch", "-q", url, base` без `-C`, что и покрывал прежний
+        вариант этого теста до AC-4).
+
+        Ловит мутацию: fetch по-прежнему уходит в `config.ROOT`
+        (`c[0] == "fetch"` без `-C`, литералом `entry["url"]` вторым
+        аргументом) — `fetch_calls` здесь останется пустым, и
+        `assertTrue` это поймает.
         """
         self.tdir.mkdir(parents=True, exist_ok=True)
         (self.tdir / "PLAN.md").write_text(
@@ -620,20 +630,24 @@ class TargetSourcedRemoteTest(unittest.TestCase):
         with mock.patch.object(gitcmd, "commits_behind", return_value=0):
             self.capture(fsm.cmd_advance, self.TASK)
 
-        fetch_calls = [c for c in self.calls if c and c[0] == "fetch"]
-        self.assertTrue(fetch_calls, "AC-10: сверка обязана фетчить "
-                        "источник target'а перед сравнением")
+        fetch_calls = [c for c in self.calls
+                       if len(c) > 2 and c[0] == "-C" and c[2] == "fetch"]
+        self.assertTrue(fetch_calls, "SPEC 01M1R5B33CC7E6BZK085XV3ZCX AC-4: "
+                        "сверка обязана фетчить в клоне контекста target'а")
         remote_args = fetch_calls[0]
-        self.assertNotIn("origin", remote_args,
-                         "AC-10: remote внешнего target — из его "
-                         "конфигурации, не хардкод origin пульта")
-        self.assertIn("http://127.0.0.1:9/acme-target.git", remote_args,
-                     "AC-10: remote — url записи target'а из targets.yaml")
+        self.assertIn(str(config.PROJECTS / "acme" / "workspace"),
+                     remote_args,
+                     "AC-4: fetch идёт в клон контекста target'а "
+                     "(config.PROJECTS/<target>/workspace), не в "
+                     "config.ROOT пульта")
+        self.assertIn("origin", remote_args,
+                     "AC-4: remote — локальное имя origin клона target'а "
+                     "(git-уровень), не голый url targets.yaml")
         self.assertIn("trunk", remote_args,
-                     "AC-10: ветка фетча — base записи target'а, не "
+                     "AC-4: ветка фетча — base записи target'а, не "
                      "config.MAIN_BRANCH")
         self.assertNotIn(config.MAIN_BRANCH, remote_args,
-                         "AC-10: config.MAIN_BRANCH — имя ветки self-"
+                         "AC-4: config.MAIN_BRANCH — имя ветки self-"
                          "target'а, не этого target'а")
 
 

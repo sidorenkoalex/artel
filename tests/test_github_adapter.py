@@ -177,12 +177,20 @@ class EnsureHeadInOriginTest(unittest.TestCase):
         self.journal_patcher = mock.patch.object(github_adapter.store, "journal")
         self.journal = self.journal_patcher.start()
         self.addCleanup(self.journal_patcher.stop)
+        # `ensure_head_in_origin` резолвит репозиторный контекст target'а
+        # (SPEC 01M1R5B33CC7E6BZK085XV3ZCX) через `store.task_target` —
+        # self по умолчанию, тем же путём, что и до этой задачи.
+        self.task_target_patcher = mock.patch.object(
+            github_adapter.store, "task_target",
+            lambda conn, tid: "artel")
+        self.task_target_patcher.start()
+        self.addCleanup(self.task_target_patcher.stop)
 
     def test_matching_sha_is_a_noop(self):
         with mock.patch.object(github_adapter.gitcmd, "branch_head_sha",
-                               lambda b: "abc123"), \
+                               lambda b, repo=None: "abc123"), \
              mock.patch.object(github_adapter.gitcmd, "remote_branch_sha",
-                               lambda b: "abc123"), \
+                               lambda b, repo=None: "abc123"), \
              mock.patch.object(github_adapter.gitcmd, "git") as git_mock:
             ok, detail = github_adapter.ensure_head_in_origin(
                 self.conn, "T001", "task/t001-x")
@@ -200,9 +208,9 @@ class EnsureHeadInOriginTest(unittest.TestCase):
             return subprocess.CompletedProcess(list(args), 0, "ok\n", "")
 
         with mock.patch.object(github_adapter.gitcmd, "branch_head_sha",
-                               lambda b: "abc123"), \
+                               lambda b, repo=None: "abc123"), \
              mock.patch.object(github_adapter.gitcmd, "remote_branch_sha",
-                               lambda b: ""), \
+                               lambda b, repo=None: ""), \
              mock.patch.object(github_adapter.gitcmd, "git", fake_git):
             ok, detail = github_adapter.ensure_head_in_origin(
                 self.conn, "T001", "task/t001-x")
@@ -217,9 +225,9 @@ class EnsureHeadInOriginTest(unittest.TestCase):
         """AC-2: расхождение по sha, не только полное отсутствие ветки в
         origin, тоже обязано запустить push."""
         with mock.patch.object(github_adapter.gitcmd, "branch_head_sha",
-                               lambda b: "new-sha"), \
+                               lambda b, repo=None: "new-sha"), \
              mock.patch.object(github_adapter.gitcmd, "remote_branch_sha",
-                               lambda b: "old-sha"), \
+                               lambda b, repo=None: "old-sha"), \
              mock.patch.object(
                  github_adapter.gitcmd, "git",
                  lambda *a: subprocess.CompletedProcess(list(a), 0, "ok\n", "")):
@@ -231,9 +239,9 @@ class EnsureHeadInOriginTest(unittest.TestCase):
 
     def test_failed_push_is_a_named_refusal(self):
         with mock.patch.object(github_adapter.gitcmd, "branch_head_sha",
-                               lambda b: "abc123"), \
+                               lambda b, repo=None: "abc123"), \
              mock.patch.object(github_adapter.gitcmd, "remote_branch_sha",
-                               lambda b: ""), \
+                               lambda b, repo=None: ""), \
              mock.patch.object(
                  github_adapter.gitcmd, "git",
                  lambda *a: subprocess.CompletedProcess(
@@ -250,9 +258,9 @@ class EnsureHeadInOriginTest(unittest.TestCase):
 
     def test_push_returning_none_is_also_a_named_refusal(self):
         with mock.patch.object(github_adapter.gitcmd, "branch_head_sha",
-                               lambda b: "abc123"), \
+                               lambda b, repo=None: "abc123"), \
              mock.patch.object(github_adapter.gitcmd, "remote_branch_sha",
-                               lambda b: ""), \
+                               lambda b, repo=None: ""), \
              mock.patch.object(github_adapter.gitcmd, "git", lambda *a: None):
             ok, detail = github_adapter.ensure_head_in_origin(
                 self.conn, "T001", "task/t001-x")

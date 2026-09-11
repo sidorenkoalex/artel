@@ -11,8 +11,8 @@ from typing import NamedTuple
 from scripts import guard
 
 from . import (acceptance, agent_log, artifact_source, artifacts, auto, budget,
-              ci, config, fsm, fsm_autogate, gitcmd, github_adapter, store,
-              workspace, yamlmini)
+              ci, config, fsm, fsm_autogate, gitcmd, github_adapter,
+              repo_context, store, workspace, yamlmini)
 # Функция, не модуль (SPEC 01M1GCN1FPSC1A6WK9WD1Q1V8X, требование 5): этот
 # же модуль ниже определяет обработчик состояния `review` под тем же
 # именем `review` — `from . import review` тут вело бы к коллизии имён,
@@ -514,26 +514,26 @@ def _capacity_gate(conn, task_id: str, t) -> GateRefusal | None:
     приёмом мерится и `code_size` ниже, хотя там пустой код-diff и так не
     превысил бы потолок.
 
-    Внешний (не self) target — гейт не проверяется вовсе, тем же
-    доводом «сознательно вне объёма этой итерации», что уже
-    зафиксирован парой функций выше в этом же файле для лока
-    `acceptance_tests/` с внешним target: `git diff config.MAIN_BRANCH
-    ...<ветка задачи>` в `config.ROOT` — репозитории ПУЛЬТА — не видит
-    настоящий код внешнего target (тот живёт в отдельном репозитории
-    `config.PROJECTS/<target>/workspace`), а до самого перехода
-    `tasks/<id>/` для внешнего target ещё не закоммичен в свою ветку
-    (коммитит `fixation._fix_external` уже ПОСЛЕ решения перейти,
-    `ExternalTargetAdvanceIgnoresDirtyCheckTest`) — fail-closed здесь
-    заблокировал бы КАЖДЫЙ переход `in_dev -> review` для КАЖДОЙ задачи
-    любого внешнего target навсегда, а не редкий сбой git."""
-    if store.task_target(conn, task_id) != config.DEFAULT_TARGET:
+    Репозиторный контекст target'а (SPEC 01M1R5B33CC7E6BZK085XV3ZCX,
+    требование 5, AC-10): для target ≠ self гейт больше не пропускается
+    безусловно — база сравнения и diff считаются в клоне контекста
+    target'а (`orchestrator/repo_context.py`), тем же способом, что и
+    `review.git_diff_part` (AC-9). Контекст не читается (targets.yaml
+    сломан/неизвестный target) — гейт деградирует на «пропустить», тем
+    же приёмом, что `fsm._origin_main_source` (конфигурация не читается
+    — сравнивать не с чем, не повод блокировать переход).
+
+    `True` — переход отклонён (планка красная)."""
+    ctx = repo_context.resolve(store.task_target(conn, task_id))
+    if ctx is None:
         return None
+    repo = repo_context.path_or_none(ctx)
     tasks_prefix = f"tasks/{task_id}/"
     # База сравнения — merge-base с origin/main или локальным main (tasks/
     # 01M1SG9T962WJJ31S282GWM0EN, AC-1/AC-3), не голый `config.MAIN_BRANCH`:
     # локальный пин по построению отстаёт от origin/main, которую ветка
     # задачи подтягивает, и раздувает снимок чужими коммитами.
-    base = gitcmd.diff_base(t["branch"])
+    base = gitcmd.diff_base(t["branch"], repo=repo)
     action = "переход отклонён: гейт ёмкости diff"
     if base is None:
         detail = (f"гейт ёмкости: git не ответил на определение базы "
@@ -544,7 +544,7 @@ def _capacity_gate(conn, task_id: str, t) -> GateRefusal | None:
                f"для {t['branch']}, и повтори artel.py advance {task_id}")
         return GateRefusal(action, detail, hint)
     code_diff, _, reason = _review_git_diff_part(
-        base, t["branch"], pathspec=(".", f":!{tasks_prefix}"))
+        base, t["branch"], pathspec=(".", f":!{tasks_prefix}"), repo=repo)
     if reason:
         detail = (f"гейт ёмкости: git не ответил на diff снимка "
                  f"({base}...{t['branch']}) — сверка размера невозможна: "
@@ -558,7 +558,7 @@ def _capacity_gate(conn, task_id: str, t) -> GateRefusal | None:
     if code_size <= config.REVIEW_SNAPSHOT_DIFF_MAX_BYTES:
         return None
     artifacts_diff, _, artifacts_reason = _review_git_diff_part(
-        base, t["branch"], pathspec=(tasks_prefix,))
+        base, t["branch"], pathspec=(tasks_prefix,), repo=repo)
     if artifacts_reason:
         artifacts_note = f"неизвестен (git не ответил: {artifacts_reason})"
     elif artifacts_diff == _EMPTY_DIFF_TEXT:
@@ -567,7 +567,7 @@ def _capacity_gate(conn, task_id: str, t) -> GateRefusal | None:
         artifacts_note = f"{len(artifacts_diff.encode('utf-8'))} байт"
     # Источник базы в сообщении (требование 4/AC-6) — Оператор видит, с чем
     # реально сравнивали, не только литерал diff-диапазона.
-    source = gitcmd.diff_base_source(t["branch"])
+    source = gitcmd.diff_base_source(t["branch"], repo=repo)
     detail = (f"{CAPACITY_GATE_REASON} ({task_id} «{t['title']}», база "
              f"сравнения {base} от {source}): diff кода {code_size} байт "
              f"> потолка {config.REVIEW_SNAPSHOT_DIFF_MAX_BYTES} байт "
@@ -1103,7 +1103,7 @@ def _acceptance_run_refuses(conn, task_id: str, t, tdir, target: str,
     elif workspace.on_task_branch(task_id, t["branch"]) is True:
         run_cwd = workspace.path(task_id)
         acc_tdir = run_cwd / "tasks" / task_id
-    green, tail = acceptance.run(acc_tdir, code_root=run_cwd)
+    green, tail = acceptance.run(acc_tdir, cwd=run_cwd)
     # Fingerprint окружения (SPEC T101, требование 4б, AC-5) — часть
     # исхода прогона приёмочных тестов, значение поля `detail`
     # существующего журнального события, без новой таблицы/колонки.

@@ -11,6 +11,7 @@
 """
 import json
 import subprocess
+from pathlib import Path
 
 from . import config, gitcmd
 
@@ -20,7 +21,8 @@ from . import config, gitcmd
 GREEN = {"success", "skipped", "neutral"}
 
 
-def gh(*args: str, timeout: int | None = None) -> subprocess.CompletedProcess:
+def gh(*args: str, timeout: int | None = None,
+      repo: str | None = None) -> subprocess.CompletedProcess:
     """`gh` в корне репозитория; отсутствие CLI — такой же ненулевой код.
 
     Как и в `gitcmd.git`: разбирает исход вызывающий, а «команды нет»,
@@ -30,10 +32,17 @@ def gh(*args: str, timeout: int | None = None) -> subprocess.CompletedProcess:
     без вывода и без конца. `timeout` по умолчанию — `GH_TIMEOUT_SEC`
     (короткий REST-опрос); `trigger_rerun` передаёт свой, куда больший —
     `gh run watch` реально ждёт завершения workflow, не ответа API.
+
+    `repo` (SPEC 01M1R5B33CC7E6BZK085XV3ZCX, AC-2) — адрес форджа
+    (`targets.yaml[target]["url"]`) внешнего target: дописывает `--repo
+    <repo>` в конец argv, `gh` резолвит владельца/репозиторий по нему,
+    не по remote `cwd`. `None` (по умолчанию, self) — argv и `cwd`
+    байт-в-байт как до этой задачи, флаг не добавляется вовсе.
     """
     timeout_sec = config.GH_TIMEOUT_SEC if timeout is None else timeout
+    full_args = (*args, "--repo", repo) if repo else args
     try:
-        return subprocess.run(["gh", *args], cwd=config.ROOT,
+        return subprocess.run(["gh", *full_args], cwd=config.ROOT,
                               capture_output=True, text=True,
                               timeout=timeout_sec)
     except subprocess.TimeoutExpired:
@@ -43,9 +52,16 @@ def gh(*args: str, timeout: int | None = None) -> subprocess.CompletedProcess:
         return subprocess.CompletedProcess(args, 1, "", str(exc))
 
 
-def head_sha(branch: str) -> tuple[str, str]:
-    """Sha головного коммита ветки задачи и причина, если его нет."""
-    res = gitcmd.git("rev-parse", "--verify", f"refs/heads/{branch}")
+def head_sha(branch: str, repo: Path | None = None) -> tuple[str, str]:
+    """Sha головного коммита ветки задачи и причина, если его нет.
+
+    `repo` (SPEC 01M1R5B33CC7E6BZK085XV3ZCX, AC-3) — клон, в котором
+    читается голова (путь, не URL — в отличие от `repo=` у `gh`),
+    не всегда `config.ROOT`. `None` (по умолчанию) — прежнее поведение
+    байт-в-байт.
+    """
+    args = ("rev-parse", "--verify", f"refs/heads/{branch}")
+    res = gitcmd.in_repo(repo, *args) if repo else gitcmd.git(*args)
     sha = res.stdout.strip() if res.returncode == 0 else ""
     if not sha:
         return "", (f"головной коммит ветки {branch} не определён: "
@@ -53,10 +69,18 @@ def head_sha(branch: str) -> tuple[str, str]:
     return sha, ""
 
 
-def check_runs_page(sha: str, page: int) -> tuple[dict | None, str]:
-    """Одна страница проверок коммита; (None, причина) — ответа нет."""
+def check_runs_page(sha: str, page: int,
+                    repo: str | None = None) -> tuple[dict | None, str]:
+    """Одна страница проверок коммита; (None, причина) — ответа нет.
+
+    `repo` — адрес форджа (`gh --repo`, SPEC 01M1R5B33CC7E6BZK085XV3ZCX,
+    AC-2), тот же смысл, что у `gh(repo=...)`. `repo=None` (по умолчанию)
+    не подставляется дальше как явная kwarg — байт-в-байт прежний вызов
+    `gh(...)`, который существующие заглушки-моки этого модуля (сигнатура
+    `(*args)`, без `**kwargs`) продолжают понимать."""
     res = gh("api", f"repos/{{owner}}/{{repo}}/commits/{sha}/check-runs"
-                    f"?per_page={config.CI_CHECKS_PER_PAGE}&page={page}")
+                    f"?per_page={config.CI_CHECKS_PER_PAGE}&page={page}",
+            **({"repo": repo} if repo else {}))
     if res.returncode != 0:
         detail = (res.stderr or res.stdout).strip()[:200]
         return None, f"gh не ответил: {detail or f'код {res.returncode}'}"
@@ -125,7 +149,7 @@ def check_runs(sha: str) -> tuple[list | None, str]:
     return runs, ""
 
 
-def run_list(branch: str) -> tuple[list | None, str]:
+def run_list(branch: str, repo: str | None = None) -> tuple[list | None, str]:
     """Запуски `gh run list` по ветке; (None, причина) — ответа нет.
 
     Второй источник статуса CI для `verifying` (роадмап P3, T040; SPEC
@@ -133,10 +157,14 @@ def run_list(branch: str) -> tuple[list | None, str]:
     check-runs коммита временно пустыми, хотя запуск по ветке уже виден.
     Литерал `run`/`list` в argv — прямая цитата требования 5 («gh run
     list по ветке»), не домысел интерфейса.
-    """
+
+    `repo` — адрес форджа (`gh --repo`, SPEC 01M1R5B33CC7E6BZK085XV3ZCX,
+    AC-3), тот же смысл, что у `gh(repo=...)`. `repo=None` (по умолчанию)
+    не подставляется дальше как явная kwarg — тот же довод, что у
+    `check_runs_page` выше."""
     res = gh("run", "list", "--branch", branch, "--json",
              "headBranch,status,conclusion", "--limit",
-             str(config.CI_RUN_LIST_LIMIT))
+             str(config.CI_RUN_LIST_LIMIT), **({"repo": repo} if repo else {}))
     if res.returncode != 0:
         detail = (res.stderr or res.stdout).strip()[:200]
         return None, f"gh run list не ответил: {detail or f'код {res.returncode}'}"

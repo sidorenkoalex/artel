@@ -94,8 +94,9 @@ from collections import namedtuple
 from pathlib import Path
 
 from .. import (alerts, artifact_branch, canary, ci, coldstart, config,
-                fixation, gitcmd, liveness, notes, projects, roles, runner,
-                snapshot, spend, stack, store, targets, workspace, zone_lock)
+                fixation, gitcmd, liveness, notes, projects, repo_context,
+                roles, runner, snapshot, spend, stack, store, targets,
+                workspace, zone_lock)
 
 # status: "ok" | "warn" | "fail" | "skip" ("skip" — честный пропуск проверки,
 # требование 9: сверка forge-политики без `gh`/сети — не провал и не ок).

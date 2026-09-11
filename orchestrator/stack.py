@@ -257,7 +257,7 @@ def pytest_python_executable() -> str:
     отсутствовать (ANSWER-4, диагноз AC-7).
 
     Порядок поиска (ANSWER-6: планку пульт гоняет против worktree задачи,
-    `acceptance.run(tdir, code_root=<worktree>)`, где `.artel/venv` не
+    `acceptance.run(tdir, cwd=<worktree>)`, где `.artel/venv` не
     существует — этому venv соответствует только ГЛАВНАЯ копия, из
     которой worktree создан):
 
