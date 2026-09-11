@@ -471,7 +471,8 @@ def commit_success_checkpoint(conn, task_id: str, role: str) -> str:
     summary = _staged_change_summary(wt, exclude)
     message = (f"{task_id}: код закоммичен пультом за роль developer — "
               "шаг завершён с незакоммиченным кодом")
-    committed, sha = _commit_worktree_change(wt, message, exclude=exclude)
+    committed, sha, _stray = _commit_worktree_change(
+        conn, task_id, wt, message, exclude=exclude)
     if not committed:
         return ""
     detail = f"{summary} (sha {sha})" if sha else summary
