@@ -193,13 +193,26 @@ def run_full_suite(root: Path) -> tuple[bool, str]:
     `-o timeout=…` — тот же довод, что у `run()` выше (требование 4, AC-7):
     таймаут отдельного теста передаётся явно, не через обнаружение
     `pyproject.toml` pytest'ом самостоятельно.
+
+    `-n config.FULL_SUITE_WORKERS -p xdist` (01M291M2Z76M84GVP25J387A66,
+    требование 1/AC-1): параллель только здесь, не в `_pytest_command`
+    выше — `run()` (планка задачи) остаётся последовательной (требование
+    1, «Не входит»). Явная загрузка `-p xdist`, тем же приёмом, что и
+    `-p timeout` в `_pytest_command`: пакета `pytest-xdist` нет в
+    интерпретаторе — pytest откажет ненулевым returncode и сообщением о
+    неизвестном плагине в stderr, `res.returncode == 0` ниже это ловит
+    как обычный красный прогон, без тихого повторного прогона без `-n`
+    (AC-3). Срез хвоста `[-2000:]` ниже не меняется (AC-5): построчный
+    вывод воркеров xdist многословнее последовательного, но финальная
+    строка "N passed" остаётся в КОНЦЕ вывода, который и берёт срез.
     """
     tests_dir = root / "tests"
     if not tests_dir.is_dir():
         return False, "tests/ нет в worktree — полный набор не проверен"
     try:
         res = subprocess.run(
-            _pytest_command("tests"),
+            _pytest_command("tests") + ["-n", str(config.FULL_SUITE_WORKERS),
+                                        "-p", "xdist"],
             cwd=root, capture_output=True, text=True,
             timeout=config.FULL_SUITE_TIMEOUT_SEC)
     except subprocess.TimeoutExpired as exc:
