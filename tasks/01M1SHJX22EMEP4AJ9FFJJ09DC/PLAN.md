@@ -615,3 +615,60 @@ R1-F3) переведены `open -> fixed` с кратким описанием
 не входят (перенесёт автокоммит оркестратора).
 
 `status: ready`.
+
+## Возврат — замечания REVIEW.md итерации 2 (R2-F1)
+
+Причина возврата: предыдущий advance отклонён — «замечания ревью не
+отработаны: нет шага developer после итерации 2». REVIEW.md итерации 2
+(`status: changes_requested`) несёт одну открытую запись реестра,
+R2-F1 (minor): три из четырёх постоянных тестов, добавленных под R1-F3
+(`test_approve_without_sha_on_diverged_fixation_is_refused_and_names_both_shas`,
+`test_approve_without_sha_on_dirty_copy_is_refused_and_state_unchanged`
+в `tests/test_git_fixation.py`, `test_approve_on_spec_gate_does_not_reapply_an_unchanged_spec_value`
+в `tests/test_spec_budget.py`), несли содержательный докстринг, но без
+обязательной строки `Ловит мутацию: …` (`skills/test-authoring.md`).
+
+Закрыл ровно так, как предложил ревьювер, — код тестов и продакшен-код
+не менял, добавил по одной строке `Ловит мутацию: …` в каждый из трёх
+докстрингов:
+
+- `test_approve_without_sha_on_diverged_fixation_is_refused_and_names_both_shas`
+  (`tests/test_git_fixation.py:895`) — мутация: подстановка `{fixed or
+  current}` вместо `{current}` в подсказке повтора (регресс R1-F2).
+- `test_approve_without_sha_on_dirty_copy_is_refused_and_state_unchanged`
+  (`tests/test_git_fixation.py:925`, строка сдвинулась на несколько
+  строк вниз после правки предыдущего теста) — мутация: пропуск
+  проверки `clean` при совпадающем sha.
+- `test_approve_on_spec_gate_does_not_reapply_an_unchanged_spec_value`
+  (`tests/test_spec_budget.py:540`) — мутация: сравнение `source is
+  not None` вместо `source == BUDGET_SOURCE_SPEC and value == old`
+  (тот же класс регрессии, что у соседнего теста, у которого тег уже
+  был).
+
+Реестр замечаний REVIEW.md размечен: R2-F1 переведена `open -> fixed`
+с описанием правки в колонке «решение» — терминальный `accepted`
+поставит ревьювер следующей итерацией.
+
+Прогон синхронно, пофайлово, в переднем плане:
+
+- `tests/test_git_fixation.py` — 41/41 OK
+- `tests/test_spec_budget.py` — 46/46 OK
+
+Полный набор `tests/` в шаге не гонял (запрещено скилом — гоняет CI на
+каждый пуш ветки); прогонял только два модуля, в которых поменялись
+докстринги (правка не затрагивает никакой другой код — ни продакшена,
+ни других тестов).
+
+`python3 scripts/codebase_map.py` прогнан — правка `*.py` в `tests/`
+того требует (класс из скила), хотя докстринги не входят в публичную
+сигнатуру функций; диф — только `built_at_sha`.
+
+`python3 scripts/guard.py` — прогнан на `PLAN.md`/`SPEC.md`/`REVIEW.md`
+этой задачи, ок.
+
+Коммичу `tests/test_git_fixation.py`, `tests/test_spec_budget.py`,
+`docs/codebase-map.md` в кодовую ветку задачи. `REVIEW.md` (реестр
+замечаний) и этот `PLAN.md` — артефакты `tasks/<id>/`, в кодовую ветку
+не входят.
+
+`status: ready`.
