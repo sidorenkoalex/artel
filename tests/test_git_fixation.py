@@ -108,6 +108,29 @@ schema_version: 1
 ## Не входит
 """
 
+# SPEC.md с явным легитимным пропуском планки (регрессия №16,
+# 01M283NJV2PNDSS7J2HKS19YHJ) — `guard.requires_ac_markup` читает
+# `skip_tests` только при `schema_version >= 2`.
+SPEC_SKIP_TESTS = """---
+task: {task}
+type: spec
+author_role: analyst
+status: ready
+schema_version: 2
+skip_tests: true
+---
+
+# SPEC: git-фиксация
+
+## Контекст
+
+## Требования
+
+## Критерии приёмки
+
+## Не входит
+"""
+
 # PLAN.md минимальный и валидный по guard — для сверки чистоты advance
 # (T033): ExternalTargetAdvanceIgnoresDirtyCheckTest ниже.
 PLAN_READY = """---
@@ -307,7 +330,14 @@ class ExternalTargetAdvanceIgnoresDirtyCheckTest(TmpRootTest):
         from orchestrator import artifact_branch
         artifact_branch.commit_files(
             self.TASK,
-            {f"tasks/{self.TASK}/PLAN.md": PLAN_READY.format(task=self.TASK)},
+            {f"tasks/{self.TASK}/PLAN.md": PLAN_READY.format(task=self.TASK),
+             # регрессия №16 (01M283NJV2PNDSS7J2HKS19YHJ): начиная с
+             # правки `_acceptance_run_refuses` (материализация планки
+             # для собственного/внешнего target), отсутствие SPEC.md в
+             # артефактной ветке даёт «планка не найдена в источнике» —
+             # SPEC-заглушка нужна здесь именно для легитимного пропуска
+             # (`skip_tests`), не для содержания.
+             f"tasks/{self.TASK}/SPEC.md": SPEC_SKIP_TESTS.format(task=self.TASK)},
             f"{self.TASK}: PLAN заглушка")
 
     def test_uncommitted_plan_still_advances_for_external_target(self):

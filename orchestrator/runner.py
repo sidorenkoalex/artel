@@ -188,13 +188,48 @@ def _cmd_run(conn, task_id: str) -> None:
     # эквивалентно `t["state"] == "in_dev"` — единственная фаза, где
     # действует этот отказ. Тот же `sys.exit`, что и бюджет/лимит
     # параллельных задач выше: `auto` ловит `SystemExit` немедленно.
+    #
+    # Проверка и захват — одной транзакцией (SPEC 01M28NWPS3PJHJAT4APXRY7MF7,
+    # требование 1, AC-1): `zone_lock.claim` журналирует `zone claimed` ДО
+    # того, как эта функция дойдёт до сборки промпта/окружения и запуска
+    # агента — закрывает гонку двух параллельных `cmd_run`, раньше
+    # проверявших конфликт секундами раньше фактической записи занятости
+    # (SPEC «Контекст»). `claim_pending` — записан ли захват ИМЕННО этим
+    # вызовом (не унаследован от уже идущей занятости этой же задачи в
+    # текущем пребывании) — используется ниже, чтобы решить, снимать ли
+    # его (требование 2, AC-2/AC-3).
+    claim_pending = False
     if role == "developer":
-        zone_refusal = zone_lock.refusal(conn, task_id, t)
+        zone_refusal, claim_pending = zone_lock.claim(conn, task_id, t)
         if zone_refusal is not None:
             store.journal(conn, task_id, role, zone_lock.REFUSAL_ACTION,
                           zone_refusal)
             sys.exit(zone_refusal)
 
+    try:
+        _run_developer_step(conn, task_id, t, role)
+    finally:
+        # Захват снимается, только если он записан ЭТИМ вызовом и шаг не
+        # довёл дело до фактического старта агента (требование 2, AC-2/
+        # AC-3) — покрывает ЛЮБОЙ путь возврата ниже (sys.exit паузы/
+        # стоп-крана, return workspace/pre-flight/фиксации, sys.exit
+        # несобранных скилов, «skipped»-исход run_agent_once до записи
+        # «agent run started»), не требуя чинить каждый путь отдельно.
+        # Задача, уже занимавшая зону раньше в этом пребывании
+        # (`claim_pending is False`), не трогается — её occupancy не от
+        # этого захвата, снимать нечего.
+        if claim_pending and zone_lock.claimed_but_not_started(conn, task_id):
+            zone_lock.release_claim(conn, task_id)
+
+
+def _run_developer_step(conn, task_id: str, t, role: str) -> None:
+    """Тело шага ПОСЛЕ прохождения занятости зоны — пауза, стоп-кран
+    волны, workspace, pre-flight, фиксация, сборка промпта, попытки
+    агента. Вынесено из `_cmd_run` отдельной функцией (SPEC
+    01M28NWPS3PJHJAT4APXRY7MF7, требование 2), чтобы та могла обернуть
+    вызов `try/finally` и снять атомарный захват зоны (`zone_lock.
+    release_claim`), если шаг вернётся отсюда, не запустив агента —
+    независимо от конкретного места возврата ниже."""
     # Штатная пауза (SPEC T070, требование 2): пометка стоит — шаг не
     # начинается, но уже идущий шаг (эта же функция, стартовавшая раньше)
     # эта проверка не трогает — она стоит строго до всего, что реально
@@ -954,6 +989,13 @@ def run_agent_once(conn, task_id: str, role: str, prompt: str,
         # завершения шага (см. `commit_abnormal_checkpoint`, докстринг).
         checkpoint.commit_abnormal_checkpoint(conn, task_id, role, "обрыв потока")
     else:
+        # WIP-коммит кода пультом за роль developer, если рабочее дерево
+        # вне tasks/<id>/ осталось грязным после обычного успешного шага
+        # (SPEC 01M283NC4JJXK7QS68Y9ET8TBK, требования 1-3) — до
+        # артефактного автокоммита ниже, тем же порядком, что у трёх
+        # аварийных WIP-чекпоинтов (код сначала, перенос tasks/<id>/
+        # потом).
+        checkpoint.commit_success_checkpoint(conn, task_id, role)
         # Автокоммит — до журнала завершения шага и до advance-логики
         # (SPEC T059, требование 1): роль может не успеть закоммитить свой
         # артефакт, а `advance` уже проверяет чистоту рабочей копии.

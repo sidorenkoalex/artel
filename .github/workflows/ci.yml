@@ -161,40 +161,30 @@ jobs:
     outputs:
       code: ${{ steps.classify.outputs.code }}
     steps:
-      - uses: actions/checkout@v4
+      - name: дерево репозитория — классификатор читается из scripts/ci_push_class.py (01M28NWK5X10J139Z8TD69HFAC)
+        uses: actions/checkout@v4
+      - name: полная история — дифф и родительский коммит на main нужны только этой ветке (ADR-0016)
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: actions/checkout@v4
         with: { fetch-depth: 0 }
       - id: classify
+        name: классификация пуша (01M28NWK5X10J139Z8TD69HFAC — наследование итога родителя для документного пуша main)
         env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           BEFORE: ${{ github.event.before }}
         run: |
-          # ADR-0016: job `python` (семь минут) идёт только там, где может
-          # что-то найти. Fail-closed: любое сомнение — `code=true`.
-          #   artifact/**  — только tasks/<id>/, код равен родителю: false.
-          #   main         — документный пуш (все файлы под docs/, tasks/
-          #                  или *.md в корне): false; нет базы диффа,
-          #                  принудительный пуш, пустой дифф: true.
-          #   task/**, PR  — всегда true (этот sha ждёт пульт).
-          code=true
-          ref="${GITHUB_REF#refs/heads/}"
-          if [ "$GITHUB_EVENT_NAME" = "push" ]; then
-            case "$ref" in
-              artifact/*)
-                code=false ;;
-              main)
-                if [ -n "$BEFORE" ] \
-                   && [ "$BEFORE" != "0000000000000000000000000000000000000000" ] \
-                   && git cat-file -e "$BEFORE" 2>/dev/null; then
-                  files=$(git diff --name-only "$BEFORE" HEAD)
-                  if [ -n "$files" ] \
-                     && ! printf '%s\n' "$files" | grep -Ev '^(docs/|tasks/|[^/]+\.md$)' >/dev/null; then
-                    code=false
-                  fi
-                fi ;;
-            esac
-          fi
-          echo "класс пуша: ref=$ref event=$GITHUB_EVENT_NAME code=$code"
-          echo "code=$code" >> "$GITHUB_OUTPUT"
+          # Классификация вынесена в scripts/ci_push_class.py (stdlib,
+          # юнит-тесты tests/test_ci_push_class.py) — ADR-0016 дословно
+          # плюс правило «документный пуш main наследует итог CI
+          # родителя»: `code=false` только если последний завершённый
+          # прогон workflow `ci` для коммита `before` на ветке main
+          # закончился `success` (01M28NWK5X10J139Z8TD69HFAC). Скрипт
+          # печатает две строки: `code=true|false` в $GITHUB_OUTPUT,
+          # причину — в лог задания. Без аргументов — входы берутся из
+          # переменных окружения (GITHUB_EVENT_NAME/GITHUB_REF/GITHUB_SHA
+          # уже несёт среда Actions, BEFORE — только что заданный env).
+          python3 scripts/ci_push_class.py | tee /tmp/ci-push-class.out
+          grep '^code=' /tmp/ci-push-class.out >> "$GITHUB_OUTPUT"
 
   python:
     name: Синтаксис и тесты оркестратора
@@ -218,7 +208,11 @@ jobs:
         run: git for-each-ref --format='%(refname) %(objectname)' refs/heads/ refs/artifacts/ > /tmp/refs-before.txt
       - name: unit-тесты (если появятся)
         run: |
-          if [ -d tests ]; then python3 -m unittest discover -s tests -v; fi
+          # Параллель pytest-xdist (01M291M2Z76M84GVP25J387A66, требование
+          # 3/AC-6): 438с -> 140с на машине разработчика. Значение таймаута
+          # отдельного теста дублирует stack.PER_TEST_TIMEOUT_SEC литералом
+          # — известное ограничение (YAML не читает Python-константу).
+          if [ -d tests ]; then python3 -m pytest tests -n auto -p no:cacheprovider -p timeout -p xdist -o timeout=120; fi
       - name: прогон tests/ не меняет набор ссылок репозитория (SPEC 01M1KVGD18P9H5WR7VM8TGPV1T, требование 1)
         run: |
           # Инвариант: полный прогон tests/ не пишет в объектную базу CI-
