@@ -514,3 +514,104 @@ main` — уже в кодовой ветке задачи. Коммитить �
 не менялся, только голова ветки продвинута.
 
 `status: ready`.
+
+## Возврат — замечания REVIEW.md итерации 1 (R1-F1, R1-F2, R1-F3)
+
+Причина возврата: предыдущий advance отклонён — три предыдущих хода
+(«подтяжка main (R3)», «правка планки AC-6», «инвариант 25 правит
+Оператор», «подтяжка main после hotfix №19») были шагами developer, но
+ни один не отработал REVIEW.md итерации 1 (`status: changes_requested`,
+blocker R1-F1 + major R1-F2/R1-F3) — все они закрывали побочные
+блокеры (конфликт подтяжки, эскалации), а не сами замечания ревью.
+Гейт отказал явно: «замечания ревью не отработаны: нет шага developer
+после итерации 1». В этом ходе закрываю все три записи реестра.
+
+**R1-F1 (blocker)** — `orchestrator/budget.py::apply_spec_budget`
+(строки 90-102 после правки) отказывал в перечитывании значения из
+SPEC на ВТОРОМ вызове (approve на `spec_gate`), если `budget_source`
+уже `spec` — независимо от того, изменилось ли само значение. Разбил
+единую проверку `source is not None` на две: `source ==
+BUDGET_SOURCE_OPERATOR` — отказ всегда (ручной потолок неприкосновенен,
+без изменений); `source == BUDGET_SOURCE_SPEC and value == old` —
+отказ ТОЛЬКО при совпадении значений, иначе применяет новое (с тем же
+журналированием, что и первое применение). Идемпотентность
+(AC-7/AC-8) не потеряна — потолок Оператора по-прежнему неприкосновенен
+ни при каком значении SPEC, совпадающее значение по-прежнему не
+плодит дублей в журнале (проверено `test_ac7_matching_...`,
+`test_ac8_unchanged_...`, оба зелёные).
+
+**R1-F2 (major)** — `orchestrator/fsm.py::confirm_fixation`, ветка
+`sha is None` при расхождении: подсказка повтора печатала ЗАФИКСИРОВАННЫЙ
+sha (`fixed or current`), хотя явный путь ниже сравнивает переданный
+sha с ЖИВЫМ (`current.startswith(sha)`) — подсказанная команда
+детерминированно проваливалась второй раз. Заменил подстановку на
+`{current}`; в ветке «грязная копия» `current == fixed`, поведение не
+меняется.
+
+**R1-F3 (major)** — новая логика (`confirm_fixation` на `sha is None`,
+перечитывание бюджета на approve `spec_gate`) не имела постоянного
+покрытия в `tests/`, только в эфемерной `acceptance_tests/` задачи.
+Добавил permanent-тесты:
+- `tests/test_git_fixation.py::ApproveByShaTest.
+  test_approve_without_sha_on_diverged_fixation_is_refused_and_names_both_shas`
+  — расхождение без sha: именованный отказ с обоими sha + регрессия
+  R1-F2 (подсказка называет живой sha, не зафиксированный);
+- `tests/test_git_fixation.py::ApproveByShaTest.
+  test_approve_without_sha_on_dirty_copy_is_refused_and_state_unchanged`
+  — грязная копия при совпадающем sha, без sha — отказ, состояние не
+  меняется;
+- `tests/test_spec_budget.py::SpecBudgetOnTheGateTest.
+  test_approve_on_spec_gate_reapplies_a_changed_spec_value` —
+  регрессия R1-F1: approve на `spec_gate` подхватывает ИЗМЕНЁННОЕ
+  значение SPEC после первого применения;
+- `tests/test_spec_budget.py::SpecBudgetOnTheGateTest.
+  test_approve_on_spec_gate_does_not_reapply_an_unchanged_spec_value`
+  — тот же путь, но значение не менялось — без дублей журнала.
+
+Сценарий «живое совпадение → авто-переход» (AC-2) постоянным тестом уже
+был закрыт в итерации 1 (`test_approve_without_sha_transitions_on_matching_clean_fixation`,
+переименованный AC-9-тест) — новых тестов на него не добавлял.
+
+Реестр замечаний REVIEW.md размечен: все три записи (R1-F1, R1-F2,
+R1-F3) переведены `open -> fixed` с кратким описанием правки в колонке
+«решение» — терминальный `accepted` поставит ревьювер следующей
+итерацией (правило схемы реестра, не моя роль).
+
+Прогон синхронно, пофайлово, в переднем плане:
+
+- `tests/test_git_fixation.py` (ADR-0002-защищённый класс + 2 новых
+  теста) — 43/43 OK
+- `tests/test_spec_budget.py` (класс потолка задачи + 2 новых теста) —
+  46/46 OK
+- `tests/test_cmd_approve_dispatch.py` + `tests/test_zones_approve.py`
+  (диспетчер approve, не тронут этим ходом, но зона пересекается) —
+  9/9 OK
+- `tests/test_fsm_advance_gate_smoke.py` + `tests/test_invariants.py`
+  (смоук гейтов и инварианты, включая `SpecCeilingRespectsRoleBudgetCapTest`)
+  — 55/55 OK
+- `tests/test_auto_cycle.py` + `tests/test_catalog_wave_breaker_status.py`
+  + `tests/test_doctor_wave_breaker.py` + `tests/test_runner_wave_breaker.py`
+  (модули main, принесённые предыдущей подтяжкой — не тронуты этим
+  ходом, регрессия на всякий случай) — 61/61 OK
+- Все 12 файлов приёмочной планки задачи (10 исполняемых + 2 manual) —
+  16/16 OK (без изменений относительно предыдущего хода — планка сама
+  не менялась, только код под ней).
+
+Полный набор `tests/` в шаге не гонял (запрещено скилом — гоняет CI на
+каждый пуш ветки).
+
+`python3 scripts/codebase_map.py` прогнан — правка `*.py` в
+`orchestrator/`/`tests/` того требует (класс из скила); диф —
+`built_at_sha` плюс докстринг `apply_spec_budget` (публичная сигнатура
+не менялась).
+
+`python3 scripts/guard.py` — прогнан на `PLAN.md`/`REVIEW.md`/`SPEC.md`
+этой задачи, ок.
+
+Коммичу код (`orchestrator/fsm.py`, `orchestrator/budget.py`,
+`tests/test_git_fixation.py`, `tests/test_spec_budget.py`,
+`docs/codebase-map.md`) в кодовую ветку задачи. `REVIEW.md` (реестр
+замечаний) и этот `PLAN.md` — артефакты `tasks/<id>/`, в кодовую ветку
+не входят (перенесёт автокоммит оркестратора).
+
+`status: ready`.
