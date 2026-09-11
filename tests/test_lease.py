@@ -142,7 +142,11 @@ class AcquireReleaseTest(TmpRootTest):
 
     def test_live_pid_on_own_host_with_fresh_heartbeat_still_refuses(self):
         """AC-3: держатель на своём host с ЖИВЫМ pid и свежим heartbeat —
-        отказ не меняется (перехват срабатывает только на мёртвый pid)."""
+        отказ не меняется (перехват срабатывает только на мёртвый pid).
+        Ловит мутацию: если `dead_on_own_host` перестанет проверять
+        `liveness._pid_alive` и будет полагаться только на
+        `hostname == hostname`, живой держатель на своём host будет
+        ошибочно перехвачен вместо отказа."""
         conn = store.db()
         conn.execute(
             "INSERT INTO leases (task_id, session_id, pid, hostname,"
@@ -217,7 +221,11 @@ class AcquireJournalCauseTest(TmpRootTest):
         """SPEC 01M290PS4ZXK1RCZ3PXQSXK0Y9, AC-2: перехват мёртвого
         держателя на своём host ДО протухания heartbeat пишет ту же запись
         журнала, что и перехват по протуханию — с прежним session_id и
-        pid держателя в тексте."""
+        pid держателя в тексте.
+        Ловит мутацию: если причина перехвата для немедленного пути
+        (fresh heartbeat) по ошибке возьмётся из ветки «heartbeat протух»
+        вместо `dead_on_own_host`, текст записи журнала не будет содержать
+        «мёртв» и/или прежний session_id/pid держателя."""
         conn = store.db()
         dead_pid = _dead_pid()
         conn.execute(
@@ -646,7 +654,12 @@ class ConcurrentAcquireTest(TmpRootTest):
         ОДНОГО и того же держателя с мёртвым pid на своём host (heartbeat
         ЕЩЁ СВЕЖИЙ, не протухший — новый путь перехвата, не старый «протух
         по возрасту») — успешен только один перехват, второй вызывающий
-        получает именованный отказ, не создавая вторую запись журнала."""
+        получает именованный отказ, не создавая вторую запись журнала.
+        Ловит мутацию: если новый путь перехвата (`dead_on_own_host`)
+        выполнит `update_lease`/`journal` вне блокировки `BEGIN IMMEDIATE`
+        или без сверки `pre_row`, конкурентный прогон даст больше одной
+        записи «lease перехвачен» либо у второго вызывающего перехват
+        тоже отрапортует успехом вместо именованного отказа."""
         conn = store.db()
         conn.execute(
             "INSERT INTO leases (task_id, session_id, pid, hostname,"
