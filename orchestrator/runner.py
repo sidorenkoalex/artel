@@ -954,6 +954,13 @@ def run_agent_once(conn, task_id: str, role: str, prompt: str,
         # завершения шага (см. `commit_abnormal_checkpoint`, докстринг).
         checkpoint.commit_abnormal_checkpoint(conn, task_id, role, "обрыв потока")
     else:
+        # WIP-коммит кода пультом за роль developer, если рабочее дерево
+        # вне tasks/<id>/ осталось грязным после обычного успешного шага
+        # (SPEC 01M283NC4JJXK7QS68Y9ET8TBK, требования 1-3) — до
+        # артефактного автокоммита ниже, тем же порядком, что у трёх
+        # аварийных WIP-чекпоинтов (код сначала, перенос tasks/<id>/
+        # потом).
+        checkpoint.commit_success_checkpoint(conn, task_id, role)
         # Автокоммит — до журнала завершения шага и до advance-логики
         # (SPEC T059, требование 1): роль может не успеть закоммитить свой
         # артефакт, а `advance` уже проверяет чистоту рабочей копии.

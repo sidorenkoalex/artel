@@ -1,5 +1,5 @@
 ---
-built_at_sha: 9ad1ae90232ecc0b066d3a33f351a091ab7d53e3
+built_at_sha: fa9056f2bfc7a73ed0dad5d5943999682e2b4f8b
 ---
 
 # Codebase-map пульта
@@ -243,6 +243,7 @@ built_at_sha: 9ad1ae90232ecc0b066d3a33f351a091ab7d53e3
 - `commit_pause_now_checkpoint`
 - `commit_pull_checkpoint`
 - `commit_step_artifacts`
+- `commit_success_checkpoint`
 - `commit_timeout_checkpoint`
 
 **Импортирует:** `orchestrator/alerts.py`, `orchestrator/artifact_branch.py`, `orchestrator/config.py`, `orchestrator/fixation.py`, `orchestrator/gitcmd.py`, `orchestrator/store.py`, `orchestrator/workspace.py`, `orchestrator/yamlmini.py`, `scripts/guard.py`
