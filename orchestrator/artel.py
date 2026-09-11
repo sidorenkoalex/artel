@@ -450,15 +450,26 @@ from orchestrator import (amend, answer, auto, budget, canary, catalog,  # noqa:
 # команда порождает себя же отдельным процессом ОС (`start_new_session`)
 # и сразу возвращает управление, напечатав pid/лог/подсказку.
 
-def _task_id_and_attach(rest: list, usage: str) -> tuple:
+_CYCLE_FLAGS_RUN = ("--attach",)
+_CYCLE_FLAGS_AUTO = ("--attach", "--wait-zone")
+
+
+def _task_id_and_attach(rest: list, usage: str,
+                        known: tuple = _CYCLE_FLAGS_RUN) -> tuple:
+    """Hotfix №22 (11.09): неизвестный флаг — отказ с текстом, а не
+    молчаливое проглатывание (`auto <id> --wait-zone` дважды «успешно»
+    стартовал без ожидания зоны, пока флага в разборе не было)."""
+    unknown = [a for a in rest if a.startswith("--") and a not in known]
+    if unknown:
+        sys.exit(f"неизвестный флаг {unknown[0]!r}; использование: {usage}")
     attach = "--attach" in rest
-    positional = [a for a in rest if a != "--attach"]
+    positional = [a for a in rest if not a.startswith("--")]
     if not positional:
         sys.exit(usage)
     return positional[0], attach
 
 
-def _launch_detached(cmd: str, task_id: str) -> None:
+def _launch_detached(cmd: str, task_id: str, extra: tuple = ()) -> None:
     """R1-F3 (REVIEW.md итерации 1): до отвязки — дешёвая проверка
     `lease.is_live`, не авторитетное взятие lease (тем ниже и остаётся,
     внутри спавненного процесса, через `lease.run_locked`). Без неё
@@ -491,8 +502,10 @@ def _launch_detached(cmd: str, task_id: str) -> None:
             # буфере до конца процесса, лог выглядел бы пустым живьём
             # (AC-3, «наблюдать: artel.py log <id>» обязан видеть
             # прогресс, не только финал).
+            # Hotfix №22 (11.09): флаги команды (`--wait-zone`) едут в
+            # дочерний процесс — иначе отделённый цикл терял их молча.
             [sys.executable, "-u", str(Path(__file__).resolve()), cmd,
-             task_id, "--attach"],
+             task_id, *extra, "--attach"],
             stdout=log_fh, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL,
             start_new_session=True)
     finally:
@@ -511,11 +524,14 @@ def _cmd_run_or_detach(rest: list) -> None:
 
 
 def _cmd_auto_or_detach(rest: list) -> None:
-    task_id, attach = _task_id_and_attach(rest, "auto <id> [--attach]")
+    task_id, attach = _task_id_and_attach(
+        rest, "auto <id> [--attach] [--wait-zone]", known=_CYCLE_FLAGS_AUTO)
+    wait_zone = "--wait-zone" in rest
     if attach:
-        auto.cmd_auto(task_id)
+        auto.cmd_auto(task_id, wait_zone=wait_zone)
         return
-    _launch_detached("auto", task_id)
+    _launch_detached("auto", task_id,
+                     extra=("--wait-zone",) if wait_zone else ())
 
 
 def _cmd_stop(task_id: str) -> None:
