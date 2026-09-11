@@ -154,27 +154,86 @@ def _iter_matching_rows(lines: list[str], key: str):
             k += 1
 
 
-def _apply_append(original: str, key: str, text: str) -> tuple[str, str]:
-    lines = original.split("\n")
+def _find_unique_row(lines: list[str], key: str) -> tuple[str, int]:
     matches = list(_iter_matching_rows(lines, key))
     if len(matches) != 1:
         sys.exit(
             f"ключ «{key}» найден в {len(matches)} строках — нужна ровно "
             f"одна совпадающая строка, файл не изменён")
-    section_key, idx = matches[0]
+    return matches[0]
+
+
+def _apply_append(original: str, key: str, text: str) -> tuple[str, str]:
+    lines = original.split("\n")
+    section_key, idx = _find_unique_row(lines, key)
     cells = _row_cells(lines[idx])
     cells[-1] = f"{cells[-1]} {text}".strip()
     lines[idx] = "| " + " | ".join(cells) + " |"
     return "\n".join(lines), section_key
 
 
-def _build_for(request: dict, original: str) -> tuple[str, str]:
-    if request["kind"] == "insert":
-        return _apply_insert(original, request["section"], request["text"])
-    return _apply_append(original, request["key"], request["text"])
+def _apply_drop(original: str, key: str) -> tuple[str, str, str]:
+    lines = original.split("\n")
+    section_key, idx = _find_unique_row(lines, key)
+    observation = " | ".join(_row_cells(lines[idx]))
+    del lines[idx]
+    return "\n".join(lines), section_key, observation
 
 
-def _commit_message(section_key: str, request: dict) -> str:
+def _apply_set_state(original: str, key: str, text: str) -> tuple[str, str]:
+    lines = original.split("\n")
+    section_key, idx = _find_unique_row(lines, key)
+    cells = _row_cells(lines[idx])
+    cells[-1] = text
+    lines[idx] = "| " + " | ".join(cells) + " |"
+    return "\n".join(lines), section_key
+
+
+def _apply_set_priority(original: str, key: str, text: str) -> tuple[str, str]:
+    try:
+        value = int(text)
+    except ValueError:
+        value = None
+    if value is None or not 1 <= value <= 4:
+        sys.exit(f"приоритет «{text}» вне диапазона 1..4")
+    lines = original.split("\n")
+    section_key, idx = _find_unique_row(lines, key)
+    cells = _row_cells(lines[idx])
+    cells[0] = text
+    lines[idx] = "| " + " | ".join(cells) + " |"
+    return "\n".join(lines), section_key
+
+
+def _build_for(request: dict, original: str) -> tuple[str, str, str | None]:
+    kind = request["kind"]
+    if kind == "insert":
+        new_text, section_key = _apply_insert(
+            original, request["section"], request["text"])
+        return new_text, section_key, None
+    if kind == "append":
+        new_text, section_key = _apply_append(
+            original, request["key"], request["text"])
+        return new_text, section_key, None
+    if kind == "drop":
+        return _apply_drop(original, request["key"])
+    if kind == "set-state":
+        new_text, section_key = _apply_set_state(
+            original, request["key"], request["text"])
+        return new_text, section_key, None
+    new_text, section_key = _apply_set_priority(
+        original, request["key"], request["text"])
+    return new_text, section_key, None
+
+
+def _commit_message(section_key: str, request: dict,
+                    observation: str | None) -> str:
+    kind = request["kind"]
+    if kind == "drop":
+        return f"оператор: {section_key} — снята: {observation[:80]}"
+    if kind == "set-state":
+        return f"оператор: {section_key} — состояние: {request['text'][:80]}"
+    if kind == "set-priority":
+        return f"оператор: {section_key} — приоритет: {request['text'][:80]}"
     return f"оператор: {section_key} — {request['text'][:80]}"
 
 
@@ -228,9 +287,9 @@ def _attempt(request: dict) -> str | None:
         gitcmd.in_repo(work_dir, "checkout", "-q", "-B", config.MAIN_BRANCH,
                        "FETCH_HEAD")
         original = _read_backlog(work_dir)
-        new_text, section_key = _build_for(request, original)
+        new_text, section_key, observation = _build_for(request, original)
         _write_backlog(work_dir, new_text)
-        message = _commit_message(section_key, request)
+        message = _commit_message(section_key, request, observation)
         gitcmd.in_repo(work_dir, "add", BACKLOG_REL)
         commit = gitcmd.in_repo(
             work_dir, "-c", f"user.name={NOTE_AUTHOR_NAME}",
@@ -280,6 +339,9 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("section", nargs="?", choices=list(SECTION_HEADINGS))
     parser.add_argument("--text")
     parser.add_argument("--append")
+    parser.add_argument("--drop")
+    parser.add_argument("--set-state")
+    parser.add_argument("--set-priority")
     parser.add_argument("--flush", action="store_true")
     # Принимается, поведения не несёт сверх приёма (SPEC «Не входит»).
     parser.add_argument("--task")
@@ -293,6 +355,17 @@ def cmd_note(argv: list[str]) -> None:
         if not args.text:
             sys.exit("--append требует --text")
         _run({"kind": "append", "key": args.append, "text": args.text})
+    elif args.drop is not None:
+        _run({"kind": "drop", "key": args.drop})
+    elif args.set_state is not None:
+        if not args.text:
+            sys.exit("--set-state требует --text")
+        _run({"kind": "set-state", "key": args.set_state, "text": args.text})
+    elif args.set_priority is not None:
+        if not args.text:
+            sys.exit("--set-priority требует --text")
+        _run({"kind": "set-priority", "key": args.set_priority,
+             "text": args.text})
     elif args.section is not None:
         if not args.text:
             sys.exit("--text обязателен")
@@ -300,4 +373,5 @@ def cmd_note(argv: list[str]) -> None:
     elif args.flush:
         return
     else:
-        sys.exit("укажи раздел с --text, --append <ключ> --text, либо --flush")
+        sys.exit("укажи раздел с --text, --append/--drop/--set-state/"
+                 "--set-priority <ключ>, либо --flush")

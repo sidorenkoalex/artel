@@ -44,6 +44,21 @@ MAP_REL = "docs/codebase-map.md"
 # от содержательного конфликта («CONFLICT (content): ...»).
 PULL_OVERWRITE_MARKER = "would be overwritten by merge"
 
+# Фиксированный текст action (SPEC 01M290PYPV5T2NFW1Y0HB8BD6E, требование
+# 1): эскалация `in_dev` по НЕРАЗРЕШЁННОМУ конфликту СОДЕРЖИМОГО подтяжки
+# (единственная ветка `_handle_merge_failure` ниже, где `git merge --abort`
+# завершает попытку, отличная от инцидента очистки worktree и от
+# авторазрешаемого конфликта `docs/codebase-map.md`) метит задачу
+# признаком «нужен шаг роли до следующего предварительного advance» —
+# `orchestrator/auto.py::_role_step_since_state_entry`/`_pre_advance_step`
+# читают этот текст по фиксированному действию журнала, не по вариативному
+# detail. Скопирована в `orchestrator/brief.py` тем же приёмом, что уже
+# дублирует `REFUSAL_ACTION_PREFIX` между store.py и auto.py (импорт
+# auto.py <- fsm.py <- review.py <- brief.py уже существует — обратный
+# импорт brief.py -> pull.py тут не нужен, значение читается как строка).
+PULL_CONFLICT_ROLE_STEP_MARKER = (
+    "конфликт подтяжки: нужен шаг роли до следующего предварительного advance")
+
 
 class Fresh:
     """Ветка не отстала от origin (или сверка выродилась) — подтяжка не нужна."""
@@ -247,6 +262,12 @@ def _handle_merge_failure(conn, task_id: str, state: str, branch: str,
     detail = f"конфликт подтяжки {source_branch} в ветку {branch}: {note}"
     store.set_state(conn, task_id, "escalated", "fsm", expected_state=state,
                     detail=detail)
+    if state == "in_dev":
+        # Требование 1 — только `in_dev` (СПЕК: «Эскалация состояния
+        # in_dev по конфликту подтяжки»); `acceptance`/`merge_gate` (два
+        # других вызывающих `fsm._pull_main_or_escalate`) не заводят
+        # шага роли на возврате из escalated, метить их нечем.
+        store.journal(conn, task_id, "fsm", PULL_CONFLICT_ROLE_STEP_MARKER, detail)
     return Conflict(files, detail)
 
 
