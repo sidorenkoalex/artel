@@ -184,6 +184,11 @@ class OuterCycleDeadlineTest(MergeGateCiWaitUnitTest):
     приёмочными тестами на настоящем git)."""
 
     def test_mutex_acquired_once_and_held_across_both_body_calls(self):
+        """Ловит мутацию: если `acquire`/`release` снова вызываются вокруг
+        КАЖДОГО отдельного захода в тело гейта (старое поведение до этой
+        задачи), `acquire_calls`/`release_calls` станут длиной 2 (по разу
+        на каждый из двух `fake_body`) вместо 1 — тест это ловит через
+        `assertEqual(..., ["sess-1"])`."""
         acquire_calls = []
         release_calls = []
         bodies = [("wait", "task/t001-zadacha"), ("done",)]

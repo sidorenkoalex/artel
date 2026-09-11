@@ -84,12 +84,24 @@ def touch_heartbeat(conn) -> None:
     Не принимает `session_id`: таблица несёт не более одной строки на
     весь пульт (требование 2), поэтому текущий держатель однозначен без
     сверки. Строки нет (мьютекс не взят либо вызвано вне окна) —
-    молча ничего не делает."""
-    row = store.merge_lock_row(conn)
-    if row is None:
-        return
-    store.set_merge_lock(conn, row["task_id"], row["session_id"],
-                         row["pid"], row["hostname"], store.now())
+    молча ничего не делает.
+
+    Чтение+запись обёрнуты `BEGIN IMMEDIATE`, тем же приёмом, что
+    `acquire()` (см. модульный докстринг, ревью T044) — без этого
+    конкурентный `acquire()` другой сессии мог бы атомарно перехватить
+    протухший мьютекс МЕЖДУ чтением строки здесь и отложенной записью,
+    и эта запись «воскресила» бы уже вытесненного держателя (R1-F1,
+    REVIEW.md 01M291EJMA995AZ61MEMDZKWRY, итерация 1)."""
+    conn.execute("BEGIN IMMEDIATE")
+    try:
+        row = store.merge_lock_row(conn)
+        if row is None:
+            return
+        store.set_merge_lock(conn, row["task_id"], row["session_id"],
+                             row["pid"], row["hostname"], store.now())
+    finally:
+        if conn.in_transaction:
+            conn.rollback()
 
 
 def release(conn, session_id: str) -> None:
