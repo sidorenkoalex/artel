@@ -23,7 +23,7 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from orchestrator import (agent_log, auto, budget, catalog,  # noqa: E402
+from orchestrator import (agent_log, alerts, auto, budget, catalog,  # noqa: E402
                           ci, config, fsm, gitcmd, github_adapter, pause,
                           runner, store)
 from tests.sandbox import (SpyRun, capture,  # noqa: E402
@@ -876,6 +876,73 @@ class AutoStopsOnPauseAndBudgetTogetherTest(AutoCycleTest):
 
         self.assertIn("run отказался стартовать",
                       self.journal_detail("auto остановлен"))
+
+
+class AutoStopsOnWaveBreakerRefusalTest(AutoCycleTest):
+    """01M1THKRK8HPXA7Y2SRB0RFTN2, требования 1, 3-4: открытый алерт
+    стоп-крана self, заведённый до старта `auto`, останавливает цикл на
+    первой же попытке `run` — тем же приёмом, что `AutoStopsOnPauseRefusalTest`
+    уже применяет к паузе.
+
+    `cmd_run` тут настоящая — по тому же доводу, что и у соседних классов
+    этого файла: имитация отказа доказывала бы только то, что тест умеет
+    бросать `SystemExit`, а не то, что `auto` действительно отличает
+    отказ по стоп-крану от прочих.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.patch_object(runner, "cmd_run", REAL_CMD_RUN)
+        # PLAN не ready — тот же довод, что и у AutoStopsOnPauseRefusalTest:
+        # предварительный advance не имеет права увести задачу дальше
+        # раньше, чем `run` получит шанс отказать по стоп-крану.
+        self.write_plan("draft")
+        self.set_state("in_dev")
+        opened = alerts.raise_alert(
+            store.db(), config.DEFAULT_TARGET, "incident", "wave_breaker",
+            "стоп-кран волны: класс 1б у 3 задач за 15 минут")
+        assert opened, "фикстура теста не смогла завести алерт"
+
+    def test_cycle_stops_on_the_first_attempt_and_no_agent_starts(self):
+        with mock.patch.object(runner, "spawn_agent") as popen:
+            out = self.auto()
+
+        popen.assert_not_called()
+        self.assertEqual(self.state(), "in_dev", "задача осталась где стояла")
+        self.assertIn("стоп-кран", out.lower())
+
+    def test_refusal_is_not_retried(self):
+        """Отказ — причина остановки, а не повод крутиться до лимита шагов."""
+        with mock.patch.object(runner, "spawn_agent") as popen:
+            self.auto()
+
+        popen.assert_not_called()
+        self.assertEqual(
+            [a for _, a, _ in self.journal_rows()]
+            .count(runner.WAVE_BREAKER_REFUSAL_ACTION), 1,
+            "run на стоп-кране отказал больше одного раза за вызов auto")
+
+    def test_no_attention_alert_is_raised_on_top_of_the_incident(self):
+        """Причина уже видна первой строкой `doctor` и пометкой `status`
+        — `auto` не дублирует уже открытый `kind=incident` алертом
+        `kind=attention` (в отличие от большинства других причин
+        остановки цикла).
+
+        Ловит мутацию: если ветка стоп-крана внутри `_role_run_step`
+        получит `alert=True` вместо `False`, число открытых
+        `kind=attention` алертов вырастет с нуля до одного."""
+        with mock.patch.object(runner, "spawn_agent"):
+            self.auto()
+
+        self.assertEqual(alerts.open_alerts(store.db(), "attention"), [])
+
+    def test_final_message_names_wave_breaker_not_the_step_limit(self):
+        with mock.patch.object(runner, "spawn_agent"):
+            out = self.auto()
+
+        # "лимит N шагов за вызов" тоже встречается на старте (информационная
+        # строка) — предмет проверки в том, что СТОП не мотивирован лимитом.
+        self.assertNotIn(f"лимит {config.AUTO_MAX_STEPS} шагов исчерпан", out)
 
 
 class AutoStepLimitTest(AutoCycleTest):

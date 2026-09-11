@@ -583,3 +583,11 @@ AUTO_STOP_PAUSE = ("задача на паузе",
 AUTO_STOP_ZONE_WAIT = ("ждёт зоны",
                       "artel.py status  (кто держит зону) — дождись мержа/"
                       "kill занявшей задачи либо artel.py zone-release {id}")
+
+# Стоп-кран волны, часть 2 (01M1THKRK8HPXA7Y2SRB0RFTN2, требования 1-2):
+# `run` отказывается стартовать тем же `sys.exit`, что и пауза/занятость
+# зоны выше — причина внешняя (открытый алерт `kind=incident`, не эта
+# задача), Оператор снимает её `alert-ack`, не `resume`/`zone-release`.
+AUTO_STOP_WAVE_BREAKER = ("стоп-кран волны — решение Оператора",
+                         "artel.py doctor  (открытый алерт первой строкой) "
+                         "— `artel.py alert-ack <id> \"...\"` снимет блокировку")
