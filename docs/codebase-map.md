@@ -1,5 +1,5 @@
 ---
-built_at_sha: b10fe9cdaff1501eb12c51997dd2393aef644cfb
+built_at_sha: 702c8bb8ec55ffe18554b7ff5352961f19ff8a52
 ---
 
 # Codebase-map пульта
@@ -985,7 +985,7 @@ built_at_sha: b10fe9cdaff1501eb12c51997dd2393aef644cfb
 
 **Импортирует:** `orchestrator/config.py`, `orchestrator/store.py`
 
-**Импортируется:** `orchestrator/artel.py`, `orchestrator/auto.py`, `orchestrator/catalog.py`, `orchestrator/runner.py`, `tests/test_catalog_status_log.py`, `tests/test_zone_lock.py`
+**Импортируется:** `orchestrator/artel.py`, `orchestrator/auto.py`, `orchestrator/catalog.py`, `orchestrator/runner.py`, `scripts/guard.py`, `tests/test_catalog_status_log.py`, `tests/test_zone_lock.py`
 
 ## scripts/codebase_map.py
 
@@ -1061,7 +1061,7 @@ built_at_sha: b10fe9cdaff1501eb12c51997dd2393aef644cfb
 - `split_signal_names`
 - `traceability_errors_from_content`
 
-**Импортирует:** `orchestrator/config.py`, `orchestrator/spend.py`, `orchestrator/yamlmini.py`
+**Импортирует:** `orchestrator/config.py`, `orchestrator/spend.py`, `orchestrator/yamlmini.py`, `orchestrator/zone_lock.py`
 
 **Импортируется:** `orchestrator/acceptance.py`, `orchestrator/amend.py`, `orchestrator/canary.py`, `orchestrator/catalog.py`, `orchestrator/checkpoint.py`, `orchestrator/dry_run.py`, `orchestrator/fsm.py`, `orchestrator/fsm_advance.py`, `orchestrator/fsm_autogate.py`, `orchestrator/fsm_merge_gate.py`, `orchestrator/pull.py`, `orchestrator/retro.py`, `orchestrator/version.py`, `tests/test_acceptance_tests_flow.py`, `tests/test_analyst_role.py`, `tests/test_answer.py`, `tests/test_artifact_materialization.py`, `tests/test_fsm_autogate.py`, `tests/test_guard_artifact_branch_mode.py`, `tests/test_guard_division_section.py`, `tests/test_guard_extraneous_acceptance_files.py`, `tests/test_guard_schema.py`, `tests/test_guard_split_signals.py`, `tests/test_guard_task_root_subdirectory.py`, `tests/test_guard_zones.py`, `tests/test_id_format_guard.py`, `tests/test_invariants.py`, `tests/test_review_registry_gate.py`, `tests/test_version.py`, `tests/test_yaml_parsing.py`
 

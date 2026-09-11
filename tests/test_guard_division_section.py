@@ -75,6 +75,9 @@ class ParseDivisionSubsectionsTest(unittest.TestCase):
     обязательности (валидацию несёт `division_section_errors`)."""
 
     def test_no_division_header_returns_empty_list(self):
+        """Ловит мутацию: отсутствие заголовка «## Деление» трактуется как
+        ошибка/пустой подраздел вместо штатного AC-9 — SPEC без заявки на
+        деление обязан парситься в `[]`, не поднимать исключение."""
         text = spec_text()
 
         self.assertEqual(guard.parse_division_subsections(text), [])
@@ -87,6 +90,10 @@ class ParseDivisionSubsectionsTest(unittest.TestCase):
         self.assertEqual(guard.parse_division_subsections(text), [])
 
     def test_optional_budget_field_is_parsed_when_present(self):
+        """Ловит мутацию: `Рамка:` парсится как обязательное поле (падает
+        на подразделе без него) либо не парсится вовсе (всегда `None`) —
+        поле должно быть ИМЕННО необязательным: `$15`, когда есть, `None`,
+        когда нет."""
         with_budget = subsection(
             "Часть с рамкой", zones=FIXTURE_ZONE,
             order="первая, без зависимостей", tz_text="Текст ТЗ первой.",
@@ -124,6 +131,9 @@ class DivisionSectionErrorsTest(unittest.TestCase):
     версий, версия-гейтинг здесь не нужен)."""
 
     def test_non_spec_type_is_never_checked(self):
+        """Ловит мутацию: проверка `meta.get("type") != "spec"` выпадает
+        или инвертируется — секция «## Деление» текстом в PLAN.md (где
+        она не имеет смысла) не должна порождать ошибок формата."""
         single = subsection("Одна часть", zones=FIXTURE_ZONE,
                             order="первая, без зависимостей",
                             tz_text="Текст ТЗ.")
@@ -152,6 +162,84 @@ class DivisionSectionErrorsTest(unittest.TestCase):
             "SPEC.md", text, {"type": "spec", "zones": FIXTURE_ZONE})
 
         self.assertEqual(errors, [])
+
+    def test_zone_nested_under_a_common_directory_zone_does_not_error(self):
+        """Ловит мутацию R1-F1 (REVIEW.md итерация 1): сверка зоны
+        подраздела с общими зонами — буквальное членство в множестве, а
+        не покрытие с учётом вложенности каталог/файл. `tests/` входит в
+        `config.COMMON_ZONES` как каталог — конкретный файл внутри него
+        (`tests/test_something_new.py`) обязан считаться покрытым, а не
+        отказываться из-за того, что сам путь не встречается в
+        `COMMON_ZONES` буквально."""
+        nested_zone = "tests/test_something_new.py"
+        self.assertIn("tests/", config.COMMON_ZONES)
+        first = subsection("Часть с вложенной общей зоной",
+                           zones=nested_zone,
+                           order="первая, без зависимостей",
+                           tz_text="Текст ТЗ первой части.")
+        second = subsection("Вторая часть", zones=FIXTURE_ZONE,
+                           order="после части 1",
+                           tz_text="Текст ТЗ второй части.")
+        text = spec_text(zones=FIXTURE_ZONE, subsections=[first, second])
+
+        errors = guard.division_section_errors(
+            "SPEC.md", text, {"type": "spec", "zones": FIXTURE_ZONE})
+
+        self.assertEqual(errors, [])
+
+    def test_zone_nested_under_a_parent_directory_zone_does_not_error(self):
+        """Ловит мутацию R1-F1 (REVIEW.md итерация 1): та же вложенность,
+        но со стороны зоны РОДИТЕЛЯ — родитель называет зоной целый
+        каталог (`orchestrator/`), подраздел — конкретный файл внутри него
+        (`orchestrator/catalog.py`); плоское членство отказало бы, хотя
+        файл целиком лежит внутри зоны родителя."""
+        parent_dir_zone = "orchestrator/"
+        first = subsection("Часть внутри каталога родителя",
+                           zones="orchestrator/catalog.py",
+                           order="первая, без зависимостей",
+                           tz_text="Текст ТЗ первой части.")
+        second = subsection("Вторая часть", zones="orchestrator/fsm.py",
+                           order="после части 1",
+                           tz_text="Текст ТЗ второй части.")
+        text = spec_text(zones=parent_dir_zone, subsections=[first, second])
+
+        errors = guard.division_section_errors(
+            "SPEC.md", text, {"type": "spec", "zones": parent_dir_zone})
+
+        self.assertEqual(errors, [])
+
+    def test_zone_wider_than_parent_directory_still_errors(self):
+        """Каталожная вложенность не должна стать лазейкой в обратную
+        сторону: подраздел, называющий зоной каталог ШИРЕ узкой зоны
+        родителя (родитель — конкретный файл, подраздел — весь каталог),
+        по-прежнему режет зону родителя поперёк и обязан отказать."""
+        single = subsection("Часть шире родителя", zones="orchestrator/",
+                            order="первая, без зависимостей",
+                            tz_text="Текст ТЗ.")
+        text = spec_text(zones="orchestrator/catalog.py",
+                         subsections=[single])
+
+        errors = guard.division_section_errors(
+            "SPEC.md", text, {"type": "spec", "zones": "orchestrator/catalog.py"})
+
+        self.assertTrue(
+            any("orchestrator/" in e for e in errors),
+            f"не отказал зоне шире зоны родителя: {errors}")
+
+    def test_header_present_with_prose_but_no_subsections_errors(self):
+        """Ловит мутацию R1-F3 (REVIEW.md итерация 1): заголовок «##
+        Деление» есть, тело непустое, но ни одного `### <название>` нет —
+        функция обязана явно отказать (намерение аналитика на деление не
+        должно тихо проходить тем же путём, что и полное отсутствие
+        секции)."""
+        text = spec_text(division_raw="Текст без единого ### подраздела.")
+
+        errors = guard.division_section_errors(
+            "SPEC.md", text, {"type": "spec"})
+
+        self.assertTrue(
+            any("подраздела" in e for e in errors),
+            f"молча пропустил секцию без подразделов: {errors}")
 
     def test_check_content_wires_division_errors_for_spec(self):
         """Мутация: вызов `division_section_errors` выпал из

@@ -43,7 +43,7 @@ from pathlib import Path
 # репозитория, поэтому корень кладётся руками: та же схема, что в artel.py.
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from orchestrator import config, spend, yamlmini  # noqa: E402
+from orchestrator import config, spend, yamlmini, zone_lock  # noqa: E402
 
 REQUIRED_META = {"task", "type", "author_role", "status"}
 
@@ -1281,9 +1281,20 @@ def division_section_errors(path: Path | str, text: str, meta: dict) -> list[str
     headers = set(re.findall(r"^##\s+(.+?)\s*$", text, re.M))
     if DIVISION_SECTION not in headers:
         return []
+    body = section_body(text, DIVISION_SECTION)
+    if not body.strip():
+        return []
     subsections = parse_division_subsections(text)
     if not subsections:
-        return []
+        # Заголовок есть, тело непустое, но ни один `### <название>` не
+        # найден (R1-F3, REVIEW.md итерация 1) — намерение аналитика на
+        # деление не должно тихо проходить тем же путём, что полное
+        # отсутствие секции: раздел без подразделов < DIVISION_MIN_
+        # SUBSECTIONS буквально по AC-2.
+        return [f"{path}: секция '## {DIVISION_SECTION}' не несёт ни "
+               f"одного подраздела '### <название>' — оформи заявку "
+               f"подразделами (от {DIVISION_MIN_SUBSECTIONS} до "
+               f"{DIVISION_MAX_SUBSECTIONS}) либо убери секцию"]
 
     errors: list[str] = []
     count = len(subsections)
@@ -1295,7 +1306,6 @@ def division_section_errors(path: Path | str, text: str, meta: dict) -> list[str
             f"этому диапазону")
 
     parent_zones = set(_division_zone_list(meta.get("zones")))
-    common_zones = set(config.COMMON_ZONES)
     for sub in subsections:
         title = sub["title"] or "(без названия)"
         if not sub["title"]:
@@ -1319,7 +1329,15 @@ def division_section_errors(path: Path | str, text: str, meta: dict) -> list[str
                 f"'## {DIVISION_SECTION}' не несёт текст ТЗ подзадачи — "
                 f"добавь свободный текст после полей 'Зоны:'/'Порядок:'")
         for zone in _division_zone_list(sub["zones"]):
-            if zone not in parent_zones and zone not in common_zones:
+            # Покрытие — с учётом вложенности каталог/файл (R1-F1, REVIEW.md
+            # итерации 1), тем же приёмом, что `zone_lock._is_common_zone`/
+            # `_covered_by`: файл внутри общей/родительской директории-зоны
+            # (например `tests/test_x.py` при `COMMON_ZONES`, несущем
+            # `"tests/"`) покрыт, а не только буквальное совпадение строк.
+            covered = (zone_lock._is_common_zone(zone)
+                      or any(zone_lock._covered_by(zone, pz)
+                            for pz in parent_zones))
+            if not covered:
                 errors.append(
                     f"{path}: подраздел '{title}' секции "
                     f"'## {DIVISION_SECTION}' несёт зону '{zone}', не "

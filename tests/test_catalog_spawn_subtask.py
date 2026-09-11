@@ -29,6 +29,10 @@ TZ_BODY = ("Зоны: orchestrator/foo.py\nПорядок: первая, без 
 class SpawnSubtaskTest(RealGitSandbox):
 
     def test_spec_is_the_unmodified_template_with_title_and_task_id(self):
+        """Ловит мутацию: `spawn_subtask` подставляет своё название/id в
+        шаблон SPEC вместо `title`/`task_id` подзадачи, либо правит шаблон
+        сверх подстановки `TASK_ID`/`<название задачи>` — SPEC подзадачи
+        обязан оставаться байт-в-байт тем же шаблоном, что у `cmd_new`."""
         sub_id = catalog.spawn_subtask(PARENT_ID, PARENT_TITLE,
                                        "Подзадача spawn", TZ_BODY)
 
@@ -39,6 +43,10 @@ class SpawnSubtaskTest(RealGitSandbox):
         self.assertEqual(spec, expected)
 
     def test_tz_starts_with_the_parent_link_and_keeps_field_text(self):
+        """Ловит мутацию: ссылка на родителя дописывается в конец `TZ.md`
+        вместо первой строки, либо поля `Зоны:`/`Порядок:` подраздела
+        теряются/парсятся при сборке TZ — требование 2 явно запрещает
+        `spawn_subtask` разбирать эти поля, они остаются сырым текстом."""
         sub_id = catalog.spawn_subtask(PARENT_ID, PARENT_TITLE,
                                        "Подзадача с полями", TZ_BODY)
 
@@ -54,6 +62,10 @@ class SpawnSubtaskTest(RealGitSandbox):
         self.assertIn("Порядок: первая, без зависимостей", tz)
 
     def test_new_task_row_starts_in_spec_writing_like_cmd_new(self):
+        """Ловит мутацию: подзадача заводится в состоянии, отличном от
+        `spec_writing` (например, копирует состояние родителя `spec_gate`)
+        — общий скелет `_new_task_row` обязан заводить строку так же, как
+        `cmd_new`, независимо от того, откуда пришло ТЗ."""
         sub_id = catalog.spawn_subtask(PARENT_ID, PARENT_TITLE,
                                        "Подзадача состояния", TZ_BODY)
 
@@ -63,6 +75,9 @@ class SpawnSubtaskTest(RealGitSandbox):
         self.assertEqual(row["title"], "Подзадача состояния")
 
     def test_target_defaults_to_config_default_target(self):
+        """Ловит мутацию: `spawn_subtask` без явного `target` заводит
+        подзадачу с пустым/родительским `target` вместо `config.
+        DEFAULT_TARGET` — та же логика дефолта, что у `cmd_new`."""
         sub_id = catalog.spawn_subtask(PARENT_ID, PARENT_TITLE,
                                        "Подзадача таргета", TZ_BODY)
 

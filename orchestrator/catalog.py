@@ -210,17 +210,10 @@ def cmd_new(title: str, tz_path: str | None = None, *,
 
     target = target or config.DEFAULT_TARGET
     task_id = idgen.new_task_id()
-    branch = f"task/{task_id.lower()}-{slugify(title)}"
-
-    spec = (config.TEMPLATES / "SPEC.md").read_text(encoding="utf-8")
-    spec = spec.replace("TASK_ID", task_id).replace("<название задачи>", title)
     tz_doc = _tz_document(task_id, title, tz_raw) if tz_raw is not None else None
 
-    _new_external_artifact_branch(task_id, title, spec, tz_doc)
-
-    store.insert_task(conn, task_id, title, "spec_writing", branch, target,
-                      config.DEFAULT_BUDGET_USD, is_canary=canary)
-    store.journal(conn, task_id, "operator", "created", title)
+    _new_task_row(conn, task_id, title, target, tz_doc, is_canary=canary,
+                 journal_detail=title)
     print(f"[{task_id}] «{title}» создана (target {target}, артефактная "
          f"ветка пульта {artifact_branch.branch_name(task_id)})")
     if tz_raw is not None:
@@ -232,13 +225,31 @@ def cmd_new(title: str, tz_path: str | None = None, *,
     return task_id
 
 
+def _new_task_row(conn, task_id: str, title: str, target: str,
+                  tz_doc: str | None, *, is_canary: bool = False,
+                  journal_detail: str) -> None:
+    """Общий скелет заведения строки задачи (R1-F4, REVIEW.md итерация 1):
+    SPEC из шаблона, `TZ.md` (если есть), артефактная ветка пульта, строка
+    в БД, запись в журнал — переиспользуется `cmd_new` (ТЗ Оператора) и
+    `spawn_subtask` (подраздел секции «## Деление»), отличающимися только
+    источником `tz_doc`, пометкой `is_canary` и текстом записи журнала."""
+    branch = f"task/{task_id.lower()}-{slugify(title)}"
+    spec = (config.TEMPLATES / "SPEC.md").read_text(encoding="utf-8")
+    spec = spec.replace("TASK_ID", task_id).replace("<название задачи>", title)
+
+    _new_external_artifact_branch(task_id, title, spec, tz_doc)
+
+    store.insert_task(conn, task_id, title, "spec_writing", branch, target,
+                      config.DEFAULT_BUDGET_USD, is_canary=is_canary)
+    store.journal(conn, task_id, "operator", "created", journal_detail)
+
+
 def spawn_subtask(parent_id: str, parent_title: str, title: str,
                   tz_body: str, *, target: str | None = None) -> str:
     """Заводит одну подзадачу деления (01M1SHJZCE0Y4DXAAWQ2W585A7,
     требования 1-2) — та же механика, что `cmd_new` с ТЗ Оператора
-    (`_tz_document`/`_new_external_artifact_branch` переиспользуются без
-    изменений), только источник ТЗ — подраздел секции «## Деление»
-    родителя, не файл с диска Оператора.
+    (общий скелет `_new_task_row`, R1-F4), только источник ТЗ — подраздел
+    секции «## Деление» родителя, не файл с диска Оператора.
 
     `TZ.md` подзадачи — `tz_body` (поля `Зоны:`/`Порядок:`/`Рамка:`
     подраздела и текст ТЗ, требование 2: поля остаются текстом внутри
@@ -253,19 +264,11 @@ def spawn_subtask(parent_id: str, parent_title: str, title: str,
     conn = store.db()
     target = target or config.DEFAULT_TARGET
     task_id = idgen.new_task_id()
-    branch = f"task/{task_id.lower()}-{slugify(title)}"
-
-    spec = (config.TEMPLATES / "SPEC.md").read_text(encoding="utf-8")
-    spec = spec.replace("TASK_ID", task_id).replace("<название задачи>", title)
     link_line = f"Родительская задача: {parent_id} — {parent_title}"
     tz_doc = _tz_document(task_id, title, f"{link_line}\n{tz_body}")
 
-    _new_external_artifact_branch(task_id, title, spec, tz_doc)
-
-    store.insert_task(conn, task_id, title, "spec_writing", branch, target,
-                      config.DEFAULT_BUDGET_USD)
-    store.journal(conn, task_id, "operator", "created",
-                  f"деление {parent_id}: {title}")
+    _new_task_row(conn, task_id, title, target, tz_doc,
+                 journal_detail=f"деление {parent_id}: {title}")
     print(f"[{task_id}] «{title}» создана делением {parent_id} (target "
          f"{target}, артефактная ветка пульта "
          f"{artifact_branch.branch_name(task_id)})")
