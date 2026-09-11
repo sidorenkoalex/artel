@@ -20,8 +20,16 @@ from orchestrator import catalog, config, lease, store  # noqa: E402
 from tests.sandbox import TmpRootTest, _dead_pid, _ts_ago, capture  # noqa: E402
 
 
-class ResolveSessionIdTest(unittest.TestCase):
-    """Требование 9: identity вызова — явный параметр, иначе окружение/ppid."""
+class ResolveSessionIdTest(TmpRootTest):
+    """Требование 9: identity вызова — явный параметр, иначе окружение/ppid.
+
+    Наследует `TmpRootTest`, не голый `unittest.TestCase` (регресс SPEC
+    01M290PP4KBTG1KYS1PWKQJH6T): с той задачи `resolve_session_id`
+    (`lease.resolve_session_id` — тот же объект функции) при отсутствии
+    аргумента/переменной читает и заводит файл `.artel/session-id` —
+    непропатченный `config.ROOT` подхватил бы `ppid-fallback` из файла,
+    оставшегося на диске от предыдущего вызова CLI на этой машине, а не
+    посчитал бы живой `os.getppid()`, как ожидают проверки ниже."""
 
     def test_explicit_argument_wins(self):
         with mock.patch.dict(os.environ, {"ARTEL_SESSION_ID": "env-sess"}):
