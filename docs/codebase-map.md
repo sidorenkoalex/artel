@@ -1,5 +1,5 @@
 ---
-built_at_sha: 7cdc680215a6214ee1d13902ec004f561b98dbb0
+built_at_sha: 57303b802e5e93235a2ae7cd5e1fd722a607f1f0
 ---
 
 # Codebase-map пульта
@@ -540,6 +540,7 @@ built_at_sha: 7cdc680215a6214ee1d13902ec004f561b98dbb0
 - `acquire`
 - `release`
 - `run_window`
+- `touch_heartbeat`
 
 **Импортирует:** `orchestrator/config.py`, `orchestrator/liveness.py`, `orchestrator/store.py`
 

@@ -74,6 +74,24 @@ def acquire(conn, task_id: str, session_id: str) -> str | None:
             conn.rollback()
 
 
+def touch_heartbeat(conn) -> None:
+    """Продлевает `heartbeat_ts` ТЕКУЩЕГО держателя мьютекса, если строка
+    есть (SPEC 01M291EJMA995AZ61MEMDZKWRY, требование 3) — вызывать на
+    каждой итерации опроса CI внутри `_wait_for_branch_ci_green`, чтобы
+    долгое ожидание CI не роняло heartbeat ниже `LEASE_STALE_AFTER_SEC`
+    и не подставляло живого держателя под перехват `_holder_is_dead`.
+
+    Не принимает `session_id`: таблица несёт не более одной строки на
+    весь пульт (требование 2), поэтому текущий держатель однозначен без
+    сверки. Строки нет (мьютекс не взят либо вызвано вне окна) —
+    молча ничего не делает."""
+    row = store.merge_lock_row(conn)
+    if row is None:
+        return
+    store.set_merge_lock(conn, row["task_id"], row["session_id"],
+                         row["pid"], row["hostname"], store.now())
+
+
 def release(conn, session_id: str) -> None:
     """Снимает мьютекс merge-окна, если он принадлежит этой сессии —
     вызывать из `finally` по завершении окна, независимо от исхода (SPEC
