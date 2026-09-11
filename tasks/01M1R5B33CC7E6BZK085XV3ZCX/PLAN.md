@@ -358,3 +358,87 @@ test_no_dns_hostname_addresses_in_tests_tree` — два файла этой з�
 
 Код `orchestrator/` в этом ходе не менялся — правка целиком в
 `tests/`, задача остаётся закрытой по всем 17 AC.
+
+## Возврат — REVIEW.md итерация 1: R1-F1 (major) и R1-F2 (minor)
+
+Закрыты оба замечания реестра REVIEW.md итерации 1.
+
+**R1-F1** (`orchestrator/fsm_merge_gate.py`, класс «git-worktree admin-
+операция без ctx репозитория-владельца»): `_drop_scratch_worktree`
+принимает `ctx: repo_context.RepoContext` и зовёт `repo_context.git(ctx,
+"worktree", "remove", "--force", str(repo))` — дерегистрация теперь
+идёт в том же репозитории, где `_scratch_worktree` завёл worktree (для
+self — байт-в-байт прежний `gitcmd.git`, `cwd=config.ROOT`; для внешнего
+target — `-C <ctx.path>`, а не безусловный `config.ROOT`). `ctx`
+протащен через все 5 вызовов: `_handle_merge_conflict` (два вызова,
+строки 125/140), `_guard_task_root_or_refuse` (строка 324),
+`_publish_merge_artifacts` (строка 493 — параметр функции переименован
+`is_self: bool` → `ctx: repo_context.RepoContext`, сам `is_self`
+вычисляется внутри как `ctx.path == config.ROOT`, что уже требовалось
+для условия карты/RETRO AC-13 и не меняет то поведение), финальный вызов
+в `_cmd_approve_merge_gate` (строка 610).
+
+Единственный существующий вызывающий тест на старую сигнатуру —
+`tests/test_guard_task_root_subdirectory.py::
+MergeGateGuardRefusesSubdirectoryFileTest.
+test_nested_stray_file_in_snapshot_blocks_before_push` — обновлён
+(передаёт `repo_context.resolve(config.DEFAULT_TARGET)` четвёртым
+аргументом).
+
+Регресс закрыт новым тестом на ДВУХ настоящих git-репозиториях (не
+мок — тем же приёмом, которым ревьювер сам эмпирически воспроизвёл
+дефект): `tests/test_fsm_merge_gate_scratch_worktree_cleanup.py`
+(`ScratchWorktreeCleanupTest`, 3 метода) — `self.root` (via
+`RealGitSandbox`, изображает `config.ROOT`) и отдельный настоящий
+git-репозиторий `self.target_repo` (изображает клон внешнего target'а,
+путь ВНЕ `config.ROOT`, `ctx.path != config.ROOT` проверено явным
+`assertNotEqual` в `setUp`):
+- `test_cleanup_deregisters_worktree_in_the_target_clone` — worktree,
+  заведённый в `target_repo`, дерегистрируется именно там (`git
+  worktree list --porcelain` не несёт больше эту запись).
+- `test_cleanup_does_not_touch_the_pult_repository` — дерегистрация
+  внешнего scratch не оставляет никаких posторонних worktree-записей в
+  `config.ROOT`.
+- `test_self_context_still_cleans_up_in_the_pult_repository` — self-путь
+  (`ctx.path == config.ROOT`) не сломан фиксом, продолжает убирать
+  worktree в `config.ROOT`, как и до этой правки.
+
+Мутационная проверка (не гипотеза): временно откатил `_drop_scratch_
+worktree` на голую `gitcmd.git("worktree", "remove", ...)` (то есть
+воспроизвёл именно дефект R1-F1) — `test_cleanup_deregisters_worktree_
+in_the_target_clone` покраснел (`AssertionError`, worktree осталась
+зарегистрированной в `target_repo`), два других метода остались
+зелёными (сами не различают self/external достаточно чувствительно,
+ожидаемо); вернул фикс — все 3 метода снова зелёные.
+
+**R1-F2** (`tests/test_repo_context.py`, конвенция test-authoring): всем
+9 методам классов `ResolveSelfTest`/`ResolveExternalTargetTest`/
+`PathOrNoneTest`/`GitHelperTest` добавлен докстринг `Ловит мутацию: …` с
+конкретным сценарием (перепутанные поля `RepoContext`, обращение к
+targets.yaml раньше проверки `target_name == DEFAULT_TARGET`,
+исключение парсера вместо деградации в `None`, `path_or_none`/
+`repo_context.git`, перепутавшие self/external ветвление) — по образцу
+`tests/test_branch_freshness_gate.py`, названному ревьювером.
+
+Реестр замечаний REVIEW.md переведён в `fixed` по обеим записям
+(R1-F1, R1-F2) с указанием конкретной правки — закрытие (`accepted`)
+остаётся решением ревьювера следующей итерации.
+
+Прогон:
+- `python3 -m unittest tests.test_fsm_merge_gate_scratch_worktree_cleanup
+  tests.test_repo_context tests.test_guard_task_root_subdirectory
+  tests.test_fsm_merge_gate_done_snapshot tests.test_merge_gate_ci_wait
+  -v` — 29/29 OK.
+- `python3 -m unittest` по полному списку модулей из REVIEW.md
+  «Проверено исполнением» (+ новый `tests.test_fsm_merge_gate_
+  scratch_worktree_cleanup`, + обновлённый `tests.test_guard_task_root_
+  subdirectory`) — 743 теста, все OK.
+- `python3 -m pytest tasks/01M1R5B33CC7E6BZK085XV3ZCX/acceptance_tests
+  -o timeout=90 -q` — 39 passed (планка не тронута этим ходом, все 17 AC
+  зелёные по-прежнему).
+
+Код этой правки не выходит за пределы файлов, уже перечисленных в зонах
+SPEC ∪ ANSWER-2 (`orchestrator/fsm_merge_gate.py` в зоне SPEC) плюс
+`tests/` (тестовая зона, без ограничения путём zones — `zones:` SPEC
+называет только код `orchestrator/`, тесты в его состав не входят,
+тем же принципом, что и предыдущие ходы этой задачи).
