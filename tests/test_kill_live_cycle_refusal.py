@@ -37,21 +37,43 @@ class LiveCycleHolderTest(unittest.TestCase):
     ловит мутацию, что любой из них перестал влиять на результат."""
 
     def test_none_row_is_not_live(self):
+        """Ловит мутацию: отсутствие lease (`None`) трактуется как
+        «живой» — например, проверка `row is None` убрана или
+        инвертирована — тест красен на `True` там, где lease нет вовсе.
+        """
         self.assertFalse(cleanup._live_cycle_holder(None))
 
     def test_foreign_host_is_not_live(self):
+        """Ловит мутацию: сверка hostname с этим host убрана или
+        сравнивается не то поле — держатель на чужой машине ошибочно
+        считается живым, тест красен на `True`.
+        """
         row = _row(hostname="какой-то-другой-host")
         self.assertFalse(cleanup._live_cycle_holder(row))
 
     def test_dead_pid_on_this_host_is_not_live(self):
+        """Ловит мутацию: проверка адресуемости pid (`_pid_alive`)
+        убрана или её результат игнорируется — мёртвый pid на своём
+        host ошибочно считается живым, тест красен на `True`.
+        """
         row = _row(pid=_dead_pid())
         self.assertFalse(cleanup._live_cycle_holder(row))
 
     def test_stale_heartbeat_on_this_host_with_alive_pid_is_not_live(self):
+        """Ловит мутацию: сверка возраста heartbeat с
+        `config.LEASE_STALE_AFTER_SEC` убрана или порог перепутан —
+        протухший heartbeat при живом pid ошибочно считается живым,
+        тест красен на `True`.
+        """
         row = _row(heartbeat_ts=_ts_ago(config.LEASE_STALE_AFTER_SEC + 1))
         self.assertFalse(cleanup._live_cycle_holder(row))
 
     def test_same_host_alive_pid_fresh_heartbeat_is_live(self):
+        """Ловит мутацию: любая из трёх проверок (host/pid/heartbeat)
+        отказывает безусловно (например, функция всегда возвращает
+        `False`) — тест красен на `False` там, где держатель живой по
+        всем трём признакам.
+        """
         row = _row()
         self.assertTrue(cleanup._live_cycle_holder(row))
 
@@ -70,6 +92,13 @@ class LiveCycleRoleTest(TmpRepoTest):
                            os.getpid(), socket.gethostname(), store.now())
 
     def test_no_role_on_the_current_state_is_not_a_live_cycle(self):
+        """Ловит мутацию: `_live_cycle_role` считает живой lease
+        циклом независимо от роли текущего состояния (проверка
+        `runner.step_role(...)` убрана) — на голом `spec_writing` без
+        роли тест красен, вернув имя роли вместо `None`, и защищённый
+        `tests/test_detached_cycle.py::KillSignalsDetachedHolderTest`
+        (требование 6/AC-7) сломался бы тем же путём.
+        """
         self._seed_live_lease()
         row = store.lease_row(store.db(), self.TASK)
 
@@ -77,6 +106,11 @@ class LiveCycleRoleTest(TmpRepoTest):
             cleanup._live_cycle_role(store.db(), self.TASK, row))
 
     def test_a_role_bearing_state_with_a_live_lease_is_a_live_cycle(self):
+        """Ловит мутацию: `_live_cycle_role` возвращает `None`
+        безусловно (например, проверка роли всегда считает её
+        отсутствующей) — на `in_dev` с ролью `developer` и живым lease
+        тест красен, вернув `None` вместо имени роли.
+        """
         self._seed_live_lease()
         conn = store.db()
         store.set_state(conn, self.TASK, "in_dev", "operator",
@@ -103,12 +137,22 @@ class KillDispatchYesFlagTest(TmpRepoTest):
             artel.main()
 
     def test_yes_flag_reaches_cmd_kill_as_confirmed_true(self):
+        """Ловит мутацию: диспетчер `"kill"` не разбирает `--yes` из
+        `rest[1:]` (флаг проглатывается или игнорируется) — тест
+        красен, если `cmd_kill` вызван без `confirmed=True` при
+        переданном флаге.
+        """
         with mock.patch.object(cleanup, "cmd_kill") as kill:
             self._dispatch("--yes")
 
         kill.assert_called_once_with(self.TASK, confirmed=True)
 
     def test_missing_flag_reaches_cmd_kill_as_confirmed_false(self):
+        """Ловит мутацию: диспетчер `"kill"` считает `confirmed=True`
+        значением по умолчанию (или любой третий аргумент трактует как
+        подтверждение) — тест красен, если `cmd_kill` вызван с
+        `confirmed=True` без переданного флага.
+        """
         with mock.patch.object(cleanup, "cmd_kill") as kill:
             self._dispatch()
 
