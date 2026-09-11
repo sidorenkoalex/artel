@@ -656,6 +656,28 @@ def cmd_approve(task_id: str, sha: str | None = None,
                      lambda sid: _cmd_approve(conn, task_id, sha, sid))
 
 
+def _spawn_division_subtasks(conn, task_id: str, t, state: str,
+                             subsections: list) -> None:
+    """Заводит по одной подзадаче на каждый подраздел секции «## Деление»
+    (01M1SHJZCE0Y4DXAAWQ2W585A7, требования 2-3, AC-5/AC-6/AC-11) и
+    переводит родителя в `killed` — единственное терминальное
+    непродолжаемое состояние FSM, подходящее по смыслу «поделена»
+    (`orchestrator/config.py::AUTO_STOP`, требование 2 SPEC).
+
+    Ленивый импорт `catalog` — тем же приёмом, что `_approve_merge_gate`
+    выше зовёт `fsm_merge_gate`: `catalog.py` не импортирует `fsm.py` на
+    уровне модуля, цикла нет, но локальный импорт держит связку явной
+    только там, где она нужна.
+    """
+    from . import catalog
+    new_ids = [catalog.spawn_subtask(task_id, t["title"], sub["title"],
+                                     sub["body_raw"], target=t["target"])
+              for sub in subsections]
+    ids_text = ", ".join(new_ids)
+    store.set_state(conn, task_id, "killed", "operator",
+                    expected_state=state, detail=f"поделена на: {ids_text}")
+
+
 def _approve_spec_gate(conn, task_id: str, t, state: str, sid: str) -> None:
     # tests_writing до кода (SPEC T023, требование 1): пропускается
     # только явным skip_tests либо SPEC версии ниже 2 (без AC-разметки,
@@ -701,6 +723,17 @@ def _approve_spec_gate(conn, task_id: str, t, state: str, sid: str) -> None:
     budget.apply_spec_budget(conn, t, meta)
     _print_spec_gate_calibration_hint(conn, task_id, t["budget_usd"] or 0.0,
                                       meta, spec_text)
+    # Заявка на деление (01M1SHJZCE0Y4DXAAWQ2W585A7, требования 2-3):
+    # секция «## Деление» уже провалидирована guard'ом на переходе
+    # `spec_writing -> spec_gate` (`fsm_advance.spec_writing`) — здесь её
+    # достаточно распознать, не проверять заново. Ветвь срабатывает
+    # ТОЛЬКО из состояния spec_gate (мы уже внутри этого обработчика) —
+    # повторный approve того же родителя приходит уже из killed и здесь
+    # не оказывается вовсе (диспетчер `_cmd_approve` ниже).
+    subsections = guard.parse_division_subsections(spec_text)
+    if subsections:
+        _spawn_division_subtasks(conn, task_id, t, state, subsections)
+        return
     skip_reason = meta.get("skip_tests")
     if skip_reason or not guard.requires_ac_markup(meta):
         detail = (f"тесты пропущены (skip_tests): {skip_reason}"
