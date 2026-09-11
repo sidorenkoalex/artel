@@ -208,7 +208,11 @@ jobs:
         run: git for-each-ref --format='%(refname) %(objectname)' refs/heads/ refs/artifacts/ > /tmp/refs-before.txt
       - name: unit-тесты (если появятся)
         run: |
-          if [ -d tests ]; then python3 -m unittest discover -s tests -v; fi
+          # Параллель pytest-xdist (01M291M2Z76M84GVP25J387A66, требование
+          # 3/AC-6): 438с -> 140с на машине разработчика. Значение таймаута
+          # отдельного теста дублирует stack.PER_TEST_TIMEOUT_SEC литералом
+          # — известное ограничение (YAML не читает Python-константу).
+          if [ -d tests ]; then python3 -m pytest tests -n auto -p no:cacheprovider -p timeout -p xdist -o timeout=120; fi
       - name: прогон tests/ не меняет набор ссылок репозитория (SPEC 01M1KVGD18P9H5WR7VM8TGPV1T, требование 1)
         run: |
           # Инвариант: полный прогон tests/ не пишет в объектную базу CI-
