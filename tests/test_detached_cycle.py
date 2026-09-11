@@ -462,3 +462,45 @@ class KillSignalsDetachedHolderTest(TmpRepoTest):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class WaitZoneFlagHotfix22Test(TmpRootTest):
+    """Hotfix №22 (11.09): `auto <id> --wait-zone` — флаг разбирается,
+    едет в отделённый процесс, а неизвестный флаг даёт отказ, а не
+    молчаливый старт без ожидания зоны."""
+    TASK = "T001"
+
+    def setUp(self):
+        super().setUp()
+        capture(catalog.cmd_init)
+        store.insert_task(store.db(), self.TASK, "Задача", "in_dev",
+                          "task/t001-zadacha", config.DEFAULT_TARGET, 25.0)
+
+    def test_wait_zone_flag_reaches_the_detached_child_argv(self):
+        """Ловит мутацию: `_cmd_auto_or_detach` роняет `--wait-zone` при
+        детаче — дочерний argv обязан нести флаг ПЕРЕД `--attach`."""
+        proc = mock.Mock()
+        proc.pid = 4242
+        with mock.patch.object(artel.subprocess, "Popen",
+                               return_value=proc) as popen:
+            capture(artel._cmd_auto_or_detach, [self.TASK, "--wait-zone"])
+        argv = popen.call_args.args[0]
+        self.assertEqual(argv[-4:],
+                         ["auto", self.TASK, "--wait-zone", "--attach"])
+
+    def test_attached_auto_passes_wait_zone_to_cmd_auto(self):
+        """Ловит мутацию: путь `--attach` зовёт `cmd_auto(task_id)` без
+        `wait_zone=True` — режим ожидания зоны терялся бы молча."""
+        with mock.patch.object(artel.auto, "cmd_auto") as cmd_auto:
+            artel._cmd_auto_or_detach([self.TASK, "--attach", "--wait-zone"])
+        cmd_auto.assert_called_once_with(self.TASK, wait_zone=True)
+
+    def test_unknown_flag_is_refused_not_swallowed(self):
+        """Ловит мутацию: неизвестный флаг фильтруется как «лишний
+        позиционный» и команда стартует, будто флага не было."""
+        with self.assertRaises(SystemExit) as ctx:
+            artel._task_id_and_attach([self.TASK, "--wait-zon"], "usage")
+        self.assertIn("--wait-zon", str(ctx.exception))
+        with self.assertRaises(SystemExit) as ctx:
+            artel._cmd_run_or_detach([self.TASK, "--wait-zone"])
+        self.assertIn("--wait-zone", str(ctx.exception))
