@@ -844,14 +844,28 @@ class DogfoodTransitionJournalsCodeBranchShaTest(RealPultGitTest):
 class ApproveByShaTest(RealPultGitTest):
     """Требование 4: approve с привязкой к sha."""
 
-    def test_approve_without_sha_prints_current_and_does_not_transition(self):
+    def test_approve_without_sha_transitions_on_matching_clean_fixation(self):
+        """SPEC 01M1SHJX22EMEP4AJ9FFJJ09DC, AC-2: до этой задачи `approve`
+        без аргумента НИКОГДА не переводил состояние (формулировка этого
+        метода до правки) — он безусловно печатал зафиксированный sha и
+        ждал, чтобы Оператор набрал его руками, даже когда живое
+        состояние уже совпадало с зафиксированным и копия была чистая.
+        Теперь на этом совпадении `approve` сверяет sha сам (той же
+        `fixation.read()`, что раньше служила только для подсказки) и
+        проводит переход без ручного набора — расхождение/грязная копия
+        по-прежнему НЕ пропускают approve (`test_ac1_diverged_or_dirty_
+        live_sha_blocks_approve.py`, `test_ac3_diverged_or_dirty_refuses_
+        named.py` в приёмочных тестах задачи) — здесь меняется только
+        формулировка сценария «живое совпадение», не сам принцип
+        инварианта 25 (FSM решает по зафиксированным хэшам)."""
         sha = self.enter_spec_gate()
 
         out = self.capture(fsm.cmd_approve, self.TASK)
 
         self.assertIn(sha, out)
         self.assertEqual(store.get_task(store.db(), self.TASK)["state"],
-                         "spec_gate")
+                         "in_dev", "живое совпадение и чистая копия "
+                         "обязаны переводить состояние без ручного sha")
 
     def test_approve_with_a_mismatched_sha_is_refused(self):
         self.enter_spec_gate()

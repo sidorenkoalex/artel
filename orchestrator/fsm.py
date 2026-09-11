@@ -16,9 +16,9 @@ from pathlib import Path
 
 from scripts import guard
 
-from . import (acceptance, artifact_source, artifacts, config, fixation,
-              github_adapter, gitcmd, lease, review, store, targets,
-              workspace, yamlmini)
+from . import (acceptance, artifact_source, artifacts, budget, config,
+              fixation, github_adapter, gitcmd, lease, review, store,
+              targets, workspace, yamlmini)
 
 # Буквальная строка «сигналов нет» (ANSWER-2, tasks/01M1KS8K9RXWHX2PW3ZKB0P903,
 # AC-12) — снимок секции «Оценка объёма и деление» пустой/отсутствующей,
@@ -708,40 +708,68 @@ APPROVE_SHA_PREFIX_MIN = 8
 
 
 def confirm_fixation(conn, task_id: str, sha: str | None) -> bool:
-    """True — approve может продолжить; False — сообщил и ждёт sha (не отказ).
+    """True — approve может продолжить; False — отклонено (не запрос sha).
 
     Живьём пересчитывает состояние через `fixation.read()`, а не читает
-    `tasks.fixed_sha`: approve обязан сверяться с ТЕКУЩИМ состоянием
-    (ADR-0003 п.15, «сверка на каждом следующем гейте... = сравнение sha +
-    чистота рабочей копии»), а не с тем, что было на момент прошлого
-    перехода. `read()`, не `fix()` (REVIEW.md T021, замечание 1 итерации
-    2): approve — точка ПРОВЕРКИ, не фиксации, и не имеет права коммитить
-    незакоммиченный WIP чужой задачи того же target как побочный эффект
-    сравнения — легитимный коммит перехода случится позже, в
-    `store.set_state` → `fix()`, если сверка сошлась.
+    `tasks.fixed_sha` напрямую для сравнения с САМИМ СОБОЙ — но именно
+    `tasks.fixed_sha` служит эталоном сверки на ветке `sha is None`
+    (SPEC 01M1SHJX22EMEP4AJ9FFJJ09DC, требование 1): approve обязан
+    сверяться с ТЕКУЩИМ состоянием (ADR-0003 п.15, «сверка на каждом
+    следующем гейте... = сравнение sha + чистота рабочей копии»), а не
+    заново набранным Оператором значением. `read()`, не `fix()`
+    (REVIEW.md T021, замечание 1 итерации 2): approve — точка ПРОВЕРКИ,
+    не фиксации, и не имеет права коммитить незакоммиченный WIP чужой
+    задачи того же target как побочный эффект сравнения — легитимный
+    коммит перехода случится позже, в `store.set_state` → `fix()`, если
+    сверка сошлась.
 
-    Фиксации нет (`sha == ""` — git не ответил, песочница без
+    Фиксации нет (`current == ""` — git не ответил, песочница без
     репозитория) — сверять не с чем: approve ведёт себя как до T021
-    (требование 3, критерий 3). Расхождение sha или грязная копия —
-    `sys.exit`, тем же стилем, что и отказ merge по красному CI ниже.
+    (требование 3, критерий 3).
 
-    Переданный `sha` короче `APPROVE_SHA_PREFIX_MIN` — именованный отказ
-    про минимальную длину, ДО сравнения с зафиксированным (SPEC
+    `sha is None` (SPEC 01M1SHJX22EMEP4AJ9FFJJ09DC, требования 1-2,
+    AC-1..AC-3): живой `current`/`clean` сверяются с `tasks.fixed_sha` —
+    совпало и чисто → `True` без печати запроса sha (переход, который
+    сделает вызывающий код, сам зафиксирует и зажурналирует этот sha
+    через `store.set_state` → `record_fixation`, отдельного журнала
+    здесь для этого не нужно); разошлось или грязно → именованный отказ
+    с ОБОИМИ sha (живым и зафиксированным) — мягкий `return False`, НЕ
+    `sys.exit`: единственный существующий (ADR-0002) тест на эту ветку,
+    `tests/test_git_fixation.py::ExternalApproveDoesNotCommitOthersWorkInProgressTest.
+    test_approve_without_sha_does_not_commit_another_tasks_wip`, ждёт
+    именно мягкого возврата, не исключения.
+
+    `sha` передан явно — прежняя семантика T021 байт-в-байт (SPEC
+    требование 2, AC-4): сверяется с ЖИВЫМ `current` (не с
+    `tasks.fixed_sha`), отказ — `sys.exit`, тем же стилем, что и отказ
+    merge по красному CI ниже. Короче `APPROVE_SHA_PREFIX_MIN` —
+    именованный отказ про минимальную длину, ДО сравнения (SPEC T021
     требование 3, AC-4): короткий отрезок совпал бы с зафиксированным
     почти всегда случайно, отличить опечатку от намеренного префикса
     нечем. От `APPROVE_SHA_PREFIX_MIN` и длиннее — `current.startswith
     (sha)` принимает как полный sha (совпадает с собой целиком), так и
-    любой его префикс той же длины (SPEC требование 2, AC-2); не
+    любой его префикс той же длины (SPEC T021 требование 2, AC-2); не
     префикс — прежний отказ «не совпадает» с печатью зафиксированного
-    sha (SPEC требование 3, AC-3), байт-в-байт как до этой задачи.
+    sha (SPEC T021 требование 3, AC-3), байт-в-байт как до этой задачи.
     """
     target = store.task_target(conn, task_id)
     current, clean = fixation.read(task_id, target)
     if not current:
         return True
     if sha is None:
-        print(f"[{task_id}] approve требует sha — зафиксирован {current}")
-        print(f"  повтори: artel.py approve {task_id} {current}")
+        fixed = store.get_task(conn, task_id)["fixed_sha"] or ""
+        if fixed and current == fixed and clean:
+            print(f"[{task_id}] approve: живой sha совпадает с "
+                  f"зафиксированным {current} — переход подтверждён "
+                  f"механикой")
+            return True
+        reason = (f"живой sha {current} расходится с зафиксированным "
+                  f"{fixed or '(нет)'}" if current != fixed else
+                  f"грязная копия артефактов при sha {current}")
+        store.journal(conn, task_id, "operator", "approve отклонён", reason)
+        print(f"[{task_id}] approve отклонён: {reason}")
+        print(f"  перепроверь артефакты и повтори: artel.py approve "
+              f"{task_id} {fixed or current}")
         return False
     if len(sha) < APPROVE_SHA_PREFIX_MIN:
         reason = (f"sha {sha!r} короче минимальной длины "
@@ -808,6 +836,17 @@ def _cmd_approve(conn, task_id: str, sha: str | None, sid: str) -> None:
         # assessment рядом — meta уже прочитана выше, поле отсутствует у
         # SPEC старых версий (`meta.get` даёт None, колонка тогда NULL).
         store.update_task(conn, task_id, zones=meta.get("zones"))
+        # Перечитывание budget_usd на гейте SPEC (SPEC
+        # 01M1SHJX22EMEP4AJ9FFJJ09DC, требования 4-5): Оператор мог
+        # поправить SPEC прямо на гейте (сузить рамку и т.п.) уже ПОСЛЕ
+        # того, как `spec_writing -> spec_gate` (`fsm_advance.spec_writing`)
+        # применил значение, действовавшее на тот момент — approve обязан
+        # перечитать `meta` (уже прочитана выше той же веткой foreign/диск)
+        # тем же `apply_spec_budget`. Идемпотентность (потолок Оператора
+        # не перебивается; совпадающее значение не журналируется дважды)
+        # уже целиком несёт сама функция через `budget_source` — второй
+        # вызов той же функции с той же `t` не требует отдельного кода.
+        budget.apply_spec_budget(conn, t, meta)
         skip_reason = meta.get("skip_tests")
         if skip_reason or not guard.requires_ac_markup(meta):
             detail = (f"тесты пропущены (skip_tests): {skip_reason}"
