@@ -51,15 +51,24 @@ def spec_budget(meta: dict) -> tuple[float | None, str]:
 
 
 def apply_spec_budget(conn, t: sqlite3.Row, meta: dict) -> None:
-    """Ставит задаче потолок из SPEC — один раз и никогда поверх ручного.
+    """Ставит задаче потолок из SPEC — перечитывая изменения, но никогда
+    поверх ручного.
 
     Вызывается на переходе spec_writing -> spec_gate: SPEC к этому моменту
     прочитан и признан готовым, а денег задача ещё не потратила (агент
     запускается только из in_dev и review).
 
-    Кто задал потолок, помнит `budget_source`: с ним значение из SPEC не
-    применяется ни повторно, ни поверх поднятия Оператора — в какую бы
-    сторону ни шёл порядок (требование 4).
+    Кто задал потолок, помнит `budget_source`: значение из SPEC никогда
+    не перебивает поднятие Оператора (`budget_source=operator`) — в
+    какую бы сторону ни шёл порядок (требование 4). Но источник `spec`
+    сам по себе не запрещает повторное применение — запрещает только
+    совпадение с уже применённым значением (REVIEW.md
+    01M1SHJX22EMEP4AJ9FFJJ09DC итерация 1, R1-F1): approve на spec_gate
+    (SPEC 01M1SHJX22EMEP4AJ9FFJJ09DC, требования 4-5) зовёт эту функцию
+    ВТОРЫМ разом, уже после того, как `spec_writing -> spec_gate`
+    применил исходное значение — если Оператор успел поправить SPEC
+    ПРЯМО на гейте, новое значение обязано подхватиться, а не быть
+    молча отвергнутым как «уже применён».
 
     Функция ничего не бросает и состояние не двигает: и непонятное значение,
     и значение выше дефолта — это предупреждение Оператору, а не остановка
@@ -80,10 +89,14 @@ def apply_spec_budget(conn, t: sqlite3.Row, meta: dict) -> None:
         return
 
     source = t["budget_source"]
-    if source is not None:
-        why = ("уже применён" if source == config.BUDGET_SOURCE_SPEC
-               else "потолок задан Оператором")
-        detail = f"${value:.2f} — {why}, остаётся ${old:.2f}"
+    if source == config.BUDGET_SOURCE_OPERATOR:
+        detail = f"${value:.2f} — потолок задан Оператором, остаётся ${old:.2f}"
+        store.journal(conn, task_id, "fsm",
+                      "бюджет из SPEC не применён", detail)
+        print(f"[{task_id}] бюджет из SPEC не применён: {detail}")
+        return
+    if source == config.BUDGET_SOURCE_SPEC and value == old:
+        detail = f"${value:.2f} — уже применён, остаётся ${old:.2f}"
         store.journal(conn, task_id, "fsm",
                       "бюджет из SPEC не применён", detail)
         print(f"[{task_id}] бюджет из SPEC не применён: {detail}")
