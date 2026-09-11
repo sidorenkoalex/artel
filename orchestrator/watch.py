@@ -146,15 +146,20 @@ def _emit_steps(conn, task_id: str, events: set, known_step_id: dict) -> None:
                        row["detail"])
 
 
-def _emit_alerts(conn, selection: list, known_alert_id: int) -> int:
-    """Новые alerts, чей `target` буквально совпадает с id ВЫБРАННОЙ
-    задачи (AC-3, `kind` не фильтруется); возвращает новый базовый id."""
+def _emit_alerts(conn, known_ids: set, known_alert_id: int) -> int:
+    """Новые alerts, чей `target` совпадает с id ЛЮБОЙ когда-либо
+    наблюдаемой задачи (AC-3, `kind` не фильтруется) — `known_ids`
+    несёт объединение текущей выборки и уже известных задач, тем же
+    приёмом, что цикл `cmd_watch` уже применяет для `steps`/`STATE`
+    (`watch.py:209`): задача, покинувшая динамическую `--mine`/`--all`
+    выборку (стала терминальной либо сменила владельца), обязана
+    продолжать наблюдаться — иначе её алерт, возникший после выхода из
+    выборки, пропадёт из потока навсегда (REVIEW.md R1-F1)."""
     rows = store.alerts_since(conn, known_alert_id)
     if not rows:
         return known_alert_id
-    selected = set(selection)
     for row in rows:
-        if row["target"] in selected:
+        if row["target"] in known_ids:
             _print_line(row["ts"], row["target"], row["source"],
                        f"alert:{row['kind']}", row["message"])
     return rows[-1]["id"]
@@ -221,7 +226,8 @@ def cmd_watch(argv: list) -> None:
             _emit_steps(conn, task_id, opts["events"], known_step_id)
 
         if "alerts" in opts["events"]:
-            known_alert_id = _emit_alerts(conn, selection, known_alert_id)
+            known_alert_id = _emit_alerts(
+                conn, set(selection) | set(known_step_id), known_alert_id)
 
         if _should_stop(opts, selection, tasks_by_id):
             return
