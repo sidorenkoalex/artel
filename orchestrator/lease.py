@@ -37,6 +37,18 @@ def acquire(conn, task_id: str, session_id: str, *,
     записью в журнале задачи. `взят_с_нуля` — True, только если до этого
     вызова строки не было вовсе (см. модульный докстринг про `release`).
 
+    SPEC 01M290PS4ZXK1RCZ3PXQSXK0Y9, требование 1/AC-1: чужой lease СВОЕГО
+    hostname с проверяемо мёртвым pid держателя (`liveness._pid_alive` ->
+    `False`) перехватывается так же, НЕЗАВИСИМО от возраста heartbeat —
+    живость на своём host проверяема мгновенно, ждать порога незачем.
+    Живость не проверяется вовсе для ДРУГОГО hostname (AC-4, pid чужой
+    машины не адресуем локально) и не меняет исход, если pid на своём
+    host ещё жив (AC-3, отказ «подожди её» как раньше). Гонка двух
+    перехватчиков одного мёртвого держателя (AC-6) закрыта той же
+    транзакцией `BEGIN IMMEDIATE` ниже — второй вызывающий читает строку
+    уже ПОСЛЕ коммита первого и видит его (живой, свежий) lease, поэтому
+    уходит в обычный именованный отказ, а не во второй перехват.
+
     `same_host_ok` (SPEC 01M1VBEDGMEXHVGWAH42FTDZ4X, требование 1) —
     keyword-only, дефолт `False` сохраняет поведение ВСЕХ существующих
     вызывателей `run_locked` дословно (SPEC «Не входит»: исключение из
@@ -81,13 +93,21 @@ def acquire(conn, task_id: str, session_id: str, *,
             store.update_lease(conn, task_id, session_id, pid, hostname, store.now())
             return None, False
         age = liveness._age_seconds(row["heartbeat_ts"])
+        dead_on_own_host = (row["hostname"] == hostname
+                            and not liveness._pid_alive(row["pid"]))
         if not force and age <= config.LEASE_STALE_AFTER_SEC:
             if same_host_ok and row["hostname"] == hostname:
                 return None, False
-            refusal = (f"[{task_id}] задачу ведёт сессия {row['session_id']} "
-                      f"с host {row['hostname']}, heartbeat {int(age)} сек "
-                      f"назад — подожди её или разберись, что с ней")
-            return refusal, False
+            # SPEC 01M290PS4ZXK1RCZ3PXQSXK0Y9, требование 1/AC-1: держатель
+            # на ЭТОМ host с мёртвым pid — перехват немедленно, не дожидаясь
+            # протухания heartbeat (`same_host_ok` выше уже забрал случай
+            # разрешённой параллельной работы — он приоритетнее; сюда
+            # попадает только явный отказ либо перехват мёртвого держателя).
+            if not dead_on_own_host:
+                refusal = (f"[{task_id}] задачу ведёт сессия {row['session_id']} "
+                          f"с host {row['hostname']}, heartbeat {int(age)} сек "
+                          f"назад — подожди её или разберись, что с ней")
+                return refusal, False
         # AC-5: причина перехвата — «pid мёртв», если прежний держатель на
         # ЭТОМ host и его pid проверяемо мёртв (тот же приём различения
         # «свой/чужой host», которым уже пользуется `doctor.check_leases`);
@@ -96,7 +116,7 @@ def acquire(conn, task_id: str, session_id: str, *,
         # heartbeat выше) не меняется, меняется только текст причины.
         if force and age <= config.LEASE_STALE_AFTER_SEC:
             cause = "kill switch (принудительно, сессия ещё свежая)"
-        elif row["hostname"] == hostname and not liveness._pid_alive(row["pid"]):
+        elif dead_on_own_host:
             cause = f"pid держателя мёртв (pid {row['pid']})"
         else:
             cause = (f"heartbeat протух ({int(age)} сек > порог "
