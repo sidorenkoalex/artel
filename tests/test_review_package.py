@@ -975,6 +975,21 @@ class CmdRunReviewPackageTest(unittest.TestCase):
         # git-вызова (в отличие от прежнего безусловного `git add -A`
         # догфуда). Список точный: любой `show` diff/stat (чтение
         # ревью-пакета) в шаге разработчика по-прежнему провалит тест.
+        # Последние шесть — `checkpoint.commit_success_checkpoint`
+        # (SPEC 01M283NC4JJXK7QS68Y9ET8TBK, требование 1): вызывается
+        # безусловно на обычном успешном `rc=0` для роли `developer`,
+        # даже когда рабочее дерево worktree чисто (фейковый агент этого
+        # теста ничего не писал за пределами PLAN.md-маркера в
+        # `tasks/<id>/`) — тихая деградация без коммита (`diff --cached
+        # --quiet` отвечает 0, «нечего коммитить»), но сами git-вызовы
+        # уже сделаны. Первая тройка — `_staged_change_summary` (add -A,
+        # reset исключения, numstat для журнала), вторая — повторный
+        # `add -A`/`reset` внутри `_commit_worktree_change` (идемпотентно,
+        # но НЕ переиспользует индекс первого вызова: разные вызовы
+        # `gitcmd.in_repo`) и финальная проверка `diff --cached --quiet`.
+        # `-C <worktree>` — путь `workspace.path(task_id)`, тот же, что
+        # строит сам чекпоинт.
+        wt = str(config.WORKTREES / self.TASK)
         self.assertEqual(self.git.calls,
                          [["worktree", "list", "--porcelain"],
                           ["show", "main:skills/conventions-core.md"],
@@ -997,7 +1012,15 @@ class CmdRunReviewPackageTest(unittest.TestCase):
                           ["config", "--get", "user.name"],
                           ["config", "--get", "user.email"],
                           ["rev-parse", "--verify", "--quiet",
-                           f"refs/heads/artifact/{self.TASK.lower()}"]],
+                           f"refs/heads/artifact/{self.TASK.lower()}"],
+                          ["-C", wt, "add", "-A"],
+                          ["-C", wt, "reset", "-q", "--",
+                           f"tasks/{self.TASK}"],
+                          ["-C", wt, "diff", "--cached", "--numstat"],
+                          ["-C", wt, "add", "-A"],
+                          ["-C", wt, "reset", "-q", "--",
+                           f"tasks/{self.TASK}"],
+                          ["-C", wt, "diff", "--cached", "--quiet"]],
                          "diff разработчику не собирается")
 
     def test_reviewer_rights_are_not_narrowed(self):

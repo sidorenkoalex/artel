@@ -189,6 +189,17 @@ AC_MARKER = re.compile(
     r"^#\s*AC-(\d+):\s*(manual|skip|escalate|ci)\b[^\S\n]*(?:[—-]+[^\S\n]*(.*))?",
     re.M)
 
+# Тот же текст маркера, но НЕ в начале строки — перед `#` есть пробелы
+# или табуляция (01M28NX43ERJGHCJN29HVKMCC3): AC_MARKER выше заякорен на
+# `^#` и молча не видит такую строку — критерий тихо остаётся без
+# пометки, а инцидент 11.09 (`# AC-7: manual`, поставленный с отступом
+# вместо снятого тестового метода) показал, что это должно быть
+# именованным отказом guard, а не побочным эффектом «нет теста и нет
+# пометки». `indented_ac_marker_errors_from_files`/`scan_indented_ac_markers`
+# ниже (после `acceptance_traceability_errors`) используют этот образец.
+INDENTED_AC_MARKER = re.compile(
+    r"^[ \t]+#\s*AC-(\d+):\s*(manual|skip|escalate|ci)\b", re.M)
+
 # Полный текст критерия `AC-n. <текст>` — от начала пункта до следующего
 # `AC-m.` в начале строки либо конца раздела. Тот же якорь, что AC_ITEM
 # выше, но захватывает содержимое целиком — нужен только для эвристики
@@ -695,6 +706,11 @@ def acceptance_traceability_errors(tdir: Path) -> list[str]:
     SPEC без AC-разметки (версия 1 или `skip_tests`) — tests_writing эту
     задачу не проходит, сверять нечего. Само правило —
     `traceability_errors_from_content`.
+
+    Несёт также ошибки маркера AC-n с отступом
+    (01M28NX43ERJGHCJN29HVKMCC3, `scan_indented_ac_markers`) — тот же
+    выход из tests_writing обязан отказывать и на этом классе дефекта,
+    не только на буквальном «нет теста и нет пометки».
     """
     spec_path = tdir / "SPEC.md"
     try:
@@ -703,7 +719,94 @@ def acceptance_traceability_errors(tdir: Path) -> list[str]:
         return [f"{spec_path}: не прочитан: {exc}"]
     meta = yamlmini.frontmatter(text) or {}
     tested, markers = scan_acceptance_tests(tdir)
-    return traceability_errors_from_content(text, meta, tested, markers)
+    errors = traceability_errors_from_content(text, meta, tested, markers)
+    return errors + scan_indented_ac_markers(tdir)
+
+
+# --------------------------------------------------------------------------
+# Маркер AC-n с отступом (01M28NX43ERJGHCJN29HVKMCC3): `# AC-n: manual|
+# skip|escalate|ci`, поставленный не в начале строки. AC_MARKER (заякорен
+# на `^#`, без отступа) молча не видит такую строку — критерий остаётся
+# без пометки и без явной причины (инцидент 11.09, `# AC-7: manual`
+# вместо снятого тестового метода, ADR-0014 ч.2, 01M1THKWFX). Проверка
+# ниже находит такую строку явно и называет её отдельной, именованной
+# ошибкой, а не полагается на побочный эффект «нет теста и нет пометки».
+INDENTED_AC_MARKER_REASON_TMPL = (
+    "маркер '# AC-{n}: {kind}' с отступом не учитывается каталогом — "
+    "вынеси в начало строки либо убери")
+
+
+def _string_literal_lines(source: str) -> set[int]:
+    """Номера строк (1-based) файла `source`, занятые строковыми
+    константами (докстринги и любые другие строковые литералы) — `ast.
+    parse`, тот же приём, что `module_docstring` выше, но по ВСЕМ
+    строковым узлам файла, не только докстрингу модуля (требование 2:
+    буквальный пример синтаксиса маркера внутри докстринга/строкового
+    литерала — не нарушение).
+
+    Пустое множество — файл не разбирается (`SyntaxError`): вызывающий
+    код в этом случае ничего не исключает — остаётся запасная эвристика
+    требования 2 («строка начинается с отступа и `#`» — признак
+    комментария), допустимая явно, когда guard не различает докстринг.
+    """
+    try:
+        tree = ast.parse(source)
+    except SyntaxError:
+        return set()
+    lines: set[int] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Constant) and isinstance(node.value, str):
+            end = getattr(node, "end_lineno", None) or node.lineno
+            lines.update(range(node.lineno, end + 1))
+    return lines
+
+
+def indented_ac_marker_errors_from_files(files: list[tuple[str, str]]) -> list[str]:
+    """Ошибки маркера AC-n с отступом (требования 1-2) по уже прочитанным
+    (label, текст) парам .py-файлов acceptance_tests/ — источник (диск
+    или ВЕТКА задачи) выбирает вызывающий код, тем же приёмом, что
+    `redness_marker_errors_from_files`/`id_format_sample_errors`.
+
+    Строка, занятая строковым литералом/докстрингом (`_string_literal_
+    lines`), из проверки исключается — требование 2. Строка с
+    маркер-подобным текстом, которому предшествуют на той же строке
+    кавычки или любой другой символ (не только отступ), под
+    `INDENTED_AC_MARKER` не подпадает вовсе — регулярка заякорена на
+    `^[ \\t]+#`, ровно тем же приёмом, каким `AC_MARKER` уже отсекает
+    текст маркера, не стоящий буквально в начале строки (комментарий
+    выше `AC_MARKER`, R1-F2).
+    """
+    errors: list[str] = []
+    for label, source in files:
+        string_lines = _string_literal_lines(source)
+        for lineno, line in enumerate(source.splitlines(), start=1):
+            if lineno in string_lines:
+                continue
+            m = INDENTED_AC_MARKER.match(line)
+            if not m:
+                continue
+            reason = INDENTED_AC_MARKER_REASON_TMPL.format(
+                n=m.group(1), kind=m.group(2))
+            errors.append(f"{label}:{lineno}: {reason}")
+    return errors
+
+
+def scan_indented_ac_markers(tdir: Path) -> list[str]:
+    """Ошибки маркера AC-n с отступом для `acceptance_tests/test_*.py`
+    рабочей копии `tdir` — тот же набор файлов, что `scan_acceptance_tests`
+    читает для AC_MARKER без отступа, сохраняя единый домен между
+    признанной и непризнанной разметкой одного и того же критерия.
+    """
+    tests_dir = tdir / "acceptance_tests"
+    if not tests_dir.is_dir():
+        return []
+    files: list[tuple[str, str]] = []
+    for f in sorted(tests_dir.rglob("test_*.py")):
+        try:
+            files.append((str(f), f.read_text(encoding="utf-8")))
+        except (OSError, UnicodeDecodeError):
+            continue
+    return indented_ac_marker_errors_from_files(files)
 
 
 # Секция «Проверено исполнением» — обязательна при status: approved
@@ -1609,11 +1712,30 @@ def main() -> int:
         # Копия лёгкой песочницы переходов (SPEC 01M1TKP45EM16ZMJGQKNZA5T7J,
         # требование 3, AC-8) — предупреждение, не ошибка, собирается по
         # всем каталогам задач сразу, тем же приёмом, что посторонние
-        # файлы выше.
+        # файлы выше. Маркер AC-n с отступом
+        # (01M28NX43ERJGHCJN29HVKMCC3) — по тому же обходу, но ошибка, не
+        # предупреждение: `--all` (в т.ч. с `--artifact-branch`, режим CI
+        # на пуш ветки `artifact/<id>`) обязан красить дерево ПОСЛЕ
+        # `amend-tests`, коммитящего правку планки плотницки мимо
+        # `tests_writing -> in_dev` — единственная проверка индента,
+        # которую видит именно этот путь. Задача, уже закрытая ДО
+        # появления этого правила (несёт `docs/retro/<id>.md`), не
+        # сканируется — тот же принцип, что `scan_extraneous_acceptance_
+        # files`/`_closed_before_split_assessment` выше (модульный
+        # докстринг: «новые правила guard действуют на живые задачи»);
+        # без исключения найдено эмпирически: закрытая
+        # 01M1THKWFXFYNW28HDJGYHQWH6 несёт в acceptance_tests/ ровно тот
+        # исторический индентированный маркер, из-за которого эта задача
+        # заведена, и красила бы `--all` на main для любой ветки.
+        indented_marker_errors: list[str] = []
         for task_dir in sorted(Path("tasks").iterdir()):
             if task_dir.is_dir():
                 sandbox_reuse_warnings.extend(
                     sandbox_reuse_check(task_dir)["warnings"])
+                if not (RETRO_DIR / f"{task_dir.name}.md").exists():
+                    indented_marker_errors.extend(
+                        scan_indented_ac_markers(task_dir))
+        extraneous_errors = extraneous_errors + indented_marker_errors
     else:
         files = [Path(a) for a in args]
 
