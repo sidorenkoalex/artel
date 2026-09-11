@@ -904,7 +904,11 @@ class ApproveByShaTest(RealPultGitTest):
         обязана называть ЖИВОЙ sha (с которым явный путь `approve <id>
         <sha>` реально сравнивает — `current.startswith(sha)`), а не
         зафиксированный — иначе подсказанная команда детерминированно
-        проваливается второй раз."""
+        проваливается второй раз.
+
+        Ловит мутацию: подстановка `{fixed or current}` вместо
+        `{current}` в подсказке повтора (регресс R1-F2) — ассерт на
+        `f"approve {self.TASK} {live_sha}"` в выводе не пройдёт."""
         fixed_sha = self.enter_spec_gate()
         (self.task_dir() / "SPEC.md").write_text(
             "подмена мимо гейта\n", encoding="utf-8")
@@ -927,7 +931,11 @@ class ApproveByShaTest(RealPultGitTest):
         R1-F3) — живой sha совпадает с зафиксированным, но рабочая копия
         репо фиксации грязная (правка без коммита): approve без sha
         обязан отказать по грязноте, а не пройти только по совпадению
-        sha."""
+        sha.
+
+        Ловит мутацию: пропуск проверки `clean` при совпадающем sha
+        (переход считался бы подтверждённым по одному лишь совпадению
+        sha) — ассерт на неизменённое состояние задачи не пройдёт."""
         fixed_sha = self.enter_spec_gate()
         (self.task_dir() / "SPEC.md").write_text(
             "правка без коммита\n", encoding="utf-8")

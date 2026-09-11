@@ -540,7 +540,13 @@ class SpecBudgetOnTheGateTest(unittest.TestCase):
     def test_approve_on_spec_gate_does_not_reapply_an_unchanged_spec_value(self):
         """Тот же повторный проход approve, но значение SPEC не менялось —
         идемпотентность (AC-8: без дублей журнала) обязана сохраняться и
-        на ВТОРОЙ точке чтения (approve), не только на `advance`."""
+        на ВТОРОЙ точке чтения (approve), не только на `advance`.
+
+        Ловит мутацию: сравнение `source is not None` вместо
+        `source == BUDGET_SOURCE_SPEC and value == old` (тот же класс
+        регрессии, что и в соседнем тесте выше) — повторное применение
+        неизменного значения породило бы вторую запись в журнале,
+        `self.journal(...)` вернёт список длиной 2 вместо 1."""
         self.write_spec(budget_usd=45)
         self.capture(fsm.cmd_advance, self.TASK)
 
