@@ -65,6 +65,21 @@ schema_version: 5
    этой задачей; в `operator-gates.md` — строка под «Гейт эскалации»
    про `zones-extend`/маркер/`--from-branch` как штатный путь вместо
    ручных операций.
+6. Итерация 2 (REVIEW.md итерации 1, замечание R1-F1 — blocker):
+   `_cmd_answer` (ветка `in_dev`/`review`) и `_cmd_zones_extend`
+   принимали мандат «от Оператора» без проверки, что вызов пришёл не
+   из окружения самой роли, ведущей этот же активный шаг — developer
+   на своём `in_dev`/reviewer на своём `review` физически имели
+   безусловный `Bash(python3:*)` (`runner.role_cmd`) и могли выполнить
+   `python3 orchestrator/artel.py zones-extend <свой же id> <путь>`
+   (или `answer` файлом, который сами же и написали) и сами себе
+   выдать мандат. Закрыто тем же рубежом, что уже защищает расшифровку
+   пула канарейки (`canary._authorized_pool_payload`, `canary.py:317`)
+   — `runner.in_role_environment()` в начале обеих точек, отказ ДО
+   чтения файла/коммита. Симметричная запись в `permissions.deny`
+   курируемого слоя роли (`docs/reference/role-home/claude/
+   settings.json`) вне зон этой задачи — приложена к этому PLAN
+   unified-диффом (см. «Приложение» ниже), применяет Оператор.
 
 ## Шаги
 
@@ -80,6 +95,11 @@ schema_version: 5
    мандата, `tests/test_amend.py` — классом `--from-branch`; новый
    `tests/test_zones_extend.py` для CLI-команды) + прогон трёх
    заблокированных `acceptance_tests/` этой задачи и затронутых модулей.
+6. Итерация 2 (R1-F1): `runner.in_role_environment()` в `_cmd_answer`/
+   `_cmd_zones_extend` (`orchestrator/answer.py`) + регресс-тесты
+   `tests/test_answer.py::RoleEnvironmentRefusalTest`; unified-дифф
+   `docs/reference/role-home/claude/settings.json` — приложением к
+   этому PLAN, не коммитом (путь вне зон задачи).
 
 ## Покрытие требований
 
@@ -118,6 +138,15 @@ schema_version: 5
 - Откат — вся правка в трёх модулях и двух командах без изменения схемы
   БД и без изменения существующих путей выполнения; откат — ревёрт
   коммита.
+- Итерация 2 (R1-F1): рубеж `runner.in_role_environment()` в `answer`/
+  `zones-extend` не меняет happy-path Оператора (его сессия не несёт
+  `HOME`/`CLAUDE_CONFIG_DIR` роли — обе переменные ставит только
+  `runner.role_env` процессу шага) и не меняет ветку `escalated` (там
+  рубежа нет — на этом состоянии процесс роли уже завершён, действующего
+  вызывающего из-под роли физически нет). Регресс подтверждён
+  `AnswerCommandRefusalsTest`/`AnswerMandateMarkerOutsideInDevOrReviewStillRefusesTest`/
+  `ZonesExtendCommandTest`/тремя приёмочными тестами AC-1/AC-4 —
+  зелёные без правки ассертов.
 
 ## Риски
 
@@ -126,6 +155,38 @@ schema_version: 5
   транзитивно) — риска нет, но это единственное место кодовой базы,
   где `answer.py` обзаводится зависимостью на `fsm_advance.py` (раньше
   было наоборот только текстом комментария, не импортом).
+- Итерация 2: та же проверка для новой зависимости `answer.py` →
+  `runner.py` — `runner.py` не импортирует `answer.py` ни прямо, ни
+  транзитивно (проверено `python3 -c "import orchestrator.answer"` —
+  чистый импорт, без цикла); карта кодовой базы перегенерирована тем
+  же коммитом (`python3 scripts/codebase_map.py`).
+
+## Приложение: unified-дифф docs/reference/role-home/claude/settings.json (R1-F1)
+
+Путь вне зон этой задачи (курируемый слой роли — не `orchestrator/`/
+`docs/operator-*.md`/`tests/`) — применяет Оператор. Проверено `git
+apply --check` на чистом дереве перед сдачей (журнал шага: `APPLIES
+CLEANLY`). Второй, независимый от кода рубеж (симметрично
+`permissions.deny` записям `init`/`doctor --restore` в этом же файле):
+роль не сможет даже попытаться вызвать `answer`/`zones-extend` из-под
+Bash своего шага — код (`runner.in_role_environment()`, см. «Подход»,
+п.6) отказывает и без этой записи, здесь — защита в глубину, не замена.
+
+```diff
+diff --git a/docs/reference/role-home/claude/settings.json b/docs/reference/role-home/claude/settings.json
+index 60d03f78..8737366d 100644
+--- a/docs/reference/role-home/claude/settings.json
++++ b/docs/reference/role-home/claude/settings.json
+@@ -8,6 +8,8 @@
+       "Bash(git remote add:*)",
+       "Bash(python3 orchestrator/artel.py init:*)",
+       "Bash(python3 orchestrator/artel.py doctor --restore:*)",
++      "Bash(python3 orchestrator/artel.py answer:*)",
++      "Bash(python3 orchestrator/artel.py zones-extend:*)",
+       "Bash(openssl enc -d:*)",
+       "Bash(security find-generic-password:*)"
+     ]
+```
 
 ## Предложения системе
 
@@ -136,3 +197,11 @@ schema_version: 5
   требуют прогона буквально, поэтому реализация его не делает; будущим
   SPEC на похожие команды стоит явно писать «включая обязательный
   прогон» или «без прогона», а не полагаться на «тем же способом».
+- До этой задачи `runner.in_role_environment()` защищал только
+  расшифровку пула канарейки (единственный пример в кодовой базе) —
+  класс шире:
+  любая новая Оператор-only команда, доступная из активного состояния
+  роли (`in_dev`/`review`/…), нуждается в том же рубеже. Ревьювер этой
+  задачи (REVIEW итерации 1) уже предложил вынести это в
+  `skills/review-checklist.md` — присоединяюсь: без явного пункта
+  чек-листа класс находится вручную по кодовой базе, не по инструкции.
