@@ -188,7 +188,7 @@ class ZoneLockTest(TmpRootTest):
         хотя требование 1 говорит о ВСЁМ диапазоне."""
         self.set_own_zones("a/b")
         for state in ("in_dev", "review", "verifying", "acceptance",
-                      "merge_gate"):
+                      "merge_gate", "escalated"):
             with self.subTest(state=state):
                 self._clear_other_tasks()
                 occupier = f"T9{state[:3]}"
@@ -200,6 +200,24 @@ class ZoneLockTest(TmpRootTest):
 
                 self.assertIsNotNone(conflict)
                 self.assertEqual(conflict, ("a/b", occupier, state))
+
+    def test_escalated_without_developer_start_does_not_occupy(self):
+        """SPEC 01M1VBEAWZW4EBZHKMGNBBK648, требование 5, AC-7 второй
+        сценарий: `escalated` попало в `BLOCKING_STATES`, но фильтр
+        `_occupies` (старт developer в текущем пребывании) применяется к
+        нему точно так же, как и к остальным состояниям диапазона —
+        задача, эскалированная ДО первого шага developer (например, по
+        бюджету на самом входе в `in_dev`), зону не держит.
+
+        Ловит мутацию: `escalated` добавлен в `BLOCKING_STATES` без
+        сохранения проверки `_occupies` — тогда любая эскалированная
+        задача с пересекающейся зоной ложно блокировала бы соседей, даже
+        не начав код."""
+        self.set_own_zones("a/b")
+        self.seed_other("escalated", "a/b")
+
+        self.assertIsNone(zone_lock.blocking_conflict(
+            store.db(), self.TASK, self.get_task()))
 
     def test_occupier_outside_range_does_not_conflict(self):
         """Ловит мутацию: диапазон `BLOCKING_STATES` расширен за пределы

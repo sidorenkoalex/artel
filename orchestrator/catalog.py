@@ -285,6 +285,13 @@ def _zone_wait_suffix(conn, t) -> str:
     итерация 1) — добавкой ПОСЛЕ держателя, только когда конкурентов по
     ЭТОЙ зоне больше одного; иначе строка не меняется (единственный
     заблокированный — очередь из одного не несёт новой информации).
+
+    Минуты ожидания (SPEC 01M1VBEAWZW4EBZHKMGNBBK648, требование 4,
+    AC-6) — добавкой ПОСЛЕ держателя/очереди, только пока задача реально
+    в цикле `auto --wait-zone` (`zone_lock.wait_minutes` не `None`):
+    `run`/`auto` без флага останавливаются немедленно и не оставляют
+    записи входа — строка в этом случае не меняется, тем же приёмом, что
+    и очередь из одного конкурента выше.
     """
     conflict = zone_lock.blocking_conflict(conn, t["id"], t)
     if conflict is None:
@@ -292,8 +299,10 @@ def _zone_wait_suffix(conn, t) -> str:
     path, occupier_id, occupier_state = conflict
     position, total = zone_lock.queue_position(conn, t["id"], path)
     queue = f", очередь {position}/{total}" if total > 1 else ""
+    minutes = zone_lock.wait_minutes(conn, t["id"])
+    waited = f", ждёт {minutes} мин" if minutes is not None else ""
     return (f"  [ждёт зоны {path}: занята {occupier_id} ({occupier_state})"
-            f"{queue}]")
+            f"{queue}{waited}]")
 
 
 def _wave_breaker_suffix(t, wave_breaker_open: bool) -> str:
