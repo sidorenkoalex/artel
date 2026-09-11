@@ -762,5 +762,176 @@ class CommitPullCheckpointTest(_WorktreeCheckpointTest):
         self.assertEqual(self.orchestrator_steps(), [])
 
 
+class CommitSuccessCheckpointTest(_WorktreeCheckpointTest):
+    """Юнит-тесты `checkpoint.commit_success_checkpoint` (SPEC
+    01M283NC4JJXK7QS68Y9ET8TBK, требования 1-5): WIP-коммит кода пультом
+    за роль `developer` на обычном успешном (`rc=0`) завершении шага —
+    сценарное покрытие целиком (весь шаг через `run_faked()`) уже несут
+    `tasks/01M283NC4JJXK7QS68Y9ET8TBK/acceptance_tests/`; здесь —
+    изолированные случаи самой функции чекпоинта, тем же приёмом, что и
+    соседние классы файла.
+
+    `orchestrator_steps()` родителя фильтрует по действию, начинающемуся
+    с «WIP-чекпоинт» — действие этого чекпоинта другое (буквально «код
+    закоммичен пультом за роль», AC-3), поэтому здесь свой фильтр."""
+
+    def success_checkpoint_steps(self) -> list:
+        return [r for r in store.task_steps(store.db(), self.TASK)
+               if r["actor"] == "orchestrator"
+               and r["action"] == "код закоммичен пультом за роль"]
+
+    def test_clean_tree_commits_nothing_and_journals_nothing(self):
+        self.enter_in_dev()
+        before = self.worktree_head()
+
+        detail = checkpoint.commit_success_checkpoint(
+            store.db(), self.TASK, "developer")
+
+        self.assertEqual(detail, "")
+        self.assertEqual(self.worktree_head(), before)
+        self.assertEqual(self.success_checkpoint_steps(), [])
+
+    def test_dirty_tree_commits_with_literal_message_and_journal_entry(self):
+        """Ловит мутацию: сообщение коммита переиспользует текст соседнего
+        WIP-чекпоинта вместо буквальной строки AC-2, или `detail`/журнал
+        не называют закоммиченный файл и число строк (AC-3)."""
+        self.enter_in_dev()
+        self.write_code_file("orchestrator/new_module.py",
+                             "строка 1\nстрока 2\nстрока 3\nстрока 4\n")
+        (self.worktree_task_dir() / "wip.md").write_text(
+            "недописано\n", encoding="utf-8")
+
+        detail = checkpoint.commit_success_checkpoint(
+            store.db(), self.TASK, "developer")
+
+        subject = self.worktree_git("log", "-1", "--format=%s").strip()
+        expected = (f"{self.TASK}: код закоммичен пультом за роль "
+                   "developer — шаг завершён с незакоммиченным кодом")
+        self.assertEqual(subject, expected)
+        self.assertIn(self.worktree_head(), detail)
+        self.assertIn("orchestrator/new_module.py", detail)
+        self.assertIn("4", detail)
+
+        entries = self.success_checkpoint_steps()
+        self.assertEqual(len(entries), 1)
+        self.assertEqual(entries[0]["actor"], "orchestrator")
+        self.assertIn("orchestrator/new_module.py", entries[0]["detail"])
+        self.assertIn("4", entries[0]["detail"])
+
+    def test_excludes_task_dir_from_code_commit(self):
+        """Ловит мутацию: `exclude` не передаётся `_commit_worktree_change` —
+        `tasks/<id>/` попал бы в кодовый коммит наравне с
+        `orchestrator/new_module.py`."""
+        self.enter_in_dev()
+        self.write_code_file("orchestrator/new_module.py",
+                             "# правка разработчика\n")
+        (self.worktree_task_dir() / "wip.md").write_text(
+            "недописанный артефакт\n", encoding="utf-8")
+
+        checkpoint.commit_success_checkpoint(store.db(), self.TASK, "developer")
+
+        after = self.worktree_head()
+        committed = self.worktree_git("show", "--name-only", "--format=", after)
+        committed_paths = [p for p in committed.splitlines() if p]
+        self.assertIn("orchestrator/new_module.py", committed_paths)
+        task_paths = [p for p in committed_paths
+                     if p.startswith(f"tasks/{self.TASK}/")]
+        self.assertEqual(task_paths, [],
+                         f"tasks/<id>/ не входит в мандат кода — "
+                         f"фактически закоммичено: {task_paths}")
+
+    def test_refixation_keeps_check_integrity_clean_after_the_commit(self):
+        self.enter_in_dev()
+        self.write_code_file("orchestrator/new_module.py",
+                             "# правка разработчика\n")
+
+        checkpoint.commit_success_checkpoint(store.db(), self.TASK, "developer")
+
+        conn = store.db()
+        self.assertIsNone(fixation.check_integrity(conn, self.TASK))
+        self.assertEqual(store.get_task(conn, self.TASK)["fixed_sha"],
+                         self.head())
+
+    def test_non_developer_role_is_left_untouched_not_discarded(self):
+        """AC-5: в отличие от трёх аварийных WIP-чекпоинтов, роль без
+        мандата кода не получает здесь НИ отката, НИ коммита — «прежнее
+        поведение» для обычного успешного пути было полным отсутствием
+        эффекта (ни один из аварийных чекпоинтов не срабатывает вне
+        таймаута/rc!=0/обрыва потока)."""
+        self.enter_in_dev()
+        claude_md = self.wt / "CLAUDE.md"
+        original = claude_md.read_text(encoding="utf-8")
+        claude_md.write_text(original + "строка 1\nстрока 2\n",
+                             encoding="utf-8")
+        before = self.worktree_head()
+
+        detail = checkpoint.commit_success_checkpoint(
+            store.db(), self.TASK, "reviewer")
+
+        self.assertEqual(detail, "")
+        self.assertEqual(self.worktree_head(), before)
+        self.assertEqual(claude_md.read_text(encoding="utf-8"),
+                         original + "строка 1\nстрока 2\n",
+                         "AC-5: правка вне мандата не должна быть откачена")
+        self.assertEqual(self.success_checkpoint_steps(), [])
+
+    def test_non_dogfood_target_skips_checkpoint(self):
+        self.enter_in_dev()
+        (self.worktree_task_dir() / "wip.md").write_text(
+            "недописано\n", encoding="utf-8")
+        before = self.worktree_head()
+        conn = store.db()
+        store.update_task(conn, self.TASK, target="another-target")
+
+        with mock.patch.object(gitcmd, "git") as git_mock:
+            detail = checkpoint.commit_success_checkpoint(
+                conn, self.TASK, "developer")
+
+        git_mock.assert_not_called()
+        self.assertEqual(detail, "")
+        self.assertEqual(self.worktree_head(), before)
+        self.assertEqual(self.success_checkpoint_steps(), [])
+
+    def test_git_add_failure_commits_nothing_and_journals_nothing(self):
+        self.enter_in_dev()
+        self.write_code_file("orchestrator/new_module.py",
+                             "# правка разработчика\n")
+        before = self.worktree_head()
+        real_git = gitcmd.git
+
+        def side_effect(*args):
+            if "add" in args:
+                return subprocess.CompletedProcess(list(args), 1, "", "boom")
+            return real_git(*args)
+
+        with mock.patch.object(gitcmd, "git", side_effect=side_effect):
+            detail = checkpoint.commit_success_checkpoint(
+                store.db(), self.TASK, "developer")
+
+        self.assertEqual(detail, "")
+        self.assertEqual(self.worktree_head(), before)
+        self.assertEqual(self.success_checkpoint_steps(), [])
+
+    def test_git_commit_failure_commits_nothing_and_journals_nothing(self):
+        self.enter_in_dev()
+        self.write_code_file("orchestrator/new_module.py",
+                             "# правка разработчика\n")
+        before = self.worktree_head()
+        real_git = gitcmd.git
+
+        def side_effect(*args):
+            if "commit" in args:
+                return subprocess.CompletedProcess(list(args), 1, "", "boom")
+            return real_git(*args)
+
+        with mock.patch.object(gitcmd, "git", side_effect=side_effect):
+            detail = checkpoint.commit_success_checkpoint(
+                store.db(), self.TASK, "developer")
+
+        self.assertEqual(detail, "")
+        self.assertEqual(self.worktree_head(), before)
+        self.assertEqual(self.success_checkpoint_steps(), [])
+
+
 if __name__ == "__main__":
     unittest.main()

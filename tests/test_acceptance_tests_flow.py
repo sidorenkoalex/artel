@@ -402,6 +402,161 @@ class AcceptanceTraceabilityFunctionTest(unittest.TestCase):
 
 
 # --------------------------------------------------------------------------
+# guard: маркер AC-n с отступом не учитывается каталогом
+# (01M28NX43ERJGHCJN29HVKMCC3, SPEC AC-1/AC-2/AC-3).
+
+INDENTED_MARKER_SOURCE = """import unittest
+
+
+class AcceptanceTest(unittest.TestCase):
+    def test_ac1_first_criterion(self):
+        self.assertTrue(True)
+
+    # AC-2: manual — Оператор проверяет глазами
+"""
+
+DOCSTRING_MENTION_SOURCE = '''"""Модуль с примером синтаксиса пометки в докстринге, не настоящей
+пометкой:
+
+    # AC-2: manual — это просто пример синтаксиса, не пометка критерия.
+
+Зелёный с рождения: докстринг несёт только пример, реальная пометка —
+ниже, в начале строки.
+"""
+import unittest
+
+
+class AcceptanceTest(unittest.TestCase):
+    def test_ac1_first_criterion(self):
+        self.assertTrue(True)
+
+
+# AC-2: manual — Оператор проверяет глазами
+'''
+
+
+class IndentedAcMarkerTest(unittest.TestCase):
+    """`guard.indented_ac_marker_errors_from_files`/`scan_indented_ac_markers`/
+    `acceptance_traceability_errors` — маркер AC-n с отступом (требования
+    1-3 SPEC этой задачи)."""
+
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.tdir = Path(tmp.name)
+        (self.tdir / "SPEC.md").write_text(
+            SPEC_V2.format(task="T999", extra=""), encoding="utf-8")
+
+    def write(self, content: str, name: str = "test_ac.py") -> None:
+        tests_dir = self.tdir / "acceptance_tests"
+        tests_dir.mkdir(parents=True, exist_ok=True)
+        (tests_dir / name).write_text(content, encoding="utf-8")
+
+    def test_indented_marker_is_named_with_line_number(self):
+        """AC-3а: маркер с отступом — именованный отказ с номером строки
+        (мутация «отступ разрешён» красная — если детекция снята, этот
+        тест не находит ни ошибку про AC-2, ни текст «с отступом»)."""
+        self.write(INDENTED_MARKER_SOURCE)
+
+        errors = guard.indented_ac_marker_errors_from_files(
+            [(str(self.tdir / "acceptance_tests" / "test_ac.py"),
+             INDENTED_MARKER_SOURCE)])
+
+        self.assertEqual(len(errors), 1, errors)
+        self.assertIn("test_ac.py:8", errors[0])
+        self.assertIn("с отступом", errors[0])
+        self.assertIn("вынеси в начало строки либо убери", errors[0])
+        self.assertIn("AC-2", errors[0])
+
+    def test_indented_marker_still_leaves_the_criterion_untraced(self):
+        """Отступленный маркер не засчитывается каталогом как валидная
+        пометка AC-2 — трассируемость по-прежнему требует теста/пометки
+        (AC_MARKER, заякоренная на начало строки, эту строку не видит),
+        а `acceptance_traceability_errors` дополнительно называет
+        отступ отдельной ошибкой (AC-1).
+        Ловит мутацию: если бы отступленный маркер засчитывался как
+        валидная пометка AC-2 (ровно инцидент 11.09, причина этой
+        задачи), тест не нашёл бы ошибку «нет теста и нет пометки» —
+        AC-2 считался бы покрытым молча."""
+        self.write(INDENTED_MARKER_SOURCE)
+
+        errors = guard.acceptance_traceability_errors(self.tdir)
+
+        self.assertTrue(any("AC-2" in e and "нет теста и нет пометки" in e
+                            for e in errors), errors)
+        self.assertTrue(any("с отступом" in e for e in errors), errors)
+
+    def test_marker_at_line_start_is_unaffected(self):
+        """AC-3б: маркер в начале строки распознаётся как раньше — не
+        нарушение, критерий покрыт пометкой.
+        Ловит мутацию: регресс, при котором маркер без отступа
+        ошибочно начинает считаться нарушением (например, `INDENTED_
+        AC_MARKER` без проверки на ненулевой отступ) — валидная пометка
+        AC-2 в начале строки внезапно красит и `indented_ac_marker_
+        errors_from_files`, и `acceptance_traceability_errors`."""
+        self.write(AC_TEST_BOTH_COVERED)
+
+        self.assertEqual(guard.indented_ac_marker_errors_from_files(
+            [(str(self.tdir / "acceptance_tests" / "test_ac.py"),
+             AC_TEST_BOTH_COVERED)]), [])
+        self.assertEqual(guard.acceptance_traceability_errors(self.tdir), [])
+
+    def test_docstring_mention_is_not_flagged(self):
+        """AC-3в: упоминание «AC-2: manual» внутри докстринга/строкового
+        литерала — не отказ (существующий приём разбора докстрингов
+        сохраняется); критерий покрыт настоящей пометкой в начале строки
+        ниже докстринга.
+        Ловит мутацию: если бы `_string_literal_lines` не исключала
+        строки строковых литералов (или исключала только первую строку
+        докстринга, а не весь его диапазон), упоминание маркера внутри
+        текста докстринга ошибочно красилось бы как нарушение AC-1."""
+        self.write(DOCSTRING_MENTION_SOURCE)
+
+        errors = guard.indented_ac_marker_errors_from_files(
+            [(str(self.tdir / "acceptance_tests" / "test_ac.py"),
+             DOCSTRING_MENTION_SOURCE)])
+
+        self.assertEqual(errors, [])
+        self.assertEqual(guard.acceptance_traceability_errors(self.tdir), [])
+
+    def test_syntax_error_falls_back_to_the_plain_heuristic(self):
+        """Файл не разбирается `ast` (SyntaxError) — запасной путь
+        требования 2: строки не исключаются, отступленный маркер вне
+        строки всё равно находится.
+        Ловит мутацию: если бы `SyntaxError` в `_string_literal_lines`
+        не перехватывался (или перехватывался, но вместо запасной
+        эвристики возвращал пустой список ошибок), отступленный маркер
+        в несинтаксируемом файле молча проходил бы — ровно тот же класс
+        пропуска, что и исходный дефект SPEC."""
+        broken = INDENTED_MARKER_SOURCE + "def broken(:\n"
+
+        errors = guard.indented_ac_marker_errors_from_files(
+            [("test_broken.py", broken)])
+
+        self.assertTrue(any("с отступом" in e for e in errors), errors)
+
+    def test_missing_directory_is_empty_not_an_error(self):
+        """Отсутствующий каталог `acceptance_tests/` — пустой список
+        ошибок, не исключение.
+        Ловит мутацию: отсутствующий каталог трактуется как ошибка, а
+        не как пустой список — например, если бы `scan_indented_ac_
+        markers` падала на `iterdir()`/`glob()` несуществующего пути
+        вместо штатного раннего возврата."""
+        self.assertEqual(guard.scan_indented_ac_markers(self.tdir), [])
+
+    def test_non_test_file_is_not_scanned(self):
+        """`scan_indented_ac_markers` держит тот же домен файлов
+        (`test_*.py`), что `scan_acceptance_tests` — вспомогательный файл
+        вроде `_sandbox.py` не сканируется.
+        Ловит мутацию: если бы `scan_indented_ac_markers` сканировала
+        любой `*.py` вместо только `test_*.py`, отступленный маркер во
+        вспомогательном файле ошибочно красился бы как нарушение."""
+        self.write(INDENTED_MARKER_SOURCE, name="_sandbox.py")
+
+        self.assertEqual(guard.scan_indented_ac_markers(self.tdir), [])
+
+
+# --------------------------------------------------------------------------
 # guard: маркер причины красноты в докстринге модуля (SPEC T064).
 
 class ModuleDocstringTest(unittest.TestCase):

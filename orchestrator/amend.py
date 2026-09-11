@@ -34,7 +34,8 @@ from pathlib import Path
 
 from scripts import guard
 
-from . import acceptance, alerts, artifact_branch, gitcmd, lease, store, workspace
+from . import (acceptance, alerts, artifact_branch, gitcmd, lease, store,
+              workspace, yamlmini)
 
 AMEND_ACTION = "правка планки"
 DEVALUATION_ALERT_SOURCE = "amend_tests.window_threshold"
@@ -132,6 +133,44 @@ def _materialize_tests_if_missing(task_id: str, tdir: Path) -> None:
         dest = tdir / rel[len(f"tasks/{task_id}/"):]
         dest.parent.mkdir(parents=True, exist_ok=True)
         dest.write_text(text, encoding="utf-8")
+
+
+def _materialize_spec_if_missing(task_id: str, tdir: Path) -> Path | None:
+    """SPEC.md ещё нет на диске worktree (обычный случай post-A7:
+    `tasks/<id>/` живёт только в артефактной ветке) — подкладывает его
+    ТЕКУЩИМ содержимым артефактной ветки, только чтобы `guard.
+    acceptance_traceability_errors(tdir)` (требует SPEC.md на диске)
+    вообще имел что прочитать (SPEC требование 1, AC-1). Возвращает путь
+    к файлу, если он создан ИМЕННО этим вызовом — вызывающий код обязан
+    убрать его после проверки: оставшись на диске, он торчал бы ВНЕ
+    `acceptance_tests/` и следующий вызов `_worktree_changed_paths`
+    ошибочно читал бы его как правку «за пределами» (AC-3 задачи
+    01M1HNNHDMP2C1AJTH5QF1BTN2), ломая amend-tests для этого worktree
+    навсегда. `None` — файл уже был на диске (трогать не надо), либо его
+    нет и на артефактной ветке."""
+    spec_path = tdir / "SPEC.md"
+    if spec_path.is_file():
+        return None
+    text = artifact_branch.read_tree(task_id).get(f"tasks/{task_id}/SPEC.md")
+    if text is None:
+        return None
+    spec_path.parent.mkdir(parents=True, exist_ok=True)
+    spec_path.write_text(text, encoding="utf-8")
+    return spec_path
+
+
+def _refuse_traceability(conn, task_id: str, errors: list[str]) -> None:
+    """Отказ по нарушенной трассируемости AC — общий для worktree- (AC-1)
+    и `--from-branch`-пути (AC-3): один и тот же текст `sys.exit`, и
+    журнальная запись актором `operator`, называющая сломанный критерий
+    (AC-2). `AMEND_ACTION` («правка планки») здесь намеренно не
+    переиспользуется — иначе отказ засчитывался бы `_amend_events_in_window`
+    как состоявшуюся правку планки, хотя лок не сдвинулся."""
+    reason = "; ".join(errors)
+    store.journal(conn, task_id, "operator", "amend-tests отклонён",
+                 f"трассируемость AC нарушена: {reason}")
+    sys.exit(f"[{task_id}] amend-tests: отказ — трассируемость AC нарушена: "
+             f"{reason}")
 
 
 def _tests_snapshot(wt_path: Path, rel_tests_dir: str) -> dict[str, bytes] | None:
@@ -269,6 +308,17 @@ def _cmd_amend_tests(conn, task_id: str, reason: str | None) -> None:
         sys.exit(f"[{task_id}] amend-tests: отказ — есть изменения за "
                  f"пределами {rel_tests_dir}/: {', '.join(sorted(outside))}")
 
+    # AC-1/AC-4: трассируемость AC — ДО прогона планки (копилка 11.09,
+    # коммит 33aeb202: `amend-tests` сдвигал лок мимо этой проверки).
+    created_spec = _materialize_spec_if_missing(task_id, tdir)
+    try:
+        trace_errors = guard.acceptance_traceability_errors(tdir)
+    finally:
+        if created_spec is not None:
+            created_spec.unlink(missing_ok=True)
+    if trace_errors:
+        _refuse_traceability(conn, task_id, trace_errors)
+
     green, tail = acceptance.run(tdir)
     if not green:
         # Обязательный прогон (ТЗ п.6, инцидент опечатки 03.09) — не «OK»
@@ -326,6 +376,31 @@ def _branch_tests_snapshot(rev: str, rel_tests_dir: str) -> dict[str, str] | Non
     return files
 
 
+def _branch_traceability_errors(task_id: str, rev: str,
+                                tests_snapshot: dict[str, str]) -> list[str] | None:
+    """Ошибки трассируемости AC (SPEC требование 2, AC-3) по SPEC.md и
+    `acceptance_tests/` ГОЛОВЫ артефактной ветки — тем же ядром, что
+    рабочая копия использует через `guard.acceptance_traceability_errors`
+    (`guard.scan_ac_content`/`guard.traceability_errors_from_content`,
+    тот же приём, каким `orchestrator/fsm.py::_tests_writing_ac_state`
+    уже читает трассируемость с чужой ветки, SPEC T031), но без диска:
+    `tests_snapshot` — уже прочитанный `_branch_tests_snapshot` того же
+    `rev` (переиспользован вызывающим кодом, второй обход дерева не
+    нужен). Только `test_*.py` (SPEC T081, тот же фильтр, что `guard.
+    scan_acceptance_tests` применяет для рабочей копии) — вспомогательный
+    файл каталога (например `_sandbox.py`) не должен читаться как
+    настоящая AC-разметка. `None` — git не ответил на SPEC.md."""
+    spec_text, _reason = gitcmd.show(rev, f"tasks/{task_id}/SPEC.md")
+    if spec_text is None:
+        return None
+    meta = yamlmini.frontmatter(spec_text) or {}
+    sources = [text for rel, text in tests_snapshot.items()
+              if Path(rel).name.startswith("test_")]
+    tested, markers = guard.scan_ac_content(sources)
+    return guard.traceability_errors_from_content(spec_text, meta, tested,
+                                                   markers)
+
+
 def _cmd_amend_tests_from_branch(conn, task_id: str, reason: str | None) -> None:
     """`amend-tests <id> --reason "<основание>" --from-branch` (SPEC
     01M287TPG0HAVXS8CHBCY679WN, требование 3): источник правки —
@@ -365,6 +440,16 @@ def _cmd_amend_tests_from_branch(conn, task_id: str, reason: str | None) -> None
         sys.exit(f"[{task_id}] amend-tests: отказ — нет расхождения в "
                  f"{rel_tests_dir}/ между {old_locked} и головой ветки "
                  f"{branch}")
+
+    # AC-3: трассируемость AC по содержимому ГОЛОВЫ ветки — до сдвига
+    # tests_locked_sha (копилка 11.09, тот же путь мимо проверки, что и
+    # у worktree-пути AC-1).
+    trace_errors = _branch_traceability_errors(task_id, new_sha, new_snapshot)
+    if trace_errors is None:
+        sys.exit(f"[{task_id}] amend-tests: отказ — git не ответил на "
+                 f"tasks/{task_id}/SPEC.md")
+    if trace_errors:
+        _refuse_traceability(conn, task_id, trace_errors)
 
     changed_files = sorted(
         p for p in set(old_snapshot) | set(new_snapshot)
