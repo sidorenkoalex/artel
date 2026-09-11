@@ -126,8 +126,8 @@ def _cmd_answer(conn, task_id: str, file_path: str) -> None:
     elif state in ("in_dev", "review"):
         if runner.in_role_environment():
             sys.exit(f"[{task_id}] answer отказана — вызов из окружения "
-                     f"роли (role_env), требование 5 SPEC "
-                     f"01M1NSR5M5THYRC0RFWPMVE2DW")
+                     f"роли (role_env), REVIEW 01M287TPG0HAVXS8CHBCY679WN "
+                     f"итерация 1, замечание R1-F1")
         raw = _read_answer_file(task_id, file_path)
         mandate_paths = _zones_mandate_marker_paths(raw)
         if not mandate_paths:
@@ -180,8 +180,8 @@ def _cmd_zones_extend(conn, task_id: str, paths_arg: str) -> None:
     отказывать симметрично."""
     if runner.in_role_environment():
         sys.exit(f"[{task_id}] zones-extend отказана — вызов из окружения "
-                 f"роли (role_env), требование 5 SPEC "
-                 f"01M1NSR5M5THYRC0RFWPMVE2DW")
+                 f"роли (role_env), REVIEW 01M287TPG0HAVXS8CHBCY679WN "
+                 f"итерация 1, замечание R1-F1")
     paths = fsm_advance._split_zone_paths(paths_arg)
     if not paths:
         sys.exit(f"[{task_id}] zones-extend: отказ — пустой список путей")
