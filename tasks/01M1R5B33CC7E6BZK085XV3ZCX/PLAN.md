@@ -315,3 +315,46 @@ R3 (01M1TKP08P, 06.09) вынес подтяжку main из `fsm.py` в `pull.p
 объявления SPEC не фиксировала. `stack.py` — одна строка докстринга с
 переименованным параметром `acceptance.run` (точка 10). Мандат Оператора —
 ANSWER-2 этой задачи (11.09).
+
+## Возврат — DNS-имя в тестах
+
+Возврат из `verifying`: CI красный на защищённом
+`tests/test_invariants.py::NoNetworkAddressesInTestsTest::
+test_no_dns_hostname_addresses_in_tests_tree` — два файла этой задачи
+несли литералы `https://example.invalid/…`/`https://x` вне списка
+именованных исключений инварианта (исключения там — только
+`test_sandbox.py`, `test_github_adapter.py`, `test_ci_status.py`; мои
+новые файлы в список не входили и не должны были — правильный фикс не
+расширять исключения, а убрать сетевые DNS-адреса из фикстур).
+
+Исправлено (только литералы, без изменения проверяемого поведения):
+- `tests/test_repo_context.py:40,52,76,94` — `https://example.invalid/
+  sled` → `http://localhost/sled`, `https://x` → `http://localhost/x`
+  (оба случая — значение поля `remote`/`url`, тест сравнивает его как
+  непрозрачную строку, реальный git/gh-вызов по нему не идёт: смысл
+  проверки не изменился).
+- `tests/test_fsm_merge_gate_done_snapshot.py:92` — тот же класс правки
+  (`url:` в фикстуре `targets.yaml`).
+- `tests/test_fsm_merge_gate_done_snapshot.py:122` (`artel@example.
+  invalid`, email git-identity) не трогал — это не URL (`_URL_RE`
+  требует префикс `http(s)://`), инвариант его не ловит и никогда не
+  ловил.
+- `tests/test_invariants.py` не трогал (защищённый путь).
+
+Прогон:
+- `python3 -m unittest tests.test_invariants.NoNetworkAddressesInTestsTest
+  -v` — 2/2 OK (в т.ч. мутационный `test_synthetic_dns_hostname_fixture_
+  is_caught`, доказывающий, что сканер по-прежнему ловит нарушение).
+- `python3 -m unittest tests.test_repo_context
+  tests.test_fsm_merge_gate_done_snapshot -v` — 11/11 OK.
+- `python3 -m unittest tests.test_invariants -v` — 52/52 OK (полный
+  модуль инвариантов, не только задетый класс — правка трогала общий
+  скан `tests/**/*.py`, стоило перепроверить весь модуль).
+- Приёмочная планка (`tasks/01M1R5B33CC7E6BZK085XV3ZCX/acceptance_
+  tests/`) правкой этого хода не задета (изменение — только текст двух
+  URL-литералов в юнит-тестах, не код `orchestrator/`); её зелёный
+  статус зафиксирован предыдущим ходом («Возврат — правка планки
+  AC-4/AC-15 и hotfix №21» выше) и не пересматривается.
+
+Код `orchestrator/` в этом ходе не менялся — правка целиком в
+`tests/`, задача остаётся закрытой по всем 17 AC.
