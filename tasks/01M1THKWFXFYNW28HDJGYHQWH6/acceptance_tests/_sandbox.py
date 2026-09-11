@@ -277,7 +277,15 @@ class PlanBudgetSandbox(unittest.TestCase):
         self._seed_artifact_branch(
             f"tasks/{self.TASK}/PLAN.md", plan_ready_text(self.TASK, budget_usd),
             f"{self.TASK}: PLAN сдан")
-        self.capture(fsm.cmd_advance, self.TASK)
+        self.capture(fsm.cmd_advance, self.TASK)  # in_dev -> verifying
+        # ADR-0015 «CI до ревью» (инвариант 36, смержен после фиксации
+        # этой планки): из in_dev задача идёт в verifying, а в review —
+        # отдельным advance по зелёному CI (amend-tests 11.09).
+        # Отказ перехода (AC-6: бюджет выше потолка ролей) оставляет
+        # задачу в in_dev — тогда второго шага нет, тест проверяет отказ.
+        if self.state() == "verifying":
+            self.push_branch_to_origin()
+            self.capture(fsm.cmd_advance, self.TASK)  # verifying -> review
 
     def write_review(self, status: str, iteration: int) -> None:
         self._seed_artifact_branch(
@@ -294,15 +302,12 @@ class PlanBudgetSandbox(unittest.TestCase):
             f"вернуть задачу в in_dev, состояние {self.state()!r}")
 
     def reach_acceptance(self, iteration: int = 1) -> None:
-        """review(approved) -> verifying (CI зелёный, голова в origin) ->
-        acceptance. `accept_rejects` ещё не растёт — до самого `reject`."""
+        """review(approved) -> acceptance: verifying по ADR-0015 уже
+        позади (пройден в `submit_plan`). `accept_rejects` ещё не растёт —
+        до самого `reject`."""
         self.write_review("approved", iteration)
         self.push_branch_to_origin()
-        self.capture(fsm.cmd_advance, self.TASK)  # review -> verifying
-        assert self.state() == "verifying", (
-            f"предпосылка песочницы: вердикт approved + голова в origin "
-            f"обязаны завести verifying, состояние {self.state()!r}")
-        self.capture(fsm.cmd_advance, self.TASK)  # verifying -> acceptance
+        self.capture(fsm.cmd_advance, self.TASK)  # review -> acceptance
         assert self.state() == "acceptance", (
             f"предпосылка песочницы: зелёный CI обязан завести acceptance "
             f"(автогейт не проходит — каталога acceptance_tests/ в этой "
