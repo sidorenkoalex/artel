@@ -10,7 +10,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from orchestrator import catalog, config, store  # noqa: E402
+from orchestrator import catalog, config, store, zone_lock  # noqa: E402
 from tests.sandbox import TmpRootTest, capture  # noqa: E402
 
 TASK = "T001"
@@ -79,6 +79,44 @@ class CmdStatusLeaseHolderTest(TmpRootTest):
 
         self.assertIn("sess-status-unit", out)
         self.assertIn("жив", out)
+
+
+class CmdStatusZoneWaitMinutesTest(TmpRootTest):
+    """SPEC 01M1VBEAWZW4EBZHKMGNBBK648, требование 4, AC-6: `status`
+    добавляет минуты ожидания зоны, только пока задача реально в цикле
+    `auto --wait-zone` (запись входа в ожидание уже журналирована)."""
+
+    OTHER = "T901"
+
+    def setUp(self):
+        super().setUp()
+        capture(catalog.cmd_init)
+        store.insert_task(store.db(), TASK, "Задача", "in_dev",
+                          "task/t001-zadacha", config.DEFAULT_TARGET, 25.0)
+        store.update_task(store.db(), TASK, zones="a/b")
+        store.insert_task(store.db(), self.OTHER, "Другая", "in_dev",
+                          "task/t901-fake", config.DEFAULT_TARGET, 25.0)
+        store.update_task(store.db(), self.OTHER, zones="a/b")
+        store.journal(store.db(), self.OTHER, "developer",
+                     "agent run started", "")
+
+    def test_status_shows_minutes_waited_once_the_wait_cycle_entered(self):
+        entry = zone_lock.wait_enter_action("a/b", self.OTHER, "in_dev")
+        store.journal(store.db(), TASK, "operator", entry, "")
+
+        out = capture(catalog.cmd_status)
+
+        self.assertIn("ждёт", out)
+        self.assertIn("мин", out)
+
+    def test_status_does_not_show_minutes_without_the_wait_cycle_entry(self):
+        """Ловит мутацию: минуты появляются в строке `status` даже без
+        записи входа в ожидание — задача заблокирована зоной (`run`/`auto`
+        без `--wait-zone` останавливаются немедленно), но НЕ в цикле
+        ожидания, показывать «ждёт N мин» тут нечего."""
+        out = capture(catalog.cmd_status)
+
+        self.assertNotIn("мин", out)
 
 
 if __name__ == "__main__":

@@ -1,5 +1,5 @@
 ---
-built_at_sha: 39afa6b924a54b1dc6ddded27ab107d81f001993
+built_at_sha: 435650890f2cfe55eb40589be50eea2d077d997e
 ---
 
 # Codebase-map пульта
@@ -971,7 +971,7 @@ built_at_sha: 39afa6b924a54b1dc6ddded27ab107d81f001993
 
 **Импортирует:** `orchestrator/config.py`, `orchestrator/store.py`
 
-**Импортируется:** `orchestrator/artel.py`, `orchestrator/auto.py`, `orchestrator/catalog.py`, `orchestrator/runner.py`, `tests/test_zone_lock.py`
+**Импортируется:** `orchestrator/artel.py`, `orchestrator/auto.py`, `orchestrator/catalog.py`, `orchestrator/runner.py`, `tests/test_catalog_status_log.py`, `tests/test_zone_lock.py`
 
 ## scripts/codebase_map.py
 
@@ -1357,7 +1357,7 @@ built_at_sha: 39afa6b924a54b1dc6ddded27ab107d81f001993
 
 **Публичные функции:** (нет)
 
-**Импортирует:** `orchestrator/catalog.py`, `orchestrator/config.py`, `orchestrator/store.py`, `tests/sandbox.py`
+**Импортирует:** `orchestrator/catalog.py`, `orchestrator/config.py`, `orchestrator/store.py`, `orchestrator/zone_lock.py`, `tests/sandbox.py`
 
 **Импортируется:** —
 

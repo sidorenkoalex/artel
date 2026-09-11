@@ -64,6 +64,16 @@ def _run_zone_wait_refusal(conn, task_id: str, journaled_before: int) -> bool:
 # словарь, тот же приём, что уже развёл REFUSAL_ACTION/RELEASE_ACTION.
 _ZONE_WAIT_CEILING_REASON = "потолок ожидания зоны исчерпан"
 
+# Причина остановки цикла, если heartbeat lease этой сессии не удалось
+# продлить внутри ожидания (REVIEW.md итерация 1, R1-F2): `lease.acquire`
+# отказывает только чужой ЖИВОЙ сессии (см. её докстринг) — при
+# `_wait_for_zone`, вызванном из-под `_cmd_auto`, это может значить
+# только перехват lease другой сессией во время долгого ожидания.
+# Продолжать опрос как ни в чём не бывало значило бы молча делить
+# владение задачей с чужой сессией — именованная остановка безопаснее
+# тихого игнорирования отказа.
+_ZONE_WAIT_LEASE_LOST_REASON = "lease задачи потерян во время ожидания зоны"
+
 
 def _wait_for_zone(conn, task_id: str, session_id: str, state: str) -> "Stop | None":
     """Цикл ожидания зоны требования 1 (AC-1..AC-4, AC-8а/б): опрашивает
@@ -81,8 +91,9 @@ def _wait_for_zone(conn, task_id: str, session_id: str, state: str) -> "Stop | N
     независимо от того, подменяет ли вызывающий код источник времени.
 
     `None` — зона свободна (либо не была занята вовсе — вызывающий уже
-    убедился в конфликте до вызова). `Stop` — потолок исчерпан: задача
-    остаётся `state` (обычно `in_dev`), НЕ эскалирует (требование 3).
+    убедился в конфликте до вызова). `Stop` — потолок исчерпан либо
+    lease этой сессии потерян во время ожидания: задача остаётся
+    `state` (обычно `in_dev`), НЕ эскалирует (требование 3).
     """
     t = store.get_task(conn, task_id)
     conflict = zone_lock.blocking_conflict(conn, task_id, t)
@@ -102,11 +113,22 @@ def _wait_for_zone(conn, task_id: str, session_id: str, state: str) -> "Stop | N
             return Stop(state, _ZONE_WAIT_CEILING_REASON, hint, False)
         time.sleep(config.ZONE_WAIT_POLL_SEC)
         elapsed_sec += config.ZONE_WAIT_POLL_SEC
-        lease.acquire(conn, task_id, session_id)
+        lease_refusal, _ = lease.acquire(conn, task_id, session_id)
+        if lease_refusal is not None:
+            hint = f"artel.py auto {task_id} --wait-zone — перезапусти ожидание"
+            return Stop(state, f"{_ZONE_WAIT_LEASE_LOST_REASON}: {lease_refusal}",
+                        hint, True)
         t = store.get_task(conn, task_id)
         conflict = zone_lock.blocking_conflict(conn, task_id, t)
         if conflict is None:
             break
+        # Требование 1/AC-3: держатель мог смениться между опросами (одна
+        # задача мержится/убивается, следующая по очереди зону не отпускает
+        # тут же) — атрибуция записи выхода обязана называть ПОСЛЕДНЕГО
+        # реального держателя, а не того, кто был занявшим до входа в цикл
+        # (REVIEW.md итерации 1, R1-F1: без этого обновления запись «зона
+        # свободна... держал <id>» называла бы устаревшего держателя).
+        path, occupier_id, occupier_state = conflict
 
     minutes = int(elapsed_sec // 60)
     exit_action = zone_lock.wait_exit_action(occupier_id, minutes)
