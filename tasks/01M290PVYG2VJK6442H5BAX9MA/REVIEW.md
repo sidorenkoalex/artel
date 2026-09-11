@@ -42,9 +42,9 @@ schema_version: 5
 
 | id | статус | файл/строка | суть | последствие | решение |
 |---|---|---|---|---|---|
-| R1-F1 | open | orchestrator/checkpoint.py:471-479 | `_staged_change_summary` считает файлы/строки ДО зонного фильтра `_commit_worktree_change` | журнал «код закоммичен пультом за роль» лжёт о составе коммита, противоречит соседней записи «посторонние файлы в worktree» о том же файле | пересчитать `summary` после применения зонного фильтра (или строить `detail` из фактически закоммиченных путей) |
-| R1-F2 | open | orchestrator/checkpoint.py:906-914 | `_commit_worktree_change`, ветка `refuse_on_stray=True` — обе ветки `if unstage_all.returncode != 0` возвращают одно и то же | мёртвый код, лишняя когнитивная нагрузка при чтении | схлопнуть в две строки без ветвления |
-| R1-F3 | open | orchestrator/checkpoint.py:915-917 | `_commit_worktree_change`, ветка `refuse_on_stray=False` — на отказе `git reset` возврат обнуляет `stray` до `[]`, в отличие от соседних return-точек той же функции | несогласованный контракт возврата, ловушка для будущего вызывающего кода, читающего третий элемент кортежа | вернуть `stray` вместо `[]` на этой ветке |
+| R1-F1 | fixed | orchestrator/checkpoint.py | `_staged_change_summary` считала файлы/строки ДО зонного фильтра `_commit_worktree_change` | журнал «код закоммичен пультом за роль» лгал о составе коммита, противоречил соседней записи «посторонние файлы в worktree» о том же файле | заменена на `_commit_summary(wt, sha)` — считает `git show --numstat` ПОСЛЕ коммита, по уже отфильтрованному `sha`; `commit_success_checkpoint` вызывает её только когда `_commit_worktree_change` вернула `committed=True`. Регресс-тест `tests/test_checkpoint_zone_filter.py::CommitSuccessCheckpointSummaryTest` |
+| R1-F2 | fixed | orchestrator/checkpoint.py | `_commit_worktree_change`, ветка `refuse_on_stray=True` — обе ветки `if unstage_all.returncode != 0` возвращали одно и то же | мёртвый код, лишняя когнитивная нагрузка при чтении | схлопнуто в `gitcmd.in_repo(wt, "reset", "-q"); return False, "", stray` без ветвления по коду возврата |
+| R1-F3 | fixed | orchestrator/checkpoint.py | `_commit_worktree_change`, ветка `refuse_on_stray=False` — на отказе `git reset` возврат обнулял `stray` до `[]`, в отличие от соседних return-точек той же функции | несогласованный контракт возврата, ловушка для будущего вызывающего кода, читающего третий элемент кортежа | ветка теперь возвращает `stray` вместо `[]`, как и остальные return-точки функции |
 
 ## Вердикт
 
