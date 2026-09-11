@@ -1,5 +1,5 @@
 ---
-built_at_sha: 9f579374a2a2cbe6e7a8e93c12c479effde9ba7b
+built_at_sha: a6c3859207ed10c746197d71b496ae1ae1a6eb43
 ---
 
 # Codebase-map пульта
@@ -77,7 +77,7 @@ built_at_sha: 9f579374a2a2cbe6e7a8e93c12c479effde9ba7b
 **Публичные функции:**
 - `cmd_amend_tests`
 
-**Импортирует:** `orchestrator/acceptance.py`, `orchestrator/alerts.py`, `orchestrator/artifact_branch.py`, `orchestrator/gitcmd.py`, `orchestrator/lease.py`, `orchestrator/store.py`, `orchestrator/workspace.py`, `scripts/guard.py`
+**Импортирует:** `orchestrator/acceptance.py`, `orchestrator/alerts.py`, `orchestrator/artifact_branch.py`, `orchestrator/gitcmd.py`, `orchestrator/lease.py`, `orchestrator/store.py`, `orchestrator/workspace.py`, `orchestrator/yamlmini.py`, `scripts/guard.py`
 
 **Импортируется:** `orchestrator/artel.py`, `tests/test_amend.py`
 
@@ -968,7 +968,7 @@ built_at_sha: 9f579374a2a2cbe6e7a8e93c12c479effde9ba7b
 
 **Импортирует:** —
 
-**Импортируется:** `orchestrator/artifacts.py`, `orchestrator/canary.py`, `orchestrator/catalog.py`, `orchestrator/checkpoint.py`, `orchestrator/fsm.py`, `orchestrator/fsm_advance.py`, `orchestrator/gates.py`, `orchestrator/pull.py`, `orchestrator/retro_corpus.py`, `orchestrator/roles.py`, `orchestrator/targets.py`, `scripts/guard.py`, `tests/test_fsm_merge_gate_done_snapshot.py`, `tests/test_guard_schema.py`, `tests/test_guard_split_signals.py`, `tests/test_yaml_parsing.py`
+**Импортируется:** `orchestrator/amend.py`, `orchestrator/artifacts.py`, `orchestrator/canary.py`, `orchestrator/catalog.py`, `orchestrator/checkpoint.py`, `orchestrator/fsm.py`, `orchestrator/fsm_advance.py`, `orchestrator/gates.py`, `orchestrator/pull.py`, `orchestrator/retro_corpus.py`, `orchestrator/roles.py`, `orchestrator/targets.py`, `scripts/guard.py`, `tests/test_fsm_merge_gate_done_snapshot.py`, `tests/test_guard_schema.py`, `tests/test_guard_split_signals.py`, `tests/test_yaml_parsing.py`
 
 ## orchestrator/zone_lock.py
 

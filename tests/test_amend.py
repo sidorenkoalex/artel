@@ -186,6 +186,61 @@ class BranchTestsSnapshotTest(unittest.TestCase):
         self.assertIsNone(self._snapshot(rel + "\n", 0, {}))
 
 
+class BranchTraceabilityErrorsTest(unittest.TestCase):
+    """`_branch_traceability_errors` (SPEC 01M28SWSQ46B8A9FX6KBVJ3Y0G,
+    требование 2) в изоляции от настоящего git — тот же фейковый-git
+    приём, что `BranchTestsSnapshotTest` выше."""
+
+    def _errors(self, spec_text: str, tests_snapshot: dict,
+               show_returncode: int = 0):
+        def fake_git(*args):
+            if args[0] == "show":
+                if show_returncode != 0:
+                    return subprocess.CompletedProcess(
+                        list(args), show_returncode, "", "not found")
+                return subprocess.CompletedProcess(list(args), 0, spec_text, "")
+            raise AssertionError(f"неожиданный вызов git: {args}")
+
+        with mock.patch.object(gitcmd, "git", fake_git):
+            return amend._branch_traceability_errors(
+                "T001", "deadbeef", tests_snapshot)
+
+    def test_spec_show_failure_returns_none(self):
+        """Ловит мутацию: убранная проверка `spec_text is None` читала бы
+        неудачу `git show` как пустой SPEC.md — трассируемость молча
+        считалась бы нарушенной (или, того хуже, пустой SPEC давал бы
+        `requires_ac_markup` ложный `False`) вместо именованного отказа
+        «git не ответил» на уровне вызывающего кода."""
+        errors = self._errors(SPEC_V2.format(task="T001", extra=""), {},
+                              show_returncode=128)
+        self.assertIsNone(errors)
+
+    def test_valid_coverage_returns_no_errors(self):
+        rel = "tasks/T001/acceptance_tests/test_ac.py"
+        errors = self._errors(SPEC_V2.format(task="T001", extra=""),
+                              {rel: AC_TEST_BOTH_COVERED})
+        self.assertEqual(errors, [])
+
+    def test_missing_criterion_test_names_it(self):
+        rel = "tasks/T001/acceptance_tests/test_ac.py"
+        errors = self._errors(SPEC_V2.format(task="T001", extra=""),
+                              {rel: "import unittest\n"})
+        self.assertTrue(any("AC-1" in e for e in errors), errors)
+
+    def test_ignores_files_without_the_test_prefix(self):
+        """Ловит мутацию: убранный фильтр `test_*.py` (SPEC T081) читает
+        содержимое вспомогательного файла каталога (например `_sandbox.py`)
+        как настоящую AC-разметку задачи — тот же класс инцидента, от
+        которого `guard.scan_acceptance_tests` уже защищает рабочую
+        копию."""
+        rel = "tasks/T001/acceptance_tests/_sandbox.py"
+        errors = self._errors(SPEC_V2.format(task="T001", extra=""),
+                              {rel: AC_TEST_BOTH_COVERED})
+        self.assertTrue(
+            any("AC-1" in e for e in errors),
+            f"покрытие из не-test_-файла не должно засчитываться: {errors}")
+
+
 class TestsSnapshotAndMaterializeTest(RealGitSandbox):
     """`_materialize_tests_if_missing`/`_tests_snapshot`/
     `_artifact_tests_snapshot` (ANSWER-3, вопрос 2) в изоляции: приёмочные
@@ -329,6 +384,75 @@ class TestsSnapshotAndMaterializeTest(RealGitSandbox):
             disk, baseline,
             "материализация без правки Оператора не должна читаться как "
             "изменение (AC-2)")
+
+
+class MaterializeSpecIfMissingTest(RealGitSandbox):
+    """`_materialize_spec_if_missing` (SPEC 01M28SWSQ46B8A9FX6KBVJ3Y0G,
+    требование 1) в изоляции: приёмочные тесты кроют её только сквозным
+    путём через `_cmd_amend_tests`."""
+
+    def setUp(self):
+        super().setUp()
+        capture(catalog.cmd_init)
+        _, self.TASK = capture_new_task_id(catalog.cmd_new,
+                                           "материализация SPEC.md")
+        self.conn = store.db()
+        wt_path, error = workspace.ensure(self.TASK, self.row()["branch"])
+        self.assertIsNone(error, f"worktree не создан: {error}")
+        self.tdir = wt_path / "tasks" / self.TASK
+
+    def row(self):
+        return store.db().execute("SELECT * FROM tasks WHERE id=?",
+                                  (self.TASK,)).fetchone()
+
+    def test_creates_file_from_artifact_branch_and_returns_its_path(self):
+        artifact_branch.commit_files(
+            self.TASK, {f"tasks/{self.TASK}/SPEC.md": "содержимое SPEC\n"},
+            f"{self.TASK}: SPEC")
+
+        created = amend._materialize_spec_if_missing(self.TASK, self.tdir)
+
+        self.assertEqual(created, self.tdir / "SPEC.md")
+        self.assertEqual(
+            (self.tdir / "SPEC.md").read_text(encoding="utf-8"),
+            "содержимое SPEC\n")
+
+    def test_skips_and_returns_none_when_file_already_on_disk(self):
+        """Ловит мутацию: убранная проверка `spec_path.is_file()`
+        перезаписала бы уже присутствующий SPEC.md содержимым артефактной
+        ветки (риск затереть чужую правку) — и заставила бы вызывающий
+        код удалить чужой файл после проверки, приняв возврат за «сам
+        создал, сам и убираю»."""
+        self.tdir.mkdir(parents=True, exist_ok=True)
+        (self.tdir / "SPEC.md").write_text("уже на диске\n", encoding="utf-8")
+        artifact_branch.commit_files(
+            self.TASK, {f"tasks/{self.TASK}/SPEC.md": "содержимое ветки\n"},
+            f"{self.TASK}: SPEC")
+
+        created = amend._materialize_spec_if_missing(self.TASK, self.tdir)
+
+        self.assertIsNone(created)
+        self.assertEqual(
+            (self.tdir / "SPEC.md").read_text(encoding="utf-8"),
+            "уже на диске\n")
+
+    def test_returns_none_when_not_on_artifact_branch_either(self):
+        """`cmd_new` уже кладёт черновой SPEC.md на артефактную ветку
+        КАЖДОЙ заведённой задачи (catalog.py, требование A7) — чтобы
+        честно поймать случай «файла нет и на ветке», используется
+        task_id, для которого артефактная ветка вовсе не заводилась
+        (`artifact_branch.read_tree` возвращает пустой словарь).
+
+        Ловит мутацию: пропущенная проверка `text is None` создала бы
+        файл с текстом `"None"` вместо честного отказа от материализации,
+        оставляя `guard.acceptance_traceability_errors` читать мусор
+        вместо реального SPEC.md."""
+        tdir = self.root / "tasks" / "NOSUCHTASK"
+
+        created = amend._materialize_spec_if_missing("NOSUCHTASK", tdir)
+
+        self.assertIsNone(created)
+        self.assertFalse((tdir / "SPEC.md").exists())
 
 
 class LockedWindowTest(TmpRootTest):
