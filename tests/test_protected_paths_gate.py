@@ -201,3 +201,13 @@ class MergeGateProtectedPathDiffGateTest(TmpRootTest):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class AgentsMdIsProtectedTest(unittest.TestCase):
+    """Решение Оператора 11.09: AGENTS.md — символьная ссылка на CLAUDE.md,
+    как путь обязан стоять в списке защищённых, иначе роль подменяет
+    инструкции агентам, заменив ссылку обычным файлом."""
+
+    def test_agents_md_is_in_protected_paths(self):
+        """Ловит мутацию: AGENTS.md выпал из PROTECTED_PATHS."""
+        self.assertIn("AGENTS.md", config.PROTECTED_PATHS)

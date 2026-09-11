@@ -509,9 +509,12 @@ REVIEW_VERDICTS = ("approved", "changes_requested", "escalate")
 # conventions-core). Конфликт merge, задевающий любой из них (SPEC T052,
 # требование 2), эскалирует вместо автоматического возврата в in_dev:
 # developer не вправе разрешать спор здесь сам.
+# AGENTS.md — символьная ссылка на CLAUDE.md (решение Оператора 11.09):
+# без записи в списке роль могла бы заменить ссылку обычным файлом и
+# подменить инструкции агентам, не трогая путь CLAUDE.md.
 PROTECTED_PATHS = ("gates.yaml", "roles.yaml", ".github/", "templates/",
                    "skills/", "docs/invariants.md", "tests/test_invariants.py",
-                   "docs/adr/", "CLAUDE.md", "targets.yaml")
+                   "docs/adr/", "CLAUDE.md", "AGENTS.md", "targets.yaml")
 
 # Общие зоны вне конфликта (задача 01M1NKVPD2A79PQ6K0JVV1B2Q1, часть 1,
 # AC-4): пути, которые трогают все задачи, а конфликт по ним — текстовый,
