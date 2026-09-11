@@ -1128,15 +1128,39 @@ def _acceptance_run_refuses(conn, task_id: str, t, tdir, target: str,
     01M1RNZ6V7TTTTYAHBMF8JBQQS, требование 1-2, AC-1/AC-2/AC-5).
 
     `True` — переход отклонён (планка красная)."""
+    def _missing_plank_refuses() -> bool:
+        if (acc_tdir / "acceptance_tests").is_dir():
+            return False
+        spec_text = fsm._read_branch_text_or_refuse(conn, task_id, branch,
+                                                     "SPEC.md")
+        if spec_text is None:
+            return True
+        meta = yamlmini.frontmatter(spec_text) or {}
+        if not guard.requires_ac_markup(meta):
+            return False
+        detail = (f"планка не найдена в источнике: артефактная ветка "
+                  f"{branch} не несёт tasks/{task_id}/acceptance_tests/, а "
+                  f"tests_writing не пропущена легитимно (skip_tests не "
+                  f"задан в SPEC)")
+        store.journal(conn, task_id, "fsm",
+                      "переход отклонён: планка не найдена в источнике",
+                      detail)
+        print(f"[{task_id}] переход отклонён: {detail}")
+        return True
+
     acc_tdir = tdir
     run_cwd = config.ROOT
     if target != config.DEFAULT_TARGET:
         run_cwd = config.PROJECTS / target / "workspace"
         run_cwd.mkdir(parents=True, exist_ok=True)
         acc_tdir = acceptance.materialize_from_branch(task_id, branch, run_cwd)
+        if _missing_plank_refuses():
+            return True
     elif workspace.on_task_branch(task_id, t["branch"]) is True:
         run_cwd = workspace.path(task_id)
-        acc_tdir = run_cwd / "tasks" / task_id
+        acc_tdir = acceptance.materialize_from_branch(task_id, branch, run_cwd)
+        if _missing_plank_refuses():
+            return True
     green, tail = acceptance.run(acc_tdir, cwd=run_cwd)
     # Fingerprint окружения (SPEC T101, требование 4б, AC-5) — часть
     # исхода прогона приёмочных тестов, значение поля `detail`
