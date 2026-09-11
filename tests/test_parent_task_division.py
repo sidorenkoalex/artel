@@ -48,6 +48,10 @@ class DivisionSuffixSingleSubtaskTest(TmpRootTest):
         store.update_task(conn, self.SUB, parent_task_id=self.PARENT)
 
     def test_single_subtask_shows_one_of_one(self):
+        """Ловит мутацию: `M` в «часть N/M» считается не по числу
+        подзадач ЭТОГО родителя, а хардкодится/берётся из другого
+        источника (например, общего числа задач в БД) — тогда
+        единственная подзадача показала бы «часть 1/2» вместо «1/1»."""
         out = capture(catalog.cmd_status)
 
         sub_line = next(ln for ln in out.splitlines()
@@ -78,6 +82,10 @@ class RetroDividedParentCostIsolationTest(TmpRootTest):
                           spent_usd=99.0)
 
     def test_cost_block_shows_only_the_parents_own_spend(self):
+        """Ловит мутацию: `_cost_block` в ветке «поделена» суммирует
+        `spent_usd` подзадач в стоимость родителя (или подставляет
+        стоимость подзадачи вместо родителя) — тогда $3.50 подменится
+        суммой с $99.00 или самим $99.00."""
         text = retro.build_killed(self.conn, self.PARENT)
 
         self.assertIn("Стоимость итого: $3.50", text)
@@ -105,6 +113,10 @@ class HasSubtasksTest(TmpRootTest):
                           25.0)
 
     def test_task_without_subtasks_is_not_flagged_as_divided(self):
+        """Ловит мутацию: `_has_subtasks` возвращает `True` безусловно
+        (или проверяет наличие ЛЮБЫХ строк в `tasks`, а не строк с
+        `parent_task_id == TASK`) — тогда одиночная задача без
+        подзадач ложно считалась бы «поделённым родителем»."""
         self.assertFalse(canary._has_subtasks(self.conn, self.TASK))
 
 
