@@ -1,5 +1,5 @@
 ---
-built_at_sha: d2ade0718213ddc7ea8971897599ff8e2e623ea7
+built_at_sha: 5d033863bbceaa333255398b26fc2831390d6bfd
 ---
 
 # Codebase-map пульта
@@ -155,7 +155,7 @@ built_at_sha: d2ade0718213ddc7ea8971897599ff8e2e623ea7
 - `auto_stop_advice`
 - `cmd_auto`
 
-**Импортирует:** `orchestrator/agent_log.py`, `orchestrator/alerts.py`, `orchestrator/budget.py`, `orchestrator/ci.py`, `orchestrator/config.py`, `orchestrator/fixation.py`, `orchestrator/fsm.py`, `orchestrator/lease.py`, `orchestrator/pause.py`, `orchestrator/runner.py`, `orchestrator/store.py`, `orchestrator/zone_lock.py`
+**Импортирует:** `orchestrator/agent_log.py`, `orchestrator/alerts.py`, `orchestrator/budget.py`, `orchestrator/ci.py`, `orchestrator/config.py`, `orchestrator/fixation.py`, `orchestrator/fsm.py`, `orchestrator/lease.py`, `orchestrator/pause.py`, `orchestrator/pull.py`, `orchestrator/runner.py`, `orchestrator/store.py`, `orchestrator/zone_lock.py`
 
 **Импортируется:** `orchestrator/artel.py`, `orchestrator/canary.py`, `orchestrator/fsm_advance.py`, `tests/test_analyst_role.py`, `tests/test_auto_cycle.py`, `tests/test_auto_escalated_return_rework_gate.py`, `tests/test_git_fixation.py`, `tests/test_stall_alerts.py`
 
@@ -631,7 +631,7 @@ built_at_sha: d2ade0718213ddc7ea8971897599ff8e2e623ea7
 
 **Импортирует:** `orchestrator/acceptance.py`, `orchestrator/alerts.py`, `orchestrator/artifact_source.py`, `orchestrator/checkpoint.py`, `orchestrator/config.py`, `orchestrator/gitcmd.py`, `orchestrator/store.py`, `orchestrator/workspace.py`, `orchestrator/yamlmini.py`, `scripts/guard.py`
 
-**Импортируется:** `orchestrator/fsm.py`, `tests/test_pull.py`
+**Импортируется:** `orchestrator/auto.py`, `orchestrator/fsm.py`, `tests/test_pull.py`
 
 ## orchestrator/release.py
 
