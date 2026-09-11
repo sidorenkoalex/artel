@@ -43,7 +43,7 @@ from pathlib import Path
 # репозитория, поэтому корень кладётся руками: та же схема, что в artel.py.
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from orchestrator import config, spend, yamlmini  # noqa: E402
+from orchestrator import config, spend, yamlmini, zone_lock  # noqa: E402
 
 REQUIRED_META = {"task", "type", "author_role", "status"}
 
@@ -1200,6 +1200,153 @@ def role_budget_cap_errors(path: Path | str, meta: dict) -> list[str]:
            f"${config.ROLE_BUDGET_CAP:.2f} — {ROLE_BUDGET_CAP_HINT}"]
 
 
+# --------------------------------------------------------------------------
+# Заявка на деление секцией «## Деление» SPEC (01M1SHJZCE0Y4DXAAWQ2W585A7,
+# требование 1): роль не вправе звать команды пульта из worktree (T056) —
+# аналитик оформляет заявку текстом SPEC, заводит подзадачи сам пульт на
+# `approve`/`spec_gate` (`orchestrator/fsm.py::_approve_spec_gate`), читая
+# уже провалидированный этой проверкой текст (guard уже отказал бы
+# переходу `spec_writing -> spec_gate` на невалидной секции).
+DIVISION_SECTION = "Деление"
+DIVISION_MIN_SUBSECTIONS = 2
+DIVISION_MAX_SUBSECTIONS = 4
+
+# Заголовок подраздела `### <название>` — заякорен на начало строки, тем
+# же приёмом, что и заголовки `## ` в остальном файле.
+_DIVISION_SUBSECTION_SPLIT = re.compile(r"^###[ \t]+", re.M)
+_DIVISION_FIELD_LINE = re.compile(r"^(Зоны|Порядок|Рамка):[ \t]*(.*)$")
+
+
+def parse_division_subsections(text: str) -> list[dict]:
+    """Разбор секции «## Деление» на подразделы (требование 1): список
+    словарей `title`/`zones`/`order`/`budget`/`tz_text`/`body_raw` — без
+    валидации обязательности полей (её несёт `division_section_errors`
+    ниже). `[]` — секции нет вовсе либо её тело пусто (AC-9: SPEC без
+    заявки на деление ведёт себя как раньше).
+
+    Поля `Зоны:`/`Порядок:`/`Рамка:` ищутся построчно в теле подраздела,
+    а не строго следом за заголовком (первое найденное значение поля
+    побеждает) — реальный формат Оператора не обязан быть настолько же
+    жёстким, насколько жёсткой была бы позиционная привязка; `tz_text` —
+    остаток строк подраздела за вычетом строк-полей, `body_raw` — тот же
+    остаток БЕЗ вычета строк-полей (требование 2: поля остаются текстом
+    внутри `TZ.md` заведённой подзадачи, не только свободный текст).
+    """
+    body = section_body(text, DIVISION_SECTION)
+    if not body.strip():
+        return []
+    chunks = _DIVISION_SUBSECTION_SPLIT.split(body)[1:]
+    subsections = []
+    for chunk in chunks:
+        lines = chunk.split("\n")
+        title = lines[0].strip()
+        rest_lines = lines[1:]
+        fields: dict[str, str] = {}
+        tz_lines: list[str] = []
+        for line in rest_lines:
+            m = _DIVISION_FIELD_LINE.match(line)
+            if m and m.group(1) not in fields:
+                fields[m.group(1)] = m.group(2).strip()
+            else:
+                tz_lines.append(line)
+        subsections.append({
+            "title": title,
+            "zones": fields.get("Зоны"),
+            "order": fields.get("Порядок"),
+            "budget": fields.get("Рамка"),
+            "tz_text": "\n".join(tz_lines).strip(),
+            "body_raw": "\n".join(rest_lines).strip(),
+        })
+    return subsections
+
+
+def _division_zone_list(raw: str | None) -> list[str]:
+    """Список непустых зон подраздела через запятую — тот же разбор, что
+    `orchestrator/zone_lock.py::_own_paths` применяет к `zones` задачи."""
+    if not raw:
+        return []
+    return [p.strip() for p in raw.split(",") if p.strip()]
+
+
+def division_section_errors(path: Path | str, text: str, meta: dict) -> list[str]:
+    """Формат секции «## Деление» (требование 1, AC-2..AC-4, AC-13, AC-14).
+    `path` — только для текста ошибок (см. `schema_errors`).
+
+    Применяется к любому SPEC независимо от `schema_version` — секция
+    необязательна для всех версий (AC-9), версия-гейтинг здесь не нужен,
+    в отличие от `spec_zones_errors`/`spec_budget_field_errors` выше.
+    """
+    if (meta.get("type") or "") != "spec":
+        return []
+    headers = set(re.findall(r"^##\s+(.+?)\s*$", text, re.M))
+    if DIVISION_SECTION not in headers:
+        return []
+    body = section_body(text, DIVISION_SECTION)
+    if not body.strip():
+        return []
+    subsections = parse_division_subsections(text)
+    if not subsections:
+        # Заголовок есть, тело непустое, но ни один `### <название>` не
+        # найден (R1-F3, REVIEW.md итерация 1) — намерение аналитика на
+        # деление не должно тихо проходить тем же путём, что полное
+        # отсутствие секции: раздел без подразделов < DIVISION_MIN_
+        # SUBSECTIONS буквально по AC-2.
+        return [f"{path}: секция '## {DIVISION_SECTION}' не несёт ни "
+               f"одного подраздела '### <название>' — оформи заявку "
+               f"подразделами (от {DIVISION_MIN_SUBSECTIONS} до "
+               f"{DIVISION_MAX_SUBSECTIONS}) либо убери секцию"]
+
+    errors: list[str] = []
+    count = len(subsections)
+    if count < DIVISION_MIN_SUBSECTIONS or count > DIVISION_MAX_SUBSECTIONS:
+        errors.append(
+            f"{path}: секция '## {DIVISION_SECTION}' несёт {count} "
+            f"подразделов — допустимо от {DIVISION_MIN_SUBSECTIONS} до "
+            f"{DIVISION_MAX_SUBSECTIONS}, приведи число подразделов к "
+            f"этому диапазону")
+
+    parent_zones = set(_division_zone_list(meta.get("zones")))
+    for sub in subsections:
+        title = sub["title"] or "(без названия)"
+        if not sub["title"]:
+            errors.append(
+                f"{path}: подраздел секции '## {DIVISION_SECTION}' без "
+                f"названия — заголовок '### <название>' пуст")
+        if not sub["zones"]:
+            errors.append(
+                f"{path}: подраздел '{title}' секции "
+                f"'## {DIVISION_SECTION}' не несёт обязательное поле "
+                f"'Зоны:' — добавь список зон подзадачи")
+        if not sub["order"]:
+            errors.append(
+                f"{path}: подраздел '{title}' секции "
+                f"'## {DIVISION_SECTION}' не несёт обязательное поле "
+                f"'Порядок:' — впиши 'первая, без зависимостей' либо "
+                f"'после части N'")
+        if not sub["tz_text"]:
+            errors.append(
+                f"{path}: подраздел '{title}' секции "
+                f"'## {DIVISION_SECTION}' не несёт текст ТЗ подзадачи — "
+                f"добавь свободный текст после полей 'Зоны:'/'Порядок:'")
+        for zone in _division_zone_list(sub["zones"]):
+            # Покрытие — с учётом вложенности каталог/файл (R1-F1, REVIEW.md
+            # итерации 1), тем же приёмом, что `zone_lock._is_common_zone`/
+            # `_covered_by`: файл внутри общей/родительской директории-зоны
+            # (например `tests/test_x.py` при `COMMON_ZONES`, несущем
+            # `"tests/"`) покрыт, а не только буквальное совпадение строк.
+            covered = (zone_lock._is_common_zone(zone)
+                      or any(zone_lock._covered_by(zone, pz)
+                            for pz in parent_zones))
+            if not covered:
+                errors.append(
+                    f"{path}: подраздел '{title}' секции "
+                    f"'## {DIVISION_SECTION}' несёт зону '{zone}', не "
+                    f"входящую ни в зоны родителя (frontmatter zones:), "
+                    f"ни в общие зоны (config.COMMON_ZONES) — сузь зону "
+                    f"подраздела либо расширь zones родителя")
+    return errors
+
+
 def _content_errors(label: str, text: str) -> list[str]:
     """Ядро `check` — структурная проверка уже прочитанного текста, без
     чтения файла: `label` — путь или его подобие, только для текста
@@ -1281,6 +1428,7 @@ def _content_errors(label: str, text: str) -> list[str]:
         errors.extend(split_assessment_errors(label, text, meta))
         errors.extend(spec_zones_errors(label, meta))
         errors.extend(spec_budget_field_errors(label, meta))
+        errors.extend(division_section_errors(label, text, meta))
 
     if atype in ("spec", "plan"):
         errors.extend(role_budget_cap_errors(label, meta))
