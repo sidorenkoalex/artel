@@ -31,6 +31,56 @@ def _touches_protected_path(path: str) -> bool:
     return any(path == p or path.startswith(p) for p in config.PROTECTED_PATHS)
 
 
+def _protected_path_refusal_detail(paths: list[str]) -> str:
+    """Именованный текст отказа (SPEC 01M27JPEGCGMDDRX5A98QWJW0Z, требование
+    4/AC-4) — дословно общий с `fsm_advance._protected_path_refusal_detail`
+    (тот же текст на гейте зон и на гейте мержа)."""
+    return (f"защищённый путь {', '.join(paths)} — правит только "
+           f"Оператор коммитом в main; предложи правку приложением к "
+           f"PLAN (unified-дифф)")
+
+
+def _protected_path_diff_gate(conn, task_id: str, state: str, branch: str,
+                              ctx: repo_context.RepoContext) -> bool:
+    """Эскалация по защищённому пути в диффе ветки задачи против базы
+    сравнения (SPEC 01M27JPEGCGMDDRX5A98QWJW0Z, требование 3, AC-5) — ДО
+    попытки `git merge --no-ff`, независимо от того, конфликтует ли она
+    содержательно: сегодняшняя эскалация `_handle_merge_conflict` видит
+    защищённый путь ТОЛЬКО когда сам merge конфликтует, а бесконфликтный
+    дифф (новый файл, не тронутый на main) доходил до `done` молча.
+
+    Self target ТОЛЬКО (`ctx.path == config.ROOT`, тот же довод, что
+    карта/RETRO в `_publish_merge_artifacts`): защищённые пути этого
+    списка — файлы пульта, у внешнего target'а их либо нет вовсе, либо
+    это не те же файлы её репозитория.
+
+    `True` — эскалировано (`store.set_state` уже отжурналировал именованный
+    текст AC-4), вызывающий код обязан остановиться; `False` — дифф чист
+    либо git не ответил на определение базы/списка файлов. Git не
+    ответивший здесь НЕ останавливает процесс `sys.exit`'ом (в отличие
+    от инфраструктурных отказов остальных узлов этого гейта): `state` к
+    этому моменту ещё не тронут, а сломанный git тем же вызовом всё
+    равно упрётся в `sys.exit` чуть ниже (`_ensure_branch_head_published`/
+    `_perform_carpentry_merge` сами требуют рабочий git) — расширять
+    список мест отказа тем же git-failure не добавляет защиты.
+    """
+    if ctx.path != config.ROOT:
+        return False
+    base = gitcmd.diff_base(branch)
+    if base is None:
+        return False
+    files = gitcmd.diff_names(base, branch)
+    if files is None:
+        return False
+    protected = [f for f in files if _touches_protected_path(f)]
+    if not protected:
+        return False
+    detail = _protected_path_refusal_detail(protected)
+    store.set_state(conn, task_id, "escalated", "fsm",
+                    expected_state=state, detail=detail)
+    return True
+
+
 def _origin_main_sha(ctx: repo_context.RepoContext) -> str | None:
     """sha текущего HEAD `refs/heads/<ctx.base>` main target'а на её
     `origin` — `None`, git не ответил.
@@ -567,10 +617,11 @@ def _cmd_approve_merge_gate(conn, task_id: str, state: str, t,
                             confirmed_ci_note: str | None = None) -> tuple:
     """Тело окна `merge_gate -> done`, исполняемое ПОД МЬЮТЕКСОМ merge
     (SPEC T053, требование 1; SPEC T087, требования 1-2, 5-6): короткая
-    композиция шагов — публикация головы -> свежесть main -> зелёный CI
-    -> плотницкий merge в scratch-worktree (Stage0, AC-8) -> снимок
-    артефактов/карта/RETRO -> push явным sha -> done -> снапшот закрытия
-    -> уборка worktree/ветки.
+    композиция шагов — защищённые пути в диффе (SPEC
+    01M27JPEGCGMDDRX5A98QWJW0Z, требование 3/AC-5) -> публикация головы ->
+    свежесть main -> зелёный CI -> плотницкий merge в scratch-worktree
+    (Stage0, AC-8) -> снимок артефактов/карта/RETRO -> push явным sha ->
+    done -> снапшот закрытия -> уборка worktree/ветки.
 
     Возврат — сигнал вызывающему циклу (`_cmd_approve_merge_gate_cycle`):
     `("stopped",)` — окно завершилось без merge (отказ, эскалация,
@@ -595,6 +646,8 @@ def _cmd_approve_merge_gate(conn, task_id: str, state: str, t,
                  f"  задача осталась на гейте merge; почини targets.yaml "
                  f"и повтори: artel.py approve {task_id}")
     branch = t["branch"]
+    if _protected_path_diff_gate(conn, task_id, state, branch, ctx):
+        return ("stopped",)
     if _ensure_branch_head_published(conn, task_id, branch) != "ok":
         return ("stopped",)
     sync_outcome = _sync_main_or_wait(conn, task_id, t, state, branch, ctx)

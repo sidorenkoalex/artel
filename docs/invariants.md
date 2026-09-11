@@ -9,10 +9,13 @@
 в ревью, а не задача. Роль, которой инвариант мешает выполнить SPEC,
 эскалирует (skills/escalation-rules.md), а не переписывает тест.
 
-Оба файла реестра — `tests/test_invariants.py` и этот документ — стоят
-в `PROTECTED` job'а `protected-paths` (.github/workflows/ci.yml): их
-изменение в PR помечается предупреждением, как и правка конфигов системы.
-В Фазе 0 это предупреждение, после разделения токенов — fail (ADR-0001).
+Оба файла реестра — `tests/test_invariants.py` и этот документ — входят
+в `config.PROTECTED_PATHS` — единый список защищённых путей (задача
+01M27JPEGC, 11.09.2026): гейт зон отказывает диффу с таким путём всегда,
+мандата на расширение зон для них нет; гейт мержа отклоняет такой дифф в
+`escalated`; задание CI `protected-paths` (.github/workflows/ci.yml)
+читает список из того же `config.PROTECTED_PATHS` и на `pull_request`
+падает, не предупреждает. Правит эти пути только Оператор коммитом в main.
 
 Источники: README «Инварианты», docs/design.md (§2 роли и права, §4 циклы
 и политика гейтов, §6 runtime и FSM, §7 наблюдаемость, §10 экономика),
@@ -34,7 +37,7 @@ docs/adr/0002-integrity-principle.md, CLAUDE.md.
 | 7 | Гейт (spec_gate, acceptance, merge_gate) проходит `approve`/`reject` Оператора ЛИБО автогейт по политике `gates.yaml` — только при выполнении ВСЕХ условий этой политики для данного гейта (ADR-0007); дефолт политики каждого гейта — manual, при нём поведение не отличается от исходного | `test_invariants.ManualGatesNeedTheOperatorTest`; `tasks/T066/acceptance_tests/test_ac1_ac2_ac3_autogate_success.py` | design §4; ADR-0007 |
 | 8 | Потолок задачи = её денежный бюджет: жёсткий, с алертом на 70% | `test_step_cost.CmdRunCostTest` | README 5; design §6, §10 |
 | 9 | Исчерпанный бюджет блокирует запуск агента и не обходится переходами FSM | `test_invariants.ExhaustedBudgetIsNotBypassableTest` | design §6 |
-| 10 | Поднять потолок выше `ROLE_BUDGET_CAP` может только Оператор командой `budget`; в пределах потолка ролей потолок задаёт SPEC на гейте SPEC | `test_invariants.ExhaustedBudgetIsNotBypassableTest.test_only_the_operator_ceiling_unblocks_the_run`; `test_invariants.SpecCeilingRespectsRoleBudgetCapTest`; `test_step_cost.CmdBudgetTest` | design §4 («увеличение лимитов — manual всегда»); ADR-0014 |
+| 10 | Поднять потолок выше `ROLE_BUDGET_CAP` может только Оператор командой `budget`; в пределах потолка ролей потолок задаёт SPEC на гейте SPEC и один раз PLAN при первой сдаче | `test_invariants.ExhaustedBudgetIsNotBypassableTest.test_only_the_operator_ceiling_unblocks_the_run`; `test_invariants.SpecCeilingRespectsRoleBudgetCapTest`; `test_invariants.PlanBudgetOneTimeReassessmentTest`; `test_step_cost.CmdBudgetTest` | design §4 («увеличение лимитов — manual всегда»); ADR-0014 |
 | 11 | Журнал шагов пишется всегда: запуск, исход, стоимость, сбой лога, уборка | `test_agent_log.CmdRunLoggingTest`; `test_step_cost.CmdRunCostTest.test_step_cost_lands_in_spent_and_journal`; `test_kill_cleanup.KillCleanupTest.test_cleanup_is_listed_in_the_journal` | README 5; design §6, §7 |
 | 12 | В main мержит только `approve` из merge_gate — другого пути влить что-либо в main нет. Единственный merge вне гейта — актуализация ветки задачи от main (сверка свежести T051): в worktree задачи (`-C`), вливает main, ветку задачи в аргументах не упоминает, main не изменяет | `test_invariants.MergeOnlyFromMergeGateTest` | design §2, §4; CLAUDE.md; ADR-0006 |
 | 13 | Переход review → acceptance невозможен без свежего вердикта ревьювера | `test_invariants.FreshVerdictGuardsAcceptanceTest`; `test_review_freshness.FreshVerdictIterationTest` | design §4; artifacts.py `fresh_verdict_iteration` |
@@ -76,7 +79,7 @@ docs/adr/0002-integrity-principle.md, CLAUDE.md.
 | Ревьювер работает свежим контекстом и не наследует контекст разработчика | Свойство рантайма и промпта: агент физически имеет доступ к репозиторию, изоляция контекста не проверяется изнутри процесса | ревью, дизайн запуска (`cmd_run`) |
 | Артефакт — единственный канал передачи между ролями (в части «не история чата») | То же: отсутствие внеартефактного канала недоказуемо тестом оркестратора | ревью |
 | Разработчик не мержит, ревьювер не правит код | В Фазе 0 один токен на все роли (ADR-0001), разделение прав существует в промптах; enforcement — branch protection и отдельные PAT | ревью, CI, ADR-0001 |
-| Конфиги системы (gates.yaml, roles.yaml, .github/, templates/, skills/) меняет только Оператор | Проверка живёт в CI (job `protected-paths`), а не в коде оркестратора; в Фазе 0 деградирует до предупреждения — один аккаунт | CI, Оператор |
+| Защищённые пути (`config.PROTECTED_PATHS`: gates.yaml, roles.yaml, .github/, templates/, skills/, docs/invariants.md, tests/test_invariants.py, docs/adr/, CLAUDE.md, AGENTS.md, targets.yaml) меняет только Оператор | Гейт зон (`fsm_advance`) отказывает всегда, гейт мержа (`fsm_merge_gate`) отклоняет в `escalated`, задание CI `protected-paths` падает на `pull_request` — один источник списка (01M27JPEGC) | `tests/test_protected_paths_gate.py`; CI; Оператор |
 | Guards неотключаемы: смержить с красным CI нельзя **никаким** способом | Путь оркестратора закрыт кодом и кодирован инвариантом 19 (T017). Некодируемым остаётся остаток: ручной `git merge` мимо оркестратора и пуш в main — это branch protection и настройки репозитория, вне кода | Оператор, настройки репо |
 | Ручной гейт не проходится по таймауту: `awaiting-approval` шлёт напоминание, но никогда не подтверждает (design §6) | У FSM Фазы 0 нет часов и фонового процесса: `advance` времени не смотрит, автопроходить нечему. Подмена `store.now` в тесте дала бы видимость покрытия, а не покрытие. Кодируется вместе с напоминаниями | ревью, Оператор |
 | Policy проверяет оркестратор, а не агент | Policy-движка в Фазе 0 нет: gates.yaml справочный, все гейты захардкожены ручными. Кодируется вместе с движком в MVP | ревью, дизайн |

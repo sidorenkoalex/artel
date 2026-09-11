@@ -608,6 +608,24 @@ def _touches_zone(path: str, zones: list[str]) -> bool:
     return any(path == z or path.startswith(z) for z in zones)
 
 
+def _protected_paths_touched(files: list[str]) -> list[str]:
+    """Файлы `files`, задевающие `config.PROTECTED_PATHS` — тот же приём
+    префикса, что `_touches_zone` (формула требования 1 SPEC
+    01M27JPEGCGMDDRX5A98QWJW0Z). Порядок — как во входном списке
+    (обычно порядок `git diff --name-only`), без сортировки."""
+    protected = list(config.PROTECTED_PATHS)
+    return [f for f in files if _touches_zone(f, protected)]
+
+
+def _protected_path_refusal_detail(paths: list[str]) -> str:
+    """Именованный текст отказа (SPEC 01M27JPEGCGMDDRX5A98QWJW0Z,
+    требование 4/AC-4) — дословно общий с `fsm_merge_gate` (тот же текст
+    на гейте зон и на гейте мержа)."""
+    return (f"защищённый путь {', '.join(paths)} — правит только "
+           f"Оператор коммитом в main; предложи правку приложением к "
+           f"PLAN (unified-дифф)")
+
+
 def _plan_zones_extension_paths(plan_text: str) -> list[str] | None:
     """Пути раздела `## Расширение зон` PLAN.md (ANSWER-1.md, п.1: строка
     `Пути: <путь1>, <путь2>`). `None` — раздела нет вовсе, либо в нём нет
@@ -732,6 +750,22 @@ def _zones_gate(conn, task_id: str, t, branch: str,
                f"{base}...{t['branch']}, и повтори "
                f"artel.py advance {task_id}")
         return GateRefusal("переход отклонён: гейт зон", detail, hint)
+
+    # Защищённые пути (SPEC 01M27JPEGCGMDDRX5A98QWJW0Z, требования 2-3,
+    # AC-2/AC-3) — отказывает БЕЗУСЛОВНО, раньше проверки zones/
+    # расширения: заявленность пути в zones (AC-2) или подкреплённый
+    # мандатом Оператора раздел «## Расширение зон» PLAN.md (AC-3,
+    # обычное исключение ниже) защищённые пути не покрывают — мандат на
+    # расширение зон не мандат на правку защищённого пути (факт 11.09,
+    # «Контекст» SPEC).
+    protected = _protected_paths_touched(files)
+    if protected:
+        detail = _protected_path_refusal_detail(protected)
+        hint = (f"предложи правку unified-диффом в приложении к PLAN.md — "
+               f"её применяет Оператор, не роль; повтори "
+               f"artel.py advance {task_id} без правки защищённого пути в "
+               f"диффе")
+        return GateRefusal("переход отклонён: защищённый путь", detail, hint)
 
     zones = declared + list(config.COMMON_ZONES)
     out_of_zone = [f for f in files if not _touches_zone(f, zones)]
@@ -1124,6 +1158,63 @@ def _acceptance_run_refuses(conn, task_id: str, t, tdir, target: str,
     return False
 
 
+def _apply_plan_budget(conn, task_id: str, t, meta: dict) -> None:
+    """Однократная переоценка потолка задачи по PLAN.md (ADR-0014 п.3,
+    требования 1-5) — один шанс за всю жизнь задачи, не за итерацию.
+
+    `review_iters`/`accept_rejects` оба ещё нулевые — только тогда PLAN.md,
+    дошедший сюда, гарантированно первая сдача со `status: ready`: возврат
+    в `in_dev` из ревью (`changes_requested`) растит `review_iters`
+    (`_review_changes_requested` выше), возврат из приёмки (`reject`) —
+    `accept_rejects` (`fsm._cmd_reject`) — оба возврата закрывают канал
+    навсегда (требование 4), ни один из счётчиков переходами не сбрасывается
+    (инвариант 4, docs/invariants.md).
+
+    Вызывается прямо перед переходом в `verifying`, тем же местом в
+    последовательности, каким `budget.apply_spec_budget` стоит перед
+    `spec_gate` (`spec_writing` выше) — потолок обязан устояться до того,
+    как задача продолжит тратить деньги на этом шаге.
+
+    Разбор значения и потолок ролей — тот же `budget.spec_budget`, что и у
+    SPEC (поле то же самое, правило то же самое, ADR-0014 требование 6):
+    значение выше `ROLE_BUDGET_CAP` сюда в норме не доходит вовсе — раньше
+    отказывает guard (требование 6, эта функция для такого случая
+    отдельной обработки не добавляет; парсер отказывает и здесь — вторая,
+    независимая линия защиты, тем же приёмом, что и `apply_spec_budget`).
+    """
+    if t["review_iters"] or t["accept_rejects"]:
+        return
+    old = t["budget_usd"] or 0.0
+    value, refused = budget.spec_budget(meta)
+
+    if refused:
+        detail = f"{refused}, остаётся потолок ${old:.2f}"
+        store.journal(conn, task_id, "fsm", "бюджет из PLAN отклонён", detail)
+        print(f"[{task_id}] ВНИМАНИЕ: бюджет из PLAN отклонён: {detail}")
+        return
+    if value is None:
+        return  # требование 2: поля нет — потолок не меняется, молча
+
+    if t["budget_source"] == config.BUDGET_SOURCE_OPERATOR:
+        detail = f"${value:.2f} — потолок задан Оператором, остаётся ${old:.2f}"
+        store.journal(conn, task_id, "fsm", "бюджет из PLAN не применён", detail)
+        print(f"[{task_id}] бюджет из PLAN не применён: {detail}")
+        return
+    if value <= old:
+        detail = f"не применён: ниже потолка (${value:.2f} <= ${old:.2f})"
+        store.journal(conn, task_id, "fsm", "бюджет из PLAN не применён", detail)
+        print(f"[{task_id}] бюджет из PLAN не применён: {detail}")
+        return
+
+    store.update_task(conn, task_id, budget_usd=value,
+                      budget_source=config.BUDGET_SOURCE_PLAN,
+                      updated_at=store.now())
+    detail = (f"${value:.2f} (прежний потолок ${old:.2f}, "
+             f"источник {config.BUDGET_SOURCE_PLAN})")
+    store.journal(conn, task_id, "fsm", "бюджет из PLAN", detail)
+    print(f"[{task_id}] бюджет из PLAN: {detail}")
+
+
 def in_dev(conn, task_id: str, t, tdir, target: str, state: str) -> bool:
     # Разработчик закончил: PLAN ready и ветка запушена -> в verifying
     # (ADR-0015, требования 1-2: CI подтянутой головы проверяется ДО
@@ -1182,6 +1273,10 @@ def in_dev(conn, task_id: str, t, tdir, target: str, state: str) -> bool:
             return False
     if _acceptance_run_refuses(conn, task_id, t, tdir, target, branch):
         return False
+    # До смены состояния — тем же приёмом, что `apply_spec_budget` перед
+    # `spec_gate` выше: потолок обязан устояться до того, как задача
+    # продолжит тратить деньги (ADR-0014 п.3).
+    _apply_plan_budget(conn, task_id, t, plan_meta)
     store.update_task(conn, task_id, verifying_attempts=0)
     store.set_state(conn, task_id, "verifying", "fsm",
                     expected_state=state, detail="MR готов — жду зелёного CI ветки")

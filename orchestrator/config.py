@@ -182,6 +182,9 @@ PIN_UPDATE_JOURNAL_TASK_ID = "PIN-UPDATED"
 # Кто задал потолок задачи (tasks.budget_source). NULL — никто, стоит дефолт.
 BUDGET_SOURCE_SPEC = "spec"
 BUDGET_SOURCE_OPERATOR = "operator"
+# Однократная переоценка потолка на PLAN (ADR-0014 п.3, задача
+# 01M1THKWFXFYNW28HDJGYHQWH6): `orchestrator/fsm_advance.py::_apply_plan_budget`.
+BUDGET_SOURCE_PLAN = "plan"
 LIMIT_REVIEW_ITERS = 3
 LIMIT_ACCEPT_REJECTS = 1
 # Опрос CI в `verifying` (SPEC T086, требование 1): `auto` — владелец
@@ -506,8 +509,12 @@ REVIEW_VERDICTS = ("approved", "changes_requested", "escalate")
 # conventions-core). Конфликт merge, задевающий любой из них (SPEC T052,
 # требование 2), эскалирует вместо автоматического возврата в in_dev:
 # developer не вправе разрешать спор здесь сам.
+# AGENTS.md — символьная ссылка на CLAUDE.md (решение Оператора 11.09):
+# без записи в списке роль могла бы заменить ссылку обычным файлом и
+# подменить инструкции агентам, не трогая путь CLAUDE.md.
 PROTECTED_PATHS = ("gates.yaml", "roles.yaml", ".github/", "templates/",
-                   "skills/")
+                   "skills/", "docs/invariants.md", "tests/test_invariants.py",
+                   "docs/adr/", "CLAUDE.md", "AGENTS.md", "targets.yaml")
 
 # Общие зоны вне конфликта (задача 01M1NKVPD2A79PQ6K0JVV1B2Q1, часть 1,
 # AC-4): пути, которые трогают все задачи, а конфликт по ним — текстовый,
