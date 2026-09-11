@@ -214,3 +214,56 @@ test_watch.py`): сам разбирает сырой `argv` без argparse —
 
 Полный набор `tests/` в шаге не гонялся (конвенция скила
 `coding-standards`, раздел «Тесты») — его прогонит CI на пуш ветки.
+
+## Возврат — повторная подтяжка main (11.09, второй круг)
+
+Причина возврата: CI-прогон `pull_request`, снятый до правки main
+11.09 (guard на историческом REVIEW.md 01M1GCHKG8 после hotfix №19),
+брал устаревший merge-коммит head'а ветки — нужна новая голова,
+код не менять.
+
+К моменту этого шага main ушёл вперёд ещё на 4 коммита от точки
+предыдущего слияния (merge-base `eb45d817`): смержена «стоп-кран волны
+часть 2» (01M1THKRK8) — `orchestrator/auto.py`, `orchestrator/catalog.py`,
+`orchestrator/config.py`, `orchestrator/doctor/cli.py`,
+`orchestrator/runner.py`, три новых теста
+(`tests/test_catalog_wave_breaker_status.py`,
+`tests/test_doctor_wave_breaker.py`, `tests/test_runner_wave_breaker.py`),
+RETRO/снимок задачи. Из файлов зоны этой задачи в этом диапазоне
+менялся только `docs/codebase-map.md`.
+
+`git merge origin/main` — конфликт ровно в `docs/codebase-map.md` (тот
+же класс, что и в первом круге): взята сторона main
+(`git checkout --theirs`), карта перегенерирована штатной командой
+`python3 scripts/codebase_map.py` — `watch.py` и вся остальная карта
+на месте (сверено `grep`). `orchestrator/artel.py` в этот раз в
+конфликт не попал — коммит слияния `f98a5624`.
+
+`docs/operator-session.md` — без конфликта, п.4 «Поставить дозор»
+(`artel.py watch --mine`) на месте (сверено `grep`).
+
+Прогон после разрешения (синхронно, в переднем плане, с таймаутом):
+
+- `python3 -m unittest tests.test_auto_cycle tests.test_catalog_status_log
+  tests.test_catalog_wave_breaker_status tests.test_doctor_wave_breaker
+  tests.test_runner_wave_breaker tests.test_stack tests.test_store_journal
+  tests.test_session tests.test_new_argv_parsing` — 98 тестов, OK
+  (модули, задетые слиянием, плюс планка задачи).
+- `python3 -m unittest tasks.01M1VBEKRN0GA029J98S0K2DAQ.acceptance_tests.test_watch`
+  — 14 тестов (AC-1..AC-14), OK — код `watch` пережил и вторую
+  подтяжку без правки.
+- `python3 scripts/guard.py tasks/01M1VBEKRN0GA029J98S0K2DAQ/PLAN.md
+  tasks/01M1VBEKRN0GA029J98S0K2DAQ/SPEC.md
+  tasks/01M1VBEKRN0GA029J98S0K2DAQ/ANSWER-2.md` — ок.
+
+Полный набор `tests/` в шаге не гонялся — по той же конвенции; его
+прогонит CI на новую голову ветки.
+
+## Предложения системе (доп.)
+
+- Копилка `eb45d817` уже подняла до П1 класс «ветка не подтягивает
+  main до первого шага developer»; этот возврат — третий наблюдённый
+  случай того же класса на этой же задаче (main успел уйти вперёд ещё
+  на 4 коммита между предыдущим слиянием и этим шагом) — само
+  наблюдение не новое, фиксирую только повтор, без нового пункта
+  копилки.
