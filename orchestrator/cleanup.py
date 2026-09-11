@@ -3,6 +3,7 @@ import os
 import shutil
 import signal
 import socket
+import sys
 
 from . import config, gitcmd, lease, liveness, store, workspace
 
@@ -137,14 +138,82 @@ def cleanup_killed_task(conn, task_id: str, branch: str) -> None:
         print(f"  {note}")
 
 
-def cmd_kill(task_id: str, session_id: str | None = None) -> None:
+def _live_cycle_holder(row) -> bool:
+    """Живой держатель lease — признаки SPEC 01M28NX0M2WTVC38XVN75N01XD,
+    требование 1 (те же, что уже проверяют по отдельности `doctor.
+    check_leases` — свой host + адресуемый pid — и `lease.acquire`/
+    `is_live` — свежий heartbeat): держатель на ЭТОМ host (иначе pid не
+    проверяем и живость не подтвердить), его pid адресуем
+    (`liveness._pid_alive`), heartbeat не протух (не старше
+    `config.LEASE_STALE_AFTER_SEC`). Отсутствие lease — не «живой»."""
+    if row is None:
+        return False
+    if row["hostname"] != socket.gethostname():
+        return False
+    if not liveness._pid_alive(row["pid"]):
+        return False
+    return liveness._age_seconds(row["heartbeat_ts"]) <= config.LEASE_STALE_AFTER_SEC
+
+
+def _live_cycle_role(conn, task_id: str, row) -> str | None:
+    """Роль держателя живого ЦИКЛА — None, если отказывать нечему: либо
+    lease не живой (`_live_cycle_holder`), либо на текущем состоянии
+    задачи прямо сейчас нет агентского шага (`runner.step_role`).
+
+    Второе условие — не сужение требования 1, а его точный смысл: SPEC
+    называет сценарий «живой ОТВЯЗАННЫЙ ЦИКЛ (`auto`/`run`)», а `auto`/
+    `run` берут lease только вокруг реального шага роли (`runner.
+    step_role(t) is not None`) — на состоянии без роли (например,
+    `spec_writing` без `TZ.md`, прежний флоу «SPEC пишет Оператор») ни
+    `auto`, ни `run` lease так не возьмут, а синтетическая строка
+    `leases`, заведённая тестом или руками, «циклом» в смысле SPEC не
+    является. Отсюда и текст отказа AC-1 («шаг <роль> с <время>») — без
+    роли ему нечего называть.
+    """
+    if not _live_cycle_holder(row):
+        return None
+    from . import runner
+    t = store.get_task(conn, task_id)
+    return runner.step_role(t)
+
+
+# Литерал действия журнала отказа — сверяется буквально приёмочным тестом
+# AC-1 (`test_ac1_journal_names_the_refusal`).
+KILL_REFUSAL_JOURNAL_ACTION = "kill отклонён: цикл жив"
+# Литерал действия журнала подтверждения --yes — AC-2
+# (`test_ac2_journal_names_the_yes_confirmation`).
+KILL_CONFIRM_JOURNAL_ACTION = "kill подтверждён флагом --yes при живом цикле"
+
+
+def _refuse_live_cycle(conn, task_id: str, role: str, row) -> None:
+    """Отказ AC-1: текст называет держателя (pid, роль/шаг, время
+    heartbeat) и обе следующие команды — не меняет ничего в задаче,
+    вызывается ДО `lease.run_locked`, так что `force=True` до строки
+    lease так и не добирается."""
+    text = (f"[{task_id}] цикл жив (pid {row['pid']}, шаг {role} с "
+           f"{row['heartbeat_ts']}) — остановить цикл: artel.py stop "
+           f"{task_id}; ликвидировать задачу (ветка и worktree будут "
+           f"удалены): artel.py kill {task_id} --yes")
+    store.journal(conn, task_id, "operator", KILL_REFUSAL_JOURNAL_ACTION, text)
+    sys.exit(text)
+
+
+def cmd_kill(task_id: str, session_id: str | None = None, *,
+            confirmed: bool = False) -> None:
     """Берёт lease задачи перед работой (SPEC T044, требование 2).
 
     Префикс -> полный id (SPEC T094, требование 3, AC-3) резолвится ЗДЕСЬ,
     до lease/CAS/путей на диске — иначе `kill` неразрешённым префиксом
     брал lease по несуществующему ключу и зацикливался в `_cmd_kill` на
     вечно проигрывающем CAS (REVIEW T094 итерация 1, замечание 1: живой
-    репро — `cmd_kill` с уникальным префиксом зависал бесконечно)."""
+    репро — `cmd_kill` с уникальным префиксом зависал бесконечно).
+
+    `confirmed` (SPEC 01M28NX0M2WTVC38XVN75N01XD, требования 1-2) —
+    флаг `--yes` командной строки: без него живой держатель (`_live_
+    cycle_holder`) отказывает целиком, ничего не меняя (AC-1); с ним —
+    прежнее полное поведение `kill`, только с дополнительной записью в
+    журнал (AC-2). Мёртвый/отсутствующий держатель не смотрит на
+    `confirmed` вовсе — путь остаётся прежним (AC-3)."""
     conn = store.db()
     task_id = store.resolve_task_id(conn, task_id)
     # Снимок lease ДО `run_locked` (SPEC 01M1NWCHVTYQ0M8PCJ1YJ2N78P,
@@ -153,6 +222,13 @@ def cmd_kill(task_id: str, session_id: str | None = None) -> None:
     # живого отвязанного цикла нужно поймать раньше, иначе к моменту,
     # когда `_cmd_kill` его читает, там уже лежит pid самого kill.
     holder_before = store.lease_row(conn, task_id)
+    live_role = _live_cycle_role(conn, task_id, holder_before)
+    if live_role is not None:
+        if not confirmed:
+            _refuse_live_cycle(conn, task_id, live_role, holder_before)
+        store.journal(conn, task_id, "operator", KILL_CONFIRM_JOURNAL_ACTION,
+                     f"pid={holder_before['pid']}, hostname="
+                     f"{holder_before['hostname']}")
     # `force=True` — kill обязан прервать задачу немедленно, даже если
     # lease сейчас держит живой отвязанный цикл со свежим heartbeat
     # (иначе kill отказал бы «сессия занята», ровно тем же текстом,

@@ -518,6 +518,92 @@ class ZoneLockTest(TmpRootTest):
         self.assertEqual(total, 1)
         self.assertEqual(position, 1)
 
+    # ------------------------------------------------------------------ claim
+
+    def test_claim_without_conflict_journals_claim_action_and_reports_pending(self):
+        """Ловит мутацию: `claim` не журналирует `CLAIM_ACTION` (или
+        журналирует его чужим актором) на зоне без конфликта — вызывающий
+        (`runner._cmd_run`) не узнал бы, что захват состоялся, и не мог бы
+        решить, снимать ли его позже (SPEC 01M28NWPS3PJHJAT4APXRY7MF7,
+        требование 1, AC-1)."""
+        self.set_own_zones("a/b")
+
+        refusal, pending = zone_lock.claim(store.db(), self.TASK,
+                                           self.get_task())
+
+        self.assertIsNone(refusal)
+        self.assertTrue(pending)
+        tail = store.task_steps(store.db(), self.TASK)[-1]
+        self.assertEqual(tail["action"], zone_lock.CLAIM_ACTION)
+        self.assertEqual(tail["actor"], "developer")
+
+    def test_claim_with_conflict_refuses_and_writes_nothing(self):
+        """Ловит мутацию: `claim` журналирует `CLAIM_ACTION`, даже когда
+        `blocking_conflict` нашёл занявшую зону задачу — второй кандидат
+        ложно считался бы захватившим зону, которую на самом деле держит
+        занявшая её задача (требование 1, AC-6)."""
+        self.set_own_zones("a/b")
+        occupier = self.seed_other("in_dev", "a/b")
+        self._mark_already_started(occupier)
+
+        refusal, pending = zone_lock.claim(store.db(), self.TASK,
+                                           self.get_task())
+
+        self.assertIsNotNone(refusal)
+        self.assertIn(occupier, refusal)
+        self.assertFalse(pending)
+        claimed = [r for r in store.task_steps(store.db(), self.TASK)
+                  if r["action"] == zone_lock.CLAIM_ACTION]
+        self.assertEqual(claimed, [])
+
+    def test_claim_when_already_occupying_reports_not_pending(self):
+        """Задача, уже занимающая зону (собственный старт в этом же
+        пребывании), не получает НОВОЙ записи `CLAIM_ACTION` — иначе
+        `runner._cmd_run` мог бы позже снять occupancy, реально
+        установленную более ранним стартом, а не этим вызовом `claim`
+        (докстринг `claim`, «`claim_pending`»)."""
+        self.set_own_zones("a/b")
+        self._mark_already_started(self.TASK)
+
+        refusal, pending = zone_lock.claim(store.db(), self.TASK,
+                                           self.get_task())
+
+        self.assertIsNone(refusal)
+        self.assertFalse(pending)
+        claimed = [r for r in store.task_steps(store.db(), self.TASK)
+                  if r["action"] == zone_lock.CLAIM_ACTION]
+        self.assertEqual(claimed, [])
+
+    def test_claimed_but_not_started_before_and_after_agent_start(self):
+        """Ловит мутацию: `claimed_but_not_started` не сверяет актора
+        `developer` записи `"agent run started"` — старт роли не-developer
+        (например `test_author`) ложно засчитывался бы фактическим стартом
+        разработчика (тот же класс регрессии, что и у `_occupies`)."""
+        self.assertTrue(
+            zone_lock.claimed_but_not_started(store.db(), self.TASK))
+
+        store.journal(store.db(), self.TASK, "test_author",
+                     "agent run started", "")
+        self.assertTrue(
+            zone_lock.claimed_but_not_started(store.db(), self.TASK),
+            "старт не-developer ложно засчитан фактическим стартом")
+
+        store.journal(store.db(), self.TASK, "developer",
+                     "agent run started", "")
+        self.assertFalse(
+            zone_lock.claimed_but_not_started(store.db(), self.TASK))
+
+    def test_release_claim_journals_fsm_actor_and_literal_action(self):
+        """Ловит мутацию: `release_claim` пишет захват актором `developer`
+        (спутав со своим же `claim`) или произвольным текстом действия —
+        приёмочные тесты (AC-3/AC-4) сверяют журнал буквальной строкой
+        `"zone claim released"`, не именем константы (SPEC требование 2)."""
+        zone_lock.release_claim(store.db(), self.TASK)
+
+        tail = store.task_steps(store.db(), self.TASK)[-1]
+        self.assertEqual(tail["actor"], "fsm")
+        self.assertEqual(tail["action"], "zone claim released")
+
 
 if __name__ == "__main__":
     unittest.main()
