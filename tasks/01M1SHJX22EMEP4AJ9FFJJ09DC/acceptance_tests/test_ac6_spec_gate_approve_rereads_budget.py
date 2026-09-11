@@ -79,7 +79,7 @@ class ApproveOnSpecGateRereadsBudgetFromArtifactBranchTest(ApproveSandbox):
         self.assertAlmostEqual(row["budget_usd"], config.DEFAULT_BUDGET_USD,
                                msg="потолок не поднялся выше дефолта")
         self.assertIsNone(row["budget_source"])
-        self.assertIn("выше дефолта", out)
+        self.assertIn("выше потолка ролей", out)
 
 
 if __name__ == "__main__":
