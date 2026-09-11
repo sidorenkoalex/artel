@@ -608,6 +608,24 @@ def _touches_zone(path: str, zones: list[str]) -> bool:
     return any(path == z or path.startswith(z) for z in zones)
 
 
+def _protected_paths_touched(files: list[str]) -> list[str]:
+    """Файлы `files`, задевающие `config.PROTECTED_PATHS` — тот же приём
+    префикса, что `_touches_zone` (формула требования 1 SPEC
+    01M27JPEGCGMDDRX5A98QWJW0Z). Порядок — как во входном списке
+    (обычно порядок `git diff --name-only`), без сортировки."""
+    protected = list(config.PROTECTED_PATHS)
+    return [f for f in files if _touches_zone(f, protected)]
+
+
+def _protected_path_refusal_detail(paths: list[str]) -> str:
+    """Именованный текст отказа (SPEC 01M27JPEGCGMDDRX5A98QWJW0Z,
+    требование 4/AC-4) — дословно общий с `fsm_merge_gate` (тот же текст
+    на гейте зон и на гейте мержа)."""
+    return (f"защищённый путь {', '.join(paths)} — правит только "
+           f"Оператор коммитом в main; предложи правку приложением к "
+           f"PLAN (unified-дифф)")
+
+
 def _plan_zones_extension_paths(plan_text: str) -> list[str] | None:
     """Пути раздела `## Расширение зон` PLAN.md (ANSWER-1.md, п.1: строка
     `Пути: <путь1>, <путь2>`). `None` — раздела нет вовсе, либо в нём нет
@@ -732,6 +750,22 @@ def _zones_gate(conn, task_id: str, t, branch: str,
                f"{base}...{t['branch']}, и повтори "
                f"artel.py advance {task_id}")
         return GateRefusal("переход отклонён: гейт зон", detail, hint)
+
+    # Защищённые пути (SPEC 01M27JPEGCGMDDRX5A98QWJW0Z, требования 2-3,
+    # AC-2/AC-3) — отказывает БЕЗУСЛОВНО, раньше проверки zones/
+    # расширения: заявленность пути в zones (AC-2) или подкреплённый
+    # мандатом Оператора раздел «## Расширение зон» PLAN.md (AC-3,
+    # обычное исключение ниже) защищённые пути не покрывают — мандат на
+    # расширение зон не мандат на правку защищённого пути (факт 11.09,
+    # «Контекст» SPEC).
+    protected = _protected_paths_touched(files)
+    if protected:
+        detail = _protected_path_refusal_detail(protected)
+        hint = (f"предложи правку unified-диффом в приложении к PLAN.md — "
+               f"её применяет Оператор, не роль; повтори "
+               f"artel.py advance {task_id} без правки защищённого пути в "
+               f"диффе")
+        return GateRefusal("переход отклонён: защищённый путь", detail, hint)
 
     zones = declared + list(config.COMMON_ZONES)
     out_of_zone = [f for f in files if not _touches_zone(f, zones)]
