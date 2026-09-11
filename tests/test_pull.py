@@ -263,6 +263,39 @@ class PullEvaluateTest(TmpRootTest):
 
     # ------------------------------------------------------------- Refused
 
+    def test_refused_when_worktree_carries_a_file_outside_the_task_zones(self):
+        """SPEC 01M290PVYG2VJK6442H5BAX9MA, AC-3/AC-4: WIP-чекпоинт перед
+        подтяжкой (`checkpoint.commit_pull_checkpoint`) находит путь вне
+        заявленных зон задачи — подтяжка обязана отказать ЦЕЛИКОМ
+        (`Refused`, состояние не меняется), не продолжать до `git merge`.
+
+        Ловит мутацию: `evaluate` игнорирует отказ чекпоинта и всё равно
+        зовёт `_run_merge` — `outcome` оказался бы `Pulled`/`Conflict`
+        вместо `Refused`, и `merge_calls` поймала бы лишний вызов."""
+        store.update_task(store.db(), self.TASK, zones="orchestrator/allowed.py")
+        merge_calls = []
+
+        def side_effect(repo, *args) -> subprocess.CompletedProcess:
+            if args[:3] == ("diff", "--cached", "--name-only"):
+                return subprocess.CompletedProcess(
+                    ("git", "-C", str(repo), *args), 0, "docs/stray.md\n", "")
+            if args[:1] == ("merge",):
+                merge_calls.append(args)
+            return self._ok(repo, *args)
+
+        with mock.patch.object(gitcmd, "commits_behind", return_value=3), \
+             mock.patch.object(gitcmd, "in_repo", side_effect=side_effect):
+            outcome = self.evaluate()
+
+        self.assertIsInstance(outcome, pull.Refused)
+        self.assertIsNotNone(outcome.reason)
+        self.assertIn("stray.md", outcome.reason)
+        self.assertIn("посторонние файлы в worktree — решение Оператора",
+                      outcome.reason)
+        self.assertEqual(merge_calls, [])
+        self.assertEqual(self.task_row()["state"], "in_dev",
+                         "Refused не имеет права менять состояние задачи")
+
     def test_refused_when_plank_missing_and_ac_required(self):
         """SPEC с AC-разметкой требует приёмочную планку, но
         ветка-источник после подтяжки её не содержит — `Refused` с
