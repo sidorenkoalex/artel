@@ -78,6 +78,17 @@ def cmd_doctor(restore: bool = False, fix: bool = False) -> None:
     работать независимо от исхода сверки веток-сирот.
     """
     conn = doctor.store.db()
+    # Стоп-кран волны, часть 2 (01M1THKRK8HPXA7Y2SRB0RFTN2, требование 3):
+    # первым пунктом вывода, раньше остальных проверок — Оператор обязан
+    # увидеть блокирующую причину, из-за которой `run`/`auto` self сейчас
+    # отказывают, до любой другой диагностики.
+    wave_breaker_alerts = doctor.runner.wave_breaker_alerts_open(conn)
+    if wave_breaker_alerts:
+        print("СТОП-КРАН ВОЛНЫ ОТКРЫТ — run/auto self не начинают новый "
+             "агентный шаг:")
+        for a in wave_breaker_alerts:
+            print(f"  #{a['id']} {a['message']}")
+        print(f"  `artel.py alert-ack <id> \"...\"` снимет блокировку\n")
     if restore:
         print("Recovery-сверка после восстановления .artel/ из бэкапа:")
         # SPEC 01M1NSR5M5THYRC0RFWPMVE2DW, требование 3/AC-6: тот же

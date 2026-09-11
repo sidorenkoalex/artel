@@ -8,7 +8,7 @@ from pathlib import Path
 from scripts import guard
 
 from . import (alerts, artifact_branch, artifacts, budget, config, gitcmd,
-              idgen, liveness, store, zone_lock)
+              idgen, liveness, runner, store, zone_lock)
 
 # ГОСТ-подобная транслитерация: только stdlib, без внешних зависимостей.
 # ъ/ь пропускаются; ё → yo; щ → sch; ю → yu; я → ya.
@@ -296,11 +296,30 @@ def _zone_wait_suffix(conn, t) -> str:
             f"{queue}]")
 
 
+def _wave_breaker_suffix(t, wave_breaker_open: bool) -> str:
+    """Пометка стоп-крана волны (01M1THKRK8HPXA7Y2SRB0RFTN2, требование
+    4): ДОБАВКОЙ в конец строки, тем же приёмом, что и `_lease_holder_
+    suffix`/`_zone_wait_suffix`. У КАЖДОЙ задачи target self, пока хоть
+    один алерт открыт (требование 4: «блокирует весь target, не только
+    задачи, вызвавшие срабатывание») — не только у задач, чей класс
+    отказа поднял алерт. Задачи любого другого target не помечаются
+    (требование 5)."""
+    if not wave_breaker_open:
+        return ""
+    if (t["target"] or config.DEFAULT_TARGET) != config.DEFAULT_TARGET:
+        return ""
+    return "  [СТОП-КРАН ВОЛНЫ: run/auto не начинают новый шаг]"
+
+
 def cmd_status() -> None:
     conn = store.db()
     rows = store.all_tasks(conn)
     if not rows:
         print("Задач нет. `new \"<название>\"` создаст первую.")
+    # Стоп-кран волны, часть 2 (01M1THKRK8HPXA7Y2SRB0RFTN2, требование 4):
+    # один запрос на весь вывод, не по строке на задачу — критерий «алерт
+    # открыт» не меняется между строками одного вызова `status`.
+    wave_breaker_open = bool(runner.wave_breaker_alerts_open(conn))
     for r in rows:
         flag = " <- ЖДЁТ ОПЕРАТОРА" if r["state"] in (
             "spec_gate", "acceptance", "merge_gate", "escalated") else ""
@@ -310,11 +329,12 @@ def cmd_status() -> None:
         mark = "  [canary]" if r["is_canary"] else ""
         holder = _lease_holder_suffix(conn, r["id"])
         zone = _zone_wait_suffix(conn, r)
+        wave_breaker = _wave_breaker_suffix(r, wave_breaker_open)
         print(
             f"{r['id']}  {r['state']:<13} "
             f"ревью {r['review_iters']}/{config.LIMIT_REVIEW_ITERS}"
             f"  ${r['spent_usd']:.2f}/{r['budget_usd']:.2f}  {r['title']}"
-            f"{flag}{mark}{holder}{zone}"
+            f"{flag}{mark}{holder}{zone}{wave_breaker}"
         )
 
     # Требование 7 SPEC T022: триггеры docs/triggers.md — отдельная секция
