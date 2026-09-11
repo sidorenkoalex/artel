@@ -1233,7 +1233,7 @@ def parse_division_subsections(text: str) -> list[dict]:
     внутри `TZ.md` заведённой подзадачи, не только свободный текст).
     """
     body = section_body(text, DIVISION_SECTION)
-    if not body.strip():
+    if not body.strip() or _is_template_placeholder(body):
         return []
     chunks = _DIVISION_SUBSECTION_SPLIT.split(body)[1:]
     subsections = []
@@ -1260,6 +1260,18 @@ def parse_division_subsections(text: str) -> list[dict]:
     return subsections
 
 
+def _is_template_placeholder(body: str) -> bool:
+    """Hotfix №23 (11.09): тело секции — один нетронутый заполнитель
+    шаблона `<...>` (templates/SPEC.md несёт «## Деление» с примером
+    подразделов внутри угловых скобок). SPEC, заведённый `cmd_new` из
+    шаблона и не тронутый в этой секции, не является заявкой на деление —
+    иначе guard отказывал бы каждому такому SPEC («подраздел '<название
+    первой подзадачи>' не несёт поле Зоны»), как 11.09 после применения
+    диффа шаблона в main."""
+    stripped = body.strip()
+    return stripped.startswith("<") and stripped.endswith(">")
+
+
 def _division_zone_list(raw: str | None) -> list[str]:
     """Список непустых зон подраздела через запятую — тот же разбор, что
     `orchestrator/zone_lock.py::_own_paths` применяет к `zones` задачи."""
@@ -1282,7 +1294,7 @@ def division_section_errors(path: Path | str, text: str, meta: dict) -> list[str
     if DIVISION_SECTION not in headers:
         return []
     body = section_body(text, DIVISION_SECTION)
-    if not body.strip():
+    if not body.strip() or _is_template_placeholder(body):
         return []
     subsections = parse_division_subsections(text)
     if not subsections:
