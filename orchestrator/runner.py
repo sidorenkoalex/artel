@@ -28,6 +28,28 @@ GIT_IDENTITY = (
 )
 
 
+# Стоп-кран волны, часть 2 (01M1THKRK8HPXA7Y2SRB0RFTN2, требования 1, 5):
+# текст action записи журнала, которым `auto._run_wave_breaker_refusal`
+# узнаёт, что ИМЕННО этот вызов `_cmd_run` отказал по открытому алерту
+# стоп-крана — не по одновременному отказу бюджета/лимита/паузы/занятости
+# зоны (тот же приём отсечки, что уже несёт `pause.REFUSAL_ACTION`).
+WAVE_BREAKER_REFUSAL_ACTION = "run отклонён: стоп-кран волны"
+
+
+def wave_breaker_alerts_open(conn) -> list:
+    """Открытые алерты `kind=incident` стоп-крана волны target self
+    (`alerts.WAVE_BREAKER_SOURCE`, `target=config.DEFAULT_TARGET`) —
+    заводит часть 1 (`alerts.check_wave_breaker_failure`/
+    `check_wave_breaker_timeout`), читает часть 2 (это SPEC): отказ
+    старта шага здесь (требование 1), первая строка вывода `doctor`
+    (требование 3) и пометка `status` (требование 4) — один и тот же
+    критерий «алерт открыт» в трёх разных командах, поэтому общая
+    функция вместо трёх копий фильтра."""
+    return [row for row in alerts.open_alerts(conn, "incident")
+           if row["target"] == config.DEFAULT_TARGET
+           and row["source"] == alerts.WAVE_BREAKER_SOURCE]
+
+
 def _attempts_word(n: int) -> str:
     """Русское числительное «попытка» в форме, согласованной с {n} (ревью
     T082 итерации 1, замечание minor): класс 2 (session limit) обрывает
@@ -187,6 +209,25 @@ def _cmd_run(conn, task_id: str) -> None:
                   f"начинается; `artel.py resume {task_id}` снимет пометку")
         store.journal(conn, task_id, role, pause.REFUSAL_ACTION, detail)
         sys.exit(f"[{task_id}] run отклонён: {detail}")
+
+    # Стоп-кран волны, часть 2 (01M1THKRK8HPXA7Y2SRB0RFTN2, требования 1,
+    # 5): тем же приёмом, что и штатная пауза выше — стоит строго до
+    # workspace/pre-flight/spawn, уже идущий шаг не трогает (AC-1). Только
+    # target self — задачи любого другого target не блокируются вовсе
+    # (требование 5, AC-7): `wave_breaker_alerts_open` уже фильтрует по
+    # `target=config.DEFAULT_TARGET` со стороны алерта, здесь проверяем
+    # ЭТУ задачу тем же критерием, чтобы внешний target не заходил в блок.
+    if (t["target"] or config.DEFAULT_TARGET) == config.DEFAULT_TARGET:
+        wave_breaker_alerts = wave_breaker_alerts_open(conn)
+        if wave_breaker_alerts:
+            names = "; ".join(f"#{a['id']} {a['message']}"
+                              for a in wave_breaker_alerts)
+            detail = (f"открыт алерт(ы) стоп-крана волны ({names}) — новый "
+                      f"агентный шаг не начинается; "
+                      f"`artel.py alert-ack <id> \"...\"` снимет блокировку")
+            store.journal(conn, task_id, role,
+                          WAVE_BREAKER_REFUSAL_ACTION, detail)
+            sys.exit(f"[{task_id}] run отклонён: {detail}")
 
     target = t["target"] or config.DEFAULT_TARGET
 

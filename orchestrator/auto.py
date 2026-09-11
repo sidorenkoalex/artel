@@ -56,6 +56,17 @@ def _run_zone_wait_refusal(conn, task_id: str, journaled_before: int) -> bool:
     return False
 
 
+def _run_wave_breaker_refusal(conn, task_id: str, journaled_before: int) -> bool:
+    """Отказал ли `run` ИМЕННО этим вызовом из-за открытого алерта
+    стоп-крана волны self (01M1THKRK8HPXA7Y2SRB0RFTN2, требование 1) —
+    тот же приём отсечки, что `_run_paused_refusal` уже применяет к
+    штатной паузе."""
+    for row in store.task_steps(conn, task_id)[journaled_before:]:
+        if row["action"] == runner.WAVE_BREAKER_REFUSAL_ACTION:
+            return True
+    return False
+
+
 def _advance_refusal(conn, task_id: str, journaled_before: int) -> str | None:
     """Текст `action` записи `fsm` «переход отклонён…», добавленной ИМЕННО
     этим вызовом `cmd_advance`; `None` — отказ не журналировался (агент ещё
@@ -600,6 +611,13 @@ def _role_run_step(conn, task_id: str, session_id: str, role: str,
         # зону (требование 4), алерт буксования не открывается.
         if _run_zone_wait_refusal(conn, task_id, run_journaled_before):
             reason, hint = config.AUTO_STOP_ZONE_WAIT
+            return Stop(state, reason, hint.format(id=task_id), False)
+        # Стоп-кран волны, часть 2 (01M1THKRK8HPXA7Y2SRB0RFTN2, требования
+        # 1, 3-4) — причина уже видна первой строкой `doctor` и пометкой
+        # `status` у каждой задачи target self: алерт буксования здесь
+        # был бы дублем уже открытого incident-алерта.
+        if _run_wave_breaker_refusal(conn, task_id, run_journaled_before):
+            reason, hint = config.AUTO_STOP_WAVE_BREAKER
             return Stop(state, reason, hint.format(id=task_id), False)
         return Stop(state, "run отказался стартовать",
                     f"artel.py budget {task_id} <usd> или artel.py kill {task_id}",
