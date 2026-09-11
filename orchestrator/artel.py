@@ -87,6 +87,21 @@ REVIEW.md (iteration больше уже учтённого, см. fresh_verdict
 AUTO_MAX_STEPS шагов за вызов. Решений auto не принимает: approve и reject
 остаются ручными (§4), пути мимо гейта у цикла нет.
 
+`run <id>`/`auto <id>` без `--attach` (по умолчанию, SPEC
+01M1NWCHVTYQ0M8PCJ1YJ2N78P) отвязывают цикл от процесса сессии Оператора:
+команда сама порождает себя отдельным процессом ОС и сразу возвращает
+управление, напечатав pid, путь лога (`.artel/logs/<id>-<cmd>-<n>.log`)
+и подсказку `artel.py log <id>`; цикл переживает обрыв породившей его
+сессии. `--attach` — прежнее (до этой задачи) поведение: передний план
+вызывающего процесса, без отвязки. `stop <id>` шлёт отвязанному циклу
+SIGTERM; гарантия «доигрывает уже начатый шаг и завершается сам между
+шагами» — про `auto` (у него есть граница между шагами, на которой
+сигнал проверяется). У отвязанного `run` границы нет — один шаг и
+естественный выход, обработчика `SIGTERM` он не ставит, `stop` для него
+обрывает процесс немедленно, как и до этой задачи. `kill <id>` прерывает
+немедленно в обоих случаях, включая принудительное завершение самого
+цикла.
+
 Целевые проекты объявляются в targets.yaml (ADR-0003 п.2), каталог
 проекта заводит `target-init <target>` (.artel/projects/<target>/ —
 workspace, tasks, knowledge, logs). БД одна на все проекты: строка
@@ -103,7 +118,8 @@ workspace, tasks, knowledge, logs). БД одна на все проекты: с
 
 Команды:
   init | new "<название>" [--tz <файл>] | status | show <id> | advance <id> |
-  run <id> | auto <id> | approve <id> [sha] | reject <id> "<причина>" |
+  run <id> [--attach] | auto <id> [--attach] | stop <id> |
+  approve <id> [sha] | reject <id> "<причина>" |
   answer <id> <файл-с-ответом> | kill <id> | release <id> |
   pause [--now] <id> | resume <id> | log <id> | budget <id> <usd> |
   target-init <target> | doctor [--restore] [--fix] | alert-ack <id> "<решение>" |
@@ -331,6 +347,8 @@ worktree задачи, команда коммитит правку, сдвиг�
             read-only, без lease (SPEC 01M1VBEKRN0GA029J98S0K2DAQ)
 """
 import os
+import signal
+import socket
 import subprocess
 import sys
 from pathlib import Path
@@ -420,9 +438,121 @@ def _ensure_supported_interpreter():
 _ensure_supported_interpreter()
 
 from orchestrator import (amend, answer, auto, budget, canary, catalog,  # noqa: E402
-                          cleanup, doctor, dry_run, fsm, notes, pause,
-                          pin, projects, prune, release, report, runner,
-                          venv, version, watch, workspace, zone_lock)
+                          cleanup, doctor, dry_run, fsm, lease, liveness,
+                          notes, pause, pin, projects, prune, release,
+                          report, runner, store, venv, version, watch,
+                          workspace, zone_lock)
+
+
+# Отвязка `run`/`auto` от процесса сессии Оператора (SPEC
+# 01M1NWCHVTYQ0M8PCJ1YJ2N78P) — детали см. SPEC.md этой задачи. `--attach`
+# сохраняет прежнее поведение (передний план, без отвязки); без флага
+# команда порождает себя же отдельным процессом ОС (`start_new_session`)
+# и сразу возвращает управление, напечатав pid/лог/подсказку.
+
+def _task_id_and_attach(rest: list, usage: str) -> tuple:
+    attach = "--attach" in rest
+    positional = [a for a in rest if a != "--attach"]
+    if not positional:
+        sys.exit(usage)
+    return positional[0], attach
+
+
+def _launch_detached(cmd: str, task_id: str) -> None:
+    """R1-F3 (REVIEW.md итерации 1): до отвязки — дешёвая проверка
+    `lease.is_live`, не авторитетное взятие lease (тем ниже и остаётся,
+    внутри спавненного процесса, через `lease.run_locked`). Без неё
+    повторный `run`/`auto` при уже идущем цикле раньше отказывал СИНХРОННО
+    прямо на экране, а после детача молча печатал бы «отвязан: pid …» и
+    сразу же падал бы внутри свежего процесса — отказ был бы виден только
+    в его логе. Гонка (lease освобождается/занимается между этой проверкой
+    и спавном) не авторитетна и не обязана быть — тело `run_locked` внутри
+    спавненного процесса решает по факту, эта проверка только возвращает
+    немедленную обратную связь на очевидный случай."""
+    conn = store.db()
+    task_id = store.resolve_task_id(conn, task_id)
+    if lease.is_live(conn, task_id):
+        row = store.lease_row(conn, task_id)
+        sys.exit(f"[{task_id}] задачу уже ведёт живой lease "
+                 f"(session_id={row['session_id']}, pid={row['pid']}, "
+                 f"host={row['hostname']}) — не запускаю второй отвязанный "
+                 f"процесс; подожди её или `artel.py stop {task_id}`")
+    config.LOGS.mkdir(parents=True, exist_ok=True)
+    prefix = f"{task_id}-{cmd}-"
+    used = [int(p.stem[len(prefix):]) for p in config.LOGS.glob(f"{prefix}*.log")
+           if p.stem[len(prefix):].isdigit()]
+    n = max(used, default=0) + 1
+    log_path = config.LOGS / f"{prefix}{n}.log"
+    log_fh = open(log_path, "ab", buffering=0)
+    try:
+        proc = subprocess.Popen(
+            # `-u`: stdout к файлу (не к терминалу) иначе блочно
+            # буферизуется питоном — маркер старта цикла осел бы в
+            # буфере до конца процесса, лог выглядел бы пустым живьём
+            # (AC-3, «наблюдать: artel.py log <id>» обязан видеть
+            # прогресс, не только финал).
+            [sys.executable, "-u", str(Path(__file__).resolve()), cmd,
+             task_id, "--attach"],
+            stdout=log_fh, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL,
+            start_new_session=True)
+    finally:
+        log_fh.close()
+    print(f"[{task_id}] {cmd} отвязан от сессии: pid {proc.pid}")
+    print(f"  лог: {log_path}")
+    print(f"  наблюдать: artel.py log {task_id}")
+
+
+def _cmd_run_or_detach(rest: list) -> None:
+    task_id, attach = _task_id_and_attach(rest, "run <id> [--attach]")
+    if attach:
+        runner.cmd_run(task_id)
+        return
+    _launch_detached("run", task_id)
+
+
+def _cmd_auto_or_detach(rest: list) -> None:
+    task_id, attach = _task_id_and_attach(rest, "auto <id> [--attach]")
+    if attach:
+        auto.cmd_auto(task_id)
+        return
+    _launch_detached("auto", task_id)
+
+
+def _cmd_stop(task_id: str) -> None:
+    """Штатная остановка отвязанного цикла (SPEC требование 5, AC-9):
+    SIGTERM держателю lease — тот же адрес, что уже несёт AC-6 (lease.pid
+    отвязанного процесса, не короткоживущей команды).
+
+    Чужой host не трогаем — тем же приёмом различения, что уже применяют
+    `cleanup._cmd_kill`/`doctor.check_leases`: pid на другом хосте не наш
+    для отправки сигнала, даже случайное числовое совпадение адресовало
+    бы посторонний процесс.
+
+    Адресация — по lease, не по имени команды: `_cmd_stop` не знает и не
+    спрашивает, `run` держит lease или `auto` — доигровка текущего шага
+    гарантирована только для `auto` (`orchestrator/auto.py::_on_sigterm`
+    ставит обработчик на границе между шагами), голый отвязанный `run`
+    такого обработчика не ставит и обрывается немедленно тем же
+    сигналом (см. модульный докстринг выше и `docs/operator-session.md`)."""
+    conn = store.db()
+    task_id = store.resolve_task_id(conn, task_id)
+    row = store.lease_row(conn, task_id)
+    if row is None:
+        sys.exit(f"[{task_id}] lease не найден — нечего останавливать")
+    if row["hostname"] != socket.gethostname():
+        sys.exit(f"[{task_id}] lease держит host {row['hostname']}, не "
+                 f"этот ({socket.gethostname()}) — останови оттуда")
+    if not liveness._pid_alive(row["pid"]):
+        sys.exit(f"[{task_id}] процесс цикла (pid={row['pid']}) уже не "
+                 f"существует")
+    try:
+        os.kill(row["pid"], signal.SIGTERM)
+    except ProcessLookupError:
+        sys.exit(f"[{task_id}] процесс цикла (pid={row['pid']}) уже не "
+                 f"существует")
+    print(f"[{task_id}] stop: SIGTERM отправлен pid={row['pid']} — "
+          f"`auto` доиграет текущий шаг и завершится сам; голый `run` "
+          f"обработчика не ставит и завершится немедленно")
 
 
 def _refuse_if_worktree() -> None:
@@ -578,8 +708,9 @@ def main() -> None:
         "show": lambda: catalog.cmd_show(rest[0]),
         "advance": lambda: fsm.cmd_advance(rest[0]),
         "workspace": lambda: workspace.cmd_workspace(rest[0]),
-        "run": lambda: runner.cmd_run(rest[0]),
-        "auto": lambda: auto.cmd_auto(rest[0]),
+        "run": lambda: _cmd_run_or_detach(rest),
+        "auto": lambda: _cmd_auto_or_detach(rest),
+        "stop": lambda: _cmd_stop(rest[0]),
         "approve": lambda: fsm.cmd_approve(rest[0],
                                            rest[1] if len(rest) > 1 else None),
         "reject": lambda: fsm.cmd_reject(rest[0],

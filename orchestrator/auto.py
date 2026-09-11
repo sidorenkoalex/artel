@@ -4,11 +4,24 @@
 предварительный advance пробует готовый артефакт до запуска роли, не
 после)."""
 import re
+import signal
 import time
 from dataclasses import dataclass
 
 from . import (agent_log, alerts, budget, ci, config, fixation, fsm, lease,
               pause, runner, store, zone_lock)
+
+# Флаг «пришёл SIGTERM (команда `stop`, SPEC 01M1NWCHVTYQ0M8PCJ1YJ2N78P,
+# требование 5)»: цикл доигрывает уже начатый шаг и останавливается сам
+# на ближайшей границе между шагами, не разрывая run+advance текущего.
+# Модульный уровень — сигнал асинхронный, обычный локальный флаг функции
+# ему не адресуем.
+_stop_requested = False
+
+
+def _on_sigterm(signum, frame) -> None:
+    global _stop_requested
+    _stop_requested = True
 
 # Действие журнала, которым отказ `advance` узнаётся вне зависимости от
 # конкретной причины (SPEC T038, требование 1): каждая точка `cmd_advance`
@@ -449,11 +462,27 @@ def cmd_auto(task_id: str, session_id: str | None = None,
     Префикс -> полный id (SPEC T094, требование 3, AC-3) резолвится ЗДЕСЬ,
     до lease (REVIEW T094 итерация 1, замечание 1).
     """
+    global _stop_requested
+    _stop_requested = False
+    # SIGTERM — сигнал команды `stop` (SPEC требование 5), штатная просьба
+    # остановиться между шагами (см. `_stop_requested` выше). Ставится ДО
+    # lease/цикла — сигнал технически может прийти даже до первого шага.
+    signal.signal(signal.SIGTERM, _on_sigterm)
     conn = store.db()
     task_id = store.resolve_task_id(conn, task_id)
-    lease.run_locked(conn, task_id, session_id,
-                     lambda sid: _cmd_auto(conn, task_id, sid, wait_zone),
-                     on_refusal="print")
+    try:
+        lease.run_locked(conn, task_id, session_id,
+                         lambda sid: _cmd_auto(conn, task_id, sid, wait_zone),
+                         on_refusal="print")
+    except BaseException as exc:
+        # Обрыв НЕ через `stop` (SPEC требование 7, AC-11): сигнал без
+        # обработчика вроде SIGINT, необработанное исключение — если
+        # процесс успевает выполнить код (в отличие от SIGKILL/
+        # аварийного убийства ОС), это место его ловит и журналирует
+        # причину до того, как исключение уронит процесс.
+        store.journal(conn, task_id, "operator", "цикл оборван",
+                      f"{type(exc).__name__}: {exc}")
+        raise
 
 
 @dataclass
@@ -786,6 +815,17 @@ def _cmd_auto(conn, task_id: str, session_id: str, wait_zone: bool = False) -> N
     # входом в `verifying` (диагностировано ANSWER-2/ANSWER-3, инцидент
     # 04-05.09 — часовые «зависания» шагов developer этой же задачи).
     while role is not None or (state == "verifying" and not t["is_canary"]):
+        if _stop_requested:
+            # SPEC 01M1NWCHVTYQ0M8PCJ1YJ2N78P требование 5, AC-9:
+            # проверяется ИМЕННО на границе между шагами (верх цикла,
+            # после того как прошлый run+advance уже отработал целиком)
+            # — уже начатый шаг сигнал не прерывает, доиграет своим
+            # чередом.
+            auto_stop(conn, task_id, state,
+                      "штатная остановка — команда stop",
+                      f"artel.py auto {task_id} — продолжит отсюда",
+                      alert=False)
+            return
         if state == "verifying":
             if _advance_verifying_poll(conn, task_id, session_id):
                 return
