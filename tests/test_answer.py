@@ -13,6 +13,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
@@ -52,6 +53,37 @@ class NextAnswerNumberTest(unittest.TestCase):
             answer._next_answer_number(
                 ["tasks/T001/ANSWER-1.md", "tasks/T001/ANSWER-final.md"]),
             2)
+
+
+class ZonesMandateMarkerPathsTest(unittest.TestCase):
+    """`answer._zones_mandate_marker_paths` (SPEC
+    01M287TPG0HAVXS8CHBCY679WN, требование 1) — чистый разбор строки
+    маркера в тексте файла ответа, в изоляции от команды/git."""
+
+    def test_no_marker_gives_empty_list(self):
+        self.assertEqual(
+            answer._zones_mandate_marker_paths("Обычный ответ.\n"), [])
+
+    def test_marker_line_paths_are_parsed(self):
+        self.assertEqual(
+            answer._zones_mandate_marker_paths(
+                "Расширение зон разрешено: docs/a.md, docs/b.md\n"),
+            ["docs/a.md", "docs/b.md"])
+
+    def test_marker_not_at_line_start_is_ignored(self):
+        """Ловит мутацию: поиск подстроки где угодно в тексте вместо
+        строки, начинающейся с маркера (`line.startswith`) — маркер,
+        случайно процитированный в свободном тексте, не должен
+        восприниматься как настоящий мандат Оператора."""
+        self.assertEqual(
+            answer._zones_mandate_marker_paths(
+                "Я читал про «Расширение зон разрешено: docs/a.md» в "
+                "скиле, но сам его не даю.\n"), [])
+
+    def test_leading_whitespace_before_marker_is_stripped(self):
+        self.assertEqual(
+            answer._zones_mandate_marker_paths(
+                "  Расширение зон разрешено: docs/a.md\n"), ["docs/a.md"])
 
 
 class AnswerDocumentIsGuardValidTest(unittest.TestCase):
@@ -122,6 +154,95 @@ class AnswerCommandRefusalsTest(_ArtifactBranchAnswerTest):
                          self.artifact_branch_files())
 
 
+class AnswerMandateMarkerOutsideInDevOrReviewStillRefusesTest(_ArtifactBranchAnswerTest):
+    """SPEC 01M287TPG0HAVXS8CHBCY679WN, требование 1: маркер расширяет
+    приём ТОЛЬКО для `in_dev`/`review`, не для ЛЮБОГО состояния вне
+    `escalated` — дополняет приёмочные тесты AC-1/AC-2 этой задачи
+    (кроют только `in_dev`/`review`/отсутствие маркера, не третье
+    состояние с маркером)."""
+
+    def test_marker_in_spec_writing_state_still_refuses(self):
+        """Ловит мутацию: гейт состояния ослаблен до «`escalated` ИЛИ
+        (маркер в тексте)», без проверки конкретных `in_dev`/`review` —
+        задача в `spec_writing` с тем же маркером прошла бы точно так
+        же, как в `in_dev`."""
+        self.assertEqual(store.get_task(store.db(), self.TASK)["state"],
+                         "spec_writing")
+        answer_file = self._answer_file(
+            "Расширение зон разрешено: docs/a.md\n")
+
+        with self.assertRaises(SystemExit) as ctx:
+            answer.cmd_answer(self.TASK, answer_file)
+
+        self.assertIn("escalated", str(ctx.exception))
+        self.assertNotIn(f"tasks/{self.TASK}/ANSWER-1.md",
+                         self.artifact_branch_files())
+
+
+class RoleEnvironmentRefusalTest(_ArtifactBranchAnswerTest):
+    """REVIEW 01M287TPG0HAVXS8CHBCY679WN итерация 1, замечание R1-F1:
+    `answer` (ветка `in_dev`/`review`) и `zones-extend` отказывают, если
+    ТЕКУЩИЙ процесс сам исполняется в окружении роли
+    (`runner.in_role_environment`) — без этого рубежа developer/reviewer,
+    ведущий свой же активный шаг, мог бы вызвать эти команды за
+    «Оператора» и сам себе выдать мандат на расширение зон. Тот же
+    приём, что `tests/test_canary.py::
+    AuthorizedPoolPayloadRoleEnvTest.test_role_environment_refuses_before_touching_keychain`
+    уже проверяет для `canary._authorized_pool_payload`."""
+
+    def _enter_in_dev(self) -> None:
+        store.set_state(store.db(), self.TASK, "in_dev", "operator",
+                        expected_state="spec_writing")
+
+    def test_answer_in_dev_refuses_from_role_environment(self):
+        """Ловит мутацию: рубеж `runner.in_role_environment()` убран из
+        ветки `in_dev`/`review` `_cmd_answer` (или переставлен ПОСЛЕ
+        чтения файла/коммита) — вызов из-под роли создал бы ANSWER-n.md
+        как если бы это сделал сам Оператор."""
+        self._enter_in_dev()
+        answer_file = self._answer_file(
+            "Расширение зон разрешено: docs/a.md\n")
+
+        with mock.patch.object(answer.runner, "in_role_environment",
+                               return_value=True):
+            with self.assertRaises(SystemExit) as ctx:
+                answer.cmd_answer(self.TASK, answer_file)
+
+        self.assertIn("role_env", str(ctx.exception))
+        self.assertNotIn(f"tasks/{self.TASK}/ANSWER-1.md",
+                         self.artifact_branch_files())
+
+    def test_answer_in_dev_succeeds_outside_role_environment(self):
+        """Симметричный положительный контроль: тот же вызов, что выше,
+        без окружения роли — путь `in_dev`/`review` остаётся рабочим
+        (регресс AC-1 не сломан новым рубежом)."""
+        self._enter_in_dev()
+        answer_file = self._answer_file(
+            "Расширение зон разрешено: docs/a.md\n")
+
+        with mock.patch.object(answer.runner, "in_role_environment",
+                               return_value=False):
+            answer.cmd_answer(self.TASK, answer_file)
+
+        self.assertIn(f"tasks/{self.TASK}/ANSWER-1.md",
+                      self.artifact_branch_files())
+
+    def test_zones_extend_refuses_from_role_environment(self):
+        """Тот же рубеж — `zones-extend` не коммитит ANSWER и не трогает
+        `zones_extension`, если вызвана из-под роли."""
+        with mock.patch.object(answer.runner, "in_role_environment",
+                               return_value=True):
+            with self.assertRaises(SystemExit) as ctx:
+                answer.cmd_zones_extend(self.TASK, "docs/a.md")
+
+        self.assertIn("role_env", str(ctx.exception))
+        self.assertNotIn(f"tasks/{self.TASK}/ANSWER-1.md",
+                         self.artifact_branch_files())
+        self.assertIsNone(
+            store.db().execute("SELECT zones_extension FROM tasks WHERE id=?",
+                               (self.TASK,)).fetchone()["zones_extension"])
+
+
 class AnswerCommandDoesNotDisturbOtherArtifactsTest(_ArtifactBranchAnswerTest):
     """Тот же класс дефекта, что REVIEW T075 итерация 1, замечание major
     (тогда — `add -A` worktree, теперь — плотницкая запись): `answer`
@@ -139,6 +260,81 @@ class AnswerCommandDoesNotDisturbOtherArtifactsTest(_ArtifactBranchAnswerTest):
         self.assertIn(f"tasks/{self.TASK}/QUESTIONS.md", files,
                       "answer не имеет права затронуть чужие артефакты "
                       "той же ветки")
+
+
+PLAN_WITH_EXTENSION_TEMPLATE = """---
+task: {task}
+type: plan
+author_role: developer
+status: ready
+schema_version: 2
+---
+
+# PLAN: тест zones-extend
+
+## Подход
+
+## Шаги
+
+## Покрытие требований
+
+## Влияние на систему
+
+## Расширение зон
+
+Пути: {paths}
+
+Обоснование: тест.
+"""
+
+
+class ZonesExtendCommandTest(_ArtifactBranchAnswerTest):
+    """`answer.cmd_zones_extend` (SPEC 01M287TPG0HAVXS8CHBCY679WN,
+    требование 2) — дополняет приёмочные тесты AC-4/AC-5/AC-6 этой же
+    задачи (`tasks/01M287TPG0HAVXS8CHBCY679WN/acceptance_tests/
+    test_ac4_ac5_ac6_zones_extend.py`) на двух углах, которых они не
+    кроют: пустой список путей и слияние с УЖЕ имеющимся
+    `zones_extension` при повторном вызове (не перезапись)."""
+
+    def row(self):
+        return store.db().execute(
+            "SELECT * FROM tasks WHERE id=?", (self.TASK,)).fetchone()
+
+    def artifact_commit(self, files: dict, message: str) -> None:
+        from orchestrator import artifact_branch
+        sha = artifact_branch.commit_files(
+            self.TASK, files, f"{self.TASK}: {message}")
+        self.assertTrue(sha, f"коммит {message!r} не удался")
+
+    def test_empty_paths_argument_refuses(self):
+        """Ловит мутацию: пустой/пробельный аргумент путей коммитит
+        ANSWER с пустым маркером вместо именованного отказа."""
+        with self.assertRaises(SystemExit) as ctx:
+            answer.cmd_zones_extend(self.TASK, "  ,  ")
+        self.assertIn("пустой список путей", str(ctx.exception))
+
+    def test_second_call_merges_with_existing_zones_extension(self):
+        """Повторный вызов с расширенным списком путей и обновлённым
+        PLAN.md — `zones_extension` становится ОБЪЕДИНЕНИЕМ старого и
+        нового множества, не перезаписывается последним вызовом.
+
+        Ловит мутацию: `store.update_task(..., zones_extension=paths_str)`
+        вместо merge с `t["zones_extension"]` — второй вызов стёр бы
+        путь, легализованный первым."""
+        self.artifact_commit(
+            {f"tasks/{self.TASK}/PLAN.md": PLAN_WITH_EXTENSION_TEMPLATE.format(
+                task=self.TASK, paths="docs/a.md")},
+            "PLAN v1")
+        answer.cmd_zones_extend(self.TASK, "docs/a.md")
+        self.assertEqual(self.row()["zones_extension"], "docs/a.md")
+
+        self.artifact_commit(
+            {f"tasks/{self.TASK}/PLAN.md": PLAN_WITH_EXTENSION_TEMPLATE.format(
+                task=self.TASK, paths="docs/a.md, docs/b.md")},
+            "PLAN v2")
+        answer.cmd_zones_extend(self.TASK, "docs/a.md, docs/b.md")
+
+        self.assertEqual(self.row()["zones_extension"], "docs/a.md,docs/b.md")
 
 
 if __name__ == "__main__":

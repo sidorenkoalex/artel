@@ -141,6 +141,51 @@ class WorktreeChangedPathsTest(unittest.TestCase):
         self.assertIsNone(self._paths("", returncode=128))
 
 
+class BranchTestsSnapshotTest(unittest.TestCase):
+    """`amend._branch_tests_snapshot` (SPEC 01M287TPG0HAVXS8CHBCY679WN,
+    требование 3): чтение дерева `acceptance_tests/` на ПРОИЗВОЛЬНОЙ
+    git-ревизии (`gitcmd.ls_tree_files`/`gitcmd.show` принимают и sha, и
+    имя ветки одинаково) — здесь в изоляции от настоящего git, песочница
+    `RealGitSandbox` для чистых веток отказа не нужна."""
+
+    def _snapshot(self, ls_tree_output: str, ls_returncode: int,
+                  show_text_by_rel: dict):
+        def fake_git(*args):
+            if args[0] == "ls-tree":
+                return subprocess.CompletedProcess(
+                    list(args), ls_returncode, ls_tree_output, "")
+            if args[0] == "show":
+                rel = args[1].split(":", 1)[1]
+                if rel in show_text_by_rel:
+                    return subprocess.CompletedProcess(
+                        list(args), 0, show_text_by_rel[rel], "")
+                return subprocess.CompletedProcess(list(args), 1, "", "not found")
+            raise AssertionError(f"неожиданный вызов git: {args}")
+
+        with mock.patch.object(gitcmd, "git", fake_git):
+            return amend._branch_tests_snapshot(
+                "deadbeef", "tasks/T001/acceptance_tests")
+
+    def test_reads_all_files_at_the_given_revision(self):
+        rel = "tasks/T001/acceptance_tests/test_ac.py"
+        snapshot = self._snapshot(rel + "\n", 0, {rel: "содержимое\n"})
+        self.assertEqual(snapshot, {rel: "содержимое\n"})
+
+    def test_ls_tree_failure_returns_none(self):
+        """Ловит мутацию: проверка `paths is None` убрана — сбой
+        `ls-tree` (ненулевой код) читался бы как «файлов нет» вместо
+        именованного `None` (ложное «нет расхождения» в AC-8)."""
+        self.assertIsNone(self._snapshot("", 128, {}))
+
+    def test_show_failure_for_any_file_returns_none(self):
+        """Ловит мутацию: файл, не прочитанный `show` (не в дереве этой
+        ревизии, git не ответил), тихо пропускается вместо `None` —
+        снимок получился бы неполным, сверка AC-7/AC-8 сравнивала бы
+        частичные данные как полные."""
+        rel = "tasks/T001/acceptance_tests/test_ac.py"
+        self.assertIsNone(self._snapshot(rel + "\n", 0, {}))
+
+
 class TestsSnapshotAndMaterializeTest(RealGitSandbox):
     """`_materialize_tests_if_missing`/`_tests_snapshot`/
     `_artifact_tests_snapshot` (ANSWER-3, вопрос 2) в изоляции: приёмочные
@@ -512,6 +557,87 @@ class AmendThenReviewGateTest(RealGitSandbox):
             "гейт in_dev -> verifying обязан пройти сразу после успешной "
             "правки планки (ADR-0015 — цель перехода in_dev теперь "
             "verifying, не review)")
+
+
+AC_TEST_EXTRA_UNCHANGED = '''"""Зелёный с рождения: файл-контроль amend --from-branch, остаётся
+побайтно неизменным между локом и последующей правкой — не должен
+попасть в список отличающихся файлов журнала (SPEC
+01M287TPG0HAVXS8CHBCY679WN, требование 3)."""
+import unittest
+
+
+class UnchangedTest(unittest.TestCase):
+    def test_noop(self):
+        self.assertTrue(True)
+'''
+
+
+class AmendFromBranchDivergenceDetailTest(RealGitSandbox):
+    """`amend.cmd_amend_tests(..., from_branch=True)` (SPEC
+    01M287TPG0HAVXS8CHBCY679WN, требование 3) — деталь, которую
+    приёмочные тесты этой же задачи (`tasks/01M287TPG0HAVXS8CHBCY679WN/
+    acceptance_tests/test_ac7_ac8_ac9_amend_from_branch.py`) не кроют:
+    правка ЗАТРАГИВАЕТ несколько файлов сразу (не один произвольный), а
+    файл каталога, оставшийся ПОБАЙТНО неизменным, в список отличий не
+    попадает."""
+
+    def setUp(self):
+        super().setUp()
+        capture(catalog.cmd_init)
+        _, self.TASK = capture_new_task_id(
+            catalog.cmd_new, "amend --from-branch, несколько файлов")
+        self.conn = store.db()
+        self.branch = artifact_branch.branch_name(self.TASK)
+        self._enter_in_dev()
+
+    def row(self):
+        return store.db().execute(
+            "SELECT * FROM tasks WHERE id=?", (self.TASK,)).fetchone()
+
+    def artifact_commit(self, files: dict, message: str) -> str:
+        sha = artifact_branch.commit_files(
+            self.TASK, files, f"{self.TASK}: {message}")
+        self.assertTrue(sha, f"коммит {message!r} не удался")
+        return sha
+
+    def _enter_in_dev(self) -> None:
+        self.artifact_commit(
+            {f"tasks/{self.TASK}/SPEC.md": SPEC_V2.format(task=self.TASK, extra="")},
+            "SPEC")
+        capture(fsm.cmd_advance, self.TASK)  # spec_writing -> spec_gate
+        sha = gitcmd.head_sha(config.PROJECTS / config.DEFAULT_TARGET)
+        capture(fsm.cmd_approve, self.TASK, sha)  # -> tests_writing
+
+        self.artifact_commit(
+            {f"tasks/{self.TASK}/acceptance_tests/test_ac.py": AC_TEST_BOTH_COVERED,
+             f"tasks/{self.TASK}/acceptance_tests/test_extra.py":
+                 AC_TEST_EXTRA_UNCHANGED},
+            "acceptance_tests")
+        capture(fsm.cmd_advance, self.TASK)  # tests_writing -> in_dev
+
+    def journal_texts(self) -> list:
+        return [f"{s['action']} {s['detail']}"
+               for s in store.task_steps(self.conn, self.TASK)]
+
+    def test_lists_every_differing_file_and_excludes_the_unchanged_one(self):
+        new_sha = self.artifact_commit(
+            {f"tasks/{self.TASK}/acceptance_tests/test_ac.py": AC_TEST_AMENDED,
+             f"tasks/{self.TASK}/acceptance_tests/test_second.py": AC_TEST_AMENDED,
+             f"tasks/{self.TASK}/acceptance_tests/test_extra.py":
+                 AC_TEST_EXTRA_UNCHANGED},
+            "правка планки: два файла сразу, третий побайтно тот же")
+
+        amend.cmd_amend_tests(self.TASK, "два файла сразу", from_branch=True)
+
+        self.assertEqual(self.row()["tests_locked_sha"], new_sha)
+        texts = self.journal_texts()
+        matched = [t for t in texts if amend.AMEND_ACTION in t]
+        self.assertTrue(matched, f"нет записи «{amend.AMEND_ACTION}»: {texts}")
+        detail = matched[-1]
+        self.assertIn("test_ac.py", detail)
+        self.assertIn("test_second.py", detail)
+        self.assertNotIn("test_extra.py", detail,
+                         "неизменённый файл не должен попасть в список отличий")
 
 
 class ReasonArgTest(unittest.TestCase):

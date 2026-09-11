@@ -1,5 +1,5 @@
 ---
-built_at_sha: 369e22f209b719ca7cc7850a21bfc1bd4c59b099
+built_at_sha: 7cdc680215a6214ee1d13902ec004f561b98dbb0
 ---
 
 # Codebase-map пульта
@@ -87,8 +87,9 @@ built_at_sha: 369e22f209b719ca7cc7850a21bfc1bd4c59b099
 
 **Публичные функции:**
 - `cmd_answer`
+- `cmd_zones_extend`
 
-**Импортирует:** `orchestrator/artifact_branch.py`, `orchestrator/artifact_source.py`, `orchestrator/gitcmd.py`, `orchestrator/lease.py`, `orchestrator/store.py`
+**Импортирует:** `orchestrator/artifact_branch.py`, `orchestrator/artifact_source.py`, `orchestrator/fsm_advance.py`, `orchestrator/gitcmd.py`, `orchestrator/lease.py`, `orchestrator/runner.py`, `orchestrator/store.py`
 
 **Импортируется:** `orchestrator/artel.py`, `orchestrator/canary.py`, `tests/test_answer.py`
 
@@ -389,7 +390,7 @@ built_at_sha: 369e22f209b719ca7cc7850a21bfc1bd4c59b099
 
 **Импортирует:** `orchestrator/acceptance.py`, `orchestrator/agent_log.py`, `orchestrator/artifact_source.py`, `orchestrator/artifacts.py`, `orchestrator/auto.py`, `orchestrator/budget.py`, `orchestrator/ci.py`, `orchestrator/config.py`, `orchestrator/fsm.py`, `orchestrator/fsm_autogate.py`, `orchestrator/gitcmd.py`, `orchestrator/github_adapter.py`, `orchestrator/repo_context.py`, `orchestrator/review.py`, `orchestrator/store.py`, `orchestrator/workspace.py`, `orchestrator/yamlmini.py`, `scripts/guard.py`
 
-**Импортируется:** `orchestrator/fsm.py`, `tests/test_capacity_gate.py`, `tests/test_fsm_advance_gate_framework.py`, `tests/test_fsm_advance_gate_smoke.py`, `tests/test_fsm_review_rework_gate.py`, `tests/test_fsm_review_rework_sha_gate.py`, `tests/test_git_fixation.py`, `tests/test_invariants.py`, `tests/test_protected_paths_gate.py`, `tests/test_zones_gate.py`
+**Импортируется:** `orchestrator/answer.py`, `orchestrator/fsm.py`, `tests/test_capacity_gate.py`, `tests/test_fsm_advance_gate_framework.py`, `tests/test_fsm_advance_gate_smoke.py`, `tests/test_fsm_review_rework_gate.py`, `tests/test_fsm_review_rework_sha_gate.py`, `tests/test_git_fixation.py`, `tests/test_invariants.py`, `tests/test_protected_paths_gate.py`, `tests/test_zones_gate.py`
 
 ## orchestrator/fsm_autogate.py
 
@@ -759,7 +760,7 @@ built_at_sha: 369e22f209b719ca7cc7850a21bfc1bd4c59b099
 
 **Импортирует:** `orchestrator/agent_log.py`, `orchestrator/alerts.py`, `orchestrator/artifact_branch.py`, `orchestrator/artifact_source.py`, `orchestrator/brief.py`, `orchestrator/budget.py`, `orchestrator/checkpoint.py`, `orchestrator/config.py`, `orchestrator/failure_classification.py`, `orchestrator/fixation.py`, `orchestrator/gitcmd.py`, `orchestrator/keychain.py`, `orchestrator/lease.py`, `orchestrator/liveness.py`, `orchestrator/parallel_limit.py`, `orchestrator/pause.py`, `orchestrator/review.py`, `orchestrator/role_prompt.py`, `orchestrator/roles.py`, `orchestrator/spend.py`, `orchestrator/stack.py`, `orchestrator/store.py`, `orchestrator/workspace.py`, `orchestrator/zone_lock.py`
 
-**Импортируется:** `orchestrator/artel.py`, `orchestrator/auto.py`, `orchestrator/budget.py`, `orchestrator/canary.py`, `orchestrator/catalog.py`, `orchestrator/lease.py`, `orchestrator/pause.py`, `tests/test_acceptance_tests_flow.py`, `tests/test_agent_failure.py`, `tests/test_agent_log.py`, `tests/test_agent_prompt.py`, `tests/test_analyst_role.py`, `tests/test_artifact_materialization.py`, `tests/test_auto_cycle.py`, `tests/test_doctor.py`, `tests/test_git_fixation.py`, `tests/test_invariants.py`, `tests/test_multitarget.py`, `tests/test_multitarget_invariants.py`, `tests/test_review_freshness.py`, `tests/test_review_package.py`, `tests/test_runner_wave_breaker.py`, `tests/test_step_autocommit.py`, `tests/test_step_cost.py`, `tests/test_timeout_checkpoint.py`
+**Импортируется:** `orchestrator/answer.py`, `orchestrator/artel.py`, `orchestrator/auto.py`, `orchestrator/budget.py`, `orchestrator/canary.py`, `orchestrator/catalog.py`, `orchestrator/lease.py`, `orchestrator/pause.py`, `tests/test_acceptance_tests_flow.py`, `tests/test_agent_failure.py`, `tests/test_agent_log.py`, `tests/test_agent_prompt.py`, `tests/test_analyst_role.py`, `tests/test_artifact_materialization.py`, `tests/test_auto_cycle.py`, `tests/test_doctor.py`, `tests/test_git_fixation.py`, `tests/test_invariants.py`, `tests/test_multitarget.py`, `tests/test_multitarget_invariants.py`, `tests/test_review_freshness.py`, `tests/test_review_package.py`, `tests/test_runner_wave_breaker.py`, `tests/test_step_autocommit.py`, `tests/test_step_cost.py`, `tests/test_timeout_checkpoint.py`
 
 ## orchestrator/schema.py
 
