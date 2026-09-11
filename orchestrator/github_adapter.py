@@ -15,7 +15,7 @@ push; отдельный вызов адаптера здесь добавлял
 `merge_gate`, а не условие перехода (тот же приём, что `fsm.py::
 _regenerate_and_commit_map`/`_generate_and_commit_retro`, SPEC T042/T043).
 """
-from . import alerts, ci, config, gitcmd, store, targets
+from . import alerts, ci, config, gitcmd, repo_context, store, targets
 
 
 def _is_github_target(target_name: str) -> bool:
@@ -31,15 +31,21 @@ def _incident(conn, task_id: str, action: str, message: str) -> None:
                        "github_adapter", message)
 
 
-def _touched_protected_paths(branch: str, base: str) -> list[str]:
+def _touched_protected_paths(branch: str, base: str,
+                             repo=None) -> list[str]:
     """Пути `config.PROTECTED_PATHS`, затронутые диффом `base...branch`
     (A7, требование 7, AC-16) — независимо от предупреждения, которое
     уже печатает CI-job protected-paths (не заменяет его, дополняет).
 
     Git не ответил на diff — пустой список (не отказ и не эскалация:
     подсветка в MR — необязательное дополнение, отсутствие ответа не
-    имеет права держать заведение Draft MR)."""
-    res = gitcmd.git("diff", "--name-only", f"{base}...{branch}")
+    имеет права держать заведение Draft MR).
+
+    `repo` (SPEC 01M1R5B33CC7E6BZK085XV3ZCX, AC-8) — клон, в котором
+    считается diff, не всегда `config.ROOT`. `None` (по умолчанию) —
+    прежнее поведение байт-в-байт."""
+    args = ("diff", "--name-only", f"{base}...{branch}")
+    res = gitcmd.in_repo(repo, *args) if repo else gitcmd.git(*args)
     if res is None or res.returncode != 0:
         return []
     paths = [p for p in res.stdout.splitlines() if p]
@@ -70,8 +76,16 @@ def ensure_draft_mr(conn, task_id: str, t) -> None:
         _incident(conn, task_id, "Draft MR FAILED", f"targets.yaml: {exc}")
         return
 
+    # Репозиторный контекст target'а (SPEC 01M1R5B33CC7E6BZK085XV3ZCX,
+    # AC-6/AC-7): push ветки и `gh` внешнего target идут в его клон/форндж,
+    # не в `config.ROOT`/без `--repo` (self, прежнее поведение байт-в-байт).
+    ctx = repo_context.resolve(target_name)
+    repo = repo_context.path_or_none(ctx)
+    gh_repo_kwargs = {"repo": ctx.remote} if repo is not None else {}
+
     branch = t["branch"]
-    push = gitcmd.git("push", "-u", "origin", branch)
+    push = (gitcmd.git("push", "-u", "origin", branch) if repo is None
+           else gitcmd.in_repo(repo, "push", "-u", "origin", branch))
     if push is None or push.returncode != 0:
         _incident(conn, task_id, "Draft MR FAILED",
                   f"git push -u origin {branch} не удался: "
@@ -82,7 +96,7 @@ def ensure_draft_mr(conn, task_id: str, t) -> None:
     create = ci.gh("pr", "create", "--draft", "--title", title,
                    "--head", branch, "--base", base, "--body",
                    f"Draft MR задачи {task_id} (заведён автоматически "
-                   f"GitHub-адаптером, SPEC T079).")
+                   f"GitHub-адаптером, SPEC T079).", **gh_repo_kwargs)
     if create is None or create.returncode != 0:
         detail = ((create.stderr or create.stdout).strip()[:300]
                   if create is not None else "gh не ответил")
@@ -97,12 +111,13 @@ def ensure_draft_mr(conn, task_id: str, t) -> None:
     # на MR — в дополнение к предупреждению CI-job protected-paths, не
     # взамен него. Отказ комментария — не отказ Draft MR (та уже
     # заведена): incident тем же приёмом, что и остальные сбои модуля.
-    protected = _touched_protected_paths(branch, base)
+    protected = _touched_protected_paths(branch, base, repo=repo)
     if protected:
         comment = ci.gh(
             "pr", "comment", branch, "--body",
             f"⚠️ Диф задачи {task_id} затрагивает защищённые пути: "
-            f"{', '.join(protected)} (config.PROTECTED_PATHS).")
+            f"{', '.join(protected)} (config.PROTECTED_PATHS).",
+            **gh_repo_kwargs)
         if comment is None or comment.returncode != 0:
             detail = ((comment.stderr or comment.stdout).strip()[:300]
                       if comment is not None else "gh не ответил")
@@ -132,11 +147,15 @@ def ensure_head_in_origin(conn, task_id: str, branch: str) -> tuple[bool, str]:
     (AC-4/AC-9) — решение о смене состояния/эскалации на этом отказе
     остаётся за вызывающим кодом, сам хелпер состояние задачи не трогает.
     """
-    local = gitcmd.branch_head_sha(branch)
-    remote = gitcmd.remote_branch_sha(branch)
+    target_name = store.task_target(conn, task_id) or config.DEFAULT_TARGET
+    ctx = repo_context.resolve(target_name)
+    repo = repo_context.path_or_none(ctx)
+    local = gitcmd.branch_head_sha(branch, repo=repo)
+    remote = gitcmd.remote_branch_sha(branch, repo=repo)
     if local and remote == local:
         return True, ""
-    push = gitcmd.git("push", "-u", "origin", branch)
+    push = (gitcmd.git("push", "-u", "origin", branch) if repo is None
+           else gitcmd.in_repo(repo, "push", "-u", "origin", branch))
     if push is None or push.returncode != 0:
         err = ((push.stderr or push.stdout).strip()[:300]
               if push is not None else "git не ответил")
@@ -160,7 +179,10 @@ def undraft_mr(conn, task_id: str, t) -> None:
     if not _is_github_target(target_name):
         return
     branch = t["branch"]
-    ready = ci.gh("pr", "ready", branch)
+    ctx = repo_context.resolve(target_name)
+    gh_repo_kwargs = ({"repo": ctx.remote}
+                      if repo_context.path_or_none(ctx) is not None else {})
+    ready = ci.gh("pr", "ready", branch, **gh_repo_kwargs)
     if ready is None or ready.returncode != 0:
         detail = ((ready.stderr or ready.stdout).strip()[:300]
                   if ready is not None else "gh не ответил")

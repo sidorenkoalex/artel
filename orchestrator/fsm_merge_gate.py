@@ -23,37 +23,52 @@ from pathlib import Path
 from scripts import guard
 
 from . import (artifact_branch, ci, cleanup, config, fsm, fsm_postmerge,
-              gitcmd, github_adapter, lease, merge_lock, store, workspace)
+              gitcmd, github_adapter, lease, merge_lock, repo_context, store,
+              workspace)
 
 
 def _touches_protected_path(path: str) -> bool:
     return any(path == p or path.startswith(p) for p in config.PROTECTED_PATHS)
 
 
-def _origin_main_sha() -> str | None:
-    """sha текущего HEAD `refs/heads/<MAIN_BRANCH>` main артели (её
-    `origin`, ANSWER-1) — `None`, git не ответил.
+def _origin_main_sha(ctx: repo_context.RepoContext) -> str | None:
+    """sha текущего HEAD `refs/heads/<ctx.base>` main target'а на её
+    `origin` — `None`, git не ответил.
 
     `git fetch` пишет только в объектную базу и `FETCH_HEAD`/
-    remote-tracking ref, никогда в локальный `refs/heads/<MAIN_BRANCH>`
-    — рабочее дерево и HEAD `config.ROOT` не задеты (AC-8).
+    remote-tracking ref, никогда в локальный `refs/heads/<base>` —
+    рабочее дерево и HEAD клона `ctx` не задеты (AC-8).
+
+    `ctx` (SPEC 01M1R5B33CC7E6BZK085XV3ZCX, требование 4, AC-12) —
+    репозиторный контекст target'а задачи: для self — байт-в-байт
+    прежнее поведение (`config.ROOT`, ветка `config.MAIN_BRANCH`); для
+    внешнего target — клон `ctx.path`, ветка `ctx.base`, remote —
+    литеральное имя `"origin"` (клон внешнего target несёт свой git
+    remote `origin` по тому же соглашению, что и `config.ROOT` пульта,
+    `orchestrator/repo_context.py` докстринг), не адрес форджа
+    `ctx.remote`.
     """
-    fetch = gitcmd.git("fetch", "-q", "origin", config.MAIN_BRANCH)
+    fetch = repo_context.git(ctx, "fetch", "-q", "origin", ctx.base)
     if fetch is None or fetch.returncode != 0:
         return None
-    res = gitcmd.git("rev-parse", "FETCH_HEAD")
+    res = repo_context.git(ctx, "rev-parse", "FETCH_HEAD")
     return res.stdout.strip() if res is not None and res.returncode == 0 else None
 
 
-def _scratch_worktree(sha: str) -> tuple[Path | None, str | None]:
+def _scratch_worktree(ctx: repo_context.RepoContext,
+                      sha: str) -> tuple[Path | None, str | None]:
     """Временный detached git-worktree на `sha`, ВНЕ рабочего дерева
-    `config.ROOT` (AC-8) — тот же приём, что `orchestrator/workspace.py`
-    уже несёт для задач, здесь одноразовый и detached (main артели —
-    не ветка задачи, checkout по имени ветки уже занят самим ROOT).
+    клона `ctx` (AC-8) — тот же приём, что `orchestrator/workspace.py`
+    уже несёт для задач, здесь одноразовый и detached (main target'а —
+    не ветка задачи, checkout по имени ветки уже занят самим `ctx.path`).
+    `git worktree add` исполняется В `ctx.path` (SPEC
+    01M1R5B33CC7E6BZK085XV3ZCX, AC-12): `sha` — объект её собственной
+    объектной базы (только что зафетчен туда `_origin_main_sha`), не
+    обязательно существующий в `config.ROOT`.
     (путь, None) — успех; (None, причина) — git не ответил.
     """
     scratch = Path(tempfile.mkdtemp(prefix="artel-merge-carpentry-"))
-    res = gitcmd.git("worktree", "add", "--detach", str(scratch), sha)
+    res = repo_context.git(ctx, "worktree", "add", "--detach", str(scratch), sha)
     if res is None or res.returncode != 0:
         shutil.rmtree(scratch, ignore_errors=True)
         reason = res.stderr.strip()[:300] if res is not None else "git не ответил"
@@ -326,7 +341,8 @@ def _ensure_branch_head_published(conn, task_id: str, branch: str) -> str:
     return "ok"
 
 
-def _sync_main_or_wait(conn, task_id: str, t, state: str, branch: str):
+def _sync_main_or_wait(conn, task_id: str, t, state: str, branch: str,
+                       ctx: repo_context.RepoContext):
     """Подтяжка main и проверка свежести ветки ПОД МЬЮТЕКСОМ, до сверки
     CI (SPEC T053, требования 5-8): main мог уйти вперёд, пока задача
     стояла на гейте или ждала освобождения чужого merge-окна — дыра №2
@@ -345,14 +361,18 @@ def _sync_main_or_wait(conn, task_id: str, t, state: str, branch: str):
     if pull_outcome in ("escalated", "refused"):
         return ("stopped",)
     if pull_outcome == "pulled":
-        # Push нового head в origin из главной копии пульта, не
-        # `wt_path`: ref ветки задачи общий для всех worktree одного
-        # репозитория (тот же приём, что уже использует
-        # `github_adapter.ensure_draft_mr`). Внутри окна мьютекса, до
-        # его освобождения (требование 2) — `_cmd_approve_merge_gate_
-        # cycle` отпускает мьютекс сразу после возврата тела.
-        new_head = gitcmd.branch_head_sha(branch)
-        push = gitcmd.git("push", "-u", "origin", branch)
+        # Push нового head в origin клона контекста target'а (SPEC
+        # 01M1R5B33CC7E6BZK085XV3ZCX, AC-6): для self — из главной копии
+        # пульта, не `wt_path` (ref ветки задачи общий для всех worktree
+        # одного репозитория, тот же приём, что уже использует
+        # `github_adapter.ensure_draft_mr`); для внешнего target — её
+        # клон, где подтяжка (`fsm._pull_main_or_escalate`) только что
+        # реально смержила голову. Внутри окна мьютекса, до его
+        # освобождения (требование 2) — `_cmd_approve_merge_gate_cycle`
+        # отпускает мьютекс сразу после возврата тела.
+        repo = repo_context.path_or_none(ctx)
+        new_head = gitcmd.branch_head_sha(branch, repo=repo)
+        push = repo_context.git(ctx, "push", "-u", "origin", branch)
         if push is None or push.returncode != 0:
             detail = (push.stderr.strip()[:500] if push is not None
                       else "git не ответил")
@@ -396,24 +416,28 @@ def _ci_ready_or_wait(task_id: str, confirmed_ci_note: str | None,
     return "ok"
 
 
-def _perform_carpentry_merge(conn, task_id: str, state: str, branch: str):
+def _perform_carpentry_merge(conn, task_id: str, state: str, branch: str,
+                             ctx: repo_context.RepoContext):
     """Плотницкий merge (Stage0, ANSWER-1 вопрос 1, вариант B; AC-8):
-    текущий sha main артели (её origin) БЕЗ прикосновения к локальному
-    `refs/heads/<MAIN_BRANCH>` (`_origin_main_sha` только фетчит), затем
-    `git merge --no-ff` В SCRATCH-WORKTREE, не в `config.ROOT`.
+    текущий sha main target'а (её origin) БЕЗ прикосновения к локальному
+    `refs/heads/<ctx.base>` (`_origin_main_sha` только фетчит), затем
+    `git merge --no-ff` В SCRATCH-WORKTREE клона `ctx`, не в
+    `config.ROOT` (для self — тот же `config.ROOT`, что и до этой
+    задачи; для внешнего target — `ctx.path`, SPEC
+    01M1R5B33CC7E6BZK085XV3ZCX, AC-12).
 
     `("ok", scratch)` — merge выполнен, scratch-дерево готово к
     публикации артефактов; `("stopped", None)` — конфликт разобран
     `_handle_merge_conflict` (защищённый путь -> escalated, иначе ->
     in_dev), scratch-дерево уже убрано.
     """
-    origin_sha = _origin_main_sha()
+    origin_sha = _origin_main_sha(ctx)
     if origin_sha is None:
         sys.exit(f"[{task_id}] merge отклонён: git fetch origin "
-                 f"{config.MAIN_BRANCH} не ответил\n"
+                 f"{ctx.base} не ответил\n"
                  f"  задача осталась на гейте merge; почини доступ к "
                  f"origin и повтори: artel.py approve {task_id}")
-    scratch, scratch_error = _scratch_worktree(origin_sha)
+    scratch, scratch_error = _scratch_worktree(ctx, origin_sha)
     if scratch is None:
         store.journal(conn, task_id, "orchestrator", "merge FAILED",
                       scratch_error)
@@ -427,7 +451,8 @@ def _perform_carpentry_merge(conn, task_id: str, state: str, branch: str):
     return ("ok", scratch)
 
 
-def _publish_merge_artifacts(conn, task_id: str, scratch: Path) -> str:
+def _publish_merge_artifacts(conn, task_id: str, scratch: Path,
+                             is_self: bool) -> str:
     """Снимок артефактной ветки поверх обычного merge (SPEC
     01M1R9YEK08XEQWBFX0929WFVJ, требование 3; AC-6/AC-7/AC-8/AC-11) —
     ДО sha "коммита мержа" ниже: main обязан унести АРТЕФАКТНЫЙ снимок
@@ -436,35 +461,44 @@ def _publish_merge_artifacts(conn, task_id: str, scratch: Path) -> str:
 
     Карта кодовой базы (SPEC T042) и RETRO (SPEC T043, требование 8,
     адресуется на `merge_sha` — сразу после merge/наложения снимка, ДО
-    любых последующих служебных коммитов) — оба провала некритичны, push
-    ниже выполняется независимо от их исхода. Оба служебных шага
-    работают В SCRATCH (AC-9) — не в `config.ROOT`.
+    любых последующих служебных коммитов) — оба шага ТОЛЬКО для self
+    (`is_self`): SPEC 01M1R5B33CC7E6BZK085XV3ZCX, требование 4, AC-13 —
+    «в пульте — только кухня пульта», для внешнего target ни карта, ни
+    RETRO в её main НЕ коммитятся вовсе (RETRO внешнего target остаётся
+    только в снапшоте закрытия, `orchestrator/snapshot.py`). Для self —
+    оба провала некритичны, push ниже выполняется независимо от их
+    исхода; оба шага работают В SCRATCH (AC-9) — не в `config.ROOT`.
 
     `_guard_task_root_or_refuse` (SPEC 01M1TNN4TMWAQSQ9Y1PW37J5H0,
     AC-7/AC-8) — сразу после наложения снимка, ДО карты/RETRO/push:
     посторонний файл `tasks/<id>/` отказывает переходу `sys.exit`'ом,
     дальше этой функции выполнение не идёт.
 
-    Возврат — `final_sha` (после карты/RETRO) для push явным sha.
+    Возврат — `final_sha` (после карты/RETRO для self) для push явным sha.
     """
     _overlay_artifact_snapshot(conn, task_id, scratch)
     _guard_task_root_or_refuse(conn, task_id, scratch)
     merge_sha = gitcmd.head_sha(scratch)
-    fsm_postmerge._regenerate_and_commit_map(conn, task_id, repo=scratch)
-    fsm_postmerge._generate_and_commit_retro(conn, task_id, merge_sha,
-                                             repo=scratch)
+    if is_self:
+        fsm_postmerge._regenerate_and_commit_map(conn, task_id, repo=scratch)
+        fsm_postmerge._generate_and_commit_retro(conn, task_id, merge_sha,
+                                                 repo=scratch)
     final_sha = gitcmd.head_sha(scratch)
     _drop_scratch_worktree(scratch)
     return final_sha
 
 
-def _push_merged_main(conn, task_id: str, final_sha: str) -> str:
+def _push_merged_main(conn, task_id: str, final_sha: str,
+                      ctx: repo_context.RepoContext) -> str:
     """Push ЯВНОГО sha (не текущего чекаута) прямо в `refs/heads/
-    <MAIN_BRANCH>` origin — из `config.ROOT`, чья объектная база уже
-    несёт коммиты scratch-worktree (общий `.git`), но чей собственный
-    чекаут/HEAD этот push не трогает вовсе (AC-8)."""
-    push = gitcmd.git("push", "origin",
-                      f"{final_sha}:refs/heads/{config.MAIN_BRANCH}")
+    <ctx.base>` origin клона `ctx`, чья объектная база уже несёт коммиты
+    scratch-worktree (общий `.git`), но чей собственный чекаут/HEAD этот
+    push не трогает вовсе (AC-8). Для self — байт-в-байт прежнее
+    поведение (`config.ROOT`, `refs/heads/config.MAIN_BRANCH`); для
+    внешнего target — её клон и `refs/heads/<ctx.base>` (SPEC
+    01M1R5B33CC7E6BZK085XV3ZCX, AC-12)."""
+    push = repo_context.git(ctx, "push", "origin",
+                            f"{final_sha}:refs/heads/{ctx.base}")
     if push is None or push.returncode != 0:
         store.journal(conn, task_id, "orchestrator", "merge FAILED",
                       push.stderr.strip()[:500] if push is not None
@@ -530,21 +564,39 @@ def _cmd_approve_merge_gate(conn, task_id: str, state: str, t,
     конфликт — дальше вызывающему циклу делать нечего); `("done",)` —
     merge выполнен; `("wait", branch)` — дальше вызывающий цикл ждёт CI
     ВНЕ этого мьютекса циклом `_wait_for_branch_ci_green` (требование 2).
+
+    Репозиторный контекст target'а (SPEC 01M1R5B33CC7E6BZK085XV3ZCX,
+    требование 4, AC-12/AC-13): резолвится ОДИН раз здесь (`store.
+    task_target`, не `t["target"]` — `t` в некоторых существующих тестах
+    несёт только `branch`) и передаётся дальше каждому шагу, который
+    решает, где физически стоит scratch-worktree/куда идёт push и нужны
+    ли карта/RETRO (только self, AC-13). Контекст не читается
+    (targets.yaml сломан/неизвестный target) — `sys.exit` тем же стилем,
+    что и остальные инфраструктурные отказы этого гейта: merge — точка
+    без права молча деградировать на чужой репозиторий.
     """
+    ctx = repo_context.resolve(store.task_target(conn, task_id))
+    if ctx is None:
+        sys.exit(f"[{task_id}] merge отклонён: репозиторный контекст "
+                 f"target'а не читается (targets.yaml)\n"
+                 f"  задача осталась на гейте merge; почини targets.yaml "
+                 f"и повтори: artel.py approve {task_id}")
     branch = t["branch"]
     if _ensure_branch_head_published(conn, task_id, branch) != "ok":
         return ("stopped",)
-    sync_outcome = _sync_main_or_wait(conn, task_id, t, state, branch)
+    sync_outcome = _sync_main_or_wait(conn, task_id, t, state, branch, ctx)
     if sync_outcome != "fresh":
         return sync_outcome
     ci_outcome = _ci_ready_or_wait(task_id, confirmed_ci_note, branch)
     if ci_outcome != "ok":
         return ci_outcome
-    merge_kind, scratch = _perform_carpentry_merge(conn, task_id, state, branch)
+    merge_kind, scratch = _perform_carpentry_merge(conn, task_id, state,
+                                                    branch, ctx)
     if merge_kind != "ok":
         return ("stopped",)
-    final_sha = _publish_merge_artifacts(conn, task_id, scratch)
-    _push_merged_main(conn, task_id, final_sha)
+    final_sha = _publish_merge_artifacts(conn, task_id, scratch,
+                                         ctx.path == config.ROOT)
+    _push_merged_main(conn, task_id, final_sha, ctx)
     _finalize_done_state(conn, task_id, state, branch)
     if _publish_closing_snapshot_or_wait(conn, task_id, t) == "done":
         return ("done",)

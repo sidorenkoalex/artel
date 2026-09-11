@@ -44,7 +44,8 @@ def branch_merged(branch: str) -> bool:
     return res.returncode == 0 and bool(res.stdout.strip())
 
 
-def commits_behind(branch: str, base: str | None = None) -> int | None:
+def commits_behind(branch: str, base: str | None = None,
+                   repo: Path | None = None) -> int | None:
     """Число коммитов `base` (по умолчанию `config.MAIN_BRANCH`), которых
     нет в `branch`; `None` — git не ответил, `branch`/`base` не существует,
     или ответ не разобрать как число (SPEC T051, требование 2).
@@ -58,8 +59,14 @@ def commits_behind(branch: str, base: str | None = None) -> int | None:
     тестах, не связанных с git (SPEC T051, требование 9), отвечают пустым
     выводом с кодом 0 на любую нераспознанную команду и не должны
     трактоваться как «ноль коммитов».
+
+    `repo` (SPEC 01M1R5B33CC7E6BZK085XV3ZCX, AC-4) — клон, в котором
+    сравниваются `branch`/`base` (`gitcmd.in_repo`), не всегда `config.ROOT`:
+    ветка внешнего target существует только в её собственном клоне.
+    `None` (по умолчанию) — прежнее поведение байт-в-байт.
     """
-    res = git("rev-list", "--count", f"{branch}..{base or config.MAIN_BRANCH}")
+    args = ("rev-list", "--count", f"{branch}..{base or config.MAIN_BRANCH}")
+    res = in_repo(repo, *args) if repo else git(*args)
     if res is None or res.returncode != 0:
         return None
     text = res.stdout.strip()
@@ -250,18 +257,19 @@ def diff_paths(a: str, b: str, *paths: str) -> bool | None:
     return res.returncode == 1
 
 
-def _origin_main_ref_exists() -> bool | None:
+def _origin_main_ref_exists(repo: Path | None = None) -> bool | None:
     """`refs/remotes/origin/<MAIN_BRANCH>` заведён в репозитории; `None` —
     git не ответил на саму проверку. Только чтение уже существующего
     локального ref — без `fetch`/`ls-remote`, никаких сетевых обращений
     (тесты не выходят в сеть, 01M1QHQ277…): ref обновляется механикой
     подтяжки и входа в `verifying`, эта функция его не актуализирует."""
-    res = git("rev-parse", "--verify", "--quiet",
-             f"refs/remotes/origin/{config.MAIN_BRANCH}")
+    args = ("rev-parse", "--verify", "--quiet",
+           f"refs/remotes/origin/{config.MAIN_BRANCH}")
+    res = in_repo(repo, *args) if repo else git(*args)
     return None if res is None else res.returncode == 0
 
 
-def diff_base(branch: str) -> str | None:
+def diff_base(branch: str, repo: Path | None = None) -> str | None:
     """Одна точка правды для базы сравнения ветки задачи (tasks/
     01M1SG9T962WJJ31S282GWM0EN): merge-base `branch` с `refs/remotes/
     origin/<MAIN_BRANCH>`, если такой ref есть в репозитории; иначе —
@@ -275,19 +283,24 @@ def diff_base(branch: str) -> str | None:
     `None` — git не ответил ни на проверку существования ref, ни на саму
     команду `merge-base`: вызывающий код обязан отказать fail-closed
     (ADR-0002), не подставлять `None` дальше как базу diff'а.
+
+    `repo` (SPEC 01M1R5B33CC7E6BZK085XV3ZCX, AC-10) — клон, в котором
+    считается merge-base, не всегда `config.ROOT`. `None` (по умолчанию)
+    — прежнее поведение байт-в-байт.
     """
-    exists = _origin_main_ref_exists()
+    exists = _origin_main_ref_exists(repo)
     if exists is None:
         return None
     base_ref = (f"refs/remotes/origin/{config.MAIN_BRANCH}" if exists
                else config.MAIN_BRANCH)
-    res = git("merge-base", base_ref, branch)
+    args = ("merge-base", base_ref, branch)
+    res = in_repo(repo, *args) if repo else git(*args)
     if res is None or res.returncode != 0:
         return None
     return res.stdout.strip()
 
 
-def diff_base_source(branch: str) -> str:
+def diff_base_source(branch: str, repo: Path | None = None) -> str:
     """Название источника базы `diff_base(branch)` для журнала: `"origin/
     <MAIN_BRANCH>"` — ref заведён и был использован; иначе — локальный
     `config.MAIN_BRANCH` (tasks/01M1SG9T962WJJ31S282GWM0EN, требование 4:
@@ -298,8 +311,8 @@ def diff_base_source(branch: str) -> str:
     же вырожденным откатом, что и у `diff_base` в этом случае (вызывающий
     код сюда доходит только когда `diff_base` уже вернула не-`None` базу,
     так что расхождение возможно только при флапе git между двумя
-    вызовами)."""
-    return (f"origin/{config.MAIN_BRANCH}" if _origin_main_ref_exists()
+    вызовами). `repo` — тот же клон, что уже передан `diff_base` (AC-10)."""
+    return (f"origin/{config.MAIN_BRANCH}" if _origin_main_ref_exists(repo)
            else config.MAIN_BRANCH)
 
 
@@ -317,11 +330,16 @@ def has_no_remote(repo: Path) -> bool:
 # ВЕТКА задачи, не рабочая копия пульта, которую чужой checkout (журнал
 # T030, ~17:35 25.08.2026) может подменить у оркестратора под ногами.
 
-def branch_head_sha(branch: str) -> str:
+def branch_head_sha(branch: str, repo: Path | None = None) -> str:
     """sha головы `branch` независимо от текущего чекаута; пустая строка —
     ветки нет в git или он не ответил (`res is None` — тот же вырожденный
-    случай заглушек `gitcmd.git`, что у `head_sha`)."""
-    res = git("rev-parse", "--verify", "--quiet", f"refs/heads/{branch}")
+    случай заглушек `gitcmd.git`, что у `head_sha`).
+
+    `repo` (SPEC 01M1R5B33CC7E6BZK085XV3ZCX, AC-6) — клон, в котором
+    читается голова, не всегда `config.ROOT`. `None` (по умолчанию) —
+    прежнее поведение байт-в-байт."""
+    args = ("rev-parse", "--verify", "--quiet", f"refs/heads/{branch}")
+    res = in_repo(repo, *args) if repo else git(*args)
     return res.stdout.strip() if res is not None and res.returncode == 0 else ""
 
 
@@ -365,7 +383,7 @@ def show(branch: str, rel: str) -> tuple[str | None, str]:
     return None, res.stderr.strip()[:200] or f"git show вернул {res.returncode}"
 
 
-def remote_branch_sha(branch: str) -> str:
+def remote_branch_sha(branch: str, repo: Path | None = None) -> str:
     """sha `branch` в `origin`; пустая строка — там такой ветки нет (ещё не
     публиковалась, либо разошлась по имени) или git не ответил.
 
@@ -373,8 +391,13 @@ def remote_branch_sha(branch: str) -> str:
     01M1GS5HZ1JXFGKVR95HEW0AEZ, AC-2): `git ls-remote origin <branch>`
     неполным именем мог бы зацепить одноимённый тег — здесь сверяется
     именно голова ветки-задачи.
+
+    `repo` (SPEC 01M1R5B33CC7E6BZK085XV3ZCX, AC-6) — клон, чей `origin`
+    опрашивается, не всегда `config.ROOT`. `None` (по умолчанию) —
+    прежнее поведение байт-в-байт.
     """
-    res = git("ls-remote", "origin", f"refs/heads/{branch}")
+    args = ("ls-remote", "origin", f"refs/heads/{branch}")
+    res = in_repo(repo, *args) if repo else git(*args)
     if res is None or res.returncode != 0 or not res.stdout.strip():
         return ""
     return res.stdout.split()[0]

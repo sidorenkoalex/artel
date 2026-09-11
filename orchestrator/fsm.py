@@ -19,8 +19,8 @@ from pathlib import Path
 from scripts import guard
 
 from . import (artifact_source, artifacts, budget, config, fixation,
-              github_adapter, gitcmd, lease, pull, review, store, targets,
-              yamlmini)
+              github_adapter, gitcmd, lease, pull, repo_context, review,
+              store, targets, yamlmini)
 from .pull import _merge_conflict_note
 
 # Буквальная строка «сигналов нет» (ANSWER-2, tasks/01M1KS8K9RXWHX2PW3ZKB0P903,
@@ -102,7 +102,7 @@ def _origin_main_source(target_name: str) -> tuple[str, str] | None:
     return entry["url"], entry["base"]
 
 
-def _origin_main_sha(target_name: str) -> str | None:
+def _origin_main_sha(target_name: str, *, repo: Path | None = None) -> str | None:
     """sha текущего HEAD main конкретного target'а на её удалённом
     источнике (SPEC 01M1NBWPKNBXP9ZXXQDJM7AXPJ, AC-1/AC-2/AC-8/AC-10) —
     своя копия узла `orchestrator/fsm_merge_gate.py::_origin_main_sha`
@@ -113,7 +113,7 @@ def _origin_main_sha(target_name: str) -> str | None:
     гейт), эта — про main ЗАДАННОГО target'а (`_origin_main_source`).
 
     `git fetch` пишет только в объектную базу и `FETCH_HEAD` репозитория,
-    в котором исполнен (`config.ROOT` — здесь всегда так, `gitcmd.git`,
+    в котором исполнен (`config.ROOT`, когда `repo=None` — `gitcmd.git`,
     не `in_repo`), никогда в локальный `refs/heads/<MAIN_BRANCH>` — ни
     рабочее дерево, ни HEAD `config.ROOT`, ни зафиксированный там пин не
     задеты (AC-8). Возврат — конкретный sha, не литерал `"FETCH_HEAD"`:
@@ -125,15 +125,31 @@ def _origin_main_sha(target_name: str) -> str | None:
     (`_origin_main_source`) — тот же вырожденный случай, что у остальных
     примитивов оркестратора: сверка ниже деградирует на «ничего не
     делать».
+
+    `repo` (SPEC 01M1R5B33CC7E6BZK085XV3ZCX, требование 3, AC-4) — клон
+    контекста target'а, когда target ≠ self: fetch и `rev-parse
+    FETCH_HEAD` идут ТАМ (`gitcmd.in_repo`), не в `config.ROOT` — ветки
+    внешнего target в `config.ROOT` нет вовсе. Remote — литеральное имя
+    `"origin"` (не `remote` из `_origin_main_source`, которая для
+    внешнего target несёт адрес форджа, не настроенный в клоне git
+    remote): клон внешнего target несёт свой `origin` по тому же
+    соглашению, что и `config.ROOT` пульта (`orchestrator/repo_context.py`
+    докстринг). `repo=None` (по умолчанию, self) — прежнее поведение
+    байт-в-байт, включая `remote` из `_origin_main_source` (там уже
+    литерал `"origin"` для self).
     """
     source = _origin_main_source(target_name)
     if source is None:
         return None
     remote, branch = source
-    fetch = gitcmd.git("fetch", "-q", remote, branch)
+    if repo is not None:
+        fetch = gitcmd.in_repo(repo, "fetch", "-q", "origin", branch)
+    else:
+        fetch = gitcmd.git("fetch", "-q", remote, branch)
     if fetch is None or fetch.returncode != 0:
         return None
-    res = gitcmd.git("rev-parse", "FETCH_HEAD")
+    res = (gitcmd.in_repo(repo, "rev-parse", "FETCH_HEAD") if repo is not None
+          else gitcmd.git("rev-parse", "FETCH_HEAD"))
     return res.stdout.strip() if res is not None and res.returncode == 0 else None
 
 
@@ -168,12 +184,25 @@ def _pull_main_or_escalate(conn, task_id: str, t, state: str) -> str:
     задачей (AC-2): `"escalated"`/`"refused"`/`"fresh"`/`"pulled"` — их
     семантика (когда состояние меняется, что означает каждый) описана в
     `orchestrator/pull.py` докстринге `evaluate`/классов исходов.
+
+    `repo_path` (SPEC 01M1R5B33CC7E6BZK085XV3ZCX, требование 3, AC-4):
+    клон контекста target'а задачи (`orchestrator/repo_context.py`) —
+    `None` для self (прежний путь через `workspace.ensure`, worktree
+    `config.ROOT`), путь `.artel/projects/<target>/workspace` для любого
+    другого target (сравнение и merge подтяжки идут прямо там, без
+    отдельного worktree — внешний target уже стоит на своей ветке задачи
+    в этом клоне, ТЗ-2). `origin_main_sha` передаётся замыканием,
+    связанным с ТЕМ ЖЕ `repo_path` — фетч и `rev-parse FETCH_HEAD`
+    внутри него идут в тот же клон, не в `config.ROOT`.
     """
+    ctx = repo_context.resolve(t["target"] or config.DEFAULT_TARGET)
+    repo_path = repo_context.path_or_none(ctx)
     outcome = pull.evaluate(
         conn, task_id, t, state,
         origin_main_source=_origin_main_source,
-        origin_main_sha=_origin_main_sha,
-        read_branch_text_or_refuse=_read_branch_text_or_refuse)
+        origin_main_sha=lambda name: _origin_main_sha(name, repo=repo_path),
+        read_branch_text_or_refuse=_read_branch_text_or_refuse,
+        repo_path=repo_path)
     if isinstance(outcome, pull.Fresh):
         return "fresh"
     if isinstance(outcome, pull.Pulled):

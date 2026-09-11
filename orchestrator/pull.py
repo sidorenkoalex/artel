@@ -255,7 +255,7 @@ def _materialize_and_run_plank(conn, task_id: str, branch: str,
             return Refused(detail)
         return Pulled(base)
 
-    green, tail = acceptance.run(tdir, code_root=wt_path)
+    green, tail = acceptance.run(tdir, cwd=wt_path)
     if not green:
         detail = (f"приёмочные тесты красные после подтяжки {source_branch} "
                   f"(слияние сохранено, откат не выполняется):\n{tail}")
@@ -266,11 +266,22 @@ def _materialize_and_run_plank(conn, task_id: str, branch: str,
 
 
 def evaluate(conn, task_id: str, t, state: str, *, origin_main_source,
-            origin_main_sha, read_branch_text_or_refuse):
+            origin_main_sha, read_branch_text_or_refuse,
+            repo_path=None):
     """Исход подтяжки главной ветки target'а задачи в её ветку — вызывается
     из `fsm._pull_main_or_escalate`. `origin_main_source`/`origin_main_sha`/
     `read_branch_text_or_refuse` — узлы `fsm.py`, инъекция параметрами (не
-    импорт `fsm` этим модулем — см. докстринг файла)."""
+    импорт `fsm` этим модулем — см. докстринг файла).
+
+    `repo_path` (SPEC 01M1R5B33CC7E6BZK085XV3ZCX, требование 3, AC-4) —
+    клон контекста target'а задачи (`orchestrator/repo_context.py`),
+    когда target ≠ self: сравнение (`gitcmd.commits_behind`) и сам merge
+    идут ПРЯМО ТАМ — внешний target уже стоит на своей ветке задачи в
+    этом клоне (ТЗ-2), отдельный worktree (`workspace.ensure`,
+    self-специфичный механизм) не заводится и не нужен. `None` (по
+    умолчанию, self) — прежнее поведение байт-в-байт: worktree
+    `config.ROOT` через `workspace.ensure`.
+    """
     branch = t["branch"]
     target_name = t["target"] or config.DEFAULT_TARGET
     source = origin_main_source(target_name)
@@ -278,17 +289,20 @@ def evaluate(conn, task_id: str, t, state: str, *, origin_main_source,
     base = origin_main_sha(target_name)
     if not base:
         return Fresh()
-    behind = gitcmd.commits_behind(branch, base=base)
+    behind = gitcmd.commits_behind(branch, base=base, repo=repo_path)
     if not behind:
         return Fresh()
 
-    wt_path, error = workspace.ensure(task_id, branch)
-    if error is not None:
-        detail = (f"подтяжка {source_branch} отменена: worktree "
-                  f"задачи не создан — {error}")
-        store.set_state(conn, task_id, "escalated", "fsm", expected_state=state,
-                        detail=detail)
-        return Conflict([], detail)
+    if repo_path is not None:
+        wt_path = repo_path
+    else:
+        wt_path, error = workspace.ensure(task_id, branch)
+        if error is not None:
+            detail = (f"подтяжка {source_branch} отменена: worktree "
+                      f"задачи не создан — {error}")
+            store.set_state(conn, task_id, "escalated", "fsm",
+                            expected_state=state, detail=detail)
+            return Conflict([], detail)
 
     _clean_worktree_before_merge(conn, task_id, wt_path)
     merge = _run_merge(wt_path, base, task_id, source_branch)
