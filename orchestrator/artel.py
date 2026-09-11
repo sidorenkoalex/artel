@@ -111,7 +111,9 @@ workspace, tasks, knowledge, logs). БД одна на все проекты: с
   amend-tests <id> --reason "<основание>" | pin-update <sha main артели> |
   pin --to [<sha>] | zone-release <id> | zone-reorder <id1> <id2> ... |
   venv-sync | note (копилка|бэклог|очередь) --text "<строка>" |
-  note --append <ключ> --text "<текст>" | note --flush
+  note --append <ключ> --text "<текст>" | note --flush |
+  watch [--tasks <id>[,<id>...]] [--mine] [--all] [--events <класс>[,...]]
+        [--interval SEC] [--until <state>]
 
 `pin-update <sha>` (A7, Stage1) — обновляет пин запущенной версии:
 продвигает рабочее дерево и HEAD `config.ROOT` до `<sha>` main артели
@@ -204,6 +206,24 @@ done`/`kill` занявшей задачи либо явно: `zone-release <id>
 конкурентов по зоне больше одного — очередь сама по себе ничего не
 решает (кто стартует первым, решает только занятость), только показывает
 Оператору порядок.
+
+`watch [--tasks <id>[,...]] [--mine] [--all] [--events <класс>[,...]]
+[--interval SEC] [--until <state>]` (SPEC 01M1VBEKRN0GA029J98S0K2DAQ) —
+дозор событий журнала для сессии Оператора: печатает на stdout, без
+буферизации, поток НОВЫХ (с момента запуска) записей `steps`/`alerts`
+выбранных задач строками формата `log` плюс идентификатор задачи;
+классы `--events` — именованные фильтры над `action` (дефолт
+`transitions,refusals,gates,steps`). Селекторы `--tasks`/`--mine`/
+`--all` взаимоисключающие (ровно один обязателен); `--mine`/`--all`
+пересчитывают выборку заново каждые `--interval` секунд (по умолчанию
+30) — новая задача подхватывается без перезапуска. Смена `tasks.state`
+отслеживаемой задачи печатается отдельно (`STATE=<state>`) независимо
+от `--events`. Завершается кодом 0 по `--until <state>` (выборка обязана
+быть из одной задачи) либо по истощению нетерминальных задач выборки.
+Не мутирующая команда: своё соединение `store.db()`, без lease, без
+записи в `steps`/`alerts`, без смены `tasks.state` — тем же классом, что
+`status`/`log`/`doctor`. Заменяет внерепозиторные сценарии сессии
+(`watch_tasks.py`/`watch_spec_gate.py`, `docs/operator-session.md`).
 
 `venv-sync` (SPEC 01M1REVEZ1HESMJ7AFD5A9MEJ8) — создаёт/обновляет
 `.artel/venv` средствами стандартной библиотеки (`python3 -m venv` тем же
@@ -307,6 +327,8 @@ worktree задачи, команда коммитит правку, сдвиг�
   notes     команда `note`: строка в копилку/бэклог/очередь изолированным
             коммитом от origin/main, повтор non-fast-forward, удержание
             коммита при сетевом отказе (tasks/01M1VBEHTDYPK3E4RRFHWYYYW3)
+  watch     дозор событий журнала (steps/alerts) для сессии Оператора,
+            read-only, без lease (SPEC 01M1VBEKRN0GA029J98S0K2DAQ)
 """
 import sys
 from pathlib import Path
@@ -321,7 +343,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from orchestrator import (amend, answer, auto, budget, canary, catalog,  # noqa: E402
                           cleanup, config, doctor, dry_run, fsm, notes, pause,
                           pin, projects, prune, release, report, runner,
-                          venv, version, workspace, zone_lock)
+                          venv, version, watch, workspace, zone_lock)
 
 
 def _refuse_if_worktree() -> None:
@@ -507,6 +529,7 @@ def main() -> None:
         "zone-reorder": lambda: zone_lock.cmd_zone_reorder(rest),
         "venv-sync": lambda: venv.cmd_venv_sync(),
         "note": lambda: notes.cmd_note(rest),
+        "watch": lambda: watch.cmd_watch(rest),
     }
     fn = table.get(cmd)
     if fn is None:
