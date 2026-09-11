@@ -757,7 +757,7 @@ def main() -> None:
                                          rest[1] if len(rest) > 1 else ""),
         "answer": lambda: answer.cmd_answer(rest[0], rest[1]),
         "zones-extend": lambda: answer.cmd_zones_extend(rest[0], rest[1]),
-        "kill": lambda: cleanup.cmd_kill(rest[0]),
+        "kill": lambda: cleanup.cmd_kill(rest[0], confirmed="--yes" in rest[1:]),
         "release": lambda: release.cmd_release(rest[0]),
         "pause": lambda: _cmd_pause(rest),
         "resume": lambda: pause.cmd_resume(rest[0]),
