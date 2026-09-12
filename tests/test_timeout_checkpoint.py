@@ -10,8 +10,10 @@
 это реальные `git add`/`git diff`/`git commit`, заглушкой `gitcmd.git`
 эту механику не проверить (тот же довод, что в acceptance_tests T041).
 """
+import shutil
 import subprocess
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -49,6 +51,17 @@ class _WorktreeCheckpointTest(RealPultGitTest):
 
     def setUp(self):
         super().setUp()
+        # `workspace.ensure` заводящий НОВУЮ ветку задачи делает `git
+        # fetch origin <MAIN_BRANCH>` (SPEC 01M297HFSKV3GVZJ9YF20FZEZE) —
+        # `RealPultGitTest.config.ROOT` не несёт origin вовсе, локальный
+        # (не Draft-MR-related) bare origin здесь нужен только затем,
+        # чтобы fetch не отказывал.
+        origin = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, origin, ignore_errors=True)
+        self.git("init", "-q", "--bare", str(origin))
+        self.git("remote", "add", "origin", str(origin))
+        self.git("push", "-q", "origin",
+                f"{config.MAIN_BRANCH}:{config.MAIN_BRANCH}")
         branch = store.get_task(store.db(), self.TASK)["branch"]
         wt_path, error = workspace.ensure(self.TASK, branch)
         self.assertIsNone(error, f"worktree не создан: {error}")

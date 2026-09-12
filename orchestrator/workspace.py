@@ -54,8 +54,16 @@ def ensure(task_id: str, branch: str) -> tuple[Path, str | None]:
     существованию каталога на диске (тот мог остаться после ручной
     уборки). Ветки ещё нет в git (роль до этой задачи создавала её сама
     первым действием миссии — с T045 это делает сама worktree-норма) —
-    заводится от `config.MAIN_BRANCH` тем же действием, что и сам
-    worktree (`git worktree add -b`), а не отдельным `checkout -b`.
+    заводится от `origin/<config.MAIN_BRANCH>`, не от локального
+    `config.MAIN_BRANCH` (SPEC 01M297HFSKV3GVZJ9YF20FZEZE, требование 1):
+    документный коммит, ушедший в origin в обход локального пина
+    (инцидент 11.09), иначе оставлял бы новую ветку задачи на устаревшей
+    точке расхождения. `git fetch origin <config.MAIN_BRANCH>` идёт
+    ПЕРЕД самим `git worktree add -b` — на его же голове (`FETCH_HEAD`)
+    заводится ветка, не отдельным `checkout -b`. Fetch не удался —
+    именованный отказ БЕЗ отката на локальный `config.MAIN_BRANCH`
+    (AC-3): молчаливая деградация здесь повторила бы тот же класс
+    инцидента, который эта задача чинит.
     """
     wt_path = path(task_id)
     if _registered(wt_path):
@@ -63,8 +71,15 @@ def ensure(task_id: str, branch: str) -> tuple[Path, str | None]:
     if gitcmd.branch_exists(branch):
         res = gitcmd.git("worktree", "add", str(wt_path), branch)
     else:
+        origin_sha, fetch_reason = gitcmd.fetch_head_sha(
+            "origin", config.MAIN_BRANCH)
+        if not origin_sha:
+            reason = "база ветки недоступна: fetch origin не удался"
+            if fetch_reason:
+                reason += f": {fetch_reason}"
+            return wt_path, reason
         res = gitcmd.git("worktree", "add", "-b", branch, str(wt_path),
-                         config.MAIN_BRANCH)
+                         origin_sha)
     if res is None or res.returncode != 0:
         reason = (res.stderr.strip()[:300] if res is not None and res.stderr
                   else f"git worktree add вернул {res.returncode if res else '—'}")

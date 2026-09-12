@@ -226,6 +226,16 @@ class PrefixWorkspaceTest(unittest.TestCase):
         self.git("add", "-A")
         self.git("commit", "-q", "-m", "init")
 
+        # `workspace.ensure` заводящий НОВУЮ ветку задачи делает `git
+        # fetch origin <MAIN_BRANCH>` (SPEC 01M297HFSKV3GVZJ9YF20FZEZE) —
+        # без настоящего origin, синхронного с main, fetch отказывает.
+        self.origin = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.origin, ignore_errors=True)
+        self.git("init", "-q", "--bare", str(self.origin))
+        self.git("remote", "add", "origin", str(self.origin))
+        self.git("push", "-q", "origin",
+                f"{config.MAIN_BRANCH}:{config.MAIN_BRANCH}")
+
         for attr, value in (("ROOT", self.root),
                             ("DB", self.root / ".artel" / "state.db"),
                             ("TASKS", self.root / "tasks"),
