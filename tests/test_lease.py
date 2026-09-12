@@ -201,11 +201,14 @@ class OwnSessionLiveOtherPidTest(TmpRootTest):
         return store.lease_row(store.db(), self.TASK)
 
     def insert_holder(self, holder_pid: int) -> None:
+        self.insert_holder_on_host(holder_pid, socket.gethostname())
+
+    def insert_holder_on_host(self, holder_pid: int, hostname: str) -> None:
         conn = store.db()
         conn.execute(
             "INSERT INTO leases (task_id, session_id, pid, hostname,"
             " heartbeat_ts) VALUES (?,?,?,?,?)",
-            (self.TASK, "sess-a", holder_pid, socket.gethostname(), store.now()))
+            (self.TASK, "sess-a", holder_pid, hostname, store.now()))
         conn.commit()
 
     def test_refuses_by_default_naming_the_task_pid_and_own_session(self):
@@ -273,6 +276,42 @@ class OwnSessionLiveOtherPidTest(TmpRootTest):
         self.assertFalse(fresh)
         row = self.row()
         self.assertEqual(row["pid"], os.getpid())
+
+    def test_holder_on_different_host_with_locally_dead_pid_refuses_without_overwriting(self):
+        """REVIEW.md 01M2B6JWGS9HMR9XZJBASXVNSY итерация 1, R1-F1: держатель
+        своей сессии на ДРУГОМ host'е под числом pid, которое на ЭТОМ
+        host'е мёртво (`_dead_pid()`), — pid host-локален, число не
+        доказывает, что держатель на СВОЁМ host'е тоже мёртв. Ловит
+        мутацию: если ветка «своя сессия» вернётся к голому
+        `liveness._pid_alive(row['pid'])` без сверки `row['hostname']`,
+        строка живого держателя другого host'а будет тихо переписана
+        (`refusal` станет `None`, `row['pid']` — pid текущего процесса)
+        вместо именованного отказа."""
+        self.insert_holder_on_host(_dead_pid(), "other-host")
+        before = dict(self.row())
+
+        refusal, fresh = lease.acquire(store.db(), self.TASK, "sess-a")
+
+        self.assertIsNotNone(refusal)
+        self.assertIn("этой же сессии", refusal)
+        self.assertFalse(fresh)
+        self.assertEqual(dict(self.row()), before)
+
+    def test_holder_on_different_host_with_same_host_ok_returns_none_false_without_mutation(self):
+        """R1-F1: то же самое, что и тест выше, но с `same_host_ok=True`
+        (единственный такой вызыватель — `budget`) — держатель другого
+        host'а не отказывает именованно, но и не перезаписывается молча:
+        `(None, False)` без мутации строки, как и для держателя своего
+        host'а (`test_same_host_ok_returns_none_false_without_mutation`)."""
+        self.insert_holder_on_host(_dead_pid(), "other-host")
+        before = dict(self.row())
+
+        refusal, fresh = lease.acquire(store.db(), self.TASK, "sess-a",
+                                       same_host_ok=True)
+
+        self.assertIsNone(refusal)
+        self.assertFalse(fresh)
+        self.assertEqual(dict(self.row()), before)
 
 
 class AcquireJournalCauseTest(TmpRootTest):
