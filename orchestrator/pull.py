@@ -28,6 +28,7 @@ AC-5) патчит имя в ПРОСТРАНСТВЕ ИМЁН `fsm`, а не з
 (`tests/test_fsm_merge_conflict_note.py`, не мок, чистая функция) —
 `fsm.py` реэкспортирует его отсюда (AC-5).
 """
+import shutil
 import subprocess
 
 from . import (acceptance, alerts, artifact_source, checkpoint, config,
@@ -279,36 +280,58 @@ def _materialize_and_run_plank(conn, task_id: str, branch: str,
     01M1R9YEK08XEQWBFX0929WFVJ/01M1RNZ6V7TTTTYAHBMF8JBQQS). Планка не
     найдена — легитимно только когда SPEC пропустила `tests_writing`
     (`skip_tests`) или не несёт AC-разметки; иначе — именованный отказ
-    (SPEC 01M1R9YEK08XEQWBFX0929WFVJ, AC-3)."""
-    artifact_branch_name, _ = artifact_source.resolve(conn, task_id)
-    tdir = acceptance.materialize_from_branch(task_id, artifact_branch_name, wt_path)
-    if not (tdir / "acceptance_tests").is_dir():
-        spec_text = read_branch_text_or_refuse(conn, task_id, artifact_branch_name,
-                                               "SPEC.md")
-        if spec_text is None:
-            return Refused(None)
-        meta = yamlmini.frontmatter(spec_text) or {}
-        if guard.requires_ac_markup(meta):
-            detail = (
-                f"планка не найдена в источнике: артефактная ветка "
-                f"{artifact_branch_name} не несёт tasks/{task_id}/"
-                f"acceptance_tests/, а tests_writing не пропущена "
-                f"легитимно (skip_tests не задан в SPEC)")
-            store.journal(
-                conn, task_id, "fsm",
-                "переход отклонён: планка не найдена в источнике", detail)
-            print(f"[{task_id}] переход отклонён: {detail}")
-            return Refused(detail)
-        return Pulled(base)
+    (SPEC 01M1R9YEK08XEQWBFX0929WFVJ, AC-3).
 
-    green, tail = acceptance.run(tdir, cwd=wt_path)
-    if not green:
-        detail = (f"приёмочные тесты красные после подтяжки {source_branch} "
-                  f"(слияние сохранено, откат не выполняется):\n{tail}")
-        store.set_state(conn, task_id, "escalated", "fsm", expected_state=state,
-                        detail=detail)
-        return Conflict([], detail)
-    return Pulled(base)
+    `tasks/<task_id>/acceptance_tests/` убирается из worktree в `finally`
+    (SPEC 01M2B6JNFD381MZT70CVB5NJQC, требование 2/AC-3), если каталога
+    там не было ДО этого вызова `acceptance.materialize_from_branch`:
+    диск нужен планке только на время прогона в этой функции, источник
+    истины остаётся артефактная ветка задачи (SPEC «Не входит»). Каталог,
+    реально существовавший на диске до материализации (устаревший прогон
+    прошлой версии этой функции, ручное вмешательство), не трогается —
+    только то, что материализовала САМА эта материализация. `finally`,
+    не последняя строка перед `return` — уборка обязана отработать на
+    ЛЮБОМ исходе функции (`Pulled` после зелёной планки, `Conflict` после
+    красной, `Refused`, если планка не найдена, но SPEC требует
+    AC-разметку), не только на счастливом пути; сам факт уборки не
+    журналируется отдельной записью (требование 3/AC-5 — штатное
+    действие, не событие, о котором стоит сообщать Оператору)."""
+    artifact_branch_name, _ = artifact_source.resolve(conn, task_id)
+    tests_dir = wt_path / "tasks" / task_id / "acceptance_tests"
+    preexisting = tests_dir.is_dir()
+    try:
+        tdir = acceptance.materialize_from_branch(task_id, artifact_branch_name,
+                                                   wt_path)
+        if not (tdir / "acceptance_tests").is_dir():
+            spec_text = read_branch_text_or_refuse(conn, task_id, artifact_branch_name,
+                                                   "SPEC.md")
+            if spec_text is None:
+                return Refused(None)
+            meta = yamlmini.frontmatter(spec_text) or {}
+            if guard.requires_ac_markup(meta):
+                detail = (
+                    f"планка не найдена в источнике: артефактная ветка "
+                    f"{artifact_branch_name} не несёт tasks/{task_id}/"
+                    f"acceptance_tests/, а tests_writing не пропущена "
+                    f"легитимно (skip_tests не задан в SPEC)")
+                store.journal(
+                    conn, task_id, "fsm",
+                    "переход отклонён: планка не найдена в источнике", detail)
+                print(f"[{task_id}] переход отклонён: {detail}")
+                return Refused(detail)
+            return Pulled(base)
+
+        green, tail = acceptance.run(tdir, cwd=wt_path)
+        if not green:
+            detail = (f"приёмочные тесты красные после подтяжки {source_branch} "
+                      f"(слияние сохранено, откат не выполняется):\n{tail}")
+            store.set_state(conn, task_id, "escalated", "fsm", expected_state=state,
+                            detail=detail)
+            return Conflict([], detail)
+        return Pulled(base)
+    finally:
+        if not preexisting and tests_dir.is_dir():
+            shutil.rmtree(tests_dir)
 
 
 def _git_in(repo_path, *args: str):

@@ -253,6 +253,72 @@ class UntrackedWorktreePathsTest(TmpRootTest):
             {"docs/new_note.md", "orchestrator/checkpoint.py", "new_name.py"})
 
 
+class ZonesGateOwnTaskDirTest(TmpRootTest):
+    """SPEC 01M2B6JNFD381MZT70CVB5NJQC, AC-1/AC-2: собственный каталог
+    задачи — своя зона для довеска неотслеживаемых файлов, тем же
+    правилом (`checkpoint.task_dir_zone`), что уже применяет
+    `checkpoint._zone_paths` к WIP-чекпоинтам. Committed-дифф пуст в обоих
+    тестах — предмет проверки строго довесок untracked-путей
+    (`_untracked_worktree_paths`), не остальной гейт."""
+
+    def setUp(self):
+        super().setUp()
+        store.create_schema(store.db())
+        self.conn = store.db()
+        self.task_id = "T001"
+        store.insert_task(self.conn, self.task_id, "Тест", "in_dev",
+                          "task/t001-x", config.DEFAULT_TARGET, 10.0)
+        store.update_task(self.conn, self.task_id, zones="orchestrator/store.py")
+        self.t = {"title": "Тест", "branch": "task/t001-x",
+                 "zones": "orchestrator/store.py", "zones_extension": None}
+
+    def _status_in_repo(self, porcelain: str):
+        def fake(repo, *args):
+            if args[:1] == ("status",):
+                return subprocess.CompletedProcess(list(args), 0, porcelain, "")
+            return subprocess.CompletedProcess(list(args), 0, "", "")
+        return fake
+
+    def test_untracked_file_under_own_task_dir_does_not_refuse(self):
+        """AC-1: неотслеживаемый `tasks/<id>/acceptance_tests/test_x.py`
+        (материализованная планка после подтяжки, SPEC «Контекст») —
+        гейт зон пропускает переход, коммиченный дифф строго в
+        заявленных зонах.
+
+        Ловит мутацию: фильтр `task_dir_zone` в `_zones_gate` убран —
+        планка приёмки снова считалась бы файлом вне зон, регрессия
+        12.09 (четыре ложных отказа волны 3)."""
+        porcelain = f"?? tasks/{self.task_id}/acceptance_tests/test_x.py\n"
+        with mock.patch.object(gitcmd, "diff_base", return_value="deadbeef"), \
+             mock.patch.object(gitcmd, "diff_names", return_value=[]), \
+             mock.patch.object(gitcmd, "in_repo",
+                               side_effect=self._status_in_repo(porcelain)):
+            refuses = fsm_advance._zones_gate_refuses(
+                self.conn, self.task_id, self.t, "task/t001-x", "PLAN\n")
+        self.assertFalse(refuses)
+
+    def test_untracked_file_outside_own_task_dir_still_refuses(self):
+        """AC-2: неотслеживаемый файл кода вне `tasks/<id>/` и вне
+        заявленных zones — прежний отказ гейта зон сохраняется
+        байт-в-байт (01M290PVYG, AC-6).
+
+        Ловит мутацию: фильтр `task_dir_zone` расширен неверно (например,
+        сверяет подстрокой вместо префикса пути) и случайно накрывает
+        посторонний путь — регрессия по AC-2, гейт молча пропускал бы
+        код вне зон."""
+        porcelain = "?? docs/stray_note.md\n"
+        with mock.patch.object(gitcmd, "diff_base", return_value="deadbeef"), \
+             mock.patch.object(gitcmd, "diff_names", return_value=[]), \
+             mock.patch.object(gitcmd, "in_repo",
+                               side_effect=self._status_in_repo(porcelain)):
+            refuses = fsm_advance._zones_gate_refuses(
+                self.conn, self.task_id, self.t, "task/t001-x", "PLAN\n")
+        self.assertTrue(refuses)
+        details = [r["detail"] for r in self.conn.execute(
+            "SELECT detail FROM steps WHERE task_id=?", (self.task_id,))]
+        self.assertTrue(any("docs/stray_note.md" in d for d in details))
+
+
 class AnswerCommitIsRoleStepAutocommitTest(unittest.TestCase):
     """R2-F1 (REVIEW.md 01M1P9QCHPHSCEA6TK13PV85SP итерация 2, blocker):
     `_answer_commit_is_role_step_autocommit` — единственный узел,
