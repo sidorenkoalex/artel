@@ -11,8 +11,8 @@ from typing import NamedTuple
 from scripts import guard
 
 from . import (acceptance, agent_log, artifact_source, artifacts, auto, budget,
-              ci, config, fsm, fsm_autogate, gitcmd, github_adapter,
-              repo_context, store, workspace, yamlmini)
+              checkpoint, ci, config, fsm, fsm_autogate, gitcmd,
+              github_adapter, repo_context, store, workspace, yamlmini)
 # Функция, не модуль (SPEC 01M1GCN1FPSC1A6WK9WD1Q1V8X, требование 5): этот
 # же модуль ниже определяет обработчик состояния `review` под тем же
 # именем `review` — `from . import review` тут вело бы к коллизии имён,
@@ -408,6 +408,106 @@ def verifying(conn, task_id: str, t, tdir, target: str, state: str) -> bool:
     return False
 
 
+def _tests_writing_stray_plank_files_gate(conn, task_id: str) -> GateRefusal | None:
+    """Требование 3/AC-8 (SPEC 01M2ARQRDV4YY9TVPHXN2E7136): пока запись
+    журнала `checkpoint.STRAY_ACCEPTANCE_FILES_ACTION` («посторонние файлы
+    в каталоге планки» — checkpoint отбросил файлы этого же шага
+    `test_author`, `checkpoint._commit_external_step_artifacts`) остаётся
+    ПОСЛЕДНЕЙ записью с момента входа задачи в текущий визит состояния
+    `tests_writing`, выход отклоняет переход, называя отброшенные файлы
+    поимённо — иначе задача прошла бы трассируемость AC и сухой сбор
+    планкой, ссылающейся на файл, которого нет ни на артефактной ветке,
+    ни в следующем шаге developer (класс дефекта инцидента 06.09, SPEC
+    «Контекст»: `_shared.py` был отброшен молча, трассируемость его не
+    видела вовсе, а тесты планки падали ImportError только на приёмке).
+
+    «Текущий визит состояния» — записи журнала ПОСЛЕ последней `state ->
+    tests_writing` (обычный маркер `store.set_state`); нет такой записи
+    вовсе (лёгкие песочницы, где переход состояния делается напрямую
+    правкой строки БД, минуя `store.set_state`, либо самый первый вход
+    задачи в состояние без единой записи журнала) — сверять от начала всего
+    журнала, тот же вырожденный приём деградации, что и у
+    `auto._role_step_since_state_entry` («сверять нечем» не значит
+    «не сверять вовсе», здесь означает «весь имеющийся журнал — один
+    визит»).
+
+    Запись НЕ последняя (за ней есть более поздняя активность визита —
+    например, повторный шаг `test_author` после починки, заметка
+    Оператора) — не блокирует: устаревшая, уже замещённая запись не
+    имеет права держать переход бесконечно.
+
+    Записи `actor == "lease"` («lease взят»/«lease перехвачен»,
+    `orchestrator/lease.py::acquire`) исключаются из сравнения целиком:
+    это бухгалтерия ПРОЦЕССА, вызывающего `advance` сейчас (пишется
+    самим `lease.run_locked` ДО того, как управление вообще дошло до
+    этого гейта), не активность визита состояния — без исключения
+    первый же холодный вызов `advance` для задачи без предсуществующего
+    lease (обычный путь однократного `artel.py advance <id>`, не только
+    тестовая песочница) журналировал бы «lease взят» ПОЗЖЕ отброшенной
+    записи планки и гейт молчал бы всегда, даже когда отброшенные файлы
+    реально остались последней содержательной записью визита."""
+    rows = [r for r in store.task_steps(conn, task_id) if r["actor"] != "lease"]
+    marker = "state -> tests_writing"
+    since = 0
+    for i, row in enumerate(rows):
+        if row["action"] == marker:
+            since = i + 1
+    visit = rows[since:]
+    if not visit:
+        return None
+    last = visit[-1]
+    if last["action"] != checkpoint.STRAY_ACCEPTANCE_FILES_ACTION:
+        return None
+    detail = last["detail"] or ""
+    prefix = checkpoint.STRAY_ACCEPTANCE_FILES_DETAIL_PREFIX
+    names = detail[len(prefix):] if detail.startswith(prefix) else detail
+    refusal_detail = f"планка ссылается на отброшенные файлы: {names}"
+    hint = (f"верни отброшенные файлы либо перепиши планку без них "
+           f"(skills/test-authoring.md: общий код — только модули _*.py) "
+           f"и повтори artel.py advance {task_id}")
+    return GateRefusal("переход отклонён: посторонние файлы планки",
+                       refusal_detail, hint)
+
+
+def _tests_writing_acceptance_dir(task_id: str, tdir, target: str,
+                                  branch: str, code_branch: str):
+    """(планка, cwd) материализованной планки для сухого сбора на выходе
+    `tests_writing` (требование 2) — тот же трёхветочный выбор каталога,
+    что уже несут `_acceptance_run_refuses`/`_review_approved` ниже по
+    конвейеру для прогона той же планки (внешний target — workspace
+    target'а; self на своей ветке — worktree задачи; иначе — `tdir`/
+    `config.ROOT`): отдельная функция, не рефакторинг тех двух (PLAN
+    «Подход») — обе уже плотно покрыты тестами T023-семьи, а совпадение
+    здесь — три строки на ветку, не повод рисковать их поведением ради
+    переиспользования."""
+    if target != config.DEFAULT_TARGET:
+        run_cwd = config.PROJECTS / target / "workspace"
+        run_cwd.mkdir(parents=True, exist_ok=True)
+        return acceptance.materialize_from_branch(task_id, branch, run_cwd), run_cwd
+    if workspace.on_task_branch(task_id, code_branch) is True:
+        run_cwd = workspace.path(task_id)
+        return acceptance.materialize_from_branch(task_id, branch, run_cwd), run_cwd
+    return tdir, config.ROOT
+
+
+def _tests_writing_dry_collect_gate(acc_tdir, run_cwd,
+                                    task_id: str) -> GateRefusal | None:
+    """Требование 2/AC-4/AC-5: сухой сбор материализованной планки
+    (`acceptance.collect`) ПОСЛЕ трассируемости AC и гейта AC-8, ДО
+    перевода задачи в `in_dev` — отказ сбора (импорт/синтаксис планки)
+    отклоняет переход тем же текстом действия («переход отклонён: планка
+    не собирается»), что и остальные отказы `tests_writing`, чтобы стоп-
+    кран T038 и история отказов брифа test_author (`brief.
+    advance_refusal_history`) видели его как обычный отказ шага роли,
+    не как повод остановиться навсегда (AC-6 — уже общий механизм,
+    правки не требует)."""
+    collected, tail = acceptance.collect(acc_tdir, run_cwd)
+    if collected:
+        return None
+    hint = f"почини импорт/синтаксис планки и повтори artel.py advance {task_id}"
+    return GateRefusal("переход отклонён: планка не собирается", tail, hint)
+
+
 def tests_writing(conn, task_id: str, t, tdir, target: str, state: str) -> bool:
     # test_author закончил: каждый AC-n — тест либо пометка
     # manual/skip/escalate (SPEC T023, требование 4). Ветка-источник
@@ -446,6 +546,15 @@ def tests_writing(conn, task_id: str, t, tdir, target: str, state: str) -> bool:
             print(f"  - {e}")
         print(f"  дальше: допиши {tdir / 'acceptance_tests'} и повтори "
               f"artel.py advance {task_id}")
+        return False
+    if _run_gates(conn, task_id,
+                  [lambda: _tests_writing_stray_plank_files_gate(conn, task_id)]):
+        return False
+    acc_tdir, run_cwd = _tests_writing_acceptance_dir(
+        task_id, tdir, target, branch, t["branch"])
+    if _run_gates(conn, task_id,
+                  [lambda: _tests_writing_dry_collect_gate(
+                      acc_tdir, run_cwd, task_id)]):
         return False
     store.set_state(conn, task_id, "in_dev", "fsm", expected_state=state,
                     detail="приёмочные тесты готовы — трассируемость AC "

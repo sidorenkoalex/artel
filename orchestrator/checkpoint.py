@@ -28,6 +28,15 @@ from . import config, fixation, gitcmd, store, workspace, yamlmini, zone_lock
 # на время миграции правила) не долетала бы досюда.
 _ACCEPTANCE_TESTS_DIR = "acceptance_tests/"
 
+# Действие и префикс детали журнала «посторонние файлы в каталоге планки»
+# (SPEC 01M2ARQRDV4YY9TVPHXN2E7136, требование 3) — вынесены константами:
+# гейт `fsm_advance.tests_writing` (AC-8) сверяет ПОСЛЕДНЮЮ запись журнала
+# визита состояния с этим же действием и извлекает список отброшенных
+# файлов из detail по этому же префиксу, не заводя независимую копию
+# текста (тот же приём, что уже несёт `STRAY_WORKTREE_FILES_ACTION` ниже).
+STRAY_ACCEPTANCE_FILES_ACTION = "посторонние файлы в каталоге планки"
+STRAY_ACCEPTANCE_FILES_DETAIL_PREFIX = "в каталоге планки посторонние файлы: "
+
 
 def _is_stray_acceptance_test_file(task_rel: str) -> bool:
     """`task_rel` — путь относительно `tasks/<id>/` (например
@@ -690,8 +699,8 @@ def _commit_external_step_artifacts(conn, task_id: str, role: str,
                  if rel[len(task_prefix):] not in stray}
         store.journal(
             conn, task_id, "orchestrator",
-            "посторонние файлы в каталоге планки",
-            f"в каталоге планки посторонние файлы: {', '.join(stray)}")
+            STRAY_ACCEPTANCE_FILES_ACTION,
+            f"{STRAY_ACCEPTANCE_FILES_DETAIL_PREFIX}{', '.join(stray)}")
 
     # Посторонние файлы первого уровня tasks/<id>/ (SPEC
     # 01M1TNN4TMWAQSQ9Y1PW37J5H0, требование 2, AC-4/AC-5/AC-6) —
