@@ -178,9 +178,9 @@ def _origin_push_gate(conn, task_id: str, t) -> GateRefusal | None:
     Канареечная задача (SPEC 01M1NEEWH5K1XPFRDGRMPYSBXJ, требование
     11/AC-11) не зовёт этот гейт вовсе (см. `in_dev()`): её `verifying`
     не ждёт CI и не читает origin (`canary._kill_at_verifying` убивает
-    задачу сразу по входу) — origin эфемерного клона (`canary.
-    _ephemeral_clone`) в любом случае не главный пульт, дотягиваться до
-    него этому гейту незачем."""
+    задачу сразу по входу) — push на origin-заглушку
+    (`canary.ORIGIN_STUB_URL`) гарантированно проваливается по
+    построению, не по сбою."""
     push_ok, push_detail = github_adapter.ensure_head_in_origin(
         conn, task_id, t["branch"])
     if push_ok:
@@ -1421,9 +1421,10 @@ def in_dev(conn, task_id: str, t, tdir, target: str, state: str) -> bool:
     # Сверка головы на origin (ADR-0015, требование 2) — не для канареечной
     # задачи (SPEC 01M1NEEWH5K1XPFRDGRMPYSBXJ, требование 11/AC-11): её
     # `verifying` не ждёт CI и не читает origin (`canary._kill_at_verifying`
-    # убивает задачу сразу по входу) — origin эфемерного клона (`canary.
-    # _ephemeral_clone`) в любом случае не главный пульт, тем же
-    # исключением, что раньше стояло на входе `review()`.
+    # убивает задачу сразу по входу) — push на origin-заглушку
+    # (`canary.ORIGIN_STUB_URL`) гарантированно проваливается по
+    # построению, не по сбою, тем же исключением, что раньше стояло на
+    # входе `review()`.
     if not t["is_canary"]:
         if _run_gates(conn, task_id, [lambda: _origin_push_gate(conn, task_id, t)]):
             return False
