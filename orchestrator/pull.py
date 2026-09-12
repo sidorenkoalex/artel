@@ -32,7 +32,7 @@ import subprocess
 
 from . import (acceptance, alerts, artifact_source, checkpoint, config,
               gitcmd, store, workspace, yamlmini)
-from scripts import guard
+from scripts import ci_push_class, guard
 
 # Файл, конфликт по которому подтяжка авторазрешает сама (SPEC T067) —
 # своя копия константы (тот же приём, что и у `orchestrator/fsm_postmerge.
@@ -311,6 +311,47 @@ def _materialize_and_run_plank(conn, task_id: str, branch: str,
     return Pulled(base)
 
 
+def _git_in(repo_path, *args: str):
+    """`gitcmd.git`/`gitcmd.in_repo` по наличию `repo_path` — свой мини-приём
+    ровно тех двух примитивов, что уже несёт `gitcmd.py` (`git`/`in_repo`,
+    оба публичные), без правки самого `gitcmd.py`: зона задачи
+    (SPEC 01M2ARQMTYRNPR5HRXAPCBAXNY) — `orchestrator/pull.py`,
+    `scripts/ci_push_class.py`, `tests/`, `gitcmd.py` в неё не входит и не
+    покрыт `config.COMMON_ZONES`."""
+    return gitcmd.in_repo(repo_path, *args) if repo_path else gitcmd.git(*args)
+
+
+def _diff_names_in(repo_path, a: str, b: str) -> list | None:
+    res = _git_in(repo_path, "diff", "--name-only", a, b)
+    if res is None or res.returncode != 0:
+        return None
+    return [p for p in res.stdout.splitlines() if p]
+
+
+def _doc_only_main_advance(branch: str, base: str, repo_path) -> list | None:
+    """Файлы диффа main от точки расхождения (`merge-base(branch, base)`)
+    до `base` — только если ВСЕ документные (`ci_push_class.is_doc_path`,
+    SPEC 01M2ARQMTYRNPR5HRXAPCBAXNY, требование 1) И не пересекаются с
+    диффом ветки от той же точки расхождения до `branch`. `None` —
+    подтяжка нужна как прежде: недокументный либо пересекающийся файл, а
+    также git, не ответивший ни на один из трёх запросов (`merge-base`,
+    два `diff --name-only`) — fail-closed на ПРЕЖНЕЕ поведение
+    (подтяжка), не на новое «пропустить» (AC-2)."""
+    point_res = _git_in(repo_path, "merge-base", branch, base)
+    if point_res is None or point_res.returncode != 0:
+        return None
+    point = point_res.stdout.strip()
+    if not point:
+        return None
+    main_files = _diff_names_in(repo_path, point, base)
+    if main_files is None or not all(ci_push_class.is_doc_path(f) for f in main_files):
+        return None
+    branch_files = _diff_names_in(repo_path, point, branch)
+    if branch_files is None or set(main_files) & set(branch_files):
+        return None
+    return main_files
+
+
 def evaluate(conn, task_id: str, t, state: str, *, origin_main_source,
             origin_main_sha, read_branch_text_or_refuse,
             repo_path=None):
@@ -327,6 +368,13 @@ def evaluate(conn, task_id: str, t, state: str, *, origin_main_source,
     self-специфичный механизм) не заводится и не нужен. `None` (по
     умолчанию, self) — прежнее поведение байт-в-байт: worktree
     `config.ROOT` через `workspace.ensure`.
+
+    `behind > 0`, но весь дифф main от точки расхождения — документные
+    файлы (`ci_push_class.is_doc_path`), не пересекающиеся с диффом ветки
+    (`_doc_only_main_advance`, SPEC 01M2ARQMTYRNPR5HRXAPCBAXNY) — тоже
+    `Fresh()`, ДО заведения worktree: чисто документные коммиты main
+    (копилка/бэклог/ADR) не обязаны вызывать подтяжку, когда они не
+    затрагивают файлы самой ветки.
     """
     branch = t["branch"]
     target_name = t["target"] or config.DEFAULT_TARGET
@@ -337,6 +385,14 @@ def evaluate(conn, task_id: str, t, state: str, *, origin_main_source,
         return Fresh()
     behind = gitcmd.commits_behind(branch, base=base, repo=repo_path)
     if not behind:
+        return Fresh()
+
+    doc_files = _doc_only_main_advance(branch, base, repo_path)
+    if doc_files is not None:
+        store.journal(
+            conn, task_id, "fsm",
+            f"свежесть: {len(doc_files)} документных коммитов main без подтяжки",
+            ", ".join(doc_files[:10]))
         return Fresh()
 
     if repo_path is not None:

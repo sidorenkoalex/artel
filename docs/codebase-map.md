@@ -1,5 +1,5 @@
 ---
-built_at_sha: ad4a605add7342656ef01cb970ac6ecd9f2e7fe8
+built_at_sha: 7aedaa3c8a39c6f1f3df5308cdf57d58d85b0919
 ---
 
 # Codebase-map пульта
@@ -645,7 +645,7 @@ built_at_sha: ad4a605add7342656ef01cb970ac6ecd9f2e7fe8
 **Публичные функции:**
 - `evaluate`
 
-**Импортирует:** `orchestrator/acceptance.py`, `orchestrator/alerts.py`, `orchestrator/artifact_source.py`, `orchestrator/checkpoint.py`, `orchestrator/config.py`, `orchestrator/gitcmd.py`, `orchestrator/store.py`, `orchestrator/workspace.py`, `orchestrator/yamlmini.py`, `scripts/guard.py`
+**Импортирует:** `orchestrator/acceptance.py`, `orchestrator/alerts.py`, `orchestrator/artifact_source.py`, `orchestrator/checkpoint.py`, `orchestrator/config.py`, `orchestrator/gitcmd.py`, `orchestrator/store.py`, `orchestrator/workspace.py`, `orchestrator/yamlmini.py`, `scripts/ci_push_class.py`, `scripts/guard.py`
 
 **Импортируется:** `orchestrator/auto.py`, `orchestrator/fsm.py`, `tests/test_pull.py`
 
@@ -1019,11 +1019,12 @@ built_at_sha: ad4a605add7342656ef01cb970ac6ecd9f2e7fe8
 
 **Публичные функции:**
 - `classify`
+- `is_doc_path`
 - `main`
 
 **Импортирует:** —
 
-**Импортируется:** `tests/test_ci_push_class.py`
+**Импортируется:** `orchestrator/pull.py`, `tests/test_ci_push_class.py`, `tests/test_pull.py`
 
 ## scripts/codebase_map.py
 
@@ -2217,7 +2218,7 @@ built_at_sha: ad4a605add7342656ef01cb970ac6ecd9f2e7fe8
 
 **Публичные функции:** (нет)
 
-**Импортирует:** `orchestrator/acceptance.py`, `orchestrator/config.py`, `orchestrator/gitcmd.py`, `orchestrator/pull.py`, `orchestrator/store.py`, `orchestrator/workspace.py`, `tests/sandbox.py`
+**Импортирует:** `orchestrator/acceptance.py`, `orchestrator/config.py`, `orchestrator/gitcmd.py`, `orchestrator/pull.py`, `orchestrator/store.py`, `orchestrator/workspace.py`, `scripts/ci_push_class.py`, `tests/sandbox.py`
 
 **Импортируется:** —
 
