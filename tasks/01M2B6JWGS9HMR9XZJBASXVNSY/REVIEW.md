@@ -55,7 +55,7 @@ schema_version: 5    # версия формата артефакта, см. scr
 
 | id | статус | файл/строка | суть | последствие | решение |
 |---|---|---|---|---|---|
-| R1-F1 | open | orchestrator/lease.py:127-136 | ветка «своя сессия» не проверяет `row["hostname"]` перед `liveness._pid_alive(row["pid"])` | ложный отказ или тихая порча lease живого держателя другого host'а под тем же `session_id` | добавить сверку host'а по образцу `dead_on_own_host` (строки 138-139) |
+| R1-F1 | fixed | orchestrator/lease.py:127-148 | ветка «своя сессия» не проверяет `row["hostname"]` перед `liveness._pid_alive(row["pid"])` | ложный отказ или тихая порча lease живого держателя другого host'а под тем же `session_id` | добавлена `dead_on_own_host_same_session = (row["hostname"] == hostname and not liveness._pid_alive(row["pid"]))`, ветка отказывает/перезаписывает по ней (не по голому `_pid_alive`) — держатель другого host'а теперь молча считается живым, как и в ветке «чужая сессия»/`foreign_live_lease`; докстринг функции обновлён; регресс-тесты `tests/test_lease.py::OwnSessionLiveOtherPidTest::test_holder_on_different_host_with_locally_dead_pid_refuses_without_overwriting` и `test_holder_on_different_host_with_same_host_ok_returns_none_false_without_mutation` |
 
 ## Вердикт
 
