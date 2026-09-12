@@ -26,6 +26,15 @@ v2 отличия от v1 (дыра v1: RETRO/ветки/алерты убиты
    (`<!-- canary-expect-escalation: yes|no -->`) сверяется с фактом по
    завершении задачи; расхождение — в отчёте прогона (требование 8).
 
+Целевой sha прогона (SPEC 01M2B6K02YVJBWE1JDWP85EJH0): без `--sha` —
+голова `origin/<config.MAIN_BRANCH>` (`gitcmd.fetch_ref_sha`), не HEAD
+главной копии (пина); эфемерный клон делает checkout именно этого sha
+(`_ephemeral_clone`), а `canary_runs.main_sha` несёт его же — до этой
+задачи оба всегда были `gitcmd.head_sha()` пина, из-за чего правка,
+ушедшая в `origin/main`, но ещё не в пин, не могла получить зелёный
+прогон (инцидент 12.09, SPEC/«Контекст»). `_sha_label` — пометка
+происхождения sha в отчёте («код пина»/«код origin/main»/«код <sha>»).
+
 Каждый шаблон пула, использованный боевым прогоном, обязан нести
 метку `canary-guid: <значение>` (HTML-комментарием, тем же приёмом, что
 и маркер эскалации выше) — требование 7: CI-джоб пульта (`.github/
@@ -489,13 +498,37 @@ _CLONE_CONFIG_ATTRS = (
 
 
 @contextmanager
-def _ephemeral_clone():
+def _ephemeral_clone(target_sha: str | None = None):
     """Заводит эфемерный клон пульта на время блока: собственный рабочий
     каталог, собственная БД состояния, собственный origin-заглушка
     (требование 2, AC-2) — и убирает его по выходу из блока, включая
     исключение (требование 4, AC-4). Патчит МОДУЛЬНЫЕ атрибуты
     `config.py`, через которые весь FSM-код читает пути пульта — не сам
     код FSM (см. модульный докстринг).
+
+    `target_sha` (SPEC 01M2B6K02YVJBWE1JDWP85EJH0, требование 1/AC-3) —
+    клон делает checkout именно этого sha (`git checkout -B
+    <MAIN_BRANCH> <target_sha>`, ветка не отсоединённым HEAD — остальной
+    код канарейки и FSM ожидают, что клон стоит НА `config.MAIN_BRANCH`,
+    как обычный клон), а не остаётся на HEAD `outer_root`, унаследованном
+    от обычного `git clone`: раньше клон всегда тестировал код ПИНА
+    (HEAD главной копии) — ровно тот тупик 12.09, который устраняет эта
+    задача. Локальный `git clone` источника на диске переносит объекты
+    файловой копией/хардлинком каталога `objects/` целиком, не только
+    объекты, достижимые с текущего HEAD источника, — поэтому `target_sha`,
+    только что подтянутый `gitcmd.fetch_ref_sha` в `outer_root` ДО входа в
+    этот блок (сама ссылка уже удалена, но объект остался в базе), доедет
+    до `dest` даже будучи недостижимым ни с одной ветки `outer_root`.
+    Checkout — ДО создания `origin_dir` ниже, чтобы origin-заглушка тоже
+    несла `config.MAIN_BRANCH` на `target_sha`, не на прежнем HEAD.
+
+    `target_sha=None` (по умолчанию) — обратная совместимость с `tasks/
+    01M1SC3Y20YBTTJVQDJBF2NDQW/acceptance_tests/
+    test_canary_report_kill_reason.py` (залоченная планка ДРУГОЙ, уже
+    смерженной задачи, зовущая `_run_one_task` без `target_sha`, что
+    транслируется в вызов `_ephemeral_clone()` без аргументов): checkout
+    не делается вовсе, клон остаётся на HEAD `outer_root`, ровно прежнее
+    поведение байт-в-байт.
 
     Origin эфемерного клона — ОТДЕЛЬНЫЙ одноразовый bare-клон `origin_dir`
     рядом с самим клоном (снят с `dest` сразу после его создания, то есть
@@ -531,6 +564,14 @@ def _ephemeral_clone():
         if clone.returncode != 0:
             raise RuntimeError(
                 f"canary: эфемерный клон не создан: {clone.stderr.strip()}")
+        if target_sha is not None:
+            checkout = subprocess.run(
+                ["git", "checkout", "-q", "-B", config.MAIN_BRANCH, target_sha],
+                cwd=dest, capture_output=True, text=True)
+            if checkout.returncode != 0:
+                raise RuntimeError(
+                    f"canary: checkout целевого sha {target_sha} в "
+                    f"эфемерном клоне не удался: {checkout.stderr.strip()}")
         mirror = subprocess.run(
             ["git", "clone", "-q", "--bare", "--shared", str(dest),
              str(origin_dir)],
@@ -1098,10 +1139,69 @@ def _save_diagnostics(outer_root: Path, run_stamp: str, task_id: str,
     return diag_dir
 
 
-def _run_one_task(template_path: Path, run_stamp: str, ratio: float) -> None:
+def _resolve_target_sha(explicit_sha: str | None) -> tuple[str, str | None]:
+    """(sha, origin_sha) целевого прогона (SPEC 01M2B6K02YVJBWE1JDWP85EJH0,
+    требование 1, AC-1/AC-2): `explicit_sha` задан — он и есть целевой
+    sha, БЕЗ единого обращения к `origin` (`origin_sha=None` — сравнивать
+    с головой `origin/<MAIN_BRANCH>` для пометки происхождения, AC-8,
+    после этого нечем, не запрашивать её отдельно ради пометки — именно
+    это и запрещает AC-2). Без `--sha` — голова `origin/<config.
+    MAIN_BRANCH>` через `gitcmd.fetch_ref_sha`, не `gitcmd.head_sha()`
+    главной копии; `origin_sha` в этой ветке — тот же sha (уже известно,
+    что целевой sha и есть голова origin, используется `_sha_label`).
+
+    `fetch_ref_sha` не ответил (нет `origin` вовсе, сеть недоступна) —
+    деградация на `gitcmd.head_sha()` главной копии, тем же приёмом, что
+    и `doctor.check_root_pin`/`check_pin_unpushed` (отсутствие ответа
+    origin — это «сверить не с чем», не повод отказывать прогону целиком):
+    стенд БЕЗ единого `origin` — легитимный случай (канареечная задача v1/
+    v2, `tasks/01M1NEEWH5K1XPFRDGRMPYSBXJ/acceptance_tests/`, гоняла canary
+    без единого настроенного origin ДО этой задачи) — сам целевой sha
+    прогона в этом вырожденном случае остаётся прежним, но `canary --k <N>`
+    не отказывает целиком там, где origin в принципе недостижим."""
+    if explicit_sha is not None:
+        return explicit_sha, None
+    target_sha, _reason = gitcmd.fetch_ref_sha("origin", config.MAIN_BRANCH)
+    if not target_sha:
+        return gitcmd.head_sha(), None
+    return target_sha, target_sha
+
+
+def _sha_label(target_sha: str, origin_sha: str | None) -> str:
+    """Пометка происхождения целевого sha отчёта (требование 4, AC-8):
+    «код пина» — целевой sha совпадает с `gitcmd.head_sha()` главной
+    копии (проверяется первым — приоритет над «код origin/main», даже
+    когда оба совпадения истинны разом, стенд синхронен); «код
+    origin/main» — известно (только в ветке без `--sha`, `_resolve_
+    target_sha`), что целевой sha и есть голова `origin/<MAIN_BRANCH>`;
+    иначе — «код <sha>» буквально, в том числе для явного `--sha`, для
+    которого сравнение с origin недоступно (AC-2 запрещает запрос
+    origin ради этой пометки)."""
+    if target_sha == gitcmd.head_sha():
+        return "код пина"
+    if origin_sha is not None and target_sha == origin_sha:
+        return "код origin/main"
+    return f"код {target_sha}"
+
+
+def _run_one_task(template_path: Path, run_stamp: str, ratio: float,
+                  target_sha: str | None = None,
+                  sha_label: str | None = None) -> None:
     """Полный цикл одной канареечной задачи: заводит, ведёт в собственном
-    эфемерном клоне (требование 2), пишет метрики/бейзлайн в БД пульта
-    СНАРУЖИ клона (требование 5, 9) и печатает итог.
+    эфемерном клоне на checkout'е `target_sha` (требование 1/2), пишет
+    метрики/бейзлайн в БД пульта СНАРУЖИ клона (требование 5, 9) и
+    печатает итог со сноской происхождения `target_sha` (`sha_label`,
+    требование 4/AC-8).
+
+    `target_sha`/`sha_label` необязательны — `cmd_canary` всегда передаёт
+    оба, но `tasks/01M1SC3Y20YBTTJVQDJBF2NDQW/acceptance_tests/
+    test_canary_report_kill_reason.py` (залоченная планка ДРУГОЙ, уже
+    смерженной задачи) зовёт эту функцию тремя позиционными аргументами
+    напрямую — правка чужой планки требует отдельного мандата Оператора,
+    которого эта задача не получала. Без явного `target_sha` — тот же sha,
+    на котором и раньше молча оставался клон без единого checkout
+    (`gitcmd.head_sha()` главной копии в момент вызова), с меткой «код
+    пина» тем же вычислением, что и у явного вызова с этим же sha.
 
     Создание задачи и её вождение — с подавленным stdout
     (`redirect_stdout`): между строкой «заведена» и остальным выводом
@@ -1117,12 +1217,21 @@ def _run_one_task(template_path: Path, run_stamp: str, ratio: float) -> None:
     ради чужой планки, REVIEW.md итерации 2 R2-F1) от «не сошлась»,
     `mismatch` — расхождение маркера ожидания эскалации с фактом.
     """
+    explicit_target_sha = target_sha
     raw = template_path.read_text(encoding="utf-8")
     title = template_path.stem
     expected = _expected_escalation(raw)
     outer_root = config.ROOT
 
-    with _ephemeral_clone():
+    # Позиционность вызова `_ephemeral_clone` обязана в точности повторять
+    # прежнюю (`_ephemeral_clone()`, без аргументов) для обратной
+    # совместимости с планкой `01M1SC3Y20YBTTJVQDJBF2NDQW`, зовущей эту
+    # функцию тремя позиционными аргументами: та планка мокает саму
+    # `_ephemeral_clone` нульарной функцией — вызов с ЛЮБЫМ позиционным
+    # аргументом (даже `None`) упал бы `TypeError` на этом моке.
+    clone_ctx = (_ephemeral_clone() if explicit_target_sha is None
+                else _ephemeral_clone(explicit_target_sha))
+    with clone_ctx:
         conn = store.db()
         with redirect_stdout(io.StringIO()):
             task_id = catalog.cmd_new(title, tz_path=str(template_path),
@@ -1155,10 +1264,20 @@ def _run_one_task(template_path: Path, run_stamp: str, ratio: float) -> None:
     print(f"[canary] {task_id} заведена из {template_path.name}")
 
     outer_conn = store.db()
-    # `config.ROOT` уже вне эфемерного клона (см. `_ephemeral_clone`) —
-    # это HEAD главного пульта на момент прогона (ANSWER-1
-    # 01M1NGFK3N6MRMYGCC09H975V3 п.2), не клона, в котором велась задача.
-    main_sha = gitcmd.head_sha()
+    # `main_sha` записи — целевой sha ЭТОГО прогона (SPEC
+    # 01M2B6K02YVJBWE1JDWP85EJH0, требование 1/4, AC-4), не `gitcmd.
+    # head_sha()` главной копии (ANSWER-1 01M1NGFK3N6MRMYGCC09H975V3 п.2,
+    # прежнее поведение до этой задачи) — расходится с ним всегда, когда
+    # `--sha` явно отличается от пина, и по умолчанию, когда `origin/
+    # <MAIN_BRANCH>` ушёл вперёд пина. Без явного `target_sha` (см.
+    # докстринг — совместимость со старой планкой) — тот же `gitcmd.
+    # head_sha()` главной копии, снятый ПОСЛЕ выхода из клона, что и до
+    # этой задачи, байт-в-байт.
+    if explicit_target_sha is None:
+        target_sha = gitcmd.head_sha()
+    if sha_label is None:
+        sha_label = _sha_label(target_sha, None)
+    main_sha = target_sha
     # Возврат из merge_gate (06.09, п.2): вердикт зелёности выражен через
     # уже смерженное понятие штатного исхода прогона (`normal_outcome`/
     # `_needs_diagnostics`, вычислены выше), не через «дошла до состояния
@@ -1212,12 +1331,13 @@ def _run_one_task(template_path: Path, run_stamp: str, ratio: float) -> None:
          f"эскалаций={len(metrics['escalations'])}  "
          f"повторов developer={metrics['dev_retries']}  "
          f"исход={metrics['outcome']}{outcome_note}  "
+         f"sha={target_sha} ({sha_label})  "
          f"test_author={test_author_note}{mismatch_note}{note}")
     if diag_dir is not None:
         print(f"  диагностика: {diag_dir}")
 
 
-def cmd_canary(*, k: int) -> None:
+def cmd_canary(*, k: int, sha: str | None = None) -> None:
     pool_dir = _pool_dir()
     if not pool_dir.is_dir():
         sys.exit(f"canary: каталог пула не найден: {pool_dir}")
@@ -1225,9 +1345,13 @@ def cmd_canary(*, k: int) -> None:
         sys.exit("canary: --k должен быть положительным целым числом")
     templates = _sample_pool_templates(pool_dir, k)
 
+    target_sha, origin_sha = _resolve_target_sha(sha)
+    sha_label = _sha_label(target_sha, origin_sha)
+
     run_stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     print(f"[canary] прогон {run_stamp}: {len(templates)} задач из пула "
-         f"{pool_dir}")
+         f"{pool_dir}, целевой sha {target_sha} ({sha_label})")
     for template_path in templates:
-        _run_one_task(template_path, run_stamp, config.CANARY_DEVIATION_RATIO)
+        _run_one_task(template_path, run_stamp, config.CANARY_DEVIATION_RATIO,
+                      target_sha, sha_label)
     print(f"[canary] прогон {run_stamp} завершён")
