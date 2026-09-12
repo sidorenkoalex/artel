@@ -177,10 +177,10 @@ class MetricsFromJournalTest(unittest.TestCase):
         self.assertEqual(metrics["outcome"], "killed")
 
     def test_test_author_visited_true_when_tests_writing_in_journal(self):
-        """AC-5: признак «test_author=да» строится по переходу `state ->
-        tests_writing` в журнале задачи — не по факту наличия ролевых
-        логов, устойчиво к подмене `runner.cmd_run` тем же приёмом, что
-        `_step_count` (docstring выше)."""
+        """Ловит мутацию: `_test_author_visited` возвращает `False`
+        безусловно (или сравнение строки действия подменено на другой
+        переход, например `state -> in_dev`) — задача реально прошла
+        `tests_writing`, а признак АС-5 ошибочно остался бы «нет»."""
         store.journal(self.conn, self.TASK, "fsm", "state -> spec_gate", "")
         store.journal(self.conn, self.TASK, "operator",
                       "state -> tests_writing", "")
@@ -192,9 +192,11 @@ class MetricsFromJournalTest(unittest.TestCase):
             self.conn, self.TASK)["test_author_visited"])
 
     def test_test_author_visited_false_when_tests_writing_skipped(self):
-        """AC-5: SPEC без AC-разметки (или `skip_tests`) идёт `spec_gate
-        -> in_dev` напрямую — журнал не несёт `state -> tests_writing`,
-        признак обязан быть «нет»."""
+        """Ловит мутацию: `_test_author_visited` возвращает `True`
+        безусловно (или `any(...)` подменён на проверку непустоты
+        `steps`) — журнал без перехода `state -> tests_writing` (SPEC
+        без AC-разметки ушёл `spec_gate -> in_dev` напрямую) ошибочно
+        дал бы «test_author=да»."""
         store.journal(self.conn, self.TASK, "fsm", "state -> spec_gate", "")
         store.journal(self.conn, self.TASK, "canary", "state -> in_dev", "")
 
@@ -1082,16 +1084,14 @@ AC-1. Критерий.
         self.checkout(config.MAIN_BRANCH)
 
     def test_ac1_spec_only_on_artifact_branch_goes_to_tests_writing(self):
-        """AC-1: SPEC с AC-разметкой лежит ТОЛЬКО в артефактной ветке —
-        ни на кодовой ветке задачи (не существует в git вовсе на этой
-        стадии), ни на диске `config.TASKS`.
-
-        AC-6 (тест-регресс): мутация, откатывающая чтение обратно на
-        `gitcmd.on_foreign_branch(t["branch"])` (кодовая ветка), красит
-        этот тест — кодовая ветка не существует, `on_foreign_branch` даёт
-        `False`, старый код падает на пустой disk-read
-        (`config.TASKS/<id>/SPEC.md` тоже не существует) и вернул бы
-        `in_dev` вместо `tests_writing`."""
+        """Ловит мутацию (AC-6): `_spec_gate_next_state` определяет
+        источник SPEC обратно через `gitcmd.on_foreign_branch(t
+        ["branch"])` (кодовая ветка), не через `artifact_source.
+        resolve` — кодовая ветка задачи не существует в git вовсе на
+        этой стадии, `on_foreign_branch` даёт `False`, мутировавший код
+        падает на пустой disk-read (`config.TASKS/<id>/SPEC.md` тоже не
+        существует) и вернул бы `in_dev` вместо `tests_writing`, минуя
+        test_author."""
         self._commit_spec_on_artifact_branch(self.SPEC_WITH_AC)
         t = store.get_task(self.conn, self.TASK)
 
@@ -1102,6 +1102,11 @@ AC-1. Критерий.
         spy.assert_not_called()  # AC-4
 
     def test_ac2_skip_tests_on_artifact_branch_goes_to_in_dev(self):
+        """Ловит мутацию: `_spec_gate_next_state` игнорирует `skip_tests`
+        из frontmatter артефактной ветки (например, читает только
+        раздел «Критерии приёмки» и не смотрит на поле `meta`) —
+        SPEC с `skip_tests: <причина>` ошибочно ушёл бы `tests_writing`
+        вместо штатного `in_dev`."""
         self._commit_spec_on_artifact_branch(self.SPEC_SKIP_TESTS)
         t = store.get_task(self.conn, self.TASK)
 
@@ -1110,10 +1115,12 @@ AC-1. Критерий.
         self.assertEqual(result, "in_dev")
 
     def test_ac3_spec_not_found_anywhere_kills_inconclusive_not_in_dev(self):
-        """Ни артефактная ветка не заведена, ни SPEC на диске — `_pass_
-        spec_gate` не смеет истолковать это как «SPEC без AC-разметки» и
-        перевести задачу в `in_dev` (требование 2): вместо этого зовёт
-        `_kill_inconclusive` с именованной причиной."""
+        """Ловит мутацию: `_spec_gate_next_state` возвращает `"in_dev"`
+        вместо `None`, когда SPEC не прочитан ни с одной ветки (ни
+        артефактная ветка не заведена, ни SPEC на диске) — `_pass_spec_
+        gate` истолковал бы отсутствие SPEC как «без AC-разметки» и
+        перевёл бы задачу в `in_dev`, вместо вызова `_kill_inconclusive`
+        с именованной причиной (требование 2)."""
         with mock.patch.object(canary.cleanup, "cmd_kill") as kill:
             canary._pass_spec_gate(self.conn, self.TASK)
 
