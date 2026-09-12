@@ -137,9 +137,14 @@ _INCONCLUSIVE_KILL_DETAIL = "прогон дальше эту задачу не 
 # формально не http(s), но реально дотягивающийся до главного пульта):
 # `artifact_branch.push()` (best-effort) с таким origin смог бы
 # по-настоящему запушить ветку канареечной задачи в главный пульт —
-# ровно то, что запрещает требование 3. Несуществующая схема гарантирует
-# молчаливый отказ best-effort push, как и задумано.
-ORIGIN_STUB_URL = "canary-stub://ephemeral-clone-no-real-remote"
+# ровно то, что запрещает требование 3. С задачи 01M297HFSKV3GVZJ9YF20FZEZE
+# заглушка — не несуществующая схема (`workspace.ensure` теперь требует
+# успешного `git fetch origin` при заведении НОВОЙ ветки задачи, а
+# канареечная задача всегда новая), а ОТДЕЛЬНЫЙ одноразовый bare-клон
+# рядом с самим эфемерным клоном (см. `_ephemeral_clone`): fetch с него
+# проходит (там есть `config.MAIN_BRANCH` на момент старта прогона), а
+# push по-прежнему не достигает главного пульта — уходит в тот же
+# одноразовый bare-клон, убираемый вместе с эфемерным клоном.
 
 # Машиночитаемый маркер «ожидается эскалация» (требование 8) — HTML-
 # комментарий в теле шаблона: `catalog.cmd_new`/`_tz_document` кладёт
@@ -478,6 +483,24 @@ def _ephemeral_clone():
     `config.py`, через которые весь FSM-код читает пути пульта — не сам
     код FSM (см. модульный докстринг).
 
+    Origin эфемерного клона — ОТДЕЛЬНЫЙ одноразовый bare-клон `origin_dir`
+    рядом с самим клоном (снят с `dest` сразу после его создания, то есть
+    несёт `config.MAIN_BRANCH` на момент старта прогона), не сам
+    `outer_root` и не несуществующая схема (см. комментарий у бывшей
+    `ORIGIN_STUB_URL`, задача 01M297HFSKV3GVZJ9YF20FZEZE): `workspace.
+    ensure` при заведении НОВОЙ ветки задачи требует успешного `git fetch
+    origin` — с недостижимого адреса он валился бы на каждом канареечном
+    прогоне, а с прямым `outer_root` best-effort push из клона реально
+    достигал бы главного пульта (требование 3 это запрещает). Bare-клон —
+    ни то, ни другое: fetch с него проходит локально, а push по-прежнему
+    не покидает пару временных каталогов, убираемых вместе. `--shared`
+    (объекты — alternate-ссылка на `dest`, не копия): без него вторая
+    полная копия объектов пульта на каждую канареечную задачу подрывала
+    временной запас AC-11/AC-8/AC-9 (SPEC 01M1NEEWH5K1XPFRDGRMPYSBXJ) —
+    `origin_dir` живёт и умирает строго вместе с `dest`, объекты которого
+    он занимает, поэтому «протухание» alternate-ссылки после prune
+    исходника здесь не сценарий.
+
     `tempfile.mkdtemp`/`shutil.rmtree` — единственные стандартные
     способы завести/убрать временный каталог в CPython (перехватываются
     приёмочной песочницей этой задачи, `_EphemeralDirTracker`, тем же
@@ -485,6 +508,7 @@ def _ephemeral_clone():
     """
     outer_root = config.ROOT
     dest = Path(tempfile.mkdtemp(prefix="artel-canary-"))
+    origin_dir = Path(tempfile.mkdtemp(prefix="artel-canary-origin-"))
     saved = {attr: getattr(config, attr) for attr in _CLONE_CONFIG_ATTRS}
     try:
         clone = subprocess.run(
@@ -493,8 +517,16 @@ def _ephemeral_clone():
         if clone.returncode != 0:
             raise RuntimeError(
                 f"canary: эфемерный клон не создан: {clone.stderr.strip()}")
+        mirror = subprocess.run(
+            ["git", "clone", "-q", "--bare", "--shared", str(dest),
+             str(origin_dir)],
+            capture_output=True, text=True)
+        if mirror.returncode != 0:
+            raise RuntimeError(
+                f"canary: origin-заглушка не создана: "
+                f"{mirror.stderr.strip()}")
         origin = subprocess.run(
-            ["git", "remote", "set-url", "origin", ORIGIN_STUB_URL],
+            ["git", "remote", "set-url", "origin", str(origin_dir)],
             cwd=dest, capture_output=True, text=True)
         if origin.returncode != 0:
             raise RuntimeError(
@@ -508,6 +540,7 @@ def _ephemeral_clone():
         for attr, value in saved.items():
             setattr(config, attr, value)
         shutil.rmtree(dest, ignore_errors=True)
+        shutil.rmtree(origin_dir, ignore_errors=True)
 
 
 def _spec_gate_next_state(conn, task_id: str, t) -> str | None:
