@@ -687,7 +687,13 @@ def _has_subtasks(conn, task_id: str) -> bool:
     """Родитель поделён (01M29284PTCJXGERV5262E9XMM, требование 1) — хоть
     одна строка `tasks` ссылается на `task_id` через `parent_task_id`.
     Фильтрация уже существующего `store.all_tasks(conn)`, без новой
-    сырой SQL вне `store.py` (ADR-0003 3ж)."""
+    сырой SQL вне `store.py` (ADR-0003 3ж).
+
+    `conn` без таблицы `tasks` (БД ещё не проинициализирована `init`,
+    тот же вырожденный случай, что `schema.migrate` уже трактует как
+    штатный, `schema.py:92-93`) — подзадач нет физически, не ошибка."""
+    if not store.table_columns(conn, "tasks"):
+        return False
     return any(r["parent_task_id"] == task_id for r in store.all_tasks(conn))
 
 
