@@ -32,7 +32,8 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from orchestrator import acceptance, config, gitcmd, pull, store  # noqa: E402
+from orchestrator import (acceptance, artifact_branch, config, gitcmd, pull,  # noqa: E402
+                         store)
 from scripts import ci_push_class  # noqa: E402
 from tests.sandbox import (RealGitSandbox, TmpRootTest,  # noqa: E402
                            disk_backed_ls_tree_files, disk_backed_show)
@@ -211,6 +212,73 @@ class PullEvaluateTest(TmpRootTest):
                                side_effect=self._default_in_repo):
             outcome = self.evaluate()
         self.assertIsInstance(outcome, pull.Pulled)
+
+    # --------------------------------------------- уборка планки (AC-3)
+
+    def test_freshly_materialized_plank_dir_is_removed_after_pull(self):
+        """SPEC 01M2B6JNFD381MZT70CVB5NJQC, требование 2/AC-3: каталога
+        `tasks/<id>/acceptance_tests/` не было в worktree ДО
+        материализации — после прогона зелёной планки он убирается,
+        источником истины остаётся артефактная ветка.
+
+        Ловит мутацию: `finally`-уборка в `_materialize_and_run_plank`
+        убрана/сломана — каталог, материализованный этим же прогоном,
+        остался бы в worktree неотслеживаемым, и следующий гейт зон
+        увидел бы его как путь вне зон (12.09, регрессия волны 3)."""
+        self.write_acceptance_plank()
+        tests_dir = self.wt_path / "tasks" / self.TASK / "acceptance_tests"
+        self.assertFalse(tests_dir.exists())
+        with mock.patch.object(gitcmd, "commits_behind", return_value=3), \
+             mock.patch.object(gitcmd, "in_repo",
+                               side_effect=self._default_in_repo), \
+             mock.patch.object(acceptance, "run", return_value=(True, "ok")):
+            outcome = self.evaluate()
+        self.assertIsInstance(outcome, pull.Pulled)
+        self.assertFalse(tests_dir.exists(),
+                         "материализованная планка обязана быть убрана")
+
+    def test_preexisting_plank_dir_is_kept_after_pull(self):
+        """Каталог `acceptance_tests/` УЖЕ БЫЛ в worktree до материализации
+        (прежний прогон не подчистил себя, либо ручное вмешательство) —
+        уборка его не трогает.
+
+        Ловит мутацию: проверка `preexisting` убрана/инвертирована —
+        планка, оставленная предыдущим шагом (например, WIP роли,
+        читающей её сейчас), удалялась бы этим прогоном без разбора."""
+        self.write_acceptance_plank()
+        tests_dir = self.wt_path / "tasks" / self.TASK / "acceptance_tests"
+        tests_dir.mkdir(parents=True, exist_ok=True)
+        (tests_dir / "leftover_marker.py").write_text(
+            "# уже лежал до материализации\n", encoding="utf-8")
+        with mock.patch.object(gitcmd, "commits_behind", return_value=3), \
+             mock.patch.object(gitcmd, "in_repo",
+                               side_effect=self._default_in_repo), \
+             mock.patch.object(acceptance, "run", return_value=(True, "ok")):
+            outcome = self.evaluate()
+        self.assertIsInstance(outcome, pull.Pulled)
+        self.assertTrue(tests_dir.is_dir(),
+                        "каталог, существовавший ДО материализации, не "
+                        "должен быть убран")
+
+    def test_freshly_materialized_plank_dir_is_removed_after_red_acceptance(self):
+        """Уборка срабатывает независимо от исхода прогона (требование 2:
+        «после прогона приёмочных тестов», не только на зелёном пути) —
+        красная планка после подтяжки уходит в `Conflict`, но
+        материализованный каталог всё равно убирается.
+
+        Ловит мутацию: уборка привязана только к ветке `Pulled` (`return`
+        до `finally` не звонится по ошибочному early-return вместо
+        finally) — красный прогон оставлял бы планку в worktree."""
+        self.write_acceptance_plank()
+        tests_dir = self.wt_path / "tasks" / self.TASK / "acceptance_tests"
+        with mock.patch.object(gitcmd, "commits_behind", return_value=3), \
+             mock.patch.object(gitcmd, "in_repo",
+                               side_effect=self._default_in_repo), \
+             mock.patch.object(acceptance, "run",
+                               return_value=(False, "МАРКЕР-КРАСНЫЙ")):
+            outcome = self.evaluate()
+        self.assertIsInstance(outcome, pull.Conflict)
+        self.assertFalse(tests_dir.exists())
 
     # ------------------------------------------------------------ Conflict
 
@@ -507,6 +575,94 @@ class DocOnlyMainAdvanceTest(RealGitSandbox):
         self.ensure_mock.assert_called_once()
         self.assertFalse(
             any(r["action"].startswith("свежесть:") for r in self.journal_rows()))
+
+
+class MaterializedPlankCleanupRealGitTest(RealGitSandbox):
+    """SPEC 01M2B6JNFD381MZT70CVB5NJQC, требование 2/AC-4: исход `Pulled`
+    на стенде с bare origin (тот же приём, что `DocOnlyMainAdvanceTest`) —
+    планка читается РЕАЛЬНЫМ git с отдельной артефактной ветки
+    (`artifact_branch.branch_name`, не заглушкой `read_branch_text_or_
+    refuse`/`gitcmd.show`) и реально прогоняется `acceptance.run`
+    (не мокается — требование «прогон… фактически состоялся»), затем
+    материализованный каталог убирается из worktree."""
+
+    TASK = "01PULLPLANKCLEANUPUT"
+    BRANCH = f"task/{TASK.lower()}-x"
+
+    def setUp(self):
+        super().setUp()
+        store.insert_task(store.db(), self.TASK, "Юнит-тест уборки планки",
+                          "in_dev", self.BRANCH, config.DEFAULT_TARGET,
+                          config.DEFAULT_BUDGET_USD)
+        self.checkout(self.BRANCH, create=True)
+        self.add_synced_origin()
+
+        # main продвигается недокументным коммитом (SPEC
+        # 01M2ARQMTYRNPR5HRXAPCBAXNY) — подтяжка реальна, не короткое
+        # замыкание «доку-only».
+        self.checkout(config.MAIN_BRANCH)
+        (self.root / "orchestrator").mkdir(exist_ok=True)
+        (self.root / "orchestrator" / "seed.py").write_text(
+            "# main\n", encoding="utf-8")
+        self.git("add", "-A")
+        self.git("commit", "-q", "-m", "main: код")
+        self.git("push", "-q", "origin",
+                f"{config.MAIN_BRANCH}:{config.MAIN_BRANCH}")
+        self.checkout(self.BRANCH)
+
+        # Артефактная ветка задачи — реальный коммит планки приёмки с
+        # одним зелёным тестом (та же ветка, что читает `artifact_source.
+        # resolve` для self-target); ветка BRANCH её не несёт.
+        artifact_branch_name = artifact_branch.branch_name(self.TASK)
+        self.checkout(artifact_branch_name, create=True)
+        tdir = self.root / "tasks" / self.TASK
+        tdir.mkdir(parents=True, exist_ok=True)
+        (tdir / "SPEC.md").write_text(
+            SPEC_WITH_AC_MARKUP.format(task=self.TASK), encoding="utf-8")
+        tests_dir = tdir / "acceptance_tests"
+        tests_dir.mkdir(parents=True, exist_ok=True)
+        (tests_dir / "test_stub.py").write_text(
+            "import unittest\n\n\nclass StubTest(unittest.TestCase):\n\n"
+            "    def test_stub(self):\n        pass\n", encoding="utf-8")
+        self.git("add", "-A")
+        self.git("commit", "-q", "-m", "seed: артефактная ветка")
+        self.checkout(self.BRANCH)
+
+        from orchestrator import workspace
+        self.ensure_mock = mock.Mock(return_value=(self.root, None))
+        ensure_patcher = mock.patch.object(workspace, "ensure", self.ensure_mock)
+        ensure_patcher.start()
+        self.addCleanup(ensure_patcher.stop)
+
+        self.origin_main_source = mock.Mock(
+            return_value=("origin", config.MAIN_BRANCH))
+        self.read_branch_text_or_refuse = mock.Mock(return_value=None)
+
+    def evaluate(self):
+        conn = store.db()
+        t = store.get_task(conn, self.TASK)
+        main_sha = self.git("rev-parse", config.MAIN_BRANCH).strip()
+        return pull.evaluate(
+            conn, self.TASK, t, "in_dev",
+            origin_main_source=self.origin_main_source,
+            origin_main_sha=mock.Mock(return_value=main_sha),
+            read_branch_text_or_refuse=self.read_branch_text_or_refuse)
+
+    def test_plank_actually_runs_and_directory_is_removed_after(self):
+        """Ловит мутацию: уборка каталога планки убрана/не звонится на
+        реальном стенде — `tests_dir` остался бы в worktree
+        неотслеживаемым после `Pulled`, тот же класс регрессии, что и
+        12.09 (четыре ложных отказа гейта зон волны 3)."""
+        tests_dir = self.root / "tasks" / self.TASK / "acceptance_tests"
+        self.assertFalse(tests_dir.exists())
+
+        outcome = self.evaluate()
+
+        self.assertIsInstance(outcome, pull.Pulled)
+        self.assertFalse(
+            tests_dir.exists(),
+            "материализованная планка обязана быть убрана после "
+            "реального прогона")
 
 
 class DocPathClassificationTest(unittest.TestCase):
