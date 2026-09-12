@@ -351,15 +351,30 @@ def _lease_holder_suffix(conn, task_id: str) -> str:
     подтвердить мёртвым, ни опровергнуть, поэтому он молча считается
     «жив» (то же допущение, что уже принял `doctor.check_merge_lock`
     для мёртвого держателя на чужом host).
+
+    Pid держателя мёртв на СВОЁМ host — вторая проверка (SPEC
+    01M2B6JWGS9HMR9XZJBASXVNSY, требование 3, AC-7/AC-8): группа
+    `row["pgid"]` (агент шага, `runner.spawn_agent`/`store.
+    update_lease_pgid`) может пережить смерть самого держателя (ровно
+    инцидент из «Контекст» SPEC — команда сессии завершилась, цикл
+    `auto` под её же lease продолжает работать). Непустая группа —
+    «жив (агент pgid N)», а не «мёртв»; `pgid` отсутствует (`NULL`,
+    lease, ни разу не видевший `update_lease_pgid`) или группа уже
+    пуста — «мёртв», как и раньше.
     """
     row = store.lease_row(conn, task_id)
     if row is None:
         return ""
     if row["hostname"] == socket.gethostname():
-        alive = liveness._pid_alive(row["pid"])
+        if liveness._pid_alive(row["pid"]):
+            status = "жив"
+        else:
+            pgid = row["pgid"]
+            group_count = liveness._group_member_count(pgid) if pgid is not None else 0
+            status = f"жив (агент pgid {pgid})" if group_count > 0 else "мёртв"
     else:
-        alive = True
-    return f"  [lease: {row['session_id']} {'жив' if alive else 'мёртв'}]"
+        status = "жив"
+    return f"  [lease: {row['session_id']} {status}]"
 
 
 def _zone_wait_suffix(conn, t) -> str:

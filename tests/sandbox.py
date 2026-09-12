@@ -433,6 +433,25 @@ def _dead_pid() -> int:
     return proc.pid
 
 
+def _alive_foreign_pid(testcase) -> int:
+    """Pid дочернего процесса, живой на момент вызова и гарантированно
+    отличный от `os.getpid()` вызывающего теста (SPEC
+    01M2B6JWGS9HMR9XZJBASXVNSY, требование 1) — обратный случай
+    `_dead_pid()` выше. Завершается в cleanup теста."""
+    proc = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"])
+
+    def _cleanup():
+        proc.terminate()
+        try:
+            proc.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.wait(timeout=5)
+
+    testcase.addCleanup(_cleanup)
+    return proc.pid
+
+
 class SpyRun:
     """Подмена `subprocess.run`: команда запоминается; исход зависит от
     `passthrough_unknown`.

@@ -17,7 +17,8 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from orchestrator import catalog, config, lease, store  # noqa: E402
-from tests.sandbox import TmpRootTest, _dead_pid, _ts_ago, capture  # noqa: E402
+from tests.sandbox import (TmpRootTest, _alive_foreign_pid, _dead_pid,  # noqa: E402
+                           _ts_ago, capture)
 
 
 class ResolveSessionIdTest(TmpRootTest):
@@ -180,6 +181,137 @@ class AcquireReleaseTest(TmpRootTest):
 
         lease.release(store.db(), self.TASK, "sess-a")
         self.assertIsNone(self.row())
+
+
+class OwnSessionLiveOtherPidTest(TmpRootTest):
+    """SPEC 01M2B6JWGS9HMR9XZJBASXVNSY, требование 1: ветка «своя сессия»
+    держит lease под ДРУГИМ, но ещё живым pid'ом — раньше эта ветка
+    переписывала строку безусловно, не глядя на живость держателя.
+    """
+
+    TASK = "T001"
+
+    def setUp(self):
+        super().setUp()
+        capture(catalog.cmd_init)
+        store.insert_task(store.db(), self.TASK, "Задача", "in_dev",
+                          "task/t001-zadacha", config.DEFAULT_TARGET, 25.0)
+
+    def row(self):
+        return store.lease_row(store.db(), self.TASK)
+
+    def insert_holder(self, holder_pid: int) -> None:
+        self.insert_holder_on_host(holder_pid, socket.gethostname())
+
+    def insert_holder_on_host(self, holder_pid: int, hostname: str) -> None:
+        conn = store.db()
+        conn.execute(
+            "INSERT INTO leases (task_id, session_id, pid, hostname,"
+            " heartbeat_ts) VALUES (?,?,?,?,?)",
+            (self.TASK, "sess-a", holder_pid, hostname, store.now()))
+        conn.commit()
+
+    def test_refuses_by_default_naming_the_task_pid_and_own_session(self):
+        """Ловит мутацию: если новая ветка перестанет проверять
+        `liveness._pid_alive(row['pid'])` (например, всегда посчитает
+        держателя мёртвым), вызов ошибочно перезапишет строку вместо
+        именованного отказа — `refusal` останется `None`."""
+        holder_pid = _alive_foreign_pid(self)
+        self.insert_holder(holder_pid)
+        before = dict(self.row())
+
+        refusal, fresh = lease.acquire(store.db(), self.TASK, "sess-a")
+
+        self.assertIsNotNone(refusal)
+        self.assertIn(self.TASK, refusal)
+        self.assertIn(str(holder_pid), refusal)
+        self.assertIn("этой же сессии", refusal)
+        self.assertFalse(fresh)
+        self.assertEqual(dict(self.row()), before)
+
+    def test_same_host_ok_returns_none_false_without_mutation(self):
+        """Ловит мутацию: если реализация `same_host_ok` для этой ветки
+        не будет прокинута отдельно от ветки «чужая сессия» (например,
+        `same_host_ok` продолжит читаться только там), этот вызов вместо
+        `(None, False)` получит либо именованный отказ, либо (как до
+        фикса требования 1) молча перепишет строку lease."""
+        holder_pid = _alive_foreign_pid(self)
+        self.insert_holder(holder_pid)
+        before = dict(self.row())
+
+        refusal, fresh = lease.acquire(store.db(), self.TASK, "sess-a",
+                                       same_host_ok=True)
+
+        self.assertIsNone(refusal)
+        self.assertFalse(fresh)
+        self.assertEqual(dict(self.row()), before)
+
+    def test_force_overrides_the_refusal_and_overwrites_the_row(self):
+        """Ловит мутацию: если `force` перестанет читаться в этой ветке
+        (например, реализация скопирует только текст отказа без условия
+        `if not force`), `force=True` продолжит отказывать вместо
+        перезаписи строки текущим процессом."""
+        holder_pid = _alive_foreign_pid(self)
+        self.insert_holder(holder_pid)
+
+        refusal, fresh = lease.acquire(store.db(), self.TASK, "sess-a",
+                                       force=True)
+
+        self.assertIsNone(refusal)
+        self.assertFalse(fresh)
+        row = self.row()
+        self.assertEqual(row["pid"], os.getpid())
+        self.assertEqual(row["session_id"], "sess-a")
+
+    def test_dead_holder_pid_is_still_overwritten_without_a_refusal(self):
+        """Регресс AC-3: держатель своей сессии физически мёртв — строка
+        перезаписывается, как и до этой задачи. Ловит мутацию: если
+        новая проверка живости будет инвертирована, мёртвый держатель
+        ошибочно попадёт в ветку отказа вместо перезаписи."""
+        self.insert_holder(_dead_pid())
+
+        refusal, fresh = lease.acquire(store.db(), self.TASK, "sess-a")
+
+        self.assertIsNone(refusal)
+        self.assertFalse(fresh)
+        row = self.row()
+        self.assertEqual(row["pid"], os.getpid())
+
+    def test_holder_on_different_host_with_locally_dead_pid_refuses_without_overwriting(self):
+        """REVIEW.md 01M2B6JWGS9HMR9XZJBASXVNSY итерация 1, R1-F1: держатель
+        своей сессии на ДРУГОМ host'е под числом pid, которое на ЭТОМ
+        host'е мёртво (`_dead_pid()`), — pid host-локален, число не
+        доказывает, что держатель на СВОЁМ host'е тоже мёртв. Ловит
+        мутацию: если ветка «своя сессия» вернётся к голому
+        `liveness._pid_alive(row['pid'])` без сверки `row['hostname']`,
+        строка живого держателя другого host'а будет тихо переписана
+        (`refusal` станет `None`, `row['pid']` — pid текущего процесса)
+        вместо именованного отказа."""
+        self.insert_holder_on_host(_dead_pid(), "other-host")
+        before = dict(self.row())
+
+        refusal, fresh = lease.acquire(store.db(), self.TASK, "sess-a")
+
+        self.assertIsNotNone(refusal)
+        self.assertIn("этой же сессии", refusal)
+        self.assertFalse(fresh)
+        self.assertEqual(dict(self.row()), before)
+
+    def test_holder_on_different_host_with_same_host_ok_returns_none_false_without_mutation(self):
+        """R1-F1: то же самое, что и тест выше, но с `same_host_ok=True`
+        (единственный такой вызыватель — `budget`) — держатель другого
+        host'а не отказывает именованно, но и не перезаписывается молча:
+        `(None, False)` без мутации строки, как и для держателя своего
+        host'а (`test_same_host_ok_returns_none_false_without_mutation`)."""
+        self.insert_holder_on_host(_dead_pid(), "other-host")
+        before = dict(self.row())
+
+        refusal, fresh = lease.acquire(store.db(), self.TASK, "sess-a",
+                                       same_host_ok=True)
+
+        self.assertIsNone(refusal)
+        self.assertFalse(fresh)
+        self.assertEqual(dict(self.row()), before)
 
 
 class AcquireJournalCauseTest(TmpRootTest):

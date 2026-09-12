@@ -42,7 +42,35 @@ class IsExtraneousTaskRootFileTest(unittest.TestCase):
             checkpoint._is_extraneous_task_root_file("SPEC.md"))
 
 
+class TaskDirZoneTest(unittest.TestCase):
+    """`checkpoint.task_dir_zone` (SPEC 01M2B6JNFD381MZT70CVB5NJQC,
+    требование 1): единый источник строки «собственный каталог задачи»,
+    которым пользуются и `_zone_paths` ниже, и довесок неотслеживаемых
+    файлов `fsm_advance._zones_gate`."""
+
+    def test_formats_task_dir_with_trailing_slash(self):
+        """Ловит мутацию: trailing `/` потерян — зона перестала бы
+        матчить вложенные пути через `_touches_zone`/`_paths_overlap`
+        (обе сверяют директорию по префиксу с trailing `/`)."""
+        self.assertEqual(checkpoint.task_dir_zone("01M2B6JNFD381MZT70CVB5NJQC"),
+                         "tasks/01M2B6JNFD381MZT70CVB5NJQC/")
+
+
 class ZonePathsTest(_WorktreeCheckpointTest):
+
+    def test_task_dir_zone_element_comes_from_shared_helper(self):
+        """Ловит мутацию: `_zone_paths` перестаёт звать `task_dir_zone` и
+        собирает строку `tasks/<id>/` заново инлайном — расхождение с
+        `fsm_advance._zones_gate`, использующим тот же `task_dir_zone`,
+        осталось бы незамеченным этим тестом, не будь прямой сверки с
+        возвратом самой функции."""
+        self.enter_in_dev()
+        conn = store.db()
+        store.update_task(conn, self.TASK, zones="orchestrator/a.py")
+
+        zones = checkpoint._zone_paths(conn, self.TASK)
+
+        self.assertIn(checkpoint.task_dir_zone(self.TASK), zones)
 
     def test_no_declared_zone_yields_empty_list(self):
         """Задача, ни разу не заявившая зону (SPEC старой версии до
