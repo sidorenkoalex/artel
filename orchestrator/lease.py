@@ -75,6 +75,24 @@ def acquire(conn, task_id: str, session_id: str, *,
     (SPEC AC-4, инцидент 02.09.2026 — «другой Оператор физически» не
     исключение).
 
+    Ветка «своя сессия» (SPEC 01M2B6JWGS9HMR9XZJBASXVNSY, требование 1)
+    — тем же приёмом, что и ветка «чужая сессия» ниже, включая сверку
+    `row["hostname"] == hostname` перед `liveness._pid_alive` (ревью
+    итерации 1, R1-F1): держатель СВОЕЙ сессии под ДРУГИМ pid'ом на
+    ЭТОМ host'е, который ещё жив, — не продление, а либо
+    `same_host_ok=True` (`(None, False)` без мутации строки, AC-2 — та
+    же семантика «разрешить параллельно», что и для чужой сессии выше),
+    либо именованный отказ «ведёт процесс … этой же сессии» (AC-1),
+    либо `force=True` перешагивает отказ и перезаписывает строку (AC-5,
+    тот же приоритет `force`, что и ниже). Держатель своей сессии на
+    ДРУГОМ host'е — pid там непроверяем локально, молча считается живым
+    (тот же приём, что уже применяют `foreign_live_lease`/ветка «чужая
+    сессия» ниже): строка не перезаписывается тихо, даже если число pid
+    совпало с мёртвым локальным процессом. Держатель своей сессии под
+    ТЕМ ЖЕ pid'ом (тот же процесс, продление, AC-4) и держатель своей
+    сессии на ЭТОМ host'е с МЁРТВЫМ pid'ом (перехват, AC-3) — поведение
+    не меняется вовсе: ровно то, что и было до этой задачи.
+
     `force=True` (SPEC 01M1NWCHVTYQ0M8PCJ1YJ2N78P, AC-10; используется
     ТОЛЬКО `kill`) перешагивает именованный отказ «сессия свежая» — kill
     switch обязан прерывать работу немедленно, включая свежий lease
@@ -113,6 +131,21 @@ def acquire(conn, task_id: str, session_id: str, *,
                          f"взят сессией {session_id}", session_id=session_id)
             return None, True
         if row["session_id"] == session_id:
+            if row["pid"] == pid:
+                store.update_lease(conn, task_id, session_id, pid, hostname, store.now())
+                return None, False
+            # R1-F1: pid другого host непроверяем локально (см. докстринг
+            # выше и `dead_on_own_host` ниже, тот же приём) — `not
+            # dead_on_own_host_same_session` молча считает его живым,
+            # вместо того чтобы доверять голому `liveness._pid_alive`,
+            # который отвечает про число pid НА ЭТОМ host'е, а не про
+            # процесс держателя, если тот работает на другом host'е.
+            dead_on_own_host_same_session = (row["hostname"] == hostname
+                                             and not liveness._pid_alive(row["pid"]))
+            if not force and not dead_on_own_host_same_session:
+                if same_host_ok:
+                    return None, False
+                return _own_session_live_holder_refusal(conn, task_id, row["pid"]), False
             store.update_lease(conn, task_id, session_id, pid, hostname, store.now())
             return None, False
         age = liveness._age_seconds(row["heartbeat_ts"])
@@ -165,6 +198,22 @@ def acquire(conn, task_id: str, session_id: str, *,
     finally:
         if conn.in_transaction:
             conn.rollback()
+
+
+def _own_session_live_holder_refusal(conn, task_id: str, holder_pid: int) -> str:
+    """Текст отказа AC-1 (SPEC 01M2B6JWGS9HMR9XZJBASXVNSY, требование 1):
+    своя сессия уже держит lease под другим, живым pid'ом. Роль/шаг
+    держателя — той же информацией, что уже подмешивает
+    `warn_foreign_live` (`runner.step_role`, отложенный импорт во
+    избежание цикла на уровне модуля), необязательной добавкой к
+    отказу — «действие держателя, если известно» (SPEC)."""
+    from . import runner
+    t = store.get_task(conn, task_id)
+    role = runner.step_role(t)
+    action = f" ({role}, шаг {t['state']})" if role is not None else ""
+    return (f"[{task_id}] задачу прямо сейчас ведёт процесс {holder_pid} "
+           f"этой же сессии{action} — дождись завершения шага либо "
+           f"artel.py stop {task_id}")
 
 
 def release(conn, task_id: str, session_id: str) -> None:
