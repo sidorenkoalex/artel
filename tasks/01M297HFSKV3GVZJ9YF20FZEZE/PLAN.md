@@ -48,6 +48,35 @@ worktree на настоящем git без общего фикстурного 
 `test_task_id_prefix_regression.py`, `test_step_refixation.py`,
 `test_workspace.py`).
 
+Итерация 2 (REVIEW.md итерации 1, R1-F1, blocker): требование
+обязательного `git fetch origin` в `workspace.ensure` несовместимо с
+намеренно нерабочим `origin` `canary._ephemeral_clone`
+(`ORIGIN_STUB_URL`, схема без транспорта) — канареечный прогон
+(`artel.py canary --k N`) заводит ЛЮБУЮ задачу как НОВУЮ, значит для
+неё ВСЕГДА исполняется ветка с fetch, которая гарантированно валилась.
+Почищено в `orchestrator/canary.py::_ephemeral_clone`: вместо
+недостижимой схемы origin эфемерного клона — ОТДЕЛЬНЫЙ одноразовый
+bare-клон `origin_dir` рядом с `dest` (`git clone --bare --shared dest
+origin_dir`, снят сразу после `dest`, несёт `config.MAIN_BRANCH` на
+момент старта прогона), убираемый вместе с `dest` в `finally`. `--
+shared` обязателен: первая попытка (полный `--bare` без `--shared`)
+формально чинила R1-F1 (`test_ac2_ac4_ephemeral_clone_lifecycle.py`
+зелёный), но вторая полная копия объектов пульта на каждую
+канареечную задачу подрывала временной запас ДРУГИХ тестов той же
+задачи 01M1NEEWH5K1XPFRDGRMPYSBXJ (`test_ac8_escalation_marker_
+discrepancy.py`, `test_ac9_per_task_baseline.py`,
+`test_ac11_verifying_gate_bypassed.py` — все несут жёсткий потолок
+«прогон уложился в 30с»); `--shared` (объекты — alternate-ссылка на
+`dest`, не копия) убирает эту стоимость. Fetch/push из `dest` теперь
+идёт на `origin_dir`, не на несуществующий адрес и не на `outer_root`
+— push по-прежнему не покидает пару временных каталогов, требование 3
+(«ноль следов в главном пульте») не нарушено. `ORIGIN_STUB_URL`
+убрана как константа; комментарии `orchestrator/fsm_advance.py`
+(`_origin_push_gate`, `in_dev`), ссылавшиеся на неё как на «источник
+гарантированного отказа push», поправлены — реальная защита там не
+это, а явная проверка `if not t["is_canary"]`, гейт вовсе не
+вызывается для канареечных задач.
+
 ## Шаги
 
 1. `orchestrator/workspace.py::ensure` — fetch origin перед заведением
@@ -125,3 +154,18 @@ RealGitSandbox/RealPultGitTest-наследникам и bespoke `git("init"...)
   стоило бы явно закрепить это правило в `coding-standards.md`
   («acceptance_tests закрывают AC — юнит-тест обязателен только для
   чистой логики без git»), а не оставлять implicit.
+- При проверке R1-F1 обнаружена ПРЕДСУЩЕСТВУЮЩАЯ (не от этой задачи)
+  флакующая планка в `tasks/01M1NEEWH5K1XPFRDGRMPYSBXJ/acceptance_tests/`:
+  `test_ac8_escalation_marker_discrepancy.py`,
+  `test_ac9_per_task_baseline.py`,
+  `test_ac11_verifying_gate_bypassed.py` несут жёсткий потолок «прогон
+  канарейки укладывается в 30с» — на текущем размере пульта прогон
+  реально занимает ~41с ДАЖЕ на HEAD ДО начала этой задачи (проверено
+  прямым откатом трёх файлов `workspace.py`/`canary.py`/`catalog.py` к
+  cd9a477b и повторным прогоном — тот же провал по тому же порогу).
+  Похоже на естественный рост пульта со временем (больше коммитов/
+  файлов — дольше материализация worktree), не на конкретную мутацию
+  кода. Вне зоны этой задачи (`tasks:` не входят в zones SPEC, файл
+  чужой уже закрытой задачи) — не чинил; фиксирую, чтобы не потерялось
+  и не было ошибочно приписано следующей задаче, которая случайно
+  заденет этот путь.
