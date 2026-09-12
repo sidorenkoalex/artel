@@ -581,7 +581,13 @@ AUTO_STOP = {
                      "доведи SPEC.md до status: ready, затем artel.py advance {id}"),
     "spec_gate": ("гейт SPEC — решение Оператора",
                   "прочитай SPEC и: artel.py approve {id}{sha}; " + _BOTH_COMMANDS),
+    # Отсылка к записи «приёмка: что проверит approve»
+    # (`fsm_autogate.ACCEPTANCE_CHECKLIST_ACTION`, 01M2B6K76EAFDF5X1B3Z9XK30Q,
+    # требование 3/AC-6): что из протокола `docs/operator-gates.md`
+    # approve/автогейт уже делают сами, а что реально осталось человеку —
+    # вместо того, чтобы полагаться на устаревший протокол вручную.
     "acceptance": ("приёмка — решение Оператора",
+                   "см. «приёмка: что проверит approve» в artel.py log {id}; "
                    "проведи приёмку по критериям SPEC: artel.py approve {id}{sha} "
                    "или artel.py reject {id} \"причина\"; " + _BOTH_COMMANDS),
     "merge_gate": ("гейт merge — решение Оператора",
