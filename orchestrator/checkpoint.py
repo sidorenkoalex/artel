@@ -846,11 +846,23 @@ def commit_pull_checkpoint(conn, task_id: str, wt: Path) -> str:
 STRAY_WORKTREE_FILES_ACTION = "посторонние файлы в worktree"
 
 
+def task_dir_zone(task_id: str) -> str:
+    """Собственный каталог задачи `tasks/<task_id>/` — зона, общая для
+    WIP-чекпоинтов (`_zone_paths` ниже) и довеска неотслеживаемых файлов
+    гейта зон (`fsm_advance._zones_gate`, SPEC
+    01M2B6JNFD381MZT70CVB5NJQC, требование 1): материализованная планка
+    приёмки (`acceptance.materialize_from_branch`) остаётся в worktree
+    неотслеживаемой между стартом и концом подтяжки главной ветки — без
+    единого источника этого правила оба места самостоятельно решали бы,
+    что такое «свой каталог задачи», и могли бы разойтись."""
+    return f"tasks/{task_id}/"
+
+
 def _zone_paths(conn, task_id: str) -> list[str]:
     """Зоны, в пределах которых WIP-чекпоинт вправе коммитить путь
     worktree (SPEC 01M290PVYG2VJK6442H5BAX9MA, AC-1): объявленные `zones`
     + `zones_extension` задачи, `config.COMMON_ZONES` и собственный
-    каталог `tasks/<id>/`.
+    каталог `tasks/<id>/` (`task_dir_zone`).
 
     Задача, ни разу не заявившая зону (`zones` и `zones_extension` оба
     пусты — SPEC старой версии до `guard.requires_zones`, либо тестовая
@@ -864,7 +876,7 @@ def _zone_paths(conn, task_id: str) -> list[str]:
     declared = [p.strip() for p in raw.split(",") if p.strip()]
     if not declared:
         return []
-    return declared + list(config.COMMON_ZONES) + [f"tasks/{task_id}/"]
+    return declared + list(config.COMMON_ZONES) + [task_dir_zone(task_id)]
 
 
 def _stray_staged_paths(wt: Path, zones: list[str]) -> list[str] | None:
