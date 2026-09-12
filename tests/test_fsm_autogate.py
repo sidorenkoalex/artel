@@ -16,7 +16,8 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from orchestrator import acceptance, artifact_source, budget, ci, fsm_autogate, gitcmd, workspace
+from orchestrator import (acceptance, artifact_source, budget, ci, fixation,
+                          fsm_autogate, gates, gitcmd, store, workspace)
 from scripts import guard
 
 BRANCH = "artifact/T001"
@@ -274,6 +275,164 @@ class CiMarkerConditionTest(_AutogateConditionsUnitTest):
         ok, reason = self.call(ls_tree_files=[rel], show_map={rel: content})
 
         self.assertIsNone(reason)
+
+
+class PullMergeCommitsTest(unittest.TestCase):
+    """Юнит-тесты `fsm_autogate._acceptance_pull_merge_commits`
+    (01M2B6K76EAFDF5X1B3Z9XK30Q, требование 3/AC-3) — угол, который
+    приёмочные тесты задачи (реальный git, всегда отвечающий) не бьют:
+    git не ответил на сам запрос."""
+
+    def test_git_not_answering_gives_empty_list(self):
+        """Ловит мутацию: код, не проверяющий `res is None`/`returncode`
+        перед `res.stdout.splitlines()`, уронил бы `AttributeError` на
+        `None` вместо пустого списка — тот же вырожденный случай, что и
+        у прочих примитивов `gitcmd`."""
+        with mock.patch.object(gitcmd, "git", return_value=None):
+            self.assertEqual(
+                fsm_autogate._acceptance_pull_merge_commits(CODE_BRANCH), [])
+
+    def test_full_sha_lines_are_returned(self):
+        """Ловит мутацию: формат `%h` (сокращённый sha) вместо `%H` —
+        тест сверяет ДЛИНУ строки (40 знаков полного sha), сокращённый
+        вариант её не даст."""
+        res = mock.Mock(returncode=0, stdout=f"{SHA}\n")
+
+        with mock.patch.object(gitcmd, "git", return_value=res) as git_mock:
+            merges = fsm_autogate._acceptance_pull_merge_commits(CODE_BRANCH)
+
+        git_mock.assert_called_once_with("log", "--merges", "--format=%H",
+                                         CODE_BRANCH)
+        self.assertEqual(merges, [SHA])
+
+
+class ManualCriteriaExcludesCiTest(_AutogateConditionsUnitTest):
+    """Юнит-тест `fsm_autogate._acceptance_manual_criteria`
+    (01M2B6K76EAFDF5X1B3Z9XK30Q, требование 3/AC-3) — угол, который
+    приёмочные тесты задачи не заводят (там нет пометки `ci`)."""
+
+    def test_ci_marker_is_excluded_manual_and_skip_are_kept(self):
+        """Ловит мутацию: фильтр `kind in ("manual", "skip", "escalate")`,
+        ослабленный до «любой kind» (или потерянный вовсе), протащил бы
+        AC-1 (`ci`) в список — критерий `ci` не остаётся человеку, его
+        уже проверяет автогейт (условие «а»), не предмет группы «б»."""
+        rel = f"tasks/{self.TASK}/acceptance_tests/test_marker.py"
+        content = ('"""Планка со смесью пометок."""\n'
+                  "# AC-1: ci — CI ветки зелёный.\n"
+                  "# AC-2: skip — обоснование причины skip.\n")
+
+        with mock.patch.object(gitcmd, "ls_tree_files", return_value=[rel]), \
+             mock.patch.object(gitcmd, "show", return_value=(content, "")):
+            items = fsm_autogate._acceptance_manual_criteria(self.TASK, BRANCH)
+
+        self.assertEqual(len(items), 1, items)
+        self.assertIn("AC-2", items[0])
+        self.assertNotIn("AC-1", " ".join(items))
+
+
+class AcceptanceChecklistDetailMergesOmittedTest(unittest.TestCase):
+    """Юнит-тест `fsm_autogate._acceptance_checklist_detail`
+    (01M2B6K76EAFDF5X1B3Z9XK30Q, требование 3/AC-3) — манускрит-критерий
+    есть, но подтяжек main не было вовсе: строка «родители подтяжек» не
+    имеет права появиться (требование 3: «если такие были»)."""
+
+    TASK = "T001"
+
+    def test_no_merges_means_no_parents_line(self):
+        """Ловит мутацию: код, печатающий строку «родители подтяжек:»
+        даже с пустым списком (`if merges:` ослаблен до безусловного
+        добавления) — `assertNotIn` ниже поймает пустую строку после
+        двоеточия."""
+        t = {"branch": CODE_BRANCH, "spent_usd": 0.0, "budget_usd": 5.0}
+        rel = f"tasks/{self.TASK}/acceptance_tests/test_marker.py"
+        content = ('"""Планка с manual-критерием."""\n'
+                  "# AC-3: manual — проверка руками.\n")
+
+        with mock.patch.object(artifact_source, "resolve",
+                               return_value=(BRANCH, True)), \
+             mock.patch.object(gitcmd, "branch_head_sha", return_value=SHA), \
+             mock.patch.object(gitcmd, "ls_tree_files", return_value=[rel]), \
+             mock.patch.object(gitcmd, "show", return_value=(content, "")), \
+             mock.patch.object(gitcmd, "git",
+                               return_value=mock.Mock(returncode=0, stdout="")):
+            detail = fsm_autogate._acceptance_checklist_detail(
+                object(), self.TASK, t, 1)
+
+        self.assertIn("остаётся человеку", detail)
+        self.assertNotIn("родители подтяжек", detail)
+
+
+class MaybeAutogateChecklistJournalTest(unittest.TestCase):
+    """Юнит-тесты AC-1 (01M2B6K76EAFDF5X1B3Z9XK30Q): `_maybe_autogate_
+    acceptance` журналирует «приёмка: что проверит approve» РОВНО один
+    раз, независимо от исхода `_autogate_conditions` — тот же приём
+    развязки, что уже применяют юнит-тесты `_autogate_conditions` выше
+    (условия б/в/г/д заглушены; здесь заглушён весь автогейт разом, так
+    как предмет теста — количество журнальных записей, не их содержание).
+    """
+
+    TASK = "T001"
+
+    def _run(self, *, autogate_reason):
+        t = {"branch": CODE_BRANCH, "spent_usd": 0.0, "budget_usd": 5.0}
+        journal_calls = []
+
+        def fake_journal(conn, task_id, actor, action, detail=""):
+            journal_calls.append((actor, action, detail))
+
+        with mock.patch.object(artifact_source, "resolve",
+                               return_value=(BRANCH, True)), \
+             mock.patch.object(gitcmd, "branch_head_sha", return_value=SHA), \
+             mock.patch.object(gitcmd, "ls_tree_files", return_value=None), \
+             mock.patch.object(fsm_autogate, "_autogate_conditions",
+                               return_value=(["ok"], autogate_reason)), \
+             mock.patch.object(gates, "policy", return_value=gates.AUTO), \
+             mock.patch.object(store, "journal", side_effect=fake_journal), \
+             mock.patch.object(store, "set_state") as set_state_mock, \
+             mock.patch.object(store, "task_target", return_value="artel"), \
+             mock.patch.object(fixation, "approve_sha_hint", return_value=""):
+            fsm_autogate._maybe_autogate_acceptance(
+                object(), self.TASK, t, Path("/no/such/dir"), 1)
+
+        checklist_calls = [c for c in journal_calls
+                           if c[1] == fsm_autogate.ACCEPTANCE_CHECKLIST_ACTION]
+        return checklist_calls, set_state_mock
+
+    def test_checklist_logged_once_when_autogate_refuses(self):
+        """Ловит мутацию: запись, дублируемая на каждый вызов (или
+        случайно журналируемая ещё раз внутри ветки отказа) — `len`
+        отличился бы от 1."""
+        calls, set_state_mock = self._run(
+            autogate_reason="автогейт: критерии manual — AC-1")
+
+        self.assertEqual(len(calls), 1, calls)
+        set_state_mock.assert_not_called()
+
+    def test_checklist_logged_once_when_autogate_passes(self):
+        """Ловит мутацию: печать/журнал чек-листа, поставленные ПОСЛЕ
+        решения автогейта и обусловленные его исходом (например, только
+        в ветке отказа) — на пути «все условия выполнены» запись
+        пропала бы, `len` был бы 0."""
+        calls, set_state_mock = self._run(autogate_reason=None)
+
+        self.assertEqual(len(calls), 1, calls)
+        set_state_mock.assert_called_once()
+
+    def test_no_checklist_when_gate_policy_is_manual(self):
+        """SPEC T066 AC-5 (не должна ослабнуть этой задачей): политика
+        гейта не `auto` — функция не журналирует и не печатает ничего,
+        включая новую запись чек-листа.
+
+        Ловит мутацию: чек-лист, вынесенный ДО отсечки `gates.policy`,
+        — `store.journal` был бы вызван даже на политике `manual`."""
+        t = {"branch": CODE_BRANCH, "spent_usd": 0.0, "budget_usd": 5.0}
+
+        with mock.patch.object(gates, "policy", return_value=gates.MANUAL), \
+             mock.patch.object(store, "journal") as journal_mock:
+            fsm_autogate._maybe_autogate_acceptance(
+                object(), self.TASK, t, Path("/no/such/dir"), 1)
+
+        journal_mock.assert_not_called()
 
 
 if __name__ == "__main__":

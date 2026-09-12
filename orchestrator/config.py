@@ -353,6 +353,19 @@ ALERT_ARCHIVE_DAYS = 90
 # уборка при kill и diff ревью-пакета. Литералов "main" в коде не осталось
 # (T017, требование 7).
 MAIN_BRANCH = "main"
+# Окно тишины `note` (01M2B6JS2BZNBW9WSHT1RPFXTE, требование 1, AC-1):
+# состояния живого цикла задачи, при которых `note` удерживает валидную
+# запись копилки/бэклога/очереди вместо немедленного push. Push во время
+# этих состояний двигает `origin/main` и провоцирует подтяжку на точках
+# сверки свежести (`in_dev -> review`, `acceptance -> merge_gate`,
+# `merge_gate -> done`) либо гонку с push самого мержа — 11.09 и 12.09
+# это дважды сбило цикл мержа (docs/backlog.md, строки П2 12.09/П1
+# 11.09). Ровно эти пять состояний, буквально из SPEC — НЕ
+# `zone_lock.BLOCKING_STATES` (тот несёт шесть состояний, включая
+# `escalated`, который окно тишины сознательно не занимает: эскалация
+# не двигает origin, решение по ней принимает Оператор вручную).
+NOTE_SILENCE_WINDOW_STATES = ("in_dev", "verifying", "review", "acceptance",
+                              "merge_gate")
 # Лимиты пакетов контекста (tasks/01M1GCN1FPSC1A6WK9WD1Q1V8X/SPEC.md,
 # требования 2, 4-5) — замена прежнего молчаливого усечения
 # (`review.truncate_diff`/`truncate_package`, вырезаны этой задачей).
@@ -581,7 +594,13 @@ AUTO_STOP = {
                      "доведи SPEC.md до status: ready, затем artel.py advance {id}"),
     "spec_gate": ("гейт SPEC — решение Оператора",
                   "прочитай SPEC и: artel.py approve {id}{sha}; " + _BOTH_COMMANDS),
+    # Отсылка к записи «приёмка: что проверит approve»
+    # (`fsm_autogate.ACCEPTANCE_CHECKLIST_ACTION`, 01M2B6K76EAFDF5X1B3Z9XK30Q,
+    # требование 3/AC-6): что из протокола `docs/operator-gates.md`
+    # approve/автогейт уже делают сами, а что реально осталось человеку —
+    # вместо того, чтобы полагаться на устаревший протокол вручную.
     "acceptance": ("приёмка — решение Оператора",
+                   "см. «приёмка: что проверит approve» в artel.py log {id}; "
                    "проведи приёмку по критериям SPEC: artel.py approve {id}{sha} "
                    "или artel.py reject {id} \"причина\"; " + _BOTH_COMMANDS),
     "merge_gate": ("гейт merge — решение Оператора",
