@@ -538,16 +538,6 @@ class MergeOnlyFromMergeGateTest(FsmTest):
                 return subprocess.CompletedProcess(argv, 1, "", "конфликт")
             if plain[:3] == ["diff", "--name-only", "--diff-filter=U"]:
                 return subprocess.CompletedProcess(argv, 0, "shared.txt\n", "")
-            # `rev-parse --verify refs/artel/fetch/<pid>-<uuid>` — приватная
-            # ссылка `gitcmd.fetch_ref_sha` (SPEC 01M2ARQGY51B99YNP9PY806AN1):
-            # настоящий git на неё пустым stdout при rc=0 не отвечает,
-            # заглушка обязана вернуть правдоподобный sha, как и SpyRun
-            # выше (tests/sandbox.py) — иначе `_origin_main_sha` видит
-            # «приватная ссылка не разрешилась» до того, как дойти до
-            # самого merge, который здесь и проверяется.
-            if (plain[:2] == ["rev-parse", "--verify"]
-                    and plain[-1].startswith("refs/artel/fetch/")):
-                return subprocess.CompletedProcess(argv, 0, "f" * 40, "")
             return subprocess.CompletedProcess(argv, 0, "", "")
 
         with mock.patch.object(gitcmd.subprocess, "run", failing):
@@ -581,12 +571,6 @@ class MergeOnlyFromMergeGateTest(FsmTest):
                 return subprocess.CompletedProcess(argv, 0, "shared.txt\n", "")
             if plain[:2] == ["merge", "--abort"]:
                 return subprocess.CompletedProcess(argv, 1, "", "не могу")
-            # `rev-parse --verify refs/artel/fetch/<pid>-<uuid>` — та же
-            # заглушка приватной ссылки `gitcmd.fetch_ref_sha`, что и в
-            # соседнем `test_merge_failure_leaves_the_task_in_the_gate`.
-            if (plain[:2] == ["rev-parse", "--verify"]
-                    and plain[-1].startswith("refs/artel/fetch/")):
-                return subprocess.CompletedProcess(argv, 0, "f" * 40, "")
             return subprocess.CompletedProcess(argv, 0, "", "")
 
         with mock.patch.object(gitcmd.subprocess, "run", failing):
