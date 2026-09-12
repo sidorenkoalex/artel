@@ -125,6 +125,53 @@ class AcquireReleaseTest(TmpRootTest):
         new_steps = store.task_steps(store.db(), self.TASK)[journalled_before:]
         self.assertTrue(any("lease" in s["action"] for s in new_steps))
 
+    def test_dead_pid_on_own_host_is_intercepted_immediately_even_when_fresh(self):
+        """SPEC 01M290PS4ZXK1RCZ3PXQSXK0Y9, AC-1/AC-8: держатель на ЭТОМ
+        host с мёртвым pid перехватывается немедленно, даже если heartbeat
+        моложе `config.LEASE_STALE_AFTER_SEC` — ловит мутацию «проверка
+        живости pid выполняется только после порога», которая вернула бы
+        сюда прежний отказ «подожди её» вместо перехвата."""
+        conn = store.db()
+        conn.execute(
+            "INSERT INTO leases (task_id, session_id, pid, hostname,"
+            " heartbeat_ts) VALUES (?,?,?,?,?)",
+            (self.TASK, "sess-dead-holder", _dead_pid(), socket.gethostname(),
+             _ts_ago(5)))
+        conn.commit()
+
+        refusal, fresh = lease.acquire(store.db(), self.TASK, "sess-taker")
+
+        self.assertIsNone(refusal)
+        self.assertFalse(fresh, "перехват существующей строки — не «с нуля»")
+        row = self.row()
+        self.assertEqual(row["session_id"], "sess-taker")
+        self.assertEqual(row["pid"], os.getpid())
+        self.assertEqual(row["hostname"], socket.gethostname())
+
+    def test_live_pid_on_own_host_with_fresh_heartbeat_still_refuses(self):
+        """AC-3: держатель на своём host с ЖИВЫМ pid и свежим heartbeat —
+        отказ не меняется (перехват срабатывает только на мёртвый pid).
+        Ловит мутацию: если `dead_on_own_host` перестанет проверять
+        `liveness._pid_alive` и будет полагаться только на
+        `hostname == hostname`, живой держатель на своём host будет
+        ошибочно перехвачен вместо отказа."""
+        conn = store.db()
+        conn.execute(
+            "INSERT INTO leases (task_id, session_id, pid, hostname,"
+            " heartbeat_ts) VALUES (?,?,?,?,?)",
+            (self.TASK, "sess-holder", os.getpid(), socket.gethostname(),
+             _ts_ago(5)))
+        conn.commit()
+        before = dict(self.row())
+
+        refusal, fresh = lease.acquire(store.db(), self.TASK, "sess-caller")
+
+        self.assertIsNotNone(refusal)
+        self.assertIn("sess-holder", refusal)
+        self.assertIn(socket.gethostname(), refusal)
+        self.assertFalse(fresh)
+        self.assertEqual(dict(self.row()), before)
+
     def test_release_removes_only_the_matching_session(self):
         lease.acquire(store.db(), self.TASK, "sess-a")
 
@@ -177,6 +224,36 @@ class AcquireJournalCauseTest(TmpRootTest):
         detail = self.steps()[-1]["detail"]
         self.assertIn("pid", detail)
         self.assertTrue("мёртв" in detail or "мертв" in detail)
+
+    def test_intercept_of_dead_pid_on_this_host_with_fresh_heartbeat_names_the_cause(self):
+        """SPEC 01M290PS4ZXK1RCZ3PXQSXK0Y9, AC-2: перехват мёртвого
+        держателя на своём host ДО протухания heartbeat пишет ту же запись
+        журнала, что и перехват по протуханию — с прежним session_id и
+        pid держателя в тексте.
+        Ловит мутацию: если причина перехвата для немедленного пути
+        (fresh heartbeat) по ошибке возьмётся из ветки «heartbeat протух»
+        вместо `dead_on_own_host`, текст записи журнала не будет содержать
+        «мёртв» и/или прежний session_id/pid держателя."""
+        conn = store.db()
+        dead_pid = _dead_pid()
+        conn.execute(
+            "INSERT INTO leases (task_id, session_id, pid, hostname,"
+            " heartbeat_ts) VALUES (?,?,?,?,?)",
+            (self.TASK, "sess-dead-holder", dead_pid, socket.gethostname(),
+             _ts_ago(5)))
+        conn.commit()
+        journalled_before = len(self.steps())
+
+        lease.acquire(store.db(), self.TASK, "sess-taker")
+
+        new_steps = self.steps()[journalled_before:]
+        self.assertEqual(len(new_steps), 1)
+        step = new_steps[0]
+        self.assertEqual(step["action"], "lease перехвачен")
+        self.assertIn("sess-dead-holder", step["detail"])
+        self.assertIn(str(dead_pid), step["detail"])
+        self.assertTrue("мёртв" in step["detail"] or "мертв" in step["detail"])
+        self.assertEqual(step["session_id"], "sess-taker")
 
     def test_intercept_of_foreign_host_keeps_the_heartbeat_cause(self):
         """AC-5, сценарий Б: прежний держатель на чужом host — pid
@@ -574,6 +651,43 @@ class ConcurrentAcquireTest(TmpRootTest):
         self.assertEqual(errors, [], "acquire() не должна падать под гонкой")
         wins = [r for r in results if r[0] is None]
         self.assertEqual(len(wins), 1, results)
+        row = store.lease_row(store.db(), self.TASK)
+        self.assertIn(row["session_id"], session_ids)
+        new_steps = store.task_steps(store.db(), self.TASK)[journalled_before:]
+        intercept_steps = [s for s in new_steps if "lease" in s["action"]]
+        self.assertEqual(len(intercept_steps), 1, new_steps)
+
+    def test_concurrent_acquire_of_dead_pid_own_host_exactly_one_intercepts(self):
+        """SPEC 01M290PS4ZXK1RCZ3PXQSXK0Y9, AC-6: гонка двух перехватчиков
+        ОДНОГО и того же держателя с мёртвым pid на своём host (heartbeat
+        ЕЩЁ СВЕЖИЙ, не протухший — новый путь перехвата, не старый «протух
+        по возрасту») — успешен только один перехват, второй вызывающий
+        получает именованный отказ, не создавая вторую запись журнала.
+        Ловит мутацию: если новый путь перехвата (`dead_on_own_host`)
+        выполнит `update_lease`/`journal` вне блокировки `BEGIN IMMEDIATE`
+        или без сверки `pre_row`, конкурентный прогон даст больше одной
+        записи «lease перехвачен» либо у второго вызывающего перехват
+        тоже отрапортует успехом вместо именованного отказа."""
+        conn = store.db()
+        conn.execute(
+            "INSERT INTO leases (task_id, session_id, pid, hostname,"
+            " heartbeat_ts) VALUES (?,?,?,?,?)",
+            (self.TASK, "sess-holder", _dead_pid(), socket.gethostname(),
+             _ts_ago(5)))
+        conn.commit()
+        journalled_before = len(store.task_steps(store.db(), self.TASK))
+        session_ids = [f"sess-{i}" for i in range(self.THREADS)]
+
+        results, errors = self._run_concurrently(session_ids)
+
+        self.assertEqual(errors, [], "acquire() не должна падать под гонкой")
+        wins = [r for r in results if r[0] is None]
+        self.assertEqual(len(wins), 1, results)
+        refusals = [r for r in results if r[0] is not None]
+        self.assertEqual(len(refusals), self.THREADS - 1, results)
+        for refusal, _ in refusals:
+            self.assertTrue(any(sid in refusal for sid in session_ids),
+                            refusal)
         row = store.lease_row(store.db(), self.TASK)
         self.assertIn(row["session_id"], session_ids)
         new_steps = store.task_steps(store.db(), self.TASK)[journalled_before:]
