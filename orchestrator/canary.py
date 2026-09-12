@@ -132,6 +132,20 @@ _VERIFYING_KILL_ACTION = "canary: verifying не дожидается CI — з�
 # `CANARY_MARK_ACTOR` и берёт её `action` (сама причина) для отчёта.
 _INCONCLUSIVE_KILL_DETAIL = "прогон дальше эту задачу не ведёт — cleanup.cmd_kill"
 
+# Литерал `action`, которым `orchestrator/fsm_advance.py::
+# _acceptance_run_refuses` отклоняет `in_dev -> verifying` на красной
+# приёмочной планке (01M2ARQD7C472KZACB3SZXGF1N, требование 2) — не
+# экспортируется `fsm_advance.py` как публичное имя, согласованный
+# литерал здесь, тем же приёмом, что уже дублирует `REFUSAL_ACTION_
+# PREFIX` между `store.py`/`auto.py`.
+_ACCEPTANCE_TESTS_REFUSAL_ACTION = "переход отклонён: приёмочные тесты"
+
+# Литерал `action`, которым `canary._drive_task` журналирует КАЖДЫЙ
+# повтор developer на красной планке (требование 5) — читается
+# `_dev_retry_count` для строки отчёта; сам повтор — не переход
+# состояния, поэтому не подпадает под `_step_count`.
+_DEV_RETRY_ACTION = "canary: повтор developer на красной планке"
+
 # Origin эфемерного клона (требование 2, AC-2) — заглушка ЯВНО, не то,
 # что `git clone` подставил бы сам (локальный путь до `config.ROOT`,
 # формально не http(s), но реально дотягивающийся до главного пульта):
@@ -716,6 +730,28 @@ def _last_role_skip_reason(conn, task_id: str) -> str | None:
     return None
 
 
+def _acceptance_refusal_blocks_in_dev(conn, task_id: str) -> bool:
+    """Последняя запись журнала задачи — отказ `in_dev -> verifying` по
+    красной приёмочной планке (01M2ARQD7C472KZACB3SZXGF1N, требование 2):
+    либо напрямую `fsm` (`_ACCEPTANCE_TESTS_REFUSAL_ACTION` — сам
+    `action`), либо стоп-кран T038 `auto` (`_AUTO_STOPPED_ACTION`, тот же
+    текст ВНУТРИ `detail` — `auto.py::auto_stop` журналирует `f"{state}:
+    {reason}"`, а `reason` `_pre_advance_step` несёт дословный `action`
+    отказа `advance`). Отказы другого класса (планка не найдена в
+    источнике, зоны, гейт заявки мутации, лок планки — требование 4) этим
+    литералом не журналируются, условие на них не срабатывает — прежняя
+    стагнация (`config.CANARY_MAX_STALL_ITERS`) остаётся байт-в-байт."""
+    steps = store.task_steps(conn, task_id)
+    if not steps:
+        return False
+    last = steps[-1]
+    if last["actor"] == "fsm" and last["action"] == _ACCEPTANCE_TESTS_REFUSAL_ACTION:
+        return True
+    if last["action"] == _AUTO_STOPPED_ACTION:
+        return _ACCEPTANCE_TESTS_REFUSAL_ACTION in (last["detail"] or "")
+    return False
+
+
 def _has_subtasks(conn, task_id: str) -> bool:
     """Родитель поделён (01M29284PTCJXGERV5262E9XMM, требование 1) — хоть
     одна строка `tasks` ссылается на `task_id` через `parent_task_id`.
@@ -788,10 +824,16 @@ def _drive_task(conn, task_id: str) -> None:
     escalation_cycles = 0
     stall_streak = 0
     prev_signature = None
+    dev_retries = 0
     while True:
         auto.cmd_auto(task_id)
         t = store.get_task(conn, task_id)
         state = t["state"]
+        if state != "in_dev":
+            # Требование 3: потолок повторов developer держит один визит
+            # `in_dev` — уход из состояния (гейт пройден, эскалация,
+            # kill) обнуляет счётчик для следующего возможного визита.
+            dev_retries = 0
         skip_detail = _last_role_skip_reason(conn, task_id)
         if skip_detail is not None:
             # Требование 3/AC-3: не тратим холостые проходы до
@@ -821,6 +863,29 @@ def _drive_task(conn, task_id: str) -> None:
                     "повторных эскалаций подряд — задача не сходится")
                 return
             _pass_escalated_with_synthetic_answer(conn, task_id)
+            continue
+        if state == "in_dev" and _acceptance_refusal_blocks_in_dev(conn, task_id):
+            # Требование 2 (решение Оператора 12.09, вариант а):
+            # воспроизводим ручной возврат Оператора `run <id>` — в
+            # реальном конвейере `auto` уже остановился бы здесь стоп-
+            # краном T038, не дав developer ни одного шанса на повтор.
+            dev_retries += 1
+            if dev_retries > config.CANARY_MAX_DEV_RETRIES:
+                _kill_inconclusive(
+                    conn, task_id,
+                    f"canary: {config.CANARY_MAX_DEV_RETRIES} повторов "
+                    "developer на красной планке — задача не сходится")
+                return
+            store.journal(
+                conn, task_id, CANARY_MARK_ACTOR, _DEV_RETRY_ACTION,
+                f"попытка {dev_retries}/{config.CANARY_MAX_DEV_RETRIES} — "
+                "developer получает бриф с блоком «ОТКАЗ ADVANCE (история)»")
+            runner.cmd_run(task_id)
+            # Требование 3: повтор — прогресс цикла, не стагнация;
+            # `prev_signature` намеренно не трогаем — следующий проход без
+            # прогресса (если он случится) сравнивается с состоянием ДО
+            # этого повтора, тем же приёмом, что и ветка `escalated` выше.
+            stall_streak = 0
             continue
         if runner.step_role(t) is not None:
             # `auto` остановился, не дойдя до гейта (лимит AUTO_MAX_STEPS
@@ -888,6 +953,14 @@ def _escalation_notes(steps) -> list:
     return [r["detail"] or "" for r in steps if r["action"] == "state -> escalated"]
 
 
+def _dev_retry_count(steps) -> int:
+    """Число повторов developer на красной планке (требование 5) —
+    записи `_DEV_RETRY_ACTION`, журналируемые `_drive_task` ДО каждого
+    вызова `runner.cmd_run` этой веткой, не переходы состояния."""
+    return sum(1 for r in steps
+              if r["actor"] == CANARY_MARK_ACTOR and r["action"] == _DEV_RETRY_ACTION)
+
+
 def _test_author_visited(steps) -> bool:
     """Прошла ли задача `tests_writing` (требование 3, AC-5): переход
     `state -> tests_writing` в журнале задачи — знак, что роль
@@ -903,6 +976,7 @@ def _task_metrics(conn, task_id: str) -> dict:
         "cost_usd": t["spent_usd"] or 0.0,
         "review_iterations": t["review_iters"],
         "escalations": _escalation_notes(steps),
+        "dev_retries": _dev_retry_count(steps),
         "outcome": t["state"],
         "kill_note": (_kill_outcome_note(conn, task_id, steps)
                      if t["state"] == "killed" else None),
@@ -1136,6 +1210,7 @@ def _run_one_task(template_path: Path, run_stamp: str, ratio: float) -> None:
          f"${metrics['cost_usd']:.2f}  "
          f"ревью-итераций={metrics['review_iterations']}  "
          f"эскалаций={len(metrics['escalations'])}  "
+         f"повторов developer={metrics['dev_retries']}  "
          f"исход={metrics['outcome']}{outcome_note}  "
          f"test_author={test_author_note}{mismatch_note}{note}")
     if diag_dir is not None:

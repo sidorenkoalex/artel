@@ -111,6 +111,56 @@ def run(tdir: Path, cwd: Path | None = None) -> tuple[bool, str]:
     return res.returncode == 0, f"{location_note}\n{tail}"
 
 
+def collect(tdir: Path, cwd: Path | None = None) -> tuple[bool, str]:
+    """(собралось, хвост вывода) — сухой сбор планки `pytest
+    --collect-only -q` (SPEC 01M2ARQRDV4YY9TVPHXN2E7136, требование 1,
+    AC-1/AC-2/AC-3): та же команда, тот же интерпретатор и те же флаги
+    окружения, что несёт общая часть `_pytest_command` (venv пульта,
+    `-p no:cacheprovider`, явная загрузка `-p timeout`), но без прогона
+    ТЕЛ тестов — только импорт модулей и сборка списка тестов. `tdir`/
+    `cwd` — тот же контракт, что у `run()` выше.
+
+    Различение исходов — по коду возврата pytest (эмпирически проверено
+    этой же задачей, не документированный публичный API, но устойчивое
+    поведение текущей мажорной версии): `0` — планка собралась, есть хотя
+    бы один тест; `5` (`EXIT_NOTESTSCOLLECTED`) — планка синтаксически
+    валидна и импортируется, но не содержит ни одного теста (AC-3, текст
+    ровно «планка не содержит ни одного теста» — критерий требует точный
+    текст); любой другой код (`2` — сбор прерван ошибкой импорта/
+    синтаксиса, и т.п.) — красный сбор, хвост сырого вывода pytest
+    называет причину (AC-2). Оба «пустых» исхода (синтаксическая ошибка
+    и легитимно пустая планка) печатают в stdout фразу «no tests
+    collected» — отличить их текстом самого вывода нельзя, только кодом
+    возврата: код 5 отдаётся ТОЛЬКО когда pytest успел собрать дерево без
+    единой ошибки и в нём действительно ноль тестов.
+
+    Каталога `acceptance_tests/` нет вовсе — тот же вырожденный случай,
+    что и у `run()`: собирать нечего, `(True, ...)`, переход не
+    блокируется этой функцией.
+    """
+    tests_dir = tdir / "acceptance_tests"
+    if not tests_dir.is_dir():
+        return True, "acceptance_tests/ нет — приёмочные тесты не заведены"
+    run_cwd = cwd if cwd is not None else config.ROOT
+    location_note = f"планка: {tests_dir}, cwd: {run_cwd}"
+    try:
+        res = subprocess.run(
+            _pytest_command(str(tests_dir), "--collect-only", "-q"),
+            cwd=run_cwd, capture_output=True, text=True,
+            timeout=config.ACCEPTANCE_TIMEOUT_SEC)
+    except subprocess.TimeoutExpired as exc:
+        tail = (_timeout_text(exc.stdout) + _timeout_text(exc.stderr))[-2000:]
+        return False, (f"{location_note}\nсбор превысил "
+                       f"{config.ACCEPTANCE_TIMEOUT_SEC}с — завис или ждёт "
+                       f"сетевой ответ\n{tail}")
+    if res.returncode == 0:
+        return True, (res.stdout + res.stderr)[-2000:]
+    if res.returncode == 5:
+        return False, "планка не содержит ни одного теста"
+    tail = (res.stdout + res.stderr)[-2000:]
+    return False, f"{location_note}\n{tail}"
+
+
 def materialize_from_branch(task_id: str, branch: str, code_dir: Path) -> Path:
     """`tasks/<id>/acceptance_tests/` каталога `code_dir` (рабочего
     каталога КОДА задачи — worktree self-target либо workspace внешнего
