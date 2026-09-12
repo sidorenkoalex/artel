@@ -654,17 +654,29 @@ def _last_role_skip_reason(conn, task_id: str) -> str | None:
     return None
 
 
-def _kill_outcome_note(steps) -> str:
+def _has_subtasks(conn, task_id: str) -> bool:
+    """Родитель поделён (01M29284PTCJXGERV5262E9XMM, требование 1) — хоть
+    одна строка `tasks` ссылается на `task_id` через `parent_task_id`.
+    Фильтрация уже существующего `store.all_tasks(conn)`, без новой
+    сырой SQL вне `store.py` (ADR-0003 3ж)."""
+    return any(r["parent_task_id"] == task_id for r in store.all_tasks(conn))
+
+
+def _kill_outcome_note(conn, task_id: str, steps) -> str:
     """Причина исхода `killed` для отчёта прогона (требование 4, AC-4):
-    «штатно» — `_kill_at_merge_gate` (единственный путь, которым
-    РЕАЛЬНОЕ вождение `_drive_task` убивает задачу сегодня — `verifying`
-    теперь проходится синтетически, не убивает, `_pass_verifying`) и
-    `_kill_at_verifying` (недостижима из `_drive_task`, распознаётся
-    здесь только ради совместимости с чужой залоченной планкой — см.
-    докстринг `_kill_at_verifying`), иначе — «не сошлась: <причина>» с
-    текстом причины из журнальной записи `_kill_inconclusive` (её
-    `detail` — фиксированный литерал-маркер, `action` несёт саму
-    причину — требование 3/AC-3 идёт этим же путём)."""
+    родитель, поделённый на подзадачи (01M29284PTCJXGERV5262E9XMM,
+    требование 4) — «поделена», штатный исход наравне со «штатно».
+    Иначе прежняя классификация: «штатно» — `_kill_at_merge_gate`
+    (единственный путь, которым РЕАЛЬНОЕ вождение `_drive_task` убивает
+    задачу сегодня — `verifying` теперь проходится синтетически, не
+    убивает, `_pass_verifying`) и `_kill_at_verifying` (недостижима из
+    `_drive_task`, распознаётся здесь только ради совместимости с чужой
+    залоченной планкой — см. докстринг `_kill_at_verifying`), иначе —
+    «не сошлась: <причина>» с текстом причины из журнальной записи
+    `_kill_inconclusive` (её `detail` — фиксированный литерал-маркер,
+    `action` несёт саму причину — требование 3/AC-3 идёт этим же путём)."""
+    if _has_subtasks(conn, task_id):
+        return "поделена"
     for r in reversed(steps):
         if r["actor"] != CANARY_MARK_ACTOR:
             continue
@@ -817,7 +829,8 @@ def _task_metrics(conn, task_id: str) -> dict:
         "review_iterations": t["review_iters"],
         "escalations": _escalation_notes(steps),
         "outcome": t["state"],
-        "kill_note": _kill_outcome_note(steps) if t["state"] == "killed" else None,
+        "kill_note": (_kill_outcome_note(conn, task_id, steps)
+                     if t["state"] == "killed" else None),
     }
 
 
@@ -981,7 +994,10 @@ def _run_one_task(template_path: Path, run_stamp: str, ratio: float) -> None:
         metrics = _task_metrics(conn, task_id)
         actual = bool(metrics["escalations"])
         mismatch = expected is not None and expected != actual
-        normal_outcome = metrics["kill_note"] == "штатно"
+        # «Поделена» (01M29284PTCJXGERV5262E9XMM, требование 4) — штатный
+        # исход наравне со «штатно»: родитель, поделённый на подзадачи,
+        # не сбой прогона, диагностика ему не нужна.
+        normal_outcome = metrics["kill_note"] in ("штатно", "поделена")
         diag_dir = None
         if _needs_diagnostics(normal_outcome, mismatch):
             diag_dir = _save_diagnostics(outer_root, run_stamp, task_id, steps)
