@@ -1,5 +1,5 @@
 ---
-built_at_sha: d098afaf5c12d90aa075d6aef157507d13b34524
+built_at_sha: d7913eda52c837ade23eb0b0719a9926e4730481
 ---
 
 # Codebase-map пульта
@@ -177,7 +177,7 @@ built_at_sha: d098afaf5c12d90aa075d6aef157507d13b34524
 
 **Импортирует:** `orchestrator/alerts.py`, `orchestrator/artifact_source.py`, `orchestrator/config.py`, `orchestrator/context_package.py`, `orchestrator/gitcmd.py`, `orchestrator/store.py`, `scripts/codebase_map.py`
 
-**Импортируется:** `orchestrator/review.py`, `orchestrator/role_prompt.py`, `orchestrator/runner.py`, `tests/test_advance_refusal_history.py`, `tests/test_answer_branch_reads.py`, `tests/test_brief.py`
+**Импортируется:** `orchestrator/review.py`, `orchestrator/role_prompt.py`, `orchestrator/runner.py`, `tests/test_advance_refusal_history.py`, `tests/test_answer_branch_reads.py`, `tests/test_brief.py`, `tests/test_role_prompt_test_author_mission.py`
 
 ## orchestrator/budget.py
 
@@ -737,9 +737,9 @@ built_at_sha: d098afaf5c12d90aa075d6aef157507d13b34524
 **Публичные функции:**
 - `mission_brief_package`
 
-**Импортирует:** `orchestrator/brief.py`, `orchestrator/review.py`
+**Импортирует:** `orchestrator/brief.py`, `orchestrator/review.py`, `orchestrator/stack.py`
 
-**Импортируется:** `orchestrator/runner.py`
+**Импортируется:** `orchestrator/runner.py`, `tests/test_role_prompt_test_author_mission.py`
 
 ## orchestrator/roles.py
 
@@ -846,7 +846,7 @@ built_at_sha: d098afaf5c12d90aa075d6aef157507d13b34524
 
 **Импортирует:** `orchestrator/config.py`
 
-**Импортируется:** `orchestrator/acceptance.py`, `orchestrator/artel.py`, `orchestrator/runner.py`, `orchestrator/version.py`, `scripts/stack_ci.py`, `tests/sandbox.py`, `tests/test_agent_prompt.py`, `tests/test_artel_bootstrap.py`, `tests/test_invariants.py`, `tests/test_review_freshness.py`, `tests/test_review_package.py`, `tests/test_stack.py`, `tests/test_stack_ci.py`
+**Импортируется:** `orchestrator/acceptance.py`, `orchestrator/artel.py`, `orchestrator/role_prompt.py`, `orchestrator/runner.py`, `orchestrator/version.py`, `scripts/stack_ci.py`, `tests/sandbox.py`, `tests/test_agent_prompt.py`, `tests/test_artel_bootstrap.py`, `tests/test_invariants.py`, `tests/test_review_freshness.py`, `tests/test_review_package.py`, `tests/test_role_prompt_test_author_mission.py`, `tests/test_stack.py`, `tests/test_stack_ci.py`
 
 ## orchestrator/store.py
 
@@ -2236,6 +2236,16 @@ built_at_sha: d098afaf5c12d90aa075d6aef157507d13b34524
 **Публичные функции:** (нет)
 
 **Импортирует:** —
+
+**Импортируется:** —
+
+## tests/test_role_prompt_test_author_mission.py
+
+**Назначение:** Регресс-тест пункта 5 миссии test_author (SPEC 01M29BANMM8X8JWJ5GDTJWKB0Z,
+
+**Публичные функции:** (нет)
+
+**Импортирует:** `orchestrator/brief.py`, `orchestrator/role_prompt.py`, `orchestrator/stack.py`
 
 **Импортируется:** —
 
