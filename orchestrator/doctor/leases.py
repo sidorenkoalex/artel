@@ -83,9 +83,16 @@ def _lease_fail_detail(conn, row, steps: list) -> str:
     прежде байт-в-байт совпадавший с сообщением алерта) + роль держателя,
     номер и время старта последнего шага задачи (не только оборванного —
     R1-F1) и последнее журнальное событие задачи — Оператору не нужно
-    отдельно звать `log`, чтобы понять, что произошло."""
+    отдельно звать `log`, чтобы понять, что произошло.
+
+    Подсказка «следующий approve/auto перехватит сам» (SPEC
+    01M290PS4ZXK1RCZ3PXQSXK0Y9, требование 4/AC-7) — только здесь, в
+    `base` этой функции (Check-текст для Оператора), НЕ в `message`
+    `check_leases` ниже: тот разбирается regex'ом авто-ack (SPEC T054,
+    AC-1) и обязан оставаться байт-в-байт прежним."""
     base = (f"{row['task_id']}: lease сессии {row['session_id']} "
-           f"мёртв (pid {row['pid']} на {row['hostname']})")
+           f"мёртв (pid {row['pid']} на {row['hostname']}) — следующий "
+           f"approve/auto перехватит lease сам, release не требуется")
     t = doctor.store.get_task(conn, row["task_id"])
     role = doctor.config.STATE_ROLE.get(t["state"], t["state"])
     parts = [base, f"роль {role}"]

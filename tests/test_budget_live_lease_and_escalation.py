@@ -10,6 +10,7 @@
 `lease.acquire`/`lease.is_live` и момент, в который `enforce_budget`
 журналирует sha.
 """
+import os
 import socket
 import sys
 import unittest
@@ -27,7 +28,7 @@ def _insert_lease(conn, task_id: str, session_id: str, hostname: str,
     conn.execute(
         "INSERT INTO leases (task_id, session_id, pid, hostname,"
         " heartbeat_ts) VALUES (?,?,?,?,?)",
-        (task_id, session_id, 999, hostname, _ts_ago(age_sec)))
+        (task_id, session_id, os.getpid(), hostname, _ts_ago(age_sec)))
     conn.commit()
 
 
