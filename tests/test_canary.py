@@ -1092,17 +1092,19 @@ AC-1. Критерий.
         (`config.TASKS/<id>/SPEC.md` тоже не существует) и вернул бы
         `in_dev` вместо `tests_writing`."""
         self._commit_spec_on_artifact_branch(self.SPEC_WITH_AC)
+        t = store.get_task(self.conn, self.TASK)
 
         with mock.patch.object(canary.gitcmd, "on_foreign_branch") as spy:
-            result = canary._spec_gate_next_state(self.conn, self.TASK)
+            result = canary._spec_gate_next_state(self.conn, self.TASK, t)
 
         self.assertEqual(result, "tests_writing")
         spy.assert_not_called()  # AC-4
 
     def test_ac2_skip_tests_on_artifact_branch_goes_to_in_dev(self):
         self._commit_spec_on_artifact_branch(self.SPEC_SKIP_TESTS)
+        t = store.get_task(self.conn, self.TASK)
 
-        result = canary._spec_gate_next_state(self.conn, self.TASK)
+        result = canary._spec_gate_next_state(self.conn, self.TASK, t)
 
         self.assertEqual(result, "in_dev")
 

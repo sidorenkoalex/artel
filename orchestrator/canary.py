@@ -510,7 +510,7 @@ def _ephemeral_clone():
         shutil.rmtree(dest, ignore_errors=True)
 
 
-def _spec_gate_next_state(conn, task_id: str) -> str | None:
+def _spec_gate_next_state(conn, task_id: str, t) -> str | None:
     """Куда ведёт SPEC-гейт — та же ветка условий, что и у
     `fsm._approve_spec_gate` для `spec_gate` (AC-разметка SPEC),
     скопированная сюда намеренно (см. модульный докстринг: не через
@@ -520,7 +520,10 @@ def _spec_gate_next_state(conn, task_id: str) -> str | None:
     только в артефактной ветке — ни на кодовой ветке задачи, ни на диске
     `config.TASKS/<id>/SPEC.md`, и старая проверка давала пустой словарь
     на обеих ветках, уводя канареечную задачу с AC-разметкой мимо
-    `tests_writing`.
+    `tests_writing`. Параметр `t` в теле не используется (AC-4: источник
+    определяется исключительно через `artifact_source.resolve`) —
+    оставлен третьим позиционным ради сигнатуры, зафиксированной
+    залоченной приёмочной планкой (ANSWER-1).
 
     `None` — SPEC не прочитан ни в одном источнике (дерево не на ветке
     задачи, файл там не прочитан) — требование 2: это не трактуется как
@@ -540,7 +543,8 @@ def _spec_gate_next_state(conn, task_id: str) -> str | None:
 
 
 def _pass_spec_gate(conn, task_id: str) -> None:
-    next_state = _spec_gate_next_state(conn, task_id)
+    t = store.get_task(conn, task_id)
+    next_state = _spec_gate_next_state(conn, task_id, t)
     if next_state is None:
         # Требование 2/AC-3: SPEC не найден ни в одном источнике не
         # трактуется как «SPEC без AC-разметки» (что увело бы задачу в
