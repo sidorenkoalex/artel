@@ -63,6 +63,10 @@ CREATE TABLE IF NOT EXISTS merge_locks (
   task_id TEXT, session_id TEXT, pid INTEGER, hostname TEXT,
   heartbeat_ts TEXT
 );
+CREATE TABLE IF NOT EXISTS merge_queue (
+  task_id TEXT, session_id TEXT, pid INTEGER, hostname TEXT,
+  enqueued_ts TEXT, heartbeat_ts TEXT
+);
 """
 
 
@@ -231,4 +235,11 @@ def migrate(conn: sqlite3.Connection) -> None:
         "CREATE TABLE IF NOT EXISTS merge_locks ("
         "  task_id TEXT, session_id TEXT, pid INTEGER,"
         "  hostname TEXT, heartbeat_ts TEXT);")
+    # Очередь FIFO ожидания мьютекса merge-окна (SPEC
+    # 01M291EPQ2VFGCHZTXXC81616V, требования 2-3): БД прошлых версий её не
+    # имеют — догоняется тем же приёмом, что и merge_locks.
+    conn.executescript(
+        "CREATE TABLE IF NOT EXISTS merge_queue ("
+        "  task_id TEXT, session_id TEXT, pid INTEGER, hostname TEXT,"
+        "  enqueued_ts TEXT, heartbeat_ts TEXT);")
     conn.commit()

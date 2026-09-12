@@ -110,6 +110,12 @@ CI_RERUN_WAIT_SEC = 1200
 # худший наблюдавшийся прецедент задержки события CI (tasks/T040).
 MERGE_GATE_CI_WAIT_POLL_SEC = 90
 MERGE_GATE_CI_WAIT_CEILING_SEC = 3600
+# Потолок ожидания в очереди FIFO мьютекса merge-окна (SPEC
+# 01M291EPQ2VFGCHZTXXC81616V, требование 3): по истечении `approve`
+# выходит без merge, задача остаётся на `merge_gate` — не отсчитывается в
+# потолок ожидания CI выше (требование 4, тот отсчитывается от момента
+# выхода ИЗ этой очереди).
+MERGE_QUEUE_WAIT_CEILING_SEC = 7200
 PUMP_JOIN_TIMEOUT_SEC = 10
 # Предел прогона acceptance_tests/ на гейте review -> verifying
 # (orchestrator/acceptance.py, SPEC T023 требование 6). Без него зависший
