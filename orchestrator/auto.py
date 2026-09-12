@@ -9,7 +9,7 @@ import time
 from dataclasses import dataclass
 
 from . import (agent_log, alerts, budget, ci, config, fixation, fsm, lease,
-              pause, runner, store, zone_lock)
+              pause, pull, runner, store, zone_lock)
 
 # Флаг «пришёл SIGTERM (команда `stop`, SPEC 01M1NWCHVTYQ0M8PCJ1YJ2N78P,
 # требование 5)»: цикл доигрывает уже начатый шаг и останавливается сам
@@ -192,6 +192,28 @@ _REWORK_GATE_STATES = ("in_dev", "spec_writing", "tests_writing")
 # с `orchestrator/fsm_advance.py::_review_rework_gate_refuses`.
 REWORK_REFUSAL_ACTION = "переход отклонён: замечания ревью не отработаны"
 
+# Действие журнала общего узла ВСЕХ четырёх обработчиков `cmd_advance`
+# (`fsm._read_branch_text_or_refuse`), которым отказ «дерево не на ветке
+# задачи» отличим текстом (см. докстринг `_pre_advance_step` ниже) — было
+# инлайн-литералом там же, вынесено константой требованием 3 (SPEC
+# 01M290PYPV5T2NFW1Y0HB8BD6E) ради единого перечня класса «роль ещё не
+# закончила» ниже.
+TREE_NOT_ON_BRANCH_REFUSAL_ACTION = "переход отклонён: дерево не на ветке задачи"
+
+# Единый перечень-константа (требование 3, AC-5/AC-6): тексты action,
+# которыми `_pre_advance_step`/`_rework_gate_blocks` журналируют отказы
+# КЛАССА «роль ещё не закончила» — читать роли нечего, задача просто ждёт
+# своего следующего шага, не настоящий отказ гейта/guard. Собственная
+# копия той же пары значений живёт в `orchestrator/brief.py`
+# (`_ROLE_NOT_FINISHED_REFUSAL_ACTIONS`, `advance_refusal_history`
+# фильтрует ими блок «почини это») — тот же приём, что уже дублирует
+# `REFUSAL_ACTION_PREFIX` между `store.py` и этим модулем: `brief.py` не
+# может импортировать этот модуль обратно (цикл `auto.py -> fsm.py ->
+# review.py -> brief.py` уже существует), поэтому общий источник — не
+# общий Python-объект, а согласованные литералы в обоих местах.
+ROLE_NOT_FINISHED_REFUSAL_ACTIONS = (
+    REWORK_REFUSAL_ACTION, TREE_NOT_ON_BRANCH_REFUSAL_ACTION)
+
 # Номер итерации ревью в detail записи `state -> in_dev`, оставленной
 # `orchestrator/fsm_advance.py::review` (`f"замечания ревью, итерация
 # {iters}"`) — тем же текстом отвечает и тестовая фикстура, дописывающая
@@ -278,13 +300,38 @@ def _role_step_since_state_entry(conn, task_id: str, state: str,
     числе через любые промежуточные записи возврата из эскалации
     (шаг роли, отработанный между анкером и эскалацией, засчитывается
     точно так же, как отработанный уже после возврата).
+
+    Исключение (SPEC 01M290PYPV5T2NFW1Y0HB8BD6E, требование 1, П1
+    копилки 11.09): эскалация `in_dev` по НЕРАЗРЕШЁННОМУ конфликту
+    содержимого подтяжки метит себя `pull.PULL_CONFLICT_ROLE_STEP_MARKER`
+    (журналируется сразу ПОСЛЕ записи `state -> escalated`, до возврата) —
+    в отличие от `_ESCALATED_RETURN_DETAILS`, ЭТА эскалация несёт
+    собственное основание переделки (разрешить конфликт некому, кроме
+    роли): запись возврата, которой ПРЕДШЕСТВОВАЛ такой маркер, сама
+    становится анкером — не пропускается, даже хотя её `detail` совпадает
+    с общим текстом `_approve_escalated`. Маркер «гасится» первой же
+    следующей записью `state -> {state}` (израсходован — независимо от
+    того, пропущена она или стала анкером) и любым ДРУГИМ переходом
+    состояния (`state -> X`, `X` не `escalated`) — иначе разросся бы на
+    несвязанный последующий визит state, до которого маркер не долетел
+    бы по смыслу.
     """
     rows = store.task_steps(conn, task_id)
     marker = f"state -> {state}"
     last_entry = None
+    role_step_required = False
     for i, row in enumerate(rows):
-        if row["action"] == marker and row["detail"] not in _ESCALATED_RETURN_DETAILS:
-            last_entry = i
+        action = row["action"]
+        if action == pull.PULL_CONFLICT_ROLE_STEP_MARKER:
+            role_step_required = True
+            continue
+        if action == marker:
+            if row["detail"] not in _ESCALATED_RETURN_DETAILS or role_step_required:
+                last_entry = i
+            role_step_required = False
+            continue
+        if action.startswith("state -> ") and action != "state -> escalated":
+            role_step_required = False
     if last_entry is None:
         return True, None
     detail = rows[last_entry]["detail"]
@@ -579,6 +626,32 @@ def _rework_gate_blocks(conn, task_id: str, state: str, role: str) -> bool:
     return False
 
 
+# Основание (требование 2) — единственный класс эскалации, отмеченный
+# `pull.PULL_CONFLICT_ROLE_STEP_MARKER`, читается стоп-краном ниже.
+_PULL_CONFLICT_BASIS_LABEL = "конфликт подтяжки"
+
+
+def _pull_conflict_marker_streak(rows: list) -> int:
+    """Число подряд идущих эскалаций `in_dev` по одному и тому же
+    основанию — неразрешённому конфликту подтяжки (требование 2, AC-4):
+    считает записи `pull.PULL_CONFLICT_ROLE_STEP_MARKER`, но сбрасывается
+    ЛЮБЫМ переходом состояния, кроме самой пары `escalated`/`in_dev`
+    (`state -> escalated` держит счёт — это собственный переход
+    эскалации; `state -> in_dev` держит его тоже — это возврат
+    Оператора) — задача реально продвинулась мимо конфликта (например,
+    ушла в `review`), новая эскалация того же основания, если случится
+    позже, начинает счёт заново, не продолжает старый."""
+    streak = 0
+    for row in rows:
+        action = row["action"]
+        if action == pull.PULL_CONFLICT_ROLE_STEP_MARKER:
+            streak += 1
+        elif (action.startswith("state -> ")
+              and action not in ("state -> escalated", "state -> in_dev")):
+            streak = 0
+    return streak
+
+
 def _pre_advance_step(conn, task_id: str, session_id: str, role: str,
                       state: str, before: str,
                       cycle: _CycleState) -> Advanced | Refused | Stop | None:
@@ -609,9 +682,31 @@ def _pre_advance_step(conn, task_id: str, session_id: str, role: str,
     t = store.get_task(conn, task_id)
     new_state = t["state"]
     if new_state != before:
-        # Требование 2: переход уже случился по готовым артефактам — шаг
-        # роли этой итерации не нужен, цикл продолжает уже с нового
-        # состояния. Не расходует `steps` — ни один агент не звался.
+        # Требование 2 (AC-4): ЭТОТ ЖЕ вызов только что эскалировал по
+        # неразрешённому конфликту подтяжки (маркер среди строк,
+        # добавленных ИМЕННО этим `cmd_advance`, не более раннего) —
+        # если это уже ВТОРАЯ подряд эскалация того же основания (гейт
+        # (а) `_rework_gate_blocks` уже дал роли её единственный
+        # гарантированный шанс между ними), новых шансов больше не даём:
+        # именованная остановка вместо тихого продвижения в generic
+        # «advance остановлен на escalated» (не даёт циклу жечь эскалации
+        # по кругу).
+        just_escalated_via_pull_conflict = any(
+            row["action"] == pull.PULL_CONFLICT_ROLE_STEP_MARKER
+            for row in store.task_steps(conn, task_id)[journaled_before:])
+        if new_state == "escalated" and just_escalated_via_pull_conflict:
+            streak = _pull_conflict_marker_streak(store.task_steps(conn, task_id))
+            if streak >= 2:
+                hint = (f"artel.py show {task_id} — реши конфликт вручную, "
+                        f"затем artel.py answer/approve {task_id}")
+                reason = (f"предварительный advance дважды упёрся в "
+                          f"{_PULL_CONFLICT_BASIS_LABEL} без шага роли — "
+                          f"решение Оператора")
+                return Stop(new_state, reason, hint, True)
+        # Требование 2 (SPEC 01M1R8B3ZKXQT0Z0G6QQQDV906): переход уже
+        # случился по готовым артефактам — шаг роли этой итерации не
+        # нужен, цикл продолжает уже с нового состояния. Не расходует
+        # `steps` — ни один агент не звался.
         note = f"шаг {role} не нужен: переход выполнен по готовым артефактам"
         store.journal(conn, task_id, "operator", note, f"{before} -> {new_state}")
         print(f"[{task_id}] {note} ({before} -> {new_state})")
@@ -659,7 +754,7 @@ def _pre_advance_step(conn, task_id: str, session_id: str, role: str,
     # идентичному тексту раньше, чем developer получит хоть один шанс
     # написать PLAN.md) — регрессия, которую ловит
     # `test_fresh_task_first_developer_step_still_runs`.
-    tree_missing = refusal == "переход отклонён: дерево не на ветке задачи"
+    tree_missing = refusal == TREE_NOT_ON_BRANCH_REFUSAL_ACTION
     other_class_refusal = refusal if (refusal is not None
                                       and state == "in_dev"
                                       and not tree_missing) else None

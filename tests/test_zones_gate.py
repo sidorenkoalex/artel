@@ -219,6 +219,40 @@ class ZonesGateExternalTargetSkipsTest(TmpRootTest):
         self.assertFalse(refuses)
 
 
+class UntrackedWorktreePathsTest(TmpRootTest):
+    """`fsm_advance._untracked_worktree_paths` (SPEC
+    01M290PVYG2VJK6442H5BAX9MA, AC-6): разбор `git status --porcelain`
+    рабочего дерева self-target — изолированно от полного `_zones_gate`
+    (сценарий «нетрекенный файл вне зоны отказывает переходу» целиком уже
+    несёт залоченная планка приёмки tasks/01M290PVYG2VJK6442H5BAX9MA/
+    acceptance_tests/test_ac6_zones_gate_untracked_files.py)."""
+
+    def test_git_status_failure_degrades_to_empty_list(self):
+        """Ловит мутацию: отказ `git status` трактуется как «путей нет»
+        и одновременно роняет исключение/отказывает переходу отдельно —
+        committed-дифф `_zones_gate` уже fail-closed на СВОИХ отказах,
+        этот довесок обязан молча деградировать, не падать."""
+        with mock.patch.object(gitcmd, "in_repo", return_value=None):
+            paths = fsm_advance._untracked_worktree_paths("T001")
+        self.assertEqual(paths, [])
+
+    def test_parses_untracked_staged_and_renamed_entries(self):
+        """Ловит мутацию: разбор строки `git status --porcelain` не
+        снимает трёхсимвольный код статуса (`assertEqual` ниже увидел бы
+        `"?? docs/new_note.md"` целиком вместо `"docs/new_note.md"`) либо
+        не берёт путь НАЗНАЧЕНИЯ переименования после ` -> `."""
+        porcelain = ("?? docs/new_note.md\n"
+                    " M orchestrator/checkpoint.py\n"
+                    "R  old_name.py -> new_name.py\n")
+        with mock.patch.object(
+                gitcmd, "in_repo",
+                return_value=subprocess.CompletedProcess([], 0, porcelain, "")):
+            paths = fsm_advance._untracked_worktree_paths("T001")
+        self.assertEqual(
+            set(paths),
+            {"docs/new_note.md", "orchestrator/checkpoint.py", "new_name.py"})
+
+
 class AnswerCommitIsRoleStepAutocommitTest(unittest.TestCase):
     """R2-F1 (REVIEW.md 01M1P9QCHPHSCEA6TK13PV85SP итерация 2, blocker):
     `_answer_commit_is_role_step_autocommit` — единственный узел,

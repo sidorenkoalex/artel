@@ -250,11 +250,34 @@ def build_done(conn, task_id: str, merge_sha: str) -> str:
     return "\n".join(lines) + "\n"
 
 
+def _subtask_rows(conn, task_id: str) -> list:
+    """Подзадачи деления родителя `task_id`, по возрастанию id
+    (01M29284PTCJXGERV5262E9XMM, требование 1) — фильтрация уже
+    существующего `store.all_tasks(conn)` по `parent_task_id`, без новой
+    сырой SQL вне `store.py` (ADR-0003 3ж)."""
+    return [r for r in store.all_tasks(conn) if r["parent_task_id"] == task_id]
+
+
+def _division_block(subtasks) -> list[str]:
+    """Список подзадач деления — id, название, состояние КАЖДОЙ на
+    момент генерации (требование 3, AC-3)."""
+    lines = ["Подзадачи деления:"]
+    for r in subtasks:
+        lines.append(f"  {r['id']} «{r['title']}» — {r['state']}")
+    return lines
+
+
 def build_killed(conn, task_id: str) -> str:
     """RETRO задачи, снятой через `kill` (требования 6, 7, 8) — источник
     истины только БД: `tasks/<id>/` к моменту подбора долга (следующий
     `merge_gate` любой другой задачи, решение (d)) обычно уже убран
-    `cleanup.cleanup_killed_task`."""
+    `cleanup.cleanup_killed_task`.
+
+    Родитель, поделённый на подзадачи (01M29284PTCJXGERV5262E9XMM,
+    требование 3) — отдельная ветка: раздел последней эскалации не
+    цитируется (эскалации не было — деление произошло явным решением
+    Оператора, не автоматическим отказом), вместо него список подзадач.
+    Задача без подзадач идёт прежним путём без изменений (AC-4)."""
     t = store.get_task(conn, task_id)
     steps = store.task_steps(conn, task_id)
     # «Суть» строится из ТЗ, положенного в журнал `kill` (SPEC T048,
@@ -267,6 +290,29 @@ def build_killed(conn, task_id: str) -> str:
     context_line = (_first_sentence(tz_text) if tz_text is not None
                     else _first_context_line(_read_spec_text(task_id)))
     count, manual, skip = _acceptance_counts(task_id)
+    subtasks = _subtask_rows(conn, task_id)
+
+    if subtasks:
+        lines = [
+            f"# RETRO: {task_id} — {t['title']}",
+            "",
+            "Итог: поделена на подзадачи",
+            f"Адрес артефактов: {NO_ARTIFACTS_NOTE}",
+            f"Суть: {_gist(t['title'], context_line)}",
+            *(["Канареечная задача: да"] if t["is_canary"] else []),
+            "",
+            *_cost_block(steps, t["spent_usd"] or 0.0,
+                        t["spent_estimate_usd"] or 0.0),
+            "",
+            f"Ревью: {t['review_iters']} итераций; "
+            f"приёмка: {t['accept_rejects']} отказ(ов)",
+            "",
+            *_division_block(subtasks),
+            "",
+            f"Приёмочные тесты: {count} тест(ов), {manual} manual, {skip} skip",
+        ]
+        return "\n".join(lines) + "\n"
+
     reason = _last_step_detail(steps, "state -> killed") or "причина не найдена в журнале"
 
     lines = [

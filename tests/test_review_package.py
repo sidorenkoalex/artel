@@ -975,18 +975,20 @@ class CmdRunReviewPackageTest(unittest.TestCase):
         # git-вызова (в отличие от прежнего безусловного `git add -A`
         # догфуда). Список точный: любой `show` diff/stat (чтение
         # ревью-пакета) в шаге разработчика по-прежнему провалит тест.
-        # Последние шесть — `checkpoint.commit_success_checkpoint`
+        # Последние три — `checkpoint.commit_success_checkpoint`
         # (SPEC 01M283NC4JJXK7QS68Y9ET8TBK, требование 1): вызывается
         # безусловно на обычном успешном `rc=0` для роли `developer`,
         # даже когда рабочее дерево worktree чисто (фейковый агент этого
         # теста ничего не писал за пределами PLAN.md-маркера в
         # `tasks/<id>/`) — тихая деградация без коммита (`diff --cached
         # --quiet` отвечает 0, «нечего коммитить»), но сами git-вызовы
-        # уже сделаны. Первая тройка — `_staged_change_summary` (add -A,
-        # reset исключения, numstat для журнала), вторая — повторный
-        # `add -A`/`reset` внутри `_commit_worktree_change` (идемпотентно,
-        # но НЕ переиспользует индекс первого вызова: разные вызовы
-        # `gitcmd.in_repo`) и финальная проверка `diff --cached --quiet`.
+        # уже сделаны: `add -A`/`reset` исключения и финальная проверка
+        # `diff --cached --quiet` внутри `_commit_worktree_change` — без
+        # отдельного предварительного `numstat` (SPEC
+        # 01M290PVYG2VJK6442H5BAX9MA, R1-F1: сводка `detail` теперь
+        # считается ПОСЛЕ коммита, `git show --numstat` на сам `sha`, а
+        # не заранее по индексу до зонного фильтра, — здесь коммита нет
+        # вовсе, поэтому `_commit_summary` не вызывается ни разу).
         # `-C <worktree>` — путь `workspace.path(task_id)`, тот же, что
         # строит сам чекпоинт.
         wt = str(config.WORKTREES / self.TASK)
@@ -1013,10 +1015,6 @@ class CmdRunReviewPackageTest(unittest.TestCase):
                           ["config", "--get", "user.email"],
                           ["rev-parse", "--verify", "--quiet",
                            f"refs/heads/artifact/{self.TASK.lower()}"],
-                          ["-C", wt, "add", "-A"],
-                          ["-C", wt, "reset", "-q", "--",
-                           f"tasks/{self.TASK}"],
-                          ["-C", wt, "diff", "--cached", "--numstat"],
                           ["-C", wt, "add", "-A"],
                           ["-C", wt, "reset", "-q", "--",
                            f"tasks/{self.TASK}"],

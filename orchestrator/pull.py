@@ -44,6 +44,21 @@ MAP_REL = "docs/codebase-map.md"
 # от содержательного конфликта («CONFLICT (content): ...»).
 PULL_OVERWRITE_MARKER = "would be overwritten by merge"
 
+# Фиксированный текст action (SPEC 01M290PYPV5T2NFW1Y0HB8BD6E, требование
+# 1): эскалация `in_dev` по НЕРАЗРЕШЁННОМУ конфликту СОДЕРЖИМОГО подтяжки
+# (единственная ветка `_handle_merge_failure` ниже, где `git merge --abort`
+# завершает попытку, отличная от инцидента очистки worktree и от
+# авторазрешаемого конфликта `docs/codebase-map.md`) метит задачу
+# признаком «нужен шаг роли до следующего предварительного advance» —
+# `orchestrator/auto.py::_role_step_since_state_entry`/`_pre_advance_step`
+# читают этот текст по фиксированному действию журнала, не по вариативному
+# detail. Скопирована в `orchestrator/brief.py` тем же приёмом, что уже
+# дублирует `REFUSAL_ACTION_PREFIX` между store.py и auto.py (импорт
+# auto.py <- fsm.py <- review.py <- brief.py уже существует — обратный
+# импорт brief.py -> pull.py тут не нужен, значение читается как строка).
+PULL_CONFLICT_ROLE_STEP_MARKER = (
+    "конфликт подтяжки: нужен шаг роли до следующего предварительного advance")
+
 
 class Fresh:
     """Ветка не отстала от origin (или сверка выродилась) — подтяжка не нужна."""
@@ -172,14 +187,39 @@ def _merge_conflict_note(files: list, merge) -> str:
     return "; ".join(parts)
 
 
-def _clean_worktree_before_merge(conn, task_id: str, wt_path) -> None:
+# Префикс детали журнала `checkpoint.STRAY_WORKTREE_FILES_ACTION` (SPEC
+# 01M290PVYG2VJK6442H5BAX9MA, AC-2): `_clean_worktree_before_merge` снимает
+# его, чтобы не дублировать «посторонние файлы в worktree» дважды подряд
+# внутри собственного отказа AC-3/AC-4 ниже.
+_STRAY_DETAIL_PREFIX = f"{checkpoint.STRAY_WORKTREE_FILES_ACTION}: "
+
+
+def _clean_worktree_before_merge(conn, task_id: str, wt_path) -> str | None:
     """Очистка worktree ДО `git merge` (SPEC 01M1RA0R9AH9RBAHD4A2Z5SEWQ,
     требования 1-2): незакоммиченная `docs/codebase-map.md` отбрасывается
     (merge её всё равно перегенерирует), прочий WIP вне `tasks/<id>/`
     фиксируется чекпоинтом — без этого git отказывал бы merge'у отдельно
-    от содержательного конфликта («... would be overwritten by merge»)."""
+    от содержательного конфликта («... would be overwritten by merge»).
+
+    Возврат — `None` в штатном случае; список посторонних файлов (текстом,
+    через запятую) — если `checkpoint.commit_pull_checkpoint` отказала
+    коммиту целиком из-за пути вне зон задачи (SPEC
+    01M290PVYG2VJK6442H5BAX9MA, AC-3): читается по СВЕЖЕЙ записи журнала
+    `checkpoint.STRAY_WORKTREE_FILES_ACTION`, добавленной этим самым
+    вызовом (тот же приём отсечки, что `auto._run_paused_refusal`), не по
+    возврату `commit_pull_checkpoint` — её контракт (`str`) зафиксирован
+    существующими `tests/test_timeout_checkpoint.py::
+    CommitPullCheckpointTest`, менять его нельзя (AC-8)."""
     gitcmd.in_repo(wt_path, "checkout", "--", MAP_REL)
+    journaled_before = len(store.task_steps(conn, task_id))
     checkpoint.commit_pull_checkpoint(conn, task_id, wt_path)
+    for row in store.task_steps(conn, task_id)[journaled_before:]:
+        if row["action"] == checkpoint.STRAY_WORKTREE_FILES_ACTION:
+            detail = row["detail"]
+            if detail.startswith(_STRAY_DETAIL_PREFIX):
+                return detail[len(_STRAY_DETAIL_PREFIX):]
+            return detail
+    return None
 
 
 def _run_merge(wt_path, base: str, task_id: str, source_branch: str):
@@ -222,6 +262,12 @@ def _handle_merge_failure(conn, task_id: str, state: str, branch: str,
     detail = f"конфликт подтяжки {source_branch} в ветку {branch}: {note}"
     store.set_state(conn, task_id, "escalated", "fsm", expected_state=state,
                     detail=detail)
+    if state == "in_dev":
+        # Требование 1 — только `in_dev` (СПЕК: «Эскалация состояния
+        # in_dev по конфликту подтяжки»); `acceptance`/`merge_gate` (два
+        # других вызывающих `fsm._pull_main_or_escalate`) не заводят
+        # шага роли на возврате из escalated, метить их нечем.
+        store.journal(conn, task_id, "fsm", PULL_CONFLICT_ROLE_STEP_MARKER, detail)
     return Conflict(files, detail)
 
 
@@ -304,7 +350,21 @@ def evaluate(conn, task_id: str, t, state: str, *, origin_main_source,
                             expected_state=state, detail=detail)
             return Conflict([], detail)
 
-    _clean_worktree_before_merge(conn, task_id, wt_path)
+    stray = _clean_worktree_before_merge(conn, task_id, wt_path)
+    if stray is not None:
+        # SPEC 01M290PVYG2VJK6442H5BAX9MA, AC-3/AC-4: посторонний файл на
+        # чекпоинте перед подтяжкой отказывает переходу ЦЕЛИКОМ (`git
+        # merge` не начинается, задача остаётся в прежнем состоянии — не
+        # эскалирует, `store.set_state` здесь не звонится, в отличие от
+        # `Conflict` ниже) — именованная причина, которой останавливается
+        # `auto` вместо повторной попытки той же безнадёжной подтяжки.
+        detail = (f"посторонние файлы в worktree — решение Оператора: "
+                 f"{stray}")
+        store.journal(conn, task_id, "fsm",
+                      "переход отклонён: посторонние файлы в worktree",
+                      detail)
+        print(f"[{task_id}] переход отклонён: {detail}")
+        return Refused(detail)
     merge = _run_merge(wt_path, base, task_id, source_branch)
     if merge is None or merge.returncode != 0:
         outcome = _handle_merge_failure(conn, task_id, state, branch,
