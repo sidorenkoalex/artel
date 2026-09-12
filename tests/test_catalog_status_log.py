@@ -7,11 +7,12 @@ import socket
 import sys
 import unittest
 from pathlib import Path
+from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from orchestrator import catalog, config, store, zone_lock  # noqa: E402
-from tests.sandbox import TmpRootTest, capture  # noqa: E402
+from tests.sandbox import TmpRootTest, _dead_pid, capture  # noqa: E402
 
 TASK = "T001"
 
@@ -79,6 +80,63 @@ class CmdStatusLeaseHolderTest(TmpRootTest):
 
         self.assertIn("sess-status-unit", out)
         self.assertIn("жив", out)
+
+    def insert_lease(self, pid: int, pgid=None) -> None:
+        conn = store.db()
+        conn.execute(
+            "INSERT INTO leases (task_id, session_id, pid, hostname,"
+            " heartbeat_ts, pgid) VALUES (?,?,?,?,?,?)",
+            (TASK, "sess-status-unit", pid, socket.gethostname(), store.now(),
+             pgid))
+        conn.commit()
+
+    def test_dead_holder_pid_with_nonempty_agent_group_shows_alive(self):
+        """SPEC 01M2B6JWGS9HMR9XZJBASXVNSY, требование 3, AC-7: pid
+        держателя мёртв, но группа агента шага (`pgid`) непуста —
+        суффикс называет её живой, не «мёртв».
+
+        Ловит мутацию: если `catalog._lease_holder_suffix` не станет
+        сверяться с `liveness._group_member_count(row['pgid'])` (или
+        посчитает её результат и отбросит), суффикс останется «мёртв»
+        несмотря на живую группу агента."""
+        self.insert_lease(_dead_pid(), pgid=4242)
+
+        with mock.patch.object(catalog.liveness, "_group_member_count",
+                               return_value=2):
+            out = capture(catalog.cmd_status)
+
+        self.assertNotIn("мёртв", out)
+        self.assertIn("жив (агент pgid 4242)", out)
+
+    def test_dead_holder_pid_without_pgid_still_shows_dead(self):
+        """Регресс AC-8: держатель мёртв, `pgid` в строке отсутствует
+        (`NULL`) — суффикс остаётся «мёртв», как и до этой задачи.
+
+        Ловит мутацию: если отсутствие `pgid` станет трактоваться как
+        «группа есть, просто неизвестна» (например, подстановкой 0 и
+        вызовом `_group_member_count(0)`), мёртвый держатель без pgid
+        может ошибочно оказаться «жив»."""
+        self.insert_lease(_dead_pid(), pgid=None)
+
+        out = capture(catalog.cmd_status)
+
+        self.assertIn("мёртв", out)
+
+    def test_dead_holder_pid_with_empty_agent_group_still_shows_dead(self):
+        """Регресс AC-8: держатель мёртв, `pgid` известен, но группа уже
+        пуста (`_group_member_count` -> 0) — суффикс остаётся «мёртв».
+
+        Ловит мутацию: если проверка забудет сравнить результат
+        `_group_member_count` с нулём (будет считать «жив» по одному
+        факту, что `pgid` не `NULL`), пустая группа завершившегося шага
+        ошибочно покажет «жив»."""
+        self.insert_lease(_dead_pid(), pgid=4242)
+
+        with mock.patch.object(catalog.liveness, "_group_member_count",
+                               return_value=0):
+            out = capture(catalog.cmd_status)
+
+        self.assertIn("мёртв", out)
 
 
 class CmdStatusZoneWaitMinutesTest(TmpRootTest):
