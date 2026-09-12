@@ -920,6 +920,69 @@ def _reviewer_verdict_baseline(conn, task_id: str, branch: str):
     return None, None
 
 
+def _mutation_claim_gate(conn, task_id: str, t, branch: str) -> GateRefusal | None:
+    """Заявка «Ловит мутацию: …» для новых/изменённых тестов `tests/` на
+    `in_dev -> verifying` (SPEC 01M29A0F88P9GKSXFW90F99H2N, требования
+    1-4): шесть задач 11.09 получили от ревьювера один и тот же major на
+    ЭТО правило (`skills/test-authoring.md`) без единой правки кода —
+    круг ревью и CI стоил дороже самой проверки. Рубеж по образцу
+    `_zones_gate` выше — та же база сравнения, то же чтение содержимого
+    файлов через git, тот же приём отказа на сбое git (fail-closed,
+    ADR-0002), не пропуск перехода молча.
+
+    Внешний (не self) target и канареечная задача — гейт не проверяется,
+    тем же условием, что `_origin_push_gate` (требование 3/AC-8): дифф в
+    `config.ROOT` не видит код внешнего target, а канареечный `verifying`
+    не ждёт CI и не читает origin — сверка тестов ветки здесь так же не
+    имеет смысла.
+    """
+    if t["is_canary"] or t["target"] != config.DEFAULT_TARGET:
+        return None
+    base = gitcmd.diff_base(branch)
+    if base is None:
+        detail = (f"гейт заявки мутации: git не ответил на определение базы "
+                 f"сравнения (merge-base с origin/{config.MAIN_BRANCH} либо "
+                 f"локальным {config.MAIN_BRANCH}) для ветки {branch} — "
+                 f"сверка заявки мутации невозможна")
+        hint = (f"разберись, почему git не отвечает на merge-base "
+               f"для {branch}, и повтори artel.py advance {task_id}")
+        return GateRefusal("переход отклонён: гейт заявки мутации", detail, hint)
+    files = gitcmd.diff_names(base, branch)
+    if files is None:
+        detail = (f"гейт заявки мутации: git не ответил на список файлов "
+                 f"диффа (база {base}...{branch}) — сверка заявки мутации "
+                 f"невозможна")
+        hint = (f"разберись, почему git не отвечает на diff "
+               f"{base}...{branch}, и повтори artel.py advance {task_id}")
+        return GateRefusal("переход отклонён: гейт заявки мутации", detail, hint)
+
+    # Только tests/test_*.py на верхнем уровне каталога (AC-5) — тот же
+    # шаблон путей, что и остальные проверки заявок в acceptance_tests/
+    # (guard.scan_redness_markers).
+    test_files = [f for f in files
+                 if f.startswith("tests/test_") and f.endswith(".py")
+                 and f.count("/") == 1]
+    per_file: list[str] = []
+    for path in test_files:
+        head_source, _ = gitcmd.show(branch, path)
+        if head_source is None:
+            # Файл удалён в HEAD (или git не ответил на его чтение) —
+            # заявку мутации сравнивать не с чем, пропускаем (требование 2).
+            continue
+        base_source, _ = gitcmd.show(base, path)
+        missing = guard.test_functions_without_mutation_claim(
+            base_source, head_source)
+        if missing:
+            per_file.append(f"{path}: {', '.join(missing)}")
+    if not per_file:
+        return None
+    detail = (f"{'; '.join(per_file)} — каждый новый или изменённый тест в "
+             f"tests/ несёт в докстринге строку «Ловит мутацию: <что "
+             f"сломали — и тест покраснеет>» (skills/test-authoring.md)")
+    hint = f"допиши заявку и повтори artel.py advance {task_id}"
+    return GateRefusal("переход отклонён: гейт заявки мутации", detail, hint)
+
+
 def _review_rework_gate(conn, task_id: str, t, branch: str) -> GateRefusal | None:
     """Гейт `in_dev -> review` (SPEC «регрессия №13» 01M1RHFRQ2C0P4A57XJJ1WZV8N,
     требование 3, AC-3/AC-4/AC-6/AC-7; SPEC «регрессия №15»
@@ -1282,6 +1345,9 @@ def in_dev(conn, task_id: str, t, tdir, target: str, state: str) -> bool:
     if _capacity_gate_refuses(conn, task_id, t, state):
         return False
     if _zones_gate_refuses(conn, task_id, t, branch, plan_text):
+        return False
+    if _run_gates(conn, task_id,
+                  [lambda: _mutation_claim_gate(conn, task_id, t, branch)]):
         return False
     if _review_rework_gate_refuses(conn, task_id, t, branch):
         return False
