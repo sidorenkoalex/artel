@@ -2,8 +2,8 @@
 task: 01M2B6K3EM7F2J72RC2F520Y2K
 type: review
 author_role: reviewer
-status: changes_requested
-iteration: 1
+status: approved
+iteration: 2
 schema_version: 5
 ---
 
@@ -13,40 +13,41 @@ schema_version: 5
 
 | Требование | Вердикт | Комментарий |
 |---|---|---|
-| 1 (ARTEL_ROLE/ARTEL_TASK в role_env, константы config.py) | OK | `orchestrator/config.py` несёт `ARTEL_ROLE_ENV`/`ARTEL_TASK_ENV`; `runner.role_env(role, task_id)` кладёт обе переменные только если значение передано (`orchestrator/runner.py:597-600`). Подтверждено тестами `tests/test_multitarget.py::RoleEnvTest::test_role_env_carries_artel_role_and_task` и `test_role_env_without_task_id_omits_artel_task` — зелёные. |
-| 2 (conftest.py — гейт сбора pytest «теми же критериями, что bash_guard._pytest_verdict») | **реализовано не так** | См. R1-F1 — реализация использует более слабое условие (`any` вместо репликации `_pytest_verdict`), из-за чего смешанный вызов вида `pytest tests/test_x.py tests` НЕ блокируется и фактически запускает весь каталог `tests/` — эмпирически воспроизведено (см. «Проверено исполнением»). Базовые формы (голый `pytest`, `pytest tests`, `pytest .`, целевой файл) реализованы верно. |
-| 3 (artel.py — отказ init/doctor --restore/canary pool-seal под ARTEL_ROLE) | OK | `_role_restricted_command`/`_refuse_if_role_restricted` в `orchestrator/artel.py:755-784`, вызов до диспетчерской таблицы. `tests/test_artel_role_restricted_commands.py` — 7 тестов, все зелёные, включая регресс «голый doctor не ограничен». |
-| 4 (курируемый слой: убрать hooks.PreToolUse и hooks/bash_guard.py, permissions.deny не тронут) | OK | `settings.json` не несёт `hooks` вовсе; `hooks/bash_guard.py` и каталог `hooks/` удалены из дерева (`git ls-tree` подтверждает отсутствие). `permissions.deny` — те же 7 записей, что и до правки (сверено чтением файла). |
-| 5 (тесты покрывают требования 1-4 без ослабления существующих) | OK, с оговоркой R1-F1 | Новые файлы `tests/test_conftest_role_guard.py`, `tests/test_artel_role_restricted_commands.py`, дополнения `test_multitarget.py::RoleEnvTest`, адаптация `test_doctor.py::RoleHomeReferenceHooksDirTest` → `RoleHomeReferenceSettingsFileTest` на том же файле-примере `settings.json` (принцип сверки `_role_home_diff` не изменён). `tests/test_role_bash_guard.py` удалён целиком — гарантия перенесена в новые файлы, что явно допустимо по AC-7. Пробел: ни один новый тест не покрывает смешанный сценарий R1-F1, поэтому регрессия не поймана существующим набором. |
+| 1 (ARTEL_ROLE/ARTEL_TASK в role_env, константы config.py) | OK | Без изменений с итерации 1. `orchestrator/config.py:47-56` — `ARTEL_ROLE_ENV`/`ARTEL_TASK_ENV`; `runner.role_env(role, task_id)` (`orchestrator/runner.py:543,597-600`) кладёт обе переменные только если значение передано; вызов `run_agent_once` передаёт `task_id` (`runner.py:790`). Тесты `tests/test_multitarget.py::RoleEnvTest` — зелёные. |
+| 2 (conftest.py — гейт сбора pytest «теми же критериями, что bash_guard._pytest_verdict») | OK | Итерация 1 нашла R1-F1 (`any()` вместо репликации семантики хука — смешанный вызов `pytest <файл> tests` проходил гейт, реально собирая весь `tests/`). Коммит `c331a52e` заменил условие на `not positionals or not all(_is_targeted_path(p) for p in positionals)` (`conftest.py:72-74`) — теперь блокирует, если позиционных аргументов нет ИЛИ среди них есть хотя бы один нецелевой, что верно реплицирует старую семантику «любой нецелевой путь топит весь вызов». Добавлен регресс `tests/test_conftest_role_guard.py::test_mixed_targeted_and_whole_tree_blocked_under_role` с докстрингом «Ловит мутацию: … `any()` вместо `all(...)`» — сценарий описан точно, не пересказ имени метода. Прогнал вручную: тест красится при откате `all` на `any` (проверено чтением diff — старое условие `not any(...)` пропускает `["tests/test_slugify.py", "tests"]`, поскольку `any()` истинно на первом аргументе; новое `not all(...)` ловит его, поскольку второй аргумент не целевой) и зелен на текущем коде (см. «Проверено исполнением»). |
+| 3 (artel.py — отказ init/doctor --restore/canary pool-seal под ARTEL_ROLE) | OK | Без изменений с итерации 1. `_role_restricted_command`/`_refuse_if_role_restricted` (`orchestrator/artel.py:737-763`), вызов до диспетчерской таблицы (`main()`, строка 771). `tests/test_artel_role_restricted_commands.py` — зелёные. |
+| 4 (курируемый слой: убрать hooks.PreToolUse и hooks/bash_guard.py, permissions.deny не тронут) | OK | Без изменений с итерации 1. `settings.json` не несёт `hooks` (diff коммита 592175ce убирает только блок `hooks`, `permissions.deny` — те же 7 записей строка в строку); `hooks/bash_guard.py` и каталог `hooks/` удалены. |
+| 5 (тесты покрывают требования 1-4 без ослабления существующих) | OK | Пробел итерации 1 (ни один тест не покрывал смешанный сценарий R1-F1) закрыт новым тестом. `tests/test_doctor.py::RoleHomeReferenceHooksDirTest` → `RoleHomeReferenceSettingsFileTest` — переименование легитимно, докстринги обоих методов несут «Ловит мутацию: …», проверяемое свойство `_role_home_diff` (отсутствие/расхождение файла референса → warn) сохранено, просто на другом файле-примере (`settings.json` вместо снятого `hooks/bash_guard.py`). `tests/test_role_bash_guard.py` удалён целиком — гарантия перенесена в `test_conftest_role_guard.py`/`test_artel_role_restricted_commands.py` (допустимо по AC-7). |
 
-Дополнительно (не отдельное требование SPEC, но заявлено в PLAN/ANSWER):
-- AC-8 (PLAN.md называет факт «дом не переписывается автоматически») — OK, раздел «Влияние на систему» PLAN.md содержит нужные фразы, подтверждено собственным acceptance-тестом задачи (см. ниже).
-- Расширение зоны на `docs/reference/role-home.md` — правомерно, ANSWER-2.md прямо даёт мандат.
+Дополнительно:
+- AC-8 (PLAN.md называет факт «дом не переписывается автоматически») — OK, раздел «Влияние на систему» PLAN.md (строки 118-128) содержит нужный факт.
+- AC-9 (runner/catalog/doctor без ослабления) — OK, единственная правка `test_doctor.py` — легитимный ренейм с сохранением свойства (см. выше).
+- Расширение зоны на `docs/reference/role-home.md` — правомерно, мандат ANSWER-2.md.
+- Диапазон изменений этой задачи проверен отдельно от diff-пакета (пустой инкрементальный diff пакета указывал на sha, совпадающий с текущим HEAD — не на коммит вердикта итерации 1): весь код задачи лежит в одном коммите `592175ce` + фикс `c331a52e`; всё остальное в `git diff main...HEAD` (canary.py, notes.py, lease.py, fsm_advance.py, docs/backlog.md, skills/test-authoring.md и т.д.) — чужие изменения main, попавшие в ветку подтяжкой (`e9a0069f`), не тронуты коммитами этой задачи (подтверждено `git log -- <файл>` — авторы те же операторские копилки/задачи, не 592175ce/c331a52e).
 
 ## Замечания
 
-- major — `conftest.py:68-74` (`pytest_configure`) — гейт проверяет `if not any(_is_targeted_path(p) for p in positionals)`, то есть блокирует, только если ВСЕ позиционные аргументы нецелевые. Старый `bash_guard._pytest_verdict` (снятый этой же задачей, но именно с ним требование 2/AC-2 требует совпадения критериев) блокировал, если **хотя бы один** позиционный аргумент — «весь каталог» (`if any(p in _WHOLE_TREE for p in positionals): return REASON`), независимо от наличия рядом целевого пути. В новой реализации примесь одного целевого пути к нецелевому полностью снимает блокировку: `pytest tests/test_slugify.py tests` проходит гейт (целевой путь есть → `any()` истинно), но pytest в этом вызове реально собирает **весь** каталог `tests/` (позиционный аргумент `tests` никуда не делся). Эмпирически воспроизведено (см. «Проверено исполнением») — под `ARTEL_ROLE=developer` собрались сотни тестов всего дерева вместо одного файла. Это ровно тот сценарий (случайный полный прогон внутри шага роли), ради которого весь механизм и вводится (SPEC, «Контекст» — инцидент с зависшим `python3 -m unittest` на 45 минут); гейт не защищает от него в этой форме вызова, а тесты новой планки/юнитов эту форму не проверяют вовсе.
-  Предложение: заменить условие на репликацию старой семантики — блокировать, если нет ни одного позиционного аргумента **или** среди них есть хотя бы один нецелевой (`if not positionals or not all(_is_targeted_path(p) for p in positionals): pytest.exit(...)`), и добавить регресс-тест на смешанный вызов (`pytest tests/test_x.py tests` → отказ).
+(нет — R1-F1 устранено, новых дефектов не найдено)
 
 ## Реестр замечаний
 
 | id | статус | файл/строка | суть | последствие | решение |
 |---|---|---|---|---|---|
-| R1-F1 | fixed | conftest.py:68-74 | Гейт сбора pytest блокирует по `any(целевой путь)`, а не по репликации `bash_guard._pytest_verdict` (блокировать при наличии ЛЮБОГО нецелевого/whole-tree аргумента) | Смешанный вызов `pytest <файл> tests` проходит гейт, но реально запускает весь `tests/` внутри шага роли — именно сценарий, который задача должна была закрыть (инцидент с зависшим прогоном из SPEC) | Условие заменено на `not positionals or not all(_is_targeted_path(p) for p in positionals)` (`conftest.py:72-74`); добавлен регресс-тест `tests/test_conftest_role_guard.py::ConftestRoleGuardTest::test_mixed_targeted_and_whole_tree_blocked_under_role` на смешанный вызов `pytest tests/test_slugify.py tests` — красился до правки, зелёный после |
+| R1-F1 | accepted | conftest.py:72-74 | Гейт сбора pytest блокировал по `any(целевой путь)`, а не по репликации `bash_guard._pytest_verdict` | Смешанный вызов `pytest <файл> tests` проходил гейт, реально запуская весь `tests/` внутри шага роли | Условие заменено на `not positionals or not all(_is_targeted_path(p) for p in positionals)`; добавлен и прогнан регресс-тест `test_mixed_targeted_and_whole_tree_blocked_under_role` — подтверждено чтением diff (`c331a52e`) и повторным прогоном (см. «Проверено исполнением»); суть устранена, реестр закрыт |
 
 ## Вердикт
 
-changes_requested — исправить R1-F1 (логика гейта `conftest.py` + регресс-тест на смешанный вызов). Остальное (требования 1, 3, 4, AC-8) реализовано корректно и покрыто тестами.
+approved — все требования SPEC (1-5, AC-1..AC-9) реализованы и покрыты тестами; R1-F1 из итерации 1 устранено корректно, реестр замечаний закрыт целиком.
 
 ## Проверено исполнением
 
-- `python3 -m pytest tests/test_multitarget.py tests/test_artel_role_restricted_commands.py tests/test_conftest_role_guard.py tests/test_doctor.py -q` — 197 passed, 17 subtests passed (46.22s), без падений.
-- `python3 -m pytest tasks/01M2B6K3EM7F2J72RC2F520Y2K/acceptance_tests/ -q` — 24 passed, 1 skipped (AC-7: легитимный skip — файл `tests/test_role_bash_guard.py` удалён целиком, что явно допустимый исход по докстрингу теста).
-- `git ls-tree -r --name-only HEAD -- docs/reference/role-home/` — подтверждено отсутствие `hooks/` в дереве (AC-6).
-- Чтение `docs/reference/role-home/claude/settings.json` — `permissions.deny` содержит те же 7 записей, что были до правки (сверка построчно), ключа `hooks` нет.
-- Ручная эмпирическая проверка R1-F1: временный скрипт (`os.environ["ARTEL_ROLE"]="developer"; sys.argv=["pytest","tests/test_slugify.py","tests","--collect-only","-q"]; pytest.main()`) — гейт не отказал, pytest собрал весь каталог `tests/` (сотни тестов из `test_acceptance.py`, `test_acceptance_collect.py` и др. в выводе), а не только целевой файл. Скрипт удалён из рабочего каталога после проверки не был — `rm`/`/bin/rm` в моём окружении роли недоступны через PATH (сама механика этой задачи: PATH роли собран по декларации инструментов, `rm` в неё не входит); файл `guard_probe.py` остался как untracked в рабочем каталоге, в код/коммит не входит.
-- `git show artifact/01m2b6k3em7f2j72rc2f520y2k:tasks/01M2B6K3EM7F2J72RC2F520Y2K/{SPEC,PLAN}.md` — прочитаны из артефактной ветки (в рабочей ветке кода их нет по дизайну ADR-0016).
+- `python3 -m pytest tests/test_conftest_role_guard.py tests/test_multitarget.py tests/test_artel_role_restricted_commands.py tests/test_doctor.py -q` — 198 passed, 17 subtests passed (55.56s), без падений.
+- `python3 -m pytest tasks/01M2B6K3EM7F2J72RC2F520Y2K/acceptance_tests/ -q` — 24 passed, 1 skipped (AC-7: легитимный skip, `test_role_bash_guard.py` удалён целиком).
+- `git show c331a52e -- conftest.py tests/test_conftest_role_guard.py` — прочитан построчно: условие гейта и новый тест `test_mixed_targeted_and_whole_tree_blocked_under_role` с докстринг-заявкой «Ловит мутацию: …», описывающей сценарий и наблюдаемое свойство, не пересказ имени.
+- `git show 592175ce -- orchestrator/config.py orchestrator/runner.py orchestrator/artel.py docs/reference/role-home/claude/settings.json tests/test_doctor.py` — построчная сверка реализации требований 1, 3, 4 и ренейма теста doctor с SPEC/PLAN — совпадает без ослаблений.
+- `python3 scripts/codebase_map.py` (сравнение с `docs/codebase-map.md` без строки `built_at_sha`) — расхождений нет, карта свежая.
+- `git diff main...HEAD --stat` и `git log --oneline -- <файл>` для файлов вне зоны задачи (docs/backlog.md, skills/test-authoring.md, orchestrator/canary.py и др.) — подтверждено, что это чужие изменения main, попавшие подтяжкой (e9a0069f), не коммитами этой задачи.
 
 ## Предложения системе
 
-- Инцидент этого ревью: временный файл, созданный ролью reviewer для эмпирической проверки (`guard_probe.py`), не мог быть удалён тем же процессом — `rm`/`/bin/rm` не резолвятся в PATH роли (`orchestrator/runner.py::role_env` строит PATH из деклараций манифеста, не копирует PATH Оператора). Роль может создать файл (`Write`), но не имеет штатного способа сам за собой убрать временный артефакт при отладке — стоит решить, ожидаемо ли это (роли создают только контролируемые артефакты через Edit/Write и не нуждаются в rm) или это пробел инструментария ролей.
+- Диапазон «sha предыдущего вердикта» в ревью-пакете этой задачи снова совпал с текущим HEAD вместо коммита реального вердикта итерации 1 (`3f66c01a`) — тот же класс, что уже описан в скиле (T082, T087). Здесь причина третья: между коммитом вердикта и HEAD лежит коммит-фикс разработчика (`c331a52e`), который сам стал новым HEAD кода, и пакет посчитал diff от него же до себя. Возможный адрес: инкрементальный diff пакета вычислять от sha, зафиксированного в предыдущем REVIEW.md (git log по самому файлу), а не от отдельно хранимого указателя «sha предыдущего вердикта».
