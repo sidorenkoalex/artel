@@ -92,6 +92,23 @@ clone()` реальный (canary.py:505), схему создаёт всегд�
 (залочена, tasks/T023) — правка только в `_has_subtasks`, в зоне этой
 задачи (`orchestrator/canary.py`).
 
+**Правка по REVIEW итерации 1 (R1-F1, major)** — пять новых тестов
+(`test_test_author_visited_true_when_tests_writing_in_journal`,
+`test_test_author_visited_false_when_tests_writing_skipped`,
+`test_ac1_spec_only_on_artifact_branch_goes_to_tests_writing`,
+`test_ac2_skip_tests_on_artifact_branch_goes_to_in_dev`,
+`test_ac3_spec_not_found_anywhere_kills_inconclusive_not_in_dev`) не
+несли обязательную заявку «Ловит мутацию: …» в докстринге
+(skills/test-authoring.md), один — вовсе без докстринга. Каждому
+дописан/переписан докстринг, формулирующий конкретную мутацию и
+наблюдаемое расхождение — по образцу существующих тестов файла
+(например `NeedsDiagnosticsTest`). R1-F2 (minor, сообщение
+merge-коммита `ad24afa3` не в формате `<id>: <что сделано>`) —
+отклонено: коммит уже опубликован и не является HEAD ветки,
+переписывание истории ради сообщения минорного merge-коммита создаёт
+больше риска (force-push опубликованной ветки), чем пользы; само
+REVIEW отмечает исправление как опциональное.
+
 ## Шаги
 1. `orchestrator/canary.py`: `_spec_gate_next_state` — резолвер
    источника через `artifact_source.resolve` + `fsm._read_branch_text_
