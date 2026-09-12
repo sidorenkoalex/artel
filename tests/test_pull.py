@@ -11,6 +11,18 @@ autoresolve.py` и в приёмочных тестах задачи).
 узлы `fsm.py`, `evaluate()` принимает их параметрами (не импортом
 `fsm`, см. докстринг `pull.py`) — здесь это простые фейки, без
 затрагивания `orchestrator.fsm` вовсе.
+
+`DocOnlyMainAdvanceTest` (SPEC 01M2ARQMTYRNPR5HRXAPCBAXNY, сценарии
+(а)-(в)) — отдельный класс на `tests.sandbox.RealGitSandbox` (НАСТОЯЩИЙ
+git, не заглушки): классификация «весь дифф main документный и не
+пересекается с диффом ветки» считается двумя реальными `git diff
+--name-only` от реального `git merge-base`, заглушкой это не
+изобразить осмысленно. Bare origin не заводится — `pull.evaluate`
+получает `base` уже готовым sha параметром (`origin_main_sha`), сам
+`origin/*` не читает; здесь это sha реального коммита на локальном
+`config.MAIN_BRANCH`, не фиктивная строка, как у `PullEvaluateTest`
+выше (там `commits_behind` замокан отдельно и до реального git дело не
+доходит).
 """
 import subprocess
 import sys
@@ -21,8 +33,9 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from orchestrator import acceptance, config, gitcmd, pull, store  # noqa: E402
-from tests.sandbox import (TmpRootTest, disk_backed_ls_tree_files,  # noqa: E402
-                           disk_backed_show)
+from scripts import ci_push_class  # noqa: E402
+from tests.sandbox import (RealGitSandbox, TmpRootTest,  # noqa: E402
+                           disk_backed_ls_tree_files, disk_backed_show)
 
 MAP_REL = "docs/codebase-map.md"
 
@@ -334,6 +347,184 @@ class PullEvaluateTest(TmpRootTest):
                                side_effect=self._default_in_repo):
             outcome = self.evaluate()
         self.assertEqual(outcome, pull.Refused(None))
+
+
+SPEC_NO_AC_MARKUP = (
+    "---\ntask: x\ntype: spec\nauthor_role: analyst\n"
+    "status: ready\nschema_version: 1\n---\n\n# SPEC\n")
+
+
+class DocOnlyMainAdvanceTest(RealGitSandbox):
+    """SPEC 01M2ARQMTYRNPR5HRXAPCBAXNY, сценарии (а)-(в): `pull.evaluate`
+    на настоящем git — реальные `merge-base`/`diff --name-only`, не
+    заглушки (см. докстринг файла)."""
+
+    TASK = "01PULLDOCONLYADVANCEUT"
+    BRANCH = f"task/{TASK.lower()}-x"
+
+    def setUp(self):
+        super().setUp()
+        # Файл, общий для main и ветки задачи ДО расхождения — нужен
+        # сценарию (в) (AC-9): обе стороны правят один и тот же путь
+        # неконфликтующими правками (разные концы файла), чтобы отличить
+        # «пересекается по ПУТИ» (что и проверяет требование 1) от
+        # «конфликтует по содержимому» (уже другая, существующая ветка
+        # проверки в этом файле).
+        (self.root / "docs").mkdir()
+        (self.root / "docs" / "backlog.md").write_text(
+            "line1\nline2\nline3\n", encoding="utf-8")
+        self.git("add", "-A")
+        self.git("commit", "-q", "-m", "seed: docs/backlog.md")
+
+        store.insert_task(store.db(), self.TASK, "Юнит-тест doc-only свежести",
+                          "in_dev", self.BRANCH, config.DEFAULT_TARGET,
+                          config.DEFAULT_BUDGET_USD)
+        self.checkout(self.BRANCH, create=True)
+
+        from orchestrator import workspace
+        self.ensure_mock = mock.Mock(return_value=(self.root, None))
+        ensure_patcher = mock.patch.object(workspace, "ensure", self.ensure_mock)
+        ensure_patcher.start()
+        self.addCleanup(ensure_patcher.stop)
+
+        self.origin_main_source = mock.Mock(
+            return_value=("origin", config.MAIN_BRANCH))
+        self.read_branch_text_or_refuse = mock.Mock(
+            return_value=SPEC_NO_AC_MARKUP)
+
+    # ------------------------------------------------------------ утилиты
+
+    def write_on_main(self, rel: str, content: str) -> None:
+        self.checkout(config.MAIN_BRANCH)
+        path = self.root / rel
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(content, encoding="utf-8")
+        self.git("add", "-A")
+        self.git("commit", "-q", "-m", f"main: {rel}")
+        self.checkout(self.BRANCH)
+
+    def append_on_main(self, rel: str, line: str) -> None:
+        self.checkout(config.MAIN_BRANCH)
+        path = self.root / rel
+        with path.open("a", encoding="utf-8") as f:
+            f.write(line)
+        self.git("add", "-A")
+        self.git("commit", "-q", "-m", f"main: {rel}")
+        self.checkout(self.BRANCH)
+
+    def prepend_on_branch(self, rel: str, line: str) -> None:
+        path = self.root / rel
+        path.write_text(line + path.read_text(encoding="utf-8"),
+                        encoding="utf-8")
+        self.git("add", "-A")
+        self.git("commit", "-q", "-m", f"branch: {rel}")
+
+    def journal_rows(self) -> list:
+        return store.db().execute(
+            "SELECT action, detail FROM steps WHERE task_id=? ORDER BY id",
+            (self.TASK,)).fetchall()
+
+    def task_row(self):
+        return store.get_task(store.db(), self.TASK)
+
+    def evaluate(self):
+        conn = store.db()
+        t = store.get_task(conn, self.TASK)
+        main_sha = self.git("rev-parse", config.MAIN_BRANCH).strip()
+        return pull.evaluate(
+            conn, self.TASK, t, "in_dev",
+            origin_main_source=self.origin_main_source,
+            origin_main_sha=mock.Mock(return_value=main_sha),
+            read_branch_text_or_refuse=self.read_branch_text_or_refuse)
+
+    # ---------------------------------------------------------- сценарий (а)
+
+    def test_doc_only_main_advance_is_fresh_without_pull(self):
+        """AC-7: main продвинулся только документным `docs/backlog2.md`,
+        ветка задачи от точки расхождения не менялась — `Fresh()`, без
+        реального merge (worktree не заводился — `ensure_mock` не
+        позван), с журналом «свежесть: …».
+
+        Ловит мутацию: короткое замыкание убрано или проверяет только
+        часть условия (например, только документность main без сверки
+        пересечения с диффом ветки) — `evaluate` ушёл бы в реальный
+        `git merge` вместо `Fresh()`, и `ensure_mock` была бы позвана."""
+        self.write_on_main("docs/backlog2.md", "новая строка копилки\n")
+        outcome = self.evaluate()
+        self.assertEqual(outcome, pull.Fresh())
+        self.ensure_mock.assert_not_called()
+        rows = self.journal_rows()
+        self.assertEqual(1, len(rows))
+        self.assertEqual(
+            "свежесть: 1 документных коммитов main без подтяжки",
+            rows[0]["action"])
+        self.assertIn("docs/backlog2.md", rows[0]["detail"])
+        self.assertEqual(self.task_row()["state"], "in_dev")
+
+    # ---------------------------------------------------------- сценарий (б)
+
+    def test_main_code_change_still_pulls(self):
+        """AC-8: одним коммитом main меняет и `docs/x.md`, и
+        `orchestrator/a.py` — недокументный файл ломает короткое
+        замыкание целиком, подтяжка идёт как прежде (`Pulled`).
+
+        Ловит мутацию: классификация «все файлы документные» смотрит не
+        на ВЕСЬ дифф, а на первый файл/на любой один документный —
+        `orchestrator/a.py` (недокументный) остался бы незамеченным, и
+        `evaluate` вернула бы `Fresh()` вместо `Pulled`."""
+        self.checkout(config.MAIN_BRANCH)
+        (self.root / "docs" / "x.md").write_text("x\n", encoding="utf-8")
+        (self.root / "orchestrator").mkdir(exist_ok=True)
+        (self.root / "orchestrator" / "a.py").write_text(
+            "# код\n", encoding="utf-8")
+        self.git("add", "-A")
+        self.git("commit", "-q", "-m", "main: docs/x.md + orchestrator/a.py")
+        self.checkout(self.BRANCH)
+
+        outcome = self.evaluate()
+        self.assertIsInstance(outcome, pull.Pulled)
+        self.ensure_mock.assert_called_once()
+        self.assertFalse(
+            any(r["action"].startswith("свежесть:") for r in self.journal_rows()))
+
+    # ---------------------------------------------------------- сценарий (в)
+
+    def test_doc_path_touched_by_branch_still_pulls(self):
+        """AC-9: main правит `docs/backlog.md`, ветка задачи от той же
+        точки расхождения ТОЖЕ его правит (другой конец файла, без
+        конфликта содержимого) — пересечение по пути ломает короткое
+        замыкание, `Pulled`, несмотря на документность main.
+
+        Ловит мутацию: сверка пересечения диффов main/ветки убрана или
+        сравнивает не множества путей, а что-то другое (например, только
+        имена файлов без каталога) — `evaluate` вернула бы `Fresh()`,
+        хотя ветка реально меняет тот же путь."""
+        self.append_on_main("docs/backlog.md", "main line\n")
+        self.prepend_on_branch("docs/backlog.md", "branch line\n")
+
+        outcome = self.evaluate()
+        self.assertIsInstance(outcome, pull.Pulled)
+        self.ensure_mock.assert_called_once()
+        self.assertFalse(
+            any(r["action"].startswith("свежесть:") for r in self.journal_rows()))
+
+
+class DocPathClassificationTest(unittest.TestCase):
+    """SPEC 01M2ARQMTYRNPR5HRXAPCBAXNY, сценарий (г)/AC-10: публичное имя
+    `ci_push_class.is_doc_path` (требование 4/AC-6) на корневом `.md` и на
+    `.md` в подкаталоге вне `docs/`/`tasks/`."""
+
+    def test_root_markdown_is_doc_path(self):
+        """Ловит мутацию: `is_doc_path` перестаёт узнавать корневой `.md`
+        (например, регэксп сузили до `docs/`/`tasks/` без ветки
+        `[^/]+\\.md$`) — `README.md` ошибочно не документный."""
+        self.assertTrue(ci_push_class.is_doc_path("README.md"))
+
+    def test_nested_markdown_outside_docs_or_tasks_is_not_doc_path(self):
+        """Ловит мутацию: `is_doc_path` расширили до ЛЮБОГО `.md` независимо
+        от каталога (потерян якорь `^`/исключение `/` в `[^/]+`) —
+        `skills/x.md` ошибочно документный."""
+        self.assertFalse(ci_push_class.is_doc_path("skills/x.md"))
 
 
 if __name__ == "__main__":

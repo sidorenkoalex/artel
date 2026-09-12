@@ -46,7 +46,7 @@ _NULL_SHA = "0" * 40
 _WORKFLOW_NAME = "ci"
 
 
-def _is_doc_path(path: str) -> bool:
+def is_doc_path(path: str) -> bool:
     return bool(_DOC_PATTERN.match(path))
 
 
@@ -120,7 +120,7 @@ def classify(event_name: str, ref: str, before: str, head: str,
         return True, f"ветка {branch} — тесты идут"
 
     files = changed_files if changed_files is not None else _diff_names(before, head)
-    if not files or not all(_is_doc_path(f) for f in files):
+    if not files or not all(is_doc_path(f) for f in files):
         return True, "main: код менялся — тесты идут"
 
     conclusion, why = _parent_run_conclusion(before)
