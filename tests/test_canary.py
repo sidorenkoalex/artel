@@ -48,6 +48,17 @@ class DeviationTest(unittest.TestCase):
         self.assertTrue(canary._deviation_exceeds(1, 0, 0.5))
 
 
+class DevRetriesConfigConstantTest(unittest.TestCase):
+    """`config.CANARY_MAX_DEV_RETRIES` (01M2ARQD7C472KZACB3SZXGF1N,
+    требование 1) — потолок повторов developer на красной планке."""
+
+    def test_value_is_two(self):
+        """Ловит мутацию: константа переименована/удалена либо несёт
+        другое значение (0, 1, 3) — потолок повторов developer разошёлся
+        бы с решением Оператора 12.09 (вариант а)."""
+        self.assertEqual(config.CANARY_MAX_DEV_RETRIES, 2)
+
+
 class TaskDeviationWarningsTest(unittest.TestCase):
     """`canary._task_deviation_warnings` — отклонение ОДНОЙ задачи от ЕЁ
     per-task бейзлайна (требование 9, 12), не суммы по набору (v1-регресс,
@@ -190,6 +201,20 @@ class MetricsFromJournalTest(unittest.TestCase):
         self.assertTrue(canary._test_author_visited(steps))
         self.assertTrue(canary._task_metrics(
             self.conn, self.TASK)["test_author_visited"])
+
+    def test_task_metrics_includes_dev_retries_count(self):
+        """Ловит мутацию: `_task_metrics` не прокидывает `_dev_retry_count`
+        в возвращаемый словарь (поле `dev_retries` отсутствует или всегда
+        0) — отчёт `_run_one_task` не смог бы напечатать реальное число
+        повторов developer (01M2ARQD7C472KZACB3SZXGF1N, требование 5)."""
+        store.journal(self.conn, self.TASK, "canary",
+                      canary._DEV_RETRY_ACTION, "попытка 1/2")
+        store.journal(self.conn, self.TASK, "canary",
+                      canary._DEV_RETRY_ACTION, "попытка 2/2")
+
+        metrics = canary._task_metrics(self.conn, self.TASK)
+
+        self.assertEqual(metrics["dev_retries"], 2)
 
     def test_test_author_visited_false_when_tests_writing_skipped(self):
         """Ловит мутацию: `_test_author_visited` возвращает `True`
@@ -691,6 +716,227 @@ class DriveTaskStallCapTest(unittest.TestCase):
         # только звонит `cleanup.cmd_kill` (замокан здесь), реальный
         # переход в `killed` — его работа, не предмет этого теста.
         self.assertEqual(store.get_task(self.conn, self.TASK)["state"], "in_dev")
+
+
+class DriveTaskDevRetryOnAcceptanceRefusalTest(unittest.TestCase):
+    """`canary._drive_task` — повтор developer на красной приёмочной
+    планке (01M2ARQD7C472KZACB3SZXGF1N, требование 2, AC-7): решение
+    Оператора 12.09 (вариант а) — воспроизвести ручной возврат `run <id>`
+    ВНУТРИ цикла канарейки на отказе «переход отклонён: приёмочные
+    тесты», не дожидаясь стагнации."""
+
+    TASK = "T920"
+
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.root = Path(tmp.name)
+        for attr, value in (("ROOT", self.root),
+                            ("DB", self.root / ".artel" / "state.db"),
+                            ("TASKS", self.root / "tasks")):
+            patcher = mock.patch.object(config, attr, value)
+            patcher.start()
+            self.addCleanup(patcher.stop)
+        store.create_schema(store.db())
+        self.conn = store.db()
+        store.insert_task(self.conn, self.TASK, "Канареечная задача",
+                          "in_dev", "task/t920-x", config.DEFAULT_TARGET,
+                          50.0, is_canary=True)
+
+        self.auto_calls = 0
+
+        def fake_auto(task_id):
+            self.auto_calls += 1
+            if self.auto_calls == 1:
+                store.journal(self.conn, task_id, "fsm",
+                             "переход отклонён: приёмочные тесты",
+                             "acceptance_tests красные:\n...")
+                return
+            # Второй проход — задача сдвинулась дальше `in_dev` (планка
+            # исправлена повтором): цикл продолжает работу очередным
+            # `auto.cmd_auto`, а не застревает на этом отказе навсегда.
+            store.set_state(self.conn, task_id, "merge_gate", "test",
+                            expected_state="in_dev")
+
+        patcher = mock.patch.object(canary.auto, "cmd_auto",
+                                    side_effect=fake_auto)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+        patcher = mock.patch.object(canary.runner, "cmd_run")
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+        patcher = mock.patch.object(canary.cleanup, "cmd_kill")
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def test_single_refusal_retries_developer_once_and_continues(self):
+        """Ловит мутацию: ветка повтора developer не добавлена в
+        `_drive_task` (или добавлена ПОСЛЕ generic-ветки `runner.
+        step_role`) — отказ приёмочной планки по-прежнему копил бы
+        `stall_streak` вместо вызова `runner.cmd_run`, и `_drive_task`
+        никогда не дошёл бы до `merge_gate` этим же прогоном."""
+        canary._drive_task(self.conn, self.TASK)
+
+        canary.runner.cmd_run.assert_called_once_with(self.TASK)
+        self.assertEqual(self.auto_calls, 2)
+        canary.cleanup.cmd_kill.assert_called_once_with(self.TASK)
+
+    def test_refusal_wrapped_by_auto_stopped_is_detected_too(self):
+        """Тот же отказ, видимый ТОЛЬКО как причина остановки `auto`
+        стоп-краном T038 («auto остановлен: in_dev: переход отклонён:
+        приёмочные тесты — ...»), не прямой записью `fsm`.
+
+        Ловит мутацию: детектор ищет отказ ТОЛЬКО буквальным `action ==
+        "переход отклонён: приёмочные тесты"`, не заглядывая в `detail`
+        записи «auto остановлен» — этот сценарий (T038 срабатывает раньше
+        отдельной проверки цикла) остался бы нераспознанным, и `runner.
+        cmd_run` не был бы вызван ни разу."""
+        self.auto_calls = 0
+
+        def fake_auto_wrapped(task_id):
+            self.auto_calls += 1
+            if self.auto_calls == 1:
+                store.journal(
+                    self.conn, task_id, "operator", "auto остановлен",
+                    f"in_dev: переход отклонён: приёмочные тесты — "
+                    f"почини причину и повтори artel.py advance {task_id}")
+                return
+            store.set_state(self.conn, task_id, "merge_gate", "test",
+                            expected_state="in_dev")
+
+        canary.auto.cmd_auto.side_effect = fake_auto_wrapped
+
+        canary._drive_task(self.conn, self.TASK)
+
+        canary.runner.cmd_run.assert_called_once_with(self.TASK)
+        self.assertEqual(self.auto_calls, 2)
+
+
+class DriveTaskDevRetryCapExceededTest(unittest.TestCase):
+    """`canary._drive_task` — потолок `config.CANARY_MAX_DEV_RETRIES`
+    повторов developer подряд одного визита `in_dev` (требование 3,
+    AC-4, тест AC-8): без потолка цикл гонял бы developer по кругу на
+    реально не сходящейся планке бесконечно."""
+
+    TASK = "T921"
+
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.root = Path(tmp.name)
+        for attr, value in (("ROOT", self.root),
+                            ("DB", self.root / ".artel" / "state.db"),
+                            ("TASKS", self.root / "tasks")):
+            patcher = mock.patch.object(config, attr, value)
+            patcher.start()
+            self.addCleanup(patcher.stop)
+        store.create_schema(store.db())
+        self.conn = store.db()
+        store.insert_task(self.conn, self.TASK, "Канареечная задача",
+                          "in_dev", "task/t921-x", config.DEFAULT_TARGET,
+                          50.0, is_canary=True)
+
+        # Тот же отказ на КАЖДОМ проходе — планка реально не сходится.
+        def fake_auto(task_id):
+            store.journal(self.conn, task_id, "fsm",
+                         "переход отклонён: приёмочные тесты",
+                         "acceptance_tests красные: одна и та же причина")
+
+        patcher = mock.patch.object(canary.auto, "cmd_auto",
+                                    side_effect=fake_auto)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+        patcher = mock.patch.object(canary.runner, "cmd_run")
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+        patcher = mock.patch.object(canary.cleanup, "cmd_kill")
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def test_exceeding_cap_kills_inconclusive_and_bounds_retries(self):
+        """Ловит мутацию: потолок `config.CANARY_MAX_DEV_RETRIES` не
+        проверяется (или сверяется со сдвигом) — цикл звал бы `runner.
+        cmd_run` без ограничения на каждом проходе; тест либо завис бы,
+        либо число вызовов `runner.cmd_run` превысило бы потолок вместо
+        `cleanup.cmd_kill` через ограниченное число повторов."""
+        canary._drive_task(self.conn, self.TASK)
+
+        cap = config.CANARY_MAX_DEV_RETRIES
+        canary.cleanup.cmd_kill.assert_called_once_with(self.TASK)
+        self.assertEqual(canary.runner.cmd_run.call_count, cap)
+        rows = store.open_alerts(self.conn, "threshold")
+        matching = [r for r in rows if r["target"] == self.TASK]
+        expected_text = (f"canary: {cap} повторов developer на красной "
+                         "планке — задача не сходится")
+        self.assertTrue(any(r["message"] == expected_text for r in matching),
+                        [r["message"] for r in matching])
+
+
+class DriveTaskOtherClassRefusalDoesNotRetryDeveloperTest(unittest.TestCase):
+    """`canary._drive_task` — отказ ДРУГОГО класса (не «приёмочные
+    тесты») в `in_dev` не лечится повтором developer (требование 4,
+    тест AC-9): планка не найдена в источнике/зоны/гейт заявки
+    мутации/лок планки — прежняя стагнация (`config.
+    CANARY_MAX_STALL_ITERS`) сохраняется байт-в-байт."""
+
+    TASK = "T922"
+
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.root = Path(tmp.name)
+        for attr, value in (("ROOT", self.root),
+                            ("DB", self.root / ".artel" / "state.db"),
+                            ("TASKS", self.root / "tasks")):
+            patcher = mock.patch.object(config, attr, value)
+            patcher.start()
+            self.addCleanup(patcher.stop)
+        store.create_schema(store.db())
+        self.conn = store.db()
+        store.insert_task(self.conn, self.TASK, "Канареечная задача",
+                          "in_dev", "task/t922-x", config.DEFAULT_TARGET,
+                          50.0, is_canary=True)
+
+        def fake_auto(task_id):
+            store.journal(self.conn, task_id, "fsm",
+                         "переход отклонён: гейт заявки мутации",
+                         "мутация не заявлена")
+
+        patcher = mock.patch.object(canary.auto, "cmd_auto",
+                                    side_effect=fake_auto)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+        patcher = mock.patch.object(canary.runner, "cmd_run")
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+        patcher = mock.patch.object(canary.cleanup, "cmd_kill")
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def test_other_class_refusal_never_calls_runner_cmd_run(self):
+        """Ловит мутацию: детектор `_acceptance_refusal_blocks_in_dev`
+        сравнивает по префиксу `"переход отклонён"` вместо точного текста
+        `"переход отклонён: приёмочные тесты"` — отказ другого класса
+        (гейт заявки мутации) ошибочно запустил бы повтор developer,
+        хотя требование 4 предписывает не трогать это поведение."""
+        canary._drive_task(self.conn, self.TASK)
+
+        canary.runner.cmd_run.assert_not_called()
+        canary.cleanup.cmd_kill.assert_called_once_with(self.TASK)
+        rows = store.open_alerts(self.conn, "threshold")
+        matching = [r for r in rows if r["target"] == self.TASK]
+        self.assertTrue(
+            any("проходов подряд без прогресса" in r["message"]
+               for r in matching),
+            [r["message"] for r in matching])
+        self.assertEqual(
+            store.get_task(self.conn, self.TASK)["state"], "in_dev")
 
 
 class PassVerifyingTest(unittest.TestCase):
