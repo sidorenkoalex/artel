@@ -51,7 +51,8 @@ class RealGitWorkspaceTest(unittest.TestCase):
         # ни одна ветка не заводится вовсе.
         self.origin = Path(tempfile.mkdtemp())
         self.addCleanup(shutil.rmtree, self.origin, ignore_errors=True)
-        self.git("init", "-q", "--bare", str(self.origin))
+        self.git("init", "-q", "--bare", "-b", config.MAIN_BRANCH,
+                str(self.origin))
         self.git("remote", "add", "origin", str(self.origin))
         self.git("push", "-q", "origin",
                 f"{config.MAIN_BRANCH}:{config.MAIN_BRANCH}")
