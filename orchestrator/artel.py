@@ -124,7 +124,7 @@ workspace, tasks, knowledge, logs). БД одна на все проекты: с
   kill <id> | release <id> |
   pause [--now] <id> | resume <id> | log <id> | budget <id> <usd> |
   target-init <target> | doctor [--restore] [--fix] | alert-ack <id> "<решение>" |
-  version | canary --k <N> | canary pool-seal | prune [--execute] |
+  version | canary --k <N> [--sha <sha>] | canary pool-seal | prune [--execute] |
   amend-tests <id> --reason "<основание>" [--from-branch] | pin-update <sha main артели> |
   pin --to [<sha>] | zone-release <id> | zone-reorder <id1> <id2> ... |
   venv-sync | note (копилка|бэклог|очередь) --text "<строка>" |
@@ -179,7 +179,12 @@ lease задачи (pid, host); lease нет, его процесс мёртв �
 `canary --k <N>` (SPEC 01M1NEEWH5K1XPFRDGRMPYSBXJ, v2 — переработка
 v1, tasks/T065/SPEC.md) — синтетический прогон конвейера: отбирает `N`
 случайных шаблонов ТЗ из пула ВНЕ корня пульта (`~/.artel-canary`,
-Оператор заводит и наполняет его вручную), ведёт КАЖДУЮ выбранную
+Оператор заводит и наполняет его вручную). Целевой sha прогона (SPEC
+01M2B6K02YVJBWE1JDWP85EJH0) — по умолчанию голова `origin/<config.
+MAIN_BRANCH>`, не HEAD главной копии (пина); явный `--sha <sha>` берёт
+целевым именно его, без обращения к `origin`. Эфемерный клон делает
+checkout этого sha, `canary_runs.main_sha` несёт его же. Ведёт КАЖДУЮ
+выбранную
 задачу ПОЛНЫМ циклом в ОТДЕЛЬНОМ эфемерном клоне пульта (`git clone`
 во временный каталог + origin-заглушка — своя рабочая копия, своя БД,
 свой origin, ноль следов в главном пульте: ни веток, ни RETRO, ни
@@ -679,6 +684,19 @@ def _k_arg(rest: list) -> int:
         sys.exit(f"--k требует целое число, получено {rest[idx + 1]!r}.")
 
 
+def _sha_arg(rest: list) -> str | None:
+    """Значение флага `canary --k <N> --sha <sha>` (SPEC
+    01M2B6K02YVJBWE1JDWP85EJH0, требование 1, AC-2) — `None`, если флаг
+    не передан вовсе: целевой sha берётся по умолчанию из головы
+    `origin/<config.MAIN_BRANCH>` (`canary.cmd_canary`)."""
+    if "--sha" not in rest:
+        return None
+    idx = rest.index("--sha")
+    if idx + 1 >= len(rest):
+        sys.exit("--sha требует значение следующим аргументом.")
+    return rest[idx + 1]
+
+
 def _cmd_canary(rest: list) -> None:
     """`canary pool-seal` (SPEC 01M1NSR5M5THYRC0RFWPMVE2DW, требование 2)
     — отдельная подкоманда семейства `canary`, разбирается ДО `--k`:
@@ -686,7 +704,7 @@ def _cmd_canary(rest: list) -> None:
     if rest and rest[0] == "pool-seal":
         canary.cmd_pool_seal()
         return
-    canary.cmd_canary(k=_k_arg(rest))
+    canary.cmd_canary(k=_k_arg(rest), sha=_sha_arg(rest))
 
 
 def _cmd_new(rest: list) -> None:

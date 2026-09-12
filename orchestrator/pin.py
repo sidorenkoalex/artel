@@ -22,6 +22,15 @@ HEAD `config.ROOT` от изменения переходом `merge_gate -> don
 двигает — только обновляет remote-tracking ref'ы, так что «отказ не
 трогает HEAD» (ANSWER-1 п.4) верно и с гейтом после него.
 
+Гейт всегда искал зелёный прогон на истории именно `sha` (параметра
+функции), не `gitcmd.head_sha()` пина — SPEC 01M2B6K02YVJBWE1JDWP85EJH0
+(требование 2, AC-5) убеждается, что это НЕ регрессирует к сравнению с
+пином, потому что до этой задачи `canary.py` мог записать зелёный
+прогон только на sha самого пина (клон всегда тестировал код ПИНА) —
+сравнение с произвольным целевым `sha` было мертвым кодом; отказ теперь
+называет и сам `sha`, и точную команду его получения (`--sha <sha>`,
+AC-6), не общий `canary --k 1` без привязки к нужному sha.
+
 `cmd_pin_to` (AC-5/AC-6/AC-7, ANSWER-1 п.5): откатывает HEAD `config.
 ROOT` на явный `<sha>` (обязан быть предком текущего HEAD) либо, без
 аргумента, на `main_sha` самого свежего зелёного прогона канарейки —
@@ -48,8 +57,8 @@ def cmd_pin_update(sha: str) -> None:
         sys.exit(
             "pin-update: нет зелёного прогона канарейки не старше "
             f"{config.CANARY_MAX_MERGES_SINCE_GREEN} мержей main на sha "
-            f"{sha[:7]} (ADR-0013) — прогони канарейку: "
-            "python3 orchestrator/artel.py canary --k 1")
+            f"{sha[:7]} (ADR-0013) — прогони канарейку на этом sha: "
+            f"python3 orchestrator/artel.py canary --k 1 --sha {sha}")
 
     merge = gitcmd.git("merge", "--ff-only", sha)
     if merge is None or merge.returncode != 0:

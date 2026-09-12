@@ -891,8 +891,23 @@ def _zones_gate(conn, task_id: str, t, branch: str,
     # --porcelain` читает тем же путём, что и остальной модуль ниже
     # (fail-open на отказ git — этот довесок опционален, committed-дифф
     # выше уже fail-closed на СВОИХ отказах).
+    #
+    # Собственный каталог задачи (SPEC 01M2B6JNFD381MZT70CVB5NJQC,
+    # требование 1/AC-1) исключается из этого довеска ДО мержа в `files`,
+    # общим правилом с WIP-чекпоинтами (`checkpoint.task_dir_zone`):
+    # `pull._materialize_and_run_plank` материализует
+    # `tasks/<task_id>/acceptance_tests/` В worktree НА МЕСТЕ, оставляя
+    # его неотслеживаемым между началом и концом подтяжки main — без
+    # этого исключения довесок видел бы саму планку приёмки как путь вне
+    # зон и отказывал бы переходу на ровном месте (12.09, четыре ложных
+    # отказа задач волны 3, docs/backlog.md строка П1). Committed-дифф
+    # (`out_of_zone` ниже, через `zones` без каталога задачи) этим
+    # исключением не затронут — AC-2 (посторонний код-файл вне
+    # `tasks/<task_id>/`) сохраняется байт-в-байт.
     untracked = _untracked_worktree_paths(task_id)
     if untracked:
+        task_zone = checkpoint.task_dir_zone(task_id)
+        untracked = [p for p in untracked if not _touches_zone(p, [task_zone])]
         files = files + [p for p in untracked if p not in files]
 
     # Защищённые пути (SPEC 01M27JPEGCGMDDRX5A98QWJW0Z, требования 2-3,

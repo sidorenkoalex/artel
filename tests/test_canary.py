@@ -508,6 +508,85 @@ class CmdCanaryBadInputTest(unittest.TestCase):
         self.assertIn("--k", str(ctx.exception))
 
 
+class ResolveTargetShaTest(unittest.TestCase):
+    """`canary._resolve_target_sha` (SPEC 01M2B6K02YVJBWE1JDWP85EJH0,
+    требование 1, AC-1/AC-2) — чистая маршрутизация без реального git."""
+
+    def test_explicit_sha_is_returned_verbatim_without_touching_origin(self):
+        """Ловит мутацию: явный `--sha` всё равно уходит в `gitcmd.
+        fetch_ref_sha` — AC-2 запрещает обращение к `origin`, когда sha
+        уже известен явно; с этой мутацией `fetch_ref_sha` был бы вызван
+        независимо от переданного `explicit_sha`."""
+        with mock.patch.object(canary.gitcmd, "fetch_ref_sha") as fetch_mock:
+            sha, origin_sha = canary._resolve_target_sha("deadbeef")
+        self.assertEqual(sha, "deadbeef")
+        self.assertIsNone(origin_sha)
+        fetch_mock.assert_not_called()
+
+    def test_missing_sha_resolves_via_fetch_ref_sha_of_origin_main(self):
+        """Ловит мутацию: источник sha по умолчанию — `gitcmd.head_sha()`
+        главной копии (старое поведение) вместо `gitcmd.fetch_ref_sha(
+        "origin", config.MAIN_BRANCH)` — вызов ушёл бы в другую функцию
+        или с другими аргументами."""
+        with mock.patch.object(canary.gitcmd, "fetch_ref_sha",
+                               return_value=("cafefeed", "")) as fetch_mock:
+            sha, origin_sha = canary._resolve_target_sha(None)
+        fetch_mock.assert_called_once_with("origin", config.MAIN_BRANCH)
+        self.assertEqual(sha, "cafefeed")
+        self.assertEqual(origin_sha, "cafefeed")
+
+    def test_fetch_failure_falls_back_to_local_head_sha(self):
+        """`origin` недоступен (нет remote вовсе, сеть недоступна) —
+        деградация на `gitcmd.head_sha()` главной копии, тем же приёмом,
+        что `doctor.check_root_pin`/`check_pin_unpushed` (SPEC
+        01M2B6K02YVJBWE1JDWP85EJH0, требование 1) — стенды без единого
+        `origin` (например, `tasks/01M1NEEWH5K1XPFRDGRMPYSBXJ/
+        acceptance_tests/`, локальная планка ДРУГОЙ, уже смерженной
+        задачи, гоняющая `canary` без единого `origin`) не должны
+        получить безусловный отказ прогона целиком.
+
+        Ловит мутацию: отказ `fetch_ref_sha` завершает прогон `SystemExit`
+        вместо деградации — стенд без `origin` терял бы возможность
+        прогнать канарейку вовсе, хотя раньше (до этой задачи) прогонял
+        её без единого `origin`."""
+        with mock.patch.object(canary.gitcmd, "fetch_ref_sha",
+                               return_value=("", "нет такого remote")), \
+             mock.patch.object(canary.gitcmd, "head_sha",
+                               return_value="localhead"):
+            sha, origin_sha = canary._resolve_target_sha(None)
+        self.assertEqual(sha, "localhead")
+        self.assertIsNone(origin_sha)
+
+
+class ShaLabelTest(unittest.TestCase):
+    """`canary._sha_label` (требование 4, AC-8)."""
+
+    def test_matches_local_head_is_pin_code_even_if_origin_matches_too(self):
+        """Ловит мутацию: приоритет отдан «код origin/main» вместо «код
+        пина», когда оба совпадения истинны одновременно (стенд
+        синхронен) — AC-8 перечисляет «код пина» первым."""
+        with mock.patch.object(canary.gitcmd, "head_sha", return_value="same"):
+            label = canary._sha_label("same", "same")
+        self.assertEqual(label, "код пина")
+
+    def test_matches_origin_head_only_is_origin_main_code(self):
+        """Ловит мутацию: сравнение с `origin_sha` не выполняется вовсе —
+        sha, совпавший с головой origin, но не с пином, получил бы «код
+        <sha>» вместо «код origin/main»."""
+        with mock.patch.object(canary.gitcmd, "head_sha", return_value="pin"):
+            label = canary._sha_label("upstream", "upstream")
+        self.assertEqual(label, "код origin/main")
+
+    def test_matches_neither_is_bare_sha_code(self):
+        """Ловит мутацию: третья ветка (`else`) не реализована — sha, не
+        совпавший ни с пином, ни с origin (или origin неизвестен, явный
+        `--sha`), получил бы одну из первых двух пометок вместо «код
+        <sha>» с буквальным значением."""
+        with mock.patch.object(canary.gitcmd, "head_sha", return_value="pin"):
+            label = canary._sha_label("other", None)
+        self.assertEqual(label, "код other")
+
+
 class EphemeralCloneConfigRemapTest(unittest.TestCase):
     """`canary._ephemeral_clone` — пересчёт путей `config` под клон и их
     восстановление по выходу, БЕЗ реального git (реальный git — приём
@@ -545,7 +624,7 @@ class EphemeralCloneConfigRemapTest(unittest.TestCase):
                                return_value=str(fake_clone_dir)), \
              mock.patch.object(canary.subprocess, "run", side_effect=fake_run), \
              mock.patch.object(canary.catalog, "cmd_init", lambda: None):
-            with canary._ephemeral_clone() as dest:
+            with canary._ephemeral_clone("f" * 40) as dest:
                 self.assertEqual(dest, fake_clone_dir)
                 for attr in canary._CLONE_CONFIG_ATTRS:
                     self.assertEqual(getattr(config, attr),
@@ -570,12 +649,42 @@ class EphemeralCloneConfigRemapTest(unittest.TestCase):
              mock.patch.object(canary.subprocess, "run", side_effect=fake_run), \
              mock.patch.object(canary.catalog, "cmd_init", lambda: None):
             with self.assertRaises(ValueError):
-                with canary._ephemeral_clone():
+                with canary._ephemeral_clone("f" * 40):
                     raise ValueError("boom")
 
         for attr in canary._CLONE_CONFIG_ATTRS:
             self.assertEqual(getattr(config, attr), saved_before[attr])
         self.assertFalse(fake_clone_dir.exists())
+
+    def test_checkout_uses_target_sha(self):
+        """`_ephemeral_clone` делает checkout ИМЕННО переданного
+        `target_sha` (SPEC 01M2B6K02YVJBWE1JDWP85EJH0, требование 1/AC-3).
+
+        Ловит мутацию: клон не делает `git checkout <target_sha>` вовсе
+        (или делает его с другим значением, например HEAD `outer_root`
+        по умолчанию) — это ровно мутация «клон остаётся на HEAD главной
+        копии вместо целевого sha», прямо названная в AC-4."""
+        fake_clone_dir = self.outer_root.parent / "clone3"
+        calls = []
+
+        def fake_run(cmd, **kw):
+            calls.append((list(cmd), kw.get("cwd")))
+            if cmd[:2] == ["git", "clone"]:
+                Path(cmd[-1]).mkdir(parents=True, exist_ok=True)
+            return subprocess.CompletedProcess(cmd, 0, "", "")
+
+        target_sha = "deadbeef" * 5
+        with mock.patch.object(canary.tempfile, "mkdtemp",
+                               return_value=str(fake_clone_dir)), \
+             mock.patch.object(canary.subprocess, "run", side_effect=fake_run), \
+             mock.patch.object(canary.catalog, "cmd_init", lambda: None):
+            with canary._ephemeral_clone(target_sha):
+                pass
+
+        checkout_calls = [c for c, _cwd in calls if c[:2] == ["git", "checkout"]]
+        self.assertEqual(len(checkout_calls), 1, calls)
+        self.assertEqual(checkout_calls[0][-1], target_sha)
+        self.assertIn(config.MAIN_BRANCH, checkout_calls[0])
 
 
 class DriveTaskEscalationCapTest(unittest.TestCase):
