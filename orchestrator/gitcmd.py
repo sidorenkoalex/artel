@@ -85,25 +85,6 @@ def is_ancestor(ancestor: str, descendant: str) -> bool:
     return res is not None and res.returncode == 0
 
 
-def merge_base(a: str, b: str, repo: Path | None = None) -> str | None:
-    """sha точки расхождения `a` и `b` (`git merge-base`); `None` — git не
-    ответил либо `a`/`b` не связаны общей историей (ANSWER этого же
-    класса вырождения, что у `commits_behind`).
-
-    В отличие от `diff_base` (готовая обвязка выбора между `origin/
-    <MAIN_BRANCH>` и локальным), здесь оба конца — параметры вызывающего
-    кода как есть (SPEC 01M2ARQMTYRNPR5HRXAPCBAXNY, требование 1: точка
-    расхождения ветки задачи с уже вычисленным sha main, не с именем
-    ветки main). `repo` — тот же приём, что у `commits_behind`/
-    `diff_base`: `None` (по умолчанию) — прежнее поведение, `config.ROOT`.
-    """
-    args = ("merge-base", a, b)
-    res = in_repo(repo, *args) if repo else git(*args)
-    if res is None or res.returncode != 0:
-        return None
-    return res.stdout.strip() or None
-
-
 def merges_between(sha_from: str, sha_to: str) -> int | None:
     """Число merge-коммитов на отрезке `sha_from..sha_to` (ANSWER-1
     01M1NGFK3N6MRMYGCC09H975V3 п.3: «возраст» зелёного прогона канарейки
@@ -254,20 +235,13 @@ def check_ignore(paths) -> set[str] | None:
     return ignored
 
 
-def diff_names(a: str, b: str, *paths: str,
-               repo: Path | None = None) -> list[str] | None:
+def diff_names(a: str, b: str, *paths: str) -> list[str] | None:
     """Пути, различающиеся между `a` и `b` под `paths`; `None` — git не
     ответил. В отличие от `diff_paths` (голое да/нет), отдаёт сами пути —
     нужно, чтобы отличить настоящую правку от разницы только в
     игнорируемых `.gitignore` файлах (SPEC 01M1KVG3KSCY47HWXWF5HM0E76,
-    требование 3).
-
-    `repo` (SPEC 01M2ARQMTYRNPR5HRXAPCBAXNY, требование 1) — репозиторий,
-    в котором считается дифф, не всегда `config.ROOT`: тот же приём, что
-    уже несут `commits_behind`/`diff_base`. `None` (по умолчанию) —
-    прежнее поведение байт-в-байт."""
-    args = ("diff", "--name-only", a, b, "--", *paths)
-    res = in_repo(repo, *args) if repo else git(*args)
+    требование 3)."""
+    res = git("diff", "--name-only", a, b, "--", *paths)
     if res is None or res.returncode != 0:
         return None
     return [p for p in res.stdout.splitlines() if p]

@@ -311,6 +311,23 @@ def _materialize_and_run_plank(conn, task_id: str, branch: str,
     return Pulled(base)
 
 
+def _git_in(repo_path, *args: str):
+    """`gitcmd.git`/`gitcmd.in_repo` по наличию `repo_path` — свой мини-приём
+    ровно тех двух примитивов, что уже несёт `gitcmd.py` (`git`/`in_repo`,
+    оба публичные), без правки самого `gitcmd.py`: зона задачи
+    (SPEC 01M2ARQMTYRNPR5HRXAPCBAXNY) — `orchestrator/pull.py`,
+    `scripts/ci_push_class.py`, `tests/`, `gitcmd.py` в неё не входит и не
+    покрыт `config.COMMON_ZONES`."""
+    return gitcmd.in_repo(repo_path, *args) if repo_path else gitcmd.git(*args)
+
+
+def _diff_names_in(repo_path, a: str, b: str) -> list | None:
+    res = _git_in(repo_path, "diff", "--name-only", a, b)
+    if res is None or res.returncode != 0:
+        return None
+    return [p for p in res.stdout.splitlines() if p]
+
+
 def _doc_only_main_advance(branch: str, base: str, repo_path) -> list | None:
     """Файлы диффа main от точки расхождения (`merge-base(branch, base)`)
     до `base` — только если ВСЕ документные (`ci_push_class.is_doc_path`,
@@ -320,13 +337,16 @@ def _doc_only_main_advance(branch: str, base: str, repo_path) -> list | None:
     также git, не ответивший ни на один из трёх запросов (`merge-base`,
     два `diff --name-only`) — fail-closed на ПРЕЖНЕЕ поведение
     (подтяжка), не на новое «пропустить» (AC-2)."""
-    point = gitcmd.merge_base(branch, base, repo=repo_path)
+    point_res = _git_in(repo_path, "merge-base", branch, base)
+    if point_res is None or point_res.returncode != 0:
+        return None
+    point = point_res.stdout.strip()
     if not point:
         return None
-    main_files = gitcmd.diff_names(point, base, repo=repo_path)
+    main_files = _diff_names_in(repo_path, point, base)
     if main_files is None or not all(ci_push_class.is_doc_path(f) for f in main_files):
         return None
-    branch_files = gitcmd.diff_names(point, branch, repo=repo_path)
+    branch_files = _diff_names_in(repo_path, point, branch)
     if branch_files is None or set(main_files) & set(branch_files):
         return None
     return main_files

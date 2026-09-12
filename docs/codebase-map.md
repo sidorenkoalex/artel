@@ -1,5 +1,5 @@
 ---
-built_at_sha: 95633e66b940b712973176093d2140efd505f750
+built_at_sha: b18d8562f975d6f2ff9976984d60b178e499310f
 ---
 
 # Codebase-map пульта
@@ -460,7 +460,6 @@ built_at_sha: 95633e66b940b712973176093d2140efd505f750
 - `is_clean`
 - `list_branches`
 - `ls_tree_files`
-- `merge_base`
 - `merges_between`
 - `on_foreign_branch`
 - `remote_branch_sha`
