@@ -540,9 +540,16 @@ def _venv_interpreter_bin() -> str:
     return str(config.VENV_DIR / "bin")
 
 
-def role_env(role: str | None = None) -> dict:
+def role_env(role: str | None = None, task_id: str | None = None) -> dict:
     """Окружение процесса роли: PATH и переменные — из манифеста, не копия
     `os.environ` Оператора (SPEC 01M1RDCEF0JZ4AVQRE43JFH8TN, требования 1-3).
+
+    `ARTEL_ROLE`/`ARTEL_TASK` (SPEC 01M2B6K3EM7F2J72RC2F520Y2K, требование
+    1) — признак процесса роли, читаемый самим CLI (`conftest.py`,
+    `artel.py`) вместо клиентского PreToolUse-хука: ставятся, только если
+    значение передано — вызовы без `task_id` (`orchestrator/doctor/*`,
+    часть тестов) продолжают работать без правки и просто не несут
+    `ARTEL_TASK` в результате.
 
     Роль не наследует user-слой Оператора (ADR-0003 п.14): его
     ~/.claude/CLAUDE.md, хуки его плагинов и его MCP исполнялись бы
@@ -587,6 +594,10 @@ def role_env(role: str | None = None) -> dict:
     env["HOME"] = str(config.ROLE_HOME)
     env["CLAUDE_CONFIG_DIR"] = str(config.ROLE_CONFIG_DIR)
     env["PATH"] = os.pathsep.join([venv_bin] + _role_path_dirs(resolved))
+    if role:
+        env[config.ARTEL_ROLE_ENV] = role
+    if task_id:
+        env[config.ARTEL_TASK_ENV] = task_id
     for name, value in git_identity().items():
         env.setdefault(name, value)
     # Аутентификация CLI живёт в user-слое Оператора (~/.claude.json +
@@ -776,7 +787,7 @@ def run_agent_once(conn, task_id: str, role: str, prompt: str,
     # каталог курируемого слоя — шаг не начинается. Тихо откатиться на HOME
     # Оператора было бы молчаливой сменой периметра (ADR-0003 п.14).
     try:
-        env = role_env(role)
+        env = role_env(role, task_id)
     except OSError as exc:
         store.journal(conn, task_id, role, "agent run SKIPPED",
                       f"каталог окружения роли не создан: {exc}")

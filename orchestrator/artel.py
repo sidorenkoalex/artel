@@ -734,6 +734,33 @@ def _cmd_pause(rest: list) -> None:
     pause.cmd_pause(rest[0])
 
 
+def _role_restricted_command(cmd: str, rest: list) -> str | None:
+    """Название команды, недоступной процессу роли, либо `None` (SPEC
+    01M2B6K3EM7F2J72RC2F520Y2K, требование 3) — частичная замена
+    `permissions.deny` курируемого слоя LLM-независимым признаком
+    (`ARTEL_ROLE` в окружении, `orchestrator/runner.py::role_env`):
+    `init`, `doctor --restore`, `canary pool-seal` отказывают роли до
+    исполнения, остальные команды (включая голый `doctor`/`canary`) не
+    затронуты."""
+    if cmd == "init":
+        return "init"
+    if cmd == "doctor" and "--restore" in rest:
+        return "doctor --restore"
+    if cmd == "canary" and rest[:1] == ["pool-seal"]:
+        return "canary pool-seal"
+    return None
+
+
+def _refuse_if_role_restricted(cmd: str, rest: list) -> None:
+    role = os.environ.get(config.ARTEL_ROLE_ENV)
+    if not role:
+        return
+    restricted = _role_restricted_command(cmd, rest)
+    if restricted:
+        sys.exit(f"artel.py {restricted}: команда недоступна процессу "
+                 f"роли {role}")
+
+
 def main() -> None:
     _refuse_if_worktree()
     args = sys.argv[1:]
@@ -741,6 +768,7 @@ def main() -> None:
         print(__doc__)
         return
     cmd, rest = args[0], args[1:]
+    _refuse_if_role_restricted(cmd, rest)
     table = {
         "init": lambda: catalog.cmd_init(),
         "new": lambda: _cmd_new(rest),

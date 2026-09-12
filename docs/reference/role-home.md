@@ -12,21 +12,22 @@
 ```
 docs/reference/role-home/
   claude/CLAUDE.md          -> .artel/home/.claude/CLAUDE.md  (переименовывается при деплое)
-  claude/settings.json      -> .artel/home/.claude/settings.json  (deny-список и хуки роли)
-  claude/hooks/bash_guard.py -> .artel/home/.claude/hooks/bash_guard.py
+  claude/settings.json      -> .artel/home/.claude/settings.json  (deny-список роли)
 ```
 
-`settings.json` несёт два исполняемых правила периметра роли:
-`permissions.deny` (пул канарейки и клонирование — SPEC
-01M1NEEWH5K1XPFRDGRMPYSBXJ, требование 13а) и PreToolUse-хук `Bash` →
-`hooks/bash_guard.py`, который отклоняет полный прогон набора тестов
-внутри шага (голый `python3 -m unittest`, `unittest discover`, `pytest`
-по всему дереву) с причиной для роли; адресные прогоны проходят. Хук
-вызывается через `$CLAUDE_CONFIG_DIR`, поэтому не зависит от рабочего
-каталога роли и от target'а. Проверяется `tests/test_role_bash_guard.py`.
-Хук — временная мера до появления таймаута на каждый тест (P1,
-`pytest-timeout`, docs/backlog.md приоритет 1): после мержа той задачи
-он снимается ЕЮ, не ручной правкой Оператора.
+`settings.json` несёт `permissions.deny` — часть периметра роли (пул
+канарейки и клонирование, SPEC 01M1NEEWH5K1XPFRDGRMPYSBXJ, требование
+13а). Полный прогон набора тестов внутри шага (голый `pytest`, `pytest
+tests`, `pytest .`) и три команды диспетчера (`init`, `doctor
+--restore`, `canary pool-seal`) отклоняются не отсюда, а признаком
+процесса роли в окружении (`ARTEL_ROLE`/`ARTEL_TASK`,
+`orchestrator/runner.py::role_env`) — читает его сам CLI: корневой
+`conftest.py` (гейт сбора pytest) и `orchestrator/artel.py` (гейт трёх
+команд диспетчера). Механизм LLM-независим (SPEC
+01M2B6K3EM7F2J72RC2F520Y2K), в отличие от снятого этой же задачей
+клиентского PreToolUse-хука `hooks/bash_guard.py`, работавшего только
+через протокол Claude Code. Проверяется `tests/test_conftest_role_guard.py`
+и тестами диспетчера `orchestrator/artel.py`.
 
 Деплой референса происходит ТОЛЬКО при отсутствии `.artel/home`
 (холодный старт). На уже работающем пульте изменения референса в

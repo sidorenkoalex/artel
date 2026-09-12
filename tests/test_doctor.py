@@ -2445,28 +2445,40 @@ class RoleHomeReferenceExtraFilesTest(_RoleHomeReferenceTmpRootTest):
                             f"{check.detail}")
 
 
-class RoleHomeReferenceHooksDirTest(_RoleHomeReferenceTmpRootTest):
-    """Регресс SPEC 01M1SG9WPVN8P3S4X7975N9T69, AC-5: каталог `hooks/`
-    референса (восстановленный `hooks/bash_guard.py`) обязан быть частью
-    сверки `check_role_home_reference`, как `CLAUDE.md`/`settings.json`."""
+class RoleHomeReferenceSettingsFileTest(_RoleHomeReferenceTmpRootTest):
+    """Регресс SPEC 01M1SG9WPVN8P3S4X7975N9T69, AC-5, адаптирован SPEC
+    01M2B6K3EM7F2J72RC2F520Y2K (требование 5, AC-7): каждый файл
+    референса, включая `settings.json`, обязан быть частью сверки
+    `check_role_home_reference`. Прежняя пара тестов сверяла это на
+    `hooks/bash_guard.py` — файл снят той же задачей вместе с хуком
+    (AC-6), поэтому равноценная проверка того же свойства
+    `check_role_home_reference` (любой отсутствующий/расходящийся файл
+    референса — warn) перенесена на `settings.json`, который остаётся в
+    референсе и после снятия хука."""
 
-    def test_hooks_bash_guard_missing_is_a_warn(self):
-        (config.ROLE_CONFIG_DIR / "hooks" / "bash_guard.py").unlink()
+    def test_settings_json_missing_is_a_warn(self):
+        """Ловит мутацию: `_role_home_diff` перестаёт замечать
+        отсутствующий в развёрнутом слое файл референса — тест
+        покраснеет на отсутствии WARN."""
+        (config.ROLE_CONFIG_DIR / "settings.json").unlink()
 
         check = doctor.check_role_home_reference()
 
         self.assertEqual(check.status, "warn")
-        self.assertIn("hooks/bash_guard.py", check.detail)
+        self.assertIn("settings.json", check.detail)
 
-    def test_hooks_bash_guard_diverging_is_a_warn(self):
-        hook = config.ROLE_CONFIG_DIR / "hooks" / "bash_guard.py"
-        hook.write_text(hook.read_text(encoding="utf-8") + "\n# правка\n",
-                        encoding="utf-8")
+    def test_settings_json_diverging_is_a_warn(self):
+        """Ловит мутацию: `_role_home_diff` сравнивает только присутствие
+        файла, не его содержимое — расхождение байт в развёрнутом слое
+        осталось бы незамеченным."""
+        settings = config.ROLE_CONFIG_DIR / "settings.json"
+        settings.write_text(settings.read_text(encoding="utf-8") + "\n",
+                            encoding="utf-8")
 
         check = doctor.check_role_home_reference()
 
         self.assertEqual(check.status, "warn")
-        self.assertIn("hooks/bash_guard.py", check.detail)
+        self.assertIn("settings.json", check.detail)
 
 
 class RoleHomeReferenceSettingsAutoMemoryTest(unittest.TestCase):
