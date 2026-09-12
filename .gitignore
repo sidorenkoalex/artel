@@ -8,3 +8,6 @@ __pycache__/
 .codex/
 *.log
 .pytest_cache/
+/.git-commit-msg*.txt
+/_*.txt
+/_*.md

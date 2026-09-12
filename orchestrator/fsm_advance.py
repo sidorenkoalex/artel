@@ -703,6 +703,30 @@ def _answer_zones_mandate(branch: str, task_id: str) -> set[str]:
     return mandate
 
 
+def _untracked_worktree_paths(task_id: str) -> list[str]:
+    """Пути worktree self-target задачи с любым несохранённым изменением
+    (`git status --porcelain=v1 --untracked-files=all`, SPEC
+    01M290PVYG2VJK6442H5BAX9MA, AC-6) — untracked/staged/unstaged разом,
+    независимо от того, попали ли они уже в коммит. Пустой список — git
+    не ответил (гейт молча не расширяет список этим довеском — committed-
+    дифф `_zones_gate` уже fail-closed на СВОИХ отказах выше) либо worktree
+    и правда чист."""
+    wt = workspace.path(task_id)
+    status = gitcmd.in_repo(wt, "status", "--porcelain=v1",
+                            "--untracked-files=all")
+    if status is None or status.returncode != 0:
+        return []
+    paths = []
+    for line in status.stdout.splitlines():
+        if not line:
+            continue
+        rel = line[3:]
+        if " -> " in rel:
+            rel = rel.split(" -> ", 1)[1]
+        paths.append(rel)
+    return paths
+
+
 def _zones_gate(conn, task_id: str, t, branch: str,
                 plan_text: str) -> GateRefusal | None:
     """Сверка диффа ветки задачи с зонами на `in_dev -> review` (SPEC
@@ -750,6 +774,17 @@ def _zones_gate(conn, task_id: str, t, branch: str,
                f"{base}...{t['branch']}, и повтори "
                f"artel.py advance {task_id}")
         return GateRefusal("переход отклонён: гейт зон", detail, hint)
+
+    # Неотслеживаемые файлы worktree (SPEC 01M290PVYG2VJK6442H5BAX9MA,
+    # AC-6): `diff_names` выше видит только committed-дифф — файл,
+    # оставленный ролью нетрекенным (не закоммиченным и даже не
+    # застейдженным), гейтом иначе не замечен вовсе. `git status
+    # --porcelain` читает тем же путём, что и остальной модуль ниже
+    # (fail-open на отказ git — этот довесок опционален, committed-дифф
+    # выше уже fail-closed на СВОИХ отказах).
+    untracked = _untracked_worktree_paths(task_id)
+    if untracked:
+        files = files + [p for p in untracked if p not in files]
 
     # Защищённые пути (SPEC 01M27JPEGCGMDDRX5A98QWJW0Z, требования 2-3,
     # AC-2/AC-3) — отказывает БЕЗУСЛОВНО, раньше проверки zones/

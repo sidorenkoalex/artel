@@ -74,6 +74,36 @@ def acquire(conn, task_id: str, session_id: str) -> str | None:
             conn.rollback()
 
 
+def touch_heartbeat(conn) -> None:
+    """Продлевает `heartbeat_ts` ТЕКУЩЕГО держателя мьютекса, если строка
+    есть (SPEC 01M291EJMA995AZ61MEMDZKWRY, требование 3) — вызывать на
+    каждой итерации опроса CI внутри `_wait_for_branch_ci_green`, чтобы
+    долгое ожидание CI не роняло heartbeat ниже `LEASE_STALE_AFTER_SEC`
+    и не подставляло живого держателя под перехват `_holder_is_dead`.
+
+    Не принимает `session_id`: таблица несёт не более одной строки на
+    весь пульт (требование 2), поэтому текущий держатель однозначен без
+    сверки. Строки нет (мьютекс не взят либо вызвано вне окна) —
+    молча ничего не делает.
+
+    Чтение+запись обёрнуты `BEGIN IMMEDIATE`, тем же приёмом, что
+    `acquire()` (см. модульный докстринг, ревью T044) — без этого
+    конкурентный `acquire()` другой сессии мог бы атомарно перехватить
+    протухший мьютекс МЕЖДУ чтением строки здесь и отложенной записью,
+    и эта запись «воскресила» бы уже вытесненного держателя (R1-F1,
+    REVIEW.md 01M291EJMA995AZ61MEMDZKWRY, итерация 1)."""
+    conn.execute("BEGIN IMMEDIATE")
+    try:
+        row = store.merge_lock_row(conn)
+        if row is None:
+            return
+        store.set_merge_lock(conn, row["task_id"], row["session_id"],
+                             row["pid"], row["hostname"], store.now())
+    finally:
+        if conn.in_transaction:
+            conn.rollback()
+
+
 def release(conn, session_id: str) -> None:
     """Снимает мьютекс merge-окна, если он принадлежит этой сессии —
     вызывать из `finally` по завершении окна, независимо от исхода (SPEC

@@ -53,6 +53,20 @@ _RETURN_TRIGGER_STATES = frozenset(
 # мягкое значение кода, не инвариант: чтобы бриф не разбухал бесконтрольно
 # при частом топтании на одном состоянии.
 ADVANCE_REFUSAL_LIMIT = 5
+# Тексты action, которыми `orchestrator/auto.py::_pre_advance_step`/
+# `_rework_gate_blocks` журналируют отказы КЛАССА «роль ещё не закончила»
+# (SPEC 01M290PYPV5T2NFW1Y0HB8BD6E, требование 3, П2 копилки 11.09):
+# читать роли нечего — задача просто ждёт своего следующего шага, не
+# настоящий отказ гейта/guard, `advance_refusal_history` ниже такие
+# записи из блока «почини это» исключает. Собственная копия
+# `auto.ROLE_NOT_FINISHED_REFUSAL_ACTIONS` — тот же приём, что уже
+# дублирует `REFUSAL_ACTION_PREFIX` между `store.py` и `auto.py`: этот
+# модуль не может импортировать `auto.py` обратно (цикл `auto.py ->
+# fsm.py -> review.py -> brief.py` уже существует).
+_ROLE_NOT_FINISHED_REFUSAL_ACTIONS = (
+    "переход отклонён: замечания ревью не отработаны",
+    "переход отклонён: дерево не на ветке задачи",
+)
 # Источник алерта «карта крупнее потолка файла брифа» (tasks/
 # 01M1GCN1FPSC1A6WK9WD1Q1V8X, AC-21): сигнал, что лимит пакета начал
 # жать — в отличие от пропуска артефакта конкретной задачи (AC-22),
@@ -661,8 +675,17 @@ def advance_refusal_history(conn, task_id: str, role: str, state: str) -> str:
     Отказов по этому визиту состояния не было — пустая строка, бриф не
     меняется вовсе (требование 5, AC-2): вызывающий код обязан не
     добавлять пустой блок к промпту.
+
+    Отказы класса «роль ещё не закончила» (`_ROLE_NOT_FINISHED_REFUSAL_
+    ACTIONS`, SPEC 01M290PYPV5T2NFW1Y0HB8BD6E, требование 3) — вычтены
+    из выборки ДО построения блока: их некому чинить — они не описывают
+    дефект артефакта роли, только то, что предварительный advance ждёт
+    нового шага. Все отказы визита оказались этого класса — тот же
+    исход, что и «отказов не было», пустая строка.
     """
     rows = store.refusal_history(conn, task_id, state, ADVANCE_REFUSAL_LIMIT)
+    rows = [row for row in rows
+           if row["action"] not in _ROLE_NOT_FINISHED_REFUSAL_ACTIONS]
     if not rows:
         return ""
     body = "\n\n".join(f"— {row['action']}:\n{row['detail']}" for row in rows)
