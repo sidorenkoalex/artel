@@ -313,7 +313,8 @@ class LeaseForceTest(TmpRootTest):
         conn.execute(
             "INSERT INTO leases (task_id, session_id, pid, hostname,"
             " heartbeat_ts) VALUES (?,?,?,?,?)",
-            (self.TASK, "sess-holder", 999, socket.gethostname(), store.now()))
+            (self.TASK, "sess-holder", os.getpid(), socket.gethostname(),
+             store.now()))
         conn.commit()
 
     def test_without_force_a_fresh_foreign_lease_refuses(self):
