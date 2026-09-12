@@ -146,6 +146,47 @@ class MutationClaimGateFileSelectionTest(TmpRootTest):
                 self.conn, self.task_id, self.t, "task/t001-x")
         self.assertIsNone(refusal)
 
+    def test_git_not_answering_show_refuses_not_skips(self):
+        """Ловит мутацию: `head_reason == "git не ответил"` не отличается
+        от легитимного отсутствия пути в HEAD — сбой самого git на
+        чтении СУЩЕСТВУЮЩЕГО файла молча пропускал бы проверку заявки
+        вместо отказа (R1-F2, REVIEW.md 01M29A0F88P9GKSXFW90F99H2N
+        итерации 1)."""
+        def fake_show(branch, path):
+            return (None, "git не ответил")
+
+        with mock.patch.object(gitcmd, "diff_base",
+                               return_value="deadbeef"), \
+             mock.patch.object(gitcmd, "diff_names",
+                               return_value=["tests/test_a.py"]), \
+             mock.patch.object(gitcmd, "show", fake_show):
+            refusal = fsm_advance._mutation_claim_gate(
+                self.conn, self.task_id, self.t, "task/t001-x")
+        self.assertIsNotNone(refusal)
+        self.assertIn("гейт заявки мутации", refusal.action)
+
+    def test_undecodable_file_refuses_not_skips(self):
+        """Ловит мутацию: причина «не прочитан: …» (`UnicodeDecodeError`
+        на нестандартной кодировке файла, `gitcmd.show`) трактуется как
+        легитимное удаление — тест без заявки мутации проскочил бы гейт
+        именно там, где штатный (декодируемый) файл был бы пойман
+        (R1-F2)."""
+        def fake_show(branch, path):
+            if branch == "deadbeef":
+                return (None, "новый файл")
+            return (None, "не прочитан: 'utf-8' codec can't decode byte 0xff")
+
+        with mock.patch.object(gitcmd, "diff_base",
+                               return_value="deadbeef"), \
+             mock.patch.object(gitcmd, "diff_names",
+                               return_value=["tests/test_binary.py"]), \
+             mock.patch.object(gitcmd, "show", fake_show):
+            refusal = fsm_advance._mutation_claim_gate(
+                self.conn, self.task_id, self.t, "task/t001-x")
+        self.assertIsNotNone(refusal)
+        self.assertIn("гейт заявки мутации", refusal.action)
+        self.assertIn("tests/test_binary.py", refusal.detail)
+
 
 class MutationClaimGateRefusalContentTest(TmpRootTest):
 

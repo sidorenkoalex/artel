@@ -49,6 +49,10 @@ class ChangedFunctionTest(unittest.TestCase):
             guard.test_functions_without_mutation_claim(base, head), ["test_x"])
 
     def test_changed_function_with_claim_is_not_reported(self):
+        """Ловит мутацию: изменённая функция с валидной заявкой в
+        собственном докстринге всё равно попадала бы в отказ — сравнение
+        сегмента (изменена/не изменена) не должно перекрывать проверку
+        заявки, если она на месте."""
         base = "def test_x():\n    pass\n"
         head = ('def test_x():\n    """Ловит мутацию: неверное сравнение."""\n'
                "    assert 1 == 1\n")
@@ -84,6 +88,9 @@ class EmptyClaimTextTest(unittest.TestCase):
             guard.test_functions_without_mutation_claim(None, head), ["test_x"])
 
     def test_no_docstring_at_all_is_reported(self):
+        """Ловит мутацию: `ast.get_docstring(node) or ""` заменено на
+        обращение к докстрингу без запасного значения — функция без
+        докстринга вовсе роняла бы исключение вместо честного отказа."""
         head = "def test_x():\n    pass\n"
         self.assertEqual(
             guard.test_functions_without_mutation_claim(None, head), ["test_x"])

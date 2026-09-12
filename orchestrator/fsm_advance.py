@@ -997,12 +997,32 @@ def _mutation_claim_gate(conn, task_id: str, t, branch: str) -> GateRefusal | No
     test_files = [f for f in files
                  if f.startswith("tests/test_") and f.endswith(".py")
                  and f.count("/") == 1]
+
     per_file: list[str] = []
     for path in test_files:
-        head_source, _ = gitcmd.show(branch, path)
+        head_source, head_reason = gitcmd.show(branch, path)
         if head_source is None:
-            # Файл удалён в HEAD (или git не ответил на его чтение) —
-            # заявку мутации сравнивать не с чем, пропускаем (требование 2).
+            # `gitcmd.show` возвращает `None` и на легитимное отсутствие
+            # пути в HEAD (файл удалён — требование 2), и на сбой самого
+            # git на существующем пути (R1-F2, REVIEW.md итерация 1: без
+            # этого различения нечитаемый файл, например не-UTF8 байты,
+            # молча пропускался бы вместо отказа). `head_reason` различает
+            # эти два случая по тем же двум веткам, что документирует сам
+            # `gitcmd.show` («git не ответил», `UnicodeDecodeError`) —
+            # третья ветка (ненулевой код возврата `git show`, путь
+            # реально отсутствует в дереве) — легитимное удаление.
+            if (head_reason == "git не ответил"
+                   or head_reason.startswith("не прочитан:")):
+                detail = (f"гейт заявки мутации: git не ответил на чтение "
+                         f"{path} из {branch} ({head_reason}) — сверка "
+                         f"заявки мутации для этого файла невозможна")
+                hint = (f"разберись, почему git не отвечает на show "
+                       f"{branch}:{path}, и повтори artel.py advance "
+                       f"{task_id}")
+                return GateRefusal("переход отклонён: гейт заявки мутации",
+                                  detail, hint)
+            # Файл легитимно удалён в HEAD — заявку мутации сравнивать не
+            # с чем, пропускаем (требование 2).
             continue
         base_source, _ = gitcmd.show(base, path)
         missing = guard.test_functions_without_mutation_claim(

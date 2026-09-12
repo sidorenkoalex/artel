@@ -424,7 +424,7 @@ def _collect_test_functions(tree: ast.Module) -> dict[str, ast.AST]:
 
 
 def test_functions_without_mutation_claim(base_source: str | None,
-                                          head_source: str) -> list[str]:
+                                          head_source: str | None) -> list[str]:
     """Имена новых/изменённых функций и методов `test_*` HEAD-версии файла
     без заявки «Ловит мутацию: <непустой текст>» в докстринге (SPEC
     01M29A0F88P9GKSXFW90F99H2N, требования 1-2).
@@ -434,12 +434,17 @@ def test_functions_without_mutation_claim(base_source: str | None,
     текста того же имени в base. Неизменённые функции в результат не
     попадают ни при каких условиях (старые тесты не трогаем).
 
+    `head_source is None` — нет сведений о HEAD (пусто, не ошибка вызывающего
+    кода): пустой список, ни одной функции не собрать.
+
     HEAD не парсится (`SyntaxError`) — список из одного элемента
     «<не парсится: текст ошибки>», не исключение (требование 1/AC-4). Base
     не парсится — трактуется как отсутствие сведений о base (все функции
     HEAD в этом файле — новые): тот же fail-safe отказ, что и `base_source
     is None`, не падение гейта на пустом месте.
     """
+    if head_source is None:
+        return []
     try:
         head_tree = ast.parse(head_source)
     except SyntaxError as exc:
