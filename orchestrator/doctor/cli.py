@@ -49,6 +49,7 @@ def all_checks(conn) -> list[doctor.Check]:
     checks.extend(doctor.check_artifact_branch_ci(conn))
     checks.extend(doctor.check_artifact_branch_parent_ancestry(conn))
     checks.append(doctor.check_root_pin())
+    checks.append(doctor.check_pin_unpushed())
     checks.append(doctor.check_role_log_pool_leak(conn))
     checks.append(doctor.check_canary_pool_drift())
     checks.append(doctor.check_canary_trigger(conn))

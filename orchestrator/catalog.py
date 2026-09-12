@@ -159,6 +159,49 @@ def _print_new_calibration_hint(conn, task_id: str, tz_raw: str) -> None:
         print(f"[{task_id}] ВНИМАНИЕ: {warning}")
 
 
+def _pin_divergence_warning_text(commits: list) -> str:
+    """Текст предупреждения `cmd_new` о непушенных коммитах главной
+    копии (SPEC 01M297HFSKV3GVZJ9YF20FZEZE, требование 3, AC-7): sha (7
+    символов) и первая строка сообщения каждого коммита, одной строкой
+    на коммит."""
+    lines = [f"ВНИМАНИЕ: пин расходится с origin — {len(commits)} "
+            f"непушенных коммитов главной копии:"]
+    lines += [f"  {sha[:7]} {msg}" for sha, msg in commits]
+    return "\n".join(lines)
+
+
+def _pin_divergence_journal_detail(commits: list) -> str:
+    """Текст записи журнала о расхождении пина (AC-7: «пин расходится с
+    origin: N коммитов»)."""
+    return f"пин расходится с origin: {len(commits)} коммитов"
+
+
+def _warn_pin_divergence(conn, task_id: str) -> None:
+    """Предупреждение о непушенных коммитах главной копии (SPEC
+    01M297HFSKV3GVZJ9YF20FZEZE, требования 2-3): заведение задачи не
+    блокируется расхождением (AC-7) — только видимость Оператору.
+
+    `git fetch origin <MAIN_BRANCH>` не удался (нет сети, нет origin,
+    песочница без настоящего git) — молчим (AC-8): недоступность origin
+    — это «сверка не проведена», не повод трактовать её как расхождение.
+    Импорт `doctor` — лениво, внутри функции: `doctor/__init__.py`
+    импортирует `canary`, которая импортирует этот модуль (`catalog`) на
+    уровне модуля — импорт `doctor` здесь на уровне модуля дал бы цикл
+    (тот же приём, что уже несёт `cmd_init` для `canary`).
+    """
+    from . import doctor
+    root_sha = gitcmd.head_sha()
+    origin_sha, _ = doctor.fetch_origin_main_sha()
+    if not origin_sha:
+        return
+    commits = doctor.unpushed_commits(root_sha, origin_sha)
+    if not commits:
+        return
+    print(f"[{task_id}] {_pin_divergence_warning_text(commits)}")
+    store.journal(conn, task_id, "operator", "pin-divergence",
+                 _pin_divergence_journal_detail(commits))
+
+
 def cmd_new(title: str, tz_path: str | None = None, *,
            canary: bool = False, target: str | None = None) -> str:
     """Заводит задачу: ТЗ/SPEC рождаются сразу в её ветке (ADR-0005 п.9,
@@ -216,6 +259,7 @@ def cmd_new(title: str, tz_path: str | None = None, *,
                  journal_detail=title)
     print(f"[{task_id}] «{title}» создана (target {target}, артефактная "
          f"ветка пульта {artifact_branch.branch_name(task_id)})")
+    _warn_pin_divergence(conn, task_id)
     if tz_raw is not None:
         _print_new_calibration_hint(conn, task_id, tz_raw)
     if tz_path is not None:

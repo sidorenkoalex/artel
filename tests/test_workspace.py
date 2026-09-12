@@ -44,6 +44,19 @@ class RealGitWorkspaceTest(unittest.TestCase):
         self.git("add", "-A")
         self.git("commit", "-q", "-m", "init")
 
+        # `ensure()` заводит НОВУЮ ветку задачи от `origin/<MAIN_BRANCH>`
+        # (SPEC 01M297HFSKV3GVZJ9YF20FZEZE, требование 1) — реальный
+        # origin, синхронный с локальным main на старте каждого теста,
+        # нужен, иначе `git fetch origin` внутри `ensure()` отказывает и
+        # ни одна ветка не заводится вовсе.
+        self.origin = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.origin, ignore_errors=True)
+        self.git("init", "-q", "--bare", "-b", config.MAIN_BRANCH,
+                str(self.origin))
+        self.git("remote", "add", "origin", str(self.origin))
+        self.git("push", "-q", "origin",
+                f"{config.MAIN_BRANCH}:{config.MAIN_BRANCH}")
+
         for attr, value in (
             ("ROOT", self.root),
             ("DB", self.root / ".artel" / "state.db"),
@@ -188,11 +201,59 @@ class EnsureTest(RealGitWorkspaceTest):
         self.assertIn("не удалось", error)
 
     def test_failure_without_a_git_response_is_reported(self):
+        """Ни один вызов `gitcmd.git` не отвечает — отказ виден уже на
+        `git fetch origin <MAIN_BRANCH>` (первый git-вызов свежей ветки
+        с этой задачи), не на последующем `worktree add`: сообщение
+        меняется соответственно (SPEC 01M297HFSKV3GVZJ9YF20FZEZE)."""
         with mock.patch.object(gitcmd, "git", lambda *a: None):
             path, error = workspace.ensure(self.TASK, self.branch)
 
         self.assertEqual(path, self.wt_path())
-        self.assertIn("вернул", error)
+        self.assertIn("база ветки недоступна: fetch origin не удался", error)
+
+    def test_fresh_branch_forks_from_origin_main_not_from_stale_local_main(self):
+        """SPEC 01M297HFSKV3GVZJ9YF20FZEZE, AC-1: локальный main отстал
+        от origin (документный коммит ушёл в origin в обход локального
+        пина, инцидент 11.09 из «Контекста» SPEC) — новая ветка задачи
+        обязана стартовать от origin, не от устаревшего локального main.
+        """
+        clone_dir = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, clone_dir, ignore_errors=True)
+        self.git("clone", "-q", str(self.origin), str(clone_dir))
+        self.git("config", "user.email", "artel-tests@example.invalid",
+                 cwd=clone_dir)
+        self.git("config", "user.name", "artel tests", cwd=clone_dir)
+        (clone_dir / "origin-only.txt").write_text("y\n", encoding="utf-8")
+        self.git("add", "-A", cwd=clone_dir)
+        self.git("commit", "-q", "-m", "прямой коммит в origin", cwd=clone_dir)
+        self.git("push", "-q", "origin", config.MAIN_BRANCH, cwd=clone_dir)
+        origin_sha = self.git("rev-parse", "HEAD", cwd=clone_dir).stdout.strip()
+        local_main_sha = self.git("rev-parse",
+                                  config.MAIN_BRANCH).stdout.strip()
+        self.assertNotEqual(origin_sha, local_main_sha,
+                            "предпосылка теста: origin обязан уйти вперёд "
+                            "локального main")
+
+        path, error = workspace.ensure(self.TASK, self.branch)
+
+        self.assertIsNone(error)
+        branch_sha = self.git("-C", str(path), "rev-parse",
+                              "HEAD").stdout.strip()
+        self.assertEqual(branch_sha, origin_sha)
+
+    def test_fetch_failure_is_a_named_reason_without_local_main_fallback(self):
+        """SPEC 01M297HFSKV3GVZJ9YF20FZEZE, AC-3: origin недоступен —
+        именованный отказ, БЕЗ отката на локальный `config.MAIN_BRANCH`
+        (ни ветка, ни worktree не заводятся)."""
+        self.git("remote", "set-url", "origin",
+                str(self.root / "no-such-origin-here"))
+
+        path, error = workspace.ensure(self.TASK, self.branch)
+
+        self.assertIsNotNone(error)
+        self.assertIn("база ветки недоступна: fetch origin не удался", error)
+        self.assertNotIn(str(path), self.worktree_list())
+        self.assertFalse(gitcmd.branch_exists(self.branch))
 
 
 class OnTaskBranchTest(RealGitWorkspaceTest):

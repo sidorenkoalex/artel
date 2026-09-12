@@ -249,6 +249,7 @@ class TestsSnapshotAndMaterializeTest(RealGitSandbox):
 
     def setUp(self):
         super().setUp()
+        self.add_synced_origin()
         capture(catalog.cmd_init)
         _, self.TASK = capture_new_task_id(catalog.cmd_new, "снимок и материализация")
         self.conn = store.db()
@@ -393,6 +394,7 @@ class MaterializeSpecIfMissingTest(RealGitSandbox):
 
     def setUp(self):
         super().setUp()
+        self.add_synced_origin()
         capture(catalog.cmd_init)
         _, self.TASK = capture_new_task_id(catalog.cmd_new,
                                            "материализация SPEC.md")
@@ -594,6 +596,7 @@ class AmendThenReviewGateTest(RealGitSandbox):
 
     def setUp(self):
         super().setUp()
+        self.add_synced_origin()
         capture(catalog.cmd_init)
         _, self.TASK = capture_new_task_id(catalog.cmd_new,
                                            "amend -> review, гейт лока")

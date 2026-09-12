@@ -152,7 +152,8 @@ from .hung_test_watchdog import (_HUNG_TEST_CMD_RE, _ETIME_RE,
 from .misc_checks import (check_backup_age, check_pending_notes,
                           check_task_counters, check_pending_snapshots,
                           check_remote_empty, check_base_branch)
-from .root_pin import check_root_pin
+from .root_pin import (check_root_pin, fetch_origin_main_sha,
+                       unpushed_commits, check_pin_unpushed)
 from .orphan_branches import (ORPHAN_ARTIFACT_BRANCH_SOURCE,
                               _REMOTE_ARTIFACT_GLOB, _UNSET,
                               _remote_artifact_branch_names,

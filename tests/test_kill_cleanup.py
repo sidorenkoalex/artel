@@ -66,6 +66,17 @@ class TmpRepoTest(unittest.TestCase):
         self.git("add", "-A")
         self.git("commit", "-m", "init")
 
+        # `workspace.ensure` заводящий НОВУЮ ветку задачи делает `git
+        # fetch origin <MAIN_BRANCH>` (SPEC 01M297HFSKV3GVZJ9YF20FZEZE) —
+        # `ensure_worktree` ниже нуждается в настоящем origin, синхронном
+        # с main на момент вызова, иначе fetch отказывает и ensure()
+        # именованно отказывается заводить worktree.
+        self.origin = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.origin, ignore_errors=True)
+        self.git("init", "--bare", str(self.origin))
+        self.git("remote", "add", "origin", str(self.origin))
+        self.git("push", "origin", f"{config.MAIN_BRANCH}:{config.MAIN_BRANCH}")
+
         for attr, value in (("ROOT", self.root),
                             ("DB", self.root / ".artel" / "state.db"),
                             ("TASKS", self.root / "tasks"),

@@ -501,6 +501,16 @@ class SpyRun:
         if (len(cmd) >= 4 and cmd[1] == "rev-parse" and cmd[2] == "--verify"
                 and cmd[-1].startswith("refs/heads/")):
             return subprocess.CompletedProcess(list(cmd), 1, empty, empty)
+        # `rev-parse --verify --quiet FETCH_HEAD` (`gitcmd.fetch_head_sha`,
+        # SPEC 01M297HFSKV3GVZJ9YF20FZEZE) — успех с тем же фейковым sha,
+        # что и плотницкие примитивы ниже: без этого `workspace.ensure`
+        # заводящий НОВУЮ ветку задачи видел бы отказ fetch на КАЖДОМ
+        # вызове под этим спаем (никакого настоящего `origin` здесь нет) и
+        # отказывался бы заводить worktree там, где раньше заводил всегда.
+        if (len(cmd) >= 4 and cmd[1] == "rev-parse" and cmd[2] == "--verify"
+                and cmd[-1] == "FETCH_HEAD"):
+            sha = self._FAKE_SHA if want_text else self._FAKE_SHA.encode()
+            return subprocess.CompletedProcess(list(cmd), 0, sha, empty)
         # `hash-object`/`write-tree`/`commit-tree` — плотницкая запись
         # артефактной ветки (`artifact_branch.write_commit`, A7 generic-путь
         # `catalog.cmd_new`, AC-5) читает их stdout как sha и трактует
@@ -557,10 +567,20 @@ def fake_git(*args: str) -> subprocess.CompletedProcess:
     фикстурами (`seed_developer_brief_fixtures`, `shutil.copytree(...,
     "skills")`) как раз для этого чтения; файла на диске нет — тот же
     отказ, что дал бы `git show` на несуществующий путь.
+
+    `rev-parse --verify --quiet FETCH_HEAD` (`gitcmd.fetch_head_sha`, SPEC
+    01M297HFSKV3GVZJ9YF20FZEZE) — успех с фейковым sha: без него
+    `workspace.ensure`, заводящий НОВУЮ ветку задачи, видел бы отказ
+    `git fetch origin <MAIN_BRANCH>` под этой заглушкой (настоящего
+    origin здесь нет) и отказывался бы заводить worktree там, где раньше
+    заводил всегда.
     """
     if (len(args) >= 3 and args[0] == "rev-parse" and args[1] == "--verify"
             and args[-1].startswith("refs/heads/")):
         return subprocess.CompletedProcess(list(args), 1, "", "")
+    if (len(args) >= 3 and args[0] == "rev-parse" and args[1] == "--verify"
+            and args[-1] == "FETCH_HEAD"):
+        return subprocess.CompletedProcess(list(args), 0, "f" * 40 + "\n", "")
     if len(args) == 2 and args[0] == "show" and ":" in args[1]:
         _, _, rel = args[1].partition(":")
         try:
@@ -712,6 +732,25 @@ class RealGitSandbox(TmpRootTest):
             args.append("-b")
         args.append(branch)
         self.git(*args)
+
+    def add_synced_origin(self) -> Path:
+        """Bare `origin`, синхронный с `config.MAIN_BRANCH` на момент
+        вызова (SPEC 01M297HFSKV3GVZJ9YF20FZEZE, требование 1) — не
+        автоматически в `setUp`, опционально: `workspace.ensure`,
+        заводящий НОВУЮ ветку задачи, с этой задачи делает `git fetch
+        origin <MAIN_BRANCH>` и именованно отказывается заводить ветку,
+        если он не удался (AC-3) — подклассам, вызывающим `ensure()`
+        напрямую против этой песочницы (не через `fake_git`/`SpyRun`),
+        нужен настоящий origin. Подклассы, уже заводящие свой origin
+        (артефактная синхронизация и т.п.), эту утилиту не зовут — второй
+        `remote add origin` на тот же репозиторий отказал бы."""
+        origin = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, origin, ignore_errors=True)
+        self.git("init", "-q", "--bare", str(origin))
+        self.git("remote", "add", "origin", str(origin))
+        self.git("push", "-q", "origin",
+                f"{config.MAIN_BRANCH}:{config.MAIN_BRANCH}")
+        return origin
 
 
 def assert_acceptance_run_called(acc_run, tdir: Path, code_root: Path) -> None:

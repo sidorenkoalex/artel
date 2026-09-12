@@ -746,6 +746,60 @@ class CanaryTriggerCheckTest(RealGitSandbox):
         self.assertEqual(found, [])
 
 
+class PinUnpushedCheckTest(RealGitSandbox):
+    """`doctor.check_pin_unpushed` (SPEC 01M297HFSKV3GVZJ9YF20FZEZE,
+    требование 2, AC-4/AC-5/AC-6) — реальный git: предмет проверки —
+    исход настоящего `git fetch`/предковости относительно настоящего
+    origin, заглушкой `gitcmd.git` не изобразить (тот же приём, что
+    `CanaryTriggerCheckTest` выше)."""
+
+    def setUp(self):
+        super().setUp()
+        self.origin = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.origin, ignore_errors=True)
+        self.git("init", "-q", "--bare", str(self.origin))
+        self.git("remote", "add", "origin", str(self.origin))
+        self.git("push", "-q", "origin",
+                f"{config.MAIN_BRANCH}:{config.MAIN_BRANCH}")
+
+    def test_synced_pin_is_ok(self):
+        check = doctor.check_pin_unpushed()
+
+        self.assertEqual(check.status, "ok")
+
+    def test_unpushed_head_is_fail_and_lists_the_commit(self):
+        """AC-4: HEAD ушёл вперёд origin — `fail`, sha и сообщение
+        непушенного коммита перечислены в тексте."""
+        (self.root / "doc.txt").write_text("x\n", encoding="utf-8")
+        self.git("add", "doc.txt")
+        self.git("commit", "-q", "-m", "документный коммит")
+        sha = self.git("rev-parse", "HEAD").strip()
+
+        check = doctor.check_pin_unpushed()
+
+        self.assertEqual(check.status, "fail")
+        self.assertIn(sha[:7], check.detail)
+        self.assertIn("документный коммит", check.detail)
+
+    def test_unreachable_origin_is_warn_not_ok(self):
+        """AC-6: fetch отказал — `warn`, не деградация до `ok`, как у
+        соседнего `check_root_pin`."""
+        self.git("remote", "set-url", "origin",
+                str(self.root / "no-such-origin-here"))
+
+        check = doctor.check_pin_unpushed()
+
+        self.assertEqual(check.status, "warn")
+        self.assertIn("сверка с origin невозможна", check.detail)
+
+    def test_all_checks_wires_in_check_pin_unpushed(self):
+        """Ловит мутацию: `check_pin_unpushed` реализована, но забыта в
+        `all_checks` — doctor молчал бы о непушенных коммитах пина при
+        обычном прогоне, несмотря на наличие самой проверки (по образцу
+        `test_all_checks_wires_in_check_map_growth`)."""
+        self.assertIn("check_pin_unpushed", inspect.getsource(doctor.all_checks))
+
+
 class ProgramThresholdAlertTest(TmpRootTest):
     """Критерий 5: пороги 70/90% программы — alerts kind=threshold, без дублей."""
 

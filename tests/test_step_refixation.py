@@ -9,14 +9,16 @@ T076): `gitcmd.commit_committer_dates`,
 tests/test_step_autocommit.py/tests/test_timeout_checkpoint.py, которые
 эту песочницу уже переиспользуют).
 """
+import shutil
 import sys
+import tempfile
 import unittest
 from datetime import datetime
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from orchestrator import fixation, fsm, gitcmd, store  # noqa: E402
+from orchestrator import config, fixation, fsm, gitcmd, store  # noqa: E402
 from tests.test_git_fixation import RealPultGitTest  # noqa: E402
 
 # SPEC schema_version 2 с AC-разметкой — spec_gate направляет approve в
@@ -75,6 +77,20 @@ class AcceptanceTest(unittest.TestCase):
 
 
 class _RefixationTest(RealPultGitTest):
+
+    def setUp(self):
+        super().setUp()
+        # `run_faked` -> `runner.cmd_run` -> `role_cwd` заводит worktree
+        # задачи через `workspace.ensure` (self-target) — та с этой
+        # задачи делает `git fetch origin <MAIN_BRANCH>`
+        # (SPEC 01M297HFSKV3GVZJ9YF20FZEZE), а `RealPultGitTest.config.
+        # ROOT` origin не несёт вовсе.
+        origin = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, origin, ignore_errors=True)
+        self.git("init", "-q", "--bare", str(origin))
+        self.git("remote", "add", "origin", str(origin))
+        self.git("push", "-q", "origin",
+                f"{config.MAIN_BRANCH}:{config.MAIN_BRANCH}")
 
     def enter_tests_writing(self) -> str:
         spec_text = SPEC_V2.format(task=self.TASK)
