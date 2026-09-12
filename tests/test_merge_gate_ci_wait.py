@@ -174,12 +174,21 @@ class WaitLoopRedStatusTest(MergeGateCiWaitUnitTest):
 
 
 class OuterCycleDeadlineTest(MergeGateCiWaitUnitTest):
-    """`_cmd_approve_merge_gate_cycle`: мьютекс берётся/отпускается вокруг
-    каждого захода в тело гейта, и потолок ожидания не пересчитывается на
-    повторном исходе `("wait", ...)` (AC-4, тело гейта здесь замокано —
-    сама подтяжка/push кроются приёмочными тестами на настоящем git)."""
+    """`_cmd_approve_merge_gate_cycle`: мьютекс резервируется ОДИН раз на
+    весь цикл (SPEC 01M291EJMA995AZ61MEMDZKWRY, требования 1-2, 4, 7;
+    AC-1, AC-5, AC-7), остаётся у того же держателя между заходами в
+    тело, включая время ожидания CI между ними — не берётся/отпускается
+    вокруг КАЖДОГО отдельного захода, как было до этой задачи. Потолок
+    ожидания не пересчитывается на повторном исходе `("wait", ...)`
+    (AC-4, тело гейта здесь замокано — сама подтяжка/push кроются
+    приёмочными тестами на настоящем git)."""
 
-    def test_mutex_acquired_and_released_around_each_body_call(self):
+    def test_mutex_acquired_once_and_held_across_both_body_calls(self):
+        """Ловит мутацию: если `acquire`/`release` снова вызываются вокруг
+        КАЖДОГО отдельного захода в тело гейта (старое поведение до этой
+        задачи), `acquire_calls`/`release_calls` станут длиной 2 (по разу
+        на каждый из двух `fake_body`) вместо 1 — тест это ловит через
+        `assertEqual(..., ["sess-1"])`."""
         acquire_calls = []
         release_calls = []
         bodies = [("wait", "task/t001-zadacha"), ("done",)]
@@ -209,8 +218,14 @@ class OuterCycleDeadlineTest(MergeGateCiWaitUnitTest):
                 store.db(), self.TASK, "sess-1", {"branch": "task/t001-zadacha"},
                 "merge_gate")
 
-        self.assertEqual(acquire_calls, ["sess-1", "sess-1"])
-        self.assertEqual(release_calls, ["sess-1", "sess-1"])
+        self.assertEqual(
+            acquire_calls, ["sess-1"],
+            "мьютекс обязан браться РОВНО один раз на весь цикл, не на "
+            "каждый заход в тело (AC-7)")
+        self.assertEqual(
+            release_calls, ["sess-1"],
+            "мьютекс обязан отпускаться РОВНО один раз при выходе из "
+            "цикла, не после каждого захода в тело (AC-7)")
 
     def test_ceiling_not_reset_by_a_second_wait_outcome(self):
         outcomes = [("wait", "task/t001-zadacha"),
