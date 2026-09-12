@@ -1,6 +1,8 @@
 """Вызовы git в корне репозитория, вопросы к ветке задачи и к произвольному
 репозиторию (артефактные git-репо внешних target, ADR-0003 3д, tasks/T021)."""
+import os
 import subprocess
+import uuid
 from pathlib import Path
 
 from . import config
@@ -409,30 +411,77 @@ def remote_branch_sha(branch: str, repo: Path | None = None) -> str:
     return res.stdout.split()[0]
 
 
+def fetch_ref_sha(remote: str, ref: str, *,
+                  repo: Path | None = None) -> tuple[str, str]:
+    """(sha, "") — голова ветки `ref` в `remote` через ВРЕМЕННУЮ приватную
+    ссылку `refs/artel/fetch/<pid>-<uuid>` (SPEC
+    01M2ARQGY51B99YNP9PY806AN1, AC-1/AC-2/AC-3): `git fetch <remote>
+    +refs/heads/<ref>:refs/artel/fetch/<pid>-<uuid>`, затем `git rev-parse
+    --verify` этой ссылки — БЕЗ единого обращения к `FETCH_HEAD`.
+
+    Общий `FETCH_HEAD` — один файл на репозиторий (приватный на worktree
+    начиная с git 2.5, но всё равно общий для всех шагов, исполняемых В
+    ТОМ ЖЕ рабочем дереве/`config.ROOT`): параллельный шаг ДРУГОЙ задачи
+    в том же репозитории (push/fetch артефактной ветки) мог переписать
+    его МЕЖДУ нашими собственными `fetch` и чтением результата (инцидент
+    12.09 07:15Z, канарейка 01M2A22CG2: merge-коммит 9a7f06c4 принёс
+    голову ЧУЖОЙ артефактной ветки вместо `origin/main`). Приватная
+    ссылка своя у каждого вызова (`<pid>-<uuid>` в имени) — гонки на
+    общем файле нет ни при каком совпадении по времени с другим шагом,
+    а объекты фетча при этом реально попадают в объектную базу (то, ради
+    чего вызывающему коду вообще нужен fetch, а не голый `ls-remote`).
+
+    ("", причина) — `remote`/`ref` недоступны, или git не ответил на
+    любой из шагов; причина — первые 200 символов stderr (тот же приём,
+    что у `show`/`drop`). Приватная ссылка убирается (`git update-ref
+    -d`) и на успех, и на отказ `rev-parse` (`finally`, AC-2) —
+    единственный случай, когда убирать нечего, это отказ самого `fetch`
+    (ссылка тогда ещё не создана).
+
+    `repo` (по образцу `in_repo`) — клон, в котором идёт ВЕСЬ git-трафик
+    примитива (`in_repo`, не голый `git`); `None` (по умолчанию) —
+    `config.ROOT`.
+    """
+    private_ref = f"refs/artel/fetch/{os.getpid()}-{uuid.uuid4().hex}"
+    refspec = f"+refs/heads/{ref}:{private_ref}"
+    fetch_args = ("fetch", remote, refspec)
+    fetch = in_repo(repo, *fetch_args) if repo else git(*fetch_args)
+    if fetch is None:
+        return "", "git не ответил"
+    if fetch.returncode != 0:
+        return "", (fetch.stderr.strip()[:200] or "git fetch вернул ненулевой код")
+    try:
+        verify_args = ("rev-parse", "--verify", private_ref)
+        res = in_repo(repo, *verify_args) if repo else git(*verify_args)
+        if res is None:
+            return "", "git не ответил"
+        if res.returncode != 0 or not res.stdout.strip():
+            return "", (res.stderr.strip()[:200] or "приватная ссылка не разрешилась")
+        return res.stdout.strip(), ""
+    finally:
+        delete_args = ("update-ref", "-d", private_ref)
+        in_repo(repo, *delete_args) if repo else git(*delete_args)
+
+
 def fetch_head_sha(remote: str, ref: str) -> tuple[str, str]:
-    """(sha, "") — голова `ref` в `remote` ПОСЛЕ `git fetch <remote> <ref>`
-    (SPEC 01M1TQ0ZCYJ6TESZ2KGJ6AWYNH, требование 1): `git fetch` не
-    трогает HEAD и рабочее дерево ни при каком исходе, так что HEAD
+    """(sha, "") — голова `ref` в `remote`, через `fetch_ref_sha` (SPEC
+    01M2ARQGY51B99YNP9PY806AN1): приватная ссылка `refs/artel/fetch/
+    <pid>-<uuid>`, БЕЗ обращения к `FETCH_HEAD` (до этой задачи здесь
+    стоял отдельный `git rev-parse ... FETCH_HEAD` — общий на репозиторий
+    файл, который параллельный шаг другой задачи мог переписать между
+    нашими fetch и чтением результата, инцидент 12.09 07:15Z). `git
+    fetch` не трогает HEAD и рабочее дерево ни при каком исходе — HEAD
     главной копии остаётся на месте. ("", причина) — `remote` недоступен
     (нет сети, `remote` не настроен, песочница) или git не ответил;
-    причина — первые 200 символов stderr, тем же приёмом, что и у
-    `show`/`drop`.
+    причина — первые 200 символов stderr.
 
     Не `ls_remote`/`remote_branch_sha` (голый sha без объектов): вызывающему
-    коду (`artifact_branch`, `doctor`) нужен РЕАЛЬНО присутствующий локально
-    коммит — родитель плотницкой записи (`write_commit`, `read-tree
+    коду (`artifact_branch`, `workspace`) нужен РЕАЛЬНО присутствующий
+    локально коммит — родитель плотницкой записи (`write_commit`, `read-tree
     parent`) обязан существовать в объектной базе, не только числиться sha
     на удалённой стороне.
     """
-    res = git("fetch", remote, ref)
-    if res is None:
-        return "", "git не ответил"
-    if res.returncode != 0:
-        return "", (res.stderr.strip()[:200] or "git fetch вернул ненулевой код")
-    head = git("rev-parse", "--verify", "--quiet", "FETCH_HEAD")
-    if head is None or head.returncode != 0 or not head.stdout.strip():
-        return "", "FETCH_HEAD не разрешён"
-    return head.stdout.strip(), ""
+    return fetch_ref_sha(remote, ref)
 
 
 def ls_tree_files(branch: str, rel_dir: str) -> list[str] | None:

@@ -85,9 +85,17 @@ def _origin_main_sha(ctx: repo_context.RepoContext) -> str | None:
     """sha текущего HEAD `refs/heads/<ctx.base>` main target'а на её
     `origin` — `None`, git не ответил.
 
-    `git fetch` пишет только в объектную базу и `FETCH_HEAD`/
-    remote-tracking ref, никогда в локальный `refs/heads/<base>` —
-    рабочее дерево и HEAD клона `ctx` не задеты (AC-8).
+    Фетч и чтение результата идут через `gitcmd.fetch_ref_sha` (SPEC
+    01M2ARQGY51B99YNP9PY806AN1) — временную приватную ссылку `refs/artel/
+    fetch/<pid>-<uuid>`, БЕЗ обращения к общему `FETCH_HEAD` (до этой
+    задачи здесь стоял голый `git fetch` + `rev-parse FETCH_HEAD` —
+    общий на репозиторий файл, который параллельный шаг ДРУГОЙ задачи в
+    том же репозитории (например, `config.ROOT` при self-`ctx`) мог
+    переписать между двумя этими вызовами, инцидент 12.09 07:15Z,
+    канарейка 01M2A22CG2). `git fetch` пишет только в объектную базу и
+    саму приватную ссылку (удаляемую сразу после чтения), никогда в
+    локальный `refs/heads/<base>` — рабочее дерево и HEAD клона `ctx` не
+    задеты (AC-8).
 
     `ctx` (SPEC 01M1R5B33CC7E6BZK085XV3ZCX, требование 4, AC-12) —
     репозиторный контекст target'а задачи: для self — байт-в-байт
@@ -98,11 +106,9 @@ def _origin_main_sha(ctx: repo_context.RepoContext) -> str | None:
     `orchestrator/repo_context.py` докстринг), не адрес форджа
     `ctx.remote`.
     """
-    fetch = repo_context.git(ctx, "fetch", "-q", "origin", ctx.base)
-    if fetch is None or fetch.returncode != 0:
-        return None
-    res = repo_context.git(ctx, "rev-parse", "FETCH_HEAD")
-    return res.stdout.strip() if res is not None and res.returncode == 0 else None
+    sha, _ = gitcmd.fetch_ref_sha("origin", ctx.base,
+                                  repo=repo_context.path_or_none(ctx))
+    return sha or None
 
 
 def _scratch_worktree(ctx: repo_context.RepoContext,

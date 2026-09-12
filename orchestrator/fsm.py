@@ -112,25 +112,26 @@ def _origin_main_sha(target_name: str, *, repo: Path | None = None) -> str | Non
     конкретно (плотницкий merge Stage0 — только self-target/`operator`
     гейт), эта — про main ЗАДАННОГО target'а (`_origin_main_source`).
 
-    `git fetch` пишет только в объектную базу и `FETCH_HEAD` репозитория,
-    в котором исполнен (`config.ROOT`, когда `repo=None` — `gitcmd.git`,
-    не `in_repo`), никогда в локальный `refs/heads/<MAIN_BRANCH>` — ни
-    рабочее дерево, ни HEAD `config.ROOT`, ни зафиксированный там пин не
-    задеты (AC-8). Возврат — конкретный sha, не литерал `"FETCH_HEAD"`:
-    merge ниже идёт в ДРУГОМ git-worktree (worktree задачи), а начиная с
-    git 2.5 `FETCH_HEAD` — файл, приватный для каждого worktree (как
-    HEAD/index) — литерал `"FETCH_HEAD"` там не резолвится в то, что
-    только что зафетчил `config.ROOT`. `None` — git не ответил на fetch
-    или на `rev-parse`, либо конфигурация target'а не читается
-    (`_origin_main_source`) — тот же вырожденный случай, что у остальных
-    примитивов оркестратора: сверка ниже деградирует на «ничего не
-    делать».
+    Фетч и чтение результата идут через `gitcmd.fetch_ref_sha` (SPEC
+    01M2ARQGY51B99YNP9PY806AN1) — временную приватную ссылку `refs/artel/
+    fetch/<pid>-<uuid>`, БЕЗ обращения к общему `FETCH_HEAD` репозитория
+    (до этой задачи здесь стоял голый `git fetch` + `rev-parse
+    FETCH_HEAD` — общий на репозиторий/worktree файл, который
+    параллельный шаг другой задачи мог переписать между двумя этими
+    вызовами, инцидент 12.09 07:15Z). `git fetch` пишет только в
+    объектную базу и саму приватную ссылку (удаляемую сразу после
+    чтения), никогда в локальный `refs/heads/<MAIN_BRANCH>` — ни рабочее
+    дерево, ни HEAD `config.ROOT`, ни зафиксированный там пин не задеты
+    (AC-8). `None` — git не ответил на fetch или на `rev-parse`, либо
+    конфигурация target'а не читается (`_origin_main_source`) — тот же
+    вырожденный случай, что у остальных примитивов оркестратора: сверка
+    ниже деградирует на «ничего не делать».
 
     `repo` (SPEC 01M1R5B33CC7E6BZK085XV3ZCX, требование 3, AC-4) — клон
-    контекста target'а, когда target ≠ self: fetch и `rev-parse
-    FETCH_HEAD` идут ТАМ (`gitcmd.in_repo`), не в `config.ROOT` — ветки
-    внешнего target в `config.ROOT` нет вовсе. Remote — литеральное имя
-    `"origin"` (не `remote` из `_origin_main_source`, которая для
+    контекста target'а, когда target ≠ self: весь git-трафик
+    `fetch_ref_sha` идёт ТАМ (`gitcmd.in_repo`), не в `config.ROOT` —
+    ветки внешнего target в `config.ROOT` нет вовсе. Remote — литеральное
+    имя `"origin"` (не `remote` из `_origin_main_source`, которая для
     внешнего target несёт адрес форджа, не настроенный в клоне git
     remote): клон внешнего target несёт свой `origin` по тому же
     соглашению, что и `config.ROOT` пульта (`orchestrator/repo_context.py`
@@ -142,15 +143,9 @@ def _origin_main_sha(target_name: str, *, repo: Path | None = None) -> str | Non
     if source is None:
         return None
     remote, branch = source
-    if repo is not None:
-        fetch = gitcmd.in_repo(repo, "fetch", "-q", "origin", branch)
-    else:
-        fetch = gitcmd.git("fetch", "-q", remote, branch)
-    if fetch is None or fetch.returncode != 0:
-        return None
-    res = (gitcmd.in_repo(repo, "rev-parse", "FETCH_HEAD") if repo is not None
-          else gitcmd.git("rev-parse", "FETCH_HEAD"))
-    return res.stdout.strip() if res is not None and res.returncode == 0 else None
+    effective_remote = "origin" if repo is not None else remote
+    sha, _ = gitcmd.fetch_ref_sha(effective_remote, branch, repo=repo)
+    return sha or None
 
 
 def _pull_main_or_escalate(conn, task_id: str, t, state: str) -> str:
@@ -192,8 +187,8 @@ def _pull_main_or_escalate(conn, task_id: str, t, state: str) -> str:
     другого target (сравнение и merge подтяжки идут прямо там, без
     отдельного worktree — внешний target уже стоит на своей ветке задачи
     в этом клоне, ТЗ-2). `origin_main_sha` передаётся замыканием,
-    связанным с ТЕМ ЖЕ `repo_path` — фетч и `rev-parse FETCH_HEAD`
-    внутри него идут в тот же клон, не в `config.ROOT`.
+    связанным с ТЕМ ЖЕ `repo_path` — весь git-трафик `gitcmd.fetch_ref_sha`
+    внутри него идёт в тот же клон, не в `config.ROOT`.
     """
     ctx = repo_context.resolve(t["target"] or config.DEFAULT_TARGET)
     repo_path = repo_context.path_or_none(ctx)
