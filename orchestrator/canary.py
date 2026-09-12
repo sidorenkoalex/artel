@@ -89,9 +89,9 @@ from pathlib import Path
 
 from scripts import guard
 
-from . import (alerts, answer, artifact_branch, artifacts, auto, catalog,
-              cleanup, config, fsm, gitcmd, keychain, runner, store,
-              workspace, yamlmini)
+from . import (alerts, answer, artifact_branch, artifact_source, artifacts,
+              auto, catalog, cleanup, config, fsm, gitcmd, keychain, runner,
+              store, workspace, yamlmini)
 
 CANARY_MARK_ACTOR = "canary"
 
@@ -510,14 +510,33 @@ def _ephemeral_clone():
         shutil.rmtree(dest, ignore_errors=True)
 
 
-def _spec_gate_next_state(conn, task_id: str, t) -> str:
+def _spec_gate_next_state(conn, task_id: str, t) -> str | None:
     """Куда ведёт SPEC-гейт — та же ветка условий, что и у
-    `fsm._cmd_approve` для `spec_gate` (AC-разметка SPEC), скопированная
-    сюда намеренно (см. модульный докстринг: не через `cmd_approve`)."""
-    branch = t["branch"]
-    if gitcmd.on_foreign_branch(branch):
-        spec_text, _reason = gitcmd.show(branch, f"tasks/{task_id}/SPEC.md")
-        meta = (yamlmini.frontmatter(spec_text) or {}) if spec_text is not None else {}
+    `fsm._approve_spec_gate` для `spec_gate` (AC-разметка SPEC),
+    скопированная сюда намеренно (см. модульный докстринг: не через
+    `cmd_approve`). Источник SPEC — `artifact_source.resolve` (SPEC
+    01M2A22CG2P0E69H00RDHFF3K4, требование 1), не `gitcmd.
+    on_foreign_branch(t["branch"])`: после ADR-0016 `tasks/<id>/` живёт
+    только в артефактной ветке — ни на кодовой ветке задачи, ни на диске
+    `config.TASKS/<id>/SPEC.md`, и старая проверка давала пустой словарь
+    на обеих ветках, уводя канареечную задачу с AC-разметкой мимо
+    `tests_writing`. Параметр `t` в теле не используется (AC-4: источник
+    определяется исключительно через `artifact_source.resolve`) —
+    оставлен третьим позиционным ради сигнатуры, зафиксированной
+    залоченной приёмочной планкой (ANSWER-1).
+
+    `None` — SPEC не прочитан ни в одном источнике (дерево не на ветке
+    задачи, файл там не прочитан) — требование 2: это не трактуется как
+    «SPEC без AC-разметки», вызывающий код (`_pass_spec_gate`) решает,
+    как трактовать `None` отдельно от найденного, но пустого SPEC.
+    """
+    branch, foreign = artifact_source.resolve(conn, task_id)
+    if foreign:
+        spec_text = fsm._read_branch_text_or_refuse(conn, task_id, branch,
+                                                     "SPEC.md")
+        if spec_text is None:
+            return None
+        meta = yamlmini.frontmatter(spec_text) or {}
     else:
         meta = artifacts.frontmatter(config.TASKS / task_id / "SPEC.md")
     return "tests_writing" if guard.requires_ac_markup(meta) else "in_dev"
@@ -526,6 +545,16 @@ def _spec_gate_next_state(conn, task_id: str, t) -> str:
 def _pass_spec_gate(conn, task_id: str) -> None:
     t = store.get_task(conn, task_id)
     next_state = _spec_gate_next_state(conn, task_id, t)
+    if next_state is None:
+        # Требование 2/AC-3: SPEC не найден ни в одном источнике не
+        # трактуется как «SPEC без AC-разметки» (что увело бы задачу в
+        # `in_dev`, минуя test_author) — задача снимается тем же путём,
+        # что и прочие случаи «прогон дальше не ведёт».
+        branch, _ = artifact_source.resolve(conn, task_id)
+        _kill_inconclusive(
+            conn, task_id,
+            f"canary: SPEC не найден в источнике артефактов ({branch})")
+        return
     store.set_state(conn, task_id, next_state, CANARY_MARK_ACTOR,
                     expected_state="spec_gate",
                     detail="canary: гейт SPEC пройден автоматически "
@@ -658,7 +687,13 @@ def _has_subtasks(conn, task_id: str) -> bool:
     """Родитель поделён (01M29284PTCJXGERV5262E9XMM, требование 1) — хоть
     одна строка `tasks` ссылается на `task_id` через `parent_task_id`.
     Фильтрация уже существующего `store.all_tasks(conn)`, без новой
-    сырой SQL вне `store.py` (ADR-0003 3ж)."""
+    сырой SQL вне `store.py` (ADR-0003 3ж).
+
+    `conn` без таблицы `tasks` (БД ещё не проинициализирована `init`,
+    тот же вырожденный случай, что `schema.migrate` уже трактует как
+    штатный, `schema.py:92-93`) — подзадач нет физически, не ошибка."""
+    if not store.table_columns(conn, "tasks"):
+        return False
     return any(r["parent_task_id"] == task_id for r in store.all_tasks(conn))
 
 
@@ -820,6 +855,13 @@ def _escalation_notes(steps) -> list:
     return [r["detail"] or "" for r in steps if r["action"] == "state -> escalated"]
 
 
+def _test_author_visited(steps) -> bool:
+    """Прошла ли задача `tests_writing` (требование 3, AC-5): переход
+    `state -> tests_writing` в журнале задачи — знак, что роль
+    test_author реально её увидела, не была пропущена гейтом SPEC."""
+    return any(r["action"] == "state -> tests_writing" for r in steps)
+
+
 def _task_metrics(conn, task_id: str) -> dict:
     t = store.get_task(conn, task_id)
     steps = store.task_steps(conn, task_id)
@@ -831,6 +873,7 @@ def _task_metrics(conn, task_id: str) -> dict:
         "outcome": t["state"],
         "kill_note": (_kill_outcome_note(conn, task_id, steps)
                      if t["state"] == "killed" else None),
+        "test_author_visited": _test_author_visited(steps),
     }
 
 
@@ -1053,13 +1096,15 @@ def _run_one_task(template_path: Path, run_stamp: str, ratio: float) -> None:
             f"{'эскалация была' if actual else 'эскалации не было'}]")
 
     outcome_note = f" ({metrics['kill_note']})" if metrics["kill_note"] else ""
+    test_author_note = "да" if metrics["test_author_visited"] else "нет"
     for line in _journal_excerpt_lines(steps):
         print(f"  {line}")
     print(f"  {task_id}: шагов={metrics['steps']}  "
          f"${metrics['cost_usd']:.2f}  "
          f"ревью-итераций={metrics['review_iterations']}  "
          f"эскалаций={len(metrics['escalations'])}  "
-         f"исход={metrics['outcome']}{outcome_note}{mismatch_note}{note}")
+         f"исход={metrics['outcome']}{outcome_note}  "
+         f"test_author={test_author_note}{mismatch_note}{note}")
     if diag_dir is not None:
         print(f"  диагностика: {diag_dir}")
 

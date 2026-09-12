@@ -20,7 +20,8 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from orchestrator import canary, catalog, config, retro, store  # noqa: E402
+from orchestrator import (artifact_branch, canary, catalog, config,  # noqa: E402
+                          retro, store)
 from tests.sandbox import RealGitSandbox, capture  # noqa: E402
 
 
@@ -174,6 +175,36 @@ class MetricsFromJournalTest(unittest.TestCase):
         self.assertEqual(metrics["review_iterations"], 2)
         self.assertEqual(metrics["escalations"], [])
         self.assertEqual(metrics["outcome"], "killed")
+
+    def test_test_author_visited_true_when_tests_writing_in_journal(self):
+        """Ловит мутацию: `_test_author_visited` возвращает `False`
+        безусловно (или сравнение строки действия подменено на другой
+        переход, например `state -> in_dev`) — задача реально прошла
+        `tests_writing`, а признак АС-5 ошибочно остался бы «нет»."""
+        store.journal(self.conn, self.TASK, "fsm", "state -> spec_gate", "")
+        store.journal(self.conn, self.TASK, "operator",
+                      "state -> tests_writing", "")
+
+        steps = store.task_steps(self.conn, self.TASK)
+
+        self.assertTrue(canary._test_author_visited(steps))
+        self.assertTrue(canary._task_metrics(
+            self.conn, self.TASK)["test_author_visited"])
+
+    def test_test_author_visited_false_when_tests_writing_skipped(self):
+        """Ловит мутацию: `_test_author_visited` возвращает `True`
+        безусловно (или `any(...)` подменён на проверку непустоты
+        `steps`) — журнал без перехода `state -> tests_writing` (SPEC
+        без AC-разметки ушёл `spec_gate -> in_dev` напрямую) ошибочно
+        дал бы «test_author=да»."""
+        store.journal(self.conn, self.TASK, "fsm", "state -> spec_gate", "")
+        store.journal(self.conn, self.TASK, "canary", "state -> in_dev", "")
+
+        steps = store.task_steps(self.conn, self.TASK)
+
+        self.assertFalse(canary._test_author_visited(steps))
+        self.assertFalse(canary._task_metrics(
+            self.conn, self.TASK)["test_author_visited"])
 
 
 class NeedsDiagnosticsTest(unittest.TestCase):
@@ -991,6 +1022,116 @@ class MergesSinceLastGreenRunTest(RealGitSandbox):
 
         self.assertIsNone(
             canary.merges_since_last_green_run(self.conn, target))
+
+
+class SpecGateArtifactSourceTest(RealGitSandbox):
+    """`canary._spec_gate_next_state`/`_pass_spec_gate` (SPEC
+    01M2A22CG2P0E69H00RDHFF3K4): после ADR-0016 `tasks/<id>/` живёт
+    ТОЛЬКО в артефактной ветке пульта (`artifact/<id>`) — ни на кодовой
+    ветке задачи (которая на стадии `spec_gate` зачастую ещё не заведена
+    в git вовсе), ни на диске `config.TASKS/<id>/SPEC.md`. Реальный git —
+    сам предмет проверки (расхождение чтения с кодовой и с артефактной
+    ветки), заглушкой `fake_git` не изобразить."""
+
+    TASK = "T950"
+    CODE_BRANCH = "task/t950-marker"
+
+    SPEC_WITH_AC = """---
+task: {task}
+type: spec
+author_role: analyst
+status: ready
+schema_version: 2
+---
+
+# SPEC: маркер артефактной ветки
+
+## Критерии приёмки
+AC-1. Критерий.
+"""
+
+    SPEC_SKIP_TESTS = """---
+task: {task}
+type: spec
+author_role: analyst
+status: ready
+schema_version: 2
+skip_tests: причина пропуска
+---
+
+# SPEC: маркер артефактной ветки
+
+## Критерии приёмки
+AC-1. Критерий.
+"""
+
+    def setUp(self):
+        super().setUp()
+        self.conn = store.db()
+        store.insert_task(self.conn, self.TASK, "Канареечная задача",
+                          "spec_gate", self.CODE_BRANCH, config.DEFAULT_TARGET,
+                          50.0, is_canary=True)
+        self.artifact_branch = artifact_branch.branch_name(self.TASK)
+
+    def _commit_spec_on_artifact_branch(self, template: str) -> None:
+        self.checkout(self.artifact_branch, create=True)
+        d = self.root / "tasks" / self.TASK
+        d.mkdir(parents=True, exist_ok=True)
+        (d / "SPEC.md").write_text(template.format(task=self.TASK),
+                                   encoding="utf-8")
+        self.git("add", f"tasks/{self.TASK}")
+        self.git("commit", "-q", "-m", "SPEC задачи")
+        self.checkout(config.MAIN_BRANCH)
+
+    def test_ac1_spec_only_on_artifact_branch_goes_to_tests_writing(self):
+        """Ловит мутацию (AC-6): `_spec_gate_next_state` определяет
+        источник SPEC обратно через `gitcmd.on_foreign_branch(t
+        ["branch"])` (кодовая ветка), не через `artifact_source.
+        resolve` — кодовая ветка задачи не существует в git вовсе на
+        этой стадии, `on_foreign_branch` даёт `False`, мутировавший код
+        падает на пустой disk-read (`config.TASKS/<id>/SPEC.md` тоже не
+        существует) и вернул бы `in_dev` вместо `tests_writing`, минуя
+        test_author."""
+        self._commit_spec_on_artifact_branch(self.SPEC_WITH_AC)
+        t = store.get_task(self.conn, self.TASK)
+
+        with mock.patch.object(canary.gitcmd, "on_foreign_branch") as spy:
+            result = canary._spec_gate_next_state(self.conn, self.TASK, t)
+
+        self.assertEqual(result, "tests_writing")
+        spy.assert_not_called()  # AC-4
+
+    def test_ac2_skip_tests_on_artifact_branch_goes_to_in_dev(self):
+        """Ловит мутацию: `_spec_gate_next_state` игнорирует `skip_tests`
+        из frontmatter артефактной ветки (например, читает только
+        раздел «Критерии приёмки» и не смотрит на поле `meta`) —
+        SPEC с `skip_tests: <причина>` ошибочно ушёл бы `tests_writing`
+        вместо штатного `in_dev`."""
+        self._commit_spec_on_artifact_branch(self.SPEC_SKIP_TESTS)
+        t = store.get_task(self.conn, self.TASK)
+
+        result = canary._spec_gate_next_state(self.conn, self.TASK, t)
+
+        self.assertEqual(result, "in_dev")
+
+    def test_ac3_spec_not_found_anywhere_kills_inconclusive_not_in_dev(self):
+        """Ловит мутацию: `_spec_gate_next_state` возвращает `"in_dev"`
+        вместо `None`, когда SPEC не прочитан ни с одной ветки (ни
+        артефактная ветка не заведена, ни SPEC на диске) — `_pass_spec_
+        gate` истолковал бы отсутствие SPEC как «без AC-разметки» и
+        перевёл бы задачу в `in_dev`, вместо вызова `_kill_inconclusive`
+        с именованной причиной (требование 2)."""
+        with mock.patch.object(canary.cleanup, "cmd_kill") as kill:
+            canary._pass_spec_gate(self.conn, self.TASK)
+
+        kill.assert_called_once_with(self.TASK)
+        self.assertEqual(
+            store.get_task(self.conn, self.TASK)["state"], "spec_gate")
+        steps = store.task_steps(self.conn, self.TASK)
+        self.assertTrue(any(
+            "SPEC не найден в источнике артефактов" in r["action"]
+            for r in steps))
+
 
 class PoolSerializationRoundtripTest(unittest.TestCase):
     """`canary._serialize_pool`/`_deserialize_pool` (SPEC
