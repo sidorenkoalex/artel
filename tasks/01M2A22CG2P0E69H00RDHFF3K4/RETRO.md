@@ -1,0 +1,28 @@
+---
+operator: Alexander Sidorenko
+model: unknown
+artel_sha: 699fa124233296c255ee56881b34e6b146fafa47
+---
+
+# RETRO: 01M2A22CG2P0E69H00RDHFF3K4 — канарейка читает SPEC из артефактной ветки: задача с AC-разметкой идёт в tests_writing, а не мимо test_author в in_dev
+
+Итог: killed — причина: причина не найдена в журнале
+Адрес артефактов: артефакты не сохранены (ветка удалена при kill)
+Суть: канарейка читает SPEC из артефактной ветки: задача с AC-разметкой идёт в tests_writing, а не мимо test_author в in_dev
+
+Стоимость итого: $19.64
+  analyst: $1.12, 1551390 токенов
+  test_author: $5.28, 9572740 токенов
+  developer: $10.65, 22635597 токенов
+  reviewer: $2.59, 4107839 токенов
+
+Ревью: 1 итераций; приёмка: 0 отказ(ов)
+
+Эскалации: 2 (последняя): конфликт подтяжки main в ветку task/01m2a22cg2p0e69h00rdhff3k4-kanareyka-chitaet-spec-iz-arte: конфликтные файлы: docs/codebase-map.md, orchestrator/canary.py; Auto-merging docs/codebase-map.md
+CONFLICT (content): Merge conflict in docs/codebase-map.md
+Auto-merging orchestrator/canary.py
+CONFLICT (content): Merge conflict in orchestrator/canary.py
+Auto-merging tests/test_canary.py
+Automatic merge failed; fix conflicts and then commit the result.
+
+Приёмочные тесты: 0 тест(ов), 0 manual, 0 skip
