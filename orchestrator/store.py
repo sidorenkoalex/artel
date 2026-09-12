@@ -692,6 +692,50 @@ def release_merge_lock(conn, session_id: str) -> None:
     conn.commit()
 
 
+def merge_queue_rows(conn) -> list:
+    """Все ожидающие мьютекса merge-окна, FIFO по времени входа в очередь
+    (SPEC 01M291EPQ2VFGCHZTXXC81616V, требования 2-3) — `rowid` явно в
+    выборке ради точечного удаления мёртвой записи (`delete_merge_queue_
+    row`), таблица без собственного первичного ключа."""
+    return conn.execute(
+        "SELECT rowid, task_id, session_id, pid, hostname, enqueued_ts,"
+        " heartbeat_ts FROM merge_queue ORDER BY enqueued_ts, rowid").fetchall()
+
+
+def enqueue_merge_wait(conn, task_id: str, session_id: str, pid: int,
+                       hostname: str, ts: str) -> None:
+    """Регистрирует ожидающего мьютекса merge-окна (требование 2)."""
+    conn.execute(
+        "INSERT INTO merge_queue (task_id, session_id, pid, hostname,"
+        " enqueued_ts, heartbeat_ts) VALUES (?,?,?,?,?,?)",
+        (task_id, session_id, pid, hostname, ts, ts))
+    conn.commit()
+
+
+def touch_merge_queue_heartbeat(conn, session_id: str, ts: str) -> None:
+    """Продлевает heartbeat записи ожидающего на каждом опросе — тот же
+    признак «участник ещё жив», что уже несут lease/мьютекс merge
+    (требование 5: протухший heartbeat — один из двух признаков мёртвого
+    участника очереди)."""
+    conn.execute("UPDATE merge_queue SET heartbeat_ts=? WHERE session_id=?",
+                (ts, session_id))
+    conn.commit()
+
+
+def dequeue_merge_wait(conn, session_id: str) -> None:
+    """Снимает регистрацию ожидающего — своё окно получено, либо истёк
+    потолок ожидания (требования 1, 3)."""
+    conn.execute("DELETE FROM merge_queue WHERE session_id=?", (session_id,))
+    conn.commit()
+
+
+def delete_merge_queue_row(conn, rowid: int) -> None:
+    """Удаляет конкретную запись очереди мёртвого участника по `rowid`
+    (требование 5)."""
+    conn.execute("DELETE FROM merge_queue WHERE rowid=?", (rowid,))
+    conn.commit()
+
+
 # ===== Алерты =====
 
 

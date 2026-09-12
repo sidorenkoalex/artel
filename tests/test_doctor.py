@@ -35,9 +35,10 @@ from orchestrator import (alerts, budget, canary, catalog, config,  # noqa: E402
                           store)
 from tests import sandbox as sandbox_module  # noqa: E402
 from tests.sandbox import (FakeStream, RealGitSandbox, TmpRootTest,  # noqa: E402
-                           capture, capture_new_task_id, claude_only_popen,
-                           claude_only_run, disk_backed_ls_tree_files,
-                           disk_backed_show, fake_git, sync_spec_from_worktree)
+                           _ts_ago, capture, capture_new_task_id,
+                           claude_only_popen, claude_only_run,
+                           disk_backed_ls_tree_files, disk_backed_show,
+                           fake_git, sync_spec_from_worktree)
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
@@ -1814,6 +1815,79 @@ class MergeLockCheckTest(TmpRootTest):
         doctor.check_merge_lock(conn)
 
         self.assertIsNone(store.get_alert(conn, alert_id)["ack_ts"])
+
+
+class MergeQueueCheckTest(TmpRootTest):
+    """SPEC 01M291EPQ2VFGCHZTXXC81616V, требование 6/AC-9: содержимое
+    очереди `merge_queue` видно Оператору, мёртвая запись — отдельным
+    fail-`Check` (тот же признак мёртвости, что `merge_lock._holder_is_
+    dead`), без смешения с видимостью живых записей."""
+
+    def setUp(self):
+        super().setUp()
+        capture(catalog.cmd_init)
+        for task_id in ("T001", "T002"):
+            store.insert_task(store.db(), task_id, "Задача", "merge_gate",
+                              f"task/{task_id.lower()}-zadacha",
+                              config.DEFAULT_TARGET, 25.0)
+
+    @staticmethod
+    def dead_pid() -> int:
+        proc = subprocess.Popen([sys.executable, "-c", "pass"],
+                                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        proc.wait()
+        return proc.pid
+
+    def test_empty_queue_is_ok(self):
+        checks = doctor.check_merge_queue(store.db())
+
+        self.assertTrue(all(c.status == "ok" for c in checks))
+
+    def test_live_entry_is_visible_and_ok(self):
+        conn = store.db()
+        store.enqueue_merge_wait(conn, "T001", "sess", os.getpid(),
+                                 socket.gethostname(), store.now())
+
+        checks = doctor.check_merge_queue(conn)
+
+        self.assertTrue(any(c.status == "ok" and "T001" in c.detail
+                           for c in checks))
+
+    def test_dead_entry_on_this_host_is_a_separate_fail_check(self):
+        conn = store.db()
+        store.enqueue_merge_wait(conn, "T001", "sess", self.dead_pid(),
+                                 socket.gethostname(), store.now())
+
+        checks = doctor.check_merge_queue(conn)
+
+        fail_checks = [c for c in checks if c.status == "fail"]
+        self.assertEqual(len(fail_checks), 1)
+        self.assertIn("T001", fail_checks[0].detail)
+
+    def test_foreign_host_dead_pid_is_not_flagged(self):
+        conn = store.db()
+        store.enqueue_merge_wait(conn, "T001", "sess", self.dead_pid(),
+                                 "other-host.invalid", store.now())
+
+        checks = doctor.check_merge_queue(conn)
+
+        self.assertTrue(all(c.status != "fail" for c in checks))
+
+    def test_dead_entry_does_not_mask_the_live_one_behind_it(self):
+        conn = store.db()
+        store.enqueue_merge_wait(conn, "T001", "sess-dead", self.dead_pid(),
+                                 socket.gethostname(), _ts_ago(1))
+        store.enqueue_merge_wait(conn, "T002", "sess-live", os.getpid(),
+                                 socket.gethostname(), store.now())
+
+        checks = doctor.check_merge_queue(conn)
+
+        self.assertTrue(any(c.status == "fail" and "T001" in c.detail
+                           for c in checks))
+        self.assertFalse(any(c.status == "fail" and "T002" in c.detail
+                            for c in checks))
+        self.assertTrue(any(c.status == "ok" and "T002" in c.detail
+                           for c in checks))
 
 
 class BranchFreshnessCheckTest(TmpRootTest):

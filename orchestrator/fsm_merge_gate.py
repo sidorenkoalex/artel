@@ -23,8 +23,8 @@ from pathlib import Path
 from scripts import guard
 
 from . import (artifact_branch, ci, cleanup, config, fsm, fsm_postmerge,
-              gitcmd, github_adapter, lease, merge_lock, repo_context, store,
-              workspace)
+              gitcmd, github_adapter, lease, merge_lock, merge_queue,
+              repo_context, store, workspace)
 
 
 def _touches_protected_path(path: str) -> bool:
@@ -237,20 +237,27 @@ def _ci_confirm_red_or_flake(conn, task_id: str, branch: str,
 
 def _wait_for_branch_ci_green(conn, task_id: str, branch: str,
                               start: float, deadline: float) -> str:
-    """Цикл ожидания CI пушнутого head ВНЕ мьютекса merge-окна (SPEC T087,
-    требования 2-4, 7-9; решение Оператора 31.08, аудит v6 Q-5).
+    """Цикл ожидания CI пушнутого head ВНУТРИ мьютекса merge-окна (SPEC
+    T087, требования 2-4, 7-9, решение Оператора 31.08, аудит v6 Q-5;
+    SPEC 01M291EJMA995AZ61MEMDZKWRY, требования 1, 3: с этой задачи
+    мьютекс на время ожидания уже не свободен — держит его вызывающий
+    цикл `_cmd_approve_merge_gate_cycle`, здесь только продлевается его
+    heartbeat).
 
-    Каждая итерация опрашивает `ci.branch_status` и журналирует/печатает
-    статус и прошедшее с `start` (момент первого пуша ЭТОГО вызова
-    `approve`) время (требование 9). «CI ещё идёт»/«статус неизвестен»
-    паузит `time.sleep(config.MERGE_GATE_CI_WAIT_POLL_SEC)` и продолжает
-    цикл (требование 3), пока не истёк общий потолок `deadline` (требование
-    4, `time.monotonic()` — тот же приём часов, что уже применяет
-    `orchestrator/pause.py`) — тогда `sys.exit` «статус CI неизвестен»
-    (требование 8). Подтверждённо красный статус — `_ci_confirm_red_or_
-    flake` (требование 7, тот же узел, что и однократная проверка): флейк
-    возвращает зелёный исход, подтверждённый красный сам завершает
-    процесс `sys.exit`'ом (требование 7).
+    Каждая итерация опрашивает `ci.branch_status`, продлевает heartbeat
+    держателя мьютекса (`merge_lock.touch_heartbeat`, требование 3,
+    AC-2 — иначе долгое ожидание протухло бы раньше времени и подставило
+    живого держателя под перехват `_holder_is_dead`) и журналирует/
+    печатает статус и прошедшее с `start` (момент первого пуша ЭТОГО
+    вызова `approve`) время (требование 9). «CI ещё идёт»/«статус
+    неизвестен» паузит `time.sleep(config.MERGE_GATE_CI_WAIT_POLL_SEC)`
+    и продолжает цикл (требование 3), пока не истёк общий потолок
+    `deadline` (требование 4, `time.monotonic()` — тот же приём часов,
+    что уже применяет `orchestrator/pause.py`) — тогда `sys.exit`
+    «статус CI неизвестен» (требование 8). Подтверждённо красный статус
+    — `_ci_confirm_red_or_flake` (требование 7, тот же узел, что и
+    однократная проверка): флейк возвращает зелёный исход, подтверждённый
+    красный сам завершает процесс `sys.exit`'ом (требование 7).
 
     Возврат — `note` зелёного статуса (требование 5: вызывающий код
     передаёт его следующему заходу в тело гейта, чтобы не спрашивать CI
@@ -258,6 +265,7 @@ def _wait_for_branch_ci_green(conn, task_id: str, branch: str,
     """
     while True:
         green, note = ci.branch_status(branch)
+        merge_lock.touch_heartbeat(conn)
         elapsed = int(time.monotonic() - start)
         detail = f"{note} (ожидание {elapsed} сек)"
         store.journal(conn, task_id, "orchestrator",
@@ -672,42 +680,54 @@ def _cmd_approve_merge_gate(conn, task_id: str, state: str, t,
 def _cmd_approve_merge_gate_cycle(conn, task_id: str, sid: str, t,
                                   state: str) -> None:
     """Внешний цикл гейта `merge_gate` (SPEC T087, требования 1-6, 10;
-    решение Оператора 31.08, аудит v6 Q-5): чередует тело гейта
-    (`_cmd_approve_merge_gate`, ПОД мьютексом merge-окна) и ожидание CI
-    вне мьютекса (`_wait_for_branch_ci_green`) — один и тот же вызов
-    `approve` доводит задачу до `done` сам, без нового ручного вызова
-    Оператора.
+    решение Оператора 31.08, аудит v6 Q-5; SPEC
+    01M291EJMA995AZ61MEMDZKWRY, требования 1-2, 4-5): чередует тело
+    гейта (`_cmd_approve_merge_gate`) и ожидание CI
+    (`_wait_for_branch_ci_green`) — один и тот же вызов `approve`
+    доводит задачу до `done` сам, без нового ручного вызова Оператора.
 
-    Мьютекс берётся/отпускается ЭТИМ циклом напрямую (`merge_lock.
-    acquire`/`release`), не через `merge_lock.run_window`: тот держит
-    мьютекс на весь вызов тела, а здесь между заходами в тело мьютекс
-    обязан быть свободен (требование 2) — `finally` вокруг каждого захода
-    снимает его безусловно, включая `sys.exit`/`KeyboardInterrupt`
-    (требование 10), тем же принципом, что и `run_window`.
+    Мьютекс резервируется на ВЕСЬ цикл, не вокруг каждого отдельного
+    захода в тело: `merge_lock.acquire` — один раз ДО `while True`,
+    `merge_lock.release` — один раз в `finally` ВОКРУГ всего цикла
+    (требования 1-2, 4; AC-1, AC-5, AC-7) — держатель не меняется между
+    заходом, вернувшим `("wait", ...)`, и следующим заходом, включая
+    время внутри `_wait_for_branch_ci_green` (её heartbeat продлевает
+    сама, требование 3). `finally` снимает мьютекс безусловно на любом
+    исходе — успешный merge, отказ `sys.exit`, `KeyboardInterrupt`
+    (требование 10) — тем же принципом, что и `merge_lock.run_window`,
+    только на границе всего цикла, а не одного захода в тело.
+
+    Занятый мьютекс (SPEC 01M291EPQ2VFGCHZTXXC81616V, требования 1-3) не
+    отказывает немедленно — `merge_queue.wait_for_window` встаёт в очередь
+    FIFO и опрашивает освобождение окна, возвращаясь только с уже взятым
+    ЭТОЙ сессией мьютексом (либо сама завершает процесс `sys.exit`'ом по
+    истечении потолка ожидания очереди, не тронув состояние задачи).
 
     `deadline`/`start` вычисляются ОДИН раз за весь вызов `approve` — в
     момент первого исхода `("wait", ...)`, то есть от первого пуша
     (требование 4): повторный уход в `("wait", ...)` после новой подтяжки
-    (AC-6) не пересчитывает их.
+    (AC-6) не пересчитывает их. Время, проведённое в очереди мержа до входа
+    в окно, в этот отсчёт не входит (SPEC 01M291EPQ2VFGCHZTXXC81616V,
+    требование 4) — `start` берётся ПОСЛЕ возврата `wait_for_window`.
     """
     start: float | None = None
     deadline: float | None = None
     confirmed_ci_note: str | None = None
-    while True:
-        refusal = merge_lock.acquire(conn, task_id, sid)
-        if refusal is not None:
-            sys.exit(refusal)
-        try:
+    refusal = merge_lock.acquire(conn, task_id, sid)
+    if refusal is not None:
+        merge_queue.wait_for_window(conn, task_id, sid)
+    try:
+        while True:
             outcome = _cmd_approve_merge_gate(conn, task_id, state, t,
                                               confirmed_ci_note)
-        finally:
-            merge_lock.release(conn, sid)
-        confirmed_ci_note = None
-        if outcome[0] != "wait":
-            return
-        branch = outcome[1]
-        if deadline is None:
-            start = time.monotonic()
-            deadline = start + config.MERGE_GATE_CI_WAIT_CEILING_SEC
-        confirmed_ci_note = _wait_for_branch_ci_green(conn, task_id, branch,
-                                                       start, deadline)
+            confirmed_ci_note = None
+            if outcome[0] != "wait":
+                return
+            branch = outcome[1]
+            if deadline is None:
+                start = time.monotonic()
+                deadline = start + config.MERGE_GATE_CI_WAIT_CEILING_SEC
+            confirmed_ci_note = _wait_for_branch_ci_green(
+                conn, task_id, branch, start, deadline)
+    finally:
+        merge_lock.release(conn, sid)

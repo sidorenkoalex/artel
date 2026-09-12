@@ -228,6 +228,11 @@ def ci_marker_wording_ok(criterion_text: str) -> bool:
 REDNESS_MARKER = re.compile(
     r"(?:Красен до реализации|Зелёный с рождения):[^\S\n]*(\S.*)")
 
+# Заявка мутации в докстринге теста (01M29A0F88P9GKSXFW90F99H2N, требование
+# 1): «Ловит мутацию: <что сломали — и тест покраснеет>», непустой текст на
+# той же строке после двоеточия — тот же приём, что REDNESS_MARKER выше.
+MUTATION_CLAIM = re.compile(r"Ловит мутацию:[^\S\n]*(\S.*)")
+
 
 def section_body(text: str, name: str) -> str:
     """Текст секции `## name` до следующего `## ` заголовка или конца файла.
@@ -398,6 +403,74 @@ def scan_redness_markers(tdir: Path) -> list[str]:
         except (OSError, UnicodeDecodeError):
             continue
     return redness_marker_errors_from_files(files)
+
+
+def _collect_test_functions(tree: ast.Module) -> dict[str, ast.AST]:
+    """Функции и методы `test_*` на уровне модуля и внутри классов (не
+    глубже) — то же ограничение области, что называет требование 1
+    (01M29A0F88P9GKSXFW90F99H2N): помощник `test_*`, объявленный внутри
+    другой функции, не тестовый метод фреймворка и не собирается им."""
+    functions: dict[str, ast.AST] = {}
+    for node in tree.body:
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and \
+                node.name.startswith("test_"):
+            functions[node.name] = node
+        elif isinstance(node, ast.ClassDef):
+            for sub in node.body:
+                if isinstance(sub, (ast.FunctionDef, ast.AsyncFunctionDef)) and \
+                        sub.name.startswith("test_"):
+                    functions[sub.name] = sub
+    return functions
+
+
+def test_functions_without_mutation_claim(base_source: str | None,
+                                          head_source: str | None) -> list[str]:
+    """Имена новых/изменённых функций и методов `test_*` HEAD-версии файла
+    без заявки «Ловит мутацию: <непустой текст>» в докстринге (SPEC
+    01M29A0F88P9GKSXFW90F99H2N, требования 1-2).
+
+    Новая — имени нет в `base_source` (либо `base_source is None`, файл
+    добавлен); изменённая — текст сегмента функции в HEAD отличается от
+    текста того же имени в base. Неизменённые функции в результат не
+    попадают ни при каких условиях (старые тесты не трогаем).
+
+    `head_source is None` — нет сведений о HEAD (пусто, не ошибка вызывающего
+    кода): пустой список, ни одной функции не собрать.
+
+    HEAD не парсится (`SyntaxError`) — список из одного элемента
+    «<не парсится: текст ошибки>», не исключение (требование 1/AC-4). Base
+    не парсится — трактуется как отсутствие сведений о base (все функции
+    HEAD в этом файле — новые): тот же fail-safe отказ, что и `base_source
+    is None`, не падение гейта на пустом месте.
+    """
+    if head_source is None:
+        return []
+    try:
+        head_tree = ast.parse(head_source)
+    except SyntaxError as exc:
+        return [f"<не парсится: {exc}>"]
+    head_funcs = _collect_test_functions(head_tree)
+
+    base_funcs: dict[str, ast.AST] = {}
+    if base_source is not None:
+        try:
+            base_tree = ast.parse(base_source)
+        except SyntaxError:
+            base_tree = None
+        if base_tree is not None:
+            base_funcs = _collect_test_functions(base_tree)
+
+    missing: list[str] = []
+    for name, node in head_funcs.items():
+        base_node = base_funcs.get(name)
+        if base_node is not None:
+            head_segment = ast.get_source_segment(head_source, node)
+            base_segment = ast.get_source_segment(base_source, base_node)
+            if head_segment == base_segment:
+                continue
+        if not MUTATION_CLAIM.search(ast.get_docstring(node) or ""):
+            missing.append(name)
+    return missing
 
 
 # --------------------------------------------------------------------------

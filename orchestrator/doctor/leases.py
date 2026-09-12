@@ -83,9 +83,16 @@ def _lease_fail_detail(conn, row, steps: list) -> str:
     прежде байт-в-байт совпадавший с сообщением алерта) + роль держателя,
     номер и время старта последнего шага задачи (не только оборванного —
     R1-F1) и последнее журнальное событие задачи — Оператору не нужно
-    отдельно звать `log`, чтобы понять, что произошло."""
+    отдельно звать `log`, чтобы понять, что произошло.
+
+    Подсказка «следующий approve/auto перехватит сам» (SPEC
+    01M290PS4ZXK1RCZ3PXQSXK0Y9, требование 4/AC-7) — только здесь, в
+    `base` этой функции (Check-текст для Оператора), НЕ в `message`
+    `check_leases` ниже: тот разбирается regex'ом авто-ack (SPEC T054,
+    AC-1) и обязан оставаться байт-в-байт прежним."""
     base = (f"{row['task_id']}: lease сессии {row['session_id']} "
-           f"мёртв (pid {row['pid']} на {row['hostname']})")
+           f"мёртв (pid {row['pid']} на {row['hostname']}) — следующий "
+           f"approve/auto перехватит lease сам, release не требуется")
     t = doctor.store.get_task(conn, row["task_id"])
     role = doctor.config.STATE_ROLE.get(t["state"], t["state"])
     parts = [base, f"роль {role}"]
@@ -185,5 +192,37 @@ def check_merge_lock(conn) -> list[doctor.Check]:
     doctor._auto_ack_gone(conn, "doctor.merge_lock",
                   lambda msg: doctor._merge_lock_alert_live(msg, row))
     return result
+
+
+def check_merge_queue(conn) -> list[doctor.Check]:
+    """SPEC 01M291EPQ2VFGCHZTXXC81616V, требование 6/AC-9: содержимое
+    очереди `merge_queue` видно Оператору целиком, мёртвая запись (тот же
+    признак, что `merge_lock._holder_is_dead` — требование 5, используемый
+    и пруной `orchestrator/merge_queue.py`) — ОТДЕЛЬНЫМ fail-`Check`, не
+    смешанным с видимостью живых записей (AC-9: Оператор обязан отличить
+    обычную очередь от предупреждения).
+
+    В отличие от `check_merge_lock` не заводит incident-алерт/auto-ack:
+    AC-9 требует только видимость в `doctor.all_checks`, мёртвая запись
+    очереди сама не блокирует ничего дольше одного опроса (`merge_queue.
+    wait_for_window` пруноет её при первой же проверке головы очереди) —
+    в отличие от мёртвого держателя мьютекса, который блокировал бы merge
+    навсегда без перехвата."""
+    rows = doctor.store.merge_queue_rows(conn)
+    if not rows:
+        return [doctor.Check("merge-queue", "ok", "очередь merge-окна пуста")]
+    results = []
+    for row in rows:
+        if doctor.merge_lock._holder_is_dead(row):
+            results.append(doctor.Check(
+                "merge-queue", "fail",
+                f"{row['task_id']}: запись очереди merge-окна мертва "
+                f"(pid {row['pid']} на {row['hostname']})"))
+        else:
+            results.append(doctor.Check(
+                "merge-queue", "ok",
+                f"{row['task_id']}: ждёт merge-окна (сессия "
+                f"{row['session_id']}, {row['hostname']})"))
+    return results
 
 

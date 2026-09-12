@@ -3,7 +3,7 @@
 Перенесено из orchestrator/runner.py без изменения поведения (T091,
 декомпозиция диспетчеров fsm/runner).
 """
-from . import brief, review
+from . import brief, review, stack
 
 
 def mission_brief_package(conn, task_id: str, t, role: str, cwd):
@@ -60,9 +60,10 @@ def mission_brief_package(conn, task_id: str, t, role: str, cwd):
             f"или `# AC-n: skip — <причина>`.\n"
             f"4) Критерий в принципе неисполним тестом — не изобретай "
             f"компромисс: `# AC-n: escalate — <вопрос Оператору>`.\n"
-            f"5) Прогони `python3 -m unittest discover -s "
-            f"{task_ref}/acceptance_tests`. tasks/<id>/ коммитить не нужно "
-            f"— автокоммит оркестратора сам перенесёт написанное в "
+            f"5) Прогони `python3 -m pytest {task_ref}/acceptance_tests -p "
+            f"no:cacheprovider -p timeout -o "
+            f"timeout={stack.PER_TEST_TIMEOUT_SEC}`. tasks/<id>/ коммитить "
+            f"не нужно — автокоммит оркестратора сам перенесёт написанное в "
             f"артефактную ветку. Код репозитория и SPEC.md НЕ трогай."
         )
         brief_text = brief.test_author_answer_component(conn, task_id)

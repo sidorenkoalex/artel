@@ -35,6 +35,7 @@ CREATE TABLE IF NOT EXISTS tasks (
   diff_bytes INTEGER, split_assessment TEXT, zones TEXT,
   zones_extension TEXT,
   materialized_artifact_sha TEXT, zone_queue_position INTEGER,
+  parent_task_id TEXT,
   created_at TEXT, updated_at TEXT
 );
 CREATE TABLE IF NOT EXISTS steps (
@@ -61,6 +62,10 @@ CREATE TABLE IF NOT EXISTS leases (
 CREATE TABLE IF NOT EXISTS merge_locks (
   task_id TEXT, session_id TEXT, pid INTEGER, hostname TEXT,
   heartbeat_ts TEXT
+);
+CREATE TABLE IF NOT EXISTS merge_queue (
+  task_id TEXT, session_id TEXT, pid INTEGER, hostname TEXT,
+  enqueued_ts TEXT, heartbeat_ts TEXT
 );
 """
 
@@ -176,6 +181,12 @@ def migrate(conn: sqlite3.Connection) -> None:
     # переставлена, естественный порядок по времени approve (`updated_at`)
     # решает (`orchestrator/zone_lock.py::queue_order`).
     add_column(conn, "tasks", "zone_queue_position", "INTEGER")
+    # Связь родитель -> подзадача деления (01M29284PTCJXGERV5262E9XMM,
+    # требование 1): NULL — задача не подзадача деления. «Родитель
+    # поделён» вычисляется каждый раз заново — наличием хотя бы одной
+    # строки с parent_task_id = <id родителя> при её состоянии killed,
+    # отдельный флаг на строке родителя не заводится.
+    add_column(conn, "tasks", "parent_task_id", "TEXT")
     conn.executescript(
         "CREATE TABLE IF NOT EXISTS task_counters ("
         "  target TEXT PRIMARY KEY, next_number INTEGER NOT NULL);")
@@ -224,4 +235,11 @@ def migrate(conn: sqlite3.Connection) -> None:
         "CREATE TABLE IF NOT EXISTS merge_locks ("
         "  task_id TEXT, session_id TEXT, pid INTEGER,"
         "  hostname TEXT, heartbeat_ts TEXT);")
+    # Очередь FIFO ожидания мьютекса merge-окна (SPEC
+    # 01M291EPQ2VFGCHZTXXC81616V, требования 2-3): БД прошлых версий её не
+    # имеют — догоняется тем же приёмом, что и merge_locks.
+    conn.executescript(
+        "CREATE TABLE IF NOT EXISTS merge_queue ("
+        "  task_id TEXT, session_id TEXT, pid INTEGER, hostname TEXT,"
+        "  enqueued_ts TEXT, heartbeat_ts TEXT);")
     conn.commit()

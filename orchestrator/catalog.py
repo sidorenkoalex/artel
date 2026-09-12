@@ -8,7 +8,7 @@ from pathlib import Path
 from scripts import guard
 
 from . import (alerts, artifact_branch, artifacts, budget, config, gitcmd,
-              idgen, liveness, runner, store, zone_lock)
+              idgen, liveness, merge_queue, runner, store, zone_lock)
 
 # ГОСТ-подобная транслитерация: только stdlib, без внешних зависимостей.
 # ъ/ь пропускаются; ё → yo; щ → sch; ю → yu; я → ya.
@@ -313,6 +313,7 @@ def spawn_subtask(parent_id: str, parent_title: str, title: str,
 
     _new_task_row(conn, task_id, title, target, tz_doc,
                  journal_detail=f"деление {parent_id}: {title}")
+    store.update_task(conn, task_id, parent_task_id=parent_id)
     print(f"[{task_id}] «{title}» создана делением {parent_id} (target "
          f"{target}, артефактная ветка пульта "
          f"{artifact_branch.branch_name(task_id)})")
@@ -407,6 +408,24 @@ def _wave_breaker_suffix(t, wave_breaker_open: bool) -> str:
     return "  [СТОП-КРАН ВОЛНЫ: run/auto не начинают новый шаг]"
 
 
+def _division_suffix(rows, r) -> str:
+    """Добавка «[поделена: <id1>, <id2>]»/«[часть N/M родителя <id>]»
+    (01M29284PTCJXGERV5262E9XMM, требование 2) — ДОБАВКОЙ в конец строки,
+    тем же приёмом, что и `_lease_holder_suffix`/`_zone_wait_suffix`.
+    `rows` — уже прочитанный `store.all_tasks(conn)` (по возрастанию id),
+    отдельного запроса на строку не делается: подзадачи — те же строки,
+    отфильтрованные по `parent_task_id`."""
+    subtask_ids = [x["id"] for x in rows if x["parent_task_id"] == r["id"]]
+    if subtask_ids:
+        return f"  [поделена: {', '.join(subtask_ids)}]"
+    parent_id = r["parent_task_id"]
+    if not parent_id:
+        return ""
+    sibling_ids = [x["id"] for x in rows if x["parent_task_id"] == parent_id]
+    n = sibling_ids.index(r["id"]) + 1
+    return f"  [часть {n}/{len(sibling_ids)} родителя {parent_id}]"
+
+
 def cmd_status() -> None:
     conn = store.db()
     rows = store.all_tasks(conn)
@@ -425,12 +444,14 @@ def cmd_status() -> None:
         mark = "  [canary]" if r["is_canary"] else ""
         holder = _lease_holder_suffix(conn, r["id"])
         zone = _zone_wait_suffix(conn, r)
+        merge_wait = merge_queue.wait_suffix(conn, r)
         wave_breaker = _wave_breaker_suffix(r, wave_breaker_open)
+        division = _division_suffix(rows, r)
         print(
             f"{r['id']}  {r['state']:<13} "
             f"ревью {r['review_iters']}/{config.LIMIT_REVIEW_ITERS}"
             f"  ${r['spent_usd']:.2f}/{r['budget_usd']:.2f}  {r['title']}"
-            f"{flag}{mark}{holder}{zone}{wave_breaker}"
+            f"{flag}{mark}{holder}{zone}{wave_breaker}{division}{merge_wait}"
         )
 
     # Требование 7 SPEC T022: триггеры docs/triggers.md — отдельная секция

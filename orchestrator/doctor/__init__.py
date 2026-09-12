@@ -94,9 +94,9 @@ from collections import namedtuple
 from pathlib import Path
 
 from .. import (alerts, artifact_branch, canary, ci, coldstart, config,
-                fixation, gitcmd, liveness, notes, projects, repo_context,
-                roles, runner, snapshot, spend, stack, store, targets,
-                workspace, zone_lock)
+                fixation, gitcmd, liveness, merge_lock, notes, projects,
+                repo_context, roles, runner, snapshot, spend, stack, store,
+                targets, workspace, zone_lock)
 
 # status: "ok" | "warn" | "fail" | "skip" ("skip" — честный пропуск проверки,
 # требование 9: сверка forge-политики без `gh`/сети — не провал и не ок).
@@ -140,7 +140,7 @@ from .lease_alerts import (_LEASE_ALERT_RE, _MERGE_LOCK_ALERT_RE,
 from .leases import (_STEP_TERMINAL_ACTIONS, _ORPHAN_ACTION_MARKER,
                      _orphaned_start_step, _reconcile_orphaned_step,
                      _last_start_step, _lease_fail_detail, check_leases,
-                     check_merge_lock)
+                     check_merge_lock, check_merge_queue)
 from .hung_test_watchdog import (_HUNG_TEST_CMD_RE, _ETIME_RE,
                                  _etime_to_seconds, _running_processes,
                                  _process_cwd, _hung_test_run_task_id,

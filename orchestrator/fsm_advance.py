@@ -703,6 +703,30 @@ def _answer_zones_mandate(branch: str, task_id: str) -> set[str]:
     return mandate
 
 
+def _untracked_worktree_paths(task_id: str) -> list[str]:
+    """Пути worktree self-target задачи с любым несохранённым изменением
+    (`git status --porcelain=v1 --untracked-files=all`, SPEC
+    01M290PVYG2VJK6442H5BAX9MA, AC-6) — untracked/staged/unstaged разом,
+    независимо от того, попали ли они уже в коммит. Пустой список — git
+    не ответил (гейт молча не расширяет список этим довеском — committed-
+    дифф `_zones_gate` уже fail-closed на СВОИХ отказах выше) либо worktree
+    и правда чист."""
+    wt = workspace.path(task_id)
+    status = gitcmd.in_repo(wt, "status", "--porcelain=v1",
+                            "--untracked-files=all")
+    if status is None or status.returncode != 0:
+        return []
+    paths = []
+    for line in status.stdout.splitlines():
+        if not line:
+            continue
+        rel = line[3:]
+        if " -> " in rel:
+            rel = rel.split(" -> ", 1)[1]
+        paths.append(rel)
+    return paths
+
+
 def _zones_gate(conn, task_id: str, t, branch: str,
                 plan_text: str) -> GateRefusal | None:
     """Сверка диффа ветки задачи с зонами на `in_dev -> review` (SPEC
@@ -750,6 +774,17 @@ def _zones_gate(conn, task_id: str, t, branch: str,
                f"{base}...{t['branch']}, и повтори "
                f"artel.py advance {task_id}")
         return GateRefusal("переход отклонён: гейт зон", detail, hint)
+
+    # Неотслеживаемые файлы worktree (SPEC 01M290PVYG2VJK6442H5BAX9MA,
+    # AC-6): `diff_names` выше видит только committed-дифф — файл,
+    # оставленный ролью нетрекенным (не закоммиченным и даже не
+    # застейдженным), гейтом иначе не замечен вовсе. `git status
+    # --porcelain` читает тем же путём, что и остальной модуль ниже
+    # (fail-open на отказ git — этот довесок опционален, committed-дифф
+    # выше уже fail-closed на СВОИХ отказах).
+    untracked = _untracked_worktree_paths(task_id)
+    if untracked:
+        files = files + [p for p in untracked if p not in files]
 
     # Защищённые пути (SPEC 01M27JPEGCGMDDRX5A98QWJW0Z, требования 2-3,
     # AC-2/AC-3) — отказывает БЕЗУСЛОВНО, раньше проверки zones/
@@ -918,6 +953,101 @@ def _reviewer_verdict_baseline(conn, task_id: str, branch: str):
                 continue
             return ts, "запись журнала agent run finished роли reviewer"
     return None, None
+
+
+def _mutation_claim_gate(conn, task_id: str, t, branch: str) -> GateRefusal | None:
+    """Заявка «Ловит мутацию: …» для новых/изменённых тестов `tests/` на
+    `in_dev -> verifying` (SPEC 01M29A0F88P9GKSXFW90F99H2N, требования
+    1-4): шесть задач 11.09 получили от ревьювера один и тот же major на
+    ЭТО правило (`skills/test-authoring.md`) без единой правки кода —
+    круг ревью и CI стоил дороже самой проверки. Рубеж по образцу
+    `_zones_gate` выше — та же база сравнения, то же чтение содержимого
+    файлов через git, тот же приём отказа на сбое git (fail-closed,
+    ADR-0002), не пропуск перехода молча.
+
+    Внешний (не self) target и канареечная задача — гейт не проверяется,
+    тем же условием, что `_origin_push_gate` (требование 3/AC-8): дифф в
+    `config.ROOT` не видит код внешнего target, а канареечный `verifying`
+    не ждёт CI и не читает origin — сверка тестов ветки здесь так же не
+    имеет смысла.
+    """
+    if t["is_canary"] or t["target"] != config.DEFAULT_TARGET:
+        return None
+    base = gitcmd.diff_base(branch)
+    if base is None:
+        detail = (f"гейт заявки мутации: git не ответил на определение базы "
+                 f"сравнения (merge-base с origin/{config.MAIN_BRANCH} либо "
+                 f"локальным {config.MAIN_BRANCH}) для ветки {branch} — "
+                 f"сверка заявки мутации невозможна")
+        hint = (f"разберись, почему git не отвечает на merge-base "
+               f"для {branch}, и повтори artel.py advance {task_id}")
+        return GateRefusal("переход отклонён: гейт заявки мутации", detail, hint)
+    files = gitcmd.diff_names(base, branch)
+    if files is None:
+        detail = (f"гейт заявки мутации: git не ответил на список файлов "
+                 f"диффа (база {base}...{branch}) — сверка заявки мутации "
+                 f"невозможна")
+        hint = (f"разберись, почему git не отвечает на diff "
+               f"{base}...{branch}, и повтори artel.py advance {task_id}")
+        return GateRefusal("переход отклонён: гейт заявки мутации", detail, hint)
+
+    # Только tests/test_*.py на верхнем уровне каталога (AC-5) — тот же
+    # шаблон путей, что и остальные проверки заявок в acceptance_tests/
+    # (guard.scan_redness_markers).
+    test_files = [f for f in files
+                 if f.startswith("tests/test_") and f.endswith(".py")
+                 and f.count("/") == 1]
+
+    per_file: list[str] = []
+    for path in test_files:
+        head_source, head_reason = gitcmd.show(branch, path)
+        if head_source is None:
+            # `gitcmd.show` возвращает `None` и на легитимное отсутствие
+            # пути в HEAD (файл удалён — требование 2), и на сбой самого
+            # git на существующем пути (R1-F2, REVIEW.md итерация 1/3):
+            # различать эти два случая по ТЕКСТУ причины `gitcmd.show`
+            # недостаточно — есть третий класс сбоя (повреждённый объект,
+            # недоступный blob, гонка со сборкой мусора), не совпадающий
+            # ни с «git не ответил», ни с `UnicodeDecodeError`, который
+            # молча трактовался бы как удаление. Источник истины —
+            # `gitcmd.ls_tree_files(branch, "tests")`: путь есть в дереве
+            # HEAD — это сбой чтения независимо от текста причины; путь
+            # реально отсутствует — легитимное удаление (требование 2).
+            tree = gitcmd.ls_tree_files(branch, "tests")
+            if tree is not None:
+                is_failure = path in tree
+            else:
+                # git не ответил и на эту проверку — permissive-фоллбэк на
+                # прежнее поведение (два уже известных класса причины);
+                # это уже двойной сбой git на одном пути, дальше сужать
+                # незачем — есть отдельный fail-closed рубеж выше на сбой
+                # `diff_base`/`diff_names` для случая полной неотвечаемости.
+                is_failure = (head_reason == "git не ответил"
+                             or head_reason.startswith("не прочитан:"))
+            if is_failure:
+                detail = (f"гейт заявки мутации: git не ответил на чтение "
+                         f"{path} из {branch} ({head_reason}) — сверка "
+                         f"заявки мутации для этого файла невозможна")
+                hint = (f"разберись, почему git не отвечает на show "
+                       f"{branch}:{path}, и повтори artel.py advance "
+                       f"{task_id}")
+                return GateRefusal("переход отклонён: гейт заявки мутации",
+                                  detail, hint)
+            # Файл легитимно удалён в HEAD — заявку мутации сравнивать не
+            # с чем, пропускаем (требование 2).
+            continue
+        base_source, _ = gitcmd.show(base, path)
+        missing = guard.test_functions_without_mutation_claim(
+            base_source, head_source)
+        if missing:
+            per_file.append(f"{path}: {', '.join(missing)}")
+    if not per_file:
+        return None
+    detail = (f"{'; '.join(per_file)} — каждый новый или изменённый тест в "
+             f"tests/ несёт в докстринге строку «Ловит мутацию: <что "
+             f"сломали — и тест покраснеет>» (skills/test-authoring.md)")
+    hint = f"допиши заявку и повтори artel.py advance {task_id}"
+    return GateRefusal("переход отклонён: гейт заявки мутации", detail, hint)
 
 
 def _review_rework_gate(conn, task_id: str, t, branch: str) -> GateRefusal | None:
@@ -1282,6 +1412,9 @@ def in_dev(conn, task_id: str, t, tdir, target: str, state: str) -> bool:
     if _capacity_gate_refuses(conn, task_id, t, state):
         return False
     if _zones_gate_refuses(conn, task_id, t, branch, plan_text):
+        return False
+    if _run_gates(conn, task_id,
+                  [lambda: _mutation_claim_gate(conn, task_id, t, branch)]):
         return False
     if _review_rework_gate_refuses(conn, task_id, t, branch):
         return False
