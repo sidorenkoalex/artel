@@ -852,7 +852,8 @@ class KillAtVerifyingCompatTest(unittest.TestCase):
         canary._kill_at_verifying(self.conn, self.TASK)
 
         steps = store.task_steps(self.conn, self.TASK)
-        self.assertEqual(canary._kill_outcome_note(steps), "штатно")
+        self.assertEqual(
+            canary._kill_outcome_note(self.conn, self.TASK, steps), "штатно")
 
 
 class StoreAndCatalogMarkingTest(unittest.TestCase):

@@ -193,6 +193,9 @@ jobs:
     # `changes` даёт пустой output, и тесты ИДУТ (fail-closed).
     if: ${{ !cancelled() && needs.changes.outputs.code != 'false' }}
     runs-on: ubuntu-latest
+    # Страховка от зависшего раннера (01M29BANMM8X8JWJ5GDTJWKB0Z) — не
+    # рабочий ориентир для длительности job, реальные прогоны много короче.
+    timeout-minutes: 40
     steps:
       - uses: actions/checkout@v4
       - name: версия Python из манифеста стека (01M1RDCCKBQMJ5G2K9ANJP059H)
@@ -232,8 +235,14 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ steps.stack-python-min.outputs.version }}
+      - name: зависимости из файла закреплённых версий для минимальной версии Python (01M29BANMM8X8JWJ5GDTJWKB0Z)
+        run: python3 -m pip install -r requirements.lock
       - name: tests.test_invariants на минимальной объявленной версии Python (AC-2)
-        run: python3 -m unittest tests.test_invariants -v
+        run: |
+          # Литерал timeout=120 дублирует stack.PER_TEST_TIMEOUT_SEC —
+          # известное ограничение (YAML не читает Python-константу), тот
+          # же класс, что и в шаге unit-тестов выше.
+          python3 -m pytest tests/test_invariants.py -p no:cacheprovider -p timeout -o timeout=120
 
   protected-paths:
     name: Enforcement, конфиги системы меняет только Оператор
