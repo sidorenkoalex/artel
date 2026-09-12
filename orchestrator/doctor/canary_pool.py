@@ -138,20 +138,33 @@ def check_canary_trigger(conn) -> doctor.Check:
     у guard'а `pin.cmd_pin_update`, AC-1/AC-2 — `canary.
     merges_since_last_green_run`).
 
-    Возраст считается ЛОКАЛЬНО относительно локальной ветки main
-    `config.ROOT`, без обращения к сети (ANSWER-1 п.3, инвариант 35).
+    Возраст считается относительно головы `origin/<config.MAIN_BRANCH>`
+    (`doctor.fetch_origin_main_sha`, тот же источник, что `canary` по
+    умолчанию — SPEC 01M2B6K02YVJBWE1JDWP85EJH0, требование 3/AC-7), НЕ
+    относительно `gitcmd.head_sha()` главной копии (пина) — до этой
+    задачи было наоборот (ANSWER-1 п.3, «без обращения к сети»,
+    инвариант 35 остаётся про сеть в ТЕСТАХ, не про doctor в проде):
+    пин мог отставать от `origin/main`, из-за чего этот триггер и
+    `pin.cmd_pin_update` сверяли возраст с разными точками истории.
+    `fetch` не удался (нет origin, сеть недоступна) — `warn` с текстом
+    «сверка с origin невозможна» (тот же приём, что соседний `check_
+    pin_unpushed`), НЕ триггер: недоступность origin — это «сверка не
+    проведена», не «канарейка устарела».
+
     Пустой журнал зелёных прогонов — тот же порог, вырожденно всегда
     достигнутый: «канарейка ни разу не прогонялась» (AC-3, второй
     сценарий). Дедуп открытого алерта — заботa `alerts.raise_alert`
     (не дублирует, пока прежний не подтверждён).
 
     Текст алерта (`alert_message`), участвующий в дедупе, ФИКСИРОВАН —
-    не несёт текущее число мержей (REVIEW.md итерации 1, R1-F2):
-    `store.open_alert_exists` дедупит строгим совпадением `message`, а
-    возраст растёт с каждым следующим мержем main после срабатывания
-    порога — несли бы число в тексте, каждый такой мерж заводил бы НОВЫЙ
-    алерт вместо одного, ждущего ack Оператора. Конкретное число мержей
-    остаётся в `Check.detail`, который в алерт не идёт.
+    не несёт ни текущее число мержей, ни сам sha (REVIEW.md итерации 1,
+    R1-F2): `store.open_alert_exists` дедупит строгим совпадением
+    `message`, а и возраст, и голова `origin/<MAIN_BRANCH>` меняются с
+    каждым следующим мержем main после срабатывания порога — несли бы
+    их в тексте, каждый такой мерж заводил бы НОВЫЙ алерт вместо одного,
+    ждущего ack Оператора. Конкретные число мержей и sha остаются в
+    `Check.detail` (требование 3, AC-7: «текст проверки называет сам
+    sha»), который в алерт не идёт.
 
     Статус `warn`, не `fail` (docs/triggers.md: триггер требует решения
     Оператора с ack'ом, не блокирует прогон doctor как инцидент) — тем же
@@ -159,25 +172,30 @@ def check_canary_trigger(conn) -> doctor.Check:
     кодом только на `fail`, а триггер без прогнанной канарейки иначе
     держал бы КАЖДЫЙ прогон doctor красным до первого прогона.
     """
-    head = doctor.gitcmd.head_sha()
-    age = doctor.canary.merges_since_last_green_run(conn, head)
+    target_sha, fetch_reason = doctor.fetch_origin_main_sha()
+    if not target_sha:
+        detail = "сверка с origin невозможна"
+        if fetch_reason:
+            detail += f": {fetch_reason}"
+        return doctor.Check("canary-trigger", "warn", detail)
+    age = doctor.canary.merges_since_last_green_run(conn, target_sha)
     if age is None:
         alert_message = ("канарейка ни разу не прогонялась — обновление "
                          "пина заблокировано до первого зелёного прогона "
                          "(tasks/01M1NGFK3N6MRMYGCC09H975V3/SPEC.md)")
-        detail = alert_message
+        detail = f"{alert_message} (целевой sha {target_sha})"
     elif age >= doctor.config.CANARY_MAX_MERGES_SINCE_GREEN:
         alert_message = ("последний зелёный прогон канарейки устарел (порог "
                          f"{doctor.config.CANARY_MAX_MERGES_SINCE_GREEN} мержей "
                          "main) — пора перепрогнать: artel.py canary --k 1")
-        detail = (f"последний зелёный прогон канарейки — {age} мержей "
-                 f"main назад (порог "
+        detail = (f"последний зелёный прогон канарейки на sha {target_sha} — "
+                 f"{age} мержей main назад (порог "
                  f"{doctor.config.CANARY_MAX_MERGES_SINCE_GREEN}) — пора "
-                 "перепрогнать: artel.py canary --k 1")
+                 f"перепрогнать: artel.py canary --k 1 --sha {target_sha}")
     else:
         return doctor.Check("canary-trigger", "ok",
-                     f"последний зелёный прогон канарейки — {age} мержей "
-                     f"main назад (порог "
+                     f"последний зелёный прогон канарейки на sha {target_sha} "
+                     f"— {age} мержей main назад (порог "
                      f"{doctor.config.CANARY_MAX_MERGES_SINCE_GREEN})")
     doctor.alerts.raise_alert(conn, None, "trigger", "canary", alert_message)
     return doctor.Check("canary-trigger", "warn", detail)

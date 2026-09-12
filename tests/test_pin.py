@@ -59,6 +59,32 @@ class PinUpdateGateOrderTest(RealGitSandbox):
                          "отказ не должен двигать HEAD")
 
 
+class PinUpdateRefusalMessageTest(RealGitSandbox):
+    """SPEC 01M2B6K02YVJBWE1JDWP85EJH0, требование 2/AC-6: отказ
+    `pin-update` называет sha и команду с `--sha <sha>` для его
+    получения — не старую `canary --k 1` без привязки к целевому sha."""
+
+    def setUp(self):
+        super().setUp()
+        self.conn = store.db()
+        self.add_synced_origin()
+
+    def test_refusal_names_sha_and_the_canary_command_with_sha_flag(self):
+        """Ловит мутацию: текст отказа сохраняет старую команду `canary
+        --k 1` без `--sha <sha>` — Оператор получил бы команду,
+        прогоняющую канарейку на случайном шаблоне без привязки к
+        нужному целевому sha (регрессия к тупику, который эта задача
+        устраняет, см. `canary.py`)."""
+        target = self.git("rev-parse", "HEAD").strip()
+
+        with self.assertRaises(SystemExit) as ctx:
+            pin.cmd_pin_update(target)
+
+        message = str(ctx.exception)
+        self.assertIn(target[:7], message)
+        self.assertIn(f"canary --k 1 --sha {target}", message)
+
+
 class PinUpdateGateAfterFetchTest(RealGitSandbox):
     """Регрессия R1-F1 (REVIEW.md итерации 1, blocker): sha, ради
     которого обычно и вызывают `pin-update`, — коммит main, ушедший

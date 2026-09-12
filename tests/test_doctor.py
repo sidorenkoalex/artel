@@ -643,9 +643,14 @@ class BaseBranchCheckTest(unittest.TestCase):
 
 class CanaryTriggerCheckTest(RealGitSandbox):
     """`doctor.check_canary_trigger` (tasks/01M1NGFK3N6MRMYGCC09H975V3/
-    SPEC.md, AC-3/AC-4) — реальный git: сам предмет проверки, возраст в
+    SPEC.md, AC-3/AC-4; источник sha — SPEC 01M2B6K02YVJBWE1JDWP85EJH0,
+    требование 3/AC-7) — реальный git: сам предмет проверки, возраст в
     мержах main, заглушкой `gitcmd.git` не изобразить (тот же приём, что
-    `CommitsBehindTest` в tests/test_gitcmd_branch_reads.py).
+    `CommitsBehindTest` в tests/test_gitcmd_branch_reads.py). Origin
+    (`add_synced_origin`) обязателен: с SPEC 01M2B6K02YVJBWE1JDWP85EJH0
+    возраст считается относительно головы `origin/<MAIN_BRANCH>`, не
+    `gitcmd.head_sha()` локального main — `_merge` пушит каждый мерж в
+    origin тем же вызовом, чтобы имитировать синхронный стенд.
 
     Статус — `warn`, не `fail` (см. соседний `check_root_pin`): триггер
     требует ack Оператора с решением (docs/triggers.md), не блокирует
@@ -656,6 +661,7 @@ class CanaryTriggerCheckTest(RealGitSandbox):
     def setUp(self):
         super().setUp()
         self.conn = store.db()
+        self.add_synced_origin()
 
     def _merge(self, name: str) -> str:
         self.checkout(name, create=True)
@@ -664,7 +670,9 @@ class CanaryTriggerCheckTest(RealGitSandbox):
         self.git("commit", "-q", "-m", f"работа {name}")
         self.checkout(config.MAIN_BRANCH)
         self.git("merge", "--no-ff", "-q", "-m", f"merge {name}", name)
-        return self.git("rev-parse", "HEAD").strip()
+        sha = self.git("rev-parse", "HEAD").strip()
+        self.git("push", "-q", "origin", config.MAIN_BRANCH)
+        return sha
 
     def _insert_green(self, main_sha: str) -> None:
         store.insert_canary_run(

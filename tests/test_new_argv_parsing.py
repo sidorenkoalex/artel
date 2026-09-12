@@ -99,8 +99,19 @@ class CmdCanaryDispatchTest(unittest.TestCase):
         with mock.patch.object(artel.canary, "cmd_pool_seal") as seal_mock:
             with mock.patch.object(artel.canary, "cmd_canary") as run_mock:
                 artel._cmd_canary(["--k", "3"])
-        run_mock.assert_called_once_with(k=3)
+        run_mock.assert_called_once_with(k=3, sha=None)
         seal_mock.assert_not_called()
+
+    def test_k_flag_with_explicit_sha_passes_it_through(self):
+        """SPEC 01M2B6K02YVJBWE1JDWP85EJH0, требование 1/AC-2: `--sha
+        <sha>` разобран и передан `cmd_canary` как есть.
+
+        Ловит мутацию: `_sha_arg` не читается вовсе (значение `sha`
+        всегда `None`) — явный `--sha` терялся бы, целевой sha прогона
+        всегда вычислялся бы по умолчанию из `origin`."""
+        with mock.patch.object(artel.canary, "cmd_canary") as run_mock:
+            artel._cmd_canary(["--k", "3", "--sha", "abc123"])
+        run_mock.assert_called_once_with(k=3, sha="abc123")
 
 
 if __name__ == "__main__":
