@@ -77,6 +77,28 @@ discrepancy.py`, `test_ac9_per_task_baseline.py`,
 это, а явная проверка `if not t["is_canary"]`, гейт вовсе не
 вызывается для канареечных задач.
 
+## Расширение зон
+
+Пути: orchestrator/canary.py
+
+Обоснование: R1-F1 (REVIEW.md итерации 1) — фикс несовместимости
+обязательного `git fetch origin` в `workspace.ensure` с намеренно
+нерабочим `origin` `canary._ephemeral_clone` лежит в
+`orchestrator/canary.py`, вне зон SPEC (`orchestrator/workspace.py`,
+`orchestrator/doctor/`, `orchestrator/catalog.py`, `tests/`). Мандат
+Оператора — `tasks/01M297HFSKV3GVZJ9YF20FZEZE/ANSWER-3.md`
+(«Расширение зон разрешено: orchestrator/canary.py»). Комментарии
+`orchestrator/fsm_advance.py`, правленные предыдущей итерацией заодно с
+`canary.py` (не по мандату), откачены byte-for-byte до состояния
+origin/main отдельным коммитом (`fefc89a4`) — правка была
+необязательной (только текст комментария) и не входит в мандат
+ANSWER-3; сверено `git diff origin/main -- orchestrator/fsm_advance.py`
+(пусто). После отката перепрогнан
+`tasks/01M1NEEWH5K1XPFRDGRMPYSBXJ/acceptance_tests/
+test_ac2_ac4_ephemeral_clone_lifecycle.py` и `test_ac3_no_traces_in_
+main_pult.py` — 3 passed, 8 subtests passed (250.73с) — фикс R1-F1 не
+задет откатом fsm_advance.py.
+
 ## Шаги
 
 1. `orchestrator/workspace.py::ensure` — fetch origin перед заведением
