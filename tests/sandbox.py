@@ -501,14 +501,17 @@ class SpyRun:
         if (len(cmd) >= 4 and cmd[1] == "rev-parse" and cmd[2] == "--verify"
                 and cmd[-1].startswith("refs/heads/")):
             return subprocess.CompletedProcess(list(cmd), 1, empty, empty)
-        # `rev-parse --verify --quiet FETCH_HEAD` (`gitcmd.fetch_head_sha`,
-        # SPEC 01M297HFSKV3GVZJ9YF20FZEZE) — успех с тем же фейковым sha,
-        # что и плотницкие примитивы ниже: без этого `workspace.ensure`
-        # заводящий НОВУЮ ветку задачи видел бы отказ fetch на КАЖДОМ
-        # вызове под этим спаем (никакого настоящего `origin` здесь нет) и
-        # отказывался бы заводить worktree там, где раньше заводил всегда.
-        if (len(cmd) >= 4 and cmd[1] == "rev-parse" and cmd[2] == "--verify"
-                and cmd[-1] == "FETCH_HEAD"):
+        # `rev-parse --verify refs/artel/fetch/<pid>-<uuid>` (приватная
+        # ссылка `gitcmd.fetch_ref_sha`, SPEC 01M2ARQGY51B99YNP9PY806AN1 —
+        # до этой задачи здесь стоял `rev-parse --verify --quiet
+        # FETCH_HEAD`, SPEC 01M297HFSKV3GVZJ9YF20FZEZE, тот же довод) —
+        # успех с тем же фейковым sha, что и плотницкие примитивы ниже:
+        # без этого `workspace.ensure`, заводящий НОВУЮ ветку задачи,
+        # видел бы отказ fetch на КАЖДОМ вызове под этим спаем (никакого
+        # настоящего `origin` здесь нет) и отказывался бы заводить
+        # worktree там, где раньше заводил всегда.
+        if (len(cmd) >= 3 and cmd[1] == "rev-parse"
+                and cmd[-1].startswith("refs/artel/fetch/")):
             sha = self._FAKE_SHA if want_text else self._FAKE_SHA.encode()
             return subprocess.CompletedProcess(list(cmd), 0, sha, empty)
         # `hash-object`/`write-tree`/`commit-tree` — плотницкая запись
@@ -568,18 +571,21 @@ def fake_git(*args: str) -> subprocess.CompletedProcess:
     "skills")`) как раз для этого чтения; файла на диске нет — тот же
     отказ, что дал бы `git show` на несуществующий путь.
 
-    `rev-parse --verify --quiet FETCH_HEAD` (`gitcmd.fetch_head_sha`, SPEC
-    01M297HFSKV3GVZJ9YF20FZEZE) — успех с фейковым sha: без него
-    `workspace.ensure`, заводящий НОВУЮ ветку задачи, видел бы отказ
+    `rev-parse --verify refs/artel/fetch/<pid>-<uuid>` (приватная ссылка
+    `gitcmd.fetch_ref_sha`, SPEC 01M2ARQGY51B99YNP9PY806AN1 — до этой
+    задачи здесь стоял `rev-parse --verify --quiet FETCH_HEAD`, SPEC
+    01M297HFSKV3GVZJ9YF20FZEZE, тот же довод) — успех с фейковым sha: без
+    него `workspace.ensure`, заводящий НОВУЮ ветку задачи, видел бы отказ
     `git fetch origin <MAIN_BRANCH>` под этой заглушкой (настоящего
-    origin здесь нет) и отказывался бы заводить worktree там, где раньше
-    заводил всегда.
+    origin здесь нет, а `fetch`/`update-ref` сами по себе уже отвечают
+    успехом дефолтной веткой ниже) и отказывался бы заводить worktree
+    там, где раньше заводил всегда.
     """
     if (len(args) >= 3 and args[0] == "rev-parse" and args[1] == "--verify"
             and args[-1].startswith("refs/heads/")):
         return subprocess.CompletedProcess(list(args), 1, "", "")
-    if (len(args) >= 3 and args[0] == "rev-parse" and args[1] == "--verify"
-            and args[-1] == "FETCH_HEAD"):
+    if (len(args) >= 3 and args[0] == "rev-parse"
+            and args[-1].startswith("refs/artel/fetch/")):
         return subprocess.CompletedProcess(list(args), 0, "f" * 40 + "\n", "")
     if len(args) == 2 and args[0] == "show" and ":" in args[1]:
         _, _, rel = args[1].partition(":")

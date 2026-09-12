@@ -643,12 +643,17 @@ class TargetSourcedRemoteTest(unittest.TestCase):
         self.assertIn("origin", remote_args,
                      "AC-4: remote — локальное имя origin клона target'а "
                      "(git-уровень), не голый url targets.yaml")
-        self.assertIn("trunk", remote_args,
-                     "AC-4: ветка фетча — base записи target'а, не "
-                     "config.MAIN_BRANCH")
-        self.assertNotIn(config.MAIN_BRANCH, remote_args,
-                         "AC-4: config.MAIN_BRANCH — имя ветки self-"
-                         "target'а, не этого target'а")
+        # SPEC 01M2ARQGY51B99YNP9PY806AN1: ветка фетча с этой задачи —
+        # не отдельный элемент кортежа аргументов, а часть рефспека
+        # приватной ссылки (`+refs/heads/<ref>:refs/artel/fetch/...`) —
+        # сверка по вхождению подстроки, не по точному равенству элемента.
+        self.assertTrue(
+            any("refs/heads/trunk:" in a for a in remote_args),
+            "AC-4: ветка фетча — base записи target'а, не config.MAIN_BRANCH")
+        self.assertFalse(
+            any(f"refs/heads/{config.MAIN_BRANCH}:" in a for a in remote_args),
+            "AC-4: config.MAIN_BRANCH — имя ветки self-target'а, не этого "
+            "target'а")
 
 
 if __name__ == "__main__":
