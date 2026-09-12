@@ -57,6 +57,21 @@ class ConftestRoleGuardTest(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertIn(REASON_MARKER, result.stdout + result.stderr)
 
+    def test_mixed_targeted_and_whole_tree_blocked_under_role(self):
+        """`pytest tests/test_slugify.py tests` (целевой файл РЯДОМ с
+        каталогом целиком) отказывает под ARTEL_ROLE — присутствие
+        целевого пути не спасает от отказа, когда нецелевой аргумент
+        всё равно потянул бы сбор всего `tests/`.
+
+        Ловит мутацию: условие гейта возвращается к `any(целевой путь)`
+        вместо `all(...)` (REVIEW.md R1-F1) — тогда этот смешанный вызов
+        прошёл бы, хотя pytest реально собрал бы весь каталог `tests/`.
+        """
+        result = _run_pytest(["tests/test_slugify.py", "tests"], role="developer")
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn(REASON_MARKER, result.stdout + result.stderr)
+
     def test_targeted_file_collects_under_role(self):
         """Путь к конкретному файлу под `tests/` собирается и прогоняется
         под ARTEL_ROLE без отказа.

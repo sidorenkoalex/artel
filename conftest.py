@@ -7,13 +7,16 @@ Claude Code и снят этой же задачей.
 Гейт активен, ТОЛЬКО когда `ARTEL_ROLE` есть в окружении процесса (шаг
 роли конвейера, `orchestrator/runner.py::role_env`) — без него
 (Оператор, CI, автогейт пульта) сбор не трогается вовсе. Под ролью —
-отказ (`pytest.exit`), если среди аргументов запуска нет ни одного пути
-к конкретному файлу/каталогу НИЖЕ `tests/` или
-`tasks/<id>/acceptance_tests/` (голый `pytest`, `pytest tests`, `pytest
-.` — тот же класс запуска, что раньше ловил `bash_guard._pytest_
-verdict`; сфера здесь уже — только СВОЙ процесс pytest, не произвольная
-Bash-команда, поэтому формы `python3 -m unittest` вне зоны действия
-этого гейта)."""
+отказ (`pytest.exit`), если аргументов-путей нет вовсе ИЛИ среди них
+есть хотя бы один нецелевой (не путь к конкретному файлу/каталогу НИЖЕ
+`tests/` или `tasks/<id>/acceptance_tests/`) — голый `pytest`, `pytest
+tests`, `pytest .`, а также смешанный вызов вида `pytest
+tests/test_x.py tests` (целевой путь рядом с нецелевым не спасает от
+отказа, иначе нецелевой аргумент всё равно потянул бы за собой сбор
+всего дерева) — тот же класс запуска, что раньше ловил
+`bash_guard._pytest_verdict`; сфера здесь уже — только СВОЙ процесс
+pytest, не произвольная Bash-команда, поэтому формы `python3 -m
+unittest` вне зоны действия этого гейта)."""
 import os
 import sys
 
@@ -70,5 +73,5 @@ def pytest_configure(config):
     if not role:
         return
     positionals = _positionals(sys.argv[1:])
-    if not any(_is_targeted_path(p) for p in positionals):
+    if not positionals or not all(_is_targeted_path(p) for p in positionals):
         pytest.exit(REASON, returncode=2)
