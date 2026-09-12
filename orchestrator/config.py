@@ -44,6 +44,16 @@ ROLE_CONFIG_DIR = ROLE_HOME / ".claude"
 # `--setting-sources` — единственный подтверждённый `claude --help`
 # способ исключить оба слоя из резолвинга целиком, независимо от cwd.
 AGENT_SETTING_SOURCES = "user"
+# Признак процесса роли в окружении (SPEC 01M2B6K3EM7F2J72RC2F520Y2K,
+# требование 1) — LLM-независимая замена клиентского PreToolUse-хука
+# курируемого слоя (`docs/reference/role-home/claude/hooks/bash_guard.py`,
+# снят той же задачей): сам CLI читает признак и отказывает, вместо
+# протокола конкретного клиента. `runner.role_env` кладёт обе переменные
+# в окружение роли; читатели — корневой `conftest.py` (гейт сбора
+# pytest, ARTEL_ROLE) и `artel.py` (отказ команд `init`/`doctor
+# --restore`/`canary pool-seal`, ARTEL_ROLE).
+ARTEL_ROLE_ENV = "ARTEL_ROLE"
+ARTEL_TASK_ENV = "ARTEL_TASK"
 # Рабочая поверхность задачи (SPEC T045): git worktree на её ветке в
 # стандартном месте — `orchestrator/workspace.py` эту норму несёт.
 WORKTREES = ROOT / ".artel" / "worktrees"

@@ -675,6 +675,37 @@ class RoleEnvTest(TmpRootTest):
         self.assertTrue(env["HOME"].startswith(str(self.root)))
         self.assertNotEqual(env["HOME"], str(Path.home()))
 
+    def test_role_env_carries_artel_role_and_task(self):
+        """AC-1 (SPEC 01M2B6K3EM7F2J72RC2F520Y2K, требование 1): `role_env`
+        кладёт в окружение `ARTEL_ROLE`/`ARTEL_TASK` под именами констант
+        `config.py`, значениями роли и id задачи как есть.
+
+        Ловит мутацию: `role_env` игнорирует второй аргумент (не
+        прокидывает `ARTEL_TASK` вовсе) либо путает роль и id задачи
+        местами — тест покраснеет на несовпадении значения по ключу.
+        """
+        env = runner.role_env("developer", "01ABCDEF")
+
+        self.assertEqual(env[config.ARTEL_ROLE_ENV], "developer")
+        self.assertEqual(env[config.ARTEL_TASK_ENV], "01ABCDEF")
+
+    def test_role_env_without_task_id_omits_artel_task(self):
+        """Вызовы без `task_id` (`orchestrator/doctor/*`, часть тестов)
+        продолжают работать без правки и не несут `ARTEL_TASK` в
+        результате.
+
+        Ловит мутацию: параметр задачи сделан обязательным (`TypeError`
+        на вызове без него) либо `ARTEL_TASK` кладётся мусорным значением
+        вместо пропуска ключа при отсутствии `task_id`.
+        """
+        env_bare = runner.role_env()
+        env_role_only = runner.role_env("developer")
+
+        self.assertNotIn(config.ARTEL_TASK_ENV, env_bare)
+        self.assertNotIn(config.ARTEL_ROLE_ENV, env_bare)
+        self.assertEqual(env_role_only[config.ARTEL_ROLE_ENV], "developer")
+        self.assertNotIn(config.ARTEL_TASK_ENV, env_role_only)
+
     def test_role_path_is_built_from_declared_tools_not_copied(self):
         """PATH роли — не копия PATH Оператора (SPEC
         01M1RDCEF0JZ4AVQRE43JFH8TN, требование 1): каталог, где
