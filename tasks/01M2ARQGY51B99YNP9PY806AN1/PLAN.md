@@ -39,6 +39,25 @@ ensure`/`fsm._origin_main_sha` под этими фейками (наприме�
 `tests/test_doctor.py::PreflightBlocksMissingTokenTest`), молча
 получали бы «приватная ссылка не разрешилась» и красились.
 
+Возврат из `verifying` (CI красный на 794ad88b) вскрыл ТРЕТЬЮ, отдельную
+от `fake_git`/`SpyRun` пару заглушек: `MergeOnlyFromMergeGateTest.
+test_merge_failure_leaves_the_task_in_the_gate`/
+`test_merge_abort_failure_keeps_task_in_the_gate` (`tests/
+test_invariants.py`) несут СОБСТВЕННУЮ локальную функцию `failing`,
+не делегирующую в `self.git_spy` (`SpyRun`) для нераспознанных команд —
+она лишь зовёт `self.git_spy(...)` для записи в лог вызовов и
+возвращает СВОЙ ответ `CompletedProcess(argv, 0, "", "")` по умолчанию.
+На `rev-parse --verify refs/artel/fetch/<pid>-<uuid>` (новый примитив)
+это пустой stdout при rc=0 — настоящий git так не отвечает, а
+`fsm_merge_gate._origin_main_sha` теперь трактует это как «приватная
+ссылка не разрешилась» и возвращает `None` ДО самого `git merge`,
+который эти два теста и проверяют. Правка — точечная ветка в `failing`
+(по образцу уже исправленного `SpyRun`, тот же фейковый sha `"f" * 40`):
+на `rev-parse --verify` с хвостом `refs/artel/fetch/` — успешный ответ
+с этим sha, остальные ветки (`merge --no-ff`, `diff --name-only`,
+`merge --abort`) не тронуты — проверяемое поведение тестов (отказ
+merge/abort остаётся отказом) не ослаблено.
+
 `tests/test_branch_freshness_gate.py::TargetSourcedRemoteTest` проверял
 имя ветки фетча (`"trunk"`) как ОТДЕЛЬНЫЙ элемент кортежа аргументов —
 с этой задачи имя ветки живёт внутри рефспека
@@ -108,6 +127,9 @@ fetch` + `rev-parse ... FETCH_HEAD`, тестовая песочница — к 
 
 - `tasks/01M2ARQGY51B99YNP9PY806AN1/acceptance_tests/` — 9/9 зелёных.
 - `tests/test_gitcmd_fetch_ref_sha.py` (новый) — 6/6.
+- `tests/test_invariants.py` (заглушка `MergeOnlyFromMergeGateTest.
+  failing` починена на рефспек приватной ссылки, см. «Подход») — 60/60,
+  215 subtests.
 - `tests/test_branch_freshness_gate.py`, `tests/test_pull.py`,
   `tests/test_fsm_merge_gate_scratch_worktree_cleanup.py`,
   `tests/test_fsm_merge_gate_done_snapshot.py`,
