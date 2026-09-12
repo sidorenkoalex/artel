@@ -41,6 +41,7 @@ def all_checks(conn) -> list[doctor.Check]:
     checks.extend(doctor.check_orphans(conn))
     checks.extend(doctor.check_leases(conn))
     checks.extend(doctor.check_merge_lock(conn))
+    checks.extend(doctor.check_merge_queue(conn))
     checks.extend(doctor.check_hung_test_runs(conn))
     checks.extend(doctor.check_zone_waits(conn))
     checks.extend(doctor.check_branch_freshness(conn))

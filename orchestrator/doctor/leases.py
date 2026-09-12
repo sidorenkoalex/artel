@@ -194,3 +194,35 @@ def check_merge_lock(conn) -> list[doctor.Check]:
     return result
 
 
+def check_merge_queue(conn) -> list[doctor.Check]:
+    """SPEC 01M291EPQ2VFGCHZTXXC81616V, требование 6/AC-9: содержимое
+    очереди `merge_queue` видно Оператору целиком, мёртвая запись (тот же
+    признак, что `merge_lock._holder_is_dead` — требование 5, используемый
+    и пруной `orchestrator/merge_queue.py`) — ОТДЕЛЬНЫМ fail-`Check`, не
+    смешанным с видимостью живых записей (AC-9: Оператор обязан отличить
+    обычную очередь от предупреждения).
+
+    В отличие от `check_merge_lock` не заводит incident-алерт/auto-ack:
+    AC-9 требует только видимость в `doctor.all_checks`, мёртвая запись
+    очереди сама не блокирует ничего дольше одного опроса (`merge_queue.
+    wait_for_window` пруноет её при первой же проверке головы очереди) —
+    в отличие от мёртвого держателя мьютекса, который блокировал бы merge
+    навсегда без перехвата."""
+    rows = doctor.store.merge_queue_rows(conn)
+    if not rows:
+        return [doctor.Check("merge-queue", "ok", "очередь merge-окна пуста")]
+    results = []
+    for row in rows:
+        if doctor.merge_lock._holder_is_dead(row):
+            results.append(doctor.Check(
+                "merge-queue", "fail",
+                f"{row['task_id']}: запись очереди merge-окна мертва "
+                f"(pid {row['pid']} на {row['hostname']})"))
+        else:
+            results.append(doctor.Check(
+                "merge-queue", "ok",
+                f"{row['task_id']}: ждёт merge-окна (сессия "
+                f"{row['session_id']}, {row['hostname']})"))
+    return results
+
+

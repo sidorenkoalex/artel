@@ -23,8 +23,8 @@ from pathlib import Path
 from scripts import guard
 
 from . import (artifact_branch, ci, cleanup, config, fsm, fsm_postmerge,
-              gitcmd, github_adapter, lease, merge_lock, repo_context, store,
-              workspace)
+              gitcmd, github_adapter, lease, merge_lock, merge_queue,
+              repo_context, store, workspace)
 
 
 def _touches_protected_path(path: str) -> bool:
@@ -697,17 +697,25 @@ def _cmd_approve_merge_gate_cycle(conn, task_id: str, sid: str, t,
     (требование 10) — тем же принципом, что и `merge_lock.run_window`,
     только на границе всего цикла, а не одного захода в тело.
 
+    Занятый мьютекс (SPEC 01M291EPQ2VFGCHZTXXC81616V, требования 1-3) не
+    отказывает немедленно — `merge_queue.wait_for_window` встаёт в очередь
+    FIFO и опрашивает освобождение окна, возвращаясь только с уже взятым
+    ЭТОЙ сессией мьютексом (либо сама завершает процесс `sys.exit`'ом по
+    истечении потолка ожидания очереди, не тронув состояние задачи).
+
     `deadline`/`start` вычисляются ОДИН раз за весь вызов `approve` — в
     момент первого исхода `("wait", ...)`, то есть от первого пуша
     (требование 4): повторный уход в `("wait", ...)` после новой подтяжки
-    (AC-6) не пересчитывает их.
+    (AC-6) не пересчитывает их. Время, проведённое в очереди мержа до входа
+    в окно, в этот отсчёт не входит (SPEC 01M291EPQ2VFGCHZTXXC81616V,
+    требование 4) — `start` берётся ПОСЛЕ возврата `wait_for_window`.
     """
     start: float | None = None
     deadline: float | None = None
     confirmed_ci_note: str | None = None
     refusal = merge_lock.acquire(conn, task_id, sid)
     if refusal is not None:
-        sys.exit(refusal)
+        merge_queue.wait_for_window(conn, task_id, sid)
     try:
         while True:
             outcome = _cmd_approve_merge_gate(conn, task_id, state, t,

@@ -8,7 +8,7 @@ from pathlib import Path
 from scripts import guard
 
 from . import (alerts, artifact_branch, artifacts, budget, config, gitcmd,
-              idgen, liveness, runner, store, zone_lock)
+              idgen, liveness, merge_queue, runner, store, zone_lock)
 
 # ГОСТ-подобная транслитерация: только stdlib, без внешних зависимостей.
 # ъ/ь пропускаются; ё → yo; щ → sch; ю → yu; я → ya.
@@ -400,13 +400,14 @@ def cmd_status() -> None:
         mark = "  [canary]" if r["is_canary"] else ""
         holder = _lease_holder_suffix(conn, r["id"])
         zone = _zone_wait_suffix(conn, r)
+        merge_wait = merge_queue.wait_suffix(conn, r)
         wave_breaker = _wave_breaker_suffix(r, wave_breaker_open)
         division = _division_suffix(rows, r)
         print(
             f"{r['id']}  {r['state']:<13} "
             f"ревью {r['review_iters']}/{config.LIMIT_REVIEW_ITERS}"
             f"  ${r['spent_usd']:.2f}/{r['budget_usd']:.2f}  {r['title']}"
-            f"{flag}{mark}{holder}{zone}{wave_breaker}{division}"
+            f"{flag}{mark}{holder}{zone}{wave_breaker}{division}{merge_wait}"
         )
 
     # Требование 7 SPEC T022: триггеры docs/triggers.md — отдельная секция
