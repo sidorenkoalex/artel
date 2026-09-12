@@ -56,6 +56,42 @@ get_task(conn, task_id)` и передаёт третьим позиционны
 вызова в `tests/test_canary.py` (`SpecGateArtifactSourceTest.
 test_ac1_…`/`test_ac2_…`) поправлены на новую сигнатуру тем же приёмом.
 
+**Восстановление по ANSWER-2** (возврат: предыдущая «подтяжка main»
+слила голову ЧУЖОЙ артефактной ветки `artifact/01m29a0f88…` вместо
+`origin/main` — в дереве появился `tasks/01M29A0F88P9GKSXFW90F99H2N/`,
+мержить которое в main нельзя). Восстановлено ровно по инструкции
+Оператора: `git reset --hard 4d080ceb` (свой коммит реализации до
+сбойной подтяжки) -> `git cherry-pick 66f3adf8` (возврат сигнатуры по
+ANSWER-1) -> `git fetch origin main && git merge origin/main`.
+Конфликт `docs/codebase-map.md` (в обоих раундах — cherry-pick и merge)
+разрешён перегенерацией `python3 scripts/codebase_map.py` поверх
+слитого дерева. Конфликт `orchestrator/canary.py` — сохранены обе
+стороны: правки main (`_has_subtasks`, `_kill_outcome_note(conn,
+task_id, steps)`, исход «поделена», SPEC 01M29284PTCJXGERV5262E9XMM) и
+свои (чтение SPEC через `artifact_source.resolve`, сигнатура с `t`,
+`test_author=да/нет` в отчёте) — обе ветки блока `_task_metrics`
+слиты в один словарь. Проверено: `git ls-tree --name-only HEAD tasks/`
+не содержит `01M29A0F88`; `git log --merges origin/main..HEAD`
+показывает единственный merge-коммит с родителем из `origin/main`.
+
+Слияние вскрыло реальный крэш на стыке двух независимо разработанных
+веток: приёмочная планка ЭТОЙ задачи (`test_canary_report_and_
+regression.py`, написана test_author до появления `_has_subtasks` в
+main) мокает `catalog.cmd_init` внутри `_ephemeral_clone()` no-op'ом —
+до слияния это было безопасно (`_kill_outcome_note(steps)` в БД не
+ходила), после слияния `_kill_outcome_note(conn, task_id, steps)` зовёт
+новую `_has_subtasks(conn, task_id)` -> `store.all_tasks(conn)` на
+`conn`, чья БД не проинициализирована (мок `cmd_init` не создаёт
+схему) — `sqlite3.OperationalError: no such table: tasks`. В
+продакшне не воспроизводится: там `cmd_init()` внутри `_ephemeral_
+clone()` реальный (canary.py:505), схему создаёт всегда. Фикс — в
+`_has_subtasks`: `conn` без таблицы `tasks` трактуется как «подзадач
+нет» (`False`), не как ошибка — тот же вырожденный случай, что
+`schema.migrate` уже трактует как штатный («БД ещё не создана: схему
+ставит init», `schema.py:92-93`). Приёмочную планку задачи не правил
+(залочена, tasks/T023) — правка только в `_has_subtasks`, в зоне этой
+задачи (`orchestrator/canary.py`).
+
 ## Шаги
 1. `orchestrator/canary.py`: `_spec_gate_next_state` — резолвер
    источника через `artifact_source.resolve` + `fsm._read_branch_text_
@@ -91,7 +127,8 @@ test_ac1_…`/`test_ac2_…`) поправлены на новую сигнат�
 test_canary.py` прогнаны без правок в сторону смягчения — все зелёные
 (добавлено 5 новых, итого 72; ни один старый ассерт не ослаблен и не
 удалён, AC-8). Приёмочная планка (`tasks/01M2A22CG2P0E69H00RDHFF3K4/
-acceptance_tests/`) после правки по ANSWER-1 — все 6 тестов зелёные.
+acceptance_tests/`) после правки по ANSWER-1 и восстановления по
+ANSWER-2 (включая фикс `_has_subtasks`) — все 6 тестов зелёные.
 Регресс-свойство AC-6 проверено вручную: временный откат
 `_spec_gate_next_state` на старую логику (`gitcmd.on_foreign_branch(t
 ["branch"])`) красит оба новых теста `test_ac1_…`/`test_ac3_…`
@@ -112,4 +149,13 @@ spec_gate` возвращаются к прежнему виду, строка �
   изменения резолвера — так же, как в образце.
 
 ## Предложения системе
-(пусто)
+- Класс: приёмочная планка, зафиксированная (tasks/T023) до появления
+  параллельной задачи в той же зоне (`orchestrator/canary.py`), мокает
+  внутреннюю функцию (`catalog.cmd_init`) под предположение «эта ветка
+  кода в БД не ходит» — предположение, верное на момент написания
+  планки, но которое молча ломает следующая задача в той же зоне
+  (`_kill_outcome_note` из 01M29284PTCJXGERV5262E9XMM стала звать
+  `conn`). Планка красная не потому, что реализация неверна, а потому,
+  что мок устарел на стыке двух независимых задач одной зоны — сама
+  ситуация (см. «Подход», подраздел ANSWER-2) не обнаруживается ни
+  одной из двух задач по отдельности, только на подтяжке main.
