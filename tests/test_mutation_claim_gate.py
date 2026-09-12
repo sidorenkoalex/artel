@@ -187,6 +187,55 @@ class MutationClaimGateFileSelectionTest(TmpRootTest):
         self.assertIn("гейт заявки мутации", refusal.action)
         self.assertIn("tests/test_binary.py", refusal.detail)
 
+    def test_unclassified_show_failure_on_path_present_in_tree_refuses(self):
+        """Ловит мутацию: третья причина сбоя `gitcmd.show` (ни «git не
+        ответил», ни «не прочитан: …» — например, повреждённый объект или
+        недоступный blob) на пути, который РЕАЛЬНО есть в дереве HEAD
+        (`gitcmd.ls_tree_files`), трактуется как легитимное удаление и
+        молча пропускается — REVIEW.md 01M29A0F88P9GKSXFW90F99H2N
+        итерации 3, R1-F2: `ls_tree_files` даёт независимый от текста
+        причины ответ «путь есть в дереве», и такой путь обязан
+        отказывать, а не пропускаться."""
+        def fake_show(branch, path):
+            if branch == "deadbeef":
+                return (None, "новый файл")
+            return (None, "недоступный blob")
+
+        with mock.patch.object(gitcmd, "diff_base",
+                               return_value="deadbeef"), \
+             mock.patch.object(gitcmd, "diff_names",
+                               return_value=["tests/test_broken.py"]), \
+             mock.patch.object(gitcmd, "show", fake_show), \
+             mock.patch.object(gitcmd, "ls_tree_files",
+                               return_value=["tests/test_broken.py"]):
+            refusal = fsm_advance._mutation_claim_gate(
+                self.conn, self.task_id, self.t, "task/t001-x")
+        self.assertIsNotNone(refusal)
+        self.assertIn("гейт заявки мутации", refusal.action)
+        self.assertIn("tests/test_broken.py", refusal.detail)
+
+    def test_unclassified_show_failure_on_path_absent_from_tree_skips(self):
+        """Ловит мутацию: если `path in tree` заменить на безусловный
+        отказ (без проверки принадлежности дереву), легитимно удалённый
+        файл с непризнанной причиной `gitcmd.show` тоже отказывал бы —
+        `ls_tree_files`, вернувший список БЕЗ этого пути, обязан
+        подтверждать легитимное удаление так же, как и раньше."""
+        def fake_show(branch, path):
+            if branch == "deadbeef":
+                return (None, "новый файл")
+            return (None, "недоступный blob")
+
+        with mock.patch.object(gitcmd, "diff_base",
+                               return_value="deadbeef"), \
+             mock.patch.object(gitcmd, "diff_names",
+                               return_value=["tests/test_gone2.py"]), \
+             mock.patch.object(gitcmd, "show", fake_show), \
+             mock.patch.object(gitcmd, "ls_tree_files",
+                               return_value=["tests/test_other.py"]):
+            refusal = fsm_advance._mutation_claim_gate(
+                self.conn, self.task_id, self.t, "task/t001-x")
+        self.assertIsNone(refusal)
+
 
 class MutationClaimGateRefusalContentTest(TmpRootTest):
 
