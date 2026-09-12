@@ -32,7 +32,7 @@ schema_version: 5
 
 | id | статус | файл/строка | суть | последствие | решение |
 |---|---|---|---|---|---|
-| R1-F1 | open | conftest.py:68-74 | Гейт сбора pytest блокирует по `any(целевой путь)`, а не по репликации `bash_guard._pytest_verdict` (блокировать при наличии ЛЮБОГО нецелевого/whole-tree аргумента) | Смешанный вызов `pytest <файл> tests` проходит гейт, но реально запускает весь `tests/` внутри шага роли — именно сценарий, который задача должна была закрыть (инцидент с зависшим прогоном из SPEC) | Заменить условие на `not positionals or not all(_is_targeted_path(p) for p in positionals)`; добавить регресс-тест на смешанный вызов |
+| R1-F1 | fixed | conftest.py:68-74 | Гейт сбора pytest блокирует по `any(целевой путь)`, а не по репликации `bash_guard._pytest_verdict` (блокировать при наличии ЛЮБОГО нецелевого/whole-tree аргумента) | Смешанный вызов `pytest <файл> tests` проходит гейт, но реально запускает весь `tests/` внутри шага роли — именно сценарий, который задача должна была закрыть (инцидент с зависшим прогоном из SPEC) | Условие заменено на `not positionals or not all(_is_targeted_path(p) for p in positionals)` (`conftest.py:72-74`); добавлен регресс-тест `tests/test_conftest_role_guard.py::ConftestRoleGuardTest::test_mixed_targeted_and_whole_tree_blocked_under_role` на смешанный вызов `pytest tests/test_slugify.py tests` — красился до правки, зелёный после |
 
 ## Вердикт
 
