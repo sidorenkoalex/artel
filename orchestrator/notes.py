@@ -14,6 +14,16 @@ fetch до `MAX_PUSH_ATTEMPTS` раз (требование 4). Сетевой �
 содержимого раздела) удерживаются JSON-файлом в `_pending_dir()`
 (требование 5) до следующего вызова `note`/`note --flush` (требование 7).
 
+Окно тишины (01M2B6JS2BZNBW9WSHT1RPFXTE): помимо сетевого отказа, валидная
+запись удерживается тем же путём (`_hold_pending`, тот же формат JSON и
+каталог), когда открыто «окно тишины» — живой держатель мьютекса
+merge-окна либо задача в состоянии из `config.NOTE_SILENCE_WINDOW_STATES`
+(`_silence_window_reason`). Валидация (`_build_for`, внутри
+`_fetch_and_build`) происходит ДО проверки окна независимо от его
+состояния — отказ валидации `sys.exit`'ит раньше любого решения о push
+или удержании. `note --flush`/`note --now` обходят окно явно (решение
+Оператора), оппортунистический допуш в начале `cmd_note` — нет.
+
 Пути `_work_dir()`/`_pending_dir()` читают `config.ROOT` заново при
 каждом вызове, не кэшируются модульной константой при импорте:
 `tests/sandbox.ALL_CONFIG_ATTRS` патчит только перечисленный список
@@ -29,7 +39,7 @@ import time
 import uuid
 from pathlib import Path
 
-from . import config, gitcmd, store
+from . import config, gitcmd, merge_lock, store
 
 BACKLOG_REL = "docs/backlog.md"
 
@@ -83,6 +93,25 @@ def pending_notes() -> list[dict]:
         except (OSError, json.JSONDecodeError):
             continue
     return result
+
+
+def _silence_window_reason() -> str | None:
+    """Открытое «окно тишины» (требование 1, AC-1): живой держатель
+    мьютекса `merge_locks` (тот же признак живости, что
+    `merge_lock._holder_is_dead`) ЛИБО хоть одна задача (`store.all_tasks`)
+    в состоянии из `config.NOTE_SILENCE_WINDOW_STATES` — условие ИЛИ,
+    любой из двух триггеров срабатывает независимо от другого (живой
+    держатель без единой задачи в этих состояниях — уже открытое окно).
+    `None` — окна нет, push идёт как сегодня (AC-5)."""
+    conn = store.db()
+    lock_row = store.merge_lock_row(conn)
+    if lock_row is not None and not merge_lock._holder_is_dead(lock_row):
+        return (f"держатель merge-окна жив (сессия {lock_row['session_id']}, "
+               f"задача {lock_row['task_id']})")
+    for task in store.all_tasks(conn):
+        if task["state"] in config.NOTE_SILENCE_WINDOW_STATES:
+            return f"задача {task['id']} в состоянии {task['state']}"
+    return None
 
 
 def _hold_pending(request: dict) -> None:
@@ -268,48 +297,88 @@ def _write_backlog(work_dir: Path, text: str) -> None:
     (work_dir / BACKLOG_REL).write_text(text, encoding="utf-8")
 
 
+def _fetch_and_build(work_dir: Path,
+                     request: dict) -> tuple[str, str, str | None] | None:
+    """Fetch+checkout свежего `origin/<MAIN_BRANCH>` и валидация+построение
+    правки (`_build_for`) — общая точка для немедленного push (`_attempt`,
+    `_run`) и для решения «push или удержание» при окне тишины (требование
+    2, AC-4): отказ валидации (`sys.exit` внутри `_build_for`) происходит
+    здесь, ДО commit/push и ДО проверки окна тишины, и распространяется
+    наружу нетронутым — коммит не создаётся, файл в `_pending_dir()` не
+    появляется, независимо от состояния окна.
+
+    `None` — сетевой отказ fetch: вызывающий код обязан трактовать это как
+    удержание (требование 5), окно тишины здесь не участвует вовсе.
+    """
+    fetch = gitcmd.in_repo(work_dir, "fetch", "-q", "origin",
+                           config.MAIN_BRANCH)
+    if fetch is None or fetch.returncode != 0:
+        return None
+    gitcmd.in_repo(work_dir, "checkout", "-q", "-B", config.MAIN_BRANCH,
+                   "FETCH_HEAD")
+    original = _read_backlog(work_dir)
+    return _build_for(request, original)
+
+
+def _commit_and_push(work_dir: Path, request: dict, new_text: str,
+                     section_key: str, observation: str | None) -> str | None:
+    """Коммит+push уже построенной правки. `None` — коммит или push
+    отказали (non-fast-forward и подобное) — вызывающий код решает:
+    повторить с новым `_fetch_and_build` либо удержать (требование 4/5)."""
+    _write_backlog(work_dir, new_text)
+    message = _commit_message(section_key, request, observation)
+    gitcmd.in_repo(work_dir, "add", BACKLOG_REL)
+    commit = gitcmd.in_repo(
+        work_dir, "-c", f"user.name={NOTE_AUTHOR_NAME}",
+        "-c", f"user.email={NOTE_AUTHOR_EMAIL}",
+        "commit", "-q", "-m", message)
+    if commit is None or commit.returncode != 0:
+        return None
+    push = gitcmd.in_repo(work_dir, "push", "-q", "origin",
+                          f"HEAD:{config.MAIN_BRANCH}")
+    if push is None or push.returncode != 0:
+        return None
+    sha = gitcmd.head_sha(work_dir)
+    store.journal(store.db(), None, "operator",
+                 f"заметка: {section_key} {sha}")
+    return sha
+
+
 def _attempt(request: dict) -> str | None:
     """Полный цикл fetch/правка/commit/push с повтором non-fast-forward
     (требование 4). `None` — сетевой отказ fetch либо исчерпание попыток
     push: вызывающий код обязан удержать `request` (требование 5).
 
-    Валидационные отказы (`sys.exit` внутри `_build_for`) НЕ перехватываются
-    здесь и распространяются прямо наружу — они происходят ДО первого push
-    и не должны трактоваться как «сетевой отказ, удержать заметку»
-    (AC-3/AC-9: коммит вовсе не создаётся, файл origin не меняется).
+    Валидационные отказы (`sys.exit` внутри `_build_for`, через
+    `_fetch_and_build`) НЕ перехватываются здесь и распространяются прямо
+    наружу — они происходят ДО первого push и не должны трактоваться как
+    «сетевой отказ, удержать заметку» (AC-3/AC-9: коммит вовсе не
+    создаётся, файл origin не меняется).
+
+    Используется только `_flush_pending` (флаш уже решил отправлять —
+    без понятия окна тишины здесь, требование 7/AC-6/AC-8 решают на
+    уровне вызывающего кода, не здесь).
     """
     work_dir = _ensure_work_repo()
     for _attempt_no in range(1, MAX_PUSH_ATTEMPTS + 1):
-        fetch = gitcmd.in_repo(work_dir, "fetch", "-q", "origin",
-                               config.MAIN_BRANCH)
-        if fetch is None or fetch.returncode != 0:
+        prepared = _fetch_and_build(work_dir, request)
+        if prepared is None:
             return None
-        gitcmd.in_repo(work_dir, "checkout", "-q", "-B", config.MAIN_BRANCH,
-                       "FETCH_HEAD")
-        original = _read_backlog(work_dir)
-        new_text, section_key, observation = _build_for(request, original)
-        _write_backlog(work_dir, new_text)
-        message = _commit_message(section_key, request, observation)
-        gitcmd.in_repo(work_dir, "add", BACKLOG_REL)
-        commit = gitcmd.in_repo(
-            work_dir, "-c", f"user.name={NOTE_AUTHOR_NAME}",
-            "-c", f"user.email={NOTE_AUTHOR_EMAIL}",
-            "commit", "-q", "-m", message)
-        if commit is None or commit.returncode != 0:
-            return None
-        push = gitcmd.in_repo(work_dir, "push", "-q", "origin",
-                              f"HEAD:{config.MAIN_BRANCH}")
-        if push is not None and push.returncode == 0:
-            sha = gitcmd.head_sha(work_dir)
-            store.journal(store.db(), None, "operator",
-                         f"заметка: {section_key} {sha}")
+        new_text, section_key, observation = prepared
+        sha = _commit_and_push(work_dir, request, new_text, section_key,
+                               observation)
+        if sha is not None:
             return sha
     return None
 
 
 def _flush_pending() -> None:
-    """Оппортунистический допуш всех удержанных заметок (требование 7,
-    AC-8) — вызывается в начале КАЖДОГО `cmd_note`, не только `--flush`.
+    """Безусловный допуш всех удержанных заметок, независимо от окна
+    тишины (требование 5/7, AC-6): и оппортунистический вызов в начале
+    `cmd_note` (когда окно уже проверено закрытым вызывающим кодом), и
+    явный `note --flush` (обходит окно решением Оператора, AC-6) зовут
+    эту же функцию — разница только в том, вызывает ли её `cmd_note`
+    вообще (см. `_silence_window_reason` там).
 
     Отказ одной заметки (сеть всё ещё недоступна, либо устаревшая
     заметка больше не проходит собственную валидацию) не должен рушить
@@ -325,13 +394,39 @@ def _flush_pending() -> None:
             path.unlink(missing_ok=True)
 
 
-def _run(request: dict) -> None:
-    sha = _attempt(request)
-    if sha is None:
-        _hold_pending(request)
-        sys.exit(
-            "не удалось отправить заметку в origin — коммит удержан "
-            "(.artel/notes-pending/), повтори note позже либо note --flush")
+def _run(request: dict, bypass_window: bool = False) -> None:
+    """Путь одной новой заметки. `bypass_window=True` — `--now` (требование
+    6/AC-7): та же валидация, но окно тишины не проверяется вовсе, запись
+    никогда не удерживается им.
+
+    Иначе (требования 1-3, AC-1..AC-3): каждая итерация повтора
+    non-fast-forward сперва валидирует и строит правку (`_fetch_and_build`
+    — отказ валидации распространяется наружу, не доходя до проверки окна,
+    AC-4), затем проверяет окно тишины — открыто, удерживает `request`
+    (не построенный текст: тот же формат, что и сетевое удержание,
+    требование 3/AC-9) и печатает причину, ничего не коммитя и не пушя.
+    """
+    work_dir = _ensure_work_repo()
+    for _attempt_no in range(1, MAX_PUSH_ATTEMPTS + 1):
+        prepared = _fetch_and_build(work_dir, request)
+        if prepared is None:
+            break
+        new_text, section_key, observation = prepared
+        if not bypass_window:
+            reason = _silence_window_reason()
+            if reason is not None:
+                _hold_pending(request)
+                print(f"заметка удержана: {reason}; отправка — note --flush "
+                     "либо автоматически следующим note вне окна")
+                return
+        sha = _commit_and_push(work_dir, request, new_text, section_key,
+                               observation)
+        if sha is not None:
+            return
+    _hold_pending(request)
+    sys.exit(
+        "не удалось отправить заметку в origin — коммит удержан "
+        "(.artel/notes-pending/), повтори note позже либо note --flush")
 
 
 def _parse_args(argv: list[str]) -> argparse.Namespace:
@@ -342,6 +437,10 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--drop")
     parser.add_argument("--set-state")
     parser.add_argument("--set-priority")
+    # Обход окна тишины (требование 6, AC-7) — тот же раздел, что и
+    # позиционный `section`, но под явным флагом: запись пишется и
+    # пушится немедленно, не удерживаясь.
+    parser.add_argument("--now", choices=list(SECTION_HEADINGS))
     parser.add_argument("--flush", action="store_true")
     # Принимается, поведения не несёт сверх приёма (SPEC «Не входит»).
     parser.add_argument("--task")
@@ -350,7 +449,13 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
 
 def cmd_note(argv: list[str]) -> None:
     args = _parse_args(argv)
-    _flush_pending()
+    # Оппортунистический допуш уважает окно тишины (требование 7, AC-8):
+    # при открытом окне удержанные записи остаются нетронутыми, вне окна —
+    # допушиваются, как и сегодня. `--flush` форсирует его безусловно
+    # (короткое замыкание `or` — окно вовсе не проверяется, требование
+    # 5/AC-6, не смешивается с оппортунистическим путём).
+    if args.flush or _silence_window_reason() is None:
+        _flush_pending()
     if args.append is not None:
         if not args.text:
             sys.exit("--append требует --text")
@@ -366,6 +471,11 @@ def cmd_note(argv: list[str]) -> None:
             sys.exit("--set-priority требует --text")
         _run({"kind": "set-priority", "key": args.set_priority,
              "text": args.text})
+    elif args.now is not None:
+        if not args.text:
+            sys.exit("--text обязателен")
+        _run({"kind": "insert", "section": args.now, "text": args.text},
+            bypass_window=True)
     elif args.section is not None:
         if not args.text:
             sys.exit("--text обязателен")
@@ -374,4 +484,5 @@ def cmd_note(argv: list[str]) -> None:
         return
     else:
         sys.exit("укажи раздел с --text, --append/--drop/--set-state/"
-                 "--set-priority <ключ>, либо --flush")
+                 "--set-priority <ключ>, --now <раздел> --text, либо "
+                 "--flush")

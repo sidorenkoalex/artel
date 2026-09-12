@@ -11,10 +11,130 @@ from pathlib import Path
 
 from scripts import guard
 
-from . import (acceptance, artifact_source, budget, ci, fixation, gates,
-              gitcmd, store, workspace)
+from . import (acceptance, artifact_source, budget, ci, config, fixation,
+              gates, gitcmd, store, workspace)
 
 AUTOGATE_PASS_MESSAGE = "acceptance пройден автогейтом (политика gates.yaml)"
+
+# Требование 1 (01M2B6K76EAFDF5X1B3Z9XK30Q): единственная точка входа
+# задачи в acceptance (эта функция, зовётся ровно один раз из
+# `fsm_advance._review_approved`) журналирует и печатает ОДНОЙ записью,
+# что approve/автогейт проверят автоматически, а что остаётся сверить
+# Оператору — вместо устаревшего протокола `docs/operator-gates.md`.
+# `config.AUTO_STOP["acceptance"]` ссылается на это действие (требование
+# 3, AC-6).
+ACCEPTANCE_CHECKLIST_ACTION = "приёмка: что проверит approve"
+
+# Требование 1 (AC-4/AC-8): планка без единого manual/skip/escalate
+# критерия — вторая группа записи заменяется целиком этой фразой,
+# поведение автогейта (переход без Оператора) не меняется.
+_ACCEPTANCE_AUTOPASS_NOTE = "автогейт пройдёт сам"
+
+# Требование 3 (AC-3) — литеральный факт: дифф уже сверен с зонами
+# гейтом `in_dev -> review` (`fsm_advance._zones_gate`), задолго до
+# входа в acceptance — здесь только констатация для Оператора.
+_ZONES_ALREADY_CHECKED_FACT = "дифф сверен с зонами — уже сделано гейтом"
+
+
+def _acceptance_pull_merge_commits(branch: str) -> list[str]:
+    """Требование 3/AC-3: «родители подтяжек» — merge-коммиты main в
+    кодовую ветку задачи за её жизнь. В этой системе единственный вид
+    merge-коммита на кодовой ветке задачи — автослияние подтяжки main
+    (docstring `orchestrator/fsm_advance.py::_PULL_MAIN_COMMIT_INFIX`:
+    «единственный вид коммита на кодовой ветке, не являющийся работой
+    developer'а») — сам факт `--merges` уже и есть искомый список, без
+    текстового фильтра по сообщению коммита (который распознавал бы
+    только автослияние настоящего пульта, но не любой ручной `git merge
+    --no-ff main` — а оба случая одинаково остаются подтяжкой main,
+    которую Оператору полезно увидеть на приёмке).
+
+    Полный sha (`%H`), не сокращённый: длина сокращения git выбирает
+    сама и не гарантирует конкретное число знаков — печать обязана
+    называть значение, однозначно узнаваемое Оператором в `git log`
+    независимо от этого выбора.
+
+    Пустой список — merge-коммитов не было (легитимно, требование 3:
+    «если такие были») либо git не ответил: оба случая означают одно и
+    то же для печати — эту строку факта просто не включать."""
+    res = gitcmd.git("log", "--merges", "--format=%H", branch)
+    if res is None or res.returncode != 0:
+        return []
+    return [line for line in res.stdout.splitlines() if line.strip()]
+
+
+def _acceptance_manual_criteria(task_id: str, branch: str) -> list[str]:
+    """Требование 3/AC-3, вычислено требованием 2/AC-5 через
+    `guard.scan_ac_content` целиком (не через `_autogate_conditions`,
+    чьё короткое замыкание на первом отказе не даёт увидеть остальные
+    критерии планки, docstring `_autogate_conditions`) — каждый
+    manual/skip/escalate критерий планки, номером AC и первой строкой
+    его пометки. Критерий `ci` не входит (требование 3: он не остаётся
+    человеку — уже автоматика, `_autogate_conditions` условие «а»).
+
+    Чтение планки — теми же примитивами, что и условие «а»
+    (`gitcmd.ls_tree_files`/`gitcmd.show` с артефактной ветки,
+    `*.py` целиком, не только `test_*.py` — тот же приём T031)."""
+    tests_rel = f"tasks/{task_id}/acceptance_tests"
+    py_paths = [p for p in (gitcmd.ls_tree_files(branch, tests_rel) or [])
+               if p.endswith(".py")]
+    sources = []
+    for p in py_paths:
+        text, _ = gitcmd.show(branch, p)
+        if text is not None:
+            sources.append(text)
+    _, markers = guard.scan_ac_content(sources)
+    return [f"AC-{n}: {kind}" + (f" — {reason}" if reason else "")
+            for n, (kind, reason) in sorted(markers.items())
+            if kind in ("manual", "skip", "escalate")]
+
+
+def _acceptance_checklist_detail(conn, task_id: str, t, iteration: int) -> str:
+    """Содержимое единой записи «приёмка: что проверит approve»
+    (требования 1-3, AC-1..AC-4): группа «а» — ровно четыре пункта,
+    которые approve/автогейт исполняют автоматически (AC-2); группа
+    «б» — что остаётся Оператору (AC-3), либо, если у планки нет ни
+    одного manual/skip/escalate критерия, литеральная фраза «автогейт
+    пройдёт сам» вместо всей группы целиком (AC-4).
+
+    Источник планки (артефактная ветка + sha) — те же
+    `artifact_source.resolve`/`gitcmd.branch_head_sha`, что несёт
+    условие «а» `_autogate_conditions` (требование 2/AC-5) — значение
+    не может разойтись с тем, что реально видит автогейт. Подтяжки/
+    свежесть — про КОДОВУЮ ветку `t["branch"]`, отдельно от
+    артефактной, тем же разделением, что и остальной модуль.
+    """
+    artifact_branch_name, _ = artifact_source.resolve(conn, task_id)
+    artifact_sha = gitcmd.branch_head_sha(artifact_branch_name)
+    group_a = (
+        f"прогон планки приёмочных тестов (источник: артефактная ветка "
+        f"{artifact_branch_name}, sha {artifact_sha}); "
+        "полный набор tests/ в worktree ветки задачи; "
+        f"потолок бюджета задачи (${t['budget_usd'] or 0.0:.2f}); "
+        f"свежесть кодовой ветки против origin/{config.MAIN_BRANCH}"
+    )
+    header = f"автоматически при approve: {group_a}"
+    manual_items = _acceptance_manual_criteria(task_id, artifact_branch_name)
+    if not manual_items:
+        return f"{header} | {_ACCEPTANCE_AUTOPASS_NOTE}"
+    group_b_items = list(manual_items)
+    group_b_items.append(_ZONES_ALREADY_CHECKED_FACT)
+    merges = _acceptance_pull_merge_commits(t["branch"])
+    if merges:
+        group_b_items.append(f"родители подтяжек: {'; '.join(merges)}")
+    group_b_items.append(f"вердикт ревью: tasks/{task_id}/REVIEW.md, "
+                         f"итерация {iteration}")
+    return f"{header} | остаётся человеку: {'; '.join(group_b_items)}"
+
+
+def _log_acceptance_checklist(conn, task_id: str, t, iteration: int) -> None:
+    """Журналирует и печатает `_acceptance_checklist_detail` (AC-1) —
+    одна и та же запись, независимо от исхода `_autogate_conditions`
+    (эта задача не меняет, что и как автогейт проверяет — только
+    сообщает об этом заранее)."""
+    detail = _acceptance_checklist_detail(conn, task_id, t, iteration)
+    store.journal(conn, task_id, "fsm", ACCEPTANCE_CHECKLIST_ACTION, detail)
+    print(f"[{task_id}] {ACCEPTANCE_CHECKLIST_ACTION}")
+    print(f"  {detail}")
 
 
 def _autogate_conditions(conn, task_id: str, t, acc_tdir: Path,
@@ -138,9 +258,16 @@ def _maybe_autogate_acceptance(conn, task_id: str, t, acc_tdir: Path,
     не проходит времени, в отличие от ручного approve после ожидания
     Оператора — второй такой же проверкой без временнóго окна нечего
     ловить.
+
+    Требование 1 (01M2B6K76EAFDF5X1B3Z9XK30Q): единственная точка входа
+    в acceptance во всей кодовой базе — эта функция журналирует и
+    печатает «приёмка: что проверит approve» ОДНОЙ записью, до решения
+    самого автогейта (ниже) и независимо от его исхода — печать
+    описывает, что approve/автогейт проверят, не то, что уже проверено.
     """
     if gates.policy("acceptance") != gates.AUTO:
         return
+    _log_acceptance_checklist(conn, task_id, t, iteration)
     ok_conditions, reason = _autogate_conditions(conn, task_id, t, acc_tdir,
                                                  iteration)
     if reason is not None:
