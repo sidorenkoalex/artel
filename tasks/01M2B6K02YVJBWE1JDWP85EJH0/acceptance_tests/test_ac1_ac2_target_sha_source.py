@@ -3,11 +3,12 @@
 `gitcmd.head_sha()` главной копии; с явным `--sha` — именно он, без
 обращения к `origin`.
 
-Красен до реализации (3 из 4 тестов): `canary.cmd_canary` сегодня не
-принимает параметр `sha` вовсе (`orchestrator/canary.py`, `def
-cmd_canary(*, k: int)`) — вызов `canary.cmd_canary(k=1, sha=...)`
-падает `TypeError` раньше, чем дойдёт до какого-либо `assert`; это
-ловит `test_ac2_explicit_sha_is_used_verbatim`/`..._does_not_require_
+Красен до реализации: 3 из 4 тестов этого файла падают уже сегодня —
+`canary.cmd_canary` сегодня не принимает параметр `sha` вовсе
+(`orchestrator/canary.py`, `def cmd_canary(*, k: int)`) — вызов
+`canary.cmd_canary(k=1, sha=...)` падает `TypeError` раньше, чем
+дойдёт до какого-либо `assert`; это ловит
+`test_ac2_explicit_sha_is_used_verbatim`/`..._does_not_require_
 origin_remote` напрямую (оба зовут `run_cmd_canary(sha=<явный sha>)`);
 `test_ac1_default_target_sha_is_origin_main_head_not_local_pin_head`
 красный по другой причине — вызов идёт БЕЗ `sha` (`cmd_canary(k=1)`,
@@ -16,15 +17,16 @@ gitcmd.head_sha()` (строка ~1161) безусловно, поэтому з�
 `main_sha` совпадает со старым локальным HEAD, а не с головой
 `origin/<MAIN_BRANCH>`, которая в этом сценарии намеренно другая.
 
-Зелёный с рождения (1 из 4): `test_ac1_default_target_sha_matches_
-origin_head_when_pin_is_in_sync` не расходится с сегодняшним
-поведением — стенд синхронен (`origin/<MAIN_BRANCH>` == локальный
-HEAD == HEAD, из которого сегодня берётся `main_sha`), поэтому
-`gitcmd.head_sha()` уже сейчас совпадает с ожидаемым значением; тест
-остаётся в файле как позитивный образец из формулировки AC-1, не как
-дефект «неловящего» теста — расходящийся сценарий той же АС ловится
-соседним `test_ac1_default_target_sha_is_origin_main_head_not_local_
-pin_head` выше.
+Зелёный с рождения: четвёртый тест этого файла,
+`test_ac1_default_target_sha_matches_origin_head_when_pin_is_in_sync`,
+не расходится с сегодняшним поведением — стенд синхронен
+(`origin/<MAIN_BRANCH>` == локальный HEAD == HEAD, из которого сегодня
+берётся `main_sha`), поэтому `gitcmd.head_sha()` уже сейчас совпадает
+с ожидаемым значением; тест остаётся в файле как позитивный образец из
+формулировки AC-1, не как дефект «неловящего» теста — расходящийся
+сценарий той же АС ловится соседним
+`test_ac1_default_target_sha_is_origin_main_head_not_local_pin_head`
+выше.
 """
 import sys
 from pathlib import Path
