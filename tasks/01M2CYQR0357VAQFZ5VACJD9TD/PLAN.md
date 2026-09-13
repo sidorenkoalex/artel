@@ -160,6 +160,24 @@ tests/test_zones_gate.py tests/test_capacity_gate.py -p no:cacheprovider
 единственная наблюдаемая поверхность — тексты гейтов, зафиксированные
 существующими тестами.
 
+## Расширение зон
+
+Пути: orchestrator/advance_gates/__init__.py, orchestrator/advance_gates/_base.py, orchestrator/advance_gates/zones.py, orchestrator/advance_gates/capacity.py, orchestrator/advance_gates/review.py, orchestrator/advance_gates/acceptance.py, orchestrator/advance_gates/tests_writing.py
+
+Обоснование: SPEC (zones) называет пакет `orchestrator/gates/` — имя
+занято существующим модулем `orchestrator/gates.py` (политика
+`gates.yaml`, ADR-0007/T066); ANSWER-1.md переименовал пакет в
+`orchestrator/advance_gates/` текстуально по существу без изменений
+объёма переноса, поэтому реальные пути диффа расходятся с буквальным
+текстом `zones:` SPEC — подкреплено мандатом Оператора.
+
+Мандат — `tasks/01M2CYQR0357VAQFZ5VACJD9TD/ANSWER-1.md` («Расширение
+зон разрешено: orchestrator/advance_gates/__init__.py,
+orchestrator/advance_gates/_base.py, orchestrator/advance_gates/zones.py,
+orchestrator/advance_gates/capacity.py, orchestrator/advance_gates/review.py,
+orchestrator/advance_gates/acceptance.py,
+orchestrator/advance_gates/tests_writing.py»).
+
 ## Риски
 
 Функция, физически оставшаяся в `fsm_advance.py`, но случайно
