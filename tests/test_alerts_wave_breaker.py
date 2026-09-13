@@ -19,16 +19,12 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from orchestrator import alerts, config, failure_classification, store  # noqa: E402
-from tests.sandbox import TmpRootTest, _ts_ago  # noqa: E402
+from tests.sandbox import SchemaTmpRootTest, _ts_ago  # noqa: E402
 
 FOREIGN_TARGET = "внешний-проект"
 
 
-class WaveBreakerTestBase(TmpRootTest):
-
-    def setUp(self):
-        super().setUp()
-        store.create_schema(store.db())
+class WaveBreakerTestBase(SchemaTmpRootTest):
 
     def make_task(self, task_id: str, target: str | None = None) -> None:
         store.insert_task(store.db(), task_id, task_id, "in_dev",

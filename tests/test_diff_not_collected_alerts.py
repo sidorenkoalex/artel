@@ -16,7 +16,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from orchestrator import alerts, store  # noqa: E402
-from tests.sandbox import TmpRootTest  # noqa: E402
+from tests.sandbox import SchemaTmpRootTest  # noqa: E402
 
 TASK = "T001"
 OTHER_TASK = "T002"
@@ -31,11 +31,7 @@ class WarningKindTest(unittest.TestCase):
         self.assertIn("warning", alerts.KINDS)
 
 
-class RaiseDiffNotCollectedAlertTest(TmpRootTest):
-
-    def setUp(self):
-        super().setUp()
-        store.create_schema(store.db())
+class RaiseDiffNotCollectedAlertTest(SchemaTmpRootTest):
 
     def test_raises_an_open_warning_alert_naming_the_task(self):
         """Первый вызов заводит открытый алерт `kind=warning` с задачей в
@@ -73,11 +69,7 @@ class RaiseDiffNotCollectedAlertTest(TmpRootTest):
         self.assertEqual(len(store.open_alerts(store.db(), "warning")), 1)
 
 
-class CloseDiffNotCollectedAlertsTest(TmpRootTest):
-
-    def setUp(self):
-        super().setUp()
-        store.create_schema(store.db())
+class CloseDiffNotCollectedAlertsTest(SchemaTmpRootTest):
 
     def test_closes_open_warning_alert_of_this_task(self):
         """Открытый warning-алерт этой задачи закрывается вызовом

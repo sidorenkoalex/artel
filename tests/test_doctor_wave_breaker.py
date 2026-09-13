@@ -17,14 +17,10 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from orchestrator import alerts, config, doctor, store  # noqa: E402
-from tests.sandbox import TmpRootTest, capture  # noqa: E402
+from tests.sandbox import SchemaTmpRootTest, capture  # noqa: E402
 
 
-class DoctorWaveBreakerFirstLineTest(TmpRootTest):
-
-    def setUp(self):
-        super().setUp()
-        store.create_schema(store.db())
+class DoctorWaveBreakerFirstLineTest(SchemaTmpRootTest):
 
     def run_doctor(self) -> str:
         with mock.patch.object(doctor, "_orphan_artifact_branches",

@@ -17,8 +17,8 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from orchestrator import catalog, config, lease, store  # noqa: E402
-from tests.sandbox import (TmpRootTest, _alive_foreign_pid, _dead_pid,  # noqa: E402
-                           _ts_ago, capture)
+from tests.sandbox import (TaskSeededTmpRootTest, TmpRootTest,  # noqa: E402
+                           _alive_foreign_pid, _dead_pid, _ts_ago, capture)
 
 
 class ResolveSessionIdTest(TmpRootTest):
@@ -58,14 +58,7 @@ class ResolveSessionIdTest(TmpRootTest):
                              lease.resolve_session_id(None))
 
 
-class AcquireReleaseTest(TmpRootTest):
-    TASK = "T001"
-
-    def setUp(self):
-        super().setUp()
-        capture(catalog.cmd_init)
-        store.insert_task(store.db(), self.TASK, "Задача", "in_dev",
-                          "task/t001-zadacha", config.DEFAULT_TARGET, 25.0)
+class AcquireReleaseTest(TaskSeededTmpRootTest):
 
     def row(self):
         return store.lease_row(store.db(), self.TASK)
@@ -183,19 +176,11 @@ class AcquireReleaseTest(TmpRootTest):
         self.assertIsNone(self.row())
 
 
-class OwnSessionLiveOtherPidTest(TmpRootTest):
+class OwnSessionLiveOtherPidTest(TaskSeededTmpRootTest):
     """SPEC 01M2B6JWGS9HMR9XZJBASXVNSY, требование 1: ветка «своя сессия»
     держит lease под ДРУГИМ, но ещё живым pid'ом — раньше эта ветка
     переписывала строку безусловно, не глядя на живость держателя.
     """
-
-    TASK = "T001"
-
-    def setUp(self):
-        super().setUp()
-        capture(catalog.cmd_init)
-        store.insert_task(store.db(), self.TASK, "Задача", "in_dev",
-                          "task/t001-zadacha", config.DEFAULT_TARGET, 25.0)
 
     def row(self):
         return store.lease_row(store.db(), self.TASK)
@@ -314,17 +299,9 @@ class OwnSessionLiveOtherPidTest(TmpRootTest):
         self.assertEqual(dict(self.row()), before)
 
 
-class AcquireJournalCauseTest(TmpRootTest):
+class AcquireJournalCauseTest(TaskSeededTmpRootTest):
     """SPEC 01M1GCHKG8DDK4DCZWCE3DYKWC: identity в журнале lease-событий
     (требования 1-3, AC-1, AC-4..AC-6)."""
-
-    TASK = "T001"
-
-    def setUp(self):
-        super().setUp()
-        capture(catalog.cmd_init)
-        store.insert_task(store.db(), self.TASK, "Задача", "in_dev",
-                          "task/t001-zadacha", config.DEFAULT_TARGET, 25.0)
 
     def steps(self):
         return store.task_steps(store.db(), self.TASK)
@@ -407,17 +384,9 @@ class AcquireJournalCauseTest(TmpRootTest):
         self.assertIn("протух", detail)
 
 
-class ReleaseAnyTest(TmpRootTest):
+class ReleaseAnyTest(TaskSeededTmpRootTest):
     """SPEC 01M1GCHKG8DDK4DCZWCE3DYKWC, требование 3, AC-6: снятие lease
     «любым путём» — общий узел `lease.release_any` для `kill`/`done`."""
-
-    TASK = "T001"
-
-    def setUp(self):
-        super().setUp()
-        capture(catalog.cmd_init)
-        store.insert_task(store.db(), self.TASK, "Задача", "in_dev",
-                          "task/t001-zadacha", config.DEFAULT_TARGET, 25.0)
 
     def test_releases_a_lease_held_by_a_different_session_and_names_the_caller(self):
         conn = store.db()
@@ -447,17 +416,9 @@ class ReleaseAnyTest(TmpRootTest):
         self.assertEqual(store.task_steps(conn, self.TASK), [])
 
 
-class RunLockedTest(TmpRootTest):
+class RunLockedTest(TaskSeededTmpRootTest):
     """SPEC T057, требование 2: общая точка обвязки — `resolve_session_id`
     -> `acquire` -> отказ -> `body(sid)` -> `release`-если-`fresh`."""
-
-    TASK = "T001"
-
-    def setUp(self):
-        super().setUp()
-        capture(catalog.cmd_init)
-        store.insert_task(store.db(), self.TASK, "Задача", "in_dev",
-                          "task/t001-zadacha", config.DEFAULT_TARGET, 25.0)
 
     def row(self):
         return store.lease_row(store.db(), self.TASK)
@@ -531,18 +492,10 @@ class RunLockedTest(TmpRootTest):
                                       "всё равно обязан быть отпущен")
 
 
-class ForeignLiveLeaseTest(TmpRootTest):
+class ForeignLiveLeaseTest(TaskSeededTmpRootTest):
     """SPEC 01M1NEEYSP0QWPMXHG0BK591M7, требование 1: `foreign_live_lease`/
     `warn_foreign_live` в изоляции — сквозной путь через `pause`/`release`
     покрыт приёмочными тестами AC-1..AC-7."""
-
-    TASK = "T001"
-
-    def setUp(self):
-        super().setUp()
-        capture(catalog.cmd_init)
-        store.insert_task(store.db(), self.TASK, "Задача", "in_dev",
-                          "task/t001-zadacha", config.DEFAULT_TARGET, 25.0)
 
     def insert_lease(self, session_id: str, pid: int, hostname: str,
                      heartbeat_ts: str) -> None:

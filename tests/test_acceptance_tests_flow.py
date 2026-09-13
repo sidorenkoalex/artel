@@ -29,7 +29,7 @@ from orchestrator import (acceptance, agent_log, artifact_branch, catalog,  # no
                           config, fsm, github_adapter, gitcmd, runner, store,
                           workspace)
 from scripts import guard  # noqa: E402
-from tests.sandbox import (FakeProc, TmpRootTest, capture,  # noqa: E402
+from tests.sandbox import (FakeProc, TmpDirTest, TmpRootTest, capture,  # noqa: E402
                            capture_new_task_id, disk_backed_ls_tree_files,
                            disk_backed_show, fake_git, resilient_tmp_cleanup)
 
@@ -200,9 +200,6 @@ class _AcceptanceFlowTmpRootTest(TmpRootTest):
     настоящий `templates/SPEC.md`, только уже из песочницы.
     """
 
-    PATCHED_ATTRS = ("DB", "TASKS", "LOGS", "ROLE_HOME", "ROLE_CONFIG_DIR",
-                     "WORKTREES", "ROOT")
-
     def setUp(self):
         super().setUp()
         shutil.copytree(REPO_ROOT / "templates", self.root / "templates")
@@ -322,13 +319,8 @@ class SpecAcMarkupGuardTest(unittest.TestCase):
         self.assertTrue(any("повторяются" in e for e in errors), errors)
 
 
-class ScanAcceptanceTestsTest(unittest.TestCase):
+class ScanAcceptanceTestsTest(TmpDirTest):
     """Статический разбор acceptance_tests/: тесты и пометки manual/skip/escalate."""
-
-    def setUp(self):
-        tmp = tempfile.TemporaryDirectory()
-        self.addCleanup(tmp.cleanup)
-        self.tdir = Path(tmp.name)
 
     def write(self, content: str, name: str = "test_ac.py") -> None:
         tests_dir = self.tdir / "acceptance_tests"
@@ -358,15 +350,20 @@ class ScanAcceptanceTestsTest(unittest.TestCase):
         self.assertEqual(markers[5], ("escalate", "критерий противоречив"))
 
 
-class AcceptanceTraceabilityFunctionTest(unittest.TestCase):
-    """`guard.acceptance_traceability_errors` — источник ошибок для fsm.py."""
+class _SpecV2TmpDirTest(TmpDirTest):
+    """`TmpDirTest` + `SPEC.md` версии 2 уже на диске — общий предок двух
+    классов ниже (SPEC 01M2DC6SQVSANMECXPDZJDP75D, R8: их `setUp` были
+    байт-в-байт одинаковы; `SPEC_V2` — локальная константа этого файла,
+    поэтому общий класс живёт здесь, не в tests/sandbox.py)."""
 
     def setUp(self):
-        tmp = tempfile.TemporaryDirectory()
-        self.addCleanup(tmp.cleanup)
-        self.tdir = Path(tmp.name)
+        super().setUp()
         (self.tdir / "SPEC.md").write_text(
             SPEC_V2.format(task="T999", extra=""), encoding="utf-8")
+
+
+class AcceptanceTraceabilityFunctionTest(_SpecV2TmpDirTest):
+    """`guard.acceptance_traceability_errors` — источник ошибок для fsm.py."""
 
     def write(self, content: str) -> None:
         tests_dir = self.tdir / "acceptance_tests"
@@ -435,17 +432,10 @@ class AcceptanceTest(unittest.TestCase):
 '''
 
 
-class IndentedAcMarkerTest(unittest.TestCase):
+class IndentedAcMarkerTest(_SpecV2TmpDirTest):
     """`guard.indented_ac_marker_errors_from_files`/`scan_indented_ac_markers`/
     `acceptance_traceability_errors` — маркер AC-n с отступом (требования
     1-3 SPEC этой задачи)."""
-
-    def setUp(self):
-        tmp = tempfile.TemporaryDirectory()
-        self.addCleanup(tmp.cleanup)
-        self.tdir = Path(tmp.name)
-        (self.tdir / "SPEC.md").write_text(
-            SPEC_V2.format(task="T999", extra=""), encoding="utf-8")
 
     def write(self, content: str, name: str = "test_ac.py") -> None:
         tests_dir = self.tdir / "acceptance_tests"
@@ -635,13 +625,8 @@ class RednessMarkerErrorsFromFilesTest(unittest.TestCase):
         self.assertEqual(guard.redness_marker_errors_from_files([]), [])
 
 
-class ScanRednessMarkersTest(unittest.TestCase):
+class ScanRednessMarkersTest(TmpDirTest):
     """`guard.scan_redness_markers` — рабочая копия, только `test_*.py`."""
-
-    def setUp(self):
-        tmp = tempfile.TemporaryDirectory()
-        self.addCleanup(tmp.cleanup)
-        self.tdir = Path(tmp.name)
 
     def write(self, content: str, name: str) -> None:
         tests_dir = self.tdir / "acceptance_tests"

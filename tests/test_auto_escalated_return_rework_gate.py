@@ -16,17 +16,12 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from orchestrator import auto, store  # noqa: E402
-from tests.sandbox import TmpRootTest  # noqa: E402
+from tests.sandbox import SchemaConnTmpRootTest  # noqa: E402
 
 TASK_ID = "T001"
 
 
-class RoleStepSinceStateEntryTest(TmpRootTest):
-
-    def setUp(self):
-        super().setUp()
-        store.create_schema(store.db())
-        self.conn = store.db()
+class RoleStepSinceStateEntryTest(SchemaConnTmpRootTest):
 
     def _journal(self, actor: str, action: str, detail: str = "") -> None:
         store.journal(self.conn, TASK_ID, actor, action, detail)

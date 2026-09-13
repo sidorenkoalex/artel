@@ -13,9 +13,7 @@ docs/design.md §6, §7). Ослабить, заскипать или удали
 docs/invariants.md.
 """
 import io
-import json
 import platform
-import shutil
 import subprocess
 import sys
 import tempfile
@@ -30,16 +28,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from orchestrator import (agent_log, catalog, config, gitcmd,  # noqa: E402
                           runner, store)
-from tests.sandbox import (FakeProc, FakeStream, TmpRootTest,  # noqa: E402
-                           capture_new_task_id, fake_git,
-                           seed_developer_brief_fixtures, sync_spec_from_worktree)
-
-REPO_ROOT = Path(__file__).resolve().parent.parent
-
-
-def event(**fields) -> str:
-    """Строка потока `--output-format stream-json`."""
-    return json.dumps(fields, ensure_ascii=False) + "\n"
+from tests.sandbox import (DeveloperBriefTmpRootTest as TmpRootTest,  # noqa: E402
+                           FakeProc, FakeStream, capture_new_task_id, event,
+                           fake_git, sync_spec_from_worktree)
 
 
 def assistant_event(*blocks) -> str:
@@ -67,28 +58,6 @@ class BrokenPipeStream(FakeStream):
             return next(self.lines)
         except StopIteration:
             raise OSError("обрыв stdout-пайпа шага") from None
-
-
-class _AgentLogTmpRootTest(TmpRootTest):
-    """Общая песочница: DB, TASKS и LOGS уводятся во временный каталог.
-
-    `ROOT` тоже уводится (SPEC T049: холодный старт сканирует его для
-    посева счётчика — непропатченный ROOT читал бы реальное дерево
-    пульта) — `templates/` копируется рядом, `cmd_new` продолжает читать
-    настоящий `templates/SPEC.md`, только уже из песочницы.
-    """
-
-    PATCHED_ATTRS = ("DB", "TASKS", "LOGS", "ROLE_HOME", "ROLE_CONFIG_DIR",
-                     "WORKTREES", "ROOT")
-
-    def setUp(self):
-        super().setUp()
-        shutil.copytree(REPO_ROOT / "templates", self.root / "templates")
-        shutil.copytree(REPO_ROOT / "skills", self.root / "skills")
-        seed_developer_brief_fixtures(self.root)
-
-
-TmpRootTest = _AgentLogTmpRootTest
 
 
 class EnvironmentFingerprintTest(unittest.TestCase):

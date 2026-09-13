@@ -8,7 +8,6 @@ test_ac1_ac2_ac3_collect.py`), которая испытывает те же т�
 """
 import subprocess
 import sys
-import tempfile
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -16,6 +15,7 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from orchestrator import acceptance  # noqa: E402
+from tests.sandbox import TmpDirTest  # noqa: E402
 
 PASSING_TEST = """import unittest
 
@@ -40,12 +40,7 @@ NO_TESTS_MODULE = """def helper():
 """
 
 
-class CollectTest(unittest.TestCase):
-
-    def setUp(self):
-        tmp = tempfile.TemporaryDirectory()
-        self.addCleanup(tmp.cleanup)
-        self.tdir = Path(tmp.name)
+class CollectTest(TmpDirTest):
 
     def write(self, content: str, name: str = "test_ac.py") -> None:
         tests_dir = self.tdir / "acceptance_tests"

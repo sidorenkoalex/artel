@@ -12,19 +12,13 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from orchestrator import config, store  # noqa: E402
-from tests.sandbox import TmpRootTest  # noqa: E402
+from orchestrator import store  # noqa: E402
+from tests.sandbox import SchemaSeededTmpRootTest  # noqa: E402
 
 TASK = "T001"
 
 
-class SetStateCasTest(TmpRootTest):
-
-    def setUp(self):
-        super().setUp()
-        store.create_schema(store.db())
-        store.insert_task(store.db(), TASK, "Задача", "in_dev",
-                          "task/t001-zadacha", config.DEFAULT_TARGET, 25.0)
+class SetStateCasTest(SchemaSeededTmpRootTest):
 
     def test_matching_expected_state_wins_and_journals_the_transition(self):
         store.set_state(store.db(), TASK, "review", "test",

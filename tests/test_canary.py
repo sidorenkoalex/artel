@@ -22,7 +22,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from orchestrator import (artifact_branch, canary, catalog, config,  # noqa: E402
                           pool_seal, retro, store)
-from tests.sandbox import RealGitSandbox, capture  # noqa: E402
+from tests.sandbox import ConnRealGitSandbox, RealGitSandbox, capture  # noqa: E402
 
 
 class DeviationTest(unittest.TestCase):
@@ -362,9 +362,11 @@ class DiagnosticsDirTest(unittest.TestCase):
             outer_root / ".artel" / "canary" / "20260906T000000Z" / "T902")
 
 
-class CanaryBaselineStoreRoundtripTest(unittest.TestCase):
-    """`store.canary_baseline`/`set_canary_baseline` — бейзлайн per-task,
-    ключ `title`, не `task_id` (требование 9)."""
+class _CanaryBaselineTmpDirTest(unittest.TestCase):
+    """Временный каталог с патчем ТОЛЬКО `ROOT`/`DB` (не полный
+    `TmpRootTest`) + схема + соединение — общий предок двух классов ниже
+    (SPEC 01M2DC6SQVSANMECXPDZJDP75D, R8: их `setUp` были байт-в-байт
+    одинаковы)."""
 
     def setUp(self):
         tmp = tempfile.TemporaryDirectory()
@@ -377,6 +379,11 @@ class CanaryBaselineStoreRoundtripTest(unittest.TestCase):
             self.addCleanup(patcher.stop)
         store.create_schema(store.db())
         self.conn = store.db()
+
+
+class CanaryBaselineStoreRoundtripTest(_CanaryBaselineTmpDirTest):
+    """`store.canary_baseline`/`set_canary_baseline` — бейзлайн per-task,
+    ключ `title`, не `task_id` (требование 9)."""
 
     def test_missing_baseline_is_none(self):
         self.assertIsNone(store.canary_baseline(self.conn, "prostaya-pravka"))
@@ -422,22 +429,10 @@ class CanaryBaselineStoreRoundtripTest(unittest.TestCase):
         self.assertIsNone(row["verdict"])
 
 
-class GreenCanaryRunsTest(unittest.TestCase):
+class GreenCanaryRunsTest(_CanaryBaselineTmpDirTest):
     """`store.green_canary_runs`/`latest_green_canary_run` (tasks/
     01M1NGFK3N6MRMYGCC09H975V3, ANSWER-1 п.2/п.5) — источник guard'а
     привязки пина и цели отката по умолчанию `pin --to`."""
-
-    def setUp(self):
-        tmp = tempfile.TemporaryDirectory()
-        self.addCleanup(tmp.cleanup)
-        self.root = Path(tmp.name)
-        for attr, value in (("ROOT", self.root),
-                            ("DB", self.root / ".artel" / "state.db")):
-            patcher = mock.patch.object(config, attr, value)
-            patcher.start()
-            self.addCleanup(patcher.stop)
-        store.create_schema(store.db())
-        self.conn = store.db()
 
     def _insert(self, run_stamp, verdict, created_at, main_sha="sha"):
         store.insert_canary_run(
@@ -1295,16 +1290,12 @@ class RunOneTaskVerdictUsesNormalOutcomeTest(unittest.TestCase):
                 self.assertEqual(verdict, expected)
 
 
-class MergesSinceLastGreenRunTest(RealGitSandbox):
+class MergesSinceLastGreenRunTest(ConnRealGitSandbox):
     """`canary.merges_since_last_green_run` (tasks/
     01M1NGFK3N6MRMYGCC09H975V3, ANSWER-1 п.3) — общая арифметика
     возраста guard'а AC-1/AC-3/AC-4. Реальный git: сама история мержей —
     предмет проверки, заглушкой не изобразить (тот же приём, что
     `CommitsBehindTest` в tests/test_gitcmd_branch_reads.py)."""
-
-    def setUp(self):
-        super().setUp()
-        self.conn = store.db()
 
     def _merge(self, name: str) -> str:
         self.checkout(name, create=True)

@@ -130,9 +130,6 @@ class _AnalystRoleTmpRootTest(TmpRootTest):
     настоящий `templates/SPEC.md`, только уже из песочницы.
     """
 
-    PATCHED_ATTRS = ("DB", "TASKS", "LOGS", "PROJECTS", "ROLE_HOME",
-                     "ROLE_CONFIG_DIR", "WORKTREES", "ROOT")
-
     def setUp(self):
         super().setUp()
         shutil.copytree(REPO_ROOT / "templates", self.root / "templates")

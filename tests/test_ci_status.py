@@ -25,13 +25,20 @@ def run(name: str, status: str = "completed", conclusion: str = "success") -> di
     return {"name": name, "status": status, "conclusion": conclusion}
 
 
-class BranchStatusTest(unittest.TestCase):
-    """Решение о зелёности: и по составу проверок, и по способности спросить."""
+class _HeadShaPatchedTest(unittest.TestCase):
+    """`ci.head_sha` подменён фиксированным `SHA` — общий предок трёх
+    классов ниже (SPEC 01M2DC6SQVSANMECXPDZJDP75D, R8: их `setUp` были
+    байт-в-байт одинаковы; `SHA` — локальная константа этого файла,
+    поэтому общий класс живёт здесь, не в tests/sandbox.py)."""
 
     def setUp(self):
         patcher = mock.patch.object(ci, "head_sha", lambda branch: (SHA, ""))
         patcher.start()
         self.addCleanup(patcher.stop)
+
+
+class BranchStatusTest(_HeadShaPatchedTest):
+    """Решение о зелёности: и по составу проверок, и по способности спросить."""
 
     def answer(self, stdout: str, returncode: int = 0) -> None:
         patcher = mock.patch.object(
@@ -349,17 +356,12 @@ class RunListTest(unittest.TestCase):
         self.assertIn(str(config.CI_RUN_LIST_LIMIT), asked[0])
 
 
-class VerifyingStatusTest(unittest.TestCase):
+class VerifyingStatusTest(_HeadShaPatchedTest):
     """`ci.verifying_status` — четыре исхода `verifying` (SPEC T079,
     требование 5, AC-5..AC-8): собственная развилка функции, `check_runs`/
     `run_list` подменены — их отдельные правила разбора уже проверены
     выше/в `RunListTest`, здесь проверяется только то, как их результат
     сводится к одному из четырёх исходов."""
-
-    def setUp(self):
-        patcher = mock.patch.object(ci, "head_sha", lambda branch: (SHA, ""))
-        patcher.start()
-        self.addCleanup(patcher.stop)
 
     def set_check_runs(self, runs, why: str = "") -> None:
         patcher = mock.patch.object(ci, "check_runs", lambda sha: (runs, why))
@@ -475,18 +477,13 @@ class CommitNotFoundInOriginTest(unittest.TestCase):
             "gh не ответил: gh молчал дольше 10 с"))
 
 
-class VerifyingStatus422Test(unittest.TestCase):
+class VerifyingStatus422Test(_HeadShaPatchedTest):
     """`ci.verifying_status` различает HTTP 422 («коммит не найден») от
     прочих сбоев опроса CI (SPEC 01M1GS5HZ1JXFGKVR95HEW0AEZ, требование 4,
     AC-6): вместо нейтрального «статус неизвестен» — именованная причина
     «голова не в origin» с подсказкой push, и без бесполезного фолбэка на
     `gh run list` (коммита на GitHub нет вовсе — прогон с ним не свяжется).
     """
-
-    def setUp(self):
-        patcher = mock.patch.object(ci, "head_sha", lambda branch: (SHA, ""))
-        patcher.start()
-        self.addCleanup(patcher.stop)
 
     def set_check_runs(self, runs, why: str = "") -> None:
         patcher = mock.patch.object(ci, "check_runs", lambda sha: (runs, why))

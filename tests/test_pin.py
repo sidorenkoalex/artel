@@ -23,18 +23,15 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from orchestrator import config, gitcmd, pin, store  # noqa: E402
-from tests.sandbox import RealGitSandbox  # noqa: E402
+from tests.sandbox import (ConnRealGitSandbox, RealGitSandbox,  # noqa: E402
+                           SyncedOriginConnSandbox)
 
 
-class PinUpdateGateOrderTest(RealGitSandbox):
+class PinUpdateGateOrderTest(ConnRealGitSandbox):
     """AC-1 (ANSWER-1 п.4): «отказ не трогает HEAD» — гейт стоит ПОСЛЕ
     `fetch` (fetch сам HEAD не двигает — только remote-tracking ref'ы),
     но ДО `merge`: сам факт, что `git merge` не вызывается вовсе, когда
     гейт отказывает, и HEAD остаётся прежним."""
-
-    def setUp(self):
-        super().setUp()
-        self.conn = store.db()
 
     def test_refusal_after_fetch_never_calls_merge(self):
         """Ловит мутацию: гейт передвинут ПОСЛЕ `merge` (или убран
@@ -59,15 +56,10 @@ class PinUpdateGateOrderTest(RealGitSandbox):
                          "отказ не должен двигать HEAD")
 
 
-class PinUpdateRefusalMessageTest(RealGitSandbox):
+class PinUpdateRefusalMessageTest(SyncedOriginConnSandbox):
     """SPEC 01M2B6K02YVJBWE1JDWP85EJH0, требование 2/AC-6: отказ
     `pin-update` называет sha и команду с `--sha <sha>` для его
     получения — не старую `canary --k 1` без привязки к целевому sha."""
-
-    def setUp(self):
-        super().setUp()
-        self.conn = store.db()
-        self.add_synced_origin()
 
     def test_refusal_names_sha_and_the_canary_command_with_sha_flag(self):
         """Ловит мутацию: текст отказа сохраняет старую команду `canary
@@ -150,14 +142,10 @@ class PinUpdateGateAfterFetchTest(RealGitSandbox):
         self.assertEqual(self.git("rev-parse", "HEAD").strip(), new_sha)
 
 
-class PinToResetFailureTest(RealGitSandbox):
+class PinToResetFailureTest(ConnRealGitSandbox):
     """`pin.cmd_pin_to` — отказ самого `git reset --hard` (край, не
     покрытый приёмочными тестами: там reset всегда успешен) журналируется
     тем же действием «pin откат отклонён», что и прочие отказы (AC-7)."""
-
-    def setUp(self):
-        super().setUp()
-        self.conn = store.db()
 
     def test_reset_failure_is_journaled_as_a_refusal(self):
         """Ловит мутацию: отказ `git reset --hard` в `cmd_pin_to`

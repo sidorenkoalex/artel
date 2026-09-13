@@ -9,19 +9,12 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from orchestrator import artifact_branch, config, doctor, gitcmd, store  # noqa: E402
-from tests.sandbox import RealGitSandbox  # noqa: E402
+from tests.sandbox import GitignoreCommittedRealGitSandbox  # noqa: E402
 
-GITIGNORE_TEXT = "__pycache__/\n*.pyc\n*.log\ndropme/\n.artel/\n"
 PYC_REL = "acceptance_tests/__pycache__/x.cpython-311.pyc"
 
 
-class FixIgnoredArtifactFilesTest(RealGitSandbox):
-
-    def setUp(self):
-        super().setUp()
-        (self.root / ".gitignore").write_text(GITIGNORE_TEXT, encoding="utf-8")
-        self.git("add", ".gitignore")
-        self.git("commit", "-q", "-m", "gitignore")
+class FixIgnoredArtifactFilesTest(GitignoreCommittedRealGitSandbox):
 
     def seed_task(self, task_id: str, state: str, files: dict) -> None:
         store.insert_task(store.db(), task_id, f"Задача {task_id}", state,

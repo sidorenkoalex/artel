@@ -15,7 +15,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from orchestrator import catalog, config, store  # noqa: E402
-from tests.sandbox import TmpRootTest, capture  # noqa: E402
+from tests.sandbox import BudgetSeededTmpRootTest, capture  # noqa: E402
 
 OTHER_TARGET = "sled"
 
@@ -50,17 +50,8 @@ class WaveBreakerSuffixTest(unittest.TestCase):
         self.assertEqual(suffix, "")
 
 
-class CmdStatusWaveBreakerMarkTest(TmpRootTest):
+class CmdStatusWaveBreakerMarkTest(BudgetSeededTmpRootTest):
     """Smoke: пометка реально доходит до печатаемой строки `cmd_status`."""
-
-    TASK = "T001"
-
-    def setUp(self):
-        super().setUp()
-        capture(catalog.cmd_init)
-        store.insert_task(store.db(), self.TASK, "Задача", "in_dev",
-                          "task/t001-zadacha", config.DEFAULT_TARGET,
-                          config.DEFAULT_BUDGET_USD)
 
     def line_for(self, task_id: str, out: str) -> str:
         return next(line for line in out.splitlines()

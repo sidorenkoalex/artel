@@ -16,7 +16,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from orchestrator import alerts, auto, config, store  # noqa: E402
-from tests.sandbox import TmpRootTest  # noqa: E402
+from tests.sandbox import SchemaSeededTmpRootTest, SchemaTmpRootTest  # noqa: E402
 
 TASK = "T001"
 OTHER_TASK = "T002"
@@ -34,11 +34,7 @@ class AttentionKindTest(unittest.TestCase):
         self.assertIn("attention", alerts.KINDS)
 
 
-class RaiseAttentionAlertTest(TmpRootTest):
-
-    def setUp(self):
-        super().setUp()
-        store.create_schema(store.db())
+class RaiseAttentionAlertTest(SchemaTmpRootTest):
 
     def test_raises_an_open_alert_of_kind_attention_naming_the_task(self):
         """Первый вызов `raise_attention_alert` заводит открытый алерт
@@ -91,11 +87,7 @@ class RaiseAttentionAlertTest(TmpRootTest):
         self.assertEqual(len(store.open_alerts(store.db(), "attention")), 2)
 
 
-class CloseAttentionAlertsTest(TmpRootTest):
-
-    def setUp(self):
-        super().setUp()
-        store.create_schema(store.db())
+class CloseAttentionAlertsTest(SchemaTmpRootTest):
 
     def test_closes_open_attention_alerts_of_this_task(self):
         """Открытый алерт `attention` этой задачи закрывается вызовом
@@ -160,17 +152,11 @@ class CloseAttentionAlertsTest(TmpRootTest):
         self.assertEqual(store.open_alerts(store.db(), "attention"), [])
 
 
-class SetStateClosesAttentionAlertTest(TmpRootTest):
+class SetStateClosesAttentionAlertTest(SchemaSeededTmpRootTest):
     """Требование 4 (ANSWER-1, вопрос 1, вариант B): хук висит в
     `store.set_state`, единственной точке ЛЮБОГО перехода FSM — не
     привязан к тому, кто её вызвал (`auto`, ручной `advance`/`approve`/
     `reject`)."""
-
-    def setUp(self):
-        super().setUp()
-        store.create_schema(store.db())
-        store.insert_task(store.db(), TASK, "Задача", "in_dev",
-                          "task/t001-zadacha", config.DEFAULT_TARGET, 25.0)
 
     def test_a_transition_closes_the_open_attention_alert(self):
         """Успешный CAS-переход `set_state` закрывает открытый алерт

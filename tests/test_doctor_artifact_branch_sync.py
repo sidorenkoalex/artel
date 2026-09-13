@@ -8,19 +8,12 @@ import unittest
 from pathlib import Path
 
 from orchestrator import artifact_branch, doctor, gitcmd, store
-from tests.sandbox import RealGitSandbox
+from tests.sandbox import AutoOriginSandbox
 
 EXTERNAL_TARGET = "extproj"
 
 
-class ArtifactBranchSyncSandbox(RealGitSandbox):
-
-    def add_origin(self) -> str:
-        self.bare = tempfile.mkdtemp()
-        self.addCleanup(shutil.rmtree, self.bare, ignore_errors=True)
-        self.git("init", "-q", "--bare", self.bare)
-        self.git("remote", "add", "origin", self.bare)
-        return self.bare
+class ArtifactBranchSyncSandbox(AutoOriginSandbox):
 
     def new_task(self, task_id: str, state: str = "in_dev",
                 target: str = "artel") -> str:
@@ -63,10 +56,6 @@ class ArtifactBranchSyncSandbox(RealGitSandbox):
                        check=True)
         subprocess.run(["git", "-C", scratch, "push", "-q", "origin", branch],
                        check=True)
-
-    def setUp(self):
-        super().setUp()
-        self.add_origin()
 
     def checks(self):
         return doctor.check_artifact_branch_sync(store.db())
