@@ -156,6 +156,19 @@ schema_version: 1
 class _GitFixationTmpRootTest(TmpRootTest):
     """Песочница мультитаргета: пути `config` — во временном каталоге, git настоящий."""
 
+    # Значения совпадают с `sandbox.ALL_CONFIG_ATTRS` (SPEC
+    # 01M2DC6SQVSANMECXPDZJDP75D, AC-2) — литерал остаётся, не убирается
+    # переходом на наследование: `tests/test_invariants.py::
+    # SandboxPatchedAttrsCoverWorktreesInvariantTest.
+    # test_git_fixation_sandbox_also_patches_backup_marker` (AC-1 задачи
+    # 01M2CN465WEDCF6D77V37FJ82E, защищённый файл, не трогается) сверяет
+    # AST-узел `PATCHED_ATTRS = (...)` именно на этом классе по имени —
+    # переход на инерцию `TmpRootTest.PATCHED_ATTRS` убирает узел
+    # присваивания и красит этот инвариант.
+    PATCHED_ATTRS = ("ROOT", "DB", "TASKS", "LOGS", "PROJECTS",
+                     "ROLE_HOME", "ROLE_CONFIG_DIR", "TARGETS",
+                     "WORKTREES", "BACKUP_MARKER")
+
     def setUp(self):
         super().setUp()
         # Весь этот файл проверяет НАСТОЯЩИЙ git (см. докстринг модуля) —

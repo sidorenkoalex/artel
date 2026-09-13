@@ -805,7 +805,20 @@ class SchemaTmpRootTest(TmpRootTest):
         store.create_schema(store.db())
 
 
-class SchemaConnTmpRootTest(SchemaTmpRootTest):
+class _ConnSetupMixin:
+    """`self.conn = store.db()` после `super().setUp()` (SPEC
+    01M2DC6SQVSANMECXPDZJDP75D, R8): то же самое тело `setUp` нужно и
+    `SchemaConnTmpRootTest` (цепочка без git), и `ConnRealGitSandbox`
+    (цепочка с настоящим git) — двум РАЗНЫМ родословным `TmpRootTest`, не
+    только его прямым потомкам; кооперативный `super()` в примеси
+    подставляет нужного родителя каждого потомка через MRO."""
+
+    def setUp(self):
+        super().setUp()
+        self.conn = store.db()
+
+
+class SchemaConnTmpRootTest(_ConnSetupMixin, SchemaTmpRootTest):
     """`SchemaTmpRootTest` + соединение `self.conn` (SPEC
     01M2DC6SQVSANMECXPDZJDP75D, R8): тело `setUp` байт-в-байт повторялось
     в 5 классах (`tests/test_auto_escalated_return_rework_gate.py`,
@@ -813,10 +826,6 @@ class SchemaConnTmpRootTest(SchemaTmpRootTest):
     `tests/test_fsm_review_rework_sha_gate.py`,
     `tests/test_program_spend_reseed.py`,
     `tests/test_spent_estimate_store.py`)."""
-
-    def setUp(self):
-        super().setUp()
-        self.conn = store.db()
 
 
 class SchemaSeededTmpRootTest(TmpRootTest):
@@ -954,15 +963,13 @@ class RealGitSandbox(TmpRootTest):
         return origin
 
 
-class ConnRealGitSandbox(RealGitSandbox):
+class ConnRealGitSandbox(_ConnSetupMixin, RealGitSandbox):
     """`RealGitSandbox` + соединение `self.conn` (SPEC
     01M2DC6SQVSANMECXPDZJDP75D, R8): тело `setUp` байт-в-байт повторялось
     в `tests/test_canary.py::MergesSinceLastGreenRunTest`,
-    `tests/test_dry_run.py`, `tests/test_pin.py` (×2)."""
-
-    def setUp(self):
-        super().setUp()
-        self.conn = store.db()
+    `tests/test_dry_run.py`, `tests/test_pin.py` (×2) — общее тело с
+    `SchemaConnTmpRootTest` вынесено в `_ConnSetupMixin` выше (не
+    прямой предок, но то же самое тело `setUp`)."""
 
 
 class SyncedOriginConnSandbox(RealGitSandbox):
