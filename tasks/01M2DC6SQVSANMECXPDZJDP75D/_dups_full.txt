@@ -1,0 +1,250 @@
+=== group 1: 13 occ, 5 lines ===
+  tests/test_detached_cycle.py:96 LaunchDetachedTest
+  tests/test_detached_cycle.py:214 CmdStopTest
+  tests/test_detached_cycle.py:305 LeaseForceTest
+  tests/test_detached_cycle.py:474 WaitZoneFlagHotfix22Test
+  tests/test_doctor.py:1539 LeaseFailDetailAndReconciliationTest
+  tests/test_lease.py:64 AcquireReleaseTest
+  tests/test_lease.py:194 OwnSessionLiveOtherPidTest
+  tests/test_lease.py:323 AcquireJournalCauseTest
+  tests/test_lease.py:416 ReleaseAnyTest
+  tests/test_lease.py:456 RunLockedTest
+  tests/test_lease.py:541 ForeignLiveLeaseTest
+  tests/test_parallel_limit.py:42 ParallelLimitTest
+  tests/test_zone_lock.py:24 ZoneLockTest
+--- body ---
+def setUp(self):
+        super().setUp()
+        capture(catalog.cmd_init)
+        store.insert_task(store.db(), self.TASK, "Задача", "in_dev",
+                          "task/t001-zadacha", config.DEFAULT_TARGET, 25.0)
+
+=== group 2: 8 occ, 3 lines ===
+  tests/test_alerts_wave_breaker.py:29 WaveBreakerTestBase
+  tests/test_diff_not_collected_alerts.py:36 RaiseDiffNotCollectedAlertTest
+  tests/test_diff_not_collected_alerts.py:78 CloseDiffNotCollectedAlertsTest
+  tests/test_doctor_wave_breaker.py:25 DoctorWaveBreakerFirstLineTest
+  tests/test_notes.py:196 CmdNoteArgumentValidationTest
+  tests/test_runner_wave_breaker.py:26 WaveBreakerAlertsOpenTest
+  tests/test_stall_alerts.py:39 RaiseAttentionAlertTest
+  tests/test_stall_alerts.py:96 CloseAttentionAlertsTest
+--- body ---
+def setUp(self):
+        super().setUp()
+        store.create_schema(store.db())
+
+=== group 3: 5 occ, 4 lines ===
+  tests/test_auto_escalated_return_rework_gate.py:26 RoleStepSinceStateEntryTest
+  tests/test_fsm_review_rework_gate.py:43 ReviewerVerdictBaselineTest
+  tests/test_fsm_review_rework_sha_gate.py:26 CodeShaAtReviewEscalationTest
+  tests/test_program_spend_reseed.py:20 ProgramSpendReseedTest
+  tests/test_spent_estimate_store.py:68 TotalEstimateTest
+--- body ---
+def setUp(self):
+        super().setUp()
+        store.create_schema(store.db())
+        self.conn = store.db()
+
+=== group 4: 5 occ, 3 lines ===
+  tests/test_doctor.py:1909 BranchFreshnessCheckTest
+  tests/test_doctor.py:1972 TaskCounterCheckTest
+  tests/test_prune.py:88 PruneCanaryDiagCandidatesTest
+  tests/test_prune.py:142 PruneAlertArchiveStoreTest
+  tests/test_prune.py:188 PruneReportEmptyStateTest
+--- body ---
+def setUp(self):
+        super().setUp()
+        capture(catalog.cmd_init)
+
+=== group 5: 4 occ, 4 lines ===
+  tests/test_acceptance_collect.py:45 CollectTest
+  tests/test_acceptance_tests_flow.py:328 ScanAcceptanceTestsTest
+  tests/test_acceptance_tests_flow.py:641 ScanRednessMarkersTest
+  tests/test_id_format_guard.py:166 ScanIdFormatSamplesTest
+--- body ---
+def setUp(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.tdir = Path(tmp.name)
+
+=== group 6: 4 occ, 3 lines ===
+  tests/test_canary.py:1305 MergesSinceLastGreenRunTest
+  tests/test_dry_run.py:66 DryRunSandboxTest
+  tests/test_pin.py:35 PinUpdateGateOrderTest
+  tests/test_pin.py:158 PinToResetFailureTest
+--- body ---
+def setUp(self):
+        super().setUp()
+        self.conn = store.db()
+
+=== group 7: 3 occ, 5 lines ===
+  tests/test_agent_failure.py:47 _AgentFailureTmpRootTest
+  tests/test_agent_log.py:84 _AgentLogTmpRootTest
+  tests/test_step_cost.py:73 _StepCostTmpRootTest
+--- body ---
+def setUp(self):
+        super().setUp()
+        shutil.copytree(REPO_ROOT / "templates", self.root / "templates")
+        shutil.copytree(REPO_ROOT / "skills", self.root / "skills")
+        seed_developer_brief_fixtures(self.root)
+
+=== group 8: 3 occ, 5 lines ===
+  tests/test_catalog_status_log.py:22 CmdLogSessionIdTest
+  tests/test_catalog_status_log.py:59 CmdStatusLeaseHolderTest
+  tests/test_store_journal.py:20 JournalSessionIdTest
+--- body ---
+def setUp(self):
+        super().setUp()
+        capture(catalog.cmd_init)
+        store.insert_task(store.db(), TASK, "Задача", "in_dev",
+                          "task/t001-zadacha", config.DEFAULT_TARGET, 25.0)
+
+=== group 9: 3 occ, 6 lines ===
+  tests/test_catalog_wave_breaker_status.py:58 CmdStatusWaveBreakerMarkTest
+  tests/test_pause.py:26 PauseTest
+  tests/test_release.py:30 ReleaseTest
+--- body ---
+def setUp(self):
+        super().setUp()
+        capture(catalog.cmd_init)
+        store.insert_task(store.db(), self.TASK, "Задача", "in_dev",
+                          "task/t001-zadacha", config.DEFAULT_TARGET,
+                          config.DEFAULT_BUDGET_USD)
+
+=== group 10: 3 occ, 4 lines ===
+  tests/test_ci_status.py:31 BranchStatusTest
+  tests/test_ci_status.py:359 VerifyingStatusTest
+  tests/test_ci_status.py:486 VerifyingStatus422Test
+--- body ---
+def setUp(self):
+        patcher = mock.patch.object(ci, "head_sha", lambda branch: (SHA, ""))
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+=== group 11: 2 occ, 6 lines ===
+  tests/test_acceptance_tests_flow.py:364 AcceptanceTraceabilityFunctionTest
+  tests/test_acceptance_tests_flow.py:443 IndentedAcMarkerTest
+--- body ---
+def setUp(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.tdir = Path(tmp.name)
+        (self.tdir / "SPEC.md").write_text(
+            SPEC_V2.format(task="T999", extra=""), encoding="utf-8")
+
+=== group 12: 2 occ, 6 lines ===
+  tests/test_answer_branch_reads.py:90 AnswerFileCountOnForeignBranchTest
+  tests/test_answer_branch_reads.py:135 BriefAnswerComponentsOnForeignBranchTest
+--- body ---
+def setUp(self):
+        super().setUp()
+        self.conn = store.db()
+        store.create_schema(self.conn)
+        store.insert_task(self.conn, self.TASK, "Задача", "spec_writing",
+                          self.branch, config.DEFAULT_TARGET, 25.0)
+
+=== group 13: 2 occ, 3 lines ===
+  tests/test_artifact_branch_push.py:101 PushSuccessTest
+  tests/test_doctor_artifact_branch_sync.py:67 ArtifactBranchSyncSandbox
+--- body ---
+def setUp(self):
+        super().setUp()
+        self.add_origin()
+
+=== group 14: 2 occ, 5 lines ===
+  tests/test_budget_live_lease_and_escalation.py:40 AcquireSameHostOkTest
+  tests/test_budget_live_lease_and_escalation.py:105 IsLiveTest
+--- body ---
+def setUp(self):
+        super().setUp()
+        store.create_schema(store.db())
+        store.insert_task(store.db(), self.TASK, "Задача", "in_dev",
+                          "task/t001-zadacha", config.DEFAULT_TARGET, 25.0)
+
+=== group 15: 2 occ, 11 lines ===
+  tests/test_canary.py:369 CanaryBaselineStoreRoundtripTest
+  tests/test_canary.py:430 GreenCanaryRunsTest
+--- body ---
+def setUp(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.root = Path(tmp.name)
+        for attr, value in (("ROOT", self.root),
+                            ("DB", self.root / ".artel" / "state.db")):
+            patcher = mock.patch.object(config, attr, value)
+            patcher.start()
+            self.addCleanup(patcher.stop)
+        store.create_schema(store.db())
+        self.conn = store.db()
+
+=== group 16: 2 occ, 5 lines ===
+  tests/test_cas_set_state.py:23 SetStateCasTest
+  tests/test_stall_alerts.py:169 SetStateClosesAttentionAlertTest
+--- body ---
+def setUp(self):
+        super().setUp()
+        store.create_schema(store.db())
+        store.insert_task(store.db(), TASK, "Задача", "in_dev",
+                          "task/t001-zadacha", config.DEFAULT_TARGET, 25.0)
+
+=== group 17: 2 occ, 4 lines ===
+  tests/test_doctor.py:661 CanaryTriggerCheckTest
+  tests/test_pin.py:67 PinUpdateRefusalMessageTest
+--- body ---
+def setUp(self):
+        super().setUp()
+        self.conn = store.db()
+        self.add_synced_origin()
+
+=== group 18: 2 occ, 7 lines ===
+  tests/test_doctor.py:1404 LeasesCheckTest
+  tests/test_doctor.py:1718 MergeLockCheckTest
+--- body ---
+def setUp(self):
+        super().setUp()
+        capture(catalog.cmd_init)
+        for task_id in ("T001", "T002"):
+            store.insert_task(store.db(), task_id, "Задача", "in_dev",
+                              f"task/{task_id.lower()}-zadacha",
+                              config.DEFAULT_TARGET, 25.0)
+
+=== group 19: 2 occ, 5 lines ===
+  tests/test_doctor_fix_ignored_artifacts.py:20 FixIgnoredArtifactFilesTest
+  tests/test_gitcmd_check_ignore.py:22 CheckIgnoreTest
+--- body ---
+def setUp(self):
+        super().setUp()
+        (self.root / ".gitignore").write_text(GITIGNORE_TEXT, encoding="utf-8")
+        self.git("add", ".gitignore")
+        self.git("commit", "-q", "-m", "gitignore")
+
+=== group 20: 2 occ, 4 lines ===
+  tests/test_guard_schema.py:42 SchemaVersionTest
+  tests/test_yaml_parsing.py:144 ArtifactsReadTest
+--- body ---
+def setUp(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.path = Path(tmp.name) / "PLAN.md"
+
+=== group 21: 2 occ, 5 lines ===
+  tests/test_mutation_claim_gate.py:24 MutationClaimGateGitFailureTest
+  tests/test_protected_paths_gate.py:87 ZonesGateProtectedPathPriorityTest
+--- body ---
+def setUp(self):
+        super().setUp()
+        store.create_schema(store.db())
+        self.conn = store.db()
+        self.task_id = "T001"
+
+=== group 22: 2 occ, 6 lines ===
+  tests/test_mutation_claim_gate.py:95 MutationClaimGateFileSelectionTest
+  tests/test_mutation_claim_gate.py:242 MutationClaimGateRefusalContentTest
+--- body ---
+def setUp(self):
+        super().setUp()
+        store.create_schema(store.db())
+        self.conn = store.db()
+        self.task_id = "T001"
+        self.t = _task_row()
+

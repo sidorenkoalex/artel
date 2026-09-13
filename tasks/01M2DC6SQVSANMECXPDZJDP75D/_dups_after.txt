@@ -1,0 +1,38 @@
+=== setUp duplicate groups (>=2 files/classes) ===
+
+=== helper function duplicate groups (same name, same body, >=2 files) ===
+--- helper: assistant_event (2 defs across 2 files) ---
+  [diff body]
+    tests/test_agent_log.py:36
+  [diff body]
+    tests/test_step_cost.py:37
+--- helper: result_event (3 defs across 3 files) ---
+  [diff body]
+    tests/test_doctor.py:114
+  [diff body]
+    tests/test_multitarget.py:61
+  [diff body]
+    tests/test_step_cost.py:31
+--- helper: _run (2 defs across 2 files) ---
+  [diff body]
+    tests/test_fsm_merge_gate_scratch_worktree_cleanup.py:27
+  [diff body]
+    tests/test_gitcmd_fetch_ref_sha.py:34
+--- helper: spec_text (2 defs across 2 files) ---
+  [diff body]
+    tests/test_guard_division_section.py:62
+  [diff body]
+    tests/test_guard_split_signals.py:57
+--- helper: _row (2 defs across 2 files) ---
+  [diff body]
+    tests/test_kill_live_cycle_refusal.py:27
+  [diff body]
+    tests/test_report.py:20
+--- helper: fake_git_config (2 defs across 2 files) ---
+  [diff body]
+    tests/test_multitarget.py:74
+  [diff body]
+    tests/test_multitarget_invariants.py:65
+
+=== PATCHED_ATTRS occurrences ===
+tests/test_doctor.py:2395 class _RoleHomeReferenceTmpRootTest: PATCHED_ATTRS = ("ROLE_HOME", "ROLE_CONFIG_DIR")
