@@ -95,7 +95,7 @@ def cmd_doctor(restore: bool = False, fix: bool = False) -> None:
         print("Recovery-сверка после восстановления .artel/ из бэкапа:")
         # SPEC 01M1NSR5M5THYRC0RFWPMVE2DW, требование 3/AC-6: тот же
         # вход восстановления пула, что `catalog.cmd_init()`.
-        pool_restore_msg = doctor.canary.restore_pool_if_missing(conn)
+        pool_restore_msg = doctor.pool_seal.restore_pool_if_missing(conn)
         if pool_restore_msg:
             print(pool_restore_msg)
     orphans = doctor._orphan_artifact_branches(conn)

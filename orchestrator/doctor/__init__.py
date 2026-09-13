@@ -52,9 +52,9 @@ subprocess-вызовов», см. `preflight_checks`).
 пакета — один раздел (граница комментария-разделителя) на файл, тело
 функций не переписано, только перенесено. Этот файл (фасад) — ЕДИНСТВЕННОЕ
 место, где коллаборанты (`alerts`, `artifact_branch`, `canary`, `ci`,
-`coldstart`, `config`, `fixation`, `gitcmd`, `liveness`, `projects`,
-`roles`, `runner`, `snapshot`, `spend`, `stack`, `store`, `targets`,
-`workspace`, `zone_lock`, `subprocess`, `shutil`) импортируются напрямую — подмодули
+`coldstart`, `config`, `fixation`, `gitcmd`, `liveness`, `pool_seal`,
+`projects`, `roles`, `runner`, `snapshot`, `spend`, `stack`, `store`,
+`targets`, `workspace`, `zone_lock`, `subprocess`, `shutil`) импортируются напрямую — подмодули
 их не импортируют (AC-9: сканирующий тест красит любой прямой
 `import subprocess`/`import shutil`/`from orchestrator import gitcmd` в
 подмодуле). Единый приём на весь пакет (AC-4): каждый подмодуль делает
@@ -94,9 +94,9 @@ from collections import namedtuple
 from pathlib import Path
 
 from .. import (alerts, artifact_branch, canary, ci, coldstart, config,
-                fixation, gitcmd, liveness, merge_lock, notes, projects,
-                repo_context, roles, runner, snapshot, spend, stack, store,
-                targets, workspace, zone_lock)
+                fixation, gitcmd, liveness, merge_lock, notes, pool_seal,
+                projects, repo_context, roles, runner, snapshot, spend,
+                stack, store, targets, workspace, zone_lock)
 
 # status: "ok" | "warn" | "fail" | "skip" ("skip" — честный пропуск проверки,
 # требование 9: сверка forge-политики без `gh`/сети — не провал и не ок).

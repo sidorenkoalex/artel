@@ -21,7 +21,7 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from orchestrator import (artifact_branch, canary, catalog, config,  # noqa: E402
-                          retro, store)
+                          pool_seal, retro, store)
 from tests.sandbox import RealGitSandbox, capture  # noqa: E402
 
 
@@ -1509,7 +1509,7 @@ class PoolSerializationRoundtripTest(unittest.TestCase):
         (root / "b.md").write_bytes(b"")
         files = sorted(root.iterdir())
 
-        restored = canary._deserialize_pool(canary._serialize_pool(files))
+        restored = pool_seal._deserialize_pool(pool_seal._serialize_pool(files))
 
         self.assertEqual(set(restored), {"a.md", "b.md"})
         self.assertEqual(restored["a.md"], (root / "a.md").read_bytes())
@@ -1520,8 +1520,8 @@ class PoolSerializationRoundtripTest(unittest.TestCase):
         для пустого списка файлов — `_serialize_pool([])` перестал бы
         быть пустой строкой байт, и `_deserialize_pool(b"")` либо упал
         бы, либо вернул неверную форму словаря."""
-        self.assertEqual(canary._serialize_pool([]), b"")
-        self.assertEqual(canary._deserialize_pool(b""), {})
+        self.assertEqual(pool_seal._serialize_pool([]), b"")
+        self.assertEqual(pool_seal._deserialize_pool(b""), {})
 
 
 class MacKeyTest(unittest.TestCase):
@@ -1535,19 +1535,19 @@ class MacKeyTest(unittest.TestCase):
         (`os.urandom`/временную метку) — два вызова на тот же ключ
         пула разошлись бы, и `_authorized_pool_payload` не смог бы
         воспроизвести тег при восстановлении, посчитанный при seal."""
-        self.assertEqual(canary._mac_key("key-A"), canary._mac_key("key-A"))
+        self.assertEqual(pool_seal._mac_key("key-A"), pool_seal._mac_key("key-A"))
 
     def test_different_input_gives_different_mac_key(self):
         """Ловит мутацию: `_mac_key` игнорирует аргумент и возвращает
         константу (заглушка вместо реального вывода) — разные ключи
         пула дали бы один и тот же MAC-ключ."""
-        self.assertNotEqual(canary._mac_key("key-A"), canary._mac_key("key-B"))
+        self.assertNotEqual(pool_seal._mac_key("key-A"), pool_seal._mac_key("key-B"))
 
     def test_mac_key_is_not_the_pool_key_itself(self):
         """Ловит мутацию: `_mac_key` возвращает ключ пула без вывода
         (забытый `hashlib.sha256(...)`) — тег и шифрование делили бы
         один материал вопреки разделению ключей ANSWER-1 п.1."""
-        self.assertNotEqual(canary._mac_key("key-A"), "key-A")
+        self.assertNotEqual(pool_seal._mac_key("key-A"), "key-A")
 
 
 class AuthorizedPoolPayloadRoleEnvTest(unittest.TestCase):
@@ -1562,10 +1562,10 @@ class AuthorizedPoolPayloadRoleEnvTest(unittest.TestCase):
         `token_mock` был бы вызван раньше отказа, требование 5/AC-15
         («второй, независимый от permissions.deny рубеж») перестало бы
         держаться этой единой точкой входа."""
-        with mock.patch.object(canary.runner, "in_role_environment",
+        with mock.patch.object(pool_seal.runner, "in_role_environment",
                                return_value=True):
-            with mock.patch.object(canary.keychain, "token") as token_mock:
-                payload, refusal = canary._authorized_pool_payload()
+            with mock.patch.object(pool_seal.keychain, "token") as token_mock:
+                payload, refusal = pool_seal._authorized_pool_payload()
 
         self.assertIsNone(payload)
         self.assertIn("role_env", refusal)
@@ -1584,9 +1584,9 @@ class RestorePoolIfMissingNoOpTest(unittest.TestCase):
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
         existing = Path(tmp.name)
-        with mock.patch.object(canary, "_pool_dir", return_value=existing):
-            with mock.patch.object(canary.keychain, "token") as token_mock:
-                result = canary.restore_pool_if_missing(conn=None)
+        with mock.patch.object(pool_seal, "_pool_dir", return_value=existing):
+            with mock.patch.object(pool_seal.keychain, "token") as token_mock:
+                result = pool_seal.restore_pool_if_missing(conn=None)
 
         self.assertIsNone(result)
         token_mock.assert_not_called()
@@ -1615,9 +1615,9 @@ class OpensslSecretPassingTest(unittest.TestCase):
         вызова находит его; отсутствие `pass_fds` в kwargs тоже ловится
         (без него дескриптор не переживает `exec`)."""
         calls = []
-        with mock.patch.object(canary.subprocess, "run",
+        with mock.patch.object(pool_seal.subprocess, "run",
                                side_effect=self._spy(calls)):
-            canary._openssl_encrypt(b"payload", self.KEY)
+            pool_seal._openssl_encrypt(b"payload", self.KEY)
 
         self.assertTrue(calls)
         cmd, kw = calls[0]
@@ -1631,9 +1631,9 @@ class OpensslSecretPassingTest(unittest.TestCase):
         """Ловит мутацию: то же самое для расшифровки — регресс к
         `-pass pass:{key}` в `_openssl_decrypt`."""
         calls = []
-        with mock.patch.object(canary.subprocess, "run",
+        with mock.patch.object(pool_seal.subprocess, "run",
                                side_effect=self._spy(calls)):
-            canary._openssl_decrypt(b"ciphertext-stub", self.KEY)
+            pool_seal._openssl_decrypt(b"ciphertext-stub", self.KEY)
 
         self.assertTrue(calls)
         cmd, kw = calls[0]

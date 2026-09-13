@@ -468,9 +468,9 @@ _ensure_supported_interpreter()
 
 from orchestrator import (amend, answer, auto, budget, canary, catalog,  # noqa: E402
                           cleanup, doctor, dry_run, fsm, lease, liveness,
-                          notes, pause, pin, projects, prune, release,
-                          report, runner, store, venv, version, watch,
-                          workspace, zone_lock)
+                          notes, pause, pin, pool_seal, projects, prune,
+                          release, report, runner, store, venv, version,
+                          watch, workspace, zone_lock)
 
 
 # Отвязка `run`/`auto` от процесса сессии Оператора (SPEC
@@ -702,7 +702,7 @@ def _cmd_canary(rest: list) -> None:
     — отдельная подкоманда семейства `canary`, разбирается ДО `--k`:
     `pool-seal` не берёт `--k` и не заводит прогон."""
     if rest and rest[0] == "pool-seal":
-        canary.cmd_pool_seal()
+        pool_seal.cmd_pool_seal()
         return
     canary.cmd_canary(k=_k_arg(rest), sha=_sha_arg(rest))
 

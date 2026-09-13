@@ -85,7 +85,7 @@ class CmdCanaryDispatchTest(unittest.TestCase):
         (например, пытается распарсить `--k` из отсутствующих
         аргументов) вместо прямого вызова `cmd_pool_seal` — либо
         `cmd_canary` был бы вызван вместо/вместе с `cmd_pool_seal`."""
-        with mock.patch.object(artel.canary, "cmd_pool_seal") as seal_mock:
+        with mock.patch.object(artel.pool_seal, "cmd_pool_seal") as seal_mock:
             with mock.patch.object(artel.canary, "cmd_canary") as run_mock:
                 artel._cmd_canary(["pool-seal"])
         seal_mock.assert_called_once_with()
@@ -96,7 +96,7 @@ class CmdCanaryDispatchTest(unittest.TestCase):
         `cmd_pool_seal` (регресс существовавшего до этой задачи
         поведения `canary --k N`) — `run_mock` не получил бы вызова с
         разобранным `k=3`."""
-        with mock.patch.object(artel.canary, "cmd_pool_seal") as seal_mock:
+        with mock.patch.object(artel.pool_seal, "cmd_pool_seal") as seal_mock:
             with mock.patch.object(artel.canary, "cmd_canary") as run_mock:
                 artel._cmd_canary(["--k", "3"])
         run_mock.assert_called_once_with(k=3, sha=None)

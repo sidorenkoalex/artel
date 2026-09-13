@@ -58,7 +58,7 @@ def check_canary_pool_drift() -> doctor.Check:
     """AC-8 (SPEC 01M1NSR5M5THYRC0RFWPMVE2DW, требование 3): предупреждает,
     если открытый пул `~/.artel-canary` разошёлся с запечатанным
     `canary/pool.sealed` — незапечатанные правки Оператора."""
-    warning = doctor.canary.pool_drift_warning()
+    warning = doctor.pool_seal.pool_drift_warning()
     if warning is None:
         return doctor.Check("canary-pool-drift", "ok",
                      "открытый пул канарейки не расходится с запечатанным "

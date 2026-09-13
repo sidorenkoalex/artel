@@ -43,11 +43,12 @@ def cmd_init() -> None:
     store.seed_task_counters(conn)
     _deploy_role_home_reference()
     budget.reseed_program_spend(conn)
-    # Ленивый импорт — `canary.py` сам импортирует `catalog` (SPEC
-    # 01M1NSR5M5THYRC0RFWPMVE2DW, требование 3): импорт на уровне модуля
-    # дал бы цикл.
-    from . import canary
-    restore_msg = canary.restore_pool_if_missing(conn)
+    # Ленивый импорт — `pool_seal.py` перенял эту функцию у `canary.py`
+    # (SPEC 01M2CN42RV0EBBP7HS4HP2VNY1); `canary.py` по-прежнему сам
+    # импортирует `catalog` на уровне модуля (SPEC 01M1NSR5M5THYRC0RFWPMVE2DW,
+    # требование 3) — та же лень оставлена и для нового источника.
+    from . import pool_seal
+    restore_msg = pool_seal.restore_pool_if_missing(conn)
     if restore_msg:
         print(restore_msg)
     print(f"OK: состояние в {config.DB}")
