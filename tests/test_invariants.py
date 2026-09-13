@@ -2113,3 +2113,125 @@ class CiJobsByPushClassInvariantTest(unittest.TestCase):
         self.assertNotEqual(text, planted)
         self.assertTrue(any("исключает 'artifact/'" in v for v in self.violations(planted)),
                         self.violations(planted))
+
+
+class SandboxPatchedAttrsCoverWorktreesInvariantTest(unittest.TestCase):
+    """Инвариант 37 (docs/invariants.md; SPEC 01M2CN465WEDCF6D77V37FJ82E):
+    класс `tests/*.py` с СОБСТВЕННЫМ `PATCHED_ATTRS` для
+    `tests.sandbox.TmpRootTest` патчит `config.WORKTREES`, либо явно
+    значится в `ALLOWLIST` ниже с обоснованием, почему запись по этому
+    пути для него недостижима (read-only сценарий или подмена самого
+    `workspace.ensure`, не пути).
+
+    Находка (docs/audits/code-revision-2026-09-13.md, повтор
+    CR-2026-09-12-1): `_GitFixationTmpRootTest`
+    (`tests/test_git_fixation.py`) задавал собственный `PATCHED_ATTRS`
+    без `WORKTREES` — файл делает настоящий `git worktree add`
+    (`network_guarded_real_run` вместо `SpyRun`), а `workspace.path`
+    (`orchestrator/workspace.py`) строит путь от `config.WORKTREES`,
+    вычисленного один раз при импорте: подмена `config.ROOT` в тесте его
+    не двигает. 54 осиротевших каталога `.artel/worktrees` за один
+    прогон `tests/` до фикса.
+
+    `config.BACKUP_MARKER` не входит в автоматический скан ниже: ни один
+    путь orchestrator-кода его не пишет (только читает —
+    `doctor/misc_checks.py::check_backup_age`), поэтому непропатченный
+    `BACKUP_MARKER` в ОБЩЕМ случае не создаёт риска записи. Для
+    `_GitFixationTmpRootTest` конкретно (AC-1 задачи
+    01M2CN465WEDCF6D77V37FJ82E) он всё равно возвращён в
+    `PATCHED_ATTRS` — восстановление полного набора, из которого класс
+    был сужен регрессией d692f2a6, не вывод из анализа записи; отдельный
+    тест ниже проверяет именно эту пару для этого класса.
+    """
+
+    # Каждая запись — обоснование, почему конкретный класс безопасен без
+    # WORKTREES в PATCHED_ATTRS.
+    ALLOWLIST = {
+        ("tests/test_doctor.py", "_RoleHomeReferenceTmpRootTest"):
+            "только doctor.check_role_home_reference() — read-only; "
+            "ROOT намеренно настоящий (читает docs/reference/role-home)",
+        ("tests/test_multitarget.py", "_MultitargetTmpRootTest"):
+            "runner.workspace.ensure подменён моком целиком, не путём — "
+            "механика worktree в сценариях класса не участвует",
+    }
+
+    REQUIRED = "WORKTREES"
+
+    @classmethod
+    def _classes_missing_required(cls, rel_path: str, source: str) -> list:
+        tree = ast.parse(source, filename=rel_path)
+        missing = []
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.ClassDef):
+                continue
+            for stmt in node.body:
+                if not (isinstance(stmt, ast.Assign)
+                        and len(stmt.targets) == 1
+                        and isinstance(stmt.targets[0], ast.Name)
+                        and stmt.targets[0].id == "PATCHED_ATTRS"):
+                    continue
+                if not isinstance(stmt.value, (ast.Tuple, ast.List)):
+                    continue
+                values = {elt.value for elt in stmt.value.elts
+                         if isinstance(elt, ast.Constant)
+                         and isinstance(elt.value, str)}
+                if cls.REQUIRED not in values:
+                    missing.append((rel_path, node.name))
+        return missing
+
+    def test_repo_tree_sandboxes_patch_worktrees_or_are_allowlisted(self):
+        """Ловит мутацию: новый/изменённый класс `tests/*.py` заводит
+        собственный `PATCHED_ATTRS` без `WORKTREES` и без записи в
+        `ALLOWLIST` — `assertEqual([], ...)` откажет списком таких
+        классов (тот самый класс дефекта, что увёл
+        `_GitFixationTmpRootTest` на 54 осиротевших каталога за прогон,
+        SPEC 01M2CN465WEDCF6D77V37FJ82E)."""
+        violations = []
+        for path in sorted((REPO_ROOT / "tests").glob("*.py")):
+            rel = str(path.relative_to(REPO_ROOT))
+            for item in self._classes_missing_required(
+                    rel, path.read_text(encoding="utf-8")):
+                if item not in self.ALLOWLIST:
+                    violations.append(item)
+        self.assertEqual(
+            [], violations,
+            f"классы с PATCHED_ATTRS без WORKTREES и без записи в "
+            f"ALLOWLIST: {violations}")
+
+    def test_git_fixation_sandbox_also_patches_backup_marker(self):
+        """AC-1: `_GitFixationTmpRootTest` — специально восстановленный
+        полный список (`WORKTREES` И `BACKUP_MARKER`), не только
+        `WORKTREES`, как остальные классы этого скана. Ловит мутацию:
+        правку, возвращающую сужение `PATCHED_ATTRS` этого класса без
+        `BACKUP_MARKER`."""
+        path = REPO_ROOT / "tests" / "test_git_fixation.py"
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        found = None
+        for node in ast.walk(tree):
+            if (isinstance(node, ast.ClassDef)
+                    and node.name == "_GitFixationTmpRootTest"):
+                for stmt in node.body:
+                    if (isinstance(stmt, ast.Assign)
+                            and len(stmt.targets) == 1
+                            and isinstance(stmt.targets[0], ast.Name)
+                            and stmt.targets[0].id == "PATCHED_ATTRS"):
+                        found = {elt.value for elt in stmt.value.elts
+                                if isinstance(elt, ast.Constant)}
+        self.assertIsNotNone(
+            found, "_GitFixationTmpRootTest.PATCHED_ATTRS не найден")
+        self.assertIn("WORKTREES", found)
+        self.assertIn("BACKUP_MARKER", found)
+
+    def test_planted_missing_worktrees_is_caught_on_synthetic_source(self):
+        """Ловит мутацию: сканер перестаёт замечать урезанный
+        `PATCHED_ATTRS` — синтетический дефектный класс обязан попасть в
+        список нарушителей, класс с `WORKTREES` — нет."""
+        dirty = ("class _Dirty(TmpRootTest):\n"
+                "    PATCHED_ATTRS = ('ROOT', 'DB', 'TASKS')\n")
+        clean = ("class _Clean(TmpRootTest):\n"
+                "    PATCHED_ATTRS = ('ROOT', 'DB', 'WORKTREES')\n")
+        self.assertEqual(
+            [("tests/synthetic.py", "_Dirty")],
+            self._classes_missing_required("tests/synthetic.py", dirty))
+        self.assertEqual(
+            [], self._classes_missing_required("tests/synthetic.py", clean))
