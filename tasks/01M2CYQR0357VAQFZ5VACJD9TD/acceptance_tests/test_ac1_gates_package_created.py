@@ -1,10 +1,17 @@
-"""Приёмочный тест AC-1 (tasks/01M2CYQR0357VAQFZ5VACJD9TD/SPEC.md): пакет
-`orchestrator/gates/` создан с файлами `__init__.py`, `_base.py`,
-`zones.py`, `capacity.py`, `review.py`, `acceptance.py`,
-`tests_writing.py`; функции/константы, перечисленные ДОСЛОВНО
-требованием 1 SPEC, физически перенесены в соответствующий файл (не
-переопределены заново — само определение, `__module__`, указывает на
-новый файл).
+"""Приёмочный тест AC-1 (tasks/01M2CYQR0357VAQFZ5VACJD9TD/SPEC.md, с
+поправкой ANSWER-1.md/ANSWER-2.md): пакет `orchestrator/advance_gates/`
+создан с файлами `__init__.py`, `_base.py`, `zones.py`, `capacity.py`,
+`review.py`, `acceptance.py`, `tests_writing.py`; функции/константы,
+перечисленные ДОСЛОВНО требованием 1 SPEC, физически перенесены в
+соответствующий файл (не переопределены заново — само определение,
+`__module__`, указывает на новый файл).
+
+Путь пакета — `orchestrator/advance_gates/`, не `orchestrator/gates/`:
+ANSWER-1.md (вопрос 1, вариант б) меняет требование 1 и AC-1 текстуально
+из-за коллизии имени с существующим `orchestrator/gates.py` (политика
+`gates.yaml`, ADR-0007/T066) — по существу критерий тот же, имя пакета
+другое. ANSWER-2.md подтверждает: `orchestrator/gates.py` и его тесты не
+трогаются, мандат на расширение зон дан этим же ответом.
 
 Требование 1 называет явно только часть переносимых имён по каждому
 файлу («и его прямые помощники», «их помощники дат/sha» — без
@@ -13,12 +20,10 @@
 этим префиксом), не изобретая проверку для неназванных помощников
 (test-authoring: «тест на то, что не написано в AC — такой же дефект»).
 
-Красен до реализации: `orchestrator/gates/` ещё не существует —
-`orchestrator.gates` сегодня резолвится в старый флэт-модуль
-`orchestrator/gates.py` (политика `gates.yaml`, ADR-0007/T066), у
-которого нет ни `__path__` (не пакет), ни атрибутов `_base`/`zones`/
-`capacity`/`review`/`acceptance`/`tests_writing` — первая же проверка
-`test_ac1_package_directory_with_required_files_exists` падает.
+Красен до реализации: `orchestrator/advance_gates/` ещё не существует
+(ни как пакет, ни как модуль) — первая же проверка
+`test_ac1_package_directory_with_required_files_exists` падает на
+отсутствующем каталоге.
 """
 import importlib
 import sys
@@ -52,39 +57,40 @@ _EXPECTED_LOCATION = {
 class GatesPackageCreatedTest(unittest.TestCase):
 
     def test_ac1_package_directory_with_required_files_exists(self):
-        """`orchestrator/gates/` — каталог-пакет на диске, несущий ровно
-        семь файлов, перечисленных требованием 1 (`__init__.py` плюс
-        шесть тематических модулей).
+        """`orchestrator/advance_gates/` — каталог-пакет на диске, несущий
+        ровно семь файлов, перечисленных требованием 1 (`__init__.py`
+        плюс шесть тематических модулей).
 
         Ловит мутацию: перенос сделан ОДНИМ файлом
-        (`orchestrator/gates/__init__.py` целиком, без разбивки на
-        `zones.py`/`capacity.py`/...) — часть путей из списка не
+        (`orchestrator/advance_gates/__init__.py` целиком, без разбивки
+        на `zones.py`/`capacity.py`/...) — часть путей из списка не
         существует, хотя пакет как таковой есть и даже импортируется.
         """
-        gates_dir = REPO_ROOT / "orchestrator" / "gates"
+        gates_dir = REPO_ROOT / "orchestrator" / "advance_gates"
         missing = [name for name in _REQUIRED_FILES
                   if not (gates_dir / name).is_file()]
         self.assertEqual(
             missing, [],
-            f"orchestrator/gates/ не несёт файлов: {missing}")
+            f"orchestrator/advance_gates/ не несёт файлов: {missing}")
 
     def test_ac1_named_functions_and_constants_physically_moved(self):
         """Каждое имя, названное требованием 1 буквально, — атрибут
-        соответствующего подмодуля `orchestrator.gates.<file>`, причём
-        ОПРЕДЕЛЁННЫЙ там же (`__module__` указывает на этот подмодуль),
-        а не реэкспортирован из `orchestrator.fsm_advance`.
+        соответствующего подмодуля `orchestrator.advance_gates.<file>`,
+        причём ОПРЕДЕЛЁННЫЙ там же (`__module__` указывает на этот
+        подмодуль), а не реэкспортирован из `orchestrator.fsm_advance`.
 
         Ловит мутацию: функция физически ОСТАЁТСЯ в
-        `orchestrator/fsm_advance.py`, а в нужный файл `gates/`
+        `orchestrator/fsm_advance.py`, а в нужный файл `advance_gates/`
         добавляется только `from ..fsm_advance import _capacity_gate` —
-        имя формально доступно как `orchestrator.gates.capacity.
-        _capacity_gate`, но `__module__` этой функции остаётся
-        `orchestrator.fsm_advance`, а не `orchestrator.gates.capacity`
-        (переезд не дословный, а обратный реэкспорт).
+        имя формально доступно как
+        `orchestrator.advance_gates.capacity._capacity_gate`, но
+        `__module__` этой функции остаётся `orchestrator.fsm_advance`, а
+        не `orchestrator.advance_gates.capacity` (переезд не дословный, а
+        обратный реэкспорт).
         """
         mismatches = []
         for file_stem, names in _EXPECTED_LOCATION.items():
-            module_name = f"orchestrator.gates.{file_stem}"
+            module_name = f"orchestrator.advance_gates.{file_stem}"
             module = importlib.import_module(module_name)
             for name in names:
                 if not hasattr(module, name):

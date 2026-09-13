@@ -1,8 +1,13 @@
-"""Приёмочный тест AC-2 (tasks/01M2CYQR0357VAQFZ5VACJD9TD/SPEC.md):
+"""Приёмочный тест AC-2 (tasks/01M2CYQR0357VAQFZ5VACJD9TD/SPEC.md, с
+поправкой ANSWER-1.md/ANSWER-2.md на путь пакета):
 `orchestrator/fsm_advance.py` сохраняет обработчики состояний, эффекты
-вердиктов и алиасы старых имён на все перенесённые в `orchestrator/
-gates/` функции/константы; `orchestrator/answer.py` не изменён и
-продолжает работать без правок.
+вердиктов и алиасы старых имён на все перенесённые в
+`orchestrator/advance_gates/` функции/константы; `orchestrator/answer.py`
+не изменён и продолжает работать без правок.
+
+Путь пакета — `orchestrator/advance_gates/` (не `orchestrator/gates/` —
+см. ANSWER-1.md, вопрос 1, вариант б: коллизия имени с существующим
+`orchestrator/gates.py`).
 
 Список алиасов ниже — объединение (а) имён, явно названных требованием
 1 SPEC (та же выборка, что test_ac1_gates_package_created.py), и (б)
@@ -16,10 +21,18 @@ SPEC/код репозитория уже сегодня: девять тест�
 буквально — берёт `_split_zone_paths`, `_plan_zones_extension_paths`,
 `_ZONES_MANDATE_MARKER` из `fsm_advance` тем же способом.
 
-Красен до реализации: `orchestrator/gates/` не существует —
+Красен до реализации: `orchestrator/advance_gates/` не существует —
 `test_ac2_all_transferred_names_are_true_aliases_to_gates_objects`
-падает на первом же `importlib.import_module("orchestrator.gates.
-_base")` (ModuleNotFoundError).
+падает на первом же `importlib.import_module("orchestrator.
+advance_gates._base")` (ModuleNotFoundError).
+
+Зелёный с рождения: два других метода этого файла
+(`test_ac2_state_handlers_and_verdict_effects_stay_defined_in_module`,
+`test_ac2_answer_module_imports_and_keeps_using_fsm_advance_names`)
+проходят уже сегодня — обработчики/эффекты и три имени, нужные
+`answer.py`, живут в `fsm_advance` до переноса ТАК ЖЕ, как обязаны жить
+после; тесты сохранения существующего поведения, которое перенос
+обязан не сломать (не алиасный путь через ещё не существующий пакет).
 """
 import importlib
 import sys
@@ -33,8 +46,8 @@ _STATE_HANDLERS = ["spec_writing", "tests_writing", "review", "verifying",
                   "in_dev"]
 _EFFECTS = ["_review_approved", "_in_dev_plan_escalate", "_apply_plan_budget"]
 
-# имя -> подмодуль orchestrator.gates.<...>, где объект физически живёт
-# после переноса.
+# имя -> подмодуль orchestrator.advance_gates.<...>, где объект физически
+# живёт после переноса.
 _ALIASED_NAMES = {
     "GateRefusal": "_base",
     "_run_gates": "_base",
@@ -69,14 +82,15 @@ class FsmAdvanceHandlersAndAliasesTest(unittest.TestCase):
         (`_review_approved`, `_in_dev_plan_escalate`, `_apply_plan_budget`)
         остаются реально ОПРЕДЕЛЕНЫ в `orchestrator/fsm_advance.py`
         (`__module__` указывает на сам этот модуль), а не становятся
-        алиасами на `orchestrator.gates.*`.
+        алиасами на `orchestrator.advance_gates.*`.
 
         Ловит мутацию: разработчик по ошибке заодно переносит один из
         эффектов (например, `_review_approved`, который зовёт
         `_registry_gate` — сосед перенесённых функций по тексту файла)
-        в `orchestrator/gates/acceptance.py`, оставляя в
+        в `orchestrator/advance_gates/acceptance.py`, оставляя в
         `fsm_advance.py` только алиас — `__module__` эффекта укажет на
-        `orchestrator.gates.acceptance`, не на `orchestrator.fsm_advance`.
+        `orchestrator.advance_gates.acceptance`, не на
+        `orchestrator.fsm_advance`.
         """
         from orchestrator import fsm_advance
 
@@ -93,11 +107,12 @@ class FsmAdvanceHandlersAndAliasesTest(unittest.TestCase):
         self.assertEqual(mismatches, [], "; ".join(mismatches))
 
     def test_ac2_all_transferred_names_are_true_aliases_to_gates_objects(self):
-        """Каждое перенесённое в `orchestrator/gates/` имя остаётся
+        """Каждое перенесённое в `orchestrator/advance_gates/` имя остаётся
         доступным как `orchestrator.fsm_advance.<имя>` И является ТЕМ ЖЕ
-        объектом (`is`), что и `orchestrator.gates.<файл>.<имя>` — то
-        есть настоящим алиасом (`from .gates.zones import _zones_gate`),
-        а не независимой копией/переопределением под старым именем.
+        объектом (`is`), что и `orchestrator.advance_gates.<файл>.<имя>` —
+        то есть настоящим алиасом (`from .advance_gates.zones import
+        _zones_gate`), а не независимой копией/переопределением под
+        старым именем.
 
         Ловит мутацию: `fsm_advance.py` не импортирует перенесённые
         имена вовсе — обращения к ним в оставшихся обработчиках
@@ -110,7 +125,7 @@ class FsmAdvanceHandlersAndAliasesTest(unittest.TestCase):
 
         mismatches = []
         for name, file_stem in _ALIASED_NAMES.items():
-            module_name = f"orchestrator.gates.{file_stem}"
+            module_name = f"orchestrator.advance_gates.{file_stem}"
             module = importlib.import_module(module_name)
             if not hasattr(fsm_advance, name):
                 mismatches.append(f"fsm_advance.{name}: отсутствует")
