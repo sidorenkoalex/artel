@@ -3,10 +3,12 @@ cmd_init` делает ленивый импорт `pool_seal` и зовёт `po
 restore_pool_if_missing(conn)` (не `canary.restore_pool_if_missing`),
 требование 4.
 
-Красен до реализации: `cmd_init` всё ещё делает `from . import canary`
-и зовёт `canary.restore_pool_if_missing` — подмена `pool_seal.
-restore_pool_if_missing` не перехватит вызов, `assert_called_once_with`
-упадёт на нулевом числе вызовов.
+Красен до реализации: `orchestrator.pool_seal` ещё не существует —
+`ModuleNotFoundError` при импорте. Импорт вынесен в `setUp` (не на
+уровень модуля), чтобы `ModuleNotFoundError` заваливал только тест
+этого файла, а не прерывал сбор всей планки (pytest без
+`--continue-on-collection-errors` останавливает сбор целиком при
+ошибке импорта хотя бы одного модуля теста).
 """
 import sys
 import unittest
@@ -16,12 +18,19 @@ from unittest import mock
 REPO_ROOT = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(REPO_ROOT))
 
-from orchestrator import catalog, pool_seal  # noqa: E402
+from orchestrator import catalog  # noqa: E402
 
 _SENTINEL_CONN = object()
 
 
 class CatalogInitUsesPoolSealTest(unittest.TestCase):
+
+    def setUp(self):
+        try:
+            from orchestrator import pool_seal
+        except ModuleNotFoundError as exc:
+            self.fail(f"orchestrator.pool_seal не найден: {exc}")
+        self.pool_seal = pool_seal
 
     def test_ac4_cmd_init_calls_pool_seal_restore_pool_if_missing(self):
         """Сценарий: зовём `catalog.cmd_init()` с изолированными от
@@ -43,7 +52,7 @@ class CatalogInitUsesPoolSealTest(unittest.TestCase):
              mock.patch.object(catalog.store, "seed_task_counters"), \
              mock.patch.object(catalog, "_deploy_role_home_reference"), \
              mock.patch.object(catalog.budget, "reseed_program_spend"), \
-             mock.patch.object(pool_seal, "restore_pool_if_missing",
+             mock.patch.object(self.pool_seal, "restore_pool_if_missing",
                                return_value=None) as restore_mock:
             catalog.cmd_init()
 
