@@ -9,19 +9,13 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from orchestrator import catalog, config, store  # noqa: E402
-from tests.sandbox import TmpRootTest, capture  # noqa: E402
+from orchestrator import store  # noqa: E402
+from tests.sandbox import TaskSeededTmpRootTest  # noqa: E402
 
 TASK = "T001"
 
 
-class JournalSessionIdTest(TmpRootTest):
-
-    def setUp(self):
-        super().setUp()
-        capture(catalog.cmd_init)
-        store.insert_task(store.db(), TASK, "Задача", "in_dev",
-                          "task/t001-zadacha", config.DEFAULT_TARGET, 25.0)
+class JournalSessionIdTest(TaskSeededTmpRootTest):
 
     def last_step(self):
         return store.task_steps(store.db(), TASK)[-1]

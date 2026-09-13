@@ -17,7 +17,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from orchestrator import (config, fsm_advance, fsm_merge_gate,  # noqa: E402
                           gitcmd, repo_context, store)
-from tests.sandbox import TmpRootTest  # noqa: E402
+from tests.sandbox import TaskIdSchemaConnTmpRootTest, TmpRootTest  # noqa: E402
 
 
 class ProtectedPathsTouchedTest(unittest.TestCase):
@@ -77,18 +77,12 @@ class ProtectedPathRefusalDetailTest(unittest.TestCase):
             fsm_merge_gate._protected_path_refusal_detail(["gates.yaml"]))
 
 
-class ZonesGateProtectedPathPriorityTest(TmpRootTest):
+class ZonesGateProtectedPathPriorityTest(TaskIdSchemaConnTmpRootTest):
     """Дифф, где ОДНОВРЕМЕННО есть защищённый путь и обычный файл вне
     заявленных zones (не защищённый) — отказ обязан называть только
     защищённый путь (требование 2 срабатывает раньше проверки zones),
     не смешивать его с обычным текстом «дифф трогает файлы вне
     заявленных zones»."""
-
-    def setUp(self):
-        super().setUp()
-        store.create_schema(store.db())
-        self.conn = store.db()
-        self.task_id = "T001"
 
     def test_protected_path_wins_over_ordinary_out_of_zone_refusal(self):
         t = {"title": "Тест", "branch": "task/t001-x",

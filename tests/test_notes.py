@@ -26,7 +26,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from orchestrator import config, doctor, notes, store  # noqa: E402
-from tests.sandbox import RealGitSandbox, TmpRootTest  # noqa: E402
+from tests.sandbox import RealGitSandbox, SchemaTmpRootTest, TmpRootTest  # noqa: E402
 
 BACKLOG_TEXT = """## Копилка
 
@@ -181,7 +181,7 @@ class PendingNotesStorageTest(TmpRootTest):
         self.assertEqual(len(notes.pending_notes()), 2)
 
 
-class CmdNoteArgumentValidationTest(TmpRootTest):
+class CmdNoteArgumentValidationTest(SchemaTmpRootTest):
     """Отказы разбора аргументов, не доходящие до git вовсе (пустая
     `pending_notes()` — оппортунистический flush внутри `cmd_note` не
     находит, что отправлять, и не трогает сеть).
@@ -192,10 +192,6 @@ class CmdNoteArgumentValidationTest(TmpRootTest):
     без схемы `store.merge_lock_row`/`store.all_tasks` падали бы
     `sqlite3.OperationalError` раньше ожидаемого `SystemExit` разбора
     аргументов."""
-
-    def setUp(self):
-        super().setUp()
-        store.create_schema(store.db())
 
     def test_no_arguments_at_all_refuses(self):
         with self.assertRaises(SystemExit):

@@ -17,7 +17,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from orchestrator import alerts, catalog, config, prune, store  # noqa: E402
-from tests.sandbox import TmpRootTest, capture  # noqa: E402
+from tests.sandbox import InitializedTmpRootTest, TmpRootTest, capture  # noqa: E402
 
 
 def _ts(days_ago: int) -> str:
@@ -76,7 +76,7 @@ class PruneLogCandidatesTest(TmpRootTest):
         self.assertIn("нечего убирать", out)
 
 
-class PruneCanaryDiagCandidatesTest(TmpRootTest):
+class PruneCanaryDiagCandidatesTest(InitializedTmpRootTest):
     """`prune._canary_diag_candidates` (SPEC 01M1TKP269W9JN3NBJCR5Q6C3B,
     требование 4/AC-9) — тот же порог давности, что и `.artel/logs/`,
     БЕЗ второго условия «последние N задач» (canary `task_id` никогда не
@@ -84,10 +84,6 @@ class PruneCanaryDiagCandidatesTest(TmpRootTest):
     сквозную проверку prune --execute на реальном дереве несёт залоченная
     планка (`test_ac9_prune_retention_for_canary_dir.py`), здесь —
     сама функция-отбор в изоляции."""
-
-    def setUp(self):
-        super().setUp()
-        capture(catalog.cmd_init)
 
     def _diag(self, run_stamp: str, task_id: str, age_days: float) -> Path:
         path = config.ROOT / ".artel" / "canary" / run_stamp / task_id / "steps.txt"
@@ -135,13 +131,9 @@ class PruneCanaryDiagCandidatesTest(TmpRootTest):
         self.assertIn("диагностика канарейки", out)
 
 
-class PruneAlertArchiveStoreTest(TmpRootTest):
+class PruneAlertArchiveStoreTest(InitializedTmpRootTest):
     """store.alerts_older_than/archive_alert напрямую — опора `prune` на
     хранилище (SQL живёт только в store.py, ADR-0003 3ж)."""
-
-    def setUp(self):
-        super().setUp()
-        capture(catalog.cmd_init)
 
     def test_alerts_older_than_excludes_recent_and_includes_old(self):
         conn = store.db()
@@ -183,11 +175,7 @@ class PruneAlertArchiveStoreTest(TmpRootTest):
             conn.execute("SELECT * FROM alerts_archive").fetchall(), [])
 
 
-class PruneReportEmptyStateTest(TmpRootTest):
-
-    def setUp(self):
-        super().setUp()
-        capture(catalog.cmd_init)
+class PruneReportEmptyStateTest(InitializedTmpRootTest):
 
     def test_dry_run_report_says_nothing_to_clean_up_when_nothing_qualifies(self):
         out = capture(prune.cmd_prune)

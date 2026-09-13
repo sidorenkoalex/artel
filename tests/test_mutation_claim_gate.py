@@ -11,21 +11,15 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from orchestrator import config, fsm_advance, gitcmd, store  # noqa: E402
-from tests.sandbox import TmpRootTest  # noqa: E402
+from orchestrator import config, fsm_advance, gitcmd  # noqa: E402
+from tests.sandbox import TaskIdSchemaConnTmpRootTest  # noqa: E402
 
 
 def _task_row(target=config.DEFAULT_TARGET, is_canary=False):
     return {"branch": "task/t001-x", "target": target, "is_canary": is_canary}
 
 
-class MutationClaimGateGitFailureTest(TmpRootTest):
-
-    def setUp(self):
-        super().setUp()
-        store.create_schema(store.db())
-        self.conn = store.db()
-        self.task_id = "T001"
+class MutationClaimGateGitFailureTest(TaskIdSchemaConnTmpRootTest):
 
     def test_git_not_answering_diff_base_refuses(self):
         """Ловит мутацию: `if base is None: ... return True` убран/заменён
@@ -90,14 +84,18 @@ class MutationClaimGateSkipConditionsTest(unittest.TestCase):
         self.assertIsNone(refusal)
 
 
-class MutationClaimGateFileSelectionTest(TmpRootTest):
+class _MutationClaimGateRowTest(TaskIdSchemaConnTmpRootTest):
+    """`TaskIdSchemaConnTmpRootTest` + `self.t` — общий предок двух классов
+    ниже (SPEC 01M2DC6SQVSANMECXPDZJDP75D, R8: их `setUp` были байт-в-байт
+    одинаковы; `_task_row` — локальная функция этого файла, поэтому общий
+    класс живёт здесь, не в tests/sandbox.py)."""
 
     def setUp(self):
         super().setUp()
-        store.create_schema(store.db())
-        self.conn = store.db()
-        self.task_id = "T001"
         self.t = _task_row()
+
+
+class MutationClaimGateFileSelectionTest(_MutationClaimGateRowTest):
 
     def test_non_test_path_is_not_checked(self):
         """Ловит мутацию: фильтр путей ослаблен до «любой .py» — файл вне
@@ -237,14 +235,7 @@ class MutationClaimGateFileSelectionTest(TmpRootTest):
         self.assertIsNone(refusal)
 
 
-class MutationClaimGateRefusalContentTest(TmpRootTest):
-
-    def setUp(self):
-        super().setUp()
-        store.create_schema(store.db())
-        self.conn = store.db()
-        self.task_id = "T001"
-        self.t = _task_row()
+class MutationClaimGateRefusalContentTest(_MutationClaimGateRowTest):
 
     def test_missing_claim_produces_named_refusal_with_file_and_function(self):
         """Ловит мутацию: имена функций из `guard.

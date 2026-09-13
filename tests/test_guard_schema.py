@@ -14,6 +14,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from orchestrator import yamlmini  # noqa: E402
 from scripts import guard  # noqa: E402
+from tests.sandbox import TmpPlanPathTest  # noqa: E402
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
@@ -36,13 +37,8 @@ status: ready
 """
 
 
-class SchemaVersionTest(unittest.TestCase):
+class SchemaVersionTest(TmpPlanPathTest):
     """Guard и версия формата: своё читаем, чужое из будущего — нет."""
-
-    def setUp(self):
-        tmp = tempfile.TemporaryDirectory()
-        self.addCleanup(tmp.cleanup)
-        self.path = Path(tmp.name) / "PLAN.md"
 
     def write(self, extra: str = "") -> Path:
         self.path.write_text(PLAN_MD.format(extra=extra), encoding="utf-8")

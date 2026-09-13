@@ -67,13 +67,21 @@ class _AnswerRealGitSandbox(RealGitSandbox):
     файлу: `self.branch` — только значение колонки БД (`tasks.branch`),
     веткой-источником `tasks/<id>/` (A7) служит артефактная ветка пульта
     — main её не чекаутит, `on_foreign_branch(self.branch)` истинно с
-    самого начала теста, ничего дополнительно готовить не надо."""
+    самого начала теста, ничего дополнительно готовить не надо.
+
+    Заведение задачи (`self.conn`/схема/`insert_task`) — сюда же (SPEC
+    01M2DC6SQVSANMECXPDZJDP75D, R8): было байт-в-байт продублировано в
+    `setUp` обоих наследников ниже."""
 
     TASK = "T001"
 
     def setUp(self):
         super().setUp()
         self.branch = "task/t001-vetko-korrektnoe-chtenie"
+        self.conn = store.db()
+        store.create_schema(self.conn)
+        store.insert_task(self.conn, self.TASK, "Задача", "spec_writing",
+                          self.branch, config.DEFAULT_TARGET, 25.0)
 
     def commit_on_branch(self, name: str, template: str, n: int = 1) -> None:
         """Пишет и коммитит артефакт в АРТЕФАКТНУЮ ВЕТКУ ПУЛЬТА
@@ -86,13 +94,6 @@ class _AnswerRealGitSandbox(RealGitSandbox):
 
 
 class AnswerFileCountOnForeignBranchTest(_AnswerRealGitSandbox):
-
-    def setUp(self):
-        super().setUp()
-        self.conn = store.db()
-        store.create_schema(self.conn)
-        store.insert_task(self.conn, self.TASK, "Задача", "spec_writing",
-                          self.branch, config.DEFAULT_TARGET, 25.0)
 
     def test_counts_answer_files_from_the_branch_not_the_disk(self):
         self.commit_on_branch("ANSWER-1.md", ANSWER_MD, 1)
@@ -131,13 +132,6 @@ class AnswerFileCountOnForeignBranchTest(_AnswerRealGitSandbox):
 
 
 class BriefAnswerComponentsOnForeignBranchTest(_AnswerRealGitSandbox):
-
-    def setUp(self):
-        super().setUp()
-        self.conn = store.db()
-        store.create_schema(self.conn)
-        store.insert_task(self.conn, self.TASK, "Задача", "spec_writing",
-                          self.branch, config.DEFAULT_TARGET, 25.0)
 
     def test_latest_answer_rel_reads_the_branch_and_compares_numerically(self):
         self.commit_on_branch("ANSWER-1.md", ANSWER_MD, 1)

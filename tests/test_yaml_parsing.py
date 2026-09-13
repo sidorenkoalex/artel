@@ -17,6 +17,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from orchestrator import artifacts, config, roles, yamlmini  # noqa: E402
 from scripts import guard  # noqa: E402
+from tests.sandbox import TmpPlanPathTest  # noqa: E402
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
@@ -138,13 +139,8 @@ class FrontmatterTest(unittest.TestCase):
         self.assertEqual(meta, {"task": "T017"})
 
 
-class ArtifactsReadTest(unittest.TestCase):
+class ArtifactsReadTest(TmpPlanPathTest):
     """`artifacts.frontmatter` — тот же разбор, что у guard, плюс файл."""
-
-    def setUp(self):
-        tmp = tempfile.TemporaryDirectory()
-        self.addCleanup(tmp.cleanup)
-        self.path = Path(tmp.name) / "PLAN.md"
 
     def test_reader_and_guard_see_the_same_fields(self):
         self.path.write_text(ARTIFACT, encoding="utf-8")

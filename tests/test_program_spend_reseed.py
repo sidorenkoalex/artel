@@ -12,15 +12,10 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from orchestrator import budget, config, store  # noqa: E402
-from tests.sandbox import TmpRootTest  # noqa: E402
+from tests.sandbox import SchemaConnTmpRootTest  # noqa: E402
 
 
-class ProgramSpendReseedTest(TmpRootTest):
-
-    def setUp(self):
-        super().setUp()
-        store.create_schema(store.db())
-        self.conn = store.db()
+class ProgramSpendReseedTest(SchemaConnTmpRootTest):
 
     def write_retro(self, task_id: str, cost_usd: float) -> None:
         retro_dir = config.ROOT / "docs" / "retro"

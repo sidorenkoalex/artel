@@ -17,7 +17,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from orchestrator import config, dry_run, store  # noqa: E402
-from tests.sandbox import RealGitSandbox  # noqa: E402
+from tests.sandbox import ConnRealGitSandbox  # noqa: E402
 
 TASK = "T900"
 BRANCH = "task/t900-dry-run-fixture"
@@ -61,11 +61,7 @@ class IsTestFileTest(unittest.TestCase):
             "tasks/T1/acceptance_tests/conftest.py"))
 
 
-class DryRunSandboxTest(RealGitSandbox):
-
-    def setUp(self):
-        super().setUp()
-        self.conn = store.db()
+class DryRunSandboxTest(ConnRealGitSandbox):
 
     def seed_task(self, branch: str = BRANCH, task_id: str = TASK) -> None:
         store.insert_task(self.conn, task_id, "Фикстура", "in_dev", branch,

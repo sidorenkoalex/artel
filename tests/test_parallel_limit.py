@@ -12,8 +12,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from orchestrator import catalog, config, parallel_limit, store  # noqa: E402
-from tests.sandbox import TmpRootTest, _dead_pid, _ts_ago, capture  # noqa: E402
+from orchestrator import config, parallel_limit, store  # noqa: E402
+from tests.sandbox import TaskSeededTmpRootTest, _dead_pid, _ts_ago  # noqa: E402
 
 # Граница свежести heartbeat (01M1R5B570KMS26NQ6J2G2WXZB): запас ровно в
 # 1 секунду до/после `LEASE_STALE_AFTER_SEC` делал тест зависимым от
@@ -36,14 +36,7 @@ def _stale_edge_ts() -> str:
     return _ts_ago(config.LEASE_STALE_AFTER_SEC + _MARGIN_SEC)
 
 
-class ParallelLimitTest(TmpRootTest):
-    TASK = "T001"
-
-    def setUp(self):
-        super().setUp()
-        capture(catalog.cmd_init)
-        store.insert_task(store.db(), self.TASK, "Задача", "in_dev",
-                          "task/t001-zadacha", config.DEFAULT_TARGET, 25.0)
+class ParallelLimitTest(TaskSeededTmpRootTest):
 
     def seed_lease(self, task_id: str, session_id: str, pid: int,
                    hostname: str, heartbeat_ts: str) -> None:

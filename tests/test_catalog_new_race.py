@@ -31,8 +31,6 @@ class PeekTaskNumberRaceTest(TmpRootTest):
     `templates/` копируется рядом, `cmd_new` продолжает читать настоящий
     `templates/SPEC.md`, только уже из песочницы."""
 
-    PATCHED_ATTRS = ("DB", "TASKS", "LOGS", "WORKTREES", "ROOT")
-
     def setUp(self):
         super().setUp()
         shutil.copytree(REPO_ROOT / "templates", self.root / "templates")

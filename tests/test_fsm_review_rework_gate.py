@@ -15,7 +15,7 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from orchestrator import fsm_advance, gitcmd, store  # noqa: E402
-from tests.sandbox import TmpRootTest  # noqa: E402
+from tests.sandbox import SchemaConnTmpRootTest, TmpRootTest  # noqa: E402
 
 TASK_ID = "T001"
 BRANCH = "artifact/t001"
@@ -38,12 +38,7 @@ def _git_log(lines: str, returncode: int = 0):
     return fake
 
 
-class ReviewerVerdictBaselineTest(TmpRootTest):
-
-    def setUp(self):
-        super().setUp()
-        store.create_schema(store.db())
-        self.conn = store.db()
+class ReviewerVerdictBaselineTest(SchemaConnTmpRootTest):
 
     def test_uses_the_freshest_reviewer_step_autocommit(self):
         """Ловит мутацию: подбирается не самый свежий, а какой попало

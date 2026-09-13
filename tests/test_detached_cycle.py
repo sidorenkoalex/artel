@@ -19,8 +19,8 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from orchestrator import artel, catalog, cleanup, config, lease, store  # noqa: E402
-from tests.sandbox import TmpRootTest, _dead_pid, _ts_ago, capture  # noqa: E402
+from orchestrator import artel, cleanup, config, lease, store  # noqa: E402
+from tests.sandbox import TaskSeededTmpRootTest, _dead_pid, _ts_ago, capture  # noqa: E402
 from tests.test_kill_cleanup import TmpRepoTest  # noqa: E402
 
 _REAL_OS_KILL = os.kill
@@ -90,14 +90,7 @@ class TaskIdAndAttachTest(unittest.TestCase):
             artel._task_id_and_attach(["--attach"], "usage")
 
 
-class LaunchDetachedTest(TmpRootTest):
-    TASK = "T001"
-
-    def setUp(self):
-        super().setUp()
-        capture(catalog.cmd_init)
-        store.insert_task(store.db(), self.TASK, "Задача", "in_dev",
-                          "task/t001-zadacha", config.DEFAULT_TARGET, 25.0)
+class LaunchDetachedTest(TaskSeededTmpRootTest):
 
     def _popen_mock(self, pid: int = 4242):
         proc = mock.Mock()
@@ -208,14 +201,7 @@ class LaunchDetachedTest(TmpRootTest):
         self.assertIn("живой lease", str(ctx.exception))
 
 
-class CmdStopTest(TmpRootTest):
-    TASK = "T001"
-
-    def setUp(self):
-        super().setUp()
-        capture(catalog.cmd_init)
-        store.insert_task(store.db(), self.TASK, "Задача", "in_dev",
-                          "task/t001-zadacha", config.DEFAULT_TARGET, 25.0)
+class CmdStopTest(TaskSeededTmpRootTest):
 
     def _seed_lease(self, pid: int, hostname: str) -> None:
         store.insert_lease(store.db(), self.TASK, "cycle-session", pid,
@@ -299,14 +285,7 @@ class CmdStopTest(TmpRootTest):
         self.assertIn("уже не существует", str(ctx.exception))
 
 
-class LeaseForceTest(TmpRootTest):
-    TASK = "T001"
-
-    def setUp(self):
-        super().setUp()
-        capture(catalog.cmd_init)
-        store.insert_task(store.db(), self.TASK, "Задача", "in_dev",
-                          "task/t001-zadacha", config.DEFAULT_TARGET, 25.0)
+class LeaseForceTest(TaskSeededTmpRootTest):
 
     def _seed_foreign_fresh_lease(self) -> None:
         conn = store.db()
@@ -465,17 +444,10 @@ if __name__ == "__main__":
     unittest.main()
 
 
-class WaitZoneFlagHotfix22Test(TmpRootTest):
+class WaitZoneFlagHotfix22Test(TaskSeededTmpRootTest):
     """Hotfix №22 (11.09): `auto <id> --wait-zone` — флаг разбирается,
     едет в отделённый процесс, а неизвестный флаг даёт отказ, а не
     молчаливый старт без ожидания зоны."""
-    TASK = "T001"
-
-    def setUp(self):
-        super().setUp()
-        capture(catalog.cmd_init)
-        store.insert_task(store.db(), self.TASK, "Задача", "in_dev",
-                          "task/t001-zadacha", config.DEFAULT_TARGET, 25.0)
 
     def test_wait_zone_flag_reaches_the_detached_child_argv(self):
         """Ловит мутацию: `_cmd_auto_or_detach` роняет `--wait-zone` при

@@ -12,18 +12,12 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from orchestrator import catalog, config, store, zone_lock  # noqa: E402
-from tests.sandbox import TmpRootTest, _dead_pid, capture  # noqa: E402
+from tests.sandbox import TaskSeededTmpRootTest, TmpRootTest, _dead_pid, capture  # noqa: E402
 
 TASK = "T001"
 
 
-class CmdLogSessionIdTest(TmpRootTest):
-
-    def setUp(self):
-        super().setUp()
-        capture(catalog.cmd_init)
-        store.insert_task(store.db(), TASK, "Задача", "in_dev",
-                          "task/t001-zadacha", config.DEFAULT_TARGET, 25.0)
+class CmdLogSessionIdTest(TaskSeededTmpRootTest):
 
     def test_log_shows_the_session_id_on_one_readable_line(self):
         store.journal(store.db(), TASK, "operator", "событие", "деталь",
@@ -54,13 +48,7 @@ class CmdLogSessionIdTest(TmpRootTest):
         self.assertNotIn("None", out)
 
 
-class CmdStatusLeaseHolderTest(TmpRootTest):
-
-    def setUp(self):
-        super().setUp()
-        capture(catalog.cmd_init)
-        store.insert_task(store.db(), TASK, "Задача", "in_dev",
-                          "task/t001-zadacha", config.DEFAULT_TARGET, 25.0)
+class CmdStatusLeaseHolderTest(TaskSeededTmpRootTest):
 
     def test_no_lease_adds_no_holder_suffix(self):
         out = capture(catalog.cmd_status)

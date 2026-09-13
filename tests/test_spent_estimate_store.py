@@ -9,7 +9,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from orchestrator import config, store  # noqa: E402
-from tests.sandbox import TmpRootTest  # noqa: E402
+from tests.sandbox import SchemaConnTmpRootTest, TmpRootTest  # noqa: E402
 
 
 class ChargeEstimateTest(TmpRootTest):
@@ -63,12 +63,7 @@ class ChargeEstimateTest(TmpRootTest):
         self.assertEqual(row["spent_estimate_usd"], 5.0)
 
 
-class TotalEstimateTest(TmpRootTest):
-
-    def setUp(self):
-        super().setUp()
-        store.create_schema(store.db())
-        self.conn = store.db()
+class TotalEstimateTest(SchemaConnTmpRootTest):
 
     def test_no_tasks_is_zero(self):
         """Ловит мутацию: `total_estimate` возвращает `row["total"]`

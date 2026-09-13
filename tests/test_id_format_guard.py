@@ -15,7 +15,6 @@ regression-защита общего источника образцов от к
 """
 import re
 import sys
-import tempfile
 import unittest
 from pathlib import Path
 
@@ -23,6 +22,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from orchestrator import config, fsm, gitcmd  # noqa: E402
 from scripts import guard  # noqa: E402
+from tests.sandbox import TmpDirTest  # noqa: E402
 from tests.test_fsm_branch_correct_status_reads import (  # noqa: E402
     RealGitBranchTest)
 
@@ -161,12 +161,7 @@ class IdFormatSampleErrorsFromFilesTest(unittest.TestCase):
 # acceptance_tests/ (шире `scan_redness_markers`, который смотрит только
 # `test_*.py` — SPEC требование 1 говорит о содержимом каталога целиком).
 
-class ScanIdFormatSamplesTest(unittest.TestCase):
-
-    def setUp(self):
-        tmp = tempfile.TemporaryDirectory()
-        self.addCleanup(tmp.cleanup)
-        self.tdir = Path(tmp.name)
+class ScanIdFormatSamplesTest(TmpDirTest):
 
     def write(self, content: str, name: str) -> None:
         tests_dir = self.tdir / "acceptance_tests"

@@ -42,9 +42,26 @@ cleanup)` в обход этого модуля.
 `gitcmd.subprocess.run` вместо сырого модульного `subprocess.run` —
 без этого DNS-адрес фикстуры target'а (SPEC «Контекст») уходил в
 реальный резолвер и висел на таймауте при обрыве сети.
+
+Р8 (SPEC 01M2DC6SQVSANMECXPDZJDP75D) — шестое поколение: 22 группы
+байт-в-байт одинаковых `setUp`/помощников нашлись уже МЕЖДУ файлами, не
+внутри одного (`event`, и ниже — `TmpDirTest`, `TmpPlanPathTest`,
+`InitializedTmpRootTest`, `TaskSeededTmpRootTest`,
+`BudgetSeededTmpRootTest`, `SchemaTmpRootTest`, `SchemaConnTmpRootTest`,
+`SchemaSeededTmpRootTest`, `TaskIdSchemaConnTmpRootTest`,
+`DeveloperBriefTmpRootTest`, `ConnRealGitSandbox`,
+`SyncedOriginConnSandbox`, `OriginRealGitSandbox`, `AutoOriginSandbox`,
+`GitignoreCommittedRealGitSandbox`, `GITIGNORE_TEXT`) — докстринг каждого
+класса называет файлы, чьи копии он заменил. Заодно 7 из 10 файлов с
+собственным подмножеством `PATCHED_ATTRS` расширены до полного
+`ALL_CONFIG_ATTRS` (обоснования не нашлось — ни один тест этих файлов не
+трогает исключённые пути `config`); `tests/test_doctor.py::
+_RoleHomeReferenceTmpRootTest` — единственный, где сужение оправдано
+(нужен настоящий `config.ROOT`), несёт explicit-комментарий.
 """
 import errno
 import io
+import json
 import shutil
 import subprocess
 import sys
@@ -128,6 +145,39 @@ def capture(fn, *args) -> str:
     with redirect_stdout(buf):
         fn(*args)
     return buf.getvalue()
+
+
+def event(**fields) -> str:
+    """Строка потока `--output-format stream-json` (SPEC
+    01M2DC6SQVSANMECXPDZJDP75D, R8): байт-в-байт совпадала в
+    `tests/test_agent_log.py` и `tests/test_step_cost.py` — оба теперь
+    импортируют её отсюда вместо собственной копии."""
+    return json.dumps(fields, ensure_ascii=False) + "\n"
+
+
+class TmpDirTest(unittest.TestCase):
+    """Временный каталог без песочницы `config` — только `self.tdir`
+    (SPEC 01M2DC6SQVSANMECXPDZJDP75D, R8): тело `setUp` байт-в-байт
+    повторялось в `tests/test_acceptance_collect.py`,
+    `tests/test_acceptance_tests_flow.py` (дважды) и
+    `tests/test_id_format_guard.py`."""
+
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.tdir = Path(tmp.name)
+
+
+class TmpPlanPathTest(unittest.TestCase):
+    """Временный каталог + путь будущего `PLAN.md` в нём, файл ещё не
+    создан (SPEC 01M2DC6SQVSANMECXPDZJDP75D, R8): тело `setUp` байт-в-байт
+    повторялось в `tests/test_guard_schema.py` и
+    `tests/test_yaml_parsing.py`."""
+
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.path = Path(tmp.name) / "PLAN.md"
 
 
 def resilient_tmp_cleanup(tmp: tempfile.TemporaryDirectory) -> None:
@@ -693,6 +743,132 @@ class TmpRootTest(unittest.TestCase):
         return capture(fn, *args)
 
 
+_REPO_ROOT = Path(__file__).resolve().parent.parent
+
+
+class InitializedTmpRootTest(TmpRootTest):
+    """`TmpRootTest` + `catalog.cmd_init` — каталог и БД проинициализированы
+    (SPEC 01M2DC6SQVSANMECXPDZJDP75D, R8): тело `setUp` байт-в-байт
+    повторялось в `tests/test_doctor.py` (`BranchFreshnessCheckTest`,
+    `TaskCounterCheckTest`) и `tests/test_prune.py` (три класса)."""
+
+    def setUp(self):
+        super().setUp()
+        capture(catalog.cmd_init)
+
+
+class TaskSeededTmpRootTest(InitializedTmpRootTest):
+    """`InitializedTmpRootTest` + одна заведённая задача `self.TASK` (SPEC
+    01M2DC6SQVSANMECXPDZJDP75D, R8): тело `setUp` байт-в-байт повторялось
+    в 13 классах (`tests/test_detached_cycle.py` ×4,
+    `tests/test_doctor.py`, `tests/test_lease.py` ×6,
+    `tests/test_parallel_limit.py`, `tests/test_zone_lock.py`) и, с
+    точностью до обращения к `TASK` модульной константой вместо
+    `self.TASK` (тот же литерал `"T001"`, дефолт этого класса), ещё в
+    `tests/test_catalog_status_log.py` (×2) и
+    `tests/test_store_journal.py`."""
+
+    TASK = "T001"
+
+    def setUp(self):
+        super().setUp()
+        store.insert_task(store.db(), self.TASK, "Задача", "in_dev",
+                          "task/t001-zadacha", config.DEFAULT_TARGET, 25.0)
+
+
+class BudgetSeededTmpRootTest(InitializedTmpRootTest):
+    """Как `TaskSeededTmpRootTest`, но бюджет — `config.DEFAULT_BUDGET_USD`,
+    не литерал (SPEC 01M2DC6SQVSANMECXPDZJDP75D, R8): тело `setUp`
+    байт-в-байт повторялось в `tests/test_catalog_wave_breaker_status.py`,
+    `tests/test_pause.py`, `tests/test_release.py`."""
+
+    TASK = "T001"
+
+    def setUp(self):
+        super().setUp()
+        store.insert_task(store.db(), self.TASK, "Задача", "in_dev",
+                          "task/t001-zadacha", config.DEFAULT_TARGET,
+                          config.DEFAULT_BUDGET_USD)
+
+
+class SchemaTmpRootTest(TmpRootTest):
+    """`TmpRootTest` + схема БД, без заведённой задачи (SPEC
+    01M2DC6SQVSANMECXPDZJDP75D, R8): тело `setUp` байт-в-байт повторялось
+    в 8 классах (`tests/test_alerts_wave_breaker.py`,
+    `tests/test_diff_not_collected_alerts.py` ×2,
+    `tests/test_doctor_wave_breaker.py`, `tests/test_notes.py`,
+    `tests/test_runner_wave_breaker.py`, `tests/test_stall_alerts.py`
+    ×2)."""
+
+    def setUp(self):
+        super().setUp()
+        store.create_schema(store.db())
+
+
+class SchemaConnTmpRootTest(SchemaTmpRootTest):
+    """`SchemaTmpRootTest` + соединение `self.conn` (SPEC
+    01M2DC6SQVSANMECXPDZJDP75D, R8): тело `setUp` байт-в-байт повторялось
+    в 5 классах (`tests/test_auto_escalated_return_rework_gate.py`,
+    `tests/test_fsm_review_rework_gate.py`,
+    `tests/test_fsm_review_rework_sha_gate.py`,
+    `tests/test_program_spend_reseed.py`,
+    `tests/test_spent_estimate_store.py`)."""
+
+    def setUp(self):
+        super().setUp()
+        self.conn = store.db()
+
+
+class SchemaSeededTmpRootTest(TmpRootTest):
+    """`TmpRootTest` + схема БД + одна заведённая задача, БЕЗ
+    `cmd_init` (SPEC 01M2DC6SQVSANMECXPDZJDP75D, R8) — отличие от
+    `TaskSeededTmpRootTest` в первой строке тела (`create_schema`, не
+    `cmd_init`): тело `setUp` байт-в-байт повторялось (с точностью до
+    `self.TASK`/модульной константы `TASK`, тот же литерал `"T001"`,
+    дефолт этого класса) в `tests/test_budget_live_lease_and_escalation.py`
+    (×2), `tests/test_cas_set_state.py`, `tests/test_stall_alerts.py`."""
+
+    TASK = "T001"
+
+    def setUp(self):
+        super().setUp()
+        store.create_schema(store.db())
+        store.insert_task(store.db(), self.TASK, "Задача", "in_dev",
+                          "task/t001-zadacha", config.DEFAULT_TARGET, 25.0)
+
+
+class TaskIdSchemaConnTmpRootTest(TmpRootTest):
+    """`TmpRootTest` + схема БД + соединение + `self.task_id = "T001"` —
+    задача НЕ заводится в `tasks` (SPEC 01M2DC6SQVSANMECXPDZJDP75D, R8):
+    тело `setUp` байт-в-байт повторялось в
+    `tests/test_mutation_claim_gate.py::MutationClaimGateGitFailureTest`
+    и
+    `tests/test_protected_paths_gate.py::ZonesGateProtectedPathPriorityTest`."""
+
+    def setUp(self):
+        super().setUp()
+        store.create_schema(store.db())
+        self.conn = store.db()
+        self.task_id = "T001"
+
+
+class DeveloperBriefTmpRootTest(TmpRootTest):
+    """`TmpRootTest` + `templates/`/`skills/` реального репозитория +
+    фикстуры брифа разработчика (SPEC 01M2DC6SQVSANMECXPDZJDP75D, R8):
+    тело `setUp` байт-в-байт повторялось в `tests/test_agent_failure.py`,
+    `tests/test_agent_log.py`, `tests/test_step_cost.py` — их локальные
+    `_*TmpRootTest` (и общее для всех троих подмножество `PATCHED_ATTRS`
+    — семь путей без `PROJECTS`/`TARGETS`/`BACKUP_MARKER`, ни один тест
+    этих трёх файлов их не касается) заменены наследованием от этого
+    класса целиком."""
+
+    def setUp(self):
+        super().setUp()
+        shutil.copytree(_REPO_ROOT / "templates", self.root / "templates")
+        shutil.copytree(_REPO_ROOT / "skills", self.root / "skills")
+        seed_developer_brief_fixtures(self.root)
+
+
 class RealGitSandbox(TmpRootTest):
     """`self.root` — свежий git-репозиторий с веткой main и одним коммитом.
 
@@ -776,6 +952,80 @@ class RealGitSandbox(TmpRootTest):
         self.git("push", "-q", "origin",
                 f"{config.MAIN_BRANCH}:{config.MAIN_BRANCH}")
         return origin
+
+
+class ConnRealGitSandbox(RealGitSandbox):
+    """`RealGitSandbox` + соединение `self.conn` (SPEC
+    01M2DC6SQVSANMECXPDZJDP75D, R8): тело `setUp` байт-в-байт повторялось
+    в `tests/test_canary.py::MergesSinceLastGreenRunTest`,
+    `tests/test_dry_run.py`, `tests/test_pin.py` (×2)."""
+
+    def setUp(self):
+        super().setUp()
+        self.conn = store.db()
+
+
+class SyncedOriginConnSandbox(RealGitSandbox):
+    """`RealGitSandbox` + соединение `self.conn` + синхронный origin
+    (`add_synced_origin` выше) (SPEC 01M2DC6SQVSANMECXPDZJDP75D, R8):
+    тело `setUp` байт-в-байт повторялось в
+    `tests/test_doctor.py::CanaryTriggerCheckTest` и
+    `tests/test_pin.py::PinUpdateRefusalMessageTest`."""
+
+    def setUp(self):
+        super().setUp()
+        self.conn = store.db()
+        self.add_synced_origin()
+
+
+class OriginRealGitSandbox(RealGitSandbox):
+    """`RealGitSandbox` + bare `origin`, готовый к явному вызову
+    `add_origin()` — НЕ в `setUp`: часть сценариев (например
+    `PushWithoutOriginTest`) умышленно заводится без origin (SPEC
+    01M2DC6SQVSANMECXPDZJDP75D, R8) — метод `add_origin` байт-в-байт
+    повторялся в
+    `tests/test_artifact_branch_push.py::PushJournalSandbox` и
+    `tests/test_doctor_artifact_branch_sync.py::ArtifactBranchSyncSandbox`."""
+
+    def add_origin(self) -> str:
+        self.bare = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.bare, ignore_errors=True)
+        self.git("init", "-q", "--bare", self.bare)
+        self.git("remote", "add", "origin", self.bare)
+        return self.bare
+
+
+class AutoOriginSandbox(OriginRealGitSandbox):
+    """`OriginRealGitSandbox`, но origin заводится сразу в `setUp` (SPEC
+    01M2DC6SQVSANMECXPDZJDP75D, R8): тело `setUp` байт-в-байт повторялось
+    в `tests/test_artifact_branch_push.py::PushSuccessTest` и
+    `tests/test_doctor_artifact_branch_sync.py::ArtifactBranchSyncSandbox`
+    — второй класс наследует этот класс напрямую, первый примешивает его
+    поверх `PushJournalSandbox` кооперативным `super()` (только у ЭТОГО
+    сценария среди наследников `PushJournalSandbox` origin нужен сразу;
+    `PushWithoutOriginTest`/`PushNonFastForwardTest` — нет или с другой
+    последовательностью, поэтому не сюда)."""
+
+    def setUp(self):
+        super().setUp()
+        self.add_origin()
+
+
+GITIGNORE_TEXT = "__pycache__/\n*.pyc\n*.log\ndropme/\n.artel/\n"
+
+
+class GitignoreCommittedRealGitSandbox(RealGitSandbox):
+    """`RealGitSandbox` + закоммиченный `.gitignore` пульта (SPEC
+    01M2DC6SQVSANMECXPDZJDP75D, R8): тело `setUp` и константа
+    `GITIGNORE_TEXT` байт-в-байт повторялись в
+    `tests/test_doctor_fix_ignored_artifacts.py` и
+    `tests/test_gitcmd_check_ignore.py`."""
+
+    def setUp(self):
+        super().setUp()
+        (self.root / ".gitignore").write_text(GITIGNORE_TEXT, encoding="utf-8")
+        self.git("add", ".gitignore")
+        self.git("commit", "-q", "-m", "gitignore")
 
 
 def assert_acceptance_run_called(acc_run, tdir: Path, code_root: Path) -> None:

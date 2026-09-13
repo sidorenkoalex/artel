@@ -72,9 +72,6 @@ def fake_git_config(*args: str) -> subprocess.CompletedProcess:
 class _MultitargetInvariantsTmpRootTest(TmpRootTest):
     """Песочница: БД, каталоги проектов и слой ролей во временном каталоге."""
 
-    PATCHED_ATTRS = ("ROOT", "DB", "TASKS", "LOGS", "PROJECTS",
-                     "ROLE_HOME", "ROLE_CONFIG_DIR", "TARGETS", "WORKTREES")
-
     def setUp(self):
         super().setUp()
         # ROOT — тоже песочница (не только DB/TASKS/...): `cmd_new` читает

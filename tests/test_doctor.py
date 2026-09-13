@@ -34,11 +34,12 @@ from orchestrator import (alerts, budget, canary, catalog, config,  # noqa: E402
                           doctor, gitcmd, liveness, projects, runner, spend,
                           store)
 from tests import sandbox as sandbox_module  # noqa: E402
-from tests.sandbox import (FakeStream, RealGitSandbox, TmpRootTest,  # noqa: E402
-                           _ts_ago, capture, capture_new_task_id,
-                           claude_only_popen, claude_only_run,
-                           disk_backed_ls_tree_files, disk_backed_show,
-                           fake_git, sync_spec_from_worktree)
+from tests.sandbox import (FakeStream, InitializedTmpRootTest,  # noqa: E402
+                           RealGitSandbox, SyncedOriginConnSandbox,
+                           TaskSeededTmpRootTest, TmpRootTest, _ts_ago,
+                           capture, capture_new_task_id, claude_only_popen,
+                           claude_only_run, disk_backed_ls_tree_files,
+                           disk_backed_show, fake_git, sync_spec_from_worktree)
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
@@ -641,7 +642,7 @@ class BaseBranchCheckTest(unittest.TestCase):
         self.assertEqual(check.status, "warn")
 
 
-class CanaryTriggerCheckTest(RealGitSandbox):
+class CanaryTriggerCheckTest(SyncedOriginConnSandbox):
     """`doctor.check_canary_trigger` (tasks/01M1NGFK3N6MRMYGCC09H975V3/
     SPEC.md, AC-3/AC-4; источник sha — SPEC 01M2B6K02YVJBWE1JDWP85EJH0,
     требование 3/AC-7) — реальный git: сам предмет проверки, возраст в
@@ -657,11 +658,6 @@ class CanaryTriggerCheckTest(RealGitSandbox):
     `cmd_doctor` как инцидент — регресс этого стал бы КАЖДЫЙ прогон
     doctor красным до первого зелёного прогона канарейки.
     """
-
-    def setUp(self):
-        super().setUp()
-        self.conn = store.db()
-        self.add_synced_origin()
 
     def _merge(self, name: str) -> str:
         self.checkout(name, create=True)
@@ -1392,7 +1388,20 @@ class CmdDoctorOriginUnavailableTest(TmpRootTest):
         self.assertIn("критерий не вычислим без origin", out)
 
 
-class LeasesCheckTest(TmpRootTest):
+class _TwoTasksInitializedTest(InitializedTmpRootTest):
+    """`InitializedTmpRootTest` + T001/T002 заведены — общий предок двух
+    классов ниже (SPEC 01M2DC6SQVSANMECXPDZJDP75D, R8: их `setUp` были
+    байт-в-байт одинаковы)."""
+
+    def setUp(self):
+        super().setUp()
+        for task_id in ("T001", "T002"):
+            store.insert_task(store.db(), task_id, "Задача", "in_dev",
+                              f"task/{task_id.lower()}-zadacha",
+                              config.DEFAULT_TARGET, 25.0)
+
+
+class LeasesCheckTest(_TwoTasksInitializedTest):
     """SPEC T044, требование 11: lease с мёртвым pid на этом host — incident.
 
     AC-6 (tasks/T044/acceptance_tests) уже кроет golden path одного
@@ -1400,14 +1409,6 @@ class LeasesCheckTest(TmpRootTest):
     которые критерию не нужны (несколько мёртвых, чужой host, пустая
     таблица), по образцу `OrphansTest`.
     """
-
-    def setUp(self):
-        super().setUp()
-        capture(catalog.cmd_init)
-        for task_id in ("T001", "T002"):
-            store.insert_task(store.db(), task_id, "Задача", "in_dev",
-                              f"task/{task_id.lower()}-zadacha",
-                              config.DEFAULT_TARGET, 25.0)
 
     @staticmethod
     def dead_pid() -> int:
@@ -1527,20 +1528,12 @@ class LeasesCheckTest(TmpRootTest):
         self.assertIsNone(store.get_alert(conn, alert_id)["ack_ts"])
 
 
-class LeaseFailDetailAndReconciliationTest(TmpRootTest):
+class LeaseFailDetailAndReconciliationTest(TaskSeededTmpRootTest):
     """SPEC 01M1GCHKG8DDK4DCZWCE3DYKWC, требования 4-5 (AC-7..AC-10):
     рекон осиротевшего шага и обогащённая FAIL-строка `check_leases`,
     отдельно от golden path (tasks/T044 acceptance) и от анти-race/полей
     (01M1G... acceptance) — здесь узкие юнит-срезы форм, которых критерию
     не нужно."""
-
-    TASK = "T001"
-
-    def setUp(self):
-        super().setUp()
-        capture(catalog.cmd_init)
-        store.insert_task(store.db(), self.TASK, "Задача", "in_dev",
-                          "task/t001-zadacha", config.DEFAULT_TARGET, 25.0)
 
     @staticmethod
     def dead_pid() -> int:
@@ -1710,18 +1703,10 @@ class LeaseAntiRaceTest(TmpRootTest):
         self.assertFalse(any(c.status == "fail" for c in checks), checks)
 
 
-class MergeLockCheckTest(TmpRootTest):
+class MergeLockCheckTest(_TwoTasksInitializedTest):
     """SPEC T053, требование 4: мёртвый держатель мьютекса merge —
     incident-алерт; SPEC T054, требование 2 (AC-2): тот же алерт закрывается
     авто-ack'ом, когда условие исчезло."""
-
-    def setUp(self):
-        super().setUp()
-        capture(catalog.cmd_init)
-        for task_id in ("T001", "T002"):
-            store.insert_task(store.db(), task_id, "Задача", "in_dev",
-                              f"task/{task_id.lower()}-zadacha",
-                              config.DEFAULT_TARGET, 25.0)
 
     @staticmethod
     def dead_pid() -> int:
@@ -1898,17 +1883,13 @@ class MergeQueueCheckTest(TmpRootTest):
                            for c in checks))
 
 
-class BranchFreshnessCheckTest(TmpRootTest):
+class BranchFreshnessCheckTest(InitializedTmpRootTest):
     """SPEC T051, требование 8 (AC-5): активная задача с веткой, отставшей
     от `config.MAIN_BRANCH` больше чем на `config.STALE_BRANCH_WARN_COMMITS`
     коммитов, — warn, не incident (см. PLAN «Подход»); требование 9 (AC-6)
     — git не отвечающий осмысленно пропускается молча, по образцу
     `LeasesCheckTest`/`OrphansTest`.
     """
-
-    def setUp(self):
-        super().setUp()
-        capture(catalog.cmd_init)
 
     def test_stale_active_task_warns(self):
         store.insert_task(store.db(), "T001", "Задача", "in_dev",
@@ -1959,7 +1940,7 @@ class BranchFreshnessCheckTest(TmpRootTest):
         self.assertEqual(alerts.open_alerts(store.db(), "incident"), [])
 
 
-class TaskCounterCheckTest(TmpRootTest):
+class TaskCounterCheckTest(InitializedTmpRootTest):
     """SPEC T094, требование 6 (AC-7) СУПЕРСЕДИРУЕТ SPEC T049 требование 3:
     контур счётчика номеров заморожен как legacy (генератор id — ULID,
     `orchestrator/idgen.py`) — сверка деградирована до информационной,
@@ -1968,10 +1949,6 @@ class TaskCounterCheckTest(TmpRootTest):
     `cmd_init`, реальный git) — `tasks/T049/acceptance_tests/
     test_ac2_doctor_counter_incident.py` (обновлён этой же задачей);
     здесь `check_task_counters` дёргается напрямую, без git."""
-
-    def setUp(self):
-        super().setUp()
-        capture(catalog.cmd_init)
 
     def test_counter_behind_observed_max_is_informational_only(self):
         (config.TASKS / "T010").mkdir(parents=True)
@@ -2410,6 +2387,11 @@ class _RoleHomeReferenceTmpRootTest(sandbox_module.TmpRootTest):
     (`tasks/01M1RDCEF0JZ4AVQRE43JFH8TN/acceptance_tests/
     test_ac13_doctor_role_home_reference_diff.py`)."""
 
+    # Полный ALL_CONFIG_ATTRS избыточен и вреден здесь (SPEC
+    # 01M2DC6SQVSANMECXPDZJDP75D, AC-2): `setUp` ниже читает `config.ROOT /
+    # "docs" / "reference" / "role-home" / "claude"` — патч ROOT увёл бы
+    # этот путь во временный каталог, где такого дерева нет, и `setUp`
+    # падал бы ENOENT на каждом тесте.
     PATCHED_ATTRS = ("ROLE_HOME", "ROLE_CONFIG_DIR")
 
     def setUp(self):

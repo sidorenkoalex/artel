@@ -20,7 +20,7 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from orchestrator import budget, config, gitcmd, lease, store  # noqa: E402
-from tests.sandbox import TmpRootTest, _ts_ago  # noqa: E402
+from tests.sandbox import SchemaSeededTmpRootTest, TmpRootTest, _ts_ago  # noqa: E402
 
 
 def _insert_lease(conn, task_id: str, session_id: str, hostname: str,
@@ -32,16 +32,8 @@ def _insert_lease(conn, task_id: str, session_id: str, hostname: str,
     conn.commit()
 
 
-class AcquireSameHostOkTest(TmpRootTest):
+class AcquireSameHostOkTest(SchemaSeededTmpRootTest):
     """Требование 1: `lease.acquire(..., same_host_ok=True)`."""
-
-    TASK = "T001"
-
-    def setUp(self):
-        super().setUp()
-        store.create_schema(store.db())
-        store.insert_task(store.db(), self.TASK, "Задача", "in_dev",
-                          "task/t001-zadacha", config.DEFAULT_TARGET, 25.0)
 
     def row(self):
         return store.lease_row(store.db(), self.TASK)
@@ -99,14 +91,7 @@ class AcquireSameHostOkTest(TmpRootTest):
         self.assertEqual(self.row()["session_id"], "sess-caller")
 
 
-class IsLiveTest(TmpRootTest):
-    TASK = "T001"
-
-    def setUp(self):
-        super().setUp()
-        store.create_schema(store.db())
-        store.insert_task(store.db(), self.TASK, "Задача", "in_dev",
-                          "task/t001-zadacha", config.DEFAULT_TARGET, 25.0)
+class IsLiveTest(SchemaSeededTmpRootTest):
 
     def test_no_lease_row_is_not_live(self):
         self.assertFalse(lease.is_live(store.db(), self.TASK))

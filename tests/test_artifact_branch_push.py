@@ -10,7 +10,7 @@ from pathlib import Path
 from unittest import mock
 
 from orchestrator import artifact_branch, gitcmd, store
-from tests.sandbox import RealGitSandbox
+from tests.sandbox import AutoOriginSandbox, OriginRealGitSandbox
 
 
 class ClassifyPushFailureTest(unittest.TestCase):
@@ -34,7 +34,7 @@ class ClassifyPushFailureTest(unittest.TestCase):
             artifact_branch.PUSH_REASON_NETWORK)
 
 
-class PushJournalSandbox(RealGitSandbox):
+class PushJournalSandbox(OriginRealGitSandbox):
     """Пульт — настоящий git-репозиторий; `self.bare` — origin, подключается
     отдельным вызовом `add_origin` (нужны сценарии и с ним, и без него)."""
 
@@ -44,13 +44,6 @@ class PushJournalSandbox(RealGitSandbox):
         super().setUp()
         store.insert_task(store.db(), self.TASK, "Задача", "in_dev",
                           f"task/{self.TASK.lower()}-x", "artel", 25.0)
-
-    def add_origin(self) -> str:
-        self.bare = tempfile.mkdtemp()
-        self.addCleanup(shutil.rmtree, self.bare, ignore_errors=True)
-        self.git("init", "-q", "--bare", self.bare)
-        self.git("remote", "add", "origin", self.bare)
-        return self.bare
 
     def commit(self, text: str) -> str:
         return artifact_branch.commit_files(
@@ -96,11 +89,13 @@ class PushWithoutOriginTest(PushJournalSandbox):
         self.assertEqual(push_calls, [])
 
 
-class PushSuccessTest(PushJournalSandbox):
-
-    def setUp(self):
-        super().setUp()
-        self.add_origin()
+class PushSuccessTest(AutoOriginSandbox, PushJournalSandbox):
+    """Множественное наследование (не просто `PushJournalSandbox`): `setUp`
+    этого сценария был байт-в-байт как `ArtifactBranchSyncSandbox.setUp`
+    в `tests/test_doctor_artifact_branch_sync.py` (SPEC
+    01M2DC6SQVSANMECXPDZJDP75D, R8) — `AutoOriginSandbox` несёт этот
+    `setUp` один раз, кооперативный `super()` проводит инициализацию через
+    `PushJournalSandbox` (заводит задачу) перед вызовом `add_origin()`."""
 
     def test_returns_true_and_journals_success(self):
         self.commit("спека\n")

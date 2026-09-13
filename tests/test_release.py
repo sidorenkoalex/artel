@@ -16,23 +16,15 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from orchestrator import catalog, config, release, store  # noqa: E402
-from tests.sandbox import TmpRootTest, _ts_ago, capture  # noqa: E402
+from orchestrator import config, release, store  # noqa: E402
+from tests.sandbox import BudgetSeededTmpRootTest, _ts_ago, capture  # noqa: E402
 
 HOLDER_SESSION = "session-holder"
 HOLDER_PID = 424242
 HOLDER_HOST = "holder-host"
 
 
-class ReleaseTest(TmpRootTest):
-    TASK = "T001"
-
-    def setUp(self):
-        super().setUp()
-        capture(catalog.cmd_init)
-        store.insert_task(store.db(), self.TASK, "Задача", "in_dev",
-                          "task/t001-zadacha", config.DEFAULT_TARGET,
-                          config.DEFAULT_BUDGET_USD)
+class ReleaseTest(BudgetSeededTmpRootTest):
 
     def insert_lease(self, task_id: str, session_id: str, pid: int,
                      hostname: str, heartbeat_ts: str) -> None:

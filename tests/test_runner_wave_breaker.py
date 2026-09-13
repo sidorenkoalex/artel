@@ -16,16 +16,12 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from orchestrator import alerts, config, runner, store  # noqa: E402
-from tests.sandbox import TmpRootTest  # noqa: E402
+from tests.sandbox import SchemaTmpRootTest  # noqa: E402
 
 OTHER_TARGET = "sled"
 
 
-class WaveBreakerAlertsOpenTest(TmpRootTest):
-
-    def setUp(self):
-        super().setUp()
-        store.create_schema(store.db())
+class WaveBreakerAlertsOpenTest(SchemaTmpRootTest):
 
     def raise_wave_breaker(self, target: str | None = None,
                            message: str = "стоп-кран волны: класс 1б у 3 "

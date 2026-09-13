@@ -12,7 +12,6 @@
 Оператор отдельным ADR; перечень «инвариант → тест → откуда» —
 docs/invariants.md.
 """
-import shutil
 import sqlite3
 import sys
 import tempfile
@@ -24,34 +23,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from orchestrator import (agent_log, catalog, config, fsm, gitcmd,  # noqa: E402
                           runner, store)
-from tests.sandbox import (FakeProc, FakeStream, TmpRootTest,  # noqa: E402
-                           capture_new_task_id, disk_backed_ls_tree_files,
-                           disk_backed_show, fake_git,
-                           seed_developer_brief_fixtures, sync_spec_from_worktree)
-
-REPO_ROOT = Path(__file__).resolve().parent.parent
-
-
-class _AgentFailureTmpRootTest(TmpRootTest):
-    """Общая песочница: DB, TASKS и LOGS уводятся во временный каталог.
-
-    `ROOT` тоже уводится (SPEC T049: холодный старт сканирует его для
-    посева счётчика — непропатченный ROOT читал бы реальное дерево
-    пульта) — `templates/` копируется рядом, `cmd_new` продолжает читать
-    настоящий `templates/SPEC.md`, только уже из песочницы.
-    """
-
-    PATCHED_ATTRS = ("DB", "TASKS", "LOGS", "ROLE_HOME", "ROLE_CONFIG_DIR",
-                     "WORKTREES", "ROOT")
-
-    def setUp(self):
-        super().setUp()
-        shutil.copytree(REPO_ROOT / "templates", self.root / "templates")
-        shutil.copytree(REPO_ROOT / "skills", self.root / "skills")
-        seed_developer_brief_fixtures(self.root)
-
-
-TmpRootTest = _AgentFailureTmpRootTest
+from tests.sandbox import (DeveloperBriefTmpRootTest as TmpRootTest,  # noqa: E402
+                           FakeProc, FakeStream, capture_new_task_id,
+                           disk_backed_ls_tree_files, disk_backed_show,
+                           fake_git, sync_spec_from_worktree)
 
 
 class LogTailTest(TmpRootTest):

@@ -13,19 +13,12 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from orchestrator import catalog, config, store, zone_lock  # noqa: E402
-from tests.sandbox import TmpRootTest, capture  # noqa: E402
+from orchestrator import config, store, zone_lock  # noqa: E402
+from tests.sandbox import TaskSeededTmpRootTest, capture  # noqa: E402
 
 
-class ZoneLockTest(TmpRootTest):
-    TASK = "T001"
+class ZoneLockTest(TaskSeededTmpRootTest):
     OTHER = "T901"
-
-    def setUp(self):
-        super().setUp()
-        capture(catalog.cmd_init)
-        store.insert_task(store.db(), self.TASK, "Задача", "in_dev",
-                          "task/t001-zadacha", config.DEFAULT_TARGET, 25.0)
 
     def set_own_zones(self, zones: str | None) -> None:
         store.update_task(store.db(), self.TASK, zones=zones)

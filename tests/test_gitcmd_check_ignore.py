@@ -12,18 +12,11 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from orchestrator import config, gitcmd  # noqa: E402
-from tests.sandbox import RealGitSandbox  # noqa: E402
+from tests.sandbox import (GitignoreCommittedRealGitSandbox,  # noqa: E402
+                           RealGitSandbox)
 
-GITIGNORE_TEXT = "__pycache__/\n*.pyc\n*.log\ndropme/\n.artel/\n"
 
-
-class CheckIgnoreTest(RealGitSandbox):
-
-    def setUp(self):
-        super().setUp()
-        (self.root / ".gitignore").write_text(GITIGNORE_TEXT, encoding="utf-8")
-        self.git("add", ".gitignore")
-        self.git("commit", "-q", "-m", "gitignore")
+class CheckIgnoreTest(GitignoreCommittedRealGitSandbox):
 
     def test_empty_paths_is_empty_without_a_git_call(self):
         """Ловит мутацию: удаление короткого пути `if not paths: return
