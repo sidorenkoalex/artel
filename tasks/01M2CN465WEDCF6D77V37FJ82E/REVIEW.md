@@ -3,21 +3,55 @@ task: 01M2CN465WEDCF6D77V37FJ82E
 type: review
 author_role: reviewer
 status: approved        # draft | approved | changes_requested | escalate
-iteration: 1
+iteration: 2
 schema_version: 5    # версия формата артефакта, см. scripts/guard.py
 ---
 
 # REVIEW: Фикс утечки тестов в настоящий пульт: WORKTREES в песочнице test_git_fixation
 
+## Контекст итерации 2
+
+Инкрементальный diff пакета (от sha предыдущего вердикта b450f886 до
+HEAD) пуст — HEAD ветки и есть b450f886. Согласно
+skills/review-checklist.md («Инкрементальный diff пакета — пустой не
+значит без изменений»), проверил вручную: реальный коммит вердикта
+итерации 1 — `90443168` («подтяжка main» сразу после кода задачи
+`1634fd23`, на него ссылается сама REVIEW.md итерации 1 в «Проверено
+исполнением» и в комментарии к требованию 3). После него в ветку вошли
+ДВЕ новых подтяжки main:
+
+- `e19bead2` — смержен несвязанный `01M2CN3VV99BTAJF2JBTNADQPH`
+  (рефакторинг `orchestrator/checkpoint.py`, свои `tasks/`/acceptance_tests)
+  — вне зоны `tests/.` этой задачи, кода этой задачи не касается.
+- `b450f886` — смержен `1bd1bb7b`, которым Оператор закоммитил в main
+  ИМЕННО тот unified diff (`tests/test_invariants.py`,
+  `docs/invariants.md`), что был приложен к PLAN.md этой задачи (AC-4).
+
+Требовалась повторная проверка: (а) код задачи (`tests/test_git_fixation.py`)
+не пострадал при двух подтяжках; (б) применённый инвариант 37 —
+дословно тот, что проверяла итерация 1 диффом, и реально проходит на
+текущем дереве (раньше был только `git apply --check`, теперь код
+слит по-настоящему).
+
+Эскалации ANSWER-1/ANSWER-2 — о дефекте самой планки AC-4
+(`test_ac4_invariants_diff_attachment.py` читала PLAN.md с диска вместо
+артефактной ветки; база сравнения диффа была локальный `main`, а не
+`origin/main`) на этапе acceptance, не о коде этой задачи. Оператор
+дважды поправил планку командой `amend-tests`; код и PLAN этой задачи
+не менялись. К зоне ревью это относится только фактом: FSM вернул
+задачу в `verifying`/`review` не из-за замечаний ревью, а из-за
+подтяжек main после починки планки — что и объясняет iteration: 2 без
+изменений кода.
+
 ## Соответствие SPEC
 
 | Требование | Вердикт | Комментарий |
 |---|---|---|
-| 1 (`_GitFixationTmpRootTest.PATCHED_ATTRS` несёт `WORKTREES`/`BACKUP_MARKER`) | OK | tests/test_git_fixation.py:159-161 — кортеж расширен ровно на эти два атрибута, остальные семь сохранены дословно. |
-| 2 (прочие классы с собственным `PATCHED_ATTRS` сверены) | OK | Пересчитал grep `PATCHED_ATTRS` по `tests/*.py` независимо от таблицы PLAN — те же 8 классов вне `_GitFixationTmpRootTest`. Прочёл тела всех восьми: 6 классов (`test_acceptance_tests_flow.py:203`, `test_agent_failure.py:44`, `test_agent_log.py:81`, `test_analyst_role.py:133`, `test_multitarget_invariants.py:75`, `test_step_cost.py:70`) уже несут `WORKTREES` в своём кортеже — подтверждено чтением, не только таблицей. `test_catalog_new_race.py:34` тоже несёт `WORKTREES`. Оставшиеся два — заявленные исключения: `test_doctor.py:2413` (`_RoleHomeReferenceTmpRootTest`) патчит только `ROLE_HOME`/`ROLE_CONFIG_DIR`, `ROOT` намеренно настоящий и класс только читает (`doctor.check_role_home_reference()`) — записи по `WORKTREES` в теле нет; `test_multitarget.py:104` (`_MultitargetTmpRootTest`) патчит `runner.workspace.ensure` целиком через `mock.patch.object` (строки 134-138) — сам путь к записи подменён, а не обойдён, что явно допустимо AC-2. Таблица PLAN («Покрытие требований») соответствует фактическому коду. |
-| 3 (полный прогон `tests/` не создаёт каталоги в `.artel/worktrees`, `git status --porcelain` пуст) | OK (частично — по модулям, не полным набором) | Прогнал `tests/test_git_fixation.py` (41/41), `tests/test_sandbox.py`+`tests/test_multitarget.py`+`tests/test_catalog_new_race.py` (65/65) — `git status --porcelain` до/после пуст, каталогов в `.artel/worktrees` не появилось. Полный набор `tests/` в шаге ревью не гоняется (решение Оператора 05.09) — AC-3 в целом остаётся за CI job `python` (см. «Статус CI» пакета — зелёный на 90443168). |
-| 4 (новый инвариант — только приложением диффа к PLAN.md, `tests/test_invariants.py` не редактируется в ветке) | OK | Diff в код ветки не входит (git diff --stat подтверждает: только `docs/codebase-map.md` и `tests/test_git_fixation.py`). Оба приложенных унифицированных диффа (`tests/test_invariants.py`, `docs/invariants.md`) прогнал `git apply --check` на текущем дереве (эти два файла в ветке идентичны `main`@01b6a33c, что и заявляет PLAN) — оба применяются чисто. Новый тестовый класс несёт три метода, каждый с докстрингом «Ловит мутацию: …», описывающим сценарий и наблюдаемое свойство, не пересказ имени. |
-| 5 (ассерты существующих тестов не меняются) | OK | Diff `tests/test_git_fixation.py` — только добавление двух строковых литералов в существующий кортеж, ни одна строка `assert`/тела теста не тронута. |
+| 1 (`_GitFixationTmpRootTest.PATCHED_ATTRS` несёт `WORKTREES`/`BACKUP_MARKER`) | OK | tests/test_git_fixation.py:159-161 — кортеж по-прежнему расширен ровно на эти два атрибута; две подтяжки main этот файл не тронули (подтверждено `git diff main...HEAD -- tests/test_git_fixation.py` — тот же 1 файл, 3 строки, что и на итерации 1). |
+| 2 (прочие классы с собственным `PATCHED_ATTRS` сверены) | OK | Перепроверил `grep -n "PATCHED_ATTRS = " tests/*.py` заново на текущем HEAD (после обеих подтяжек) — тот же список из 8 внешних классов, что и на итерации 1, без добавлений: подтянутая задача `01M2CN3VV99BTAJF2JBTNADQPH` не заводит новых классов с собственным `PATCHED_ATTRS`. Оба заявленных исключения (`test_doctor.py:2413`, `test_multitarget.py:104`) на месте, без изменений. |
+| 3 (полный прогон `tests/` не создаёт каталоги в `.artel/worktrees`, `git status --porcelain` пуст) | OK | Прогнал `tests/test_git_fixation.py` (41/41) и `tests/test_sandbox.py`+`tests/test_multitarget.py`+`tests/test_catalog_new_race.py` (65/65) на текущем HEAD — `git status --porcelain` до/после пуст (только untracked `tasks/01M2CN465WEDCF6D77V37FJ82E/`, не код), каталог `.artel/worktrees` в рабочей копии отсутствует и после прогона. Полный набор `tests/` — за CI (см. «Статус CI» пакета: 14 проверок зелёные на b450f886 = текущий HEAD). |
+| 4 (новый инвариант — только приложением диффа к PLAN.md, `tests/test_invariants.py` не редактируется в КОДЕ ВЕТКИ ЗАДАЧИ) | OK | `git diff main...HEAD -- tests/test_invariants.py docs/invariants.md` — пусто: файлы в ветке идентичны main, дифф пришёл ЧЕРЕЗ подтяжку коммита Оператора `1bd1bb7b`, не правкой этой ветки — требование про код ветки не нарушено. Дополнительно (сверх итерации 1, тогда было только `git apply --check`): теперь дифф реально слит в дерево — прогнал `python3 -m unittest tests.test_invariants.SandboxPatchedAttrsCoverWorktreesInvariantTest -v`: 3/3 зелёных, включая `test_repo_tree_sandboxes_patch_worktrees_or_are_allowlisted` — инвариант 37 реально подтверждает фикс этой задачи на боевом коде, не только на синтетике. Текст класса/докстринги дословно совпадают с приложением PLAN.md (сверил построчно). |
+| 5 (ассерты существующих тестов не меняются) | OK | `git diff main...HEAD -- tests/test_git_fixation.py` — только добавление двух строковых литералов в существующий кортеж, ни один `assert`/тело теста не тронуты. Файлы, пришедшие подтяжкой (`orchestrator/checkpoint.py`, `tasks/01M2CN3VV99BTAJF2JBTNADQPH/**`, новый `docs/retro/...`) — код чужой смерженной задачи, не этой; вне зоны и вне ответственности этого REVIEW. |
 
 ## Замечания
 
@@ -25,7 +59,7 @@ schema_version: 5    # версия формата артефакта, см. scr
 
 ## Реестр замечаний
 
-Замечаний нет — реестр пуст.
+Замечаний нет — реестр пуст (итерация 1 тоже была пустой).
 
 ## Вердикт
 
@@ -33,13 +67,14 @@ approved
 
 ## Проверено исполнением
 
-- `python3 -m unittest tests.test_git_fixation -v` — 41 тест, все зелёные (26.5с); после прогона `git status --porcelain` пуст, новых каталогов в `.artel/worktrees` не появилось.
-- `python3 -m unittest tests.test_sandbox tests.test_multitarget tests.test_catalog_new_race` — 65 тестов, все зелёные (30.8с).
-- `git apply --check` на приложенных к PLAN.md диффах `tests/test_invariants.py` и `docs/invariants.md` (сохранены во временные файлы, прогнаны против текущего дерева задачи, где оба файла идентичны `main`@01b6a33c) — оба применяются чисто, оба временных файла удалены (`git clean -f`) до сдачи REVIEW.md, в диффе кода не участвуют.
-- `python3 scripts/codebase_map.py` — контрольный прогон вручную (не для коммита): диф свёлся только к строке `built_at_sha` (текущий HEAD `90443168` вместо `812c9064` из коммита ветки) — по правилу скила («built_at_sha… не признак дефекта») это не расхождение по содержимому; тестовый прогон отменён (`git checkout -- docs/codebase-map.md`), в рабочем дереве изменений не осталось.
-- `grep -rn "PATCHED_ATTRS" tests/*.py` + точечное чтение всех 8 внешних классов (offsets выше) — таблица ревизии PLAN подтверждена самостоятельным чтением кода, не принята на слово.
-- Статус CI пакета (14 проверок, зелёный на 90443168) принят как подтверждение AC-3 на полном наборе — сам полный прогон в шаге не повторялся (решение Оператора 05.09).
+- `git diff --stat b450f886...HEAD` и `git diff main...HEAD --stat` — сверил фактический дифф кода задачи не изменился со времени вердикта итерации 1 (реальный коммит вердикта `90443168`, не `b450f886` — см. «Контекст итерации 2»); единственная правка кода задачи — `tests/test_git_fixation.py` (3 строки), как и раньше.
+- `python3 -m unittest tests.test_git_fixation -v` — 41 тест, все зелёные (26.4с); `git status --porcelain` пуст до/после, `.artel/worktrees` не появился.
+- `python3 -m unittest tests.test_sandbox tests.test_multitarget tests.test_catalog_new_race` — 65 тестов, все зелёные (30.9с).
+- `python3 -m unittest tests.test_invariants.SandboxPatchedAttrsCoverWorktreesInvariantTest -v` — 3 теста, все зелёные (0.24с) — инвариант 37 (пришедший подтяжкой `1bd1bb7b`) реально проходит на текущем коде задачи, не только `git apply --check`, как на итерации 1.
+- `grep -n "PATCHED_ATTRS = " tests/*.py` — 8 внешних классов те же, что на итерации 1, подтягивание main новых не добавило.
+- `git diff main...HEAD -- docs/codebase-map.md` без строки `built_at_sha` — дифф пуст (правило скила: расхождение только в `built_at_sha` не дефект).
+- Статус CI пакета (14 проверок, зелёный на b450f886 = текущий HEAD) принят как подтверждение AC-3 на полном наборе — сам полный прогон `tests/` в шаге не повторялся (решение Оператора 05.09).
 
 ## Предложения системе
 
-- Идея хелпера `TmpRootTest.with_real_git()`/`.without_worktrees()` (PLAN.md, «Предложения системе») — согласен, класс «песочница вручную перечисляет узкое подмножение `PATCHED_ATTRS» уже дважды приводил к регрессии (d692f2a6 и, судя по докстрингу нового инварианта, повтору CR-2026-09-12-1) — стоит завести отдельной задачей R8, не блокирует эту.
+- Наблюдение независимо от этой задачи, но обнаруженное в её материалах: у diff-пакета ревью «sha предыдущего вердикта» второй раз подряд (после T087) указывает не на коммит вердикта, а на коммит, куда его снёс автокоммит/подтяжка main — здесь `b450f886` вместо настоящего `90443168`. Инкрементальный diff пакета из-за этого оказался пуст, хотя ветка дважды подтягивала main между вердиктами. Стоит чинить сам механизм вычисления базы инкрементального диффа (искать коммит по содержимому REVIEW.md с прошлым статусом, не по сохранённому sha), а не оставлять это на ручную перепроверку каждым ревьювером.
