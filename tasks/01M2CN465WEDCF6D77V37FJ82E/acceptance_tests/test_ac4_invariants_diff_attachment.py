@@ -40,9 +40,27 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 import _util  # noqa: E402
+from orchestrator import artifact_branch, gitcmd  # noqa: E402
 
 TASK_ID = "01M2CN465WEDCF6D77V37FJ82E"
 PLAN_PATH = _util.REPO_ROOT / "tasks" / TASK_ID / "PLAN.md"
+
+
+def _plan_text() -> str | None:
+    """Текст PLAN.md — из артефактной ветки задачи (там он живёт по
+    ADR-0016; на диске при прогоне планки пультом лежит только
+    `acceptance_tests/`), тем же примитивом, что читает артефакты сам
+    пульт (`gitcmd.show`). Диск — запасной источник для ручного прогона
+    роли до автокоммита (правка Оператора 13.09, amend-tests: прежняя
+    версия читала только диск и краснела на прогоне пультом после
+    подтяжки main — класс 12.09, AC-8 01M2B6K3EM)."""
+    text, _reason = gitcmd.show(artifact_branch.branch_name(TASK_ID),
+                                f"tasks/{TASK_ID}/PLAN.md")
+    if text:
+        return text
+    if PLAN_PATH.is_file():
+        return PLAN_PATH.read_text(encoding="utf-8")
+    return None
 TARGET_FILE = "tests/test_invariants.py"
 
 _DIFF_BLOCK_RE = re.compile(
@@ -85,11 +103,11 @@ class PlanAttachesApplicableInvariantsDiffTest(unittest.TestCase):
         отвечает «patch with only garbage at line N») — `returncode`
         станет ненулевым, и тест покраснеет вместо тихого прохождения.
         """
-        self.assertTrue(
-            PLAN_PATH.exists(),
-            f"{PLAN_PATH} ещё не создан — приложение диффа AC-4 — "
-            f"обязанность роли developer")
-        plan_text = PLAN_PATH.read_text(encoding="utf-8")
+        plan_text = _plan_text()
+        self.assertIsNotNone(
+            plan_text,
+            f"{PLAN_PATH} ещё не создан ни в артефактной ветке, ни на "
+            f"диске — приложение диффа AC-4 — обязанность роли developer")
 
         match = _DIFF_BLOCK_RE.search(plan_text)
         self.assertIsNotNone(
