@@ -1,0 +1,157 @@
+=== setUp duplicate groups (>=2 files/classes) ===
+--- group 1 (4 occurrences) ---
+  tests/test_acceptance_collect.py:45 class CollectTest
+  tests/test_acceptance_tests_flow.py:328 class ScanAcceptanceTestsTest
+  tests/test_acceptance_tests_flow.py:641 class ScanRednessMarkersTest
+  tests/test_id_format_guard.py:166 class ScanIdFormatSamplesTest
+--- group 2 (2 occurrences) ---
+  tests/test_acceptance_tests_flow.py:364 class AcceptanceTraceabilityFunctionTest
+  tests/test_acceptance_tests_flow.py:443 class IndentedAcMarkerTest
+--- group 3 (3 occurrences) ---
+  tests/test_agent_failure.py:47 class _AgentFailureTmpRootTest
+  tests/test_agent_log.py:84 class _AgentLogTmpRootTest
+  tests/test_step_cost.py:73 class _StepCostTmpRootTest
+--- group 4 (8 occurrences) ---
+  tests/test_alerts_wave_breaker.py:29 class WaveBreakerTestBase
+  tests/test_diff_not_collected_alerts.py:36 class RaiseDiffNotCollectedAlertTest
+  tests/test_diff_not_collected_alerts.py:78 class CloseDiffNotCollectedAlertsTest
+  tests/test_doctor_wave_breaker.py:25 class DoctorWaveBreakerFirstLineTest
+  tests/test_notes.py:196 class CmdNoteArgumentValidationTest
+  tests/test_runner_wave_breaker.py:26 class WaveBreakerAlertsOpenTest
+  tests/test_stall_alerts.py:39 class RaiseAttentionAlertTest
+  tests/test_stall_alerts.py:96 class CloseAttentionAlertsTest
+--- group 5 (2 occurrences) ---
+  tests/test_answer_branch_reads.py:90 class AnswerFileCountOnForeignBranchTest
+  tests/test_answer_branch_reads.py:135 class BriefAnswerComponentsOnForeignBranchTest
+--- group 6 (2 occurrences) ---
+  tests/test_artifact_branch_push.py:101 class PushSuccessTest
+  tests/test_doctor_artifact_branch_sync.py:67 class ArtifactBranchSyncSandbox
+--- group 7 (5 occurrences) ---
+  tests/test_auto_escalated_return_rework_gate.py:26 class RoleStepSinceStateEntryTest
+  tests/test_fsm_review_rework_gate.py:43 class ReviewerVerdictBaselineTest
+  tests/test_fsm_review_rework_sha_gate.py:26 class CodeShaAtReviewEscalationTest
+  tests/test_program_spend_reseed.py:20 class ProgramSpendReseedTest
+  tests/test_spent_estimate_store.py:68 class TotalEstimateTest
+--- group 8 (2 occurrences) ---
+  tests/test_budget_live_lease_and_escalation.py:40 class AcquireSameHostOkTest
+  tests/test_budget_live_lease_and_escalation.py:105 class IsLiveTest
+--- group 9 (2 occurrences) ---
+  tests/test_canary.py:369 class CanaryBaselineStoreRoundtripTest
+  tests/test_canary.py:430 class GreenCanaryRunsTest
+--- group 10 (4 occurrences) ---
+  tests/test_canary.py:1305 class MergesSinceLastGreenRunTest
+  tests/test_dry_run.py:66 class DryRunSandboxTest
+  tests/test_pin.py:35 class PinUpdateGateOrderTest
+  tests/test_pin.py:158 class PinToResetFailureTest
+--- group 11 (2 occurrences) ---
+  tests/test_cas_set_state.py:23 class SetStateCasTest
+  tests/test_stall_alerts.py:169 class SetStateClosesAttentionAlertTest
+--- group 12 (3 occurrences) ---
+  tests/test_catalog_status_log.py:22 class CmdLogSessionIdTest
+  tests/test_catalog_status_log.py:59 class CmdStatusLeaseHolderTest
+  tests/test_store_journal.py:20 class JournalSessionIdTest
+--- group 13 (3 occurrences) ---
+  tests/test_catalog_wave_breaker_status.py:58 class CmdStatusWaveBreakerMarkTest
+  tests/test_pause.py:26 class PauseTest
+  tests/test_release.py:30 class ReleaseTest
+--- group 14 (3 occurrences) ---
+  tests/test_ci_status.py:31 class BranchStatusTest
+  tests/test_ci_status.py:359 class VerifyingStatusTest
+  tests/test_ci_status.py:486 class VerifyingStatus422Test
+--- group 15 (13 occurrences) ---
+  tests/test_detached_cycle.py:96 class LaunchDetachedTest
+  tests/test_detached_cycle.py:214 class CmdStopTest
+  tests/test_detached_cycle.py:305 class LeaseForceTest
+  tests/test_detached_cycle.py:474 class WaitZoneFlagHotfix22Test
+  tests/test_doctor.py:1539 class LeaseFailDetailAndReconciliationTest
+  tests/test_lease.py:64 class AcquireReleaseTest
+  tests/test_lease.py:194 class OwnSessionLiveOtherPidTest
+  tests/test_lease.py:323 class AcquireJournalCauseTest
+  tests/test_lease.py:416 class ReleaseAnyTest
+  tests/test_lease.py:456 class RunLockedTest
+  tests/test_lease.py:541 class ForeignLiveLeaseTest
+  tests/test_parallel_limit.py:42 class ParallelLimitTest
+  tests/test_zone_lock.py:24 class ZoneLockTest
+--- group 16 (2 occurrences) ---
+  tests/test_doctor.py:661 class CanaryTriggerCheckTest
+  tests/test_pin.py:67 class PinUpdateRefusalMessageTest
+--- group 17 (2 occurrences) ---
+  tests/test_doctor.py:1404 class LeasesCheckTest
+  tests/test_doctor.py:1718 class MergeLockCheckTest
+--- group 18 (5 occurrences) ---
+  tests/test_doctor.py:1909 class BranchFreshnessCheckTest
+  tests/test_doctor.py:1972 class TaskCounterCheckTest
+  tests/test_prune.py:88 class PruneCanaryDiagCandidatesTest
+  tests/test_prune.py:142 class PruneAlertArchiveStoreTest
+  tests/test_prune.py:188 class PruneReportEmptyStateTest
+--- group 19 (2 occurrences) ---
+  tests/test_doctor_fix_ignored_artifacts.py:20 class FixIgnoredArtifactFilesTest
+  tests/test_gitcmd_check_ignore.py:22 class CheckIgnoreTest
+--- group 20 (2 occurrences) ---
+  tests/test_guard_schema.py:42 class SchemaVersionTest
+  tests/test_yaml_parsing.py:144 class ArtifactsReadTest
+--- group 21 (2 occurrences) ---
+  tests/test_mutation_claim_gate.py:24 class MutationClaimGateGitFailureTest
+  tests/test_protected_paths_gate.py:87 class ZonesGateProtectedPathPriorityTest
+--- group 22 (2 occurrences) ---
+  tests/test_mutation_claim_gate.py:95 class MutationClaimGateFileSelectionTest
+  tests/test_mutation_claim_gate.py:242 class MutationClaimGateRefusalContentTest
+
+=== helper function duplicate groups (same name, same body, >=2 files) ===
+--- helper: event (2 defs across 2 files) ---
+  [SAME BODY]
+    tests/test_agent_log.py:40
+    tests/test_step_cost.py:35
+--- helper: assistant_event (2 defs across 2 files) ---
+  [diff body]
+    tests/test_agent_log.py:45
+  [diff body]
+    tests/test_step_cost.py:46
+--- helper: result_event (3 defs across 3 files) ---
+  [diff body]
+    tests/test_doctor.py:113
+  [diff body]
+    tests/test_multitarget.py:61
+  [diff body]
+    tests/test_step_cost.py:40
+--- helper: _run (2 defs across 2 files) ---
+  [diff body]
+    tests/test_fsm_merge_gate_scratch_worktree_cleanup.py:27
+  [diff body]
+    tests/test_gitcmd_fetch_ref_sha.py:34
+--- helper: spec_text (2 defs across 2 files) ---
+  [diff body]
+    tests/test_guard_division_section.py:62
+  [diff body]
+    tests/test_guard_split_signals.py:57
+--- helper: _row (2 defs across 2 files) ---
+  [diff body]
+    tests/test_kill_live_cycle_refusal.py:27
+  [diff body]
+    tests/test_report.py:20
+--- helper: fake_git_config (2 defs across 2 files) ---
+  [diff body]
+    tests/test_multitarget.py:74
+  [diff body]
+    tests/test_multitarget_invariants.py:65
+
+=== PATCHED_ATTRS occurrences ===
+tests/test_acceptance_tests_flow.py:203 class _AcceptanceFlowTmpRootTest: PATCHED_ATTRS = ("DB", "TASKS", "LOGS", "ROLE_HOME", "ROLE_CONFIG_DIR",
+                     "WORKTREES", "ROOT")
+tests/test_agent_failure.py:44 class _AgentFailureTmpRootTest: PATCHED_ATTRS = ("DB", "TASKS", "LOGS", "ROLE_HOME", "ROLE_CONFIG_DIR",
+                     "WORKTREES", "ROOT")
+tests/test_agent_log.py:81 class _AgentLogTmpRootTest: PATCHED_ATTRS = ("DB", "TASKS", "LOGS", "ROLE_HOME", "ROLE_CONFIG_DIR",
+                     "WORKTREES", "ROOT")
+tests/test_analyst_role.py:133 class _AnalystRoleTmpRootTest: PATCHED_ATTRS = ("DB", "TASKS", "LOGS", "PROJECTS", "ROLE_HOME",
+                     "ROLE_CONFIG_DIR", "WORKTREES", "ROOT")
+tests/test_catalog_new_race.py:34 class PeekTaskNumberRaceTest: PATCHED_ATTRS = ("DB", "TASKS", "LOGS", "WORKTREES", "ROOT")
+tests/test_doctor.py:2413 class _RoleHomeReferenceTmpRootTest: PATCHED_ATTRS = ("ROLE_HOME", "ROLE_CONFIG_DIR")
+tests/test_git_fixation.py:159 class _GitFixationTmpRootTest: PATCHED_ATTRS = ("ROOT", "DB", "TASKS", "LOGS", "PROJECTS",
+                     "ROLE_HOME", "ROLE_CONFIG_DIR", "TARGETS",
+                     "WORKTREES", "BACKUP_MARKER")
+tests/test_multitarget.py:104 class _MultitargetTmpRootTest: PATCHED_ATTRS = ("DB", "TASKS", "LOGS", "PROJECTS",
+                     "ROLE_HOME", "ROLE_CONFIG_DIR", "TARGETS", "ROOT")
+tests/test_multitarget_invariants.py:75 class _MultitargetInvariantsTmpRootTest: PATCHED_ATTRS = ("ROOT", "DB", "TASKS", "LOGS", "PROJECTS",
+                     "ROLE_HOME", "ROLE_CONFIG_DIR", "TARGETS", "WORKTREES")
+tests/test_step_cost.py:70 class _StepCostTmpRootTest: PATCHED_ATTRS = ("DB", "TASKS", "LOGS", "ROLE_HOME", "ROLE_CONFIG_DIR",
+                     "WORKTREES", "ROOT")
