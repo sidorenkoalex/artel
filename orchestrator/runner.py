@@ -241,7 +241,7 @@ def _run_developer_step(conn, task_id: str, t, role: str) -> None:
         sys.exit(payload)
     if action == "return":
         return
-    target, skills = payload
+    target, skills, _model_id = payload
 
     prompt = _build_prompt(conn, task_id, t, role, target, skills)
 
@@ -256,12 +256,13 @@ def _run_developer_step(conn, task_id: str, t, role: str) -> None:
 
 def _refuse_before_start(conn, task_id: str, t, role: str):
     """Отказы шага до старта агента: пауза, стоп-кран волны, чужая ветка
-    worktree, pre-flight, инцидент целостности, скилы роли (SPEC
-    01M2CN3ZCSZ54TFJGTDCXTDHXD, AC-5). Журнал/консоль/`set_state` — те
-    же побочные эффекты, что раньше стояли прямо в `_run_developer_step`;
-    сам `sys.exit`/`return` остаётся за вызывающим кодом — эта функция
+    worktree, pre-flight, инцидент целостности, скилы и модель роли (SPEC
+    01M2CN3ZCSZ54TFJGTDCXTDHXD, AC-5; SPEC 01M2DTT96FS25SHXP0HDTWARQH,
+    требования 1-2, 4). Журнал/консоль/`set_state` — те же побочные
+    эффекты, что раньше стояли прямо в `_run_developer_step`; сам
+    `sys.exit`/`return` остаётся за вызывающим кодом — эта функция
     возвращает признак: `("exit", message)`, `("return", None)` или
-    `("continue", (target, skills))`."""
+    `("continue", (target, skills, model_id))`."""
     # Штатная пауза (SPEC T070, требование 2): пометка стоит — шаг не
     # начинается, но уже идущий шаг (эта же функция, стартовавшая раньше)
     # эта проверка не трогает — она стоит строго до всего, что реально
@@ -378,7 +379,23 @@ def _refuse_before_start(conn, task_id: str, t, role: str):
     if skills is None:
         return "exit", f"[{task_id}] скил роли {role} не прочитан: {reason}"
 
-    return "continue", (target, skills)
+    # Модель роли из roles.yaml (SPEC 01M2DTT96FS25SHXP0HDTWARQH, требования
+    # 1-2, 4): тем же приёмом отказа, что skills выше — нечитаемое значение
+    # поля (не строка/пустая строка) останавливает шаг, вместо того чтобы
+    # молча дотянуть до попытки агента. Поле не задано (`None`) — не отказ:
+    # ровно одна запись предупреждения в журнал ЭТОГО шага (не на попытку —
+    # `run_agent_once` резолвит модель заново для argv/журнала записей
+    # попытки, но не журналирует предупреждение повторно), команда идёт без
+    # `--model` (требование 3).
+    try:
+        model_id = roles.model(role)
+    except roles.RolesError as exc:
+        return "exit", f"[{task_id}] модель роли {role} не прочитана: {exc}"
+    if model_id is None:
+        store.journal(conn, task_id, role, "model WARNING",
+                      "модель роли не задана — дефолт CLI")
+
+    return "continue", (target, skills, model_id)
 
 
 def _build_prompt(conn, task_id: str, t, role: str, target: str,
@@ -817,6 +834,53 @@ def _missing_required_artifact(role: str, cwd: Path, task_id: str) -> str | None
     return None
 
 
+def _resolved_role_model(role: str) -> str | None:
+    """`roles.model(role)`, деградируя к `None` на `RolesError` (SPEC
+    01M2DTT96FS25SHXP0HDTWARQH, требование 2) — защитный повтор: значение,
+    нечитаемое `roles.model`, уже остановило бы шаг раньше, в
+    `_refuse_before_start`, ДО первой попытки. Повтор здесь нужен только
+    потому, что `run_agent_once` (AC-7 `tasks/01M2CN3ZCSZ54TFJGTDCXTDHXD`
+    — 101 патч по имени модуля) не вправе принять новый параметр — модель
+    попытки резолвится тем же вызовом заново, а не передаётся аргументом."""
+    try:
+        return roles.model(role)
+    except roles.RolesError:
+        return None
+
+
+def _model_journal_label(model_id: str | None) -> str:
+    """`<идентификатор>` либо `дефолт CLI` — общий текст поля `model=` для
+    записей журнала шага (SPEC 01M2DTT96FS25SHXP0HDTWARQH, требования
+    5-6)."""
+    return model_id if model_id is not None else "дефолт CLI"
+
+
+def _numbered_with_model(numbered: str, model_id: str | None) -> str:
+    """`numbered`, дополненный `model=` — источник для записей «agent cost
+    KNOWN»/«agent cost PARTIAL», журналируемых `spend.py` (вне зоны этой
+    задачи, требования 5-6): тот же приём, что и «agent run started» в
+    `_prepare_step`, применённый к параметру, который `spend.charge_step`/
+    `charge_missing_result` дословно вставляют в начало своей записи."""
+    return f"{numbered}, model={_model_journal_label(model_id)}"
+
+
+def _cost_partial_expected(role: str, pump) -> bool:
+    """Верно — ровно то же условие, при котором `spend.
+    charge_missing_result` заведёт «agent cost PARTIAL», а не «agent cost
+    LOST»/«agent cost ESTIMATED» (SPEC 01M2DTT96FS25SHXP0HDTWARQH,
+    требование 6): usage-события в потоке были, и курс роли считает
+    частичную сумму без `ValueError`. Условие читается ОТСЮДА (не
+    правкой `spend.py`, вне зоны этой задачи) вызовом её же публичной
+    `partial_cost_usd` — дублируется только ветвление, не арифметика
+    курса."""
+    if not pump.saw_usage_event:
+        return False
+    try:
+        return spend.partial_cost_usd(role, pump.partial_tokens) is not None
+    except ValueError:
+        return False
+
+
 def run_agent_once(conn, task_id: str, role: str, prompt: str,
                    attempt: int) -> tuple[str, str, str | None]:
     """Один запуск агента: исход попытки, пояснение и класс отказа.
@@ -833,18 +897,22 @@ def run_agent_once(conn, task_id: str, role: str, prompt: str,
     функции исходов `_finish_*` (SPEC 01M2CN3ZCSZ54TFJGTDCXTDHXD, AC-1) —
     значение и тип возврата не меняются.
     """
-    skip, ctx = _prepare_step(conn, task_id, role, prompt, attempt)
+    model_id = _resolved_role_model(role)
+
+    skip, ctx = _prepare_step(conn, task_id, role, prompt, attempt, model_id)
     if skip is not None:
         return skip
     log_path, prompt_path, env, cwd, numbered = ctx
 
     skip, spawn_ctx = _spawn_and_wait(
-        conn, task_id, role, log_path, prompt_path, cwd, env, numbered)
+        conn, task_id, role, log_path, prompt_path, cwd, env, numbered,
+        model_id)
     if skip is not None:
         return skip
     proc, pump, rc, timed_out, killed_group = spawn_ctx
 
-    spent = _account_step(conn, task_id, role, pump, timed_out, numbered)
+    spent = _account_step(conn, task_id, role, pump, timed_out, numbered,
+                          model_id)
     agent_pid = getattr(proc, "pid", None)
 
     if timed_out:
@@ -864,7 +932,8 @@ def run_agent_once(conn, task_id: str, role: str, prompt: str,
     return _finish_ok(conn, task_id, role, pump, rc, numbered, spent)
 
 
-def _prepare_step(conn, task_id: str, role: str, prompt: str, attempt: int):
+def _prepare_step(conn, task_id: str, role: str, prompt: str, attempt: int,
+                  model_id: str | None):
     """Подготовка попытки шага: лог/промпт на диске, окружение и рабочий
     каталог роли (SPEC 01M2CN3ZCSZ54TFJGTDCXTDHXD, AC-2/AC-3) — три из
     пяти исходов SKIPPED (промпт не записан; окружение роли не создано;
@@ -936,13 +1005,15 @@ def _prepare_step(conn, task_id: str, role: str, prompt: str, attempt: int):
 
     print(f"[{task_id}] лог шага: {log_path}  (наблюдать: tail -f {log_path})")
     store.journal(conn, task_id, role, "agent run started",
-                  f"{numbered}, лог: {log_path}, промпт: {prompt_path}, "
+                  f"{numbered}, model={_model_journal_label(model_id)}, "
+                  f"лог: {log_path}, промпт: {prompt_path}, "
                   f"окружение: {agent_log.environment_fingerprint()}")
     return None, (log_path, prompt_path, env, cwd, numbered)
 
 
 def _spawn_and_wait(conn, task_id: str, role: str, log_path: Path,
-                    prompt_path: Path, cwd: Path, env: dict, numbered: str):
+                    prompt_path: Path, cwd: Path, env: dict, numbered: str,
+                    model_id: str | None):
     """Запуск агента и ожидание завершения: открытие промпта, `spawn_
     agent`, перекачка вывода, таймаут и снятие группы процессов (SPEC
     01M2CN3ZCSZ54TFJGTDCXTDHXD, AC-3) — оставшиеся два из пяти исходов
@@ -965,11 +1036,20 @@ def _spawn_and_wait(conn, task_id: str, role: str, log_path: Path,
     # Файл открыт только на время запуска: у процесса свой дескриптор,
     # а держать его открытым в оркестраторе незачем.
     with prompt_file:
+        # Модель роли — довеском к argv `role_cmd()`, а не внутри неё:
+        # `role_cmd()` заперта на нулевой список параметров (AC-7 `tasks/
+        # 01M2CN3ZCSZ54TFJGTDCXTDHXD`, 101 патч по имени модуля), а флаг
+        # `--model` — per-role, известен только здесь (SPEC
+        # 01M2DTT96FS25SHXP0HDTWARQH, требование 3). Довесок в конец
+        # списка не переставляет существующие флаги.
+        cmd = role_cmd()
+        if model_id is not None:
+            cmd = cmd + ["--model", model_id]
         try:
             proc = spawn_agent(
                 # Промпт — файлом на стандартном входе, им и отдаётся
                 # `prompt_file` (см. `role_cmd`, флаги — там).
-                role_cmd(),
+                cmd,
                 cwd=cwd, env=env, text=True, bufsize=1,
                 stdin=prompt_file, stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
@@ -1024,7 +1104,7 @@ def _spawn_and_wait(conn, task_id: str, role: str, log_path: Path,
 
 
 def _account_step(conn, task_id: str, role: str, pump, timed_out: bool,
-                  numbered: str) -> str:
+                  numbered: str, model_id: str | None) -> str:
     """Учёт шага: трение, стоимость и потолок программы (SPEC
     01M2CN3ZCSZ54TFJGTDCXTDHXD, AC-3) — без изменения вызовов и их
     порядка. Возвращает `spent` — хвост строки для журналов и печати
@@ -1046,13 +1126,29 @@ def _account_step(conn, task_id: str, role: str, pump, timed_out: bool,
     # требование 4). Признак обрыва пайпа — тот же `pump.error`, что уже
     # заводит «agent log INCOMPLETE» в `close_pump`; новый способ его
     # обнаружить не заводится.
+    # `model=` в «agent cost KNOWN»/«agent cost PARTIAL» (SPEC
+    # 01M2DTT96FS25SHXP0HDTWARQH, требование 6) — без правки `spend.py`
+    # (вне зоны этой задачи): условие «эта попытка заведёт именно ТУ
+    # запись» читается здесь тем же приёмом, что и выбор между веткой
+    # `charge_missing_result`/`charge_step` уже ниже, и `numbered`
+    # достаётся `spend.py` с довеском ТОЛЬКО когда ветка внутри неё и
+    # правда журналирует KNOWN/PARTIAL — иначе «agent cost UNKNOWN»/
+    # «agent cost LOST»/«agent cost ESTIMATED» получили бы `model=` по
+    # ошибке, хотя требование 6 называет только KNOWN и PARTIAL.
     if pump.cost is None and (timed_out or pump.error is not None):
         cause = "таймаут шага" if timed_out else "обрыв stdout-пайпа"
+        numbered_for_cost = (_numbered_with_model(numbered, model_id)
+                             if _cost_partial_expected(role, pump)
+                             else numbered)
         spent = spend.charge_missing_result(
-            conn, task_id, role, numbered, cause,
+            conn, task_id, role, numbered_for_cost, cause,
             pump.partial_tokens, pump.saw_usage_event)
     else:
-        spent = spend.charge_step(conn, task_id, role, pump.cost, numbered)
+        numbered_for_cost = (_numbered_with_model(numbered, model_id)
+                             if pump.cost and pump.cost.get("tokens_by_type")
+                             else numbered)
+        spent = spend.charge_step(conn, task_id, role, pump.cost,
+                                  numbered_for_cost)
     # Порог программы считается сразу после учёта: сумма по всем задачам
     # всех target'ов сдвинулась именно этим шагом (roadmap §5).
     budget.check_program_spend(conn, task_id, pump.cost)

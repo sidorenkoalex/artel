@@ -276,5 +276,58 @@ class RolesTest(unittest.TestCase):
                             f"скил {name} назван в roles.yaml, но файла нет")
 
 
+class RolesModelTest(unittest.TestCase):
+    """`roles.model` — модель роли из roles.yaml (SPEC
+    01M2DTT96FS25SHXP0HDTWARQH, требования 1-2): тот же приём песочницы,
+    что `RolesTest` выше для `skills()`, постоянная копия покрытия
+    приёмочной планки задачи (`tasks/01M2DTT96FS25SHXP0HDTWARQH/
+    acceptance_tests/test_ac1_ac2_roles_model.py`) — планка уходит при
+    следующей чистке каталога задачи, этот файл остаётся регрессией."""
+
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.path = Path(tmp.name) / "roles.yaml"
+        patcher = mock.patch.object(config, "ROLES", self.path)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def write(self, text: str) -> None:
+        self.path.write_text(text, encoding="utf-8")
+
+    def test_model_field_value_is_returned(self):
+        """Ловит мутацию: `model()` путает поле (например, читает `skills`
+        или `token_slot`) либо возвращает булево наличие поля/имя роли
+        вместо самого значения `model:`."""
+        self.write("roles:\n  developer:\n    skills: [a]\n"
+                   "    model: claude-opus-5\n")
+
+        self.assertEqual(roles.model("developer"), "claude-opus-5")
+
+    def test_missing_field_is_none_not_a_refusal(self):
+        """Ловит мутацию: отсутствие `model:` трактуется как отказ (как у
+        `skills()` на отсутствии `skills:`) вместо `None` — AC-1 требует
+        именно `None` для роли без этого поля."""
+        self.write("roles:\n  developer:\n    skills: [a]\n")
+
+        self.assertIsNone(roles.model("developer"))
+
+    def test_non_string_value_is_a_roles_error(self):
+        """Ловит мутацию: нестроковое значение (число, bool) молча
+        приводится к строке (`str(value)`) вместо отказа `RolesError`."""
+        self.write("roles:\n  developer:\n    skills: [a]\n    model: 7\n")
+
+        with self.assertRaises(roles.RolesError):
+            roles.model("developer")
+
+    def test_empty_string_value_is_a_roles_error(self):
+        """Ловит мутацию: проверка ограничивается `isinstance(value, str)`
+        без проверки непустоты — пустая строка проходит как имя модели."""
+        self.write('roles:\n  developer:\n    skills: [a]\n    model: ""\n')
+
+        with self.assertRaises(roles.RolesError):
+            roles.model("developer")
+
+
 if __name__ == "__main__":
     unittest.main()
