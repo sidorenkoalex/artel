@@ -46,13 +46,9 @@ workflows/ci.yml`, приложение к PLAN.md этой задачи — п�
 пишущих пул, — сам код `canary.py` её не читает и не проверяет.
 
 `canary pool-seal`/восстановление пула (SPEC 01M1NSR5M5THYRC0RFWPMVE2DW,
-часть 2) — отдельная от прогона конвейера механика, живущая здесь же:
-пул шифруется ОДНИМ файлом `canary/pool.sealed` в репозитории пульта
-(`openssl enc -aes-256-cbc -pbkdf2` + отдельный тег HMAC-SHA256 поверх
-шифртекста), ключ — в keychain пульта; `init`/`doctor --restore`
-расшифровывают его обратно в `~/.artel-canary`, если каталог
-отсутствует. Расшифровка недоступна ролям (`runner.in_role_environment`)
-— см. секцию кода перед `_pool_dir` ниже.
+часть 2) — отдельная от прогона конвейера механика; вынесена в
+`orchestrator/pool_seal.py` (SPEC 01M2CN42RV0EBBP7HS4HP2VNY1) — детали
+формата (HMAC, openssl, GUID-манифест) см. там.
 
 `spec_gate`/`acceptance` эта команда проходит САМА, отдельным кодовым
 путём (не через `fsm.cmd_approve`): инвариант 18 («`auto` не проходит
@@ -81,17 +77,13 @@ NBJCR5Q6C3B итерации 2, R2-F1), которого эта задача н�
 живёт как чистый совместимый alias, не участвующий в реальном вождении
 канарейки.
 """
-import hashlib
-import hmac
 import io
 import os
 import random
 import shutil
-import struct
 import subprocess
 import sys
 import tempfile
-import uuid
 from contextlib import contextmanager, redirect_stdout
 from datetime import datetime, timezone
 from pathlib import Path
@@ -99,7 +91,7 @@ from pathlib import Path
 from scripts import guard
 
 from . import (alerts, answer, artifact_branch, artifact_source, artifacts,
-              auto, catalog, cleanup, config, fsm, gitcmd, keychain, runner,
+              auto, catalog, cleanup, config, fsm, gitcmd, pool_seal, runner,
               store, workspace, yamlmini)
 
 CANARY_MARK_ACTOR = "canary"
@@ -176,288 +168,6 @@ _DEV_RETRY_ACTION = "canary: повтор developer на красной план
 # комментарий читаем механикой и невидим при рендере markdown.
 MARK_EXPECT_ESCALATION_YES = "<!-- canary-expect-escalation: yes -->"
 MARK_EXPECT_ESCALATION_NO = "<!-- canary-expect-escalation: no -->"
-
-
-def _pool_dir() -> Path:
-    return Path.home() / config.CANARY_POOL_DIRNAME
-
-
-# --- пул канарейки в репозитории в зашифрованном виде (SPEC
-#     01M1NSR5M5THYRC0RFWPMVE2DW) ------------------------------------------
-#
-# `canary pool-seal` берёт открытый пул `~/.artel-canary` и кладёт его
-# ОДНИМ файлом `canary/pool.sealed` в репозиторий пульта (требование 1-2);
-# `init`/`doctor --restore` расшифровывают его обратно, если каталог
-# отсутствует (требование 3). Симметричное шифрование — внешней командой
-# `openssl enc -aes-256-cbc -pbkdf2` (не AEAD — `openssl enc` эмпирически
-# не умеет AEAD-шифры, ANSWER-1 п.1) плюс отдельный тег HMAC-SHA256 по
-# шифртексту (`openssl dgst -sha256 -hmac`, encrypt-then-MAC руками);
-# ключ HMAC — SHA-256 от ключа пула с суффиксом `:mac` (один слот
-# keychain на оба назначения ключа, ANSWER-1 п.1). Формат `pool.sealed`:
-# первые `_TAG_HEX_LEN` (64) байт — тег HMAC-SHA256 в hex ASCII, дальше —
-# шифртекст целиком; тег сверяется `hmac.compare_digest` ДО обращения к
-# `openssl enc -d` (AC-1: файл с неверным тегом не расшифровывается).
-#
-# Ключ пула — в keychain пульта тем же механизмом, что токены ролей
-# (`orchestrator/keychain.py::token`, слот `config.CANARY_POOL_KEY_SLOT`,
-# ANSWER-1 п.3), в репозиторий и в окружение роли не попадает (AC-17).
-#
-# Расшифровка — ЕДИНАЯ точка входа `_authorized_pool_payload` для ОБОИХ
-# путей (`restore_pool_if_missing`, `pool_drift_warning`): роль
-# запущенного процесса (`runner.in_role_environment`) проверяется здесь
-# независимо от того, какая команда её вызвала (требование 5, AC-15 —
-# «второй, независимый от permissions.deny рубеж», не только запрет
-# самой команды в курируемом слое роли, `docs/reference/role-home/
-# claude/settings.json`).
-
-SEALED_REL = ("canary", "pool.sealed")
-GUIDS_REL = ("canary", "guids.txt")
-_TAG_HEX_LEN = 64  # длина hex-представления HMAC-SHA256 (32 байта -> 64 hex)
-
-
-def sealed_path() -> Path:
-    return config.ROOT.joinpath(*SEALED_REL)
-
-
-def guids_path() -> Path:
-    return config.ROOT.joinpath(*GUIDS_REL)
-
-
-def _mac_key(pool_key: str) -> str:
-    """Ключ HMAC, детерминированно выведенный из ключа пула (ANSWER-1
-    п.1) — один слот keychain несёт материал для обоих назначений."""
-    return hashlib.sha256((pool_key + ":mac").encode("utf-8")).hexdigest()
-
-
-@contextmanager
-def _secret_fd(secret: str):
-    """Отдаёт значение через файловый дескриптор наследуемого пайпа
-    (`fd:N` — `openssl enc -pass fd:N`), не аргументом командной строки:
-    REVIEW.md итерации 1, R1-F1 — секрет-аргумент виден в выводе
-    `ps`/`ps aux` любому процессу того же пользователя на время жизни
-    подпроцесса. Проверено эмпирически на этой машине (`openssl enc
-    -pass fd:N` роундтрипит корректно, LibreSSL)."""
-    r, w = os.pipe()
-    os.write(w, secret.encode("utf-8"))
-    os.close(w)
-    try:
-        yield r
-    finally:
-        os.close(r)
-
-
-def _hmac_tag_hex(data: bytes, mac_key: str) -> str:
-    """`openssl dgst -hmac key` — единственный CLI-путь на этой машине,
-    добавляющий тег HMAC-SHA256 внешней командой (ANSWER-1 п.1): в
-    отличие от `openssl enc`, `dgst` не несёт `-passin`/`fd:`/`env:`-
-    аналога для `-hmac` (проверено эмпирически: `openssl dgst -help` не
-    называет такой опции; `openssl mac` — команда OpenSSL 3.x, на этой
-    LibreSSL её нет вовсе), а локальный приёмочный тест `tasks/
-    01M1NSR5M5THYRC0RFWPMVE2DW/acceptance_tests/test_pool_seal.py::
-    test_ac1_...` (залочен) буквально требует подстроку `-hmac` в argv
-    вызова. Значение `mac_key` поэтому неизбежно видно в `ps`/`ps aux`
-    на время жизни этого подпроцесса (REVIEW.md итерации 1, R1-F1,
-    открытый остаток) — сам ключ пула здесь не используется (только
-    производный `_mac_key`), сужая практическую цену утечки до подделки
-    тега целостности, не расшифровки пула."""
-    proc = subprocess.run(
-        ["openssl", "dgst", "-sha256", "-hmac", mac_key, "-r"],
-        input=data, capture_output=True)
-    if proc.returncode != 0:
-        raise RuntimeError(
-            f"canary: openssl dgst отказал: "
-            f"{proc.stderr.decode('utf-8', errors='replace').strip()}")
-    return proc.stdout.decode("ascii").split()[0]
-
-
-def _openssl_encrypt(data: bytes, key: str) -> bytes:
-    with _secret_fd(key) as fd:
-        proc = subprocess.run(
-            ["openssl", "enc", "-aes-256-cbc", "-pbkdf2", "-pass", f"fd:{fd}"],
-            input=data, capture_output=True, pass_fds=(fd,))
-    if proc.returncode != 0:
-        raise RuntimeError(
-            f"canary: openssl enc отказал: "
-            f"{proc.stderr.decode('utf-8', errors='replace').strip()}")
-    return proc.stdout
-
-
-def _openssl_decrypt(data: bytes, key: str) -> bytes | None:
-    """None — openssl отказал (неверный ключ/битые данные): решает
-    вызывающий, у которого есть контекст для именованного отказа."""
-    with _secret_fd(key) as fd:
-        proc = subprocess.run(
-            ["openssl", "enc", "-d", "-aes-256-cbc", "-pbkdf2", "-pass",
-             f"fd:{fd}"],
-            input=data, capture_output=True, pass_fds=(fd,))
-    if proc.returncode != 0:
-        return None
-    return proc.stdout
-
-
-def _serialize_pool(files: list) -> bytes:
-    """Байты пула: имя+содержимое КАЖДОГО файла, длиной-с-префиксом —
-    свой формат вместо `tarfile`/`zipfile` (нет временных меток/прав
-    доступа, которые сделали бы шифртекст менее предсказуемым без
-    выигрыша: восстановление всё равно идёт по именам файлов, не по
-    метаданным архива)."""
-    buf = io.BytesIO()
-    for f in files:
-        name_bytes = f.name.encode("utf-8")
-        content_bytes = f.read_bytes()
-        buf.write(struct.pack(">I", len(name_bytes)))
-        buf.write(name_bytes)
-        buf.write(struct.pack(">Q", len(content_bytes)))
-        buf.write(content_bytes)
-    return buf.getvalue()
-
-
-def _deserialize_pool(payload: bytes) -> dict:
-    files = {}
-    offset = 0
-    total = len(payload)
-    while offset < total:
-        (name_len,) = struct.unpack_from(">I", payload, offset)
-        offset += 4
-        name = payload[offset:offset + name_len].decode("utf-8")
-        offset += name_len
-        (content_len,) = struct.unpack_from(">Q", payload, offset)
-        offset += 8
-        content = payload[offset:offset + content_len]
-        offset += content_len
-        files[name] = content
-    return files
-
-
-def _authorized_pool_payload(*, audit_conn=None):
-    """Расшифровывает `canary/pool.sealed`, если вызов легитимен.
-    Возвращает `(payload, refusal)` — ровно один из двух не `None`.
-    `refusal is None` и `payload is None` вместе означает «расшифровывать
-    нечего» (sealed ещё не создан) — не ошибка вызывающего.
-
-    `audit_conn` — соединение БД для алерта аудита `kind=incident`
-    (требование 5): передаётся только вызовом ВОССТАНОВЛЕНИЯ
-    (`restore_pool_if_missing`), не рутинной сверкой расхождения
-    (`pool_drift_warning`) — последняя не кладёт пул на диск, аудит
-    относится к самой команде расшифровки, не к каждому internal-чтению
-    ради сравнения.
-    """
-    if runner.in_role_environment():
-        return None, (
-            "canary: расшифровка пула отказана — вызов из окружения роли "
-            "(role_env), требование 5 SPEC 01M1NSR5M5THYRC0RFWPMVE2DW")
-    sealed = sealed_path()
-    if not sealed.is_file():
-        return None, None
-    key = keychain.token(config.CANARY_POOL_KEY_SLOT)
-    if not key:
-        return None, (
-            f"canary: расшифровка пула отказана — ключ не найден в "
-            f"keychain (слот {config.CANARY_POOL_KEY_SLOT!r})")
-    if audit_conn is not None:
-        alerts.raise_alert(
-            audit_conn, None, "incident", "canary.pool-decrypt",
-            "вызов расшифровки пула канарейки (canary/pool.sealed), "
-            "требование 5 SPEC 01M1NSR5M5THYRC0RFWPMVE2DW")
-    sealed_bytes = sealed.read_bytes()
-    if len(sealed_bytes) < _TAG_HEX_LEN:
-        return None, "canary: canary/pool.sealed повреждён (короче тега HMAC)"
-    tag_hex = sealed_bytes[:_TAG_HEX_LEN]
-    ciphertext = sealed_bytes[_TAG_HEX_LEN:]
-    expected_tag_hex = _hmac_tag_hex(ciphertext, _mac_key(key)).encode("ascii")
-    if not hmac.compare_digest(tag_hex, expected_tag_hex):
-        return None, (
-            "canary: восстановление пула отказано — тег HMAC не совпал, "
-            "файл canary/pool.sealed повреждён")
-    payload = _openssl_decrypt(ciphertext, key)
-    if payload is None:
-        return None, (
-            "canary: восстановление пула отказано — расшифровка openssl "
-            "не удалась")
-    return payload, None
-
-
-def restore_pool_if_missing(conn) -> str | None:
-    """`init`/`doctor --restore` (требование 3, AC-5/AC-6/AC-7): при
-    отсутствии `~/.artel-canary` расшифровывает `canary/pool.sealed` в
-    этот каталог; при наличии — no-op (`None`, без сообщения)."""
-    pool_dir = _pool_dir()
-    if pool_dir.exists():
-        return None
-    payload, refusal = _authorized_pool_payload(audit_conn=conn)
-    if refusal is not None:
-        return refusal
-    if payload is None:
-        return None
-    files = _deserialize_pool(payload)
-    pool_dir.mkdir(parents=True)
-    for name, content in files.items():
-        (pool_dir / name).write_bytes(content)
-    return f"canary: пул восстановлен в {pool_dir} ({len(files)} шаблонов)"
-
-
-def pool_drift_warning() -> str | None:
-    """`doctor` (требование 3, AC-8): предупреждение, если открытый пул
-    отличается от запечатанного. `None` — нечего сравнивать (пул/sealed
-    отсутствуют, ключ недоступен, вызов из роли) или расхождения нет."""
-    pool_dir = _pool_dir()
-    if not pool_dir.is_dir() or not sealed_path().is_file():
-        return None
-    payload, refusal = _authorized_pool_payload()
-    if refusal is not None or payload is None:
-        return None
-    sealed_files = _deserialize_pool(payload)
-    # Тот же фильтр, что и `cmd_pool_seal`/`_sample_pool_templates`
-    # (REVIEW.md итерации 1, R1-F2): без него посторонний файл в
-    # `~/.artel-canary` без расширения `.md` (например, `.DS_Store`,
-    # который macOS Finder кладёт в любой просмотренный каталог) даёт
-    # ложное "незапечатанные правки" даже когда набор `*.md`-шаблонов
-    # не менялся.
-    current_files = {p.name: p.read_bytes() for p in pool_dir.iterdir()
-                     if p.is_file() and p.suffix == ".md"}
-    if sealed_files == current_files:
-        return None
-    return ("открытый пул канарейки (~/.artel-canary) разошёлся с "
-           "запечатанным canary/pool.sealed — незапечатанные правки, "
-           "нужен canary pool-seal")
-
-
-def cmd_pool_seal() -> None:
-    """`canary pool-seal` (требование 2, AC-3/AC-4): шифрует открытый пул
-    `~/.artel-canary` в `canary/pool.sealed`, обновляет манифест GUID
-    `canary/guids.txt` (требование 4, AC-9..AC-11); ничего не коммитит —
-    коммит остаётся штатным путём Оператора (требование 2)."""
-    pool_dir = _pool_dir()
-    if not pool_dir.is_dir():
-        sys.exit(f"canary pool-seal: каталог пула не найден: {pool_dir}")
-    files = sorted(p for p in pool_dir.iterdir()
-                   if p.is_file() and p.suffix == ".md")
-    if not files:
-        sys.exit(f"canary pool-seal: в пуле {pool_dir} нет файлов *.md")
-    key = keychain.token(config.CANARY_POOL_KEY_SLOT)
-    if not key:
-        sys.exit(
-            f"canary pool-seal: ключ пула не найден в keychain (слот "
-            f"{config.CANARY_POOL_KEY_SLOT!r})")
-
-    payload = _serialize_pool(files)
-    ciphertext = _openssl_encrypt(payload, key)
-    tag_hex = _hmac_tag_hex(ciphertext, _mac_key(key))
-    sealed_bytes = tag_hex.encode("ascii") + ciphertext
-
-    sealed = sealed_path()
-    sealed.parent.mkdir(parents=True, exist_ok=True)
-    sealed.write_bytes(sealed_bytes)
-
-    # AC-10: значения манифеста — случайные строки, не содержимое/имена
-    # шаблонов; AC-11: манифест ПЕРЕЗАПИСЫВАЕТСЯ набором ТЕКУЩИХ
-    # шаблонов на каждом seal, не дописывается.
-    guids = [str(uuid.uuid4()) for _ in files]
-    guids_path().write_text("\n".join(guids) + "\n", encoding="utf-8")
-
-    fingerprint = hashlib.sha256(payload).hexdigest()
-    print(f"[canary] pool-seal: {len(files)} шаблонов, отпечаток "
-         f"{fingerprint}")
 
 
 def _sample_pool_templates(pool_dir: Path, k: int) -> list:
@@ -1184,49 +894,29 @@ def _sha_label(target_sha: str, origin_sha: str | None) -> str:
     return f"код {target_sha}"
 
 
-def _run_one_task(template_path: Path, run_stamp: str, ratio: float,
-                  target_sha: str | None = None,
-                  sha_label: str | None = None) -> None:
-    """Полный цикл одной канареечной задачи: заводит, ведёт в собственном
-    эфемерном клоне на checkout'е `target_sha` (требование 1/2), пишет
-    метрики/бейзлайн в БД пульта СНАРУЖИ клона (требование 5, 9) и
-    печатает итог со сноской происхождения `target_sha` (`sha_label`,
-    требование 4/AC-8).
-
-    `target_sha`/`sha_label` необязательны — `cmd_canary` всегда передаёт
-    оба, но `tasks/01M1SC3Y20YBTTJVQDJBF2NDQW/acceptance_tests/
-    test_canary_report_kill_reason.py` (залоченная планка ДРУГОЙ, уже
-    смерженной задачи) зовёт эту функцию тремя позиционными аргументами
-    напрямую — правка чужой планки требует отдельного мандата Оператора,
-    которого эта задача не получала. Без явного `target_sha` — тот же sha,
-    на котором и раньше молча оставался клон без единого checkout
-    (`gitcmd.head_sha()` главной копии в момент вызова), с меткой «код
-    пина» тем же вычислением, что и у явного вызова с этим же sha.
+def _run_task_in_ephemeral_clone(template_path: Path, run_stamp: str,
+                                 explicit_target_sha: str | None,
+                                 outer_root: Path) -> tuple:
+    """Фаза 1 из 3 (требование 6) `_run_one_task`: заводит и ведёт ОДНУ
+    канареечную задачу в собственном эфемерном клоне на checkout'е
+    `explicit_target_sha` (требование 1/2), сохраняя диагностику, пока
+    клон ещё жив. Возвращает всё, что нужно двум следующим фазам —
+    `task_id`, `title`, `expected`, `steps`, `metrics`, `actual`,
+    `mismatch`, `normal_outcome`, `diag_dir`.
 
     Создание задачи и её вождение — с подавленным stdout
-    (`redirect_stdout`): между строкой «заведена» и остальным выводом
-    иначе ложится десяток строк `store.set_state`/`cleanup.cmd_kill`.
-
-    «Штатный исход без расхождения» (ANSWER-1.md, вариант Б) — ЕДИНСТВЕННЫЙ
-    случай, где диагностика не сохраняется (требование 1, AC-4) и где
-    бейзлайн/сравнение отклонений вообще применяются (требование 3,
-    AC-7/AC-8): `_kill_outcome_note` отличает штатный kill на
-    `merge_gate` (единственный штатный kill РЕАЛЬНОГО вождения —
-    `verifying` теперь проходится синтетически, ANSWER-3.md 06.09; см.
-    также недостижимую из `_drive_task` `_kill_at_verifying`, оставленную
-    ради чужой планки, REVIEW.md итерации 2 R2-F1) от «не сошлась»,
-    `mismatch` — расхождение маркера ожидания эскалации с фактом.
+    (`redirect_stdout`): между строкой «заведена» (печатается вызывающим
+    ПОСЛЕ выхода из этой фазы) и остальным выводом иначе ложится десяток
+    строк `store.set_state`/`cleanup.cmd_kill`.
     """
-    explicit_target_sha = target_sha
     raw = template_path.read_text(encoding="utf-8")
     title = template_path.stem
     expected = _expected_escalation(raw)
-    outer_root = config.ROOT
 
     # Позиционность вызова `_ephemeral_clone` обязана в точности повторять
     # прежнюю (`_ephemeral_clone()`, без аргументов) для обратной
-    # совместимости с планкой `01M1SC3Y20YBTTJVQDJBF2NDQW`, зовущей эту
-    # функцию тремя позиционными аргументами: та планка мокает саму
+    # совместимости с планкой `01M1SC3Y20YBTTJVQDJBF2NDQW`, зовущей
+    # `_run_one_task` тремя позиционными аргументами: та планка мокает саму
     # `_ephemeral_clone` нульарной функцией — вызов с ЛЮБЫМ позиционным
     # аргументом (даже `None`) упал бы `TypeError` на этом моке.
     clone_ctx = (_ephemeral_clone() if explicit_target_sha is None
@@ -1261,18 +951,30 @@ def _run_one_task(template_path: Path, run_stamp: str, ratio: float,
         if _needs_diagnostics(normal_outcome, mismatch):
             diag_dir = _save_diagnostics(outer_root, run_stamp, task_id, steps)
 
-    print(f"[canary] {task_id} заведена из {template_path.name}")
+    return (task_id, title, expected, steps, metrics, actual, mismatch,
+           normal_outcome, diag_dir)
 
-    outer_conn = store.db()
-    # `main_sha` записи — целевой sha ЭТОГО прогона (SPEC
-    # 01M2B6K02YVJBWE1JDWP85EJH0, требование 1/4, AC-4), не `gitcmd.
-    # head_sha()` главной копии (ANSWER-1 01M1NGFK3N6MRMYGCC09H975V3 п.2,
-    # прежнее поведение до этой задачи) — расходится с ним всегда, когда
-    # `--sha` явно отличается от пина, и по умолчанию, когда `origin/
-    # <MAIN_BRANCH>` ушёл вперёд пина. Без явного `target_sha` (см.
-    # докстринг — совместимость со старой планкой) — тот же `gitcmd.
-    # head_sha()` главной копии, снятый ПОСЛЕ выхода из клона, что и до
-    # этой задачи, байт-в-байт.
+
+def _record_canary_run(outer_conn, run_stamp: str, title: str, task_id: str,
+                       metrics: dict, expected: bool | None, actual: bool,
+                       mismatch: bool, normal_outcome: bool,
+                       explicit_target_sha: str | None,
+                       target_sha: str, sha_label: str | None) -> tuple:
+    """Фаза 3 из 3 (требование 6) `_run_one_task`: закрывает целевой sha
+    прогона (если он не был передан явно), вычисляет вердикт зелёности и
+    пишет строку `canary_runs` СНАРУЖИ клона (требование 5, 9). Возвращает
+    финальные `(target_sha, sha_label)` для отчёта.
+
+    `main_sha` записи — целевой sha ЭТОГО прогона (SPEC
+    01M2B6K02YVJBWE1JDWP85EJH0, требование 1/4, AC-4), не `gitcmd.
+    head_sha()` главной копии (ANSWER-1 01M1NGFK3N6MRMYGCC09H975V3 п.2,
+    прежнее поведение до этой задачи) — расходится с ним всегда, когда
+    `--sha` явно отличается от пина, и по умолчанию, когда `origin/
+    <MAIN_BRANCH>` ушёл вперёд пина. Без явного `target_sha` (см.
+    докстринг `_run_one_task` — совместимость со старой планкой) — тот же
+    `gitcmd.head_sha()` главной копии, снятый ПОСЛЕ выхода из клона, что и
+    до этой задачи, байт-в-байт.
+    """
     if explicit_target_sha is None:
         target_sha = gitcmd.head_sha()
     if sha_label is None:
@@ -1280,9 +982,10 @@ def _run_one_task(template_path: Path, run_stamp: str, ratio: float,
     main_sha = target_sha
     # Возврат из merge_gate (06.09, п.2): вердикт зелёности выражен через
     # уже смерженное понятие штатного исхода прогона (`normal_outcome`/
-    # `_needs_diagnostics`, вычислены выше), не через «дошла до состояния
-    # merge_gate/verifying» — `verifying` с ADR-0015 не конечная точка
-    # реального вождения вовсе (проходится синтетически, `_pass_verifying`).
+    # `_needs_diagnostics`, вычислены фазой 1), не через «дошла до
+    # состояния merge_gate/verifying» — `verifying` с ADR-0015 не конечная
+    # точка реального вождения вовсе (проходится синтетически,
+    # `_pass_verifying`).
     verdict = "green" if not _needs_diagnostics(normal_outcome, mismatch) else "red"
     store.insert_canary_run(
         outer_conn, run_stamp, title, task_id, metrics["steps"],
@@ -1290,29 +993,91 @@ def _run_one_task(template_path: Path, run_stamp: str, ratio: float,
         len(metrics["escalations"]), metrics["outcome"],
         "yes" if expected else ("no" if expected is False else None),
         actual, mismatch, main_sha=main_sha, verdict=verdict)
+    return target_sha, sha_label
 
-    note = ""
-    if not _needs_diagnostics(normal_outcome, mismatch):
-        # Требование 3/AC-7/AC-8: бейзлайн заводится и сравнение отклонений
-        # применяется ТОЛЬКО для штатного исхода без расхождения маркера —
-        # прогон, снятый как «не сошлась», или с расхождением, в это
-        # сравнение не попадает, даже если он первый для шаблона (копилка
-        # 06.09: killed-прогон дважды за день ложно завёл бейзлайн).
-        baseline = store.canary_baseline(outer_conn, title)
-        if baseline is None:
-            store.set_canary_baseline(outer_conn, title, metrics["steps"],
-                                      metrics["cost_usd"],
-                                      metrics["review_iterations"])
-            note = "  [бейзлайн создан]"
-        else:
-            warnings = _task_deviation_warnings(metrics, baseline, ratio)
-            if warnings:
-                for w in warnings:
-                    alerts.raise_alert(
-                        outer_conn, task_id, "threshold", "canary",
-                        f"канарейка {title} ({task_id}): {w}")
-                note = "  [ВНИМАНИЕ: отклонение от бейзлайна: " + \
-                    "; ".join(warnings) + "]"
+
+def _baseline_deviation_note(outer_conn, task_id: str, title: str,
+                             metrics: dict, normal_outcome: bool,
+                             mismatch: bool, ratio: float) -> str:
+    """Фаза 2 из 3 (требование 6) `_run_one_task`: сверка метрик задачи с
+    ЕЁ per-task бейзлайном — заводит бейзлайн, если его ещё нет, либо
+    поднимает алерт на отклонение сверх `ratio`. Возвращает готовую
+    строку-примечание для итогового отчёта (пустую — если сравнивать не
+    положено или отклонений нет).
+
+    Требование 3/AC-7/AC-8: бейзлайн заводится и сравнение отклонений
+    применяется ТОЛЬКО для штатного исхода без расхождения маркера —
+    прогон, снятый как «не сошлась», или с расхождением, в это сравнение
+    не попадает, даже если он первый для шаблона (копилка 06.09:
+    killed-прогон дважды за день ложно завёл бейзлайн).
+    """
+    if _needs_diagnostics(normal_outcome, mismatch):
+        return ""
+    baseline = store.canary_baseline(outer_conn, title)
+    if baseline is None:
+        store.set_canary_baseline(outer_conn, title, metrics["steps"],
+                                  metrics["cost_usd"],
+                                  metrics["review_iterations"])
+        return "  [бейзлайн создан]"
+    warnings = _task_deviation_warnings(metrics, baseline, ratio)
+    if not warnings:
+        return ""
+    for w in warnings:
+        alerts.raise_alert(
+            outer_conn, task_id, "threshold", "canary",
+            f"канарейка {title} ({task_id}): {w}")
+    return "  [ВНИМАНИЕ: отклонение от бейзлайна: " + "; ".join(warnings) + "]"
+
+
+def _run_one_task(template_path: Path, run_stamp: str, ratio: float,
+                  target_sha: str | None = None,
+                  sha_label: str | None = None) -> None:
+    """Полный цикл одной канареечной задачи: заводит, ведёт в собственном
+    эфемерном клоне на checkout'е `target_sha` (требование 1/2), пишет
+    метрики/бейзлайн в БД пульта СНАРУЖИ клона (требование 5, 9) и
+    печатает итог со сноской происхождения `target_sha` (`sha_label`,
+    требование 4/AC-8). Разбита на три фазы (требование 6, SPEC
+    01M2CN42RV0EBBP7HS4HP2VNY1) — `_run_task_in_ephemeral_clone` (прогон
+    в эфемерном клоне), `_record_canary_run` (запись в `canary_runs`),
+    `_baseline_deviation_note` (сверка с бейзлайном) — эта функция только
+    их вызывает и собирает итоговую печать.
+
+    `target_sha`/`sha_label` необязательны — `cmd_canary` всегда передаёт
+    оба, но `tasks/01M1SC3Y20YBTTJVQDJBF2NDQW/acceptance_tests/
+    test_canary_report_kill_reason.py` (залоченная планка ДРУГОЙ, уже
+    смерженной задачи) зовёт эту функцию тремя позиционными аргументами
+    напрямую — правка чужой планки требует отдельного мандата Оператора,
+    которого эта задача не получала. Без явного `target_sha` — тот же sha,
+    на котором и раньше молча оставался клон без единого checkout
+    (`gitcmd.head_sha()` главной копии в момент вызова), с меткой «код
+    пина» тем же вычислением, что и у явного вызова с этим же sha.
+
+    «Штатный исход без расхождения» (ANSWER-1.md, вариант Б) — ЕДИНСТВЕННЫЙ
+    случай, где диагностика не сохраняется (требование 1, AC-4) и где
+    бейзлайн/сравнение отклонений вообще применяются (требование 3,
+    AC-7/AC-8): `_kill_outcome_note` отличает штатный kill на
+    `merge_gate` (единственный штатный kill РЕАЛЬНОГО вождения —
+    `verifying` теперь проходится синтетически, ANSWER-3.md 06.09; см.
+    также недостижимую из `_drive_task` `_kill_at_verifying`, оставленную
+    ради чужой планки, REVIEW.md итерации 2 R2-F1) от «не сошлась»,
+    `mismatch` — расхождение маркера ожидания эскалации с фактом.
+    """
+    explicit_target_sha = target_sha
+    outer_root = config.ROOT
+
+    (task_id, title, expected, steps, metrics, actual, mismatch,
+     normal_outcome, diag_dir) = _run_task_in_ephemeral_clone(
+        template_path, run_stamp, explicit_target_sha, outer_root)
+
+    print(f"[canary] {task_id} заведена из {template_path.name}")
+
+    outer_conn = store.db()
+    target_sha, sha_label = _record_canary_run(
+        outer_conn, run_stamp, title, task_id, metrics, expected, actual,
+        mismatch, normal_outcome, explicit_target_sha, target_sha, sha_label)
+
+    note = _baseline_deviation_note(outer_conn, task_id, title, metrics,
+                                    normal_outcome, mismatch, ratio)
 
     mismatch_note = ""
     if mismatch:
@@ -1338,7 +1103,7 @@ def _run_one_task(template_path: Path, run_stamp: str, ratio: float,
 
 
 def cmd_canary(*, k: int, sha: str | None = None) -> None:
-    pool_dir = _pool_dir()
+    pool_dir = pool_seal._pool_dir()
     if not pool_dir.is_dir():
         sys.exit(f"canary: каталог пула не найден: {pool_dir}")
     if k <= 0:

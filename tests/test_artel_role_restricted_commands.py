@@ -3,7 +3,7 @@
 `canary pool-seal` отказывают процессу роли (`ARTEL_ROLE` в окружении)
 до вызова реализации; без признака роли команды выполняются как прежде.
 
-Замоканы `catalog.cmd_init`/`doctor.cmd_doctor`/`canary.cmd_pool_seal` —
+Замоканы `catalog.cmd_init`/`doctor.cmd_doctor`/`pool_seal.cmd_pool_seal` —
 проверка гейта живёт в самом `artel.py`, реализации команд к зоне этой
 задачи не относятся.
 """
@@ -12,7 +12,7 @@ import sys
 import unittest
 from unittest import mock
 
-from orchestrator import artel, canary, catalog, config, doctor
+from orchestrator import artel, catalog, config, doctor, pool_seal
 from tests.sandbox import TmpRootTest
 
 ROLE = "developer"
@@ -74,14 +74,14 @@ class DispatcherRoleGateTest(TmpRootTest):
         не расширен на `canary pool-seal` — тогда `cmd_pool_seal` был бы
         вызван вместо отказа.
         """
-        with mock.patch.object(canary, "cmd_pool_seal") as fake:
+        with mock.patch.object(pool_seal, "cmd_pool_seal") as fake:
             self._assert_refused_under_role(["canary", "pool-seal"], fake)
 
     def test_canary_pool_seal_runs_without_role(self):
         """Ловит мутацию: гейт срабатывает для `canary pool-seal`
         независимо от `ARTEL_ROLE`.
         """
-        with mock.patch.object(canary, "cmd_pool_seal") as fake:
+        with mock.patch.object(pool_seal, "cmd_pool_seal") as fake:
             self._assert_runs_without_role(["canary", "pool-seal"], fake)
 
     def test_bare_doctor_runs_under_role(self):

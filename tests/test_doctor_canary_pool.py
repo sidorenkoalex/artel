@@ -146,7 +146,7 @@ class CanaryPoolDriftCheckTest(unittest.TestCase):
         (self.pool_dir / "a.md").write_text("тело А\n", encoding="utf-8")
 
         kc_patcher = mock.patch.object(
-            doctor.canary.keychain, "token",
+            doctor.pool_seal.keychain, "token",
             return_value="unit-test-drift-key")
         kc_patcher.start()
         self.addCleanup(kc_patcher.stop)
@@ -161,14 +161,14 @@ class CanaryPoolDriftCheckTest(unittest.TestCase):
         """Ловит мутацию: сравнение множеств файлов пула сломано
         (например, сверка по количеству файлов, а не по имени+
         содержимому) — совпадающий пул ложно дал бы `warn`."""
-        doctor.canary.cmd_pool_seal()
+        doctor.pool_seal.cmd_pool_seal()
         self.assertEqual(doctor.check_canary_pool_drift().status, "ok")
 
     def test_diverging_pool_warns(self):
         """Ловит мутацию: расхождение открытого пула с запечатанным не
         замечено (сравнение всегда `ok` либо сравнивает не то поле) —
         `warn` не наступил бы даже при реальной незапечатанной правке."""
-        doctor.canary.cmd_pool_seal()
+        doctor.pool_seal.cmd_pool_seal()
         (self.pool_dir / "a.md").write_text(
             "тело А, незапечатанная правка\n", encoding="utf-8")
         check = doctor.check_canary_pool_drift()
@@ -187,7 +187,7 @@ class CanaryPoolDriftCheckTest(unittest.TestCase):
         сравнивает ВСЕ файлы каталога без фильтра по `.md` — добавление
         `.DS_Store` после seal ложно покраснило бы этот тест в `warn`.
         """
-        doctor.canary.cmd_pool_seal()
+        doctor.pool_seal.cmd_pool_seal()
         (self.pool_dir / ".DS_Store").write_bytes(b"\x00\x01macos-junk")
 
         check = doctor.check_canary_pool_drift()
