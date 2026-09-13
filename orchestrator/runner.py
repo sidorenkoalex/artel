@@ -229,7 +229,39 @@ def _run_developer_step(conn, task_id: str, t, role: str) -> None:
     01M28NWPS3PJHJAT4APXRY7MF7, требование 2), чтобы та могла обернуть
     вызов `try/finally` и снять атомарный захват зоны (`zone_lock.
     release_claim`), если шаг вернётся отсюда, не запустив агента —
-    независимо от конкретного места возврата ниже."""
+    независимо от конкретного места возврата ниже.
+
+    Разбито на фазы `_refuse_before_start`/`_build_prompt`/`_run_attempts`/
+    `_escalate_after_attempts` (SPEC 01M2CN3ZCSZ54TFJGTDCXTDHXD, AC-4):
+    `sys.exit`/`return` отказов до старта остаются текстом здесь же
+    (AC-5) — `_refuse_before_start` только вычисляет, какой из них нужен.
+    """
+    action, payload = _refuse_before_start(conn, task_id, t, role)
+    if action == "exit":
+        sys.exit(payload)
+    if action == "return":
+        return
+    target, skills = payload
+
+    prompt = _build_prompt(conn, task_id, t, role, target, skills)
+
+    attempt, reason, failure_class = _run_attempts(conn, task_id, t, role,
+                                                    prompt)
+    if attempt is None:
+        return
+
+    _escalate_after_attempts(conn, task_id, t, role, target, attempt,
+                             reason, failure_class)
+
+
+def _refuse_before_start(conn, task_id: str, t, role: str):
+    """Отказы шага до старта агента: пауза, стоп-кран волны, чужая ветка
+    worktree, pre-flight, инцидент целостности, скилы роли (SPEC
+    01M2CN3ZCSZ54TFJGTDCXTDHXD, AC-5). Журнал/консоль/`set_state` — те
+    же побочные эффекты, что раньше стояли прямо в `_run_developer_step`;
+    сам `sys.exit`/`return` остаётся за вызывающим кодом — эта функция
+    возвращает признак: `("exit", message)`, `("return", None)` или
+    `("continue", (target, skills))`."""
     # Штатная пауза (SPEC T070, требование 2): пометка стоит — шаг не
     # начинается, но уже идущий шаг (эта же функция, стартовавшая раньше)
     # эта проверка не трогает — она стоит строго до всего, что реально
@@ -243,7 +275,7 @@ def _run_developer_step(conn, task_id: str, t, role: str) -> None:
         detail = (f"задача на паузе — следующий агентный шаг не "
                   f"начинается; `artel.py resume {task_id}` снимет пометку")
         store.journal(conn, task_id, role, pause.REFUSAL_ACTION, detail)
-        sys.exit(f"[{task_id}] run отклонён: {detail}")
+        return "exit", f"[{task_id}] run отклонён: {detail}"
 
     # Стоп-кран волны, часть 2 (01M1THKRK8HPXA7Y2SRB0RFTN2, требования 1,
     # 5): тем же приёмом, что и штатная пауза выше — стоит строго до
@@ -262,7 +294,7 @@ def _run_developer_step(conn, task_id: str, t, role: str) -> None:
                       f"`artel.py alert-ack <id> \"...\"` снимет блокировку")
             store.journal(conn, task_id, role,
                           WAVE_BREAKER_REFUSAL_ACTION, detail)
-            sys.exit(f"[{task_id}] run отклонён: {detail}")
+            return "exit", f"[{task_id}] run отклонён: {detail}"
 
     target = t["target"] or config.DEFAULT_TARGET
 
@@ -282,7 +314,7 @@ def _run_developer_step(conn, task_id: str, t, role: str) -> None:
             store.journal(conn, task_id, role,
                           "run отклонён: чужая ветка worktree", detail)
             print(f"[{task_id}] run отклонён: {detail}")
-            return
+            return "return", None
 
     # Pre-flight перед стартом шага (SPEC T022, требование 2): быстрые
     # проверки окружения (CLI найден, токен роли добыт, диск, layout
@@ -304,7 +336,7 @@ def _run_developer_step(conn, task_id: str, t, role: str) -> None:
         reason = "; ".join(f"{c.name}: {c.detail}" for c in failed)
         store.journal(conn, task_id, role, "pre-flight FAILED", reason)
         print(f"[{task_id}] pre-flight провален — шаг не начат: {reason}")
-        return
+        return "return", None
 
     # Сверка при старте каждого шага (ADR-0003 п.17, SPEC T021 требование
     # 5): вход шага сравнивается с sha, зафиксированным на последнем
@@ -324,7 +356,7 @@ def _run_developer_step(conn, task_id: str, t, role: str) -> None:
         # который Оператору иначе пришлось бы искать самому.
         sha_hint = fixation.approve_sha_hint(task_id, target)
         print(f"  разберись и: artel.py approve {task_id}{sha_hint}")
-        return
+        return "return", None
 
     # Состав скилов роли — из roles.yaml, а не из константы рядом с кодом:
     # правка карты исполнителей меняет промпт без правки кода (T017,
@@ -340,10 +372,21 @@ def _run_developer_step(conn, task_id: str, t, role: str) -> None:
     try:
         skill_names = roles.skills(role)
     except roles.RolesError as exc:
-        sys.exit(f"[{task_id}] состав скилов роли {role} не прочитан: {exc}")
+        return "exit", (f"[{task_id}] состав скилов роли {role} не "
+                        f"прочитан: {exc}")
     skills, reason = brief.skills_text(conn, task_id, role, skill_names)
     if skills is None:
-        sys.exit(f"[{task_id}] скил роли {role} не прочитан: {reason}")
+        return "exit", f"[{task_id}] скил роли {role} не прочитан: {reason}"
+
+    return "continue", (target, skills)
+
+
+def _build_prompt(conn, task_id: str, t, role: str, target: str,
+                  skills: str) -> str:
+    """Сборка промпта шага: бриф/миссия/ревью-пакет и история отказов
+    advance (SPEC 01M2CN3ZCSZ54TFJGTDCXTDHXD, AC-4) — перенесённое
+    дословно тело `_run_developer_step` между чтением скилов и циклом
+    попыток."""
     cwd_for_prompt = role_cwd_path(task_id, target)
     mission, brief_text, package = role_prompt.mission_brief_package(
         conn, task_id, t, role, cwd_for_prompt)
@@ -378,6 +421,17 @@ def _run_developer_step(conn, task_id: str, t, role: str) -> None:
     if refusal_block:
         prompt = f"{prompt}\n\n--- ОТКАЗ ADVANCE (история) ---\n\n{refusal_block}"
 
+    return prompt
+
+
+def _run_attempts(conn, task_id: str, t, role: str, prompt: str):
+    """Цикл попыток агента: `run_agent_once` + бэкофф между попытками
+    (SPEC 01M2CN3ZCSZ54TFJGTDCXTDHXD, AC-4/AC-6). Возвращает `(attempt,
+    reason, failure_class)`; `attempt is None` — шаг обязан завершиться
+    без эскалации (потолок бюджета либо исход, отличный от "failed") —
+    тот же ранний `return`, что раньше стоял прямо в теле
+    `_run_developer_step`; иначе `attempt` — номер последней попытки, как
+    в прежнем теле цикла (AC-6)."""
     reason = ""
     failure_class = None
     for attempt in range(1, config.AGENT_ATTEMPTS + 1):
@@ -386,9 +440,9 @@ def _run_developer_step(conn, task_id: str, t, role: str) -> None:
         # Потолок проверяем после каждой попытки, до решения о ретрае: иначе
         # три попытки подряд потратят бюджет, исчерпанный ещё первой.
         if budget.enforce_budget(conn, task_id, t["state"]):
-            return
+            return None, None, None
         if outcome != "failed":
-            return
+            return None, None, None
         if failure_class == "session_limit":
             # Требование 4/AC-9: класс 2 не расходует остаток попыток шага —
             # отказ сразу, без ретрая (в отличие от связки «транзиентное
@@ -407,7 +461,15 @@ def _run_developer_step(conn, task_id: str, t, role: str) -> None:
             store.journal(conn, task_id, role, "agent run retry", detail)
             print(f"[{task_id}] {detail}")
             time.sleep(backoff_sec)
+    return attempt, reason, failure_class
 
+
+def _escalate_after_attempts(conn, task_id: str, t, role: str, target: str,
+                             attempt: int, reason: str,
+                             failure_class: str | None) -> None:
+    """Эскалация задачи после исчерпания попыток шага (SPEC
+    01M2CN3ZCSZ54TFJGTDCXTDHXD, AC-4) — хвостовое тело
+    `_run_developer_step`, перенесённое без изменений."""
     # Шаг, на котором упал агент, запоминаем: чинить надо его, а не задачу
     # целиком. Без этого approve увёл бы упавшее ревью в in_dev и поднял
     # разработчика на ветке, где всё уже сделано.
@@ -766,7 +828,51 @@ def run_agent_once(conn, task_id: str, role: str, prompt: str,
     прогона. Класс отказа (SPEC T082, требования 1-2) — `None` вне
     "failed" и для нераспознанного текста; иначе решает `cmd_run` —
     бэкофф связки «транзиентное системное» или немедленный отказ класса 2.
+
+    Разбит на фазы `_prepare_step`/`_spawn_and_wait`/`_account_step` и
+    функции исходов `_finish_*` (SPEC 01M2CN3ZCSZ54TFJGTDCXTDHXD, AC-1) —
+    значение и тип возврата не меняются.
     """
+    skip, ctx = _prepare_step(conn, task_id, role, prompt, attempt)
+    if skip is not None:
+        return skip
+    log_path, prompt_path, env, cwd, numbered = ctx
+
+    skip, spawn_ctx = _spawn_and_wait(
+        conn, task_id, role, log_path, prompt_path, cwd, env, numbered)
+    if skip is not None:
+        return skip
+    proc, pump, rc, timed_out, killed_group = spawn_ctx
+
+    spent = _account_step(conn, task_id, role, pump, timed_out, numbered)
+    agent_pid = getattr(proc, "pid", None)
+
+    if timed_out:
+        return _finish_timeout(conn, task_id, role, numbered, spent,
+                               killed_group, agent_pid)
+
+    if rc != 0:
+        return _finish_failed(conn, task_id, role, rc, numbered, spent,
+                              log_path)
+
+    missing_artifact = _missing_required_artifact(role, cwd, task_id)
+    if missing_artifact is not None:
+        return _finish_missing_artifact(conn, task_id, role,
+                                        missing_artifact, cwd, numbered,
+                                        spent)
+
+    return _finish_ok(conn, task_id, role, pump, rc, numbered, spent)
+
+
+def _prepare_step(conn, task_id: str, role: str, prompt: str, attempt: int):
+    """Подготовка попытки шага: лог/промпт на диске, окружение и рабочий
+    каталог роли (SPEC 01M2CN3ZCSZ54TFJGTDCXTDHXD, AC-2/AC-3) — три из
+    пяти исходов SKIPPED (промпт не записан; окружение роли не создано;
+    рабочий каталог роли не создан), с прежними текстами возврата и
+    записями журнала. Возвращает `(skip, ctx)`: `skip` — то, что
+    `run_agent_once` обязан вернуть немедленно (`None` при успехе); `ctx`
+    — `(log_path, prompt_path, env, cwd, numbered)` для
+    `_spawn_and_wait`."""
     numbered = f"попытка {attempt}/{config.AGENT_ATTEMPTS}"
     log_path = agent_log.new_agent_log(task_id, role)
     # Промпт уходит агенту файлом на stdin, а не аргументом командной строки
@@ -781,7 +887,7 @@ def run_agent_once(conn, task_id: str, role: str, prompt: str,
         store.journal(conn, task_id, role, "agent run SKIPPED",
                       f"промпт не записан в {prompt_path}: {exc}")
         print(f"[{task_id}] промпт шага не записан ({exc}) — шаг не начат")
-        return "skipped", f"промпт не записан: {exc}", None
+        return ("skipped", f"промпт не записан: {exc}", None), None
 
     # Окружение готовится до запуска и без запасного пути: не создался
     # каталог курируемого слоя — шаг не начинается. Тихо откатиться на HOME
@@ -793,7 +899,8 @@ def run_agent_once(conn, task_id: str, role: str, prompt: str,
                       f"каталог окружения роли не создан: {exc}")
         print(f"[{task_id}] окружение роли не подготовлено ({exc}) — "
               f"шаг не начат")
-        return "skipped", f"окружение роли не подготовлено: {exc}", None
+        return (("skipped", f"окружение роли не подготовлено: {exc}", None),
+                None)
 
     # Тот же принцип, что у окружения выше: рабочий каталог roли не создался —
     # шаг не стартует, тихого отката на ROOT нет (ADR-0003 §4).
@@ -804,7 +911,8 @@ def run_agent_once(conn, task_id: str, role: str, prompt: str,
                       f"рабочий каталог роли не создан: {exc}")
         print(f"[{task_id}] рабочий каталог роли не подготовлен ({exc}) — "
               f"шаг не начат")
-        return "skipped", f"рабочий каталог роли не подготовлен: {exc}", None
+        return (("skipped", f"рабочий каталог роли не подготовлен: {exc}",
+                 None), None)
 
     # Отсутствие идентичности — не повод не запускать шаг (агент делает не
     # только коммит), но повод сказать об этом до запуска: иначе Оператор
@@ -830,6 +938,18 @@ def run_agent_once(conn, task_id: str, role: str, prompt: str,
     store.journal(conn, task_id, role, "agent run started",
                   f"{numbered}, лог: {log_path}, промпт: {prompt_path}, "
                   f"окружение: {agent_log.environment_fingerprint()}")
+    return None, (log_path, prompt_path, env, cwd, numbered)
+
+
+def _spawn_and_wait(conn, task_id: str, role: str, log_path: Path,
+                    prompt_path: Path, cwd: Path, env: dict, numbered: str):
+    """Запуск агента и ожидание завершения: открытие промпта, `spawn_
+    agent`, перекачка вывода, таймаут и снятие группы процессов (SPEC
+    01M2CN3ZCSZ54TFJGTDCXTDHXD, AC-3) — оставшиеся два из пяти исходов
+    SKIPPED (промпт не прочитан; claude CLI не найден). Возвращает
+    `(skip, ctx)`: `skip` — то, что `run_agent_once` обязан вернуть
+    немедленно (`None` при успехе); `ctx` — `(proc, pump, rc, timed_out,
+    killed_group)`."""
     # Открытие файла держится вне `try` вокруг Popen: там ловится
     # FileNotFoundError, и пропавший промпт (ручная уборка `.artel/logs`,
     # внешний tmp-reaper) отчитывался бы Оператору как «claude CLI не найден» —
@@ -840,7 +960,7 @@ def run_agent_once(conn, task_id: str, role: str, prompt: str,
         store.journal(conn, task_id, role, "agent run SKIPPED",
                       f"промпт не прочитан из {prompt_path}: {exc}")
         print(f"[{task_id}] промпт шага не прочитан ({exc}) — шаг не начат")
-        return "skipped", f"промпт не прочитан: {exc}", None
+        return ("skipped", f"промпт не прочитан: {exc}", None), None
 
     # Файл открыт только на время запуска: у процесса свой дескриптор,
     # а держать его открытым в оркестраторе незачем.
@@ -861,7 +981,7 @@ def run_agent_once(conn, task_id: str, role: str, prompt: str,
                           f"claude CLI не найден, промпт: {prompt_path}")
             print(f"claude CLI не найден. Промпт шага целиком записан в "
                   f"{prompt_path} — запусти роль вручную с ним.")
-            return "skipped", "claude CLI не найден", None
+            return ("skipped", "claude CLI не найден", None), None
 
     # pgid агентного процесса — рядом с существующим pid держателя lease
     # (SPEC 01M1PNBSHR2PMFECMP7C204MF1, AC-2): `spawn_agent` спавнит его
@@ -900,6 +1020,15 @@ def run_agent_once(conn, task_id: str, role: str, prompt: str,
         timed_out = True
 
     close_pump(conn, task_id, role, pump, proc)
+    return None, (proc, pump, rc, timed_out, killed_group)
+
+
+def _account_step(conn, task_id: str, role: str, pump, timed_out: bool,
+                  numbered: str) -> str:
+    """Учёт шага: трение, стоимость и потолок программы (SPEC
+    01M2CN3ZCSZ54TFJGTDCXTDHXD, AC-3) — без изменения вызовов и их
+    порядка. Возвращает `spent` — хвост строки для журналов и печати
+    исхода."""
     # Трение шага (tasks/T095/SPEC.md, вариант 4б — точка завершения
     # шага, обоснование в tasks/T095/PLAN.md): журналируется сразу по
     # завершении перекачки, независимо от исхода попытки — провалившийся
@@ -927,71 +1056,91 @@ def run_agent_once(conn, task_id: str, role: str, prompt: str,
     # Порог программы считается сразу после учёта: сумма по всем задачам
     # всех target'ов сдвинулась именно этим шагом (roadmap §5).
     budget.check_program_spend(conn, task_id, pump.cost)
+    return spent
 
-    if timed_out:
-        # Чекпоинт — до журнала таймаута, чтобы рестарт, начатый сразу по
-        # этой записи, уже видел чистое дерево (SPEC T041, требования 1–4).
-        checkpoint.commit_timeout_checkpoint(conn, task_id, role)
-        # «без ретрая» — чтобы читающий журнал не ждал попыток 2 и 3.
-        timeout_min = f"{config.AGENT_TIMEOUT_SEC // 60} мин"
-        detail = f"{timeout_min}, {numbered} (без ретрая){spent}"
-        if killed_group is not None:
-            # Только когда группа реально снята (AC-7) — `agent_pid`
-            # тестового дубля выше не участвовал в group-kill вовсе.
-            detail = f"{detail}; {liveness.group_kill_detail(agent_pid, killed_group)}"
-        store.journal(conn, task_id, role, "agent run TIMEOUT", detail)
-        # Стоп-кран волны (01M1THKPNZ11DBZAQDMJ33EMJR, требование 3, вторая
-        # точка вызова): считает только СЕЙЧАС записанное событие и все
-        # прежние в пределах окна — журнал выше уже несёт эту попытку.
-        alerts.check_wave_breaker_timeout(conn)
-        print(f"[{task_id}] таймаут шага ({timeout_min}) — разберись и "
-              f"перезапусти run")
-        return "timeout", f"таймаут шага ({timeout_min})", None
 
-    if rc != 0:
-        # Чекпоинт — до журнала провала, тем же доводом, что и у таймаута
-        # выше (SPEC T074, требование 3 — расширение правила T041: провал
-        # по коду возврата тоже аварийное завершение шага, не только
-        # таймаут). Сам провал/ретрай/эскалация ниже не меняются.
-        checkpoint.commit_abnormal_checkpoint(conn, task_id, role, f"rc={rc}")
-        reason = (f"rc={rc}, {numbered}{spent}; "
-                  f"хвост {log_path}:\n{agent_log.log_tail(log_path)}")
-        store.journal(conn, task_id, role, "agent run FAILED", reason)
-        # Эвристики ошибок агента (SPEC T082): классификация по ПОЛНОМУ
-        # тексту попытки (не по усечённому хвосту выше) — журналирует
-        # сырой текст структурно и заводит алерты классов «обрыв
-        # потока»/2, решение о бэкоффе/немедленном отказе — за `cmd_run`.
-        failure_class = failure_classification._record_failure_classification(
-            conn, task_id, role, numbered,
-            failure_classification._attempt_output_text(log_path))
-        # Стоп-кран волны (01M1THKPNZ11DBZAQDMJ33EMJR, требование 3, первая
-        # точка вызова): без действия для классов вне TRANSIENT_SYSTEM_
-        # CLASSES (в т.ч. failure_class=None) — фильтр внутри check_wave_
-        # breaker_failure.
-        alerts.check_wave_breaker_failure(conn, failure_class)
-        # В консоли хвост не повторяем: эти строки Оператор только что видел
-        # вживую (перекачка пишет и в stdout, и в лог). В журнале он нужен —
-        # `log <id>` читают потом, когда вывода на экране уже нет.
-        print(f"[{task_id}] {role}: агент упал (rc={rc}, {numbered}), "
-              f"причина в {log_path}")
-        return "failed", reason, failure_class
+def _finish_timeout(conn, task_id: str, role: str, numbered: str,
+                    spent: str, killed_group, agent_pid):
+    """Исход «таймаут шага» (SPEC 01M2CN3ZCSZ54TFJGTDCXTDHXD, AC-1) —
+    перенесённая без изменений ветка `run_agent_once`."""
+    # Чекпоинт — до журнала таймаута, чтобы рестарт, начатый сразу по
+    # этой записи, уже видел чистое дерево (SPEC T041, требования 1–4).
+    checkpoint.commit_timeout_checkpoint(conn, task_id, role)
+    # «без ретрая» — чтобы читающий журнал не ждал попыток 2 и 3.
+    timeout_min = f"{config.AGENT_TIMEOUT_SEC // 60} мин"
+    detail = f"{timeout_min}, {numbered} (без ретрая){spent}"
+    if killed_group is not None:
+        # Только когда группа реально снята (AC-7) — `agent_pid`
+        # тестового дубля выше не участвовал в group-kill вовсе.
+        detail = f"{detail}; {liveness.group_kill_detail(agent_pid, killed_group)}"
+    store.journal(conn, task_id, role, "agent run TIMEOUT", detail)
+    # Стоп-кран волны (01M1THKPNZ11DBZAQDMJ33EMJR, требование 3, вторая
+    # точка вызова): считает только СЕЙЧАС записанное событие и все
+    # прежние в пределах окна — журнал выше уже несёт эту попытку.
+    alerts.check_wave_breaker_timeout(conn)
+    print(f"[{task_id}] таймаут шага ({timeout_min}) — разберись и "
+          f"перезапусти run")
+    return "timeout", f"таймаут шага ({timeout_min})", None
 
-    missing_artifact = _missing_required_artifact(role, cwd, task_id)
-    if missing_artifact is not None:
-        # Требование 3: rc=0, но роль не оставила обязательный артефакт в
-        # своём рабочем каталоге — тот же класс отказа, что rc != 0 выше
-        # (чекпоинт WIP, ретрай/эскалацию решает `cmd_run`), а не штатное
-        # «agent run finished» (иначе цикл ретраев съедает попытку и
-        # бюджет впустую — оба инцидента 05.09, «Контекст» SPEC).
-        checkpoint.commit_abnormal_checkpoint(
-            conn, task_id, role, f"без артефакта {missing_artifact}")
-        reason = (f"rc=0, {numbered}{spent}; шаг завершён без артефакта "
-                  f"{missing_artifact} в рабочем каталоге роли {cwd}")
-        store.journal(conn, task_id, role, "agent run FAILED", reason)
-        print(f"[{task_id}] {role}: шаг завершён без артефакта "
-              f"{missing_artifact} (rc=0, {numbered})")
-        return "failed", reason, None
 
+def _finish_failed(conn, task_id: str, role: str, rc: int, numbered: str,
+                   spent: str, log_path: Path):
+    """Исход «агент упал» (rc != 0) (SPEC 01M2CN3ZCSZ54TFJGTDCXTDHXD,
+    AC-1) — перенесённая без изменений ветка `run_agent_once`."""
+    # Чекпоинт — до журнала провала, тем же доводом, что и у таймаута
+    # выше (SPEC T074, требование 3 — расширение правила T041: провал
+    # по коду возврата тоже аварийное завершение шага, не только
+    # таймаут). Сам провал/ретрай/эскалация ниже не меняются.
+    checkpoint.commit_abnormal_checkpoint(conn, task_id, role, f"rc={rc}")
+    reason = (f"rc={rc}, {numbered}{spent}; "
+              f"хвост {log_path}:\n{agent_log.log_tail(log_path)}")
+    store.journal(conn, task_id, role, "agent run FAILED", reason)
+    # Эвристики ошибок агента (SPEC T082): классификация по ПОЛНОМУ
+    # тексту попытки (не по усечённому хвосту выше) — журналирует
+    # сырой текст структурно и заводит алерты классов «обрыв
+    # потока»/2, решение о бэкоффе/немедленном отказе — за `cmd_run`.
+    failure_class = failure_classification._record_failure_classification(
+        conn, task_id, role, numbered,
+        failure_classification._attempt_output_text(log_path))
+    # Стоп-кран волны (01M1THKPNZ11DBZAQDMJ33EMJR, требование 3, первая
+    # точка вызова): без действия для классов вне TRANSIENT_SYSTEM_
+    # CLASSES (в т.ч. failure_class=None) — фильтр внутри check_wave_
+    # breaker_failure.
+    alerts.check_wave_breaker_failure(conn, failure_class)
+    # В консоли хвост не повторяем: эти строки Оператор только что видел
+    # вживую (перекачка пишет и в stdout, и в лог). В журнале он нужен —
+    # `log <id>` читают потом, когда вывода на экране уже нет.
+    print(f"[{task_id}] {role}: агент упал (rc={rc}, {numbered}), "
+          f"причина в {log_path}")
+    return "failed", reason, failure_class
+
+
+def _finish_missing_artifact(conn, task_id: str, role: str,
+                             missing_artifact: str, cwd: Path,
+                             numbered: str, spent: str):
+    """Исход «rc=0, но обязательный артефакт роли не оставлен» (SPEC
+    01M2CN3ZCSZ54TFJGTDCXTDHXD, AC-1) — перенесённая без изменений ветка
+    `run_agent_once`."""
+    # Требование 3: rc=0, но роль не оставила обязательный артефакт в
+    # своём рабочем каталоге — тот же класс отказа, что rc != 0 выше
+    # (чекпоинт WIP, ретрай/эскалацию решает `cmd_run`), а не штатное
+    # «agent run finished» (иначе цикл ретраев съедает попытку и
+    # бюджет впустую — оба инцидента 05.09, «Контекст» SPEC).
+    checkpoint.commit_abnormal_checkpoint(
+        conn, task_id, role, f"без артефакта {missing_artifact}")
+    reason = (f"rc=0, {numbered}{spent}; шаг завершён без артефакта "
+              f"{missing_artifact} в рабочем каталоге роли {cwd}")
+    store.journal(conn, task_id, role, "agent run FAILED", reason)
+    print(f"[{task_id}] {role}: шаг завершён без артефакта "
+          f"{missing_artifact} (rc=0, {numbered})")
+    return "failed", reason, None
+
+
+def _finish_ok(conn, task_id: str, role: str, pump, rc: int,
+              numbered: str, spent: str):
+    """Исход «шаг завершён» (rc=0, обязательный артефакт на месте) (SPEC
+    01M2CN3ZCSZ54TFJGTDCXTDHXD, AC-1) — перенесённая без изменений ветка
+    `run_agent_once`."""
     if pump.error is not None:
         # Обрыв stdout-пайпа без таймаута (rc=0, но перекачка сама поймала
         # исключение) — тоже аварийное завершение (SPEC T074, требование 3):
