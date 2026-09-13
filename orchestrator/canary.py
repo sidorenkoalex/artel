@@ -91,8 +91,9 @@ from pathlib import Path
 from scripts import guard
 
 from . import (alerts, answer, artifact_branch, artifact_source, artifacts,
-              auto, catalog, cleanup, config, fsm, gitcmd, pool_seal, runner,
+              auto, catalog, cleanup, config, fsm, gitcmd, runner,
               store, workspace, yamlmini)
+from .pool_seal import _pool_dir
 
 CANARY_MARK_ACTOR = "canary"
 
@@ -1103,7 +1104,7 @@ def _run_one_task(template_path: Path, run_stamp: str, ratio: float,
 
 
 def cmd_canary(*, k: int, sha: str | None = None) -> None:
-    pool_dir = pool_seal._pool_dir()
+    pool_dir = _pool_dir()
     if not pool_dir.is_dir():
         sys.exit(f"canary: каталог пула не найден: {pool_dir}")
     if k <= 0:
