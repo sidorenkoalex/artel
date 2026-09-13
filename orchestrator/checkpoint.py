@@ -80,6 +80,60 @@ def _is_extraneous_task_root_file(rel: str) -> bool:
 _DELETABLE_ARTIFACT_TYPES = frozenset({"questions"})
 
 
+def _wip_checkpoint(conn, task_id: str, role: str, message: str, action: str,
+                    discard_action: str, discard_detail: str,
+                    timeout: bool) -> str:
+    """Общая обвязка трёх WIP-чекпоинтов роли — таймаута
+    (`commit_timeout_checkpoint`), аварийного завершения
+    (`commit_abnormal_checkpoint`) и `pause --now`
+    (`commit_pause_now_checkpoint`) — введена рефакторингом R7 (роадмап
+    §3, фаза R, CR-2026-09-13-2 ★): три тела различались только текстом
+    сообщения коммита/журнала и флагом `timeout`, сама
+    последовательность действий (мандат `developer` → `_commit_worktree_
+    change` → журнал/`record_fixation`, либо откат вне мандата
+    `_discard_out_of_mandate_changes` → `_commit_external_step_artifacts`)
+    была построчно одинакова. Логика и её обоснование — целиком в
+    докстрингах трёх вызывающих публичных функций (сохранены без
+    изменений); здесь — только параметры, которыми они отличаются:
+
+    - `message` — сообщение WIP-коммита кодовой ветки (мандат `developer`),
+      уже собранное вызывающей функцией (единственная, у кого текст
+      требует дополнительных данных сверх `task_id`/`role`, —
+      `commit_abnormal_checkpoint` с параметром `cause`);
+    - `action` — текст действия журнала при успешном коммите (мандат
+      `developer`);
+    - `discard_action` — текст действия журнала при откате WIP вне
+      мандата (прочие роли);
+    - `discard_detail` — короткая фраза-причина, вставляемая в текст
+      детали отката вне мандата (`"после таймаута шага"`,
+      `"после аварийного завершения шага"`, `"pause --now"`);
+    - `timeout` — флаг, передаваемый в `_commit_external_step_artifacts`
+      (`True` только для `commit_timeout_checkpoint`).
+    """
+    if store.task_target(conn, task_id) != config.DEFAULT_TARGET:
+        return ""
+    wt = workspace.path(task_id)
+    detail = ""
+    if role == "developer":
+        committed, sha, _stray = _commit_worktree_change(
+            conn, task_id, wt, message, exclude=f"tasks/{task_id}")
+        if committed:
+            detail = f"{message} (sha {sha})" if sha else message
+            store.journal(conn, task_id, "orchestrator", action, detail)
+            store.record_fixation(conn, task_id)
+    else:
+        discarded = _discard_out_of_mandate_changes(wt, task_id)
+        if discarded:
+            journal_detail = (f"{task_id}: WIP вне мандата роли {role} "
+                              f"{discard_detail} откачен — {discarded}")
+            store.journal(conn, task_id, "orchestrator", discard_action,
+                          journal_detail)
+
+    _commit_external_step_artifacts(conn, task_id, role, config.DEFAULT_TARGET,
+                                    timeout=timeout)
+    return detail
+
+
 def commit_timeout_checkpoint(conn, task_id: str, role: str) -> str:
     """WIP-чекпоинт ветки задачи при таймауте шага — без участия Оператора.
 
@@ -155,32 +209,18 @@ def commit_timeout_checkpoint(conn, task_id: str, role: str) -> str:
     `_commit_worktree_change`, общая с `commit_step_artifacts` (SPEC
     T059): обе функции отличаются только сообщением коммита, текстом
     действия журнала и условием вызова (таймаут здесь, `rc == 0` там).
-    """
-    if store.task_target(conn, task_id) != config.DEFAULT_TARGET:
-        return ""
-    wt = workspace.path(task_id)
-    detail = ""
-    if role == "developer":
-        message = f"{task_id}: WIP-чекпоинт после таймаута шага {role}"
-        committed, sha, _stray = _commit_worktree_change(
-            conn, task_id, wt, message, exclude=f"tasks/{task_id}")
-        if committed:
-            detail = f"{message} (sha {sha})" if sha else message
-            store.journal(conn, task_id, "orchestrator",
-                          "WIP-чекпоинт после таймаута шага", detail)
-            store.record_fixation(conn, task_id)
-    else:
-        discarded = _discard_out_of_mandate_changes(wt, task_id)
-        if discarded:
-            journal_detail = (f"{task_id}: WIP вне мандата роли {role} "
-                              f"после таймаута шага откачен — {discarded}")
-            store.journal(conn, task_id, "orchestrator",
-                          "WIP-чекпоинт после таймаута шага — откат вне мандата",
-                          journal_detail)
 
-    _commit_external_step_artifacts(conn, task_id, role, config.DEFAULT_TARGET,
-                                    timeout=True)
-    return detail
+    Тело — общий приватный помощник `_wip_checkpoint` (рефакторинг R7,
+    роадмап §3, фаза R): дословно та же последовательность действий, что
+    и раньше, с параметрами этой функции.
+    """
+    message = f"{task_id}: WIP-чекпоинт после таймаута шага {role}"
+    return _wip_checkpoint(
+        conn, task_id, role, message,
+        action="WIP-чекпоинт после таймаута шага",
+        discard_action="WIP-чекпоинт после таймаута шага — откат вне мандата",
+        discard_detail="после таймаута шага",
+        timeout=True)
 
 
 def _discard_out_of_mandate_changes(wt: Path, task_id: str) -> str:
@@ -315,31 +355,20 @@ def commit_abnormal_checkpoint(conn, task_id: str, role: str, cause: str) -> str
     догфуд, коммитит, только если есть что коммитить, тихая деградация
     без git, общая обвязка `_commit_worktree_change` (SPEC T059), повторная
     фиксация (`store.record_fixation`) — тот же довод, что там.
-    """
-    if store.task_target(conn, task_id) != config.DEFAULT_TARGET:
-        return ""
-    wt = workspace.path(task_id)
-    detail = ""
-    if role == "developer":
-        message = f"{task_id}: WIP-чекпоинт после аварийного завершения шага {role} ({cause})"
-        committed, sha, _stray = _commit_worktree_change(
-            conn, task_id, wt, message, exclude=f"tasks/{task_id}")
-        if committed:
-            detail = f"{message} (sha {sha})" if sha else message
-            store.journal(conn, task_id, "orchestrator",
-                          "WIP-чекпоинт после аварийного завершения шага", detail)
-            store.record_fixation(conn, task_id)
-    else:
-        discarded = _discard_out_of_mandate_changes(wt, task_id)
-        if discarded:
-            journal_detail = (f"{task_id}: WIP вне мандата роли {role} "
-                              f"после аварийного завершения шага откачен — {discarded}")
-            store.journal(conn, task_id, "orchestrator",
-                          "WIP-чекпоинт после аварийного завершения шага — откат вне мандата",
-                          journal_detail)
 
-    _commit_external_step_artifacts(conn, task_id, role, config.DEFAULT_TARGET)
-    return detail
+    Тело — общий приватный помощник `_wip_checkpoint` (рефакторинг R7,
+    роадмап §3, фаза R): дословно та же последовательность действий, что
+    и раньше, с параметрами этой функции.
+    """
+    message = (f"{task_id}: WIP-чекпоинт после аварийного завершения шага "
+              f"{role} ({cause})")
+    return _wip_checkpoint(
+        conn, task_id, role, message,
+        action="WIP-чекпоинт после аварийного завершения шага",
+        discard_action=("WIP-чекпоинт после аварийного завершения шага — "
+                        "откат вне мандата"),
+        discard_detail="после аварийного завершения шага",
+        timeout=False)
 
 
 def commit_pause_now_checkpoint(conn, task_id: str, role: str) -> str:
@@ -371,31 +400,18 @@ def commit_pause_now_checkpoint(conn, task_id: str, role: str) -> str:
     коммитит только при реальном diff, тихая деградация без git,
     `store.record_fixation` — та же фиксация, что не даёт следующему
     `fixation.check_integrity` увидеть сдвиг HEAD как инцидент, AC-14).
-    """
-    if store.task_target(conn, task_id) != config.DEFAULT_TARGET:
-        return ""
-    wt = workspace.path(task_id)
-    detail = ""
-    if role == "developer":
-        message = f"{task_id}: WIP-чекпоинт pause --now (шаг {role} прерван)"
-        committed, sha, _stray = _commit_worktree_change(
-            conn, task_id, wt, message, exclude=f"tasks/{task_id}")
-        if committed:
-            detail = f"{message} (sha {sha})" if sha else message
-            store.journal(conn, task_id, "orchestrator", "WIP-чекпоинт pause --now",
-                          detail)
-            store.record_fixation(conn, task_id)
-    else:
-        discarded = _discard_out_of_mandate_changes(wt, task_id)
-        if discarded:
-            journal_detail = (f"{task_id}: WIP вне мандата роли {role} "
-                              f"pause --now откачен — {discarded}")
-            store.journal(conn, task_id, "orchestrator",
-                          "WIP-чекпоинт pause --now — откат вне мандата",
-                          journal_detail)
 
-    _commit_external_step_artifacts(conn, task_id, role, config.DEFAULT_TARGET)
-    return detail
+    Тело — общий приватный помощник `_wip_checkpoint` (рефакторинг R7,
+    роадмап §3, фаза R): дословно та же последовательность действий, что
+    и раньше, с параметрами этой функции.
+    """
+    message = f"{task_id}: WIP-чекпоинт pause --now (шаг {role} прерван)"
+    return _wip_checkpoint(
+        conn, task_id, role, message,
+        action="WIP-чекпоинт pause --now",
+        discard_action="WIP-чекпоинт pause --now — откат вне мандата",
+        discard_detail="pause --now",
+        timeout=False)
 
 
 def _commit_summary(wt: Path, sha: str) -> str:
@@ -531,50 +547,168 @@ def commit_step_artifacts(conn, task_id: str, role: str) -> str:
     return _commit_external_step_artifacts(conn, task_id, role, target)
 
 
-def _commit_external_step_artifacts(conn, task_id: str, role: str,
-                                    target: str, timeout: bool = False) -> str:
-    """`commit_step_artifacts` для любого target (SPEC T094, требование
-    8, AC-9): `tasks/<id>/`, написанный ролью в её рабочем каталоге,
-    коммитится плотницки в артефактную ветку пульта
-    (`orchestrator/artifact_branch.py`, тот же приём, что уже несёт
-    `catalog._new_external_artifact_branch`) и убирается ОТТУДА —
-    следующий шаг роли не увидит чужого прошлого содержимого как своё
-    незакоммиченное, а кодовая ветка не подхватит `tasks/<id>/` ни одним
-    будущим коммитом роли (требование 8: «кодовая ветка task/* свободна
-    от артефактов задачи»).
-
-    Каталога нет или он пуст — роль ничего не написала на этом шаге
-    (например, чисто код без правки артефакта) — не отказ, тот же довод,
-    что и у догфудной ветки («нечего коммитить»).
+def _collect_step_artifact_files(workspace_root: Path, task_dir: Path,
+                                 existing: list[str]
+                                 ) -> tuple[dict[str, bytes], list[str]] | None:
+    """Фаза 1/5 `_commit_external_step_artifacts` (рефакторинг R7, роадмап
+    §3, фаза R, CR-2026-09-13-2 ★): сбор файлов `task_dir` с диска и
+    фильтр по `.gitignore` пульта. Возвращает `(files, existing)` —
+    `existing` профильтрован тем же списком игнорируемых путей, что и
+    `files` (SPEC 01M1KVG3KSCY47HWXWF5HM0E76, требования 1-2): пути,
+    игнорируемые `.gitignore`, никогда не участвуют в автокоммите — ни на
+    добавление из рабочего каталога, ни на удаление уже зафиксированной
+    ранее записи, симметрично для обоих направлений требования 2 (AC-3).
+    `None` — git не ответил на сверку `.gitignore` (та же тихая
+    деградация без git, что и у остального модуля, требование 6): не
+    коммитить вслепую без гарантии фильтрации, не откатываться на
+    безусловный `rglob("*")`.
 
     Читает файлы БАЙТАМИ, не текстом (REVIEW.md T094 итерация 2,
     замечание 1 — major): раньше `read_text(encoding="utf-8")` молча
     пропускал (`continue`) любой не-UTF8/бинарный файл, а последующий
-    `shutil.rmtree` ниже удалял его с диска без следа, даже если он так
-    и не попал в артефактную ветку — асимметрия с self-путём
+    `shutil.rmtree` удалял его с диска без следа, даже если он так и не
+    попал в артефактную ветку — асимметрия с self-путём
     (`_commit_worktree_change`, настоящий `git add -A`, коммитит любые
     байты). `artifact_branch.write_commit` принимает `bytes` наравне со
     `str` — потери не осталось для ни одного файла, читаемого с диска.
 
-    Источник для self/артели — worktree КОДОВОЙ ветки задачи
-    (`workspace.path(task_id)`), не `config.PROJECTS/<target>/workspace`:
-    пересмотр планки решением Оператора 03.09 (вариант A второй
-    эскалации задачи A7, канал ADR-0012, коммит `9a984c3`) — `role_cwd`
-    для self возвращает именно этот worktree (T045), и источник
-    автокоммита обязан совпасть с ним же, иначе роль пишет в один
-    каталог, а автокоммит ищет в другом.
+    Источник — `workspace_root` (для self/артели — worktree КОДОВОЙ
+    ветки задачи `workspace.path(task_id)`, не
+    `config.PROJECTS/<target>/workspace`: пересмотр планки решением
+    Оператора 03.09, вариант A второй эскалации задачи A7, канал
+    ADR-0012, коммит `9a984c3` — `role_cwd` для self возвращает именно
+    этот worktree, T045, и источник автокоммита обязан совпасть с ним
+    же, иначе роль пишет в один каталог, а автокоммит ищет в другом),
+    разрешённый вызывающей функцией.
+    """
+    raw_files = {}
+    for path in sorted(task_dir.rglob("*")):
+        if not path.is_file():
+            continue
+        rel = path.relative_to(workspace_root).as_posix()
+        try:
+            raw_files[rel] = path.read_bytes()
+        except OSError:
+            continue
+    ignored = gitcmd.check_ignore(set(raw_files) | set(existing))
+    if ignored is None:
+        return None
+    files = {rel: content for rel, content in raw_files.items()
+             if rel not in ignored}
+    existing = [rel for rel in existing if rel not in ignored]
+    return files, existing
 
-    Удаления переносятся тоже (SPEC 01M1KT0792125J9ZNJNZJ86E9Q,
-    требование 4/AC-6), но НЕ полным зеркалированием диска на артефактную
-    ветку целиком: роль на КАЖДОМ шаге видит пустой `task_dir` (эта же
-    функция wipe'ает его в конце любого успешного коммита) и пишет туда
-    только то, что меняет СЕЙЧАС, — файл другой роли/шага, не тронутый
-    сегодня, обязан пережить чужой автокоммит (`tests/
-    test_checkpoint_external_step_artifacts.py::
-    test_second_step_accumulates_onto_the_first_not_replaces_it`, уже
-    зелёный тест, ломать нельзя). Кандидат на удаление — путь, ПОСЛЕДНИЙ
-    коммит которого на артефактной ветке — автокоммит ЭТОЙ ЖЕ роли (по
-    тексту `message` ниже, уникален для пары task_id/role) — но сам по
+
+def _journal_stray_step_artifacts(conn, task_id: str, files: dict[str, bytes]
+                                  ) -> dict[str, bytes]:
+    """Фаза 2/5 `_commit_external_step_artifacts` (рефакторинг R7): журнал
+    посторонних файлов планки приёмки и корня `tasks/<id>/`, исключение
+    обоих из `files` ДО конфликт-гварда и коммита. Возвращает
+    отфильтрованный `files`.
+
+    Посторонние файлы `acceptance_tests/` (SPEC 01M1SAA01YRRTWAVADT2F81RRQ,
+    требование 1, AC-1/AC-2) — критерий `_is_stray_acceptance_test_file`
+    (тот же список, что называет SPEC: `test_*.py`, `_sandbox.py`,
+    `markers.py`, `__init__.py`, `*.md`/`*.txt` первого уровня) — инцидент
+    05.09, `scripts/codebase_map.py` с cwd внутри каталога планки оставлял
+    `acceptance_tests/docs/codebase-map.md` на диске, и он безусловно
+    доезжал до артефактной ветки, откуда красил `guard --all` попыткой
+    разбора его как артефакта. Одна запись журнала на весь список
+    посторонних файлов шага, не по записи на файл (требование 2, AC-2) —
+    цикл только собирает `stray`, сам вызов `store.journal` вне цикла.
+
+    Посторонние файлы первого уровня `tasks/<id>/` (SPEC
+    01M1TNN4TMWAQSQ9Y1PW37J5H0, требование 2, AC-4/AC-5/AC-6) — тот же
+    приём, но критерий (`_is_extraneous_task_root_file`, тонкая обёртка
+    над `guard.is_extraneous_task_root_file`) не независимая копия, а
+    вызов `scripts.guard` (единый источник истины с `guard --all`,
+    требование 2, AC-5 задачи 01M290PVYG2VJK6442H5BAX9MA — с исключением
+    `RETRO.md`, которого сам список guard не несёт): инцидент 06.09,
+    рабочие файлы роли (копии карты кодовой базы) в корне `tasks/<id>/`
+    доехали до артефактной ветки и main без единой проверки.
+    """
+    task_prefix = f"tasks/{task_id}/"
+    stray = sorted(
+        rel[len(task_prefix):] for rel in files
+        if _is_stray_acceptance_test_file(rel[len(task_prefix):]))
+    if stray:
+        files = {rel: content for rel, content in files.items()
+                 if rel[len(task_prefix):] not in stray}
+        store.journal(
+            conn, task_id, "orchestrator",
+            STRAY_ACCEPTANCE_FILES_ACTION,
+            f"{STRAY_ACCEPTANCE_FILES_DETAIL_PREFIX}{', '.join(stray)}")
+
+    task_root_stray = sorted(
+        rel[len(task_prefix):] for rel in files
+        if _is_extraneous_task_root_file(rel[len(task_prefix):]))
+    if task_root_stray:
+        files = {rel: content for rel, content in files.items()
+                 if rel[len(task_prefix):] not in task_root_stray}
+        store.journal(
+            conn, task_id, "orchestrator",
+            "посторонние файлы в каталоге задачи",
+            f"в каталоге задачи посторонние файлы: {', '.join(task_root_stray)}")
+    return files
+
+
+def _apply_artifact_conflict_guard(conn, task_id: str, files: dict[str, bytes],
+                                   existing: list[str], baseline_sha: str,
+                                   branch: str) -> dict[str, bytes]:
+    """Фаза 3/5 `_commit_external_step_artifacts` (рефакторинг R7):
+    конфликт-гвард против `baseline_sha` (SPEC 01M1NKTF173WV5CPDZ1C3WW69K,
+    требование 4, AC-6/AC-7). Файл, который на этом шаге НЕ поменялся на
+    диске относительно версии, материализованной `runner.role_cwd` на
+    СТАРТЕ шага (`tasks.materialized_artifact_sha` — `baseline_sha`), но
+    который в артефактной ветке (`branch`) изменился ПОСЛЕ этого старта
+    (правка Оператора на гейте между стартом и концом шага, инцидент
+    04.09) — исключается из `files`, заводит alert `kind=incident`, и не
+    рассматривается на удаление фазой 4 (правка Оператора — не сигнал
+    «роль его убрала»). Файл, который роль реально поменяла (диск
+    разошёлся с baseline), — конфликта не ловит, коммитится как обычно:
+    конфликт по одному файлу не блокирует перенос остальных (AC-7).
+    Пустой `baseline_sha` (материализации не было) — гвард не применяется
+    вовсе, `files` возвращается как есть.
+    """
+    from . import alerts
+    if not baseline_sha:
+        return files
+    conflicted = []
+    for rel in sorted(set(files) & set(existing)):
+        baseline_text, _ = gitcmd.show(baseline_sha, rel)
+        if baseline_text is None:
+            continue  # файл появился на этом шаге — конфликтовать не с чем
+        content = files[rel]
+        try:
+            disk_text = (content.decode("utf-8")
+                        if isinstance(content, bytes) else content)
+        except UnicodeDecodeError:
+            continue  # бинарное содержимое — сравнение текстом бессмысленно
+        if disk_text != baseline_text:
+            continue  # роль сама поменяла файл — не конфликт, её правка идёт дальше
+        current_text, _ = gitcmd.show(branch, rel)
+        if current_text is not None and current_text != baseline_text:
+            conflicted.append(rel)
+    for rel in conflicted:
+        del files[rel]
+        alerts.raise_alert(
+            conn, task_id, "incident", "checkpoint",
+            f"конфликт артефактов: правка в ветке новее рабочего "
+            f"каталога — {rel}")
+    return files
+
+
+def _step_artifact_deletion_candidates(conn, task_id: str, role: str, t,
+                                       files: dict[str, bytes],
+                                       existing: list[str], branch: str,
+                                       own_commit_marker: str) -> list[str]:
+    """Фаза 4/5 `_commit_external_step_artifacts` (рефакторинг R7):
+    кандидаты на удаление среди путей `existing`, отсутствующих в `files`
+    после фаз 1-3 (SPEC 01M1KT0792125J9ZNJNZJ86E9Q, требование 4/AC-6).
+
+    Кандидат на удаление — путь, ПОСЛЕДНИЙ коммит которого на
+    артефактной ветке `branch` — автокоммит ЭТОЙ ЖЕ роли (по префиксу
+    `own_commit_marker`, уникальному для пары task_id/role) — но сам по
     себе этот сигнал совпадает и с реальным ПОВТОРНЫМ шагом ТОЙ ЖЕ роли
     В ТОМ ЖЕ состоянии, где роль файл просто не тронула, не отказалась
     от него (REVIEW.md итерация 1, замечание R1-F1: auto-цикл `in_dev`,
@@ -588,162 +722,26 @@ def _commit_external_step_artifacts(conn, task_id: str, role: str,
     последний раз тронутый ДРУГИМ автором (другая роль, PASSPORT.md
     переходов, ANSWER Оператора), или чей `type` не в списке (PLAN.md,
     REVIEW.md, SPEC.md) — никогда не кандидат на удаление здесь,
-    независимо от локального отсутствия. Исключение — удаление файлов
-    `acceptance_tests/` ДО фиксации лока (см. блок ниже, SPEC
-    01M1NKTF173WV5CPDZ1C3WW69K, требование 7/AC-13/AC-14/AC-15): planка
-    приёмки ещё не зафиксирована, значит она ещё не «чужая», её меняет
-    сам test_author.
+    независимо от локального отсутствия.
 
-    Конфликт-гвард (SPEC 01M1NKTF173WV5CPDZ1C3WW69K, требование 4,
-    AC-6/AC-7): файл, который на этом шаге НЕ поменялся на диске
-    относительно версии, материализованной `runner.role_cwd` на СТАРТЕ
-    шага (`tasks.materialized_artifact_sha`), но который в артефактной
-    ветке изменился ПОСЛЕ этого старта (правка Оператора на гейте между
-    стартом и концом шага, инцидент 04.09) — исключается из переноса,
-    заводит alert `kind=incident`, и НЕ рассматривается на удаление ниже
-    (правка Оператора — не сигнал «роль его убрала»). Файл, который роль
-    реально поменяла (диск разошёлся с baseline), — конфликта не ловит,
-    коммитится как обычно: конфликт по одному файлу не блокирует перенос
-    остальных (AC-7).
+    Сверка `own_commit_marker` — ПРЕФИКСОМ, не точным текстом сообщения
+    (SPEC 01M1NBWTSXEJB24PXR417YF1VA, AC-4/AC-5): свой автокоммит любой
+    из двух формулировок (обычной и с пометкой «WIP после таймаута»)
+    остаётся распознаваемым как «последний коммит пути — автокоммит этой
+    же роли», иначе чередование обычных шагов и обрывов по таймауту той
+    же роли ломало бы удаление уже на второй итерации.
 
-    Посторонние файлы `acceptance_tests/` (SPEC 01M1SAA01YRRTWAVADT2F81RRQ,
-    требование 1, AC-1/AC-2) — критерий `_is_stray_acceptance_test_file`
-    (тот же список, что называет SPEC: `test_*.py`, `_sandbox.py`,
-    `markers.py`, `__init__.py`, `*.md`/`*.txt` первого уровня) исключает
-    их из `files` ПОСЛЕ фильтра `.gitignore` выше, ДО конфликт-гварда и
-    коммита — инцидент 05.09, `scripts/codebase_map.py` с cwd внутри
-    каталога планки оставлял `acceptance_tests/docs/codebase-map.md` на
-    диске, и он безусловно доезжал до артефактной ветки, откуда красил
-    `guard --all` попыткой разбора его как артефакта. Одна запись журнала
-    на весь список посторонних файлов шага, не по записи на файл
-    (требование 2, AC-2) — цикл только собирает `stray`, сам вызов
-    `store.journal` вне цикла.
-
-    Посторонние файлы первого уровня `tasks/<id>/` (SPEC
-    01M1TNN4TMWAQSQ9Y1PW37J5H0, требование 2, AC-4/AC-5/AC-6) — тот же
-    приём, но критерий (`_is_extraneous_task_root_file`, тонкая обёртка
-    над `guard.is_extraneous_task_root_file`) не независимая копия, а
-    вызов `scripts.guard` (единый источник истины с `guard --all`,
-    требование 2, AC-5 задачи 01M290PVYG2VJK6442H5BAX9MA — с
-    исключением `RETRO.md`, которого сам список guard не несёт):
-    инцидент 06.09, рабочие файлы роли (копии карты кодовой базы) в
-    корне `tasks/<id>/` доехали до артефактной ветки и main без единой
-    проверки.
-
-    `timeout=True` (SPEC 01M1NBWTSXEJB24PXR417YF1VA, AC-4/AC-5) —
-    `commit_timeout_checkpoint` зовёт этой веткой: тот же перенос, что и
-    при штатном завершении шага, но сообщение коммита артефактной ветки
-    несёт пометку «WIP после таймаута», чтобы читатель истории отличил
-    «роль успела сама» от «оркестратор подобрал WIP после обрыва».
-    Кандидат на удаление (`own_commit_marker` ниже) сверяется ПРЕФИКСОМ,
-    не точным текстом сообщения — свой автокоммит любой из двух
-    формулировок (обычной и с пометкой таймаута) остаётся распознаваемым
-    как «последний коммит пути — автокоммит этой же роли», иначе
-    чередование обычных шагов и обрывов по таймауту той же роли ломало
-    бы удаление уже на второй итерации.
-
-    Push артефактной ветки в origin (`artifact_branch.push`, ниже) теперь
-    классифицирует причину отказа и журналирует и успех, и отказ (SPEC
-    01M1TQ0X14Y5B3C87WC0Q31PK2, требования 1-2) — раньше отказ push
-    молча пропадал (`bool` результат никем не читался).
+    Исключение — удаление файлов `acceptance_tests/` ДО фиксации лока
+    (SPEC 01M1NKTF173WV5CPDZ1C3WW69K, требование 7/AC-13/AC-14/AC-15):
+    planка приёмки ещё не зафиксирована, значит она ещё не «чужая», её
+    меняет сам test_author — тесты `acceptance_tests/*.py` не несут
+    frontmatter вовсе (`_DELETABLE_ARTIFACT_TYPES` их никогда не увидит),
+    но до фиксации лока планка ещё правится самим test_author'ом — её
+    удаление им же обязано доехать до ветки тем же коммитом, без
+    повторной попытки (канарейка v2). После лока (AC-14)
+    `tests_locked_sha` уже не пуст — эта ветка не срабатывает, прежнее
+    правило (только `type: questions`) остаётся в силе.
     """
-    from . import alerts, artifact_branch
-    if target == config.DEFAULT_TARGET:
-        workspace_root = workspace.path(task_id)
-    else:
-        workspace_root = config.PROJECTS / target / "workspace"
-    task_dir = workspace_root / "tasks" / task_id
-    if not task_dir.is_dir():
-        return ""
-    raw_files = {}
-    for path in sorted(task_dir.rglob("*")):
-        if not path.is_file():
-            continue
-        rel = path.relative_to(workspace_root).as_posix()
-        try:
-            raw_files[rel] = path.read_bytes()
-        except OSError:
-            continue
-
-    branch = artifact_branch.branch_name(task_id)
-    own_commit_marker = f"{task_id}: артефакты шага {role} (автокоммит оркестратора"
-    message = (f"{own_commit_marker}, WIP после таймаута)" if timeout
-              else f"{own_commit_marker})")
-    existing = gitcmd.ls_tree_files(branch, f"tasks/{task_id}") or []
-    # Файлы, игнорируемые `.gitignore` пульта (SPEC 01M1KVG3KSCY47HWXWF5HM0E76,
-    # требования 1-2), никогда не участвуют в автокоммите — ни на добавление
-    # из рабочего каталога, ни на удаление уже зафиксированной ранее записи:
-    # исключаются из ОБЕИХ сторон сравнения `files`/`existing` ДО diff'а,
-    # симметрично для обоих направлений требования 2 (AC-3).
-    ignored = gitcmd.check_ignore(set(raw_files) | set(existing))
-    if ignored is None:
-        # git не ответил на сверку .gitignore — та же тихая деградация без
-        # git, что и у остального модуля (требование 6): не коммитить
-        # вслепую без гарантии фильтрации, не откатываться на
-        # безусловный rglob("*").
-        return ""
-    files = {rel: content for rel, content in raw_files.items()
-             if rel not in ignored}
-    existing = [rel for rel in existing if rel not in ignored]
-
-    # Посторонние файлы `acceptance_tests/` (SPEC 01M1SAA01YRRTWAVADT2F81RRQ,
-    # AC-1/AC-2) — исключаются из переноса, ОДНА запись журнала на весь шаг
-    # (не по записи на файл): цикл ниже только собирает список, само
-    # журналирование — один вызов после цикла.
-    task_prefix = f"tasks/{task_id}/"
-    stray = sorted(
-        rel[len(task_prefix):] for rel in files
-        if _is_stray_acceptance_test_file(rel[len(task_prefix):]))
-    if stray:
-        files = {rel: content for rel, content in files.items()
-                 if rel[len(task_prefix):] not in stray}
-        store.journal(
-            conn, task_id, "orchestrator",
-            STRAY_ACCEPTANCE_FILES_ACTION,
-            f"{STRAY_ACCEPTANCE_FILES_DETAIL_PREFIX}{', '.join(stray)}")
-
-    # Посторонние файлы первого уровня tasks/<id>/ (SPEC
-    # 01M1TNN4TMWAQSQ9Y1PW37J5H0, требование 2, AC-4/AC-5/AC-6) —
-    # критерий допустимости импортирован из scripts.guard (один источник
-    # истины с guard --all, не независимая копия): исключаются из
-    # переноса, ОДНА запись журнала на весь список отброшенных путей.
-    task_root_stray = sorted(
-        rel[len(task_prefix):] for rel in files
-        if _is_extraneous_task_root_file(rel[len(task_prefix):]))
-    if task_root_stray:
-        files = {rel: content for rel, content in files.items()
-                 if rel[len(task_prefix):] not in task_root_stray}
-        store.journal(
-            conn, task_id, "orchestrator",
-            "посторонние файлы в каталоге задачи",
-            f"в каталоге задачи посторонние файлы: {', '.join(task_root_stray)}")
-
-    t = store.get_task(conn, task_id)
-    baseline_sha = t["materialized_artifact_sha"] or ""
-    if baseline_sha:
-        conflicted = []
-        for rel in sorted(set(files) & set(existing)):
-            baseline_text, _ = gitcmd.show(baseline_sha, rel)
-            if baseline_text is None:
-                continue  # файл появился на этом шаге — конфликтовать не с чем
-            content = files[rel]
-            try:
-                disk_text = (content.decode("utf-8")
-                            if isinstance(content, bytes) else content)
-            except UnicodeDecodeError:
-                continue  # бинарное содержимое — сравнение текстом бессмысленно
-            if disk_text != baseline_text:
-                continue  # роль сама поменяла файл — не конфликт, её правка идёт дальше
-            current_text, _ = gitcmd.show(branch, rel)
-            if current_text is not None and current_text != baseline_text:
-                conflicted.append(rel)
-        for rel in conflicted:
-            del files[rel]
-            alerts.raise_alert(
-                conn, task_id, "incident", "checkpoint",
-                f"конфликт артефактов: правка в ветке новее рабочего "
-                f"каталога — {rel}")
-
     removed = []
     for rel in sorted(set(existing) - set(files)):
         subject = gitcmd.git("log", "-1", "--format=%s", branch, "--", rel)
@@ -756,18 +754,36 @@ def _commit_external_step_artifacts(conn, task_id: str, role: str,
         if not deletable and role == "test_author" and t["state"] == "tests_writing" \
                 and not t["tests_locked_sha"] \
                 and rel.startswith(f"tasks/{task_id}/acceptance_tests/"):
-            # SPEC 01M1NKTF173WV5CPDZ1C3WW69K, требование 7/AC-13/AC-15:
-            # тесты `acceptance_tests/*.py` не несут frontmatter вовсе
-            # (`_DELETABLE_ARTIFACT_TYPES` их никогда не увидит), но до
-            # фиксации лока планка ещё правится самим test_author'ом —
-            # её удаление им же обязано доехать до ветки тем же коммитом,
-            # без повторной попытки (канарейка v2). После лока (AC-14)
-            # `tests_locked_sha` уже не пуст — эта ветка не срабатывает,
-            # прежнее правило (только `type: questions`) остаётся в силе.
             deletable = True
         if deletable:
             removed.append(rel)
+    return removed
 
+
+def _commit_step_artifacts_to_branch(conn, task_id: str, files: dict[str, bytes],
+                                     removed: list[str], message: str,
+                                     task_dir: Path) -> str:
+    """Фаза 5/5 `_commit_external_step_artifacts` (рефакторинг R7): коммит
+    `files`/`removed` в артефактную ветку пульта
+    (`orchestrator/artifact_branch.py`, тот же приём, что уже несёт
+    `catalog._new_external_artifact_branch`), очистка `task_dir` в рабочем
+    каталоге роли и push. Пустой результат обеих фаз 1-4 (`not files and
+    not removed`) — нечего коммитить, тот же довод, что и у догфудной
+    ветки. Отказ `artifact_branch.commit_files` (`not commit_sha`) — та же
+    тихая деградация без git, что и у остального модуля.
+
+    Каталог роли (`task_dir`) очищается ПОСЛЕ успешного коммита —
+    следующий шаг роли не увидит чужого прошлого содержимого как своё
+    незакоммиченное, а кодовая ветка не подхватит `tasks/<id>/` ни одним
+    будущим коммитом роли (SPEC T094, требование 8: «кодовая ветка
+    task/* свободна от артефактов задачи»).
+
+    Push артефактной ветки в origin (`artifact_branch.push`) классифицирует
+    причину отказа и журналирует и успех, и отказ (SPEC
+    01M1TQ0X14Y5B3C87WC0Q31PK2, требования 1-2) — раньше отказ push молча
+    пропадал (`bool` результат никем не читался).
+    """
+    from . import artifact_branch
     if not files and not removed:
         return ""
     commit_sha = artifact_branch.commit_files(task_id, files, message,
@@ -783,6 +799,68 @@ def _commit_external_step_artifacts(conn, task_id: str, role: str,
                   "автокоммит артефактов шага (артефактная ветка)", detail)
     store.record_fixation(conn, task_id)
     return detail
+
+
+def _commit_external_step_artifacts(conn, task_id: str, role: str,
+                                    target: str, timeout: bool = False) -> str:
+    """`commit_step_artifacts` для любого target (SPEC T094, требование
+    8, AC-9): `tasks/<id>/`, написанный ролью в её рабочем каталоге,
+    коммитится плотницки в артефактную ветку пульта и убирается ОТТУДА.
+
+    Каталога нет или он пуст — роль ничего не написала на этом шаге
+    (например, чисто код без правки артефакта) — не отказ, тот же довод,
+    что и у догфудной ветки («нечего коммитить»).
+
+    Разбита рефакторингом R7 (роадмап §3, фаза R, CR-2026-09-13-2 ★) на
+    пять фаз с явными аргументами — подробности каждой фазы в её
+    собственном докстринге:
+
+    1. `_collect_step_artifact_files` — сбор файлов с фильтром `.gitignore`;
+    2. `_journal_stray_step_artifacts` — журнал посторонних файлов планки
+       и корня;
+    3. `_apply_artifact_conflict_guard` — конфликт-гвард против baseline;
+    4. `_step_artifact_deletion_candidates` — кандидаты на удаление по
+       `own_commit_marker`;
+    5. `_commit_step_artifacts_to_branch` — коммит в артефактную ветку.
+
+    `timeout=True` (SPEC 01M1NBWTSXEJB24PXR417YF1VA, AC-4/AC-5) —
+    `commit_timeout_checkpoint` зовёт этой веткой: тот же перенос, что и
+    при штатном завершении шага, но сообщение коммита артефактной ветки
+    несёт пометку «WIP после таймаута», чтобы читатель истории отличил
+    «роль успела сама» от «оркестратор подобрал WIP после обрыва».
+    """
+    if target == config.DEFAULT_TARGET:
+        workspace_root = workspace.path(task_id)
+    else:
+        workspace_root = config.PROJECTS / target / "workspace"
+    task_dir = workspace_root / "tasks" / task_id
+    if not task_dir.is_dir():
+        return ""
+
+    from . import artifact_branch
+    branch = artifact_branch.branch_name(task_id)
+    own_commit_marker = f"{task_id}: артефакты шага {role} (автокоммит оркестратора"
+    message = (f"{own_commit_marker}, WIP после таймаута)" if timeout
+              else f"{own_commit_marker})")
+    existing = gitcmd.ls_tree_files(branch, f"tasks/{task_id}") or []
+
+    collected = _collect_step_artifact_files(workspace_root, task_dir, existing)
+    if collected is None:
+        return ""
+    files, existing = collected
+
+    files = _journal_stray_step_artifacts(conn, task_id, files)
+
+    t = store.get_task(conn, task_id)
+    baseline_sha = t["materialized_artifact_sha"] or ""
+    files = _apply_artifact_conflict_guard(conn, task_id, files, existing,
+                                           baseline_sha, branch)
+
+    removed = _step_artifact_deletion_candidates(
+        conn, task_id, role, t, files, existing, branch, own_commit_marker)
+
+    return _commit_step_artifacts_to_branch(conn, task_id, files, removed,
+                                            message, task_dir)
 
 
 def commit_pull_checkpoint(conn, task_id: str, wt: Path) -> str:
