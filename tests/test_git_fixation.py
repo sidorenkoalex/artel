@@ -157,7 +157,8 @@ class _GitFixationTmpRootTest(TmpRootTest):
     """Песочница мультитаргета: пути `config` — во временном каталоге, git настоящий."""
 
     PATCHED_ATTRS = ("ROOT", "DB", "TASKS", "LOGS", "PROJECTS",
-                     "ROLE_HOME", "ROLE_CONFIG_DIR", "TARGETS")
+                     "ROLE_HOME", "ROLE_CONFIG_DIR", "TARGETS",
+                     "WORKTREES", "BACKUP_MARKER")
 
     def setUp(self):
         super().setUp()
