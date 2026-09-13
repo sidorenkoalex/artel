@@ -119,7 +119,7 @@ class PlanAttachesApplicableInvariantsDiffTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             subprocess.run(
                 ["git", "worktree", "add", "--detach", "--quiet", tmp,
-                 "main"],
+                 _util.merge_base()],
                 cwd=_util.REPO_ROOT, check=True,
                 capture_output=True, text=True)
             try:
@@ -127,10 +127,19 @@ class PlanAttachesApplicableInvariantsDiffTest(unittest.TestCase):
                     ["git", "apply", "--check", "-"],
                     cwd=tmp, input=diff_text,
                     capture_output=True, text=True)
-                self.assertEqual(
-                    0, result.returncode,
-                    f"git apply --check на чистом main отказал:\n"
-                    f"{result.stderr}")
+                if result.returncode != 0:
+                    # Приложение уже применено Оператором в main (штатный
+                    # путь: коммит приложения до/в цикле мержа) — дифф
+                    # корректен, если накладывается в обратную сторону.
+                    reverse = subprocess.run(
+                        ["git", "apply", "--check", "--reverse", "-"],
+                        cwd=tmp, input=diff_text,
+                        capture_output=True, text=True)
+                    self.assertEqual(
+                        0, reverse.returncode,
+                        f"git apply --check на базе интеграции отказал и "
+                        f"прямо, и обратно (дифф не накладывается и не "
+                        f"применён):\n{result.stderr}\n{reverse.stderr}")
             finally:
                 subprocess.run(
                     ["git", "worktree", "remove", "--force", tmp],

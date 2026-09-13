@@ -20,8 +20,12 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 
-def merge_base(ref: str = "main") -> str:
-    """sha точки расхождения ветки задачи с `ref` (по умолчанию `main`)."""
+def merge_base(ref: str = "origin/main") -> str:
+    """sha точки расхождения ветки задачи с `ref` (по умолчанию
+    `origin/main` — база интеграции; локальная `main` главной копии —
+    пин пульта и отстаёт от origin, из-за чего после подтяжки main диф
+    «с main» приписывал ветке чужие коммиты; правка Оператора 13.09,
+    amend-tests)."""
     res = subprocess.run(["git", "merge-base", ref, "HEAD"], cwd=REPO_ROOT,
                          capture_output=True, text=True, check=True)
     return res.stdout.strip()
