@@ -10,6 +10,7 @@
 заглушены `FakeClock` (не настоящее ожидание), `ci.branch_status`/
 `ci.trigger_rerun` — прямыми моками (не сетевой `gh`).
 """
+import subprocess
 import sys
 import time
 import unittest
@@ -19,7 +20,7 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from orchestrator import (catalog, ci, config, fsm, fsm_merge_gate,  # noqa: E402
-                          github_adapter, merge_lock, store)
+                          github_adapter, merge_lock, repo_context, store)
 from tests.sandbox import TmpRootTest, capture  # noqa: E402
 
 RUNNING = (False, "CI коммита abc12345 ещё идёт: python")
@@ -255,6 +256,246 @@ class OuterCycleDeadlineTest(MergeGateCiWaitUnitTest):
             starts[0], starts[1],
             "AC-4: потолок обязан отсчитываться от ПЕРВОГО пуша — второй "
             "заход в ожидание не имеет права пересчитать `start`")
+
+
+CANNOT_LOCK_REF = (
+    "To github.com:example/artel.git\n"
+    " ! [remote rejected] deadbeef -> main (cannot lock ref "
+    "'refs/heads/main': is at 8772115e but expected cd979106)\n"
+    "error: failed to push some refs to 'github.com:example/artel.git'\n")
+NON_FAST_FORWARD = (
+    " ! [rejected]        deadbeef -> main (non-fast-forward)\n"
+    "error: failed to push some refs\n")
+FETCH_FIRST = (
+    " ! [rejected]        deadbeef -> main (fetch first)\n"
+    "error: failed to push some refs\n")
+HOOK_DECLINED = (
+    " ! [remote rejected] deadbeef -> main (pre-receive hook declined)\n"
+    "error: failed to push some refs\n")
+NETWORK_FAILURE = (
+    "ssh: connect to host github.com port 22: Operation timed out\n"
+    "fatal: Could not read from remote repository.\n")
+
+
+def _push_result(stderr: str = "", returncode: int = 0):
+    return subprocess.CompletedProcess(args=["git", "push"],
+                                       returncode=returncode, stdout="",
+                                       stderr=stderr)
+
+
+class PushMergedMainMovedMainTest(MergeGateCiWaitUnitTest):
+    """`_push_merged_main` (SPEC 01M2XFSE8G3MBRHHQR38H53J1M, требования
+    8-9): отказ push класса «main сдвинулся» — именованная запись и
+    `"moved"` без завершения процесса; иные отказы — прежние «merge
+    FAILED» + `SystemExit`."""
+
+    def push_with(self, result):
+        ctx = repo_context.RepoContext(path=self.root, remote="origin",
+                                       base="main")
+        with mock.patch.object(repo_context, "git", lambda ctx, *a: result):
+            return fsm_merge_gate._push_merged_main(
+                store.db(), self.TASK, "deadbeef", ctx)
+
+    def test_classifier_recognises_the_three_moved_main_markers_only(self):
+        """«cannot lock ref», «non-fast-forward», «fetch first» — сдвиг
+        main; «pre-receive hook declined» (голое «rejected») и сетевой
+        отказ — нет.
+
+        Ловит мутацию: классификатор сведён к одной подстроке (только
+        текст инцидента) или расширен до голого «rejected» — одна из пяти
+        сверок покраснеет.
+        """
+        self.assertTrue(fsm_merge_gate._push_rejected_by_moved_main(CANNOT_LOCK_REF))
+        self.assertTrue(fsm_merge_gate._push_rejected_by_moved_main(NON_FAST_FORWARD))
+        self.assertTrue(fsm_merge_gate._push_rejected_by_moved_main(FETCH_FIRST))
+        self.assertFalse(fsm_merge_gate._push_rejected_by_moved_main(HOOK_DECLINED))
+        self.assertFalse(fsm_merge_gate._push_rejected_by_moved_main(NETWORK_FAILURE))
+
+    def test_moved_main_returns_moved_and_journals_without_merge_failed(self):
+        """Отказ «cannot lock ref» — возврат `"moved"`, запись «main
+        сдвинулся во время окна — повтор подтяжки», без «merge FAILED» и
+        без `SystemExit`.
+
+        Ловит мутацию: ветка «сдвиг main» не заведена (любой ненулевой код
+        push — `sys.exit`) — вызов упадёт `SystemExit`; либо запись
+        оставлена прежней «merge FAILED» — `assertNotIn` покраснеет.
+        """
+        outcome = self.push_with(_push_result(CANNOT_LOCK_REF, 1))
+
+        self.assertEqual(outcome, "moved")
+        journal = self.journal_blob()
+        self.assertIn("main сдвинулся во время окна — повтор подтяжки", journal)
+        self.assertNotIn("merge failed", journal)
+
+    def test_other_push_failure_journals_merge_failed_and_exits(self):
+        """Сетевой отказ push — прежняя запись «merge FAILED» и
+        `SystemExit`.
+
+        Ловит мутацию: реакция «повтор подтяжки» применена к любому отказу
+        push — `SystemExit` не будет, `assertRaises` покраснеет.
+        """
+        with self.assertRaises(SystemExit):
+            self.push_with(_push_result(NETWORK_FAILURE, 128))
+
+        self.assertIn("merge failed", self.journal_blob())
+        self.assertNotIn("main сдвинулся", self.journal_blob())
+
+    def test_git_not_answering_still_exits(self):
+        """`repo_context.git` вернул `None` (git не ответил) — прежний
+        «merge FAILED»/«git не ответил» и `SystemExit`.
+
+        Ловит мутацию: чтение `push.stderr` до проверки на `None` —
+        `AttributeError` вместо именованного `SystemExit`.
+        """
+        with self.assertRaises(SystemExit):
+            self.push_with(None)
+
+        self.assertIn("git не ответил", self.journal_blob())
+
+    def test_successful_push_returns_ok(self):
+        """Успешный push — `"ok"`, журнал без записей отказа.
+
+        Ловит мутацию: условие успеха инвертировано — вернётся `"moved"`
+        или `SystemExit`.
+        """
+        self.assertEqual(self.push_with(_push_result()), "ok")
+        self.assertNotIn("сдвинулся", self.journal_blob())
+
+
+class MovedMainRetryInCycleTest(MergeGateCiWaitUnitTest):
+    """Тело гейта на `"moved"` возвращает `("wait", branch)`, и внешний
+    цикл повторяет заход в том же вызове `approve`, не сбрасывая потолок
+    ожидания CI (SPEC 01M2XFSE8G3MBRHHQR38H53J1M, требования 8-9)."""
+
+    BRANCH = "task/t001-zadacha"
+
+    def patch(self, target, attr, replacement):
+        patcher = mock.patch.object(target, attr, replacement)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def setUp(self):
+        super().setUp()
+        self.push_results: list = []
+        self.push_calls = 0
+        self.sync_calls = 0
+        self.ci_waits: list = []
+        self.patch(fsm_merge_gate, "_protected_path_diff_gate",
+                   lambda *a, **k: False)
+        self.patch(fsm_merge_gate, "_ensure_branch_head_published",
+                   lambda *a, **k: "ok")
+        self.patch(fsm_merge_gate, "_sync_main_or_wait", self.fake_sync)
+        self.patch(fsm_merge_gate, "_ci_ready_or_wait", lambda *a, **k: "ok")
+        self.patch(fsm_merge_gate, "_perform_carpentry_merge",
+                   lambda *a, **k: ("ok", self.root / "scratch"))
+        self.patch(fsm_merge_gate, "_publish_merge_artifacts",
+                   lambda *a, **k: "deadbeef")
+        self.patch(fsm_merge_gate, "_publish_closing_snapshot_or_wait",
+                   lambda *a, **k: "ok")
+        self.patch(fsm_merge_gate, "_cleanup_merged_task", lambda *a, **k: None)
+        self.patch(fsm_merge_gate, "_wait_for_branch_ci_green",
+                   self.fake_ci_wait)
+        self.patch(repo_context, "git", self.fake_git)
+
+    def fake_sync(self, conn, task_id, t, state, branch, ctx):
+        self.sync_calls += 1
+        return "fresh"
+
+    def fake_ci_wait(self, conn, task_id, branch, start, deadline):
+        self.ci_waits.append((start, deadline))
+        self.clock.value += 100.0
+        return GREEN[1]
+
+    def fake_git(self, ctx, *args):
+        if args and args[0] == "push":
+            self.push_calls += 1
+            self.assertTrue(self.push_results,
+                            "push вызван больше раз, чем предусмотрено")
+            return self.push_results.pop(0)
+        return _push_result()
+
+    def run_cycle(self):
+        conn = store.db()
+        fsm_merge_gate._cmd_approve_merge_gate_cycle(
+            conn, self.TASK, "sess-1", store.get_task(conn, self.TASK),
+            "merge_gate")
+
+    def test_body_returns_wait_on_moved_main(self):
+        """Тело гейта при отказе push «main сдвинулся» возвращает
+        `("wait", branch)`, не переводя задачу в `done`.
+
+        Ловит мутацию: результат `_push_merged_main` не читается (как до
+        задачи) — тело дойдёт до `_finalize_done_state` и вернёт
+        `("done",)` при неудавшемся push.
+        """
+        self.push_results = [_push_result(CANNOT_LOCK_REF, 1)]
+
+        outcome = fsm_merge_gate._cmd_approve_merge_gate(
+            store.db(), self.TASK, "merge_gate",
+            store.get_task(store.db(), self.TASK), GREEN[1])
+
+        self.assertEqual(outcome, ("wait", self.BRANCH))
+        self.assertEqual(store.get_task(store.db(), self.TASK)["state"],
+                         "merge_gate")
+
+    def test_cycle_retries_the_body_and_keeps_the_ceiling(self):
+        """Первый push отклонён сдвигом main, второй успешен: тело заходит
+        дважды в одном вызове, между заходами — ожидание CI с тем же
+        `start`/`deadline`, задача доходит до `done`.
+
+        Ловит мутацию: повтор реализован сбросом `deadline`/`start` перед
+        новым заходом — второй `ci_waits` придёт со сдвинутым `start`, и
+        `assertEqual(ci_waits[0], ci_waits[1])` покраснеет; либо повтор не
+        идёт через ожидание CI — `len(ci_waits)` не равен 1.
+        """
+        self.push_results = [_push_result(CANNOT_LOCK_REF, 1), _push_result()]
+
+        self.run_cycle()
+
+        self.assertEqual(self.push_calls, 2)
+        self.assertEqual(self.sync_calls, 2)
+        self.assertEqual(len(self.ci_waits), 1)
+        start, deadline = self.ci_waits[0]
+        self.assertEqual(deadline - start, config.MERGE_GATE_CI_WAIT_CEILING_SEC)
+        self.assertEqual(store.get_task(store.db(), self.TASK)["state"], "done")
+        self.assertIn("main сдвинулся", self.journal_blob())
+        self.assertNotIn("merge failed", self.journal_blob())
+
+    def test_repeated_moved_main_shares_one_ceiling_across_retries(self):
+        """Два подряд отказа «main сдвинулся» — два ожидания CI с
+        ОДИНАКОВЫМИ `start`/`deadline`, хотя часы между ними ушли вперёд.
+
+        Ловит мутацию: `deadline` пересчитывается на каждом исходе
+        `("wait", ...)` — второй кортеж `ci_waits` разойдётся с первым.
+        """
+        self.push_results = [_push_result(NON_FAST_FORWARD, 1),
+                             _push_result(CANNOT_LOCK_REF, 1),
+                             _push_result()]
+
+        self.run_cycle()
+
+        self.assertEqual(len(self.ci_waits), 2)
+        self.assertEqual(self.ci_waits[0], self.ci_waits[1])
+        self.assertGreater(self.clock.value, self.ci_waits[0][0])
+        self.assertEqual(store.get_task(store.db(), self.TASK)["state"], "done")
+
+    def test_network_failure_in_cycle_exits_without_retry(self):
+        """Сетевой отказ push внутри цикла — `SystemExit`, тело не
+        повторяется, задача остаётся на `merge_gate`.
+
+        Ловит мутацию: класс отказа в цикле не различается — второй push
+        упрётся в исчерпанный сценарий (`assertTrue(push_results)`), а
+        `SystemExit` не будет.
+        """
+        self.push_results = [_push_result(NETWORK_FAILURE, 128)]
+
+        with self.assertRaises(SystemExit):
+            self.run_cycle()
+
+        self.assertEqual(self.sync_calls, 1)
+        self.assertEqual(store.get_task(store.db(), self.TASK)["state"],
+                         "merge_gate")
+        self.assertIn("merge failed", self.journal_blob())
 
 
 class FreshPathDefersToWaitLoopTest(MergeGateCiWaitUnitTest):
