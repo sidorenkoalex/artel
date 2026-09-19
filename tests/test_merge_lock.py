@@ -16,8 +16,9 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from orchestrator import catalog, config, merge_lock, store  # noqa: E402
-from tests.sandbox import TmpRootTest, _dead_pid, _ts_ago, capture  # noqa: E402
+from orchestrator import catalog, config, liveness, merge_lock, store  # noqa: E402
+from tests.sandbox import (TmpRootTest, _alive_foreign_pid, _dead_pid,  # noqa: E402
+                           _ts_ago, capture)
 
 
 class AcquireReleaseTest(TmpRootTest):
@@ -118,6 +119,157 @@ class AcquireReleaseTest(TmpRootTest):
         self.assertIsNotNone(self.row(), "release чужой сессией снял мьютекс")
 
         merge_lock.release(store.db(), "sess-a")
+        self.assertIsNone(self.row())
+
+
+class ProcessOwnershipTest(TmpRootTest):
+    """SPEC 01M2XFSE8G3MBRHHQR38H53J1M, требования 1-4: держатель мьютекса
+    — процесс (session_id И pid), не сессия. Второй живой процесс той же
+    рабочей копии пульта (тот же session_id, другой pid) — чужой
+    держатель: тот же отказ, что чужой сессии; мёртвый — прежний перехват;
+    `release` снимает только строку своего процесса."""
+
+    TASK = "T001"
+    HOLDER_TASK = "T999"
+
+    def setUp(self):
+        super().setUp()
+        capture(catalog.cmd_init)
+        for tid, branch in ((self.TASK, "task/t001-zadacha"),
+                            (self.HOLDER_TASK, "task/t999-holder")):
+            store.insert_task(store.db(), tid, tid, "merge_gate", branch,
+                              config.DEFAULT_TARGET, 25.0)
+
+    def row(self):
+        return store.merge_lock_row(store.db())
+
+    def seed(self, session_id, pid, hostname=None, heartbeat_ts=None):
+        store.set_merge_lock(store.db(), self.HOLDER_TASK, session_id, pid,
+                             hostname or socket.gethostname(),
+                             heartbeat_ts or store.now())
+
+    def test_live_other_process_of_same_session_is_refused_with_holder_pid(self):
+        """Мьютекс держит живой процесс той же сессии с другим pid —
+        `acquire` отказывает, называет pid держателя, строку не трогает.
+
+        Ловит мутацию: условие «свой» оставлено по одному session_id —
+        вызов вернёт `None`, строка окажется переписана на `os.getpid()`,
+        и `assertIsNotNone`/сверка строки «до/после» покраснеют.
+        """
+        holder_pid = _alive_foreign_pid(self)
+        self.seed("sess-a", holder_pid)
+        before = dict(self.row())
+
+        refusal = merge_lock.acquire(store.db(), self.TASK, "sess-a")
+
+        self.assertIsNotNone(refusal)
+        self.assertIn(str(holder_pid), refusal)
+        self.assertIn(self.HOLDER_TASK, refusal)
+        self.assertEqual(dict(self.row()), before)
+
+    def test_refusal_text_for_own_session_equals_foreign_session_text(self):
+        """Один живой держатель отказывает своей и чужой сессии одним и тем
+        же текстом — разница только в самом session_id.
+
+        Ловит мутацию: для процесса своей сессии заведена отдельная ветка
+        с другим текстом отказа — нормализованные строки разойдутся.
+        """
+        holder_pid = _alive_foreign_pid(self)
+        with mock.patch.object(liveness, "_age_seconds", lambda ts: 5.0):
+            self.seed("sess-holder", holder_pid)
+            foreign = merge_lock.acquire(store.db(), self.TASK, "sess-caller")
+            self.seed("sess-caller", holder_pid)
+            own = merge_lock.acquire(store.db(), self.TASK, "sess-caller")
+
+        self.assertIsNotNone(foreign)
+        self.assertIsNotNone(own)
+        self.assertEqual(own.replace("sess-caller", "SID"),
+                         foreign.replace("sess-holder", "SID"))
+
+    def test_own_process_re_enters_and_refreshes_the_row(self):
+        """Строка этого процесса (session_id И `os.getpid()`) с протухшим
+        на две минуты heartbeat — повторный `acquire` даёт `None`, ставит
+        текущую задачу и свежий heartbeat.
+
+        Ловит мутацию: условие «свой» требует ещё и совпадения task_id
+        (либо ветка «свой» не пишет строку) — `acquire` откажет своему же
+        процессу или оставит старый heartbeat, обе сверки покраснеют.
+        """
+        self.seed("sess-a", os.getpid(), heartbeat_ts=_ts_ago(120))
+
+        refusal = merge_lock.acquire(store.db(), self.TASK, "sess-a")
+
+        self.assertIsNone(refusal)
+        row = self.row()
+        self.assertEqual(row["task_id"], self.TASK)
+        self.assertEqual(row["pid"], os.getpid())
+        self.assertLess(liveness._age_seconds(row["heartbeat_ts"]), 60)
+
+    def test_dead_process_of_own_session_is_intercepted_and_journalled(self):
+        """Держатель той же сессии, но с неживым pid на этом host —
+        перехват прежней записью «мьютекс merge перехвачен», не отказ.
+
+        Ловит мутацию: отказ «другой pid той же сессии» поставлен ПЕРЕД
+        проверкой живости — мёртвый держатель своей сессии перестанет
+        перехватываться, `assertIsNone` покраснеет; либо перехват своей
+        сессии идёт молча без записи — сверка журнала покраснеет.
+        """
+        self.seed("sess-a", _dead_pid())
+
+        refusal = merge_lock.acquire(store.db(), self.TASK, "sess-a")
+
+        self.assertIsNone(refusal)
+        self.assertEqual(self.row()["pid"], os.getpid())
+        actions = [s["action"] for s in store.task_steps(store.db(), self.TASK)]
+        self.assertIn("мьютекс merge перехвачен", actions, actions)
+
+    def test_release_from_non_holder_process_keeps_the_mutex(self):
+        """`release` с тем же session_id из процесса, который окна не
+        держит (строка за живым другим pid), мьютекс НЕ снимает.
+
+        Ловит мутацию: `store.release_merge_lock` удаляет по одному
+        `session_id` (pid не в `WHERE`) — строка живого держателя исчезнет,
+        `assertIsNotNone` покраснеет.
+        """
+        holder_pid = _alive_foreign_pid(self)
+        self.seed("sess-a", holder_pid)
+
+        merge_lock.release(store.db(), "sess-a")
+
+        row = self.row()
+        self.assertIsNotNone(row)
+        self.assertEqual(row["pid"], holder_pid)
+
+    def test_release_from_holder_process_removes_the_mutex(self):
+        """`release` из процесса-держателя (мьютекс взят через `acquire`
+        этим же процессом) снимает строку.
+
+        Ловит мутацию: pid в `release` берётся не из вызывающего процесса
+        (либо сверка pid написана наоборот) — свой мьютекс перестанет
+        сниматься, `assertIsNone` покраснеет.
+        """
+        merge_lock.acquire(store.db(), self.TASK, "sess-a")
+
+        merge_lock.release(store.db(), "sess-a")
+
+        self.assertIsNone(self.row())
+
+    def test_store_release_merge_lock_requires_both_session_and_pid(self):
+        """`store.release_merge_lock(conn, session_id, pid)` — опорная
+        функция снимает строку только при совпадении ОБОИХ ключей.
+
+        Ловит мутацию: в `WHERE` остался один из ключей — вызов с чужим
+        pid (или чужой сессией) снимет строку, и первые две сверки
+        покраснеют.
+        """
+        conn = store.db()
+        self.seed("sess-a", 4242)
+
+        store.release_merge_lock(conn, "sess-a", 4243)
+        self.assertIsNotNone(self.row(), "pid не совпал — строка остаётся")
+        store.release_merge_lock(conn, "sess-b", 4242)
+        self.assertIsNotNone(self.row(), "сессия не совпала — строка остаётся")
+        store.release_merge_lock(conn, "sess-a", 4242)
         self.assertIsNone(self.row())
 
 

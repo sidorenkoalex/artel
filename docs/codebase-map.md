@@ -1,5 +1,5 @@
 ---
-built_at_sha: 7e1353c0a7406a9a74fa211a28d8af046ddea251
+built_at_sha: c8d17bf8ab313ed2183582a3c40c382756743f21
 ---
 
 # Codebase-map пульта
@@ -529,7 +529,7 @@ built_at_sha: 7e1353c0a7406a9a74fa211a28d8af046ddea251
 
 **Импортирует:** —
 
-**Импортируется:** `orchestrator/artel.py`, `orchestrator/catalog.py`, `orchestrator/cleanup.py`, `orchestrator/lease.py`, `orchestrator/merge_lock.py`, `orchestrator/parallel_limit.py`, `orchestrator/pause.py`, `orchestrator/release.py`, `orchestrator/runner.py`, `tests/test_doctor.py`, `tests/test_liveness.py`
+**Импортируется:** `orchestrator/artel.py`, `orchestrator/catalog.py`, `orchestrator/cleanup.py`, `orchestrator/lease.py`, `orchestrator/merge_lock.py`, `orchestrator/parallel_limit.py`, `orchestrator/pause.py`, `orchestrator/release.py`, `orchestrator/runner.py`, `tests/test_doctor.py`, `tests/test_liveness.py`, `tests/test_merge_lock.py`
 
 ## orchestrator/merge_lock.py
 
@@ -682,7 +682,7 @@ built_at_sha: 7e1353c0a7406a9a74fa211a28d8af046ddea251
 
 **Импортирует:** `orchestrator/config.py`, `orchestrator/gitcmd.py`, `orchestrator/targets.py`
 
-**Импортируется:** `orchestrator/fsm.py`, `orchestrator/fsm_merge_gate.py`, `orchestrator/github_adapter.py`, `orchestrator/review.py`, `tests/test_fsm_merge_gate_scratch_worktree_cleanup.py`, `tests/test_gitcmd_fetch_ref_sha.py`, `tests/test_guard_task_root_subdirectory.py`, `tests/test_protected_paths_gate.py`, `tests/test_repo_context.py`
+**Импортируется:** `orchestrator/fsm.py`, `orchestrator/fsm_merge_gate.py`, `orchestrator/github_adapter.py`, `orchestrator/review.py`, `tests/test_fsm_merge_gate_scratch_worktree_cleanup.py`, `tests/test_gitcmd_fetch_ref_sha.py`, `tests/test_guard_task_root_subdirectory.py`, `tests/test_merge_gate_ci_wait.py`, `tests/test_protected_paths_gate.py`, `tests/test_repo_context.py`
 
 ## orchestrator/report.py
 
@@ -2094,7 +2094,7 @@ built_at_sha: 7e1353c0a7406a9a74fa211a28d8af046ddea251
 
 **Публичные функции:** (нет)
 
-**Импортирует:** `orchestrator/catalog.py`, `orchestrator/ci.py`, `orchestrator/config.py`, `orchestrator/fsm.py`, `orchestrator/fsm_merge_gate.py`, `orchestrator/github_adapter.py`, `orchestrator/merge_lock.py`, `orchestrator/store.py`, `tests/sandbox.py`
+**Импортирует:** `orchestrator/catalog.py`, `orchestrator/ci.py`, `orchestrator/config.py`, `orchestrator/fsm.py`, `orchestrator/fsm_merge_gate.py`, `orchestrator/github_adapter.py`, `orchestrator/merge_lock.py`, `orchestrator/repo_context.py`, `orchestrator/store.py`, `tests/sandbox.py`
 
 **Импортируется:** —
 
@@ -2104,7 +2104,7 @@ built_at_sha: 7e1353c0a7406a9a74fa211a28d8af046ddea251
 
 **Публичные функции:** (нет)
 
-**Импортирует:** `orchestrator/catalog.py`, `orchestrator/config.py`, `orchestrator/merge_lock.py`, `orchestrator/store.py`, `tests/sandbox.py`
+**Импортирует:** `orchestrator/catalog.py`, `orchestrator/config.py`, `orchestrator/liveness.py`, `orchestrator/merge_lock.py`, `orchestrator/store.py`, `tests/sandbox.py`
 
 **Импортируется:** —
 

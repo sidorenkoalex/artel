@@ -55,6 +55,19 @@ def _current_holder_id(conn) -> str:
     return row["task_id"] if row is not None else "?"
 
 
+def _current_holder_label(conn) -> str:
+    """Держатель мьютекса merge-окна для журнала входа в очередь и
+    суффикса `status` — «<task_id> (pid <pid>)» (SPEC
+    01M2XFSE8G3MBRHHQR38H53J1M, требования 6-7): держатель — процесс, и
+    по одному task_id Оператор не отличит два параллельных цикла одного
+    пульта. Без держателя — прежний `"?"` (тот же довод, что у
+    `_current_holder_id`)."""
+    row = store.merge_lock_row(conn)
+    if row is None:
+        return "?"
+    return f"{row['task_id']} (pid {row['pid']})"
+
+
 def queue_wait_minutes(conn, task_id: str) -> int | None:
     """Минуты, прошедшие с момента входа `task_id` в очередь ожидания
     merge-окна (`catalog.cmd_status`, требование 1/AC-2, по образцу
@@ -69,15 +82,16 @@ def queue_wait_minutes(conn, task_id: str) -> int | None:
 
 
 def wait_suffix(conn, t) -> str:
-    """Добавка `status` вида «[ждёт merge-окна: занято <id>, N мин]»
-    (требование 1, AC-2) — ДОБАВКОЙ в конец строки, по образцу
-    `catalog._zone_wait_suffix`; пустая строка — задача сейчас не в
-    очереди `merge_queue`."""
+    """Добавка `status` вида «[ждёт merge-окна: занято <id> (pid <pid>),
+    N мин]» (требование 1, AC-2; pid держателя — SPEC
+    01M2XFSE8G3MBRHHQR38H53J1M, требование 7) — ДОБАВКОЙ в конец строки,
+    по образцу `catalog._zone_wait_suffix`; пустая строка — задача сейчас
+    не в очереди `merge_queue`."""
     minutes = queue_wait_minutes(conn, t["id"])
     if minutes is None:
         return ""
-    holder_id = _current_holder_id(conn)
-    return f"  [ждёт merge-окна: занято {holder_id}, {minutes} мин]"
+    holder = _current_holder_label(conn)
+    return f"  [ждёт merge-окна: занято {holder}, {minutes} мин]"
 
 
 def wait_for_window(conn, task_id: str, sid: str) -> None:
@@ -92,24 +106,30 @@ def wait_for_window(conn, task_id: str, sid: str) -> None:
     Вызывать ТОЛЬКО когда прямой `merge_lock.acquire` уже отказал —
     функция сама этого не проверяет, ей просто больше неоткуда взяться в
     `fsm_merge_gate._cmd_approve_merge_gate_cycle`. Возврат — мьютекс уже
-    взят ЭТОЙ сессией (требование 1: «получая окно после освобождения без
-    нового ручного вызова»), вызывающий код продолжает как если бы
+    взят ЭТИМ процессом (требование 1: «получая окно после освобождения
+    без нового ручного вызова»), вызывающий код продолжает как если бы
     `merge_lock.acquire` сразу вернул успех.
+
+    Своя запись очереди адресуется процессом — (sid, pid), не одним sid
+    (SPEC 01M2XFSE8G3MBRHHQR38H53J1M, требование 5): два цикла `approve`
+    одной рабочей копии пульта несут один session_id и стоят в очереди
+    двумя записями, продлевая и снимая каждый только свою; журнал входа
+    называет держателя с pid (требование 6).
     """
     pid, hostname = os.getpid(), socket.gethostname()
     ts = store.now()
     store.enqueue_merge_wait(conn, task_id, sid, pid, hostname, ts)
-    holder_id = _current_holder_id(conn)
+    holder = _current_holder_label(conn)
     store.journal(
         conn, task_id, "orchestrator",
-        f"ждёт merge-окна: держит {holder_id}",
+        f"ждёт merge-окна: держит {holder}",
         f"вход в очередь merge_queue, опрос каждые "
         f"{config.MERGE_GATE_CI_WAIT_POLL_SEC} сек, потолок "
         f"{config.MERGE_QUEUE_WAIT_CEILING_SEC} сек")
     deadline = time.monotonic() + config.MERGE_QUEUE_WAIT_CEILING_SEC
     try:
         while True:
-            store.touch_merge_queue_heartbeat(conn, sid, store.now())
+            store.touch_merge_queue_heartbeat(conn, sid, pid, store.now())
             _prune_dead_entries(conn)
             if _head_task_id(conn) == task_id:
                 refusal = merge_lock.acquire(conn, task_id, sid)
@@ -123,4 +143,4 @@ def wait_for_window(conn, task_id: str, sid: str) -> None:
                     f"artel.py approve {task_id}")
             time.sleep(config.MERGE_GATE_CI_WAIT_POLL_SEC)
     finally:
-        store.dequeue_merge_wait(conn, sid)
+        store.dequeue_merge_wait(conn, sid, pid)
