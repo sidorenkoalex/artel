@@ -10,6 +10,7 @@
 заглушены `FakeClock` (не настоящее ожидание), `ci.branch_status`/
 `ci.trigger_rerun` — прямыми моками (не сетевой `gh`).
 """
+import math
 import subprocess
 import sys
 import time
@@ -363,11 +364,17 @@ class PushMergedMainMovedMainTest(MergeGateCiWaitUnitTest):
 
 
 class MovedMainRetryInCycleTest(MergeGateCiWaitUnitTest):
-    """Тело гейта на `"moved"` возвращает `("wait", branch)`, и внешний
+    """Тело гейта на `"moved"` возвращает `("moved", branch)`, и внешний
     цикл повторяет заход в том же вызове `approve`, не сбрасывая потолок
-    ожидания CI (SPEC 01M2XFSE8G3MBRHHQR38H53J1M, требования 8-9)."""
+    ожидания CI (SPEC 01M2XFSE8G3MBRHHQR38H53J1M, требования 8-9), а
+    потолок на этом пути РЕАЛЬНО ограничивает повтор и между заходами
+    стоит пауза (REVIEW итерации 1, R1-F1: тест с настоящим
+    `_wait_for_branch_ci_green`, не с его моком)."""
 
     BRANCH = "task/t001-zadacha"
+    # Запас сверх `CEILING / POLL` (40 при текущих константах): ловит
+    # бесконечный повтор, не мешая штатному конечному пути.
+    PUSH_CAP = 60
 
     def patch(self, target, attr, replacement):
         patcher = mock.patch.object(target, attr, replacement)
@@ -377,9 +384,13 @@ class MovedMainRetryInCycleTest(MergeGateCiWaitUnitTest):
     def setUp(self):
         super().setUp()
         self.push_results: list = []
+        self.push_always = None
         self.push_calls = 0
         self.sync_calls = 0
+        self.sync_outcomes: list = []
         self.ci_waits: list = []
+        self.ci_wait_seconds = 100.0
+        self.real_ci_wait = fsm_merge_gate._wait_for_branch_ci_green
         self.patch(fsm_merge_gate, "_protected_path_diff_gate",
                    lambda *a, **k: False)
         self.patch(fsm_merge_gate, "_ensure_branch_head_published",
@@ -399,16 +410,24 @@ class MovedMainRetryInCycleTest(MergeGateCiWaitUnitTest):
 
     def fake_sync(self, conn, task_id, t, state, branch, ctx):
         self.sync_calls += 1
+        if self.sync_outcomes:
+            return self.sync_outcomes.pop(0)
         return "fresh"
 
     def fake_ci_wait(self, conn, task_id, branch, start, deadline):
         self.ci_waits.append((start, deadline))
-        self.clock.value += 100.0
+        self.clock.value += self.ci_wait_seconds
         return GREEN[1]
 
     def fake_git(self, ctx, *args):
         if args and args[0] == "push":
             self.push_calls += 1
+            if self.push_always is not None:
+                self.assertLessEqual(
+                    self.push_calls, self.PUSH_CAP,
+                    "push вызван больше раз, чем допускает конечный "
+                    "потолок — путь повтора не завершается")
+                return self.push_always
             self.assertTrue(self.push_results,
                             "push вызван больше раз, чем предусмотрено")
             return self.push_results.pop(0)
@@ -420,13 +439,16 @@ class MovedMainRetryInCycleTest(MergeGateCiWaitUnitTest):
             conn, self.TASK, "sess-1", store.get_task(conn, self.TASK),
             "merge_gate")
 
-    def test_body_returns_wait_on_moved_main(self):
+    def test_body_returns_moved_on_moved_main(self):
         """Тело гейта при отказе push «main сдвинулся» возвращает
-        `("wait", branch)`, не переводя задачу в `done`.
+        `("moved", branch)` — отдельный тег для цикла, не `("wait", …)`
+        и не `("done",)`, — не переводя задачу в `done`.
 
         Ловит мутацию: результат `_push_merged_main` не читается (как до
         задачи) — тело дойдёт до `_finalize_done_state` и вернёт
-        `("done",)` при неудавшемся push.
+        `("done",)` при неудавшемся push; либо тело возвращает
+        `("wait", branch)` — цикл не отличит сдвиг main от исхода подтяжки
+        и не поставит на этом пути ни паузы, ни сверки потолка (R1-F1).
         """
         self.push_results = [_push_result(CANNOT_LOCK_REF, 1)]
 
@@ -434,7 +456,104 @@ class MovedMainRetryInCycleTest(MergeGateCiWaitUnitTest):
             store.db(), self.TASK, "merge_gate",
             store.get_task(store.db(), self.TASK), GREEN[1])
 
-        self.assertEqual(outcome, ("wait", self.BRANCH))
+        self.assertEqual(outcome, ("moved", self.BRANCH))
+        self.assertEqual(store.get_task(store.db(), self.TASK)["state"],
+                         "merge_gate")
+
+    def test_moved_path_pauses_a_poll_interval_before_reentry(self):
+        """Один отказ «main сдвинулся» — ровно одна пауза
+        `MERGE_GATE_CI_WAIT_POLL_SEC` перед новым заходом в тело; потом
+        ожидание CI и успешный второй push.
+
+        Ловит мутацию: пауза на пути «moved» убрана (повтор идёт сразу в
+        ожидание CI, которое при зелёном статусе не паузит) —
+        `sleep_calls` останется пустым.
+        """
+        self.push_results = [_push_result(CANNOT_LOCK_REF, 1), _push_result()]
+
+        self.run_cycle()
+
+        self.assertEqual(self.clock.sleep_calls,
+                         [config.MERGE_GATE_CI_WAIT_POLL_SEC])
+        self.assertEqual(self.push_calls, 2)
+        self.assertEqual(store.get_task(store.db(), self.TASK)["state"], "done")
+
+    def test_wait_path_does_not_get_the_moved_pause(self):
+        """Обычный исход подтяжки `("wait", branch)` паузы перед повторным
+        заходом не получает — она только для пути «moved»: после зелёного
+        CI тело заходит заново сразу, как и до задачи.
+
+        Ловит мутацию: пауза/сверка потолка навешаны на ЛЮБОЙ повторный
+        заход (`outcome[0] in ("wait", "moved")` без различения) — путь
+        подтяжки получит лишние 90 секунд, `sleep_calls` станет непустым.
+        """
+        self.sync_outcomes = [("wait", self.BRANCH)]
+        self.push_results = [_push_result()]
+
+        self.run_cycle()
+
+        self.assertEqual(self.clock.sleep_calls, [])
+        self.assertEqual(len(self.ci_waits), 1)
+        self.assertEqual(store.get_task(store.db(), self.TASK)["state"], "done")
+
+    def test_persistently_moved_main_exits_by_ceiling_with_real_wait_loop(self):
+        """R1-F1, свойство «путь повтора конечен»: РЕАЛЬНЫЙ
+        `_wait_for_branch_ci_green`, `ci.branch_status` всегда зелёный
+        (голова ветки не менялась), push ВСЕГДА отвергается «cannot lock
+        ref». Цикл обязан завершиться `SystemExit` за конечное число
+        push'ей — не больше `CEILING / POLL` заходов, каждый с паузой, — с
+        записью «merge FAILED» и задачей, оставшейся на `merge_gate`.
+
+        Ловит мутацию: сверка потолка на пути повтора убрана — цикл не
+        завершится, push упрётся в `PUSH_CAP` сценария (`assertLessEqual`
+        покраснеет); пауза убрана — часы не идут, `sleep_calls` пуст и тот
+        же исход.
+        """
+        self.patch(fsm_merge_gate, "_wait_for_branch_ci_green",
+                   self.real_ci_wait)
+        self.patch_branch_status(lambda branch: GREEN)
+        self.push_always = _push_result(CANNOT_LOCK_REF, 1)
+
+        with self.assertRaises(SystemExit) as exit_:
+            self.run_cycle()
+
+        expected_retries = math.ceil(config.MERGE_GATE_CI_WAIT_CEILING_SEC
+                                     / config.MERGE_GATE_CI_WAIT_POLL_SEC)
+        self.assertEqual(self.push_calls, expected_retries)
+        self.assertEqual(self.sync_calls, expected_retries)
+        self.assertEqual(self.clock.sleep_calls,
+                         [config.MERGE_GATE_CI_WAIT_POLL_SEC] * expected_retries)
+        self.assertGreaterEqual(self.clock.value,
+                                config.MERGE_GATE_CI_WAIT_CEILING_SEC)
+        self.assertIn("потолок ожидания истёк", str(exit_.exception))
+        journal = self.journal_blob()
+        self.assertIn("merge failed", journal)
+        self.assertIn(f"{expected_retries} повтор", journal)
+        self.assertEqual(store.get_task(store.db(), self.TASK)["state"],
+                         "merge_gate")
+        self.assertIsNone(store.merge_lock_row(store.db()),
+                          "мьютекс обязан быть снят `finally` цикла и на "
+                          "этом отказе")
+
+    def test_moved_after_exhausted_ceiling_exits_on_first_retry(self):
+        """Потолок на пути «moved» — ОБЩИЙ с ожиданием CI, не свой: первое
+        ожидание CI после подтяжки съело весь потолок, следующий отказ
+        «main сдвинулся» отказывает сразу, без второго захода в тело.
+
+        Ловит мутацию: на пути «moved» заведён собственный отсчёт
+        (`deadline` пересчитан от момента отказа push) — цикл сделает ещё
+        ~40 заходов вместо одного, `sync_calls` не будет равен 2.
+        """
+        self.sync_outcomes = [("wait", self.BRANCH)]
+        self.ci_wait_seconds = float(config.MERGE_GATE_CI_WAIT_CEILING_SEC)
+        self.push_results = [_push_result(NON_FAST_FORWARD, 1)]
+
+        with self.assertRaises(SystemExit):
+            self.run_cycle()
+
+        self.assertEqual(self.sync_calls, 2)
+        self.assertEqual(self.push_calls, 1)
+        self.assertIn("1 повтор", self.journal_blob())
         self.assertEqual(store.get_task(store.db(), self.TASK)["state"],
                          "merge_gate")
 
