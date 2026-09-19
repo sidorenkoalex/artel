@@ -7,6 +7,9 @@ started» несёт `model=<идентификатор>` (либо `model=де�
 вовсе — подстрока не найдётся ни при каком сценарии.
 """
 import sys
+# AC-7: manual — дубль пометки из markers.py (amend-tests читает разметку только из test_*.py)
+# AC-8: manual — дубль пометки из markers.py (amend-tests читает разметку только из test_*.py)
+# AC-9: manual — дубль пометки из markers.py (amend-tests читает разметку только из test_*.py)
 import unittest
 from pathlib import Path
 
