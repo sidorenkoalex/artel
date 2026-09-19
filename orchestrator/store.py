@@ -685,10 +685,15 @@ def set_merge_lock(conn, task_id: str, session_id: str, pid: int,
     conn.commit()
 
 
-def release_merge_lock(conn, session_id: str) -> None:
-    """Снимает мьютекс merge-окна, если он всё ещё принадлежит этой
-    сессии (SPEC T053, требование 3)."""
-    conn.execute("DELETE FROM merge_locks WHERE session_id=?", (session_id,))
+def release_merge_lock(conn, session_id: str, pid: int) -> None:
+    """Снимает мьютекс merge-окна, если он всё ещё принадлежит этому
+    ПРОЦЕССУ — паре (session_id, pid), не любой строке той же сессии
+    (SPEC T053, требование 3; SPEC 01M2XFSE8G3MBRHHQR38H53J1M, требование
+    4): все процессы одной рабочей копии пульта несут один session_id
+    (`session.resolve_session_id`), и снятие по нему одному отпускало бы
+    окно из-под живого держателя-соседа."""
+    conn.execute("DELETE FROM merge_locks WHERE session_id=? AND pid=?",
+                 (session_id, pid))
     conn.commit()
 
 
@@ -712,20 +717,27 @@ def enqueue_merge_wait(conn, task_id: str, session_id: str, pid: int,
     conn.commit()
 
 
-def touch_merge_queue_heartbeat(conn, session_id: str, ts: str) -> None:
+def touch_merge_queue_heartbeat(conn, session_id: str, pid: int,
+                                ts: str) -> None:
     """Продлевает heartbeat записи ожидающего на каждом опросе — тот же
     признак «участник ещё жив», что уже несут lease/мьютекс merge
     (требование 5: протухший heartbeat — один из двух признаков мёртвого
-    участника очереди)."""
-    conn.execute("UPDATE merge_queue SET heartbeat_ts=? WHERE session_id=?",
-                (ts, session_id))
+    участника очереди). Запись адресуется процессом (session_id, pid), не
+    одной сессией (SPEC 01M2XFSE8G3MBRHHQR38H53J1M, требование 5): два
+    процесса одной рабочей копии стоят в очереди двумя записями, и опрос
+    одного не имеет права «оживлять» запись другого."""
+    conn.execute(
+        "UPDATE merge_queue SET heartbeat_ts=? WHERE session_id=? AND pid=?",
+        (ts, session_id, pid))
     conn.commit()
 
 
-def dequeue_merge_wait(conn, session_id: str) -> None:
+def dequeue_merge_wait(conn, session_id: str, pid: int) -> None:
     """Снимает регистрацию ожидающего — своё окно получено, либо истёк
-    потолок ожидания (требования 1, 3)."""
-    conn.execute("DELETE FROM merge_queue WHERE session_id=?", (session_id,))
+    потолок ожидания (требования 1, 3). Только СВОЮ запись (session_id,
+    pid) — та же причина, что у `touch_merge_queue_heartbeat`."""
+    conn.execute("DELETE FROM merge_queue WHERE session_id=? AND pid=?",
+                 (session_id, pid))
     conn.commit()
 
 
