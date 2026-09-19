@@ -43,6 +43,19 @@ from .advance_gates.zones import (_ZONES_MANDATE_MARKER,
                                   _zones_gate, _zones_gate_refuses)
 
 
+def _mark_artifact_escalation(conn, task_id: str, detail: str) -> None:
+    """Маркер «ответ Оператора должен дойти до роли» (SPEC
+    01M2XFSJ1Z7BS6HR69SAT1D81Y, требования 1-2) — отдельной записью
+    журнала СРАЗУ после `state -> escalated` эскалации по содержимому
+    артефакта роли, до возврата Оператора: `auto._role_step_since_state_entry`
+    делает запись возврата, следующую за маркером, анкером рубежа
+    переделки, и пред-advance не перечитывает ту же пометку/тот же батч
+    раньше шага роли. `detail` — текст самой эскалации, как у
+    `pull.PULL_CONFLICT_ROLE_STEP_MARKER` (`orchestrator/pull.py`)."""
+    store.journal(conn, task_id, "fsm",
+                  fsm.ARTIFACT_ESCALATION_ROLE_STEP_MARKER, detail)
+
+
 def spec_writing(conn, task_id: str, t, tdir, target: str, state: str) -> bool:
     # Батч вопросов analyst (SPEC T025, требование 4): файл на месте —
     # эскалация немедленно, не дожидаясь статуса SPEC.md, тем же
@@ -88,10 +101,11 @@ def spec_writing(conn, task_id: str, t, tdir, target: str, state: str) -> bool:
             store.update_task(
                 conn, task_id, escalated_from="spec_writing",
                 answer_baseline=answer_baseline)
+            detail = f"analyst: батч вопросов по ТЗ — ветка {branch}:{q_rel}"
             store.set_state(
                 conn, task_id, "escalated", "fsm",
-                expected_state=state,
-                detail=f"analyst: батч вопросов по ТЗ — ветка {branch}:{q_rel}")
+                expected_state=state, detail=detail)
+            _mark_artifact_escalation(conn, task_id, detail)
             print(f"[{task_id}] эскалация analyst: см. ветку {branch}, "
                   f"{q_rel}")
             return False
@@ -111,9 +125,11 @@ def spec_writing(conn, task_id: str, t, tdir, target: str, state: str) -> bool:
             store.update_task(
                 conn, task_id, escalated_from="spec_writing",
                 answer_baseline=answer_baseline)
+            detail = f"analyst: батч вопросов по ТЗ — {questions}"
             store.set_state(
                 conn, task_id, "escalated", "fsm", expected_state=state,
-                detail=f"analyst: батч вопросов по ТЗ — {questions}")
+                detail=detail)
+            _mark_artifact_escalation(conn, task_id, detail)
             print(f"[{task_id}] эскалация analyst: см. {questions}")
             return False
         meta = artifacts.frontmatter(tdir / "SPEC.md")
@@ -295,10 +311,11 @@ def tests_writing(conn, task_id: str, t, tdir, target: str, state: str) -> bool:
         store.update_task(
             conn, task_id, escalated_from="tests_writing",
             answer_baseline=answer_baseline)
+        escalation_detail = (f"test_author: критерий неисполним тестом — "
+                             f"{detail}")
         store.set_state(conn, task_id, "escalated", "fsm",
-                        expected_state=state,
-                        detail=f"test_author: критерий неисполним тестом — "
-                        f"{detail}")
+                        expected_state=state, detail=escalation_detail)
+        _mark_artifact_escalation(conn, task_id, escalation_detail)
         print(f"[{task_id}] эскалация test_author: {detail}")
         return False
     if errors:

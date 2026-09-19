@@ -281,6 +281,18 @@ def _is_legit_first_entry_detail(detail: str | None) -> bool:
 _ESCALATED_RETURN_DETAILS = ("эскалация разрешена, продолжаем",
                             "бюджет поднят, продолжаем")
 
+# Маркеры эскалаций, несущих СОБСТВЕННОЕ основание переделки — запись
+# возврата из `escalated`, которой предшествовал любой из них, становится
+# анкером рубежа `_role_step_since_state_entry`, а не пропускается как
+# `_ESCALATED_RETURN_DETAILS` (см. докстринг там же). Конфликт подтяжки
+# `in_dev` (SPEC 01M290PYPV5T2NFW1Y0HB8BD6E) и эскалация по содержимому
+# артефакта роли — пометка `AC-n: escalate`/батч `QUESTIONS.md` (SPEC
+# 01M2XFSJ1Z7BS6HR69SAT1D81Y, требование 3) — один класс: разрешить
+# основание некому, кроме роли, и ответ Оператора обязан дойти до неё
+# раньше следующего предварительного advance.
+_ROLE_STEP_REQUIRED_MARKERS = (pull.PULL_CONFLICT_ROLE_STEP_MARKER,
+                               fsm.ARTIFACT_ESCALATION_ROLE_STEP_MARKER)
+
 
 def _role_step_since_state_entry(conn, task_id: str, state: str,
                                  role: str) -> tuple[bool, str | None]:
@@ -325,6 +337,17 @@ def _role_step_since_state_entry(conn, task_id: str, state: str,
     состояния (`state -> X`, `X` не `escalated`) — иначе разросся бы на
     несвязанный последующий визит state, до которого маркер не долетел
     бы по смыслу.
+
+    Тот же класс и тот же приём (SPEC 01M2XFSJ1Z7BS6HR69SAT1D81Y,
+    требования 3-4, П1 копилки 13.09) — эскалация по СОДЕРЖИМОМУ артефакта
+    роли (`fsm.ARTIFACT_ESCALATION_ROLE_STEP_MARKER`: пометка `AC-n:
+    escalate` в `tests_writing`, батч `QUESTIONS.md` в `spec_writing`):
+    без анкера на записи возврата пред-advance перечитывал ту же
+    пометку/тот же батч и повторял уже отвеченную эскалацию раньше шага
+    роли, поднимая `answer_baseline`. Оба маркера — `_ROLE_STEP_REQUIRED_
+    MARKERS` — читаются и гасятся одинаково; в `spec_writing` анкером
+    может стать и самая первая запись `state -> spec_writing` задачи
+    (первый вход туда `cmd_new` не журналирует).
     """
     rows = store.task_steps(conn, task_id)
     marker = f"state -> {state}"
@@ -332,7 +355,7 @@ def _role_step_since_state_entry(conn, task_id: str, state: str,
     role_step_required = False
     for i, row in enumerate(rows):
         action = row["action"]
-        if action == pull.PULL_CONFLICT_ROLE_STEP_MARKER:
+        if action in _ROLE_STEP_REQUIRED_MARKERS:
             role_step_required = True
             continue
         if action == marker:
