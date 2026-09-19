@@ -336,6 +336,40 @@ class ZonesExtendCommandTest(_ArtifactBranchAnswerTest):
 
         self.assertEqual(self.row()["zones_extension"], "docs/a.md,docs/b.md")
 
+    def test_plan_without_section_names_auto_as_the_next_command(self):
+        """SPEC 01M2XFSNVGWA2VX5XFEYR93Y4Z, требование 6 (AC-7): раздела
+        «## Расширение зон» в PLAN.md нет — подсказка называет команду
+        продолжения `artel.py auto <id>`, `zones_extension` не тронут,
+        журнальная запись «раздел PLAN отсутствует» прежняя.
+
+        Ловит мутацию: подсказка продолжения не печатается (или называет
+        `run`) — Оператор снова оставался бы без следующего шага, как
+        13.09; либо ветка «раздела нет» начала писать `zones_extension`."""
+        before = self.row()["zones_extension"]
+
+        out = self.capture(answer.cmd_zones_extend, self.TASK, "docs/a.md")
+
+        self.assertIn(f"дальше: artel.py auto {self.TASK}", out)
+        self.assertEqual(self.row()["zones_extension"], before)
+        actions = [r["action"] for r in store.task_steps(store.db(), self.TASK)]
+        self.assertIn("раздел PLAN отсутствует — разработчик добавит на "
+                      "следующем шаге", actions)
+
+    def test_matching_plan_section_does_not_print_the_auto_hint(self):
+        """Контроль: раздел совпал — `zones_extension` обновлён, подсказка
+        «дальше: artel.py auto» не нужна и не печатается.
+
+        Ловит мутацию: подсказка печатается безусловно, в обеих ветках."""
+        self.artifact_commit(
+            {f"tasks/{self.TASK}/PLAN.md": PLAN_WITH_EXTENSION_TEMPLATE.format(
+                task=self.TASK, paths="docs/a.md")},
+            "PLAN v1")
+
+        out = self.capture(answer.cmd_zones_extend, self.TASK, "docs/a.md")
+
+        self.assertNotIn("дальше: artel.py auto", out)
+        self.assertEqual(self.row()["zones_extension"], "docs/a.md")
+
 
 if __name__ == "__main__":
     unittest.main()

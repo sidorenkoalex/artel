@@ -10,6 +10,7 @@ from dataclasses import dataclass
 
 from . import (agent_log, alerts, budget, ci, config, fixation, fsm, lease,
               pause, pull, runner, store, zone_lock)
+from .advance_gates.zones import ZONES_MANDATE_WITHOUT_PLAN_REFUSAL_ACTION
 
 # Флаг «пришёл SIGTERM (команда `stop`, SPEC 01M1NWCHVTYQ0M8PCJ1YJ2N78P,
 # требование 5)»: цикл доигрывает уже начатый шаг и останавливается сам
@@ -211,6 +212,15 @@ TREE_NOT_ON_BRANCH_REFUSAL_ACTION = "переход отклонён: дерев
 # может импортировать этот модуль обратно (цикл `auto.py -> fsm.py ->
 # review.py -> brief.py` уже существует), поэтому общий источник — не
 # общий Python-объект, а согласованные литералы в обоих местах.
+#
+# Отказ гейта зон «мандат есть, раздел PLAN не оформлен»
+# (`ZONES_MANDATE_WITHOUT_PLAN_REFUSAL_ACTION`, SPEC
+# 01M2XFSNVGWA2VX5XFEYR93Y4Z, требования 3-5) в этот перечень НАМЕРЕННО
+# не входит, хотя `_pre_advance_step` тоже запускает на нём роль: в
+# отличие от двух действий выше, роли есть ЧТО читать — перечень путей
+# мандата и подсказку «оформи раздел PLAN» — и бриф обязан этот отказ
+# нести (AC-4), а не вычитать. Расширять перечень «за компанию» с копией
+# в `brief.py` нельзя.
 ROLE_NOT_FINISHED_REFUSAL_ACTIONS = (
     REWORK_REFUSAL_ACTION, TREE_NOT_ON_BRANCH_REFUSAL_ACTION)
 
@@ -652,6 +662,32 @@ def _pull_conflict_marker_streak(rows: list) -> int:
     return streak
 
 
+def _role_step_between_repeated_refusals(rows: list, journaled_before: int,
+                                         action: str, role: str) -> bool:
+    """Был ли завершённый шаг `role` (запись `agent run finished`) между
+    ПРЕДЫДУЩИМ отказом `action` этого же визита состояния и текущим
+    (записи с индекса `journaled_before` — текущий вызов `cmd_advance`) —
+    защита от кружения на отказе «мандат есть, раздел PLAN не оформлен»
+    (SPEC 01M2XFSNVGWA2VX5XFEYR93Y4Z, требование 5/AC-5).
+
+    Именно «шаг между двумя отказами», не «шаг с момента входа в
+    состояние» (`_role_step_since_state_entry`): в сценарии инцидента
+    13.09 шаг developer уже БЫЛ до первого такого отказа, и общая проверка
+    остановила бы цикл, не дав роли ни одного шага на оформление раздела
+    (AC-3). Предыдущего отказа `action` в этом визите нет (граница — любая
+    запись `state -> …`, как у `store.refusal_history`) — `False`: роль
+    свой гарантированный шаг ещё не получала."""
+    seen_role_step = False
+    for row in reversed(rows[:journaled_before]):
+        if row["action"] == action:
+            return seen_role_step
+        if row["action"].startswith("state -> "):
+            return False
+        if row["actor"] == role and row["action"] == "agent run finished":
+            seen_role_step = True
+    return False
+
+
 def _pre_advance_step(conn, task_id: str, session_id: str, role: str,
                       state: str, before: str,
                       cycle: _CycleState) -> Advanced | Refused | Stop | None:
@@ -755,9 +791,25 @@ def _pre_advance_step(conn, task_id: str, session_id: str, role: str,
     # написать PLAN.md) — регрессия, которую ловит
     # `test_fresh_task_first_developer_step_still_runs`.
     tree_missing = refusal == TREE_NOT_ON_BRANCH_REFUSAL_ACTION
+    # «Мандат есть, раздел PLAN не оформлен» (гейт зон, SPEC
+    # 01M2XFSNVGWA2VX5XFEYR93Y4Z, требования 3-5): причина отказа — в
+    # артефакте самой роли (PLAN.md без раздела «## Расширение зон» при
+    # уже выданном мандате Оператора), тот же класс требования 3, что и
+    # «PLAN.md не ready» — роль запускается, стоп-кран T038 на него не
+    # смотрит (AC-3). Единственная защита от кружения — журнал: тот же
+    # отказ ПОВТОРИЛСЯ после завершённого шага роли (раздел так и не
+    # оформлен) — роль свой гарантированный шаг уже получила, дальше тот
+    # же `Stop`, что и у двух одинаковых отказов Оператора (AC-5).
+    mandate_without_plan = (state == "in_dev" and refusal
+                            == ZONES_MANDATE_WITHOUT_PLAN_REFUSAL_ACTION)
+    if mandate_without_plan and _role_step_between_repeated_refusals(
+            store.task_steps(conn, task_id), journaled_before, refusal, role):
+        hint = f"почини причину и повтори artel.py advance {task_id}"
+        return Stop(state, f"{refusal} — {hint}", hint, True)
     other_class_refusal = refusal if (refusal is not None
                                       and state == "in_dev"
-                                      and not tree_missing) else None
+                                      and not tree_missing
+                                      and not mandate_without_plan) else None
     if other_class_refusal is not None and other_class_refusal == cycle.prev_refusal:
         # Требование 1 (инцидент T035, SPEC T038): два подряд отказа одним
         # текстом — причина отказа вне зоны агента, прогон агента её не
