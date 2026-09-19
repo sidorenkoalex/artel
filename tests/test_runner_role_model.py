@@ -37,6 +37,16 @@ def _roles_yaml_text(role: str, model: str | None) -> str:
     anchor = f"  {role}:\n"
     for i, line in enumerate(lines):
         if line == anchor:
+            # Реальный roles.yaml с 13.09 (коммит Оператора d4e80604) уже
+            # несёт `model:` у ролей — существующую строку снять, иначе
+            # сценарий «поле не задано» неотличим от боевого (правка
+            # Оператора 19.09, amend-tests).
+            j = i + 1
+            while j < len(lines) and lines[j].startswith("    "):
+                if lines[j].lstrip().startswith("model:"):
+                    del lines[j]
+                    break
+                j += 1
             if model is not None:
                 lines[i] = line + f"    model: {model}\n"
             break
