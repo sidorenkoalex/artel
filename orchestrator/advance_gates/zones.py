@@ -12,6 +12,19 @@ from ._base import GateRefusal, _run_gates
 # анализируется.
 _ZONES_MANDATE_MARKER = "Расширение зон разрешено:"
 
+# Действие отказа гейта зон в подслучае «мандат Оператора покрывает ВСЕ
+# пути диффа вне зон, а раздел «## Расширение зон» PLAN.md отсутствует
+# либо не совпадает с мандатом» (SPEC 01M2XFSNVGWA2VX5XFEYR93Y4Z,
+# требование 1). Отдельное имя нужно `orchestrator/auto.py::
+# _pre_advance_step`: причину этого отказа устраняет сама роль (PLAN.md —
+# её артефакт), это класс «роль ещё не закончила», а не «нужны руки
+# Оператора»; прежнее действие «переход отклонён: гейт зон» (мандата нет
+# или он покрывает не все пути) остаётся классом Оператора и текстом
+# байт-в-байт (требование 2). Префикс «переход отклонён» общий — по нему
+# `store.refusal_history` доносит отказ до брифа роли (AC-4).
+ZONES_MANDATE_WITHOUT_PLAN_REFUSAL_ACTION = (
+    "переход отклонён: гейт зон — мандат есть, раздел PLAN не оформлен")
+
 
 def _split_zone_paths(raw) -> list[str]:
     """Список путей через запятую — тот же формат, что несёт `zones:` части
@@ -247,9 +260,14 @@ def _zones_gate(conn, task_id: str, t, branch: str,
 
     # Исключение AC-3: раздел «## Расширение зон» PLAN.md, подкреплённый
     # мандатом Оператора на ТЕ ЖЕ пути в ANSWER-*.md (ANSWER-1.md, п.1-2).
+    # Мандат читается независимо от наличия раздела: он нужен и ниже, для
+    # различения причины отказа (SPEC 01M2XFSNVGWA2VX5XFEYR93Y4Z,
+    # требование 1) — до этой задачи «мандат есть, раздела нет» было
+    # неотличимо от обычного отказа, и `auto` останавливался, не дав
+    # роли шага на оформление раздела (инцидент 13.09, задача 01M2CYQR03).
     extension_paths = _plan_zones_extension_paths(plan_text)
+    mandate = _answer_zones_mandate(branch, task_id)
     if extension_paths is not None:
-        mandate = _answer_zones_mandate(branch, task_id)
         uncovered_by_mandate = [p for p in extension_paths if p not in mandate]
         if not uncovered_by_mandate:
             still_out = [f for f in out_of_zone
@@ -268,6 +286,28 @@ def _zones_gate(conn, task_id: str, t, branch: str,
     detail = (f"дифф трогает файлы вне заявленных zones и COMMON_ZONES "
              f"(база сравнения {base} от {source}): "
              f"{', '.join(out_of_zone)}")
+
+    # Мандат Оператора покрывает ВСЕ оставшиеся пути вне зон (та же
+    # формула префикса, что у исключения AC-3 выше), не хватает только
+    # раздела PLAN.md — отказ именуется отдельно (требование 1/AC-1):
+    # чинить его будет роль, не Оператор. Покрыты не все пути или мандата
+    # нет вовсе — прежний отказ ниже, байт-в-байт (требование 2/AC-2).
+    mandate_paths = sorted(mandate)
+    if mandate_paths and all(_touches_zone(f, mandate_paths) for f in out_of_zone):
+        if extension_paths is None:
+            plan_state = "отсутствует"
+        else:
+            plan_state = (f"не совпадает с мандатом (в разделе: "
+                          f"{', '.join(extension_paths) or '—'})")
+        detail = (f"{detail} — все они покрыты мандатом Оператора "
+                  f"«{_ZONES_MANDATE_MARKER} {', '.join(mandate_paths)}», "
+                  f"но раздел «## Расширение зон» PLAN.md {plan_state}")
+        hint = (f"оформи раздел «## Расширение зон» в PLAN.md: строка "
+                f"«Пути: {', '.join(mandate_paths)}» и обоснование, затем "
+                f"повтори artel.py advance {task_id}")
+        return GateRefusal(ZONES_MANDATE_WITHOUT_PLAN_REFUSAL_ACTION,
+                           detail, hint)
+
     hint = (f"сократи дифф до заявленных zones либо оформи раздел "
            f"«## Расширение зон» в PLAN.md с обоснованием и мандатом "
            f"Оператора («{_ZONES_MANDATE_MARKER} <пути>» в ANSWER-n.md), и "

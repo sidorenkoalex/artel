@@ -565,6 +565,25 @@ def _publish_merge_artifacts(conn, task_id: str, scratch: Path,
     return final_sha
 
 
+# Подстроки stderr `git push`, по которым отказ читается как «main
+# сдвинулся между `_origin_main_sha` и push» (SPEC
+# 01M2XFSE8G3MBRHHQR38H53J1M, требование 8): «cannot lock ref … is at X but
+# expected Y» — буквальный текст origin из инцидента 13.09; «non-fast-
+# forward»/«fetch first» — тексты самого git на отставшую ветку (те же,
+# что различает `artifact_branch._classify_push_failure`). Голое
+# «rejected» сюда НЕ входит: «[remote rejected] … (pre-receive hook
+# declined)» — отказ прав, а не сдвиг main (требование 9).
+_MAIN_MOVED_PUSH_MARKERS = ("cannot lock ref", "non-fast-forward",
+                            "fetch first")
+
+
+def _push_rejected_by_moved_main(stderr: str) -> bool:
+    """Отказ push класса «main сдвинулся» — по подстрокам
+    `_MAIN_MOVED_PUSH_MARKERS` в stderr git (регистр не важен)."""
+    lowered = stderr.lower()
+    return any(marker in lowered for marker in _MAIN_MOVED_PUSH_MARKERS)
+
+
 def _push_merged_main(conn, task_id: str, final_sha: str,
                       ctx: repo_context.RepoContext) -> str:
     """Push ЯВНОГО sha (не текущего чекаута) прямо в `refs/heads/
@@ -573,16 +592,34 @@ def _push_merged_main(conn, task_id: str, final_sha: str,
     push не трогает вовсе (AC-8). Для self — байт-в-байт прежнее
     поведение (`config.ROOT`, `refs/heads/config.MAIN_BRANCH`); для
     внешнего target — её клон и `refs/heads/<ctx.base>` (SPEC
-    01M1R5B33CC7E6BZK085XV3ZCX, AC-12)."""
+    01M1R5B33CC7E6BZK085XV3ZCX, AC-12).
+
+    `"ok"` — main продвинут. `"moved"` — origin отклонил push классом
+    «не fast-forward»/«cannot lock ref» (SPEC 01M2XFSE8G3MBRHHQR38H53J1M,
+    требование 8): main сдвинулся между `_origin_main_sha` и push (чужой
+    пульт либо второй цикл этого же — инцидент 13.09). Это штатный исход
+    движущегося main, не сбой: в журнал — именованная запись «main
+    сдвинулся во время окна — повтор подтяжки», процесс НЕ завершается,
+    вызывающее тело гейта возвращает `("wait", branch)` и заходит заново в
+    том же вызове `approve`. Иные отказы (сеть, права, git не ответил) —
+    прежние «merge FAILED» + `sys.exit` (требование 9)."""
     push = repo_context.git(ctx, "push", "origin",
                             f"{final_sha}:refs/heads/{ctx.base}")
-    if push is None or push.returncode != 0:
-        store.journal(conn, task_id, "orchestrator", "merge FAILED",
-                      push.stderr.strip()[:500] if push is not None
-                      else "git не ответил")
-        sys.exit(f"merge упал на git push:\n"
-                 f"{push.stderr if push is not None else '—'}")
-    return "ok"
+    if push is not None and push.returncode == 0:
+        return "ok"
+    stderr = push.stderr if push is not None else ""
+    if push is not None and _push_rejected_by_moved_main(stderr):
+        store.journal(conn, task_id, "orchestrator",
+                      "main сдвинулся во время окна — повтор подтяжки",
+                      stderr.strip()[:500])
+        print(f"[{task_id}] main сдвинулся во время merge-окна — повтор "
+              f"подтяжки и ожидания CI в этом же вызове approve")
+        return "moved"
+    store.journal(conn, task_id, "orchestrator", "merge FAILED",
+                  stderr.strip()[:500] if push is not None
+                  else "git не ответил")
+    sys.exit(f"merge упал на git push:\n"
+             f"{stderr if push is not None else '—'}")
 
 
 def _finalize_done_state(conn, task_id: str, state: str, branch: str) -> None:
@@ -642,6 +679,17 @@ def _cmd_approve_merge_gate(conn, task_id: str, state: str, t,
     конфликт — дальше вызывающему циклу делать нечего); `("done",)` —
     merge выполнен; `("wait", branch)` — дальше вызывающий цикл ждёт CI
     ВНЕ этого мьютекса циклом `_wait_for_branch_ci_green` (требование 2).
+    `("moved", branch)` — отказ push «main сдвинулся» (`_push_merged_main`
+    -> `"moved"`, SPEC 01M2XFSE8G3MBRHHQR38H53J1M, требования 8-9): повтор
+    идёт тем же путём, что и исход подтяжки, — цикл не сбрасывает уже
+    идущий отсчёт `MERGE_GATE_CI_WAIT_CEILING_SEC`, подтверждает CI ветки
+    (голова не менялась) и заходит в тело заново, где подтяжка увидит
+    сдвинутый main. Отдельный тег нужен циклу, чтобы ТОЛЬКО на этом пути
+    поставить паузу и сверить общий потолок до нового захода (REVIEW
+    итерации 1, R1-F1): при уже зелёном CI `_wait_for_branch_ci_green`
+    возвращается сразу, не сверяя `deadline`, и без этой сверки устойчиво
+    отвергаемый push (застрявший lock ref, чужой пульт, стабильно
+    выигрывающий гонку) крутил бы тело гейта горячим бесконечным циклом.
 
     Репозиторный контекст target'а (SPEC 01M1R5B33CC7E6BZK085XV3ZCX,
     требование 4, AC-12/AC-13): резолвится ОДИН раз здесь (`store.
@@ -675,7 +723,8 @@ def _cmd_approve_merge_gate(conn, task_id: str, state: str, t,
     if merge_kind != "ok":
         return ("stopped",)
     final_sha = _publish_merge_artifacts(conn, task_id, scratch, ctx)
-    _push_merged_main(conn, task_id, final_sha, ctx)
+    if _push_merged_main(conn, task_id, final_sha, ctx) == "moved":
+        return ("moved", branch)
     _finalize_done_state(conn, task_id, state, branch)
     if _publish_closing_snapshot_or_wait(conn, task_id, t) == "done":
         return ("done",)
@@ -706,19 +755,40 @@ def _cmd_approve_merge_gate_cycle(conn, task_id: str, sid: str, t,
     Занятый мьютекс (SPEC 01M291EPQ2VFGCHZTXXC81616V, требования 1-3) не
     отказывает немедленно — `merge_queue.wait_for_window` встаёт в очередь
     FIFO и опрашивает освобождение окна, возвращаясь только с уже взятым
-    ЭТОЙ сессией мьютексом (либо сама завершает процесс `sys.exit`'ом по
+    ЭТИМ процессом мьютексом (либо сама завершает процесс `sys.exit`'ом по
     истечении потолка ожидания очереди, не тронув состояние задачи).
+    Держатель мьютекса — процесс, не сессия (SPEC
+    01M2XFSE8G3MBRHHQR38H53J1M, требования 1-2): второй цикл `approve`
+    той же рабочей копии пульта получает от `merge_lock.acquire` тот же
+    отказ, что и чужая сессия, и уходит в очередь этим же путём.
 
     `deadline`/`start` вычисляются ОДИН раз за весь вызов `approve` — в
-    момент первого исхода `("wait", ...)`, то есть от первого пуша
-    (требование 4): повторный уход в `("wait", ...)` после новой подтяжки
-    (AC-6) не пересчитывает их. Время, проведённое в очереди мержа до входа
-    в окно, в этот отсчёт не входит (SPEC 01M291EPQ2VFGCHZTXXC81616V,
-    требование 4) — `start` берётся ПОСЛЕ возврата `wait_for_window`.
+    момент первого исхода `("wait", ...)`/`("moved", ...)`, то есть от
+    первого пуша (требование 4): повторный уход в `("wait", ...)` после
+    новой подтяжки (AC-6) не пересчитывает их. Время, проведённое в
+    очереди мержа до входа в окно, в этот отсчёт не входит (SPEC
+    01M291EPQ2VFGCHZTXXC81616V, требование 4) — `start` берётся ПОСЛЕ
+    возврата `wait_for_window`.
+
+    Исход `("moved", branch)` — отказ push «main сдвинулся» (SPEC
+    01M2XFSE8G3MBRHHQR38H53J1M, требования 8-9) — идёт дальше тем же
+    путём, что и `("wait", branch)` (ожидание CI, новый заход в тело), но
+    с двумя своими шагами ДО него (REVIEW итерации 1, R1-F1):
+    пауза `MERGE_GATE_CI_WAIT_POLL_SEC` (heartbeat мьютекса продлевается
+    перед ней — тем же приёмом, что итерация `_wait_for_branch_ci_green`)
+    и сверка общего `deadline`. Голова ветки при «moved» не менялась, CI
+    уже зелёный, и `_wait_for_branch_ci_green` вернулась бы мгновенно, не
+    сверив потолок и не паузя, — без этих шагов устойчиво отвергаемый push
+    (застрявший lock ref origin, чужой пульт, стабильно выигрывающий
+    гонку) крутил бы fetch/worktree/merge/карту/RETRO/push горячим циклом
+    без конца. Потолок один и тот же для обоих исходов — не сбрасывается
+    (требование 9): истёк — запись «merge FAILED» и `sys.exit` с
+    именованным отказом, задача остаётся на `merge_gate`.
     """
     start: float | None = None
     deadline: float | None = None
     confirmed_ci_note: str | None = None
+    moved_retries = 0
     refusal = merge_lock.acquire(conn, task_id, sid)
     if refusal is not None:
         merge_queue.wait_for_window(conn, task_id, sid)
@@ -727,13 +797,38 @@ def _cmd_approve_merge_gate_cycle(conn, task_id: str, sid: str, t,
             outcome = _cmd_approve_merge_gate(conn, task_id, state, t,
                                               confirmed_ci_note)
             confirmed_ci_note = None
-            if outcome[0] != "wait":
+            if outcome[0] not in ("wait", "moved"):
                 return
             branch = outcome[1]
             if deadline is None:
                 start = time.monotonic()
                 deadline = start + config.MERGE_GATE_CI_WAIT_CEILING_SEC
+            if outcome[0] == "moved":
+                moved_retries += 1
+                merge_lock.touch_heartbeat(conn)
+                time.sleep(config.MERGE_GATE_CI_WAIT_POLL_SEC)
+                if time.monotonic() >= deadline:
+                    _exit_moved_main_ceiling(conn, task_id, branch,
+                                             moved_retries, start)
             confirmed_ci_note = _wait_for_branch_ci_green(
                 conn, task_id, branch, start, deadline)
     finally:
         merge_lock.release(conn, sid)
+
+
+def _exit_moved_main_ceiling(conn, task_id: str, branch: str,
+                             moved_retries: int, start: float) -> None:
+    """Общий потолок `MERGE_GATE_CI_WAIT_CEILING_SEC` истёк на пути повтора
+    «main сдвинулся» (SPEC 01M2XFSE8G3MBRHHQR38H53J1M, требование 9; REVIEW
+    итерации 1, R1-F1): запись «merge FAILED» с числом повторов и
+    `sys.exit` тем же стилем, что и отказ `_wait_for_branch_ci_green` по
+    истёкшему потолку. Задача остаётся на `merge_gate`, мьютекс снимает
+    `finally` вызывающего цикла."""
+    elapsed = int(time.monotonic() - start)
+    detail = (f"main сдвигался всё окно: потолок ожидания истёк после "
+              f"{moved_retries} повтор(ов) подтяжки, {elapsed} сек")
+    store.journal(conn, task_id, "orchestrator", "merge FAILED", detail)
+    sys.exit(f"[{task_id}] merge отклонён: {detail}\n"
+             f"  задача осталась на гейте merge; проверь, кто двигает "
+             f"{config.MAIN_BRANCH} origin, и повтори: artel.py approve "
+             f"{task_id} (ветка {branch})")

@@ -4,8 +4,12 @@ Lease задачи (`lease.py`, T044) не защищает от гонки за
 РАЗНЫМИ задачами: обе могут одновременно исполнять merge-окно, каждая
 удерживая lease только своей собственной задачи. Этот мьютекс — второй,
 отдельный замок с единственной строкой на весь пульт (не per-task, в
-отличие от `leases`): держит его СЕССИЯ, вне зависимости от того, чью
-задачу она мержит (требование 2). Взятие атомарно тем же приёмом, что
+отличие от `leases`): держит его ПРОЦЕСС — пара (session_id, pid), вне
+зависимости от того, чью задачу он мержит (требование 2; SPEC
+01M2XFSE8G3MBRHHQR38H53J1M, требование 1: все процессы одной рабочей
+копии пульта несут один session_id (`session.resolve_session_id`), и
+владение по одной сессии пропускало два параллельных цикла `approve`
+одного пульта в одно merge-окно — инцидент 13.09). Взятие атомарно тем же приёмом, что
 `lease.acquire` — `BEGIN IMMEDIATE` до чтения строки закрывает то же окно
 между чтением и записью, которое без него позволяло бы двум сессиям
 одновременно решить, что мьютекс свободен, и обеим уйти мержить main
@@ -39,26 +43,40 @@ def _holder_is_dead(row) -> bool:
            and not liveness._pid_alive(row["pid"]))
 
 
+def _is_own_process(row, session_id: str, pid: int) -> bool:
+    """«Свой» мьютекс — строка ЭТОГО процесса: session_id И pid (SPEC
+    01M2XFSE8G3MBRHHQR38H53J1M, требование 1). Живость своего pid
+    проверять нечего — он вызывающий; иной pid той же сессии — чужой
+    держатель, дальше решает `_holder_is_dead`, как и для чужой сессии
+    (требование 3: мёртвый процесс своей сессии перехватывается той же
+    веткой, не отказывает)."""
+    return row["session_id"] == session_id and row["pid"] == pid
+
+
 def acquire(conn, task_id: str, session_id: str) -> str | None:
     """None — мьютекс взят (свободен, свой либо перехвачен мёртвый
     держатель) и можно исполнять merge-окно; иначе — именованный отказ
-    с session_id держателя и задачей, которую он держит (требование 2),
-    ничего не меняется.
+    с session_id и pid держателя и задачей, которую он держит
+    (требование 2; SPEC 01M2XFSE8G3MBRHHQR38H53J1M, требование 2: живой
+    процесс своей сессии получает ТОТ ЖЕ текст, что и чужая сессия),
+    ничего не меняется. Pid вызывающего процесса — `os.getpid()`, не
+    параметр: сигнатура общая с моками `tests/test_merge_gate_ci_wait.py`
+    и циклом `fsm_merge_gate._cmd_approve_merge_gate_cycle`.
     """
     conn.execute("BEGIN IMMEDIATE")
     try:
         row = store.merge_lock_row(conn)
         pid, hostname = os.getpid(), socket.gethostname()
-        if row is None or row["session_id"] == session_id:
+        if row is None or _is_own_process(row, session_id, pid):
             store.set_merge_lock(conn, task_id, session_id, pid, hostname,
                                  store.now())
             return None
         if not _holder_is_dead(row):
             age = liveness._age_seconds(row["heartbeat_ts"])
             return (f"[{task_id}] merge-окно занято сессией "
-                   f"{row['session_id']} (задача {row['task_id']}), "
-                   f"heartbeat {int(age)} сек назад — дождись освобождения "
-                   f"и повтори approve")
+                   f"{row['session_id']} (pid {row['pid']}, задача "
+                   f"{row['task_id']}), heartbeat {int(age)} сек назад — "
+                   f"дождись освобождения и повтори approve")
         detail = (f"держатель мьютекса merge мёртв (сессия "
                  f"{row['session_id']} на {row['hostname']}, pid "
                  f"{row['pid']}, задача {row['task_id']}, heartbeat "
@@ -105,10 +123,13 @@ def touch_heartbeat(conn) -> None:
 
 
 def release(conn, session_id: str) -> None:
-    """Снимает мьютекс merge-окна, если он принадлежит этой сессии —
-    вызывать из `finally` по завершении окна, независимо от исхода (SPEC
-    T053, требование 3)."""
-    store.release_merge_lock(conn, session_id)
+    """Снимает мьютекс merge-окна, если он принадлежит ЭТОМУ процессу
+    (session_id И `os.getpid()`, SPEC 01M2XFSE8G3MBRHHQR38H53J1M,
+    требование 4) — вызывать из `finally` по завершении окна, независимо
+    от исхода (SPEC T053, требование 3). `finally` цикла, который окна
+    так и не получил (отказ очереди по потолку), строку живого
+    держателя-соседа той же сессии не трогает."""
+    store.release_merge_lock(conn, session_id, os.getpid())
 
 
 def run_window(conn, task_id: str, session_id: str, body):

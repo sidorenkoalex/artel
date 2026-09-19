@@ -1757,14 +1757,25 @@ class MergeLockCheckTest(_TwoTasksInitializedTest):
         self.assertEqual(len(incidents), 1)
 
     def test_lock_cleared_is_auto_acked_on_next_run(self):
+        """Снятый мьютекс мёртвого держателя — инцидент авто-ack'ается на
+        следующем прогоне `check_merge_lock`.
+
+        Ловит мутацию: `store.release_merge_lock(conn, sid, pid)` перестал
+        снимать строку по своему (sid, pid) — мьютекс останется, инцидент
+        не закроется, `assertIsNotNone(ack_ts)` покраснеет; либо авто-ack
+        исчезнувшего держателя убран из `check_merge_lock`.
+        """
         conn = store.db()
-        store.set_merge_lock(conn, "T001", "sess", self.dead_pid(),
+        holder_pid = self.dead_pid()
+        store.set_merge_lock(conn, "T001", "sess", holder_pid,
                              socket.gethostname(), store.now())
         doctor.check_merge_lock(conn)
         alert_id = [a for a in alerts.open_alerts(conn, "incident")
                    if a["source"] == "doctor.merge_lock"][0]["id"]
 
-        store.release_merge_lock(conn, "sess")
+        # Снятие адресуется процессом-держателем (session_id И pid) — SPEC
+        # 01M2XFSE8G3MBRHHQR38H53J1M, требование 4.
+        store.release_merge_lock(conn, "sess", holder_pid)
         doctor.check_merge_lock(conn)
 
         self.assertIsNotNone(store.get_alert(conn, alert_id)["ack_ts"])
