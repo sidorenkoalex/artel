@@ -1,0 +1,27 @@
+diff --git a/roles.yaml b/roles.yaml
+index 134b5658..20a2831b 100644
+--- a/roles.yaml
++++ b/roles.yaml
+@@ -16,18 +16,22 @@ roles:
+                                   # именованно)
+     token_slot: artel-analyst
+     skills: [conventions-core, escalation-rules, spec-authoring]
++    model: claude-sonnet-5        # решение Оператора 13.09 (01M2DTT96FS25SHXP0HDTWARQH)
+   test_author:
+     executor: agent              # A4 (tasks/T023): приёмочные тесты до кода
+     token_slot: artel-test-author
+     skills: [conventions-core, escalation-rules, test-authoring]
++    model: claude-sonnet-5        # решение Оператора 13.09 (01M2DTT96FS25SHXP0HDTWARQH)
+   developer:
+     executor: agent
+     token_slot: artel-developer
+     skills: [conventions-core, escalation-rules, coding-standards]
++    model: claude-opus-5          # решение Оператора 13.09 (01M2DTT96FS25SHXP0HDTWARQH)
+   reviewer:
+     executor: agent
+     token_slot: artel-reviewer
+     skills: [conventions-core, escalation-rules, review-checklist]
++    model: claude-opus-5          # решение Оператора 13.09 (01M2DTT96FS25SHXP0HDTWARQH)
+   verifier:
+     executor: none              # появится в MVP (стенд + приёмочные тесты)
+     token_slot: artel-verifier
