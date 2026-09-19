@@ -69,3 +69,24 @@ def skills(role: str) -> list[str]:
         raise RolesError(
             f"{config.ROLES}: skills роли '{role}' — не список имён")
     return names
+
+
+def model(role: str) -> str | None:
+    """Идентификатор модели роли (поле `model:` в roles.yaml).
+
+    `None` — поле не задано вовсе: роль идёт на дефолт CLI (SPEC
+    01M2DTT96FS25SHXP0HDTWARQH, требование 2), в отличие от `skills()`,
+    где отсутствие поля — отказ. Поле присутствует, но не является
+    непустой строкой (число, bool, пустая строка) — `RolesError`, тем же
+    приёмом, что `skills()` на неверном формате.
+    """
+    entry = load().get(role)
+    if not isinstance(entry, dict):
+        raise RolesError(f"{config.ROLES}: роль '{role}' не описана")
+    value = entry.get("model")
+    if value is None:
+        return None
+    if not isinstance(value, str) or not value:
+        raise RolesError(
+            f"{config.ROLES}: model роли '{role}' — не непустая строка")
+    return value
