@@ -36,6 +36,25 @@ SPLIT_ASSESSMENT_NONE = "сигналов нет"
 # `ci.verifying_status` второй раз за ту же итерацию цикла.
 VERIFYING_STATUS_ACTION = "статус CI ветки (verifying)"
 
+# Фиксированный текст action (SPEC 01M2XFSJ1Z7BS6HR69SAT1D81Y, требования
+# 1-2, П1 копилки 13.09): эскалация, поднятая СОДЕРЖИМЫМ артефакта роли —
+# пометкой `AC-n: escalate` в планке (`fsm_advance.tests_writing`) или
+# батчем `QUESTIONS.md` (`fsm_advance.spec_writing`), — метит задачу
+# признаком «ответ Оператора должен дойти до роли до следующего
+# предварительного advance»: записью журнала сразу ПОСЛЕ `state ->
+# escalated`, до возврата Оператора. Без него `auto._pre_advance_step`
+# после `approve` перечитывал ту же пометку/тот же батч и повторял уже
+# отвеченную эскалацию за 0 секунд, поднимая `answer_baseline` (инцидент
+# 13.09). Читает `orchestrator/auto.py::_role_step_since_state_entry` —
+# тем же приёмом, что `pull.PULL_CONFLICT_ROLE_STEP_MARKER` для эскалации
+# `in_dev` по конфликту подтяжки; значение своё, константа `pull.py` не
+# переиспользуется (SPEC «Не входит»). Живёт здесь, а не в
+# `fsm_advance.py`: и обе точки записи, и читатель уже импортируют этот
+# модуль, обратного импорта не возникает.
+ARTIFACT_ESCALATION_ROLE_STEP_MARKER = (
+    "эскалация по артефакту роли: ответ Оператора должен дойти до роли "
+    "до следующего предварительного advance")
+
 
 def _verifying_elapsed_seconds(updated_at: str) -> float:
     """Секунды с момента входа в `verifying` (SPEC T086, требование 3):
