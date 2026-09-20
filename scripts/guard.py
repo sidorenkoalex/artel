@@ -898,6 +898,18 @@ def scan_indented_ac_markers(tdir: Path) -> list[str]:
 # cat-file` — не нарушение, потому что ни один из этих вызовов не входит
 # в набор выражений доступа к файловой системе ниже.
 #
+# Нарушение — только путь, ЯКОРЕННЫЙ на рабочую копию (ANSWER-1 задачи,
+# вариант B: уточнение требования 1 и AC-1/AC-5): цепочка от
+# `Path(__file__)`, от `config.ROOT`/`config.TASKS`, либо литерал,
+# начинающийся с `tasks/`, — включая имена, присвоенные от таких выражений
+# (`TASK_DIR = Path(__file__).resolve().parents[1]`). Пути от временных
+# каталогов (`tempfile`, `self.tdir` вложенной песочницы FSM-задач, которая
+# ПИШЕТ поддельные `SPEC.md`/`PLAN.md` фиктивной задачи) под правило не
+# подпадают: такая планка читает не артефакт задачи, а свою фикстуру, и
+# в среде гейта она так же зелена, как у автора. До уточнения правило
+# «любое выражение доступа с именем артефакта» отклоняло бы 68 из 186
+# исторических планок и планку самой задачи (REVIEW.md итерации 1, R1-F1).
+#
 # Вызывается ТОЛЬКО гейтом выхода `tests_writing` (`orchestrator/
 # advance_gates/tests_writing.py`), НЕ из `check()`/`main()` (требование
 # 4): режим CI «Валидация артефактов» по всему `tasks/` исторические
@@ -913,6 +925,13 @@ ARTIFACT_FILE_NAMES = ("PLAN.md", "SPEC.md", "REVIEW.md", "TZ.md",
 _FS_ACCESS_CALLS = frozenset({"open", "Path", "pathlib.Path",
                               "os.path.join", "os.path.exists"})
 _FS_ACCESS_METHODS = frozenset({"read_text", "joinpath"})
+
+# Якоря рабочей копии (ANSWER-1, вариант B): имя `__file__`, атрибуты
+# `config.ROOT`/`config.TASKS` (по суффиксу точечного имени — и
+# `orchestrator.config.TASKS`), литерал первого сегмента пути `tasks`.
+_ANCHOR_NAMES = frozenset({"__file__"})
+_ANCHOR_ATTR_SUFFIXES = ("config.ROOT", "config.TASKS")
+_ANCHOR_LITERAL_ROOT = "tasks"
 
 ARTIFACT_DISK_READ_RECIPE_TMPL = (
     "читай из артефактной ветки: "
@@ -933,16 +952,99 @@ def _dotted_name(node: ast.AST) -> str | None:
 
 
 def _artifact_name_in_literal(value: str) -> str | None:
-    """Имя артефакта, которое несёт строковый литерал `value` (для
-    префикса `ANSWER-` — фактическое имя файла из литерала, например
-    `ANSWER-1.md`, чтобы рецепт назвал настоящий файл); `None` — литерал
-    об артефактах не говорит."""
+    """Имя артефакта, которое несёт строковый литерал `value`; `None` —
+    литерал об артефактах не говорит.
+
+    В рецепт уходит имя файла из литерала (`tasks/<id>/ANSWER-1.md` для
+    префикса `ANSWER-`) ТОЛЬКО когда basename литерала начинается с имени
+    артефакта; иначе — само имя из `ARTIFACT_FILE_NAMES`: часть f-строки
+    `f"{TASK}-PLAN.md"` — это литерал `-PLAN.md`, и рецепт с
+    `tasks/<id>/-PLAN.md` называл бы несуществующий файл (R1-F2 REVIEW.md
+    итерации 1)."""
     for name in ARTIFACT_FILE_NAMES:
         if name not in value:
             continue
         basename = value.rsplit("/", 1)[-1]
-        return basename if name in basename else name
+        return basename if basename.startswith(name) else name
     return None
+
+
+def _literal_is_anchored(value: str, root: bool) -> bool:
+    """Строковый литерал якорится на рабочую копию, если начинается с
+    `tasks/`; голое `tasks` — только в корневой позиции пути (первый
+    аргумент `os.path.join("tasks", …)`), не операндом `/` посреди цепочки
+    (`Path(tmp) / "tasks" / TASK / "SPEC.md"` — путь от временного
+    каталога)."""
+    return (value.startswith(_ANCHOR_LITERAL_ROOT + "/")
+            or (root and value == _ANCHOR_LITERAL_ROOT))
+
+
+def _is_anchored(node: ast.AST, names: set[str]) -> bool:
+    """Выражение пути якорится на рабочую копию (ANSWER-1, вариант B):
+    `__file__`, имя из `names` (присвоенное от якорного выражения),
+    `config.ROOT`/`config.TASKS`, корневой литерал `tasks/…`; далее —
+    транзитивно по получателю атрибута/подписки/метода (`Path(__file__)
+    .resolve().parents[1]`, `TASK_DIR.joinpath(…)`), по первому аргументу
+    вызова (`Path(__file__)`, `os.path.join("tasks", …)`, `str(TASK_DIR)`),
+    по левому операнду `/` и `+` (`TASK_DIR / "PLAN.md"`, `str(TASK_DIR)
+    + "/PLAN.md"`), по началу f-строки (`f"{TASK_DIR}/PLAN.md"`).
+    Правый операнд `/` корнем пути не является — литерал там считается
+    только с `tasks/`."""
+    if isinstance(node, ast.Name):
+        return node.id in _ANCHOR_NAMES or node.id in names
+    if isinstance(node, ast.Constant):
+        return isinstance(node.value, str) and _literal_is_anchored(node.value, root=True)
+    if isinstance(node, ast.JoinedStr):
+        if not node.values:
+            return False
+        first = node.values[0]
+        if isinstance(first, ast.FormattedValue):
+            return _is_anchored(first.value, names)
+        return _is_anchored(first, names)
+    if isinstance(node, ast.Attribute):
+        dotted = _dotted_name(node)
+        if dotted is not None and dotted.endswith(_ANCHOR_ATTR_SUFFIXES):
+            return True
+        return _is_anchored(node.value, names)
+    if isinstance(node, ast.Subscript):
+        return _is_anchored(node.value, names)
+    if isinstance(node, ast.Call):
+        if isinstance(node.func, ast.Attribute) and _is_anchored(node.func.value, names):
+            return True
+        return bool(node.args) and _is_anchored(node.args[0], names)
+    if isinstance(node, ast.BinOp) and isinstance(node.op, (ast.Div, ast.Add)):
+        if _is_anchored(node.left, names):
+            return True
+        right = node.right
+        return (isinstance(right, ast.Constant) and isinstance(right.value, str)
+                and _literal_is_anchored(right.value, root=False))
+    return False
+
+
+def _anchored_names(tree: ast.AST) -> set[str]:
+    """Имена, присвоенные от якорных выражений (`TASK_DIR = Path(__file__)
+    .resolve().parents[1]`, `PLAN_DIR = TASK_DIR.parent`) — с замыканием
+    по цепочке присваиваний. Область видимости не различается (имя
+    считается по всему файлу): в планке имя каталога задачи одно, а цена
+    ошибки различения — пропуск инцидентного чтения."""
+    names: set[str] = set()
+    changed = True
+    while changed:
+        changed = False
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Assign):
+                targets, value = node.targets, node.value
+            elif isinstance(node, ast.AnnAssign) and node.value is not None:
+                targets, value = [node.target], node.value
+            else:
+                continue
+            if not _is_anchored(value, names):
+                continue
+            for target in targets:
+                if isinstance(target, ast.Name) and target.id not in names:
+                    names.add(target.id)
+                    changed = True
+    return names
 
 
 def _artifact_literals(node: ast.AST) -> list[tuple[int, str]]:
@@ -972,13 +1074,17 @@ def artifact_disk_read_errors_from_files(files: list[tuple[str, str]]) -> list[s
     `redness_marker_errors_from_files`/`indented_ac_marker_errors_from_files`.
 
     Нарушение — строковый литерал с именем артефакта (`ARTIFACT_FILE_
-    NAMES`) внутри выражения доступа к файловой системе:
-    - операнд операции `/` (`Path(__file__).parents[1] / "PLAN.md"`;
-      `str / str` в Python не существует, поэтому литерал-операнд `/`
-      всегда означает pathlib — левый операнд отдельно не проверяется,
-      `TASK_DIR / "PLAN.md"` через переменную ловится так же);
+    NAMES`) внутри выражения доступа к файловой системе, путь которого
+    ЯКОРИТСЯ на рабочую копию (`_is_anchored`: `__file__`, `config.ROOT`/
+    `config.TASKS`, литерал `tasks/…`, имена, присвоенные от них —
+    `_anchored_names`; ANSWER-1, вариант B):
+    - операнд операции `/` (`Path(__file__).parents[1] / "PLAN.md"`,
+      `TASK_DIR / "PLAN.md"` при `TASK_DIR = Path(__file__)…`);
     - поддерево вызова `_FS_ACCESS_CALLS`/`_FS_ACCESS_METHODS`, включая
       цепочку получателя (`TASK_DIR.joinpath("PLAN.md").read_text()`).
+    Путь от временного каталога (`Path(tmp) / "tasks" / TASK / "SPEC.md"`,
+    `(self.tdir / "SPEC.md").write_text(…)` вложенной песочницы) — не
+    нарушение: имя артефакта там называет фикстуру, не артефакт задачи.
 
     Каждая ошибка: `<label>:<строка литерала>: … — читай из артефактной
     ветки: gitcmd.show(artifact_branch.branch_name(TASK_ID),
@@ -994,13 +1100,17 @@ def artifact_disk_read_errors_from_files(files: list[tuple[str, str]]) -> list[s
             tree = ast.parse(source)
         except SyntaxError:
             continue
+        names = _anchored_names(tree)
         hits: set[tuple[int, str]] = set()
         for node in ast.walk(tree):
             if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Div):
+                if not _is_anchored(node, names):
+                    continue
                 for operand in (node.left, node.right):
                     if isinstance(operand, (ast.Constant, ast.JoinedStr)):
                         hits.update(_artifact_literals(operand))
-            elif isinstance(node, ast.Call) and _is_fs_access_call(node):
+            elif (isinstance(node, ast.Call) and _is_fs_access_call(node)
+                  and _is_anchored(node, names)):
                 hits.update(_artifact_literals(node))
         # `ast.walk` обходит дерево в ширину, не по строкам — порядок
         # ошибок внутри файла восстанавливается по номеру строки.

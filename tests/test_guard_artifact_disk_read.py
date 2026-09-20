@@ -5,6 +5,12 @@
 acceptance_tests/`), которая наблюдает те же свойства только через
 `fsm.cmd_advance` вложенной песочницы; здесь — сама функция по
 отдельности, тем же приёмом, что `tests/test_guard_mutation_claim.py`.
+
+Правило действует по ANSWER-1 задачи (вариант B, уточнение требования 1
+и AC-1/AC-5): ошибка — только путь, якоренный на рабочую копию
+(`Path(__file__)`, `config.ROOT`/`config.TASKS`, литерал `tasks/…`, имена,
+присвоенные от них); пути от временных каталогов песочницы под правило
+не подпадают — класс `AnchoringTest`.
 """
 import io
 import os
@@ -23,13 +29,17 @@ RECIPE = ('читай из артефактной ветки: '
           'gitcmd.show(artifact_branch.branch_name(TASK_ID), '
           '"tasks/<id>/PLAN.md")')
 
+# Пролог фикстурной планки: `TASK_DIR` — якорное имя (от `Path(__file__)`),
+# `FIXTURE_DIR` — неякорное (от `tempfile`), оба на уровне модуля.
 PRELUDE = (
     "import os\n"
     "import subprocess\n"
+    "import tempfile\n"
     "from pathlib import Path\n"
-    "from orchestrator import artifact_branch, gitcmd\n"
+    "from orchestrator import artifact_branch, config, gitcmd\n"
     "TASK = '01FIXTURETASK'\n"
     "TASK_DIR = Path(__file__).resolve().parents[1]\n"
+    "FIXTURE_DIR = Path(tempfile.mkdtemp())\n"
 )
 
 
@@ -48,36 +58,49 @@ def errors_for(*lines: str) -> list[str]:
 
 
 class DiskReadFormsTest(unittest.TestCase):
-    """Требование 1/AC-1: каждый названный образец доступа к файловой
-    системе со строковым литералом имени артефакта — ошибка."""
+    """Требование 1/AC-1 (в редакции ANSWER-1): каждый названный образец
+    доступа к файловой системе со строковым литералом имени артефакта по
+    якорному пути — ошибка."""
 
     FORMS = {
-        "Path(...) / literal":
+        "Path(__file__)... / literal":
             'plan = Path(__file__).resolve().parents[1] / "PLAN.md"',
-        "name / literal (Path в переменной)":
+        "якорное имя / literal (TASK_DIR от Path(__file__))":
             'plan = TASK_DIR / "PLAN.md"',
-        "Path(literal)":
+        "Path(literal tasks/...)":
             'plan = Path("tasks/01FIXTURETASK/PLAN.md")',
-        "pathlib.Path(literal)":
+        "pathlib.Path(literal tasks/...)":
             'plan = pathlib.Path("tasks/01FIXTURETASK/PLAN.md")',
-        "open(literal)":
+        "open(literal tasks/...)":
             'handle = open("tasks/01FIXTURETASK/PLAN.md", encoding="utf-8")',
-        ".read_text( на цепочке с joinpath(literal)":
+        ".read_text( на цепочке с joinpath(literal) от якорного имени":
             'text = TASK_DIR.joinpath("PLAN.md").read_text(encoding="utf-8")',
-        "os.path.join(literal)":
+        "os.path.join('tasks', ...)":
             'path = os.path.join("tasks", "01FIXTURETASK", "PLAN.md")',
-        "os.path.exists(literal)":
+        "os.path.exists(literal tasks/...)":
             'exists = os.path.exists("tasks/01FIXTURETASK/PLAN.md")',
-        "f-строка в open(":
+        "f-строка tasks/... в open(":
             'handle = open(f"tasks/{TASK}/PLAN.md")',
-        "f-строка операндом /":
+        "f-строка операндом / от якорного имени":
             'plan = TASK_DIR / f"{TASK}-PLAN.md"',
+        "config.TASKS / ... / literal":
+            'plan = config.TASKS / TASK / "PLAN.md"',
+        "config.ROOT / 'tasks' / ... / literal":
+            'spec = config.ROOT / "tasks" / TASK / "SPEC.md"',
+        "os.path.join(str(config.TASKS), ...)":
+            'path = os.path.join(str(config.TASKS), TASK, "PLAN.md")',
+        "open(str(якорное имя) + literal)":
+            'handle = open(str(TASK_DIR) + "/PLAN.md", encoding="utf-8")',
+        "Path(f-строка от якорного имени)":
+            'plan = Path(f"{TASK_DIR}/PLAN.md")',
     }
 
     def test_each_named_form_is_reported_once_with_file_and_line(self):
         """Ловит мутацию: список выражений доступа собран не полностью
         (только `/` с `Path(...)`, забыты `open(`/`os.path.*`/`.read_text(`
-        либо f-строка не разбирается как литерал) — подтест с этим
+        либо f-строка не разбирается как литерал) или список якорей сведён
+        к `__file__` (забыты `config.ROOT`/`config.TASKS`, литерал
+        `tasks/`, конкатенация `+`, f-строка от якоря) — подтест с этим
         образцом получит пустой список ошибок; вторая половина ассерта
         ловит подмену номера строки узла-выражения на номер строки
         начала файла или инструкции."""
@@ -144,6 +167,133 @@ class DiskReadFormsTest(unittest.TestCase):
         self.assertEqual(len(errors), 2, errors)
         self.assertIn(f":{FIRST_SCENARIO_LINE}: ", errors[0])
         self.assertIn(f":{FIRST_SCENARIO_LINE + 1}: ", errors[1])
+
+
+class AnchoringTest(unittest.TestCase):
+    """ANSWER-1 (вариант B, уточнение требования 1 и AC-1/AC-5): ошибка —
+    только путь, якоренный на рабочую копию; пути от временных каталогов
+    песочницы (`tempfile`, `self.tdir` вложенной песочницы) правило не
+    касается, а имена, присвоенные от якорей, якорны транзитивно."""
+
+    TEMP_FORMS = {
+        "запись фикстуры от имени модуля из tempfile":
+            '(FIXTURE_DIR / "tasks" / TASK / "SPEC.md").write_text("x")',
+        "чтение фикстуры от tempfile":
+            'spec = (FIXTURE_DIR / "SPEC.md").read_text(encoding="utf-8")',
+        "open(os.path.join(tmp, ...))":
+            'handle = open(os.path.join(FIXTURE_DIR, "tasks", TASK, "PLAN.md"))',
+        "Path(tmp, literal)":
+            'plan = Path(FIXTURE_DIR, "PLAN.md")',
+        "os.path.exists от tempfile":
+            'exists = os.path.exists(os.path.join(str(FIXTURE_DIR), "REVIEW.md"))',
+        "локальное имя от tempfile.mkdtemp()":
+            'tmp = tempfile.mkdtemp()\n'
+            'plan = Path(tmp) / "tasks" / TASK / "PLAN.md"',
+        "Path(tempfile.gettempdir())":
+            'plan = Path(tempfile.gettempdir()) / "PLAN.md"',
+        "self.tdir вложенной песочницы":
+            'class Sandbox:\n'
+            '    def enter(self):\n'
+            '        (self.tdir / "SPEC.md").write_text("x", encoding="utf-8")',
+    }
+
+    def test_paths_from_temporary_directories_are_not_reported(self):
+        """Восемь форм доступа с именем артефакта по пути от временного
+        каталога — записи и чтения фикстур вложенной песочницы — ошибок не
+        дают.
+
+        Ловит мутацию: якорный предикат снят (правило вернулось к «любое
+        выражение доступа с именем артефакта») либо голый литерал `tasks`
+        правым операндом `/` посчитан корнем пути — `Path(tmp) / "tasks" /
+        TASK / "PLAN.md"` и `(self.tdir / "SPEC.md").write_text(...)`
+        получили бы ошибку, как 68 из 186 исторических планок до
+        уточнения."""
+        for form, line in self.TEMP_FORMS.items():
+            with self.subTest(form=form):
+                self.assertEqual(errors_for(line), [])
+
+    def test_names_assigned_from_anchors_are_anchored_transitively(self):
+        """`PLAN_DIR = TASK_DIR.parent` и `TASKS_ROOT = config.TASKS` —
+        имена второго порядка якорны; порядок присваивания и
+        использования в файле не важен (использование внутри функции,
+        объявленной раньше присваивания, — та же ошибка).
+
+        Ловит мутацию: имена собираются одним проходом только от прямых
+        якорных выражений (`Path(__file__)`, `config.TASKS`) без замыкания
+        по цепочке присваиваний либо только по порядку строк — `PLAN_DIR`
+        от `TASK_DIR` или имя, использованное раньше объявления, дадут
+        пустой список."""
+        errors = errors_for('PLAN_DIR = TASK_DIR.parent',
+                            'plan = PLAN_DIR / "PLAN.md"')
+        self.assertEqual(len(errors), 1, errors)
+        self.assertIn(f":{FIRST_SCENARIO_LINE + 1}: ", errors[0])
+        errors = errors_for('TASKS_ROOT = config.TASKS',
+                            'spec = TASKS_ROOT / TASK / "SPEC.md"')
+        self.assertEqual(len(errors), 1, errors)
+        errors = errors_for('def read():',
+                            '    return (PLAN_DIR / "PLAN.md").read_text()',
+                            'PLAN_DIR = TASK_DIR.parent')
+        self.assertEqual(len(errors), 1, errors)
+        self.assertIn(f":{FIRST_SCENARIO_LINE + 1}: ", errors[0])
+
+    def test_incident_sample_01m2b6k3em_stays_reported(self):
+        """Эталон инцидента 12.09 (`tasks/01M2B6K3EM7F2J72RC2F520Y2K/
+        acceptance_tests/test_ac8_…:26`, ANSWER-1 п. 3): модульное
+        `PLAN_DISK = Path(__file__).resolve().parents[1] / "PLAN.md"` рядом
+        с законным `gitcmd.show(...)` — ровно одна ошибка, на строке
+        `PLAN_DISK`, с именем `PLAN.md`.
+
+        Ловит мутацию: `__file__` выпал из якорей (якоря сведены к
+        `config.*`/литералу `tasks/`) — инцидентный образец, ради которого
+        задача затевалась, прошёл бы гейт."""
+        source = (
+            '"""AC-8 — образец инцидента 12.09."""\n'
+            'import unittest\n'
+            'from pathlib import Path\n'
+            '\n'
+            'from orchestrator import artifact_branch, gitcmd\n'
+            '\n'
+            'TASK_ID = "01M2B6K3EM7F2J72RC2F520Y2K"\n'
+            'PLAN_DISK = Path(__file__).resolve().parents[1] / "PLAN.md"\n'
+            'text, _reason = gitcmd.show(artifact_branch.branch_name(TASK_ID),\n'
+            '                            f"tasks/{TASK_ID}/PLAN.md")\n')
+        errors = guard.artifact_disk_read_errors_from_files(
+            [("acceptance_tests/test_ac8_plan.py", source)])
+        self.assertEqual(len(errors), 1, errors)
+        self.assertTrue(errors[0].startswith(
+            "acceptance_tests/test_ac8_plan.py:8: чтение артефакта задачи "
+            "PLAN.md с диска"), errors[0])
+
+    def test_bare_tasks_literal_anchors_only_at_the_path_root(self):
+        """Голый литерал `tasks` — якорь в корне пути (`os.path.join("tasks",
+        …)`, `Path("tasks") / …`), но не правым операндом `/` посреди цепочки
+        от временного каталога (`FIXTURE_DIR / "tasks" / TASK / "PLAN.md"`).
+
+        Ловит мутацию: `_literal_is_anchored` перестал различать корневую
+        позицию — либо `os.path.join("tasks", …)` пропущен, либо путь от
+        временного каталога с сегментом `tasks` отклонён."""
+        self.assertEqual(len(errors_for(
+            'path = os.path.join("tasks", TASK, "PLAN.md")')), 1)
+        self.assertEqual(len(errors_for(
+            'plan = Path("tasks") / TASK / "PLAN.md"')), 1)
+        self.assertEqual(errors_for(
+            'plan = FIXTURE_DIR / "tasks" / TASK / "PLAN.md"'), [])
+
+    def test_recipe_names_the_artifact_not_the_literal_fragment(self):
+        """R1-F2 REVIEW.md итерации 1: для части f-строки `f"{TASK}-PLAN.md"`
+        рецепт называет `tasks/<id>/PLAN.md`, а не несуществующий
+        `tasks/<id>/-PLAN.md`; имя файла из литерала подставляется только
+        когда basename начинается с имени артефакта (`ANSWER-1.md`).
+
+        Ловит мутацию: условие подстановки basename вернулось к `name in
+        basename` — фрагмент `-PLAN.md` ушёл бы в рецепт как есть."""
+        errors = errors_for('plan = TASK_DIR / f"{TASK}-PLAN.md"')
+        self.assertIn('"tasks/<id>/PLAN.md")', errors[0])
+        self.assertNotIn("-PLAN.md", errors[0])
+        errors = errors_for('answer = TASK_DIR / "ANSWER-1.md"')
+        self.assertIn('"tasks/<id>/ANSWER-1.md")', errors[0])
+        errors = errors_for('answer = Path("tasks/01FIXTURETASK/ANSWER-3.md")')
+        self.assertIn('"tasks/<id>/ANSWER-3.md")', errors[0])
 
 
 class AllowedSourcesTest(unittest.TestCase):

@@ -63,6 +63,25 @@ class PlankTest(unittest.TestCase):
 '''
 DISK_READ_LINENO = 9
 
+# Планка со вложенной песочницей (ANSWER-1, вариант B): пишет и читает
+# поддельный SPEC.md фиктивной задачи во временном каталоге — путь не
+# якорится на рабочую копию, правило её не касается.
+TEMP_DIR_FIXTURE_PLANK = '''"""Зелёный с рождения: фикстура планки-сценария этого файла, не планка
+реальной задачи — пишет поддельный SPEC.md фиктивной задачи во временный
+каталог, как вложенная песочница FSM-задач."""
+import tempfile
+import unittest
+from pathlib import Path
+
+
+class PlankTest(unittest.TestCase):
+    def test_ac1_first_criterion(self):
+        tdir = Path(tempfile.mkdtemp()) / "tasks" / "01FIXTURETASK"
+        tdir.mkdir(parents=True)
+        (tdir / "SPEC.md").write_text("# SPEC", encoding="utf-8")
+        self.assertTrue((tdir / "SPEC.md").read_text(encoding="utf-8"))
+'''
+
 
 class _ArtifactSourceSandbox(LightTransitionSandbox):
 
@@ -164,6 +183,26 @@ class ArtifactSourceGateTest(_ArtifactSourceSandbox):
             self.capture(fsm.cmd_advance, self.TASK)
 
         collect_.assert_called_once()
+        self.assertEqual(self.state(), "in_dev")
+        self.assertEqual(self.refusal_rows(), [])
+
+    def test_temp_dir_fixture_plank_passes_to_in_dev(self):
+        """Планка со вложенной песочницей пишет `SPEC.md` фиктивной
+        задачи во временный каталог и читает его оттуда — гейт молчит,
+        переход доходит до `in_dev` без записи отказа (ANSWER-1, вариант
+        B: путь от временного каталога не якорится на рабочую копию).
+
+        Ловит мутацию: якорный предикат guard снят или гейт зовёт не
+        `scan_artifact_disk_reads`, а текстовый поиск имени артефакта
+        рядом с признаком доступа — штатный приём планок FSM-задач получал
+        бы отказ, состояние осталось бы `tests_writing`."""
+        self.enter_tests_writing()
+        self.write_plank(TEMP_DIR_FIXTURE_PLANK)
+
+        with mock.patch.object(acceptance, "collect",
+                               return_value=(True, "1 test collected")):
+            self.capture(fsm.cmd_advance, self.TASK)
+
         self.assertEqual(self.state(), "in_dev")
         self.assertEqual(self.refusal_rows(), [])
 
