@@ -126,15 +126,24 @@ def _role_home_diff(reference: Path, deployed: Path) -> set[str]:
 
 
 def check_role_home_reference() -> doctor.Check:
-    """Сверка развёрнутого курируемого слоя роли (`config.ROLE_CONFIG_DIR`)
-    с референсом (`docs/reference/role-home/claude`) — WARN с перечнем
-    отличающихся файлов, без автоправки (SPEC 01M1RDCEF0JZ4AVQRE43JFH8TN,
-    требование 5, AC-13): деплой (`catalog._deploy_role_home_reference`)
-    копирует референс только при холодном старте, поэтому расхождение,
-    внесённое Оператором вручную позже, никак иначе не всплывает.
+    """Сверка развёрнутого курируемого слоя роли с референсом — WARN с
+    перечнем отличающихся файлов, без автоправки (SPEC
+    01M1RDCEF0JZ4AVQRE43JFH8TN, требование 5, AC-13): деплой
+    (`catalog._deploy_role_home_reference`) копирует референс только при
+    холодном старте, поэтому расхождение, внесённое Оператором вручную
+    позже, никак иначе не всплывает.
+
+    И каталог референса, и имя развёрнутого каталога называет провайдер
+    исполнителя роли (`home_reference()`, SPEC
+    01M2ZNTHSNFYSTF904P6SZTPYF, требование 7): сверка и развёртывание
+    обязаны смотреть на одну и ту же пару путей, иначе на втором
+    провайдере они разъедутся молча. Провайдер по умолчанию — проверка
+    зеро-арг и говорит про развёрнутый слой пульта целиком, не про
+    отдельную роль.
     """
-    reference = doctor.config.ROOT / "docs" / "reference" / "role-home" / "claude"
-    deployed = doctor.config.ROLE_CONFIG_DIR
+    home = doctor.providers.default().home_reference()
+    reference = home.reference
+    deployed = doctor.config.ROLE_HOME / home.deployed_name
     if not deployed.is_dir():
         return doctor.Check("role-home-reference", "ok",
                      "курируемый слой ещё не развёрнут")
@@ -144,7 +153,7 @@ def check_role_home_reference() -> doctor.Check:
     diffs = doctor._role_home_diff(reference, deployed)
     if diffs:
         return doctor.Check("role-home-reference", "warn",
-                     f"развёрнутый слой .artel/home/.claude отличается от "
+                     f"развёрнутый слой {deployed} отличается от "
                      f"референса: {', '.join(sorted(diffs))}")
     return doctor.Check("role-home-reference", "ok",
                  "развёрнутый слой совпадает с референсом")
@@ -197,6 +206,69 @@ def check_target_wrapper(target: str) -> doctor.Check:
                  f"агентская обвязка target'а {target} не обнаружена")
 
 
+def agent_roles() -> list:
+    """Agent-роли, за которые `doctor` отвечает: те же, по которым он
+    искал токены до задачи (`config.STATE_ROLE`), отсортированные."""
+    return sorted(set(doctor.config.STATE_ROLE.values()))
+
+
+def check_role_providers() -> doctor.Check:
+    """Строка «провайдеры ролей: <роль → провайдер>» (SPEC
+    01M2ZNTHSNFYSTF904P6SZTPYF, требование 6) — и красная, если имя
+    провайдера какой-нибудь роли не зарегистрировано в реестре
+    (требование 4): иначе пульт узнавал бы о незнакомом имени только в
+    момент отказа шага.
+
+    Имя печатается из карты исполнителей как есть, без резолва в
+    объект: для незарегистрированного имени именно оно и есть предмет
+    починки. Нечитаемая карта — WARN, не исключение: `doctor` —
+    диагностика, ронять её целиком нечитаемым `roles.yaml` значило бы
+    спрятать остальные строки (тот же приём, что `stack._model_checks`).
+    """
+    try:
+        pairs = doctor.providers.role_providers(agent_roles())
+    except doctor.roles.RolesError as exc:
+        return doctor.Check("role-providers", "warn",
+                     f"провайдеры ролей: карта исполнителей не прочитана: {exc}")
+    listed = ", ".join(f"{role} → {name}" for role, name in pairs)
+    unknown = [(role, name) for role, name in pairs
+               if name not in doctor.providers.PROVIDERS]
+    if unknown:
+        named = "; ".join(f"провайдер {name} роли {role} не зарегистрирован"
+                          for role, name in unknown)
+        return doctor.Check(
+            "role-providers", "fail",
+            f"провайдеры ролей: {listed}; {named} "
+            f"(известны: {', '.join(sorted(doctor.providers.PROVIDERS))})")
+    return doctor.Check("role-providers", "ok", f"провайдеры ролей: {listed}")
+
+
+def provider_preflight_checks() -> dict:
+    """{имя проверки: [проверки]} — `preflight()` провайдера КАЖДОЙ
+    agent-роли, склеенный без дублей (SPEC 01M2ZNTHSNFYSTF904P6SZTPYF,
+    требование 6, AC-9).
+
+    Проверки, не зависящие от роли (CLI найден, версия CLI, дом роли),
+    у одного провайдера выходят одинаковыми — одинаковые отбрасываются,
+    и в выводе `doctor` каждая остаётся одна, как до задачи. Проверка
+    секрета у каждой роли своя и остаётся по одной на роль. Роль с
+    незарегистрированным провайдером пропускается молча: про неё
+    говорит красная строка `check_role_providers` выше, дублировать её
+    здесь нечем — провайдера, который выполнил бы проверки, нет.
+    """
+    grouped = {}
+    for role in agent_roles():
+        try:
+            provider = doctor.providers.for_role(role)
+        except doctor.providers.UnknownProviderError:
+            continue
+        for check in provider.preflight(role):
+            bucket = grouped.setdefault(check.name, [])
+            if check not in bucket:
+                bucket.append(check)
+    return grouped
+
+
 def preflight_checks(role: str, target: str) -> list[doctor.Check]:
     """Быстрые проверки перед стартом шага (SPEC требование 2).
 
@@ -212,15 +284,31 @@ def preflight_checks(role: str, target: str) -> list[doctor.Check]:
     лишний, если исход уже решён (и небезопасный вместе с тестами,
     которые для провала preflight ожидают вообще ни одного
     subprocess-вызова — `tests/test_doctor.py::PreflightBlocksMissingTokenTest`).
+
+    Проверки исполнителя (CLI, секрет, версия) спрашиваются у провайдера
+    роли поимённо, а не списком `preflight()` (SPEC
+    01M2ZNTHSNFYSTF904P6SZTPYF, требование 6): порядок здесь свой —
+    провайдерские проверки перемежаются общими (диск, layout target'а),
+    и блокирующие стоят до дорогих. Сверка дома роли в набор шага не
+    входит и здесь: она часть `doctor`, а не предполёта каждого запуска
+    (иначе шаг платил бы обходом дерева референса на каждом старте).
     """
-    checks = [doctor.check_cli_found()]
-    checks.append(doctor.check_token(role))
+    try:
+        provider = doctor.providers.for_role(role)
+    except doctor.providers.UnknownProviderError as exc:
+        # Сюда предполёт доходит только в обход `runner._refuse_before_
+        # start` (тот отказывает раньше, требование 4) — но молчать об
+        # этом здесь всё равно нельзя: блокирующий провал с тем же
+        # именованным текстом.
+        return [doctor.Check("role-providers", "fail", str(exc))]
+    checks = [provider.check_cli_found()]
+    checks.append(provider.check_token(role))
     checks.append(doctor.check_disk_space())
     checks.append(doctor.check_target_layout(target))
     if any(c.status == "fail" for c in checks):
         return checks
     checks.append(doctor.check_git_identity())
-    checks.append(doctor.check_cli_version())
+    checks.append(provider.check_cli_version())
     return checks
 
 

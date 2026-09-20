@@ -50,7 +50,11 @@ def isolation_smoke(role: str = "developer") -> doctor.Check:
     флаг `--strict-mcp-config` в реальном argv шага (`runner.role_cmd()`,
     единый источник для запуска и для этой проверки — SPEC T069, «тот же
     приём, что уже применён к --setting-sources», здесь буквально: сама
-    сборка cmd, а не только константа). Живая дискриминирующая проверка
+    сборка cmd, а не только константа). И argv, и окружение приходят от
+    провайдера исполнителя роли (SPEC 01M2ZNTHSNFYSTF904P6SZTPYF,
+    требование 6): `role_cmd()`/`role_env()` — общие точки runner, за
+    которыми стоит `providers.for_role(...)`, поэтому смок сверяет
+    изоляцию того CLI, который реально запустит шаг, а не литерала. Живая дискриминирующая проверка
     того же класса, что и у project-/local-хуков выше, здесь не
     построена: экспериментально подтверждено (см. докстринг
     `tasks/T069/acceptance_tests/test_ac1_strict_mcp_command.py`), что
@@ -68,11 +72,15 @@ def isolation_smoke(role: str = "developer") -> doctor.Check:
         os.environ["HOME"] = fake_home
         try:
             env = doctor.runner.role_env(role)
-        except OSError as exc:
+        except (OSError, doctor.providers.UnknownProviderError) as exc:
             # Тот же класс отказа, что уже ловят `check_git_identity`/
             # `_live_smoke_run` (SPEC 01M1RDCEF0JZ4AVQRE43JFH8TN, AC-6):
             # объявленный инструмент манифеста не найден — не повод
-            # уронить весь `doctor` необработанным исключением.
+            # уронить весь `doctor` необработанным исключением. То же
+            # самое для незарегистрированного провайдера роли (SPEC
+            # 01M2ZNTHSNFYSTF904P6SZTPYF, требование 4): про него
+            # говорит именованная красная строка `check_role_providers`,
+            # а `doctor` обязан дойти до остальных проверок.
             return doctor.Check("isolation-smoke", "fail",
                         f"окружение роли не подготовлено: {exc}")
         finally:

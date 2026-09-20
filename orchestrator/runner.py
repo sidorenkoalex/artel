@@ -15,8 +15,8 @@ from pathlib import Path
 
 from . import (agent_log, alerts, brief, budget, checkpoint, config,
               failure_classification, fixation, gitcmd, keychain, lease,
-              liveness, parallel_limit, pause, review, role_prompt, roles,
-              spend, stack, store, workspace, zone_lock)
+              liveness, parallel_limit, pause, providers, review, role_prompt,
+              roles, spend, stack, store, workspace, zone_lock)
 
 # Идентичность коммитера, которую роль обязана унести с собой в свой HOME.
 # git читает эти переменные ПОВЕРХ конфига, поэтому перенос ровно двух пар
@@ -306,6 +306,20 @@ def _refuse_before_start(conn, task_id: str, t, role: str):
 
     target = t["target"] or config.DEFAULT_TARGET
 
+    # Провайдер исполнителя роли (SPEC 01M2ZNTHSNFYSTF904P6SZTPYF,
+    # требование 4): имя из `roles.yaml`, которого нет в реестре, —
+    # именованный отказ ДО старта агента и до предполёта, а не тихий
+    # откат на провайдера по умолчанию. Стоит раньше предполёта
+    # намеренно: сборку argv и окружения шага делает именно провайдер,
+    # и без него дальше идти не с чем. `sys.exit` — тем же приёмом, что
+    # пауза/стоп-кран выше: `auto` ловит `SystemExit` и останавливает
+    # цикл, а не крутит шаги до `AUTO_MAX_STEPS`.
+    try:
+        provider = providers.for_role(role)
+    except providers.UnknownProviderError as exc:
+        store.journal(conn, task_id, role, PROVIDER_REFUSAL_ACTION, str(exc))
+        return "exit", f"[{task_id}] run отклонён: {exc}"
+
     # Рабочая поверхность агентного шага (SPEC T045, требование 3, AC-8,
     # сценарий 1): worktree задачи уже есть, но стоит не на её ветке —
     # кто-то переключил его руками. Отказ до старта агента вместо попытки
@@ -412,9 +426,11 @@ def _refuse_before_start(conn, task_id: str, t, role: str):
         # приёмом, что пауза/стоп-кран выше: `auto` ловит `SystemExit`,
         # печатает текст (с подсказкой из самого отказа) и останавливает
         # цикл, не прокручивая шаги до `AUTO_MAX_STEPS`.
-        installed = (stack.installed_cli_version()
-                     if model_id in stack.MODEL_MIN_CLI_VERSION else None)
-        verdict = stack.model_cli_verdict(model_id, installed)
+        # Вердикт — у провайдера (SPEC 01M2ZNTHSNFYSTF904P6SZTPYF,
+        # требование 5, AC-7): решение «спрашивать ли версию CLI ради
+        # этой модели» принимает тот, кто эту модель запускает, а не
+        # runner литералом рядом с таблицей.
+        verdict = provider.model_verdict(model_id)
         if verdict.status == "fail":
             return "exit", _model_refusal_exit(conn, task_id, role,
                                                verdict.detail)
@@ -434,6 +450,10 @@ def _refuse_before_start(conn, task_id: str, t, role: str):
 # предполётного отказа и отказа после попытки — тот же приём именованного
 # отказа, что `pause.REFUSAL_ACTION`/`WAVE_BREAKER_REFUSAL_ACTION`.
 MODEL_UNSUPPORTED_REFUSAL_ACTION = "run отклонён: модель не поддерживается CLI"
+
+# То же самое для отказа по незарегистрированному провайдеру роли (SPEC
+# 01M2ZNTHSNFYSTF904P6SZTPYF, требование 4).
+PROVIDER_REFUSAL_ACTION = "run отклонён: провайдер роли не зарегистрирован"
 
 
 def _model_refusal_exit(conn, task_id: str, role: str, detail: str) -> str:
@@ -455,7 +475,9 @@ def _model_unsupported_after_attempt(conn, task_id: str, role: str,
     текста попытки («version X or newer is required»), установленная —
     тем же `claude --version`, что и предполёт."""
     required = failure_classification.required_cli_version(reason)
-    installed = stack.installed_cli_version()
+    # Версия — у провайдера роли (SPEC 01M2ZNTHSNFYSTF904P6SZTPYF,
+    # требование 5): тот же источник, что у предполётного вердикта выше.
+    installed = providers.for_role(role).installed_cli_version()
     detail = (f"{stack.MODEL_UNSUPPORTED_PREFIX}: "
               f"{_model_journal_label(model_id)} — CLI отверг модель в "
               f"попытке агента («{failure_classification.MODEL_UNSUPPORTED_SIGNATURE}»)")
@@ -648,6 +670,22 @@ def _resolve_declared_tools() -> dict[str, str]:
     return resolved
 
 
+def declared_tool_path(name: str) -> str:
+    """Абсолютный путь ОДНОГО объявленного инструмента манифеста — тот
+    же резолв, из которого собирается PATH роли (`_resolve_declared_
+    tools`), отданный наружу одним значением.
+
+    Провайдер исполнителя роли берёт отсюда argv[0] команды шага (SPEC
+    01M2ZNTHSNFYSTF904P6SZTPYF, требование 5): резолв инструментов —
+    общая часть runner, а не знание конкретного провайдера, но литерал
+    `claude` в argv[0] искался бы по PATH роли в момент запуска
+    (инцидент 06.09, см. `providers/claude.py::command`). Отсутствие
+    ЛЮБОГО объявленного инструмента по-прежнему `OSError`, называющий
+    его по имени.
+    """
+    return _resolve_declared_tools()[name]
+
+
 def _role_path_dirs(resolved: dict[str, str]) -> list[str]:
     """PATH роли — каталоги объявленных инструментов, в порядке манифеста
     (SPEC, AC-1, AC-3): для `python3` — каталог `sys.executable` пульта, а
@@ -734,8 +772,13 @@ def role_env(role: str | None = None, task_id: str | None = None) -> dict:
     Оператором должна остаться сильнее — так роль видит ровно ту
     идентичность, которую увидел бы git в его HOME.
 
-    Каталог создаётся здесь же: CLI, не нашедший CLAUDE_CONFIG_DIR,
-    создал бы его сам — и это был бы каталог, о котором пульт не знает.
+    Провайдерская часть окружения (дом роли, каталог конфига CLI, токен
+    подписки — и создание каталога конфига) приходит от провайдера
+    исполнителя роли (SPEC 01M2ZNTHSNFYSTF904P6SZTPYF, требование 5):
+    `providers.for_role(role).environment(role, task_id)` поверх белого
+    списка манифеста. Общими у runner остаются сам белый список, PATH,
+    метки роли/задачи и git-идентичность — они не зависят от того, каким
+    CLI исполняется шаг.
 
     Интерпретатор роли — `.artel/venv` (SPEC 01M1REVEZ1HESMJ7AFD5A9MEJ8,
     требование 4), если он согласован с файлом закреплённых версий
@@ -747,10 +790,8 @@ def role_env(role: str | None = None, task_id: str | None = None) -> dict:
     """
     resolved = _resolve_declared_tools()
     venv_bin = _venv_interpreter_bin()
-    config.ROLE_CONFIG_DIR.mkdir(parents=True, exist_ok=True)
     env = _allowlisted_env(os.environ)
-    env["HOME"] = str(config.ROLE_HOME)
-    env["CLAUDE_CONFIG_DIR"] = str(config.ROLE_CONFIG_DIR)
+    env.update(providers.for_role(role).environment(role, task_id))
     env["PATH"] = os.pathsep.join([venv_bin] + _role_path_dirs(resolved))
     if role:
         env[config.ARTEL_ROLE_ENV] = role
@@ -758,17 +799,6 @@ def role_env(role: str | None = None, task_id: str | None = None) -> dict:
         env[config.ARTEL_TASK_ENV] = task_id
     for name, value in git_identity().items():
         env.setdefault(name, value)
-    # Аутентификация CLI живёт в user-слое Оператора (~/.claude.json +
-    # keychain-запись аккаунта) и вместе с ним из-под роли уходит — чистый
-    # HOME отвечает «Not logged in» (фактура T020, вопрос 18 ADR-0003 п.14).
-    # Токен подписки (`claude setup-token`) кладётся Оператором в слот
-    # keychain и приходит роли переменной окружения. setdefault — заданный
-    # Оператором CLAUDE_CODE_OAUTH_TOKEN/ANTHROPIC_API_KEY сильнее слота.
-    if not env.get("CLAUDE_CODE_OAUTH_TOKEN") and not env.get(
-            "ANTHROPIC_API_KEY"):
-        token = role_token(role)
-        if token:
-            env["CLAUDE_CODE_OAUTH_TOKEN"] = token
     return env
 
 
@@ -855,45 +885,23 @@ def role_cwd(conn, task_id: str, target: str) -> Path:
 
 
 def role_cmd() -> list[str]:
-    """Argv шага роли: сборка без побочных эффектов, один источник истины
-    для реального запуска (`run_agent_once`) и для офлайн-сверки
-    `doctor.isolation_smoke` (SPEC T069, требование 2) — вместо двух
-    списков флагов, синхронизируемых руками.
+    """Argv шага роли провайдером по умолчанию, без модели — зеро-арг
+    точка для офлайн-сверки `doctor.isolation_smoke` (SPEC T069,
+    требование 2) и для вызывающего кода, у которого роли под рукой нет.
 
-    `--strict-mcp-config` без курируемого `--mcp-config` (пульт его пока
-    не заводит, SPEC T069 требование 1) резолвит шагу ноль MCP-серверов
-    независимо от `.mcp.json` рабочего каталога — конфиг-инъекция через
-    MCP тем же вектором, что уже закрыт `--setting-sources` для
-    project-/local-хуков (SPEC T058, инцидент T046).
+    Сами флаги живут у провайдера (`providers/claude.py::command`, SPEC
+    01M2ZNTHSNFYSTF904P6SZTPYF, требование 5) — здесь не остаётся ни
+    одного литерала команды, иначе их было бы два списка,
+    синхронизируемых руками.
+
+    Функция заперта на нулевой список параметров (AC-5 этой задачи,
+    AC-4 задачи 01M2DTT96FS25SHXP0HDTWARQH), поэтому провайдера
+    АКТИВНОГО ШАГА она не резолвит: это делает `_spawn_and_wait`, у
+    которого роль шага уже есть в контексте вызова, — не глобальная
+    переменная окружения и не параметр, протаскиваемый через всех
+    вызывающих.
     """
-    # argv[0] — абсолютный путь из резолва манифеста (SPEC
-    # 01M2XJKV84SQ9VEVR0VNVKDNGJ, требование 1, AC-1/AC-3): тот же
-    # `_resolve_declared_tools`, из которого `role_env` собирает PATH роли.
-    # Литерал `claude` искался бы по PATH роли в момент запуска, где
-    # каталог другого объявленного инструмента стоит раньше и может нести
-    # одноимённый бинарник (инцидент 06.09: подставной `claude` планки
-    # затенён настоящим из каталога `gh`). Резолв здесь, а не параметром:
-    # `role_cmd()` заперта на нулевой список параметров (AC-4). Обе точки
-    # вызова стоят после успешного `role_env()` — `OSError` резолва там уже
-    # отработал бы раньше.
-    claude = _resolve_declared_tools()["claude"]
-    return [
-        # `claude -p` без аргумента читает промпт со стандартного входа.
-        claude, "-p", "--permission-mode", "acceptEdits",
-        # stream-json — единственный режим, где строки приходят по ходу
-        # шага: text и json отдают всё одним куском в конце (замер в
-        # PLAN.md T017). --verbose при нём обязателен, иначе CLI выходит
-        # с rc=1.
-        "--output-format", "stream-json", "--verbose",
-        # белый список вместо полного Bash: только git и запуск тестов/guard
-        "--allowedTools", "Bash(git:*),Bash(python3:*)",
-        # изоляция от project-/local-слоя клиентских настроек репозитория
-        # (хуки, MCP) — SPEC T058, инцидент T046
-        "--setting-sources", config.AGENT_SETTING_SOURCES,
-        # изоляция MCP-вектора: ambient `.mcp.json` рабочего каталога не
-        # резолвится — SPEC T069
-        "--strict-mcp-config",
-    ]
+    return providers.for_role(None).command()
 
 
 def _missing_required_artifact(role: str, cwd: Path, task_id: str) -> str | None:
@@ -1126,15 +1134,15 @@ def _spawn_and_wait(conn, task_id: str, role: str, log_path: Path,
     # Файл открыт только на время запуска: у процесса свой дескриптор,
     # а держать его открытым в оркестраторе незачем.
     with prompt_file:
-        # Модель роли — довеском к argv `role_cmd()`, а не внутри неё:
-        # `role_cmd()` заперта на нулевой список параметров (AC-7 `tasks/
-        # 01M2CN3ZCSZ54TFJGTDCXTDHXD`, 101 патч по имени модуля), а флаг
-        # `--model` — per-role, известен только здесь (SPEC
-        # 01M2DTT96FS25SHXP0HDTWARQH, требование 3). Довесок в конец
-        # списка не переставляет существующие флаги.
-        cmd = role_cmd()
-        if model_id is not None:
-            cmd = cmd + ["--model", model_id]
+        # Команду шага собирает провайдер РОЛИ этого шага (SPEC
+        # 01M2ZNTHSNFYSTF904P6SZTPYF, требование 5): роль здесь уже
+        # известна из контекста вызова, а зеро-арг `role_cmd()` знает
+        # только провайдера по умолчанию. Модель — параметром метода, а
+        # не довеском на стороне runner: флаг `--model` per-role (SPEC
+        # 01M2DTT96FS25SHXP0HDTWARQH, требование 3), и его место в
+        # списке знает тот же, кто знает остальные флаги. Сам список от
+        # этого не меняется: модель по-прежнему в конце argv.
+        cmd = providers.for_role(role).command(model_id)
         try:
             proc = spawn_agent(
                 # Промпт — файлом на стандартном входе, им и отдаётся

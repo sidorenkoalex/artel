@@ -8,7 +8,8 @@ from pathlib import Path
 from scripts import guard
 
 from . import (alerts, artifact_branch, artifacts, budget, config, gitcmd,
-              idgen, liveness, merge_queue, runner, store, zone_lock)
+              idgen, liveness, merge_queue, providers, runner, store,
+              zone_lock)
 
 # ГОСТ-подобная транслитерация: только stdlib, без внешних зависимостей.
 # ъ/ь пропускаются; ё → yo; щ → sch; ю → yu; я → ya.
@@ -61,24 +62,28 @@ def _deploy_role_home_reference() -> None:
     """Разворачивает курируемый слой ролей из референса пульта, если
     `.artel/home` ещё не существует (SPEC T049, требования 8-9, AC-5).
 
-    Каталог референса `docs/reference/role-home/claude/` копируется как
-    `.artel/home/.claude/` — имя без ведущей точки в самом репозитории
-    (docs/reference/role-home.md), переименование — только здесь, при
-    развёртывании.
+    Какой каталог референса разворачивать и под каким именем, называет
+    сам провайдер исполнителя роли (`home_reference()`, SPEC
+    01M2ZNTHSNFYSTF904P6SZTPYF, требование 7): для `claude` —
+    `docs/reference/role-home/claude/` в `.artel/home/.claude/`, то же
+    самое, что этот код нёс литералом до задачи. Имя без ведущей точки
+    в самом репозитории (docs/reference/role-home.md), переименование —
+    только здесь, при развёртывании.
+
+    Референса нет на диске вовсе (ни у одного провайдера) — каталог
+    дома роли не создаётся: прежнее поведение на дереве без
+    `docs/reference/`.
     """
     if config.ROLE_HOME.exists():
         return
-    reference = config.ROOT / "docs" / "reference" / "role-home"
-    if not reference.is_dir():
+    references = [ref for ref in providers.home_references()
+                  if ref.reference.is_dir()]
+    if not references:
         return
     config.ROLE_HOME.mkdir(parents=True)
-    for entry in reference.iterdir():
-        dest_name = ".claude" if entry.name == "claude" else entry.name
-        dest = config.ROLE_HOME / dest_name
-        if entry.is_dir():
-            shutil.copytree(entry, dest)
-        else:
-            shutil.copy2(entry, dest)
+    for reference in references:
+        shutil.copytree(reference.reference,
+                        config.ROLE_HOME / reference.deployed_name)
 
 
 def _tz_document(task_id: str, title: str, raw: str) -> str:

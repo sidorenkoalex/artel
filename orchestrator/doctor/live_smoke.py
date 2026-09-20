@@ -37,6 +37,21 @@ def live_smoke(conn, role: str = "developer") -> doctor.Check:
 
 
 def _live_smoke_run(role: str) -> doctor.Check:
+    """Argv и окружение — у провайдера роли (SPEC
+    01M2ZNTHSNFYSTF904P6SZTPYF, требование 6): смок обязан проверять
+    живость ТОГО САМОГО CLI и того окружения, которыми реально пойдёт
+    шаг, а не собственной копии списка флагов. Окружение роли уже несёт
+    провайдерскую часть (`runner.role_env`), argv даёт
+    `live_smoke_command` того же провайдера.
+
+    Сборка argv стоит ПОСЛЕ `role_env`: обе тянут резолв инструментов
+    манифеста, и `OSError` отсутствующего инструмента отрабатывает
+    здесь один раз, первой же строкой.
+    """
+    try:
+        provider = doctor.providers.for_role(role)
+    except doctor.providers.UnknownProviderError as exc:
+        return doctor.Check("live-smoke", "fail", str(exc))
     try:
         env = doctor.runner.role_env(role)
     except OSError as exc:
@@ -44,8 +59,7 @@ def _live_smoke_run(role: str) -> doctor.Check:
                      f"окружение роли не подготовлено: {exc}")
     try:
         proc = doctor.subprocess.Popen(
-            ["claude", "-p", doctor.LIVE_SMOKE_PROMPT,
-             "--output-format", "stream-json", "--verbose"],
+            provider.live_smoke_command(doctor.LIVE_SMOKE_PROMPT),
             cwd=doctor.config.ROOT, env=env, text=True,
             stdout=doctor.subprocess.PIPE, stderr=doctor.subprocess.STDOUT)
     except FileNotFoundError:

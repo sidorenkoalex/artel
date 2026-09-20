@@ -2207,10 +2207,16 @@ class LiveSmokeTest(TmpRootTest):
         self.assertIn("стоимост", check.detail)
 
     def test_cli_not_found_fails(self):
+        # Опознание процесса живого смоука — по БАЗОВОМУ имени argv[0]
+        # (`is_claude_call`), не сравнением с литералом: argv смоука
+        # приходит от провайдера исполнителя роли и несёт абсолютный
+        # путь резолва манифеста (SPEC 01M2ZNTHSNFYSTF904P6SZTPYF, AC-5/
+        # AC-10). Правка фикстуры, не проверки: сам ассерт про «claude
+        # CLI не найден» ниже прежний.
         real_popen = subprocess.Popen
 
         def popen(cmd, *args, **kwargs):
-            if cmd and cmd[0] == "claude":
+            if is_claude_call(cmd):
                 raise FileNotFoundError()
             return real_popen(cmd, *args, **kwargs)
 
