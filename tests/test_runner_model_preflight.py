@@ -123,9 +123,20 @@ class _StepSandbox(DeveloperBriefTmpRootTest):
         patcher.start()
         self.addCleanup(patcher.stop)
 
+    # Имя файла каталога под тестом — РОВНО `models.yaml`, отличается
+    # только каталог: наследники этой песочницы (планка приёмки
+    # 01M3009Y9AGGY6ZCFA7H1HJ1TD) уводят пути слоёв в свой временный
+    # корень, отыскивая их обходом `vars(config)` по имени файла. Имя
+    # вида `models-under-test.yaml` такому обходу невидимо, и наследник
+    # молча оставался бы на каталоге ЭТОГО файла — сценарий проверял бы
+    # не то, что написано в нём (модель `experimental` стартовала бы как
+    # `supported`).
+    CATALOG_DIR = "catalog-under-test"
+
     def set_catalog(self, model: str, minimum: str) -> None:
         """Каталог моделей под тестом — временный файл вместо боевого."""
-        path = self.root / "models-under-test.yaml"
+        path = self.root / self.CATALOG_DIR / "models.yaml"
+        path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(_catalog_text(model, minimum), encoding="utf-8")
         self.patch(config, "MODELS", path)
 
@@ -380,6 +391,42 @@ class TierWithoutModelTest(_StepSandbox):
         self.spawn.assert_not_called()
         self.assertIn(runner.MODEL_UNRESOLVED_REFUSAL_ACTION, self.actions())
         self.assertIn(TIER, self.exit_message)
+
+
+class BrokenLocalLayerTest(_StepSandbox):
+    """Требование 8 (AC-11, AC-12): локальный слой есть, но не
+    разбирается — отказ до старта агента, а не деградация к `None`."""
+
+    def setUp(self):
+        super().setUp()
+        self.set_model(TABLE_MODEL)
+        # Переопределение без цен: слой читается, схема — нет. Именно
+        # этот класс ошибки `_resolved_role_model` гасит до `None`
+        # (штатно — потому что отказ уже случился раньше), и проверяется
+        # здесь, что раньше он ДЕЙСТВИТЕЛЬНО случается.
+        config.MODELS_LOCAL.write_text(
+            f"tiers:\n  {TIER}: {TABLE_MODEL}\n"
+            f"overrides:\n  {TABLE_MODEL}:\n    source: без цен\n",
+            encoding="utf-8")
+
+    def test_unparsed_local_layer_refuses_before_the_agent(self):
+        """Ловит мутацию: ошибка СХЕМЫ локального слоя ловится только
+        деградацией к `None` в `_resolved_role_model`, а предполёт её не
+        видит — шаг уходил бы в CLI без `--model` (дефолт CLI) при
+        сломанном слое, то есть fail-closed цепочки держался бы лишь на
+        тех ошибках, что отдаёт `resolve_role`."""
+        self.run_step()
+
+        self.spawn.assert_not_called()
+        self.assertIn(runner.MODEL_UNRESOLVED_REFUSAL_ACTION, self.actions())
+        self.assertIn(str(config.MODELS_LOCAL), self.exit_message)
+        self.assertEqual(self.state(), "in_dev")
+
+    def test_resolved_role_model_degrades_to_none_without_raising(self):
+        """Ловит мутацию: деградация `_resolved_role_model` заменена на
+        проброс исключения — сборка argv/журнала попытки падала бы
+        трейсбеком вместо отказа, оформленного предполётом."""
+        self.assertIsNone(runner._resolved_role_model(self.ROLE))
 
 
 class ExplicitModelFlagTest(_StepSandbox):

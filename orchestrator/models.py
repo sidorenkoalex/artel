@@ -303,12 +303,41 @@ def catalog_model(model_id: str, catalog: Catalog = None) -> CatalogModel:
             f"(есть: {', '.join(sorted(catalog.models))})") from None
 
 
+def _override_tariff(raw, where: str) -> Tariff:
+    """Тариф переопределения — тремя равноправными формами записи.
+
+    Требование 6 называет «собственный тариф по тем же четырём видам
+    токенов», но КЛЮЧ, под которым он лежит, не фиксирует, и Оператор
+    пишет этот файл руками. Поэтому принимаются все три написания, какие
+    у него есть основания выбрать: четыре вида токенов прямо записью
+    модели (рядом с `calibrated_at`/`source`), они же под ключом
+    каталога `list_price_usd_per_mtok` (переопределение выглядит как
+    запись, которую оно замещает) и под ключом `tariff_usd_per_mtok`
+    (имя по смыслу: это тариф, а не прейскурант). Отвергать две формы из
+    трёх значило бы ловить опечаткой то, что опечаткой не является.
+    """
+    for key in (TARIFF_KEY, LIST_PRICE_KEY):
+        nested = raw.get(key)
+        if nested is not None:
+            return _prices(nested, f"{where}.{key}", LocalLayerError,
+                           LocalLayerError)
+    flat = {kind: raw.get(kind) for kind in PRICE_KINDS}
+    if any(value is not None for value in flat.values()):
+        # Хотя бы один вид токенов записью модели — форма выбрана
+        # плоская, и неполнота набора здесь уже ошибка, а не «другая
+        # форма»: `_prices` назовёт недостающие виды поимённо.
+        return _prices(flat, where, LocalLayerError, LocalLayerError)
+    raise LocalLayerError(
+        f"{where}: тарифа нет ни в одной из форм — задай четыре вида "
+        f"токенов ({', '.join(PRICE_KINDS)}) записью модели либо под "
+        f"ключом {LIST_PRICE_KEY}/{TARIFF_KEY}")
+
+
 def _override(model_id, raw) -> Override:
     where = f"{config.MODELS_LOCAL}: {OVERRIDES_KEY}.{model_id}"
     if not isinstance(raw, dict):
         raise LocalLayerError(f"{where}: запись — не отображение")
-    tariff = _prices(raw.get(TARIFF_KEY), where, LocalLayerError,
-                     LocalLayerError)
+    tariff = _override_tariff(raw, where)
     calibrated_at = raw.get(CALIBRATED_AT_KEY)
     source = raw.get(SOURCE_KEY)
     for key, value in ((CALIBRATED_AT_KEY, calibrated_at),
@@ -425,16 +454,20 @@ tiers:
 
 # overrides — собственный тариф поверх прейскуранта каталога (прокси,
 # скидка, свой счёт). Необязателен; без него действует прейскурант.
+# Обязательны все четыре вида токенов плюс calibrated_at и source: тариф
+# без даты калибровки и основания не отличим от опечатки.
 #
 # overrides:
 #   claude-opus-5:
-#     tariff_usd_per_mtok:
-#       input: 5.0
-#       output: 25.0
-#       cache_write: 6.25
-#       cache_read: 0.50
+#     input: 5.0
+#     output: 25.0
+#     cache_write: 6.25
+#     cache_read: 0.50
 #     calibrated_at: 2026-09-20
 #     source: сверено с фактом CLI 20.09, коэффициент 1.009
+#
+# Те же четыре цены можно сложить под ключ list_price_usd_per_mtok (как
+# в каталоге) или tariff_usd_per_mtok — разбор принимает все три формы.
 
 # allow_experimental — явное разрешение модели со статусом
 # `experimental` из каталога. Без записи такая модель не запускается.
@@ -538,8 +571,15 @@ def cmd_models() -> None:
             override = local.overrides.get(model_id)
             tariff = override.tariff if override else model.list_price
             tariff_text = _price_text(tariff)
-            tariff_source = (TARIFF_SOURCE_OVERRIDE if override
-                             else TARIFF_SOURCE_CATALOG)
+            # Источником названа не только СТОРОНА (каталог против
+            # локального слоя), но и основание с датой: тариф, который
+            # Оператор откалибровал по журналу, и тариф, переписанный с
+            # прейскуранта прокси, — разные основания доверия, а по
+            # одному слову «переопределение» их не различить.
+            tariff_source = (
+                f"{TARIFF_SOURCE_OVERRIDE}: {override.source} "
+                f"({override.calibrated_at})" if override
+                else f"{TARIFF_SOURCE_CATALOG} ({model.price_date})")
         # Ярус, на который не указывает ни одна роль, в столбец не
         # попадает: «cheap: » пустым хвостом только мешал бы читать
         # таблицу, а сам факт «ярус ведёт сюда, но ролей нет» виден по

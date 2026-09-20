@@ -281,6 +281,90 @@ allow_experimental:
         with self.assertRaises(models.LocalLayerMissingError):
             models.load_local()
 
+    def test_override_tariff_is_read_in_all_three_written_forms(self):
+        """Три написания собственного тарифа дают один и тот же разбор:
+        четыре вида токенов записью модели, они же под ключом каталога
+        `list_price_usd_per_mtok` и под `tariff_usd_per_mtok`.
+
+        Ловит мутацию: принимается только одно написание из трёх (сегодня
+        — `tariff_usd_per_mtok`) — локальный слой, написанный Оператором
+        в другой форме, не разбирается вовсе, и пульт не запускает ни
+        одного шага из-за имени ключа, которого требование 6 не
+        фиксирует.
+        """
+        prices = ("      input: 1.0\n      output: 2.0\n"
+                  "      cache_write: 3.0\n      cache_read: 4.0\n")
+        flat = prices.replace("      ", "    ")
+        forms = {
+            "плоская": flat,
+            models.LIST_PRICE_KEY: f"    {models.LIST_PRICE_KEY}:\n{prices}",
+            models.TARIFF_KEY: f"    {models.TARIFF_KEY}:\n{prices}",
+        }
+        for name, block in forms.items():
+            with self.subTest(form=name):
+                self.use_local(
+                    f"tiers:\n  strong: model-alfa\noverrides:\n"
+                    f"  model-alfa:\n{block}"
+                    f"    calibrated_at: 2026-09-20\n    source: свой счёт\n")
+
+                override = models.load_local().overrides["model-alfa"]
+
+                self.assertEqual(override.tariff,
+                                 models.Tariff(1.0, 2.0, 3.0, 4.0))
+                self.assertEqual(override.source, "свой счёт")
+
+    def test_override_without_any_price_form_is_refused_by_name(self):
+        """Запись переопределения без цен ни в одной из трёх форм — отказ,
+        называющий и виды токенов, и оба ключа.
+
+        Ловит мутацию: запись без цен разбирается в тариф из нулей (или
+        молча пропускается) — вместо отказа Оператор получает модель,
+        которая «стоит ноль», ровно то, что `ZeroPriceError` и запрещает
+        в каталоге.
+        """
+        self.use_local("""\
+tiers:
+  strong: model-alfa
+overrides:
+  model-alfa:
+    calibrated_at: 2026-09-20
+    source: свой счёт
+""")
+
+        with self.assertRaises(models.LocalLayerError) as ctx:
+            models.load_local()
+
+        text = str(ctx.exception)
+        self.assertIn(models.LIST_PRICE_KEY, text)
+        self.assertIn(models.TARIFF_KEY, text)
+        self.assertIn("cache_write", text)
+
+    def test_incomplete_flat_override_names_the_missing_kinds(self):
+        """Плоская форма с неполным набором видов токенов — отказ, а не
+        добор недостающих цен из прейскуранта каталога.
+
+        Ловит мутацию: недостающие виды молча берутся из прейскуранта —
+        получается тариф-химера (часть цен Оператора, часть каталога),
+        которого Оператор не задавал и по журналу не воспроизведёт.
+        """
+        self.use_local("""\
+tiers:
+  strong: model-alfa
+overrides:
+  model-alfa:
+    input: 1.0
+    output: 2.0
+    calibrated_at: 2026-09-20
+    source: свой счёт
+""")
+
+        with self.assertRaises(models.LocalLayerError) as ctx:
+            models.load_local()
+
+        text = str(ctx.exception)
+        self.assertIn("cache_write", text)
+        self.assertIn("cache_read", text)
+
     def test_override_without_calibration_fields_is_refused(self):
         """Ловит мутацию: собственный тариф принимается без
         `calibrated_at`/`source` — в учёте появилось бы число без даты и
@@ -451,6 +535,35 @@ class CmdModelsTest(_LayersTest):
         self.assertIn("3/15/3.75/0.3", out)
         self.assertIn(models.TARIFF_SOURCE_CATALOG, out)
         self.assertIn("strong: developer", out)
+
+    def test_source_column_names_the_basis_and_date_of_the_tariff(self):
+        """Столбец источника несёт не только сторону (каталог против
+        локального слоя), но и основание с датой калибровки.
+
+        Ловит мутацию: источником печатается одно слово
+        «переопределение» — Оператор видит, что тариф не из каталога, но
+        не видит, ОТКУДА он и когда сверялся, то есть не может решить,
+        доверять ли числу, по которому считается расход.
+        """
+        self.use_local("""\
+tiers:
+  strong: model-alfa
+overrides:
+  model-alfa:
+    input: 1.0
+    output: 2.0
+    cache_write: 3.0
+    cache_read: 4.0
+    calibrated_at: 2026-09-19
+    source: сверено по журналу шагов
+""")
+
+        out = self.run_cmd()
+
+        self.assertIn(models.TARIFF_SOURCE_OVERRIDE, out)
+        self.assertIn("сверено по журналу шагов", out)
+        self.assertIn("2026-09-19", out)
+        self.assertIn("1/2/3/4", out)
 
     def test_command_writes_nothing(self):
         """Ловит мутацию: команда чтения заводит файл (шаблон локального
