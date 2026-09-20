@@ -37,6 +37,7 @@ import math
 import re
 import sys
 from pathlib import Path
+from typing import NamedTuple
 
 # Файл живёт двумя жизнями — скрипт и модуль (`from scripts import guard`
 # в тестах и в FSM). У скрипта в sys.path лежит scripts/, а не корень
@@ -244,6 +245,118 @@ def section_body(text: str, name: str) -> str:
     match = re.search(rf"^##\s+{re.escape(name)}\s*$(.*?)(?=^##\s|\Z)",
                       text, re.M | re.S)
     return match.group(1) if match else ""
+
+
+# Приложение PLAN.md к защищённому пути (SPEC 01M2YSHDKWFJN3XSJ618Z74FNF,
+# требование 1): роль не вправе править `config.PROTECTED_PATHS` сама и
+# предлагает правку unified-диффом, который применяет пульт на мерже.
+# Формат сложился практикой (восемь таких разделов в `tasks/` к 20.09) и
+# здесь впервые становится машиночитаемым.
+
+# Раздел приложения узнаётся по ПРЕФИКСУ заголовка, а не по точному имени
+# (`section_body` выше сверяет имя целиком): практика пишет заголовок с
+# хвостом — «## Приложение: правка skills/test-authoring.md».
+APPENDIX_SECTION_PREFIX = "Приложение"
+_APPENDIX_HEADING = re.compile(rf"^##\s+{re.escape(APPENDIX_SECTION_PREFIX)}",
+                               re.M)
+# Ограда блока диффа внутри раздела и заголовок пути внутри блока.
+_DIFF_FENCE_OPEN = re.compile(r"^\s*```diff\s*$")
+_DIFF_FENCE_CLOSE = re.compile(r"^\s*```\s*$")
+_DIFF_GIT_HEADER = re.compile(r"^diff --git a/(\S+) b/(\S+)\s*$", re.M)
+
+APPENDIX_NO_HEADER_ERROR = "приложение PLAN: нет заголовка diff --git"
+
+
+def appendix_unprotected_path_error(path: str) -> str:
+    """Именованная ошибка требования 1 для пути вне `config.PROTECTED_PATHS`:
+    такую правку роль вносит сама, в своей ветке, под ревью и CI ветки —
+    коммитом Оператора в main ей ехать незачем."""
+    return (f"приложение PLAN: путь {path} не защищённый — правь в ветке "
+            f"задачи")
+
+
+class PlanAppendix(NamedTuple):
+    """Одно приложение PLAN.md: `path` — путь ИЗ заголовка `diff --git`
+    (не из заголовка раздела: заголовок раздела — свободный текст),
+    `diff` — текст блока ```diff без самой ограды, годный на вход
+    `git apply`."""
+    path: str
+    diff: str
+
+
+def _appendix_path_is_protected(path: str) -> bool:
+    # Та же формула префикса, что `fsm_merge_gate._touches_protected_path`
+    # и `advance_gates.zones._touches_zone`: пути-каталоги списка несут
+    # trailing `/`, пути-файлы сравниваются буквально.
+    return any(path == p or path.startswith(p)
+               for p in config.PROTECTED_PATHS)
+
+
+def _diff_blocks(body: str) -> list[str]:
+    """Тексты ВСЕХ блоков ```diff тела раздела, в порядке появления —
+    без строк-оград. Незакрытый блок в конце тела считается закрытым
+    концом раздела: PLAN с оборванной оградой не повод потерять дифф
+    молча (ошибку про него всё равно выдаст `git apply`)."""
+    blocks, current = [], None
+    for line in body.splitlines():
+        if current is None:
+            if _DIFF_FENCE_OPEN.match(line):
+                current = []
+            continue
+        if _DIFF_FENCE_CLOSE.match(line):
+            blocks.append("\n".join(current) + "\n")
+            current = None
+            continue
+        current.append(line)
+    if current:
+        blocks.append("\n".join(current) + "\n")
+    return blocks
+
+
+def _appendix_section_bodies(text: str) -> list[str]:
+    """Тела всех разделов, заголовок которых начинается на «## Приложение»,
+    в порядке появления: от конца своего заголовка до следующего `## `
+    заголовка любого раздела или конца текста."""
+    bodies = []
+    for match in _APPENDIX_HEADING.finditer(text):
+        start = text.find("\n", match.end())
+        if start == -1:
+            continue
+        nxt = re.search(r"^##\s", text[start:], re.M)
+        bodies.append(text[start:start + nxt.start()] if nxt else text[start:])
+    return bodies
+
+
+def plan_appendices(text: str) -> tuple[list[PlanAppendix], list[str]]:
+    """Приложения PLAN.md и именованные ошибки требования 1 (SPEC
+    01M2YSHDKWFJN3XSJ618Z74FNF, AC-1..AC-4).
+
+    Разбирается КАЖДЫЙ блок ```diff КАЖДОГО раздела «## Приложение…» —
+    и порядок приложений на выходе равен порядку их появления в тексте:
+    его читает и гейт применимости на выходе `in_dev`, и применение на
+    мерже (приложения к одному и тому же пути обязаны лечь друг на друга
+    в том же порядке, в каком их написал Оператор).
+
+    Блок без заголовка `diff --git` и блок с путём вне
+    `config.PROTECTED_PATHS` в список приложений НЕ попадают — про каждый
+    возвращается своя именованная ошибка: молчаливый пропуск такого блока
+    означал бы, что Оператор узнаёт о потерянной правке только на мерже.
+    PLAN без разделов «## Приложение» — `([], [])`, ни одной ошибки.
+    """
+    appendices: list[PlanAppendix] = []
+    errors: list[str] = []
+    for body in _appendix_section_bodies(text):
+        for block in _diff_blocks(body):
+            header = _DIFF_GIT_HEADER.search(block)
+            if header is None or header.group(1) != header.group(2):
+                errors.append(APPENDIX_NO_HEADER_ERROR)
+                continue
+            path = header.group(1)
+            if not _appendix_path_is_protected(path):
+                errors.append(appendix_unprotected_path_error(path))
+                continue
+            appendices.append(PlanAppendix(path, block))
+    return appendices, errors
 
 
 def requires_ac_markup(meta: dict) -> bool:

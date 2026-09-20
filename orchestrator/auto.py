@@ -10,6 +10,8 @@ from dataclasses import dataclass
 
 from . import (agent_log, alerts, budget, ci, config, fixation, fsm, lease,
               pause, pull, runner, store, zone_lock)
+from .advance_gates.plan_appendix import \
+    PLAN_APPENDIX_INAPPLICABLE_REFUSAL_ACTION
 from .advance_gates.zones import ZONES_MANDATE_WITHOUT_PLAN_REFUSAL_ACTION
 
 # Флаг «пришёл SIGTERM (команда `stop`, SPEC 01M1NWCHVTYQ0M8PCJ1YJ2N78P,
@@ -223,6 +225,26 @@ TREE_NOT_ON_BRANCH_REFUSAL_ACTION = "переход отклонён: дерев
 # в `brief.py` нельзя.
 ROLE_NOT_FINISHED_REFUSAL_ACTIONS = (
     REWORK_REFUSAL_ACTION, TREE_NOT_ON_BRANCH_REFUSAL_ACTION)
+
+# Отказы выхода `in_dev`, причина которых живёт в АРТЕФАКТЕ САМОЙ РОЛИ
+# (PLAN.md), а не в руках Оператора: `_pre_advance_step` запускает на них
+# шаг developer вместо остановки цикла, а от кружения их держит не
+# `cycle.prev_refusal`, а журнал — тот же отказ, повторившийся ПОСЛЕ
+# завершённого шага роли, останавливает цикл
+# (`_role_step_between_repeated_refusals`).
+#
+# «Мандат есть, раздел PLAN не оформлен» (SPEC 01M2XFSNVGWA2VX5XFEYR93Y4Z)
+# открыл этот класс, «приложение PLAN неприменимо» (SPEC
+# 01M2YSHDKWFJN3XSJ618Z74FNF, требование 2/AC-6) — второй его участник:
+# unified-дифф приложения пишет разработчик в своём PLAN.md, и починить
+# его может только новый шаг роли; без этого класса задача 01M2XJKKPH
+# 20.09 упёрлась бы в `Stop` со второго вызова, не получив ни одного шага
+# на починку. В `ROLE_NOT_FINISHED_REFUSAL_ACTIONS` выше эти действия
+# НАМЕРЕННО не входят: роли есть ЧТО читать (перечень путей, ответ git),
+# и бриф обязан этот отказ нести, а не вычитать.
+_IN_DEV_ROLE_FIXABLE_REFUSAL_ACTIONS = (
+    ZONES_MANDATE_WITHOUT_PLAN_REFUSAL_ACTION,
+    PLAN_APPENDIX_INAPPLICABLE_REFUSAL_ACTION)
 
 # Номер итерации ревью в detail записи `state -> in_dev`, оставленной
 # `orchestrator/fsm_advance.py::review` (`f"замечания ревью, итерация
@@ -814,25 +836,24 @@ def _pre_advance_step(conn, task_id: str, session_id: str, role: str,
     # написать PLAN.md) — регрессия, которую ловит
     # `test_fresh_task_first_developer_step_still_runs`.
     tree_missing = refusal == TREE_NOT_ON_BRANCH_REFUSAL_ACTION
-    # «Мандат есть, раздел PLAN не оформлен» (гейт зон, SPEC
-    # 01M2XFSNVGWA2VX5XFEYR93Y4Z, требования 3-5): причина отказа — в
-    # артефакте самой роли (PLAN.md без раздела «## Расширение зон» при
-    # уже выданном мандате Оператора), тот же класс требования 3, что и
-    # «PLAN.md не ready» — роль запускается, стоп-кран T038 на него не
-    # смотрит (AC-3). Единственная защита от кружения — журнал: тот же
-    # отказ ПОВТОРИЛСЯ после завершённого шага роли (раздел так и не
-    # оформлен) — роль свой гарантированный шаг уже получила, дальше тот
-    # же `Stop`, что и у двух одинаковых отказов Оператора (AC-5).
-    mandate_without_plan = (state == "in_dev" and refusal
-                            == ZONES_MANDATE_WITHOUT_PLAN_REFUSAL_ACTION)
-    if mandate_without_plan and _role_step_between_repeated_refusals(
+    # Отказы `in_dev`, причину которых несёт артефакт самой роли
+    # (`_IN_DEV_ROLE_FIXABLE_REFUSAL_ACTIONS` выше: раздел «## Расширение
+    # зон» при выданном мандате, неприменимое приложение PLAN) — тот же
+    # класс требования 3, что и «PLAN.md не ready»: роль запускается,
+    # стоп-кран T038 на них не смотрит. Единственная защита от кружения —
+    # журнал: тот же отказ ПОВТОРИЛСЯ после завершённого шага роли (роль
+    # свой гарантированный шаг уже получила) — дальше тот же `Stop`, что и
+    # у двух одинаковых отказов Оператора.
+    role_fixable = (state == "in_dev"
+                    and refusal in _IN_DEV_ROLE_FIXABLE_REFUSAL_ACTIONS)
+    if role_fixable and _role_step_between_repeated_refusals(
             store.task_steps(conn, task_id), journaled_before, refusal, role):
         hint = f"почини причину и повтори artel.py advance {task_id}"
         return Stop(state, f"{refusal} — {hint}", hint, True)
     other_class_refusal = refusal if (refusal is not None
                                       and state == "in_dev"
                                       and not tree_missing
-                                      and not mandate_without_plan) else None
+                                      and not role_fixable) else None
     if other_class_refusal is not None and other_class_refusal == cycle.prev_refusal:
         # Требование 1 (инцидент T035, SPEC T038): два подряд отказа одним
         # текстом — причина отказа вне зоны агента, прогон агента её не
