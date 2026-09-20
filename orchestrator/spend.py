@@ -210,8 +210,7 @@ def _divergence_note(conn, role: str, actual_usd: float,
     if divergence is None:
         return ""
     return (f" | расчёт по курсу=${calculated:.4f}, "
-            f"коэффициент роли с {divergence['since']}="
-            f"{divergence['coefficient']:.2f}")
+            f"коэффициент роли с {divergence.since}={divergence:.2f}")
 
 
 # Счётчик usage (`config.USAGE_TOKEN_KEYS`) -> поле цены `TOKEN_RATES[role]`,
@@ -363,7 +362,33 @@ def known_cost_pairs(conn, role: str | None = None) -> dict:
     return pairs
 
 
-def check_rate_divergence(conn, role: str, pairs: list) -> dict | None:
+class RateDivergence(float):
+    """Коэффициент расхождения курса роли с фактом CLI — число, которое
+    помнит, по какой выборке оно посчитано: `steps` (сколько шагов в неё
+    вошло) и `since` (дата калибровки курса, с которой идёт сверка).
+
+    Именно число, а не словарь или кортеж: возврат
+    `report.token_rate_divergence` — `{роль: коэффициент}` — зафиксирован
+    залоченной планкой 01M1PP0VYRT55WN8GGVG66X89Y (AC-6,
+    `acceptance_tests/test_ac6_calibration_reports_divergence_by_role.py`
+    сравнивает значение роли через `assertAlmostEqual`), а правка
+    залоченной планки — право Оператора (ADR-0012), не этой задачи.
+    Дату и число шагов обязаны назвать строка журнала (SPEC
+    01M2ZNJX2N5SPZCAQE6EHD4EWH, требование 3) и строка отчёта
+    (требование 7), поэтому они едут рядом с коэффициентом — считать их
+    второй раз у каждого читателя значило бы развести две математики.
+    """
+
+    __slots__ = ("steps", "since")
+
+    def __new__(cls, coefficient: float, steps: int, since: str):
+        value = super().__new__(cls, coefficient)
+        value.steps = steps
+        value.since = since
+        return value
+
+
+def check_rate_divergence(conn, role: str, pairs: list) -> RateDivergence | None:
     """Коэффициент расхождения курса роли с фактом CLI по парам «расчёт,
     факт» — и алерт, если он выше порога. `None` — сверять нечего.
 
@@ -382,9 +407,10 @@ def check_rate_divergence(conn, role: str, pairs: list) -> dict | None:
     1, R1-F2). Заведение алерта живёт здесь, а не у вызывающих, по той же
     причине, что и сам расчёт: две копии условия разошлись бы.
 
-    Возврат несёт дату и число вошедших шагов рядом с коэффициентом —
-    строка журнала и строка отчёта обязаны их назвать (требования 3, 7),
-    а считать их второй раз значило бы завести вторую математику.
+    Возврат — `RateDivergence`: сам коэффициент числом (форма возврата
+    `report.token_rate_divergence` этим и сохранена), а дата и число
+    вошедших шагов — его атрибутами, потому что строка журнала и строка
+    отчёта обязаны их назвать (требования 3, 7).
     """
     since = rate_calibrated_at(role)
     if since is None or not pairs:
@@ -402,7 +428,7 @@ def check_rate_divergence(conn, role: str, pairs: list) -> dict | None:
             f"{config.TOKEN_RATE_DIVERGENCE_ALERT_THRESHOLD} — расчётная "
             f"цена ${calculated_sum:.4f} против фактической "
             f"${actual_sum:.4f} по {len(pairs)} шагам с {since}")
-    return {"coefficient": coefficient, "steps": len(pairs), "since": since}
+    return RateDivergence(coefficient, len(pairs), since)
 
 
 def charge_missing_result(conn, task_id: str, role: str, numbered: str,

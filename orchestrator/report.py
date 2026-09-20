@@ -19,9 +19,13 @@ from datetime import datetime, timedelta, timezone
 
 # `alerts` этот модуль сам больше не зовёт (алерт расхождения курса
 # заводит `spend.check_rate_divergence`, SPEC 01M2ZNJX2N5SPZCAQE6EHD4EWH
-# требование 6), но имя остаётся частью поверхности модуля: планка
-# 01M1RGQV4DG2FX1B90W4EEETTR (AC-5) подменяет `report.alerts` шпионом и
-# проверяет, что вывод отчёта не заводит алертов сам.
+# требование 6), но имя обязано остаться атрибутом модуля: планка
+# 01M1RGQV4DG2FX1B90W4EEETTR (AC-5) наводит на `report.alerts` шпиона
+# (`mock.patch.object`) вокруг вызова `map_growth_cost_estimate` и
+# проверяет, что ОЦЕНКА РОСТА КАРТЫ алертов не заводит; без атрибута
+# такая подмена падает с `AttributeError`. Про отчёт целиком планка
+# этого не спрашивает — и не могла бы: `token_rate_divergence` ниже
+# алерты на пути `cmd_report` как раз заводит (см. её докстроку).
 from . import agent_log, alerts, config, spend, store  # noqa: F401
 
 # Гейты, где решение принимает только Оператор, независимо от политики
@@ -331,9 +335,12 @@ def _known_cost_breakdown(detail: str) -> tuple:
 
 
 def token_rate_divergence(conn) -> dict:
-    """{роль: {"coefficient", "steps", "since"}} — расхождение курса
-    роли с фактом CLI (SPEC 01M1PP0VYRT55WN8GGVG66X89Y, требования 4-5;
-    SPEC 01M2ZNJX2N5SPZCAQE6EHD4EWH, требования 6-7).
+    """{роль: коэффициент} — расхождение курса роли с фактом CLI (SPEC
+    01M1PP0VYRT55WN8GGVG66X89Y, требования 4-5; SPEC
+    01M2ZNJX2N5SPZCAQE6EHD4EWH, требования 6-7). Коэффициент —
+    `spend.RateDivergence`, то есть число (прежний контракт
+    `dict[str, float]` цел), несущее вдобавок число вошедших шагов и
+    дату сверки атрибутами `steps`/`since`.
 
     Источник — журнал: каждая запись `spend.KNOWN_COST_JOURNAL_ACTION`
     (`spend.charge_step`) несёт фактическую цену завершённого шага (из
@@ -570,14 +577,16 @@ def _divergence_html(divergence: dict) -> str:
     Дата калибровки и число вошедших шагов — в той же строке (SPEC
     01M2ZNJX2N5SPZCAQE6EHD4EWH, требование 7, AC-8): без них читатель не
     может сказать, по какому периоду и по скольким шагам посчитана
-    цифра, а в сверку входят не все строки KNOWN роли."""
+    цифра, а в сверку входят не все строки KNOWN роли. Значение —
+    `spend.RateDivergence`: сам коэффициент числом, период — его
+    атрибутами."""
     if not divergence:
         return ('<div class="metric-row">нет завершённых шагов с известной '
                 'стоимостью — коэффициент расхождения не считается</div>')
     return "".join(
         f'<div class="metric-row">{_esc(role)}: коэффициент расхождения '
-        f'{value["coefficient"]:.2f} по {value["steps"]} шагам '
-        f'с {_esc(value["since"])}</div>'
+        f'{value:.2f} по {value.steps} шагам '
+        f'с {_esc(value.since)}</div>'
         for role, value in sorted(divergence.items())
     )
 

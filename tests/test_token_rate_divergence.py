@@ -71,15 +71,15 @@ class DivergenceMathTest(TaskSeededTmpRootTest):
     def test_coefficient_is_the_sum_ratio_not_the_average_of_steps(self):
         """Ловит мутацию: расчёт усредняет коэффициенты шагов вместо
         деления суммы на сумму — на паре «крупный расходящийся шаг плюс
-        мелкий точный» среднее даёт 0.25, а сумма против суммы — 0.099,
-        и `assertAlmostEqual` разойдётся."""
+        мелкий точный» среднее даёт 0.125, а сумма против суммы —
+        2.5/11 ≈ 0.227, и `assertAlmostEqual` разойдётся."""
         pairs = [(12.5, 10.0), (1.0, 1.0)]
 
         divergence = spend.check_rate_divergence(store.db(), ROLE, pairs)
 
-        self.assertAlmostEqual(divergence["coefficient"], 2.5 / 11.0)
-        self.assertEqual(divergence["steps"], 2)
-        self.assertEqual(divergence["since"], config.TOKEN_RATES[ROLE]["calibrated_at"])
+        self.assertAlmostEqual(divergence, 2.5 / 11.0)
+        self.assertEqual(divergence.steps, 2)
+        self.assertEqual(divergence.since, config.TOKEN_RATES[ROLE]["calibrated_at"])
 
     def test_nothing_to_compare_is_none_not_zero(self):
         """Ловит мутацию: пустая выборка трактуется как «расхождения
@@ -255,17 +255,35 @@ class ReportDivergenceTest(TaskSeededTmpRootTest):
 
         divergence = report.token_rate_divergence(self.conn)
 
-        self.assertAlmostEqual(divergence[ROLE]["coefficient"], threshold / 2,
-                               places=2)
-        self.assertEqual(divergence[ROLE]["steps"], 1)
-        self.assertEqual(divergence[ROLE]["since"], CALIBRATED_AT)
+        self.assertAlmostEqual(divergence[ROLE], threshold / 2, places=2)
+        self.assertEqual(divergence[ROLE].steps, 1)
+        self.assertEqual(divergence[ROLE].since, CALIBRATED_AT)
+
+    def test_coefficient_of_a_role_stays_a_plain_number(self):
+        """Возврат `token_rate_divergence` по роли — число: его
+        вычитают и сравнивают как число (`assertAlmostEqual`), а период
+        сверки едет атрибутами.
+
+        Ловит мутацию: дата и число шагов заезжают в возврат так, что
+        значение роли перестаёт быть числом (словарь, кортеж) —
+        арифметика прежнего читателя падает с `TypeError`, а
+        зафиксированный контракт `dict[str, float]` планки
+        01M1PP0VYRT55WN8GGVG66X89Y (AC-6) ломается молча: планки чужих
+        задач CI не гоняет."""
+        spend.charge_step(self.conn, self.TASK, ROLE, cost(self.calculated),
+                          "попытка 1/3")
+
+        value = report.token_rate_divergence(self.conn)[ROLE]
+
+        self.assertIsInstance(value, float)
+        self.assertAlmostEqual(value, 0.0, places=6)
 
     def test_report_line_names_the_date_and_the_number_of_steps(self):
         """Ловит мутацию: строка отчёта остаётся прежней (только
         коэффициент) — читатель не может сказать, по какому периоду и по
         скольким шагам посчитана цифра."""
         line = report._divergence_html(
-            {ROLE: {"coefficient": 0.12, "steps": 7, "since": CALIBRATED_AT}})
+            {ROLE: spend.RateDivergence(0.12, 7, CALIBRATED_AT)})
 
         self.assertIn("коэффициент расхождения 0.12", line)
         self.assertIn("по 7 шагам", line)
