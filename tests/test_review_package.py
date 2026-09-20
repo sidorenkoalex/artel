@@ -515,9 +515,64 @@ class ReviewPackageTest(unittest.TestCase):
                          "главная копия пульта источником не является")
         self.assertIn(review.STEP_WORKDIR_NOTE.strip(), package["text"],
                       "подмена источника не проходит молча")
-        self.assertEqual(package["from_worktree"], [f"tasks/{self.TASK}/PLAN.md"])
         self.assertIn(review.ARTIFACT_SOURCE_WORKDIR, package["artifact_source"],
                       "источник артефакта уезжает и в журнал")
+
+    def test_step_workdir_fallback_is_not_called_the_pult_worktree(self):
+        """Артефакт задачи, прочитанный с диска ШАГА, не объявляется в
+        журнале прочитанным «из рабочего дерева» (R1-F3, REVIEW.md
+        итерация 1): его фактический источник уже несёт `artifact_source`.
+
+        Ловит мутацию: признак отката снова считается по любой непустой
+        пометке — запись `log <id>` скажет про PLAN.md «не из ветки, а из
+        рабочего дерева», и Оператор пойдёт за версией артефакта в
+        главную копию пульта, где её с 11.09 не бывает.
+        """
+        del self.git.files[f"tasks/{self.TASK}/PLAN.md"]
+        self.put_in_step_workdir(f"tasks/{self.TASK}/PLAN.md", PLAN_MD)
+
+        package = self.build()
+
+        self.assertEqual(package["from_worktree"], [],
+                         "рабочее дерево пульта источником не было")
+        note = review.package_note(package)
+        self.assertNotIn("рабочего дерева", note)
+        self.assertIn(f"{review.ARTIFACT_SOURCE_WORKDIR} — PLAN.md", note)
+
+    def test_missing_task_artifact_names_the_step_workdir_as_the_tree(self):
+        """Строка отсутствия трёх артефактов задачи называет, какое
+        «дерево» проверялось (R1-F2, REVIEW.md итерация 1): каталог
+        рабочего каталога шага, не главная копия пульта. Сама именованная
+        строка при этом прежняя (требование 3 SPEC, AC-3).
+
+        Ловит мутацию: оговорка потеряна — ревьювер читает «в дереве —
+        файл не найден» как «нет в главной копии пульта» и идёт искать
+        SPEC/PLAN туда, то есть делает ровно тот ручной обход, который
+        снимает требование 1.
+        """
+        del self.git.files[f"tasks/{self.TASK}/PLAN.md"]
+
+        text = self.build()["text"]
+
+        self.assertIn("(не показан: в ветке — ", text, "форма строки прежняя")
+        self.assertIn("в дереве — файл не найден)", text)
+        self.assertIn(review.STEP_WORKDIR_MISSING_HINT.strip(), text)
+
+    def test_missing_verdict_form_keeps_the_plain_tree_reason(self):
+        """Форма вердикта читается с диска ПУЛЬТА (AC-4) — оговорка о
+        рабочем каталоге шага к её строке отсутствия не приписывается.
+
+        Ловит мутацию: оговорка навешена на `artifact_text` для всех
+        чтений разом — строка отсутствия формы вердикта начнёт называть
+        источником каталог шага, в котором её никогда не искали.
+        """
+        del self.git.files["templates/REVIEW.md"]
+
+        text = self.build()["text"]
+
+        form_part = text.split("templates/REVIEW.md")[-1]
+        self.assertIn("в дереве — файл не найден)", form_part)
+        self.assertNotIn(review.STEP_WORKDIR_MISSING_HINT.strip(), form_part)
 
     def test_worktree_fallback_is_visible_in_the_note(self):
         """Расхождение дерева и diff Оператор разбирает по `log <id>`."""
@@ -931,15 +986,14 @@ class CmdRunReviewPackageTest(unittest.TestCase):
 
         _, argv = self.run_agent("review")
 
-        # Не требуем, чтобы `templates/REVIEW.md` шёл в списке первым: сама
-        # запись `run_agent` кладёт на диск маркер `tasks/<id>/REVIEW.md`
-        # (обязательный артефакт роли reviewer, SPEC 01M1RQ12JVHE3PQYDFV1XPSTQ3,
-        # требование 3) — он тоже честно попадает в `from_worktree` и может
-        # стоять раньше по алфавиту; поведение, которое ловит этот тест
-        # (расхождение источника журналируется), от порядка не зависит.
+        # Форма вердикта — единственный компонент, чей откат ведёт в
+        # рабочее дерево ПУЛЬТА, поэтому список точен (R1-F3, REVIEW.md
+        # итерация 1): маркер `tasks/<id>/REVIEW.md`, который кладёт на
+        # диск сама запись `run_agent`, читается из рабочего каталога шага
+        # и уезжает в журнал полем `artifact_source`, а не этой строкой.
         note = self.journal_details("ревью-пакет собран")[0]
-        self.assertIn("не из ветки, а из рабочего дерева", note)
-        self.assertIn("templates/REVIEW.md", note)
+        self.assertIn("не из ветки, а из рабочего дерева: templates/REVIEW.md",
+                      note)
         self.assertIn(review.WORKTREE_NOTE.strip(), self.prompt(),
                       "источник назван и в самом пакете, не только в журнале")
 
@@ -1171,13 +1225,16 @@ class IncrementalReviewPackageTest(ReviewPackageTest):
 
         Ловит мутацию: обход снят `--first-parent`/`--no-merges` либо
         диапазон взят от main — в pathspec приедут пути, пришедшие
-        подтяжкой main, и инкремент снова станет «что угодно с базы».
+        подтяжкой main, и инкремент снова станет «что угодно с базы»; снят
+        `--no-renames` — перечень потеряет прежнее имя переименованного
+        файла (R1-F1, REVIEW.md итерация 1).
         """
         self.build_incremental()
 
         self.assertIn(
-            ["log", "--first-parent", "--no-merges", "--format=",
-             "--name-only", "-z", f"{self.PREV_SHA}..{self.BRANCH}"],
+            ["log", "--first-parent", "--no-merges", "--no-renames",
+             "--format=", "--name-only", "-z",
+             f"{self.PREV_SHA}..{self.BRANCH}"],
             self.git.calls)
 
     def test_unlisted_own_commits_degrade_to_the_full_diff_from_the_base(self):
@@ -1385,6 +1442,7 @@ class OwnCommitPathsTest(RealGitSandbox):
     BRANCH = "task/t001-revyu-paket"
     DEV_FILE = "orchestrator/alpha.py"
     MAIN_FILE = "orchestrator/beta.py"
+    RENAMED_FILE = "orchestrator/alpha_renamed.py"
 
     def commit(self, branch: str, rel: str, text: str) -> str:
         self.checkout(branch)
@@ -1452,6 +1510,54 @@ class OwnCommitPathsTest(RealGitSandbox):
         paths, failed = review.own_commit_paths(self.base, self.BRANCH)
 
         self.assertEqual((paths, failed), ([], ""))
+
+    def test_a_rename_lists_both_sides_of_the_pair(self):
+        """Собственный коммит переименовал файл — в перечне ОБА пути пары,
+        прежний и новый (R1-F1, REVIEW.md итерация 1, major).
+
+        Ловит мутацию: из `git log` убран `--no-renames` — git отдаст
+        только новое имя, прежний путь в pathspec инкремента не попадёт, и
+        ревьювер увидит переименованный модуль как новый файл целиком, не
+        увидев ни строки об исчезновении старого (для файла из `tests/`
+        это прямо прячет удалённые ассерты). Инкремент при этом не пуст,
+        поэтому откат требования 7 такой пропуск не ловит.
+        """
+        self.checkout(self.BRANCH)
+        self.git("mv", self.DEV_FILE, self.RENAMED_FILE)
+        self.git("commit", "-q", "-m", "переименование модуля")
+        self.checkout(config.MAIN_BRANCH)
+
+        paths, failed = review.own_commit_paths(self.base, self.BRANCH)
+
+        self.assertEqual(failed, "")
+        self.assertEqual(paths, [self.DEV_FILE, self.RENAMED_FILE],
+                         "пре-образ переименования обязан остаться в перечне")
+
+    def test_a_renamed_increment_shows_the_same_stat_as_the_full_diff(self):
+        """Итог для ревьювера: стат-список инкремента по этому перечню
+        совпадает со стат-списком полного diff от базы — переименование
+        показано как переименование, а не как новый файл.
+
+        Ловит мутацию: pathspec собран по неполному перечню (без прежнего
+        имени) — `git diff` перестанет видеть пару и покажет новый файл
+        добавленным целиком, а старый не покажет вовсе; сравнение со
+        стат-списком полного diff покраснеет.
+        """
+        self.checkout(self.BRANCH)
+        self.git("mv", self.DEV_FILE, self.RENAMED_FILE)
+        self.git("commit", "-q", "-m", "переименование модуля")
+        self.checkout(config.MAIN_BRANCH)
+        paths, _ = review.own_commit_paths(self.base, self.BRANCH)
+
+        incremental, _, _ = review.git_diff_part(
+            self.base, self.BRANCH, "--stat",
+            pathspec=tuple(f":(literal){p}" for p in paths))
+        full, _, _ = review.git_diff_part(self.base, self.BRANCH, "--stat",
+                                          pathspec=(".",))
+
+        self.assertEqual(incremental, full)
+        self.assertIn(self.DEV_FILE.rsplit("/", 1)[-1], incremental,
+                      "исчезновение прежнего имени обязано быть видно")
 
     def test_git_failure_is_a_named_reason_not_an_exception(self):
         """Неизвестная ревизия базы — причина строкой, не трейсбек.

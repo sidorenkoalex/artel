@@ -16,6 +16,18 @@ WORKTREE_NOTE = " (в ветке нет, показан файл из рабоч
 STEP_WORKDIR_NOTE = (" (в артефактной ветке нет, показан файл из рабочего "
                      "каталога шага)")
 
+# Оговорка к строке отсутствия тех же трёх артефактов (R1-F2, REVIEW.md
+# итерация 1, minor). Сама строка «(не показан: в ветке — …; в дереве —
+# …)» переписана быть не может: требование 3 SPEC велит сохранить её
+# ДОСЛОВНО, и залоченная планка AC-3 сверяет её регуляркой с литералом
+# «в дереве — ». Но слово «дерево» без оговорки читается как главная
+# копия пульта — ревьювер идёт искать SPEC/PLAN туда, где их с 11.09 не
+# бывает, то есть делает ровно тот ручной обход, который снимает
+# требование 1. Оговорка идёт ПОСЛЕ закрывающей скобки — форма самой
+# строки этим не меняется.
+STEP_WORKDIR_MISSING_HINT = (" («дерево» здесь — каталог tasks/<id>/ рабочего "
+                             "каталога шага, не главная копия пульта)")
+
 # Источник артефактов задачи для записи журнала (требование 9, AC-10).
 # Порядок групп в строке фиксирован этим же кортежем.
 ARTIFACT_SOURCE_BRANCH = "артефактная ветка"
@@ -50,7 +62,8 @@ EMPTY_DIFF_TEXT = "(изменений нет)"
 
 
 def artifact_text(branch: str, rel: str, *, disk_root=None,
-                  disk_note: str = WORKTREE_NOTE) -> tuple[str | None, str]:
+                  disk_note: str = WORKTREE_NOTE,
+                  disk_hint: str = "") -> tuple[str | None, str]:
     """Текст файла из ветки `branch` и пометка об источнике.
 
     Читаем из ветки (`git show <ветка>:<путь>`), а не из рабочего дерева.
@@ -72,6 +85,13 @@ def artifact_text(branch: str, rel: str, *, disk_root=None,
     КАТАЛОГА ШАГА, со своей пометкой. `config.ROOT` не берётся значением
     по умолчанию самого параметра: он вычислился бы один раз при загрузке
     модуля и не двигался бы вместе с подменой пути в песочнице теста.
+
+    `disk_hint` (R1-F2, REVIEW.md итерация 1, minor) — оговорка, которой
+    строка ОТСУТСТВИЯ называет фактический адрес диска: успешный откат
+    источник называет (`disk_note`), а неуспешный до этой правки молчал и
+    говорил «в дереве» про рабочий каталог шага. Оговорка приписывается
+    ко всем трём исходам «файла нет/файл нечитаем» — класс один, чинится
+    целиком, а не на `FileNotFoundError`.
     """
     in_branch = ""
     try:
@@ -92,18 +112,20 @@ def artifact_text(branch: str, rel: str, *, disk_root=None,
         # `rel`, начинающегося с `tasks/<id>/`, это буквально путь каталога
         # задачи в рабочем каталоге шага, и эта строка утекала бы в
         # ревью-пакет, а с ним и в промпт ревьювера.
-        return None, f"(не показан: в ветке — {in_branch}; в дереве — файл не найден)"
+        return None, (f"(не показан: в ветке — {in_branch}; в дереве — файл "
+                      f"не найден){disk_hint}")
     except OSError as exc:
         # Тот же класс утечки, что и у `FileNotFoundError` выше (SPEC
         # 01M2ZZDJ5ECR4ZYV23BKFCNFXM, требование 3): `str(OSError)` тоже
         # несёт `filename` — в текст части идут имя класса и strerror, без
         # пути.
         return None, (f"(не показан: в ветке — {in_branch}; в дереве — "
-                      f"{type(exc).__name__}: {exc.strerror})")
+                      f"{type(exc).__name__}: {exc.strerror}){disk_hint}")
     except UnicodeDecodeError as exc:
         # `str(UnicodeDecodeError)` пути не несёт вовсе — только кодек и
         # позицию битого байта, то есть причину, по которой файл нечитаем.
-        return None, f"(не показан: в ветке — {in_branch}; в дереве — {exc})"
+        return None, (f"(не показан: в ветке — {in_branch}; в дереве — "
+                      f"{exc}){disk_hint}")
 
 
 def artifact_part(label: str, text: str | None, note: str,
@@ -318,9 +340,20 @@ def own_commit_paths(base: str, branch: str, repo=None) -> tuple[list[str], str]
     результат разбирается устойчиво к обоим разделителям: формат вывода
     `log -z --name-only` менялся между версиями git, а перечень путей от
     этого не зависит.
+
+    `--no-renames` (R1-F1, REVIEW.md итерация 1, major) — не украшение:
+    с определением переименований (оно включено по умолчанию)
+    `--name-only` отдаёт ТОЛЬКО новое имя пары, прежний путь в pathspec не
+    попадает, и ревьювер видит переименованный модуль как новый файл
+    целиком, не видя ни строки о том, что старый перестал существовать
+    (для тестового файла это прямо ломает пункт скила «дифф tests/ —
+    удалённые ассерты»). Инкремент при этом НЕ пуст, поэтому откат
+    требования 7 такой пропуск не ловит. С флагом git перечисляет оба
+    пути пары, а само переименование как переименование по-прежнему
+    показывает `git diff` — pathspec несёт обе стороны.
     """
-    args = ("log", "--first-parent", "--no-merges", "--format=", "--name-only",
-            "-z", f"{base}..{branch}")
+    args = ("log", "--first-parent", "--no-merges", "--no-renames",
+            "--format=", "--name-only", "-z", f"{base}..{branch}")
     try:
         res = gitcmd.in_repo(repo, *args) if repo else gitcmd.git(*args)
     except UnicodeDecodeError as exc:
@@ -506,7 +539,8 @@ def review_package(conn, task_id: str, title: str, branch: str, *,
     step_dir = _step_workdir(task_id, target)
     task_rels = (spec_rel, plan_rel, review_rel)
     found = {rel: artifact_text(artifact_branch_name, rel, disk_root=step_dir,
-                                disk_note=STEP_WORKDIR_NOTE)
+                                disk_note=STEP_WORKDIR_NOTE,
+                                disk_hint=STEP_WORKDIR_MISSING_HINT)
              for rel in task_rels}
     # Форма вердикта — единственная часть, чей источник эта задача не
     # трогает (AC-4): кодовая ветка задачи, откат — главная копия пульта.
@@ -674,9 +708,17 @@ def review_package(conn, task_id: str, title: str, branch: str, *,
             "parts": parts_n,
             "not_collected": shown["failed"],
             # Артефакт не из ветки — расхождение дерева и diff; в журнале
-            # оно объясняет странный вердикт без подъёма лога шага.
+            # оно объясняет странный вердикт без подъёма лога шага. Здесь
+            # ровно рабочее ДЕРЕВО ПУЛЬТА (`WORKTREE_NOTE`, сегодня —
+            # только форма вердикта): три артефакта задачи откатываются на
+            # рабочий каталог шага, и их источник уезжает в журнал полем
+            # `artifact_source` своим фактическим именем (R1-F3, REVIEW.md
+            # итерация 1, minor). Прежний признак «непустая пометка»
+            # сваливал оба отката в одну формулировку «из рабочего
+            # дерева» — по ней Оператор шёл за версией PLAN.md в главную
+            # копию пульта, где её с 11.09 не бывает.
             "from_worktree": [rel for rel, (text_, note) in found.items()
-                              if text_ is not None and note],
+                              if text_ is not None and note == WORKTREE_NOTE],
             "diff_type": diff_type, "iteration": iteration,
             # Требование 9/AC-10: источник артефактов задачи и база
             # инкремента — в запись журнала о сборке пакета, чтобы дефект
