@@ -719,6 +719,19 @@ def _approve_spec_gate(conn, task_id: str, t, state: str, sid: str) -> None:
     else:
         meta = artifacts.frontmatter(config.TASKS / task_id / "SPEC.md")
         spec_text = ""
+    # Сверка путей SPEC с зонами (01M2XJKQNFTWHYAY4KBBQ1NVY7, требования
+    # 5-6) — ДО записи `tasks.zones` ниже: путь из «## Контекст»/
+    # «## Требования»/«## Критерии приёмки», не покрытый `zones:` и не
+    # названный в «## Не входит»/«## Материалы», — именованный отказ тем
+    # же текстом, что у `new --tz`; задача остаётся на spec_gate, колонка
+    # zones не переписывается. Мягкий `return` — тем же способом, что узел
+    # `_read_branch_text_or_refuse` выше в этой же функции.
+    unclassified = guard.spec_unclassified_paths(spec_text, meta)
+    if unclassified:
+        reason = guard.unclassified_paths_refusal(unclassified)
+        store.journal(conn, task_id, "operator", "approve отклонён", reason)
+        print(f"[{task_id}] approve отклонён: {reason}")
+        return
     # Значение zones (01M1NKVPD2A79PQ6K0JVV1B2Q1, AC-3) сохраняется тем
     # же моментом входа approve на spec_gate, что и budget/split_
     # assessment рядом — meta уже прочитана выше, поле отсутствует у

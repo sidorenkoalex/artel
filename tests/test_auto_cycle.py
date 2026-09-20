@@ -23,9 +23,10 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from orchestrator import (agent_log, alerts, auto, budget, catalog,  # noqa: E402
-                          ci, config, fsm, gitcmd, github_adapter, pause,
-                          runner, store)
+from orchestrator import (agent_log, alerts, auto, brief, budget,  # noqa: E402
+                          catalog, ci, config, fsm, gitcmd, github_adapter,
+                          pause, runner, store)
+from orchestrator.advance_gates import zones  # noqa: E402
 from tests.sandbox import (SpyRun, capture,  # noqa: E402
                            capture_new_task_id, disk_backed_ls_tree_files,
                            disk_backed_show, fake_git)
@@ -1292,6 +1293,220 @@ class WaitForZoneTest(AutoCycleTest):
         self.assertIsInstance(result, auto.Stop)
         self.assertIn("lease", result.reason)
         self.assertIn("sess-other", result.reason)
+
+
+# Мандат Оператора на путь вне зон — тот же маркер, что разбирает
+# `zones._answer_zones_mandate`; файл кладётся на диск `tdir`, откуда его
+# читают `disk_backed_ls_tree_files`/`disk_backed_show`, а `fake_git`
+# отвечает на `log -1 --format=%s` пустой темой — не автокоммит роли.
+MANDATE_ANSWER_MD = """---
+task: {task}
+type: answer
+schema_version: 1
+---
+
+# ANSWER-1
+
+## Ответы
+
+Расширение зон разрешено: {paths}
+"""
+
+PLAN_EXTENSION_SECTION = """
+## Расширение зон
+
+Пути: {paths}
+
+Обоснование: правка затрагивает путь вне заявленных zones.
+"""
+
+
+class AutoRunsDeveloperOnMandateWithoutPlanSectionTest(AutoCycleTest):
+    """SPEC 01M2XFSNVGWA2VX5XFEYR93Y4Z (требования 3-5, AC-3/AC-5/AC-6/
+    AC-8): сценарий инцидента 13.09 настоящим `fsm.cmd_advance` —
+    мандат в `ANSWER-1.md`, PLAN.md ready без раздела «## Расширение
+    зон», дифф ветки трогает путь вне заявленных zones. Дифф подменён на
+    уровне `gitcmd.diff_base`/`diff_names` (у песочницы нет git-репозитория),
+    мандат — файлом на диске, остальной гейт зон настоящий."""
+
+    OUT_OF_ZONE = "docs/extra_module.md"
+
+    def setUp(self):
+        super().setUp()
+        self.patch_object(config, "AUTO_STALL_STEPS_LIMIT",
+                          config.AUTO_MAX_STEPS + 1)
+        self.write_plan("ready")
+        self.set_state("in_dev", zones="orchestrator/store.py")
+        self.patch_object(gitcmd, "diff_base", lambda branch, repo=None: "deadbeef")
+        # Только двухаргументная форма (`_zones_gate`) видит путь вне зон;
+        # трёхаргументная (лок `acceptance_tests/`) — пустой дифф.
+        self.patch_object(
+            gitcmd, "diff_names",
+            lambda base, branch, *rest: [] if rest else [self.OUT_OF_ZONE])
+
+    def write_mandate(self) -> None:
+        (self.tdir / "ANSWER-1.md").write_text(
+            MANDATE_ANSWER_MD.format(task=self.TASK, paths=self.OUT_OF_ZONE),
+            encoding="utf-8")
+
+    def write_plan_with_section(self) -> None:
+        (self.tdir / "PLAN.md").write_text(
+            PLAN_MD.format(task=self.TASK, status="ready")
+            + PLAN_EXTENSION_SECTION.format(paths=self.OUT_OF_ZONE),
+            encoding="utf-8")
+
+    def refusal_actions(self) -> list[str]:
+        return [a for _actor, a, _d in self.journal_rows()
+                if a.startswith(auto.REFUSAL_ACTION_PREFIX)]
+
+    def test_incident_runs_one_developer_step_with_mandate_paths_in_the_brief(self):
+        """Мандат есть, раздела PLAN нет: developer получает ровно один
+        шаг, его бриф несёт новое действие и путь мандата; повтор того
+        же отказа после шага без раздела останавливает цикл в `in_dev`.
+
+        Ловит мутацию: `_pre_advance_step` относит новое действие к
+        классу «нужны руки Оператора» — `self.agent.calls` остался бы
+        пустым, ровно как 13.09; либо `brief.advance_refusal_history`
+        вычитает новое действие — бриф шага был бы пуст."""
+        self.write_mandate()
+        briefs: list[str] = []
+        self.agent.script = [lambda: briefs.append(brief.advance_refusal_history(
+            store.db(), self.TASK, "developer", "in_dev"))]
+
+        out = self.auto()
+
+        self.assertEqual(len(self.agent.calls), 1,
+                         f"шагов developer: {len(self.agent.calls)}\n{out}")
+        self.assertEqual(self.refusal_actions(),
+                         [zones.ZONES_MANDATE_WITHOUT_PLAN_REFUSAL_ACTION] * 2)
+        self.assertIn(zones.ZONES_MANDATE_WITHOUT_PLAN_REFUSAL_ACTION, briefs[0])
+        self.assertIn(self.OUT_OF_ZONE, briefs[0])
+        self.assertEqual(self.state(), "in_dev")
+        self.assertIn("auto остановлен", out)
+        self.assertIn(zones.ZONES_MANDATE_WITHOUT_PLAN_REFUSAL_ACTION, out)
+
+    def test_step_writing_the_plan_section_advances_out_of_in_dev(self):
+        """Шаг developer оформил раздел с путями мандата — следующий
+        предварительный advance проходит гейт зон (путь легализован в
+        `zones_extension`), задача уходит в `verifying` (ADR-0015: гейт
+        стоит на `in_dev -> verifying`; SPEC называет переход историческим
+        именем `review`).
+
+        Ловит мутацию: новая ветка отказа перехватывает и совпавший с
+        мандатом раздел — задача не вышла бы из `in_dev`."""
+        self.write_mandate()
+        self.agent.script = [self.write_plan_with_section]
+
+        self.auto()
+
+        self.assertEqual(self.state(), "verifying")
+        self.assertEqual(len(self.agent.calls), 1)
+        self.assertEqual(self.task_row()["zones_extension"], self.OUT_OF_ZONE)
+
+    def test_without_a_mandate_stops_without_running_the_role(self):
+        """Мандата нет — прежний отказ «переход отклонён: гейт зон» дважды
+        подряд, `Stop` решением Оператора без единого шага роли.
+
+        Ловит мутацию: мягкий класс распространён на любой отказ гейта
+        зон — developer гонялся бы по пути, который никто не разрешал."""
+        out = self.auto()
+
+        self.assertEqual(self.agent.calls, [])
+        self.assertEqual(self.refusal_actions(),
+                         ["переход отклонён: гейт зон"] * 2)
+        self.assertEqual(self.state(), "in_dev")
+        self.assertIn(f"почини причину и повтори artel.py advance {self.TASK}",
+                      out)
+
+
+class PreAdvanceMandateRefusalRepeatTest(AutoCycleTest):
+    """`auto._pre_advance_step` на отказе «мандат есть, раздел PLAN не
+    оформлен» (SPEC 01M2XFSNVGWA2VX5XFEYR93Y4Z, AC-3/AC-5): стоп-кран —
+    только при завершённом шаге роли МЕЖДУ двумя одинаковыми отказами,
+    не по `cycle.prev_refusal` и не по шагу с момента входа в состояние."""
+
+    ACTION = zones.ZONES_MANDATE_WITHOUT_PLAN_REFUSAL_ACTION
+
+    def setUp(self):
+        super().setUp()
+        self.write_plan("ready")
+        self.set_state("in_dev")
+        store.journal(store.db(), self.TASK, "fsm", "state -> in_dev",
+                      "гейт SPEC пройден — приёмочные тесты до кода")
+        # Шаг developer ДО первого отказа (инцидент: шаг 10:13:20) — общая
+        # проверка «шаг с момента входа» уже видела бы его.
+        store.journal(store.db(), self.TASK, "developer", "agent run finished",
+                      "rc=0, тестовая заглушка")
+        self.advance = FakeAdvance()
+        self.patch_object(fsm, "cmd_advance", self.advance)
+        self.cycle = auto._CycleState()
+
+    def pre_advance(self):
+        return auto._pre_advance_step(store.db(), self.TASK, "sid", "developer",
+                                      "in_dev", "in_dev", self.cycle)
+
+    def test_repeat_without_a_role_step_between_returns_none_twice(self):
+        """Ловит мутацию: новое действие не исключено из
+        `other_class_refusal` — первый вызов дал бы `Refused`, второй
+        `Stop`; либо защита от кружения смотрит на любой шаг роли с
+        входа в состояние — второй вызов дал бы `Stop`."""
+        self.advance.script = [self.ACTION, self.ACTION]
+        self.cycle.prev_refusal = self.ACTION
+
+        first = self.pre_advance()
+        second = self.pre_advance()
+
+        self.assertIsNone(first)
+        self.assertIsNone(second)
+        self.assertIsNone(self.cycle.prev_refusal)
+
+    def test_repeat_after_a_role_step_stops_with_the_refusal_text(self):
+        """Ловит мутацию: новое действие безусловно отнесено к классу
+        «роль ещё не закончила» без журнальной защиты — цикл жёг бы шаги
+        developer до `AUTO_MAX_STEPS`."""
+        self.advance.script = [self.ACTION, self.ACTION]
+
+        first = self.pre_advance()
+        store.journal(store.db(), self.TASK, "developer", "agent run finished",
+                      "rc=0, тестовая заглушка")
+        second = self.pre_advance()
+
+        self.assertIsNone(first)
+        self.assertIsInstance(second, auto.Stop)
+        self.assertIn(self.ACTION, second.reason)
+        self.assertEqual(second.state, "in_dev")
+
+    def test_state_entry_between_refusals_resets_the_protection(self):
+        """Отказ прошлого визита `in_dev` (до новой записи `state ->
+        in_dev`) не считается предыдущим: роль снова получает шаг.
+
+        Ловит мутацию: помощник не останавливается на границе `state ->`
+        — отказ и шаг роли из прошлого визита давали бы `Stop` на первом
+        же отказе нового визита."""
+        self.advance.script = [self.ACTION, self.ACTION]
+
+        self.pre_advance()
+        store.journal(store.db(), self.TASK, "developer", "agent run finished",
+                      "rc=0, тестовая заглушка")
+        store.journal(store.db(), self.TASK, "fsm", "state -> in_dev",
+                      "замечания ревью, итерация 1")
+        second = self.pre_advance()
+
+        self.assertIsNone(second)
+
+    def test_other_in_dev_refusal_still_stops_on_the_second_repeat(self):
+        """Контроль AC-6: прежний отказ гейта зон в `in_dev` остаётся
+        классом Оператора — второй подряд даёт `Stop` без шага роли.
+
+        Ловит мутацию: исключение из `other_class_refusal` написано
+        префиксом «гейт зон» и накрыло прежнее действие."""
+        self.advance.script = ["переход отклонён: гейт зон"] * 2
+
+        first = self.pre_advance()
+        second = self.pre_advance()
+
+        self.assertIsInstance(first, auto.Refused)
+        self.assertIsInstance(second, auto.Stop)
 
 
 if __name__ == "__main__":
