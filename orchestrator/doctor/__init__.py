@@ -53,7 +53,7 @@ subprocess-вызовов», см. `preflight_checks`).
 функций не переписано, только перенесено. Этот файл (фасад) — ЕДИНСТВЕННОЕ
 место, где коллаборанты (`alerts`, `artifact_branch`, `canary`, `ci`,
 `coldstart`, `config`, `fixation`, `gitcmd`, `liveness`, `pool_seal`,
-`projects`, `roles`, `runner`, `snapshot`, `spend`, `stack`, `store`,
+`projects`, `providers`, `roles`, `runner`, `snapshot`, `spend`, `stack`, `store`,
 `targets`, `workspace`, `zone_lock`, `subprocess`, `shutil`) импортируются напрямую — подмодули
 их не импортируют (AC-9: сканирующий тест красит любой прямой
 `import subprocess`/`import shutil`/`from orchestrator import gitcmd` в
@@ -95,8 +95,8 @@ from pathlib import Path
 
 from .. import (alerts, artifact_branch, canary, ci, coldstart, config,
                 fixation, gitcmd, liveness, merge_lock, notes, pool_seal,
-                projects, repo_context, roles, runner, snapshot, spend,
-                stack, store, targets, workspace, zone_lock)
+                projects, providers, repo_context, roles, runner, snapshot,
+                spend, stack, store, targets, workspace, zone_lock)
 
 # status: "ok" | "warn" | "fail" | "skip" ("skip" — честный пропуск проверки,
 # требование 9: сверка forge-политики без `gh`/сети — не провал и не ок).
@@ -117,7 +117,9 @@ from .preflight import (check_cli_found, cli_version, check_cli_version,
                         check_token, check_git_identity, check_disk_space,
                         _role_home_diff, check_role_home_reference,
                         check_target_layout, TARGET_WRAPPER_MARKERS,
-                        check_target_wrapper, preflight_checks)
+                        check_target_wrapper, agent_roles,
+                        check_role_providers, provider_preflight_checks,
+                        preflight_checks)
 from .isolation import isolation_smoke
 from .live_smoke import live_smoke, _live_smoke_run
 from .recovery import recovery_check

@@ -83,11 +83,32 @@ PER_TEST_TIMEOUT_SEC = 120
 
 ToolRequirement = namedtuple("ToolRequirement", "minimum command")
 
+def _provider_tools() -> dict:
+    """Записи манифеста инструментов, объявленные самими провайдерами
+    исполнителя роли (SPEC 01M2ZNTHSNFYSTF904P6SZTPYF, требование 6,
+    AC-8): имя и минимальную версию CLI знает провайдер
+    (`orchestrator/providers/`), форму записи манифеста — манифест.
+    До этой задачи запись `claude` стояла здесь литералом, и второй
+    провайдер правил бы этот файл руками.
+
+    Импорт пакета провайдеров безопасен на пути импорта самого
+    `stack.py` под интерпретатором 3.9 (докстринг у `REQUIRED_PYTHON`):
+    пакет на уровне модуля тянет только стандартную библиотеку и себя
+    же, а пульт читает лениво, внутри методов.
+    """
+    from .providers import cli_tools
+    return {tool.name: ToolRequirement(tool.minimum, tool.command)
+            for tool in cli_tools().values()}
+
+
 REQUIRED_TOOLS = {
     "git": ToolRequirement((2, 30, 0), ("git", "--version")),
     "gh": ToolRequirement((2, 0, 0), ("gh", "--version")),
-    "claude": ToolRequirement((1, 0, 0), ("claude", "--version")),
 }
+# Инструменты провайдеров — после общих: порядок ключей задаёт порядок
+# строк `check_stack()` и порядок каталогов PATH роли (`DECLARED_TOOLS`
+# ниже), а он не менялся с T019 (git, gh, claude).
+REQUIRED_TOOLS.update(_provider_tools())
 
 # Таблица «модель роли -> минимальная версия CLI claude» (SPEC
 # 01M2XJKV84SQ9VEVR0VNVKDNGJ, требование 2): состав правит Оператор

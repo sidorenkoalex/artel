@@ -11,15 +11,34 @@ from orchestrator import doctor
 # --- команда doctor -------------------------------------------------------
 
 def all_checks(conn) -> list[doctor.Check]:
-    """Требование 1: прогон всех проверок doctor."""
-    checks = [doctor.check_cli_found()]
-    if checks[-1].status == "ok":
-        checks.append(doctor.check_cli_version())
-    for role in sorted(set(doctor.config.STATE_ROLE.values())):
-        checks.append(doctor.check_token(role))
+    """Требование 1: прогон всех проверок doctor.
+
+    Проверки исполнителя роли (CLI найден, версия CLI, секрет, дом
+    роли) приходят из `preflight()` провайдера КАЖДОЙ agent-роли (SPEC
+    01M2ZNTHSNFYSTF904P6SZTPYF, требование 6): склейка без дублей — в
+    `doctor.provider_preflight_checks`, порядок строк в выводе остаётся
+    прежним (CLI, версия, токены ролей, git-идентичность, диск, дом
+    роли). Версия CLI отсутствует в склейке, если CLI не нашёлся, —
+    то же условие, что стояло здесь явным `if` до задачи, теперь внутри
+    `preflight()` провайдера.
+
+    Четыре сегодняшних имени разбираются поимённо — ради ПОРЯДКА строк,
+    в котором они перемежаются общими проверками пульта; всё, что
+    провайдер назвал иначе, печатается следом за ними, а не пропадает
+    (REVIEW.md итерации 1, R1-F4): проверка секрета второго провайдера
+    под своим именем (`api-key`) обязана дойти до Оператора, иначе
+    `doctor` зеленел бы при отсутствующем ключе.
+    """
+    provider_checks = doctor.provider_preflight_checks()
+    checks = [doctor.check_role_providers()]
+    checks.extend(provider_checks.pop("cli-found", []))
+    checks.extend(provider_checks.pop("cli-version", []))
+    checks.extend(provider_checks.pop("token", []))
     checks.append(doctor.check_git_identity())
     checks.append(doctor.check_disk_space())
-    checks.append(doctor.check_role_home_reference())
+    checks.extend(provider_checks.pop("role-home-reference", []))
+    for remaining in provider_checks.values():
+        checks.extend(remaining)
     checks.append(doctor.check_backup_age(conn))
     checks.append(doctor.check_task_counters(conn))
     checks.append(doctor.isolation_smoke())

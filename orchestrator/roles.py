@@ -71,6 +71,33 @@ def skills(role: str) -> list[str]:
     return names
 
 
+def provider(role: str) -> str:
+    """Имя провайдера исполнителя роли (поле `provider:` в roles.yaml).
+
+    Поле не задано — `providers.DEFAULT_PROVIDER` (`claude`), в отличие
+    от `model()`, где отсутствие поля отдаёт `None`: провайдер обязан
+    быть у каждой роли, а сегодняшний `roles.yaml` поля не несёт вовсе
+    (SPEC 01M2ZNTHSNFYSTF904P6SZTPYF, требование 3 — сам файл эта задача
+    не меняет). Роль не описана либо значение не является непустой
+    строкой — `RolesError`, тем же приёмом, что `skills()`/`model()`.
+
+    Реестр импортируется лениво: `orchestrator/providers/` читается
+    манифестом стека на пути импорта точки входа, и обычный импорт
+    отсюда замкнул бы круг.
+    """
+    from .providers import DEFAULT_PROVIDER
+    entry = load().get(role)
+    if not isinstance(entry, dict):
+        raise RolesError(f"{config.ROLES}: роль '{role}' не описана")
+    value = entry.get("provider")
+    if value is None:
+        return DEFAULT_PROVIDER
+    if not isinstance(value, str) or not value:
+        raise RolesError(
+            f"{config.ROLES}: provider роли '{role}' — не непустая строка")
+    return value
+
+
 def model(role: str) -> str | None:
     """Идентификатор модели роли (поле `model:` в roles.yaml).
 
