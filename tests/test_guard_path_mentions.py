@@ -108,13 +108,15 @@ class MentionedPathsTest(_SeededRootTest):
         self.assertEqual(self.paths(text), set())
 
     def test_url_and_dotted_suffix_are_not_confused_with_repo_paths(self):
-        """Хвост URL `example.com/scripts/guard.py` не даёт
+        """Хвост чужого пути `mirror.old/scripts/guard.py` не даёт
         `scripts/guard.py`; `scripts/guard.py.bak` не даёт
-        `scripts/guard.py`.
+        `scripts/guard.py`. Сетевого адреса в литерале нет намеренно —
+        инвариант 35 (`tests/test_invariants.py`) запрещает `http(s)://`
+        в тестах.
 
         Ловит мутацию: левая граница `(?<![A-Za-z0-9_./-])` или правая
         `(?!\\.[A-Za-z0-9_])` снята — оба ложных пути вернулись бы."""
-        text = ("См. https://example.com/scripts/guard.py и копию "
+        text = ("См. mirror.old/scripts/guard.py и копию "
                 "scripts/guard.py.bak рядом.")
 
         self.assertEqual(self.paths(text), set())
