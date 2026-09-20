@@ -155,6 +155,35 @@ def _tests_writing_acceptance_dir(task_id: str, tdir, target: str,
     return tdir, config.ROOT
 
 
+ARTIFACT_DISK_READ_ACTION = "переход отклонён: планка читает артефакты с диска"
+
+
+def _tests_writing_artifact_source_gate(acc_tdir, task_id: str) -> GateRefusal | None:
+    """Источник артефактов задачи в планке — только артефактная ветка
+    (SPEC 01M2XJKKPHM5XDAE42838AMBQH, требование 5, AC-6/AC-7):
+    статическая проверка `guard.scan_artifact_disk_reads` над всеми
+    `*.py` материализованной планки `acc_tdir` — тем же каталогом, что
+    сухой сбор ниже. Непустой результат отклоняет переход именованным
+    действием `ARTIFACT_DISK_READ_ACTION`, текст ошибок guard (файл,
+    строка, рецепт) — в `detail`. Отказ идёт обычным путём `_run_gates`
+    (`store.journal(..., "fsm", ...)` с префиксом «переход отклонён: »),
+    поэтому история отказов брифа test_author и стоп-кран T038 видят его
+    тем же классом, что отказ сухого сбора: шаг роли повторяется,
+    `brief._ROLE_NOT_FINISHED_REFUSAL_ACTIONS` его не вычитает.
+
+    Зовётся из `_tests_writing_dry_collect_gate` ДО `acceptance.collect`,
+    а не отдельным элементом списка `_run_gates` в `fsm_advance.
+    tests_writing`: зоны задачи (`scripts/guard.py`, этот модуль,
+    `tests/`) не включают `orchestrator/fsm_advance.py`, а статическая
+    проверка дешевле субпроцесса pytest и даёт точнее диагноз."""
+    errors = guard.scan_artifact_disk_reads(acc_tdir)
+    if not errors:
+        return None
+    hint = (f"перепиши чтение артефактов планки на артефактную ветку "
+            f"(skills/test-authoring.md) и повтори artel.py advance {task_id}")
+    return GateRefusal(ARTIFACT_DISK_READ_ACTION, "; ".join(errors), hint)
+
+
 def _tests_writing_dry_collect_gate(acc_tdir, run_cwd,
                                     task_id: str) -> GateRefusal | None:
     """Требование 2/AC-4/AC-5: сухой сбор материализованной планки
@@ -165,7 +194,15 @@ def _tests_writing_dry_collect_gate(acc_tdir, run_cwd,
     кран T038 и история отказов брифа test_author (`brief.
     advance_refusal_history`) видели его как обычный отказ шага роли,
     не как повод остановиться навсегда (AC-6 — уже общий механизм,
-    правки не требует)."""
+    правки не требует).
+
+    Первым — источник артефактов (`_tests_writing_artifact_source_gate`,
+    SPEC 01M2XJKKPHM5XDAE42838AMBQH): планка, читающая `PLAN.md` с диска,
+    отклоняется своим именованным действием без запуска субпроцесса
+    pytest."""
+    refusal = _tests_writing_artifact_source_gate(acc_tdir, task_id)
+    if refusal is not None:
+        return refusal
     collected, tail = acceptance.collect(acc_tdir, run_cwd)
     if collected:
         return None
