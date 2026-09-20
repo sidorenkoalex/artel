@@ -241,7 +241,7 @@ def _run_developer_step(conn, task_id: str, t, role: str) -> None:
         sys.exit(payload)
     if action == "return":
         return
-    target, skills, _model_id = payload
+    target, skills, model_id = payload
 
     prompt = _build_prompt(conn, task_id, t, role, target, skills)
 
@@ -249,6 +249,13 @@ def _run_developer_step(conn, task_id: str, t, role: str) -> None:
                                                     prompt)
     if attempt is None:
         return
+
+    if failure_class == failure_classification.MODEL_UNSUPPORTED_CLASS:
+        # Тот же именованный отказ, что у предполётной сверки (SPEC
+        # 01M2XJKV84SQ9VEVR0VNVKDNGJ, требование 4): задача остаётся в
+        # своём состоянии, `auto` останавливается текстом с подсказкой.
+        sys.exit(_model_unsupported_after_attempt(conn, task_id, role,
+                                                  model_id, reason))
 
     _escalate_after_attempts(conn, task_id, t, role, target, attempt,
                              reason, failure_class)
@@ -394,8 +401,74 @@ def _refuse_before_start(conn, task_id: str, t, role: str):
     if model_id is None:
         store.journal(conn, task_id, role, "model WARNING",
                       "модель роли не задана — дефолт CLI")
+    else:
+        # Предполётная сверка модели с версией CLI (SPEC
+        # 01M2XJKV84SQ9VEVR0VNVKDNGJ, требование 3, AC-6..AC-8) — ДО
+        # сборки промпта и первой попытки: отказ детерминирован, повторы и
+        # эскалация его не лечат (инцидент 19.09 — три попытки по 120 с за
+        # 0 токенов). `claude --version` зовётся только для модели из
+        # таблицы: модели вне её версия не нужна — одна запись
+        # предупреждения на шаг и запуск как сегодня. `sys.exit` — тем же
+        # приёмом, что пауза/стоп-кран выше: `auto` ловит `SystemExit`,
+        # печатает текст (с подсказкой из самого отказа) и останавливает
+        # цикл, не прокручивая шаги до `AUTO_MAX_STEPS`.
+        installed = (stack.installed_cli_version()
+                     if model_id in stack.MODEL_MIN_CLI_VERSION else None)
+        verdict = stack.model_cli_verdict(model_id, installed)
+        if verdict.status == "fail":
+            return "exit", _model_refusal_exit(conn, task_id, role,
+                                               verdict.detail)
+        if verdict.status == "warn":
+            # Только журнал, без консоли — тем же приёмом, что «модель
+            # роли не задана» выше: модели вне таблицы — штатный случай
+            # (таблицу пополняет Оператор), строка на каждый шаг в stdout
+            # была бы шумом раньше пути лога шага.
+            store.journal(conn, task_id, role, "model WARNING",
+                          f"{model_id}: {verdict.detail}")
 
     return "continue", (target, skills, model_id)
+
+
+# Действие записи журнала отказа «модель не поддерживается CLI» (SPEC
+# 01M2XJKV84SQ9VEVR0VNVKDNGJ, требования 3-4): одно и то же для
+# предполётного отказа и отказа после попытки — тот же приём именованного
+# отказа, что `pause.REFUSAL_ACTION`/`WAVE_BREAKER_REFUSAL_ACTION`.
+MODEL_UNSUPPORTED_REFUSAL_ACTION = "run отклонён: модель не поддерживается CLI"
+
+
+def _model_refusal_exit(conn, task_id: str, role: str, detail: str) -> str:
+    """Журнал + текст `sys.exit` именованного отказа шага по модели роли:
+    `detail` уже несёт префикс `stack.MODEL_UNSUPPORTED_PREFIX`, модель,
+    обе версии и подсказку `stack.CLI_UPGRADE_HINT` — `auto` печатает
+    ровно этот текст, останавливая цикл (AC-7)."""
+    store.journal(conn, task_id, role, MODEL_UNSUPPORTED_REFUSAL_ACTION, detail)
+    return f"[{task_id}] run отклонён: {detail}"
+
+
+def _model_unsupported_after_attempt(conn, task_id: str, role: str,
+                                     model_id: str | None,
+                                     reason: str) -> str:
+    """Отказ шага после попытки класса «модель не поддерживается CLI»
+    (SPEC 01M2XJKV84SQ9VEVR0VNVKDNGJ, требование 4, AC-9) — тот же
+    именованный исход, что и у предполётной сверки, для модели, которой
+    в таблице нет (или чья запись занижена): требуемая версия — из
+    текста попытки («version X or newer is required»), установленная —
+    тем же `claude --version`, что и предполёт."""
+    required = failure_classification.required_cli_version(reason)
+    installed = stack.installed_cli_version()
+    detail = (f"{stack.MODEL_UNSUPPORTED_PREFIX}: "
+              f"{_model_journal_label(model_id)} — CLI отверг модель в "
+              f"попытке агента («{failure_classification.MODEL_UNSUPPORTED_SIGNATURE}»)")
+    if required is not None:
+        detail += f", требует claude ≥ {required}"
+    if installed is not None:
+        detail += f", установлен {stack.version_text(installed)}"
+    detail += f"; {stack.CLI_UPGRADE_HINT}"
+    if model_id is not None and model_id not in stack.MODEL_MIN_CLI_VERSION:
+        detail += (f"; {stack.MODEL_NOT_IN_TABLE_WARNING} — запись в "
+                   f"stack.MODEL_MIN_CLI_VERSION остановит следующий такой "
+                   f"шаг до запуска агента")
+    return _model_refusal_exit(conn, task_id, role, detail)
 
 
 def _build_prompt(conn, task_id: str, t, role: str, target: str,
@@ -464,6 +537,12 @@ def _run_attempts(conn, task_id: str, t, role: str, prompt: str):
             # Требование 4/AC-9: класс 2 не расходует остаток попыток шага —
             # отказ сразу, без ретрая (в отличие от связки «транзиентное
             # системное» ниже, которую ретрай как раз должен пережидать).
+            break
+        if failure_class == failure_classification.MODEL_UNSUPPORTED_CLASS:
+            # «Модель не поддерживается CLI» (SPEC 01M2XJKV84SQ9VEVR0VNVKDNGJ,
+            # требование 4, AC-9): отказ детерминирован — следующая попытка
+            # не запускается, паузы нет; исход решает `_run_developer_step`
+            # (именованный отказ, не эскалация).
             break
         if attempt < config.AGENT_ATTEMPTS:
             if failure_class in failure_classification.TRANSIENT_SYSTEM_CLASSES:
@@ -787,9 +866,20 @@ def role_cmd() -> list[str]:
     MCP тем же вектором, что уже закрыт `--setting-sources` для
     project-/local-хуков (SPEC T058, инцидент T046).
     """
+    # argv[0] — абсолютный путь из резолва манифеста (SPEC
+    # 01M2XJKV84SQ9VEVR0VNVKDNGJ, требование 1, AC-1/AC-3): тот же
+    # `_resolve_declared_tools`, из которого `role_env` собирает PATH роли.
+    # Литерал `claude` искался бы по PATH роли в момент запуска, где
+    # каталог другого объявленного инструмента стоит раньше и может нести
+    # одноимённый бинарник (инцидент 06.09: подставной `claude` планки
+    # затенён настоящим из каталога `gh`). Резолв здесь, а не параметром:
+    # `role_cmd()` заперта на нулевой список параметров (AC-4). Обе точки
+    # вызова стоят после успешного `role_env()` — `OSError` резолва там уже
+    # отработал бы раньше.
+    claude = _resolve_declared_tools()["claude"]
     return [
         # `claude -p` без аргумента читает промпт со стандартного входа.
-        "claude", "-p", "--permission-mode", "acceptEdits",
+        claude, "-p", "--permission-mode", "acceptEdits",
         # stream-json — единственный режим, где строки приходят по ходу
         # шага: text и json отдают всё одним куском в конце (замер в
         # PLAN.md T017). --verbose при нём обязателен, иначе CLI выходит

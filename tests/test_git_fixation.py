@@ -39,7 +39,8 @@ from orchestrator import (auto, catalog, config, fixation, fsm,  # noqa: E402
                           gitcmd, projects, runner, store)
 from tests.sandbox import (FakeProc, TmpRootTest, capture,  # noqa: E402
                            capture_new_task_id, claude_only_popen,
-                           network_guarded_real_run, resilient_tmp_cleanup)
+                           is_claude_call, network_guarded_real_run,
+                           resilient_tmp_cleanup)
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
@@ -489,7 +490,7 @@ class ExternalIntegrityIncidentBlocksRunTest(TmpRootTest):
 
     def claude_launches(self, popen) -> list:
         return [c for c in popen.call_args_list
-               if c.args and c.args[0] and c.args[0][0] == "claude"]
+               if c.args and is_claude_call(c.args[0])]
 
     def test_tampering_after_fixation_blocks_the_run(self):
         self.make_task(self.TASK)
@@ -940,7 +941,7 @@ class RealPultGitTest(_GitFixationTmpRootTest):
         Проверять надо запуск именно агента.
         """
         return [c for c in popen.call_args_list
-               if c.args and c.args[0] and c.args[0][0] == "claude"]
+               if c.args and is_claude_call(c.args[0])]
 
 
 class DogfoodTransitionJournalsShaTest(RealPultGitTest):

@@ -39,7 +39,8 @@ from tests.sandbox import (FakeStream, InitializedTmpRootTest,  # noqa: E402
                            TaskSeededTmpRootTest, TmpRootTest, _ts_ago,
                            capture, capture_new_task_id, claude_only_popen,
                            claude_only_run, disk_backed_ls_tree_files,
-                           disk_backed_show, fake_git, sync_spec_from_worktree)
+                           disk_backed_show, fake_git, is_claude_call,
+                           sync_spec_from_worktree)
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
@@ -316,14 +317,19 @@ class PreflightBlocksMissingTokenTest(TmpRootTest):
         self.assertEqual(store.get_task(store.db(), self.TASK)["state"], "in_dev")
 
     def test_token_present_lets_the_step_start(self):
-        """Контроль: сам pre-flight не мешает обычному запуску."""
+        """Контроль: сам pre-flight не мешает обычному запуску.
+
+        Ловит мутацию: pre-flight с добытым токеном всё равно отказывает
+        шагу (или запускает агента дважды) — счёт запусков CLI роли
+        (по базовому имени argv[0], `is_claude_call`) отклонится от 1.
+        """
         with mock.patch.object(runner, "spawn_agent",
                                side_effect=claude_only_popen(
                                    FakeAgentProc(["готово\n"]))) as popen:
             capture(runner.cmd_run, self.TASK)
 
         claude_calls = [c for c in popen.call_args_list
-                       if c.args and c.args[0] and c.args[0][0] == "claude"]
+                       if c.args and is_claude_call(c.args[0])]
         self.assertEqual(len(claude_calls), 1, "агент стартовал ровно один раз")
 
     def test_git_identity_is_part_of_preflight(self):
@@ -333,6 +339,10 @@ class PreflightBlocksMissingTokenTest(TmpRootTest):
         self.assertIn("git-identity", [c.name for c in checks])
 
     def test_broken_identity_warns_but_does_not_block_the_step(self):
+        """Ловит мутацию: отсутствующая git-идентичность трактуется как
+        провал pre-flight (шаг не начат, агент не запущен) либо
+        предупреждение не печатается — `assertIn`/счёт запусков CLI роли
+        (по базовому имени argv[0], `is_claude_call`) откажут."""
         def no_identity(*args):
             # Только запросы идентичности отвечают отказом — остальное
             # (в частности `workspace.ensure` внутри `role_cwd`, SPEC
@@ -358,7 +368,7 @@ class PreflightBlocksMissingTokenTest(TmpRootTest):
 
         self.assertIn("git-identity", out)
         claude_calls = [c for c in popen.call_args_list
-                       if c.args and c.args[0] and c.args[0][0] == "claude"]
+                       if c.args and is_claude_call(c.args[0])]
         self.assertEqual(len(claude_calls), 1, "предупреждение не блокирует шаг")
 
     def test_blocking_failure_makes_no_subprocess_calls_at_all(self):

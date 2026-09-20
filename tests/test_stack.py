@@ -116,6 +116,11 @@ class CheckStackTest(unittest.TestCase):
         отклонится от 6, `assertEqual` откажет; либо какой-то из
         заведомо согласованных проверок присвоен не `ok` — `assertEqual`
         на множестве статусов откажет.
+
+        Строки моделей ролей (`model-<роль>`, SPEC 01M2XJKV84SQ9VEVR0VNVKDNGJ,
+        требование 5) отсекаются по имени: их число — функция `roles.yaml`,
+        не манифеста инструментов, а их статусы проверяет
+        `CheckStackModelLinesTest` ниже.
         """
         with tempfile.TemporaryDirectory() as tmp:
             venv_dir = Path(tmp) / "venv"
@@ -129,7 +134,8 @@ class CheckStackTest(unittest.TestCase):
                  mock.patch.object(stack.subprocess, "run",
                                    side_effect=_all_ok_run), \
                  mock.patch.object(sys, "version_info", OK_PYTHON_VERSION_INFO):
-                checks = stack.check_stack()
+                checks = [c for c in stack.check_stack()
+                          if not c.name.startswith("model-")]
 
         self.assertEqual(6, len(checks))
         statuses = {c.status for c in checks}
@@ -331,6 +337,243 @@ def _all_ok_run_with_freeze(freeze_output: str):
             return subprocess.CompletedProcess(args, 0, freeze_output, "")
         return _all_ok_run(args, **kwargs)
     return fake_run
+
+
+TABLE_MODEL = "claude-fable-5-1"
+UNKNOWN_MODEL = "claude-test-model-vne-tablitsy"
+
+ROLES_YAML = """roles:
+  orchestrator:
+    executor: system
+    token_slot: artel-orchestrator
+    model: {developer}
+  developer:
+    executor: agent
+    token_slot: artel-developer
+    skills: [conventions-core]
+    model: {developer}
+  reviewer:
+    executor: agent
+    token_slot: artel-reviewer
+    skills: [conventions-core]
+    model: {reviewer}
+  analyst:
+    executor: agent
+    token_slot: artel-analyst
+    skills: [conventions-core]
+  verifier:
+    executor: none
+    token_slot: artel-verifier
+    model: {developer}
+token_fallback: artel-token
+"""
+
+
+class ModelCliVerdictTest(unittest.TestCase):
+    """Требование 2 (SPEC 01M2XJKV84SQ9VEVR0VNVKDNGJ, AC-5): таблица
+    `MODEL_MIN_CLI_VERSION` и чистый вердикт `model_cli_verdict`."""
+
+    def test_table_carries_the_incident_entry(self):
+        """Ловит мутацию: запись инцидента 19.09 удалена или записана
+        другим числом/строкой — `assertEqual` откажет."""
+        self.assertEqual(stack.MODEL_MIN_CLI_VERSION[TABLE_MODEL], (2, 1, 251))
+
+    def test_verdict_reads_the_table_not_a_literal(self):
+        """Ловит мутацию: минимум повторён литералом по месту сравнения —
+        подменённая таблица не меняет ни вердикт, ни названное число."""
+        with mock.patch.object(stack, "MODEL_MIN_CLI_VERSION",
+                               {TABLE_MODEL: (7, 7, 7)}):
+            low = stack.model_cli_verdict(TABLE_MODEL, (7, 7, 6))
+            high = stack.model_cli_verdict(TABLE_MODEL, (7, 7, 8))
+            equal = stack.model_cli_verdict(TABLE_MODEL, (7, 7, 7))
+
+        self.assertEqual(low.status, "fail")
+        self.assertIn("7.7.7", low.detail)
+        self.assertIn("7.7.6", low.detail)
+        self.assertEqual(high.status, "ok")
+        self.assertEqual(equal.status, "ok")
+
+    def test_fail_detail_names_the_refusal_and_the_hint(self):
+        """Ловит мутацию: текст отказа расходится с требованием 3 SPEC
+        (префикс, «требует claude ≥ X, установлен Y», подсказка)."""
+        verdict = stack.model_cli_verdict(TABLE_MODEL, (2, 1, 236))
+
+        self.assertEqual(verdict.status, "fail")
+        self.assertTrue(verdict.detail.startswith(
+            f"{stack.MODEL_UNSUPPORTED_PREFIX}: {TABLE_MODEL} требует claude ≥ "
+            f"2.1.251, установлен 2.1.236"), verdict.detail)
+        self.assertIn(stack.CLI_UPGRADE_HINT, verdict.detail)
+
+    def test_model_outside_the_table_is_a_warning_regardless_of_version(self):
+        """Ловит мутацию: отсутствие модели в таблице трактуется как
+        `fail` (fail-closed) либо как `ok` без предупреждения."""
+        for installed in ((0, 0, 1), (999, 0, 0), None):
+            with self.subTest(installed=installed):
+                verdict = stack.model_cli_verdict(UNKNOWN_MODEL, installed)
+                self.assertEqual(verdict.status, "warn")
+                self.assertIn(stack.MODEL_NOT_IN_TABLE_WARNING, verdict.detail)
+
+    def test_undetermined_cli_version_is_a_warning_not_a_refusal(self):
+        """Ловит мутацию: `installed=None` сравнивается с кортежем
+        (`TypeError`) либо трактуется как «ниже минимума» — отказ по
+        причине вне предмета сверки."""
+        verdict = stack.model_cli_verdict(TABLE_MODEL, None)
+
+        self.assertEqual(verdict.status, "warn")
+        self.assertIn("не определилась", verdict.detail)
+
+    def test_ok_detail_matches_the_spec_wording(self):
+        """Ловит мутацию: строка `ok` теряет обе версии или знак `≥`
+        (текст требования 5: «CLI 2.1.267 ≥ 2.1.251 — ok»)."""
+        verdict = stack.model_cli_verdict(TABLE_MODEL, (2, 1, 267))
+
+        self.assertEqual(verdict.status, "ok")
+        self.assertEqual(verdict.detail, "CLI 2.1.267 ≥ 2.1.251 — ok")
+
+
+class InstalledCliVersionTest(unittest.TestCase):
+    """Требование 3: `installed_cli_version()` — тот же вызов и разбор
+    `claude --version`, что у проверки инструмента манифеста."""
+
+    def test_parses_the_version_tuple_from_claude_version(self):
+        """Ловит мутацию: версия читается не из `claude --version` или
+        возвращается строкой, не кортежем."""
+        recorded = []
+
+        def fake_run(args, **kwargs):
+            recorded.append(list(args))
+            return subprocess.CompletedProcess(args, 0, "2.1.267 (Claude Code)\n", "")
+
+        with mock.patch.object(stack.subprocess, "run", side_effect=fake_run):
+            version = stack.installed_cli_version()
+
+        self.assertEqual(version, (2, 1, 267))
+        self.assertEqual(recorded, [list(stack.REQUIRED_TOOLS["claude"].command)])
+
+    def test_missing_or_unparsable_cli_gives_none(self):
+        """Ловит мутацию: отсутствие CLI роняет вызывающий код исключением
+        либо нераспознанный вывод отдаётся пустым кортежем."""
+        def missing(args, **kwargs):
+            raise FileNotFoundError("claude")
+
+        with mock.patch.object(stack.subprocess, "run", side_effect=missing):
+            self.assertIsNone(stack.installed_cli_version())
+        with mock.patch.object(stack.subprocess, "run",
+                               side_effect=_all_ok_run_with_freeze("")):
+            with mock.patch.object(stack, "VERSION_RE", stack.re.compile("nope")):
+                self.assertIsNone(stack.installed_cli_version())
+
+
+class CheckStackModelLinesTest(unittest.TestCase):
+    """Требование 5 (AC-10): строки моделей agent-ролей в `check_stack()`."""
+
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.roles_path = Path(tmp.name) / "roles.yaml"
+        self.set_roles(developer=TABLE_MODEL, reviewer=UNKNOWN_MODEL)
+        self.patch(config, "ROLES", self.roles_path)
+        self.patch(sys, "version_info", OK_PYTHON_VERSION_INFO)
+        self.patch(stack, "MODEL_MIN_CLI_VERSION", {TABLE_MODEL: (2, 1, 251)})
+
+    def patch(self, target, attr, value) -> None:
+        patcher = mock.patch.object(target, attr, value)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def set_roles(self, developer, reviewer) -> None:
+        self.roles_path.write_text(
+            ROLES_YAML.format(developer=developer, reviewer=reviewer),
+            encoding="utf-8")
+
+    def checks_with_cli(self, version_text: str) -> list:
+        self.runs = []
+
+        def fake_run(args, **kwargs):
+            self.runs.append(list(args))
+            if args[0] == "claude":
+                return subprocess.CompletedProcess(args, 0, f"{version_text}\n", "")
+            return _all_ok_run(args, **kwargs)
+
+        with mock.patch.object(stack.subprocess, "run", side_effect=fake_run):
+            return stack.check_stack()
+
+    def model_lines(self, checks) -> dict:
+        return {c.name: c for c in checks if c.name.startswith("model-")}
+
+    def test_one_line_per_agent_role_with_a_model(self):
+        """Ловит мутацию: строка печатается на каждую роль подряд (включая
+        `orchestrator`/`verifier` с полем `model`, `analyst` без поля),
+        либо модель вне таблицы даёт `ok`/`fail` вместо `warn`."""
+        lines = self.model_lines(self.checks_with_cli("2.1.267"))
+
+        self.assertEqual(sorted(lines), ["model-developer", "model-reviewer"])
+        ok = lines["model-developer"]
+        self.assertEqual(ok.status, "ok", ok.detail)
+        self.assertEqual(
+            ok.detail,
+            f"модель роли developer {TABLE_MODEL}: CLI 2.1.267 ≥ 2.1.251 — ok")
+        unknown = lines["model-reviewer"]
+        self.assertEqual(unknown.status, "warn", unknown.detail)
+        self.assertIn(UNKNOWN_MODEL, unknown.detail)
+        self.assertIn(stack.MODEL_NOT_IN_TABLE_WARNING, unknown.detail)
+
+    def test_line_fails_when_the_installed_cli_is_below_the_minimum(self):
+        """Ловит мутацию: заниженная версия отмечается `warn` (как минимум
+        инструмента в `_tool_check`) — `doctor` остаётся зелёным при
+        заведомо нерабочей модели роли."""
+        lines = self.model_lines(self.checks_with_cli("2.1.236"))
+
+        check = lines["model-developer"]
+        self.assertEqual(check.status, "fail", check.detail)
+        self.assertIn("2.1.251", check.detail)
+        self.assertIn("2.1.236", check.detail)
+        self.assertIn(stack.CLI_UPGRADE_HINT, check.detail)
+
+    def test_model_lines_reuse_the_tool_probe_without_extra_subprocesses(self):
+        """Ловит мутацию: версия для строк моделей добывается отдельным
+        `claude --version` на роль — `check_stack()` (а с ним и
+        `runner._venv_interpreter_bin` на каждом шаге) заводит лишние
+        подпроцессы."""
+        self.checks_with_cli("2.1.267")
+
+        claude_runs = [r for r in self.runs if r[0] == "claude"]
+        self.assertEqual(len(claude_runs), 1, self.runs)
+
+    def test_model_line_names_do_not_match_the_venv_filter(self):
+        """Ловит мутацию: имя строки содержит «venv» — фильтр `runner.
+        _venv_interpreter_bin` (`"venv" in c.name`) примет WARN модели за
+        неготовый venv и остановит шаг."""
+        lines = self.model_lines(self.checks_with_cli("1.0.0"))
+
+        self.assertTrue(lines)
+        for name in lines:
+            self.assertNotIn("venv", name.lower())
+
+    def test_unreadable_roles_yaml_is_a_warning_line_not_an_exception(self):
+        """Ловит мутацию: нечитаемый `roles.yaml` роняет `check_stack()`
+        необработанным `RolesError` вместо строки диагностики."""
+        self.roles_path.unlink()
+
+        checks = self.checks_with_cli("2.1.267")
+
+        warn = [c for c in checks if c.name == "model-roles"]
+        self.assertEqual(len(warn), 1)
+        self.assertEqual(warn[0].status, "warn")
+
+    def test_undetermined_cli_version_gives_warn_lines(self):
+        """Ловит мутацию: `claude` не найден — строка модели из таблицы
+        падает исключением или даёт `fail` по неизвестному числу."""
+        def missing_claude(args, **kwargs):
+            if args[0] == "claude":
+                raise FileNotFoundError("claude")
+            return _all_ok_run(args, **kwargs)
+
+        with mock.patch.object(stack.subprocess, "run", side_effect=missing_claude):
+            lines = self.model_lines(stack.check_stack())
+
+        self.assertEqual(lines["model-developer"].status, "warn")
+        self.assertIn("не определилась", lines["model-developer"].detail)
 
 
 class MainCopyRootTest(unittest.TestCase):
