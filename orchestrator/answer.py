@@ -227,3 +227,9 @@ def _cmd_zones_extend(conn, task_id: str, paths_arg: str) -> None:
         print(f"[{task_id}] {rel_answer} создан, раздел «Расширение зон» "
              f"PLAN.md не совпадает с переданными путями — zones_extension "
              f"не изменён")
+        # Команда продолжения (SPEC 01M2XFSNVGWA2VX5XFEYR93Y4Z, требование
+        # 6): гейт зон на этом мандате отказывает действием класса «роль
+        # ещё не закончила», и `auto` сам запускает developer оформить
+        # раздел — Оператору не нужен ручной `run` (инцидент 13.09).
+        print(f"  дальше: artel.py auto {task_id} — цикл сам запустит "
+              f"developer, тот оформит раздел «## Расширение зон» PLAN.md")
