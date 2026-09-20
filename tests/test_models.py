@@ -17,7 +17,7 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from orchestrator import config, models, roles  # noqa: E402
+from orchestrator import config, models, roles, store  # noqa: E402
 from tests.sandbox import TmpDirTest  # noqa: E402
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -386,6 +386,76 @@ overrides:
 
         self.assertIn(models.CALIBRATED_AT_KEY, str(ctx.exception))
 
+    def test_zero_price_in_an_override_is_a_local_layer_error(self):
+        """Ноль ценой в `overrides:` — отказ КЛАССА локального слоя, а не
+        класса каталога (REVIEW итерации 1, R1-F8).
+
+        Ловит мутацию: `_prices` рождает `ZeroPriceError` (потомок
+        `CatalogError`) независимо от разбираемого файла — обработчик
+        `except LocalLayerError`, который отличает «сломан файл
+        Оператора» от «сломан каталог в git», пропустит ноль в
+        `overrides:` мимо себя трейсбеком.
+        """
+        self.use_local("""\
+tiers:
+  strong: model-alfa
+overrides:
+  model-alfa:
+    input: 1.0
+    output: 0
+    cache_write: 3.0
+    cache_read: 4.0
+    calibrated_at: 2026-09-20
+    source: свой счёт
+""")
+
+        with self.assertRaises(models.LocalLayerError) as ctx:
+            models.load_local()
+
+        self.assertNotIsInstance(ctx.exception, models.CatalogError)
+        self.assertIn("output", str(ctx.exception))
+
+
+class LayersOrNoneTest(_LayersTest):
+    """`models.layers_or_none` — оба слоя одним чтением для перебора
+    ролей (REVIEW итерации 1, R1-F3)."""
+
+    def setUp(self):
+        super().setUp()
+        self.use_catalog(self.catalog_text())
+        self.use_local(LOCAL_TEMPLATE)
+        self.use_roles(ROLES_TEMPLATE.format(tier="strong"))
+
+    def test_passed_layers_spare_the_caller_a_reread_of_both_files(self):
+        """Прочитанные слои, переданные `resolve_role`, и есть источник
+        цепочки: файлы больше не открываются.
+
+        Ловит мутацию: `resolve_role` игнорирует переданные слои и
+        перечитывает файлы сам — цикл `doctor` по ролям снова читает оба
+        файла по разу на роль, а докстринг обещает обратное. Файлы
+        удаляются после чтения: перечитывание упало бы отказом.
+        """
+        catalog, local = models.layers_or_none()
+        config.MODELS.unlink()
+        config.MODELS_LOCAL.unlink()
+
+        resolved = models.resolve_role("developer", catalog, local)
+
+        self.assertEqual(resolved.model, "model-alfa")
+
+    def test_unreadable_layer_comes_back_as_none_not_an_exception(self):
+        """Ловит мутацию: помощник поднимает ошибку разбора вместо
+        `None` — `doctor`/`check_stack` падали бы целиком на сломанном
+        слое вместо красной строки по каждой роли."""
+        self.use_local("tiers: не-отображение\n")
+
+        catalog, local = models.layers_or_none()
+
+        self.assertIsNotNone(catalog)
+        self.assertIsNone(local)
+        with self.assertRaises(models.ModelsError):
+            models.resolve_role("developer", catalog, local)
+
 
 class ResolveRoleTest(_LayersTest):
     """AC-10/AC-11: разрешение цепочки и отказ на каждом звене."""
@@ -567,8 +637,23 @@ overrides:
 
     def test_command_writes_nothing(self):
         """Ловит мутацию: команда чтения заводит файл (шаблон локального
-        слоя, кэш) или пишет в журнал — `models` перестала бы быть
-        безопасной в любом состоянии пульта."""
+        слоя, кэш) или пишет строку в журнал `steps` — `models` перестала
+        бы быть безопасной в любом состоянии пульта.
+
+        Журнал проверяется по НАСТОЯЩЕЙ таблице подменённой БД, а не
+        косвенно по списку файлов (REVIEW итерации 1, R1-F6): БД пульта
+        `TmpDirTest` не подменяет, поэтому до этой правки мутация с
+        `store.journal(...)` оставалась зелёной и писала строки в боевую
+        `state.db` прямо на прогоне тестов.
+        """
+        self.patch("DB", self.tdir / "state.db")
+        # Затравочная строка: БД существует и не пуста — ровно то
+        # состояние, в котором Оператор зовёт `models` на живом пульте.
+        conn = store.db()
+        store.create_schema(conn)
+        store.journal(conn, "T0", "тест", "затравка")
+        conn.commit()
+        del conn
         before = sorted(p.name for p in self.tdir.iterdir())
         mtimes = {p.name: p.stat().st_mtime_ns for p in self.tdir.iterdir()}
 
@@ -577,6 +662,8 @@ overrides:
         self.assertEqual(sorted(p.name for p in self.tdir.iterdir()), before)
         self.assertEqual({p.name: p.stat().st_mtime_ns
                           for p in self.tdir.iterdir()}, mtimes)
+        rows = store.db().execute("SELECT COUNT(*) FROM steps").fetchone()[0]
+        self.assertEqual(rows, 1)
 
     def test_unreadable_local_layer_still_prints_the_catalog(self):
         """Ловит мутацию: без локального слоя команда падает или молчит —
@@ -588,6 +675,35 @@ overrides:
 
         self.assertIn("model-alfa", out)
         self.assertIn(models.LOCAL_FIX_HINT, out)
+
+    def test_unreadable_tier_is_named_above_the_table(self):
+        """Ярус роли не прочитан — команда называет причину строкой над
+        таблицей, а не оставляет молча пустой столбец ролей (REVIEW
+        итерации 1, R1-F5).
+
+        Ловит мутацию: нечитаемый ярус гасится молча — прочерк в столбце
+        ролей читается как «ни одна роль сюда не указывает», хотя правда
+        «ярус роли не прочитан»; различить эти два состояния Оператору
+        больше негде, `models` — единственная команда обзора.
+        """
+        self.use_roles(ROLES_TEMPLATE.format(tier="богатырский"))
+
+        out = self.run_cmd()
+
+        self.assertIn("developer", out)
+        self.assertIn("не полностью", out)
+        self.assertIn("model-alfa", out)
+
+    def test_unreadable_roles_map_is_named_above_the_table(self):
+        """Ловит мутацию: нечитаемая карта исполнителей роняет команду
+        либо гасится молча — в первом случае Оператор не видит каталог
+        вовсе, во втором принимает пустой столбец за «ролей нет»."""
+        self.use_roles("roles: не-отображение\n")
+
+        out = self.run_cmd()
+
+        self.assertIn("карта исполнителей не прочитана", out)
+        self.assertIn("model-alfa", out)
 
     def test_broken_catalog_refuses_by_name(self):
         """Ловит мутацию: сломанный каталог печатает пустую таблицу

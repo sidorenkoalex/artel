@@ -186,12 +186,21 @@ def _document(path, error_cls, missing_cls=None) -> dict:
     return document
 
 
-def _prices(raw, where: str, error_missing, error_incomplete) -> Tariff:
+def _prices(raw, where: str, error_missing, error_incomplete,
+            error_zero) -> Tariff:
     """Четыре цены записи (`list_price_usd_per_mtok` каталога либо
     `tariff_usd_per_mtok` переопределения) — с тремя именованными
     отказами требования 3: прейскуранта нет вовсе, задан не весь набор,
     ноль как цена. Три разных отказа, а не один общий: Оператор чинит
-    каждый из них по-своему."""
+    каждый из них по-своему.
+
+    Класс КАЖДОГО из трёх приходит параметром, включая `error_zero`
+    (REVIEW итерации 1, R1-F8): те же три проверки работают и на
+    каталоге в git, и на локальном слое Оператора, но чинятся эти два
+    файла по-разному — жёсткий `ZeroPriceError` (потомок `CatalogError`)
+    уводил бы ноль в `overrides:` мимо будущего `except LocalLayerError`
+    трейсбеком.
+    """
     if raw is None:
         raise error_missing(f"{where}: прейскуранта нет "
                             f"({LIST_PRICE_KEY}/{TARIFF_KEY})")
@@ -210,7 +219,7 @@ def _prices(raw, where: str, error_missing, error_incomplete) -> Tariff:
             raise error_incomplete(f"{where}: цена {kind} = {value!r} — "
                                    f"не число")
         if value <= 0:
-            raise ZeroPriceError(
+            raise error_zero(
                 f"{where}: цена {kind} = {value} — ноль ценой не бывает "
                 f"(модель без тарифа не запускается, а не считается "
                 f"бесплатной)")
@@ -259,7 +268,7 @@ def _catalog_model(section: ProviderSection, model_id, raw) -> CatalogModel:
         raise CatalogError(f"{where}: {PRICE_DATE_KEY} не проставлена — "
                            f"цена без даты не проверяема на свежесть")
     prices = _prices(raw.get(LIST_PRICE_KEY), where, MissingPriceError,
-                     IncompletePriceError)
+                     IncompletePriceError, ZeroPriceError)
     return CatalogModel(model_id, section.name, section.cli, minimum, status,
                         prices, price_date, section.cost_from_cli)
 
@@ -322,13 +331,14 @@ def _override_tariff(raw, where: str) -> Tariff:
         nested = raw.get(key)
         if nested is not None:
             return _prices(nested, f"{where}.{key}", LocalLayerError,
-                           LocalLayerError)
+                           LocalLayerError, LocalLayerError)
     flat = {kind: raw.get(kind) for kind in PRICE_KINDS}
     if any(value is not None for value in flat.values()):
         # Хотя бы один вид токенов записью модели — форма выбрана
         # плоская, и неполнота набора здесь уже ошибка, а не «другая
         # форма»: `_prices` назовёт недостающие виды поимённо.
-        return _prices(flat, where, LocalLayerError, LocalLayerError)
+        return _prices(flat, where, LocalLayerError, LocalLayerError,
+                       LocalLayerError)
     raise LocalLayerError(
         f"{where}: тарифа нет ни в одной из форм — задай четыре вида "
         f"токенов ({', '.join(PRICE_KINDS)}) записью модели либо под "
@@ -391,6 +401,26 @@ def load_local(path=None) -> LocalLayer:
     return LocalLayer(tiers, overrides, allowed)
 
 
+def layers_or_none() -> tuple:
+    """(каталог, локальный слой) ОДНИМ чтением — для вызывающих, которые
+    зовут `resolve_role` в цикле по ролям (`doctor.check_models_local`,
+    `doctor.check_role_providers`, `stack._model_checks`).
+
+    Нечитаемый слой отдаётся `None`, а не исключением: `resolve_role`
+    прочитает его сам и отдаст ИМЕННОЙ отказ по каждой роли — тот же
+    текст и тот же класс, что и без предчтения, поэтому вызывающему не
+    нужна отдельная ветка на «слой сломан» (REVIEW итерации 1, R1-F3: до
+    этого `doctor` перечитывал оба файла по разу на роль в трёх разных
+    циклах, а докстринг `resolve_role` обещал обратное).
+    """
+    def _or_none(load):
+        try:
+            return load()
+        except ModelsError:
+            return None
+    return _or_none(load_catalog), _or_none(load_local)
+
+
 def resolve_role(role: str, catalog: Catalog = None,
                  local: LocalLayer = None) -> Resolution:
     """Цепочка «роль -> ярус -> модель -> провайдер» с действующим тарифом
@@ -399,8 +429,9 @@ def resolve_role(role: str, catalog: Catalog = None,
     Отказ на каждом звене — свой класс `ResolutionError`: `run`/`auto`
     печатают его текст Оператору вместо трейсбека, а `doctor` — красной
     строкой. `catalog`/`local` передаются, когда вызывающий код уже
-    прочитал слои (`doctor`, команда `models`, строки `check_stack()` по
-    ролям): иначе каждая роль перечитывала бы оба файла.
+    прочитал слои (`layers_or_none` выше): иначе каждая роль перечитывала
+    бы оба файла. Одиночный вызов (шаг роли — `runner`) слои не
+    передаёт: читать их заранее там негде и незачем.
 
     Действующий тариф — переопределение локального слоя, иначе
     прейскурант каталога; источник называется явно и уходит наружу
@@ -513,24 +544,36 @@ def _number_text(value: float) -> str:
     return f"{value:g}"
 
 
-def _roles_by_tier() -> dict:
-    """{ярус: [роли]} по `roles.yaml` — столбец «роли по ярусам»
-    (требование 12). Нечитаемая карта исполнителей не роняет команду:
-    столбец просто пуст, остальная таблица Оператору всё равно нужна."""
+def _roles_by_tier() -> tuple:
+    """({ярус: [роли]}, причина неполноты либо `None`) по `roles.yaml` —
+    столбец «роли по ярусам» (требование 12).
+
+    Нечитаемая карта исполнителей не роняет команду: столбец пуст,
+    остальная таблица Оператору всё равно нужна. Но и молчать об этом
+    нельзя (REVIEW итерации 1, R1-F5): пустой столбец у модели значит
+    либо «ни один ярус сюда не ведёт», либо «ярус роли не прочитан», а
+    различить эти два состояния Оператору больше негде — `models` и есть
+    единственная команда обзора. Поэтому причина уходит наружу строкой
+    и печатается НАД таблицей, тем же приёмом, что и непрочитанный
+    локальный слой.
+    """
     from . import roles
     grouped = {}
     try:
         entries = roles.load()
-    except roles.RolesError:
-        return grouped
+    except roles.RolesError as exc:
+        return grouped, f"карта исполнителей не прочитана: {exc}"
+    unreadable = []
     for role, entry in entries.items():
         if not isinstance(entry, dict) or entry.get("executor") != "agent":
             continue
         try:
             grouped.setdefault(roles.model_tier(role), []).append(role)
-        except roles.RolesError:
-            continue
-    return grouped
+        except roles.RolesError as exc:
+            unreadable.append(f"{role}: {exc}")
+    if unreadable:
+        return grouped, f"ярус не прочитан — {'; '.join(unreadable)}"
+    return grouped, None
 
 
 def cmd_models() -> None:
@@ -542,7 +585,10 @@ def cmd_models() -> None:
     Каталог не разобран — отказ с причиной (sys.exit), а не пустая
     таблица. Локальный слой не прочитан — таблица печатается без
     столбцов тарифа и ролей: каталог сам по себе Оператору виден и без
-    выбора пульта, а причина названа строкой над таблицей.
+    выбора пульта, а причина названа строкой над таблицей. Ярус роли не
+    прочитан — тем же приёмом: своя строка-причина над таблицей, иначе
+    прочерк в столбце ролей читался бы как «сюда не указывает ни одна
+    роль» (REVIEW итерации 1, R1-F5).
     """
     try:
         catalog = load_catalog()
@@ -557,7 +603,12 @@ def cmd_models() -> None:
         print(f"локальный слой не прочитан: {local_note} — "
               f"действующий тариф и ярусы не показаны ({LOCAL_FIX_HINT})")
 
-    by_tier = _roles_by_tier() if local is not None else {}
+    by_tier, roles_note = ({}, None)
+    if local is not None:
+        by_tier, roles_note = _roles_by_tier()
+    if roles_note is not None:
+        print(f"роли по ярусам показаны не полностью: {roles_note} — "
+              f"прочерк в столбце ролей не значит «ролей нет»")
     tier_of_model = {}
     for tier, model_id in (local.tiers.items() if local else ()):
         tier_of_model.setdefault(model_id, []).append(tier)

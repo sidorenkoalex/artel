@@ -61,7 +61,7 @@ def check_models_local() -> doctor.Check:
     `resolve_role` отказывает, текст называет причину и починку.
     """
     try:
-        doctor.models.load_local()
+        local = doctor.models.load_local()
     except doctor.models.LocalLayerMissingError as exc:
         return doctor.Check("models-local", "fail",
                             f"локальный слой моделей: {exc} — "
@@ -69,10 +69,15 @@ def check_models_local() -> doctor.Check:
     except doctor.models.ModelsError as exc:
         return doctor.Check("models-local", "fail",
                             f"локальный слой моделей не разобран: {exc}")
+    # Каталог — тем же одним чтением на весь перебор ролей, что и слой
+    # выше (REVIEW итерации 1, R1-F3). Нечитаемый каталог отдаётся сюда
+    # `None`: `resolve_role` прочитает его сам и назовёт отказ по каждой
+    # роли — предмет этой строки остаётся прежним.
+    catalog, _ = doctor.models.layers_or_none()
     chains, failures = [], []
     for role in doctor.agent_roles():
         try:
-            resolved = doctor.models.resolve_role(role)
+            resolved = doctor.models.resolve_role(role, catalog, local)
         except doctor.models.ModelsError as exc:
             failures.append(f"{role}: {exc}")
             continue

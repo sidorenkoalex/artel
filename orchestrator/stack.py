@@ -315,6 +315,10 @@ def _model_checks(installed: Optional[tuple]) -> list:
     пропуск строки: шаг такой роли всё равно не стартует, и `doctor`
     обязан назвать это раньше, чем Оператор запустит `run`.
 
+    Слои читаются один раз на весь перебор (`models.layers_or_none`), не
+    по разу на роль: цепочка у всех ролей резолвится по одним и тем же
+    двум файлам, а `check_stack()` зовётся на КАЖДЫЙ `runner.role_env`.
+
     `roles`/`models` импортируются здесь, не на уровне модуля:
     `orchestrator/roles.py` несёт `str | None` в сигнатурах, а этот
     модуль обязан импортироваться интерпретатором 3.9 (докстринг у
@@ -329,11 +333,12 @@ def _model_checks(installed: Optional[tuple]) -> list:
     except roles.RolesError as exc:
         return [StackCheck("model-roles", "warn",
                            f"модели ролей не сверены: {exc}")]
+    catalog, local = models.layers_or_none()
     for role, entry in entries.items():
         if not isinstance(entry, dict) or entry.get("executor") != "agent":
             continue
         try:
-            resolved = models.resolve_role(role)
+            resolved = models.resolve_role(role, catalog, local)
         except models.ModelsError as exc:
             checks.append(StackCheck(f"model-{role}", "fail",
                                      f"модель роли {role} не разрешена: {exc}"))

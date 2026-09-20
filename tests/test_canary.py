@@ -8,9 +8,11 @@ v1 — tasks/T065/SPEC.md).
 git) — здесь только то, что они не изолируют: чистая арифметика
 отклонения от бейзлайна, парсинг маркера «ожидается эскалация»,
 выборка `k` из `N`, сборка метрик из журнала, пересчёт путей `config`
-под эфемерный клон (без реального git) и факт пометки/учёта canary в
-`store`/`catalog`/`retro` без полного прогона конвейера.
+под эфемерный клон (без реального git) и ПОЛНОТА их списка, факт
+пометки/учёта canary в `store`/`catalog`/`retro` без полного прогона
+конвейера.
 """
+import importlib.util
 import subprocess
 import sys
 import tempfile
@@ -23,6 +25,24 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from orchestrator import (artifact_branch, canary, catalog, config,  # noqa: E402
                           pool_seal, retro, store)
 from tests.sandbox import ConnRealGitSandbox, RealGitSandbox, capture  # noqa: E402
+
+
+def pristine_config():
+    """Чистая копия `orchestrator/config.py`, загруженная заново.
+
+    Тесты пересчёта путей под эфемерный клон спрашивают, как путь
+    ОПРЕДЕЛЁН в коде (`ROOT / <подпуть>`), а не чему он равен в этом
+    процессе: `tests/sandbox.py` при импорте уводит `config.MODELS_LOCAL`
+    во временный каталог на весь процесс (локальный слой моделей — вне
+    git, тестам нечего читать в слое Оператора), и патченное значение
+    под `config.ROOT` уже не лежит. Модуль `config.py` самодостаточен
+    (импортирует только `pathlib`), поэтому грузится автономно.
+    """
+    spec = importlib.util.spec_from_file_location(
+        "artel_config_pristine", Path(config.__file__))
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 
 class DeviationTest(unittest.TestCase):
@@ -591,9 +611,13 @@ class EphemeralCloneConfigRemapTest(unittest.TestCase):
     подпуть под новым корнем."""
 
     def setUp(self):
-        self.real_root = config.ROOT
+        # Подпути — из ЧИСТОЙ копии `config.py` (см. `pristine_config`):
+        # в этом процессе `config.MODELS_LOCAL` уведён песочницей во
+        # временный каталог и под `config.ROOT` не лежит.
+        pristine = pristine_config()
+        self.real_root = pristine.ROOT
         self.suffixes = {
-            attr: getattr(config, attr).relative_to(self.real_root)
+            attr: getattr(pristine, attr).relative_to(self.real_root)
             for attr in canary._CLONE_CONFIG_ATTRS}
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
@@ -1630,6 +1654,68 @@ class OpensslSecretPassingTest(unittest.TestCase):
         cmd, kw = calls[0]
         self.assertNotIn(self.KEY, cmd, f"ключ найден буквально в argv: {cmd}")
         self.assertIn("pass_fds", kw)
+
+
+class CloneConfigAttrsInvariantTest(unittest.TestCase):
+    """Инвариант списка `canary._CLONE_CONFIG_ATTRS` (REVIEW
+    01M3009Y9AGGY6ZCFA7H1HJ1TD итерации 1, R1-F1 и «Предложения
+    системе»): КАЖДЫЙ путь `config`, лежащий под `ROOT/.artel`, либо
+    переадресуется эфемерным клоном, либо назван в
+    `_CLONE_EXEMPT_CONFIG_ATTRS` с причиной.
+
+    До этого теста оба списка перечисляли сами себя: `EphemeralClone
+    ConfigRemapTest` выше проверяет ПЕРЕСЧЁТ уже перечисленных атрибутов
+    и по построению слеп к забытому. Класс подтверждён дважды —
+    `VENV_DIR` (осознанное исключение) и `MODELS_LOCAL` (забытый: его
+    непереадресованность уводила `catalog.cmd_init()` клона писать
+    шаблон локального слоя в ГЛАВНЫЙ пульт).
+
+    Значения `config` читаются из ЧИСТОЙ копии модуля, а не из уже
+    импортированного: `tests/sandbox.py` при импорте уводит
+    `config.MODELS_LOCAL` во временный каталог на весь процесс, и
+    патченное значение под `ROOT/.artel` уже не лежит — инвариант
+    проверялся бы на состоянии песочницы вместо состояния кода.
+    """
+
+    def setUp(self):
+        self.pristine = pristine_config()
+
+    def test_every_artel_path_is_remapped_or_exempt_with_a_reason(self):
+        """Ловит мутацию: новый путь `config` под `.artel/` заведён, а в
+        `_CLONE_CONFIG_ATTRS` не попал — прогон канарейки оставил бы след
+        в главном пульте (или читал бы живое состояние Оператора вместо
+        состояния клона), и ни один существующий тест этого не увидел
+        бы."""
+        artel_dir = self.pristine.ROOT / ".artel"
+        under_artel = sorted(
+            name for name, value in vars(self.pristine).items()
+            if isinstance(value, Path) and artel_dir in value.parents)
+
+        self.assertIn("MODELS_LOCAL", under_artel,
+                      "предпосылка теста: локальный слой лежит под .artel/")
+        covered = (set(canary._CLONE_CONFIG_ATTRS)
+                   | set(canary._CLONE_EXEMPT_CONFIG_ATTRS))
+        forgotten = [name for name in under_artel if name not in covered]
+        self.assertEqual(
+            forgotten, [],
+            f"пути config под .artel/ не переадресуются клоном и не "
+            f"названы исключением с причиной: {', '.join(forgotten)}")
+
+    def test_exemptions_are_disjoint_from_the_remapped_list(self):
+        """Ловит мутацию: путь дописали в оба списка разом — «клон его
+        переадресует» и «клон его сознательно не трогает» одновременно,
+        и следующий читатель верит тому из двух, что прочёл первым."""
+        both = (set(canary._CLONE_CONFIG_ATTRS)
+                & set(canary._CLONE_EXEMPT_CONFIG_ATTRS))
+        self.assertEqual(both, set())
+
+    def test_every_exemption_carries_a_reason(self):
+        """Ловит мутацию: исключение заведено пустой причиной — список
+        перестаёт отличать «решили не переадресовывать, вот почему» от
+        «забыли», ради чего он и существует."""
+        for name, reason in canary._CLONE_EXEMPT_CONFIG_ATTRS.items():
+            self.assertTrue(reason and reason.strip(),
+                            f"исключение {name} без причины")
 
 
 if __name__ == "__main__":

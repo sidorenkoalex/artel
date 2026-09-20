@@ -212,7 +212,7 @@ def agent_roles() -> list:
     return sorted(set(doctor.config.STATE_ROLE.values()))
 
 
-def _role_chain(role: str, name: str) -> tuple:
+def _role_chain(role: str, name: str, catalog=None, local=None) -> tuple:
     """(текст цепочки роли, причина отказа либо `None`) для строки
     `check_role_providers` (SPEC 01M3009Y9AGGY6ZCFA7H1HJ1TD, требование
     11, AC-15): «роль → ярус → модель → провайдер» вместо прежнего «роль
@@ -222,9 +222,13 @@ def _role_chain(role: str, name: str) -> tuple:
     не из разрешения цепочки: имя незарегистрированного провайдера —
     предмет отдельного отказа этой же строки, и оно обязано печататься
     даже тогда, когда ярус роли не разрешается вовсе.
+
+    `catalog`/`local` — слои, прочитанные вызывающим один раз на весь
+    перебор ролей (REVIEW итерации 1, R1-F3); `None` в любом из них
+    означает «читай сам», и отказ по роли остаётся тем же.
     """
     try:
-        resolved = doctor.models.resolve_role(role)
+        resolved = doctor.models.resolve_role(role, catalog, local)
     except doctor.models.ModelsError as exc:
         return f"{role} → (не разрешено) → {name}", f"{role}: {exc}"
     return f"{role} → {resolved.tier} → {resolved.model} → {name}", None
@@ -255,9 +259,10 @@ def check_role_providers() -> doctor.Check:
     except doctor.roles.RolesError as exc:
         return doctor.Check("role-providers", "warn",
                      f"провайдеры ролей: {exc}")
+    catalog, local = doctor.models.layers_or_none()
     chains, unresolved = [], []
     for role, name in pairs:
-        chain, failure = _role_chain(role, name)
+        chain, failure = _role_chain(role, name, catalog, local)
         chains.append(chain)
         if failure is not None:
             unresolved.append(failure)
