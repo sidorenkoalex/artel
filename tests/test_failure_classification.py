@@ -82,6 +82,63 @@ class ClassifyAttemptFailureTest(unittest.TestCase):
         self.assertIsNone(failure_classification.classify_attempt_failure(""))
 
 
+UNSUPPORTED_MODEL_OUTPUT = (
+    "API Error: 400 {\"type\":\"error\",\"error\":{\"type\":"
+    "\"invalid_request_error\",\"message\":\"This Claude Code version "
+    "does not support this model; version 2.1.251 or newer is required\"}}\n")
+
+
+class ModelUnsupportedClassTest(unittest.TestCase):
+    """Класс «модель не поддерживается CLI» (SPEC 01M2XJKV84SQ9VEVR0VNVKDNGJ,
+    требование 4, AC-9): собственный класс раньше якоря «API Error:»,
+    вне связки транзиентных, с подписью для журнала."""
+
+    def test_unsupported_model_text_is_its_own_class(self):
+        """Ловит мутацию: сигнатура добавлена в список «системного
+        кандидата» или проверяется ПОСЛЕ якоря «API Error:», который
+        перехватывает её первым — детерминированный отказ снова лечится
+        повторами с паузами."""
+        failure_class = failure_classification.classify_attempt_failure(
+            UNSUPPORTED_MODEL_OUTPUT)
+
+        self.assertEqual(failure_class,
+                         failure_classification.MODEL_UNSUPPORTED_CLASS)
+        self.assertNotEqual(failure_class, "system_candidate")
+        self.assertNotIn(failure_class,
+                         failure_classification.TRANSIENT_SYSTEM_CLASSES)
+        self.assertIn(failure_class, failure_classification.CLASS_LABELS)
+
+    def test_signature_is_case_insensitive_like_the_others(self):
+        """Ловит мутацию: сравнение идёт по исходному регистру, а не по
+        `lowered`, как у остальных списков."""
+        self.assertEqual(
+            failure_classification.classify_attempt_failure(
+                "DOES NOT SUPPORT THIS MODEL"),
+            failure_classification.MODEL_UNSUPPORTED_CLASS)
+
+    def test_the_general_api_error_anchor_still_works(self):
+        """Ловит мутацию: новая проверка написана по подстроке «API Error»
+        или «model» и забирает себе весь класс 1."""
+        self.assertEqual(
+            failure_classification.classify_attempt_failure(
+                "API Error: 500 Internal Server Error"),
+            "system_candidate")
+        self.assertEqual(
+            failure_classification.classify_attempt_failure(
+                "API Error: 400 model name is invalid"),
+            "system_candidate")
+
+    def test_required_cli_version_is_parsed_from_the_attempt_text(self):
+        """Ловит мутацию: требуемая версия не читается из текста попытки
+        (`None` для текста инцидента) либо читается из любого числа вида
+        X.Y.Z, не из фразы «version X or newer is required»."""
+        self.assertEqual(
+            failure_classification.required_cli_version(UNSUPPORTED_MODEL_OUTPUT),
+            "2.1.251")
+        self.assertIsNone(failure_classification.required_cli_version(
+            "Claude Code 2.1.236 does not support this model"))
+
+
 class AttemptOutputTextTest(unittest.TestCase):
     """Классификатор смотрит на ПОЛНЫЙ текст попытки, не на усечённый
     `agent_log.log_tail` (LOG_TAIL_LINES/LOG_TAIL_CHARS): сигнатура класса
