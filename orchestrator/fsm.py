@@ -916,9 +916,41 @@ def _cmd_reject(conn, task_id: str, reason: str) -> None:
                         detail=f"возврат из verifying: {reason}")
         _maybe_ensure_draft_mr(conn, task_id)
         return
+    if state == "spec_gate":
+        # Возврат с гейта SPEC (SPEC 01M2YWRB9HWW99R57HWGP2M7MQ,
+        # требования 1-4): тем же приёмом, каким T052/T079 расширили
+        # reject на merge_gate/verifying — один переход в состояние роли
+        # с причиной Оператора в журнале, без роста review_iters/
+        # accept_rejects (требование 2: гейт SPEC не расходует ни лимит
+        # итераций ревью, ни лимит отказов приёмки — это чужие циклы).
+        #
+        # `tasks.zones` и `budget_usd` ОТКЛОНЁННОГО SPEC здесь не
+        # пишутся (требование 3) — их читает и применяет только
+        # `_approve_spec_gate`: принятыми остаются значения последней
+        # редакции, которую Оператор действительно принял.
+        #
+        # Пустая причина — отказ команды (требование 4): без текста
+        # аналитику нечего читать в разделе «Причина возврата» его брифа
+        # (`brief._return_context`), а запись возврата уже стала бы
+        # анкером гейта переделки `auto._role_step_since_state_entry` —
+        # задача получила бы обязательный шаг роли без единого слова о
+        # том, что в SPEC не так. Отказ — тем же механизмом sys.exit,
+        # что и именованный отказ неприменимого состояния ниже.
+        # Соседние состояния этой проверки НЕ получают (SPEC «Не
+        # входит»): там причина не обязательна и сегодня.
+        if not reason.strip():
+            sys.exit(f"[{task_id}] reject на spec_gate требует причины: "
+                     f"reject {task_id} \"<причина>\" (сейчас {state})")
+        # Draft MR тут не заводится: узел `_maybe_ensure_draft_mr` —
+        # побочный эффект входа именно в in_dev (SPEC T079, требование 1).
+        store.set_state(conn, task_id, "spec_writing", "operator",
+                        expected_state=state,
+                        detail=f"возврат из spec_gate: {reason}")
+        print(f"  дальше: artel.py auto {task_id}  (аналитик перепишет SPEC)")
+        return
     if state != "acceptance":
         sys.exit(f"[{task_id}] reject применим только в acceptance, "
-                 f"merge_gate или verifying (сейчас {state})")
+                 f"spec_gate, merge_gate или verifying (сейчас {state})")
     rejects = t["accept_rejects"] + 1
     if rejects > config.LIMIT_ACCEPT_REJECTS:
         store.set_state(conn, task_id, "escalated", "fsm",

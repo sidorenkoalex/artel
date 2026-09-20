@@ -49,6 +49,15 @@ RETURN_REASON_CLOSING = "шаг без правки, закрывающей пр
 # verifying/merge_gate (reject Оператора), escalated (approve Оператора).
 _RETURN_TRIGGER_STATES = frozenset(
     {"review", "acceptance", "verifying", "merge_gate", "escalated"})
+# Предшественники, приход из которых — возврат ТОЛЬКО для конкретного
+# целевого состояния (SPEC 01M2YWRB9HWW99R57HWGP2M7MQ, требование 5):
+# `spec_gate -> spec_writing` бывает единственным способом — reject
+# Оператора с причиной. В общий перечень выше `spec_gate` класть нельзя:
+# из него же задача штатно уходит в `tests_writing`/`in_dev` по approve,
+# и тогда test_author/developer получали бы раздел «Причина возврата» с
+# текстом «гейт SPEC пройден — приёмочные тесты до кода» на ПЕРВОМ,
+# совершенно штатном входе (требование 5/AC-6 этого не допускают).
+_RETURN_TRIGGER_STATES_BY_TARGET = {"spec_writing": frozenset({"spec_gate"})}
 # Потолок записей в блоке отказов advance (SPEC T078, требование 3) —
 # мягкое значение кода, не инвариант: чтобы бриф не разбухал бесконтрольно
 # при частом топтании на одном состоянии.
@@ -724,7 +733,9 @@ def _return_context(conn, task_id: str, state: str) -> dict | None:
     запись `state -> {state}` (требование 1) — не текстом её `detail`:
     фиксированная фраза approve («эскалация разрешена, продолжаем»)
     одинакова для всех трёх целевых состояний эскалации и сама по себе
-    не отличима от обычного перехода (AC-3).
+    не отличима от обычного перехода (AC-3). Часть предшественников
+    считается возвратом не вообще, а лишь для конкретного целевого
+    состояния — `_RETURN_TRIGGER_STATES_BY_TARGET`, см. её комментарий.
 
     `is_escalation` — предшественник `escalated`: `detail` в этом
     случае — дословный текст записи `state -> escalated`, которой
@@ -741,7 +752,9 @@ def _return_context(conn, task_id: str, state: str) -> dict | None:
     if entry_row is None:
         return None
     prev_state = _previous_state_name(steps, entry_row["id"])
-    if prev_state not in _RETURN_TRIGGER_STATES:
+    triggers = _RETURN_TRIGGER_STATES | _RETURN_TRIGGER_STATES_BY_TARGET.get(
+        state, frozenset())
+    if prev_state not in triggers:
         return None
     if prev_state != "escalated":
         return {"detail": entry_row["detail"], "is_escalation": False}
