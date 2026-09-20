@@ -242,6 +242,12 @@ ROLE_NOT_FINISHED_REFUSAL_ACTIONS = (
 # на починку. В `ROLE_NOT_FINISHED_REFUSAL_ACTIONS` выше эти действия
 # НАМЕРЕННО не входят: роли есть ЧТО читать (перечень путей, ответ git),
 # и бриф обязан этот отказ нести, а не вычитать.
+#
+# Инфраструктурный отказ того же гейта приложений
+# (`PLAN_APPENDIX_GATE_FAILURE_ACTION`: git не ответил на базу сравнения,
+# дерево базы не развернулось) в перечень НЕ входит по той же логике
+# наоборот: его причина не в PLAN.md роли, шаг developer на нём — сожжённый
+# шаг (R1-F4, REVIEW итерация 1).
 _IN_DEV_ROLE_FIXABLE_REFUSAL_ACTIONS = (
     ZONES_MANDATE_WITHOUT_PLAN_REFUSAL_ACTION,
     PLAN_APPENDIX_INAPPLICABLE_REFUSAL_ACTION)

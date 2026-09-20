@@ -263,8 +263,17 @@ _APPENDIX_HEADING = re.compile(rf"^##\s+{re.escape(APPENDIX_SECTION_PREFIX)}",
 _DIFF_FENCE_OPEN = re.compile(r"^\s*```diff\s*$")
 _DIFF_FENCE_CLOSE = re.compile(r"^\s*```\s*$")
 _DIFF_GIT_HEADER = re.compile(r"^diff --git a/(\S+) b/(\S+)\s*$", re.M)
+# Начало заголовка файла — по нему узнаётся дифф, оставшийся ВНЕ блоков
+# ```diff (ограда набрана голым ```): такой дифф не приложение, но и не
+# молчание.
+_DIFF_GIT_ANY = re.compile(r"^diff --git ", re.M)
 
 APPENDIX_NO_HEADER_ERROR = "приложение PLAN: нет заголовка diff --git"
+# Дифф раздела «## Приложение», не попавший ни в один блок ```diff
+# (R1-F1, REVIEW итерация 1): голая ограда ``` вместо ```diff давала ни
+# приложения, ни ошибки — правка Оператора пропадала бесследно.
+APPENDIX_DIFF_OUTSIDE_BLOCK_ERROR = (
+    "приложение PLAN: дифф вне блока ```diff — огороди его ```diff")
 
 
 def appendix_unprotected_path_error(path: str) -> str:
@@ -276,11 +285,18 @@ def appendix_unprotected_path_error(path: str) -> str:
 
 
 class PlanAppendix(NamedTuple):
-    """Одно приложение PLAN.md: `path` — путь ИЗ заголовка `diff --git`
-    (не из заголовка раздела: заголовок раздела — свободный текст),
-    `diff` — текст блока ```diff без самой ограды, годный на вход
-    `git apply`."""
-    path: str
+    """Одно приложение PLAN.md: `paths` — ВСЕ пути из заголовков
+    `diff --git` блока (не из заголовка раздела: заголовок раздела —
+    свободный текст), `diff` — текст блока ```diff без самой ограды,
+    годный на вход `git apply`.
+
+    Путей несколько, потому что `git diff` по двум файлам даёт один текст
+    с двумя заголовками, и Оператор вставляет его в PLAN одним блоком
+    (образец — `tasks/01M1THKTJ7YT1K410G1KS17MK6/PLAN.md`, пять
+    заголовков в одном блоке). До R1-F1 разбор брал только первый: `git
+    apply` правил все файлы блока, а `git add` уносил в main один —
+    остальная правка Оператора терялась вместе со scratch-деревом."""
+    paths: tuple[str, ...]
     diff: str
 
 
@@ -292,16 +308,24 @@ def _appendix_path_is_protected(path: str) -> bool:
                for p in config.PROTECTED_PATHS)
 
 
-def _diff_blocks(body: str) -> list[str]:
-    """Тексты ВСЕХ блоков ```diff тела раздела, в порядке появления —
-    без строк-оград. Незакрытый блок в конце тела считается закрытым
-    концом раздела: PLAN с оборванной оградой не повод потерять дифф
-    молча (ошибку про него всё равно выдаст `git apply`)."""
-    blocks, current = [], None
+def _diff_blocks(body: str) -> tuple[list[str], str]:
+    """(тексты ВСЕХ блоков ```diff тела раздела в порядке появления без
+    строк-оград, остальной текст тела).
+
+    Незакрытый блок в конце тела считается закрытым концом раздела: PLAN
+    с оборванной оградой не повод потерять дифф молча (ошибку про него
+    всё равно выдаст `git apply`).
+
+    Остаток нужен вызывающему, чтобы заметить дифф, огороженный голым
+    ``` (такая ограда блоком ```diff не является и до R1-F1 просто
+    растворялась в тексте раздела)."""
+    blocks, current, outside = [], None, []
     for line in body.splitlines():
         if current is None:
             if _DIFF_FENCE_OPEN.match(line):
                 current = []
+            else:
+                outside.append(line)
             continue
         if _DIFF_FENCE_CLOSE.match(line):
             blocks.append("\n".join(current) + "\n")
@@ -310,7 +334,7 @@ def _diff_blocks(body: str) -> list[str]:
         current.append(line)
     if current:
         blocks.append("\n".join(current) + "\n")
-    return blocks
+    return blocks, "\n".join(outside) + "\n"
 
 
 def _appendix_section_bodies(text: str) -> list[str]:
@@ -337,25 +361,39 @@ def plan_appendices(text: str) -> tuple[list[PlanAppendix], list[str]]:
     мерже (приложения к одному и тому же пути обязаны лечь друг на друга
     в том же порядке, в каком их написал Оператор).
 
-    Блок без заголовка `diff --git` и блок с путём вне
-    `config.PROTECTED_PATHS` в список приложений НЕ попадают — про каждый
-    возвращается своя именованная ошибка: молчаливый пропуск такого блока
-    означал бы, что Оператор узнаёт о потерянной правке только на мерже.
-    PLAN без разделов «## Приложение» — `([], [])`, ни одной ошибки.
+    Пути блока берутся из ВСЕХ его заголовков `diff --git` (R1-F1):
+    многофайловый дифф — один патч и одно приложение, но `git add` на
+    мерже и проверка защищённости обязаны видеть каждый его файл.
+
+    Блок без единого заголовка `diff --git`, блок с путём вне
+    `config.PROTECTED_PATHS` и дифф, оставшийся вне блоков ```diff, в
+    список приложений НЕ попадают — про каждый возвращается своя
+    именованная ошибка: молчаливый пропуск означал бы, что Оператор
+    узнаёт о потерянной правке только на мерже. PLAN без разделов
+    «## Приложение» — `([], [])`, ни одной ошибки.
     """
     appendices: list[PlanAppendix] = []
     errors: list[str] = []
     for body in _appendix_section_bodies(text):
-        for block in _diff_blocks(body):
-            header = _DIFF_GIT_HEADER.search(block)
-            if header is None or header.group(1) != header.group(2):
+        blocks, outside = _diff_blocks(body)
+        if _DIFF_GIT_ANY.search(outside):
+            errors.append(APPENDIX_DIFF_OUTSIDE_BLOCK_ERROR)
+        for block in blocks:
+            headers = _DIFF_GIT_HEADER.findall(block)
+            # Заголовок с разными a/ и b/ (переименование) корректным не
+            # считается: защищённость проверялась бы по одному пути, а
+            # файл создавался бы по другому, сколь угодно постороннему.
+            if not headers or any(old != new for old, new in headers):
                 errors.append(APPENDIX_NO_HEADER_ERROR)
                 continue
-            path = header.group(1)
-            if not _appendix_path_is_protected(path):
-                errors.append(appendix_unprotected_path_error(path))
+            paths = list(dict.fromkeys(old for old, _new in headers))
+            unprotected = [p for p in paths
+                           if not _appendix_path_is_protected(p)]
+            if unprotected:
+                errors.extend(appendix_unprotected_path_error(p)
+                              for p in unprotected)
                 continue
-            appendices.append(PlanAppendix(path, block))
+            appendices.append(PlanAppendix(tuple(paths), block))
     return appendices, errors
 
 

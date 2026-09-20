@@ -23,6 +23,7 @@ from .advance_gates.acceptance import _acceptance_lock_refuses, _acceptance_run_
 from .advance_gates.capacity import (CAPACITY_GATE_REASON, _EMPTY_DIFF_TEXT,
                                      _capacity_gate, _capacity_gate_refuses)
 from .advance_gates.plan_appendix import (
+    PLAN_APPENDIX_GATE_FAILURE_ACTION,
     PLAN_APPENDIX_INAPPLICABLE_REFUSAL_ACTION, _plan_appendix_gate,
     _plan_appendix_gate_refuses)
 from .advance_gates.review import (_code_sha_at_review_escalation,

@@ -28,12 +28,23 @@ from ._base import GateRefusal, _run_gates
 PLAN_APPENDIX_INAPPLICABLE_REFUSAL_ACTION = (
     "переход отклонён: приложение PLAN неприменимо")
 
+# Инфраструктурный отказ этого же гейта: git не ответил на базу сравнения
+# либо дерево базы не развернулось. Отдельное действие (R1-F4, REVIEW
+# итерация 1) — тем же разделением, что у соседнего гейта зон («переход
+# отклонён: гейт зон» для «git не ответил»): причину такого отказа роль
+# починить НЕ может, приложение в её PLAN.md ни при чём, и класс «роль
+# ещё не закончила» (`auto._IN_DEV_ROLE_FIXABLE_REFUSAL_ACTIONS`) на него
+# не распространяется — иначе цикл жёг бы гарантированный шаг developer
+# на сбое git, показав роли подсказку «почини дифф», которую нечем
+# исполнить.
+PLAN_APPENDIX_GATE_FAILURE_ACTION = "переход отклонён: гейт приложений PLAN"
+
 
 def _base_worktree(base: str) -> tuple[Path | None, str]:
     """Временный detached worktree на sha `base` — тот же приём, что
     `fsm_merge_gate._scratch_worktree` уже несёт для мержа.
 
-    Нужен по существу: `git apply --check` сверяет патч с РАБОЧИМ
+    Нужен по существу: `git apply` сверяет патч с РАБОЧИМ
     ДЕРЕВОМ, а SPEC называет базой сравнения `gitcmd.diff_base(branch)` —
     коммит, который в рабочем дереве задачи не вычекан. Проверять патч
     против дерева самой ветки задачи было бы другой проверкой: ветка
@@ -55,18 +66,19 @@ def _drop_base_worktree(repo: Path) -> None:
     shutil.rmtree(repo, ignore_errors=True)
 
 
-def git_apply(repo: Path, appendix: guard.PlanAppendix,
-              check: bool = False) -> str:
-    """`git apply` приложения в дереве `repo` — `check=True` даёт `git
-    apply --check` (проверка без правки дерева, гейт `in_dev`),
-    `check=False` — настоящее применение (цикл мержа). Пустая строка —
-    git согласился; иначе его ответ, и он едет в журнал: без него и роль,
-    и Оператор читают «неприменимо» без единой подсказки, ЧТО не сошлось.
+def git_apply(repo: Path, appendix: guard.PlanAppendix) -> str:
+    """`git apply` приложения в дереве `repo`. Пустая строка — git
+    согласился; иначе его ответ, и он едет в журнал: без него и роль, и
+    Оператор читают «неприменимо» без единой подсказки, ЧТО не сошлось.
 
-    Одна функция на оба вызова НАРОЧНО: гейт и мерж обязаны отдавать
-    git'у байт-в-байт один и тот же патч одним и тем же способом — иначе
+    Одна функция на гейт и на мерж НАРОЧНО: оба обязаны отдавать git'у
+    байт-в-байт один и тот же патч одним и тем же способом — иначе
     «проверено на выходе in_dev» перестаёт что-либо гарантировать о
-    мерже.
+    мерже. По той же причине здесь настоящее применение, а не `git apply
+    --check`: мерж кладёт приложения ПОДРЯД на одно дерево, и приложение,
+    опирающееся на строку предыдущего, при `--check` против чистой базы
+    отказывало бы ложно (R1-F2, REVIEW итерация 1). Дерево базы у гейта
+    одноразовое — правку в нём выбрасывают вместе с ним.
 
     Дифф отдаётся git'у файлом, а не stdin: `gitcmd.git` не умеет
     `input=`, а заводить ради этого второй способ звать git значило бы
@@ -75,8 +87,7 @@ def git_apply(repo: Path, appendix: guard.PlanAppendix,
     patch_file = patch / "appendix.diff"
     try:
         patch_file.write_text(appendix.diff, encoding="utf-8")
-        args = ["apply"] + (["--check"] if check else []) + [str(patch_file)]
-        res = gitcmd.in_repo(repo, *args)
+        res = gitcmd.in_repo(repo, "apply", str(patch_file))
     finally:
         shutil.rmtree(patch, ignore_errors=True)
     if res is not None and res.returncode == 0:
@@ -95,11 +106,23 @@ def _inapplicable_refusal(task_id: str, detail: str) -> GateRefusal:
                        hint)
 
 
+def _gate_failure_refusal(task_id: str, detail: str) -> GateRefusal:
+    """Отказ по сбою самого гейта (git), не по содержимому приложения:
+    подсказка адресует не роль, а того, кто разбирается с git — роли
+    чинить тут нечего."""
+    hint = (f"разберись, почему git не отвечает по ветке задачи, и повтори "
+            f"artel.py advance {task_id}")
+    return GateRefusal(PLAN_APPENDIX_GATE_FAILURE_ACTION, detail, hint)
+
+
 def _plan_appendix_gate(conn, task_id: str, t,
                         plan_text: str) -> GateRefusal | None:
-    """Каждое приложение PLAN проходит `git apply --check` против дерева
+    """Приложения PLAN применяются ПОДРЯД, в порядке разбора, к дереву
     базы сравнения ветки (SPEC 01M2YSHDKWFJN3XSJ618Z74FNF, требование 2;
-    AC-5/AC-7).
+    AC-5/AC-7) — ровно тем же способом и в том же порядке, каким их
+    положит на подтянутый main цикл мержа: проверка порознь против чистой
+    базы отвергала бы приложение, опирающееся на строку предыдущего
+    (R1-F2). Дерево одноразовое, применённые правки уходят вместе с ним.
 
     PLAN без разделов «## Приложение» гейт не трогает вовсе — ни одного
     вызова git (AC-7): выход по пустому списку стоит ДО определения базы
@@ -130,18 +153,18 @@ def _plan_appendix_gate(conn, task_id: str, t,
         detail = (f"приложения PLAN: git не ответил на определение базы "
                   f"сравнения для ветки {t['branch']} — проверить "
                   f"применимость нечем")
-        return _inapplicable_refusal(task_id, detail)
+        return _gate_failure_refusal(task_id, detail)
     repo, reason = _base_worktree(base)
     if repo is None:
         detail = (f"приложения PLAN: дерево базы сравнения {base} не "
                   f"развёрнуто — {reason}")
-        return _inapplicable_refusal(task_id, detail)
+        return _gate_failure_refusal(task_id, detail)
     try:
         for appendix in appendices:
-            answer = git_apply(repo, appendix, check=True)
+            answer = git_apply(repo, appendix)
             if answer:
-                detail = (f"приложение PLAN {appendix.path} не применяется "
-                          f"к базе сравнения {base}: {answer}")
+                detail = (f"приложение PLAN {', '.join(appendix.paths)} не "
+                          f"применяется к базе сравнения {base}: {answer}")
                 return _inapplicable_refusal(task_id, detail)
     finally:
         _drop_base_worktree(repo)

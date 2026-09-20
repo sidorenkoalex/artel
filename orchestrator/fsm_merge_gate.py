@@ -544,11 +544,11 @@ def _appendix_needs_full_suite(paths: list[str]) -> bool:
 
 
 def _plan_appendices_or_refuse(conn, task_id: str, scratch: Path,
-                               ctx: repo_context.RepoContext) -> list | None:
+                               ctx: repo_context.RepoContext) -> list:
     """Приложения PLAN.md задачи с ветки-источника артефактов (SPEC
-    01M2YSHDKWFJN3XSJ618Z74FNF, требование 3). `None` — ошибки разбора
-    требования 1: отказ мержа `sys.exit`'ом, задача остаётся на
-    `merge_gate`.
+    01M2YSHDKWFJN3XSJ618Z74FNF, требование 3). Ошибки разбора требования
+    1 — отказ мержа `sys.exit`'ом (задача остаётся на `merge_gate`),
+    возврата из функции в этом случае нет вовсе.
 
     Гейт применимости на выходе `in_dev` такие ошибки уже не пропустил
     бы — значит PLAN.md правили ПОСЛЕ него, на самом гейте, и разбирается
@@ -594,7 +594,7 @@ def _return_inapplicable_appendix(conn, task_id: str, state: str,
     нужна."""
     _drop_scratch_worktree(ctx, scratch)
     detail = (f"приложение PLAN неприменимо после подтяжки: "
-              f"{appendix.path} — {answer}")
+              f"{', '.join(appendix.paths)} — {answer}")
     store.set_state(conn, task_id, "in_dev", "fsm",
                     expected_state=state, detail=detail)
     fsm._maybe_ensure_draft_mr(conn, task_id)
@@ -675,6 +675,10 @@ def _apply_plan_appendices(conn, task_id: str, state: str, scratch: Path,
     if not appendices:
         return ("ok", [])
 
+    # Пути КАЖДОГО заголовка `diff --git` каждого приложения (R1-F1):
+    # многофайловый блок git применяет целиком, и `git add` ниже обязан
+    # унести в коммит все его файлы, иначе правка Оператора уезжает в
+    # никуда вместе со scratch-деревом.
     paths: list[str] = []
     for appendix in appendices:
         answer = git_apply(scratch, appendix)
@@ -682,8 +686,7 @@ def _apply_plan_appendices(conn, task_id: str, state: str, scratch: Path,
             _return_inapplicable_appendix(conn, task_id, state, appendix,
                                           answer, scratch, ctx)
             return ("stopped", [])
-        if appendix.path not in paths:
-            paths.append(appendix.path)
+        paths.extend(p for p in appendix.paths if p not in paths)
 
     sha = _commit_applied_appendices(conn, task_id, paths, scratch, ctx)
     # Прогон — после коммита и ДО записи «применены»/push: красный исход
