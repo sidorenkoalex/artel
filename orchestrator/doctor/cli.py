@@ -50,6 +50,7 @@ def all_checks(conn) -> list[doctor.Check]:
     checks.extend(doctor.check_artifact_branch_parent_ancestry(conn))
     checks.append(doctor.check_root_pin())
     checks.append(doctor.check_pin_unpushed())
+    checks.append(doctor.check_git_hooks())
     checks.append(doctor.check_role_log_pool_leak(conn))
     checks.append(doctor.check_canary_pool_drift())
     checks.append(doctor.check_canary_trigger(conn))
@@ -126,6 +127,10 @@ def cmd_doctor(restore: bool = False, fix: bool = False) -> None:
         doctor._fix_ignored_artifact_files(conn)
         doctor._fix_dead_lease_groups(conn)
         doctor._fix_hung_test_runs(conn)
+        # Хуки защиты main (SPEC 01M2XMCC837R5CX9M58VARK85G, требование 4)
+        # — до `all_checks` ниже, чтобы проверка «git-hooks» в том же
+        # прогоне уже видела включённую защиту (AC-11).
+        doctor._fix_git_hooks()
     else:
         if orphans is None:
             print("критерий не вычислим без origin")

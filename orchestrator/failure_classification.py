@@ -2,6 +2,7 @@
 Перенесено из orchestrator/runner.py без изменения поведения (T091,
 декомпозиция диспетчеров fsm/runner).
 """
+import re
 from pathlib import Path
 
 from . import alerts, config, store
@@ -21,6 +22,23 @@ SESSION_LIMIT_SIGNATURES = ("session limit", "usage limit", "5-hour limit",
                             "resets at")
 SYSTEM_CANDIDATE_ANCHOR = "api error:"
 
+# Класс «модель не поддерживается CLI» (SPEC 01M2XJKV84SQ9VEVR0VNVKDNGJ,
+# требование 4): сигнатура инцидента 19.09 — «API Error: 400 … does not
+# support this model; version 2.1.251 or newer is required». Отказ
+# детерминирован (CLI старше модели), повторами не лечится: класс
+# проверяется РАНЬШЕ общего якоря «API Error:» (иначе тот забирал бы его
+# в «системный кандидат» с минутным бэкоффом и эскалацией) и в связку
+# транзиентных не входит — `runner._run_attempts` обрывает цикл на
+# первой же попытке, исход шага — тот же именованный отказ, что и у
+# предполётной сверки модели (`stack.MODEL_UNSUPPORTED_PREFIX`).
+MODEL_UNSUPPORTED_SIGNATURE = "does not support this model"
+MODEL_UNSUPPORTED_CLASS = "model_unsupported"
+# Требуемая версия из того же текста — для отказа шага: «version X or
+# newer is required» (модель может отсутствовать в таблице
+# `stack.MODEL_MIN_CLI_VERSION`, тогда число известно только отсюда).
+MODEL_REQUIRED_VERSION_RE = re.compile(
+    r"version\s+(\d+\.\d+\.\d+)\s+or newer is required", re.IGNORECASE)
+
 # Связка «транзиентное системное» (требование 3): auth/403, сетевой отказ
 # до API, «системный кандидат» — минутный бэкофф вместо секундного,
 # число попыток шага не меняется (инвариант 3). «Обрыв потока» в связку
@@ -33,14 +51,30 @@ CLASS_LABELS = {
     "stream_broken": "обрыв потока",
     "system_candidate": "класс 1, системный кандидат",
     "session_limit": "класс 2 (session limit подписки)",
+    MODEL_UNSUPPORTED_CLASS: "класс «модель не поддерживается CLI» "
+                             "(детерминированный отказ, без повторов)",
 }
+
+
+def required_cli_version(text: str) -> str | None:
+    """Версия CLI, которую текст попытки называет минимальной («version
+    2.1.251 or newer is required»); `None` — текст её не несёт."""
+    match = MODEL_REQUIRED_VERSION_RE.search(text)
+    return match.group(1) if match else None
 
 
 def classify_attempt_failure(text: str) -> str | None:
     """Класс отказа попытки по её тексту; `None` — нераспознанный (SPEC
     T082, требования 1-2, критерии AC-1..AC-6).
+
+    Класс «модель не поддерживается CLI» (SPEC 01M2XJKV84SQ9VEVR0VNVKDNGJ,
+    требование 4) проверяется первым: сигнатура однозначна, а любой из
+    списков ниже (в том числе общий якорь «API Error:», которым текст
+    инцидента начинается) увёл бы детерминированный отказ в повторы.
     """
     lowered = text.lower()
+    if MODEL_UNSUPPORTED_SIGNATURE in lowered:
+        return MODEL_UNSUPPORTED_CLASS
     if any(sig in lowered for sig in CLASS_1A_SIGNATURES):
         return "1a"
     if any(sig in lowered for sig in CLASS_1B_SIGNATURES):

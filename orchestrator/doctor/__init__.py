@@ -161,6 +161,8 @@ from .orphan_branches import (ORPHAN_ARTIFACT_BRANCH_SOURCE,
                               sweep_orphan_artifact_branches,
                               _print_orphan_branch_candidates)
 from .ignored_artifacts import _fix_ignored_artifact_files
+from .git_hooks import (HOOKS_PATH, HOOK_NAMES, GIT_HOOKS_CHECK,
+                        check_git_hooks, _fix_git_hooks)
 from .map_growth import (MAP_SIZE_ACTION, MAP_GROWTH_SOURCE, _FAR_FUTURE_TS,
                          _all_map_size_steps, _map_growth_reference_point,
                          _map_growth_series, _map_growth_message,

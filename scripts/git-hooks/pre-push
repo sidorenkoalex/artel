@@ -1,0 +1,32 @@
+#!/bin/sh
+# pre-push главной копии пульта (SPEC 01M2XMCC837R5CX9M58VARK85G,
+# требования 1-3): push, среди целевых refs которого есть refs/heads/main,
+# проходит только с маркером пульта ARTEL_PULT_GIT=1 в окружении — его
+# несут дочерние git-процессы команд пульта (orchestrator/gitcmd.py,
+# orchestrator/repo_context.py). Ручной `git push` в main из оболочки
+# сессии или Оператора получает именованный отказ. Ветки task/*,
+# artifact/*, refs refs/artifacts/* и любые другие хук не трогает.
+#
+# Только POSIX sh, git и встроенные команды оболочки: PATH роли ограничен
+# манифестом стека, посторонних интерпретаторов там нет.
+# Включение: `doctor --fix` (git config core.hooksPath scripts/git-hooks).
+
+if [ "${ARTEL_PULT_GIT:-}" = "1" ]; then
+    exit 0
+fi
+
+# git подаёт на stdin по строке на обновляемый ref:
+# "<локальный ref> <локальный sha> <удалённый ref> <удалённый sha>".
+# Сверяется ЦЕЛЕВОЙ (удалённый) ref: при push вида <sha>:refs/heads/main
+# локальная сторона имени main не несёт вовсе.
+while read -r local_ref local_sha remote_ref remote_sha; do
+    if [ "$remote_ref" = "refs/heads/main" ]; then
+        printf '%s\n' \
+            "pre-push: push в main главной копии — только командой пульта" \
+            "(note, doc-commit, pin-update, approve на merge_gate);" \
+            "обход по решению Оператора: ARTEL_PULT_GIT=1" >&2
+        exit 1
+    fi
+done
+
+exit 0
