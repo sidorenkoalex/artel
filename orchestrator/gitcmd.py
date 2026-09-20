@@ -7,15 +7,40 @@ from pathlib import Path
 
 from . import config
 
+# Маркер пульта (SPEC 01M2XMCC837R5CX9M58VARK85G, требования 6-7): git-хуки
+# главной копии (`scripts/git-hooks/pre-commit`, `pre-push`) отказывают
+# коммиту/push в main всем, у кого этой переменной нет в окружении, —
+# команды пульта (push мержа, pin-update, note, doc-commit) помечают свои
+# дочерние git-процессы здесь, ручной `git commit`/`git push` из оболочки
+# сессии или Оператора маркера не несёт. Процесс роли (`runner.role_env`)
+# его тоже не получает: белый список `stack.ROLE_ENV_ALLOWLIST` отсекает
+# переменную — хук остаётся второй линией защиты main от роли.
+PULT_MARKER_ENV = "ARTEL_PULT_GIT"
+PULT_MARKER_VALUE = "1"
+
+
+def pult_env(base: dict | None = None) -> dict:
+    """Окружение дочернего git-процесса пульта: копия `base` (по умолчанию
+    — текущего `os.environ`) плюс маркер `ARTEL_PULT_GIT=1` поверх.
+    Только копия: сам `os.environ` не трогается, иначе маркер утёк бы в
+    любой посторонний процесс пульта."""
+    env = dict(os.environ if base is None else base)
+    env[PULT_MARKER_ENV] = PULT_MARKER_VALUE
+    return env
+
 
 def git(*args: str) -> subprocess.CompletedProcess:
     """git в корне репозитория; исход разбирает вызывающий.
 
     Ошибка запуска (git не установлен) — такой же ненулевой код возврата,
     как и ошибка самой команды: уборке достаточно знать, что ответа нет.
+
+    Дочерний процесс получает окружение пульта плюс маркер
+    `ARTEL_PULT_GIT=1` (`pult_env`, требования 6-7): прочие переменные не
+    меняются — git-идентичность, PATH, `GIT_*` Оператора доходят как есть.
     """
     try:
-        return subprocess.run(["git", *args], cwd=config.ROOT,
+        return subprocess.run(["git", *args], cwd=config.ROOT, env=pult_env(),
                               capture_output=True, text=True)
     except OSError as exc:
         return subprocess.CompletedProcess(args, 1, "", str(exc))
@@ -157,8 +182,13 @@ def carpentry(repo: Path, args: list, env: dict, *,
     run`, — общий модуль-синглтон): патч перехватывает и эти вызовы тоже,
     без изменения точки подмены (`tests/01M1KVGD18P9H5WR7VM8TGPV1T/
     acceptance_tests/test_ac3_sandbox_default_covers_carpentry.py`).
+
+    Маркер пульта `ARTEL_PULT_GIT=1` ложится ПОВЕРХ переданного `env`
+    (`pult_env(env)`, SPEC 01M2XMCC837R5CX9M58VARK85G, требование 7):
+    `GIT_INDEX_FILE`/`GIT_AUTHOR_*`/`GIT_COMMITTER_*` плотницкой записи
+    доходят до git нетронутыми.
     """
-    return subprocess.run(["git", *args], cwd=repo, env=env,
+    return subprocess.run(["git", *args], cwd=repo, env=pult_env(env),
                           capture_output=True, text=text, input=input)
 
 

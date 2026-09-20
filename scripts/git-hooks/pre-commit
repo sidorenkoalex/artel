@@ -1,0 +1,28 @@
+#!/bin/sh
+# pre-commit главной копии пульта (SPEC 01M2XMCC837R5CX9M58VARK85G,
+# требования 1-3): коммит на ветке main проходит только с маркером пульта
+# ARTEL_PULT_GIT=1 в окружении — его несут дочерние git-процессы команд
+# пульта (orchestrator/gitcmd.py: git/in_repo/carpentry,
+# orchestrator/repo_context.py: git). Ручной `git commit` из оболочки
+# сессии или Оператора получает именованный отказ. Ветки task/*,
+# artifact/* и любые другие хук не трогает; отсоединённый HEAD — тоже
+# (main им не двигается).
+#
+# Только POSIX sh, git и встроенные команды оболочки: PATH роли ограничен
+# манифестом стека, посторонних интерпретаторов там нет.
+# Включение: `doctor --fix` (git config core.hooksPath scripts/git-hooks).
+
+if [ "${ARTEL_PULT_GIT:-}" = "1" ]; then
+    exit 0
+fi
+
+branch=$(git symbolic-ref --quiet --short HEAD 2>/dev/null) || exit 0
+if [ "$branch" != "main" ]; then
+    exit 0
+fi
+
+printf '%s\n' \
+    "pre-commit: коммит в main главной копии — только командой пульта" \
+    "(note, doc-commit, pin-update, approve на merge_gate);" \
+    "обход по решению Оператора: ARTEL_PULT_GIT=1" >&2
+exit 1
