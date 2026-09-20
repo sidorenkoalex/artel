@@ -11,6 +11,14 @@ branch_name(TASK_ID), "tasks/<id>/PLAN.md")».
 запрещает второй, из `check()`/`main()`), а имени функции SPEC не даёт;
 подробнее — докстринг `_sandbox.py`.
 
+Уточнение ANSWER-1 (вариант B, сила правки SPEC для требования 1 и
+AC-1/AC-5): ошибка — только путь, якоренный на рабочую копию (цепочка от
+`Path(__file__)`, от `config.ROOT`/`config.TASKS`, литерал с началом
+`tasks/`, включая имена, присвоенные от таких выражений, — `TASK_DIR`
+подставной планки именно такое); пути от временного каталога песочницы
+ошибкой не считаются — класс `TempDirFixturePathsPassTest`. Все пять
+образцов `DISK_READ_FORMS` якорны и после уточнения.
+
 Красен до реализации: гейта «переход отклонён: планка читает артефакты с
 диска» на выходе `tests_writing` ещё нет — advance уводит вложенную
 задачу в `in_dev`, записи журнала с этим действием не появляется вовсе.
@@ -39,6 +47,32 @@ DISK_READ_FORMS = {
 }
 
 PATH_FORM = DISK_READ_FORMS['Path(__file__)…/"PLAN.md"']
+
+# Пути от временного каталога (ANSWER-1, вариант B): вложенная песочница
+# пишет и читает поддельные артефакты фиктивной задачи во временном
+# каталоге — это её фикстура, не артефакт задачи. `import tempfile` —
+# строкой тела метода: пролог шаблона подставной планки фиксирован.
+TEMP_DIR_BODIES = {
+    "имя от tempfile.mkdtemp()": [
+        'import tempfile',
+        'fixture_dir = Path(tempfile.mkdtemp()) / "tasks" / TASK',
+        'fixture_dir.mkdir(parents=True)',
+        '(fixture_dir / "SPEC.md").write_text("# SPEC", encoding="utf-8")',
+        'spec = (fixture_dir / "SPEC.md").read_text(encoding="utf-8")',
+    ],
+    "self.tdir песочницы": [
+        'import tempfile',
+        'self.tdir = Path(tempfile.mkdtemp())',
+        '(self.tdir / "PLAN.md").write_text("# PLAN", encoding="utf-8")',
+        'exists = os.path.exists(os.path.join(self.tdir, "REVIEW.md"))',
+    ],
+    "сегмент tasks посреди пути от tempfile": [
+        'import tempfile',
+        'tmp = tempfile.mkdtemp()',
+        'plan = Path(tmp) / "tasks" / TASK / "PLAN.md"',
+        'handle = open(os.path.join(tmp, "tasks", TASK, "QUESTIONS.md"), "w")',
+    ],
+}
 
 
 class DiskReadFormsRefuseTest(_sandbox.ArtifactSourcePlankSandbox):
@@ -88,6 +122,36 @@ class DiskReadErrorTextTest(_sandbox.ArtifactSourcePlankSandbox):
         detail = self.assert_disk_read_refused(out, source, PATH_FORM)
         self.assertIn(_sandbox.RECIPE_HEAD, detail)
         self.assertIn(_sandbox.RECIPE_CALL, detail)
+
+
+class TempDirFixturePathsPassTest(_sandbox.ArtifactSourcePlankSandbox):
+
+    def test_ac1_paths_from_a_temporary_directory_do_not_refuse_the_exit(self):
+        """Три формы вложенной песочницы (ANSWER-1, вариант B): планка
+        пишет и читает `SPEC.md`/`PLAN.md`/`REVIEW.md`/`QUESTIONS.md` по
+        пути от временного каталога — от имени, присвоенного из
+        `tempfile.mkdtemp()`, от `self.tdir` песочницы и по пути с
+        сегментом `tasks` посреди цепочки от временного каталога, — и
+        после контроля, доказавшего срабатывание проверки на якорном
+        чтении, выход из `tests_writing` каждый раз проходит в `in_dev`.
+
+        Ловит мутацию: якорный предикат снят — правило вернулось к «любое
+        выражение доступа с именем артефакта» — либо голый сегмент `tasks`
+        правым операндом `/` посчитан корнем пути: штатный приём планок
+        FSM-задач получает отказ, и состояние остаётся `tests_writing`.
+        """
+        self.enter_tests_writing()
+        self.control_refuses()
+        for name, body in TEMP_DIR_BODIES.items():
+            with self.subTest(form=name):
+                self.write_plank(_sandbox.plank_source(body))
+
+                out = self.advance()
+
+                self.assertEqual(
+                    self.state(), "in_dev",
+                    f"путь от временного каталога ({name}) не должен "
+                    f"отклонять переход; вывод advance: {out!r}")
 
 
 if __name__ == "__main__":
