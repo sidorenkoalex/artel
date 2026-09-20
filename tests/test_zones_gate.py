@@ -15,6 +15,7 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from orchestrator import config, fsm_advance, gitcmd, store  # noqa: E402
+from orchestrator.advance_gates import zones  # noqa: E402
 from tests.sandbox import TmpRootTest  # noqa: E402
 
 
@@ -402,6 +403,175 @@ class AnswerZonesMandateOriginTest(unittest.TestCase):
                 mock.patch.object(gitcmd, "git", git_fake):
             mandate = fsm_advance._answer_zones_mandate("task/t001-x", "T001")
         self.assertEqual(mandate, {"docs/extra_module.md"})
+
+
+class ZonesGateMandateWithoutPlanSectionTest(TmpRootTest):
+    """SPEC 01M2XFSNVGWA2VX5XFEYR93Y4Z, требования 1-2 (AC-1/AC-2): гейт
+    зон различает «мандат Оператора покрывает все пути вне зон, раздел
+    «## Расширение зон» PLAN.md не оформлен» (своё действие
+    `ZONES_MANDATE_WITHOUT_PLAN_REFUSAL_ACTION`, перечень путей мандата в
+    тексте, подсказка «оформи раздел PLAN») и обычный отказ «вне зон»
+    (мандата нет / покрыты не все пути — прежние действие, текст и
+    подсказка байт-в-байт). Мандат подменяется на уровне
+    `_answer_zones_mandate` — происхождение ANSWER-файла проверяют
+    `AnswerZonesMandateOriginTest` выше и планка приёмки задачи."""
+
+    OUT_OF_ZONE = "docs/extra_module.md"
+    PLAN_WITH_SECTION = ("PLAN\n\n## Расширение зон\n\nПути: {paths}\n\n"
+                         "Обоснование: нужно.\n")
+    OLD_ACTION = "переход отклонён: гейт зон"
+
+    def setUp(self):
+        super().setUp()
+        store.create_schema(store.db())
+        self.conn = store.db()
+        self.task_id = "T001"
+        store.insert_task(self.conn, self.task_id, "Тест", "in_dev",
+                          "task/t001-x", config.DEFAULT_TARGET, 10.0)
+        store.update_task(self.conn, self.task_id, zones="orchestrator/store.py")
+        self.t = {"title": "Тест", "branch": "task/t001-x",
+                 "zones": "orchestrator/store.py", "zones_extension": None}
+
+    def _gate(self, plan_text: str, mandate: set, files: list) -> tuple:
+        """(отказал ли гейт, stdout, последняя запись (action, detail))."""
+        empty_status = subprocess.CompletedProcess([], 0, "", "")
+        result = []
+        with mock.patch.object(gitcmd, "diff_base", return_value="deadbeef"), \
+             mock.patch.object(gitcmd, "diff_base_source",
+                               return_value="локальной main"), \
+             mock.patch.object(gitcmd, "diff_names", return_value=list(files)), \
+             mock.patch.object(gitcmd, "in_repo", return_value=empty_status), \
+             mock.patch.object(zones, "_answer_zones_mandate",
+                               return_value=set(mandate)):
+            out = self.capture(lambda: result.append(
+                fsm_advance._zones_gate_refuses(
+                    self.conn, self.task_id, self.t, "task/t001-x", plan_text)))
+        rows = [(r["action"], r["detail"]) for r in self.conn.execute(
+            "SELECT action, detail FROM steps WHERE task_id=? ORDER BY id",
+            (self.task_id,))]
+        last = rows[-1] if rows else (None, None)
+        return result[0], out, last
+
+    def _old_detail(self, files: list) -> str:
+        return (f"дифф трогает файлы вне заявленных zones и COMMON_ZONES "
+                f"(база сравнения deadbeef от локальной main): "
+                f"{', '.join(files)}")
+
+    def _old_hint(self) -> str:
+        return (f"  дальше: сократи дифф до заявленных zones либо оформи раздел "
+                f"«## Расширение зон» в PLAN.md с обоснованием и мандатом "
+                f"Оператора («Расширение зон разрешено: <пути>» в ANSWER-n.md), "
+                f"и повтори artel.py advance {self.task_id}")
+
+    def test_missing_plan_section_with_full_mandate_refuses_with_named_action(self):
+        """Раздела «## Расширение зон» нет, мандат покрывает единственный
+        путь вне зон — действие отказа отдельное, в тексте перечислены
+        пути мандата и причина «отсутствует», подсказка называет раздел
+        PLAN.md со строкой «Пути:» мандата.
+
+        Ловит мутацию: чтение мандата оставлено внутри ветки
+        `if extension_paths is not None` — без раздела гейт вовсе не
+        читает `_answer_zones_mandate` и журналирует прежнее «переход
+        отклонён: гейт зон» (инцидент 13.09)."""
+        refuses, out, (action, detail) = self._gate(
+            "PLAN\n", {self.OUT_OF_ZONE}, [self.OUT_OF_ZONE])
+
+        self.assertTrue(refuses)
+        self.assertEqual(action, zones.ZONES_MANDATE_WITHOUT_PLAN_REFUSAL_ACTION)
+        self.assertNotEqual(action, self.OLD_ACTION)
+        self.assertIn(f"Расширение зон разрешено: {self.OUT_OF_ZONE}", detail)
+        self.assertIn("отсутствует", detail)
+        self.assertIn(f"  дальше: оформи раздел «## Расширение зон» в PLAN.md: "
+                      f"строка «Пути: {self.OUT_OF_ZONE}»", out)
+
+    def test_plan_section_mismatching_the_mandate_refuses_with_named_action(self):
+        """Раздел есть, но его `Пути:` называют другой путь — тот же
+        именованный отказ, в тексте — и путь мандата, и пути раздела.
+
+        Ловит мутацию: различение прикручено только к `extension_paths
+        is None` — опечатка в строке `Пути:` снова давала бы отказ класса
+        «нужны руки Оператора»."""
+        refuses, out, (action, detail) = self._gate(
+            self.PLAN_WITH_SECTION.format(paths="docs/another.md"),
+            {self.OUT_OF_ZONE}, [self.OUT_OF_ZONE])
+
+        self.assertTrue(refuses)
+        self.assertEqual(action, zones.ZONES_MANDATE_WITHOUT_PLAN_REFUSAL_ACTION)
+        self.assertIn("не совпадает с мандатом (в разделе: docs/another.md)",
+                      detail)
+        self.assertIn(self.OUT_OF_ZONE, detail)
+        self.assertIn("оформи раздел «## Расширение зон» в PLAN.md", out)
+
+    def test_mandate_by_directory_prefix_covers_the_file(self):
+        """Мандат на директорию `docs/` покрывает файл под ней — та же
+        формула префикса `_touches_zone`, что у исключения AC-3.
+
+        Ловит мутацию: покрытие мандатом сверяется равенством строк
+        вместо префикса — мандат на директорию не засчитывался бы, и
+        отказ уходил бы в прежний класс."""
+        refuses, _out, (action, _detail) = self._gate(
+            "PLAN\n", {"docs/"}, [self.OUT_OF_ZONE])
+
+        self.assertTrue(refuses)
+        self.assertEqual(action, zones.ZONES_MANDATE_WITHOUT_PLAN_REFUSAL_ACTION)
+
+    def test_named_refusal_leaves_zones_extension_untouched(self):
+        """Именованный отказ не легализует пути в БД: `zones_extension`
+        обновляется по-прежнему только совпадающим разделом PLAN.
+
+        Ловит мутацию: новая ветка «заодно» пишет `zones_extension` по
+        мандату — следующий advance прошёл бы без раздела PLAN вовсе."""
+        self._gate("PLAN\n", {self.OUT_OF_ZONE}, [self.OUT_OF_ZONE])
+
+        row = self.conn.execute("SELECT zones_extension FROM tasks WHERE id=?",
+                                (self.task_id,)).fetchone()
+        self.assertIsNone(row["zones_extension"])
+
+    def test_no_mandate_keeps_the_old_refusal_byte_for_byte(self):
+        """Мандата нет — прежние действие, текст и подсказка дословно.
+
+        Ловит мутацию: новая ветка срабатывает на одном факте «раздела
+        нет» (без сверки покрытия мандатом) — задача без мандата
+        получала бы мягкий отказ и гоняла бы developer по кругу."""
+        refuses, out, (action, detail) = self._gate(
+            "PLAN\n", set(), [self.OUT_OF_ZONE])
+
+        self.assertTrue(refuses)
+        self.assertEqual(action, self.OLD_ACTION)
+        self.assertEqual(detail, self._old_detail([self.OUT_OF_ZONE]))
+        self.assertIn(self._old_hint(), out)
+
+    def test_mandate_covering_only_part_of_the_paths_keeps_the_old_refusal(self):
+        """Мандат покрывает один из двух путей вне зон — прежний отказ
+        байт-в-байт, оба пути в тексте.
+
+        Ловит мутацию: покрытие сверяется `any` вместо `all` —
+        непокрытый путь молча получал бы мягкий класс отказа."""
+        files = [self.OUT_OF_ZONE, "docs/uncovered.md"]
+
+        refuses, out, (action, detail) = self._gate(
+            "PLAN\n", {self.OUT_OF_ZONE}, files)
+
+        self.assertTrue(refuses)
+        self.assertEqual(action, self.OLD_ACTION)
+        self.assertEqual(detail, self._old_detail(files))
+        self.assertIn(self._old_hint(), out)
+
+    def test_matching_plan_section_with_mandate_still_passes(self):
+        """Контроль: раздел совпадает с мандатом — исключение AC-3 как и
+        раньше пропускает переход и легализует путь в `zones_extension`.
+
+        Ловит мутацию: новая ветка стоит ДО исключения AC-3 и
+        перехватывает уже оформленный раздел — задача не выходила бы из
+        `in_dev` даже после честно оформленного раздела."""
+        refuses, _out, _row = self._gate(
+            self.PLAN_WITH_SECTION.format(paths=self.OUT_OF_ZONE),
+            {self.OUT_OF_ZONE}, [self.OUT_OF_ZONE])
+
+        self.assertFalse(refuses)
+        row = self.conn.execute("SELECT zones_extension FROM tasks WHERE id=?",
+                                (self.task_id,)).fetchone()
+        self.assertEqual(row["zones_extension"], self.OUT_OF_ZONE)
 
 
 if __name__ == "__main__":

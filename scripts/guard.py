@@ -1685,6 +1685,150 @@ def division_section_errors(path: Path | str, text: str, meta: dict) -> list[str
     return errors
 
 
+# --------------------------------------------------------------------------
+# Упоминания путей и сверка с зонами (01M2XJKQNFTWHYAY4KBBQ1NVY7): одно
+# определение «путь упомянут» для заведения задачи (`catalog.cmd_new` по
+# ТЗ) и гейта SPEC (`fsm._approve_spec_gate`). В `check()`/`main()` НЕ
+# участвует (требование 7): исторические SPEC не перепроверяются — новые
+# правила guard действуют на живые задачи (модульный докстринг).
+
+# Расширения файла-кандидата (требование 1).
+PATH_MENTION_EXTENSIONS = ("py", "md", "yaml", "yml", "txt", "json", "toml")
+
+# Сегмент пути — только ASCII: пути репозитория такие и есть, а
+# кириллические «и/или», «AC-2/AC-3» и даты кандидатами не становятся.
+_PATH_SEGMENT = r"[A-Za-z0-9_.-]+"
+# Символ, которым может кончаться кандидат-каталог: конец слова (пробел,
+# знак препинания, кавычка, скобка) или конец текста. Шаблонные хвосты
+# (`tasks/<id>/`, `orchestrator/*.py`) сюда не попадают: после слэша там
+# идёт `<`/`*`, и такой «каталог» кандидатом не считается — он лишь
+# префикс шаблона, а не упомянутый путь.
+_PATH_DIR_END = r"(?![^\s,.;:!?)\]}»\"'`])"
+# Кандидат: `каталог/…/файл.расш` либо `каталог/` с завершающим слэшем.
+# Слева — не середина слова/пути (URL-хвост `x.com/a/b.py` берётся
+# целиком и отсеивается фильтром существования, не даёт `a/b.py`).
+# Справа за расширением — не буква/цифра и не `.буква` (`a.py.bak`), но
+# точка конца предложения допустима (`… в tests/test_foo.py.`).
+PATH_MENTION = re.compile(
+    r"(?<![A-Za-z0-9_./-])"
+    r"(?:" + _PATH_SEGMENT + r"/)+"
+    r"(?:" + _PATH_SEGMENT + r"\.(?:" + "|".join(PATH_MENTION_EXTENSIONS)
+    + r")(?![A-Za-z0-9_]|\.[A-Za-z0-9_])"
+    r"|" + _PATH_DIR_END + r")")
+
+# Подсказка отказа по неклассифицированному пути (требование 3) — одна и
+# та же в `new` и на гейте SPEC (требование 6).
+UNCLASSIFIED_PATH_HINT = ("назови в Зонах, в «Не входит» или в «Только "
+                          "чтение/Приложением»")
+# Отказ по защищённому пути в «Зоны:» ТЗ (требование 4).
+PROTECTED_ZONE_REFUSAL = "защищённый путь только приложением"
+
+# Разделы SPEC, чьи пути сверяются (требование 6), и разделы, чьё
+# упоминание пути его классифицирует (требование 5) — помимо `zones:`.
+SPEC_PATH_CHECKED_SECTIONS = ("Контекст", "Требования", "Критерии приёмки")
+SPEC_PATH_DECLARING_SECTIONS = ("Не входит", "Материалы")
+
+
+def _path_mention_candidates(text: str) -> set[str]:
+    """Кандидаты-упоминания путей в `text` без фильтра существования."""
+    return set(PATH_MENTION.findall(text))
+
+
+def mentioned_paths(text: str, root: Path | None = None) -> set[str]:
+    """Пути, упомянутые в свободном тексте и существующие в репозитории
+    (требование 1): кандидаты `PATH_MENTION`, из которых остаются только
+    существующие относительно `root` (по умолчанию `config.ROOT`, читается
+    в момент вызова — песочницы тестов подменяют его). Кандидат-каталог
+    (с завершающим `/`) обязан быть каталогом, файл — файлом; путь,
+    которого в репозитории нет (файл, который задача только создаст),
+    не возвращается (требование 8)."""
+    base = config.ROOT if root is None else Path(root)
+    found = set()
+    for candidate in _path_mention_candidates(text):
+        target = base / candidate
+        if candidate.endswith("/"):
+            if target.is_dir():
+                found.add(candidate)
+        elif target.is_file():
+            found.add(candidate)
+    return found
+
+
+def zone_items(raw: str | None) -> set[str]:
+    """Элементы строки зон («Зоны: …» ТЗ либо frontmatter `zones:` SPEC):
+    список через запятую — тем же разбором, что `zone_lock._own_paths`
+    (с завершающей точкой предложения ТЗ, как `budget.count_zone_paths`)
+    — плюс кандидаты `PATH_MENTION` из той же строки, чтобы пояснение в
+    скобках рядом с путём («scripts/guard.py (только сборщик)») не
+    превращало элемент в непуть. Существование не проверяется: зона —
+    заявка, путь в ней может ещё не существовать."""
+    if not raw:
+        return set()
+    if isinstance(raw, (list, tuple)):
+        raw = ", ".join(str(item) for item in raw)
+    items = {piece.strip().rstrip(".") for piece in raw.split(",")}
+    items.discard("")
+    return items | _path_mention_candidates(raw)
+
+
+def _classified(path: str, zones: set[str], declared: set[str]) -> bool:
+    """`path` покрыт общей зоной, зоной задачи или объявлен в
+    классифицирующем разделе — с учётом вложенности каталог/файл, тем же
+    приёмом, что `division_section_errors` (`zone_lock._is_common_zone`/
+    `_covered_by`)."""
+    if zone_lock._is_common_zone(path):
+        return True
+    return any(zone_lock._covered_by(path, zone) for zone in zones | declared)
+
+
+def unclassified_paths(checked_text: str, zones, declared_text: str = "",
+                       root: Path | None = None) -> list[str]:
+    """Отсортированный список путей `checked_text`, не классифицированных
+    ни зонами `zones` (элементы, см. `zone_items`), ни общими зонами
+    `config.COMMON_ZONES`, ни упоминанием в `declared_text` (разделы
+    «Не входит»/«Только чтение…»/«Приложением» ТЗ, «## Не входит»/
+    «## Материалы» SPEC). Пустой список — все пути классифицированы."""
+    zone_set = set(zones)
+    declared = _path_mention_candidates(declared_text)
+    return sorted(p for p in mentioned_paths(checked_text, root)
+                  if not _classified(p, zone_set, declared))
+
+
+def unclassified_paths_refusal(paths) -> str:
+    """Текст отказа по неклассифицированным путям (требования 3, 6) —
+    перечень путей и подсказка `UNCLASSIFIED_PATH_HINT`."""
+    listed = ", ".join(paths)
+    return (f"пути упомянуты, но не классифицированы: {listed} — "
+            f"{UNCLASSIFIED_PATH_HINT}")
+
+
+def protected_zones(zones) -> list[str]:
+    """Элементы зон, попадающие под `config.PROTECTED_PATHS` — с учётом
+    вложенности (`templates/SPEC.md` под `templates/`), тем же
+    `zone_lock._covered_by` (требование 4)."""
+    return sorted(z for z in set(zones)
+                  if any(zone_lock._covered_by(z, protected)
+                         for protected in config.PROTECTED_PATHS))
+
+
+def spec_unclassified_paths(text: str, meta: dict,
+                            root: Path | None = None) -> list[str]:
+    """Неклассифицированные пути SPEC (требования 5-6): проверяются
+    разделы `SPEC_PATH_CHECKED_SECTIONS`, классифицируют frontmatter
+    `zones:` (`meta`, с вложенностью и общими зонами) и разделы
+    `SPEC_PATH_DECLARING_SECTIONS`.
+
+    Зовётся гейтом `orchestrator/fsm.py::_approve_spec_gate` — и ТОЛЬКО
+    им: в `_content_errors`/`check()`/`main()` не входит (требование 7),
+    исторические SPEC с путями вне зон остаются валидными для CI."""
+    checked = "\n".join(section_body(text, name)
+                        for name in SPEC_PATH_CHECKED_SECTIONS)
+    declared = "\n".join(section_body(text, name)
+                         for name in SPEC_PATH_DECLARING_SECTIONS)
+    return unclassified_paths(checked, zone_items(meta.get("zones")),
+                              declared, root)
+
+
 def _content_errors(label: str, text: str) -> list[str]:
     """Ядро `check` — структурная проверка уже прочитанного текста, без
     чтения файла: `label` — путь или его подобие, только для текста

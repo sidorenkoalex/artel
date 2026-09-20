@@ -129,6 +129,8 @@ workspace, tasks, knowledge, logs). БД одна на все проекты: с
   pin --to [<sha>] | zone-release <id> | zone-reorder <id1> <id2> ... |
   venv-sync | note (копилка|бэклог|очередь) --text "<строка>" |
   note --append <ключ> --text "<текст>" | note --flush |
+  doc-commit <путь-в-репозитории> --from <файл> --message "<основание>" |
+  doc-commit --flush |
   watch [--tasks <id>[,<id>...]] [--mine] [--all] [--events <класс>[,...]]
         [--interval SEC] [--until <state>]
 
@@ -371,7 +373,10 @@ worktree задачи, команда коммитит правку, сдвиг�
             01M1REVEZ1HESMJ7AFD5A9MEJ8)
   notes     команда `note`: строка в копилку/бэклог/очередь изолированным
             коммитом от origin/main, повтор non-fast-forward, удержание
-            коммита при сетевом отказе (tasks/01M1VBEHTDYPK3E4RRFHWYYYW3)
+            коммита при сетевом отказе (tasks/01M1VBEHTDYPK3E4RRFHWYYYW3);
+            команда `doc-commit`: документ `docs/**` или конфигурация
+            Оператора целиком тем же механизмом, со сверкой базы с пином
+            (tasks/01M2XMCG167615YS9EZD9TYJWV)
   watch     дозор событий журнала (steps/alerts) для сессии Оператора,
             read-only, без lease (SPEC 01M1VBEKRN0GA029J98S0K2DAQ)
 """
@@ -827,6 +832,7 @@ def main() -> None:
         "zone-reorder": lambda: zone_lock.cmd_zone_reorder(rest),
         "venv-sync": lambda: venv.cmd_venv_sync(),
         "note": lambda: notes.cmd_note(rest),
+        "doc-commit": lambda: notes.cmd_doc_commit(rest),
         "watch": lambda: watch.cmd_watch(rest),
     }
     fn = table.get(cmd)
