@@ -443,13 +443,26 @@ def network_guarded_real_run(cmd, *args, **kwargs) -> subprocess.CompletedProces
     return _REAL_RUN(cmd, *args, **kwargs)
 
 
+def is_claude_call(argv) -> bool:
+    """`argv` — вызов CLI роли, а не `git`/`python3` в том же моке: сверка
+    по БАЗОВОМУ имени argv[0] (SPEC 01M2XJKV84SQ9VEVR0VNVKDNGJ,
+    «Материалы»): шаг роли зовёт CLI абсолютным путём из резолва манифеста
+    (`runner.role_cmd()`), а `stack._probe_tool`/`doctor.cli_version` —
+    по-прежнему литералом `claude`; сам путь зависит от машины прогона
+    (homebrew, npm-global, стаб `_stub_which`), и сверка по нему падала бы
+    по причине вне предмета проверки."""
+    if not argv or isinstance(argv, (str, bytes)):
+        return False
+    return Path(str(argv[0])).name == "claude"
+
+
 def claude_only_run(claude_stdout: str, claude_returncode: int = 0):
     """`subprocess.run` side_effect: отвечает только на `claude ...`, остальное
     (например, `git config --get ...` внутри `gitcmd.git` — тот же общий
     модуль `subprocess`) уходит в настоящий `subprocess.run`: подмена
     атрибута `subprocess.run` глобальна на модуль."""
     def run(args, **kwargs):
-        if args and args[0] == "claude":
+        if is_claude_call(args):
             return subprocess.CompletedProcess(args, claude_returncode,
                                                claude_stdout, "")
         return _REAL_RUN(args, **kwargs)
@@ -459,7 +472,7 @@ def claude_only_run(claude_stdout: str, claude_returncode: int = 0):
 def claude_only_popen(fake_proc):
     """Аналог `claude_only_run` для `subprocess.Popen`/`runner.spawn_agent`."""
     def popen(cmd, *args, **kwargs):
-        if cmd and cmd[0] == "claude":
+        if is_claude_call(cmd):
             return fake_proc
         return _REAL_POPEN(cmd, *args, **kwargs)
     return popen
