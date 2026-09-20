@@ -78,6 +78,11 @@ SPEC не добавляется: требование 5 называет «ту
    `unclassified_paths_refusal`, `PROTECTED_ZONE_REFUSAL`,
    `protected_zones`, `spec_unclassified_paths`; в `check()`/`main()`
    не подключаются. Тесты: `tests/test_guard_path_mentions.py`.
+   Возврат из verifying (инвариант 35, `NoNetworkAddressesInTestsTest`):
+   литерал `https://example.com/scripts/guard.py` в тесте левой границы
+   заменён на хвост чужого пути `mirror.old/scripts/guard.py` — та же
+   проверка (кандидат берётся целиком и отсеивается существованием),
+   без сетевого адреса; инвариант не тронут.
 2. `orchestrator/catalog.py`: `_TZ_SECTION_RE`, `_tz_sections`,
    `_tz_path_check`, отказ в `cmd_new` до заведения. Тесты:
    `tests/test_catalog_tz_path_check.py` (чистые функции + отказ
