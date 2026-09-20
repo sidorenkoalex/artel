@@ -11,8 +11,9 @@
 
 Песочницы — общие (`tests/sandbox.py`), шаг роли — готовый
 `_StepSandbox` из `tests/test_runner_model_preflight.py` (настоящий путь
-`runner.cmd_run` с подменённым процессом агента), тем же приёмом, каким
-тот файл переиспользует `tests/test_runner_role_model.py`.
+`runner.cmd_run` с подменённым процессом агента), полный прогон
+`doctor.all_checks` — готовая песочница `tests/test_doctor.py`, тем же
+приёмом, каким тот файл переиспользует `tests/test_runner_role_model.py`.
 """
 import os
 import shutil
@@ -25,13 +26,26 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from orchestrator import (catalog, config, doctor, keychain, providers,  # noqa: E402
-                          roles, runner, stack)
+                          roles, runner, stack, store)
 from orchestrator.providers import claude as claude_provider  # noqa: E402
-from tests.sandbox import TmpDirTest, TmpRootTest  # noqa: E402
+from tests.sandbox import (TmpDirTest, TmpRootTest, claude_only_popen,  # noqa: E402
+                           claude_only_run)
+from tests.test_doctor import (FakeLiveSmokeProc,  # noqa: E402
+                               TmpRootTest as DoctorSandbox, result_event)
 from tests.test_runner_model_preflight import _StepSandbox  # noqa: E402
 from tests.test_runner_role_model import _roles_yaml_text  # noqa: E402
 
 UNKNOWN_PROVIDER = "provider-kotorogo-net"
+
+# Ambient-канал токена: обе переменные входят в белый список манифеста
+# (`stack.ROLE_ENV_ALLOWLIST`) и сильнее слота keychain, а в окружении
+# прогона стоят по построению — внутри шага роли их кладёт туда сам
+# пульт (`runner.role_env`). Тесты, чей предмет — слот, гасят их пустым
+# значением, тем же приёмом, что `tests/test_doctor.py::
+# _DoctorTmpRootTest`: иначе набор краснел бы на машине Оператора с
+# заданным токеном без единого дефекта в коде (REVIEW.md итерации 1,
+# R1-F1).
+NO_AMBIENT_TOKEN = {"CLAUDE_CODE_OAUTH_TOKEN": "", "ANTHROPIC_API_KEY": ""}
 
 # Хвост argv шага роли, зафиксированный ДО задачи (`runner.role_cmd()` на
 # 20.09): значение `--setting-sources` — от крутилки Оператора, не
@@ -108,8 +122,14 @@ class RolesProviderTest(TmpDirTest):
 
     def setUp(self):
         super().setUp()
+        self.use_roles_text(ROLES_YAML)
+
+    def use_roles_text(self, text: str) -> None:
+        """Карта исполнителей под тестом: `config.ROLES` — файл с этим
+        содержимым (патч снимается штатным cleanup, поэтому повторный
+        вызов внутри теста подменяет карту поверх setUp)."""
         path = self.tdir / "roles-under-test.yaml"
-        path.write_text(ROLES_YAML, encoding="utf-8")
+        path.write_text(text, encoding="utf-8")
         patcher = mock.patch.object(config, "ROLES", path)
         patcher.start()
         self.addCleanup(patcher.stop)
@@ -131,13 +151,44 @@ class RolesProviderTest(TmpDirTest):
                 with self.assertRaises(roles.RolesError):
                     roles.provider(role)
 
-    def test_for_role_degrades_to_the_default_on_an_unreadable_map(self):
-        """Ловит мутацию: `providers.for_role` роняет трейсбек на
-        нечитаемой карте исполнителей — сборка окружения (`role_env`,
+    def test_for_role_degrades_to_the_default_for_an_unknown_role(self):
+        """Ловит мутацию: `providers.for_role` роняет трейсбек на роли,
+        которой в карте исполнителей нет, — сборка окружения (`role_env`,
         её зовёт и `doctor`) падала бы вместо своей, названной причины,
         которую шаг и так печатает раньше."""
         self.assertIs(providers.for_role("delta"), providers.default())
         self.assertIs(providers.for_role(None), providers.default())
+
+    def test_for_role_degrades_to_the_default_on_an_unreadable_map(self):
+        """Ловит мутацию: та же деградация, но на карте, которая НЕ
+        РАЗОБРАНА или которой нет на диске (`RolesError` из `_document`,
+        не из «роль не описана») — ветка, которой до REVIEW.md итерации 1
+        (R1-F3) не касался ни один тест: `role_env()` падал бы трейсбеком
+        разбора YAML там, где обязан отдать окружение провайдера по
+        умолчанию.
+        """
+        # Блочный список — конструкция, которую `yamlmini` не разбирает.
+        self.use_roles_text("roles:\n  - developer\n")
+        with self.assertRaises(roles.RolesError):
+            roles.provider("developer")
+        self.assertIs(providers.for_role("developer"), providers.default())
+
+        with mock.patch.object(config, "ROLES",
+                               self.tdir / "net-takogo-fayla.yaml"):
+            self.assertIs(providers.for_role("developer"), providers.default())
+
+    def test_role_providers_does_not_degrade_on_an_unreadable_map(self):
+        """Ловит мутацию: сводка «кто на чём идёт» собирается через
+        `name_for_role` (с деградацией к дефолту) — `doctor` утверждал бы
+        зелёной строкой «роль → claude» по карте, которую не смог
+        прочитать (REVIEW.md итерации 1, R1-F2).
+        """
+        self.assertEqual(providers.role_providers(["beta"]),
+                         [("beta", providers.DEFAULT_PROVIDER)])
+
+        self.use_roles_text("roles:\n  - developer\n")
+        with self.assertRaises(roles.RolesError):
+            providers.role_providers(["developer"])
 
 
 class StepCommandTest(TmpRootTest):
@@ -185,6 +236,9 @@ class StepEnvironmentTest(TmpRootTest):
         patcher = mock.patch.object(keychain, "token", lambda slot: "tok-test")
         patcher.start()
         self.addCleanup(patcher.stop)
+        env_patcher = mock.patch.dict(os.environ, NO_AMBIENT_TOKEN)
+        env_patcher.start()
+        self.addCleanup(env_patcher.stop)
 
     def test_provider_part_sits_on_top_of_the_manifest_allowlist(self):
         """Ловит мутацию: провайдерская часть окружения собирается копией
@@ -321,6 +375,15 @@ class RoleHomeTest(TmpRootTest):
 class DoctorProviderLinesTest(TmpRootTest):
     """Строки `doctor` — требования 4, 6 (AC-9, AC-11)."""
 
+    def setUp(self):
+        super().setUp()
+        patcher = mock.patch.object(keychain, "token", lambda slot: "tok-test")
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        env_patcher = mock.patch.dict(os.environ, NO_AMBIENT_TOKEN)
+        env_patcher.start()
+        self.addCleanup(env_patcher.stop)
+
     def use_roles_yaml(self, text: str) -> None:
         path = self.root / "roles-under-test.yaml"
         path.write_text(text, encoding="utf-8")
@@ -373,6 +436,50 @@ class DoctorProviderLinesTest(TmpRootTest):
                 self.assertEqual(len(grouped.get(name, [])), 1, grouped)
         self.assertEqual(len(grouped.get("token", [])),
                          len(doctor.agent_roles()), grouped)
+
+    def test_unreadable_roles_map_is_a_warn_line_not_a_green_one(self):
+        """Ловит мутацию: карта исполнителей не прочитана, а строка
+        «провайдеры ролей» всё равно зелёная с перечнем ролей на
+        `claude` — `doctor` утверждает прочитанным файл, которого не
+        читал, и поломка `roles.yaml` (опечатка, файл не на месте)
+        остаётся невидимой до отказа шага (REVIEW.md итерации 1, R1-F2).
+        """
+        self.use_roles_yaml("roles:\n  - developer\n")
+
+        check = doctor.check_role_providers()
+
+        self.assertEqual(check.status, "warn", check.detail)
+        self.assertIn("не разобран", check.detail)
+
+
+class AllChecksProviderNamesTest(DoctorSandbox):
+    """Склейка провайдерских проверок в выводе `doctor` — требование 6.
+
+    Песочница — готовая `tests/test_doctor.py` (временный корень с
+    `skills/`/`templates/`, подменённый keychain, погашенный
+    ambient-токен): `all_checks` проходит весь прогон целиком, и своих
+    копий этой обвязки здесь не заводится.
+    """
+
+    def test_all_checks_prints_provider_checks_with_unexpected_names(self):
+        """Ловит мутацию: `all_checks` разбирает набор провайдера по
+        четырём сегодняшним именам и молча теряет остальные — проверка
+        секрета второго провайдера под своим именем (`api-key` у
+        `codex`) исчезает из вывода `doctor`, и Оператор видит зелёный
+        прогон при отсутствующем ключе (REVIEW.md итерации 1, R1-F4).
+        """
+        own = doctor.Check("api-key", "fail", "ключ провайдера не найден")
+        self.touch_backup()
+
+        with mock.patch.object(claude_provider.ClaudeProvider, "preflight",
+                               lambda self, role: [own]), \
+                mock.patch.object(doctor.subprocess, "run", claude_only_run(
+                    f"{config.CLI_VERSION_PIN} (Claude Code)\n")), \
+                mock.patch.object(doctor.subprocess, "Popen", claude_only_popen(
+                    FakeLiveSmokeProc(result_event(0.01)))):
+            checks = doctor.all_checks(store.db())
+
+        self.assertIn(own, checks, [c.name for c in checks])
 
 
 class UnknownProviderStepTest(_StepSandbox):

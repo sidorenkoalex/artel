@@ -21,15 +21,24 @@ def all_checks(conn) -> list[doctor.Check]:
     роли). Версия CLI отсутствует в склейке, если CLI не нашёлся, —
     то же условие, что стояло здесь явным `if` до задачи, теперь внутри
     `preflight()` провайдера.
+
+    Четыре сегодняшних имени разбираются поимённо — ради ПОРЯДКА строк,
+    в котором они перемежаются общими проверками пульта; всё, что
+    провайдер назвал иначе, печатается следом за ними, а не пропадает
+    (REVIEW.md итерации 1, R1-F4): проверка секрета второго провайдера
+    под своим именем (`api-key`) обязана дойти до Оператора, иначе
+    `doctor` зеленел бы при отсутствующем ключе.
     """
     provider_checks = doctor.provider_preflight_checks()
     checks = [doctor.check_role_providers()]
-    checks.extend(provider_checks.get("cli-found", []))
-    checks.extend(provider_checks.get("cli-version", []))
-    checks.extend(provider_checks.get("token", []))
+    checks.extend(provider_checks.pop("cli-found", []))
+    checks.extend(provider_checks.pop("cli-version", []))
+    checks.extend(provider_checks.pop("token", []))
     checks.append(doctor.check_git_identity())
     checks.append(doctor.check_disk_space())
-    checks.extend(provider_checks.get("role-home-reference", []))
+    checks.extend(provider_checks.pop("role-home-reference", []))
+    for remaining in provider_checks.values():
+        checks.extend(remaining)
     checks.append(doctor.check_backup_age(conn))
     checks.append(doctor.check_task_counters(conn))
     checks.append(doctor.isolation_smoke())

@@ -221,15 +221,20 @@ def check_role_providers() -> doctor.Check:
 
     Имя печатается из карты исполнителей как есть, без резолва в
     объект: для незарегистрированного имени именно оно и есть предмет
-    починки. Нечитаемая карта — WARN, не исключение: `doctor` —
-    диагностика, ронять её целиком нечитаемым `roles.yaml` значило бы
-    спрятать остальные строки (тот же приём, что `stack._model_checks`).
+    починки. Нечитаемая карта (или роль, которой в ней нет) — WARN с
+    причиной от `roles`, не исключение и не молчаливый `claude`:
+    `doctor` — диагностика, ронять её целиком нечитаемым `roles.yaml`
+    значило бы спрятать остальные строки (тот же приём, что
+    `stack._model_checks`), а подставить дефолт — соврать, что файл
+    прочитан (REVIEW.md итерации 1, R1-F2). Отсюда и чтение через
+    `providers.role_providers`, который, в отличие от
+    `providers.for_role`, до дефолта не деградирует.
     """
     try:
         pairs = doctor.providers.role_providers(agent_roles())
     except doctor.roles.RolesError as exc:
         return doctor.Check("role-providers", "warn",
-                     f"провайдеры ролей: карта исполнителей не прочитана: {exc}")
+                     f"провайдеры ролей: {exc}")
     listed = ", ".join(f"{role} → {name}" for role, name in pairs)
     unknown = [(role, name) for role, name in pairs
                if name not in doctor.providers.PROVIDERS]
