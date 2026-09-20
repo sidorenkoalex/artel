@@ -22,9 +22,10 @@ from pathlib import Path
 
 from scripts import guard
 
-from . import (artifact_branch, ci, cleanup, config, fsm, fsm_postmerge,
-              gitcmd, github_adapter, lease, merge_lock, merge_queue,
-              repo_context, store, workspace)
+from . import (acceptance, artifact_branch, artifact_source, ci, cleanup,
+              config, fsm, fsm_postmerge, gitcmd, github_adapter, lease,
+              merge_lock, merge_queue, repo_context, store, workspace)
+from .advance_gates.plan_appendix import git_apply
 
 
 def _touches_protected_path(path: str) -> bool:
@@ -527,8 +528,180 @@ def _perform_carpentry_merge(conn, task_id: str, state: str, branch: str,
     return ("ok", scratch)
 
 
+# Классы защищённых путей, чья правка приложением обязана пройти ПОЛНЫЙ
+# набор тестов в scratch-дереве до push (SPEC 01M2YSHDKWFJN3XSJ618Z74FNF,
+# требование 5): приложение к `tests/` правит сам набор, приложение к
+# `.github/` — правила его прогона, и ни то ни другое CI main уже не
+# поймает — оно и есть то, чем CI main проверяет. Остальные защищённые
+# пути (skills, templates, docs/adr, docs/invariants.md, конфигурация) на
+# зелёность тестов не влияют — их проверит CI main.
+_FULL_SUITE_APPENDIX_PREFIXES = ("tests/", ".github/")
+
+
+def _appendix_needs_full_suite(paths: list[str]) -> bool:
+    return any(p.startswith(prefix) for p in paths
+               for prefix in _FULL_SUITE_APPENDIX_PREFIXES)
+
+
+def _plan_appendices_or_refuse(conn, task_id: str, scratch: Path,
+                               ctx: repo_context.RepoContext) -> list:
+    """Приложения PLAN.md задачи с ветки-источника артефактов (SPEC
+    01M2YSHDKWFJN3XSJ618Z74FNF, требование 3). Ошибки разбора требования
+    1 — отказ мержа `sys.exit`'ом (задача остаётся на `merge_gate`),
+    возврата из функции в этом случае нет вовсе.
+
+    Гейт применимости на выходе `in_dev` такие ошибки уже не пропустил
+    бы — значит PLAN.md правили ПОСЛЕ него, на самом гейте, и разбирается
+    это руками Оператора, а не возвратом задачи разработчику.
+
+    PLAN.md, не прочитанный с ветки (git не ответил, ветки нет), —
+    журналируемое предупреждение и «приложений нет», а не отказ мержа:
+    тем же принципом деградации, что `_overlay_artifact_snapshot` уже
+    применяет к провалу материализации снимка. Ничего некорректного в
+    main это не пропускает — не применяется ничего."""
+    branch, _foreign = artifact_source.resolve(conn, task_id)
+    text, reason = gitcmd.show(branch, f"tasks/{task_id}/PLAN.md")
+    if text is None:
+        store.journal(conn, task_id, "orchestrator",
+                      "приложения PLAN не прочитаны",
+                      f"PLAN.md не читается с ветки {branch}: {reason} — "
+                      f"приложения не применяются")
+        return []
+    appendices, errors = guard.plan_appendices(text)
+    if errors:
+        detail = f"приложения PLAN не разобраны: {'; '.join(errors)}"
+        store.journal(conn, task_id, "orchestrator", "merge FAILED", detail)
+        _drop_scratch_worktree(ctx, scratch)
+        sys.exit(f"[{task_id}] merge отклонён: {detail}\n"
+                 f"  задача осталась на гейте merge; почини раздел "
+                 f"«## Приложение» в PLAN.md и повтори: artel.py approve "
+                 f"{task_id}")
+    return appendices
+
+
+def _return_inapplicable_appendix(conn, task_id: str, state: str,
+                                  appendix, answer: str, scratch: Path,
+                                  ctx: repo_context.RepoContext) -> None:
+    """Приложение, применимое к базе сравнения на выходе `in_dev`, но не к
+    подтянутому main (SPEC 01M2YSHDKWFJN3XSJ618Z74FNF, требование 4/AC-9):
+    main сдвинулся, пока задача шла по конвейеру.
+
+    НЕ `sys.exit` (в отличие от инфраструктурных отказов этого гейта):
+    чинит дифф приложения сама роль, в своём PLAN.md, — тем же путём и
+    тем же `store.set_state`, что возврат по содержательному конфликту
+    merge (`_handle_merge_conflict`), включая Draft-MR. Scratch-дерево
+    убирается до перехода: половина применённых хунков в нём никому не
+    нужна."""
+    _drop_scratch_worktree(ctx, scratch)
+    detail = (f"приложение PLAN неприменимо после подтяжки: "
+              f"{', '.join(appendix.paths)} — {answer}")
+    store.set_state(conn, task_id, "in_dev", "fsm",
+                    expected_state=state, detail=detail)
+    fsm._maybe_ensure_draft_mr(conn, task_id)
+
+
+def _commit_applied_appendices(conn, task_id: str, paths: list[str],
+                               scratch: Path,
+                               ctx: repo_context.RepoContext) -> str:
+    """Один коммит на все применённые приложения (требование 3/AC-8):
+    «<id>: приложения Оператора — <пути>». Возврат — sha коммита; git
+    отказал — отказ мержа `sys.exit`'ом (инфраструктурный сбой того же
+    класса, что и прочие отказы этого гейта), и выполнение сюда не
+    возвращается."""
+    add = gitcmd.in_repo(scratch, "add", "--", *paths)
+    commit = (gitcmd.in_repo(
+        scratch, "commit", "-m",
+        f"{task_id}: приложения Оператора — {', '.join(paths)}")
+        if add is not None and add.returncode == 0 else None)
+    if commit is not None and commit.returncode == 0:
+        return gitcmd.head_sha(scratch)
+    failed = commit if commit is not None else add
+    reason = (failed.stderr.strip()[:300] if failed is not None
+              else "git не ответил")
+    detail = f"коммит приложений PLAN не удался: {reason}"
+    store.journal(conn, task_id, "orchestrator", "merge FAILED", detail)
+    _drop_scratch_worktree(ctx, scratch)
+    sys.exit(f"[{task_id}] merge отклонён: {detail}\n"
+             f"  задача осталась на гейте merge; повтори: artel.py approve "
+             f"{task_id}")
+
+
+def _full_suite_or_refuse(conn, task_id: str, paths: list[str], scratch: Path,
+                          ctx: repo_context.RepoContext) -> None:
+    """Полный набор тестов в scratch-дереве, где приложения УЖЕ применены
+    (требование 5/AC-10/AC-11) — только для путей
+    `_FULL_SUITE_APPENDIX_PREFIXES`. Красный прогон — именованный отказ
+    мержа: задача остаётся на `merge_gate`, scratch убран, main не
+    продвинут, приложения не опубликованы."""
+    if not _appendix_needs_full_suite(paths):
+        return
+    green, tail = acceptance.run_full_suite(scratch)
+    if green:
+        store.journal(conn, task_id, "orchestrator",
+                      "полный прогон после приложений", tail)
+        return
+    detail = f"приложения ломают тесты: {tail}"
+    store.journal(conn, task_id, "orchestrator", "merge FAILED", detail)
+    _drop_scratch_worktree(ctx, scratch)
+    sys.exit(f"[{task_id}] merge отклонён: {detail}\n"
+             f"  задача осталась на гейте merge; почини приложение к "
+             f"{', '.join(paths)} и повтори: artel.py approve {task_id}")
+
+
+def _apply_plan_appendices(conn, task_id: str, state: str, scratch: Path,
+                           ctx: repo_context.RepoContext):
+    """Приложения PLAN к защищённым путям — применение пультом (SPEC
+    01M2YSHDKWFJN3XSJ618Z74FNF, требования 3-6): ПОСЛЕ плотницкого merge и
+    ДО снимка артефактов, то есть коммит приложений ложится в main раньше
+    коммита снимка (AC-8) и входит в содержимое, на которое адресуется
+    RETRO.
+
+    До этой задачи защищённый путь в main мог попасть только ручным
+    коммитом Оператора; после включения хуков защиты main
+    (01M2XMCC83) этот путь закрылся, и приложение 01M2XJKKPH к
+    `skills/test-authoring.md` применить стало некому — дыра, которую
+    закрывает эта функция.
+
+    Только self-target (`ctx.path == config.ROOT`), тем же доводом, что
+    карта и RETRO ниже: `config.PROTECTED_PATHS` — файлы пульта, у
+    внешнего target'а их либо нет вовсе, либо это не те же файлы.
+
+    `("ok", пути)` — применять было нечего либо всё применено и
+    закоммичено; `("stopped", [])` — приложение неприменимо к подтянутому
+    main, задача возвращена в `in_dev` (требование 4)."""
+    if ctx.path != config.ROOT:
+        return ("ok", [])
+    appendices = _plan_appendices_or_refuse(conn, task_id, scratch, ctx)
+    if not appendices:
+        return ("ok", [])
+
+    # Пути КАЖДОГО заголовка `diff --git` каждого приложения (R1-F1):
+    # многофайловый блок git применяет целиком, и `git add` ниже обязан
+    # унести в коммит все его файлы, иначе правка Оператора уезжает в
+    # никуда вместе со scratch-деревом.
+    paths: list[str] = []
+    for appendix in appendices:
+        answer = git_apply(scratch, appendix)
+        if answer:
+            _return_inapplicable_appendix(conn, task_id, state, appendix,
+                                          answer, scratch, ctx)
+            return ("stopped", [])
+        paths.extend(p for p in appendix.paths if p not in paths)
+
+    sha = _commit_applied_appendices(conn, task_id, paths, scratch, ctx)
+    # Прогон — после коммита и ДО записи «применены»/push: красный исход
+    # означает, что приложения не поедут в main вовсе, и объявлять их
+    # применёнными раньше его нечестно.
+    _full_suite_or_refuse(conn, task_id, paths, scratch, ctx)
+    store.journal(conn, task_id, "orchestrator",
+                  f"приложения применены: {', '.join(paths)}",
+                  f"коммит {sha} в scratch-дереве мержа")
+    return ("ok", paths)
+
+
 def _publish_merge_artifacts(conn, task_id: str, scratch: Path,
-                             ctx: repo_context.RepoContext) -> str:
+                             ctx: repo_context.RepoContext,
+                             applied_appendices: list[str] | None = None) -> str:
     """Снимок артефактной ветки поверх обычного merge (SPEC
     01M1R9YEK08XEQWBFX0929WFVJ, требование 3; AC-6/AC-7/AC-8/AC-11) —
     ДО sha "коммита мержа" ниже: main обязан унести АРТЕФАКТНЫЙ снимок
@@ -551,6 +724,10 @@ def _publish_merge_artifacts(conn, task_id: str, scratch: Path,
     посторонний файл `tasks/<id>/` отказывает переходу `sys.exit`'ом,
     дальше этой функции выполнение не идёт.
 
+    `applied_appendices` (SPEC 01M2YSHDKWFJN3XSJ618Z74FNF, требование 6) —
+    пути приложений, применённых `_apply_plan_appendices` ДО этого вызова:
+    RETRO задачи обязано нести их перечень, а собирается RETRO здесь.
+
     Возврат — `final_sha` (после карты/RETRO для self) для push явным sha.
     """
     _overlay_artifact_snapshot(conn, task_id, scratch)
@@ -558,8 +735,9 @@ def _publish_merge_artifacts(conn, task_id: str, scratch: Path,
     merge_sha = gitcmd.head_sha(scratch)
     if ctx.path == config.ROOT:
         fsm_postmerge._regenerate_and_commit_map(conn, task_id, repo=scratch)
-        fsm_postmerge._generate_and_commit_retro(conn, task_id, merge_sha,
-                                                 repo=scratch)
+        fsm_postmerge._generate_and_commit_retro(
+            conn, task_id, merge_sha, repo=scratch,
+            applied_appendices=applied_appendices)
     final_sha = gitcmd.head_sha(scratch)
     _drop_scratch_worktree(ctx, scratch)
     return final_sha
@@ -671,8 +849,10 @@ def _cmd_approve_merge_gate(conn, task_id: str, state: str, t,
     композиция шагов — защищённые пути в диффе (SPEC
     01M27JPEGCGMDDRX5A98QWJW0Z, требование 3/AC-5) -> публикация головы ->
     свежесть main -> зелёный CI -> плотницкий merge в scratch-worktree
-    (Stage0, AC-8) -> снимок артефактов/карта/RETRO -> push явным sha ->
-    done -> снапшот закрытия -> уборка worktree/ветки.
+    (Stage0, AC-8) -> приложения PLAN к защищённым путям (SPEC
+    01M2YSHDKWFJN3XSJ618Z74FNF, требования 3-6) -> снимок артефактов/
+    карта/RETRO -> push явным sha -> done -> снапшот закрытия -> уборка
+    worktree/ветки.
 
     Возврат — сигнал вызывающему циклу (`_cmd_approve_merge_gate_cycle`):
     `("stopped",)` — окно завершилось без merge (отказ, эскалация,
@@ -722,7 +902,12 @@ def _cmd_approve_merge_gate(conn, task_id: str, state: str, t,
                                                     branch, ctx)
     if merge_kind != "ok":
         return ("stopped",)
-    final_sha = _publish_merge_artifacts(conn, task_id, scratch, ctx)
+    appendix_kind, applied = _apply_plan_appendices(conn, task_id, state,
+                                                    scratch, ctx)
+    if appendix_kind != "ok":
+        return ("stopped",)
+    final_sha = _publish_merge_artifacts(conn, task_id, scratch, ctx,
+                                         applied_appendices=applied)
     if _push_merged_main(conn, task_id, final_sha, ctx) == "moved":
         return ("moved", branch)
     _finalize_done_state(conn, task_id, state, branch)

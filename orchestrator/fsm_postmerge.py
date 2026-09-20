@@ -170,8 +170,26 @@ def _commit_retro(conn, task_id: str, message: str, repo=None) -> None:
                         f"{commit.stderr.strip()[:200]}")
 
 
+# Строка RETRO о приложениях Оператора (SPEC 01M2YSHDKWFJN3XSJ618Z74FNF,
+# требование 6): дописывается здесь, а не в `retro.build_done` —
+# `orchestrator/retro.py` вне зон той задачи, а перечень применённых путей
+# знает только цикл мержа.
+APPENDICES_RETRO_PREFIX = "Приложения Оператора применены:"
+
+
+def _with_appendices_line(text: str, applied_appendices) -> str:
+    """Текст RETRO со строкой перечня применённых приложений в конце.
+    Приложений не было — текст возвращается байт-в-байт: RETRO задач без
+    приложений не имеет права отличаться от сегодняшнего ни одним
+    символом."""
+    if not applied_appendices:
+        return text
+    return (f"{text}\n{APPENDICES_RETRO_PREFIX} "
+            f"{', '.join(applied_appendices)}\n")
+
+
 def _generate_and_commit_retro(conn, task_id: str, merge_sha: str,
-                               repo=None) -> None:
+                               repo=None, applied_appendices=None) -> None:
     """done-RETRO мержащейся задачи + подбор killed-долгов (SPEC T043,
     требования 1, 2, 5-8) — коммит отдельный на каждую задачу (провал
     одной не должен мешать журналировать/чинить остальные по отдельности).
@@ -184,9 +202,15 @@ def _generate_and_commit_retro(conn, task_id: str, merge_sha: str,
     несколько независимых источников чтения (журнал БД, SPEC, разбор
     acceptance_tests/), и ни один сбой любого из них не имеет права
     отменить сам переход.
+
+    `applied_appendices` (SPEC 01M2YSHDKWFJN3XSJ618Z74FNF, требование 6) —
+    пути приложений PLAN, применённых этим же мержем: строка с их
+    перечнем дописывается к done-RETRO мержащейся задачи (долги killed
+    ниже её не несут — приложения принадлежат ЭТОЙ задаче).
     """
     try:
-        text = retro.build_done(conn, task_id, merge_sha)
+        text = _with_appendices_line(retro.build_done(conn, task_id, merge_sha),
+                                     applied_appendices)
     except Exception as exc:  # noqa: BLE001 — см. докстринг: провал не критичен
         _retro_incident(conn, task_id, f"генерация RETRO не удалась: {exc}")
     else:

@@ -22,6 +22,10 @@ from .advance_gates._base import GateRefusal, _run_gates
 from .advance_gates.acceptance import _acceptance_lock_refuses, _acceptance_run_refuses
 from .advance_gates.capacity import (CAPACITY_GATE_REASON, _EMPTY_DIFF_TEXT,
                                      _capacity_gate, _capacity_gate_refuses)
+from .advance_gates.plan_appendix import (
+    PLAN_APPENDIX_GATE_FAILURE_ACTION,
+    PLAN_APPENDIX_INAPPLICABLE_REFUSAL_ACTION, _plan_appendix_gate,
+    _plan_appendix_gate_refuses)
 from .advance_gates.review import (_code_sha_at_review_escalation,
                                    _mutation_claim_gate,
                                    _review_escalation_sha_gate,
@@ -484,6 +488,13 @@ def in_dev(conn, task_id: str, t, tdir, target: str, state: str) -> bool:
     if _capacity_gate_refuses(conn, task_id, t, state):
         return False
     if _zones_gate_refuses(conn, task_id, t, branch, plan_text):
+        return False
+    # Применимость приложений PLAN к защищённым путям (SPEC
+    # 01M2YSHDKWFJN3XSJ618Z74FNF, требование 2) — сразу за гейтом зон: тот
+    # отказывает правке защищённого пути В ДИФФЕ и адресует роль к
+    # приложению, этот проверяет само приложение. PLAN без приложений
+    # гейт не трогает (AC-7).
+    if _plan_appendix_gate_refuses(conn, task_id, t, plan_text):
         return False
     if _run_gates(conn, task_id,
                   [lambda: _mutation_claim_gate(conn, task_id, t, branch)]):

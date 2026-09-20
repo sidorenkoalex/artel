@@ -37,6 +37,7 @@ import math
 import re
 import sys
 from pathlib import Path
+from typing import NamedTuple
 
 # Файл живёт двумя жизнями — скрипт и модуль (`from scripts import guard`
 # в тестах и в FSM). У скрипта в sys.path лежит scripts/, а не корень
@@ -244,6 +245,187 @@ def section_body(text: str, name: str) -> str:
     match = re.search(rf"^##\s+{re.escape(name)}\s*$(.*?)(?=^##\s|\Z)",
                       text, re.M | re.S)
     return match.group(1) if match else ""
+
+
+# Приложение PLAN.md к защищённому пути (SPEC 01M2YSHDKWFJN3XSJ618Z74FNF,
+# требование 1): роль не вправе править `config.PROTECTED_PATHS` сама и
+# предлагает правку unified-диффом, который применяет пульт на мерже.
+# Формат сложился практикой (восемь таких разделов в `tasks/` к 20.09) и
+# здесь впервые становится машиночитаемым.
+
+# Раздел приложения узнаётся по ПРЕФИКСУ заголовка, а не по точному имени
+# (`section_body` выше сверяет имя целиком): практика пишет заголовок с
+# хвостом — «## Приложение: правка skills/test-authoring.md».
+APPENDIX_SECTION_PREFIX = "Приложение"
+_APPENDIX_HEADING = re.compile(rf"^##\s+{re.escape(APPENDIX_SECTION_PREFIX)}",
+                               re.M)
+# Ограда блока диффа внутри раздела и заголовок пути внутри блока.
+# Ограда закреплена на КОЛОНКЕ 0 (R2-F1, REVIEW итерация 2): в unified-
+# диффе каждая строка содержимого начинается с пробела, `+` или `-`,
+# поэтому ограда, допускавшая ведущие пробелы, закрывалась контекстной
+# строкой ` ``` ` — приложение к защищённому markdown-файлу, несущему
+# ограду кода (`docs/adr/0003-target-projects.md` — реальный такой файл),
+# разбиралось в обрезанный патч, и гейт отказывал переходу диффом,
+# в котором роли нечего чинить.
+_DIFF_FENCE_OPEN = re.compile(r"^```diff\s*$")
+_DIFF_FENCE_CLOSE = re.compile(r"^```\s*$")
+_DIFF_GIT_HEADER = re.compile(r"^diff --git a/(\S+) b/(\S+)\s*$", re.M)
+# Начало заголовка файла — по нему узнаётся дифф, оставшийся ВНЕ блоков
+# ```diff (ограда набрана голым ```): такой дифф не приложение, но и не
+# молчание.
+_DIFF_GIT_ANY = re.compile(r"^diff --git ", re.M)
+
+APPENDIX_NO_HEADER_ERROR = "приложение PLAN: нет заголовка diff --git"
+# Дифф раздела «## Приложение», не попавший ни в один блок ```diff
+# (R1-F1, REVIEW итерация 1): голая ограда ``` вместо ```diff давала ни
+# приложения, ни ошибки — правка Оператора пропадала бесследно.
+APPENDIX_DIFF_OUTSIDE_BLOCK_ERROR = (
+    "приложение PLAN: дифф вне блока ```diff — огороди его ```diff")
+
+
+def appendix_rename_header_error(old: str, new: str) -> str:
+    """Именованная ошибка для заголовка `diff --git a/<старый> b/<новый>`
+    (R2-F2, REVIEW итерация 2).
+
+    Переименование приложением не поддерживается: защищённость
+    проверялась бы по одному пути, а файл создавался бы по другому,
+    сколь угодно постороннему. До этой ошибки такой заголовок отвергался
+    текстом «нет заголовка diff --git» — роль читала в брифе, что
+    заголовка нет, видела его на месте и чинила наугад, каждый раз ценой
+    гарантированного шага developer."""
+    return (f"приложение PLAN: заголовок diff --git называет разные пути "
+            f"a/{old} и b/{new} — переименование приложением не "
+            f"поддерживается")
+
+
+def appendix_unprotected_path_error(path: str) -> str:
+    """Именованная ошибка требования 1 для пути вне `config.PROTECTED_PATHS`:
+    такую правку роль вносит сама, в своей ветке, под ревью и CI ветки —
+    коммитом Оператора в main ей ехать незачем."""
+    return (f"приложение PLAN: путь {path} не защищённый — правь в ветке "
+            f"задачи")
+
+
+class PlanAppendix(NamedTuple):
+    """Одно приложение PLAN.md: `paths` — ВСЕ пути из заголовков
+    `diff --git` блока (не из заголовка раздела: заголовок раздела —
+    свободный текст), `diff` — текст блока ```diff без самой ограды,
+    годный на вход `git apply`.
+
+    Путей несколько, потому что `git diff` по двум файлам даёт один текст
+    с двумя заголовками, и Оператор вставляет его в PLAN одним блоком
+    (образец — `tasks/01M1THKTJ7YT1K410G1KS17MK6/PLAN.md`, пять
+    заголовков в одном блоке). До R1-F1 разбор брал только первый: `git
+    apply` правил все файлы блока, а `git add` уносил в main один —
+    остальная правка Оператора терялась вместе со scratch-деревом."""
+    paths: tuple[str, ...]
+    diff: str
+
+
+def _appendix_path_is_protected(path: str) -> bool:
+    # Та же формула префикса, что `fsm_merge_gate._touches_protected_path`
+    # и `advance_gates.zones._touches_zone`: пути-каталоги списка несут
+    # trailing `/`, пути-файлы сравниваются буквально.
+    return any(path == p or path.startswith(p)
+               for p in config.PROTECTED_PATHS)
+
+
+def _diff_blocks(body: str) -> tuple[list[str], str]:
+    """(тексты ВСЕХ блоков ```diff тела раздела в порядке появления без
+    строк-оград, остальной текст тела).
+
+    Незакрытый блок в конце тела считается закрытым концом раздела: PLAN
+    с оборванной оградой не повод потерять дифф молча (ошибку про него
+    всё равно выдаст `git apply`).
+
+    Остаток нужен вызывающему, чтобы заметить дифф, огороженный голым
+    ``` (такая ограда блоком ```diff не является и до R1-F1 просто
+    растворялась в тексте раздела)."""
+    blocks, current, outside = [], None, []
+    for line in body.splitlines():
+        if current is None:
+            if _DIFF_FENCE_OPEN.match(line):
+                current = []
+            else:
+                outside.append(line)
+            continue
+        if _DIFF_FENCE_CLOSE.match(line):
+            blocks.append("\n".join(current) + "\n")
+            current = None
+            continue
+        current.append(line)
+    if current:
+        blocks.append("\n".join(current) + "\n")
+    return blocks, "\n".join(outside) + "\n"
+
+
+def _appendix_section_bodies(text: str) -> list[str]:
+    """Тела всех разделов, заголовок которых начинается на «## Приложение»,
+    в порядке появления: от конца своего заголовка до следующего `## `
+    заголовка любого раздела или конца текста."""
+    bodies = []
+    for match in _APPENDIX_HEADING.finditer(text):
+        start = text.find("\n", match.end())
+        if start == -1:
+            continue
+        nxt = re.search(r"^##\s", text[start:], re.M)
+        bodies.append(text[start:start + nxt.start()] if nxt else text[start:])
+    return bodies
+
+
+def plan_appendices(text: str) -> tuple[list[PlanAppendix], list[str]]:
+    """Приложения PLAN.md и именованные ошибки требования 1 (SPEC
+    01M2YSHDKWFJN3XSJ618Z74FNF, AC-1..AC-4).
+
+    Разбирается КАЖДЫЙ блок ```diff КАЖДОГО раздела «## Приложение…» —
+    и порядок приложений на выходе равен порядку их появления в тексте:
+    его читает и гейт применимости на выходе `in_dev`, и применение на
+    мерже (приложения к одному и тому же пути обязаны лечь друг на друга
+    в том же порядке, в каком их написал Оператор).
+
+    Пути блока берутся из ВСЕХ его заголовков `diff --git` (R1-F1):
+    многофайловый дифф — один патч и одно приложение, но `git add` на
+    мерже и проверка защищённости обязаны видеть каждый его файл.
+
+    Блок без единого заголовка `diff --git`, блок с заголовком-
+    переименованием (`a/` и `b/` называют разные пути), блок с путём вне
+    `config.PROTECTED_PATHS` и дифф, оставшийся вне блоков ```diff, в
+    список приложений НЕ попадают — про каждый возвращается СВОЯ
+    именованная ошибка: молчаливый пропуск означал бы, что Оператор
+    узнаёт о потерянной правке только на мерже, а общая ошибка на два
+    разных повода посылала бы роль чинить не то (R2-F2). PLAN без
+    разделов «## Приложение» — `([], [])`, ни одной ошибки.
+    """
+    appendices: list[PlanAppendix] = []
+    errors: list[str] = []
+    for body in _appendix_section_bodies(text):
+        blocks, outside = _diff_blocks(body)
+        if _DIFF_GIT_ANY.search(outside):
+            errors.append(APPENDIX_DIFF_OUTSIDE_BLOCK_ERROR)
+        for block in blocks:
+            headers = _DIFF_GIT_HEADER.findall(block)
+            if not headers:
+                errors.append(APPENDIX_NO_HEADER_ERROR)
+                continue
+            # Заголовок с разными a/ и b/ (переименование) корректным не
+            # считается: защищённость проверялась бы по одному пути, а
+            # файл создавался бы по другому, сколь угодно постороннему.
+            # Ошибка своя (R2-F2): текст про отсутствующий заголовок
+            # отправлял роль искать то, что у неё на месте.
+            renames = [(old, new) for old, new in headers if old != new]
+            if renames:
+                errors.extend(appendix_rename_header_error(old, new)
+                              for old, new in renames)
+                continue
+            paths = list(dict.fromkeys(old for old, _new in headers))
+            unprotected = [p for p in paths
+                           if not _appendix_path_is_protected(p)]
+            if unprotected:
+                errors.extend(appendix_unprotected_path_error(p)
+                              for p in unprotected)
+                continue
+            appendices.append(PlanAppendix(tuple(paths), block))
+    return appendices, errors
 
 
 def requires_ac_markup(meta: dict) -> bool:
