@@ -14,11 +14,19 @@ report.py/artel.py). `steps.id` — сквозной autoincrement через в
 """
 import html as html_lib
 import json
-import re
 import statistics
 from datetime import datetime, timedelta, timezone
 
-from . import agent_log, alerts, config, spend, store
+# `alerts` этот модуль сам больше не зовёт (алерт расхождения курса
+# заводит `spend.check_rate_divergence`, SPEC 01M2ZNJX2N5SPZCAQE6EHD4EWH
+# требование 6), но имя обязано остаться атрибутом модуля: планка
+# 01M1RGQV4DG2FX1B90W4EEETTR (AC-5) наводит на `report.alerts` шпиона
+# (`mock.patch.object`) вокруг вызова `map_growth_cost_estimate` и
+# проверяет, что ОЦЕНКА РОСТА КАРТЫ алертов не заводит; без атрибута
+# такая подмена падает с `AttributeError`. Про отчёт целиком планка
+# этого не спрашивает — и не могла бы: `token_rate_divergence` ниже
+# алерты на пути `cmd_report` как раз заводит (см. её докстроку).
+from . import agent_log, alerts, config, spend, store  # noqa: F401
 
 # Гейты, где решение принимает только Оператор, независимо от политики
 # `gates.yaml` (`orchestrator/gates.py` применяет её ТОЛЬКО к acceptance;
@@ -311,101 +319,52 @@ def _cost_per_done_task(tasks: list) -> float | None:
 # 01M1PP0VYRT55WN8GGVG66X89Y, требование 6, AC-8) с фактической ценой
 # запуска ($, полная точность — `actual_usd=<repr>`, не округлённое
 # отображение `cost_note`) и разбивкой usage по видам
-# (`spend._tokens_by_type_text`). Разбор здесь — обратная операция того
-# же формата; оба места держит один модуль (spend), но парсер живёт
-# здесь же, рядом с использованием, тем же приёмом, что
-# `_task_journal_friction` разбирает `agent_log.FRICTION_JOURNAL_ACTION`.
-_ACTUAL_USD_RE = re.compile(r"actual_usd=([0-9eE.+-]+)")
-_TOKEN_FIELD_RE = {key: re.compile(rf"(?<![a-z_]){re.escape(key)}=(\d+)")
-                   for key in config.USAGE_TOKEN_KEYS}
-
-KNOWN_COST_JOURNAL_ACTION = "agent cost KNOWN"
+# (`spend._tokens_by_type_text`). Разбор этого формата и математика
+# сверки живут в `orchestrator/spend.py` — у писателя формата: с SPEC
+# 01M2ZNJX2N5SPZCAQE6EHD4EWH (требование 6) читателей у строки KNOWN
+# двое, сверка при записи шага и отчёт, и две копии расчёта разошлись бы.
 
 
 def _known_cost_breakdown(detail: str) -> tuple:
     """(фактическая_цена, разбивка_по_видам) из детали «agent cost
-    KNOWN», либо `(None, None)` — запись не несёт того, что нужно
-    (старый формат, повреждённая строка)."""
-    usd_match = _ACTUAL_USD_RE.search(detail or "")
-    if usd_match is None:
-        return None, None
-    try:
-        actual_usd = float(usd_match.group(1))
-    except ValueError:
-        return None, None
-    tokens_by_type = {}
-    for key, pattern in _TOKEN_FIELD_RE.items():
-        m = pattern.search(detail)
-        if m is not None:
-            tokens_by_type[key] = int(m.group(1))
-    return actual_usd, tokens_by_type
+    KNOWN» — `spend.known_cost_breakdown`, разбор переехал к писателю
+    формата (SPEC 01M2ZNJX2N5SPZCAQE6EHD4EWH, требование 6). Имя
+    сохранено: это адрес разбора строки KNOWN для читателя отчёта, на
+    него же ссылается SPEC (требование 2)."""
+    return spend.known_cost_breakdown(detail)
 
 
 def token_rate_divergence(conn) -> dict:
-    """Коэффициент расхождения курса роли с фактом CLI, по роли (SPEC
-    01M1PP0VYRT55WN8GGVG66X89Y, требования 4-5, AC-6/AC-7).
+    """{роль: коэффициент} — расхождение курса роли с фактом CLI (SPEC
+    01M1PP0VYRT55WN8GGVG66X89Y, требования 4-5; SPEC
+    01M2ZNJX2N5SPZCAQE6EHD4EWH, требования 6-7). Коэффициент —
+    `spend.RateDivergence`, то есть число (прежний контракт
+    `dict[str, float]` цел), несущее вдобавок число вошедших шагов и
+    дату сверки атрибутами `steps`/`since`.
 
-    Источник — журнал: каждая запись `KNOWN_COST_JOURNAL_ACTION`
+    Источник — журнал: каждая запись `spend.KNOWN_COST_JOURNAL_ACTION`
     (`spend.charge_step`) несёт фактическую цену завершённого шага (из
     `total_cost_usd` финального события потока) и разбивку usage по
-    видам. Расчётная цена той же разбивки — `spend.partial_cost_usd` по
-    курсу РОЛИ (не задачи, не target'а): коэффициент — суммарное
-    расхождение по всем известным шагам этой роли, не среднее по шагам
-    (несколько маленьких шагов не должны тонуть один крупный
-    расходящийся).
+    видам. Чтение журнала (`spend.known_cost_pairs`) и сам расчёт с
+    алертом (`spend.check_rate_divergence`) — те же функции, которыми
+    считает сверку `charge_step` в момент записи шага: одна математика
+    на обе точки, не две (требование 6, AC-8).
 
-    Роль без записей — отсутствует в результате вовсе, не 0.0
-    (требование AC-6 — «не считается расхождением по умолчанию»).
-    Курс роли неполон (`partial_cost_usd` бросает `ValueError`, AC-5) —
-    её шаги пропускаются молча: калибровка курса не обязана падать из-за
-    неполноты конфигурации, это дело `spend.partial_cost_usd` в её
-    собственной точке вызова.
+    Считается с даты `calibrated_at` курса роли (требование 7): строки
+    KNOWN старше неё записаны шагами ДРУГОЙ модели, их складывание со
+    свежими и дало бы то самое расхождение, которое контур обязан
+    ловить. Роль без подходящих строк — отсутствует в результате вовсе,
+    не 0.0 (AC-6 прежней SPEC: «не считается расхождением по
+    умолчанию»).
 
-    Вычисление и алерт совмещены одним вызовом (тот же приём, что уже
-    сочетают `spend.charge_missing_result`/`budget.check_program_spend`)
-    — коэффициент выше `config.TOKEN_RATE_DIVERGENCE_ALERT_THRESHOLD`
-    поднимает `alerts` `kind=warning`, `target=None` (расхождение — по
-    роли поперёк всех задач и target'ов, не про одну задачу), через
-    `alerts.raise_token_rate_divergence_alert` — не `alerts.raise_alert`
-    напрямую: сообщение несёт растущие суммы/счётчики, дедуп по точному
-    тексту не сработал бы на повторных прогонах (REVIEW.md итерации 1,
-    R1-F2).
+    Не read-only (отсюда алерт в `cmd_report`) — осознанное исключение,
+    описанное в докстроке `cmd_report`.
     """
-    tasks = store.all_tasks(conn)
-    steps = _all_steps(conn, tasks)
-
-    pairs_by_role: dict = {}
-    for row in steps:
-        if row["action"] != KNOWN_COST_JOURNAL_ACTION:
-            continue
-        actual_usd, tokens_by_type = _known_cost_breakdown(row["detail"])
-        if actual_usd is None or not tokens_by_type:
-            continue
-        role = row["actor"]
-        try:
-            calculated_usd = spend.partial_cost_usd(role, tokens_by_type)
-        except ValueError:
-            continue
-        if calculated_usd is None:
-            continue
-        pairs_by_role.setdefault(role, []).append((calculated_usd, actual_usd))
-
     result = {}
-    for role, pairs in pairs_by_role.items():
-        actual_sum = sum(actual for _, actual in pairs)
-        if actual_sum == 0:
-            continue
-        calculated_sum = sum(calc for calc, _ in pairs)
-        coefficient = abs(calculated_sum - actual_sum) / actual_sum
-        result[role] = coefficient
-        if coefficient > config.TOKEN_RATE_DIVERGENCE_ALERT_THRESHOLD:
-            alerts.raise_token_rate_divergence_alert(
-                conn, role,
-                f"{role}: коэффициент расхождения курса токенов "
-                f"{coefficient:.2f} выше порога "
-                f"{config.TOKEN_RATE_DIVERGENCE_ALERT_THRESHOLD} — расчётная "
-                f"цена ${calculated_sum:.4f} против фактической "
-                f"${actual_sum:.4f} по {len(pairs)} шагам")
+    for role, pairs in spend.known_cost_pairs(conn).items():
+        divergence = spend.check_rate_divergence(conn, role, pairs)
+        if divergence is not None:
+            result[role] = divergence
     return result
 
 
@@ -613,14 +572,22 @@ def _divergence_html(divergence: dict) -> str:
     """Коэффициент расхождения курса токенов по роли (SPEC
     01M1PP0VYRT55WN8GGVG66X89Y, требование 4, AC-6) — часть панели
     метрик `report`, не отдельная команда (выбор разработчика, требование
-    4 явно оставляет его на усмотрение)."""
+    4 явно оставляет его на усмотрение).
+
+    Дата калибровки и число вошедших шагов — в той же строке (SPEC
+    01M2ZNJX2N5SPZCAQE6EHD4EWH, требование 7, AC-8): без них читатель не
+    может сказать, по какому периоду и по скольким шагам посчитана
+    цифра, а в сверку входят не все строки KNOWN роли. Значение —
+    `spend.RateDivergence`: сам коэффициент числом, период — его
+    атрибутами."""
     if not divergence:
         return ('<div class="metric-row">нет завершённых шагов с известной '
                 'стоимостью — коэффициент расхождения не считается</div>')
     return "".join(
         f'<div class="metric-row">{_esc(role)}: коэффициент расхождения '
-        f'{coefficient:.2f}</div>'
-        for role, coefficient in sorted(divergence.items())
+        f'{value:.2f} по {value.steps} шагам '
+        f'с {_esc(value.since)}</div>'
+        for role, value in sorted(divergence.items())
     )
 
 
