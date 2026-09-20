@@ -260,8 +260,15 @@ APPENDIX_SECTION_PREFIX = "Приложение"
 _APPENDIX_HEADING = re.compile(rf"^##\s+{re.escape(APPENDIX_SECTION_PREFIX)}",
                                re.M)
 # Ограда блока диффа внутри раздела и заголовок пути внутри блока.
-_DIFF_FENCE_OPEN = re.compile(r"^\s*```diff\s*$")
-_DIFF_FENCE_CLOSE = re.compile(r"^\s*```\s*$")
+# Ограда закреплена на КОЛОНКЕ 0 (R2-F1, REVIEW итерация 2): в unified-
+# диффе каждая строка содержимого начинается с пробела, `+` или `-`,
+# поэтому ограда, допускавшая ведущие пробелы, закрывалась контекстной
+# строкой ` ``` ` — приложение к защищённому markdown-файлу, несущему
+# ограду кода (`docs/adr/0003-target-projects.md` — реальный такой файл),
+# разбиралось в обрезанный патч, и гейт отказывал переходу диффом,
+# в котором роли нечего чинить.
+_DIFF_FENCE_OPEN = re.compile(r"^```diff\s*$")
+_DIFF_FENCE_CLOSE = re.compile(r"^```\s*$")
 _DIFF_GIT_HEADER = re.compile(r"^diff --git a/(\S+) b/(\S+)\s*$", re.M)
 # Начало заголовка файла — по нему узнаётся дифф, оставшийся ВНЕ блоков
 # ```diff (ограда набрана голым ```): такой дифф не приложение, но и не
@@ -274,6 +281,21 @@ APPENDIX_NO_HEADER_ERROR = "приложение PLAN: нет заголовка
 # приложения, ни ошибки — правка Оператора пропадала бесследно.
 APPENDIX_DIFF_OUTSIDE_BLOCK_ERROR = (
     "приложение PLAN: дифф вне блока ```diff — огороди его ```diff")
+
+
+def appendix_rename_header_error(old: str, new: str) -> str:
+    """Именованная ошибка для заголовка `diff --git a/<старый> b/<новый>`
+    (R2-F2, REVIEW итерация 2).
+
+    Переименование приложением не поддерживается: защищённость
+    проверялась бы по одному пути, а файл создавался бы по другому,
+    сколь угодно постороннему. До этой ошибки такой заголовок отвергался
+    текстом «нет заголовка diff --git» — роль читала в брифе, что
+    заголовка нет, видела его на месте и чинила наугад, каждый раз ценой
+    гарантированного шага developer."""
+    return (f"приложение PLAN: заголовок diff --git называет разные пути "
+            f"a/{old} и b/{new} — переименование приложением не "
+            f"поддерживается")
 
 
 def appendix_unprotected_path_error(path: str) -> str:
@@ -365,12 +387,14 @@ def plan_appendices(text: str) -> tuple[list[PlanAppendix], list[str]]:
     многофайловый дифф — один патч и одно приложение, но `git add` на
     мерже и проверка защищённости обязаны видеть каждый его файл.
 
-    Блок без единого заголовка `diff --git`, блок с путём вне
+    Блок без единого заголовка `diff --git`, блок с заголовком-
+    переименованием (`a/` и `b/` называют разные пути), блок с путём вне
     `config.PROTECTED_PATHS` и дифф, оставшийся вне блоков ```diff, в
-    список приложений НЕ попадают — про каждый возвращается своя
+    список приложений НЕ попадают — про каждый возвращается СВОЯ
     именованная ошибка: молчаливый пропуск означал бы, что Оператор
-    узнаёт о потерянной правке только на мерже. PLAN без разделов
-    «## Приложение» — `([], [])`, ни одной ошибки.
+    узнаёт о потерянной правке только на мерже, а общая ошибка на два
+    разных повода посылала бы роль чинить не то (R2-F2). PLAN без
+    разделов «## Приложение» — `([], [])`, ни одной ошибки.
     """
     appendices: list[PlanAppendix] = []
     errors: list[str] = []
@@ -380,11 +404,18 @@ def plan_appendices(text: str) -> tuple[list[PlanAppendix], list[str]]:
             errors.append(APPENDIX_DIFF_OUTSIDE_BLOCK_ERROR)
         for block in blocks:
             headers = _DIFF_GIT_HEADER.findall(block)
+            if not headers:
+                errors.append(APPENDIX_NO_HEADER_ERROR)
+                continue
             # Заголовок с разными a/ и b/ (переименование) корректным не
             # считается: защищённость проверялась бы по одному пути, а
             # файл создавался бы по другому, сколь угодно постороннему.
-            if not headers or any(old != new for old, new in headers):
-                errors.append(APPENDIX_NO_HEADER_ERROR)
+            # Ошибка своя (R2-F2): текст про отсутствующий заголовок
+            # отправлял роль искать то, что у неё на месте.
+            renames = [(old, new) for old, new in headers if old != new]
+            if renames:
+                errors.extend(appendix_rename_header_error(old, new)
+                              for old, new in renames)
                 continue
             paths = list(dict.fromkeys(old for old, _new in headers))
             unprotected = [p for p in paths

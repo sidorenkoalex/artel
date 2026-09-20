@@ -143,7 +143,82 @@ class PlanAppendicesParsingTest(unittest.TestCase):
         appendices, errors = guard.plan_appendices(f"## Приложение\n\n{block}")
 
         self.assertEqual(appendices, [])
-        self.assertEqual(errors, [guard.APPENDIX_NO_HEADER_ERROR])
+        self.assertEqual(errors, [guard.appendix_rename_header_error(
+            PROTECTED_FILE, "docs/somewhere-else.md")])
+
+    def test_rename_header_error_names_the_rename_not_a_missing_header(self):
+        """Ошибка переименования — СВОЯ, и она называет оба пути (R2-F2,
+        REVIEW итерация 2).
+
+        Ловит мутацию: заголовок-переименование отвергается общей ошибкой
+        `APPENDIX_NO_HEADER_ERROR` — роль читает в брифе «нет заголовка
+        diff --git», видит заголовок на месте, чинит наугад, и каждая
+        попытка стоит гарантированного шага developer (класс AC-6)."""
+        block = diff_block(
+            PROTECTED_FILE,
+            body=f"diff --git a/{PROTECTED_FILE} b/docs/somewhere-else.md")
+
+        _appendices, errors = guard.plan_appendices(
+            f"## Приложение\n\n{block}")
+
+        self.assertNotIn(guard.APPENDIX_NO_HEADER_ERROR, errors)
+        self.assertIn(PROTECTED_FILE, errors[0])
+        self.assertIn("docs/somewhere-else.md", errors[0])
+        # Ошибка «нет заголовка» осталась за своим — настоящим —
+        # сценарием AC-2, а не разошлась на два повода.
+        headerless = "```diff\n--- a/x\n+++ b/x\n```\n"
+        self.assertEqual(
+            guard.plan_appendices(f"## Приложение\n\n{headerless}")[1],
+            [guard.APPENDIX_NO_HEADER_ERROR])
+
+    def test_context_line_with_a_code_fence_does_not_close_the_block(self):
+        """Контекстная строка диффа ` ``` ` (пробел + ограда — так
+        выглядит неизменённая строка markdown-файла) блок ```diff НЕ
+        закрывает: приложение к защищённому md-файлу с примером кода
+        обязано доехать до `git apply` целиком (R2-F1, REVIEW итерация 2).
+
+        Ловит мутацию: ограда распознаётся с допуском ведущих пробелов
+        (`^\\s*```\\s*$`) — дифф режется на первой же контекстной ограде,
+        `git apply` отвечает «corrupt patch», и гейт `in_dev` отказывает
+        переходу действием «приложение PLAN неприменимо»: роль жжёт шаг
+        на дифф, в котором нечего чинить, а задача встаёт `Stop`'ом."""
+        path = PROTECTED_DIR + "adr-like.md"
+        block = ("```diff\n"
+                 f"diff --git a/{path} b/{path}\n"
+                 f"--- a/{path}\n+++ b/{path}\n"
+                 "@@ -1,5 +1,5 @@\n"
+                 "-старый абзац\n"
+                 "+новый абзац\n"
+                 " ```\n"
+                 " artel.py status\n"
+                 " ```\n"
+                 "```\n")
+
+        appendices, errors = guard.plan_appendices(f"## Приложение\n\n{block}")
+
+        self.assertEqual(errors, [])
+        self.assertEqual([a.paths for a in appendices], [(path,)])
+        self.assertIn(" artel.py status", appendices[0].diff)
+        self.assertEqual(appendices[0].diff.count("\n"), 9)
+
+    def test_indented_fence_does_not_open_a_block(self):
+        """Ограда, сдвинутая от колонки 0, блоком ```diff не считается —
+        парная половина R2-F1.
+
+        Ловит мутацию: открывающая ограда снова допускает ведущие
+        пробелы — контекстная строка ` ```diff ` внутри приложения к
+        md-файлу открыла бы ВТОРОЙ блок посреди первого, и разбор
+        разъехался бы с тем, что видит `git apply`."""
+        text = ("## Приложение\n\n  ```diff\n"
+                f"diff --git a/{PROTECTED_FILE} b/{PROTECTED_FILE}\n"
+                "  ```\n")
+
+        appendices, errors = guard.plan_appendices(text)
+
+        self.assertEqual(appendices, [])
+        # Дифф не растворился молча: он остался ВНЕ блоков ```diff, и про
+        # него есть именованная ошибка (R1-F1).
+        self.assertEqual(errors, [guard.APPENDIX_DIFF_OUTSIDE_BLOCK_ERROR])
 
     def test_block_with_two_headers_gives_both_paths(self):
         """Блок ```diff с заголовками `diff --git` двух файлов даёт ОДНО

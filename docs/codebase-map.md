@@ -1,5 +1,5 @@
 ---
-built_at_sha: 1859d951ed84145bc49b40edf4de4b116bbde7df
+built_at_sha: 958a52c7f8fd1709ffe1226058eb266c4f378d92
 ---
 
 # Codebase-map пульта
@@ -1073,6 +1073,7 @@ built_at_sha: 1859d951ed84145bc49b40edf4de4b116bbde7df
 
 **Публичные функции:**
 - `acceptance_traceability_errors`
+- `appendix_rename_header_error`
 - `appendix_unprotected_path_error`
 - `artifact_disk_read_errors_from_files`
 - `basic_frontmatter_errors`
