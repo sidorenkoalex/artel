@@ -14,13 +14,23 @@ from orchestrator import config, notes
 class ProtectedPathTest(unittest.TestCase):
 
     def test_ac4_models_yaml_is_in_protected_paths(self):
-        """`models.yaml` входит в список защищённых путей.
+        """`models.yaml` в список защищённых путей этой частью НЕ входит
+        — он войдёт частью 2 линии (01M300A14K).
 
-        Ловит мутацию: каталог моделей остался обычным файлом кода — роль
-        конвейера вправе сама поменять модель яруса или цену в своей
-        ветке, минуя приложение к PLAN и решение Оператора.
+        Правка подтеста — решение Оператора 20.09 по возврату из
+        verifying: CI-джоб `protected-paths` (.github/workflows/ci.yml)
+        читает `config.PROTECTED_PATHS` из ВЕТКИ PR, поэтому ветка,
+        которая создаёт `models.yaml` и одновременно объявляет его
+        защищённым, красит собственный PR на создании этого файла;
+        провести путь приложением к PLAN тоже нельзя — гейт приложений
+        сверяется со списком главной копии. Защита включается частью 2,
+        когда файл уже в главной копии.
+
+        Ловит мутацию: путь внесён в список этой веткой — джоб
+        `protected-paths` снова падает на создании файла, и задача не
+        может дойти до мержа.
         """
-        self.assertIn(_models.CATALOG_NAME, config.PROTECTED_PATHS)
+        self.assertNotIn(_models.CATALOG_NAME, config.PROTECTED_PATHS)
 
 
 class DocCommitPathTest(unittest.TestCase):
