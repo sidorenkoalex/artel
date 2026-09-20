@@ -121,6 +121,73 @@ _TZ_ZONES_RE = re.compile(
     re.M | re.S)
 
 
+# Сверка упомянутых в ТЗ путей с зонами (01M2XJKQNFTWHYAY4KBBQ1NVY7,
+# требования 2-4). Разделы ТЗ Оператора — метка в начале строки
+# («Зоны:», «Не входит:», «Только чтение (не менять):», «Приложением:»),
+# тело до пустой строки, следующей метки или конца текста — тот же
+# приём, что `_TZ_ZONES_RE` выше, но метка — параметр, а границей
+# считается и многословная метка со скобками (`_TZ_ANY_LABEL_LINE`):
+# «Только чтение (не менять):» однословный `_TZ_LABEL_LINE` границей не
+# признаёт.
+_TZ_ANY_LABEL_LINE = r"[ \t]*[А-ЯЁ][А-Яа-яЁё ()\-]*:"
+# Метки классифицирующих разделов ТЗ (требование 2): «Только чтение…:»
+# допускает хвост в скобках между словами и двоеточием.
+_TZ_ZONES_LABEL = r"Зоны"
+_TZ_DECLARING_LABELS = (r"Не входит", r"Только чтение[^:\n]*", r"Приложением")
+
+
+def _tz_section_re(label: str) -> re.Pattern:
+    return re.compile(
+        r"^" + label + r":[ \t]*(.*?)(?:\n[ \t]*\n|\n(?=" + _TZ_ANY_LABEL_LINE
+        + r")|\Z)", re.M | re.S)
+
+
+def _tz_sections(tz_raw: str, labels) -> tuple[str, list[tuple[int, int]]]:
+    """(склеенные тела разделов с метками `labels`, их диапазоны в
+    `tz_raw`) — все вхождения каждой метки, не только первое."""
+    bodies: list[str] = []
+    spans: list[tuple[int, int]] = []
+    for label in labels:
+        for match in _tz_section_re(label).finditer(tz_raw):
+            bodies.append(match.group(1))
+            spans.append(match.span())
+    return "\n".join(bodies), spans
+
+
+def _tz_path_check(tz_raw: str) -> tuple[list[str], list[str]]:
+    """(неклассифицированные пути ТЗ, защищённые пути из «Зоны:») —
+    требования 2-4. Путь классифицирован, если покрыт «Зоны:» (с
+    вложенностью и `config.COMMON_ZONES`, `guard.unclassified_paths`)
+    либо назван в «Не входит:»/«Только чтение…:»/«Приложением:»;
+    проверяется текст ТЗ ЗА ВЫЧЕТОМ этих четырёх разделов. Защищённость
+    (`config.PROTECTED_PATHS`) сверяется только по элементам «Зоны:» —
+    защищённый путь, названный «Приложением:», проходит (требование 4)."""
+    zones_text, zone_spans = _tz_sections(tz_raw, (_TZ_ZONES_LABEL,))
+    declared_text, declared_spans = _tz_sections(tz_raw, _TZ_DECLARING_LABELS)
+    checked = list(tz_raw)
+    for start, end in zone_spans + declared_spans:
+        checked[start:end] = [" "] * (end - start)
+    zones = guard.zone_items(zones_text)
+    unclassified = guard.unclassified_paths("".join(checked), zones,
+                                            declared_text)
+    return unclassified, guard.protected_zones(zones)
+
+
+def _tz_path_refusal(tz_path: str, tz_raw: str) -> str | None:
+    """Текст отказа `new` по путям ТЗ (требования 3-4) либо `None`, если
+    ТЗ сверку прошло — обе причины разом, чтобы Оператор чинил ТЗ за
+    один заход."""
+    unclassified, protected = _tz_path_check(tz_raw)
+    lines = []
+    if unclassified:
+        lines.append(f"ТЗ {tz_path}: "
+                     f"{guard.unclassified_paths_refusal(unclassified)}")
+    if protected:
+        lines.append(f"ТЗ {tz_path}: в «Зоны:» {', '.join(protected)} — "
+                     f"{guard.PROTECTED_ZONE_REFUSAL}")
+    return "\n".join(lines) if lines else None
+
+
 def _tz_calibration_inputs(tz_raw: str) -> tuple[float, int, int] | None:
     """(рамка, число пунктов «Требуется:», число путей «Зоны:») из
     свободного текста ТЗ — `None`, если ТЗ не несёт строку «Рамка: $N»
@@ -251,6 +318,12 @@ def cmd_new(title: str, tz_path: str | None = None, *,
             tz_raw = Path(tz_path).read_text(encoding="utf-8")
         except (OSError, UnicodeDecodeError) as exc:
             sys.exit(f"ТЗ не прочитано из {tz_path}: {exc}")
+        # Сверка путей ТЗ с зонами (01M2XJKQNFTWHYAY4KBBQ1NVY7, требования
+        # 2-4) — здесь же, ДО id/ветки/строки БД (требование 3, AC-3):
+        # отказ не оставляет ни артефактной ветки, ни строки задачи.
+        refusal = _tz_path_refusal(tz_path, tz_raw)
+        if refusal is not None:
+            sys.exit(refusal)
 
     target = target or config.DEFAULT_TARGET
     task_id = idgen.new_task_id()
