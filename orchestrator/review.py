@@ -6,6 +6,53 @@ from . import (artifact_source, brief, config, context_package, gitcmd,
 
 WORKTREE_NOTE = " (в ветке нет, показан файл из рабочего дерева)"
 
+# Пометка отката для трёх артефактов задачи (SPEC 01M2ZZDJ5ECR4ZYV23BKFCNFXM,
+# требование 3, AC-2): их источник — артефактная ветка, а откат — каталог
+# `tasks/<id>/` РАБОЧЕГО КАТАЛОГА ШАГА, не рабочее дерево пульта. Пометка
+# отдельная от `WORKTREE_NOTE` именно поэтому: текст артефакта в ветке и на
+# диске шага может быть байт-в-байт одним и тем же (размер и sha256 в
+# заголовке части совпадут), и различить источники ревьювер может только по
+# названному источнику.
+STEP_WORKDIR_NOTE = (" (в артефактной ветке нет, показан файл из рабочего "
+                     "каталога шага)")
+
+# Оговорка к строке отсутствия тех же трёх артефактов (R1-F2, REVIEW.md
+# итерация 1, minor). Сама строка «(не показан: в ветке — …; в дереве —
+# …)» переписана быть не может: требование 3 SPEC велит сохранить её
+# ДОСЛОВНО, и залоченная планка AC-3 сверяет её регуляркой с литералом
+# «в дереве — ». Но слово «дерево» без оговорки читается как главная
+# копия пульта — ревьювер идёт искать SPEC/PLAN туда, где их с 11.09 не
+# бывает, то есть делает ровно тот ручной обход, который снимает
+# требование 1. Оговорка идёт ПОСЛЕ закрывающей скобки — форма самой
+# строки этим не меняется.
+STEP_WORKDIR_MISSING_HINT = (" («дерево» здесь — каталог tasks/<id>/ рабочего "
+                             "каталога шага, не главная копия пульта)")
+
+# Источник артефактов задачи для записи журнала (требование 9, AC-10).
+# Порядок групп в строке фиксирован этим же кортежем.
+ARTIFACT_SOURCE_BRANCH = "артефактная ветка"
+ARTIFACT_SOURCE_WORKDIR = "рабочий каталог шага"
+ARTIFACT_SOURCE_MISSING = "не найден"
+ARTIFACT_SOURCE_ORDER = (ARTIFACT_SOURCE_BRANCH, ARTIFACT_SOURCE_WORKDIR,
+                         ARTIFACT_SOURCE_MISSING)
+
+# Якорь вердикта в журнале задачи (требование 4): detail ниже пишет ровно
+# одно место кода — переход `review -> in_dev` по вердикту
+# `changes_requested` (`orchestrator/fsm_advance.py::
+# _review_changes_requested`), а `store.set_state` сразу следом зовёт
+# `store.record_fixation`, то есть запись фиксации с полем `код=` идёт
+# НЕПОСРЕДСТВЕННО за переходом. Поэтому лишние записи фиксации между
+# итерациями (автокоммит артефактов, чекпоинт, подтяжка main) на выбор базы
+# не влияют — в отличие от прежней «предпоследней записи журнала».
+VERDICT_TRANSITION_ACTION = "state -> in_dev"
+VERDICT_DETAIL_PREFIX = "замечания ревью, итерация"
+FIXATION_ACTION = "sha зафиксирован"
+
+# Дословная причина отката требования 7/AC-8 — одна строка на три канала:
+# заметка под diff'ом, запись журнала «ревью-пакет собран» и текст алерта.
+EMPTY_INCREMENT_FALLBACK_REASON = ("инкрементальный diff пуст при непустых "
+                                   "правках — показан полный")
+
 # Плейсхолдер `git_diff_part` для реально пустого diff — вынесен в константу
 # (tasks/01M1RA0N6FCFEQBB82K58GM12X, R1-F1, REVIEW.md итерации 1-3): вызывающий
 # код, которому нужен именно БАЙТОВЫЙ РАЗМЕР diff'а (не текст для показа
@@ -14,19 +61,37 @@ WORKTREE_NOTE = " (в ветке нет, показан файл из рабоч
 EMPTY_DIFF_TEXT = "(изменений нет)"
 
 
-def artifact_text(branch: str, rel: str) -> tuple[str | None, str]:
-    """Текст файла из ветки задачи и пометка об источнике.
+def artifact_text(branch: str, rel: str, *, disk_root=None,
+                  disk_note: str = WORKTREE_NOTE,
+                  disk_hint: str = "") -> tuple[str | None, str]:
+    """Текст файла из ветки `branch` и пометка об источнике.
 
-    Читаем из той же точки, из которой собран diff (`git show <ветка>:<путь>`),
-    а не из рабочего дерева. Дерево на ветке задачи не стоит: `cmd_approve`
-    делает `checkout main` и обратно не возвращается, а `cmd_kill` требует
-    быть на main — то есть после мержа соседней задачи чтение из дерева
-    объявило бы SPEC и PLAN отсутствующими, хотя в ветке они есть, и молча
-    выбросило бы прошлый REVIEW (T011, ревью 2).
+    Читаем из ветки (`git show <ветка>:<путь>`), а не из рабочего дерева.
+    Дерево на ветке задачи не стоит: `cmd_approve` делает `checkout main` и
+    обратно не возвращается, а `cmd_kill` требует быть на main — то есть
+    после мержа соседней задачи чтение из дерева объявило бы SPEC и PLAN
+    отсутствующими, хотя в ветке они есть, и молча выбросило бы прошлый
+    REVIEW (T011, ревью 2).
 
-    Рабочее дерево — откат: файла может ещё не быть в коммите. Источник в
-    таком случае назван, а не подменён молча. `(None, причина)` — файла нет
-    ни там, ни там либо он нечитаем.
+    Диск — откат: файла может ещё не быть в коммите. Источник в таком
+    случае назван, а не подменён молча. `(None, причина)` — файла нет ни
+    там, ни там либо он нечитаем.
+
+    `disk_root`/`disk_note` (SPEC 01M2ZZDJ5ECR4ZYV23BKFCNFXM, требования
+    1-3) — адрес отката и пометка о нём. По умолчанию — прежние
+    `config.ROOT` и `WORKTREE_NOTE` (форма вердикта `templates/REVIEW.md`,
+    чей источник задача не меняет, AC-4). Три артефакта задачи читаются с
+    артефактной ветки, а их откат — каталог `tasks/<id>/` РАБОЧЕГО
+    КАТАЛОГА ШАГА, со своей пометкой. `config.ROOT` не берётся значением
+    по умолчанию самого параметра: он вычислился бы один раз при загрузке
+    модуля и не двигался бы вместе с подменой пути в песочнице теста.
+
+    `disk_hint` (R1-F2, REVIEW.md итерация 1, minor) — оговорка, которой
+    строка ОТСУТСТВИЯ называет фактический адрес диска: успешный откат
+    источник называет (`disk_note`), а неуспешный до этой правки молчал и
+    говорил «в дереве» про рабочий каталог шага. Оговорка приписывается
+    ко всем трём исходам «файла нет/файл нечитаем» — класс один, чинится
+    целиком, а не на `FileNotFoundError`.
     """
     in_branch = ""
     try:
@@ -38,17 +103,29 @@ def artifact_text(branch: str, rel: str) -> tuple[str | None, str]:
         # git отдаёт байты файла как есть; strict-декодирование внутри
         # subprocess роняло бы всю команду `run` трейсбеком.
         in_branch = f"не прочитан: {exc}"
+    root = config.ROOT if disk_root is None else disk_root
     try:
-        return (config.ROOT / rel).read_text(encoding="utf-8"), WORKTREE_NOTE
+        return (root / rel).read_text(encoding="utf-8"), disk_note
     except FileNotFoundError:
         # Без абсолютного пути (SPEC 01M1RQ12JVHE3PQYDFV1XPSTQ3, требование 1):
-        # `str(FileNotFoundError)` несёт `str(config.ROOT / rel)` целиком —
-        # для `rel`, начинающегося с `tasks/<id>/`, это буквально
-        # `str(config.TASKS / task_id / ...)`, и эта строка утекала бы в
+        # `str(FileNotFoundError)` несёт `str(root / rel)` целиком — для
+        # `rel`, начинающегося с `tasks/<id>/`, это буквально путь каталога
+        # задачи в рабочем каталоге шага, и эта строка утекала бы в
         # ревью-пакет, а с ним и в промпт ревьювера.
-        return None, f"(не показан: в ветке — {in_branch}; в дереве — файл не найден)"
-    except (OSError, UnicodeDecodeError) as exc:
-        return None, f"(не показан: в ветке — {in_branch}; в дереве — {exc})"
+        return None, (f"(не показан: в ветке — {in_branch}; в дереве — файл "
+                      f"не найден){disk_hint}")
+    except OSError as exc:
+        # Тот же класс утечки, что и у `FileNotFoundError` выше (SPEC
+        # 01M2ZZDJ5ECR4ZYV23BKFCNFXM, требование 3): `str(OSError)` тоже
+        # несёт `filename` — в текст части идут имя класса и strerror, без
+        # пути.
+        return None, (f"(не показан: в ветке — {in_branch}; в дереве — "
+                      f"{type(exc).__name__}: {exc.strerror}){disk_hint}")
+    except UnicodeDecodeError as exc:
+        # `str(UnicodeDecodeError)` пути не несёт вовсе — только кодек и
+        # позицию битого байта, то есть причину, по которой файл нечитаем.
+        return None, (f"(не показан: в ветке — {in_branch}; в дереве — "
+                      f"{exc}){disk_hint}")
 
 
 def artifact_part(label: str, text: str | None, note: str,
@@ -155,21 +232,24 @@ def _answer_rels(task_id: str, branch: str) -> list[str]:
 
 
 def previous_verdict_sha(conn, task_id: str) -> str:
-    """Sha кодовой ветки задачи, зафиксированный на переходе `review ->
-    in_dev` прошлой итерации (tasks/01M1P9RJVYHTAC087J4B2CAR44, требование
-    1) — не sha артефактного/фиксационного репозитория target'а.
+    """Sha кодовой ветки задачи, на котором вынесен предыдущий вердикт
+    (tasks/01M1P9RJVYHTAC087J4B2CAR44, требование 1) — не sha
+    артефактного/фиксационного репозитория target'а.
 
-    Источник — существующий журнал hash-фиксации (T021,
-    `orchestrator/fixation.py`, запись «sha зафиксирован» в
-    `store.record_fixation`) — новый учёт sha не заводится (T029, SPEC
-    требование 3). `record_fixation` пишет ровно одну такую запись на
-    КАЖДЫЙ переход FSM (`store.set_state`). Между входом в `review`
-    прошлой итерации и входом в `review` текущей лежит ровно два таких
-    перехода: `review -> in_dev` (вердикт `changes_requested` — фиксирует
-    sha состояния, на котором вердикт вынесен) и `in_dev -> review`
-    (правка разработчика — фиксирует новый sha, он же текущий
-    `fixed_sha`, уже давший старт этому шагу). Значит искомый sha —
-    предпоследняя по порядку запись в журнале, а не последняя.
+    Источник — существующий журнал задачи, новый учёт sha не заводится
+    (T029, SPEC требование 3). Ищется ЯКОРЬ ВЕРДИКТА (SPEC
+    01M2ZZDJ5ECR4ZYV23BKFCNFXM, требование 4): последняя по журналу
+    запись перехода `VERDICT_TRANSITION_ACTION` с detail
+    `VERDICT_DETAIL_PREFIX`; база — поле `код=` ближайшей СЛЕДУЮЩЕЙ за
+    ней записи `FIXATION_ACTION`.
+
+    «Предпоследняя запись журнала» базой быть перестала: она опиралась на
+    «между двумя входами в review ровно два перехода», а фиксация пишется
+    и на автокоммите артефактов, и на чекпоинте, и на подтяжке main. У
+    задачи 01M2ZNTHSN это дало базой голову ветки после подтяжки — пакет
+    обеих задач 20.09 сообщил «строк diff 0» при пяти правленых файлах, и
+    алерт не сработал: diff был собран, просто пуст. Якорь однозначен по
+    построению — см. комментарий у `VERDICT_TRANSITION_ACTION`.
 
     Поле `код=` — sha кодовой ветки — несёт КАЖДАЯ запись «sha
     зафиксирован» независимо от target (требование 1: заводится/
@@ -179,19 +259,222 @@ def previous_verdict_sha(conn, task_id: str) -> str:
     репозитории пульта (требование 4): этот объект там попросту не
     существует.
 
-    Меньше двух записей (итерация 1 ещё не выходила из `review`) или sha
-    в записи не распознан (git не ответил в момент той фиксации —
-    вырожденный случай, уже существующий в T021, либо журнал старой
-    задачи, заведённой до этой правки, без поля `код=`) — пустая строка;
-    вызывающий код трактует это как «сравнивать не с чем» и остаётся на
-    полном diff, тем же приёмом деградации, что и у `fixation.py`.
+    Якоря в журнале нет (итерация 1 ещё не выходила из `review`; задача
+    заведена до этой правки; вход в `review` не через вердикт), за ним не
+    идёт ни одной записи фиксации, или sha в ней не распознан (git не
+    ответил в момент той фиксации — вырожденный случай, уже существующий
+    в T021) — пустая строка; вызывающий код трактует это как «сравнивать
+    не с чем» и остаётся на полном diff, тем же приёмом деградации, что и
+    у `fixation.py`. Запасного пути на предпоследнюю запись нет: он
+    вернул бы ровно тот чужой sha, из-за которого задача и заведена.
     """
-    entries = [s["detail"] for s in store.task_steps(conn, task_id)
-              if s["action"] == "sha зафиксирован"]
-    if len(entries) < 2:
+    rows = store.task_steps(conn, task_id)
+    anchor = -1
+    for i, row in enumerate(rows):
+        if (row["action"] == VERDICT_TRANSITION_ACTION
+                and (row["detail"] or "").startswith(VERDICT_DETAIL_PREFIX)):
+            anchor = i
+    if anchor < 0:
         return ""
-    match = re.search(r"код=([0-9a-f]{4,40})", entries[-2])
-    return match.group(1) if match else ""
+    for row in rows[anchor + 1:]:
+        if row["action"] == FIXATION_ACTION:
+            match = re.search(r"код=([0-9a-f]{4,40})", row["detail"] or "")
+            return match.group(1) if match else ""
+    return ""
+
+
+def _step_workdir(task_id: str, target: str):
+    """Каталог рабочей копии ЭТОГО шага: worktree задачи для self, workspace
+    target'а — для внешнего (SPEC 01M2ZZDJ5ECR4ZYV23BKFCNFXM, требование 1).
+
+    Формула не переписывается заново — зовётся `runner.role_cwd_path`, то
+    же место, откуда её берёт сам промпт шага. Импорт отложенный, внутри
+    функции, по той же причине, что и `fsm` в `review_package` ниже:
+    `runner` импортирует этот модуль на верхнем уровне, и парный импорт на
+    уровне модуля дал бы цикл в момент загрузки пакета.
+    """
+    from . import runner as _runner
+    return _runner.role_cwd_path(task_id, target)
+
+
+def artifact_sources_note(found: dict) -> str:
+    """Источник каждого артефакта задачи одной строкой для журнала (SPEC
+    01M2ZZDJ5ECR4ZYV23BKFCNFXM, требование 9, AC-10): группы
+    `ARTIFACT_SOURCE_ORDER` в фиксированном порядке, в каждой — имена
+    файлов. Без этой строки дефект класса «пакет собран не из того
+    источника» виден только глазами в промпте: у всех 25 задач с ≈11.09
+    обе секции пакета были «(не показан: …)», и журнал об этом молчал.
+
+    `found` — тот же словарь `rel -> (текст, пометка)`, что собирает
+    `review_package`: текст `None` — файла нет нигде, непустая пометка —
+    откат на рабочий каталог шага, пустая — артефактная ветка.
+    """
+    groups: dict[str, list[str]] = {}
+    for rel, (text, note) in found.items():
+        if text is None:
+            label = ARTIFACT_SOURCE_MISSING
+        elif note:
+            label = ARTIFACT_SOURCE_WORKDIR
+        else:
+            label = ARTIFACT_SOURCE_BRANCH
+        groups.setdefault(label, []).append(rel.rsplit("/", 1)[-1])
+    return "; ".join(f"{label} — {', '.join(groups[label])}"
+                     for label in ARTIFACT_SOURCE_ORDER if label in groups)
+
+
+def own_commit_paths(base: str, branch: str, repo=None) -> tuple[list[str], str]:
+    """(пути, причина сбоя) — пути, которые тронули СОБСТВЕННЫЕ коммиты
+    ветки с момента `base` (SPEC 01M2ZZDJ5ECR4ZYV23BKFCNFXM, требование 6).
+
+    Обход `--first-parent` без merge-коммитов: у ветки задачи, подтянувшей
+    main, первый родитель merge-коммита — прежняя голова ветки, поэтому
+    обход остаётся на ветке, а сами merge-коммиты (и, значит, пути,
+    пришедшие из main) в перечень не попадают. Честный инкремент — правки
+    разработчика за итерацию, а не изменения главной ветки.
+
+    Пустой перечень — собственных коммитов с базы нет вовсе (ветка только
+    подтянула main либо стоит на базе): вызывающий код трактует это как
+    пустой инкремент, отдельного git-вызова за diff'ом не делая.
+
+    Разделитель — `-z` (пути без кавычек и без экранирования не-ASCII), но
+    результат разбирается устойчиво к обоим разделителям: формат вывода
+    `log -z --name-only` менялся между версиями git, а перечень путей от
+    этого не зависит.
+
+    `--no-renames` (R1-F1, REVIEW.md итерация 1, major) — не украшение:
+    с определением переименований (оно включено по умолчанию)
+    `--name-only` отдаёт ТОЛЬКО новое имя пары, прежний путь в pathspec не
+    попадает, и ревьювер видит переименованный модуль как новый файл
+    целиком, не видя ни строки о том, что старый перестал существовать
+    (для тестового файла это прямо ломает пункт скила «дифф tests/ —
+    удалённые ассерты»). Инкремент при этом НЕ пуст, поэтому откат
+    требования 7 такой пропуск не ловит. С флагом git перечисляет оба
+    пути пары, а само переименование как переименование по-прежнему
+    показывает `git diff` — pathspec несёт обе стороны.
+    """
+    args = ("log", "--first-parent", "--no-merges", "--no-renames",
+            "--format=", "--name-only", "-z", f"{base}..{branch}")
+    try:
+        res = gitcmd.in_repo(repo, *args) if repo else gitcmd.git(*args)
+    except UnicodeDecodeError as exc:
+        # Тот же класс сбоя, что у `git_diff_part`: имя файла в cp1251/
+        # latin-1 декодируется внутри subprocess и роняло бы сборку пакета
+        # трейсбеком до первой записи в журнал.
+        return [], f"не прочитан: {exc}"
+    if res.returncode != 0:
+        return [], (res.stderr.strip()[:200]
+                    or f"git log вернул {res.returncode}")
+    names = res.stdout.replace("\0", "\n").splitlines()
+    return sorted({name.strip() for name in names if name.strip()}), ""
+
+
+def _shown_diff(task_id: str, base: str, branch: str,
+                tasks_dir_exclude: tuple, repo, incremental: bool) -> dict:
+    """Тексты стат-списка и diff, которые пакет реально покажет, плюс
+    признаки исхода: `stat`, `diff`, `lines`, `failed`, `fallback`,
+    `no_edits` (SPEC 01M2ZZDJ5ECR4ZYV23BKFCNFXM, требования 6-8).
+
+    Полный diff (итерация 1 и вырожденная итерация > 1 без базы) —
+    прежнее поведение байт-в-байт: два вызова `git_diff_part` с
+    исключающим pathspec каталога задачи.
+
+    Инкрементальный — тот же диапазон `<база>..<голова>`, но по путям
+    СОБСТВЕННЫХ коммитов ветки (`own_commit_paths`): изменения main,
+    пришедшие подтяжкой, ревьюверу за инкремент итерации не выдаются.
+    Путь с магией `:(literal)` — имя файла с `*`/`[`/`:` иначе стало бы
+    глобом или магией pathspec; исключение `tasks/<id>/` идёт тем же
+    pathspec, поэтому правило каталога задачи остаётся ровно одно и для
+    diff, и для `--stat` (требование 6).
+
+    Пустой инкремент разбирается на два разных исхода (требования 7-8):
+    полный diff от базы НЕ пуст — это дефект, `fallback` несёт дословную
+    причину для заметки, журнала и алерта, а показывается полный diff от
+    базы; полный diff от базы тоже пуст — `no_edits`, штатная пустота без
+    алерта. Сбой git на самой сверке не превращается ни в то, ни в
+    другое: он уезжает в `failed`, как и любой другой несобранный diff.
+    """
+    own_failed = ""
+    if incremental:
+        own_paths, own_failed = own_commit_paths(base, branch, repo)
+        if own_failed:
+            pathspec = tasks_dir_exclude
+        else:
+            pathspec = (*(f":(literal){p}" for p in own_paths),
+                        f":!tasks/{task_id}/") if own_paths else ()
+    else:
+        pathspec = tasks_dir_exclude
+
+    if pathspec:
+        stat, _, stat_failed = git_diff_part(base, branch, "--stat",
+                                             pathspec=pathspec, repo=repo)
+        diff, lines, diff_failed = git_diff_part(base, branch,
+                                                 pathspec=pathspec, repo=repo)
+    else:
+        # Собственных коммитов с базы нет вовсе — инкремент пуст по
+        # построению, git об этом спрашивать нечем: pathspec из одних
+        # исключений отдал бы diff всего дерева.
+        stat, diff, lines = EMPTY_DIFF_TEXT, EMPTY_DIFF_TEXT, 0
+        stat_failed = diff_failed = ""
+
+    out = {"stat": stat, "diff": diff, "lines": lines,
+           "failed": diff_failed or stat_failed or own_failed,
+           "fallback": "", "no_edits": False, "own_failed": own_failed}
+    if not incremental or out["failed"] or diff != EMPTY_DIFF_TEXT:
+        return out
+
+    full_stat, _, full_stat_failed = git_diff_part(
+        base, branch, "--stat", pathspec=tasks_dir_exclude, repo=repo)
+    full_diff, full_lines, full_failed = git_diff_part(
+        base, branch, pathspec=tasks_dir_exclude, repo=repo)
+    if full_failed or full_stat_failed:
+        out["failed"] = full_failed or full_stat_failed
+    elif full_diff != EMPTY_DIFF_TEXT:
+        # `failed` несёт ту же причину намеренно (требование 7): алерт
+        # `kind=warning` заводит `runner._build_prompt` по непустому
+        # `not_collected` пакета и тем же каналом закрывает открытые
+        # алерты, когда оно пусто, — точка вызова алерта этой задачей не
+        # меняется («Не входит»). Слово «не собран» при этом в журнал не
+        # уходит: `package_note` печатает откат своей формулировкой.
+        out.update({"stat": full_stat, "diff": full_diff, "lines": full_lines,
+                    "fallback": EMPTY_INCREMENT_FALLBACK_REASON,
+                    "failed": EMPTY_INCREMENT_FALLBACK_REASON})
+    else:
+        out["no_edits"] = True
+    return out
+
+
+def _increment_note(shown: dict, prev_sha: str, branch: str) -> str:
+    """Первая фраза заметки под diff'ом итерации > 1 с найденной базой:
+    называет базу и голову ветки (требование 6) и различает три исхода —
+    обычный инкремент, откат при пустом инкременте и непустых правках
+    (требование 7), штатное отсутствие правок (требование 8).
+
+    Штатная пустота обязана читаться иначе, чем откат: одна фраза на два
+    случая вернула бы ревьюверу ровно ту неотличимость, из-за которой
+    пакет 20.09 сообщил «строк diff 0» и там, где правок было пять
+    файлов, и там, где их не было вовсе.
+    """
+    span = f"от sha предыдущего вердикта ({prev_sha}) до HEAD ветки {branch}"
+    if shown["own_failed"]:
+        # Перечня собственных коммитов нет — показан весь diff от базы.
+        # Назвать это инкрементом значило бы соврать ревьюверу о составе
+        # того, что у него перед глазами (причина уходит и в журнал, и в
+        # алерт полем `failed`).
+        return (f"Diff выше — полный {span}: перечень собственных коммитов "
+                f"ветки не получен ({shown['own_failed']}), ограничить "
+                f"инкремент их путями было нечем.")
+    if shown["fallback"]:
+        return (f"Diff выше — полный {span}: {shown['fallback']} "
+                f"(собственных коммитов ветки с базы вердикта нет либо они "
+                f"не дали изменений, а правки с базы есть).")
+    if shown["no_edits"]:
+        return (f"Diff выше — инкрементальный {span}: правок с предыдущего "
+                f"вердикта нет — ни собственных коммитов ветки, ни "
+                f"изменений в diff от базы вердикта.")
+    return (f"Diff выше — инкрементальный {span}, не вся ветка целиком: "
+            f"только пути, которые тронули СОБСТВЕННЫЕ коммиты ветки с "
+            f"базы вердикта — изменения main, пришедшие подтяжкой, в него "
+            f"не входят.")
 
 
 def review_package(conn, task_id: str, title: str, branch: str, *,
@@ -222,6 +505,14 @@ def review_package(conn, task_id: str, title: str, branch: str, *,
     полный diff от `config.MAIN_BRANCH`, что и в самой
     `previous_verdict_sha` (требование 2, тоже не меняется этой задачей).
 
+    Источник трёх артефактов задачи (SPEC 01M2ZZDJ5ECR4ZYV23BKFCNFXM,
+    требование 1) — АРТЕФАКТНАЯ ветка (`artifact_source.resolve`, тот же
+    резолв, что и для `ANSWER-n.md`), откат — каталог `tasks/<id>/`
+    рабочего каталога шага. Кодовая ветка и главная копия пульта их
+    источниками быть перестали: с 11.09 их там просто нет, и пакет 25
+    задач подряд нёс «(не показан: …)» вместо SPEC и PLAN. Форма вердикта
+    `templates/REVIEW.md` читается как раньше — с кодовой ветки (AC-4).
+
     Границы недоверенных данных (tasks/01M1GV6H5DDDCWW4G3GW1D3A1X,
     AC-1/AC-2): один `run_id` на весь вызов оборачивает тело каждого
     компонента пакета (SPEC/PLAN/прошлый REVIEW/форма/ANSWER/стат-список/
@@ -239,18 +530,31 @@ def review_package(conn, task_id: str, title: str, branch: str, *,
     # снимал: миссия велит заполнять REVIEW.md именно по нему, обойти его
     # нельзя, значит без него каждый прогон делает гарантированный Read.
     form_rel = "templates/REVIEW.md"
-    found = {rel: artifact_text(branch, rel)
-             for rel in (spec_rel, plan_rel, review_rel, form_rel)}
+    # Артефактная ветка задачи — источник и трёх артефактов задачи, и
+    # ANSWER-n.md (`orchestrator/answer.py::cmd_answer` коммитит его туда и
+    # только туда): один резолв тем же резолвером, что уже пользуется
+    # `brief.py` для developer/analyst/test_author (SPEC T075).
+    target = store.task_target(conn, task_id)
+    artifact_branch_name, _foreign = artifact_source.resolve(conn, task_id)
+    step_dir = _step_workdir(task_id, target)
+    task_rels = (spec_rel, plan_rel, review_rel)
+    found = {rel: artifact_text(artifact_branch_name, rel, disk_root=step_dir,
+                                disk_note=STEP_WORKDIR_NOTE,
+                                disk_hint=STEP_WORKDIR_MISSING_HINT)
+             for rel in task_rels}
+    # Форма вердикта — единственная часть, чей источник эта задача не
+    # трогает (AC-4): кодовая ветка задачи, откат — главная копия пульта.
+    found[form_rel] = artifact_text(branch, form_rel)
+    artifact_sources = artifact_sources_note({rel: found[rel]
+                                              for rel in task_rels})
 
-    # ANSWER-n.md живёт ИСКЛЮЧИТЕЛЬНО в артефактной ветке задачи
-    # (`orchestrator/answer.py::cmd_answer` коммитит его туда и только
-    # туда), не в кодовой ветке `branch`, которой читаются SPEC/PLAN/
-    # REVIEW выше (AC-3: их источник эта задача не трогает) — отдельное
-    # разрешение ветки, тем же резолвером, что уже пользуется `brief.py`
-    # для developer/analyst/test_author (SPEC T075).
-    answer_branch, _ = artifact_source.resolve(conn, task_id)
-    answer_rels = _answer_rels(task_id, answer_branch)
-    found.update({rel: artifact_text(answer_branch, rel) for rel in answer_rels})
+    # ANSWER-n.md читается той же ветки, но прежним вызовом: `_answer_rels`
+    # перечисляет ровно те файлы, которые в ветке ЕСТЬ, поэтому откат у
+    # этих компонентов недостижим, и менять его адрес значило бы трогать
+    # состав пакета сверх требований задачи.
+    answer_rels = _answer_rels(task_id, artifact_branch_name)
+    found.update({rel: artifact_text(artifact_branch_name, rel)
+                  for rel in answer_rels})
     for rel in answer_rels:
         answer_text, _note = found[rel]
         if answer_text is not None:
@@ -279,6 +583,11 @@ def review_package(conn, task_id: str, title: str, branch: str, *,
         # полный diff от config.MAIN_BRANCH, diff_base здесь не звонится
         # вовсе (инкрементальная ветка этой задачей не меняется).
         base = config.MAIN_BRANCH
+    # Тип diff — режим сборки, а не исход: откат требования 7 показывает
+    # полный diff от базы вердикта, оставаясь итерацией инкрементального
+    # режима, и называется в журнале своей отдельной пометкой («откат
+    # diff», `package_note`) — иначе по журналу нельзя было бы отличить
+    # итерацию, у которой инкремент не сложился, от итерации без базы.
     diff_type = "инкрементальный" if incremental else "полный"
 
     # `tasks/<task_id>/` (SPEC, PLAN, залоченная планка) уже идёт в пакет
@@ -291,13 +600,9 @@ def review_package(conn, task_id: str, title: str, branch: str, *,
     # Репозиторный контекст target'а (SPEC 01M1R5B33CC7E6BZK085XV3ZCX,
     # AC-9): diff внешнего target считается в его клоне, не в
     # `config.ROOT`; для self — прежнее поведение (repo=None).
-    repo = repo_context.path_or_none(
-        repo_context.resolve(store.task_target(conn, task_id)))
-    stat, _, stat_failed = git_diff_part(base, branch, "--stat",
-                                         pathspec=tasks_dir_exclude, repo=repo)
-    diff, diff_lines, diff_failed = git_diff_part(base, branch,
-                                                  pathspec=tasks_dir_exclude,
-                                                  repo=repo)
+    repo = repo_context.path_or_none(repo_context.resolve(target))
+    shown = _shown_diff(task_id, base, branch, tasks_dir_exclude, repo,
+                        incremental)
 
     # Статус CI подтянутой головы (ADR-0015, требование 4/AC-13) — см.
     # докстринг функции выше.
@@ -342,9 +647,9 @@ def review_package(conn, task_id: str, title: str, branch: str, *,
         # `discipline`).
         parts.append(artifact_part(rel, *found[rel], run_id))
     parts.append(f"### Изменённые файлы (git diff --stat {base}...{branch})"
-                 f"\n\n{brief.wrap_boundary(run_id, stat)}\n")
+                 f"\n\n{brief.wrap_boundary(run_id, shown['stat'])}\n")
     parts.append(f"### Diff (git diff {base}...{branch})"
-                 f"\n\n{brief.wrap_boundary(run_id, diff)}\n")
+                 f"\n\n{brief.wrap_boundary(run_id, shown['diff'])}\n")
     if incremental:
         # Требование 5: инструкция, не переключатель — называет команду,
         # но не запускает её и не заводит отдельный CLI-режим («не входит»).
@@ -361,8 +666,7 @@ def review_package(conn, task_id: str, title: str, branch: str, *,
         # оговорка явно называет это несоответствие вместо молчаливой
         # команды.
         parts.append(
-            f"Diff выше — инкрементальный: от sha предыдущего вердикта "
-            f"({prev_sha}) до HEAD ветки, не вся ветка целиком. Если для "
+            f"{_increment_note(shown, prev_sha, branch)} Если для "
             f"оценки замечания недостаточно — посмотри полный diff ветки "
             f"отдельно: `git diff {config.MAIN_BRANCH}...{branch}` "
             f"(диапазон от локального {config.MAIN_BRANCH}, заведомо шире "
@@ -400,14 +704,30 @@ def review_package(conn, task_id: str, title: str, branch: str, *,
     # включая тело недоверенных компонентов пакета (diff/SPEC/PLAN).
     text = brief.mark_unclosed_parts(text, run_id, parts_n)
     return {"text": text, "chars": len(text),
-            "bytes": len(text.encode("utf-8")), "diff_lines": diff_lines,
+            "bytes": len(text.encode("utf-8")), "diff_lines": shown["lines"],
             "parts": parts_n,
-            "not_collected": diff_failed or stat_failed,
+            "not_collected": shown["failed"],
             # Артефакт не из ветки — расхождение дерева и diff; в журнале
-            # оно объясняет странный вердикт без подъёма лога шага.
+            # оно объясняет странный вердикт без подъёма лога шага. Здесь
+            # ровно рабочее ДЕРЕВО ПУЛЬТА (`WORKTREE_NOTE`, сегодня —
+            # только форма вердикта): три артефакта задачи откатываются на
+            # рабочий каталог шага, и их источник уезжает в журнал полем
+            # `artifact_source` своим фактическим именем (R1-F3, REVIEW.md
+            # итерация 1, minor). Прежний признак «непустая пометка»
+            # сваливал оба отката в одну формулировку «из рабочего
+            # дерева» — по ней Оператор шёл за версией PLAN.md в главную
+            # копию пульта, где её с 11.09 не бывает.
             "from_worktree": [rel for rel, (text_, note) in found.items()
-                              if text_ is not None and note],
-            "diff_type": diff_type, "iteration": iteration}
+                              if text_ is not None and note == WORKTREE_NOTE],
+            "diff_type": diff_type, "iteration": iteration,
+            # Требование 9/AC-10: источник артефактов задачи и база
+            # инкремента — в запись журнала о сборке пакета, чтобы дефект
+            # этого класса был виден по `log <id>`, а не по промпту. Базы
+            # на итерации 1 не существует — поле пустое, а не merge-base
+            # полного diff.
+            "artifact_source": artifact_sources,
+            "increment_base": prev_sha if incremental else "",
+            "fallback": shown["fallback"]}
 
 
 def package_note(package: dict) -> str:
@@ -421,15 +741,29 @@ def package_note(package: dict) -> str:
     собой в журнале одной задачи (требование 9). Пакет, собранный вручную
     без этих полей (юнит-тесты `package_note` до T029), получает строку
     старого формата — ключей нет, добавить нечего.
+
+    Источник артефактов задачи и база инкремента (SPEC
+    01M2ZZDJ5ECR4ZYV23BKFCNFXM, требование 9, AC-10) — тем же приёмом
+    «нет ключа, нечего добавлять». Откат требования 7 печатается своей
+    формулировкой, а не как «diff не собран»: собран он был, причём
+    дважды, — иначе строка журнала врала бы о сбое git там, где сбоя нет
+    (поле `not_collected` несёт ту же причину ради канала алерта, см.
+    `_shown_diff`).
     """
     note = (f"символов {package['chars']}, байт {package['bytes']}, "
             f"строк diff {package['diff_lines']}")
     if package.get("diff_type"):
         note += (f", diff {package['diff_type']}, "
                 f"итерация {package['iteration']}")
+    if package.get("artifact_source"):
+        note += f", артефакты задачи: {package['artifact_source']}"
+    if package.get("increment_base"):
+        note += f", база инкремента {package['increment_base']}"
     if package.get("parts"):
         note += f", пакет поделён на {package['parts']} частей"
-    if package["not_collected"]:
+    if package.get("fallback"):
+        note += f", откат diff: {package['fallback']}"
+    elif package["not_collected"]:
         note += f", diff не собран: {package['not_collected']}"
     if package["from_worktree"]:
         note += (", не из ветки, а из рабочего дерева: "
