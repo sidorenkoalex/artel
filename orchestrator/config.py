@@ -503,23 +503,39 @@ USAGE_TOKEN_KEYS = ("input_tokens", "output_tokens",
 # token_rate_divergence` сравнивает расчётную цену с фактической по
 # журналу и поднимает алерт при большом расхождении (требования 4-5),
 # следующая правка этих чисел — по его сигналу, не наугад.
+#
+# Калибровка 20.09 (задача 01M2ZNJX2N5SPZCAQE6EHD4EWH): роли переведены
+# на модель `claude-opus-5` 13.09 (`roles.yaml`, поле `model`), а курс
+# оставался на ценах Sonnet — по 93 шагам «agent cost KNOWN» с 13.09
+# факт CLI относился к расчёту как 1.52-1.92 по всем четырём ролям.
+# Числа ниже — прейскурант opus-5 за миллион токенов ($5 вход, $25
+# выход, $6.25 запись кэша, $0.50 чтение кэша), делённый на миллион.
+# Метод — прейскурант плюс сверка: прейскурант берётся как есть, а
+# сходимость проверяется по тем же 93 шагам — факт $432.38 против
+# расчёта $428.39, коэффициент 1.009. Подгонка курса по журналу (подбор
+# четырёх цен так, чтобы сумма сошлась) отвергнута: входных токенов и
+# записи кэша в шаге почти нет, весь объём — чтения кэша, поэтому три
+# из четырёх цен подбор определяет шумом, и на следующей же смеси шагов
+# они разъехались бы. Курс задан по роли, потому что поля модели у
+# записи курса нет; тариф на модель — задача 2 плана провайдеров
+# (`models.yaml`), эта правка временная до неё.
 TOKEN_RATES = {
-    "analyst": {"input_usd_per_token": 0.000003, "output_usd_per_token": 0.000015,
-               "cache_creation_usd_per_token": 0.00000375,
-               "cache_read_usd_per_token": 0.0000003,
-               "calibrated_at": "2026-09-05"},
-    "test_author": {"input_usd_per_token": 0.000003, "output_usd_per_token": 0.000015,
-                    "cache_creation_usd_per_token": 0.00000375,
-                    "cache_read_usd_per_token": 0.0000003,
-                    "calibrated_at": "2026-09-05"},
-    "developer": {"input_usd_per_token": 0.000003, "output_usd_per_token": 0.000015,
-                 "cache_creation_usd_per_token": 0.00000375,
-                 "cache_read_usd_per_token": 0.0000003,
-                 "calibrated_at": "2026-09-05"},
-    "reviewer": {"input_usd_per_token": 0.000003, "output_usd_per_token": 0.000015,
-                "cache_creation_usd_per_token": 0.00000375,
-                "cache_read_usd_per_token": 0.0000003,
-                "calibrated_at": "2026-09-05"},
+    "analyst": {"input_usd_per_token": 0.000005, "output_usd_per_token": 0.000025,
+               "cache_creation_usd_per_token": 0.00000625,
+               "cache_read_usd_per_token": 0.0000005,
+               "calibrated_at": "2026-09-20"},
+    "test_author": {"input_usd_per_token": 0.000005, "output_usd_per_token": 0.000025,
+                    "cache_creation_usd_per_token": 0.00000625,
+                    "cache_read_usd_per_token": 0.0000005,
+                    "calibrated_at": "2026-09-20"},
+    "developer": {"input_usd_per_token": 0.000005, "output_usd_per_token": 0.000025,
+                 "cache_creation_usd_per_token": 0.00000625,
+                 "cache_read_usd_per_token": 0.0000005,
+                 "calibrated_at": "2026-09-20"},
+    "reviewer": {"input_usd_per_token": 0.000005, "output_usd_per_token": 0.000025,
+                "cache_creation_usd_per_token": 0.00000625,
+                "cache_read_usd_per_token": 0.0000005,
+                "calibrated_at": "2026-09-20"},
 }
 # Порог коэффициента расхождения калибровки курса (`report.
 # token_rate_divergence`, SPEC 01M1PP0VYRT55WN8GGVG66X89Y, требование 5),
