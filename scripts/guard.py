@@ -882,6 +882,156 @@ def scan_indented_ac_markers(tdir: Path) -> list[str]:
     return indented_ac_marker_errors_from_files(files)
 
 
+# Источник артефактов задачи в планке — только артефактная ветка (SPEC
+# 01M2XJKKPHM5XDAE42838AMBQH, требования 1-4). Планка пишется в worktree,
+# где `tasks/<id>/` лежит на диске целиком, а прогоняется пультом в среде,
+# куда материализован ТОЛЬКО `acceptance_tests/` (`orchestrator/pull.py::
+# _materialize_and_run_plank`, `acceptance.materialize_from_branch`):
+# тест, читающий `PLAN.md`/`SPEC.md` с диска, зелен у автора и красен на
+# гейте (12.09 01M2B6K3EM AC-8, 13.09 01M2CN465W test_ac4 — оба закрыты
+# руками через `amend-tests`).
+#
+# Проверка — по AST, не по тексту строки (требование 2): имя артефакта в
+# докстринге/комментарии (в том числе в концевом комментарии строки с
+# настоящим чтением ПОСТОРОННЕГО файла) — не нарушение; чтение через
+# `gitcmd.show(...)`/`artifact_branch`/`subprocess` с `git show`/`git
+# cat-file` — не нарушение, потому что ни один из этих вызовов не входит
+# в набор выражений доступа к файловой системе ниже.
+#
+# Вызывается ТОЛЬКО гейтом выхода `tests_writing` (`orchestrator/
+# advance_gates/tests_writing.py`), НЕ из `check()`/`main()` (требование
+# 4): режим CI «Валидация артефактов» по всему `tasks/` исторические
+# планки, читавшие артефакты с диска до появления правила, не
+# переписывает (модульный докстринг: «история не переписывается»).
+ARTIFACT_FILE_NAMES = ("PLAN.md", "SPEC.md", "REVIEW.md", "TZ.md",
+                       "QUESTIONS.md", "TEST_REPORT.md", "ANSWER-")
+
+# Вызовы доступа к файловой системе по точечному имени функции
+# (`Path("…/PLAN.md")`, `open(…)`, `os.path.join(…)`, `os.path.exists(…)`)
+# и методы по имени атрибута без учёта получателя (`x.read_text(…)`,
+# `x.joinpath("PLAN.md")` — метод-форма операции `/` у Path).
+_FS_ACCESS_CALLS = frozenset({"open", "Path", "pathlib.Path",
+                              "os.path.join", "os.path.exists"})
+_FS_ACCESS_METHODS = frozenset({"read_text", "joinpath"})
+
+ARTIFACT_DISK_READ_RECIPE_TMPL = (
+    "читай из артефактной ветки: "
+    "gitcmd.show(artifact_branch.branch_name(TASK_ID), \"tasks/<id>/{name}\")")
+
+
+def _dotted_name(node: ast.AST) -> str | None:
+    """`a.b.c` для цепочки Name/Attribute; `None` — узел иной формы
+    (вызов, подписка, литерал)."""
+    parts: list[str] = []
+    while isinstance(node, ast.Attribute):
+        parts.append(node.attr)
+        node = node.value
+    if not isinstance(node, ast.Name):
+        return None
+    parts.append(node.id)
+    return ".".join(reversed(parts))
+
+
+def _artifact_name_in_literal(value: str) -> str | None:
+    """Имя артефакта, которое несёт строковый литерал `value` (для
+    префикса `ANSWER-` — фактическое имя файла из литерала, например
+    `ANSWER-1.md`, чтобы рецепт назвал настоящий файл); `None` — литерал
+    об артефактах не говорит."""
+    for name in ARTIFACT_FILE_NAMES:
+        if name not in value:
+            continue
+        basename = value.rsplit("/", 1)[-1]
+        return basename if name in basename else name
+    return None
+
+
+def _artifact_literals(node: ast.AST) -> list[tuple[int, str]]:
+    """(строка, имя артефакта) для каждого строкового литерала поддерева
+    `node` (в т.ч. частей f-строки), несущего имя артефакта задачи."""
+    found: list[tuple[int, str]] = []
+    for sub in ast.walk(node):
+        if isinstance(sub, ast.Constant) and isinstance(sub.value, str):
+            name = _artifact_name_in_literal(sub.value)
+            if name is not None:
+                found.append((sub.lineno, name))
+    return found
+
+
+def _is_fs_access_call(node: ast.Call) -> bool:
+    dotted = _dotted_name(node.func)
+    if dotted in _FS_ACCESS_CALLS:
+        return True
+    return (isinstance(node.func, ast.Attribute)
+            and node.func.attr in _FS_ACCESS_METHODS)
+
+
+def artifact_disk_read_errors_from_files(files: list[tuple[str, str]]) -> list[str]:
+    """Ошибки чтения артефакта задачи с диска (требования 1-3) по уже
+    прочитанным (label, текст) парам `*.py`-файлов `acceptance_tests/` —
+    источник выбирает вызывающий код, тем же приёмом, что
+    `redness_marker_errors_from_files`/`indented_ac_marker_errors_from_files`.
+
+    Нарушение — строковый литерал с именем артефакта (`ARTIFACT_FILE_
+    NAMES`) внутри выражения доступа к файловой системе:
+    - операнд операции `/` (`Path(__file__).parents[1] / "PLAN.md"`;
+      `str / str` в Python не существует, поэтому литерал-операнд `/`
+      всегда означает pathlib — левый операнд отдельно не проверяется,
+      `TASK_DIR / "PLAN.md"` через переменную ловится так же);
+    - поддерево вызова `_FS_ACCESS_CALLS`/`_FS_ACCESS_METHODS`, включая
+      цепочку получателя (`TASK_DIR.joinpath("PLAN.md").read_text()`).
+
+    Каждая ошибка: `<label>:<строка литерала>: … — читай из артефактной
+    ветки: gitcmd.show(artifact_branch.branch_name(TASK_ID),
+    "tasks/<id>/<имя>")` (требование 3). Один литерал в нескольких
+    вложенных выражениях сразу (`open(os.path.join(…, "PLAN.md"))`) —
+    одна ошибка, не две. Файл, который не разбирается (`SyntaxError`),
+    ошибок здесь не даёт: синтаксис планки — предмет сухого сбора того же
+    гейта (`acceptance.collect`), его текст ошибки точнее.
+    """
+    errors: list[str] = []
+    for label, source in files:
+        try:
+            tree = ast.parse(source)
+        except SyntaxError:
+            continue
+        hits: set[tuple[int, str]] = set()
+        for node in ast.walk(tree):
+            if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Div):
+                for operand in (node.left, node.right):
+                    if isinstance(operand, (ast.Constant, ast.JoinedStr)):
+                        hits.update(_artifact_literals(operand))
+            elif isinstance(node, ast.Call) and _is_fs_access_call(node):
+                hits.update(_artifact_literals(node))
+        # `ast.walk` обходит дерево в ширину, не по строкам — порядок
+        # ошибок внутри файла восстанавливается по номеру строки.
+        for lineno, name in sorted(hits):
+            errors.append(
+                f"{label}:{lineno}: чтение артефакта задачи {name} с диска — "
+                + ARTIFACT_DISK_READ_RECIPE_TMPL.format(name=name))
+    return errors
+
+
+def scan_artifact_disk_reads(tdir: Path) -> list[str]:
+    """Ошибки чтения артефакта с диска для ВСЕХ `acceptance_tests/**/*.py`
+    каталога задачи `tdir` (требование 1, AC-5) — не только `test_*.py`:
+    общий модуль планки `_helper.py`, читающий `PLAN.md`, ломает прогон
+    точно так же. Метка ошибки — путь относительно `tdir`
+    (`acceptance_tests/test_x.py`): каталог `tdir` на гейте — временная
+    материализация, её абсолютный путь в истории отказов брифа роли
+    ничего не значит.
+    """
+    tests_dir = tdir / "acceptance_tests"
+    if not tests_dir.is_dir():
+        return []
+    files: list[tuple[str, str]] = []
+    for f in sorted(tests_dir.rglob("*.py")):
+        try:
+            files.append((str(f.relative_to(tdir)), f.read_text(encoding="utf-8")))
+        except (OSError, UnicodeDecodeError):
+            continue
+    return artifact_disk_read_errors_from_files(files)
+
+
 # Секция «Проверено исполнением» — обязательна при status: approved
 # (tasks/T072/SPEC.md, требования 1–2). Урок ручных гейтов Оператора
 # (docs/operator-gates.md, норматив 26.08 «гейт — проверка, а не
