@@ -21,10 +21,12 @@ from unittest import mock
 REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO))
 
-from orchestrator import (catalog, config, context_package, gitcmd,  # noqa: E402
-                          review, runner, stack, store)
-from tests.sandbox import (FakeProc, SpyRun, TmpRootTest, _stub_check_stack,  # noqa: E402
-                           capture, capture_new_task_id)
+from orchestrator import (artifact_branch, catalog, config,  # noqa: E402
+                          context_package, gitcmd, review, runner, stack,
+                          store)
+from tests.sandbox import (FakeProc, RealGitSandbox, SpyRun,  # noqa: E402
+                           TmpRootTest, _stub_check_stack, capture,
+                           capture_new_task_id)
 
 SPEC_MD = """---
 task: T001
@@ -94,13 +96,19 @@ class FakeGit:
 
     def __init__(self, stat="orchestrator/artel.py | 2 +-", diff="diff --git a b",
                  returncode: int = 0, stderr: str = "", files=None,
-                 raises_on: str = "", map_diff: str = ""):
+                 raises_on: str = "", map_diff: str = "", own_paths=()):
         self.stat = stat
         self.diff = diff
         self.returncode = returncode
         self.stderr = stderr
         self.files = dict(files or {})
         self.raises_on = raises_on
+        # Пути собственных коммитов ветки с базы вердикта (`review.
+        # own_commit_paths`, SPEC 01M2ZZDJ5ECR4ZYV23BKFCNFXM, требование 6)
+        # — ответ на `git log --first-parent --no-merges --name-only`.
+        # Пустой кортеж — собственных коммитов нет (ветка только подтянула
+        # main): инкремент по правилу требования 6 пуст.
+        self.own_paths = tuple(own_paths)
         # T028: `--name-only` — сверка свежести docs/codebase-map.md
         # (orchestrator/brief.py), другой запрос, чем ревью-пакетный
         # `--stat`/полный diff ветки; по умолчанию «карта свежа» (пусто).
@@ -114,6 +122,17 @@ class FakeGit:
                                      "invalid continuation byte")
         if args and args[0] == "show":
             return self.show(args)
+        if args and args[0] == "log":
+            # `log --first-parent --no-merges --format= --name-only -z` тоже
+            # несёт `--name-only`, но это СОВСЕМ ДРУГОЙ запрос, чем сверка
+            # свежести карты (`diff --name-only`) — ветка обязана идти
+            # РАНЬШЕ generic-диспетчера ниже (тот же класс сбоя, что у
+            # `ls-tree`).
+            if self.returncode:
+                return subprocess.CompletedProcess(list(args), self.returncode,
+                                                   "", self.stderr)
+            return subprocess.CompletedProcess(
+                list(args), 0, "\0".join(("", *self.own_paths)), "")
         if args and args[0] == "ls-tree":
             # `ls-tree -r --name-only <ветка> -- <rel_dir>` — тоже несёт
             # `--name-only`, но это СОВСЕМ ДРУГОЙ запрос, чем сверка
@@ -333,7 +352,14 @@ class ReviewPackageTest(unittest.TestCase):
         self.root = Path(tmp.name)
         self.tdir = self.root / "tasks" / self.TASK
         self.tdir.mkdir(parents=True)
+        # Артефактная ветка задачи — источник трёх её артефактов (SPEC
+        # 01M2ZZDJ5ECR4ZYV23BKFCNFXM, требование 1); рабочий каталог шага
+        # (`config.WORKTREES/<id>`) — их откат, поэтому `WORKTREES` обязан
+        # быть в подмене: без него откат читал бы `.artel/worktrees`
+        # НАСТОЯЩЕГО репозитория пульта (инвариант 37 docs/invariants.md).
+        self.artifact_branch = artifact_branch.branch_name(self.TASK)
         for attr, value in (("ROOT", self.root), ("TASKS", self.root / "tasks"),
+                            ("WORKTREES", self.root / ".artel" / "worktrees"),
                             ("DB", self.root / ".artel" / "state.db")):
             patcher = mock.patch.object(config, attr, value)
             patcher.start()
@@ -366,7 +392,19 @@ class ReviewPackageTest(unittest.TestCase):
         self.addCleanup(pf_patcher.stop)
 
     def put_in_worktree(self, rel: str, text: str) -> Path:
+        """Файл в главную копию пульта — откат ФОРМЫ ВЕРДИКТА
+        (`templates/REVIEW.md`), чей источник задача 01M2ZZDJ5... не
+        меняет."""
         path = self.root / rel
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text, encoding="utf-8")
+        return path
+
+    def put_in_step_workdir(self, rel: str, text: str) -> Path:
+        """Файл в каталог `tasks/<id>/` РАБОЧЕГО КАТАЛОГА ШАГА — откат трёх
+        артефактов задачи (SPEC 01M2ZZDJ5ECR4ZYV23BKFCNFXM, требование 1):
+        главная копия пульта их источником быть перестала."""
+        path = config.WORKTREES / self.TASK / rel
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(text, encoding="utf-8")
         return path
@@ -411,15 +449,24 @@ class ReviewPackageTest(unittest.TestCase):
                           ["diff", f"{config.MAIN_BRANCH}...{self.BRANCH}",
                            *exclude]])
 
-    def test_artifacts_are_read_from_the_same_point_as_the_diff(self):
-        """Артефакты — из ветки задачи, а не из того, что сейчас в дереве."""
+    def test_artifacts_are_read_from_the_artifact_branch(self):
+        """Три артефакта задачи — из её АРТЕФАКТНОЙ ветки (SPEC
+        01M2ZZDJ5ECR4ZYV23BKFCNFXM, требование 1), форма вердикта — с
+        кодовой ветки, как до задачи (AC-4); ни один из четырёх — не из
+        того, что сейчас в дереве.
+
+        Ловит мутацию: чтение артефактов оставлено на кодовой ветке (там
+        их с 11.09 нет вовсе) или, наоборот, на артефактную ветку уведена
+        и форма вердикта — список вызовов `show` разойдётся с ожидаемым.
+        """
         self.build()
 
-        self.assertEqual([c for c in self.git.calls if c[0] == "show"],
-                         [["show", f"{self.BRANCH}:tasks/{self.TASK}/SPEC.md"],
-                          ["show", f"{self.BRANCH}:tasks/{self.TASK}/PLAN.md"],
-                          ["show", f"{self.BRANCH}:tasks/{self.TASK}/REVIEW.md"],
-                          ["show", f"{self.BRANCH}:templates/REVIEW.md"]])
+        self.assertEqual(
+            [c for c in self.git.calls if c[0] == "show"],
+            [["show", f"{self.artifact_branch}:tasks/{self.TASK}/SPEC.md"],
+             ["show", f"{self.artifact_branch}:tasks/{self.TASK}/PLAN.md"],
+             ["show", f"{self.artifact_branch}:tasks/{self.TASK}/REVIEW.md"],
+             ["show", f"{self.BRANCH}:templates/REVIEW.md"]])
 
     def test_tree_on_main_does_not_empty_the_package(self):
         """Штатный ход оркестратора: после мержа соседней задачи дерево на main.
@@ -446,17 +493,86 @@ class ReviewPackageTest(unittest.TestCase):
         self.assertIn("прошлая итерация", text)
         self.assertIn("усечение без пометки", text, "замечания прошлой итерации")
 
-    def test_uncommitted_artifact_falls_back_to_the_worktree_and_says_so(self):
-        """PLAN написан, но ещё не в коммите — показываем и называем источник."""
+    def test_uncommitted_artifact_falls_back_to_the_step_workdir_and_says_so(self):
+        """PLAN написан, но ещё не в коммите артефактной ветки — показываем
+        файл рабочего каталога ШАГА и называем источник (SPEC
+        01M2ZZDJ5ECR4ZYV23BKFCNFXM, требования 1, 3).
+
+        Ловит мутацию: откат оставлен на главную копию пульта
+        (`config.ROOT`) — тело PLAN в пакет не попадёт, либо попадёт без
+        пометки об источнике, и ревьювер не отличит версию ветки от
+        версии диска шага.
+        """
         del self.git.files[f"tasks/{self.TASK}/PLAN.md"]
-        self.put_in_worktree(f"tasks/{self.TASK}/PLAN.md", PLAN_MD)
+        self.put_in_step_workdir(f"tasks/{self.TASK}/PLAN.md", PLAN_MD)
+        self.put_in_worktree(f"tasks/{self.TASK}/PLAN.md",
+                             "# УСТАРЕВШАЯ-КОПИЯ-ПУЛЬТА\n")
 
         package = self.build()
 
         self.assertIn("Собрать пакет в cmd_run", package["text"])
-        self.assertIn(review.WORKTREE_NOTE.strip(), package["text"],
+        self.assertNotIn("УСТАРЕВШАЯ-КОПИЯ-ПУЛЬТА", package["text"],
+                         "главная копия пульта источником не является")
+        self.assertIn(review.STEP_WORKDIR_NOTE.strip(), package["text"],
                       "подмена источника не проходит молча")
-        self.assertEqual(package["from_worktree"], [f"tasks/{self.TASK}/PLAN.md"])
+        self.assertIn(review.ARTIFACT_SOURCE_WORKDIR, package["artifact_source"],
+                      "источник артефакта уезжает и в журнал")
+
+    def test_step_workdir_fallback_is_not_called_the_pult_worktree(self):
+        """Артефакт задачи, прочитанный с диска ШАГА, не объявляется в
+        журнале прочитанным «из рабочего дерева» (R1-F3, REVIEW.md
+        итерация 1): его фактический источник уже несёт `artifact_source`.
+
+        Ловит мутацию: признак отката снова считается по любой непустой
+        пометке — запись `log <id>` скажет про PLAN.md «не из ветки, а из
+        рабочего дерева», и Оператор пойдёт за версией артефакта в
+        главную копию пульта, где её с 11.09 не бывает.
+        """
+        del self.git.files[f"tasks/{self.TASK}/PLAN.md"]
+        self.put_in_step_workdir(f"tasks/{self.TASK}/PLAN.md", PLAN_MD)
+
+        package = self.build()
+
+        self.assertEqual(package["from_worktree"], [],
+                         "рабочее дерево пульта источником не было")
+        note = review.package_note(package)
+        self.assertNotIn("рабочего дерева", note)
+        self.assertIn(f"{review.ARTIFACT_SOURCE_WORKDIR} — PLAN.md", note)
+
+    def test_missing_task_artifact_names_the_step_workdir_as_the_tree(self):
+        """Строка отсутствия трёх артефактов задачи называет, какое
+        «дерево» проверялось (R1-F2, REVIEW.md итерация 1): каталог
+        рабочего каталога шага, не главная копия пульта. Сама именованная
+        строка при этом прежняя (требование 3 SPEC, AC-3).
+
+        Ловит мутацию: оговорка потеряна — ревьювер читает «в дереве —
+        файл не найден» как «нет в главной копии пульта» и идёт искать
+        SPEC/PLAN туда, то есть делает ровно тот ручной обход, который
+        снимает требование 1.
+        """
+        del self.git.files[f"tasks/{self.TASK}/PLAN.md"]
+
+        text = self.build()["text"]
+
+        self.assertIn("(не показан: в ветке — ", text, "форма строки прежняя")
+        self.assertIn("в дереве — файл не найден)", text)
+        self.assertIn(review.STEP_WORKDIR_MISSING_HINT.strip(), text)
+
+    def test_missing_verdict_form_keeps_the_plain_tree_reason(self):
+        """Форма вердикта читается с диска ПУЛЬТА (AC-4) — оговорка о
+        рабочем каталоге шага к её строке отсутствия не приписывается.
+
+        Ловит мутацию: оговорка навешена на `artifact_text` для всех
+        чтений разом — строка отсутствия формы вердикта начнёт называть
+        источником каталог шага, в котором её никогда не искали.
+        """
+        del self.git.files["templates/REVIEW.md"]
+
+        text = self.build()["text"]
+
+        form_part = text.split("templates/REVIEW.md")[-1]
+        self.assertIn("в дереве — файл не найден)", form_part)
+        self.assertNotIn(review.STEP_WORKDIR_MISSING_HINT.strip(), form_part)
 
     def test_worktree_fallback_is_visible_in_the_note(self):
         """Расхождение дерева и diff Оператор разбирает по `log <id>`."""
@@ -466,9 +582,15 @@ class ReviewPackageTest(unittest.TestCase):
                       note)
 
     def test_unreadable_artifact_names_the_reason(self):
-        """Битые байты в артефакте — строка с причиной, а не трейсбек из `run`."""
+        """Битые байты в артефакте — строка с причиной, а не трейсбек из `run`.
+
+        Ловит мутацию: `UnicodeDecodeError` чтения с диска шага не
+        перехвачен (или перехвачен без текста причины) — один файл в
+        latin-1 уронил бы сборку пакета трейсбеком до первой записи в
+        журнал, и причина не попала бы даже в `log <id>`.
+        """
         del self.git.files[f"tasks/{self.TASK}/PLAN.md"]
-        path = self.put_in_worktree(f"tasks/{self.TASK}/PLAN.md", "")
+        path = self.put_in_step_workdir(f"tasks/{self.TASK}/PLAN.md", "")
         path.write_bytes(b"\xff\xfe\x00PLAN")
 
         text = self.build()["text"]
@@ -476,6 +598,25 @@ class ReviewPackageTest(unittest.TestCase):
         self.assertIn(f"tasks/{self.TASK}/PLAN.md", text)
         self.assertIn("не показан", text)
         self.assertIn("codec", text, "названа причина, а не просто «нет файла»")
+
+    def test_unreadable_artifact_reason_carries_no_absolute_path(self):
+        """Не-`FileNotFoundError` сбой чтения с диска (каталог на месте
+        файла) назван, но без абсолютного пути: текст части уходит в
+        промпт ревьювера (SPEC 01M2ZZDJ5ECR4ZYV23BKFCNFXM, требование 3).
+
+        Ловит мутацию: причиной отдаётся `str(OSError)` — он несёт
+        `filename` целиком, и путь рабочего каталога шага утекает в пакет.
+        """
+        del self.git.files[f"tasks/{self.TASK}/PLAN.md"]
+        (config.WORKTREES / self.TASK / "tasks" / self.TASK
+         / "PLAN.md").mkdir(parents=True)
+
+        text = self.build()["text"]
+
+        self.assertIn("не показан", text)
+        self.assertIn("IsADirectoryError", text, "класс сбоя назван")
+        self.assertNotIn(str(config.WORKTREES), text,
+                         "абсолютного пути в тексте части быть не должно")
 
     def test_review_form_is_part_of_the_package(self):
         """Единственное чтение, которое пакет обязан снять: форма вердикта."""
@@ -845,15 +986,14 @@ class CmdRunReviewPackageTest(unittest.TestCase):
 
         _, argv = self.run_agent("review")
 
-        # Не требуем, чтобы `templates/REVIEW.md` шёл в списке первым: сама
-        # запись `run_agent` кладёт на диск маркер `tasks/<id>/REVIEW.md`
-        # (обязательный артефакт роли reviewer, SPEC 01M1RQ12JVHE3PQYDFV1XPSTQ3,
-        # требование 3) — он тоже честно попадает в `from_worktree` и может
-        # стоять раньше по алфавиту; поведение, которое ловит этот тест
-        # (расхождение источника журналируется), от порядка не зависит.
+        # Форма вердикта — единственный компонент, чей откат ведёт в
+        # рабочее дерево ПУЛЬТА, поэтому список точен (R1-F3, REVIEW.md
+        # итерация 1): маркер `tasks/<id>/REVIEW.md`, который кладёт на
+        # диск сама запись `run_agent`, читается из рабочего каталога шага
+        # и уезжает в журнал полем `artifact_source`, а не этой строкой.
         note = self.journal_details("ревью-пакет собран")[0]
-        self.assertIn("не из ветки, а из рабочего дерева", note)
-        self.assertIn("templates/REVIEW.md", note)
+        self.assertIn("не из ветки, а из рабочего дерева: templates/REVIEW.md",
+                      note)
         self.assertIn(review.WORKTREE_NOTE.strip(), self.prompt(),
                       "источник назван и в самом пакете, не только в журнале")
 
@@ -1040,6 +1180,15 @@ class IncrementalReviewPackageTest(ReviewPackageTest):
     новыми параметрами вместо стандартных."""
 
     PREV_SHA = "abc1234"
+    OWN_PATH = "orchestrator/artel.py"
+
+    def setUp(self):
+        super().setUp()
+        # Итерация > 1 у ветки с собственным коммитом: инкремент
+        # ограничивается его путями (SPEC 01M2ZZDJ5ECR4ZYV23BKFCNFXM,
+        # требование 6). Пустой перечень — отдельный сценарий требований
+        # 7-8, он живёт в `EmptyIncrementPackageTest` ниже.
+        self.git.own_paths = (self.OWN_PATH,)
 
     def build_incremental(self, iteration: int = 2, prev_sha: str | None = None
                           ) -> dict:
@@ -1049,17 +1198,87 @@ class IncrementalReviewPackageTest(ReviewPackageTest):
             else prev_sha)
 
     def test_diff_and_stat_are_taken_against_the_previous_verdict_sha(self):
+        """Диапазон — от sha вердикта, а пути — только собственных коммитов
+        ветки; исключение `tasks/<id>/` (tasks/01M1RA0N6FCFEQBB82K58GM12X,
+        AC-2) действует и здесь, причём одним и тем же pathspec для diff и
+        для `--stat` (SPEC 01M2ZZDJ5ECR4ZYV23BKFCNFXM, требование 6).
+
+        Ловит мутацию: pathspec инкремента собран только для показанного
+        diff, а `--stat` оставлен на всём дереве — стат-список назвал бы
+        ревьюверу файлы, которых в diff нет (например, пришедшие
+        подтяжкой main).
+        """
         self.build_incremental()
 
-        # tasks/01M1RA0N6FCFEQBB82K58GM12X (AC-2): исключение `tasks/<id>/`
-        # действует и на инкрементальный diff/stat, не только на полный.
+        pathspec = ("--", f":(literal){self.OWN_PATH}",
+                    f":!tasks/{self.TASK}/")
+        self.assertEqual(
+            [c for c in self.git.calls if c[0] == "diff"],
+            [["diff", "--stat", f"{self.PREV_SHA}...{self.BRANCH}", *pathspec],
+             ["diff", f"{self.PREV_SHA}...{self.BRANCH}", *pathspec]],
+            "iteration > 1 должен сравнивать не с main, а с sha "
+            "предыдущего вердикта, и только по путям своих коммитов")
+
+    def test_own_commit_paths_are_asked_from_the_base_of_the_verdict(self):
+        """Перечень собственных коммитов спрашивается обходом по первому
+        родителю без merge-коммитов на диапазоне `<база>..<ветка>`.
+
+        Ловит мутацию: обход снят `--first-parent`/`--no-merges` либо
+        диапазон взят от main — в pathspec приедут пути, пришедшие
+        подтяжкой main, и инкремент снова станет «что угодно с базы»; снят
+        `--no-renames` — перечень потеряет прежнее имя переименованного
+        файла (R1-F1, REVIEW.md итерация 1).
+        """
+        self.build_incremental()
+
+        self.assertIn(
+            ["log", "--first-parent", "--no-merges", "--no-renames",
+             "--format=", "--name-only", "-z",
+             f"{self.PREV_SHA}..{self.BRANCH}"],
+            self.git.calls)
+
+    def test_unlisted_own_commits_degrade_to_the_full_diff_from_the_base(self):
+        """git не ответил на перечень собственных коммитов — показывается
+        весь diff от базы вердикта, и заметка называет его полным, а
+        причину — текстом (SPEC 01M2ZZDJ5ECR4ZYV23BKFCNFXM, требование 6).
+
+        Ловит мутацию: сбой перечня молча даёт пустой pathspec или оставляет
+        заметку «инкрементальный, только свои коммиты» — ревьювер прочитал
+        бы полный diff как инкремент итерации и вернул бы замечания по
+        чужим, уже принятым правкам.
+        """
+        def broken_log(*args):
+            if args and args[0] == "log":
+                return subprocess.CompletedProcess(list(args), 1, "",
+                                                   "fatal: bad revision")
+            return self.git(*args)
+
+        with mock.patch.object(gitcmd, "git", broken_log):
+            package = self.build_incremental()
+
+        self.assertEqual(package["not_collected"], "fatal: bad revision",
+                         "причина уезжает в журнал и в алерт")
+        self.assertIn("Diff выше — полный", package["text"])
+        self.assertIn("перечень собственных коммитов ветки не получен",
+                      package["text"])
         exclude = ("--", ".", f":!tasks/{self.TASK}/")
         self.assertEqual(
             [c for c in self.git.calls if c[0] == "diff"],
             [["diff", "--stat", f"{self.PREV_SHA}...{self.BRANCH}", *exclude],
              ["diff", f"{self.PREV_SHA}...{self.BRANCH}", *exclude]],
-            "iteration > 1 должен сравнивать не с main, а с sha "
-            "предыдущего вердикта")
+            "показан весь diff от базы вердикта, а не от main и не по "
+            "путям, которых не удалось перечислить")
+
+    def test_note_names_the_base_and_the_branch_head(self):
+        """Заметка под diff'ом называет базу и голову ветки (требование 6).
+
+        Ловит мутацию: заметка осталась без имени ветки — ревьювер не
+        воспроизведёт диапазон, по которому собран инкремент.
+        """
+        text = self.build_incremental()["text"]
+
+        self.assertIn(f"от sha предыдущего вердикта ({self.PREV_SHA}) до "
+                      f"HEAD ветки {self.BRANCH}", text)
 
     def test_package_names_the_full_diff_command(self):
         """Требование 5: явная инструкция для полного diff по запросу."""
@@ -1099,6 +1318,298 @@ class IncrementalReviewPackageTest(ReviewPackageTest):
             [["diff", "--stat", f"{config.MAIN_BRANCH}...{self.BRANCH}",
               *exclude],
              ["diff", f"{config.MAIN_BRANCH}...{self.BRANCH}", *exclude]])
+
+
+class EmptyIncrementPackageTest(ReviewPackageTest):
+    """Пустой инкремент разбирается на два исхода (SPEC
+    01M2ZZDJ5ECR4ZYV23BKFCNFXM, требования 7-8): дефект (правки с базы
+    есть) и штатная пустота (правок нет). До этой задачи оба выглядели для
+    ревьювера одинаково — «(изменений нет)» без единого слова о причине, и
+    алерт не срабатывал ни в одном из них.
+
+    Наследует фикстуру `ReviewPackageTest` (тот же `FakeGit`, те же патчи
+    путей) — тем же приёмом, что `IncrementalReviewPackageTest` выше;
+    собственные тесты собирают пакет напрямую с параметрами итерации > 1."""
+
+    PREV_SHA = "abc1234"
+
+    def setUp(self):
+        super().setUp()
+        # Собственных коммитов с базы вердикта у ветки нет — только
+        # подтяжка main merge-коммитом: инкремент пуст по построению.
+        self.git.own_paths = ()
+
+    def build_incremental(self) -> dict:
+        return review.review_package(
+            self.conn, self.TASK, "Ревью-пакет", self.BRANCH,
+            iteration=2, prev_sha=self.PREV_SHA)
+
+    def diff_calls(self) -> list:
+        return [c for c in self.git.calls if c[0] == "diff"]
+
+    def test_empty_increment_with_edits_shows_the_full_diff_from_the_base(self):
+        """Инкремент пуст, а diff от базы вердикта не пуст — показывается
+        полный diff от базы вердикта, причина названа дословно.
+
+        Ловит мутацию: пустой инкремент отдаётся ревьюверу как есть
+        («изменений нет») — ровно тот дефект 20.09, из-за которого пакет
+        обеих задач сообщил «строк diff 0» при пяти правленых файлах.
+        """
+        package = self.build_incremental()
+
+        self.assertIn("diff --git a b", package["text"],
+                      "полный diff от базы вердикта обязан быть показан")
+        self.assertIn(review.EMPTY_INCREMENT_FALLBACK_REASON, package["text"])
+        self.assertEqual(package["fallback"],
+                         review.EMPTY_INCREMENT_FALLBACK_REASON)
+        self.assertEqual(
+            self.diff_calls()[-1],
+            ["diff", f"{self.PREV_SHA}...{self.BRANCH}", "--", ".",
+             f":!tasks/{self.TASK}/"],
+            "полный diff отката считается от базы вердикта, не от main")
+
+    def test_fallback_reaches_the_alert_channel_and_the_journal(self):
+        """Причина отката уезжает и в `not_collected` (канал алерта
+        `runner._build_prompt`), и в запись журнала — своей формулировкой,
+        не как «diff не собран».
+
+        Ловит мутацию: причина доносится только текстом пакета — дефект
+        этого класса снова станет невидимым и для Оператора (алерта нет),
+        и для журнала.
+        """
+        package = self.build_incremental()
+
+        self.assertEqual(package["not_collected"],
+                         review.EMPTY_INCREMENT_FALLBACK_REASON,
+                         "алерт заводится по непустому not_collected")
+        note = review.package_note(package)
+        self.assertIn(f"откат diff: {review.EMPTY_INCREMENT_FALLBACK_REASON}",
+                      note)
+        self.assertNotIn("diff не собран", note,
+                         "diff собран — слово «не собран» остаётся за "
+                         "настоящими сбоями git")
+
+    def test_empty_increment_without_edits_is_a_normal_outcome(self):
+        """Инкремент пуст И diff от базы вердикта пуст — пакет прямо
+        говорит, что правок нет; ни отката, ни алерта.
+
+        Ловит мутацию: ветка «инкремент пуст» одна на оба случая — штатная
+        итерация без правок стала бы заводить Оператору warning, а откат
+        перестал бы отличаться от неё.
+        """
+        self.git.diff = ""
+        self.git.stat = ""
+
+        package = self.build_incremental()
+
+        self.assertIn("правок с предыдущего вердикта нет", package["text"])
+        self.assertEqual(package["fallback"], "")
+        self.assertEqual(package["not_collected"], "",
+                         "штатная пустота — не повод для алерта")
+
+    def test_failed_full_diff_of_the_fallback_is_not_read_as_no_edits(self):
+        """git отказал на самой сверке «а есть ли правки с базы» — это
+        несобранный diff, а не доказательство, что правок нет.
+
+        Ловит мутацию: сбой второй пары вызовов трактуется как пустой
+        полный diff — пакет соврал бы «правок с предыдущего вердикта нет»
+        при неизвестном состоянии ветки, и алерт бы не завёлся.
+        """
+        calls = []
+
+        def broken_full_diff(*args):
+            if args and args[0] == "diff" and "." in args:
+                calls.append(list(args))
+                return subprocess.CompletedProcess(list(args), 1, "",
+                                                   "fatal: bad revision")
+            return self.git(*args)
+
+        with mock.patch.object(gitcmd, "git", broken_full_diff):
+            package = self.build_incremental()
+
+        self.assertTrue(calls, "фикстура не поймала ни одного полного diff")
+        self.assertEqual(package["not_collected"], "fatal: bad revision")
+        self.assertNotIn("правок с предыдущего вердикта нет", package["text"])
+
+
+class OwnCommitPathsTest(RealGitSandbox):
+    """`review.own_commit_paths` на НАСТОЯЩЕМ git-репозитории (SPEC
+    01M2ZZDJ5ECR4ZYV23BKFCNFXM, требование 6): предмет проверки — какие
+    коммиты считает своими обход `--first-parent --no-merges` у ветки,
+    подтянувшей main merge-коммитом; заглушкой `gitcmd.git` такой граф
+    не изобразить."""
+
+    BRANCH = "task/t001-revyu-paket"
+    DEV_FILE = "orchestrator/alpha.py"
+    MAIN_FILE = "orchestrator/beta.py"
+    RENAMED_FILE = "orchestrator/alpha_renamed.py"
+
+    def commit(self, branch: str, rel: str, text: str) -> str:
+        self.checkout(branch)
+        path = self.root.joinpath(*rel.split("/"))
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text, encoding="utf-8")
+        self.git("add", "--", rel)
+        self.git("commit", "-q", "-m", f"правка {rel}")
+        sha = self.git("rev-parse", "HEAD").strip()
+        self.checkout(config.MAIN_BRANCH)
+        return sha
+
+    def setUp(self):
+        super().setUp()
+        self.git("branch", self.BRANCH, config.MAIN_BRANCH)
+        self.base = self.commit(self.BRANCH, self.DEV_FILE, "база\n")
+
+    def pull_main(self) -> None:
+        self.commit(config.MAIN_BRANCH, self.MAIN_FILE, "чужая правка\n")
+        self.checkout(self.BRANCH)
+        self.git("merge", "-q", "--no-ff", "-m", "подтяжка main",
+                 config.MAIN_BRANCH)
+        self.checkout(config.MAIN_BRANCH)
+
+    def test_own_commit_is_listed(self):
+        """Правка разработчика после базы — в перечне.
+
+        Ловит мутацию: диапазон перевёрнут (`<ветка>..<база>`) — перечень
+        окажется пустым, и инкремент потеряет именно то, ради чего
+        ревьювер читает пакет.
+        """
+        self.commit(self.BRANCH, self.DEV_FILE, "правка итерации 2\n")
+
+        paths, failed = review.own_commit_paths(self.base, self.BRANCH)
+
+        self.assertEqual(failed, "")
+        self.assertEqual(paths, [self.DEV_FILE])
+
+    def test_paths_brought_by_a_main_pull_are_not_listed(self):
+        """Файл, пришедший merge-коммитом подтяжки main, своим не считается.
+
+        Ловит мутацию: обход снят `--first-parent` или merge-коммиты не
+        исключены — путь из main приедет в перечень, и «инкремент»
+        покажет ревьюверу чужие правки как правки итерации.
+        """
+        self.commit(self.BRANCH, self.DEV_FILE, "правка итерации 2\n")
+        self.pull_main()
+
+        paths, failed = review.own_commit_paths(self.base, self.BRANCH)
+
+        self.assertEqual(failed, "")
+        self.assertEqual(paths, [self.DEV_FILE],
+                         "изменения main в собственные коммиты не входят")
+
+    def test_only_a_main_pull_since_the_base_leaves_the_list_empty(self):
+        """С базы у ветки нет ни одного собственного коммита — перечень
+        пуст, а не «всё дерево».
+
+        Ловит мутацию: пустой перечень трактуется как «ограничений нет» —
+        пакет показал бы полный diff молча, без признака пустого
+        инкремента, и откат требования 7 не сработал бы.
+        """
+        self.pull_main()
+
+        paths, failed = review.own_commit_paths(self.base, self.BRANCH)
+
+        self.assertEqual((paths, failed), ([], ""))
+
+    def test_a_rename_lists_both_sides_of_the_pair(self):
+        """Собственный коммит переименовал файл — в перечне ОБА пути пары,
+        прежний и новый (R1-F1, REVIEW.md итерация 1, major).
+
+        Ловит мутацию: из `git log` убран `--no-renames` — git отдаст
+        только новое имя, прежний путь в pathspec инкремента не попадёт, и
+        ревьювер увидит переименованный модуль как новый файл целиком, не
+        увидев ни строки об исчезновении старого (для файла из `tests/`
+        это прямо прячет удалённые ассерты). Инкремент при этом не пуст,
+        поэтому откат требования 7 такой пропуск не ловит.
+        """
+        self.checkout(self.BRANCH)
+        self.git("mv", self.DEV_FILE, self.RENAMED_FILE)
+        self.git("commit", "-q", "-m", "переименование модуля")
+        self.checkout(config.MAIN_BRANCH)
+
+        paths, failed = review.own_commit_paths(self.base, self.BRANCH)
+
+        self.assertEqual(failed, "")
+        self.assertEqual(paths, [self.DEV_FILE, self.RENAMED_FILE],
+                         "пре-образ переименования обязан остаться в перечне")
+
+    def test_a_renamed_increment_shows_the_same_stat_as_the_full_diff(self):
+        """Итог для ревьювера: стат-список инкремента по этому перечню
+        совпадает со стат-списком полного diff от базы — переименование
+        показано как переименование, а не как новый файл.
+
+        Ловит мутацию: pathspec собран по неполному перечню (без прежнего
+        имени) — `git diff` перестанет видеть пару и покажет новый файл
+        добавленным целиком, а старый не покажет вовсе; сравнение со
+        стат-списком полного diff покраснеет.
+        """
+        self.checkout(self.BRANCH)
+        self.git("mv", self.DEV_FILE, self.RENAMED_FILE)
+        self.git("commit", "-q", "-m", "переименование модуля")
+        self.checkout(config.MAIN_BRANCH)
+        paths, _ = review.own_commit_paths(self.base, self.BRANCH)
+
+        incremental, _, _ = review.git_diff_part(
+            self.base, self.BRANCH, "--stat",
+            pathspec=tuple(f":(literal){p}" for p in paths))
+        full, _, _ = review.git_diff_part(self.base, self.BRANCH, "--stat",
+                                          pathspec=(".",))
+
+        self.assertEqual(incremental, full)
+        self.assertIn(self.DEV_FILE.rsplit("/", 1)[-1], incremental,
+                      "исчезновение прежнего имени обязано быть видно")
+
+    def test_git_failure_is_a_named_reason_not_an_exception(self):
+        """Неизвестная ревизия базы — причина строкой, не трейсбек.
+
+        Ловит мутацию: исход `git log` не проверяется — пустой stdout
+        отказавшей команды стал бы «собственных коммитов нет», и пакет
+        молча ушёл бы в откат вместо честного «diff не собран».
+        """
+        paths, failed = review.own_commit_paths("0" * 40, self.BRANCH)
+
+        self.assertEqual(paths, [])
+        self.assertTrue(failed, "причина отказа git обязана быть названа")
+
+
+class ArtifactSourcesNoteTest(unittest.TestCase):
+    """`review.artifact_sources_note` — источник каждого артефакта задачи
+    одной строкой для журнала (SPEC 01M2ZZDJ5ECR4ZYV23BKFCNFXM,
+    требование 9, AC-10)."""
+
+    def note(self, **found) -> str:
+        return review.artifact_sources_note(
+            {f"tasks/T001/{name}": value for name, value in found.items()})
+
+    def test_three_sources_are_named_and_grouped(self):
+        """Файл из ветки, файл из рабочего каталога шага и ненайденный
+        названы каждый своим источником.
+
+        Ловит мутацию: источник пишется только для прочитанных файлов —
+        по журналу «пакет без SPEC и PLAN» перестал бы отличаться от
+        «пакета с ними», то есть ровно от дефекта, из-за которого 25
+        задач подряд ревьюились без артефактов в пакете.
+        """
+        note = self.note(**{"SPEC.md": ("текст", ""),
+                            "PLAN.md": ("текст", review.STEP_WORKDIR_NOTE),
+                            "REVIEW.md": (None, "(не показан: …)")})
+
+        self.assertIn(f"{review.ARTIFACT_SOURCE_BRANCH} — SPEC.md", note)
+        self.assertIn(f"{review.ARTIFACT_SOURCE_WORKDIR} — PLAN.md", note)
+        self.assertIn(f"{review.ARTIFACT_SOURCE_MISSING} — REVIEW.md", note)
+
+    def test_files_of_one_source_share_a_group(self):
+        """Два файла одного источника — одна группа, а не два повтора
+        названия источника.
+
+        Ловит мутацию: группировка снята — строка журнала растёт линейно
+        по числу артефактов и перестаёт читаться глазами.
+        """
+        note = self.note(**{"SPEC.md": ("текст", ""),
+                            "PLAN.md": ("текст", "")})
+
+        self.assertEqual(note, f"{review.ARTIFACT_SOURCE_BRANCH} — "
+                               f"SPEC.md, PLAN.md")
 
 
 class AnswerRelsTest(unittest.TestCase):
@@ -1185,7 +1696,12 @@ class AnswerComponentsInReviewPackageTest(unittest.TestCase):
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
         self.root = Path(tmp.name)
+        # `WORKTREES` — в подмене вместе с остальным: откат чтения трёх
+        # артефактов задачи смотрит в рабочий каталог шага (SPEC
+        # 01M2ZZDJ5ECR4ZYV23BKFCNFXM, требование 1), и без патча он ушёл бы
+        # в `.artel/worktrees` настоящего репозитория пульта.
         for attr, value in (("ROOT", self.root), ("TASKS", self.root / "tasks"),
+                            ("WORKTREES", self.root / ".artel" / "worktrees"),
                             ("DB", self.root / ".artel" / "state.db")):
             patcher = mock.patch.object(config, attr, value)
             patcher.start()
@@ -1314,10 +1830,49 @@ class PackageNoteDiffTypeTest(unittest.TestCase):
 
     def test_package_without_diff_type_keeps_the_old_note_shape(self):
         """Пакет, собранный вручную без этих полей (старые тесты), не падает
-        и не получает лишнего текста."""
+        и не получает лишнего текста.
+
+        Ловит мутацию: новые поля записи (источник артефактов, база
+        инкремента) читаются из словаря по индексу, а не через `.get` —
+        любой вызывающий код, собравший пакет без них, получил бы
+        `KeyError` вместо строки журнала.
+        """
         note = self.note_of()
 
         self.assertNotIn("итерация", note)
+        self.assertNotIn("артефакты задачи", note)
+        self.assertNotIn("база инкремента", note)
+
+    def test_artifact_source_and_increment_base_land_in_the_note(self):
+        """Источник артефактов задачи и база инкремента — в записи
+        «ревью-пакет собран» (SPEC 01M2ZZDJ5ECR4ZYV23BKFCNFXM, требование
+        9, AC-10).
+
+        Ловит мутацию: в запись добавлен только источник артефактов, а база
+        инкремента забыта (или наоборот) — дефект «diff собран не от того
+        sha» снова ловится глазами в промпте, а не по `log <id>`.
+        """
+        note = self.note_of(diff_type="инкрементальный", iteration=2,
+                            artifact_source="артефактная ветка — SPEC.md",
+                            increment_base="abc1234")
+
+        self.assertIn("артефакты задачи: артефактная ветка — SPEC.md", note)
+        self.assertIn("база инкремента abc1234", note)
+
+    def test_first_iteration_note_carries_no_increment_base(self):
+        """На итерации 1 базы инкремента не существует — пустое поле в
+        строку не печатается.
+
+        Ловит мутацию: база пишется безусловно (например, подставляется
+        merge-base полного diff) — в журнале появится sha, который базой
+        инкремента не является.
+        """
+        note = self.note_of(diff_type="полный", iteration=1,
+                            artifact_source="артефактная ветка — SPEC.md",
+                            increment_base="")
+
+        self.assertIn("артефакты задачи", note)
+        self.assertNotIn("база инкремента", note)
 
 
 class GitDiffPartPathspecTest(unittest.TestCase):
@@ -1352,8 +1907,10 @@ class GitDiffPartPathspecTest(unittest.TestCase):
 
 
 class PreviousVerdictShaTest(TmpRootTest):
-    """`previous_verdict_sha` читает журнал hash-фиксации (T021), не изобретая
-    новый учёт sha (SPEC требование 3).
+    """`previous_verdict_sha` читает журнал задачи, не изобретая новый учёт
+    sha (SPEC требование 3), и берёт базу по ЯКОРЮ ВЕРДИКТА — переходу
+    `state -> in_dev` с detail «замечания ревью, итерация …» (SPEC
+    01M2ZZDJ5ECR4ZYV23BKFCNFXM, требование 4).
 
     Фикстуры несут ОБА поля записи (`sha=` — фиксационный sha артефактного
     репозитория target'а, `код=` — sha кодовой ветки, разными значениями)
@@ -1393,6 +1950,12 @@ class PreviousVerdictShaTest(TmpRootTest):
                      f"target=dogfood, sha={fixation_sha}, чисто=True, "
                      f"код={code_sha}")
 
+    def verdict_transition(self, iteration: int = 1) -> None:
+        """Якорь вердикта: тот же переход и тот же detail, что пишет
+        `orchestrator/fsm_advance.py::_review_changes_requested`."""
+        store.journal(self.conn, self.TASK, "fsm", "state -> in_dev",
+                     f"замечания ревью, итерация {iteration}")
+
     def test_no_fixation_history_is_empty(self):
         self.assertEqual(review.previous_verdict_sha(self.conn, self.TASK), "")
 
@@ -1402,24 +1965,79 @@ class PreviousVerdictShaTest(TmpRootTest):
 
         self.assertEqual(review.previous_verdict_sha(self.conn, self.TASK), "")
 
-    def test_second_to_last_fixation_is_the_previous_verdict(self):
-        """review -> in_dev (вердикт) фиксирует sha_a; in_dev -> review
-        (правка) фиксирует sha_b, уже текущий `fixed_sha`. Искомый —
-        предпоследний, sha_a, не последний. `fixation_sha` каждой записи —
-        отдельное значение, чтобы совпадение с ним доказывало регресс.
+    def test_fixation_right_after_the_verdict_transition_is_the_base(self):
+        """Якорь — переход `state -> in_dev` по вердикту; база — `код=`
+        записи фиксации, которую `set_state` пишет непосредственно за ним.
+        `fixation_sha` каждой записи — отдельное значение, чтобы совпадение
+        с ним доказывало регресс.
 
         Ловит мутацию: previous_verdict_sha продолжает читать `sha=`
         вместо `код=` — result совпадёт с fixation_sha, не с code_sha.
         """
         self.fixate("1111111", fixation_sha="8888888")  # in_dev -> review, итерация 1
-        self.fixate("2222222", fixation_sha="7777777")  # review -> in_dev, вердикт итерации 1
-        self.fixate("3333333", fixation_sha="6666666")  # in_dev -> review, итерация 2 (текущий)
+        self.verdict_transition(iteration=1)
+        self.fixate("2222222", fixation_sha="7777777")  # вердикт итерации 1
+        self.fixate("3333333", fixation_sha="6666666")  # in_dev -> review, итерация 2
 
         result = review.previous_verdict_sha(self.conn, self.TASK)
         self.assertEqual(result, "2222222")
         self.assertNotEqual(result, "7777777",
                             "вернулся фиксационный sha артефактного "
                             "репозитория target'а вместо sha кодовой ветки")
+
+    def test_extra_fixations_between_iterations_do_not_shift_the_base(self):
+        """Между вердиктом и входом в review итерации 2 лежат лишние записи
+        фиксации (автокоммит артефактов, чекпоинт, подтяжка main) — база
+        обязана остаться sha вердикта (SPEC 01M2ZZDJ5ECR4ZYV23BKFCNFXM,
+        требование 4).
+
+        Ловит мутацию: база берётся предпоследней записью «sha
+        зафиксирован» (прежнее `entries[-2]`) — вернётся sha чекпоинта
+        «4444444», и пакет соберёт diff не от того коммита, на котором
+        вынесен вердикт (дефект 20.09: «строк diff 0» при пяти правленых
+        файлах).
+        """
+        self.verdict_transition(iteration=1)
+        self.fixate("2222222")                 # вердикт итерации 1
+        self.fixate("3333333")                 # автокоммит артефактов
+        self.fixate("4444444")                 # чекпоинт
+        self.fixate("5555555")                 # подтяжка main
+
+        self.assertEqual(review.previous_verdict_sha(self.conn, self.TASK),
+                         "2222222")
+
+    def test_the_latest_verdict_transition_wins(self):
+        """Итерация 3: якорей в журнале два — базой обязан стать sha
+        ПОСЛЕДНЕГО вердикта.
+
+        Ловит мутацию: поиск якоря останавливается на первом найденном
+        переходе — ревьювер получит инкремент за две итерации сразу, и
+        свои закрытые замечания увидит заново.
+        """
+        self.verdict_transition(iteration=1)
+        self.fixate("2222222")
+        self.fixate("3333333")
+        self.verdict_transition(iteration=2)
+        self.fixate("4444444")
+        self.fixate("5555555")
+
+        self.assertEqual(review.previous_verdict_sha(self.conn, self.TASK),
+                         "4444444")
+
+    def test_journal_without_the_verdict_transition_has_no_base(self):
+        """Переходов по вердикту в журнале нет вовсе (задача заведена до
+        этой правки, вход в review не через вердикт) — базы нет.
+
+        Ловит мутацию: якорь ищется «по наличию хотя бы двух фиксаций», а
+        не по переходу — вернётся чужой sha там, где базы не существует, и
+        деградация на полный diff не наступит.
+        """
+        self.fixate("1111111")
+        store.journal(self.conn, self.TASK, "fsm", "state -> in_dev",
+                     "план принят")
+        self.fixate("2222222")
+
+        self.assertEqual(review.previous_verdict_sha(self.conn, self.TASK), "")
 
     def test_unrecognisable_sha_is_treated_as_missing(self):
         """git не ответил в момент той фиксации (T021, вырожденный случай) —
@@ -1429,9 +2047,24 @@ class PreviousVerdictShaTest(TmpRootTest):
         `код=` в записи с `код=—` — вернёт «9999999» вместо пустой строки.
         """
         self.fixate("1111111")
+        self.verdict_transition(iteration=1)
         store.journal(self.conn, self.TASK, "fsm", "sha зафиксирован",
                      "target=dogfood, sha=9999999, чисто=False, код=—")
         self.fixate("3333333")
+
+        self.assertEqual(review.previous_verdict_sha(self.conn, self.TASK), "")
+
+    def test_anchor_without_any_following_fixation_has_no_base(self):
+        """Якорь есть, а записи фиксации за ним нет (журнал обрезан
+        retention'ом, переход не довёл фиксацию) — пустая строка, не
+        исключение.
+
+        Ловит мутацию: код берёт `rows[anchor + 1]` без проверки, что это
+        запись фиксации, или падает `IndexError` на последней записи
+        журнала — шаг ревью умер бы трейсбеком до записи о пакете.
+        """
+        self.fixate("1111111")
+        self.verdict_transition(iteration=1)
 
         self.assertEqual(review.previous_verdict_sha(self.conn, self.TASK), "")
 
