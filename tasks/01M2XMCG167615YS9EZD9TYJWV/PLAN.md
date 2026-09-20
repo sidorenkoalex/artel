@@ -2,7 +2,7 @@
 task: 01M2XMCG167615YS9EZD9TYJWV
 type: plan
 author_role: developer
-status: draft
+status: ready
 schema_version: 5
 ---
 
@@ -69,18 +69,37 @@ schema_version: 5
 ## Шаги
 
 1. `orchestrator/notes.py`: константы `DOC_COMMIT_KIND`,
-   `DOC_COMMIT_CONFIG_PATHS`; `_doc_commit_path_refusal`,
+   `DOC_COMMIT_CONFIG_PATHS`, `DOC_COMMIT_FOREIGN_REFUSAL`,
+   `DOC_COMMIT_BASE_REFUSAL`; `_doc_commit_path_refusal`,
    `_doc_commit_prefix`, `_blob_sha`, `_build_doc_commit`,
-   `_target_rel`; ветки `doc-commit` в `_fetch_and_build`,
+   `_target_rel`, `_write_doc`; ветки `doc-commit` в `_fetch_and_build`,
    `_commit_and_push`, `_commit_message`; тексты удержания/отказа в
    `_run` по виду записи и возврат sha; `_parse_doc_commit_args`,
-   `cmd_doc_commit`. Докстринг модуля — абзац про `doc-commit`.
+   `_read_source_file`, `cmd_doc_commit`. Докстринг модуля — абзац про
+   `doc-commit`.
 2. `orchestrator/artel.py`: запись `"doc-commit"` в таблице
    диспетчера, строка в справке команд и в описании модуля `notes`.
 3. `tests/test_doc_commit.py`: стенд `DocCommitSandbox(RealGitSandbox)`
    с bare origin (docs/backlog.md, docs/roadmap.md, roles.yaml) и
-   тесты AC-1..AC-9 плюс чистые тесты `_doc_commit_path_refusal`.
+   тесты AC-1..AC-9 плюс чистые тесты `_doc_commit_path_refusal`,
+   `_commit_message`, `_target_rel`, и углы: CRLF байт-в-байт, отказ
+   «содержимое уже совпадает», путь, появившийся в origin после пина,
+   флаш без исходного `--from`-файла, дисциплина оппортунистического
+   флаша под окном.
 4. `python3 scripts/codebase_map.py` тем же коммитом (правка `*.py`).
+
+Сделано одним коммитом `ed3b7854` в ветке задачи. Прогоны (передний
+план, `-p no:cacheprovider -p timeout -o timeout=120`):
+
+| Набор | Итог |
+|---|---|
+| `tasks/01M2XMCG167615YS9EZD9TYJWV/acceptance_tests/` | 13 passed |
+| `tests/test_notes.py` + `tests/test_artel_role_restricted_commands.py` | 47 passed (без правок) |
+| `tests/test_doc_commit.py` | 28 passed |
+| `tests/test_doctor.py` + `tests/test_codebase_map.py` | 155 passed |
+
+`scripts/guard.py` по PLAN.md/SPEC.md — ок; заявка мутации есть у всех
+тестов нового файла (`guard.test_functions_without_mutation_claim` → []).
 
 ## Покрытие требований
 
@@ -127,9 +146,13 @@ schema_version: 5
   Цикла нет: `runner` не импортирует `notes` и `doctor`; проверено
   импортом пакета при прогоне тестов.
 - Сверка базы отказывает и в случае «файл есть в HEAD, удалён в
-  origin» (blob-sha различаются) — это трактуется как «изменился в
-  origin после пина», сначала `pin-update`. Сознательно: удаление —
-  тоже чужая правка.
+  origin» и в обратном «файла нет в HEAD, появился в origin» (blob-sha
+  различаются) — оба трактуются как «изменился в origin после пина»,
+  сначала `pin-update`. Сознательно: удаление и чужой новый файл —
+  тоже чужая правка (второй случай покрыт тестом).
+- Сверка базы читает HEAD главной копии одним `git rev-parse` в
+  `config.ROOT` — только чтение, требование 2 не нарушается (снимок
+  HEAD/ветки/`git status` до и после сверяется тестом).
 - Удержанная запись `doc-commit` при флаше после сдвига origin по тому
   же файлу отказывает сверкой базы и остаётся висеть (как устаревшая
   заметка `note`) — Оператор делает `pin-update` и повторяет флаш.
