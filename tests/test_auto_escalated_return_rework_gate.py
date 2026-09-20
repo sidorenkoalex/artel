@@ -136,6 +136,46 @@ class RoleStepSinceStateEntryTest(SchemaConnTmpRootTest):
         self.assertTrue(ran)
         self.assertIsNone(detail)
 
+    def test_spec_gate_return_without_an_analyst_step_blocks(self):
+        """SPEC 01M2YWRB9HWW99R57HWGP2M7MQ, требование 6: запись возврата
+        `reject` с гейта SPEC — полноценный анкер рубежа, как и возврат
+        из ревью: пред-advance не имеет права увести задачу обратно на
+        `spec_gate` по тому же самому, только что отклонённому SPEC.
+
+        Ловит мутацию: detail «возврат из spec_gate: …» вписан в
+        `_ESCALATED_RETURN_DETAILS` или иначе пропускается при поиске
+        анкера — рубеж отдаст `(True, ...)`, и analyst не получит ни
+        одного шага на переписывание SPEC.
+        """
+        self._journal("fsm", "state -> spec_gate", "SPEC готов — ждёт approve")
+        self._journal("operator", "state -> spec_writing",
+                      "возврат из spec_gate: критерий непроверяем")
+
+        ran, detail = auto._role_step_since_state_entry(
+            self.conn, TASK_ID, "spec_writing", "analyst")
+
+        self.assertFalse(ran)
+        self.assertEqual(detail, "возврат из spec_gate: критерий непроверяем")
+
+    def test_analyst_step_after_the_spec_gate_return_unblocks(self):
+        """Вторая половина требования 6: рубеж держит ровно один шаг роли
+        — после завершённого шага analyst переход на гейт снова возможен.
+
+        Ловит мутацию: шаг роли ищется ДО анкера, а не после (перепутан
+        срез `rows[last_entry + 1:]`) — «шага после возврата не было»
+        осталось бы истиной навсегда, и задача топталась бы в
+        `spec_writing`, никогда не возвращаясь на гейт.
+        """
+        self._journal("fsm", "state -> spec_gate", "SPEC готов — ждёт approve")
+        self._journal("operator", "state -> spec_writing",
+                      "возврат из spec_gate: критерий непроверяем")
+        self._journal("analyst", "agent run finished", "rc=0")
+
+        ran, _detail = auto._role_step_since_state_entry(
+            self.conn, TASK_ID, "spec_writing", "analyst")
+
+        self.assertTrue(ran)
+
 
 if __name__ == "__main__":
     unittest.main()

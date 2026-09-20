@@ -470,6 +470,49 @@ class ReturnReasonComponentTest(BriefUnitTest):
         self.assertIn(brief.RETURN_REASON_HEADER, text)
         self.assertIn("test_author: критерий неисполним тестом — AC-7", text)
 
+    def test_analyst_brief_carries_the_reason_of_a_spec_gate_reject(self):
+        """SPEC 01M2YWRB9HWW99R57HWGP2M7MQ, требование 5: приход в
+        `spec_writing` ИЗ `spec_gate` бывает единственным способом —
+        `reject` Оператора с причиной, и аналитик обязан её получить.
+
+        Ловит мутацию: `spec_gate` не учтён среди предшественников-
+        возвратов вовсе — `_return_context` отдаст `None`, и аналитик
+        станет переписывать SPEC, не зная, чем тот не подошёл (ровно
+        инцидент 20.09 из «Контекста» SPEC).
+        """
+        conn = store.db()
+        self.seed_state("fsm", "spec_gate", "SPEC готов — ждёт approve")
+        self.seed_state("operator", "spec_writing",
+                        "возврат из spec_gate: класс отказа требует зоны")
+
+        with mock.patch.object(gitcmd, "git", fake_git):
+            text = brief.analyst_map_component(conn, "T001")
+
+        self.assertIn(brief.RETURN_REASON_HEADER, text)
+        self.assertIn("возврат из spec_gate: класс отказа требует зоны", text)
+
+    def test_test_author_brief_unchanged_on_the_approve_out_of_spec_gate(self):
+        """Тот же SPEC, требование 5: `spec_gate` учтён ТОЛЬКО для
+        целевого `spec_writing` — из него же задача штатно уходит в
+        `tests_writing` по approve, и это первый вход, не возврат.
+
+        Ловит мутацию: `spec_gate` дописан в общий `_RETURN_TRIGGER_
+        STATES` вместо перечня по целевому состоянию — test_author на
+        ШТАТНОМ первом входе получил бы раздел «Причина возврата» с
+        бессодержательным «гейт SPEC пройден — приёмочные тесты до кода».
+        """
+        conn = store.db()
+        self.seed_state("fsm", "spec_gate", "SPEC готов — ждёт approve")
+        self.seed_state("operator", "tests_writing",
+                        "гейт SPEC пройден — приёмочные тесты до кода")
+
+        with mock.patch.object(gitcmd, "git", fake_git):
+            text = brief.test_author_answer_component(conn, "T001")
+
+        self.assertIsNone(
+            text, "штатный approve со spec_gate не даёт test_author ни "
+                  "раздела возврата, ни ответа — добавки нет вовсе")
+
 
 if __name__ == "__main__":
     unittest.main()
