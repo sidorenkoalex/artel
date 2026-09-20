@@ -19,7 +19,7 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from orchestrator import config, stack  # noqa: E402
+from orchestrator import config, models, stack  # noqa: E402
 from tests.sandbox import resilient_tmp_cleanup  # noqa: E402
 
 HIGH_VERSION = "999.999.999"
@@ -340,52 +340,80 @@ def _all_ok_run_with_freeze(freeze_output: str):
 
 
 TABLE_MODEL = "claude-fable-5-1"
-UNKNOWN_MODEL = "claude-test-model-vne-tablitsy"
+UNKNOWN_MODEL = "claude-test-model-vne-kataloga"
+CATALOG_MINIMUM = (2, 1, 251)
 
+# Карта исполнителей под тестом: `developer` и `reviewer` — agent-роли с
+# ярусами (строки моделей `check_stack()` получают только они),
+# `orchestrator`/`verifier` — не agent-роли, `analyst` — agent-роль с
+# ярусом, которого нет в локальном слое (строка отказа цепочки).
 ROLES_YAML = """roles:
   orchestrator:
     executor: system
     token_slot: artel-orchestrator
-    model: {developer}
   developer:
     executor: agent
     token_slot: artel-developer
     skills: [conventions-core]
-    model: {developer}
+    model_tier: strong
   reviewer:
     executor: agent
     token_slot: artel-reviewer
     skills: [conventions-core]
-    model: {reviewer}
+    model_tier: standard
   analyst:
     executor: agent
     token_slot: artel-analyst
     skills: [conventions-core]
+    model_tier: cheap
   verifier:
     executor: none
     token_slot: artel-verifier
-    model: {developer}
 token_fallback: artel-token
+"""
+
+CATALOG_YAML = """providers:
+  claude:
+    cli: claude
+    min_cli_version: 1.0.0
+    cost_from_cli: true
+    models:
+      {table_model}:
+        min_cli_version: 2.1.251
+        status: supported
+        list_price_usd_per_mtok:
+          input: 5.0
+          output: 25.0
+          cache_write: 6.25
+          cache_read: 0.50
+        price_date: 2026-09-20
+"""
+
+LOCAL_YAML = """tiers:
+  strong: {strong}
+  standard: {standard}
 """
 
 
 class ModelCliVerdictTest(unittest.TestCase):
-    """Требование 2 (SPEC 01M2XJKV84SQ9VEVR0VNVKDNGJ, AC-5): таблица
-    `MODEL_MIN_CLI_VERSION` и чистый вердикт `model_cli_verdict`."""
+    """Чистый вердикт `model_cli_verdict` (SPEC
+    01M2XJKV84SQ9VEVR0VNVKDNGJ, AC-5), с минимумом версии ПАРАМЕТРОМ из
+    каталога моделей: таблица `MODEL_MIN_CLI_VERSION` удалена задачей
+    01M3009Y9AGGY6ZCFA7H1HJ1TD (требование 10, AC-13)."""
 
-    def test_table_carries_the_incident_entry(self):
-        """Ловит мутацию: запись инцидента 19.09 удалена или записана
-        другим числом/строкой — `assertEqual` откажет."""
-        self.assertEqual(stack.MODEL_MIN_CLI_VERSION[TABLE_MODEL], (2, 1, 251))
+    def test_catalog_carries_the_incident_entry(self):
+        """Ловит мутацию: запись инцидента 19.09 не пережила переезд из
+        таблицы в каталог — минимум `claude-fable-5-1` стал другим."""
+        self.assertEqual(
+            models.load_catalog().models[TABLE_MODEL].min_cli_version,
+            CATALOG_MINIMUM)
 
-    def test_verdict_reads_the_table_not_a_literal(self):
+    def test_verdict_reads_the_parameter_not_a_literal(self):
         """Ловит мутацию: минимум повторён литералом по месту сравнения —
-        подменённая таблица не меняет ни вердикт, ни названное число."""
-        with mock.patch.object(stack, "MODEL_MIN_CLI_VERSION",
-                               {TABLE_MODEL: (7, 7, 7)}):
-            low = stack.model_cli_verdict(TABLE_MODEL, (7, 7, 6))
-            high = stack.model_cli_verdict(TABLE_MODEL, (7, 7, 8))
-            equal = stack.model_cli_verdict(TABLE_MODEL, (7, 7, 7))
+        переданное число не меняет ни вердикт, ни названную версию."""
+        low = stack.model_cli_verdict(TABLE_MODEL, (7, 7, 6), (7, 7, 7))
+        high = stack.model_cli_verdict(TABLE_MODEL, (7, 7, 8), (7, 7, 7))
+        equal = stack.model_cli_verdict(TABLE_MODEL, (7, 7, 7), (7, 7, 7))
 
         self.assertEqual(low.status, "fail")
         self.assertIn("7.7.7", low.detail)
@@ -396,7 +424,8 @@ class ModelCliVerdictTest(unittest.TestCase):
     def test_fail_detail_names_the_refusal_and_the_hint(self):
         """Ловит мутацию: текст отказа расходится с требованием 3 SPEC
         (префикс, «требует claude ≥ X, установлен Y», подсказка)."""
-        verdict = stack.model_cli_verdict(TABLE_MODEL, (2, 1, 236))
+        verdict = stack.model_cli_verdict(TABLE_MODEL, (2, 1, 236),
+                                          CATALOG_MINIMUM)
 
         self.assertEqual(verdict.status, "fail")
         self.assertTrue(verdict.detail.startswith(
@@ -404,20 +433,29 @@ class ModelCliVerdictTest(unittest.TestCase):
             f"2.1.251, установлен 2.1.236"), verdict.detail)
         self.assertIn(stack.CLI_UPGRADE_HINT, verdict.detail)
 
-    def test_model_outside_the_table_is_a_warning_regardless_of_version(self):
-        """Ловит мутацию: отсутствие модели в таблице трактуется как
-        `fail` (fail-closed) либо как `ok` без предупреждения."""
+    def test_unknown_minimum_is_a_refusal_regardless_of_version(self):
+        """Ловит мутацию: неизвестный минимум (модели нет в каталоге)
+        снова трактуется как `warn` с запуском «как есть» — ровно то
+        поведение, которое требование 10 заменяет отказом."""
         for installed in ((0, 0, 1), (999, 0, 0), None):
             with self.subTest(installed=installed):
-                verdict = stack.model_cli_verdict(UNKNOWN_MODEL, installed)
-                self.assertEqual(verdict.status, "warn")
-                self.assertIn(stack.MODEL_NOT_IN_TABLE_WARNING, verdict.detail)
+                verdict = stack.model_cli_verdict(UNKNOWN_MODEL, installed,
+                                                  None)
+                self.assertEqual(verdict.status, "fail")
+                self.assertIn(UNKNOWN_MODEL, verdict.detail)
+
+    def test_the_removed_table_is_not_back(self):
+        """Ловит мутацию: таблица совместимости вернулась в манифест —
+        два источника минимума версии (код и каталог) разошлись бы
+        молча (AC-13)."""
+        self.assertFalse(hasattr(stack, "MODEL_MIN_CLI_VERSION"))
+        self.assertFalse(hasattr(stack, "MODEL_NOT_IN_TABLE_WARNING"))
 
     def test_undetermined_cli_version_is_a_warning_not_a_refusal(self):
         """Ловит мутацию: `installed=None` сравнивается с кортежем
         (`TypeError`) либо трактуется как «ниже минимума» — отказ по
         причине вне предмета сверки."""
-        verdict = stack.model_cli_verdict(TABLE_MODEL, None)
+        verdict = stack.model_cli_verdict(TABLE_MODEL, None, CATALOG_MINIMUM)
 
         self.assertEqual(verdict.status, "warn")
         self.assertIn("не определилась", verdict.detail)
@@ -425,7 +463,8 @@ class ModelCliVerdictTest(unittest.TestCase):
     def test_ok_detail_matches_the_spec_wording(self):
         """Ловит мутацию: строка `ok` теряет обе версии или знак `≥`
         (текст требования 5: «CLI 2.1.267 ≥ 2.1.251 — ok»)."""
-        verdict = stack.model_cli_verdict(TABLE_MODEL, (2, 1, 267))
+        verdict = stack.model_cli_verdict(TABLE_MODEL, (2, 1, 267),
+                                          CATALOG_MINIMUM)
 
         self.assertEqual(verdict.status, "ok")
         self.assertEqual(verdict.detail, "CLI 2.1.267 ≥ 2.1.251 — ok")
@@ -470,20 +509,27 @@ class CheckStackModelLinesTest(unittest.TestCase):
     def setUp(self):
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
-        self.roles_path = Path(tmp.name) / "roles.yaml"
-        self.set_roles(developer=TABLE_MODEL, reviewer=UNKNOWN_MODEL)
+        self.tdir = Path(tmp.name)
+        self.roles_path = self.tdir / "roles.yaml"
+        self.roles_path.write_text(ROLES_YAML, encoding="utf-8")
+        self.catalog_path = self.tdir / "models.yaml"
+        self.catalog_path.write_text(CATALOG_YAML.format(table_model=TABLE_MODEL),
+                                     encoding="utf-8")
+        self.local_path = self.tdir / "local-models.yaml"
+        self.set_tiers(strong=TABLE_MODEL, standard=TABLE_MODEL)
         self.patch(config, "ROLES", self.roles_path)
+        self.patch(config, "MODELS", self.catalog_path)
+        self.patch(config, "MODELS_LOCAL", self.local_path)
         self.patch(sys, "version_info", OK_PYTHON_VERSION_INFO)
-        self.patch(stack, "MODEL_MIN_CLI_VERSION", {TABLE_MODEL: (2, 1, 251)})
 
     def patch(self, target, attr, value) -> None:
         patcher = mock.patch.object(target, attr, value)
         patcher.start()
         self.addCleanup(patcher.stop)
 
-    def set_roles(self, developer, reviewer) -> None:
-        self.roles_path.write_text(
-            ROLES_YAML.format(developer=developer, reviewer=reviewer),
+    def set_tiers(self, strong, standard) -> None:
+        self.local_path.write_text(
+            LOCAL_YAML.format(strong=strong, standard=standard),
             encoding="utf-8")
 
     def checks_with_cli(self, version_text: str) -> list:
@@ -501,22 +547,35 @@ class CheckStackModelLinesTest(unittest.TestCase):
     def model_lines(self, checks) -> dict:
         return {c.name: c for c in checks if c.name.startswith("model-")}
 
-    def test_one_line_per_agent_role_with_a_model(self):
+    def test_one_line_per_agent_role_resolved_through_the_tier(self):
         """Ловит мутацию: строка печатается на каждую роль подряд (включая
-        `orchestrator`/`verifier` с полем `model`, `analyst` без поля),
-        либо модель вне таблицы даёт `ok`/`fail` вместо `warn`."""
+        не-agent `orchestrator`/`verifier`), модель читается не через
+        разрешение цепочки, либо неразрешимая цепочка (`analyst`: ярус
+        `cheap` в локальном слое не назван) молча пропускает строку
+        вместо `fail`."""
         lines = self.model_lines(self.checks_with_cli("2.1.267"))
 
-        self.assertEqual(sorted(lines), ["model-developer", "model-reviewer"])
+        self.assertEqual(sorted(lines),
+                         ["model-analyst", "model-developer", "model-reviewer"])
         ok = lines["model-developer"]
         self.assertEqual(ok.status, "ok", ok.detail)
         self.assertEqual(
             ok.detail,
             f"модель роли developer {TABLE_MODEL}: CLI 2.1.267 ≥ 2.1.251 — ok")
-        unknown = lines["model-reviewer"]
-        self.assertEqual(unknown.status, "warn", unknown.detail)
-        self.assertIn(UNKNOWN_MODEL, unknown.detail)
-        self.assertIn(stack.MODEL_NOT_IN_TABLE_WARNING, unknown.detail)
+        unresolved = lines["model-analyst"]
+        self.assertEqual(unresolved.status, "fail", unresolved.detail)
+        self.assertIn("cheap", unresolved.detail)
+
+    def test_model_outside_the_catalog_fails_the_line(self):
+        """Ловит мутацию: модель яруса, которой нет в каталоге, даёт
+        `warn` (поведение до 20.09) — `doctor` зеленел бы при модели без
+        минимума версии CLI и без тарифа."""
+        self.set_tiers(strong=UNKNOWN_MODEL, standard=TABLE_MODEL)
+
+        line = self.model_lines(self.checks_with_cli("2.1.267"))["model-developer"]
+
+        self.assertEqual(line.status, "fail", line.detail)
+        self.assertIn(UNKNOWN_MODEL, line.detail)
 
     def test_line_fails_when_the_installed_cli_is_below_the_minimum(self):
         """Ловит мутацию: заниженная версия отмечается `warn` (как минимум

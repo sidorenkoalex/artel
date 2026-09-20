@@ -16,6 +16,20 @@ ROLES = ROOT / "roles.yaml"
 # Декларация целевых проектов (ADR-0003 п.2). Читатель —
 # orchestrator/targets.py.
 TARGETS = ROOT / "targets.yaml"
+# Каталог моделей: провайдер, минимум версии CLI, прейскурант и статус
+# модели (SPEC 01M3009Y9AGGY6ZCFA7H1HJ1TD, требование 1). Защищённый путь
+# (PROTECTED_PATHS ниже), в git — общее знание всех клонов, поэтому
+# якорится на РЕАЛЬНЫЙ корень при загрузке модуля тем же приёмом, что
+# ROLES/TEMPLATES (и так же сознательно вне ALL_CONFIG_ATTRS
+# tests/sandbox.py: песочница задачи подменяет корень, но каталог моделей
+# от сценария к сценарию не меняется). Читатель — orchestrator/models.py.
+MODELS = ROOT / "models.yaml"
+# Локальный слой моделей: ярус -> модель, свой тариф, явное разрешение
+# `experimental` (требование 6). ВНЕ git и вне пина — выбор конкретного
+# пульта; шаблон кладут `init` и `doctor --fix`. В отличие от MODELS
+# выше, подменяется песочницей (tests/sandbox.ALL_CONFIG_ATTRS): файла
+# может не быть вовсе, и сценарий «его кладёт init» — часть предмета.
+MODELS_LOCAL = ROOT / ".artel" / "models.yaml"
 # Шаблоны артефактов (защищённый путь, PROTECTED_PATHS ниже) — программный
 # ресурс пульта, не данные задачи: якорится на РЕАЛЬНЫЙ корень при загрузке
 # модуля тем же приёмом, что и ROLES выше (сознательно вне ALL_CONFIG_ATTRS
@@ -575,9 +589,15 @@ REVIEW_VERDICTS = ("approved", "changes_requested", "escalate")
 # AGENTS.md — символьная ссылка на CLAUDE.md (решение Оператора 11.09):
 # без записи в списке роль могла бы заменить ссылку обычным файлом и
 # подменить инструкции агентам, не трогая путь CLAUDE.md.
-PROTECTED_PATHS = ("gates.yaml", "roles.yaml", ".github/", "templates/",
-                   "skills/", "docs/invariants.md", "tests/test_invariants.py",
-                   "docs/adr/", "CLAUDE.md", "AGENTS.md", "targets.yaml")
+# models.yaml — каталог моделей (SPEC 01M3009Y9AGGY6ZCFA7H1HJ1TD,
+# требование 4): состав каталога решает, на чём вообще идут роли, — та же
+# зона Оператора, что roles.yaml рядом. Ветка, впервые СОЗДАЮЩАЯ файл,
+# гейтом не отказывается: и гейт зон, и гейт мержа читают этот список у
+# главной копии в момент проверки, а она на том мерже его ещё не несёт.
+PROTECTED_PATHS = ("gates.yaml", "roles.yaml", "models.yaml", ".github/",
+                   "templates/", "skills/", "docs/invariants.md",
+                   "tests/test_invariants.py", "docs/adr/", "CLAUDE.md",
+                   "AGENTS.md", "targets.yaml")
 
 # Общие зоны вне конфликта (задача 01M1NKVPD2A79PQ6K0JVV1B2Q1, часть 1,
 # AC-4): пути, которые трогают все задачи, а конфликт по ним — текстовый,

@@ -59,6 +59,7 @@ cleanup)` в обход этого модуля.
 _RoleHomeReferenceTmpRootTest` — единственный, где сужение оправдано
 (нужен настоящий `config.ROOT`), несёт explicit-комментарий.
 """
+import atexit
 import errno
 import io
 import json
@@ -72,13 +73,21 @@ from contextlib import redirect_stdout
 from pathlib import Path
 from unittest import mock
 
-from orchestrator import catalog, config, fsm, gitcmd, stack, store, workspace
+from orchestrator import (catalog, config, fsm, gitcmd, models, stack, store,
+                          workspace)
 
 # Все пути `config`, которые сегодня подменяет хотя бы одна песочница
 # (SPEC T037, AC-2) — порядок как в orchestrator/config.py.
 ALL_CONFIG_ATTRS = (
     "DB", "TASKS", "LOGS", "ROOT", "PROJECTS", "TARGETS",
     "ROLE_HOME", "ROLE_CONFIG_DIR", "BACKUP_MARKER", "WORKTREES",
+    # Локальный слой моделей (SPEC 01M3009Y9AGGY6ZCFA7H1HJ1TD, требование
+    # 6) — вне git и свой у каждого пульта: песочница обязана держать его
+    # во временном каталоге, иначе тест писал бы в слой машины Оператора.
+    # Сам каталог моделей (`config.MODELS`) в списке сознательно
+    # отсутствует — он в git, всегда лежит рядом с кодом и от сценария к
+    # сценарию не меняется (тот же довод, что у `ROLES`/`TEMPLATES`).
+    "MODELS_LOCAL",
 )
 
 # `runner.role_env` (SPEC 01M1RDCEF0JZ4AVQRE43JFH8TN, требования 1-3)
@@ -138,6 +147,67 @@ _STUB_STACK_CHECKS = tuple(
 
 def _stub_check_stack():
     return list(_STUB_STACK_CHECKS)
+
+
+# Карта исполнителей песочницы (SPEC 01M3009Y9AGGY6ZCFA7H1HJ1TD,
+# требование 5): реальный `roles.yaml` репозитория, у agent-ролей
+# которого дописан `model_tier: strong`, если его там ещё нет.
+#
+# Дописывание — ПЕРЕХОДНАЯ мера ровно до мержа этой задачи: поле
+# `model_tier` приходит в `roles.yaml` приложением к PLAN, которое
+# применяет пульт НА МЕРЖЕ (защищённый путь, ветка задачи его не правит),
+# а код ветки модель шага уже разрешает через ярус. Без этой правки
+# каждый тест, доходящий до шага роли, падал бы «ярус роли не задан» —
+# не по своему предмету, а по состоянию файла, который ветке не
+# принадлежит. После применения приложения преобразование становится
+# пустым: у всех четырёх agent-ролей ярус будет стоять в самом файле.
+_REAL_ROLES_TEXT = Path(config.ROLES).read_text(encoding="utf-8")
+
+
+def _roles_text_with_tiers(text: str) -> str:
+    """Тот же текст карты исполнителей, с `model_tier: strong` у каждой
+    agent-роли, у которой яруса ещё нет."""
+    from orchestrator import yamlmini
+    entries = yamlmini.mapping(text).get("roles") or {}
+    need = {role for role, entry in entries.items()
+            if isinstance(entry, dict) and entry.get("executor") == "agent"
+            and entry.get("model_tier") is None}
+    if not need:
+        return text
+    lines = []
+    for line in text.splitlines(keepends=True):
+        lines.append(line)
+        name = line.strip().rstrip(":")
+        if line.startswith("  ") and line.rstrip().endswith(":") and name in need:
+            lines.append("    model_tier: strong\n")
+    return "".join(lines)
+
+
+SANDBOX_ROLES_TEXT = _roles_text_with_tiers(_REAL_ROLES_TEXT)
+
+# Конфигурация моделей на ВЕСЬ процесс тестов — тот же приём, что
+# `_stub_which` выше (модульная переменная, ставится один раз при
+# импорте): песочницы, заводящие свои патчи `config` поимённо
+# (`tests/test_invariants.py::FsmTest` с НАСТОЯЩИМ `config.ROOT`), не
+# знают ни о локальном слое моделей, ни о ярусах — и отказывали бы на
+# шаге роли по состоянию файлов вне их предмета.
+#
+# Локальный слой уводится сюда ВСЕГДА: `.artel/models.yaml` настоящего
+# пульта — рабочая конфигурация Оператора, тестам нечего в ней читать и
+# тем более писать. Карта исполнителей — только пока преобразование
+# `_roles_text_with_tiers` что-то меняет (переходный период до мержа
+# приложения к `roles.yaml`, см. комментарий выше); после него
+# `config.ROLES` остаётся настоящим файлом репозитория, как сегодня.
+_SANDBOX_CONFIG_DIR = Path(tempfile.mkdtemp(prefix="artel-tests-models-"))
+atexit.register(shutil.rmtree, _SANDBOX_CONFIG_DIR, ignore_errors=True)
+
+config.MODELS_LOCAL = _SANDBOX_CONFIG_DIR / "models.yaml"
+models.ensure_local_template()
+
+if SANDBOX_ROLES_TEXT != _REAL_ROLES_TEXT:
+    _SANDBOX_ROLES_PATH = _SANDBOX_CONFIG_DIR / "roles.yaml"
+    _SANDBOX_ROLES_PATH.write_text(SANDBOX_ROLES_TEXT, encoding="utf-8")
+    config.ROLES = _SANDBOX_ROLES_PATH
 
 
 def capture(fn, *args) -> str:
@@ -712,6 +782,17 @@ class TmpRootTest(unittest.TestCase):
         stack_patcher.start()
         self.addCleanup(stack_patcher.stop)
 
+        # Локальный слой моделей (SPEC 01M3009Y9AGGY6ZCFA7H1HJ1TD,
+        # требования 6-7) — тот же класс, что `_stub_check_stack` выше:
+        # без него ЛЮБОЙ путь песочницы, доходящий до шага роли,
+        # отказывал бы «ярус роли не разрешён» ещё до своего предмета.
+        # Кладётся тем же шаблоном, что и `init`, а не подделкой — иначе
+        # песочница проверяла бы конфигурацию, которой у Оператора нет.
+        # Сценарий «файла НЕТ» (его кладёт `init`/`doctor --fix`) тест
+        # получает, удалив файл после `setUp` — см.
+        # `tests/test_models_doctor.py`.
+        models.ensure_local_template()
+
         # `catalog.cmd_new` (A7, generic-путь, AC-5) для ЛЮБОГО target,
         # включая self/артель, коммитит артефакты плотницки
         # (`artifact_branch.write_commit`) — та функция зовёт
@@ -750,6 +831,7 @@ class TmpRootTest(unittest.TestCase):
             "ROLE_CONFIG_DIR": self.root / ".artel" / "home" / ".claude",
             "BACKUP_MARKER": self.root / ".artel" / "backup-marker",
             "WORKTREES": self.root / ".artel" / "worktrees",
+            "MODELS_LOCAL": self.root / ".artel" / "models.yaml",
         }[attr]
 
     def capture(self, fn, *args) -> str:

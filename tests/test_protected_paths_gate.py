@@ -205,3 +205,38 @@ class AgentsMdIsProtectedTest(unittest.TestCase):
     def test_agents_md_is_in_protected_paths(self):
         """Ловит мутацию: AGENTS.md выпал из PROTECTED_PATHS."""
         self.assertIn("AGENTS.md", config.PROTECTED_PATHS)
+
+
+class ModelsCatalogIsProtectedTest(unittest.TestCase):
+    """SPEC 01M3009Y9AGGY6ZCFA7H1HJ1TD, требование 4 (AC-4/AC-5): каталог
+    моделей — защищённый путь, но ветка, впервые СОЗДАЮЩАЯ его, гейтом
+    `in_dev -> review` не отказывается."""
+
+    def test_models_yaml_is_in_protected_paths(self):
+        """Ловит мутацию: `models.yaml` выпал из списка — состав
+        каталога моделей (на чём вообще идут роли) стал бы правкой любой
+        задачи, минуя Оператора."""
+        self.assertIn("models.yaml", config.PROTECTED_PATHS)
+        self.assertEqual(
+            fsm_advance._protected_paths_touched(
+                ["models.yaml", "orchestrator/models.py"]),
+            ["models.yaml"])
+
+    def test_gate_reads_the_list_of_the_main_copy_at_call_time(self):
+        """AC-5: гейт читает `config.PROTECTED_PATHS` В МОМЕНТ проверки,
+        а исполняется кодом ГЛАВНОЙ копии — на переходе ветки, которая
+        впервые создаёт `models.yaml`, главная копия его в списке ещё не
+        несёт, и отказа нет.
+
+        Ловит мутацию: список снят снимком при импорте модуля гейта
+        (константа рядом с функцией) — подмена `config.PROTECTED_PATHS`
+        перестала бы влиять на вердикт, и ветка, ДОБАВЛЯЮЩАЯ путь в
+        список, отказывала бы сама себе."""
+        before_the_merge = tuple(p for p in config.PROTECTED_PATHS
+                                 if p != "models.yaml")
+
+        with mock.patch.object(config, "PROTECTED_PATHS", before_the_merge):
+            touched = fsm_advance._protected_paths_touched(
+                ["models.yaml", "orchestrator/config.py"])
+
+        self.assertEqual(touched, [])

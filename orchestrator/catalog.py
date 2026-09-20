@@ -8,7 +8,7 @@ from pathlib import Path
 from scripts import guard
 
 from . import (alerts, artifact_branch, artifacts, budget, config, gitcmd,
-              idgen, liveness, merge_queue, providers, runner, store,
+              idgen, liveness, merge_queue, models, providers, runner, store,
               zone_lock)
 
 # ГОСТ-подобная транслитерация: только stdlib, без внешних зависимостей.
@@ -43,6 +43,13 @@ def cmd_init() -> None:
     # а не побочным эффектом первого следующего `store.db()`.
     store.seed_task_counters(conn)
     _deploy_role_home_reference()
+    # Локальный слой моделей (SPEC 01M3009Y9AGGY6ZCFA7H1HJ1TD, требование
+    # 7): без него ни один агентный шаг не стартует — ярус роли не во что
+    # разрешать. Шаблон кладётся только при отсутствии файла: выбор
+    # Оператора `init` не перезаписывает (AC-9), тем же приёмом, что и
+    # развёртывание дома роли выше.
+    if models.ensure_local_template():
+        print(f"OK: шаблон локального слоя моделей — {config.MODELS_LOCAL}")
     budget.reseed_program_spend(conn)
     # Ленивый импорт — `pool_seal.py` перенял эту функцию у `canary.py`
     # (SPEC 01M2CN42RV0EBBP7HS4HP2VNY1); `canary.py` по-прежнему сам

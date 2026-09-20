@@ -15,7 +15,8 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from orchestrator import artifacts, config, roles, yamlmini  # noqa: E402
+from orchestrator import (artifacts, config, models, roles,  # noqa: E402
+                          yamlmini)
 from scripts import guard  # noqa: E402
 from tests.sandbox import TmpPlanPathTest  # noqa: E402
 
@@ -276,13 +277,12 @@ class RolesTest(unittest.TestCase):
                             f"скил {name} назван в roles.yaml, но файла нет")
 
 
-class RolesModelTest(unittest.TestCase):
-    """`roles.model` — модель роли из roles.yaml (SPEC
-    01M2DTT96FS25SHXP0HDTWARQH, требования 1-2): тот же приём песочницы,
-    что `RolesTest` выше для `skills()`, постоянная копия покрытия
-    приёмочной планки задачи (`tasks/01M2DTT96FS25SHXP0HDTWARQH/
-    acceptance_tests/test_ac1_ac2_roles_model.py`) — планка уходит при
-    следующей чистке каталога задачи, этот файл остаётся регрессией."""
+class RolesModelTierTest(unittest.TestCase):
+    """`roles.model_tier` — ярус роли из roles.yaml (SPEC
+    01M3009Y9AGGY6ZCFA7H1HJ1TD, требование 5, AC-6), заменивший прежнее
+    поле `model:` (SPEC 01M2DTT96FS25SHXP0HDTWARQH): модель, на которую
+    указывает ярус, задаёт локальный слой пульта. Тот же приём песочницы,
+    что `RolesTest` выше для `skills()`."""
 
     def setUp(self):
         tmp = tempfile.TemporaryDirectory()
@@ -295,38 +295,49 @@ class RolesModelTest(unittest.TestCase):
     def write(self, text: str) -> None:
         self.path.write_text(text, encoding="utf-8")
 
-    def test_model_field_value_is_returned(self):
-        """Ловит мутацию: `model()` путает поле (например, читает `skills`
-        или `token_slot`) либо возвращает булево наличие поля/имя роли
-        вместо самого значения `model:`."""
-        self.write("roles:\n  developer:\n    skills: [a]\n"
-                   "    model: claude-opus-5\n")
+    def test_every_tier_of_the_closed_list_is_returned(self):
+        """Ловит мутацию: `model_tier()` путает поле (читает `skills` или
+        `token_slot`) либо возвращает булево наличие поля вместо самого
+        значения `model_tier:`."""
+        for tier in models.TIERS:
+            with self.subTest(ярус=tier):
+                self.write(f"roles:\n  developer:\n    skills: [a]\n"
+                           f"    model_tier: {tier}\n")
 
-        self.assertEqual(roles.model("developer"), "claude-opus-5")
+                self.assertEqual(roles.model_tier("developer"), tier)
 
-    def test_missing_field_is_none_not_a_refusal(self):
-        """Ловит мутацию: отсутствие `model:` трактуется как отказ (как у
-        `skills()` на отсутствии `skills:`) вместо `None` — AC-1 требует
-        именно `None` для роли без этого поля."""
+    def test_missing_field_is_a_refusal_not_a_default(self):
+        """Ловит мутацию: отсутствие `model_tier:` трактуется как `None`
+        и дефолт CLI — ровно то молчаливое поведение прежнего поля
+        `model:`, которое требование 5 заменяет отказом."""
         self.write("roles:\n  developer:\n    skills: [a]\n")
 
-        self.assertIsNone(roles.model("developer"))
+        with self.assertRaises(roles.RolesError) as ctx:
+            roles.model_tier("developer")
 
-    def test_non_string_value_is_a_roles_error(self):
-        """Ловит мутацию: нестроковое значение (число, bool) молча
-        приводится к строке (`str(value)`) вместо отказа `RolesError`."""
-        self.write("roles:\n  developer:\n    skills: [a]\n    model: 7\n")
+        self.assertIn("model_tier", str(ctx.exception))
+
+    def test_value_outside_the_closed_list_is_a_roles_error(self):
+        """Ловит мутацию: значение принимается как есть — ярус-опечатка
+        (`turbo`) уехал бы в «ярус не назван в tiers:» локального слоя, и
+        Оператор чинил бы не тот файл."""
+        for value in ("turbo", "7", '""'):
+            with self.subTest(значение=value):
+                self.write(f"roles:\n  developer:\n    skills: [a]\n"
+                           f"    model_tier: {value}\n")
+
+                with self.assertRaises(roles.RolesError):
+                    roles.model_tier("developer")
+
+    def test_unknown_role_is_a_roles_error(self):
+        """Ловит мутацию: роль, которой нет в карте, отдаёт ярус по
+        умолчанию вместо отказа — шаг такой роли пошёл бы на модель, о
+        которой карта исполнителей ничего не говорит."""
+        self.write("roles:\n  developer:\n    skills: [a]\n"
+                   "    model_tier: strong\n")
 
         with self.assertRaises(roles.RolesError):
-            roles.model("developer")
-
-    def test_empty_string_value_is_a_roles_error(self):
-        """Ловит мутацию: проверка ограничивается `isinstance(value, str)`
-        без проверки непустоты — пустая строка проходит как имя модели."""
-        self.write('roles:\n  developer:\n    skills: [a]\n    model: ""\n')
-
-        with self.assertRaises(roles.RolesError):
-            roles.model("developer")
+            roles.model_tier("reviewer")
 
 
 if __name__ == "__main__":

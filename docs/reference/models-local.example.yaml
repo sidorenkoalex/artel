@@ -1,0 +1,30 @@
+# Локальный слой моделей пульта (SPEC 01M3009Y9AGGY6ZCFA7H1HJ1TD,
+# требование 6) — ВНЕ git: выбор конкретного пульта, а не общее знание.
+# Кладут `init` и `doctor --fix`, если файла нет; существующий файл ни
+# одна из команд не перезаписывает. Читатель — orchestrator/models.py.
+#
+# tiers — ярус роли (`model_tier` в roles.yaml) -> идентификатор модели
+# из каталога models.yaml. Ярус без модели — отказ шага до старта агента.
+tiers:
+  strong: claude-opus-5
+  standard: claude-opus-5
+  cheap: claude-opus-5
+
+# overrides — собственный тариф поверх прейскуранта каталога (прокси,
+# скидка, свой счёт). Необязателен; без него действует прейскурант.
+#
+# overrides:
+#   claude-opus-5:
+#     tariff_usd_per_mtok:
+#       input: 5.0
+#       output: 25.0
+#       cache_write: 6.25
+#       cache_read: 0.50
+#     calibrated_at: 2026-09-20
+#     source: сверено с фактом CLI 20.09, коэффициент 1.009
+
+# allow_experimental — явное разрешение модели со статусом
+# `experimental` из каталога. Без записи такая модель не запускается.
+#
+# allow_experimental:
+#   gpt-5.4-mini: true

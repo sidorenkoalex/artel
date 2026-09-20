@@ -212,12 +212,32 @@ def agent_roles() -> list:
     return sorted(set(doctor.config.STATE_ROLE.values()))
 
 
+def _role_chain(role: str, name: str) -> tuple:
+    """(текст цепочки роли, причина отказа либо `None`) для строки
+    `check_role_providers` (SPEC 01M3009Y9AGGY6ZCFA7H1HJ1TD, требование
+    11, AC-15): «роль → ярус → модель → провайдер» вместо прежнего «роль
+    → провайдер».
+
+    Провайдер берётся из уже прочитанной карты исполнителей (`name`), а
+    не из разрешения цепочки: имя незарегистрированного провайдера —
+    предмет отдельного отказа этой же строки, и оно обязано печататься
+    даже тогда, когда ярус роли не разрешается вовсе.
+    """
+    try:
+        resolved = doctor.models.resolve_role(role)
+    except doctor.models.ModelsError as exc:
+        return f"{role} → (не разрешено) → {name}", f"{role}: {exc}"
+    return f"{role} → {resolved.tier} → {resolved.model} → {name}", None
+
+
 def check_role_providers() -> doctor.Check:
-    """Строка «провайдеры ролей: <роль → провайдер>» (SPEC
-    01M2ZNTHSNFYSTF904P6SZTPYF, требование 6) — и красная, если имя
+    """Строка «провайдеры ролей: <роль → ярус → модель → провайдер>»
+    (SPEC 01M2ZNTHSNFYSTF904P6SZTPYF, требование 6; SPEC
+    01M3009Y9AGGY6ZCFA7H1HJ1TD, требование 11) — и красная, если имя
     провайдера какой-нибудь роли не зарегистрировано в реестре
-    (требование 4): иначе пульт узнавал бы о незнакомом имени только в
-    момент отказа шага.
+    (требование 4) либо цепочка роли не разрешается (требование 5):
+    иначе пульт узнавал бы о незнакомом имени или незаданном ярусе
+    только в момент отказа шага.
 
     Имя печатается из карты исполнителей как есть, без резолва в
     объект: для незарегистрированного имени именно оно и есть предмет
@@ -235,7 +255,13 @@ def check_role_providers() -> doctor.Check:
     except doctor.roles.RolesError as exc:
         return doctor.Check("role-providers", "warn",
                      f"провайдеры ролей: {exc}")
-    listed = ", ".join(f"{role} → {name}" for role, name in pairs)
+    chains, unresolved = [], []
+    for role, name in pairs:
+        chain, failure = _role_chain(role, name)
+        chains.append(chain)
+        if failure is not None:
+            unresolved.append(failure)
+    listed = ", ".join(chains)
     unknown = [(role, name) for role, name in pairs
                if name not in doctor.providers.PROVIDERS]
     if unknown:
@@ -245,6 +271,11 @@ def check_role_providers() -> doctor.Check:
             "role-providers", "fail",
             f"провайдеры ролей: {listed}; {named} "
             f"(известны: {', '.join(sorted(doctor.providers.PROVIDERS))})")
+    if unresolved:
+        return doctor.Check(
+            "role-providers", "fail",
+            f"провайдеры ролей: {listed}; цепочка не разрешена — "
+            f"{'; '.join(unresolved)}")
     return doctor.Check("role-providers", "ok", f"провайдеры ролей: {listed}")
 
 

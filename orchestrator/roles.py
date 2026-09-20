@@ -98,22 +98,37 @@ def provider(role: str) -> str:
     return value
 
 
-def model(role: str) -> str | None:
-    """Идентификатор модели роли (поле `model:` в roles.yaml).
+def model_tier(role: str) -> str:
+    """Ярус роли (поле `model_tier:` в roles.yaml) — одно из значений
+    закрытого перечня `models.TIERS` (SPEC 01M3009Y9AGGY6ZCFA7H1HJ1TD,
+    требование 5).
 
-    `None` — поле не задано вовсе: роль идёт на дефолт CLI (SPEC
-    01M2DTT96FS25SHXP0HDTWARQH, требование 2), в отличие от `skills()`,
-    где отсутствие поля — отказ. Поле присутствует, но не является
-    непустой строкой (число, bool, пустая строка) — `RolesError`, тем же
-    приёмом, что `skills()` на неверном формате.
+    Заменяет прежнее поле `model:` (SPEC 01M2DTT96FS25SHXP0HDTWARQH):
+    какую модель запускает ярус, решает локальный слой пульта
+    (`.artel/models.yaml`), а не карта исполнителей в git — иначе смена
+    модели у одного пульта меняла бы её у всех клонов.
+
+    В отличие от прежнего `model()`, отсутствие поля — ОТКАЗ, а не
+    дефолт CLI (требование 5, принцип 5 docs/research/
+    providers-codex-plan.md): шаг agent-роли без явной модели не
+    стартует. Значение вне перечня — тоже отказ, названный перечнем:
+    опечатка в ярусе иначе уехала бы в «ярус не назван в tiers:» и
+    Оператор чинил бы не тот файл.
+
+    Перечень читается ленивым импортом: `models` знает о ярусах как о
+    части схемы локального слоя, а эта карта — только о поле роли.
     """
+    from .models import TIERS
     entry = load().get(role)
     if not isinstance(entry, dict):
         raise RolesError(f"{config.ROLES}: роль '{role}' не описана")
-    value = entry.get("model")
+    value = entry.get("model_tier")
     if value is None:
-        return None
-    if not isinstance(value, str) or not value:
         raise RolesError(
-            f"{config.ROLES}: model роли '{role}' — не непустая строка")
+            f"{config.ROLES}: у роли '{role}' не задан model_tier "
+            f"(ярус из перечня {', '.join(TIERS)})")
+    if value not in TIERS:
+        raise RolesError(
+            f"{config.ROLES}: model_tier роли '{role}' = {value!r} — не из "
+            f"перечня {', '.join(TIERS)}")
     return value

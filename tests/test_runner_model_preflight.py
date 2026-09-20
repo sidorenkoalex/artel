@@ -1,6 +1,7 @@
 """Юнит-тесты запуска шага роли по абсолютному пути из резолва манифеста
 и предполётной сверки модели роли с версией CLI (SPEC
-01M2XJKV84SQ9VEVR0VNVKDNGJ, требования 1, 3, 4).
+01M2XJKV84SQ9VEVR0VNVKDNGJ, требования 1, 3, 4; SPEC
+01M3009Y9AGGY6ZCFA7H1HJ1TD, требования 5, 9, 10 — AC-7, AC-11..AC-13).
 
 Постоянная копия покрытия приёмочной планки задачи (`tasks/
 01M2XJKV84SQ9VEVR0VNVKDNGJ/acceptance_tests/`) — та планка уходит при
@@ -11,6 +12,13 @@
 подпроцесса `claude --version` (подмена `subprocess.run` по базовому
 имени argv[0] — `stack.installed_cli_version` зовёт CLI литералом, шаг
 роли — абсолютным путём, обе формы обязаны попадать в заглушку).
+
+Минимум версии CLI с 20.09 приходит из каталога `models.yaml`, а не из
+таблицы `stack.MODEL_MIN_CLI_VERSION` (та удалена): песочница подменяет
+каталог временным файлом, а модель шага задаёт ярусом роли и локальным
+слоем. Модель ВНЕ каталога — теперь отказ до старта агента, а не
+предупреждение «модель не в таблице совместимости» с запуском как есть
+(требование 10).
 """
 import io
 import os
@@ -33,7 +41,29 @@ from tests.sandbox import (DeveloperBriefTmpRootTest, FakeProc,  # noqa: E402
 from tests.test_runner_role_model import _roles_yaml_text  # noqa: E402
 
 TABLE_MODEL = "claude-fable-5-1"
-UNKNOWN_MODEL = "claude-test-model-vne-tablitsy"
+UNKNOWN_MODEL = "claude-test-model-vne-kataloga"
+TIER = "strong"
+
+
+def _catalog_text(model: str, minimum: str) -> str:
+    """Каталог из одной модели: минимум версии CLI — единственное, что
+    сценариям этого файла нужно от каталога."""
+    return f"""providers:
+  claude:
+    cli: claude
+    min_cli_version: 1.0.0
+    cost_from_cli: true
+    models:
+      {model}:
+        min_cli_version: {minimum}
+        status: supported
+        list_price_usd_per_mtok:
+          input: 5.0
+          output: 25.0
+          cache_write: 6.25
+          cache_read: 0.50
+        price_date: 2026-09-20
+"""
 UNSUPPORTED_OUTPUT = (
     "API Error: 400 {\"type\":\"error\",\"error\":{\"type\":"
     "\"invalid_request_error\",\"message\":\"This Claude Code version "
@@ -84,7 +114,7 @@ class _StepSandbox(DeveloperBriefTmpRootTest):
                                lambda role, target: [])
         preflight.start()
         self.addCleanup(preflight.stop)
-        self.patch(stack, "MODEL_MIN_CLI_VERSION", {TABLE_MODEL: (2, 1, 251)})
+        self.set_catalog(TABLE_MODEL, "2.1.251")
         self.exit_message = None
         self.spawn = None
 
@@ -93,9 +123,25 @@ class _StepSandbox(DeveloperBriefTmpRootTest):
         patcher.start()
         self.addCleanup(patcher.stop)
 
+    def set_catalog(self, model: str, minimum: str) -> None:
+        """Каталог моделей под тестом — временный файл вместо боевого."""
+        path = self.root / "models-under-test.yaml"
+        path.write_text(_catalog_text(model, minimum), encoding="utf-8")
+        self.patch(config, "MODELS", path)
+
     def set_model(self, model) -> None:
+        """Модель шага: ярус у роли (`roles.yaml`) плюс модель яруса в
+        локальном слое — цепочка целиком, как её видит `run`."""
         path = self.root / "roles-under-test.yaml"
-        path.write_text(_roles_yaml_text(self.ROLE, model), encoding="utf-8")
+        path.write_text(_roles_yaml_text(self.ROLE, TIER), encoding="utf-8")
+        self.patch(config, "ROLES", path)
+        config.MODELS_LOCAL.write_text(f"tiers:\n  {TIER}: {model}\n",
+                                       encoding="utf-8")
+
+    def set_no_tier(self) -> None:
+        """Роль без `model_tier` — сценарий требования 5."""
+        path = self.root / "roles-under-test.yaml"
+        path.write_text(_roles_yaml_text(self.ROLE, None), encoding="utf-8")
         self.patch(config, "ROLES", path)
 
     def set_cli_version(self, text: str) -> None:
@@ -239,10 +285,10 @@ class ModelBelowCliMinimumTest(_StepSandbox):
         self.assertEqual(len(self.entries_containing(stack.MODEL_UNSUPPORTED_PREFIX)), 1)
         self.assertNotIn(f"лимит {config.AUTO_MAX_STEPS} шагов исчерпан", out)
 
-    def test_minimum_comes_from_the_table_not_from_a_literal(self):
+    def test_minimum_comes_from_the_catalog_not_from_a_literal(self):
         """Ловит мутацию: число `2.1.251` повторено по месту сравнения —
-        подмена таблицы вердикт не меняет."""
-        self.patch(stack, "MODEL_MIN_CLI_VERSION", {TABLE_MODEL: (2, 1, 0)})
+        подмена записи каталога вердикт не меняет."""
+        self.set_catalog(TABLE_MODEL, "2.1.0")
 
         self.run_step()
 
@@ -250,17 +296,20 @@ class ModelBelowCliMinimumTest(_StepSandbox):
         self.assertEqual(self.entries_containing(stack.MODEL_UNSUPPORTED_PREFIX), [])
 
 
-class ModelOutsideTheTableTest(_StepSandbox):
-    """Требование 3 (AC-8): модели в таблице нет — предупреждение, не отказ."""
+class ModelOutsideCatalogTest(_StepSandbox):
+    """Требование 10 (AC-13): модели в каталоге нет — отказ до старта
+    агента, а не предупреждение с запуском как есть (поведение до
+    20.09)."""
 
     def setUp(self):
         super().setUp()
         self.set_model(UNKNOWN_MODEL)
 
-    def test_unknown_model_warns_once_and_the_step_runs_without_probing_cli(self):
-        """Ловит мутацию: модель вне таблицы отказывает шагу (fail-closed),
-        предупреждение пишется дважды/на каждую попытку либо молчит; либо
-        ради модели вне таблицы всё равно заводится `claude --version`."""
+    def test_unknown_model_refuses_before_the_agent_without_probing_cli(self):
+        """Ловит мутацию: модель вне каталога запускается «как есть»
+        (прежнее `warn` «модель не в таблице совместимости») — шаг уходил
+        бы в CLI без минимума версии и без тарифа; либо ради заведомого
+        отказа всё равно заводится `claude --version`."""
         calls = []
 
         def spy_run(args, *rest, **kwargs):
@@ -273,14 +322,94 @@ class ModelOutsideTheTableTest(_StepSandbox):
 
         self.run_step()
 
-        self.assertEqual(self.spawn.call_count, 1)
-        warnings = self.entries_containing(stack.MODEL_NOT_IN_TABLE_WARNING)
-        self.assertEqual(len(warnings), 1, self.journal_rows())
-        self.assertIn(UNKNOWN_MODEL, warnings[0])
-        self.assertEqual(self.entries_containing(stack.MODEL_UNSUPPORTED_PREFIX), [])
-        self.assertEqual(self.argv()[-2:], ["--model", UNKNOWN_MODEL])
+        self.spawn.assert_not_called()
+        named = self.entries_containing(UNKNOWN_MODEL)
+        self.assertTrue(named, self.journal_rows())
+        self.assertIn(runner.MODEL_UNRESOLVED_REFUSAL_ACTION, self.actions())
         self.assertEqual(self.state(), "in_dev")
-        self.assertEqual(calls, [], "`claude --version` для модели вне таблицы не нужен")
+        self.assertIn(UNKNOWN_MODEL, self.exit_message)
+        self.assertEqual(calls, [],
+                         "`claude --version` ради заведомого отказа не нужен")
+
+
+class RoleWithoutTierTest(_StepSandbox):
+    """Требование 5 (AC-7): agent-роль без `model_tier` — отказ до старта
+    агента."""
+
+    def setUp(self):
+        super().setUp()
+        self.set_no_tier()
+
+    def test_step_refuses_before_the_agent_and_names_the_field(self):
+        """Ловит мутацию: роль без яруса идёт на дефолт CLI либо на
+        «первый попавшийся» ярус — агент стартовал бы без явной модели,
+        ровно то поведение, которое требование 5 снимает."""
+        self.run_step()
+
+        self.spawn.assert_not_called()
+        self.assertIn(runner.MODEL_UNRESOLVED_REFUSAL_ACTION, self.actions())
+        self.assertIn("model_tier", self.exit_message)
+        self.assertEqual(self.state(), "in_dev")
+        self.assertEqual(self.pauses, [])
+
+    def test_auto_stops_on_the_refusal(self):
+        """Ловит мутацию: отказ оформлен `return`, а не `sys.exit` —
+        `auto` не замечает его и крутит шаги до потолка."""
+        out = self.run_auto()
+
+        self.spawn.assert_not_called()
+        self.assertIn("model_tier", out)
+        self.assertNotIn(f"лимит {config.AUTO_MAX_STEPS} шагов исчерпан", out)
+
+
+class TierWithoutModelTest(_StepSandbox):
+    """Требование 8 (AC-11): ярус роли не назван в `tiers:` локального
+    слоя."""
+
+    def setUp(self):
+        super().setUp()
+        self.set_model(TABLE_MODEL)
+        config.MODELS_LOCAL.write_text(f"tiers:\n  cheap: {TABLE_MODEL}\n",
+                                       encoding="utf-8")
+
+    def test_step_refuses_before_the_agent(self):
+        """Ловит мутацию: ярус без модели резолвится «первой попавшейся»
+        моделью каталога — пульт молча ушёл бы не на ту модель."""
+        self.run_step()
+
+        self.spawn.assert_not_called()
+        self.assertIn(runner.MODEL_UNRESOLVED_REFUSAL_ACTION, self.actions())
+        self.assertIn(TIER, self.exit_message)
+
+
+class ExplicitModelFlagTest(_StepSandbox):
+    """AC-12: агент роли не стартует без явного `--model`."""
+
+    def setUp(self):
+        super().setUp()
+        self.set_model(TABLE_MODEL)
+        self.set_cli_version("9.9.9")
+
+    def test_agent_starts_only_with_an_explicit_model_flag(self):
+        """Ловит мутацию: `--model` перестал попадать в argv (модель
+        «по умолчанию CLI») — инвариант требования 9 нарушен молча, и
+        шаг пошёл бы на модель, о которой пульт ничего не знает."""
+        self.run_step()
+
+        argv = self.argv()
+        self.assertEqual(argv.count("--model"), 1, argv)
+        self.assertEqual(argv[-2:], ["--model", TABLE_MODEL])
+
+    def test_no_step_of_this_file_ever_spawns_without_the_flag(self):
+        """Ловит мутацию: отказы неразрешимой цепочки заменены на запуск
+        без `--model` — проверка «агент не стартовал» в соседних классах
+        могла бы стать зелёной по другой причине, эта фиксирует связку:
+        либо флаг есть, либо агента нет."""
+        self.set_model(UNKNOWN_MODEL)
+
+        self.run_step()
+
+        self.spawn.assert_not_called()
 
 
 class ModelUnsupportedAttemptTest(_StepSandbox):

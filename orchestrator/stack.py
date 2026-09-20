@@ -12,10 +12,13 @@
 `subprocess.run` локальных CLI, без сети (docs/invariants.md,
 инвариант 35).
 
-Таблица «модель роли -> минимальная версия CLI» (`MODEL_MIN_CLI_VERSION`,
-SPEC 01M2XJKV84SQ9VEVR0VNVKDNGJ) живёт здесь же: `model_cli_verdict` —
-один вердикт для предполётной сверки шага роли, строк `check_stack()` и
-отказа после попытки класса «модель не поддерживается CLI».
+Вердикт совместимости модели с установленным CLI (`model_cli_verdict`,
+SPEC 01M2XJKV84SQ9VEVR0VNVKDNGJ) живёт здесь же — один на предполётную
+сверку шага роли, строки `check_stack()` и отказ после попытки класса
+«модель не поддерживается CLI». Сам минимум версии приходит вердикту
+параметром из каталога `models.yaml` (`orchestrator/models.py`): таблица
+`MODEL_MIN_CLI_VERSION`, стоявшая здесь до 20.09, удалена задачей
+01M3009Y9AGGY6ZCFA7H1HJ1TD (требование 10).
 """
 import re
 import subprocess
@@ -111,19 +114,18 @@ REQUIRED_TOOLS = {
 REQUIRED_TOOLS.update(_provider_tools())
 
 # Таблица «модель роли -> минимальная версия CLI claude» (SPEC
-# 01M2XJKV84SQ9VEVR0VNVKDNGJ, требование 2): состав правит Оператор
-# приложением, код только читает (`model_cli_verdict`). Модель, которой
-# здесь нет, — не отказ ни в одной из точек чтения (предполёт шага,
-# `check_stack`, разбор провала попытки): предупреждение «модель не в
-# таблице совместимости», запуск как есть. Первая запись — инцидент
-# 19.09 (01M2XFSJ1Z, 01M2XFSE8G): «API Error: 400 … does not support this
-# model; version 2.1.251 or newer is required» за 0 токенов, три попытки
-# по 120 с и эскалация — при причине, известной до запуска агента.
-# Минимум инструмента `REQUIRED_TOOLS["claude"]` (1.0.0) остаётся рядом,
-# не вместо: это нижняя граница самого CLI, а не связка с моделями.
-MODEL_MIN_CLI_VERSION = {
-    "claude-fable-5-1": (2, 1, 251),
-}
+# 01M2XJKV84SQ9VEVR0VNVKDNGJ) жила здесь до 20.09 и удалена задачей
+# 01M3009Y9AGGY6ZCFA7H1HJ1TD (требование 10): минимум версии CLI — поле
+# записи модели в каталоге `models.yaml` (`orchestrator/models.py`), а
+# модель, которой в каталоге нет, — теперь ОТКАЗ шага до старта агента, а
+# не предупреждение «модель не в таблице совместимости» с запуском как
+# есть. Причина переезда та же, ради которой таблица и заводилась
+# (инцидент 19.09, 01M2XFSJ1Z/01M2XFSE8G): «API Error: 400 … does not
+# support this model; version 2.1.251 or newer is required» за 0 токенов
+# и три попытки при причине, известной до запуска агента.
+#
+# Минимум инструмента `REQUIRED_TOOLS["claude"]` (1.0.0) остаётся здесь и
+# после переезда: это нижняя граница самого CLI, а не связка с моделями.
 
 # Тексты требований 3-4 той же SPEC — дословно, одним источником для
 # предполётного отказа шага (`runner._refuse_before_start`), отказа после
@@ -131,9 +133,11 @@ MODEL_MIN_CLI_VERSION = {
 # _run_developer_step`) и строк `check_stack()`: три точки называют один и
 # тот же исход одними и теми же словами, `auto` печатает подсказку из
 # текста самого отказа (правка `auto.py`/`config.AUTO_STOP_*` — вне зон).
+# Подсказка называет локальный слой, а не `roles.yaml`: модель шага
+# задаёт ярус в `.artel/models.yaml`, roles.yaml несёт только ярус.
 MODEL_UNSUPPORTED_PREFIX = "модель роли не поддерживается CLI"
-MODEL_NOT_IN_TABLE_WARNING = "модель не в таблице совместимости"
-CLI_UPGRADE_HINT = "обнови CLI либо смени model роли в roles.yaml"
+CLI_UPGRADE_HINT = ("обнови CLI либо смени модель яруса в "
+                    ".artel/models.yaml")
 
 # Инструменты, чей абсолютный путь `orchestrator.runner.role_env` резолвит
 # через `shutil.which` для сборки PATH роли (SPEC
@@ -255,24 +259,32 @@ def installed_cli_version() -> Optional[tuple]:
 ModelCliVerdict = namedtuple("ModelCliVerdict", "status detail")
 
 
-def model_cli_verdict(model: str, installed: Optional[tuple]) -> ModelCliVerdict:
-    """Сверка модели роли с установленной версией CLI по таблице
-    `MODEL_MIN_CLI_VERSION` (SPEC 01M2XJKV84SQ9VEVR0VNVKDNGJ, требования
-    2, 3, 5): чистая функция, одна на три точки чтения таблицы.
+def model_cli_verdict(model: str, installed: Optional[tuple],
+                      minimum: Optional[tuple]) -> ModelCliVerdict:
+    """Сверка модели роли с установленной версией CLI (SPEC
+    01M2XJKV84SQ9VEVR0VNVKDNGJ, требования 3, 5; SPEC
+    01M3009Y9AGGY6ZCFA7H1HJ1TD, требование 10): чистая функция, одна на
+    предполёт шага, строки `check_stack()` и разбор провала попытки.
 
-    - модели нет в таблице — `warn` «модель не в таблице совместимости»
-      (не отказ, AC-5/AC-8), значение `installed` не участвует;
+    `minimum` — минимум версии CLI ЭТОЙ модели, прочитанный из каталога
+    `models.yaml` вызывающим кодом (`providers/claude.py::model_verdict`).
+    Параметр, а не таблица внутри: каталог читает тот, кто знает, что
+    именно запускает, а этот модуль обязан оставаться импортируемым под
+    интерпретатором 3.9 (докстринг `REQUIRED_PYTHON`).
+
+    - минимум неизвестен (`None`) — `fail`: модели нет в каталоге, и
+      запускать её «как есть» больше нельзя (требование 10, AC-13); до
+      20.09 это было предупреждением «модель не в таблице совместимости»;
     - версия CLI не определилась — `warn`: сверять не с чем, отказать
       по неизвестному числу было бы отказом по причине вне предмета;
     - `installed >= минимум` — `ok` («CLI X ≥ Y — ok»);
     - иначе — `fail` с текстом отказа требования 3 и подсказкой.
     """
-    minimum = MODEL_MIN_CLI_VERSION.get(model)
     if minimum is None:
         return ModelCliVerdict(
-            "warn",
-            f"{MODEL_NOT_IN_TABLE_WARNING} (stack.MODEL_MIN_CLI_VERSION) — "
-            f"с версией CLI не сверена, запуск как есть")
+            "fail",
+            f"{MODEL_UNSUPPORTED_PREFIX}: {model} — минимум версии CLI "
+            f"неизвестен, модели нет в каталоге; {CLI_UPGRADE_HINT}")
     if installed is None:
         return ModelCliVerdict(
             "warn",
@@ -290,21 +302,27 @@ def model_cli_verdict(model: str, installed: Optional[tuple]) -> ModelCliVerdict
 
 
 def _model_checks(installed: Optional[tuple]) -> list:
-    """Требование 5/AC-10: по строке на каждую роль `roles.yaml` с
-    `executor: agent` и полем `model` — `ok`/`fail`/`warn` вердиктом
-    `model_cli_verdict`. Роли без `executor: agent` (`orchestrator`,
-    `verifier`) строки не получают даже с полем `model`: модель там не
-    уходит в CLI. Нечитаемый `roles.yaml`/значение поля — одна строка
+    """Требование 5/AC-10: по строке на каждую agent-роль `roles.yaml` —
+    `ok`/`fail`/`warn` вердиктом `model_cli_verdict`. Роли без
+    `executor: agent` (`orchestrator`, `verifier`) строки не получают:
+    модель там не уходит в CLI. Нечитаемый `roles.yaml` — одна строка
     `warn`, не исключение: `check_stack()` — диагностика, ронять её
     нечитаемой картой ролей значило бы прятать остальные строки.
 
-    `roles` импортируется здесь, не на уровне модуля: `orchestrator/
-    roles.py` несёт `str | None` в сигнатурах, а этот модуль обязан
-    импортироваться интерпретатором 3.9 (докстринг у `REQUIRED_PYTHON`).
-    Имя строки `model-<роль>` сознательно без «venv»: фильтр `runner.
-    _venv_interpreter_bin` (`"venv" in c.name`) не должен её видеть.
+    Модель роли — результат разрешения цепочки «роль -> ярус -> модель»
+    (SPEC 01M3009Y9AGGY6ZCFA7H1HJ1TD, требование 10), а не поле
+    `model:`, которого больше нет. Неразрешимая цепочка — `fail`, а не
+    пропуск строки: шаг такой роли всё равно не стартует, и `doctor`
+    обязан назвать это раньше, чем Оператор запустит `run`.
+
+    `roles`/`models` импортируются здесь, не на уровне модуля:
+    `orchestrator/roles.py` несёт `str | None` в сигнатурах, а этот
+    модуль обязан импортироваться интерпретатором 3.9 (докстринг у
+    `REQUIRED_PYTHON`). Имя строки `model-<роль>` сознательно без «venv»:
+    фильтр `runner._venv_interpreter_bin` (`"venv" in c.name`) не должен
+    её видеть.
     """
-    from . import roles
+    from . import models, roles
     checks = []
     try:
         entries = roles.load()
@@ -314,18 +332,17 @@ def _model_checks(installed: Optional[tuple]) -> list:
     for role, entry in entries.items():
         if not isinstance(entry, dict) or entry.get("executor") != "agent":
             continue
-        if entry.get("model") is None:
-            continue
         try:
-            model = roles.model(role)
-        except roles.RolesError as exc:
-            checks.append(StackCheck(f"model-{role}", "warn",
-                                     f"модель роли {role} не прочитана: {exc}"))
+            resolved = models.resolve_role(role)
+        except models.ModelsError as exc:
+            checks.append(StackCheck(f"model-{role}", "fail",
+                                     f"модель роли {role} не разрешена: {exc}"))
             continue
-        verdict = model_cli_verdict(model, installed)
+        verdict = model_cli_verdict(resolved.model, installed,
+                                    resolved.min_cli_version)
         checks.append(StackCheck(
             f"model-{role}", verdict.status,
-            f"модель роли {role} {model}: {verdict.detail}"))
+            f"модель роли {role} {resolved.model}: {verdict.detail}"))
     return checks
 
 
@@ -504,9 +521,10 @@ def check_stack() -> list:
     есть, согласованность его пакетов с файлом закреплённых версий —
     вторая проверка не запускается без первой (нечего сверять без venv).
     Требование 5 (SPEC 01M2XJKV84SQ9VEVR0VNVKDNGJ, AC-10) добавляет по
-    строке на agent-роль `roles.yaml` с полем `model` — версия `claude`
-    берётся из уже сделанной проверки инструмента (`_probe_tool`), не
-    вторым подпроцессом.
+    строке на agent-роль `roles.yaml` — модель берётся разрешением
+    цепочки «роль -> ярус -> модель» (SPEC 01M3009Y9AGGY6ZCFA7H1HJ1TD),
+    а версия `claude` — из уже сделанной проверки инструмента
+    (`_probe_tool`), не вторым подпроцессом.
     """
     checks = [_python_check()]
     claude_version = None

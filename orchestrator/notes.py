@@ -65,7 +65,12 @@ DOC_COMMIT_KIND = "doc-commit"
 # Конфигурация Оператора, которой `doc-commit` даёт канал мимо главной
 # копии (требование 3 SPEC; решение Оператора 19.09). Всё прочее вне
 # `docs/**` — код и артефакты, они меняются задачами.
-DOC_COMMIT_CONFIG_PATHS = ("roles.yaml", "gates.yaml", "targets.yaml")
+# `models.yaml` — каталог моделей (SPEC 01M3009Y9AGGY6ZCFA7H1HJ1TD,
+# требование 4): та же конфигурация Оператора, что roles.yaml рядом, и
+# тот же канал правки мимо главной копии (префикс коммита `config:` —
+# `_doc_commit_prefix` отдаёт его всему, что вне `docs/`).
+DOC_COMMIT_CONFIG_PATHS = ("roles.yaml", "gates.yaml", "targets.yaml",
+                           "models.yaml")
 
 DOC_COMMIT_FOREIGN_REFUSAL = ("код и артефакты меняются задачами, не "
                               "doc-commit")

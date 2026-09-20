@@ -94,9 +94,9 @@ from collections import namedtuple
 from pathlib import Path
 
 from .. import (alerts, artifact_branch, canary, ci, coldstart, config,
-                fixation, gitcmd, liveness, merge_lock, notes, pool_seal,
-                projects, providers, repo_context, roles, runner, snapshot,
-                spend, stack, store, targets, workspace, zone_lock)
+                fixation, gitcmd, liveness, merge_lock, models, notes,
+                pool_seal, projects, providers, repo_context, roles, runner,
+                snapshot, spend, stack, store, targets, workspace, zone_lock)
 
 # status: "ok" | "warn" | "fail" | "skip" ("skip" — честный пропуск проверки,
 # требование 9: сверка forge-политики без `gh`/сети — не провал и не ок).
@@ -165,6 +165,8 @@ from .orphan_branches import (ORPHAN_ARTIFACT_BRANCH_SOURCE,
 from .ignored_artifacts import _fix_ignored_artifact_files
 from .git_hooks import (HOOKS_PATH, HOOK_NAMES, GIT_HOOKS_CHECK,
                         check_git_hooks, _fix_git_hooks)
+from .model_catalog import (check_models_catalog, check_models_local,
+                            fix_models_local)
 from .map_growth import (MAP_SIZE_ACTION, MAP_GROWTH_SOURCE, _FAR_FUTURE_TS,
                          _all_map_size_steps, _map_growth_reference_point,
                          _map_growth_series, _map_growth_message,

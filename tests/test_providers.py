@@ -25,8 +25,8 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from orchestrator import (catalog, config, doctor, keychain, providers,  # noqa: E402
-                          roles, runner, stack, store)
+from orchestrator import (catalog, config, doctor, keychain, models,  # noqa: E402
+                          providers, roles, runner, stack, store)
 from orchestrator.providers import claude as claude_provider  # noqa: E402
 from tests.sandbox import (TmpDirTest, TmpRootTest, claude_only_popen,  # noqa: E402
                            claude_only_run)
@@ -137,7 +137,7 @@ class RolesProviderTest(TmpDirTest):
     def test_field_value_wins_and_absent_field_defaults_to_claude(self):
         """Ловит мутацию: поле `provider:` не читается вовсе (всегда
         дефолт) — роль на другом CLI молча ушла бы на `claude`; либо
-        отсутствие поля оформлено отказом/`None`, как у `roles.model`, —
+        отсутствие поля оформлено отказом, как у `roles.model_tier`, —
         сегодняшний `roles.yaml` без поля останавливал бы каждый шаг."""
         self.assertEqual(roles.provider("alfa"), UNKNOWN_PROVIDER)
         self.assertEqual(roles.provider("beta"), providers.DEFAULT_PROVIDER)
@@ -401,14 +401,20 @@ class DoctorProviderLinesTest(TmpRootTest):
         self.assertEqual(check.status, "ok", check.detail)
         self.assertIn("провайдеры ролей:", check.detail)
         for role in doctor.agent_roles():
-            self.assertIn(f"{role} → claude", check.detail)
+            # Цепочка целиком (SPEC 01M3009Y9AGGY6ZCFA7H1HJ1TD,
+            # требование 11, AC-15): «роль → ярус → модель → провайдер»,
+            # а не прежняя пара «роль → провайдер».
+            resolved = models.resolve_role(role)
+            self.assertIn(
+                f"{role} → {resolved.tier} → {resolved.model} → claude",
+                check.detail)
 
     def test_unknown_provider_of_a_role_is_a_red_line(self):
         """Ловит мутацию: `doctor` печатает провайдеров ролей строкой, но
         не проверяет их регистрацию (статус всегда `ok`) — пульт узнаёт о
         незнакомом имени только в момент отказа шага."""
         self.use_roles_yaml(
-            _roles_yaml_text("developer", "claude-opus-5").replace(
+            _roles_yaml_text("developer", "strong").replace(
                 "  developer:\n",
                 f"  developer:\n    provider: {UNKNOWN_PROVIDER}\n", 1))
 
