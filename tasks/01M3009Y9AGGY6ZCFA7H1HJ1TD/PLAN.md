@@ -86,6 +86,33 @@ $3.75/$0.30). Запись заведена по ценам `claude-opus-5` и �
 потребитель тарифа — часть 2 линии, поэтому на сегодняшний учёт значение
 не влияет. См. «Риски».
 
+Решение 8 (итерация 2, по ANSWER-1). **Форма записи тарифа в
+`overrides:` локального слоя — три равноправных написания, а не одно.**
+SPEC ключ не фиксирует, локальный слой Оператор пишет руками, и
+залоченная планка подаёт обе своих формы, принимая любую (ADR-0012 —
+спор решается в пользу планки). `models._override_tariff` принимает:
+четыре вида токенов прямо записью модели, они же под ключом каталога
+`list_price_usd_per_mtok` и под `tariff_usd_per_mtok`. Неполный набор в
+выбранной форме — по-прежнему отказ с перечнем недостающих видов:
+принимается написание, а не пропуск цен. Шаблон `init` и
+`docs/reference/models-local.example.yaml` приведены к плоской форме и
+называют остальные две строкой комментария.
+
+Решение 9 (итерация 2). **Причина красноты AC-11/AC-12 — имя
+файла-фикстуры в `tests/test_runner_model_preflight.py`, не логика
+отказа.** `_StepSandbox.set_catalog` уводил `config.MODELS` в
+`models-under-test.yaml`, а планка (`_models.path_patchers`) ищет пути
+слоёв обходом `vars(config)` ПО ИМЕНИ ФАЙЛА `models.yaml` — имя с
+суффиксом ей невидимо, и наследник `TierStepSandbox` молча оставался на
+каталоге чужого файла: сценарий «`experimental` без разрешения» читал
+каталог, где та же модель `supported`, и агент стартовал. Гипотеза
+ANSWER-1 («деградация к `None` в обход отказа») не подтвердилась:
+`_refuse_before_start` ловит `models.ModelsError`, а `LocalLayerError` —
+его потомок, то есть ошибка СХЕМЫ слоя тоже отказ до старта. Фикстура
+переехала в `<root>/catalog-under-test/models.yaml` — имя файла ровно
+`models.yaml`, различается каталог; проверка fail-closed на сломанном
+слое закреплена тестом (`BrokenLocalLayerTest`).
+
 Потолок задачи не переоценивается: 12 файлов кода и 10 файлов тестов —
 это ровно тот класс, который SPEC уже оценил, `budget_usd` во
 фронтматтере не раскомментирован.
@@ -163,10 +190,10 @@ $3.75/$0.30). Запись заведена по ценам `claude-opus-5` и �
 | AC-5 | `tests/test_protected_paths_gate.py::ProtectedPathsReadAtCallTimeTest` |
 | AC-6 | `tests/test_yaml_parsing.py::RolesModelTierTest` |
 | AC-7 | `tests/test_runner_model_preflight.py::RoleWithoutTierTest`, `tests/test_models_doctor.py` |
-| AC-8 | `tests/test_models.py::LocalLayerTest` |
+| AC-8 | `tests/test_models.py::LocalLayerTest` — в том числе три формы записи тарифа `overrides:` и отказ на записи без цен |
 | AC-9 | `tests/test_models_doctor.py::LocalTemplateTest` |
 | AC-10, AC-11 | `tests/test_models.py::ResolveRoleTest` |
-| AC-12 | `tests/test_runner_model_preflight.py::ExplicitModelFlagTest`, `tests/test_runner_role_model.py` |
+| AC-12 | `tests/test_runner_model_preflight.py::ExplicitModelFlagTest`, `::BrokenLocalLayerTest`, `tests/test_runner_role_model.py` |
 | AC-13 | `tests/test_stack.py::ModelCliVerdictTest`, `tests/test_runner_model_preflight.py::ModelOutsideCatalogTest` |
 | AC-14, AC-15 | `tests/test_models_doctor.py` |
 | AC-16 | `tests/test_models.py::CmdModelsTest` |
@@ -184,7 +211,10 @@ $3.75/$0.30). Запись заведена по ценам `claude-opus-5` и �
   `CheckStackModelLinesTest` — роли получают `model_tier`, строки
   печатаются по резолву цепочки, роль с неразрешимым ярусом даёт `fail`.
 - `tests/test_runner_model_preflight.py` — `_StepSandbox` задаёт ярус и
-  локальный слой вместо подмены таблицы; `ModelOutsideTheTableTest`
+  локальный слой вместо подмены таблицы, каталог-фикстура лежит по пути
+  `<root>/catalog-under-test/models.yaml` (решение 9 «Подхода»), добавлен
+  `BrokenLocalLayerTest` (ошибка схемы слоя — отказ до старта);
+  `ModelOutsideTheTableTest`
   (модель вне таблицы — предупреждение и запуск) заменён
   `ModelOutsideCatalogTest` (модель вне каталога — отказ до старта);
   `ModelUnsupportedAttemptTest` больше не ждёт хвоста про
@@ -226,6 +256,16 @@ $3.75/$0.30). Запись заведена по ценам `claude-opus-5` и �
   цена — пульт без локального слоя не запускает ни одного шага, поэтому
   слой кладут и `init`, и `doctor --fix`, а `doctor` называет его
   отсутствие красной строкой с командой починки.
+- **Принятые формы локального слоя** (ANSWER-1, пункт 1). Тариф
+  `overrides:` читается в трёх написаниях — четыре вида токенов записью
+  модели, под `list_price_usd_per_mtok`, под `tariff_usd_per_mtok`;
+  явное разрешение `experimental` — отображением «модель: true». Это
+  расширение ВХОДА, а не ослабление проверки: обязательность всех
+  четырёх цен, `calibrated_at`, `source` и запрет нуля ценой действуют
+  в каждой форме одинаково, а отсутствие разрешения `experimental`
+  остаётся отказом при любом написании. Столбец «источник тарифа»
+  команды `models` теперь несёт основание и дату калибровки
+  переопределения, а не одно слово о стороне-источнике (AC-16).
 - **Учёт стоимости не затронут.** `config.TOKEN_RATES`, `spend.py`,
   `report.py` не меняются: действующий тариф этой задачей только
   отдаётся, потребитель — часть 2 линии.
