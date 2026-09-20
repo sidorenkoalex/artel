@@ -1,6 +1,7 @@
 """Стоимость шага: разбор чисел, событие потока, учёт в spent_usd."""
 import json
 import math
+import re
 from pathlib import Path
 
 from . import alerts, config, store
@@ -166,11 +167,50 @@ def charge_step(conn, task_id: str, role: str, cost: dict | None,
         # запись, чтобы сравнить расчётную цену с фактической. Отдельное
         # действие журнала, не замена существующего `cost_note` в «agent
         # run finished» — требование 6 (дополняет, не заменяет).
-        detail = (f"{numbered}: {cost_note(cost)}, разбивка по видам: "
+        #
+        # Сверка курса с фактом считается ДО записи строки и попадает в
+        # неё же (SPEC 01M2ZNJX2N5SPZCAQE6EHD4EWH, требование 3, AC-4):
+        # свежий шаг обязан входить в собственный коэффициент, а править
+        # уже вставленную строку журнала нечем — `store` эта задача
+        # держит на чтении.
+        detail = (f"{numbered}: {cost_note(cost)}, источник=факт CLI, "
+                 f"разбивка по видам: "
                  f"{_tokens_by_type_text(tokens_by_type)} | "
-                 f"actual_usd={cost['usd']!r}")
-        store.journal(conn, task_id, role, "agent cost KNOWN", detail)
+                 f"actual_usd={cost['usd']!r}"
+                 f"{_divergence_note(conn, role, cost['usd'], tokens_by_type)}")
+        store.journal(conn, task_id, role, KNOWN_COST_JOURNAL_ACTION, detail)
     return f", {cost_note(cost)}"
+
+
+def _divergence_note(conn, role: str, actual_usd: float,
+                     tokens_by_type: dict) -> str:
+    """Хвост строки KNOWN: расчёт по курсу роли и коэффициент её
+    расхождения с фактом CLI (SPEC 01M2ZNJX2N5SPZCAQE6EHD4EWH,
+    требования 3-4). Пустая строка — сверять нечем.
+
+    В сверку идут прежние строки KNOWN этой роли с даты `calibrated_at`
+    её курса (`known_cost_pairs`) ПЛЮС пара текущего шага: коэффициент в
+    строке отвечает на вопрос «как курс роли расходится с фактом на этот
+    момент», включая сам записываемый шаг.
+
+    Курс роли не задан (`partial_cost_usd` вернула `None`) или неполон
+    (`ValueError`, требование 3 SPEC 01M1PP0VYRT55WN8GGVG66X89Y) — тихий
+    пропуск: учёт шага важнее сверки и не имеет права упасть вместе с
+    ней (тот же урок, что R1-F1 у `charge_missing_result` ниже).
+    """
+    try:
+        calculated = partial_cost_usd(role, tokens_by_type)
+    except ValueError:
+        return ""
+    if calculated is None:
+        return ""
+    pairs = known_cost_pairs(conn, role).get(role, [])
+    pairs.append((calculated, actual_usd))
+    divergence = check_rate_divergence(conn, role, pairs)
+    if divergence is None:
+        return ""
+    return (f" | расчёт по курсу=${calculated:.4f}, "
+            f"коэффициент роли с {divergence.since}={divergence:.2f}")
 
 
 # Счётчик usage (`config.USAGE_TOKEN_KEYS`) -> поле цены `TOKEN_RATES[role]`,
@@ -223,6 +263,172 @@ def partial_cost_usd(role: str, tokens_by_type: dict) -> float | None:
                 f"стоимость не считается по неполному курсу молча")
         total += tokens_by_type.get(key, 0) * rate[rate_field]
     return total
+
+
+# --- сверка курса роли с фактом CLI (01M2ZNJX2N5SPZCAQE6EHD4EWH, 3-7)
+#
+# Формат строки «agent cost KNOWN» пишет `charge_step` выше — разбор
+# ниже его обратная операция. Оба живут в одном модуле с того момента,
+# как точек чтения стало две (SPEC 01M2ZNJX2N5SPZCAQE6EHD4EWH,
+# требование 6): сверка при записи шага (`_divergence_note`) и отчёт
+# (`report.token_rate_divergence`, зовёт эти же функции). До этого
+# разбор стоял в `report.py` рядом с единственным читателем.
+KNOWN_COST_JOURNAL_ACTION = "agent cost KNOWN"
+
+_ACTUAL_USD_RE = re.compile(r"actual_usd=([0-9eE.+-]+)")
+_TOKEN_FIELD_RE = {key: re.compile(rf"(?<![a-z_]){re.escape(key)}=(\d+)")
+                   for key in config.USAGE_TOKEN_KEYS}
+
+
+def known_cost_breakdown(detail: str) -> tuple:
+    """(фактическая_цена, разбивка_по_видам) из детали «agent cost
+    KNOWN», либо `(None, None)` — запись не несёт того, что нужно
+    (старый формат, повреждённая строка)."""
+    usd_match = _ACTUAL_USD_RE.search(detail or "")
+    if usd_match is None:
+        return None, None
+    try:
+        actual_usd = float(usd_match.group(1))
+    except ValueError:
+        return None, None
+    tokens_by_type = {}
+    for key, pattern in _TOKEN_FIELD_RE.items():
+        m = pattern.search(detail)
+        if m is not None:
+            tokens_by_type[key] = int(m.group(1))
+    return actual_usd, tokens_by_type
+
+
+def rate_calibrated_at(role: str) -> str | None:
+    """Дата калибровки курса роли (`config.TOKEN_RATES`), с которой идёт
+    сверка; `None` — курса роли нет либо он не несёт даты."""
+    rate = config.TOKEN_RATES.get(role)
+    return rate.get("calibrated_at") if rate else None
+
+
+def _within_rate_period(role: str, ts) -> bool:
+    """Записан ли шаг не раньше даты калибровки курса роли.
+
+    `store.now()` пишет `YYYY-MM-DD HH:MM:SSZ`, `calibrated_at` —
+    `YYYY-MM-DD`: сравнение префикса лексикографически и есть сравнение
+    дат, разбирать их нечем. Строки старше даты — шаги ДРУГОЙ модели
+    (SPEC 01M2ZNJX2N5SPZCAQE6EHD4EWH, требование 3), в сверку не входят.
+    Курс без даты либо строка без `ts` — тоже мимо: отнести такой шаг к
+    периоду курса нечем, а молча смешать две модели — ровно тот дефект,
+    который задача и закрывает.
+    """
+    since = rate_calibrated_at(role)
+    if since is None or not ts:
+        return False
+    return str(ts)[:len(since)] >= since
+
+
+def known_cost_pairs(conn, role: str | None = None) -> dict:
+    """{роль: [(расчёт по курсу, факт CLI), …]} по строкам журнала
+    `KNOWN_COST_JOURNAL_ACTION` не старше даты калибровки курса роли;
+    `role` — сузить чтение до одной роли (путь записи шага).
+
+    Журнал читается существующими функциями `store` (`all_tasks` +
+    `task_steps`), тем же приёмом, что `report._all_steps`: функции «весь
+    журнал одним запросом» в `store` нет, а заводить её эта задача не
+    вправе (SPEC «Не входит» — `store.py` только чтение).
+
+    Строка, которую нечем сверить, пропускается молча: старый формат без
+    `actual_usd`, роль без курса (`partial_cost_usd` — `None`), неполный
+    курс (`ValueError`). Калибровка не обязана падать из-за неполноты
+    конфигурации — это дело `partial_cost_usd` в её собственной точке
+    вызова.
+    """
+    pairs: dict = {}
+    for task in store.all_tasks(conn):
+        for row in store.task_steps(conn, task["id"]):
+            if row["action"] != KNOWN_COST_JOURNAL_ACTION:
+                continue
+            actor = row["actor"]
+            if role is not None and actor != role:
+                continue
+            if not _within_rate_period(actor, row["ts"]):
+                continue
+            actual_usd, tokens_by_type = known_cost_breakdown(row["detail"])
+            if actual_usd is None or not tokens_by_type:
+                continue
+            try:
+                calculated_usd = partial_cost_usd(actor, tokens_by_type)
+            except ValueError:
+                continue
+            if calculated_usd is None:
+                continue
+            pairs.setdefault(actor, []).append((calculated_usd, actual_usd))
+    return pairs
+
+
+class RateDivergence(float):
+    """Коэффициент расхождения курса роли с фактом CLI — число, которое
+    помнит, по какой выборке оно посчитано: `steps` (сколько шагов в неё
+    вошло) и `since` (дата калибровки курса, с которой идёт сверка).
+
+    Именно число, а не словарь или кортеж: возврат
+    `report.token_rate_divergence` — `{роль: коэффициент}` — зафиксирован
+    залоченной планкой 01M1PP0VYRT55WN8GGVG66X89Y (AC-6,
+    `acceptance_tests/test_ac6_calibration_reports_divergence_by_role.py`
+    сравнивает значение роли через `assertAlmostEqual`), а правка
+    залоченной планки — право Оператора (ADR-0012), не этой задачи.
+    Дату и число шагов обязаны назвать строка журнала (SPEC
+    01M2ZNJX2N5SPZCAQE6EHD4EWH, требование 3) и строка отчёта
+    (требование 7), поэтому они едут рядом с коэффициентом — считать их
+    второй раз у каждого читателя значило бы развести две математики.
+    """
+
+    __slots__ = ("steps", "since")
+
+    def __new__(cls, coefficient: float, steps: int, since: str):
+        value = super().__new__(cls, coefficient)
+        value.steps = steps
+        value.since = since
+        return value
+
+
+def check_rate_divergence(conn, role: str, pairs: list) -> RateDivergence | None:
+    """Коэффициент расхождения курса роли с фактом CLI по парам «расчёт,
+    факт» — и алерт, если он выше порога. `None` — сверять нечего.
+
+    ЕДИНСТВЕННОЕ место, где живёт математика «сумма расчёта против суммы
+    фактов» (SPEC 01M2ZNJX2N5SPZCAQE6EHD4EWH, требование 6, AC-8): её
+    зовут обе точки — запись шага (`_divergence_note`) и отчёт
+    (`report.token_rate_divergence`). Суммарное расхождение по шагам, не
+    среднее по шагам: несколько маленьких шагов не должны топить один
+    крупный расходящийся.
+
+    Алерт — `kind=warning`, `target=None` (расхождение считается по роли
+    поперёк всех задач и target'ов) через
+    `alerts.raise_token_rate_divergence_alert`, не `alerts.raise_alert`:
+    сообщение несёт растущие суммы, дедуп по точному тексту не сработал
+    бы на повторных шагах (REVIEW.md 01M1PP0VYRT55WN8GGVG66X89Y итерации
+    1, R1-F2). Заведение алерта живёт здесь, а не у вызывающих, по той же
+    причине, что и сам расчёт: две копии условия разошлись бы.
+
+    Возврат — `RateDivergence`: сам коэффициент числом (форма возврата
+    `report.token_rate_divergence` этим и сохранена), а дата и число
+    вошедших шагов — его атрибутами, потому что строка журнала и строка
+    отчёта обязаны их назвать (требования 3, 7).
+    """
+    since = rate_calibrated_at(role)
+    if since is None or not pairs:
+        return None
+    actual_sum = sum(actual for _, actual in pairs)
+    if actual_sum == 0:
+        return None
+    calculated_sum = sum(calculated for calculated, _ in pairs)
+    coefficient = abs(calculated_sum - actual_sum) / actual_sum
+    if coefficient > config.TOKEN_RATE_DIVERGENCE_ALERT_THRESHOLD:
+        alerts.raise_token_rate_divergence_alert(
+            conn, role,
+            f"{role}: коэффициент расхождения курса токенов "
+            f"{coefficient:.2f} выше порога "
+            f"{config.TOKEN_RATE_DIVERGENCE_ALERT_THRESHOLD} — расчётная "
+            f"цена ${calculated_sum:.4f} против фактической "
+            f"${actual_sum:.4f} по {len(pairs)} шагам с {since}")
+    return RateDivergence(coefficient, len(pairs), since)
 
 
 def charge_missing_result(conn, task_id: str, role: str, numbered: str,
@@ -291,9 +497,14 @@ def charge_missing_result(conn, task_id: str, role: str, numbered: str,
     else:
         rate_reason = f"курс роли {role!r} не задан"
     if usd is not None:
+        # `источник=расчёт по тарифу` (SPEC 01M2ZNJX2N5SPZCAQE6EHD4EWH,
+        # требование 2): читатель журнала обязан отличать эту сумму от
+        # факта CLI строки KNOWN — недоучёт шага PARTIAL (SPEC
+        # «Контекст») начинался с того, что обе выглядели одинаково.
         detail = (f"{numbered}: {cause}, финальное событие потока "
                  f"отсутствует — частичная стоимость по курсу роли "
-                 f"{role!r}: ${usd:.4f}, {total_tokens} токенов, "
+                 f"{role!r}: ${usd:.4f}, источник=расчёт по тарифу, "
+                 f"{total_tokens} токенов, "
                  f"разбивка по видам: {_tokens_by_type_text(partial_tokens)}")
         store.journal(conn, task_id, role, "agent cost PARTIAL", detail)
         store.charge(conn, task_id, usd)
