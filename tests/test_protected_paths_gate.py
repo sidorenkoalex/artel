@@ -207,39 +207,43 @@ class AgentsMdIsProtectedTest(unittest.TestCase):
         self.assertIn("AGENTS.md", config.PROTECTED_PATHS)
 
 
-class ModelsCatalogNotYetProtectedTest(unittest.TestCase):
-    """Решение Оператора 20.09 (возврат из verifying задачи
-    01M3009Y9AGGY6ZCFA7H1HJ1TD): каталог моделей входит в
-    `config.PROTECTED_PATHS` частью 2 линии (01M300A14K), не этой веткой
-    — CI-джоб `protected-paths` читает список из ветки PR, и ветка,
-    которая создаёт файл и объявляет его защищённым одним мержем, красит
+class ModelsCatalogIsProtectedTest(unittest.TestCase):
+    """Каталог моделей — зона Оператора (SPEC 01M300A14KRHCFB0DQXVCBJEKF,
+    требование 12): состав `models.yaml` решает, на чём идут роли, и
+    правится он приложением к PLAN либо `doc-commit`, а не веткой роли.
+
+    Включение отложили на эту часть линии по решению Оператора 20.09
+    (возврат из verifying задачи 01M3009Y9AGGY6ZCFA7H1HJ1TD): CI-джоб
+    `protected-paths` читает список из ветки PR, и ветка, которая
+    создаёт файл и объявляет его защищённым одним мержем, покрасила бы
     собственный PR."""
 
-    def test_models_yaml_is_not_in_protected_paths_until_part_two(self):
-        """Ловит мутацию: `models.yaml` вернули в список этой веткой —
-        джоб `protected-paths` снова читает объявление из ветки PR,
-        видит создание файла и падает, а обойти его приложением к PLAN
-        нельзя (гейт приложений сверяется со списком главной копии)."""
-        self.assertNotIn("models.yaml", config.PROTECTED_PATHS)
+    def test_models_yaml_is_protected_and_the_gate_catches_it(self):
+        """Ловит мутацию: `models.yaml` выпал из списка (или гейт зон
+        сверяет пути неравенством вместо префикса) — роль конвейера
+        поменяла бы модель яруса или прейскурант в своей ветке, минуя
+        приложение Оператора, и молчаливая смена цены вернулась бы тем
+        же путём, каким пришла в инциденте 13.09-20.09."""
+        self.assertIn("models.yaml", config.PROTECTED_PATHS)
         self.assertEqual(
             fsm_advance._protected_paths_touched(
                 ["models.yaml", "orchestrator/models.py"]),
-            [])
+            ["models.yaml"])
 
-    def test_gate_reads_the_list_of_the_main_copy_at_call_time(self):
+    def test_gate_reads_the_list_at_call_time_not_at_import(self):
         """Гейт читает `config.PROTECTED_PATHS` В МОМЕНТ проверки, а не
-        снимком при импорте: как только часть 2 внесёт `models.yaml` в
-        список главной копии, тот же дифф начнёт отказывать без правок
-        самого гейта.
+        снимком при импорте: список пополняется правкой одного
+        `config.py`, без правок самого гейта.
 
         Ловит мутацию: список снят снимком при импорте модуля гейта
         (константа рядом с функцией) — подмена `config.PROTECTED_PATHS`
-        перестала бы влиять на вердикт, и защита каталога, включённая
-        частью 2, не заработала бы вовсе."""
-        after_part_two = tuple(config.PROTECTED_PATHS) + ("models.yaml",)
+        перестала бы влиять на вердикт, и следующий защищённый путь не
+        заработал бы вовсе."""
+        without_catalog = tuple(p for p in config.PROTECTED_PATHS
+                                if p != "models.yaml")
 
-        with mock.patch.object(config, "PROTECTED_PATHS", after_part_two):
+        with mock.patch.object(config, "PROTECTED_PATHS", without_catalog):
             touched = fsm_advance._protected_paths_touched(
                 ["models.yaml", "orchestrator/config.py"])
 
-        self.assertEqual(touched, ["models.yaml"])
+        self.assertEqual(touched, [])
