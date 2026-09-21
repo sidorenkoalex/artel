@@ -124,7 +124,8 @@ workspace, tasks, knowledge, logs). БД одна на все проекты: с
   kill <id> | release <id> |
   pause [--now] <id> | resume <id> | log <id> | budget <id> <usd> |
   target-init <target> | doctor [--restore] [--fix] | alert-ack <id> "<решение>" |
-  version | canary --k <N> [--sha <sha>] | canary pool-seal | prune [--execute] |
+  version | models | canary --k <N> [--sha <sha>] | canary pool-seal |
+  prune [--execute] |
   amend-tests <id> --reason "<основание>" [--from-branch] | pin-update <sha main артели> |
   pin --to [<sha>] | zone-release <id> | zone-reorder <id1> <id2> ... |
   venv-sync | note (копилка|бэклог|очередь) --text "<строка>" |
@@ -356,6 +357,8 @@ worktree задачи, команда коммитит правку, сдвиг�
   alerts    таблица alerts: incident|threshold|trigger, ack с решением (A3)
   doctor    pre-flight, recovery-сверка, сироты, смоук CLI/изоляции (A3)
   version   пин CLI, фактическая версия, версия схемы артефактов (T030)
+  models    каталог моделей, ярусы ролей, тариф — только чтение
+            (01M3009Y9AGGY6ZCFA7H1HJ1TD)
   canary    синтетический прогон конвейера в эфемерном клоне, метрики,
             per-task бейзлайн, изоляция пула от ролей (v2,
             01M1NEEWH5K1XPFRDGRMPYSBXJ; v1 — T065)
@@ -473,9 +476,9 @@ _ensure_supported_interpreter()
 
 from orchestrator import (amend, answer, auto, budget, canary, catalog,  # noqa: E402
                           cleanup, doctor, dry_run, fsm, lease, liveness,
-                          notes, pause, pin, pool_seal, projects, prune,
-                          release, report, runner, store, venv, version,
-                          watch, workspace, zone_lock)
+                          models, notes, pause, pin, pool_seal, projects,
+                          prune, release, report, runner, store, venv,
+                          version, watch, workspace, zone_lock)
 
 
 # Отвязка `run`/`auto` от процесса сессии Оператора (SPEC
@@ -820,6 +823,10 @@ def main() -> None:
         "alert-ack": lambda: doctor.cmd_alert_ack(
             rest[0], rest[1] if len(rest) > 1 else ""),
         "version": lambda: version.cmd_version(),
+        # `models` — только чтение (SPEC 01M3009Y9AGGY6ZCFA7H1HJ1TD,
+        # требование 12): отказа из окружения роли ей не нужно, поэтому
+        # в `_role_restricted_command` записи нет.
+        "models": lambda: models.cmd_models(),
         "canary": lambda: _cmd_canary(rest),
         "prune": lambda: prune.cmd_prune("--execute" in rest),
         "report": lambda: report.cmd_report(),

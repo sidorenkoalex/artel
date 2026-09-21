@@ -15,8 +15,8 @@ from pathlib import Path
 
 from . import (agent_log, alerts, brief, budget, checkpoint, config,
               failure_classification, fixation, gitcmd, keychain, lease,
-              liveness, parallel_limit, pause, providers, review, role_prompt,
-              roles, spend, stack, store, workspace, zone_lock)
+              liveness, models, parallel_limit, pause, providers, review,
+              role_prompt, roles, spend, stack, store, workspace, zone_lock)
 
 # Идентичность коммитера, которую роль обязана унести с собой в свой HOME.
 # git читает эти переменные ПОВЕРХ конфига, поэтому перенос ровно двух пар
@@ -400,47 +400,42 @@ def _refuse_before_start(conn, task_id: str, t, role: str):
     if skills is None:
         return "exit", f"[{task_id}] скил роли {role} не прочитан: {reason}"
 
-    # Модель роли из roles.yaml (SPEC 01M2DTT96FS25SHXP0HDTWARQH, требования
-    # 1-2, 4): тем же приёмом отказа, что skills выше — нечитаемое значение
-    # поля (не строка/пустая строка) останавливает шаг, вместо того чтобы
-    # молча дотянуть до попытки агента. Поле не задано (`None`) — не отказ:
-    # ровно одна запись предупреждения в журнал ЭТОГО шага (не на попытку —
-    # `run_agent_once` резолвит модель заново для argv/журнала записей
-    # попытки, но не журналирует предупреждение повторно), команда идёт без
-    # `--model` (требование 3).
+    # Модель шага — разрешением цепочки «роль -> ярус -> модель ->
+    # провайдер» (SPEC 01M3009Y9AGGY6ZCFA7H1HJ1TD, требования 8-9): ярус
+    # роли в `roles.yaml`, модель яруса и тариф — в локальном слое и
+    # каталоге. Любое неразрешённое звено (ярус не задан или вне перечня,
+    # ярус без модели, модель вне каталога, `experimental` без явного
+    # разрешения) — именованный отказ ДО старта агента, а не дефолт CLI:
+    # шаг без явной модели больше не запускается вовсе (требование 5).
     try:
-        model_id = roles.model(role)
-    except roles.RolesError as exc:
-        return "exit", f"[{task_id}] модель роли {role} не прочитана: {exc}"
-    if model_id is None:
+        resolved = models.resolve_role(role)
+    except models.ModelsError as exc:
+        store.journal(conn, task_id, role, MODEL_UNRESOLVED_REFUSAL_ACTION,
+                      str(exc))
+        return "exit", (f"[{task_id}] run отклонён: модель роли {role} не "
+                        f"разрешена: {exc}")
+    model_id = resolved.model
+
+    # Предполётная сверка модели с версией CLI (SPEC
+    # 01M2XJKV84SQ9VEVR0VNVKDNGJ, требование 3, AC-6..AC-8) — ДО сборки
+    # промпта и первой попытки: отказ детерминирован, повторы и эскалация
+    # его не лечат (инцидент 19.09 — три попытки по 120 с за 0 токенов).
+    # `sys.exit` — тем же приёмом, что пауза/стоп-кран выше: `auto` ловит
+    # `SystemExit`, печатает текст (с подсказкой из самого отказа) и
+    # останавливает цикл, не прокручивая шаги до `AUTO_MAX_STEPS`.
+    # Вердикт — у провайдера (SPEC 01M2ZNTHSNFYSTF904P6SZTPYF, требование
+    # 5, AC-7): решение «спрашивать ли версию CLI ради этой модели»
+    # принимает тот, кто эту модель запускает, а не runner литералом.
+    verdict = provider.model_verdict(model_id)
+    if verdict.status == "fail":
+        return "exit", _model_refusal_exit(conn, task_id, role,
+                                           verdict.detail)
+    if verdict.status == "warn":
+        # Только журнал, без консоли: неопределившаяся версия CLI —
+        # состояние окружения, а не предмет шага; строка на каждый шаг в
+        # stdout была бы шумом раньше пути лога шага.
         store.journal(conn, task_id, role, "model WARNING",
-                      "модель роли не задана — дефолт CLI")
-    else:
-        # Предполётная сверка модели с версией CLI (SPEC
-        # 01M2XJKV84SQ9VEVR0VNVKDNGJ, требование 3, AC-6..AC-8) — ДО
-        # сборки промпта и первой попытки: отказ детерминирован, повторы и
-        # эскалация его не лечат (инцидент 19.09 — три попытки по 120 с за
-        # 0 токенов). `claude --version` зовётся только для модели из
-        # таблицы: модели вне её версия не нужна — одна запись
-        # предупреждения на шаг и запуск как сегодня. `sys.exit` — тем же
-        # приёмом, что пауза/стоп-кран выше: `auto` ловит `SystemExit`,
-        # печатает текст (с подсказкой из самого отказа) и останавливает
-        # цикл, не прокручивая шаги до `AUTO_MAX_STEPS`.
-        # Вердикт — у провайдера (SPEC 01M2ZNTHSNFYSTF904P6SZTPYF,
-        # требование 5, AC-7): решение «спрашивать ли версию CLI ради
-        # этой модели» принимает тот, кто эту модель запускает, а не
-        # runner литералом рядом с таблицей.
-        verdict = provider.model_verdict(model_id)
-        if verdict.status == "fail":
-            return "exit", _model_refusal_exit(conn, task_id, role,
-                                               verdict.detail)
-        if verdict.status == "warn":
-            # Только журнал, без консоли — тем же приёмом, что «модель
-            # роли не задана» выше: модели вне таблицы — штатный случай
-            # (таблицу пополняет Оператор), строка на каждый шаг в stdout
-            # была бы шумом раньше пути лога шага.
-            store.journal(conn, task_id, role, "model WARNING",
-                          f"{model_id}: {verdict.detail}")
+                      f"{model_id}: {verdict.detail}")
 
     return "continue", (target, skills, model_id)
 
@@ -454,6 +449,14 @@ MODEL_UNSUPPORTED_REFUSAL_ACTION = "run отклонён: модель не по
 # То же самое для отказа по незарегистрированному провайдеру роли (SPEC
 # 01M2ZNTHSNFYSTF904P6SZTPYF, требование 4).
 PROVIDER_REFUSAL_ACTION = "run отклонён: провайдер роли не зарегистрирован"
+
+# И для неразрешённой цепочки «роль -> ярус -> модель -> провайдер» (SPEC
+# 01M3009Y9AGGY6ZCFA7H1HJ1TD, требования 5, 8): ярус роли не задан или вне
+# перечня, ярус без модели в локальном слое, модель вне каталога,
+# `experimental` без явного разрешения. Отдельное имя от отказа по версии
+# CLI выше: чинятся они разными файлами (roles.yaml/.artel/models.yaml
+# против установки CLI).
+MODEL_UNRESOLVED_REFUSAL_ACTION = "run отклонён: модель роли не разрешена"
 
 
 def _model_refusal_exit(conn, task_id: str, role: str, detail: str) -> str:
@@ -470,10 +473,13 @@ def _model_unsupported_after_attempt(conn, task_id: str, role: str,
                                      reason: str) -> str:
     """Отказ шага после попытки класса «модель не поддерживается CLI»
     (SPEC 01M2XJKV84SQ9VEVR0VNVKDNGJ, требование 4, AC-9) — тот же
-    именованный исход, что и у предполётной сверки, для модели, которой
-    в таблице нет (или чья запись занижена): требуемая версия — из
-    текста попытки («version X or newer is required»), установленная —
-    тем же `claude --version`, что и предполёт."""
+    именованный исход, что и у предполётной сверки, для модели, чья
+    запись в каталоге занижена (модели ВНЕ каталога до попытки агента
+    больше не доходят — SPEC 01M3009Y9AGGY6ZCFA7H1HJ1TD, требование 10:
+    предполёт отказывает им раньше): требуемая версия — из текста попытки
+    («version X or newer is required»), установленная — тем же
+    `claude --version`, что и предполёт. Расхождение с каталогом чинится
+    правкой `min_cli_version` записи модели в `models.yaml`."""
     required = failure_classification.required_cli_version(reason)
     # Версия — у провайдера роли (SPEC 01M2ZNTHSNFYSTF904P6SZTPYF,
     # требование 5): тот же источник, что у предполётного вердикта выше.
@@ -486,10 +492,10 @@ def _model_unsupported_after_attempt(conn, task_id: str, role: str,
     if installed is not None:
         detail += f", установлен {stack.version_text(installed)}"
     detail += f"; {stack.CLI_UPGRADE_HINT}"
-    if model_id is not None and model_id not in stack.MODEL_MIN_CLI_VERSION:
-        detail += (f"; {stack.MODEL_NOT_IN_TABLE_WARNING} — запись в "
-                   f"stack.MODEL_MIN_CLI_VERSION остановит следующий такой "
-                   f"шаг до запуска агента")
+    if required is not None and model_id is not None:
+        detail += (f"; подними {models.MIN_CLI_KEY} записи {model_id} в "
+                   f"{config.MODELS} до {required} — следующий такой шаг "
+                   f"остановится до запуска агента")
     return _model_refusal_exit(conn, task_id, role, detail)
 
 
@@ -933,16 +939,18 @@ def _missing_required_artifact(role: str, cwd: Path, task_id: str) -> str | None
 
 
 def _resolved_role_model(role: str) -> str | None:
-    """`roles.model(role)`, деградируя к `None` на `RolesError` (SPEC
-    01M2DTT96FS25SHXP0HDTWARQH, требование 2) — защитный повтор: значение,
-    нечитаемое `roles.model`, уже остановило бы шаг раньше, в
-    `_refuse_before_start`, ДО первой попытки. Повтор здесь нужен только
-    потому, что `run_agent_once` (AC-7 `tasks/01M2CN3ZCSZ54TFJGTDCXTDHXD`
-    — 101 патч по имени модуля) не вправе принять новый параметр — модель
-    попытки резолвится тем же вызовом заново, а не передаётся аргументом."""
+    """Модель шага разрешением цепочки (`models.resolve_role`, SPEC
+    01M3009Y9AGGY6ZCFA7H1HJ1TD, требование 9), деградируя к `None` на
+    любом `ModelsError` — защитный повтор: неразрешимая цепочка уже
+    остановила бы шаг раньше, в `_refuse_before_start`, ДО первой
+    попытки, поэтому деградация на живом пути недостижима. Повтор здесь
+    нужен только потому, что `run_agent_once` (AC-7
+    `tasks/01M2CN3ZCSZ54TFJGTDCXTDHXD` — 101 патч по имени модуля) не
+    вправе принять новый параметр — модель попытки резолвится тем же
+    вызовом заново, а не передаётся аргументом."""
     try:
-        return roles.model(role)
-    except roles.RolesError:
+        return models.resolve_role(role).model
+    except models.ModelsError:
         return None
 
 

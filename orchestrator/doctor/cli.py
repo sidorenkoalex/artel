@@ -31,6 +31,12 @@ def all_checks(conn) -> list[doctor.Check]:
     """
     provider_checks = doctor.provider_preflight_checks()
     checks = [doctor.check_role_providers()]
+    # Каталог моделей и локальный слой (SPEC 01M3009Y9AGGY6ZCFA7H1HJ1TD,
+    # требование 11) — сразу за строкой цепочек ролей, до проверок CLI:
+    # без разрешимой цепочки ни один агентный шаг не стартует, и причина
+    # обязана стоять рядом с самой цепочкой, а не в конце списка.
+    checks.append(doctor.check_models_catalog())
+    checks.append(doctor.check_models_local())
     checks.extend(provider_checks.pop("cli-found", []))
     checks.extend(provider_checks.pop("cli-version", []))
     checks.extend(provider_checks.pop("token", []))
@@ -146,6 +152,11 @@ def cmd_doctor(restore: bool = False, fix: bool = False) -> None:
         doctor._fix_ignored_artifact_files(conn)
         doctor._fix_dead_lease_groups(conn)
         doctor._fix_hung_test_runs(conn)
+        # Локальный слой моделей (SPEC 01M3009Y9AGGY6ZCFA7H1HJ1TD,
+        # требование 7) — до `all_checks` ниже, чтобы проверка
+        # «models-local» в том же прогоне уже видела положенный шаблон
+        # (тот же приём, что у хуков защиты main ниже).
+        doctor.fix_models_local()
         # Хуки защиты main (SPEC 01M2XMCC837R5CX9M58VARK85G, требование 4)
         # — до `all_checks` ниже, чтобы проверка «git-hooks» в том же
         # прогоне уже видела включённую защиту (AC-11).

@@ -17,8 +17,10 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from orchestrator import catalog, config, gitcmd, runner, stack, store  # noqa: E402
-from tests.sandbox import (FakeProc, SpyRun, _stub_check_stack, capture,  # noqa: E402
+from orchestrator import (catalog, config, gitcmd, models, runner,  # noqa: E402
+                          stack, store)
+from tests.sandbox import (FakeProc, SANDBOX_ROLES_TEXT, SpyRun,  # noqa: E402
+                           _stub_check_stack, capture,
                            capture_new_task_id, disk_backed_ls_tree_files,
                            disk_backed_show, fake_git,
                            seed_developer_brief_fixtures, sync_spec_from_worktree)
@@ -57,10 +59,21 @@ class PromptChannelTest(unittest.TestCase):
                             # `cmd_new` (SPEC T048) сам заводит ветку и
                             # worktree через `gitcmd` — тому нужен адрес,
                             # не задетый ROOT репозитория пульта.
-                            ("WORKTREES", root / ".artel" / "worktrees")):
+                            ("WORKTREES", root / ".artel" / "worktrees"),
+                            # Локальный слой моделей и карта исполнителей с
+                            # ярусами (SPEC 01M3009Y9AGGY6ZCFA7H1HJ1TD,
+                            # требования 5-6): модель шага — результат
+                            # разрешения цепочки, и без обоих файлов шаг
+                            # отказывает «ярус роли не разрешён» ещё до
+                            # предмета этого файла (тот же приём, что
+                            # `tests.sandbox.TmpRootTest.setUp`).
+                            ("MODELS_LOCAL", root / ".artel" / "models.yaml"),
+                            ("ROLES", root / "roles-sandbox.yaml")):
             patcher = mock.patch.object(config, attr, value)
             patcher.start()
             self.addCleanup(patcher.stop)
+        config.ROLES.write_text(SANDBOX_ROLES_TEXT, encoding="utf-8")
+        models.ensure_local_template()
         # git не спрашиваем: ревью-пакет собирается на заготовке. Не
         # `lambda *a: FakeGitResult()` (везде rc=0) — с SPEC T048 `cmd_new`
         # сам решает, заводить ли задачу, по ответу `branch_exists`

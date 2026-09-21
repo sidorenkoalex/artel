@@ -1,0 +1,67 @@
+# Каталог поддерживаемых моделей (docs/research/providers-codex-plan.md
+# §3.1, SPEC 01M3009Y9AGGY6ZCFA7H1HJ1TD, требование 1) — знание пульта о
+# провайдерах, общее для всех клонов. Защищённый путь
+# (config.PROTECTED_PATHS): правит только Оператор — командой
+# `doc-commit models.yaml --from <файл> --message "<основание>"` либо
+# приложением к PLAN. Читатель — orchestrator/models.py.
+#
+# Заменяет таблицу «модель -> минимальная версия CLI», жившую до 20.09 в
+# orchestrator/stack.py: модель, которой здесь нет, теперь отказ шага до
+# старта агента, а не предупреждение.
+#
+# Форма файла ограничена orchestrator/yamlmini.py: вложенные блочные
+# отображения, без блочных списков. Версии и даты пишутся так, чтобы
+# остаться строкой (2.1.251, 2026-09-20), цены — числами; все четыре цены
+# обязательны, явный ноль — ошибка конфигурации.
+#
+# Ярус роли -> модель задаёт локальный слой .artel/models.yaml (вне git,
+# шаблон кладут `init` и `doctor --fix`); здесь его нет намеренно: выбор
+# моделей — дело конкретного пульта, а каталог — общее знание.
+providers:
+  claude:
+    cli: claude
+    # Нижняя граница самого CLI (не связка с моделями) — то же число, что
+    # несёт манифест стека (orchestrator/providers/claude.py, CLI_MINIMUM).
+    min_cli_version: 1.0.0
+    cost_from_cli: true
+    models:
+      claude-sonnet-5:
+        min_cli_version: 1.0.0
+        status: supported
+        # Прейскурант Anthropic за миллион токенов; те же числа курс
+        # пульта нёс до калибровки 20.09 (docs/backlog.md, копилка 2).
+        list_price_usd_per_mtok:
+          input: 3.0
+          output: 15.0
+          cache_write: 3.75
+          cache_read: 0.30
+        price_date: 2026-09-20
+      claude-opus-5:
+        min_cli_version: 1.0.0
+        status: supported
+        # Калибровка 20.09 (config.TOKEN_RATES, задача
+        # 01M2ZNJX2N5SPZCAQE6EHD4EWH): прейскурант сошёлся с фактом CLI по
+        # 93 шагам с коэффициентом 1.009.
+        list_price_usd_per_mtok:
+          input: 5.0
+          output: 25.0
+          cache_write: 6.25
+          cache_read: 0.50
+        price_date: 2026-09-20
+      claude-fable-5-1:
+        # Минимум — инцидент 19.09 (01M2XFSJ1Z, 01M2XFSE8G): «version
+        # 2.1.251 or newer is required» за 0 токенов и три попытки.
+        min_cli_version: 2.1.251
+        status: supported
+        # ЦЕНЫ НЕ СВЕРЕНЫ: у шага роли, заводившего этот каталог, нет
+        # сети, а в репозитории цен этой модели нет ни в одном источнике
+        # — запись заведена по ценам claude-opus-5 и ждёт сверки
+        # Оператором (`doc-commit models.yaml`). Ни один ярус на модель
+        # сегодня не указывает, потребителя тарифа в пульте пока нет
+        # (часть 2 линии) — на учёт расхода значение не влияет.
+        list_price_usd_per_mtok:
+          input: 5.0
+          output: 25.0
+          cache_write: 6.25
+          cache_read: 0.50
+        price_date: 2026-09-20

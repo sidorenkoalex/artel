@@ -50,8 +50,14 @@ class PathRefusalTest(unittest.TestCase):
         красен на непустом отказе для `roles.yaml` или
         `docs/research/x.md`."""
         for rel in (DOC_REL, "docs/research/x.md", "docs/adr/0001.md",
-                    "roles.yaml", "gates.yaml", "targets.yaml"):
+                    "roles.yaml", "gates.yaml", "targets.yaml",
+                    # Каталог моделей (SPEC 01M3009Y9AGGY6ZCFA7H1HJ1TD,
+                    # требование 4, AC-4): состав каталога — та же
+                    # конфигурация Оператора, что roles.yaml рядом.
+                    "models.yaml"):
             self.assertIsNone(notes._doc_commit_path_refusal(rel), rel)
+        self.assertIn("models.yaml", notes.DOC_COMMIT_CONFIG_PATHS)
+        self.assertEqual(notes._doc_commit_prefix("models.yaml"), "config")
 
     def test_backlog_is_refused_naming_note(self):
         """`docs/backlog.md` — путь `note`, отказ называет `note`.

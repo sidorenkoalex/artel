@@ -1,5 +1,6 @@
 """Юнит-тесты флага `--model` в команде шага и `model=` в журнале «agent
-run started» (SPEC 01M2DTT96FS25SHXP0HDTWARQH, требования 3-5).
+run started» (SPEC 01M2DTT96FS25SHXP0HDTWARQH, требования 3-5; SPEC
+01M3009Y9AGGY6ZCFA7H1HJ1TD, требования 5, 9).
 
 Постоянная копия части покрытия приёмочной планки задачи (`tasks/
 01M2DTT96FS25SHXP0HDTWARQH/acceptance_tests/test_ac3_ac4_command_flag.py`,
@@ -7,6 +8,13 @@ run started» (SPEC 01M2DTT96FS25SHXP0HDTWARQH, требования 3-5).
 чистке каталога задачи, этот файл остаётся регрессией `tests/`. Тот же
 приём песочницы, что `tests/test_step_cost.py::CmdRunCostTest`: реального
 `claude` CLI нет, `subprocess.Popen` подменён `FakeProc`.
+
+Модель шага с 20.09 — результат разрешения цепочки «роль -> ярус ->
+модель» (`orchestrator/models.py`), поэтому карта исполнителей под тестом
+задаёт РОЛИ ЯРУС, а модель яруса — локальный слой песочницы. Прежний
+сценарий «поле `model:` не задано — дефолт CLI и предупреждение» заменён
+сценарием «ярус не задан — отказ до старта агента»: требование 5 сняло
+молчаливый дефолт.
 """
 import sys
 import unittest
@@ -29,26 +37,29 @@ def result_event(usd=0.1, **fields) -> str:
                 result="готово", total_cost_usd=usd, **fields)
 
 
-def _roles_yaml_text(role: str, model: str | None) -> str:
-    """Реальный `roles.yaml` репозитория, с `model:` вставленной под
-    заголовком роли (или без вставки — `model=None`); `skills:`/
-    `token_slot:` реальных ролей не трогаются."""
+def _roles_yaml_text(role: str, tier: str | None) -> str:
+    """Реальный `roles.yaml` репозитория, с `model_tier:` вставленным под
+    заголовком роли (или без вставки — `tier=None`, сценарий «ярус не
+    задан»); `skills:`/`token_slot:` реальных ролей не трогаются.
+
+    Строки `model:`/`model_tier:` этой роли снимаются перед вставкой:
+    боевой `roles.yaml` несёт `model:` до применения приложения к PLAN
+    задачи 01M3009Y9AGGY6ZCFA7H1HJ1TD, и без снятия сценарий «поле не
+    задано» был бы неотличим от боевого (правка Оператора 19.09,
+    amend-tests).
+    """
     lines = _REAL_ROLES_TEXT.splitlines(keepends=True)
     anchor = f"  {role}:\n"
     for i, line in enumerate(lines):
         if line == anchor:
-            # Реальный roles.yaml с 13.09 (коммит Оператора d4e80604) уже
-            # несёт `model:` у ролей — существующую строку снять, иначе
-            # сценарий «поле не задано» неотличим от боевого (правка
-            # Оператора 19.09, amend-tests).
             j = i + 1
             while j < len(lines) and lines[j].startswith("    "):
-                if lines[j].lstrip().startswith("model:"):
+                if lines[j].lstrip().startswith(("model:", "model_tier:")):
                     del lines[j]
-                    break
+                    continue
                 j += 1
-            if model is not None:
-                lines[i] = line + f"    model: {model}\n"
+            if tier is not None:
+                lines[i] = line + f"    model_tier: {tier}\n"
             break
     else:
         raise AssertionError(f"роль {role!r} не найдена в roles.yaml")
@@ -86,17 +97,30 @@ class ModelFlagJournalTest(TmpRootTest):
         pf_patcher.start()
         self.addCleanup(pf_patcher.stop)
 
-    def set_model(self, model: str | None) -> None:
+    def set_tier(self, tier: str | None) -> None:
         path = self.root / "roles-under-test.yaml"
-        path.write_text(_roles_yaml_text("developer", model), encoding="utf-8")
+        path.write_text(_roles_yaml_text("developer", tier), encoding="utf-8")
         patcher = mock.patch.object(config, "ROLES", path)
         patcher.start()
         self.addCleanup(patcher.stop)
 
-    def run_agent(self) -> mock.Mock:
+    def set_tier_model(self, tier: str, model: str) -> None:
+        """Модель яруса в локальном слое песочницы: модель шага задаёт
+        он, а не карта исполнителей."""
+        config.MODELS_LOCAL.write_text(f"tiers:\n  {tier}: {model}\n",
+                                       encoding="utf-8")
+
+    def run_agent(self, expect_exit: bool = False) -> mock.Mock:
+        """Один прогон шага. `expect_exit` — сценарий отказа до старта
+        агента (`sys.exit`, как его увидел бы `auto`): исключение
+        перехватывается, чтобы тест смотрел журнал, а не падал сам."""
         proc = FakeProc([result_event(usd=0.1)])
         with mock.patch.object(runner, "spawn_agent", return_value=proc) as popen:
-            self.capture(runner.cmd_run, self.TASK)
+            if expect_exit:
+                with self.assertRaises(SystemExit):
+                    self.capture(runner.cmd_run, self.TASK)
+            else:
+                self.capture(runner.cmd_run, self.TASK)
         return popen
 
     def journal_details(self, action: str) -> list:
@@ -112,7 +136,8 @@ class ModelFlagJournalTest(TmpRootTest):
     def test_command_carries_the_model_flag_once_in_prior_flag_order(self):
         """Ловит мутацию: `--model` добавляется дважды, значение — не то
         роли, либо вставка сдвигает порядок существующих флагов."""
-        self.set_model("claude-opus-5")
+        self.set_tier("strong")
+        self.set_tier_model("strong", "claude-opus-5")
 
         argv = self.run_agent().call_args.args[0]
 
@@ -124,44 +149,42 @@ class ModelFlagJournalTest(TmpRootTest):
         positions = [argv.index(f) for f in known_flags]
         self.assertEqual(positions, sorted(positions), argv)
 
-    def test_command_has_no_model_flag_and_warns_once_when_unset(self):
-        """Ловит мутацию: `--model` подставляется безусловно, либо
-        предупреждение не пишется/пишется больше одного раза, либо
-        отсутствие поля останавливает/проваливает шаг."""
-        self.set_model(None)
+    def test_model_comes_from_the_tier_of_the_local_layer_not_the_roles_map(self):
+        """Ловит мутацию: модель читается из `roles.yaml` (как до 20.09)
+        — смена модели яруса в локальном слое пульта не меняла бы ничего,
+        и оба файла задавали бы модель одновременно."""
+        self.set_tier("strong")
+        self.set_tier_model("strong", "claude-sonnet-5")
 
         argv = self.run_agent().call_args.args[0]
 
-        self.assertNotIn("--model", argv)
-        rows = self.all_step_rows()
-        warnings = [r for r in rows
-                   if "модель роли не задана — дефолт CLI" in r["detail"]]
-        self.assertEqual(len(warnings), 1, rows)
-        self.assertFalse(
-            any(r["action"] in ("agent run FAILED", "agent run SKIPPED",
-                                "agent run TIMEOUT") for r in rows), rows)
+        self.assertEqual(argv[argv.index("--model") + 1], "claude-sonnet-5")
+
+    def test_role_without_a_tier_refuses_before_the_agent_starts(self):
+        """Ловит мутацию: роль без `model_tier` идёт на дефолт CLI —
+        прежнее молчаливое поведение, снятое требованием 5: агент
+        стартовал бы без явной модели."""
+        self.set_tier(None)
+
+        spawn = self.run_agent(expect_exit=True)
+
+        spawn.assert_not_called()
+        actions = [r["action"] for r in self.all_step_rows()]
+        self.assertIn(runner.MODEL_UNRESOLVED_REFUSAL_ACTION, actions)
+        self.assertNotIn("agent run started", actions)
 
     def test_run_started_journal_carries_the_model(self):
         """Ловит мутацию: запись «agent run started» не несёт `model=`
-        вовсе, либо несёт значение, отличное от `roles.yaml`."""
-        self.set_model("claude-opus-5")
+        вовсе, либо несёт значение, отличное от разрешённой моделью
+        яруса."""
+        self.set_tier("strong")
+        self.set_tier_model("strong", "claude-opus-5")
 
         self.run_agent()
 
         details = self.journal_details("agent run started")
         self.assertEqual(len(details), 1)
         self.assertIn("model=claude-opus-5", details[0])
-
-    def test_run_started_journal_uses_the_default_marker_when_unset(self):
-        """Ловит мутацию: поле не задано, но запись несёт `model=None`/
-        пустую строку вместо литерала «дефолт CLI»."""
-        self.set_model(None)
-
-        self.run_agent()
-
-        details = self.journal_details("agent run started")
-        self.assertEqual(len(details), 1)
-        self.assertIn("model=дефолт CLI", details[0])
 
 
 if __name__ == "__main__":

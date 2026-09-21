@@ -21,7 +21,8 @@ from .base import CliTool, HomeReference, RoleExecutorProvider
 # Имя инструмента и его минимальная версия — то же, что манифест стека
 # нёс литералом до задачи (`stack.REQUIRED_TOOLS["claude"]`). Минимум
 # инструмента — нижняя граница самого CLI, не связка с моделями: ту
-# держит таблица совместимости `stack.MODEL_MIN_CLI_VERSION`.
+# держит каталог моделей (`models.yaml`, поле `min_cli_version` записи
+# модели).
 CLI_NAME = "claude"
 CLI_MINIMUM = (1, 0, 0)
 CLI_VERSION_COMMAND = (CLI_NAME, "--version")
@@ -180,17 +181,28 @@ class ClaudeProvider(RoleExecutorProvider):
         return stack.installed_cli_version()
 
     def model_verdict(self, model):
-        """Сверка модели роли с установленной версией CLI по таблице
-        совместимости (SPEC 01M2XJKV84SQ9VEVR0VNVKDNGJ, требование 3).
+        """Сверка модели роли с установленной версией CLI по каталогу
+        моделей (SPEC 01M2XJKV84SQ9VEVR0VNVKDNGJ, требование 3; SPEC
+        01M3009Y9AGGY6ZCFA7H1HJ1TD, требование 10).
 
-        `claude --version` зовётся ТОЛЬКО для модели из таблицы: модели
-        вне её версия не нужна — вердикт `warn` «модель не в таблице
-        совместимости» и запуск как есть.
+        Минимум версии CLI — поле записи модели в `models.yaml`; модели,
+        которой в каталоге нет, соответствует `fail` (до 20.09 —
+        предупреждение «модель не в таблице совместимости» и запуск как
+        есть). `claude --version` не зовётся, пока модель не найдена в
+        каталоге: подпроцесс ради заведомого отказа не нужен.
+
+        Отказ разбора самого каталога (`ModelsError`) тоже `fail`, а не
+        исключение наружу: точка вызова — предполёт шага, и он обязан
+        назвать причину Оператору, а не уронить `run` трейсбеком.
         """
-        from .. import stack
-        installed = (self.installed_cli_version()
-                     if model in stack.MODEL_MIN_CLI_VERSION else None)
-        return stack.model_cli_verdict(model, installed)
+        from .. import models, stack
+        try:
+            entry = models.catalog_model(model)
+        except models.ModelsError as exc:
+            return stack.ModelCliVerdict(
+                "fail", f"{stack.MODEL_UNSUPPORTED_PREFIX}: {exc}")
+        return stack.model_cli_verdict(model, self.installed_cli_version(),
+                                       entry.min_cli_version)
 
     def live_smoke_command(self, prompt):
         """Минимальный живой вызов CLI (`doctor.live_smoke`): промпт
