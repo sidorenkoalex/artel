@@ -21,6 +21,27 @@ from . import config
 # (`add_column(..., "target", f"TEXT DEFAULT '{config.DEFAULT_TARGET}'")`):
 # свежая БД (эта схема) и БД, догнанная миграцией со старой версии, обязаны
 # давать одну и ту же схему колонки (SPEC T034, требование 6, ревью T019).
+#
+# История тарифов моделей (SPEC 01M300A14KRHCFB0DQXVCBJEKF, требование 5):
+# модель, четыре цены за миллион токенов в порядке `models.PRICE_KINDS`,
+# дата действующего тарифа (`valid_from` — `calibrated_at` переопределения
+# либо `price_date` каталога) и источник. Строку добавляет только пульт,
+# разрешая тариф (`store.record_model_tariff` из `spend.record_tariff`):
+# команды записи нет, руками таблица не правится.
+#
+# DDL вынесен отдельным литералом и подставляется И в `SCHEMA` ниже, И в
+# `migrate()` — паритет свежей БД и догнанной миграцией здесь обеспечен
+# одним текстом, а не двумя копиями, которые и расходятся (AC-7, тот же
+# класс, что сторожит `tests/test_store_schema_migration_parity.py`).
+MODEL_TARIFFS_DDL = """
+CREATE TABLE IF NOT EXISTS model_tariffs (
+  id INTEGER PRIMARY KEY AUTOINCREMENT, model TEXT,
+  input_usd_per_mtok REAL, output_usd_per_mtok REAL,
+  cache_write_usd_per_mtok REAL, cache_read_usd_per_mtok REAL,
+  valid_from TEXT, source TEXT, recorded_at TEXT
+);
+"""
+
 SCHEMA = f"""
 CREATE TABLE IF NOT EXISTS tasks (
   id TEXT PRIMARY KEY, title TEXT, state TEXT, branch TEXT,
@@ -67,6 +88,7 @@ CREATE TABLE IF NOT EXISTS merge_queue (
   task_id TEXT, session_id TEXT, pid INTEGER, hostname TEXT,
   enqueued_ts TEXT, heartbeat_ts TEXT
 );
+{MODEL_TARIFFS_DDL}
 """
 
 
@@ -153,7 +175,7 @@ def migrate(conn: sqlite3.Connection) -> None:
     add_column(conn, "tasks", "materialized_artifact_sha", "TEXT")
     # Верхняя оценка неучтённой стоимости шага (SPEC
     # 01M1NWCM3TDY0YABEKE8DYQA1C, требование 1): накопительная, отдельная от
-    # `spent_usd` — таймаут шага роли БЕЗ курса токенов (`config.TOKEN_RATES`)
+    # `spent_usd` — таймаут шага роли, чей тариф модели не разрешился,
     # прибавляет сюда именованную константу вместо точной суммы (требование
     # 3). DEFAULT 0 — строки старше этой задачи не несут неучтённой
     # стоимости задним числом (требование 9: пересчёт прошлых шагов не
@@ -242,4 +264,10 @@ def migrate(conn: sqlite3.Connection) -> None:
         "CREATE TABLE IF NOT EXISTS merge_queue ("
         "  task_id TEXT, session_id TEXT, pid INTEGER, hostname TEXT,"
         "  enqueued_ts TEXT, heartbeat_ts TEXT);")
+    # История тарифов моделей (SPEC 01M300A14KRHCFB0DQXVCBJEKF,
+    # требование 5): БД прошлых версий её не имеют — догоняется тем же
+    # приёмом, что и merge_queue выше, но ТЕМ ЖЕ литералом, что и `SCHEMA`
+    # (см. комментарий у `MODEL_TARIFFS_DDL`), чтобы составы колонок не
+    # разъехались между свежей БД и догнанной.
+    conn.executescript(MODEL_TARIFFS_DDL)
     conn.commit()
