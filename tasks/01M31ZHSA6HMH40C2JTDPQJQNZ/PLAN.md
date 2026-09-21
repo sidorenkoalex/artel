@@ -68,11 +68,30 @@ UNKNOWN/PARTIAL/ESTIMATED/LOST) и «итог есть, цены нет» (AC-9,
 
 `charge_step` ветвится: цена есть И `cost_from_cli` модели шага истинен
 -> прежний путь факта CLI; иначе -> расчёт по тарифу. Признак берётся
-записью каталога модели ШАГА (`models.catalog_model(...).cost_from_cli`,
-модель читается из `model=` того же `numbered`, тем же приёмом, что и
-сегодня), а не провайдером роли: требование 4 говорит «провайдер МОДЕЛИ
-шага». Строка расчёта по тарифу НЕ несёт `actual_usd=` — иначе расчёт
-попал бы в сверку курса под видом факта CLI и отравил калибровку.
+записью каталога модели ШАГА (`models.catalog_model(...).cost_from_cli`),
+а не провайдером роли: требование 4 говорит «провайдер МОДЕЛИ шага».
+Саму модель `charge_step` получает ПАРАМЕТРОМ от `runner._account_step`,
+который держит её на руках (итерация 2, R1-F2): восстановление модели
+разбором собственной строки `numbered` не годится — `model=` туда
+приписывается только у записей KNOWN/PARTIAL (требование 6 SPEC
+01M2DTT96FS25SHXP0HDTWARQH), и итог запуска без разбивки токенов остался
+бы без признака, то есть списался бы ценой, которую каталог объявил
+недостоверной. Прямые вызовы `charge_step` без параметра (их много —
+SPEC T040, требование 4) сохраняют прежний разбор строки через часовой
+`_MODEL_FROM_NUMBERED`; «модель шага не разрешилась» — законное значение
+параметра и с «параметр не передан» не путается. Строка расчёта по
+тарифу НЕ несёт `actual_usd=` — иначе расчёт попал бы в сверку курса под
+видом факта CLI и отравил калибровку.
+
+**Порог программы считает списанные деньги, а не цену итога** (итерация
+2, R1-F1). `runner._program_cost` отдаёт `budget.check_program_spend`
+разность `spent_usd` до и после шага БЕЗУСЛОВНО. Порог не сравнивает
+суммы, а восстанавливает «до шага» вычитанием переданного числа
+(`budget.py:250-256`), поэтому любое расхождение с фактом списания и
+выдумывает пересечение порога, и прячет настоящее — а дедуп алерта
+`budget.program_spend` не даёт пропущенному всплыть на следующем шаге.
+На пути факта CLI число прежнее (`store.charge` прибавляет ровно
+`cost["usd"]`), на пути расчёта по тарифу — расчёт, а не цена CLI.
 
 **Классы провалов.** Набор классов, их подписи, связка транзиентных,
 алерты и обрыв повторов остаются в
@@ -145,16 +164,22 @@ UNKNOWN/PARTIAL/ESTIMATED/LOST) и «итог есть, цены нет» (AC-9,
    `providers.for_role(role)`.
 
 4. **Стоимость по тарифу и поле `provider=`.**
-   `orchestrator/spend.py`: ветвление `charge_step` (факт CLI против
-   расчёта по тарифу), `_cost_from_cli(model_id)` с деградацией в
-   «истина» на нечитаемом каталоге/неизвестной модели (сегодняшний путь),
-   именованная запись `UNCHARGED_COST_JOURNAL_ACTION` + алерт
-   `kind=threshold` на «тариф не разрешён / разбивки нет» (AC-11).
+   `orchestrator/spend.py`: ветвление `charge_step(…, model_id)` (факт
+   CLI против расчёта по тарифу; модель шага — параметром от
+   `runner._account_step`, часовой `_MODEL_FROM_NUMBERED` сохраняет
+   прежний путь прямых вызовов), `_cost_from_cli(model_id)` с
+   деградацией в «истина» на нечитаемом каталоге/неизвестной модели
+   (сегодняшний путь), именованная запись
+   `UNCHARGED_COST_JOURNAL_ACTION` + алерт `kind=threshold` на «тариф не
+   разрешён / разбивки нет» (AC-11); текст записи и алерта собирают
+   `_tariff_path_cause` (почему считаем по тарифу — цены нет против
+   `cost_from_cli: false`) и `_uncharged_reason` (почему не посчитали —
+   тариф модели против тарифа модели РОЛИ).
    `orchestrator/runner.py`: `_numbered_with_model` приписывает
    `provider=` рядом с `model=` (AC-13); `budget.check_program_spend`
-   получает РЕАЛЬНО списанную сумму (`_program_cost`) — на пути расчёта
-   по тарифу `pump.cost["usd"]` пуст, а `budget.py` вне зоны и обязан
-   работать без правки.
+   получает РЕАЛЬНО списанную сумму (`_program_cost` — разность
+   `spent_usd` до и после шага, безусловно), а `budget.py` вне зоны и
+   обязан работать без правки.
 
 5. **Классификация по сигнатурам провайдера.**
    `orchestrator/failure_classification.py`: `classify_attempt_failure(
@@ -225,6 +250,28 @@ AC-1..AC-15 целиком. Новые юнит-тесты `tests/` берут �
   рвёт разбор поля модели; шаг, посчитанный по тарифу, двигает порог
   программы на реально списанную сумму.
 
+Добавлено итерацией 2 (регрессии на замечания ревью, все — с заявкой
+мутации в докстринге):
+
+- `tests/test_runner_role_model.py::test_the_program_threshold_gets_the_
+  charged_sum_not_the_cli_price` (R1-F1) — `cost_from_cli: false` И цена
+  в итоге запуска: порог программы получает $0.0175 расчёта, а не $0.10
+  цены CLI. Прежний тест той же ветки смотрел только случай «цены нет
+  вовсе», где числа совпадали и подмена была не видна.
+- `tests/test_runner_role_model.py::test_the_catalog_flag_is_read_by_the_
+  step_model_without_usage` (R1-F2) — итог запуска с ценой и БЕЗ usage:
+  признак каталога спрашивается по модели шага (`claude-opus-5`), а не
+  по отсутствующему в строке полю `model=`; шаг уходит в `UNCHARGED` с
+  алертом, `spent_usd` не двигается.
+- `tests/test_step_cost.py::ChargeByTariffTest::test_the_step_model_comes_
+  from_the_parameter_not_from_the_line` и `…::test_without_the_parameter_
+  the_model_is_still_read_from_the_line` (R1-F2) — параметр побеждает
+  строку, а его отсутствие оставляет прежний разбор `numbered` для
+  прямых вызовов.
+- `tests/test_step_cost.py::ChargeByTariffTest::test_the_uncharged_line_
+  names_the_role_tariff_as_the_role_tariff` (R1-F4) — роль в тексте
+  записи и алерта названа ролью, а не моделью.
+
 Обновлённые ожидания существующих наборов (требование 12 SPEC называет
 их перечислить; каждое — следствие требования, не ослабление):
 
@@ -252,6 +299,17 @@ AC-1..AC-15 целиком. Новые юнит-тесты `tests/` берут �
 | шесть файлов AC-15 + `test_runner_role_model`, `test_report`, `test_retro`, `test_pause`, `test_pause_now` | 322 passed, 39 subtests |
 | `test_invariants`, `test_multitarget`, `test_multitarget_invariants`, `test_agent_failure`, `test_auto_cycle` | 205 passed, 257 subtests |
 | `test_doctor`, `test_models`, `test_models_doctor`, `test_stack` и соседи | 366 passed, 245 subtests |
+
+Итерация 2 (после правок R1-F1..R1-F4) — прогнаны наборы, которых
+касаются `spend.charge_step`/`runner._program_cost`:
+
+| Набор | Итог |
+|---|---|
+| планка задачи `acceptance_tests/` | 39 passed, 17 subtests |
+| `test_step_cost`, `test_runner_role_model` | 73 passed, 23 subtests |
+| `test_token_rate_divergence`, `test_model_tariffs`, `test_providers`, `test_agent_log`, `test_failure_classification`, `test_report`, `test_retro`, `test_pause`, `test_pause_now` | 254 passed, 16 subtests |
+| `test_multitarget`, `test_multitarget_invariants`, `test_spec_budget`, `test_agent_failure` | 131 passed, 45 subtests |
+| `test_invariants`, `test_program_spend_reseed`, `test_budget_live_lease_and_escalation`, `test_budget_calibration_table` | 93 passed, 219 subtests |
 
 Полный набор `tests/` гоняет CI на пуш ветки.
 
@@ -352,3 +410,17 @@ finished»), `orchestrator/doctor/live_smoke.py` (`parse_cost_event`),
   (требование 12: «перечень обновлённых ожиданий разработчик перечисляет
   в PLAN») — правило стоит поднять в скил, иначе каждая SPEC будет
   изобретать его заново.
+- **Второй контур учёта денег угадывает списанную сумму вместо того,
+  чтобы получать её фактом** (ревью итерации 1, R1-F1/R1-F3).
+  `budget.check_program_spend` восстанавливает «до шага» вычитанием
+  переданного числа, поэтому КАЖДАЯ новая ветка учёта обязана помнить,
+  что в порог идёт не её входной словарь, а факт списания. Эта задача
+  закрыла свою ветку (`runner._program_cost` считает разность
+  `spent_usd`), но пробел остался у соседней: частичная стоимость
+  оборванного шага (`spend.charge_missing_result`, ветка PARTIAL)
+  списывается в `spent_usd` и в порог программы не попадает вовсе —
+  `_program_cost` отдаёт `None` при `cost is None`. Чинится это не
+  перечислением веток в вызывающем, а обязанностью точки учёта
+  ОТДАВАТЬ факт списания (`store.charge`/возврат `charge_step`/
+  `charge_missing_result`) — отдельной задачей, зоны которой включают
+  `orchestrator/budget.py`.
