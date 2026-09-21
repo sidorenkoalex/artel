@@ -663,13 +663,14 @@ def _token_cost_row_html(marker: str, usd: str, total: int | None,
     нули: `input=0 … cache_read=0` читалось бы как «шаг прошёл
     бесплатно». Сумма и разбивка показываются независимо: у строки,
     чьи шаги записаны прежним видом записи, сумма известна, а разбивки
-    нет (REVIEW.md итерации 1, R1-F1)."""
-    if not by_kind:
-        tokens_part = (f"токенов {retro.total_tokens_text(total)}, "
-                      f"разбивка по видам {retro.DASH}")
-    else:
-        tokens_part = (f"токенов {retro.total_tokens_text(total)} "
-                      f"({_esc(retro.tokens_text(by_kind))})")
+    нет (REVIEW.md итерации 1, R1-F1).
+
+    Формулировку обеих частей даёт `retro.tokens_detail_text` — там же,
+    где и в RETRO: разрез ролей отчёта суммирует ВЕСЬ журнал пульта, и
+    исторические записи без разбивки из него не исчезнут, так что
+    неполная разбивка обязана называть свою сумму явно (REVIEW.md
+    итерации 2, R2-F1)."""
+    tokens_part = _esc(retro.tokens_detail_text(total, by_kind))
     return (f'<div class="metric-row">{_esc(marker)}: {usd} · '
             f'{tokens_part}</div>')
 

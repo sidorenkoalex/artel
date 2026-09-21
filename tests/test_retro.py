@@ -598,6 +598,28 @@ class ActorTokensTest(TmpRootTest):
         self.assertIn(f"токенов {STEP_TOKENS_TOTAL} (", line)
         self.assertNotIn(f"токенов {STEP_TOKENS_TOTAL * 2}", line)
 
+    def test_partial_breakdown_names_its_own_sum_next_to_the_total(self):
+        """Роль, у которой разбивку несёт лишь ЧАСТЬ шагов (первый шаг —
+        оба носителя, второй — одна строка завершения с суммой), несёт в
+        строке разбивочное число явно: «токенов 100 (с разбивкой 60: …)».
+
+        Ловит мутацию: скобки печатаются вплотную к сумме, как её
+        разложение — четыре числа в них не складываются в показанное
+        рядом 100 (REVIEW.md итерации 2, R2-F1), и `assertIn` на пометке
+        «с разбивкой» покраснеет.
+        """
+        legacy_total = 40
+        store.journal(self.conn, self.TASK, "developer", "agent cost KNOWN",
+                      known_cost_detail(1.25, STEP_TOKENS))
+        self.finished("developer", 1.25, total=STEP_TOKENS_TOTAL)
+        self.finished("developer", 0.5, total=legacy_total)
+
+        line = self.line_of("developer")
+
+        self.assertIn(f"токенов {STEP_TOKENS_TOTAL + legacy_total} "
+                      f"(с разбивкой {STEP_TOKENS_TOTAL}:", line)
+        self.assertIn(f"input={STEP_TOKENS['input']}", line)
+
     def test_role_with_tokens_but_no_cost_row_still_gets_a_line(self):
         """Роль, чьи токены журнал записал, а стоимость — нет (шаг не
         дошёл до строки завершения), стоит в блоке своей строкой: с

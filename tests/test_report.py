@@ -630,6 +630,38 @@ class TokenCostHtmlTest(unittest.TestCase):
         self.assertIn(f"токенов {TOKENS_TOTAL}", html)
         self.assertIn(f"разбивка по видам {DASH}", html)
 
+    def test_partial_breakdown_names_its_own_sum_next_to_the_total(self):
+        """Строка, где разбивка покрывает ЧАСТЬ шагов (первый шаг записан
+        обоими носителями, второй — только суммой строки завершения),
+        называет разбивочное число явно: «токенов 100 (с разбивкой 60:
+        …)».
+
+        Ловит мутацию: скобки печатаются как разложение суммы («токенов
+        100 (input=11, …)») — четыре числа в них не складываются в
+        показанное рядом 100, и на журнале пульта так врут все четыре
+        строки разреза ролей (REVIEW.md итерации 2, R2-F1); `assertIn`
+        на пометке «с разбивкой» покраснеет.
+        """
+        legacy_total = 40
+        steps = [
+            _row(task_id="T001", actor="developer", action="agent cost KNOWN",
+                 detail=_known_cost_detail(1.25, TOKENS)),
+            _row(task_id="T001", actor="developer",
+                 action="agent run finished",
+                 detail=(f"rc=0, попытка 1/2, стоимость $1.2500, "
+                         f"токенов {TOKENS_TOTAL}")),
+            _row(task_id="T001", actor="developer",
+                 action="agent run finished",
+                 detail=(f"rc=0, попытка 2/2, стоимость $0.5000, "
+                         f"токенов {legacy_total}")),
+        ]
+
+        html = report._tokens_by_role(steps)
+
+        self.assertIn(f"токенов {TOKENS_TOTAL + legacy_total} "
+                      f"(с разбивкой {TOKENS_TOTAL}:", html)
+        self.assertIn(f"input={TOKENS['input']}", html)
+
     def test_role_with_tokens_but_no_cost_row_stays_in_the_cut(self):
         """Роль, чьи токены журнал записал, а стоимость — нет, остаётся в
         разрезе ролей: со своими токенами и прочерком вместо денег.

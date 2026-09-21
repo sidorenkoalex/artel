@@ -202,6 +202,31 @@ def total_tokens_text(total: int | None) -> str:
     return DASH if total is None else str(total)
 
 
+def tokens_detail_text(total: int | None, by_kind: dict | None) -> str:
+    """Сумма токенов и разбивка по видам одним куском текста — ОДНИМ
+    правилом на все три места показа (REVIEW.md итерации 2, R2-F1).
+
+    Носителей у суммы два, а разбивку по видам несёт только один из них
+    (`token_totals_by_actor`), поэтому разбивка бывает УЖЕ суммы: она
+    покрывает часть шагов строки, а не все. Скобки при числе читаются
+    как его разложение, и молчаливое расхождение врёт: на журнале пульта
+    так расходятся все четыре строки разреза ролей отчёта (`developer`:
+    6 252 661 902 против 3 375 837 567 в скобках). Поэтому неполная
+    разбивка называет свою сумму явно.
+
+    Три формы:
+    - разбивки нет вовсе — «токенов N, разбивка по видам —»;
+    - разбивка покрывает всю сумму — «токенов N (input=…, …)»;
+    - покрывает часть — «токенов N (с разбивкой M: input=…, …)»."""
+    total_part = f"токенов {total_tokens_text(total)}"
+    if not by_kind:
+        return f"{total_part}, разбивка по видам {DASH}"
+    covered = sum(by_kind.values())
+    if covered == total:
+        return f"{total_part} ({tokens_text(by_kind)})"
+    return f"{total_part} (с разбивкой {covered}: {tokens_text(by_kind)})"
+
+
 def usd_text(usd: float | None) -> str:
     """Деньги актёра строкой, либо прочерк — записей стоимости нет.
 
@@ -459,14 +484,11 @@ def _actor_cost_line(row: ActorCost) -> str:
     Сумма и разбивка показываются НЕЗАВИСИМО: у роли, чьи шаги записаны
     прежним видом записи, сумма известна, а разбивки нет — такая роль
     несёт число рядом с прочерком разбивки (REVIEW.md итерации 1,
-    R1-F1), а не прочерк вместо обоих."""
-    if not row.tokens:
-        tokens_part = (f"токенов {total_tokens_text(row.total)}, "
-                       f"разбивка по видам {DASH}")
-    else:
-        tokens_part = (f"токенов {total_tokens_text(row.total)} "
-                       f"({tokens_text(row.tokens)})")
-    return (f"  {row.actor}: {usd_text(row.usd)}, {tokens_part}, "
+    R1-F1), а не прочерк вместо обоих. Разбивка, покрывающая ЧАСТЬ шагов
+    роли, называет свою сумму явно — `tokens_detail_text` (REVIEW.md
+    итерации 2, R2-F1)."""
+    return (f"  {row.actor}: {usd_text(row.usd)}, "
+            f"{tokens_detail_text(row.total, row.tokens)}, "
             f"провайдер {row.provider or DASH}, модель {row.model or DASH}")
 
 

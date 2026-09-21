@@ -1,5 +1,5 @@
 ---
-built_at_sha: 7a90606809e0a7704fb88fb377cfbe3540990902
+built_at_sha: 76a60d2396b2ac38bc9454ef58de9520ab3bb9c4
 ---
 
 # Codebase-map пульта
@@ -738,6 +738,7 @@ built_at_sha: 7a90606809e0a7704fb88fb377cfbe3540990902
 - `task_token_total`
 - `token_breakdown_by_actor`
 - `token_totals_by_actor`
+- `tokens_detail_text`
 - `tokens_text`
 - `total_tokens_text`
 - `usd_text`
