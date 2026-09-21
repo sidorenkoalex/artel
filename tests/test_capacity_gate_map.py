@@ -6,10 +6,14 @@
 test_ac5_ac7_capacity_gate_map.py`) разбирает pathspec поддельным git и
 проверяет наблюдаемое свойство «карта в мере не участвует». Здесь —
 буквальная форма вызова (`:!docs/codebase-map.md` в pathspec первой меры)
-и общий узел второй цифры `_excluded_note` сам по себе: планка не
+и общий узел второй цифры `review.excluded_note` сам по себе: планка не
 различает «карта исключена pathspec'ом» и «карта вычтена из размера после
 измерения», а эти два способа расходятся на переименованиях и бинарных
 файлах.
+
+Узел цифры и исключающий pathspec живут в `orchestrator/review.py` и
+импортируются гейтом (ANSWER-1, вопрос 1, вариант A) — поэтому патчится
+здесь `review.git_diff_part`, а не имя внутри гейта.
 """
 import subprocess
 import sys
@@ -110,7 +114,7 @@ class ExcludedNoteTest(unittest.TestCase):
                  (review.EMPTY_DIFF_TEXT, "0 байт (изменений нет)")]
         for diff, expected in cases:
             with self.subTest(diff=diff[:20]):
-                with mock.patch.object(capacity, "_review_git_diff_part",
+                with mock.patch.object(review, "git_diff_part",
                                        self._part(diff)):
                     self.assertEqual(
                         capacity._excluded_note("base", BRANCH, ("docs/",),
@@ -119,7 +123,7 @@ class ExcludedNoteTest(unittest.TestCase):
 
         failing = self._part("(не собран: fatal: bad object)",
                              "fatal: bad object")
-        with mock.patch.object(capacity, "_review_git_diff_part", failing):
+        with mock.patch.object(review, "git_diff_part", failing):
             note = capacity._excluded_note("base", BRANCH, ("docs/",), None)
         self.assertIn("неизвестен", note)
         self.assertIn("bad object", note)
@@ -141,7 +145,7 @@ class ExcludedNoteTest(unittest.TestCase):
             seen["repo"] = repo
             return review.EMPTY_DIFF_TEXT, 0, ""
 
-        with mock.patch.object(capacity, "_review_git_diff_part", part):
+        with mock.patch.object(review, "git_diff_part", part):
             capacity._excluded_note("base", BRANCH, (capacity.MAP_REL,),
                                     "/tmp/clone")
 

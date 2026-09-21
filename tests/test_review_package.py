@@ -412,6 +412,17 @@ class ReviewPackageTest(unittest.TestCase):
     def build(self) -> dict:
         return review.review_package(self.conn, self.TASK, "Ревью-пакет", self.BRANCH)
 
+    def exclude(self) -> tuple:
+        """Исключающий pathspec снимка — общий узел `review.snapshot_exclude`
+        (ANSWER-1 01M31DRD81092HB69J0MAKZMGH): `tasks/<id>/` и
+        сгенерированная `docs/codebase-map.md`."""
+        return ("--", ".", f":!tasks/{self.TASK}/", f":!{review.MAP_REL}")
+
+    def map_measure(self, base: str) -> list:
+        """Отдельная мера объёма исключённой карты — её цифру называет
+        заметка под diff'ом (ANSWER-1); идёт последним вызовом diff."""
+        return ["diff", f"{base}...{self.BRANCH}", "--", review.MAP_REL]
+
     def order_of(self, text: str, *marks: str) -> list[int]:
         found = []
         for mark in marks:
@@ -436,18 +447,31 @@ class ReviewPackageTest(unittest.TestCase):
         self.assertIn("diff --git a b", text)
 
     def test_stat_and_diff_are_taken_against_main(self):
+        """Оба показанных diff берутся от базы сравнения и несут
+        исключающий pathspec снимка целиком, а объём исключённой карты
+        меряется отдельным третьим вызовом.
+
+        Ловит мутацию: из pathspec убрано одно из исключений (`tasks/<id>/`
+        или `docs/codebase-map.md`) — ревьювер снова получает байты,
+        которых гейт ёмкости не мерил; либо мера карты для заметки не
+        делается вовсе, и заметка называет объём вымышленным числом.
+        """
         self.build()
 
         # tasks/01M1RA0N6FCFEQBB82K58GM12X (AC-2/AC-6): оба вызова несут
         # исключающий pathspec `tasks/<id>/` — дубль артефактов в diff/
         # стат-списке ревью-пакета раздувает контекст без нового сигнала,
-        # они уже идут в пакет своими компонентами.
-        exclude = ("--", ".", f":!tasks/{self.TASK}/")
+        # они уже идут в пакет своими компонентами. Тем же pathspec с
+        # ANSWER-1 01M31DRD81092HB69J0MAKZMGH исключена сгенерированная
+        # `docs/codebase-map.md`, а третьим вызовом меряется её объём для
+        # заметки под diff'ом.
+        exclude = self.exclude()
         self.assertEqual([c for c in self.git.calls if c[0] == "diff"],
                          [["diff", "--stat",
                            f"{config.MAIN_BRANCH}...{self.BRANCH}", *exclude],
                           ["diff", f"{config.MAIN_BRANCH}...{self.BRANCH}",
-                           *exclude]])
+                           *exclude],
+                          self.map_measure(config.MAIN_BRANCH)])
 
     def test_artifacts_are_read_from_the_artifact_branch(self):
         """Три артефакта задачи — из её АРТЕФАКТНОЙ ветки (SPEC
@@ -1199,9 +1223,11 @@ class IncrementalReviewPackageTest(ReviewPackageTest):
 
     def test_diff_and_stat_are_taken_against_the_previous_verdict_sha(self):
         """Диапазон — от sha вердикта, а пути — только собственных коммитов
-        ветки; исключение `tasks/<id>/` (tasks/01M1RA0N6FCFEQBB82K58GM12X,
-        AC-2) действует и здесь, причём одним и тем же pathspec для diff и
-        для `--stat` (SPEC 01M2ZZDJ5ECR4ZYV23BKFCNFXM, требование 6).
+        ветки; исключения снимка — `tasks/<id>/` (tasks/
+        01M1RA0N6FCFEQBB82K58GM12X, AC-2) и `docs/codebase-map.md`
+        (ANSWER-1 01M31DRD81092HB69J0MAKZMGH) — действуют и здесь, причём
+        одним и тем же pathspec для diff и для `--stat` (SPEC
+        01M2ZZDJ5ECR4ZYV23BKFCNFXM, требование 6).
 
         Ловит мутацию: pathspec инкремента собран только для показанного
         diff, а `--stat` оставлен на всём дереве — стат-список назвал бы
@@ -1211,11 +1237,12 @@ class IncrementalReviewPackageTest(ReviewPackageTest):
         self.build_incremental()
 
         pathspec = ("--", f":(literal){self.OWN_PATH}",
-                    f":!tasks/{self.TASK}/")
+                    f":!tasks/{self.TASK}/", f":!{review.MAP_REL}")
         self.assertEqual(
             [c for c in self.git.calls if c[0] == "diff"],
             [["diff", "--stat", f"{self.PREV_SHA}...{self.BRANCH}", *pathspec],
-             ["diff", f"{self.PREV_SHA}...{self.BRANCH}", *pathspec]],
+             ["diff", f"{self.PREV_SHA}...{self.BRANCH}", *pathspec],
+             self.map_measure(self.PREV_SHA)],
             "iteration > 1 должен сравнивать не с main, а с sha "
             "предыдущего вердикта, и только по путям своих коммитов")
 
@@ -1261,11 +1288,12 @@ class IncrementalReviewPackageTest(ReviewPackageTest):
         self.assertIn("Diff выше — полный", package["text"])
         self.assertIn("перечень собственных коммитов ветки не получен",
                       package["text"])
-        exclude = ("--", ".", f":!tasks/{self.TASK}/")
+        exclude = self.exclude()
         self.assertEqual(
             [c for c in self.git.calls if c[0] == "diff"],
             [["diff", "--stat", f"{self.PREV_SHA}...{self.BRANCH}", *exclude],
-             ["diff", f"{self.PREV_SHA}...{self.BRANCH}", *exclude]],
+             ["diff", f"{self.PREV_SHA}...{self.BRANCH}", *exclude],
+             self.map_measure(self.PREV_SHA)],
             "показан весь diff от базы вердикта, а не от main и не по "
             "путям, которых не удалось перечислить")
 
@@ -1308,16 +1336,23 @@ class IncrementalReviewPackageTest(ReviewPackageTest):
     def test_missing_prev_sha_falls_back_to_the_full_diff(self):
         """Вырожденный случай (SPEC — тот же приём, что и в fixation.py):
         iteration > 1, но sha не найден — пакет не падает, а ведёт себя
-        как при iteration == 1."""
+        как при iteration == 1.
+
+        Ловит мутацию: вырожденная ветка собирает свой pathspec (или
+        теряет исключения снимка) — пакет без базы вердикта показал бы
+        ревьюверу и артефакты задачи, и карту, хотя мерил их гейт
+        по-прежнему исключёнными.
+        """
         package = self.build_incremental(prev_sha="")
 
         self.assertEqual(package["diff_type"], "полный")
-        exclude = ("--", ".", f":!tasks/{self.TASK}/")
+        exclude = self.exclude()
         self.assertEqual(
             [c for c in self.git.calls if c[0] == "diff"],
             [["diff", "--stat", f"{config.MAIN_BRANCH}...{self.BRANCH}",
               *exclude],
-             ["diff", f"{config.MAIN_BRANCH}...{self.BRANCH}", *exclude]])
+             ["diff", f"{config.MAIN_BRANCH}...{self.BRANCH}", *exclude],
+             self.map_measure(config.MAIN_BRANCH)])
 
 
 class EmptyIncrementPackageTest(ReviewPackageTest):
@@ -1362,10 +1397,15 @@ class EmptyIncrementPackageTest(ReviewPackageTest):
         self.assertIn(review.EMPTY_INCREMENT_FALLBACK_REASON, package["text"])
         self.assertEqual(package["fallback"],
                          review.EMPTY_INCREMENT_FALLBACK_REASON)
+        # Последний вызов diff — мера объёма исключённой карты для заметки
+        # пакета (ANSWER-1 01M31DRD81092HB69J0MAKZMGH); откат показанного
+        # diff'а — последний вызов ДО неё, и pathspec у него прежний
+        # исключающий, а не путь карты.
+        shown_calls = [c for c in self.diff_calls() if review.MAP_REL not in c]
         self.assertEqual(
-            self.diff_calls()[-1],
+            shown_calls[-1],
             ["diff", f"{self.PREV_SHA}...{self.BRANCH}", "--", ".",
-             f":!tasks/{self.TASK}/"],
+             f":!tasks/{self.TASK}/", f":!{review.MAP_REL}"],
             "полный diff отката считается от базы вердикта, не от main")
 
     def test_fallback_reaches_the_alert_channel_and_the_journal(self):

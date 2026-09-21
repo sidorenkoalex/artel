@@ -6,6 +6,14 @@ from .. import config, gitcmd, repo_context, store
 # требование 5, перенесено дословно вместе с `_capacity_gate`).
 from ..review import EMPTY_DIFF_TEXT as _EMPTY_DIFF_TEXT
 from ..review import git_diff_part as _review_git_diff_part
+# Имя карты, исключающий pathspec снимка и узел цифры исключённой части —
+# ИМПОРТОМ из `orchestrator/review.py`, а не копией констант и кода здесь
+# (R1-F1, REVIEW.md 01M31DRD81092HB69J0MAKZMGH итерация 1; ANSWER-1,
+# вопрос 1, вариант A): мера гейта и diff ревью-пакета обязаны совпадать,
+# а две копии литералов уже разъехались один раз — молча.
+from ..review import MAP_REL
+from ..review import excluded_note as _excluded_note
+from ..review import snapshot_exclude as _snapshot_exclude
 from ._base import GateRefusal, _run_gates
 
 # Причина отказа гейта ёмкости — дословно (tasks/01M1GCN1FPSC1A6WK9WD1Q1V8X,
@@ -15,42 +23,14 @@ from ._base import GateRefusal, _run_gates
 # — только Оператора (AC-14).
 CAPACITY_GATE_REASON = "снимок не помещается в один контекст ревью — разделить задачу"
 
-# Сгенерированная карта кодовой базы (SPEC 01M31DRD81092HB69J0MAKZMGH,
-# требование 5) — то же имя и та же форма локальной константы, что в
-# `orchestrator/brief.py`, `orchestrator/pull.py` и
-# `orchestrator/fsm_postmerge.py`.
-MAP_REL = "docs/codebase-map.md"
-
-
-def _excluded_note(base: str, branch: str, pathspec: tuple, repo) -> str:
-    """Объём исключённой из меры части снимка — цифрой для текста отказа.
-
-    Три исхода, ни один из которых не выдаёт вымышленное число: git не
-    ответил — «неизвестен» с причиной (отказ, уже решённый первой цифрой,
-    этим не отменяется); diff реально пуст — «0 байт (изменений нет)», а не
-    байтовый размер строки-плейсхолдера `review.EMPTY_DIFF_TEXT`, которую
-    `git_diff_part` подставляет для показа (R1-F1, REVIEW.md
-    01M1RA0N6FCFEQBB82K58GM12X итерации 1-3); иначе — байты diff.
-
-    Общий узел на обе исключённые части (артефакты `tasks/<id>/` и карту
-    `docs/codebase-map.md`): вторая цифра появилась по тем же правилам, по
-    каким считалась первая, и разъехаться им негде.
-    """
-    diff, _, reason = _review_git_diff_part(base, branch, pathspec=pathspec,
-                                            repo=repo)
-    if reason:
-        return f"неизвестен (git не ответил: {reason})"
-    if diff == _EMPTY_DIFF_TEXT:
-        return "0 байт (изменений нет)"
-    return f"{len(diff.encode('utf-8'))} байт"
-
 
 def _capacity_gate(conn, task_id: str, t) -> GateRefusal | None:
     """Гейт ёмкости diff снимка на `in_dev -> review` (tasks/
     01M1GCN1FPSC1A6WK9WD1Q1V8X, требование 5, AC-12..AC-16): diff снимка
-    БЕЗ `tasks/<id>/` (`git diff gitcmd.diff_base(ветка)...<ветка задачи>
-    -- . ':!tasks/<id>/'`, tasks/01M1RA0N6FCFEQBB82K58GM12X, AC-1; база —
-    точка расхождения с origin/main или локальным main, не голый
+    по исключающему pathspec `review.snapshot_exclude(<id>)` (`git diff
+    gitcmd.diff_base(ветка)...<ветка задачи> -- . ':!tasks/<id>/'
+    ':!docs/codebase-map.md'`, tasks/01M1RA0N6FCFEQBB82K58GM12X, AC-1;
+    база — точка расхождения с origin/main или локальным main, не голый
     `config.MAIN_BRANCH`, tasks/01M1SG9T962WJJ31S282GWM0EN) — тот же
     расчёт, что и «полный» `diff_type` в `review.review_package` при
     `iteration == 1` (T029) — не имеет права превышать
@@ -62,17 +42,22 @@ def _capacity_gate(conn, task_id: str, t) -> GateRefusal | None:
     способом, что и до этой задачи (AC-5). Пересчитывается заново на
     КАЖДОМ входе в гейт, не по инкременту прошлой итерации (AC-15).
 
-    Сгенерированная `docs/codebase-map.md` исключена из меры ТЕМ ЖЕ
-    приёмом и ровно по тому же основанию (SPEC
-    01M31DRD81092HB69J0MAKZMGH, требование 5): ревьювер не читает карту
-    построчно — она приходит ему отдельным компонентом пакета
-    (`orchestrator/context_package.py`), то есть в контекст ревью её
-    байты не грузятся дважды. Факт 21.09: diff кода 286 927 байт при
-    потолке 262 144, из них 47 987 байт (17 %) — карта; временный подъём
-    потолка Оператором лечил симптом. Объём исключённой карты назван в
-    отказе отдельной цифрой рядом с цифрой артефактов задачи (AC-6): обе
-    исключённые части видны Оператору порознь, и решение «разделить или
-    поднять потолок» принимается по настоящему размеру предмета ревью.
+    Сгенерированная `docs/codebase-map.md` исключена ТЕМ ЖЕ приёмом и в
+    ТОМ ЖЕ узле (SPEC 01M31DRD81092HB69J0MAKZMGH, требование 5; ANSWER-1,
+    вопрос 1, вариант A): мера гейта и diff ревью-пакета — один и тот же
+    pathspec `review.snapshot_exclude`, оба исключают `tasks/<id>/` и
+    карту. Равенство здесь не украшение, а смысл гейта: мерить меньше,
+    чем получает ревьювер, значило бы пропускать снимки крупнее его
+    контекста (R1-F1, REVIEW.md итерация 1 — исключение карты из меры при
+    карте, остававшейся в диффе пакета). Карта не предмет построчного
+    ревью: её генерирует `scripts/codebase_map.py`, а свежесть проверяет
+    отдельный джоб CI «Карта кодовой базы генерируется и свежа». Факт
+    21.09: diff кода 286 927 байт при потолке 262 144, из них 47 987 байт
+    (17 %) — карта; временный подъём потолка Оператором лечил симптом.
+    Объём исключённой карты назван в отказе отдельной цифрой рядом с
+    цифрой артефактов задачи (AC-6): обе исключённые части видны
+    Оператору порознь, и решение «разделить или поднять потолок»
+    принимается по настоящему размеру предмета ревью.
 
     `GateRefusal` — переход отклонён, отказ журналируется каркасом
     `_run_gates` (AC-13); гейт сам не эскалирует и не делает ничего
@@ -130,8 +115,7 @@ def _capacity_gate(conn, task_id: str, t) -> GateRefusal | None:
                f"для {t['branch']}, и повтори artel.py advance {task_id}")
         return GateRefusal(action, detail, hint)
     code_diff, _, reason = _review_git_diff_part(
-        base, t["branch"],
-        pathspec=(".", f":!{tasks_prefix}", f":!{MAP_REL}"), repo=repo)
+        base, t["branch"], pathspec=_snapshot_exclude(task_id), repo=repo)
     if reason:
         detail = (f"гейт ёмкости: git не ответил на diff снимка "
                  f"({base}...{t['branch']}) — сверка размера невозможна: "

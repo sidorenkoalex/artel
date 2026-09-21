@@ -60,6 +60,11 @@ EMPTY_INCREMENT_FALLBACK_REASON = ("инкрементальный diff пуст
 # успешный-но-пустой diff меряется как N байт текста плейсхолдера вместо 0.
 EMPTY_DIFF_TEXT = "(изменений нет)"
 
+# Сгенерированная карта кодовой базы — то же имя и та же форма локальной
+# константы модуля, что в `orchestrator/brief.py`, `orchestrator/pull.py`
+# и `orchestrator/fsm_postmerge.py`.
+MAP_REL = "docs/codebase-map.md"
+
 
 def artifact_text(branch: str, rel: str, *, disk_root=None,
                   disk_note: str = WORKTREE_NOTE,
@@ -210,6 +215,54 @@ def git_diff_part(base: str, branch: str, *flags: str,
         reason = res.stderr.strip()[:200] or f"git diff вернул {res.returncode}"
         return f"(не собран: {reason})", 0, reason
     return res.stdout.strip() or EMPTY_DIFF_TEXT, len(res.stdout.splitlines()), ""
+
+
+def snapshot_exclude(task_id: str) -> tuple[str, ...]:
+    """Исключающий pathspec снимка задачи — ОДИН узел на двух читателей:
+    diff ревью-пакета (`_shown_diff` ниже) и меру гейта ёмкости
+    (`orchestrator/advance_gates/capacity.py` импортирует эту функцию).
+
+    Общий узел, а не одинаковые кортежи в двух модулях (R1-F1, REVIEW.md
+    01M31DRD81092HB69J0MAKZMGH итерация 1; ANSWER-1, вопрос 1, вариант A):
+    гейт и пакет разъехались на `docs/codebase-map.md` ровно потому, что
+    каждый нёс свой литерал, и сверить их было нечем — гейт мерил меньше,
+    чем ревьювер получал, на размер diff карты (факт 21.09: 47 987 байт).
+    Теперь равенство «мера гейта = diff пакета» — свойство конструкции.
+
+    Что исключено и почему. `tasks/<id>/` (SPEC, PLAN, залоченная планка)
+    приходит ревьюверу отдельными компонентами пакета — дубль внутри diff
+    только раздувает контекст без нового сигнала (T029,
+    tasks/01M1RA0N6FCFEQBB82K58GM12X, AC-2/AC-6). `docs/codebase-map.md`
+    генерируется `scripts/codebase_map.py` по коду той же ветки, её
+    свежесть проверяет отдельный джоб CI «Карта кодовой базы генерируется
+    и свежа» — построчного ревью она не требует, а контекст ревьювера
+    съедает наравне с рукописным кодом (ANSWER-1).
+    """
+    return (".", f":!tasks/{task_id}/", f":!{MAP_REL}")
+
+
+def excluded_note(base: str, branch: str, pathspec: tuple,
+                  repo=None) -> str:
+    """Объём исключённой из снимка части — цифрой для текста отказа гейта
+    ёмкости и для заметки под diff'ом ревью-пакета.
+
+    Три исхода, ни один из которых не выдаёт вымышленное число: git не
+    ответил — «неизвестен» с причиной (решение, уже принятое по diff
+    кода, этим не отменяется); diff реально пуст — «0 байт (изменений
+    нет)», а не байтовый размер строки-плейсхолдера `EMPTY_DIFF_TEXT`,
+    которую `git_diff_part` подставляет для показа (R1-F1, REVIEW.md
+    01M1RA0N6FCFEQBB82K58GM12X итерации 1-3); иначе — байты diff.
+
+    Общий узел на все исключённые части (артефакты `tasks/<id>/` и карту
+    `docs/codebase-map.md`) и на обоих читателей: цифры появляются по
+    одному правилу, и разъехаться им негде.
+    """
+    diff, _, reason = git_diff_part(base, branch, pathspec=pathspec, repo=repo)
+    if reason:
+        return f"неизвестен (git не ответил: {reason})"
+    if diff == EMPTY_DIFF_TEXT:
+        return "0 байт (изменений нет)"
+    return f"{len(diff.encode('utf-8'))} байт"
 
 
 def _answer_rels(task_id: str, branch: str) -> list[str]:
@@ -368,8 +421,8 @@ def own_commit_paths(base: str, branch: str, repo=None) -> tuple[list[str], str]
     return sorted({name.strip() for name in names if name.strip()}), ""
 
 
-def _shown_diff(task_id: str, base: str, branch: str,
-                tasks_dir_exclude: tuple, repo, incremental: bool) -> dict:
+def _shown_diff(base: str, branch: str, exclude: tuple, repo,
+                incremental: bool) -> dict:
     """Тексты стат-списка и diff, которые пакет реально покажет, плюс
     признаки исхода: `stat`, `diff`, `lines`, `failed`, `fallback`,
     `no_edits` (SPEC 01M2ZZDJ5ECR4ZYV23BKFCNFXM, требования 6-8).
@@ -382,9 +435,13 @@ def _shown_diff(task_id: str, base: str, branch: str,
     СОБСТВЕННЫХ коммитов ветки (`own_commit_paths`): изменения main,
     пришедшие подтяжкой, ревьюверу за инкремент итерации не выдаются.
     Путь с магией `:(literal)` — имя файла с `*`/`[`/`:` иначе стало бы
-    глобом или магией pathspec; исключение `tasks/<id>/` идёт тем же
-    pathspec, поэтому правило каталога задачи остаётся ровно одно и для
-    diff, и для `--stat` (требование 6).
+    глобом или магией pathspec; исключения снимка (`snapshot_exclude`:
+    `tasks/<id>/` и `docs/codebase-map.md`) идут тем же pathspec и берутся
+    из ТОГО ЖЕ кортежа `exclude`, что и у полного diff, — правило
+    исключения остаётся ровно одно и для полного, и для инкрементального
+    diff, и для `--stat` (требование 6; ANSWER-1
+    01M31DRD81092HB69J0MAKZMGH: «один и тот же исключающий pathspec для
+    обоих видов diff»).
 
     Пустой инкремент разбирается на два разных исхода (требования 7-8):
     полный diff от базы НЕ пуст — это дефект, `fallback` несёт дословную
@@ -393,16 +450,20 @@ def _shown_diff(task_id: str, base: str, branch: str,
     алерта. Сбой git на самой сверке не превращается ни в то, ни в
     другое: он уезжает в `failed`, как и любой другой несобранный diff.
     """
+    # Исключения — из кортежа снимка, а не собранные здесь заново: второй
+    # литерал разошёлся бы с первым ровно так, как разошлись мера гейта и
+    # diff пакета (R1-F1, REVIEW.md 01M31DRD81092HB69J0MAKZMGH итерация 1).
+    excludes = tuple(spec for spec in exclude if spec.startswith(":!"))
     own_failed = ""
     if incremental:
         own_paths, own_failed = own_commit_paths(base, branch, repo)
         if own_failed:
-            pathspec = tasks_dir_exclude
+            pathspec = exclude
         else:
             pathspec = (*(f":(literal){p}" for p in own_paths),
-                        f":!tasks/{task_id}/") if own_paths else ()
+                        *excludes) if own_paths else ()
     else:
-        pathspec = tasks_dir_exclude
+        pathspec = exclude
 
     if pathspec:
         stat, _, stat_failed = git_diff_part(base, branch, "--stat",
@@ -423,9 +484,9 @@ def _shown_diff(task_id: str, base: str, branch: str,
         return out
 
     full_stat, _, full_stat_failed = git_diff_part(
-        base, branch, "--stat", pathspec=tasks_dir_exclude, repo=repo)
+        base, branch, "--stat", pathspec=exclude, repo=repo)
     full_diff, full_lines, full_failed = git_diff_part(
-        base, branch, pathspec=tasks_dir_exclude, repo=repo)
+        base, branch, pathspec=exclude, repo=repo)
     if full_failed or full_stat_failed:
         out["failed"] = full_failed or full_stat_failed
     elif full_diff != EMPTY_DIFF_TEXT:
@@ -590,19 +651,19 @@ def review_package(conn, task_id: str, title: str, branch: str, *,
     # итерацию, у которой инкремент не сложился, от итерации без базы.
     diff_type = "инкрементальный" if incremental else "полный"
 
+    # Исключения снимка — общий узел с гейтом ёмкости (`snapshot_exclude`):
     # `tasks/<task_id>/` (SPEC, PLAN, залоченная планка) уже идёт в пакет
-    # своими компонентами выше (artifact_part/answer_rels) — дубль внутри
-    # diff/стат-списка только раздувает контекст ревьювера без нового
-    # сигнала (регрессия №10, T029; tasks/01M1RA0N6FCFEQBB82K58GM12X,
-    # AC-2/AC-6). Правило одно для полного и инкрементального diff'а —
-    # оба вызова ниже несут один и тот же исключающий pathspec.
-    tasks_dir_exclude = (".", f":!tasks/{task_id}/")
+    # своими компонентами выше (artifact_part/answer_rels), а
+    # `docs/codebase-map.md` ревьювер не читает построчно (регрессия №10,
+    # T029; tasks/01M1RA0N6FCFEQBB82K58GM12X, AC-2/AC-6; ANSWER-1
+    # 01M31DRD81092HB69J0MAKZMGH). Правило одно для полного и
+    # инкрементального diff'а — оба вызова несут один и тот же pathspec.
+    exclude = snapshot_exclude(task_id)
     # Репозиторный контекст target'а (SPEC 01M1R5B33CC7E6BZK085XV3ZCX,
     # AC-9): diff внешнего target считается в его клоне, не в
     # `config.ROOT`; для self — прежнее поведение (repo=None).
     repo = repo_context.path_or_none(repo_context.resolve(target))
-    shown = _shown_diff(task_id, base, branch, tasks_dir_exclude, repo,
-                        incremental)
+    shown = _shown_diff(base, branch, exclude, repo, incremental)
 
     # Статус CI подтянутой головы (ADR-0015, требование 4/AC-13) — см.
     # докстринг функции выше.
@@ -683,6 +744,20 @@ def review_package(conn, task_id: str, title: str, branch: str, *,
             f"определить не удалось — журнал фиксации не несёт её или sha "
             f"в записи не распознан. Показан diff целиком от "
             f"{config.MAIN_BRANCH}.\n")
+
+    # Что из снимка в diff не вошло — названо ревьюверу явно, с объёмом
+    # карты цифрой (ANSWER-1 01M31DRD81092HB69J0MAKZMGH): молча урезанный
+    # diff читается как «правок больше не было», а по названной цифре
+    # видно, сколько байт снимка ревью не смотрит и почему. Цифра идёт
+    # тем же узлом `excluded_note`, каким гейт ёмкости называет свои
+    # исключённые части, — три честных исхода вместо вымышленного числа.
+    parts.append(
+        f"Из стат-списка и diff исключены артефакты задачи "
+        f"tasks/{task_id}/ (они выше отдельными компонентами пакета) и "
+        f"сгенерированная {MAP_REL} — её diff в том же диапазоне: "
+        f"{excluded_note(base, branch, (MAP_REL,), repo)}. Свежесть карты "
+        f"проверяет отдельный джоб CI «Карта кодовой базы генерируется и "
+        f"свежа», построчного ревью она не требует.\n")
 
     # Замена прежнего `truncate_package`/`truncate_diff` (SPEC
     # 01M1GCN1FPSC1A6WK9WD1Q1V8X, требования 3-4): пакет крупнее потолка
