@@ -16,6 +16,28 @@ from tests.sandbox import TaskSeededTmpRootTest, TmpRootTest, _dead_pid, capture
 
 TASK = "T001"
 
+# Токены рядом с долларами в строке `status` (SPEC
+# 01M31ZHWJWRSACYMRWTCPBC0DM, требования 1 и 5): суммарное число токенов
+# задачи, прочерк вместо нуля у задачи без записей. Виды цены названы
+# здесь литералами — именно ими подписана разбивка в журнале, и
+# разъехаться с ней молча тест не должен.
+TOKEN_KINDS = ("input", "output", "cache_write", "cache_read")
+TOKENS = dict(zip(TOKEN_KINDS, (11, 13, 17, 19)))
+TOKENS_TOTAL = sum(TOKENS.values())
+
+#: Прочерк «записей токенов нет» — тот же символ, что у `retro.DASH`.
+DASH = "—"
+
+
+def known_cost_detail(usd: float, tokens: dict) -> str:
+    """Деталь записи «agent cost KNOWN» — тем же форматом, каким её пишет
+    `spend.charge_step`: разбивку по видам несут только такие записи."""
+    by_kind = ", ".join(f"{kind}={tokens[kind]}" for kind in TOKEN_KINDS)
+    return (f"попытка 1/1, model=alfa-model-x, provider=alfa-cli: "
+            f"стоимость ${usd:.4f}, токенов {sum(tokens.values())}, "
+            f"источник=факт CLI, разбивка по видам: {by_kind} | "
+            f"actual_usd={usd!r}")
+
 
 class CmdLogSessionIdTest(TaskSeededTmpRootTest):
 
@@ -46,6 +68,65 @@ class CmdLogSessionIdTest(TaskSeededTmpRootTest):
 
         self.assertIn("легаси-событие", out)
         self.assertNotIn("None", out)
+
+
+class CmdStatusTokensTest(TaskSeededTmpRootTest):
+    """Суммарные токены задачи в строке `status` (SPEC
+    01M31ZHWJWRSACYMRWTCPBC0DM, требования 1 и 5)."""
+
+    OTHER = "T002"
+
+    def setUp(self):
+        super().setUp()
+        self.conn = store.db()
+        store.insert_task(self.conn, self.OTHER, "Вторая", "in_dev",
+                          "task/t002-vtoraya", config.DEFAULT_TARGET, 25.0)
+
+    def charged(self, task_id: str, actor: str, usd: float,
+                tokens: dict) -> None:
+        store.journal(self.conn, task_id, actor, "agent cost KNOWN",
+                      known_cost_detail(usd, tokens))
+        store.journal(self.conn, task_id, actor, "agent run finished",
+                      f"rc=0, попытка 1/1, стоимость ${usd:.4f}")
+
+    def line_for(self, task_id: str, out: str) -> str:
+        lines = [ln for ln in out.splitlines() if task_id in ln]
+        self.assertEqual(1, len(lines), out)
+        return lines[0]
+
+    def test_status_shows_the_total_token_count_of_the_task(self):
+        """Две роли одной задачи складываются в одно число рядом с
+        «$spent/budget», и задача занимает ровно одну строку.
+
+        Ловит мутацию: показ берёт разбивку последнего шага вместо суммы
+        по задаче — в строке окажется 60 вместо 120, и `assertIn`
+        покраснеет; проверка «ровно одна строка» ловит встречную порчу —
+        разбивку печатают дополнительной строкой на задачу.
+        """
+        self.charged(TASK, "developer", 1.25, TOKENS)
+        self.charged(TASK, "reviewer", 2.5, TOKENS)
+
+        line = self.line_for(TASK, capture(catalog.cmd_status))
+
+        self.assertIn(str(TOKENS_TOTAL * 2), line)
+
+    def test_status_shows_a_dash_for_a_task_without_token_records(self):
+        """Задача, чей шаг завершился без разбивки usage, показана
+        прочерком; у задачи с записями прочерка в строке нет.
+
+        Ловит мутацию: сумма считается `sum({})` и печатается как есть —
+        в строке появится «токенов 0» вместо прочерка, и обе проверки
+        ниже покраснеют.
+        """
+        self.charged(TASK, "developer", 1.25, TOKENS)
+        store.journal(self.conn, self.OTHER, "developer",
+                      "agent run finished",
+                      "rc=0, попытка 1/1, стоимость $4.2500")
+
+        out = capture(catalog.cmd_status)
+
+        self.assertIn(DASH, self.line_for(self.OTHER, out))
+        self.assertNotIn(DASH, self.line_for(TASK, out))
 
 
 class CmdStatusLeaseHolderTest(TaskSeededTmpRootTest):

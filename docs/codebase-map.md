@@ -1,5 +1,5 @@
 ---
-built_at_sha: d5eb5659dc0206705c45da9fde3dc625ac1c31b6
+built_at_sha: 3af571850006e7b1bdf05a77c7352c729477f2bc
 ---
 
 # Codebase-map пульта
@@ -225,7 +225,7 @@ built_at_sha: d5eb5659dc0206705c45da9fde3dc625ac1c31b6
 - `slugify`
 - `spawn_subtask`
 
-**Импортирует:** `orchestrator/alerts.py`, `orchestrator/artifact_branch.py`, `orchestrator/artifacts.py`, `orchestrator/budget.py`, `orchestrator/config.py`, `orchestrator/gitcmd.py`, `orchestrator/idgen.py`, `orchestrator/liveness.py`, `orchestrator/merge_queue.py`, `orchestrator/models.py`, `orchestrator/pool_seal.py`, `orchestrator/runner.py`, `orchestrator/store.py`, `orchestrator/yamlmini.py`, `orchestrator/zone_lock.py`, `scripts/guard.py`
+**Импортирует:** `orchestrator/alerts.py`, `orchestrator/artifact_branch.py`, `orchestrator/artifacts.py`, `orchestrator/budget.py`, `orchestrator/config.py`, `orchestrator/gitcmd.py`, `orchestrator/idgen.py`, `orchestrator/liveness.py`, `orchestrator/merge_queue.py`, `orchestrator/models.py`, `orchestrator/pool_seal.py`, `orchestrator/retro.py`, `orchestrator/runner.py`, `orchestrator/store.py`, `orchestrator/yamlmini.py`, `orchestrator/zone_lock.py`, `scripts/guard.py`
 
 **Импортируется:** `orchestrator/artel.py`, `orchestrator/canary.py`, `orchestrator/fsm.py`, `tests/sandbox.py`, `tests/test_acceptance_tests_flow.py`, `tests/test_advance_guard.py`, `tests/test_agent_failure.py`, `tests/test_agent_log.py`, `tests/test_agent_prompt.py`, `tests/test_amend.py`, `tests/test_analyst_role.py`, `tests/test_answer_gate.py`, `tests/test_artel_role_restricted_commands.py`, `tests/test_auto_cycle.py`, `tests/test_branch_freshness_gate.py`, `tests/test_canary.py`, `tests/test_catalog_new_race.py`, `tests/test_catalog_pin_divergence.py`, `tests/test_catalog_spawn_subtask.py`, `tests/test_catalog_status_log.py`, `tests/test_catalog_tz_path_check.py`, `tests/test_catalog_tz_zones_parsing.py`, `tests/test_catalog_wave_breaker_status.py`, `tests/test_coldstart.py`, `tests/test_doctor.py`, `tests/test_fsm_branch_correct_status_reads.py`, `tests/test_fsm_merge_gate_done_snapshot.py`, `tests/test_git_fixation.py`, `tests/test_invariants.py`, `tests/test_kill_cleanup.py`, `tests/test_lease.py`, `tests/test_merge_gate_ci_wait.py`, `tests/test_merge_lock.py`, `tests/test_merge_queue.py`, `tests/test_models_doctor.py`, `tests/test_multitarget.py`, `tests/test_multitarget_invariants.py`, `tests/test_parent_task_division.py`, `tests/test_pause_now.py`, `tests/test_plan_appendix.py`, `tests/test_providers.py`, `tests/test_prune.py`, `tests/test_review_freshness.py`, `tests/test_review_package.py`, `tests/test_runner_model_preflight.py`, `tests/test_runner_role_model.py`, `tests/test_slugify.py`, `tests/test_spec_budget.py`, `tests/test_step_cost.py`, `tests/test_task_id_prefix_regression.py`, `tests/test_workspace.py`
 
@@ -578,7 +578,7 @@ built_at_sha: d5eb5659dc0206705c45da9fde3dc625ac1c31b6
 
 **Импортирует:** `orchestrator/config.py`, `orchestrator/roles.py`, `orchestrator/yamlmini.py`
 
-**Импортируется:** `orchestrator/artel.py`, `orchestrator/catalog.py`, `orchestrator/roles.py`, `orchestrator/runner.py`, `orchestrator/spend.py`, `orchestrator/stack.py`, `tests/sandbox.py`, `tests/test_agent_prompt.py`, `tests/test_model_tariffs.py`, `tests/test_models.py`, `tests/test_models_doctor.py`, `tests/test_providers.py`, `tests/test_stack.py`, `tests/test_token_rate_divergence.py`, `tests/test_yaml_parsing.py`
+**Импортируется:** `orchestrator/artel.py`, `orchestrator/catalog.py`, `orchestrator/retro.py`, `orchestrator/roles.py`, `orchestrator/runner.py`, `orchestrator/spend.py`, `orchestrator/stack.py`, `tests/sandbox.py`, `tests/test_agent_prompt.py`, `tests/test_model_tariffs.py`, `tests/test_models.py`, `tests/test_models_doctor.py`, `tests/test_providers.py`, `tests/test_stack.py`, `tests/test_token_rate_divergence.py`, `tests/test_yaml_parsing.py`
 
 ## orchestrator/notes.py
 
@@ -719,7 +719,7 @@ built_at_sha: d5eb5659dc0206705c45da9fde3dc625ac1c31b6
 - `map_size_table_rows`
 - `token_rate_divergence`
 
-**Импортирует:** `orchestrator/agent_log.py`, `orchestrator/alerts.py`, `orchestrator/config.py`, `orchestrator/spend.py`, `orchestrator/store.py`
+**Импортирует:** `orchestrator/agent_log.py`, `orchestrator/alerts.py`, `orchestrator/config.py`, `orchestrator/retro.py`, `orchestrator/spend.py`, `orchestrator/store.py`
 
 **Импортируется:** `orchestrator/artel.py`, `tests/test_report.py`, `tests/test_token_rate_divergence.py`
 
@@ -728,15 +728,20 @@ built_at_sha: d5eb5659dc0206705c45da9fde3dc625ac1c31b6
 **Назначение:** Детерминированная генерация содержимого `docs/retro/<id>.md` (SPEC T043).
 
 **Публичные функции:**
+- `actor_costs`
 - `build_done`
 - `build_killed`
 - `parse_total_cost`
 - `retro_path`
 - `retro_rel_path`
+- `task_token_breakdown`
+- `token_breakdown_by_actor`
+- `tokens_text`
+- `total_tokens_text`
 
-**Импортирует:** `orchestrator/cleanup.py`, `orchestrator/config.py`, `orchestrator/store.py`, `scripts/guard.py`
+**Импортирует:** `orchestrator/cleanup.py`, `orchestrator/config.py`, `orchestrator/models.py`, `orchestrator/spend.py`, `orchestrator/store.py`, `scripts/guard.py`
 
-**Импортируется:** `orchestrator/budget.py`, `orchestrator/fsm_postmerge.py`, `orchestrator/snapshot.py`, `tests/test_canary.py`, `tests/test_fsm_retro.py`, `tests/test_parent_task_division.py`, `tests/test_retro.py`
+**Импортируется:** `orchestrator/budget.py`, `orchestrator/catalog.py`, `orchestrator/fsm_postmerge.py`, `orchestrator/report.py`, `orchestrator/snapshot.py`, `tests/test_canary.py`, `tests/test_fsm_retro.py`, `tests/test_parent_task_division.py`, `tests/test_retro.py`
 
 ## orchestrator/retro_corpus.py
 
@@ -886,7 +891,7 @@ built_at_sha: d5eb5659dc0206705c45da9fde3dc625ac1c31b6
 
 **Импортирует:** `orchestrator/alerts.py`, `orchestrator/config.py`, `orchestrator/models.py`, `orchestrator/store.py`
 
-**Импортируется:** `orchestrator/agent_log.py`, `orchestrator/budget.py`, `orchestrator/pause.py`, `orchestrator/report.py`, `orchestrator/runner.py`, `scripts/guard.py`, `tests/test_agent_log.py`, `tests/test_doctor.py`, `tests/test_model_tariffs.py`, `tests/test_multitarget.py`, `tests/test_multitarget_invariants.py`, `tests/test_runner_role_model.py`, `tests/test_step_cost.py`, `tests/test_token_rate_divergence.py`
+**Импортируется:** `orchestrator/agent_log.py`, `orchestrator/budget.py`, `orchestrator/pause.py`, `orchestrator/report.py`, `orchestrator/retro.py`, `orchestrator/runner.py`, `scripts/guard.py`, `tests/test_agent_log.py`, `tests/test_doctor.py`, `tests/test_model_tariffs.py`, `tests/test_multitarget.py`, `tests/test_multitarget_invariants.py`, `tests/test_runner_role_model.py`, `tests/test_step_cost.py`, `tests/test_token_rate_divergence.py`
 
 ## orchestrator/stack.py
 
@@ -1577,7 +1582,8 @@ built_at_sha: d5eb5659dc0206705c45da9fde3dc625ac1c31b6
 
 **Назначение:** Юнит-тесты `orchestrator.catalog.cmd_log`/`cmd_status` (SPEC
 
-**Публичные функции:** (нет)
+**Публичные функции:**
+- `known_cost_detail`
 
 **Импортирует:** `orchestrator/catalog.py`, `orchestrator/config.py`, `orchestrator/store.py`, `orchestrator/zone_lock.py`, `tests/sandbox.py`
 
@@ -2540,7 +2546,8 @@ built_at_sha: d5eb5659dc0206705c45da9fde3dc625ac1c31b6
 
 **Назначение:** Юнит-тесты генерации содержимого RETRO (orchestrator/retro.py, SPEC T043).
 
-**Публичные функции:** (нет)
+**Публичные функции:**
+- `known_cost_detail`
 
 **Импортирует:** `orchestrator/cleanup.py`, `orchestrator/config.py`, `orchestrator/retro.py`, `orchestrator/store.py`, `tests/sandbox.py`
 

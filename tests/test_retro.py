@@ -100,6 +100,37 @@ AC-1. Критерий.
 - Ничего.
 """
 
+# Токены рядом с долларами (SPEC 01M31ZHWJWRSACYMRWTCPBC0DM, требования
+# 2-3, 5): блок стоимости показывает по роли сумму токенов, разбивку по
+# ЧЕТЫРЁМ общим видам цены, провайдера и модель её шагов, а роль без
+# записей токенов — прочерк вместо нуля.
+TOKEN_KINDS = ("input", "output", "cache_write", "cache_read")
+
+#: Разбивка usage одного шага: числа попарно различны и не совпадают ни с
+#: суммой (60), ни друг с другом — «сложили не то с тем» меняет ЧИСЛО.
+STEP_TOKENS = dict(zip(TOKEN_KINDS, (11, 13, 17, 19)))
+STEP_TOKENS_TOTAL = sum(STEP_TOKENS.values())
+
+STEP_MODEL = "alfa-model-x"
+STEP_PROVIDER = "alfa-cli"
+
+#: Прочерк «записей токенов нет» — тот же символ, что у `retro.DASH`.
+DASH = "—"
+
+
+def known_cost_detail(usd: float, tokens: dict, model: str = STEP_MODEL,
+                      provider: str = STEP_PROVIDER) -> str:
+    """Деталь записи «agent cost KNOWN» — тем же форматом, каким её пишет
+    `spend.charge_step` (`model=`/`provider=` из `numbered`, разбивка по
+    видам, `actual_usd=`). Разбивку по видам несут ТОЛЬКО такие записи:
+    «agent run finished» знает лишь суммарное число."""
+    by_kind = ", ".join(f"{kind}={tokens[kind]}" for kind in TOKEN_KINDS)
+    return (f"попытка 1/1, model={model}, provider={provider}: "
+            f"стоимость ${usd:.4f}, токенов {sum(tokens.values())}, "
+            f"источник=факт CLI, разбивка по видам: {by_kind} | "
+            f"actual_usd={usd!r}")
+
+
 ACCEPTANCE_FIXTURE = ('''"""Фикстура."""
 # @AC-2: manual — причина.
 import unittest
@@ -208,14 +239,31 @@ class RetroGenerationTest(TmpRootTest):
         self.assertEqual(first, second)
 
     def test_build_done_aggregates_cost_per_actor_across_events(self):
+        """Две попытки одной роли складываются в ОДНУ строку блока
+        стоимости — и по деньгам ($1.00 + $0.50), и по токенам
+        (10 + 5 по каждому виду).
+
+        Ловит мутацию: агрегация по actor заменена на строку-на-событие
+        (или на «последнее событие побеждает») — в тексте появится
+        «$1.00» отдельной строкой либо сумма токенов станет 5 вместо 15,
+        и `assertIn` ниже покраснеет.
+        """
+        first = dict(zip(TOKEN_KINDS, (4, 3, 2, 1)))
+        second = dict(zip(TOKEN_KINDS, (2, 1, 1, 1)))
+        self.add_step("developer", "agent cost KNOWN",
+                      known_cost_detail(1.0, first))
         self.add_step("developer", "agent run finished",
                       "rc=1, попытка 1/2, стоимость $1.0000, токенов 10")
+        self.add_step("developer", "agent cost KNOWN",
+                      known_cost_detail(0.5, second))
         self.add_step("developer", "agent run finished",
                       "rc=0, попытка 2/2, стоимость $0.5000, токенов 5")
 
         text = retro.build_done(self.conn, self.TASK, "aaaa" * 10)
 
-        self.assertIn("developer: $1.50, 15 токенов", text)
+        self.assertIn("developer: $1.50, токенов 15 "
+                      "(input=6, output=4, cache_write=3, cache_read=2)",
+                      text)
 
     def test_build_done_escalations_show_count_and_last_verbatim(self):
         self.add_step("fsm", "state -> escalated", "первая причина")
@@ -390,6 +438,126 @@ class CostBlockTest(unittest.TestCase):
         self.assertIn("Стоимость итого: $3.00", lines)
         self.assertTrue(any("$7.00" in line for line in lines))
         self.assertNotIn("Стоимость итого: $7.00", lines)
+
+
+class ActorTokensTest(TmpRootTest):
+    """Токены рядом с долларами в блоке стоимости RETRO (SPEC
+    01M31ZHWJWRSACYMRWTCPBC0DM, требования 2-3, 5): разбивка по видам,
+    провайдер и модель — по КАЖДОЙ роли отдельно, роль без записей
+    токенов — прочерком."""
+
+    TASK = "T901"
+
+    def setUp(self):
+        super().setUp()
+        store.create_schema(store.db())
+        self.conn = store.db()
+        store.insert_task(self.conn, self.TASK, "Задача", "merge_gate",
+                          "task/t901-x", config.DEFAULT_TARGET, 50.0)
+
+    def finished(self, actor: str, usd: float) -> None:
+        store.journal(self.conn, self.TASK, actor, "agent run finished",
+                      f"rc=0, попытка 1/1, стоимость ${usd:.4f}")
+
+    def charged(self, actor: str, usd: float, tokens: dict,
+                model: str = STEP_MODEL, provider: str = STEP_PROVIDER) -> None:
+        store.journal(self.conn, self.TASK, actor, "agent cost KNOWN",
+                      known_cost_detail(usd, tokens, model, provider))
+        self.finished(actor, usd)
+
+    def cost_lines(self) -> list:
+        return retro._cost_block(store.task_steps(self.conn, self.TASK), 3.0)
+
+    def line_of(self, actor: str) -> str:
+        lines = [ln for ln in self.cost_lines() if actor in ln]
+        self.assertEqual(1, len(lines), f"{actor}: {lines}")
+        return lines[0]
+
+    def test_role_line_shows_total_tokens_and_every_price_kind(self):
+        """Строка роли несёт сумму токенов и каждый из четырёх видов со
+        своим числом.
+
+        Ловит мутацию: разбивка читается не из «agent cost KNOWN», а из
+        суммарного «токенов N» строки «agent run finished» — видов в
+        строке не окажется вовсе, и проверка по каждому виду покраснеет.
+        """
+        self.charged("developer", 1.25, STEP_TOKENS)
+
+        line = self.line_of("developer")
+
+        self.assertIn(f"токенов {STEP_TOKENS_TOTAL}", line)
+        for kind, value in STEP_TOKENS.items():
+            with self.subTest(kind=kind):
+                self.assertIn(f"{kind}={value}", line)
+
+    def test_role_line_names_the_provider_and_model_of_its_own_steps(self):
+        """Провайдер и модель берутся из записей ИМЕННО этой роли: у
+        `developer` — своя пара, у `reviewer` — своя.
+
+        Ловит мутацию: пара читается из первой записи журнала задачи (а
+        не из записей актёра) — обе роли получат `alfa-cli`/`alfa-model-x`,
+        и `assertNotIn` на чужой паре покраснеет.
+        """
+        self.charged("developer", 1.25, STEP_TOKENS)
+        self.charged("reviewer", 2.5, STEP_TOKENS, "beta-model-y", "beta-cli")
+
+        developer = self.line_of("developer")
+        reviewer = self.line_of("reviewer")
+
+        self.assertIn("провайдер alfa-cli", developer)
+        self.assertIn("модель alfa-model-x", developer)
+        self.assertNotIn("beta", developer)
+        self.assertIn("провайдер beta-cli", reviewer)
+        self.assertIn("модель beta-model-y", reviewer)
+        self.assertNotIn("alfa", reviewer)
+
+    def test_role_without_token_records_shows_a_dash_not_zero(self):
+        """Роль, чей шаг дошёл до конца без разбивки usage, показана с
+        деньгами, но с прочерком вместо суммы токенов, вместо разбивки,
+        вместо провайдера и модели.
+
+        Ловит мутацию: отсутствие разбивки трактуется как пустой словарь
+        и печатается через `.get(kind, 0)` — в строке появится
+        «input=0, output=0, cache_write=0, cache_read=0» («роль
+        отработала бесплатно»), и `assertNotIn` по каждому виду
+        покраснеет.
+        """
+        self.finished("analyst", 0.75)
+
+        line = self.line_of("analyst")
+
+        self.assertIn("$0.75", line)
+        self.assertIn(f"токенов {DASH}", line)
+        self.assertIn(f"разбивка по видам {DASH}", line)
+        self.assertIn(f"провайдер {DASH}", line)
+        self.assertIn(f"модель {DASH}", line)
+        for kind in TOKEN_KINDS:
+            with self.subTest(kind=kind):
+                self.assertNotIn(f"{kind}=", line)
+
+    def test_legacy_kind_names_of_older_journal_rows_are_read_too(self):
+        """Строка, записанная прежними именами счётчиков (до 21.09),
+        читается теми же общими видами цены.
+
+        Ловит мутацию: разбор знает только общие имена
+        (`models.PRICE_KINDS`) — исторические строки журнала прочитаются
+        пустыми, роль получит прочерк вместо честных чисел, и
+        `assertIn` на сумме покраснеет.
+        """
+        store.journal(
+            self.conn, self.TASK, "developer", "agent cost KNOWN",
+            "попытка 1/1, model=alfa-model-x, provider=alfa-cli: "
+            "стоимость $1.0000, токенов 60, источник=факт CLI, "
+            "разбивка по видам: input_tokens=11, output_tokens=13, "
+            "cache_creation_input_tokens=17, cache_read_input_tokens=19 | "
+            "actual_usd=1.0")
+        self.finished("developer", 1.0)
+
+        line = self.line_of("developer")
+
+        self.assertIn(f"токенов {STEP_TOKENS_TOTAL}", line)
+        self.assertIn("input=11", line)
+        self.assertIn("cache_read=19", line)
 
 
 class ParseTotalCostTest(unittest.TestCase):

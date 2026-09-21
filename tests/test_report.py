@@ -17,6 +17,29 @@ from orchestrator import agent_log, config, report, store  # noqa: E402
 from tests.sandbox import TmpRootTest  # noqa: E402
 
 
+# Токены рядом с долларами (SPEC 01M31ZHWJWRSACYMRWTCPBC0DM, требования
+# 4-5): панель «Токены и стоимость» показывает разбивку по ЧЕТЫРЁМ общим
+# видам цены в разрезе задач и в разрезе ролей, а строка без записей
+# токенов — прочерк вместо нуля.
+TOKEN_KINDS = ("input", "output", "cache_write", "cache_read")
+TOKENS = dict(zip(TOKEN_KINDS, (11, 13, 17, 19)))
+TOKENS_TOTAL = sum(TOKENS.values())
+
+#: Прочерк «данных нет» — та же константа, которой отчёт уже показывает
+#: пустые колонки закрытой задачи.
+DASH = report._DASH
+
+
+def _known_cost_detail(usd: float, tokens: dict) -> str:
+    """Деталь записи «agent cost KNOWN» — тем же форматом, каким её пишет
+    `spend.charge_step`: разбивку по видам несут только такие записи."""
+    by_kind = ", ".join(f"{kind}={tokens[kind]}" for kind in TOKEN_KINDS)
+    return (f"попытка 1/1, model=alfa-model-x, provider=alfa-cli: "
+            f"стоимость ${usd:.4f}, токенов {sum(tokens.values())}, "
+            f"источник=факт CLI, разбивка по видам: {by_kind} | "
+            f"actual_usd={usd!r}")
+
+
 def _row(**fields):
     """Строка `steps`/`tasks`, доступная по имени колонки — как sqlite3.Row."""
     return fields
@@ -474,6 +497,132 @@ class FrictionHtmlTest(unittest.TestCase):
 
         self.assertIn("25%", html)
         self.assertIn("шагов: 2", html)
+
+
+class TokenCostHtmlTest(unittest.TestCase):
+    """Панель «Токены и стоимость» (SPEC 01M31ZHWJWRSACYMRWTCPBC0DM,
+    требования 4-5): разрез задач и разрез ролей — каждая строка несёт
+    доллары и разбивку по видам, либо прочерк вместо нуля."""
+
+    def steps(self, task_id: str, actor: str, usd: float,
+              tokens: dict = None) -> list:
+        rows = []
+        if tokens is not None:
+            rows.append(_row(task_id=task_id, actor=actor,
+                             action="agent cost KNOWN",
+                             detail=_known_cost_detail(usd, tokens)))
+        rows.append(_row(task_id=task_id, actor=actor,
+                         action="agent run finished",
+                         detail=f"rc=0, попытка 1/1, стоимость ${usd:.4f}"))
+        return rows
+
+    def test_task_row_shows_dollars_and_every_price_kind(self):
+        """Строка разреза задач несёт деньги задачи и все четыре вида со
+        своими числами.
+
+        Ловит мутацию: разрез печатает только суммарное число токенов
+        без разбивки — ни один `assertIn` по виду не найдёт своего
+        числа.
+        """
+        steps = self.steps("T001", "developer", 1.25, TOKENS)
+
+        html = report._tokens_by_task([_row(id="T001", spent_usd=1.25)], steps)
+
+        self.assertIn("$1.25", html)
+        for kind, value in TOKENS.items():
+            with self.subTest(kind=kind):
+                self.assertIn(f"{kind}={value}", html)
+
+    def test_task_row_sums_the_breakdown_across_every_step_of_the_task(self):
+        """Два шага разных ролей одной задачи складываются в одну строку
+        задачи по каждому виду.
+
+        Ловит мутацию: разрез задач берёт разбивку первого (или
+        последнего) шага вместо суммы — `input` окажется 11, а не 22, и
+        проверка покраснеет.
+        """
+        steps = (self.steps("T001", "developer", 1.25, TOKENS)
+                 + self.steps("T001", "reviewer", 2.5, TOKENS))
+
+        html = report._tokens_by_task([_row(id="T001", spent_usd=3.75)], steps)
+
+        self.assertIn(f"токенов {TOKENS_TOTAL * 2}", html)
+        self.assertIn(f"input={TOKENS['input'] * 2}", html)
+
+    def test_task_without_token_records_shows_a_dash_not_zero(self):
+        """Задача, чей шаг завершился без разбивки usage, показана с
+        деньгами и прочерком вместо суммы и вместо разбивки.
+
+        Ловит мутацию: отсутствующая разбивка подставляется
+        `.get(kind, 0)` — в строке появятся `input=0 … cache_read=0`
+        («задача прошла бесплатно»), и `assertNotIn` по каждому виду
+        покраснеет.
+        """
+        steps = self.steps("T002", "developer", 4.25)
+
+        html = report._tokens_by_task([_row(id="T002", spent_usd=4.25)], steps)
+
+        self.assertIn("$4.25", html)
+        self.assertIn(f"токенов {DASH}", html)
+        for kind in TOKEN_KINDS:
+            with self.subTest(kind=kind):
+                self.assertNotIn(f"{kind}=", html)
+
+    def test_role_row_keeps_every_role_on_its_own_numbers(self):
+        """Разрез ролей считает деньги и токены по КАЖДОЙ роли отдельно,
+        складывая её шаги поперёк задач.
+
+        Ловит мутацию: разрез складывает все строки «agent cost KNOWN»
+        без группировки по actor — обе роли получат одну и ту же
+        разбивку, и проверка «у reviewer свои числа» покраснеет.
+        """
+        triple = {kind: value * 3 for kind, value in TOKENS.items()}
+        steps = (self.steps("T001", "developer", 1.25, TOKENS)
+                 + self.steps("T002", "developer", 1.25, TOKENS)
+                 + self.steps("T001", "reviewer", 2.5, triple))
+
+        html = report._tokens_by_role(steps)
+
+        rows = [row for row in html.split("</div>") if row.strip()]
+        developer = next(r for r in rows if "developer" in r)
+        reviewer = next(r for r in rows if "reviewer" in r)
+        # developer — два шага в разных задачах, reviewer — один тройной:
+        # суммы ролей (120 и 180) не совпадают ни между собой, ни с общей.
+        self.assertIn("$2.50", developer)
+        self.assertIn(f"токенов {TOKENS_TOTAL * 2}", developer)
+        self.assertIn(f"input={TOKENS['input'] * 2}", developer)
+        self.assertIn("$2.50", reviewer)
+        self.assertIn(f"токенов {TOKENS_TOTAL * 3}", reviewer)
+        self.assertIn(f"input={TOKENS['input'] * 3}", reviewer)
+
+    def test_role_without_token_records_shows_a_dash_not_zero(self):
+        """Роль, у которой нет ни одной записи с разбивкой, показана в
+        разрезе ролей прочерком.
+
+        Ловит мутацию: разрез ролей печатает нулевую разбивку вместо
+        прочерка — `assertNotIn` по каждому виду покраснеет.
+        """
+        html = report._tokens_by_role(self.steps("T002", "analyst", 0.75))
+
+        self.assertIn("$0.75", html)
+        self.assertIn(f"токенов {DASH}", html)
+        self.assertIn(f"разбивка по видам {DASH}", html)
+        for kind in TOKEN_KINDS:
+            with self.subTest(kind=kind):
+                self.assertNotIn(f"{kind}=", html)
+
+    def test_empty_report_says_so_instead_of_printing_zeroes(self):
+        """Пульт без задач и без шагов не печатает ни нулевых денег, ни
+        нулевой разбивки — обе подсекции говорят словами.
+
+        Ловит мутацию: пустой разрез рендерится строкой-заглушкой с
+        `$0.00` и нулями по видам — `assertNotIn` на «$» покраснеет.
+        """
+        html = report._token_cost_html([], [])
+
+        self.assertIn("Задач нет", html)
+        self.assertIn("Шагов с учтённой стоимостью нет", html)
+        self.assertNotIn("$", html)
 
 
 class _frozen_today:
