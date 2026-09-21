@@ -3,10 +3,10 @@
 провайдер» (SPEC 01M3009Y9AGGY6ZCFA7H1HJ1TD, требования 1, 3, 6, 8;
 docs/research/providers-codex-plan.md §3).
 
-До этой задачи модель роли была строкой `model:` в `roles.yaml`, а
+До части 1 этой линии модель роли была строкой `model:` в `roles.yaml`, а
 вердикт её совместимости с CLI — таблицей в `orchestrator/stack.py`. Цен
-моделей в системе не было вовсе: курс токенов задавался по РОЛИ
-(`config.TOKEN_RATES`). Теперь модель шага — результат разрешения
+моделей в системе не было вовсе: курс токенов задавался по РОЛИ, таблицей
+в `orchestrator/config.py`. Теперь модель шага — результат разрешения
 цепочки, а провайдер, минимум версии CLI, прейскурант и статус модели
 живут в каталоге.
 
@@ -15,8 +15,8 @@ docs/research/providers-codex-plan.md §3).
 - `config.MODELS` (`models.yaml` в корне, в git) — что пульт вообще
   умеет запускать: провайдер, минимум версии CLI, прейскурант, статус.
   Общее знание всех клонов. Правит его Оператор командой `doc-commit`
-  (`notes.DOC_COMMIT_CONFIG_PATHS`); в `config.PROTECTED_PATHS` путь
-  войдёт частью 2 линии (01M300A14K) — см. комментарий у списка.
+  (`notes.DOC_COMMIT_CONFIG_PATHS`); путь — защищённый
+  (`config.PROTECTED_PATHS`).
 - `config.MODELS_LOCAL` (`.artel/models.yaml`, ВНЕ git) — выбор
   конкретного пульта: ярус -> модель, при необходимости собственный тариф
   поверх прейскуранта и явное разрешение модели со статусом
@@ -28,9 +28,11 @@ docs/research/providers-codex-plan.md §3).
 модель вне каталога, `experimental` без явного разрешения — именованный
 отказ ДО старта агента, а не молчаливый дефолт CLI.
 
-Действующий тариф эта задача только ОТДАЁТ (`Resolution.tariff`): его
-потребитель — часть 2 линии, `config.TOKEN_RATES` и `orchestrator/
-spend.py` этой задачей не меняются.
+Действующий тариф отдают два входа: `resolve_role` (цепочка целиком —
+модель шага роли и её тариф) и `resolve_model` (тариф по идентификатору
+модели, без роли — модель ПРОШЕДШЕГО шага, прочитанная из журнала).
+Потребитель обоих — `orchestrator/spend.py` (SPEC
+01M300A14KRHCFB0DQXVCBJEKF, требования 1-2).
 """
 import sys
 from collections import namedtuple
@@ -149,6 +151,14 @@ Resolution = namedtuple(
     "Resolution",
     "role tier model provider cli min_cli_version status list_price "
     "tariff tariff_source calibrated_at source")
+
+#: Действующий тариф ОДНОЙ модели без цепочки роли (SPEC
+#: 01M300A14KRHCFB0DQXVCBJEKF, требование 1): те же четыре поля, что несёт
+#: хвост `Resolution` — `resolve_role` и `resolve_model` собирают их одним
+#: помощником `_effective_tariff`, чтобы формула «переопределение
+#: локального слоя, иначе прейскурант каталога» не разошлась на две копии.
+EffectiveTariff = namedtuple(
+    "EffectiveTariff", "model tariff tariff_source calibrated_at source")
 
 
 def version_tuple(raw, where: str) -> tuple:
@@ -434,8 +444,9 @@ def resolve_role(role: str, catalog: Catalog = None,
     передаёт: читать их заранее там негде и незачем.
 
     Действующий тариф — переопределение локального слоя, иначе
-    прейскурант каталога; источник называется явно и уходит наружу
-    полем `tariff_source` (потребитель тарифа — часть 2 линии).
+    прейскурант каталога (`_effective_tariff`); источник называется явно и
+    уходит наружу полем `tariff_source`. Потребитель тарифа —
+    `orchestrator/spend.py`: по нему считается стоимость шага.
     """
     from . import roles
     try:
@@ -456,16 +467,48 @@ def resolve_role(role: str, catalog: Catalog = None,
             f"{STATUS_EXPERIMENTAL} и не разрешена явно — добавь "
             f"«{ALLOW_EXPERIMENTAL_KEY}: {{{model_id}: true}}» в "
             f"{config.MODELS_LOCAL}")
-    override = local.overrides.get(model_id)
-    if override is not None:
-        tariff, source_kind = override.tariff, TARIFF_SOURCE_OVERRIDE
-        calibrated_at, source = override.calibrated_at, override.source
-    else:
-        tariff, source_kind = model.list_price, TARIFF_SOURCE_CATALOG
-        calibrated_at, source = model.price_date, str(config.MODELS)
+    effective = _effective_tariff(model, local)
     return Resolution(role, tier, model.id, model.provider, model.cli,
                       model.min_cli_version, model.status, model.list_price,
-                      tariff, source_kind, calibrated_at, source)
+                      effective.tariff, effective.tariff_source,
+                      effective.calibrated_at, effective.source)
+
+
+def _effective_tariff(model: CatalogModel, local: LocalLayer) -> EffectiveTariff:
+    """Действующий тариф записи каталога: переопределение локального слоя,
+    иначе прейскурант. Дата — `calibrated_at` переопределения либо
+    `price_date` каталога (SPEC 01M300A14KRHCFB0DQXVCBJEKF, требование 1):
+    именно она отсекает в сверке шаги, записанные до этой цены."""
+    override = local.overrides.get(model.id)
+    if override is not None:
+        return EffectiveTariff(model.id, override.tariff,
+                               TARIFF_SOURCE_OVERRIDE, override.calibrated_at,
+                               override.source)
+    return EffectiveTariff(model.id, model.list_price, TARIFF_SOURCE_CATALOG,
+                           model.price_date, str(config.MODELS))
+
+
+def resolve_model(model_id: str, catalog: Catalog = None,
+                  local: LocalLayer = None) -> EffectiveTariff:
+    """Действующий тариф модели по её идентификатору — без роли и без
+    яруса (SPEC 01M300A14KRHCFB0DQXVCBJEKF, требования 1-2).
+
+    Нужен там, где модель известна сама по себе, а цепочка роли ничего не
+    говорит: строка журнала «agent cost KNOWN» прошлого шага несёт модель
+    ТОГО шага, и она не обязана совпадать с сегодняшней моделью роли —
+    ровно на этом несовпадении и строился инцидент 13.09-20.09 (учёт по
+    цене модели, на которой роль уже не ходит).
+
+    Отказы — те же именованные классы, что и у `resolve_role`: модели нет
+    в каталоге (`ModelNotInCatalogError`), слои не читаются
+    (`CatalogError`/`LocalLayerError`). Статус `experimental` здесь НЕ
+    сверяется: разрешение запуска — предмет цепочки роли, а у прошедшего
+    шага вопрос «можно ли его запускать» уже не стоит, цена ему нужна в
+    любом случае.
+    """
+    model = catalog_model(model_id, catalog)
+    local = local if local is not None else load_local()
+    return _effective_tariff(model, local)
 
 
 # Шаблон локального слоя (требование 7): все ярусы на `claude-opus-5`,

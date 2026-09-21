@@ -4,7 +4,7 @@ import math
 import re
 from pathlib import Path
 
-from . import alerts, config, store
+from . import alerts, config, models, store
 
 
 def json_number(value) -> float | None:
@@ -168,59 +168,183 @@ def charge_step(conn, task_id: str, role: str, cost: dict | None,
         # действие журнала, не замена существующего `cost_note` в «agent
         # run finished» — требование 6 (дополняет, не заменяет).
         #
-        # Сверка курса с фактом считается ДО записи строки и попадает в
+        # Сверка тарифа с фактом считается ДО записи строки и попадает в
         # неё же (SPEC 01M2ZNJX2N5SPZCAQE6EHD4EWH, требование 3, AC-4):
         # свежий шаг обязан входить в собственный коэффициент, а править
         # уже вставленную строку журнала нечем — `store` эта задача
         # держит на чтении.
+        #
+        # Модель шага читается из `numbered` (`model=`, пишет
+        # `runner._numbered_with_model`), а не разрешается по роли
+        # заново: строка обязана считаться по той модели, которую сама
+        # называет, иначе запись и её последующий разбор разошлись бы.
+        model_id = journal_model(numbered)
+        effective = model_tariff(model_id)
+        record_tariff(conn, effective)
+        divergence_note = _divergence_note(conn, role, effective, cost["usd"],
+                                           tokens_by_type)
         detail = (f"{numbered}: {cost_note(cost)}, источник=факт CLI, "
                  f"разбивка по видам: "
                  f"{_tokens_by_type_text(tokens_by_type)} | "
                  f"actual_usd={cost['usd']!r}"
-                 f"{_divergence_note(conn, role, cost['usd'], tokens_by_type)}")
+                 f"{_tariff_note(effective)}{divergence_note}")
         store.journal(conn, task_id, role, KNOWN_COST_JOURNAL_ACTION, detail)
     return f", {cost_note(cost)}"
 
 
-def _divergence_note(conn, role: str, actual_usd: float,
+def _tariff_note(effective) -> str:
+    """Хвост строки KNOWN/PARTIAL: дата действующего тарифа модели шага
+    (SPEC 01M300A14KRHCFB0DQXVCBJEKF, требование 7, AC-9). Пустая строка
+    — тариф не разрешился.
+
+    Дата стоит в строке САМА, а не только внутри коэффициента сверки:
+    коэффициента может не быть вовсе (первый шаг модели, сверять не с
+    чем), а вопрос «по какой цене посчитан этот шаг» читатель журнала
+    задаёт всегда — RETRO и отчёт считают по тарифу, действовавшему на
+    момент шага.
+    """
+    if effective is None:
+        return ""
+    return f" | тариф модели с {effective.calibrated_at}"
+
+
+def _divergence_note(conn, role: str, effective, actual_usd: float,
                      tokens_by_type: dict) -> str:
-    """Хвост строки KNOWN: расчёт по курсу роли и коэффициент её
+    """Хвост строки KNOWN: расчёт по тарифу модели и коэффициент его
     расхождения с фактом CLI (SPEC 01M2ZNJX2N5SPZCAQE6EHD4EWH,
     требования 3-4). Пустая строка — сверять нечем.
 
-    В сверку идут прежние строки KNOWN этой роли с даты `calibrated_at`
-    её курса (`known_cost_pairs`) ПЛЮС пара текущего шага: коэффициент в
-    строке отвечает на вопрос «как курс роли расходится с фактом на этот
-    момент», включая сам записываемый шаг.
+    В сверку идут прежние строки KNOWN этой ПАРЫ (роль, модель) с даты
+    действующего тарифа модели (`known_cost_pairs`) ПЛЮС пара текущего
+    шага: коэффициент в строке отвечает на вопрос «как тариф расходится
+    с фактом на этот момент», включая сам записываемый шаг.
 
-    Курс роли не задан (`partial_cost_usd` вернула `None`) или неполон
-    (`ValueError`, требование 3 SPEC 01M1PP0VYRT55WN8GGVG66X89Y) — тихий
-    пропуск: учёт шага важнее сверки и не имеет права упасть вместе с
-    ней (тот же урок, что R1-F1 у `charge_missing_result` ниже).
+    Тариф не разрешился — тихий пропуск: учёт шага важнее сверки и не
+    имеет права упасть вместе с ней (тот же урок, что R1-F1 у
+    `charge_missing_result` ниже; SPEC 01M300A14KRHCFB0DQXVCBJEKF,
+    требование 9).
     """
-    try:
-        calculated = partial_cost_usd(role, tokens_by_type)
-    except ValueError:
+    if effective is None:
         return ""
-    if calculated is None:
-        return ""
-    pairs = known_cost_pairs(conn, role).get(role, [])
+    calculated = tariff_cost_usd(effective.tariff, tokens_by_type)
+    pairs = known_cost_pairs(conn, role, effective.model).get(
+        (role, effective.model), [])
     pairs.append((calculated, actual_usd))
-    divergence = check_rate_divergence(conn, role, pairs)
+    divergence = check_rate_divergence(conn, effective.model, pairs)
     if divergence is None:
         return ""
-    return (f" | расчёт по курсу=${calculated:.4f}, "
-            f"коэффициент роли с {divergence.since}={divergence:.2f}")
+    return (f" | расчёт по тарифу=${calculated:.4f}, "
+            f"коэффициент пары с {divergence.since}={divergence:.2f}")
 
 
-# Счётчик usage (`config.USAGE_TOKEN_KEYS`) -> поле цены `TOKEN_RATES[role]`,
-# которое его тарифицирует (SPEC 01M1PP0VYRT55WN8GGVG66X89Y, требование 1).
-_RATE_FIELD_FOR_USAGE_KEY = {
-    "input_tokens": "input_usd_per_token",
-    "output_tokens": "output_usd_per_token",
-    "cache_creation_input_tokens": "cache_creation_usd_per_token",
-    "cache_read_input_tokens": "cache_read_usd_per_token",
+# Счётчик usage (`config.USAGE_TOKEN_KEYS`) -> вид цены тарифа модели
+# (`models.PRICE_KINDS`), которым он тарифицируется (SPEC
+# 01M300A14KRHCFB0DQXVCBJEKF, требование 1). Отображение записано
+# поимённо, а не порядком двух кортежей: имена счётчиков потока CLI и
+# имена видов цены каталога живут в разных файлах и по разным поводам —
+# сдвиг любого из них на одну позицию тарифицировал бы 2 млн чтений кэша
+# по цене выхода и не покраснел бы ни на одном сравнении форм.
+_PRICE_KIND_FOR_USAGE_KEY = {
+    "input_tokens": "input",
+    "output_tokens": "output",
+    "cache_creation_input_tokens": "cache_write",
+    "cache_read_input_tokens": "cache_read",
 }
+
+#: Цены тарифа заданы за МИЛЛИОН токенов (`models.PRICE_KINDS`,
+#: `list_price_usd_per_mtok`), а разбивка usage — в штуках.
+TOKENS_PER_PRICE_UNIT = 1_000_000
+
+#: `model=` строки журнала «agent cost KNOWN/PARTIAL» (пишет
+#: `runner._numbered_with_model`). Значение — либо идентификатор модели,
+#: либо метка «дефолт CLI» с пробелом: до конца поля читается один токен
+#: без пробелов и запятых, а идентификатор ли это — решает каталог.
+#:
+#: Хвостовое двоеточие поля НЕ входит в значение: `model=` стоит последним
+#: в `numbered`, а `charge_step` приписывает к нему `": "` — без этого
+#: отсечения моделью считалось бы `claude-opus-5:`, которой в каталоге
+#: нет. Двоеточие отсекается только перед пробелом/запятой/концом строки:
+#: идентификатор модели у другого провайдера сам может нести двоеточия
+#: (arn Bedrock), и рубить по первому из них нельзя.
+_MODEL_FIELD_RE = re.compile(r"model=([^\s,]+?):?(?=[\s,]|$)")
+
+
+def journal_model(detail: str) -> str | None:
+    """Идентификатор модели из поля `model=` строки журнала; `None` —
+    поля нет (строка старого формата до 19.09) либо его значение — не
+    один токен (метка «дефолт CLI»).
+
+    Сверку значения с каталогом функция НЕ делает: «это вообще похоже на
+    поле» и «такая модель у пульта есть» — разные вопросы, и второй
+    отвечает `model_tariff` ниже, отдавая `None` на неизвестной модели.
+    """
+    match = _MODEL_FIELD_RE.search(detail or "")
+    return match.group(1) if match else None
+
+
+def role_tariff(role: str) -> models.EffectiveTariff | None:
+    """Действующий тариф модели РОЛИ (цепочка «роль -> ярус -> модель»);
+    `None` — цепочка не разрешилась.
+
+    Деградация вместо исключения — требование 9 SPEC
+    01M300A14KRHCFB0DQXVCBJEKF: учёт шага важнее цены и не имеет права
+    упасть вместе с ней. Роль без яруса (`verifier`, `executor: none`),
+    нечитаемый локальный слой, модель вне каталога — всё это здесь
+    «тарифа нет», ровно как раньше «курса роли нет»; называет причину
+    поимённо `doctor` (строки `models-catalog`/`models-local`), а не
+    стоимость шага.
+    """
+    try:
+        resolved = models.resolve_role(role)
+    except models.ModelsError:
+        return None
+    return models.EffectiveTariff(resolved.model, resolved.tariff,
+                                  resolved.tariff_source,
+                                  resolved.calibrated_at, resolved.source)
+
+
+def model_tariff(model_id: str, catalog=None, local=None):
+    """Действующий тариф МОДЕЛИ по идентификатору; `None` — модели нет в
+    каталоге или слои не читаются (та же деградация, что `role_tariff`).
+
+    `catalog`/`local` передаются вызывающим, который разрешает тариф в
+    цикле по строкам журнала (`known_cost_pairs`): без них каждая строка
+    перечитывала бы оба файла слоёв.
+    """
+    if not model_id:
+        return None
+    try:
+        return models.resolve_model(model_id, catalog, local)
+    except models.ModelsError:
+        return None
+
+
+def tariff_cost_usd(tariff, tokens_by_type: dict) -> float:
+    """Стоимость разбивки usage по четырём ценам тарифа: каждый вид
+    токенов — своей ценой (SPEC 01M1PP0VYRT55WN8GGVG66X89Y, требование 2),
+    не средней ставкой на общую сумму токенов: чтения кэша почти всегда —
+    большинство объёма шага и стоят на порядок дешевле входа, усреднение
+    завышало частичную стоимость таймаута в ~20 раз (инцидент 04.09)."""
+    return sum(tokens_by_type.get(usage_key, 0) * getattr(tariff, kind)
+               / TOKENS_PER_PRICE_UNIT
+               for usage_key, kind in _PRICE_KIND_FOR_USAGE_KEY.items())
+
+
+def record_tariff(conn, effective) -> bool:
+    """История тарифов: строка в `model_tariffs`, если действующий тариф
+    модели отличается от последней её записи (SPEC
+    01M300A14KRHCFB0DQXVCBJEKF, требование 6). `True` — строка добавлена.
+
+    Зовётся в точке учёта шага — единственной, где есть и соединение с
+    БД, и уже разрешённый тариф. Команды записи в таблицу нет: руками
+    история не правится, её пишет только пульт, разрешая тариф.
+    """
+    if effective is None:
+        return False
+    return store.record_model_tariff(conn, effective.model,
+                                     tuple(effective.tariff),
+                                     effective.calibrated_at,
+                                     effective.source)
 
 
 def _tokens_by_type_text(tokens_by_type: dict) -> str:
@@ -233,39 +357,30 @@ def _tokens_by_type_text(tokens_by_type: dict) -> str:
 
 
 def partial_cost_usd(role: str, tokens_by_type: dict) -> float | None:
-    """Частичная стоимость разбивки usage по курсу роли, или `None` — курс
-    для роли не задан вовсе (`config.TOKEN_RATES`).
+    """Стоимость разбивки usage по действующему тарифу МОДЕЛИ роли, или
+    `None` — тариф не разрешился (SPEC 01M300A14KRHCFB0DQXVCBJEKF,
+    требования 1-2, AC-2).
 
-    Сумма произведений «количество токенов вида × цена этого вида по
-    курсу роли» (SPEC 01M1PP0VYRT55WN8GGVG66X89Y, требование 2) — не
-    средняя ставка на общую сумму токенов, как раньше: чтения кэша почти
-    всегда — большинство объёма шага и стоят на порядок дешевле входа
-    (`config.TOKEN_RATES`, докстрока калибровки), усреднение с ценой
-    входа/выхода завышало частичную стоимость таймаута в ~20 раз
-    (SPEC «Контекст», инцидент 04.09).
+    Принимает роль, а не модель: вызывающие (`charge_missing_result`,
+    `runner._cost_partial_expected`) знают роль ШАГА, а модель у неё —
+    результат разрешения цепочки, а не их знание. Две роли одного яруса
+    считают одну и ту же разбивку одинаково, смена модели яруса меняет
+    сумму — ровно то, чего не умел курс по роли.
 
-    Курс роли ЕСТЬ в таблице, но не несёт одной из четырёх цен
-    (`config.USAGE_TOKEN_KEYS`) — `ValueError`, явный именованный отказ,
-    а не тихий ноль/пропуск этого вида токена (требование 3, AC-5):
-    неполный курс — ошибка конфигурации, её нельзя молча замять,
-    занизив частичную стоимость.
+    Неполный прейскурант больше не даёт здесь `ValueError`: набор из
+    четырёх цен обязателен на разборе каталога и локального слоя
+    (`models._prices`, `IncompletePriceError`) — отказ стал строже и
+    переехал раньше по течению, к чтению файла, а сюда неполный тариф
+    попасть уже не может.
     """
-    rate = config.TOKEN_RATES.get(role)
-    if rate is None:
+    effective = role_tariff(role)
+    if effective is None:
         return None
-    total = 0.0
-    for key in config.USAGE_TOKEN_KEYS:
-        rate_field = _RATE_FIELD_FOR_USAGE_KEY[key]
-        if rate_field not in rate:
-            raise ValueError(
-                f"config.TOKEN_RATES[{role!r}] не несёт цены {rate_field!r} "
-                f"(счётчик {key!r}) — курс роли неполон, частичная "
-                f"стоимость не считается по неполному курсу молча")
-        total += tokens_by_type.get(key, 0) * rate[rate_field]
-    return total
+    return tariff_cost_usd(effective.tariff, tokens_by_type)
 
 
-# --- сверка курса роли с фактом CLI (01M2ZNJX2N5SPZCAQE6EHD4EWH, 3-7)
+# --- сверка тарифа модели с фактом CLI (01M2ZNJX2N5SPZCAQE6EHD4EWH, 3-7;
+#     пара «роль, модель» — 01M300A14KRHCFB0DQXVCBJEKF, требование 2)
 #
 # Формат строки «agent cost KNOWN» пишет `charge_step` выше — разбор
 # ниже его обратная операция. Оба живут в одном модуле с того момента,
@@ -300,45 +415,57 @@ def known_cost_breakdown(detail: str) -> tuple:
 
 
 def rate_calibrated_at(role: str) -> str | None:
-    """Дата калибровки курса роли (`config.TOKEN_RATES`), с которой идёт
-    сверка; `None` — курса роли нет либо он не несёт даты."""
-    rate = config.TOKEN_RATES.get(role)
-    return rate.get("calibrated_at") if rate else None
+    """Дата действующего тарифа модели роли, с которой идёт сверка:
+    `calibrated_at` переопределения локального слоя, иначе `price_date`
+    каталога (SPEC 01M300A14KRHCFB0DQXVCBJEKF, требование 1, AC-3);
+    `None` — тариф не разрешился."""
+    effective = role_tariff(role)
+    return effective.calibrated_at if effective is not None else None
 
 
-def _within_rate_period(role: str, ts) -> bool:
-    """Записан ли шаг не раньше даты калибровки курса роли.
+def _within_tariff_period(since: str | None, ts) -> bool:
+    """Записан ли шаг не раньше даты действующего тарифа его модели.
 
-    `store.now()` пишет `YYYY-MM-DD HH:MM:SSZ`, `calibrated_at` —
+    `store.now()` пишет `YYYY-MM-DD HH:MM:SSZ`, дата тарифа —
     `YYYY-MM-DD`: сравнение префикса лексикографически и есть сравнение
-    дат, разбирать их нечем. Строки старше даты — шаги ДРУГОЙ модели
-    (SPEC 01M2ZNJX2N5SPZCAQE6EHD4EWH, требование 3), в сверку не входят.
-    Курс без даты либо строка без `ts` — тоже мимо: отнести такой шаг к
-    периоду курса нечем, а молча смешать две модели — ровно тот дефект,
-    который задача и закрывает.
+    дат, разбирать их нечем. Строки старше даты — шаги, посчитанные по
+    ДРУГОЙ цене той же модели (SPEC 01M300A14KRHCFB0DQXVCBJEKF,
+    требование 2), в коэффициент пары не входят. Тариф без даты либо
+    строка без `ts` — тоже мимо: отнести такой шаг к периоду тарифа
+    нечем, а молча смешать две цены — ровно тот дефект, который линия и
+    закрывает.
     """
-    since = rate_calibrated_at(role)
-    if since is None or not ts:
+    if not since or not ts:
         return False
     return str(ts)[:len(since)] >= since
 
 
-def known_cost_pairs(conn, role: str | None = None) -> dict:
-    """{роль: [(расчёт по курсу, факт CLI), …]} по строкам журнала
-    `KNOWN_COST_JOURNAL_ACTION` не старше даты калибровки курса роли;
-    `role` — сузить чтение до одной роли (путь записи шага).
+def known_cost_pairs(conn, role: str | None = None,
+                     model_id: str | None = None) -> dict:
+    """{(роль, модель): [(расчёт по тарифу, факт CLI), …]} по строкам
+    журнала `KNOWN_COST_JOURNAL_ACTION`; `role`/`model_id` — сузить
+    чтение до одной пары (путь записи шага).
+
+    Ключ — ПАРА (SPEC 01M300A14KRHCFB0DQXVCBJEKF, требование 2, AC-4):
+    модель берётся из поля `model=` самой строки, а не из сегодняшней
+    цепочки роли — шаг, прошедший на прежней модели, обязан считаться по
+    её цене, а не по цене нынешней. Строка входит в пару, только если
+    записана не раньше даты действующего тарифа ЭТОЙ модели.
 
     Журнал читается существующими функциями `store` (`all_tasks` +
     `task_steps`), тем же приёмом, что `report._all_steps`: функции «весь
-    журнал одним запросом» в `store` нет, а заводить её эта задача не
-    вправе (SPEC «Не входит» — `store.py` только чтение).
+    журнал одним запросом» в `store` нет. Слои моделей читаются ОДИН раз
+    на вызов (`models.layers_or_none`), а тариф каждой встреченной модели
+    — один раз и кладётся в `tariffs`: иначе длинный журнал упёрся бы в
+    файловый ввод-вывод на каждой строке.
 
     Строка, которую нечем сверить, пропускается молча: старый формат без
-    `actual_usd`, роль без курса (`partial_cost_usd` — `None`), неполный
-    курс (`ValueError`). Калибровка не обязана падать из-за неполноты
-    конфигурации — это дело `partial_cost_usd` в её собственной точке
-    вызова.
+    `actual_usd`, строка без опознаваемой модели (требование 3, AC-5),
+    модель вне каталога, нечитаемые слои. Сверка не обязана падать из-за
+    неполноты конфигурации — назвать её поимённо дело `doctor`.
     """
+    catalog, local = models.layers_or_none()
+    tariffs: dict = {}
     pairs: dict = {}
     for task in store.all_tasks(conn):
         for row in store.task_steps(conn, task["id"]):
@@ -347,32 +474,33 @@ def known_cost_pairs(conn, role: str | None = None) -> dict:
             actor = row["actor"]
             if role is not None and actor != role:
                 continue
-            if not _within_rate_period(actor, row["ts"]):
+            step_model = journal_model(row["detail"])
+            if step_model is None or (model_id is not None
+                                      and step_model != model_id):
+                continue
+            if step_model not in tariffs:
+                tariffs[step_model] = model_tariff(step_model, catalog, local)
+            effective = tariffs[step_model]
+            if effective is None:
+                continue
+            if not _within_tariff_period(effective.calibrated_at, row["ts"]):
                 continue
             actual_usd, tokens_by_type = known_cost_breakdown(row["detail"])
             if actual_usd is None or not tokens_by_type:
                 continue
-            try:
-                calculated_usd = partial_cost_usd(actor, tokens_by_type)
-            except ValueError:
-                continue
-            if calculated_usd is None:
-                continue
-            pairs.setdefault(actor, []).append((calculated_usd, actual_usd))
+            pairs.setdefault((actor, step_model), []).append(
+                (tariff_cost_usd(effective.tariff, tokens_by_type), actual_usd))
     return pairs
 
 
 class RateDivergence(float):
-    """Коэффициент расхождения курса роли с фактом CLI — число, которое
-    помнит, по какой выборке оно посчитано: `steps` (сколько шагов в неё
-    вошло) и `since` (дата калибровки курса, с которой идёт сверка).
+    """Коэффициент расхождения тарифа модели с фактом CLI — число,
+    которое помнит, по какой выборке оно посчитано: `steps` (сколько
+    шагов в неё вошло) и `since` (дата тарифа, с которой идёт сверка).
 
     Именно число, а не словарь или кортеж: возврат
-    `report.token_rate_divergence` — `{роль: коэффициент}` — зафиксирован
-    залоченной планкой 01M1PP0VYRT55WN8GGVG66X89Y (AC-6,
-    `acceptance_tests/test_ac6_calibration_reports_divergence_by_role.py`
-    сравнивает значение роли через `assertAlmostEqual`), а правка
-    залоченной планки — право Оператора (ADR-0012), не этой задачи.
+    `report.token_rate_divergence` — `{модель: коэффициент}` — читается
+    как число (SPEC 01M300A14KRHCFB0DQXVCBJEKF, требование 4, AC-6).
     Дату и число шагов обязаны назвать строка журнала (SPEC
     01M2ZNJX2N5SPZCAQE6EHD4EWH, требование 3) и строка отчёта
     (требование 7), поэтому они едут рядом с коэффициентом — считать их
@@ -388,9 +516,11 @@ class RateDivergence(float):
         return value
 
 
-def check_rate_divergence(conn, role: str, pairs: list) -> RateDivergence | None:
-    """Коэффициент расхождения курса роли с фактом CLI по парам «расчёт,
-    факт» — и алерт, если он выше порога. `None` — сверять нечего.
+def check_rate_divergence(conn, model_id: str,
+                          pairs: list) -> RateDivergence | None:
+    """Коэффициент расхождения тарифа МОДЕЛИ с фактом CLI по парам
+    «расчёт, факт» — и алерт, если он выше порога. `None` — сверять
+    нечего либо тариф модели не разрешился.
 
     ЕДИНСТВЕННОЕ место, где живёт математика «сумма расчёта против суммы
     фактов» (SPEC 01M2ZNJX2N5SPZCAQE6EHD4EWH, требование 6, AC-8): её
@@ -399,22 +529,26 @@ def check_rate_divergence(conn, role: str, pairs: list) -> RateDivergence | None
     среднее по шагам: несколько маленьких шагов не должны топить один
     крупный расходящийся.
 
-    Алерт — `kind=warning`, `target=None` (расхождение считается по роли
-    поперёк всех задач и target'ов) через
-    `alerts.raise_token_rate_divergence_alert`, не `alerts.raise_alert`:
-    сообщение несёт растущие суммы, дедуп по точному тексту не сработал
-    бы на повторных шагах (REVIEW.md 01M1PP0VYRT55WN8GGVG66X89Y итерации
-    1, R1-F2). Заведение алерта живёт здесь, а не у вызывающих, по той же
-    причине, что и сам расчёт: две копии условия разошлись бы.
+    Адресат алерта — модель, а не роль (SPEC
+    01M300A14KRHCFB0DQXVCBJEKF, требование 1): разошлась ЦЕНА, а она у
+    модели одна на все роли яруса, и три роли на одной модели обязаны
+    дать один устойчивый сигнал, а не три копии. Сам алерт прежний —
+    `kind=warning`, `target=None` (расхождение считается поперёк всех
+    задач и target'ов) через `alerts.raise_token_rate_divergence_alert`,
+    не `alerts.raise_alert`: сообщение несёт растущие суммы, дедуп по
+    точному тексту не сработал бы на повторных шагах (REVIEW.md
+    01M1PP0VYRT55WN8GGVG66X89Y итерации 1, R1-F2) — дедуп идёт по
+    префиксу сообщения, поэтому текст начинается с идентификатора модели.
 
     Возврат — `RateDivergence`: сам коэффициент числом (форма возврата
     `report.token_rate_divergence` этим и сохранена), а дата и число
     вошедших шагов — его атрибутами, потому что строка журнала и строка
     отчёта обязаны их назвать (требования 3, 7).
     """
-    since = rate_calibrated_at(role)
-    if since is None or not pairs:
+    effective = model_tariff(model_id)
+    if effective is None or not pairs:
         return None
+    since = effective.calibrated_at
     actual_sum = sum(actual for _, actual in pairs)
     if actual_sum == 0:
         return None
@@ -422,8 +556,8 @@ def check_rate_divergence(conn, role: str, pairs: list) -> RateDivergence | None
     coefficient = abs(calculated_sum - actual_sum) / actual_sum
     if coefficient > config.TOKEN_RATE_DIVERGENCE_ALERT_THRESHOLD:
         alerts.raise_token_rate_divergence_alert(
-            conn, role,
-            f"{role}: коэффициент расхождения курса токенов "
+            conn, model_id,
+            f"{model_id}: коэффициент расхождения тарифа модели "
             f"{coefficient:.2f} выше порога "
             f"{config.TOKEN_RATE_DIVERGENCE_ALERT_THRESHOLD} — расчётная "
             f"цена ${calculated_sum:.4f} против фактической "
@@ -446,35 +580,32 @@ def charge_missing_result(conn, task_id: str, role: str, numbered: str,
     в долларах, которую посчитал бы сам CLI в финальном событии, всё
     равно нечем, но раздельные счётчики позволяют тарифицировать каждый
     вид его собственной ценой, а не средней ставкой входа/выхода на всю
-    сумму (`partial_cost_usd`, требование 2/4, AC-2/AC-3). Курс роли
-    (`config.TOKEN_RATES`, SPEC 01M1NWCM3TDY0YABEKE8DYQA1C, требование 1)
-    переводит разбивку в доллары там, где он задан; исходное решение
-    T040 «курса нигде нет» осталось только для ролей БЕЗ записи в
-    таблице.
+    сумму (`partial_cost_usd`, требование 2/4, AC-2/AC-3). Действующий
+    тариф модели роли (SPEC 01M300A14KRHCFB0DQXVCBJEKF, требование 1)
+    переводит разбивку в доллары там, где цепочка роли разрешается;
+    исходное решение T040 «курса нигде нет» осталось только для ролей,
+    чей тариф не разрешился.
 
     `saw_usage_event=True` — до обрыва в потоке были usage-события:
-    курс роли известен (`partial_cost_usd` не `None`) — частичная сумма
-    по курсу прибавляется к `spent_usd` (требование 2, AC-2), алерт не
-    заводится. Курс роли НЕ известен — прибавить нечего, вместо этого
-    заводится алерт `kind=threshold` и в `spent_estimate_usd` идёт
-    именованная верхняя оценка `config.STEP_COST_ESTIMATE_USD`
-    (требование 3, AC-3) — каждый повтор отказа прибавляет оценку
-    заново, недоучёт не должен копиться молча только потому, что алерт
-    уже открыт.
+    тариф модели разрешился — частичная сумма по нему прибавляется к
+    `spent_usd` (требование 2, AC-2), алерт не заводится. Тариф НЕ
+    разрешился — прибавить нечего, вместо этого заводится алерт
+    `kind=threshold` и в `spent_estimate_usd` идёт именованная верхняя
+    оценка `config.STEP_COST_ESTIMATE_USD` (требование 3, AC-3) — каждый
+    повтор отказа прибавляет оценку заново, недоучёт не должен копиться
+    молча только потому, что алерт уже открыт.
     `saw_usage_event=False` — восстановить нечего вовсе, ни точно, ни
-    по курсу, ни оценкой: в журнал идёт «стоимость шага неизвестна», и
+    по тарифу, ни оценкой: в журнал идёт «стоимость шага неизвестна», и
     открывается алерт `alerts` (`kind=incident`,
     `source=spend.unknown_cost`) — требование 4, поведение T040 без
     изменений.
 
-    Курс роли ЕСТЬ в таблице, но не несёт одной из четырёх цен —
-    `partial_cost_usd` бросает `ValueError` (требование 3, AC-5); здесь
-    это ловится и деградирует на ту же ветку «курс роли не задан» ниже
-    (верхняя оценка + `threshold`-алерт), а не обрушивает вызывающего
-    (REVIEW.md итерации 1, R1-F1): этот путь зовётся ровно в момент
-    обработки таймаута шага/`pause --now`, до коммита чекпоинта и записи
-    журнала «agent run TIMEOUT» — необработанное исключение здесь
-    потеряло бы и то, и другое.
+    Неразрешимый тариф здесь именно деградирует, а не обрушивает
+    вызывающего (REVIEW.md 01M1NWCM3TDY0YABEKE8DYQA1C итерации 1, R1-F1;
+    SPEC 01M300A14KRHCFB0DQXVCBJEKF, требование 9): этот путь зовётся
+    ровно в момент обработки таймаута шага/`pause --now`, до коммита
+    чекпоинта и записи журнала «agent run TIMEOUT» — необработанное
+    исключение здесь потеряло бы и то, и другое.
     """
     if not saw_usage_event:
         detail = (f"{numbered}: {cause}, финальное событие потока "
@@ -489,26 +620,25 @@ def charge_missing_result(conn, task_id: str, role: str, numbered: str,
         return ""
 
     total_tokens = sum(partial_tokens.values())
-    try:
-        usd = partial_cost_usd(role, partial_tokens)
-    except ValueError as exc:
-        usd = None
-        rate_reason = f"курс роли {role!r} неполон ({exc})"
-    else:
-        rate_reason = f"курс роли {role!r} не задан"
-    if usd is not None:
+    effective = role_tariff(role)
+    rate_reason = f"тариф модели роли {role!r} не разрешён"
+    if effective is not None:
+        record_tariff(conn, effective)
+        usd = tariff_cost_usd(effective.tariff, partial_tokens)
         # `источник=расчёт по тарифу` (SPEC 01M2ZNJX2N5SPZCAQE6EHD4EWH,
         # требование 2): читатель журнала обязан отличать эту сумму от
         # факта CLI строки KNOWN — недоучёт шага PARTIAL (SPEC
         # «Контекст») начинался с того, что обе выглядели одинаково.
         detail = (f"{numbered}: {cause}, финальное событие потока "
-                 f"отсутствует — частичная стоимость по курсу роли "
-                 f"{role!r}: ${usd:.4f}, источник=расчёт по тарифу, "
+                 f"отсутствует — частичная стоимость по тарифу модели "
+                 f"{effective.model}: ${usd:.4f}, источник=расчёт по тарифу, "
                  f"{total_tokens} токенов, "
-                 f"разбивка по видам: {_tokens_by_type_text(partial_tokens)}")
+                 f"разбивка по видам: {_tokens_by_type_text(partial_tokens)}"
+                 f"{_tariff_note(effective)}")
         store.journal(conn, task_id, role, "agent cost PARTIAL", detail)
         store.charge(conn, task_id, usd)
-        return f", частичная стоимость по курсу: ${usd:.4f}, {total_tokens} токенов"
+        return (f", частичная стоимость по тарифу: ${usd:.4f}, "
+                f"{total_tokens} токенов")
 
     estimate = config.STEP_COST_ESTIMATE_USD
     detail = (f"{numbered}: {cause}, финальное событие потока "

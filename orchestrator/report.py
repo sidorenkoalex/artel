@@ -67,8 +67,8 @@ MAP_GROWTH_SOURCE = "map.growth"
 # величины, что и остальные окна «последние N» этого модуля выше.
 MAP_SIZE_TABLE_LIMIT = 12
 # Число последних задач ГЛОБАЛЬНО (не по target), по которым считается
-# медиана вызовов инструментов `developer` (AC-2, требование 1) — курс
-# роли в config.TOKEN_RATES один на все target, поэтому и выборка одна.
+# медиана вызовов инструментов `developer` (AC-2, требование 1) — тариф
+# модели один на все target, поэтому и выборка одна.
 MAP_GROWTH_CALLS_TASK_WINDOW = 10
 # Строка-заглушка target'а без единой записи «карта: размер» (AC-10) —
 # буквальный текст SPEC, без изменений.
@@ -217,8 +217,9 @@ def _map_growth_tool_call_count(log_path) -> int:
 def _map_growth_calls_estimate(conn) -> tuple:
     """(calls, is_estimate) — AC-2/AC-3: медиана числа вызовов инструментов
     `developer` по логам последних `MAP_GROWTH_CALLS_TASK_WINDOW` задач
-    ГЛОБАЛЬНО (не по target — курс роли один на все target, требование 1);
-    выборка пуста (ни одной задачи с логом `developer` в окне) — фолбэк
+    ГЛОБАЛЬНО (не по target — тариф модели один на все target,
+    требование 1); выборка пуста (ни одной задачи с логом `developer` в
+    окне) — фолбэк
     `config.MAP_GROWTH_CALLS_ESTIMATE`, помеченный как «оценка»."""
     tasks = store.all_tasks(conn)[-MAP_GROWTH_CALLS_TASK_WINDOW:]
     counts = []
@@ -238,7 +239,15 @@ def map_growth_cost_estimate(conn, target: str) -> dict | None:
     """AC-1..AC-5: оценка «стоимость карты за шаг developer» этого target —
     только число-ориентир для вывода `report`, не читается ни FSM, ни
     алертами (AC-5: ни один вызов `alerts.*` внутри). Ряда «карта: размер»
-    у target нет вовсе — `None` (AC-10, нечего оценивать)."""
+    у target нет вовсе — `None` (AC-10, нечего оценивать).
+
+    Цена — действующий тариф МОДЕЛИ роли `developer` (SPEC
+    01M300A14KRHCFB0DQXVCBJEKF, требование 1), и считается он тем же
+    `spend.partial_cost_usd`, что и стоимость шага: карта прочитывается
+    из кэша на каждый вызов инструмента и один раз пишется в кэш — это и
+    есть разбивка usage, вторая копия арифметики здесь не нужна. Тариф не
+    разрешился — `cost_usd` равен `None` (оценку не по чему считать), а
+    не нулю: ноль читался бы как «карта бесплатна»."""
     entries = _map_size_entries(conn, target)
     if not entries:
         return None
@@ -249,9 +258,9 @@ def map_growth_cost_estimate(conn, target: str) -> dict | None:
 
     calls, is_estimate = _map_growth_calls_estimate(conn)
 
-    rates = config.TOKEN_RATES["developer"]
-    cost_usd = (tokens * calls * rates["cache_read_usd_per_token"]
-               + tokens * rates["cache_creation_usd_per_token"])
+    cost_usd = spend.partial_cost_usd("developer", {
+        "cache_read_input_tokens": tokens * calls,
+        "cache_creation_input_tokens": tokens})
     return {"tokens": tokens, "calls": calls, "cost_usd": cost_usd,
            "is_estimate": is_estimate}
 
@@ -335,36 +344,45 @@ def _known_cost_breakdown(detail: str) -> tuple:
 
 
 def token_rate_divergence(conn) -> dict:
-    """{роль: коэффициент} — расхождение курса роли с фактом CLI (SPEC
-    01M1PP0VYRT55WN8GGVG66X89Y, требования 4-5; SPEC
-    01M2ZNJX2N5SPZCAQE6EHD4EWH, требования 6-7). Коэффициент —
-    `spend.RateDivergence`, то есть число (прежний контракт
-    `dict[str, float]` цел), несущее вдобавок число вошедших шагов и
-    дату сверки атрибутами `steps`/`since`.
+    """{модель: коэффициент} — расхождение тарифа модели с фактом CLI
+    (SPEC 01M1PP0VYRT55WN8GGVG66X89Y, требования 4-5; SPEC
+    01M2ZNJX2N5SPZCAQE6EHD4EWH, требования 6-7; ключ-МОДЕЛЬ — SPEC
+    01M300A14KRHCFB0DQXVCBJEKF, требование 4, AC-6). Коэффициент —
+    `spend.RateDivergence`, то есть число (контракт `dict[str, float]`
+    цел), несущее вдобавок число вошедших шагов и дату сверки
+    атрибутами `steps`/`since`.
 
     Источник — журнал: каждая запись `spend.KNOWN_COST_JOURNAL_ACTION`
     (`spend.charge_step`) несёт фактическую цену завершённого шага (из
-    `total_cost_usd` финального события потока) и разбивку usage по
-    видам. Чтение журнала (`spend.known_cost_pairs`) и сам расчёт с
-    алертом (`spend.check_rate_divergence`) — те же функции, которыми
-    считает сверку `charge_step` в момент записи шага: одна математика
-    на обе точки, не две (требование 6, AC-8).
+    `total_cost_usd` финального события потока), модель того шага и
+    разбивку usage по видам. Чтение журнала (`spend.known_cost_pairs`) и
+    сам расчёт с алертом (`spend.check_rate_divergence`) — те же
+    функции, которыми считает сверку `charge_step` в момент записи шага:
+    одна математика на обе точки, не две (требование 6, AC-8).
 
-    Считается с даты `calibrated_at` курса роли (требование 7): строки
-    KNOWN старше неё записаны шагами ДРУГОЙ модели, их складывание со
-    свежими и дало бы то самое расхождение, которое контур обязан
-    ловить. Роль без подходящих строк — отсутствует в результате вовсе,
-    не 0.0 (AC-6 прежней SPEC: «не считается расхождением по
-    умолчанию»).
+    Пары (роль, модель) одной модели складываются в ОДИН коэффициент:
+    предмет отчётной цифры — цена, а она у модели одна на все роли
+    яруса; разрез по ролям внутри модели читателю отчёта ничего не
+    добавил бы, а разрез по моделям — ровно то, чего не было видно в
+    инциденте 13.09-20.09.
+
+    Считается с даты действующего тарифа модели: строки KNOWN старше неё
+    посчитаны по другой цене, их складывание со свежими и дало бы то
+    самое расхождение, которое контур обязан ловить. Модель без
+    подходящих строк — отсутствует в результате вовсе, не 0.0 (AC-6
+    прежней SPEC: «не считается расхождением по умолчанию»).
 
     Не read-only (отсюда алерт в `cmd_report`) — осознанное исключение,
     описанное в докстроке `cmd_report`.
     """
+    by_model: dict = {}
+    for (_, model_id), pairs in spend.known_cost_pairs(conn).items():
+        by_model.setdefault(model_id, []).extend(pairs)
     result = {}
-    for role, pairs in spend.known_cost_pairs(conn).items():
-        divergence = spend.check_rate_divergence(conn, role, pairs)
+    for model_id, pairs in by_model.items():
+        divergence = spend.check_rate_divergence(conn, model_id, pairs)
         if divergence is not None:
-            result[role] = divergence
+            result[model_id] = divergence
     return result
 
 
@@ -569,10 +587,13 @@ def _ratio_line(label: str, ratio: dict | None) -> str:
 
 
 def _divergence_html(divergence: dict) -> str:
-    """Коэффициент расхождения курса токенов по роли (SPEC
-    01M1PP0VYRT55WN8GGVG66X89Y, требование 4, AC-6) — часть панели
-    метрик `report`, не отдельная команда (выбор разработчика, требование
-    4 явно оставляет его на усмотрение).
+    """Коэффициент расхождения тарифа токенов по МОДЕЛИ (SPEC
+    01M1PP0VYRT55WN8GGVG66X89Y, требование 4, AC-6; ключ-модель — SPEC
+    01M300A14KRHCFB0DQXVCBJEKF, требование 4) — часть панели метрик
+    `report`, не отдельная команда (выбор разработчика, требование 4
+    явно оставляет его на усмотрение). Строка на модель: моделей у
+    пульта несколько, и склеенная цифра снова скрыла бы, чья цена
+    разошлась.
 
     Дата калибровки и число вошедших шагов — в той же строке (SPEC
     01M2ZNJX2N5SPZCAQE6EHD4EWH, требование 7, AC-8): без них читатель не
@@ -584,10 +605,10 @@ def _divergence_html(divergence: dict) -> str:
         return ('<div class="metric-row">нет завершённых шагов с известной '
                 'стоимостью — коэффициент расхождения не считается</div>')
     return "".join(
-        f'<div class="metric-row">{_esc(role)}: коэффициент расхождения '
+        f'<div class="metric-row">{_esc(model_id)}: коэффициент расхождения '
         f'{value:.2f} по {value.steps} шагам '
         f'с {_esc(value.since)}</div>'
-        for role, value in sorted(divergence.items())
+        for model_id, value in sorted(divergence.items())
     )
 
 
@@ -619,8 +640,8 @@ def _metrics_html(steps: list, tasks: list, total_spent: float,
         f'<div class="metric-row">$/задачу (done): {cost_line}</div>'
         f'<div class="metric-row">Суммарный расход программы: '
         f'{_usd(total_spent)}</div>'
-        f'<div class="metric-row">Суммарная верхняя оценка (курс роли не '
-        f'задан): {_usd(total_estimate)}</div>'
+        f'<div class="metric-row">Суммарная верхняя оценка (тариф модели не '
+        f'разрешён): {_usd(total_estimate)}</div>'
         '<h3>Калибровка курса токенов</h3>'
         f'{_divergence_html(divergence or {})}'
         '</div>'
@@ -676,9 +697,16 @@ def _map_growth_estimate_html(estimate: dict | None) -> str:
     if estimate is None:
         return ""
     suffix = " (оценка)" if estimate["is_estimate"] else ""
+    # Нерезолвимый тариф модели `developer` печатается словами, а не
+    # `_usd(None)` = «$0.00»: цена, которую не по чему посчитать, и цена,
+    # равная нулю, — разные состояния, а читатель панели различает их
+    # только здесь.
+    cost = (f"{_usd(estimate['cost_usd'])}{suffix}"
+            if estimate["cost_usd"] is not None
+            else "тариф модели роли developer не разрешён")
     return (
         '<div class="metric-row">Стоимость карты за шаг developer: '
-        f'{_usd(estimate["cost_usd"])}{suffix} '
+        f'{cost} '
         f'(tokens={estimate["tokens"]}, calls={estimate["calls"]})</div>'
     )
 

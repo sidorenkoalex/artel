@@ -37,6 +37,12 @@ def all_checks(conn) -> list[doctor.Check]:
     # обязана стоять рядом с самой цепочкой, а не в конце списка.
     checks.append(doctor.check_models_catalog())
     checks.append(doctor.check_models_local())
+    # Действующий тариф моделей (SPEC 01M300A14KRHCFB0DQXVCBJEKF,
+    # требование 8) — сразу за слоями, по которым он и разрешается:
+    # протухшая цена и смена модели мимо тарифа читаются вместе с
+    # цепочкой роли, а не в конце списка, где их не связать с ней глазом.
+    checks.append(doctor.check_model_tariff_freshness())
+    checks.append(doctor.check_model_tariff_vs_model_change(conn))
     checks.extend(provider_checks.pop("cli-found", []))
     checks.extend(provider_checks.pop("cli-version", []))
     checks.extend(provider_checks.pop("token", []))

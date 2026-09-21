@@ -271,10 +271,59 @@ def charge_estimate(conn: sqlite3.Connection, task_id: str, usd: float) -> None:
     """Прибавляет верхнюю оценку неучтённой стоимости шага к
     `spent_estimate_usd` (SPEC 01M1NWCM3TDY0YABEKE8DYQA1C, требование 3) —
     накопительно и отдельно от `charge`/`spent_usd`: оценка не заменяет
-    точную сумму, а называет то, что курс токенов роли посчитать не смог."""
+    точную сумму, а называет то, что тариф модели посчитать не смог."""
     conn.execute("UPDATE tasks SET spent_estimate_usd=spent_estimate_usd+?, "
                  "updated_at=? WHERE id=?", (usd, now(), task_id))
     conn.commit()
+
+
+# Колонки цен `model_tariffs` в порядке `models.PRICE_KINDS` (input,
+# output, cache_write, cache_read) — тот же порядок, в котором приходит
+# кортеж `prices` ниже. `store.py` намеренно не импортирует
+# `orchestrator/models.py`: здесь живут запросы, а не знание о каталоге
+# моделей, — порядок назван словами в докстроке и сверяется тестом.
+_MODEL_TARIFF_PRICE_COLUMNS = ("input_usd_per_mtok", "output_usd_per_mtok",
+                               "cache_write_usd_per_mtok",
+                               "cache_read_usd_per_mtok")
+
+
+def last_model_tariff(conn: sqlite3.Connection, model_id: str):
+    """Последняя запись истории тарифов этой модели; `None` — записей нет
+    (SPEC 01M300A14KRHCFB0DQXVCBJEKF, требование 6)."""
+    return conn.execute(
+        "SELECT * FROM model_tariffs WHERE model=? ORDER BY id DESC LIMIT 1",
+        (model_id,)).fetchone()
+
+
+def record_model_tariff(conn: sqlite3.Connection, model_id: str,
+                        prices: tuple, valid_from: str, source: str) -> bool:
+    """Добавляет строку истории тарифов, если действующий тариф модели
+    отличается от последней её записи; `True` — строка добавлена (SPEC
+    01M300A14KRHCFB0DQXVCBJEKF, требование 6, AC-8).
+
+    `prices` — четыре цены за миллион токенов в порядке
+    `models.PRICE_KINDS`. Сравнение и вставка живут вместе: иначе
+    вызывающий держал бы у себя знание о составе колонок, а SQL обязан
+    оставаться здесь (ADR-0003 3ж).
+
+    Совпадение — по всем полям записи сразу (цены, дата, источник): смена
+    только даты калибровки при тех же ценах — тоже смена тарифа, её
+    Оператор делает осознанно (пересверил цену с фактом CLI), и история
+    обязана её запомнить.
+    """
+    last = last_model_tariff(conn, model_id)
+    current = (*(float(price) for price in prices), valid_from, source)
+    if last is not None:
+        previous = (*(last[column] for column in _MODEL_TARIFF_PRICE_COLUMNS),
+                    last["valid_from"], last["source"])
+        if previous == current:
+            return False
+    columns = ", ".join(("model", *_MODEL_TARIFF_PRICE_COLUMNS,
+                         "valid_from", "source", "recorded_at"))
+    conn.execute(f"INSERT INTO model_tariffs ({columns}) "
+                 f"VALUES (?,?,?,?,?,?,?,?)", (model_id, *current, now()))
+    conn.commit()
+    return True
 
 
 def total_spent(conn: sqlite3.Connection) -> float:
