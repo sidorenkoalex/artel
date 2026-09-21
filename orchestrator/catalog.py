@@ -540,9 +540,13 @@ def _tokens_field(conn, task_id: str) -> str:
     Считается по журналу (`store.task_steps`) — тем же приёмом, каким
     журнал уже читают `report._all_steps` и `spend.known_cost_pairs`:
     специализированной выборки в `store.py` нет, а заводить её эта задача
-    не вправе."""
-    by_kind = retro.task_token_breakdown(store.task_steps(conn, task_id))
-    return f"{retro.total_tokens_text(by_kind):>8}"
+    не вправе.
+
+    Источник суммы — оба носителя журнала (`retro.task_token_total`):
+    задача, чьи шаги записаны прежним видом записи, без разбивки по
+    видам, показывает своё число, а не прочерк «записей нет»."""
+    total = retro.task_token_total(store.task_steps(conn, task_id))
+    return f"{retro.total_tokens_text(total):>8}"
 
 
 def cmd_status() -> None:

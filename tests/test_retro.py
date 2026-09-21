@@ -455,9 +455,13 @@ class ActorTokensTest(TmpRootTest):
         store.insert_task(self.conn, self.TASK, "Задача", "merge_gate",
                           "task/t901-x", config.DEFAULT_TARGET, 50.0)
 
-    def finished(self, actor: str, usd: float) -> None:
+    def finished(self, actor: str, usd: float, total: int = None) -> None:
+        """Строка завершения шага; `total` — то самое суммарное «токенов
+        N», которое `spend.cost_note` приписывает к ней, когда итог
+        запуска число знает (второй носитель суммы, без разбивки)."""
+        tail = "" if total is None else f", токенов {total}"
         store.journal(self.conn, self.TASK, actor, "agent run finished",
-                      f"rc=0, попытка 1/1, стоимость ${usd:.4f}")
+                      f"rc=0, попытка 1/1, стоимость ${usd:.4f}{tail}")
 
     def charged(self, actor: str, usd: float, tokens: dict,
                 model: str = STEP_MODEL, provider: str = STEP_PROVIDER) -> None:
@@ -558,6 +562,60 @@ class ActorTokensTest(TmpRootTest):
         self.assertIn(f"токенов {STEP_TOKENS_TOTAL}", line)
         self.assertIn("input=11", line)
         self.assertIn("cache_read=19", line)
+
+    def test_role_without_breakdown_shows_the_total_of_the_finished_row(self):
+        """Роль, чьи шаги записаны прежним видом записи (суммарное
+        «токенов N» в строке завершения, разбивки по видам нет вовсе),
+        показана этим числом — прочерк остаётся только разбивке.
+
+        Ловит мутацию: сумма читается ТОЛЬКО из записей с разбивкой
+        («agent cost KNOWN»/«PARTIAL») — роль получит «токенов —» при
+        известных 60 токенах, то есть прочерк соврёт «записей токенов
+        нет» (REVIEW.md итерации 1, R1-F1).
+        """
+        self.finished("developer", 1.0, total=STEP_TOKENS_TOTAL)
+
+        line = self.line_of("developer")
+
+        self.assertIn(f"токенов {STEP_TOKENS_TOTAL}", line)
+        self.assertIn(f"разбивка по видам {DASH}", line)
+
+    def test_two_carriers_of_one_step_are_not_counted_twice(self):
+        """Шаг, чьи токены журнал записал ОБОИМИ носителями (разбивка в
+        «agent cost KNOWN» и та же сумма в строке завершения), считается
+        один раз.
+
+        Ловит мутацию: сумма складывает оба носителя подряд — у роли
+        окажется 120 вместо 60, и `assertIn` на честной сумме
+        покраснеет.
+        """
+        store.journal(self.conn, self.TASK, "developer", "agent cost KNOWN",
+                      known_cost_detail(1.25, STEP_TOKENS))
+        self.finished("developer", 1.25, total=STEP_TOKENS_TOTAL)
+
+        line = self.line_of("developer")
+
+        self.assertIn(f"токенов {STEP_TOKENS_TOTAL} (", line)
+        self.assertNotIn(f"токенов {STEP_TOKENS_TOTAL * 2}", line)
+
+    def test_role_with_tokens_but_no_cost_row_still_gets_a_line(self):
+        """Роль, чьи токены журнал записал, а стоимость — нет (шаг не
+        дошёл до строки завершения), стоит в блоке своей строкой: с
+        токенами и прочерком вместо денег.
+
+        Ловит мутацию: список актёров строится только по «agent run
+        finished» со стоимостью — роль исчезает из блока целиком, вместе
+        со своими токенами (REVIEW.md итерации 1, R1-F2), и `line_of`
+        покраснеет на пустом списке строк.
+        """
+        store.journal(self.conn, self.TASK, "test_author", "agent cost KNOWN",
+                      known_cost_detail(1.25, STEP_TOKENS))
+
+        line = self.line_of("test_author")
+
+        self.assertIn(f"test_author: {DASH}", line)
+        self.assertIn(f"токенов {STEP_TOKENS_TOTAL}", line)
+        self.assertIn(f"input={STEP_TOKENS['input']}", line)
 
 
 class ParseTotalCostTest(unittest.TestCase):

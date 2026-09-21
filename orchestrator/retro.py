@@ -18,6 +18,15 @@ add`/`commit`, обработка провала как incident-алерта) �
 предмету, а по тому, что разбор записей стоимости журнала регулярками
 (`COST_RE`/`TOKENS_RE` ниже) уже здесь; писатель формата
 (`orchestrator/spend.py`) для этой задачи — только чтение.
+
+У СУММАРНОГО числа токенов носителей в журнале два, и читатель берёт их
+с деградацией (REVIEW.md итерации 1, R1-F1): разбивка по видам есть —
+сумма считается по ней, разбивки нет, но «agent run finished» несёт
+`токенов N` — берётся это число. Узкое чтение одних лишь записей с
+разбивкой показывало бы прочерк «записей токенов нет» там, где журнал
+их несёт прежним видом записи (на журнале пульта — 120 задач из 256),
+то есть неправду. Прочерк остаётся разбивке по видам и случаю, когда
+токенов не записано нигде.
 """
 import re
 from typing import NamedTuple
@@ -53,6 +62,12 @@ DASH = "—"
 #: `spend.py` нет, а завести её эта задача не вправе (модуль — только
 #: чтение), поэтому литерал; KNOWN берётся константой писателя.
 TOKEN_JOURNAL_ACTIONS = (spend.KNOWN_COST_JOURNAL_ACTION, "agent cost PARTIAL")
+
+#: Действие журнала завершённого шага (`orchestrator/runner.py::
+#: _finish_ok`): деньги актёра считаются по нему, и он же — ВТОРОЙ
+#: носитель суммарного числа токенов (`spend.cost_note` приписывает
+#: `токенов N` к его детали). Разбивки по видам в нём нет.
+FINISHED_JOURNAL_ACTION = "agent run finished"
 
 # Поля разбивки в строке журнала — по ОБЕИМ формам имён видов: прежние
 # имена (счётчики Claude, `config.LEGACY_TOKEN_KIND_NAMES`) несут строки,
@@ -123,6 +138,54 @@ def task_token_breakdown(steps) -> dict:
     return totals
 
 
+def token_totals_by_actor(steps) -> dict:
+    """{actor: суммарное число токенов} по ОБОИМ носителям суммы, с
+    деградацией: шаг с разбивкой по видам считается по ней, шаг без
+    разбивки — по числу `токенов N` строки завершения (REVIEW.md
+    итерации 1, R1-F1).
+
+    Актёра без единой записи токенов в результате нет вовсе — это и
+    отличает «записей нет» (прочерк) от «токенов ноль» (требование 5).
+
+    Оба носителя ОДНОГО шага стоят в журнале рядом и сложились бы
+    дважды: `spend.charge_step` пишет «agent cost KNOWN» и возвращает
+    вызывающему хвост, который `runner._finish_ok` кладёт в «agent run
+    finished» теми же токенами. Поэтому строка завершения гасит одну
+    ещё не погашенную запись с разбивкой ТОГО ЖЕ актёра, а своё число
+    прибавляет, только когда гасить нечего: тогда разбивки у шага не
+    было вовсе (журнал до появления разбивки по видам, либо путь учёта,
+    который её не пишет). Считать по парам «шаг = попытка N/M» нельзя —
+    номер попытки повторяется у каждого шага роли внутри задачи.
+    """
+    totals: dict = {}
+    pending: dict = {}
+    for s in steps:
+        actor = s["actor"]
+        if s["action"] in TOKEN_JOURNAL_ACTIONS:
+            found = _detail_tokens(s["detail"])
+            if found:
+                totals[actor] = totals.get(actor, 0) + sum(found.values())
+                pending[actor] = pending.get(actor, 0) + 1
+            continue
+        if s["action"] != FINISHED_JOURNAL_ACTION:
+            continue
+        match = TOKENS_RE.search(s["detail"] or "")
+        if match is None:
+            continue
+        if pending.get(actor):
+            pending[actor] -= 1
+            continue
+        totals[actor] = totals.get(actor, 0) + int(match.group(1))
+    return totals
+
+
+def task_token_total(steps) -> int | None:
+    """Суммарное число токенов задачи по всем её актёрам; `None` —
+    записей токенов нет ни одним видом записи (показывается прочерком)."""
+    totals = token_totals_by_actor(steps)
+    return sum(totals.values()) if totals else None
+
+
 def tokens_text(by_kind: dict | None) -> str:
     """Разбивка по четырём видам строкой, либо прочерк — записей нет."""
     if not by_kind:
@@ -131,11 +194,20 @@ def tokens_text(by_kind: dict | None) -> str:
                      for kind in models.PRICE_KINDS)
 
 
-def total_tokens_text(by_kind: dict | None) -> str:
-    """Суммарное число токенов строкой, либо прочерк — записей нет."""
-    if not by_kind:
-        return DASH
-    return str(sum(by_kind.values()))
+def total_tokens_text(total: int | None) -> str:
+    """Суммарное число токенов строкой, либо прочерк — записей нет.
+
+    Отличается именно `None`, а не нулём: записанный журналом ноль —
+    факт («шаг не потребил токенов»), а прочерк — его отсутствие."""
+    return DASH if total is None else str(total)
+
+
+def usd_text(usd: float | None) -> str:
+    """Деньги актёра строкой, либо прочерк — записей стоимости нет.
+
+    Тем же правилом, что и токены: `$0.00` у актёра, чью стоимость
+    журнал не записал, читался бы как «шаг прошёл бесплатно»."""
+    return DASH if usd is None else f"${usd:.2f}"
 
 
 def retro_rel_path(task_id: str) -> str:
@@ -227,16 +299,23 @@ def _journaled_tz_text(steps) -> str | None:
 
 
 class ActorCost(NamedTuple):
-    """Разрез расхода по одному актёру журнала: деньги, разбивка токенов
-    по видам, провайдер и модель его шагов.
+    """Разрез расхода по одному актёру журнала: деньги, суммарные токены,
+    разбивка токенов по видам, провайдер и модель его шагов.
 
-    `tokens` — пустой словарь, `provider`/`model` — `None`, когда записей
-    токенов по актёру нет вовсе: показывается это прочерком, не нулём
-    (требование 5)."""
+    `tokens` — пустой словарь, `total`/`provider`/`model` — `None`, когда
+    записей соответствующего вида по актёру нет вовсе: показывается это
+    прочерком, не нулём (требование 5). `usd` — тоже `None`, когда
+    стоимости актёра журнал не записал: актёр попадает в разрез и с
+    одними лишь токенами (REVIEW.md итерации 1, R1-F2).
+
+    `total` отдельным полем, а не `sum(tokens.values())`: сумма
+    известна и у шага без разбивки по видам, и складывать её не из
+    чего."""
 
     actor: str
-    usd: float
+    usd: float | None
     tokens: dict
+    total: int | None
     provider: str | None
     model: str | None
 
@@ -272,25 +351,33 @@ def _actor_costs(steps) -> list[ActorCost]:
 
     Деньги по-прежнему считаются по событиям `agent run finished`: задача
     01M31ZHWJWRSACYMRWTCPBC0DM ставит токены РЯДОМ с долларами, а не
-    переучитывает доллары. Токены, провайдер и модель приезжают из строк
-    `TOKEN_JOURNAL_ACTIONS` — единственных, где разбивка по видам и поля
-    `model=`/`provider=` вообще есть."""
+    переучитывает доллары. Разбивка по видам, провайдер и модель
+    приезжают из строк `TOKEN_JOURNAL_ACTIONS` — единственных, где они
+    вообще есть; суммарное число — из обоих носителей
+    (`token_totals_by_actor`).
+
+    Список актёров — ОБЪЕДИНЕНИЕ обоих множеств (REVIEW.md итерации 1,
+    R1-F2): актёр, чьи токены журнал записал, а стоимость — нет (шаг не
+    дошёл до строки завершения), прежде исчезал из разреза целиком,
+    вместе со своими токенами. Деньги такого актёра показываются
+    прочерком, не нулём."""
+    tokens_by_actor = token_breakdown_by_actor(steps)
+    totals_by_actor = token_totals_by_actor(steps)
     order: list[str] = []
     usd_by_actor: dict[str, float] = {}
     for s in steps:
-        if s["action"] != "agent run finished":
-            continue
-        cost_m = COST_RE.search(s["detail"] or "")
-        if not cost_m:
-            continue
         actor = s["actor"]
-        if actor not in usd_by_actor:
+        if s["action"] == FINISHED_JOURNAL_ACTION:
+            cost_m = COST_RE.search(s["detail"] or "")
+            if cost_m is not None:
+                usd_by_actor[actor] = (usd_by_actor.get(actor, 0.0)
+                                       + float(cost_m.group(1)))
+        if actor not in order and (actor in usd_by_actor
+                                   or actor in totals_by_actor):
             order.append(actor)
-            usd_by_actor[actor] = 0.0
-        usd_by_actor[actor] += float(cost_m.group(1))
-    tokens_by_actor = token_breakdown_by_actor(steps)
-    return [ActorCost(actor, usd_by_actor[actor],
+    return [ActorCost(actor, usd_by_actor.get(actor),
                       tokens_by_actor.get(actor, {}),
+                      totals_by_actor.get(actor),
                       _first_field(steps, actor, _journal_provider),
                       _first_field(steps, actor, spend.journal_model))
             for actor in order]
@@ -367,13 +454,19 @@ def _actor_cost_line(row: ActorCost) -> str:
 
     Роль без записей токенов несёт прочерк вместо КАЖДОГО из этих чисел
     (требование 5): `input=0, output=0, …` читалось бы как «роль
-    отработала бесплатно», а не как «пульт разбивку не записал»."""
+    отработала бесплатно», а не как «пульт разбивку не записал».
+
+    Сумма и разбивка показываются НЕЗАВИСИМО: у роли, чьи шаги записаны
+    прежним видом записи, сумма известна, а разбивки нет — такая роль
+    несёт число рядом с прочерком разбивки (REVIEW.md итерации 1,
+    R1-F1), а не прочерк вместо обоих."""
     if not row.tokens:
-        tokens_part = f"токенов {DASH}, разбивка по видам {DASH}"
+        tokens_part = (f"токенов {total_tokens_text(row.total)}, "
+                       f"разбивка по видам {DASH}")
     else:
-        tokens_part = (f"токенов {total_tokens_text(row.tokens)} "
+        tokens_part = (f"токенов {total_tokens_text(row.total)} "
                        f"({tokens_text(row.tokens)})")
-    return (f"  {row.actor}: ${row.usd:.2f}, {tokens_part}, "
+    return (f"  {row.actor}: {usd_text(row.usd)}, {tokens_part}, "
             f"провайдер {row.provider or DASH}, модель {row.model or DASH}")
 
 

@@ -611,6 +611,44 @@ class TokenCostHtmlTest(unittest.TestCase):
             with self.subTest(kind=kind):
                 self.assertNotIn(f"{kind}=", html)
 
+    def test_row_without_breakdown_shows_the_total_of_the_finished_row(self):
+        """Задача, чьи шаги записаны прежним видом записи (сумма в строке
+        завершения, разбивки по видам нет), показана своим числом рядом
+        с прочерком разбивки.
+
+        Ловит мутацию: сумма читается ТОЛЬКО из «agent cost KNOWN» —
+        строка получит «токенов —» при известных 60 токенах в журнале
+        (REVIEW.md итерации 1, R1-F1), и `assertIn` на числе покраснеет.
+        """
+        steps = [_row(task_id="T001", actor="developer",
+                      action="agent run finished",
+                      detail=(f"rc=0, попытка 1/1, стоимость $1.2500, "
+                              f"токенов {TOKENS_TOTAL}"))]
+
+        html = report._tokens_by_task([_row(id="T001", spent_usd=1.25)], steps)
+
+        self.assertIn(f"токенов {TOKENS_TOTAL}", html)
+        self.assertIn(f"разбивка по видам {DASH}", html)
+
+    def test_role_with_tokens_but_no_cost_row_stays_in_the_cut(self):
+        """Роль, чьи токены журнал записал, а стоимость — нет, остаётся в
+        разрезе ролей: со своими токенами и прочерком вместо денег.
+
+        Ловит мутацию: список ролей строится только по «agent run
+        finished» со стоимостью — роль исчезает из разреза целиком
+        (REVIEW.md итерации 1, R1-F2), и `assertIn` на её имени
+        покраснеет.
+        """
+        steps = [_row(task_id="T001", actor="test_author",
+                      action="agent cost KNOWN",
+                      detail=_known_cost_detail(1.25, TOKENS))]
+
+        html = report._tokens_by_role(steps)
+
+        self.assertIn("test_author", html)
+        self.assertIn(f"test_author: {DASH}", html)
+        self.assertIn(f"токенов {TOKENS_TOTAL}", html)
+
     def test_empty_report_says_so_instead_of_printing_zeroes(self):
         """Пульт без задач и без шагов не печатает ни нулевых денег, ни
         нулевой разбивки — обе подсекции говорят словами.

@@ -1,5 +1,5 @@
 ---
-built_at_sha: 3af571850006e7b1bdf05a77c7352c729477f2bc
+built_at_sha: 7a90606809e0a7704fb88fb377cfbe3540990902
 ---
 
 # Codebase-map пульта
@@ -735,9 +735,12 @@ built_at_sha: 3af571850006e7b1bdf05a77c7352c729477f2bc
 - `retro_path`
 - `retro_rel_path`
 - `task_token_breakdown`
+- `task_token_total`
 - `token_breakdown_by_actor`
+- `token_totals_by_actor`
 - `tokens_text`
 - `total_tokens_text`
+- `usd_text`
 
 **Импортирует:** `orchestrator/cleanup.py`, `orchestrator/config.py`, `orchestrator/models.py`, `orchestrator/spend.py`, `orchestrator/store.py`, `scripts/guard.py`
 
@@ -753,7 +756,7 @@ built_at_sha: 3af571850006e7b1bdf05a77c7352c729477f2bc
 
 **Импортирует:** `orchestrator/config.py`, `orchestrator/gitcmd.py`, `orchestrator/targets.py`, `orchestrator/yamlmini.py`
 
-**Импортируется:** —
+**Импортируется:** `tests/test_retro_corpus.py`
 
 ## orchestrator/review.py
 
@@ -2550,6 +2553,16 @@ built_at_sha: 3af571850006e7b1bdf05a77c7352c729477f2bc
 - `known_cost_detail`
 
 **Импортирует:** `orchestrator/cleanup.py`, `orchestrator/config.py`, `orchestrator/retro.py`, `orchestrator/store.py`, `tests/sandbox.py`
+
+**Импортируется:** —
+
+## tests/test_retro_corpus.py
+
+**Назначение:** Юнит-тесты orchestrator/retro_corpus.py: поля записи кэша ретро-корпуса
+
+**Публичные функции:** (нет)
+
+**Импортирует:** `orchestrator/retro_corpus.py`
 
 **Импортируется:** —
 

@@ -654,19 +654,23 @@ def _metrics_html(steps: list, tasks: list, total_spent: float,
 # читатель на три места показа (`status`, RETRO, `report`), см. его
 # докстринг. Здесь только вёрстка двух разрезов.
 
-def _token_cost_row_html(marker: str, usd: float, by_kind: dict) -> str:
+def _token_cost_row_html(marker: str, usd: str, total: int | None,
+                         by_kind: dict) -> str:
     """Строка разреза: адрес (задача или роль), доллары и токены по видам
     РЯДОМ, в одном элементе (требования 4-5).
 
     Записей токенов нет — прочерк вместо суммы и вместо разбивки, не
     нули: `input=0 … cache_read=0` читалось бы как «шаг прошёл
-    бесплатно»."""
+    бесплатно». Сумма и разбивка показываются независимо: у строки,
+    чьи шаги записаны прежним видом записи, сумма известна, а разбивки
+    нет (REVIEW.md итерации 1, R1-F1)."""
     if not by_kind:
-        tokens_part = f"токенов {retro.DASH}, разбивка по видам {retro.DASH}"
+        tokens_part = (f"токенов {retro.total_tokens_text(total)}, "
+                      f"разбивка по видам {retro.DASH}")
     else:
-        tokens_part = (f"токенов {retro.total_tokens_text(by_kind)} "
+        tokens_part = (f"токенов {retro.total_tokens_text(total)} "
                       f"({_esc(retro.tokens_text(by_kind))})")
-    return (f'<div class="metric-row">{_esc(marker)}: {_usd(usd)} · '
+    return (f'<div class="metric-row">{_esc(marker)}: {usd} · '
             f'{tokens_part}</div>')
 
 
@@ -681,12 +685,14 @@ def _tokens_by_task(tasks: list, steps: list) -> str:
     by_task: dict = {}
     for s in steps:
         by_task.setdefault(s["task_id"], []).append(s)
-    return "".join(
-        _token_cost_row_html(
-            row["id"], row["spent_usd"],
-            retro.task_token_breakdown(by_task.get(row["id"], [])))
-        for row in tasks
-    )
+    rows = []
+    for row in tasks:
+        task_steps = by_task.get(row["id"], [])
+        rows.append(_token_cost_row_html(
+            row["id"], _usd(row["spent_usd"]),
+            retro.task_token_total(task_steps),
+            retro.task_token_breakdown(task_steps)))
+    return "".join(rows)
 
 
 def _tokens_by_role(steps: list) -> str:
@@ -694,12 +700,15 @@ def _tokens_by_role(steps: list) -> str:
     просуммированы поперёк ВСЕХ задач пульта.
 
     Источник тот же, что у блока стоимости RETRO (`retro.actor_costs`):
-    деньги по `agent run finished`, токены по записям с разбивкой, — две
-    копии этой агрегации разошлись бы между RETRO и отчётом."""
+    деньги по `agent run finished`, токены по обоим носителям суммы, —
+    две копии этой агрегации разошлись бы между RETRO и отчётом.
+    Оттуда же и прочерк вместо денег у роли, чью стоимость журнал не
+    записал (REVIEW.md итерации 1, R1-F2)."""
     rows = retro.actor_costs(steps)
     if not rows:
         return ('<p class="empty">Шагов с учтённой стоимостью нет.</p>')
-    return "".join(_token_cost_row_html(row.actor, row.usd, row.tokens)
+    return "".join(_token_cost_row_html(row.actor, retro.usd_text(row.usd),
+                                        row.total, row.tokens)
                    for row in rows)
 
 

@@ -89,6 +89,14 @@ class CmdStatusTokensTest(TaskSeededTmpRootTest):
         store.journal(self.conn, task_id, actor, "agent run finished",
                       f"rc=0, попытка 1/1, стоимость ${usd:.4f}")
 
+    def finished_with_total(self, task_id: str, actor: str, usd: float,
+                            total: int) -> None:
+        """Шаг, записанный прежним видом записи: суммарное «токенов N» в
+        строке завершения, разбивки по видам в журнале нет вовсе."""
+        store.journal(self.conn, task_id, actor, "agent run finished",
+                      f"rc=0, попытка 1/1, стоимость ${usd:.4f}, "
+                      f"токенов {total}")
+
     def line_for(self, task_id: str, out: str) -> str:
         lines = [ln for ln in out.splitlines() if task_id in ln]
         self.assertEqual(1, len(lines), out)
@@ -127,6 +135,39 @@ class CmdStatusTokensTest(TaskSeededTmpRootTest):
 
         self.assertIn(DASH, self.line_for(self.OTHER, out))
         self.assertNotIn(DASH, self.line_for(TASK, out))
+
+    def test_status_counts_tokens_of_a_journal_without_a_breakdown(self):
+        """Задача, чьи шаги записаны прежним видом записи (сумма в строке
+        завершения, разбивки по видам нет), показана своим числом, а не
+        прочерком.
+
+        Ловит мутацию: сумма читается ТОЛЬКО из «agent cost KNOWN»/
+        «PARTIAL» — задача получит прочерк «записей токенов нет» при
+        известных 120 токенах в журнале (REVIEW.md итерации 1, R1-F1).
+        """
+        self.finished_with_total(TASK, "developer", 1.25, TOKENS_TOTAL)
+        self.finished_with_total(TASK, "reviewer", 2.5, TOKENS_TOTAL)
+
+        line = self.line_for(TASK, capture(catalog.cmd_status))
+
+        self.assertIn(str(TOKENS_TOTAL * 2), line)
+        self.assertNotIn(DASH, line)
+
+    def test_status_counts_a_step_written_by_both_carriers_once(self):
+        """Шаг, чьи токены журнал записал и разбивкой, и суммой строки
+        завершения, входит в число задачи один раз.
+
+        Ловит мутацию: оба носителя складываются подряд — в строке
+        окажется 120 вместо 60, и `assertNotIn` покраснеет.
+        """
+        store.journal(self.conn, TASK, "developer", "agent cost KNOWN",
+                      known_cost_detail(1.25, TOKENS))
+        self.finished_with_total(TASK, "developer", 1.25, TOKENS_TOTAL)
+
+        line = self.line_for(TASK, capture(catalog.cmd_status))
+
+        self.assertIn(str(TOKENS_TOTAL), line)
+        self.assertNotIn(str(TOKENS_TOTAL * 2), line)
 
 
 class CmdStatusLeaseHolderTest(TaskSeededTmpRootTest):
