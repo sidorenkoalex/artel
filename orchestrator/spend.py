@@ -135,8 +135,17 @@ def cost_note(cost: dict | None) -> str:
     return f"{note}, токенов {cost['tokens']}" if cost["tokens"] is not None else note
 
 
+#: Вызывающий модель шага не назвал — восстановить её из `numbered`
+#: (`model=`). Прежний путь прямых вызовов `charge_step`, которых в
+#: пульте и тестах много (SPEC T040, требование 4): их поведение эта
+#: задача не меняет. Отдельный часовой, а не `None`: «модель шага не
+#: разрешилась» — законное значение параметра, и путать его с «параметр
+#: не передан» нельзя.
+_MODEL_FROM_NUMBERED = object()
+
+
 def charge_step(conn, task_id: str, role: str, cost: dict | None,
-                numbered: str) -> str:
+                numbered: str, model_id=_MODEL_FROM_NUMBERED) -> str:
     """Прибавляет стоимость попытки к `spent_usd`; возвращает её для журнала.
 
     Три пути (SPEC 01M31ZHSA6HMH40C2JTDPQJQNZ, требования 4-5):
@@ -151,16 +160,23 @@ def charge_step(conn, task_id: str, role: str, cost: dict | None,
     - итог есть, а цены нет ЛИБО провайдер модели шага помечен
       `cost_from_cli: false` — расчёт по действующему тарифу модели шага
       (`_charge_by_tariff`).
+
+    `model_id` — модель ШАГА от вызывающего (`runner._account_step`
+    держит её на руках). Ветка учёта денег обязана выбираться по самой
+    модели, а не по тому, попало ли `model=` в текст строки: `runner`
+    приписывает поле только к строкам KNOWN/PARTIAL (требование 6 SPEC
+    01M2DTT96FS25SHXP0HDTWARQH), и итог запуска без разбивки токенов
+    остался бы без поля — а с ним и без признака `cost_from_cli`.
+    Восстановление модели разбором собственной строки остаётся
+    читателям журнала (`known_cost_pairs`), где другого источника нет.
     """
     if cost is None:
         store.journal(conn, task_id, role, "agent cost UNKNOWN",
                       f"{numbered}: в выводе нет события со стоимостью — "
                       f"spent_usd не изменён")
         return ""
-    # Модель шага читается из `numbered` (`model=`, пишет
-    # `runner._numbered_with_model`) ОДИН раз на обе ветки: строка
-    # обязана считаться по той модели, которую сама называет.
-    model_id = journal_model(numbered)
+    if model_id is _MODEL_FROM_NUMBERED:
+        model_id = journal_model(numbered)
     if cost["usd"] is None or not _cost_from_cli(model_id):
         return _charge_by_tariff(conn, task_id, role, cost, numbered, model_id)
     store.charge(conn, task_id, cost["usd"])
@@ -230,10 +246,45 @@ def _cost_from_cli(model_id: str | None) -> bool:
         return True
 
 
+def _tariff_path_cause(cost: dict) -> str:
+    """Почему шаг считается по тарифу — первое, что читает Оператор в
+    строке UNCHARGED и в тексте алерта.
+
+    Две причины требования 4 (SPEC 01M31ZHSA6HMH40C2JTDPQJQNZ) названы
+    порознь: цены в итоге запуска не было вовсе против «цена есть, но
+    каталог объявил её недостоверной». Общий текст «цены от CLI нет» на
+    второй причине отправил бы искать пропавшее поле потока вместо
+    записи каталога.
+    """
+    if cost["usd"] is None:
+        return "цены от CLI нет"
+    return "цена от CLI не в счёт: каталог несёт cost_from_cli: false"
+
+
+def _uncharged_reason(role: str, model_id: str | None,
+                      tokens_by_type: dict | None) -> str:
+    """Почему по тарифу посчитать НЕ удалось — вторая половина текста
+    записи UNCHARGED и алерта (требование 6, AC-11).
+
+    Источник тарифа назван тем же, каким его искал `_charge_by_tariff`:
+    модель шага, если она известна, иначе цепочка РОЛИ (`role_tariff`) —
+    дословно та же формулировка, что у соседней ветки недоучёта
+    (`charge_missing_result`). Подставить роль на место модели значило бы
+    отправить Оператора искать в каталоге модель с именем роли ровно в
+    тот момент, когда деньги шага не учтены.
+    """
+    if not tokens_by_type:
+        return "разбивки токенов нет в итоге запуска"
+    if model_id:
+        return f"тариф модели {model_id!r} не разрешён"
+    return f"тариф модели роли {role!r} не разрешён"
+
+
 def _charge_by_tariff(conn, task_id: str, role: str, cost: dict,
                       numbered: str, model_id: str | None) -> str:
-    """Учёт завершённого шага по действующему тарифу модели, когда цены
-    от CLI нет (SPEC 01M31ZHSA6HMH40C2JTDPQJQNZ, требования 4, 6).
+    """Учёт завершённого шага по действующему тарифу модели: цены от CLI
+    нет либо каталог объявил её недостоверной (`cost_from_cli: false`) —
+    SPEC 01M31ZHSA6HMH40C2JTDPQJQNZ, требования 4, 6.
 
     Сверки курса здесь нет намеренно: сверять расчёт не с чем — факта
     CLI у этого шага не существует, и коэффициент «расхождения расчёта с
@@ -250,17 +301,16 @@ def _charge_by_tariff(conn, task_id: str, role: str, cost: dict,
     tokens_by_type = cost.get("tokens_by_type")
     effective = model_tariff(model_id) if model_id else role_tariff(role)
     if effective is None or not tokens_by_type:
-        reason = ("разбивки токенов нет в итоге запуска"
-                  if not tokens_by_type
-                  else f"тариф модели {model_id or role!r} не разрешён")
-        detail = (f"{numbered}: цены от CLI нет, {reason} — стоимость шага "
+        cause = _tariff_path_cause(cost)
+        reason = _uncharged_reason(role, model_id, tokens_by_type)
+        detail = (f"{numbered}: {cause}, {reason} — стоимость шага "
                   f"не учтена, spent_usd не изменён")
         store.journal(conn, task_id, role, UNCHARGED_COST_JOURNAL_ACTION,
                       detail)
         alerts.raise_alert(
             conn, store.task_target(conn, task_id), "threshold",
             "spend.step_cost_uncharged",
-            f"{task_id}/{role}: {numbered} — цены от CLI нет, {reason}; "
+            f"{task_id}/{role}: {numbered} — {cause}, {reason}; "
             f"стоимость шага не учтена")
         return ""
 

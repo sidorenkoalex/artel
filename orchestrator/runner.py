@@ -1236,18 +1236,26 @@ def _program_cost(conn, task_id: str, cost: dict | None,
     """Стоимость шага в форме, которую ждёт порог программы
     (`budget.check_program_spend`, вне зоны этой задачи).
 
-    Цена от CLI, когда она есть, — тогда это дословно прежний вход и
-    прежнее поведение порога. Цены нет (её не сообщает CLI провайдера
-    либо так помечен каталог — SPEC 01M31ZHSA6HMH40C2JTDPQJQNZ,
-    требование 4), а деньги в `spent_usd` при этом списаны расчётом по
-    тарифу: порог считает ДЕНЬГИ, а не источник числа, поэтому сюда
-    идёт реально списанная этим шагом сумма. `None` — шаг ничего не
-    списал, порогу сдвигаться не от чего.
+    Сумма — РЕАЛЬНО списанная этим шагом (`spent_usd` после минус до),
+    а не цена из итога запуска, и считается она безусловно: порог не
+    сравнивает суммы, а ВОССТАНАВЛИВАЕТ «до шага» вычитанием
+    переданного числа (`budget.check_program_spend`), поэтому любое
+    расхождение с фактом списания и выдумывает пересечение порога, и
+    прячет настоящее. На пути факта CLI это дословно то же число, что и
+    раньше (`store.charge` прибавляет ровно `cost["usd"]`), на пути
+    расчёта по тарифу (SPEC 01M31ZHSA6HMH40C2JTDPQJQNZ, требование 4) —
+    расчёт, а не цена, которую `charge_step` намеренно проигнорировал.
+
+    `None` — прежний вход порога: итога запуска не было вовсе либо шаг
+    не списал ничего. Частичную стоимость оборванного шага (ветка
+    PARTIAL `spend.charge_missing_result`, `cost is None`) порог не
+    видел и до этой задачи — пробел второго контура учёта настоящий, но
+    чинится не здесь (PLAN, «Предложения системе»).
     """
-    if cost is not None and cost.get("usd") is not None:
-        return cost
+    if cost is None:
+        return None
     charged = store.get_task(conn, task_id)["spent_usd"] - spent_before
-    if cost is None or charged <= 0:
+    if charged <= 0:
         return None
     return {**cost, "usd": charged}
 
@@ -1297,8 +1305,15 @@ def _account_step(conn, task_id: str, role: str, pump, timed_out: bool,
         numbered_for_cost = (_numbered_with_model(numbered, role, model_id)
                              if pump.cost and pump.cost.get("tokens_by_type")
                              else numbered)
+        # Модель шага уходит в учёт ПАРАМЕТРОМ, а не полем текста
+        # `numbered`: им выбирается ветка учёта денег (признак каталога
+        # `cost_from_cli`, SPEC 01M31ZHSA6HMH40C2JTDPQJQNZ, требование
+        # 4), а `model=` приписывается строке только тогда, когда
+        # разбивка токенов есть, — итог запуска без неё остался бы без
+        # признака и списался бы ценой, которую каталог объявил
+        # недостоверной.
         spent = spend.charge_step(conn, task_id, role, pump.cost,
-                                  numbered_for_cost)
+                                  numbered_for_cost, model_id)
     # Порог программы считается сразу после учёта: сумма по всем задачам
     # всех target'ов сдвинулась именно этим шагом (roadmap §5).
     budget.check_program_spend(conn, task_id,

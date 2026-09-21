@@ -578,6 +578,10 @@ class ChargeByTariffTest(TmpRootTest):
         return [row["detail"] for row in store.task_steps(self.conn, self.TASK)
                 if row["action"] == action]
 
+    def task_row(self):
+        return store.db().execute("SELECT * FROM tasks WHERE id=?",
+                                  (self.TASK,)).fetchone()
+
     def test_the_calculated_line_stays_out_of_the_tariff_calibration(self):
         """Строка расчёта по тарифу не несёт `actual_usd=` и в пары
         сверки курса не входит.
@@ -598,6 +602,73 @@ class ChargeByTariffTest(TmpRootTest):
         self.assertNotIn("actual_usd=", detail)
         self.assertEqual(spend.known_cost_breakdown(detail), (None, None))
         self.assertEqual(spend.known_cost_pairs(self.conn), {})
+
+    def test_the_step_model_comes_from_the_parameter_not_from_the_line(self):
+        """Ветка учёта выбирается по модели, переданной ПАРАМЕТРОМ, даже
+        когда строка `numbered` модели не называет (её `runner`
+        приписывает только к строкам с разбивкой токенов).
+
+        Ловит мутацию: модель шага по-прежнему восстанавливается
+        разбором собственной строки — итог запуска с ценой и без usage
+        уходит на путь факта CLI мимо признака `cost_from_cli`, и
+        `spent_usd` списывается ценой, которую каталог объявил
+        недостоверной, без единой записи об этом.
+        """
+        asked = []
+
+        def flag(model_id):
+            asked.append(model_id)
+            return False
+
+        with mock.patch.object(spend, "_cost_from_cli", flag):
+            spend.charge_step(self.conn, self.TASK, self.ROLE,
+                              {"usd": 0.5, "tokens": None,
+                               "tokens_by_type": None},
+                              "попытка 1/3", self.model)
+
+        self.assertEqual(asked, [self.model])
+        self.assertEqual(self.task_row()["spent_usd"], 0.0)
+        detail = self.details(spend.UNCHARGED_COST_JOURNAL_ACTION)[-1]
+        self.assertIn("cost_from_cli: false", detail)
+        self.assertNotIn("цены от CLI нет", detail)
+
+    def test_without_the_parameter_the_model_is_still_read_from_the_line(self):
+        """Прямой вызов без параметра читает модель из `numbered` —
+        прежнее поведение (`SPEC T040`, требование 4: сигнатуру зовут
+        напрямую и пульт, и тесты).
+
+        Ловит мутацию: параметр модели сделан обязательным либо его
+        отсутствие трактуется как «модели нет» — прямой вызов перестаёт
+        разрешать тариф МОДЕЛИ строки и считает шаг по цепочке роли,
+        молча меняя сумму на любой строке, где они разошлись.
+        """
+        asked = []
+
+        with mock.patch.object(spend, "_cost_from_cli",
+                               lambda m: asked.append(m) or True):
+            spend.charge_step(self.conn, self.TASK, self.ROLE,
+                              {"usd": 0.5, "tokens": 10,
+                               "tokens_by_type": {"input": 10}},
+                              self.numbered())
+
+        self.assertEqual(asked, [self.model])
+
+    def test_the_uncharged_line_names_the_role_tariff_as_the_role_tariff(self):
+        """Тариф искали цепочкой РОЛИ (строка модели не называет) — так
+        запись и алерт о нём и говорят, а не «тариф модели `developer`».
+
+        Ловит мутацию: в текст подставлена роль на место модели —
+        Оператор по записи о неучтённых деньгах шага ищет в каталоге
+        модель с именем роли, и диагностика уводит в сторону ровно в
+        тот момент, когда деньги шага не учтены.
+        """
+        with mock.patch.object(spend, "role_tariff", lambda *a, **k: None):
+            spend.charge_step(self.conn, self.TASK, self.ROLE,
+                              self.priceless({"input": 1000}), "попытка 1/3")
+
+        detail = self.details(spend.UNCHARGED_COST_JOURNAL_ACTION)[-1]
+        self.assertIn(f"тариф модели роли {self.ROLE!r} не разрешён", detail)
+        self.assertNotIn(f"тариф модели {self.ROLE!r}", detail)
 
     def test_a_run_result_without_any_usage_is_journaled_and_alerted(self):
         """Итог запуска без цены И без разбивки токенов: списывать

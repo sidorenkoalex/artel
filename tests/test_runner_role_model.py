@@ -242,6 +242,76 @@ class ModelFlagJournalTest(TmpRootTest):
         check.assert_called_once()
         self.assertAlmostEqual(check.call_args.args[2]["usd"], spent)
 
+    def test_the_program_threshold_gets_the_charged_sum_not_the_cli_price(self):
+        """Модель шага у провайдера с `cost_from_cli: false`, а цена в
+        итоге запуска ЕСТЬ: порог программы получает сумму, реально
+        списанную по тарифу, а не цену CLI, которую учёт намеренно
+        проигнорировал (SPEC 01M31ZHSA6HMH40C2JTDPQJQNZ, требование 4).
+
+        Ловит мутацию: в порог уходит `pump.cost` целиком, если в нём
+        есть цена. `budget.check_program_spend` восстанавливает «до
+        шага» вычитанием переданного числа — с чужой суммой он и
+        выдумывает пересечение порога расхода программы, которого не
+        было, и прячет настоящее, а дедуп алерта не даёт пропущенному
+        всплыть на следующем шаге.
+        """
+        self.set_tier("strong")
+        self.set_tier_model("strong", "claude-opus-5")
+        priced = result_event(usd=0.1, usage={"input_tokens": 1000,
+                                              "output_tokens": 500})
+
+        with mock.patch.object(runner, "spawn_agent",
+                               return_value=FakeProc([priced])), \
+                mock.patch.object(spend, "_cost_from_cli", lambda _: False), \
+                mock.patch.object(runner.budget, "check_program_spend") as check:
+            self.capture(runner.cmd_run, self.TASK)
+
+        spent = store.db().execute("SELECT spent_usd FROM tasks WHERE id=?",
+                                   (self.TASK,)).fetchone()["spent_usd"]
+        self.assertGreater(spent, 0.0, "шаг обязан стоить денег")
+        self.assertNotAlmostEqual(spent, 0.1,
+                                  msg="расчёт по тарифу обязан отличаться от "
+                                      "цены CLI — иначе сходство сумм ничего "
+                                      "не доказывает")
+        check.assert_called_once()
+        self.assertAlmostEqual(check.call_args.args[2]["usd"], spent)
+
+    def test_the_catalog_flag_is_read_by_the_step_model_without_usage(self):
+        """Итог запуска с ценой, но без usage: признак каталога
+        спрашивается по модели ШАГА, а не по полю `model=`, которого в
+        такой строке нет, — и шаг не списывается недостоверной ценой
+        молча (SPEC 01M31ZHSA6HMH40C2JTDPQJQNZ, требование 4, AC-11).
+
+        Ловит мутацию: признак ищется по модели, разобранной из строки
+        `numbered`. `runner` приписывает `model=` только при непустой
+        разбивке токенов, поэтому модель не находится, признак
+        деградирует в «цену сообщает CLI», и `spent_usd` растёт на
+        цену, которую каталог объявил недостоверной, — без строки
+        KNOWN, без записи UNCHARGED и без алерта.
+        """
+        self.set_tier("strong")
+        self.set_tier_model("strong", "claude-opus-5")
+        asked = []
+
+        def flag(model_id):
+            asked.append(model_id)
+            return False
+
+        with mock.patch.object(runner, "spawn_agent",
+                               return_value=FakeProc([result_event(usd=0.1)])), \
+                mock.patch.object(spend, "_cost_from_cli", flag):
+            self.capture(runner.cmd_run, self.TASK)
+
+        self.assertEqual(asked, ["claude-opus-5"])
+        spent = store.db().execute("SELECT spent_usd FROM tasks WHERE id=?",
+                                   (self.TASK,)).fetchone()["spent_usd"]
+        self.assertEqual(spent, 0.0)
+        actions = [r["action"] for r in self.all_step_rows()]
+        self.assertIn(spend.UNCHARGED_COST_JOURNAL_ACTION, actions)
+        self.assertTrue(store.db().execute(
+            "SELECT * FROM alerts WHERE source='spend.step_cost_uncharged'"
+        ).fetchall())
+
 
 if __name__ == "__main__":
     unittest.main()
