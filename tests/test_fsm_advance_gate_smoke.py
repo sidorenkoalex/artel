@@ -17,6 +17,12 @@
 `diff_base`/`diff_base_source` замокан явно на детерминированное
 значение, тем же приёмом, что `tests/test_zones_gate.py::
 GitFailureTest.test_git_not_answering_diff_names_refuses`.
+
+Фикстура гейта ёмкости обновлена ещё раз (SPEC
+01M31DRD81092HB69J0MAKZMGH, требование 5): отказ называет объём
+исключённой `docs/codebase-map.md` отдельной цифрой рядом с цифрой
+артефактов задачи. Это заявленная SPEC смена ожидания, а не ослабление
+сверки: строка по-прежнему сверяется байт-в-байт целиком.
 """
 import contextlib
 import io
@@ -74,7 +80,8 @@ class CapacityGateSmokeTest(TmpRootTest):
             f"база сравнения deadbeef от origin/main): diff кода "
             f"{config.REVIEW_SNAPSHOT_DIFF_MAX_BYTES + 100} "
             f"байт > потолка {config.REVIEW_SNAPSHOT_DIFF_MAX_BYTES} байт (исключённые артефакты "
-            "tasks/T001/: 0 байт (изменений нет))\n"
+            "tasks/T001/: 0 байт (изменений нет); исключённая карта "
+            "docs/codebase-map.md: 0 байт (изменений нет))\n"
             "  дальше: решение Оператора — разделить задачу или "
             "поднять потолок (ADR-0002)\n")
         rows = conn.execute(
@@ -89,7 +96,8 @@ class CapacityGateSmokeTest(TmpRootTest):
             "задачу (T001 «Тест смоука», база сравнения deadbeef от "
             f"origin/main): diff кода {config.REVIEW_SNAPSHOT_DIFF_MAX_BYTES + 100} байт "
             f"> потолка {config.REVIEW_SNAPSHOT_DIFF_MAX_BYTES} байт "
-            "(исключённые артефакты tasks/T001/: 0 байт (изменений нет))")
+            "(исключённые артефакты tasks/T001/: 0 байт (изменений нет); "
+            "исключённая карта docs/codebase-map.md: 0 байт (изменений нет))")
 
 
 class ZonesGateSmokeTest(TmpRootTest):

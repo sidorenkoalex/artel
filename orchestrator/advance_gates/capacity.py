@@ -15,6 +15,35 @@ from ._base import GateRefusal, _run_gates
 # — только Оператора (AC-14).
 CAPACITY_GATE_REASON = "снимок не помещается в один контекст ревью — разделить задачу"
 
+# Сгенерированная карта кодовой базы (SPEC 01M31DRD81092HB69J0MAKZMGH,
+# требование 5) — то же имя и та же форма локальной константы, что в
+# `orchestrator/brief.py`, `orchestrator/pull.py` и
+# `orchestrator/fsm_postmerge.py`.
+MAP_REL = "docs/codebase-map.md"
+
+
+def _excluded_note(base: str, branch: str, pathspec: tuple, repo) -> str:
+    """Объём исключённой из меры части снимка — цифрой для текста отказа.
+
+    Три исхода, ни один из которых не выдаёт вымышленное число: git не
+    ответил — «неизвестен» с причиной (отказ, уже решённый первой цифрой,
+    этим не отменяется); diff реально пуст — «0 байт (изменений нет)», а не
+    байтовый размер строки-плейсхолдера `review.EMPTY_DIFF_TEXT`, которую
+    `git_diff_part` подставляет для показа (R1-F1, REVIEW.md
+    01M1RA0N6FCFEQBB82K58GM12X итерации 1-3); иначе — байты diff.
+
+    Общий узел на обе исключённые части (артефакты `tasks/<id>/` и карту
+    `docs/codebase-map.md`): вторая цифра появилась по тем же правилам, по
+    каким считалась первая, и разъехаться им негде.
+    """
+    diff, _, reason = _review_git_diff_part(base, branch, pathspec=pathspec,
+                                            repo=repo)
+    if reason:
+        return f"неизвестен (git не ответил: {reason})"
+    if diff == _EMPTY_DIFF_TEXT:
+        return "0 байт (изменений нет)"
+    return f"{len(diff.encode('utf-8'))} байт"
+
 
 def _capacity_gate(conn, task_id: str, t) -> GateRefusal | None:
     """Гейт ёмкости diff снимка на `in_dev -> review` (tasks/
@@ -33,6 +62,18 @@ def _capacity_gate(conn, task_id: str, t) -> GateRefusal | None:
     способом, что и до этой задачи (AC-5). Пересчитывается заново на
     КАЖДОМ входе в гейт, не по инкременту прошлой итерации (AC-15).
 
+    Сгенерированная `docs/codebase-map.md` исключена из меры ТЕМ ЖЕ
+    приёмом и ровно по тому же основанию (SPEC
+    01M31DRD81092HB69J0MAKZMGH, требование 5): ревьювер не читает карту
+    построчно — она приходит ему отдельным компонентом пакета
+    (`orchestrator/context_package.py`), то есть в контекст ревью её
+    байты не грузятся дважды. Факт 21.09: diff кода 286 927 байт при
+    потолке 262 144, из них 47 987 байт (17 %) — карта; временный подъём
+    потолка Оператором лечил симптом. Объём исключённой карты назван в
+    отказе отдельной цифрой рядом с цифрой артефактов задачи (AC-6): обе
+    исключённые части видны Оператору порознь, и решение «разделить или
+    поднять потолок» принимается по настоящему размеру предмета ревью.
+
     `GateRefusal` — переход отклонён, отказ журналируется каркасом
     `_run_gates` (AC-13); гейт сам не эскалирует и не делает ничего
     автоматически (AC-14) — задача остаётся в `in_dev` до решения
@@ -44,11 +85,12 @@ def _capacity_gate(conn, task_id: str, t) -> GateRefusal | None:
     измерять байты именно этой строки значит пропускать переход, так и
     не выяснив фактический размер снимка — тот же принцип «неизвестный
     статус — это нельзя» (ADR-0002), что уже применён парой функций выше
-    в этом же файле для лока `acceptance_tests/`. Второй diff (только
-    `tasks/<id>/`, только на пути уже подтверждённого отказа — нужен лишь
-    для второй цифры сообщения, AC-3) сбоем git отказ не отменяет: первая
-    цифра (код) уже превысила потолок — вторая цифра в сообщении в этом
-    случае явно названа «неизвестна», а не вымышленным числом.
+    в этом же файле для лока `acceptance_tests/`. Diff'ы исключённых
+    частей (`tasks/<id>/` и `docs/codebase-map.md`, только на пути уже
+    подтверждённого отказа — нужны лишь для цифр сообщения, AC-3) сбоем
+    git отказ не отменяют: первая цифра (код) уже превысила потолок —
+    цифра исключённой части в этом случае явно названа «неизвестен», а не
+    вымышленным числом (`_excluded_note` выше — общий узел обеих цифр).
 
     Diff артефактов реально пуст (git ответил успешно, но пустой строкой) —
     вторая цифра обязана быть 0, а не байтовым размером строки-плейсхолдера
@@ -88,7 +130,8 @@ def _capacity_gate(conn, task_id: str, t) -> GateRefusal | None:
                f"для {t['branch']}, и повтори artel.py advance {task_id}")
         return GateRefusal(action, detail, hint)
     code_diff, _, reason = _review_git_diff_part(
-        base, t["branch"], pathspec=(".", f":!{tasks_prefix}"), repo=repo)
+        base, t["branch"],
+        pathspec=(".", f":!{tasks_prefix}", f":!{MAP_REL}"), repo=repo)
     if reason:
         detail = (f"гейт ёмкости: git не ответил на diff снимка "
                  f"({base}...{t['branch']}) — сверка размера невозможна: "
@@ -101,21 +144,16 @@ def _capacity_gate(conn, task_id: str, t) -> GateRefusal | None:
                 else len(code_diff.encode("utf-8")))
     if code_size <= config.REVIEW_SNAPSHOT_DIFF_MAX_BYTES:
         return None
-    artifacts_diff, _, artifacts_reason = _review_git_diff_part(
-        base, t["branch"], pathspec=(tasks_prefix,), repo=repo)
-    if artifacts_reason:
-        artifacts_note = f"неизвестен (git не ответил: {artifacts_reason})"
-    elif artifacts_diff == _EMPTY_DIFF_TEXT:
-        artifacts_note = "0 байт (изменений нет)"
-    else:
-        artifacts_note = f"{len(artifacts_diff.encode('utf-8'))} байт"
+    artifacts_note = _excluded_note(base, t["branch"], (tasks_prefix,), repo)
+    map_note = _excluded_note(base, t["branch"], (MAP_REL,), repo)
     # Источник базы в сообщении (требование 4/AC-6) — Оператор видит, с чем
     # реально сравнивали, не только литерал diff-диапазона.
     source = gitcmd.diff_base_source(t["branch"], repo=repo)
     detail = (f"{CAPACITY_GATE_REASON} ({task_id} «{t['title']}», база "
              f"сравнения {base} от {source}): diff кода {code_size} байт "
              f"> потолка {config.REVIEW_SNAPSHOT_DIFF_MAX_BYTES} байт "
-             f"(исключённые артефакты {tasks_prefix}: {artifacts_note})")
+             f"(исключённые артефакты {tasks_prefix}: {artifacts_note}; "
+             f"исключённая карта {MAP_REL}: {map_note})")
     hint = "решение Оператора — разделить задачу или поднять потолок (ADR-0002)"
     return GateRefusal(action, detail, hint)
 
