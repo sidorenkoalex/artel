@@ -404,5 +404,52 @@ class ReportDivergenceTest(TaskSeededTmpRootTest):
         self.assertEqual(report.token_rate_divergence(self.conn), {})
 
 
+class BreakdownNameFormsTest(unittest.TestCase):
+    """`spend.known_cost_breakdown` на обеих формах имён видов токенов
+    (SPEC 01M31ZHSA6HMH40C2JTDPQJQNZ, требование 7).
+
+    Планка задачи сверяет ЧИСЛА двух форм; здесь — перекрытие самих
+    имён, которого она не проверяет: прежние имена начинаются с общих
+    (`input` — префикс `input_tokens`), и разбор обязан не спутать их."""
+
+    @staticmethod
+    def line(breakdown: str) -> str:
+        return (f"попытка 1/3, model=m: стоимость $0.5000, "
+                f"разбивка по видам: {breakdown} | actual_usd=0.5")
+
+    def test_common_name_is_not_found_inside_a_legacy_one(self):
+        """Строка прежней формы читается прежними именами — общее имя
+        внутри длинного счётчика не подхватывается.
+
+        Ловит мутацию: шаблон общего имени собран без отсечки границы —
+        `cache_read=` находится внутри `cache_read_input_tokens=`, и
+        чтения кэша считаются дважды (или вид перетирается чужим
+        числом), отчего расчёт по тарифу на старом журнале уезжает в
+        полтора раза.
+        """
+        _, breakdown = spend.known_cost_breakdown(self.line(
+            "input_tokens=1, output_tokens=2, "
+            "cache_creation_input_tokens=3, cache_read_input_tokens=4"))
+
+        self.assertEqual(breakdown, {"input": 1, "output": 2,
+                                     "cache_write": 3, "cache_read": 4})
+
+    def test_both_forms_give_the_same_breakdown_for_the_same_numbers(self):
+        """Одни и те же числа, записанные двумя формами имён, дают одну
+        и ту же разбивку общими видами.
+
+        Ловит мутацию: разбор переведён на общие имена без поддержки
+        прежних — весь журнал до задачи читается пустым, и калибровка
+        тарифа молча начинается с нуля.
+        """
+        legacy = spend.known_cost_breakdown(self.line(
+            "input_tokens=1, output_tokens=2, "
+            "cache_creation_input_tokens=3, cache_read_input_tokens=4"))
+        common = spend.known_cost_breakdown(self.line(
+            "input=1, output=2, cache_write=3, cache_read=4"))
+
+        self.assertEqual(legacy, common)
+
+
 if __name__ == "__main__":
     unittest.main()

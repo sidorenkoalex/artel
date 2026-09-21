@@ -480,13 +480,19 @@ def _model_unsupported_after_attempt(conn, task_id: str, role: str,
     («version X or newer is required»), установленная — тем же
     `claude --version`, что и предполёт. Расхождение с каталогом чинится
     правкой `min_cli_version` записи модели в `models.yaml`."""
-    required = failure_classification.required_cli_version(reason)
-    # Версия — у провайдера роли (SPEC 01M2ZNTHSNFYSTF904P6SZTPYF,
-    # требование 5): тот же источник, что у предполётного вердикта выше.
-    installed = providers.for_role(role).installed_cli_version()
+    # Версия, сигнатура и вердикт — у провайдера роли (SPEC
+    # 01M2ZNTHSNFYSTF904P6SZTPYF требование 5, SPEC
+    # 01M31ZHSA6HMH40C2JTDPQJQNZ требование 9): тот же источник, что у
+    # предполётного вердикта выше, и тот же, по которому класс попытки
+    # был распознан, — иначе отказ называл бы Оператору слова чужого CLI.
+    provider = providers.for_role(role)
+    required = failure_classification.required_cli_version(reason, provider)
+    installed = provider.installed_cli_version()
+    signature = failure_classification.class_signature_text(
+        failure_classification.MODEL_UNSUPPORTED_CLASS, provider)
     detail = (f"{stack.MODEL_UNSUPPORTED_PREFIX}: "
               f"{_model_journal_label(model_id)} — CLI отверг модель в "
-              f"попытке агента («{failure_classification.MODEL_UNSUPPORTED_SIGNATURE}»)")
+              f"попытке агента («{signature}»)")
     if required is not None:
         detail += f", требует claude ≥ {required}"
     if installed is not None:
@@ -961,13 +967,24 @@ def _model_journal_label(model_id: str | None) -> str:
     return model_id if model_id is not None else "дефолт CLI"
 
 
-def _numbered_with_model(numbered: str, model_id: str | None) -> str:
-    """`numbered`, дополненный `model=` — источник для записей «agent cost
-    KNOWN»/«agent cost PARTIAL», журналируемых `spend.py` (вне зоны этой
-    задачи, требования 5-6): тот же приём, что и «agent run started» в
+def _numbered_with_model(numbered: str, role: str,
+                         model_id: str | None) -> str:
+    """`numbered`, дополненный `model=` и `provider=` — источник для
+    записей «agent cost KNOWN»/«agent cost PARTIAL», журналируемых
+    `spend.py`: тот же приём, что и «agent run started» в
     `_prepare_step`, применённый к параметру, который `spend.charge_step`/
-    `charge_missing_result` дословно вставляют в начало своей записи."""
-    return f"{numbered}, model={_model_journal_label(model_id)}"
+    `charge_missing_result` дословно вставляют в начало своей записи.
+
+    Имя провайдера (SPEC 01M31ZHSA6HMH40C2JTDPQJQNZ, требование 8) —
+    провайдера ЭТОЙ роли, а не провайдера записи модели в каталоге:
+    разрез расхода по провайдерам отвечает на вопрос «чей это счёт»,
+    а счёт выставляет тот, кто исполнял шаг. Берётся именем
+    (`name_for_role`), а не резолвом объекта: незарегистрированное имя
+    сюда не доходит (шаг отказал бы до старта агента), но строка
+    журнала не должна падать вместе с реестром.
+    """
+    return (f"{numbered}, model={_model_journal_label(model_id)}, "
+            f"provider={providers.name_for_role(role)}")
 
 
 def _cost_partial_expected(role: str, pump) -> bool:
@@ -1186,7 +1203,12 @@ def _spawn_and_wait(conn, task_id: str, role: str, log_path: Path,
 
     # Перекачка в потоке: чтение строк блокируется, пока агент молчит, а
     # таймаут шага должен срабатывать и на замолчавшем агенте.
-    pump = agent_log.OutputPump(proc.stdout, log_path)
+    # Строки вывода разбирает провайдер РОЛИ шага (SPEC
+    # 01M31ZHSA6HMH40C2JTDPQJQNZ, требование 3): лог, трение, токены и
+    # стоимость — всё из одного разбора, а формат знает тот, чей CLI
+    # его написал.
+    pump = agent_log.OutputPump(proc.stdout, log_path,
+                                providers.for_role(role))
     pump.start()
     timed_out = False
     killed_group = None
@@ -1207,6 +1229,35 @@ def _spawn_and_wait(conn, task_id: str, role: str, log_path: Path,
 
     close_pump(conn, task_id, role, pump, proc)
     return None, (proc, pump, rc, timed_out, killed_group)
+
+
+def _program_cost(conn, task_id: str, cost: dict | None,
+                  spent_before: float) -> dict | None:
+    """Стоимость шага в форме, которую ждёт порог программы
+    (`budget.check_program_spend`, вне зоны этой задачи).
+
+    Сумма — РЕАЛЬНО списанная этим шагом (`spent_usd` после минус до),
+    а не цена из итога запуска, и считается она безусловно: порог не
+    сравнивает суммы, а ВОССТАНАВЛИВАЕТ «до шага» вычитанием
+    переданного числа (`budget.check_program_spend`), поэтому любое
+    расхождение с фактом списания и выдумывает пересечение порога, и
+    прячет настоящее. На пути факта CLI это дословно то же число, что и
+    раньше (`store.charge` прибавляет ровно `cost["usd"]`), на пути
+    расчёта по тарифу (SPEC 01M31ZHSA6HMH40C2JTDPQJQNZ, требование 4) —
+    расчёт, а не цена, которую `charge_step` намеренно проигнорировал.
+
+    `None` — прежний вход порога: итога запуска не было вовсе либо шаг
+    не списал ничего. Частичную стоимость оборванного шага (ветка
+    PARTIAL `spend.charge_missing_result`, `cost is None`) порог не
+    видел и до этой задачи — пробел второго контура учёта настоящий, но
+    чинится не здесь (PLAN, «Предложения системе»).
+    """
+    if cost is None:
+        return None
+    charged = store.get_task(conn, task_id)["spent_usd"] - spent_before
+    if charged <= 0:
+        return None
+    return {**cost, "usd": charged}
 
 
 def _account_step(conn, task_id: str, role: str, pump, timed_out: bool,
@@ -1241,23 +1292,33 @@ def _account_step(conn, task_id: str, role: str, pump, timed_out: bool,
     # правда журналирует KNOWN/PARTIAL — иначе «agent cost UNKNOWN»/
     # «agent cost LOST»/«agent cost ESTIMATED» получили бы `model=` по
     # ошибке, хотя требование 6 называет только KNOWN и PARTIAL.
+    spent_before = store.get_task(conn, task_id)["spent_usd"]
     if pump.cost is None and (timed_out or pump.error is not None):
         cause = "таймаут шага" if timed_out else "обрыв stdout-пайпа"
-        numbered_for_cost = (_numbered_with_model(numbered, model_id)
+        numbered_for_cost = (_numbered_with_model(numbered, role, model_id)
                              if _cost_partial_expected(role, pump)
                              else numbered)
         spent = spend.charge_missing_result(
             conn, task_id, role, numbered_for_cost, cause,
             pump.partial_tokens, pump.saw_usage_event)
     else:
-        numbered_for_cost = (_numbered_with_model(numbered, model_id)
+        numbered_for_cost = (_numbered_with_model(numbered, role, model_id)
                              if pump.cost and pump.cost.get("tokens_by_type")
                              else numbered)
+        # Модель шага уходит в учёт ПАРАМЕТРОМ, а не полем текста
+        # `numbered`: им выбирается ветка учёта денег (признак каталога
+        # `cost_from_cli`, SPEC 01M31ZHSA6HMH40C2JTDPQJQNZ, требование
+        # 4), а `model=` приписывается строке только тогда, когда
+        # разбивка токенов есть, — итог запуска без неё остался бы без
+        # признака и списался бы ценой, которую каталог объявил
+        # недостоверной.
         spent = spend.charge_step(conn, task_id, role, pump.cost,
-                                  numbered_for_cost)
+                                  numbered_for_cost, model_id)
     # Порог программы считается сразу после учёта: сумма по всем задачам
     # всех target'ов сдвинулась именно этим шагом (roadmap §5).
-    budget.check_program_spend(conn, task_id, pump.cost)
+    budget.check_program_spend(conn, task_id,
+                               _program_cost(conn, task_id, pump.cost,
+                                             spent_before))
     return spent
 
 

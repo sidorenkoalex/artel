@@ -15,7 +15,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from orchestrator import config, failure_classification  # noqa: E402
+from orchestrator import config, failure_classification, providers  # noqa: E402
 
 
 class ClassifyAttemptFailureTest(unittest.TestCase):
@@ -159,6 +159,63 @@ class AttemptOutputTextTest(unittest.TestCase):
     def test_missing_file_is_empty_text(self):
         self.assertEqual(
             failure_classification._attempt_output_text(Path("/nonexistent/path.log")), "")
+
+
+class ProviderSignaturesTest(unittest.TestCase):
+    """Сигнатуры берутся у провайдера, набор классов остаётся общим
+    (SPEC 01M31ZHSA6HMH40C2JTDPQJQNZ, требование 9).
+
+    Планка задачи проверяет, что класс ТЕКСТА зависит от провайдера;
+    здесь — два угла, которые она не называет: провайдер не вправе
+    расширить набор классов, и порядок его таблицы решает исход."""
+
+    class _Provider(providers.RoleExecutorProvider):
+        """Провайдер с чужой таблицей сигнатур."""
+
+        name = "stub-signatures"
+
+        def __init__(self, table):
+            self._table = table
+
+        def failure_signatures(self):
+            return self._table
+
+    def classify(self, text: str, table) -> str | None:
+        return failure_classification.classify_attempt_failure(
+            text, self._Provider(table))
+
+    def test_a_class_outside_the_common_set_is_not_returned(self):
+        """Класс, которого нет в общем наборе, игнорируется — даже когда
+        его сигнатура совпала.
+
+        Ловит мутацию: класс провайдера возвращается как есть — дальше
+        по течению `CLASS_LABELS[failure_class]` падает `KeyError` прямо
+        в точке учёта провалившейся попытки, и шаг теряет и запись
+        классификации, и алерт своего настоящего класса.
+        """
+        table = (providers.FailureSignature("своё-имя", ("отказ",)),
+                 providers.FailureSignature("1a", ("отказ",)))
+
+        self.assertEqual(self.classify("тут отказ", table), "1a")
+
+    def test_the_first_matching_entry_of_the_table_wins(self):
+        """Текст, подходящий двум записям таблицы, получает класс
+        ПЕРВОЙ из них.
+
+        Ловит мутацию: таблица обходится в произвольном порядке
+        (например, через словарь, собранный по классам) — общий якорь
+        CLI начинает перехватывать детерминированный отказ, и тот снова
+        лечится тремя попытками с минутным бэкоффом.
+        """
+        table = (providers.FailureSignature(
+                     failure_classification.MODEL_UNSUPPORTED_CLASS,
+                     ("нет такой модели",)),
+                 providers.FailureSignature("system_candidate", ("ошибка:",)))
+
+        self.assertEqual(self.classify("ошибка: нет такой модели", table),
+                         failure_classification.MODEL_UNSUPPORTED_CLASS)
+        self.assertNotIn(failure_classification.MODEL_UNSUPPORTED_CLASS,
+                         failure_classification.TRANSIENT_SYSTEM_CLASSES)
 
 
 if __name__ == "__main__":

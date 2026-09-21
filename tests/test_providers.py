@@ -25,11 +25,12 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from orchestrator import (catalog, config, doctor, keychain, models,  # noqa: E402
+from orchestrator import (catalog, config, doctor,  # noqa: E402
+                          failure_classification, keychain, models,
                           providers, roles, runner, stack, store)
 from orchestrator.providers import claude as claude_provider  # noqa: E402
 from tests.sandbox import (TmpDirTest, TmpRootTest, claude_only_popen,  # noqa: E402
-                           claude_only_run)
+                           claude_only_run, event as sandbox_event)
 from tests.test_doctor import (FakeLiveSmokeProc,  # noqa: E402
                                TmpRootTest as DoctorSandbox, result_event)
 from tests.test_runner_model_preflight import _StepSandbox  # noqa: E402
@@ -513,6 +514,109 @@ class UnknownProviderStepTest(_StepSandbox):
         self.assertIn(refusal, f"{out}\n{self.exit_message or ''}")
         self.assertIn(runner.PROVIDER_REFUSAL_ACTION, self.actions())
         self.assertEqual(self.state(), "in_dev")
+
+
+def _assistant_line(*blocks) -> str:
+    return sandbox_event(type="assistant",
+                         message={"role": "assistant", "content": list(blocks)})
+
+
+class OutputEventTest(unittest.TestCase):
+    """Событие общего вида (SPEC 01M31ZHSA6HMH40C2JTDPQJQNZ, требования
+    1-2) — углы, которых приёмочная планка задачи не закрывает: она
+    гоняет ОДИН блок на событие, а поток живого шага смешивает их."""
+
+    def setUp(self):
+        self.provider = providers.get(providers.DEFAULT_PROVIDER)
+
+    def test_one_event_carries_both_the_text_and_the_tool_call(self):
+        """Сообщение из текста И вызова инструмента отдаёт оба: строку
+        лога с обоими и один вызов в `tool_calls`.
+
+        Ловит мутацию: разбор события ветвится по ПЕРВОМУ блоку
+        сообщения (`elif` вместо цикла по всем) — вызов инструмента,
+        приехавший вместе с текстом в одном событии, пропадает из лога и
+        из знаменателя трения, и метрика шага считается по части его
+        вызовов.
+        """
+        event = self.provider.parse_output_line(_assistant_line(
+            {"type": "text", "text": "правлю"},
+            {"type": "tool_use", "id": "t1", "name": "Edit",
+             "input": {"file_path": "a.py"}}))
+
+        self.assertEqual(event.log_text, "правлю\n· Edit a.py\n")
+        self.assertEqual(event.text, "правлю")
+        self.assertEqual([call.id for call in event.tool_calls], ["t1"])
+        self.assertEqual(event.tool_calls[0].argument, "a.py")
+
+    def test_log_line_and_call_key_read_different_argument_keys(self):
+        """Блок, несущий и `command`, и `file_path`: в строку лога идёт
+        команда, в ключ сравнения вызовов — файл.
+
+        Ловит мутацию: два порядка предпочтения аргумента сведены в один
+        («заодно упростили») — либо строка лога начинает показывать
+        Оператору путь вместо команды, либо ключ сравнения вызовов
+        меняется, и повторный `Read` одного файла перестаёт опознаваться
+        повтором. Оба отличия молчаливы: числа стоимости при них верны.
+        """
+        event = self.provider.parse_output_line(_assistant_line(
+            {"type": "tool_use", "id": "t1", "name": "Bash",
+             "input": {"command": "pytest -q", "file_path": "a.py"}}))
+
+        self.assertEqual(event.log_text, "· Bash pytest -q\n")
+        self.assertEqual(event.tool_calls[0].argument, "a.py")
+
+    def test_usage_is_read_even_when_the_blocks_are_unreadable(self):
+        """Сообщение с нечитаемым `content` всё равно отдаёт свой учёт
+        токенов.
+
+        Ловит мутацию: разбор usage спрятан внутрь ветки «блоки —
+        список» — сообщение, чьи блоки пришли не списком, перестаёт
+        считаться потраченным, и токены шага теряются тем тише, чем
+        реже такой формат встречается.
+        """
+        event = self.provider.parse_output_line(sandbox_event(
+            type="assistant",
+            message={"role": "assistant", "content": "не список",
+                     "usage": {"input_tokens": 11}}))
+
+        self.assertEqual(event.log_text, "")
+        self.assertEqual(event.tokens_by_type, {"input": 11})
+
+    def test_run_result_with_a_negative_price_reports_no_price(self):
+        """Отрицательная цена в итоге запуска — «цены нет», а не
+        отрицательные деньги в `spent_usd`.
+
+        Ловит мутацию: проверка знака потеряна при переезде разбора к
+        провайдеру — шаг с испорченным полем УМЕНЬШАЕТ потраченное по
+        задаче, и потолок бюджета обходится битым выводом CLI.
+        """
+        event = self.provider.parse_output_line(sandbox_event(
+            type="result", subtype="success", is_error=False,
+            result="готово", total_cost_usd=-1.0))
+
+        self.assertIsNotNone(event.run_result, "итог запуска получен")
+        self.assertIsNone(event.run_result.usd)
+
+    def test_failure_signatures_name_only_classes_of_the_common_set(self):
+        """Каждый класс таблицы сигнатур провайдера есть в общем наборе
+        классов, а детерминированный отказ проверяется раньше общего
+        якоря своего CLI.
+
+        Ловит мутацию: вместе с текстами к провайдеру уехал и НАБОР
+        классов — провайдер объявляет класс, которого пульт не знает, и
+        последствия (бэкофф, алерты, обрыв повторов) перестают
+        срабатывать, потому что адресата у них нет.
+        """
+        table = self.provider.failure_signatures()
+        names = [entry.failure_class for entry in table]
+
+        for name in names:
+            self.assertIn(name, failure_classification.CLASS_LABELS)
+        self.assertLess(
+            names.index(failure_classification.MODEL_UNSUPPORTED_CLASS),
+            names.index("system_candidate"),
+            "детерминированный отказ обязан перехватываться раньше якоря")
 
 
 if __name__ == "__main__":

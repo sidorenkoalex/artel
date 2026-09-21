@@ -27,7 +27,7 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from orchestrator import (agent_log, catalog, config, gitcmd,  # noqa: E402
-                          runner, store)
+                          providers, runner, spend, store)
 from tests.sandbox import (DeveloperBriefTmpRootTest as TmpRootTest,  # noqa: E402
                            FakeProc, FakeStream, capture_new_task_id, event,
                            fake_git, sync_spec_from_worktree)
@@ -306,9 +306,13 @@ class OutputPumpTest(TmpRootTest):
     def test_partial_tokens_survive_a_broken_pipe(self):
         """tasks/T040, AC-2: usage-события до обрыва пайпа не теряются —
         читать их после обрыва больше неоткуда. Ловит мутацию: несколько
-        видов токена (`input_tokens`/`output_tokens`) схлопываются в одну
-        сумму вместо разбивки по видам (01M1PP0VYRT55WN8GGVG66X89Y,
-        требование 2)."""
+        видов токена (`input`/`output`) схлопываются в одну сумму вместо
+        разбивки по видам (01M1PP0VYRT55WN8GGVG66X89Y, требование 2).
+
+        Имена видов — ОБЩИЕ (`models.PRICE_KINDS`, SPEC
+        01M31ZHSA6HMH40C2JTDPQJQNZ требование 1): счётчики своего CLI
+        провайдер переводит в них при разборе строки, и накопленная
+        разбивка тарифицируется каталогом без переводчика посередине."""
         log = agent_log.new_agent_log("T005", "developer")
         stream = BrokenPipeStream([
             event(type="assistant",
@@ -322,8 +326,7 @@ class OutputPumpTest(TmpRootTest):
             pump.join(5)
 
         self.assertIsInstance(pump.error, OSError)
-        self.assertEqual(pump.partial_tokens,
-                         {"input_tokens": 30, "output_tokens": 12})
+        self.assertEqual(pump.partial_tokens, {"input": 30, "output": 12})
         self.assertTrue(pump.saw_usage_event)
 
     def test_no_usage_events_leaves_partial_tokens_at_zero(self):
@@ -700,6 +703,31 @@ class StepFrictionTest(unittest.TestCase):
 
         self.assertEqual(agent_log.step_friction(path), 0.5)
 
+    def test_friction_of_a_call_without_its_result_is_not_a_signal(self):
+        """Вызов, результата которого в потоке нет вовсе (шаг оборвался
+        между ними), непродуктивным не считается.
+
+        Ловит мутацию: связка «вызов -> результат» после переезда
+        разбора к провайдеру берёт результат по ПОРЯДКУ появления, а не
+        по идентификатору вызова — оборванный шаг начинает приписывать
+        последнему вызову чужой результат, и трение реального шага
+        поедет ровно там, где о нём нельзя судить."""
+        path = self.write([
+            assistant_event(tool_use_call("t1", "Bash", command="pytest")),
+            tool_result_event("t1", "ModuleNotFoundError", is_error=True),
+            assistant_event(tool_use_call("t2", "Bash", command="pytest")),
+        ])
+
+        self.assertEqual(agent_log.step_friction(path), 1.0,
+                         "ошибка t1 и ретрай t2 — оба сигнала")
+
+        without_result = self.write([
+            assistant_event(tool_use_call("t1", "Bash", command="pytest")),
+            assistant_event(tool_use_call("t2", "Read", file_path="a.py")),
+        ])
+
+        self.assertEqual(agent_log.step_friction(without_result), 0.0)
+
     def test_repeated_large_result_from_different_tools_is_flagged(self):
         """Сигнал 3 ТЗ не привязан к конкретному инструменту/файлу — тот
         же большой текст, полученный ЛЮБЫМ инструментом дважды, считается."""
@@ -712,6 +740,70 @@ class StepFrictionTest(unittest.TestCase):
         ])
 
         self.assertEqual(agent_log.step_friction(path), 0.5)
+
+
+class _OtherFormatProvider(providers.RoleExecutorProvider):
+    """Провайдер, чей исполнитель пишет вывод СВОИМ форматом: одна
+    строка `<имя инструмента>|<аргумент>` — вызов инструмента, всё
+    остальное идёт в лог как есть."""
+
+    name = "stub-other-format"
+
+    def parse_output_line(self, raw_line):
+        name, sep, argument = raw_line.strip().partition("|")
+        if not sep:
+            return providers.StreamEvent(raw_line, None, (), (), None, None)
+        return providers.StreamEvent(
+            "", None, (providers.ToolCall(raw_line, name, argument),), (),
+            None, None)
+
+
+class ProviderDrivenLogTest(unittest.TestCase):
+    """Лог и трение читают строку ГЛАЗАМИ ПРОВАЙДЕРА (SPEC
+    01M31ZHSA6HMH40C2JTDPQJQNZ, требование 3).
+
+    Планка задачи строит заглушку НАД `ClaudeProvider` (тот же формат с
+    префиксом); здесь формат другой по-настоящему — так видно, что
+    пульт не делает о строке никаких собственных предположений."""
+
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.tdir = Path(tmp.name)
+        self.provider = _OtherFormatProvider()
+
+    def test_json_of_another_provider_is_not_read_as_claude_events(self):
+        """Строка формата Claude под чужим провайдером — просто текст:
+        ни вызова инструмента, ни стоимости пульт из неё не достаёт.
+
+        Ловит мутацию: хоть одна из точек разбора оставлена на литералах
+        формата Claude — тогда событие чужого провайдера, случайно
+        похожее на JSON Claude, начинает считаться вызовом инструмента
+        или итогом запуска, и лог со стоимостью шага врут молча.
+        """
+        raw = assistant_event({"type": "tool_use", "id": "t1", "name": "Read",
+                               "input": {"file_path": "a.py"}})
+
+        line = agent_log.render_agent_line(raw, self.provider)
+
+        self.assertEqual(line, raw, "чужая строка идёт в лог как есть")
+        self.assertIsNone(spend.stream_usage_by_type(raw, self.provider))
+        self.assertIsNone(spend.parse_run_result(raw, self.provider))
+
+    def test_friction_counts_the_calls_of_the_providers_own_format(self):
+        """Повтор вызова в СВОЁМ формате провайдера трением считается.
+
+        Ловит мутацию: разбор строки доехал до провайдера, а метрика
+        трения продолжает искать вызовы в блоках `tool_use` формата
+        Claude — у второго провайдера метрика шага навсегда 0.0, и
+        отсутствие сигнала неотличимо от чистой работы.
+        """
+        path = self.tdir / "step.log"
+        path.write_text("Read|a.py\nRead|a.py\n", encoding="utf-8")
+
+        self.assertEqual(agent_log.step_friction(path, self.provider), 0.5)
+        self.assertEqual(agent_log.step_friction(path), 0.0,
+                         "провайдером по умолчанию это просто текст")
 
 
 if __name__ == "__main__":

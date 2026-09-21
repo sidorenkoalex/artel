@@ -14,9 +14,13 @@ argv, окружения или дома роли от сегодняшних я
 интерпретатором 3.9 — обратный импорт на уровне модуля был бы и циклом,
 и нарушением 3.9-совместимости (см. докстринг `base.py`).
 """
+import json
 import os
+import re
 
-from .base import CliTool, HomeReference, RoleExecutorProvider
+from .base import (CliTool, EMPTY_EVENT, FailureSignature, HomeReference,
+                   RoleExecutorProvider, RunResult, StreamEvent, ToolCall,
+                   ToolResult)
 
 # Имя инструмента и его минимальная версия — то же, что манифест стека
 # нёс литералом до задачи (`stack.REQUIRED_TOOLS["claude"]`). Минимум
@@ -38,6 +42,61 @@ DEPLOYED_HOME_DIR = ".claude"
 # Белый список инструментов шага: только git и запуск тестов/guard,
 # вместо полного Bash.
 ALLOWED_TOOLS = "Bash(git:*),Bash(python3:*)"
+
+# Срез текста ошибки итога запуска в строке лога и срез ключевого
+# аргумента в отметке вызова инструмента — те же числа, что несли
+# `agent_log.render_agent_line`/`render_block` до переезда разбора сюда
+# (SPEC 01M31ZHSA6HMH40C2JTDPQJQNZ, требование 2: ни один символ строки
+# лога не меняется).
+ERROR_TEXT_LIMIT = 200
+TOOL_ARGUMENT_LIMIT = 100
+ERROR_LINE_PREFIX = "! ошибка агента: "
+TOOL_CALL_LINE_PREFIX = "· "
+
+# Ключи `input` блока `tool_use`, из которых берётся КЛЮЧЕВОЙ аргумент
+# вызова — в порядке предпочтения. Какой из них есть, зависит от
+# инструмента (Read/Edit против Bash), поэтому берётся первый
+# попавшийся, а не имя, фиксированное заранее.
+#
+# Порядков два, и они РАЗНЫЕ — так было до переезда разбора сюда, и
+# требование 2 не разрешает «заодно» их свести: отметка вызова в логе
+# показывала Оператору прежде всего команду (`agent_log.render_block`),
+# а ключ сравнения вызовов метрики трения — прежде всего файл
+# (`agent_log._tool_use_calls`). Блок, несущий оба поля сразу, дал бы
+# под сведёнными порядками другую строку лога или другое число трения.
+LOG_ARGUMENT_KEYS = ("command", "file_path", "pattern")
+CALL_ARGUMENT_KEYS = ("file_path", "command", "pattern")
+
+# Сигнатуры провалов попытки (SPEC 01M31ZHSA6HMH40C2JTDPQJQNZ, требования
+# 9-10) — дословно те же строки, что до задачи жили литералами в
+# `orchestrator/failure_classification.py`. Снятые Оператором с логов
+# инцидентов T043 (27.08) и T075-T078 (31.08); список класса 2 (session
+# limit подписки) — версия 1, предположительная, без живого инцидента
+# (tasks/T082/ANSWER-1.md). Классификация идёт по подстроке в
+# объединённом stdout+stderr попытки, без учёта регистра.
+#
+# ПОРЯДОК ЗНАЧИМ и потому задан кортежем, а не отображением: специфичные
+# списки обязаны перехватывать текст раньше общего якоря «API Error:»
+# (иначе он забирал бы их в «системный кандидат»), а
+# «модель не поддерживается» — раньше всех: отказ детерминирован (CLI
+# старше модели), повторами не лечится, и любой из списков ниже увёл бы
+# его в три попытки с минутным бэкоффом.
+MODEL_UNSUPPORTED_SIGNATURE = "does not support this model"
+FAILURE_SIGNATURES = (
+    FailureSignature("model_unsupported", (MODEL_UNSUPPORTED_SIGNATURE,)),
+    FailureSignature("1a", ("403", "failed to authenticate")),
+    FailureSignature("1b", ("connection refused", "connectionrefused")),
+    FailureSignature("stream_broken", ("connection lost mid-response",)),
+    FailureSignature("session_limit", ("session limit", "usage limit",
+                                       "5-hour limit", "resets at")),
+    FailureSignature("system_candidate", ("api error:",)),
+)
+
+# Требуемая версия CLI из текста класса «модель не поддерживается»:
+# «API Error: 400 … version 2.1.251 or newer is required» (инцидент
+# 19.09). Формулировка своя у каждого CLI — потому и здесь.
+MODEL_REQUIRED_VERSION_RE = re.compile(
+    r"version\s+(\d+\.\d+\.\d+)\s+or newer is required", re.IGNORECASE)
 
 
 class ClaudeProvider(RoleExecutorProvider):
@@ -218,3 +277,180 @@ class ClaudeProvider(RoleExecutorProvider):
         """
         return [self.command()[0], "-p", prompt,
                 "--output-format", "stream-json", "--verbose"]
+
+    # --- разбор вывода ----------------------------------------------------
+
+    def parse_output_line(self, raw_line):
+        """Строка `--output-format stream-json` -> `StreamEvent` (SPEC
+        01M31ZHSA6HMH40C2JTDPQJQNZ, требования 1-2).
+
+        Собрано из разбора, жившего до задачи в
+        `agent_log.render_agent_line`/`render_block`/`_parse_stream_
+        event`/`_tool_use_calls`/`_tool_results` и `spend.parse_cost_
+        event`/`stream_usage_by_type`/`usage_tokens_by_type`: те же
+        значения на тех же строках (AC-4..AC-7), но ОДНИМ проходом —
+        до задачи одна строка потока разбиралась четырьмя независимыми
+        функциями, и разойтись они могли молча.
+
+        Строка, не начинающаяся с `{`, и строка с битым JSON — вывод,
+        который CLI написал мимо формата событий (stderr агента,
+        трейсбек): она уходит в лог КАК ЕСТЬ и ни на что больше не
+        влияет. Молча не глотаем ничего.
+        """
+        stripped = raw_line.lstrip()
+        if not stripped.startswith("{"):
+            return self._passthrough(raw_line)
+        try:
+            event = json.loads(stripped)
+        except json.JSONDecodeError:
+            return self._passthrough(raw_line)
+        if not isinstance(event, dict):
+            return self._passthrough(raw_line)
+
+        kind = event.get("type")
+        if kind == "assistant":
+            return self._assistant_event(event)
+        if kind == "user":
+            return self._user_event(event)
+        if kind == "result":
+            return self._result_event(event)
+        return EMPTY_EVENT
+
+    @staticmethod
+    def _passthrough(raw_line):
+        """Строка мимо формата событий: в лог как есть, больше нигде."""
+        return StreamEvent(raw_line, None, (), (), None, None)
+
+    def _assistant_event(self, event):
+        """`type: assistant`: текст, вызовы инструментов и учёт токенов.
+
+        Учёт токенов снимается НЕЗАВИСИМО от блоков сообщения (у Claude
+        он лежит в `message.usage`, а не в блоке): сообщение с
+        нечитаемым `content` всё равно потратило токены.
+        """
+        message = event.get("message")
+        message = message if isinstance(message, dict) else {}
+        content = message.get("content")
+        blocks = [b for b in content if isinstance(b, dict)] \
+            if isinstance(content, list) else []
+
+        texts = []
+        calls = []
+        rendered = []
+        for block in blocks:
+            rendered.append(self._render_block(block))
+            if block.get("type") == "text":
+                text = block.get("text", "").strip()
+                if text:
+                    texts.append(text)
+            elif block.get("type") == "tool_use":
+                calls.append(ToolCall(
+                    block.get("id"), block.get("name"),
+                    self._tool_argument(block, CALL_ARGUMENT_KEYS)))
+        return StreamEvent("".join(rendered),
+                           "\n".join(texts) if texts else None,
+                           tuple(calls), (),
+                           self._tokens_by_kind(message.get("usage")), None)
+
+    def _user_event(self, event):
+        """`type: user`: результаты вызовов инструментов.
+
+        В лог не идут намеренно (простыня вывода инструмента Оператору
+        не нужна), но метрике трения шага нужны: там вызов и его
+        результат смотрятся вместе — потому и отдельное поле события, а
+        не «погасили и забыли».
+        """
+        message = event.get("message")
+        content = message.get("content") if isinstance(message, dict) else None
+        if not isinstance(content, list):
+            return EMPTY_EVENT
+        results = []
+        for block in content:
+            if not isinstance(block, dict) or block.get("type") != "tool_result":
+                continue
+            text = block.get("content")
+            results.append(ToolResult(block.get("tool_use_id"),
+                                      text if isinstance(text, str) else "",
+                                      bool(block.get("is_error"))))
+        return StreamEvent("", None, (), tuple(results), None, None)
+
+    def _result_event(self, event):
+        """`type: result`: итог запуска — разбивка, цена, признак ошибки.
+
+        Цена отсутствует (поля нет, оно не число, отрицательное, `NaN`)
+        — `usd is None`, а не ноль: «запуск ничего не стоил» и «CLI цены
+        не сообщил» ветвятся по-разному в учёте стоимости (SPEC
+        требование 4).
+        """
+        from .. import spend
+        usd = spend.json_number(event.get("total_cost_usd"))
+        if usd is not None and usd < 0:
+            usd = None
+        tokens_by_kind = self._tokens_by_kind(event.get("usage"))
+        is_error = bool(event.get("is_error"))
+        text = event.get("result")
+        text = text if isinstance(text, str) else ("" if text is None
+                                                   else str(text))
+        log_text = (f"{ERROR_LINE_PREFIX}{text[:ERROR_TEXT_LIMIT]}\n"
+                    if is_error else "")
+        return StreamEvent(log_text, None, (), (), tokens_by_kind,
+                           RunResult(tokens_by_kind, usd, is_error, text))
+
+    @staticmethod
+    def _tokens_by_kind(usage):
+        """`usage` события -> разбивка по ОБЩИМ видам цены
+        (`models.PRICE_KINDS`); `None` — ни одного известного счётчика.
+
+        Только счётчики, реально присутствующие в событии (нулями за
+        отсутствующие не дополняется): «вида не было» и «вид нулевой» —
+        разные утверждения, и решает, что с этим делать, вызывающий.
+        """
+        if not isinstance(usage, dict):
+            return None
+        from .. import config
+        counts = {}
+        for key, kind in config.LEGACY_TOKEN_KIND_NAMES.items():
+            value = usage.get(key)
+            if isinstance(value, int) and not isinstance(value, bool):
+                counts[kind] = value
+        return counts or None
+
+    @staticmethod
+    def _tool_argument(block, keys):
+        """Аргумент вызова инструмента по первому найденному ключу
+        `keys` — см. `LOG_ARGUMENT_KEYS`/`CALL_ARGUMENT_KEYS` о том,
+        почему порядков два."""
+        args = block.get("input") or {}
+        if not isinstance(args, dict):
+            return ""
+        for key in keys:
+            value = args.get(key)
+            if value:
+                return value
+        return ""
+
+    @classmethod
+    def _render_block(cls, block):
+        """Блок сообщения ассистента -> строка Оператору (пустая — не
+        показываем). Из потока событий Оператору нужны два: что агент
+        сказал и что он делает инструментом, — по ним видно, работает
+        шаг или встал."""
+        kind = block.get("type")
+        if kind == "text":
+            text = block.get("text", "").strip()
+            return f"{text}\n" if text else ""
+        if kind == "tool_use":
+            arg = cls._tool_argument(block, LOG_ARGUMENT_KEYS)
+            flat = " ".join(str(arg).split())[:TOOL_ARGUMENT_LIMIT]
+            return (f"{TOOL_CALL_LINE_PREFIX}{block.get('name')} "
+                    f"{flat}").rstrip() + "\n"
+        return ""
+
+    # --- сигнатуры провалов ----------------------------------------------
+
+    def failure_signatures(self):
+        return FAILURE_SIGNATURES
+
+    def required_cli_version(self, text):
+        match = MODEL_REQUIRED_VERSION_RE.search(text)
+        return match.group(1) if match else None
