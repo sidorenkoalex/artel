@@ -55,7 +55,12 @@ def _mark_artifact_escalation(conn, task_id: str, detail: str) -> None:
     делает запись возврата, следующую за маркером, анкером рубежа
     переделки, и пред-advance не перечитывает ту же пометку/тот же батч
     раньше шага роли. `detail` — текст самой эскалации, как у
-    `pull.PULL_CONFLICT_ROLE_STEP_MARKER` (`orchestrator/pull.py`)."""
+    `pull.PULL_CONFLICT_ROLE_STEP_MARKER` (`orchestrator/pull.py`).
+
+    Точек вызова три: `spec_writing` (батч `QUESTIONS.md`, оба пути —
+    ветка-источник и диск), `tests_writing` (пометка `AC-n: escalate`) и
+    `_review_escalate` (`REVIEW.md status: escalate`, SPEC
+    01M31JWD10728N5YGWVQGWYACW, требование 1)."""
     store.journal(conn, task_id, "fsm",
                   fsm.ARTIFACT_ESCALATION_ROLE_STEP_MARKER, detail)
 
@@ -198,12 +203,28 @@ def _review_changes_requested(conn, task_id: str, t, state: str) -> bool:
 
 
 def _review_escalate(conn, task_id: str, t, tdir, state: str) -> bool:
+    # Третья точка эскалации по содержимому артефакта роли (SPEC
+    # 01M31JWD10728N5YGWVQGWYACW, требование 1) — тот же класс, что
+    # пометка `AC-n: escalate` и батч `QUESTIONS.md` выше: разрешить
+    # основание некому, кроме роли, и ответ Оператора обязан дойти до неё
+    # раньше следующего предварительного advance. Без маркера запись
+    # возврата пропускалась как `auto._ESCALATED_RETURN_DETAILS`, анкером
+    # оставался более ранний вход в `in_dev`, и после `answer` + `approve`
+    # задача уходила `in_dev -> verifying` по готовым артефактам, ни разу
+    # не позвав developer (инциденты 20.09 и 21.09; SPEC
+    # 01M2XFSJ1Z7BS6HR69SAT1D81Y счёл случай review невоспроизводимым).
+    # Маркер ставит ИМЕННО эта функция, не `review()` выше и не общий узел
+    # перехода в `escalated`: эскалация по бюджету из того же состояния
+    # собственного основания переделки не несёт и лишнего шага роли
+    # требовать не должна (требование 4).
     answer_baseline = fsm._answer_baseline_or_refuse(conn, task_id, tdir)
     if answer_baseline is None:
         return False
     store.update_task(conn, task_id, answer_baseline=answer_baseline)
+    detail = "эскалация от ревьювера"
     store.set_state(conn, task_id, "escalated", "fsm",
-                    expected_state=state, detail="эскалация от ревьювера")
+                    expected_state=state, detail=detail)
+    _mark_artifact_escalation(conn, task_id, detail)
     return False
 
 
