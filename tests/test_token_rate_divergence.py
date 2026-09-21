@@ -100,14 +100,25 @@ class JournalModelTest(unittest.TestCase):
         self.assertEqual(spend.journal_model(detail),
                          "arn:aws:bedrock:model/x")
 
-    def test_old_format_and_cli_default_label_have_no_model(self):
-        """Строка до 19.09 (поля нет) и метка «дефолт CLI» модели не
-        дают.
+    def test_line_written_before_the_model_field_has_no_model(self):
+        """Строка до 19.09 поля `model=` не несёт вовсе — модели нет.
 
-        Ловит мутацию: метка «дефолт CLI» читается как идентификатор
-        модели — в отчёте завелась бы псевдомодель «дефолт», а её шаги
-        смешались бы с настоящими (AC-5)."""
+        Ловит мутацию: разбор отдаёт на строке без поля пустую строку
+        (или саму `detail`) вместо `None` — старый журнал целиком завёл бы
+        в сверке пару с пустым идентификатором модели, и её коэффициент
+        считался бы по шагам неизвестно какой модели (AC-5)."""
         self.assertIsNone(spend.journal_model("попытка 1/3: стоимость"))
+
+    def test_cli_default_label_is_parsed_but_the_catalog_rejects_it(self):
+        """Метка «дефолт CLI» — не идентификатор модели, и отсекает её
+        каталог, а не разбор поля: `journal_model` читает значение поля
+        как есть («дефолт»), тариф по нему не разрешается, и строка
+        выпадает из сверки на фильтре каталога (AC-5).
+
+        Ловит мутацию: `model_tariff` деградирует в тариф по умолчанию
+        вместо `None` на неизвестном каталогу идентификаторе — в отчёте
+        завелась бы псевдомодель «дефолт», а её шаги считались бы по
+        чужой цене."""
         self.assertEqual(spend.journal_model("попытка 1/3, model=дефолт CLI:"),
                          "дефолт")
         self.assertIsNone(spend.model_tariff("дефолт"))

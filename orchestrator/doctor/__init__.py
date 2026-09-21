@@ -168,7 +168,7 @@ from .git_hooks import (HOOKS_PATH, HOOK_NAMES, GIT_HOOKS_CHECK,
 from .model_catalog import (check_models_catalog, check_models_local,
                             fix_models_local)
 from .model_tariffs import (FRESHNESS_CHECK, MODEL_CHANGE_CHECK,
-                            _tariff_age_days, _role_tariffs,
+                            _tariff_age_days, _resolved_roles,
                             check_model_tariff_freshness,
                             _foreign_model_steps,
                             check_model_tariff_vs_model_change)

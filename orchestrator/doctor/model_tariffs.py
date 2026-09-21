@@ -31,26 +31,26 @@ def _tariff_age_days(calibrated_at: str):
         return None
 
 
-def _role_tariffs() -> tuple:
-    """({модель: (дата тарифа, источник)}, роли с неразрешимой цепочкой) —
-    действующие тарифы всех agent-ролей, по одной записи на модель.
+def _resolved_roles(catalog, local) -> dict:
+    """{роль: разрешённая цепочка} — по одной записи на agent-роль.
 
-    Слои читаются ОДИН раз на весь перебор ролей
-    (`models.layers_or_none`), тем же приёмом, что `check_models_local`.
+    Слои читает и передаёт сюда вызывающий (`models.layers_or_none`),
+    тем же приёмом, что `check_models_local`: обе проверки ниже
+    спрашивают об одном и том же — действующая модель роли и дата её
+    тарифа, — и разрешать цепочку каждой роли по второму разу внутри
+    каждой из них значило бы читать оба файла слоёв на прогон `doctor`
+    вчетверо против нужного.
+
     Роль с неразрешимой цепочкой сюда не попадает: её причину называет
     строка `models-local`, дублировать её второй красной строкой незачем.
     """
-    catalog, local = doctor.models.layers_or_none()
-    tariffs, unresolved = {}, []
+    resolved = {}
     for role in doctor.agent_roles():
         try:
-            resolved = doctor.models.resolve_role(role, catalog, local)
+            resolved[role] = doctor.models.resolve_role(role, catalog, local)
         except doctor.models.ModelsError:
-            unresolved.append(role)
             continue
-        tariffs[resolved.model] = (resolved.calibrated_at,
-                                   resolved.tariff_source)
-    return tariffs, unresolved
+    return resolved
 
 
 def check_model_tariff_freshness() -> doctor.Check:
@@ -67,7 +67,12 @@ def check_model_tariff_freshness() -> doctor.Check:
     молчаливое «ок» (причину уже назвали `models-catalog`/`models-local`).
     """
     horizon = doctor.config.MODEL_TARIFF_MAX_AGE_DAYS
-    tariffs, _ = _role_tariffs()
+    catalog, local = doctor.models.layers_or_none()
+    # Одна запись на МОДЕЛЬ: две роли одного яруса разрешают один тариф,
+    # и сверять его дважды — две одинаковые строки в выводе.
+    tariffs = {resolved.model: (resolved.calibrated_at,
+                                resolved.tariff_source)
+               for resolved in _resolved_roles(catalog, local).values()}
     if not tariffs:
         return doctor.Check(FRESHNESS_CHECK, "skip",
                             "действующий тариф не разрешён ни для одной "
@@ -143,27 +148,26 @@ def check_model_tariff_vs_model_change(conn) -> doctor.Check:
     «дефолт CLI») в сверку не входит: отнести её к какой-либо модели
     нечем (тот же тихий пропуск, что и в `spend.known_cost_pairs`).
     """
-    tariffs, _ = _role_tariffs()
-    if not tariffs:
+    catalog, local = doctor.models.layers_or_none()
+    roles = _resolved_roles(catalog, local)
+    if not roles:
         return doctor.Check(MODEL_CHANGE_CHECK, "skip",
                             "действующий тариф не разрешён ни для одной "
                             "роли — сверять смену модели не с чем")
-    catalog, local = doctor.models.layers_or_none()
     latest = _foreign_model_steps(conn, catalog, local)
     findings = []
-    for role in doctor.agent_roles():
-        try:
-            resolved = doctor.models.resolve_role(role, catalog, local)
-        except doctor.models.ModelsError:
+    for (actor, model_id), ts in sorted(latest.items()):
+        resolved = roles.get(actor)
+        # Строка роли, которой в карте ярусов больше нет (или цепочка
+        # которой не разрешается), сверять не с чем — её причину уже
+        # назвала строка `models-local`.
+        if resolved is None or model_id == resolved.model:
             continue
-        for (actor, model_id), ts in sorted(latest.items()):
-            if actor != role or model_id == resolved.model:
-                continue
-            if ts[:len(resolved.calibrated_at)] <= resolved.calibrated_at:
-                continue
-            findings.append(
-                f"{role}: шаг на модели {model_id} от {ts} новее тарифа "
-                f"модели {resolved.model} (с {resolved.calibrated_at})")
+        if ts[:len(resolved.calibrated_at)] <= resolved.calibrated_at:
+            continue
+        findings.append(
+            f"{actor}: шаг на модели {model_id} от {ts} новее тарифа "
+            f"модели {resolved.model} (с {resolved.calibrated_at})")
     if findings:
         return doctor.Check(MODEL_CHANGE_CHECK, "warn",
                             f"тариф старше смены модели у роли: "

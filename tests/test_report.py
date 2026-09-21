@@ -249,6 +249,43 @@ class EscUsdTest(unittest.TestCase):
         self.assertEqual(report._usd(12.5), "$12.50")
 
 
+class MapGrowthEstimateHtmlTest(unittest.TestCase):
+    """`report._map_growth_estimate_html` — денежная оценка стоимости
+    карты за шаг (SPEC 01M1RGQV4DG2FX1B90W4EEETTR, AC-4; цена — тариф
+    МОДЕЛИ роли `developer`, SPEC 01M300A14KRHCFB0DQXVCBJEKF,
+    требование 1).
+
+    Тариф модели может не разрешиться (каталог без прейскуранта, роль без
+    яруса) — тогда `map_growth_cost_estimate` отдаёт `cost_usd: None`, и
+    это состояние обязано читаться как «считать не по чему», а не как
+    «бесплатно»."""
+
+    @staticmethod
+    def _estimate(cost_usd, is_estimate=False) -> dict:
+        return {"tokens": 120_000, "calls": 7, "cost_usd": cost_usd,
+                "is_estimate": is_estimate}
+
+    def test_unresolved_tariff_is_printed_in_words_not_as_zero_dollars(self):
+        """Ловит мутацию: печать `cost_usd` идёт через `_usd` без
+        условия — `_usd(None)` даёт «$0.00», и панель утверждает, что
+        карта достаётся бесплатно, вместо признания «цену не по чему
+        посчитать»."""
+        html = report._map_growth_estimate_html(self._estimate(None))
+
+        self.assertNotIn("$0.00", html)
+        self.assertIn("не разрешён", html)
+        self.assertIn("tokens=120000", html)
+
+    def test_resolved_tariff_is_printed_as_a_sum(self):
+        """Ловит мутацию: условие перевёрнуто (словами печатается
+        разрешённый тариф) — панель теряет саму цифру оценки, ради
+        которой строка и заведена."""
+        html = report._map_growth_estimate_html(self._estimate(1.25))
+
+        self.assertIn("$1.25", html)
+        self.assertNotIn("не разрешён", html)
+
+
 class CmdReportIntegrationTest(TmpRootTest):
     """Один сквозной прогон поверх настоящей БД — склейка store.py-чтений
     и рендера в файл; детальные критерии приёмки — в
