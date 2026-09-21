@@ -26,7 +26,7 @@ from datetime import datetime, timedelta, timezone
 # такая подмена падает с `AttributeError`. Про отчёт целиком планка
 # этого не спрашивает — и не могла бы: `token_rate_divergence` ниже
 # алерты на пути `cmd_report` как раз заводит (см. её докстроку).
-from . import agent_log, alerts, config, spend, store  # noqa: F401
+from . import agent_log, alerts, config, retro, spend, store  # noqa: F401
 
 # Гейты, где решение принимает только Оператор, независимо от политики
 # `gates.yaml` (`orchestrator/gates.py` применяет её ТОЛЬКО к acceptance;
@@ -648,6 +648,82 @@ def _metrics_html(steps: list, tasks: list, total_spent: float,
     )
 
 
+# ------------------------------------- токены рядом с долларами (AC-7..AC-9)
+#
+# Разбор записей токенов журнала живёт в `orchestrator/retro.py` — один
+# читатель на три места показа (`status`, RETRO, `report`), см. его
+# докстринг. Здесь только вёрстка двух разрезов.
+
+def _token_cost_row_html(marker: str, usd: str, total: int | None,
+                         by_kind: dict) -> str:
+    """Строка разреза: адрес (задача или роль), доллары и токены по видам
+    РЯДОМ, в одном элементе (требования 4-5).
+
+    Записей токенов нет — прочерк вместо суммы и вместо разбивки, не
+    нули: `input=0 … cache_read=0` читалось бы как «шаг прошёл
+    бесплатно». Сумма и разбивка показываются независимо: у строки,
+    чьи шаги записаны прежним видом записи, сумма известна, а разбивки
+    нет (REVIEW.md итерации 1, R1-F1).
+
+    Формулировку обеих частей даёт `retro.tokens_detail_text` — там же,
+    где и в RETRO: разрез ролей отчёта суммирует ВЕСЬ журнал пульта, и
+    исторические записи без разбивки из него не исчезнут, так что
+    неполная разбивка обязана называть свою сумму явно (REVIEW.md
+    итерации 2, R2-F1)."""
+    tokens_part = _esc(retro.tokens_detail_text(total, by_kind))
+    return (f'<div class="metric-row">{_esc(marker)}: {usd} · '
+            f'{tokens_part}</div>')
+
+
+def _tokens_by_task(tasks: list, steps: list) -> str:
+    """Разрез задач (AC-7/AC-9): каждая задача пульта — своей строкой, с
+    её деньгами и суммой её записей токенов по видам.
+
+    Все задачи, а не только закрытые: разрез отвечает на вопрос «во что
+    обошлась задача», и живая задача ровно так же его задаёт."""
+    if not tasks:
+        return '<p class="empty">Задач нет.</p>'
+    by_task: dict = {}
+    for s in steps:
+        by_task.setdefault(s["task_id"], []).append(s)
+    rows = []
+    for row in tasks:
+        task_steps = by_task.get(row["id"], [])
+        rows.append(_token_cost_row_html(
+            row["id"], _usd(row["spent_usd"]),
+            retro.task_token_total(task_steps),
+            retro.task_token_breakdown(task_steps)))
+    return "".join(rows)
+
+
+def _tokens_by_role(steps: list) -> str:
+    """Разрез ролей (AC-8): роль — своей строкой, деньги и токены
+    просуммированы поперёк ВСЕХ задач пульта.
+
+    Источник тот же, что у блока стоимости RETRO (`retro.actor_costs`):
+    деньги по `agent run finished`, токены по обоим носителям суммы, —
+    две копии этой агрегации разошлись бы между RETRO и отчётом.
+    Оттуда же и прочерк вместо денег у роли, чью стоимость журнал не
+    записал (REVIEW.md итерации 1, R1-F2)."""
+    rows = retro.actor_costs(steps)
+    if not rows:
+        return ('<p class="empty">Шагов с учтённой стоимостью нет.</p>')
+    return "".join(_token_cost_row_html(row.actor, retro.usd_text(row.usd),
+                                        row.total, row.tokens)
+                   for row in rows)
+
+
+def _token_cost_html(tasks: list, steps: list) -> str:
+    return (
+        '<div class="metrics">'
+        '<h3>В разрезе задач</h3>'
+        f'{_tokens_by_task(tasks, steps)}'
+        '<h3>В разрезе ролей</h3>'
+        f'{_tokens_by_role(steps)}'
+        '</div>'
+    )
+
+
 def _friction_html(tasks: list, steps: list) -> str:
     """Блок метрики «трение» (tasks/T095/SPEC.md, требование 3): значения
     по последним задачам и тренд. Источник — журнал `steps` (шаги,
@@ -846,6 +922,8 @@ def _render(tasks: list, steps: list, alerts: list, total_spent: float,
         f"{_closed_tasks_html(tasks, steps)}</section>\n"
         '<section class="panel"><h2>Метрики гейтовой нагрузки</h2>'
         f"{_metrics_html(steps, tasks, total_spent, total_estimate, divergence)}</section>\n"
+        '<section class="panel"><h2>Токены и стоимость</h2>'
+        f"{_token_cost_html(tasks, steps)}</section>\n"
         '<section class="panel"><h2>Метрика «трение»</h2>'
         f"{_friction_html(tasks, steps)}</section>\n"
         '<section class="panel"><h2>Рост карты кодовой базы</h2>'

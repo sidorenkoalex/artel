@@ -19,7 +19,16 @@ from . import config, gitcmd, targets, yamlmini
 
 CACHE_PATH = config.ROOT / ".artel" / "retro-corpus-cache.json"
 
+#: Поля frontmatter RETRO, по наличию которых снапшот ОПОЗНАЁТСЯ как
+#: ретро: без всех трёх файл в корпус не берётся.
 RETRO_FIELDS = ("operator", "model", "artel_sha")
+
+#: Поля, которые собираются, ЕСЛИ снапшот их несёт (SPEC
+#: 01M31ZHWJWRSACYMRWTCPBC0DM, требование 6). Отдельный список, а не
+#: четвёртый элемент `RETRO_FIELDS`: сделать провайдера обязательным
+#: значило бы молча вычистить из кэша ВЕСЬ исторический корпус — все
+#: RETRO, закрытые до появления поля, перестали бы опознаваться.
+OPTIONAL_RETRO_FIELDS = ("provider",)
 
 
 def _target_workspace(target: str):
@@ -41,7 +50,11 @@ def _local_artifact_refs(target: str) -> list[str]:
 
 def _retro_entry(target: str, ref: str) -> dict | None:
     """Запись кэша из снапшота `ref` локального клона `target`; `None` —
-    ни один файл снапшота не несёт frontmatter с тремя полями RETRO."""
+    ни один файл снапшота не несёт frontmatter с тремя полями RETRO.
+
+    Необязательные поля (`OPTIONAL_RETRO_FIELDS`) попадают в запись
+    только когда frontmatter их несёт: ключ со значением `None` читатель
+    корпуса не отличил бы от «провайдер неизвестен как факт»."""
     workspace = _target_workspace(target)
     task_id = ref.rsplit("/", 1)[-1]
     files = gitcmd.in_repo(workspace, "ls-tree", "-r", "--name-only", ref)
@@ -56,7 +69,9 @@ def _retro_entry(target: str, ref: str) -> dict | None:
         meta = yamlmini.frontmatter(show.stdout)
         if meta and all(field in meta for field in RETRO_FIELDS):
             return {"task_id": task_id, "target": target,
-                   **{field: meta[field] for field in RETRO_FIELDS}}
+                   **{field: meta[field] for field in RETRO_FIELDS},
+                   **{field: meta[field] for field in OPTIONAL_RETRO_FIELDS
+                      if field in meta}}
     return None
 
 

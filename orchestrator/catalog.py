@@ -8,8 +8,8 @@ from pathlib import Path
 from scripts import guard
 
 from . import (alerts, artifact_branch, artifacts, budget, config, gitcmd,
-              idgen, liveness, merge_queue, models, providers, runner, store,
-              zone_lock)
+              idgen, liveness, merge_queue, models, providers, retro, runner,
+              store, zone_lock)
 
 # ГОСТ-подобная транслитерация: только stdlib, без внешних зависимостей.
 # ъ/ь пропускаются; ё → yo; щ → sch; ю → yu; я → ya.
@@ -527,6 +527,34 @@ def _division_suffix(rows, r) -> str:
     return f"  [часть {n}/{len(sibling_ids)} родителя {parent_id}]"
 
 
+def _tokens_field(conn, task_id: str) -> str:
+    """Суммарное число токенов задачи для строки `status` — либо прочерк,
+    если записей токенов у задачи нет (SPEC 01M31ZHWJWRSACYMRWTCPBC0DM,
+    требования 1 и 5).
+
+    Поле выровнено по правому краю по ширине десятизначного числа:
+    на журнале пульта самая дорогая задача несёт 263 335 360 токенов
+    (девять знаков), и прежняя ширина 8 выталкивала число у каждой
+    двенадцатой строки (REVIEW.md итерации 2, R2-F2). Ровной колонкой
+    вывод от этого всё равно не становится — соседнее
+    `${spent}/{budget}` само переменной ширины; выравнивание здесь
+    держит типичные числа в одном столбце, а не обещает колонку на
+    любом числе. Разбивка по видам сюда не идёт намеренно — на задачу
+    приходится ровно одна строка (AC-1), а место для видов есть в RETRO
+    и в `report`.
+
+    Считается по журналу (`store.task_steps`) — тем же приёмом, каким
+    журнал уже читают `report._all_steps` и `spend.known_cost_pairs`:
+    специализированной выборки в `store.py` нет, а заводить её эта задача
+    не вправе.
+
+    Источник суммы — оба носителя журнала (`retro.task_token_total`):
+    задача, чьи шаги записаны прежним видом записи, без разбивки по
+    видам, показывает своё число, а не прочерк «записей нет»."""
+    total = retro.task_token_total(store.task_steps(conn, task_id))
+    return f"{retro.total_tokens_text(total):>10}"
+
+
 def cmd_status() -> None:
     conn = store.db()
     rows = store.all_tasks(conn)
@@ -548,10 +576,12 @@ def cmd_status() -> None:
         merge_wait = merge_queue.wait_suffix(conn, r)
         wave_breaker = _wave_breaker_suffix(r, wave_breaker_open)
         division = _division_suffix(rows, r)
+        tokens = _tokens_field(conn, r["id"])
         print(
             f"{r['id']}  {r['state']:<13} "
             f"ревью {r['review_iters']}/{config.LIMIT_REVIEW_ITERS}"
-            f"  ${r['spent_usd']:.2f}/{r['budget_usd']:.2f}  {r['title']}"
+            f"  ${r['spent_usd']:.2f}/{r['budget_usd']:.2f}"
+            f"  токенов {tokens}  {r['title']}"
             f"{flag}{mark}{holder}{zone}{wave_breaker}{division}{merge_wait}"
         )
 
