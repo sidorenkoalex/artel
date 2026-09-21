@@ -126,19 +126,18 @@ class CatalogTest(unittest.TestCase):
                 self.assertTrue(model.price_date, model_id)
 
     def test_opus_price_matches_the_calibrated_token_rate(self):
-        """Ловит мутацию: прейскурант opus-5 разошёлся с калибровкой
-        20.09 (`config.TOKEN_RATES`, цена за токен × миллион) — учёт
-        расхода и каталог начали бы жить разными числами (AC-2)."""
+        """Ловит мутацию: прейскурант opus-5 в каталоге разошёлся с
+        калибровкой 20.09 ($5/$25/$6.25/$0.50 за миллион токенов,
+        сошедшейся с фактом CLI по 93 шагам с коэффициентом 1.009) — учёт
+        расхода поехал бы на числах, которых никто не сверял (AC-2).
+
+        Сверка идёт с литералом, а не с таблицей курса по роли: с задачи
+        01M300A14KRHCFB0DQXVCBJEKF цена живёт ТОЛЬКО здесь, в каталоге, и
+        второго источника тех же чисел, с которым её можно было бы
+        сличить, в пульте больше нет."""
         opus = self.catalog.models["claude-opus-5"]
-        rate = config.TOKEN_RATES["developer"]
 
         self.assertEqual(opus.list_price, models.Tariff(5.0, 25.0, 6.25, 0.5))
-        self.assertEqual(
-            opus.list_price,
-            models.Tariff(rate["input_usd_per_token"] * 1_000_000,
-                          rate["output_usd_per_token"] * 1_000_000,
-                          rate["cache_creation_usd_per_token"] * 1_000_000,
-                          rate["cache_read_usd_per_token"] * 1_000_000))
 
     def test_fable_minimum_is_the_incident_version(self):
         """Ловит мутацию: минимум `claude-fable-5-1` уехал с 2.1.251 —
