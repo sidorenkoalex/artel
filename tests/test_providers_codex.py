@@ -183,6 +183,36 @@ class CuratedHomeTest(unittest.TestCase):
             [line for line in text.splitlines()
              if line.strip().startswith("[") and "mcp" in line.lower()], [])
 
+    def test_every_disabled_feature_is_false_in_the_curated_config(self):
+        """Ловит мутацию: из `config.toml` пропала (переименована,
+        переключена в `true`) хотя бы одна из одиннадцати функций —
+        курируемый дом роли перестаёт нести запрет, ради которого заведён,
+        а шапка самого файла и `docs/stack.md` продолжают утверждать, что
+        совпадение половин сверяет тест (REVIEW.md итерации 1, R1-F2:
+        единственной проверкой этого свойства была приёмочная планка,
+        уходящая вместе с каталогом задачи)."""
+        pairs = _toml_pairs(
+            (self.reference() / "config.toml").read_text(encoding="utf-8"))
+
+        for feature in codex_provider.DISABLED_FEATURES:
+            with self.subTest(feature=feature):
+                self.assertEqual(pairs.get(f"features.{feature}"), "false",
+                                 pairs)
+        self.assertEqual([key for key, value in pairs.items()
+                          if value == "true"], [], pairs)
+
+    def test_curated_config_repeats_the_command_overrides_pair_for_pair(self):
+        """Ловит мутацию: пара `-c`-переопределения переименована в
+        команде шага, а дом роли остался прежним (или наоборот) — сверка
+        AC-5 шла только со стороны команды, и правка одного лишь
+        `config.toml` обеих половин не рассорила бы."""
+        pairs = _toml_pairs(
+            (self.reference() / "config.toml").read_text(encoding="utf-8"))
+
+        for key, value in codex_provider.CONFIG_OVERRIDES:
+            with self.subTest(key=key):
+                self.assertEqual(pairs.get(key), value.lower(), pairs)
+
     def test_agents_md_explains_the_home_and_not_a_step_task(self):
         """Ловит мутацию: файл заведён заглушкой или скопирован у Claude
         без правки адресов — роль на Codex читает объяснение про чужой
@@ -582,6 +612,40 @@ class IsolationSmokeTest(TmpRootTest):
         source = inspect.getsource(doctor.all_checks)
 
         self.assertIn("provider_isolation_smokes", source)
+
+
+class ForeignSecretCheckTest(TmpRootTest):
+    """Секрет чужого провайдера в окружении шага — симметрия обеих
+    сторон белого списка манифеста (REVIEW.md итерации 1, R1-F4)."""
+
+    def setUp(self):
+        super().setUp()
+        _drop_ambient(self, "OPENAI_API_KEY", *CLAUDE_SECRETS)
+
+    def test_openai_key_under_a_claude_role_is_a_yellow_line(self):
+        """Ловит мутацию: жёлтая строка заведена только со стороны Codex
+        (секрет Claude под `codex`), а обратный случай молчит — ключ
+        OpenAI Оператора копируется общим белым списком в окружение
+        КАЖДОГО шага роли на Claude, и `doctor` об этом не говорит
+        ничего."""
+        clean = doctor.check_foreign_provider_secrets()
+        self.assertEqual(clean.status, "ok", clean.detail)
+
+        with mock.patch.dict(os.environ, {"OPENAI_API_KEY": AMBIENT_KEY}):
+            check = doctor.check_foreign_provider_secrets()
+
+        self.assertEqual(check.status, "warn", check.detail)
+        self.assertIn("OPENAI_API_KEY", check.detail)
+        self.assertNotIn(AMBIENT_KEY, check.detail)
+
+    def test_the_check_is_wired_into_all_checks(self):
+        """Ловит мутацию: проверка написана, но не подключена к
+        `all_checks` — про чужой секрет в шаге не сказал бы никто (тот же
+        приём сверки подключения, что у `check_map_growth`)."""
+        import inspect
+
+        self.assertIn("check_foreign_provider_secrets",
+                      inspect.getsource(doctor.all_checks))
 
 
 if __name__ == "__main__":

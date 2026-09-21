@@ -230,10 +230,12 @@ class PreflightGateTest(_ManifestSandbox):
             return f"/artel-test-stub-bin/{name}"
         return fake
 
-    def check(self, codex_found: bool):
+    def check(self, codex_found: bool, role: str = ROLE):
+        """Проверка предполёта ШАГА роли `role`; `role=None` — прогон
+        `doctor`, который смотрит на все agent-роли сразу."""
         with mock.patch.object(doctor.shutil, "which",
                                self.which(codex_found)):
-            return doctor.check_model_provider_cli()
+            return doctor.check_model_provider_cli(role)
 
     def test_check_is_silent_and_green_while_no_tier_needs_a_foreign_cli(self):
         """Ловит мутацию: проверка спрашивает `shutil.which` по всему
@@ -257,7 +259,7 @@ class PreflightGateTest(_ManifestSandbox):
         `OSError`'ом внутри `check_git_identity` — исход шага назван
         жёлтой строкой «окружение роли не подготовлено» вместо отказа, и
         Оператор чинит не то."""
-        self.use_tier(CODEX_MODEL)
+        self.use_tier(CODEX_MODEL, provider="codex")
 
         check = self.check(codex_found=False)
 
@@ -266,6 +268,56 @@ class PreflightGateTest(_ManifestSandbox):
         self.assertIn("не найден", check.detail)
 
         self.assertEqual(self.check(codex_found=True).status, "ok")
+
+    def test_role_provider_disagreeing_with_its_model_blocks_the_step(self):
+        """Ловит мутацию: сверяется только наличие CLI, а не согласие
+        «исполнитель шага ↔ провайдер модели» (REVIEW.md итерации 1,
+        R1-F1) — роль с `provider: claude` и ярусом, разрешившимся в
+        модель Codex, уходит в `claude --model gpt-…`: зелёный предполёт,
+        оплаченная провальная попытка и расход по тарифу чужого вендора.
+        Установленный CLI Codex тут ничего не чинит — проверка идёт с
+        `codex_found=True`."""
+        self.use_tier(CODEX_MODEL, provider="claude")
+
+        check = self.check(codex_found=True)
+
+        self.assertEqual(check.status, "fail", check.detail)
+        for marker in (ROLE, "claude", "codex", CODEX_MODEL):
+            with self.subTest(marker=marker):
+                self.assertIn(marker, check.detail)
+
+    def test_both_halves_are_named_in_one_line_and_the_mismatch_is_per_role(self):
+        """Ловит мутацию: половины проверки подменяют друг друга —
+        расхождение провайдеров вытесняет из текста ненайденный CLI (и
+        Оператор, поставив CLI, получает второй отказ на ровном месте),
+        либо расхождение считается по всем ролям сразу и шаг
+        согласованной роли блокируется чужой ошибкой."""
+        self.use_tier(CODEX_MODEL, provider="claude")
+
+        both = self.check(codex_found=False)
+
+        self.assertEqual(both.status, "fail", both.detail)
+        self.assertIn("не найден", both.detail)
+        self.assertIn("разошлись", both.detail)
+
+        # Роль приведена в соответствие, остальные — нет: её шаг идёт,
+        # прогон `doctor` (без роли) по-прежнему красный.
+        self.use_tier(CODEX_MODEL, provider="codex")
+
+        self.assertEqual(self.check(codex_found=True).status, "ok")
+        whole = self.check(codex_found=True, role=None)
+        self.assertEqual(whole.status, "fail", whole.detail)
+        self.assertIn("reviewer", whole.detail)
+
+    def test_the_check_is_wired_into_the_doctor_run(self):
+        """Ловит мутацию: проверка подключена только к предполёту шага —
+        `doctor` молчит о несогласованной паре, и Оператор узнаёт о ней
+        отказом первого же запуска вместо зелёного/красного прогона
+        диагностики (REVIEW.md итерации 1, R1-F1)."""
+        import inspect
+
+        self.assertIn("check_model_provider_cli",
+                      inspect.getsource(doctor.all_checks))
 
     def test_the_check_is_part_of_the_blocking_group_of_preflight(self):
         """Ловит мутацию: проверка написана, но не подключена к

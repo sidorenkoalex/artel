@@ -194,10 +194,51 @@ def check_codex_role_home() -> doctor.Check:
                                 doctor.providers.get("codex"))
 
 
-def check_model_provider_cli() -> doctor.Check:
+def model_provider_mismatches(role: str | None = None) -> list:
+    """[(роль, провайдер роли, провайдер её модели, модель)] — роли, у
+    которых ИСПОЛНИТЕЛЬ шага и провайдер разрешившейся модели разные
+    (REVIEW.md итерации 1, R1-F1).
+
+    Исполнителя шага выбирает поле `provider:` роли в `roles.yaml`
+    (`providers.for_role`, `runner._spawn_and_wait`), а тариф, минимум
+    версии CLI и сам идентификатор модели приходят из цепочки «роль →
+    ярус → модель → провайдер». Совпадать эти две половины обязаны:
+    иначе шаг уходит в CLI одного провайдера с идентификатором модели
+    другого — оплаченная попытка, отказ от чужого CLI и расход, учтённый
+    по чужому тарифу.
+
+    `role` задан — предмет только эта роль (предполёт конкретного шага);
+    `None` — все agent-роли (строка `doctor`).
+
+    Нечитаемая карта исполнителей и неразрешимая цепочка дают ПУСТОЙ
+    список, а не исключение: о них говорят собственные именованные
+    отказы (`check_role_providers`, `runner._refuse_before_start`), и
+    подменять их здесь трейсбеком предполёта незачем — тот же приём
+    защитной деградации, что у `stack.model_providers`.
+    """
+    names = [role] if role is not None else agent_roles()
+    try:
+        pairs = doctor.providers.role_providers(names)
+    except doctor.roles.RolesError:
+        return []
+    catalog, local = doctor.models.layers_or_none()
+    found = []
+    for name, provider_name in pairs:
+        try:
+            resolved = doctor.models.resolve_role(name, catalog, local)
+        except doctor.models.ModelsError:
+            continue
+        if resolved.provider != provider_name:
+            found.append((name, provider_name, resolved.provider,
+                          resolved.model))
+    return found
+
+
+def check_model_provider_cli(role: str | None = None) -> doctor.Check:
     """CLI провайдеров, в модели которых разрешаются ярусы agent-ролей,
-    найдены — блокирующая проверка предполёта (SPEC
-    01M32NH6P053978AER66P0X4GN, требование 6, AC-13).
+    найдены И провайдер роли не разошёлся с провайдером её модели —
+    блокирующая проверка предполёта (SPEC 01M32NH6P053978AER66P0X4GN,
+    требование 6, AC-13).
 
     Смотрит только НЕОБЯЗАТЕЛЬНУЮ часть манифеста: обязательные
     инструменты закрыты `check_cli_found` провайдера и резолвом
@@ -206,29 +247,70 @@ def check_model_provider_cli() -> doctor.Check:
     `check_git_identity` — причина верная, но исход шага не назван, и
     Оператор читал бы жёлтую строку про «окружение роли» вместо отказа.
 
+    Вторая половина — расхождение «провайдер роли ≠ провайдер её модели»
+    (REVIEW.md итерации 1, R1-F1): исполнителя шага выбирает поле
+    `provider:` роли, а идентификатор модели и тариф приходят из
+    цепочки яруса, и разойтись им нельзя. До появления раздела `codex` в
+    каталоге такая пара останавливалась сама («модель вне каталога» —
+    `catalog_model` не находил идентификатор чужого вендора), а с
+    появлением раздела этот отказ исчез: шаг ушёл бы в
+    `claude --model gpt-…` — оплаченная попытка, отказ от чужого CLI и
+    расход по тарифу чужого вендора.
+
+    Обе половины называются ОДНОЙ строкой и в этом порядке: отсутствие
+    CLI — то, что чинится установкой, и оно же единственная причина,
+    по которой шаг не стартует на пульте БЕЗ второго CLI; расхождение —
+    то, что чинится правкой двух файлов. Когда верны оба (ярус переведён,
+    а `roles.yaml` нет, и CLI не поставлен), Оператор обязан прочитать
+    оба факта, а не чинить их по очереди двумя прогонами.
+
+    Ненайденный CLI перечисляется по ВСЕМ ролям (`role` в этой половине
+    не участвует): резолв объявленных инструментов
+    (`runner._resolve_declared_tools`) идёт по всему манифесту, и шаг
+    любой роли отказывает на отсутствующем инструменте любой другой.
+    Расхождение, наоборот, предмет конкретной роли — по ней предполёт
+    шага её и спрашивает.
+
     Стоит в блокирующей группе и не заводит ни одного подпроцесса
-    (`shutil.which`): `preflight_checks` платит за строки только до
-    первого провала, а тесты требуют от провального предполёта вообще ни
-    одного subprocess-вызова.
+    (`shutil.which` + чтение файлов слоёв): `preflight_checks` платит за
+    строки только до первого провала, а тесты требуют от провального
+    предполёта вообще ни одного subprocess-вызова.
     """
     demanded = doctor.stack.demanded_optional_tools()
     missing = [name for name in demanded
                if doctor.shutil.which(name) is None]
+    failures = []
     if missing:
-        return doctor.Check(
-            "model-provider-cli", "fail",
+        failures.append(
             f"объявленный инструмент не найден в PATH/системе: "
             f"{', '.join(missing)} — ярус agent-роли разрешается в модель "
             f"его провайдера; установи CLI либо смени модель яруса в "
             f"{doctor.config.MODELS_LOCAL}")
+    mismatched = doctor.model_provider_mismatches(role)
+    if mismatched:
+        named = "; ".join(
+            f"роль {name}: исполнитель шага — {own}, но ярус разрешается "
+            f"в модель {model} провайдера {model_provider}"
+            for name, own, model_provider, model in mismatched)
+        failures.append(
+            f"провайдер роли и провайдер её модели разошлись — {named}: "
+            f"шаг ушёл бы чужим CLI с идентификатором чужой модели; "
+            f"приведи в соответствие ярус в {doctor.config.MODELS_LOCAL} "
+            f"либо поле `provider:` роли в roles.yaml (путь защищённый — "
+            f"меняет Оператор отдельным MR)")
+    if failures:
+        return doctor.Check("model-provider-cli", "fail",
+                            "; ".join(failures))
     if not demanded:
         return doctor.Check(
             "model-provider-cli", "ok",
             "ни один ярус agent-роли не разрешается в модель стороннего "
-            "провайдера — сторонних CLI пульту не нужно")
+            "провайдера — сторонних CLI пульту не нужно; провайдер роли и "
+            "провайдер её модели совпадают")
     return doctor.Check("model-provider-cli", "ok",
                         f"CLI провайдеров моделей ролей на месте: "
-                        f"{', '.join(sorted(demanded))}")
+                        f"{', '.join(sorted(demanded))}; провайдер роли и "
+                        f"провайдер её модели совпадают")
 
 
 def _role_home_diff(reference: Path, deployed: Path) -> set[str]:
@@ -497,7 +579,10 @@ def preflight_checks(role: str, target: str) -> list[doctor.Check]:
     # всегда — ярус роли с `provider: claude` вправе разрешаться в
     # модель Codex, и тогда шаг обязан остановиться до старта агента с
     # причиной, называющей ненайденный инструмент, а не платить попыткой.
-    checks.append(doctor.check_model_provider_cli())
+    # Роль передаётся явно (REVIEW.md итерации 1, R1-F1): расхождение
+    # «исполнитель шага ≠ провайдер модели» — предмет КОНКРЕТНОГО шага, и
+    # останавливать им чужие роли не за что.
+    checks.append(doctor.check_model_provider_cli(role))
     checks.append(provider.check_token(role))
     checks.append(doctor.check_disk_space())
     checks.append(doctor.check_target_layout(target))

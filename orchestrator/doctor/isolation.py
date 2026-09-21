@@ -275,6 +275,58 @@ def _codex_environment_leaks(provider, role: str):
     return env, leaks
 
 
+FOREIGN_SECRETS_CHECK = "foreign-provider-secrets"
+
+
+def check_foreign_provider_secrets() -> doctor.Check:
+    """Секреты ЧУЖИХ провайдеров в окружении шага — по одной строке на
+    весь `doctor`, симметрично жёлтой строке смока Codex (REVIEW.md
+    итерации 1, R1-F4).
+
+    Белый список манифеста (`stack.ROLE_ENV_ALLOWLIST`) общий на пульт, а
+    не свой у каждого провайдера: заданный Оператором `OPENAI_API_KEY`
+    копируется в окружение КАЖДОГО шага, в том числе шага роли на
+    Claude, — ровно так же, как токен подписки Claude достаётся шагу на
+    Codex (требование 12, AC-18). Про второй случай говорит
+    `codex_isolation_smoke`, про первый до этой строки не говорил никто:
+    у провайдера по умолчанию своего смока нет, а общий
+    `isolation_smoke` про ключи других провайдеров не знает.
+
+    Отдельная строка, а не пункт `isolation_smoke`: там предмет —
+    «шаг достаёт то, чего не должен» (маркеры слоёв, хуки, MCP), и его
+    зелёность сверяют регрессии, заведённые до реестра провайдеров;
+    здесь — «в шаге лежит лишний секрет», состояние машины Оператора,
+    которое лечится не кодом шага, а сужением белого списка (отдельная
+    задача линии).
+
+    Предупреждение, а не провал: сужение списка по провайдеру требует
+    правки `orchestrator/runner.py` и в эту задачу не входит — краснеть
+    на то, чего пульт сегодня не умеет иначе, значило бы красить
+    `doctor` навсегда.
+    """
+    found = []
+    for role in doctor.agent_roles():
+        try:
+            provider = doctor.providers.for_role(role)
+        except doctor.providers.UnknownProviderError:
+            # Про незарегистрированного провайдера роли говорит красная
+            # строка `check_role_providers` — дублировать её нечем.
+            continue
+        names = _foreign_provider_secrets(provider)
+        if names:
+            found.append(f"{role} ({provider.name}): {', '.join(names)}")
+    if not found:
+        return doctor.Check(
+            FOREIGN_SECRETS_CHECK, "ok",
+            "секретов других провайдеров в окружении шагов ролей нет")
+    return doctor.Check(
+        FOREIGN_SECRETS_CHECK, "warn",
+        f"общий белый список манифеста копирует в окружение шага секрет "
+        f"ДРУГОГО провайдера — {'; '.join(found)}; значения не читаются и "
+        f"не печатаются, сужение списка по провайдеру — отдельная задача "
+        f"линии провайдеров")
+
+
 def _foreign_provider_secrets(provider) -> list:
     """Имена ambient-переменных с секретами ДРУГИХ провайдеров реестра,
     которые общий белый список манифеста скопирует в окружение шага

@@ -125,7 +125,8 @@ from .preflight import (check_cli_found, cli_version, check_cli_version,
                         check_token, check_git_identity, check_disk_space,
                         codex_cli_version, check_codex_cli_found,
                         check_codex_cli_version, check_codex_api_key,
-                        check_codex_role_home, check_model_provider_cli,
+                        check_codex_role_home, model_provider_mismatches,
+                        check_model_provider_cli,
                         _role_home_diff, _provider_home_check,
                         check_role_home_reference,
                         check_target_layout, TARGET_WRAPPER_MARKERS,
@@ -133,7 +134,9 @@ from .preflight import (check_cli_found, cli_version, check_cli_version,
                         check_role_providers, provider_preflight_checks,
                         preflight_checks)
 from .isolation import (isolation_smoke, CODEX_SMOKE_CHECK,
-                        provider_isolation_smokes, codex_isolation_smoke)
+                        provider_isolation_smokes, codex_isolation_smoke,
+                        FOREIGN_SECRETS_CHECK, check_foreign_provider_secrets,
+                        _foreign_provider_secrets)
 from .live_smoke import live_smoke, _live_smoke_run
 from .recovery import recovery_check
 from .auto_ack import (_BRANCH_ALERT_RE, _DIR_ALERT_RE, _WORKTREE_ALERT_RE,
