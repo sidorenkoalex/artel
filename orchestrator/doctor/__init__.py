@@ -94,9 +94,17 @@ from collections import namedtuple
 from pathlib import Path
 
 from .. import (alerts, artifact_branch, canary, ci, coldstart, config,
-                fixation, gitcmd, liveness, merge_lock, models, notes,
-                pool_seal, projects, providers, repo_context, roles, runner,
-                snapshot, spend, stack, store, targets, workspace, zone_lock)
+                fixation, gitcmd, keychain, liveness, merge_lock, models,
+                notes, pool_seal, projects, providers, repo_context, roles,
+                runner, snapshot, spend, stack, store, targets, workspace,
+                zone_lock)
+# Провайдер `codex` — ЕДИНСТВЕННЫЙ провайдер, чьи проверки этот пакет
+# ведёт поимённо (его имена строк не совпадают с именами Claude, SPEC
+# 01M32NH6P053978AER66P0X4GN, требование 12), поэтому его константы
+# (имя CLI, минимум версии, перечень выключаемых функций) связываются
+# здесь же, в фасаде, тем же приёмом, что и остальные коллаборанты:
+# подмодули читают их через `doctor.codex_provider.<имя>`.
+from ..providers import codex as codex_provider
 
 # status: "ok" | "warn" | "fail" | "skip" ("skip" — честный пропуск проверки,
 # требование 9: сверка forge-политики без `gh`/сети — не провал и не ок).
@@ -115,12 +123,17 @@ LEASE_DEAD_RECHECK_SEC = 0.05
 
 from .preflight import (check_cli_found, cli_version, check_cli_version,
                         check_token, check_git_identity, check_disk_space,
-                        _role_home_diff, check_role_home_reference,
+                        codex_cli_version, check_codex_cli_found,
+                        check_codex_cli_version, check_codex_api_key,
+                        check_codex_role_home, check_model_provider_cli,
+                        _role_home_diff, _provider_home_check,
+                        check_role_home_reference,
                         check_target_layout, TARGET_WRAPPER_MARKERS,
                         check_target_wrapper, agent_roles,
                         check_role_providers, provider_preflight_checks,
                         preflight_checks)
-from .isolation import isolation_smoke
+from .isolation import (isolation_smoke, CODEX_SMOKE_CHECK,
+                        provider_isolation_smokes, codex_isolation_smoke)
 from .live_smoke import live_smoke, _live_smoke_run
 from .recovery import recovery_check
 from .auto_ack import (_BRANCH_ALERT_RE, _DIR_ALERT_RE, _WORKTREE_ALERT_RE,

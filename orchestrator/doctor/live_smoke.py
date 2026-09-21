@@ -30,9 +30,16 @@ def live_smoke(conn, role: str = "developer") -> doctor.Check:
     находок (по построению) нет.
     """
     check = doctor._live_smoke_run(role)
-    if check.status != "ok":
+    # Инцидент заводит РОВНО провал (SPEC 01M32NH6P053978AER66P0X4GN,
+    # требование 12). Для провайдера по умолчанию это тождественная
+    # замена прежнему `!= "ok"` — `_live_smoke_run` отдаёт ему только
+    # `ok` и `fail`; отличать их понадобилось из-за третьего исхода
+    # `skip`, которым отвечает провайдер, чей живой смок обычный прогон
+    # `doctor` не запускает: «проверка не выполнялась» инцидентом не
+    # является, и алерт по ней открывался бы на каждом прогоне.
+    if check.status == "fail":
         doctor.alerts.raise_alert(conn, None, "incident", "doctor.live_smoke", check.detail)
-    doctor._auto_ack_gone(conn, "doctor.live_smoke", lambda _msg: check.status != "ok")
+    doctor._auto_ack_gone(conn, "doctor.live_smoke", lambda _msg: check.status == "fail")
     return check
 
 
@@ -47,11 +54,25 @@ def _live_smoke_run(role: str) -> doctor.Check:
     Сборка argv стоит ПОСЛЕ `role_env`: обе тянут резолв инструментов
     манифеста, и `OSError` отсутствующего инструмента отрабатывает
     здесь один раз, первой же строкой.
+
+    Провайдер вправе объявить, что обычный прогон `doctor` его живой смок
+    не запускает (`live_smoke_in_doctor`, SPEC
+    01M32NH6P053978AER66P0X4GN, требование 12) — тогда исход `skip` ДО
+    сборки argv и до единого системного вызова: диагностика не обязана
+    платить деньги за CLI, на который ещё не переведена ни одна роль.
+    Сам смок при этом остаётся доступен Оператору явным запуском
+    (`live_smoke_command` провайдера).
     """
     try:
         provider = doctor.providers.for_role(role)
     except doctor.providers.UnknownProviderError as exc:
         return doctor.Check("live-smoke", "fail", str(exc))
+    if not provider.live_smoke_in_doctor:
+        return doctor.Check(
+            "live-smoke", "skip",
+            f"живой смок провайдера {provider.name} роли {role} — только по "
+            f"явному запуску Оператора, обычный прогон doctor за него не "
+            f"платит")
     try:
         env = doctor.runner.role_env(role)
     except OSError as exc:

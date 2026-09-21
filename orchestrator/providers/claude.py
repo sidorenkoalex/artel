@@ -43,6 +43,11 @@ DEPLOYED_HOME_DIR = ".claude"
 # вместо полного Bash.
 ALLOWED_TOOLS = "Bash(git:*),Bash(python3:*)"
 
+# Переменные окружения, которыми приходит секрет этого провайдера: токен
+# подписки и альтернативный ambient-канал. Те же два имени читает
+# `environment()` ниже, решая, спрашивать ли keychain.
+SECRET_ENV_NAMES = ("CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_API_KEY")
+
 # Срез текста ошибки итога запуска в строке лога и срез ключевого
 # аргумента в отметке вызова инструмента — те же числа, что несли
 # `agent_log.render_agent_line`/`render_block` до переезда разбора сюда
@@ -190,6 +195,13 @@ class ClaudeProvider(RoleExecutorProvider):
             if token:
                 env["CLAUDE_CODE_OAUTH_TOKEN"] = token
         return env
+
+    def secret_env_names(self):
+        """Имена переменных, которыми приходит секрет этого провайдера —
+        по ним смок изоляции другого провайдера отличает чужой секрет,
+        оставшийся в окружении шага из общего белого списка манифеста
+        (SPEC 01M32NH6P053978AER66P0X4GN, требование 12)."""
+        return SECRET_ENV_NAMES
 
     def home_reference(self):
         """Каталог референса дома роли и имя развёрнутого каталога.

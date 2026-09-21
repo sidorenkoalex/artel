@@ -54,6 +54,11 @@ def all_checks(conn) -> list[doctor.Check]:
     checks.append(doctor.check_backup_age(conn))
     checks.append(doctor.check_task_counters(conn))
     checks.append(doctor.isolation_smoke())
+    # Смоки изоляции провайдеров, у которых он свой (SPEC
+    # 01M32NH6P053978AER66P0X4GN, требование 12) — сразу за общим: у них
+    # один предмет («достаёт ли шаг то, чего не должен»), и читать их
+    # Оператору удобнее рядом.
+    checks.extend(doctor.provider_isolation_smokes())
     checks.append(doctor.live_smoke(conn))
 
     try:
