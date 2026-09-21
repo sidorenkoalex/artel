@@ -251,22 +251,28 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with: { fetch-depth: 0 }
-      - name: diff не трогает защищённые пути (SPEC 01M27JPEGCGMDDRX5A98QWJW0Z, требование 5)
+      - name: diff не трогает защищённые пути БАЗЫ сравнения (SPEC 01M31DRD81092HB69J0MAKZMGH, требования 1-4)
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
         run: |
-          # Единый источник списка — config.PROTECTED_PATHS (python-
-          # однострочник, не отдельный хардкод-regex): требование 5/AC-6.
+          # Единый источник списка — config.PROTECTED_PATHS (собственного
+          # перечня или regex защищённых путей джоб не несёт, требование
+          # 5/AC-6 SPEC 01M27JPEGCGMDDRX5A98QWJW0Z), но читается он из
+          # ТЕКСТА orchestrator/config.py БАЗЫ сравнения, а не из кода
+          # ветки: прежний однострочник брал список из ветки, и ветка,
+          # которая создаёт файл и тем же изменением вносит его в список,
+          # красила собственный PR — провести путь было нечем (SPEC
+          # 01M31DRD81092HB69J0MAKZMGH, требования 1/4).
+          # Логика живёт модулем репозитория (ADR-0016, тот же приём, что
+          # у scripts/ci_push_class.py): текста этого джоба в ветке задачи
+          # нет ни в один момент её жизни — он приходит приложением к
+          # PLAN, — поэтому тестируемой логика может быть только вне yaml.
+          # Нечитаемая база — красный джоб с названной причиной, не
+          # молчаливо зелёный (fail-closed, ADR-0002).
           # Падает (не предупреждает) безусловно на pull_request — Фаза 0,
           # один PAT, авторство PR не различается (см. «Не входит» SPEC
           # 01M27JPEGCGMDDRX5A98QWJW0Z).
-          PROTECTED=$(python3 -c "from orchestrator import config; import re; print('|'.join(re.escape(p) for p in config.PROTECTED_PATHS))")
-          CHANGED=$(git diff --name-only "$BASE_SHA"...HEAD | grep -E "^($PROTECTED)" || true)
-          if [ -n "$CHANGED" ]; then
-            echo "::error::PR меняет защищённые пути (config.PROTECTED_PATHS) — их правит только Оператор коммитом в main:"
-            echo "$CHANGED"
-            exit 1
-          fi
+          python3 scripts/ci_protected_paths.py
 
   codebase-map:
     name: Карта кодовой базы генерируется и свежа
