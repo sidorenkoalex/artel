@@ -2,7 +2,11 @@
 01M2XFSJ1Z7BS6HR69SAT1D81Y): запись `fsm.ARTIFACT_ESCALATION_ROLE_STEP_MARKER`
 точками эскалации `fsm_advance.tests_writing`/`fsm_advance.spec_writing`
 (требования 1-2) и её чтение анкером рубежа
-`auto._role_step_since_state_entry` (требования 3-4).
+`auto._role_step_since_state_entry` (требования 3-4). Третья точка —
+эскалация ревьювера `fsm_advance._review_escalate` (SPEC
+01M31JWD10728N5YGWVQGWYACW, требование 1): случай, который SPEC
+01M2XFSJ1Z7BS6HR69SAT1D81Y счёл невоспроизводимым, а инциденты 20.09 и
+21.09 воспроизвели.
 
 Сквозной сценарий инцидента 13.09 через цикл `auto` кроет планка задачи
 (`tasks/01M2XFSJ1Z7BS6HR69SAT1D81Y/acceptance_tests/`); здесь — обе
@@ -19,7 +23,7 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from orchestrator import auto, fsm, fsm_advance, store  # noqa: E402
+from orchestrator import auto, budget, fsm, fsm_advance, store  # noqa: E402
 from tests.sandbox import SchemaConnTmpRootTest  # noqa: E402
 from tests.test_auto_cycle import AutoCycleTest  # noqa: E402
 
@@ -338,20 +342,55 @@ class MarkerWrittenByTheEscalationPointsTest(AutoCycleTest):
         self.assertEqual(marker["action"], MARKER)
         self.assertEqual(marker["detail"], escalated["detail"])
 
-    def test_review_escalation_does_not_journal_the_marker(self):
-        """Эскалация от ревьювера (`REVIEW.md status: escalate`) — не тот
-        класс (SPEC «Контекст»: повтор там закрыт `reviewed_iter`) и
-        маркера не ставит: рубеж не потребует лишнего шага роли.
+    def test_review_escalation_journals_the_marker(self):
+        """Эскалация от ревьювера (`REVIEW.md status: escalate`) — тот же
+        класс, что пометка `AC-n: escalate` и батч `QUESTIONS.md` (SPEC
+        01M31JWD10728N5YGWVQGWYACW, требование 1): сразу за
+        `state -> escalated` стоит запись маркера с тем же `detail`, что у
+        самой эскалации. Прежнее ожидание этого теста («маркера нет»)
+        опиралось на решение SPEC 01M2XFSJ1Z7BS6HR69SAT1D81Y о
+        невоспроизводимости случая review и опровергнуто инцидентами 20.09
+        и 21.09: без маркера ответ Оператора до developer не доходил.
 
-        Ловит мутацию: маркер вынесен в общий узел эскалации (например,
-        в `store.set_state` на любой переход в `escalated`) — после
-        эскалации `review` в журнале появится запись маркера.
+        Ловит мутацию: `_review_escalate` после `set_state(...,
+        "escalated")` маркер не журналирует (или журналирует ДО перехода)
+        — следующей записью после эскалации будет не маркер, и
+        `row_after_escalation` вернёт не ту строку либо упадёт на
+        `assertLess`; `auto._role_step_since_state_entry` такой маркер
+        тоже не прочитал бы.
         """
         self.write_review("escalate", 1)
         self.set_state("review")
 
         self.capture(fsm.cmd_advance, self.TASK)
 
+        self.assertEqual(self.state(), "escalated")
+        escalated, marker = self.row_after_escalation()
+        self.assertEqual(marker["action"], MARKER)
+        self.assertEqual(marker["actor"], "fsm")
+        self.assertEqual(marker["detail"], escalated["detail"])
+
+    def test_budget_escalation_from_review_journals_no_marker(self):
+        """Сохранённая половина прежнего ожидания: маркер ставит ИМЕННО
+        `_review_escalate`, а не любой переход в `escalated` из `review`.
+        Эскалация по исчерпанному потолку (`budget.enforce_budget`)
+        собственного основания переделки не несёт — разрешать ей нечего,
+        кроме поднятого потолка, — и журнал маркера не получает
+        (01M1VBEDGMEXHVGWAH42FTDZ4X, требование 2).
+
+        Ловит мутацию: маркер вынесен в общий узел эскалации (в
+        `store.set_state` на любой переход в `escalated` либо в
+        `fsm_advance.review` до разбора вердикта) — бюджетная эскалация
+        тоже пометит себя, её запись возврата станет анкером рубежа, и
+        пульт потребует лишнего шага роли там, где раньше продолжал
+        работу.
+        """
+        self.set_state("review", budget_usd=1.0, spent_usd=2.0)
+
+        escalated = budget.enforce_budget(store.db(), self.TASK, "review")
+
+        self.assertTrue(escalated, "потолок не сработал — сценарий не "
+                        "воспроизведён")
         self.assertEqual(self.state(), "escalated")
         self.assertNotIn(MARKER, [r["action"] for r in self.meaningful_rows()])
 

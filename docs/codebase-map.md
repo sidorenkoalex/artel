@@ -199,7 +199,7 @@ built_at_sha: afd4ec660ccfb862fea50ef13a502da6f885b7f4
 
 **Импортирует:** `orchestrator/alerts.py`, `orchestrator/config.py`, `orchestrator/gitcmd.py`, `orchestrator/lease.py`, `orchestrator/retro.py`, `orchestrator/runner.py`, `orchestrator/spend.py`, `orchestrator/store.py`
 
-**Импортируется:** `orchestrator/artel.py`, `orchestrator/auto.py`, `orchestrator/catalog.py`, `orchestrator/fsm.py`, `orchestrator/fsm_advance.py`, `orchestrator/fsm_autogate.py`, `orchestrator/runner.py`, `tests/test_auto_cycle.py`, `tests/test_budget_live_lease_and_escalation.py`, `tests/test_doctor.py`, `tests/test_fsm_autogate.py`, `tests/test_fsm_review_rework_sha_gate.py`, `tests/test_invariants.py`, `tests/test_multitarget.py`, `tests/test_multitarget_invariants.py`, `tests/test_program_spend_reseed.py`, `tests/test_spec_budget.py`, `tests/test_step_cost.py`
+**Импортируется:** `orchestrator/artel.py`, `orchestrator/auto.py`, `orchestrator/catalog.py`, `orchestrator/fsm.py`, `orchestrator/fsm_advance.py`, `orchestrator/fsm_autogate.py`, `orchestrator/runner.py`, `tests/test_artifact_escalation_marker.py`, `tests/test_auto_cycle.py`, `tests/test_budget_live_lease_and_escalation.py`, `tests/test_doctor.py`, `tests/test_fsm_autogate.py`, `tests/test_fsm_review_rework_sha_gate.py`, `tests/test_invariants.py`, `tests/test_multitarget.py`, `tests/test_multitarget_invariants.py`, `tests/test_program_spend_reseed.py`, `tests/test_spec_budget.py`, `tests/test_step_cost.py`
 
 ## orchestrator/canary.py
 
@@ -1408,7 +1408,7 @@ built_at_sha: afd4ec660ccfb862fea50ef13a502da6f885b7f4
 
 **Публичные функции:** (нет)
 
-**Импортирует:** `orchestrator/auto.py`, `orchestrator/fsm.py`, `orchestrator/fsm_advance.py`, `orchestrator/store.py`, `tests/sandbox.py`, `tests/test_auto_cycle.py`
+**Импортирует:** `orchestrator/auto.py`, `orchestrator/budget.py`, `orchestrator/fsm.py`, `orchestrator/fsm_advance.py`, `orchestrator/store.py`, `tests/sandbox.py`, `tests/test_auto_cycle.py`
 
 **Импортируется:** —
 
