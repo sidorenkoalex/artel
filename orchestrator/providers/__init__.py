@@ -12,7 +12,9 @@
 `REQUIRED_TOOLS`, а сам читается точкой входа до проверки версии
 интерпретатора (см. докстринг `base.py`).
 """
-from .base import CliTool, HomeReference, RoleExecutorProvider
+from .base import (CliTool, EMPTY_EVENT, FailureSignature, HomeReference,
+                   RoleExecutorProvider, RunResult, StreamEvent, ToolCall,
+                   ToolResult)
 from .claude import ClaudeProvider
 
 #: Провайдер роли, у которой поле `provider:` в `roles.yaml` не задано.
@@ -44,6 +46,19 @@ def get(name):
 def default():
     """Провайдер по умолчанию — им идёт роль без поля `provider:`."""
     return get(DEFAULT_PROVIDER)
+
+
+def or_default(provider=None):
+    """`provider`, если он передан, иначе провайдер по умолчанию.
+
+    Один адрес деградации для всех точек разбора вывода (SPEC
+    01M31ZHSA6HMH40C2JTDPQJQNZ, требование 3): провайдера им передаёт
+    шаг (`runner` — `for_role(role)`), но те же функции зовут и вне
+    шага — живой смок `doctor`, разбор лога руками, тесты. Три копии
+    тернарника по трём модулям разошлись бы на первой же правке
+    умолчания.
+    """
+    return provider if provider is not None else default()
 
 
 def name_for_role(role):

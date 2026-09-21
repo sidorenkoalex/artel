@@ -1,12 +1,17 @@
-"""Наблюдаемость шага: файлы логов прогонов и перекачка вывода агента."""
-import json
+"""Наблюдаемость шага: файлы логов прогонов и перекачка вывода агента.
+
+Формат вывода исполнителя знает провайдер роли шага
+(`orchestrator/providers/`, SPEC 01M31ZHSA6HMH40C2JTDPQJQNZ): здесь —
+только то, что делают с уже разобранным событием общего вида (лог,
+консоль, метрика трения).
+"""
 import platform
 import subprocess
 import sys
 import threading
 from pathlib import Path
 
-from . import config, spend
+from . import config, providers, spend
 
 # «Единицы секунд» (SPEC T101, требование 2) — тот же порядок, что уже
 # использует `orchestrator/doctor.py::cli_version` (10с) для того же
@@ -104,63 +109,47 @@ def log_tail(path: Path) -> str:
     return tail[-config.LOG_TAIL_CHARS:] if tail else "лог пуст"
 
 
-def render_block(block: dict) -> str:
-    """Блок сообщения ассистента → строка Оператору (пустая — не показываем)."""
-    kind = block.get("type")
-    if kind == "text":
-        text = block.get("text", "").strip()
-        return f"{text}\n" if text else ""
-    if kind == "tool_use":
-        args = block.get("input") or {}
-        arg = args.get("command") or args.get("file_path") or args.get("pattern") or ""
-        return f"· {block.get('name')} {' '.join(str(arg).split())[:100]}".rstrip() + "\n"
-    return ""
+def render_agent_line(raw_line: str, provider=None) -> str:
+    """Строка вывода исполнителя → читаемая строка Оператору.
 
+    Формат строки знает ПРОВАЙДЕР (SPEC 01M31ZHSA6HMH40C2JTDPQJQNZ,
+    требования 1-3): здесь остаётся только «что из события показать» —
+    готовое поле `log_text`. Из потока событий Оператору нужны два: что
+    агент сказал и что он делает инструментом, — по ним видно, работает
+    шаг или встал; служебные события отбрасываются, а строка, не
+    разобравшаяся в событие (stderr агента, трейсбек CLI), проходит как
+    есть — молча не глотаем ничего.
 
-def render_agent_line(raw_line: str) -> str:
-    """Событие `--output-format stream-json` → читаемая строка Оператору.
-
-    Из потока событий Оператору нужны два: что агент сказал и что он делает
-    инструментом, — по ним видно, работает шаг или встал. Служебные события
-    (хуки, лимиты, сводки) отбрасываем. Не-JSON строки (stderr агента,
-    трейсбек CLI) проходят как есть — молча не глотаем ничего.
+    `provider=None` — провайдер по умолчанию (`providers.or_default`):
+    так функцию зовут прямые вызовы вне шага и тесты; шаг передаёт
+    провайдера своей роли.
     """
-    if not raw_line.lstrip().startswith("{"):
-        return raw_line
-    try:
-        event = json.loads(raw_line)
-    except json.JSONDecodeError:
-        return raw_line
-
-    if event.get("type") == "assistant":
-        content = event.get("message", {}).get("content")
-        if not isinstance(content, list):
-            return ""
-        return "".join(render_block(b) for b in content if isinstance(b, dict))
-    if event.get("type") == "result" and event.get("is_error"):
-        return f"! ошибка агента: {str(event.get('result', ''))[:200]}\n"
-    return ""
+    return providers.or_default(provider).parse_output_line(raw_line).log_text
 
 
-def tee_lines(stream, log, sink=None) -> None:
+def tee_lines(stream, log, sink=None, provider=None) -> None:
     """Строки процесса — в консоль и, если он открыт, в лог. По одной, сразу.
 
-    `sink` получает сырую строку до отрисовки: служебные события (в них
-    стоимость шага) до консоли и лога не доходят.
+    `sink` получает РАЗОБРАННОЕ событие до отрисовки: служебные события
+    (в них стоимость шага) до консоли и лога не доходят. Разбор строки
+    делается здесь ровно один раз и отдаётся дальше: до переезда к
+    провайдеру одну и ту же строку разбирали независимо `render_agent_
+    line` и три функции внутри `sink`, и разойтись они могли молча.
     """
+    provider = providers.or_default(provider)
     for raw_line in stream:
+        event = provider.parse_output_line(raw_line)
         if sink is not None:
-            sink(raw_line)
-        line = render_agent_line(raw_line)
-        if not line:
+            sink(event)
+        if not event.log_text:
             continue
-        sys.stdout.write(line)
+        sys.stdout.write(event.log_text)
         sys.stdout.flush()
         if log is not None:
-            log.write(line)
+            log.write(event.log_text)
 
 
-def stream_to_log(stream, log_path: Path, sink=None) -> None:
+def stream_to_log(stream, log_path: Path, sink=None, provider=None) -> None:
     """Качает вывод процесса в консоль и в лог-файл.
 
     Построчная буферизация обязательна: с ней Оператор видит работу шага
@@ -172,10 +161,10 @@ def stream_to_log(stream, log_path: Path, sink=None) -> None:
         # Пайп дочитываем даже без лога: перестать читать — значит подвесить
         # агента на записи в переполненный пайп. О сбое узнает cmd_run.
         # Стоимость собираем и здесь: деньги потрачены независимо от лога.
-        tee_lines(stream, None, sink)
+        tee_lines(stream, None, sink, provider)
         raise
     with log:
-        tee_lines(stream, log, sink)
+        tee_lines(stream, log, sink, provider)
 
 
 # ------------------------------------------ метрика «трение» шага (T095)
@@ -200,66 +189,20 @@ LARGE_TOOL_RESULT_CHARS = 20_000
 FRICTION_JOURNAL_ACTION = "agent run friction"
 
 
-def _parse_stream_event(raw_line: str) -> dict | None:
-    """Одна строка потока `--output-format stream-json` → событие или
-    `None` для не-JSON строки (stderr агента, трейсбек CLI) — тот же
-    приём отсечения, что уже `spend.parse_cost_event`/
-    `render_agent_line` выше."""
-    stripped = raw_line.lstrip()
-    if not stripped.startswith("{"):
-        return None
-    try:
-        event = json.loads(stripped)
-    except json.JSONDecodeError:
-        return None
-    return event if isinstance(event, dict) else None
-
-
 def _tool_use_calls(events: list) -> list:
-    """Вызовы инструментов из событий потока, в порядке появления.
-
-    Ключевой аргумент (`file_path`/`command`/`pattern`) — то немногое,
-    что отличает повтор идентичного вызова от нового; какого именно
-    инструмента он есть, зависит от инструмента (Read/Edit против Bash),
-    поэтому берётся первый попавшийся из трёх, а не имя, фиксированное
-    заранее.
-    """
-    calls = []
-    for ev in events:
-        if ev.get("type") != "assistant":
-            continue
-        content = ev.get("message", {}).get("content")
-        if not isinstance(content, list):
-            continue
-        for block in content:
-            if not isinstance(block, dict) or block.get("type") != "tool_use":
-                continue
-            args = block.get("input") or {}
-            key = args.get("file_path") or args.get("command") or args.get("pattern") or ""
-            calls.append({"id": block.get("id"), "name": block.get("name"), "key": key})
-    return calls
+    """Вызовы инструментов (`providers.ToolCall`) из событий общего вида,
+    в порядке появления. Сам разбор блоков — у провайдера."""
+    return [call for event in events for call in event.tool_calls]
 
 
 def _tool_results(events: list) -> dict:
-    """`tool_use_id -> (текст результата, is_error)` из событий `type: user`.
+    """`id вызова -> (текст результата, is_error)` из событий общего вида.
 
-    Здесь, а не в `render_agent_line`: та функция намеренно гасит
-    `tool_result` целиком («служебные события» докстринг выше) — этому
-    разбору содержимое результата как раз и нужно."""
-    results = {}
-    for ev in events:
-        if ev.get("type") != "user":
-            continue
-        content = ev.get("message", {}).get("content")
-        if not isinstance(content, list):
-            continue
-        for block in content:
-            if not isinstance(block, dict) or block.get("type") != "tool_result":
-                continue
-            text = block.get("content")
-            results[block.get("tool_use_id")] = (
-                text if isinstance(text, str) else "", bool(block.get("is_error")))
-    return results
+    Отдельным полем события, а не в `log_text`: лог намеренно гасит
+    результаты инструментов («простыня вывода» Оператору не нужна), а
+    этому разбору содержимое результата как раз и нужно."""
+    return {result.call_id: (result.text, result.is_error)
+            for event in events for result in event.tool_results}
 
 
 def _friction_from_events(events: list) -> float:
@@ -296,7 +239,7 @@ def _friction_from_events(events: list) -> float:
     pending_retry = None  # (name, key) непосредственно предыдущего вызова с ошибкой
 
     for call in calls:
-        call_id, name, key = call["id"], call["name"], call["key"]
+        call_id, name, key = call.id, call.name, call.argument
         result_text, is_error = results.get(call_id, ("", False))
         signalled = False
 
@@ -322,7 +265,7 @@ def _friction_from_events(events: list) -> float:
     return len(unproductive) / len(calls)
 
 
-def step_friction(log_path: Path) -> float:
+def step_friction(log_path: Path, provider=None) -> float:
     """Доля непродуктивных вызовов инструментов шага, по ЗАВЕРШЁННОМУ
     файлу лога целиком — постфактум-разбор (tasks/T095/SPEC.md, AC-1),
     см. `_friction_from_events` для самих сигналов.
@@ -343,12 +286,10 @@ def step_friction(log_path: Path) -> float:
     ручной разбор) — интерфейс зафиксирован приёмочными тестами
     `tasks/T095/acceptance_tests/`.
     """
-    events = []
-    for raw_line in log_path.read_text(encoding="utf-8", errors="replace").splitlines():
-        event = _parse_stream_event(raw_line)
-        if event is not None:
-            events.append(event)
-    return _friction_from_events(events)
+    provider = providers.or_default(provider)
+    text = log_path.read_text(encoding="utf-8", errors="replace")
+    return _friction_from_events(
+        [provider.parse_output_line(line) for line in text.splitlines()])
 
 
 class OutputPump(threading.Thread):
@@ -359,50 +300,55 @@ class OutputPump(threading.Thread):
     интерпретатору выйти даже после возврата из `cmd_run`.
     """
 
-    def __init__(self, stream, log_path: Path):
+    def __init__(self, stream, log_path: Path, provider=None):
         super().__init__(daemon=True)
         self.stream = stream
         self.log_path = log_path
+        # Провайдер роли шага: он и разбирает строки вывода (SPEC
+        # 01M31ZHSA6HMH40C2JTDPQJQNZ, требование 3). `None` —
+        # провайдер по умолчанию, см. `render_agent_line`.
+        self.provider = providers.or_default(provider)
         self.error: Exception | None = None
         self.cost: dict | None = None
         # Токены промежуточных usage-событий (tasks/T040), разбивкой по
-        # видам (`config.USAGE_TOKEN_KEYS`, SPEC 01M1PP0VYRT55WN8GGVG66X89Y,
-        # требование 2) — читать их после обрыва потока неоткуда, кроме
-        # как во время самого чтения, поэтому копятся здесь же, рядом с
-        # `cost`. `saw_usage_event` — отдельно от суммы: «увидели usage с
-        # нулём токенов» не должно выглядеть как «usage не видели вовсе».
+        # общим видам (`models.PRICE_KINDS`, SPEC
+        # 01M1PP0VYRT55WN8GGVG66X89Y требование 2, имена видов —
+        # 01M31ZHSA6HMH40C2JTDPQJQNZ требование 1) — читать их после
+        # обрыва потока неоткуда, кроме как во время самого чтения,
+        # поэтому копятся здесь же, рядом с `cost`. `saw_usage_event` —
+        # отдельно от суммы: «увидели usage с нулём токенов» не должно
+        # выглядеть как «usage не видели вовсе».
         self.partial_tokens: dict = {}
         self.saw_usage_event = False
         # Трение шага (T095, ANSWER-1.md): персистентный лог несёт только
-        # рендер, поэтому сигналы ТЗ нужно ловить здесь же, на сырых
-        # строках потока, пока они ещё живы — `_friction_events` копит их
-        # тем же приёмом, что `partial_tokens` копит usage построчно.
+        # рендер, поэтому сигналы ТЗ нужно ловить здесь же, на событиях
+        # потока, пока они ещё живы — `_friction_events` копит их тем же
+        # приёмом, что `partial_tokens` копит usage построчно.
         self._friction_events: list = []
 
-    def catch_cost(self, raw_line: str) -> None:
-        """Запоминает стоимость из события потока: последнее — итог запуска.
+    def catch_event(self, event) -> None:
+        """Запоминает из события потока всё, чего не будет потом.
 
-        Заодно копит токены usage ЛЮБОГО события (не только финального) —
-        частичная находка на случай, если финальное событие так и не
-        придёт (см. `orchestrator.spend.charge_missing_result`), и сырые
-        события для метрики «трение» (`self.friction`) — тем же доводом:
-        персистентный лог их уже не несёт (`step_friction`, докстринг).
+        Стоимость: последний пришедший итог запуска и есть итог шага —
+        в файл лога он не попадает (лог несёт рендер), поэтому
+        снимается прямо с потока. Заодно копятся токены usage ЛЮБОГО
+        события, не только финального (частичная находка на случай,
+        если финальное так и не придёт — см.
+        `orchestrator.spend.charge_missing_result`), и сами события для
+        метрики «трение» (`self.friction`) — тем же доводом.
         """
-        cost = spend.parse_cost_event(raw_line)
+        cost = spend.run_result_cost(event.run_result)
         if cost is not None:
             self.cost = cost
-        tokens_by_type = spend.stream_usage_by_type(raw_line)
-        if tokens_by_type is not None:
+        if event.tokens_by_type is not None:
             self.saw_usage_event = True
-            for key, count in tokens_by_type.items():
-                self.partial_tokens[key] = self.partial_tokens.get(key, 0) + count
-        event = _parse_stream_event(raw_line)
-        if event is not None:
-            self._friction_events.append(event)
+            for kind, count in event.tokens_by_type.items():
+                self.partial_tokens[kind] = self.partial_tokens.get(kind, 0) + count
+        self._friction_events.append(event)
 
     @property
     def friction(self) -> float:
-        """Трение шага по событиям, накопленным вживую (см. `catch_cost`).
+        """Трение шага по событиям, накопленным вживую (см. `catch_event`).
 
         Читается после `join()` — обрыв потока/таймаут значит частичный
         набор событий, как и `partial_tokens`; это то же самое честное
@@ -411,6 +357,7 @@ class OutputPump(threading.Thread):
 
     def run(self) -> None:
         try:
-            stream_to_log(self.stream, self.log_path, self.catch_cost)
+            stream_to_log(self.stream, self.log_path, self.catch_event,
+                          self.provider)
         except Exception as exc:  # noqa: BLE001 — сбой лога не роняет шаг
             self.error = exc

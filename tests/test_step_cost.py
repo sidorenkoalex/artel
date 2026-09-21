@@ -22,7 +22,7 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from orchestrator import (agent_log, budget, catalog, config,  # noqa: E402
-                          fsm, gitcmd, runner, spend, store)
+                          fsm, gitcmd, providers, runner, spend, store)
 from tests.sandbox import (DeveloperBriefTmpRootTest as TmpRootTest,  # noqa: E402
                            FakeProc, FakeStream, capture_new_task_id, event,
                            fake_git, sync_spec_from_worktree)
@@ -50,17 +50,27 @@ def tool_use_event(call_id: str, name: str, **input_kwargs) -> str:
 
 
 class ParseCostEventTest(unittest.TestCase):
-    """Разбор финального события потока: цена шага и токены."""
+    """Разбор финального события потока: цена шага и токены.
+
+    Разбивка — по ОБЩИМ видам цены (`models.PRICE_KINDS`, SPEC
+    01M31ZHSA6HMH40C2JTDPQJQNZ требование 1): счётчики своего CLI
+    провайдер переводит в них при разборе строки.
+    """
 
     def test_cost_and_tokens_are_taken_from_result_event(self):
+        """Ловит мутацию: разбор итога запуска берёт цену из другого
+        поля, теряет счётчик usage или суммирует виды в одно число —
+        шаг по-прежнему «учтён», но списанная сумма и разбивка, на
+        которой стоит вся сверка тарифа с фактом CLI, становятся
+        другими."""
         cost = spend.parse_cost_event(result_event(
             usd=0.1234, usage={"input_tokens": 10, "output_tokens": 90,
                                "cache_creation_input_tokens": 400,
                                "cache_read_input_tokens": 500}))
 
         self.assertEqual(cost, {"usd": 0.1234, "tokens": 1000, "tokens_by_type": {
-            "input_tokens": 10, "output_tokens": 90,
-            "cache_creation_input_tokens": 400, "cache_read_input_tokens": 500}})
+            "input": 10, "output": 90,
+            "cache_write": 400, "cache_read": 500}})
 
     def test_tokens_are_optional(self):
         cost = spend.parse_cost_event(result_event(usd=0.5))
@@ -68,11 +78,15 @@ class ParseCostEventTest(unittest.TestCase):
         self.assertEqual(cost, {"usd": 0.5, "tokens": None, "tokens_by_type": None})
 
     def test_known_usage_counters_are_summed(self):
+        """Ловит мутацию: в разбивку попадает любое поле `usage` —
+        `server_tool_use` становится «видом токенов», и первая же
+        попытка тарифицировать такую разбивку падает на тарифе, у
+        которого такого вида нет."""
         cost = spend.parse_cost_event(result_event(
             usd=0.5, usage={"input_tokens": 7, "server_tool_use": {"a": 1}}))
 
         self.assertEqual(cost["tokens"], 7, "чужие поля usage не считаются")
-        self.assertEqual(cost["tokens_by_type"], {"input_tokens": 7},
+        self.assertEqual(cost["tokens_by_type"], {"input": 7},
                          "чужие поля usage не попадают в разбивку")
 
     def test_failed_run_still_costs_money(self):
@@ -114,16 +128,16 @@ class ParseCostEventTest(unittest.TestCase):
 class StreamUsageByTypeTest(unittest.TestCase):
     """Разбивка usage по видам любого события потока (tasks/T040, уточнено
     01M1PP0VYRT55WN8GGVG66X89Y требованием 2) — не только `result`, и не
-    одной суммой, а по счётчикам `config.USAGE_TOKEN_KEYS` раздельно."""
+    одной суммой, а по видам цены `models.PRICE_KINDS` раздельно."""
 
     def test_assistant_event_usage_is_broken_down_by_type(self):
         """Ловит мутацию: разбор `assistant`-события суммирует счётчики в
-        одно число вместо разбивки по видам (`input_tokens`/
-        `output_tokens` раздельно)."""
+        одно число вместо разбивки по видам (`input`/`output`
+        раздельно)."""
         tokens = spend.stream_usage_by_type(assistant_event(
             usage={"input_tokens": 10, "output_tokens": 5}))
 
-        self.assertEqual(tokens, {"input_tokens": 10, "output_tokens": 5})
+        self.assertEqual(tokens, {"input": 10, "output": 5})
 
     def test_result_event_usage_still_works(self):
         """Ловит мутацию: добавление ветки `assistant` в `stream_usage_by_type`
@@ -131,7 +145,7 @@ class StreamUsageByTypeTest(unittest.TestCase):
         tokens = spend.stream_usage_by_type(result_event(
             usd=0.5, usage={"input_tokens": 7, "output_tokens": 3}))
 
-        self.assertEqual(tokens, {"input_tokens": 7, "output_tokens": 3})
+        self.assertEqual(tokens, {"input": 7, "output": 3})
 
     def test_assistant_event_without_usage_is_none(self):
         self.assertIsNone(spend.stream_usage_by_type(assistant_event()))
@@ -171,7 +185,7 @@ class PartialTokensFromLogTest(unittest.TestCase):
 
         tokens, saw = spend.partial_tokens_from_log(self.log_path)
 
-        self.assertEqual(tokens, {"input_tokens": 30, "output_tokens": 13})
+        self.assertEqual(tokens, {"input": 30, "output": 13})
         self.assertTrue(saw)
 
     def test_no_usage_events_returns_empty_and_false(self):
@@ -201,7 +215,7 @@ class PartialTokensFromLogTest(unittest.TestCase):
 
         tokens, saw = spend.partial_tokens_from_log(self.log_path)
 
-        self.assertEqual(tokens, {"input_tokens": 7, "output_tokens": 3})
+        self.assertEqual(tokens, {"input": 7, "output": 3})
         self.assertTrue(saw)
 
 
@@ -255,8 +269,7 @@ class PumpCostTest(TmpRootTest):
             assistant_event(usage={"input_tokens": 20, "output_tokens": 8}),
         ])
 
-        self.assertEqual(pump.partial_tokens,
-                         {"input_tokens": 30, "output_tokens": 13})
+        self.assertEqual(pump.partial_tokens, {"input": 30, "output": 13})
         self.assertTrue(pump.saw_usage_event)
 
     def test_no_usage_events_leaves_partial_tokens_empty(self):
@@ -271,15 +284,18 @@ class PumpCostTest(TmpRootTest):
 
     def test_partial_tokens_are_kept_even_when_result_arrives(self):
         """Финальное событие пришло — частичные токены всё равно посчитаны:
-        решение, использовать ли их, принимает вызывающий код."""
+        решение, использовать ли их, принимает вызывающий код.
+
+        Ловит мутацию: накопление токенов обрывается на первом же итоге
+        запуска — шаг, чей поток продолжился после него, теряет часть
+        своего usage, и учёт оборванной попытки считается по остатку."""
         pump = self.pump([
             assistant_event(usage={"input_tokens": 10, "output_tokens": 5}),
             result_event(usd=0.5, usage={"input_tokens": 15, "output_tokens": 9}),
         ])
 
         self.assertEqual(pump.cost["usd"], 0.5)
-        self.assertEqual(pump.partial_tokens,
-                         {"input_tokens": 25, "output_tokens": 14})
+        self.assertEqual(pump.partial_tokens, {"input": 25, "output": 14})
 
 
 class ChargeMissingResultTest(TmpRootTest):
@@ -462,6 +478,147 @@ class PartialCostUsdTest(unittest.TestCase):
         ветку верхней оценки/алерта (требование 3)."""
         self.assertIsNone(spend.partial_cost_usd(
             "no-such-role", {"input_tokens": 1000}))
+
+
+class ByPriceKindTest(unittest.TestCase):
+    """`spend.by_price_kind` — приведение разбивки к общим видам цены
+    (SPEC 01M31ZHSA6HMH40C2JTDPQJQNZ, требования 1 и 7).
+
+    Углы, которых приёмочная планка задачи не закрывает: она сверяет
+    две формы имён ПОРОЗНЬ, а живой журнал после мержа смешанный, и
+    чужие поля usage в нём тоже встречаются."""
+
+    def test_both_name_forms_of_one_kind_are_summed_not_shadowed(self):
+        """Прежнее и общее имя ОДНОГО вида в одной разбивке
+        складываются.
+
+        Ловит мутацию: приведение построено словарём-перезаписью
+        (`{kinds.get(k, k): v for ...}`) — при обеих формах в одной
+        строке половина токенов молча затирается второй, и шаг
+        тарифицируется по части своего объёма.
+        """
+        self.assertEqual(
+            spend.by_price_kind({"input_tokens": 10, "input": 5}),
+            {"input": 15})
+
+    def test_foreign_usage_fields_do_not_become_kinds(self):
+        """Чужое поле usage видом цены не становится.
+
+        Ловит мутацию: приведение пропускает любой ключ как есть — в
+        разбивку попадает `server_tool_use`, и первая же попытка
+        тарифицировать её падает `AttributeError` на тарифе, у которого
+        такого поля нет.
+        """
+        self.assertEqual(
+            spend.by_price_kind({"server_tool_use": 3, "output_tokens": 7}),
+            {"output": 7})
+
+
+class CostFromCliFlagTest(unittest.TestCase):
+    """Признак каталога `cost_from_cli` на пути учёта шага (SPEC
+    01M31ZHSA6HMH40C2JTDPQJQNZ, требование 4): его деградацию планка не
+    проверяет — она гоняет обе ветки на исправном каталоге."""
+
+    def test_unknown_model_keeps_the_cli_fact_path(self):
+        """Модель, которой в каталоге нет (и строка без поля `model=`),
+        считается «цену сообщает CLI» — прежний путь.
+
+        Ловит мутацию: неизвестная модель деградирует в «цену не
+        сообщает» — КАЖДЫЙ шаг, чья строка не назвала модель, уходит на
+        расчёт по тарифу, и `spent_usd` тихо расходится с фактическим
+        счётом провайдера на всём старом формате записей.
+        """
+        self.assertTrue(spend._cost_from_cli(None))
+        self.assertTrue(spend._cost_from_cli("model-kotoroy-net"))
+
+    def test_unreadable_catalog_keeps_the_cli_fact_path(self):
+        """Каталог не читается — учёт шага не падает вместе с ним и
+        остаётся на прежнем пути.
+
+        Ловит мутацию: `ModelsError` разбора каталога летит наружу из
+        точки учёта — шаг, который уже отработал и потратил деньги,
+        роняет `cmd_run` трейсбеком вместо записи о стоимости.
+        """
+        with mock.patch.object(spend.models, "catalog_model",
+                               side_effect=spend.models.CatalogError("битый")):
+            self.assertTrue(spend._cost_from_cli("claude-opus-5"))
+
+
+class ChargeByTariffTest(TmpRootTest):
+    """`spend.charge_step` без цены от CLI — расчёт по тарифу (SPEC
+    01M31ZHSA6HMH40C2JTDPQJQNZ, требования 4, 6).
+
+    Планка задачи проверяет сам путь через `runner.cmd_run`; здесь —
+    два угла, которые она не называет: строка расчёта не входит в
+    калибровку тарифа, и итог без разбивки токенов не проходит молча."""
+
+    ROLE = "developer"
+
+    def setUp(self):
+        super().setUp()
+        git_patcher = mock.patch.object(gitcmd, "git", fake_git)
+        git_patcher.start()
+        self.addCleanup(git_patcher.stop)
+        self.capture(catalog.cmd_init)
+        _, self.TASK = capture_new_task_id(catalog.cmd_new, "Расчёт по тарифу")
+        self.conn = store.db()
+        self.model = spend.role_tariff(self.ROLE).model
+
+    def numbered(self) -> str:
+        return (f"попытка 1/3, model={self.model}, "
+                f"provider={providers.DEFAULT_PROVIDER}")
+
+    def priceless(self, tokens_by_type) -> dict:
+        """Итог запуска, полученный БЕЗ цены от CLI."""
+        return {"usd": None,
+                "tokens": sum(tokens_by_type.values()) if tokens_by_type else None,
+                "tokens_by_type": tokens_by_type}
+
+    def details(self, action: str) -> list:
+        return [row["detail"] for row in store.task_steps(self.conn, self.TASK)
+                if row["action"] == action]
+
+    def test_the_calculated_line_stays_out_of_the_tariff_calibration(self):
+        """Строка расчёта по тарифу не несёт `actual_usd=` и в пары
+        сверки курса не входит.
+
+        Ловит мутацию: ветка расчёта пишет строку тем же составом
+        полей, что и факт CLI, — расчёт по тарифу входит в калибровку
+        как «факт», тариф начинает подтверждать сам себя, и
+        коэффициент расхождения навсегда показывает ноль независимо от
+        реального счёта.
+        """
+        spend.charge_step(self.conn, self.TASK, self.ROLE,
+                          self.priceless({"input": 1000, "output": 500,
+                                          "cache_write": 10, "cache_read": 20}),
+                          self.numbered())
+
+        detail = self.details(spend.KNOWN_COST_JOURNAL_ACTION)[-1]
+        self.assertIn("источник=расчёт по тарифу", detail)
+        self.assertNotIn("actual_usd=", detail)
+        self.assertEqual(spend.known_cost_breakdown(detail), (None, None))
+        self.assertEqual(spend.known_cost_pairs(self.conn), {})
+
+    def test_a_run_result_without_any_usage_is_journaled_and_alerted(self):
+        """Итог запуска без цены И без разбивки токенов: списывать
+        нечего — именованная запись и алерт, а не тихий ноль.
+
+        Ловит мутацию: пустая разбивка проходит в расчёт — тариф от
+        нуля токенов даёт $0.0000, шаг выглядит учтённым за ноль, и
+        недоучёт копится ровно там, где о нём никто не спросит.
+        """
+        spend.charge_step(self.conn, self.TASK, self.ROLE,
+                          self.priceless(None), self.numbered())
+
+        row = store.db().execute("SELECT * FROM tasks WHERE id=?",
+                                 (self.TASK,)).fetchone()
+        self.assertEqual(row["spent_usd"], 0.0)
+        self.assertEqual(self.details(spend.KNOWN_COST_JOURNAL_ACTION), [])
+        self.assertEqual(len(self.details(spend.UNCHARGED_COST_JOURNAL_ACTION)),
+                         1)
+        self.assertTrue(store.db().execute(
+            "SELECT * FROM alerts WHERE source='spend.step_cost_uncharged'"
+        ).fetchall())
 
 
 class CmdRunCostTest(TmpRootTest):

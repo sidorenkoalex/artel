@@ -23,7 +23,8 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from orchestrator import catalog, config, gitcmd, runner, store  # noqa: E402
+from orchestrator import (catalog, config, gitcmd, providers,  # noqa: E402
+                          runner, spend, store)
 from tests.sandbox import (DeveloperBriefTmpRootTest as TmpRootTest,  # noqa: E402
                            FakeProc, capture_new_task_id, event, fake_git,
                            sync_spec_from_worktree)
@@ -185,6 +186,61 @@ class ModelFlagJournalTest(TmpRootTest):
         details = self.journal_details("agent run started")
         self.assertEqual(len(details), 1)
         self.assertIn("model=claude-opus-5", details[0])
+
+    def test_cost_line_names_the_provider_next_to_the_model(self):
+        """Строка стоимости шага несёт `provider=` рядом с `model=`, и
+        модель из неё по-прежнему читается разбором журнала (SPEC
+        01M31ZHSA6HMH40C2JTDPQJQNZ, требование 8).
+
+        Ловит мутацию: имя провайдера дописано к `numbered` так, что
+        рвёт соседнее поле — `spend.journal_model` начинает читать
+        `claude-opus-5,` или вовсе ничего, тариф по такой строке не
+        разрешается, и КАЖДЫЙ шаг тихо выпадает из сверки тарифа с
+        фактом: контур молчит не потому, что расхождения нет, а потому,
+        что сверять стало нечего.
+        """
+        self.set_tier("strong")
+        self.set_tier_model("strong", "claude-opus-5")
+        priced = result_event(usd=0.1, usage={"input_tokens": 1000,
+                                              "output_tokens": 500})
+
+        with mock.patch.object(runner, "spawn_agent",
+                               return_value=FakeProc([priced])):
+            self.capture(runner.cmd_run, self.TASK)
+
+        detail = self.journal_details(spend.KNOWN_COST_JOURNAL_ACTION)[-1]
+        self.assertIn(f"provider={providers.DEFAULT_PROVIDER}", detail)
+        self.assertIn("model=claude-opus-5", detail)
+        self.assertEqual(spend.journal_model(detail), "claude-opus-5")
+
+    def test_a_step_charged_by_the_tariff_still_moves_the_program_total(self):
+        """Шаг без цены от CLI двигает суммарный расход программы на
+        ту сумму, которую он реально списал (SPEC
+        01M31ZHSA6HMH40C2JTDPQJQNZ, требование 4; `budget.check_program_
+        spend` вне зоны задачи и обязан работать без правки).
+
+        Ловит мутацию: в порог программы по-прежнему уходит
+        `pump.cost` — на пути расчёта по тарифу цены в нём нет, и
+        `check_program_spend` либо падает на `None <= 0`, либо молча
+        не считает эти деньги вовсе: второй контур учёта перестаёт
+        видеть расход целого провайдера.
+        """
+        self.set_tier("strong")
+        self.set_tier_model("strong", "claude-opus-5")
+        priceless = event(type="result", subtype="success", is_error=False,
+                          result="готово",
+                          usage={"input_tokens": 1000, "output_tokens": 500})
+        proc = FakeProc([priceless])
+
+        with mock.patch.object(runner, "spawn_agent", return_value=proc), \
+                mock.patch.object(runner.budget, "check_program_spend") as check:
+            self.capture(runner.cmd_run, self.TASK)
+
+        spent = store.db().execute("SELECT spent_usd FROM tasks WHERE id=?",
+                                   (self.TASK,)).fetchone()["spent_usd"]
+        self.assertGreater(spent, 0.0, "шаг обязан стоить денег")
+        check.assert_called_once()
+        self.assertAlmostEqual(check.call_args.args[2]["usd"], spent)
 
 
 if __name__ == "__main__":

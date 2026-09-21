@@ -1,5 +1,5 @@
 ---
-built_at_sha: e3dca80247a7d1c0024d240c428f6e251da707e0
+built_at_sha: 6079f83d76d5a02c4d107d27f6eef6d55b5f5395
 ---
 
 # Codebase-map пульта
@@ -41,7 +41,6 @@ built_at_sha: e3dca80247a7d1c0024d240c428f6e251da707e0
 - `log_tail`
 - `new_agent_log`
 - `render_agent_line`
-- `render_block`
 - `step_friction`
 - `stream_to_log`
 - `tee_lines`
@@ -336,12 +335,13 @@ built_at_sha: e3dca80247a7d1c0024d240c428f6e251da707e0
 **Назначение:** Классификация провалившейся попытки агента (SPEC T082, требования 1-2).
 
 **Публичные функции:**
+- `class_signature_text`
 - `classify_attempt_failure`
 - `required_cli_version`
 
 **Импортирует:** `orchestrator/alerts.py`, `orchestrator/config.py`, `orchestrator/store.py`
 
-**Импортируется:** `orchestrator/alerts.py`, `orchestrator/runner.py`, `tests/test_alerts_wave_breaker.py`, `tests/test_failure_classification.py`, `tests/test_runner_model_preflight.py`
+**Импортируется:** `orchestrator/alerts.py`, `orchestrator/runner.py`, `tests/test_alerts_wave_breaker.py`, `tests/test_failure_classification.py`, `tests/test_providers.py`, `tests/test_runner_model_preflight.py`
 
 ## orchestrator/fixation.py
 
@@ -862,6 +862,7 @@ built_at_sha: e3dca80247a7d1c0024d240c428f6e251da707e0
 **Назначение:** Стоимость шага: разбор чисел, событие потока, учёт в spent_usd.
 
 **Публичные функции:**
+- `by_price_kind`
 - `charge_missing_result`
 - `charge_step`
 - `check_rate_divergence`
@@ -873,19 +874,19 @@ built_at_sha: e3dca80247a7d1c0024d240c428f6e251da707e0
 - `known_cost_pairs`
 - `model_tariff`
 - `parse_cost_event`
+- `parse_run_result`
 - `partial_cost_usd`
 - `partial_tokens_from_log`
 - `rate_calibrated_at`
 - `record_tariff`
 - `role_tariff`
-- `step_tokens`
+- `run_result_cost`
 - `stream_usage_by_type`
 - `tariff_cost_usd`
-- `usage_tokens_by_type`
 
 **Импортирует:** `orchestrator/alerts.py`, `orchestrator/config.py`, `orchestrator/models.py`, `orchestrator/store.py`
 
-**Импортируется:** `orchestrator/agent_log.py`, `orchestrator/budget.py`, `orchestrator/pause.py`, `orchestrator/report.py`, `orchestrator/runner.py`, `scripts/guard.py`, `tests/test_doctor.py`, `tests/test_model_tariffs.py`, `tests/test_multitarget.py`, `tests/test_multitarget_invariants.py`, `tests/test_step_cost.py`, `tests/test_token_rate_divergence.py`
+**Импортируется:** `orchestrator/agent_log.py`, `orchestrator/budget.py`, `orchestrator/pause.py`, `orchestrator/report.py`, `orchestrator/runner.py`, `scripts/guard.py`, `tests/test_agent_log.py`, `tests/test_doctor.py`, `tests/test_model_tariffs.py`, `tests/test_multitarget.py`, `tests/test_multitarget_invariants.py`, `tests/test_runner_role_model.py`, `tests/test_step_cost.py`, `tests/test_token_rate_divergence.py`
 
 ## orchestrator/stack.py
 
@@ -1305,7 +1306,7 @@ built_at_sha: e3dca80247a7d1c0024d240c428f6e251da707e0
 - `tool_result_event`
 - `tool_use_call`
 
-**Импортирует:** `orchestrator/agent_log.py`, `orchestrator/catalog.py`, `orchestrator/config.py`, `orchestrator/gitcmd.py`, `orchestrator/runner.py`, `orchestrator/store.py`, `tests/sandbox.py`
+**Импортирует:** `orchestrator/agent_log.py`, `orchestrator/catalog.py`, `orchestrator/config.py`, `orchestrator/gitcmd.py`, `orchestrator/runner.py`, `orchestrator/spend.py`, `orchestrator/store.py`, `tests/sandbox.py`
 
 **Импортируется:** —
 
@@ -2481,7 +2482,7 @@ built_at_sha: e3dca80247a7d1c0024d240c428f6e251da707e0
 
 **Публичные функции:** (нет)
 
-**Импортирует:** `orchestrator/catalog.py`, `orchestrator/config.py`, `orchestrator/keychain.py`, `orchestrator/models.py`, `orchestrator/roles.py`, `orchestrator/runner.py`, `orchestrator/stack.py`, `orchestrator/store.py`, `tests/sandbox.py`, `tests/test_doctor.py`, `tests/test_runner_model_preflight.py`, `tests/test_runner_role_model.py`
+**Импортирует:** `orchestrator/catalog.py`, `orchestrator/config.py`, `orchestrator/failure_classification.py`, `orchestrator/keychain.py`, `orchestrator/models.py`, `orchestrator/roles.py`, `orchestrator/runner.py`, `orchestrator/stack.py`, `orchestrator/store.py`, `tests/sandbox.py`, `tests/test_doctor.py`, `tests/test_runner_model_preflight.py`, `tests/test_runner_role_model.py`
 
 **Импортируется:** —
 
@@ -2615,7 +2616,7 @@ built_at_sha: e3dca80247a7d1c0024d240c428f6e251da707e0
 **Публичные функции:**
 - `result_event`
 
-**Импортирует:** `orchestrator/catalog.py`, `orchestrator/config.py`, `orchestrator/gitcmd.py`, `orchestrator/runner.py`, `orchestrator/store.py`, `tests/sandbox.py`
+**Импортирует:** `orchestrator/catalog.py`, `orchestrator/config.py`, `orchestrator/gitcmd.py`, `orchestrator/runner.py`, `orchestrator/spend.py`, `orchestrator/store.py`, `tests/sandbox.py`
 
 **Импортируется:** `tests/test_providers.py`, `tests/test_runner_model_preflight.py`
 
