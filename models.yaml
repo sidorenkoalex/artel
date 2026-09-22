@@ -65,3 +65,69 @@ providers:
           cache_write: 6.25
           cache_read: 0.50
         price_date: 2026-09-20
+  codex:
+    cli: codex
+    # Нижняя граница самого CLI — то же число, что несёт провайдер
+    # (orchestrator/providers/codex.py, CLI_MINIMUM): установленная у
+    # Оператора 0.155.1 (ANSWER-1 родительской задачи
+    # 01M32K876ZCDZW8M5CZ1S5WY9J).
+    min_cli_version: 0.155.1
+    # `codex exec --json` стоимости шага в долларах не сообщает — расход
+    # считается тарифом каталога по токенам (часть 2 линии провайдеров).
+    cost_from_cli: false
+    # Прейскурант OpenAI за миллион токенов, стандартный тариф; источник
+    # https://developers.openai.com/api/docs/pricing, дата 2026-09-21,
+    # получен Оператором через `codex exec` с поиском в интернете
+    # (ANSWER-1 родительской задачи, вопросы 3-4).
+    #
+    # cache_write ВЕЗДЕ равен input не по прейскуранту вендора, а по его
+    # отсутствию: у OpenAI запись кэша отдельной строкой не тарифицируется
+    # и оплачивается как обычный вход (ANSWER-1, вопрос 3). Ноль здесь
+    # поставить нельзя — orchestrator/models.py считает нулевую цену
+    # ошибкой конфигурации, а не бесплатностью.
+    models:
+      gpt-6-astra:
+        min_cli_version: 0.155.1
+        status: experimental
+        list_price_usd_per_mtok:
+          input: 10.00
+          output: 50.00
+          cache_write: 10.00
+          cache_read: 1.00
+        price_date: 2026-09-21
+      gpt-5.6-sol:
+        min_cli_version: 0.155.1
+        status: experimental
+        list_price_usd_per_mtok:
+          input: 4.00
+          output: 20.00
+          cache_write: 4.00
+          cache_read: 0.40
+        price_date: 2026-09-21
+      gpt-5.6-terra:
+        min_cli_version: 0.155.1
+        status: experimental
+        list_price_usd_per_mtok:
+          input: 2.00
+          output: 12.00
+          cache_write: 2.00
+          cache_read: 0.20
+        price_date: 2026-09-21
+      gpt-5.6-luna:
+        min_cli_version: 0.155.1
+        status: experimental
+        list_price_usd_per_mtok:
+          input: 0.20
+          output: 1.20
+          cache_write: 0.20
+          cache_read: 0.02
+        price_date: 2026-09-21
+      gpt-5.5:
+        min_cli_version: 0.155.1
+        status: experimental
+        list_price_usd_per_mtok:
+          input: 5.00
+          output: 30.00
+          cache_write: 5.00
+          cache_read: 0.50
+        price_date: 2026-09-21
