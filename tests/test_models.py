@@ -17,10 +17,15 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from orchestrator import config, models, roles, store  # noqa: E402
+from orchestrator import config, models, providers, roles, store  # noqa: E402
 from tests.sandbox import TmpDirTest  # noqa: E402
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
+
+# Имя провайдера, которого в реестре нет и не будет: сценарий отказа
+# разбора обязан опираться на заведомо невозможное имя, а не на имя
+# провайдера, которого «пока» нет — второе стареет вместе с реестром.
+UNREGISTERED_PROVIDER = "provaydera-s-takim-imenem-ne-byvaet"
 
 # Минимальный валидный каталог: ровно те поля, без которых разбор
 # отказывает — сценарии ниже портят по одному.
@@ -153,13 +158,23 @@ class CatalogErrorsTest(_LayersTest):
     def test_unknown_provider_is_named(self):
         """Ловит мутацию: раздел провайдера, которого нет в реестре,
         разбирается молча — каталог обещал бы запуск модели, запускать
-        которую нечем."""
-        self.use_catalog(self.catalog_text().replace("claude:", "codex:", 1))
+        которую нечем.
+
+        Имя незарегистрированного провайдера в фикстуре было `codex` до
+        21.09 — ровно до того дня, когда `codex` в реестре появился
+        (SPEC 01M32NH6P053978AER66P0X4GN, требование 1), и тест
+        покраснел не по своему предмету. Поэтому имя теперь заведомо
+        невозможное, а его отсутствие в реестре проверяется прямо здесь:
+        следующий настоящий провайдер эту фикстуру уже не сломает.
+        """
+        self.assertNotIn(UNREGISTERED_PROVIDER, providers.PROVIDERS)
+        self.use_catalog(self.catalog_text().replace(
+            "claude:", f"{UNREGISTERED_PROVIDER}:", 1))
 
         with self.assertRaises(models.UnknownProviderError) as ctx:
             models.load_catalog()
 
-        self.assertIn("codex", str(ctx.exception))
+        self.assertIn(UNREGISTERED_PROVIDER, str(ctx.exception))
 
     def test_model_without_price_list_is_named(self):
         """Ловит мутацию: модель без прейскуранта принимается (тариф

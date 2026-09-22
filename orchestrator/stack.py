@@ -12,6 +12,16 @@
 `subprocess.run` локальных CLI, без сети (docs/invariants.md,
 инвариант 35).
 
+Манифест инструментов двухслойный (SPEC 01M32NH6P053978AER66P0X4GN,
+требование 6): `REQUIRED_TOOLS` — обязательные всегда (`git`, `gh` и CLI
+провайдера по умолчанию), `OPTIONAL_TOOL_PROVIDERS` — CLI остальных
+провайдеров реестра, обязательные ровно тогда, когда ярус хотя бы одной
+agent-роли разрешается в модель такого провайдера. Сегодняшний манифест
+отдаёт `required_tools()`, и по нему же считается `DECLARED_TOOLS`.
+Регистрация провайдера в реестре сама по себе обязательности не
+создаёт — иначе пульт без второго CLI переставал бы запускать шаги на
+первом.
+
 Вердикт совместимости модели с установленным CLI (`model_cli_verdict`,
 SPEC 01M2XJKV84SQ9VEVR0VNVKDNGJ) живёт здесь же — один на предполётную
 сверку шага роли, строки `check_stack()` и отказ после попытки класса
@@ -104,14 +114,111 @@ def _provider_tools() -> dict:
             for tool in cli_tools().values()}
 
 
+def _optional_tool_providers() -> dict:
+    """{имя инструмента: имя провайдера} для провайдеров, чей CLI
+    НЕОБЯЗАТЕЛЕН (SPEC 01M32NH6P053978AER66P0X4GN, требование 6).
+
+    Необязательны все, кроме провайдера по умолчанию: им идёт любая роль
+    без поля `provider:`, и без его CLI пульт не работает вовсе.
+    Остальные становятся обязательными ровно тогда, когда ярус хотя бы
+    одной agent-роли разрешается в модель такого провайдера
+    (`required_tools()` ниже).
+
+    До этой задачи запись в реестр провайдеров автоматически делала
+    инструмент обязательным: `REQUIRED_TOOLS` собирался по всему
+    реестру, а `runner._resolve_declared_tools` отказывает `OSError` на
+    любом ненайденном имени — то есть регистрация второго провайдера
+    ломала работу первого на машине, где второго CLI нет.
+    """
+    from .providers import DEFAULT_PROVIDER, PROVIDERS
+    default_tool = PROVIDERS[DEFAULT_PROVIDER].cli_tool().name
+    return {provider.cli_tool().name: name
+            for name, provider in PROVIDERS.items()
+            if provider.cli_tool().name != default_tool}
+
+
+#: Инструменты ВСЕХ провайдеров реестра — и обязательные, и нет. По этому
+#: словарю спрашивается версия конкретного CLI (`installed_cli_version`),
+#: даже когда инструмент в сегодняшний манифест не входит.
+PROVIDER_TOOLS = _provider_tools()
+
+#: {имя инструмента: имя провайдера} необязательной части манифеста.
+OPTIONAL_TOOL_PROVIDERS = _optional_tool_providers()
+
 REQUIRED_TOOLS = {
     "git": ToolRequirement((2, 30, 0), ("git", "--version")),
     "gh": ToolRequirement((2, 0, 0), ("gh", "--version")),
 }
-# Инструменты провайдеров — после общих: порядок ключей задаёт порядок
-# строк `check_stack()` и порядок каталогов PATH роли (`DECLARED_TOOLS`
-# ниже), а он не менялся с T019 (git, gh, claude).
-REQUIRED_TOOLS.update(_provider_tools())
+# Инструмент провайдера по умолчанию — после общих: порядок ключей задаёт
+# порядок строк `check_stack()` и порядок каталогов PATH роли
+# (`DECLARED_TOOLS` ниже), а он не менялся с T019 (git, gh, claude).
+# Необязательные инструменты в этот словарь НЕ попадают — их дописывает
+# `required_tools()` по факту сегодняшнего выбора моделей, и всегда
+# ПОСЛЕ обязательных, чтобы порядок выше не поехал.
+REQUIRED_TOOLS.update({name: tool for name, tool in PROVIDER_TOOLS.items()
+                       if name not in OPTIONAL_TOOL_PROVIDERS})
+
+
+def model_providers() -> set:
+    """Имена провайдеров, в модели которых СЕЙЧАС разрешаются ярусы
+    agent-ролей `roles.yaml` (SPEC 01M32NH6P053978AER66P0X4GN,
+    требование 6).
+
+    Предмет — разрешение цепочки «роль -> ярус -> модель -> провайдер», а
+    НЕ поле `provider:` роли: модель решает, каким CLI шаг реально
+    пойдёт, и роль с `provider: claude` при ярусе, разрешающемся в
+    модель Codex, обязана требовать `codex` так же, как любая другая.
+
+    Нечитаемая карта исполнителей и неразрешимая цепочка молча дают
+    пустое множество, а не исключение: и о том, и о другом говорят
+    собственные именованные отказы (`check_stack` строками моделей,
+    `runner._refuse_before_start` — отказом шага), и подменять их здесь
+    трейсбеком из сборки манифеста незачем — тот же приём защитной
+    деградации, что у `providers.name_for_role`.
+
+    `models`/`roles` импортируются внутри функции: оба несут аннотации
+    вида `X | None`, а этот модуль обязан импортироваться
+    интерпретатором 3.9 (докстринг у `REQUIRED_PYTHON`).
+    """
+    from . import models, roles
+    try:
+        entries = roles.load()
+    except roles.RolesError:
+        return set()
+    catalog, local = models.layers_or_none()
+    found = set()
+    for role, entry in entries.items():
+        if not isinstance(entry, dict) or entry.get("executor") != "agent":
+            continue
+        try:
+            found.add(models.resolve_role(role, catalog, local).provider)
+        except models.ModelsError:
+            continue
+    return found
+
+
+def demanded_optional_tools() -> dict:
+    """{имя инструмента: `ToolRequirement`} необязательных инструментов,
+    ставших обязательными при сегодняшнем выборе моделей."""
+    demanded = model_providers()
+    return {tool: PROVIDER_TOOLS[tool]
+            for tool, provider in OPTIONAL_TOOL_PROVIDERS.items()
+            if provider in demanded}
+
+
+def required_tools() -> dict:
+    """Манифест инструментов, обязательных ПРЯМО СЕЙЧАС: неизменная часть
+    (`git`, `gh`, CLI провайдера по умолчанию) плюс востребованные
+    необязательные — в этом порядке.
+
+    Вычисляется при каждом обращении, а не кэшируется: слои, по которым
+    считается востребованность (`roles.yaml`, каталог моделей, локальный
+    слой), Оператор правит между вызовами, а тесты подменяют их пути —
+    кэш сделал бы обе правки невидимыми.
+    """
+    tools = dict(REQUIRED_TOOLS)
+    tools.update(demanded_optional_tools())
+    return tools
 
 # Таблица «модель роли -> минимальная версия CLI claude» (SPEC
 # 01M2XJKV84SQ9VEVR0VNVKDNGJ) жила здесь до 20.09 и удалена задачей
@@ -139,15 +246,58 @@ MODEL_UNSUPPORTED_PREFIX = "модель роли не поддерживает�
 CLI_UPGRADE_HINT = ("обнови CLI либо смени модель яруса в "
                     ".artel/models.yaml")
 
-# Инструменты, чей абсолютный путь `orchestrator.runner.role_env` резолвит
-# через `shutil.which` для сборки PATH роли (SPEC
-# 01M1RDCEF0JZ4AVQRE43JFH8TN, требование 1, AC-1/AC-2): те же три внешних
-# CLI, что и `REQUIRED_TOOLS`, плюс `python3` — интерпретатор роли, для
-# которого сам which-путь не используется (роль получает каталог
-# `sys.executable` пульта, AC-3), но присутствие в PATH/системе всё равно
-# проверяется тем же способом (AC-6 — отсутствие ЛЮБОГО из четырёх обязано
-# останавливать шаг, включая python3).
-DECLARED_TOOLS = ("python3",) + tuple(REQUIRED_TOOLS.keys())
+class _DeclaredTools(object):
+    """Имена инструментов, чей абсолютный путь `orchestrator.runner.
+    role_env` резолвит через `shutil.which` для сборки PATH роли (SPEC
+    01M1RDCEF0JZ4AVQRE43JFH8TN, требование 1, AC-1/AC-2): внешние CLI
+    сегодняшнего манифеста плюс `python3` — интерпретатор роли, для
+    которого сам which-путь не используется (роль получает каталог
+    `sys.executable` пульта, AC-3), но присутствие в PATH/системе всё
+    равно проверяется тем же способом (AC-6 — отсутствие ЛЮБОГО из них
+    обязано останавливать шаг, включая python3).
+
+    Последовательность ЛЕНИВАЯ, а не кортеж, посчитанный при импорте
+    (SPEC 01M32NH6P053978AER66P0X4GN, требование 6): состав зависит от
+    того, разрешается ли ярус какой-нибудь роли в модель провайдера с
+    необязательным CLI, а это решают файлы, которые правятся при живом
+    процессе. Объект, а не функция, потому что `orchestrator/runner.py`
+    перебирает ИМЕННО ЭТО ИМЯ (`_resolve_declared_tools`,
+    `_role_path_dirs`), а он этой задачей не правится.
+
+    Поддерживается ровно то, чем именем пользуются: итерация, `len`,
+    индекс, `in` и сравнение с кортежем/списком.
+    """
+
+    def _names(self) -> tuple:
+        return ("python3",) + tuple(required_tools().keys())
+
+    def __iter__(self):
+        return iter(self._names())
+
+    def __len__(self) -> int:
+        return len(self._names())
+
+    def __getitem__(self, index):
+        return self._names()[index]
+
+    def __contains__(self, name) -> bool:
+        return name in self._names()
+
+    def __eq__(self, other) -> bool:
+        if isinstance(other, (tuple, list)):
+            return self._names() == tuple(other)
+        if isinstance(other, _DeclaredTools):
+            return self._names() == other._names()
+        return NotImplemented
+
+    def __hash__(self):
+        return hash(self._names())
+
+    def __repr__(self) -> str:
+        return repr(self._names())
+
+
+DECLARED_TOOLS = _DeclaredTools()
 
 # Белый список переменных окружения роли (SPEC 01M1RDCEF0JZ4AVQRE43JFH8TN,
 # требования 2, 5, AC-4/AC-5): единственный источник для
@@ -162,6 +312,8 @@ ROLE_ENV_ALLOWLIST = {
     "GIT_COMMITTER_EMAIL": "почта коммитера коммита роли",
     "CLAUDE_CODE_OAUTH_TOKEN": "токен подписки CLI claude для роли",
     "ANTHROPIC_API_KEY": "альтернативный канал токена CLI claude (ambient)",
+    "CODEX_HOME": "путь курируемого `.codex/` роли (ADR-0003 п.14)",
+    "OPENAI_API_KEY": "ключ CLI codex для роли (слот config.OPENAI_API_KEY_SLOT)",
     "LANG": "локаль — предсказуемый разбор вывода CLI claude/git",
     "TMPDIR": "временный каталог — CLI claude/git пишут туда рабочие файлы",
     "TERM": "тип терминала — вывод CLI claude зависит от него",
@@ -245,22 +397,42 @@ def _tool_check(name: str, requirement: ToolRequirement) -> StackCheck:
     return _probe_tool(name, requirement)[0]
 
 
-def installed_cli_version() -> Optional[tuple]:
-    """Установленная версия CLI `claude` кортежем — тот же вызов и разбор
-    `claude --version`, что у проверки инструмента манифеста (SPEC
-    01M2XJKV84SQ9VEVR0VNVKDNGJ, требование 3: «уже разбирается
+def installed_cli_version(tool: Optional[str] = None) -> Optional[tuple]:
+    """Установленная версия CLI провайдера кортежем — тот же вызов и
+    разбор `<инструмент> --version`, что у проверки инструмента манифеста
+    (SPEC 01M2XJKV84SQ9VEVR0VNVKDNGJ, требование 3: «уже разбирается
     `stack._tool_check`»); `None` — не определилась. Для предполётной
     сверки ОДНОЙ модели шага роли (`runner._refuse_before_start`) — не
     полный `check_stack()`, который тянул бы `git`/`gh`/venv-проверки ради
-    одного числа."""
-    return _probe_tool("claude", REQUIRED_TOOLS["claude"])[1]
+    одного числа.
+
+    `tool` не задан — инструмент провайдера по умолчанию (`claude`):
+    прежняя зеро-арг форма вызова и её поведение сохранены. Второй
+    провайдер обязан спрашивать СВОЙ CLI (SPEC
+    01M32NH6P053978AER66P0X4GN, требование 7): вердикт по версии чужого
+    инструмента дал бы зелёный предполёт и провал попытки за деньги.
+    Спрашивается `PROVIDER_TOOLS`, а не сегодняшний манифест, — версия
+    нужна и у инструмента, который в манифест пока не входит."""
+    name = tool or _default_provider_tool()
+    requirement = PROVIDER_TOOLS.get(name) or REQUIRED_TOOLS.get(name)
+    if requirement is None:
+        return None
+    return _probe_tool(name, requirement)[1]
+
+
+def _default_provider_tool() -> str:
+    """Имя CLI провайдера по умолчанию — не литерал `claude`: имя знает
+    реестр провайдеров, а не манифест."""
+    from .providers import DEFAULT_PROVIDER, PROVIDERS
+    return PROVIDERS[DEFAULT_PROVIDER].cli_tool().name
 
 
 ModelCliVerdict = namedtuple("ModelCliVerdict", "status detail")
 
 
 def model_cli_verdict(model: str, installed: Optional[tuple],
-                      minimum: Optional[tuple]) -> ModelCliVerdict:
+                      minimum: Optional[tuple],
+                      cli: str = "claude") -> ModelCliVerdict:
     """Сверка модели роли с установленной версией CLI (SPEC
     01M2XJKV84SQ9VEVR0VNVKDNGJ, требования 3, 5; SPEC
     01M3009Y9AGGY6ZCFA7H1HJ1TD, требование 10): чистая функция, одна на
@@ -271,6 +443,13 @@ def model_cli_verdict(model: str, installed: Optional[tuple],
     Параметр, а не таблица внутри: каталог читает тот, кто знает, что
     именно запускает, а этот модуль обязан оставаться импортируемым под
     интерпретатором 3.9 (докстринг `REQUIRED_PYTHON`).
+
+    `cli` — имя инструмента, у которого спрошена `installed`: оно и
+    уходит в текст (SPEC 01M32NH6P053978AER66P0X4GN, требование 7).
+    Значение по умолчанию оставлено прежним литералом `claude`, чтобы
+    ни один сегодняшний вызов и ни одна сегодняшняя строка отказа не
+    поменялись; второй провайдер называет свой инструмент явно — иначе
+    отказ по версии Codex сообщал бы Оператору «требует claude ≥ …».
 
     - минимум неизвестен (`None`) — `fail`: модели нет в каталоге, и
       запускать её «как есть» больше нельзя (требование 10, AC-13) — до
@@ -288,20 +467,20 @@ def model_cli_verdict(model: str, installed: Optional[tuple],
     if installed is None:
         return ModelCliVerdict(
             "warn",
-            f"версия CLI не определилась (`claude --version`) — модель "
-            f"требует claude ≥ {version_text(minimum)}, сверить не с чем")
+            f"версия CLI не определилась (`{cli} --version`) — модель "
+            f"требует {cli} ≥ {version_text(minimum)}, сверить не с чем")
     if installed >= minimum:
         return ModelCliVerdict(
             "ok",
             f"CLI {version_text(installed)} ≥ {version_text(minimum)} — ok")
     return ModelCliVerdict(
         "fail",
-        f"{MODEL_UNSUPPORTED_PREFIX}: {model} требует claude ≥ "
+        f"{MODEL_UNSUPPORTED_PREFIX}: {model} требует {cli} ≥ "
         f"{version_text(minimum)}, установлен {version_text(installed)}; "
         f"{CLI_UPGRADE_HINT}")
 
 
-def _model_checks(installed: Optional[tuple]) -> list:
+def _model_checks(versions: dict) -> list:
     """Требование 5/AC-10: по строке на каждую agent-роль `roles.yaml` —
     `ok`/`fail`/`warn` вердиктом `model_cli_verdict`. Роли без
     `executor: agent` (`orchestrator`, `verifier`) строки не получают:
@@ -318,6 +497,13 @@ def _model_checks(installed: Optional[tuple]) -> list:
     Слои читаются один раз на весь перебор (`models.layers_or_none`), не
     по разу на роль: цепочка у всех ролей резолвится по одним и тем же
     двум файлам, а `check_stack()` зовётся на КАЖДЫЙ `runner.role_env`.
+
+    `versions` — {имя инструмента: разобранная версия либо `None`} из уже
+    сделанных проб `check_stack()`, а не одно число (SPEC
+    01M32NH6P053978AER66P0X4GN, требование 7): модель роли сверяется с
+    версией СВОЕГО CLI (`resolved.cli`), иначе модель Codex получала бы
+    вердикт по версии Claude — зелёный предполёт и провал попытки за
+    деньги. Второго подпроцесса сверка по-прежнему не стоит.
 
     `roles`/`models` импортируются здесь, не на уровне модуля:
     `orchestrator/roles.py` несёт `str | None` в сигнатурах, а этот
@@ -343,8 +529,9 @@ def _model_checks(installed: Optional[tuple]) -> list:
             checks.append(StackCheck(f"model-{role}", "fail",
                                      f"модель роли {role} не разрешена: {exc}"))
             continue
-        verdict = model_cli_verdict(resolved.model, installed,
-                                    resolved.min_cli_version)
+        verdict = model_cli_verdict(resolved.model,
+                                    versions.get(resolved.cli),
+                                    resolved.min_cli_version, resolved.cli)
         checks.append(StackCheck(
             f"model-{role}", verdict.status,
             f"модель роли {role} {resolved.model}: {verdict.detail}"))
@@ -528,19 +715,25 @@ def check_stack() -> list:
     Требование 5 (SPEC 01M2XJKV84SQ9VEVR0VNVKDNGJ, AC-10) добавляет по
     строке на agent-роль `roles.yaml` — модель берётся разрешением
     цепочки «роль -> ярус -> модель» (SPEC 01M3009Y9AGGY6ZCFA7H1HJ1TD),
-    а версия `claude` — из уже сделанной проверки инструмента
+    а версия её CLI — из уже сделанной проверки инструмента
     (`_probe_tool`), не вторым подпроцессом.
+
+    Перебирается `required_tools()`, а не весь реестр провайдеров (SPEC
+    01M32NH6P053978AER66P0X4GN, требование 6): инструмент провайдера,
+    в модели которого не разрешается ни один ярус, строки не получает
+    вовсе — пульт без него проходит `doctor` и работает как до его
+    регистрации. Ровно тот же инструмент становится FAIL'ом в ту минуту,
+    когда ярус какой-нибудь agent-роли на его модель указал.
     """
     checks = [_python_check()]
-    claude_version = None
-    for name, requirement in REQUIRED_TOOLS.items():
+    versions = {}
+    for name, requirement in required_tools().items():
         check, version = _probe_tool(name, requirement)
         checks.append(check)
-        if name == "claude":
-            claude_version = version
+        versions[name] = version
     venv_check = _venv_exists_check()
     checks.append(venv_check)
     if venv_check.status == "ok":
         checks.append(_venv_packages_check())
-    checks.extend(_model_checks(claude_version))
+    checks.extend(_model_checks(versions))
     return checks

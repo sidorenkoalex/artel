@@ -132,3 +132,216 @@ def isolation_smoke(role: str = "developer") -> doctor.Check:
                  "(--strict-mcp-config)")
 
 
+# --- офлайн-смок изоляции провайдера `codex` (SPEC
+#     01M32NH6P053978AER66P0X4GN, требование 12) -----------------------
+
+CODEX_SMOKE_CHECK = "codex-isolation-smoke"
+
+
+def provider_isolation_smokes() -> list:
+    """Смоки изоляции провайдеров реестра, у которых он СВОЙ (`isolation_
+    smoke()` вернул `Check`, а не `None`) — вход `doctor.all_checks`.
+
+    Перебор по реестру, а не поимённый вызов: следующий провайдер со
+    своей изоляцией попадёт в вывод `doctor` записью в реестр, без
+    правки списка проверок.
+    """
+    checks = []
+    for provider in doctor.providers.PROVIDERS.values():
+        check = provider.isolation_smoke()
+        if check is not None:
+            checks.append(check)
+    return checks
+
+
+def codex_isolation_smoke(role: str = "developer") -> doctor.Check:
+    """Изоляция шага роли на `codex` — БЕЗ запуска CLI и без сети.
+
+    Сверяется РЕАЛЬНО собранная команда шага и РЕАЛЬНО собранное
+    окружение (`CodexProvider.command()`/`environment()`), а не
+    собственная копия списка флагов рядом с проверкой: копия не заметила
+    бы флага, выломанного из сборки, и Оператор читал бы зелёную строку
+    про изоляцию, которой у шага уже нет.
+
+    Четыре пункта, каждый называется в тексте провала поимённо:
+    песочница `workspace-write`, выключение сети песочницы, выключение
+    КАЖДОЙ из одиннадцати функций 0.155.1 и ambient-значения `HOME`/
+    `CODEX_HOME`, не отведённые от окружения Оператора.
+
+    Чужие секреты (токен подписки Claude), оставшиеся в окружении шага
+    из ОБЩЕГО белого списка манифеста, — отдельная ЖЁЛТАЯ строка, а не
+    молчание: сужение белого списка по провайдеру требует правки
+    `orchestrator/runner.py` и в эту задачу не входит, поэтому единственное,
+    чем факт утечки может стать заметным, — этот смок. Своим и чужим
+    секрет называет реестр (`secret_env_names()` провайдеров), не литерал.
+
+    Инструмент `codex` может вовсе не входить в сегодняшний манифест
+    (пульт без Codex, ни один ярус на его модели не указывает) — тогда
+    сборка argv отказывает резолвом, и смок честно отдаёт `skip`:
+    краснеть на отсутствие того, чем никто не пользуется, `doctor` не
+    вправе.
+    """
+    provider = doctor.providers.get(doctor.codex_provider.CLI_NAME)
+    try:
+        cmd = provider.command()
+    except (OSError, KeyError) as exc:
+        return doctor.Check(
+            CODEX_SMOKE_CHECK, "skip",
+            f"команда шага не собрана ({exc}) — инструмент {doctor.codex_provider.CLI_NAME} "
+            f"не объявлен сегодняшним манифестом, изоляция не сверяется")
+
+    leaks = []
+    if not _carries_value(cmd, doctor.codex_provider.SANDBOX_MODE):
+        leaks.append(f"песочница: в команде шага нет "
+                     f"{doctor.codex_provider.SANDBOX_MODE}")
+    network = f"{doctor.codex_provider.NETWORK_ACCESS_KEY}=" \
+              f"{doctor.codex_provider.NETWORK_ACCESS_VALUE}"
+    if not _carries_value(cmd, network):
+        leaks.append(f"сеть песочницы: в команде шага нет -c {network}")
+    for feature in doctor.codex_provider.DISABLED_FEATURES:
+        if not _carries_flag_value(cmd, "--disable", feature):
+            leaks.append(f"функция {feature}: в команде шага нет "
+                         f"--disable {feature}")
+
+    env, env_leaks = _codex_environment_leaks(provider, role)
+    if env is None:
+        return doctor.Check(CODEX_SMOKE_CHECK, "fail", env_leaks)
+    leaks.extend(env_leaks)
+
+    if leaks:
+        return doctor.Check(CODEX_SMOKE_CHECK, "fail", "; ".join(leaks))
+
+    foreign = _foreign_provider_secrets(provider)
+    if foreign:
+        return doctor.Check(
+            CODEX_SMOKE_CHECK, "warn",
+            f"изоляция команды и дома роли сошлась, но в окружении шага "
+            f"остаётся секрет другого провайдера: {', '.join(foreign)} — "
+            f"общий белый список манифеста копирует его любому шагу "
+            f"(сужение списка по провайдеру — отдельная задача)")
+    return doctor.Check(
+        CODEX_SMOKE_CHECK, "ok",
+        f"команда шага несёт песочницу {doctor.codex_provider.SANDBOX_MODE}, "
+        f"выключенную сеть и выключение всех "
+        f"{len(doctor.codex_provider.DISABLED_FEATURES)} функций; окружение несёт "
+        f"CODEX_HOME на курируемый дом и не наследует ambient HOME/CODEX_HOME")
+
+
+def _carries_value(cmd, value: str) -> bool:
+    """Команда несёт `value` отдельным элементом или хвостом через `=`:
+    написание флага — дело провайдера, предмет проверки — значение."""
+    return any(item == value or item.endswith(f"={value}") for item in cmd)
+
+
+def _carries_flag_value(cmd, flag: str, value: str) -> bool:
+    """Команда несёт пару `flag value` — раздельно, через `=` или
+    слитно."""
+    pairs = [(cmd[i], cmd[i + 1]) for i in range(len(cmd) - 1)]
+    return ((flag, value) in pairs or f"{flag}={value}" in cmd
+            or f"{flag}{value}" in cmd)
+
+
+def _codex_environment_leaks(provider, role: str):
+    """(окружение провайдера, список утечек) либо `(None, текст отказа)`.
+
+    Ambient `HOME`/`CODEX_HOME` подменяются ВРЕМЕННЫМ каталогом-маркером
+    (не реальным домом Оператора — офлайн-смок им не пользуется вовсе), и
+    проверяется, что собранное окружение этот маркер не унаследовало:
+    провайдер обязан переписывать обе переменные всегда, а не
+    `setdefault`-ом.
+    """
+    marker_names = ("HOME", doctor.codex_provider.HOME_ENV)
+    prior = {name: os.environ.get(name) for name in marker_names}
+    with tempfile.TemporaryDirectory() as fake_home:
+        for name in marker_names:
+            os.environ[name] = fake_home
+        try:
+            env = provider.environment(role)
+        except OSError as exc:
+            return None, f"окружение роли не подготовлено: {exc}"
+        finally:
+            for name, value in prior.items():
+                if value is None:
+                    os.environ.pop(name, None)
+                else:
+                    os.environ[name] = value
+    leaks = [f"{name}: окружение шага унаследовало ambient-значение "
+             f"Оператора" for name in marker_names
+             if env.get(name) == fake_home]
+    deployed = str(doctor.config.ROLE_HOME / doctor.codex_provider.DEPLOYED_HOME_DIR)
+    if env.get(doctor.codex_provider.HOME_ENV) != deployed:
+        leaks.append(f"{doctor.codex_provider.HOME_ENV}: окружение шага не указывает "
+                     f"на курируемый дом {deployed}")
+    return env, leaks
+
+
+FOREIGN_SECRETS_CHECK = "foreign-provider-secrets"
+
+
+def check_foreign_provider_secrets() -> doctor.Check:
+    """Секреты ЧУЖИХ провайдеров в окружении шага — по одной строке на
+    весь `doctor`, симметрично жёлтой строке смока Codex (REVIEW.md
+    итерации 1, R1-F4).
+
+    Белый список манифеста (`stack.ROLE_ENV_ALLOWLIST`) общий на пульт, а
+    не свой у каждого провайдера: заданный Оператором `OPENAI_API_KEY`
+    копируется в окружение КАЖДОГО шага, в том числе шага роли на
+    Claude, — ровно так же, как токен подписки Claude достаётся шагу на
+    Codex (требование 12, AC-18). Про второй случай говорит
+    `codex_isolation_smoke`, про первый до этой строки не говорил никто:
+    у провайдера по умолчанию своего смока нет, а общий
+    `isolation_smoke` про ключи других провайдеров не знает.
+
+    Отдельная строка, а не пункт `isolation_smoke`: там предмет —
+    «шаг достаёт то, чего не должен» (маркеры слоёв, хуки, MCP), и его
+    зелёность сверяют регрессии, заведённые до реестра провайдеров;
+    здесь — «в шаге лежит лишний секрет», состояние машины Оператора,
+    которое лечится не кодом шага, а сужением белого списка (отдельная
+    задача линии).
+
+    Предупреждение, а не провал: сужение списка по провайдеру требует
+    правки `orchestrator/runner.py` и в эту задачу не входит — краснеть
+    на то, чего пульт сегодня не умеет иначе, значило бы красить
+    `doctor` навсегда.
+    """
+    found = []
+    for role in doctor.agent_roles():
+        try:
+            provider = doctor.providers.for_role(role)
+        except doctor.providers.UnknownProviderError:
+            # Про незарегистрированного провайдера роли говорит красная
+            # строка `check_role_providers` — дублировать её нечем.
+            continue
+        names = _foreign_provider_secrets(provider)
+        if names:
+            found.append(f"{role} ({provider.name}): {', '.join(names)}")
+    if not found:
+        return doctor.Check(
+            FOREIGN_SECRETS_CHECK, "ok",
+            "секретов других провайдеров в окружении шагов ролей нет")
+    return doctor.Check(
+        FOREIGN_SECRETS_CHECK, "warn",
+        f"общий белый список манифеста копирует в окружение шага секрет "
+        f"ДРУГОГО провайдера — {'; '.join(found)}; значения не читаются и "
+        f"не печатаются, сужение списка по провайдеру — отдельная задача "
+        f"линии провайдеров")
+
+
+def _foreign_provider_secrets(provider) -> list:
+    """Имена ambient-переменных с секретами ДРУГИХ провайдеров реестра,
+    которые общий белый список манифеста скопирует в окружение шага
+    (`runner._allowlisted_env`). Значения не читаются и никуда не
+    печатаются — только имена."""
+    own = set(provider.secret_env_names())
+    found = []
+    for other in doctor.providers.PROVIDERS.values():
+        if other is provider:
+            continue
+        for name in other.secret_env_names():
+            if name in own or name in found:
+                continue
+            if name in doctor.stack.ROLE_ENV_ALLOWLIST and os.environ.get(name):
+                found.append(name)
+    return found
+
+

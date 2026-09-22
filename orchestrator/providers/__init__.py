@@ -16,6 +16,7 @@ from .base import (CliTool, EMPTY_EVENT, FailureSignature, HomeReference,
                    RoleExecutorProvider, RunResult, StreamEvent, ToolCall,
                    ToolResult)
 from .claude import ClaudeProvider
+from .codex import CodexProvider
 
 #: Провайдер роли, у которой поле `provider:` в `roles.yaml` не задано.
 DEFAULT_PROVIDER = "claude"
@@ -24,8 +25,17 @@ DEFAULT_PROVIDER = "claude"
 #: Значения — готовые экземпляры: провайдер не несёт состояния шага, а
 #: подмена его метода в тесте (`mock.patch.object(ClaudeProvider, ...)`)
 #: видна всем держателям этого экземпляра.
+#:
+#: Запись в этом словаре НЕ делает инструмент провайдера обязательным
+#: для пульта (SPEC 01M32NH6P053978AER66P0X4GN, требование 6): манифест
+#: стека держит инструменты провайдеров, кроме провайдера по умолчанию,
+#: необязательными и спрашивает их ровно тогда, когда ярус хотя бы одной
+#: agent-роли разрешается в модель такого провайдера
+#: (`orchestrator/stack.py::required_tools`). Пульт без Codex проходит
+#: `doctor` и запускает роли на Claude как до регистрации.
 PROVIDERS = {
     DEFAULT_PROVIDER: ClaudeProvider(),
+    CodexProvider.name: CodexProvider(),
 }
 
 

@@ -43,6 +43,12 @@ def all_checks(conn) -> list[doctor.Check]:
     # цепочкой роли, а не в конце списка, где их не связать с ней глазом.
     checks.append(doctor.check_model_tariff_freshness())
     checks.append(doctor.check_model_tariff_vs_model_change(conn))
+    # Согласованность «провайдер роли ↔ провайдер её модели» и наличие
+    # CLI востребованных провайдеров (REVIEW.md итерации 1, R1-F1) —
+    # перед строками самих CLI: пара, разошедшаяся между `roles.yaml` и
+    # ярусом локального слоя, до этой строки не была видна в `doctor`
+    # вовсе, а шаг по ней уходил бы в чужой CLI за деньги.
+    checks.append(doctor.check_model_provider_cli())
     checks.extend(provider_checks.pop("cli-found", []))
     checks.extend(provider_checks.pop("cli-version", []))
     checks.extend(provider_checks.pop("token", []))
@@ -54,6 +60,16 @@ def all_checks(conn) -> list[doctor.Check]:
     checks.append(doctor.check_backup_age(conn))
     checks.append(doctor.check_task_counters(conn))
     checks.append(doctor.isolation_smoke())
+    # Смоки изоляции провайдеров, у которых он свой (SPEC
+    # 01M32NH6P053978AER66P0X4GN, требование 12) — сразу за общим: у них
+    # один предмет («достаёт ли шаг то, чего не должен»), и читать их
+    # Оператору удобнее рядом.
+    checks.extend(doctor.provider_isolation_smokes())
+    # Секреты чужих провайдеров в окружении шага (REVIEW.md итерации 1,
+    # R1-F4) — рядом со смоками изоляции: предмет тот же («в шаге лежит
+    # то, чего там быть не должно»), но лечится он не кодом шага, а
+    # сужением общего белого списка манифеста.
+    checks.append(doctor.check_foreign_provider_secrets())
     checks.append(doctor.live_smoke(conn))
 
     try:
