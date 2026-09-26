@@ -100,6 +100,11 @@ def all_checks(conn) -> list[doctor.Check]:
     checks.append(doctor.check_git_hooks())
     checks.append(doctor.check_role_log_pool_leak(conn))
     checks.append(doctor.check_canary_pool_drift())
+    # Наборы ролей канарейки (SPEC 01M3FQ2Z2PY0E9T5F5WQ207NP5, требование
+    # 9) — рядом с остальными строками канарейки: битая ссылка набора
+    # обнаруживается иначе только на самом прогоне, то есть после того, как
+    # за неё заплачено попыткой.
+    checks.append(doctor.check_canary_sets())
     checks.append(doctor.check_canary_trigger(conn))
     checks.append(doctor.check_pending_notes())
     checks.extend(doctor.check_token_repo_scope())

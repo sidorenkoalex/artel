@@ -146,6 +146,7 @@ from .auto_ack import (_BRANCH_ALERT_RE, _DIR_ALERT_RE, _WORKTREE_ALERT_RE,
 from .orphans import _is_legit_task_worktree, _orphan_worktrees, check_orphans
 from .canary_pool import (check_role_log_pool_leak, check_canary_pool_drift,
                           check_token_repo_scope, check_canary_trigger)
+from .canary_sets import CANARY_SETS_CHECK, check_canary_sets
 from .branch_freshness import check_branch_freshness
 from .artifact_branches import (_artifact_branch_first_commit_parent,
                                 check_artifact_branch_parent_ancestry,
