@@ -93,11 +93,6 @@ NOTE_AUTHOR_NAME = "Artel Operator Note"
 NOTE_AUTHOR_EMAIL = "operator-note@artel.invalid"
 
 
-class NoteError(Exception):
-    """Не используется наружу — валидация отказывает через sys.exit сразу,
-    здесь только для внутренней читаемости кода (не поймана нигде)."""
-
-
 def _work_dir() -> Path:
     return config.ROOT / ".artel" / "notes-work"
 

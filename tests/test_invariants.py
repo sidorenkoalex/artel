@@ -37,6 +37,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from orchestrator import (artel, budget, catalog, ci, cleanup,  # noqa: E402
                           config, fsm, fsm_advance, gitcmd, runner, stack,
                           store)
+from orchestrator.advance_gates import test_integrity  # noqa: E402
 from scripts import guard  # noqa: E402
 from tests.sandbox import (FakeProc, SpyRun, TmpRootTest, _stub_check_stack,  # noqa: E402
                            capture, capture_new_task_id,
@@ -2235,3 +2236,120 @@ class SandboxPatchedAttrsCoverWorktreesInvariantTest(unittest.TestCase):
             self._classes_missing_required("tests/synthetic.py", dirty))
         self.assertEqual(
             [], self._classes_missing_required("tests/synthetic.py", clean))
+
+
+class TestWeakeningNeedsTheOperatorTest(TmpRootTest):
+    """Инвариант 38 (docs/invariants.md): удаление, переименование и
+    ослабление тестов `tests/` без мандата Оператора не проходят ни
+    переход `in_dev → verifying`, ни гейт мержа (SPEC
+    01M3FQ2V77QNK95Z599DM124QN).
+
+    Живой git здесь не нужен и не заводится: предмет — что открыть рубеж
+    может только Оператор и что на находке он отказывает на ОБОИХ
+    маршрутах. Что рубеж встроен в тела `fsm_advance.in_dev` и
+    `fsm_merge_gate._cmd_approve_merge_gate`, держит
+    `tests/test_test_integrity_gate.py::GateWiringTest`; разбор настоящих
+    ответов git — остальные сценарии того же модуля и планка задачи.
+    """
+
+    TASK = "T001"
+    BRANCH = "task/t001-x"
+    ARTIFACT = "artifact/t001"
+    BASE = "basesha"
+    DELETED = "tests/test_protected.py"
+    SOURCE = ("import unittest\n\n\n"
+              "class ProtectedTest(unittest.TestCase):\n\n"
+              "    def test_one(self):\n        pass\n")
+    MANDATE = "Ослабление тестов разрешено: tests/test_protected.py"
+    ANSWER = "tasks/T001/ANSWER-1.md"
+
+    def setUp(self):
+        super().setUp()
+        store.create_schema(store.db())
+        self.conn = store.db()
+        store.insert_task(self.conn, self.TASK, "Задача", "in_dev",
+                          self.BRANCH, config.DEFAULT_TARGET, 25.0)
+        self.answer_text = None
+        self.answer_subject = f"{self.TASK}: ANSWER-1 — ответ Оператора"
+
+    def _show(self, ref, rel):
+        if (ref, rel) == (self.BASE, self.DELETED):
+            return self.SOURCE, ""
+        if (ref, rel) == (self.ARTIFACT, self.ANSWER) and self.answer_text:
+            return self.answer_text, ""
+        return None, "файла нет в этой ветке"
+
+    def _git(self, *args):
+        return subprocess.CompletedProcess(args, 0,
+                                           f"{self.answer_subject}\n", "")
+
+    @contextlib.contextmanager
+    def _branch_deleting_a_test(self):
+        answers = [self.ANSWER] if self.answer_text else []
+        with mock.patch.object(gitcmd, "diff_base", return_value=self.BASE), \
+             mock.patch.object(gitcmd, "diff_name_status",
+                               return_value=[("D", self.DELETED, None)]), \
+             mock.patch.object(gitcmd, "show", self._show), \
+             mock.patch.object(gitcmd, "ls_tree_files", return_value=answers), \
+             mock.patch.object(gitcmd, "git", self._git):
+            yield
+
+    def test_a_deleted_test_does_not_pass_the_transition(self):
+        """Ловит мутацию: обёртка `_test_integrity_gate_refuses` открыта
+        на находке — возвращает `False` либо не журналирует именованное
+        действие, и удаление файла тестов проходит `in_dev → verifying`
+        молча, как оно проходило до 01M3FQ2V77QNK95Z599DM124QN.
+
+        Что обёртка ВЫЗВАНА телом `in_dev`, этот сценарий не проверяет —
+        он зовёт её напрямую; подключение держит
+        `tests/test_test_integrity_gate.py::GateWiringTest`."""
+        box = []
+        with self._branch_deleting_a_test():
+            t = store.get_task(self.conn, self.TASK)
+            capture(lambda: box.append(
+                fsm_advance._test_integrity_gate_refuses(
+                    self.conn, self.TASK, t, self.ARTIFACT)))
+        self.assertTrue(box[0], "гейт обязан отклонить переход")
+        actions = [row["action"] for row in self.conn.execute(
+            "SELECT action FROM steps WHERE task_id=?", (self.TASK,))]
+        self.assertIn("переход отклонён: гейт неослабления тестов", actions)
+
+    def test_only_the_operator_mandate_opens_the_gate(self):
+        """Ловит мутацию: мандатом признаётся ЛЮБОЙ `ANSWER-n.md` с
+        нужной строкой, без сверки подписи его последнего коммита —
+        developer кладёт файл в собственный `tasks/<id>/` в своём же
+        шаге `in_dev`, автокоммит переносит его в ветку, и роль сама
+        себе разрешает ослабление (тот же класс, что у мандата зон)."""
+        self.answer_text = f"# Ответ\n\n{self.MANDATE}\nОснование: ADR-0002.\n"
+        self.answer_subject = (f"{self.TASK}: артефакты шага developer "
+                               f"(автокоммит оркестратора)")
+        with self._branch_deleting_a_test():
+            t = store.get_task(self.conn, self.TASK)
+            refusal = fsm_advance._test_integrity_gate(
+                self.conn, self.TASK, t, self.ARTIFACT)
+        self.assertIsNotNone(refusal, "автокоммит роли мандатом не считается")
+
+        self.answer_subject = f"{self.TASK}: ANSWER-1 — ответ Оператора"
+        with self._branch_deleting_a_test():
+            t = store.get_task(self.conn, self.TASK)
+            allowed = fsm_advance._test_integrity_gate(
+                self.conn, self.TASK, t, self.ARTIFACT)
+        self.assertIsNone(allowed, "мандат Оператора обязан снимать отказ")
+
+    def test_the_merge_gate_escalates_the_same_finding(self):
+        """Ловит мутацию: узел на маршруте мержа докладывает находку
+        одним возвратом, забыв `store.set_state` — задача остаётся в
+        `merge_gate` и уходит в main, хотя ручная сверка удалённых тестов
+        с Оператора этой задачей уже снята.
+
+        Подключение узла к телу `_cmd_approve_merge_gate` держит
+        `tests/test_test_integrity_gate.py::GateWiringTest`, не этот
+        сценарий."""
+        store.update_task(self.conn, self.TASK, state="merge_gate")
+        with self._branch_deleting_a_test():
+            escalated = test_integrity.merge_gate_escalates(
+                self.conn, self.TASK, "merge_gate", self.BRANCH,
+                self.ARTIFACT)
+        self.assertTrue(escalated)
+        self.assertEqual("escalated",
+                         store.get_task(self.conn, self.TASK)["state"])
