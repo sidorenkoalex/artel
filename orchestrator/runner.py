@@ -724,6 +724,32 @@ def _allowlisted_env(source) -> dict:
            if name in stack.ROLE_ENV_ALLOWLIST or name.startswith(prefixes)}
 
 
+def foreign_secret_env_names(provider) -> set[str]:
+    """Имена переменных, которыми приходит секрет ЧУЖОГО для `provider`
+    исполнителя (SPEC 01M3F7BYE82S9AQCBSP1RTQQTR, требование 4).
+
+    Набор считается по РЕЕСТРУ провайдеров, а не литералами: своим секрет
+    называет один провайдер (`secret_env_names()`), чужим — все остальные,
+    и следующий провайдер со своим секретом не придётся дописывать в двух
+    местах. Собственные имена провайдера роли вычитаются в конце — иначе
+    шаг роли на Claude остался бы без токена подписки и падал бы «Not
+    logged in» на провайдере, который сам же этот токен объявил.
+
+    Публичная (не `_foreign_...`), потому что читателя два: сборка
+    окружения ниже и строка `doctor.check_foreign_provider_secrets`,
+    которая сверяет УЖЕ СОБРАННОЕ окружение шага тем же набором имён — тем
+    же приёмом единственного определения, которым смок Codex зовёт
+    `_allowlisted_env` вместо своей копии правила.
+    """
+    own = set(provider.secret_env_names())
+    foreign: set[str] = set()
+    for other in providers.PROVIDERS.values():
+        if other is provider:
+            continue
+        foreign.update(other.secret_env_names())
+    return foreign - own
+
+
 def _venv_interpreter_bin() -> str:
     """Требование 4 (SPEC 01M1REVEZ1HESMJ7AFD5A9MEJ8, AC-12/AC-13): каталог
     `<.artel/venv>/bin` — интерпретатор роли, если `.artel/venv` существует
@@ -792,6 +818,14 @@ def role_env(role: str | None = None, task_id: str | None = None) -> dict:
     метки роли/задачи и git-идентичность — они не зависят от того, каким
     CLI исполняется шаг.
 
+    Белый список при этом ОБЩИЙ на пульт, а провайдеры разные (SPEC
+    01M3F7BYE82S9AQCBSP1RTQQTR, требование 4): имена секретов ЧУЖОГО
+    исполнителя (`foreign_secret_env_names`) из ambient-копии вычитаются,
+    иначе токен подписки Claude, заданный Оператором, доставался бы и шагу
+    роли на Codex — утечка секрета в чужой CLI тем самым каналом, который
+    список и открывает. Сам список остаётся источником РАЗРЕШЁННЫХ имён:
+    сужение вычитает из него по провайдеру шага, а не заменяет его.
+
     Интерпретатор роли — `.artel/venv` (SPEC 01M1REVEZ1HESMJ7AFD5A9MEJ8,
     требование 4), если он согласован с файлом закреплённых версий
     (`_venv_interpreter_bin`, вызывается сразу после резолвинга
@@ -802,8 +836,16 @@ def role_env(role: str | None = None, task_id: str | None = None) -> dict:
     """
     resolved = _resolve_declared_tools()
     venv_bin = _venv_interpreter_bin()
+    provider = providers.for_role(role)
     env = _allowlisted_env(os.environ)
-    env.update(providers.for_role(role).environment(role, task_id))
+    # Секреты ЧУЖИХ провайдеров — из ambient-копии вон (SPEC
+    # 01M3F7BYE82S9AQCBSP1RTQQTR, требование 4): белый список манифеста
+    # общий на пульт, и заданный Оператором токен подписки одного
+    # исполнителя иначе уезжал бы в CLI другого. Вычитание идёт ДО
+    # накладки провайдера: своё провайдер кладёт поверх и сильнее.
+    for name in foreign_secret_env_names(provider):
+        env.pop(name, None)
+    env.update(provider.environment(role, task_id))
     env["PATH"] = os.pathsep.join([venv_bin] + _role_path_dirs(resolved))
     if role:
         env[config.ARTEL_ROLE_ENV] = role

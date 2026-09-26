@@ -4,12 +4,19 @@
 `config.LOGS`, покрыт приёмочными тестами `tasks/
 01M1NEEWH5K1XPFRDGRMPYSBXJ/acceptance_tests/`).
 
+Отбор файлов каталога логов (SPEC 01M3F7BYE82S9AQCBSP1RTQQTR, требование
+7): логи шагов ролей ОБОИХ провайдеров читаются независимо от формата
+содержимого (в том числе JSONL `codex exec --json`), записи сессий
+Оператора (`*.session.log`) не читаются вовсе — «не читает» проверяется
+слежкой за `Path.read_text`, а не отсутствием срабатывания.
+
 `CanaryPoolDriftCheckTest` — `doctor.check_canary_pool_drift` (SPEC
 01M1NSR5M5THYRC0RFWPMVE2DW, требование 3/AC-8) вызовом функции напрямую;
 полный сценарий через `doctor` CLI и обе команды восстановления уже
 покрыт приёмочными тестами `tasks/01M1NSR5M5THYRC0RFWPMVE2DW/
 acceptance_tests/`.
 """
+import json
 import subprocess
 import sys
 import tempfile
@@ -69,6 +76,112 @@ class RoleLogPoolLeakCheckTest(unittest.TestCase):
         doctor.check_role_log_pool_leak(self.conn)
         doctor.check_role_log_pool_leak(self.conn)
         self.assertEqual(len(alerts.open_alerts(self.conn, "incident")), 1)
+
+    # --- логи обоих провайдеров и записи сессий Оператора (SPEC
+    #     01M3F7BYE82S9AQCBSP1RTQQTR, требование 7) ----------------------
+
+    #: Лог шага роли на Codex: `codex exec --json`, то есть JSONL, а не
+    #: строки текста, — формат содержимого, которого проверка до этой
+    #: задачи не видела.
+    CODEX_LOG = "01M32NH6P053978AER66P0X4GN-developer-1.log"
+    #: Запись сессии Оператора — имя из живого разбора 21.09
+    #: (docs/backlog.md, строка 3 копилки): именно они давали ложные
+    #: срабатывания.
+    SESSION_LOG = "canary-20260911T230820Z.session.log"
+
+    def codex_jsonl(self) -> str:
+        marker = config.CANARY_POOL_DIRNAME
+        return "\n".join(json.dumps(event, ensure_ascii=False) for event in (
+            {"type": "thread.started", "thread_id": "th-1"},
+            {"type": "item.completed",
+             "item": {"type": "command_execution",
+                      "command": f"ls ~/{marker}/templates",
+                      "aggregated_output": "ok"}},
+            {"type": "turn.completed", "usage": {"input_tokens": 10}},
+        )) + "\n"
+
+    def read_names(self) -> tuple:
+        """(список имён прочитанных файлов, контекст слежки за чтением):
+        «не читает» проверяется буквально, а не отсутствием
+        срабатывания."""
+        seen = []
+        real_read_text = Path.read_text
+
+        def spy(self_path, *args, **kwargs):
+            seen.append(self_path.name)
+            return real_read_text(self_path, *args, **kwargs)
+
+        return seen, mock.patch.object(Path, "read_text", spy)
+
+    def test_codex_step_log_in_jsonl_is_read_and_caught(self):
+        """Лог шага роли в формате JSONL (`codex exec --json`), несущий имя
+        каталога пула внутри команды шага, поднимает срабатывание: ищется
+        подстрока, формат содержимого значения не имеет.
+
+        Ловит мутацию: отбор файлов сужает заодно и содержимое (лог
+        разбирается как строки лога Claude, а JSON-строка пропускается как
+        «не текст лога») — утечка в шаге на Codex перестаёт быть видимой
+        ровно у того провайдера, ради которого проверку и правят.
+        """
+        config.LOGS.mkdir(parents=True)
+        (config.LOGS / self.CODEX_LOG).write_text(self.codex_jsonl(),
+                                                  encoding="utf-8")
+
+        check = doctor.check_role_log_pool_leak(self.conn)
+
+        self.assertEqual(check.status, "fail", check.detail)
+        self.assertIn(self.CODEX_LOG, check.detail)
+        incidents = alerts.open_alerts(self.conn, "incident")
+        self.assertEqual(len(incidents), 1, incidents)
+        self.assertIn(config.CANARY_POOL_DIRNAME, incidents[0]["message"])
+
+    def test_operator_session_log_is_not_read_at_all(self):
+        """Запись сессии Оператора `*.session.log` с именем каталога пула
+        внутри оставляет проверку зелёной — и не читается вовсе.
+
+        Ловит мутацию: файлы сессий отсеиваются ПОСЛЕ чтения (прочитали,
+        нашли совпадение, отбросили по имени) — содержимое сессии
+        Оператора всё равно проходит через проверку, и следующая правка
+        условия снова вернёт ложные срабатывания 21.09.
+        """
+        config.LOGS.mkdir(parents=True)
+        (config.LOGS / self.SESSION_LOG).write_text(
+            f"artel.py canary --k 1\nклон пула "
+            f"~/{config.CANARY_POOL_DIRNAME}/pool\n", encoding="utf-8")
+
+        seen, spy = self.read_names()
+        with spy:
+            check = doctor.check_role_log_pool_leak(self.conn)
+
+        self.assertEqual(check.status, "ok", check.detail)
+        self.assertEqual(alerts.open_alerts(self.conn, "incident"), [])
+        self.assertNotIn(self.SESSION_LOG, seen, seen)
+
+    def test_role_log_beside_a_session_log_is_still_read(self):
+        """Обычный текстовый лог шага роли рядом с записью сессии
+        по-прежнему читается и ловится: сужение по имени не отменяет саму
+        проверку.
+
+        Ловит мутацию: отбор написан слишком узко (маска `*-developer-*`,
+        «имя начинается с ULID») — логи ролей, не попавшие в маску,
+        перестают проверяться вовсе, и проверка зеленеет молча.
+        """
+        config.LOGS.mkdir(parents=True)
+        (config.LOGS / self.SESSION_LOG).write_text(
+            f"~/{config.CANARY_POOL_DIRNAME}/pool\n", encoding="utf-8")
+        role_log = "01M1NSR5M5THYRC0RFWPMVE2DW-test_author-2.log"
+        (config.LOGS / role_log).write_text(
+            f"Agent: гружу шаблон из ~/{config.CANARY_POOL_DIRNAME}/x.md\n",
+            encoding="utf-8")
+
+        seen, spy = self.read_names()
+        with spy:
+            check = doctor.check_role_log_pool_leak(self.conn)
+
+        self.assertEqual(check.status, "fail", check.detail)
+        self.assertIn(role_log, check.detail)
+        self.assertNotIn(self.SESSION_LOG, check.detail)
+        self.assertIn(role_log, seen)
 
 
 class TokenRepoScopeCheckTest(unittest.TestCase):
