@@ -26,6 +26,7 @@ from . import (acceptance, artifact_branch, artifact_source, ci, cleanup,
               config, fsm, fsm_postmerge, gitcmd, github_adapter, lease,
               merge_lock, merge_queue, repo_context, store, workspace)
 from .advance_gates.plan_appendix import git_apply
+from .advance_gates.test_integrity import merge_gate_escalates
 
 
 def _touches_protected_path(path: str) -> bool:
@@ -80,6 +81,30 @@ def _protected_path_diff_gate(conn, task_id: str, state: str, branch: str,
     store.set_state(conn, task_id, "escalated", "fsm",
                     expected_state=state, detail=detail)
     return True
+
+
+def _test_integrity_diff_gate(conn, task_id: str, state: str, branch: str,
+                              ctx: repo_context.RepoContext) -> bool:
+    """Тот же узел сравнения `tests/`, что стоит на `in_dev -> verifying`
+    (SPEC 01M3FQ2V77QNK95Z599DM124QN, требование 7, AC-12) — сразу за
+    `_protected_path_diff_gate` и до попытки merge: ветка могла дойти
+    сюда и другим маршрутом (ручной `advance` Оператора, повторный заход
+    после эскалации, подтяжка main, добавившая удаление уже после
+    `verifying`), а ручная сверка удалённых и ослабленных тестов с этой
+    задачи с Оператора снята.
+
+    Self target ТОЛЬКО (`ctx.path == config.ROOT`) — тот же довод, что у
+    соседа выше: дифф в `config.ROOT` не видит код внешнего target.
+    Мандат Оператора читается с ветки-источника `tasks/<id>/`
+    (`artifact_source.resolve`), дифф — с кодовой ветки.
+
+    `True` — эскалировано, вызывающий код обязан остановиться.
+    """
+    if ctx.path != config.ROOT:
+        return False
+    artifact_branch_name, _foreign = artifact_source.resolve(conn, task_id)
+    return merge_gate_escalates(conn, task_id, state, branch,
+                                artifact_branch_name)
 
 
 def _origin_main_sha(ctx: repo_context.RepoContext) -> str | None:
@@ -847,7 +872,9 @@ def _cmd_approve_merge_gate(conn, task_id: str, state: str, t,
     """Тело окна `merge_gate -> done`, исполняемое ПОД МЬЮТЕКСОМ merge
     (SPEC T053, требование 1; SPEC T087, требования 1-2, 5-6): короткая
     композиция шагов — защищённые пути в диффе (SPEC
-    01M27JPEGCGMDDRX5A98QWJW0Z, требование 3/AC-5) -> публикация головы ->
+    01M27JPEGCGMDDRX5A98QWJW0Z, требование 3/AC-5) -> неослабление тестов
+    в диффе (SPEC 01M3FQ2V77QNK95Z599DM124QN, требование 7/AC-12) ->
+    публикация головы ->
     свежесть main -> зелёный CI -> плотницкий merge в scratch-worktree
     (Stage0, AC-8) -> приложения PLAN к защищённым путям (SPEC
     01M2YSHDKWFJN3XSJ618Z74FNF, требования 3-6) -> снимок артефактов/
@@ -889,6 +916,8 @@ def _cmd_approve_merge_gate(conn, task_id: str, state: str, t,
                  f"и повтори: artel.py approve {task_id}")
     branch = t["branch"]
     if _protected_path_diff_gate(conn, task_id, state, branch, ctx):
+        return ("stopped",)
+    if _test_integrity_diff_gate(conn, task_id, state, branch, ctx):
         return ("stopped",)
     if _ensure_branch_head_published(conn, task_id, branch) != "ok":
         return ("stopped",)

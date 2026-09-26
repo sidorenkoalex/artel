@@ -32,6 +32,10 @@ from .advance_gates.review import (_code_sha_at_review_escalation,
                                    _review_rework_gate,
                                    _review_rework_gate_refuses,
                                    _reviewer_verdict_baseline)
+from .advance_gates.test_integrity import (TEST_INTEGRITY_REFUSAL_ACTION,
+                                           TEST_WEAKENING_MANDATE_MARKER,
+                                           _test_integrity_gate,
+                                           _test_integrity_gate_refuses)
 from .advance_gates.tests_writing import (_freshness_refuses,
                                           _origin_push_gate, _registry_gate,
                                           _tests_writing_acceptance_dir,
@@ -519,6 +523,14 @@ def in_dev(conn, task_id: str, t, tdir, target: str, state: str) -> bool:
         return False
     if _run_gates(conn, task_id,
                   [lambda: _mutation_claim_gate(conn, task_id, t, branch)]):
+        return False
+    # Гейт неослабления тестов (SPEC 01M3FQ2V77QNK95Z599DM124QN, требование
+    # 6) — сразу за гейтом заявки мутации: оба читают одну базу сравнения
+    # и один набор файлов `tests/` через git, а постановка ПЕРЕД заявкой
+    # мутации переставила бы старшинство отказов на диффе, задевающем оба
+    # (`tests/test_fsm_advance_gate_smoke.py` сверяет журнал и stdout
+    # существующих сценариев байт-в-байт).
+    if _test_integrity_gate_refuses(conn, task_id, t, branch):
         return False
     if _review_rework_gate_refuses(conn, task_id, t, branch):
         return False

@@ -587,11 +587,25 @@ def scan_redness_markers(tdir: Path) -> list[str]:
     return redness_marker_errors_from_files(files)
 
 
-def _collect_test_functions(tree: ast.Module) -> dict[str, ast.AST]:
+# Разделитель квалифицированного имени тестового метода: `Class::test_x`
+# — тот же разделитель, которым Оператор называет метод в мандате
+# «Ослабление тестов разрешено: tests/test_y.py::Class::test_z» (SPEC
+# 01M3FQ2V77QNK95Z599DM124QN, требование 4).
+TEST_NAME_SEP = "::"
+
+
+def _collect_qualified_test_functions(tree: ast.Module) -> dict[str, ast.AST]:
     """Функции и методы `test_*` на уровне модуля и внутри классов (не
-    глубже) — то же ограничение области, что называет требование 1
-    (01M29A0F88P9GKSXFW90F99H2N): помощник `test_*`, объявленный внутри
-    другой функции, не тестовый метод фреймворка и не собирается им."""
+    глубже) под КВАЛИФИЦИРОВАННЫМ именем: `test_x` для функции модуля,
+    `Class::test_x` для метода класса.
+
+    Область та же, что у `_collect_test_functions` ниже — эта функция её
+    единственный источник: «что считается тестовым методом» в пульте
+    решается здесь и только здесь (SPEC 01M3FQ2V77QNK95Z599DM124QN,
+    требование 1). Квалифицированное имя нужно гейту неослабления тестов:
+    одноимённые методы двух классов одного файла — разные тесты, и
+    исчезновение одного из них обязано называться вместе с классом (AC-3).
+    """
     functions: dict[str, ast.AST] = {}
     for node in tree.body:
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and \
@@ -601,8 +615,131 @@ def _collect_test_functions(tree: ast.Module) -> dict[str, ast.AST]:
             for sub in node.body:
                 if isinstance(sub, (ast.FunctionDef, ast.AsyncFunctionDef)) and \
                         sub.name.startswith("test_"):
-                    functions[sub.name] = sub
+                    functions[f"{node.name}{TEST_NAME_SEP}{sub.name}"] = sub
     return functions
+
+
+def _collect_test_functions(tree: ast.Module) -> dict[str, ast.AST]:
+    """Те же узлы, что `_collect_qualified_test_functions`, но под ГОЛЫМ
+    именем метода — контракт гейта заявки мутации
+    (`test_functions_without_mutation_claim` ниже, SPEC
+    01M29A0F88P9GKSXFW90F99H2N, требование 1): помощник `test_*`,
+    объявленный внутри другой функции, не тестовый метод фреймворка и не
+    собирается им. Порядок и правило «последний одноимённый побеждает» —
+    те же, что были до выделения квалифицированного сборщика."""
+    return {name.rsplit(TEST_NAME_SEP, 1)[-1]: node
+            for name, node in _collect_qualified_test_functions(tree).items()}
+
+
+# Имена декораторов пропуска и ожидаемого провала (SPEC
+# 01M3FQ2V77QNK95Z599DM124QN, требование 1, класс находки «г»): решает
+# ПОСЛЕДНИЙ сегмент точечного имени — так один набор покрывает и
+# `@unittest.skipIf`, и `@skipIf` от `from unittest import skipIf`, и
+# `@pytest.mark.xfail`.
+SKIP_DECORATOR_NAMES = frozenset((
+    "skip", "skipIf", "skipUnless", "expectedFailure", "skipif", "xfail"))
+
+# Вызовы пропуска в теле метода — по паре «последний сегмент имени,
+# требуемый префикс»: `self.skipTest(...)` и `pytest.skip(...)`. Голый
+# `skip(` в теле маркером не считается: `skipTest` однозначен, а `skip`
+# без `pytest.` — обычное имя чего угодно.
+SKIP_CALL_NAMES = frozenset(("skipTest", "pytest.skip"))
+
+
+def _called_dotted_name(node: ast.AST) -> str:
+    """Точечное имя декоратора или вызываемого: `unittest.skip`,
+    `pytest.mark.xfail`, `self.skipTest`. Пустая строка — имя не
+    складывается из цепочки Name/Attribute (вычисляемый декоратор).
+
+    Разбор самой цепочки — общий `_dotted_name` ниже по файлу; здесь
+    добавлено только разворачивание вызова: `@unittest.skip` и
+    `@unittest.skip("причина")` — один и тот же маркер.
+    """
+    if isinstance(node, ast.Call):
+        node = node.func
+    return _dotted_name(node) or ""
+
+
+def _decorator_skip_markers(node: ast.AST) -> set:
+    """Маркеры пропуска среди декораторов `node` — в виде текста, каким их
+    видит человек (`@unittest.skip`)."""
+    markers = set()
+    for decorator in getattr(node, "decorator_list", []):
+        dotted = _called_dotted_name(decorator)
+        if dotted and dotted.rsplit(".", 1)[-1] in SKIP_DECORATOR_NAMES:
+            markers.add(f"@{dotted}")
+    return markers
+
+
+def _body_skip_markers(node: ast.AST) -> set:
+    """Маркеры пропуска среди ВЫЗОВОВ в теле `node` (`self.skipTest(`,
+    `pytest.skip(`) — декоратора может не быть вовсе, а тест всё равно
+    выключен (требование 1, класс «г», вторая половина)."""
+    markers = set()
+    for sub in ast.walk(node):
+        if not isinstance(sub, ast.Call):
+            continue
+        dotted = _called_dotted_name(sub.func)
+        if not dotted:
+            continue
+        if dotted.rsplit(".", 1)[-1] == "skipTest" or dotted in SKIP_CALL_NAMES:
+            markers.add(f"{dotted}(")
+    return markers
+
+
+def _parse_or_none(source):
+    """`ast.Module` из `source`; `None` — текста нет (`source is None`) или
+    он не парсится. Не исключение: сведения об одной из двух сторон
+    сравнения могут законно отсутствовать (файл добавлен/удалён), а
+    непарсящийся файл — забота CI, не повод ронять гейт трейсбеком (тот же
+    fail-safe, что у `test_functions_without_mutation_claim` ниже)."""
+    if source is None:
+        return None
+    try:
+        return ast.parse(source)
+    except SyntaxError:
+        return None
+
+
+def qualified_test_methods(source) -> dict[str, ast.AST]:
+    """Тестовые методы текста `source` по квалифицированному имени
+    (`_collect_qualified_test_functions`). Пустой словарь — текста нет либо
+    он не парсится."""
+    tree = _parse_or_none(source)
+    return {} if tree is None else _collect_qualified_test_functions(tree)
+
+
+def test_skip_markers(source) -> dict[str, set]:
+    """Маркеры пропуска и ожидаемого провала текста `source` по имени, на
+    котором они стоят: квалифицированное имя метода (`Class::test_x`) —
+    его декораторы и вызовы пропуска в теле; имя класса (`Class`) —
+    декораторы самого класса (один декоратор над классом гасит все его
+    тесты, AC-4).
+
+    Класс без единого тестового метода в результат не попадает: предмет
+    рубежа — выключенные тесты, а не любой декорированный класс файла.
+    Пустой словарь — текста нет либо он не парсится.
+    """
+    tree = _parse_or_none(source)
+    if tree is None:
+        return {}
+    markers: dict[str, set] = {}
+    for name, node in _collect_qualified_test_functions(tree).items():
+        found = _decorator_skip_markers(node) | _body_skip_markers(node)
+        if found:
+            markers[name] = found
+    for node in tree.body:
+        if not isinstance(node, ast.ClassDef):
+            continue
+        has_tests = any(
+            isinstance(sub, (ast.FunctionDef, ast.AsyncFunctionDef))
+            and sub.name.startswith("test_") for sub in node.body)
+        if not has_tests:
+            continue
+        found = _decorator_skip_markers(node)
+        if found:
+            markers[node.name] = found
+    return markers
 
 
 def test_functions_without_mutation_claim(base_source: str | None,
