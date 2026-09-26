@@ -9,11 +9,20 @@
 таблица обязана называть проверку, которая в пульте есть сегодня, а не ту,
 что была на день правки документа.
 
+Собираются они по МЕСТУ ОБЪЯВЛЕНИЯ (разбором `ast`), а не по форме
+литерала (REVIEW.md итерации 1, R1-F2): сбор «любой дефисный литерал минус
+ручной чёрный список» ослабевал бы сам — дефисное слово, именем строки не
+являющееся (`read-only`, `workspace-write`, `ls-files`; `workspace-write`
+уже стоит в тексте двух строк таблицы), делало бы строку «подтверждённой»
+проверкой, которой нет, и свойство AC-2 выключалось бы молча, на зелёном
+тесте.
+
 Таблица ищется ПОКРЫТИЕМ (та из таблиц документа, которая опознаёт больше
 всего запретов), а не заголовком раздела: предмет требования — строка на
 каждый запрет, и привязка к формулировке заголовка сделала бы тест
 заложником этой формулировки.
 """
+import ast
 import re
 import sys
 import unittest
@@ -57,23 +66,72 @@ NOT_CLOSED = ("не закрыт", "не закрыто", "не закрыта")
 COMPENSATION = ("гейт", "риск")
 
 _SEPARATOR_ROW = re.compile(r"^\|[\s:|-]+\|?\s*$")
-#: Имя строки `doctor` — `имя-через-дефис` в двойных кавычках исходника.
-_CHECK_LITERAL = re.compile(r'"([a-z][a-z0-9]*(?:-[a-z0-9]+)+)"')
-#: Литералы той же формы, именами проверок не являющиеся.
-_NOT_A_CHECK = frozenset({"utf-8", "ls-remote", "rev-parse", "merge-base",
-                          "pre-commit", "pre-push"})
+#: Суффикс константы, несущей имя строки: `FOREIGN_SECRETS_CHECK = "…"`.
+_CHECK_CONST_SUFFIX = "_CHECK"
+#: Суффикс имени фабрики строки: `doctor.Check(...)` сама запись строки,
+#: `_provider_home_check("codex-role-home", …)` — фабрика над ней.
+_CHECK_FACTORY_SUFFIX = "_check"
 
 
 def stack_md_text() -> str:
     return config.ROOT.joinpath(*STACK_MD_REL).read_text(encoding="utf-8")
 
 
+def _callee_name(func) -> str:
+    """Имя вызываемого: `doctor.Check` и `Check` — одинаково `Check`."""
+    if isinstance(func, ast.Attribute):
+        return func.attr
+    return getattr(func, "id", "")
+
+
+def _declared_name(arg):
+    """Имя строки из первого аргумента фабрики либо `None`.
+
+    Литерал — целиком; параметризованное имя (`f"map-growth:{target}"`,
+    `f"snapshot-pending:{task_id}"`) — своим постоянным префиксом: строка
+    таблицы называет семейство, а не отдельный target. Первый аргумент,
+    пришедший параметром (`Check(name, …)` внутри фабрики), именем не
+    является — имя такой строки стоит литералом на вызове фабрики.
+    """
+    if isinstance(arg, ast.Constant) and isinstance(arg.value, str):
+        return arg.value
+    if isinstance(arg, ast.JoinedStr) and arg.values:
+        head = arg.values[0]
+        if isinstance(head, ast.Constant) and isinstance(head.value, str):
+            return head.value.rstrip(":")
+    return None
+
+
 def doctor_check_names() -> set:
-    """Имена строк `doctor`, какими их знает код `orchestrator/doctor/`."""
+    """Имена строк `doctor`, какими их ОБЪЯВЛЯЕТ код `orchestrator/doctor/`:
+    первый аргумент записи строки (`Check(...)`) и её фабрик (`*_check(...)`)
+    плюс константы `*_CHECK`.
+
+    Разбор `ast`, а не регулярка по тексту: предмет — место объявления имени,
+    и строка, чьё имя пришло откуда-то ещё, в набор не попадёт вовсе
+    (сторож покраснеет громко), тогда как литерал ЛЮБОГО дефисного слова
+    молча пополнял бы набор именами, которых у `doctor` нет.
+    """
     names = set()
     for path in sorted(config.ROOT.joinpath(*DOCTOR_REL).glob("*.py")):
-        names.update(_CHECK_LITERAL.findall(path.read_text(encoding="utf-8")))
-    return names - _NOT_A_CHECK
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Call) and node.args:
+                callee = _callee_name(node.func)
+                if callee == "Check" or callee.endswith(_CHECK_FACTORY_SUFFIX):
+                    name = _declared_name(node.args[0])
+                    if name:
+                        names.add(name)
+            elif isinstance(node, ast.Assign):
+                value = node.value
+                if not (isinstance(value, ast.Constant)
+                        and isinstance(value.value, str)):
+                    continue
+                for target in node.targets:
+                    if (isinstance(target, ast.Name)
+                            and target.id.endswith(_CHECK_CONST_SUFFIX)):
+                        names.add(value.value)
+    return names
 
 
 def markdown_tables(text: str) -> list:
@@ -184,6 +242,35 @@ class StackParityTableTest(unittest.TestCase):
         self.assertEqual([], no_evidence,
                          "строка(и) без имени живой проверки doctor и без "
                          "пометки «не закрыт»: " + " || ".join(no_evidence))
+
+    def test_check_names_come_from_declaration_sites_only(self):
+        """Набор «живых» имён собран по ТРЁМ местам объявления имени строки
+        `doctor` — литералу в `Check(...)`, фабрике строки (`*_check(...)`) и
+        константе `*_CHECK` — и не несёт дефисных слов, именами строк не
+        являющихся.
+
+        Ловит мутацию: сбор возвращается к форме литерала (любой
+        `имя-через-дефис` в исходниках `orchestrator/doctor/` минус ручной
+        чёрный список) — набор молча пополняется словами вроде
+        `workspace-write`, `read-only`, `ls-remote`, и строка таблицы, где
+        такое слово стоит в тексте механизма, считается подтверждённой
+        проверкой, которой нет: свойство AC-2 выключается на зелёном тесте.
+        Вторая мутация того же класса: сбор теряет одно из трёх мест
+        объявления — имя, объявленное фабрикой или константой, перестаёт
+        считаться живым, и строка таблицы, называющая ровно его, краснеет
+        ложно (этот исход громкий, тем и отличается от первого).
+        """
+        self.assertIn("canary-pool-leak", self.known,
+                      "литерал имени в Check(...) не собран")
+        self.assertIn("foreign-provider-secrets", self.known,
+                      "имя из константы *_CHECK не собрано")
+        self.assertIn("codex-role-home", self.known,
+                      "имя с вызова фабрики строки не собрано")
+
+        for word in ("utf-8", "workspace-write", "read-only", "ls-remote",
+                     "rev-parse", "merge-base", "pre-commit", "pre-push"):
+            with self.subTest(word=word):
+                self.assertNotIn(word, self.known)
 
     def test_open_rows_name_a_compensating_gate_or_an_accepted_risk(self):
         """Каждая строка с пометкой «не закрыт» называет компенсирующий
