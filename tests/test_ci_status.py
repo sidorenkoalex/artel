@@ -812,5 +812,155 @@ class TriggerRerunTest(unittest.TestCase):
         self.assertIn("ветки нет", note)
 
 
+class RerunStartedTest(unittest.TestCase):
+    """`ci.rerun_started` (SPEC 01M3F7C2DVYCEANQ8CF1FCSD87, требование 8):
+    отличает «повтор не запущен вовсе» от «повтор запущен, дальше ожидание»
+    по `note`, которую сама `trigger_rerun` и вернула — тем же приёмом, что
+    `verifying_is_red`/`status_kind` (`VerifyingIsRedTest`/`StatusKindTest`
+    выше)."""
+
+    def test_started_note_of_trigger_rerun_reads_as_started(self):
+        """Успешный `note` `trigger_rerun` — «повтор запущен».
+
+        Ловит мутацию: признак записан как наличие подстроки «запущен»
+        вместо отсутствия «не запущен» — тогда `ре-ран … не запущен: …`
+        (подстрока «запущен» в нём ЕСТЬ) тоже читался бы как состоявшийся
+        повтор, и сбой `gh` уходил бы в журнал успехом.
+        """
+        self.assertTrue(ci.rerun_started(
+            "ре-ран прогона 4242 запущен, ожидание завершения: "
+            "gh run watch завершился"))
+
+    def test_both_refusal_notes_of_trigger_rerun_read_as_not_started(self):
+        """Оба пути отказа `trigger_rerun` — «повтор не запущен».
+
+        Ловит мутацию: признак сверяется только с одной из двух форм
+        отказа (например только с «ре-ран прогона … не запущен») — тогда
+        отказ без найденного sha/прогона («ре-ран CI не запущен: …»)
+        читался бы как состоявшийся повтор.
+        """
+        for note in ("ре-ран CI не запущен: ветки нет",
+                     "ре-ран прогона 4242 не запущен: boom"):
+            with self.subTest(note=note):
+                self.assertFalse(ci.rerun_started(note))
+
+
+class RedStatusShaTest(unittest.TestCase):
+    """`ci.red_status_sha` (SPEC 01M3F7C2DVYCEANQ8CF1FCSD87, требование 4):
+    достаёт короткий sha коммита из `note` красного исхода
+    `verifying_status` — парная к `verifying_is_red`."""
+
+    def test_sha_comes_from_the_note_verifying_status_itself_writes(self):
+        """Sha берётся из настоящей `note` `verifying_status`, не из
+        рукописного образца.
+
+        Ловит мутацию: регулярка разошлась с текстом, который
+        `verifying_status` реально кладёт в `note` (другой падеж, другое
+        слово, sha не в первой позиции) — сверка головы ветки требования 4
+        перестала бы находить sha и отказывала бы всегда.
+        """
+        with mock.patch.object(ci, "head_sha", lambda branch: (SHA, "")), \
+             mock.patch.object(
+                 ci, "gh",
+                 lambda *a, **kw: subprocess.CompletedProcess(
+                     list(a), 0,
+                     json.dumps({"total_count": 1, "check_runs": [
+                         run("python", conclusion="failure")]}), "")):
+            outcome, note = ci.verifying_status("task/t001-x")
+
+        self.assertEqual(outcome, ci.VERIFYING_RED)
+        self.assertEqual(ci.red_status_sha(note), SHA[:8])
+
+    def test_non_red_notes_have_no_sha(self):
+        """Не-красный `note` sha не отдаёт вовсе.
+
+        Ловит мутацию: sha ищется любой шестнадцатеричной подстрокой, без
+        привязки к «не зелёный» — тогда зелёный/идущий `note` тоже отдавал
+        бы sha, и сверка требования 4 «проходила» бы на записи журнала,
+        которая красноту не подтверждает.
+        """
+        for note in (f"CI коммита {SHA[:8]} зелёный (2 проверок)",
+                     f"CI коммита {SHA[:8]} ещё идёт: python",
+                     "статус CI неизвестен: ветки нет"):
+            with self.subTest(note=note):
+                self.assertEqual(ci.red_status_sha(note), "")
+
+
+class FailedCheckNamesTest(_HeadShaPatchedTest):
+    """`ci.failed_check_names` (SPEC 01M3F7C2DVYCEANQ8CF1FCSD87,
+    требование 5): имена завершённых не-зелёных check-run'ов коммита —
+    единственный общий язык двух РАЗНЫХ коммитов (головы ветки задачи и
+    вершины главной ветки)."""
+
+    def answer(self, stdout: str, returncode: int = 0) -> None:
+        patcher = mock.patch.object(
+            ci, "gh",
+            lambda *a, **kw: subprocess.CompletedProcess(list(a), returncode,
+                                                         stdout, ""))
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def names(self, runs: list, returncode: int = 0) -> tuple:
+        self.answer(json.dumps({"total_count": len(runs), "check_runs": runs}),
+                    returncode)
+        return ci.failed_check_names(SHA)
+
+    def test_only_completed_non_green_names_are_collected(self):
+        """Собираются имена только завершённых и только не-зелёных.
+
+        Ловит мутацию: фильтр `status == "completed"` убран — тогда
+        незавершённое задание вершины главной ветки попадало бы в
+        «упавшие», и совпадение имён отказывало бы повтору при живом,
+        ещё идущем CI главной ветки.
+        """
+        names, why = self.names([
+            run("guard"),                                   # зелёное
+            run("skipped-job", conclusion="skipped"),        # зелёное
+            run("python", conclusion="failure"),             # упало
+            run("map", conclusion="timed_out"),              # упало
+            run("idet", status="in_progress", conclusion=None),  # не завершено
+        ])
+
+        self.assertEqual(names, {"python", "map"})
+        self.assertEqual(why, "")
+
+    def test_all_green_gives_an_empty_set_not_none(self):
+        """Все проверки зелёные — пустое множество, а не «неизвестно».
+
+        Ловит мутацию: пустой результат сворачивается в `None` («статус
+        неизвестен») — тогда зелёная вершина главной ветки отказывала бы
+        повтору, и команда не сработала бы ни разу.
+        """
+        names, why = self.names([run("guard"), run("python")])
+
+        self.assertEqual(names, set())
+        self.assertEqual(why, "")
+
+    def test_no_checks_at_all_is_unknown_with_a_named_reason(self):
+        """Ни одной проверки — «статус неизвестен», не пустое множество.
+
+        Ловит мутацию: коммит без check-run'ов отдаёт пустое множество —
+        тогда пересечение с ним пусто ВСЕГДА, и повтор шёл бы поверх
+        главной ветки, чей статус никто не подтвердил (инвариант 19).
+        """
+        names, why = self.names([])
+
+        self.assertIsNone(names)
+        self.assertIn(SHA[:8], why)
+        self.assertIn("неизвестен", why)
+
+    def test_unanswered_gh_is_unknown_with_the_reason_inside(self):
+        """`gh` не ответил — «неизвестно» и причина внутри.
+
+        Ловит мутацию: сбой `gh` проглатывается в пустое множество —
+        первый же сетевой сбой превращал бы команду в слепой перезапуск,
+        маскирующий дефект главной ветки.
+        """
+        names, why = self.names([], returncode=1)
+
+        self.assertIsNone(names)
+        self.assertIn(SHA[:8], why)
+
+
 if __name__ == "__main__":
     unittest.main()
