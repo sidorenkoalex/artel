@@ -46,11 +46,12 @@ MAP_REL = "docs/codebase-map.md"
 PULL_OVERWRITE_MARKER = "would be overwritten by merge"
 
 # Фиксированный текст action (SPEC 01M290PYPV5T2NFW1Y0HB8BD6E, требование
-# 1): эскалация `in_dev` по НЕРАЗРЕШЁННОМУ конфликту СОДЕРЖИМОГО подтяжки
-# (единственная ветка `_handle_merge_failure` ниже, где `git merge --abort`
-# завершает попытку, отличная от инцидента очистки worktree и от
-# авторазрешаемого конфликта `docs/codebase-map.md`) метит задачу
-# признаком «нужен шаг роли до следующего предварительного advance» —
+# 1; SPEC 01M3EM7A84KE0W690M02VWPNXF, требование 1): эскалация по
+# НЕРАЗРЕШЁННОМУ конфликту СОДЕРЖИМОГО подтяжки (единственная ветка
+# `_handle_merge_failure` ниже, где `git merge --abort` завершает попытку,
+# отличная от инцидента очистки worktree и от авторазрешаемого конфликта
+# `docs/codebase-map.md`) метит задачу признаком «нужен шаг роли до
+# следующего предварительного advance» —
 # `orchestrator/auto.py::_role_step_since_state_entry`/`_pre_advance_step`
 # читают этот текст по фиксированному действию журнала, не по вариативному
 # detail. Скопирована в `orchestrator/brief.py` тем же приёмом, что уже
@@ -59,6 +60,23 @@ PULL_OVERWRITE_MARKER = "would be overwritten by merge"
 # импорт brief.py -> pull.py тут не нужен, значение читается как строка).
 PULL_CONFLICT_ROLE_STEP_MARKER = (
     "конфликт подтяжки: нужен шаг роли до следующего предварительного advance")
+
+# Состояния, эскалация которых по тому же конфликту получает метку выше
+# (SPEC 01M3EM7A84KE0W690M02VWPNXF, требования 1-2) — ровно те, из которых
+# возврат из ЭТОЙ эскалации ведёт в `in_dev`, где следующий шаг и есть шаг
+# разработчика, единственного, кому конфликт по силам разрешить. Основание
+# набора: `escalated_from` пишут только эскалации собственных классов
+# (провал агента, потолок бюджета, эскалация по содержимому артефакта
+# роли), каждая непосредственно перед своей же сменой состояния, — а
+# эскалация подтяжки его не пишет, и возврат считает состояние как
+# `escalated_from or "in_dev"`. Три состояния — три точки подтяжки:
+# `fsm::_approve_acceptance` и `canary::_pass_acceptance_gate`
+# (`acceptance`), обработчик `fsm_advance::in_dev` (`in_dev`),
+# `fsm_merge_gate::_sync_main_or_wait` (`merge_gate`). Состояние вне
+# набора метку не получает: метка обещает читателям в `auto.py`, что шаг
+# роли после возврата действительно состоится, — обещать это за
+# состояние, из которого возврат уходит куда-то ещё, нечем.
+PULL_CONFLICT_MARKED_STATES = ("in_dev", "acceptance", "merge_gate")
 
 
 class Fresh:
@@ -263,11 +281,18 @@ def _handle_merge_failure(conn, task_id: str, state: str, branch: str,
     detail = f"конфликт подтяжки {source_branch} в ветку {branch}: {note}"
     store.set_state(conn, task_id, "escalated", "fsm", expected_state=state,
                     detail=detail)
-    if state == "in_dev":
-        # Требование 1 — только `in_dev` (СПЕК: «Эскалация состояния
-        # in_dev по конфликту подтяжки»); `acceptance`/`merge_gate` (два
-        # других вызывающих `fsm._pull_main_or_escalate`) не заводят
-        # шага роли на возврате из escalated, метить их нечем.
+    if state in PULL_CONFLICT_MARKED_STATES:
+        # SPEC 01M3EM7A84KE0W690M02VWPNXF, требования 1-3: метятся все три
+        # состояния набора, не одно `in_dev`. Основание — сама эта
+        # эскалация `escalated_from` не пишет, а возврат берёт состояние
+        # как `escalated_from or "in_dev"`: из `acceptance` и `merge_gate`
+        # он уходит в `in_dev` ровно так же, и следующий шаг там — шаг
+        # разработчика, до которого метка и обязана дожить. Без неё `auto`
+        # после возврата делал предварительный advance, повторял ту же
+        # подтяжку, ловил тот же конфликт и эскалировал снова — лишний
+        # круг `answer`/`approve` Оператора на каждый конфликт (живой
+        # случай 21.09, задача 01M31DRD81). `detail` — тот же, что у
+        # записи эскалации: по нему Оператор читает, ЧЕМ помечена задача.
         store.journal(conn, task_id, "fsm", PULL_CONFLICT_ROLE_STEP_MARKER, detail)
     return Conflict(files, detail)
 
