@@ -118,17 +118,39 @@ class CatalogTest(unittest.TestCase):
         self.assertEqual(section.min_cli_version, (1, 0, 0))
         self.assertIs(section.cost_from_cli, True)
 
-    def test_three_models_with_status_and_price_date(self):
-        """Ловит мутацию: из каталога пропала модель, статус читается вне
-        перечня либо дата прейскуранта не проставлена."""
+    def test_claude_and_openai_models_with_status_and_price_date(self):
+        """Ловит мутацию: из каталога пропала модель ЛЮБОГО из двух
+        разделов, статус читается вне перечня, дата прейскуранта не
+        проставлена либо запись модели уехала в чужой раздел (провайдер
+        записи разошёлся с провайдером раздела).
+
+        Перечень моделей — литералом по каждому разделу, а не счётчиком:
+        каталог решает, на чём вообще идут роли, и «моделей столько же»
+        не отличило бы замену одной модели другой. Раздел `codex` в
+        ожидании появился вместе с приложением `models.yaml` части 1 линии
+        провайдеров (SPEC 01M3EKCZJY9NGCW6VT878RX9JZ, требование 8): до
+        него тест ждал ровно три модели Claude и краснел на фактическом
+        каталоге.
+        """
+        self.assertEqual(
+            sorted(self.catalog.providers["claude"].models),
+            ["claude-fable-5-1", "claude-opus-5", "claude-sonnet-5"])
+        self.assertEqual(
+            sorted(self.catalog.providers["codex"].models),
+            ["gpt-5.5", "gpt-5.6-luna", "gpt-5.6-sol", "gpt-5.6-terra",
+             "gpt-6-astra"])
         self.assertEqual(sorted(self.catalog.models),
                          ["claude-fable-5-1", "claude-opus-5",
-                          "claude-sonnet-5"])
-        for model_id, model in self.catalog.models.items():
-            with self.subTest(model=model_id):
-                self.assertEqual(model.provider, "claude")
-                self.assertIn(model.status, models.STATUSES)
-                self.assertTrue(model.price_date, model_id)
+                          "claude-sonnet-5", "gpt-5.5", "gpt-5.6-luna",
+                          "gpt-5.6-sol", "gpt-5.6-terra", "gpt-6-astra"])
+
+        for name, section in sorted(self.catalog.providers.items()):
+            for model_id in sorted(section.models):
+                model = self.catalog.models[model_id]
+                with self.subTest(model=model_id):
+                    self.assertEqual(model.provider, name)
+                    self.assertIn(model.status, models.STATUSES)
+                    self.assertTrue(model.price_date, model_id)
 
     def test_opus_price_matches_the_calibrated_token_rate(self):
         """Ловит мутацию: прейскурант opus-5 в каталоге разошёлся с
