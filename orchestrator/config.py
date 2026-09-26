@@ -68,14 +68,15 @@ AGENT_SETTING_SOURCES = "user"
 # --restore`/`canary pool-seal`, ARTEL_ROLE).
 ARTEL_ROLE_ENV = "ARTEL_ROLE"
 ARTEL_TASK_ENV = "ARTEL_TASK"
-# Слот keychain пульта с ключом OpenAI для ролей на провайдере `codex`
-# (SPEC 01M32NH6P053978AER66P0X4GN, требование 4) — ОТДЕЛЬНЫЙ от слотов
-# `roles.yaml`, которые несут токен подписки Claude: общий канал отдал бы
-# шагу Codex чужой секрет под именем ключа OpenAI. Заводит запись
-# Оператор вручную (`security add-generic-password -a artel -s <слот>
-# -w <ключ>`), код только читает (`orchestrator/keychain.py::token`);
-# заданная Оператором ambient-переменная OPENAI_API_KEY сильнее слота.
-OPENAI_API_KEY_SLOT = "artel-openai-api-key"
+# Слота keychain с ключом API для ролей на провайдере `codex` здесь больше
+# нет (решение Оператора 22.09.2026, `docs/research/providers-codex-plan.md`,
+# раздел 6 п.1): роли авторизуются входом по подписке ChatGPT, токены того
+# входа хранит сам CLI, и секрета, который пульту надо было бы передать
+# шагу, у Codex не осталось вовсе (`orchestrator/providers/codex.py::
+# environment`). Имя слота удалено, а не помечено «не используется»:
+# именованный адрес секретного канала внутри пульта — приглашение вернуть
+# ключ в окружение «по аналогии». История слота — в
+# `docs/research/codex-live-check-2026-09-22.md`.
 # Рабочая поверхность задачи (SPEC T045): git worktree на её ветке в
 # стандартном месте — `orchestrator/workspace.py` эту норму несёт.
 WORKTREES = ROOT / ".artel" / "worktrees"
