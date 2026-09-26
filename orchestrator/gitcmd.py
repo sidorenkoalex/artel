@@ -279,6 +279,43 @@ def diff_names(a: str, b: str, *paths: str) -> list[str] | None:
     return [p for p in res.stdout.splitlines() if p]
 
 
+def diff_name_status(a: str, b: str, *paths: str) -> list[tuple] | None:
+    """Записи `git diff -M --name-status` между `a` и `b` под `paths`:
+    `(статус, путь, новый путь | None)`; `None` — git не ответил (тот же
+    вырожденный случай, что у `diff_names` рядом).
+
+    Отличие от `diff_names`: статус записи и ВТОРОЙ путь у пары
+    переименования/копии (`R100`/`C85`) — определение переименования
+    остаётся работой git (SPEC 01M3FQ2V77QNK95Z599DM124QN, требование 3),
+    а не собственной эвристики пульта «пара удалён/добавлен с совпадающим
+    набором имён».
+
+    Разбор идёт по `-z` (поля разделены NUL, у `R`/`C` их три подряд:
+    статус, старый путь, новый), не по табуляциям: путь с пробелом или
+    кавычкой в обычном выводе экранируется кавычками, и табуляционный
+    разбор отдал бы искажённое имя.
+    """
+    res = git("diff", "-M", "--name-status", "-z", a, b, "--", *paths)
+    if res is None or res.returncode != 0:
+        return None
+    fields = [f for f in res.stdout.split("\0") if f]
+    entries: list[tuple] = []
+    i = 0
+    while i < len(fields):
+        status = fields[i]
+        if status[:1] in ("R", "C"):
+            if i + 2 >= len(fields):
+                break
+            entries.append((status, fields[i + 1], fields[i + 2]))
+            i += 3
+            continue
+        if i + 1 >= len(fields):
+            break
+        entries.append((status, fields[i + 1], None))
+        i += 2
+    return entries
+
+
 def diff_paths(a: str, b: str, *paths: str) -> bool | None:
     """True — ревизии `a` и `b` расходятся по путям; None — git не ответил.
 
