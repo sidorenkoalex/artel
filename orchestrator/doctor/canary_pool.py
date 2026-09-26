@@ -4,12 +4,39 @@
 orchestrator/doctor/__init__.py) -- не импортируются напрямую.
 """
 import os
+import re
 
 from orchestrator import doctor
 
 
 # --- изоляция пула канарейки от ролей (SPEC 01M1NEEWH5K1XPFRDGRMPYSBXJ,
 #     требование 13) ---------------------------------------------------
+
+# Лог шага роли — `<task_id>-<role>-<N>.log` (`agent_log.new_agent_log`,
+# один адрес на весь пульт). Отбор по ФОРМЕ имени, а не по маске ролей и
+# не по формату идентификатора задачи (SPEC 01M3F7BYE82S9AQCBSP1RTQQTR,
+# требование 7): роль появляется в `roles.yaml`, id задачи сменил формат
+# один раз (T0NN -> ULID) и сменит ещё, а тройка «задача-роль-номер» в
+# имени лога не менялась ни разу. Номер прогона — последняя часть, и
+# только она обязана быть числом: имя роли само содержит `_`, а бывало бы
+# и с дефисом.
+_ROLE_LOG_STEM = re.compile(r"^[^-]+-.+-\d+$")
+
+# Запись сессии Оператора — `<что-то>.session.log`
+# (docs/backlog.md, строка 3 копилки 21.09: ложные срабатывания шли именно
+# с них). Исключается ЯВНО и ДО чтения файла, а не отбрасыванием
+# совпадения после: «прочитали и промолчали» — не то же, что «не читаем»,
+# и первая же правка условия вернула бы ложные срабатывания.
+_SESSION_LOG_SUFFIX = ".session.log"
+
+
+def _is_role_step_log(name: str) -> bool:
+    """Имя файла — лог шага роли, а не запись сессии Оператора и не
+    посторонний файл каталога логов."""
+    if name.endswith(_SESSION_LOG_SUFFIX):
+        return False
+    return bool(_ROLE_LOG_STEM.match(name[:-len(".log")]))
+
 
 def check_role_log_pool_leak(conn) -> doctor.Check:
     """Требование 13б: логи шагов ролей проверяются на упоминание
@@ -29,12 +56,25 @@ def check_role_log_pool_leak(conn) -> doctor.Check:
     контекста роли — инцидент, требующий разбора Оператором, а не
     состояние, самоустраняющееся ротацией логов (`prune`) без его
     внимания.
+
+    Читаются ЛОГИ ШАГОВ РОЛЕЙ обоих провайдеров и только они
+    (`_is_role_step_log`, SPEC 01M3F7BYE82S9AQCBSP1RTQQTR, требование 7):
+    формат содержимого значения не имеет — и строки лога Claude, и JSONL
+    `codex exec --json` проверяются одной подстрокой, — а записи сессий
+    Оператора (`*.session.log`) не читаются вовсе. До этой правки читался
+    каждый `*.log` каталога, и упоминание пула в записи сессии Оператора,
+    который пул и заводит, давало ложное срабатывание (docs/backlog.md,
+    строка 3 копилки 21.09). Задача, чьи зоны или SPEC называют пул, из
+    проверки по-прежнему НЕ исключается (требование 8): предмет отбора —
+    имя файла, не задача.
     """
     if not doctor.config.LOGS.is_dir():
         return doctor.Check("canary-pool-leak", "ok", "логов ролей ещё нет")
     marker = doctor.config.CANARY_POOL_DIRNAME
     leaking = []
     for path in sorted(doctor.config.LOGS.glob("*.log")):
+        if not _is_role_step_log(path.name):
+            continue
         try:
             text = path.read_text(encoding="utf-8", errors="replace")
         except OSError:
