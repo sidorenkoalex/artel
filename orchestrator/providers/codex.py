@@ -15,18 +15,23 @@
 команды шага (требование 3) — дом роли можно потерять (`.artel/home`
 эфемерен, ADR-0005 п.3), команду шага собирает код.
 
-Разбор вывода, учёт стоимости и сигнатуры провалов — ВТОРАЯ часть линии
-провайдеров: `parse_output_line`, `failure_signatures` и
-`required_cli_version` здесь намеренно не реализованы и громко
-отказывают базовым интерфейсом.
+Разбор вывода, учёт стоимости шага и сигнатуры провалов — ВТОРАЯ часть
+линии провайдеров (SPEC 01M32NH9QTC1T6FNH8JD79662R, требования 1-3):
+`parse_output_line` переводит строки `codex exec --json` в событие общего
+вида, итог запуска несёт разбивку токенов БЕЗ цены (`usd is None` —
+расход шага считает пульт по тарифу модели, `cost_from_cli: false` в
+каталоге), а провалы получают собственный набор сигнатур с общими
+именами классов.
 
 Коллаборанты пульта читаются ленивым импортом ВНУТРИ методов — тем же
 приёмом и по той же причине, что в `providers/claude.py` (см. докстринг
 `base.py` про 3.9-совместимость пути импорта манифеста стека).
 """
+import json
 import re
 
-from .base import CliTool, HomeReference, RoleExecutorProvider
+from .base import (CliTool, EMPTY_EVENT, HomeReference, RoleExecutorProvider,
+                   RunResult, StreamEvent, ToolCall, ToolResult)
 
 # Имя инструмента и его минимальная версия — та же 0.155.1, что объявляет
 # раздел `codex` каталога моделей (`models.yaml`). Минимум инструмента —
@@ -144,6 +149,103 @@ LOGIN_STATUS_TIMEOUT_SEC = 20
 # выхода 0 сам по себе ничего не доказывает: им же CLI отвечает и на «не
 # вошёл», и на вход ключом API.
 CHATGPT_LOGIN_RE = re.compile(r"(?<!not )logged in[^.\n]*chatgpt")
+
+# --- разбор вывода `codex exec --json` (требования 1-2) -----------------
+#
+# Виды СОБЫТИЙ образца 0.155.1. Служебные (`thread.started`,
+# `turn.started`) названы наравне с остальными, хотя пульту сказать им
+# нечего: так «знаем и показывать нечего» отличимо от «имени не знаем», а
+# незнакомое имя обслуживается одной веткой — ею же гасятся `item.updated`
+# и прочее, чего образцы не несут, а живой поток несёт (требование 1,
+# последний абзац).
+THREAD_STARTED_EVENT = "thread.started"
+TURN_STARTED_EVENT = "turn.started"
+ITEM_STARTED_EVENT = "item.started"
+ITEM_COMPLETED_EVENT = "item.completed"
+TURN_COMPLETED_EVENT = "turn.completed"
+SILENT_EVENTS = (THREAD_STARTED_EVENT, TURN_STARTED_EVENT)
+
+# Виды ЭЛЕМЕНТОВ, несущих вызов инструмента: `item.started` даёт вызов,
+# `item.completed` ТОГО ЖЕ `item.id` — его результат. `reasoning` в перечень
+# не входит намеренно: размышления исполнителя — не вызов и не сказанное
+# словами, и у Claude блок мышления тоже не даёт ни строки лога, ни текста
+# события (`claude._render_block`).
+COMMAND_ITEM = "command_execution"
+WEB_SEARCH_ITEM = "web_search"
+MCP_ITEM = "mcp_tool_call"
+FILE_CHANGE_ITEM = "file_change"
+TOOL_ITEMS = (COMMAND_ITEM, WEB_SEARCH_ITEM, MCP_ITEM, FILE_CHANGE_ITEM)
+
+# Элемент, несущий сказанное словами.
+AGENT_MESSAGE_ITEM = "agent_message"
+
+# Ключевой аргумент вызова — первый найденный ключ элемента, в порядке
+# предпочтения. Перечень, а не имя на вид элемента: `command_execution`
+# несёт `command`, `mcp_tool_call` — `arguments`, а имена полей `web_search`
+# и `file_change` материалы задачи не называют вовсе, и отсутствие ключа
+# обязано давать пустой аргумент, а не пропавший вызов (тот же приём, что
+# `claude.LOG_ARGUMENT_KEYS`).
+ITEM_ARGUMENT_KEYS = ("command", "query", "arguments", "path", "changes",
+                      "text")
+
+# Текст результата вызова — первый ключ, который у элемента ЕСТЬ (пусть и
+# пустой): `aggregated_output` команды бывает пустой строкой, и это
+# «результат без вывода», а не «результата нет».
+RESULT_TEXT_KEYS = ("aggregated_output", "result", "error", "text")
+
+# Признак ошибки результата — ТОЛЬКО состояние элемента. Поле `error` не
+# читается ни одной веткой: живой запуск 0.155.1 завершил `mcp_tool_call`
+# состоянием `failed` при `error: null` (требование 1), и чтение `error`
+# пропустило бы провалившийся вызов как успешный.
+ITEM_STATUS_KEY = "status"
+FAILED_STATUS = "failed"
+
+# Счётчики `usage` итога запуска -> ОБЩИЕ виды цены (`models.PRICE_KINDS`).
+# Отображение стоит здесь, а не собирается из `models`: имена видов общие,
+# а вот КАКОЙ счётчик CLI какому виду отвечает — знание провайдера, и у
+# Codex оно не совпадает с Claude ни полями, ни арифметикой (вход приходит
+# с кэшем внутри, см. `_tokens_by_kind`).
+USAGE_INPUT_KEY = "input_tokens"
+USAGE_CACHE_READ_KEY = "cached_input_tokens"
+USAGE_CACHE_WRITE_KEY = "cache_write_input_tokens"
+USAGE_OUTPUT_KEY = "output_tokens"
+
+# Отметка вызова инструмента в логе шага: префикс строки и срез ключевого
+# аргумента. Символ и число повторяют `claude.py`, а не импортируются из
+# него: формат строки лога — провайдерское знание (докстринг `base.py`), а у
+# Claude оно вдобавок заморожено требованием «ни один символ строки лога не
+# меняется» (SPEC 01M31ZHSA6HMH40C2JTDPQJQNZ) — общий адрес превратил бы
+# любую правку вида строки Codex в правку поведения Claude.
+TOOL_CALL_LINE_PREFIX = "· "
+TOOL_ARGUMENT_LIMIT = 100
+
+# --- сигнатуры провалов (требование 3) ----------------------------------
+#
+# ПУСТ намеренно и с адресом: тексты, которыми Codex CLI сообщает о лимите
+# подписки, неверном входе, недоступной модели и обрыве, снимаются с ЖИВЫХ
+# случаев задачей 6 линии, а выдумывать их эта задача не вправе (SPEC
+# требование 3 и «Не входит»).
+#
+# Пустота — не «механизма нет». Набор спрашивает общий классификатор
+# (`failure_classification.classify_attempt_failure`) у провайдера РОЛИ
+# шага, и одна строка здесь включает класс целиком, вместе с его
+# последствиями. Поведение по умолчанию от пустоты не страдает: провал с
+# текстом, не совпавшим ни с одной сигнатурой, остаётся неклассифицированным
+# и идёт в повтор с бэкоффом — то же, что делает у Claude «системный
+# кандидат». Чего нельзя — отдать здесь набор Claude: его слов («does not
+# support this model», «api error:») Codex не произносит, а класс
+# детерминированного отказа оборвал бы повторы шага на чужом тексте.
+FAILURE_SIGNATURES = ()
+
+# Регулярки, которыми текст провалившейся попытки называет минимальную
+# версию СВОЕГО CLI: первая совпавшая группа 1 и есть версия. Перечень свой
+# и сегодня пустой по той же причине — формулировка Claude («version X or
+# newer is required») здесь не годится, это слова другого CLI. Мёртвого пути
+# пустота не оставляет: единственный читатель
+# (`runner._model_unsupported_after_attempt`) работает ровно на классе
+# `model_unsupported`, сигнатуры которого у Codex появятся той же задачей 6,
+# — версия без своей сигнатуры была бы недостижима.
+REQUIRED_VERSION_PATTERNS = ()
 
 
 class CodexProvider(RoleExecutorProvider):
@@ -371,9 +473,12 @@ class CodexProvider(RoleExecutorProvider):
         Сегодня его не запускает НИЧТО (REVIEW.md итерации 1, R1-F3):
         единственный вызывающий — `doctor._live_smoke_run`, а он при
         `live_smoke_in_doctor = False` выходит раньше сборки argv;
-        команды пульта для явного запуска нет. Вход появляется во второй
-        части линии провайдеров — вместе с разбором вывода, без которого
-        итог живого вызова всё равно нечем прочитать.
+        команды пульта для явного запуска нет. Вход заводит задача 6
+        линии, где живой запуск Codex нужен для канарейки и калибровки
+        расхода (решение Оператора,
+        `tasks/01M32NH9QTC1T6FNH8JD79662R/ANSWER-1.md`, п.2): разбор
+        вывода, без которого итог живого вызова нечем прочитать, есть
+        уже здесь, а командного слоя пульта эта задача не касается.
 
         Инструмент берётся из команды шага (`command()[0]`), а не именем:
         смок обязан проверять живость ТОГО САМОГО бинарника, который
@@ -385,3 +490,260 @@ class CodexProvider(RoleExecutorProvider):
         """
         return [self.command()[0], EXEC_SUBCOMMAND, "--json",
                 "--skip-git-repo-check", prompt]
+
+    # --- разбор вывода ----------------------------------------------------
+
+    def parse_output_line(self, raw_line):
+        """Строка `codex exec --json` -> `StreamEvent` (требование 1).
+
+        Пять видов события образца 0.155.1 разбираются, остальные дают
+        пустое событие: незнакомое имя — не ошибка и не исключение, иначе
+        первая же строка вида, которого не было в образцах (`item.updated`
+        живого потока), роняла бы разбор шага либо помечала бы шаг
+        провалившимся. Тем же правилом гасится элемент `item.type=error`
+        переключения транспорта — не отдельная механика, а незнакомый вид
+        элемента (требование 1, последний абзац).
+
+        Строка, не разобравшаяся как JSON-ОБЪЕКТ (трейсбек CLI, stderr,
+        обрезанная строка, JSON-массив), уходит в лог шага как есть и ни
+        на что больше не влияет: молча не глотаем ничего.
+        """
+        stripped = raw_line.lstrip()
+        if not stripped.startswith("{"):
+            return self._passthrough(raw_line)
+        try:
+            event = json.loads(stripped)
+        except json.JSONDecodeError:
+            return self._passthrough(raw_line)
+        if not isinstance(event, dict):
+            return self._passthrough(raw_line)
+
+        kind = event.get("type")
+        if kind in SILENT_EVENTS:
+            return EMPTY_EVENT
+        if kind == TURN_COMPLETED_EVENT:
+            return self._run_result_event(event)
+        if kind == ITEM_STARTED_EVENT:
+            return self._tool_call_event(event)
+        if kind == ITEM_COMPLETED_EVENT:
+            return self._item_completed_event(event)
+        return EMPTY_EVENT
+
+    @staticmethod
+    def _passthrough(raw_line):
+        """Строка мимо формата событий: в лог как есть, больше нигде."""
+        return StreamEvent(raw_line, None, (), (), None, None)
+
+    @staticmethod
+    def _item(event):
+        """Элемент события либо пустое отображение — событие об элементе
+        без самого элемента разбирается как незнакомое, а не падает."""
+        item = event.get("item")
+        return item if isinstance(item, dict) else {}
+
+    def _tool_call_event(self, event):
+        """`item.started`: начало вызова инструмента.
+
+        Результата здесь нет и быть не может — он придёт `item.completed`
+        того же `item.id`. Вид элемента, который вызовом не является
+        (`agent_message`, `reasoning`, незнакомый), даёт пустое событие:
+        «исполнитель начал говорить» пульту сказать нечего, текст приедет
+        завершением.
+        """
+        item = self._item(event)
+        if item.get("type") not in TOOL_ITEMS:
+            return EMPTY_EVENT
+        name = self._tool_name(item)
+        argument = self._argument(item)
+        call = ToolCall(item.get("id"), name, argument)
+        return StreamEvent(self._call_line(name, argument), None, (call,), (),
+                           None, None)
+
+    def _item_completed_event(self, event):
+        """`item.completed`: результат вызова либо сказанный текст."""
+        item = self._item(event)
+        kind = item.get("type")
+        if kind in TOOL_ITEMS:
+            return self._tool_result_event(item)
+        if kind == AGENT_MESSAGE_ITEM:
+            return self._agent_message_event(item)
+        return EMPTY_EVENT
+
+    def _tool_result_event(self, item):
+        """Результат вызова инструмента: тот же `item.id`, текст и признак
+        ошибки из СОСТОЯНИЯ элемента.
+
+        В лог результат не идёт намеренно — простыня вывода инструмента
+        Оператору не нужна (то же решение, что у Claude), но метрике
+        трения шага он нужен вместе со своим вызовом: потому и отдельное
+        поле события, а не «погасили и забыли».
+        """
+        result = ToolResult(item.get("id"), self._result_text(item),
+                            item.get(ITEM_STATUS_KEY) == FAILED_STATUS)
+        return StreamEvent("", None, (), (result,), None, None)
+
+    @staticmethod
+    def _agent_message_event(item):
+        """`agent_message`: то, что исполнитель сказал словами — и в поле
+        `text` события, и строкой лога. Пустой текст — пустое событие:
+        показывать и пересказывать нечего."""
+        text = item.get("text")
+        text = text.strip() if isinstance(text, str) else ""
+        if not text:
+            return EMPTY_EVENT
+        return StreamEvent(f"{text}\n", text, (), (), None, None)
+
+    def _run_result_event(self, event):
+        """`turn.completed`: итог запуска — разбивка токенов и ОТСУТСТВИЕ
+        цены (требование 2).
+
+        `usd` — `None` безусловно, а не «если поля нет»: `codex exec
+        --json` доллары не считает в принципе, и условная ветка читалась
+        бы как «иногда считает». `None`, не `0.0`: «CLI цены не сообщил»
+        и «запуск был бесплатен» ветвятся в учёте по-разному
+        (`spend.charge_step`) — расход шага считает пульт по действующему
+        тарифу модели, раздел `codex` каталога объявил
+        `cost_from_cli: false`.
+
+        Признака ошибки у `turn.completed` образцы 0.155.1 не несут,
+        поэтому итог запуска — всегда «не ошибка»: провал попытки пульт
+        узнаёт кодом возврата CLI и классифицирует сигнатурами
+        (`failure_signatures`), а выдуманное поле состояния молча
+        помечало бы провалившимися успешные шаги.
+        """
+        tokens_by_kind = self._tokens_by_kind(event.get("usage"))
+        return StreamEvent("", None, (), (), tokens_by_kind,
+                           RunResult(tokens_by_kind, None, False, ""))
+
+    @classmethod
+    def _tokens_by_kind(cls, usage):
+        """`usage` итога запуска -> разбивка по ОБЩИМ видам цены
+        (`models.PRICE_KINDS`); `None` — расход неизвестен.
+
+        Арифметика — не переименование полей (требование 2):
+
+        - `input` = `input_tokens` МИНУС `cached_input_tokens`:
+          кэшированный вход ВХОДИТ в `input_tokens`, и без вычитания
+          дешёвые чтения кэша тарифицировались бы вторично ценой входа;
+        - `cache_read` = `cached_input_tokens`;
+        - `cache_write` = `cache_write_input_tokens`, отсутствие поля —
+          ноль (`docs/research/codex-live-check-2026-09-22.md`, п.5);
+        - `output` = `output_tokens` БЕЗ `reasoning_output_tokens`: токены
+          рассуждений — ЧАСТЬ выхода (живой запуск: `output_tokens` 8513
+          при `reasoning_output_tokens` 997), и сложение завысило бы
+          выход по самой дорогой цене тарифа.
+
+        Неполный `usage` (не отображение, нет входа или выхода, счётчик не
+        целое число) — `None`, то есть «расход неизвестен», а не нули: та
+        же деградация, что назвал отчёт живых проверок (п.5). Нули ушли бы
+        в `spent_usd` бесплатным шагом, а `None` уводит учёт на
+        именованную запись `agent cost UNCHARGED` с алертом
+        (`spend._charge_by_tariff`).
+
+        Вычитание берётся с нижней границей ноль: `cached_input_tokens`
+        больше `input_tokens` — испорченный `usage`, и отрицательный
+        счётчик вычел бы деньги из потраченного по задаче.
+        """
+        if not isinstance(usage, dict):
+            return None
+        total_input = cls._counter(usage.get(USAGE_INPUT_KEY))
+        output = cls._counter(usage.get(USAGE_OUTPUT_KEY))
+        if total_input is None or output is None:
+            return None
+        cache_read = cls._counter(usage.get(USAGE_CACHE_READ_KEY)) or 0
+        cache_write = cls._counter(usage.get(USAGE_CACHE_WRITE_KEY)) or 0
+        return {"input": max(total_input - cache_read, 0),
+                "output": output,
+                "cache_write": cache_write,
+                "cache_read": cache_read}
+
+    @staticmethod
+    def _counter(value):
+        """Счётчик токенов из события; `None` — не целое число. `bool` —
+        не счётчик: `True` не равен одному токену (то же правило, что у
+        `spend.json_number` про доллары)."""
+        if isinstance(value, bool) or not isinstance(value, int):
+            return None
+        return value
+
+    @staticmethod
+    def _tool_name(item):
+        """Имя инструмента вызова.
+
+        У `mcp_tool_call` это `сервер/инструмент`, а не имя вида: вид —
+        конверт, а инструментов внутри него столько, сколько серверов у
+        роли, и под общим именем метрика трения считала бы повтором два
+        разных вызова MCP. Сервер или инструмент не назван — остаётся вид
+        элемента: имя вызова обязано быть непустым.
+        """
+        kind = item.get("type")
+        if kind == MCP_ITEM:
+            server, tool = item.get("server"), item.get("tool")
+            if server and tool:
+                return f"{server}/{tool}"
+        return kind
+
+    @classmethod
+    def _argument(cls, item):
+        """Ключевой аргумент вызова по первому найденному ключу
+        `ITEM_ARGUMENT_KEYS`; пустая строка — ни одного из них нет."""
+        for key in ITEM_ARGUMENT_KEYS:
+            value = item.get(key)
+            if value:
+                return cls._text_of(value)
+        return ""
+
+    @classmethod
+    def _result_text(cls, item):
+        """Текст результата вызова по первому ключу `RESULT_TEXT_KEYS`,
+        который у элемента ЕСТЬ и не пуст значением `null`.
+
+        Проверяется наличие ключа, а не его правдивость: пустой
+        `aggregated_output` — это «команда ничего не написала», и
+        проваливаться по нему в соседние ключи значило бы показывать на
+        месте вывода команды чужое поле.
+        """
+        for key in RESULT_TEXT_KEYS:
+            if key in item and item[key] is not None:
+                return cls._text_of(item[key])
+        return ""
+
+    @staticmethod
+    def _text_of(value):
+        """Значение поля элемента как текст: строка — как есть, остальное
+        (аргументы MCP, результат-структура, перечень правок файлов) —
+        компактным JSON с сохранением букв, чтобы Оператор читал русский
+        текст, а не escape-последовательности."""
+        if isinstance(value, str):
+            return value
+        try:
+            return json.dumps(value, ensure_ascii=False, sort_keys=True)
+        except (TypeError, ValueError):
+            return str(value)
+
+    @staticmethod
+    def _call_line(name, argument):
+        """Отметка вызова инструмента в логе шага: имя и срез ключевого
+        аргумента в одну строку — по ней Оператору видно, работает шаг или
+        встал."""
+        flat = " ".join(str(argument).split())[:TOOL_ARGUMENT_LIMIT]
+        return f"{TOOL_CALL_LINE_PREFIX}{name} {flat}".rstrip() + "\n"
+
+    # --- сигнатуры провалов ----------------------------------------------
+
+    def failure_signatures(self):
+        """Сигнатуры провалов попытки — свой набор, см.
+        `FAILURE_SIGNATURES` о том, почему он сегодня пуст и что это
+        значит для поведения шага."""
+        return FAILURE_SIGNATURES
+
+    def required_cli_version(self, text):
+        """Версия CLI, которую текст попытки называет минимальной; `None`
+        — текст её не несёт. Разбор свой: формулировку Claude метод не
+        понимает намеренно (требование 3), см.
+        `REQUIRED_VERSION_PATTERNS`."""
+        for pattern in REQUIRED_VERSION_PATTERNS:
+            match = pattern.search(text)
+            if match is not None:
+                return match.group(1)
+        return None

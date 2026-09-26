@@ -1,17 +1,22 @@
 """Юнит-тесты провайдера `codex` (SPEC 01M32NH6P053978AER66P0X4GN,
-требования 1-5, 7, 12).
+требования 1-5, 7, 12; SPEC 01M32NH9QTC1T6FNH8JD79662R, требования 1-3 —
+разбор вывода, стоимость шага и сигнатуры провалов).
 
-Постоянная регрессия поверх приёмочной планки задачи
-(`tasks/01M32NH6P053978AER66P0X4GN/acceptance_tests/`): та планка уходит
-вместе с каталогом задачи, а свойства «команда шага и курируемый дом
+Постоянная регрессия поверх приёмочных планок обеих частей линии
+(`tasks/01M32NH6P053978AER66P0X4GN/acceptance_tests/`,
+`tasks/01M32NH9QTC1T6FNH8JD79662R/acceptance_tests/`): планки уходят
+вместе с каталогами задач, а свойства «команда шага и курируемый дом
 роли говорят одно и то же», «роль на Codex не наследует дом и секреты
-Оператора» и «живой смок платного CLI не идёт в обычном `doctor`»
-обязаны её пережить.
+Оператора», «живой смок платного CLI не идёт в обычном `doctor`» и
+«разбор вывода отдаёт общее событие, а неполный расход не притворяется
+нулём» обязаны их пережить.
 
 Песочницы — общие (`tests/sandbox.py`); настоящий `codex` на машине
 прогона не нужен и не запускается ни разу: резолв инструментов манифеста
-и ответы `codex --version` подменяются.
+и ответы `codex --version` подменяются, а строки потока собираются
+`json.dumps` из словарей.
 """
+import json
 import os
 import subprocess
 import sys
@@ -21,10 +26,12 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from orchestrator import (catalog, config, doctor, keychain,  # noqa: E402
-                          providers, runner, stack)
+from orchestrator import (agent_log, catalog, config, doctor,  # noqa: E402
+                          failure_classification, keychain, models, providers,
+                          runner, spend, stack, store)
 from orchestrator.providers import codex as codex_provider  # noqa: E402
-from tests.sandbox import TmpRootTest  # noqa: E402
+from tests.sandbox import (TaskSeededTmpRootTest, TmpDirTest,  # noqa: E402
+                           TmpRootTest)
 
 STUB_BIN = "/artel-test-stub-bin"
 KEYCHAIN_SECRET = "kluch-iz-slota"
@@ -1022,6 +1029,353 @@ class ForeignSecretCheckTest(TmpRootTest):
 
         self.assertIn("check_foreign_provider_secrets",
                       inspect.getsource(doctor.all_checks))
+
+
+# --- разбор вывода, стоимость шага и сигнатуры провалов ------------------
+#     (SPEC 01M32NH9QTC1T6FNH8JD79662R, требования 1-3)
+
+
+def _line(**fields) -> str:
+    """Строка вывода `codex exec --json` — тем же приёмом, каким
+    `tests/sandbox.py::event` собирает строку потока Claude: `json.dumps`
+    из словаря, а не копипаста текста (иначе предметом теста молча
+    становилось бы форматирование JSON)."""
+    return json.dumps(fields, ensure_ascii=False) + "\n"
+
+
+def _item_line(kind: str, **item) -> str:
+    """Строка события об элементе: вид СОБЫТИЯ снаружи, вид ЭЛЕМЕНТА —
+    полем `type` самого элемента."""
+    return _line(type=kind, item=item)
+
+
+#: Полный `usage` итога запуска: четыре счётчика, поверх которых сценарий
+#: меняет ровно то, что проверяет.
+FULL_USAGE = {"input_tokens": 1000, "cached_input_tokens": 400,
+              "cache_write_input_tokens": 7, "output_tokens": 30,
+              "reasoning_output_tokens": 11}
+
+def _codex_model_id() -> str:
+    """Идентификатор модели раздела `codex` каталога — ОТ каталога, не
+    литералом: состав раздела правит Оператор, и зашитое имя пережило бы
+    только до первой его правки."""
+    ids = sorted(entry.id for entry in models.load_catalog().models.values()
+                 if entry.provider == codex_provider.CLI_NAME)
+    assert ids, f"в каталоге {config.MODELS} нет моделей провайдера codex"
+    return ids[0]
+
+
+#: Текст класса «модель не поддерживается» словами CLAUDE (инцидент
+#: 19.09): для набора Codex — чужие слова, которых его CLI не произносит.
+CLAUDE_MODEL_FAILURE_TEXT = ("API Error: 400 … does not support this model; "
+                             "version 2.1.251 or newer is required")
+
+
+class OutputEventTest(unittest.TestCase):
+    """Событие общего вида из строки `codex exec --json` — углы, которых
+    планка задачи не закрывает: она гоняет образцы живого потока, а здесь
+    испорченный и неполный вывод."""
+
+    def setUp(self):
+        self.provider = providers.get(codex_provider.CLI_NAME)
+
+    def run_result(self, usage):
+        """Итог запуска из строки `turn.completed` с этим `usage`."""
+        event = self.provider.parse_output_line(
+            _line(type="turn.completed", usage=usage))
+        self.assertIsNotNone(event.run_result, "строка — итог запуска")
+        return event.run_result
+
+    def test_the_breakdown_is_named_by_the_common_price_kinds(self):
+        """Разбивка итога запуска названа ОБЩИМИ видами цены
+        (`models.PRICE_KINDS`), а не счётчиками своего CLI.
+
+        Ловит мутацию: провайдер отдаёт разбивку собственными именами
+        полей (`input_tokens`, `cached_input_tokens`) — `spend.by_price_kind`
+        переводит в вид только те, что совпали с прежними именами Claude,
+        а `cached_input_tokens` и `cache_write_input_tokens` молча
+        отбрасывает: шаг тарифицируется по половине разбивки, и строка
+        журнала показывает чтения кэша нулём.
+        """
+        by_kind = self.run_result(FULL_USAGE).tokens_by_type
+
+        self.assertEqual(sorted(by_kind), sorted(models.PRICE_KINDS))
+        self.assertEqual(spend.by_price_kind(by_kind), dict(by_kind),
+                         "перевод к видам цены ничего не отбросил")
+
+    def test_the_cached_input_never_makes_the_input_negative(self):
+        """Кэшированный вход больше `input_tokens` (испорченный `usage`) —
+        `input` ноль, а не отрицательное число.
+
+        Ловит мутацию: вычитание без нижней границы — `spend.tariff_cost_usd`
+        считает отрицательный вид отрицательными деньгами и ВЫЧИТАЕТ их из
+        потраченного по задаче: потолок бюджета обходится битым выводом CLI,
+        а сумма остаётся правдоподобной.
+        """
+        by_kind = self.run_result(
+            dict(FULL_USAGE, input_tokens=100, cached_input_tokens=400)
+        ).tokens_by_type
+
+        self.assertEqual(by_kind["input"], 0)
+        self.assertEqual(by_kind["cache_read"], 400)
+
+    def test_a_missing_cache_write_counter_is_zero_not_an_unknown_spend(self):
+        """Потока без `cache_write_input_tokens` хватает для расхода: этот
+        вид ноль, остальные три на месте.
+
+        Ловит мутацию: отсутствующий счётчик записи кэша делает разбивку
+        неизвестной целиком (`None`) — а его в потоке 0.155.1 может не быть
+        вовсе (`docs/research/codex-live-check-2026-09-22.md`, п.5): каждый
+        такой шаг уходил бы в «agent cost UNCHARGED» с алертом, и расход
+        роли на Codex не учитывался бы ни разу.
+        """
+        usage = {"input_tokens": 1000, "cached_input_tokens": 400,
+                 "output_tokens": 30}
+
+        by_kind = self.run_result(usage).tokens_by_type
+
+        self.assertEqual(dict(by_kind), {"input": 600, "cache_read": 400,
+                                         "cache_write": 0, "output": 30})
+
+    def test_an_incomplete_usage_leaves_the_spend_unknown(self):
+        """`usage` не отображением, без входа, без выхода или со счётчиком,
+        который не целое число, — разбивки нет (`None`), но итог запуска
+        есть.
+
+        Ловит мутацию: неполный `usage` дополняется нулями — шаг с
+        недосчитанным потоком списывается частью цены (а при пустом
+        `usage` — нулём) и выглядит УЧТЁННЫМ: именованной записи
+        «agent cost UNCHARGED» и её алерта не появляется, и недоучёт копится
+        без единого сигнала.
+        """
+        cases = (("usage не отображение", "нет"),
+                 ("нет входа", {"output_tokens": 30}),
+                 ("нет выхода", {"input_tokens": 1000}),
+                 ("выход строкой", dict(FULL_USAGE, output_tokens="30")),
+                 ("вход логическим", dict(FULL_USAGE, input_tokens=True)))
+
+        for label, usage in cases:
+            with self.subTest(label):
+                self.assertIsNone(self.run_result(usage).tokens_by_type)
+
+    def test_the_run_result_never_carries_a_price(self):
+        """Цены в итоге запуска нет, даже если строка несёт похожее поле.
+
+        Ловит мутацию: цена читается из поля строки потока — `charge_step`
+        уходит на путь факта CLI, списывает это число как фактическую
+        стоимость и заводит его в калибровку тарифа, хотя `codex exec
+        --json` доллары не считает вовсе.
+        """
+        event = self.provider.parse_output_line(
+            _line(type="turn.completed", usage=FULL_USAGE,
+                  total_cost_usd=1.23, cost_usd=1.23))
+
+        self.assertIsNone(event.run_result.usd)
+        self.assertFalse(event.run_result.is_error)
+
+    def test_the_call_goes_to_the_log_and_its_result_stays_muted(self):
+        """Отметка вызова в логе шага: имя инструмента и срез ключевого
+        аргумента одной строкой; результат вызова в лог не идёт.
+
+        Ловит мутацию: в лог пишется и результат вызова — лог шага
+        превращается в простыню вывода команд (решение, обратное принятому
+        у Claude), а многострочный вывод команды ломает построчный разбор
+        лога теми же средствами, которыми он пишется.
+        """
+        command = "cat docs/stack.md\n  | grep -n codex " + "x" * 200
+
+        started = self.provider.parse_output_line(_item_line(
+            "item.started", id="item_1", type="command_execution",
+            command=command, status="in_progress"))
+        completed = self.provider.parse_output_line(_item_line(
+            "item.completed", id="item_1", type="command_execution",
+            command=command, aggregated_output="вывод", status="completed"))
+
+        self.assertEqual(started.log_text.count("\n"), 1, started.log_text)
+        self.assertTrue(started.log_text.startswith(
+            f"{codex_provider.TOOL_CALL_LINE_PREFIX}command_execution "))
+        self.assertLessEqual(len(started.log_text.rstrip("\n")),
+                             len(codex_provider.TOOL_CALL_LINE_PREFIX)
+                             + len("command_execution ")
+                             + codex_provider.TOOL_ARGUMENT_LIMIT)
+        self.assertEqual(completed.log_text, "",
+                         "результат вызова в лог не идёт")
+
+    def test_an_mcp_call_is_named_by_its_server_and_tool(self):
+        """Имя вызова `mcp_tool_call` — `сервер/инструмент`; сервер не
+        назван — остаётся вид элемента, но имя непустое всегда.
+
+        Ловит мутацию: именем вызова остаётся вид конверта
+        (`mcp_tool_call`) — в логе шага все вызовы MCP выглядят одним
+        инструментом, а ретрай-сигнал метрики трения (имя + аргумент)
+        слипается у разных серверов, вызванных с одинаковыми аргументами.
+        """
+        call = self.provider.parse_output_line(_item_line(
+            "item.started", id="item_9", type="mcp_tool_call",
+            server="cua_repl", tool="js", arguments={"code": "1"},
+            status="in_progress")).tool_calls[0]
+
+        self.assertEqual(call.name, "cua_repl/js")
+        self.assertIn("code", call.argument)
+
+        without_server = self.provider.parse_output_line(_item_line(
+            "item.started", id="item_9", type="mcp_tool_call", tool="js",
+            status="in_progress")).tool_calls[0]
+
+        self.assertEqual(without_server.name, "mcp_tool_call")
+
+    def test_reasoning_and_a_started_message_say_nothing(self):
+        """`reasoning` и начало `agent_message` — пустое событие.
+
+        Ловит мутацию: размышления исполнителя уезжают в `text` события и
+        в лог шага — поле «что исполнитель сказал словами» перестаёт
+        означать сказанное (его читают помимо лога), а лог шага заполняется
+        потоком мышления вместо двух предметов, ради которых он ведётся.
+        """
+        cases = (("reasoning", _item_line("item.completed", id="item_2",
+                                          type="reasoning",
+                                          text="подумаю")),
+                 ("начало agent_message",
+                  _item_line("item.started", id="item_0",
+                             type="agent_message", text="")))
+
+        for label, raw in cases:
+            with self.subTest(label):
+                self.assertEqual(self.provider.parse_output_line(raw),
+                                 providers.EMPTY_EVENT)
+
+    def test_an_event_without_a_readable_item_is_empty_and_not_a_crash(self):
+        """Событие об элементе без самого элемента (поля нет, поле не
+        отображение) — пустое событие.
+
+        Ловит мутацию: элемент читается без проверки типа — строка потока,
+        где `item` пришёл числом или строкой, роняет разбор
+        `AttributeError`, а с ним и перекачку вывода шага, которая зовёт
+        разбор на КАЖДОЙ строке.
+        """
+        cases = (("поля item нет", _line(type="item.completed")),
+                 ("item числом", _line(type="item.completed", item=17)),
+                 ("item строкой", _line(type="item.started", item="нет")))
+
+        for label, raw in cases:
+            with self.subTest(label):
+                self.assertEqual(self.provider.parse_output_line(raw),
+                                 providers.EMPTY_EVENT)
+
+
+class FailureWordsTest(unittest.TestCase):
+    """Слова провала — свои: набор сигнатур и извлечение требуемой версии
+    CLI (требование 3)."""
+
+    def setUp(self):
+        self.provider = providers.get(codex_provider.CLI_NAME)
+        self.claude = providers.get(providers.DEFAULT_PROVIDER)
+
+    def test_required_cli_version_does_not_understand_the_claude_wording(self):
+        """Текст отказа СЛОВАМИ CLAUDE не даёт провайдеру `codex` ни
+        версии, ни класса, ни сигнатуры в тексте отказа шага — тот же текст
+        у Claude разбирается.
+
+        Ловит мутацию: метод заимствует формулировку Claude (перенесённой
+        регуляркой или делегированием его провайдеру) — отказ шага на Codex
+        называет Оператору слова чужого CLI и просит поднять версию
+        `claude`, а чинить нужно `codex`.
+        """
+        self.assertIsNone(
+            self.provider.required_cli_version(CLAUDE_MODEL_FAILURE_TEXT))
+        self.assertEqual(
+            self.claude.required_cli_version(CLAUDE_MODEL_FAILURE_TEXT),
+            "2.1.251", "предпосылка теста: у Claude этот текст разбирается")
+
+        self.assertIsNone(failure_classification.classify_attempt_failure(
+            CLAUDE_MODEL_FAILURE_TEXT, self.provider))
+        self.assertEqual(failure_classification.class_signature_text(
+            failure_classification.MODEL_UNSUPPORTED_CLASS, self.provider), "")
+
+    def test_the_signature_set_is_the_providers_own_and_names_no_class_yet(self):
+        """Набор сигнатур — кортеж самого провайдера, не набор Claude, и ни
+        одного класса сегодня не заявляет.
+
+        Ловит мутацию: пустой набор «на время» подменён набором Claude —
+        провал Codex классифицируется по чужим словам, и класс
+        детерминированного отказа обрывает повторы шага на тексте, которого
+        его CLI никогда не произносит.
+        """
+        table = self.provider.failure_signatures()
+
+        self.assertIsInstance(table, tuple)
+        self.assertEqual(table, ())
+        self.assertIsNot(table, self.claude.failure_signatures())
+
+
+class StepCostTest(TaskSeededTmpRootTest):
+    """Деньги шага на неполном выводе: угол AC-5 с обратным знаком —
+    учтённой оказывается НЕизвестность, а не сумма."""
+
+    ROLE = "developer"
+
+    def test_an_incomplete_usage_is_journalled_uncharged_and_alerted(self):
+        """Итог запуска без разбивки токенов: `spent_usd` не меняется,
+        журнал несёт «agent cost UNCHARGED», открыт алерт порога.
+
+        Ловит мутацию: разбор дополняет неполный `usage` нулями — учёт
+        уходит на путь расчёта по тарифу с нулевой разбивкой, списывает
+        ноль и пишет его известной стоимостью: шаг выглядит бесплатным, а
+        ни записи UNCHARGED, ни алерта Оператор не видит.
+        """
+        provider = providers.get(codex_provider.CLI_NAME)
+        cost = spend.run_result_cost(provider.parse_output_line(
+            _line(type="turn.completed", usage={"cached_input_tokens": 400})
+        ).run_result)
+        self.assertIsNotNone(cost, "итог запуска получен")
+        self.assertIsNone(cost["tokens_by_type"], "разбивки нет")
+
+        conn = store.db()
+        spend.charge_step(conn, self.TASK, self.ROLE, cost,
+                          f"попытка 1/{config.AGENT_ATTEMPTS}",
+                          _codex_model_id())
+
+        self.assertEqual(store.get_task(store.db(), self.TASK)["spent_usd"],
+                         0.0, "нечего списывать — и не списано")
+        actions = [row["action"]
+                   for row in store.task_steps(store.db(), self.TASK)]
+        self.assertIn(spend.UNCHARGED_COST_JOURNAL_ACTION, actions)
+        self.assertNotIn(spend.KNOWN_COST_JOURNAL_ACTION, actions)
+        sources = [row["source"] for row in store.open_alerts(store.db())]
+        self.assertIn("spend.step_cost_uncharged", sources)
+
+
+class FrictionTest(TmpDirTest):
+    """Метрика трения шага на событиях Codex: вызов и его результат
+    связаны `item.id` — без этого трение шага всегда ноль."""
+
+    def test_a_failed_codex_tool_call_is_counted_unproductive(self):
+        """Лог сырых строк `codex exec --json`: пара вызов/результат со
+        `status: failed` даёт трение 1.0, та же пара со `status: completed`
+        — 0.0.
+
+        Ловит мутацию: результат вызова приходит с пустым или чужим
+        `call_id` (идентификатор берётся не из элемента) — `agent_log`
+        сопоставить результат с вызовом не может, ошибки инструментов шага
+        не видит никто, и трение шага на Codex остаётся нулевым при любом
+        числе провалившихся команд.
+        """
+        provider = providers.get(codex_provider.CLI_NAME)
+        started = _item_line("item.started", id="item_1",
+                             type="command_execution", command="pytest -q",
+                             status="in_progress")
+
+        for label, status, expected in (("провал", "failed", 1.0),
+                                        ("успех", "completed", 0.0)):
+            with self.subTest(label):
+                path = self.tdir / f"{status}.log"
+                path.write_text(started + _item_line(
+                    "item.completed", id="item_1", type="command_execution",
+                    command="pytest -q", aggregated_output="вывод",
+                    status=status), encoding="utf-8")
+
+                self.assertEqual(
+                    agent_log.step_friction(path, provider), expected)
 
 
 if __name__ == "__main__":
