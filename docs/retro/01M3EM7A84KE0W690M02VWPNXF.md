@@ -1,0 +1,17 @@
+# RETRO: 01M3EM7A84KE0W690M02VWPNXF — Конфликт подтяжки на приёмке и гейте мержа: возврат из эскалации требует шага разработчика
+
+Итог: done, sha 99da21086d8189c32ef0486d60a0cced351da363
+Адрес артефактов: 99da21086d8189c32ef0486d60a0cced351da363:tasks/01M3EM7A84KE0W690M02VWPNXF/
+Суть: Конфликт подтяжки на приёмке и гейте мержа: возврат из эскалации требует шага разработчика
+
+Стоимость итого: $20.25
+  analyst: $3.14, токенов 2603330 (input=50, output=28038, cache_write=118595, cache_read=2456647), провайдер claude, модель claude-opus-5
+  test_author: $7.41, токенов 8084221 (input=118, output=65317, cache_write=185312, cache_read=7833474), провайдер claude, модель claude-opus-5
+  developer: $6.28, токенов 6664956 (input=140, output=38361, cache_write=203993, cache_read=6422462), провайдер claude, модель claude-opus-5
+  reviewer: $3.42, токенов 3298580 (input=88, output=31852, cache_write=100994, cache_read=3165646), провайдер claude, модель claude-opus-5
+
+Ревью: 0 итераций; приёмка: 0 отказ(ов)
+
+Эскалации: нет
+
+Приёмочные тесты: 0 тест(ов), 0 manual, 0 skip
