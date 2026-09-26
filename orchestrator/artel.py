@@ -127,6 +127,7 @@ workspace, tasks, knowledge, logs). БД одна на все проекты: с
   version | models | canary --k <N> [--sha <sha>] | canary pool-seal |
   prune [--execute] |
   amend-tests <id> --reason "<основание>" [--from-branch] | pin-update <sha main артели> |
+  ci-rerun <id> --reason "<основание>" |
   pin --to [<sha>] | zone-release <id> | zone-reorder <id1> <id2> ... |
   venv-sync | note (копилка|бэклог|очередь) --text "<строка>" |
   note --append <ключ> --text "<текст>" | note --flush |
@@ -329,6 +330,24 @@ worktree задачи, команда коммитит правку, сдвиг�
 отличающиеся файлы и сдвигает лок на голову ветки без нового коммита
 (содержимое уже там); без расхождения отказывает («нет расхождения»).
 Без флага `--from-branch` поведение команды прежнее (сверка с worktree).
+
+`ci-rerun <id> --reason "<основание>"` (SPEC 01M3F7C2DVYCEANQ8CF1FCSD87) —
+исполняет решение Оператора «красный CI ветки на `verifying` — флейк»:
+повторяет упавший прогон существующим узлом `ci.trigger_rerun` (`gh run
+rerun --failed` + ожидание `gh run watch`) и пишет в журнал задачи
+основание, id прогона и исход ожидания (зелёный / снова красный / `gh` не
+ответил). Состояние задачи не меняет и роль не запускает: после зелёного
+повтора задачу уводит дальше очередной опрос `advance` в `verifying`.
+Отказывает именованно, ничего не перезапуская, если: задача не в
+`verifying`; CI ветки не завершённо-красный; `--reason` пуст; голова
+ветки уехала с того коммита, к которому относится красный статус;
+основание дословно совпадает с основанием последнего повтора этой задачи.
+Главное предусловие — сверка с главной веткой: имена завершённых
+не-зелёных заданий головы ветки задачи сверяются с такими же именами
+вершины `origin/<MAIN_BRANCH>`, и непустое пересечение отказывает «дефект
+main, не флейк» (урок 12.09: перезапуск замаскировал реальный дефект;
+красная главная ветка 22-26.09). Неизвестный статус вершины главной ветки
+— тоже отказ, а не повтор (инвариант 19).
 
 Модули пакета (T015; здесь — только разбор argv и таблица команд):
   config    пути и константы; все обращения к ним идут через модуль
@@ -724,16 +743,18 @@ def _cmd_new(rest: list) -> None:
 
 
 def _reason_arg(rest: list) -> str | None:
-    """Значение флага `--reason` команды `amend-tests <id> --reason
-    "<основание>"`; `None` — флаг не передан вовсе. `amend.cmd_amend_tests`
-    не различает «флага нет» и «флаг передан пустой строкой» — оба
-    отказывают одинаково (SPEC AC-5), поэтому здесь достаточно вернуть
+    """Значение флага `--reason` команд `amend-tests <id> --reason
+    "<основание>"` и `ci-rerun <id> --reason "<основание>"`; `None` — флаг
+    не передан вовсе. Ни `amend.cmd_amend_tests`, ни `fsm.cmd_ci_rerun` не
+    различают «флага нет» и «флаг передан пустой строкой» — оба отказывают
+    одинаково (SPEC 01M1HNNHDMP2C1AJTH5QF1BTN2, AC-5; SPEC
+    01M3F7C2DVYCEANQ8CF1FCSD87, AC-3), поэтому здесь достаточно вернуть
     `None`/пустую строку как есть, без специальной обработки."""
     if "--reason" not in rest:
         return None
     idx = rest.index("--reason")
     if idx + 1 >= len(rest):
-        sys.exit("--reason требует основание правки следующим аргументом.")
+        sys.exit("--reason требует основание следующим аргументом.")
     return rest[idx + 1]
 
 
@@ -833,6 +854,7 @@ def main() -> None:
         "acceptance-dry-run": lambda: dry_run.cmd_acceptance_dry_run(rest[0]),
         "amend-tests": lambda: amend.cmd_amend_tests(
             rest[0], _reason_arg(rest), from_branch="--from-branch" in rest),
+        "ci-rerun": lambda: fsm.cmd_ci_rerun(rest[0], _reason_arg(rest)),
         "pin-update": lambda: pin.cmd_pin_update(rest[0]),
         "pin": lambda: _cmd_pin(rest),
         "zone-release": lambda: zone_lock.cmd_zone_release(rest[0]),

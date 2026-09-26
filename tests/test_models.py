@@ -9,9 +9,10 @@
 поведение на конфигурации, которой не бывает.
 """
 import io
+import sqlite3
 import sys
 import unittest
-from contextlib import redirect_stdout
+from contextlib import closing, redirect_stdout
 from pathlib import Path
 from unittest import mock
 
@@ -681,15 +682,32 @@ overrides:
         `TmpDirTest` не подменяет, поэтому до этой правки мутация с
         `store.journal(...)` оставалась зелёной и писала строки в боевую
         `state.db` прямо на прогоне тестов.
+
+        Ловит мутацию: затравочное соединение отпускается удалением
+        ссылки (`del conn`) вместо явного закрытия — снимок «до»
+        делается при ЖИВОЙ БД, а закрывается она в неопределённый момент
+        циклической сборки мусора, в том числе уже внутри `run_cmd()`.
+        На Linux SQLite при закрытии последнего соединения убирает
+        `state.db-wal`/`state.db-shm`, и список «после» оказывается
+        короче списка «до»: тест краснеет на CI и зелен локально. Эту
+        мутацию ловит `assertRaises(sqlite3.ProgrammingError)` ниже —
+        одинаково на обеих платформах и независимо от того, удаляет ли
+        SQLite служебные файлы WAL.
         """
         self.patch("DB", self.tdir / "state.db")
         # Затравочная строка: БД существует и не пуста — ровно то
         # состояние, в котором Оператор зовёт `models` на живом пульте.
         conn = store.db()
-        store.create_schema(conn)
-        store.journal(conn, "T0", "тест", "затравка")
-        conn.commit()
-        del conn
+        with closing(conn):
+            store.create_schema(conn)
+            store.journal(conn, "T0", "тест", "затравка")
+            conn.commit()
+        # Закрытие обязано быть явным и доказанным ДО снимков ниже:
+        # `store._AutoClosingConnection` участвует в ссылочном цикле со
+        # своим кэшем подготовленных выражений, поэтому его `__del__` по
+        # счётчику ссылок не срабатывает — отпускание ссылки закрывало бы
+        # БД когда угодно, вплоть до середины `run_cmd()`.
+        self.assertRaises(sqlite3.ProgrammingError, conn.execute, "SELECT 1")
         before = sorted(p.name for p in self.tdir.iterdir())
         mtimes = {p.name: p.stat().st_mtime_ns for p in self.tdir.iterdir()}
 
