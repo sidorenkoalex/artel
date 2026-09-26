@@ -183,6 +183,29 @@ CODEX_AUTH_RECIPE = (
 )
 
 
+def _login_status_lines(res) -> list:
+    """Строки вывода `codex login status` из ОБОИХ потоков, сведённые к
+    нижнему регистру и одному пробелу.
+
+    Оба потока, а не только `stdout`: живые пробы настоящего 0.155.1
+    (REVIEW.md итерации 1, R1-F1) показали, что результат `login status`
+    печатается в STDERR, а `stdout` остаётся пустым — и при подтверждённом
+    входе (`rc=0`, `stderr='Logged in using ChatGPT\\n'`), и при входе
+    ключом API, и при «Not logged in». Чтение одного `stdout` давало
+    вошедшему дому роли `fail` с рецептом «войдите», то есть `ok`
+    недостижимый вовсе. Обратное обобщение тоже неверно: `codex --version`
+    печатает в `stdout` — поток зависит от подкоманды, и предполагать его
+    по соседней проверке нельзя.
+
+    Построчно, а не одной склейкой: `Logged in using an API key` первой
+    строкой и `chatgpt` где-нибудь ниже — не подтверждение входа ChatGPT, а
+    два разных утверждения, и склейка потоков в один текст сделала бы их
+    неразличимыми для регулярки.
+    """
+    text = f"{res.stdout or ''}\n{res.stderr or ''}"
+    return [" ".join(line.lower().split()) for line in text.splitlines()]
+
+
 def check_codex_chatgpt_auth(role: str) -> doctor.Check:
     """Подписочный вход ChatGPT для роли — блокирующая строка на месте
     прежней проверки ключа API (требование 4, AC-6..AC-10).
@@ -197,7 +220,9 @@ def check_codex_chatgpt_auth(role: str) -> doctor.Check:
 
     `ok` — только код выхода 0 И подтверждённый вход ChatGPT: тем же нулём
     CLI отвечает и на «не вошёл», и на вход ключом API (тот самый ключ без
-    баланса, с которым 22.09 живой запуск получил 401).
+    баланса, с которым 22.09 живой запуск получил 401). Подтверждение
+    ищется в ОБОИХ потоках вывода (`_login_status_lines`): 0.155.1 печатает
+    результат `login status` в stderr.
 
     Вывод CLI не попадает в `detail` ни в одном исходе: `codex login status`
     печатает адрес связки ключей и состояние авторизации — сведения, которым
@@ -236,8 +261,9 @@ def check_codex_chatgpt_auth(role: str) -> doctor.Check:
             CODEX_AUTH_CHECK, "fail",
             f"роль {role}: `codex login status` ответил кодом "
             f"{res.returncode} (вывод CLI не печатается) — {CODEX_AUTH_RECIPE}")
-    output = " ".join((res.stdout or "").lower().split())
-    if not doctor.codex_provider.CHATGPT_LOGIN_RE.search(output):
+    lines = _login_status_lines(res)
+    if not any(doctor.codex_provider.CHATGPT_LOGIN_RE.search(line)
+               for line in lines):
         return doctor.Check(
             CODEX_AUTH_CHECK, "fail",
             f"роль {role}: код выхода 0, но вход ChatGPT не подтверждён — "

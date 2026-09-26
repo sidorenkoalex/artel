@@ -133,8 +133,10 @@ LOGIN_STATUS_ARGS = ("login", "status")
 LOGIN_STATUS_TIMEOUT_SEC = 20
 
 # Подтверждение входа ChatGPT в выводе `codex login status`. 0.155.1
-# отвечает «Logged in using ChatGPT» (`docs/research/
-# codex-live-check-2026-09-22.md`), но сверка по точной строке краснела бы
+# отвечает `rc=0`, пустым `stdout` и `stderr='Logged in using ChatGPT\n'`
+# (живые пробы, REVIEW.md итерации 1, R1-F1; отчёт `docs/research/
+# codex-live-check-2026-09-22.md`) — поток разбирает
+# `doctor._login_status_lines`, а сверка по точной строке краснела бы
 # на любой переформулировке вендора, а сверка по одному слову `chatgpt` —
 # зеленела бы на «Not logged in (ChatGPT)». Отсюда регулярка по тексту,
 # сведённому к нижнему регистру и одному пробелу: утверждение о входе,

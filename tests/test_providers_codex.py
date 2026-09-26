@@ -37,12 +37,26 @@ FORBIDDEN_KEY_NAMES = codex_provider.FORBIDDEN_KEY_ENV_NAMES
 
 # Вывод `codex login status` в трёх состояниях авторизации; маркер в каждой
 # строке ловит эхо вывода CLI в текст строки `doctor`.
-OUT_MARKER = "VYVOD-CLI-STDOUT"
-ERR_MARKER = "VYVOD-CLI-STDERR"
-LOGGED_IN_CHATGPT = f"Logged in using ChatGPT {OUT_MARKER}"
-LOGGED_IN_API_KEY = f"Logged in using an API key {OUT_MARKER}"
-NOT_LOGGED_IN = f"Not logged in {OUT_MARKER}"
-STDERR_NOISE = f"{ERR_MARKER}: warning from cli"
+STATUS_MARKER = "VYVOD-CLI-STATUS"
+NOISE_MARKER = "VYVOD-CLI-NOISE"
+LOGGED_IN_CHATGPT = f"Logged in using ChatGPT {STATUS_MARKER}"
+LOGGED_IN_API_KEY = f"Logged in using an API key {STATUS_MARKER}"
+NOT_LOGGED_IN = f"Not logged in {STATUS_MARKER}"
+CLI_NOISE = f"{NOISE_MARKER}: warning from cli"
+
+# ЗАПИСАННЫЙ факт настоящего CLI 0.155.1 (живые пробы ревьювера, REVIEW.md
+# итерации 1, R1-F1; отчёт `docs/research/codex-live-check-2026-09-22.md`):
+# `codex login status` печатает результат в STDERR, оставляя stdout пустым,
+# — `rc=0, stdout='', stderr='Logged in using ChatGPT\n'` при
+# подтверждённом входе; `rc=0, stderr='Logged in using an API key - sk-***'`
+# при входе ключом; `rc=1, stderr='Not logged in'`, если дом роли не вошёл.
+# `codex --version`, наоборот, печатает в stdout (`codex-cli 0.155.1`):
+# поток зависит от подкоманды, и обобщать его с соседней проверки нельзя.
+#
+# Заглушка калибруется этим фактом по умолчанию: до правки она клала строку
+# входа в stdout, весь набор зеленел на CLI, которого нет, а вошедший дом
+# роли получал `fail` с рецептом «войдите».
+LOGIN_STATUS_STREAM = "stderr"
 
 
 def _drop_ambient(test, *names) -> None:
@@ -79,26 +93,44 @@ def _toml_pairs(text: str) -> dict:
 
 class _LoginStatusRuns:
     """Подмена `subprocess.run` пакета `doctor`: отвечает на `--version`
-    обоих CLI и на `codex … login status`, запоминая вызовы второго.
+    обоих CLI и на `codex … login status`, запоминая ВСЕ вызовы и отдельно
+    вызовы второго.
+
+    Состояние авторизации (`status`) кладётся в тот поток, который назван
+    `stream`; по умолчанию — `stderr`, как печатает настоящий 0.155.1 (см.
+    `LOGIN_STATUS_STREAM`). Во второй поток идёт шум со своим маркером:
+    эхо ЛЮБОГО из потоков в текст строки `doctor` обязано быть видно.
 
     Настоящий `codex` на машине прогона не нужен и не запускается ни разу.
     """
 
-    def __init__(self, stdout=LOGGED_IN_CHATGPT, stderr=STDERR_NOISE,
-                 returncode=0, raises=None, codex_version="0.155.1"):
-        self.stdout, self.stderr = stdout, stderr
+    def __init__(self, status=LOGGED_IN_CHATGPT, stream=LOGIN_STATUS_STREAM,
+                 returncode=0, raises=None, codex_version="0.155.1",
+                 noise=CLI_NOISE):
+        self.status, self.stream, self.noise = status, stream, noise
         self.returncode, self.raises = returncode, raises
         self.codex_version = codex_version
         self.login_calls = []
+        self.calls = []
+
+    def streams(self) -> tuple:
+        """(stdout, stderr) ответа `login status`: состояние — в своём
+        потоке, шум — во втором."""
+        text = f"{self.status}\n"
+        if self.stream == "stdout":
+            return text, f"{self.noise}\n"
+        return f"{self.noise}\n", text
 
     def __call__(self, args, **kwargs):
         argv = [str(item) for item in args]
+        self.calls.append(argv)
         if "login" in argv:
             self.login_calls.append((argv, kwargs))
             if self.raises is not None:
                 raise self.raises
+            stdout, stderr = self.streams()
             return subprocess.CompletedProcess(argv, self.returncode,
-                                               self.stdout, self.stderr)
+                                               stdout, stderr)
         name = Path(argv[0]).name
         text = self.codex_version if name == "codex" else config.CLI_VERSION_PIN
         return subprocess.CompletedProcess(argv, 0, f"{text}\n", "")
@@ -340,6 +372,57 @@ class EnvironmentTest(TmpRootTest):
         self.assertNotIn(AMBIENT_KEY, set(env.values()), env)
 
 
+class StepEnvironmentAllowlistTest(TmpRootTest):
+    """Белый список манифеста и СОБРАННОЕ окружение шага — требование 3,
+    AC-4 (REVIEW.md итерации 1, R1-F3).
+
+    Свойство держится здесь, а не только приёмочной планкой задачи: CI
+    гоняет `pytest tests` и каталогов `tasks/*/acceptance_tests` не
+    трогает, так что планка закрытой задачи возврат имени в белый список
+    уже не заметит.
+    """
+
+    def setUp(self):
+        super().setUp()
+        _drop_ambient(self, *FORBIDDEN_KEY_NAMES, *CLAUDE_SECRETS)
+        patcher = mock.patch.object(keychain, "token", lambda slot: "tok-test")
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def step_env(self, provider_name: str) -> dict:
+        """Окружение шага, собранное РЕАЛЬНОЙ точкой пульта
+        (`runner.role_env`), с исполнителем шага `provider_name`."""
+        provider = providers.get(provider_name)
+        with mock.patch.object(providers, "for_role", lambda role=None: provider):
+            return runner.role_env("developer", "T1")
+
+    def test_no_api_key_name_is_in_the_allowlist_or_in_either_step_env(self):
+        """Ловит мутацию: `OPENAI_API_KEY` убран из белого списка, а взамен
+        дописан `CODEX_API_KEY` — «тот, который `codex exec` и читает»
+        (факт живой проверки 22.09). Список общий на пульт, поэтому такая
+        замена возвращает ключ Оператора в окружение КАЖДОГО шага, включая
+        шаг роли на Claude, — ровно та утечка, которую требование 3
+        закрывает. Проверяются обе половины: сам список (с его префиксами)
+        и собранное `runner.role_env` на обоих провайдерах при всех трёх
+        заданных ambient-переменных.
+        """
+        prefixes = tuple(stack.ROLE_ENV_ALLOWLIST_PREFIXES)
+        for name in FORBIDDEN_KEY_NAMES:
+            with self.subTest(name=name, where="белый список"):
+                self.assertNotIn(name, stack.ROLE_ENV_ALLOWLIST)
+                self.assertFalse(name.startswith(prefixes), prefixes)
+
+        ambient = {name: AMBIENT_KEY for name in FORBIDDEN_KEY_NAMES}
+        for provider_name in ("codex", "claude"):
+            with mock.patch.dict(os.environ, ambient):
+                env = self.step_env(provider_name)
+
+            for name in FORBIDDEN_KEY_NAMES:
+                with self.subTest(provider=provider_name, name=name):
+                    self.assertNotIn(name, env)
+            self.assertNotIn(AMBIENT_KEY, set(env.values()), provider_name)
+
+
 class RoleHomeDeploymentTest(TmpRootTest):
     """Развёртывание и сверка ДВУХ домов роли — требование 5."""
 
@@ -419,8 +502,8 @@ class PreflightTest(TmpRootTest):
         for check in checks:
             with self.subTest(check=check.name):
                 self.assertNotIn(KEYCHAIN_SECRET, check.detail)
-                self.assertNotIn(OUT_MARKER, check.detail)
-                self.assertNotIn(ERR_MARKER, check.detail)
+                self.assertNotIn(STATUS_MARKER, check.detail)
+                self.assertNotIn(NOISE_MARKER, check.detail)
 
     def test_cli_version_below_the_minimum_warns_and_names_both_numbers(self):
         """Ловит мутацию: версия сверяется с пином Claude
@@ -474,13 +557,13 @@ class PreflightTest(TmpRootTest):
         ключом API (тот самый ключ без баланса, с которым живой запуск
         22.09 получил 401), и зелёная строка `doctor` доказывала бы
         авторизацию, которой у шага нет."""
-        ok, _ = self.auth_check(stdout=LOGGED_IN_CHATGPT)
+        ok, _ = self.auth_check(status=LOGGED_IN_CHATGPT)
         self.assertEqual(ok.status, "ok", ok.detail)
 
         for title, kwargs in (
                 ("ненулевой код выхода", {"returncode": 1}),
-                ("код 0, вход не выполнен", {"stdout": NOT_LOGGED_IN}),
-                ("код 0, вход ключом API", {"stdout": LOGGED_IN_API_KEY}),
+                ("код 0, вход не выполнен", {"status": NOT_LOGGED_IN}),
+                ("код 0, вход ключом API", {"status": LOGGED_IN_API_KEY}),
                 ("таймаут", {"raises": subprocess.TimeoutExpired(
                     cmd="codex", timeout=1)}),
                 ("CLI не запустился", {"raises": OSError("нет такого файла")})):
@@ -488,6 +571,35 @@ class PreflightTest(TmpRootTest):
                 check, _ = self.auth_check(**kwargs)
 
                 self.assertEqual(check.status, "fail", check.detail)
+
+    def test_the_confirmation_is_read_from_the_stream_the_cli_really_prints_to(self):
+        """Ловит мутацию: подтверждение входа ищется в ОДНОМ потоке —
+        именно это и было в итерации 1 (REVIEW.md, R1-F1): читался
+        `stdout`, а настоящий 0.155.1 печатает результат `login status` в
+        `stderr` (rc=0, stdout пуст, stderr='Logged in using ChatGPT'), и
+        вошедший дом роли получал `fail` с рецептом «войдите» — то есть
+        `ok` был недостижим, а предполёт блокировал КАЖДЫЙ шаг роли на
+        Codex. Зеркальная мутация (читать только `stderr`) ловится тем же
+        перебором: вендор вправе вернуть вывод в `stdout`, как уже делает
+        `codex --version`.
+
+        Вторая мутация: потоки склеиваются в один текст без границ строк —
+        `Logged in using an API key` в одной строке и `ChatGPT` в другой
+        начинают вместе давать `ok`, то есть вход ключом API засчитывается
+        за подписочный.
+        """
+        for stream in ("stderr", "stdout"):
+            with self.subTest(stream=stream):
+                check, runs = self.auth_check(status=LOGGED_IN_CHATGPT,
+                                              stream=stream)
+
+                self.assertEqual(check.status, "ok", check.detail)
+                self.assertEqual(len(runs.login_calls), 1)
+
+        crossed = self.auth_check(
+            status=LOGGED_IN_API_KEY, stream="stdout",
+            noise=f"{NOISE_MARKER}: run `codex login` to use ChatGPT")[0]
+        self.assertEqual(crossed.status, "fail", crossed.detail)
 
     def test_every_failure_hides_the_cli_output_and_names_both_operator_steps(self):
         """Ловит мутацию: причину отказа берут прямо из вывода CLI («так
@@ -498,8 +610,8 @@ class PreflightTest(TmpRootTest):
         отказывают без него — Оператор получает красную строку без того
         шага, которого не хватает (без указателя связки ключей вход не
         сохраняется вовсе, живая проверка 22.09)."""
-        scenarios = ({}, {"returncode": 1}, {"stdout": NOT_LOGGED_IN},
-                     {"stdout": LOGGED_IN_API_KEY},
+        scenarios = ({}, {"returncode": 1}, {"status": NOT_LOGGED_IN},
+                     {"status": LOGGED_IN_API_KEY},
                      {"raises": subprocess.TimeoutExpired(cmd="codex",
                                                           timeout=1)},
                      {"raises": OSError("нет такого файла")})
@@ -507,8 +619,8 @@ class PreflightTest(TmpRootTest):
         for kwargs in scenarios:
             check, _ = self.auth_check(**kwargs)
             with self.subTest(status=check.status, detail=check.detail[:40]):
-                self.assertNotIn(OUT_MARKER, check.detail)
-                self.assertNotIn(ERR_MARKER, check.detail)
+                self.assertNotIn(STATUS_MARKER, check.detail)
+                self.assertNotIn(NOISE_MARKER, check.detail)
                 if check.status == "fail":
                     self.assertIn("default-keychain", check.detail)
                     self.assertIn("codex login", check.detail)
@@ -525,6 +637,42 @@ class PreflightTest(TmpRootTest):
 
         self.assertNotIn("chatgpt", source.lower())
         self.assertNotIn(doctor.CODEX_AUTH_CHECK, source)
+
+    def test_a_pult_without_a_codex_role_gets_neither_the_line_nor_the_call(self):
+        """То же свойство ПОВЕДЕНИЕМ, а не текстом исходника (REVIEW.md
+        итерации 1, R1-F3): сверка `inspect.getsource` выше слепа к
+        подключению проверки через провайдера или переменную — имени в
+        исходнике `all_checks` такая правка не оставит.
+
+        Ловит мутацию: строка авторизации приходит не из
+        `CodexProvider.preflight`, а из общего набора или из предполёта
+        шага любой роли — пульт, где ни одна agent-роль не идёт на
+        `codex`, начинает платить подпроцессом `codex login status` на
+        каждый прогон и печатать красную строку про инструмент, которым
+        никто не пользуется.
+
+        Контроль вырожденности — вторая половина сценария: роль НА CODEX
+        обе строки получает, и вызов CLI ровно один.
+        """
+        self.assertNotIn("codex", {providers.name_for_role(role)
+                                   for role in doctor.agent_roles()})
+
+        grouped = doctor.provider_preflight_checks()
+        step = doctor.preflight_checks("developer", config.DEFAULT_TARGET)
+
+        self.assertNotIn(doctor.CODEX_AUTH_CHECK, grouped, sorted(grouped))
+        self.assertNotIn(doctor.CODEX_AUTH_CHECK, [c.name for c in step])
+        self.assertEqual(self.runs.login_calls, [], self.runs.login_calls)
+        self.assertEqual([argv for argv in self.runs.calls
+                          if "codex" in " ".join(argv)], [], self.runs.calls)
+
+        codex = providers.get("codex")
+        with mock.patch.object(providers, "for_role", lambda role=None: codex):
+            on_codex = doctor.preflight_checks("developer",
+                                               config.DEFAULT_TARGET)
+
+        self.assertIn(doctor.CODEX_AUTH_CHECK, [c.name for c in on_codex])
+        self.assertEqual(len(self.runs.login_calls), 1, self.runs.login_calls)
 
 
 class ModelVerdictTest(TmpRootTest):
@@ -724,6 +872,33 @@ class IsolationSmokeTest(TmpRootTest):
             with self.subTest(name=name):
                 with mock.patch.object(self.provider_class, "environment",
                                        leaky_with({name: AMBIENT_KEY})):
+                    check = doctor.codex_isolation_smoke("developer")
+
+                self.assertEqual(check.status, "fail", check.detail)
+                self.assertIn(name, check.detail)
+                self.assertNotIn(AMBIENT_KEY, check.detail)
+
+    def test_a_key_name_returned_to_the_allowlist_turns_the_smoke_red(self):
+        """Ловит мутацию: пятый пункт смока смотрит НАКЛАДКУ провайдера
+        (`provider.environment`), а не собранное окружение шага — ровно то,
+        что было в итерации 1 (REVIEW.md, R1-F2). После требования 3
+        единственный живой канал ключа — общий белый список манифеста:
+        имя, дописанное в `stack.ROLE_ENV_ALLOWLIST` следующей задачей
+        линии или правкой «по аналогии», едет в окружение КАЖДОГО шага,
+        включая шаг Codex, а смок оставался бы зелёным — при том, что
+        `docs/stack.md` и `AGENTS.md` дома роли обещают Оператору красную
+        строку.
+
+        Метод провайдера здесь НЕ подменяется намеренно: сценарий обязан
+        ломаться от правки белого списка, иначе он проверяет заглушку, а
+        не канал.
+        """
+        for name in FORBIDDEN_KEY_NAMES:
+            with self.subTest(name=name):
+                with mock.patch.dict(
+                        stack.ROLE_ENV_ALLOWLIST,
+                        {name: "ключ API, вернувшийся в белый список"}), \
+                        mock.patch.dict(os.environ, {name: AMBIENT_KEY}):
                     check = doctor.codex_isolation_smoke("developer")
 
                 self.assertEqual(check.status, "fail", check.detail)
