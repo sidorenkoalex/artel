@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Codebase-map пульта: детерминированная карта модулей верхнего уровня.
+"""Codebase-map пульта: детерминированная карта модулей пакетов.
 
 Использование:
     python3 scripts/codebase_map.py
@@ -11,8 +11,12 @@ cwd (SPEC 01M1SAA01YRRTWAVADT2F81RRQ, AC-4/AC-7), НЕ сам cwd: запуск 
 В CI — корень пульта после checkout, тот же результат, что раньше давал
 голый `Path.cwd()`.
 
-Перебирает `orchestrator/*.py`, `scripts/*.py`, `tests/*.py` без захода во
-вложенные директории. Разбор — статический (`ast`), файлы не исполняются
+Перебирает `orchestrator/`, `scripts/`, `tests/` РЕКУРСИВНО — вместе с
+модулями подпакетов (`orchestrator/doctor/`, `orchestrator/advance_gates/`,
+`orchestrator/providers/`): требование «только верхний уровень» из SPEC
+T027 устарело, когда подпакеты появились в фазе R, и 34 модуля переставали
+быть видны и карте, и брифу роли. Служебные каталоги (`__pycache__`,
+скрытые) в перечень не входят. Разбор — статический (`ast`), файлы не исполняются
 и не импортируются: содержимое чужого дерева — данные, не код для запуска.
 Выход: `<cwd>/docs/codebase-map.md`. Код возврата: 0 — успех, иначе — сбой
 (ADR-0003 3б: карта никогда не выдаётся за актуальную молча).
@@ -26,6 +30,9 @@ from pathlib import Path
 MODULE_DIRS = ("orchestrator", "scripts", "tests")
 OUTPUT_PATH = Path("docs") / "codebase-map.md"
 NO_DOCSTRING_MARK = "нет docstring"
+# Каталоги, чьё содержимое в перечень модулей не входит: байткод-кэш и
+# любые скрытые служебные каталоги внутри зоны карты.
+SERVICE_DIR_NAMES = ("__pycache__",)
 
 
 class ModuleInfo:
@@ -36,28 +43,55 @@ class ModuleInfo:
         self.imports = imports  # dotted-имена, до резолюции в перечень
 
 
+def _is_service_path(rel_path: Path) -> bool:
+    """Путь лежит внутри служебного каталога — байткод-кэша или скрытого."""
+    return any(part in SERVICE_DIR_NAMES or part.startswith(".")
+               for part in rel_path.parts[:-1])
+
+
 def discover_module_paths(root: Path) -> list:
-    """Отсортированный список путей .py-модулей верхнего уровня перечня."""
+    """Отсортированный список путей .py-модулей перечня, включая подпакеты.
+
+    Ключ сортировки — кортеж сегментов относительного пути, а не имя
+    файла: только так модули одного подпакета идут в карте непрерывным
+    блоком (SPEC 01M3FTQ16M3VVXPPFCC0BGA39V, AC-4), а не расходятся по
+    алфавиту между модулями верхнего уровня. Для модулей верхнего уровня
+    порядок при этом прежний — у них общий префикс, а последний сегмент
+    и есть имя файла.
+    """
     paths = []
     for directory in MODULE_DIRS:
         dir_path = root / directory
         if not dir_path.is_dir():
             continue
-        paths.extend(sorted(dir_path.glob("*.py"), key=lambda p: p.name))
+        found = [p for p in dir_path.rglob("*.py")
+                 if not _is_service_path(p.relative_to(root))]
+        paths.extend(sorted(found, key=lambda p: p.relative_to(root).parts))
     return paths
 
 
 def module_dotted_name(rel_path: Path) -> str:
     """Путь модуля -> dotted-имя для сопоставления с import-выражениями.
 
-    `__init__.py` пакета называется именем директории (`orchestrator`),
-    а не `orchestrator.__init__` — так на него ссылаются `import orchestrator`
-    и `from . import config` внутри пакета.
+    Имя строится по пути ЦЕЛИКОМ (`orchestrator/doctor/preflight.py` ->
+    `orchestrator.doctor.preflight`): иначе модуль подпакета не совпал бы
+    ни с одним реальным import-выражением.
+
+    `__init__.py` пакета называется именем его директории
+    (`orchestrator`, `orchestrator.doctor`), а не `…__init__` — так на
+    него ссылаются `import orchestrator` и `from . import config` внутри
+    пакета.
     """
-    package = rel_path.parts[0]
     if rel_path.stem == "__init__":
-        return package
-    return f"{package}.{rel_path.stem}"
+        return module_package_name(rel_path)
+    return ".".join(rel_path.parts[:-1] + (rel_path.stem,))
+
+
+def module_package_name(rel_path: Path) -> str:
+    """Dotted-имя пакета, ВНУТРИ которого лежит модуль — база, против
+    которой резолвятся его относительные импорты (`orchestrator/doctor/
+    preflight.py` -> `orchestrator.doctor`)."""
+    return ".".join(rel_path.parts[:-1])
 
 
 def extract_purpose(tree: ast.Module) -> str:
@@ -83,11 +117,18 @@ def extract_imported_dotted_names(tree: ast.Module, package: str) -> set:
     """Dotted-имена, на которые модуль похоже ссылается импортом.
 
     `ast.walk`, не только `tree.body`: импорт бывает под `if`/`try`
-    (см. orchestrator/artel.py). Уровень 1 (`from . import x`) —
-    единственный вид относительного импорта, достижимый без захода
-    в подпакеты, раз карта модулей сама не рекурсирует.
+    (см. orchestrator/artel.py).
+
+    `package` — dotted-имя пакета самого модуля (`orchestrator` для
+    модуля верхнего уровня, `orchestrator.doctor` для модуля подпакета).
+    Относительный импорт уровня N отсчитывается от него вверх на N-1
+    сегментов: `from . import x` внутри `orchestrator.doctor` —
+    `orchestrator.doctor.x`, `from .. import y` — `orchestrator.y`.
+    Уровень глубже корня пакета указывать некуда, такой импорт
+    пропускается.
     """
     referenced = set()
+    package_parts = package.split(".") if package else []
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
             for alias in node.names:
@@ -97,8 +138,10 @@ def extract_imported_dotted_names(tree: ast.Module, package: str) -> set:
                 if not node.module:
                     continue
                 base = node.module
-            elif node.level == 1:
-                base = f"{package}.{node.module}" if node.module else package
+            elif node.level <= len(package_parts):
+                anchor = ".".join(
+                    package_parts[:len(package_parts) - node.level + 1])
+                base = f"{anchor}.{node.module}" if node.module else anchor
             else:
                 continue
             referenced.add(base)
@@ -113,7 +156,7 @@ def parse_module(path: Path, root: Path) -> ModuleInfo:
     tree = ast.parse(source, filename=str(rel_path))
     purpose = extract_purpose(tree)
     public_functions = extract_public_functions(tree)
-    imports = extract_imported_dotted_names(tree, rel_path.parts[0])
+    imports = extract_imported_dotted_names(tree, module_package_name(rel_path))
     return ModuleInfo(rel_path, purpose, public_functions, imports)
 
 
