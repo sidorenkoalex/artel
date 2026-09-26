@@ -114,10 +114,12 @@ class TmpRepoTest(unittest.TestCase):
         worktree/кодовую ветку задачи первым действием своего шага и
         сразу коммитит SPEC.md в неё — byte-в-byte то, что раньше делал
         сам `cmd_new` (`_new_dogfood`), чтобы сценарии уборки ниже видели
-        ту же топологию: ветка НЕ пустой предок main (пустая ветвь без
-        собственных коммитов — тривиально «смержена», `gitcmd.
-        branch_merged`, и `drop_task_branch` её сохраняет — не тот
-        сценарий, который проверяют «неслитая ветка убрана»)."""
+        ту же топологию: ветка НЕ пустой предок main. Собственный коммит
+        здесь — то, что делает ветку НЕСЛИТОЙ: с
+        01M3EM7EFQ4X4CAYMNG35P9D7Y (требование 4) `drop_task_branch`
+        удаляет и влитую ветку тоже, но разными флагами и с разным
+        текстом исхода («удалена неслитая ветка» против «удалена влитая
+        ветка», требование 5) — сценариям ниже нужен именно первый."""
         wt_path, error = workspace.ensure(self.TASK, self.branch)
         self.assertIsNone(error, f"worktree не создан: {error}")
         self.commit_more_in_worktree(f"tasks/{self.TASK}/SPEC.md", "готово",
@@ -210,17 +212,81 @@ class KillCleanupTest(TmpRepoTest):
                          "ветку не убрать, пока её держит worktree")
         self.assertIn(f"убран worktree {wt_path}", out)
 
-    def test_merged_task_keeps_artifacts_and_branch(self):
-        """Критерий приёмки 2: артефакты в main — не трогаем ничего."""
+    def test_merged_task_keeps_artifacts_and_drops_branch(self):
+        """Критерий приёмки 2: артефакты в main — не трогаем; влитую
+        ветку-указатель при этом снимаем.
+
+        Ожидание по ветке переписано с прежнего правила «оставлена:
+        смержена в main» на требование 4 задачи
+        01M3EM7EFQ4X4CAYMNG35P9D7Y (санкция — её требование 8): каждый
+        коммит влитой ветки достижим из main, merge идёт `--no-ff` без
+        squash (docs/retention.md), удаление теряет только имя. Половина
+        критерия про артефакты в main осталась дословно — она и есть
+        инвариант «попавшее в main не удаляется».
+
+        Ловит мутацию: новое правило прикручено мимо `drop_task_branch`
+        (только к пути деления) — kill влитой ветки её не снимает; либо,
+        наоборот, вместе с веткой снесён каталог артефактов, лежащий в
+        main.
+        """
         self.ensure_worktree()
         self.git("merge", "--no-ff", self.branch, "-m", "merge")
 
         out = self.capture(cleanup.cmd_kill, self.TASK)
 
         self.assertTrue((self.task_dir() / "SPEC.md").exists())
-        self.assertIn(self.branch, self.branches())
+        self.assertNotIn(self.branch, self.branches())
         self.assertIn("артефакты в main", out)
-        self.assertIn(f"ветка {self.branch} оставлена: смержена в main", out)
+        self.assertIn(f"удалена влитая ветка {self.branch}", out)
+
+    def test_empty_branch_without_own_commits_is_dropped_as_merged(self):
+        """01M3EM7EFQ4X4CAYMNG35P9D7Y, требования 4-6: ветка без
+        СОБСТВЕННЫХ коммитов относительно main (её завела роль, работа
+        шла в артефактной ветке пульта — топология поделённого родителя)
+        снимается вместе с worktree и называется влитой.
+
+        Ровно этот хвост прежнее правило «оставлена: смержена в main»
+        оставляло навсегда, а `doctor` (`orphans-branches`) на нём
+        краснел постоянно.
+
+        Ловит мутацию: новое правило применено только к ветке, влитой
+        НАСТОЯЩИМ мержем (например, через сравнение sha с main или
+        `gitcmd.merges_between` вместо `branch --merged`) — пустая ветка
+        снова остаётся среди локальных.
+        """
+        wt_path, error = workspace.ensure(self.TASK, self.branch)
+        self.assertIsNone(error, f"worktree не создан: {error}")
+        self.assertEqual(self.git("rev-parse", self.branch),
+                         self.git("rev-parse", config.MAIN_BRANCH),
+                         "предусловие: у ветки нет собственных коммитов")
+
+        out = self.capture(cleanup.cmd_kill, self.TASK)
+
+        self.assertFalse(wt_path.exists())
+        self.assertNotIn(self.branch, self.branches())
+        self.assertIn(f"удалена влитая ветка {self.branch}", out)
+        self.assertIn(f"удалена влитая ветка {self.branch}",
+                      self.cleanup_note())
+
+    def test_unmerged_branch_is_named_unmerged_in_the_output(self):
+        """01M3EM7EFQ4X4CAYMNG35P9D7Y, требование 5: неслитая ветка
+        удаляется как и раньше, но исход назван своим словом — иначе по
+        журналу не отличить снятый указатель на историю main от
+        снесённой несохранённой работы.
+
+        Ловит мутацию: различение исходов сделано наполовину — новый
+        текст заведён только для влитой ветки, а ветвь `-D` продолжает
+        возвращать безразличное «удалена ветка <branch>».
+        """
+        self.ensure_worktree()
+        self.assertFalse(gitcmd.branch_merged(self.branch),
+                         "предусловие: ветка не влита в main")
+
+        out = self.capture(cleanup.cmd_kill, self.TASK)
+
+        self.assertNotIn(self.branch, self.branches())
+        self.assertIn(f"удалена неслитая ветка {self.branch}", out)
+        self.assertNotIn(f"удалена влитая ветка {self.branch}", out)
 
     def test_unmerged_branch_is_removed_even_when_artifacts_are_in_main(self):
         """Условия требования 1 независимы: ветка ушла вперёд после мержа."""
@@ -260,7 +326,18 @@ class KillCleanupTest(TmpRepoTest):
         self.assertIn("отслеживается в main — сними его из индекса", out)
 
     def test_cleanup_is_listed_in_the_journal(self):
-        """Требование 2: по журналу видно, что именно убрано."""
+        """Требование 2: по журналу видно, что именно убрано.
+
+        Хвост ожидания переписан со старого текста «удалена ветка
+        <branch>» на «удалена неслитая ветка <branch>» — требование 5
+        задачи 01M3EM7EFQ4X4CAYMNG35P9D7Y (санкция — её требование 8:
+        ожидание старого правила в этом файле); сценарий и число
+        ассертов не тронуты.
+
+        Ловит мутацию: запись журнала собирается не из строк-исходов всех
+        трёх шагов уборки (worktree, каталог, ветка) — потерянный или
+        переставленный шаг ломает точное равенство целиком.
+        """
         self.ensure_worktree()
         self.seed_main_task_dir()
 
@@ -269,7 +346,7 @@ class KillCleanupTest(TmpRepoTest):
         self.assertEqual(
             self.cleanup_note(),
             f"убран worktree {workspace.path(self.TASK)}; удалён каталог "
-            f"tasks/{self.TASK}/; удалена ветка {self.branch}")
+            f"tasks/{self.TASK}/; удалена неслитая ветка {self.branch}")
         self.assertIn("удалён каталог", self.capture(catalog.cmd_log, self.TASK))
 
     def test_run_logs_survive_the_kill(self):
@@ -291,6 +368,37 @@ class KillCleanupTest(TmpRepoTest):
         self.assertEqual(self.task_row()["state"], "killed")
         self.assertIn(f"каталога tasks/{self.TASK}/ нет", out)
         self.assertIn(f"локальной ветки {self.branch} нет", out)
+
+    def test_repeated_kill_finishes_a_left_over_tail(self):
+        """01M3EM7EFQ4X4CAYMNG35P9D7Y, требование 6: `kill` уже killed
+        задачи, у которой остались worktree и кодовая ветка, доводит
+        уборку до конца и не падает — это путь однократной уборки двух
+        висящих поделённых родителей штатной командой, без ручного git.
+
+        Состояние воспроизводится переводом в `killed` напрямую через
+        `store.set_state` (уборки при этом не было) — ровно то, в чём
+        те двое застряли.
+
+        Ловит мутацию: уборка привязана к самому переходу (зовётся
+        внутри выигранного CAS `store.set_state`, а не безусловно после
+        него) — повторный `kill` печатает «уже killed — kill не
+        требуется» и выходит, не тронув ни worktree, ни ветку.
+        """
+        wt_path, error = workspace.ensure(self.TASK, self.branch)
+        self.assertIsNone(error, f"worktree не создан: {error}")
+        state = self.task_row()["state"]
+        store.set_state(store.db(), self.TASK, "killed", "operator",
+                        expected_state=state, detail="kill switch")
+
+        out = self.capture(cleanup.cmd_kill, self.TASK)
+
+        self.assertIn("уже killed — kill не требуется", out)
+        self.assertFalse(wt_path.exists(), "повторный kill не снял worktree")
+        self.assertNotIn(self.branch, self.branches(),
+                         "повторный kill не удалил кодовую ветку")
+        self.assertEqual(self.task_row()["state"], "killed")
+        self.assertIn(f"удалена влитая ветка {self.branch}",
+                      self.cleanup_note())
 
     def test_kill_releases_the_lease_and_names_the_killing_session(self):
         """SPEC 01M1GCHKG8DDK4DCZWCE3DYKWC, требование 3 (AC-6): kill снимает

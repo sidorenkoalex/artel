@@ -690,6 +690,40 @@ def _spawn_division_subtasks(conn, task_id: str, t, state: str,
     ids_text = ", ".join(new_ids)
     store.set_state(conn, task_id, "killed", "operator",
                     expected_state=state, detail=f"поделена на: {ids_text}")
+    _cleanup_divided_parent(conn, task_id, t["branch"])
+
+
+def _cleanup_divided_parent(conn, task_id: str, branch: str) -> None:
+    """Убирает хвосты поделённого родителя тем же узлом, что и kill
+    (01M3EM7EFQ4X4CAYMNG35P9D7Y, требования 1-3): worktree, каталог
+    артефактов и кодовая ветка — одной записью «уборка» в журнале.
+
+    `cleanup.cleanup_killed_task`, а НЕ полный `cleanup._cmd_kill`: тот по
+    дороге зовёт `_publish_snapshot_if_pending` -> `snapshot.publish_and_
+    cleanup`, который удаляет ЛОКАЛЬНУЮ артефактную ветку задачи
+    (`artifact_branch.drop`), а требование 3 велит оставить артефактную
+    ветку родителя и её SPEC.md с разделом «## Деление», из которого
+    нарезаны части, нетронутыми. Переход в `killed` и снятие lease
+    `_cmd_kill` здесь тоже не нужны: первое уже сделал вызыватель, второго
+    не требуется — lease держит сам `approve` (`cmd_approve` ->
+    `lease.run_locked`).
+
+    Сбой уборки не может отменить деление (требование 2): подзадачи к
+    этому моменту уже заведены, и исключение, поднятое наружу, оставило бы
+    approve упавшим на полпути — родитель в `killed`, подзадачи есть,
+    Оператор видит трейс вместо гейта. Поэтому `except Exception`
+    намеренно широкий: причина целиком уходит записью «уборка» в журнал
+    родителя и в вывод approve. Штатные отказы git исключениями не
+    являются вовсе — `cleanup_killed_task` превращает их в строки
+    «оставлено/не удалено» внутри своей же записи журнала.
+    """
+    from . import cleanup
+    try:
+        cleanup.cleanup_killed_task(conn, task_id, branch)
+    except Exception as exc:  # noqa: BLE001 — см. докстринг, требование 2
+        note = f"уборка поделённого родителя не доведена: {exc!r}"
+        store.journal(conn, task_id, "orchestrator", "уборка", note)
+        print(f"  {note}")
 
 
 def _approve_spec_gate(conn, task_id: str, t, state: str, sid: str) -> None:
