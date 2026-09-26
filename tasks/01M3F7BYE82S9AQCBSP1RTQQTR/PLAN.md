@@ -88,6 +88,19 @@ skills/conventions-core).
    в `docs/stack.md` + тест-сторож `tests/test_stack_parity_table.py`;
    ADR-0017 приложением к PLAN (раздел «Приложение» ниже). Регенерация
    `docs/codebase-map.md` тем же коммитом, что правки `*.py`.
+5. **Подтяжка main (возврат из `verifying`, 26.09).** Правок кода причина
+   возврата не требовала: CI ветки на коммите 88423f52 падал только на
+   нестабильном `test_command_writes_nothing`, починку которого смержила
+   01M3F7C66Y2ZBK8X4TSS7VMDAB. `git merge --no-ff` main (044d0146) в ветку
+   задачи; единственный конфликт — `docs/codebase-map.md`, разрешён
+   регенерацией `python3 scripts/codebase_map.py` тем же merge-коммитом
+   (подтяжка меняет `*.py`: `orchestrator/artel.py`, `orchestrator/ci.py`,
+   `orchestrator/fsm.py`). После подтяжки зелены модули задачи и
+   затронутые подтяжкой (`tests/test_provider_scoped_step_env.py`,
+   `tests/test_doctor_canary_pool.py`, `tests/test_stack_parity_table.py`,
+   `tests/test_providers*.py`, `tests/test_doctor.py`,
+   `tests/test_models.py`, `tests/test_ci_rerun_command.py`,
+   `tests/test_ci_status.py`) и вся планка приёмки задачи (24 теста).
 
 ## Покрытие требований
 
