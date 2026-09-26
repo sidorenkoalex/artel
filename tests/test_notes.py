@@ -14,6 +14,7 @@ git не нужен, быстрым `TmpRootTest`.
 `tasks/01M2B6JS2BZNBW9WSHT1RPFXTE/acceptance_tests/` (те материализуются
 только на время задачи и не остаются постоянным регрессом).
 """
+import ast
 import os
 import shutil
 import socket
@@ -492,6 +493,30 @@ class WindowBypassAndNoWindowTest(NoteSilenceSandbox):
         self.assertIn("старая без окна", text)
         self.assertIn("новая без окна", text)
         self.assertEqual(notes.pending_notes(), [])
+
+
+# Имя удалённого класса-рудимента (01M3FTQ16M3VVXPPFCC0BGA39V, требование
+# 6; находка CR-2026-09-26-12 седьмой ревизии) собирается из кусков
+# намеренно: критерий AC-8 задачи запрещает его литерал где бы то ни было
+# в дереве вне `tasks/` и `docs/audits/` — включая этот регресс.
+RUDIMENT_CLASS = "Note" + "Error"
+
+
+class RudimentRemovedTest(unittest.TestCase):
+    """Класс-рудимент исключения не вернулся в `orchestrator/notes.py`."""
+
+    def test_notes_module_declares_no_rudiment_exception(self):
+        """Ни атрибута модуля, ни объявления класса в исходнике —
+        исключение не ловилось нигде и существовало «для читаемости».
+
+        Ловит мутацию: класс возвращён в модуль (например, вместе с
+        попыткой завести обработку ошибок, не доведённой до `except`) —
+        и `hasattr`, и разбор `ast` снова его найдут."""
+        self.assertFalse(hasattr(notes, RUDIMENT_CLASS))
+        source = Path(notes.__file__).read_text(encoding="utf-8")
+        classes = [node.name for node in ast.parse(source).body
+                   if isinstance(node, ast.ClassDef)]
+        self.assertNotIn(RUDIMENT_CLASS, classes)
 
 
 if __name__ == "__main__":
