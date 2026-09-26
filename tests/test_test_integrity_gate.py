@@ -6,9 +6,11 @@
 
 Настоящий git (удаление/переименование живой веткой) проверяет планка
 задачи; здесь предмет — разбор ответов git, область узла, мандат
-Оператора и два разных поведения на молчание git (fail-closed на
-переходе, fail-open на мерже).
+Оператора, два разных поведения на молчание git (fail-closed на переходе,
+fail-open на мерже) и ПОДКЛЮЧЕНИЕ рубежа к обоим маршрутам
+(`GateWiringTest`).
 """
+import inspect
 import subprocess
 import sys
 import unittest
@@ -17,7 +19,8 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from orchestrator import config, fsm_advance, gitcmd, store  # noqa: E402
+from orchestrator import (config, fsm_advance, fsm_merge_gate,  # noqa: E402
+                          gitcmd, store)
 from orchestrator.advance_gates import test_integrity  # noqa: E402
 from tests.sandbox import (SchemaSeededTmpRootTest,  # noqa: E402
                            TaskIdSchemaConnTmpRootTest)
@@ -370,6 +373,122 @@ class MandateTest(_GateSandbox):
         self.assertIn("advance", refusal.hint)
 
 
+class RenameMandateTest(_GateSandbox):
+    """Мандат на пару переименования читается по ЛЮБОМУ из двух путей
+    (REVIEW итерация 1, R1-F2): Оператор пишет разрешение, глядя на ветку
+    и на PR, где файл уже под новым именем."""
+
+    def setUp(self):
+        super().setUp()
+        self.entries = [("R090", "tests/test_alpha.py", "tests/test_beta.py")]
+        self.sources[(BASE, "tests/test_alpha.py")] = ALPHA
+        self.sources[(CODE_BRANCH, "tests/test_beta.py")] = ALPHA_WITHOUT_SECOND
+
+    def test_mandate_on_the_new_path_covers_the_rename_and_its_method(self):
+        """Ловит мутацию: `mandate_elements` знает только путь из базы
+        сравнения — Оператор выписывает разрешение на имя, которое видит в
+        ветке (`tests/test_beta.py`), гейт его не засчитывает и отказывает
+        второй раз на безупречно выписанном мандате."""
+        self.add_answer("ANSWER-1.md",
+                        "tests/test_beta.py, "
+                        "tests/test_beta.py::AlphaTest::test_two")
+        self.assertIsNone(self.refusal())
+
+    def test_mandate_on_the_old_path_still_covers_the_rename(self):
+        """Ловит мутацию: признание нового пути сделано ВМЕСТО старого
+        (подмена, а не добавление) — разрешение по пути из базы сравнения,
+        который отказ называет первым, перестаёт работать."""
+        self.add_answer("ANSWER-1.md", "tests/test_alpha.py")
+        self.assertIsNone(self.refusal())
+
+    def test_method_element_of_a_rename_does_not_cover_the_rename_itself(self):
+        """Ловит мутацию: признание второго пути расширено до совпадения
+        по префиксу — разрешение на один метод переименованного файла
+        начинает покрывать и само переименование."""
+        self.add_answer("ANSWER-1.md",
+                        "tests/test_beta.py::AlphaTest::test_two")
+        refusal = self.refusal()
+        self.assertIsNotNone(refusal)
+        self.assertEqual(
+            "tests/test_alpha.py: переименован в tests/test_beta.py",
+            refusal.detail)
+
+
+class GateWiringTest(unittest.TestCase):
+    """Рубеж ПОДКЛЮЧЁН к обоим маршрутам — к телу `fsm_advance.in_dev` и к
+    телу `fsm_merge_gate._cmd_approve_merge_gate` (требования 6-7, AC-13).
+
+    Читается по исходному тексту обработчиков (`inspect.getsource`), тем
+    же приёмом, что планка задачи: каждый гейт `in_dev` зовётся своим
+    `if ...: return False`, и порядок вызовов — это и есть порядок строк в
+    теле; воспроизводить весь переход целиком (PLAN.md, подтяжка main,
+    ёмкость, зоны, лок планки, origin, прогон планки) ради одного факта о
+    соседстве дороже и хрупче, чем прочитать само тело.
+
+    Класс заведён по замечанию R1-F1 ревью итерации 1: без него снятие
+    ОБЕИХ строк подключения оставляло 183 теста `tests/` зелёными —
+    постоянный набор пульта пропускал отключение рубежа молча, а планка
+    задачи после мержа регресс не сторожит (`pytest tests` её не
+    собирает). Сверка идёт по форме вызова (`имя(conn`), не по имени в
+    тексте: имя, оставшееся в комментарии или в блоке импортов,
+    подключением не является.
+    """
+
+    def test_in_dev_calls_the_gate_between_mutation_claim_and_review_rework(self):
+        """Ловит мутацию: строка вызова `_test_integrity_gate_refuses`
+        снята из тела `fsm_advance.in_dev` (модуль гейта при этом цел, и
+        все его собственные сценарии зелены) — переход `in_dev ->
+        verifying` снова пропускает удаление файла тестов молча; либо
+        вызов переставлен ПЕРЕД гейтом заявки мутации, отчего на диффе,
+        задевающем оба, меняется старшинство отказов, а вместе с ним
+        журнал и stdout сценариев, которые
+        `tests/test_fsm_advance_gate_smoke.py` сверяет байт-в-байт."""
+        source = inspect.getsource(fsm_advance.in_dev)
+        claim = source.find("_mutation_claim_gate(conn")
+        integrity = source.find("_test_integrity_gate_refuses(conn")
+        rework = source.find("_review_rework_gate_refuses(conn")
+
+        self.assertNotEqual(
+            -1, integrity,
+            "тело in_dev не зовёт _test_integrity_gate_refuses — рубеж "
+            "отключён от перехода in_dev -> verifying")
+        self.assertNotEqual(-1, claim,
+                            "тело in_dev не зовёт _mutation_claim_gate")
+        self.assertNotEqual(-1, rework,
+                            "тело in_dev не зовёт _review_rework_gate_refuses")
+        self.assertLess(claim, integrity,
+                        "новый рубеж обязан стоять ПОСЛЕ гейта заявки мутации")
+        self.assertLess(integrity, rework,
+                        "новый рубеж обязан стоять ДО гейта отработки замечаний")
+
+    def test_merge_gate_calls_the_gate_after_the_protected_path_gate(self):
+        """Ловит мутацию: строка вызова `_test_integrity_diff_gate` снята
+        из тела `_cmd_approve_merge_gate` (либо поставлена после попытки
+        merge) — ветка, дошедшая до гейта мержа другим маршрутом (ручной
+        `advance` Оператора, повторный заход после эскалации, подтяжка
+        main, добавившая удаление уже после `verifying`), вливается в main
+        без сверки тестов, и снятая с Оператора ручная сверка оказывается
+        снята впустую (требование 7, AC-12)."""
+        source = inspect.getsource(fsm_merge_gate._cmd_approve_merge_gate)
+        protected = source.find("_protected_path_diff_gate(conn")
+        integrity = source.find("_test_integrity_diff_gate(conn")
+        merge = source.find("_perform_carpentry_merge(")
+
+        self.assertNotEqual(
+            -1, integrity,
+            "тело _cmd_approve_merge_gate не зовёт _test_integrity_diff_gate "
+            "— рубеж отключён от маршрута мержа")
+        self.assertNotEqual(-1, protected,
+                            "тело гейта мержа не зовёт _protected_path_diff_gate")
+        self.assertNotEqual(-1, merge,
+                            "тело гейта мержа не зовёт _perform_carpentry_merge")
+        self.assertLess(
+            protected, integrity,
+            "рубеж обязан стоять сразу ЗА гейтом защищённых путей")
+        self.assertLess(integrity, merge,
+                        "рубеж обязан стоять ДО попытки merge")
+
+
 class MergeGateTest(SchemaSeededTmpRootTest):
     """Тот же узел на гейте мержа: fail-open на молчание git и эскалация
     на находке (требование 7, AC-12)."""
@@ -394,10 +513,15 @@ class MergeGateTest(SchemaSeededTmpRootTest):
                 ARTIFACT_BRANCH)
 
     def test_finding_without_mandate_escalates_with_the_same_text(self):
-        """Ловит мутацию: узел подключён только к `in_dev -> verifying` —
-        ветка, дошедшая до гейта мержа другим маршрутом (ручной advance,
-        повторный заход после эскалации, подтяжка main), сливается в main
-        без единого слова (AC-12)."""
+        """Ловит мутацию: `merge_gate_escalates` докладывает находку
+        одним возвратом `True`, забыв `store.set_state` (либо эскалирует
+        с пустым detail) — задача остаётся в `merge_gate`, а Оператор не
+        узнаёт, какой именно файл тестов потерян, хотя ручную сверку с
+        него эта задача сняла (требование 7, AC-12).
+
+        Про то, что узел ВООБЩЕ вызван с маршрута мержа, этот сценарий не
+        говорит — он зовёт функцию напрямую; подключение ловит
+        `GateWiringTest` ниже."""
         escalated = self._escalates(
             [("D", "tests/test_doomed.py", None)],
             {(BASE, "tests/test_doomed.py"): ALPHA})

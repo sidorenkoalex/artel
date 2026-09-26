@@ -1,5 +1,5 @@
 ---
-built_at_sha: a24d78fc238a01f4e550808482bc5bd26576659c
+built_at_sha: 8c17fedbaff20f560c3431c4cbab290e2ab0fd5f
 ---
 
 # Codebase-map пульта
@@ -413,7 +413,7 @@ built_at_sha: a24d78fc238a01f4e550808482bc5bd26576659c
 
 **Импортирует:** `orchestrator/acceptance.py`, `orchestrator/artifact_branch.py`, `orchestrator/artifact_source.py`, `orchestrator/ci.py`, `orchestrator/cleanup.py`, `orchestrator/config.py`, `orchestrator/fsm.py`, `orchestrator/fsm_postmerge.py`, `orchestrator/gitcmd.py`, `orchestrator/github_adapter.py`, `orchestrator/lease.py`, `orchestrator/merge_lock.py`, `orchestrator/merge_queue.py`, `orchestrator/repo_context.py`, `orchestrator/snapshot.py`, `orchestrator/store.py`, `orchestrator/workspace.py`, `scripts/guard.py`
 
-**Импортируется:** `orchestrator/fsm.py`, `tests/test_fsm_merge_gate_done_snapshot.py`, `tests/test_fsm_merge_gate_scratch_worktree_cleanup.py`, `tests/test_gitcmd_fetch_ref_sha.py`, `tests/test_guard_task_root_subdirectory.py`, `tests/test_merge_gate_ci_wait.py`, `tests/test_plan_appendix.py`, `tests/test_protected_paths_gate.py`, `tests/test_pull_conflict_marker_states.py`
+**Импортируется:** `orchestrator/fsm.py`, `tests/test_fsm_merge_gate_done_snapshot.py`, `tests/test_fsm_merge_gate_scratch_worktree_cleanup.py`, `tests/test_gitcmd_fetch_ref_sha.py`, `tests/test_guard_task_root_subdirectory.py`, `tests/test_merge_gate_ci_wait.py`, `tests/test_plan_appendix.py`, `tests/test_protected_paths_gate.py`, `tests/test_pull_conflict_marker_states.py`, `tests/test_test_integrity_gate.py`
 
 ## orchestrator/fsm_postmerge.py
 
@@ -2923,7 +2923,7 @@ built_at_sha: a24d78fc238a01f4e550808482bc5bd26576659c
 
 **Публичные функции:** (нет)
 
-**Импортирует:** `orchestrator/config.py`, `orchestrator/fsm_advance.py`, `orchestrator/gitcmd.py`, `orchestrator/store.py`, `tests/sandbox.py`
+**Импортирует:** `orchestrator/config.py`, `orchestrator/fsm_advance.py`, `orchestrator/fsm_merge_gate.py`, `orchestrator/gitcmd.py`, `orchestrator/store.py`, `tests/sandbox.py`
 
 **Импортируется:** —
 

@@ -47,14 +47,16 @@ TEST_WEAKENING_MANDATE_MARKER = "Ослабление тестов разреш�
 
 class Finding(NamedTuple):
     """Одна находка узла: `path` — путь файла в БАЗЕ сравнения (у
-    переименования — старый путь: им же Оператор покрывает мандатом все
-    находки файла, требование 4), `name` — квалифицированное имя метода
-    или класса (пустое — находка о файле целиком), `text` — «что именно»
-    для колонки detail."""
+    переименования — старый путь: он же идёт первым в колонку detail),
+    `name` — квалифицированное имя метода или класса (пустое — находка о
+    файле целиком), `text` — «что именно» для колонки detail, `alias` —
+    второй путь того же файла у распознанной пары переименования (путь в
+    head), пустой у всех остальных находок."""
 
     path: str
     name: str
     text: str
+    alias: str = ""
 
     @property
     def line(self) -> str:
@@ -64,10 +66,19 @@ class Finding(NamedTuple):
     def mandate_elements(self) -> tuple:
         """Элементы мандата, которые покрывают ЭТУ находку: путь файла
         покрывает все его находки, элемент с `::` — только названный
-        метод или класс (требование 4)."""
+        метод или класс (требование 4).
+
+        У пары переименования засчитываются ОБА пути — старый (`path`) и
+        новый (`alias`). Оператор пишет мандат, глядя на ветку и на PR,
+        где файл уже лежит под новым именем, и признание одного лишь
+        пути из базы сравнения стоило бы ему лишнего круга `advance` на
+        безупречно выписанном разрешении (REVIEW итерация 1, R1-F2).
+        """
+        paths = (self.path, self.alias) if self.alias else (self.path,)
         if not self.name:
-            return (self.path,)
-        return (self.path, f"{self.path}{guard.TEST_NAME_SEP}{self.name}")
+            return paths
+        return paths + tuple(f"{p}{guard.TEST_NAME_SEP}{self.name}"
+                             for p in paths)
 
 
 def _in_scope(path) -> bool:
@@ -119,17 +130,23 @@ def _file_findings(base_path, head_path, renamed_to, base_source,
 
     У распознанной пары переименования сравнение идёт между СТАРЫМ путём
     в base и НОВЫМ в head (требование 3, последняя фраза): переименование
-    с одновременным удалением метода даёт обе находки, не одну.
+    с одновременным удалением метода даёт обе находки, не одну. Оба пути
+    такой пары становятся `alias` КАЖДОЙ её находки — и самого
+    переименования, и исчезнувшего метода, и появившегося маркера: мандат
+    Оператора обязан читаться по любому из двух имён файла (R1-F2), а не
+    только по тому, которого в ветке уже нет.
     """
     base_methods = guard.qualified_test_methods(base_source)
     path = base_path or head_path
+    alias = renamed_to or ""
     found: list = []
 
     if base_methods:
         if head_path is None:
             found.append(Finding(path, "", "удалён"))
         elif renamed_to:
-            found.append(Finding(path, "", f"переименован в {renamed_to}"))
+            found.append(Finding(path, "", f"переименован в {renamed_to}",
+                                 alias))
 
     if head_path is None:
         # Методы удалённого файла по отдельности не перечисляются: находка
@@ -140,12 +157,12 @@ def _file_findings(base_path, head_path, renamed_to, base_source,
     head_methods = guard.qualified_test_methods(head_source)
     for name in base_methods:
         if name not in head_methods:
-            found.append(Finding(path, name, f"метод {name} исчез"))
+            found.append(Finding(path, name, f"метод {name} исчез", alias))
 
     base_markers = guard.test_skip_markers(base_source)
     for name, markers in guard.test_skip_markers(head_source).items():
         for marker in sorted(markers - base_markers.get(name, set())):
-            found.append(Finding(path, name, f"{marker} на {name}"))
+            found.append(Finding(path, name, f"{marker} на {name}", alias))
     return found
 
 
