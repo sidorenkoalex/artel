@@ -1,5 +1,5 @@
 ---
-built_at_sha: 2ca37b32e1ce76833c53069da5a99bd4880f2e8c
+built_at_sha: b698421beed08bef85685e8ac117a96c47f7e80b
 ---
 
 # Codebase-map пульта
@@ -104,7 +104,7 @@ built_at_sha: 2ca37b32e1ce76833c53069da5a99bd4880f2e8c
 
 **Импортирует:** `orchestrator/advance_gates/_base.py`, `orchestrator/advance_gates/zones.py`, `orchestrator/config.py`, `orchestrator/gitcmd.py`, `orchestrator/store.py`, `scripts/guard.py`
 
-**Импортируется:** `orchestrator/fsm_advance.py`, `orchestrator/fsm_merge_gate.py`, `tests/test_test_integrity_gate.py`
+**Импортируется:** `orchestrator/fsm_advance.py`, `orchestrator/fsm_merge_gate.py`, `tests/test_invariants.py`, `tests/test_test_integrity_gate.py`
 
 ## orchestrator/advance_gates/tests_writing.py
 
@@ -2702,7 +2702,7 @@ built_at_sha: 2ca37b32e1ce76833c53069da5a99bd4880f2e8c
 
 **Публичные функции:** (нет)
 
-**Импортирует:** `orchestrator/artel.py`, `orchestrator/budget.py`, `orchestrator/catalog.py`, `orchestrator/ci.py`, `orchestrator/cleanup.py`, `orchestrator/config.py`, `orchestrator/fsm.py`, `orchestrator/fsm_advance.py`, `orchestrator/gitcmd.py`, `orchestrator/runner.py`, `orchestrator/stack.py`, `orchestrator/store.py`, `scripts/guard.py`, `tests/sandbox.py`
+**Импортирует:** `orchestrator/advance_gates/test_integrity.py`, `orchestrator/artel.py`, `orchestrator/budget.py`, `orchestrator/catalog.py`, `orchestrator/ci.py`, `orchestrator/cleanup.py`, `orchestrator/config.py`, `orchestrator/fsm.py`, `orchestrator/fsm_advance.py`, `orchestrator/gitcmd.py`, `orchestrator/runner.py`, `orchestrator/stack.py`, `orchestrator/store.py`, `scripts/guard.py`, `tests/sandbox.py`
 
 **Импортируется:** `tests/test_ci_status_kind_gate.py`, `tests/test_review_registry_gate.py`, `tests/test_verifying_ceiling.py`
 
