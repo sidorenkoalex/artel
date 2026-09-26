@@ -161,28 +161,93 @@ def check_codex_cli_version() -> doctor.Check:
                         f"{version} ≥ {minimum}")
 
 
-def check_codex_api_key(role: str) -> doctor.Check:
-    """Ключ OpenAI для роли — блокирующая, БЕЗ печати значения
-    (требование 12): строка называет только факт «есть/нет» и имя слота.
+CODEX_AUTH_CHECK = "codex-chatgpt-auth"
 
-    Источники и их приоритет — те же, что в `CodexProvider.environment`:
-    ambient `OPENAI_API_KEY` сильнее слота, поэтому при заданной
-    переменной keychain не спрашивается вовсе.
+# Оба однократных шага Оператора одной строкой — она приписывается к
+# КАЖДОМУ исходу отказа, не только к «вход не выполнен»: истёкший таймаут и
+# незапустившийся CLI тоже оставляют Оператора без авторизованной роли, и
+# отказ без рецепта в этих исходах был бы тем же дефектом.
+#
+# Указатель связки ключей — не теория: живой вход 22.09
+# (`docs/research/codex-live-check-2026-09-22.md`) в изолированном `HOME`
+# без него не сохранился вовсе (`persist_failed`), то есть Оператор прошёл
+# бы OAuth и получил ту же красную строку. Ставит указатель Оператор
+# руками — пульт этого не делает (`docs/stack.md`, раздел «Провайдер
+# codex»).
+CODEX_AUTH_RECIPE = (
+    "два однократных шага Оператора: (1) указать дому роли связку ключей "
+    "— `security default-keychain -d user -s <путь связки>` с HOME "
+    "курируемого дома роли, иначе вход не сохранится; (2) войти — "
+    "`codex login` с тем же HOME/CODEX_HOME. Остаток лимита подписки эта "
+    "строка не доказывает"
+)
+
+
+def check_codex_chatgpt_auth(role: str) -> doctor.Check:
+    """Подписочный вход ChatGPT для роли — блокирующая строка на месте
+    прежней проверки ключа API (требование 4, AC-6..AC-10).
+
+    Спрашивает сам CLI (`codex login status`) с окружением курируемого дома
+    роли и с теми же двумя переопределениями авторизации, что несёт команда
+    шага (`codex_provider.AUTH_OVERRIDES`): без дома роли CLI ответил бы про
+    ЛИЧНЫЙ вход Оператора, без переопределений — про способ авторизации,
+    отличный от того, каким пойдёт шаг. Прежняя проверка смотрела только
+    наличие ключа в слоте keychain и авторизацию не доказывала вовсе —
+    `codex exec` читает ключ из другой переменной (живая проверка 22.09).
+
+    `ok` — только код выхода 0 И подтверждённый вход ChatGPT: тем же нулём
+    CLI отвечает и на «не вошёл», и на вход ключом API (тот самый ключ без
+    баланса, с которым 22.09 живой запуск получил 401).
+
+    Вывод CLI не попадает в `detail` ни в одном исходе: `codex login status`
+    печатает адрес связки ключей и состояние авторизации — сведения, которым
+    нечего делать в логе `doctor`. Вместо них отказ несёт рецепт.
+
+    Вызов ограничен таймаутом, а истёкший таймаут и незапустившийся CLI
+    дают `fail` с названной причиной, а не исключение наружу: точка вызова —
+    предполёт шага и прогон диагностики, оба обязаны назвать причину, а не
+    упасть трейсбеком (тот же приём, что у `codex_cli_version` выше).
     """
-    slot = doctor.config.OPENAI_API_KEY_SLOT
-    if os.environ.get(doctor.codex_provider.API_KEY_ENV):
+    provider = doctor.providers.get(doctor.codex_provider.CLI_NAME)
+    timeout = doctor.codex_provider.LOGIN_STATUS_TIMEOUT_SEC
+    try:
+        cmd = provider.login_status_command()
+        env = provider.environment(role)
+    except (OSError, KeyError) as exc:
         return doctor.Check(
-            "codex-api-key", "ok",
-            f"ключ уже в окружении (ambient {doctor.codex_provider.API_KEY_ENV}) — "
-            f"слот keychain {slot} не спрашивается")
-    if doctor.keychain.token(slot):
+            CODEX_AUTH_CHECK, "fail",
+            f"роль {role}: вызов `codex login status` не собран ({exc}) — "
+            f"{CODEX_AUTH_RECIPE}")
+    try:
+        res = doctor.subprocess.run(cmd, capture_output=True, text=True,
+                                    env=env, timeout=timeout)
+    except doctor.subprocess.TimeoutExpired:
         return doctor.Check(
-            "codex-api-key", "ok",
-            f"роль {role}: ключ добыт из keychain (слот {slot})")
+            CODEX_AUTH_CHECK, "fail",
+            f"роль {role}: `codex login status` не ответил за {timeout} с — "
+            f"{CODEX_AUTH_RECIPE}")
+    except OSError as exc:
+        return doctor.Check(
+            CODEX_AUTH_CHECK, "fail",
+            f"роль {role}: `codex login status` не запустился ({exc}) — "
+            f"{CODEX_AUTH_RECIPE}")
+    if res.returncode != 0:
+        return doctor.Check(
+            CODEX_AUTH_CHECK, "fail",
+            f"роль {role}: `codex login status` ответил кодом "
+            f"{res.returncode} (вывод CLI не печатается) — {CODEX_AUTH_RECIPE}")
+    output = " ".join((res.stdout or "").lower().split())
+    if not doctor.codex_provider.CHATGPT_LOGIN_RE.search(output):
+        return doctor.Check(
+            CODEX_AUTH_CHECK, "fail",
+            f"роль {role}: код выхода 0, но вход ChatGPT не подтверждён — "
+            f"дом роли либо не вошёл, либо вошёл ключом API (вывод CLI не "
+            f"печатается). {CODEX_AUTH_RECIPE}")
     return doctor.Check(
-        "codex-api-key", "fail",
-        f"роль {role}: ключ OpenAI не найден в keychain (слот {slot}) — "
-        f"`security add-generic-password -a artel -s {slot} -U -w`")
+        CODEX_AUTH_CHECK, "ok",
+        f"роль {role}: вход ChatGPT подтверждён для курируемого дома "
+        f"{env.get(doctor.codex_provider.HOME_ENV)} (остаток лимита подписки "
+        f"не проверяется)")
 
 
 def check_codex_role_home() -> doctor.Check:

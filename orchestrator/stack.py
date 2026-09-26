@@ -313,7 +313,12 @@ ROLE_ENV_ALLOWLIST = {
     "CLAUDE_CODE_OAUTH_TOKEN": "токен подписки CLI claude для роли",
     "ANTHROPIC_API_KEY": "альтернативный канал токена CLI claude (ambient)",
     "CODEX_HOME": "путь курируемого `.codex/` роли (ADR-0003 п.14)",
-    "OPENAI_API_KEY": "ключ CLI codex для роли (слот config.OPENAI_API_KEY_SLOT)",
+    # Ключа API OpenAI в списке НЕТ и не заводится — ни под именем
+    # `OPENAI_API_KEY`, ни под `CODEX_API_KEY`/`CODEX_ACCESS_TOKEN`
+    # (решение Оператора 22.09.2026): роль на `codex` авторизуется входом
+    # по подписке ChatGPT, а список общий на пульт — заданный Оператором
+    # ключ копировался бы и в окружение шага роли на Claude, которому он
+    # не нужен ни под каким именем.
     "LANG": "локаль — предсказуемый разбор вывода CLI claude/git",
     "TMPDIR": "временный каталог — CLI claude/git пишут туда рабочие файлы",
     "TERM": "тип терминала — вывод CLI claude зависит от него",

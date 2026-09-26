@@ -31,6 +31,18 @@ KEYCHAIN_SECRET = "kluch-iz-slota"
 AMBIENT_KEY = "kluch-operatora"
 ALIEN_HOME = "/tmp/dom-operatora-ne-roli"
 CLAUDE_SECRETS = ("CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_API_KEY")
+# Имена, которыми ключ API мог бы прийти к шагу: ни одного из них шаг на
+# Codex не получает (SPEC 01M3EKCZJY9NGCW6VT878RX9JZ, требования 2, 3, 5).
+FORBIDDEN_KEY_NAMES = codex_provider.FORBIDDEN_KEY_ENV_NAMES
+
+# Вывод `codex login status` в трёх состояниях авторизации; маркер в каждой
+# строке ловит эхо вывода CLI в текст строки `doctor`.
+OUT_MARKER = "VYVOD-CLI-STDOUT"
+ERR_MARKER = "VYVOD-CLI-STDERR"
+LOGGED_IN_CHATGPT = f"Logged in using ChatGPT {OUT_MARKER}"
+LOGGED_IN_API_KEY = f"Logged in using an API key {OUT_MARKER}"
+NOT_LOGGED_IN = f"Not logged in {OUT_MARKER}"
+STDERR_NOISE = f"{ERR_MARKER}: warning from cli"
 
 
 def _drop_ambient(test, *names) -> None:
@@ -63,6 +75,33 @@ def _toml_pairs(text: str) -> dict:
         full = f"{section}.{key.strip()}" if section else key.strip()
         pairs[full] = value.strip().strip('"').strip("'").lower()
     return pairs
+
+
+class _LoginStatusRuns:
+    """Подмена `subprocess.run` пакета `doctor`: отвечает на `--version`
+    обоих CLI и на `codex … login status`, запоминая вызовы второго.
+
+    Настоящий `codex` на машине прогона не нужен и не запускается ни разу.
+    """
+
+    def __init__(self, stdout=LOGGED_IN_CHATGPT, stderr=STDERR_NOISE,
+                 returncode=0, raises=None, codex_version="0.155.1"):
+        self.stdout, self.stderr = stdout, stderr
+        self.returncode, self.raises = returncode, raises
+        self.codex_version = codex_version
+        self.login_calls = []
+
+    def __call__(self, args, **kwargs):
+        argv = [str(item) for item in args]
+        if "login" in argv:
+            self.login_calls.append((argv, kwargs))
+            if self.raises is not None:
+                raise self.raises
+            return subprocess.CompletedProcess(argv, self.returncode,
+                                               self.stdout, self.stderr)
+        name = Path(argv[0]).name
+        text = self.codex_version if name == "codex" else config.CLI_VERSION_PIN
+        return subprocess.CompletedProcess(argv, 0, f"{text}\n", "")
 
 
 def _strip_comment(line: str) -> str:
@@ -219,10 +258,15 @@ class CuratedHomeTest(unittest.TestCase):
         дом и чужой канал секрета."""
         text = (self.reference() / "AGENTS.md").read_text(encoding="utf-8")
 
-        for marker in (".artel/home", "эфемер", "OPENAI_API_KEY", ".codex"):
+        for marker in (".artel/home", "эфемер", "chatgpt", ".codex"):
             with self.subTest(marker=marker):
                 self.assertIn(marker.lower(), text.lower())
         self.assertNotIn("CLAUDE_CODE_OAUTH_TOKEN", text)
+        # Канал ключа API убран из пульта (SPEC
+        # 01M3EKCZJY9NGCW6VT878RX9JZ, требование 6): дом роли, который
+        # продолжал бы обещать секрет переменной окружения, отправлял бы
+        # роль искать причину отказа не там.
+        self.assertNotIn("OPENAI_API_KEY", text)
 
 
 class EnvironmentTest(TmpRootTest):
@@ -244,7 +288,7 @@ class EnvironmentTest(TmpRootTest):
         — роль наследует каталог конфига Оператора вместе с его
         MCP-серверами и правилами, то есть ровно ту конфиг-инъекцию, от
         которой дом роли и заводится."""
-        _drop_ambient(self, "OPENAI_API_KEY")
+        _drop_ambient(self, *FORBIDDEN_KEY_NAMES)
         deployed = config.ROLE_HOME / ".codex"
 
         with mock.patch.dict(os.environ, {"CODEX_HOME": ALIEN_HOME,
@@ -255,32 +299,45 @@ class EnvironmentTest(TmpRootTest):
         self.assertEqual(env["HOME"], str(config.ROLE_HOME))
         self.assertTrue(deployed.is_dir(), list(config.ROLE_HOME.rglob("*")))
 
-    def test_key_comes_from_its_own_slot_and_never_carries_a_foreign_secret(self):
-        """Ловит мутацию: ключ берётся тем же вызовом, что подписочный
-        токен Claude (`runner.role_token` по слотам `roles.yaml`) — оба
-        провайдера начинают тянуть секрет из одного слота, и ключ OpenAI
-        уходит в шаг под именем токена подписки."""
-        _drop_ambient(self, "OPENAI_API_KEY", *CLAUDE_SECRETS)
+    def test_environment_is_only_the_role_home_and_never_asks_the_keychain(self):
+        """Ловит мутацию: ключ перестал попадать в окружение, но слот
+        keychain по-прежнему читается «на всякий случай» — добытое значение
+        либо кладётся под другим именем, либо добывается впустую, и шаг
+        снова несёт секрет, которого требование 2 ему не даёт.
+
+        Сверяется полный СОСТАВ окружения, а не отсутствие одного имени:
+        роль на Codex авторизуется входом по подписке, и `HOME`/`CODEX_HOME`
+        — единственное, что провайдер шагу передаёт.
+        """
+        _drop_ambient(self, *FORBIDDEN_KEY_NAMES, *CLAUDE_SECRETS)
 
         env = providers.get("codex").environment("developer", "T1")
 
-        self.assertEqual(env["OPENAI_API_KEY"], KEYCHAIN_SECRET)
-        self.assertEqual(self.slots, [config.OPENAI_API_KEY_SLOT])
-        for name in CLAUDE_SECRETS:
-            with self.subTest(name=name):
-                self.assertNotIn(name, env)
+        self.assertEqual(set(env), {"HOME", "CODEX_HOME"}, env)
+        self.assertEqual(self.slots, [], "слот keychain спрошен провайдером")
+        self.assertEqual(tuple(providers.get("codex").secret_env_names()), ())
 
-    def test_ambient_key_is_stronger_than_the_slot(self):
-        """Ловит мутацию: keychain спрашивается безусловно — заданный
-        Оператором ambient-ключ перестаёт быть сильнее слота, и шаг идёт
-        не под тем счётом, под которым Оператор его запускал."""
-        _drop_ambient(self, "OPENAI_API_KEY")
+    def test_no_api_key_name_reaches_the_step_whatever_the_ambient_value(self):
+        """Ловит мутацию: канал ключа вернулся под другим именем —
+        `CODEX_API_KEY` («тот, который `codex exec` и читает», факт живой
+        проверки 22.09) или `CODEX_ACCESS_TOKEN`. Проверка на одно
+        `OPENAI_API_KEY` пропустила бы ровно тот канал, которым ключ и
+        подействовал бы на шаг.
 
-        with mock.patch.dict(os.environ, {"OPENAI_API_KEY": AMBIENT_KEY}):
+        Ambient-значения заданы всем трём именам: провайдер обязан не
+        пропускать их дальше НЕЗАВИСИМО от окружения Оператора.
+        """
+        _drop_ambient(self, *FORBIDDEN_KEY_NAMES)
+        ambient = {name: AMBIENT_KEY for name in FORBIDDEN_KEY_NAMES}
+
+        with mock.patch.dict(os.environ, ambient):
             env = providers.get("codex").environment("developer", "T1")
 
-        self.assertEqual(self.slots, [], "keychain спрошен при ambient-ключе")
-        self.assertNotIn("OPENAI_API_KEY", env)
+        self.assertEqual(self.slots, [], "keychain спрошен провайдером")
+        for name in FORBIDDEN_KEY_NAMES:
+            with self.subTest(name=name):
+                self.assertNotIn(name, env)
+        self.assertNotIn(AMBIENT_KEY, set(env.values()), env)
 
 
 class RoleHomeDeploymentTest(TmpRootTest):
@@ -329,10 +386,12 @@ class PreflightTest(TmpRootTest):
 
     def setUp(self):
         super().setUp()
-        _drop_ambient(self, "OPENAI_API_KEY", *CLAUDE_SECRETS)
+        _drop_ambient(self, *FORBIDDEN_KEY_NAMES, *CLAUDE_SECRETS)
         self.patch(keychain, "token", lambda slot: KEYCHAIN_SECRET)
         self.patch(doctor.shutil, "which", self._which)
-        self.patch(doctor.subprocess, "run", self._run)
+        self.patch(runner, "declared_tool_path", lambda name: f"{STUB_BIN}/{name}")
+        self.runs = _LoginStatusRuns(codex_version="0.150.0")
+        self.patch(doctor.subprocess, "run", self.runs)
 
     def patch(self, target, attr, value) -> None:
         patcher = mock.patch.object(target, attr, value)
@@ -342,29 +401,26 @@ class PreflightTest(TmpRootTest):
     def _which(self, name, *args, **kwargs):
         return f"{STUB_BIN}/{name}"
 
-    def _run(self, args, **kwargs):
-        name = Path(str(args[0])).name
-        text = "0.150.0" if name == "codex" else config.CLI_VERSION_PIN
-        return subprocess.CompletedProcess(list(args), 0, f"{text}\n", "")
-
     def test_four_checks_with_own_names_hide_the_secret(self):
         """Ловит мутацию: набор собран переиспользованием проверок Claude
         — имена совпадают, склейка `provider_preflight_checks` схлопывает
-        их как дубли, и отсутствие `codex` или его ключа исчезает за
-        зелёной строкой Claude; либо текст проверки ключа печатает сам
-        секрет, и он уезжает в лог `doctor`."""
+        их как дубли, и отсутствие `codex` или невыполненный вход исчезает
+        за зелёной строкой Claude; либо текст проверки авторизации несёт
+        вывод `codex login status`, и состояние аутентификации уезжает в
+        лог `doctor`."""
         checks = providers.get("codex").preflight("developer")
 
-        self.assertEqual(len(checks), 4, [c.name for c in checks])
+        self.assertEqual([c.name for c in checks],
+                         ["codex-cli-found", "codex-cli-version",
+                          doctor.CODEX_AUTH_CHECK, "codex-role-home"])
         claude_names = {c.name
                         for c in providers.default().preflight("developer")}
         self.assertEqual(set(c.name for c in checks) & claude_names, set())
         for check in checks:
             with self.subTest(check=check.name):
                 self.assertNotIn(KEYCHAIN_SECRET, check.detail)
-        key_line = [c for c in checks if c.name == "codex-api-key"]
-        self.assertTrue(key_line)
-        self.assertIn(config.OPENAI_API_KEY_SLOT, key_line[0].detail)
+                self.assertNotIn(OUT_MARKER, check.detail)
+                self.assertNotIn(ERR_MARKER, check.detail)
 
     def test_cli_version_below_the_minimum_warns_and_names_both_numbers(self):
         """Ловит мутацию: версия сверяется с пином Claude
@@ -377,15 +433,98 @@ class PreflightTest(TmpRootTest):
         self.assertIn("0.150.0", check.detail)
         self.assertIn("0.155.1", check.detail)
 
-    def test_missing_key_is_a_blocking_check_naming_only_the_slot(self):
-        """Ловит мутацию: отсутствие ключа трактуется предупреждением —
-        шаг стартует, платит попыткой и падает на авторизации вместо
-        бесплатного отказа до старта агента."""
-        with mock.patch.object(keychain, "token", lambda slot: None):
+    def auth_check(self, **kwargs):
+        """Строка авторизации на подменённом `codex login status`."""
+        runs = _LoginStatusRuns(**kwargs)
+        with mock.patch.object(doctor.subprocess, "run", runs):
             check = providers.get("codex").check_token("developer")
+        return check, runs
 
-        self.assertEqual(check.status, "fail", check.detail)
-        self.assertIn(config.OPENAI_API_KEY_SLOT, check.detail)
+    def test_login_status_is_called_with_the_role_home_and_the_step_overrides(self):
+        """Ловит мутацию: вызов собран без окружения дома роли (CLI читает
+        `~/.codex` Оператора и отвечает про ЛИЧНЫЙ вход) либо без пар
+        авторизации — тогда `codex login status` отвечает про способ входа,
+        отличный от того, каким пойдёт шаг, и зелёная строка `doctor`
+        доказывает не то, что нужно. Вторая мутация: вызов без `timeout=` —
+        висящий CLI держит предполёт шага бесконечно."""
+        deployed = config.ROLE_HOME / ".codex"
+        step_argv = providers.get("codex").command()
+
+        check, runs = self.auth_check()
+
+        self.assertEqual(check.status, "ok", check.detail)
+        self.assertEqual(len(runs.login_calls), 1, runs.login_calls)
+        argv, kwargs = runs.login_calls[0]
+        self.assertEqual(Path(argv[0]).name, "codex", argv)
+        self.assertLess(argv.index("login"), argv.index("status"), argv)
+        for key, value in codex_provider.AUTH_OVERRIDES:
+            with self.subTest(key=key):
+                self.assertIn(f"{key}={value}", argv, argv)
+                self.assertIn(f"{key}={value}", step_argv, step_argv)
+                self.assertLess(argv.index(f"{key}={value}"),
+                                argv.index("login"), argv)
+        self.assertEqual(kwargs.get("env", {}).get("HOME"),
+                         str(config.ROLE_HOME))
+        self.assertEqual(kwargs.get("env", {}).get("CODEX_HOME"), str(deployed))
+        self.assertGreater(kwargs.get("timeout") or 0, 0, kwargs)
+
+    def test_ok_needs_both_a_zero_exit_code_and_a_confirmed_chatgpt_login(self):
+        """Ловит мутацию: вердикт считается по одному коду выхода —
+        `codex login status` отвечает нулём и на «Not logged in», и на вход
+        ключом API (тот самый ключ без баланса, с которым живой запуск
+        22.09 получил 401), и зелёная строка `doctor` доказывала бы
+        авторизацию, которой у шага нет."""
+        ok, _ = self.auth_check(stdout=LOGGED_IN_CHATGPT)
+        self.assertEqual(ok.status, "ok", ok.detail)
+
+        for title, kwargs in (
+                ("ненулевой код выхода", {"returncode": 1}),
+                ("код 0, вход не выполнен", {"stdout": NOT_LOGGED_IN}),
+                ("код 0, вход ключом API", {"stdout": LOGGED_IN_API_KEY}),
+                ("таймаут", {"raises": subprocess.TimeoutExpired(
+                    cmd="codex", timeout=1)}),
+                ("CLI не запустился", {"raises": OSError("нет такого файла")})):
+            with self.subTest(scenario=title):
+                check, _ = self.auth_check(**kwargs)
+
+                self.assertEqual(check.status, "fail", check.detail)
+
+    def test_every_failure_hides_the_cli_output_and_names_both_operator_steps(self):
+        """Ловит мутацию: причину отказа берут прямо из вывода CLI («так
+        Оператору понятнее») — `codex login status` печатает адрес связки
+        ключей и состояние авторизации, и строка `doctor` начинает выносить
+        сведения об аутентификации в лог. Вторая мутация: рецепт приписан
+        только к исходу «не вошёл», а таймаут и незапустившийся CLI
+        отказывают без него — Оператор получает красную строку без того
+        шага, которого не хватает (без указателя связки ключей вход не
+        сохраняется вовсе, живая проверка 22.09)."""
+        scenarios = ({}, {"returncode": 1}, {"stdout": NOT_LOGGED_IN},
+                     {"stdout": LOGGED_IN_API_KEY},
+                     {"raises": subprocess.TimeoutExpired(cmd="codex",
+                                                          timeout=1)},
+                     {"raises": OSError("нет такого файла")})
+
+        for kwargs in scenarios:
+            check, _ = self.auth_check(**kwargs)
+            with self.subTest(status=check.status, detail=check.detail[:40]):
+                self.assertNotIn(OUT_MARKER, check.detail)
+                self.assertNotIn(ERR_MARKER, check.detail)
+                if check.status == "fail":
+                    self.assertIn("default-keychain", check.detail)
+                    self.assertIn("codex login", check.detail)
+
+    def test_the_auth_check_is_not_wired_into_the_general_doctor_set(self):
+        """Ловит мутацию: проверка подключена к общему набору `doctor`
+        (`all_checks`) вместо предполёта провайдера — КАЖДЫЙ прогон
+        диагностики на пульте без Codex платит подпроцессом
+        `codex login status` и печатает красную строку про авторизацию
+        инструмента, которым никто не пользуется."""
+        import inspect
+
+        source = inspect.getsource(doctor.all_checks)
+
+        self.assertNotIn("chatgpt", source.lower())
+        self.assertNotIn(doctor.CODEX_AUTH_CHECK, source)
 
 
 class ModelVerdictTest(TmpRootTest):
@@ -519,7 +658,7 @@ class IsolationSmokeTest(TmpRootTest):
 
     def setUp(self):
         super().setUp()
-        _drop_ambient(self, "CODEX_HOME", "OPENAI_API_KEY", *CLAUDE_SECRETS)
+        _drop_ambient(self, "CODEX_HOME", *FORBIDDEN_KEY_NAMES, *CLAUDE_SECRETS)
         patcher = mock.patch.object(keychain, "token", lambda slot: "tok")
         patcher.start()
         self.addCleanup(patcher.stop)
@@ -559,6 +698,37 @@ class IsolationSmokeTest(TmpRootTest):
             [a for a in self.healthy if a != "computer_use"])
         self.assertEqual(no_feature.status, "fail", no_feature.detail)
         self.assertIn("computer_use", no_feature.detail)
+
+    def test_any_api_key_name_in_the_step_env_is_a_named_failure(self):
+        """Ловит мутацию: проверка написана на одно имя (`OPENAI_API_KEY` —
+        то, которое убрали из белого списка), а `CODEX_API_KEY`/
+        `CODEX_ACCESS_TOKEN` не смотрит. Живая проверка 22.09 показала, что
+        `codex exec` читает именно `CODEX_API_KEY`, — незамеченным остался
+        бы ровно тот канал, которым ключ и подействовал бы на шаг. Вторая
+        мутация: провал печатает ЗНАЧЕНИЕ найденной переменной, и ключ
+        Оператора уезжает в лог `doctor`."""
+        deployed = config.ROLE_HOME / ".codex"
+
+        def leaky_with(extra):
+            def environment(inner_self, role=None, task_id=None):
+                env = {"HOME": str(config.ROLE_HOME),
+                       "CODEX_HOME": str(deployed)}
+                env.update(extra)
+                return env
+            return environment
+
+        clean = doctor.codex_isolation_smoke("developer")
+        self.assertNotEqual(clean.status, "fail", clean.detail)
+
+        for name in FORBIDDEN_KEY_NAMES:
+            with self.subTest(name=name):
+                with mock.patch.object(self.provider_class, "environment",
+                                       leaky_with({name: AMBIENT_KEY})):
+                    check = doctor.codex_isolation_smoke("developer")
+
+                self.assertEqual(check.status, "fail", check.detail)
+                self.assertIn(name, check.detail)
+                self.assertNotIn(AMBIENT_KEY, check.detail)
 
     def test_inherited_ambient_home_is_red(self):
         """Ловит мутацию: смок смотрит на окружение провайдера по
@@ -620,22 +790,53 @@ class ForeignSecretCheckTest(TmpRootTest):
 
     def setUp(self):
         super().setUp()
-        _drop_ambient(self, "OPENAI_API_KEY", *CLAUDE_SECRETS)
+        _drop_ambient(self, *FORBIDDEN_KEY_NAMES, *CLAUDE_SECRETS)
 
-    def test_openai_key_under_a_claude_role_is_a_yellow_line(self):
-        """Ловит мутацию: жёлтая строка заведена только со стороны Codex
-        (секрет Claude под `codex`), а обратный случай молчит — ключ
-        OpenAI Оператора копируется общим белым списком в окружение
-        КАЖДОГО шага роли на Claude, и `doctor` об этом не говорит
-        ничего."""
-        clean = doctor.check_foreign_provider_secrets()
-        self.assertEqual(clean.status, "ok", clean.detail)
+    def test_the_openai_key_is_no_longer_named_for_a_claude_step(self):
+        """Ловит мутацию: ключ убран из белого списка, но остался в
+        `CodexProvider.secret_env_names()` — проверка чужих секретов
+        перебирает имена секретов ДРУГИХ провайдеров, и жёлтая строка про
+        утечку горела бы на пульте, где утечки уже нет: `doctor` просит
+        Оператора чинить починенное. Ни одно из трёх имён ключа при этом не
+        должно называться ни при каком ambient-значении, включая пустое."""
+        ambient = {name: AMBIENT_KEY for name in FORBIDDEN_KEY_NAMES}
 
-        with mock.patch.dict(os.environ, {"OPENAI_API_KEY": AMBIENT_KEY}):
+        for title, values in (("ключи заданы", ambient),
+                              ("ключи пусты",
+                               {n: "" for n in FORBIDDEN_KEY_NAMES})):
+            with self.subTest(scenario=title):
+                with mock.patch.dict(os.environ, values):
+                    check = doctor.check_foreign_provider_secrets()
+
+                self.assertEqual(check.status, "ok", check.detail)
+                for name in FORBIDDEN_KEY_NAMES:
+                    self.assertNotIn(name, check.detail)
+                self.assertNotIn(AMBIENT_KEY, check.detail)
+
+    def test_a_registered_secret_of_a_foreign_provider_is_still_a_yellow_line(self):
+        """Ловит мутацию: механика жёлтой строки осиротела вместе с ключом
+        OpenAI — «раз называть больше нечего, уберём и проверку». Реестр
+        провайдеров открыт, и следующий исполнитель со своим секретом в
+        общем белом списке обязан попадать в строку записью в реестр, а не
+        правкой проверки.
+
+        Секрет синтетический (имя и запись белого списка подменяются на
+        время сценария): после требования 3 у сегодняшних двух провайдеров
+        подходящей пары «имя Codex, стоящее в белом списке» не осталось, и
+        сверять механику на фактическом состоянии реестра было бы нечем.
+        """
+        foreign = "ARTEL_TEST_FOREIGN_SECRET"
+        codex_class = type(providers.get("codex"))
+
+        with mock.patch.object(codex_class, "secret_env_names",
+                               lambda inner: (foreign,)), \
+                mock.patch.dict(stack.ROLE_ENV_ALLOWLIST,
+                                {foreign: "синтетический секрет теста"}), \
+                mock.patch.dict(os.environ, {foreign: AMBIENT_KEY}):
             check = doctor.check_foreign_provider_secrets()
 
         self.assertEqual(check.status, "warn", check.detail)
-        self.assertIn("OPENAI_API_KEY", check.detail)
+        self.assertIn(foreign, check.detail)
         self.assertNotIn(AMBIENT_KEY, check.detail)
 
     def test_the_check_is_wired_into_all_checks(self):
