@@ -245,14 +245,59 @@ def _print_new_calibration_hint(conn, task_id: str, tz_raw: str) -> None:
 ZONE_OVERLAP_ACTION = "пересечение зон при заведении"
 
 
+# Фиксированный текст действия журнала (ответ Оператора ANSWER-1 п.2 по
+# замечанию R1-F2 ревью итерации 1): предварительные зоны ТЗ, записанные в
+# `tasks.zones` при заведении. Оператор читает по нему, откуда взялось
+# значение колонки до гейта SPEC (approve на `spec_gate` перезапишет его
+# зонами SPEC).
+PRELIMINARY_ZONES_ACTION = "предварительные зоны из ТЗ"
+
+
+def _tz_zone_items(tz_raw: str) -> list[str]:
+    """Элементы строки `Зоны:` ТЗ — как они написаны, без фильтра общих
+    зон. Разбор — ТОТ ЖЕ, что у существующей сверки путей ТЗ
+    (`_tz_path_check`): один `_tz_sections` + `guard.zone_items` на все
+    проверки одной команды, иначе перенос строки `Зоны:` или следующая
+    метка-раздел разошлись бы между ними.
+
+    Отсортировано: `guard.zone_items` отдаёт МНОЖЕСТВО, и порядок его
+    обхода у строк меняется от процесса к процессу (hash randomization)
+    — записанное в `tasks.zones` значение обязано быть одинаковым при
+    одном и том же ТЗ."""
+    zones_text, _ = _tz_sections(tz_raw, (_TZ_ZONES_LABEL,))
+    return sorted(guard.zone_items(zones_text))
+
+
 def _tz_zone_paths(tz_raw: str) -> set[str]:
     """Пути строки `Зоны:` ТЗ — множеством, без путей, покрытых
-    `config.COMMON_ZONES` (`zone_lock._own_paths`). Разбор — ТОТ ЖЕ, что у
-    существующей сверки путей ТЗ (`_tz_path_check`): один `_tz_sections` +
-    `guard.zone_items` на обе проверки одной команды, иначе перенос строки
-    `Зоны:` или следующая метка-раздел разошлись бы между ними."""
-    zones_text, _ = _tz_sections(tz_raw, (_TZ_ZONES_LABEL,))
-    return zone_lock._own_paths(",".join(guard.zone_items(zones_text)))
+    `config.COMMON_ZONES` (`zone_lock._own_paths`)."""
+    return zone_lock._own_paths(",".join(_tz_zone_items(tz_raw)))
+
+
+def _record_preliminary_zones(conn, task_id: str, tz_raw: str) -> None:
+    """Зоны строки `Зоны:` ТЗ — в колонку `tasks.zones` СРАЗУ при
+    заведении, как предварительные (ответ Оператора ANSWER-1 п.2).
+
+    Без этой записи колонка пуста до approve на гейте SPEC
+    (`fsm._approve_spec_gate` — единственный, кто её писал), и прогноз
+    очереди зон слеп ровно к тем состояниям, ради которых он и заведён:
+    задача, чей SPEC пишется прямо сейчас, не попадала бы ни в
+    предупреждение `new` (требование 1), ни в добавку `status`
+    (требование 3) — то есть волна из «Контекста» SPEC не ловилась бы
+    (замечание R1-F2 ревью итерации 1).
+
+    Предварительность значения — в том, что его перезаписывает approve на
+    `spec_gate` зонами SPEC (поведение не меняется); reject на том же
+    гейте зон не пишет вовсе, и предварительное значение переживает
+    возврат аналитику. Пустая строка `Зоны:` колонку не трогает: `NULL`
+    остаётся признаком «зона не заявлена вовсе», который читают
+    `checkpoint._zone_paths` и гейт зон."""
+    items = _tz_zone_items(tz_raw)
+    if not items:
+        return
+    zones = ", ".join(items)
+    store.update_task(conn, task_id, zones=zones)
+    store.journal(conn, task_id, "operator", PRELIMINARY_ZONES_ACTION, zones)
 
 
 def _zone_overlap_warning_text(matches: list) -> str:
@@ -264,7 +309,8 @@ def _zone_overlap_warning_text(matches: list) -> str:
     return "\n".join(lines)
 
 
-def _warn_zone_overlap(conn, task_id: str, tz_raw: str) -> None:
+def _warn_zone_overlap(conn, task_id: str, tz_raw: str,
+                       target: str | None = None) -> None:
     """Предупреждение о пересечении зон ТЗ с зонами задач в полёте (SPEC
     01M3GKJ84XM5QPC6TK5EE307Q9, требования 1-2): печатается и
     журналируется ПОСЛЕ заведения строки задачи, тем же приёмом, что
@@ -274,7 +320,15 @@ def _warn_zone_overlap(conn, task_id: str, tz_raw: str) -> None:
     Набор состояний — `zone_lock.FORECAST_STATES` (занимающие плюс те, что
     займут зону позже); признак «занимает зону» (`zone_lock._occupies`) не
     применяется: это прогноз будущей очереди, а не отказ входа в `in_dev`.
-    """
+
+    Задача ЧУЖОГО target'а предупреждения не получает (ответ Оператора
+    ANSWER-1 п.3 по замечанию R1-F3): замок зон — механика только
+    основного target'а (`zone_lock.blocking_conflict` отдаёт `None` любой
+    задаче не-`DEFAULT_TARGET`), очереди для такой задачи не будет
+    никогда, и обещать её в журнале нечем. Тот же фильтр, что у парной
+    добавки `status` (`_zone_forecast_suffix`)."""
+    if (target or config.DEFAULT_TARGET) != config.DEFAULT_TARGET:
+        return
     matches = zone_lock.forecast_overlaps(conn, _tz_zone_paths(tz_raw),
                                           exclude_task_id=task_id)
     if not matches:
@@ -390,12 +444,14 @@ def cmd_new(title: str, tz_path: str | None = None, *,
 
     _new_task_row(conn, task_id, title, target, tz_doc, is_canary=canary,
                  journal_detail=title)
+    if tz_raw is not None:
+        _record_preliminary_zones(conn, task_id, tz_raw)
     print(f"[{task_id}] «{title}» создана (target {target}, артефактная "
          f"ветка пульта {artifact_branch.branch_name(task_id)})")
     _warn_pin_divergence(conn, task_id)
     if tz_raw is not None:
         _print_new_calibration_hint(conn, task_id, tz_raw)
-        _warn_zone_overlap(conn, task_id, tz_raw)
+        _warn_zone_overlap(conn, task_id, tz_raw, target)
     if tz_path is not None:
         print(f"  затем: artel.py run {task_id}  (запуск analyst)")
     else:

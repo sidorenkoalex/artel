@@ -1,5 +1,5 @@
 ---
-built_at_sha: d92eced9d0bd31d2c7adb102171bad172414e929
+built_at_sha: 35340c2153e063c0e1082d46a394a47547457983
 ---
 
 # Codebase-map пульта
@@ -769,7 +769,7 @@ built_at_sha: d92eced9d0bd31d2c7adb102171bad172414e929
 
 **Импортирует:** `orchestrator/acceptance.py`, `orchestrator/artifact_source.py`, `orchestrator/artifacts.py`, `orchestrator/budget.py`, `orchestrator/catalog.py`, `orchestrator/ci.py`, `orchestrator/cleanup.py`, `orchestrator/config.py`, `orchestrator/fixation.py`, `orchestrator/fsm_advance.py`, `orchestrator/fsm_merge_gate.py`, `orchestrator/gitcmd.py`, `orchestrator/github_adapter.py`, `orchestrator/lease.py`, `orchestrator/pull.py`, `orchestrator/repo_context.py`, `orchestrator/review.py`, `orchestrator/store.py`, `orchestrator/targets.py`, `orchestrator/workspace.py`, `orchestrator/yamlmini.py`, `scripts/guard.py`
 
-**Импортируется:** `orchestrator/advance_gates/acceptance.py`, `orchestrator/artel.py`, `orchestrator/auto.py`, `orchestrator/canary.py`, `orchestrator/fsm_advance.py`, `orchestrator/fsm_merge_gate.py`, `orchestrator/review.py`, `tests/sandbox.py`, `tests/test_acceptance_tests_flow.py`, `tests/test_advance_guard.py`, `tests/test_agent_failure.py`, `tests/test_amend.py`, `tests/test_analyst_role.py`, `tests/test_answer.py`, `tests/test_answer_branch_reads.py`, `tests/test_answer_gate.py`, `tests/test_approve_acceptance_full_suite.py`, `tests/test_artifact_escalation_marker.py`, `tests/test_auto_cycle.py`, `tests/test_branch_freshness_gate.py`, `tests/test_ci_rerun_command.py`, `tests/test_ci_status_kind_gate.py`, `tests/test_cmd_approve_dispatch.py`, `tests/test_division_parent_cleanup.py`, `tests/test_fsm_advance_tests_writing_artifact_source.py`, `tests/test_fsm_advance_tests_writing_dry_collect.py`, `tests/test_fsm_branch_correct_status_reads.py`, `tests/test_fsm_draft_mr_reentry.py`, `tests/test_fsm_map_conflict_autoresolve.py`, `tests/test_fsm_merge_conflict_note.py`, `tests/test_fsm_spec_gate_path_check.py`, `tests/test_fsm_spec_gate_reject.py`, `tests/test_git_fixation.py`, `tests/test_gitcmd_fetch_ref_sha.py`, `tests/test_id_format_guard.py`, `tests/test_invariants.py`, `tests/test_merge_gate_ci_wait.py`, `tests/test_multitarget_invariants.py`, `tests/test_pull_conflict_marker_states.py`, `tests/test_review_freshness.py`, `tests/test_review_registry_gate.py`, `tests/test_spec_budget.py`, `tests/test_split_assessment_merge_gate.py`, `tests/test_step_cost.py`, `tests/test_step_refixation.py`, `tests/test_task_id_prefix_regression.py`, `tests/test_verifying_ceiling.py`, `tests/test_zones_approve.py`
+**Импортируется:** `orchestrator/advance_gates/acceptance.py`, `orchestrator/artel.py`, `orchestrator/auto.py`, `orchestrator/canary.py`, `orchestrator/fsm_advance.py`, `orchestrator/fsm_merge_gate.py`, `orchestrator/review.py`, `tests/sandbox.py`, `tests/test_acceptance_tests_flow.py`, `tests/test_advance_guard.py`, `tests/test_agent_failure.py`, `tests/test_amend.py`, `tests/test_analyst_role.py`, `tests/test_answer.py`, `tests/test_answer_branch_reads.py`, `tests/test_answer_gate.py`, `tests/test_approve_acceptance_full_suite.py`, `tests/test_artifact_escalation_marker.py`, `tests/test_auto_cycle.py`, `tests/test_branch_freshness_gate.py`, `tests/test_catalog_zone_overlap.py`, `tests/test_ci_rerun_command.py`, `tests/test_ci_status_kind_gate.py`, `tests/test_cmd_approve_dispatch.py`, `tests/test_division_parent_cleanup.py`, `tests/test_fsm_advance_tests_writing_artifact_source.py`, `tests/test_fsm_advance_tests_writing_dry_collect.py`, `tests/test_fsm_branch_correct_status_reads.py`, `tests/test_fsm_draft_mr_reentry.py`, `tests/test_fsm_map_conflict_autoresolve.py`, `tests/test_fsm_merge_conflict_note.py`, `tests/test_fsm_spec_gate_path_check.py`, `tests/test_fsm_spec_gate_reject.py`, `tests/test_git_fixation.py`, `tests/test_gitcmd_fetch_ref_sha.py`, `tests/test_id_format_guard.py`, `tests/test_invariants.py`, `tests/test_merge_gate_ci_wait.py`, `tests/test_multitarget_invariants.py`, `tests/test_pull_conflict_marker_states.py`, `tests/test_review_freshness.py`, `tests/test_review_registry_gate.py`, `tests/test_spec_budget.py`, `tests/test_split_assessment_merge_gate.py`, `tests/test_step_cost.py`, `tests/test_step_refixation.py`, `tests/test_task_id_prefix_regression.py`, `tests/test_verifying_ceiling.py`, `tests/test_zones_approve.py`
 
 ## orchestrator/fsm_advance.py
 
@@ -2107,7 +2107,7 @@ built_at_sha: d92eced9d0bd31d2c7adb102171bad172414e929
 **Публичные функции:**
 - `seed_task`
 
-**Импортирует:** `orchestrator/catalog.py`, `orchestrator/config.py`, `orchestrator/store.py`, `orchestrator/zone_lock.py`, `tests/sandbox.py`
+**Импортирует:** `orchestrator/catalog.py`, `orchestrator/config.py`, `orchestrator/fsm.py`, `orchestrator/store.py`, `orchestrator/zone_lock.py`, `tests/sandbox.py`
 
 **Импортируется:** —
 

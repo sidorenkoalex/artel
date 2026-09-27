@@ -64,6 +64,18 @@ class StackZonesPullSectionTest(unittest.TestCase):
             with self.subTest(state=state):
                 self.assertIn(state, self.body)
 
+    def test_section_names_the_preliminary_zones_written_by_new(self):
+        """Раздел называет предварительные зоны ТЗ, записываемые в
+        `tasks.zones` при заведении (ответ Оператора ANSWER-1 п.2), — и
+        что approve на гейте SPEC их перезаписывает.
+
+        Ловит мутацию: действие журнала предварительных зон
+        переименовано в коде, а документ остался прежним — Оператор,
+        увидев в строке задачи до гейта SPEC чужую на вид колонку зон,
+        не нашёл бы в документе, откуда она взялась."""
+        self.assertIn(catalog.PRELIMINARY_ZONES_ACTION, self.body)
+        self.assertIn("approve", self.body)
+
     def test_section_lists_what_the_pull_merges_itself(self):
         """Раздел перечисляет то, что подтяжка сливает сама: карту
         кодовой базы и аддитивный конфликт документов, с порядком добавок
@@ -90,6 +102,24 @@ class StackZonesPullSectionTest(unittest.TestCase):
                        "fail-closed"):
             with self.subTest(marker=marker):
                 self.assertIn(marker, lowered)
+
+    def test_section_names_the_close_hunk_postcheck_and_marked_states(self):
+        """Раздел называет пост-проверку близких хунков (решение
+        Оператора ANSWER-1 п.1) и оговаривает, что метка «нужен шаг
+        роли» ставится только в помечаемых состояниях.
+
+        Ловит мутацию: документ обещает, что union-слияние безопасно для
+        любых аддитивных сторон (пост-проверка из раздела исчезла) —
+        читатель не знал бы, почему близкие добавки уходят
+        разработчику; либо метка обещана безусловно, и Оператор искал бы
+        её в журнале задачи из состояния вне
+        `pull.PULL_CONFLICT_MARKED_STATES`, где её не бывает."""
+        lowered = self.body.lower()
+        self.assertIn("хунк", lowered)
+        self.assertIn("помечаемых состояниях", lowered)
+        for state in pull.PULL_CONFLICT_MARKED_STATES:
+            with self.subTest(state=state):
+                self.assertIn(state, self.body)
 
 
 if __name__ == "__main__":

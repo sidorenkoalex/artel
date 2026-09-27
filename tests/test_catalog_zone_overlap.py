@@ -17,7 +17,7 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from orchestrator import catalog, config, store, zone_lock  # noqa: E402
+from orchestrator import catalog, config, fsm, store, zone_lock  # noqa: E402
 from tests.sandbox import (InitializedTmpRootTest,  # noqa: E402
                            SchemaTmpRootTest, capture, capture_new_task_id)
 
@@ -41,10 +41,16 @@ TZ_COMMON_ZONES_ONLY = """Требуется:
 """
 
 
-def seed_task(task_id: str, state: str, zones: str) -> None:
+def seed_task(task_id: str, state: str, zones: str,
+              target: str = config.DEFAULT_TARGET) -> None:
+    """Строка задачи с заданными зонами. Для состояний ДО гейта SPEC это
+    не синтетика: `cmd_new` пишет зоны ТЗ в `tasks.zones` сразу при
+    заведении (`_record_preliminary_zones`, ответ Оператора ANSWER-1
+    п.2) — сквозной путь того же состояния проверяет
+    `CmdNewPreliminaryZonesTest` ниже, без прямой правки колонки."""
     conn = store.db()
     store.insert_task(conn, task_id, f"Задача {task_id}", state,
-                      f"task/{task_id.lower()}-x", config.DEFAULT_TARGET,
+                      f"task/{task_id.lower()}-x", target,
                       config.DEFAULT_BUDGET_USD)
     store.update_task(conn, task_id, zones=zones)
 
@@ -103,7 +109,7 @@ class WarnZoneOverlapTest(SchemaTmpRootTest):
 
     def test_warning_fires_for_a_task_that_will_occupy_the_zone_later(self):
         """Пересечение с задачей в `tests_writing` (займёт зону позже) —
-        то же предупреждение; то же для `spec_writing`/`spec_gate`.
+        то же предупреждение; то же для `spec_writing` и `spec_gate`.
 
         Ловит мутацию: `new` спрашивает только про `BLOCKING_STATES` —
         задачи волны, чьи SPEC/планки пишутся прямо сейчас, в
@@ -112,12 +118,35 @@ class WarnZoneOverlapTest(SchemaTmpRootTest):
         seed_task("01ZONEOVERLAPTESTSWRIT", "tests_writing",
                   "orchestrator/pull.py")
         seed_task("01ZONEOVERLAPSPECGATEX", "spec_gate", "docs/stack.md")
+        seed_task("01ZONEOVERLAPSPECWRITE", "spec_writing",
+                  "orchestrator/pull.py")
 
         out = self.warn(TZ_ZONES)
 
         self.assertIn("01ZONEOVERLAPTESTSWRIT", out)
         self.assertIn("01ZONEOVERLAPSPECGATEX", out)
+        self.assertIn("01ZONEOVERLAPSPECWRITE", out)
         self.assertEqual(len(self.journal_rows()), 1)
+
+    def test_a_task_of_a_foreign_target_gets_no_warning(self):
+        """Заводимая задача чужого target'а предупреждения не получает и
+        записи журнала не пишет (ответ Оператора ANSWER-1 п.3): замок зон
+        — механика только основного target'а, очереди для такой задачи не
+        будет никогда.
+
+        Ловит мутацию: фильтр target'а снят (асимметрия с парной добавкой
+        `status`, которая его проверяет) — задача внешнего target'а
+        уносила бы в журнал обещание очереди, которой нет."""
+        seed_task("01ZONEOVERLAPFOREIGNHL", "in_dev", "orchestrator/pull.py")
+
+        out = capture(catalog._warn_zone_overlap, store.db(), self.TASK,
+                      TZ_ZONES, "acme")
+
+        self.assertEqual(out, "")
+        self.assertEqual(self.journal_rows(), [])
+        # Тот же вызов без чужого target'а предупреждение даёт — иначе
+        # тест зеленел бы и на сломанной сверке.
+        self.assertIn("01ZONEOVERLAPFOREIGNHL", self.warn(TZ_ZONES))
 
     def test_no_overlap_prints_nothing_and_journals_nothing(self):
         """Пересечения нет, а также пересечение ТОЛЬКО по общим зонам —
@@ -179,6 +208,102 @@ class CmdNewZoneOverlapTest(InitializedTmpRootTest):
         actions = [r["action"] for r in store.task_steps(store.db(), task_id)]
         self.assertNotIn(catalog.ZONE_OVERLAP_ACTION, actions)
         self.assertNotIn("пересечение зон", out)
+
+
+class CmdNewPreliminaryZonesTest(InitializedTmpRootTest):
+    """Зоны ТЗ в колонке `tasks.zones` сразу при заведении (ответ
+    Оператора ANSWER-1 п.2 по замечанию R1-F2): без них прогноз слеп к
+    `spec_writing`/`spec_gate`, потому что колонку писал только approve
+    на гейте SPEC."""
+
+    def setUp(self):
+        super().setUp()
+        self.tz_file = self.root / "TZ.md"
+        self.tz_file.write_text(TZ_ZONES, encoding="utf-8")
+        patcher = mock.patch.object(catalog, "_warn_pin_divergence")
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def new_task(self) -> str:
+        _out, task_id = capture_new_task_id(catalog.cmd_new, "Фикстура",
+                                            str(self.tz_file))
+        return task_id
+
+    def zones_of(self, task_id: str):
+        return store.get_task(store.db(), task_id)["zones"]
+
+    def test_new_writes_the_tz_zones_into_the_task_row(self):
+        """`new --tz` пишет пути строки «Зоны:» в колонку `tasks.zones`
+        и журналирует это фиксированным действием; задача при этом в
+        `spec_writing`.
+
+        Ловит мутацию: запись предварительных зон снята — колонка
+        осталась бы `NULL` до approve на гейте SPEC, и требования 1 и 3
+        не наблюдались бы ни в одном состоянии до него (ровно замечание
+        R1-F2)."""
+        task_id = self.new_task()
+
+        row = store.get_task(store.db(), task_id)
+        self.assertEqual(row["state"], "spec_writing")
+        self.assertEqual(row["zones"], "docs/stack.md, orchestrator/pull.py")
+        actions = [r["action"] for r in store.task_steps(store.db(), task_id)]
+        self.assertIn(catalog.PRELIMINARY_ZONES_ACTION, actions)
+
+    def test_tz_without_a_zones_line_leaves_the_column_null(self):
+        """ТЗ без строки «Зоны:» колонку не трогает: `NULL` остаётся
+        признаком «зона не заявлена вовсе», по которому
+        `checkpoint._zone_paths` и гейт зон отключают свой фильтр.
+
+        Ловит мутацию: пустой список зон пишется пустой строкой — «зон
+        нет» стало бы неотличимо от «зоны заявлены пустыми», и фильтр
+        WIP-чекпоинта посчитал бы посторонним любой путь такой задачи."""
+        self.tz_file.write_text("Требуется:\n1. Что-то.\n", encoding="utf-8")
+
+        self.assertIsNone(self.zones_of(self.new_task()))
+
+    def test_second_task_of_the_wave_sees_the_first_one_before_the_spec_gate(self):
+        """Сквозной сценарий «Контекста» SPEC, без единой правки колонки
+        руками: первая задача волны заведена и ещё пишет SPEC
+        (`spec_writing`), вторая заводится с пересекающимся ТЗ — и
+        получает предупреждение с id первой.
+
+        Ловит мутацию: прогноз читает зоны, которых в БД до гейта SPEC
+        нет (или предварительная запись снята) — предупреждение молчало
+        бы ровно в той ситуации, ради которой задача заведена, а тесты на
+        seed-фикстурах этого не заметили бы."""
+        first = self.new_task()
+
+        out, second = capture_new_task_id(catalog.cmd_new, "Вторая",
+                                          str(self.tz_file))
+
+        self.assertEqual(store.get_task(store.db(), first)["state"],
+                         "spec_writing")
+        self.assertIn(first, out)
+        # Общий путь — один на задачу (`_shared_zone`, первый по
+        # алфавиту), как и у существующего отказа замка зон.
+        self.assertIn("docs/stack.md", out)
+        actions = [r["action"] for r in store.task_steps(store.db(), second)]
+        self.assertIn(catalog.ZONE_OVERLAP_ACTION, actions)
+
+    def test_reject_on_the_spec_gate_keeps_the_preliminary_zones(self):
+        """Возврат SPEC аналитику предварительные зоны НЕ стирает (ответ
+        Оператора ANSWER-1 п.2): задача возвращается в `spec_writing` с
+        тем же значением колонки, и прогноз продолжает её видеть.
+
+        Ловит мутацию: ветка `reject` на `spec_gate` начала писать зоны
+        (например, обнулять их «на всякий случай») — задача волны,
+        вернувшаяся с гейта, выпала бы из прогноза, и очередь снова
+        стала бы невидимой."""
+        task_id = self.new_task()
+        store.update_task(store.db(), task_id, state="spec_gate")
+
+        with mock.patch.object(fsm.github_adapter, "ensure_draft_mr"):
+            capture(fsm._cmd_reject, store.db(), task_id, "SPEC переписать")
+
+        self.assertEqual(store.get_task(store.db(), task_id)["state"],
+                         "spec_writing")
+        self.assertEqual(self.zones_of(task_id),
+                         "docs/stack.md, orchestrator/pull.py")
 
 
 class ZoneForecastSuffixTest(SchemaTmpRootTest):

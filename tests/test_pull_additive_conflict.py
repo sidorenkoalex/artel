@@ -37,6 +37,22 @@ SPEC_NO_AC_MARKUP = (
 BASE_A = "a1\na2\na3\n"
 BASE_B = "b1\nb2\n"
 
+#: База документа-списка из замечания R1-F1 ревью итерации 1: два
+#: растущих вниз списка, между которыми ВСЕГО две строки базы — меньше
+#: контекста git, поэтому добавки сторон в разные списки склеиваются в
+#: одну конфликтную область.
+BASE_LISTS = "## Open\n- open: A\n## Closed\n- closed: B\n"
+
+#: Те же два списка, разведённые шестью строками базы — хунки сторон
+#: остаются раздельными, и union-слияние идёт штатно (парный случай к
+#: `BASE_LISTS`).
+BASE_FAR = "## Open\n- open: A\nx1\nx2\nx3\nx4\n## Closed\n- closed: B\n"
+
+#: Карта кодовой базы — в базе слияния (ДО ветвления), чтобы её конфликт
+#: в наборе «карта + документ» был содержательным (стадия базы есть), а
+#: не `add/add` (R1-F4 ревью итерации 1).
+MAP_BASE = "---\nbuilt_at_sha: seed\n---\n\n# Карта\n"
+
 
 class AdditiveConflictSandbox(RealGitSandbox):
     """Ветка задачи и main, разошедшиеся правками одних и тех же файлов —
@@ -47,7 +63,9 @@ class AdditiveConflictSandbox(RealGitSandbox):
 
     def setUp(self):
         super().setUp()
-        self.write_files({"docs/a.md": BASE_A, "docs/b.md": BASE_B})
+        self.write_files({"docs/a.md": BASE_A, "docs/b.md": BASE_B,
+                          "docs/lists.md": BASE_LISTS, "docs/far.md": BASE_FAR,
+                          MAP_REL: MAP_BASE})
         self.git("add", "-A")
         self.git("commit", "-q", "-m", "seed: документы")
 
@@ -281,22 +299,160 @@ class NonAdditiveConflictEscalatesTest(AdditiveConflictSandbox):
         self.assertEqual(self.read("docs/a.md"), BASE_A + "BRANCH-A\n")
 
 
-class MapWithAdditiveDocumentTest(AdditiveConflictSandbox):
-    """AC-11: набор «карта + аддитивный документ». Карта заведена в базе
-    отдельным коммитом — конфликт по ней должен быть настоящим."""
+class CloseHunksEscalateTest(AdditiveConflictSandbox):
+    """Пост-проверка «итог == база + добавки обеих сторон» (решение
+    Оператора ANSWER-1 п.1 по замечанию R1-F1 ревью итерации 1): обе
+    стороны аддитивны, git отвечает нулём, но union-слияние близких
+    хунков дублирует строки базы — такой конфликт обязан эскалировать, а
+    не коммититься."""
 
-    MAP_BASE = "---\nbuilt_at_sha: seed\n---\n\n# Карта\n"
+    #: Обе стороны дописывают по пункту в КАЖДЫЙ из двух списков базы;
+    #: между списками две строки базы — меньше контекста git.
+    BRANCH_LISTS = ("## Open\n- open: A\n- open: BRANCH\n"
+                    "## Closed\n- closed: B\n- closed: BRANCH-C\n")
+    MAIN_LISTS = ("## Open\n- open: A\n- open: MAIN\n"
+                  "## Closed\n- closed: B\n- closed: MAIN-C\n")
+
+    def setUp(self):
+        super().setUp()
+        self.commit_on_branch({"docs/lists.md": self.BRANCH_LISTS})
+        self.commit_on_main({"docs/lists.md": self.MAIN_LISTS})
+        self.before = self.branch_head()
+        self.outcome = self.evaluate()
+
+    def test_close_additive_hunks_escalate_instead_of_being_committed(self):
+        """Добавки сторон ближе четырёх строк базы друг к другу —
+        прежняя эскалация: `Conflict`, `escalated`, `merge --abort`,
+        метка «нужен шаг роли». Документ ветки остаётся нетронутым, и
+        коммита подтяжки нет.
+
+        Ловит мутацию: пост-проверка снята (итог union берётся как есть,
+        раз обе стороны «+N, −0») — пульт закоммитил бы документ, в
+        котором строки базы `## Closed`/`- closed: B` стоят ДВАЖДЫ, а
+        `- open: BRANCH` уехал в чужой раздел, и унёс бы эту порчу в
+        main как удачную подтяжку."""
+        self.assertIsInstance(self.outcome, pull.Conflict)
+        self.assertEqual(self.outcome.files, ["docs/lists.md"])
+        self.assertEqual(self.state(), "escalated")
+        self.assertEqual(self.unmerged(), [])
+        self.assertEqual(self.read("docs/lists.md"), self.BRANCH_LISTS)
+        self.assertEqual(self.first_parent_subjects(self.before), [])
+        self.assertIn(pull.PULL_CONFLICT_ROLE_STEP_MARKER, self.actions())
+        self.assertNotIn(pull.ADDITIVE_CONFLICT_ACTION, self.actions())
+
+    def test_both_sides_are_additive_so_the_side_check_alone_would_pass(self):
+        """Сверка аддитивности САМИХ СТОРОН этот случай пропускает: у
+        каждой стороны «+2, −0» относительно базы — эскалацию даёт
+        именно пост-проверка итога, а не отказ `_side_added_lines`.
+
+        Ловит мутацию: эскалация приписана сверке сторон (например,
+        `_side_added_lines` стал возвращать `None` на любом
+        многохунковом диффе) — механизм закрыл бы заодно и штатные
+        аддитивные слияния с двумя далёкими добавками, а тест выше
+        остался бы зелёным и это скрыл."""
+        base = self.root / "base.md"
+        branch = self.root / "branch.md"
+        main = self.root / "main.md"
+        base.write_text(BASE_LISTS, encoding="utf-8")
+        branch.write_text(self.BRANCH_LISTS, encoding="utf-8")
+        main.write_text(self.MAIN_LISTS, encoding="utf-8")
+
+        self.assertEqual(pull._side_added_lines(self.root, base, branch), 2)
+        self.assertEqual(pull._side_added_lines(self.root, base, main), 2)
+
+
+class DistantHunksStillMergeTest(AdditiveConflictSandbox):
+    """Парная проверка к `CloseHunksEscalateTest`: те же два списка, но
+    разведённые шестью строками базы — git держит хунки раздельно, итог
+    сходится с арифметикой, и пост-проверка слиянию не мешает."""
+
+    # Имена с суффиксом `_TEXT`: `BRANCH` у песочницы — ИМЯ ветки задачи,
+    # перекрыть его текстом документа значит увести `checkout -b` в
+    # многострочный «branch name». Сам `docs/far.md` лежит в базе
+    # слияния (`AdditiveConflictSandbox.setUp`) — иначе конфликт был бы
+    # `add/add`, а предмет теста — конфликт содержимого.
+    BRANCH_TEXT = ("## Open\n- open: A\n- open: BRANCH\nx1\nx2\nx3\nx4\n"
+                   "## Closed\n- closed: B\n- closed: BRANCH-C\n")
+    MAIN_TEXT = ("## Open\n- open: A\n- open: MAIN\nx1\nx2\nx3\nx4\n"
+                 "## Closed\n- closed: B\n- closed: MAIN-C\n")
+
+    def setUp(self):
+        super().setUp()
+        self.commit_on_branch({"docs/far.md": self.BRANCH_TEXT})
+        self.commit_on_main({"docs/far.md": self.MAIN_TEXT})
+
+    def test_two_distant_additive_hunks_merge_in_order_main_then_branch(self):
+        """Пост-проверка не закрывает штатный случай: документ с двумя
+        далёкими добавками каждой стороны сливается, все строки базы — по
+        одному разу, порядок в каждой области «main, затем ветка».
+
+        Ловит мутацию: пост-проверка ужесточена до «один хунк на файл»
+        (или сравнивает не те числа) — обычное аддитивное слияние
+        растущего списка ушло бы в эскалацию, и механика задачи не
+        срабатывала бы ровно там, ради чего заведена."""
+        outcome = self.evaluate()
+
+        self.assertIsInstance(outcome, pull.Pulled)
+        self.assertEqual(self.state(), "in_dev")
+        self.assertEqual(
+            self.read("docs/far.md"),
+            "## Open\n- open: A\n- open: MAIN\n- open: BRANCH\n"
+            "x1\nx2\nx3\nx4\n"
+            "## Closed\n- closed: B\n- closed: MAIN-C\n- closed: BRANCH-C\n")
+
+
+class LineCountTest(unittest.TestCase):
+
+    def test_last_line_without_a_trailing_newline_still_counts(self):
+        """`_line_count` считает строки тем же счётом, что `git diff
+        --numstat`: хвост без перевода строки — тоже строка, пустой
+        текст — ноль.
+
+        Ловит мутацию: счёт заменён на `text.count("\\n")` — файл без
+        завершающего перевода строки давал бы итог на строку меньше
+        суммы «база + добавки», и штатное аддитивное слияние такого
+        документа уходило бы в ложную эскалацию."""
+        self.assertEqual(pull._line_count(""), 0)
+        self.assertEqual(pull._line_count("a\n"), 1)
+        self.assertEqual(pull._line_count("a\nb"), 2)
+        self.assertEqual(pull._line_count("a\nb\n"), 2)
+
+
+class MapWithAdditiveDocumentTest(AdditiveConflictSandbox):
+    """AC-11: набор «карта + аддитивный документ». Карта лежит в БАЗЕ
+    слияния (`AdditiveConflictSandbox.setUp`, до ветвления) — её конфликт
+    здесь содержательный, со всеми тремя стадиями индекса, а не `add/add`
+    (R1-F4 ревью итерации 1: раньше карта коммитилась уже ПОСЛЕ
+    переключения на ветку задачи, и в main её не было вовсе)."""
+
+    MAP_BASE = MAP_BASE
     STUB_MAP = "---\nbuilt_at_sha: regen\n---\n\n# Карта (стаб регенерации)\n"
 
     def setUp(self):
         super().setUp()
-        self.write_files({MAP_REL: self.MAP_BASE})
-        self.git("add", "-A")
-        self.git("commit", "-q", "-m", "seed: карта")
         self.commit_on_branch({MAP_REL: self.MAP_BASE + "ветка\n",
                                "docs/a.md": BASE_A + "BRANCH-A\n"})
         self.commit_on_main({MAP_REL: self.MAP_BASE + "main\n",
                              "docs/a.md": BASE_A + "MAIN-A\n"})
+
+    def test_the_map_conflict_of_this_set_has_a_merge_base(self):
+        """Форма конфликта карты в этом наборе — содержательная, со
+        стадией базы: карта лежит в КОММИТЕ БАЗЫ слияния, и обе стороны
+        правят её относительно него (а не добавляют с нуля каждая
+        своей). Иначе AC-11 проверялся бы на `add/add` — форме, которую
+        требование 9 не имеет в виду.
+
+        Ловит мутацию: карта снова коммитится только в ветке задачи (как
+        было до R1-F4) — в базе слияния её не оказалось бы, конфликт стал
+        бы `add/add`, и набор «карта + документ» закрывался бы
+        отсутствием стадии базы, а не разбирался бы по требованию 9."""
+        base = self.git("merge-base", "HEAD", config.MAIN_BRANCH).strip()
+
+        self.assertEqual(self.git("show", f"{base}:{MAP_REL}"), self.MAP_BASE)
+        self.assertEqual(self.git("show", f"HEAD:{MAP_REL}"),
+                         self.MAP_BASE + "ветка\n")
+        self.assertEqual(self.git("show", f"{config.MAIN_BRANCH}:{MAP_REL}"),
+                         self.MAP_BASE + "main\n")
 
     def fake_regen(self, args, cwd=None, capture_output=None, text=None):
         """Стаб `python3 scripts/codebase_map.py`: пишет карту на слитом

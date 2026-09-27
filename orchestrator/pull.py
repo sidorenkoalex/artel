@@ -190,12 +190,17 @@ def _git_text(wt_path, *args: str, ok_codes=(0,)) -> str | None:
     return res.stdout
 
 
-def _side_is_additive(wt_path, base_file, side_file) -> bool:
-    """Сторона слияния только ДОБАВЛЯЕТ строки относительно базы (SPEC
-    01M3GKJ84XM5QPC6TK5EE307Q9, требование 5): `git diff --no-index
-    --numstat` с нулём в колонке удалений. Изменённая строка даёт
-    удаление и аддитивной не считается; двоичный файл даёт «-» и тоже не
-    считается. Пустой вывод — стороны совпадают, удалений нет.
+def _side_added_lines(wt_path, base_file, side_file) -> int | None:
+    """Число строк, ДОБАВЛЕННЫХ стороной слияния относительно базы (SPEC
+    01M3GKJ84XM5QPC6TK5EE307Q9, требование 5), либо `None` — сторона не
+    аддитивна: `git diff --no-index --numstat` обязан дать нуль в колонке
+    удалений. Изменённая строка даёт удаление и аддитивной не считается;
+    двоичный файл даёт «-» в обеих колонках и тоже не считается. Пустой
+    вывод — стороны совпадают: ноль добавленных, ноль удалённых.
+
+    Не `bool`, а число: то же самое `--numstat` даёт материал для
+    пост-проверки union-слияния ниже (`_union_merged_text`, ответ
+    Оператора ANSWER-1 п.1) — считать его вторым вызовом git незачем.
 
     Критерий применяется к файлу ЦЕЛИКОМ, не к конфликтным блокам
     (решение SPEC, требование 5): ошибка в эту сторону ведёт к прежней
@@ -203,12 +208,23 @@ def _side_is_additive(wt_path, base_file, side_file) -> bool:
     out = _git_text(wt_path, "diff", "--no-index", "--numstat",
                     str(base_file), str(side_file), ok_codes=(0, 1))
     if out is None:
-        return False
+        return None
+    added = 0
     for line in out.splitlines():
         columns = line.split("\t")
-        if len(columns) < 2 or columns[1] != "0":
-            return False
-    return True
+        if len(columns) < 2 or columns[1] != "0" or not columns[0].isdigit():
+            return None
+        added += int(columns[0])
+    return added
+
+
+def _line_count(text: str) -> int:
+    """Число строк текста в том же счёте, в каком их считает `git diff
+    --numstat`: последняя строка без завершающего перевода строки — всё
+    равно строка, пустой текст — ноль строк."""
+    if not text:
+        return 0
+    return text.count("\n") + (0 if text.endswith("\n") else 1)
 
 
 def _union_merged_text(wt_path, rel: str, stage_dir) -> str | None:
@@ -230,8 +246,26 @@ def _union_merged_text(wt_path, rel: str, stage_dir) -> str | None:
     Стадии выкладываются в каталог ВНЕ рабочего дерева: `git
     checkout-index --stage=all --temp` игнорирует `--prefix` и кладёт
     свои `.merge_file_*` в корень дерева, где посторонние незакоммиченные
-    файлы ловит гейт зон следующего шага."""
+    файлы ловит гейт зон следующего шага.
+
+    Итог union-слияния сверяется с арифметикой «база плюс добавки» —
+    fail-closed пост-проверка (решение Оператора ANSWER-1 п.1 по
+    замечанию R1-F1 ревью итерации 1). Аддитивности САМИХ СТОРОН для
+    сохранности документа недостаточно: когда хунки сторон стоят ближе
+    четырёх строк базы друг к другу, git склеивает их в ОДНУ конфликтную
+    область, а `--union` конкатенирует такие области целиком — строки
+    базы между хунками попадают в итог дважды, а добавка ветки уезжает в
+    чужой раздел документа. Обе стороны при этом честно «+N, −0», git
+    отвечает нулём, и без этой сверки пульт закоммитил бы порчу как
+    удачную подтяжку (проверено на базе `## Open / - open: A / ## Closed
+    / - closed: B`, где каждая сторона дописала по пункту в оба списка).
+    Расхождение числа строк итога с суммой «строки базы + добавки обеих
+    сторон» закрывает путь автоматики: конфликт уходит в прежнюю
+    эскалацию. Слияние, где обе стороны внесли ОДНУ И ТУ ЖЕ добавку, той
+    же сверкой тоже уходит в эскалацию (git засчитает её один раз) — то
+    же безопасное направление ошибки, что и у остального модуля."""
     stages = {}
+    base_text = None
     for stage in (1, 2, 3):
         text = _git_text(wt_path, "show", f":{stage}:{rel}")
         if text is None:
@@ -242,11 +276,19 @@ def _union_merged_text(wt_path, rel: str, stage_dir) -> str | None:
         except OSError:
             return None
         stages[stage] = path
-    if not (_side_is_additive(wt_path, stages[1], stages[3])
-            and _side_is_additive(wt_path, stages[1], stages[2])):
+        if stage == 1:
+            base_text = text
+    main_added = _side_added_lines(wt_path, stages[1], stages[3])
+    branch_added = _side_added_lines(wt_path, stages[1], stages[2])
+    if main_added is None or branch_added is None:
         return None
-    return _git_text(wt_path, "merge-file", "-p", "--union",
-                     str(stages[3]), str(stages[1]), str(stages[2]))
+    merged = _git_text(wt_path, "merge-file", "-p", "--union",
+                       str(stages[3]), str(stages[1]), str(stages[2]))
+    if merged is None:
+        return None
+    if _line_count(merged) != _line_count(base_text) + main_added + branch_added:
+        return None
+    return merged
 
 
 def _merged_doc_texts(wt_path, docs: list) -> dict | None:
