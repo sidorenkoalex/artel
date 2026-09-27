@@ -260,21 +260,40 @@ class LiveRolesMapConsistencyTest(unittest.TestCase):
         и скил без файла проходят в главную ветку молча, а Оператор
         узнаёт о них отказом первого же шага роли. До фикстуры это ловили
         чужие тесты, доходившие до шага роли на боевой карте.
+
+        Все несогласованности собираются в ОДИН список и предъявляются
+        одним ассертом верхнего уровня, а не через `subTest` по роли:
+        провал внутри `subTest` pytest печатает строкой `SUBFAILED`, и
+        сверка красноты по строкам `FAILED`/`ERROR` короткого итога (тот
+        же разбор ведёт гейт приёмки) такую красноту не увидела бы —
+        несогласованная правка карты выглядела бы «сломавшимся прогоном»
+        вместо названного упавшего теста.
         """
         agents = self.live_agent_roles()
 
         self.assertTrue(agents, f"{LIVE_ROLES_PATH}: agent-ролей нет вовсе")
+        problems = []
         for role, entry in sorted(agents.items()):
-            with self.subTest(роль=role):
-                self.assertIn(entry.get("model_tier"), models.TIERS)
-                self.assertIn(entry.get("provider")
-                              or providers.DEFAULT_PROVIDER,
-                              providers.PROVIDERS)
-                names = entry.get("skills")
-                self.assertIsInstance(names, list)
-                for name in names:
-                    self.assertTrue((REPO_ROOT / "skills" / f"{name}.md").exists(),
-                                    f"скил {name} назван в roles.yaml, но файла нет")
+            tier = entry.get("model_tier")
+            if tier not in models.TIERS:
+                problems.append(f"{role}: ярус {tier!r} вне перечня "
+                                f"{models.TIERS}")
+            provider = entry.get("provider") or providers.DEFAULT_PROVIDER
+            if provider not in providers.PROVIDERS:
+                problems.append(f"{role}: провайдера {provider!r} нет в "
+                                f"реестре orchestrator/providers/")
+            names = entry.get("skills")
+            if not isinstance(names, list):
+                problems.append(f"{role}: `skills:` не список, а {names!r}")
+                continue
+            for name in names:
+                if not (REPO_ROOT / "skills" / f"{name}.md").exists():
+                    problems.append(f"{role}: скил {name} назван в "
+                                    f"{LIVE_ROLES_PATH.name}, но файла нет")
+
+        self.assertEqual(problems, [],
+                         f"{LIVE_ROLES_PATH}: карта несогласована — "
+                         f"{'; '.join(problems)}")
 
 
 if __name__ == "__main__":
