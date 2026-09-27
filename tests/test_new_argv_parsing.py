@@ -102,12 +102,18 @@ class CmdCanaryDispatchTest(unittest.TestCase):
         Ловит мутацию: без `--set` диспетчер передаёт не имя набора по
         умолчанию (`None`, пустую строку) — бейзлайн прогона «как пульт»
         ключевался бы не тем набором (SPEC 01M3FQ2Z2PY0E9T5F5WQ207NP5,
-        AC-1)."""
+        AC-1).
+
+        Ловит мутацию: без `--template` диспетчер передаёт не `None`, а
+        пустой список имён (01M3HJQV2QV9BXNXSH3F8STAYH, требование 4) —
+        прогон уходил бы в именованный выбор с нулём имён вместо прежней
+        случайной выборки шаблонов пула."""
         with mock.patch.object(artel.pool_seal, "cmd_pool_seal") as seal_mock:
             with mock.patch.object(artel.canary, "cmd_canary") as run_mock:
                 artel._cmd_canary(["--k", "3"])
         run_mock.assert_called_once_with(k=3, sha=None,
-                                        set_name=config.CANARY_DEFAULT_SET)
+                                        set_name=config.CANARY_DEFAULT_SET,
+                                        templates=None)
         seal_mock.assert_not_called()
 
     def test_set_flag_value_reaches_the_run_command(self):
@@ -118,7 +124,8 @@ class CmdCanaryDispatchTest(unittest.TestCase):
         with mock.patch.object(artel.canary, "cmd_canary") as run_mock:
             artel._cmd_canary(["--k", "3", "--set", "codex-strong"])
         run_mock.assert_called_once_with(k=3, sha=None,
-                                        set_name="codex-strong")
+                                        set_name="codex-strong",
+                                        templates=None)
 
     def test_k_flag_with_explicit_sha_passes_it_through(self):
         """SPEC 01M2B6K02YVJBWE1JDWP85EJH0, требование 1/AC-2: `--sha
@@ -130,7 +137,8 @@ class CmdCanaryDispatchTest(unittest.TestCase):
         with mock.patch.object(artel.canary, "cmd_canary") as run_mock:
             artel._cmd_canary(["--k", "3", "--sha", "abc123"])
         run_mock.assert_called_once_with(k=3, sha="abc123",
-                                        set_name=config.CANARY_DEFAULT_SET)
+                                        set_name=config.CANARY_DEFAULT_SET,
+                                        templates=None)
 
 
 if __name__ == "__main__":
