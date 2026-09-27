@@ -25,7 +25,13 @@ from scripts import guard
 
 from .. import config, gitcmd, store
 from ._base import GateRefusal, _run_gates
-from .zones import _answer_commit_is_role_step_autocommit, _split_zone_paths
+# Маркер мандата ослабления и разбор его строки живут в `mandate` — общем
+# узле разбора строки мандата (SPEC 01M3GKJBXEBHB6ZA48J7VG8Z8W, требование
+# 1); импорт сюда сохраняет прежнее имя `test_integrity.
+# TEST_WEAKENING_MANDATE_MARKER` рабочим для `fsm_advance` и тестов.
+from .mandate import (TEST_WEAKENING_MANDATE_MARKER, elements,
+                      in_weakening_scope)
+from .zones import _answer_commit_is_role_step_autocommit
 
 # Именованное действие отказа — общее для перехода и для эскалации на
 # гейте мержа (требования 6-7, AC-1/AC-12). Префикс «переход отклонён» —
@@ -37,12 +43,6 @@ TEST_INTEGRITY_REFUSAL_ACTION = "переход отклонён: гейт не�
 # остаться видимыми — иначе Оператор на приёмке не узнает, что прошло по
 # его разрешению.
 TEST_INTEGRITY_ALLOWED_ACTION = "ослабление тестов разрешено мандатом Оператора"
-
-# Маркер мандата Оператора в `tasks/<id>/ANSWER-n.md` (требование 4) — по
-# образцу `_ZONES_MANDATE_MARKER` соседнего гейта зон: разбирается только
-# по этому префиксу и перечню через запятую, свободный текст ANSWER (в
-# том числе ссылка на основание) не анализируется.
-TEST_WEAKENING_MANDATE_MARKER = "Ослабление тестов разрешено:"
 
 
 class Finding(NamedTuple):
@@ -91,8 +91,14 @@ def _in_scope(path) -> bool:
     фильтре можно было бы удалить вне поля зрения рубежа. Файлы планок
     `tasks/*/acceptance_tests` под `tests/` не лежат и в область не входят
     — их держит лок планки (AC-5).
+
+    Сама формула живёт в `mandate.in_weakening_scope` — общий узел с
+    проверкой элемента мандата при записи ответа (REVIEW итерация 1,
+    R1-F2): область гейта и правило годности элемента обязаны совпадать,
+    иначе элемент вида `tests/fixtures/data.json` записывается без отказа
+    и молча не срабатывает.
     """
-    return bool(path) and path.startswith("tests/") and path.endswith(".py")
+    return in_weakening_scope(path)
 
 
 def _pair(status: str, first: str, second):
@@ -218,7 +224,10 @@ def _answer_mandate(artifact_branch: str, task_id: str) -> dict:
     (`zones._answer_zones_mandate`), включая отказ засчитывать файл, чей
     последний коммит — доказанный автокоммит шага роли: иначе developer
     выписал бы себе разрешение сам, положив ANSWER-n.md в собственный
-    `tasks/<id>/` прямо в шаге `in_dev` (AC-9)."""
+    `tasks/<id>/` прямо в шаге `in_dev` (AC-9). Саму строку разбирает общий
+    узел `mandate.elements` (SPEC 01M3GKJBXEBHB6ZA48J7VG8Z8W, требование
+    1) — тот же, что и у мандата зон, на том же правиле `startswith` и том
+    же делении по запятым."""
     paths = gitcmd.ls_tree_files(artifact_branch, f"tasks/{task_id}") or []
     mandate: dict = {}
     for p in sorted(paths):
@@ -231,12 +240,8 @@ def _answer_mandate(artifact_branch: str, task_id: str) -> dict:
         if text is None:
             continue
         for line in text.splitlines():
-            line = line.strip()
-            if not line.startswith(TEST_WEAKENING_MANDATE_MARKER):
-                continue
-            allowed = _split_zone_paths(
-                line[len(TEST_WEAKENING_MANDATE_MARKER):])
-            for element in allowed:
+            allowed = elements(line, TEST_WEAKENING_MANDATE_MARKER)
+            for element in allowed or ():
                 mandate.setdefault(element, name[:-len(".md")])
     return mandate
 
