@@ -239,6 +239,53 @@ def _print_new_calibration_hint(conn, task_id: str, tz_raw: str) -> None:
         print(f"[{task_id}] ВНИМАНИЕ: {warning}")
 
 
+# Фиксированный текст действия журнала (SPEC 01M3GKJ84XM5QPC6TK5EE307Q9,
+# требование 2): читатель журнала и тест находят запись по ДЕЙСТВИЮ, а не
+# по вариативному detail (тот несёт конкретные id, состояния и пути).
+ZONE_OVERLAP_ACTION = "пересечение зон при заведении"
+
+
+def _tz_zone_paths(tz_raw: str) -> set[str]:
+    """Пути строки `Зоны:` ТЗ — множеством, без путей, покрытых
+    `config.COMMON_ZONES` (`zone_lock._own_paths`). Разбор — ТОТ ЖЕ, что у
+    существующей сверки путей ТЗ (`_tz_path_check`): один `_tz_sections` +
+    `guard.zone_items` на обе проверки одной команды, иначе перенос строки
+    `Зоны:` или следующая метка-раздел разошлись бы между ними."""
+    zones_text, _ = _tz_sections(tz_raw, (_TZ_ZONES_LABEL,))
+    return zone_lock._own_paths(",".join(guard.zone_items(zones_text)))
+
+
+def _zone_overlap_warning_text(matches: list) -> str:
+    """Текст предупреждения `new` о пересечении зон (требование 2): по
+    строке на пересекающуюся задачу — общий путь, её id и состояние."""
+    lines = ["ВНИМАНИЕ: зоны ТЗ пересекаются с задачами в полёте — "
+            "задача встанет в очередь замка зон:"]
+    lines += [f"  {path} — {task_id} ({state})" for path, task_id, state in matches]
+    return "\n".join(lines)
+
+
+def _warn_zone_overlap(conn, task_id: str, tz_raw: str) -> None:
+    """Предупреждение о пересечении зон ТЗ с зонами задач в полёте (SPEC
+    01M3GKJ84XM5QPC6TK5EE307Q9, требования 1-2): печатается и
+    журналируется ПОСЛЕ заведения строки задачи, тем же приёмом, что
+    подсказка калибровки выше, и отказом НЕ становится — задача заведена,
+    код возврата `new` тот же, что без пересечения.
+
+    Набор состояний — `zone_lock.FORECAST_STATES` (занимающие плюс те, что
+    займут зону позже); признак «занимает зону» (`zone_lock._occupies`) не
+    применяется: это прогноз будущей очереди, а не отказ входа в `in_dev`.
+    """
+    matches = zone_lock.forecast_overlaps(conn, _tz_zone_paths(tz_raw),
+                                          exclude_task_id=task_id)
+    if not matches:
+        return
+    warning = _zone_overlap_warning_text(matches)
+    store.journal(conn, task_id, "operator", ZONE_OVERLAP_ACTION,
+                 "; ".join(f"{path}: {other} ({state})"
+                           for path, other, state in matches))
+    print(f"[{task_id}] {warning}")
+
+
 def _pin_divergence_warning_text(commits: list) -> str:
     """Текст предупреждения `cmd_new` о непушенных коммитах главной
     копии (SPEC 01M297HFSKV3GVZJ9YF20FZEZE, требование 3, AC-7): sha (7
@@ -348,6 +395,7 @@ def cmd_new(title: str, tz_path: str | None = None, *,
     _warn_pin_divergence(conn, task_id)
     if tz_raw is not None:
         _print_new_calibration_hint(conn, task_id, tz_raw)
+        _warn_zone_overlap(conn, task_id, tz_raw)
     if tz_path is not None:
         print(f"  затем: artel.py run {task_id}  (запуск analyst)")
     else:
@@ -494,6 +542,30 @@ def _zone_wait_suffix(conn, t) -> str:
             f"{queue}{waited}]")
 
 
+def _zone_forecast_suffix(conn, t) -> str:
+    """Добавка «зона занята: <id>» строке задачи ДО `in_dev` (SPEC
+    01M3GKJ84XM5QPC6TK5EE307Q9, требование 3) — тем же приёмом добавки в
+    конец строки, что `_lease_holder_suffix`/`_zone_wait_suffix`.
+
+    Только три состояния `zone_lock.LATER_STATES`: задача в `in_dev` этой
+    добавки не получает — её ожидание зоны уже печатает `_zone_wait_suffix`
+    по `zone_lock.blocking_conflict` (держатель, очередь, минуты), и
+    поведение того суффикса не меняется. Кандидаты — только
+    `zone_lock.BLOCKING_STATES`: «занята» обещает занявшего зону, не
+    будущего конкурента из того же набора `LATER_STATES`."""
+    if t["state"] not in zone_lock.LATER_STATES:
+        return ""
+    if (t["target"] or config.DEFAULT_TARGET) != config.DEFAULT_TARGET:
+        return ""
+    matches = zone_lock.forecast_overlaps(
+        conn, zone_lock.task_zone_paths(t), exclude_task_id=t["id"],
+        states=zone_lock.BLOCKING_STATES)
+    if not matches:
+        return ""
+    holders = sorted({task_id for _, task_id, _ in matches})
+    return f"  [зона занята: {', '.join(holders)}]"
+
+
 def _wave_breaker_suffix(t, wave_breaker_open: bool) -> str:
     """Пометка стоп-крана волны (01M1THKRK8HPXA7Y2SRB0RFTN2, требование
     4): ДОБАВКОЙ в конец строки, тем же приёмом, что и `_lease_holder_
@@ -572,7 +644,7 @@ def cmd_status() -> None:
         # Оператору, не роли внутри промпта шага.
         mark = "  [canary]" if r["is_canary"] else ""
         holder = _lease_holder_suffix(conn, r["id"])
-        zone = _zone_wait_suffix(conn, r)
+        zone = _zone_wait_suffix(conn, r) + _zone_forecast_suffix(conn, r)
         merge_wait = merge_queue.wait_suffix(conn, r)
         wave_breaker = _wave_breaker_suffix(r, wave_breaker_open)
         division = _division_suffix(rows, r)

@@ -105,6 +105,20 @@ from . import config, store
 BLOCKING_STATES = ("in_dev", "review", "verifying", "acceptance",
                    "merge_gate", "escalated")
 
+# Состояния, которые зону ещё НЕ занимают, но займут позже (SPEC
+# 01M3GKJ84XM5QPC6TK5EE307Q9, требование 1): задача, чей SPEC пишется или
+# чья планка приёмки пишется, до `in_dev` ещё не дошла — но дойдёт, и
+# пересечение её зоны с чужой видно уже сейчас. `done`/`killed` в набор
+# не входят: они не займут зону никогда.
+LATER_STATES = ("spec_writing", "spec_gate", "tests_writing")
+
+# Набор состояний ПРОГНОЗА очереди зон (требование 1): занимающие плюс
+# те, что займут позже. Прогноз — не отказ: `_occupies` (старт шага
+# разработчика) к кандидатам этого набора НЕ применяется, членства в
+# состоянии достаточно. Отказ на входе в `in_dev` считает
+# `blocking_conflict` по-прежнему своим, более строгим признаком.
+FORECAST_STATES = BLOCKING_STATES + LATER_STATES
+
 # Actor/action журнала отказа `run`/`auto` по занятости зоны (требования
 # 2-3): `auto._run_zone_wait_refusal` ищет это действие буквально, тем же
 # приёмом, что `auto._run_paused_refusal` ищет `pause.REFUSAL_ACTION` —
@@ -251,6 +265,54 @@ def _shared_zone(own: set[str], other: set[str]) -> str | None:
     if not matches:
         return None
     return sorted(matches)[0]
+
+
+def task_zone_paths(row) -> set[str]:
+    """Зоны строки задачи — объединение `zones` и `zones_extension`
+    (SPEC 01M3GKJ84XM5QPC6TK5EE307Q9, требование 1), без путей, покрытых
+    `config.COMMON_ZONES`: тот же `_own_paths`, которым считает свои зоны
+    `blocking_conflict` (он читает только `zones` — расширение зоны
+    появляется уже ПОСЛЕ входа в `in_dev`, где его отказ неактуален, а
+    прогноз обязан видеть и его)."""
+    raw = ",".join(p for p in (row["zones"], row["zones_extension"]) if p)
+    return _own_paths(raw)
+
+
+def forecast_overlaps(conn, own: set[str], *, exclude_task_id: str | None = None,
+                      states=FORECAST_STATES) -> list[tuple[str, str, str]]:
+    """Список `(общий путь, id задачи, её состояние)` — пересечения `own` с
+    зонами задач основного target'а, чьё состояние входит в `states`
+    (SPEC 01M3GKJ84XM5QPC6TK5EE307Q9, требования 1 и 3). Отсортирован для
+    детерминизма вывода и журнала.
+
+    Это ПРОГНОЗ очереди, не отказ: `_occupies` (старт шага разработчика,
+    граница текущего пребывания) здесь не применяется — задача, которая
+    зону ещё не начала занимать, в прогноз всё равно попадает, потому что
+    займёт её позже. Тем же прогноз отличается от `blocking_conflict`,
+    отвечающего на вопрос «можно ли стартовать прямо сейчас».
+
+    `states` — параметр, а не константа: `new` спрашивает про весь
+    `FORECAST_STATES` (требование 1), а добавка `status` — только про
+    `BLOCKING_STATES` (требование 3: «зона занята» обещает занявшего, не
+    будущего конкурента).
+
+    Способ сверки — тот же, что у отказа (`_own_paths`/`_shared_zone`/
+    `_paths_overlap`): вложенность файл/каталог учитывается, пути,
+    покрытые `config.COMMON_ZONES`, из сверки выпадают вместе с ними."""
+    if not own:
+        return []
+    matches = []
+    for row in store.all_tasks(conn):
+        if row["id"] == exclude_task_id:
+            continue
+        if (row["target"] or config.DEFAULT_TARGET) != config.DEFAULT_TARGET:
+            continue
+        if row["state"] not in states:
+            continue
+        shared = _shared_zone(own, task_zone_paths(row))
+        if shared is not None:
+            matches.append((shared, row["id"], row["state"]))
+    return sorted(matches)
 
 
 def _stay_since_id(conn, task_id: str) -> int:
