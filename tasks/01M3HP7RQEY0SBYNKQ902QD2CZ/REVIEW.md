@@ -143,11 +143,63 @@ schema_version: 5
 
 | id | статус | файл/строка | суть | последствие | решение |
 |---|---|---|---|---|---|
-| R1-F1 | open | tests/test_roles_map_fixture.py:253 (+ tests/sandbox.py:194) | возвращённое покрытие боевой карты не проверяет состав ролей и их `executor`; ассерт про боевую карту в tests/test_doctor_agent_roles.py:125 теперь проверяет фикстуру | переименование/удаление роли или `executor: none` в боевом `roles.yaml` проходит зелёным CI (проверено: 165 passed и 92 passed на ветке против названного FAILED на базе), отказ приходит Оператору на первом шаге роли | дополнить `LiveRolesMapConsistencyTest` односторонней сверкой: каждая роль, которую запускает пульт (`FIXTURE_ROLES` либо `config.STATE_ROLE` + analyst), описана в боевой карте с тем же `executor`; одним ассертом верхнего уровня |
-| R1-F2 | open | tests/test_doctor.py:216; tests/test_providers.py:408; tests/test_providers.py:452; tests/test_providers_codex.py:674 | четыре подмены карты сценария кладут текст, уже стоящий в `config.ROLES` после `use_role_map()` — пустые операции (проверено снятием: 214 passed) | докстринги обещают управление картой, которого нет; следующий автор правит мёртвые строки | снять подмены (докстринг сослать на общую фикстуру) либо объяснить комментарием, зачем дубль сохранён |
-| R1-F3 | open | tests/sandbox.py:917 | `use_role_map` восстанавливает `config.ROLES` патчем, но содержимое локального слоя перезаписывает без откатa | в классе, не патчящем `MODELS_LOCAL` (tests/test_doctor.py:2445), первый вызов с `tiers=` переконфигурирует процессный слой всем следующим тестам | восстанавливать прежний текст слоя `addCleanup`'ом либо патчить `config.MODELS_LOCAL` в свой каталог |
-| R1-F4 | open | tests/sandbox.py:182; tests/sandbox.py:269 | `FIXTURE_TIER_MODEL` — второй источник «модели яруса» рядом с шаблоном слоя, против довода собственного докстринга (строка 251) | модель шаблона сменили и старую сняли из каталога — все сценарии с `tiers=` краснеют строкой `model-<роль>` мимо предмета | выводить значение из шаблона (`models.local_template_layer().tiers[FIXTURE_TIER]`), как делает `acceptance_tests/_util.py::template_tier_model` |
-| R1-F5 | open | tests/sandbox.py:88-91 | комментарий `ALL_CONFIG_ATTRS` называет `ROLES` примером неподменяемого пути, хотя модуль уводит его на весь процесс и посценарно | автор следующей песочницы будет считать `config.ROLES` настоящим файлом репозитория | поправить довод в комментарии, назвав, где и почему `ROLES` подменяется |
+| R1-F1 | fixed | tests/test_roles_map_fixture.py:253 (+ tests/sandbox.py:194) | возвращённое покрытие боевой карты не проверяет состав ролей и их `executor`; ассерт про боевую карту в tests/test_doctor_agent_roles.py:125 теперь проверяет фикстуру | переименование/удаление роли или `executor: none` в боевом `roles.yaml` проходит зелёным CI (проверено: 165 passed и 92 passed на ветке против названного FAILED на базе), отказ приходит Оператору на первом шаге роли | дополнить `LiveRolesMapConsistencyTest` односторонней сверкой: каждая роль, которую запускает пульт (`FIXTURE_ROLES` либо `config.STATE_ROLE` + analyst), описана в боевой карте с тем же `executor`; одним ассертом верхнего уровня |
+| R1-F2 | fixed | tests/test_doctor.py:216; tests/test_providers.py:408; tests/test_providers.py:452; tests/test_providers_codex.py:674 | четыре подмены карты сценария кладут текст, уже стоящий в `config.ROLES` после `use_role_map()` — пустые операции (проверено снятием: 214 passed) | докстринги обещают управление картой, которого нет; следующий автор правит мёртвые строки | снять подмены (докстринг сослать на общую фикстуру) либо объяснить комментарием, зачем дубль сохранён |
+| R1-F3 | fixed | tests/sandbox.py:917 | `use_role_map` восстанавливает `config.ROLES` патчем, но содержимое локального слоя перезаписывает без откатa | в классе, не патчящем `MODELS_LOCAL` (tests/test_doctor.py:2445), первый вызов с `tiers=` переконфигурирует процессный слой всем следующим тестам | восстанавливать прежний текст слоя `addCleanup`'ом либо патчить `config.MODELS_LOCAL` в свой каталог |
+| R1-F4 | fixed | tests/sandbox.py:182; tests/sandbox.py:269 | `FIXTURE_TIER_MODEL` — второй источник «модели яруса» рядом с шаблоном слоя, против довода собственного докстринга (строка 251) | модель шаблона сменили и старую сняли из каталога — все сценарии с `tiers=` краснеют строкой `model-<роль>` мимо предмета | выводить значение из шаблона (`models.local_template_layer().tiers[FIXTURE_TIER]`), как делает `acceptance_tests/_util.py::template_tier_model` |
+| R1-F5 | fixed | tests/sandbox.py:88-91 | комментарий `ALL_CONFIG_ATTRS` называет `ROLES` примером неподменяемого пути, хотя модуль уводит его на весь процесс и посценарно | автор следующей песочницы будет считать `config.ROLES` настоящим файлом репозитория | поправить довод в комментарии, назвав, где и почему `ROLES` подменяется |
+
+## Разметка разработчика, итерация 1 -> 2
+
+- **R1-F1 — fixed.** `LiveRolesMapConsistencyTest` получил второй метод
+  `test_the_live_map_describes_every_role_the_pult_and_the_fixture_know`
+  (`tests/test_roles_map_fixture.py`): `expected_executors()` собирает
+  {роль -> ожидаемый `executor`} из двух источников — сначала
+  `PULT_AGENT_ROLES` (`config.STATE_ROLE.values()` плюс `analyst`, особый
+  случай `spec_writing` в `runner.step_role`) с требованием `agent`,
+  затем `setdefault` остальными ролями `FIXTURE_ROLES` с их `executor`.
+  Порядок именно такой, чтобы правка `FIXTURE_ROLES` на `executor: none`
+  не обнулила заодно и проверку боевого файла. Сверка односторонняя (⊆):
+  добавленная Оператором роль теста не красит. Один ассерт верхнего
+  уровня по списку `problems`, как и у соседнего метода. Проверено
+  поведением — правкой боевого `roles.yaml` на месте с восстановлением:
+  `analyst` -> `analitik` (rc 1, FAILED названный), `analyst` с
+  `executor: none` (rc 1), `verifier` с `executor: agent` (rc 1, красят
+  оба метода класса); `git status -- roles.yaml` после прогона чистый.
+- **R1-F2 — fixed.** Сняты все четыре пустые подмены: `setUp`
+  `DoctorCommandTest` (`tests/test_doctor.py`) целиком, два вызова
+  `use_roles_yaml(SANDBOX_ROLES_TEXT)` (`tests/test_providers.py`) и
+  запись с `self.patch(config, "ROLES", ...)` в
+  `tests/test_providers_codex.py`. Докстринги теперь называют источник
+  карты (общая фикстура песочницы) и причину, по которой своей подмены
+  нет. Неиспользуемые импорты `SANDBOX_ROLES_TEXT` убраны из трёх файлов.
+  Ассерты не тронуты: те же файлы — 240 passed.
+- **R1-F3 — fixed.** `use_role_map` (`tests/sandbox.py`) запоминает
+  прежний текст `config.MODELS_LOCAL` (либо его отсутствие) и
+  восстанавливает его `addCleanup(_restore_file, ...)`. Ловушку сторожит
+  новый `SandboxLayerRestoreTest`: он гоняет `_LayerUnpatchedSandbox`
+  (весь `ALL_CONFIG_ATTRS`, КРОМЕ `MODELS_LOCAL`), тот внутри зовёт
+  `use_role_map(tiers=...)`, и тест сверяет текст процессного слоя до и
+  после плюс контроль вырожденности «сценарий слой действительно
+  двигал». Проверено снятием `addCleanup`: FAILED именно этот тест.
+- **R1-F4 — fixed.** `FIXTURE_TIER_MODEL` считается
+  `_fixture_tier_model()` из `models.local_template_layer().tiers[
+  FIXTURE_TIER]` — тем же способом и по тому же доводу, что
+  `acceptance_tests/_util.py::template_tier_model`; шаблон без этого
+  яруса отказывает читаемым `RuntimeError` при импорте, а не молчит.
+  Литерала имени модели в `tests/sandbox.py` не осталось.
+- **R1-F5 — fixed.** Комментарий `ALL_CONFIG_ATTRS` больше не приводит
+  `ROLES` доводом «от сценария к сценарию не меняется»; вместо этого он
+  называет обратное — карта меняется, модуль уводит `config.ROLES` на
+  фикстуру на весь процесс, сценарию её выдаёт `use_role_map`, — и
+  объясняет, почему `ROLES` не в `PATCHED_ATTRS` (путь живёт в общем
+  каталоге фикстуры процесса, а не в tmp-корне теста).
+
+Побочное следствие R1-F2: `tests/test_doctor.py` перестал называть
+`config.ROLES` и потому выбыл из МАШИННОГО перечня читателей боевой карты
+(20 файлов вместо 21). Пункт о нём в PLAN.md оставлен как история
+зависимости — перечень от этого шире машинного, а не уже, и AC-1 сверяет
+только отсутствующие пункты.
 
 ## Вердикт
 

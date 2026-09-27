@@ -43,9 +43,20 @@ schema_version: 5
 согласованность проверялась СЛУЧАЙНО — несогласованная правка красила
 чужие тесты. С фикстурой это покрытие исчезает, и его нужно вернуть явно,
 иначе задача сделала бы систему слабее (принцип целостности). Его несёт
-`LiveRolesMapConsistencyTest` нового файла: у каждой agent-роли боевой
-карты ярус из перечня `models.TIERS`, провайдер из реестра
-`orchestrator/providers/` и скилы, которым есть файлы в `skills/`.
+`LiveRolesMapConsistencyTest` нового файла, двумя методами:
+
+- поля описанных ролей — у каждой agent-роли боевой карты ярус из перечня
+  `models.TIERS`, провайдер из реестра `orchestrator/providers/` и скилы,
+  которым есть файлы в `skills/`;
+- САМ СОСТАВ карты и `executor` каждой роли — каждая роль, которую пульт
+  запускает шагом (`config.STATE_ROLE` плюс особый случай `spec_writing`
+  -> `analyst` из `runner.step_role`), описана в боевом файле agent-ролью,
+  а каждая роль фикстуры стоит там с тем же `executor`. Односторонне (⊆):
+  роль, добавленная Оператором, теста не красит.
+
+Вторая половина — правка итерации 2 по замечанию R1-F1: без неё
+переименование роли, её удаление из карты и `executor: none` проходили
+зелёным CI, хотя до фикстуры их ловил набор.
 
 ### Цена класса до правки
 
@@ -74,6 +85,12 @@ schema_version: 5
 текстом. Итого 21 файл. `tests/sandbox.py` пунктом не идёт: перечень — о
 тестах, а песочница их общая обвязка.
 
+После итерации 2 (R1-F2 — снятие четырёх пустых подмен карты)
+`tests/test_doctor.py` не называет ни `config.ROLES`, ни адреса карты
+литералом, то есть из машинного перечня выбывает: его пункт остаётся в
+списке ниже как ИСТОРИЯ зависимости — перечень от этого только шире
+машинного, а не уже. Машинный перечень сегодня — 20 файлов.
+
 Графа «поля» читается так: сначала поля боевого файла, от которых исход
 зависел ДО правки, затем состояние после неё.
 
@@ -84,7 +101,7 @@ schema_version: 5
 - tests/test_canary_sets.py — поля: ни одного до и после — карта сценария своя, в tmp-корне (`self.use("ROLES", ...)`), боевой файл не читается; в перечне из-за литерала адреса — предмет карты: нет
 - tests/test_ci_protected_paths.py — поля: ни одного до и после — адрес карты живёт литералом в синтетическом исходнике списка защищённых путей — предмет карты: нет
 - tests/test_doc_commit.py — поля: ни одного до и после — `roles.yaml`/`models.yaml` тут имена путей в `DOC_COMMIT_CONFIG_PATHS`, содержимое своё — предмет карты: нет
-- tests/test_doctor.py — поля: до правки состав ролей и model_tier (перечень ролей предполёта; `provider:` снимался помощником); после — ни одного — предмет карты: нет
+- tests/test_doctor.py — поля: до правки состав ролей и model_tier (перечень ролей предполёта; `provider:` снимался помощником); после — ни одного, и с итерации 2 файл выбыл из машинного перечня вовсе — предмет карты: нет
 - tests/test_doctor_agent_roles.py — поля: до правки состав ролей, executor, provider, model_tier (предмет — сам перечень agent-ролей предполёта); после — ни одного — предмет карты: нет
 - tests/test_guard_zones.py — поля: ни одного до и после — адрес карты стоит литералом в наборе защищённых зон — предмет карты: нет
 - tests/test_model_tariffs.py — поля: ни одного до и после — локальный слой пишет свой, адрес каталога — литерал в списке защищённых путей — предмет карты: нет
@@ -101,7 +118,7 @@ schema_version: 5
 
 **Предмет теста — сама боевая карта: остаются на боевом файле**
 
-- tests/test_roles_map_fixture.py — поля: model_tier, provider, skills каждой agent-роли — сверяет их с `models.TIERS`, с реестром `orchestrator/providers/` и с файлами `skills/`, поэтому ДОЛЖЕН краснеть от несогласованной правки; адресует файл путём репозитория, а не `config.ROLES` — предмет карты: да
+- tests/test_roles_map_fixture.py — поля: model_tier, provider, skills каждой agent-роли ПЛЮС состав карты и `executor` каждой роли — сверяет их с `models.TIERS`, с реестром `orchestrator/providers/`, с файлами `skills/` и с составом, который запускает пульт (`config.STATE_ROLE` + analyst, `FIXTURE_ROLES`), поэтому ДОЛЖЕН краснеть от несогласованной правки; адресует файл путём репозитория, а не `config.ROLES` — предмет карты: да
 - tests/test_yaml_parsing.py — поля: формат файла, наличие роли developer, `token_fallback` — разбирает боевой файл потому, что боевой файл и есть его предмет — предмет карты: да
 
 ## Шаги
@@ -126,6 +143,25 @@ schema_version: 5
    (analyst на Codex, отдельный ярус с моделью Codex) — рабочая
    конфигурация. Плюс `LiveRolesMapConsistencyTest` — возвращённое явно
    покрытие согласованности боевой карты.
+4. Замечания ревью итерации 1 (R1-F1 — R1-F5), одной итерацией:
+   - R1-F1: `LiveRolesMapConsistencyTest` получает ВТОРУЮ половину
+     возвращённого покрытия — сверку СОСТАВА боевой карты и `executor`
+     каждой её роли с тем, что запускает пульт
+     (`config.STATE_ROLE` + `analyst`) и что знает фикстура
+     (`FIXTURE_ROLES`). Сверка односторонняя (⊆): роль, ДОБАВЛЕННАЯ
+     Оператором, теста не красит.
+   - R1-F2: четыре подмены карты сценария, ставшие пустыми
+     (`tests/test_doctor.py`, `tests/test_providers.py` — две,
+     `tests/test_providers_codex.py`), сняты; докстринги вместо обещания
+     управления картой ссылаются на общую фикстуру.
+   - R1-F3: `use_role_map` возвращает прежнее СОДЕРЖИМОЕ локального слоя
+     `addCleanup`'ом; ловушку сторожит новый `SandboxLayerRestoreTest`.
+   - R1-F4: `FIXTURE_TIER_MODEL` выводится из шаблона слоя
+     (`models.local_template_layer().tiers[FIXTURE_TIER]`), а не литералом
+     — второй крутилки «модель яруса» не остаётся.
+   - R1-F5: комментарий `ALL_CONFIG_ATTRS` больше не называет `ROLES`
+     примером неподменяемого пути и объясняет, где и почему он
+     подменяется.
 
 ## Покрытие требований
 
@@ -133,10 +169,10 @@ schema_version: 5
 |---|---|
 | 1 | секция «Перечень тестов `tests/`, читающих боевую карту» |
 | 2 | 1, 2 |
-| 3 | 1, 2 |
-| 4 | 3 (`LiveRolesMapConsistencyTest`) + перечень, второй список |
+| 3 | 1, 2, 4 (R1-F3, R1-F4) |
+| 4 | 3 + 4 (`LiveRolesMapConsistencyTest`, оба метода) + перечень, второй список |
 | 5 | 3 (`Ac7MapAcceptedTest`) |
-| 6 | 1–3 (ни один тестовый метод не удалён и не переименован) |
+| 6 | 1–4 (ни один тестовый метод не удалён и не переименован) |
 
 ## Влияние на систему
 
@@ -155,21 +191,36 @@ schema_version: 5
   `tests/test_invariants.py` и `docs/invariants.md` не тронуты — прогон
   `tests/test_invariants.py` зелёный.
 - Покрытие согласованности боевой карты, ранее случайное, становится
-  явным и адресным (`LiveRolesMapConsistencyTest`). Проверено поведением:
-  на карте с ярусом вне перечня, несуществующим скилом и
-  незарегистрированным провайдером этот тест краснеет строкой `FAILED`.
+  явным и адресным (`LiveRolesMapConsistencyTest`) — и покрывает ОБЕ
+  половины прежнего случайного покрытия: поля описанных ролей и сам
+  состав карты вместе с `executor` каждой роли. Вторая половина добавлена
+  итерацией 2 (R1-F1): в итерации 1 её не было, и переименование роли,
+  удаление её из карты или `executor: none` проходили зелёным CI.
+  Проверено поведением, четырьмя правками боевого файла на месте с
+  восстановлением: ярус вне перечня + несуществующий скил +
+  незарегистрированный провайдер краснят
+  `test_every_agent_role_of_the_live_map_is_runnable_as_written`;
+  `analyst` -> `analitik`, `analyst` с `executor: none` и `verifier` с
+  `executor: agent` краснят
+  `test_the_live_map_describes_every_role_the_pult_and_the_fixture_know`
+  — каждый случай строкой `FAILED` с именем теста, rc 1.
 - Гейт неослабления тестов: тестовые методы только добавляются (новый
-  файл — 6 методов), ни один не удалён и не переименован; число методов в
-  каждом изменённом файле не уменьшилось.
+  файл — 8 методов: 6 итерации 1 плюс два итерации 2), ни один не удалён
+  и не переименован; число методов в каждом изменённом файле не
+  уменьшилось. Снятые итерацией 2 пустые подмены карты (R1-F2) —
+  строки внутри тел тестов и `setUp`, не методы: ни одного ассерта они не
+  уносят, что подтверждено прогоном тех же файлов (240 passed).
 
 Откат — revert одного merge-коммита: правка целиком лежит в `tests/`,
 внешних поверхностей (схема БД, вывод команд, журнал, алерты) не
 касается.
 
-Прогоны в шаге (передний план, явный таймаут; полный набор гоняет CI):
-`tests/test_roles_map_fixture.py`, `tests/test_runner_role_model.py`,
-`tests/test_stack_optional_tools.py`, `tests/test_stack_roles_tier_spread.py`
-(32 passed); `tests/test_doctor.py`, `tests/test_providers.py`,
+Прогоны в шаге (передний план, явный таймаут; полный набор гоняет CI).
+
+Итерация 1: `tests/test_roles_map_fixture.py`,
+`tests/test_runner_role_model.py`, `tests/test_stack_optional_tools.py`,
+`tests/test_stack_roles_tier_spread.py` (32 passed);
+`tests/test_doctor.py`, `tests/test_providers.py`,
 `tests/test_providers_codex.py`, `tests/test_analyst_role.py` (240 passed);
 `tests/test_models.py`, `tests/test_models_doctor.py`, `tests/test_stack.py`,
 `tests/test_canary_sets.py`, `tests/test_doctor_agent_roles.py`,
@@ -179,15 +230,35 @@ schema_version: 5
 `tests/test_ci_protected_paths.py`, `tests/test_doc_commit.py`,
 `tests/test_invariants.py`, `tests/test_sandbox.py` (162 passed).
 
+Итерация 2 (после правок R1-F1 — R1-F5):
+`tests/test_roles_map_fixture.py`, `tests/test_runner_role_model.py`,
+`tests/test_stack_optional_tools.py`, `tests/test_stack_roles_tier_spread.py`,
+`tests/test_sandbox.py` (46 passed); `tests/test_doctor.py`,
+`tests/test_providers.py`, `tests/test_providers_codex.py`,
+`tests/test_analyst_role.py` (240 passed); `tests/test_models.py`,
+`tests/test_models_doctor.py`, `tests/test_stack.py`,
+`tests/test_canary_sets.py`, `tests/test_doctor_agent_roles.py`,
+`tests/test_yaml_parsing.py`, `tests/test_runner_model_preflight.py`,
+`tests/test_agent_prompt.py`, `tests/test_invariants.py` (266 passed);
+`tests/test_roles_map_fixture.py`, `tests/test_invariants.py`,
+`tests/test_sandbox.py` после правки `PATCHED_ATTRS` нового класса
+(87 passed). Планка задачи целиком — 11 passed тремя прогонами
+(статические AC-1/AC-2/AC-6/AC-9 — 6 passed; AC-5/AC-7/AC-8 — 3 passed,
+23 с; AC-3/AC-4 — 2 passed, 147 с).
+
 ## Риски
 
 - Фикстура повторяет имена ролей и состав скилов сегодняшнего пульта.
   Если Оператор ЗАВЕДЁТ новую роль в FSM, фикстуру придётся дополнить —
   но это правка по составу ролей, а не по их полям, и она видна отказом
-  названного теста, а не случайной краснотой чужого.
-- `FIXTURE_TIER_MODEL` — литерал имени модели. Он обязан оставаться
-  моделью провайдера по умолчанию из каталога; сверку с каталогом несут
-  сценарии, доходящие до разрешения цепочки роли.
+  названного теста (`test_the_live_map_describes_every_role_the_pult_and_
+  the_fixture_know` — он читает `config.STATE_ROLE`, то есть новую роль
+  FSM увидит сразу), а не случайной краснотой чужого.
+- `FIXTURE_TIER_MODEL` с итерации 2 не литерал, а значение шаблона
+  локального слоя (`models.local_template_layer().tiers[FIXTURE_TIER]`):
+  вторая крутилка «модель яруса по умолчанию» снята (R1-F4). Остаточный
+  риск — шаблон без яруса `FIXTURE_TIER`: он отказывает читаемым
+  `RuntimeError` при импорте песочницы, а не молчит.
 
 ## Предложения системе
 
