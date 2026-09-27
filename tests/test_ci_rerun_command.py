@@ -1,5 +1,10 @@
-"""Юнит-тесты команды `ci-rerun` (`orchestrator/fsm.py`, SPEC
+"""Юнит-тесты команды `ci-rerun` (`orchestrator/ci_rerun.py`, SPEC
 01M3F7C2DVYCEANQ8CF1FCSD87).
+
+Команда переехала из `orchestrator/fsm.py` в собственный модуль (SPEC
+01M3H3T8RKTVKTJJYEAGW19BPS) — здесь от этого изменились только импорты
+и пути подмен. `fsm` остаётся адресом двух имён, которые команда
+по-прежнему берёт оттуда: `VERIFYING_STATUS_ACTION` и `_origin_main_sha`.
 
 Приёмочная планка задачи разыгрывает двенадцать критериев на живом
 `ci.verifying_status`/`ci.trigger_rerun` с подменённым `gh`. Здесь — углы,
@@ -21,7 +26,7 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from orchestrator import ci, fsm, store  # noqa: E402
+from orchestrator import ci, ci_rerun, fsm, store  # noqa: E402
 from tests import sandbox  # noqa: E402
 
 HEAD = "1111aaaa" + "0" * 32
@@ -35,6 +40,23 @@ def red_note(sha: str) -> str:
     """`note` красного исхода в той форме, в которой её пишет
     `ci.verifying_status` (`short = sha[:8]`)."""
     return f"CI коммита {sha[:8]} не зелёный: python=failure"
+
+
+class AliasIdentityTest(unittest.TestCase):
+    """Алиас прежнего публичного имени в `orchestrator/fsm.py` (SPEC
+    01M3H3T8RKTVKTJJYEAGW19BPS, требование 3) — на одну волну."""
+
+    def test_fsm_alias_points_at_the_new_module_function(self):
+        """`fsm.cmd_ci_rerun` — ТОТ ЖЕ объект, что `ci_rerun.cmd_ci_rerun`.
+
+        Ловит мутацию: алиас подменён обёрткой
+        (`def cmd_ci_rerun(*a): return ci_rerun.cmd_ci_rerun(*a)`) или
+        снят раньше срока — подмена `mock.patch.object(fsm,
+        "cmd_ci_rerun", …)` во внешнем коде перестала бы перехватывать
+        настоящую команду, и тест покраснеет на `assertIs`/`hasattr`.
+        """
+        self.assertTrue(hasattr(fsm, "cmd_ci_rerun"))
+        self.assertIs(fsm.cmd_ci_rerun, ci_rerun.cmd_ci_rerun)
 
 
 class JournalReadsTest(unittest.TestCase):
@@ -59,7 +81,7 @@ class JournalReadsTest(unittest.TestCase):
             {"action": fsm.VERIFYING_STATUS_ACTION, "detail": red_note(HEAD)},
         ]
         with self.steps(rows):
-            self.assertEqual(fsm._last_red_status_sha(None, "T001"), HEAD[:8])
+            self.assertEqual(ci_rerun._last_red_status_sha(None, "T001"), HEAD[:8])
 
     def test_non_red_status_records_are_skipped(self):
         """Зелёные/идущие записи того же action не считаются красными.
@@ -75,7 +97,7 @@ class JournalReadsTest(unittest.TestCase):
              "detail": f"CI коммита {OLD_HEAD[:8]} ещё идёт: python"},
         ]
         with self.steps(rows):
-            self.assertEqual(fsm._last_red_status_sha(None, "T001"), HEAD[:8])
+            self.assertEqual(ci_rerun._last_red_status_sha(None, "T001"), HEAD[:8])
 
     def test_no_red_record_at_all_is_an_empty_sha(self):
         """Красной записи нет вовсе — пустой sha, не выдуманный.
@@ -86,7 +108,7 @@ class JournalReadsTest(unittest.TestCase):
         """
         rows = [{"action": "state -> verifying", "detail": ""}]
         with self.steps(rows):
-            self.assertEqual(fsm._last_red_status_sha(None, "T001"), "")
+            self.assertEqual(ci_rerun._last_red_status_sha(None, "T001"), "")
 
     def test_multiline_reason_is_recovered_verbatim(self):
         """Многострочное основание достаётся из записи дословно.
@@ -97,11 +119,11 @@ class JournalReadsTest(unittest.TestCase):
         ошибочно отказывал бы (или наоборот проходил бы с тем же).
         """
         reason = "флейк сети:\n  job python, шаг pip install\n  второй абзац"
-        rows = [{"action": fsm.CI_RERUN_ACTION,
+        rows = [{"action": ci_rerun.CI_RERUN_ACTION,
                  "detail": f"ре-ран прогона {RUN_ID} запущен; исход ожидания: "
-                           f"нечто; {fsm.CI_RERUN_REASON_MARKER}{reason}"}]
+                           f"нечто; {ci_rerun.CI_RERUN_REASON_MARKER}{reason}"}]
         with self.steps(rows):
-            self.assertEqual(fsm._last_ci_rerun_reason(None, "T001"), reason)
+            self.assertEqual(ci_rerun._last_ci_rerun_reason(None, "T001"), reason)
 
     def test_refusal_records_are_not_read_as_performed_reruns(self):
         """Запись ОТКАЗА основанием прошлого повтора не считается.
@@ -111,11 +133,11 @@ class JournalReadsTest(unittest.TestCase):
         случившийся с тем же основанием, навсегда блокировал бы повтор,
         который ни разу не состоялся.
         """
-        rows = [{"action": fsm.CI_RERUN_REFUSED_ACTION,
+        rows = [{"action": ci_rerun.CI_RERUN_REFUSED_ACTION,
                  "detail": f"задача в состоянии in_dev; "
-                           f"{fsm.CI_RERUN_REASON_MARKER}{REASON}"}]
+                           f"{ci_rerun.CI_RERUN_REASON_MARKER}{REASON}"}]
         with self.steps(rows):
-            self.assertIsNone(fsm._last_ci_rerun_reason(None, "T001"))
+            self.assertIsNone(ci_rerun._last_ci_rerun_reason(None, "T001"))
 
 
 class OutcomeTableTest(unittest.TestCase):
@@ -141,12 +163,12 @@ class OutcomeTableTest(unittest.TestCase):
             return ci.VERIFYING_RED, red_note(HEAD)
 
         with mock.patch.object(ci, "verifying_status", spy):
-            text, answered = fsm._ci_rerun_outcome(
+            text, answered = ci_rerun._ci_rerun_outcome(
                 "task/t001-x", f"ре-ран прогона {RUN_ID} не запущен: boom")
 
         self.assertEqual(calls, [])
         self.assertFalse(answered)
-        self.assertIn(fsm.CI_RERUN_OUTCOME_UNKNOWN, text)
+        self.assertIn(ci_rerun.CI_RERUN_OUTCOME_UNKNOWN, text)
 
     def test_green_status_after_rerun_is_the_green_outcome(self):
         """Зелёный статус после повтора — исход «стал зелёным».
@@ -157,11 +179,11 @@ class OutcomeTableTest(unittest.TestCase):
         """
         note = f"CI коммита {HEAD[:8]} зелёный (2 проверок)"
         with self.status(ci.VERIFYING_GREEN, note):
-            text, answered = fsm._ci_rerun_outcome(
+            text, answered = ci_rerun._ci_rerun_outcome(
                 "task/t001-x", f"ре-ран прогона {RUN_ID} запущен, ожидание")
 
         self.assertTrue(answered)
-        self.assertIn(fsm.CI_RERUN_OUTCOME_GREEN, text)
+        self.assertIn(ci_rerun.CI_RERUN_OUTCOME_GREEN, text)
         self.assertIn(note, text)
 
     def test_red_status_after_rerun_is_the_red_again_outcome(self):
@@ -172,11 +194,11 @@ class OutcomeTableTest(unittest.TestCase):
         Оператор ждал бы результата, который уже есть.
         """
         with self.status(ci.VERIFYING_RED, red_note(HEAD)):
-            text, answered = fsm._ci_rerun_outcome(
+            text, answered = ci_rerun._ci_rerun_outcome(
                 "task/t001-x", f"ре-ран прогона {RUN_ID} запущен, ожидание")
 
         self.assertTrue(answered)
-        self.assertIn(fsm.CI_RERUN_OUTCOME_RED, text)
+        self.assertIn(ci_rerun.CI_RERUN_OUTCOME_RED, text)
 
     def test_unknown_and_running_statuses_are_both_unanswered(self):
         """«Проверок нет» и «проверки идут» — исход неизвестен, не зелёный.
@@ -188,12 +210,12 @@ class OutcomeTableTest(unittest.TestCase):
         for outcome in (ci.VERIFYING_NONE, ci.VERIFYING_RUNNING):
             with self.subTest(outcome=outcome):
                 with self.status(outcome, "что-то неопределённое"):
-                    text, answered = fsm._ci_rerun_outcome(
+                    text, answered = ci_rerun._ci_rerun_outcome(
                         "task/t001-x",
                         f"ре-ран прогона {RUN_ID} запущен, ожидание")
 
                 self.assertFalse(answered)
-                self.assertIn(fsm.CI_RERUN_OUTCOME_UNKNOWN, text)
+                self.assertIn(ci_rerun.CI_RERUN_OUTCOME_UNKNOWN, text)
 
 
 class CommandRefusalTest(sandbox.TaskSeededTmpRootTest):
@@ -245,7 +267,7 @@ class CommandRefusalTest(sandbox.TaskSeededTmpRootTest):
         """Всё, что команда сказала: stdout/stderr плюс текст именованного
         отказа. Любое другое исключение проходит наружу и валит тест."""
         try:
-            return self.capture(fsm.cmd_ci_rerun, self.TASK, reason)
+            return self.capture(ci_rerun.cmd_ci_rerun, self.TASK, reason)
         except SystemExit as exc:
             return str(exc)
 
@@ -297,12 +319,12 @@ class CommandRefusalTest(sandbox.TaskSeededTmpRootTest):
         self.run_command()
 
         rows = store.task_steps(store.db(), self.TASK)[before:]
-        records = [r for r in rows if r["action"] == fsm.CI_RERUN_ACTION]
+        records = [r for r in rows if r["action"] == ci_rerun.CI_RERUN_ACTION]
         self.assertEqual(self.trigger_calls, [self.BRANCH])
         self.assertEqual(len(records), 1)
         self.assertIn(REASON, records[0]["detail"])
         self.assertIn(RUN_ID, records[0]["detail"])
-        self.assertIn(fsm.CI_RERUN_OUTCOME_RED, records[0]["detail"])
+        self.assertIn(ci_rerun.CI_RERUN_OUTCOME_RED, records[0]["detail"])
         self.assertEqual(self.state(), "verifying")
 
     def test_second_rerun_with_the_same_reason_never_touches_gh(self):
