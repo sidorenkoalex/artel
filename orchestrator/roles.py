@@ -72,7 +72,8 @@ def skills(role: str) -> list[str]:
 
 
 def provider(role: str) -> str:
-    """Имя провайдера исполнителя роли (поле `provider:` в roles.yaml).
+    """Имя провайдера исполнителя роли (поле `provider:` в roles.yaml),
+    с приоритетом переопределения локального слоя пульта.
 
     Поле не задано — `providers.DEFAULT_PROVIDER` (`claude`), в отличие
     от `model()`, где отсутствие поля отдаёт `None`: провайдер обязан
@@ -80,6 +81,14 @@ def provider(role: str) -> str:
     (SPEC 01M2ZNTHSNFYSTF904P6SZTPYF, требование 3 — сам файл эта задача
     не меняет). Роль не описана либо значение не является непустой
     строкой — `RolesError`, тем же приёмом, что `skills()`/`model()`.
+
+    Переопределение слоя (`role_providers:`, SPEC
+    01M3FQ2Z2PY0E9T5F5WQ207NP5, требование 5) читается ПОСЛЕ записи роли:
+    нечитаемая карта исполнителей и роль вне карты остаются прежними
+    отказами с прежним текстом, слой замещает только уже разрешённое
+    ЗНАЧЕНИЕ. Порядок именно такой, потому что переопределение — канал
+    пробного прогона канарейки, а не способ описать роль, которой в карте
+    нет.
 
     Реестр импортируется лениво: `orchestrator/providers/` читается
     манифестом стека на пути импорта точки входа, и обычный импорт
@@ -89,6 +98,9 @@ def provider(role: str) -> str:
     entry = load().get(role)
     if not isinstance(entry, dict):
         raise RolesError(f"{config.ROLES}: роль '{role}' не описана")
+    override = _local_provider_override(role)
+    if override is not None:
+        return override
     value = entry.get("provider")
     if value is None:
         return DEFAULT_PROVIDER
@@ -96,6 +108,30 @@ def provider(role: str) -> str:
         raise RolesError(
             f"{config.ROLES}: provider роли '{role}' — не непустая строка")
     return value
+
+
+def _local_provider_override(role: str) -> str | None:
+    """Провайдер роли из `role_providers:` локального слоя пульта; `None`
+    — записи нет, слоя нет или он не разобран (SPEC
+    01M3FQ2Z2PY0E9T5F5WQ207NP5, требование 5).
+
+    Канал существует ради прогона канарейки на наборе ролей: `roles.yaml`
+    — защищённый путь и приходит из целевого sha, а локальный слой уже
+    переадресован в эфемерный клон (`canary._CLONE_CONFIG_ATTRS`), то есть
+    набор действует внутри клона и ни одной роли пульта не переводит.
+
+    Нечитаемый слой отдаётся `None`, а не исключением: о нём говорит своя
+    строка `doctor` (`check_models_local`), а шаг роли всё равно
+    остановится раньше и по своей названной причине — подменять её здесь
+    трейсбеком из чтения провайдера незачем (тот же приём защитной
+    деградации, что у `providers.name_for_role`). Ключа нет в слое —
+    поведение байт-в-байт как до этой задачи.
+    """
+    from . import models
+    try:
+        return models.load_local().role_providers.get(role)
+    except models.ModelsError:
+        return None
 
 
 def model_tier(role: str) -> str:

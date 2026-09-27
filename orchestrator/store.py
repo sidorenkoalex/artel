@@ -906,18 +906,24 @@ def _ensure_canary_tables(conn) -> None:
     «появилась после прогона» той же проверкой, которой AC-5 ловит
     противоположную мутацию (буквальный перенос v1 — метрики только в
     JSON на диске, `.artel/canary/*.json`, вовсе без таблицы БД).
-    `canary_baseline` ключуется `title` (стабильное имя шаблона пула
-    МЕЖДУ прогонами), не `task_id` (свежий ULID каждый прогон) —
-    требование 9: бейзлайн per-task, не суммой по набору."""
+    `canary_baseline` ключуется ПАРОЙ (`title`, `set_name`) — стабильным
+    именем шаблона пула МЕЖДУ прогонами и именем набора ролей, которым
+    прогон шёл (SPEC 01M3FQ2Z2PY0E9T5F5WQ207NP5, требование 7), не
+    `task_id` (свежий ULID каждый прогон): бейзлайн per-task, не суммой по
+    набору шаблонов, и свой у каждого набора ролей — прогон на другом
+    наборе моделей сравнивался бы с бейзлайном прежнего набора и
+    переписывал бы его."""
     conn.executescript(
         "CREATE TABLE IF NOT EXISTS canary_runs ("
         "  id INTEGER PRIMARY KEY AUTOINCREMENT, run_stamp TEXT, title TEXT,"
         "  task_id TEXT, steps INTEGER, cost_usd REAL, review_iterations INTEGER,"
         "  escalations INTEGER, outcome TEXT, expected_escalation TEXT,"
-        "  actual_escalation INTEGER, marker_mismatch INTEGER, created_at TEXT);"
+        "  actual_escalation INTEGER, marker_mismatch INTEGER, created_at TEXT,"
+        "  main_sha TEXT, verdict TEXT, set_name TEXT, models_summary TEXT);"
         "CREATE TABLE IF NOT EXISTS canary_baseline ("
-        "  title TEXT PRIMARY KEY, steps INTEGER, cost_usd REAL,"
-        "  review_iterations INTEGER, updated_at TEXT);")
+        "  title TEXT, set_name TEXT, steps INTEGER, cost_usd REAL,"
+        "  review_iterations INTEGER, updated_at TEXT,"
+        "  PRIMARY KEY (title, set_name));")
     # Привязка пина к зелёной канарейке (tasks/01M1NGFK3N6MRMYGCC09H975V3/
     # SPEC.md, ANSWER-1 п.2): `main_sha` — HEAD `config.ROOT` на момент
     # прогона, `verdict` — 'green'/'red' задачи-канарейки. `add_column`
@@ -925,9 +931,58 @@ def _ensure_canary_tables(conn) -> None:
     # задачи (как и прочие миграции store — см. `migrate()`); отдельная
     # табличная схема этой задачи не входит, потому что таблица уже
     # заведена лениво, не универсальной SCHEMA/`migrate()` (см. докстринг
-    # функции выше).
+    # функции выше). Те же четыре колонки стоят и в `CREATE TABLE` выше:
+    # на свежей БД `add_column` не доходит до `ALTER TABLE` вовсе — иначе
+    # сверка «есть/нет колонки» гонялась бы с самим `ALTER TABLE` при
+    # параллельных `store.db()` (класс дефекта
+    # tests/test_store_schema_migration_parity.py).
     add_column(conn, "canary_runs", "main_sha", "TEXT")
     add_column(conn, "canary_runs", "verdict", "TEXT")
+    # Набор ролей прогона и сводка «роль -> модель», по которой он шёл
+    # (требование 7): сам набор — файл ВНЕ git, его правка следа не
+    # оставляет, поэтому по строке прогона должно быть видно не только имя
+    # набора, но и модели за ним НА ТОТ прогон.
+    add_column(conn, "canary_runs", "set_name", "TEXT")
+    add_column(conn, "canary_runs", "models_summary", "TEXT")
+    # Строки, заведённые до этой задачи, принадлежат набору по умолчанию
+    # (требование 7, AC-8): `NULL` означал бы «прогон ничьего набора», и
+    # `green_canary_runs` — вход гейта сдвига пина — перестал бы их видеть.
+    conn.execute("UPDATE canary_runs SET set_name=? WHERE set_name IS NULL",
+                 (config.CANARY_DEFAULT_SET,))
+    _migrate_canary_baseline_to_set_key(conn)
+    conn.commit()
+
+
+def _migrate_canary_baseline_to_set_key(conn) -> None:
+    """Перевод `canary_baseline` на ключ-пару (`title`, `set_name`) —
+    сменой самой таблицы, потому что PRIMARY KEY в sqlite не меняется
+    `ALTER TABLE` (SPEC 01M3FQ2Z2PY0E9T5F5WQ207NP5, требование 7, AC-8).
+
+    Строки ПЕРЕНОСЯТСЯ, а не пересоздаются: бейзлайны сняты на живых
+    прогонах (шаблон `canary-version-json` — 13.09, $6.54) и являются
+    единственной точкой сравнения следующих прогонов; `DROP TABLE` +
+    `CREATE TABLE` потерял бы их, и первый прогон после мержа завёл бы их
+    заново уже по другой цене.
+
+    Таблица уже с новым ключом (в том числе свежесозданная `CREATE TABLE`
+    выше) — выход первой строкой: миграция идемпотентна, как и остальные
+    в `migrate()`.
+    """
+    if "set_name" in table_columns(conn, "canary_baseline"):
+        return
+    conn.executescript(
+        "ALTER TABLE canary_baseline RENAME TO canary_baseline_pre_set;"
+        "CREATE TABLE canary_baseline ("
+        "  title TEXT, set_name TEXT, steps INTEGER, cost_usd REAL,"
+        "  review_iterations INTEGER, updated_at TEXT,"
+        "  PRIMARY KEY (title, set_name));")
+    conn.execute(
+        "INSERT INTO canary_baseline (title, set_name, steps, cost_usd,"
+        " review_iterations, updated_at)"
+        " SELECT title, ?, steps, cost_usd, review_iterations, updated_at"
+        " FROM canary_baseline_pre_set", (config.CANARY_DEFAULT_SET,))
+    conn.execute("DROP TABLE canary_baseline_pre_set")
+    conn.commit()
 
 
 def insert_canary_run(conn, run_stamp: str, title: str, task_id: str,
@@ -936,68 +991,96 @@ def insert_canary_run(conn, run_stamp: str, title: str, task_id: str,
                       expected_escalation: str | None,
                       actual_escalation: bool, marker_mismatch: bool,
                       main_sha: str | None = None,
-                      verdict: str | None = None) -> None:
+                      verdict: str | None = None,
+                      set_name: str = config.CANARY_DEFAULT_SET,
+                      models_summary: str | None = None) -> None:
     """Строка метрик одной канареечной задачи одного прогона (SPEC
     01M1NEEWH5K1XPFRDGRMPYSBXJ, требование 5, AC-5) — читатель:
     `canary._run_one_task`.
 
     `main_sha`/`verdict` (ANSWER-1 01M1NGFK3N6MRMYGCC09H975V3 п.2) —
     привязка пина к зелёной канарейке: `None` по умолчанию сохраняет
-    сигнатуру для вызывающих кода до этой задачи."""
+    сигнатуру для вызывающих кода до этой задачи.
+
+    `set_name`/`models_summary` (SPEC 01M3FQ2Z2PY0E9T5F5WQ207NP5,
+    требование 7) — набор ролей прогона и сводка «роль -> модель», по
+    которой он шёл; значение по умолчанию — набор по умолчанию, тем же
+    приёмом совместимости, что `main_sha`/`verdict` выше."""
     _ensure_canary_tables(conn)
     conn.execute(
         "INSERT INTO canary_runs (run_stamp, title, task_id, steps, cost_usd,"
         " review_iterations, escalations, outcome, expected_escalation,"
-        " actual_escalation, marker_mismatch, main_sha, verdict, created_at)"
-        " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        " actual_escalation, marker_mismatch, main_sha, verdict, set_name,"
+        " models_summary, created_at)"
+        " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
         (run_stamp, title, task_id, steps, cost_usd, review_iterations,
          escalations, outcome, expected_escalation, int(actual_escalation),
-         int(marker_mismatch), main_sha, verdict, now()))
+         int(marker_mismatch), main_sha, verdict, set_name, models_summary,
+         now()))
     conn.commit()
 
 
-def green_canary_runs(conn) -> list:
-    """Зелёные прогоны канарейки, самые свежие первыми по `created_at`
-    (ANSWER-1 01M1NGFK3N6MRMYGCC09H975V3 п.2/п.5) — общий источник и для
-    guard'а привязки пина (`canary.merges_since_last_green_run`, AC-1/
-    AC-3/AC-4), и для отката пина по умолчанию (`pin.cmd_pin_to`, AC-6:
-    первая строка результата — самый свежий)."""
+def green_canary_runs(conn, set_name: str = config.CANARY_DEFAULT_SET) -> list:
+    """Зелёные прогоны канарейки НАБОРА `set_name`, самые свежие первыми по
+    `created_at` (ANSWER-1 01M1NGFK3N6MRMYGCC09H975V3 п.2/п.5) — общий
+    источник и для guard'а привязки пина
+    (`canary.merges_since_last_green_run`, AC-1/AC-3/AC-4), и для отката
+    пина по умолчанию (`pin.cmd_pin_to`, AC-6: первая строка результата —
+    самый свежий).
+
+    Фильтр по набору (SPEC 01M3FQ2Z2PY0E9T5F5WQ207NP5, требование 10) —
+    машинная половина правила «канарейка на наборе, отличном от набора по
+    умолчанию, зелёной канарейкой для сдвига пина не считается»
+    (docs/operator-session.md): пин двигает только прогон ТОГО конвейера,
+    которым пульт работает, а прогон по требованию на чужих моделях — нет.
+    Значение по умолчанию оставляет ответ функции для сегодняшней БД
+    прежним: строки, заведённые до этой задачи, миграция размечает
+    набором по умолчанию."""
     _ensure_canary_tables(conn)
     return conn.execute(
-        "SELECT * FROM canary_runs WHERE verdict='green' "
-        "ORDER BY created_at DESC, id DESC").fetchall()
+        "SELECT * FROM canary_runs WHERE verdict='green' AND set_name=? "
+        "ORDER BY created_at DESC, id DESC", (set_name,)).fetchall()
 
 
-def latest_green_canary_run(conn):
-    """Самый свежий зелёный прогон канарейки; `None` — журнал не несёт
-    ни одного (`pin.cmd_pin_to`, AC-6)."""
-    rows = green_canary_runs(conn)
+def latest_green_canary_run(conn, set_name: str = config.CANARY_DEFAULT_SET):
+    """Самый свежий зелёный прогон канарейки набора `set_name`; `None` —
+    журнал не несёт ни одного (`pin.cmd_pin_to`, AC-6)."""
+    rows = green_canary_runs(conn, set_name)
     return rows[0] if rows else None
 
 
-def canary_baseline(conn, title: str) -> sqlite3.Row | None:
-    """Бейзлайн канарейки по имени шаблона; None — прогона ещё не было
-    (SPEC 01M1NEEWH5K1XPFRDGRMPYSBXJ, требование 9-10)."""
+def canary_baseline(conn, title: str,
+                    set_name: str = config.CANARY_DEFAULT_SET) -> sqlite3.Row | None:
+    """Бейзлайн канарейки по паре (имя шаблона, имя набора ролей); None —
+    прогона этого набора по этому шаблону ещё не было (SPEC
+    01M1NEEWH5K1XPFRDGRMPYSBXJ, требование 9-10; SPEC
+    01M3FQ2Z2PY0E9T5F5WQ207NP5, требование 7)."""
     _ensure_canary_tables(conn)
     return conn.execute(
-        "SELECT * FROM canary_baseline WHERE title=?", (title,)).fetchone()
+        "SELECT * FROM canary_baseline WHERE title=? AND set_name=?",
+        (title, set_name)).fetchone()
 
 
 def set_canary_baseline(conn, title: str, steps: int, cost_usd: float,
-                        review_iterations: int) -> None:
-    """Заводит либо перезаписывает бейзлайн шаблона (первый прогон
-    заводит его сам, требование 10 — не отдельная команда, как у v1
-    `--rewrite-baseline`: v2 бейзлайн per-task не редактируется руками
-    отдельным флагом, только рождается на первом прогоне шаблона)."""
+                        review_iterations: int,
+                        set_name: str = config.CANARY_DEFAULT_SET) -> None:
+    """Заводит либо перезаписывает бейзлайн пары (шаблон, набор ролей)
+    (первый прогон заводит его сам, требование 10 — не отдельная команда,
+    как у v1 `--rewrite-baseline`: v2 бейзлайн per-task не редактируется
+    руками отдельным флагом, только рождается на первом прогоне шаблона).
+
+    Перезапись — по той же ПАРЕ: прогон набора A по тому же шаблону
+    бейзлайн набора B не затирает (SPEC 01M3FQ2Z2PY0E9T5F5WQ207NP5,
+    требование 7, AC-7)."""
     _ensure_canary_tables(conn)
     conn.execute(
-        "INSERT INTO canary_baseline (title, steps, cost_usd,"
-        " review_iterations, updated_at) VALUES (?,?,?,?,?)"
-        " ON CONFLICT(title) DO UPDATE SET steps=excluded.steps,"
+        "INSERT INTO canary_baseline (title, set_name, steps, cost_usd,"
+        " review_iterations, updated_at) VALUES (?,?,?,?,?,?)"
+        " ON CONFLICT(title, set_name) DO UPDATE SET steps=excluded.steps,"
         " cost_usd=excluded.cost_usd,"
         " review_iterations=excluded.review_iterations,"
         " updated_at=excluded.updated_at",
-        (title, steps, cost_usd, review_iterations, now()))
+        (title, set_name, steps, cost_usd, review_iterations, now()))
     conn.commit()
 
 

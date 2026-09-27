@@ -331,6 +331,14 @@ CANARY_POOL_DIRNAME = ".artel-canary"
 # (ANSWER-1 п.3). Заводит Оператор вручную (`security add-generic-
 # password`), код только читает.
 CANARY_POOL_KEY_SLOT = "artel-canary-pool-key"
+# Имя набора ролей канарейки ПО УМОЛЧАНИЮ (SPEC
+# 01M3FQ2Z2PY0E9T5F5WQ207NP5, требования 1 и 3): под ним живут бейзлайн и
+# строки прогонов «как пульт» — провайдер ролей из `roles.yaml` целевого
+# sha, локальный слой клона — шаблон `models.LOCAL_TEMPLATE`. Имя набора,
+# не равное этому, прогон ищет в `canary_sets:` локального слоя; это же
+# имя отделяет прогоны, годные для сдвига пина, от прогонов по требованию
+# (`store.green_canary_runs`, docs/operator-session.md).
+CANARY_DEFAULT_SET = "default"
 # Потолок ПОДРЯД идущих циклов возврата из `escalated` ОДНОЙ канареечной
 # задачи (REVIEW.md 01M1NEEWH5K1XPFRDGRMPYSBXJ итерации 1, R1-F1):
 # `review_iters` не сбрасывается при возврате из `escalated` (общее

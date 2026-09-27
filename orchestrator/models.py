@@ -20,7 +20,10 @@ docs/research/providers-codex-plan.md §3).
 - `config.MODELS_LOCAL` (`.artel/models.yaml`, ВНЕ git) — выбор
   конкретного пульта: ярус -> модель, при необходимости собственный тариф
   поверх прейскуранта и явное разрешение модели со статусом
-  `experimental`. Шаблон кладут `init` и `doctor --fix`.
+  `experimental`. Шаблон кладут `init` и `doctor --fix`. Тот же слой
+  несёт наборы ролей канарейки (`canary_sets:`) и переопределение
+  провайдера роли (`role_providers:`, кладёт прогон канарейки в слой
+  своего эфемерного клона) — SPEC 01M3FQ2Z2PY0E9T5F5WQ207NP5.
 - `roles.yaml` (`model_tier` у роли) — ярус роли, читает
   `orchestrator/roles.py`.
 
@@ -68,6 +71,16 @@ TARIFF_KEY = "tariff_usd_per_mtok"
 CALIBRATED_AT_KEY = "calibrated_at"
 SOURCE_KEY = "source"
 ALLOW_EXPERIMENTAL_KEY = "allow_experimental"
+#: Наборы ролей канарейки и переопределение провайдера роли (SPEC
+#: 01M3FQ2Z2PY0E9T5F5WQ207NP5, требования 2 и 5) — два ключа ОДНОГО слоя,
+#: с разных его концов: `canary_sets:` Оператор пишет руками у себя
+#: («какие подписки и CLI на этой машине»), `role_providers:` пишет сам
+#: прогон канарейки в слой ЭФЕМЕРНОГО КЛОНА, собирая его из выбранного
+#: набора. Читатель `role_providers:` — `orchestrator/roles.py::provider`.
+CANARY_SETS_KEY = "canary_sets"
+ROLE_PROVIDERS_KEY = "role_providers"
+PROVIDER_KEY = "provider"
+MODEL_KEY = "model"
 
 #: Источник действующего тарифа (требование 8): `Resolution.tariff_source`
 #: печатается `models` и `doctor`, поэтому текст — один литерал на всех.
@@ -145,7 +158,14 @@ Catalog = namedtuple("Catalog", "providers models")
 
 Override = namedtuple("Override", "model tariff calibrated_at source")
 
-LocalLayer = namedtuple("LocalLayer", "tiers overrides allow_experimental")
+LocalLayer = namedtuple(
+    "LocalLayer", "tiers overrides allow_experimental role_providers")
+
+#: Одна запись набора ролей канарейки (SPEC 01M3FQ2Z2PY0E9T5F5WQ207NP5,
+#: требование 2): обе половины обязательны — роль с моделью без провайдера
+#: (и наоборот) есть ровно то расхождение, за которым следит
+#: `doctor.check_model_provider_cli`.
+CanarySetRole = namedtuple("CanarySetRole", "role provider model")
 
 Resolution = namedtuple(
     "Resolution",
@@ -378,7 +398,30 @@ def load_local(path=None) -> LocalLayer:
     чинится он командой (`doctor --fix`), а не правкой содержимого.
     """
     path = path or config.MODELS_LOCAL
-    document = _document(path, LocalLayerError, LocalLayerMissingError)
+    return _local_layer(_document(path, LocalLayerError,
+                                  LocalLayerMissingError), path)
+
+
+def local_template_layer() -> LocalLayer:
+    """Слой ШАБЛОНА (`LOCAL_TEMPLATE`) разобранным — тем же разбором, что
+    и слой на диске (SPEC 01M3FQ2Z2PY0E9T5F5WQ207NP5, требование 4).
+
+    Нужен сборщику слоя эфемерного клона канарейки: ярусы, которых набор
+    не называет, обязаны остаться «как в шаблоне», и повторять их в коде
+    литералами значило бы завести вторую копию крутилки пульта — она
+    разошлась бы с шаблоном на первой же правке.
+    """
+    try:
+        document = yamlmini.mapping(LOCAL_TEMPLATE)
+    except yamlmini.YamlError as exc:  # pragma: no cover - шаблон в коде
+        raise LocalLayerError(
+            f"шаблон локального слоя не разобран: {exc}") from exc
+    return _local_layer(document, "шаблон локального слоя")
+
+
+def _local_layer(document: dict, path) -> LocalLayer:
+    """Разбор уже прочитанного документа локального слоя. `path` — адрес
+    источника, он и уходит в текст каждого отказа."""
     raw_tiers = document.get(TIERS_KEY)
     if not isinstance(raw_tiers, dict) or not raw_tiers:
         raise LocalLayerError(f"{path}: нет раздела '{TIERS_KEY}:' "
@@ -408,7 +451,85 @@ def load_local(path=None) -> LocalLayer:
     # статусом `experimental` остаётся неразрешённой (fail-closed).
     allowed = {model_id for model_id, value in raw_allowed.items()
                if value is True}
-    return LocalLayer(tiers, overrides, allowed)
+    return LocalLayer(tiers, overrides, allowed,
+                      _role_providers(document, path))
+
+
+def _role_providers(document: dict, path) -> dict:
+    """Карта «роль -> провайдер» раздела `role_providers:` (SPEC
+    01M3FQ2Z2PY0E9T5F5WQ207NP5, требование 5); раздела нет — пустая.
+
+    Раздел кладёт в слой ЭФЕМЕРНОГО КЛОНА сам прогон канарейки
+    (`canary._clone_local_layer_text`), а не Оператор: `roles.yaml`
+    приходит из целевого sha и защищён, а локальный слой уже
+    переадресован в клон. Имя провайдера здесь НЕ сверяется с реестром:
+    незарегистрированное имя останавливает шаг своим именованным отказом
+    (`providers.for_role`) и красит строку `doctor` — дублировать эту
+    сверку в разборе слоя значило бы завести второй текст на одну причину.
+    """
+    raw = document.get(ROLE_PROVIDERS_KEY) or {}
+    if not isinstance(raw, dict):
+        raise LocalLayerError(f"{path}: раздел '{ROLE_PROVIDERS_KEY}:' — не "
+                              f"отображение «роль: провайдер»")
+    mapped = {}
+    for role, name in raw.items():
+        if not isinstance(name, str) or not name:
+            raise LocalLayerError(
+                f"{path}: {ROLE_PROVIDERS_KEY}.{role} = {name!r} — не имя "
+                f"провайдера")
+        mapped[role] = name
+    return mapped
+
+
+def load_canary_sets(path=None) -> dict:
+    """Наборы ролей канарейки из локального слоя (SPEC
+    01M3FQ2Z2PY0E9T5F5WQ207NP5, требование 2): «имя набора -> {роль ->
+    `CanarySetRole`}». Раздела нет — пустое отображение, не отказ: пульт
+    без наборов — штатное состояние (набор по умолчанию наборов не
+    требует).
+
+    Читается отдельным входом, а не полем `LocalLayer`: набор нужен ровно
+    двум читателям (прогон `canary --set` и строка `doctor`), а слой
+    читает каждый шаг любой роли — платить за разбор наборов на каждом
+    шаге незачем. Форма записи — вложенные блочные отображения; потоковых
+    отображений (`{provider: codex}`) единственный разбор пульта
+    (`orchestrator/yamlmini.py`) не знает вовсе.
+    """
+    path = path or config.MODELS_LOCAL
+    document = _document(path, LocalLayerError, LocalLayerMissingError)
+    raw = document.get(CANARY_SETS_KEY) or {}
+    if not isinstance(raw, dict):
+        raise LocalLayerError(
+            f"{path}: раздел '{CANARY_SETS_KEY}:' — не отображение «имя "
+            f"набора: роль: {PROVIDER_KEY}/{MODEL_KEY}»")
+    sets = {}
+    for name, raw_set in raw.items():
+        where = f"{path}: {CANARY_SETS_KEY}.{name}"
+        if not isinstance(raw_set, dict) or not raw_set:
+            raise LocalLayerError(
+                f"{where}: набор — не отображение «роль: "
+                f"{PROVIDER_KEY}/{MODEL_KEY}» либо пуст")
+        sets[name] = {role: _canary_set_role(role, raw_entry,
+                                             f"{where}.{role}")
+                      for role, raw_entry in raw_set.items()}
+    return sets
+
+
+def _canary_set_role(role: str, raw, where: str) -> CanarySetRole:
+    if not isinstance(raw, dict):
+        raise LocalLayerError(f"{where}: запись роли — не отображение "
+                              f"«{PROVIDER_KEY}/{MODEL_KEY}»")
+    values = {}
+    for key in (PROVIDER_KEY, MODEL_KEY):
+        value = raw.get(key)
+        if not isinstance(value, str) or not value:
+            raise LocalLayerError(
+                f"{where}: {key} не задан — обязательны обе половины "
+                f"записи ({PROVIDER_KEY} и {MODEL_KEY}): роль с моделью без "
+                f"провайдера и есть то расхождение, за которым следит "
+                f"doctor")
+        values[key] = value
+    return CanarySetRole(role, values[PROVIDER_KEY], values[MODEL_KEY])
 
 
 def layers_or_none() -> tuple:
@@ -512,9 +633,10 @@ def resolve_model(model_id: str, catalog: Catalog = None,
 
 
 # Шаблон локального слоя (требование 7): все ярусы на `claude-opus-5`,
-# раздел переопределений пуст. Тот же текст лежит в
-# `docs/reference/models-local.example.yaml` (требование 13) — сверяет
-# тест, а не глаз Оператора.
+# раздел переопределений пуст, наборы ролей канарейки — закомментированным
+# образцом (SPEC 01M3FQ2Z2PY0E9T5F5WQ207NP5, требование 10). Тот же текст
+# лежит в `docs/reference/models-local.example.yaml` (требование 13) —
+# сверяет тест, а не глаз Оператора.
 LOCAL_TEMPLATE = """\
 # Локальный слой моделей пульта (SPEC 01M3009Y9AGGY6ZCFA7H1HJ1TD,
 # требование 6) — ВНЕ git: выбор конкретного пульта, а не общее знание.
@@ -550,6 +672,27 @@ tiers:
 #
 # allow_experimental:
 #   gpt-5.4-mini: true
+
+# canary_sets — именованные наборы ролей канарейки: «имя набора -> роль ->
+# (provider, model)». Действует ТОЛЬКО внутри эфемерного клона прогона
+# `canary --k <N> --set <имя>`: ни одна роль пульта набором не переведена,
+# roles.yaml не трогается. Обе половины записи обязательны. Без --set
+# прогон идёт набором по умолчанию (`default`) — всё как у пульта.
+# Прогон на наборе, отличном от набора по умолчанию, зелёной канарейкой
+# для сдвига пина не считается (docs/operator-session.md).
+#
+# canary_sets:
+#   codex-strong:
+#     developer:
+#       provider: codex
+#       model: gpt-5.6-terra
+#     reviewer:
+#       provider: codex
+#       model: gpt-5.6-terra
+#
+# Раздел role_providers («роль -> провайдер», переопределение поля
+# `provider:` карты исполнителей) кладёт в слой КЛОНА сам прогон, собирая
+# его из выбранного набора — руками его писать не нужно.
 """
 
 

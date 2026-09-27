@@ -15,7 +15,7 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from orchestrator import artel  # noqa: E402
+from orchestrator import artel, config  # noqa: E402
 
 
 class ParseNewArgsValidFormsTest(unittest.TestCase):
@@ -78,7 +78,9 @@ class ParseNewArgsRejectsUnrecognizedTest(unittest.TestCase):
 class CmdCanaryDispatchTest(unittest.TestCase):
     """`artel._cmd_canary` — маршрутизация `canary pool-seal` до
     `cmd_pool_seal` БЕЗ разбора `--k` (SPEC 01M1NSR5M5THYRC0RFWPMVE2DW,
-    требование 2), `canary --k N` — до `cmd_canary` как раньше."""
+    требование 2), `canary --k N` — до `cmd_canary` как раньше, с именем
+    набора ролей отдельным параметром (SPEC 01M3FQ2Z2PY0E9T5F5WQ207NP5,
+    требование 1, AC-1)."""
 
     def test_pool_seal_routes_to_pool_seal_without_k_arg(self):
         """Ловит мутацию: `pool-seal` падает в общую ветку разбора `--k`
@@ -95,12 +97,28 @@ class CmdCanaryDispatchTest(unittest.TestCase):
         """Ловит мутацию: `--k` ошибочно маршрутизируется в
         `cmd_pool_seal` (регресс существовавшего до этой задачи
         поведения `canary --k N`) — `run_mock` не получил бы вызова с
-        разобранным `k=3`."""
+        разобранным `k=3`.
+
+        Ловит мутацию: без `--set` диспетчер передаёт не имя набора по
+        умолчанию (`None`, пустую строку) — бейзлайн прогона «как пульт»
+        ключевался бы не тем набором (SPEC 01M3FQ2Z2PY0E9T5F5WQ207NP5,
+        AC-1)."""
         with mock.patch.object(artel.pool_seal, "cmd_pool_seal") as seal_mock:
             with mock.patch.object(artel.canary, "cmd_canary") as run_mock:
                 artel._cmd_canary(["--k", "3"])
-        run_mock.assert_called_once_with(k=3, sha=None)
+        run_mock.assert_called_once_with(k=3, sha=None,
+                                        set_name=config.CANARY_DEFAULT_SET)
         seal_mock.assert_not_called()
+
+    def test_set_flag_value_reaches_the_run_command(self):
+        """Ловит мутацию: `_set_arg` не читается диспетчером (имя набора
+        всегда по умолчанию) — `canary --k N --set <имя>` гонял бы набор
+        «как пульт», молча игнорируя выбор Оператора (SPEC
+        01M3FQ2Z2PY0E9T5F5WQ207NP5, требование 1, AC-1)."""
+        with mock.patch.object(artel.canary, "cmd_canary") as run_mock:
+            artel._cmd_canary(["--k", "3", "--set", "codex-strong"])
+        run_mock.assert_called_once_with(k=3, sha=None,
+                                        set_name="codex-strong")
 
     def test_k_flag_with_explicit_sha_passes_it_through(self):
         """SPEC 01M2B6K02YVJBWE1JDWP85EJH0, требование 1/AC-2: `--sha
@@ -111,7 +129,8 @@ class CmdCanaryDispatchTest(unittest.TestCase):
         всегда вычислялся бы по умолчанию из `origin`."""
         with mock.patch.object(artel.canary, "cmd_canary") as run_mock:
             artel._cmd_canary(["--k", "3", "--sha", "abc123"])
-        run_mock.assert_called_once_with(k=3, sha="abc123")
+        run_mock.assert_called_once_with(k=3, sha="abc123",
+                                        set_name=config.CANARY_DEFAULT_SET)
 
 
 if __name__ == "__main__":
