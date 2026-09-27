@@ -29,9 +29,9 @@ from orchestrator import (catalog, config, doctor,  # noqa: E402
                           failure_classification, keychain, models,
                           providers, roles, runner, stack, store)
 from orchestrator.providers import claude as claude_provider  # noqa: E402
-from tests.sandbox import (TmpDirTest, TmpRootTest, claude_only_popen,  # noqa: E402
-                           claude_only_run, event as sandbox_event,
-                           roles_text_on_default_provider)
+from tests.sandbox import (SANDBOX_ROLES_TEXT, TmpDirTest,  # noqa: E402
+                           TmpRootTest, claude_only_popen, claude_only_run,
+                           event as sandbox_event)
 from tests.test_doctor import (FakeLiveSmokeProc,  # noqa: E402
                                TmpRootTest as DoctorSandbox, result_event)
 from tests.test_runner_model_preflight import _StepSandbox  # noqa: E402
@@ -405,7 +405,7 @@ class DoctorProviderLinesTest(TmpRootTest):
         реальной роли красил этот тест мимо его предмета — REVIEW.md
         итерации 1, R1-F1).
         """
-        self.use_roles_yaml(roles_text_on_default_provider())
+        self.use_roles_yaml(SANDBOX_ROLES_TEXT)
 
         check = doctor.check_role_providers()
 
@@ -449,7 +449,7 @@ class DoctorProviderLinesTest(TmpRootTest):
         строк `token` — счёт краснел бы от правки `roles.yaml`, а не от
         снятой дедупликации, которая тут предмет.
         """
-        self.use_roles_yaml(roles_text_on_default_provider())
+        self.use_roles_yaml(SANDBOX_ROLES_TEXT)
         # Контроль вырожденности: на одной роли «по одной строке на
         # провайдера» выполняется и без дедупликации — считать дубли
         # можно только там, где ролей на провайдере больше одной.

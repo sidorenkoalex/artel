@@ -2,11 +2,12 @@
 ярусах стоят agent-роли, которых тест не называет (SPEC
 01M3H5FEXH5M9HGZYT3BCDX5C4, требование 6, AC-5).
 
-Тесты `tests/`, которым нужна управляемая карта исполнителей, строят её
-из НАСТОЯЩЕГО `roles.yaml` (`_roles_yaml_text`): ярус подменяется у ОДНОЙ
-названной роли, остальные остаются такими, как в боевом файле. Локальный
-слой такая песочница пишет свой — и пока он называл модель только у
-яруса роли под тестом, роль на другом ярусе оставалась без модели: её
+Тесты `tests/`, которым нужна управляемая карта исполнителей, берут её у
+общей фикстуры (`_roles_yaml_text` поверх `tests/sandbox.py::
+role_map_fixture`): ярус подменяется у ОДНОЙ названной роли, остальные
+остаются на ярусе фикстуры. Локальный слой такая песочница пишет свой — и
+пока он называл модель только у яруса роли под тестом, роль на другом
+ярусе оставалась без модели: её
 цепочка «роль -> ярус -> модель» не разрешалась, и `orchestrator/stack.py`
 давал строку `model-<роль>` со статусом `fail`. Так перевод роли analyst
 на ярус `standard` уронил на главной ветке
@@ -26,9 +27,9 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from orchestrator import config, models, roles, yamlmini  # noqa: E402
-from tests.sandbox import roles_text_on_default_provider  # noqa: E402
-from tests.test_runner_role_model import (_REAL_ROLES_TEXT,  # noqa: E402
-                                          _roles_yaml_text, _tiers_text)
+from tests.sandbox import SANDBOX_ROLES_TEXT  # noqa: E402
+from tests.test_runner_role_model import (_roles_yaml_text,  # noqa: E402
+                                          _tiers_text)
 from tests.test_stack_optional_tools import (CLAUDE_MODEL,  # noqa: E402
                                              _ManifestSandbox)
 
@@ -38,22 +39,23 @@ def _spread_roles_text() -> tuple:
     переставлена на ярус перечня `models.TIERS`, которого нет ни у одной
     из остальных agent-ролей.
 
-    Ярус выбирается по факту боевого файла, а не литералом: сегодня все
-    agent-роли стоят на `strong`, но распределение — крутилка Оператора,
+    Ярус выбирается по факту карты, а не литералом: сегодня все agent-роли
+    фикстуры стоят на одном ярусе, но их распределение — та же крутилка,
     и прибитый литерал перестал бы давать разброс ровно в тот день, когда
-    Оператор переставит роли. Если разброс в боевом файле уже есть
-    (agent-роли заняли все ярусы перечня), карта берётся как есть —
-    переставлять нечего.
+    ярусы в карте разъедутся. Если разброс в карте уже есть (agent-роли
+    заняли все ярусы перечня), карта берётся как есть — переставлять
+    нечего.
 
-    Провайдер у ролей — по умолчанию (`roles_text_on_default_provider`):
-    предмет сценария — РАЗБРОС ЯРУСОВ, а `provider: codex` у любой роли
-    боевого файла делает CLI второго провайдера обязательным и даёт
-    песочнице (`codex_found=False`) красную строку мимо предмета. Тот же
-    класс, что и ярус выше: и то и другое — крутилка Оператора в
-    защищённом файле, которую он правит отдельным MR без прогона этих
-    тестов (REVIEW.md 01M3H3JRBD544GQ10SS3DBGEVP итерации 1, R1-F1).
+    Карта — фикстура песочницы (`SANDBOX_ROLES_TEXT`), а не текст боевого
+    `roles.yaml` (SPEC 01M3HP7RQEY0SBYNKQ902QD2CZ, требование 2): предмет
+    сценария — РАЗБРОС ЯРУСОВ, а `provider: codex` у любой роли боевого
+    файла делает CLI второго провайдера обязательным и даёт песочнице
+    (`codex_found=False`) красную строку мимо предмета. И то и другое —
+    крутилка Оператора в защищённом файле, которую он правит отдельным MR
+    без прогона этих тестов (REVIEW.md 01M3H3JRBD544GQ10SS3DBGEVP
+    итерации 1, R1-F1).
     """
-    entries = yamlmini.mapping(_REAL_ROLES_TEXT).get("roles") or {}
+    entries = yamlmini.mapping(SANDBOX_ROLES_TEXT).get("roles") or {}
     agents = [name for name, entry in entries.items()
               if isinstance(entry, dict) and entry.get("executor") == "agent"]
     role = agents[0]
@@ -61,10 +63,8 @@ def _spread_roles_text() -> tuple:
              for name in agents if name != role}
     free = [tier for tier in models.TIERS if tier not in taken]
     if not free:
-        return (roles_text_on_default_provider(_REAL_ROLES_TEXT), role,
-                entries[role].get("model_tier"))
-    return (roles_text_on_default_provider(_roles_yaml_text(role, free[0])),
-            role, free[0])
+        return SANDBOX_ROLES_TEXT, role, entries[role].get("model_tier")
+    return _roles_yaml_text(role, free[0]), role, free[0]
 
 
 class RolesTierSpreadTest(_ManifestSandbox):

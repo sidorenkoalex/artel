@@ -22,7 +22,7 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from orchestrator import config, doctor, stack  # noqa: E402
-from tests.sandbox import TmpRootTest, roles_text_on_default_provider  # noqa: E402
+from tests.sandbox import TmpRootTest  # noqa: E402
 from tests.test_runner_role_model import (_roles_yaml_text,  # noqa: E402
                                           _tiers_text)
 
@@ -99,18 +99,20 @@ class _ManifestSandbox(TmpRootTest):
 
         `model` называется у КАЖДОГО яруса перечня (`_tiers_text`, SPEC
         01M3H5FEXH5M9HGZYT3BCDX5C4, требование 1): ярус подменяется
-        только у `ROLE`, остальные agent-роли приходят из боевого
-        `roles.yaml` со своими ярусами, и их цепочка обязана разрешаться
-        независимо от того, какой ярус у них стоит сегодня.
+        только у `ROLE`, остальные agent-роли остаются на ярусе фикстуры
+        песочницы, и их цепочка обязана разрешаться независимо от него.
 
-        Поле `provider:` в карте сценария ставит только сам тест
-        (`roles_text_on_default_provider` снимает все остальные): строки
-        этого файла считаются по ВСЕМ agent-ролям карты, и `provider: codex`
-        у чужой роли — правка Оператора по защищённому пути — красил бы их
+        Карта — фикстура (`_roles_yaml_text` поверх
+        `tests/sandbox.py::role_map_fixture`, SPEC
+        01M3HP7RQEY0SBYNKQ902QD2CZ, требование 2), а не текст боевого
+        `roles.yaml`: строки этого файла считаются по ВСЕМ agent-ролям
+        карты, и `provider: codex` либо чужой ярус у роли, которой тест не
+        называет, — правка Оператора по защищённому пути — красил бы их
         мимо предмета (REVIEW.md 01M3H3JRBD544GQ10SS3DBGEVP итерации 1,
-        R1-F1, тот же класс, что и ярус выше).
+        R1-F1; копилка 27.09). Поле `provider:` здесь ставит только сам
+        тест.
         """
-        text = roles_text_on_default_provider(_roles_yaml_text(ROLE, TIER))
+        text = _roles_yaml_text(ROLE, TIER)
         if provider is not None:
             text = text.replace(f"  {ROLE}:\n",
                                 f"  {ROLE}:\n    provider: {provider}\n", 1)

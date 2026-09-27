@@ -30,8 +30,8 @@ from orchestrator import (agent_log, catalog, config, doctor,  # noqa: E402
                           failure_classification, keychain, models, providers,
                           runner, spend, stack, store)
 from orchestrator.providers import codex as codex_provider  # noqa: E402
-from tests.sandbox import (TaskSeededTmpRootTest, TmpDirTest,  # noqa: E402
-                           TmpRootTest, roles_text_on_default_provider)
+from tests.sandbox import (SANDBOX_ROLES_TEXT, TaskSeededTmpRootTest,  # noqa: E402
+                           TmpDirTest, TmpRootTest)
 
 STUB_BIN = "/artel-test-stub-bin"
 KEYCHAIN_SECRET = "kluch-iz-slota"
@@ -672,7 +672,7 @@ class PreflightTest(TmpRootTest):
         остаётся: он сторожит саму карту сценария от вырождения.
         """
         path = self.root / "roles-on-default-provider.yaml"
-        path.write_text(roles_text_on_default_provider(), encoding="utf-8")
+        path.write_text(SANDBOX_ROLES_TEXT, encoding="utf-8")
         self.patch(config, "ROLES", path)
 
         self.assertNotIn("codex", {providers.name_for_role(role)

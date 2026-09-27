@@ -27,10 +27,9 @@ from orchestrator import (catalog, config, gitcmd, models,  # noqa: E402
                           providers, runner, spend, store)
 from tests.sandbox import (DeveloperBriefTmpRootTest as TmpRootTest,  # noqa: E402
                            FakeProc, capture_new_task_id, event, fake_git,
-                           sync_spec_from_worktree)
+                           role_map_fixture, sync_spec_from_worktree)
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-_REAL_ROLES_TEXT = (REPO_ROOT / "roles.yaml").read_text(encoding="utf-8")
 
 
 def result_event(usd=0.1, **fields) -> str:
@@ -39,32 +38,20 @@ def result_event(usd=0.1, **fields) -> str:
 
 
 def _roles_yaml_text(role: str, tier: str | None) -> str:
-    """Реальный `roles.yaml` репозитория, с `model_tier:` вставленным под
-    заголовком роли (или без вставки — `tier=None`, сценарий «ярус не
-    задан»); `skills:`/`token_slot:` реальных ролей не трогаются.
+    """Карта исполнителей фикстуры песочницы, где ярус `role` равен
+    `tier` (`tier=None` — поле снято, сценарий «ярус не задан»).
 
-    Строки `model:`/`model_tier:` этой роли снимаются перед вставкой:
-    боевой `roles.yaml` несёт `model:` до применения приложения к PLAN
-    задачи 01M3009Y9AGGY6ZCFA7H1HJ1TD, и без снятия сценарий «поле не
-    задано» был бы неотличим от боевого (правка Оператора 19.09,
-    amend-tests).
+    Тонкая обёртка над единственным сборщиком карты
+    (`tests/sandbox.py::role_map_fixture`, SPEC
+    01M3HP7RQEY0SBYNKQ902QD2CZ, требование 3): до этой задачи здесь
+    строился текст БОЕВОГО `roles.yaml` со вставкой яруса, и исход
+    каждого файла, зовущего этого помощника, зависел от того, какие
+    ярусы, провайдеры и роли Оператор держит в защищённом файле сегодня.
+    Имя и подпись сохранены — по ним помощника зовут
+    `tests/test_providers.py`, `tests/test_stack_optional_tools.py` и
+    `tests/test_stack_roles_tier_spread.py`.
     """
-    lines = _REAL_ROLES_TEXT.splitlines(keepends=True)
-    anchor = f"  {role}:\n"
-    for i, line in enumerate(lines):
-        if line == anchor:
-            j = i + 1
-            while j < len(lines) and lines[j].startswith("    "):
-                if lines[j].lstrip().startswith(("model:", "model_tier:")):
-                    del lines[j]
-                    continue
-                j += 1
-            if tier is not None:
-                lines[i] = line + f"    model_tier: {tier}\n"
-            break
-    else:
-        raise AssertionError(f"роль {role!r} не найдена в roles.yaml")
-    return "".join(lines)
+    return role_map_fixture(roles={role: {"model_tier": tier}}).roles_text
 
 
 def _tiers_text(model: str) -> str:
@@ -73,15 +60,15 @@ def _tiers_text(model: str) -> str:
     тестом (SPEC 01M3H5FEXH5M9HGZYT3BCDX5C4, требование 1).
 
     Слой пишется в паре с `_roles_yaml_text` выше, а тот подменяет ярус
-    у ОДНОЙ названной роли — остальные остаются такими, как в боевом
-    `roles.yaml`. Слой, называющий модель у одного яруса, покрывает их
-    ровно до тех пор, пока Оператор держит все agent-роли на одном
-    ярусе: роль на другом ярусе остаётся без модели, её цепочка «роль ->
-    ярус -> модель» не разрешается, и `orchestrator/stack.py` даёт
-    строку `model-<роль>` со статусом `fail`. Так 27.09 перевод роли
-    analyst на ярус `standard` уронил на главной ветке тест состава
-    строк инструментов — покраснело распределение ролей по ярусам,
-    решение Оператора в защищённом файле, а не предмет проверки.
+    у ОДНОЙ названной роли — остальные остаются на ярусе фикстуры. Слой,
+    называющий модель у одного яруса, покрывает их ровно до тех пор, пока
+    все agent-роли стоят на одном ярусе: роль на другом ярусе остаётся
+    без модели, её цепочка «роль -> ярус -> модель» не разрешается, и
+    `orchestrator/stack.py` даёт строку `model-<роль>` со статусом
+    `fail`. Так 27.09 перевод роли analyst на ярус `standard` уронил на
+    главной ветке тест состава строк инструментов — покраснело
+    распределение ролей по ярусам, решение Оператора в защищённом файле,
+    а не предмет проверки.
 
     Покрытие всех ярусов одной моделью — конфигурация настоящего пульта:
     шаблон локального слоя (`models.LOCAL_TEMPLATE`) называет модель у
@@ -91,8 +78,12 @@ def _tiers_text(model: str) -> str:
     test_unreadable_layers_demand_nothing_instead_of_raising`), пишут
     слой сами и этим помощником не пользуются — иначе потеряли бы свой
     предмет.
+
+    Тело — тот же единственный сборщик, что у `_roles_yaml_text`:
+    собственной крутилки ярусов в `tests/` не остаётся.
     """
-    return "tiers:\n" + "".join(f"  {tier}: {model}\n" for tier in models.TIERS)
+    return role_map_fixture(
+        tiers={tier: model for tier in models.TIERS}).local_text
 
 
 class ModelFlagJournalTest(TmpRootTest):
