@@ -154,16 +154,22 @@ def _tz_section_re(label: str) -> re.Pattern:
         + r")|\Z)", re.M | re.S)
 
 
-def _tz_sections(tz_raw: str, labels) -> tuple[str, list[tuple[int, int]]]:
-    """(склеенные тела разделов с метками `labels`, их диапазоны в
-    `tz_raw`) — все вхождения каждой метки, не только первое."""
+def _tz_sections(tz_raw: str, labels,
+                 joiner: str = "\n") -> tuple[str, list[tuple[int, int]]]:
+    """(тела разделов с метками `labels`, склеенные `joiner`, их диапазоны
+    в `tz_raw`) — все вхождения каждой метки, не только первое.
+
+    `joiner` — параметр, потому что разбор зон (`_tz_zone_items`) склеивает
+    тела запятой: для него граница двух тел — граница ЭЛЕМЕНТОВ перечня, а
+    перенос строки он снимает как вёрстку (R2-F1), и тело, склеенное с
+    соседним переносом, дало бы один элемент из двух зон."""
     bodies: list[str] = []
     spans: list[tuple[int, int]] = []
     for label in labels:
         for match in _tz_section_re(label).finditer(tz_raw):
             bodies.append(match.group(1))
             spans.append(match.span())
-    return "\n".join(bodies), spans
+    return joiner.join(bodies), spans
 
 
 def _tz_path_check(tz_raw: str) -> tuple[list[str], list[str]]:
@@ -237,6 +243,128 @@ def _print_new_calibration_hint(conn, task_id: str, tz_raw: str) -> None:
     if warning is not None:
         store.journal(conn, task_id, "operator", "калибровка бюджета", warning)
         print(f"[{task_id}] ВНИМАНИЕ: {warning}")
+
+
+# Фиксированный текст действия журнала (SPEC 01M3GKJ84XM5QPC6TK5EE307Q9,
+# требование 2): читатель журнала и тест находят запись по ДЕЙСТВИЮ, а не
+# по вариативному detail (тот несёт конкретные id, состояния и пути).
+ZONE_OVERLAP_ACTION = "пересечение зон при заведении"
+
+
+# Фиксированный текст действия журнала (ответ Оператора ANSWER-1 п.2 по
+# замечанию R1-F2 ревью итерации 1): предварительные зоны ТЗ, записанные в
+# `tasks.zones` при заведении. Оператор читает по нему, откуда взялось
+# значение колонки до гейта SPEC (approve на `spec_gate` перезапишет его
+# зонами SPEC).
+PRELIMINARY_ZONES_ACTION = "предварительные зоны из ТЗ"
+
+
+# Перенос строки ВНУТРИ пути (замечание R2-F1 ревью итерации 2): вёрстка
+# ТЗ по ~72 символа рвёт длинный путь, и точка разрыва — `/`, `-` или `_`
+# (на 215 живых ТЗ пульта встречаются ровно такие: `orchestrator/⏎
+# schema.py`, `docs/reference/⏎role-home.md`, `константа-⏎ориентир`).
+# Разрыв склеивается ДО разбора: иначе обрывок перед переносом
+# (`orchestrator/`) становится самостоятельной зоной-каталогом и накрывает
+# почти любую задачу пульта (ложное пересечение), а сам путь теряется
+# целиком (пропуск настоящего — ровно прецедент «Контекста» SPEC, где
+# рвётся `docs/operator-session.md`).
+#
+# Снимать ВСЕ переносы нельзя: перенос после слова склеил бы прозу с
+# путём, стоящим в начале следующей строки («… задачи 01M3FQ2V77⏎
+# docs/stack.md»), а `guard.PATH_MENTION` запрещает букву/цифру слева от
+# кандидата — путь пропал бы. Разрыв в иной точке (`orchestrator/con⏎
+# fig.py`) не склеивается и остаётся, как до задачи: он даёт только
+# непуть-элемент, но не обрывок-каталог, то есть промах, а не ложное
+# срабатывание.
+_TZ_WRAPPED_PATH_BREAK = re.compile(r"(?<=[/_-])\n[ \t]*")
+
+
+def _tz_zone_items(tz_raw: str) -> list[str]:
+    """Элементы строки `Зоны:` ТЗ — как они написаны, без фильтра общих
+    зон. Разбор — ТОТ ЖЕ, что у существующей сверки путей ТЗ
+    (`_tz_path_check`): один `_tz_sections` + `guard.zone_items` на все
+    проверки одной команды, иначе перенос строки `Зоны:` или следующая
+    метка-раздел разошлись бы между ними — плюс склейка пути, разорванного
+    вёрсткой ТЗ (`_TZ_WRAPPED_PATH_BREAK`, замечание R2-F1).
+
+    Отсортировано: `guard.zone_items` отдаёт МНОЖЕСТВО, и порядок его
+    обхода у строк меняется от процесса к процессу (hash randomization)
+    — записанное в `tasks.zones` значение обязано быть одинаковым при
+    одном и том же ТЗ."""
+    zones_text, _ = _tz_sections(tz_raw, (_TZ_ZONES_LABEL,), joiner=",")
+    return sorted(guard.zone_items(_TZ_WRAPPED_PATH_BREAK.sub("", zones_text)))
+
+
+def _tz_zone_paths(tz_raw: str) -> set[str]:
+    """Пути строки `Зоны:` ТЗ — множеством, без путей, покрытых
+    `config.COMMON_ZONES` (`zone_lock._own_paths`)."""
+    return zone_lock._own_paths(",".join(_tz_zone_items(tz_raw)))
+
+
+def _record_preliminary_zones(conn, task_id: str, tz_raw: str) -> None:
+    """Зоны строки `Зоны:` ТЗ — в колонку `tasks.zones` СРАЗУ при
+    заведении, как предварительные (ответ Оператора ANSWER-1 п.2).
+
+    Без этой записи колонка пуста до approve на гейте SPEC
+    (`fsm._approve_spec_gate` — единственный, кто её писал), и прогноз
+    очереди зон слеп ровно к тем состояниям, ради которых он и заведён:
+    задача, чей SPEC пишется прямо сейчас, не попадала бы ни в
+    предупреждение `new` (требование 1), ни в добавку `status`
+    (требование 3) — то есть волна из «Контекста» SPEC не ловилась бы
+    (замечание R1-F2 ревью итерации 1).
+
+    Предварительность значения — в том, что его перезаписывает approve на
+    `spec_gate` зонами SPEC (поведение не меняется); reject на том же
+    гейте зон не пишет вовсе, и предварительное значение переживает
+    возврат аналитику. Пустая строка `Зоны:` колонку не трогает: `NULL`
+    остаётся признаком «зона не заявлена вовсе», который читают
+    `checkpoint._zone_paths` и гейт зон."""
+    items = _tz_zone_items(tz_raw)
+    if not items:
+        return
+    zones = ", ".join(items)
+    store.update_task(conn, task_id, zones=zones)
+    store.journal(conn, task_id, "operator", PRELIMINARY_ZONES_ACTION, zones)
+
+
+def _zone_overlap_warning_text(matches: list) -> str:
+    """Текст предупреждения `new` о пересечении зон (требование 2): по
+    строке на пересекающуюся задачу — общий путь, её id и состояние."""
+    lines = ["ВНИМАНИЕ: зоны ТЗ пересекаются с задачами в полёте — "
+            "задача встанет в очередь замка зон:"]
+    lines += [f"  {path} — {task_id} ({state})" for path, task_id, state in matches]
+    return "\n".join(lines)
+
+
+def _warn_zone_overlap(conn, task_id: str, tz_raw: str,
+                       target: str | None = None) -> None:
+    """Предупреждение о пересечении зон ТЗ с зонами задач в полёте (SPEC
+    01M3GKJ84XM5QPC6TK5EE307Q9, требования 1-2): печатается и
+    журналируется ПОСЛЕ заведения строки задачи, тем же приёмом, что
+    подсказка калибровки выше, и отказом НЕ становится — задача заведена,
+    код возврата `new` тот же, что без пересечения.
+
+    Набор состояний — `zone_lock.FORECAST_STATES` (занимающие плюс те, что
+    займут зону позже); признак «занимает зону» (`zone_lock._occupies`) не
+    применяется: это прогноз будущей очереди, а не отказ входа в `in_dev`.
+
+    Задача ЧУЖОГО target'а предупреждения не получает (ответ Оператора
+    ANSWER-1 п.3 по замечанию R1-F3): замок зон — механика только
+    основного target'а (`zone_lock.blocking_conflict` отдаёт `None` любой
+    задаче не-`DEFAULT_TARGET`), очереди для такой задачи не будет
+    никогда, и обещать её в журнале нечем. Тот же фильтр, что у парной
+    добавки `status` (`_zone_forecast_suffix`)."""
+    if (target or config.DEFAULT_TARGET) != config.DEFAULT_TARGET:
+        return
+    matches = zone_lock.forecast_overlaps(conn, _tz_zone_paths(tz_raw),
+                                          exclude_task_id=task_id)
+    if not matches:
+        return
+    warning = _zone_overlap_warning_text(matches)
+    store.journal(conn, task_id, "operator", ZONE_OVERLAP_ACTION,
+                 "; ".join(f"{path}: {other} ({state})"
+                           for path, other, state in matches))
+    print(f"[{task_id}] {warning}")
 
 
 def _pin_divergence_warning_text(commits: list) -> str:
@@ -343,11 +471,14 @@ def cmd_new(title: str, tz_path: str | None = None, *,
 
     _new_task_row(conn, task_id, title, target, tz_doc, is_canary=canary,
                  journal_detail=title)
+    if tz_raw is not None:
+        _record_preliminary_zones(conn, task_id, tz_raw)
     print(f"[{task_id}] «{title}» создана (target {target}, артефактная "
          f"ветка пульта {artifact_branch.branch_name(task_id)})")
     _warn_pin_divergence(conn, task_id)
     if tz_raw is not None:
         _print_new_calibration_hint(conn, task_id, tz_raw)
+        _warn_zone_overlap(conn, task_id, tz_raw, target)
     if tz_path is not None:
         print(f"  затем: artel.py run {task_id}  (запуск analyst)")
     else:
@@ -494,6 +625,30 @@ def _zone_wait_suffix(conn, t) -> str:
             f"{queue}{waited}]")
 
 
+def _zone_forecast_suffix(conn, t) -> str:
+    """Добавка «зона занята: <id>» строке задачи ДО `in_dev` (SPEC
+    01M3GKJ84XM5QPC6TK5EE307Q9, требование 3) — тем же приёмом добавки в
+    конец строки, что `_lease_holder_suffix`/`_zone_wait_suffix`.
+
+    Только три состояния `zone_lock.LATER_STATES`: задача в `in_dev` этой
+    добавки не получает — её ожидание зоны уже печатает `_zone_wait_suffix`
+    по `zone_lock.blocking_conflict` (держатель, очередь, минуты), и
+    поведение того суффикса не меняется. Кандидаты — только
+    `zone_lock.BLOCKING_STATES`: «занята» обещает занявшего зону, не
+    будущего конкурента из того же набора `LATER_STATES`."""
+    if t["state"] not in zone_lock.LATER_STATES:
+        return ""
+    if (t["target"] or config.DEFAULT_TARGET) != config.DEFAULT_TARGET:
+        return ""
+    matches = zone_lock.forecast_overlaps(
+        conn, zone_lock.task_zone_paths(t), exclude_task_id=t["id"],
+        states=zone_lock.BLOCKING_STATES)
+    if not matches:
+        return ""
+    holders = sorted({task_id for _, task_id, _ in matches})
+    return f"  [зона занята: {', '.join(holders)}]"
+
+
 def _wave_breaker_suffix(t, wave_breaker_open: bool) -> str:
     """Пометка стоп-крана волны (01M1THKRK8HPXA7Y2SRB0RFTN2, требование
     4): ДОБАВКОЙ в конец строки, тем же приёмом, что и `_lease_holder_
@@ -572,7 +727,7 @@ def cmd_status() -> None:
         # Оператору, не роли внутри промпта шага.
         mark = "  [canary]" if r["is_canary"] else ""
         holder = _lease_holder_suffix(conn, r["id"])
-        zone = _zone_wait_suffix(conn, r)
+        zone = _zone_wait_suffix(conn, r) + _zone_forecast_suffix(conn, r)
         merge_wait = merge_queue.wait_suffix(conn, r)
         wave_breaker = _wave_breaker_suffix(r, wave_breaker_open)
         division = _division_suffix(rows, r)
