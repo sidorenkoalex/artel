@@ -63,6 +63,29 @@ schema_version: 5
 (`tests/test_stack_optional_tools.py::PreflightGateTest`, строка
 `model-provider-cli`), и закрыта тем же помощником.
 
+**Итерация 3: подтяжка main — покрытие ярусов берётся у главной ветки,
+нормализация провайдера кладётся поверх** (ANSWER-2.md, решение Оператора
+по конфликту подтяжки). В main 27.09 слита задача
+01M3H5FEXH5M9HGZYT3BCDX5C4 (вершина `origin/main` 5ec64e1c), закрывшая
+покрытие ярусов общим помощником
+`tests/test_runner_role_model.py::_tiers_text` — локальный слой песочницы
+называет модель у КАЖДОГО яруса `models.TIERS`. Это то же решение, к
+которому итерация 2 пришла своим `_tiers_block` в
+`tests/test_stack_optional_tools.py`, поэтому по ANSWER-2 п.1 собственный
+вариант ветки снят целиком (функция и её комментарий): двух способов
+покрыть ярусы в одном файле не осталось. Нормализация провайдера — предмет
+ЭТОЙ задачи — сохранена и наложена поверх варианта главной ветки: карту
+сценария `_ManifestSandbox.use_tier` по-прежнему прогоняет через
+`roles_text_on_default_provider`, а слой пишет `_tiers_text` главной ветки.
+Тем же приёмом (ANSWER-2 п.2) развязан с полем `provider:` боевой карты и
+НОВЫЙ тест главной ветки `tests/test_stack_roles_tier_spread.py`: его
+`_spread_roles_text()` строит карту из настоящего `roles.yaml`, а песочница
+считает строки при `codex_found=False` — `provider: codex` у любой роли
+сделал бы CLI второго провайдера обязательным и дал красную строку мимо
+предмета (разброс ЯРУСОВ). Ярусы и провайдер здесь — один класс: обе
+крутилки Оператора в защищённом файле, который правится отдельным MR без
+прогона этих тестов.
+
 Бюджет SPEC ($25) не переоценивается: правка — один узел и его читатели,
 поле `budget_usd` во frontmatter не заводится.
 
@@ -99,8 +122,16 @@ schema_version: 5
    `tests/test_providers_codex.py` (тест «пульт без роли на Codex»),
    `tests/test_stack_optional_tools.py::_ManifestSandbox.use_tier` (поле
    `provider:` в карте сценария ставит только сам тест).
-5. **Карта кодовой базы** — `python3 scripts/codebase_map.py` тем же
-   коммитом.
+5. **Подтяжка main и разрешение конфликта** (итерация 3, ANSWER-2):
+   в `tests/test_stack_optional_tools.py` покрытие ярусов — вариант
+   `origin/main` (`_tiers_text`), собственный `_tiers_block` ветки и его
+   комментарий сняты как дубль; нормализация провайдера ветки сохранена
+   поверх; `roles_text_on_default_provider` применён к
+   `tests/test_stack_roles_tier_spread.py::_spread_roles_text` — новому
+   тесту главной ветки того же класса.
+6. **Карта кодовой базы** — `python3 scripts/codebase_map.py` тем же
+   коммитом (и отдельно после подтяжки main: она меняет `*.py` не через
+   Edit, `skills/conventions-core.md`).
 
 ## Покрытие требований
 
@@ -110,7 +141,7 @@ schema_version: 5
 | 2 | 1 (перечень), 3 (охват) |
 | 3 | 1 (склейка не менялась), 3 |
 | 4 | 1, 2 |
-| 5 | 3, 4 |
+| 5 | 3, 4, 5 |
 
 | Критерий приёмки | Чем закрыт |
 |---|---|
@@ -118,7 +149,7 @@ schema_version: 5
 | AC-2 | `tests/test_doctor_agent_roles.py::AnalystPreflightLinesTest` — оба провайдера |
 | AC-3 | `…::test_role_independent_lines_stay_one_per_provider` (две роли на одном провайдере — счёт дублей не вырожден), `…::test_promoting_a_role_in_the_map_only_adds_lines_naming_it` (сравнение МУЛЬТИмножеств, `line_counts`); обе заявки мутации проверены снятием дедупликации — файл краснеет |
 | AC-4 | `preflight.py::agent_roles_or_empty`; `…::UnreadableRolesMapTest` (4 метода, 8 функций сабтестами, текст обеих ветвей пустого перечня) |
-| AC-5 | `tests/test_doctor_agent_roles.py`; шаг 4 (пять названных файлов зелены и при `provider: codex` у analyst); прогоны ниже |
+| AC-5 | `tests/test_doctor_agent_roles.py`; шаги 4 и 5 (пять названных файлов плюс `tests/test_stack_roles_tier_spread.py` главной ветки зелены и при `provider: codex` у analyst); прогоны ниже |
 
 ## Влияние на систему
 
@@ -136,16 +167,27 @@ schema_version: 5
 `STATE_ROLE ⊆ FSM_STATES` (`tests/test_invariants.py:401`) и
 `tests/test_auto_cycle.py:349` остаются в силе; `tests/test_invariants.py`
 не тронут (SPEC, «Не входит»). Ни один тест, гейт, лимит или guard не
-ослаблен и не удалён. Правки в `tests/` — шесть файлов: новый
+ослаблен и не удалён. Правки в `tests/` — семь файлов: новый
 `tests/test_doctor_agent_roles.py`, общий помощник песочницы
-(`tests/sandbox.py`, только добавление функции) и четыре файла, где карта
+(`tests/sandbox.py`, только добавление функции) и пять файлов, где карта
 сценария теперь задаётся тестом, а не боевым `roles.yaml`
 (`test_providers.py`, `test_doctor.py`, `test_providers_codex.py`,
-`test_stack_optional_tools.py`). Во всех четырёх менялись докстринги и
+`test_stack_optional_tools.py`, `test_stack_roles_tier_spread.py` —
+последний приехал подтяжкой main). Во всех пяти менялись докстринги и
 подготовка карты; ассерты, сценарии и имена методов — нет. Единственные
 ДОБАВЛЕННЫЕ ассерты — два контроля вырожденности
 (`assertGreater(len(...), 1)`): без них «одна строка на провайдера»
 выполнялось бы и без дедупликации.
+
+**Число тестовых методов после слияния не уменьшилось** (ANSWER-2 п.5):
+в `tests/test_stack_optional_tools.py` — 15 против 15 в `origin/main`,
+сверено по именам (`def test_*` слитого файла против
+`git show main:tests/test_stack_optional_tools.py`): ни одного
+потерянного, ни одного дописанного. Резолюция конфликта — выбор между
+двумя реализациями ОДНОГО покрытия ярусов, ни один сценарий из main не
+снят: `_tiers_text` главной ветки покрывает ярусы шире собственного
+`_tiers_block` ветки (весь перечень `models.TIERS`, а не только ярусы
+ролей нынешней карты).
 
 **Прогоны (передний план, таймаут явный, `-p timeout -o timeout=300`).**
 - `tests/test_doctor_agent_roles.py` — 12 passed, 14 subtests.
@@ -185,28 +227,58 @@ schema_version: 5
 - Полный набор `tests/` в шаге не гонялся (skills/coding-standards.md); его
   гоняет CI на пуш ветки.
 
+**Прогоны итерации 3 — после подтяжки main** (передний план, `-p timeout
+-o timeout=300|400`, полный набор `tests/` не гонялся):
+- `tests/test_stack_optional_tools.py tests/test_stack_roles_tier_spread.py
+  tests/test_runner_role_model.py tests/test_runner_model_preflight.py` —
+  41 passed, 8 subtests (файлы обеих сторон конфликта и оба помощника).
+- `tests/test_doctor_agent_roles.py tests/test_doctor.py
+  tests/test_models_doctor.py tests/test_providers.py
+  tests/test_providers_codex.py tests/test_stack.py tests/test_stack_ci.py
+  tests/test_models.py tests/test_model_tariffs.py
+  tests/test_provider_scoped_step_env.py tests/test_invariants.py` —
+  404 passed, 336 subtests.
+- Модули, приехавшие подтяжкой (`orchestrator/ci_rerun.py` из `fsm.py`,
+  `catalog.spawn_subtask`): `tests/test_ci_rerun_command.py
+  tests/test_catalog_spawn_subtask.py tests/test_ci_status.py` — 96 passed,
+  33 subtests.
+- **То же на карте с `provider: codex` у analyst** (временная правка
+  `roles.yaml`, снятая `git checkout --`; `git status --short` — только
+  неотслеживаемый `tasks/<id>/`, `grep -c 'provider:' roles.yaml` = 0):
+  `tests/test_stack_optional_tools.py tests/test_stack_roles_tier_spread.py
+  tests/test_runner_role_model.py tests/test_runner_model_preflight.py
+  tests/test_providers.py tests/test_providers_codex.py
+  tests/test_doctor.py tests/test_doctor_agent_roles.py` — 267 passed,
+  111 subtests; соседний набор (`test_models_doctor`, `test_stack*`,
+  `test_models*`, `test_model_tariffs`, `test_provider_scoped_step_env`,
+  `test_invariants`, `test_canary_sets`, `test_doctor_canary_*`,
+  `test_yaml_parsing`, `test_auto_cycle`) — 340 passed, 299 subtests. Это
+  и есть доказательство ANSWER-2 п.2 для нового теста главной ветки: без
+  развязки `test_a_role_on_its_own_tier_leaves_no_red_model_line` краснел
+  бы строкой обязательного CLI Codex при `codex_found=False`.
+- Приёмочная планка задачи на слитом дереве — 13 passed, 10 subtests.
+
 **Откат.** Revert одного merge-коммита: пять файлов `orchestrator/doctor/`,
-шесть файлов `tests/`, регенерированная карта. Ни схемы БД, ни формата
+семь файлов `tests/`, регенерированная карта. Ни схемы БД, ни формата
 артефактов, ни состояний FSM правка не касается.
 
 ## Риски
 
-- **Правка фикстуры локального слоя в `tests/test_stack_optional_tools.py`
-  формально выходит за требования SPEC.** Итерация 1 дописала в фикстуру
-  `LOCAL` литеральную строку `standard: {claude_model}`: тест краснел на
-  чистом дереве, потому что `roles.yaml` держал analyst на ярусе `standard`
-  (a6da0abe), а фикстура описывала только `strong`. Оператор откатил ярус
-  коммитом d910c523 — предком этой ветки, — и обоснование «иначе CI красный»
-  перестало существовать: тест зелёный и без той строки (проверено
-  прогоном). Итерация 2 заменила литерал на сборку секции `tiers:` ПО КАРТЕ
-  (`_tiers_block`, `tests/test_stack_optional_tools.py:78`): ярус роли под
-  тестом — в модель сценария, ярус каждой остальной agent-роли карты — в
-  модель Claude каталога. Обоснование теперь безусловное — фикстура покрывает
-  ярусы всех agent-ролей при любом их наборе в `roles.yaml`, — и от даты,
-  яруса и отката не зависит. Ассерты и сценарии не менялись, проверка не
-  ослаблена. Решение о допустимости выхода за SPEC — за ревьювером; выбор
-  сделан в пользу зелёного CI ветки вместо эскалации ради одной строки
-  фикстуры в собственной зоне задачи.
+- **Покрытие ярусов локального слоя задача больше не несёт: его закрыла
+  главная ветка** (итерация 3, R1-F3 закрыт подтяжкой, ANSWER-2 п.3).
+  Итерация 1 дописала в фикстуру `LOCAL` литеральную строку
+  `standard: {claude_model}` (тогда `roles.yaml` держал analyst на ярусе
+  `standard`, a6da0abe), итерация 2 заменила литерал на сборку секции
+  `tiers:` по карте (`_tiers_block`) — оба шага были выходом за требования
+  SPEC, обоснованным красным CI. Основания больше нет ни у одного из них:
+  ярус Оператор откатил (d910c523), а покрытие ярусов слито в main задачей
+  01M3H5FEXH5M9HGZYT3BCDX5C4 общим помощником `_tiers_text`
+  (`tests/test_runner_role_model.py`, вся `models.TIERS`). Собственный
+  `_tiers_block` ветки снят как дубль, файл берёт помощник главной ветки, и
+  в зоне задачи от этого риска остаётся ровно одна правка — нормализация
+  поля `provider:`, которая из требования 5 SPEC («без ослабления
+  существующих тестов») следует прямо: без неё правка `roles.yaml`, ради
+  которой задача существует, красит main.
 - **Строки `doctor`, перебирающие роли, теперь зависят от `roles.yaml`.**
   Класс «нечитаемая карта роняет строку» закрыт по всем найденным
   читателям перечня, не по одному (grep по `agent_roles` — восемь точек
@@ -228,14 +300,26 @@ schema_version: 5
 ## Предложения системе
 
 - **Фикстура локального слоя моделей в тестах должна покрывать ВСЕ
-  agent-роли карты, а не только роль под тестом.** В
-  `tests/test_stack_optional_tools.py` это закрыто сборкой ярусов по карте
-  (`_tiers_block`), но класс шире: `tests/test_models_doctor.py` держит свою
-  карту из трёх ролей и уцелел случайно. Перевод одной роли на другой ярус в
-  `roles.yaml` красит такие файлы, и покраснение не связано с их предметом.
-  Совпадает со строкой бэклога П3 «Планка test-authoring: фикстура теста
-  должна быть достижима хотя бы одним путём» (коммит b611ec19) —
-  подтверждение класса вторым примером.
+  agent-роли карты, а не только роль под тестом.** Для песочниц, строящих
+  карту из боевого `roles.yaml`, класс закрыт в main помощником
+  `tests/test_runner_role_model.py::_tiers_text` (задача
+  01M3H5FEXH5M9HGZYT3BCDX5C4) — эта задача его и берёт. Но класс шире
+  помощника: `tests/test_models_doctor.py` держит свою карту из трёх ролей и
+  уцелел случайно, помощником не пользуется, и следующий перевод роли на
+  другой ярус его так же покрасит мимо предмета. Совпадает со строкой
+  бэклога П3 «Планка test-authoring: фикстура теста должна быть достижима
+  хотя бы одним путём» (коммит b611ec19) — подтверждение класса вторым
+  примером.
+- **Два решения одного класса дефекта разошлись по ветвям и встретились
+  конфликтом.** Покрытие ярусов фикстуры чинили одновременно эта задача
+  (`_tiers_block`, итерация 2) и 01M3H5FEXH5M9HGZYT3BCDX5C4 (`_tiers_text`,
+  слита в main 27.09) — в одном и том же файле, из одного и того же
+  инцидента a6da0abe. Ни одна из двух не знала о другой: гейт зон видит
+  пересечение `tests/`, но обе задачи держат `tests/` в зонах, и
+  предупреждение о пересечении за сигнал «тот же дефект чинят дважды» не
+  сходит. Дом решения — прогноз пересечений `orchestrator/zone_lock.py`:
+  пересечение по КОНКРЕТНОМУ файлу зоны (не по каталогу) стоит называть
+  Оператору отдельно от пересечения по зоне.
 - **Смена защищённого пути (`roles.yaml`) не проходит прогон затронутых
   тестов.** Класс подтверждён трижды за одну задачу: a6da0abe (смена ЯРУСА
   analyst) оставил `tests/test_stack_optional_tools.py` красным в main —
