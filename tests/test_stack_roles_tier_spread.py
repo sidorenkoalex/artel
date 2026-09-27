@@ -26,6 +26,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from orchestrator import config, models, roles, yamlmini  # noqa: E402
+from tests.sandbox import roles_text_on_default_provider  # noqa: E402
 from tests.test_runner_role_model import (_REAL_ROLES_TEXT,  # noqa: E402
                                           _roles_yaml_text, _tiers_text)
 from tests.test_stack_optional_tools import (CLAUDE_MODEL,  # noqa: E402
@@ -43,6 +44,14 @@ def _spread_roles_text() -> tuple:
     Оператор переставит роли. Если разброс в боевом файле уже есть
     (agent-роли заняли все ярусы перечня), карта берётся как есть —
     переставлять нечего.
+
+    Провайдер у ролей — по умолчанию (`roles_text_on_default_provider`):
+    предмет сценария — РАЗБРОС ЯРУСОВ, а `provider: codex` у любой роли
+    боевого файла делает CLI второго провайдера обязательным и даёт
+    песочнице (`codex_found=False`) красную строку мимо предмета. Тот же
+    класс, что и ярус выше: и то и другое — крутилка Оператора в
+    защищённом файле, которую он правит отдельным MR без прогона этих
+    тестов (REVIEW.md 01M3H3JRBD544GQ10SS3DBGEVP итерации 1, R1-F1).
     """
     entries = yamlmini.mapping(_REAL_ROLES_TEXT).get("roles") or {}
     agents = [name for name, entry in entries.items()
@@ -52,8 +61,10 @@ def _spread_roles_text() -> tuple:
              for name in agents if name != role}
     free = [tier for tier in models.TIERS if tier not in taken]
     if not free:
-        return _REAL_ROLES_TEXT, role, entries[role].get("model_tier")
-    return _roles_yaml_text(role, free[0]), role, free[0]
+        return (roles_text_on_default_provider(_REAL_ROLES_TEXT), role,
+                entries[role].get("model_tier"))
+    return (roles_text_on_default_provider(_roles_yaml_text(role, free[0])),
+            role, free[0])
 
 
 class RolesTierSpreadTest(_ManifestSandbox):

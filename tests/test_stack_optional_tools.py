@@ -22,7 +22,7 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from orchestrator import config, doctor, stack  # noqa: E402
-from tests.sandbox import TmpRootTest  # noqa: E402
+from tests.sandbox import TmpRootTest, roles_text_on_default_provider  # noqa: E402
 from tests.test_runner_role_model import (_roles_yaml_text,  # noqa: E402
                                           _tiers_text)
 
@@ -101,8 +101,16 @@ class _ManifestSandbox(TmpRootTest):
         01M3H5FEXH5M9HGZYT3BCDX5C4, требование 1): ярус подменяется
         только у `ROLE`, остальные agent-роли приходят из боевого
         `roles.yaml` со своими ярусами, и их цепочка обязана разрешаться
-        независимо от того, какой ярус у них стоит сегодня."""
-        text = _roles_yaml_text(ROLE, TIER)
+        независимо от того, какой ярус у них стоит сегодня.
+
+        Поле `provider:` в карте сценария ставит только сам тест
+        (`roles_text_on_default_provider` снимает все остальные): строки
+        этого файла считаются по ВСЕМ agent-ролям карты, и `provider: codex`
+        у чужой роли — правка Оператора по защищённому пути — красил бы их
+        мимо предмета (REVIEW.md 01M3H3JRBD544GQ10SS3DBGEVP итерации 1,
+        R1-F1, тот же класс, что и ярус выше).
+        """
+        text = roles_text_on_default_provider(_roles_yaml_text(ROLE, TIER))
         if provider is not None:
             text = text.replace(f"  {ROLE}:\n",
                                 f"  {ROLE}:\n    provider: {provider}\n", 1)

@@ -59,6 +59,11 @@ def check_models_local() -> doctor.Check:
     «локального слоя нет» подряд. Модель со статусом `experimental` без
     явного разрешения попадает сюда тем же путём, что и остальные звенья:
     `resolve_role` отказывает, текст называет причину и починку.
+
+    Перечень agent-ролей пуст (карта исполнителей без agent-ролей либо не
+    прочитана) — строка остаётся зелёной по своему предмету и честно
+    говорит, что ярусы не сверены, тем же приёмом, что
+    `check_models_catalog` при непрочитанном слое.
     """
     try:
         local = doctor.models.load_local()
@@ -74,8 +79,19 @@ def check_models_local() -> doctor.Check:
     # `None`: `resolve_role` прочитает его сам и назовёт отказ по каждой
     # роли — предмет этой строки остаётся прежним.
     catalog, _ = doctor.models.layers_or_none()
+    # Перечень ролей — с деградацией (`agent_roles_or_empty`, SPEC
+    # 01M3H3JRBD544GQ10SS3DBGEVP, требование 4): предмет этой строки —
+    # локальный слой, а не карта исполнителей, и ронять её нечитаемым
+    # `roles.yaml` значило бы прятать состояние слоя за чужой поломкой.
+    listed_roles = doctor.agent_roles_or_empty()
+    if not listed_roles:
+        return doctor.Check(
+            "models-local", "ok",
+            f"локальный слой моделей {doctor.config.MODELS_LOCAL} разобран; "
+            f"ярусы не сверены — agent-ролей в карте исполнителей нет либо "
+            f"она не прочитана (см. строку role-providers)")
     chains, failures = [], []
-    for role in doctor.agent_roles():
+    for role in listed_roles:
         try:
             resolved = doctor.models.resolve_role(role, catalog, local)
         except doctor.models.ModelsError as exc:
