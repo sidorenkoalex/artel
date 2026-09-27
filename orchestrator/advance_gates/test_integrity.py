@@ -18,7 +18,18 @@ fail-closed на сбое git) и `merge_gate_escalates` в
 здесь, а в `scripts/guard.py` (`qualified_test_methods`/
 `test_skip_markers`) — единственный адрес правила «что считается тестовым
 методом» в пульте (требование 1).
+
+Послабление SPEC 01M3HWXFYWVDHGW011P6BZJFYA живёт тут же, в узле, и потому
+действует на обоих рубежах сразу (его требование 8): маркер пропуска на
+НОВОМ тестовом методе — таком, чьего квалифицированного имени в базе
+сравнения нет — находкой не считается, если он одновременно условный и с
+названной причиной, а сами такие пропуски уходят в журнал задачи:
+послаблению нельзя быть молчаливым. Той же правкой закрыт обход рубежа
+ранним `return` под условием — 27.09 новый тест оболочки входа выключили
+им вместо пропуска, и на машине без `/bin/zsh` он остался зелёным, не
+проверив ничего.
 """
+import ast
 from typing import NamedTuple
 
 from scripts import guard
@@ -43,6 +54,26 @@ TEST_INTEGRITY_REFUSAL_ACTION = "переход отклонён: гейт не�
 # остаться видимыми — иначе Оператор на приёмке не узнает, что прошло по
 # его разрешению.
 TEST_INTEGRITY_ALLOWED_ACTION = "ослабление тестов разрешено мандатом Оператора"
+
+# Действие журнальной записи о пропусках, прошедших послабление (SPEC
+# 01M3HWXFYWVDHGW011P6BZJFYA, требование 7, AC-2): рубеж по ним молчит, но
+# видимыми они остаться обязаны — запись читает ревьювер, и она же
+# остаётся Оператору на приёмке. Уровень обычный: это не отказ и не алерт.
+TEST_INTEGRITY_CONDITIONAL_SKIP_ACTION = "новый тест с условным пропуском"
+
+# Декораторы пропуска, несущие УСЛОВИЕ — подмножество
+# `guard.SKIP_DECORATOR_NAMES`. Остальные из того набора (`skip`,
+# `expectedFailure`, `xfail`) гасят тест на ВСЕХ машинах навсегда и
+# послаблению не подлежат, даже когда причина у них названа (требование 3).
+_CONDITIONAL_DECORATORS = frozenset(("skipIf", "skipUnless", "skipif"))
+
+# Точечное имя декоратора и вызываемого — тем же разбором, которым его
+# видит `guard.test_skip_markers`. Текст маркера здесь обязан совпасть с
+# её ключами байт-в-байт: иначе послабление сверяется с маркером, которого
+# в наборе нет, и молча не срабатывает. Своя копия разбора разошлась бы с
+# эталоном при первой правке `scripts/guard.py`, а публичного имени там
+# завести нельзя — SPEC задачи называет этот файл только для чтения.
+_called_dotted_name = guard._called_dotted_name
 
 
 class Finding(NamedTuple):
@@ -79,6 +110,25 @@ class Finding(NamedTuple):
             return paths
         return paths + tuple(f"{p}{guard.TEST_NAME_SEP}{self.name}"
                              for p in paths)
+
+
+class ConditionalSkip(NamedTuple):
+    """Пропуск, прошедший послабление требования 2: `path` — путь файла в
+    HEAD (его роль и ревьювер видят в ветке), `name` — квалифицированное
+    имя метода, `reason` — названная причина."""
+
+    path: str
+    name: str
+    reason: str
+
+    @property
+    def line(self) -> str:
+        """Элемент detail журнальной записи требования 7:
+        «<файл>::<квалифицированное имя метода> — <причина>». Разделитель —
+        тот же `guard.TEST_NAME_SEP`, которым Оператор называет метод в
+        мандате: двух разных написаний одного адреса в пульте быть не
+        должно."""
+        return f"{self.path}{guard.TEST_NAME_SEP}{self.name} — {self.reason}"
 
 
 def _in_scope(path) -> bool:
@@ -127,12 +177,140 @@ def _git_silence(what: str) -> str:
            f"сверка тестов ветки с базой невозможна")
 
 
+def _constant_reason(call: ast.Call, position: int) -> str:
+    """Названная причина маркера: строковая КОНСТАНТА, непустая после
+    отбрасывания пробелов — позиционным аргументом `position` либо
+    именованным `reason=` (требование 2). Пустая строка — причины нет.
+
+    Вычисляемое выражение (переменная, конкатенация, f-строка) причиной не
+    считается: его текст статическим разбором не восстановить, и в журнал
+    требования 7 ушло бы либо пусто, либо исходный код выражения вместо
+    объяснения для ревьювера — рубеж закрывается в пользу находки.
+    """
+    candidates = [kw.value for kw in call.keywords if kw.arg == "reason"]
+    if len(call.args) > position:
+        candidates.insert(0, call.args[position])
+    for node in candidates:
+        if isinstance(node, ast.Constant) and isinstance(node.value, str) \
+                and node.value.strip():
+            return node.value.strip()
+    return ""
+
+
+def _decorator_occurrence(decorator, dotted: str) -> tuple:
+    """(маркер, причина) одного декоратора пропуска. Причина пустая —
+    декоратор под послабление не годится: он безусловен
+    (`skip`/`expectedFailure`/`xfail`), у него нет аргумента условия либо
+    причина не названа строковой константой.
+
+    Значим ПОСЛЕДНИЙ сегмент точечного имени — то же правило, по которому
+    маркер вообще опознан (`guard.SKIP_DECORATOR_NAMES`): один набор
+    покрывает и `@unittest.skipIf`, и `@skipIf` от `from unittest import
+    skipIf`, и `@pytest.mark.skipif`.
+    """
+    marker = f"@{dotted}"
+    if dotted.rsplit(".", 1)[-1] not in _CONDITIONAL_DECORATORS:
+        return marker, ""
+    if not isinstance(decorator, ast.Call) or not decorator.args:
+        # Условие — первый позиционный аргумент; `@skipIf` без скобок или
+        # `@pytest.mark.skipif(reason="…")` без условия выключают тест
+        # безусловно, как ни назови причину.
+        return marker, ""
+    return marker, _constant_reason(decorator, 1)
+
+
+def _skip_calls(node, inside_if: bool):
+    """(вызов пропуска, точечное имя, внутри ли он `if`) по всему узлу —
+    тот же обход, что у `guard._body_skip_markers` (весь метод, включая
+    декораторы и вложенные функции), плюс память о ветке `if`.
+
+    Условным считается вызов в теле `if` либо `else` на ЛЮБОЙ глубине
+    вложенности (требование 2). Вызов в самом УСЛОВИИ условным не
+    считается: условие вычисляется всегда, и `if self.skipTest("x"):`
+    гасит тест на каждой машине.
+    """
+    if isinstance(node, ast.If):
+        yield from _skip_calls(node.test, inside_if)
+        for sub in node.body + node.orelse:
+            yield from _skip_calls(sub, True)
+        return
+    if isinstance(node, ast.Call):
+        dotted = _called_dotted_name(node.func)
+        if dotted and (dotted.rsplit(".", 1)[-1] == "skipTest"
+                       or dotted in guard.SKIP_CALL_NAMES):
+            yield node, dotted, inside_if
+    for child in ast.iter_child_nodes(node):
+        yield from _skip_calls(child, inside_if)
+
+
+def _excused_skips(node) -> dict:
+    """{маркер: причина} по маркерам пропуска ОДНОГО тестового метода,
+    которые годятся под послабление требования 2 — условные и с названной
+    причиной.
+
+    Маркер попадает сюда только если КАЖДОЕ его вхождение в метод годится:
+    `guard.test_skip_markers` сводит вхождения к одному тексту маркера, и
+    безусловный `self.skipTest("причина")` первой строкой тела не имеет
+    права уйти из находок за компанию с условным вызовом того же вида
+    ниже (рубеж закрывается в пользу находки).
+    """
+    occurrences: list = []
+    for decorator in getattr(node, "decorator_list", []):
+        dotted = _called_dotted_name(decorator)
+        if dotted and dotted.rsplit(".", 1)[-1] in guard.SKIP_DECORATOR_NAMES:
+            occurrences.append(_decorator_occurrence(decorator, dotted))
+    for call, dotted, inside_if in _skip_calls(node, False):
+        occurrences.append((f"{dotted}(",
+                            _constant_reason(call, 0) if inside_if else ""))
+
+    excused: dict = {}
+    rejected: set = set()
+    for marker, reason in occurrences:
+        if reason and marker not in rejected:
+            excused.setdefault(marker, reason)
+        else:
+            rejected.add(marker)
+            excused.pop(marker, None)
+    return excused
+
+
+def _has_early_return(node) -> bool:
+    """ПЕРВЫЙ исполняемый оператор тела метода (докстринг не в счёт) —
+    оператор `if`, тело ветки которого ровно один `return` без значения
+    (требование 5). Иные формы раннего выхода в границы не входят: SPEC
+    перечисляет их в «Не входит» дословно.
+    """
+    body = list(node.body)
+    if body and isinstance(body[0], ast.Expr) \
+            and isinstance(body[0].value, ast.Constant) \
+            and isinstance(body[0].value.value, str):
+        body = body[1:]
+    if not body or not isinstance(body[0], ast.If):
+        return False
+    branch = body[0].body
+    return len(branch) == 1 and isinstance(branch[0], ast.Return) \
+        and branch[0].value is None
+
+
+def _early_return_names(methods: dict) -> set:
+    """Квалифицированные имена методов с ранним `return` под условием."""
+    return {name for name, node in methods.items() if _has_early_return(node)}
+
+
+def _early_return_text(name: str) -> str:
+    """Текст находки о раннем `return` — отличим от текста находки о
+    пропуске («<маркер> на <имя>»), как требует требование 6."""
+    return f"ранний return под условием в {name}"
+
+
 def _file_findings(base_path, head_path, renamed_to, base_source,
-                   head_source) -> list:
-    """Находки одного файла: удаление/переименование (только если в base
-    есть хоть один тестовый метод — требование 5: защиты в пустом файле
-    нет, удалять нечего), исчезнувшие методы и ПОЯВИВШИЕСЯ маркеры
-    пропуска.
+                   head_source) -> tuple:
+    """(находки одного файла, прошедшие послабление пропуски).
+
+    Находки: удаление/переименование (только если в base есть хоть один
+    тестовый метод — требование 5 SPEC 01M3FQ2V77QNK95Z599DM124QN: защиты в
+    пустом файле нет, удалять нечего), исчезнувшие методы, ПОЯВИВШИЕСЯ
+    маркеры пропуска и ПОЯВИВШИЙСЯ ранний `return` под условием.
 
     У распознанной пары переименования сравнение идёт между СТАРЫМ путём
     в base и НОВЫМ в head (требование 3, последняя фраза): переименование
@@ -146,6 +324,7 @@ def _file_findings(base_path, head_path, renamed_to, base_source,
     path = base_path or head_path
     alias = renamed_to or ""
     found: list = []
+    passed: list = []
 
     if base_methods:
         if head_path is None:
@@ -158,7 +337,7 @@ def _file_findings(base_path, head_path, renamed_to, base_source,
         # Методы удалённого файла по отдельности не перечисляются: находка
         # о самом файле уже называет потерю целиком, и мандат на путь
         # (требование 4) покрывает её одним элементом.
-        return found
+        return found, passed
 
     head_methods = guard.qualified_test_methods(head_source)
     for name in base_methods:
@@ -167,33 +346,60 @@ def _file_findings(base_path, head_path, renamed_to, base_source,
 
     base_markers = guard.test_skip_markers(base_source)
     for name, markers in guard.test_skip_markers(head_source).items():
+        # Послабление SPEC 01M3HWXFYWVDHGW011P6BZJFYA действует только на
+        # имени МЕТОДА, которого в базе сравнения нет (его требования 1-2,
+        # 4). Ключ `test_skip_markers`, отсутствующий среди методов head, —
+        # это имя КЛАССА: один декоратор над классом гасит все его тесты
+        # разом и остаётся находкой даже в новом файле.
+        new_name = name in head_methods and name not in base_methods
+        excused = _excused_skips(head_methods[name]) if new_name else {}
         for marker in sorted(markers - base_markers.get(name, set())):
+            if marker in excused:
+                # Путь HEAD, а не базы: перечень уходит в журнал задачи для
+                # ревьювера, а он читает ветку.
+                passed.append(ConditionalSkip(head_path, name,
+                                              excused[marker]))
+                continue
             found.append(Finding(path, name, f"{marker} на {name}", alias))
-    return found
+
+    # Ранний `return` — по тому же правилу появления, что маркеры пропуска
+    # (требование 6): для нового метода база пуста, значит находка; тот же
+    # ранний выход, стоявший на том же имени в базе, находки не даёт.
+    for name in sorted(_early_return_names(head_methods)
+                       - _early_return_names(base_methods)):
+        found.append(Finding(path, name, _early_return_text(name), alias))
+    return found, passed
 
 
 def findings(code_branch: str) -> tuple:
-    """(находки ветки против базы сравнения, текст сбоя git).
+    """(находки ветки против базы сравнения, прошедшие послабление
+    пропуски, текст сбоя git).
 
     База — `gitcmd.diff_base` (merge-base с origin/main), та же, что у
     гейта заявки мутации и у `_protected_path_diff_gate`. Git не ответил
     на базу, на список файлов диффа или на чтение содержимого пути,
     который по ответу самого git существует в своём дереве, — находки НЕ
-    собраны: `(None, detail)`. Как на это реагировать, решает вызывающий
-    гейт (fail-closed на переходе, fail-open на мерже), а не этот узел.
+    собраны: `(None, [], detail)`. Как на это реагировать, решает
+    вызывающий гейт (fail-closed на переходе, fail-open на мерже), а не
+    этот узел.
+
+    Второй элемент — пропуски, прошедшие послабление требования 2 SPEC
+    01M3HWXFYWVDHGW011P6BZJFYA: находками они не стали, но потеряться не
+    имеют права, и вызывающий вход (`uncovered`) пишет их в журнал задачи.
     """
     base = gitcmd.diff_base(code_branch)
     if base is None:
-        return None, _git_silence(
+        return None, [], _git_silence(
             f"определение базы сравнения (merge-base с origin/"
             f"{config.MAIN_BRANCH} либо локальным {config.MAIN_BRANCH}) "
             f"для ветки {code_branch}")
     entries = gitcmd.diff_name_status(base, code_branch)
     if entries is None:
-        return None, _git_silence(
+        return None, [], _git_silence(
             f"список файлов диффа (база {base}...{code_branch})")
 
     found: list = []
+    passed: list = []
     for status, first, second in entries:
         base_path, head_path, renamed_to = _pair(status, first, second)
         if not _in_scope(base_path) and not _in_scope(head_path):
@@ -211,11 +417,14 @@ def findings(code_branch: str) -> tuple:
                 # значит `None` здесь всегда сбой чтения, не легитимное
                 # отсутствие (различать их по тексту причины, как это
                 # вынужден делать гейт заявки мутации, тут не нужно).
-                return None, _git_silence(f"чтение {path} из {ref} ({reason})")
+                return None, [], _git_silence(
+                    f"чтение {path} из {ref} ({reason})")
             sources[side] = text
-        found += _file_findings(base_path, head_path, renamed_to,
-                                sources["base"], sources["head"])
-    return found, ""
+        file_found, file_passed = _file_findings(
+            base_path, head_path, renamed_to, sources["base"], sources["head"])
+        found += file_found
+        passed += file_passed
+    return found, passed, ""
 
 
 def _answer_mandate(artifact_branch: str, task_id: str) -> dict:
@@ -254,10 +463,21 @@ def uncovered(conn, task_id: str, code_branch: str,
     Покрытые мандатом находки в возврат не попадают, а уходят ОДНОЙ
     записью журнала «разрешено ANSWER-n» (требование 4, AC-8): Оператор
     видит и то, что рубеж их встретил, и чем именно они разрешены.
+
+    Тем же приёмом и тут же — пропуски, прошедшие послабление требования 2
+    SPEC 01M3HWXFYWVDHGW011P6BZJFYA: ОДНА запись журнала «новый тест с
+    условным пропуском» (его требование 7). Место записи — этот общий
+    вход, а не обёртки: он единственный у узла, кому доступны `conn` и
+    `task_id`, и зовут его оба рубежа, так что запись появляется на
+    каждом.
     """
-    found, git_detail = findings(code_branch)
+    found, passed, git_detail = findings(code_branch)
     if found is None:
         return None, git_detail
+    if passed:
+        store.journal(conn, task_id, "fsm",
+                      TEST_INTEGRITY_CONDITIONAL_SKIP_ACTION,
+                      "; ".join(skip.line for skip in passed))
     if not found:
         return [], ""
 

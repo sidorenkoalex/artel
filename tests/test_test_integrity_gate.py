@@ -19,6 +19,8 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+from scripts import guard  # noqa: E402
+
 from orchestrator import (config, fsm_advance, fsm_merge_gate,  # noqa: E402
                           gitcmd, store)
 from orchestrator.advance_gates import test_integrity  # noqa: E402
@@ -65,6 +67,185 @@ class AlphaTest(unittest.TestCase):
 
 HELPER_WITHOUT_TESTS = '''def build(size):
     return list(range(size))
+'''
+
+# ---------------------------------------------------------------------------
+# Фикстуры послабления SPEC 01M3HWXFYWVDHGW011P6BZJFYA: условный пропуск с
+# названной причиной на НОВОМ методе и ранний `return` под условием. Живая
+# ветка с настоящим git — предмет планки задачи; здесь предмет — ГРАНИЦЫ
+# разбора, до которых планка не достаёт (смешанные маркеры на одном методе,
+# вложенность `if`, вызов в условии, неконстантная причина, формы раннего
+# выхода вне границы требования 5).
+
+CONDITIONAL_SKIPS = '''import os
+import unittest
+
+import pytest
+
+READY = os.path.exists("/bin/zsh")
+
+
+class NewTest(unittest.TestCase):
+
+    def test_call_inside_if(self):
+        if not READY:
+            self.skipTest("вызов внутри if")
+        self.assertTrue(READY)
+
+    @unittest.skipUnless(READY, "второй позиционный аргумент")
+    def test_skip_unless_positional_reason(self):
+        self.assertTrue(READY)
+
+    @pytest.mark.skipif(not READY, reason="именованный reason")
+    def test_skipif_reason_kwarg(self):
+        self.assertTrue(READY)
+'''
+
+# Один новый метод под ДВУМЯ маркерами: условный с причиной и безусловный.
+MIXED_MARKERS = '''import unittest
+
+READY = False
+
+
+class MixedTest(unittest.TestCase):
+
+    @unittest.skipUnless(READY, "оболочки нет")
+    @unittest.skip("чиню отдельной задачей")
+    def test_both(self):
+        self.assertTrue(READY)
+'''
+
+# Два вызова ОДНОГО вида в одном методе: условный и безусловный. Маркер у
+# них один текстом, и годность решается по худшему вхождению.
+TWO_SKIP_CALLS = '''import unittest
+
+READY = False
+
+
+class TwoCallsTest(unittest.TestCase):
+
+    def test_two_calls(self):
+        if not READY:
+            self.skipTest("оболочки нет")
+        self.skipTest("и вообще нечего проверять")
+'''
+
+NESTED_SKIP_CALL = '''import unittest
+
+READY = False
+PLATFORM = "darwin"
+
+
+class NestedTest(unittest.TestCase):
+
+    def test_nested(self):
+        if not READY:
+            for _ in range(1):
+                if PLATFORM == "darwin":
+                    self.skipTest("оболочки нет")
+        self.assertTrue(READY)
+'''
+
+SKIP_CALL_IN_CONDITION = '''import unittest
+
+READY = False
+
+
+class ConditionTest(unittest.TestCase):
+
+    def test_in_condition(self):
+        if self.skipTest("оболочки нет"):
+            pass
+        self.assertTrue(READY)
+'''
+
+SKIPIF_WITHOUT_CONDITION = '''import unittest
+
+import pytest
+
+
+class NoConditionTest(unittest.TestCase):
+
+    @pytest.mark.skipif(reason="оболочки нет")
+    def test_no_condition(self):
+        self.assertTrue(True)
+'''
+
+NON_STRING_REASON = '''import unittest
+
+READY = False
+
+
+class NonStringTest(unittest.TestCase):
+
+    def test_non_string_reason(self):
+        if not READY:
+            self.skipTest(None)
+        self.assertTrue(READY)
+'''
+
+# Новый файл без единого маркера и без раннего выхода.
+PLAIN_NEW_FILE = '''import unittest
+
+
+class PlainTest(unittest.TestCase):
+
+    def test_plain(self):
+        self.assertTrue(True)
+'''
+
+# Тот же ГОЛЫЙ `test_one`, что в `ALPHA`, но в НОВОМ классе: имя метода
+# квалифицированное, и `BetaTest::test_one` в базе сравнения не существует.
+ALPHA_PLUS_NEW_CLASS = ALPHA + '''
+
+class BetaTest(unittest.TestCase):
+
+    @unittest.skipUnless(False, "оболочки нет")
+    def test_one(self):
+        pass
+'''
+
+EARLY_RETURN = '''import unittest
+
+READY = False
+
+
+class EarlyTest(unittest.TestCase):
+
+    def test_early(self):
+        """Докстринг не считается первым исполняемым оператором."""
+        if not READY:
+            return
+        self.assertTrue(READY)
+'''
+
+# Четыре формы раннего выхода, которые SPEC («Не входит») из границы
+# требования 5 исключает дословно.
+EARLY_RETURN_OUT_OF_SCOPE = '''import unittest
+
+READY = False
+
+
+class OutOfScopeTest(unittest.TestCase):
+
+    def test_unconditional_return(self):
+        return
+
+    def test_return_is_not_the_first_statement(self):
+        self.assertTrue(True)
+        if not READY:
+            return
+
+    def test_branch_has_two_statements(self):
+        if not READY:
+            self.assertTrue(True)
+            return
+        self.assertTrue(READY)
+
+    def test_return_with_a_value(self):
+        if not READY:
+            return None
+        self.assertTrue(READY)
 '''
 
 ANSWER_SUBJECT = "T001: ANSWER-1 — ответ Оператора"
@@ -414,6 +595,190 @@ class RenameMandateTest(_GateSandbox):
             refusal.detail)
 
 
+class ConditionalSkipInNewMethodTest(_GateSandbox):
+    """Послабление SPEC 01M3HWXFYWVDHGW011P6BZJFYA (требования 1-3, 7):
+    маркер пропуска на НОВОМ методе находкой не считается, если он
+    одновременно условный и с названной причиной, и уходит в журнал."""
+
+    PATH = "tests/test_new.py"
+
+    def added(self, source):
+        """Единственная правка ветки — НОВЫЙ файл тестов `source`."""
+        self.entries = [("A", self.PATH, None)]
+        self.sources[(CODE_BRANCH, self.PATH)] = source
+        return self.refusal()
+
+    def skips(self):
+        return [detail for action, detail in self.journal()
+                if action == test_integrity.TEST_INTEGRITY_CONDITIONAL_SKIP_ACTION]
+
+    def test_three_conditional_forms_pass_and_go_to_the_journal(self):
+        """Ловит мутацию: послабление реализовано для одной формы из трёх
+        (разбирается только декоратор, только `reason=`, только второй
+        позиционный) либо запись журнала собрана из голого имени метода без
+        класса и файла — честный неприменимый тест снова гонят за мандатом,
+        а прошедший пропуск теряется для ревьювера."""
+        self.assertIsNone(self.added(CONDITIONAL_SKIPS))
+        self.assertEqual(
+            ["tests/test_new.py::NewTest::test_call_inside_if — "
+             "вызов внутри if; "
+             "tests/test_new.py::NewTest::test_skip_unless_positional_reason "
+             "— второй позиционный аргумент; "
+             "tests/test_new.py::NewTest::test_skipif_reason_kwarg — "
+             "именованный reason"],
+            self.skips())
+
+    def test_excused_marker_texts_are_the_guard_marker_texts(self):
+        """Ловит мутацию: текст маркера собран в узле своим разбором
+        точечного имени, а не тем, которым его видит
+        `guard.test_skip_markers` — послабление сверяется с маркером,
+        которого в наборе гейта нет, и молча не срабатывает ни на одной
+        форме."""
+        markers = guard.test_skip_markers(CONDITIONAL_SKIPS)
+        for name, node in guard.qualified_test_methods(CONDITIONAL_SKIPS).items():
+            self.assertEqual(markers[name],
+                             set(test_integrity._excused_skips(node)), name)
+
+    def test_unconditional_marker_beside_a_conditional_one_stays_a_finding(self):
+        """Ловит мутацию: послабление решает судьбу МЕТОДА, а не каждого
+        маркера — один условный декоратор с причиной снимает с того же
+        метода и `@unittest.skip`, гасящий его на всех машинах навсегда
+        (требование 3 называет такой маркер находкой дословно)."""
+        refusal = self.added(MIXED_MARKERS)
+        self.assertIsNotNone(refusal)
+        self.assertEqual("tests/test_new.py: @unittest.skip на "
+                         "MixedTest::test_both", refusal.detail)
+        self.assertEqual(["tests/test_new.py::MixedTest::test_both — "
+                          "оболочки нет"], self.skips())
+
+    def test_one_unconditional_occurrence_rejects_the_whole_marker(self):
+        """Ловит мутацию: годность маркера решается по ПЕРВОМУ подходящему
+        вхождению — `self.skipTest("…")` вне всякого `if` уходит из находок
+        за компанию с условным вызовом того же вида выше, хотя
+        `guard.test_skip_markers` сводит оба к одному тексту маркера и
+        рубеж обязан закрыться в пользу находки."""
+        refusal = self.added(TWO_SKIP_CALLS)
+        self.assertIsNotNone(refusal)
+        self.assertEqual("tests/test_new.py: self.skipTest( на "
+                         "TwoCallsTest::test_two_calls", refusal.detail)
+        self.assertEqual([], self.skips())
+
+    def test_skip_call_nested_deeper_than_one_if_is_conditional(self):
+        """Ловит мутацию: условность вызова проверяется только на ПЕРВОМ
+        уровне тела `if` — пропуск внутри цикла или вложенного `if`
+        перестаёт считаться условным, хотя требование 2 называет любую
+        глубину вложенности."""
+        self.assertIsNone(self.added(NESTED_SKIP_CALL))
+        self.assertEqual(["tests/test_new.py::NestedTest::test_nested — "
+                          "оболочки нет"], self.skips())
+
+    def test_skip_call_in_the_if_condition_is_not_conditional(self):
+        """Ловит мутацию: условным считается любой вызов, лежащий внутри
+        узла `ast.If` — вызов в самом УСЛОВИИ исполняется всегда и гасит
+        тест на каждой машине, а рубеж о нём молчит."""
+        refusal = self.added(SKIP_CALL_IN_CONDITION)
+        self.assertIsNotNone(refusal)
+        self.assertIn("self.skipTest( на ConditionTest::test_in_condition",
+                      refusal.detail)
+        self.assertEqual([], self.skips())
+
+    def test_decorator_without_a_condition_argument_stays_a_finding(self):
+        """Ловит мутацию: условным считается сам ВИД декоратора
+        (`skipif`/`skipIf`/`skipUnless`) без проверки, что условие ему
+        передано — `@pytest.mark.skipif(reason="…")` выключает тест
+        безусловно и проходит рубеж на одной названной причине."""
+        refusal = self.added(SKIPIF_WITHOUT_CONDITION)
+        self.assertIsNotNone(refusal)
+        self.assertEqual("tests/test_new.py: @pytest.mark.skipif на "
+                         "NoConditionTest::test_no_condition", refusal.detail)
+
+    def test_non_string_constant_is_not_a_reason(self):
+        """Ловит мутацию: причиной считается любая константа
+        (`self.skipTest(None)`, `self.skipTest(0)`) — в журнал требования 7
+        уходит «None» вместо объяснения, и ревьювер получает след без
+        смысла."""
+        refusal = self.added(NON_STRING_REASON)
+        self.assertIsNotNone(refusal)
+        self.assertIn("self.skipTest( на NonStringTest::test_non_string_reason",
+                      refusal.detail)
+        self.assertEqual([], self.skips())
+
+    def test_no_journal_record_when_nothing_passed_the_leniency(self):
+        """Ловит мутацию: запись «новый тест с условным пропуском» пишется
+        безусловно, на каждом заходе узла — журнал задачи забивается
+        пустыми записями, и настоящее послабление в них не разглядеть."""
+        self.assertIsNone(self.added(PLAIN_NEW_FILE))
+        self.assertEqual([], self.skips())
+
+    def test_new_method_of_an_old_class_name_is_compared_qualified(self):
+        """Ловит мутацию: имя сверяется с базой ГОЛЫМ (как в
+        `guard._collect_test_functions`) — `BetaTest::test_one` нового
+        класса считается существующим из-за одноимённого
+        `AlphaTest::test_one`, и послабление на него не действует, хотя
+        такого теста в базе сравнения не было вовсе."""
+        self.entries = [("M", "tests/test_alpha.py", None)]
+        self.sources[(BASE, "tests/test_alpha.py")] = ALPHA
+        self.sources[(CODE_BRANCH, "tests/test_alpha.py")] = ALPHA_PLUS_NEW_CLASS
+        self.assertIsNone(self.refusal())
+        self.assertEqual(["tests/test_alpha.py::BetaTest::test_one — "
+                          "оболочки нет"], self.skips())
+
+
+class EarlyReturnFindingTest(_GateSandbox):
+    """Ранний `return` под условием — находка того же класса, что пропуск
+    без причины (SPEC 01M3HWXFYWVDHGW011P6BZJFYA, требования 5-6)."""
+
+    PATH = "tests/test_new.py"
+
+    def added(self, source):
+        self.entries = [("A", self.PATH, None)]
+        self.sources[(CODE_BRANCH, self.PATH)] = source
+        return self.refusal()
+
+    def test_early_return_after_a_docstring_is_a_finding(self):
+        """Ловит мутацию: докстринг метода принят за первый исполняемый
+        оператор (либо ранний выход ищется регуляркой по тексту) — обход
+        рубежа, который SPEC называет известным и открытым, остаётся
+        открытым; текст находки при этом обязан отличаться от текста
+        находки о пропуске и называть файл с квалифицированным именем."""
+        refusal = self.added(EARLY_RETURN)
+        self.assertIsNotNone(refusal)
+        self.assertEqual("tests/test_new.py: ранний return под условием в "
+                         "EarlyTest::test_early", refusal.detail)
+
+    def test_other_forms_of_early_exit_are_out_of_scope(self):
+        """Ловит мутацию: границы требования 5 расширены — безусловный
+        `return` первым действием, `return` не первым оператором, `if` с
+        телом из двух операторов или `return None` начинают отказывать
+        переходу, и рубеж краснеет на коде, который SPEC («Не входит») из
+        границы исключает дословно."""
+        self.assertIsNone(self.added(EARLY_RETURN_OUT_OF_SCOPE))
+
+    def test_early_return_present_in_base_is_not_a_finding(self):
+        """Ловит мутацию: ранний выход собирается по одному head, без
+        сверки с тем же именем в базе — правка файла, где ранний `return`
+        стоял годами, отказывает переходу за чужой давний код."""
+        self.entries = [("M", self.PATH, None)]
+        self.sources[(BASE, self.PATH)] = EARLY_RETURN
+        self.sources[(CODE_BRANCH, self.PATH)] = EARLY_RETURN.replace(
+            "self.assertTrue(READY)", "self.assertTrue(bool(READY))")
+        self.assertIsNone(self.refusal())
+
+    def test_early_return_is_covered_by_the_operator_mandate(self):
+        """Ловит мутацию: новая находка заведена в обход общего пути
+        находок (собственным отказом мимо `uncovered`) — мандат Оператора
+        её не покрывает, и законное решение «этот ранний выход остаётся»
+        нечем оформить, кроме правки самого гейта."""
+        self.add_answer("ANSWER-1.md",
+                        f"{self.PATH}::EarlyTest::test_early")
+        self.assertIsNone(self.added(EARLY_RETURN))
+        allowed = [detail for action, detail in self.journal()
+                   if action == test_integrity.TEST_INTEGRITY_ALLOWED_ACTION]
+        self.assertEqual(["tests/test_new.py: ранний return под условием в "
+                          "EarlyTest::test_early — разрешено ANSWER-1"],
+                         allowed)
+
+
 class GateWiringTest(unittest.TestCase):
     """Рубеж ПОДКЛЮЧЁН к обоим маршрутам — к телу `fsm_advance.in_dev` и к
     телу `fsm_merge_gate._cmd_approve_merge_gate` (требования 6-7, AC-13).
@@ -545,6 +910,25 @@ class MergeGateTest(SchemaSeededTmpRootTest):
         self.assertFalse(escalated)
         self.assertEqual("merge_gate",
                          store.get_task(self.conn, self.TASK)["state"])
+
+    def test_conditional_skip_passes_the_merge_route_and_is_journalled(self):
+        """Ловит мутацию: послабление и его журнальная запись вписаны в
+        обёртку перехода, а не в общий узел — честный неприменимый тест
+        проходит `in_dev -> verifying` и упирается в эскалацию на самом
+        дорогом шаге конвейера, а Оператор на мерже не видит перечня
+        пропусков, которые рубеж пропустил (требования 7-8)."""
+        escalated = self._escalates(
+            [("A", "tests/test_new.py", None)],
+            {(CODE_BRANCH, "tests/test_new.py"): CONDITIONAL_SKIPS})
+        self.assertFalse(escalated)
+        self.assertEqual("merge_gate",
+                         store.get_task(self.conn, self.TASK)["state"])
+        skips = [r["detail"] for r in self.conn.execute(
+            "SELECT detail FROM steps WHERE task_id=? AND action=?",
+            (self.TASK, test_integrity.TEST_INTEGRITY_CONDITIONAL_SKIP_ACTION))]
+        self.assertEqual(1, len(skips), skips)
+        self.assertIn("tests/test_new.py::NewTest::test_call_inside_if — "
+                      "вызов внутри if", skips[0])
 
 
 class DiffNameStatusTest(unittest.TestCase):
