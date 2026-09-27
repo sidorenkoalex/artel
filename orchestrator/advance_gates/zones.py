@@ -5,12 +5,11 @@ from scripts import guard
 
 from .. import checkpoint, config, gitcmd, store, workspace
 from ._base import GateRefusal, _run_gates
-
-# Маркер мандата Оператора на расширение зон (SPEC 01M1P9QCHPHSCEA6TK13PV85SP,
-# ANSWER-1.md, п.2, канал ADR-0012) — строка в ЛЮБОМ ANSWER-n.md задачи,
-# разбирается только по этому префиксу; свободный текст ANSWER не
-# анализируется.
-_ZONES_MANDATE_MARKER = "Расширение зон разрешено:"
+# Маркер мандата и разбор строк через запятую живут в `mandate` — общем
+# узле разбора строки мандата (SPEC 01M3GKJBXEBHB6ZA48J7VG8Z8W, требование
+# 1); импорт сюда сохраняет прежние имена `zones._ZONES_MANDATE_MARKER`/
+# `zones._split_zone_paths` рабочими для реэкспорта `fsm_advance` и тестов.
+from .mandate import _ZONES_MANDATE_MARKER, _split_zone_paths, elements
 
 # Действие отказа гейта зон в подслучае «мандат Оператора покрывает ВСЕ
 # пути диффа вне зон, а раздел «## Расширение зон» PLAN.md отсутствует
@@ -24,16 +23,6 @@ _ZONES_MANDATE_MARKER = "Расширение зон разрешено:"
 # `store.refusal_history` доносит отказ до брифа роли (AC-4).
 ZONES_MANDATE_WITHOUT_PLAN_REFUSAL_ACTION = (
     "переход отклонён: гейт зон — мандат есть, раздел PLAN не оформлен")
-
-
-def _split_zone_paths(raw) -> list[str]:
-    """Список путей через запятую — тот же формат, что несёт `zones:` части
-    1 (01M1NKVPD2A79PQ6K0JVV1B2Q1) и строки `Пути:`/`Расширение зон
-    разрешено:` ANSWER-1.md этой задачи. `raw` — `None`/пустая строка (поле
-    не заполнено) даёт пустой список, не ошибку."""
-    if not raw:
-        return []
-    return [p.strip() for p in raw.split(",") if p.strip()]
 
 
 def _touches_zone(path: str, zones: list[str]) -> bool:
@@ -115,7 +104,10 @@ def _answer_commit_is_role_step_autocommit(branch: str, task_id: str,
 def _answer_zones_mandate(branch: str, task_id: str) -> set[str]:
     """Объединение путей ВСЕХ маркеров `_ZONES_MANDATE_MARKER`, найденных в
     ЛЮБОМ `tasks/<id>/ANSWER-n.md` ветки задачи (ANSWER-1.md, п.2) — перебор
-    файлов тем же приёмом, что `fsm._answer_file_count`.
+    файлов тем же приёмом, что `fsm._answer_file_count`. Саму строку
+    разбирает общий узел `mandate.elements` (SPEC
+    01M3GKJBXEBHB6ZA48J7VG8Z8W, требование 1); накопление по строкам и по
+    файлам остаётся здесь.
 
     Файл, последний коммит которого — доказанный автокоммит шага роли
     (`_answer_commit_is_role_step_autocommit`), пропускается: это не
@@ -133,9 +125,9 @@ def _answer_zones_mandate(branch: str, task_id: str) -> set[str]:
         if text is None:
             continue
         for line in text.splitlines():
-            line = line.strip()
-            if line.startswith(_ZONES_MANDATE_MARKER):
-                mandate.update(_split_zone_paths(line[len(_ZONES_MANDATE_MARKER):]))
+            found = elements(line, _ZONES_MANDATE_MARKER)
+            if found:
+                mandate.update(found)
     return mandate
 
 
