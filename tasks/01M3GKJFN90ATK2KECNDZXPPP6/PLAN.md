@@ -33,6 +33,20 @@ schema_version: 5
    индекса rowid-таблицы, и план запроса это подтверждает (замер AC-3
    ниже: `SEARCH steps USING INDEX idx_steps_task_id (task_id=?)`, ни
    `SCAN`, ни `USE TEMP B-TREE FOR ORDER BY`).
+   Запись миграции защищена проверкой наличия самой таблицы —
+   `if table_columns(conn, "steps")` (`orchestrator/schema.py:308`), тем же
+   вырожденным случаем, что живёт в `add_column` («нет таблицы — нечего
+   догонять»). Причина возврата из verifying (прогон 36298443711): `steps`
+   заводит только `create_schema`, миграция её не создаёт, а БД с `tasks` и
+   без `steps` — штатный вход миграции (минимальные БД прошлых версий в
+   `tests/test_agent_failure.py:321`, `tests/test_review_freshness.py`), и
+   `CREATE INDEX` на такой БД падал `no such table: main.steps`, унося ВЕСЬ
+   `migrate`, то есть любое открытие такой БД. Порядок записей `migrate`
+   этого класса не закрывал бы: создавать `steps` в миграции — новая
+   таблица во второй копии DDL, ровно тот расход паритета, от которого
+   решение 1 и уходит. Паритет схемы сохранён: у свежей и у живой БД
+   таблица `steps` есть, ветка проверки на них не срабатывает (AC-1/AC-2
+   зелены, планка не правилась).
 
 2. **SQL остаётся в `store.py`** (ADR-0003 3ж): две новые выборки —
    `store.all_steps(conn)` (весь журнал одним запросом, `ORDER BY id`) и
@@ -151,7 +165,7 @@ N + 7 (10/13/19 выше) и продолжает расти с числом з�
 
 | Требование | Место | Тест |
 |---|---|---|
-| 1 | `schema.py:45` (DDL), `:299` (`migrate`) | `tests/test_steps_task_id_index.py::test_migrate_adds_the_index_and_a_second_run_changes_nothing` |
+| 1 | `schema.py:62` (DDL), `:308` (`migrate`) | `tests/test_steps_task_id_index.py::test_migrate_adds_the_index_and_a_second_run_changes_nothing`, `::test_migrate_of_a_db_without_the_steps_table_does_not_fail` |
 | 2 | составной индекс не заводится; обоснование — комментарий у DDL | `tests/test_steps_task_id_index.py::test_journal_query_plan_searches_the_index_without_sorting` |
 | 3 | `store.all_steps`, `report._all_steps`, `report._map_size_entries` | `tests/test_report.py::JournalIsReadInOneSelectTest`, `tests/test_store_journal.py::BulkJournalReadsTest` |
 | 4 | `store.task_steps_since`, `watch._emit_steps` | `tests/test_watch.py::EmitStepsFiltersInSqlTest` |
@@ -208,8 +222,30 @@ N + 7 (10/13/19 выше) и продолжает расти с числом з�
   tests/test_multitarget_invariants.py tests/test_cas_set_state.py
   tests/test_spent_estimate_store.py tests/test_coldstart.py
   tests/test_model_tariffs.py` — 186 passed, 229 subtests.
-Полный набор `tests/` в шаге не запускался (скил coding-standards: 3-4
-минуты, уходит в фон) — его гоняет CI на каждый пуш ветки.
+
+Итерация 2 (закрытие причины возврата) — прогнан ВЕСЬ набор `tests/`, но
+батчами по модулям, потому что `pytest tests/` целиком отказывает сторож
+роли в `conftest.py` («полный прогон набора внутри шага запрещён»):
+- `tests/test_steps_task_id_index.py tests/test_agent_failure.py
+  tests/test_review_freshness.py
+  tests/test_store_schema_migration_parity.py` — 42 passed (обе
+  упавшие в CI миграционные проверки зелены);
+- `tasks/01M3GKJFN90ATK2KECNDZXPPP6/acceptance_tests/` — 11 passed,
+  планка не правилась;
+- батч зон задачи (`test_report`, `test_watch`, `test_pin`, `test_canary`,
+  `test_catalog_status_log`, `test_retro`, `test_invariants`,
+  `test_multitarget`, `test_spec_budget`, `test_parent_task_division`,
+  `test_zones_approve`, `test_store_journal`) — 405 passed, 284 subtests;
+- остальные 161 модуля `tests/` тремя батчами — 956 passed / 116 subtests,
+  710 passed / 91 subtests при 1 failed, 993 passed / 196 subtests.
+Единственный красный — `tests/test_liveness.py::TerminateProcessGroupTest::
+test_kills_the_leader_and_returns_a_positive_count`: он спавнит реальный
+процесс новой сессии и ждёт `os.killpg`, а в песочнице шага роли
+`terminate_process_group` возвращает 0. К диффу задачи отношения не имеет
+(дифф трогает `orchestrator/schema.py` и
+`tests/test_steps_task_id_index.py`), в CI ветки этот тест зелён — красными
+там были ровно две миграционные проверки из причины возврата. Строка о
+самой трении — в «Предложения системе».
 
 ## Риски
 
@@ -240,3 +276,18 @@ N + 7 (10/13/19 выше) и продолжает расти с числом з�
   `schema.py` — это половина набора: `store.task_steps` зовут 20 файлов
   `orchestrator/`. Формулировка не даёт критерия остановки, и выбор
   батчей остаётся на глазомере роли.
+- Возврат из verifying требует «прогнать полный набор tests/ до пуша», а
+  сторож роли в `conftest.py` отказывает шагу ровно в этом (`pytest
+  tests/` -> «полный прогон набора внутри шага запрещён»). Класс:
+  требование возврата и сторож шага противоречат друг другу, и роль
+  закрывает разрыв вручную — перечислением всех 161 модуля батчами (девять
+  минут вместо трёх-четырёх и никакой гарантии, что модуль не потерян).
+  Нужна команда пульта «прогнать набор за шаг» либо формулировка возврата,
+  адресующая CI.
+- `tests/test_liveness.py::TerminateProcessGroupTest::
+  test_kills_the_leader_and_returns_a_positive_count` красен в песочнице
+  шага роли и зелён в CI: `os.killpg` по процессу новой сессии в песочнице
+  не доходит, `terminate_process_group` возвращает 0. Класс: тест на
+  реальных OS-сигналах не отличает «сигнал не сработал» от «песочница
+  сигнал не пропустила», и роль, сверяющая свой дифф прогоном модулей,
+  каждый раз обязана доказывать себе, что красный — чужой.
