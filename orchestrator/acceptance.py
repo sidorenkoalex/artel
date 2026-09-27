@@ -8,12 +8,14 @@
 а не проверкой. guard.py содержимое файлов принципиально не исполняет
 (его докстринг) — прогон и сбор тестов поэтому здесь, не там.
 """
+import re
 import subprocess
 from pathlib import Path
+from typing import NamedTuple
 
 from scripts import guard
 
-from . import ci, config, gitcmd, stack
+from . import agent_log, ci, config, gitcmd, stack
 
 
 def _pytest_command(*args: str) -> list[str]:
@@ -48,6 +50,74 @@ def _timeout_text(value: bytes | str | None) -> str:
     if value is None:
         return ""
     return value.decode("utf-8", errors="replace") if isinstance(value, bytes) else value
+
+
+# ------------------------------------------------ разбор вывода прогона
+#
+# Один узел разбора на весь пульт (SPEC 01M3FQ3JVC3DGGM33XCX8TC7ME,
+# требование 1): до него признак красноты и итоговую строку читали в двух
+# местах по-разному — `amend._RUN_SUMMARY` знал только итоговую строку, а
+# автогейт приёмки не читал вывод вовсе и писал одну фразу на три разных
+# исхода. Имена упавших тестов не читал никто.
+
+# Итоговая строка pytest (перенесена из `orchestrator/amend.py`, SPEC
+# 01M1TKP6AAY4W8GDGZNA9R0JZT, требование 2): «N passed in Xs» / «M failed,
+# N passed in Xs», в любом порядке категорий (failed/passed/skipped/error/
+# xfailed/xpassed/warning) через запятую, завершается «in <секунды>s» — тем
+# же местом, где pytest печатает сводку независимо от порядка
+# category-групп в конкретном прогоне.
+_RUN_SUMMARY = re.compile(
+    r"\d+ (?:passed|failed|error(?:s)?|skipped|xfailed|xpassed|warnings?)"
+    r"(?:, \d+ (?:passed|failed|error(?:s)?|skipped|xfailed|xpassed|warnings?))*"
+    r" in [\d.]+s")
+
+# Строка блока «short test summary info»: имя упавшего теста. `ERROR` —
+# та же категория (требование 1): тест не запустился вовсе (сбой setUp/
+# импорта), но назван он там же и тем же форматом, а Оператору нужен
+# именно nodeid. Якорь на начало строки обязателен — иначе слово FAILED
+# внутри traceback или в сообщении ассерта читалось бы как имя теста.
+_FAILED_LINE = re.compile(r"^(?:FAILED|ERROR) \S+.*$", re.MULTILINE)
+
+
+def run_summary_line(output: str) -> str:
+    """Итоговая строка прогона pytest (`N passed in Xs`/`M failed, N
+    passed in Xs`) из вывода прогона; пустая строка — строки в выводе
+    нет (прогон оборвался раньше сводки, вывод обрезан иначе, чем
+    ожидается)."""
+    match = _RUN_SUMMARY.search(output)
+    return match.group(0).strip() if match else ""
+
+
+def failed_test_lines(output: str) -> list[str]:
+    """Строки `FAILED <nodeid>`/`ERROR <nodeid>` блока «short test summary
+    info» — имена упавших тестов вместе с коротким сообщением, которым
+    pytest их сопровождает (оно и есть первая версия причины)."""
+    return [line.strip() for line in _FAILED_LINE.findall(output)]
+
+
+def _bounded(text: str) -> str:
+    """Текст, ограниченный теми же потолками, что выжимка логов ролей
+    (`agent_log.log_tail`, SPEC требование 2): сначала последние
+    `config.LOG_TAIL_LINES` строк, затем последние
+    `config.LOG_TAIL_CHARS` символов — хвост, а не начало: в конце вывода
+    pytest стоит и сводка, и последние упавшие тесты."""
+    tail = "\n".join(text.splitlines()[-config.LOG_TAIL_LINES:]).strip()
+    return tail[-config.LOG_TAIL_CHARS:]
+
+
+def run_digest(output: str) -> str:
+    """Выжимка вывода прогона pytest для журнала (требование 1): имена
+    упавших тестов и итоговая строка; ни того, ни другого в выводе нет
+    (сбор оборвался на conftest, вывод не от pytest) — хвост вывода, чтобы
+    диагностика не потерялась совсем.
+
+    Объём — `_bounded` (требование 2): запись журнала читают глазами, а
+    красный полный набор бывает и на двести тестов."""
+    lines = failed_test_lines(output)
+    summary = run_summary_line(output)
+    if summary:
+        lines.append(summary)
+    return _bounded("\n".join(lines) if lines else output)
 
 
 def run(tdir: Path, cwd: Path | None = None) -> tuple[bool, str]:
@@ -226,9 +296,112 @@ def materialize_from_branch(task_id: str, branch: str, code_dir: Path) -> Path:
     return tdir
 
 
+# ----------------------------------------------- полный набор tests/
+#
+# Исходы прогона полного набора (SPEC 01M3FQ3JVC3DGGM33XCX8TC7ME,
+# требование 4): до этой задачи все три не-зелёных схлопывались в одну
+# фразу «полный набор tests/ красный», и причину восстанавливали по
+# времени событий (26.09).
+FULL_SUITE_GREEN = "зелёный прогон"
+FULL_SUITE_RED = "красный прогон"
+FULL_SUITE_TIMEOUT = "таймаут прогона"
+FULL_SUITE_NO_TESTS = "tests/ нет в worktree"
+
+# Текст вырожденного исхода «в рабочей копии нет каталога tests/» — одна
+# константа и для `run_full_suite` (производитель), и для
+# `_full_suite_outcome` (потребитель): исход различается по тексту,
+# который пульт сам же и написал, и расхождение двух копий этого текста
+# молча ломало бы классификацию.
+FULL_SUITE_NO_TESTS_NOTE = "tests/ нет в worktree — полный набор не проверен"
+
+# «Роль» в имени файла лога полного набора: `agent_log.new_agent_log`
+# складывает имя как `<task>-<role>-<N>.log`, то есть `.artel/logs/
+# <id>-fullsuite-<n>.log` (требование 3 прямо разрешает имя по этому
+# образцу). Своей нумерации задача не заводит — она там уже есть, и
+# второй её источник разошёлся бы с первым.
+FULL_SUITE_LOG_KIND = "fullsuite"
+
+
+def _full_suite_timeout_note() -> str:
+    """Текст исхода «прогон не уложился в потолок» — функция, не
+    константа: `config.FULL_SUITE_TIMEOUT_SEC` подменяют тесты, и значение
+    обязано читаться в момент вызова (тот же довод, что и у
+    `FULL_SUITE_NO_TESTS_NOTE` — один текст на производителя и
+    потребителя)."""
+    return (f"прогон полного набора tests/ превысил "
+            f"{config.FULL_SUITE_TIMEOUT_SEC}с — завис или ждёт сетевой "
+            f"ответ")
+
+
+class FullSuiteRun(NamedTuple):
+    """Исход прогона полного набора с разбором и файлом лога (SPEC
+    01M3FQ3JVC3DGGM33XCX8TC7ME, требования 3-6) — общий для трёх
+    потребителей: автогейта приёмки, гейта мержа и `approve` в
+    `acceptance`.
+
+    `outcome` — одна из четырёх констант `FULL_SUITE_*`; `digest` —
+    выжимка `run_digest`; `log_path` — файл с ПОЛНЫМ выводом прогона
+    (`None`: прогона не было вовсе либо запись лога не удалась);
+    `detail` — готовая строка для журнала: различимая причина, выжимка и
+    путь к логу.
+    """
+
+    green: bool
+    outcome: str
+    digest: str
+    log_path: Path | None
+    detail: str
+
+
+def _full_suite_outcome(green: bool, output: str) -> str:
+    """Исход прогона по его тексту — по префиксу СВОЕГО ЖЕ сообщения о
+    вырожденном исходе (см. `FULL_SUITE_NO_TESTS_NOTE`), не по разбору
+    вывода pytest: сам pytest про «каталога нет» и «не уложился в
+    потолок» ничего не печатает — это решения `run_full_suite`."""
+    if green:
+        return FULL_SUITE_GREEN
+    if output.startswith(FULL_SUITE_NO_TESTS_NOTE):
+        return FULL_SUITE_NO_TESTS
+    if output.startswith(_full_suite_timeout_note()):
+        return FULL_SUITE_TIMEOUT
+    return FULL_SUITE_RED
+
+
+def _write_full_suite_log(task_id: str, output: str) -> Path | None:
+    """Полный вывод прогона — в файл рядом с логами ролей (требование 3);
+    `None` — файл не записался.
+
+    Сбой записи лога не имеет права уронить гейт, который этот прогон
+    обслуживает (тот же приём деградации, что у `agent_log.stream_to_log`
+    для лога шага): запись журнала останется без пути к файлу, но с
+    выжимкой разбора."""
+    try:
+        path = agent_log.new_agent_log(task_id, FULL_SUITE_LOG_KIND)
+        path.write_text(output, encoding="utf-8")
+        return path
+    except OSError:
+        return None
+
+
+def _full_suite_detail(outcome: str, digest: str,
+                       log_path: Path | None) -> str:
+    """Строка журнала об исходе прогона: различимая причина, выжимка
+    разбора и путь к файлу лога (требования 4-6)."""
+    if outcome == FULL_SUITE_NO_TESTS:
+        # Прогона не было — ни выжимки, ни лога не существует.
+        return FULL_SUITE_NO_TESTS_NOTE
+    head = {
+        FULL_SUITE_GREEN: "полный набор tests/ зелёный",
+        FULL_SUITE_RED: "полный набор tests/ красный",
+        FULL_SUITE_TIMEOUT: _full_suite_timeout_note(),
+    }[outcome]
+    log_note = f" (лог прогона: {log_path})" if log_path is not None else ""
+    return f"{head}: {digest}{log_note}"
+
+
 def run_full_suite(root: Path) -> tuple[bool, str]:
-    """(зелено, хвост вывода) — прогон ПОЛНОГО пакета `tests/` каталога
-    `root` через pytest (SPEC T066, требование 2в; переход раннера —
+    """(зелено, ПОЛНЫЙ вывод прогона) — прогон ПОЛНОГО пакета `tests/`
+    каталога `root` через pytest (SPEC T066, требование 2в; переход раннера —
     SPEC 01M1TKP6AAY4W8GDGZNA9R0JZT, требование 1): условие автогейта
     acceptance; штатный CI-джоб `python` (`.github/workflows/ci.yml`)
     остаётся на unittest — переход CI вне зоны этой задачи (SPEC, «Не
@@ -252,13 +425,17 @@ def run_full_suite(root: Path) -> tuple[bool, str]:
     интерпретаторе — pytest откажет ненулевым returncode и сообщением о
     неизвестном плагине в stderr, `res.returncode == 0` ниже это ловит
     как обычный красный прогон, без тихого повторного прогона без `-n`
-    (AC-3). Срез хвоста `[-2000:]` ниже не меняется (AC-5): построчный
-    вывод воркеров xdist многословнее последовательного, но финальная
-    строка "N passed" остаётся в КОНЦЕ вывода, который и берёт срез.
+    (AC-3).
+
+    Вывод отдаётся ЦЕЛИКОМ, без прежнего среза `[-2000:]` (SPEC
+    01M3FQ3JVC3DGGM33XCX8TC7ME, требование 3): полный вывод нужен файлу
+    лога (`full_suite` выше), а в журнал уходит уже не он, а выжимка
+    `run_digest`, ограниченная `config.LOG_TAIL_*` — записи журнала от
+    этого только короче, чем были со срезом.
     """
     tests_dir = root / "tests"
     if not tests_dir.is_dir():
-        return False, "tests/ нет в worktree — полный набор не проверен"
+        return False, FULL_SUITE_NO_TESTS_NOTE
     try:
         res = subprocess.run(
             _pytest_command("tests") + ["-n", str(config.FULL_SUITE_WORKERS),
@@ -266,12 +443,32 @@ def run_full_suite(root: Path) -> tuple[bool, str]:
             cwd=root, capture_output=True, text=True,
             timeout=config.FULL_SUITE_TIMEOUT_SEC)
     except subprocess.TimeoutExpired as exc:
-        tail = (_timeout_text(exc.stdout) + _timeout_text(exc.stderr))[-2000:]
-        return False, (f"прогон полного набора tests/ превысил "
-                       f"{config.FULL_SUITE_TIMEOUT_SEC}с — завис или ждёт "
-                       f"сетевой ответ\n{tail}")
-    tail = (res.stdout + res.stderr)[-2000:]
-    return res.returncode == 0, tail
+        output = _timeout_text(exc.stdout) + _timeout_text(exc.stderr)
+        return False, f"{_full_suite_timeout_note()}\n{output}"
+    return res.returncode == 0, res.stdout + res.stderr
+
+
+def full_suite(root: Path, task_id: str) -> FullSuiteRun:
+    """Прогон полного набора `tests/` каталога `root` с разбором вывода и
+    файлом лога (SPEC 01M3FQ3JVC3DGGM33XCX8TC7ME, требования 3-6) — узел
+    для автогейта приёмки, гейта мержа и `approve` в `acceptance`.
+
+    Сам прогон идёт через `run_full_suite` выше, а не в обход неё: это
+    единственный вход прогона полного набора во всём пульте (и
+    единственная точка его подмены в тестах), а различимость исходов
+    держит `_full_suite_outcome` по тексту той же функции.
+
+    Пустой вывод (прогона не было вовсе либо он ничего не напечатал) файла
+    лога не заводит: пустой файл в каталоге логов только мешает читать
+    настоящие.
+    """
+    green, output = run_full_suite(root)
+    outcome = _full_suite_outcome(green, output)
+    log_path = (_write_full_suite_log(task_id, output)
+                if outcome != FULL_SUITE_NO_TESTS and output.strip() else None)
+    digest = run_digest(output)
+    return FullSuiteRun(green, outcome, digest, log_path,
+                        _full_suite_detail(outcome, digest, log_path))
 
 
 def summary(tdir: Path, branch: str | None = None) -> str:

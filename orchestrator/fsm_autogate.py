@@ -26,8 +26,9 @@ AUTOGATE_PASS_MESSAGE = "acceptance пройден автогейтом (пол�
 ACCEPTANCE_CHECKLIST_ACTION = "приёмка: что проверит approve"
 
 # Требование 1 (AC-4/AC-8): планка без единого manual/skip/escalate
-# критерия — вторая группа записи заменяется целиком этой фразой,
-# поведение автогейта (переход без Оператора) не меняется.
+# критерия — ПОСЛЕДНЯЯ группа записи («остаётся человеку») заменяется
+# целиком этой фразой, поведение автогейта (переход без Оператора) не
+# меняется.
 _ACCEPTANCE_AUTOPASS_NOTE = "автогейт пройдёт сам"
 
 # Требование 3 (AC-3) — литеральный факт: дифф уже сверен с зонами
@@ -90,11 +91,27 @@ def _acceptance_manual_criteria(task_id: str, branch: str) -> list[str]:
 
 def _acceptance_checklist_detail(conn, task_id: str, t, iteration: int) -> str:
     """Содержимое единой записи «приёмка: что проверит approve»
-    (требования 1-3, AC-1..AC-4): группа «а» — ровно четыре пункта,
-    которые approve/автогейт исполняют автоматически (AC-2); группа
-    «б» — что остаётся Оператору (AC-3), либо, если у планки нет ни
-    одного manual/skip/escalate критерия, литеральная фраза «автогейт
-    пройдёт сам» вместо всей группы целиком (AC-4).
+    (требования 1-3, AC-1..AC-4): группа «а» — что approve/автогейт
+    исполняют автоматически (AC-2); группа «уже проверено» — проверки,
+    место которых не `approve`; группа «б» — что остаётся Оператору
+    (AC-3), либо, если у планки нет ни одного manual/skip/escalate
+    критерия, литеральная фраза «автогейт пройдёт сам» вместо всей группы
+    целиком (AC-4).
+
+    Состав группы «а» приведён в соответствие с фактом (SPEC
+    01M3FQ3JVC3DGGM33XCX8TC7ME, требование 9): `approve` в `acceptance`
+    гоняет полный набор tests/ в worktree и сверяет свежесть кодовой
+    ветки — и только это. Прогон планки приёмочных тестов гонялся раньше,
+    на переходе `review -> verifying` (`fsm_advance.review`), а потолок
+    бюджета проверяет `budget.budget_block` на старте шага роли — оба
+    названы там, где проверяются, а не там, где о них удобно упомянуть:
+    до этой правки запись обещала четыре автоматические проверки
+    `approve`, а делал он одну (26.09 красный полный набор прошёл приёмку
+    молча).
+
+    Группа «а» стоит ПЕРВОЙ, до разделителя ` | `: запись читают сверху,
+    и первым Оператору нужно то, что случится по его команде, а не
+    история проверок.
 
     Источник планки (артефактная ветка + sha) — те же
     `artifact_source.resolve`/`gitcmd.branch_head_sha`, что несёт
@@ -106,13 +123,18 @@ def _acceptance_checklist_detail(conn, task_id: str, t, iteration: int) -> str:
     artifact_branch_name, _ = artifact_source.resolve(conn, task_id)
     artifact_sha = gitcmd.branch_head_sha(artifact_branch_name)
     group_a = (
-        f"прогон планки приёмочных тестов (источник: артефактная ветка "
-        f"{artifact_branch_name}, sha {artifact_sha}); "
         "полный набор tests/ в worktree ветки задачи; "
-        f"потолок бюджета задачи (${t['budget_usd'] or 0.0:.2f}); "
         f"свежесть кодовой ветки против origin/{config.MAIN_BRANCH}"
     )
-    header = f"автоматически при approve: {group_a}"
+    already_checked = (
+        f"прогон планки приёмочных тестов — на переходе review -> "
+        f"verifying (источник: артефактная ветка {artifact_branch_name}, "
+        f"sha {artifact_sha}); "
+        f"потолок бюджета задачи (${t['budget_usd'] or 0.0:.2f}) — "
+        f"budget.budget_block на старте шага роли"
+    )
+    header = (f"автоматически при approve: {group_a} | уже проверено: "
+              f"{already_checked}")
     manual_items = _acceptance_manual_criteria(task_id, artifact_branch_name)
     if not manual_items:
         return f"{header} | {_ACCEPTANCE_AUTOPASS_NOTE}"
@@ -222,10 +244,20 @@ def _autogate_conditions(conn, task_id: str, t, acc_tdir: Path,
     if wt_root is None:
         return ok, ("автогейт: полный набор tests/ не проверен — worktree "
                     "задачи не заведён")
-    green, _ = acceptance.run_full_suite(wt_root)
-    if not green:
-        return ok, "автогейт: полный набор tests/ красный"
-    ok.append("полный набор tests/ в worktree ветки зелёный")
+    # Разбор вывода прогона — общий узел `acceptance.full_suite` (SPEC
+    # 01M3FQ3JVC3DGGM33XCX8TC7ME, требования 3-4): причина отказа
+    # различает красный прогон, таймаут и отсутствие tests/ в worktree,
+    # несёт имена упавших тестов с итоговой строкой pytest и путь к файлу
+    # с полным выводом прогона. До этой задачи все три исхода писались
+    # одной фразой «полный набор tests/ красный», а вывод отбрасывался —
+    # 26.09 причину красноты восстанавливали по времени событий.
+    run = acceptance.full_suite(wt_root, task_id)
+    if not run.green:
+        return ok, f"автогейт: {run.detail}"
+    ok.append("полный набор tests/ в worktree ветки зелёный"
+              + (f" — {run.digest}" if run.digest else "")
+              + (f" (лог прогона: {run.log_path})"
+                 if run.log_path is not None else ""))
 
     if budget.budget_block(t) is not None:
         return ok, "автогейт: бюджет задачи исчерпан"
