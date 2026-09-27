@@ -28,7 +28,6 @@ review`, который сверяет лок с АРТЕФАКТНОЙ ветк
 `checkpoint._commit_external_step_artifacts`) и сдвигает `tests_locked_sha`
 на HEAD именно этой ветки — ту же, с которой сверяет лок гейт.
 """
-import re
 import sys
 from pathlib import Path
 
@@ -44,16 +43,6 @@ DEVALUATION_ALERT_SOURCE = "amend_tests.window_threshold"
 # больше WINDOW_THRESHOLD правок в этом окне поднимает алерт.
 WINDOW_SIZE = 5
 WINDOW_THRESHOLD = 1
-
-# Итоговая строка pytest (SPEC 01M1TKP6AAY4W8GDGZNA9R0JZT, требование 2):
-# «N passed in Xs» / «M failed, N passed in Xs», в любом порядке категорий
-# (failed/passed/skipped/error/xfailed/xpassed/warning) через запятую,
-# завершается «in <секунды>s» — тем же местом, где pytest печатает сводку
-# независимо от порядка category-групп в конкретном прогоне.
-_RUN_SUMMARY = re.compile(
-    r"\d+ (?:passed|failed|error(?:s)?|skipped|xfailed|xpassed|warnings?)"
-    r"(?:, \d+ (?:passed|failed|error(?:s)?|skipped|xfailed|xpassed|warnings?))*"
-    r" in [\d.]+s")
 
 
 def cmd_amend_tests(task_id: str, reason: str | None,
@@ -232,9 +221,15 @@ def _run_summary(tail: str) -> str:
     passed in Xs`) из хвоста вывода `acceptance.run` — для журнала
     (AC-11), не только «прошло/не прошло» одним словом. Регулярка не
     найдена (вывод truncated иначе, чем ожидается) — весь хвост как есть,
-    без потери диагностики."""
-    match = _RUN_SUMMARY.search(tail)
-    return match.group(0).strip() if match else tail.strip()
+    без потери диагностики.
+
+    Сама регулярка живёт в `orchestrator/acceptance.py` — там же, где
+    остальной разбор вывода pytest (SPEC 01M3FQ3JVC3DGGM33XCX8TC7ME,
+    требование 1): один узел на весь пульт. Журналу правки планки нужна
+    ТОЛЬКО итоговая строка (AC-11 задачи 01M1HNNHDMP2C1AJTH5QF1BTN2), не
+    выжимка с именами упавших тестов, поэтому здесь зовётся
+    `run_summary_line`, а не `run_digest`."""
+    return acceptance.run_summary_line(tail) or tail.strip()
 
 
 def _locked_window_task_ids(conn, limit: int = WINDOW_SIZE) -> list[str]:
