@@ -35,6 +35,12 @@ GIT_IDENTITY = (
 # зоны (тот же приём отсечки, что уже несёт `pause.REFUSAL_ACTION`).
 WAVE_BREAKER_REFUSAL_ACTION = "run отклонён: стоп-кран волны"
 
+# Действие журнала предупреждения предполёта — литерал СЕГОДНЯШНЕГО журнала
+# (текст эта задача не меняет, SPEC 01M3HP7WAXKFK3GYZ3T6HX08M0 требование
+# 7): имя нужно, потому что с дедупликацией действие записи стало ещё и
+# ключом сверки (`budget.journal_warning_once`).
+PREFLIGHT_WARNING_ACTION = "pre-flight WARNING"
+
 
 def wave_breaker_alerts_open(conn) -> list:
     """Открытые алерты `kind=incident` стоп-крана волны target self
@@ -351,7 +357,15 @@ def _refuse_before_start(conn, task_id: str, t, role: str):
     for check in preflight:
         if check.status == "warn":
             detail = f"{check.name}: {check.detail}"
-            store.journal(conn, task_id, role, "pre-flight WARNING", detail)
+            # Одна запись на пребывание задачи в состоянии (SPEC
+            # 01M3HP7WAXKFK3GYZ3T6HX08M0, требования 1-4): та же версия CLI
+            # давала 162 записи об одном и том же за две недели. Ключ —
+            # текст предупреждения: другая версия/другая проверка
+            # журналируется отдельно. Печать НЕ подавляется (требование 6)
+            # — она ниже подавления, на каждое срабатывание.
+            budget.journal_warning_once(conn, task_id, role,
+                                        PREFLIGHT_WARNING_ACTION, detail,
+                                        key=detail)
             print(f"[{task_id}] ВНИМАНИЕ: {detail}")
     failed = [c for c in preflight if c.status == "fail"]
     if failed:
