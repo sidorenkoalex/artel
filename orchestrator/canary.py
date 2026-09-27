@@ -60,6 +60,28 @@ workflows/ci.yml`, приложение к PLAN.md этой задачи — п�
 `--set` действует набор по умолчанию (`config.CANARY_DEFAULT_SET`) —
 сегодняшнее поведение байт-в-байт, без единого чтения `canary_sets:`.
 
+Выбор шаблонов прогона и судьба бюджетной эскалации (SPEC
+01M3HJQV2QV9BXNXSH3F8STAYH): `canary --k <N> --template <имя>[,<имя>…]`
+берёт из пула НАЗВАННЫЕ шаблоны в порядке их перечисления, вместо
+случайной выборки (`_named_pool_templates`); имя — стабильное имя файла
+шаблона без `.md`, число имён обязано равняться `--k`, и каждый случай
+битого флага — именованный отказ ДО эфемерного клона, до origin и до
+заведения задачи. Без флага выбор прежний, случайной выборкой. Первая
+строка вывода прогона называет выбранные шаблоны в порядке прогона.
+Эскалация канареечной задачи ПО БЮДЖЕТУ (её признак — причина перехода,
+которую пишет `orchestrator/budget.py::enforce_budget`) отличается от
+остальных эскалаций: первую такую прогон закрывает ОДНОКРАТНЫМ подъёмом
+потолка этой задачи (`_raise_task_ceiling`, множитель
+`config.CANARY_BUDGET_CEILING_FACTOR`) и ведёт задачу дальше; исчерпание
+уже поднятого потолка снимает задачу своим исходом («исчерпан потолок
+задачи: $X из $Y на шаге <роль>», `_kill_ceiling_exhausted`) со своим
+вердиктом `VERDICT_CEILING_EXHAUSTED`. До этой задачи бюджетная эскалация
+закрывалась синтетическим ANSWER без изменения потолка, задача крутилась
+до снятия «задача не сходится», и прогон 20260927T123258Z дал красный
+вердикт там, где шаблон просто не уложился в потолок. Сам факт подъёма
+прогон не красит: задача, прошедшая после него штатно до `merge_gate` без
+расхождения маркера, остаётся `green`.
+
 `canary pool-seal`/восстановление пула (SPEC 01M1NSR5M5THYRC0RFWPMVE2DW,
 часть 2) — отдельная от прогона конвейера механика; вынесена в
 `orchestrator/pool_seal.py` (SPEC 01M2CN42RV0EBBP7HS4HP2VNY1) — детали
@@ -107,8 +129,8 @@ from pathlib import Path
 from scripts import guard
 
 from . import (alerts, answer, artifact_branch, artifact_source, artifacts,
-              auto, catalog, cleanup, config, fsm, gitcmd, models, roles,
-              runner, store, workspace, yamlmini)
+              auto, budget, catalog, cleanup, config, fsm, gitcmd, models,
+              roles, runner, store, workspace, yamlmini)
 from .pool_seal import _pool_dir
 
 CANARY_MARK_ACTOR = "canary"
@@ -164,6 +186,47 @@ _ACCEPTANCE_TESTS_REFUSAL_ACTION = "переход отклонён: приём�
 # состояния, поэтому не подпадает под `_step_count`.
 _DEV_RETRY_ACTION = "canary: повтор developer на красной планке"
 
+# Признак эскалации ПО БЮДЖЕТУ (01M3HJQV2QV9BXNXSH3F8STAYH, требование 6):
+# устойчивая часть `detail`, которым `orchestrator/budget.py::
+# enforce_budget` сопровождает переход в `escalated` («бюджет исчерпан: $X
+# из $Y»). `budget.py` не экспортирует эту формулировку публичным именем и
+# по разделу «Не входит» SPEC не правится — согласованный литерал здесь,
+# тем же приёмом, что уже дублируют `_AUTO_STOPPED_ACTION` и
+# `_ACCEPTANCE_TESTS_REFUSAL_ACTION` ниже/выше.
+_BUDGET_ESCALATION_DETAIL_MARK = "бюджет исчерпан"
+
+# Литерал `action`, которым `_raise_task_ceiling` журналирует ОДНОКРАТНЫЙ
+# подъём потолка канареечной задачи (требования 7, 11). Он же — ПАМЯТЬ о
+# том, что подъём уже был (`_ceiling_already_raised`): признак живёт в
+# журнале задачи, а не в переменной цикла `_drive_task`, потому что
+# переменная обнулялась бы на уходе из состояния (как `dev_retries`) и
+# поднятый потолок перестал бы быть конечной верхней границей расхода
+# (требование 8).
+_CEILING_RAISE_ACTION = "canary: потолок канареечной задачи поднят однократно"
+
+# Литерал `detail`, которым `_kill_ceiling_exhausted` помечает снятие
+# задачи по исчерпанию УЖЕ ПОДНЯТОГО потолка (требование 9) — по нему
+# `_kill_outcome_note` отличает этот исход и от штатного, и от «не
+# сошлась», а `_ceiling_exhausted` — от любого другого снятия. Сама
+# причина с числами и ролью шага живёт в `action` той же записи, тем же
+# приёмом, что и `_INCONCLUSIVE_KILL_DETAIL`.
+_CEILING_EXHAUSTED_KILL_DETAIL = (
+    "прогон дальше эту задачу не ведёт — исчерпан поднятый потолок задачи")
+
+# Устойчивая часть причины исхода (требование 9, AC-6): по этой
+# формулировке исход узнаётся и в отчёте прогона, и в справке пульта, и в
+# docs/operator-session.md.
+_CEILING_EXHAUSTED_REASON = "исчерпан потолок задачи"
+
+#: Третье значение `canary_runs.verdict` (требование 10): прогон, задача
+#: которого не уложилась в уже поднятый потолок. Не `green` и не `red` —
+#: диагноз «шаблон не уложился в потолок» и диагноз «конвейер не сошёлся»
+#: обязаны различаться по строке журнала прогонов. Годным для `pin-update`
+#: такой прогон не становится: `store.green_canary_runs` отбирает строго
+#: `verdict='green'`, поэтому ни `store.py`, ни `pin.py` этой задачей не
+#: правятся и условие ADR-0013 не ослабляется.
+VERDICT_CEILING_EXHAUSTED = "ceiling"
+
 # Origin эфемерного клона (требование 2, AC-2) — заглушка ЯВНО, не то,
 # что `git clone` подставил бы сам (локальный путь до `config.ROOT`,
 # формально не http(s), но реально дотягивающийся до главного пульта):
@@ -187,17 +250,62 @@ MARK_EXPECT_ESCALATION_YES = "<!-- canary-expect-escalation: yes -->"
 MARK_EXPECT_ESCALATION_NO = "<!-- canary-expect-escalation: no -->"
 
 
-def _sample_pool_templates(pool_dir: Path, k: int) -> list:
-    """`k` случайных `*.md` шаблонов пула из доступных `N` (требование 1,
-    AC-1) — не «все файлы каталога», как v1."""
+def _pool_md_files(pool_dir: Path) -> list:
+    """Шаблоны пула — отсортированные `*.md` каталога, не «все файлы»
+    (требование 1 SPEC 01M1NEEWH5K1XPFRDGRMPYSBXJ). Пустой пул — отказ
+    ЗДЕСЬ, общий для обеих ветвей выбора: без шаблонов прогону нечего
+    вести ни по имени, ни случайно."""
     files = sorted(p for p in pool_dir.iterdir()
                    if p.is_file() and p.suffix == ".md")
     if not files:
         sys.exit(f"canary: в пуле {pool_dir} нет файлов *.md")
+    return files
+
+
+def _sample_pool_templates(pool_dir: Path, k: int) -> list:
+    """`k` случайных `*.md` шаблонов пула из доступных `N` (требование 1,
+    AC-1) — не «все файлы каталога», как v1."""
+    files = _pool_md_files(pool_dir)
     if k > len(files):
         sys.exit(f"canary: --k={k} больше числа доступных шаблонов пула "
                  f"({len(files)})")
     return random.sample(files, k)
+
+
+def _named_pool_templates(pool_dir: Path, k: int, titles: list) -> list:
+    """Названные шаблоны пула в ПОРЯДКЕ перечисления во флаге
+    `--template` (01M3HJQV2QV9BXNXSH3F8STAYH, требования 1-3).
+
+    Возвращается список по списку имён, не по отсортированному пулу и не
+    по множеству: порядок имён во флаге и есть порядок задач прогона —
+    иначе воспроизвести конкретный сценарий пула командой было бы
+    нельзя, а именно за этим флаг и заведён.
+
+    Каждый из трёх отказов требования 3 — `sys.exit` ЗДЕСЬ, то есть до
+    `_resolve_target_sha` (единственное обращение к origin) и до первого
+    `_ephemeral_clone`: за опечатку в имени шаблона Оператор не платит ни
+    сетью, ни `git clone`, ни заведённой задачей — тот же принцип, что у
+    отказов `_set_plan` по соседству. Четвёртый случай («`--template` без
+    значения») разбирается ещё раньше, в `artel._template_arg`: до этой
+    функции пустой флаг просто не доходит.
+    """
+    available = [p.stem for p in _pool_md_files(pool_dir)]
+    if len(titles) != k:
+        sys.exit(f"canary: --template называет {len(titles)} имён, а --k={k} "
+                 "— число имён обязано равняться --k (иначе прогон вёл бы "
+                 "не то число задач, которое назвал Оператор)")
+    repeated = sorted({title for title in titles if titles.count(title) > 1})
+    if repeated:
+        sys.exit(f"canary: --template повторяет имя шаблона: "
+                 f"{', '.join(repeated)} — обе задачи писали бы бейзлайн "
+                 "одного шаблона в одном прогоне, и вторая строка "
+                 "перезаписывала бы первую")
+    unknown = [title for title in titles if title not in available]
+    if unknown:
+        sys.exit(f"canary: --template называет имя, которого нет в пуле "
+                 f"{pool_dir}: {', '.join(unknown)}; доступные шаблоны: "
+                 f"{', '.join(available)}")
+    return [pool_dir / f"{title}.md" for title in titles]
 
 
 def _expected_escalation(raw_text: str) -> bool | None:
@@ -795,7 +903,14 @@ def _kill_outcome_note(conn, task_id: str, steps) -> str:
     залоченной планкой — см. докстринг `_kill_at_verifying`), иначе —
     «не сошлась: <причина>» с текстом причины из журнальной записи
     `_kill_inconclusive` (её `detail` — фиксированный литерал-маркер,
-    `action` несёт саму причину — требование 3/AC-3 идёт этим же путём)."""
+    `action` несёт саму причину — требование 3/AC-3 идёт этим же путём).
+
+    Исчерпание уже поднятого потолка (01M3HJQV2QV9BXNXSH3F8STAYH,
+    требование 9) — ТРЕТИЙ, свой исход: причина из `action` записи
+    `_kill_ceiling_exhausted` возвращается как есть, без приписки «не
+    сошлась». Приписка сделала бы два взаимоисключающих диагноза одной
+    строкой отчёта: «шаблон не уложился в потолок» и «конвейер не
+    сошёлся»."""
     if _has_subtasks(conn, task_id):
         return "поделена"
     for r in reversed(steps):
@@ -803,9 +918,33 @@ def _kill_outcome_note(conn, task_id: str, steps) -> str:
             continue
         if r["action"] in (_MERGE_GATE_KILL_ACTION, _VERIFYING_KILL_ACTION):
             return "штатно"
+        if r["detail"] == _CEILING_EXHAUSTED_KILL_DETAIL:
+            return r["action"]
         if r["detail"] == _INCONCLUSIVE_KILL_DETAIL:
             return f"не сошлась: {r['action']}"
     return "не сошлась"
+
+
+def _ceiling_exhausted(steps) -> bool:
+    """Задача снята исчерпанием уже поднятого потолка (требование 10) —
+    запись `_kill_ceiling_exhausted` в журнале. Отдельно от
+    `_kill_outcome_note`: вердикт прогона читает признак, а не текст
+    причины."""
+    return any(row["actor"] == CANARY_MARK_ACTOR
+              and row["detail"] == _CEILING_EXHAUSTED_KILL_DETAIL
+              for row in steps)
+
+
+def _ceiling_raise_line(steps) -> str | None:
+    """Строка отчёта прогона о подъёме потолка (требование 11) или `None`,
+    если подъёма не было. Журнал задачи живёт в БД эфемерного клона и
+    умирает вместе с ним — без этой строки Оператор, читая зелёный
+    прогон, не узнал бы, что задача уложилась только со второго потолка."""
+    for row in steps:
+        if (row["actor"] == CANARY_MARK_ACTOR
+                and row["action"] == _CEILING_RAISE_ACTION):
+            return f"{row['action']} — {row['detail'] or ''}".strip()
+    return None
 
 
 def _kill_inconclusive(conn, task_id: str, detail: str) -> None:
@@ -820,6 +959,85 @@ def _kill_inconclusive(conn, task_id: str, detail: str) -> None:
     store.journal(conn, task_id, CANARY_MARK_ACTOR, detail,
                  "прогон дальше эту задачу не ведёт — cleanup.cmd_kill")
     alerts.raise_alert(conn, task_id, "threshold", "canary", detail)
+    cleanup.cmd_kill(task_id)
+
+
+def _budget_escalation(steps) -> bool:
+    """Последний переход `state -> escalated` журнала — эскалация ПО
+    БЮДЖЕТУ (требование 6): его `detail` несёт причину
+    `budget.enforce_budget`. Смотрится именно последний переход: задача
+    могла эскалировать раньше по другой причине, и прогон обязан
+    реагировать на ту эскалацию, в которой стоит СЕЙЧАС."""
+    for row in reversed(steps):
+        if row["action"] != "state -> escalated":
+            continue
+        return _BUDGET_ESCALATION_DETAIL_MARK in (row["detail"] or "")
+    return False
+
+
+def _ceiling_already_raised(steps) -> bool:
+    """Потолок этой задачи прогон уже поднимал (требование 8) — запись
+    `_CEILING_RAISE_ACTION` в журнале. Журнал, а не переменная цикла: см.
+    комментарий у самого литерала."""
+    return any(row["actor"] == CANARY_MARK_ACTOR
+              and row["action"] == _CEILING_RAISE_ACTION for row in steps)
+
+
+def _raise_task_ceiling(conn, task_id: str, t) -> None:
+    """ОДНОКРАТНЫЙ подъём потолка канареечной задачи, эскалировавшей по
+    бюджету (требования 7, 11): новый потолок — прежний, умноженный на
+    `config.CANARY_BUDGET_CEILING_FACTOR`, факт подъёма — в журнал задачи,
+    а сама задача возвращается в состояние, из которого эскалировала.
+
+    Возврат — существующим `_pass_escalated_with_synthetic_answer`, не
+    собственным `set_state`: канал возврата из `escalated` в системе один
+    (ANSWER Оператора-заглушки в артефактной ветке), и второй, «тихий»,
+    расходился бы с тем, что Оператор делает руками — `budget <id> <usd>`
+    и затем ответ на эскалацию.
+
+    Потолок правится ДО возврата: вернувшаяся задача иначе упёрлась бы в
+    `budget.budget_block` на первом же запуске роли, то есть подъём не дал
+    бы прогону продолжиться.
+    """
+    before = t["budget_usd"] or 0.0
+    after = before * config.CANARY_BUDGET_CEILING_FACTOR
+    spent = budget.spent_with_estimate(t)
+    store.update_task(conn, task_id, budget_usd=after)
+    store.journal(
+        conn, task_id, CANARY_MARK_ACTOR, _CEILING_RAISE_ACTION,
+        f"эскалация по бюджету (${spent:.2f} из ${before:.2f}): потолок "
+        f"задачи поднят до ${after:.2f} (множитель "
+        f"{config.CANARY_BUDGET_CEILING_FACTOR}) — прогон продолжается, "
+        "второго подъёма не будет")
+    _pass_escalated_with_synthetic_answer(conn, task_id)
+
+
+def _kill_ceiling_exhausted(conn, task_id: str, t) -> None:
+    """Снимает задачу прогона по исчерпанию УЖЕ ПОДНЯТОГО потолка
+    (требования 8-9): своя причина исхода с фактическими числами и ролью
+    шага, свой литерал-маркер `detail`, тот же алерт и тот же штатный
+    `cleanup.cmd_kill`, что и у `_kill_inconclusive`.
+
+    Отдельный исход, а не «задача не сходится»: поднятый потолок —
+    конечная верхняя граница расхода канареечной задачи, и её пробой
+    означает «шаблон не уложился в потолок», а не «конвейер не сошёлся»
+    (требование 10 требует различать эти диагнозы и по вердикту прогона).
+
+    Роль шага — по `escalated_from`, который `budget.enforce_budget`
+    записал перед самой эскалацией: именно на шаге этой роли потолок и
+    кончился. Состояние вне `config.STATE_ROLE` (эскалация не с шага
+    роли) — печатаем само состояние: причина без адреса шага
+    бессодержательна.
+    """
+    spent = budget.spent_with_estimate(t)
+    ceiling = t["budget_usd"] or 0.0
+    origin = t["escalated_from"] or ""
+    where = config.STATE_ROLE.get(origin, origin or "неизвестном")
+    reason = (f"canary: {_CEILING_EXHAUSTED_REASON}: ${spent:.2f} из "
+             f"${ceiling:.2f} на шаге {where}")
+    store.journal(conn, task_id, CANARY_MARK_ACTOR, reason,
+                 _CEILING_EXHAUSTED_KILL_DETAIL)
+    alerts.raise_alert(conn, task_id, "threshold", "canary", reason)
     cleanup.cmd_kill(task_id)
 
 
@@ -872,6 +1090,19 @@ def _drive_task(conn, task_id: str) -> None:
             _pass_verifying(conn, task_id)
             continue
         if state == "escalated":
+            # Требования 6-9: эскалация ПО БЮДЖЕТУ идёт своим путём —
+            # первая закрывается однократным подъёмом потолка, повторная
+            # (потолок уже поднят) снимает задачу своим исходом. Развилка
+            # стоит ДО `escalation_cycles` и счётчик не трогает: потолок
+            # повторных эскалаций остаётся прежним для ВСЕХ остальных
+            # эскалаций прогона («Не входит» SPEC).
+            steps = store.task_steps(conn, task_id)
+            if _budget_escalation(steps):
+                if _ceiling_already_raised(steps):
+                    _kill_ceiling_exhausted(conn, task_id, t)
+                    return
+                _raise_task_ceiling(conn, task_id, t)
+                continue
             escalation_cycles += 1
             if escalation_cycles > config.CANARY_MAX_ESCALATION_CYCLES:
                 _kill_inconclusive(
@@ -1004,6 +1235,8 @@ def _task_metrics(conn, task_id: str) -> dict:
         "kill_note": (_kill_outcome_note(conn, task_id, steps)
                      if t["state"] == "killed" else None),
         "test_author_visited": _test_author_visited(steps),
+        "ceiling_exhausted": _ceiling_exhausted(steps),
+        "ceiling_raise": _ceiling_raise_line(steps),
     }
 
 
@@ -1081,6 +1314,23 @@ def _needs_diagnostics(normal_outcome: bool, mismatch: bool) -> bool:
     сохраняется во всех случаях, КРОМЕ штатного исхода БЕЗ расхождения
     маркера — единственная комбинация, где сохранять нечего расследовать."""
     return not (normal_outcome and not mismatch)
+
+
+def _run_verdict(normal_outcome: bool, mismatch: bool,
+                 ceiling_exhausted: bool) -> str:
+    """Вердикт строки `canary_runs` (01M3HJQV2QV9BXNXSH3F8STAYH,
+    требования 10-11): исчерпание уже поднятого потолка — свой вердикт,
+    иначе прежняя формула «обратное `_needs_diagnostics`» байт-в-байт.
+
+    Сам факт ОДНОКРАТНОГО подъёма прогон не красит (требование 11): задача,
+    прошедшая после подъёма штатно до `merge_gate` без расхождения
+    маркера, остаётся `green` — иначе механизм починки красноты сам красил
+    бы прогоны, и ни один шаблон, однажды пробивший потолок, больше не мог
+    бы разрешить сдвиг пина.
+    """
+    if ceiling_exhausted:
+        return VERDICT_CEILING_EXHAUSTED
+    return "green" if not _needs_diagnostics(normal_outcome, mismatch) else "red"
 
 
 def _diagnostics_dir(outer_root: Path, run_stamp: str, task_id: str) -> Path:
@@ -1315,8 +1565,11 @@ def _record_canary_run(outer_conn, run_stamp: str, title: str, task_id: str,
     # `_needs_diagnostics`, вычислены фазой 1), не через «дошла до
     # состояния merge_gate/verifying» — `verifying` с ADR-0015 не конечная
     # точка реального вождения вовсе (проходится синтетически,
-    # `_pass_verifying`).
-    verdict = "green" if not _needs_diagnostics(normal_outcome, mismatch) else "red"
+    # `_pass_verifying`). Третье значение вердикта (исчерпание уже
+    # поднятого потолка, 01M3HJQV2QV9BXNXSH3F8STAYH, требование 10) живёт в
+    # `_run_verdict` — не «не green», а свой диагноз.
+    verdict = _run_verdict(normal_outcome, mismatch,
+                           metrics["ceiling_exhausted"])
     store.insert_canary_run(
         outer_conn, run_stamp, title, task_id, metrics["steps"],
         metrics["cost_usd"], metrics["review_iterations"],
@@ -1441,6 +1694,12 @@ def _run_one_task(template_path: Path, run_stamp: str, ratio: float,
     test_author_note = "да" if metrics["test_author_visited"] else "нет"
     for line in _journal_excerpt_lines(steps):
         print(f"  {line}")
+    # Требование 11 (01M3HJQV2QV9BXNXSH3F8STAYH): факт подъёма потолка — в
+    # отчёт прогона, не только в журнал задачи. Журнал остаётся в БД
+    # эфемерного клона и умирает вместе с ним; выдержка `_journal_excerpt_
+    # lines` эту запись не несёт (она не переход состояния).
+    if metrics["ceiling_raise"] is not None:
+        print(f"  {metrics['ceiling_raise']}")
     print(f"  {task_id}: шагов={metrics['steps']}  "
          f"${metrics['cost_usd']:.2f}  "
          f"ревью-итераций={metrics['review_iterations']}  "
@@ -1462,16 +1721,25 @@ def _summary_note(plan: CanarySetPlan) -> str:
 
 
 def cmd_canary(*, k: int, sha: str | None = None,
-               set_name: str = config.CANARY_DEFAULT_SET) -> None:
+               set_name: str = config.CANARY_DEFAULT_SET,
+               templates: list | None = None) -> None:
     """`set_name` (SPEC 01M3FQ2Z2PY0E9T5F5WQ207NP5, требование 1) — имя
     набора ролей прогона из `canary_sets:` локального слоя; значение по
-    умолчанию — набор по умолчанию, то есть прогон «как пульт»."""
+    умолчанию — набор по умолчанию, то есть прогон «как пульт».
+
+    `templates` (01M3HJQV2QV9BXNXSH3F8STAYH, требования 1-4) — стабильные
+    имена шаблонов пула (имя файла без `.md`) в порядке прогона: прогон
+    берёт из пула ровно их, без случайной выборки. `None` (по умолчанию) —
+    выбор прежний, случайная выборка `k` шаблонов из пула, байт-в-байт как
+    до этой задачи: развилка ровно одна и стоит здесь, прежняя ветка не
+    переписана."""
     pool_dir = _pool_dir()
     if not pool_dir.is_dir():
         sys.exit(f"canary: каталог пула не найден: {pool_dir}")
     if k <= 0:
         sys.exit("canary: --k должен быть положительным целым числом")
-    templates = _sample_pool_templates(pool_dir, k)
+    templates = (_sample_pool_templates(pool_dir, k) if templates is None
+                else _named_pool_templates(pool_dir, k, templates))
     # Набор разбирается и проверяется ЗДЕСЬ — до `_resolve_target_sha` (он
     # ходит к origin) и до первого `_ephemeral_clone` (требование 6): за
     # битый набор Оператор не платит ни обращением к сети, ни `git clone`,
@@ -1482,9 +1750,15 @@ def cmd_canary(*, k: int, sha: str | None = None,
     sha_label = _sha_label(target_sha, origin_sha)
 
     run_stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    # Требование 5: имена выбранных шаблонов в порядке прогона — в САМОЙ
+    # первой строке вывода, до первого эфемерного клона. Иначе состав
+    # прогона Оператор узнавал бы по мере того, как задачи одна за другой
+    # доходят до конца, то есть через десятки минут, а при падении первого
+    # же клона — не узнал бы вовсе.
     print(f"[canary] прогон {run_stamp}: {len(templates)} задач из пула "
-         f"{pool_dir}, целевой sha {target_sha} ({sha_label}), набор "
-         f"{plan.name}{_summary_note(plan)}")
+         f"{pool_dir} в порядке прогона: "
+         f"{', '.join(p.stem for p in templates)}; целевой sha {target_sha} "
+         f"({sha_label}), набор {plan.name}{_summary_note(plan)}")
     for template_path in templates:
         _run_one_task(template_path, run_stamp, config.CANARY_DEVIATION_RATIO,
                       target_sha, sha_label, plan)
