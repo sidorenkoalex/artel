@@ -6,6 +6,7 @@
 тем же приёмом, что `tests/test_retro.py` держит для `orchestrator/retro.py`.
 """
 import json
+import re
 import sys
 import unittest
 from pathlib import Path
@@ -864,6 +865,219 @@ class MapGrowthHtmlTest(TmpRootTest):
 
         self.assertIn(report.NO_MEASUREMENTS_TEXT, html)
         self.assertIn("ghost", html)
+
+
+class _StepsQueries:
+    """Счётчик SQL-запросов соединения, читающих `steps`
+    (`sqlite3.Connection.set_trace_callback` — приём, названный
+    требованием 6 SPEC 01M3GKJFN90ATK2KECNDZXPPP6)."""
+
+    def __init__(self, conn):
+        self.conn = conn
+        self.statements = []
+
+    def __enter__(self):
+        self.conn.set_trace_callback(self._trace)
+        return self
+
+    def __exit__(self, *exc_info):
+        self.conn.set_trace_callback(None)
+        return False
+
+    def _trace(self, statement) -> None:
+        if statement and re.search(r"\bfrom\s+steps\b", str(statement), re.I):
+            self.statements.append(str(statement))
+
+    @property
+    def count(self) -> int:
+        return len(self.statements)
+
+
+class _StepsRows:
+    """Обёртка соединения, считающая СТРОКИ, отданные SQL по запросам к
+    `steps`: предмет замечания R1-F2 ревью — не число запросов, а объём
+    прочитанного. Читатели журнала принимают соединение параметром, так
+    что подменять внутри них нечего."""
+
+    def __init__(self, conn):
+        self._conn = conn
+        self.steps_rows = 0
+
+    def execute(self, sql, parameters=()):
+        cursor = self._conn.execute(sql, parameters)
+        if not re.search(r"\bfrom\s+steps\b", str(sql), re.I):
+            return cursor
+        rows = cursor.fetchall()
+        self.steps_rows += len(rows)
+        return _FetchedRows(rows)
+
+    def __getattr__(self, name):
+        return getattr(self._conn, name)
+
+
+class _FetchedRows:
+    """Курсор поверх уже вычитанных строк — `_StepsRows` обязан узнать их
+    число, то есть дочитать курсор сам."""
+
+    def __init__(self, rows):
+        self._rows = list(rows)
+
+    def fetchall(self):
+        return list(self._rows)
+
+    def fetchone(self):
+        return self._rows[0] if self._rows else None
+
+    def __iter__(self):
+        return iter(self._rows)
+
+
+class JournalIsReadInOneSelectTest(TmpRootTest):
+    """`report._all_steps`/`_map_size_entries` берут журнал ОДНОЙ выборкой
+    (SPEC 01M3GKJFN90ATK2KECNDZXPPP6, требование 3): число запросов к
+    `steps` не зависит от числа задач, а прочитанное — то же, что давала
+    выборка на каждую задачу."""
+
+    OTHER_TARGET = "vtoroy-target"
+
+    def setUp(self):
+        super().setUp()
+        store.create_schema(store.db())
+        self.conn = store.db()
+        self.seeded = 0
+
+    def seed(self, count: int) -> None:
+        """Задачи двух target'ов с журналом каждая — включая запись «карта:
+        размер», которую читает ряд роста карты."""
+        for _ in range(count):
+            self.seeded += 1
+            task_id = f"T{self.seeded:03d}"
+            target = config.DEFAULT_TARGET if self.seeded % 2 else self.OTHER_TARGET
+            store.insert_task(self.conn, task_id, f"Задача {task_id}",
+                              "in_dev", f"task/{task_id.lower()}", target, 25.0)
+            store.journal(self.conn, task_id, "operator", "state -> merge_gate",
+                          "гейт")
+            store.journal(self.conn, task_id, "orchestrator",
+                          report.MAP_SIZE_ACTION,
+                          json.dumps({"bytes_total": 1000 * self.seeded,
+                                      "sections_total": 3,
+                                      "bytes_by_dir": {"orchestrator": 500}}))
+
+    def old_all_steps(self) -> list:
+        """Прежний способ: выборка на каждую задачу + сортировка в Python."""
+        steps = []
+        for row in store.all_tasks(self.conn):
+            steps.extend(store.task_steps(self.conn, row["id"]))
+        steps.sort(key=lambda r: r["id"])
+        return steps
+
+    def test_all_steps_reads_the_same_rows_as_the_per_task_selection(self):
+        """Ловит мутацию: одна выборка отдана читателю в порядке `task_id`
+        (или её состав разошёлся со склейкой по задачам) — журнал уехал бы
+        из сквозной хронологии, а на ней стоят и доли гейтов, и журнал
+        Оператора по дням, и метрика трения.
+
+        Утрату `ORDER BY id` целиком этот тест не ловит и не заявляет:
+        эталон рядом сам сортирует список в Python, а `steps` —
+        rowid-таблица, где `SCAN` даёт сегодня тот же порядок. Это
+        свойство закреплено на выполненном SQL — `tests/test_store_journal.
+        py::BulkJournalReadsTest::
+        test_all_steps_asks_sql_itself_for_the_chronological_order`."""
+        self.seed(4)
+        # Журнал пульта перемешан между задачами: `seed` пишет записи
+        # задачи сразу за её заведением, и без этих двух строк порядок
+        # `task_id` совпал бы с порядком `id` — тест не различил бы их.
+        store.journal(self.conn, "T001", "operator", "state -> done", "закрытие")
+        store.journal(self.conn, "T002", "operator", "state -> done", "закрытие")
+
+        new = [(r["id"], r["task_id"], r["action"]) for r in
+               report._all_steps(self.conn, store.all_tasks(self.conn))]
+        old = [(r["id"], r["task_id"], r["action"]) for r in self.old_all_steps()]
+
+        self.assertEqual(old, new)
+        self.assertEqual(sorted(new), new, "журнал отдан не по возрастанию id")
+
+    def test_all_steps_drops_journal_rows_of_pseudo_tasks(self):
+        """Записи псевдозадач журнала (пин, пересев расхода) строки `tasks`
+        не имеют, и прежняя склейка по задачам их не включала.
+
+        Ловит мутацию: фильтр «только задачи из `tasks`» снят (одна
+        выборка отдана читателю как есть) — запись `pin откатан` actor'а
+        `operator` попала бы в журнал Оператора по дням, то есть вывод
+        отчёта изменился бы, хотя требование 5 запрещает."""
+        self.seed(1)
+        store.journal(self.conn, config.PIN_UPDATE_JOURNAL_TASK_ID, "operator",
+                      "pin откатан", "деталь")
+
+        steps = report._all_steps(self.conn, store.all_tasks(self.conn))
+
+        self.assertEqual(
+            [], [r for r in steps
+                 if r["task_id"] == config.PIN_UPDATE_JOURNAL_TASK_ID])
+
+    def test_steps_queries_do_not_grow_with_the_number_of_tasks(self):
+        """Ловит мутацию: одна выборка сделана только в `_all_steps`, а
+        `_map_size_entries` оставлен с выборкой на каждую задачу — число
+        запросов осталось бы пропорциональным числу задач, и равенство
+        «при 3 и при 6» покраснело бы."""
+        self.seed(3)
+        with _StepsQueries(self.conn) as three:
+            report._all_steps(self.conn, store.all_tasks(self.conn))
+            report._map_growth_html(self.conn, store.all_tasks(self.conn))
+
+        self.seed(3)
+        with _StepsQueries(self.conn) as six:
+            report._all_steps(self.conn, store.all_tasks(self.conn))
+            report._map_growth_html(self.conn, store.all_tasks(self.conn))
+
+        self.assertGreater(six.count, 0, "счётчик не увидел ни одного запроса")
+        self.assertEqual(three.count, six.count,
+                         f"запросов при 3 задачах {three.count}, при 6 — "
+                         f"{six.count}: число растёт с числом задач")
+
+    def test_map_size_entries_still_belong_to_the_asked_target(self):
+        """Ряд роста карты одного target не должен показывать записи
+        другого: принадлежность берётся у каталога задач, а одна выборка
+        журнала сама по себе несёт записи всех задач пульта.
+
+        Ловит мутацию: отбор по target при переходе к одной выборке
+        потерян — ряд каждого target показал бы записи обоих, и число
+        записей ряда удвоилось бы."""
+        self.seed(4)
+
+        first = report._map_size_entries(self.conn, config.DEFAULT_TARGET)
+        second = report._map_size_entries(self.conn, self.OTHER_TARGET)
+
+        self.assertEqual(2, len(first))
+        self.assertEqual(2, len(second))
+        self.assertEqual([1000, 3000], [e["bytes_total"] for e in first])
+        self.assertEqual([2000, 4000], [e["bytes_total"] for e in second])
+
+    def test_map_size_entries_reads_only_the_rows_of_its_own_action(self):
+        """Ряд роста карты собирается тремя вызовами на КАЖДЫЙ target
+        (`map_size_table_rows`, `map_growth_calibration_median`,
+        `map_growth_cost_estimate`), поэтому весь журнал пульта на вызов —
+        это `3 × T` полных проходов на один отчёт (REVIEW.md итерации 1,
+        R1-F2). Из SQL приходят только записи «карта: размер».
+
+        Ловит мутацию: выборка вернулась к журналу целиком
+        (`store.all_steps`), а отбор действия считается в Python — число
+        прочитанных строк стало бы равно длине ВСЕГО журнала и росло бы и
+        с числом задач, и с числом target'ов."""
+        self.seed(4)
+        counting = _StepsRows(self.conn)
+
+        entries = report._map_size_entries(counting, config.DEFAULT_TARGET)
+
+        journal_rows = len(store.all_steps(self.conn))
+        self.assertEqual(2, len(entries))
+        self.assertEqual(
+            4, counting.steps_rows,
+            f"SQL отдал {counting.steps_rows} строк при {journal_rows} "
+            f"записях журнала: прочитан весь журнал, а не ряд «карта: "
+            f"размер»")
+        self.assertGreater(journal_rows, counting.steps_rows,
+                           "фикстура не различает «весь журнал» и «ряд»")
 
 
 if __name__ == "__main__":

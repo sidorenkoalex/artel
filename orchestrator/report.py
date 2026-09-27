@@ -3,14 +3,14 @@
 тот же дух самодостаточности, что и утверждённый макет
 `tasks/T080/mockup.html` (борд, карточка задачи, алерты, очередь гейтов).
 
-Читает состояние и журнал ТОЛЬКО через уже существующие функции
-`orchestrator/store.py` (SPEC требование 11): `all_tasks`/`task_steps` на
-каждую задачу вместо одного SQL-запроса по всей таблице `steps` разом —
-такой функции («весь журнал пульта одним запросом») store.py не несёт, а
-заводить её эта задача не вправе («Не входит» SPEC — правки вне
-report.py/artel.py). `steps.id` — сквозной autoincrement через все
-задачи, так что склейка списков по задачам и сортировка по `id`
-восстанавливает единую хронологию журнала без отдельного запроса.
+Читает состояние и журнал ТОЛЬКО через функции `orchestrator/store.py`
+(SPEC требование 11). Журнал — ОДНОЙ выборкой `store.all_steps` (SPEC
+01M3GKJFN90ATK2KECNDZXPPP6, требование 3): до неё отчёт звал
+`store.task_steps` на каждую задачу, и число запросов к `steps` росло с
+числом задач — на 268 задачах и 38 тысячах записей это и был основной
+вклад в профиль чтения БД (находка ревизии CR-2026-09-26-2). `steps.id` —
+сквозной autoincrement через все задачи, так что одна выборка `ORDER BY
+id` и есть единая хронология журнала.
 """
 import html as html_lib
 import json
@@ -95,42 +95,62 @@ _DASH = "—"
 # --------------------------------------------------------------- чтение
 
 def _all_steps(conn, tasks: list) -> list:
-    """Журнал ВСЕХ задач одним списком, в сквозной хронологии `id`."""
-    steps = []
-    for row in tasks:
-        steps.extend(store.task_steps(conn, row["id"]))
-    steps.sort(key=lambda r: r["id"])
-    return steps
+    """Журнал ВСЕХ задач одним списком, в сквозной хронологии `id`.
+
+    Одна выборка (`store.all_steps`) вместо выборки на каждую задачу
+    (требование 3) — и без сортировки в Python: `ORDER BY id` самой
+    выборки уже даёт хронологию, которую прежняя склейка списков по
+    задачам восстанавливала сортировкой.
+
+    Отбор «только задачи из `tasks`» остаётся: журнал несёт записи
+    псевдозадач пульта (`config.PIN_UPDATE_JOURNAL_TASK_ID`,
+    `config.PROGRAM_SPEND_RESEED_TASK_ID`) — строки `tasks` у них нет, и
+    прежняя склейка по задачам их не включала. Без этого фильтра они
+    попали бы, например, в журнал Оператора по дням (`_operator_window`
+    отбирает записи actor'а `operator` не глядя на `task_id`), то есть
+    вывод отчёта изменился бы (требование 5 запрещает).
+    """
+    known = {row["id"] for row in tasks}
+    return [row for row in store.all_steps(conn) if row["task_id"] in known]
 
 
 # ------------------------------------ наблюдатель роста карты (AC-1..AC-12)
 #
-# Читает журнал и алерты ТОЛЬКО через уже существующие функции store.py
-# (`all_tasks`/`task_steps`/`open_alerts`/`alerts_older_than`), тем же
-# приёмом, что `_all_steps` выше — зона этой задачи не включает store.py
-# (SPEC frontmatter `zones`), заводить в нём новую специализированную
-# выборку эта задача не вправе.
+# Читает журнал и алерты через функции store.py (`all_tasks`/
+# `steps_of_action`/`open_alerts`/`alerts_older_than`), тем же приёмом, что
+# `_all_steps` выше.
 
 def _map_size_entries(conn, target: str) -> list:
     """Записи ряда «карта: размер» этого target, хронологически (по
     возрастанию `id` — сквозной autoincrement `steps` через все задачи).
 
     Каждый элемент — уже разобранный JSON `detail` записи с добавленным
-    ключом `ts` (момент записи, для окна калибровки AC-7)."""
+    ключом `ts` (момент записи, для окна калибровки AC-7).
+
+    Одна выборка журнала (требование 3 SPEC 01M3GKJFN90ATK2KECNDZXPPP6)
+    вместо выборки на каждую задачу target'а, и выборка эта — только
+    записи ЭТОГО действия (`store.steps_of_action`), а не весь журнал
+    пульта: ряд роста карты собирается тремя вызовами на каждый target
+    (`map_size_table_rows`, `map_growth_calibration_median`,
+    `map_growth_cost_estimate`), так что весь журнал на вызов означал бы
+    `3 × T` полных проходов на отчёт — REVIEW.md итерации 1, R1-F2.
+
+    Принадлежность target'у по-прежнему берётся у КАТАЛОГА ЗАДАЧ
+    (`all_tasks`), не у колонки `steps.target`: ряд роста карты одного
+    target не должен уметь показать запись другого, даже если колонка
+    журнала разошлась с каталогом."""
+    task_ids = {row["id"] for row in store.all_tasks(conn)
+               if row["target"] == target}
     entries = []
-    for row in store.all_tasks(conn):
-        if row["target"] != target:
+    for s in store.steps_of_action(conn, MAP_SIZE_ACTION):
+        if s["task_id"] not in task_ids:
             continue
-        for s in store.task_steps(conn, row["id"]):
-            if s["action"] != MAP_SIZE_ACTION:
-                continue
-            try:
-                detail = json.loads(s["detail"])
-            except (TypeError, ValueError):
-                continue
-            entries.append((s["id"], {**detail, "ts": s["ts"]}))
-    entries.sort(key=lambda pair: pair[0])
-    return [detail for _, detail in entries]
+        try:
+            detail = json.loads(s["detail"])
+        except (TypeError, ValueError):
+            continue
+        entries.append({**detail, "ts": s["ts"]})
+    return entries
 
 
 def map_size_table_rows(conn, target: str) -> list:

@@ -18,6 +18,7 @@ acceptance_tests/`: та планка — гейт приёмки задачи, 
 которую CI гоняет на каждый пуш ветки (`.github/workflows/ci.yml`).
 """
 import os
+import re
 import sys
 import threading
 import time
@@ -29,7 +30,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT))
 
 from orchestrator import config, store, watch  # noqa: E402
-from tests.sandbox import TmpRootTest  # noqa: E402
+from tests.sandbox import TmpRootTest, capture  # noqa: E402
 
 
 class _WatchStream:
@@ -364,6 +365,132 @@ class EmptySelectionRefusesTest(_WatchThreadTestCase):
             watch.cmd_watch(["--tasks", "НЕТТАКОЙ"])
         message = str(cm.exception)
         self.assertTrue(message.strip())
+
+
+class _RowCountingConn:
+    """Обёртка соединения, считающая СТРОКИ, отданные SQL по запросам к
+    `steps`: предмет требования 4 — не число запросов, а объём
+    прочитанного. `_emit_steps` принимает соединение параметром, так что
+    подменять внутри него нечего."""
+
+    def __init__(self, conn):
+        self._conn = conn
+        self.steps_rows = 0
+        self.steps_statements = []
+
+    def execute(self, sql, parameters=()):
+        rows = self._conn.execute(sql, parameters).fetchall()
+        if re.search(r"\bfrom\s+steps\b", str(sql), re.I):
+            self.steps_statements.append(str(sql))
+            self.steps_rows += len(rows)
+        return _FetchedRows(rows)
+
+    def __getattr__(self, name):
+        return getattr(self._conn, name)
+
+
+class _FetchedRows:
+    """Курсор поверх уже вычитанных строк — `_RowCountingConn` обязан
+    узнать их число, то есть дочитать курсор сам."""
+
+    def __init__(self, rows):
+        self._rows = list(rows)
+
+    def fetchall(self):
+        return list(self._rows)
+
+    def fetchone(self):
+        return self._rows[0] if self._rows else None
+
+    def __iter__(self):
+        return iter(self._rows)
+
+
+class EmitStepsFiltersInSqlTest(TmpRootTest):
+    """`watch._emit_steps` отбирает новые записи фильтром `id > known` в
+    SQL (SPEC 01M3GKJFN90ATK2KECNDZXPPP6, требование 4): дозор опрашивает
+    БД каждые `--interval` секунд, и полная история задачи на каждом опросе
+    была тем же дефектом CR-2026-09-26-2, что и в `report`."""
+
+    TASK = "S100"
+    HISTORY = (
+        ("autogate", "state -> review", "автогейт"),
+        ("orchestrator", "карта: размер", '{"bytes_total": 1}'),
+        ("developer", "agent run завершён", "шаг агента"),
+        ("operator", "state -> merge_gate", "гейт Оператора"),
+        ("autogate", "state -> done", "закрытие"),
+    )
+
+    def setUp(self):
+        super().setUp()
+        store.create_schema(store.db())
+        self.conn = store.db()
+        store.insert_task(self.conn, self.TASK, "Задача дозора", "in_dev",
+                         "task/s100", config.DEFAULT_TARGET, 25.0)
+        for actor, action, detail in self.HISTORY:
+            store.journal(self.conn, self.TASK, actor, action, detail)
+        self.ids = [r["id"] for r in store.task_steps(self.conn, self.TASK)]
+
+    def test_only_the_single_new_row_comes_from_sql(self):
+        """Известен id предпоследней записи истории: SQL отдаёт дозору
+        ровно одну строку, а не всю историю задачи.
+
+        Ловит мутацию: фильтр `id > known` остался считаться в Python на
+        полной выборке (`store.task_steps`) — обёртка увидела бы столько
+        строк, сколько записей в истории, и ускорение опроса не состоялось
+        бы вовсе."""
+        counting = _RowCountingConn(self.conn)
+        known = {self.TASK: self.ids[-2]}
+
+        capture(watch._emit_steps, counting, self.TASK, {"transitions"},
+               known, None)
+
+        self.assertEqual(1, counting.steps_rows,
+                        f"SQL отдал {counting.steps_rows} строк при истории "
+                        f"из {len(self.HISTORY)} записей: "
+                        f"{counting.steps_statements}")
+
+    def test_prints_the_new_rows_of_the_asked_classes_and_moves_the_cursor(self):
+        """Печатается то же, что печатал прежний код: новые записи классов
+        из `events`, а курсор `known_step_id` сдвигается на последнюю
+        новую запись.
+
+        Ловит мутацию: фильтр класса (`_matches_class`) потерян при
+        переходе на SQL-выборку — в потоке появилась бы запись `agent run
+        завершён`, которой Оператор класса `transitions` не просил; либо
+        курсор не сдвинут вовсе — те же записи печатались бы на каждом
+        опросе заново. Строгость границы этот сценарий не проверяет — её
+        закрепляет тест ниже.
+
+        Известен id записи «карта: размер»: в окно новых записей попадает
+        и `agent run завершён`, класса `steps`, которого Оператор не
+        просил, — иначе фильтру класса нечего было бы отбрасывать."""
+        known = {self.TASK: self.ids[-4]}
+
+        out = capture(watch._emit_steps, self.conn, self.TASK,
+                     {"transitions"}, known, None)
+
+        self.assertIn("state -> merge_gate", out)
+        self.assertIn("state -> done", out)
+        self.assertNotIn("agent run завершён", out)
+        self.assertEqual(self.ids[-1], known[self.TASK])
+
+    def test_the_already_shown_row_is_not_printed_a_second_time(self):
+        """Известен id записи `operator / state -> merge_gate` — записи
+        класса `transitions`, уже показанной Оператору: в потоке её больше
+        нет, есть только следующая за ней.
+
+        Ловит мутацию: граница фильтра взята нестрого (`id >= known` в
+        `store.task_steps_since`) — эта запись печаталась бы вторым разом
+        на каждом опросе дозора, пока журнал задачи не двинется."""
+        known = {self.TASK: self.ids[-2]}
+
+        out = capture(watch._emit_steps, self.conn, self.TASK,
+                     {"transitions"}, known, None)
+
+        self.assertNotIn("state -> merge_gate", out)
+        self.assertIn("state -> done", out)
+        self.assertEqual(self.ids[-1], known[self.TASK])
 
 
 if __name__ == "__main__":
