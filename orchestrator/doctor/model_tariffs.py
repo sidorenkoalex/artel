@@ -43,9 +43,12 @@ def _resolved_roles(catalog, local) -> dict:
 
     Роль с неразрешимой цепочкой сюда не попадает: её причину называет
     строка `models-local`, дублировать её второй красной строкой незачем.
+    То же и с нечитаемой картой исполнителей (`agent_roles_or_empty`, SPEC
+    01M3H3JRBD544GQ10SS3DBGEVP, требование 4): перебирать нечего, и обе
+    проверки ниже честно уходят в `skip` вместо трейсбека.
     """
     resolved = {}
-    for role in doctor.agent_roles():
+    for role in doctor.agent_roles_or_empty():
         try:
             resolved[role] = doctor.models.resolve_role(role, catalog, local)
         except doctor.models.ModelsError:

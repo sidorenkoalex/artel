@@ -61,8 +61,15 @@ CATALOG = """providers:
         price_date: 2026-09-21
 """
 
+# Ярус роли под тестом плюс ярус `standard`: строки `check_stack`/
+# `doctor` считаются по ВСЕМ agent-ролям карты, а не только по `ROLE`, и
+# ярус, не названный в слое, даёт им красную строку «цепочка не
+# разрешена» вне предмета этого файла. С 27.09 (roles.yaml: analyst →
+# `model_tier: standard`) слой с одним `strong` перестал покрывать карту,
+# и `CheckStackLinesTest` краснел строкой `model-analyst`.
 LOCAL = """tiers:
   {tier}: {model}
+  standard: {claude_model}
 allow_experimental:
   {model}: true
 """
@@ -106,8 +113,9 @@ class _ManifestSandbox(TmpRootTest):
         # на свой файл при импорте, и невосстановленное значение утекло бы
         # в соседние тесты процесса.
         self.patch(config, "ROLES", self.roles_path)
-        config.MODELS_LOCAL.write_text(LOCAL.format(tier=TIER, model=model),
-                                       encoding="utf-8")
+        config.MODELS_LOCAL.write_text(
+            LOCAL.format(tier=TIER, model=model, claude_model=CLAUDE_MODEL),
+            encoding="utf-8")
 
     def stack_checks(self, codex_found: bool) -> list:
         def fake_run(args, **kwargs):

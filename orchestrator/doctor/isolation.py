@@ -367,8 +367,12 @@ def check_foreign_provider_secrets() -> doctor.Check:
     # инструменты манифеста, сверяет venv и спрашивает keychain — платить
     # этим за каждую из agent-ролей, идущих на одном и том же исполнителе,
     # незачем, набор чужих имён у них один и тот же.
+    # Перечень ролей — с деградацией (`agent_roles_or_empty`, SPEC
+    # 01M3H3JRBD544GQ10SS3DBGEVP, требование 4): нечитаемая карта
+    # исполнителей оставляет строку без предмета, но не роняет весь прогон
+    # `doctor` — о самой карте говорит `check_role_providers`.
     by_provider = {}
-    for role in doctor.agent_roles():
+    for role in doctor.agent_roles_or_empty():
         try:
             provider = doctor.providers.for_role(role)
         except doctor.providers.UnknownProviderError:

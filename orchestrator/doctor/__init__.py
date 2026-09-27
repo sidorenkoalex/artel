@@ -132,6 +132,7 @@ from .preflight import (check_cli_found, cli_version, check_cli_version,
                         check_role_home_reference,
                         check_target_layout, TARGET_WRAPPER_MARKERS,
                         check_target_wrapper, agent_roles,
+                        agent_roles_or_empty,
                         check_role_providers, provider_preflight_checks,
                         preflight_checks)
 from .isolation import (isolation_smoke, CODEX_SMOKE_CHECK,

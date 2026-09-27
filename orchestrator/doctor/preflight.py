@@ -307,8 +307,8 @@ def model_provider_mismatches(role: str | None = None) -> list:
     подменять их здесь трейсбеком предполёта незачем — тот же приём
     защитной деградации, что у `stack.model_providers`.
     """
-    names = [role] if role is not None else agent_roles()
     try:
+        names = [role] if role is not None else agent_roles()
         pairs = doctor.providers.role_providers(names)
     except doctor.roles.RolesError:
         return []
@@ -529,9 +529,51 @@ def check_target_wrapper(target: str) -> doctor.Check:
 
 
 def agent_roles() -> list:
-    """Agent-роли, за которые `doctor` отвечает: те же, по которым он
-    искал токены до задачи (`config.STATE_ROLE`), отсортированные."""
-    return sorted(set(doctor.config.STATE_ROLE.values()))
+    """Agent-роли, за которые `doctor` отвечает: роли карты исполнителей
+    с `executor: agent`, отсортированные (SPEC
+    01M3H3JRBD544GQ10SS3DBGEVP, требование 1).
+
+    Источник — сама карта (`roles.load()`), а не словарь состояний
+    `config.STATE_ROLE`, по которому перечень собирался до задачи:
+    `spec_writing` в этот словарь не входит намеренно (роль analyst
+    исполняет состояние только при наличии ТЗ — `runner.step_role`,
+    `auto`), поэтому analyst не попадал в перечень вовсе и НИ ОДНОЙ
+    зависимой от роли строки предполёта не получал — ни токена, ни входа
+    провайдера, ни дома роли, ни цепочки яруса. Пока все роли шли на одном
+    провайдере, пробел стоил только непроверенного токена; с переводом
+    analyst на Codex (27.09) вход роли приходилось проверять руками.
+    `config.STATE_ROLE` при этом не меняется: он отвечает на другой
+    вопрос — «какая роль работает в ЭТОМ состоянии FSM», и его читатели
+    (`runner`, `auto`, `pause`, `doctor.leases`) задачей не тронуты.
+
+    `RolesError` уходит вызывающему, без деградации к дефолту: перечень —
+    это ПРОЧИТАННЫЙ файл, и подставить сюда молчаливый список значило бы
+    утверждать прочитанным то, чего не читали (тот же довод, что у
+    `providers.role_providers`). Именно так строка `check_role_providers`
+    сохраняет свой именованный WARN; строкам, которым падать нельзя,
+    служит `agent_roles_or_empty` ниже.
+    """
+    return sorted(role for role, entry in doctor.roles.load().items()
+                  if isinstance(entry, dict)
+                  and entry.get("executor") == "agent")
+
+
+def agent_roles_or_empty() -> list:
+    """`agent_roles()` с защитной деградацией до ПУСТОГО перечня на
+    нечитаемой карте исполнителей (требование 4, AC-4).
+
+    До задачи перечень ролей жил словарём в коде и чтения `roles.yaml` не
+    требовал вовсе — теперь от файла зависит КАЖДАЯ строка `doctor`,
+    перебирающая роли. Трейсбек из такой строки выбросил бы из прогона и
+    все остальные — диск, сироты, lease, — к карте исполнителей отношения
+    не имеющие; а причину нечитаемой карты называет своя строка
+    (`check_role_providers`), и дублировать её здесь нечем (тот же приём
+    защитной деградации, что у `stack.model_providers`).
+    """
+    try:
+        return agent_roles()
+    except doctor.roles.RolesError:
+        return []
 
 
 def _role_chain(role: str, name: str, catalog=None, local=None) -> tuple:
@@ -618,9 +660,14 @@ def provider_preflight_checks() -> dict:
     незарегистрированным провайдером пропускается молча: про неё
     говорит красная строка `check_role_providers` выше, дублировать её
     здесь нечем — провайдера, который выполнил бы проверки, нет.
+
+    Нечитаемая карта исполнителей оставляет склейку ПУСТОЙ
+    (`agent_roles_or_empty`, требование 4): спрашивать провайдера не о
+    ком, а причину называет та же красная строка выше — трейсбек отсюда
+    унёс бы с собой весь прогон `doctor`.
     """
     grouped = {}
-    for role in agent_roles():
+    for role in agent_roles_or_empty():
         try:
             provider = doctor.providers.for_role(role)
         except doctor.providers.UnknownProviderError:
