@@ -98,6 +98,22 @@ class JournalWarningOnceTest(_TaskInDbTest):
 
         self.assertEqual(self.details(self.ACTION), ["суммы A"])
 
+    def test_a_key_other_than_the_text_is_refused_loudly(self):
+        """Ключ, который не равен тексту записи и не `None`, — отказ
+        `ValueError`, а не тихое «подавление как получится»: носителя ключа
+        в журнале нет, сверка восстанавливает его из `detail`.
+
+        Ловит мутацию: контракт снят и узел принимает любой ключ — вызов с
+        ключом мимо текста (живой сценарий: второй порог бюджета с
+        `key=f"{ratio}"`) молча перестал бы подавлять, потому что с
+        `row["detail"]` такой ключ не совпадёт никогда, и журнал снова
+        получил бы запись на каждый шаг — без единого красного теста.
+        """
+        with self.assertRaises(ValueError):
+            self.write("израсходовано $7.00 из $10.00", key="0.7")
+
+        self.assertEqual(self.details(self.ACTION), [])
+
     def test_state_entry_record_shifts_the_boundary(self):
         """Повторный вход в состояние (запись `state -> ...`) открывает
         журнал тому же предупреждению заново (требование 4).

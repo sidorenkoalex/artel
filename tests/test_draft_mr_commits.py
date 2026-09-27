@@ -227,13 +227,16 @@ class DraftMrAtTheVerifyingRubiconTest(_DraftMrSandbox):
         self.assertEqual(self.adapter_alerts(), [])
 
     def test_a_branch_identical_to_the_base_wakes_nobody(self):
-        """Голова ветки совпала с головой базы — публиковать нечего, и
-        рубеж не трогает ни `gh`, ни признак задачи.
+        """Голова ветки совпала с головой базы — будить адаптер незачем, и
+        рубеж не трогает ни `gh`, ни признак задачи, ни журнал.
 
-        Ловит мутацию: узел черновика зовётся на каждой успешной публикации
-        без разбора — рубеж `merge_gate`, куда `ensure_head_in_origin`
-        приходит на КАЖДЫЙ approve, обращался бы к форджу на заведомо
-        пустой ветке.
+        Ловит мутацию: сверка `head == база` в хуке снята, и узел черновика
+        зовётся на каждой успешной публикации без разбора. До форджа дело
+        и тогда не дойдёт — авторитетную сверку несёт сама
+        `ensure_draft_mr`, — но каждый approve `merge_gate`, куда
+        `ensure_head_in_origin` приходит на КАЖДЫЙ визит, начнёт дописывать
+        в журнал `Draft MR пропущен: в ветке нет коммитов`: ровно тот
+        механический повтор, который эта задача и лечит.
         """
         ok, detail = github_adapter.ensure_head_in_origin(
             self.conn, self.TASK, self.branch)
@@ -241,6 +244,8 @@ class DraftMrAtTheVerifyingRubiconTest(_DraftMrSandbox):
         self.assertTrue(ok, detail)
         self.assertEqual(self.gh_calls, [])
         self.assertEqual(self.flag(), 0)
+        self.assertNotIn(github_adapter.DRAFT_MR_SKIPPED_ACTION,
+                         self.actions())
 
     def test_an_already_created_draft_mr_is_not_created_twice(self):
         """Идемпотентность колонки `draft_mr_created` рубежом не нарушена.
