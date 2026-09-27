@@ -1,5 +1,5 @@
 ---
-built_at_sha: d910c523b263d9f7f2454a33876fa9d0b6a926e2
+built_at_sha: b03fb38e4943bf163f5cda48df3443037cd8c15b
 ---
 
 # Codebase-map пульта
@@ -2078,7 +2078,8 @@ built_at_sha: d910c523b263d9f7f2454a33876fa9d0b6a926e2
 
 **Назначение:** Юнит-тесты `orchestrator.catalog.spawn_subtask`
 
-**Публичные функции:** (нет)
+**Публичные функции:**
+- `tz_body`
 
 **Импортирует:** `orchestrator/artifact_branch.py`, `orchestrator/catalog.py`, `orchestrator/config.py`, `orchestrator/store.py`, `tests/sandbox.py`
 
