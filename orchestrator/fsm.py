@@ -14,13 +14,14 @@ import subprocess  # шов для tests/test_ac3_ac9_pull_message_fixtures.py:
                     # сам fsm.py вызовов subprocess не делает (они в pull.py)
 import sys
 from datetime import datetime, timezone
+from functools import partial
 from pathlib import Path
 
 from scripts import guard
 
-from . import (artifact_source, artifacts, budget, ci, config, fixation,
-              github_adapter, gitcmd, lease, pull, repo_context, review,
-              store, targets, yamlmini)
+from . import (acceptance, artifact_source, artifacts, budget, ci, config,
+              fixation, github_adapter, gitcmd, lease, pull, repo_context,
+              review, store, targets, workspace, yamlmini)
 from .pull import _merge_conflict_note
 
 # Буквальная строка «сигналов нет» (ANSWER-2, tasks/01M1KS8K9RXWHX2PW3ZKB0P903,
@@ -54,6 +55,17 @@ VERIFYING_STATUS_ACTION = "статус CI ветки (verifying)"
 ARTIFACT_ESCALATION_ROLE_STEP_MARKER = (
     "эскалация по артефакту роли: ответ Оператора должен дойти до роли "
     "до следующего предварительного advance")
+
+# Действия журнала о полном наборе tests/ на `approve` из `acceptance`
+# (SPEC 01M3FQ3JVC3DGGM33XCX8TC7ME, требования 6-8): три исхода — прогон
+# пропущен (worktree не заведён), набор зелёный, краснота принята
+# осознанно. Четвёртый (отказ приёмки) идёт общим для команды действием
+# «approve отклонён».
+ACCEPTANCE_SUITE_SKIPPED_ACTION = ("полный набор не проверен — worktree "
+                                   "не заведён")
+ACCEPTANCE_SUITE_GREEN_ACTION = "приёмка: полный набор tests/ зелёный"
+ACCEPTANCE_RED_ACCEPTED_ACTION = ("приёмка: красный полный набор tests/ "
+                                  "принят осознанно")
 
 
 def _verifying_elapsed_seconds(updated_at: str) -> float:
@@ -659,15 +671,24 @@ def confirm_fixation(conn, task_id: str, sha: str | None) -> bool:
 
 
 def cmd_approve(task_id: str, sha: str | None = None,
-               session_id: str | None = None) -> None:
+               session_id: str | None = None,
+               accept_red: str | None = None) -> None:
     """Берёт lease задачи перед работой (SPEC T044, требование 2).
 
     Префикс -> полный id (SPEC T094, требование 3, AC-3) резолвится ЗДЕСЬ,
-    до lease/CAS (REVIEW T094 итерация 1, замечание 1)."""
+    до lease/CAS (REVIEW T094 итерация 1, замечание 1).
+
+    `accept_red` (SPEC 01M3FQ3JVC3DGGM33XCX8TC7ME, требование 8) —
+    основание флага `approve <id> --accept-red "<основание>"`: осознанное
+    принятие не-зелёного полного набора tests/ на приёмке. `None` (флага
+    нет) — не-зелёный набор отказывает приёмке; сам флаг разбирает
+    диспетчер (`orchestrator/artel.py`), здесь он только доезжает до
+    обработчика состояния `acceptance`."""
     conn = store.db()
     task_id = store.resolve_task_id(conn, task_id)
-    lease.run_locked(conn, task_id, session_id,
-                     lambda sid: _cmd_approve(conn, task_id, sha, sid))
+    lease.run_locked(
+        conn, task_id, session_id,
+        lambda sid: _cmd_approve(conn, task_id, sha, sid, accept_red))
 
 
 def _spawn_division_subtasks(conn, task_id: str, t, state: str,
@@ -813,12 +834,78 @@ def _approve_spec_gate(conn, task_id: str, t, state: str, sid: str) -> None:
         print(f"  дальше: artel.py run {task_id}  (запуск test_author)")
 
 
-def _approve_acceptance(conn, task_id: str, t, state: str, sid: str) -> None:
+def _acceptance_full_suite_ok(conn, task_id: str, t,
+                              accept_red: str | None) -> bool:
+    """Прогон полного набора tests/ в worktree ветки задачи на `approve`
+    из `acceptance` (SPEC 01M3FQ3JVC3DGGM33XCX8TC7ME, требования 6-8);
+    `True` — приёмку можно проводить дальше.
+
+    До этой задачи `approve` не гонял набор вовсе, хотя запись «приёмка:
+    что проверит approve» его обещала: 26.09 после красного автогейта
+    `approve` прошёл без повтора набора, и зелёность доказал только
+    ручной прогон сессии.
+
+    Worktree задачи не заведён или стоит не на её ветке
+    (`workspace.on_task_branch` вернула не `True`) — гонять нечего:
+    именованная запись журнала и проход (требование 7). Не отказ: иначе
+    приёмка встала бы насмерть на каждом пульте, где worktree убран после
+    шага, и на каждой FSM-песочнице без реального git (инвариант
+    `tests/test_invariants.py::test_operator_approve_passes_each_gate`).
+
+    Не-зелёный набор без флага — отказ приёмки (задача остаётся в
+    `acceptance`) тем же каналом `approve отклонён`, что и остальные
+    отказы этой команды: запись журнала + печать, без `sys.exit` —
+    lease снимает общая обвязка `lease.run_locked`, а Оператору нужен
+    текст с именами упавших тестов, а не трейс.
+
+    `accept_red` — осознанное принятие красноты, не относящейся к задаче
+    (например красный main 22-26.09): приёмка проходит, а в журнал
+    уходят основание Оператора, имена упавших тестов и итоговая строка
+    pytest — что именно приняли и на каком основании (требование 8).
+    """
+    wt_root = (workspace.path(task_id)
+              if workspace.on_task_branch(task_id, t["branch"]) is True
+              else None)
+    if wt_root is None:
+        detail = (f"worktree задачи не заведён или стоит не на ветке "
+                  f"{t['branch']} — прогон полного набора tests/ пропущен")
+        store.journal(conn, task_id, "operator",
+                      ACCEPTANCE_SUITE_SKIPPED_ACTION, detail)
+        print(f"[{task_id}] {ACCEPTANCE_SUITE_SKIPPED_ACTION}: {detail}")
+        return True
+    run = acceptance.full_suite(wt_root, task_id)
+    if run.green:
+        store.journal(conn, task_id, "operator", ACCEPTANCE_SUITE_GREEN_ACTION,
+                      run.detail)
+        print(f"[{task_id}] {ACCEPTANCE_SUITE_GREEN_ACTION}: {run.digest}")
+        return True
+    if accept_red:
+        detail = f"основание: {accept_red}\n{run.detail}"
+        store.journal(conn, task_id, "operator", ACCEPTANCE_RED_ACCEPTED_ACTION,
+                      detail)
+        print(f"[{task_id}] {ACCEPTANCE_RED_ACCEPTED_ACTION}: {detail}")
+        return True
+    reason = f"полный набор tests/ не пройден — {run.detail}"
+    store.journal(conn, task_id, "operator", "approve отклонён", reason)
+    print(f"[{task_id}] approve отклонён: {reason}")
+    print(f"  почини набор и повтори: artel.py approve {task_id}")
+    print(f"  либо прими красноту осознанно: artel.py approve {task_id} "
+          f'--accept-red "<основание>"')
+    return False
+
+
+def _approve_acceptance(conn, task_id: str, t, state: str, sid: str,
+                        accept_red: str | None = None) -> None:
     # Сверка свежести ветки до гейта (SPEC T051, требования 1, 4):
     # тот же узел, что и на входе в review — approve не выносит на
     # merge_gate срез, который мог устареть, пока задача ждала приёмки.
     if _pull_main_or_escalate(conn, task_id, t, state) in (
             "escalated", "refused"):
+        return
+    # Полный набор tests/ — ПОСЛЕ подтяжки main (SPEC
+    # 01M3FQ3JVC3DGGM33XCX8TC7ME, требование 6): гонять его до неё значило
+    # бы проверять срез, которого на merge_gate уже не будет.
+    if not _acceptance_full_suite_ok(conn, task_id, t, accept_red):
         return
     store.set_state(conn, task_id, "merge_gate", "operator",
                     expected_state=state, detail="приёмка пройдена")
@@ -890,7 +977,8 @@ def _approve_escalated(conn, task_id: str, t, state: str, sid: str) -> None:
     print(f"  дальше: artel.py run {task_id}")
 
 
-def _cmd_approve(conn, task_id: str, sha: str | None, sid: str) -> None:
+def _cmd_approve(conn, task_id: str, sha: str | None, sid: str,
+                accept_red: str | None = None) -> None:
     t = store.get_task(conn, task_id)
     state = t["state"]
     if state in APPROVE_NEEDS_SHA and not confirm_fixation(conn, task_id, sha):
@@ -899,9 +987,15 @@ def _cmd_approve(conn, task_id: str, sha: str | None, sid: str) -> None:
     # обработчик — прежнее тело своей ветки `if state == ...` (переход
     # без изменения поведения); ветка «иначе» ниже несёт прежний текст
     # отказа. Тем же приёмом, что и `_cmd_advance` (SPEC T091).
+    #
+    # `accept_red` касается ровно одного состояния (SPEC
+    # 01M3FQ3JVC3DGGM33XCX8TC7ME, требование 8) — связывается с ним
+    # `partial`, а не шестым параметром во всех четырёх обработчиках:
+    # сигнатура «(conn, task_id, t, state, sid)» остаётся общей для
+    # таблицы.
     handler = {
         "spec_gate": _approve_spec_gate,
-        "acceptance": _approve_acceptance,
+        "acceptance": partial(_approve_acceptance, accept_red=accept_red),
         "merge_gate": _approve_merge_gate,
         "escalated": _approve_escalated,
     }.get(state)

@@ -657,15 +657,22 @@ def _full_suite_or_refuse(conn, task_id: str, paths: list[str], scratch: Path,
     (требование 5/AC-10/AC-11) — только для путей
     `_FULL_SUITE_APPENDIX_PREFIXES`. Красный прогон — именованный отказ
     мержа: задача остаётся на `merge_gate`, scratch убран, main не
-    продвинут, приложения не опубликованы."""
+    продвинут, приложения не опубликованы.
+
+    Прогон и разбор его вывода — общий узел `acceptance.full_suite` (SPEC
+    01M3FQ3JVC3DGGM33XCX8TC7ME, требование 5): detail отказа несёт
+    итоговую строку pytest, имена упавших тестов и путь к файлу с полным
+    выводом прогона — той же поверхностью, что и автогейт приёмки. До
+    этой правки здесь лежал сырой хвост вывода, в котором имена упавших
+    тестов тонули."""
     if not _appendix_needs_full_suite(paths):
         return
-    green, tail = acceptance.run_full_suite(scratch)
-    if green:
+    run = acceptance.full_suite(scratch, task_id)
+    if run.green:
         store.journal(conn, task_id, "orchestrator",
-                      "полный прогон после приложений", tail)
+                      "полный прогон после приложений", run.detail)
         return
-    detail = f"приложения ломают тесты: {tail}"
+    detail = f"приложения ломают тесты: {run.detail}"
     store.journal(conn, task_id, "orchestrator", "merge FAILED", detail)
     _drop_scratch_worktree(ctx, scratch)
     sys.exit(f"[{task_id}] merge отклонён: {detail}\n"
