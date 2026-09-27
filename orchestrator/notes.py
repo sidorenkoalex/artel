@@ -48,19 +48,56 @@ merge-окна либо задача в состоянии из `config.NOTE_SIL
 `DOC_COMMIT_CONFIG_PATHS` (требование 3); сверка базы (требование 5) —
 blob-sha пути в `origin/<MAIN_BRANCH>` против `HEAD:<путь>` главной копии
 (пина), чтобы правка поверх устаревшей версии не затёрла чужую.
+
+Единый формат строки бэклога (01M3HST4SGX0SPKAGNHVY7DWHM): текст `--text`
+разбирается ТЕМ ЖЕ `_row_cells`, которым читается шапка раздела, — форма
+с обрамляющими чертами («| a | b |», ровно так строка выглядит в
+документе) и без них дают одну и ту же строку (требования 1-2; до этой
+задачи `_apply_insert` делил текст своим `text.split("|")`, и обрамлённая
+форма отказывала по числу колонок — три отказа `note` 27.09). Формы
+ячеек приводятся к одной, выбранной по большинству строк документа:
+приоритет — цифра без буквы (159 строк против 43 на вершине b21f01e6),
+дата — «ДД.ММ» (134 против 7). Колонки находятся по ЗАГОЛОВКУ шапки
+раздела («П», «Дата»), не по номеру: колонка «Дата» есть у «Копилки» и
+отсутствует у «Бэклога»/«Очереди Оператора» (требования 3-6). Дописка
+состояния отделяется от прежнего текста ячейки разделителем с датой
+(требование 7) — прежде новый текст склеивался с прежним одним пробелом,
+и колонка «Состояние» превращалась в слипшийся абзац без границ дописок.
+
+`note --apply <файл> --message "<основание>"` (требования 9-12) — третий
+вид записи (`APPLY_KIND`) рядом с `note` и `doc-commit`: заменяет
+`docs/backlog.md` содержимым файла-заготовки целиком, тем же
+изолированным путём и с теми же сверками, что `doc-commit` (база, окно
+тишины, изменение файла в origin), плюс сверка формы самой заготовки
+(`_apply_shape_refusal`) и запись журнала с перечнем удалённых строк.
+
+Гейт полного набора `tests/` перед отправкой правки конфигурации
+Оператора (требования 13-16, `_suite_gate_refusal`): правка `roles.yaml`
+27.09 (a6da0abe) сделала главную ветку красной, потребовался откат
+(d910c523) и встали ветки волны. Прогон идёт по дереву рабочего
+репозитория, в котором правка УЖЕ записана, — поэтому гейт стоит в
+`_commit_and_push` после записи файла и до `git commit`. Путь `docs/**`
+прогона не заводит вовсе (требование 16), осознанный обход —
+`--accept-red "<основание>"` с записью журнала (требование 15).
 """
 import argparse
 import json
+import re
 import sys
 import time
 import uuid
+from datetime import date
 from pathlib import Path, PurePosixPath
 
-from . import config, gitcmd, merge_lock, runner, store
+from . import acceptance, config, gitcmd, merge_lock, runner, store
 
 BACKLOG_REL = "docs/backlog.md"
 
 DOC_COMMIT_KIND = "doc-commit"
+
+# Вид записи `note --apply` (требование 9): замена `docs/backlog.md`
+# содержимым файла-заготовки целиком.
+APPLY_KIND = "apply"
 
 # Конфигурация Оператора, которой `doc-commit` даёт канал мимо главной
 # копии (требование 3 SPEC; решение Оператора 19.09). Всё прочее вне
@@ -77,12 +114,41 @@ DOC_COMMIT_FOREIGN_REFUSAL = ("код и артефакты меняются з�
 DOC_COMMIT_BASE_REFUSAL = ("файл изменился в origin после пина — сначала "
                            "pin-update")
 
+# Именованное действие журнала об осознанном обходе гейта полного набора
+# (требование 15): коммит проходит при необеспеченном наборе, но обход
+# обязан остаться видимым Оператору вместе с путём и основанием.
+ACCEPT_RED_JOURNAL_ACTION = ("doc-commit конфигурации с необеспеченным "
+                             "набором tests/")
+
 # Имена разделов — как заголовки docs/backlog.md (требование 1).
 SECTION_HEADINGS = {
     "копилка": "## Копилка",
     "бэклог": "## Бэклог",
     "очередь": "## Очередь Оператора",
 }
+
+# Заголовки колонок, форма которых нормализуется (требования 3, 5, 6).
+# Колонка ищется по заголовку шапки раздела, а не по номеру: «Дата» есть у
+# «Копилки» и отсутствует у «Бэклога»/«Очереди Оператора», а раздел без
+# колонки нормализации соответствующей формы просто не получает.
+PRIORITY_HEADER = "П"
+DATE_HEADER = "Дата"
+
+# Приоритет: цифра 1-4, допускается ведущая «П»/«п» и произвольные пробелы
+# (требование 3). В файл пишется цифра — форма большинства строк документа.
+_PRIORITY_RE = re.compile(r"^[Пп]?([1-4])$")
+# Пример допустимой формы в тексте отказа (требование 4): без него
+# Оператор узнаёт только то, что его значение не подошло.
+PRIORITY_FORM_EXAMPLE = "цифра 1..4 («2»), допускается ведущая «П» («П2»)"
+
+# Дата с годом: «22.09.2026» -> «22.09» (требование 6). Сами числа дня и
+# месяца не переписываются — ни дополнения нулями, ни сверки календаря:
+# нормализуется ФОРМА, а не содержимое ячейки.
+_DATE_WITH_YEAR_RE = re.compile(r"^(\d\d?)\.(\d\d?)\.\d\d+$")
+
+# Пустая ячейка состояния (требование 7): пробелы либо прочерк — к такой
+# ячейке дописка идёт без ведущего разделителя.
+STATE_EMPTY_CELLS = ("", "—")
 
 MAX_PUSH_ATTEMPTS = 3
 
@@ -157,16 +223,96 @@ def _row_cells(line: str) -> list[str]:
     return [c.strip() for c in inner.split("|")]
 
 
-def _find_table_header(lines: list[str], heading_idx: int, heading: str) -> int:
+def _table_header_index(lines: list[str], heading_idx: int,
+                        heading: str) -> int | None:
+    """Индекс строки-шапки таблицы раздела; `None` — раздел кончился
+    (следующий `## `) или текст кончился раньше таблицы."""
     j = heading_idx + 1
     while j < len(lines):
         line = lines[j]
         if line.startswith("## ") and line != heading:
-            break
+            return None
         if line.strip().startswith("|"):
             return j
         j += 1
-    sys.exit(f"таблица раздела «{heading}» не найдена в {BACKLOG_REL}")
+    return None
+
+
+def _find_table_header(lines: list[str], heading_idx: int, heading: str) -> int:
+    idx = _table_header_index(lines, heading_idx, heading)
+    if idx is None:
+        sys.exit(f"таблица раздела «{heading}» не найдена в {BACKLOG_REL}")
+    return idx
+
+
+def _table_header_cells(text: str, heading: str) -> list[str] | None:
+    """Ячейки шапки таблицы раздела `heading` в `text`; `None` — раздела
+    нет вовсе либо у него нет таблицы.
+
+    Немой вариант `_find_table_header` для мест, где отсутствие раздела —
+    предмет проверки, а не отказ на месте: сверка формы заготовки
+    `--apply` (требование 11) и поиск колонки приоритета по шапке
+    (требование 5). Разбор строки — тот же `_row_cells`, один на модуль.
+    """
+    lines = text.split("\n")
+    try:
+        heading_idx = lines.index(heading)
+    except ValueError:
+        return None
+    idx = _table_header_index(lines, heading_idx, heading)
+    return _row_cells(lines[idx]) if idx is not None else None
+
+
+def _today_stamp() -> str:
+    """Текущая дата пульта в нормализованной форме «ДД.ММ» (требование 7).
+
+    Местная, не UTC (в отличие от `store.now` — там машинная метка
+    времени журнала): `docs/backlog.md` читает и пишет Оператор, и все
+    даты в нём — его календарные.
+    """
+    return date.today().strftime("%d.%m")
+
+
+def _normalized_priority(cell: str) -> str | None:
+    """Ячейка приоритета в нормализованной форме — цифра без буквы
+    (требование 3); `None` — форма не распознана (отказывает вызывающий
+    код, требование 4). Пробелы снимаются и внутри: «П 2» — та же форма,
+    что «П2»."""
+    match = _PRIORITY_RE.match("".join(cell.split()))
+    return match.group(1) if match else None
+
+
+def _priority_or_refuse(cell: str) -> str:
+    """Нормализованный приоритет либо именованный отказ с примером
+    допустимой формы (требование 4): файл не меняется, коммит не
+    создаётся — отказ происходит до записи."""
+    value = _normalized_priority(cell)
+    if value is None:
+        sys.exit(f"приоритет «{cell}» не распознан — ожидается "
+                 f"{PRIORITY_FORM_EXAMPLE}; файл не изменён")
+    return value
+
+
+def _normalized_date(cell: str) -> str:
+    """Ячейка даты в нормализованной форме «ДД.ММ» (требование 6): год
+    снимается; уже краткая форма и содержимое, датой не являющееся ни в
+    одной из двух форм, остаются как есть — отказ требование 6 для даты
+    не предусматривает (в отличие от приоритета)."""
+    match = _DATE_WITH_YEAR_RE.match(cell)
+    return f"{match.group(1)}.{match.group(2)}" if match else cell
+
+
+def _normalized_row(header_cells: list[str], cells: list[str]) -> list[str]:
+    """Ячейки строки с нормализованными приоритетом и датой (требования
+    3-6). Колонки находятся по заголовку шапки раздела: раздела без
+    колонки «П» нормализация приоритета не касается, без «Дата» — даты."""
+    result = list(cells)
+    for i, head in enumerate(header_cells[:len(result)]):
+        if head == PRIORITY_HEADER:
+            result[i] = _priority_or_refuse(result[i])
+        elif head == DATE_HEADER:
+            result[i] = _normalized_date(result[i])
+    return result
 
 
 def _apply_insert(original: str, section_key: str, text: str) -> tuple[str, str]:
@@ -178,12 +324,18 @@ def _apply_insert(original: str, section_key: str, text: str) -> tuple[str, str]
         sys.exit(f"раздел «{heading}» не найден в {BACKLOG_REL}")
     header_idx = _find_table_header(lines, heading_idx, heading)
     header_cells = _row_cells(lines[header_idx])
-    given_cells = [c.strip() for c in text.split("|")]
+    # Тем же разбором, что и шапка раздела (требование 1): обрамляющие
+    # черты снимаются только когда текст И начинается, И заканчивается
+    # чертой, поэтому обе формы дают одни и те же ячейки. Число колонок
+    # сверяется ПОСЛЕ снятия обрамления (требование 2) — иначе «| 1 | 2 |
+    # 3 |» проходило бы как пять ячеек с двумя пустыми.
+    given_cells = _row_cells(text)
     if len(given_cells) != len(header_cells):
         sys.exit(
             f"строка несёт {len(given_cells)} колонок(-у), раздел "
             f"«{section_key}» ожидает {len(header_cells)} (по шапке таблицы)")
-    new_line = "| " + " | ".join(given_cells) + " |"
+    new_line = "| " + " | ".join(
+        _normalized_row(header_cells, given_cells)) + " |"
     sep_idx = header_idx + 1
     lines.insert(sep_idx + 1, new_line)
     return "\n".join(lines), section_key
@@ -221,11 +373,27 @@ def _find_unique_row(lines: list[str], key: str) -> tuple[str, int]:
     return matches[0]
 
 
+def _appended_state(previous: str, text: str) -> str:
+    """Ячейка состояния после дописки (требование 7): `<прежний текст> —
+    <ДД.ММ>: <новый текст>`; прежняя ячейка пуста (пробелы либо прочерк) —
+    без ведущего разделителя.
+
+    Прежний текст сохраняется целиком: до этой задачи новый склеивался с
+    прежним одним пробелом, и колонка «Состояние» ряда строк превратилась
+    в слипшийся абзац, в котором границы дописок уже не читаются.
+    """
+    stamped = f"{_today_stamp()}: {text}"
+    old = previous.strip()
+    if old in STATE_EMPTY_CELLS:
+        return stamped
+    return f"{old} — {stamped}"
+
+
 def _apply_append(original: str, key: str, text: str) -> tuple[str, str]:
     lines = original.split("\n")
     section_key, idx = _find_unique_row(lines, key)
     cells = _row_cells(lines[idx])
-    cells[-1] = f"{cells[-1]} {text}".strip()
+    cells[-1] = _appended_state(cells[-1], text)
     lines[idx] = "| " + " | ".join(cells) + " |"
     return "\n".join(lines), section_key
 
@@ -248,16 +416,20 @@ def _apply_set_state(original: str, key: str, text: str) -> tuple[str, str]:
 
 
 def _apply_set_priority(original: str, key: str, text: str) -> tuple[str, str]:
-    try:
-        value = int(text)
-    except ValueError:
-        value = None
-    if value is None or not 1 <= value <= 4:
-        sys.exit(f"приоритет «{text}» вне диапазона 1..4")
+    """Второй путь нормализации приоритета (требование 5): в файл пишется
+    цифра, какая бы из двух допустимых форм ни пришла в `--text`; диапазон
+    1..4 тот же, что был. Колонка — с заголовком «П» по шапке раздела
+    найденной строки (во всех трёх разделах документа она первая, но
+    номер колонки — не правило, а совпадение)."""
+    value = _priority_or_refuse(text)
     lines = original.split("\n")
     section_key, idx = _find_unique_row(lines, key)
+    header_cells = _table_header_cells(original, SECTION_HEADINGS[section_key])
+    if header_cells is None or PRIORITY_HEADER not in header_cells:
+        sys.exit(f"раздел «{section_key}» не несёт колонки "
+                 f"«{PRIORITY_HEADER}» — приоритет менять негде")
     cells = _row_cells(lines[idx])
-    cells[0] = text
+    cells[header_cells.index(PRIORITY_HEADER)] = value
     lines[idx] = "| " + " | ".join(cells) + " |"
     return "\n".join(lines), section_key
 
@@ -292,6 +464,12 @@ def _commit_message(section_key: str, request: dict,
         # читается из истории целиком.
         rel = request["path"]
         return f"{_doc_commit_prefix(rel)}: {rel} — {request['message']}"
+    if kind == APPLY_KIND:
+        # Основание `--message` целиком, без усечения (требование 9, AC-8) —
+        # тот же довод, что у `doc-commit`: основание замены документа
+        # целиком читается из истории, а не угадывается по обрезку.
+        return (f"оператор: {BACKLOG_REL} заменён заготовкой — "
+                f"{request['message']}")
     if kind == "drop":
         return f"оператор: {section_key} — снята: {observation[:80]}"
     if kind == "set-state":
@@ -399,6 +577,123 @@ def _build_doc_commit(work_dir: Path,
     return content, rel, None
 
 
+APPLY_SHAPE_REFUSAL = "заготовка --apply негодна"
+
+
+def _apply_shape_refusal(draft: str, original: str) -> str | None:
+    """Текст отказа по форме заготовки `--apply`, либо `None` — форма
+    годна (требование 11): в заготовке присутствуют все три раздела,
+    которые знает `note`, у каждого есть таблица, и число колонок шапки
+    каждого раздела совпадает с числом колонок того же раздела в текущем
+    `origin/<MAIN_BRANCH>`.
+
+    Раздела нет в САМОМ origin (документ в origin сам не по форме) —
+    сверять число колонок не с чем, и отказ по этому поводу не выносится:
+    предмет проверки — заготовка, а не состояние origin.
+    """
+    for _section_key, heading in SECTION_HEADINGS.items():
+        draft_cells = _table_header_cells(draft, heading)
+        if draft_cells is None:
+            return (f"{APPLY_SHAPE_REFUSAL}: раздела «{heading}» нет либо у "
+                    f"него нет таблицы — коммита нет")
+        origin_cells = _table_header_cells(original, heading)
+        if origin_cells is not None and len(draft_cells) != len(origin_cells):
+            return (f"{APPLY_SHAPE_REFUSAL}: шапка раздела «{heading}» несёт "
+                    f"{len(draft_cells)} колонок(-у), в "
+                    f"origin/{config.MAIN_BRANCH} их {len(origin_cells)} — "
+                    f"коммита нет")
+    return None
+
+
+def _dropped_rows(original: str, draft: str) -> list[str]:
+    """Строки таблиц, которые были в прежнем содержимом документа и в
+    заготовке отсутствуют — каждая усечённая до 80 знаков тем же приёмом,
+    что сообщение коммита `note --drop` (требование 12)."""
+    kept = set(draft.split("\n"))
+    return [" | ".join(_row_cells(line))[:80]
+            for line in original.split("\n")
+            if line.strip().startswith("|") and line not in kept]
+
+
+def _apply_journal_detail(rows: list[str]) -> str:
+    """Колонка detail записи журнала об успешном `--apply` (требование
+    12): число удалённых строк и сами строки."""
+    return "; ".join([f"удалено строк: {len(rows)}", *rows])
+
+
+def _build_apply(work_dir: Path, request: dict,
+                 original: str) -> tuple[str, str, str | None]:
+    """Валидация и построение правки `note --apply` (требования 9-12).
+
+    Сверка базы — та же, что у `_build_doc_commit` (требование 10):
+    blob-sha `docs/backlog.md` в свежем `origin/<MAIN_BRANCH>` против
+    blob-sha того же пути в HEAD главной копии. Разошлись — документ в
+    origin ушёл от базы, заготовка легла бы поверх чужой правки и стёрла
+    бы её целиком (замена файла, не правка одной строки), поэтому отказ.
+
+    Отказ «заготовка совпадает с origin» — тот же класс, что у
+    `_build_doc_commit`: иначе `git commit` не нашёл бы изменений,
+    `MAX_PUSH_ATTEMPTS` повторов провалились бы, и запись повисла бы в
+    `_pending_dir()` без внятной причины.
+
+    Третий элемент возврата (у `note` — снятая строка, у `doc-commit` —
+    `None`) несёт здесь готовую колонку detail записи журнала: перечень
+    удалённых строк считается ЗДЕСЬ, пока прежнее содержимое под рукой, —
+    `_commit_and_push` его уже не увидит.
+    """
+    origin_sha = _blob_sha(work_dir, f"FETCH_HEAD:{BACKLOG_REL}")
+    pin_sha = _blob_sha(config.ROOT, f"HEAD:{BACKLOG_REL}")
+    if origin_sha != pin_sha:
+        sys.exit(f"{BACKLOG_REL}: {DOC_COMMIT_BASE_REFUSAL}")
+    draft = request["content"]
+    if draft == original:
+        sys.exit(f"{BACKLOG_REL}: заготовка совпадает с содержимым в "
+                 f"origin/{config.MAIN_BRANCH} — коммитить нечего")
+    refusal = _apply_shape_refusal(draft, original)
+    if refusal is not None:
+        sys.exit(refusal)
+    return draft, BACKLOG_REL, _apply_journal_detail(
+        _dropped_rows(original, draft))
+
+
+def _suite_gate_refusal(work_dir: Path, request: dict) -> str | None:
+    """Текст отказа гейта полного набора `tests/` перед отправкой правки
+    конфигурации Оператора, либо `None` — гейт неприменим или пройден
+    (требования 13-16).
+
+    Гейт стоит на путях `DOC_COMMIT_CONFIG_PATHS` и только на них: путь
+    `docs/**` прогона не заводит вовсе (требование 16) — документ не
+    исполняется и красным набор сделать не может. Прогон идёт по дереву
+    рабочего репозитория, в котором правка УЖЕ записана вызывающим кодом
+    (требование 13): именно применённая правка и есть предмет проверки —
+    прогон до записи проверял бы не её.
+
+    Набор не удалось запустить вовсе (`tests/` в дереве нет, интерпретатор
+    или pytest отсутствуют) — `acceptance.run_full_suite` отдаёт «не
+    зелено», и гейт закрывается тем же отказом, что при красном наборе
+    (требование 14): гейт закрыт по умолчанию, молчаливого пропуска нет.
+
+    `--accept-red "<основание>"` (требование 15) снимает гейт целиком, не
+    гоняя набор: решение Оператор уже принял, а минуты прогона ради
+    заранее принятого исхода — чистая потеря. Сам обход пишет запись
+    журнала (`_journal_commit`), а не молчит.
+    """
+    if request["kind"] != DOC_COMMIT_KIND:
+        return None
+    if request["path"] not in DOC_COMMIT_CONFIG_PATHS:
+        return None
+    if request.get("accept_red"):
+        return None
+    green, output = acceptance.run_full_suite(work_dir)
+    if green:
+        return None
+    return (f"{request['path']}: полный набор tests/ не обеспечен на дереве "
+            f"с применённой правкой — коммита нет; "
+            f"{acceptance.run_digest(output)}; осознанный обход — "
+            f"doc-commit <путь> --from <файл> --message \"<основание>\" "
+            f"--accept-red \"<почему красный набор принят>\"")
+
+
 def _target_rel(request: dict) -> str:
     """Путь в репозитории, который меняет запись: свой у `doc-commit`,
     `BACKLOG_REL` у всех видов `note`."""
@@ -438,6 +733,8 @@ def _fetch_and_build(work_dir: Path,
     if request["kind"] == DOC_COMMIT_KIND:
         return _build_doc_commit(work_dir, request)
     original = _read_backlog(work_dir)
+    if request["kind"] == APPLY_KIND:
+        return _build_apply(work_dir, request, original)
     return _build_for(request, original)
 
 
@@ -448,13 +745,27 @@ def _commit_and_push(work_dir: Path, request: dict, new_text: str,
     повторить с новым `_fetch_and_build` либо удержать (требование 4/5).
 
     Запись `doc-commit` пишет свой путь (`_target_rel`) и журнал пульта не
-    трогает (требование 7 её SPEC); пути `note` — как прежде."""
+    трогает (требование 7 её SPEC); пути `note` — как прежде.
+
+    Гейт полного набора `tests/` (требования 13-14 SPEC
+    01M3HST4SGX0SPKAGNHVY7DWHM) стоит здесь: ПОСЛЕ записи правки в дерево
+    рабочего репозитория и ДО `git commit` — «дерево с уже применённой
+    правкой» требования 13 существует ровно в этом промежутке. Отсюда же
+    получается верное поведение на обоих путях: при открытом окне тишины
+    решение об удержании принимается раньше (`_run`), прогона не будет
+    вовсе, и набор гоняется тогда, когда отправка действительно идёт
+    (`--flush`). Цена — прогон на каждой попытке повтора
+    non-fast-forward; отказ гейта выходит `sys.exit` с первой попытки,
+    поэтому три красных прогона подряд невозможны."""
     rel = _target_rel(request)
     is_doc_commit = request["kind"] == DOC_COMMIT_KIND
     if is_doc_commit:
         _write_doc(work_dir, rel, new_text)
     else:
         _write_backlog(work_dir, new_text)
+    gate = _suite_gate_refusal(work_dir, request)
+    if gate is not None:
+        sys.exit(gate)
     message = _commit_message(section_key, request, observation)
     gitcmd.in_repo(work_dir, "add", rel)
     commit = gitcmd.in_repo(
@@ -468,10 +779,35 @@ def _commit_and_push(work_dir: Path, request: dict, new_text: str,
     if push is None or push.returncode != 0:
         return None
     sha = gitcmd.head_sha(work_dir)
-    if not is_doc_commit:
-        store.journal(store.db(), None, "operator",
-                     f"заметка: {section_key} {sha}")
+    _journal_commit(request, section_key, observation, rel, sha)
     return sha
+
+
+def _journal_commit(request: dict, section_key: str, observation: str | None,
+                    rel: str, sha: str) -> None:
+    """Запись журнала пульта по итогам успешного push — своя у каждого вида
+    записи.
+
+    `doc-commit` журнал не пишет (требование 7 её SPEC) — кроме
+    осознанного обхода гейта набора: он обязан остаться видимым Оператору
+    вместе с путём и основанием (требование 15 SPEC
+    01M3HST4SGX0SPKAGNHVY7DWHM). `--apply` пишет перечень удалённых строк
+    (требование 12), пути `note` — прежнюю строку, буквально.
+    """
+    conn = store.db()
+    kind = request["kind"]
+    if kind == DOC_COMMIT_KIND:
+        reason = request.get("accept_red")
+        if reason:
+            store.journal(conn, None, "operator", ACCEPT_RED_JOURNAL_ACTION,
+                          f"{rel}: {reason}")
+        return
+    if kind == APPLY_KIND:
+        store.journal(conn, None, "operator",
+                      f"{BACKLOG_REL} заменён заготовкой {sha}",
+                      observation or "")
+        return
+    store.journal(conn, None, "operator", f"заметка: {section_key} {sha}")
 
 
 def _attempt(request: dict) -> str | None:
@@ -544,6 +880,9 @@ def _run(request: dict, bypass_window: bool = False) -> str | None:
     """
     if request["kind"] == DOC_COMMIT_KIND:
         held, accusative, command = "doc-commit удержан", "doc-commit", "doc-commit"
+    elif request["kind"] == APPLY_KIND:
+        held, accusative, command = ("заготовка бэклога удержана",
+                                     "заготовку бэклога", "note")
     else:
         held, accusative, command = "заметка удержана", "заметку", "note"
     work_dir = _ensure_work_repo()
@@ -575,9 +914,16 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("section", nargs="?", choices=list(SECTION_HEADINGS))
     parser.add_argument("--text")
     parser.add_argument("--append")
+    # То же действие под именем из ТЗ (требование 8): `--state` и
+    # `--append` — одна операция, не две, и оба имени дают один результат.
+    parser.add_argument("--state")
     parser.add_argument("--drop")
     parser.add_argument("--set-state")
     parser.add_argument("--set-priority")
+    # Замена документа заготовкой целиком (требование 9): `--message`
+    # обязателен, его текст входит в сообщение коммита.
+    parser.add_argument("--apply")
+    parser.add_argument("--message")
     # Обход окна тишины (требование 6, AC-7) — тот же раздел, что и
     # позиционный `section`, но под явным флагом: запись пишется и
     # пушится немедленно, не удерживаясь.
@@ -597,10 +943,24 @@ def cmd_note(argv: list[str]) -> None:
     # 5/AC-6, не смешивается с оппортунистическим путём).
     if args.flush or _silence_window_reason() is None:
         _flush_pending()
-    if args.append is not None:
+    # `--state` — второе имя `--append` (требование 8): обе формы ведут в
+    # один путь, а текст отказа называет то имя, которым позвали.
+    append_flag = "--append" if args.append is not None else "--state"
+    append_key = args.append if args.append is not None else args.state
+    if args.apply is not None:
+        if not args.message or not args.message.strip():
+            sys.exit('--apply требует --message "<основание>": основание '
+                     'замены документа — часть сообщения коммита')
+        sha = _run({"kind": APPLY_KIND,
+                    "content": _read_source_file(args.apply, "--apply"),
+                    "message": args.message.strip()})
+        if sha is not None:
+            print(f"{BACKLOG_REL} заменён заготовкой в "
+                  f"origin/{config.MAIN_BRANCH}: {sha}")
+    elif append_key is not None:
         if not args.text:
-            sys.exit("--append требует --text")
-        _run({"kind": "append", "key": args.append, "text": args.text})
+            sys.exit(f"{append_flag} требует --text")
+        _run({"kind": "append", "key": append_key, "text": args.text})
     elif args.drop is not None:
         _run({"kind": "drop", "key": args.drop})
     elif args.set_state is not None:
@@ -624,9 +984,9 @@ def cmd_note(argv: list[str]) -> None:
     elif args.flush:
         return
     else:
-        sys.exit("укажи раздел с --text, --append/--drop/--set-state/"
-                 "--set-priority <ключ>, --now <раздел> --text, либо "
-                 "--flush")
+        sys.exit("укажи раздел с --text, --append/--state/--drop/"
+                 "--set-state/--set-priority <ключ>, --now <раздел> --text, "
+                 "--apply <файл> --message \"<основание>\", либо --flush")
 
 
 def _parse_doc_commit_args(argv: list[str]) -> argparse.Namespace:
@@ -634,23 +994,34 @@ def _parse_doc_commit_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("path", nargs="?")
     parser.add_argument("--from", dest="source")
     parser.add_argument("--message")
+    # Осознанный обход гейта полного набора `tests/` (требование 15) —
+    # идиома `orchestrator/artel.py::_accept_red_arg` (`approve
+    # --accept-red`): основание обязательно, флаг без него отказывает.
+    # `nargs="?"` с пустым `const` — чтобы голый флаг дошёл до ИМЕНОВАННОГО
+    # отказа ниже, а не до кода выхода 2 самого argparse.
+    parser.add_argument("--accept-red", dest="accept_red", nargs="?", const="")
     parser.add_argument("--flush", action="store_true")
     return parser.parse_args(argv)
 
 
-def _read_source_file(source: str | None) -> str:
-    """Содержимое `--from <файл>` — любой путь на диске (требование 1).
-    Байтами со строгим UTF-8: файл не в UTF-8 не сериализуется в JSON
-    удержанной записи без потерь, поэтому отказ здесь, до git."""
+def _read_source_file(source: str | None, flag: str = "--from") -> str:
+    """Содержимое файла-источника — любой путь на диске (требование 1
+    SPEC `doc-commit`). Байтами со строгим UTF-8: файл не в UTF-8 не
+    сериализуется в JSON удержанной записи без потерь, поэтому отказ
+    здесь, до git.
+
+    `flag` — имя флага в текстах отказов: у `doc-commit` это `--from`, у
+    `note --apply` — сам `--apply` (требование 9), и отказ обязан называть
+    тот флаг, которым Оператор позвал команду, а не соседний."""
     if not source:
-        sys.exit("--from <файл> обязателен: откуда брать содержимое")
+        sys.exit(f"{flag} <файл> обязателен: откуда брать содержимое")
     path = Path(source)
     if not path.is_file():
-        sys.exit(f"--from: файл {source} не найден")
+        sys.exit(f"{flag}: файл {source} не найден")
     try:
         return path.read_bytes().decode("utf-8")
     except UnicodeDecodeError:
-        sys.exit(f"--from: файл {source} не в UTF-8")
+        sys.exit(f"{flag}: файл {source} не в UTF-8")
 
 
 def cmd_doc_commit(argv: list[str]) -> None:
@@ -661,10 +1032,17 @@ def cmd_doc_commit(argv: list[str]) -> None:
     любого обращения к git (требование 4, AC-9): тот же
     `runner.in_role_environment()`, что у `answer`/`zones-extend`
     (`orchestrator/answer.py`). Далее отказы валидации в порядке путь →
-    `--message` → `--from`, все — `sys.exit` до `_run`: ни коммита, ни
-    удержанной записи (AC-2/AC-3/AC-8). Оппортунистический допуш и
-    `--flush` — зеркально `cmd_note`: один каталог удержанных записей
-    на оба вида (требование 8, AC-6).
+    `--message` → `--accept-red` → `--from`, все — `sys.exit` до `_run`: ни
+    коммита, ни удержанной записи (AC-2/AC-3/AC-8). Оппортунистический
+    допуш и `--flush` — зеркально `cmd_note`: один каталог удержанных
+    записей на оба вида (требование 8, AC-6).
+
+    `--accept-red "<основание>"` (требование 15 SPEC
+    01M3HST4SGX0SPKAGNHVY7DWHM) кладётся в запись отдельным полем: она
+    самодостаточна, и обход доживает до отправки на `--flush`, когда
+    гейт полного набора действительно срабатывает. На путях `docs/**`
+    гейта нет вовсе (требование 16), так что флаг там принимается, но
+    обходить ему нечего.
     """
     if runner.in_role_environment():
         sys.exit("doc-commit отказана — вызов из окружения роли (role_env): "
@@ -684,8 +1062,15 @@ def cmd_doc_commit(argv: list[str]) -> None:
     if not args.message or not args.message.strip():
         sys.exit("--message обязателен: основание правки — часть сообщения "
                  "коммита")
+    if args.accept_red is not None and not args.accept_red.strip():
+        sys.exit('--accept-red требует основание: doc-commit <путь> --from '
+                 '<файл> --message "<основание>" --accept-red "<почему '
+                 'красный набор tests/ принят>"')
     content = _read_source_file(args.source)
-    sha = _run({"kind": DOC_COMMIT_KIND, "path": rel, "content": content,
-                "message": args.message.strip()})
+    request = {"kind": DOC_COMMIT_KIND, "path": rel, "content": content,
+               "message": args.message.strip()}
+    if args.accept_red is not None:
+        request["accept_red"] = args.accept_red.strip()
+    sha = _run(request)
     if sha is not None:
         print(f"{rel} закоммичен в origin/{config.MAIN_BRANCH}: {sha}")

@@ -44,6 +44,13 @@ BACKLOG_TEXT = """## Копилка
 | 1 | Кандидат A | Суть A | $10 | orchestrator/a.py | сразу | — |
 """
 
+# Ячейка приоритета вставляемых ниже строк — цифра РАЗРЕШЁННОГО диапазона
+# (01M3HST4SGX0SPKAGNHVY7DWHM, требования 3-4): с этой задачи колонка «П»
+# нормализуется и на пути вставки строки, а не только у `--set-priority`,
+# и прежнее значение фикстуры «9» стало именованным отказом. Предмет
+# тестов ниже (место вставки, окно тишины, общий флаш двух видов записей)
+# от самого значения не зависит — зависимость была случайной.
+
 
 class RowCellsTest(unittest.TestCase):
 
@@ -54,14 +61,22 @@ class RowCellsTest(unittest.TestCase):
 class ApplyInsertTest(unittest.TestCase):
 
     def test_inserts_right_after_separator(self):
+        """Новая строка встаёт сразу под строкой-разделителем шапки, а
+        прежняя первая строка данных сдвигается, не теряется.
+
+        Ловит мутацию: индекс вставки посчитан от шапки, а не от
+        строки-разделителя (`lines.insert(header_idx + 1, …)`) — новая
+        строка встаёт НА место разделителя, и таблица перестаёт быть
+        таблицей; вставка в конец раздела красит тот же ассерт.
+        """
         new_text, section_key = notes._apply_insert(
             BACKLOG_TEXT, "копилка",
-            "9 | 09.09 | новое | orchestrator/new.py")
+            "4 | 09.09 | новое | orchestrator/new.py")
         self.assertEqual(section_key, "копилка")
         lines = new_text.splitlines()
         sep_idx = lines.index("|---|---|---|---|")
         self.assertEqual(lines[sep_idx + 1],
-                         "| 9 | 09.09 | новое | orchestrator/new.py |")
+                         "| 4 | 09.09 | новое | orchestrator/new.py |")
         # Прежняя первая строка данных сдвинута, не потеряна.
         self.assertIn("старое УНИКАЛЬНЫЙКЛЮЧ", lines[sep_idx + 2])
 
@@ -334,7 +349,7 @@ class WindowHoldsValidNoteTest(NoteSilenceSandbox):
 
         self.capture(notes.cmd_note,
                     ["копилка", "--text",
-                     "9 | 09.09 | вставка при окне | orchestrator/i.py"])
+                     "4 | 09.09 | вставка при окне | orchestrator/i.py"])
         self.capture(notes.cmd_note,
                     ["--append", "УНИКАЛЬНЫЙКЛЮЧ", "--text", "доп-текст"])
         self.capture(notes.cmd_note, ["--drop", "УНИКАЛЬНЫЙКЛЮЧ"])
@@ -359,7 +374,7 @@ class WindowHoldsValidNoteTest(NoteSilenceSandbox):
 
         captured = self.capture(
             notes.cmd_note,
-            ["копилка", "--text", "9 | 09.09 | сообщение | orchestrator/m.py"])
+            ["копилка", "--text", "4 | 09.09 | сообщение | orchestrator/m.py"])
 
         self.assertIn("заметка удержана:", captured, captured)
         self.assertIn("отправка — note --flush либо автоматически "
@@ -396,7 +411,7 @@ class WindowHoldsValidNoteTest(NoteSilenceSandbox):
 
         self.capture(
             notes.cmd_note,
-            ["копилка", "--text", "9 | 09.09 | формат | orchestrator/fmt.py"])
+            ["копилка", "--text", "4 | 09.09 | формат | orchestrator/fmt.py"])
 
         pending = notes.pending_notes()
         self.assertEqual(len(pending), 1, pending)
@@ -414,7 +429,7 @@ class WindowBypassAndNoWindowTest(NoteSilenceSandbox):
         тест красен на пустом `origin_backlog()`."""
         self.capture(notes.cmd_note,
                     ["копилка", "--text",
-                     "9 | 09.09 | без окна | orchestrator/nw.py"])
+                     "4 | 09.09 | без окна | orchestrator/nw.py"])
 
         self.assertIn("без окна", self.origin_backlog())
         self.assertEqual(notes.pending_notes(), [])
@@ -429,7 +444,7 @@ class WindowBypassAndNoWindowTest(NoteSilenceSandbox):
         self.insert_task_in_state("review")
         self.capture(notes.cmd_note,
                     ["копилка", "--text",
-                     "9 | 09.09 | до флаша | orchestrator/f.py"])
+                     "4 | 09.09 | до флаша | orchestrator/f.py"])
         self.assertEqual(len(notes.pending_notes()), 1)
 
         self.capture(notes.cmd_note, ["--flush"])
@@ -449,7 +464,7 @@ class WindowBypassAndNoWindowTest(NoteSilenceSandbox):
         self.capture(
             notes.cmd_note,
             ["--now", "копилка", "--text",
-             "9 | 09.09 | срочно | orchestrator/now.py"])
+             "4 | 09.09 | срочно | orchestrator/now.py"])
 
         self.assertIn("срочно", self.origin_backlog())
         self.assertEqual(notes.pending_notes(), [])
@@ -463,13 +478,13 @@ class WindowBypassAndNoWindowTest(NoteSilenceSandbox):
         Ловит мутацию: оппортунистический флаш безусловен — тест красен
         на изменившемся `origin_head()` либо на потере старой заметки."""
         notes._hold_pending({"kind": "insert", "section": "копилка",
-                             "text": "9 | 09.09 | старая | orchestrator/o.py"})
+                             "text": "4 | 09.09 | старая | orchestrator/o.py"})
         self.insert_task_in_state("verifying")
         before = self.origin_head()
 
         self.capture(notes.cmd_note,
                     ["копилка", "--text",
-                     "9 | 09.09 | новая при открытом окне | orchestrator/p.py"])
+                     "4 | 09.09 | новая при открытом окне | orchestrator/p.py"])
 
         self.assertEqual(before, self.origin_head())
         pending = notes.pending_notes()
@@ -483,11 +498,11 @@ class WindowBypassAndNoWindowTest(NoteSilenceSandbox):
         Ловит мутацию: условие инвертировано (флаш только при открытом
         окне) — тест красен на непустом `pending_notes()`."""
         notes._hold_pending({"kind": "insert", "section": "копилка",
-                             "text": "9 | 09.09 | старая без окна | orchestrator/q.py"})
+                             "text": "4 | 09.09 | старая без окна | orchestrator/q.py"})
 
         self.capture(notes.cmd_note,
                     ["копилка", "--text",
-                     "9 | 09.09 | новая без окна | orchestrator/r.py"])
+                     "4 | 09.09 | новая без окна | orchestrator/r.py"])
 
         text = self.origin_backlog()
         self.assertIn("старая без окна", text)

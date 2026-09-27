@@ -38,6 +38,21 @@ ROADMAP_TEXT = "# Роадмап\n\nСтарый раздел.\n"
 ROLES_TEXT = "developer:\n  model: opus\n"
 DOC_REL = "docs/roadmap.md"
 
+# Тривиально ЗЕЛЁНЫЙ набор `tests/` в дереве стенда
+# (01M3HST4SGX0SPKAGNHVY7DWHM, требования 13-14): с этой задачи
+# `doc-commit` пути из `DOC_COMMIT_CONFIG_PATHS` гоняет полный набор
+# перед отправкой, и дерево БЕЗ `tests/` — это «набор не запустился
+# вовсе», то есть отказ. Стенд несёт набор, чтобы сценарии про сообщение
+# коммита, сверку базы и окно тишины остались про свой предмет; красный
+# и отсутствующий набор — предмет `tests/test_doc_commit_suite_gate.py`.
+GREEN_SUITE_REL = "tests/test_green.py"
+GREEN_SUITE_TEXT = '''"""Набор стенда: зелёный при любом содержимом дерева."""
+
+
+def test_green():
+    assert True
+'''
+
 
 class PathRefusalTest(unittest.TestCase):
 
@@ -140,7 +155,8 @@ class DocCommitSandbox(RealGitSandbox):
         self.git("remote", "add", "origin", self.origin)
         for rel, text in ((notes.BACKLOG_REL, BACKLOG_TEXT),
                           (DOC_REL, ROADMAP_TEXT),
-                          ("roles.yaml", ROLES_TEXT)):
+                          ("roles.yaml", ROLES_TEXT),
+                          (GREEN_SUITE_REL, GREEN_SUITE_TEXT)):
             path = self.root / rel
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text(text, encoding="utf-8")
@@ -506,7 +522,7 @@ class SilenceWindowAndFlushTest(DocCommitSandbox):
     def _hold_both_kinds(self) -> None:
         self.open_silence_window()
         capture(notes.cmd_note,
-                ["копилка", "--text", "9 | 09.09 | из окна ОБЩИЙФЛАШ | o.py"])
+                ["копилка", "--text", "4 | 09.09 | из окна ОБЩИЙФЛАШ | o.py"])
         self.doc_commit(DOC_REL, "--from",
                         str(self.source_file("# Роадмап\n\nобщий флаш\n")),
                         "--message", "общий флаш")
@@ -547,7 +563,7 @@ class SilenceWindowAndFlushTest(DocCommitSandbox):
         безусловен — тест красен на сдвинувшемся origin при открытом
         окне."""
         notes._hold_pending({"kind": "insert", "section": "копилка",
-                             "text": "9 | 09.09 | старая | o.py"})
+                             "text": "4 | 09.09 | старая | o.py"})
         self.open_silence_window()
         before = self.origin_head()
 
@@ -572,7 +588,7 @@ class SilenceWindowAndFlushTest(DocCommitSandbox):
         удержана:»."""
         self.open_silence_window()
         output = capture(notes.cmd_note,
-                         ["копилка", "--text", "9 | 09.09 | текст | o.py"])
+                         ["копилка", "--text", "4 | 09.09 | текст | o.py"])
         self.assertIn("заметка удержана:", output)
         self.assertIn("отправка — note --flush либо автоматически "
                       "следующим note вне окна", output)
