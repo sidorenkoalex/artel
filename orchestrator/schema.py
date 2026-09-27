@@ -297,5 +297,14 @@ def migrate(conn: sqlite3.Connection) -> None:
     # ЖЕ литералом, что `model_tariffs` выше. `IF NOT EXISTS` обязателен:
     # `migrate` идёт на КАЖДОМ `store.db()`, второй проход по живой БД
     # иначе падал бы `index … already exists`.
-    conn.executescript(STEPS_TASK_ID_INDEX_DDL)
+    #
+    # Проверка наличия самой таблицы — тот же вырожденный случай, что у
+    # `add_column` («нет таблицы — нечего догонять»): `steps` создаёт только
+    # `create_schema`, миграция её не заводит, а БД, где есть `tasks` и нет
+    # `steps`, встречается (минимальные БД прошлых версий в tests/
+    # test_agent_failure.py, tests/test_review_freshness.py) — `CREATE INDEX`
+    # на такой БД падал бы `no such table: main.steps` и ронял бы ВЕСЬ
+    # `migrate`, то есть любое открытие БД.
+    if table_columns(conn, "steps"):
+        conn.executescript(STEPS_TASK_ID_INDEX_DDL)
     conn.commit()

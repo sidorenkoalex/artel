@@ -105,6 +105,30 @@ class StepsTaskIdIndexTest(TmpRootTest):
         schema.migrate(migrated)
         self.assertEqual(_steps_index_map(fresh), _steps_index_map(migrated))
 
+    def test_migrate_of_a_db_without_the_steps_table_does_not_fail(self):
+        """БД прошлой версии, где есть `tasks` и ещё нет `steps`: `migrate`
+        проходит целиком (прежние колонки догнаны), индекс не заводится —
+        заводить его не на чем, `steps` создаёт только `create_schema`.
+
+        Ловит мутацию: запись индекса в `migrate` выполняется без проверки
+        наличия таблицы — `migrate` на такой БД падает
+        `sqlite3.OperationalError: no such table: main.steps`, унося с собой
+        ВСЕ последующие записи миграции и любое открытие этой БД."""
+        conn = sqlite3.connect(self.root / "no-steps.db")
+        conn.row_factory = sqlite3.Row
+        self.addCleanup(conn.close)
+        conn.executescript("CREATE TABLE tasks (id TEXT PRIMARY KEY, state TEXT);")
+        conn.commit()
+
+        schema.migrate(conn)
+
+        self.assertEqual({}, _steps_index_map(conn),
+                         "индекс заведён на БД без таблицы steps")
+        columns = {row["name"] for row in conn.execute("PRAGMA table_info(tasks)")}
+        self.assertIn("escalated_from", columns,
+                      "migrate не дошла до конца: прежние колонки не догнаны")
+        self.assertIn("parent_task_id", columns)
+
     def test_journal_query_plan_searches_the_index_without_sorting(self):
         """План `SELECT * FROM steps WHERE task_id=? ORDER BY id`: поиск по
         индексу с ключом `(task_id,)`, без `SCAN steps` и без сортировки во
