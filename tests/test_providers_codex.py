@@ -31,7 +31,7 @@ from orchestrator import (agent_log, catalog, config, doctor,  # noqa: E402
                           runner, spend, stack, store)
 from orchestrator.providers import codex as codex_provider  # noqa: E402
 from tests.sandbox import (TaskSeededTmpRootTest, TmpDirTest,  # noqa: E402
-                           TmpRootTest, roles_text_on_default_provider)
+                           TmpRootTest)
 
 STUB_BIN = "/artel-test-stub-bin"
 KEYCHAIN_SECRET = "kluch-iz-slota"
@@ -663,18 +663,17 @@ class PreflightTest(TmpRootTest):
         Контроль вырожденности — вторая половина сценария: роль НА CODEX
         обе строки получает, и вызов CLI ровно один.
 
-        «Пульт без роли на Codex» задаётся картой сценария, а не боевым
-        `roles.yaml`: перечень ролей предполёта читает карту (SPEC
-        01M3H3JRBD544GQ10SS3DBGEVP, требование 1), и `provider: codex` у
-        реальной роли — штатная правка Оператора, от которой тест обязан
-        не краснеть, а остаться о своём предмете (REVIEW.md
-        01M3H3JRBD544GQ10SS3DBGEVP итерации 1, R1-F1). Ассерт ниже
-        остаётся: он сторожит саму карту сценария от вырождения.
+        «Пульт без роли на Codex» задаётся общей фикстурой песочницы
+        (`tests/sandbox.py::role_map_fixture`, её ставит
+        `TmpRootTest.setUp`), а не боевым `roles.yaml`: перечень ролей
+        предполёта читает карту (SPEC 01M3H3JRBD544GQ10SS3DBGEVP,
+        требование 1), и `provider: codex` у реальной роли — штатная
+        правка Оператора, от которой тест обязан не краснеть, а остаться о
+        своём предмете (REVIEW.md 01M3H3JRBD544GQ10SS3DBGEVP итерации 1,
+        R1-F1). Своей подмены `config.ROLES` тест не заводит — она клала
+        бы ровно тот же текст (REVIEW.md итерации 1, R1-F2). Ассерт ниже
+        остаётся: он сторожит саму карту фикстуры от вырождения.
         """
-        path = self.root / "roles-on-default-provider.yaml"
-        path.write_text(roles_text_on_default_provider(), encoding="utf-8")
-        self.patch(config, "ROLES", path)
-
         self.assertNotIn("codex", {providers.name_for_role(role)
                                    for role in doctor.agent_roles()})
 

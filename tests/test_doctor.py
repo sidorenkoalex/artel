@@ -40,7 +40,6 @@ from tests.sandbox import (FakeStream, InitializedTmpRootTest,  # noqa: E402
                            capture, capture_new_task_id, claude_only_popen,
                            claude_only_run, disk_backed_ls_tree_files,
                            disk_backed_show, fake_git, is_claude_call,
-                           roles_text_on_default_provider,
                            sync_spec_from_worktree)
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -197,24 +196,22 @@ TmpRootTest = _DoctorTmpRootTest
 class DoctorCommandTest(TmpRootTest):
     """Критерий 1: здоровый репо — все проверки ок, код 0; сломанный — провалы, код ≠0.
 
-    Карта исполнителей сценария — своя, «все роли на провайдере по
-    умолчанию»: подмена процессов этого класса отвечает только за `claude`
-    (`claude_only_run`/`claude_only_popen`), то есть «здоровый пульт» здесь
-    по построению пульт на одном исполнителе. С тех пор как перечень ролей
-    предполёта читает карту (SPEC 01M3H3JRBD544GQ10SS3DBGEVP, требование
-    1), строка `provider:` реальной роли красила бы этот класс мимо его
-    предмета — правку `roles.yaml` Оператор ведёт отдельным MR по
-    защищённому пути (REVIEW.md 01M3H3JRBD544GQ10SS3DBGEVP итерации 1,
-    R1-F1).
+    Карта исполнителей здесь — общая фикстура песочницы
+    (`tests/sandbox.py::role_map_fixture`, её ставит `TmpRootTest.setUp`):
+    все роли на провайдере по умолчанию, тогда как подмена процессов этого
+    класса отвечает только за `claude` (`claude_only_run`/
+    `claude_only_popen`), то есть «здоровый пульт» здесь по построению
+    пульт на одном исполнителе. Своей подмены `config.ROLES` класс не
+    заводит — она клала бы ровно тот же текст (REVIEW.md итерации 1,
+    R1-F2). С тех пор как перечень ролей предполёта читает карту (SPEC
+    01M3H3JRBD544GQ10SS3DBGEVP, требование 1), строка `provider:` реальной
+    роли красила бы этот класс мимо его предмета — правку `roles.yaml`
+    Оператор ведёт отдельным MR по защищённому пути (REVIEW.md
+    01M3H3JRBD544GQ10SS3DBGEVP итерации 1, R1-F1). Ярус реальной роли
+    красил его тем же классом: на карте, где analyst стоит на ярусе с
+    моделью Codex, «здоровый пульт» требует второго CLI, которого подмена
+    процессов не знает (SPEC 01M3HP7RQEY0SBYNKQ902QD2CZ, «Контекст»).
     """
-
-    def setUp(self):
-        super().setUp()
-        path = self.root / "roles-on-default-provider.yaml"
-        path.write_text(roles_text_on_default_provider(), encoding="utf-8")
-        patcher = mock.patch.object(config, "ROLES", path)
-        patcher.start()
-        self.addCleanup(patcher.stop)
 
     def which(self, name):
         if name == "claude":
