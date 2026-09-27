@@ -21,9 +21,10 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from orchestrator import config, doctor, stack, yamlmini  # noqa: E402
+from orchestrator import config, doctor, stack  # noqa: E402
 from tests.sandbox import TmpRootTest, roles_text_on_default_provider  # noqa: E402
-from tests.test_runner_role_model import _roles_yaml_text  # noqa: E402
+from tests.test_runner_role_model import (_roles_yaml_text,  # noqa: E402
+                                          _tiers_text)
 
 CLAUDE_MODEL = "claude-opus-5"
 CODEX_MODEL = "gpt-5.6-terra"
@@ -61,38 +62,9 @@ CATALOG = """providers:
         price_date: 2026-09-21
 """
 
-# Локальный слой сценария: секция `tiers:` собирается по КАРТЕ (см.
-# `_tiers_block`), а не литералом. Строки `check_stack`/`doctor` считаются
-# по ВСЕМ agent-ролям карты, а не только по `ROLE`, и ярус, не названный в
-# слое, даёт им красную строку «цепочка не разрешена» вне предмета этого
-# файла — фикстура обязана покрывать ярусы всех agent-ролей безусловно, при
-# любом их наборе в `roles.yaml`. Класс уже сработал: смена яруса analyst
-# (a6da0abe) покрасила `CheckStackLinesTest` строкой `model-analyst`, откат
-# Оператора (d910c523) её погасил, и дописанный под тот день литерал
-# `standard:` стал мёртвой строкой, которую не отличить от несущей
-# (REVIEW.md 01M3H3JRBD544GQ10SS3DBGEVP итерации 1, R1-F3).
-LOCAL = """tiers:
-{tiers}allow_experimental:
+ALLOW_EXPERIMENTAL = """allow_experimental:
   {model}: true
 """
-
-
-def _tiers_block(roles_text: str, model: str) -> str:
-    """Секция `tiers:` локального слоя по карте `roles_text`: ярус роли под
-    тестом — в `model`, ярус КАЖДОЙ остальной agent-роли карты — в модель
-    Claude каталога сценария.
-
-    Собирается из самой карты, чтобы фикстура не расходилась с ней от
-    правки `roles.yaml` (защищённый путь, Оператор ведёт его отдельным MR
-    без прогона этих тестов).
-    """
-    tiers = {TIER: model}
-    for entry in (yamlmini.mapping(roles_text).get("roles") or {}).values():
-        if isinstance(entry, dict) and entry.get("executor") == "agent" \
-                and entry.get("model_tier"):
-            tiers.setdefault(entry["model_tier"], CLAUDE_MODEL)
-    return "".join(f"  {tier}: {value}\n"
-                   for tier, value in sorted(tiers.items()))
 
 
 # Настоящий `check_stack` снимается ДО песочницы: `tests/sandbox.py::
@@ -125,12 +97,18 @@ class _ManifestSandbox(TmpRootTest):
         """Ярус роли -> `model`; `provider` — необязательное поле роли,
         которое НЕ должно решать обязательность инструмента.
 
+        `model` называется у КАЖДОГО яруса перечня (`_tiers_text`, SPEC
+        01M3H5FEXH5M9HGZYT3BCDX5C4, требование 1): ярус подменяется
+        только у `ROLE`, остальные agent-роли приходят из боевого
+        `roles.yaml` со своими ярусами, и их цепочка обязана разрешаться
+        независимо от того, какой ярус у них стоит сегодня.
+
         Поле `provider:` в карте сценария ставит только сам тест
         (`roles_text_on_default_provider` снимает все остальные): строки
         этого файла считаются по ВСЕМ agent-ролям карты, и `provider: codex`
         у чужой роли — правка Оператора по защищённому пути — красил бы их
         мимо предмета (REVIEW.md 01M3H3JRBD544GQ10SS3DBGEVP итерации 1,
-        R1-F1, тот же класс).
+        R1-F1, тот же класс, что и ярус выше).
         """
         text = roles_text_on_default_provider(_roles_yaml_text(ROLE, TIER))
         if provider is not None:
@@ -142,7 +120,7 @@ class _ManifestSandbox(TmpRootTest):
         # в соседние тесты процесса.
         self.patch(config, "ROLES", self.roles_path)
         config.MODELS_LOCAL.write_text(
-            LOCAL.format(tiers=_tiers_block(text, model), model=model),
+            _tiers_text(model) + ALLOW_EXPERIMENTAL.format(model=model),
             encoding="utf-8")
 
     def stack_checks(self, codex_found: bool) -> list:
@@ -206,6 +184,10 @@ class OptionalToolManifestTest(_ManifestSandbox):
         исполнителей пробрасывает исключение из сборки манифеста — тогда
         `role_env`/`check_stack`/`doctor` падали бы трейсбеком там, где
         про ту же поломку уже говорит собственный именованный отказ."""
+        # Слой пишется ОДНИМ ярусом сознательно: неразрешимая цепочка и
+        # есть предмет сценария, и покрытие всех ярусов перечня (SPEC
+        # 01M3H5FEXH5M9HGZYT3BCDX5C4, требование 3) сюда не
+        # распространяется — иначе проверять было бы нечего.
         config.MODELS_LOCAL.write_text("tiers:\n  cheap: nothing\n",
                                        encoding="utf-8")
         self.assertEqual(stack.model_providers(), set())
