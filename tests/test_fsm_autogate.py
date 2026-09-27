@@ -16,9 +16,11 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from orchestrator import (acceptance, artifact_source, budget, ci, fixation,
-                          fsm_autogate, gates, gitcmd, store, workspace)
+from orchestrator import (acceptance, artifact_source, budget, ci, config,
+                          fixation, fsm_autogate, gates, gitcmd, store,
+                          workspace)
 from scripts import guard
+from tests.sandbox import TmpRootTest
 
 BRANCH = "artifact/T001"
 SHA = "a" * 40
@@ -360,6 +362,184 @@ class AcceptanceChecklistDetailMergesOmittedTest(unittest.TestCase):
 
         self.assertIn("остаётся человеку", detail)
         self.assertNotIn("родители подтяжек", detail)
+
+
+class FullSuiteRefusalDetailTest(TmpRootTest):
+    """Причина отказа автогейта по полному набору tests/ (SPEC
+    01M3FQ3JVC3DGGM33XCX8TC7ME, требования 4/AC-5): подменён
+    `acceptance.run_full_suite` — хвостом настоящего вида, чтобы разбор
+    вывода шёл настоящий, а не по фикстуре уже разобранной выжимки.
+
+    Песочница `TmpRootTest` — ради `config.LOGS`: узел прогона пишет файл
+    с полным выводом, и писать его тесту положено в свой временный
+    каталог, а не в каталог логов пульта."""
+
+    TASK = "T001"
+    SUMMARY_LINE = "2 failed, 305 passed in 71.23s"
+    FAILED_NODEID = "tests/test_fsm_autogate.py::SomeCase::test_some_scenario"
+    RED_OUTPUT = (
+        "============================= test session starts ================\n"
+        "8 workers [307 items]\n"
+        "=========================== short test summary info =============\n"
+        f"FAILED {FAILED_NODEID} - AssertionError: маркер\n"
+        f"=============== {SUMMARY_LINE} ===============\n"
+    )
+
+    def refusal(self, full_suite_result) -> str:
+        """Причина отказа `_autogate_conditions` при заданном исходе
+        `acceptance.run_full_suite`; условие «а» заведомо проходимо."""
+        rel = f"tasks/{self.TASK}/acceptance_tests/test_marker.py"
+        content = ('"""Чистая планка."""\n'
+                  "import unittest\n\n\n"
+                  "class MarkerTest(unittest.TestCase):\n"
+                  "    def test_ac1_marker(self):\n"
+                  "        self.assertTrue(True)\n")
+        t = {"branch": CODE_BRANCH, "spent_usd": 0.0, "budget_usd": 5.0}
+        with mock.patch.object(artifact_source, "resolve",
+                               return_value=(BRANCH, True)), \
+             mock.patch.object(gitcmd, "branch_head_sha", return_value=SHA), \
+             mock.patch.object(gitcmd, "ls_tree_files", return_value=[rel]), \
+             mock.patch.object(gitcmd, "show", return_value=(content, "")), \
+             mock.patch.object(workspace, "on_task_branch",
+                               return_value=True), \
+             mock.patch.object(workspace, "path", return_value=Path("/wt")), \
+             mock.patch.object(acceptance, "run_full_suite",
+                               return_value=full_suite_result), \
+             mock.patch.object(budget, "budget_block", return_value=None):
+            _ok, reason = fsm_autogate._autogate_conditions(
+                object(), self.TASK, t, Path("/no/such/dir"), 1)
+        return reason or ""
+
+    def test_red_run_refusal_names_failed_tests_and_summary_line(self):
+        """Красный полный набор — причина отказа несёт имя упавшего теста,
+        итоговую строку pytest и путь к файлу лога прогона.
+
+        Ловит мутацию: автогейт оставлен на прежней константной фразе
+        «полный набор tests/ красный» (разбор вывода посчитан и выброшен)
+        — имена упавших тестов из журнала опять не прочитать, как 26.09.
+        """
+        reason = self.refusal((False, self.RED_OUTPUT))
+
+        self.assertIn(self.FAILED_NODEID, reason)
+        self.assertIn(self.SUMMARY_LINE, reason)
+        self.assertIn("fullsuite", reason,
+                      f"причина не называет файл лога прогона: {reason!r}")
+
+    def test_three_outcomes_give_three_different_reasons(self):
+        """Красный прогон, таймаут и отсутствие `tests/` в worktree дают
+        три РАЗНЫЕ причины отказа; таймаут называет потолок
+        `config.FULL_SUITE_TIMEOUT_SEC`.
+
+        Ловит мутацию: причина собрана одним выражением на все не-зелёные
+        исходы — «набор красный» встанет и там, где не запускалось ни
+        одного теста.
+        """
+        red = self.refusal((False, self.RED_OUTPUT))
+        timeout = self.refusal(
+            (False, f"прогон полного набора tests/ превысил "
+                    f"{config.FULL_SUITE_TIMEOUT_SEC}с — завис или ждёт "
+                    f"сетевой ответ\n{self.RED_OUTPUT}"))
+        missing = self.refusal((False, acceptance.FULL_SUITE_NO_TESTS_NOTE))
+
+        self.assertEqual(len({red, timeout, missing}), 3,
+                         f"причины неразличимы: {red!r}, {timeout!r}, "
+                         f"{missing!r}")
+        self.assertIn(str(config.FULL_SUITE_TIMEOUT_SEC), timeout)
+        self.assertIn("worktree", missing)
+
+    def test_green_run_condition_names_the_log_and_passes(self):
+        """Зелёный полный набор — отказа нет, а перечень выполненных
+        условий называет и сам набор, и лог прогона.
+
+        Ловит мутацию: путь к логу назван только в ветке отказа — после
+        зелёного прогона Оператору нечем подтвердить, ЧТО именно
+        проверялось на приёмке.
+        """
+        rel = f"tasks/{self.TASK}/acceptance_tests/test_marker.py"
+        content = ('"""Чистая планка."""\n'
+                  "import unittest\n\n\n"
+                  "class MarkerTest(unittest.TestCase):\n"
+                  "    def test_ac1_marker(self):\n"
+                  "        self.assertTrue(True)\n")
+        t = {"branch": CODE_BRANCH, "spent_usd": 0.0, "budget_usd": 5.0}
+        with mock.patch.object(artifact_source, "resolve",
+                               return_value=(BRANCH, True)), \
+             mock.patch.object(gitcmd, "branch_head_sha", return_value=SHA), \
+             mock.patch.object(gitcmd, "ls_tree_files", return_value=[rel]), \
+             mock.patch.object(gitcmd, "show", return_value=(content, "")), \
+             mock.patch.object(workspace, "on_task_branch",
+                               return_value=True), \
+             mock.patch.object(workspace, "path", return_value=Path("/wt")), \
+             mock.patch.object(acceptance, "run_full_suite",
+                               return_value=(True, "307 passed in 70.11s\n")), \
+             mock.patch.object(budget, "budget_block", return_value=None):
+            ok, reason = fsm_autogate._autogate_conditions(
+                object(), self.TASK, t, Path("/no/such/dir"), 1)
+
+        self.assertIsNone(reason)
+        suite_lines = [line for line in ok if "полный набор tests/" in line]
+        self.assertEqual(len(suite_lines), 1, ok)
+        self.assertIn("307 passed in 70.11s", suite_lines[0])
+        self.assertIn("fullsuite", suite_lines[0])
+
+
+class ChecklistNamesRealChecksTest(unittest.TestCase):
+    """Текст записи «приёмка: что проверит approve» против факта (SPEC
+    01M3FQ3JVC3DGGM33XCX8TC7ME, требование 9/AC-11)."""
+
+    TASK = "T001"
+
+    def detail(self) -> str:
+        t = {"branch": CODE_BRANCH, "spent_usd": 0.0, "budget_usd": 5.0}
+        rel = f"tasks/{self.TASK}/acceptance_tests/test_marker.py"
+        content = ('"""Планка с manual-критерием."""\n'
+                  "# AC-3: manual — проверка руками.\n")
+        with mock.patch.object(artifact_source, "resolve",
+                               return_value=(BRANCH, True)), \
+             mock.patch.object(gitcmd, "branch_head_sha", return_value=SHA), \
+             mock.patch.object(gitcmd, "ls_tree_files", return_value=[rel]), \
+             mock.patch.object(gitcmd, "show", return_value=(content, "")), \
+             mock.patch.object(gitcmd, "git",
+                               return_value=mock.Mock(returncode=0, stdout="")):
+            return fsm_autogate._acceptance_checklist_detail(
+                object(), self.TASK, t, 1)
+
+    def approve_group(self) -> str:
+        """Группа «что approve проверит автоматически» — часть записи до
+        первого разделителя групп ` | `."""
+        return self.detail().split(" | ")[0]
+
+    def test_approve_group_lists_only_what_approve_really_does(self):
+        """Группа автоматических проверок `approve` называет полный набор
+        tests/ и свежесть кодовой ветки — и не обещает ни прогона планки,
+        ни потолка бюджета, которых `approve` не делает.
+
+        Ловит мутацию: пункт про планку или про бюджет оставлен в группе
+        approve (переписана только формулировка вокруг) — запись снова
+        обещает четыре проверки там, где делается две, ровно тот дефект,
+        из-за которого 26.09 красный набор прошёл приёмку молча.
+        """
+        group = self.approve_group()
+
+        self.assertIn("полный набор tests/", group)
+        self.assertIn("свежесть", group)
+        self.assertNotIn("планк", group)
+        self.assertNotIn("бюджет", group)
+
+    def test_record_names_the_real_place_of_each_moved_check(self):
+        """Прогон планки назван переходом `review -> verifying`, потолок
+        бюджета — `budget.budget_block` на старте шага роли: проверки не
+        исчезли из записи, а переехали туда, где действительно случаются.
+
+        Ловит мутацию: пункты просто удалены из записи — Оператор больше
+        не видит, что планка и бюджет вообще кем-то проверены, и приёмка
+        снова читается как «проверено только это».
+        """
+        detail = self.detail()
+
+        self.assertIn("review -> verifying", detail)
+        self.assertIn("budget_block", detail)
+        self.assertIn("шага роли", detail)
 
 
 class MaybeAutogateChecklistJournalTest(unittest.TestCase):

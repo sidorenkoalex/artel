@@ -119,7 +119,8 @@ workspace, tasks, knowledge, logs). БД одна на все проекты: с
 Команды:
   init | new "<название>" [--tz <файл>] | status | show <id> | advance <id> |
   run <id> [--attach] | auto <id> [--attach] | stop <id> |
-  approve <id> [sha] | reject <id> "<причина>" |
+  approve <id> [sha] [--accept-red "<основание>"] |
+  reject <id> "<причина>" |
   answer <id> <файл-с-ответом> | zones-extend <id> <путь>[, <путь>...] |
   kill <id> | release <id> |
   pause [--now] <id> | resume <id> | log <id> | budget <id> <usd> |
@@ -135,6 +136,17 @@ workspace, tasks, knowledge, logs). БД одна на все проекты: с
   doc-commit --flush |
   watch [--tasks <id>[,<id>...]] [--mine] [--all] [--events <класс>[,...]]
         [--interval SEC] [--until <state>]
+
+`approve <id> --accept-red "<основание>"` (SPEC
+01M3FQ3JVC3DGGM33XCX8TC7ME) — осознанное принятие не-зелёного полного
+набора tests/ на приёмке. `approve` в состоянии `acceptance` гоняет
+полный набор в worktree ветки задачи и без флага отказывает, называя
+имена упавших тестов, итоговую строку pytest и путь к файлу с полным
+выводом прогона (`.artel/logs/<id>-fullsuite-<n>.log`); с флагом приёмка
+проходит, а основание вместе с той же выжимкой уходит в журнал задачи.
+Флаг без основания — отказ. Worktree задачи не заведён или стоит не на её
+ветке — прогон пропускается с именованной записью журнала, приёмка
+проходит.
 
 `pin-update <sha>` (A7, Stage1) — обновляет пин запущенной версии:
 продвигает рабочее дерево и HEAD `config.ROOT` до `<sha>` main артели
@@ -758,6 +770,41 @@ def _reason_arg(rest: list) -> str | None:
     return rest[idx + 1]
 
 
+ACCEPT_RED_FLAG = "--accept-red"
+
+
+def _accept_red_arg(rest: list) -> str | None:
+    """Основание флага `approve <id> --accept-red "<основание>"` (SPEC
+    01M3FQ3JVC3DGGM33XCX8TC7ME, требование 8) — осознанное принятие
+    не-зелёного полного набора tests/ на приёмке; `None` — флага нет.
+
+    Флаг без основания (в конце строки либо с пустой строкой) —
+    именованный отказ ДО исполнения команды, тем же приёмом, что
+    `_reason_arg` выше: основание — весь смысл флага, и «принято без
+    основания» ровно то, что он должен был сделать невозможным."""
+    if ACCEPT_RED_FLAG not in rest:
+        return None
+    idx = rest.index(ACCEPT_RED_FLAG)
+    reason = rest[idx + 1] if idx + 1 < len(rest) else ""
+    if not reason.strip():
+        sys.exit(f"{ACCEPT_RED_FLAG} требует основание следующим аргументом: "
+                 f'artel.py approve <id> {ACCEPT_RED_FLAG} "<основание>"')
+    return reason
+
+
+def _approve_sha_arg(rest: list) -> str | None:
+    """Позиционный `sha` команды `approve <id> [sha]` — первый аргумент
+    после `<id>`, не являющийся ни флагом `--accept-red`, ни его
+    основанием (SPEC 01M3FQ3JVC3DGGM33XCX8TC7ME, требование 8: разбор
+    позиционного sha не меняется); `None` — sha не передан."""
+    flag_idx = rest.index(ACCEPT_RED_FLAG) if ACCEPT_RED_FLAG in rest else None
+    for i, arg in enumerate(rest[1:], start=1):
+        if flag_idx is not None and i in (flag_idx, flag_idx + 1):
+            continue
+        return arg
+    return None
+
+
 def _cmd_pin(rest: list) -> None:
     """`pin --to <sha>` / `pin --to` (tasks/01M1NGFK3N6MRMYGCC09H975V3,
     ANSWER-1 п.5) — откат пина; отдельная команда от `pin-update`, не
@@ -826,8 +873,9 @@ def main() -> None:
         "run": lambda: _cmd_run_or_detach(rest),
         "auto": lambda: _cmd_auto_or_detach(rest),
         "stop": lambda: _cmd_stop(rest[0]),
-        "approve": lambda: fsm.cmd_approve(rest[0],
-                                           rest[1] if len(rest) > 1 else None),
+        "approve": lambda: fsm.cmd_approve(
+            rest[0], _approve_sha_arg(rest),
+            accept_red=_accept_red_arg(rest)),
         "reject": lambda: fsm.cmd_reject(rest[0],
                                          rest[1] if len(rest) > 1 else ""),
         "answer": lambda: answer.cmd_answer(rest[0], rest[1]),
