@@ -19,6 +19,12 @@ worktree кодовой ветки задачи, которую эта кома�
 «Материалы»): плотницкая запись не завязана ни на чей git-конфиг, читать
 identity вызывающей сессии здесь уже нечего.
 
+Строки мандатов файла ответа разбирает и проверяет общий узел
+`advance_gates/mandate.py` (SPEC 01M3GKJBXEBHB6ZA48J7VG8Z8W, требования
+1-2) — тот же, что зовут гейт зон и гейт неослабления тестов: элемент, не
+являющийся путём репозитория, отказывает ЗДЕСЬ, до коммита ANSWER, а не
+молча не засчитывается гейтом через шаг роли (прецедент 26.09).
+
 Push артефактной ветки после коммита ANSWER (SPEC
 01M1TQ0X14Y5B3C87WC0Q31PK2, требование 1, AC-1) — тем же
 `artifact_branch.push`, что уже зовут автокоммит шага и `cmd_new`:
@@ -30,6 +36,7 @@ from pathlib import Path
 
 from . import (artifact_branch, artifact_source, fsm_advance, gitcmd, lease,
               runner, store)
+from .advance_gates import mandate
 
 
 def _next_answer_number(names) -> int:
@@ -53,12 +60,15 @@ def _zones_mandate_marker_paths(raw: str) -> list[str]:
     """Пути строки маркера `fsm_advance._ZONES_MANDATE_MARKER` в тексте
     файла ответа Оператора («Расширение зон разрешено: <пути>») —
     пустой список, если маркера в тексте нет (SPEC, требование 1: маркер
-    определяет ТОЛЬКО этот путь `answer`, без него — прежний отказ)."""
+    определяет ТОЛЬКО этот путь `answer`, без него — прежний отказ).
+
+    Саму строку разбирает общий узел `mandate.elements` (SPEC
+    01M3GKJBXEBHB6ZA48J7VG8Z8W, требование 1) — тот же, что зовут оба
+    гейта; здесь остаётся только выбор первой строки маркера в тексте."""
     for line in raw.splitlines():
-        line = line.strip()
-        if line.startswith(fsm_advance._ZONES_MANDATE_MARKER):
-            return fsm_advance._split_zone_paths(
-                line[len(fsm_advance._ZONES_MANDATE_MARKER):])
+        found = mandate.elements(line, fsm_advance._ZONES_MANDATE_MARKER)
+        if found is not None:
+            return found
     return []
 
 
@@ -67,6 +77,24 @@ def _read_answer_file(task_id: str, file_path: str) -> str:
         return Path(file_path).read_text(encoding="utf-8")
     except (OSError, UnicodeDecodeError) as exc:
         sys.exit(f"[{task_id}] файл ответа не прочитан из {file_path}: {exc}")
+
+
+def _read_checked_answer_file(task_id: str, file_path: str,
+                              code_branch: str | None) -> str:
+    """Текст файла ответа, прошедший проверку строк мандатов (SPEC
+    01M3GKJBXEBHB6ZA48J7VG8Z8W, требование 2).
+
+    Отказ здесь — ДО коммита ANSWER и до записи в журнал: элемент, который
+    не является путём репозитория, гейтом молча не засчитывается, и
+    26.09 мандат «Расширение зон разрешено: orchestrator/artel.py — только
+    разбор аргументов…» стоил задаче лишнего круга ролью. Проверяются все
+    строки обоих маркеров, правила — `mandate.refusals`."""
+    raw = _read_answer_file(task_id, file_path)
+    problems = mandate.refusals(raw, code_branch)
+    if problems:
+        sys.exit(f"[{task_id}] answer отказана — строка мандата не прошла "
+                 f"проверку:\n" + "\n".join(f"  {p}" for p in problems))
+    return raw
 
 
 def _answer_document(task_id: str, n: int, raw: str) -> str:
@@ -117,18 +145,25 @@ def _cmd_answer(conn, task_id: str, file_path: str) -> None:
     «Оператора» и сам себе выдать мандат на расширение зон (REVIEW
     01M287TPG0HAVXS8CHBCY679WN итерация 1, замечание R1-F1). `escalated`
     рубеж не несёт: в этом состоянии шаг роли уже завершён, действующего
-    процесса роли для задачи нет."""
+    процесса роли для задачи нет.
+
+    Проверка строк мандатов (`_read_checked_answer_file`, SPEC
+    01M3GKJBXEBHB6ZA48J7VG8Z8W, требование 2) стоит в ОБЕИХ принимающих
+    ветвях состояния, сразу за чтением файла: отказать надо до коммита
+    ANSWER, и в `escalated` тоже — маркер мандата законен в любом
+    принимаемом состоянии, а прежде содержимое файла там не разбиралось
+    вовсе."""
     t = store.get_task(conn, task_id)
     state = t["state"]
     mandate_paths: list[str] = []
     if state == "escalated":
-        raw = _read_answer_file(task_id, file_path)
+        raw = _read_checked_answer_file(task_id, file_path, t["branch"])
     elif state in ("in_dev", "review"):
         if runner.in_role_environment():
             sys.exit(f"[{task_id}] answer отказана — вызов из окружения "
                      f"роли (role_env), REVIEW 01M287TPG0HAVXS8CHBCY679WN "
                      f"итерация 1, замечание R1-F1")
-        raw = _read_answer_file(task_id, file_path)
+        raw = _read_checked_answer_file(task_id, file_path, t["branch"])
         mandate_paths = _zones_mandate_marker_paths(raw)
         if not mandate_paths:
             sys.exit(f"[{task_id}] answer доступна только для задачи в "
@@ -153,11 +188,18 @@ def _cmd_answer(conn, task_id: str, file_path: str) -> None:
     if mandate_paths:
         action = ("ANSWER создан (мандат на расширение зон: "
                  f"{', '.join(mandate_paths)})")
+    elif state == "escalated":
+        # Требование 3: ответ эскалацию НЕ снимает — её снимает `approve`,
+        # и до 26.09 журнал об этом ожидании не говорил, а цикл `auto`
+        # останавливался сразу после ответа.
+        action = "ANSWER создан, ждёт approve"
     else:
         action = "ANSWER создан"
     store.journal(conn, task_id, "operator", action, rel_answer)
     print(f"[{task_id}] {rel_answer} создан и закоммичен в артефактную "
           f"ветку {branch}")
+    if state == "escalated":
+        print(f"  дальше: artel.py approve {task_id} (снятие эскалации)")
 
 
 def cmd_zones_extend(task_id: str, paths_arg: str,

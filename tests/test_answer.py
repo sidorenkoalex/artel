@@ -262,6 +262,40 @@ class AnswerCommandDoesNotDisturbOtherArtifactsTest(_ArtifactBranchAnswerTest):
                       "той же ветки")
 
 
+class AnswerInEscalatedNamesApproveAsTheNextStepTest(_ArtifactBranchAnswerTest):
+    """SPEC 01M3GKJBXEBHB6ZA48J7VG8Z8W, требование 3: ответ эскалацию НЕ
+    снимает — её снимает `approve`, и до этой задачи `answer` об этом не
+    говорил ни Оператору (stdout), ни журналу.
+
+    Планка задачи (AC-7) проверяет то же самое, но после мержа её не
+    гоняет никто: CI запускает только `tests/` — здесь тот же рубеж в
+    наборе, который гоняется всегда (REVIEW итерация 1, R1-F1)."""
+
+    JOURNAL_ACTION = "ANSWER создан, ждёт approve"
+
+    def hint(self) -> str:
+        return f"дальше: artel.py approve {self.TASK} (снятие эскалации)"
+
+    def actions(self) -> list:
+        return [r["action"] for r in store.task_steps(store.db(), self.TASK)]
+
+    def test_successful_answer_prints_the_hint_and_journals_waiting(self):
+        """Ловит мутацию: подсказка `approve` снята из stdout либо
+        действие журнала вернулось к прежнему «ANSWER создан» — Оператор
+        снова не видит шага, снимающего эскалацию, а цикл `auto`
+        останавливается сразу после ответа молча (вторая половина
+        прецедента 26.09)."""
+        self._escalate()
+
+        out = self.capture(answer.cmd_answer, self.TASK,
+                           self._answer_file("Ответ Оператора: вариант A.\n"))
+
+        self.assertIn(f"tasks/{self.TASK}/ANSWER-1.md",
+                      self.artifact_branch_files())
+        self.assertIn(self.hint(), out)
+        self.assertIn(self.JOURNAL_ACTION, self.actions())
+
+
 PLAN_WITH_EXTENSION_TEMPLATE = """---
 task: {task}
 type: plan
