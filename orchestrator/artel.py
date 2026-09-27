@@ -125,7 +125,8 @@ workspace, tasks, knowledge, logs). БД одна на все проекты: с
   kill <id> | release <id> |
   pause [--now] <id> | resume <id> | log <id> | budget <id> <usd> |
   target-init <target> | doctor [--restore] [--fix] | alert-ack <id> "<решение>" |
-  version | models | canary --k <N> [--sha <sha>] | canary pool-seal |
+  version | models | canary --k <N> [--sha <sha>] [--set <имя набора>] |
+  canary pool-seal |
   prune [--execute] |
   amend-tests <id> --reason "<основание>" [--from-branch] | pin-update <sha main артели> |
   ci-rerun <id> --reason "<основание>" |
@@ -211,12 +212,26 @@ checkout этого sha, `canary_runs.main_sha` несёт его же. Ведё
 трогает). Эскалация (`escalated`) закрывается синтетическим ANSWER
 Оператора-заглушки, прогон продолжается сам. Метрики (шаги, стоимость,
 итерации ревью, эскалации, исход) — БД пульта СНАРУЖИ клона, таблицы
-`canary_runs`/`canary_baseline`; бейзлайн — per-task (ключ — стабильное
-имя шаблона), не суммой по набору: первый прогон шаблона пишет его,
-следующие сравнивают и поднимают алерт (`kind=threshold`) при
-отклонении сверх `config.CANARY_DEVIATION_RATIO` — без автоматического
-действия. Маркер шаблона «ожидается эскалация» сверяется с фактом,
-расхождение — в отчёте.
+`canary_runs`/`canary_baseline`; бейзлайн — per-task (ключ — пара
+«стабильное имя шаблона + имя набора ролей»), не суммой по набору
+шаблонов: первый прогон пары пишет его, следующие сравнивают и поднимают
+алерт (`kind=threshold`) при отклонении сверх
+`config.CANARY_DEVIATION_RATIO` — без автоматического действия. Маркер
+шаблона «ожидается эскалация» сверяется с фактом, расхождение — в отчёте.
+
+`--set <имя набора>` (SPEC 01M3FQ2Z2PY0E9T5F5WQ207NP5) — прогон на
+именованном наборе ролей «роль -> (провайдер, модель)» из раздела
+`canary_sets:` локального слоя пульта (`.artel/models.yaml`, вне git).
+Набор действует ТОЛЬКО внутри эфемерного клона: в его локальный слой
+уходят и модели (ярусы), и провайдер ролей (`role_providers:`), а
+`roles.yaml` — защищённый путь — не меняется ни в клоне, ни в главной
+копии, то есть ни одна роль пульта набором не переведена. Битый набор
+(имени нет в слое; роль вне карты исполнителей; модель вне каталога; две
+роли одного яруса с разными моделями; провайдер роли ≠ провайдер её
+модели) — именованный отказ ДО создания клона. Без флага действует набор
+по умолчанию (`config.CANARY_DEFAULT_SET`) — сегодняшнее поведение
+байт-в-байт; только его прогоны годятся для сдвига пина
+(docs/operator-session.md).
 
 `canary pool-seal` (SPEC 01M1NSR5M5THYRC0RFWPMVE2DW) — хранит пул
 `~/.artel-canary` в репозитории пульта ОДНИМ зашифрованным файлом
@@ -736,14 +751,31 @@ def _sha_arg(rest: list) -> str | None:
     return rest[idx + 1]
 
 
+def _set_arg(rest: list) -> str:
+    """Значение флага `canary --k <N> --set <имя>` (SPEC
+    01M3FQ2Z2PY0E9T5F5WQ207NP5, требование 1, AC-1) — имя набора ролей
+    прогона. Флаг не передан — имя набора ПО УМОЛЧАНИЮ, а не `None`
+    (в отличие от `_sha_arg`): именем набора ключуются бейзлайн и строка
+    прогона, и «прогон как пульт» — такой же полноправный набор, просто
+    не описываемый в `canary_sets:`."""
+    if "--set" not in rest:
+        return config.CANARY_DEFAULT_SET
+    idx = rest.index("--set")
+    if idx + 1 >= len(rest):
+        sys.exit("--set требует имя набора следующим аргументом.")
+    return rest[idx + 1]
+
+
 def _cmd_canary(rest: list) -> None:
     """`canary pool-seal` (SPEC 01M1NSR5M5THYRC0RFWPMVE2DW, требование 2)
-    — отдельная подкоманда семейства `canary`, разбирается ДО `--k`:
-    `pool-seal` не берёт `--k` и не заводит прогон."""
+    — отдельная подкоманда семейства `canary`, разбирается ДО `--k` и до
+    `--set`: `pool-seal` не берёт ни того, ни другого и прогона не
+    заводит."""
     if rest and rest[0] == "pool-seal":
         pool_seal.cmd_pool_seal()
         return
-    canary.cmd_canary(k=_k_arg(rest), sha=_sha_arg(rest))
+    canary.cmd_canary(k=_k_arg(rest), sha=_sha_arg(rest),
+                      set_name=_set_arg(rest))
 
 
 def _cmd_new(rest: list) -> None:

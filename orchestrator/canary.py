@@ -45,6 +45,21 @@ workflows/ci.yml`, приложение к PLAN.md этой задачи — п�
 только КАК ФОРМАТ-ДОКУМЕНТАЦИЯ для Оператора/ассистента, руками
 пишущих пул, — сам код `canary.py` её не читает и не проверяет.
 
+Набор ролей прогона (SPEC 01M3FQ2Z2PY0E9T5F5WQ207NP5): `canary --k <N>
+[--sha <sha>] [--set <имя>]` — именованный набор «роль -> (провайдер,
+модель)» из `canary_sets:` локального слоя пульта, действующий ТОЛЬКО
+внутри эфемерного клона. Обе половины приходят в клон одним каналом —
+локальным слоем клона (`_clone_local_layer_text`), который уже
+переадресован сюда `_CLONE_CONFIG_ATTRS`: модели — ярусами `tiers:`,
+провайдер — картой `role_providers:`, которую читает
+`orchestrator/roles.py::provider`. `roles.yaml` при этом не меняется ни в
+клоне, ни в главной копии: путь защищённый, и прогон канарейки не вправе
+переводить роль пульта на другого исполнителя. Бейзлайн и строки прогонов
+ключуются ПАРОЙ (шаблон, набор): прогон на другом наборе моделей иначе
+сравнивался бы с бейзлайном прежнего набора и переписывал бы его. Без
+`--set` действует набор по умолчанию (`config.CANARY_DEFAULT_SET`) —
+сегодняшнее поведение байт-в-байт, без единого чтения `canary_sets:`.
+
 `canary pool-seal`/восстановление пула (SPEC 01M1NSR5M5THYRC0RFWPMVE2DW,
 часть 2) — отдельная от прогона конвейера механика; вынесена в
 `orchestrator/pool_seal.py` (SPEC 01M2CN42RV0EBBP7HS4HP2VNY1) — детали
@@ -84,6 +99,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+from collections import namedtuple
 from contextlib import contextmanager, redirect_stdout
 from datetime import datetime, timezone
 from pathlib import Path
@@ -91,8 +107,8 @@ from pathlib import Path
 from scripts import guard
 
 from . import (alerts, answer, artifact_branch, artifact_source, artifacts,
-              auto, catalog, cleanup, config, fsm, gitcmd, runner,
-              store, workspace, yamlmini)
+              auto, catalog, cleanup, config, fsm, gitcmd, models, roles,
+              runner, store, workspace, yamlmini)
 from .pool_seal import _pool_dir
 
 CANARY_MARK_ACTOR = "canary"
@@ -234,8 +250,217 @@ _CLONE_EXEMPT_CONFIG_ATTRS = {
 }
 
 
+#: План прогона по набору ролей (SPEC 01M3FQ2Z2PY0E9T5F5WQ207NP5):
+#: `name` — имя набора (им ключуются бейзлайн и строка прогона),
+#: `entries` — записи набора «роль -> `models.CanarySetRole`»,
+#: `layer_text` — готовый текст локального слоя эфемерного клона (`None` —
+#: слой клона остаётся шаблоном, ветка набора по умолчанию),
+#: `summary` — сводка «роль -> модель» прогона для строки журнала и вывода.
+CanarySetPlan = namedtuple("CanarySetPlan", "name entries layer_text summary")
+
+#: План набора ПО УМОЛЧАНИЮ: локального слоя пульта не читает вовсе и в
+#: `canary_sets:` не заглядывает (требование 3, AC-14) — прогон без `--set`
+#: обязан воспроизводить сегодняшнее поведение байт-в-байт на пульте,
+#: который наборов не заводил.
+_DEFAULT_SET_PLAN = CanarySetPlan(config.CANARY_DEFAULT_SET, {}, None, "")
+
+
+def _set_plan(set_name: str) -> CanarySetPlan:
+    """План прогона по набору `set_name` — либо ИМЕНОВАННЫЙ ОТКАЗ
+    (требование 6): каждый случай битого набора обязан остановить команду
+    ДО эфемерного клона, то есть до `git clone` и до строки в `tasks` —
+    иначе за опечатку в имени набора Оператор платит клоном и заведённой
+    задачей, а причина умирает вместе с уничтоженным клоном.
+    """
+    if set_name == config.CANARY_DEFAULT_SET:
+        return _DEFAULT_SET_PLAN
+    try:
+        sets = models.load_canary_sets()
+    except models.ModelsError as exc:
+        sys.exit(f"canary: набор {set_name} не прочитан: {exc}")
+    entries = sets.get(set_name)
+    if entries is None:
+        known = ", ".join(sorted(sets)) or "ни одного"
+        sys.exit(f"canary: набора {set_name} нет в "
+                 f"'{models.CANARY_SETS_KEY}:' {config.MODELS_LOCAL} "
+                 f"(известны: {known}); набор по умолчанию — "
+                 f"{config.CANARY_DEFAULT_SET}, он в этом разделе не "
+                 f"описывается")
+    try:
+        catalog_data = models.load_catalog()
+    except models.ModelsError as exc:
+        sys.exit(f"canary: каталог моделей не разобран: {exc}")
+    tiers = _set_tiers_or_exit(set_name, entries, catalog_data)
+    affected = _roles_of_tiers(tiers)
+    return CanarySetPlan(
+        set_name, entries,
+        _clone_local_layer_text(set_name, tiers, affected, catalog_data),
+        _set_summary(tiers, affected))
+
+
+def _set_tiers_or_exit(set_name: str, entries: dict, catalog_data) -> dict:
+    """{ярус -> модель} набора; каждый из четырёх отказов требования 6
+    (б, в, г, д) — `sys.exit` с названной сущностью, из-за которой набор
+    битый: без имени роли/модели Оператор не знает, какую строку набора
+    править.
+    """
+    tiers = {}
+    for role, entry in entries.items():
+        try:
+            tier = roles.model_tier(role)
+        except roles.RolesError as exc:
+            sys.exit(f"canary: набор {set_name} называет роль {role}, ярус "
+                     f"которой не прочитан в карте исполнителей целевого "
+                     f"sha: {exc}")
+        try:
+            model = models.catalog_model(entry.model, catalog_data)
+        except models.ModelsError as exc:
+            sys.exit(f"canary: набор {set_name}, роль {role}: {exc}")
+        if entry.provider != model.provider:
+            sys.exit(f"canary: набор {set_name}, роль {role}: провайдер "
+                     f"{entry.provider} не совпадает с провайдером "
+                     f"{model.provider} её модели {entry.model} в каталоге "
+                     f"{config.MODELS} — шаг ушёл бы чужим CLI с "
+                     f"идентификатором чужой модели, то есть оплаченной "
+                     f"попыткой")
+        named = tiers.get(tier)
+        if named is not None and named != entry.model:
+            sys.exit(f"canary: набор {set_name} даёт ярусу {tier} две "
+                     f"разные модели ({named} и {entry.model}) — локальный "
+                     f"слой клона ключуется ярусом, и такой набор в нём "
+                     f"невыразим")
+        tiers[tier] = entry.model
+    return tiers
+
+
+def _roles_of_tiers(tiers: dict) -> dict:
+    """{роль -> ярус} ВСЕХ agent-ролей карты исполнителей, чей ярус набор
+    сдвинул — не только ролей, названных набором.
+
+    Слой клона ключуется ярусом (требование 4), поэтому роль, стоящая на
+    том же ярусе, что и названная набором, получает модель набора, названа
+    она в нём или нет. Провайдер обязан следовать за моделью: иначе
+    предполёт ЕЁ шага в клоне отказал бы расхождением «провайдер роли ≠
+    провайдер её модели» (`doctor.check_model_provider_cli`, вызывается по
+    конкретной роли), и любой набор ронял бы прогон на первом же шаге
+    такой роли. Провайдер яруса определён однозначно: модель на ярусе одна
+    (отказ 6г), а её провайдер совпадает с провайдером записи набора
+    (отказ 6д).
+
+    Нечитаемая карта исполнителей или нечитаемый ярус — отказ до клона, а
+    не пропуск роли: без ярусов согласованный слой клона не собрать, а
+    молчаливый пропуск дал бы роль с моделью набора и провайдером пульта.
+    """
+    try:
+        entries = roles.load()
+    except roles.RolesError as exc:
+        sys.exit(f"canary: карта исполнителей не прочитана: {exc}")
+    affected = {}
+    for role, entry in entries.items():
+        if not isinstance(entry, dict) or entry.get("executor") != "agent":
+            continue
+        try:
+            tier = roles.model_tier(role)
+        except roles.RolesError as exc:
+            sys.exit(f"canary: ярус роли {role} не прочитан: {exc}")
+        if tier in tiers:
+            affected[role] = tier
+    return affected
+
+
+def _set_summary(tiers: dict, affected: dict) -> str:
+    """Сводка «роль -> модель» прогона (требование 7): по КАЖДОЙ роли,
+    которая реально идёт на модели набора, — сам набор живёт в файле вне
+    git, и по его сегодняшнему тексту прошлый прогон не восстановить."""
+    return ", ".join(f"{role} → {tiers[affected[role]]}"
+                    for role in sorted(affected))
+
+
+def _scalar_text(value: str) -> str:
+    """Строковое значение слоя клона так, чтобы обратный разбор
+    (`yamlmini.scalar`) вернул его дословно: `#` после пробела начинает
+    комментарий, а хвостовые пробелы срезаются, поэтому такое значение
+    уходит в кавычки. Значение с кавычкой внутри остаётся как есть:
+    экранирования внутри кавычек разбор пульта не знает вовсе
+    (`yamlmini`, докстринг модуля), и сочинять его здесь значило бы писать
+    слой, которого читатель не поймёт."""
+    text = str(value)
+    if '"' in text:
+        return text
+    if "#" in text or text != text.strip():
+        return f'"{text}"'
+    return text
+
+
+def _clone_local_layer_text(set_name: str, tiers: dict, affected: dict,
+                            catalog_data) -> str:
+    """Текст локального слоя ЭФЕМЕРНОГО КЛОНА, собранный из набора
+    (требования 4-5): ярусы набора на его модели, остальные ярусы — как в
+    шаблоне, разрешение каждой `experimental`-модели набора, тариф пульта
+    для моделей набора и карта «роль -> провайдер».
+
+    Тариф снимается с локального слоя ПУЛЬТА здесь, ДО клона (требование
+    4): стоимость шага в клоне обязана считаться по тарифу этого пульта, а
+    не по прейскуранту каталога — иначе метрика стоимости прогона
+    разошлась бы с тарифом, на который её же и сравнивают с бейзлайном.
+    Слой пульта нечитаем — переопределений просто нет: прогон не должен
+    отказывать из-за того, чего у пульта могло и не быть (об этом говорит
+    своя строка `doctor`).
+    """
+    layer_tiers = dict(models.local_template_layer().tiers)
+    layer_tiers.update(tiers)
+    lines = [
+        "# Локальный слой ЭФЕМЕРНОГО КЛОНА канарейки — собран прогоном из",
+        f"# набора {set_name} (`canary --k <N> --set {set_name}`, SPEC",
+        "# 01M3FQ2Z2PY0E9T5F5WQ207NP5, требования 4-5). Живёт и умирает",
+        "# вместе с клоном: ни одна роль пульта набором не переведена,",
+        "# roles.yaml ни здесь, ни в главной копии не тронут.",
+        "",
+        f"{models.TIERS_KEY}:",
+    ]
+    lines += [f"  {tier}: {layer_tiers[tier]}" for tier in models.TIERS
+              if tier in layer_tiers]
+
+    experimental = sorted(
+        model_id for model_id in set(tiers.values())
+        if catalog_data.models[model_id].status == models.STATUS_EXPERIMENTAL)
+    if experimental:
+        lines += ["", f"{models.ALLOW_EXPERIMENTAL_KEY}:"]
+        lines += [f"  {model_id}: true" for model_id in experimental]
+
+    overrides = _pult_overrides(set(tiers.values()))
+    if overrides:
+        lines += ["", f"{models.OVERRIDES_KEY}:"]
+        for model_id in sorted(overrides):
+            override = overrides[model_id]
+            lines.append(f"  {model_id}:")
+            lines += [f"    {kind}: {price!r}" for kind, price
+                      in zip(models.PRICE_KINDS, override.tariff)]
+            lines.append(f"    {models.CALIBRATED_AT_KEY}: "
+                        f"{_scalar_text(override.calibrated_at)}")
+            lines.append(f"    {models.SOURCE_KEY}: "
+                        f"{_scalar_text(override.source)}")
+
+    lines += ["", f"{models.ROLE_PROVIDERS_KEY}:"]
+    lines += [f"  {role}: {catalog_data.models[tiers[affected[role]]].provider}"
+              for role in sorted(affected)]
+    return "\n".join(lines) + "\n"
+
+
+def _pult_overrides(model_ids) -> dict:
+    """Переопределения тарифа ПУЛЬТА для моделей набора (требование 4);
+    слоя нет или он не разобран — пусто."""
+    try:
+        local = models.load_local()
+    except models.ModelsError:
+        return {}
+    return {model_id: local.overrides[model_id] for model_id in model_ids
+            if model_id in local.overrides}
+
+
 @contextmanager
-def _ephemeral_clone(target_sha: str | None = None):
+def _ephemeral_clone(target_sha: str | None = None,
+                    local_layer_text: str | None = None):
     """Заводит эфемерный клон пульта на время блока: собственный рабочий
     каталог, собственная БД состояния, собственный origin-заглушка
     (требование 2, AC-2) — и убирает его по выходу из блока, включая
@@ -285,6 +510,17 @@ def _ephemeral_clone(target_sha: str | None = None):
     он занимает, поэтому «протухание» alternate-ссылки после prune
     исходника здесь не сценарий.
 
+    `local_layer_text` (SPEC 01M3FQ2Z2PY0E9T5F5WQ207NP5, требования 4-5) —
+    готовый текст локального слоя КЛОНА, собранный из набора ролей
+    (`_clone_local_layer_text`): кладётся ПОСЛЕ `catalog.cmd_init()`,
+    поверх положенного им шаблона. Именно после, а не до: порядок «сначала
+    слой, потом init» работал бы только за счёт того, что
+    `models.ensure_local_template` не трогает существующий файл, — связь
+    неочевидная, и первая же правка того умолчания положила бы шаблон
+    поверх собранного слоя молча. `None` (по умолчанию) — слой клона
+    остаётся ровно шаблоном, который кладёт `cmd_init`, то есть прежнее
+    поведение байт-в-байт (требование 3, AC-14).
+
     `tempfile.mkdtemp`/`shutil.rmtree` — единственные стандартные
     способы завести/убрать временный каталог в CPython (перехватываются
     приёмочной песочницей этой задачи, `_EphemeralDirTracker`, тем же
@@ -327,6 +563,9 @@ def _ephemeral_clone(target_sha: str | None = None):
         for attr in _CLONE_CONFIG_ATTRS:
             setattr(config, attr, dest / saved[attr].relative_to(outer_root))
         catalog.cmd_init()
+        if local_layer_text is not None:
+            config.MODELS_LOCAL.parent.mkdir(parents=True, exist_ok=True)
+            config.MODELS_LOCAL.write_text(local_layer_text, encoding="utf-8")
         yield dest
     finally:
         for attr, value in saved.items():
@@ -705,6 +944,12 @@ def merges_since_last_green_run(conn, target_sha: str) -> int | None:
     пуст, либо ни один из них не лежит на истории `target_sha`
     (вырожденный случай того же порога: «сравнивать не с чем» ⇔ «порог
     всегда достигнут», AC-3 второй сценарий).
+
+    Считаются только прогоны НАБОРА ПО УМОЛЧАНИЮ — это уже решено
+    источником (`store.green_canary_runs`, SPEC
+    01M3FQ2Z2PY0E9T5F5WQ207NP5, требование 10): пин двигает прогон того
+    конвейера, которым пульт работает, а прогон по требованию на моделях
+    другого провайдера зелёной канарейкой для сдвига пина не считается.
     """
     best = None
     for row in store.green_canary_runs(conn):
@@ -923,13 +1168,19 @@ def _sha_label(target_sha: str, origin_sha: str | None) -> str:
 
 def _run_task_in_ephemeral_clone(template_path: Path, run_stamp: str,
                                  explicit_target_sha: str | None,
-                                 outer_root: Path) -> tuple:
+                                 outer_root: Path,
+                                 layer_text: str | None = None) -> tuple:
     """Фаза 1 из 3 (требование 6) `_run_one_task`: заводит и ведёт ОДНУ
     канареечную задачу в собственном эфемерном клоне на checkout'е
     `explicit_target_sha` (требование 1/2), сохраняя диагностику, пока
     клон ещё жив. Возвращает всё, что нужно двум следующим фазам —
     `task_id`, `title`, `expected`, `steps`, `metrics`, `actual`,
     `mismatch`, `normal_outcome`, `diag_dir`.
+
+    `layer_text` (SPEC 01M3FQ2Z2PY0E9T5F5WQ207NP5, требования 4-5) —
+    локальный слой клона, собранный из набора ролей; `None` — слой клона
+    остаётся шаблоном `models.LOCAL_TEMPLATE`, как его кладёт
+    `catalog.cmd_init()` (набор по умолчанию, AC-14).
 
     Создание задачи и её вождение — с подавленным stdout
     (`redirect_stdout`): между строкой «заведена» (печатается вызывающим
@@ -946,8 +1197,9 @@ def _run_task_in_ephemeral_clone(template_path: Path, run_stamp: str,
     # `_run_one_task` тремя позиционными аргументами: та планка мокает саму
     # `_ephemeral_clone` нульарной функцией — вызов с ЛЮБЫМ позиционным
     # аргументом (даже `None`) упал бы `TypeError` на этом моке.
-    clone_ctx = (_ephemeral_clone() if explicit_target_sha is None
-                else _ephemeral_clone(explicit_target_sha))
+    clone_ctx = (_ephemeral_clone()
+                if explicit_target_sha is None and layer_text is None
+                else _ephemeral_clone(explicit_target_sha, layer_text))
     with clone_ctx:
         conn = store.db()
         with redirect_stdout(io.StringIO()):
@@ -986,7 +1238,8 @@ def _record_canary_run(outer_conn, run_stamp: str, title: str, task_id: str,
                        metrics: dict, expected: bool | None, actual: bool,
                        mismatch: bool, normal_outcome: bool,
                        explicit_target_sha: str | None,
-                       target_sha: str, sha_label: str | None) -> tuple:
+                       target_sha: str, sha_label: str | None,
+                       plan: CanarySetPlan) -> tuple:
     """Фаза 3 из 3 (требование 6) `_run_one_task`: закрывает целевой sha
     прогона (если он не был передан явно), вычисляет вердикт зелёности и
     пишет строку `canary_runs` СНАРУЖИ клона (требование 5, 9). Возвращает
@@ -1001,6 +1254,11 @@ def _record_canary_run(outer_conn, run_stamp: str, title: str, task_id: str,
     докстринг `_run_one_task` — совместимость со старой планкой) — тот же
     `gitcmd.head_sha()` главной копии, снятый ПОСЛЕ выхода из клона, что и
     до этой задачи, байт-в-байт.
+
+    Имя набора и сводка «роль -> модель» (SPEC
+    01M3FQ2Z2PY0E9T5F5WQ207NP5, требование 7) идут в ту же строку: набор
+    — файл вне git, и к разбору истории прогонов его текст уже будет
+    другим.
     """
     if explicit_target_sha is None:
         target_sha = gitcmd.head_sha()
@@ -1019,13 +1277,15 @@ def _record_canary_run(outer_conn, run_stamp: str, title: str, task_id: str,
         metrics["cost_usd"], metrics["review_iterations"],
         len(metrics["escalations"]), metrics["outcome"],
         "yes" if expected else ("no" if expected is False else None),
-        actual, mismatch, main_sha=main_sha, verdict=verdict)
+        actual, mismatch, main_sha=main_sha, verdict=verdict,
+        set_name=plan.name, models_summary=plan.summary or None)
     return target_sha, sha_label
 
 
 def _baseline_deviation_note(outer_conn, task_id: str, title: str,
                              metrics: dict, normal_outcome: bool,
-                             mismatch: bool, ratio: float) -> str:
+                             mismatch: bool, ratio: float,
+                             set_name: str = config.CANARY_DEFAULT_SET) -> str:
     """Фаза 2 из 3 (требование 6) `_run_one_task`: сверка метрик задачи с
     ЕЁ per-task бейзлайном — заводит бейзлайн, если его ещё нет, либо
     поднимает алерт на отклонение сверх `ratio`. Возвращает готовую
@@ -1037,14 +1297,21 @@ def _baseline_deviation_note(outer_conn, task_id: str, title: str,
     прогон, снятый как «не сошлась», или с расхождением, в это сравнение
     не попадает, даже если он первый для шаблона (копилка 06.09:
     killed-прогон дважды за день ложно завёл бейзлайн).
+
+    Бейзлайн читается и пишется по ПАРЕ (шаблон, набор ролей) — SPEC
+    01M3FQ2Z2PY0E9T5F5WQ207NP5, требование 7: прогон на другом наборе
+    моделей сравнивался бы с бейзлайном прежнего набора (предупреждение
+    «отклонение сверх 50%» на ожидаемой разнице моделей, и именно этот
+    алерт — вход гейта сдвига пина) и затем переписал бы его своими
+    числами.
     """
     if _needs_diagnostics(normal_outcome, mismatch):
         return ""
-    baseline = store.canary_baseline(outer_conn, title)
+    baseline = store.canary_baseline(outer_conn, title, set_name)
     if baseline is None:
         store.set_canary_baseline(outer_conn, title, metrics["steps"],
                                   metrics["cost_usd"],
-                                  metrics["review_iterations"])
+                                  metrics["review_iterations"], set_name)
         return "  [бейзлайн создан]"
     warnings = _task_deviation_warnings(metrics, baseline, ratio)
     if not warnings:
@@ -1052,13 +1319,14 @@ def _baseline_deviation_note(outer_conn, task_id: str, title: str,
     for w in warnings:
         alerts.raise_alert(
             outer_conn, task_id, "threshold", "canary",
-            f"канарейка {title} ({task_id}): {w}")
+            f"канарейка {title} ({task_id}), набор {set_name}: {w}")
     return "  [ВНИМАНИЕ: отклонение от бейзлайна: " + "; ".join(warnings) + "]"
 
 
 def _run_one_task(template_path: Path, run_stamp: str, ratio: float,
                   target_sha: str | None = None,
-                  sha_label: str | None = None) -> None:
+                  sha_label: str | None = None,
+                  plan: CanarySetPlan | None = None) -> None:
     """Полный цикл одной канареечной задачи: заводит, ведёт в собственном
     эфемерном клоне на checkout'е `target_sha` (требование 1/2), пишет
     метрики/бейзлайн в БД пульта СНАРУЖИ клона (требование 5, 9) и
@@ -1088,23 +1356,34 @@ def _run_one_task(template_path: Path, run_stamp: str, ratio: float,
     также недостижимую из `_drive_task` `_kill_at_verifying`, оставленную
     ради чужой планки, REVIEW.md итерации 2 R2-F1) от «не сошлась»,
     `mismatch` — расхождение маркера ожидания эскалации с фактом.
+
+    `plan` (SPEC 01M3FQ2Z2PY0E9T5F5WQ207NP5) — план прогона по набору
+    ролей: слой клона, ключ бейзлайна, имя набора и сводка моделей в
+    строке прогона и в выводе. `None` — набор по умолчанию
+    (`_DEFAULT_SET_PLAN`), то есть прежнее поведение байт-в-байт: как для
+    `cmd_canary` без `--set`, так и для залоченной планки задачи
+    01M1SC3Y20YBTTJVQDJBF2NDQW, зовущей эту функцию тремя позиционными
+    аргументами.
     """
+    plan = plan or _DEFAULT_SET_PLAN
     explicit_target_sha = target_sha
     outer_root = config.ROOT
 
     (task_id, title, expected, steps, metrics, actual, mismatch,
      normal_outcome, diag_dir) = _run_task_in_ephemeral_clone(
-        template_path, run_stamp, explicit_target_sha, outer_root)
+        template_path, run_stamp, explicit_target_sha, outer_root,
+        plan.layer_text)
 
     print(f"[canary] {task_id} заведена из {template_path.name}")
 
     outer_conn = store.db()
     target_sha, sha_label = _record_canary_run(
         outer_conn, run_stamp, title, task_id, metrics, expected, actual,
-        mismatch, normal_outcome, explicit_target_sha, target_sha, sha_label)
+        mismatch, normal_outcome, explicit_target_sha, target_sha, sha_label,
+        plan)
 
     note = _baseline_deviation_note(outer_conn, task_id, title, metrics,
-                                    normal_outcome, mismatch, ratio)
+                                    normal_outcome, mismatch, ratio, plan.name)
 
     mismatch_note = ""
     if mismatch:
@@ -1124,26 +1403,44 @@ def _run_one_task(template_path: Path, run_stamp: str, ratio: float,
          f"повторов developer={metrics['dev_retries']}  "
          f"исход={metrics['outcome']}{outcome_note}  "
          f"sha={target_sha} ({sha_label})  "
+         f"набор={plan.name}{_summary_note(plan)}  "
          f"test_author={test_author_note}{mismatch_note}{note}")
     if diag_dir is not None:
         print(f"  диагностика: {diag_dir}")
 
 
-def cmd_canary(*, k: int, sha: str | None = None) -> None:
+def _summary_note(plan: CanarySetPlan) -> str:
+    """Сводка моделей набора в скобках — пусто у набора по умолчанию:
+    модели там те же, что у живого конвейера, и называть их отдельно
+    нечего."""
+    return f" ({plan.summary})" if plan.summary else ""
+
+
+def cmd_canary(*, k: int, sha: str | None = None,
+               set_name: str = config.CANARY_DEFAULT_SET) -> None:
+    """`set_name` (SPEC 01M3FQ2Z2PY0E9T5F5WQ207NP5, требование 1) — имя
+    набора ролей прогона из `canary_sets:` локального слоя; значение по
+    умолчанию — набор по умолчанию, то есть прогон «как пульт»."""
     pool_dir = _pool_dir()
     if not pool_dir.is_dir():
         sys.exit(f"canary: каталог пула не найден: {pool_dir}")
     if k <= 0:
         sys.exit("canary: --k должен быть положительным целым числом")
     templates = _sample_pool_templates(pool_dir, k)
+    # Набор разбирается и проверяется ЗДЕСЬ — до `_resolve_target_sha` (он
+    # ходит к origin) и до первого `_ephemeral_clone` (требование 6): за
+    # битый набор Оператор не платит ни обращением к сети, ни `git clone`,
+    # ни заведённой задачей.
+    plan = _set_plan(set_name)
 
     target_sha, origin_sha = _resolve_target_sha(sha)
     sha_label = _sha_label(target_sha, origin_sha)
 
     run_stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     print(f"[canary] прогон {run_stamp}: {len(templates)} задач из пула "
-         f"{pool_dir}, целевой sha {target_sha} ({sha_label})")
+         f"{pool_dir}, целевой sha {target_sha} ({sha_label}), набор "
+         f"{plan.name}{_summary_note(plan)}")
     for template_path in templates:
         _run_one_task(template_path, run_stamp, config.CANARY_DEVIATION_RATIO,
-                      target_sha, sha_label)
+                      target_sha, sha_label, plan)
     print(f"[canary] прогон {run_stamp} завершён")
