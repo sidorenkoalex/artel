@@ -14,6 +14,87 @@ from . import alerts, config, gitcmd, lease, retro, spend, store
 # reviewer»).
 REVIEW_ESCALATION_CODE_SHA_ACTION = "эскалация review: sha кода зафиксирован"
 
+# Префикс действия, которым `store.set_state` отмечает вход в состояние
+# (`f"state -> {state}"`) — граница текущего пребывания задачи в состоянии
+# для `journal_warning_once` ниже.
+STATE_ENTRY_ACTION_PREFIX = "state -> "
+
+# Действия журнала двух подавляемых бюджетных предупреждений — литералы
+# СЕГОДНЯШНЕГО журнала (тексты эта задача не меняет, требование 7): имя
+# нужно, потому что с дедупликацией действие записи стало ещё и ключом
+# сверки — расхождение литералов между записью и сверкой было бы молчаливой
+# потерей подавления.
+SPEC_NOT_APPLIED_ACTION = "бюджет из SPEC не применён"
+BUDGET_WARNING_ACTION = "бюджет: предупреждение"
+
+
+def journal_warning_once(conn, task_id: str, actor: str, action: str,
+                         detail: str, *, key: str | None) -> bool:
+    """Пишет предупреждение в журнал, если такого же в ТЕКУЩЕМ пребывании
+    задачи в состоянии ещё не было; `True` — запись добавлена, `False` —
+    повтор подавлен (SPEC 01M3HP7WAXKFK3GYZ3T6HX08M0, требования 1-4).
+
+    Живёт здесь, а не в `store.py`: журнал остаётся только дописываемым, и
+    подавление — правило ТРЁХ вызывающих мест, не свойство носителя
+    (ANSWER-1 п. 1-2). Из четырёх файлов зоны задачи `budget.py` —
+    единственный, который уже импортирует на уровне модуля второй
+    потребитель узла (`runner.py`), поэтому общий узел не требует ни
+    нового модуля, ни отложенных импортов ради цикла.
+
+    Печать в stdout остаётся за вызывающим и подавлению НЕ подлежит
+    (требование 6): Оператор у терминала видит каждое срабатывание.
+    Счётчика повторов нет — ни в записи, ни сводной строкой на выходе из
+    состояния (ANSWER-1 п. 1).
+
+    Граница пребывания — последняя запись входа в состояние
+    (`STATE_ENTRY_ACTION_PREFIX`) журнала этой задачи: тот же приём скоупа
+    без новой колонки, которым уже пользуется `store.refusal_history`.
+    Сверяется ЛЮБОЙ вход в состояние, а не вход в названное состояние:
+    последний переход и есть начало текущего пребывания, а повторный вход
+    в то же состояние сдвигает границу вперёд и открывает предупреждению
+    журнал заново (требование 4). Такой записи нет вовсе (задача рождается
+    в `spec_writing` напрямую через `insert_task`; лёгкая песочница ставит
+    состояние минуя `set_state`) — граница 0, весь журнал считается одним
+    пребыванием: тот же вырожденный случай, что и у `refusal_history`.
+
+    `key` — что считается «тем же предупреждением» (требование 3), и
+    допустимых значений ровно два:
+    * `key=detail` — ключ есть текст записи: для предупреждений, чей текст
+      и есть смысл (`pre-flight WARNING`, «бюджет из SPEC не применён»);
+      другая версия CLI, другая причина «не применён» дают новую запись;
+    * `None` — ключ есть само действие: у «бюджет: предупреждение» ключ по
+      SPEC — пересечённый порог `config.BUDGET_ALERT_RATIO`, а он у этой
+      записи один, тогда как текст несёт текущие суммы и меняется на каждом
+      шаге.
+
+    Третьего значения нет, и узел отказывает на нём громко (`ValueError`),
+    а не подавляет «как получится»: своего носителя у ключа в журнале нет
+    (колонку не заводим — `orchestrator/store.py` не в зонах, ANSWER-1
+    п. 1), поэтому сверка восстанавливает ключ прошлой записи из её же
+    `detail`. Ключ, отличный от текста, не совпал бы с ним НИКОГДА —
+    подавление молча выключилось бы, без единого красного теста (REVIEW
+    итерации 1, R1-F2; живой сценарий — второй порог бюджета,
+    `docs/backlog.md`, с естественным `key=f"{ratio}"`). Понадобится такой
+    ключ — он потребует носителя, а не молчаливого расхождения.
+    """
+    if key is not None and key != detail:
+        raise ValueError(
+            "journal_warning_once: ключ восстанавливается из текста записи, "
+            "своего носителя у него нет — допустимо key=None (ключ = само "
+            f"действие) либо key=detail, но не {key!r} при detail {detail!r}")
+    rows = store.task_steps(conn, task_id)
+    since = 0
+    for i, row in enumerate(rows):
+        if row["action"].startswith(STATE_ENTRY_ACTION_PREFIX):
+            since = i + 1
+    for row in rows[since:]:
+        # Ключ прошлой записи — её же `detail` (контракт выше): колонки под
+        # ключ в журнале нет, и сравнивать больше не с чем.
+        if row["action"] == action and (key is None or row["detail"] == key):
+            return False
+    store.journal(conn, task_id, actor, action, detail)
+    return True
+
 
 def spec_budget(meta: dict) -> tuple[float | None, str]:
     """Потолок из frontmatter SPEC: (сумма, причина отказа).
@@ -93,14 +174,14 @@ def apply_spec_budget(conn, t: sqlite3.Row, meta: dict) -> None:
     source = t["budget_source"]
     if source == config.BUDGET_SOURCE_OPERATOR:
         detail = f"${value:.2f} — потолок задан Оператором, остаётся ${old:.2f}"
-        store.journal(conn, task_id, "fsm",
-                      "бюджет из SPEC не применён", detail)
+        journal_warning_once(conn, task_id, "fsm",
+                             SPEC_NOT_APPLIED_ACTION, detail, key=detail)
         print(f"[{task_id}] бюджет из SPEC не применён: {detail}")
         return
     if source == config.BUDGET_SOURCE_SPEC and value == old:
         detail = f"${value:.2f} — уже применён, остаётся ${old:.2f}"
-        store.journal(conn, task_id, "fsm",
-                      "бюджет из SPEC не применён", detail)
+        journal_warning_once(conn, task_id, "fsm",
+                             SPEC_NOT_APPLIED_ACTION, detail, key=detail)
         print(f"[{task_id}] бюджет из SPEC не применён: {detail}")
         return
 
@@ -223,7 +304,14 @@ def enforce_budget(conn, task_id: str, state: str) -> bool:
     if spent >= budget * config.BUDGET_ALERT_RATIO:
         detail = (f"израсходовано ${spent:.2f} из ${budget:.2f} — "
                   f"больше {int(config.BUDGET_ALERT_RATIO * 100)}% бюджета")
-        store.journal(conn, task_id, "fsm", "бюджет: предупреждение", detail)
+        # Ключ подавления — не текст, а пересечённый порог (SPEC требование
+        # 3): суммы в тексте свои на каждом шаге, и ключом по тексту
+        # подавление не сработало бы ни разу. Порог у этой записи один
+        # (`config.BUDGET_ALERT_RATIO`), поэтому ключом служит само
+        # действие — `key=None`. Ветка ИСЧЕРПАНИЯ выше подавления не знает
+        # (требование 5, AC-7): она возвращает управление раньше.
+        journal_warning_once(conn, task_id, "fsm", BUDGET_WARNING_ACTION,
+                             detail, key=None)
         print(f"[{task_id}] ВНИМАНИЕ: {detail}")
     return False
 
