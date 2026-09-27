@@ -64,6 +64,14 @@ schema_version: 5
 4. `python3 scripts/codebase_map.py` — карта кодовой базы тем же коммитом
    (в `guard.py` появляется публичная `zone_line_items`, в `budget.py`
    меняется блок «Импортирует»).
+5. Возврат из `verifying` 27.09 (CI коммита e9b5046b красный чужим
+   дефектом — `tests/test_stack_optional_tools.py::CheckStackLinesTest::
+   test_missing_unused_tool_gives_no_line_at_all` падал из-за `roles.yaml`
+   главной ветки, a6da0abe; главная исправлена d910c523): подтяжка
+   `origin/main` в ветку задачи (merge 3019168c, конфликтов нет, дифф
+   подтяжки — только `roles.yaml` и `docs/backlog.md`), регенерация карты
+   отдельным коммитом 2911d97e, пуш ветки на CI. Код и тесты задачи не
+   менялись.
 
 Один MR: разбор и его потребитель обязаны смениться вместе (обоснование
 монолита в SPEC).
