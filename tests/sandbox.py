@@ -87,7 +87,18 @@ ALL_CONFIG_ATTRS = (
     # во временном каталоге, иначе тест писал бы в слой машины Оператора.
     # Сам каталог моделей (`config.MODELS`) в списке сознательно
     # отсутствует — он в git, всегда лежит рядом с кодом и от сценария к
-    # сценарию не меняется (тот же довод, что у `ROLES`/`TEMPLATES`).
+    # сценарию не меняется (тот же довод, что у `TEMPLATES`).
+    #
+    # `ROLES` в списке тоже нет, но по ОБРАТНОЙ причине (SPEC
+    # 01M3HP7RQEY0SBYNKQ902QD2CZ, требование 2): карта исполнителей от
+    # сценария к сценарию как раз меняется, и настоящим файлом
+    # репозитория она для тестов не остаётся ни на минуту — этот модуль
+    # уводит `config.ROLES` на фикстуру НА ВЕСЬ ПРОЦЕСС при импорте (см.
+    # `_SANDBOX_ROLES_PATH` ниже), а сценарию свою карту выдаёт
+    # `TmpRootTest.use_role_map`. Место `ALL_CONFIG_ATTRS` — пути, чей
+    # адрес песочница уводит в tmp-корень ТЕСТА; `ROLES` живёт в общем
+    # каталоге фикстуры процесса, и его пришлось бы собирать до
+    # `setUp`-времени.
     "MODELS_LOCAL",
 )
 
@@ -175,11 +186,36 @@ def _stub_check_stack():
 # LiveRolesMapConsistencyTest`): они адресуют файл репозитория явно, а не
 # через `config.ROLES`.
 
-#: Ярус agent-ролей фикстуры и модель, которой его называет локальный слой:
-#: сегодняшняя конфигурация пульта (все ярусы шаблона — на одной модели),
-#: но заданная здесь, а не прочитанная из его файлов.
+#: Ярус agent-ролей фикстуры. Имя яруса — из перечня `models.TIERS`, и
+#: крутилкой Оператора оно не является: перечень ярусов живёт в коде.
 FIXTURE_TIER = "strong"
-FIXTURE_TIER_MODEL = "claude-opus-5"
+
+
+def _fixture_tier_model() -> str:
+    """Модель, которой шаблон локального слоя пульта называет
+    `FIXTURE_TIER`.
+
+    Из шаблона, а не литералом: литерал был бы ВТОРОЙ крутилкой «модель
+    яруса по умолчанию» рядом с `models.LOCAL_TEMPLATE` — сменили модель
+    шаблона и сняли прежнюю из каталога `models.yaml`, и каждый сценарий,
+    зовущий фикстуру с `tiers=`, получил бы ярусы на модели, которой в
+    каталоге нет, то есть покраснел бы строкой `model-<роль>` мимо своего
+    предмета (REVIEW.md итерации 1, R1-F4). Тем же доводом и тем же
+    способом модель яруса берёт планка этой задачи
+    (`acceptance_tests/_util.py::template_tier_model`).
+    """
+    layer = models.local_template_layer()
+    model = layer.tiers.get(FIXTURE_TIER)
+    if not model:
+        raise RuntimeError(
+            f"шаблон локального слоя (models.LOCAL_TEMPLATE) не называет "
+            f"модель ярусу {FIXTURE_TIER!r} — фикстуре карты негде взять "
+            f"модель agent-ролей")
+    return model
+
+
+#: Модель, которой локальный слой фикстуры называет `FIXTURE_TIER`.
+FIXTURE_TIER_MODEL = _fixture_tier_model()
 
 #: Слот keychain и общий fallback — те же имена, что у пульта: их читает
 #: `roles.token_slots`, а подмена keychain в песочницах идёт по слоту.
@@ -252,7 +288,9 @@ def role_map_fixture(roles: dict = None, tiers: dict = None,
     который кладут `init` и `doctor --fix` (`models.local_template_text`):
     это конфигурация настоящего пульта, а не подделка, и повторять её
     здесь литералом значило бы завести вторую крутилку ярусов, которая
-    разошлась бы с шаблоном на первой же правке.
+    разошлась бы с шаблоном на первой же правке. С `tiers=` модель
+    неназванных ярусов берётся из того же шаблона
+    (`FIXTURE_TIER_MODEL`) — по тому же доводу.
     """
     entries = {name: dict(fields) for name, fields in FIXTURE_ROLES.items()}
     for name, override in (roles or {}).items():
@@ -274,6 +312,15 @@ def role_map_fixture(roles: dict = None, tiers: dict = None,
         local_text += "allow_experimental:\n" + "".join(
             f"  {model}: true\n" for model in allow_experimental)
     return RoleMapFixture(roles_text, local_text)
+
+
+def _restore_file(path: Path, text) -> None:
+    """Вернуть файлу прежнее содержимое; `text is None` — файла не было,
+    значит его и не должно остаться."""
+    if text is None:
+        path.unlink(missing_ok=True)
+    else:
+        path.write_text(text, encoding="utf-8")
 
 
 #: Текст карты исполнителей фикстуры по умолчанию — им же песочница
@@ -921,13 +968,26 @@ class TmpRootTest(unittest.TestCase):
         Оба файла кладутся в `.artel/` песочницы, рядом с БД: запись в
         корень `self.root` попадала бы в `git add -A`/`git status
         --porcelain` тех подклассов, которые заводят в нём настоящий
-        репозиторий. Патч `config.ROLES` снимается штатным `addCleanup`,
-        поэтому карта сценария не утекает в соседние тесты процесса.
+        репозиторий.
+
+        Ни карта, ни слой не утекают в соседние тесты процесса: патч
+        `config.ROLES` снимается штатным `addCleanup`, а прежнее
+        СОДЕРЖИМОЕ локального слоя возвращается на место тем же
+        `addCleanup`. Возврат слоя обязателен не для классов с полным
+        `PATCHED_ATTRS` (у них `config.MODELS_LOCAL` свой, в tmp-корне), а
+        для тех, кто этот путь не патчит вовсе (`tests/test_doctor.py::
+        _RoleHomeReferenceTmpRootTest`): у них слой — файл ФИКСТУРЫ
+        ПРОЦЕССА, и вызов с `tiers=`/`allow_experimental=` без отката
+        переконфигурировал бы ярусы всем последующим тестам прогона
+        (REVIEW.md итерации 1, R1-F3).
         """
         fixture = role_map_fixture(**overrides)
-        config.MODELS_LOCAL.parent.mkdir(parents=True, exist_ok=True)
-        config.MODELS_LOCAL.write_text(fixture.local_text, encoding="utf-8")
-        roles_path = config.MODELS_LOCAL.parent / "roles-fixture.yaml"
+        local = Path(config.MODELS_LOCAL)
+        local.parent.mkdir(parents=True, exist_ok=True)
+        before = local.read_text(encoding="utf-8") if local.is_file() else None
+        self.addCleanup(_restore_file, local, before)
+        local.write_text(fixture.local_text, encoding="utf-8")
+        roles_path = local.parent / "roles-fixture.yaml"
         roles_path.write_text(fixture.roles_text, encoding="utf-8")
         patcher = mock.patch.object(config, "ROLES", roles_path)
         patcher.start()
