@@ -23,7 +23,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from orchestrator import config, doctor, stack  # noqa: E402
 from tests.sandbox import TmpRootTest  # noqa: E402
-from tests.test_runner_role_model import _roles_yaml_text  # noqa: E402
+from tests.test_runner_role_model import (_roles_yaml_text,  # noqa: E402
+                                          _tiers_text)
 
 CLAUDE_MODEL = "claude-opus-5"
 CODEX_MODEL = "gpt-5.6-terra"
@@ -61,9 +62,7 @@ CATALOG = """providers:
         price_date: 2026-09-21
 """
 
-LOCAL = """tiers:
-  {tier}: {model}
-allow_experimental:
+ALLOW_EXPERIMENTAL = """allow_experimental:
   {model}: true
 """
 
@@ -96,7 +95,13 @@ class _ManifestSandbox(TmpRootTest):
 
     def use_tier(self, model: str, provider: str = None) -> None:
         """Ярус роли -> `model`; `provider` — необязательное поле роли,
-        которое НЕ должно решать обязательность инструмента."""
+        которое НЕ должно решать обязательность инструмента.
+
+        `model` называется у КАЖДОГО яруса перечня (`_tiers_text`, SPEC
+        01M3H5FEXH5M9HGZYT3BCDX5C4, требование 1): ярус подменяется
+        только у `ROLE`, остальные agent-роли приходят из боевого
+        `roles.yaml` со своими ярусами, и их цепочка обязана разрешаться
+        независимо от того, какой ярус у них стоит сегодня."""
         text = _roles_yaml_text(ROLE, TIER)
         if provider is not None:
             text = text.replace(f"  {ROLE}:\n",
@@ -106,8 +111,9 @@ class _ManifestSandbox(TmpRootTest):
         # на свой файл при импорте, и невосстановленное значение утекло бы
         # в соседние тесты процесса.
         self.patch(config, "ROLES", self.roles_path)
-        config.MODELS_LOCAL.write_text(LOCAL.format(tier=TIER, model=model),
-                                       encoding="utf-8")
+        config.MODELS_LOCAL.write_text(
+            _tiers_text(model) + ALLOW_EXPERIMENTAL.format(model=model),
+            encoding="utf-8")
 
     def stack_checks(self, codex_found: bool) -> list:
         def fake_run(args, **kwargs):
@@ -170,6 +176,10 @@ class OptionalToolManifestTest(_ManifestSandbox):
         исполнителей пробрасывает исключение из сборки манифеста — тогда
         `role_env`/`check_stack`/`doctor` падали бы трейсбеком там, где
         про ту же поломку уже говорит собственный именованный отказ."""
+        # Слой пишется ОДНИМ ярусом сознательно: неразрешимая цепочка и
+        # есть предмет сценария, и покрытие всех ярусов перечня (SPEC
+        # 01M3H5FEXH5M9HGZYT3BCDX5C4, требование 3) сюда не
+        # распространяется — иначе проверять было бы нечего.
         config.MODELS_LOCAL.write_text("tiers:\n  cheap: nothing\n",
                                        encoding="utf-8")
         self.assertEqual(stack.model_providers(), set())

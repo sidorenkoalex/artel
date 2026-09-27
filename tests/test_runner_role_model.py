@@ -23,8 +23,8 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from orchestrator import (catalog, config, gitcmd, providers,  # noqa: E402
-                          runner, spend, store)
+from orchestrator import (catalog, config, gitcmd, models,  # noqa: E402
+                          providers, runner, spend, store)
 from tests.sandbox import (DeveloperBriefTmpRootTest as TmpRootTest,  # noqa: E402
                            FakeProc, capture_new_task_id, event, fake_git,
                            sync_spec_from_worktree)
@@ -67,6 +67,34 @@ def _roles_yaml_text(role: str, tier: str | None) -> str:
     return "".join(lines)
 
 
+def _tiers_text(model: str) -> str:
+    """Раздел `tiers:` локального слоя песочницы: `model` названа у
+    КАЖДОГО яруса перечня `models.TIERS`, а не только у яруса роли под
+    тестом (SPEC 01M3H5FEXH5M9HGZYT3BCDX5C4, требование 1).
+
+    Слой пишется в паре с `_roles_yaml_text` выше, а тот подменяет ярус
+    у ОДНОЙ названной роли — остальные остаются такими, как в боевом
+    `roles.yaml`. Слой, называющий модель у одного яруса, покрывает их
+    ровно до тех пор, пока Оператор держит все agent-роли на одном
+    ярусе: роль на другом ярусе остаётся без модели, её цепочка «роль ->
+    ярус -> модель» не разрешается, и `orchestrator/stack.py` даёт
+    строку `model-<роль>` со статусом `fail`. Так 27.09 перевод роли
+    analyst на ярус `standard` уронил на главной ветке тест состава
+    строк инструментов — покраснело распределение ролей по ярусам,
+    решение Оператора в защищённом файле, а не предмет проверки.
+
+    Покрытие всех ярусов одной моделью — конфигурация настоящего пульта:
+    шаблон локального слоя (`models.LOCAL_TEMPLATE`) называет модель у
+    каждого яруса перечня. Сценарии, чей ПРЕДМЕТ — непокрытый ярус
+    (`tests/test_runner_model_preflight.py::TierWithoutModelTest`,
+    `tests/test_stack_optional_tools.py::OptionalToolManifestTest::
+    test_unreadable_layers_demand_nothing_instead_of_raising`), пишут
+    слой сами и этим помощником не пользуются — иначе потеряли бы свой
+    предмет.
+    """
+    return "tiers:\n" + "".join(f"  {tier}: {model}\n" for tier in models.TIERS)
+
+
 class ModelFlagJournalTest(TmpRootTest):
     """Один прогон `runner.cmd_run` (роль developer) с управляемым
     `roles.yaml`: argv команды и журнал шага."""
@@ -105,11 +133,15 @@ class ModelFlagJournalTest(TmpRootTest):
         patcher.start()
         self.addCleanup(patcher.stop)
 
-    def set_tier_model(self, tier: str, model: str) -> None:
-        """Модель яруса в локальном слое песочницы: модель шага задаёт
-        он, а не карта исполнителей."""
-        config.MODELS_LOCAL.write_text(f"tiers:\n  {tier}: {model}\n",
-                                       encoding="utf-8")
+    def set_tier_model(self, model: str) -> None:
+        """Модель ярусов в локальном слое песочницы: модель шага задаёт
+        он, а не карта исполнителей.
+
+        Ярус называется не один, а каждый (`_tiers_text`): роли, которых
+        тест не называет, остаются на ярусах боевого `roles.yaml`, и их
+        цепочка обязана разрешаться независимо от того, какой ярус
+        Оператор им сегодня поставил."""
+        config.MODELS_LOCAL.write_text(_tiers_text(model), encoding="utf-8")
 
     def run_agent(self, expect_exit: bool = False) -> mock.Mock:
         """Один прогон шага. `expect_exit` — сценарий отказа до старта
@@ -138,7 +170,7 @@ class ModelFlagJournalTest(TmpRootTest):
         """Ловит мутацию: `--model` добавляется дважды, значение — не то
         роли, либо вставка сдвигает порядок существующих флагов."""
         self.set_tier("strong")
-        self.set_tier_model("strong", "claude-opus-5")
+        self.set_tier_model("claude-opus-5")
 
         argv = self.run_agent().call_args.args[0]
 
@@ -155,7 +187,7 @@ class ModelFlagJournalTest(TmpRootTest):
         — смена модели яруса в локальном слое пульта не меняла бы ничего,
         и оба файла задавали бы модель одновременно."""
         self.set_tier("strong")
-        self.set_tier_model("strong", "claude-sonnet-5")
+        self.set_tier_model("claude-sonnet-5")
 
         argv = self.run_agent().call_args.args[0]
 
@@ -179,7 +211,7 @@ class ModelFlagJournalTest(TmpRootTest):
         вовсе, либо несёт значение, отличное от разрешённой моделью
         яруса."""
         self.set_tier("strong")
-        self.set_tier_model("strong", "claude-opus-5")
+        self.set_tier_model("claude-opus-5")
 
         self.run_agent()
 
@@ -200,7 +232,7 @@ class ModelFlagJournalTest(TmpRootTest):
         что сверять стало нечего.
         """
         self.set_tier("strong")
-        self.set_tier_model("strong", "claude-opus-5")
+        self.set_tier_model("claude-opus-5")
         priced = result_event(usd=0.1, usage={"input_tokens": 1000,
                                               "output_tokens": 500})
 
@@ -226,7 +258,7 @@ class ModelFlagJournalTest(TmpRootTest):
         видеть расход целого провайдера.
         """
         self.set_tier("strong")
-        self.set_tier_model("strong", "claude-opus-5")
+        self.set_tier_model("claude-opus-5")
         priceless = event(type="result", subtype="success", is_error=False,
                           result="готово",
                           usage={"input_tokens": 1000, "output_tokens": 500})
@@ -256,7 +288,7 @@ class ModelFlagJournalTest(TmpRootTest):
         всплыть на следующем шаге.
         """
         self.set_tier("strong")
-        self.set_tier_model("strong", "claude-opus-5")
+        self.set_tier_model("claude-opus-5")
         priced = result_event(usd=0.1, usage={"input_tokens": 1000,
                                               "output_tokens": 500})
 
@@ -290,7 +322,7 @@ class ModelFlagJournalTest(TmpRootTest):
         KNOWN, без записи UNCHARGED и без алерта.
         """
         self.set_tier("strong")
-        self.set_tier_model("strong", "claude-opus-5")
+        self.set_tier_model("claude-opus-5")
         asked = []
 
         def flag(model_id):
