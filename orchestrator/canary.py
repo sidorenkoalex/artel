@@ -132,6 +132,7 @@ from . import (alerts, answer, artifact_branch, artifact_source, artifacts,
               auto, budget, catalog, cleanup, config, fsm, gitcmd, models,
               roles, runner, store, workspace, yamlmini)
 from .pool_seal import _pool_dir
+from .providers import codex as codex_provider
 
 CANARY_MARK_ACTOR = "canary"
 
@@ -358,19 +359,52 @@ _CLONE_EXEMPT_CONFIG_ATTRS = {
 }
 
 
+#: Указатель связки ключей внутри дома роли — ОТНОСИТЕЛЬНЫМ путём (SPEC
+#: 01M3HST1381E1FZCYAN2TSB1F3, требование 1). Абсолютный адрес считается в
+#: момент обращения (`config.ROLE_HOME / _KEYCHAIN_POINTER_REL`): снаружи
+#: блока клона то же выражение даёт указатель ПУЛЬТА, внутри — указатель
+#: КЛОНА, потому что `ROLE_HOME` там уже переадресован
+#: (`_CLONE_CONFIG_ATTRS`). Абсолютной константой в `config.py` это заводить
+#: незачем: её значение всё равно пересчитывалось бы от `ROLE_HOME`, а
+#: инвариант `tests/test_canary.py::CloneConfigAttrsInvariantTest` требовал
+#: бы записи в один из двух списков переадресации — учёта пути, у которого
+#: своего адреса нет.
+#:
+#: Сам файл — настройки, не секрет: в нём лежит ПУТЬ к связке ключей, по
+#: которому `codex` её ищет (`$HOME/Library/Preferences`, см.
+#: `CodexProvider.environment`), а токены остаются в самой связке, которую
+#: пульт не читает и не пишет.
+_KEYCHAIN_POINTER_REL = Path("Library/Preferences/com.apple.security.plist")
+
+#: Вход Codex, который прогон переносит в эфемерный клон (SPEC
+#: 01M3HST1381E1FZCYAN2TSB1F3, требования 1/4): `role` — роль, которой
+#: зовётся проверка входа домом клона (первая по алфавиту из идущих
+#: провайдером Codex — `CodexProvider.environment` роль не читает, и
+#: аргумент нужен только для воспроизводимости строки отказа), `pointer` —
+#: БАЙТЫ указателя связки ключей дома роли пульта, прочитанные ДО клона.
+#:
+#: Байты, а не путь: читаемость указателя обязана выясниться до клона
+#: (требование 3), то есть прочитать его снаружи всё равно нужно — и второе
+#: чтение внутри клона могло бы отказать там, где отказывать уже нельзя.
+CodexCloneAuth = namedtuple("CodexCloneAuth", "role pointer")
+
 #: План прогона по набору ролей (SPEC 01M3FQ2Z2PY0E9T5F5WQ207NP5):
 #: `name` — имя набора (им ключуются бейзлайн и строка прогона),
 #: `entries` — записи набора «роль -> `models.CanarySetRole`»,
 #: `layer_text` — готовый текст локального слоя эфемерного клона (`None` —
 #: слой клона остаётся шаблоном, ветка набора по умолчанию),
-#: `summary` — сводка «роль -> модель» прогона для строки журнала и вывода.
-CanarySetPlan = namedtuple("CanarySetPlan", "name entries layer_text summary")
+#: `summary` — сводка «роль -> модель» прогона для строки журнала и вывода,
+#: `codex_roles` — роли прогона, идущие провайдером Codex (SPEC
+#: 01M3HST1381E1FZCYAN2TSB1F3, требование 2), отсортированные по алфавиту;
+#: пустой кортеж — переноса указателя и проверки входа не будет вовсе.
+CanarySetPlan = namedtuple("CanarySetPlan",
+                           "name entries layer_text summary codex_roles")
 
 #: План набора ПО УМОЛЧАНИЮ: локального слоя пульта не читает вовсе и в
 #: `canary_sets:` не заглядывает (требование 3, AC-14) — прогон без `--set`
 #: обязан воспроизводить сегодняшнее поведение байт-в-байт на пульте,
 #: который наборов не заводил.
-_DEFAULT_SET_PLAN = CanarySetPlan(config.CANARY_DEFAULT_SET, {}, None, "")
+_DEFAULT_SET_PLAN = CanarySetPlan(config.CANARY_DEFAULT_SET, {}, None, "", ())
 
 
 def _set_plan(set_name: str) -> CanarySetPlan:
@@ -403,7 +437,8 @@ def _set_plan(set_name: str) -> CanarySetPlan:
     return CanarySetPlan(
         set_name, entries,
         _clone_local_layer_text(set_name, tiers, affected, catalog_data),
-        _set_summary(tiers, affected))
+        _set_summary(tiers, affected),
+        _codex_roles(tiers, affected, catalog_data))
 
 
 def _set_tiers_or_exit(set_name: str, entries: dict, catalog_data) -> dict:
@@ -482,6 +517,25 @@ def _set_summary(tiers: dict, affected: dict) -> str:
     git, и по его сегодняшнему тексту прошлый прогон не восстановить."""
     return ", ".join(f"{role} → {tiers[affected[role]]}"
                     for role in sorted(affected))
+
+
+def _codex_roles(tiers: dict, affected: dict, catalog_data) -> tuple:
+    """Роли прогона, идущие провайдером Codex (SPEC
+    01M3HST1381E1FZCYAN2TSB1F3, требование 2), по алфавиту.
+
+    Считается по `affected` (`_roles_of_tiers`), а не по записям самого
+    набора: ярус сдвигается целиком, поэтому роль-сосед по ярусу идёт
+    провайдером набора, названа она в нём или нет — и её шаг в клоне тоже
+    требует входа. Тот же перечень, который `_clone_local_layer_text`
+    кладёт в `role_providers:` слоя клона, просто названный отдельно.
+
+    Имя провайдера — из реестра (`codex_provider.CLI_NAME`), не литералом:
+    так же его спрашивает `doctor/preflight.py`, и переименование
+    провайдера не должно расходиться по двум местам.
+    """
+    return tuple(role for role in sorted(affected)
+                if catalog_data.models[tiers[affected[role]]].provider
+                == codex_provider.CLI_NAME)
 
 
 def _scalar_text(value: str) -> str:
@@ -566,9 +620,94 @@ def _pult_overrides(model_ids) -> dict:
             if model_id in local.overrides}
 
 
+def _codex_clone_auth(plan: CanarySetPlan) -> CodexCloneAuth | None:
+    """Вход Codex для эфемерного клона — либо ИМЕНОВАННЫЙ ОТКАЗ (SPEC
+    01M3HST1381E1FZCYAN2TSB1F3, требование 3). `None` — ни одна роль
+    прогона не идёт провайдером Codex: дом клона не меняется, проверка
+    входа не зовётся, поведение прежнее байт-в-байт (требование 2).
+
+    Зовётся в `cmd_canary` сразу после `_set_plan` — та же стадия, что у
+    отказов по битому набору: до `_resolve_target_sha` (сеть) и до первого
+    `_ephemeral_clone`, то есть за несделанный однократный шаг Оператора
+    пульт не платит ни обращением к сети, ни `git clone`, ни заведённой
+    задачей. ВНУТРЬ `_set_plan` эта проверка не ставится намеренно: тот
+    разбирает набор и файловой системы не касается вовсе, а его
+    собственные тесты (`tests/test_canary_sets.py`) зовут его на наборах
+    Codex в песочнице, где дома роли с указателем нет и быть не должно.
+
+    Указатель читается РОВНО один раз и здесь: это одновременно и
+    проверка «файла нет или он не читается» (любой `OSError` — нет файла,
+    каталог вместо файла, нет прав), и сам payload копии, которую положит
+    `_install_codex_pointer` внутри клона. Второе чтение уже из блока
+    клона могло бы отказать там, где отказывать поздно.
+    """
+    if not plan.codex_roles:
+        return None
+    # Импорт отложенный (пакет `doctor` импортирует этот модуль) и стоит до
+    # чтения, а не в ветке отказа: рецепт нужен только отказу, но импорт
+    # полупакета на пути обработки ошибки — лишняя причина отказа отказать.
+    from . import doctor
+    pointer = config.ROLE_HOME / _KEYCHAIN_POINTER_REL
+    try:
+        payload = pointer.read_bytes()
+    except OSError as exc:
+        sys.exit(f"canary: набор {plan.name} ведёт провайдером "
+                 f"{codex_provider.CLI_NAME} роли "
+                 f"{', '.join(plan.codex_roles)}, а указатель связки ключей "
+                 f"дома роли пульта не прочитан ({exc}): {pointer} — без "
+                 f"него `codex login status` домом эфемерного клона искал бы "
+                 f"связку не там, где её нашёл вход Оператора, и шаг роли "
+                 f"упал бы авторизацией до первого токена. "
+                 f"{doctor.CODEX_AUTH_RECIPE}")
+    return CodexCloneAuth(plan.codex_roles[0], payload)
+
+
+def _install_codex_pointer(payload: bytes) -> None:
+    """Кладёт указатель связки ключей в дом роли КЛОНА тем же
+    относительным путём (SPEC 01M3HST1381E1FZCYAN2TSB1F3, требование 1).
+
+    Ровно один файл и никакого `Library/` помимо него: копией каталога
+    (`copytree` на `Library/` или на `Library/Preferences/`) в клон уехали
+    бы и соседние plist'ы, и содержимое каталога связок — ровно та
+    изоляция (требование 5), которую задача обязана сохранить.
+
+    `config.ROLE_HOME` читается ЗДЕСЬ, изнутри блока клона: снаружи то же
+    имя указывает на дом роли пульта, и копия легла бы обратно в пульт.
+    """
+    target = config.ROLE_HOME / _KEYCHAIN_POINTER_REL
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_bytes(payload)
+
+
+def _refuse_unless_clone_logged_in(role: str) -> None:
+    """Проверяет вход Codex домом роли КЛОНА и отказывает до первого шага
+    роли, если он не подтверждён (SPEC 01M3HST1381E1FZCYAN2TSB1F3,
+    требование 4).
+
+    Тем же узлом, что `doctor` (`doctor.check_codex_chatgpt_auth`), а не
+    своей копией его логики: расхождение копилось бы молча — `ok` у
+    канарейки при красной строке `doctor` или наоборот.
+
+    Импорт отложенный, потому что пакет `orchestrator/doctor` импортирует
+    этот модуль (тот же приём и по той же причине, что в
+    `catalog.py`/`runner.py`).
+
+    В отказ идут имя проверки и её `detail` целиком, а не своя
+    формулировка: `detail` несёт рецепт `CODEX_AUTH_RECIPE` с двумя
+    однократными шагами Оператора, которыми красная строка и чинится.
+    """
+    from . import doctor
+    check = doctor.check_codex_chatgpt_auth(role)
+    if check.status != "ok":
+        sys.exit(f"canary: вход Codex домом роли эфемерного клона не "
+                 f"подтверждён — шаг роли упал бы авторизацией за деньги. "
+                 f"{check.name}: {check.detail}")
+
+
 @contextmanager
 def _ephemeral_clone(target_sha: str | None = None,
-                    local_layer_text: str | None = None):
+                    local_layer_text: str | None = None,
+                    codex_auth: CodexCloneAuth | None = None):
     """Заводит эфемерный клон пульта на время блока: собственный рабочий
     каталог, собственная БД состояния, собственный origin-заглушка
     (требование 2, AC-2) — и убирает его по выходу из блока, включая
@@ -629,6 +768,21 @@ def _ephemeral_clone(target_sha: str | None = None,
     остаётся ровно шаблоном, который кладёт `cmd_init`, то есть прежнее
     поведение байт-в-байт (требование 3, AC-14).
 
+    `codex_auth` (SPEC 01M3HST1381E1FZCYAN2TSB1F3, требования 1/4) — вход
+    Codex для клона: указатель связки ключей копируется в дом роли КЛОНА, и
+    вход домом клона проверяется узлом `doctor`; не `ok` — отказ до
+    `yield`, то есть до заведения задачи и до первого шага роли. `None` (по
+    умолчанию) — ни одна роль прогона не идёт провайдером Codex, дом клона
+    остаётся ровно тем, что развернул холодный старт (требование 2).
+
+    Оба действия — ПОСЛЕ `catalog.cmd_init()` и ВНУТРИ `try:`, и ни то, ни
+    другое не переставимо. После `cmd_init()`: `catalog._deploy_role_home_
+    reference` выходит первой же строкой на существующем `ROLE_HOME`, и
+    указатель, положенный раньше, лишил бы роли клона курируемого дома
+    целиком. Внутри `try:`: `finally` ниже — единственная уборка клона, и
+    отказ проверки входа обязан оставить `/tmp` чистым, а скопированный
+    указатель не обязан пережить прогон.
+
     `tempfile.mkdtemp`/`shutil.rmtree` — единственные стандартные
     способы завести/убрать временный каталог в CPython (перехватываются
     приёмочной песочницей этой задачи, `_EphemeralDirTracker`, тем же
@@ -674,6 +828,9 @@ def _ephemeral_clone(target_sha: str | None = None,
         if local_layer_text is not None:
             config.MODELS_LOCAL.parent.mkdir(parents=True, exist_ok=True)
             config.MODELS_LOCAL.write_text(local_layer_text, encoding="utf-8")
+        if codex_auth is not None:
+            _install_codex_pointer(codex_auth.pointer)
+            _refuse_unless_clone_logged_in(codex_auth.role)
         yield dest
     finally:
         for attr, value in saved.items():
@@ -1461,10 +1618,11 @@ def _sha_label(target_sha: str, origin_sha: str | None) -> str:
     return f"код {target_sha}"
 
 
-def _run_task_in_ephemeral_clone(template_path: Path, run_stamp: str,
-                                 explicit_target_sha: str | None,
-                                 outer_root: Path,
-                                 layer_text: str | None = None) -> tuple:
+def _run_task_in_ephemeral_clone(
+        template_path: Path, run_stamp: str,
+        explicit_target_sha: str | None, outer_root: Path,
+        layer_text: str | None = None,
+        codex_auth: CodexCloneAuth | None = None) -> tuple:
     """Фаза 1 из 3 (требование 6) `_run_one_task`: заводит и ведёт ОДНУ
     канареечную задачу в собственном эфемерном клоне на checkout'е
     `explicit_target_sha` (требование 1/2), сохраняя диагностику, пока
@@ -1476,6 +1634,10 @@ def _run_task_in_ephemeral_clone(template_path: Path, run_stamp: str,
     локальный слой клона, собранный из набора ролей; `None` — слой клона
     остаётся шаблоном `models.LOCAL_TEMPLATE`, как его кладёт
     `catalog.cmd_init()` (набор по умолчанию, AC-14).
+
+    `codex_auth` (SPEC 01M3HST1381E1FZCYAN2TSB1F3) — вход Codex для клона
+    (указатель связки ключей и проверка входа домом клона); `None` — ни
+    одна роль прогона не идёт провайдером Codex.
 
     Создание задачи и её вождение — с подавленным stdout
     (`redirect_stdout`): между строкой «заведена» (печатается вызывающим
@@ -1493,8 +1655,10 @@ def _run_task_in_ephemeral_clone(template_path: Path, run_stamp: str,
     # `_ephemeral_clone` нульарной функцией — вызов с ЛЮБЫМ позиционным
     # аргументом (даже `None`) упал бы `TypeError` на этом моке.
     clone_ctx = (_ephemeral_clone()
-                if explicit_target_sha is None and layer_text is None
-                else _ephemeral_clone(explicit_target_sha, layer_text))
+                if (explicit_target_sha is None and layer_text is None
+                    and codex_auth is None)
+                else _ephemeral_clone(explicit_target_sha, layer_text,
+                                      codex_auth))
     with clone_ctx:
         conn = store.db()
         with redirect_stdout(io.StringIO()):
@@ -1624,7 +1788,8 @@ def _baseline_deviation_note(outer_conn, task_id: str, title: str,
 def _run_one_task(template_path: Path, run_stamp: str, ratio: float,
                   target_sha: str | None = None,
                   sha_label: str | None = None,
-                  plan: CanarySetPlan | None = None) -> None:
+                  plan: CanarySetPlan | None = None,
+                  codex_auth: CodexCloneAuth | None = None) -> None:
     """Полный цикл одной канареечной задачи: заводит, ведёт в собственном
     эфемерном клоне на checkout'е `target_sha` (требование 1/2), пишет
     метрики/бейзлайн в БД пульта СНАРУЖИ клона (требование 5, 9) и
@@ -1662,15 +1827,25 @@ def _run_one_task(template_path: Path, run_stamp: str, ratio: float,
     `cmd_canary` без `--set`, так и для залоченной планки задачи
     01M1SC3Y20YBTTJVQDJBF2NDQW, зовущей эту функцию тремя позиционными
     аргументами.
+
+    `codex_auth` (SPEC 01M3HST1381E1FZCYAN2TSB1F3) — вход Codex для клона,
+    собранный `_codex_clone_auth` ДО клона; `None` — ни одна роль прогона
+    не идёт провайдером Codex.
     """
     plan = plan or _DEFAULT_SET_PLAN
     explicit_target_sha = target_sha
     outer_root = config.ROOT
 
+    # `codex_auth` доезжает до фазы 1 ТОЛЬКО когда он есть — тот же довод,
+    # что у развилки `clone_ctx` внутри неё: залоченная планка
+    # 01M3GKJFN90ATK2KECNDZXPPP6 подменяет фазу 1 фикстурой с пятью
+    # параметрами, и шестой аргумент уронил бы её `TypeError` даже значением
+    # `None`.
+    phase_one_extra = {} if codex_auth is None else {"codex_auth": codex_auth}
     (task_id, title, expected, steps, metrics, actual, mismatch,
      normal_outcome, diag_dir) = _run_task_in_ephemeral_clone(
         template_path, run_stamp, explicit_target_sha, outer_root,
-        plan.layer_text)
+        plan.layer_text, **phase_one_extra)
 
     print(f"[canary] {task_id} заведена из {template_path.name}")
 
@@ -1745,6 +1920,12 @@ def cmd_canary(*, k: int, sha: str | None = None,
     # битый набор Оператор не платит ни обращением к сети, ни `git clone`,
     # ни заведённой задачей.
     plan = _set_plan(set_name)
+    # Вход Codex для клона — здесь же, на той же стадии (SPEC
+    # 01M3HST1381E1FZCYAN2TSB1F3, требование 3): за несделанный однократный
+    # шаг Оператора пульт тоже не платит ни сетью, ни `git clone`, ни
+    # заведённой задачей. `None` — ни одна роль прогона не идёт провайдером
+    # Codex, и дальше всё идёт байт-в-байт как до этой задачи.
+    codex_auth = _codex_clone_auth(plan)
 
     target_sha, origin_sha = _resolve_target_sha(sha)
     sha_label = _sha_label(target_sha, origin_sha)
@@ -1761,5 +1942,5 @@ def cmd_canary(*, k: int, sha: str | None = None,
          f"({sha_label}), набор {plan.name}{_summary_note(plan)}")
     for template_path in templates:
         _run_one_task(template_path, run_stamp, config.CANARY_DEVIATION_RATIO,
-                      target_sha, sha_label, plan)
+                      target_sha, sha_label, plan, codex_auth)
     print(f"[canary] прогон {run_stamp} завершён")
