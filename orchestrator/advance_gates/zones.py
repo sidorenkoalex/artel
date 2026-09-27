@@ -51,16 +51,27 @@ def _protected_path_refusal_detail(paths: list[str]) -> str:
            f"PLAN (unified-дифф)")
 
 
+# Маркер строки путей раздела «## Расширение зон» PLAN.md (ANSWER-1.md,
+# п.1) — не мандат Оператора, но тот же формат строки, поэтому разбирается
+# тем же узлом (REVIEW итерация 1, R1-F3).
+_PLAN_PATHS_MARKER = "Пути:"
+
+
 def _plan_zones_extension_paths(plan_text: str) -> list[str] | None:
     """Пути раздела `## Расширение зон` PLAN.md (ANSWER-1.md, п.1: строка
     `Пути: <путь1>, <путь2>`). `None` — раздела нет вовсе, либо в нём нет
     строки `Пути:` — исключение AC-3 не применяется, дифф сверяется только
-    с `zones`/`zones_extension`/`COMMON_ZONES` (обычный AC-1)."""
+    с `zones`/`zones_extension`/`COMMON_ZONES` (обычный AC-1).
+
+    Строку разбирает тот же узел `mandate.elements`, что и строки мандатов
+    (REVIEW итерация 1, R1-F3): формат у них один — «маркер, дальше пути
+    через запятую», и держать рядом с общим узлом вторую копию правила
+    разбора значит снова развести их первой же правкой."""
     body = guard.section_body(plan_text, "Расширение зон")
     for line in body.splitlines():
-        line = line.strip()
-        if line.startswith("Пути:"):
-            return _split_zone_paths(line[len("Пути:"):])
+        found = elements(line, _PLAN_PATHS_MARKER)
+        if found is not None:
+            return found
     return None
 
 

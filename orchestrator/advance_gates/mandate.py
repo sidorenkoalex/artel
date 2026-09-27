@@ -91,6 +91,17 @@ def _looks_like_path(text: str) -> bool:
     return ".." not in text.split("/")
 
 
+def in_weakening_scope(path: str) -> bool:
+    """Путь принадлежит области гейта неослабления тестов — `tests/**/*.py`
+    на любой глубине. Формула живёт здесь, а `test_integrity._in_scope`
+    её зовёт: проверка при записи обязана отказывать ровно тому, что гейт
+    ЗАВЕДОМО не засчитает (REVIEW итерация 1, R1-F2). Элемент «tests/» или
+    «tests/fixtures/data.json» под областью не лежит, с находкой гейта
+    (сверка точным вхождением) не совпадёт никогда — и без этого правила
+    молча не срабатывал бы ровно так же, как элемент-пояснение 26.09."""
+    return bool(path) and path.startswith("tests/") and path.endswith(".py")
+
+
 def _qualified_name_ok(name: str) -> bool:
     """Часть элемента мандата ослабления за `::` — непустая цепочка имён
     питона через тот же разделитель (`<Класс>`, `<Класс>::<метод>`), в той
@@ -137,9 +148,9 @@ def _element_refusal(element: str, marker: str,
         path, sep, name = element.partition(guard.TEST_NAME_SEP)
         if not _looks_like_path(path):
             return "не похож на путь репозитория"
-        if not path.startswith("tests/"):
-            return ("путь не под tests/ — гейт неослабления тестов смотрит "
-                    "только tests/**/*.py")
+        if not in_weakening_scope(path):
+            return ("путь вне области tests/**/*.py — гейт неослабления "
+                    "тестов другие пути не рассматривает")
         if sep and not _qualified_name_ok(name):
             return f"нарушена форма «путь{guard.TEST_NAME_SEP}имя»"
         # Существование пути тут не проверяется СОЗНАТЕЛЬНО (требование 2б

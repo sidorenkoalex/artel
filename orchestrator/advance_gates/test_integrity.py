@@ -29,7 +29,8 @@ from ._base import GateRefusal, _run_gates
 # узле разбора строки мандата (SPEC 01M3GKJBXEBHB6ZA48J7VG8Z8W, требование
 # 1); импорт сюда сохраняет прежнее имя `test_integrity.
 # TEST_WEAKENING_MANDATE_MARKER` рабочим для `fsm_advance` и тестов.
-from .mandate import TEST_WEAKENING_MANDATE_MARKER, elements
+from .mandate import (TEST_WEAKENING_MANDATE_MARKER, elements,
+                      in_weakening_scope)
 from .zones import _answer_commit_is_role_step_autocommit
 
 # Именованное действие отказа — общее для перехода и для эскалации на
@@ -90,8 +91,14 @@ def _in_scope(path) -> bool:
     фильтре можно было бы удалить вне поля зрения рубежа. Файлы планок
     `tasks/*/acceptance_tests` под `tests/` не лежат и в область не входят
     — их держит лок планки (AC-5).
+
+    Сама формула живёт в `mandate.in_weakening_scope` — общий узел с
+    проверкой элемента мандата при записи ответа (REVIEW итерация 1,
+    R1-F2): область гейта и правило годности элемента обязаны совпадать,
+    иначе элемент вида `tests/fixtures/data.json` записывается без отказа
+    и молча не срабатывает.
     """
-    return bool(path) and path.startswith("tests/") and path.endswith(".py")
+    return in_weakening_scope(path)
 
 
 def _pair(status: str, first: str, second):
