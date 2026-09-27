@@ -16,9 +16,7 @@ roles:
                                   # именованно)
     token_slot: artel-analyst
     skills: [conventions-core, escalation-rules, spec-authoring]
-    model_tier: standard          # ярус -> модель: .artel/models.yaml (tiers);
-                                  # standard — пробная роль на Codex, решение
-                                  # Оператора 27.09.2026 (план провайдеров, 7.1)
+    model_tier: strong            # ярус -> модель: .artel/models.yaml (tiers)
   test_author:
     executor: agent              # A4 (tasks/T023): приёмочные тесты до кода
     token_slot: artel-test-author
