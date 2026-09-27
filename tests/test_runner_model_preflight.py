@@ -38,7 +38,8 @@ from tests.sandbox import (DeveloperBriefTmpRootTest, FakeProc,  # noqa: E402
                            capture_new_task_id, disk_backed_ls_tree_files,
                            disk_backed_show, fake_git, is_claude_call,
                            sync_spec_from_worktree)
-from tests.test_runner_role_model import _roles_yaml_text  # noqa: E402
+from tests.test_runner_role_model import (_roles_yaml_text,  # noqa: E402
+                                          _tiers_text)
 
 TABLE_MODEL = "claude-fable-5-1"
 UNKNOWN_MODEL = "claude-test-model-vne-kataloga"
@@ -142,12 +143,16 @@ class _StepSandbox(DeveloperBriefTmpRootTest):
 
     def set_model(self, model) -> None:
         """Модель шага: ярус у роли (`roles.yaml`) плюс модель яруса в
-        локальном слое — цепочка целиком, как её видит `run`."""
+        локальном слое — цепочка целиком, как её видит `run`.
+
+        Слой называет модель у КАЖДОГО яруса (`_tiers_text`): ярус
+        подменяется только у роли под тестом, а роли, которых он не
+        называет, приходят из боевого `roles.yaml` со своими ярусами
+        (SPEC 01M3H5FEXH5M9HGZYT3BCDX5C4, требование 1)."""
         path = self.root / "roles-under-test.yaml"
         path.write_text(_roles_yaml_text(self.ROLE, TIER), encoding="utf-8")
         self.patch(config, "ROLES", path)
-        config.MODELS_LOCAL.write_text(f"tiers:\n  {TIER}: {model}\n",
-                                       encoding="utf-8")
+        config.MODELS_LOCAL.write_text(_tiers_text(model), encoding="utf-8")
 
     def set_no_tier(self) -> None:
         """Роль без `model_tier` — сценарий требования 5."""
@@ -375,7 +380,12 @@ class RoleWithoutTierTest(_StepSandbox):
 
 class TierWithoutModelTest(_StepSandbox):
     """Требование 8 (AC-11): ярус роли не назван в `tiers:` локального
-    слоя."""
+    слоя.
+
+    Слой здесь пишется поверх `set_model` ОДНИМ ярусом сознательно:
+    непокрытый ярус роли и есть предмет проверки, и покрытие всех ярусов
+    перечня (SPEC 01M3H5FEXH5M9HGZYT3BCDX5C4, требование 3) на него не
+    распространяется — иначе сценарию нечего было бы проверять."""
 
     def setUp(self):
         super().setUp()
@@ -405,8 +415,8 @@ class BrokenLocalLayerTest(_StepSandbox):
         # (штатно — потому что отказ уже случился раньше), и проверяется
         # здесь, что раньше он ДЕЙСТВИТЕЛЬНО случается.
         config.MODELS_LOCAL.write_text(
-            f"tiers:\n  {TIER}: {TABLE_MODEL}\n"
-            f"overrides:\n  {TABLE_MODEL}:\n    source: без цен\n",
+            _tiers_text(TABLE_MODEL)
+            + f"overrides:\n  {TABLE_MODEL}:\n    source: без цен\n",
             encoding="utf-8")
 
     def test_unparsed_local_layer_refuses_before_the_agent(self):
