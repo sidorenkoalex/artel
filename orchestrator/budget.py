@@ -2,6 +2,8 @@
 import sqlite3
 import sys
 
+from scripts import guard
+
 from . import alerts, config, gitcmd, lease, retro, spend, store
 
 # Действие журнала, которым `enforce_budget` фиксирует sha головы кодовой
@@ -151,12 +153,17 @@ def count_zone_paths(text: str | None) -> int:
     01M1TQ11K4WJZD7ZE3MR0J4ZK4, требования 2-3) — общий разбор и для
     frontmatter `zones:` SPEC (гейт SPEC), и для строки «Зоны: ...» ТЗ
     (`new`, где текст предложения может нести завершающую точку сразу
-    за последним путём)."""
-    if not text:
-        return 0
-    return len([p for p in
-               (piece.strip().rstrip(".") for piece in text.split(","))
-               if p])
+    за последним путём).
+
+    Разбор — ТОТ ЖЕ, что у остальных потребителей строки зон
+    (`guard.zone_line_items`, SPEC 01M3H3JW9XE1THF0HK8RESZ0CV, требование
+    2): своего деления по запятым здесь больше нет, и путь, разорванный
+    вёрсткой ТЗ, не даёт лишней зоны. Именно `zone_line_items`, а не
+    `guard.zone_items`: последний добавляет кандидаты упоминаний путей из
+    той же строки, и пояснение в скобках рядом с зоной («scripts/guard.py
+    (см. docs/stack.md)») удвоило бы число зон — калибровка бюджета
+    считает элементы перечня, а не все упомянутые пути."""
+    return len(guard.zone_line_items(text))
 
 
 def spent_with_estimate(t: sqlite3.Row) -> float:

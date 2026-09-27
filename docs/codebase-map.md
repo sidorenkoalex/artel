@@ -1,5 +1,5 @@
 ---
-built_at_sha: b35e6baf2ceb943bc8928f4f138fed4afbc9aa5b
+built_at_sha: 315dec3d189f93104b8452a38c364f0cfa239feb
 ---
 
 # Codebase-map пульта
@@ -308,9 +308,9 @@ built_at_sha: b35e6baf2ceb943bc8928f4f138fed4afbc9aa5b
 - `spec_budget`
 - `spent_with_estimate`
 
-**Импортирует:** `orchestrator/alerts.py`, `orchestrator/config.py`, `orchestrator/gitcmd.py`, `orchestrator/lease.py`, `orchestrator/retro.py`, `orchestrator/runner.py`, `orchestrator/spend.py`, `orchestrator/store.py`
+**Импортирует:** `orchestrator/alerts.py`, `orchestrator/config.py`, `orchestrator/gitcmd.py`, `orchestrator/lease.py`, `orchestrator/retro.py`, `orchestrator/runner.py`, `orchestrator/spend.py`, `orchestrator/store.py`, `scripts/guard.py`
 
-**Импортируется:** `orchestrator/advance_gates/review.py`, `orchestrator/artel.py`, `orchestrator/auto.py`, `orchestrator/catalog.py`, `orchestrator/fsm.py`, `orchestrator/fsm_advance.py`, `orchestrator/fsm_autogate.py`, `orchestrator/runner.py`, `tests/test_artifact_escalation_marker.py`, `tests/test_auto_cycle.py`, `tests/test_budget_calibration_table.py`, `tests/test_budget_live_lease_and_escalation.py`, `tests/test_doctor.py`, `tests/test_fsm_autogate.py`, `tests/test_fsm_review_rework_sha_gate.py`, `tests/test_invariants.py`, `tests/test_multitarget.py`, `tests/test_multitarget_invariants.py`, `tests/test_program_spend_reseed.py`, `tests/test_spec_budget.py`, `tests/test_step_cost.py`
+**Импортируется:** `orchestrator/advance_gates/review.py`, `orchestrator/artel.py`, `orchestrator/auto.py`, `orchestrator/catalog.py`, `orchestrator/fsm.py`, `orchestrator/fsm_advance.py`, `orchestrator/fsm_autogate.py`, `orchestrator/runner.py`, `tests/test_artifact_escalation_marker.py`, `tests/test_auto_cycle.py`, `tests/test_budget_calibration_table.py`, `tests/test_budget_live_lease_and_escalation.py`, `tests/test_doctor.py`, `tests/test_fsm_autogate.py`, `tests/test_fsm_review_rework_sha_gate.py`, `tests/test_invariants.py`, `tests/test_multitarget.py`, `tests/test_multitarget_invariants.py`, `tests/test_program_spend_reseed.py`, `tests/test_spec_budget.py`, `tests/test_step_cost.py`, `tests/test_zone_line_parse.py`
 
 ## orchestrator/canary.py
 
@@ -339,7 +339,7 @@ built_at_sha: b35e6baf2ceb943bc8928f4f138fed4afbc9aa5b
 
 **Импортирует:** `orchestrator/alerts.py`, `orchestrator/artifact_branch.py`, `orchestrator/artifacts.py`, `orchestrator/budget.py`, `orchestrator/config.py`, `orchestrator/gitcmd.py`, `orchestrator/idgen.py`, `orchestrator/liveness.py`, `orchestrator/merge_queue.py`, `orchestrator/models.py`, `orchestrator/pool_seal.py`, `orchestrator/retro.py`, `orchestrator/runner.py`, `orchestrator/store.py`, `orchestrator/yamlmini.py`, `orchestrator/zone_lock.py`, `scripts/guard.py`
 
-**Импортируется:** `orchestrator/artel.py`, `orchestrator/canary.py`, `orchestrator/fsm.py`, `tests/sandbox.py`, `tests/test_acceptance_tests_flow.py`, `tests/test_advance_guard.py`, `tests/test_agent_failure.py`, `tests/test_agent_log.py`, `tests/test_agent_prompt.py`, `tests/test_amend.py`, `tests/test_analyst_role.py`, `tests/test_answer_gate.py`, `tests/test_artel_role_restricted_commands.py`, `tests/test_auto_cycle.py`, `tests/test_branch_freshness_gate.py`, `tests/test_canary.py`, `tests/test_catalog_new_race.py`, `tests/test_catalog_pin_divergence.py`, `tests/test_catalog_spawn_subtask.py`, `tests/test_catalog_status_log.py`, `tests/test_catalog_tz_path_check.py`, `tests/test_catalog_tz_zones_parsing.py`, `tests/test_catalog_wave_breaker_status.py`, `tests/test_catalog_zone_overlap.py`, `tests/test_coldstart.py`, `tests/test_doctor.py`, `tests/test_fsm_branch_correct_status_reads.py`, `tests/test_fsm_merge_gate_done_snapshot.py`, `tests/test_git_fixation.py`, `tests/test_invariants.py`, `tests/test_kill_cleanup.py`, `tests/test_lease.py`, `tests/test_merge_gate_ci_wait.py`, `tests/test_merge_lock.py`, `tests/test_merge_queue.py`, `tests/test_models_doctor.py`, `tests/test_multitarget.py`, `tests/test_multitarget_invariants.py`, `tests/test_parent_task_division.py`, `tests/test_pause_now.py`, `tests/test_plan_appendix.py`, `tests/test_providers.py`, `tests/test_providers_codex.py`, `tests/test_prune.py`, `tests/test_review_freshness.py`, `tests/test_review_package.py`, `tests/test_runner_model_preflight.py`, `tests/test_runner_role_model.py`, `tests/test_slugify.py`, `tests/test_spec_budget.py`, `tests/test_stack_zones_pull_section.py`, `tests/test_step_cost.py`, `tests/test_task_id_prefix_regression.py`, `tests/test_workspace.py`
+**Импортируется:** `orchestrator/artel.py`, `orchestrator/canary.py`, `orchestrator/fsm.py`, `tests/sandbox.py`, `tests/test_acceptance_tests_flow.py`, `tests/test_advance_guard.py`, `tests/test_agent_failure.py`, `tests/test_agent_log.py`, `tests/test_agent_prompt.py`, `tests/test_amend.py`, `tests/test_analyst_role.py`, `tests/test_answer_gate.py`, `tests/test_artel_role_restricted_commands.py`, `tests/test_auto_cycle.py`, `tests/test_branch_freshness_gate.py`, `tests/test_canary.py`, `tests/test_catalog_new_race.py`, `tests/test_catalog_pin_divergence.py`, `tests/test_catalog_spawn_subtask.py`, `tests/test_catalog_status_log.py`, `tests/test_catalog_tz_path_check.py`, `tests/test_catalog_tz_zones_parsing.py`, `tests/test_catalog_wave_breaker_status.py`, `tests/test_catalog_zone_overlap.py`, `tests/test_coldstart.py`, `tests/test_doctor.py`, `tests/test_fsm_branch_correct_status_reads.py`, `tests/test_fsm_merge_gate_done_snapshot.py`, `tests/test_git_fixation.py`, `tests/test_invariants.py`, `tests/test_kill_cleanup.py`, `tests/test_lease.py`, `tests/test_merge_gate_ci_wait.py`, `tests/test_merge_lock.py`, `tests/test_merge_queue.py`, `tests/test_models_doctor.py`, `tests/test_multitarget.py`, `tests/test_multitarget_invariants.py`, `tests/test_parent_task_division.py`, `tests/test_pause_now.py`, `tests/test_plan_appendix.py`, `tests/test_providers.py`, `tests/test_providers_codex.py`, `tests/test_prune.py`, `tests/test_review_freshness.py`, `tests/test_review_package.py`, `tests/test_runner_model_preflight.py`, `tests/test_runner_role_model.py`, `tests/test_slugify.py`, `tests/test_spec_budget.py`, `tests/test_stack_zones_pull_section.py`, `tests/test_step_cost.py`, `tests/test_task_id_prefix_regression.py`, `tests/test_workspace.py`, `tests/test_zone_line_parse.py`
 
 ## orchestrator/checkpoint.py
 
@@ -1675,10 +1675,11 @@ built_at_sha: b35e6baf2ceb943bc8928f4f138fed4afbc9aa5b
 - `unclassified_paths`
 - `unclassified_paths_refusal`
 - `zone_items`
+- `zone_line_items`
 
 **Импортирует:** `orchestrator/config.py`, `orchestrator/spend.py`, `orchestrator/yamlmini.py`, `orchestrator/zone_lock.py`
 
-**Импортируется:** `orchestrator/acceptance.py`, `orchestrator/advance_gates/acceptance.py`, `orchestrator/advance_gates/mandate.py`, `orchestrator/advance_gates/plan_appendix.py`, `orchestrator/advance_gates/review.py`, `orchestrator/advance_gates/test_integrity.py`, `orchestrator/advance_gates/tests_writing.py`, `orchestrator/advance_gates/zones.py`, `orchestrator/amend.py`, `orchestrator/canary.py`, `orchestrator/catalog.py`, `orchestrator/checkpoint.py`, `orchestrator/dry_run.py`, `orchestrator/fsm.py`, `orchestrator/fsm_advance.py`, `orchestrator/fsm_autogate.py`, `orchestrator/fsm_merge_gate.py`, `orchestrator/pull.py`, `orchestrator/retro.py`, `orchestrator/version.py`, `tests/test_acceptance_tests_flow.py`, `tests/test_analyst_role.py`, `tests/test_answer.py`, `tests/test_artifact_materialization.py`, `tests/test_catalog_tz_path_check.py`, `tests/test_fsm_autogate.py`, `tests/test_fsm_spec_gate_path_check.py`, `tests/test_guard_artifact_branch_mode.py`, `tests/test_guard_artifact_disk_read.py`, `tests/test_guard_division_section.py`, `tests/test_guard_extraneous_acceptance_files.py`, `tests/test_guard_mutation_claim.py`, `tests/test_guard_path_mentions.py`, `tests/test_guard_schema.py`, `tests/test_guard_split_signals.py`, `tests/test_guard_task_root_subdirectory.py`, `tests/test_guard_test_ast.py`, `tests/test_guard_zones.py`, `tests/test_id_format_guard.py`, `tests/test_invariants.py`, `tests/test_plan_appendix.py`, `tests/test_review_registry_gate.py`, `tests/test_version.py`, `tests/test_yaml_parsing.py`
+**Импортируется:** `orchestrator/acceptance.py`, `orchestrator/advance_gates/acceptance.py`, `orchestrator/advance_gates/mandate.py`, `orchestrator/advance_gates/plan_appendix.py`, `orchestrator/advance_gates/review.py`, `orchestrator/advance_gates/test_integrity.py`, `orchestrator/advance_gates/tests_writing.py`, `orchestrator/advance_gates/zones.py`, `orchestrator/amend.py`, `orchestrator/budget.py`, `orchestrator/canary.py`, `orchestrator/catalog.py`, `orchestrator/checkpoint.py`, `orchestrator/dry_run.py`, `orchestrator/fsm.py`, `orchestrator/fsm_advance.py`, `orchestrator/fsm_autogate.py`, `orchestrator/fsm_merge_gate.py`, `orchestrator/pull.py`, `orchestrator/retro.py`, `orchestrator/version.py`, `tests/test_acceptance_tests_flow.py`, `tests/test_analyst_role.py`, `tests/test_answer.py`, `tests/test_artifact_materialization.py`, `tests/test_catalog_tz_path_check.py`, `tests/test_fsm_autogate.py`, `tests/test_fsm_spec_gate_path_check.py`, `tests/test_guard_artifact_branch_mode.py`, `tests/test_guard_artifact_disk_read.py`, `tests/test_guard_division_section.py`, `tests/test_guard_extraneous_acceptance_files.py`, `tests/test_guard_mutation_claim.py`, `tests/test_guard_path_mentions.py`, `tests/test_guard_schema.py`, `tests/test_guard_split_signals.py`, `tests/test_guard_task_root_subdirectory.py`, `tests/test_guard_test_ast.py`, `tests/test_guard_zones.py`, `tests/test_id_format_guard.py`, `tests/test_invariants.py`, `tests/test_plan_appendix.py`, `tests/test_review_registry_gate.py`, `tests/test_version.py`, `tests/test_yaml_parsing.py`, `tests/test_zone_line_parse.py`
 
 ## scripts/stack_ci.py
 
@@ -3597,6 +3598,16 @@ built_at_sha: b35e6baf2ceb943bc8928f4f138fed4afbc9aa5b
 **Публичные функции:** (нет)
 
 **Импортирует:** `orchestrator/artifacts.py`, `orchestrator/config.py`, `orchestrator/models.py`, `orchestrator/roles.py`, `orchestrator/yamlmini.py`, `scripts/guard.py`, `tests/sandbox.py`
+
+**Импортируется:** —
+
+## tests/test_zone_line_parse.py
+
+**Назначение:** Юнит-тесты ОДНОГО разбора строки зон (SPEC
+
+**Публичные функции:** (нет)
+
+**Импортирует:** `orchestrator/budget.py`, `orchestrator/catalog.py`, `scripts/guard.py`
 
 **Импортируется:** —
 
