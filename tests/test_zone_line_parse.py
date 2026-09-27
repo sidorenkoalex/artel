@@ -8,13 +8,17 @@
 критерии не называют: отсутствие отступа после переноса (так свёрстана
 половина живых ТЗ пульта — `tasks/01M3FQ2Z2PY0E9T5F5WQ207NP5/TZ.md`),
 порядок и состав перечня `zone_line_items` в отличие от множества
-`zone_items`, идемпотентность приведения строки и синхронность двух копий
+`zone_items`, идемпотентность приведения строки, синхронность двух копий
 правила склейки (`guard._WRAPPED_PATH_BREAK` и остающаяся до следующей
-задачи `catalog._TZ_WRAPPED_PATH_BREAK`).
+задачи `catalog._TZ_WRAPPED_PATH_BREAK`) и само делегирование счёта зон
+общему разбору — свойство, наблюдаемое только подменой
+`guard.zone_line_items`, потому что на любом входе собственный разбор
+`budget.count_zone_paths` по запятым давал то же число.
 """
 import sys
 import unittest
 from pathlib import Path
+from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
@@ -160,9 +164,12 @@ class ZoneItemsWrapTest(unittest.TestCase):
     def test_line_without_a_wrap_keeps_the_previous_items(self):
         """Строка зон без переноса разбирается ровно как до задачи.
 
-        Ловит мутацию: склейка реализована срезкой всех пробельных
-        символов внутри строки — `scripts/guard.py` и соседние элементы
-        слиплись бы в один.
+        Ловит мутацию: при выносе разбора в общие `_zone_line_text`/
+        `zone_line_items` потеряна обрезка элемента — без `strip()`
+        элементы после запятой приходят с ведущим пробелом
+        (` orchestrator/budget.py`), без `rstrip(".")` последний элемент
+        остаётся с точкой предложения ТЗ (`tests/.`); в обоих случаях
+        множество расходится с дозадачным.
         """
         self.assertEqual(guard.zone_items(FLAT_LINE), FLAT_ITEMS)
 
@@ -173,11 +180,20 @@ class CountZonePathsTest(unittest.TestCase):
         """Число зон строки с разрывом пути равно числу зон той же строки
         без разрыва — и не зависит от того, есть ли отступ после переноса.
 
-        Ловит мутацию: `count_zone_paths` оставлен на своём разборе по
-        запятым, а склейка добавлена только в `guard.zone_items` — счёт
-        зон расходится с элементами на строке, где разрыв съел запятую
-        (`… tests/,\\n    orchestrator/⏎budget.py`), и калибровка бюджета
-        считает зоны по вёрстке ТЗ.
+        Ловит мутацию: перенос внутри пути обработан не склейкой ДО
+        разбора, а делением перечня ещё и по переносам строк
+        (`re.split(r"[,\\n]", …)` вместо `split(",")` над приведённой
+        строкой) — разорванный путь даёт две зоны вместо одной, и
+        калибровка бюджета считает зоны по вёрстке ТЗ (проверено
+        подменой: счёт становится 4 против 3 на всех трёх точках разрыва).
+
+        Заявку «`count_zone_paths` вернули на собственный разбор по
+        запятым» этот тест НЕ несёт: число элементов после деления по
+        запятым к склейке безразлично (правило снимает только пробельный
+        хвост после `/`, `_`, `-` и никогда не запятую), различающего
+        входа не существует. Делегирование общему разбору — требование 2 —
+        держит соседний
+        `test_count_zone_paths_delegates_to_the_shared_enumeration`.
         """
         for head, tail in WRAPPED:
             with self.subTest(разрыв=head[-1]):
@@ -189,6 +205,29 @@ class CountZonePathsTest(unittest.TestCase):
                     self.assertEqual(budget.count_zone_paths(wrapped), 3)
                     self.assertEqual(budget.count_zone_paths(wrapped),
                                      budget.count_zone_paths(flat))
+
+    def test_count_zone_paths_delegates_to_the_shared_enumeration(self):
+        """Счёт зон идёт ЧЕРЕЗ общий разбор строки зон: результат —
+        длина `guard.zone_line_items` от того же текста, своего разбора у
+        `budget.count_zone_paths` нет (требование 2).
+
+        Наблюдаемо это только подменой: на любом входе собственный разбор
+        по запятым даёт то же число, что общий (различающего входа не
+        существует — см. соседний тест), и без подмены требование «тот же
+        разбор» остаётся без тестового прикрытия вовсе.
+
+        Ловит мутацию: `count_zone_paths` вернулся на собственное деление
+        по запятым (подменённый перечень не виден — счёт 2 вместо 3) либо
+        пошёл через `guard.zone_items` (к перечню добавляются кандидаты
+        упоминаний путей из той же строки — счёт 5 вместо 3).
+        """
+        line = "scripts/guard.py, tests/"
+
+        with mock.patch.object(guard, "zone_line_items",
+                               return_value=["один", "два", "три"]) as items:
+            self.assertEqual(budget.count_zone_paths(line), 3)
+
+        items.assert_called_once_with(line)
 
     def test_path_mentioned_in_a_note_does_not_add_a_zone(self):
         """Путь, упомянутый в пояснении рядом с зоной, число зон не
