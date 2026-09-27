@@ -207,6 +207,37 @@ pytest <файлы> -p no:cacheprovider -p timeout -o timeout=…`), кажды�
 | линт формата id задачи (`scripts/id_format_patterns.txt` по новым строкам диффа `*.py`) | 0 совпадений |
 | `python3 scripts/codebase_map.py` | карта перегенерирована тем же коммитом |
 
+Подтяжка main 27.09 (шаг возврата по конфликту, `origin/main` 40d92262 —
+гейт неослабления тестов 01M3FQ2V77, канарейка на наборе ролей
+01M3FQ2Z2, подпакеты в карте 01M3FTQ16M): конфликтовали два файла.
+
+- `docs/codebase-map.md` — автогенерируемый: взята сторона main, затем
+  карта перегенерирована уже новым `scripts/codebase_map.py` (подпакеты)
+  тем же merge-коммитом.
+- `docs/operator-session.md`, раздел «Запуски и рабочие копии» —
+  содержательный конфликт: main заменил пункт «перед `approve`
+  материализовать планку» на пункт «планку задачи руками не гонять» и
+  добавил пункт про канарейку; моя ветка добавляла три пункта требования
+  10. Разрешено объединением: пункт main оставлен, его фраза «`approve` в
+  acceptance сегодня ничего не гоняет, хотя запись … обещает обратное»
+  заменена на факт после этой задачи (approve гоняет полный набор сам,
+  запись перечисляет ровно проверяемое) — иначе документ противоречил бы
+  сам себе в двух соседних пунктах; далее идут три пункта требования 10,
+  затем пункт main про канарейку. Удалённый main пункт про
+  материализацию планки не возвращён: планку на приёмке пульт гоняет сам.
+
+Прогоны после подтяжки (тот же раннер и передний план):
+
+| Прогон | Итог |
+|---|---|
+| `tasks/01M3FQ3JVC3DGGM33XCX8TC7ME/acceptance_tests` (вся планка) | 34 passed, 3 subtests |
+| `tests/test_acceptance.py tests/test_fsm_autogate.py tests/test_approve_acceptance_full_suite.py tests/test_amend.py tests/test_plan_appendix.py` | 118 passed, 2 subtests |
+| `tests/test_invariants.py tests/test_cmd_approve_dispatch.py tests/test_test_integrity_gate.py tests/test_guard_test_ast.py tests/test_new_argv_parsing.py` | 124 passed, 215 subtests |
+| `tests/test_merge_gate_ci_wait.py tests/test_protected_paths_gate.py tests/test_codebase_map.py tests/test_fsm_advance_gate_framework.py tests/test_fsm_advance_gate_smoke.py tests/test_mutation_claim_gate.py` | 93 passed |
+| `tests/test_acceptance_tests_flow.py tests/test_branch_freshness_gate.py tests/test_pull.py tests/test_pull_conflict_marker_states.py tests/test_fsm_map_conflict_autoresolve.py` | 119 passed |
+| `test_integrity.findings(<ветка задачи>)` — новый гейт неослабления main на диффе этой задачи | `([], '')` — находок нет, гейт задачу не остановит |
+| `python3 scripts/guard.py --all` после подтяжки | ок |
+
 Риск из «Рисков» закрыт: ни один существующий тест, проводящий `approve`
 из `acceptance`, нового прогона набора не получил — в лёгких
 FSM-песочницах `workspace.registered_paths()` пуст (поддельный git), и
