@@ -20,6 +20,22 @@ from . import config, providers, spend
 # два подвисших вызова подряд не должны заметно задерживать сам шаг.
 ENV_FINGERPRINT_TIMEOUT_SEC = 5
 
+# Последнее поле записи об окружении: чьё это окружение (SPEC
+# 01M3H3K73XBMJMD0EPXZX6HYY9, требование 4). Запись снимается в окружении
+# ПУЛЬТА — версия запущенного интерпретатора и версии `git`/`claude`,
+# найденных по PATH Оператора, — а читалась Оператором как «вот что видит
+# шаг»: 27.09 она печатала `python=3.13.12`, пока команды шага роли на
+# Codex видели системный 3.9. PATH роли этой записи взять негде (она
+# кэшируется на процесс и не знает ни роли, ни задачи, а `role_env()`
+# вправе отказать `OSError`), поэтому выполняется вторая ветвь
+# требования — явная пометка предмета.
+#
+# Поле стоит В КОНЦЕ, а не в начале и не внутри python-части: первое поле
+# записи читают залоченная планка 01M1SHK3MD4ZF9NYXSCT67J8AP
+# (`python=<версия> (<путь>)` шаблоном ровно из двух частей) и
+# `tests/test_agent_log.py`.
+ENV_FINGERPRINT_SUBJECT = "окружение пульта (оркестратора), не команд шага"
+
 _environment_fingerprint_cache: str | None = None
 
 
@@ -39,10 +55,16 @@ def _tool_version_text(cmd: list) -> str:
 
 
 def environment_fingerprint() -> str:
-    """Fingerprint окружения шага: интерпретатор Python, версии git и
+    """Fingerprint окружения ПУЛЬТА: интерпретатор Python, версии git и
     claude CLI (SPEC T101, требование 1) — как часть значения поля
     `detail` существующих журнальных событий (требование 4-5), без
     новых таблиц/колонок.
+
+    Чьё это окружение, запись говорит сама последним полем
+    (`ENV_FINGERPRINT_SUBJECT`, SPEC 01M3H3K73XBMJMD0EPXZX6HYY9,
+    требование 4): окружение команд ВНУТРИ шага собирает
+    `runner.role_env` и оно может отличаться — ровно на этом различии
+    выросла задача о паритете шага Codex.
 
     Кэшируется на процесс оркестратора (требование 3, AC-6): второе и
     последующие обращения в рамках одного и того же запуска CLI отдают
@@ -57,7 +79,9 @@ def environment_fingerprint() -> str:
     python_part = f"python={platform.python_version()} ({sys.executable})"
     git_part = f"git={_tool_version_text(['git', '--version'])}"
     claude_part = f"claude={_tool_version_text(['claude', '--version'])}"
-    _environment_fingerprint_cache = f"{python_part}, {git_part}, {claude_part}"
+    _environment_fingerprint_cache = (f"{python_part}, {git_part}, "
+                                      f"{claude_part}, "
+                                      f"{ENV_FINGERPRINT_SUBJECT}")
     return _environment_fingerprint_cache
 
 
