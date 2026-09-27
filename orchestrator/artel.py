@@ -521,10 +521,10 @@ def _ensure_supported_interpreter():
 _ensure_supported_interpreter()
 
 from orchestrator import (amend, answer, auto, budget, canary, catalog,  # noqa: E402
-                          cleanup, doctor, dry_run, fsm, lease, liveness,
-                          models, notes, pause, pin, pool_seal, projects,
-                          prune, release, report, runner, store, venv,
-                          version, watch, workspace, zone_lock)
+                          ci_rerun, cleanup, doctor, dry_run, fsm, lease,
+                          liveness, models, notes, pause, pin, pool_seal,
+                          projects, prune, release, report, runner, store,
+                          venv, version, watch, workspace, zone_lock)
 
 
 # Отвязка `run`/`auto` от процесса сессии Оператора (SPEC
@@ -789,7 +789,7 @@ def _cmd_new(rest: list) -> None:
 def _reason_arg(rest: list) -> str | None:
     """Значение флага `--reason` команд `amend-tests <id> --reason
     "<основание>"` и `ci-rerun <id> --reason "<основание>"`; `None` — флаг
-    не передан вовсе. Ни `amend.cmd_amend_tests`, ни `fsm.cmd_ci_rerun` не
+    не передан вовсе. Ни `amend.cmd_amend_tests`, ни `ci_rerun.cmd_ci_rerun` не
     различают «флага нет» и «флаг передан пустой строкой» — оба отказывают
     одинаково (SPEC 01M1HNNHDMP2C1AJTH5QF1BTN2, AC-5; SPEC
     01M3F7C2DVYCEANQ8CF1FCSD87, AC-3), поэтому здесь достаточно вернуть
@@ -934,7 +934,7 @@ def main() -> None:
         "acceptance-dry-run": lambda: dry_run.cmd_acceptance_dry_run(rest[0]),
         "amend-tests": lambda: amend.cmd_amend_tests(
             rest[0], _reason_arg(rest), from_branch="--from-branch" in rest),
-        "ci-rerun": lambda: fsm.cmd_ci_rerun(rest[0], _reason_arg(rest)),
+        "ci-rerun": lambda: ci_rerun.cmd_ci_rerun(rest[0], _reason_arg(rest)),
         "pin-update": lambda: pin.cmd_pin_update(rest[0]),
         "pin": lambda: _cmd_pin(rest),
         "zone-release": lambda: zone_lock.cmd_zone_release(rest[0]),
