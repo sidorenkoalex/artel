@@ -115,6 +115,28 @@ class EnvironmentFingerprintTest(unittest.TestCase):
             self.assertGreater(timeout, 0)
             self.assertLessEqual(timeout, 10, "таймаут обязан быть «единиц секунд»")
 
+    def test_the_record_names_whose_environment_it_describes(self):
+        """SPEC 01M3H3K73XBMJMD0EPXZX6HYY9, требование 4: запись говорит
+        словами, что описывает окружение ПУЛЬТА, — и говорит это последним
+        полем, не тронув первое.
+
+        Ловит мутацию: пометка снята (Оператор снова читает `python=3.13.12`
+        как «вот что видит шаг» — ровно то заблуждение, из которого выросла
+        задача о паритете шага Codex) либо дописана В НАЧАЛО записи или
+        внутрь python-поля, и читатели первого поля — залоченная планка
+        01M1SHK3MD4ZF9NYXSCT67J8AP и соседние тесты этого класса — краснеют.
+        """
+        with mock.patch.object(agent_log.subprocess, "run",
+                               side_effect=lambda cmd, **kw:
+                               subprocess.CompletedProcess(cmd, 0, "v1\n", "")):
+            fingerprint = agent_log.environment_fingerprint()
+
+        self.assertTrue(fingerprint.endswith(agent_log.ENV_FINGERPRINT_SUBJECT),
+                        fingerprint)
+        self.assertIn("пульт", agent_log.ENV_FINGERPRINT_SUBJECT.lower())
+        self.assertRegex(fingerprint.split(", ")[0],
+                         r"^python=[^\s(]+ \([^)]+\)$")
+
     def test_result_is_cached_and_external_calls_are_not_repeated(self):
         call_count = 0
 

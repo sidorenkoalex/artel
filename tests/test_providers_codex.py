@@ -345,14 +345,16 @@ class EnvironmentTest(TmpRootTest):
         снова несёт секрет, которого требование 2 ему не даёт.
 
         Сверяется полный СОСТАВ окружения, а не отсутствие одного имени:
-        роль на Codex авторизуется входом по подписке, и `HOME`/`CODEX_HOME`
-        — единственное, что провайдер шагу передаёт.
+        роль на Codex авторизуется входом по подписке, и три адреса
+        курируемого дома (`HOME`, `CODEX_HOME`, `ZDOTDIR` — последний с
+        SPEC 01M3H3K73XBMJMD0EPXZX6HYY9, требование 2) — единственное, что
+        провайдер шагу передаёт.
         """
         _drop_ambient(self, *FORBIDDEN_KEY_NAMES, *CLAUDE_SECRETS)
 
         env = providers.get("codex").environment("developer", "T1")
 
-        self.assertEqual(set(env), {"HOME", "CODEX_HOME"}, env)
+        self.assertEqual(set(env), {"HOME", "CODEX_HOME", "ZDOTDIR"}, env)
         self.assertEqual(self.slots, [], "слот keychain спрошен провайдером")
         self.assertEqual(tuple(providers.get("codex").secret_env_names()), ())
 
