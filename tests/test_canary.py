@@ -688,12 +688,21 @@ class LocalFullShaTest(unittest.TestCase):
                         f"резолв не спросил саму ревизию: {args}")
 
     def test_nonzero_exit_and_no_answer_both_give_an_empty_string(self):
-        """Ловит мутацию: ненулевой код возврата (ревизии нет в локальной
-        базе) трактуется как успех — `stdout` там пуст либо несёт текст
-        `fatal:`, и вызывающий принял бы его за разрешённый sha вместо
-        того, чтобы отказать прогону."""
-        failed = subprocess.CompletedProcess(("rev-parse",), 128, "", "fatal:")
-        with mock.patch.object(canary.gitcmd, "git", return_value=failed):
+        """Ненулевой код возврата — отказ резолва, ЧТО БЫ ни стояло в
+        `stdout`: `rev-parse` без `--verify` на неизвестной ревизии
+        печатает эхо самой строки и выходит ненулевым, и именно этот
+        вариант ответа обязан быть отброшен, а не «пустой stdout».
+
+        Ловит мутацию: проверка `returncode` снята (успехом считается
+        любой ответ git) — эхо `nety` уехало бы в целевой sha прогона и
+        дальше в `canary_runs.main_sha` вместо именованного отказа
+        команды."""
+        echoed = subprocess.CompletedProcess(("rev-parse",), 128, "nety\n",
+                                             "fatal: ...")
+        with mock.patch.object(canary.gitcmd, "git", return_value=echoed):
+            self.assertEqual(canary._local_full_sha("nety"), "")
+        empty = subprocess.CompletedProcess(("rev-parse",), 128, "", "fatal:")
+        with mock.patch.object(canary.gitcmd, "git", return_value=empty):
             self.assertEqual(canary._local_full_sha("nety"), "")
         with mock.patch.object(canary.gitcmd, "git", return_value=None):
             self.assertEqual(canary._local_full_sha("nety"), "")

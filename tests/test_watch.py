@@ -453,11 +453,19 @@ class EmitStepsFiltersInSqlTest(TmpRootTest):
     def test_prints_the_new_rows_of_the_asked_classes_and_moves_the_cursor(self):
         """Печатается то же, что печатал прежний код: новые записи классов
         из `events`, а курсор `known_step_id` сдвигается на последнюю
-        новую запись независимо от того, напечаталась ли она.
+        новую запись.
 
-        Ловит мутацию: граница фильтра взята нестрого (`id >= known`) — уже
-        показанная Оператору запись печаталась бы в потоке второй раз."""
-        known = {self.TASK: self.ids[-3]}
+        Ловит мутацию: фильтр класса (`_matches_class`) потерян при
+        переходе на SQL-выборку — в потоке появилась бы запись `agent run
+        завершён`, которой Оператор класса `transitions` не просил; либо
+        курсор не сдвинут вовсе — те же записи печатались бы на каждом
+        опросе заново. Строгость границы этот сценарий не проверяет — её
+        закрепляет тест ниже.
+
+        Известен id записи «карта: размер»: в окно новых записей попадает
+        и `agent run завершён`, класса `steps`, которого Оператор не
+        просил, — иначе фильтру класса нечего было бы отбрасывать."""
+        known = {self.TASK: self.ids[-4]}
 
         out = capture(watch._emit_steps, self.conn, self.TASK,
                      {"transitions"}, known, None)
@@ -465,6 +473,23 @@ class EmitStepsFiltersInSqlTest(TmpRootTest):
         self.assertIn("state -> merge_gate", out)
         self.assertIn("state -> done", out)
         self.assertNotIn("agent run завершён", out)
+        self.assertEqual(self.ids[-1], known[self.TASK])
+
+    def test_the_already_shown_row_is_not_printed_a_second_time(self):
+        """Известен id записи `operator / state -> merge_gate` — записи
+        класса `transitions`, уже показанной Оператору: в потоке её больше
+        нет, есть только следующая за ней.
+
+        Ловит мутацию: граница фильтра взята нестрого (`id >= known` в
+        `store.task_steps_since`) — эта запись печаталась бы вторым разом
+        на каждом опросе дозора, пока журнал задачи не двинется."""
+        known = {self.TASK: self.ids[-2]}
+
+        out = capture(watch._emit_steps, self.conn, self.TASK,
+                     {"transitions"}, known, None)
+
+        self.assertNotIn("state -> merge_gate", out)
+        self.assertIn("state -> done", out)
         self.assertEqual(self.ids[-1], known[self.TASK])
 
 

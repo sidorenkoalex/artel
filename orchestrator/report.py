@@ -116,8 +116,9 @@ def _all_steps(conn, tasks: list) -> list:
 
 # ------------------------------------ наблюдатель роста карты (AC-1..AC-12)
 #
-# Читает журнал и алерты через функции store.py (`all_tasks`/`all_steps`/
-# `open_alerts`/`alerts_older_than`), тем же приёмом, что `_all_steps` выше.
+# Читает журнал и алерты через функции store.py (`all_tasks`/
+# `steps_of_action`/`open_alerts`/`alerts_older_than`), тем же приёмом, что
+# `_all_steps` выше.
 
 def _map_size_entries(conn, target: str) -> list:
     """Записи ряда «карта: размер» этого target, хронологически (по
@@ -127,16 +128,22 @@ def _map_size_entries(conn, target: str) -> list:
     ключом `ts` (момент записи, для окна калибровки AC-7).
 
     Одна выборка журнала (требование 3 SPEC 01M3GKJFN90ATK2KECNDZXPPP6)
-    вместо выборки на каждую задачу target'а. Принадлежность target'у
-    по-прежнему берётся у КАТАЛОГА ЗАДАЧ (`all_tasks`), не у колонки
-    `steps.target`: ряд роста карты одного target не должен уметь
-    показать запись другого, даже если колонка журнала разошлась с
-    каталогом."""
+    вместо выборки на каждую задачу target'а, и выборка эта — только
+    записи ЭТОГО действия (`store.steps_of_action`), а не весь журнал
+    пульта: ряд роста карты собирается тремя вызовами на каждый target
+    (`map_size_table_rows`, `map_growth_calibration_median`,
+    `map_growth_cost_estimate`), так что весь журнал на вызов означал бы
+    `3 × T` полных проходов на отчёт — REVIEW.md итерации 1, R1-F2.
+
+    Принадлежность target'у по-прежнему берётся у КАТАЛОГА ЗАДАЧ
+    (`all_tasks`), не у колонки `steps.target`: ряд роста карты одного
+    target не должен уметь показать запись другого, даже если колонка
+    журнала разошлась с каталогом."""
     task_ids = {row["id"] for row in store.all_tasks(conn)
                if row["target"] == target}
     entries = []
-    for s in store.all_steps(conn):
-        if s["task_id"] not in task_ids or s["action"] != MAP_SIZE_ACTION:
+    for s in store.steps_of_action(conn, MAP_SIZE_ACTION):
+        if s["task_id"] not in task_ids:
             continue
         try:
             detail = json.loads(s["detail"])

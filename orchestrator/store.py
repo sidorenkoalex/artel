@@ -646,6 +646,26 @@ def all_steps(conn: sqlite3.Connection) -> list:
         f"SELECT {_BULK_STEP_COLUMNS} FROM steps ORDER BY id").fetchall()
 
 
+def steps_of_action(conn: sqlite3.Connection, action: str) -> list:
+    """Записи журнала ОДНОГО действия по всему пульту, по возрастанию `id`.
+
+    Читатель — `report._map_size_entries` (REVIEW.md итерации 1, R1-F2):
+    ряд «карта: размер» строится тремя вызовами на КАЖДЫЙ target, и одна
+    выборка всего журнала (`all_steps`) на каждый такой вызов
+    материализовала бы `3 × T` полных журналов на отчёт — на шести
+    target'ах это восемнадцать проходов по 39 тысячам записей там, где
+    нужны десятки. Отбор по `action` в SQL оставляет от журнала только
+    нужные записи, и число их не зависит ни от числа задач, ни от числа
+    target'ов.
+
+    Отбор по задаче/target, как и у `all_steps`, остаётся за читателем —
+    по каталогу задач, не по колонке `steps.target`.
+    """
+    return conn.execute(
+        f"SELECT {_BULK_STEP_COLUMNS} FROM steps WHERE action=? ORDER BY id",
+        (action,)).fetchall()
+
+
 def task_steps_since(conn: sqlite3.Connection, task_id: str,
                      since_id: int) -> list:
     """Записи журнала задачи НОВЕЕ `since_id`, по возрастанию `id`.

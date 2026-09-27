@@ -1,5 +1,5 @@
 ---
-built_at_sha: feebec39a26631171e0abf549b3d88cf6ad8ac31
+built_at_sha: 56545b77d4554924fdf06f62ee1ee9835554fb86
 ---
 
 # Codebase-map пульта
@@ -1415,6 +1415,7 @@ built_at_sha: feebec39a26631171e0abf549b3d88cf6ad8ac31
 - `set_canary_baseline`
 - `set_merge_lock`
 - `set_state`
+- `steps_of_action`
 - `task_branch`
 - `task_exists`
 - `task_number`

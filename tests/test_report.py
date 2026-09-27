@@ -893,6 +893,45 @@ class _StepsQueries:
         return len(self.statements)
 
 
+class _StepsRows:
+    """Обёртка соединения, считающая СТРОКИ, отданные SQL по запросам к
+    `steps`: предмет замечания R1-F2 ревью — не число запросов, а объём
+    прочитанного. Читатели журнала принимают соединение параметром, так
+    что подменять внутри них нечего."""
+
+    def __init__(self, conn):
+        self._conn = conn
+        self.steps_rows = 0
+
+    def execute(self, sql, parameters=()):
+        cursor = self._conn.execute(sql, parameters)
+        if not re.search(r"\bfrom\s+steps\b", str(sql), re.I):
+            return cursor
+        rows = cursor.fetchall()
+        self.steps_rows += len(rows)
+        return _FetchedRows(rows)
+
+    def __getattr__(self, name):
+        return getattr(self._conn, name)
+
+
+class _FetchedRows:
+    """Курсор поверх уже вычитанных строк — `_StepsRows` обязан узнать их
+    число, то есть дочитать курсор сам."""
+
+    def __init__(self, rows):
+        self._rows = list(rows)
+
+    def fetchall(self):
+        return list(self._rows)
+
+    def fetchone(self):
+        return self._rows[0] if self._rows else None
+
+    def __iter__(self):
+        return iter(self._rows)
+
+
 class JournalIsReadInOneSelectTest(TmpRootTest):
     """`report._all_steps`/`_map_size_entries` берут журнал ОДНОЙ выборкой
     (SPEC 01M3GKJFN90ATK2KECNDZXPPP6, требование 3): число запросов к
@@ -933,11 +972,23 @@ class JournalIsReadInOneSelectTest(TmpRootTest):
         return steps
 
     def test_all_steps_reads_the_same_rows_as_the_per_task_selection(self):
-        """Ловит мутацию: одна выборка потеряла `ORDER BY id` (или
-        сортировку заменили на порядок вставки по задачам) — хронология
-        журнала разошлась бы с прежней, а на ней стоят и доли гейтов, и
-        журнал Оператора по дням, и метрика трения."""
+        """Ловит мутацию: одна выборка отдана читателю в порядке `task_id`
+        (или её состав разошёлся со склейкой по задачам) — журнал уехал бы
+        из сквозной хронологии, а на ней стоят и доли гейтов, и журнал
+        Оператора по дням, и метрика трения.
+
+        Утрату `ORDER BY id` целиком этот тест не ловит и не заявляет:
+        эталон рядом сам сортирует список в Python, а `steps` —
+        rowid-таблица, где `SCAN` даёт сегодня тот же порядок. Это
+        свойство закреплено на выполненном SQL — `tests/test_store_journal.
+        py::BulkJournalReadsTest::
+        test_all_steps_asks_sql_itself_for_the_chronological_order`."""
         self.seed(4)
+        # Журнал пульта перемешан между задачами: `seed` пишет записи
+        # задачи сразу за её заведением, и без этих двух строк порядок
+        # `task_id` совпал бы с порядком `id` — тест не различил бы их.
+        store.journal(self.conn, "T001", "operator", "state -> done", "закрытие")
+        store.journal(self.conn, "T002", "operator", "state -> done", "закрытие")
 
         new = [(r["id"], r["task_id"], r["action"]) for r in
                report._all_steps(self.conn, store.all_tasks(self.conn))]
@@ -1001,6 +1052,32 @@ class JournalIsReadInOneSelectTest(TmpRootTest):
         self.assertEqual(2, len(second))
         self.assertEqual([1000, 3000], [e["bytes_total"] for e in first])
         self.assertEqual([2000, 4000], [e["bytes_total"] for e in second])
+
+    def test_map_size_entries_reads_only_the_rows_of_its_own_action(self):
+        """Ряд роста карты собирается тремя вызовами на КАЖДЫЙ target
+        (`map_size_table_rows`, `map_growth_calibration_median`,
+        `map_growth_cost_estimate`), поэтому весь журнал пульта на вызов —
+        это `3 × T` полных проходов на один отчёт (REVIEW.md итерации 1,
+        R1-F2). Из SQL приходят только записи «карта: размер».
+
+        Ловит мутацию: выборка вернулась к журналу целиком
+        (`store.all_steps`), а отбор действия считается в Python — число
+        прочитанных строк стало бы равно длине ВСЕГО журнала и росло бы и
+        с числом задач, и с числом target'ов."""
+        self.seed(4)
+        counting = _StepsRows(self.conn)
+
+        entries = report._map_size_entries(counting, config.DEFAULT_TARGET)
+
+        journal_rows = len(store.all_steps(self.conn))
+        self.assertEqual(2, len(entries))
+        self.assertEqual(
+            4, counting.steps_rows,
+            f"SQL отдал {counting.steps_rows} строк при {journal_rows} "
+            f"записях журнала: прочитан весь журнал, а не ряд «карта: "
+            f"размер»")
+        self.assertGreater(journal_rows, counting.steps_rows,
+                           "фикстура не различает «весь журнал» и «ряд»")
 
 
 if __name__ == "__main__":
