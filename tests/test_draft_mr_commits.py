@@ -23,10 +23,14 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from orchestrator import config, github_adapter, gitcmd, store  # noqa: E402
 from tests.sandbox import RealGitSandbox  # noqa: E402
 
+# Адреса фикстур — loopback: инвариант 35 (docs/invariants.md) держит
+# `tests/**/*.py` без DNS-имён, а проверяемое свойство (черновик заводится
+# либо законно пропускается) от хоста не зависит — `url` target'а адаптер
+# только хранит, а адрес запроса на слияние приходит из вывода `gh`.
 TARGETS_YAML = f"""targets:
   {config.DEFAULT_TARGET}:
     forge: github
-    url: https://github.com/artel/artel
+    url: http://localhost/artel
     base: {config.MAIN_BRANCH}
     token_slot: artel-token
     no_paths: []
@@ -85,7 +89,7 @@ class _DraftMrSandbox(RealGitSandbox):
     def _spy_gh(self, *args, **kwargs):
         self.gh_calls.append(list(args))
         return subprocess.CompletedProcess(
-            list(args), 0, "https://github.com/artel/artel/pull/1\n", "")
+            list(args), 0, "http://localhost/artel/pull/1\n", "")
 
     # ------------------------------------------------------------ фикстуры
 
