@@ -2,8 +2,8 @@
 task: 01M3HP7WAXKFK3GYZ3T6HX08M0
 type: review
 author_role: reviewer
-status: changes_requested
-iteration: 1
+status: approved
+iteration: 2
 schema_version: 5
 ---
 
@@ -11,31 +11,26 @@ schema_version: 5
 
 ## Фаза A: гейт плана
 
-1. **Покрытие требований.** Таблица PLAN полна: требования 1–12 разложены
-   по шагам 1–6, дырок нет. Требование 11 (ручная уборка 121 инцидента)
-   честно вынесено в шаг 6 сценарием для Оператора, а отсутствие команды
-   массового закрытия — строкой «Предложения системе», как и требует SPEC.
-2. **Размер шагов.** Шаги 1–4 — проверяемые единицы (узел + два бюджетных
-   места; предполёт; адаптер; тесты), шаг 5 — регенерация карты, шаг 6 —
-   действие Оператора. Ни микроопераций, ни «сделать всё».
-3. **Конвенции и архитектура.** Размещение узла в `budget.py` обосновано
-   и разрешено ANSWER-1 п. 2 (новый модуль не заводится, размещение за
-   разработчиком); из четырёх файлов зоны только `budget.py` уже
-   импортируется вторым потребителем на уровне модуля
-   (`orchestrator/runner.py:16`), встречный импорт не заводится. Граница
-   пребывания взята существующей идиомой `store.refusal_history`
-   (`orchestrator/store.py:385-413`), новой колонки нет,
-   `orchestrator/store.py` не правится — журнал остаётся только
-   дописываемым. Зоны не расширялись: `orchestrator/fsm_advance.py` и
-   `orchestrator/fsm.py` в диффе отсутствуют, требование 9 закрыто из
-   `github_adapter.py`, как и предполагал раздел «Не входит» SPEC.
-4. **«Влияние на систему» = дифф.** Заявлено ровно то, что изменено:
-   три файла `orchestrator/` + два новых файла `tests/` + карта. Правок
-   защищённых путей (`skills/`, `templates/`, `gates.yaml`, `.github/`),
-   инвариантов и существующих тестов нет — `git diff --stat` подтверждает.
-   Абзац «Возврат из `verifying`» описывает реальный коммит e64a5850
-   (адреса фикстуры → loopback, инвариант 35 не трогался). Откат описан
-   и верен: правки аддитивны, схема БД и формат записей не менялись.
+1. **Покрытие требований.** Таблица PLAN по-прежнему полна (требования
+   1–12 по шагам 1–6), итерация 2 её не тронула и не должна была: правки
+   этой итерации — внутри шагов 1 и 4.
+2. **Размер шагов.** Без изменений с итерации 1: шаги 1–4 — проверяемые
+   единицы, шаг 5 — карта, шаг 6 — действие Оператора.
+3. **Конвенции и архитектура.** Зоны не расширены: правились
+   `orchestrator/budget.py` и два НОВЫХ файла `tests/`. Защищённые пути
+   (`skills/`, `templates/`, `gates.yaml`, `roles.yaml`, `.github/`,
+   `docs/invariants.md`) не тронуты — `git diff --stat 6b8cee21...HEAD`
+   даёт ровно `orchestrator/budget.py`, `orchestrator/github_adapter.py`,
+   `orchestrator/runner.py`, `docs/codebase-map.md` и два новых файла
+   тестов.
+4. **«Влияние на систему» = дифф.** Новый абзац PLAN «Итерация 2»
+   соответствует факту построчно, включая две проверяемые заявки:
+   «содержимое карты не изменилось, расхождение только в `built_at_sha`»
+   — подтвердил регенерацией (см. «Проверено исполнением»), и «ослаблений
+   нет» — в диффе `tests/` этой итерации ни одной удалённой или
+   изменённой строки `assert`, только добавленные (docstring
+   `test_a_branch_identical_to_the_base_wakes_nobody` переписан, ассерты
+   прежние плюс один новый).
 
 Замечаний по плану нет.
 
@@ -43,151 +38,143 @@ schema_version: 5
 
 | Требование | Вердикт | Комментарий |
 |---|---|---|
-| 1 | OK | Все три места идут через узел: `orchestrator/budget.py:158`, `:164`, `:294`, `orchestrator/runner.py:366`. |
-| 2 | OK | Счётчика нет ни в записи, ни сводной строкой; узел только пишет или молчит. |
-| 3 | OK | `key=detail` для двух текстовых мест, `key=None` (ключ = само действие) для «бюджет: предупреждение» — порог у записи один. |
-| 4 | OK | `orchestrator/budget.py:68-75`: граница — последняя запись с префиксом `state -> ` журнала ЭТОЙ задачи, вырожденный случай «записи нет» = граница 0, как у `store.refusal_history`. |
-| 5 | OK | Ветка исчерпания (`orchestrator/budget.py:263-282`) возвращает управление до порогового блока; «бюджет из SPEC отклонён»/«бюджет из SPEC»/`pre-flight FAILED` не тронуты. |
-| 6 | OK | `print` во всех трёх местах стоит НИЖЕ вызова узла и от его ответа не зависит (`budget.py:160`, `:166`, `:296`, `runner.py:369`); ответ узла (`True`/`False`) вызывающие места не читают вовсе. |
-| 7 | OK | Константы несут прежние литералы байт-в-байт: `"pre-flight WARNING"`, `"бюджет из SPEC не применён"`, `"бюджет: предупреждение"`. |
-| 8 | OK | `orchestrator/github_adapter.py:113-124`: локальная сверка `_commits_over_base` стоит ДО `git push` и до `gh pr create`; пропуск — `store.journal` обычного уровня, без `_incident`/алерта, `draft_mr_created` не выставляется. `None` («git не ответил») в пропуск не превращается. |
-| 9 | OK | Хук `_ensure_draft_mr_after_publish` на ветке УСПЕШНОГО push `ensure_head_in_origin` (`github_adapter.py:209`), а её зовёт рубеж `advance_gates/tests_writing.py::_origin_push_gate`. Проверил отдельно, что кодовую ветку до этого рубежа не публикует никто другой: `git push` кодовой ветки в `orchestrator/` есть только в `github_adapter.py:127/197` и `fsm_merge_gate.py:476/816` (остальные push — артефактная ветка, notes, snapshot), поэтому на первом проходе рубежа `local != remote` и черновик заводится. |
-| 10 | OK | Отказ push/`gh` при наличии коммита не изменён — `Draft MR FAILED` + `_incident`; новый пропуск срабатывает только на положительном ответе git «ровно 0». |
-| 11 | OK | PLAN шаг 6 даёт перечень номеров и `alert-ack` на каждый; `alerts.open_alerts(conn, "incident")` и колонки `source`/`message` в сценарии существуют (`orchestrator/alerts.py:110`, `orchestrator/store.py:925`). Отсутствие команды массового закрытия вынесено в «Предложения системе». |
-| 12 | реализовано не так (частично) | Тесты заведены и зелены, все четыре названных SPEC модуля зелёные, ни один существующий тест не изменён и не удалён (диффа `tests/` сверх двух НОВЫХ файлов нет). Но один из семи случаев `tests/test_draft_mr_commits.py` заявленную мутацию не ловит — R1-F1. |
+| 1 | OK | Три места через узел: `orchestrator/budget.py:177`, `:183`, `:313`, `orchestrator/runner.py:366`. |
+| 2 | OK | Счётчика нет ни в записи, ни сводной строкой — узел только пишет либо молчит (`budget.py:90-96`). |
+| 3 | OK | `key=detail` у двух текстовых мест, `key=None` («ключ = само действие») у «бюджет: предупреждение»; контракт `key` теперь сужен явно и отказывает громко (`budget.py:80-84`) — закрытие R1-F2. |
+| 4 | OK | `budget.py:85-89`: граница — последняя запись с префиксом `state -> ` журнала ЭТОЙ задачи; `store.task_steps` (`store.py:624-627`) отдаёт весь журнал задачи `ORDER BY id`, без LIMIT, а `set_state` (`store.py:473`) пишет ровно `f"state -> {state}"` — префикс сверки и запись совпадают. |
+| 5 | OK | Ветка исчерпания возвращает управление до порогового блока (`budget.py:284-303`); «бюджет из SPEC отклонён», «бюджет из SPEC», `pre-flight FAILED` идут прежним `store.journal`. |
+| 6 | OK | `print` во всех трёх местах ниже вызова узла и от его ответа не зависит (`budget.py:179`, `:185`, `:315`, `runner.py:369`). |
+| 7 | OK | Литералы прежние: `"pre-flight WARNING"`, `"бюджет из SPEC не применён"`, `"бюджет: предупреждение"`. Итерация 2 текстов не касалась. |
+| 8 | OK | `github_adapter.py:113-125`: `_commits_over_base` стоит ДО `git push` и до `gh pr create`; пропуск — `store.journal` обычного уровня без `_incident`, `draft_mr_created` не выставляется; `None` в пропуск не превращается (`:44` — `gitcmd.commits_behind(base, branch)` = `rev-list --count base..branch`, то есть коммиты ветки сверх базы). |
+| 9 | OK | Хук `_ensure_draft_mr_after_publish` (`github_adapter.py:222`) на ветке УСПЕШНОГО push `ensure_head_in_origin`; ветка «sha уже совпал» осталась no-op. Дешёвая сверка `head == база` (`:253-254`) сохранена и теперь охраняется тестом — см. R1-F1. |
+| 10 | OK | Отказ push/`gh` при наличии коммита не изменён: `Draft MR FAILED` + `_incident` (`github_adapter.py:129-133`, `:142-147`). |
+| 11 | OK | PLAN шаг 6 даёт перечень номеров и `alert-ack` на каждый; отсутствие команды массового закрытия — строкой «Предложения системе». |
+| 12 | OK | Оба новых файла зелены (19 тестов), четыре названных SPEC модуля зелены, ни один существующий тест не изменён и не удалён. Обе заявки «Ловит мутацию» этой итерации проверил исполнением — под названной мутацией тест краснеет (было `реализовано не так` на итерации 1, R1-F1 закрыт). |
 
 ## Замечания
 
-- **major — tests/test_draft_mr_commits.py:229-247 (заявка — строки 233-236) —
-  `test_a_branch_identical_to_the_base_wakes_nobody` не ловит мутацию,
-  которую заявляет, и заявка описывает неверное последствие.** Докстринг
-  обещает: «Ловит мутацию: узел черновика зовётся на каждой успешной
-  публикации без разбора — рубеж `merge_gate` … обращался бы к форджу на
-  заведомо пустой ветке». Проверил исполнением: подменил
-  `github_adapter._ensure_draft_mr_after_publish` на версию БЕЗ сверки
-  `head == gitcmd.branch_head_sha(base)` (то есть ровно на заявленную
-  мутацию) и прогнал класс — `Ran 3 tests … OK`, все три случая зелёные.
-  Причина в том, что под мутацией до форджа дело не доходит: авторитетную
-  сверку делает сама `ensure_draft_mr` (`orchestrator/github_adapter.py:120`),
-  `_commits_over_base` отдаёт 0, и `gh` не зовётся — ассерты
-  `assertEqual(self.gh_calls, [])` и `assertEqual(self.flag(), 0)` остаются
-  верны. Это тот же довод, которым PLAN сам обосновывает устройство хука
-  («АВТОРИТЕТНУЮ сверку несёт сама `ensure_draft_mr`»), — то есть
-  докстринг противоречит плану. Последствие: единственный страж дешёвой
-  сверки `head == base` снимается без единого красного теста, а её снятие —
-  не безобидно: на ветке, равной базе, каждая успешная публикация начнёт
-  дописывать в журнал `Draft MR пропущен: в ветке нет коммитов`, то есть
-  ровно тот класс шума, который задача и лечит. Наблюдаемая разница под
-  мутацией одна, я её снял пробой: журнал становится
-  `['push (голова не в origin)', 'Draft MR пропущен: в ветке нет коммитов']`
-  вместо `['push (голова не в origin)']`. Предложение: добавить в тест
-  ассерт на эту разницу — `self.assertNotIn(github_adapter.DRAFT_MR_SKIPPED_ACTION,
-  self.actions())` (проверено: он краснеет под мутацией и зелен на текущем
-  коде) — и переписать вторую половину заявки так, чтобы она называла
-  настоящее последствие (лишняя запись журнала на каждый approve, а не
-  обращение к форджу). Либо, если дешёвая сверка признаётся избыточной
-  рядом с проверкой в `ensure_draft_mr`, — убрать её вместе с тестом.
-  Остальные шесть случаев этого файла и все девять случаев
-  `tests/test_journal_warning_once.py` я сверил с их заявками поштучно,
-  второго экземпляра класса не нашёл: две самые дешёвые к проверке заявки
-  (`None` приравнен к нулю; ключ = текст вместо порога) подтверждаются
-  прямо ассертами `len(self.push_calls) == 1` и
-  `len(self.details(BUDGET_WARNING_ACTION)) == 1`.
+Новых замечаний нет; обе записи прошлой итерации закрыты (см. реестр).
 
-- **minor — orchestrator/budget.py:74 — `key` сверяется со СТОРОННИМ
-  полем записи (`row["detail"]`), а не с сохранённым ключом: любой
-  будущий вызов, где `key != detail`, молча перестанет подавлять.**
-  Сегодня оба текстовых места зовут узел с `key=detail`, а пороговое — с
-  `key=None`, так что дефекта в поведении нет. Сценарий поломки: у
-  `config.BUDGET_ALERT_RATIO` появляется второй порог (класс живёт в
-  `docs/backlog.md:156`), вызывающий естественно передаёт
-  `key=f"{ratio}"` — узел сравнивает этот ключ с текстом записи («…больше
-  70% бюджета»), совпадения не будет никогда, и журнал снова получит
-  запись на каждый шаг, причём молча и без красного теста. Предложение:
-  либо сузить контракт явно (в докстринге и ассертом/проверкой:
-  допустимо только `key is None` или `key == detail`), либо сверять по
-  вычисляемому из записи ключу, а не по сырому `detail`.
+Оценка закрытий:
+
+- **R1-F1 (`accepted`).** Разработчик взял первый из двух предложенных
+  путей: сверка `head == база` оставлена, а тест дотянут до собственной
+  заявки — `tests/test_draft_mr_commits.py:247-248`. Проверил не текстом,
+  а той самой мутацией: подменил
+  `github_adapter._ensure_draft_mr_after_publish` на копию БЕЗ двух строк
+  сверки и прогнал `DraftMrAtTheVerifyingRubiconTest` — теперь
+  `FAILED (failures=1)` ровно на новом ассерте (`'Draft MR пропущен: в
+  ветке нет коммитов' unexpectedly found in ['push (голова не в origin)',
+  'Draft MR пропущен: в ветке нет коммитов']`), на итерации 1 та же
+  подмена давала `Ran 3 tests … OK`. Переписанная заявка
+  (`:234-239`) называет последствие верно: до форджа мутация не доходит
+  (останавливает `ensure_draft_mr`), а цена — запись журнала на каждый
+  approve `merge_gate`; это ровно то, что показал мой зонд журнала.
+- **R1-F2 (`accepted`).** Контракт сужен явно: `budget.py:80-84` —
+  `ValueError` на любом `key`, который не `None` и не равен `detail`,
+  докстринг (`:60-78`) называет два допустимых значения и причину (носителя
+  ключа в журнале нет). Отказ от второго пути («сверять по вычисляемому
+  ключу») обоснован верно: из записи восстановим только `detail`, колонка
+  под ключ потребовала бы `orchestrator/store.py`, который в зоны не
+  входит (ANSWER-1 п. 1). Проверил, что новый тест держит контракт
+  мутацией: подменил `budget.journal_warning_once` на копию без охранного
+  условия — `test_a_key_other_than_the_text_is_refused_loudly` краснеет
+  (`AssertionError: ValueError not raised`), на коде ветки зелен. Оба
+  сегодняшних вызывающих места под контракт попадают без исключений
+  (`budget.py:177`, `:183` — `key=detail`; `:313` — `key=None`;
+  `runner.py:366` — `key=detail`), так что новый отказ живого пути не
+  задевает: 190 тестов затронутых модулей зелены.
+- **Класс R1-F1 («заявка мутации не проверена прогоном»), а не
+  экземпляр.** Второго экземпляра в диффе не нашёл: обе новые заявки этой
+  итерации я прогнал сам (выше), а остальные 17 случаев двух файлов
+  сверил с заявками поштучно на итерации 1 и заново — на итерации 2 они не
+  менялись (в диффе `tests/` только добавленные строки).
 
 ## Реестр замечаний
 
 | id | статус | файл/строка | суть | последствие | решение |
 |---|---|---|---|---|---|
-| R1-F1 | fixed | tests/test_draft_mr_commits.py:229-252 | Заявка «Ловит мутацию» ложна: подмена `_ensure_draft_mr_after_publish` на версию без сверки `head == base` оставляет класс зелёным (проверено прогоном), и заявленное последствие («обращался бы к форджу») неверно — `ensure_draft_mr` всё равно останавливает вызов | Сверка `head == base` снимается без красного теста; её снятие возвращает шум журнала (`Draft MR пропущен` на каждый approve при ветке, равной базе) | Добавить `self.assertNotIn(github_adapter.DRAFT_MR_SKIPPED_ACTION, self.actions())` и переписать вторую половину заявки на настоящее последствие; либо убрать сверку вместе с тестом. **Итерация 2 (developer):** взят первый путь — сверка `head == base` нужна и оставлена. `tests/test_draft_mr_commits.py:248-252`: добавлен ассерт `assertNotIn(DRAFT_MR_SKIPPED_ACTION, self.actions())`, заявка переписана — мутация названа точно (сверка снята, узел зовётся на каждой публикации), последствие названо настоящее (лишняя запись журнала на каждый approve `merge_gate`, а не обращение к форджу: до форджа не доходит, останавливает `ensure_draft_mr`). Заявка проверена прогоном: под той самой мутацией (две строки сверки удалены из `_ensure_draft_mr_after_publish`) класс краснеет ровно этим ассертом — `'Draft MR пропущен: в ветке нет коммитов' unexpectedly found in ['push (голова не в origin)', 'Draft MR пропущен: в ветке нет коммитов']`, на восстановленном коде 7 passed |
-| R1-F2 | fixed | orchestrator/budget.py:80-84 | `key` сверяется с `row["detail"]`, а не с сохранённым ключом — контракт «ключ ≠ текст» узлом не поддержан и отказывает молча | Второй порог бюджета (класс `docs/backlog.md:156`) с `key=f"{ratio}"` вернёт запись на каждый шаг, без красного теста | Сузить контракт явно (`key is None` либо `key == detail`, в докстринге и проверкой) или сверять по вычисляемому ключу записи. **Итерация 2 (developer):** взят первый путь (второй невозможен — из записи восстановим только `detail`, колонку под ключ не заводим: `orchestrator/store.py` не в зонах). `orchestrator/budget.py:80-84` — `raise ValueError` на третьем значении, докстринг (`:60-78`) называет допустимыми ровно `key=None` и `key=detail` и причину отказа (носителя у ключа нет; понадобится ключ мимо текста — он потребует носителя). Новый тест `tests/test_journal_warning_once.py::JournalWarningOnceTest::test_a_key_other_than_the_text_is_refused_loudly` с заявкой на этот класс; заявка проверена прогоном — без охранного условия тест краснеет (`ValueError not raised`), с ним 12 passed |
+| R1-F1 | accepted | tests/test_draft_mr_commits.py:229-248 | Заявка «Ловит мутацию» была ложна: подмена `_ensure_draft_mr_after_publish` на версию без сверки `head == base` оставляла класс зелёным | Сверка `head == base` снималась без красного теста, а её снятие возвращает шум журнала (`Draft MR пропущен` на каждый approve при ветке, равной базе) | Закрыто первым путём: сверка оставлена, добавлен `assertNotIn(DRAFT_MR_SKIPPED_ACTION, self.actions())` (`:247-248`), заявка переписана на настоящее последствие. **Итерация 2 (reviewer):** `accepted` — мутационный зонд повторён, класс теперь краснеет ровно этим ассертом (на итерации 1 был `OK`) |
+| R1-F2 | accepted | orchestrator/budget.py:80-84 | `key` сверялся с `row["detail"]`, а не с сохранённым ключом — контракт «ключ ≠ текст» узлом не поддерживался и отказал бы молча | Второй порог бюджета с `key=f"{ratio}"` вернул бы запись на каждый шаг, без красного теста | Закрыто сужением контракта: `ValueError` на третьем значении, докстринг `:60-78` называет допустимые `key=None`/`key=detail` и причину; тест `test_a_key_other_than_the_text_is_refused_loudly`. **Итерация 2 (reviewer):** `accepted` — без охранного условия тест краснеет (`ValueError not raised`), все четыре сегодняшних вызова контракту соответствуют, затронутые модули зелены |
 
 ## Вердикт
 
-`changes_requested` — два пункта:
+`approved`.
 
-1. R1-F1 (major): дотянуть `test_a_branch_identical_to_the_base_wakes_nobody`
-   до её собственной заявки (ассерт на отсутствие записи
-   `DRAFT_MR_SKIPPED_ACTION`) и исправить текст заявки; либо убрать
-   избыточную сверку `head == base` вместе с тестом.
-2. R1-F2 (minor): явно сузить контракт `key` в `journal_warning_once`.
-
-Код по существу требований 1–11 реализован верно, планка и все затронутые
-модули зелёные; правок защищённых путей, ослабления тестов, гейтов и
-инвариантов нет.
+Обе записи реестра прошлых итераций закрыты в `accepted` — гейт `review ->
+verifying` по реестру пройдёт. Требования 1–12 реализованы, планка задачи
+(10 тестов, 4 subtests) и все затронутые модули зелёные; правок защищённых
+путей, ослабления тестов, гейтов, лимитов и инвариантов нет, ни одного
+удалённого или изменённого ассерта существующих тестов в диффе ветки.
+Пометок `# AC-n: manual|skip` в планке нет — автогейт acceptance задачи не
+выключен.
 
 ## Проверено исполнением
 
-- `python3 -m unittest tests.test_draft_mr_commits tests.test_journal_warning_once -v` —
-  18 тестов, OK.
-- `python3 -m pytest -q -p no:cacheprovider tasks/01M3HP7WAXKFK3GYZ3T6HX08M0/acceptance_tests` —
-  планка задачи: 10 passed, 4 subtests passed (совпадает с заявкой PLAN).
-  Пометок `# AC-n: manual|skip` в планке нет — автогейт acceptance задачи
-  не выключен; AC-1..AC-10 разложены по четырём файлам планки без дыр.
-- `python3 -m unittest tests.test_github_adapter tests.test_fsm_draft_mr_reentry
-  tests.test_spec_budget tests.test_runner_model_preflight
-  tests.test_budget_live_lease_and_escalation tests.test_store_journal` —
-  110 тестов, OK (четыре модуля требования 12 в их числе).
-- `python3 -m unittest tests.test_step_cost tests.test_invariants
-  tests.test_advance_guard tests.test_fsm_spec_gate_reject
+- `python3 -m unittest tests.test_journal_warning_once
+  tests.test_draft_mr_commits` — 19 тестов, OK (12 + 7, совпадает с
+  заявкой PLAN итерации 2).
+- `python3 -m pytest -q -p no:cacheprovider
+  tasks/01M3HP7WAXKFK3GYZ3T6HX08M0/acceptance_tests` — 10 passed,
+  4 subtests passed. Четыре файла планки покрывают AC-1..AC-10, пометок
+  `manual|skip` нет (`grep -rn "AC-" acceptance_tests/` — только
+  докстринги).
+- **Мутационный зонд R1-F1.** Подмена
+  `github_adapter._ensure_draft_mr_after_publish` копией без сверки
+  `head == gitcmd.branch_head_sha(base)` →
+  `DraftMrAtTheVerifyingRubiconTest`: `Ran 3 tests … FAILED (failures=1)`,
+  падает `test_a_branch_identical_to_the_base_wakes_nobody` на
+  `assertNotIn` с текстом `'Draft MR пропущен: в ветке нет коммитов'
+  unexpectedly found in ['push (голова не в origin)', 'Draft MR пропущен:
+  в ветке нет коммитов']`. На итерации 1 та же подмена давала `OK` — тест
+  действительно дотянут до заявки.
+- **Мутационный зонд R1-F2.** Подмена `budget.journal_warning_once`
+  копией без охранного `if key is not None and key != detail: raise` →
+  `JournalWarningOnceTest`: `Ran 6 tests … FAILED (failures=1)`,
+  `test_a_key_other_than_the_text_is_refused_loudly` —
+  `AssertionError: ValueError not raised`.
+- `python3 -m unittest tests.test_github_adapter
+  tests.test_fsm_draft_mr_reentry tests.test_spec_budget
+  tests.test_runner_model_preflight tests.test_step_cost
+  tests.test_store_journal tests.test_budget_live_lease_and_escalation
   tests.test_budget_calibration_table tests.test_program_spend_reseed` —
-  161 тест, OK (в том числе инвариант 35 и оба существующих читателя
-  записи «бюджет: предупреждение», `tests/test_step_cost.py:841,850`).
-- `python3 -m unittest tests.test_merge_gate_ci_wait tests.test_multitarget
-  tests.test_multitarget_invariants tests.test_auto_cycle
-  tests.test_acceptance_tests_flow tests.test_step_autocommit
-  tests.test_git_fixation tests.test_runner_role_model
-  tests.test_runner_wave_breaker tests.test_catalog_zone_overlap` —
-  440 тестов, OK.
-- `python3 -m unittest tests.test_amend tests.test_catalog_zone_overlap
-  tests.test_detached_cycle tests.test_timeout_checkpoint tests.test_doctor` —
-  255 тестов, OK (все оставшиеся модули, упоминающие `ensure_draft_mr`/
-  `ensure_head_in_origin`, по `grep -rln` покрыты).
-- Мутационная проба R1-F1: подмена `github_adapter._ensure_draft_mr_after_publish`
-  на версию без сверки `head == base` → `DraftMrAtTheVerifyingRubiconTest`
-  `Ran 3 tests … OK`; зонд журнала под той же мутацией показал
-  `['push (голова не в origin)', 'Draft MR пропущен: в ветке нет коммитов']`,
-  `gh: []`, `flag: 0`.
-- `python3 scripts/codebase_map.py` + `git diff -- docs/codebase-map.md` —
-  расхождение только в строке `built_at_sha` (1 строка), содержимое карты
-  свежее; дерево восстановлено `git checkout -- docs/codebase-map.md`.
-- `git diff --stat 6b8cee21…HEAD` — изменены только `orchestrator/budget.py`,
-  `orchestrator/github_adapter.py`, `orchestrator/runner.py` и два НОВЫХ
-  файла `tests/`; ни одного изменённого/удалённого ассерта существующих
-  тестов, ни одной правки `skills/`, `templates/`, `gates.yaml`,
-  `roles.yaml`, `.github/`, `docs/invariants.md`.
+  190 тестов, OK (четыре модуля требования 12 и оба читателя записи
+  «бюджет: предупреждение» в их числе).
+- `python3 -m unittest tests.test_invariants tests.test_guard_mutation_claim
+  tests.test_advance_guard tests.test_auto_cycle
+  tests.test_fsm_spec_gate_reject` — 151 тест, OK (инвариант 35 на новых
+  файлах и гейт заявки мутации в их числе).
+- `python3 scripts/codebase_map.py` + `git diff --numstat --
+  docs/codebase-map.md` — 1 изменённая строка, и это только
+  `built_at_sha` (`0490b7e0` → `2b99fc87`); содержимое карты свежее,
+  заявка PLAN верна. Дерево восстановил `git checkout --
+  docs/codebase-map.md`, `git status --short` чист.
+- `git diff --stat 6b8cee21...HEAD -- . ':!tasks/'` — только
+  `orchestrator/budget.py`, `orchestrator/github_adapter.py`,
+  `orchestrator/runner.py`, `docs/codebase-map.md` и два НОВЫХ файла
+  `tests/`; `git diff 6b8cee21...HEAD -- tests/ | grep -E "^-[^-]"` —
+  пусто (ни одной удалённой строки в `tests/`, включая ассерты).
 
-Читал сверх пакета (причины названы в замечаниях и таблице выше):
-`orchestrator/github_adapter.py` целиком — проверить, что `base` и
-`repo_context` посчитаны ДО вставленной сверки (требование 8);
-`orchestrator/gitcmd.py` (`commits_behind`, `branch_head_sha`) — убедиться,
-что переставленные аргументы дают именно «коммиты ветки сверх базы» и что
-деградация к `None` реальна; `orchestrator/store.py`
-(`task_steps`, `refusal_history`, `open_alerts`) — сверить порядок выборки
-(без LIMIT, `ORDER BY id`) и идиому границы пребывания; вызывающие места
-`_maybe_ensure_draft_mr`/`ensure_head_in_origin` в `orchestrator/fsm.py`,
-`fsm_advance.py`, `fsm_merge_gate.py`, `advance_gates/tests_writing.py` —
-проверить требование 9 на прямом пути; `orchestrator/alerts.py` — сверить
-сигнатуру `open_alerts` из сценария PLAN шага 6.
+Читал сверх пакета (причины — в замечаниях и таблице выше):
+`orchestrator/budget.py:1-130` и вызывающие места `:170-195`, `:305-316` —
+проверить, что новый `ValueError` не задевает ни один живой вызов (R1-F2);
+`orchestrator/runner.py:355-375` — то же для предполёта;
+`orchestrator/github_adapter.py:27-275` — сверить порядок локальной
+проверки относительно push/`gh` и содержимое хука (требования 8–10 и
+мутация R1-F1); `orchestrator/store.py` (`task_steps`, `set_state`) —
+убедиться, что выборка границы пребывания не ограничена LIMIT и префикс
+записи входа в состояние совпадает с префиксом сверки (требование 4);
+`tests/test_draft_mr_commits.py`, `tests/test_journal_warning_once.py`
+целиком — сверка заявок мутации с ассертами.
 
 ## Предложения системе
 
-- Заявка «Ловит мутацию» проверяется ревьювером глазами, и ложная заявка
-  (R1-F1) выявляется только ручной подменой узла. `skills/test-authoring.md`
-  стоило бы прямо потребовать от автора теста ПРОГНАТЬ заявленную мутацию
-  и назвать в PLAN, что тест на ней покраснел, — ровно тем же приёмом,
-  каким `skills/conventions-core.md` уже требует `git apply --check` для
-  диффа по защищённому пути.
+- Реестр замечаний и правило вердикта расходятся на `minor`: «0
+  blocker/major → approved», но гейт `review -> verifying` требует ВСЕ
+  записи в `accepted`. Заведённое `minor`-замечание тем самым стоит
+  полной итерации ревью, как `major` — на этой задаче так закрывался
+  R1-F2. Стоит назвать это в `skills/review-checklist.md` прямо (либо
+  «minor тоже блокирует, заводи осознанно», либо отдельный терминальный
+  статус для принятого-к-сведению minor), иначе ревьювер выбирает между
+  «промолчать» и «оплатить итерацию» вслепую.
+</content>
