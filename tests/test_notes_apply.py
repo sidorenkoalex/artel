@@ -245,10 +245,66 @@ class ApplyRefusalTest(ApplySandbox):
 
         message = self.draft_refusal(draft_with_extra_row())
 
-        self.assertIn(notes.DOC_COMMIT_BASE_REFUSAL, message, message)
+        self.assertIn(notes.APPLY_FOREIGN_BASE_REFUSAL, message, message)
         self.assertEqual(before, self.origin_head())
         self.assertEqual(self.origin_backlog(), foreign)
         self.assertEqual(notes.pending_notes(), [])
+
+    def test_own_note_commit_past_the_pin_does_not_block_apply(self):
+        """Обычная заметка уехала в origin (пин главной копии при этом не
+        двигается — так работает `note`), и `--apply` ПОСЛЕ неё проходит:
+        сверка базы отличает свою правку от чужой (требование 10, R1-F2
+        ревью итерации 1).
+
+        Ловит мутацию: сверка базы `--apply` сведена к пиновой сверке
+        `doc-commit` (`origin_sha != pin_sha` — отказ) — после первой же
+        заметки `--apply` отказывает «сначала pin-update», и тест красен на
+        `SystemExit` вместо заменённого документа.
+        """
+        capture(notes.cmd_note, ["--now", "копилка", "--text",
+                                 "| 2 | 27.09 | ЗАМЕТКАПОСЛЕБАЗЫ | o.py | — |"])
+        self.assertIn("ЗАМЕТКАПОСЛЕБАЗЫ", self.origin_backlog())
+        # Заготовка собрана от СВЕЖЕГО содержимого origin — тот порядок,
+        # который предписывает docs/operator-session.md.
+        fresh = self.origin_backlog()
+        lines = fresh.split("\n")
+        lines.insert(lines.index(KOPILKA_HEADER) + 2,
+                     "| 1 | 27.09 | РАЗНОС | orchestrator/n.py | новое |")
+        draft = "\n".join(lines)
+
+        self.apply_draft(draft)
+
+        self.assertEqual(self.origin_backlog(), draft)
+        self.assertIn("ЗАМЕТКАПОСЛЕБАЗЫ", self.origin_backlog())
+        self.assertIn("удалено строк: 0", self.journal_text())
+
+    def test_origin_changed_while_the_record_was_held_refuses_on_flush(self):
+        """Заготовка удержана окном тишины, документ в origin за это время
+        уехал (заметка `--now` обходит окно): явный флаш отказывает, назвав
+        причину, запись остаётся удержанной, а уехавшая строка в origin
+        цела — «изменился между чтением заготовки и коммитом» (требование
+        10).
+
+        Ловит мутацию: сверка базы смотрит только на состояние ПЕРВОГО
+        построения (`base_blob` в записи не хранится либо не сверяется при
+        флаше) — заготовка уезжает поверх новой строки и стирает её, и тест
+        красен на содержимом origin.
+        """
+        draft = draft_with_extra_row()
+        self.open_silence_window()
+        capture(notes.cmd_note, ["--apply", str(self.source_file(draft)),
+                                 "--message", REASON])
+        self.assertEqual(len(notes.pending_notes()), 1, notes.pending_notes())
+        capture(notes.cmd_note, ["--now", "копилка", "--text",
+                                 "| 2 | 27.09 | ПОСЛЕЗАГОТОВКИ | o.py | — |"])
+        before = self.origin_head()
+
+        output = capture(notes.cmd_note, ["--flush"])
+
+        self.assertIn(notes.APPLY_STALE_BASE_REFUSAL, output, output)
+        self.assertEqual(before, self.origin_head())
+        self.assertIn("ПОСЛЕЗАГОТОВКИ", self.origin_backlog())
+        self.assertEqual(len(notes.pending_notes()), 1, notes.pending_notes())
 
     def test_draft_without_a_section_refuses_before_commit(self):
         """Заготовка, потерявшая раздел «## Очередь Оператора» целиком, —

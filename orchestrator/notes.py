@@ -70,6 +70,14 @@ blob-sha пути в `origin/<MAIN_BRANCH>` против `HEAD:<путь>` гл�
 изолированным путём и с теми же сверками, что `doc-commit` (база, окно
 тишины, изменение файла в origin), плюс сверка формы самой заготовки
 (`_apply_shape_refusal`) и запись журнала с перечнем удалённых строк.
+Сверка базы у `--apply` СВОЯ, не пиновая (`_foreign_base_refusal`,
+требование 10): `docs/backlog.md` правит сама `note`, коммитя прямо в
+origin мимо главной копии, поэтому пин отстаёт от origin уже после
+первой же заметки — пиновая сверка `doc-commit` закрывала бы `--apply` в
+штатном состоянии пульта. Отказ выносится на ЧУЖУЮ правку документа
+после базы и на расхождение origin с blob'ом, от которого построена
+заготовка (`base_blob` записи — «изменился между чтением заготовки и
+коммитом»).
 
 Гейт полного набора `tests/` перед отправкой правки конфигурации
 Оператора (требования 13-16, `_suite_gate_refusal`): правка `roles.yaml`
@@ -79,9 +87,20 @@ blob-sha пути в `origin/<MAIN_BRANCH>` против `HEAD:<путь>` гл�
 `_commit_and_push` после записи файла и до `git commit`. Путь `docs/**`
 прогона не заводит вовсе (требование 16), осознанный обход —
 `--accept-red "<основание>"` с записью журнала (требование 15).
+
+Чистота общего рабочего репозитория — предусловие всей механики: отказ
+гейта выходит `sys.exit`'ом ПОСЛЕ записи правки в дерево, поэтому он
+снимает её (`_restore_tree`), а каждая сборка приводит дерево к
+`FETCH_HEAD` принудительно и с проверкой кода возврата
+(`_fetch_and_build`). Сверка «содержимое уже совпадает» сравнивает
+blob-sha, а не файл дерева (`_content_already_in_origin`). Без этих трёх
+вещей грязный файл читался бы следующей командой как содержимое origin, и
+правка конфигурации после отказа гейта не проходила бы уже никогда
+(R1-F1 ревью итерации 1).
 """
 import argparse
 import json
+import os
 import re
 import sys
 import time
@@ -113,6 +132,20 @@ DOC_COMMIT_FOREIGN_REFUSAL = ("код и артефакты меняются з�
                               "doc-commit")
 DOC_COMMIT_BASE_REFUSAL = ("файл изменился в origin после пина — сначала "
                            "pin-update")
+
+# Именованные отказы сверки базы `note --apply` (требование 10). Пиновый
+# текст `DOC_COMMIT_BASE_REFUSAL` здесь не годится: «сначала pin-update»
+# для бэклога не лечение — origin уходит от пина при каждой заметке
+# (`_foreign_base_refusal`).
+APPLY_FOREIGN_BASE_REFUSAL = (
+    "документ изменился в origin ЧУЖОЙ правкой после базы главной копии — "
+    "пересобери заготовку от свежего origin/main")
+APPLY_STALE_BASE_REFUSAL = (
+    "документ изменился в origin после чтения заготовки — пересобери "
+    "заготовку от свежего origin/main")
+APPLY_UNKNOWN_BASE_REFUSAL = (
+    "историю документа в origin относительно базы главной копии прочитать не "
+    "удалось — сверка базы закрыта по умолчанию, коммита нет")
 
 # Именованное действие журнала об осознанном обходе гейта полного набора
 # (требование 15): коммит проходит при необеспеченном наборе, но обход
@@ -157,6 +190,16 @@ MAX_PUSH_ATTEMPTS = 3
 # коммитит и там, где `git config user.email` не настроен вовсе.
 NOTE_AUTHOR_NAME = "Artel Operator Note"
 NOTE_AUTHOR_EMAIL = "operator-note@artel.invalid"
+
+# Префикс сообщения коммита, которым пульт правит `docs/backlog.md`
+# (`_commit_message` ниже строит им все виды записи `note`). По нему
+# сверка базы `--apply` отличает свою правку документа от чужой
+# (`_foreign_backlog_commits`, требование 10). Идентичности коммита
+# (`NOTE_AUTHOR_EMAIL`) для этого мало: `GIT_AUTHOR_EMAIL`/
+# `GIT_COMMITTER_EMAIL` окружения перебивают `-c user.email` самой
+# команды, и коммит `note` уносит адрес того окружения, из которого пульт
+# запущен, — на живом пульте адреса Оператора, не этой константы.
+NOTE_COMMIT_SUBJECT_PREFIX = "оператор: "
 
 
 def _work_dir() -> Path:
@@ -457,6 +500,10 @@ def _build_for(request: dict, original: str) -> tuple[str, str, str | None]:
 
 def _commit_message(section_key: str, request: dict,
                     observation: str | None) -> str:
+    """Сообщение коммита по виду записи. Все виды `note` (включая
+    `--apply`) начинаются `NOTE_COMMIT_SUBJECT_PREFIX` — по нему сверка
+    базы `--apply` узнаёт правку документа, сделанную самим пультом, и
+    константа взята здесь же, чтобы два места не разошлись."""
     kind = request["kind"]
     if kind == DOC_COMMIT_KIND:
         # Ровно `docs: <путь> — <message>` / `config: <путь> — <message>`
@@ -464,19 +511,20 @@ def _commit_message(section_key: str, request: dict,
         # читается из истории целиком.
         rel = request["path"]
         return f"{_doc_commit_prefix(rel)}: {rel} — {request['message']}"
+    prefix = NOTE_COMMIT_SUBJECT_PREFIX
     if kind == APPLY_KIND:
         # Основание `--message` целиком, без усечения (требование 9, AC-8) —
         # тот же довод, что у `doc-commit`: основание замены документа
         # целиком читается из истории, а не угадывается по обрезку.
-        return (f"оператор: {BACKLOG_REL} заменён заготовкой — "
+        return (f"{prefix}{BACKLOG_REL} заменён заготовкой — "
                 f"{request['message']}")
     if kind == "drop":
-        return f"оператор: {section_key} — снята: {observation[:80]}"
+        return f"{prefix}{section_key} — снята: {observation[:80]}"
     if kind == "set-state":
-        return f"оператор: {section_key} — состояние: {request['text'][:80]}"
+        return f"{prefix}{section_key} — состояние: {request['text'][:80]}"
     if kind == "set-priority":
-        return f"оператор: {section_key} — приоритет: {request['text'][:80]}"
-    return f"оператор: {section_key} — {request['text'][:80]}"
+        return f"{prefix}{section_key} — приоритет: {request['text'][:80]}"
+    return f"{prefix}{section_key} — {request['text'][:80]}"
 
 
 def _origin_url() -> str:
@@ -548,6 +596,55 @@ def _blob_sha(repo: Path, revision_path: str) -> str | None:
     return res.stdout.strip() or None
 
 
+def _content_blob_sha(work_dir: Path, content: str) -> str | None:
+    """blob-sha содержимого — счётом самого git (`hash-object --stdin`) по
+    байтам: сравнение с blob'ом пути в origin обязано считаться тем же
+    алгоритмом, каким репозиторий хранит объекты.
+
+    `None` — git не ответил: вызывающий код трактует это как «не
+    совпадает» и идёт коммитить (пустой коммит git сам не сделает), а не
+    как молчаливое совпадение.
+    """
+    res = gitcmd.carpentry(work_dir, ["hash-object", "--stdin"],
+                           dict(os.environ),
+                           input=content.encode("utf-8"), text=False)
+    if res is None or res.returncode != 0:
+        return None
+    return res.stdout.decode("utf-8", "replace").strip() or None
+
+
+def _content_already_in_origin(work_dir: Path, rel: str,
+                               content: str) -> bool:
+    """Содержимое уже лежит в свежем `origin/<MAIN_BRANCH>` по пути `rel` —
+    сравнением blob-sha `FETCH_HEAD:<rel>` с blob-sha самого содержимого.
+
+    Не файлом рабочего дерева, как было до итерации 2 ревью: общий рабочий
+    репозиторий `.artel/notes-work` мог остаться грязным от прошлого
+    отказа, и тогда сравнение с файлом отвечало бы про чужое содержимое
+    вместо содержимого origin — правка конфигурации после отказа гейта
+    набора не проходила уже никогда (R1-F1).
+    """
+    origin_sha = _blob_sha(work_dir, f"FETCH_HEAD:{rel}")
+    if origin_sha is None:
+        return False
+    return _content_blob_sha(work_dir, content) == origin_sha
+
+
+def _restore_tree(work_dir: Path, rel: str) -> None:
+    """Снять записанную правку пути `rel` в общем рабочем репозитории:
+    вернуть дерево к состоянию текущего коммита (`checkout -- <rel>`), а
+    путь, которого в коммите нет вовсе, удалить (`clean -f -- <rel>`).
+
+    Зовётся на единственном пути, который выходит `sys.exit`'ом ПОСЛЕ
+    записи правки в дерево, — отказе гейта полного набора. Без этого общий
+    репозиторий оставался грязным (R1-F1 ревью итерации 1), и следующая
+    команда либо читала грязный файл как содержимое origin, либо спотыкалась
+    на `checkout` поверх локальных изменений.
+    """
+    gitcmd.in_repo(work_dir, "checkout", "-q", "--", rel)
+    gitcmd.in_repo(work_dir, "clean", "-q", "-f", "--", rel)
+
+
 def _build_doc_commit(work_dir: Path,
                       request: dict) -> tuple[str, str, str | None]:
     """Валидация записи `doc-commit` от свежего `FETCH_HEAD` (требование
@@ -559,7 +656,9 @@ def _build_doc_commit(work_dir: Path,
 
     Отдельный отказ «содержимое уже совпадает»: иначе `git commit` не
     нашёл бы изменений, `MAX_PUSH_ATTEMPTS` повторов провалились бы, и
-    запись повисла бы в `_pending_dir()` без внятной причины.
+    запись повисла бы в `_pending_dir()` без внятной причины. Сверка — по
+    blob'у origin (`_content_already_in_origin`), не по файлу рабочего
+    дерева: тот мог остаться грязным от прошлого отказа гейта набора.
 
     Возвращает тройку той же формы, что `_build_for` (`(текст, ключ,
     наблюдение)`): ключом служит сам путь — он идёт в сообщение коммита.
@@ -570,8 +669,7 @@ def _build_doc_commit(work_dir: Path,
     if origin_sha != pin_sha:
         sys.exit(f"{rel}: {DOC_COMMIT_BASE_REFUSAL}")
     content = request["content"]
-    target = work_dir / rel
-    if target.is_file() and target.read_bytes() == content.encode("utf-8"):
+    if _content_already_in_origin(work_dir, rel, content):
         sys.exit(f"{rel}: содержимое уже совпадает с "
                  f"origin/{config.MAIN_BRANCH} — коммитить нечего")
     return content, rel, None
@@ -621,15 +719,89 @@ def _apply_journal_detail(rows: list[str]) -> str:
     return "; ".join([f"удалено строк: {len(rows)}", *rows])
 
 
+def _foreign_backlog_commits(work_dir: Path,
+                             pin_commit: str) -> list[str] | None:
+    """Коммиты origin, тронувшие `BACKLOG_REL` после базы главной копии и
+    сделанные НЕ самим пультом.
+
+    Свой коммит узнаётся по сообщению (`NOTE_COMMIT_SUBJECT_PREFIX`, тем
+    же, которым его строит `_commit_message`) ЛИБО по идентичности
+    (`NOTE_AUTHOR_EMAIL`). Двух признаков не из перестраховки: адрес автора
+    задаётся `-c user.email`, а его перебивает `GIT_AUTHOR_EMAIL` окружения
+    пульта, так что на живом пульте коммит `note` несёт адрес Оператора —
+    одного адреса не хватило бы; сообщение же строит сам пульт всегда.
+
+    `None` — git не ответил (коммита базы нет в истории origin, `log`
+    отказал): вызывающий код закрывает сверку, а не считает список пустым.
+    """
+    res = gitcmd.in_repo(work_dir, "log", "--format=%H%x00%ae%x00%s",
+                         f"{pin_commit}..FETCH_HEAD", "--", BACKLOG_REL)
+    if res is None or res.returncode != 0:
+        return None
+    foreign = []
+    for line in res.stdout.split("\n"):
+        parts = line.split("\0")
+        if len(parts) != 3 or not parts[0].strip():
+            continue
+        sha, email, subject = (p.strip() for p in parts)
+        own = (subject.startswith(NOTE_COMMIT_SUBJECT_PREFIX)
+               or email == NOTE_AUTHOR_EMAIL)
+        if not own:
+            foreign.append(sha)
+    return foreign
+
+
+def _foreign_base_refusal(work_dir: Path,
+                          origin_sha: str | None) -> str | None:
+    """Текст отказа сверки базы `--apply` при ПЕРВОМ построении правки,
+    либо `None` — база годна (требование 10).
+
+    Расхождение blob'а `docs/backlog.md` в свежем origin с blob'ом того же
+    пути в HEAD главной копии (пине) само по себе отказом НЕ является — в
+    отличие от `doc-commit` (`_build_doc_commit`). Документ правит сама
+    `note`, коммитя прямо в origin мимо главной копии: пин отстаёт от
+    origin уже после первой же заметки, и пиновая сверка закрывала бы
+    `--apply` в штатном состоянии пульта (замер 27.09: пин b21f01e6 нёс
+    blob 464e4fae, origin — 68e33dae, расхождение внесено коммитом самой
+    `note`; R1-F2 ревью итерации 1). «Сначала pin-update» тут и не
+    лечение: следующая заметка снова уводит origin от пина.
+
+    Отказ выносится, когда документ после базы тронула ЧУЖАЯ правка —
+    коммит не пультовой идентичности: заготовка готовилась от другой версии
+    документа и стёрла бы такую правку ЦЕЛИКОМ, а не одной строкой. Git не
+    ответил — тоже отказ: сверка закрыта по умолчанию.
+    """
+    if origin_sha is not None and origin_sha == _blob_sha(
+            config.ROOT, f"HEAD:{BACKLOG_REL}"):
+        return None
+    pin_commit = gitcmd.head_sha(config.ROOT)
+    foreign = (_foreign_backlog_commits(work_dir, pin_commit)
+               if pin_commit else None)
+    if foreign is None:
+        return APPLY_UNKNOWN_BASE_REFUSAL
+    if foreign:
+        return f"{APPLY_FOREIGN_BASE_REFUSAL} (коммит {foreign[0][:12]})"
+    return None
+
+
 def _build_apply(work_dir: Path, request: dict,
                  original: str) -> tuple[str, str, str | None]:
     """Валидация и построение правки `note --apply` (требования 9-12).
 
-    Сверка базы — та же, что у `_build_doc_commit` (требование 10):
-    blob-sha `docs/backlog.md` в свежем `origin/<MAIN_BRANCH>` против
-    blob-sha того же пути в HEAD главной копии. Разошлись — документ в
-    origin ушёл от базы, заготовка легла бы поверх чужой правки и стёрла
-    бы её целиком (замена файла, не правка одной строки), поэтому отказ.
+    Сверка базы — двумя шагами (требование 10: «если `docs/backlog.md` в
+    `origin/main` изменился между чтением заготовки и коммитом»):
+
+    1. Первое построение — `_foreign_base_refusal`: чужая правка документа
+       после базы главной копии закрывает команду, своя (коммит `note`) —
+       нет.
+    2. Всякое последующее — сверка с `base_blob`, blob'ом origin,
+       запомненным в записи при первом построении: это и есть «между
+       чтением заготовки и коммитом» для повтора non-fast-forward и для
+       записи, удержанной окном тишины и отправляемой флашем. Разошлись —
+       документ в origin уехал, заготовка стёрла бы уехавшее целиком.
+
+    `base_blob` кладётся в саму запись (`request`), поэтому переживает
+    удержание: `_hold_pending` пишет тот же словарь в JSON.
 
     Отказ «заготовка совпадает с origin» — тот же класс, что у
     `_build_doc_commit`: иначе `git commit` не нашёл бы изменений,
@@ -642,11 +814,16 @@ def _build_apply(work_dir: Path, request: dict,
     `_commit_and_push` его уже не увидит.
     """
     origin_sha = _blob_sha(work_dir, f"FETCH_HEAD:{BACKLOG_REL}")
-    pin_sha = _blob_sha(config.ROOT, f"HEAD:{BACKLOG_REL}")
-    if origin_sha != pin_sha:
-        sys.exit(f"{BACKLOG_REL}: {DOC_COMMIT_BASE_REFUSAL}")
+    recorded = request.get("base_blob")
+    if recorded is None:
+        refusal = _foreign_base_refusal(work_dir, origin_sha)
+        if refusal is not None:
+            sys.exit(f"{BACKLOG_REL}: {refusal}")
+        request["base_blob"] = origin_sha
+    elif recorded != origin_sha:
+        sys.exit(f"{BACKLOG_REL}: {APPLY_STALE_BASE_REFUSAL}")
     draft = request["content"]
-    if draft == original:
+    if _content_already_in_origin(work_dir, BACKLOG_REL, draft):
         sys.exit(f"{BACKLOG_REL}: заготовка совпадает с содержимым в "
                  f"origin/{config.MAIN_BRANCH} — коммитить нечего")
     refusal = _apply_shape_refusal(draft, original)
@@ -654,6 +831,27 @@ def _build_apply(work_dir: Path, request: dict,
         sys.exit(refusal)
     return draft, BACKLOG_REL, _apply_journal_detail(
         _dropped_rows(original, draft))
+
+
+def _config_path_request(request: dict) -> bool:
+    """Запись правит файл конфигурации Оператора. Только на таких путях
+    стоит гейт полного набора (требования 13, 16) — и только на них
+    осознанному обходу есть что записывать журналом (требование 15):
+    на пути `docs/**` гейта нет вовсе, и запись об обходе была бы ложной
+    (R1-F4 ревью итерации 1)."""
+    return (request["kind"] == DOC_COMMIT_KIND
+            and request["path"] in DOC_COMMIT_CONFIG_PATHS)
+
+
+def _suite_gate_applies(request: dict) -> bool:
+    """Отправка этой записи заведёт прогон полного набора: путь
+    конфигурации, обхода `--accept-red` в записи нет.
+
+    Знать это ЗАРАНЕЕ нужно флашу (`_flush_pending`): оппортунистический
+    допуш не вправе увести произвольную команду `note` в многоминутный
+    прогон (R1-F3 ревью итерации 1).
+    """
+    return _config_path_request(request) and not request.get("accept_red")
 
 
 def _suite_gate_refusal(work_dir: Path, request: dict) -> str | None:
@@ -678,11 +876,7 @@ def _suite_gate_refusal(work_dir: Path, request: dict) -> str | None:
     заранее принятого исхода — чистая потеря. Сам обход пишет запись
     журнала (`_journal_commit`), а не молчит.
     """
-    if request["kind"] != DOC_COMMIT_KIND:
-        return None
-    if request["path"] not in DOC_COMMIT_CONFIG_PATHS:
-        return None
-    if request.get("accept_red"):
+    if not _suite_gate_applies(request):
         return None
     green, output = acceptance.run_full_suite(work_dir)
     if green:
@@ -721,15 +915,30 @@ def _fetch_and_build(work_dir: Path,
     наружу нетронутым — коммит не создаётся, файл в `_pending_dir()` не
     появляется, независимо от состояния окна.
 
-    `None` — сетевой отказ fetch: вызывающий код обязан трактовать это как
-    удержание (требование 5), окно тишины здесь не участвует вовсе.
+    `None` — сетевой отказ fetch ЛИБО дерево рабочего репозитория не
+    удалось привести к `FETCH_HEAD`: вызывающий код обязан трактовать это
+    как удержание (требование 5), окно тишины здесь не участвует вовсе.
+
+    Checkout — принудительный (`-f`) и с проверкой кода возврата: без
+    первого он спотыкался о локальные изменения, оставшиеся от прошлого
+    отказа, а без второй сборка шла на дереве ПРОШЛОГО коммита молча, и
+    каждая заметка отказывала «не удалось отправить» (R1-F1 ревью итерации
+    1, второй сценарий). Путь записи дочищается от невыслеженного мусора
+    (`clean`): файла, которого в `FETCH_HEAD` нет, принудительный checkout
+    не снимает, а сборка прочла бы его как содержимое origin.
     """
     fetch = gitcmd.in_repo(work_dir, "fetch", "-q", "origin",
                            config.MAIN_BRANCH)
     if fetch is None or fetch.returncode != 0:
         return None
-    gitcmd.in_repo(work_dir, "checkout", "-q", "-B", config.MAIN_BRANCH,
-                   "FETCH_HEAD")
+    checkout = gitcmd.in_repo(work_dir, "checkout", "-q", "-f", "-B",
+                              config.MAIN_BRANCH, "FETCH_HEAD")
+    if checkout is None or checkout.returncode != 0:
+        detail = (checkout.stderr or "").strip() if checkout else "нет ответа"
+        print(f"рабочий репозиторий {work_dir} не приведён к "
+              f"origin/{config.MAIN_BRANCH}: {detail}")
+        return None
+    gitcmd.in_repo(work_dir, "clean", "-q", "-f", "--", _target_rel(request))
     if request["kind"] == DOC_COMMIT_KIND:
         return _build_doc_commit(work_dir, request)
     original = _read_backlog(work_dir)
@@ -756,7 +965,11 @@ def _commit_and_push(work_dir: Path, request: dict, new_text: str,
     вовсе, и набор гоняется тогда, когда отправка действительно идёт
     (`--flush`). Цена — прогон на каждой попытке повтора
     non-fast-forward; отказ гейта выходит `sys.exit` с первой попытки,
-    поэтому три красных прогона подряд невозможны."""
+    поэтому три красных прогона подряд невозможны. Перед выходом записанная
+    правка СНИМАЕТСЯ с дерева (`_restore_tree`): это единственное место,
+    которое выходит из команды после записи файла, и грязный общий
+    репозиторий ломал бы и повтор той же команды, и любую следующую
+    заметку (R1-F1 ревью итерации 1)."""
     rel = _target_rel(request)
     is_doc_commit = request["kind"] == DOC_COMMIT_KIND
     if is_doc_commit:
@@ -765,6 +978,7 @@ def _commit_and_push(work_dir: Path, request: dict, new_text: str,
         _write_backlog(work_dir, new_text)
     gate = _suite_gate_refusal(work_dir, request)
     if gate is not None:
+        _restore_tree(work_dir, rel)
         sys.exit(gate)
     message = _commit_message(section_key, request, observation)
     gitcmd.in_repo(work_dir, "add", rel)
@@ -791,14 +1005,18 @@ def _journal_commit(request: dict, section_key: str, observation: str | None,
     `doc-commit` журнал не пишет (требование 7 её SPEC) — кроме
     осознанного обхода гейта набора: он обязан остаться видимым Оператору
     вместе с путём и основанием (требование 15 SPEC
-    01M3HST4SGX0SPKAGNHVY7DWHM). `--apply` пишет перечень удалённых строк
-    (требование 12), пути `note` — прежнюю строку, буквально.
+    01M3HST4SGX0SPKAGNHVY7DWHM). Обход записывается только на пути
+    конфигурации (`_config_path_request`): на `docs/**` гейта нет вовсе, и
+    запись об обходе была бы ложной — а именно по этим записям Оператор
+    обходы и ищет (R1-F4 ревью итерации 1). `--apply` пишет перечень
+    удалённых строк (требование 12), пути `note` — прежнюю строку,
+    буквально.
     """
     conn = store.db()
     kind = request["kind"]
     if kind == DOC_COMMIT_KIND:
         reason = request.get("accept_red")
-        if reason:
+        if reason and _config_path_request(request):
             store.journal(conn, None, "operator", ACCEPT_RED_JOURNAL_ACTION,
                           f"{rel}: {reason}")
         return
@@ -838,23 +1056,45 @@ def _attempt(request: dict) -> str | None:
     return None
 
 
-def _flush_pending() -> None:
-    """Безусловный допуш всех удержанных заметок, независимо от окна
-    тишины (требование 5/7, AC-6): и оппортунистический вызов в начале
-    `cmd_note` (когда окно уже проверено закрытым вызывающим кодом), и
-    явный `note --flush` (обходит окно решением Оператора, AC-6) зовут
-    эту же функцию — разница только в том, вызывает ли её `cmd_note`
-    вообще (см. `_silence_window_reason` там).
+def _flush_pending(explicit: bool = False) -> None:
+    """Допуш удержанных заметок независимо от окна тишины (требование 5/7,
+    AC-6): и оппортунистический вызов в начале `cmd_note` (когда окно уже
+    проверено закрытым вызывающим кодом), и явный `note --flush` (обходит
+    окно решением Оператора, AC-6) зовут эту же функцию — разница в
+    `explicit` и в том, вызывает ли её `cmd_note` вообще (см.
+    `_silence_window_reason` там).
 
-    Отказ одной заметки (сеть всё ещё недоступна, либо устаревшая
-    заметка больше не проходит собственную валидацию) не должен рушить
-    текущий вызов `note` — файл просто остаётся висеть.
+    `explicit=False` (попутный допуш) НЕ трогает запись, отправка которой
+    заведёт прогон полного набора `tests/` (`_suite_gate_applies`), — она
+    ждёт явного флаша, и причина печатается. Иначе одна удержанная правка
+    `roles.yaml` при красном наборе превращала бы КАЖДУЮ следующую `note`
+    в молчаливый многоминутный прогон (R1-F3 ревью итерации 1): Оператор
+    просил записать наблюдение, а не прогнать набор.
+
+    Отказ одной заметки (сеть всё ещё недоступна, либо устаревшая заметка
+    больше не проходит собственную валидацию) не рушит текущий вызов
+    `note` — файл остаётся висеть, — но и не молчит: причина печатается.
+    Прежде `SystemExit` глотался целиком, и запись висела без объяснения,
+    а `doctor` сообщал только сам факт удержания.
     """
     for path in _pending_paths():
         try:
             request = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        if not explicit and _suite_gate_applies(request):
+            print(f"{request['path']}: удержанная правка конфигурации попутно "
+                  f"не отправляется — её отправка гоняет полный набор "
+                  f"tests/; отправка — doc-commit --flush либо note --flush")
+            continue
+        try:
             sha = _attempt(request)
-        except (SystemExit, OSError, json.JSONDecodeError):
+        except SystemExit as exc:
+            detail = str(exc)
+            if detail:
+                print(f"удержанная запись не отправлена: {detail}")
+            continue
+        except OSError:
             continue
         if sha is not None:
             path.unlink(missing_ok=True)
@@ -940,9 +1180,12 @@ def cmd_note(argv: list[str]) -> None:
     # при открытом окне удержанные записи остаются нетронутыми, вне окна —
     # допушиваются, как и сегодня. `--flush` форсирует его безусловно
     # (короткое замыкание `or` — окно вовсе не проверяется, требование
-    # 5/AC-6, не смешивается с оппортунистическим путём).
+    # 5/AC-6, не смешивается с оппортунистическим путём). `explicit` —
+    # только для явного флаша: попутный не вправе увести `note` в прогон
+    # полного набора за удержанную правку конфигурации (см.
+    # `_flush_pending`).
     if args.flush or _silence_window_reason() is None:
-        _flush_pending()
+        _flush_pending(explicit=args.flush)
     # `--state` — второе имя `--append` (требование 8): обе формы ведут в
     # один путь, а текст отказа называет то имя, которым позвали.
     append_flag = "--append" if args.append is not None else "--state"
@@ -1042,14 +1285,15 @@ def cmd_doc_commit(argv: list[str]) -> None:
     самодостаточна, и обход доживает до отправки на `--flush`, когда
     гейт полного набора действительно срабатывает. На путях `docs/**`
     гейта нет вовсе (требование 16), так что флаг там принимается, но
-    обходить ему нечего.
+    обходить ему нечего — и записи журнала об обходе на таком пути не
+    появляется (`_journal_commit`, R1-F4 ревью итерации 1).
     """
     if runner.in_role_environment():
         sys.exit("doc-commit отказана — вызов из окружения роли (role_env): "
                  "документы и конфигурация Оператора коммитятся Оператором")
     args = _parse_doc_commit_args(argv)
     if args.flush or _silence_window_reason() is None:
-        _flush_pending()
+        _flush_pending(explicit=args.flush)
     if args.path is None:
         if args.flush:
             return

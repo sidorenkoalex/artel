@@ -17,6 +17,7 @@
 главную ветку красной, потребовался откат (d910c523) и встали ветки
 волны.
 """
+import subprocess
 import sys
 import unittest
 from pathlib import Path
@@ -25,8 +26,9 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from orchestrator import config, notes, store  # noqa: E402
+from tests.sandbox import capture  # noqa: E402
 from tests.test_doc_commit import (DOC_REL, GREEN_SUITE_REL,  # noqa: E402
-                                   DocCommitSandbox)
+                                   GREEN_SUITE_TEXT, DocCommitSandbox)
 
 CONFIG_REL = notes.DOC_COMMIT_CONFIG_PATHS[0]
 NEW_CONFIG_TEXT = "developer:\n  model: sonnet\n"
@@ -74,6 +76,19 @@ class SuiteGateSandbox(DocCommitSandbox):
         rows = store.db().execute(
             "SELECT actor, action, detail FROM steps ORDER BY id").fetchall()
         return "\n".join(" ".join(str(col) for col in row) for row in rows)
+
+    def work_status(self, rel: str) -> str:
+        """`git status --porcelain` пути в ОБЩЕМ рабочем репозитории
+        `note`/`doc-commit`: грязный файл после отказа — предмет проверки
+        (R1-F1 ревью итерации 1)."""
+        work_dir = config.ROOT / ".artel" / "notes-work"
+        return subprocess.run(
+            ["git", "-C", str(work_dir), "status", "--porcelain", "--", rel],
+            capture_output=True, text=True).stdout.strip()
+
+    def note_row(self, marker: str) -> str:
+        return capture(notes.cmd_note,
+                       ["копилка", "--text", f"4 | 09.09 | {marker} | o.py"])
 
     def spy_suite(self, green: bool = True):
         """Шпион `acceptance.run_full_suite`: запоминает корень прогона и
@@ -282,6 +297,185 @@ class AcceptRedTest(SuiteGateSandbox):
         journal = self.journal_text()
         self.assertIn(notes.ACCEPT_RED_JOURNAL_ACTION, journal, journal)
         self.assertIn(ACCEPT_REASON, journal, journal)
+
+
+class GateRefusalLeavesNoDirtTest(SuiteGateSandbox):
+    """Отказ гейта выходит `sys.exit`'ом ПОСЛЕ записи правки в общий
+    рабочий репозиторий — оба регресса R1-F1 ревью итерации 1 про то, чем
+    он оставляет дерево после себя."""
+
+    def _push_foreign_config_change(self) -> None:
+        """Сторонняя правка того же пути конфигурации, уехавшая в origin
+        позже базы главной копии (тот же приём, что
+        `tests/test_doc_commit.py::PinBaseCheckTest`)."""
+        (self.root / CONFIG_REL).write_text("developer:\n  model: haiku\n",
+                                            encoding="utf-8")
+        self.git("commit", "-a", "-q", "-m", "чужая правка конфигурации")
+        self.git("push", "-q", "origin",
+                 f"{config.MAIN_BRANCH}:{config.MAIN_BRANCH}")
+        self.git("reset", "-q", "--hard", "HEAD~1")
+
+    def test_repeat_after_fixing_the_suite_commits_the_same_change(self):
+        """Отказ гейта не оставляет записанную правку в дереве рабочего
+        репозитория: `git status` по пути пуст, и ТА ЖЕ команда после
+        починки набора доводит правку до origin.
+
+        Ловит мутацию: отказ гейта не снимает правку с дерева, а сверка
+        «содержимое уже совпадает» читает ФАЙЛ дерева вместо blob'а origin
+        — повтор отказывает «содержимое уже совпадает с origin/main» даже
+        при зелёном наборе, и правка конфигурации не проходит уже никогда.
+        """
+        self.reseed_suite(RED_SUITE_TEXT)
+
+        message = self.refuse_config()
+
+        self.assertIn("test_seed_always_red", message, message)
+        self.assertEqual(self.work_status(CONFIG_REL), "")
+
+        self.reseed_suite(GREEN_SUITE_TEXT)
+        self.commit_config()
+
+        self.assertEqual(self.origin_show(CONFIG_REL), NEW_CONFIG_TEXT)
+        self.assertEqual(notes.pending_notes(), [])
+
+    def test_note_reaches_origin_after_a_gate_refusal_and_a_foreign_change(self):
+        """Второй сценарий R1-F1: после отказа гейта тот же путь изменён в
+        origin сторонней правкой — заметка `note` всё равно доезжает до
+        origin, удержанной записи не появляется.
+
+        Ловит мутацию: дерево остаётся грязным, а `checkout -B` в
+        `_fetch_and_build` идёт без `-f` и без проверки кода возврата —
+        сборка молча идёт на дереве прошлого коммита, и КАЖДАЯ заметка
+        отказывает «не удалось отправить заметку в origin».
+        """
+        self.reseed_suite(RED_SUITE_TEXT)
+        self.refuse_config()
+        self._push_foreign_config_change()
+
+        self.note_row("ЗАМЕТКАПОСЛЕОТКАЗА")
+
+        self.assertIn("ЗАМЕТКАПОСЛЕОТКАЗА",
+                      self.origin_show(notes.BACKLOG_REL))
+        self.assertEqual(notes.pending_notes(), [])
+
+    def test_dirty_work_tree_is_forced_to_origin_before_the_next_record(self):
+        """Дерево общего рабочего репозитория, оставшееся с посторонним
+        файлом пути, который есть в origin (аварийный выход команды, снятие
+        процесса), приводится к origin ПРИНУДИТЕЛЬНО — заметка доезжает.
+
+        Ловит мутацию: `checkout -B` в `_fetch_and_build` идёт без `-f`
+        (спотыкается о постороннее содержимое пути) и без проверки кода
+        возврата — сборка молча идёт на пустом дереве прошлого состояния, и
+        заметка отказывает вместо того, чтобы доехать.
+        """
+        work_config = config.ROOT / ".artel" / "notes-work" / CONFIG_REL
+        work_config.parent.mkdir(parents=True, exist_ok=True)
+        work_config.write_text("developer:\n  model: ГРЯЗЬ\n",
+                               encoding="utf-8")
+
+        self.note_row("ЗАМЕТКАПОВЕРХГРЯЗИ")
+
+        self.assertIn("ЗАМЕТКАПОВЕРХГРЯЗИ",
+                      self.origin_show(notes.BACKLOG_REL))
+        self.assertEqual(notes.pending_notes(), [])
+
+    def test_leftover_file_in_the_work_tree_is_not_read_as_origin_content(self):
+        """Мусор в дереве общего рабочего репозитория не читается как
+        содержимое origin: файл нового пути, оставшийся в
+        `.artel/notes-work` и равный тому, что коммитят, ложного отказа
+        «содержимое уже совпадает» не даёт — путь доезжает до origin.
+
+        Ловит мутацию: сверка «уже совпадает» сравнивает содержимое с
+        ФАЙЛОМ дерева, а дерево перед сборкой не чистится — новый путь не
+        закоммитить, пока Оператор не уберёт файл в рабочем репозитории
+        руками.
+        """
+        rel = "docs/research/new.md"
+        text = "# новый документ\n"
+        leftover = config.ROOT / ".artel" / "notes-work" / rel
+        leftover.parent.mkdir(parents=True, exist_ok=True)
+        leftover.write_text(text, encoding="utf-8")
+
+        self.doc_commit(rel, "--from", str(self.source_file(text, "new.md")),
+                        "--message", "новый документ")
+
+        self.assertEqual(self.origin_show(rel), text)
+
+
+class HeldConfigRecordFlushTest(SuiteGateSandbox):
+
+    def test_opportunistic_flush_skips_the_record_and_explicit_flush_speaks(self):
+        """Удержанная правка конфигурации не превращает обычную `note` в
+        молчаливый прогон полного набора: прогона нет, причина напечатана,
+        сама заметка доезжает до origin. Явный `doc-commit --flush` прогон
+        заводит и печатает причину отказа (R1-F3 ревью итерации 1).
+
+        Ловит мутацию: попутный флаш отправляет любую удержанную запись —
+        прогон позван на обычной `note`; либо `_flush_pending` снова глотает
+        `SystemExit` целиком — явный флаш ничего не печатает, и запись висит
+        без объяснения.
+        """
+        seen = self.spy_suite(green=False)
+        self.open_silence_window()
+        self.commit_config()
+        self.close_silence_window()
+        self.assertEqual(len(notes.pending_notes()), 1, notes.pending_notes())
+
+        note_output = self.note_row("ЗАМЕТКАПРИУДЕРЖАНИИ")
+
+        self.assertEqual(seen, [])
+        self.assertIn(CONFIG_REL, note_output, note_output)
+        self.assertIn("ЗАМЕТКАПРИУДЕРЖАНИИ",
+                      self.origin_show(notes.BACKLOG_REL))
+        self.assertEqual(len(notes.pending_notes()), 1, notes.pending_notes())
+
+        flush_output = self.doc_commit("--flush")
+
+        self.assertEqual(len(seen), 1, seen)
+        self.assertIn("tests/", flush_output, flush_output)
+        self.assertEqual(len(notes.pending_notes()), 1, notes.pending_notes())
+
+    def test_accept_red_record_is_sent_by_the_opportunistic_flush(self):
+        """Удержанная запись с `--accept-red` прогона не заведёт, поэтому
+        попутным флашем отправляется как любая другая: обход Оператор уже
+        объявил, ждать явного флаша нечего.
+
+        Ловит мутацию: попутный флаш откладывает ЛЮБУЮ запись пути
+        конфигурации (условие пропуска не смотрит на `accept_red`) —
+        осознанный обход перестаёт доезжать сам, и тест красен на старой
+        конфигурации в origin.
+        """
+        self.reseed_suite(RED_SUITE_TEXT)
+        self.open_silence_window()
+        self.commit_config("--accept-red", ACCEPT_REASON)
+        self.close_silence_window()
+
+        self.note_row("ЗАМЕТКАПРИОБХОДЕ")
+
+        self.assertEqual(self.origin_show(CONFIG_REL), NEW_CONFIG_TEXT)
+        self.assertEqual(notes.pending_notes(), [])
+
+
+class AcceptRedOnDocsPathTest(SuiteGateSandbox):
+
+    def test_docs_path_accept_red_writes_no_bypass_journal_row(self):
+        """`--accept-red` на пути `docs/**`: документ коммитится, а записи
+        об обходе в журнале пульта НЕТ — гейта на этом пути не существует
+        (требование 16), и запись была бы ложной (R1-F4 ревью итерации 1).
+
+        Ловит мутацию: запись журнала пишется по одному наличию флага, без
+        сверки пути — журнал несёт обход, которого не было, и Оператор
+        ищет по нему несуществующую правку конфигурации.
+        """
+        new_text = "# Роадмап\n\nбез обхода\n"
+
+        self.doc_commit(DOC_REL, "--from", str(self.source_file(new_text)),
+                        "--message", "раздел", "--accept-red", ACCEPT_REASON)
+
+        self.assertEqual(self.origin_show(DOC_REL), new_text)
+        journal = self.journal_text()
+        self.assertNotIn(notes.ACCEPT_RED_JOURNAL_ACTION, journal, journal)
+        self.assertNotIn(ACCEPT_REASON, journal, journal)
 
 
 if __name__ == "__main__":

@@ -136,7 +136,10 @@ class InsertedPriorityTest(unittest.TestCase):
         1..4 не расширяется вместе с приёмом формы «П<цифра>».
 
         Ловит мутацию: разбор стал `int(text.lstrip("Пп"))` без сверки
-        границ — «5» и «П7» проходят вместо отказа.
+        границ — «5» и «П7» проходят вместо отказа; либо пример формы из
+        текста отказа убран (`assertRegex(…, r"[1-4]")` проходил и на
+        прежнем тексте «вне диапазона 1..4», замечание R1-F5 ревью итерации
+        1) — тест красен на отсутствии `PRIORITY_FORM_EXAMPLE`.
         """
         for value in ("высокий", "5", "0", "П7", ""):
             with self.subTest(value=value):
@@ -144,7 +147,7 @@ class InsertedPriorityTest(unittest.TestCase):
                     notes._apply_insert(
                         BACKLOG_TEXT, "копилка",
                         f"{value} | 27.09 | текст | где | состояние")
-                self.assertRegex(str(cm.exception), r"[1-4]")
+                self.assertIn(notes.PRIORITY_FORM_EXAMPLE, str(cm.exception))
 
     def test_section_without_priority_column_is_not_normalized(self):
         """Раздел без колонки «П» нормализации приоритета не получает:
@@ -217,14 +220,16 @@ class SetPriorityTest(unittest.TestCase):
         """«5», «П7», «0» и «высокий» по-прежнему отказ с примером формы.
 
         Ловит мутацию: сверка границ снята вместе с заменой `int(text)` на
-        разбор формы «П<цифра>» — значения вне 1..4 проходят.
+        разбор формы «П<цифра>» — значения вне 1..4 проходят; либо пример
+        формы из текста отказа убран на этом втором пути нормализации
+        (замечание R1-F5 ревью итерации 1).
         """
         for value in ("5", "П7", "0", "высокий"):
             with self.subTest(value=value):
                 with self.assertRaises(SystemExit) as cm:
                     notes._apply_set_priority(BACKLOG_TEXT, "СОСТОЯНИЕЕСТЬ",
                                               value)
-                self.assertRegex(str(cm.exception), r"[1-4]")
+                self.assertIn(notes.PRIORITY_FORM_EXAMPLE, str(cm.exception))
 
     def test_section_without_priority_column_refuses_instead_of_cell_zero(self):
         """Раздел без колонки «П» — именованный отказ «менять негде», а не
