@@ -1,5 +1,5 @@
 ---
-built_at_sha: 0f0e5523a1b2512061d0b764cf97cc9d43987493
+built_at_sha: eccb114016af19fe0efac7115914cade285ee193
 ---
 
 # Codebase-map пульта
@@ -1521,7 +1521,7 @@ built_at_sha: 0f0e5523a1b2512061d0b764cf97cc9d43987493
 
 **Импортирует:** —
 
-**Импортируется:** `orchestrator/advance_gates/acceptance.py`, `orchestrator/advance_gates/review.py`, `orchestrator/amend.py`, `orchestrator/artifacts.py`, `orchestrator/canary.py`, `orchestrator/catalog.py`, `orchestrator/checkpoint.py`, `orchestrator/fsm.py`, `orchestrator/fsm_advance.py`, `orchestrator/gates.py`, `orchestrator/models.py`, `orchestrator/pull.py`, `orchestrator/retro_corpus.py`, `orchestrator/roles.py`, `orchestrator/targets.py`, `scripts/guard.py`, `tests/sandbox.py`, `tests/test_canary_sets.py`, `tests/test_fsm_merge_gate_done_snapshot.py`, `tests/test_guard_schema.py`, `tests/test_guard_split_signals.py`, `tests/test_yaml_parsing.py`
+**Импортируется:** `orchestrator/advance_gates/acceptance.py`, `orchestrator/advance_gates/review.py`, `orchestrator/amend.py`, `orchestrator/artifacts.py`, `orchestrator/canary.py`, `orchestrator/catalog.py`, `orchestrator/checkpoint.py`, `orchestrator/fsm.py`, `orchestrator/fsm_advance.py`, `orchestrator/gates.py`, `orchestrator/models.py`, `orchestrator/pull.py`, `orchestrator/retro_corpus.py`, `orchestrator/roles.py`, `orchestrator/targets.py`, `scripts/guard.py`, `tests/sandbox.py`, `tests/test_canary_sets.py`, `tests/test_fsm_merge_gate_done_snapshot.py`, `tests/test_guard_schema.py`, `tests/test_guard_split_signals.py`, `tests/test_stack_optional_tools.py`, `tests/test_yaml_parsing.py`
 
 ## orchestrator/zone_lock.py
 
@@ -1710,6 +1710,7 @@ built_at_sha: 0f0e5523a1b2512061d0b764cf97cc9d43987493
 - `is_claude_call`
 - `network_guarded_real_run`
 - `resilient_tmp_cleanup`
+- `roles_text_on_default_provider`
 - `seed_developer_brief_fixtures`
 - `sync_spec_from_worktree`
 
@@ -3346,7 +3347,7 @@ built_at_sha: 0f0e5523a1b2512061d0b764cf97cc9d43987493
 
 **Публичные функции:** (нет)
 
-**Импортирует:** `orchestrator/config.py`, `orchestrator/stack.py`, `tests/sandbox.py`, `tests/test_runner_role_model.py`
+**Импортирует:** `orchestrator/config.py`, `orchestrator/stack.py`, `orchestrator/yamlmini.py`, `tests/sandbox.py`, `tests/test_runner_role_model.py`
 
 **Импортируется:** —
 

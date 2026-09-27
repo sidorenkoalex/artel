@@ -30,7 +30,8 @@ from orchestrator import (catalog, config, doctor,  # noqa: E402
                           providers, roles, runner, stack, store)
 from orchestrator.providers import claude as claude_provider  # noqa: E402
 from tests.sandbox import (TmpDirTest, TmpRootTest, claude_only_popen,  # noqa: E402
-                           claude_only_run, event as sandbox_event)
+                           claude_only_run, event as sandbox_event,
+                           roles_text_on_default_provider)
 from tests.test_doctor import (FakeLiveSmokeProc,  # noqa: E402
                                TmpRootTest as DoctorSandbox, result_event)
 from tests.test_runner_model_preflight import _StepSandbox  # noqa: E402
@@ -396,7 +397,16 @@ class DoctorProviderLinesTest(TmpRootTest):
         """Ловит мутацию: строка печатается пустой (реестр опрошен, а
         карта исполнителей — нет) либо перечисляет провайдеров без ролей
         — Оператор видит «claude, claude, claude» и не может сказать,
-        какая роль на каком CLI пойдёт."""
+        какая роль на каком CLI пойдёт.
+
+        Карта сценария — своя, «все роли на провайдере по умолчанию»
+        (SPEC 01M3H3JRBD544GQ10SS3DBGEVP, требование 1 сделало перечень
+        предполёта производным от `roles.yaml`, и `provider: codex` у
+        реальной роли красил этот тест мимо его предмета — REVIEW.md
+        итерации 1, R1-F1).
+        """
+        self.use_roles_yaml(roles_text_on_default_provider())
+
         check = doctor.check_role_providers()
 
         self.assertEqual(check.status, "ok", check.detail)
@@ -432,7 +442,19 @@ class DoctorProviderLinesTest(TmpRootTest):
         печатаются по разу на роль, и Оператор ищет настоящий провал в
         учетверённом списке; либо проверка секрета схлопнута в одну на
         все роли, и отсутствие токена у одной из них исчезает из вывода.
+
+        Карта сценария — своя, «все роли на провайдере по умолчанию»
+        (REVIEW.md итерации 1, R1-F1): строка секрета у Codex своя
+        (`codex-chatgpt-auth`), и роль на нём вычиталась бы из числа
+        строк `token` — счёт краснел бы от правки `roles.yaml`, а не от
+        снятой дедупликации, которая тут предмет.
         """
+        self.use_roles_yaml(roles_text_on_default_provider())
+        # Контроль вырожденности: на одной роли «по одной строке на
+        # провайдера» выполняется и без дедупликации — считать дубли
+        # можно только там, где ролей на провайдере больше одной.
+        self.assertGreater(len(doctor.agent_roles()), 1, doctor.agent_roles())
+
         with mock.patch.object(doctor.subprocess, "run",
                                lambda *a, **kw: subprocess.CompletedProcess(
                                    a[0], 0, f"{config.CLI_VERSION_PIN}\n", "")):

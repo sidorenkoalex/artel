@@ -40,6 +40,7 @@ from tests.sandbox import (FakeStream, InitializedTmpRootTest,  # noqa: E402
                            capture, capture_new_task_id, claude_only_popen,
                            claude_only_run, disk_backed_ls_tree_files,
                            disk_backed_show, fake_git, is_claude_call,
+                           roles_text_on_default_provider,
                            sync_spec_from_worktree)
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -194,7 +195,26 @@ TmpRootTest = _DoctorTmpRootTest
 
 
 class DoctorCommandTest(TmpRootTest):
-    """Критерий 1: здоровый репо — все проверки ок, код 0; сломанный — провалы, код ≠0."""
+    """Критерий 1: здоровый репо — все проверки ок, код 0; сломанный — провалы, код ≠0.
+
+    Карта исполнителей сценария — своя, «все роли на провайдере по
+    умолчанию»: подмена процессов этого класса отвечает только за `claude`
+    (`claude_only_run`/`claude_only_popen`), то есть «здоровый пульт» здесь
+    по построению пульт на одном исполнителе. С тех пор как перечень ролей
+    предполёта читает карту (SPEC 01M3H3JRBD544GQ10SS3DBGEVP, требование
+    1), строка `provider:` реальной роли красила бы этот класс мимо его
+    предмета — правку `roles.yaml` Оператор ведёт отдельным MR по
+    защищённому пути (REVIEW.md 01M3H3JRBD544GQ10SS3DBGEVP итерации 1,
+    R1-F1).
+    """
+
+    def setUp(self):
+        super().setUp()
+        path = self.root / "roles-on-default-provider.yaml"
+        path.write_text(roles_text_on_default_provider(), encoding="utf-8")
+        patcher = mock.patch.object(config, "ROLES", path)
+        patcher.start()
+        self.addCleanup(patcher.stop)
 
     def which(self, name):
         if name == "claude":

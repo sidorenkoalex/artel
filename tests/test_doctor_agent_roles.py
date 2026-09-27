@@ -18,6 +18,7 @@
 """
 import sys
 import unittest
+from collections import Counter
 from pathlib import Path
 from unittest import mock
 
@@ -42,9 +43,14 @@ CLAUDE_SHARED_LINES = ("cli-found", "cli-version", "role-home-reference")
 CODEX_SHARED_LINES = ("codex-cli-found", "codex-cli-version",
                       "codex-role-home")
 
-#: Карта исполнителей сценариев: analyst плюс одна роль на провайдере по
-#: умолчанию (нужна, чтобы склейка строк была не вырожденной) плюс роли,
-#: которые agent-ролями НЕ являются, — перечень обязан отобрать первые две.
+#: Карта исполнителей сценариев: analyst плюс ДВЕ роли на провайдере по
+#: умолчанию плюс роли, которые agent-ролями НЕ являются, — перечень обязан
+#: отобрать первые три.
+#:
+#: Ролей на провайдере по умолчанию именно две, а не одна: «строка печатается
+#: один раз на провайдера» на ОДНОЙ роли выполняется и без дедупликации
+#: склейки, то есть сценарий был бы вырожден и заявленную мутацию не ловил
+#: (REVIEW.md итерации 1, R1-F2).
 ROLES_TEMPLATE = """\
 roles:
   orchestrator:
@@ -56,8 +62,13 @@ roles:
     skills: [conventions-core]
     model_tier: standard
 {analyst_provider}  developer:
-    executor: {developer_executor}
+    executor: {others_executor}
     token_slot: artel-developer
+    skills: [conventions-core]
+    model_tier: strong
+  reviewer:
+    executor: {others_executor}
+    token_slot: artel-reviewer
     skills: [conventions-core]
     model_tier: strong
   verifier:
@@ -72,13 +83,14 @@ UNREADABLE_ROLES_TEXT = "roles:\n  - developer\n"
 
 
 def roles_yaml(analyst_provider: str = None, analyst_executor: str = "agent",
-               developer_executor: str = "agent") -> str:
-    """Текст карты исполнителей сценария: провайдер роли analyst и поле
-    `executor:` каждой из двух ролей — параметры, остальное неизменно."""
+               others_executor: str = "agent") -> str:
+    """Текст карты исполнителей сценария: провайдер роли analyst, её
+    `executor:` и `executor:` двух остальных ролей — параметры, остальное
+    неизменно."""
     line = f"    provider: {analyst_provider}\n" if analyst_provider else ""
     return ROLES_TEMPLATE.format(analyst_executor=analyst_executor,
                                  analyst_provider=line,
-                                 developer_executor=developer_executor)
+                                 others_executor=others_executor)
 
 
 def map_agent_roles() -> list:
@@ -127,7 +139,7 @@ class AgentRolesListTest(TmpDirTest):
         `doctor` печатает строки предполёта для роли, которая шагов больше
         не делает.
         """
-        self.use_roles(roles_yaml(developer_executor="none"))
+        self.use_roles(roles_yaml(others_executor="none"))
 
         self.assertEqual(doctor.agent_roles(), [ANALYST])
 
@@ -258,9 +270,9 @@ class AnalystPreflightLinesTest(DoctorLinesSandbox):
         self.assertEqual(self.runs.login_calls, [], self.runs.login_calls)
 
     def test_role_independent_lines_stay_one_per_provider(self):
-        """На карте, где analyst идёт на Codex, а вторая роль — на Claude,
-        каждая не зависящая от роли строка ОБОИХ провайдеров печатается
-        один раз, а строка авторизации — по одной на роль своего
+        """На карте, где analyst идёт на Codex, а ДВЕ остальные роли — на
+        Claude, каждая не зависящая от роли строка ОБОИХ провайдеров
+        печатается один раз, а строка авторизации — по одной на роль своего
         провайдера.
 
         Ловит мутацию: расширяя перечень ролей, снимают дедупликацию
@@ -274,7 +286,11 @@ class AnalystPreflightLinesTest(DoctorLinesSandbox):
         claude_roles = [role for role in doctor.agent_roles()
                         if providers.name_for_role(role)
                         == providers.DEFAULT_PROVIDER]
-        self.assertTrue(claude_roles, "сценарию нужны роли на Claude")
+        # Контроль вырожденности: на ОДНОЙ роли «одна строка на провайдера»
+        # выполняется и без дедупликации — сценарию нужны хотя бы две роли
+        # на одном исполнителе, иначе заявка выше не исполняется
+        # (REVIEW.md итерации 1, R1-F2).
+        self.assertGreater(len(claude_roles), 1, claude_roles)
 
         grouped = doctor.provider_preflight_checks()
 
@@ -289,8 +305,9 @@ class AnalystPreflightLinesTest(DoctorLinesSandbox):
 
     def test_promoting_a_role_in_the_map_only_adds_lines_naming_it(self):
         """Два прогона склейки на карте, где все роли на Claude: без
-        analyst как agent-роли и с ним. Ни одна строка не исчезла и не
-        изменилась — добавились только строки, называющие analyst.
+        analyst как agent-роли и с ним. Сравниваются МУЛЬТИмножества строк
+        (`line_counts`): ни одна строка не исчезла, не изменилась и не стала
+        печататься чаще — добавились только строки, называющие analyst.
 
         Ловит мутацию: перечень ролей стал источником и для строк, которые
         ролью не параметризованы, — прежние строки размножились или
@@ -299,25 +316,34 @@ class AnalystPreflightLinesTest(DoctorLinesSandbox):
         строк).
         """
         self.use_roles(roles_yaml(analyst_executor="none"))
-        before = self.flat_lines()
+        before = self.line_counts()
 
         self.use_roles(roles_yaml(analyst_provider=providers.DEFAULT_PROVIDER))
-        after = self.flat_lines()
+        after = self.line_counts()
 
-        self.assertEqual(before - after, set(),
-                         "строки прежнего вывода исчезли или изменились")
+        self.assertEqual(before - after, Counter(),
+                         "строки прежнего вывода исчезли, изменились или "
+                         "стали печататься реже")
         added = after - before
         self.assertTrue(added, "ни одной строки роли analyst не добавилось")
-        self.assertEqual([entry for entry in sorted(added)
+        self.assertEqual([entry for entry in sorted(added.elements())
                           if ANALYST not in entry[1]], [],
                          f"добавились строки, не называющие analyst: {added}")
 
-    def flat_lines(self) -> set:
-        """`{(имя строки, текст)}` склейки предполёта — вывод как множество
-        строк, годное для сравнения двух прогонов."""
-        return {(name, check.detail)
-                for name, checks in doctor.provider_preflight_checks().items()
-                for check in checks}
+    def line_counts(self) -> Counter:
+        """`Counter{(имя строки, текст): сколько раз напечатана}` склейки
+        предполёта — вывод как МУЛЬТИмножество, годное для сравнения двух
+        прогонов.
+
+        Именно мультимножество, а не `set`: множество размножения строки не
+        видит по построению, и заявка «прежние строки размножились» на нём
+        не исполнялась — снятая дедупликация склейки проходила весь этот
+        файл зелёным (REVIEW.md итерации 1, R1-F2).
+        """
+        return Counter(
+            (name, check.detail)
+            for name, checks in doctor.provider_preflight_checks().items()
+            for check in checks)
 
 
 class UnreadableRolesMapTest(DoctorLinesSandbox):
@@ -341,6 +367,40 @@ class UnreadableRolesMapTest(DoctorLinesSandbox):
         self.assertIn("провайдеры ролей:", check.detail)
         self.assertIn("не разобран", check.detail)
         self.assertIn(str(config.ROLES), check.detail)
+
+    def test_models_local_says_the_tiers_were_not_checked(self):
+        """Строка `models-local` остаётся о своём предмете (слой разобран),
+        но честно называет несверенные ярусы и адресует причину строке
+        `role-providers`.
+
+        Ловит мутацию: ветка пустого перечня убрана («остаток кода и так
+        отдаёт `ok`») — строка возвращается к тексту «локальный слой моделей
+        <путь>: » с висящим двоеточием и пустым списком цепочек, и Оператор
+        читает её как «ярусы сверены, всё в порядке» (REVIEW.md итерации 1,
+        R1-F5).
+        """
+        check = doctor.check_models_local()
+
+        self.assertEqual(check.status, "ok", check.detail)
+        self.assertIn(str(config.MODELS_LOCAL), check.detail)
+        self.assertIn("ярусы не сверены", check.detail)
+        self.assertIn("role-providers", check.detail)
+
+    def test_foreign_secrets_line_does_not_claim_a_clean_environment(self):
+        """Строка чужих секретов на нечитаемой карте жёлтая и говорит, что
+        сверка не проведена.
+
+        Ловит мутацию: ранний выход убран, и строка доходит до финального
+        `ok` — `doctor` печатает «секретов других провайдеров в собранном
+        окружении шагов ролей нет», не собрав ни одного окружения и не
+        сверив ни одной роли, вопреки собственному докстрингу функции
+        (REVIEW.md итерации 1, R1-F4).
+        """
+        check = doctor.check_foreign_provider_secrets()
+
+        self.assertEqual(check.status, "warn", check.detail)
+        self.assertIn("сверка не проведена", check.detail)
+        self.assertIn("role-providers", check.detail)
 
     def test_no_line_that_walks_the_roles_crashes(self):
         """Ни одна перебирающая роли функция `doctor` не роняет исключение

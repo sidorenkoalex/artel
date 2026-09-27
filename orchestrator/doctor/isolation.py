@@ -362,6 +362,12 @@ def check_foreign_provider_secrets() -> doctor.Check:
     приёмом, что `check_canary_trigger` при недоступном origin: `skip`
     читался бы как норма, а `fail` называл бы утечкой то, чего не
     проверяли, — про сам отказ сборки говорят предполёт и `isolation-smoke`.
+
+    Тем же `warn` и по той же причине отвечает пустой перечень ролей: на
+    нечитаемой карте исполнителей сверять нечего, и зелёная строка
+    «секретов других провайдеров нет» была бы положительным утверждением о
+    том, что не проверялось (REVIEW.md 01M3H3JRBD544GQ10SS3DBGEVP итерации
+    1, R1-F4).
     """
     # Один вызов сборки на РАЗЛИЧНЫЙ провайдер: `role_env` резолвит
     # инструменты манифеста, сверяет venv и спрашивает keychain — платить
@@ -380,6 +386,12 @@ def check_foreign_provider_secrets() -> doctor.Check:
             # строка `check_role_providers` — дублировать её нечем.
             continue
         by_provider.setdefault(provider.name, (role, provider))
+    if not by_provider:
+        return doctor.Check(
+            FOREIGN_SECRETS_CHECK, "warn",
+            "сверка не проведена — ни одной agent-роли с зарегистрированным "
+            "провайдером: карта исполнителей пуста, не прочитана либо "
+            "называет незнакомые имена (см. строку role-providers)")
 
     found, unassembled = [], []
     for name in sorted(by_provider):
