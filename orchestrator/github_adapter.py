@@ -17,6 +17,32 @@ _regenerate_and_commit_map`/`_generate_and_commit_retro`, SPEC T042/T043).
 """
 from . import alerts, ci, config, gitcmd, repo_context, store, targets
 
+# Пропуск черновика на пустой кодовой ветке (SPEC
+# 01M3HP7WAXKFK3GYZ3T6HX08M0, требование 8) — запись журнала ОБЫЧНОГО
+# уровня: ни `_incident`, ни алерта, потому что пропускать тут нечего
+# чинить, это штатное состояние ветки до первого коммита разработчика.
+DRAFT_MR_SKIPPED_ACTION = "Draft MR пропущен: в ветке нет коммитов"
+
+
+def _commits_over_base(branch: str, base: str, repo=None) -> int | None:
+    """Число коммитов `branch`, которых нет в `base` — ЛОКАЛЬНЫМ git, без
+    единого обращения к форджу (SPEC 01M3HP7WAXKFK3GYZ3T6HX08M0,
+    требование 8).
+
+    `None` — ответа нет (git не ответил, ветки/базы нет, вывод не
+    разобрать числом). Вызывающий код обязан деградировать в то поведение,
+    которое у него было ДО этой задачи, а не додумывать за git ни «ноль
+    коммитов», ни «коммиты есть»: единственное новое решение, которое эти
+    числа принимают, — пропустить заведомо отказной вызов форджа, и
+    основанием для него служит только положительный ответ git.
+
+    Своего `rev-list` здесь нет — считает `gitcmd.commits_behind` с её же
+    деградацией. Аргументы переставлены сознательно: `commits_behind(X, Y)`
+    исполняет `rev-list --count X..Y`, то есть «коммиты Y, которых нет в
+    X» — нужный вопрос задаётся базой на первом месте и веткой на втором.
+    """
+    return gitcmd.commits_behind(base, branch, repo=repo)
+
 
 def _is_github_target(target_name: str) -> bool:
     try:
@@ -84,6 +110,20 @@ def ensure_draft_mr(conn, task_id: str, t) -> None:
     gh_repo_kwargs = {"repo": ctx.remote} if repo is not None else {}
 
     branch = t["branch"]
+    # Пустая кодовая ветка — ДО push и ДО `gh pr create` (требование 8):
+    # GitHub на ветку без коммитов относительно базы отвечает «No commits
+    # between main and task/…», и до этой задачи заведомо отказной вызов
+    # форджа становился инцидентом `github_adapter` (121 открытый за
+    # 05.09–27.09). Признак `draft_mr_created` при пропуске НЕ выставляется:
+    # следующий переход (в том числе рубеж `in_dev -> verifying`,
+    # требование 9) пробует снова, уже с коммитом в ветке.
+    if _commits_over_base(branch, base, repo=repo) == 0:
+        store.journal(conn, task_id, "orchestrator", DRAFT_MR_SKIPPED_ACTION,
+                      f"{branch}: нет коммитов относительно базы {base} — "
+                      f"черновик заведётся на первом переходе после первого "
+                      f"коммита")
+        return
+
     push = (gitcmd.git("push", "-u", "origin", branch) if repo is None
            else gitcmd.in_repo(repo, "push", "-u", "origin", branch))
     if push is None or push.returncode != 0:
@@ -166,7 +206,53 @@ def ensure_head_in_origin(conn, task_id: str, branch: str) -> tuple[bool, str]:
     store.journal(conn, task_id, "orchestrator", "push (голова не в origin)",
                  f"git push -u origin {branch}: "
                  f"{push.stdout.strip()[:300] or 'ok'}")
+    _ensure_draft_mr_after_publish(conn, task_id, target_name, branch, local,
+                                   repo)
     return True, ""
+
+
+def _ensure_draft_mr_after_publish(conn, task_id: str, target_name: str,
+                                   branch: str, head: str, repo) -> None:
+    """Черновик запроса на слияние сразу за публикацией головы ветки (SPEC
+    01M3HP7WAXKFK3GYZ3T6HX08M0, требование 9, AC-9).
+
+    На прямом пути без возвратов вход в `in_dev` застаёт кодовую ветку
+    пустой, и черновик там законно пропускается (требование 8) — а больше
+    `_maybe_ensure_draft_mr` до `verifying` не зовётся ни разу: задача
+    входила в `verifying` вовсе без запроса на слияние, при этом запись
+    перехода обещала «MR готов — жду зелёного CI ветки», а CI шёл только по
+    событию push (наблюдение 27.09). Рубеж `in_dev -> verifying`
+    (`advance_gates/tests_writing.py::_origin_push_gate` -> функция выше) —
+    первая точка, где коммит в ветке уже есть.
+
+    Зовётся ТОЛЬКО с ветки успешного push, не с ветки «sha уже совпал»:
+    та по SPEC 01M1GS5HZ1JXFGKVR95HEW0AEZ (AC-1/AC-8) обязана оставаться
+    no-op без единого обращения к git и журналу.
+
+    Условие «в ветке есть своя работа» здесь — самое дешёвое из
+    достаточных: `head` (голову ветки функция выше уже прочитала) против
+    головы базы target'а. Совпали — ветка ЕСТЬ база, открывать запрос на
+    слияние не из чего, и рубеж `merge_gate`, куда этот же хелпер приходит
+    на КАЖДЫЙ approve, не платит за новый побочный эффект ни чтением строки
+    задачи, ни пробуждением адаптера. АВТОРИТЕТНУЮ сверку («коммит
+    относительно базы», в том числе случай «ветка отстала от базы, своих
+    коммитов ноль») несёт сама `ensure_draft_mr` — единственное место,
+    решающее, трогать ли фордж (требование 8); второго такого решения здесь
+    сознательно нет. Её же забота и остальные выходы: черновик уже заведён,
+    канарейка, не github-target.
+
+    База не прочитана (`targets.yaml` не годен) — ничего: то же поведение,
+    что было до этой задачи. Инцидент на этом месте был бы вторым
+    сообщением об одной поломке — первое уже напишет `ensure_draft_mr` на
+    следующем входе в `in_dev`.
+    """
+    try:
+        base = targets.target(target_name)["base"]
+    except (targets.TargetsError, KeyError):
+        return
+    if head and head == gitcmd.branch_head_sha(base, repo=repo):
+        return
+    ensure_draft_mr(conn, task_id, store.get_task(conn, task_id))
 
 
 def undraft_mr(conn, task_id: str, t) -> None:
