@@ -36,7 +36,11 @@ ROOT` на явный `<sha>` (обязан быть предком текуще
 аргумента, на `main_sha` самого свежего зелёного прогона канарейки —
 `git reset --hard`, БЕЗ fetch/push (main пульта на origin не трогается,
 ADR-0013 ч.3). Каждый вызов — ровно одна запись журнала
-(`config.PIN_UPDATE_JOURNAL_TASK_ID`), успешная или отказ.
+(`config.PIN_UPDATE_JOURNAL_TASK_ID`), успешная или отказ. Сверка «пин
+уже на sha последнего зелёного прогона» — по префиксу
+(`_already_at_run_sha`, SPEC 01M3GKJFN90ATK2KECNDZXPPP6, требование 9):
+в журнале прогонов живут короткие `main_sha`, записанные до нормализации
+явного `--sha`.
 """
 import sys
 
@@ -72,6 +76,24 @@ def cmd_pin_update(sha: str) -> None:
     print(f"[pin-update] {detail}")
 
 
+def _already_at_run_sha(head_sha: str, main_sha: str | None) -> bool:
+    """HEAD пульта уже стоит на `main_sha` прогона канарейки — сравнение ПО
+    ПРЕФИКСУ (SPEC 01M3GKJFN90ATK2KECNDZXPPP6, требование 9).
+
+    `canary_runs.main_sha` до этой задачи писался как напечатан в `--sha`,
+    и в живой БД лежат короткие строки (прогоны 26.09). Миграция их не
+    дописывает — история остаётся как записана, — а эта ветка (`pin --to`
+    без аргумента) единственная, где такая строка сравнивается СТРОКОЙ:
+    строгое равенство не узнавало в семисимвольной записи текущий пин и
+    пускало команду на `git reset --hard` короткой строки.
+
+    Пустой (или `NULL`) `main_sha` — не «уже на пине»: префиксом пустой
+    строки является любой HEAD, и без этой проверки прогон без
+    записанного sha читался бы как совпавший с любым пином.
+    """
+    return bool(main_sha) and head_sha.startswith(main_sha)
+
+
 def _refuse_rollback(conn, detail: str) -> None:
     """Отказ `pin --to` — журналируется НА КАЖДЫЙ вызов, не только успех
     (AC-7): Оператор не должен терять след неудачной попытки отката."""
@@ -98,7 +120,7 @@ def cmd_pin_to(sha: str | None) -> None:
             _refuse_rollback(
                 conn, "pin --to: в журнале нет зелёного прогона канарейки")
         target = latest_green["main_sha"]
-        if target == old_sha:
+        if _already_at_run_sha(old_sha, target):
             _refuse_rollback(
                 conn, "pin --to: пин уже на sha последнего зелёного прогона")
         reason = ("последний зелёный прогон канарейки "

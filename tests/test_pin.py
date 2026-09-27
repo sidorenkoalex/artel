@@ -178,5 +178,68 @@ class PinToResetFailureTest(ConnRealGitSandbox):
         self.assertEqual(rows[0]["actor"], "operator")
 
 
+class AlreadyAtRunShaTest(unittest.TestCase):
+    """`pin._already_at_run_sha` (SPEC 01M3GKJFN90ATK2KECNDZXPPP6,
+    требование 9): `canary_runs.main_sha` живой БД несёт короткие строки
+    прогонов 26.09, и миграция их не дописывает — сравнение с текущим
+    пином обязано читать их по префиксу."""
+
+    HEAD = "3f2a9c1d8e7b6a5f4e3d2c1b0a99887766554433"
+
+    def test_short_main_sha_prefixing_head_counts_as_already_pinned(self):
+        """Ловит мутацию: префиксное сравнение написано в другую сторону
+        (`main_sha.startswith(head)`) — короткая запись перестала бы
+        узнаваться, и `pin --to` снова выполнял бы `git reset --hard` на
+        семисимвольную строку."""
+        self.assertTrue(pin._already_at_run_sha(self.HEAD, self.HEAD[:7]))
+        self.assertTrue(pin._already_at_run_sha(self.HEAD, self.HEAD))
+
+    def test_foreign_sha_and_empty_main_sha_are_not_already_pinned(self):
+        """Пустой `main_sha` (в живой БД такие строки есть) — не «уже на
+        пине»: префиксом пустой строки является любой HEAD.
+
+        Ловит мутацию: проверка непустоты снята (`return head.startswith(
+        main_sha)`) — прогон без записанного sha читался бы как совпавший
+        с ЛЮБЫМ пином, и откат на последний зелёный прогон перестал бы
+        работать вовсе."""
+        self.assertFalse(pin._already_at_run_sha(self.HEAD, ""))
+        self.assertFalse(pin._already_at_run_sha(self.HEAD, None))
+        self.assertFalse(pin._already_at_run_sha(self.HEAD, "0" * 40))
+
+
+class PinToShortGreenShaTest(ConnRealGitSandbox):
+    """`pin --to` без аргумента на коротком `main_sha` последнего зелёного
+    прогона (AC-11): отказ «пин уже на sha последнего зелёного прогона» и
+    ни одного `git reset --hard`."""
+
+    def test_short_green_sha_prefixing_head_refuses_before_any_reset(self):
+        """Ловит мутацию: сравнение оставлено строгим (`target == old_sha`)
+        — короткая строка пину не равна, отказа нет, и команда доходит до
+        `git reset --hard` семисимвольной строки."""
+        head = self.git("rev-parse", "HEAD").strip()
+        store.insert_canary_run(
+            self.conn, "20260926T101500Z", "t", "01AAA", steps=1,
+            cost_usd=0.1, review_iterations=0, escalations=0,
+            outcome="killed", expected_escalation=None,
+            actual_escalation=False, marker_mismatch=False,
+            main_sha=head[:7], verdict="green")
+        real_git = gitcmd.git
+        calls = []
+
+        def spy(*args):
+            calls.append(args)
+            return real_git(*args)
+
+        with mock.patch.object(gitcmd, "git", side_effect=spy):
+            with self.assertRaises(SystemExit) as ctx:
+                pin.cmd_pin_to(None)
+
+        self.assertIn("пин уже на sha последнего зелёного прогона",
+                     str(ctx.exception))
+        self.assertEqual(
+            [], [a for a in calls if a[:2] == ("reset", "--hard")],
+            f"git reset --hard выполнен после отказа: {calls}")
+
+
 if __name__ == "__main__":
     unittest.main()

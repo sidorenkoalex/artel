@@ -611,11 +611,54 @@ def latest_fixed_sha(conn, target: str) -> sqlite3.Row:
 
 # ===== Журнал steps =====
 
+# Колонки журнала, нужные читателям «много записей разом» (SPEC
+# 01M3GKJFN90ATK2KECNDZXPPP6, требование 3): `session_id` и `target` в этот
+# список не входят — ни `report`, ни `watch._emit_steps` их не читают, а на
+# 38 тысячах записей `SELECT *` тащит из БД два лишних поля на каждую.
+# `task_steps` ниже остаётся на `SELECT *`: её зовёт десяток читателей,
+# часть которых (`watch._owner_session_id`, `catalog.cmd_log`) читает
+# именно `session_id`.
+_BULK_STEP_COLUMNS = "id, task_id, ts, actor, action, detail"
+
 
 def task_steps(conn: sqlite3.Connection, task_id: str) -> list:
     """Журнал шагов задачи по порядку записи (команда `log`)."""
     return conn.execute("SELECT * FROM steps WHERE task_id=? ORDER BY id",
                         (task_id,)).fetchall()
+
+
+def all_steps(conn: sqlite3.Connection) -> list:
+    """Журнал ВСЕГО пульта одной выборкой, по возрастанию `id`.
+
+    Читатель — `report._all_steps`/`report._map_size_entries` (SPEC
+    01M3GKJFN90ATK2KECNDZXPPP6, требование 3): отчёт строится по журналу
+    всех задач разом, и выборка на каждую задачу делала число запросов
+    пропорциональным числу задач. `id` — сквозной autoincrement через все
+    задачи, поэтому `ORDER BY id` здесь и есть хронология журнала: склейка
+    и сортировка в Python на стороне читателя больше не нужны.
+
+    Отбор по задаче/target остаётся за читателем: `report` фильтрует по
+    задачам, которые сам уже прочитал (`all_tasks`), а не по колонке
+    `steps.target` — иначе запись, чей `target` разошёлся с каталогом
+    задач, попадала бы в отчёт не того target'а.
+    """
+    return conn.execute(
+        f"SELECT {_BULK_STEP_COLUMNS} FROM steps ORDER BY id").fetchall()
+
+
+def task_steps_since(conn: sqlite3.Connection, task_id: str,
+                     since_id: int) -> list:
+    """Записи журнала задачи НОВЕЕ `since_id`, по возрастанию `id`.
+
+    Читатель — `watch._emit_steps` (SPEC 01M3GKJFN90ATK2KECNDZXPPP6,
+    требование 4): дозор опрашивает БД каждые `--interval` секунд и на
+    каждом опросе читал всю историю задачи, чтобы отбросить в Python всё,
+    кроме хвоста. Граница строгая (`id > ?`, не `>=`): `since_id` — id
+    записи, УЖЕ показанной Оператору.
+    """
+    return conn.execute(
+        f"SELECT {_BULK_STEP_COLUMNS} FROM steps WHERE task_id=? AND id>? "
+        "ORDER BY id", (task_id, since_id)).fetchall()
 
 
 def journal(conn, task_id: str, actor: str, action: str, detail: str = "",

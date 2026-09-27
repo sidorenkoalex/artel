@@ -197,9 +197,13 @@ def _emit_steps(conn, task_id: str, events: set, known_step_id: dict,
     """Печатает новые строки `steps` этой задачи; `True` — среди них была
     строка класса из `exit_on` (SPEC 01M290PP4KBTG1KYS1PWKQJH6T, требование
     4) и вызывающий обязан остановиться НЕМЕДЛЕННО, той же итерацией, не
-    дожидаясь `time.sleep(interval)` (AC-7)."""
-    steps = store.task_steps(conn, task_id)
-    new_rows = [row for row in steps if row["id"] > known_step_id[task_id]]
+    дожидаясь `time.sleep(interval)` (AC-7).
+
+    Отбор новых записей — фильтром `id > known` в SQL (SPEC
+    01M3GKJFN90ATK2KECNDZXPPP6, требование 4): дозор опрашивает БД каждые
+    `--interval` секунд, и прежнее чтение всей истории задачи ради её
+    хвоста было тем же дефектом CR-2026-09-26-2, что и в `report`."""
+    new_rows = store.task_steps_since(conn, task_id, known_step_id[task_id])
     if not new_rows:
         return False
     known_step_id[task_id] = new_rows[-1]["id"]

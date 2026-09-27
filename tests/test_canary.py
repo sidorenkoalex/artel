@@ -523,20 +523,66 @@ class CmdCanaryBadInputTest(unittest.TestCase):
         self.assertIn("--k", str(ctx.exception))
 
 
+#: Полный sha, в который резолвится короткая запись в тестах ниже (SPEC
+#: 01M3GKJFN90ATK2KECNDZXPPP6, требования 7-8): именно длина 40 отличает
+#: нормализованное значение от исходного аргумента `--sha`.
+_FULL_SHA = "5c4b3a29187f6e5d4c3b2a1908f7e6d5c4b3a219"
+
+
 class ResolveTargetShaTest(unittest.TestCase):
     """`canary._resolve_target_sha` (SPEC 01M2B6K02YVJBWE1JDWP85EJH0,
-    требование 1, AC-1/AC-2) — чистая маршрутизация без реального git."""
+    требование 1, AC-1/AC-2; нормализация явного `--sha` — SPEC
+    01M3GKJFN90ATK2KECNDZXPPP6, требования 7-8) — чистая маршрутизация без
+    реального git."""
 
-    def test_explicit_sha_is_returned_verbatim_without_touching_origin(self):
+    def test_explicit_sha_is_resolved_locally_without_touching_origin(self):
         """Ловит мутацию: явный `--sha` всё равно уходит в `gitcmd.
         fetch_ref_sha` — AC-2 запрещает обращение к `origin`, когда sha
         уже известен явно; с этой мутацией `fetch_ref_sha` был бы вызван
-        независимо от переданного `explicit_sha`."""
-        with mock.patch.object(canary.gitcmd, "fetch_ref_sha") as fetch_mock:
+        независимо от переданного `explicit_sha`.
+
+        Подменена точка ЛОКАЛЬНОГО резолва (`canary._local_full_sha`, SPEC
+        01M3GKJFN90ATK2KECNDZXPPP6, требования 7/10): без неё тест
+        зависел бы от того, что «deadbeef» окажется настоящей ревизией
+        рабочей копии, — сам предмет проверки (ни одного обращения к
+        origin) остался прежним."""
+        with mock.patch.object(canary.gitcmd, "fetch_ref_sha") as fetch_mock, \
+             mock.patch.object(canary, "_local_full_sha",
+                               return_value=_FULL_SHA) as local_mock:
             sha, origin_sha = canary._resolve_target_sha("deadbeef")
-        self.assertEqual(sha, "deadbeef")
+        self.assertEqual(sha, _FULL_SHA)
         self.assertIsNone(origin_sha)
         fetch_mock.assert_not_called()
+        local_mock.assert_called_once_with("deadbeef")
+
+    def test_short_explicit_sha_is_normalized_to_the_full_sha(self):
+        """Короткий явный `--sha` доезжает до вызывающего полным
+        40-символьным sha, разрешённым локально (SPEC
+        01M3GKJFN90ATK2KECNDZXPPP6, требование 7, AC-7).
+
+        Ловит мутацию: приведение сделано не в `_resolve_target_sha`, а
+        где-то дальше по пути (только в печати отчёта) — вызывающий, а с
+        ним и `canary_runs.main_sha`, получал бы короткую строку, слепую к
+        строковому сравнению."""
+        rev_parse = subprocess.CompletedProcess(
+            ("rev-parse",), 0, _FULL_SHA + "\n", "")
+        with mock.patch.object(canary.gitcmd, "git", return_value=rev_parse):
+            sha, origin_sha = canary._resolve_target_sha(_FULL_SHA[:7])
+        self.assertEqual(sha, _FULL_SHA)
+        self.assertIsNone(origin_sha)
+
+    def test_unresolvable_explicit_sha_exits_naming_the_sha(self):
+        """Неразрешимый локально `--sha` — именованный отказ команды, а не
+        молчаливая деградация на исходную строку (требование 7, AC-8).
+
+        Ловит мутацию: неудача локального резолва проглочена (`or
+        explicit_sha`) — прогон уходил бы в клон и заводил канареечную
+        задачу на опечатке в `--sha`, а причина умирала бы вместе с
+        уничтоженным клоном."""
+        with mock.patch.object(canary, "_local_full_sha", return_value=""):
+            with self.assertRaises(SystemExit) as ctx:
+                canary._resolve_target_sha("opechatka")
+        self.assertIn("opechatka", str(ctx.exception))
 
     def test_missing_sha_resolves_via_fetch_ref_sha_of_origin_main(self):
         """Ловит мутацию: источник sha по умолчанию — `gitcmd.head_sha()`
@@ -600,6 +646,57 @@ class ShaLabelTest(unittest.TestCase):
         with mock.patch.object(canary.gitcmd, "head_sha", return_value="pin"):
             label = canary._sha_label("other", None)
         self.assertEqual(label, "код other")
+
+    def test_explicit_sha_resolved_to_the_pin_is_labelled_pin(self):
+        """Явный `--sha`, записанный коротко и разрешившийся в голову
+        главной копии, получает «код пина» (SPEC
+        01M3GKJFN90ATK2KECNDZXPPP6, требование 8, AC-10) — сквозь тот же
+        путь `_resolve_target_sha` -> `_sha_label`, которым идёт
+        `cmd_canary`.
+
+        Ловит мутацию: нормализация явного sha потеряна (значение
+        возвращается как напечатано) — семисимвольная строка не совпадёт с
+        40-символьным `head_sha()` ни при каких условиях, и пометка «код
+        пина» для явного sha пина не срабатывала бы никогда."""
+        rev_parse = subprocess.CompletedProcess(
+            ("rev-parse",), 0, _FULL_SHA + "\n", "")
+        with mock.patch.object(canary.gitcmd, "git", return_value=rev_parse), \
+             mock.patch.object(canary.gitcmd, "head_sha",
+                               return_value=_FULL_SHA):
+            target_sha, origin_sha = canary._resolve_target_sha(_FULL_SHA[:7])
+            label = canary._sha_label(target_sha, origin_sha)
+        self.assertEqual(label, "код пина")
+
+
+class LocalFullShaTest(unittest.TestCase):
+    """`canary._local_full_sha` (SPEC 01M3GKJFN90ATK2KECNDZXPPP6,
+    требование 7) — локальный резолв ревизии без обращения к origin."""
+
+    def test_asks_local_git_rev_parse_verify_and_strips_the_answer(self):
+        """Ловит мутацию: ответ git отдан без `strip()` — в целевой sha (и
+        дальше в `canary_runs.main_sha`) уехал бы перевод строки, а
+        сравнения «полный sha» стали бы ложно-отрицательными."""
+        rev_parse = subprocess.CompletedProcess(
+            ("rev-parse",), 0, _FULL_SHA + "\n", "")
+        with mock.patch.object(canary.gitcmd, "git",
+                               return_value=rev_parse) as git_mock:
+            self.assertEqual(canary._local_full_sha("korotkiy"), _FULL_SHA)
+        args = git_mock.call_args.args
+        self.assertEqual(args[0], "rev-parse")
+        self.assertIn("--verify", args)
+        self.assertTrue(any("korotkiy" in arg for arg in args[1:]),
+                        f"резолв не спросил саму ревизию: {args}")
+
+    def test_nonzero_exit_and_no_answer_both_give_an_empty_string(self):
+        """Ловит мутацию: ненулевой код возврата (ревизии нет в локальной
+        базе) трактуется как успех — `stdout` там пуст либо несёт текст
+        `fatal:`, и вызывающий принял бы его за разрешённый sha вместо
+        того, чтобы отказать прогону."""
+        failed = subprocess.CompletedProcess(("rev-parse",), 128, "", "fatal:")
+        with mock.patch.object(canary.gitcmd, "git", return_value=failed):
+            self.assertEqual(canary._local_full_sha("nety"), "")
+        with mock.patch.object(canary.gitcmd, "git", return_value=None):
+            self.assertEqual(canary._local_full_sha("nety"), "")
 
 
 class EphemeralCloneConfigRemapTest(unittest.TestCase):
