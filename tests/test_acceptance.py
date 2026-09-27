@@ -190,23 +190,33 @@ class RunDigestTest(unittest.TestCase):
         self.assertIn("ModuleNotFoundError", digest)
 
     def test_digest_is_bounded_by_the_log_tail_config(self):
-        """Выжимка двухсот упавших тестов с длинными именами ограничена
-        теми же потолками, что выжимка логов ролей: `config.LOG_TAIL_LINES`
-        строк И `config.LOG_TAIL_CHARS` символов.
+        """Выжимка двухсот упавших тестов ограничена теми же потолками,
+        что выжимка логов ролей: `config.LOG_TAIL_LINES` строк И
+        `config.LOG_TAIL_CHARS` символов. Оба случая — длинные имена
+        (потолок символов режет раньше строк) и короткие (наоборот).
 
         Ловит мутацию: ограничение применено только по символам или
         только по строкам — красный полный набор на двести тестов уедет в
-        журнал целиком.
+        журнал целиком. Снятый потолок строк виден на коротких именах
+        (последние 1000 символов — это 48 строк), снятый потолок
+        символов — на длинных (15 строк по 106 символов = 1525).
         """
-        huge = "\n".join(
+        long_names = "\n".join(
             f"FAILED tests/test_module_{i:03d}.py::VeryLongNamedCase{i:03d}"
             f"::test_rather_long_scenario_name_{i:03d} - AssertionError"
-            for i in range(200)) + f"\n===== {SUMMARY_LINE} =====\n"
+            for i in range(200))
+        short_names = "\n".join(f"FAILED t.py::C::t{i:03d}"
+                                for i in range(200))
 
-        digest = acceptance.run_digest(huge)
+        for case, output in (("длинные имена", long_names),
+                             ("короткие имена", short_names)):
+            with self.subTest(case):
+                digest = acceptance.run_digest(
+                    f"{output}\n===== {SUMMARY_LINE} =====\n")
 
-        self.assertLessEqual(len(digest.splitlines()), config.LOG_TAIL_LINES)
-        self.assertLessEqual(len(digest), config.LOG_TAIL_CHARS)
+                self.assertLessEqual(len(digest.splitlines()),
+                                     config.LOG_TAIL_LINES)
+                self.assertLessEqual(len(digest), config.LOG_TAIL_CHARS)
 
     def test_summary_line_is_empty_when_the_output_has_none(self):
         """`run_summary_line` на выводе без сводки отдаёт пустую строку —
