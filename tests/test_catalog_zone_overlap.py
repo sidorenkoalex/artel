@@ -40,6 +40,29 @@ TZ_COMMON_ZONES_ONLY = """Требуется:
 Зоны: tests/, orchestrator/config.py.
 """
 
+# Вёрстка ТЗ по ~72 символа рвёт длинный путь по `/` или `-` — как в живых
+# ТЗ пульта (`tasks/01M3FQ2Z2PY0E9T5F5WQ207NP5/TZ.md`:
+# `orchestrator/⏎schema.py`, `tasks/01M1NSR5M5THYRC0RFWPMVE2DW/TZ.md`:
+# `docs/reference/⏎role-home.md`). Здесь разорваны оба вида: путь после
+# слэша и путь после дефиса (замечание R2-F1 ревью итерации 2).
+TZ_WRAPPED_PATHS = """Требуется:
+1. Разобрать очередь.
+
+Зоны: orchestrator/canary.py, orchestrator/
+schema.py, docs/operator-
+session.md, tests/.
+"""
+
+# Перенос в ПРОЗЕ раздела «Зоны:» (так свёрстана половина живых ТЗ):
+# идущий за ним путь начинает новую строку, а предыдущая кончается
+# латинским идентификатором задачи.
+TZ_WRAPPED_PROSE = """Требуется:
+1. Разобрать очередь.
+
+Зоны: orchestrator/pull.py, конфликт зон с 01M3FQ2V77QNK95Z599DM124QN
+docs/stack.md.
+"""
+
 
 def seed_task(task_id: str, state: str, zones: str,
               target: str = config.DEFAULT_TARGET) -> None:
@@ -68,6 +91,35 @@ class TzZonePathsTest(unittest.TestCase):
         self.assertEqual(catalog._tz_zone_paths(TZ_ZONES),
                          {"orchestrator/pull.py", "docs/stack.md"})
         self.assertEqual(catalog._tz_zone_paths(TZ_COMMON_ZONES_ONLY), set())
+
+    def test_a_path_broken_by_the_tz_wrap_is_collected_whole(self):
+        """Путь, разорванный вёрсткой ТЗ по `/` или по `-`, собирается
+        целым, и обрывка-каталога (`orchestrator/`) в множестве нет.
+
+        Ловит мутацию: склейка разрыва (`_TZ_WRAPPED_PATH_BREAK`) снята —
+        обрывок `orchestrator/` стал бы самостоятельной зоной и накрыл бы
+        почти любую задачу пульта (ложное пересечение), а разорванный
+        `docs/operator-session.md` потерялся бы целиком (пропуск
+        настоящего — прецедент «Контекста» SPEC)."""
+        paths = catalog._tz_zone_paths(TZ_WRAPPED_PATHS)
+
+        self.assertEqual(paths, {"orchestrator/canary.py",
+                                 "orchestrator/schema.py",
+                                 "docs/operator-session.md"})
+
+    def test_a_wrap_in_the_prose_keeps_the_path_that_follows_it(self):
+        """Перенос в прозе раздела «Зоны:» не склеивается: путь, стоящий в
+        начале следующей строки, остаётся в множестве.
+
+        Ловит мутацию: склейка снимает ВСЕ переносы, а не только разрыв
+        внутри пути — `docs/stack.md` прилип бы к идентификатору задачи
+        слева (`…124QNdocs/stack.md`), где `guard.PATH_MENTION` запрещает
+        букву/цифру перед кандидатом, и зона документа исчезла бы из
+        прогноза."""
+        paths = catalog._tz_zone_paths(TZ_WRAPPED_PROSE)
+
+        self.assertIn("docs/stack.md", paths)
+        self.assertIn("orchestrator/pull.py", paths)
 
 
 class WarnZoneOverlapTest(SchemaTmpRootTest):
@@ -147,6 +199,43 @@ class WarnZoneOverlapTest(SchemaTmpRootTest):
         # Тот же вызов без чужого target'а предупреждение даёт — иначе
         # тест зеленел бы и на сломанной сверке.
         self.assertIn("01ZONEOVERLAPFOREIGNHL", self.warn(TZ_ZONES))
+
+    def test_a_path_broken_by_the_wrap_still_finds_the_real_overlap(self):
+        """Сценарий 2 замечания R2-F1: ТЗ с разорванным вёрсткой
+        `docs/operator-⏎session.md` против задачи, заявившей этот документ
+        целиком, — предупреждение печатается и журналируется.
+
+        Ловит мутацию: разрыв не склеен — единственным элементом стал бы
+        `'docs/operator-\\nsession.md'`, `_shared_zone` вернул бы `None`, и
+        механика молчала бы ровно в прецеденте, ради которого заведена
+        (три задачи волны 26–27.09 правили один раздел этого документа)."""
+        seed_task("01ZONEOVERLAPDOCHOLDER", "in_dev",
+                  "docs/operator-session.md")
+
+        out = self.warn(TZ_WRAPPED_PATHS)
+
+        self.assertIn("01ZONEOVERLAPDOCHOLDER", out)
+        self.assertIn("docs/operator-session.md", out)
+        self.assertEqual(len(self.journal_rows()), 1, out)
+
+    def test_a_fragment_of_a_broken_path_invents_no_overlap(self):
+        """Сценарий 1 замечания R2-F1: то же ТЗ против задачи с зоной
+        `orchestrator/runner.py`, которой в перечне нет, — ни вывода, ни
+        записи журнала.
+
+        Ловит мутацию: разрыв не склеен — обрывок `orchestrator/` накрыл бы
+        зону-соседа по вложенности, и `new` обещал бы очередь, которой не
+        будет: к `in_dev` колонка уже перезаписана зонами SPEC, где
+        каталога `orchestrator/` нет."""
+        seed_task("01ZONEOVERLAPRUNNERHLD", "in_dev", "orchestrator/runner.py")
+
+        self.assertEqual(self.warn(TZ_WRAPPED_PATHS), "")
+        self.assertEqual(self.journal_rows(), [])
+        # Заявленный целиком путь того же ТЗ пересечение даёт — иначе тест
+        # зеленел бы и на разборе, потерявшем все зоны разом.
+        seed_task("01ZONEOVERLAPCANARYHLD", "spec_gate",
+                  "orchestrator/canary.py")
+        self.assertIn("01ZONEOVERLAPCANARYHLD", self.warn(TZ_WRAPPED_PATHS))
 
     def test_no_overlap_prints_nothing_and_journals_nothing(self):
         """Пересечения нет, а также пересечение ТОЛЬКО по общим зонам —
@@ -248,6 +337,27 @@ class CmdNewPreliminaryZonesTest(InitializedTmpRootTest):
         self.assertEqual(row["zones"], "docs/stack.md, orchestrator/pull.py")
         actions = [r["action"] for r in store.task_steps(store.db(), task_id)]
         self.assertIn(catalog.PRELIMINARY_ZONES_ACTION, actions)
+
+    def test_a_wrapped_tz_writes_whole_paths_into_the_column(self):
+        """Продуктовый путь `new --tz` с ТЗ, чью строку «Зоны:» вёрстка
+        разорвала по `/` и по `-`: в колонку `tasks.zones` ложатся целые
+        пути, обрывка-каталога там нет.
+
+        Ловит мутацию: склейка разрыва снята — колонка кандидата волны
+        несла бы `orchestrator/` и `'orchestrator/\\nschema.py'`, и добавка
+        `status` («зона занята») срабатывала бы не на ту зону у любой
+        задачи пульта (замечание R2-F1, сценарий 1 на продуктовом
+        пути)."""
+        self.tz_file.write_text(TZ_WRAPPED_PATHS, encoding="utf-8")
+
+        zones = self.zones_of(self.new_task())
+
+        # Колонка несёт зоны КАК ЗАЯВЛЕНЫ, вместе с общей `tests/` (её
+        # отбрасывает уже сверка, `zone_lock._own_paths`) — предмет теста
+        # ровно в том, что пути в ней целые.
+        self.assertEqual(zones, "docs/operator-session.md, "
+                                "orchestrator/canary.py, "
+                                "orchestrator/schema.py, tests/")
 
     def test_tz_without_a_zones_line_leaves_the_column_null(self):
         """ТЗ без строки «Зоны:» колонку не трогает: `NULL` остаётся

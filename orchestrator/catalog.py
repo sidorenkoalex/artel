@@ -154,16 +154,22 @@ def _tz_section_re(label: str) -> re.Pattern:
         + r")|\Z)", re.M | re.S)
 
 
-def _tz_sections(tz_raw: str, labels) -> tuple[str, list[tuple[int, int]]]:
-    """(склеенные тела разделов с метками `labels`, их диапазоны в
-    `tz_raw`) — все вхождения каждой метки, не только первое."""
+def _tz_sections(tz_raw: str, labels,
+                 joiner: str = "\n") -> tuple[str, list[tuple[int, int]]]:
+    """(тела разделов с метками `labels`, склеенные `joiner`, их диапазоны
+    в `tz_raw`) — все вхождения каждой метки, не только первое.
+
+    `joiner` — параметр, потому что разбор зон (`_tz_zone_items`) склеивает
+    тела запятой: для него граница двух тел — граница ЭЛЕМЕНТОВ перечня, а
+    перенос строки он снимает как вёрстку (R2-F1), и тело, склеенное с
+    соседним переносом, дало бы один элемент из двух зон."""
     bodies: list[str] = []
     spans: list[tuple[int, int]] = []
     for label in labels:
         for match in _tz_section_re(label).finditer(tz_raw):
             bodies.append(match.group(1))
             spans.append(match.span())
-    return "\n".join(bodies), spans
+    return joiner.join(bodies), spans
 
 
 def _tz_path_check(tz_raw: str) -> tuple[list[str], list[str]]:
@@ -253,19 +259,40 @@ ZONE_OVERLAP_ACTION = "пересечение зон при заведении"
 PRELIMINARY_ZONES_ACTION = "предварительные зоны из ТЗ"
 
 
+# Перенос строки ВНУТРИ пути (замечание R2-F1 ревью итерации 2): вёрстка
+# ТЗ по ~72 символа рвёт длинный путь, и точка разрыва — `/`, `-` или `_`
+# (на 215 живых ТЗ пульта встречаются ровно такие: `orchestrator/⏎
+# schema.py`, `docs/reference/⏎role-home.md`, `константа-⏎ориентир`).
+# Разрыв склеивается ДО разбора: иначе обрывок перед переносом
+# (`orchestrator/`) становится самостоятельной зоной-каталогом и накрывает
+# почти любую задачу пульта (ложное пересечение), а сам путь теряется
+# целиком (пропуск настоящего — ровно прецедент «Контекста» SPEC, где
+# рвётся `docs/operator-session.md`).
+#
+# Снимать ВСЕ переносы нельзя: перенос после слова склеил бы прозу с
+# путём, стоящим в начале следующей строки («… задачи 01M3FQ2V77⏎
+# docs/stack.md»), а `guard.PATH_MENTION` запрещает букву/цифру слева от
+# кандидата — путь пропал бы. Разрыв в иной точке (`orchestrator/con⏎
+# fig.py`) не склеивается и остаётся, как до задачи: он даёт только
+# непуть-элемент, но не обрывок-каталог, то есть промах, а не ложное
+# срабатывание.
+_TZ_WRAPPED_PATH_BREAK = re.compile(r"(?<=[/_-])\n[ \t]*")
+
+
 def _tz_zone_items(tz_raw: str) -> list[str]:
     """Элементы строки `Зоны:` ТЗ — как они написаны, без фильтра общих
     зон. Разбор — ТОТ ЖЕ, что у существующей сверки путей ТЗ
     (`_tz_path_check`): один `_tz_sections` + `guard.zone_items` на все
     проверки одной команды, иначе перенос строки `Зоны:` или следующая
-    метка-раздел разошлись бы между ними.
+    метка-раздел разошлись бы между ними — плюс склейка пути, разорванного
+    вёрсткой ТЗ (`_TZ_WRAPPED_PATH_BREAK`, замечание R2-F1).
 
     Отсортировано: `guard.zone_items` отдаёт МНОЖЕСТВО, и порядок его
     обхода у строк меняется от процесса к процессу (hash randomization)
     — записанное в `tasks.zones` значение обязано быть одинаковым при
     одном и том же ТЗ."""
-    zones_text, _ = _tz_sections(tz_raw, (_TZ_ZONES_LABEL,))
-    return sorted(guard.zone_items(zones_text))
+    zones_text, _ = _tz_sections(tz_raw, (_TZ_ZONES_LABEL,), joiner=",")
+    return sorted(guard.zone_items(_TZ_WRAPPED_PATH_BREAK.sub("", zones_text)))
 
 
 def _tz_zone_paths(tz_raw: str) -> set[str]:
