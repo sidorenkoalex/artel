@@ -1121,6 +1121,28 @@ def _save_diagnostics(outer_root: Path, run_stamp: str, task_id: str,
     return diag_dir
 
 
+def _local_full_sha(revision: str) -> str:
+    """Полный 40-символьный sha ревизии по ЛОКАЛЬНОЙ базе главной копии
+    (`git rev-parse --verify <revision>^{commit}`); пустая строка — ревизия
+    локально не разрешается либо git не ответил.
+
+    Зачем отдельная функция при существующей `gitcmd.fetch_ref_sha`: та
+    ходит к `origin`, а этой ветке (`--sha` задан явно) обращение к origin
+    запрещено (AC-2 задачи 01M2B6K02YVJBWE1JDWP85EJH0). Правки самого
+    `orchestrator/gitcmd.py` тут не нужно (SPEC
+    01M3GKJFN90ATK2KECNDZXPPP6, требование 7): нужный вызов даёт
+    существующая `gitcmd.git`.
+
+    `^{commit}` — чтобы на выходе был sha КОММИТА (аннотированный тег
+    развернулся бы в свой объект тега), а `--verify` — чтобы
+    неразрешимая ревизия дала ненулевой код, а не эхо самой строки.
+    """
+    res = gitcmd.git("rev-parse", "--verify", f"{revision}^{{commit}}")
+    if res is None or res.returncode != 0:
+        return ""
+    return res.stdout.strip()
+
+
 def _resolve_target_sha(explicit_sha: str | None) -> tuple[str, str | None]:
     """(sha, origin_sha) целевого прогона (SPEC 01M2B6K02YVJBWE1JDWP85EJH0,
     требование 1, AC-1/AC-2): `explicit_sha` задан — он и есть целевой
@@ -1140,9 +1162,24 @@ def _resolve_target_sha(explicit_sha: str | None) -> tuple[str, str | None]:
     v2, `tasks/01M1NEEWH5K1XPFRDGRMPYSBXJ/acceptance_tests/`, гоняла canary
     без единого настроенного origin ДО этой задачи) — сам целевой sha
     прогона в этом вырожденном случае остаётся прежним, но `canary --k <N>`
-    не отказывает целиком там, где origin в принципе недостижим."""
+    не отказывает целиком там, где origin в принципе недостижим.
+
+    Явный `--sha` приводится к ПОЛНОМУ 40-символьному sha (SPEC
+    01M3GKJFN90ATK2KECNDZXPPP6, требования 7-8): дальше это значение
+    уходит и в `canary_runs.main_sha`, и в сравнения строк (`_sha_label`,
+    `pin.cmd_pin_to`), а короткая запись делала их слепыми — пометка «код
+    пина» не срабатывала для явного sha пина никогда. Неразрешимая
+    ревизия — именованный отказ ЗДЕСЬ: эта функция зовётся до первого
+    `_ephemeral_clone` и до `catalog.cmd_new`, так что за опечатку в
+    `--sha` Оператор не платит ни клоном, ни заведённой задачей (AC-8)."""
     if explicit_sha is not None:
-        return explicit_sha, None
+        full_sha = _local_full_sha(explicit_sha)
+        if not full_sha:
+            sys.exit(
+                f"canary: --sha {explicit_sha} не разрешается в локальной "
+                "базе главной копии — проверь опечатку либо подтяни ревизию "
+                f"(git rev-parse --verify {explicit_sha})")
+        return full_sha, None
     target_sha, _reason = gitcmd.fetch_ref_sha("origin", config.MAIN_BRANCH)
     if not target_sha:
         return gitcmd.head_sha(), None
@@ -1158,7 +1195,15 @@ def _sha_label(target_sha: str, origin_sha: str | None) -> str:
     target_sha`), что целевой sha и есть голова `origin/<MAIN_BRANCH>`;
     иначе — «код <sha>» буквально, в том числе для явного `--sha`, для
     которого сравнение с origin недоступно (AC-2 запрещает запрос
-    origin ради этой пометки)."""
+    origin ради этой пометки).
+
+    Сравниваются ПОЛНЫЕ sha с обеих сторон — `_resolve_target_sha`
+    приводит к полному и явный `--sha` (SPEC
+    01M3GKJFN90ATK2KECNDZXPPP6, требование 8). До этого короткий `--sha`
+    не мог совпасть с 40-символьным `gitcmd.head_sha()` ни при каких
+    условиях, и «код пина» для явного sha пина не срабатывала никогда
+    (AC-10). Собственного префиксного правила здесь не нужно: обе строки
+    приходят полными, и БД эта функция не читает."""
     if target_sha == gitcmd.head_sha():
         return "код пина"
     if origin_sha is not None and target_sha == origin_sha:

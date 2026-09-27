@@ -42,6 +42,27 @@ CREATE TABLE IF NOT EXISTS model_tariffs (
 );
 """
 
+# Индекс журнала по задаче (SPEC 01M3GKJFN90ATK2KECNDZXPPP6, требования
+# 1-2; находка ревизии CR-2026-09-26-2): до него `steps` не имел ни одного
+# индекса, и каждое чтение журнала ОДНОЙ задачи шло планом SCAN по всей
+# таблице — на 268 задачах и 38 тысячах записей это 0.63 с из 0.72 с
+# профиля `status`.
+#
+# Индекс ОДНОКОЛОНОЧНЫЙ, составного `steps(task_id, id)` здесь нет
+# намеренно: `id` объявлен `INTEGER PRIMARY KEY AUTOINCREMENT`, то есть
+# алиас rowid, а SQLite дописывает rowid хвостовым ключом каждой записи
+# индекса rowid-таблицы — записи этого индекса уже упорядочены по
+# `(task_id, id)` и обслуживают и `ORDER BY id`, и диапазон `id > ?` без
+# отдельной сортировки (проверяется планом запроса, AC-3, а не
+# рассуждением).
+#
+# Тем же литералом, что и в `SCHEMA` ниже, и в `migrate()` (см.
+# комментарий у `MODEL_TARIFFS_DDL`): свежая БД и догнанная миграцией
+# обязаны нести один и тот же набор индексов `steps` (AC-2).
+STEPS_TASK_ID_INDEX_DDL = """
+CREATE INDEX IF NOT EXISTS idx_steps_task_id ON steps(task_id);
+"""
+
 SCHEMA = f"""
 CREATE TABLE IF NOT EXISTS tasks (
   id TEXT PRIMARY KEY, title TEXT, state TEXT, branch TEXT,
@@ -64,6 +85,7 @@ CREATE TABLE IF NOT EXISTS steps (
   target TEXT DEFAULT '{config.DEFAULT_TARGET}', ts TEXT,
   actor TEXT, action TEXT, detail TEXT, session_id TEXT
 );
+{STEPS_TASK_ID_INDEX_DDL}
 CREATE TABLE IF NOT EXISTS task_counters (
   target TEXT PRIMARY KEY, next_number INTEGER NOT NULL
 );
@@ -270,4 +292,19 @@ def migrate(conn: sqlite3.Connection) -> None:
     # (см. комментарий у `MODEL_TARIFFS_DDL`), чтобы составы колонок не
     # разъехались между свежей БД и догнанной.
     conn.executescript(MODEL_TARIFFS_DDL)
+    # Индекс `steps(task_id)` (SPEC 01M3GKJFN90ATK2KECNDZXPPP6, требование
+    # 1): БД прошлых версий его не имеют — догоняется тем же приёмом и ТЕМ
+    # ЖЕ литералом, что `model_tariffs` выше. `IF NOT EXISTS` обязателен:
+    # `migrate` идёт на КАЖДОМ `store.db()`, второй проход по живой БД
+    # иначе падал бы `index … already exists`.
+    #
+    # Проверка наличия самой таблицы — тот же вырожденный случай, что у
+    # `add_column` («нет таблицы — нечего догонять»): `steps` создаёт только
+    # `create_schema`, миграция её не заводит, а БД, где есть `tasks` и нет
+    # `steps`, встречается (минимальные БД прошлых версий в tests/
+    # test_agent_failure.py, tests/test_review_freshness.py) — `CREATE INDEX`
+    # на такой БД падал бы `no such table: main.steps` и ронял бы ВЕСЬ
+    # `migrate`, то есть любое открытие БД.
+    if table_columns(conn, "steps"):
+        conn.executescript(STEPS_TASK_ID_INDEX_DDL)
     conn.commit()
