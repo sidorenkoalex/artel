@@ -80,33 +80,34 @@ class VersionCommandTest(unittest.TestCase):
 
 class CliVersionPinTest(unittest.TestCase):
     """Пин CLI поднят до установленной версии
-    (01M3FTQ16M3VVXPPFCC0BGA39V, требование 7; CR-2026-09-26-7):
-    расхождение пина с фактом давало warn «cli-version» на каждом шаге."""
+    (01M3KE8ZJXFARS6KC441PCDCQV, требование 5): расхождение пина с фактом
+    давало warn «cli-version» на каждом шаге."""
 
     def test_pin_value_and_operator_decision_mark(self):
-        """Значение пина — `2.1.267`, а строка константы несёт дату и
+        """Значение пина — `2.1.283`, а строка константы несёт дату и
         находку, по которой Оператор его сдвинул: подъём пина — решение
         Оператора, а не автоматика, и по строке это обязано читаться.
 
         Ловит мутацию: значение поднято без пометки (или пометка
-        осталась от прошлого решения 03.09) — по строке нельзя понять,
-        чьим решением сдвинут пин, и `assertIn` покраснеет."""
-        self.assertEqual("2.1.267", config.CLI_VERSION_PIN)
+        осталась от прошлого решения 26.09, CR-2026-09-26-7) — по строке
+        нельзя понять, чьим решением сдвинут пин, и `assertIn`
+        покраснеет."""
+        self.assertEqual("2.1.283", config.CLI_VERSION_PIN)
         source = Path(config.__file__).read_text(encoding="utf-8")
         line, = [text for text in source.splitlines()
                  if text.startswith("CLI_VERSION_PIN")]
-        self.assertIn("26.09", line)
-        self.assertIn("CR-2026-09-26-7", line)
+        self.assertIn("28.09", line)
+        self.assertIn("warn cli-version", line)
 
     def test_doctor_reports_ok_for_the_pinned_version(self):
-        """`doctor.check_cli_version` на установленной 2.1.267 — `ok`,
+        """`doctor.check_cli_version` на установленной 2.1.283 — `ok`,
         а не warn о расхождении.
 
         Ловит мутацию: пин поднят с опечаткой в цифре или лишним
         пробелом внутри строки — сверка `version != CLI_VERSION_PIN`
         снова даст warn, и предупреждение вернулось бы на каждый шаг."""
         with mock.patch.object(doctor, "cli_version",
-                               return_value="2.1.267"):
+                               return_value="2.1.283"):
             check = doctor.check_cli_version()
 
         self.assertEqual("cli-version", check.name)
