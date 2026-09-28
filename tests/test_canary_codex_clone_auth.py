@@ -27,7 +27,7 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from orchestrator import canary, config, doctor  # noqa: E402
+from orchestrator import canary, config, doctor, providers  # noqa: E402
 from orchestrator.providers import codex as codex_provider  # noqa: E402
 from tests.test_canary import pristine_config  # noqa: E402
 from tests.test_canary_sets import (SET_NAME, _SetLayersTest,  # noqa: E402
@@ -375,6 +375,26 @@ class RefuseUnlessCloneLoggedInTest(unittest.TestCase):
         self.assertIn(
             str(self.pult_home / codex_provider.DEPLOYED_HOME_DIR), defect)
 
+    def test_the_pult_defect_names_both_halves_of_the_transfer(self):
+        """Отказ «дефект пульта» называет ОБЕ половины переноса входа —
+        переопределение `CODEX_HOME` и указатель связки ключей, — с
+        адресами кода каждой.
+
+        Ловит мутацию: причиной названа одна половина (сломанное
+        переопределение) — Оператор, у которого на деле сломан перенос
+        указателя (`_KEYCHAIN_POINTER_REL` сменился в новой macOS, и
+        клиент в клоне связку не находит), получал бы тот же исход «клон
+        не `ok`, пульт `ok`», шёл читать две исправные функции, а
+        сломанной третьей в тексте не нашёл бы вовсе.
+        """
+        defect = self.refusal(pult="ok", clone="fail")
+
+        self.assertIn(codex_provider.HOME_ENV, defect)
+        self.assertIn("_ephemeral_clone", defect)
+        self.assertIn("_install_codex_pointer", defect)
+        self.assertIn(str(self.clone_home / canary._KEYCHAIN_POINTER_REL),
+                      defect)
+
     def test_the_pult_probe_asks_with_the_pult_home_and_no_override(self):
         """Второй вызов узла идёт домом роли ПУЛЬТА и со снятым
         переопределением `CODEX_HOME`, а после него оба значения снова
@@ -449,6 +469,15 @@ class EphemeralCloneCodexHomeTest(unittest.TestCase):
         self.addCleanup(codex_provider.set_codex_home_override,
                         codex_provider.codex_home_override())
         codex_provider.set_codex_home_override(None)
+        #: Окружение шага Codex, собранное в момент КАЖДОГО вызова узла
+        #: проверки входа, — тем же путём, каким его берёт настоящий узел
+        #: (`doctor.check_codex_chatgpt_auth`: `provider.environment(role)`).
+        self.preflight_envs = []
+
+    def step_environment(self, role: str | None = None) -> dict:
+        """Окружение шага роли, как его соберёт `runner.role_env`."""
+        return providers.get(codex_provider.CLI_NAME).environment(
+            role or self.ROLE)
 
     def auth(self) -> canary.CodexCloneAuth:
         return canary.CodexCloneAuth(self.ROLE, POINTER_BYTES)
@@ -463,6 +492,7 @@ class EphemeralCloneCodexHomeTest(unittest.TestCase):
             return subprocess.CompletedProcess(cmd, 0, "", "")
 
         def logged_in(role):
+            self.preflight_envs.append(self.step_environment(role))
             return doctor.Check(doctor.CODEX_AUTH_CHECK, "ok",
                                 f"роль {role}: вход подтверждён")
 
@@ -495,6 +525,33 @@ class EphemeralCloneCodexHomeTest(unittest.TestCase):
         self.assertEqual(
             self.pult_role_home / codex_provider.DEPLOYED_HOME_DIR, inside)
         self.assertNotEqual(self.pult_role_home, clone_role_home)
+
+    def test_the_preflight_check_is_asked_with_the_step_environment(self):
+        """Узел проверки входа зовётся РОВНО тем окружением, какое внутри
+        того же блока получит шаг роли: все три имени совпадают, и
+        `CODEX_HOME` в них — каталог клиента дома роли ПУЛЬТА.
+
+        Сторож ПОРЯДКА двух действий внутри блока, а не их наличия:
+        остальные тесты класса смотрят на переопределение уже после обоих
+        (`codex_home_override()` из тела блока), и перестановка строк им
+        не видна.
+
+        Ловит мутацию: переопределение ставится ПОСЛЕ проверки входа
+        (строки переставлены) — предполёт доказывал бы вход каталога
+        клиента КЛОНА, которым `codex login` записи в связке не заводил;
+        зеркальная мутация (проверка собирает окружение своим выражением,
+        а не общим `CodexProvider.environment`) даёт зелёный предполёт на
+        пультовском пути и шаг роли с клоновским `CODEX_HOME` — то есть
+        оплаченную попытку, падающую авторизацией.
+        """
+        with self.fake_clone():
+            with canary._ephemeral_clone(codex_auth=self.auth()):
+                step_env = self.step_environment()
+
+        self.assertEqual([step_env], self.preflight_envs)
+        self.assertEqual(
+            str(self.pult_role_home / codex_provider.DEPLOYED_HOME_DIR),
+            step_env[codex_provider.HOME_ENV])
 
     def test_a_block_without_codex_auth_sets_no_override(self):
         """Без входа Codex переопределения нет и внутри блока.
