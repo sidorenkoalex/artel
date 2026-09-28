@@ -25,7 +25,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from orchestrator import (agent_log, alerts, auto, brief, budget,  # noqa: E402
                           catalog, ci, config, fsm, gitcmd, github_adapter,
-                          pause, runner, store)
+                          pause, runner, store, zone_lock)
 from orchestrator.advance_gates import zones  # noqa: E402
 from tests.sandbox import (SpyRun, capture,  # noqa: E402
                            capture_new_task_id, disk_backed_ls_tree_files,
@@ -1293,6 +1293,114 @@ class WaitForZoneTest(AutoCycleTest):
         self.assertIsInstance(result, auto.Stop)
         self.assertIn("lease", result.reason)
         self.assertIn("sess-other", result.reason)
+
+
+class ZoneWaitDefaultTest(AutoCycleTest):
+    """Значение `config.AUTO_WAIT_ZONE_DEFAULT` по умолчанию, прочитанное
+    самим циклом (SPEC 01M3KHQS7EQTHDT1RGCNH4KGTW, требование 6): вызов
+    `auto` БЕЗ `wait_zone` и БЕЗ подмены настройки уходит в ожидание, а не
+    в остановку. `WaitForZoneTest` выше зовёт `auto._wait_for_zone`
+    напрямую и про эту ветку (`orchestrator/auto.py:938`) ничего не знает.
+
+    Настройку этот класс намеренно НЕ патчит: предмет теста — именно
+    значение из `orchestrator/config.py`. Причину немедленной остановки
+    (`config.AUTO_STOP_ZONE_WAIT`) он по той же причине не называет:
+    её имя в сценарии `tests/` — признак теста, ТРЕБУЮЩЕГО остановки, и
+    такой тест обязан подменять настройку сам
+    (tasks/01M3KHQS7EQTHDT1RGCNH4KGTW, AC-5). Отсутствие остановки здесь
+    наблюдается сильнее и без константы: запись входа в ожидание, парная
+    запись выхода и старт роли ТЕМ ЖЕ вызовом.
+
+    Отказ занятости зоны журналирует подмена `runner.cmd_run` (настоящая
+    `cmd_run` в этой песочнице подменена по замыслу модуля — см. его
+    докстринг) — тем же actor/action/detail, что и настоящий путь
+    `orchestrator/runner.py:209-213`: `zone_lock.REFUSAL_ACTION` плюс
+    `sys.exit` текстом отказа. Сквозной путь с настоящим
+    `zone_lock.claim` кроют приёмочные тесты задачи.
+    """
+
+    ZONE = "a/b"
+    OCCUPIER = "T9WWW"
+
+    def setUp(self):
+        super().setUp()
+        self.set_state("in_dev")
+        # PLAN не ready — по тому же доводу, что и у соседних классов с
+        # отказом `run`: `ready` увёл бы задачу в `verifying` (ADR-0015)
+        # раньше, чем цикл дойдёт до шага роли.
+        self.write_plan("draft")
+        store.update_task(store.db(), self.TASK, zones=self.ZONE)
+        self._seed_occupier(self.OCCUPIER, self.ZONE)
+        self.patch_object(runner, "cmd_run", self._cmd_run_refusing_busy_zone)
+        self.patch_object(auto.time, "sleep", self._release_on_poll)
+
+    # ------------------------------------------------------------ фикстура
+
+    def _seed_occupier(self, task_id: str, zones: str) -> None:
+        """Другая задача — реальный держатель зоны: `in_dev` плюс маркеры,
+        которые разбирает `zone_lock._occupies` (тот же приём, что
+        `WaitForZoneTest._seed_occupier` выше)."""
+        conn = store.db()
+        store.insert_task(conn, task_id, f"Держатель {task_id}", "in_dev",
+                          f"task/{task_id.lower()}-fake", config.DEFAULT_TARGET,
+                          config.DEFAULT_BUDGET_USD)
+        store.update_task(conn, task_id, zones=zones)
+        store.journal(conn, task_id, "system", "state -> in_dev", "")
+        store.journal(conn, task_id, "developer", "agent run started", "")
+
+    def _cmd_run_refusing_busy_zone(self, task_id: str,
+                                    session_id: str | None = None) -> None:
+        """Пока зона занята — отказ стартовать ровно так, как его
+        сообщает настоящая `runner.cmd_run`; свободна — штатный фейк
+        шага этой песочницы."""
+        conn = store.db()
+        refusal = zone_lock.refusal(conn, task_id, store.get_task(conn, task_id))
+        if refusal is not None:
+            store.journal(conn, task_id, "developer", zone_lock.REFUSAL_ACTION,
+                          refusal)
+            raise SystemExit(refusal)
+        return self.agent(task_id, session_id=session_id)
+
+    def _release_on_poll(self, seconds: float) -> None:
+        """Опрос цикла ожидания застаёт зону освобождённой: держатель ушёл
+        из блокирующей фазы. Фильтр по длительности — патч `auto.time.sleep`
+        глобален и ловит посторонние паузы процесса."""
+        if seconds != config.ZONE_WAIT_POLL_SEC:
+            return
+        conn = store.db()
+        conn.execute("UPDATE tasks SET state='done' WHERE id=?", (self.OCCUPIER,))
+        conn.commit()
+
+    # -------------------------------------------------------------- сценарий
+
+    def test_busy_zone_without_flag_waits_by_default(self):
+        """Требование 6: отказ занятости зоны при вызове без `wait_zone` и
+        без подмены настройки переводит цикл в ожидание — в журнале запись
+        входа «ждёт зоны <путь>: держит <id> (<состояние>)», парная запись
+        выхода, и роль стартует тем же вызовом `cmd_auto`, как только зона
+        освободилась.
+
+        Ловит мутацию: ветка `orchestrator/auto.py:938` перестаёт читать
+        `config.AUTO_WAIT_ZONE_DEFAULT` (сужена обратно до `if wait_zone:`)
+        — вызов без флага снова останавливается немедленно: записи входа в
+        ожидание в журнале нет, парной записи выхода нет, а подменённая
+        роль не вызывается ни разу.
+        """
+        out = self.auto()
+
+        actions = [action for _, action, _ in self.journal_rows()]
+        self.assertIn(
+            zone_lock.wait_enter_action(self.ZONE, self.OCCUPIER, "in_dev"),
+            actions, f"журнал не несёт записи входа в ожидание зоны; "
+                     f"вывод цикла: {out!r}")
+        self.assertEqual(
+            len([a for a in actions if a.startswith("зона свободна через")]), 1,
+            f"записи выхода из ожидания ровно одной нет: {actions}")
+        self.assertTrue(
+            self.agent.calls,
+            f"роль не стартовала после освобождения зоны тем же вызовом; "
+            f"вывод цикла: {out!r}")
+        self.assertEqual(self.state(), "in_dev")
 
 
 # Мандат Оператора на путь вне зон — тот же маркер, что разбирает

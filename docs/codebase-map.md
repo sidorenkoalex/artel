@@ -1,5 +1,5 @@
 ---
-built_at_sha: 971d8806abf49ddefa0733582c1c978f917ce251
+built_at_sha: 0114e8af3d76a35232294e9786ddf4ec6f84770e
 ---
 
 # Codebase-map пульта
@@ -1556,7 +1556,7 @@ built_at_sha: 971d8806abf49ddefa0733582c1c978f917ce251
 
 **Импортирует:** `orchestrator/config.py`, `orchestrator/store.py`
 
-**Импортируется:** `orchestrator/artel.py`, `orchestrator/auto.py`, `orchestrator/catalog.py`, `orchestrator/checkpoint.py`, `orchestrator/doctor/__init__.py`, `orchestrator/runner.py`, `scripts/guard.py`, `tests/test_catalog_status_log.py`, `tests/test_catalog_zone_overlap.py`, `tests/test_stack_zones_pull_section.py`, `tests/test_zone_lock.py`, `tests/test_zone_lock_forecast.py`
+**Импортируется:** `orchestrator/artel.py`, `orchestrator/auto.py`, `orchestrator/catalog.py`, `orchestrator/checkpoint.py`, `orchestrator/doctor/__init__.py`, `orchestrator/runner.py`, `scripts/guard.py`, `tests/test_auto_cycle.py`, `tests/test_catalog_status_log.py`, `tests/test_catalog_zone_overlap.py`, `tests/test_stack_zones_pull_section.py`, `tests/test_zone_lock.py`, `tests/test_zone_lock_forecast.py`
 
 ## scripts/ci_protected_paths.py
 
@@ -1960,7 +1960,7 @@ built_at_sha: 971d8806abf49ddefa0733582c1c978f917ce251
 
 **Публичные функции:** (нет)
 
-**Импортирует:** `orchestrator/advance_gates/zones.py`, `orchestrator/agent_log.py`, `orchestrator/alerts.py`, `orchestrator/auto.py`, `orchestrator/brief.py`, `orchestrator/budget.py`, `orchestrator/catalog.py`, `orchestrator/ci.py`, `orchestrator/config.py`, `orchestrator/fsm.py`, `orchestrator/gitcmd.py`, `orchestrator/github_adapter.py`, `orchestrator/pause.py`, `orchestrator/runner.py`, `orchestrator/store.py`, `tests/sandbox.py`
+**Импортирует:** `orchestrator/advance_gates/zones.py`, `orchestrator/agent_log.py`, `orchestrator/alerts.py`, `orchestrator/auto.py`, `orchestrator/brief.py`, `orchestrator/budget.py`, `orchestrator/catalog.py`, `orchestrator/ci.py`, `orchestrator/config.py`, `orchestrator/fsm.py`, `orchestrator/gitcmd.py`, `orchestrator/github_adapter.py`, `orchestrator/pause.py`, `orchestrator/runner.py`, `orchestrator/store.py`, `orchestrator/zone_lock.py`, `tests/sandbox.py`
 
 **Импортируется:** `tests/test_artifact_escalation_marker.py`, `tests/test_pull_conflict_marker_states.py`
 
