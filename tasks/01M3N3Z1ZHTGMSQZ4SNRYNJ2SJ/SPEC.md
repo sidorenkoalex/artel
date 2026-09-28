@@ -339,3 +339,4 @@ AC-23. Полный набор `tests/` зелёный. Ни один сущес
   `long_lived_errors_from_files`, `ACCEPTANCE_TESTS_ALLOWED_TOP_LEVEL`).
 - Формат id: `orchestrator/idgen.py` (ULID, 10 знаков времени + 16
   случайных).
+- Приложением к PLAN (защищённые пути, применяет пульт на мерже): skills/test-authoring.md, skills/coding-standards.md, skills/review-checklist.md, docs/invariants.md
