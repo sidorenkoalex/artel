@@ -1,5 +1,5 @@
 ---
-built_at_sha: e29e5832ef1de06401dcb9e51831f7f44f0c5f2d
+built_at_sha: 6cb9ae0fd73d321b8763b698312d5dbb186c7240
 ---
 
 # Codebase-map пульта
@@ -141,7 +141,7 @@ built_at_sha: e29e5832ef1de06401dcb9e51831f7f44f0c5f2d
 
 **Импортирует:** `orchestrator/advance_gates/_base.py`, `orchestrator/advance_gates/mandate.py`, `orchestrator/checkpoint.py`, `orchestrator/config.py`, `orchestrator/gitcmd.py`, `orchestrator/store.py`, `orchestrator/workspace.py`, `scripts/guard.py`
 
-**Импортируется:** `orchestrator/advance_gates/test_integrity.py`, `orchestrator/auto.py`, `orchestrator/fsm_advance.py`, `tests/test_answer_mandate.py`, `tests/test_auto_cycle.py`, `tests/test_zones_gate.py`
+**Импортируется:** `orchestrator/advance_gates/test_integrity.py`, `orchestrator/auto.py`, `orchestrator/fsm_advance.py`, `tests/test_answer_mandate.py`, `tests/test_auto_cycle.py`, `tests/test_protected_test_settings.py`, `tests/test_zones_gate.py`
 
 ## orchestrator/agent_log.py
 
@@ -902,7 +902,7 @@ built_at_sha: e29e5832ef1de06401dcb9e51831f7f44f0c5f2d
 
 **Импортирует:** `orchestrator/alerts.py`, `orchestrator/ci.py`, `orchestrator/config.py`, `orchestrator/gitcmd.py`, `orchestrator/repo_context.py`, `orchestrator/store.py`, `orchestrator/targets.py`
 
-**Импортируется:** `orchestrator/advance_gates/tests_writing.py`, `orchestrator/fsm.py`, `orchestrator/fsm_merge_gate.py`, `tests/test_acceptance_tests_flow.py`, `tests/test_amend.py`, `tests/test_auto_cycle.py`, `tests/test_draft_mr_commits.py`, `tests/test_git_fixation.py`, `tests/test_github_adapter.py`, `tests/test_merge_gate_ci_wait.py`
+**Импортируется:** `orchestrator/advance_gates/tests_writing.py`, `orchestrator/fsm.py`, `orchestrator/fsm_merge_gate.py`, `tests/test_acceptance_tests_flow.py`, `tests/test_amend.py`, `tests/test_auto_cycle.py`, `tests/test_draft_mr_commits.py`, `tests/test_git_fixation.py`, `tests/test_github_adapter.py`, `tests/test_merge_gate_ci_wait.py`, `tests/test_protected_test_settings.py`
 
 ## orchestrator/idgen.py
 
@@ -1574,7 +1574,7 @@ built_at_sha: e29e5832ef1de06401dcb9e51831f7f44f0c5f2d
 
 **Импортирует:** `orchestrator/config.py`
 
-**Импортируется:** `tests/test_ci_protected_paths.py`
+**Импортируется:** `tests/test_ci_protected_paths.py`, `tests/test_protected_test_settings.py`
 
 ## scripts/ci_push_class.py
 
@@ -3189,11 +3189,11 @@ built_at_sha: e29e5832ef1de06401dcb9e51831f7f44f0c5f2d
 
 ## tests/test_protected_test_settings.py
 
-**Назначение:** Юнит-тесты общего помощника сверки пути с перечнем защищённых путей
+**Назначение:** Юнит-тесты защиты настроек сбора тестов и общего помощника сверки пути
 
 **Публичные функции:** (нет)
 
-**Импортирует:** `orchestrator/config.py`, `orchestrator/fsm_merge_gate.py`, `scripts/guard.py`
+**Импортирует:** `orchestrator/advance_gates/zones.py`, `orchestrator/config.py`, `orchestrator/fsm_merge_gate.py`, `orchestrator/github_adapter.py`, `scripts/ci_protected_paths.py`, `scripts/guard.py`
 
 **Импортируется:** —
 
