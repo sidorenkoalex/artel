@@ -155,6 +155,26 @@ APPROVAL_POLICY_VALUE = "never"
 SHELL_ENV_INHERIT_KEY = "shell_environment_policy.inherit"
 SHELL_ENV_INHERIT_VALUE = "all"
 
+# Глубина рассуждения исполнителя — ОДНА на все роли и все модели
+# (решение Оператора 28.09.2026). Задана ЯВНО, а не оставлена дефолту
+# вендора: встроенный каталог клиента назначает `gpt-6-astra` и
+# `gpt-5.6-sol` низшую ступень `low`, и замер канарейки на моделях двух
+# провайдеров (ADR-0019 п.5 и п.7) сравнивал бы их на разной глубине —
+# то есть мерил бы не то, ради чего заводится.
+#
+# Ступень `high` на 28.09.2026 поддерживают ВСЕ модели раздела `codex`
+# каталога, все шесть; значения по умолчанию у них разные (`low` у двух
+# названных, `medium` у остальных четырёх) — ещё одна причина не
+# полагаться на дефолт. Добавляешь модель в раздел — проверь её ступени
+# там же, где проверены эти: `codex debug models --bundled`.
+#
+# Пара стоит в `CONFIG_OVERRIDES`, но НЕ в `AUTH_OVERRIDES`: `codex login
+# status` модель не запускает вовсе, глубина рассуждения на его ответ не
+# влияет, а расширение того набора перенесло бы пару и в команду ручного
+# входа Оператора (`docs/stack.md`, раздел «Провайдер codex»).
+REASONING_EFFORT_KEY = "model_reasoning_effort"
+REASONING_EFFORT_VALUE = "high"
+
 # Пары авторизации подписки: где CLI держит токены входа и каким способом
 # входит. Стоят ОТДЕЛЬНЫМ именованным кортежем внутри общего
 # `CONFIG_OVERRIDES`, потому что у них есть второй читатель — предполётная
@@ -179,6 +199,7 @@ CONFIG_OVERRIDES = (
     (NETWORK_ACCESS_KEY, NETWORK_ACCESS_VALUE),
     (APPROVAL_POLICY_KEY, APPROVAL_POLICY_VALUE),
     (SHELL_ENV_INHERIT_KEY, SHELL_ENV_INHERIT_VALUE),
+    (REASONING_EFFORT_KEY, REASONING_EFFORT_VALUE),
 ) + AUTH_OVERRIDES
 
 # Подкоманда шага и позиционный аргумент «промпт со стандартного входа».
