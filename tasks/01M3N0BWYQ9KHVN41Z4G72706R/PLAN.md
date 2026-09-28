@@ -137,6 +137,20 @@ schema_version: 5
   `test_mutation_claim_gate`, `test_codebase_map` — 412 passed;
 - `test_invariants`, `test_multitarget_invariants` — 78 passed.
 
+Итерация 2 (REVIEW R1-F1): подключение строки группы к `amend-tests`
+получило сквозной сторож в `tests/` —
+`tests/test_amend.py::AmendGroupLineRefusalTest`, по методу на путь
+(worktree и `--from-branch`): отказ с именем файла, запись журнала
+«amend-tests отклонён», лок не сдвинут. Заявка
+`AmendGroupLineTest.test_post_rule_plank_is_checked` приведена к тому,
+что метод ловит (различение лока «до/после правила»). Проверено
+временными мутациями `orchestrator/amend.py` (отказ снят в каждом пути по
+отдельности; снято различение лока) — каждую ловит ровно заявленный
+метод, код возвращён. Прогоны: `tests/test_amend.py` +
+`tests/test_fsm_advance_tests_writing_test_groups.py` — 44 passed;
+`test_acceptance_tests_flow`, `test_guard_test_groups`,
+`test_codebase_map` — 130 passed. Код `orchestrator/`/`scripts/` не менялся.
+
 ## Риски
 
 - Признак «номер задачи»/«tasks/» ловит и докстринги: долгоживущий файл
