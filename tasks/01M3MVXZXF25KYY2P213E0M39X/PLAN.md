@@ -57,7 +57,9 @@ schema_version: 5
 4. `docs/stack.md`, раздел «Паритет безопасности роли…» — строка прозы
    после таблицы (таблица не меняется).
 5. Тесты: новый `tests/test_protected_test_settings.py` (AC-1..AC-11);
-   прогон затронутых модулей; регенерация карты
+   сторожа долгоживущих свойств (состав перечня, условие полного прогона,
+   маска в шести местах) — на реальном перечне в `tests/`, не только в
+   планке (R1-F1); прогон затронутых модулей; регенерация карты
    `python3 scripts/codebase_map.py`.
 
 ## Покрытие требований
@@ -118,6 +120,29 @@ schema_version: 5
   `test_fsm_advance_gate_smoke`, `test_conftest_role_guard`,
   `test_codebase_map` — 168 passed, 221 subtests.
 Карта регенерирована тем же коммитом.
+
+Итерация 2 (R1-F1), коммит `ff0bd09a`: в
+`tests/test_protected_test_settings.py` добавлены сторожа долгоживущих
+свойств на РЕАЛЬНОМ перечне, без подмены — состав `PROTECTED_PATHS`
+(прежние 12 на местах + 5 новых, всего 17) и те же записи в тексте
+`orchestrator/config.py` через `protected_paths_from_source`;
+`_appendix_needs_full_suite` на `conftest.py`, `tests/conftest.py`,
+`tests/sub/conftest.py`, `pyproject.toml`, `pytest.ini`, `setup.cfg`,
+`tox.ini` (и ложь на `skills/spec-authoring.md`); каждое из шести мест
+требования 5 признаёт эти пути и не признаёт `tests/test_store.py`,
+`orchestrator/store.py`, `tests/test_conftest_role_guard.py`,
+`docs/pyproject.md`, `tests/pytest.ini`. Докстринг модуля переписан.
+Мутанты (в процессе): перечень 12 записей + прежнее условие полного
+прогона — красные 7 тестов (состав, полный прогон, пять мест на реальном
+перечне; CI-место краснеет при правке исходника — его тест читает текст
+`config.py`); откат `_touches_protected_path` к префиксной формуле —
+красный `test_merge_gate_diff_check`. Прогон
+`test_protected_test_settings`, планка задачи, `test_protected_paths_gate`,
+`test_ci_protected_paths`, `test_guard_mutation_claim` — 68 passed, 167
+subtests; `test_protected_test_settings`, `test_codebase_map`,
+`test_plan_appendix`, `test_zones_gate`, `test_github_adapter`,
+`test_guard_zones` — 146 passed, 95 subtests. Карта регенерирована тем же
+коммитом.
 
 ## Предложения системе
 
