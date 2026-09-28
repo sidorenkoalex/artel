@@ -7,14 +7,22 @@ AC-9. Полный набор `tests/` зелёный; `artel.py models` и `art
 doctor` на новом каталоге не дают красных строк, которых не было до
 правки.
 
-«Не было до правки» планка берёт буквально: одни и те же проверки
-гоняются ДВАЖДЫ — на каталоге базы сравнения и на каталоге после
-приложения PLAN, — и сравниваются их вердикты. Всё остальное, от чего
-зависят `models` и `doctor` (локальный слой `.artel/models.yaml` вне git
-и карта исполнителей `roles.yaml`), берётся фикстурой во временном
-каталоге: это крутилки Оператора, и тест, читающий их настоящие файлы,
-краснел бы от правки, не связанной с задачей (skills/test-authoring.md,
-«Окружение теста»).
+Редакция 2 планки по ANSWER-1, вопрос 1, вариант (а). Прежняя редакция
+брала «не было до правки» буквально: гоняла те же две строки `doctor`
+ДВАЖДЫ — на каталоге базы сравнения и на каталоге после приложения
+PLAN — и сравнивала вердикты. Коммит `ae3370c5` внёс каталог в main
+вперёд задачи, оба каталога сравнения совпали, и сравнение выродилось в
+тождество: зелёное всегда, не меряющее ничего (докстринг `_catalog.py`).
+Предметом стал каталог ВЕТКИ, а «не хуже, чем до правки» — требованием
+`ok` на обеих строках: до правки обе были `ok` (`doctor` на каталоге,
+который пульт и читал каждым шагом), поэтому требовать `ok` — то же
+условие, взятое своей сильной стороной, а не ослабленное.
+
+Всё остальное, от чего зависят `models` и `doctor` (локальный слой
+`.artel/models.yaml` вне git и карта исполнителей `roles.yaml`), берётся
+фикстурой во временном каталоге: это крутилки Оператора, и тест,
+читающий их настоящие файлы, краснел бы от правки, не связанной с
+задачей (skills/test-authoring.md, «Окружение теста»).
 
 Первую половину критерия — «полный набор `tests/` зелёный» — планка не
 повторяет: его на этом же гейте гоняет сам пульт
@@ -23,8 +31,9 @@ doctor` на новом каталоге не дают красных строк
 сходится с новым каталогом (единственное место набора, которое ломает
 именно эта задача), проверяет `test_ac4_composition_literal.py`.
 
-Красен до реализации: PLAN.md с приложением `models.yaml` ещё нет —
-каталога «после правки» не существует, и сравнивать вердикты не с чем.
+Красен до реализации: пока каталог не правлен, `artel.py models` не
+печатает ни одной из трёх новых записей и печатает снимаемую — второй
+тест файла падает на каждой из них.
 """
 import io
 import shutil
@@ -62,11 +71,11 @@ tiers:
 
 
 class CatalogAcceptedByThePultTest(unittest.TestCase):
-    """Каталог после приложения читается пультом так же, как читался
-    каталог до него."""
+    """Каталог ветки читается пультом так же, как читался каталог до
+    правки."""
 
     def setUp(self):
-        self.applied = _catalog.applied()
+        self.subject = _catalog.catalog()
         self.tdir = Path(tempfile.mkdtemp(prefix="artel-plank-ac9-"))
         self.addCleanup(self._drop)
 
@@ -86,19 +95,17 @@ class CatalogAcceptedByThePultTest(unittest.TestCase):
         shutil.rmtree(self.tdir, ignore_errors=True)
 
     def shared_model(self) -> str:
-        """Модель, которая есть и в базе сравнения, и после приложения, и
-        в обоих каталогах `supported`: ярус фикстуры обязан разрешаться в
-        ОБОИХ прогонах, иначе сравнивать вердикты не с чем."""
-        both = [model_id for model_id in sorted(self.applied.catalog.models)
-                if model_id in self.applied.base_catalog.models
-                and self.applied.catalog.models[model_id].status
-                == models.STATUS_SUPPORTED
-                and self.applied.base_catalog.models[model_id].status
-                == models.STATUS_SUPPORTED]
-        self.assertTrue(both, "ни одной модели, пережившей правку со "
-                              "статусом supported — ярусу пульта не на что "
-                              "указывать")
-        return both[0]
+        """Модель каталога ветки со статусом `supported`: ярус фикстуры
+        обязан разрешаться, иначе обе строки `doctor` покраснели бы не от
+        каталога, а от самой фикстуры."""
+        supported = [
+            model_id for model_id in sorted(self.subject.catalog.models)
+            if self.subject.catalog.models[model_id].status
+            == models.STATUS_SUPPORTED]
+        self.assertTrue(supported, "в каталоге ветки нет ни одной модели "
+                                   "статуса supported — ярусу пульта не на "
+                                   "что указывать")
+        return supported[0]
 
     def verdicts(self, catalog_path: Path) -> dict:
         """{имя строки doctor: (статус, текст)} по двум строкам о слоях
@@ -108,8 +115,8 @@ class CatalogAcceptedByThePultTest(unittest.TestCase):
         return {check.name: (check.status, check.detail) for check in checks}
 
     def test_ac9_doctor_gains_no_red_line_from_the_new_catalog(self):
-        """Строки `models-catalog` и `models-local` на каталоге после
-        приложения не хуже, чем на каталоге базы сравнения.
+        """Строки `models-catalog` и `models-local` на каталоге ветки —
+        `ok`, то есть не хуже, чем были на каталоге до правки.
 
         Ловит мутацию: у новой записи пропущена одна из четырёх цен или
         проставлен ноль (в таблице требования 1 у `gpt-6-luna` стоит
@@ -118,32 +125,31 @@ class CatalogAcceptedByThePultTest(unittest.TestCase):
         `ZeroPriceError`, и `doctor` даёт `fail` «каталог моделей не
         разобран», которого до правки не было.
         """
-        before = self.verdicts(
-            self.applied.dir / "models.base.yaml")
-        after = self.verdicts(self.applied.path)
+        verdicts = self.verdicts(self.subject.path)
 
-        self.assertEqual(sorted(before), sorted(after))
-        for name in sorted(before):
-            was, _ = before[name]
-            now, detail = after[name]
+        self.assertEqual(["models-catalog", "models-local"],
+                         sorted(verdicts),
+                         "doctor посчитал не те строки — сверять нечего")
+        for name in sorted(verdicts):
+            status, detail = verdicts[name]
             with self.subTest(check=name):
-                self.assertFalse(
-                    now != was and was == "ok",
-                    f"строка {name} стала {now} на новом каталоге "
-                    f"(до правки — {was}): {detail}")
+                self.assertEqual(
+                    "ok", status,
+                    f"строка {name} на каталоге ветки — {status} "
+                    f"(до правки обе строки были ok): {detail}")
 
     def test_ac9_models_command_prints_the_new_catalog(self):
         """`artel.py models` на новом каталоге печатает таблицу: команда
         не отказывает, новые записи в ней есть, снятой — нет.
 
-        Ловит мутацию: приложение положило запись мимо раздела
-        `models:` провайдера (отступ на два пробела меньше — форма файла
+        Ловит мутацию: правка положила запись мимо раздела `models:`
+        провайдера (отступ на два пробела меньше — форма файла
         ограничена `orchestrator/yamlmini.py`, блочные отображения
         вложены отступом): каталог разберётся, но модели в таблице не
         будет, и ярус на неё не разрешится.
         """
         buffer = io.StringIO()
-        with mock.patch.object(config, "MODELS", self.applied.path):
+        with mock.patch.object(config, "MODELS", self.subject.path):
             with redirect_stdout(buffer):
                 models.cmd_models()
         printed = buffer.getvalue()

@@ -1,5 +1,4 @@
-"""AC-1 — 01M3KE8ZJXFARS6KC441PCDCQV: три новые записи каталога моделей,
-принесённые приложением к PLAN.md.
+"""AC-1 — 01M3KE8ZJXFARS6KC441PCDCQV: три новые записи каталога моделей.
 
 Источник — SPEC.md, «Критерии приёмки»:
 
@@ -11,14 +10,19 @@ AC-1. `models.yaml` (приложением к PLAN) несёт три новы�
 0.10 / 0.50 / 0.125 / 0.01, `min_cli_version: 0.157.0`, `status:
 experimental`.
 
-Предмет критерия — каталог ПОСЛЕ применения приложения PLAN, а не
-`models.yaml` дерева ветки: путь защищённый, ветка задачи его не правит
-(SPEC, «Не входит»). Сборку каталога см. `_catalog.py`.
+Предмет критерия — каталог ВЕТКИ (`models.yaml` рабочей копии,
+прочитанный `models.load_catalog`): редакция 2 планки по ANSWER-1,
+вопрос 1, вариант (а) — прежняя редакция мерила ТУ ЖЕ тройку записей
+разницей «база сравнения -> каталог после приложения PLAN», и коммит
+`ae3370c5`, внёсший каталог в main вперёд задачи, сделал это измерение
+неисполнимым (подробнее — докстринг `_catalog.py`). Проверяемое свойство
+то же: три записи есть, каждая в своём разделе, с ценами, наименьшими
+версиями клиента и статусами сверенной таблицы.
 
-Красен до реализации: PLAN.md задачи ещё не написан (его создаёт роль
-developer), приложения с диффом `models.yaml` нет — `_catalog.applied()`
-отказывает «PLAN.md задачи не прочитан из артефактной ветки», и каждый
-тест этого файла падает на отсутствии предмета проверки.
+Красен до реализации: пока каталог не правлен, ни одной из трёх записей
+в `models.yaml` нет — `_catalog.record()` отказывает «в каталоге ветки
+нет записи claude-opus-5-5», и каждый тест этого файла падает на
+отсутствии предмета проверки.
 """
 import sys
 import unittest
@@ -30,13 +34,12 @@ import _catalog  # noqa: E402
 
 
 class NewCatalogRecordsTest(unittest.TestCase):
-    """Три записи, которых в каталоге базы сравнения нет, а после
-    приложения PLAN — есть, с числами сверенной таблицы."""
+    """Три записи, которых каталог до правки не нёс, — в каталоге ветки,
+    с числами сверенной таблицы."""
 
-    def test_ac1_appendix_adds_three_records_to_the_catalog(self):
-        """Каталог после приложения PLAN несёт `claude-opus-5-5`,
-        `gpt-6-sol` и `gpt-6-luna`, каждую — в своём разделе провайдера,
-        и ни одной из них нет в каталоге базы сравнения.
+    def test_ac1_catalog_carries_three_new_records(self):
+        """Каталог ветки несёт `claude-opus-5-5`, `gpt-6-sol` и
+        `gpt-6-luna`, каждую — в своём разделе провайдера.
 
         Ловит мутацию: разработчик добавил записи не в тот раздел —
         `gpt-6-sol` под `claude:` (обе модели в таблице требования 1
@@ -44,19 +47,19 @@ class NewCatalogRecordsTest(unittest.TestCase):
         разойдётся с ожидаемым, и провайдером модели станет `claude`,
         то есть шаг на ней пошёл бы чужим CLI.
         """
-        applied = _catalog.applied()
+        catalog = _catalog.catalog().catalog
 
         for model_id, want in sorted(_catalog.NEW_RECORDS.items()):
             with self.subTest(model=model_id):
                 self.assertNotIn(
-                    model_id, applied.base_catalog.models,
-                    f"{model_id} есть уже в базе сравнения — приложение "
-                    f"PLAN не добавляет запись, а повторяет её")
+                    model_id, _catalog.PREVIOUS_PRICES,
+                    f"{model_id} стоит в снимке каталога ДО правки — "
+                    f"запись не новая, и AC-1 о ней не про добавление")
                 entry = _catalog.record(self, model_id)
                 self.assertEqual(want["provider"], entry.provider)
                 self.assertIn(
                     model_id,
-                    applied.catalog.providers[want["provider"]].models,
+                    catalog.providers[want["provider"]].models,
                     f"{model_id} не стоит в разделе {want['provider']}")
 
     def test_ac1_new_records_carry_the_verified_prices(self):

@@ -7,12 +7,17 @@ AC-3. Записи `gpt-5.5` в `models.yaml` нет, и строку `gpt-5.5` 
 ни один файл `orchestrator/`, `roles.yaml`, `docs/reference/models-local.example.yaml`
 и `tests/`.
 
-Две половины критерия живут в разных местах: запись — в каталоге ПОСЛЕ
-применения приложения PLAN (защищённый путь), ссылки — в дереве ветки
-задачи, где их правит сам разработчик.
+Обе половины критерия читаются в дереве ветки: запись — из каталога
+ВЕТКИ (`models.yaml` рабочей копии), ссылки — из исходников. Редакция 2
+планки по ANSWER-1, вопрос 1, вариант (а): прежняя редакция брала
+каталог результатом применения приложения PLAN к базе сравнения и
+дополнительно требовала, чтобы снимаемая запись в БАЗЕ была, — коммит
+`ae3370c5` сделал оба утверждения неисполнимыми (докстринг
+`_catalog.py`). Проверяемое свойство то же: записи `gpt-5.5` нет ни в
+каталоге, ни в путях критерия.
 
-Красен до реализации: половина про каталог падает на отсутствии PLAN.md
-с приложением (его пишет роль developer); половина про ссылки падает на
+Красен до реализации: половина про каталог падает, пока запись `gpt-5.5`
+в `models.yaml` стоит; половина про ссылки падает на
 `tests/test_models.py`, где литерал состава каталога (строки 141, 145)
 по-прежнему называет снимаемую модель.
 """
@@ -49,23 +54,24 @@ def _scanned_sources() -> list:
 
 class WithdrawnModelTest(unittest.TestCase):
 
-    def test_ac3_catalog_after_the_appendix_has_no_withdrawn_record(self):
-        """Каталог после приложения PLAN не несёт записи `gpt-5.5` — ни в
-        разделе `codex`, ни в общем индексе моделей.
+    def test_ac3_branch_catalog_has_no_withdrawn_record(self):
+        """Каталог ветки не несёт записи `gpt-5.5` — ни в разделе
+        `codex`, ни в общем индексе моделей.
 
-        Ловит мутацию: приложение добавило три записи, но снять четвёртую
-        забыло — модель, которую клиент Codex убирает 14.10.2026,
+        Ловит мутацию: правка добавила три записи, но снять четвёртую
+        забыла — модель, которую клиент Codex убирает 14.10.2026,
         осталась бы разрешимой целью яруса, и шаг на ней стартовал бы
         ровно до дня снятия.
         """
-        applied = _catalog.applied()
+        catalog = _catalog.catalog().catalog
 
-        self.assertIn(_catalog.WITHDRAWN_MODEL, applied.base_catalog.models,
-                      "снимаемая запись обязана быть в базе сравнения — "
-                      "иначе проверка снятия ничего не проверяет")
-        self.assertNotIn(_catalog.WITHDRAWN_MODEL, applied.catalog.models)
+        self.assertIn(_catalog.WITHDRAWN_MODEL, _catalog.PREVIOUS_PRICES,
+                      "снимаемая запись обязана стоять в снимке каталога "
+                      "ДО правки — иначе проверка снятия ничего не "
+                      "проверяет")
+        self.assertNotIn(_catalog.WITHDRAWN_MODEL, catalog.models)
         self.assertNotIn(_catalog.WITHDRAWN_MODEL,
-                         applied.catalog.providers["codex"].models)
+                         catalog.providers["codex"].models)
 
     def test_ac3_no_scanned_file_mentions_the_withdrawn_model(self):
         """Ни один файл `orchestrator/`, `tests/`, `roles.yaml` и образца

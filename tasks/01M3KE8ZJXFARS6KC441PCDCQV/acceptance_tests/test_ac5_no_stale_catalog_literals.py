@@ -7,16 +7,22 @@ AC-5. Ни один тест `tests/` не утверждает литерало
 прежнюю наименьшую версию клиента правленой записи каталога: значения
 приведены к таблице требования 1.
 
-«Прежнее» и «новое» планка не зашивает числами, а берёт из двух
-каталогов: базы сравнения ветки (до правки) и результата применения
-приложения PLAN (после). Литерал сверяется с записью, о которой он
-говорит: адресатом считается модель, ЕДИНСТВЕННО названная в том же
-тестовом методе — `models.Tariff(...)` в методе, где рядом стоит
-`list_price` и ровно один идентификатор модели каталога, утверждает
-прейскурант именно этой записи.
+«Новое» планка берёт из каталога ВЕТКИ, «прежнее» — из снимка каталога
+ДО правки (`_catalog.PREVIOUS_PRICES`/`PREVIOUS_MIN_CLI`). Редакция 2
+планки по ANSWER-1, вопрос 1, вариант (а): прежняя редакция брала обе
+половины из пары «база сравнения -> результат применения приложения
+PLAN», и коммит `ae3370c5` эту пару схлопнул — прежних значений в git
+больше нет (докстринг `_catalog.py`). Сравниваемые величины и правило
+адресации литерала те же.
 
-Красен до реализации: PLAN.md с приложением `models.yaml` ещё нет,
-«новых» значений взять неоткуда — `_catalog.applied()` отказывает.
+Литерал сверяется с записью, о которой он говорит: адресатом считается
+модель, ЕДИНСТВЕННО названная в том же тестовом методе —
+`models.Tariff(...)` в методе, где рядом стоит `list_price` и ровно один
+идентификатор модели каталога, утверждает прейскурант именно этой записи.
+
+Красен до реализации: `tests/test_models.py` сверяет прейскурант
+`claude-sonnet-5` прежними 3.00 / 15.00 / 3.75 / 0.30, а каталог ветки
+несёт сверенные 2.00 / 10.00 / 2.50 / 0.20 — краснеют оба теста о ценах.
 """
 import ast
 import re
@@ -62,6 +68,18 @@ def _func_defs(tree, source: str):
             yield node, ast.get_source_segment(source, node) or ""
 
 
+def _as_prices(was, model_id: str) -> tuple:
+    """Прейскурант снимка — кортежем чисел, как его отдаёт разбор
+    каталога (`models.Tariff`)."""
+    return tuple(float(value) for value in was)
+
+
+def _as_version(was, model_id: str) -> tuple:
+    """Наименьшая версия клиента снимка — кортежем чисел, тем же разбором
+    (`models.version_tuple`), которым её читает пульт."""
+    return _catalog.models.version_tuple(was, f"снимок каталога, {model_id}")
+
+
 def _sole_model(text: str, model_ids) -> str | None:
     """Единственный идентификатор модели каталога, названный в тексте;
     `None` — не назван ни один либо названо несколько (адресата литерала
@@ -73,20 +91,27 @@ def _sole_model(text: str, model_ids) -> str | None:
 class StaleCatalogLiteralsTest(unittest.TestCase):
 
     def setUp(self):
-        self.applied = _catalog.applied()
+        self.subject = _catalog.catalog()
         self.sources = [(rel, text) for rel, text in _catalog.tests_sources()]
-        self.model_ids = sorted(self.applied.catalog.models)
+        self.model_ids = sorted(self.subject.catalog.models)
 
-    def changed(self, field: str) -> dict:
+    def changed(self, snapshot: dict, field: str, convert) -> dict:
         """{модель: прежнее значение} по записям, у которых `field`
-        разошёлся между базой сравнения и каталогом после приложения."""
+        каталога ветки разошёлся со снимком ДО правки. `convert` —
+        приведение значения снимка к тому виду, в котором поле живёт в
+        разобранном каталоге (кортеж цен, кортеж версии).
+
+        Снятая запись (в каталоге ветки её уже нет) пропускается: её
+        прежний прейскурант — предмет AC-3, а не AC-5.
+        """
         out = {}
-        for model_id, was in sorted(self.applied.base_catalog.models.items()):
-            now = self.applied.catalog.models.get(model_id)
+        for model_id, was in sorted(snapshot.items()):
+            now = self.subject.catalog.models.get(model_id)
             if now is None:
                 continue
-            if getattr(was, field) != getattr(now, field):
-                out[model_id] = getattr(was, field)
+            want = convert(was, model_id)
+            if want != tuple(getattr(now, field)):
+                out[model_id] = want
         return out
 
     def test_ac5_no_test_asserts_a_previous_price_of_a_corrected_record(self):
@@ -95,11 +120,12 @@ class StaleCatalogLiteralsTest(unittest.TestCase):
 
         Ловит мутацию: цены `claude-sonnet-5` исправлены в каталоге, а
         сверку прежних 3.00 / 15.00 / 3.75 / 0.30 в наборе оставили —
-        полный прогон покраснеет ровно в тот момент, когда приложение
-        каталога ляжет в main, то есть уже на мерже, где чинить его
-        некому (ровно класс 26.09: main красный с мержа приложения).
+        полный прогон краснеет ровно там, где правленый каталог и набор
+        сходятся в одном дереве: на мерже, где чинить его уже некому
+        (ровно класс 26.09: main красный с мержа правки каталога).
         """
-        stale = self.changed("list_price")
+        stale = self.changed(_catalog.PREVIOUS_PRICES, "list_price",
+                             _as_prices)
         self.assertTrue(stale, "прейскурант не правится ни у одной записи — "
                                "проверять нечего, а требование 1 его правит")
 
@@ -119,10 +145,10 @@ class StaleCatalogLiteralsTest(unittest.TestCase):
 
         self.assertEqual([], hits, "; ".join(hits))
 
-    def test_ac5_price_literals_agree_with_the_catalog_after_the_appendix(self):
+    def test_ac5_price_literals_agree_with_the_branch_catalog(self):
         """Каждый литерал `Tariff(...)`, утверждающий прейскурант
         названной записи каталога (метод называет `list_price` и ровно
-        одну модель), равен цене этой записи в каталоге после приложения.
+        одну модель), равен цене этой записи в каталоге ветки.
 
         Ловит мутацию: правя соседние строки прейскуранта, разработчик
         задел и `claude-opus-5` — запись, которую таблица требования 1
@@ -138,7 +164,7 @@ class StaleCatalogLiteralsTest(unittest.TestCase):
                 model_id = _sole_model(text, self.model_ids)
                 if model_id is None:
                     continue
-                want = tuple(self.applied.catalog.models[model_id].list_price)
+                want = tuple(self.subject.catalog.models[model_id].list_price)
                 for node in ast.walk(func):
                     if not (isinstance(node, ast.Call)
                             and getattr(node.func, "attr", None) == "Tariff"):
@@ -154,14 +180,15 @@ class StaleCatalogLiteralsTest(unittest.TestCase):
         """Ни в одном методе `tests/` нет литерала прежней наименьшей
         версии клиента записи, чей минимум правится этой задачей.
 
-        Ловит мутацию: минимум записи каталога сдвинут приложением, а
-        сверка прежнего кортежа версии в наборе оставлена — предполётная
-        сверка шага и её тест разошлись бы, и набор покраснел бы на
-        мерже. (Таблица требования 1 минимумов существующих записей не
-        двигает — на ней список пуст, и проверка молчит; она сторожит
-        именно тот случай, когда минимум всё-таки поедет.)
+        Ловит мутацию: минимум записи каталога сдвинут правкой, а сверка
+        прежнего кортежа версии в наборе оставлена — предполётная сверка
+        шага и её тест разошлись бы, и набор покраснел бы на мерже.
+        (Таблица требования 1 минимумов существующих записей не двигает —
+        на ней список пуст, и проверка молчит; она сторожит именно тот
+        случай, когда минимум всё-таки поедет.)
         """
-        stale = self.changed("min_cli_version")
+        stale = self.changed(_catalog.PREVIOUS_MIN_CLI, "min_cli_version",
+                             _as_version)
 
         hits = []
         for rel, source in self.sources:

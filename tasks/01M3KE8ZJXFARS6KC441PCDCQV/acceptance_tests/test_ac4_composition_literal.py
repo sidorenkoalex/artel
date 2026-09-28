@@ -12,8 +12,8 @@ AC-4. Перечень моделей в `tests/test_models.py` — по раз�
 подставляет `tests/test_models.py` три каталога подряд и смотрит, как
 модуль на них отвечает.
 
-- каталог после приложения PLAN — модуль обязан быть зелёным: литерал
-  равен новому составу;
+- каталог ВЕТКИ — модуль обязан быть зелёным: литерал равен новому
+  составу;
 - тот же каталог, где ОДНА модель переименована (состав той же длины) —
   модуль обязан покраснеть: сверка счётчиком («моделей столько же») это
   пропустила бы;
@@ -24,10 +24,14 @@ AC-4. Перечень моделей в `tests/test_models.py` — по раз�
 — единственное в нём, что вообще реагирует на подмену состава каталога,
 а переименование метода разработчиком не обязано ронять планку.
 
-Красен до реализации: PLAN.md с приложением `models.yaml` ещё нет (его
-пишет роль developer), и подставлять модулю нечего — `_catalog.applied()`
-отказывает; сам литерал `tests/test_models.py` при этом всё ещё называет
-старый состав со снятой `gpt-5.5`.
+Редакция 2 планки по ANSWER-1, вопрос 1, вариант (а): подставляемый
+каталог берётся из рабочей копии ветки, а не собирается применением
+приложения PLAN к базе сравнения (докстринг `_catalog.py`). Три прогона,
+их порядок и требуемые исходы — прежние.
+
+Красен до реализации: литерал состава `tests/test_models.py` называет
+старый состав со снятой `gpt-5.5` и без трёх новых моделей — на каталоге
+ветки модуль красен, и первые два теста файла падают.
 """
 import importlib
 import io
@@ -78,20 +82,20 @@ def _run_test_models(catalog_path: Path):
 class CompositionLiteralTest(unittest.TestCase):
 
     def setUp(self):
-        self.applied = _catalog.applied()
+        self.subject = _catalog.catalog()
 
     def write(self, name: str, text: str) -> Path:
-        path = self.applied.dir / name
+        path = self.subject.dir / name
         path.write_text(text, encoding="utf-8")
         return path
 
-    def test_ac4_catalog_after_the_appendix_has_the_declared_composition(self):
-        """Состав каталога после приложения PLAN — тот, к которому
-        требование 3 обязывает привести литерал: четыре модели в разделе
-        `claude`, шесть в разделе `codex`.
+    def test_ac4_branch_catalog_has_the_declared_composition(self):
+        """Состав каталога ветки — тот, к которому требование 3
+        обязывает привести литерал: четыре модели в разделе `claude`,
+        шесть в разделе `codex`.
 
-        Ловит мутацию: приложение сняло `gpt-5.5`, но новую `gpt-6-luna`
-        завело под тем же ключом, что `gpt-6-sol` (одна запись перетёрла
+        Ловит мутацию: правка сняла `gpt-5.5`, но новую `gpt-6-luna`
+        завела под тем же ключом, что `gpt-6-sol` (одна запись перетёрла
         другую — разбор отображения молча берёт последнюю): в разделе
         останется пять моделей, и сверка перечня покраснеет.
         """
@@ -99,26 +103,25 @@ class CompositionLiteralTest(unittest.TestCase):
             with self.subTest(section=section):
                 self.assertEqual(
                     expected,
-                    sorted(self.applied.catalog.providers[section].models))
+                    sorted(self.subject.catalog.providers[section].models))
         self.assertEqual(
             sorted(sum(_catalog.NEW_COMPOSITION.values(), [])),
-            sorted(self.applied.catalog.models))
+            sorted(self.subject.catalog.models))
 
-    def test_ac4_test_models_is_green_on_the_catalog_after_the_appendix(self):
-        """`tests/test_models.py` на каталоге после приложения PLAN —
-        зелёный: литерал состава равен новому составу.
+    def test_ac4_test_models_is_green_on_the_branch_catalog(self):
+        """`tests/test_models.py` на каталоге ветки — зелёный: литерал
+        состава равен новому составу.
 
         Ловит мутацию: литерал в разделе `codex` приведён к новому
         составу, а ОБЩИЙ перечень ниже оставлен прежним (в нём две
         строки, и вторую легко пропустить) — модуль покраснеет на
         сравнении общего перечня, хотя состав по разделам сойдётся.
         """
-        result = _run_test_models(self.applied.path)
+        result = _run_test_models(self.subject.path)
 
         self.assertTrue(
             result.wasSuccessful(),
-            "tests/test_models.py красен на каталоге после приложения "
-            "PLAN: " + "; ".join(
+            "tests/test_models.py красен на каталоге ветки: " + "; ".join(
                 f"{case}: {trace.strip().splitlines()[-1]}"
                 for case, trace in result.failures + result.errors))
 
@@ -133,10 +136,10 @@ class CompositionLiteralTest(unittest.TestCase):
         pattern = re.compile(rf"^(\s+){re.escape(RENAMED_FROM)}:",
                              re.MULTILINE)
         self.assertRegex(
-            self.applied.text, pattern,
-            f"в каталоге после приложения нет записи {RENAMED_FROM} — "
-            f"подменять нечего (см. AC-1)")
-        renamed = pattern.sub(rf"\g<1>{RENAMED_TO}:", self.applied.text,
+            self.subject.text, pattern,
+            f"в каталоге ветки нет записи {RENAMED_FROM} — подменять "
+            f"нечего (см. AC-1)")
+        renamed = pattern.sub(rf"\g<1>{RENAMED_TO}:", self.subject.text,
                               count=1)
 
         result = _run_test_models(self.write("models.renamed.yaml", renamed))
@@ -156,9 +159,9 @@ class CompositionLiteralTest(unittest.TestCase):
         незамеченной, и ярус мог бы указать на неё.
         """
         anchor = "    models:\n"
-        self.assertIn(anchor, self.applied.text,
-                      "в каталоге после приложения нет раздела моделей")
-        extended = self.applied.text.replace(anchor, anchor + EXTRA_RECORD,
+        self.assertIn(anchor, self.subject.text,
+                      "в каталоге ветки нет раздела моделей")
+        extended = self.subject.text.replace(anchor, anchor + EXTRA_RECORD,
                                              1)
 
         result = _run_test_models(self.write("models.extended.yaml", extended))
