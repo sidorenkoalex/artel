@@ -9,10 +9,12 @@ import shutil
 import sys
 import unittest
 from pathlib import Path
+from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from orchestrator import cleanup, config, retro, store  # noqa: E402
+from orchestrator import (artifact_branch, cleanup, config,  # noqa: E402
+                          retro, store)
 from tests.sandbox import TmpRootTest  # noqa: E402
 
 SENTENCE_SPEC_TEXT = """---
@@ -143,7 +145,15 @@ class T(unittest.TestCase):
 
 
 class RetroGenerationTest(TmpRootTest):
-    """Песочница: sandbox.TmpRootTest полным набором путей (SPEC T061, AC-3)."""
+    """Песочница: sandbox.TmpRootTest полным набором путей (SPEC T061, AC-3).
+
+    Артефакты задачи (`SPEC.md`, планка приёмки) живут в АРТЕФАКТНОЙ ветке
+    и читаются генератором через git (SPEC 01M3KE80RNBCY9G48E75Z14TA7,
+    требования 5-6) — здесь дерево ветки подменяется словарём на месте
+    `artifact_branch.read_tree` (настоящее git-чтение ветки проверяет
+    `tests/test_retro_artifact_branch_reads.py` на `RealGitSandbox`):
+    ассерты самих тестов прежние, поменялся только носитель фикстуры.
+    """
 
     TASK = "T900"
 
@@ -154,17 +164,21 @@ class RetroGenerationTest(TmpRootTest):
         store.insert_task(self.conn, self.TASK, "Задача для теста",
                           "merge_gate", "task/t900-x", config.DEFAULT_TARGET,
                           50.0)
+        self.branch_files: dict = {}
+        patcher = mock.patch.object(
+            artifact_branch, "read_tree",
+            lambda task_id: dict(self.branch_files) if task_id == self.TASK
+            else {})
+        patcher.start()
+        self.addCleanup(patcher.stop)
 
     def write_spec(self, text=SPEC_TEXT) -> None:
-        tdir = config.TASKS / self.TASK
-        tdir.mkdir(parents=True, exist_ok=True)
-        (tdir / "SPEC.md").write_text(text, encoding="utf-8")
+        self.branch_files[f"tasks/{self.TASK}/SPEC.md"] = text
 
     def write_acceptance_tests(self) -> None:
-        adir = config.TASKS / self.TASK / "acceptance_tests"
-        adir.mkdir(parents=True, exist_ok=True)
-        (adir / "test_fixture.py").write_text(ACCEPTANCE_FIXTURE,
-                                              encoding="utf-8")
+        self.branch_files[
+            f"tasks/{self.TASK}/acceptance_tests/test_fixture.py"] = (
+                ACCEPTANCE_FIXTURE)
 
     def add_step(self, actor, action, detail="") -> None:
         store.journal(self.conn, self.TASK, actor, action, detail)

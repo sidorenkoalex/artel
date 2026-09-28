@@ -5,9 +5,18 @@ add`/`commit`, обработка провала как incident-алерта) �
 `orchestrator/fsm.py`, тем же разделением, что `orchestrator/review.py`
 (сборка пакета) и `orchestrator/acceptance.py` (сводка) отделены от
 `orchestrator/fsm.py` (переходы). Источники данных — только журнал
-`steps` (`store.task_steps`) и фронтматтеры/тексты артефактов задачи
-(`tasks/<id>/SPEC.md`, `tasks/<id>/acceptance_tests/`) — требование 3
-(детерминизм): один и тот же вход даёт байт-в-байт одинаковый файл.
+`steps` (`store.task_steps`) и тексты артефактов задачи (`tasks/<id>/
+SPEC.md`, `tasks/<id>/acceptance_tests/`) — требование 3 (детерминизм):
+один и тот же вход даёт байт-в-байт одинаковый файл.
+
+Артефакты читаются из АРТЕФАКТНОЙ ВЕТКИ задачи через git, не с диска
+главной копии (SPEC 01M3KE80RNBCY9G48E75Z14TA7, требования 5-6): в
+момент записи ЛЮБОЙ из двух ретроспектив (`docs/retro/<id>.md` и
+ретроспектива снимка закрытия, `orchestrator/snapshot.py`) каталога
+закрываемой задачи в `config.TASKS` уже нет, и чтение с диска давало
+«Приёмочные тесты: 0 тест(ов)» при непустой планке и «Суть» из одного
+названия задачи. Ветка в оба этих момента ещё жива — снимок публикуется
+до её удаления, `docs/retro/<id>.md` пишется раньше снимка.
 
 С 01M31ZHWJWRSACYMRWTCPBC0DM здесь же живёт ЧИТАТЕЛЬ записей токенов
 журнала — разбор строк «agent cost KNOWN»/«agent cost PARTIAL» на
@@ -28,12 +37,15 @@ add`/`commit`, обработка провала как incident-алерта) �
 то есть неправду. Прочерк остаётся разбивке по видам и случаю, когда
 токенов не записано нигде.
 """
+import contextlib
 import re
+import tempfile
+from pathlib import Path
 from typing import NamedTuple
 
 from scripts import guard
 
-from . import cleanup, config, models, spend, store
+from . import artifact_branch, cleanup, config, models, spend, store
 
 RETRO_DIR_REL = "docs/retro"
 
@@ -248,11 +260,44 @@ def retro_path(task_id: str, repo=None):
     return (repo if repo is not None else config.ROOT) / retro_rel_path(task_id)
 
 
-def _read_spec_text(task_id: str) -> str | None:
-    try:
-        return (config.TASKS / task_id / "SPEC.md").read_text(encoding="utf-8")
-    except OSError:
-        return None
+def _artifact_branch_files(task_id: str) -> dict:
+    """{путь: текст} всего `tasks/<id>/` АРТЕФАКТНОЙ ветки задачи — ОДНО
+    чтение на оба источника ретроспективы (SPEC
+    01M3KE80RNBCY9G48E75Z14TA7, требования 5-6): `SPEC.md` строки «Суть» и
+    каталог `acceptance_tests/` счётчиков лежат в одном дереве этой ветки,
+    и разделять их чтение было бы двумя способами читать одно и то же.
+
+    Ветки нет (долговая генерация killed-ретроспективы на следующем мерже
+    — `orchestrator/fsm_postmerge.py`), или git не ответил —
+    `artifact_branch.read_tree` отдаёт пустой словарь: счётчики нули,
+    «Суть» — одно название задачи, генерация не падает (требование 7)."""
+    return artifact_branch.read_tree(task_id)
+
+
+def _spec_text(files: dict, task_id: str) -> str | None:
+    """Текст `SPEC.md` из прочитанного дерева ветки; `None` — файла в ветке
+    нет (пустой шаблон killed-задачи нового флоу, ветки нет вовсе)."""
+    return files.get(f"tasks/{task_id}/SPEC.md")
+
+
+@contextlib.contextmanager
+def _materialized_task_dir(task_id: str, files: dict):
+    """`tasks/<id>/` прочитанного дерева ветки — временным каталогом на
+    диске (требование 5): ядро подсчёта `scripts/guard.py` спрашивает
+    КАТАЛОГ, а второй копии правил подсчёта задача не заводит. Тот же
+    приём, что `acceptance.materialize_from_branch` уже применяет к планке
+    приёмки, только каталог здесь временный — подсчёт ничего после себя не
+    оставляет."""
+    prefix = f"tasks/{task_id}/"
+    with tempfile.TemporaryDirectory(prefix=f"artel-retro-{task_id}-") as tmp:
+        tdir = Path(tmp)
+        for rel, text in files.items():
+            if not rel.startswith(prefix):
+                continue
+            dest = tdir / rel[len(prefix):]
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            dest.write_text(text, encoding="utf-8")
+        yield tdir
 
 
 def _first_context_line(spec_text: str | None) -> str:
@@ -430,17 +475,18 @@ def _last_step_detail(steps, action: str) -> str:
     return ""
 
 
-def _acceptance_counts(task_id: str) -> tuple[int, int, int]:
+def _acceptance_counts(task_id: str, files: dict) -> tuple[int, int, int]:
     """(тестов, manual, skip) статическим разбором `acceptance_tests/` —
-    то же ядро, что `orchestrator/acceptance.py`; каталога нет
-    (killed-задача, чей `tasks/<id>/` уже убран `cleanup`) — нули, не
-    провал (требование 6: БД остаётся источником истины killed-задачи,
-    отсутствие рабочей копии не должно ронять генератор)."""
-    tdir = config.TASKS / task_id
-    _, markers = guard.scan_acceptance_tests(tdir)
-    manual = sum(1 for kind, _ in markers.values() if kind == "manual")
-    skip = sum(1 for kind, _ in markers.values() if kind == "skip")
-    count = guard.count_test_methods(tdir)
+    то же ядро, что `orchestrator/acceptance.py`, по каталогу АРТЕФАКТНОЙ
+    ветки (SPEC 01M3KE80RNBCY9G48E75Z14TA7, требование 5). Планки в дереве
+    нет (ветки нет вовсе, задача старше T023, `skip_tests`) — нули, не
+    провал (требование 7 и требование 6 SPEC T043: БД остаётся источником
+    истины killed-задачи, отсутствие файлов не должно ронять генератор)."""
+    with _materialized_task_dir(task_id, files) as tdir:
+        _, markers = guard.scan_acceptance_tests(tdir)
+        manual = sum(1 for kind, _ in markers.values() if kind == "manual")
+        skip = sum(1 for kind, _ in markers.values() if kind == "skip")
+        count = guard.count_test_methods(tdir)
     return count, manual, skip
 
 
@@ -511,19 +557,30 @@ def _cost_block(steps, spent_usd: float,
     return lines
 
 
-def build_done(conn, task_id: str, merge_sha: str) -> str:
-    """RETRO задачи, дошедшей до `done` (требования 4, 5, 8)."""
+def build_done(conn, task_id: str, merge_sha: str,
+               address: str | None = None) -> str:
+    """RETRO задачи, дошедшей до `done` (требования 4, 5, 8).
+
+    `address` (SPEC 01M3KE80RNBCY9G48E75Z14TA7, требование 3) — строка
+    «Адрес артефактов», когда у вызывающего он свой: ретроспектива снимка
+    закрытия называет вечный адрес `refs/artifacts/<id>` (ADR-0005 п.4,
+    ADR-0018 п.1), и имя этой ссылки знает `orchestrator/snapshot.py`, а
+    не этот модуль (обратный импорт замкнул бы цикл). По умолчанию —
+    прежний контент-адресный `<sha мержа>:tasks/<id>/`
+    `docs/retro/<id>.md`, который SPEC менять не просит."""
     t = store.get_task(conn, task_id)
     steps = store.task_steps(conn, task_id)
-    context_line = _first_context_sentence(_read_spec_text(task_id))
-    count, manual, skip = _acceptance_counts(task_id)
-    address = f"{merge_sha}:tasks/{task_id}/"
+    files = _artifact_branch_files(task_id)
+    context_line = _first_context_sentence(_spec_text(files, task_id))
+    count, manual, skip = _acceptance_counts(task_id, files)
+    artifacts_address = (address if address is not None
+                         else f"{merge_sha}:tasks/{task_id}/")
 
     lines = [
         f"# RETRO: {task_id} — {t['title']}",
         "",
         f"Итог: done, sha {merge_sha}",
-        f"Адрес артефактов: {address}",
+        f"Адрес артефактов: {artifacts_address}",
         f"Суть: {_gist(t['title'], context_line)}",
         *(["Канареечная задача: да"] if t["is_canary"] else []),
         "",
@@ -577,9 +634,10 @@ def build_killed(conn, task_id: str) -> str:
     # схлопнутая строка. ТЗ не было (`new` без `--tz`) — старый построчный
     # фолбэк как запасной путь (SPEC T063, требование 3, не меняется).
     tz_text = _journaled_tz_text(steps)
+    files = _artifact_branch_files(task_id)
     context_line = (_first_sentence(tz_text) if tz_text is not None
-                    else _first_context_line(_read_spec_text(task_id)))
-    count, manual, skip = _acceptance_counts(task_id)
+                    else _first_context_line(_spec_text(files, task_id)))
+    count, manual, skip = _acceptance_counts(task_id, files)
     subtasks = _subtask_rows(conn, task_id)
 
     if subtasks:

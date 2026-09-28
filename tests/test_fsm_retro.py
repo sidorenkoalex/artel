@@ -51,6 +51,9 @@ class GenerateAndCommitRetroTest(TmpRootTest):
         self.assertEqual(self.incidents(), [])
 
     def test_write_failure_raises_incident_and_does_not_call_git(self):
+        """Ловит мутацию: провал записи файла RETRO перестал отменять
+        `add`/`commit` — в `git_calls` появится пишущий вызов, и
+        `assertEqual` ниже покраснеет."""
         git_calls = []
 
         def fake_git(*args) -> subprocess.CompletedProcess:
@@ -65,7 +68,14 @@ class GenerateAndCommitRetroTest(TmpRootTest):
                 mock.patch.object(gitcmd, "git", fake_git):
             fsm_postmerge._generate_and_commit_retro(self.conn, self.TASK, "a" * 40)
 
-        self.assertEqual(git_calls, [])
+        # Сама генерация RETRO с 01M3KE80RNBCY9G48E75Z14TA7 (требования 5-6)
+        # читает `tasks/<id>/` артефактной ветки через git, поэтому «ни
+        # одного вызова git» тут больше не бывает: проверяется, что ни один
+        # вызов не ПИШЕТ — провал записи файла не вправе оставить за собой
+        # `add`/`commit` (читающие `ls-tree`/`show` безвредны).
+        self.assertEqual(
+            [c for c in git_calls if not c or c[0] not in ("ls-tree", "show")],
+            [])
         incidents = self.incidents()
         self.assertEqual(len(incidents), 1)
         self.assertTrue(incidents[0]["source"].startswith("fsm.retro"))

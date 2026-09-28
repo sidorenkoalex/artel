@@ -59,8 +59,25 @@ def _model_identifier() -> str:
 
 
 def _retro_with_frontmatter(conn, task_id: str, outcome: str) -> str:
+    """Ретроспектива снимка: `outcome` — ФАКТИЧЕСКИЙ исход задачи, не
+    литерал (SPEC 01M3KE80RNBCY9G48E75Z14TA7, требования 1-4). У
+    смерженной задачи это «Итог: done, sha …» и вечный адрес
+    `refs/artifacts/<id>` (ADR-0005 п.4, ADR-0018 п.1) вместо
+    контент-адресной строки `docs/retro/<id>.md`: снимок сам и есть тот
+    адрес, а на `<sha>:tasks/<id>/` его читателю опираться незачем. У
+    ликвидированной — прежние «Итог: killed — причина: …» и прежняя
+    строка адреса, путь не меняется (требование 4).
+
+    sha в строке «Итог: done» — `gitcmd.head_sha()` пульта на момент
+    публикации, то же значение, что несёт `artel_sha` ниже: sha самого
+    коммита мержа известен только внутри
+    `orchestrator/fsm_merge_gate.py::_publish_merge_artifacts` (локальная
+    `merge_sha`) и ни одним носителем наружу не выставлен — точный sha
+    мержа смерженной задачи остаётся в `docs/retro/<id>.md` main."""
     body = (retro.build_killed(conn, task_id) if outcome == "killed"
-           else retro.build_done(conn, task_id, gitcmd.head_sha()))
+           else retro.build_done(
+               conn, task_id, gitcmd.head_sha(),
+               address=SNAPSHOT_REF_TMPL.format(task_id=task_id)))
     header = (
         "---\n"
         f"operator: {_operator_identity()}\n"
@@ -89,6 +106,14 @@ def publish_and_cleanup(conn, task_id: str, target: str, outcome: str) -> str:
     убрана — `read_tree` вернёт пусто, но следующий вызов и не должен
     случаться: `cleanup`/`doctor` зовут эту функцию, только пока
     `pending(task_id)` истинно).
+
+    `outcome` — ФАКТИЧЕСКОЕ состояние закрытой задачи (`done`/`killed`):
+    его называет и ретроспектива снимка, и сообщение коммита снимка
+    («снапшот закрытия (done)»/«(killed)» — SPEC
+    01M3KE80RNBCY9G48E75Z14TA7, требование 1, AC-4). Оба вызывателя берут
+    его из БД: `doctor.check_pending_snapshots` — напрямую,
+    `cleanup._publish_snapshot_if_pending` (оба пути закрытия) — через
+    `cleanup._closing_outcome`.
     """
     files = artifact_branch.read_tree(task_id)
     files[RETRO_REL_TMPL.format(task_id=task_id)] = _retro_with_frontmatter(
