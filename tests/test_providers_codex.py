@@ -219,6 +219,49 @@ class StepCommandTest(unittest.TestCase):
         self.assertEqual(missing, [], self.argv)
         self.assertEqual(len(codex_provider.DISABLED_FEATURES), 11)
 
+    def test_reasoning_effort_pair_stands_among_the_step_overrides(self):
+        """Ловит мутацию: пара глубины рассуждения убрана из
+        `CONFIG_OVERRIDES` («дефолт клиента и так сойдёт») или
+        переставлена за подкоманду `exec`, где 0.157.1 глобальный `-c`
+        уже не разбирает, — шаг на втором провайдере молча уходит на
+        ступень по умолчанию, а встроенный каталог клиента назначает
+        `gpt-6-astra` и `gpt-5.6-sol` низшую `low`, и замер канарейки
+        сравнивает модели двух провайдеров на РАЗНОЙ глубине. Вторая
+        мутация: значение сменили на `low`/`medium` — решением Оператора
+        28.09.2026 оно одно на все роли и все модели и равно `high`."""
+        pairs = [(self.argv[i], self.argv[i + 1])
+                 for i in range(len(self.argv) - 1)]
+
+        self.assertIn((codex_provider.REASONING_EFFORT_KEY,
+                       codex_provider.REASONING_EFFORT_VALUE),
+                      codex_provider.CONFIG_OVERRIDES)
+        self.assertIn(("-c", "model_reasoning_effort=high"), pairs, self.argv)
+        self.assertLess(self.argv.index("model_reasoning_effort=high"),
+                        self.argv.index("exec"), self.argv)
+
+    def test_neither_the_login_status_nor_the_claude_argv_learns_the_pair(self):
+        """Ловит мутацию: глубину рассуждения дописали в `AUTH_OVERRIDES`
+        «чтобы стояла в одном месте» — пара уезжает в `codex login
+        status`, который модель не запускает вовсе, и argv проверки входа
+        расходится с командой ручного входа Оператора, записанной в
+        `docs/stack.md`. Вторая мутация: ту же пару завели шагу
+        провайдера по умолчанию, которого настройка второго клиента не
+        касается вовсе."""
+        login_argv = providers.get("codex").login_status_command()
+        claude_argv = providers.default().command("model-x")
+
+        self.assertEqual(
+            login_argv,
+            [f"{STUB_BIN}/codex"]
+            + [item for key, value in codex_provider.AUTH_OVERRIDES
+               for item in ("-c", f"{key}={value}")]
+            + list(codex_provider.LOGIN_STATUS_ARGS))
+        self.assertNotIn("-c", claude_argv, claude_argv)
+        for argv in (login_argv, claude_argv):
+            with self.subTest(tool=Path(argv[0]).name):
+                self.assertNotIn(codex_provider.REASONING_EFFORT_KEY,
+                                 " ".join(argv), argv)
+
     def test_overrides_repeat_the_curated_config_pair_for_pair(self):
         """Ловит мутацию: `config.toml` поправили (переименовали ключ,
         сменили значение), а команду шага — нет; половинки изоляции
@@ -278,6 +321,23 @@ class CuratedHomeTest(unittest.TestCase):
                                  pairs)
         self.assertEqual([key for key, value in pairs.items()
                           if value == "true"], [], pairs)
+
+    def test_curated_config_sets_the_reasoning_effort_at_the_top_level(self):
+        """Ловит мутацию: значение глубины рассуждения убрали из образца
+        дома роли — на пульте, где `.artel/home` доводится руками, второй
+        рубеж настройки молчит, и Оператор, разворачивающий дом, о ней не
+        знает. Вторая мутация: ключ спрятали ВНУТРЬ секции — `-c`-пара
+        команды шага адресует его без префикса секции, сверка половин
+        сличает полные ключи, и `[секция] model_reasoning_effort`
+        разъехался бы с флагом, оставаясь на вид заданным."""
+        pairs = _toml_pairs(
+            (self.reference() / "config.toml").read_text(encoding="utf-8"))
+
+        self.assertEqual(pairs.get("model_reasoning_effort"), "high", pairs)
+        self.assertEqual(
+            [key for key in pairs
+             if key.endswith(f".{codex_provider.REASONING_EFFORT_KEY}")],
+            [], pairs)
 
     def test_curated_config_repeats_the_command_overrides_pair_for_pair(self):
         """Ловит мутацию: пара `-c`-переопределения переименована в
