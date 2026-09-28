@@ -184,6 +184,33 @@ def _tests_writing_artifact_source_gate(acc_tdir, task_id: str) -> GateRefusal |
     return GateRefusal(ARTIFACT_DISK_READ_ACTION, "; ".join(errors), hint)
 
 
+TEST_GROUPS_ACTION = "переход отклонён: группы приёмочных тестов"
+
+
+def _tests_writing_test_groups_gate(acc_tdir, task_id: str,
+                                    target: str) -> GateRefusal | None:
+    """Строка группы у каждого `test_*.py` планки и проверки долгоживущих
+    файлов — признаки требования 3 и «Ловит мутацию» у каждого метода
+    (SPEC 01M3N0BWYQ9KHVN41Z4G72706R, требования 1-4, 6-7; ADR-0020).
+    Правила — `scripts/guard.py`, здесь только область и отказ.
+
+    Только target `config.DEFAULT_TARGET` (требование 7) — включая
+    канареечные задачи. Файлы — те же, что у сухого сбора (`acc_tdir`).
+
+    Подсказка test_author — в `detail`, не только в печати: история
+    отказов брифа роли читает журнал (требование 6)."""
+    if target != config.DEFAULT_TARGET:
+        return None
+    files = guard.acceptance_test_files(acc_tdir)
+    errors = (guard.group_line_errors_from_files(files)
+              + guard.long_lived_errors_from_files(files, task_id))
+    if not errors:
+        return None
+    hint = f"исправь файл планки и повтори artel.py advance {task_id}"
+    return GateRefusal(TEST_GROUPS_ACTION,
+                       "; ".join(errors) + f"\nдальше: {hint}", hint)
+
+
 def _tests_writing_dry_collect_gate(acc_tdir, run_cwd,
                                     task_id: str) -> GateRefusal | None:
     """Требование 2/AC-4/AC-5: сухой сбор материализованной планки

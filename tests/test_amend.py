@@ -575,7 +575,8 @@ class AmendEventsInWindowTest(TmpRootTest):
 # AC-1/AC-2 (тот же довод, что AC_TEST_AMENDED_V1 в
 # tasks/01M1HNNHDMP2C1AJTH5QF1BTN2/acceptance_tests/_sandbox.py).
 AC_TEST_AMENDED = '''"""Красен до реализации: фикстура покрывает оба критерия
-SPEC_V2 песочницы (правка Оператора: добавлена вторая проверка AC-1)."""
+SPEC_V2 песочницы (правка Оператора: добавлена вторая проверка AC-1).
+Группа: разовый"""
 import unittest
 
 
@@ -689,7 +690,8 @@ class AmendThenReviewGateTest(RealGitSandbox):
 AC_TEST_EXTRA_UNCHANGED = '''"""Зелёный с рождения: файл-контроль amend --from-branch, остаётся
 побайтно неизменным между локом и последующей правкой — не должен
 попасть в список отличающихся файлов журнала (SPEC
-01M287TPG0HAVXS8CHBCY679WN, требование 3)."""
+01M287TPG0HAVXS8CHBCY679WN, требование 3).
+Группа: разовый"""
 import unittest
 
 
