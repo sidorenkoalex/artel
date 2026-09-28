@@ -649,10 +649,51 @@ REVIEW_VERDICTS = ("approved", "changes_requested", "escalate")
 # (`scripts/ci_protected_paths.py`, SPEC 01M31DRD81092HB69J0MAKZMGH,
 # требования 1-4), поэтому следующий новый защищённый путь вносится тем
 # же изменением, что создаёт сам файл.
+# Настройки сбора тестов (SPEC 01M3MVXZXF25KYY2P213E0M39X): корневой
+# `conftest.py` сам работает гейтом (отказ роли в сборе тестов), а
+# `pyproject.toml`/`pytest.ini`/`setup.cfg`/`tox.ini` несут настройки
+# pytest — их подмена снимает планку тестов, не тронув ни одного файла
+# `tests/`. `conftest.py` защищён в ЛЮБОМ каталоге, в том числе ещё не
+# существующем, — отсюда запись-маска `**/conftest.py`; остальные четыре —
+# только корневые (смысл записей — `is_protected_path` ниже).
 PROTECTED_PATHS = ("gates.yaml", "roles.yaml", ".github/",
                    "templates/", "skills/", "docs/invariants.md",
                    "tests/test_invariants.py", "docs/adr/", "CLAUDE.md",
-                   "AGENTS.md", "targets.yaml", "models.yaml")
+                   "AGENTS.md", "targets.yaml", "models.yaml",
+                   "**/conftest.py", "pyproject.toml", "pytest.ini",
+                   "setup.cfg", "tox.ini")
+
+# Префикс записи-маски: `**/<имя файла>` покрывает путь, чей последний
+# компонент — ровно `<имя файла>`, в любом каталоге (включая корень).
+PROTECTED_PATH_ANY_DIR_MASK = "**/"
+
+
+def is_protected_path(path: str, protected=None) -> bool:
+    """Путь `path` попадает под перечень защищённых путей — ЕДИНАЯ формула
+    всех мест сверки (гейт зон, гейт диффа на мерже, джоб CI, допуск
+    приложения PLAN, пометка зон SPEC, подсветка Draft MR).
+
+    Запись-маска `**/<имя>` сверяется по последнему компоненту пути;
+    любая другая — префиксом: путь равен записи либо начинается с неё
+    (записи-каталоги несут завершающий `/`).
+
+    `protected=None` — `PROTECTED_PATHS`, прочитанный в момент вызова, не
+    снимком при определении функции: подмена перечня (тесты, следующая
+    запись) действует без правки мест сверки. Явный перечень нужен джобу
+    CI (перечень БАЗЫ сравнения) и условию полного прогона на мерже.
+
+    Функция живёт здесь, а не в модуле гейтов, потому что её зовут и
+    скрипты (`scripts/guard.py`, `scripts/ci_protected_paths.py`): этот
+    модуль не импортирует ни одного модуля пульта."""
+    entries = PROTECTED_PATHS if protected is None else protected
+    name = path.rsplit("/", 1)[-1]
+    for entry in entries:
+        if entry.startswith(PROTECTED_PATH_ANY_DIR_MASK):
+            if name == entry[len(PROTECTED_PATH_ANY_DIR_MASK):]:
+                return True
+        elif path == entry or path.startswith(entry):
+            return True
+    return False
 
 # Общие зоны вне конфликта (задача 01M1NKVPD2A79PQ6K0JVV1B2Q1, часть 1,
 # AC-4): пути, которые трогают все задачи, а конфликт по ним — текстовый,
