@@ -1,5 +1,5 @@
 ---
-built_at_sha: c4cec1a89cc615c79af15c4598f12ad2826c33ca
+built_at_sha: 30d746addbba57c65e4417072177a0c2fd5802dd
 ---
 
 # Codebase-map пульта
@@ -1126,7 +1126,9 @@ built_at_sha: c4cec1a89cc615c79af15c4598f12ad2826c33ca
 
 **Назначение:** Провайдер исполнителя роли `codex` (OpenAI Codex CLI, `codex exec`).
 
-**Публичные функции:** (нет)
+**Публичные функции:**
+- `codex_home_override`
+- `set_codex_home_override`
 
 **Импортирует:** `orchestrator/config.py`, `orchestrator/models.py`, `orchestrator/providers/base.py`, `orchestrator/runner.py`, `orchestrator/stack.py`
 
@@ -2025,7 +2027,7 @@ built_at_sha: c4cec1a89cc615c79af15c4598f12ad2826c33ca
 
 **Импортирует:** `orchestrator/artifact_branch.py`, `orchestrator/canary.py`, `orchestrator/catalog.py`, `orchestrator/config.py`, `orchestrator/pool_seal.py`, `orchestrator/retro.py`, `orchestrator/store.py`, `tests/sandbox.py`
 
-**Импортируется:** —
+**Импортируется:** `tests/test_canary_codex_clone_auth.py`
 
 ## tests/test_canary_budget_ceiling.py
 
@@ -2043,7 +2045,7 @@ built_at_sha: c4cec1a89cc615c79af15c4598f12ad2826c33ca
 
 **Публичные функции:** (нет)
 
-**Импортирует:** `orchestrator/canary.py`, `orchestrator/config.py`, `orchestrator/providers/codex.py`, `tests/test_canary_sets.py`
+**Импортирует:** `orchestrator/canary.py`, `orchestrator/config.py`, `orchestrator/providers/codex.py`, `tests/test_canary.py`, `tests/test_canary_sets.py`
 
 **Импортируется:** —
 

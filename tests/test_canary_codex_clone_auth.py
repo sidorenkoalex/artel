@@ -17,8 +17,11 @@ Codex, отказ по указателю связки ключей ДО кло�
 auth`; эфемерного клона здесь не заводится вовсе (настоящий клон с настоящим
 холодным стартом — предмет приёмочной планки задачи).
 """
+import subprocess
 import sys
+import tempfile
 import unittest
+from contextlib import contextmanager
 from pathlib import Path
 from unittest import mock
 
@@ -26,6 +29,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from orchestrator import canary, config, doctor  # noqa: E402
 from orchestrator.providers import codex as codex_provider  # noqa: E402
+from tests.test_canary import pristine_config  # noqa: E402
 from tests.test_canary_sets import (SET_NAME, _SetLayersTest,  # noqa: E402
                                     sets_block)
 
@@ -245,25 +249,59 @@ class InstallCodexPointerTest(_RoleHomeTest):
 
 
 class RefuseUnlessCloneLoggedInTest(unittest.TestCase):
-    """Требование 4: реакция прогона на исход проверки входа.
+    """Требование 4 (01M3HST1381E1FZCYAN2TSB1F3): реакция прогона на исход
+    проверки входа — и требование 6 (01M3M55070T5NJFYM3QQJH4B9V):
+    различение двух её отказов.
 
     Узел `doctor.check_codex_chatgpt_auth` подменён: предмет здесь — что
     прогон делает с его исходом, а сам узел и его разбор вывода CLI —
-    предмет `tests/test_doctor.py`.
+    предмет `tests/test_doctor.py`. Различитель подмены — `config.ROLE_HOME`
+    в момент вызова: именно от него настоящий узел берёт `HOME` процесса
+    `codex login status`, и «вход домом роли пульта» отличается от
+    «проверки окружением шага клона» ровно этим значением.
     """
 
     ROLE = "developer"
+
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.tdir = Path(tmp.name)
+        self.pult_home = self.tdir / "pult-home"
+        self.clone_home = self.tdir / "clone-home"
+        patcher = mock.patch.object(config, "ROLE_HOME", self.clone_home)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        self.addCleanup(codex_provider.set_codex_home_override,
+                        codex_provider.codex_home_override())
+        codex_provider.set_codex_home_override(
+            self.pult_home / codex_provider.DEPLOYED_HOME_DIR)
+        #: (дом роли, переопределение `CODEX_HOME`) каждого вызова узла.
+        self.calls = []
 
     def check(self, status: str) -> doctor.Check:
         return doctor.Check(doctor.CODEX_AUTH_CHECK, status,
                             f"роль {self.ROLE}: {doctor.CODEX_AUTH_RECIPE}")
 
-    def refuse(self, status: str) -> str:
-        with mock.patch.object(doctor, "check_codex_chatgpt_auth",
-                               lambda role: self.check(status)):
+    def node(self, *, pult: str, clone: str):
+        """Подмена узла: исход зависит от дома роли, каким его зовут."""
+        def fake(role):
+            self.calls.append((config.ROLE_HOME,
+                               codex_provider.codex_home_override()))
+            return self.check(
+                pult if config.ROLE_HOME == self.pult_home else clone)
+        return mock.patch.object(doctor, "check_codex_chatgpt_auth", fake)
+
+    def refusal(self, *, pult: str, clone: str) -> str:
+        with self.node(pult=pult, clone=clone):
             with self.assertRaises(SystemExit) as ctx:
-                canary._refuse_unless_clone_logged_in(self.ROLE)
+                canary._refuse_unless_clone_logged_in(self.ROLE,
+                                                      self.pult_home)
         return str(ctx.exception)
+
+    def refuse(self, status: str) -> str:
+        """Текст отказа, когда узел отвечает `status` ОБОИМ домам."""
+        return self.refusal(pult=status, clone=status)
 
     def test_a_failed_check_refuses_naming_the_check_and_its_detail(self):
         """Исход `fail` — `SystemExit` с именем проверки и её `detail`
@@ -297,10 +335,199 @@ class RefuseUnlessCloneLoggedInTest(unittest.TestCase):
         исход трактуется наоборот) — прогон на наборе с Codex был бы
         невозможен вообще, при любом состоянии входа.
         """
-        with mock.patch.object(doctor, "check_codex_chatgpt_auth",
-                               lambda role: self.check("ok")):
+        with self.node(pult="fail", clone="ok"):
             self.assertIsNone(
-                canary._refuse_unless_clone_logged_in(self.ROLE))
+                canary._refuse_unless_clone_logged_in(self.ROLE,
+                                                      self.pult_home))
+
+    def test_a_confirmed_login_asks_the_node_exactly_once(self):
+        """Проверка окружением шага клона прошла — узел спрошен ровно
+        один раз, как до различения двух случаев.
+
+        Ловит мутацию: вход домом роли пульта спрашивается ДО проверки
+        окружением шага (или безусловно рядом с ней) — каждый прогон на
+        наборе с ролями Codex платил бы вторым запуском `codex login
+        status`, а тот при `keyring` обращается к связке ключей и вправе
+        спросить у Оператора разрешение: лишний вызов не бесплатный, он
+        может и повиснуть до потолка ожидания.
+        """
+        with self.node(pult="ok", clone="ok"):
+            canary._refuse_unless_clone_logged_in(self.ROLE, self.pult_home)
+
+        self.assertEqual(1, len(self.calls))
+
+    def test_a_confirmed_pult_login_names_a_pult_defect_without_the_recipe(self):
+        """Вход домом роли пульта подтверждён, а проверка окружением шага
+        клона — нет: отказ БЕЗ рецепта, не равный отказу несделанного
+        входа, называющий сломанный перенос и путь, который шагу
+        отдаётся.
+
+        Ловит мутацию: различение не сделано — оба исхода пересказываются
+        одним текстом с рецептом `codex login`; Оператор, у которого вход
+        есть, получал бы указание войти ещё раз, а настоящая причина
+        (перенос `CODEX_HOME` в клон сломан) оставалась бы неназванной и
+        искалась бы руками.
+        """
+        defect = self.refusal(pult="ok", clone="fail")
+
+        self.assertNotIn(doctor.CODEX_AUTH_RECIPE, defect)
+        self.assertNotEqual(self.refuse("fail"), defect)
+        self.assertIn(
+            str(self.pult_home / codex_provider.DEPLOYED_HOME_DIR), defect)
+
+    def test_the_pult_probe_asks_with_the_pult_home_and_no_override(self):
+        """Второй вызов узла идёт домом роли ПУЛЬТА и со снятым
+        переопределением `CODEX_HOME`, а после него оба значения снова
+        клоновские.
+
+        Ловит мутацию: вход пульта спрашивается, не сняв переопределение
+        (или не вернув `config.ROLE_HOME`) — узел получал бы гибрид
+        «`HOME` клона + `CODEX_HOME` пульта», то есть ровно то окружение,
+        неуспех которого и разбирается: ответ был бы тем же `fail`, и
+        дефект пульта навсегда пересказывался бы рецептом «войдите».
+        """
+        override = codex_provider.codex_home_override()
+
+        self.refusal(pult="ok", clone="fail")
+
+        self.assertEqual([(self.clone_home, override),
+                          (self.pult_home, None)], self.calls)
+        self.assertEqual(self.clone_home, config.ROLE_HOME)
+        self.assertEqual(override, codex_provider.codex_home_override())
+
+    def test_the_pult_probe_restores_the_clone_paths_when_the_node_raises(self):
+        """Узел упал исключением на втором вызове — дом роли и
+        переопределение всё равно вернулись клоновскими.
+
+        Ловит мутацию: возврат написан последней строкой после вызова, а
+        не в `finally` — упавший второй вызов оставил бы блок клона с
+        путями ПУЛЬТА, и уборка клона (`shutil.rmtree` по `dest`) с
+        восстановлением `config` пошли бы от подменённых значений.
+        """
+        override = codex_provider.codex_home_override()
+
+        def boom(role):
+            raise RuntimeError("узел упал на доме роли пульта")
+
+        with mock.patch.object(doctor, "check_codex_chatgpt_auth", boom):
+            with self.assertRaises(RuntimeError):
+                canary._pult_home_login_confirmed(self.ROLE, self.pult_home)
+
+        self.assertEqual(self.clone_home, config.ROLE_HOME)
+        self.assertEqual(override, codex_provider.codex_home_override())
+
+
+class EphemeralCloneCodexHomeTest(unittest.TestCase):
+    """Требования 1, 4 (01M3M55070T5NJFYM3QQJH4B9V): шов блока эфемерного
+    клона — постановка переопределения `CODEX_HOME` и его снятие.
+
+    Настоящего git здесь нет (`git clone` заводит каталог, остальные
+    команды отвечают нулём, холодный старт заглушен) — тем же приёмом, что
+    `tests/test_canary.py::EphemeralCloneConfigRemapTest`. Настоящий
+    клиент Codex не запускается и связка ключей не спрашивается: узел
+    проверки входа подменён исходом `ok`.
+    """
+
+    ROLE = "analyst"
+
+    def setUp(self):
+        pristine = pristine_config()
+        self.suffixes = {
+            attr: getattr(pristine, attr).relative_to(pristine.ROOT)
+            for attr in canary._CLONE_CONFIG_ATTRS}
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.tdir = Path(tmp.name)
+        self.outer_root = self.tdir / "outer"
+        self.outer_root.mkdir()
+        for attr in canary._CLONE_CONFIG_ATTRS:
+            patcher = mock.patch.object(config, attr,
+                                        self.outer_root / self.suffixes[attr])
+            patcher.start()
+            self.addCleanup(patcher.stop)
+        self.pult_role_home = config.ROLE_HOME
+        self.addCleanup(codex_provider.set_codex_home_override,
+                        codex_provider.codex_home_override())
+        codex_provider.set_codex_home_override(None)
+
+    def auth(self) -> canary.CodexCloneAuth:
+        return canary.CodexCloneAuth(self.ROLE, POINTER_BYTES)
+
+    @contextmanager
+    def fake_clone(self):
+        """`_ephemeral_clone` без настоящего git и с подтверждённым
+        входом."""
+        def fake_run(cmd, **_kw):
+            if list(cmd[:2]) == ["git", "clone"]:
+                Path(cmd[-1]).mkdir(parents=True, exist_ok=True)
+            return subprocess.CompletedProcess(cmd, 0, "", "")
+
+        def logged_in(role):
+            return doctor.Check(doctor.CODEX_AUTH_CHECK, "ok",
+                                f"роль {role}: вход подтверждён")
+
+        with mock.patch.object(canary.tempfile, "mkdtemp",
+                               side_effect=self._mkdtemp), \
+             mock.patch.object(canary.subprocess, "run", side_effect=fake_run), \
+             mock.patch.object(canary.catalog, "cmd_init", lambda: None), \
+             mock.patch.object(doctor, "check_codex_chatgpt_auth", logged_in):
+            yield
+
+    def _mkdtemp(self, prefix: str = "", **_kw) -> str:
+        path = self.tdir / ("origin" if "origin" in prefix else "clone")
+        path.mkdir(parents=True, exist_ok=True)
+        return str(path)
+
+    def test_the_block_overrides_codex_home_with_the_pult_client_directory(self):
+        """Внутри блока с входом Codex переопределение равно каталогу
+        клиента дома роли ПУЛЬТА, а дом роли при этом — клоновский.
+
+        Ловит мутацию: переопределение считается от `config.ROLE_HOME`
+        внутри блока (то есть уже переадресованного) — оно совпало бы с
+        каталогом клиента КЛОНА, механика выглядела бы сделанной и не
+        меняла бы ровным счётом ничего.
+        """
+        with self.fake_clone():
+            with canary._ephemeral_clone(codex_auth=self.auth()):
+                inside = codex_provider.codex_home_override()
+                clone_role_home = config.ROLE_HOME
+
+        self.assertEqual(
+            self.pult_role_home / codex_provider.DEPLOYED_HOME_DIR, inside)
+        self.assertNotEqual(self.pult_role_home, clone_role_home)
+
+    def test_a_block_without_codex_auth_sets_no_override(self):
+        """Без входа Codex переопределения нет и внутри блока.
+
+        Ловит мутацию: переопределение ставится на входе в блок
+        безусловно, не по наличию входа Codex — шаг роли на прогоне без
+        ролей Codex получал бы каталог клиента ПУЛЬТА, то есть прогон
+        перестал бы проверять дом роли того sha, ради которого клон и
+        заводится.
+        """
+        with self.fake_clone():
+            with canary._ephemeral_clone(codex_auth=None):
+                self.assertIsNone(codex_provider.codex_home_override())
+
+    def test_the_override_is_dropped_on_both_exits_from_the_block(self):
+        """Штатный выход и выход ИСКЛЮЧЕНИЕМ одинаково возвращают прежнее
+        значение переопределения.
+
+        Ловит мутацию: снятие написано последней строкой тела блока, а не
+        в `finally` — упавший прогон канарейки (а падает он штатно:
+        `git clone` не создан, checkout не удался) оставлял бы пультовский
+        `CODEX_HOME` в окружении всех последующих боевых шагов процесса.
+        """
+        with self.fake_clone():
+            with canary._ephemeral_clone(codex_auth=self.auth()):
+                pass
+            self.assertIsNone(codex_provider.codex_home_override())
+
+            with self.assertRaises(ValueError):
+                with canary._ephemeral_clone(codex_auth=self.auth()):
+                    raise ValueError("боевой отказ внутри блока клона")
+
+        self.assertIsNone(codex_provider.codex_home_override())
 
 
 #: Метрики задачи, которых достаточно печати `_run_one_task` — фаза 1 в

@@ -36,6 +36,7 @@
 """
 import json
 import re
+from pathlib import Path
 
 from .base import (CliTool, EMPTY_EVENT, HomeReference, RoleExecutorProvider,
                    RunResult, StreamEvent, ToolCall, ToolResult)
@@ -83,6 +84,35 @@ HOME_ENV = "CODEX_HOME"
 ZDOTDIR_ENV = "ZDOTDIR"
 RC_FILE = ".zshenv"
 RC_DIRECTIVE = "unsetopt GLOBAL_RCS"
+
+# Переопределение каталога клиента, который `environment` отдаёт в
+# `HOME_ENV`; `None` — боевое поведение, адрес считается от дома роли
+# (SPEC 01M3M55070T5NJFYM3QQJH4B9V, требование 1).
+#
+# Существует ради ОДНОГО читателя — эфемерного клона канарейки
+# (`canary._ephemeral_clone`). Клиент ищет запись подписочного входа по
+# ПУТИ `CODEX_HOME`: при `cli_auth_credentials_store = keyring` запись
+# ключуется именно им, а прогон уводит `config.ROLE_HOME` в дом роли
+# своего клона — путь клона новый на каждом прогоне, и `codex login`
+# Оператора такой записи не заводил ни разу (отказ предполёта прогона
+# 20260928T135246Z на наборе `m-gpt-6-sol`). Поэтому внутри блока клона
+# шаг получает путь каталога клиента дома роли ПУЛЬТА — тот самый,
+# которым вход и выполнялся.
+#
+# Переопределяется РОВНО одно из трёх имён. `HOME` остаётся домом роли
+# клона — там лежит перенесённый указатель связки ключей
+# (`canary._install_codex_pointer`); `ZDOTDIR` остаётся каталогом клиента
+# дома роли КЛОНА — там лежит развёрнутый из референса клона `RC_FILE`,
+# которым держится паритет PATH проверяемого sha.
+#
+# Модульное состояние, а не аргумент `environment`: читателей окружения
+# шага трое (`runner.role_env`, `doctor.check_codex_chatgpt_auth`,
+# `doctor.codex_isolation_smoke`), сигнатуру им задаёт
+# `providers/base.py`, и провести адрес через всех троих значило бы
+# править модули, которые задача не трогает. Снимает переопределение тот
+# же блок, что ставит, — в своём `finally` (SPEC требование 4: выход из
+# блока клона, включая выход исключением, возвращает прежнее поведение).
+_CODEX_HOME_OVERRIDE = None
 
 # Имена переменных окружения, которыми к шагу мог бы прийти ключ API —
 # перечень того, чего в окружении шага быть НЕ ДОЛЖНО, а не канала
@@ -324,6 +354,25 @@ FAILURE_SIGNATURES = ()
 REQUIRED_VERSION_PATTERNS = ()
 
 
+# --- переопределение `CODEX_HOME` шага (см. `_CODEX_HOME_OVERRIDE`) ------
+
+
+def codex_home_override():
+    """Текущее переопределение `CODEX_HOME` шага; `None` — его нет."""
+    return _CODEX_HOME_OVERRIDE
+
+
+def set_codex_home_override(path):
+    """Ставит (`path` — каталог) либо снимает (`None`) переопределение
+    `CODEX_HOME` шага и отдаёт ПРЕЖНЕЕ значение — чтобы вызывающий
+    восстановил его, а не полагался на «было `None`»: вложенный блок
+    клона иначе снимал бы переопределение внешнего."""
+    global _CODEX_HOME_OVERRIDE
+    previous = _CODEX_HOME_OVERRIDE
+    _CODEX_HOME_OVERRIDE = None if path is None else Path(path)
+    return previous
+
+
 class CodexProvider(RoleExecutorProvider):
     """OpenAI Codex CLI как исполнитель роли."""
 
@@ -420,13 +469,29 @@ class CodexProvider(RoleExecutorProvider):
         заодно PATH, зависящий от того, что Оператор себе вчера дописал.
         В белом списке манифеста имени `ZDOTDIR` нет и не нужно: список
         общий на пульт, а адрес каталога знает только провайдер.
+
+        `CODEX_HOME` — единственное из трёх имён, которое вправе прийти
+        не от дома роли: стоящее переопределение (`_CODEX_HOME_OVERRIDE`,
+        ставит его только блок эфемерного клона канарейки) уводит имя в
+        каталог клиента дома роли ПУЛЬТА, потому что запись подписочного
+        входа ключуется в связке ключей именно ПУТЁМ `CODEX_HOME` (SPEC
+        01M3M55070T5NJFYM3QQJH4B9V, требование 1). Вне блока клона
+        переопределения нет, и все три имени считаются от
+        `config.ROLE_HOME`, как до задачи, — байт-в-байт.
+
+        Создаётся при этом по-прежнему каталог дома роли, а НЕ каталог
+        переопределения. Второй уже существует у вошедшего Оператора, а
+        заводить его пустым нельзя: строка `doctor.check_codex_role_home`
+        зелена, пока каталога нет вовсе, и желтеет на пустом — прогон
+        канарейки красил бы диагностику пульта, Codex не пользующегося.
         """
         from .. import config
         home = config.ROLE_HOME / DEPLOYED_HOME_DIR
         home.mkdir(parents=True, exist_ok=True)
+        client = home if _CODEX_HOME_OVERRIDE is None else _CODEX_HOME_OVERRIDE
         return {
             "HOME": str(config.ROLE_HOME),
-            HOME_ENV: str(home),
+            HOME_ENV: str(client),
             ZDOTDIR_ENV: str(home),
         }
 
