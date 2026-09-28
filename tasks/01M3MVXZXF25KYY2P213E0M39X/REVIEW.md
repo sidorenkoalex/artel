@@ -2,8 +2,8 @@
 task: 01M3MVXZXF25KYY2P213E0M39X
 type: review
 author_role: reviewer
-status: changes_requested
-iteration: 1
+status: approved
+iteration: 2
 schema_version: 5
 ---
 
@@ -11,129 +11,102 @@ schema_version: 5
 
 ## Фаза A — план
 
-- Таблица покрытия полна: требования 1–12 привязаны к шагам 1–5; шаги —
-  единицы размера MR.
-- Подход (помощник в `orchestrator/config.py`, шесть вызовов, явный
-  перечень для CI-джоба и условия полного прогона) не конфликтует с
-  архитектурой. Вставка корня в `sys.path` у `scripts/ci_protected_paths.py`
-  повторяет приём `scripts/guard.py:45`. Джоб CI (`.github/workflows/ci.yml:247+`)
-  и раньше исполнял скрипт из checkout ветки, так что перенос формулы в
-  незащищённый `orchestrator/config.py` нового вектора ослабления не
-  открывает: `scripts/ci_protected_paths.py` защищённым тоже не был.
-- «Влияние на систему» соответствует диффу: 8 файлов, все в зонах SPEC и
-  мандате ANSWER-1. `zone_lock.py`, `fsm_advance.py` и `gates.py` не
-  тронуты.
-- Замечание к плану: шаг 5 и докстринг модуля
-  `tests/test_protected_test_settings.py` сознательно оставляют основные
-  свойства задачи только планке, см. R1-F1.
+- Таблица покрытия полна: требования 1–12 привязаны к шагам 1–5. Шаг 5
+  теперь прямо называет сторожей долгоживущих свойств в `tests/` (R1-F1).
+- «Влияние на систему» совпадает с диффом итерации 2: коммит `ff0bd09a`
+  трогает только `tests/test_protected_test_settings.py` и карту
+  (`git diff --stat 6cb9ae0f..ff0bd09a` без артефактов). Код пульта в
+  итерации 2 не менялся, поэтому вердикт итерации 1 по требованиям 1–11
+  остаётся в силе.
 
 ## Соответствие SPEC
 
 | Требование | Вердикт | Комментарий |
 |---|---|---|
-| 1 | OK | `config.py`: 12 прежних записей на местах, +5 в конце, всего 17 |
-| 2 | OK | ветка маски сверяет `path.rsplit("/",1)[-1]`; `conftest.py.bak` и `tests/test_conftest_role_guard.py` не покрыты |
-| 3 | OK | литералы корневые, префиксная формула; `tests/pytest.ini` не покрыт (AC-3 в планке зелёный) |
-| 4 | OK | помощник в `config.py`, новых импортов в модуле нет |
-| 5 | OK | все шесть мест зовут `config.is_protected_path`, имена и сигнатуры сохранены. Grep `PROTECTED_PATHS` по `orchestrator/` и `scripts/` седьмого места сверки не нашёл |
-| 6 | OK | для записей без маски формула та же. `protected_zones` расходится с `_covered_by` (`zone_lock.py:231`) только на «записи-файле плюс суффикс» |
-| 7 | OK | тот же текст отказа (AC-4/AC-5 планки зелёные) |
-| 8 | OK | `protected_paths_from_source` не менялся; маска — строковый литерал |
-| 9 | OK | AC-8 зелёный |
-| 10 | OK | `_FULL_SUITE_APPENDIX_PREFIXES` пополнен, сверка идёт помощником; для `tests/` и `.github/` вердикт прежний |
-| 11 | OK | `docs/stack.md:524`: строка после таблицы, таблица не тронута |
-| 12 | реализовано не полностью | см. R1-F1: долгоживущие свойства покрыты только планкой |
+| 1 | OK | без изменений с итерации 1; состав теперь сторожит `RealProtectedPathsCompositionTest` |
+| 2 | OK | без изменений с итерации 1 |
+| 3 | OK | без изменений; `tests/pytest.ini` вошёл в `UNPROTECTED_PATHS` сторожей |
+| 4 | OK | без изменений с итерации 1 |
+| 5 | OK | каждое из шести мест на реальном перечне проверяет свой тест в `SixCheckPointsOnRealListTest` |
+| 6 | OK | без изменений с итерации 1 |
+| 7 | OK | без изменений с итерации 1 |
+| 8 | OK | `test_real_config_source_carries_the_entries_for_ci_job` сверяет текст `config.py` через `protected_paths_from_source` |
+| 9 | OK | без изменений с итерации 1 |
+| 10 | OK | `FullSuiteTestSettingsTest` проверяет все семь путей и ложь на `skills/spec-authoring.md` |
+| 11 | OK | без изменений с итерации 1 |
+| 12 | OK | R1-F1 закрыт: долгоживущие свойства сторожит `tests/`, а не только планка |
 
 ## Замечания
 
-- major — `tests/test_protected_test_settings.py:1-9` (плюс отсутствие
-  тестов для `orchestrator/config.py:662-664` и
-  `orchestrator/fsm_merge_gate.py:568-570`). Основные долгоживущие
-  свойства задачи в `tests/` не сторожит никто, только планка задачи
-  (ADR-0018, п. 3). Докстринг модуля прямо говорит, что тесты берут
-  «грани, которые приёмочная планка намеренно не проверяет». Без сторожа
-  остались:
-  (а) наличие `**/conftest.py`, `pyproject.toml`, `pytest.ini`,
-  `setup.cfg`, `tox.ini` в `config.PROTECTED_PATHS` (AC-1);
-  (б) новые записи в `_FULL_SUITE_APPENDIX_PREFIXES`: класс
-  `FullSuiteLegacyPrefixesTest` проверяет только `tests/`, `.github/`
-  (AC-9);
-  (в) шесть мест сверки опознают маску на реальном перечне. Возврат
-  любого из них (`zones._protected_paths_touched`,
-  `fsm_merge_gate._touches_protected_path`,
-  `github_adapter._touched_protected_paths`,
-  `guard._appendix_path_is_protected`, `guard.protected_zones`,
-  `ci_protected_paths.is_violation`) к префиксной формуле молча снимает
-  защиту `tests/sub/conftest.py` (AC-4/5/6/8/10/11).
-  Сценарий: `orchestrator/config.py` не защищён, и следующая задача
-  убирает `"**/conftest.py"` из перечня либо откатывает одно место к
-  своей формуле. CI зелёный, планку смерженной задачи не гоняет ни один
-  джоб, и дыра, против которой задача заведена, открывается снова.
-  Проверено мутантом (см. «Проверено исполнением»): при перечне из 12
-  записей и прежнем условии полного прогона восемь затронутых модулей
-  `tests/` проходят; единственный красный тест — артефакт подмены в
-  памяти.
-  Предложение: добавить в `tests/` (тем же модулем или отдельным) тесты
-  на реальный `config.PROTECTED_PATHS`:
-  - состав: пять новых записей присутствуют, прежние 12 на местах;
-  - `_appendix_needs_full_suite` истинна для `conftest.py`,
-    `tests/sub/conftest.py`, `pyproject.toml`, `pytest.ini`,
-    `setup.cfg`, `tox.ini`;
-  - каждое из шести мест признаёт `tests/sub/conftest.py` и
-    `pyproject.toml` защищёнными и не признаёт `tests/test_store.py`.
-  У каждого теста — заявка «Ловит мутацию: …».
+Blocker и major нет.
 
-- minor — `orchestrator/fsm_merge_gate.py:568`. Имя
-  `_FULL_SUITE_APPENDIX_PREFIXES` теперь несёт маску, а не только
-  префиксы. Имя закреплено SPEC (требование 10), поэтому достаточно
-  комментария, который уже есть. Правка не обязательна.
+- minor (перенесено из итерации 1, в реестр не заводилось) —
+  `orchestrator/fsm_merge_gate.py:568`. Имя `_FULL_SUITE_APPENDIX_PREFIXES`
+  теперь хранит и маску. Имя закреплено SPEC, комментарий на месте, правка
+  не нужна.
+
+Сверка «набор не ослаблен»: 10 удалённых строк диффа приходятся на
+докстринг модуля и две строки импорта, которые заменены расширенными.
+Ни одного `assert` не удалено и не изменено, прежние классы
+(`MaskEntryTest` и следующие) не тронуты.
+
+Заявки «Ловит мутацию» у девяти новых тестов проверены мутантами (см.
+«Проверено исполнением»): каждая заявленная мутация краснит именно свой
+тест.
 
 ## Реестр замечаний
 
 | id | статус | файл/строка | суть | последствие | решение |
 |---|---|---|---|---|---|
-| R1-F1 | fixed | tests/test_protected_test_settings.py:1; orchestrator/config.py:662; orchestrator/fsm_merge_gate.py:568 | состав перечня (5 новых записей), новые записи условия полного прогона и опознание маски шестью местами на реальном перечне в `tests/` не сторожатся — только планкой | удаление записи-маски или откат одного места к префиксной формуле после мержа проходит CI зелёным (подтверждено мутантом) | добавить в `tests/` тесты на реальный перечень: состав, `_appendix_needs_full_suite` на шести новых путях, шесть мест на `tests/sub/conftest.py`/`pyproject.toml`, с заявками «Ловит мутацию». Разработчик (ff0bd09a): в `tests/test_protected_test_settings.py` добавлены `RealProtectedPathsCompositionTest` (состав 12+5 в памяти и в тексте `config.py`), `SixCheckPointsOnRealListTest` (шесть мест на реальном перечне), `FullSuiteTestSettingsTest` (полный прогон на семи путях); мутант «перечень 12 + прежнее условие» краснит 7 тестов |
+| R1-F1 | accepted | tests/test_protected_test_settings.py:1; orchestrator/config.py:662; orchestrator/fsm_merge_gate.py:568 | состав перечня, новые записи условия полного прогона и опознание маски шестью местами на реальном перечне не сторожились в `tests/` | удаление маски или откат места сверки проходил CI зелёным | Исправлено в `ff0bd09a`. Мутанты ревьювера: откат каждого из шести мест к префиксной формуле краснит ровно свой тест `SixCheckPointsOnRealListTest`; прежнее `_FULL_SUITE_APPENDIX_PREFIXES` краснит `test_appendix_to_test_settings_needs_full_suite`; перечень из 12 записей краснит тест состава и пять мест; удаление `"**/conftest.py"` из ТЕКСТА `config.py` убирает маску из разбора CI (`is_violation("tests/sub/conftest.py")` даёт False), поэтому краснеют `test_real_config_source_carries_the_entries_for_ci_job` и CI-тест мест |
 
 ## Вердикт
 
-changes_requested. Исправить R1-F1: перенести сторожа основных свойств
-задачи (AC-1, AC-9, маска в шести местах) в `tests/`. Реализация кода по
-требованиям 1–11 верна, правок кода не требуется.
+approved. R1-F1 закрыт: долгоживущие свойства задачи (AC-1, AC-9, маска
+в шести местах, текст исходника для джоба CI) теперь сторожат тесты в
+`tests/` на реальном перечне. У каждого теста исполнимая заявка «Ловит
+мутацию». Реализация требований 1–11 не менялась и верна (итерация 1).
 
 ## Проверено исполнением
 
-- `python3 -m pytest tasks/01M3MVXZXF25KYY2P213E0M39X/acceptance_tests
-  tasks/01M31DRD81092HB69J0MAKZMGH/acceptance_tests
-  tests/test_protected_test_settings.py tests/test_protected_paths_gate.py
-  tests/test_ci_protected_paths.py tests/test_plan_appendix.py
-  tests/test_zones_gate.py tests/test_github_adapter.py
-  tests/test_stack_parity_table.py tests/test_guard_zones.py
-  tests/test_guard_path_mentions.py -p timeout -o timeout=120`: 172
-  passed, 103 subtests passed.
-- Мутант R1-F1, в процессе, код не правился: `config.PROTECTED_PATHS =
-  PROTECTED_PATHS[:12]`, `fsm_merge_gate._FULL_SUITE_APPENDIX_PREFIXES =
-  ("tests/", ".github/")`, затем unittest по восьми модулям
-  (`test_protected_test_settings`, `test_protected_paths_gate`,
-  `test_ci_protected_paths`, `test_plan_appendix`, `test_zones_gate`,
-  `test_github_adapter`, `test_guard_zones`, `test_stack_parity_table`).
-  Результат: 129 тестов, 1 failure —
-  `test_ci_protected_paths.ProtectedPathsParsingTest.test_real_config_text_yields_the_live_protected_paths`.
-  Этот тест сверяет текст файла с живым значением, и падает он только
-  из-за подмены в памяти. При настоящей правке исходника текст и живое
-  значение совпали бы, и тест был бы зелёным. Значит, удаление записей
-  `tests/` не ловит.
-- `grep -rn PROTECTED_PATHS orchestrator scripts`: мест кода, сверяющих
-  путь с перечнем, кроме шести из требования 5, нет (прочие вхождения —
-  докстринги и комментарии).
-- `.github/workflows/ci.yml:247-272`: джоб `protected-paths` исполняет
-  скрипт из checkout ветки с `fetch-depth: 0`, так что импорт
-  `orchestrator.config` в раннере доступен.
+- `python3 -m pytest tests/test_protected_test_settings.py
+  tasks/01M3MVXZXF25KYY2P213E0M39X/acceptance_tests
+  tests/test_protected_paths_gate.py tests/test_ci_protected_paths.py
+  tests/test_plan_appendix.py tests/test_zones_gate.py
+  tests/test_github_adapter.py tests/test_guard_zones.py
+  tests/test_guard_mutation_claim.py -q -p timeout -o timeout=120` на HEAD
+  `ff0bd09a`: 164 passed, 173 subtests passed.
+- Мутанты в процессе (`mock.patch.object`, код не правился), unittest
+  модуля `tests.test_protected_test_settings`, 16 тестов, базовый прогон
+  без провалов:
+  - `fsm_merge_gate._touches_protected_path` получает префиксную формулу →
+    красный `test_merge_gate_diff_check`;
+  - `zones._protected_paths_touched` получает префиксную формулу →
+    красный `test_zones_gate_check`;
+  - `ci_protected_paths.is_violation` откатывается к `startswith` → красный
+    `test_ci_job_check_on_real_config_source`;
+  - `guard._appendix_path_is_protected` получает префиксную формулу →
+    красный `test_plan_appendix_check`;
+  - `guard.protected_zones` получает префиксную формулу → красный
+    `test_spec_protected_zones_check`;
+  - `_FULL_SUITE_APPENDIX_PREFIXES = ("tests/", ".github/")` → красный
+    `test_appendix_to_test_settings_needs_full_suite`;
+  - `config.PROTECTED_PATHS[:12]` → красные тест состава и пять мест
+    (merge, zones, appendix, spec_zones, draft MR).
+- Мутант текста: из исходника `orchestrator/config.py` в памяти удалён
+  литерал `"**/conftest.py", `, затем прогнан
+  `protected_paths_from_source`. Результат: 16 записей, маски нет,
+  `is_violation("tests/sub/conftest.py", …)` даёт False. Значит,
+  настоящее удаление из исходника покраснит оба теста, которые читают
+  текст `config.py`.
+- `orchestrator/github_adapter.py:73-78`: при `repo=None`
+  `_touched_protected_paths` зовёт `gitcmd.git`, поэтому подмена
+  `gitcmd.git` в `test_draft_mr_highlight_check` проверяет сверку реально.
 
 ## Предложения системе
 
-- Шаблон для классов «планка покрывает AC, `tests/` — только грани»:
-  разработчик сознательно назвал набор `tests/` дополнением к планке, а
-  не сторожем. Стоит явно добавить в `skills/test-authoring.md`, что
-  критерии, задающие постоянные свойства (состав перечней, гейты), обязаны
-  дублироваться в `tests/` (ADR-0018 п. 3), — сейчас это правило живёт
-  только в чек-листе ревьювера.
+- В итерации 1 мутант с подменой перечня в памяти не краснил CI-место:
+  его тест читает текст файла. Тест, который читает исходник, ловит
+  только правку текста, и мутант в памяти такое место не проверяет.
+  Стоит отметить это в `skills/review-checklist.md` рядом с «Проверено
+  исполнением»: мутанты мест, читающих исходник, делать правкой текста.
