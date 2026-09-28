@@ -323,11 +323,9 @@ class PlanAppendix(NamedTuple):
 
 
 def _appendix_path_is_protected(path: str) -> bool:
-    # Та же формула префикса, что `fsm_merge_gate._touches_protected_path`
-    # и `advance_gates.zones._touches_zone`: пути-каталоги списка несут
-    # trailing `/`, пути-файлы сравниваются буквально.
-    return any(path == p or path.startswith(p)
-               for p in config.PROTECTED_PATHS)
+    # Общая формула всех мест сверки с перечнем (SPEC
+    # 01M3MVXZXF25KYY2P213E0M39X, требование 5).
+    return config.is_protected_path(path)
 
 
 def _diff_blocks(body: str) -> tuple[list[str], str]:
@@ -2277,11 +2275,12 @@ def unclassified_paths_refusal(paths) -> str:
 
 def protected_zones(zones) -> list[str]:
     """Элементы зон, попадающие под `config.PROTECTED_PATHS` — с учётом
-    вложенности (`templates/SPEC.md` под `templates/`), тем же
-    `zone_lock._covered_by` (требование 4)."""
-    return sorted(z for z in set(zones)
-                  if any(zone_lock._covered_by(z, protected)
-                         for protected in config.PROTECTED_PATHS))
+    вложенности (`templates/SPEC.md` под `templates/`) и маски
+    (`tests/sub/conftest.py` под `**/conftest.py`), общей формулой
+    `config.is_protected_path` (SPEC 01M3MVXZXF25KYY2P213E0M39X, требования
+    5-6: против прежнего `zone_lock._covered_by` расходится только на
+    «записи-файле плюс суффикс» и только в сторону «защищён»)."""
+    return sorted(z for z in set(zones) if config.is_protected_path(z))
 
 
 def spec_unclassified_paths(text: str, meta: dict,

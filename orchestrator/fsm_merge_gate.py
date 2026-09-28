@@ -30,7 +30,7 @@ from .advance_gates.test_integrity import merge_gate_escalates
 
 
 def _touches_protected_path(path: str) -> bool:
-    return any(path == p or path.startswith(p) for p in config.PROTECTED_PATHS)
+    return config.is_protected_path(path)
 
 
 def _protected_path_refusal_detail(paths: list[str]) -> str:
@@ -560,12 +560,19 @@ def _perform_carpentry_merge(conn, task_id: str, state: str, branch: str,
 # поймает — оно и есть то, чем CI main проверяет. Остальные защищённые
 # пути (skills, templates, docs/adr, docs/invariants.md, конфигурация) на
 # зелёность тестов не влияют — их проверит CI main.
-_FULL_SUITE_APPENDIX_PREFIXES = ("tests/", ".github/")
+# Настройки сбора тестов (`conftest.py` в любом каталоге, корневые
+# `pyproject.toml`/`pytest.ini`/`setup.cfg`/`tox.ini`, SPEC
+# 01M3MVXZXF25KYY2P213E0M39X, требование 10) — тот же класс, что `tests/`:
+# они решают, что и как соберёт сам набор. Записи сверяются общей формулой
+# `config.is_protected_path` (маска `**/` — по имени файла).
+_FULL_SUITE_APPENDIX_PREFIXES = ("tests/", ".github/", "**/conftest.py",
+                                 "pyproject.toml", "pytest.ini", "setup.cfg",
+                                 "tox.ini")
 
 
 def _appendix_needs_full_suite(paths: list[str]) -> bool:
-    return any(p.startswith(prefix) for p in paths
-               for prefix in _FULL_SUITE_APPENDIX_PREFIXES)
+    return any(config.is_protected_path(p, _FULL_SUITE_APPENDIX_PREFIXES)
+               for p in paths)
 
 
 def _plan_appendices_or_refuse(conn, task_id: str, scratch: Path,

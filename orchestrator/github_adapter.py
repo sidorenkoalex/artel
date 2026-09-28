@@ -75,8 +75,7 @@ def _touched_protected_paths(branch: str, base: str,
     if res is None or res.returncode != 0:
         return []
     paths = [p for p in res.stdout.splitlines() if p]
-    return [p for p in paths if any(p == pp or p.startswith(pp)
-                                    for pp in config.PROTECTED_PATHS)]
+    return [p for p in paths if config.is_protected_path(p)]
 
 
 def ensure_draft_mr(conn, task_id: str, t) -> None:

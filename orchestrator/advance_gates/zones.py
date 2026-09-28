@@ -27,19 +27,18 @@ ZONES_MANDATE_WITHOUT_PLAN_REFUSAL_ACTION = (
 
 def _touches_zone(path: str, zones: list[str]) -> bool:
     # «Путь == зона или начинается с неё» — та же формула префикса, что
-    # `fsm_merge_gate._touches_protected_path` для `PROTECTED_PATHS`: зоны-
-    # директории несут trailing `/` (COMMON_ZONES: "tests/"), зоны-файлы —
-    # нет, сравниваются буквально.
+    # `config.is_protected_path` для записей `PROTECTED_PATHS` без маски:
+    # зоны-директории несут trailing `/` (COMMON_ZONES: "tests/"), зоны-
+    # файлы — нет, сравниваются буквально.
     return any(path == z or path.startswith(z) for z in zones)
 
 
 def _protected_paths_touched(files: list[str]) -> list[str]:
-    """Файлы `files`, задевающие `config.PROTECTED_PATHS` — тот же приём
-    префикса, что `_touches_zone` (формула требования 1 SPEC
-    01M27JPEGCGMDDRX5A98QWJW0Z). Порядок — как во входном списке
-    (обычно порядок `git diff --name-only`), без сортировки."""
-    protected = list(config.PROTECTED_PATHS)
-    return [f for f in files if _touches_zone(f, protected)]
+    """Файлы `files`, задевающие `config.PROTECTED_PATHS` — общей формулой
+    `config.is_protected_path` (SPEC 01M3MVXZXF25KYY2P213E0M39X,
+    требование 5). Порядок — как во входном списке (обычно порядок `git
+    diff --name-only`), без сортировки."""
+    return [f for f in files if config.is_protected_path(f)]
 
 
 def _protected_path_refusal_detail(paths: list[str]) -> str:

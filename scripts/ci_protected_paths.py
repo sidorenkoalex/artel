@@ -32,6 +32,18 @@ ADR-0002).
 import ast
 import os
 import subprocess
+import sys
+from pathlib import Path
+
+# Скрипт запускается `python3 scripts/ci_protected_paths.py` — у скрипта в
+# sys.path лежит scripts/, а не корень; тот же приём, что у
+# `scripts/guard.py`. Формула сверки — общая `config.is_protected_path`
+# (SPEC 01M3MVXZXF25KYY2P213E0M39X, требование 4): модуль stdlib-only и не
+# импортирует ни одного модуля пульта, поэтому контракт «без сторонних
+# пакетов» сохраняется. Список при этом по-прежнему берётся из БАЗЫ.
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+from orchestrator import config  # noqa: E402
 
 CONFIG_REL = "orchestrator/config.py"
 
@@ -41,10 +53,12 @@ BASE_ENV = "BASE_SHA"
 
 
 def is_violation(path: str, protected: list) -> bool:
-    """Тот же префиксный смысл сверки, что нёс `grep -E "^($PROTECTED)"` в
-    bash джоба: элемент списка — начало пути, поэтому каталог `skills/`
-    ловит любой файл внутри него, а `gates.yaml` — сам файл."""
-    return any(path.startswith(prefix) for prefix in protected)
+    """Общая формула `config.is_protected_path` над списком `protected`
+    (базы сравнения): элемент без маски — начало пути, как нёс `grep -E
+    "^($PROTECTED)"` в bash джоба (каталог `skills/` ловит любой файл
+    внутри него, `gates.yaml` — сам файл); маска `**/<имя>` — файл с этим
+    именем в любом каталоге."""
+    return config.is_protected_path(path, protected)
 
 
 def protected_paths_from_source(source: str) -> tuple:
