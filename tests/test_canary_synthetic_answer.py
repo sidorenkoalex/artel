@@ -17,8 +17,11 @@ A» — роль читала его как ответ по другой зад�
 тестов здесь текст, который канарейка в этот канал отдаёт, а не
 устройство канала.
 """
+import inspect
+import io
 import re
 import sys
+import tokenize
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -51,6 +54,66 @@ ANCHOR_NAMES = ("_SYNTHETIC_ANSWER_NO_OPERATOR",
 _CROCKFORD = "0123456789ABCDEFGHJKMNPQRSTVWXYZ"
 ID_IN_TEXT = re.compile("(?<![{a}])[{a}]{{{n}}}(?![{a}])".format(
     a=_CROCKFORD, n=len(idgen.new_task_id())))
+
+#: Заголовок вида `## <название>`, названный внутри произвольного текста:
+#: `###` и глубже — не он, название обрывается на конце строки, обратной
+#: кавычке или кавычке-ёлочке.
+_HEADING_IN_TEXT = re.compile(r"(?<!#)##(?!#)[ \t]*([^\n`»\"']+)")
+
+
+def _template_headings() -> set:
+    """Названия разделов `## <название>` всех шаблонов `templates/*.md`.
+
+    Шаблоны читаются из РЕПОЗИТОРИЯ, а не из `config.ROOT`: песочница
+    уводит корень во временный каталог, где `templates/` нет вовсе.
+    """
+    out = set()
+    for path in sorted((REPO_ROOT / "templates").glob("*.md")):
+        for line in path.read_text(encoding="utf-8").splitlines():
+            if line.startswith("## ") and not line.startswith("### "):
+                out.add(line[3:].strip())
+    return out
+
+
+def _headings_named_in(text: str) -> list:
+    """Названия разделов вида `## <название>`, названные внутри `text`."""
+    names = []
+    for raw in _HEADING_IN_TEXT.findall(text):
+        name = raw.strip().strip("`»«\"'.,;:!?()")
+        if name:
+            names.append(name)
+    return names
+
+
+def _heading_exists(name: str, headings: set) -> bool:
+    """Название из текста существует заголовком шаблона: само либо своим
+    начальным словом/словами. Текст называет раздел живой фразой («##
+    Риски своего артефакта»), а проверяемое свойство — существование
+    НАЗВАННОГО раздела, поэтому сверяются начальные словосочетания, а не
+    одна только полная фраза."""
+    words = name.split()
+    return any(" ".join(words[:count]) in headings
+               for count in range(len(words), 0, -1))
+
+
+def _docs_and_comments(func) -> str:
+    """Докстринг + комментарии тела функции, БЕЗ строковых литералов: сам
+    текст ответа — константа-литерал, и требование 3 различает «номер в
+    пояснении для читателя кода» от «номер в тексте, который читает
+    роль». Форма пояснения (докстринг ИЛИ комментарий) требованием не
+    закреплена — читаем обе."""
+    parts = [inspect.getdoc(func) or ""]
+    try:
+        source = inspect.getsource(func)
+    except OSError:  # pragma: no cover — исходник функции всегда на диске
+        return parts[0]
+    try:
+        for tok in tokenize.generate_tokens(io.StringIO(source).readline):
+            if tok.type == tokenize.COMMENT:
+                parts.append(tok.string)
+    except (tokenize.TokenError, IndentationError):  # pragma: no cover
+        pass
+    return "\n".join(parts)
 
 
 class _CanaryEscalatedTest(SchemaConnTmpRootTest):
@@ -172,27 +235,36 @@ class SyntheticAnswerTextTest(_CanaryEscalatedTest):
                              f"якорь {name} вложен в другой якорь")
 
     def test_assumption_addressed_to_existing_template_section(self):
-        """Текст называет раздел `## Риски` — и раздел с таким названием
-        существует заголовком шаблона `templates/*.md`.
+        """Текст называет раздел `## Риски` — и КАЖДЫЙ названный им
+        раздел `## <название>` существует заголовком хотя бы одного
+        шаблона `templates/*.md`.
+
+        Вторая половина — обобщение первой, и живёт она здесь, а не
+        только в планке задачи: планку после мержа не гоняет ни один джоб
+        `.github/workflows/`, а править её нельзя (лок приёмочных тестов),
+        то есть сторожем следующей правки текста она быть не может
+        (REVIEW.md итерации 1, R1-F1).
 
         Ловит мутацию: адрес допущения убрали («запиши в артефакт» без
-        места) или заменили разделом, которого ни один шаблон не несёт
-        («## Допущения») — роль получает недостижимый адрес, а
-        `templates/` — защищённый путь, которым его не добавить.
-
-        Шаблоны читаются из РЕПОЗИТОРИЯ, а не из `config.ROOT`: песочница
-        уводит корень во временный каталог, где `templates/` нет вовсе.
+        места) — падает первая половина; адрес заменили разделом,
+        которого ни один шаблон не несёт («## Допущения», «## Открытые
+        вопросы») — роль получает недостижимый адрес, `templates/` —
+        защищённый путь, которым его не добавить, и падает вторая.
         """
         self.assertIn("## Риски", self.text,
                       f"текст не называет раздел `## Риски`:\n{self.text}")
-        headings = set()
-        for path in sorted((REPO_ROOT / "templates").glob("*.md")):
-            for line in path.read_text(encoding="utf-8").splitlines():
-                if line.startswith("## "):
-                    headings.add(line[3:].strip())
+        headings = _template_headings()
         self.assertIn("Риски", headings,
                       "ни один шаблон `templates/*.md` не несёт раздела "
                       "`## Риски` — адрес допущения в тексте недостижим")
+        named = _headings_named_in(self.text)
+        self.assertTrue(named, f"текст не называет ни одного раздела `## …`:"
+                               f"\n{self.text}")
+        unknown = [name for name in named
+                   if not _heading_exists(name, headings)]
+        self.assertEqual([], unknown,
+                         f"текст называет разделы, которых нет ни в одном "
+                         f"шаблоне templates/*.md: {unknown}")
 
     def test_text_carries_no_operator_mandate_lines(self):
         """Текст не несёт ни одной строки мандата Оператора: тот же
@@ -208,18 +280,22 @@ class SyntheticAnswerTextTest(_CanaryEscalatedTest):
             self.assertNotIn(marker, self.text,
                              f"текст ответа несёт строку мандата {marker!r}")
 
-    def test_origin_spec_lives_in_the_docstring_not_in_the_text(self):
-        """Происхождение механизма названо докстрингом функции, а текст,
-        который читает роль, этого номера не несёт.
+    def test_origin_spec_lives_in_the_code_comments_not_in_the_text(self):
+        """Происхождение механизма названо пояснением для читателя кода —
+        докстрингом функции ИЛИ комментарием её тела (требование 3
+        допускает обе формы), — а текст, который читает роль, этого номера
+        не несёт.
 
         Ловит мутацию: номер SPEC вычистили из кода вместе с текстом —
         читатель `canary.py` теряет происхождение механизма (падает
-        первая половина); номер вернули в текст вместо докстринга —
-        падает вторая.
+        первая половина); номер вернули в текст вместо пояснения — падает
+        вторая. Перенос абзаца о происхождении из докстринга в комментарий
+        тела свойство не ломает и тест не краснит (REVIEW.md итерации 1,
+        R1-F3).
         """
-        doc = canary._pass_escalated_with_synthetic_answer.__doc__ or ""
-        self.assertIn("01M1NEEWH5K1XPFRDGRMPYSBXJ", doc)
-        self.assertIn("требование 6", doc)
+        docs = _docs_and_comments(canary._pass_escalated_with_synthetic_answer)
+        self.assertIn("01M1NEEWH5K1XPFRDGRMPYSBXJ", docs)
+        self.assertIn("требование 6", docs)
         self.assertNotIn("01M1NEEWH5K1XPFRDGRMPYSBXJ", self.text)
 
 
