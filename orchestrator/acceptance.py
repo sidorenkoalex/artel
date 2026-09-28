@@ -120,7 +120,16 @@ def run_digest(output: str) -> str:
     return _bounded("\n".join(lines) if lines else output)
 
 
-def run(tdir: Path, cwd: Path | None = None) -> tuple[bool, str]:
+def _run_targets(tests_dir: Path, extra: list[str]) -> list[str]:
+    """Пути одного вызова pytest: каталог планки (если есть) и долгоживущие
+    файлы `tests/` кодовой ветки задачи (`extra`, пути от `cwd` прогона,
+    SPEC 01M3N3Z1ZHTGMSQZ4SNRYNJ2SJ, требования 3, 9) — обе группы в одном
+    прогоне, второго не заводится."""
+    return ([str(tests_dir)] if tests_dir.is_dir() else []) + list(extra)
+
+
+def run(tdir: Path, cwd: Path | None = None,
+        extra: list[str] = ()) -> tuple[bool, str]:
     """(зелёно, хвост вывода) — детерминированный прогон pytest'ом (SPEC
     01M1TKP6AAY4W8GDGZNA9R0JZT, требование 1) с `cwd`, равным
     рабочему каталогу кода задачи (SPEC 01M1RNZ6V7TTTTYAHBMF8JBQQS,
@@ -161,15 +170,21 @@ def run(tdir: Path, cwd: Path | None = None) -> tuple[bool, str]:
     строкой в начале хвоста вывода (SPEC требование 4, AC-6) — иначе
     разбор класса дефекта регрессии №14 снова требовал бы ручной раскопки
     кода вместо чтения журнала.
+
+    `extra` — долгоживущие файлы `tests/` задачи (`_run_targets`): они
+    исполняются тем же вызовом pytest, и при пустой планке тоже.
     """
     tests_dir = tdir / "acceptance_tests"
-    if not tests_dir.is_dir():
+    targets = _run_targets(tests_dir, extra)
+    if not targets:
         return True, "acceptance_tests/ нет — приёмочные тесты не заведены"
     run_cwd = cwd if cwd is not None else config.ROOT
     location_note = f"планка: {tests_dir}, cwd: {run_cwd}"
+    if extra:
+        location_note += f", долгоживущие файлы: {', '.join(extra)}"
     try:
         res = subprocess.run(
-            _pytest_command(str(tests_dir)),
+            _pytest_command(*targets),
             cwd=run_cwd, capture_output=True, text=True,
             timeout=config.ACCEPTANCE_TIMEOUT_SEC)
     except subprocess.TimeoutExpired as exc:
@@ -181,7 +196,8 @@ def run(tdir: Path, cwd: Path | None = None) -> tuple[bool, str]:
     return res.returncode == 0, f"{location_note}\n{tail}"
 
 
-def collect(tdir: Path, cwd: Path | None = None) -> tuple[bool, str]:
+def collect(tdir: Path, cwd: Path | None = None,
+            extra: list[str] = ()) -> tuple[bool, str]:
     """(собралось, хвост вывода) — сухой сбор планки `pytest
     --collect-only -q` (SPEC 01M2ARQRDV4YY9TVPHXN2E7136, требование 1,
     AC-1/AC-2/AC-3): та же команда, тот же интерпретатор и те же флаги
@@ -207,15 +223,22 @@ def collect(tdir: Path, cwd: Path | None = None) -> tuple[bool, str]:
     Каталога `acceptance_tests/` нет вовсе — тот же вырожденный случай,
     что и у `run()`: собирать нечего, `(True, ...)`, переход не
     блокируется этой функцией.
+
+    `extra` — тот же контракт, что у `run()`: долгоживущие файлы `tests/`
+    собираются тем же вызовом из `cwd` — рабочей копии кодовой ветки
+    (SPEC 01M3N3Z1ZHTGMSQZ4SNRYNJ2SJ, требование 3).
     """
     tests_dir = tdir / "acceptance_tests"
-    if not tests_dir.is_dir():
+    targets = _run_targets(tests_dir, extra)
+    if not targets:
         return True, "acceptance_tests/ нет — приёмочные тесты не заведены"
     run_cwd = cwd if cwd is not None else config.ROOT
     location_note = f"планка: {tests_dir}, cwd: {run_cwd}"
+    if extra:
+        location_note += f", долгоживущие файлы: {', '.join(extra)}"
     try:
         res = subprocess.run(
-            _pytest_command(str(tests_dir), "--collect-only", "-q"),
+            _pytest_command(*targets, "--collect-only", "-q"),
             cwd=run_cwd, capture_output=True, text=True,
             timeout=config.ACCEPTANCE_TIMEOUT_SEC)
     except subprocess.TimeoutExpired as exc:
@@ -471,7 +494,8 @@ def full_suite(root: Path, task_id: str) -> FullSuiteRun:
                         _full_suite_detail(outcome, digest, log_path))
 
 
-def summary(tdir: Path, branch: str | None = None) -> str:
+def summary(tdir: Path, branch: str | None = None,
+            long_lived: list[Path] | None = None) -> str:
     """Сводка в карточку гейта acceptance: пройдено/manual/skip/ci.
 
     Число тестов — статический счёт (`guard.count_test_methods`), не
@@ -489,9 +513,14 @@ def summary(tdir: Path, branch: str | None = None) -> str:
     сегодня. `None` (вызывающий не назвал ветку) — критерии `ci`
     называются без опроса CI: сводка не имеет права молчать про их
     существование только потому, что вызывающий не передал `branch`.
+
+    `long_lived` — файлы долгоживущей группы задачи в `tests/`, исполненные
+    тем же прогоном (SPEC 01M3N3Z1ZHTGMSQZ4SNRYNJ2SJ, требование 9): итог
+    называет число тестов обеих групп. `None` — у задачи нет перечня, строки
+    групп нет, прежний вид сводки.
     """
     tests_dir = tdir / "acceptance_tests"
-    if not tests_dir.is_dir():
+    if not tests_dir.is_dir() and long_lived is None:
         return "acceptance_tests/ нет — приёмочные тесты не заведены"
     _, markers = guard.scan_acceptance_tests(tdir)
     manual = sorted(n for n, (kind, _) in markers.items() if kind == "manual")
@@ -500,6 +529,17 @@ def summary(tdir: Path, branch: str | None = None) -> str:
     count = guard.count_test_methods(tdir)
     lines = [f"приёмочные тесты: {count} тест(ов), "
              f"{len(manual)} manual, {len(skip)} skip, {len(ci_ns)} ci"]
+    if long_lived is not None:
+        long_count = 0
+        for path in long_lived:
+            try:
+                long_count += len(guard.TEST_METHOD.findall(
+                    path.read_text(encoding="utf-8")))
+            except (OSError, UnicodeDecodeError):
+                continue
+        lines.append(f"одним прогоном: разовая группа — {count} тест(ов), "
+                     f"долгоживущая группа — {long_count} тест(ов) в "
+                     f"{len(long_lived)} файл(ах) tests/")
     if manual:
         lines.append("manual-критерии (проверяет Оператор на приёмке):")
         for n in manual:

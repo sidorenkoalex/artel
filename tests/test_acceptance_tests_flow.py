@@ -1163,13 +1163,12 @@ class LockTest(unittest.TestCase):
                                            "Лок приёмочных тестов")
         # Код задачи имитируется явно (см. докстринг класса) — ветка,
         # которую в реальном сценарии первым коммитом заводит роль
-        # разработчика (AC-5).
+        # разработчика (AC-5). Сам коммит кода — после выхода из
+        # `tests_writing` (`commit_feature_code`): до него кодовая ветка
+        # несёт только долгоживущие файлы test_author, иначе выход
+        # отказывает (SPEC 01M3N3Z1ZHTGMSQZ4SNRYNJ2SJ, требование 2).
         self.code_branch = self.row()["branch"]
-        self.git("checkout", "-q", "-b", self.code_branch)
-        (self.root / "feature.txt").write_text("код фичи\n", encoding="utf-8")
-        self.git("add", "feature.txt")
-        self.git("commit", "-q", "-m", f"{self.TASK}: код фичи")
-        self.git("checkout", "-q", config.MAIN_BRANCH)
+        self.git("branch", self.code_branch)
 
         self.branch = artifact_branch.branch_name(self.TASK)
         self.tdir = self.root / "tasks" / self.TASK
@@ -1237,11 +1236,20 @@ class LockTest(unittest.TestCase):
         self.assertEqual(self.state(), "in_dev")
         locked = self.row()["tests_locked_sha"]
         self.assertEqual(locked, self.head(), "лок берёт sha этого коммита")
+        self.commit_feature_code()
         self.on_artifact_branch()
         (self.tdir / "PLAN.md").write_text(
             PLAN_MD.format(task=self.TASK), encoding="utf-8")
         self.commit_task_dir("PLAN")
         return locked
+
+    def commit_feature_code(self) -> None:
+        """Код разработчика в кодовой ветке — после лока, как в конвейере."""
+        self.git("checkout", "-q", self.code_branch)
+        (self.root / "feature.txt").write_text("код фичи\n", encoding="utf-8")
+        self.git("add", "feature.txt")
+        self.git("commit", "-q", "-m", f"{self.TASK}: код фичи")
+        self.git("checkout", "-q", config.MAIN_BRANCH)
 
     def test_edit_after_lock_blocks_in_dev_to_review(self):
         self.enter_in_dev()

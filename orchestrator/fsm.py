@@ -419,8 +419,9 @@ def _answer_baseline_or_refuse(conn, task_id: str, tdir: Path) -> int | None:
     return count
 
 
-def _tests_writing_ac_state(conn, task_id: str, branch: str,
-                            tdir: Path) -> tuple[set, dict, list[str]] | None:
+def _tests_writing_ac_state(conn, task_id: str, branch: str, tdir: Path,
+                            long_lived_sources: list[str] = ()
+                            ) -> tuple[set, dict, list[str]] | None:
     """(тестировано, пометки, ошибки трассируемости) на выходе из
     `tests_writing`; `None` — переход отклонён (уже журналирован).
 
@@ -442,10 +443,18 @@ def _tests_writing_ac_state(conn, task_id: str, branch: str,
     это состояние уже прошло, сюда больше не попадает (обратная
     совместимость T064, требование 4, — структурно, через
     однонаправленность FSM).
+
+    `long_lived_sources` — тексты долгоживущих файлов `tests/` кодовой
+    ветки ЭТОЙ задачи (файлы с её префиксом, SPEC 01M3N3Z1ZHTGMSQZ4SNRYNJ2SJ,
+    требование 5, Р3): их методы `test_ac<n>_…` покрывают критерии; прочие
+    файлы `tests/`, в том числе одноимённые методы смерженных задач, — нет.
     """
+    extra_tested, extra_markers = guard.scan_ac_content(list(long_lived_sources))
     if not gitcmd.on_foreign_branch(branch):
         tested, markers = guard.scan_acceptance_tests(tdir)
-        errors = guard.acceptance_traceability_errors(tdir)
+        tested = tested | extra_tested
+        markers = {**extra_markers, **markers}
+        errors = guard.acceptance_traceability_errors(tdir, long_lived_sources)
         errors = errors + guard.scan_redness_markers(tdir)
         errors = errors + guard.scan_id_format_samples(tdir)
         return tested, markers, errors
@@ -478,6 +487,8 @@ def _tests_writing_ac_state(conn, task_id: str, branch: str,
             redness_files.append((p, text))
     meta = yamlmini.frontmatter(spec_text) or {}
     tested, markers = guard.scan_ac_content(sources)
+    tested = tested | extra_tested
+    markers = {**extra_markers, **markers}
     errors = guard.traceability_errors_from_content(spec_text, meta, tested,
                                                      markers)
     errors = errors + guard.redness_marker_errors_from_files(redness_files)
@@ -912,6 +923,12 @@ def _approve_acceptance(conn, task_id: str, t, state: str, sid: str,
     # merge_gate срез, который мог устареть, пока задача ждала приёмки.
     if _pull_main_or_escalate(conn, task_id, t, state) in (
             "escalated", "refused"):
+        return
+    # Сверка перечня долгоживущих файлов (SPEC 01M3N3Z1ZHTGMSQZ4SNRYNJ2SJ,
+    # требование 7) — после подтяжки, до полного набора. Импорт внутри
+    # функции: модуль гейтов сам импортирует fsm (см. `_cmd_advance`).
+    from .advance_gates.acceptance import _long_lived_manifest_refuses
+    if _long_lived_manifest_refuses(conn, task_id):
         return
     # Полный набор tests/ — ПОСЛЕ подтяжки main (SPEC
     # 01M3FQ3JVC3DGGM33XCX8TC7ME, требование 6): гонять его до неё значило

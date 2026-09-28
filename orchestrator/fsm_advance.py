@@ -19,7 +19,9 @@ from scripts import guard
 from . import (acceptance, artifact_source, artifacts, budget, ci, config,
               fsm, fsm_autogate, gitcmd, store, workspace, yamlmini)
 from .advance_gates._base import GateRefusal, _run_gates
-from .advance_gates.acceptance import _acceptance_lock_refuses, _acceptance_run_refuses
+from .advance_gates.acceptance import (_acceptance_lock_refuses,
+                                       _acceptance_run_refuses,
+                                       _long_lived_manifest_refuses)
 from .advance_gates.capacity import (CAPACITY_GATE_REASON, _EMPTY_DIFF_TEXT,
                                      _capacity_gate, _capacity_gate_refuses)
 from .advance_gates.plan_appendix import (
@@ -39,7 +41,10 @@ from .advance_gates.test_integrity import (TEST_INTEGRITY_REFUSAL_ACTION,
 from .advance_gates.tests_writing import (_freshness_refuses,
                                           _origin_push_gate, _registry_gate,
                                           _tests_writing_acceptance_dir,
+                                          _tests_writing_code_diff,
                                           _tests_writing_dry_collect_gate,
+                                          _tests_writing_long_lived_gate,
+                                          _tests_writing_manifest_gate,
                                           _tests_writing_stray_plank_files_gate,
                                           _tests_writing_test_groups_gate)
 from .advance_gates.zones import (_ZONES_MANDATE_MARKER,
@@ -265,6 +270,12 @@ def review(conn, task_id: str, t, tdir, target: str, state: str) -> bool:
         if _run_gates(conn, task_id,
                       [lambda: _review_escalation_sha_gate(conn, task_id, t)]):
             return False
+        # Сверка перечня (SPEC 01M3N3Z1ZHTGMSQZ4SNRYNJ2SJ, требование 7) —
+        # до учёта вердикта (`reviewed_iter`): отказ не сжигает вердикт, и
+        # повторный `advance` после починки видит его свежим. Возврат в
+        # `in_dev` (`changes_requested`) не сверяется (Р4).
+        if _long_lived_manifest_refuses(conn, task_id):
+            return False
 
     iteration = artifacts.fresh_verdict_iteration(meta, t["reviewed_iter"])
     store.update_task(conn, task_id, reviewed_iter=iteration)
@@ -297,6 +308,11 @@ def verifying(conn, task_id: str, t, tdir, target: str, state: str) -> bool:
                   fsm.VERIFYING_STATUS_ACTION, note)
     if outcome == ci.VERIFYING_GREEN:
         print(f"[{task_id}] {note}")
+        # Сверка перечня (SPEC 01M3N3Z1ZHTGMSQZ4SNRYNJ2SJ, требование 7) —
+        # только перед самим переходом: ожидание CI и его потолок идут
+        # прежним путём.
+        if _long_lived_manifest_refuses(conn, task_id):
+            return False
         store.set_state(conn, task_id, "review", "fsm",
                         expected_state=state, detail=note)
         return False
@@ -326,7 +342,21 @@ def tests_writing(conn, task_id: str, t, tdir, target: str, state: str) -> bool:
     # пульта для внешнего target, не кодовая ветка целевого (та в
     # `config.ROOT` не существует вовсе).
     branch, foreign = artifact_source.resolve(conn, task_id)
-    result = fsm._tests_writing_ac_state(conn, task_id, branch, tdir)
+    # Долгоживущие файлы `tests/` кодовой ветки (SPEC
+    # 01M3N3Z1ZHTGMSQZ4SNRYNJ2SJ, требования 2-6) — только target `artel`
+    # (требование 11); задача со `skip_tests` в `tests_writing` не входит.
+    # Кодовой ветки ещё нет в git — долгоживущих файлов в ней быть не может,
+    # сверять и фиксировать нечего: тот же вырожденный случай «ветка ещё не
+    # создана», что у ветко-корректных чтений (инвариант 28).
+    code_diff = long_lived = None
+    if target == config.DEFAULT_TARGET and gitcmd.branch_exists(t["branch"]):
+        code_diff, long_lived, refusal = _tests_writing_code_diff(
+            task_id, t["branch"])
+        if _run_gates(conn, task_id, [lambda: refusal]):
+            return False
+    result = fsm._tests_writing_ac_state(
+        conn, task_id, branch, tdir,
+        long_lived_sources=list((long_lived or {}).values()))
     if result is None:
         return False
     tested, markers, errors = result
@@ -364,11 +394,17 @@ def tests_writing(conn, task_id: str, t, tdir, target: str, state: str) -> bool:
         return False
     acc_tdir, run_cwd = _tests_writing_acceptance_dir(
         task_id, tdir, target, branch, t["branch"])
-    if _run_gates(conn, task_id,
-                  [lambda: _tests_writing_test_groups_gate(
-                      acc_tdir, task_id, target),
-                   lambda: _tests_writing_dry_collect_gate(
-                      acc_tdir, run_cwd, task_id)]):
+    long_lived_paths = sorted(long_lived or {})
+    gates = [lambda: _tests_writing_test_groups_gate(acc_tdir, task_id, target)]
+    if code_diff is not None:
+        gates.append(lambda: _tests_writing_long_lived_gate(
+            task_id, t["branch"], code_diff, long_lived))
+    gates.append(lambda: _tests_writing_dry_collect_gate(
+        acc_tdir, run_cwd, task_id, extra=long_lived_paths))
+    if code_diff is not None:
+        gates.append(lambda: _tests_writing_manifest_gate(
+            conn, task_id, t["branch"], long_lived_paths))
+    if _run_gates(conn, task_id, gates):
         return False
     store.set_state(conn, task_id, "in_dev", "fsm", expected_state=state,
                     detail="приёмочные тесты готовы — трассируемость AC "
@@ -504,6 +540,10 @@ def in_dev(conn, task_id: str, t, tdir, target: str, state: str) -> bool:
     # Сверка свежести ветки до гейта (SPEC T051, требования 1, 4).
     if fsm._pull_main_or_escalate(conn, task_id, t, state) in (
             "escalated", "refused"):
+        return False
+    # Сверка перечня долгоживущих файлов (SPEC 01M3N3Z1ZHTGMSQZ4SNRYNJ2SJ,
+    # требование 7) — после подтяжки: сверяется голова, которая уйдёт в CI.
+    if _long_lived_manifest_refuses(conn, task_id):
         return False
     # Порядок и обёртки — прежние, зафиксированные R2 (01M1TKNXX5YN5KT4WHG4T
     # 44JWV, AC-5/AC-6): каждый гейт вызывается через свою «сохранённую
