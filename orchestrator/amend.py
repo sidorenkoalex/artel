@@ -33,8 +33,8 @@ from pathlib import Path
 
 from scripts import guard
 
-from . import (acceptance, alerts, artifact_branch, gitcmd, lease, store,
-              workspace, yamlmini)
+from . import (acceptance, alerts, artifact_branch, config, gitcmd, lease,
+               store, workspace, yamlmini)
 
 AMEND_ACTION = "правка планки"
 DEVALUATION_ALERT_SOURCE = "amend_tests.window_threshold"
@@ -160,6 +160,37 @@ def _refuse_traceability(conn, task_id: str, errors: list[str]) -> None:
                  f"трассируемость AC нарушена: {reason}")
     sys.exit(f"[{task_id}] amend-tests: отказ — трассируемость AC нарушена: "
              f"{reason}")
+
+
+def _test_files(snapshot: dict[str, str]) -> list[tuple[str, str]]:
+    return sorted((rel, text) for rel, text in snapshot.items()
+                  if Path(rel).name.startswith("test_"))
+
+
+def _group_line_errors(t, rel_tests_dir: str,
+                       files: list[tuple[str, str]]) -> list[str]:
+    """Ошибки строки группы правки (SPEC 01M3N0BWYQ9KHVN41Z4G72706R,
+    требования 1-2, 7): только target `config.DEFAULT_TARGET` и только
+    планка, зафиксированная после появления правила — её `test_*.py` на
+    `tests_locked_sha` несут строку группы (`guard.plank_has_group_lines`;
+    планка, зафиксированная раньше, строк группы не несёт и не
+    проверяется). Лок не читается — сверять не с чем, правку не
+    проверяем: тот же исход, что у планки до правила."""
+    if t["target"] != config.DEFAULT_TARGET:
+        return []
+    locked = _branch_tests_snapshot(t["tests_locked_sha"], rel_tests_dir)
+    if locked is None or not guard.plank_has_group_lines(_test_files(locked)):
+        return []
+    return guard.group_line_errors_from_files(files)
+
+
+def _refuse_group_lines(conn, task_id: str, errors: list[str]) -> None:
+    """Отказ по строке группы — тем же приёмом, что `_refuse_traceability`
+    (журнал актором `operator`, не `AMEND_ACTION`)."""
+    reason = "; ".join(errors)
+    store.journal(conn, task_id, "operator", "amend-tests отклонён",
+                 f"строка группы: {reason}")
+    sys.exit(f"[{task_id}] amend-tests: отказ — строка группы: {reason}")
 
 
 def _tests_snapshot(wt_path: Path, rel_tests_dir: str) -> dict[str, bytes] | None:
@@ -313,6 +344,10 @@ def _cmd_amend_tests(conn, task_id: str, reason: str | None) -> None:
             created_spec.unlink(missing_ok=True)
     if trace_errors:
         _refuse_traceability(conn, task_id, trace_errors)
+    group_errors = _group_line_errors(t, rel_tests_dir,
+                                      guard.acceptance_test_files(tdir))
+    if group_errors:
+        _refuse_group_lines(conn, task_id, group_errors)
 
     green, tail = acceptance.run(tdir)
     if not green:
@@ -445,6 +480,10 @@ def _cmd_amend_tests_from_branch(conn, task_id: str, reason: str | None) -> None
                  f"tasks/{task_id}/SPEC.md")
     if trace_errors:
         _refuse_traceability(conn, task_id, trace_errors)
+    group_errors = _group_line_errors(t, rel_tests_dir,
+                                      _test_files(new_snapshot))
+    if group_errors:
+        _refuse_group_lines(conn, task_id, group_errors)
 
     changed_files = sorted(
         p for p in set(old_snapshot) | set(new_snapshot)

@@ -575,7 +575,8 @@ class AmendEventsInWindowTest(TmpRootTest):
 # AC-1/AC-2 (тот же довод, что AC_TEST_AMENDED_V1 в
 # tasks/01M1HNNHDMP2C1AJTH5QF1BTN2/acceptance_tests/_sandbox.py).
 AC_TEST_AMENDED = '''"""Красен до реализации: фикстура покрывает оба критерия
-SPEC_V2 песочницы (правка Оператора: добавлена вторая проверка AC-1)."""
+SPEC_V2 песочницы (правка Оператора: добавлена вторая проверка AC-1).
+Группа: разовый"""
 import unittest
 
 
@@ -689,7 +690,8 @@ class AmendThenReviewGateTest(RealGitSandbox):
 AC_TEST_EXTRA_UNCHANGED = '''"""Зелёный с рождения: файл-контроль amend --from-branch, остаётся
 побайтно неизменным между локом и последующей правкой — не должен
 попасть в список отличающихся файлов журнала (SPEC
-01M287TPG0HAVXS8CHBCY679WN, требование 3)."""
+01M287TPG0HAVXS8CHBCY679WN, требование 3).
+Группа: разовый"""
 import unittest
 
 
@@ -765,6 +767,95 @@ class AmendFromBranchDivergenceDetailTest(RealGitSandbox):
         self.assertIn("test_second.py", detail)
         self.assertNotIn("test_extra.py", detail,
                          "неизменённый файл не должен попасть в список отличий")
+
+
+AC_TEST_AMENDED_NO_GROUP = AC_TEST_AMENDED.replace("\nГруппа: разовый", "")
+
+
+class AmendGroupLineRefusalTest(RealGitSandbox):
+    """Отказ `amend-tests` по строке группы (SPEC 01M3N0BWYQ9KHVN41Z4G72706R,
+    требование 2, AC-4) сквозным путём через `amend.cmd_amend_tests` — оба
+    источника правки: worktree и `--from-branch`. Лок фиксируется
+    выходом из `tests_writing` с планкой, несущей строку группы, — то
+    есть планка «после правила»; правка без строки группы обязана
+    получить отказ с именем файла, запись журнала и неподвижный лок."""
+
+    def setUp(self):
+        super().setUp()
+        self.add_synced_origin()
+        capture(catalog.cmd_init)
+        _, self.TASK = capture_new_task_id(
+            catalog.cmd_new, "amend-tests, строка группы")
+        self.conn = store.db()
+        self.artifact_commit(
+            {f"tasks/{self.TASK}/SPEC.md": SPEC_V2.format(task=self.TASK, extra="")},
+            "SPEC")
+        capture(fsm.cmd_advance, self.TASK)  # spec_writing -> spec_gate
+        sha = gitcmd.head_sha(config.PROJECTS / config.DEFAULT_TARGET)
+        capture(fsm.cmd_approve, self.TASK, sha)  # -> tests_writing
+        self.artifact_commit(
+            {f"tasks/{self.TASK}/acceptance_tests/test_ac.py": AC_TEST_BOTH_COVERED},
+            "acceptance_tests")
+        capture(fsm.cmd_advance, self.TASK)  # tests_writing -> in_dev
+        self.assertEqual(self.row()["state"], "in_dev")
+        self.locked = self.row()["tests_locked_sha"]
+        self.assertTrue(self.locked)
+
+    def row(self):
+        return store.db().execute(
+            "SELECT * FROM tasks WHERE id=?", (self.TASK,)).fetchone()
+
+    def artifact_commit(self, files: dict, message: str) -> str:
+        sha = artifact_branch.commit_files(
+            self.TASK, files, f"{self.TASK}: {message}")
+        self.assertTrue(sha, f"коммит {message!r} не удался")
+        return sha
+
+    def assert_refused(self, amend_call) -> None:
+        with self.assertRaises(SystemExit) as ctx:
+            amend_call()
+        message = str(ctx.exception.code)
+        self.assertIn("строка группы", message)
+        self.assertIn("test_ac.py", message)
+        refusals = [s["detail"] for s in store.task_steps(self.conn, self.TASK)
+                    if s["action"] == "amend-tests отклонён"]
+        self.assertTrue(refusals, "нет записи журнала «amend-tests отклонён»")
+        self.assertIn("test_ac.py", refusals[-1])
+        self.assertEqual(self.row()["tests_locked_sha"], self.locked,
+                         "отказ не должен сдвигать tests_locked_sha")
+
+    def test_worktree_edit_without_group_line_is_refused(self):
+        """Правка в worktree снимает строку группы у `test_ac.py` —
+        `amend-tests` отказывает с именем файла, пишет журнал и не
+        сдвигает лок.
+
+        Ловит мутацию: проверка строки группы не подключена к
+        worktree-пути `_cmd_amend_tests` (`if group_errors:` снят) —
+        правка без строки группы фиксируется и лок сдвигается."""
+        wt_path, error = workspace.ensure(self.TASK, self.row()["branch"])
+        self.assertIsNone(error, f"worktree не создан: {error}")
+        tests_dir = wt_path / "tasks" / self.TASK / "acceptance_tests"
+        tests_dir.mkdir(parents=True, exist_ok=True)
+        (tests_dir / "test_ac.py").write_text(AC_TEST_AMENDED_NO_GROUP,
+                                              encoding="utf-8")
+        self.assert_refused(lambda: capture(
+            amend.cmd_amend_tests, self.TASK, "снята строка группы"))
+
+    def test_from_branch_edit_without_group_line_is_refused(self):
+        """Голова артефактной ветки несёт `test_ac.py` без строки группы —
+        `amend-tests --from-branch` отказывает с именем файла, пишет
+        журнал и не сдвигает лок на голову ветки.
+
+        Ловит мутацию: проверка строки группы не подключена к пути
+        `_cmd_amend_tests_from_branch` (`if group_errors:` снят) — лок
+        сдвигается на голову без строки группы."""
+        self.artifact_commit(
+            {f"tasks/{self.TASK}/acceptance_tests/test_ac.py":
+                 AC_TEST_AMENDED_NO_GROUP},
+            "правка планки без строки группы")
+        self.assert_refused(lambda: capture(
+            lambda: amend.cmd_amend_tests(self.TASK, "снята строка группы",
+                                          from_branch=True)))
 
 
 class ReasonArgTest(unittest.TestCase):

@@ -40,7 +40,8 @@ from .advance_gates.tests_writing import (_freshness_refuses,
                                           _origin_push_gate, _registry_gate,
                                           _tests_writing_acceptance_dir,
                                           _tests_writing_dry_collect_gate,
-                                          _tests_writing_stray_plank_files_gate)
+                                          _tests_writing_stray_plank_files_gate,
+                                          _tests_writing_test_groups_gate)
 from .advance_gates.zones import (_ZONES_MANDATE_MARKER,
                                   _answer_commit_is_role_step_autocommit,
                                   _answer_zones_mandate,
@@ -364,7 +365,9 @@ def tests_writing(conn, task_id: str, t, tdir, target: str, state: str) -> bool:
     acc_tdir, run_cwd = _tests_writing_acceptance_dir(
         task_id, tdir, target, branch, t["branch"])
     if _run_gates(conn, task_id,
-                  [lambda: _tests_writing_dry_collect_gate(
+                  [lambda: _tests_writing_test_groups_gate(
+                      acc_tdir, task_id, target),
+                   lambda: _tests_writing_dry_collect_gate(
                       acc_tdir, run_cwd, task_id)]):
         return False
     store.set_state(conn, task_id, "in_dev", "fsm", expected_state=state,

@@ -104,9 +104,11 @@ schema_version: 2
 
 # Маркер красноты (SPEC T064) — обязателен на выходе из tests_writing;
 # эта фикстура проезжает этот выход в TraceabilityTest/LockTest, не только
-# review -> acceptance.
+# review -> acceptance. Строка группы (SPEC 01M3N0BWYQ9KHVN41Z4G72706R) —
+# обязательна на том же выходе для задачи target `artel`.
 AC_TEST_BOTH_COVERED = '''"""Красен до реализации: фикстура покрывает оба критерия SPEC_V2
-песочницы — тест и manual-пометка, до появления реализации кода задачи."""
+песочницы — тест и manual-пометка, до появления реализации кода задачи.
+Группа: разовый"""
 import unittest
 
 

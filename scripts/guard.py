@@ -44,7 +44,7 @@ from typing import NamedTuple
 # репозитория, поэтому корень кладётся руками: та же схема, что в artel.py.
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from orchestrator import config, spend, yamlmini, zone_lock  # noqa: E402
+from orchestrator import config, spend, stack, yamlmini, zone_lock  # noqa: E402
 
 REQUIRED_META = {"task", "type", "author_role", "status"}
 
@@ -1457,6 +1457,339 @@ def scan_artifact_disk_reads(tdir: Path) -> list[str]:
         except (OSError, UnicodeDecodeError):
             continue
     return artifact_disk_read_errors_from_files(files)
+
+
+# --------------------------------------------------------------------------
+# Две группы приёмочных тестов (ADR-0020; SPEC 01M3N0BWYQ9KHVN41Z4G72706R,
+# требования 1, 3, 4): строка группы в докстринге модуля `test_*.py` и
+# статическая проверка долгоживущего файла. Одно место правила на всех
+# потребителей — выход из `tests_writing` и `amend-tests`: оба зовут функции
+# ниже, а те читают `GROUP_LINE` глобалом модуля в момент вызова.
+
+GROUP_LONG_LIVED = "долгоживущий"
+GROUP_ONE_OFF = "разовый"
+GROUP_VALUES = (GROUP_LONG_LIVED, GROUP_ONE_OFF)
+
+# Строка группы — отдельной строкой докстринга, значение на той же строке
+# после двоеточия (приём `REDNESS_MARKER`). Якорь начала строки: упоминание
+# «Группа:» внутри фразы докстринга строкой группы не считается.
+GROUP_LINE = re.compile(r"^[^\S\n]*Группа:[^\S\n]*(\S*)", re.M)
+
+
+def plank_file_group(source: str) -> tuple[str | None, str | None]:
+    """(группа, ошибка) файла `test_*.py` по строке группы его докстринга
+    модуля: ровно одна из пары не `None`. Файл не разбирается — `(None,
+    None)`: синтаксис — предмет сухого сбора, его диагноз точнее."""
+    try:
+        docstring = ast.get_docstring(ast.parse(source)) or ""
+    except SyntaxError:
+        return None, None
+    values = [m.group(1) for m in GROUP_LINE.finditer(docstring)]
+    if not values:
+        return None, (f"нет строки группы в докстринге модуля — допиши "
+                      f"«Группа: {GROUP_LONG_LIVED}» или «Группа: "
+                      f"{GROUP_ONE_OFF}»")
+    unknown = [v for v in values if v not in GROUP_VALUES]
+    if unknown:
+        return None, (f"неизвестное значение строки группы «{unknown[0]}» — "
+                      f"допустимы только «{GROUP_LONG_LIVED}» и "
+                      f"«{GROUP_ONE_OFF}»")
+    if len(set(values)) > 1:
+        return None, "строк группы две с разными значениями — оставь одну"
+    return values[0], None
+
+
+def group_line_errors_from_files(files: list[tuple[str, str]]) -> list[str]:
+    """Ошибки строки группы по (label, текст) парам файлов `test_*.py`
+    планки — источник выбирает вызывающий код (приём
+    `redness_marker_errors_from_files`)."""
+    errors: list[str] = []
+    for label, source in files:
+        _group, error = plank_file_group(source)
+        if error is not None:
+            errors.append(f"{label}: {error}")
+    return errors
+
+
+def plank_has_group_lines(files: list[tuple[str, str]]) -> bool:
+    """Хоть один `test_*.py` планки несёт распознанную строку группы —
+    планка зафиксирована после появления правила (требование 2): до него
+    строк группы не писал никто, после — выход из `tests_writing` не
+    пропускает `test_*.py` без неё."""
+    return any(plank_file_group(source)[0] is not None for _label, source in files)
+
+
+SIGN_TASKS = "tasks/"
+SIGN_GIT_MODULE = "git-модуль"
+SIGN_GIT_CALL = "git-вызов"
+SIGN_TASK_ID = "номер задачи"
+SIGN_SYS_PATH = "sys.path"
+SIGN_FOREIGN_IMPORT = "импорт вне перечня"
+SIGN_PRIVATE_NAME = "закрытое имя"
+SIGN_PATCH_PRIVATE = "patch закрытого"
+SIGN_PRIVATE_ATTR = "закрытый атрибут"
+
+_SIGN_EXPLANATIONS = {
+    SIGN_TASKS: "долгоживущий файл не знает каталога задачи",
+    SIGN_GIT_MODULE: "git-история — факт задачи, не свойство кода",
+    SIGN_GIT_CALL: "git-история — факт задачи, не свойство кода",
+    SIGN_TASK_ID: "долгоживущий файл не привязан к задаче",
+    SIGN_SYS_PATH: "файл обязан собираться из tests/ без правки путей",
+    SIGN_FOREIGN_IMPORT: ("только стандартная библиотека, orchestrator, "
+                          "scripts, tests — помощники из tests/sandbox.py"),
+    SIGN_PRIVATE_NAME: "только публичный интерфейс кода",
+    SIGN_PATCH_PRIVATE: "только публичный интерфейс кода",
+    SIGN_PRIVATE_ATTR: "только публичный интерфейс кода",
+}
+
+_GIT_MODULES = ("orchestrator.gitcmd", "orchestrator.artifact_branch")
+_CODE_PACKAGES = ("orchestrator", "scripts")
+# Тот же перечень, что `tests/test_invariants.py::StdlibOnlyImportsInvariantTest`.
+_LOCAL_PACKAGES = ("orchestrator", "scripts", "tests")
+_SYS_PATH_MUTATORS = ("insert", "append", "extend")
+_PATCH_NAMES = ("unittest.mock.patch", "mock.patch", "patch")
+
+
+def _allowed_import_tops() -> frozenset:
+    return (frozenset(sys.stdlib_module_names) | frozenset(_LOCAL_PACKAGES)
+            | frozenset(name for name, _reason in stack.THIRD_PARTY_EXCEPTIONS))
+
+
+def _is_private(segment: str) -> bool:
+    """Одно подчёркивание в начале, не dunder (`__init__`)."""
+    return segment.startswith("_") and not (
+        segment.startswith("__") and segment.endswith("__"))
+
+
+def _import_bindings(tree: ast.Module) -> dict[str, str]:
+    """Локальное имя -> полный путь модуля/имени, которое к нему привязал
+    импорт (`import a.b` -> a: a; `import a.b as x` -> x: a.b; `from m
+    import n as k` -> k: m.n). Относительный импорт — пустой путь (ни
+    стандартная библиотека, ни `tests`)."""
+    bindings: dict[str, str] = {}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                if alias.asname:
+                    bindings[alias.asname] = alias.name
+                else:
+                    top = alias.name.split(".")[0]
+                    bindings[top] = top
+        elif isinstance(node, ast.ImportFrom):
+            module = "" if node.level else (node.module or "")
+            for alias in node.names:
+                if alias.name == "*":
+                    continue
+                full = f"{module}.{alias.name}" if module else ""
+                bindings[alias.asname or alias.name] = full
+    return bindings
+
+
+def _resolved_name(node: ast.AST, bindings: dict[str, str]) -> str | None:
+    """`_dotted_name` с корнем, заменённым на путь его импорта:
+    `mock.patch` при `from unittest import mock` -> `unittest.mock.patch`."""
+    dotted = _dotted_name(node)
+    if dotted is None:
+        return None
+    root, _, rest = dotted.partition(".")
+    origin = bindings.get(root) or root
+    return f"{origin}.{rest}" if rest else origin
+
+
+def _is_git_command(node: ast.AST) -> bool:
+    if isinstance(node, (ast.List, ast.Tuple)) and node.elts:
+        first = node.elts[0]
+        return isinstance(first, ast.Constant) and first.value == "git"
+    return (isinstance(node, ast.Constant) and isinstance(node.value, str)
+            and (node.value == "git" or node.value.startswith("git ")))
+
+
+def _private_string_path(node: ast.AST | None) -> bool:
+    return (isinstance(node, ast.Constant) and isinstance(node.value, str)
+            and any(_is_private(seg) for seg in node.value.split(".")))
+
+
+def _call_arg(node: ast.Call, index: int, keyword: str) -> ast.AST | None:
+    if len(node.args) > index:
+        return node.args[index]
+    for kw in node.keywords:
+        if kw.arg == keyword:
+            return kw.value
+    return None
+
+
+def _chain_root(node: ast.AST) -> ast.AST:
+    """Корень цепочки обращения: `a.b[0].c()._x` -> `a`."""
+    while True:
+        if isinstance(node, (ast.Attribute, ast.Subscript)):
+            node = node.value
+        elif isinstance(node, ast.Call) and not (
+                isinstance(node.func, ast.Name) and node.func.id == "super"):
+            node = node.func
+        else:
+            return node
+
+
+def _exempt_attribute_root(root: ast.AST, bindings: dict[str, str]) -> bool:
+    """Корень цепочки, чьи закрытые атрибуты не признак (требование 3,
+    признак 9): `self`/`cls`/`super()` и имя, привязанное импортом из
+    стандартной библиотеки или пакета `tests`."""
+    if isinstance(root, ast.Call):
+        return True  # `super()` — `_chain_root` останавливается только на нём
+    if not isinstance(root, ast.Name):
+        return False
+    if root.id in ("self", "cls"):
+        return True
+    origin = bindings.get(root.id)
+    if not origin:
+        return False
+    top = origin.split(".")[0]
+    return top == "tests" or top in sys.stdlib_module_names
+
+
+def _import_signs(node: ast.AST, allowed_tops: frozenset) -> list[str]:
+    signs: list[str] = []
+    if isinstance(node, ast.Import):
+        modules = [alias.name for alias in node.names]
+        names: list[str] = []
+    else:
+        if node.level:
+            return [SIGN_FOREIGN_IMPORT]
+        modules = [node.module or ""]
+        names = [alias.name for alias in node.names]
+    for module in modules:
+        segments = module.split(".")
+        if segments[0] not in allowed_tops:
+            signs.append(SIGN_FOREIGN_IMPORT)
+        full_names = [module] + [f"{module}.{n}" for n in names]
+        if any(full == git or full.startswith(git + ".")
+               for full in full_names for git in _GIT_MODULES):
+            signs.append(SIGN_GIT_MODULE)
+        if segments[0] in _CODE_PACKAGES and any(
+                _is_private(seg) for seg in segments + names):
+            signs.append(SIGN_PRIVATE_NAME)
+    return signs
+
+
+def _call_signs(node: ast.Call, bindings: dict[str, str]) -> list[str]:
+    signs: list[str] = []
+    name = _resolved_name(node.func, bindings) or ""
+    if name.startswith("subprocess.") or name == "os.system":
+        args = list(node.args) + [kw.value for kw in node.keywords
+                                  if kw.arg == "args"]
+        if any(_is_git_command(arg) for arg in args):
+            signs.append(SIGN_GIT_CALL)
+    if name.rpartition(".")[0] == "sys.path" and (
+            name.rpartition(".")[2] in _SYS_PATH_MUTATORS):
+        signs.append(SIGN_SYS_PATH)
+    if name in _PATCH_NAMES and _private_string_path(
+            _call_arg(node, 0, "target")):
+        signs.append(SIGN_PATCH_PRIVATE)
+    if name in tuple(f"{p}.object" for p in _PATCH_NAMES):
+        attribute = _call_arg(node, 1, "attribute")
+        if (isinstance(attribute, ast.Constant) and isinstance(attribute.value, str)
+                and _is_private(attribute.value)):
+            signs.append(SIGN_PATCH_PRIVATE)
+    return signs
+
+
+def _is_sys_path_target(node: ast.AST, bindings: dict[str, str]) -> bool:
+    if isinstance(node, ast.Subscript):
+        node = node.value
+    return _resolved_name(node, bindings) == "sys.path"
+
+
+def _names_of(node: ast.AST) -> list[str]:
+    """Имена, которые узел вводит или называет (признак «номер задачи»)."""
+    if isinstance(node, ast.Name):
+        return [node.id]
+    if isinstance(node, ast.Attribute):
+        return [node.attr]
+    if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+        return [node.name]
+    if isinstance(node, ast.arg):
+        return [node.arg]
+    if isinstance(node, ast.alias):
+        return [node.name, node.asname or ""]
+    return []
+
+
+def long_lived_sign_hits(source: str, task_id: str) -> list[tuple[int, str]]:
+    """(строка, признак) требования 3 для текста долгоживущего файла, по
+    строкам; файл не разбирается — пусто (синтаксис — предмет сухого
+    сбора). Признак — формулировка списка требования 3 (`SIGN_*`)."""
+    try:
+        tree = ast.parse(source)
+    except SyntaxError:
+        return []
+    bindings = _import_bindings(tree)
+    allowed_tops = _allowed_import_tops()
+    task_id_lower = task_id.lower()
+    hits: set[tuple[int, str]] = set()
+    for node in ast.walk(tree):
+        lineno = getattr(node, "lineno", None)
+        if lineno is None:
+            continue
+        if isinstance(node, ast.Constant) and isinstance(node.value, str):
+            if "tasks/" in node.value:
+                hits.add((lineno, SIGN_TASKS))
+            if task_id_lower and task_id_lower in node.value.lower():
+                hits.add((lineno, SIGN_TASK_ID))
+        if task_id_lower and any(task_id_lower in name.lower()
+                                 for name in _names_of(node)):
+            hits.add((lineno, SIGN_TASK_ID))
+        if isinstance(node, (ast.Import, ast.ImportFrom)):
+            hits.update((lineno, sign) for sign in _import_signs(node, allowed_tops))
+        elif isinstance(node, ast.Call):
+            hits.update((lineno, sign) for sign in _call_signs(node, bindings))
+        elif isinstance(node, (ast.Assign, ast.AugAssign, ast.AnnAssign)):
+            targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+            if any(_is_sys_path_target(t, bindings) for t in targets):
+                hits.add((lineno, SIGN_SYS_PATH))
+        elif (isinstance(node, ast.Attribute) and _is_private(node.attr)
+              and not _exempt_attribute_root(_chain_root(node.value), bindings)):
+            hits.add((lineno, SIGN_PRIVATE_ATTR))
+    return sorted(hits)
+
+
+def long_lived_errors_from_files(files: list[tuple[str, str]],
+                                 task_id: str) -> list[str]:
+    """Ошибки долгоживущих файлов планки (требования 3, 4) по (label,
+    текст) парам `test_*.py`: файлы иной группы (и без распознанной
+    группы — это ошибка строки группы, не этой проверки) пропускаются.
+
+    Заявка мутации — тем же узлом, что гейт выхода из `in_dev`
+    (`test_functions_without_mutation_claim`): файл планки новый, base
+    `None`, каждый метод обязан нести «Ловит мутацию: …»."""
+    errors: list[str] = []
+    for label, source in files:
+        group, _error = plank_file_group(source)
+        if group != GROUP_LONG_LIVED:
+            continue
+        for lineno, sign in long_lived_sign_hits(source, task_id):
+            errors.append(f"{label}:{lineno}: признак «{sign}» — "
+                          f"{_SIGN_EXPLANATIONS[sign]}")
+        for method in test_functions_without_mutation_claim(None, source):
+            errors.append(f"{label}: метод {method} долгоживущего файла без "
+                          f"«Ловит мутацию: …» в докстринге («Зелёный с "
+                          f"рождения» её не заменяет)")
+    return errors
+
+
+def acceptance_test_files(tdir: Path) -> list[tuple[str, str]]:
+    """(путь относительно `tdir`, текст) файлов `acceptance_tests/**/test_*.py`
+    каталога задачи `tdir` — те же файлы, что `scan_redness_markers`;
+    метка — как у `scan_artifact_disk_reads`."""
+    tests_dir = tdir / "acceptance_tests"
+    if not tests_dir.is_dir():
+        return []
+    files: list[tuple[str, str]] = []
+    for f in sorted(tests_dir.rglob("test_*.py")):
+        try:
+            files.append((str(f.relative_to(tdir)), f.read_text(encoding="utf-8")))
+        except (OSError, UnicodeDecodeError):
+            continue
+    return files
 
 
 # Секция «Проверено исполнением» — обязательна при status: approved
