@@ -277,3 +277,4 @@ AC-14. Полный набор `tests/` зелёный; ни один сущес
   `ACCEPTANCE_TESTS_ALLOWED_TOP_LEVEL`
 - `orchestrator/advance_gates/tests_writing.py`:
   `_tests_writing_artifact_source_gate`, `_tests_writing_dry_collect_gate`
+- Приложением к PLAN (защищённые пути, применяет пульт на мерже): skills/test-authoring.md, skills/escalation-rules.md, skills/coding-standards.md, skills/review-checklist.md
