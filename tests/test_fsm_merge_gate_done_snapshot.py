@@ -55,6 +55,13 @@ def _snapshot_files(origin: Path, task_id: str) -> list:
     return [p for p in res.stdout.splitlines() if p] if res.returncode == 0 else []
 
 
+def _snapshot_commit_subject(origin: Path, task_id: str) -> str:
+    res = subprocess.run(
+        ["git", "-C", str(origin), "log", "-1", "--format=%s",
+         f"refs/artifacts/{task_id}"], capture_output=True, text=True)
+    return res.stdout.strip() if res.returncode == 0 else ""
+
+
 def _snapshot_file_text(origin: Path, task_id: str, rel: str) -> str:
     res = subprocess.run(
         ["git", "-C", str(origin), "show", f"refs/artifacts/{task_id}:{rel}"],
@@ -200,6 +207,32 @@ class DonePathSnapshotTest(RealGitSandbox):
             retro_meta,
             f"ни один файл снапшота {TASK} не несёт frontmatter с "
             f"operator/model/artel_sha (AC-13): {files}")
+
+    def test_done_snapshot_retro_names_the_done_outcome_and_the_ref(self):
+        """SPEC 01M3KE80RNBCY9G48E75Z14TA7, требования 1-3 (AC-1, AC-2,
+        AC-4) СКВОЗНЫМ путём мержа: ретроспектива опубликованного снимка
+        несёт «Итог: done, sha …» и адрес `refs/artifacts/<id>`, сообщение
+        коммита снимка — «снапшот закрытия (done)».
+
+        Ловит мутацию: путь закрытия снова передаёт в публикацию литерал
+        «killed» (или берёт исход раньше `_finalize_done_state`, когда
+        задача ещё на `merge_gate`) — в RETRO.md снимка окажется «Итог:
+        killed — причина: …», в сообщении коммита — «(killed)», и
+        `assertIn`/`assertNotIn` ниже это поймают.
+        """
+        t = store.get_task(store.db(), TASK)
+
+        fsm_merge_gate._cmd_approve_merge_gate(
+            store.db(), TASK, "merge_gate", t,
+            confirmed_ci_note="зелёный (тест)")
+
+        retro_text = _snapshot_file_text(self.target_origin, TASK,
+                                         f"tasks/{TASK}/RETRO.md")
+        self.assertRegex(retro_text, r"Итог: done, sha [0-9a-f]{40}\n")
+        self.assertIn(f"Адрес артефактов: refs/artifacts/{TASK}\n", retro_text)
+        self.assertNotIn("Итог: killed", retro_text)
+        self.assertEqual(_snapshot_commit_subject(self.target_origin, TASK),
+                         f"{TASK}: снапшот закрытия (done)")
 
     def test_done_snapshot_removes_the_pult_artifact_branch(self):
         """AC-13: снапшот публикуется ДО удаления кодовой и артефактной

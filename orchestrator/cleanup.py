@@ -394,6 +394,28 @@ def _cmd_kill(conn, task_id: str, holder_before=None) -> None:
     cleanup_killed_task(conn, task_id, t["branch"])
 
 
+def _closing_outcome(conn, task_id: str) -> str:
+    """Исход для публикации снимка закрытия — ФАКТИЧЕСКОЕ состояние задачи
+    из БД (SPEC 01M3KE80RNBCY9G48E75Z14TA7, требование 1), а не литерал
+    «killed»: этот узел зовут ОБА пути закрытия — `kill` (`_cmd_kill`
+    выше) и мерж (`fsm_merge_gate._publish_closing_snapshot_or_wait`), и
+    литерал делал ретроспективу снимка смерженной задачи ложью («Итог:
+    killed — причина: причина не найдена в журнале» на задаче, смерженной
+    27.09). Состояние на момент вызова уже записано на обоих путях:
+    `_finalize_done_state` пишет `done` ДО публикации снимка, `_cmd_kill`
+    — `killed` до своей. Тот же источник, которым отложенная публикация
+    (`doctor.check_pending_snapshots`) пользуется с самого начала.
+
+    Состояние не терминальное (строка БД читается, но задача почему-то не
+    закрыта) — прежний `"killed"`: публикацию снимка зовут только пути
+    закрытия, и молчаливое «done» на незакрытой задаче было бы хуже, чем
+    прежнее поведение.
+    """
+    t = store.get_task(conn, task_id)
+    state = t["state"] if t is not None else ""
+    return state if state in TERMINAL_STATES else "killed"
+
+
 def _publish_snapshot_if_pending(conn, task_id: str, target: str,
                                  is_canary: bool) -> None:
     """Снапшот закрытия (SPEC T094, требования 12-13, AC-13) — для ЛЮБОГО
@@ -403,6 +425,9 @@ def _publish_snapshot_if_pending(conn, task_id: str, target: str,
     (канарейка) или снапшот уже подтверждён в origin целевого раньше
     (идемпотентность повторного `kill`, AC-15).
 
+    Исход, уходящий в публикацию, — `_closing_outcome` (состояние задачи
+    из БД), а не литерал: см. её докстринг.
+
     Отложенный импорт: `snapshot` -> `retro` -> `cleanup` — прямой
     импорт на уровне модуля замкнул бы этот же файл в цикл.
     """
@@ -411,5 +436,6 @@ def _publish_snapshot_if_pending(conn, task_id: str, target: str,
     from . import snapshot
     if not snapshot.pending(task_id):
         return
-    note = snapshot.publish_and_cleanup(conn, task_id, target, "killed")
+    note = snapshot.publish_and_cleanup(conn, task_id, target,
+                                        _closing_outcome(conn, task_id))
     print(f"  {note}")
