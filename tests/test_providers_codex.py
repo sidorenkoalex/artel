@@ -30,8 +30,8 @@ from orchestrator import (agent_log, catalog, config, doctor,  # noqa: E402
                           failure_classification, keychain, models, providers,
                           runner, spend, stack, store)
 from orchestrator.providers import codex as codex_provider  # noqa: E402
-from tests.sandbox import (TaskSeededTmpRootTest, TmpDirTest,  # noqa: E402
-                           TmpRootTest)
+from tests.sandbox import (FIXTURE_CODEX_MODEL,  # noqa: E402
+                           TaskSeededTmpRootTest, TmpDirTest, TmpRootTest)
 
 STUB_BIN = "/artel-test-stub-bin"
 KEYCHAIN_SECRET = "kluch-iz-slota"
@@ -1085,15 +1085,6 @@ FULL_USAGE = {"input_tokens": 1000, "cached_input_tokens": 400,
               "cache_write_input_tokens": 7, "output_tokens": 30,
               "reasoning_output_tokens": 11}
 
-def _codex_model_id() -> str:
-    """Идентификатор модели раздела `codex` каталога — ОТ каталога, не
-    литералом: состав раздела правит Оператор, и зашитое имя пережило бы
-    только до первой его правки."""
-    ids = sorted(entry.id for entry in models.load_catalog().models.values()
-                 if entry.provider == codex_provider.CLI_NAME)
-    assert ids, f"в каталоге {config.MODELS} нет моделей провайдера codex"
-    return ids[0]
-
 
 #: Текст класса «модель не поддерживается» словами CLAUDE (инцидент
 #: 19.09): для набора Codex — чужие слова, которых его CLI не произносит.
@@ -1344,6 +1335,15 @@ class StepCostTest(TaskSeededTmpRootTest):
 
     ROLE = "developer"
 
+    def setUp(self):
+        super().setUp()
+        # Модель раздела `codex` берётся из каталога-фикстуры песочницы, а
+        # не из боевого `models.yaml`: предмет теста — ветка учёта по
+        # признаку `cost_from_cli` раздела, а не сегодняшний состав
+        # раздела, который правит Оператор (SPEC
+        # 01M3KE8ZJXFARS6KC441PCDCQV, требование 4).
+        self.use_catalog_fixture()
+
     def test_an_incomplete_usage_is_journalled_uncharged_and_alerted(self):
         """Итог запуска без разбивки токенов: `spent_usd` не меняется,
         журнал несёт «agent cost UNCHARGED», открыт алерт порога.
@@ -1363,7 +1363,7 @@ class StepCostTest(TaskSeededTmpRootTest):
         conn = store.db()
         spend.charge_step(conn, self.TASK, self.ROLE, cost,
                           f"попытка 1/{config.AGENT_ATTEMPTS}",
-                          _codex_model_id())
+                          FIXTURE_CODEX_MODEL)
 
         self.assertEqual(store.get_task(store.db(), self.TASK)["spent_usd"],
                          0.0, "нечего списывать — и не списано")

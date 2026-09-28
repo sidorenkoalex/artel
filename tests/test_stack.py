@@ -462,12 +462,12 @@ class ModelCliVerdictTest(unittest.TestCase):
 
     def test_ok_detail_matches_the_spec_wording(self):
         """Ловит мутацию: строка `ok` теряет обе версии или знак `≥`
-        (текст требования 5: «CLI 2.1.267 ≥ 2.1.251 — ok»)."""
-        verdict = stack.model_cli_verdict(TABLE_MODEL, (2, 1, 267),
+        (текст требования 5: «CLI 2.1.283 ≥ 2.1.251 — ok»)."""
+        verdict = stack.model_cli_verdict(TABLE_MODEL, (2, 1, 283),
                                           CATALOG_MINIMUM)
 
         self.assertEqual(verdict.status, "ok")
-        self.assertEqual(verdict.detail, "CLI 2.1.267 ≥ 2.1.251 — ok")
+        self.assertEqual(verdict.detail, "CLI 2.1.283 ≥ 2.1.251 — ok")
 
 
 class InstalledCliVersionTest(unittest.TestCase):
@@ -481,12 +481,12 @@ class InstalledCliVersionTest(unittest.TestCase):
 
         def fake_run(args, **kwargs):
             recorded.append(list(args))
-            return subprocess.CompletedProcess(args, 0, "2.1.267 (Claude Code)\n", "")
+            return subprocess.CompletedProcess(args, 0, "2.1.283 (Claude Code)\n", "")
 
         with mock.patch.object(stack.subprocess, "run", side_effect=fake_run):
             version = stack.installed_cli_version()
 
-        self.assertEqual(version, (2, 1, 267))
+        self.assertEqual(version, (2, 1, 283))
         self.assertEqual(recorded, [list(stack.REQUIRED_TOOLS["claude"].command)])
 
     def test_missing_or_unparsable_cli_gives_none(self):
@@ -553,7 +553,7 @@ class CheckStackModelLinesTest(unittest.TestCase):
         разрешение цепочки, либо неразрешимая цепочка (`analyst`: ярус
         `cheap` в локальном слое не назван) молча пропускает строку
         вместо `fail`."""
-        lines = self.model_lines(self.checks_with_cli("2.1.267"))
+        lines = self.model_lines(self.checks_with_cli("2.1.283"))
 
         self.assertEqual(sorted(lines),
                          ["model-analyst", "model-developer", "model-reviewer"])
@@ -561,7 +561,7 @@ class CheckStackModelLinesTest(unittest.TestCase):
         self.assertEqual(ok.status, "ok", ok.detail)
         self.assertEqual(
             ok.detail,
-            f"модель роли developer {TABLE_MODEL}: CLI 2.1.267 ≥ 2.1.251 — ok")
+            f"модель роли developer {TABLE_MODEL}: CLI 2.1.283 ≥ 2.1.251 — ok")
         unresolved = lines["model-analyst"]
         self.assertEqual(unresolved.status, "fail", unresolved.detail)
         self.assertIn("cheap", unresolved.detail)
@@ -572,7 +572,7 @@ class CheckStackModelLinesTest(unittest.TestCase):
         минимума версии CLI и без тарифа."""
         self.set_tiers(strong=UNKNOWN_MODEL, standard=TABLE_MODEL)
 
-        line = self.model_lines(self.checks_with_cli("2.1.267"))["model-developer"]
+        line = self.model_lines(self.checks_with_cli("2.1.283"))["model-developer"]
 
         self.assertEqual(line.status, "fail", line.detail)
         self.assertIn(UNKNOWN_MODEL, line.detail)
@@ -594,7 +594,7 @@ class CheckStackModelLinesTest(unittest.TestCase):
         `claude --version` на роль — `check_stack()` (а с ним и
         `runner._venv_interpreter_bin` на каждом шаге) заводит лишние
         подпроцессы."""
-        self.checks_with_cli("2.1.267")
+        self.checks_with_cli("2.1.283")
 
         claude_runs = [r for r in self.runs if r[0] == "claude"]
         self.assertEqual(len(claude_runs), 1, self.runs)
@@ -614,7 +614,7 @@ class CheckStackModelLinesTest(unittest.TestCase):
         необработанным `RolesError` вместо строки диагностики."""
         self.roles_path.unlink()
 
-        checks = self.checks_with_cli("2.1.267")
+        checks = self.checks_with_cli("2.1.283")
 
         warn = [c for c in checks if c.name == "model-roles"]
         self.assertEqual(len(warn), 1)

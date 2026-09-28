@@ -217,6 +217,81 @@ def _fixture_tier_model() -> str:
 #: Модель, которой локальный слой фикстуры называет `FIXTURE_TIER`.
 FIXTURE_TIER_MODEL = _fixture_tier_model()
 
+#: Вторая модель каталога-фикстуры — та, которая сценарию нужна как
+#: «КАКАЯ-НИБУДЬ ДРУГАЯ модель каталога» (шаг чужой модели, выборка по
+#: `model=`). Имя заведомо не из боевого каталога: сценарий обязан
+#: опираться на модель фикстуры, а не на соседа по `models.yaml`.
+FIXTURE_OTHER_MODEL = "model-beta-fikstury"
+
+#: Модель раздела `codex` каталога-фикстуры. Нужна там, где предмет —
+#: ветка учёта по признаку `cost_from_cli` раздела (`spend.charge_step`),
+#: а не конкретный идентификатор.
+FIXTURE_CODEX_MODEL = "model-codex-fikstury"
+
+#: Каталог моделей ФИКСТУРЫ (SPEC 01M3KE8ZJXFARS6KC441PCDCQV, требование
+#: 4): тест, которому нужна «какая-нибудь модель каталога», берёт её
+#: отсюда, а не из боевого `models.yaml` репозитория. Состав боевого
+#: каталога — крутилка Оператора: он добавляет и снимает записи (28.09 —
+#: сразу три записи и одно снятие), и тест, читающий его ради одного лишь
+#: идентификатора, краснел бы от такой правки мимо своего предмета
+#: (skills/test-authoring.md, «Окружение теста»).
+#:
+#: Раздел `claude` несёт модель яруса фикстуры (`FIXTURE_TIER_MODEL`):
+#: локальный слой фикстуры ведёт на неё все ярусы, и без записи в
+#: каталоге разрешение цепочки роли отказало бы ещё до предмета теста.
+#: Признаки `cost_from_cli` разделов — те же, что у боевого каталога: по
+#: ним `spend.charge_step` выбирает ветку учёта денег.
+#:
+#: Боевой каталог остаётся предметом проверки там, где он и есть предмет
+#: (`tests/test_models.py::CatalogTest`, `tests/test_stack.py::
+#: ModelCliVerdictTest::test_catalog_carries_the_incident_entry`) — им
+#: этот каталог не подставляется, и `config.MODELS` процессно НЕ
+#: подменяется (в отличие от `ROLES`/`MODELS_LOCAL` выше): подмена на
+#: весь процесс сняла бы с боевого каталога ровно ту сверку состава,
+#: ради которой он литералом и сверяется.
+CATALOG_FIXTURE_TEXT = f"""\
+# Каталог моделей ФИКСТУРЫ тестов (tests/sandbox.py::
+# CATALOG_FIXTURE_TEXT) — не боевой models.yaml пульта.
+providers:
+  claude:
+    cli: claude
+    min_cli_version: 1.0.0
+    cost_from_cli: true
+    models:
+      {FIXTURE_TIER_MODEL}:
+        min_cli_version: 1.0.0
+        status: supported
+        list_price_usd_per_mtok:
+          input: 5.0
+          output: 25.0
+          cache_write: 6.25
+          cache_read: 0.50
+        price_date: 2026-09-20
+      {FIXTURE_OTHER_MODEL}:
+        min_cli_version: 1.0.0
+        status: supported
+        list_price_usd_per_mtok:
+          input: 1.5
+          output: 9.0
+          cache_write: 1.75
+          cache_read: 0.15
+        price_date: 2026-09-20
+  codex:
+    cli: codex
+    min_cli_version: 0.155.1
+    cost_from_cli: false
+    models:
+      {FIXTURE_CODEX_MODEL}:
+        min_cli_version: 0.155.1
+        status: experimental
+        list_price_usd_per_mtok:
+          input: 2.0
+          output: 12.0
+          cache_write: 2.5
+          cache_read: 0.20
+        price_date: 2026-09-20
+"""
+
 #: Слот keychain и общий fallback — те же имена, что у пульта: их читает
 #: `roles.token_slots`, а подмена keychain в песочницах идёт по слоту.
 FIXTURE_TOKEN_FALLBACK = "artel-token"
@@ -993,6 +1068,30 @@ class TmpRootTest(unittest.TestCase):
         patcher.start()
         self.addCleanup(patcher.stop)
         return fixture
+
+    def use_catalog_fixture(self, text: str = None) -> Path:
+        """Каталог моделей сценария — фикстура (`CATALOG_FIXTURE_TEXT`), а
+        не боевой `models.yaml` репозитория (SPEC
+        01M3KE8ZJXFARS6KC441PCDCQV, требование 4).
+
+        Зовётся тестом ЯВНО и только там, где предмет проверки — не состав
+        боевого каталога: `config.MODELS` в `ALL_CONFIG_ATTRS` намеренно
+        не входит, и процессной подмены этого пути у песочницы нет (см.
+        комментарий к `CATALOG_FIXTURE_TEXT`). Патч снимается штатным
+        `addCleanup`, так что в соседние тесты процесса каталог не течёт.
+
+        Файл кладётся в `.artel/` песочницы, рядом с локальным слоем: в
+        корне `self.root` он попадал бы в `git add -A`/`git status
+        --porcelain` подклассов с настоящим репозиторием.
+        """
+        path = self.root / ".artel" / "models-fixture.yaml"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(CATALOG_FIXTURE_TEXT if text is None else text,
+                        encoding="utf-8")
+        patcher = mock.patch.object(config, "MODELS", path)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        return path
 
     def _patched_path(self, attr: str) -> Path:
         return {

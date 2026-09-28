@@ -21,7 +21,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from orchestrator import alerts, config, report, spend, store  # noqa: E402
-from tests.sandbox import TaskSeededTmpRootTest  # noqa: E402
+from tests.sandbox import (FIXTURE_OTHER_MODEL,  # noqa: E402
+                           TaskSeededTmpRootTest)
 
 ROLE = "developer"
 
@@ -169,6 +170,14 @@ class ChargeStepJournalTest(TaskSeededTmpRootTest):
 
     def setUp(self):
         super().setUp()
+        # Каталог — фикстура песочницы, а не боевой `models.yaml`: этому
+        # классу нужны ДВЕ модели каталога (своя у роли и любая другая), а
+        # не сегодняшний состав пульта (SPEC 01M3KE8ZJXFARS6KC441PCDCQV,
+        # требование 4). Подмена идёт ДО разрешения тарифа ниже — иначе
+        # `self.model` пришёл бы из боевого каталога, а `FIXTURE_OTHER_
+        # MODEL` в нём не разрешился бы вовсе, и шаг «другой модели» тихо
+        # выпал бы из выборки по причине вне предмета теста.
+        self.use_catalog_fixture()
         self.conn = store.db()
         self.effective = spend.role_tariff(ROLE)
         self.model = self.effective.model
@@ -271,8 +280,9 @@ class ChargeStepJournalTest(TaskSeededTmpRootTest):
         модели, посчитанный по её цене, лёг бы в коэффициент этой пары, и
         расхождение показало бы разницу прейскурантов двух моделей вместо
         расхождения тарифа с фактом."""
-        other = next(model_id for model_id in _catalog_models()
-                     if model_id != self.model)
+        other = FIXTURE_OTHER_MODEL
+        self.assertNotEqual(other, self.model, "шаг «другой модели» обязан "
+                                               "идти на другой модели")
         spend.charge_step(self.conn, self.TASK, ROLE,
                           cost(self.actual_for(4 * self.threshold)),
                           self.numbered(1, other))
@@ -328,12 +338,6 @@ class ChargeStepJournalTest(TaskSeededTmpRootTest):
                               self.numbered(attempt))
 
         self.assertEqual(len(self.divergence_alerts()), 1)
-
-
-def _catalog_models() -> list:
-    """Идентификаторы моделей боевого каталога, отсортированные."""
-    from orchestrator import models
-    return sorted(models.load_catalog().models)
 
 
 class ReportDivergenceTest(TaskSeededTmpRootTest):

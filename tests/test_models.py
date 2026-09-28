@@ -132,18 +132,31 @@ class CatalogTest(unittest.TestCase):
         провайдеров (SPEC 01M3EKCZJY9NGCW6VT878RX9JZ, требование 8): до
         него тест ждал ровно три модели Claude и краснел на фактическом
         каталоге.
+
+        Состав 28.09 — приложение `models.yaml` задачи
+        01M3KE8ZJXFARS6KC441PCDCQV (требование 3): добавлены
+        `claude-opus-5-5`, `gpt-6-sol` и `gpt-6-luna`, снята прежняя
+        старшая модель раздела `codex` (клиент Codex убирает её
+        14.10.2026; её идентификатор не называется здесь намеренно —
+        AC-3 требует, чтобы снятой строки не несло ни одного файла
+        `tests/`). Именно эта связка и есть причина, по которой состав
+        каталога правится задачей, а не `doc-commit models.yaml`:
+        перечень ниже приходится двигать тем же изменением, иначе полный
+        набор красный.
         """
         self.assertEqual(
             sorted(self.catalog.providers["claude"].models),
-            ["claude-fable-5-1", "claude-opus-5", "claude-sonnet-5"])
+            ["claude-fable-5-1", "claude-opus-5", "claude-opus-5-5",
+             "claude-sonnet-5"])
         self.assertEqual(
             sorted(self.catalog.providers["codex"].models),
-            ["gpt-5.5", "gpt-5.6-luna", "gpt-5.6-sol", "gpt-5.6-terra",
-             "gpt-6-astra"])
+            ["gpt-5.6-luna", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-6-astra",
+             "gpt-6-luna", "gpt-6-sol"])
         self.assertEqual(sorted(self.catalog.models),
                          ["claude-fable-5-1", "claude-opus-5",
-                          "claude-sonnet-5", "gpt-5.5", "gpt-5.6-luna",
-                          "gpt-5.6-sol", "gpt-5.6-terra", "gpt-6-astra"])
+                          "claude-opus-5-5", "claude-sonnet-5",
+                          "gpt-5.6-luna", "gpt-5.6-sol", "gpt-5.6-terra",
+                          "gpt-6-astra", "gpt-6-luna", "gpt-6-sol"])
 
         for name, section in sorted(self.catalog.providers.items()):
             for model_id in sorted(section.models):
