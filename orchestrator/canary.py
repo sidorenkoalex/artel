@@ -250,6 +250,38 @@ VERDICT_CEILING_EXHAUSTED = "ceiling"
 MARK_EXPECT_ESCALATION_YES = "<!-- canary-expect-escalation: yes -->"
 MARK_EXPECT_ESCALATION_NO = "<!-- canary-expect-escalation: no -->"
 
+# Четыре утверждения синтетического ответа на эскалацию (SPEC
+# 01M3MHBNMT1VDXSRQNV1GX30BV, требования 4 и 6) — именованными
+# константами, а не литералами внутри текста: утверждение существует в
+# ОДНОМ экземпляре, и тест адресует его именем, а не своей копией фразы.
+# Прежний текст назвал номер задачи, которая ввела механизм, и «вариант
+# A» — роль читала его как ответ по ЧУЖОЙ задаче на развилку, которой в
+# её вопросах не было (прогоны 20260928T165337Z и 20260928T162501Z:
+# аналитик четырежды повторил тот же вопрос и был снят предохранителем).
+_SYNTHETIC_ANSWER_NO_OPERATOR = "Оператора в этом прогоне нет"
+_SYNTHETIC_ANSWER_ROLE_DECIDES = (
+    "решение по вопросу принимаешь ты — в пределах ТЗ и SPEC задачи")
+_SYNTHETIC_ANSWER_WRITE_ASSUMPTION = (
+    "запиши выбранное толкование допущением в свой артефакт")
+_SYNTHETIC_ANSWER_SAME_ANSWER_AGAIN = (
+    "повторная эскалация по тому же вопросу получит этот же ответ")
+
+# Текст ответа — ОДИН на все роли и на все эскалации прогона (требование
+# 6): ни номера задачи (ни чужой, ни своей — роль знает свою из брифа
+# шага), ни имени роли, ни ссылки на вариант ответа. Адрес допущения —
+# «## Риски» с оговоркой: этот раздел несёт только `templates/PLAN.md`, а
+# `templates/` — защищённый путь, поэтому раздела, которого нет ни в
+# одном шаблоне, текст требовать не вправе (требование 5).
+_SYNTHETIC_ANSWER_TEXT = (
+    f"{_SYNTHETIC_ANSWER_NO_OPERATOR}: это синтетический прогон "
+    f"конвейера, отвечать на эскалацию некому, поэтому "
+    f"{_SYNTHETIC_ANSWER_ROLE_DECIDES}. Из возможных прочтений выбери "
+    f"наименее рискованное и {_SYNTHETIC_ANSWER_WRITE_ASSUMPTION}: в "
+    f"раздел «## Риски», а если шаблон твоего артефакта такого раздела "
+    f"не несёт — в его содержательный раздел. Продолжай работу с этим "
+    f"допущением: {_SYNTHETIC_ANSWER_SAME_ANSWER_AGAIN}, другого не "
+    f"будет.\n")
+
 
 def _pool_md_files(pool_dir: Path) -> list:
     """Шаблоны пула — отсортированные `*.md` каталога, не «все файлы»
@@ -1037,7 +1069,8 @@ def _pass_verifying(conn, task_id: str) -> None:
 
 def _pass_escalated_with_synthetic_answer(conn, task_id: str) -> None:
     """Возврат из `escalated` синтетическим ANSWER Оператора-заглушки
-    (требование 6, AC-6) — повторяет эффект ветки `elif state ==
+    (SPEC 01M1NEEWH5K1XPFRDGRMPYSBXJ, требование 6, AC-6 — механизм
+    введён им) — повторяет эффект ветки `elif state ==
     "escalated"` `fsm._cmd_approve` (читает `answer_baseline`/
     `escalated_from`, пишет `store.set_state`), НЕ вызов
     `fsm.cmd_approve`: тот на `escalated` требует sha
@@ -1055,14 +1088,17 @@ def _pass_escalated_with_synthetic_answer(conn, task_id: str) -> None:
     `answer.cmd_answer` коммитит ANSWER-n.md в артефактную ветку
     (best-effort push уходит в origin-заглушку клона, требование 3) —
     он не требует ни sha, ни фиксации, только `state == "escalated"`.
+
+    Сам текст ответа — `_SYNTHETIC_ANSWER_TEXT`, один на все роли и все
+    эскалации прогона: происхождение механизма (номер SPEC выше) живёт
+    ЗДЕСЬ, а не в тексте, который читает роль, — иначе роль принимает
+    ответ за ответ по другой задаче (SPEC 01M3MHBNMT1VDXSRQNV1GX30BV,
+    требование 3).
     """
     tmp = tempfile.NamedTemporaryFile(
         mode="w", suffix=".md", delete=False, encoding="utf-8")
     try:
-        tmp.write(
-            "Синтетический ответ прогона канарейки (заглушка Оператора, "
-            "SPEC 01M1NEEWH5K1XPFRDGRMPYSBXJ, требование 6): вариант A — "
-            "продолжай штатным путём.\n")
+        tmp.write(_SYNTHETIC_ANSWER_TEXT)
         tmp.close()
         answer.cmd_answer(task_id, tmp.name)
     finally:
