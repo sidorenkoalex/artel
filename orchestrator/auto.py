@@ -21,10 +21,30 @@ from .advance_gates.zones import ZONES_MANDATE_WITHOUT_PLAN_REFUSAL_ACTION
 # ему не адресуем.
 _stop_requested = False
 
+# Взведён только на время сна между опросами зоны
+# (`_sleep_until_next_poll`) — единственная длинная пауза цикла, в которой
+# «остановлюсь на границе между шагами» означало бы «не остановлюсь часами».
+_zone_wait_sleeping = False
+
+
+class _StopDuringZoneWait(Exception):
+    """Сон между опросами зоны прерван командой `stop`. Бросается ИЗ
+    обработчика сигнала, поэтому возникает ровно в точке `time.sleep` и
+    только пока `_zone_wait_sleeping` взведён; ловит его тот же
+    `_sleep_until_next_poll`, который сон и начал."""
+
 
 def _on_sigterm(signum, frame) -> None:
     global _stop_requested
     _stop_requested = True
+    if _zone_wait_sleeping:
+        # Решение Оператора 28.09.2026 (ANSWER-2, п.1): пока ожидание зоны
+        # включалось флагом вручную, «стоп учтётся на границе шагов» было
+        # терпимо; с включённым `config.AUTO_WAIT_ZONE_DEFAULT` в ожидание
+        # уходит КАЖДЫЙ вызов `auto`, и `stop` молча переставал бы работать
+        # на срок до `config.ZONE_WAIT_MAX_SEC`. Уже начатый шаг роли это
+        # по-прежнему не прерывает — там флаг не взведён.
+        raise _StopDuringZoneWait()
 
 # Действие журнала, которым отказ `advance` узнаётся вне зависимости от
 # конкретной причины (SPEC T038, требование 1): каждая точка `cmd_advance`
@@ -90,6 +110,47 @@ _ZONE_WAIT_CEILING_REASON = "потолок ожидания зоны исчер
 # тихого игнорирования отказа.
 _ZONE_WAIT_LEASE_LOST_REASON = "lease задачи потерян во время ожидания зоны"
 
+# Причина остановки цикла по команде `stop` — общая у границы между шагами
+# и у прерванного ожидания зоны (ANSWER-2, п.2: прерванное ожидание
+# завершает цикл ТАК ЖЕ, как `stop` на границе): задача остаётся в своём
+# состоянии, lease снимает `lease.run_locked` штатно, эскалации нет.
+_STOP_COMMAND_REASON = "штатная остановка — команда stop"
+
+
+def _stop_command_stop(task_id: str, state: str) -> "Stop":
+    """Исход остановки по команде `stop` — один на обе её точки."""
+    return Stop(state, _STOP_COMMAND_REASON,
+                f"artel.py auto {task_id} — продолжит отсюда", False)
+
+
+def _sleep_until_next_poll() -> bool:
+    """Пауза до следующего опроса зоны; `True` — пришла команда `stop`,
+    ожидание прерывается, не досыпая интервал.
+
+    Пауза остаётся ОДНИМ вызовом `time.sleep(config.ZONE_WAIT_POLL_SEC)`:
+    интервал опроса задача не меняет (ANSWER-2, п.1), и на «ровно
+    интервал» опирается всё, что этот сон подменяет. Слышимость `stop`
+    даёт не нарезка сна на короткие шаги, а прерывание самого сна —
+    обработчик сигнала бросает `_StopDuringZoneWait` прямо из
+    `time.sleep`, поэтому команда слышна в тот же момент, а не через
+    очередной интервал опроса.
+    """
+    global _zone_wait_sleeping
+    if _stop_requested:
+        return True
+    try:
+        _zone_wait_sleeping = True
+        # Сигнал мог прийти в окне между проверкой выше и взведением
+        # флага — тогда обработчик только пометил `_stop_requested` и не
+        # бросил; проверка закрывает окно, не начиная сон.
+        if not _stop_requested:
+            time.sleep(config.ZONE_WAIT_POLL_SEC)
+    except _StopDuringZoneWait:
+        pass
+    finally:
+        _zone_wait_sleeping = False
+    return _stop_requested
+
 
 def _wait_for_zone(conn, task_id: str, session_id: str, state: str) -> "Stop | None":
     """Цикл ожидания зоны требования 1 (AC-1..AC-4, AC-8а/б): опрашивает
@@ -107,9 +168,11 @@ def _wait_for_zone(conn, task_id: str, session_id: str, state: str) -> "Stop | N
     независимо от того, подменяет ли вызывающий код источник времени.
 
     `None` — зона свободна (либо не была занята вовсе — вызывающий уже
-    убедился в конфликте до вызова). `Stop` — потолок исчерпан либо
-    lease этой сессии потерян во время ожидания: задача остаётся
-    `state` (обычно `in_dev`), НЕ эскалирует (требование 3).
+    убедился в конфликте до вызова). `Stop` — потолок исчерпан, lease
+    этой сессии потерян во время ожидания либо пришла команда `stop`
+    (`_sleep_until_next_poll`, ANSWER-2 01M3KHQS7EQTHDT1RGCNH4KGTW):
+    задача остаётся `state` (обычно `in_dev`), НЕ эскалирует
+    (требование 3).
     """
     t = store.get_task(conn, task_id)
     conflict = zone_lock.blocking_conflict(conn, task_id, t)
@@ -122,16 +185,19 @@ def _wait_for_zone(conn, task_id: str, session_id: str, state: str) -> "Stop | N
 
     elapsed_sec = 0.0
     while True:
+        if _stop_requested:
+            return _stop_command_stop(task_id, state)
         if elapsed_sec >= config.ZONE_WAIT_MAX_SEC:
             hint = (f"artel.py status  (кто держит зону) — дождись мержа/kill "
                     f"занявшей задачи либо artel.py zone-release {task_id}, "
-                    f"затем artel.py auto {task_id} --wait-zone")
+                    f"затем artel.py auto {task_id}")
             return Stop(state, _ZONE_WAIT_CEILING_REASON, hint, False)
-        time.sleep(config.ZONE_WAIT_POLL_SEC)
+        if _sleep_until_next_poll():
+            return _stop_command_stop(task_id, state)
         elapsed_sec += config.ZONE_WAIT_POLL_SEC
         lease_refusal, _ = lease.acquire(conn, task_id, session_id)
         if lease_refusal is not None:
-            hint = f"artel.py auto {task_id} --wait-zone — перезапусти ожидание"
+            hint = f"artel.py auto {task_id} — перезапусти ожидание"
             return Stop(state, f"{_ZONE_WAIT_LEASE_LOST_REASON}: {lease_refusal}",
                         hint, True)
         t = store.get_task(conn, task_id)
@@ -543,8 +609,13 @@ def cmd_auto(task_id: str, session_id: str | None = None,
     `wait_zone` (SPEC 01M1VBEAWZW4EBZHKMGNBBK648, требования 1, 3,
     AC-1..AC-5): `True` (либо `config.AUTO_WAIT_ZONE_DEFAULT`, AC-5) —
     отказ занятости зоны не останавливает цикл, а ждёт освобождения
-    (`_wait_for_zone`) и продолжает тем же вызовом (AC-3); дефолт
-    `False` не меняет сегодняшнее поведение (немедленная остановка).
+    (`_wait_for_zone`) и продолжает тем же вызовом (AC-3). С 28.09.2026
+    настройка включена решением Оператора (SPEC
+    01M3KHQS7EQTHDT1RGCNH4KGTW), поэтому ждут ВСЕ вызовы `auto`: флаг
+    остаётся допустимым, но ничего не меняет, а дефолт `False` самого
+    параметра значит лишь «флага в командной строке не было». Границы
+    ожидания — потолок `config.ZONE_WAIT_MAX_SEC` и команда `stop`
+    (`_sleep_until_next_poll` прерывает сон между опросами).
 
     Механику шага команда не дублирует: внутри те же `cmd_run` и
     `cmd_advance`, которые Оператор зовёт руками, — бюджет, ретраи, журнал
@@ -906,9 +977,10 @@ def _role_run_step(conn, task_id: str, session_id: str, role: str,
     AC-1..AC-4, AC-8): эффективный режим — `wait_zone or config.
     AUTO_WAIT_ZONE_DEFAULT` (AC-5). Отказ занятости зоны в этом режиме
     не останавливает цикл — `_wait_for_zone` ждёт освобождения (либо
-    возвращает `Stop` по исчерпанному потолку, требование 3) и, если
-    зона освободилась, ЭТА ЖЕ функция повторяет `runner.cmd_run` тем же
-    вызовом (AC-3) — без выхода наружу и без ручного перезапуска.
+    возвращает `Stop` по исчерпанному потолку, требование 3, по потере
+    lease или по команде `stop`) и, если зона освободилась, ЭТА ЖЕ
+    функция повторяет `runner.cmd_run` тем же вызовом (AC-3) — без
+    выхода наружу и без ручного перезапуска.
     """
     while True:
         run_journaled_before = len(store.task_steps(conn, task_id))
@@ -1017,11 +1089,12 @@ def _cmd_auto(conn, task_id: str, session_id: str, wait_zone: bool = False) -> N
             # проверяется ИМЕННО на границе между шагами (верх цикла,
             # после того как прошлый run+advance уже отработал целиком)
             # — уже начатый шаг сигнал не прерывает, доиграет своим
-            # чередом.
-            auto_stop(conn, task_id, state,
-                      "штатная остановка — команда stop",
-                      f"artel.py auto {task_id} — продолжит отсюда",
-                      alert=False)
+            # чередом. Вторая точка того же исхода — прерванное ожидание
+            # зоны (`_wait_for_zone`, ANSWER-2 п.2), поэтому поля стопа
+            # собирает общий `_stop_command_stop`.
+            stop = _stop_command_stop(task_id, state)
+            auto_stop(conn, task_id, stop.state, stop.reason, stop.hint,
+                      alert=stop.alert)
             return
         if state == "verifying":
             if _advance_verifying_poll(conn, task_id, session_id):

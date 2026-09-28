@@ -252,7 +252,7 @@ class CmdStatusLeaseHolderTest(TaskSeededTmpRootTest):
 class CmdStatusZoneWaitMinutesTest(TmpRootTest):
     """SPEC 01M1VBEAWZW4EBZHKMGNBBK648, требование 4, AC-6: `status`
     добавляет минуты ожидания зоны, только пока задача реально в цикле
-    `auto --wait-zone` (запись входа в ожидание уже журналирована)."""
+    ожидания `auto` (запись входа в ожидание уже журналирована)."""
 
     OTHER = "T901"
 
@@ -279,9 +279,10 @@ class CmdStatusZoneWaitMinutesTest(TmpRootTest):
 
     def test_status_does_not_show_minutes_without_the_wait_cycle_entry(self):
         """Ловит мутацию: минуты появляются в строке `status` даже без
-        записи входа в ожидание — задача заблокирована зоной (`run`/`auto`
-        без `--wait-zone` останавливаются немедленно), но НЕ в цикле
-        ожидания, показывать «ждёт N мин» тут нечего."""
+        записи входа в ожидание — задача заблокирована зоной (так
+        выглядит одиночный `run`: он отказывает немедленно, настройка
+        `config.AUTO_WAIT_ZONE_DEFAULT` его не затрагивает), но НЕ в
+        цикле ожидания, показывать «ждёт N мин» тут нечего."""
         out = capture(catalog.cmd_status)
 
         self.assertNotIn("мин", out)
