@@ -679,29 +679,93 @@ def _install_codex_pointer(payload: bytes) -> None:
     target.write_bytes(payload)
 
 
-def _refuse_unless_clone_logged_in(role: str) -> None:
-    """Проверяет вход Codex домом роли КЛОНА и отказывает до первого шага
-    роли, если он не подтверждён (SPEC 01M3HST1381E1FZCYAN2TSB1F3,
-    требование 4).
+def _refuse_unless_clone_logged_in(role: str, pult_role_home: Path) -> None:
+    """Проверяет вход Codex окружением шага КЛОНА и отказывает до первого
+    шага роли, если он не подтверждён (SPEC 01M3HST1381E1FZCYAN2TSB1F3,
+    требование 4), НАЗЫВАЯ при этом, чей это дефект (SPEC
+    01M3M55070T5NJFYM3QQJH4B9V, требование 6).
 
     Тем же узлом, что `doctor` (`doctor.check_codex_chatgpt_auth`), а не
     своей копией его логики: расхождение копилось бы молча — `ok` у
-    канарейки при красной строке `doctor` или наоборот.
+    канарейки при красной строке `doctor` или наоборот. По той же причине
+    вторым вызовом ниже спрашивается ТОТ ЖЕ узел, а не отдельная проверка
+    «а пультом-то вошли?».
 
     Импорт отложенный, потому что пакет `orchestrator/doctor` импортирует
     этот модуль (тот же приём и по той же причине, что в
     `catalog.py`/`runner.py`).
 
-    В отказ идут имя проверки и её `detail` целиком, а не своя
-    формулировка: `detail` несёт рецепт `CODEX_AUTH_RECIPE` с двумя
-    однократными шагами Оператора, которыми красная строка и чинится.
+    Два исхода отказа адресованы РАЗНЫМ людям и потому различаются
+    текстом:
+
+    - вход не подтверждён и домом роли пульта — однократный шаг Оператора
+      не сделан; в отказ идут имя проверки и её `detail` целиком, потому
+      что `detail` несёт рецепт `CODEX_AUTH_RECIPE` с обоими шагами,
+      которыми красная строка и чинится;
+    - вход домом роли пульта подтверждён, а окружением шага клона нет —
+      сломан перенос входа Codex в клон, то есть дефект пульта. Рецепта
+      в таком отказе нет намеренно: он адресовал бы Оператору шаг,
+      который тот уже сделал, и настоящая причина осталась бы
+      неназванной.
+
+    Половин у переноса ДВЕ, и отказ называет обе: окружения двух вызовов
+    различаются не одним именем, а тремя (`HOME`, `ZDOTDIR`,
+    `CODEX_HOME`), поэтому тот же исход «клон не `ok`, пульт `ok`» даёт и
+    сломанный указатель связки ключей (`_install_codex_pointer`;
+    например, относительный путь `_KEYCHAIN_POINTER_REL` сменился в новой
+    macOS). Назови отказ единственной причиной — Оператор читал бы две
+    исправные функции, а сломанная третья в тексте не значилась бы вовсе.
+
+    Второй вызов делается ТОЛЬКО на пути отказа: при подтверждённом входе
+    узел зовётся ровно один раз, как до задачи (требование 6).
     """
     from . import doctor
     check = doctor.check_codex_chatgpt_auth(role)
-    if check.status != "ok":
-        sys.exit(f"canary: вход Codex домом роли эфемерного клона не "
-                 f"подтверждён — шаг роли упал бы авторизацией за деньги. "
-                 f"{check.name}: {check.detail}")
+    if check.status == "ok":
+        return
+    if _pult_home_login_confirmed(role, pult_role_home):
+        sys.exit(f"canary: вход Codex домом роли пульта подтверждён, а "
+                 f"проверка {check.name} окружением шага эфемерного клона "
+                 f"— нет. Это дефект пульта, а не несделанный шаг "
+                 f"Оператора: повторный вход этого не изменит. Сломана "
+                 f"одна из двух половин переноса входа в клон — "
+                 f"переопределение {codex_provider.HOME_ENV} "
+                 f"(`canary._ephemeral_clone` его ставит, "
+                 f"`CodexProvider.environment` отдаёт; шагу клона отдано "
+                 f"{codex_provider.HOME_ENV}="
+                 f"{pult_role_home / codex_provider.DEPLOYED_HOME_DIR}) "
+                 f"и/или указатель связки ключей "
+                 f"(`canary._install_codex_pointer` кладёт его в "
+                 f"{config.ROLE_HOME / _KEYCHAIN_POINTER_REL}) — до "
+                 f"починки прогон на наборе с ролями "
+                 f"{codex_provider.CLI_NAME} невозможен.")
+    sys.exit(f"canary: вход Codex не подтверждён ни окружением шага "
+             f"эфемерного клона, ни домом роли пульта — шаг роли упал бы "
+             f"авторизацией за деньги. {check.name}: {check.detail}")
+
+
+def _pult_home_login_confirmed(role: str, pult_role_home: Path) -> bool:
+    """Подтверждён ли вход Codex домом роли ПУЛЬТА — тем же узлом
+    `doctor`, но с окружением, которое собралось бы вне блока клона
+    (SPEC 01M3M55070T5NJFYM3QQJH4B9V, требование 6).
+
+    Снимается и переадресация `config.ROLE_HOME`, и переопределение
+    `CODEX_HOME`: узел берёт все три имени у `CodexProvider.environment`,
+    и ответ обязан относиться к тому дому, каким входил Оператор, а не к
+    гибриду «`HOME` клона + `CODEX_HOME` пульта». Оба снятия — в
+    `finally`: вызывающий на обеих ветках уходит `sys.exit`, а внешний
+    `finally` блока клона до этого ещё не добрался, и оставленные
+    пультовские пути увели бы уборку клона не туда.
+    """
+    from . import doctor
+    saved_role_home = config.ROLE_HOME
+    saved_override = codex_provider.set_codex_home_override(None)
+    config.ROLE_HOME = pult_role_home
+    try:
+        return doctor.check_codex_chatgpt_auth(role).status == "ok"
+    finally:
+        config.ROLE_HOME = saved_role_home
+        codex_provider.set_codex_home_override(saved_override)
 
 
 @contextmanager
@@ -769,19 +833,33 @@ def _ephemeral_clone(target_sha: str | None = None,
     поведение байт-в-байт (требование 3, AC-14).
 
     `codex_auth` (SPEC 01M3HST1381E1FZCYAN2TSB1F3, требования 1/4) — вход
-    Codex для клона: указатель связки ключей копируется в дом роли КЛОНА, и
-    вход домом клона проверяется узлом `doctor`; не `ok` — отказ до
-    `yield`, то есть до заведения задачи и до первого шага роли. `None` (по
+    Codex для клона: указатель связки ключей копируется в дом роли КЛОНА,
+    `CODEX_HOME` шага переопределяется каталогом клиента дома роли ПУЛЬТА
+    (SPEC 01M3M55070T5NJFYM3QQJH4B9V, требование 1), и вход проверяется
+    узлом `doctor` уже этим окружением; не `ok` — отказ до `yield`, то
+    есть до заведения задачи и до первого шага роли. `None` (по
     умолчанию) — ни одна роль прогона не идёт провайдером Codex, дом клона
-    остаётся ровно тем, что развернул холодный старт (требование 2).
+    остаётся ровно тем, что развернул холодный старт (требование 2), а
+    окружение шага — тремя именами от `config.ROLE_HOME` клона.
 
-    Оба действия — ПОСЛЕ `catalog.cmd_init()` и ВНУТРИ `try:`, и ни то, ни
-    другое не переставимо. После `cmd_init()`: `catalog._deploy_role_home_
+    Все три действия — ПОСЛЕ `catalog.cmd_init()` и ВНУТРИ `try:`, и ни
+    одно не переставимо. После `cmd_init()`: `catalog._deploy_role_home_
     reference` выходит первой же строкой на существующем `ROLE_HOME`, и
     указатель, положенный раньше, лишил бы роли клона курируемого дома
     целиком. Внутри `try:`: `finally` ниже — единственная уборка клона, и
     отказ проверки входа обязан оставить `/tmp` чистым, а скопированный
-    указатель не обязан пережить прогон.
+    указатель не обязан пережить прогон. Переопределение — ДО проверки
+    входа: зелёная строка предполёта обязана доказывать вход того дома,
+    каким пойдёт шаг (требование 5), а оба читают один
+    `CodexProvider.environment`.
+
+    Переопределение `CODEX_HOME` сохраняется и восстанавливается тем же
+    приёмом и в том же `finally`, что и пути `config`: оно такое же
+    модульное состояние процесса, и выход исключением обязан вернуть
+    боевому шагу прежнее окружение (требование 4). Восстанавливается
+    ПРЕЖНЕЕ значение, а не `None`, — по той же причине, по которой пути
+    восстанавливаются из `saved`: вложенный блок не вправе снимать
+    переопределение внешнего.
 
     `tempfile.mkdtemp`/`shutil.rmtree` — единственные стандартные
     способы завести/убрать временный каталог в CPython (перехватываются
@@ -792,6 +870,7 @@ def _ephemeral_clone(target_sha: str | None = None,
     dest = Path(tempfile.mkdtemp(prefix="artel-canary-"))
     origin_dir = Path(tempfile.mkdtemp(prefix="artel-canary-origin-"))
     saved = {attr: getattr(config, attr) for attr in _CLONE_CONFIG_ATTRS}
+    saved_codex_home = codex_provider.codex_home_override()
     try:
         clone = subprocess.run(
             ["git", "clone", "-q", str(outer_root), str(dest)],
@@ -830,9 +909,12 @@ def _ephemeral_clone(target_sha: str | None = None,
             config.MODELS_LOCAL.write_text(local_layer_text, encoding="utf-8")
         if codex_auth is not None:
             _install_codex_pointer(codex_auth.pointer)
-            _refuse_unless_clone_logged_in(codex_auth.role)
+            codex_provider.set_codex_home_override(
+                saved["ROLE_HOME"] / codex_provider.DEPLOYED_HOME_DIR)
+            _refuse_unless_clone_logged_in(codex_auth.role, saved["ROLE_HOME"])
         yield dest
     finally:
+        codex_provider.set_codex_home_override(saved_codex_home)
         for attr, value in saved.items():
             setattr(config, attr, value)
         shutil.rmtree(dest, ignore_errors=True)

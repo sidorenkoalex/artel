@@ -441,6 +441,104 @@ class EnvironmentTest(TmpRootTest):
         self.assertNotIn(AMBIENT_KEY, set(env.values()), env)
 
 
+class CodexHomeOverrideTest(TmpRootTest):
+    """Переопределение `CODEX_HOME` шага — SPEC 01M3M55070T5NJFYM3QQJH4B9V,
+    требования 1, 3, 4.
+
+    Ставит его в бою только блок эфемерного клона канарейки; здесь предмет
+    — сам провайдер: что переопределение меняет РОВНО одно имя из трёх,
+    каталога не заводит и снимается возвратом прежнего значения.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.addCleanup(codex_provider.set_codex_home_override,
+                        codex_provider.codex_home_override())
+        self.pult_client = self.root / "pult-rolevoi-dom" / ".codex"
+
+    def env(self) -> dict:
+        return providers.get("codex").environment("developer", "T1")
+
+    def test_the_override_replaces_codex_home_and_leaves_home_and_zdotdir(self):
+        """Переопределение стоит — `CODEX_HOME` равен ему, а `HOME` и
+        `ZDOTDIR` по-прежнему считаются от `config.ROLE_HOME`.
+
+        Ловит мутацию: клон отдаёт свой `CODEX_HOME` — вход не найден:
+        клиент ключует запись подписочного входа в связке ключей ПУТЁМ
+        `CODEX_HOME`, путь дома роли клона новый на каждом прогоне, и
+        `codex login` Оператора такой записи не заводил ни разу — шаг
+        роли упал бы авторизацией до первого токена (отказ прогона
+        20260928T135246Z). Обратная мутация — «переопределили дом роли
+        целиком» — уводит в пульт и `HOME` (шаг перестал бы видеть
+        перенесённый в клон указатель связки ключей), и `ZDOTDIR` (под
+        канарейкой перестал бы проверяться `.zshenv` проверяемого sha).
+        """
+        codex_provider.set_codex_home_override(self.pult_client)
+
+        env = self.env()
+
+        self.assertEqual(str(self.pult_client), env["CODEX_HOME"])
+        self.assertEqual(str(config.ROLE_HOME), env["HOME"])
+        self.assertEqual(str(config.ROLE_HOME / ".codex"), env["ZDOTDIR"])
+
+    def test_the_override_does_not_create_the_directory_it_points_at(self):
+        """Каталог переопределения провайдер не заводит, а каталог дома
+        роли — по-прежнему заводит.
+
+        Ловит мутацию: `mkdir` перенесён на отдаваемый каталог «за
+        компанию» — прогон канарейки заводил бы пустой
+        `.artel/home/.codex` на пульте, и жёлтая строка
+        `codex-role-home` («каталог пуст или отличается от референса»)
+        поднималась бы там, где до прогона была зелёной («каталога нет
+        вовсе»), то есть прогон красил бы диагностику самого пульта.
+        """
+        codex_provider.set_codex_home_override(self.pult_client)
+
+        self.env()
+
+        self.assertFalse(self.pult_client.exists())
+        self.assertTrue((config.ROLE_HOME / ".codex").is_dir())
+
+    def test_setting_the_override_returns_the_previous_one(self):
+        """Постановка отдаёт ПРЕЖНЕЕ значение, и возврат его снимает
+        переопределение до исходного состояния.
+
+        Ловит мутацию: снятие написано как «поставить `None`» —
+        вложенный блок клона (или второй вызов проверки входа домом роли
+        пульта, который переопределение временно снимает) возвращал бы
+        внешнему блоку окружение без переопределения, и шаг роли после
+        него получал бы `CODEX_HOME` клона: тот же отказ авторизации,
+        только на середине прогона.
+        """
+        first = self.root / "pervyi-rolevoi-dom" / ".codex"
+
+        self.assertIsNone(codex_provider.set_codex_home_override(first))
+        self.assertEqual(first,
+                         codex_provider.set_codex_home_override(
+                             self.pult_client))
+        self.assertEqual(self.pult_client,
+                         codex_provider.set_codex_home_override(None))
+        self.assertIsNone(codex_provider.codex_home_override())
+
+    def test_without_an_override_all_three_names_follow_the_role_home(self):
+        """Переопределения нет — все три имени считаются от
+        `config.ROLE_HOME`, как до задачи.
+
+        Ловит мутацию: переопределение сделано безусловным (модульное
+        значение инициализировано путём вместо `None`, либо ветка выбора
+        перепутана) — боевой шаг вне всякой канарейки получал бы
+        `CODEX_HOME`, к его дому роли отношения не имеющий.
+        """
+        codex_provider.set_codex_home_override(None)
+        deployed = config.ROLE_HOME / ".codex"
+
+        env = self.env()
+
+        self.assertEqual(
+            {"HOME": str(config.ROLE_HOME), "CODEX_HOME": str(deployed),
+             "ZDOTDIR": str(deployed)}, env)
+
+
 class StepEnvironmentAllowlistTest(TmpRootTest):
     """Белый список манифеста и СОБРАННОЕ окружение шага — требование 3,
     AC-4 (REVIEW.md итерации 1, R1-F3).
