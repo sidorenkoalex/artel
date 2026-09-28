@@ -14,6 +14,11 @@
 # остаться строкой (2.1.251, 2026-09-20), цены — числами; все четыре цены
 # обязательны, явный ноль — ошибка конфигурации.
 #
+# Правка СОСТАВА каталога (добавление или снятие записи) идёт задачей, а
+# не `doc-commit`: перечень моделей по разделам сверяет литералом
+# tests/test_models.py, и без его правки тем же изменением полный набор
+# красный (SPEC 01M3KE8ZJXFARS6KC441PCDCQV, требование 6).
+#
 # Ярус роли -> модель задаёт локальный слой .artel/models.yaml (вне git,
 # шаблон кладут `init` и `doctor --fix`); здесь его нет намеренно: выбор
 # моделей — дело конкретного пульта, а каталог — общее знание.
@@ -24,47 +29,62 @@ providers:
     # несёт манифест стека (orchestrator/providers/claude.py, CLI_MINIMUM).
     min_cli_version: 1.0.0
     cost_from_cli: true
+    # Прейскурант Anthropic за миллион токенов. Числа и идентификаторы
+    # всех записей раздела сверены Оператором 28.09.2026 по странице цен
+    # и страницам моделей Anthropic (platform.claude.com, прочитаны
+    # 28.09.2026) — отсюда общая price_date раздела.
     models:
       claude-sonnet-5:
         min_cli_version: 1.0.0
         status: supported
-        # Прейскурант Anthropic за миллион токенов; те же числа курс
-        # пульта нёс до калибровки 20.09 (docs/backlog.md, копилка 2).
+        # До сверки 28.09 запись несла курс, взятый из config.TOKEN_RATES
+        # до калибровки 20.09 (3.0/15.0/3.75/0.30) — он разошёлся с
+        # действующим прейскурантом по всем четырём видам токенов.
         list_price_usd_per_mtok:
-          input: 3.0
-          output: 15.0
-          cache_write: 3.75
-          cache_read: 0.30
-        price_date: 2026-09-20
+          input: 2.00
+          output: 10.00
+          cache_write: 2.50
+          cache_read: 0.20
+        price_date: 2026-09-28
       claude-opus-5:
         min_cli_version: 1.0.0
         status: supported
         # Калибровка 20.09 (config.TOKEN_RATES, задача
         # 01M2ZNJX2N5SPZCAQE6EHD4EWH): прейскурант сошёлся с фактом CLI по
-        # 93 шагам с коэффициентом 1.009.
+        # 93 шагам с коэффициентом 1.009. Сверка 28.09 те же числа
+        # подтвердила — меняется только price_date, точка отсчёта сверки
+        # тарифа (doctor.check_model_tariff_freshness).
         list_price_usd_per_mtok:
           input: 5.0
           output: 25.0
           cache_write: 6.25
           cache_read: 0.50
-        price_date: 2026-09-20
+        price_date: 2026-09-28
+      claude-opus-5-5:
+        # Минимум — по документации клиента; подтверждено на пульте
+        # 28.09.2026: клиент 2.1.274 отвечает `unrecognized_model`.
+        min_cli_version: 2.1.280
+        status: supported
+        list_price_usd_per_mtok:
+          input: 4.00
+          output: 20.00
+          cache_write: 5.00
+          cache_read: 0.20
+        price_date: 2026-09-28
       claude-fable-5-1:
         # Минимум — инцидент 19.09 (01M2XFSJ1Z, 01M2XFSE8G): «version
         # 2.1.251 or newer is required» за 0 токенов и три попытки.
         min_cli_version: 2.1.251
         status: supported
-        # ЦЕНЫ НЕ СВЕРЕНЫ: у шага роли, заводившего этот каталог, нет
-        # сети, а в репозитории цен этой модели нет ни в одном источнике
-        # — запись заведена по ценам claude-opus-5 и ждёт сверки
-        # Оператором (`doc-commit models.yaml`). Ни один ярус на модель
-        # сегодня не указывает, потребителя тарифа в пульте пока нет
-        # (часть 2 линии) — на учёт расхода значение не влияет.
+        # До сверки 28.09 запись стояла на ценах claude-opus-5 и ждала
+        # сверки Оператором: у шага роли, заводившего каталог, не было
+        # сети. Теперь числа — со страницы модели, прочитанной 28.09.
         list_price_usd_per_mtok:
-          input: 5.0
-          output: 25.0
-          cache_write: 6.25
-          cache_read: 0.50
-        price_date: 2026-09-20
+          input: 10.00
+          output: 50.00
+          cache_write: 12.50
+          cache_read: 0.25
+        price_date: 2026-09-28
   codex:
     cli: codex
     # Нижняя граница самого CLI — то же число, что несёт провайдер
@@ -75,16 +95,18 @@ providers:
     # `codex exec --json` стоимости шага в долларах не сообщает — расход
     # считается тарифом каталога по токенам (часть 2 линии провайдеров).
     cost_from_cli: false
-    # Прейскурант OpenAI за миллион токенов, стандартный тариф; источник
-    # https://developers.openai.com/api/docs/pricing, дата 2026-09-21,
-    # получен Оператором через `codex exec` с поиском в интернете
-    # (ANSWER-1 родительской задачи, вопросы 3-4).
+    # Прейскурант OpenAI за миллион токенов, стандартный тариф. Числа и
+    # идентификаторы всех записей раздела сверены Оператором 28.09.2026 по
+    # странице цен OpenAI (https://developers.openai.com/api/docs/pricing)
+    # и журналу изменений клиента — по копиям веб-архива от 26-27.09.2026:
+    # живые страницы с пульта недоступны.
     #
-    # cache_write ВЕЗДЕ равен input не по прейскуранту вендора, а по его
-    # отсутствию: у OpenAI запись кэша отдельной строкой не тарифицируется
-    # и оплачивается как обычный вход (ANSWER-1, вопрос 3). Ноль здесь
-    # поставить нельзя — orchestrator/models.py считает нулевую цену
-    # ошибкой конфигурации, а не бесплатностью.
+    # Запись в кэш — СВОЯ строка прейскуранта у каждой записи. До сверки
+    # 28.09 она везде повторяла цену входа: отдельной строки у вендора
+    # тогда не нашлось (ANSWER-1, вопрос 3), и равенство входу стояло как
+    # заведомо не меньшая оценка. Ноль здесь поставить нельзя —
+    # orchestrator/models.py считает нулевую цену ошибкой конфигурации,
+    # а не бесплатностью.
     models:
       gpt-6-astra:
         min_cli_version: 0.155.1
@@ -92,42 +114,51 @@ providers:
         list_price_usd_per_mtok:
           input: 10.00
           output: 50.00
-          cache_write: 10.00
+          cache_write: 12.50
           cache_read: 1.00
-        price_date: 2026-09-21
+        price_date: 2026-09-28
+      gpt-6-sol:
+        min_cli_version: 0.156.1
+        status: experimental
+        list_price_usd_per_mtok:
+          input: 2.00
+          output: 10.00
+          cache_write: 2.50
+          cache_read: 0.20
+        price_date: 2026-09-28
+      gpt-6-luna:
+        min_cli_version: 0.157.0
+        status: experimental
+        list_price_usd_per_mtok:
+          input: 0.10
+          output: 0.50
+          cache_write: 0.125
+          cache_read: 0.01
+        price_date: 2026-09-28
       gpt-5.6-sol:
         min_cli_version: 0.155.1
         status: experimental
         list_price_usd_per_mtok:
           input: 4.00
           output: 20.00
-          cache_write: 4.00
+          cache_write: 5.00
           cache_read: 0.40
-        price_date: 2026-09-21
+        price_date: 2026-09-28
       gpt-5.6-terra:
         min_cli_version: 0.155.1
         status: experimental
         list_price_usd_per_mtok:
           input: 2.00
           output: 12.00
-          cache_write: 2.00
+          cache_write: 2.50
           cache_read: 0.20
-        price_date: 2026-09-21
+        price_date: 2026-09-28
       gpt-5.6-luna:
         min_cli_version: 0.155.1
         status: experimental
         list_price_usd_per_mtok:
           input: 0.20
           output: 1.20
-          cache_write: 0.20
+          cache_write: 0.25
           cache_read: 0.02
-        price_date: 2026-09-21
-      gpt-5.5:
-        min_cli_version: 0.155.1
-        status: experimental
-        list_price_usd_per_mtok:
-          input: 5.00
-          output: 30.00
-          cache_write: 5.00
-          cache_read: 0.50
-        price_date: 2026-09-21
+        price_date: 2026-09-28
