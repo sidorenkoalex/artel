@@ -211,10 +211,12 @@ class AmendGroupLineTest(unittest.TestCase):
 
     def test_post_rule_plank_is_checked(self):
         """Лок несёт строку группы — правка без неё даёт ошибку с именем
-        файла.
+        файла. Подключение к обоим путям `amend-tests` сторожит
+        `tests/test_amend.py::AmendGroupLineRefusalTest`.
 
-        Ловит мутацию: проверка строки группы не подключена к
-        `amend-tests` — ошибок нет.
+        Ловит мутацию: `_group_line_errors` считает планкой «до правила»
+        и лок, несущий строку группы (`plank_has_group_lines` не
+        различает), — правка без строки группы проходит без ошибок.
         """
         locked = {f"{self.TDIR}/test_ac.py": plank(guard.GROUP_ONE_OFF)}
         errors = self.errors(config.DEFAULT_TARGET, locked,
