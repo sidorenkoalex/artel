@@ -239,6 +239,21 @@ def _acceptance_run_refuses(conn, task_id: str, t, tdir, target: str,
             long_lived = sorted(digests)
         if _missing_plank_refuses():
             return True
+    else:
+        # Без рабочей копии на ветке задачи долгоживущие файлы перечня
+        # исполнить негде; прогон одной планки молча выронил бы их группу
+        # (требование 9) — отказ, как на выходе из `tests_writing`.
+        digests, _reason = long_lived_manifest(task_id, t, target)
+        if digests is None or digests:
+            detail = (f"рабочая копия задачи не выписана на ветку "
+                      f"{t['branch']} — долгоживущие файлы перечня исполнить "
+                      f"негде")
+            store.journal(conn, task_id, "fsm",
+                          "переход отклонён: приёмочные тесты", detail)
+            print(f"[{task_id}] переход отклонён: {detail}")
+            print(f"  дальше: artel.py workspace {task_id} и повтори "
+                  f"artel.py advance {task_id}")
+            return True
     if long_lived:
         green, tail = acceptance.run(acc_tdir, cwd=run_cwd, extra=long_lived)
     else:

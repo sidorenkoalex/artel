@@ -183,6 +183,31 @@ class TestAuthorCheckpointMandateTest(_LongLivedGitTest):
         self.assertEqual(claude_md.read_text(encoding="utf-8"), original)
         self.assertIn("CLAUDE.md", self.journal_text())
 
+    def test_own_file_edit_and_delete_are_committed(self):
+        """Свой файл закоммичен прошлым чекпоинтом, задача в
+        `tests_writing`: правка коммитится (голова несёт новый текст),
+        удаление коммитится (пути в голове нет), диск не откачен.
+
+        Ловит мутацию: своим считается только НОВЫЙ нетрекенный файл, а
+        правка (`M`) и удаление (`D`) закоммиченного своего файла идут в
+        откат — голова держит старый текст.
+        """
+        self.set_row(state="tests_writing")
+        self.write_code_file(self.own, long_lived_source())
+        checkpoint.commit_timeout_checkpoint(store.db(), self.TASK, "test_author")
+        self.assertIsNotNone(self.branch_text(self.own))
+
+        edited = long_lived_source(tag=str(random.randrange(1 << 30)))
+        self.write_code_file(self.own, edited)
+        checkpoint.commit_success_checkpoint(store.db(), self.TASK, "test_author")
+        self.assertEqual(self.branch_text(self.own), edited)
+        self.assertEqual((self.wt / self.own).read_text(encoding="utf-8"), edited)
+
+        (self.wt / self.own).unlink()
+        checkpoint.commit_timeout_checkpoint(store.db(), self.TASK, "test_author")
+        self.assertIsNone(self.branch_text(self.own))
+        self.assertFalse((self.wt / self.own).exists())
+
     def test_own_file_is_rolled_back_outside_tests_writing(self):
         """Та же правка своего файла, но задача уже в `in_dev`: файл
         откачен, в кодовую ветку не попал.
