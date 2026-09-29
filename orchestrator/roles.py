@@ -126,10 +126,25 @@ def _local_provider_override(role: str) -> str | None:
     трейсбеком из чтения провайдера незачем (тот же приём защитной
     деградации, что у `providers.name_for_role`). Ключа нет в слое —
     поведение байт-в-байт как до этой задачи.
+
+    Роль с записью `role_models:` без записи `role_providers:` (SPEC
+    01M3PYMQ6N4SCAJ9WWTTKH6XNG, требование 2) идёт провайдером модели
+    записи в каталоге — тем же, что называет `models.resolve_role`:
+    иначе шаг ушёл бы CLI из `roles.yaml` с идентификатором модели
+    чужого провайдера. Модели нет в каталоге — `None`: об этом говорит
+    именованный отказ `resolve_role` самого шага.
     """
     from . import models
     try:
-        return models.load_local().role_providers.get(role)
+        local = models.load_local()
+    except models.ModelsError:
+        return None
+    if role in local.role_providers:
+        return local.role_providers[role]
+    if role not in local.role_models:
+        return None
+    try:
+        return models.catalog_model(local.role_models[role]).provider
     except models.ModelsError:
         return None
 

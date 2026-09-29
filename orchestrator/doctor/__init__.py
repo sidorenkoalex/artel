@@ -184,7 +184,8 @@ from .orphan_branches import (ORPHAN_ARTIFACT_BRANCH_SOURCE,
 from .ignored_artifacts import _fix_ignored_artifact_files
 from .git_hooks import (HOOKS_PATH, HOOK_NAMES, GIT_HOOKS_CHECK,
                         check_git_hooks, _fix_git_hooks)
-from .model_catalog import (check_models_catalog, check_models_local,
+from .model_catalog import (ROLE_MODELS_CHECK, check_models_catalog,
+                            check_models_local, check_role_models,
                             fix_models_local)
 from .model_tariffs import (FRESHNESS_CHECK, MODEL_CHANGE_CHECK,
                             _tariff_age_days, _resolved_roles,

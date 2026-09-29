@@ -108,6 +108,46 @@ def check_models_local() -> doctor.Check:
                         f"{doctor.config.MODELS_LOCAL}: {', '.join(chains)}")
 
 
+ROLE_MODELS_CHECK = "role-models"
+
+
+def check_role_models() -> list:
+    """По строке на каждую запись `role_models:` локального слоя (SPEC
+    01M3PYMQ6N4SCAJ9WWTTKH6XNG, требование 2, AC-5): роль и модель,
+    на которой она идёт мимо своего яруса.
+
+    Строка на запись, а не одна на раздел: запись — ручка Оператора,
+    переводящая ровно одну роль, и забытая после замера запись обязана
+    быть видна сама по себе, а не строкой-перечнем, где её легко не
+    заметить. Запись, которая не разрешается, — `fail` с текстом отказа
+    `resolve_role`: он называет и роль, и модель.
+
+    Раздела нет или слой не прочитан — строк нет: о нечитаемом слое
+    говорит `check_models_local`.
+    """
+    try:
+        local = doctor.models.load_local()
+    except doctor.models.ModelsError:
+        return []
+    catalog, _ = doctor.models.layers_or_none()
+    checks = []
+    for role, model_id in local.role_models.items():
+        try:
+            resolved = doctor.models.resolve_role(role, catalog, local)
+        except doctor.models.ModelsError as exc:
+            checks.append(doctor.Check(
+                ROLE_MODELS_CHECK, "fail",
+                f"модель роли из '{doctor.models.ROLE_MODELS_KEY}:': "
+                f"{role} → {model_id} не разрешается: {exc}"))
+            continue
+        checks.append(doctor.Check(
+            ROLE_MODELS_CHECK, "ok",
+            f"модель роли из '{doctor.models.ROLE_MODELS_KEY}:' "
+            f"{doctor.config.MODELS_LOCAL}: {role} → {model_id} "
+            f"({resolved.provider}) мимо яруса {resolved.tier}"))
+    return checks
+
+
 def fix_models_local() -> None:
     """`doctor --fix` кладёт шаблон локального слоя, если файла нет
     (требование 7, AC-9). Существующий файл не перезаписывается и не

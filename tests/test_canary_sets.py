@@ -2,7 +2,10 @@
 разбор `canary_sets:`/`role_providers:` локального слоя, отказы команды
 `canary --set` ДО эфемерного клона, сборка локального слоя клона,
 переопределение провайдера роли, ключ бейзлайна и строк прогонов по паре
-(шаблон, набор) и разбор флага `--set`.
+(шаблон, набор) и разбор флага `--set`. С SPEC 01M3PYMQ6N4SCAJ9WWTTKH6XNG
+слой клона собирается из слоя пульта, а набор переводит только свои роли
+записями `role_models:`/`role_providers:` — тесты прежнего сдвига яруса
+переписаны под это (перечень — в PLAN.md задачи).
 
 Каталог моделей, карта исполнителей и локальный слой здесь — ВРЕМЕННЫЕ
 файлы под патчами `config`, а не боевые `models.yaml`/`roles.yaml`: оба
@@ -275,6 +278,25 @@ class RoleProviderOverrideTest(_SetLayersTest):
 
         self.assertEqual("claude", roles.provider("developer"))
 
+    def test_role_models_entry_without_role_providers_takes_the_model_provider(self):
+        """Запись `role_models:` без записи `role_providers:` ведёт роль
+        провайдером модели записи в каталоге — тем же, что называет
+        `models.resolve_role` (SPEC 01M3PYMQ6N4SCAJ9WWTTKH6XNG, требование
+        2); запись `role_providers:` по-прежнему главнее.
+
+        Ловит мутацию: `roles.provider` читает только `role_providers:` —
+        роль, переведённая Оператором на модель Codex одной записью
+        `role_models:`, ушла бы CLI `claude` с идентификатором модели
+        Codex, то есть оплаченной попыткой чужого CLI.
+        """
+        self.write_local("role_models:\n  writer: model-codex-a\n"
+                         "  developer: model-codex-a\n"
+                         "role_providers:\n  developer: claude\n")
+
+        self.assertEqual("codex", roles.provider("writer"))
+        self.assertEqual("claude", roles.provider("developer"))
+        self.assertEqual("claude", roles.provider("analyst"))
+
     def test_role_outside_roles_yaml_still_refuses_even_with_an_override(self):
         """Ловит мутацию: переопределение читается ПЕРВЫМ — роль, которой в
         карте исполнителей нет вовсе, получила бы провайдера из слоя, и
@@ -322,14 +344,25 @@ class SetPlanRefusalsTest(_SetLayersTest):
                                     "model-net-v-kataloge")))
 
     def test_two_roles_of_one_tier_with_different_models_are_refused(self):
-        """Ловит мутацию: сборка `tiers:` идёт присваиванием — вторая роль
-        молча перебивала бы первую, и прогон шёл бы на модели той роли,
-        которая в наборе оказалась последней."""
-        message = self.refusal(("developer", "codex", "model-codex-a"),
-                               ("reviewer", "codex", "model-codex-b"))
+        """Две роли одного яруса на разных моделях — больше НЕ отказ (SPEC
+        01M3PYMQ6N4SCAJ9WWTTKH6XNG, требование 3): каждая роль получает в
+        слое клона свою модель. Имя метода — прежнее: тест переписан под
+        новое требование, а не удалён (AC-14).
 
-        self.assertIn("model-codex-a", message)
-        self.assertIn("model-codex-b", message)
+        Ловит мутацию: остался отказ «набор даёт ярусу две разные модели»
+        (прогон отказывает до клона), либо запись `role_models:` идёт
+        присваиванием по ярусу — вторая роль перебивала бы первую.
+        """
+        self.write_local(sets_block(("developer", "codex", "model-codex-a"),
+                                    ("reviewer", "codex", "model-codex-b")))
+
+        plan = canary._set_plan(SET_NAME)
+
+        path = self.tdir / "clone.yaml"
+        path.write_text(plan.layer_text, encoding="utf-8")
+        self.assertEqual({"developer": "model-codex-a",
+                          "reviewer": "model-codex-b"},
+                         models.load_local(path).role_models)
 
     def test_role_provider_not_matching_the_model_provider_is_refused(self):
         """Ловит мутацию: половины записи проверяются по отдельности, но не
@@ -353,7 +386,9 @@ class SetPlanRefusalsTest(_SetLayersTest):
 
 
 class DefaultSetPlanTest(_SetLayersTest):
-    """Требование 3: набор по умолчанию локального слоя не читает."""
+    """Требование 3: набор по умолчанию в `canary_sets:` не заглядывает;
+    слой клона при этом — слой пульта (SPEC 01M3PYMQ6N4SCAJ9WWTTKH6XNG,
+    требование 1)."""
 
     def test_default_set_plan_never_reads_the_local_layer(self):
         """Ловит мутацию: имя набора по умолчанию ищется в `canary_sets:`
@@ -369,15 +404,53 @@ class DefaultSetPlanTest(_SetLayersTest):
         self.assertEqual(config.CANARY_DEFAULT_SET, plan.name)
 
     def test_default_set_plan_carries_no_clone_layer_and_no_summary(self):
-        """Ловит мутацию: слой клона собирается и для набора по умолчанию
-        («тот же шаблон, только через сборку») — текст слоя разошёлся бы с
-        шаблоном хотя бы порядком ключей, и живой прогон перестал бы быть
-        тем прогоном, которым снят действующий бейзлайн."""
+        """Набор по умолчанию на читаемом слое пульта несёт слой клона с
+        ярусами ПУЛЬТА и сводку всех агентских ролей с источником «слой
+        пульта» (SPEC 01M3PYMQ6N4SCAJ9WWTTKH6XNG, требования 1, 4; имя
+        метода — прежнее, тест переписан, а не удалён, AC-14).
+
+        Ловит мутацию: слой клона из шаблона — набор по умолчанию снова
+        оставляет `layer_text` пустым, и клон идёт на моделях шаблона, а не
+        пульта; либо сводка набора по умолчанию пуста.
+        """
         plan = canary._set_plan(config.CANARY_DEFAULT_SET)
 
-        self.assertIsNone(plan.layer_text)
-        self.assertEqual("", plan.summary)
-        self.assertEqual("", canary._summary_note(plan))
+        path = self.tdir / "clone.yaml"
+        path.write_text(plan.layer_text, encoding="utf-8")
+        self.assertEqual(models.load_local().tiers,
+                         models.load_local(path).tiers)
+        self.assertEqual(
+            "developer → model-claude, reviewer → model-claude, "
+            "analyst → model-claude, writer → model-claude; "
+            "источник: слой пульта", plan.summary)
+        self.assertIn(plan.summary, canary._summary_note(plan))
+
+
+    def test_set_over_an_unparseable_pult_layer_names_the_template_base(self):
+        """Слой пульта не разбирается (`tiers:` не отображение), но раздел
+        наборов в нём читается: набор ложится поверх ШАБЛОНА, и источник
+        сводки называет это прямо (SPEC 01M3PYMQ6N4SCAJ9WWTTKH6XNG,
+        требования 1, 4).
+
+        Ловит мутацию: источник набора называется «набор <имя>» и при
+        нечитаемом слое пульта — Оператор принял бы прогон на ярусах
+        шаблона за прогон на ярусах пульта.
+        """
+        self.local_path.write_text("tiers: ne-otobrazhenie\n\n"
+                                   + sets_block(("developer", "claude",
+                                                 "model-claude")),
+                                   encoding="utf-8")
+
+        plan = canary._set_plan(SET_NAME)
+
+        source = plan.summary.split(canary._SUMMARY_SOURCE_SEP, 1)[1]
+        self.assertIn(f"набор {SET_NAME}", source)
+        self.assertIn("шаблон", source)
+        self.assertIn("не прочитан", source)
+        path = self.tdir / "clone.yaml"
+        path.write_text(plan.layer_text, encoding="utf-8")
+        self.assertEqual(models.local_template_layer().tiers,
+                         models.load_local(path).tiers)
 
 
 class CloneLocalLayerTextTest(_SetLayersTest):
@@ -408,15 +481,19 @@ overrides:
         return plan, models.load_local(path)
 
     def test_named_tier_points_at_the_set_model_and_the_rest_at_the_template(self):
-        """Ловит мутацию: слой клона собирается ТОЛЬКО из ярусов набора —
-        роль, чей ярус набор не называет, осталась бы без модели вовсе, и
-        прогон встал бы на первом же её шаге."""
+        """Ярусы слоя клона — ярусы слоя ПУЛЬТА при любом наборе, а роль
+        набора получает модель записью `role_models:` (SPEC
+        01M3PYMQ6N4SCAJ9WWTTKH6XNG, требования 1, 3; имя метода — прежнее,
+        тест переписан, а не удалён, AC-14).
+
+        Ловит мутацию: набор применяется сдвигом яруса (ярус `strong` клона
+        — модель набора) либо ярусы, не названные набором, берутся из
+        шаблона, а не из слоя пульта.
+        """
         _plan, layer = self.layer(("developer", "codex", "model-codex-a"))
 
-        template = models.local_template_layer()
-        self.assertEqual("model-codex-a", layer.tiers["strong"])
-        for tier in ("standard", "cheap"):
-            self.assertEqual(template.tiers[tier], layer.tiers[tier])
+        self.assertEqual(models.load_local().tiers, layer.tiers)
+        self.assertEqual({"developer": "model-codex-a"}, layer.role_models)
 
     def test_experimental_model_of_the_set_is_allowed(self):
         """Ловит мутацию: разрешение не собирается (или собирается
@@ -446,9 +523,10 @@ overrides:
         self.assertEqual("2026-09-26", override.calibrated_at)
 
     def test_override_of_a_model_outside_the_set_is_not_carried_over(self):
-        """Ловит мутацию: переносятся ВСЕ переопределения пульта — метрика
-        прогона по набору по умолчанию (слой клона — чистый шаблон) поехала
-        бы вместе с тарифом модели шаблона, и AC-14 перестал бы держаться."""
+        """Ловит мутацию: переносятся ВСЕ переопределения пульта — в слой
+        клона уехал бы тариф модели, на которую в клоне не идёт ни одна
+        роль и не ссылается ни один ярус (SPEC 01M3PYMQ6N4SCAJ9WWTTKH6XNG,
+        требование 1: тарифы — для моделей, на которых идут роли)."""
         _plan, layer = self.layer(("writer", "claude", "model-claude"))
 
         self.assertEqual({}, layer.overrides)
@@ -463,14 +541,18 @@ overrides:
         self.assertEqual({}, layer.overrides)
 
     def test_every_role_of_a_moved_tier_gets_the_set_provider(self):
-        """Ловит мутацию: карта провайдеров собирается только по ролям,
-        названным набором — роль-сосед по ярусу получила бы модель набора
-        при провайдере из `roles.yaml`, и предполёт ЕЁ шага в клоне
-        отказал бы расхождением, роняя прогон на первом же её шаге."""
+        """Провайдер набора получает РОВНО роль набора; соседи по ярусу
+        остаются на своём провайдере и модели яруса (SPEC
+        01M3PYMQ6N4SCAJ9WWTTKH6XNG, требование 3; имя метода — прежнее,
+        тест переписан, а не удалён, AC-14).
+
+        Ловит мутацию: карта провайдеров собирается по ролям сдвинутого
+        яруса — сосед по ярусу, набором не названный, ушёл бы провайдером
+        Codex.
+        """
         _plan, layer = self.layer(("developer", "codex", "model-codex-a"))
 
-        self.assertEqual({"developer": "codex", "reviewer": "codex",
-                          "analyst": "codex"}, layer.role_providers)
+        self.assertEqual({"developer": "codex"}, layer.role_providers)
 
     def test_role_of_an_untouched_tier_gets_no_provider_override(self):
         """Ловит мутацию: провайдер набора пишется всем agent-ролям —
@@ -482,15 +564,20 @@ overrides:
         self.assertNotIn("writer", layer.role_providers)
 
     def test_summary_names_every_role_that_really_goes_on_the_set_model(self):
-        """Ловит мутацию: сводка собирается по записям набора — по журналу
-        нельзя было бы сказать, что на модели набора шли и роли-соседи по
-        ярусу, а сам набор к разбору истории уже перезаписан (файл вне
-        git)."""
+        """Сводка называет модель КАЖДОЙ агентской роли прогона — роли
+        набора на модели набора, прочие на модели слоя пульта — и источник
+        «набор <имя>» (SPEC 01M3PYMQ6N4SCAJ9WWTTKH6XNG, требование 4; имя
+        метода — прежнее, тест переписан, а не удалён, AC-14).
+
+        Ловит мутацию: сводка собирается только по записям набора (роли,
+        идущие по слою пульта, не названы) либо без источника.
+        """
         plan, _layer = self.layer(("developer", "codex", "model-codex-a"))
 
         self.assertEqual(
-            "analyst → model-codex-a, developer → model-codex-a, "
-            "reviewer → model-codex-a", plan.summary)
+            "developer → model-codex-a, reviewer → model-claude, "
+            "analyst → model-claude, writer → model-claude; "
+            f"источник: набор {SET_NAME}", plan.summary)
         self.assertIn(plan.summary, canary._summary_note(plan))
 
     def test_clone_layer_is_not_the_template_text(self):
