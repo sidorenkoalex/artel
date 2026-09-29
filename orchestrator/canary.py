@@ -1936,11 +1936,15 @@ def _drive_in_clone(dest: Path, template_path: Path) -> tuple:
     codex_home = codex_provider.codex_home_override()
     if codex_home is not None:
         argv += ["--codex-home", str(codex_home)]
+    # Без буферизации: вывод в файл у Python блочно буферизован, а снятие
+    # по таймауту сигналом буфер не сбрасывает — диагностика зависания
+    # осталась бы без последних строк ведения.
+    env = {**os.environ, "PYTHONUNBUFFERED": "1"}
     with open(log_path, "w", encoding="utf-8") as log:
         try:
             proc = subprocess.Popen(argv, cwd=dest, stdin=subprocess.DEVNULL,
                                     stdout=log, stderr=subprocess.STDOUT,
-                                    start_new_session=True)
+                                    env=env, start_new_session=True)
         except OSError as exc:
             return 127, f"canary: процесс клона не запущен: {exc}\n", result_path
         try:
@@ -1949,6 +1953,13 @@ def _drive_in_clone(dest: Path, template_path: Path) -> tuple:
             liveness.terminate_process_group(proc.pid)
             proc.wait()
             returncode = None
+        except BaseException:
+            # Своя сессия не получает SIGINT терминала: прерванный пульт
+            # (Ctrl-C, `SystemExit` обработчика сигнала) иначе оставил бы
+            # агентов роли работать на клон, который `finally` уже удаляет.
+            liveness.terminate_process_group(proc.pid)
+            proc.wait()
+            raise
     log_text = log_path.read_text(encoding="utf-8", errors="replace")
     return returncode, log_text, result_path
 

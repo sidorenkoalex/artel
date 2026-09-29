@@ -11,6 +11,7 @@
 """
 import contextlib
 import json
+import os
 import shutil
 import sqlite3
 import subprocess
@@ -34,14 +35,14 @@ _METRICS = {
     "ceiling_raise": None,
 }
 
-#: Вход клона для сценариев. `{mark}`, `{head}`, `{rc}`, `{sleep}` —
-#: подстановки коммита сценария.
+#: Вход клона для сценариев. `{mark}`, `{head}`, `{rc}`, `{sleep}`,
+#: `{flush}` — подстановки коммита сценария.
 _ENTRY = '''
 import argparse, json, subprocess, sys, time
 parser = argparse.ArgumentParser()
 parser.add_argument("--result")
 args, _ = parser.parse_known_args()
-print("вывод процесса клона {mark}", flush=True)
+print("вывод процесса клона {mark}", flush={flush})
 time.sleep({sleep})
 head = {head!r} or subprocess.run(["git", "rev-parse", "HEAD"],
                                   capture_output=True, text=True).stdout.strip()
@@ -96,11 +97,12 @@ class _CloneDriveTest(unittest.TestCase):
             shutil.rmtree(dest, ignore_errors=True)
 
     def commit(self, mark: str, *, head: str = "", rc: int = 0,
-               sleep: float = 0, entry: bool = True) -> str:
+               sleep: float = 0, entry: bool = True, flush: bool = True) -> str:
         path = self.repo / "orchestrator" / "canary_drive.py"
         if entry:
             path.write_text(_ENTRY.format(mark=mark, head=head, rc=rc,
-                                          sleep=sleep, metrics=_METRICS),
+                                          sleep=sleep, flush=flush,
+                                          metrics=_METRICS),
                             encoding="utf-8")
         else:
             path.unlink(missing_ok=True)
@@ -228,6 +230,64 @@ class CloneProcessFailureTest(_CloneDriveTest):
         self.assertLess(time.monotonic() - started, 30)
         self.assertIn("не завершился за 2 с", failure.reason)
         self.assertIsNone(failure.task_id)
+
+    def test_output_of_a_killed_process_is_not_lost_in_its_buffer(self):
+        """Зависший процесс печатает без `flush` и снимается по пределу:
+        его вывод всё равно в сохранённой диагностике.
+
+        Ловит мутацию: процесс клона запускается с блочной буферизацией
+        вывода в файл — снятие сигналом теряет буфер, и диагностика
+        зависания (AC-9) пуста.
+        """
+        target = self.commit("вывод-без-flush", sleep=60, flush=False)
+        with mock.patch.object(canary, "CANARY_DRIVE_TIMEOUT_SEC", 2):
+            self.assert_failed_with_saved_output(target, "вывод-без-flush")
+
+
+class InterruptedPultTest(_CloneDriveTest):
+
+    def test_interrupt_while_waiting_kills_the_clone_process_group(self):
+        """Ожидание процесса клона прервано `KeyboardInterrupt` (Ctrl-C
+        Оператора): прерывание уходит наружу, группа процесса клона снята
+        (лидер мёртв, в группе никого), клон убран.
+
+        Ловит мутацию: группа процесса клона снимается только по таймауту —
+        после прерывания пульта агенты роли продолжают работать и тратить
+        бюджет на удалённом клоне.
+        """
+        target = self.commit("прерванный", sleep=60)
+        procs = []
+        real_popen = subprocess.Popen
+
+        class InterruptedPopen(real_popen):
+            def wait(self, timeout=None):
+                if timeout is None:
+                    return super().wait()
+                procs.append(self)
+                time.sleep(0.5)
+                raise KeyboardInterrupt
+
+        def popen(args, *a, **kwargs):
+            if list(args)[:1] == [sys.executable]:
+                return InterruptedPopen(args, *a, **kwargs)
+            return real_popen(args, *a, **kwargs)
+
+        def reap():
+            for proc in procs:
+                if proc.poll() is None:
+                    proc.kill()
+                    proc.wait()
+        self.addCleanup(reap)
+
+        with mock.patch.object(canary.subprocess, "Popen", popen), \
+                self.assertRaises(KeyboardInterrupt):
+            self.phase_one(target)
+
+        self.assertEqual(len(procs), 1)
+        self.assertIsNotNone(procs[0].poll())
+        with self.assertRaises(ProcessLookupError):
+            os.killpg(procs[0].pid, 0)
+        self.assertFalse(any(c.exists() for c in self.clones))
 
 
 class ReportedCommitMismatchTest(_CloneDriveTest):
@@ -372,6 +432,39 @@ class DriveFailureReportTest(unittest.TestCase):
         self.assertIn(str(Path(tmp.name) / "d"), text)
 
 
+class CommitMismatchSummaryTest(unittest.TestCase):
+
+    def summary(self, code_sha: str) -> str:
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        target = "b" * 40
+        metrics = dict(_METRICS, code_sha=code_sha, target_sha=target)
+        phase_one = ("01X", "shablon", None, [], metrics, False, False,
+                     code_sha == target, None)
+        with mock.patch.object(config, "DB", Path(tmp.name) / "state.db"), \
+                mock.patch.object(canary, "_run_task_in_ephemeral_clone",
+                                  return_value=phase_one), \
+                mock.patch("builtins.print") as printed:
+            canary._run_one_task(Path(tmp.name) / "shablon.md",
+                                 "20260929T000000Z", 2.0, target_sha=target,
+                                 sha_label="проверяемый")
+        return "\n".join(str(c.args[0]) for c in printed.call_args_list)
+
+    def test_summary_names_the_mismatch_and_both_commits(self):
+        """HEAD клона не равен проверяемому коммиту: строка сводки называет
+        причину расхождения и оба коммита; при равенстве пометки нет.
+
+        Ловит мутацию: пометка `[РАСХОЖДЕНИЕ КОММИТА …]` не печатается
+        (или без одного из коммитов) — Оператор видит красный прогон без
+        причины (AC-6).
+        """
+        text = self.summary("c" * 40)
+        line = next(l for l in text.splitlines() if "РАСХОЖДЕНИЕ КОММИТА" in l)
+        self.assertIn("c" * 40, line)
+        self.assertIn("b" * 40, line)
+        self.assertNotIn("РАСХОЖДЕНИЕ КОММИТА", self.summary("b" * 40))
+
+
 class CanaryDriveMainTest(unittest.TestCase):
 
     def setUp(self):
@@ -409,6 +502,54 @@ class CanaryDriveMainTest(unittest.TestCase):
         self.assertEqual(json.loads(result.read_text(encoding="utf-8"))["task_id"], "01X")
         self.assertEqual(seen, {"home": self.dir / "codex", "venv": self.dir / "venv"})
         self.assertEqual([p.name for p in self.dir.iterdir()], ["r.json"])
+
+    def drive_with(self, wt_error=None) -> tuple:
+        calls = self.calls = []
+
+        def record(name, value=None):
+            def fake(*args, **kwargs):
+                calls.append(name)
+                return value
+            return fake
+
+        with mock.patch.object(canary_drive.gitcmd, "head_sha",
+                               record("head", "a" * 40)), \
+                mock.patch.object(canary_drive.store, "db", record("db", "conn")), \
+                mock.patch.object(canary_drive.catalog, "cmd_new",
+                                  record("cmd_new", "01X")), \
+                mock.patch.object(canary_drive.store, "get_task",
+                                  record("get_task", {"branch": "task/01x"})), \
+                mock.patch.object(canary_drive.workspace, "ensure",
+                                  record("ensure", (self.dir, wt_error))), \
+                mock.patch.object(canary_drive.canary, "_drive_task",
+                                  record("_drive_task")), \
+                mock.patch.object(canary_drive, "build_result",
+                                  record("build_result", {"task_id": "01X"})):
+            result = canary_drive.drive(self.dir / "shablon.md")
+        return calls, result
+
+    def test_drive_opens_the_task_then_worktree_then_drives_it(self):
+        """`drive` заводит задачу, её worktree, ведёт её `_drive_task` и
+        только потом собирает результат; HEAD снят до заведения.
+
+        Ловит мутацию: вход не ведёт задачу (`_drive_task` не вызван) или
+        не заводит worktree — канарейка сообщила бы «штатный» результат по
+        недоведённой задаче.
+        """
+        calls, result = self.drive_with()
+        self.assertEqual(result, {"task_id": "01X"})
+        order = [c for c in calls if c in
+                 ("head", "cmd_new", "ensure", "_drive_task", "build_result")]
+        self.assertEqual(order, ["head", "cmd_new", "ensure", "_drive_task",
+                                 "build_result"])
+
+    def test_drive_refuses_without_a_worktree_and_does_not_drive(self):
+        """Ловит мутацию: ошибка `workspace.ensure` проглочена — задача
+        велась бы без рабочей копии и падала бы на первом шаге роли."""
+        with self.assertRaises(RuntimeError) as ctx:
+            self.drive_with(wt_error="занято")
+        self.assertIn("занято", str(ctx.exception))
+        self.assertNotIn("_drive_task", self.calls)
 
     def test_build_result_carries_head_steps_metrics_and_escalation(self):
         """Ловит мутацию: объект результата теряет HEAD клона, шаги или факт
