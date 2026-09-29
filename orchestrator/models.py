@@ -79,6 +79,12 @@ ALLOW_EXPERIMENTAL_KEY = "allow_experimental"
 #: набора. Читатель `role_providers:` — `orchestrator/roles.py::provider`.
 CANARY_SETS_KEY = "canary_sets"
 ROLE_PROVIDERS_KEY = "role_providers"
+#: Модель одной роли мимо яруса (SPEC 01M3PYMQ6N4SCAJ9WWTTKH6XNG,
+#: требование 2) — ручка Оператора того же рода, что `tiers:` и
+#: `role_providers:`: ярус переводит все роли разом, а замер «одна роль
+#: на проверяемой модели, остальные на боевой» без неё не собрать. Её же
+#: пишет прогон канарейки в слой клона для ролей набора.
+ROLE_MODELS_KEY = "role_models"
 PROVIDER_KEY = "provider"
 MODEL_KEY = "model"
 
@@ -144,6 +150,17 @@ class ExperimentalNotAllowedError(ResolutionError):
     """Модель со статусом `experimental` не разрешена локальным слоем."""
 
 
+class RoleModelNotInCatalogError(ModelNotInCatalogError):
+    """Модель записи `role_models:` не найдена в каталоге. Отдельный
+    класс, потому что текст отказа каталога знает только модель, а
+    Оператору нужна и роль — строка раздела, которую править."""
+
+
+class RoleModelExperimentalError(ExperimentalNotAllowedError):
+    """Модель записи `role_models:` со статусом `experimental` не
+    разрешена локальным слоем."""
+
+
 Tariff = namedtuple("Tariff", " ".join(PRICE_KINDS))
 
 CatalogModel = namedtuple(
@@ -159,7 +176,8 @@ Catalog = namedtuple("Catalog", "providers models")
 Override = namedtuple("Override", "model tariff calibrated_at source")
 
 LocalLayer = namedtuple(
-    "LocalLayer", "tiers overrides allow_experimental role_providers")
+    "LocalLayer",
+    "tiers overrides allow_experimental role_providers role_models")
 
 #: Одна запись набора ролей канарейки (SPEC 01M3FQ2Z2PY0E9T5F5WQ207NP5,
 #: требование 2): обе половины обязательны — роль с моделью без провайдера
@@ -452,7 +470,31 @@ def _local_layer(document: dict, path) -> LocalLayer:
     allowed = {model_id for model_id, value in raw_allowed.items()
                if value is True}
     return LocalLayer(tiers, overrides, allowed,
-                      _role_providers(document, path))
+                      _role_providers(document, path),
+                      _role_models(document, path))
+
+
+def _role_models(document: dict, path) -> dict:
+    """Карта «роль -> модель каталога» раздела `role_models:` (SPEC
+    01M3PYMQ6N4SCAJ9WWTTKH6XNG, требование 2); раздела нет — пустая.
+
+    Модель здесь с каталогом НЕ сверяется: слой разбирает каждый шаг
+    любой роли, и опечатка в записи одной роли не вправе останавливать
+    соседей — её называет именованный отказ `resolve_role` этой роли и
+    строка `doctor` о записи.
+    """
+    raw = document.get(ROLE_MODELS_KEY) or {}
+    if not isinstance(raw, dict):
+        raise LocalLayerError(f"{path}: раздел '{ROLE_MODELS_KEY}:' — не "
+                              f"отображение «роль: модель»")
+    mapped = {}
+    for role, model_id in raw.items():
+        if not isinstance(model_id, str) or not model_id:
+            raise LocalLayerError(
+                f"{path}: {ROLE_MODELS_KEY}.{role} = {model_id!r} — не "
+                f"идентификатор модели")
+        mapped[role] = model_id
+    return mapped
 
 
 def _role_providers(document: dict, path) -> dict:
@@ -568,6 +610,11 @@ def resolve_role(role: str, catalog: Catalog = None,
     прейскурант каталога (`_effective_tariff`); источник называется явно и
     уходит наружу полем `tariff_source`. Потребитель тарифа —
     `orchestrator/spend.py`: по нему считается стоимость шага.
+
+    Роль с записью `role_models:` (SPEC 01M3PYMQ6N4SCAJ9WWTTKH6XNG,
+    требование 2) идёт на модели записи мимо яруса — `_resolve_role_model`.
+    Ярус при этом всё равно читается первым: роль, которой нет в карте
+    исполнителей, остаётся прежним отказом, запись слоя её не описывает.
     """
     from . import roles
     try:
@@ -575,6 +622,8 @@ def resolve_role(role: str, catalog: Catalog = None,
     except roles.RolesError as exc:
         raise RoleTierError(str(exc)) from exc
     local = local or load_local()
+    if role in local.role_models:
+        return _resolve_role_model(role, tier, catalog, local)
     model_id = local.tiers.get(tier)
     if model_id is None:
         raise TierNotMappedError(
@@ -590,6 +639,37 @@ def resolve_role(role: str, catalog: Catalog = None,
             f"{config.MODELS_LOCAL}")
     effective = _effective_tariff(model, local)
     return Resolution(role, tier, model.id, model.provider, model.cli,
+                      model.min_cli_version, model.status, model.list_price,
+                      effective.tariff, effective.tariff_source,
+                      effective.calibrated_at, effective.source)
+
+
+def _resolve_role_model(role: str, tier: str, catalog: Catalog,
+                        local: LocalLayer) -> Resolution:
+    """Разрешение роли по записи `role_models:` — те же звенья
+    fail-closed, что у яруса (модель в каталоге, разрешение
+    `experimental`), но отказы называют и роль, и модель записи.
+
+    Провайдер — `role_providers:` этой роли, иначе провайдер модели в
+    каталоге: запись переводит роль на модель чужого провайдера, и
+    провайдер обязан следовать за ней, если слой не назвал его явно.
+    """
+    model_id = local.role_models[role]
+    try:
+        model = catalog_model(model_id, catalog)
+    except ModelNotInCatalogError as exc:
+        raise RoleModelNotInCatalogError(
+            f"роль {role}: модель {model_id} записи '{ROLE_MODELS_KEY}:' "
+            f"{config.MODELS_LOCAL} — {exc}") from None
+    if model.status == STATUS_EXPERIMENTAL and model_id not in local.allow_experimental:
+        raise RoleModelExperimentalError(
+            f"роль {role}: модель {model_id} записи '{ROLE_MODELS_KEY}:' "
+            f"имеет статус {STATUS_EXPERIMENTAL} и не разрешена явно — "
+            f"добавь «{ALLOW_EXPERIMENTAL_KEY}: {{{model_id}: true}}» в "
+            f"{config.MODELS_LOCAL}")
+    provider = local.role_providers.get(role) or model.provider
+    effective = _effective_tariff(model, local)
+    return Resolution(role, tier, model.id, provider, model.cli,
                       model.min_cli_version, model.status, model.list_price,
                       effective.tariff, effective.tariff_source,
                       effective.calibrated_at, effective.source)

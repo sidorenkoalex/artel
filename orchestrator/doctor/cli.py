@@ -37,6 +37,10 @@ def all_checks(conn) -> list[doctor.Check]:
     # обязана стоять рядом с самой цепочкой, а не в конце списка.
     checks.append(doctor.check_models_catalog())
     checks.append(doctor.check_models_local())
+    # Записи `role_models:` (SPEC 01M3PYMQ6N4SCAJ9WWTTKH6XNG, требование
+    # 2) — сразу за слоем, которому принадлежат: роль, идущая мимо яруса,
+    # читается рядом с ярусами, а не в конце списка.
+    checks.extend(doctor.check_role_models())
     # Действующий тариф моделей (SPEC 01M300A14KRHCFB0DQXVCBJEKF,
     # требование 8) — сразу за слоями, по которым он и разрешается:
     # протухшая цена и смена модели мимо тарифа читаются вместе с

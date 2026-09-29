@@ -38,10 +38,6 @@ from tests.test_canary_sets import (SET_NAME, _SetLayersTest,  # noqa: E402
 CODEX_MODEL = "model-codex-a"
 CLAUDE_MODEL = "model-claude"
 
-#: Роли яруса `strong` фикстурной карты исполнителей: `developer`/`reviewer`
-#: набор называет, `analyst` — их сосед по ярусу, набором НЕ названный.
-STRONG_ROLES = ("analyst", "developer", "reviewer")
-
 #: Байты указателя-фикстуры: непустые и уникальные, чтобы равенство
 #: байт-в-байт нельзя было получить пустым файлом.
 POINTER_BYTES = b"bplist00\xd1\x01\x02keychain-pointer-fixture\n"
@@ -78,20 +74,19 @@ class CodexRolesOfPlanTest(_SetLayersTest):
         return canary._set_plan(SET_NAME)
 
     def test_every_role_of_the_shifted_tier_counts_not_only_the_named_ones(self):
-        """Набор называет две роли яруса `strong`, а в перечне — все три
-        роли этого яруса, по алфавиту.
+        """Набор называет две роли яруса `strong` — в перечне ровно они, по
+        алфавиту; сосед по ярусу (`analyst`) в перечень не попадает (SPEC
+        01M3PYMQ6N4SCAJ9WWTTKH6XNG, требование 3, AC-9; имя метода —
+        прежнее, тест переписан, а не удалён, AC-14).
 
-        Ловит мутацию: перечень считается по записям набора
-        (`plan.entries`) вместо ролей сдвинутого яруса (`_roles_of_tiers`) —
-        роль-сосед по ярусу, которая на прогоне тоже идёт моделью и
-        провайдером набора, в счёт не шла бы, и аргументом проверки входа
-        стала бы не первая по алфавиту роль прогона (`analyst`), а
-        `developer`: строка отказа перестала бы быть воспроизводимой.
+        Ловит мутацию: перечень считается по ролям яруса, а не по ролям,
+        идущим в слое клона провайдером Codex, — сосед по ярусу на
+        `claude` получил бы проверку входа Codex и перенос указателя.
         """
         plan = self.plan(("developer", "codex", CODEX_MODEL),
                          ("reviewer", "codex", CODEX_MODEL))
 
-        self.assertEqual(STRONG_ROLES, plan.codex_roles)
+        self.assertEqual(("developer", "reviewer"), plan.codex_roles)
 
     def test_a_set_on_the_default_provider_yields_no_codex_roles(self):
         """Набор на модели провайдера по умолчанию перечня ролей Codex не
@@ -108,19 +103,19 @@ class CodexRolesOfPlanTest(_SetLayersTest):
         self.assertEqual((), plan.codex_roles)
 
     def test_only_the_codex_tier_counts_when_the_set_shifts_two_tiers(self):
-        """Набор сдвигает два яруса — на Codex и на провайдера по умолчанию;
-        в перечне только роли яруса Codex, роль второго яруса в него не
-        попадает.
+        """Набор называет роли двух ярусов — одну на Codex, другую на
+        провайдере по умолчанию; в перечне только роль на Codex (SPEC
+        01M3PYMQ6N4SCAJ9WWTTKH6XNG, требование 3; имя метода — прежнее,
+        тест переписан, а не удалён, AC-14).
 
-        Ловит мутацию: перечень собирается по всем ролям сдвинутых ярусов
-        без сверки провайдера их модели — роль на Claude считалась бы
-        идущей провайдером Codex, и первой по алфавиту (аргументом проверки
-        входа) могла бы стать роль, у которой дома Codex нет вовсе.
+        Ловит мутацию: перечень собирается по всем ролям набора без сверки
+        провайдера их модели — роль на Claude считалась бы идущей
+        провайдером Codex.
         """
         plan = self.plan(("developer", "codex", CODEX_MODEL),
                          ("writer", "claude", CLAUDE_MODEL))
 
-        self.assertEqual(STRONG_ROLES, plan.codex_roles)
+        self.assertEqual(("developer",), plan.codex_roles)
 
     def test_the_default_set_plan_carries_no_codex_roles(self):
         """План набора ПО УМОЛЧАНИЮ перечня ролей Codex не несёт.
@@ -168,7 +163,10 @@ class CodexCloneAuthTest(_RoleHomeTest):
         auth = canary._codex_clone_auth(self.codex_plan())
 
         self.assertEqual(POINTER_BYTES, auth.pointer)
-        self.assertEqual(STRONG_ROLES[0], auth.role)
+        # Роль Codex у прогона одна — роль набора (SPEC
+        # 01M3PYMQ6N4SCAJ9WWTTKH6XNG, требование 3): сосед по ярусу
+        # `analyst` проверкой входа больше не зовётся.
+        self.assertEqual("developer", auth.role)
 
     def test_a_missing_pointer_is_refused_by_path_and_with_the_recipe(self):
         """Указателя нет — `SystemExit`, называющий путь, имя провайдера,
@@ -187,7 +185,7 @@ class CodexCloneAuthTest(_RoleHomeTest):
         message = str(ctx.exception)
         self.assertIn(str(self.pointer), message)
         self.assertIn(codex_provider.CLI_NAME, message)
-        self.assertIn(STRONG_ROLES[0], message)
+        self.assertIn("developer", message)
         self.assertIn(doctor.CODEX_AUTH_RECIPE, message)
 
     def test_an_unreadable_pointer_is_refused_the_same_way(self):
