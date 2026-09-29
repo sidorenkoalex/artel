@@ -275,8 +275,8 @@ def _locked_long_lived_paths(task_id: str) -> list[str]:
     или перечня нет, перечень пуст или не прочитан (сбой git, порча, сбой
     БД) — все эти исходы оставляют пакет и гейт на прежнем кортеже.
 
-    Строка задачи читается прямым запросом, а не `store.get_task`: тот
-    роняет процесс на задаче, которой нет в БД. БД не создаётся ради
+    Существование задачи проверяется `store.task_exists` до `store.get_task`:
+    тот роняет процесс на задаче, которой нет в БД. БД не создаётся ради
     чтения — файла нет, значит и лока нет. `advance_gates.acceptance`
     импортируется здесь: он тянет `fsm`, а `fsm` импортирует этот модуль
     на верхнем уровне."""
@@ -285,12 +285,11 @@ def _locked_long_lived_paths(task_id: str) -> list[str]:
     from .advance_gates import acceptance as acceptance_gates
     try:
         conn = store.db()
-        row = conn.execute("SELECT * FROM tasks WHERE id=?",
-                           (task_id,)).fetchone()
-        target = store.task_target(conn, task_id) if row is not None else ""
+        if not store.task_exists(conn, task_id):
+            return []
+        row = store.get_task(conn, task_id)
+        target = store.task_target(conn, task_id)
     except sqlite3.Error:
-        return []
-    if row is None:
         return []
     digests, _reason = acceptance_gates.long_lived_manifest(task_id, row, target)
     return sorted(digests or {})
