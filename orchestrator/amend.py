@@ -426,8 +426,11 @@ def _collect_and_run(conn, task_id: str, acc_tdir: Path, cwd: Path,
                      plank_files: list[tuple[str, str]]) -> str:
     """Сухой сбор и прогон планки вместе с долгоживущими файлами — как
     `in_dev -> verifying`; хвост прогона для журнала. Красный прогон
-    допускается прежним правилом: каждый файл прогона несёт маркер
-    «Красен до реализации»/«Зелёный с рождения»."""
+    допускается прежним правилом: каждый файл планки несёт маркер
+    «Красен до реализации»/«Зелёный с рождения». Долгоживущий файл обязан
+    нести маркер, только если упал он сам (или имена упавших из вывода
+    не прочитаны): зелёный долгоживущий файл рядом с ещё красной планкой —
+    обычное состояние задачи в разработке, не повод для отказа."""
     extra = sorted(long_lived)
     collected, tail = acceptance.collect(acc_tdir, cwd, extra=extra)
     if not collected:
@@ -435,9 +438,11 @@ def _collect_and_run(conn, task_id: str, acc_tdir: Path, cwd: Path,
                 f"({', '.join(extra)}) не прошёл", [tail])
     green, tail = acceptance.run(acc_tdir, cwd=cwd, extra=extra)
     if not green:
+        failed = acceptance.failed_test_lines(tail)
+        suspects = [(rel, text) for rel, text in sorted(long_lived.items())
+                    if not failed or any(rel in line for line in failed)]
         marker_errors = (guard.redness_marker_errors_from_files(plank_files)
-                         + guard.redness_marker_errors_from_files(
-                             sorted(long_lived.items())))
+                         + guard.redness_marker_errors_from_files(suspects))
         if marker_errors:
             _refuse(conn, task_id, "прогон планки и долгоживущих файлов не "
                     "«OK», и не все падения промаркированы «Красен до "
@@ -499,14 +504,38 @@ def _cmd_amend_tests(conn, task_id: str, reason: str | None) -> None:
     if changed is None:
         sys.exit(f"[{task_id}] amend-tests: отказ — git не ответил на "
                  f"статус worktree {wt_path}")
-    outside = [p for p in changed if not p.startswith(prefix)]
+    # Долгоживущие пути задачи — вторая область правки, только у задачи с
+    # непустым перечнем лока (SPEC 01M3NSZ4YWZW9SD5Y6H62ATGRV, требования
+    # 1, 7): без перечня правка `tests/` — прежнее «за пределами».
+    manifest, manifest_reason = _lock_manifest(conn, task_id, t)
+    long_changed = sorted(p for p in changed
+                          if guard.is_long_lived_test_path(task_id, p))
+    outside = [p for p in changed if not p.startswith(prefix)
+               and not (manifest and p in long_changed)]
+    if manifest is None and long_changed:
+        # Без перечня лока не отличить путь перечня от нового и не
+        # проверить удаление — fail-closed (ADR-0002).
+        sys.exit(f"[{task_id}] amend-tests: отказ — перечень долгоживущих "
+                 f"файлов лока не прочитан ({manifest_reason}), правка "
+                 f"{', '.join(long_changed)} не проверяема")
 
     disk = _tests_snapshot(wt_path, rel_tests_dir)
     if disk is None:
         sys.exit(f"[{task_id}] amend-tests: отказ — git не ответил на "
                  f"содержимое {rel_tests_dir}/")
     baseline = _artifact_tests_snapshot(task_id, rel_tests_dir)
-    if disk == baseline:
+    # Файл перечня в сверку «есть ли правка» не входит: его пишет только
+    # команда (ручная правка — отказ сразу), а его отсутствие на диске —
+    # не правка: планку в worktree материализует и выход из
+    # `tests_writing`, раньше, чем пишет перечень.
+    manifest_rel = acceptance_gates.long_lived_manifest_rel(task_id)
+    if manifest_rel in disk and disk[manifest_rel] != baseline.get(manifest_rel):
+        sys.exit(f"[{task_id}] amend-tests: отказ — {manifest_rel} изменён "
+                 f"в worktree руками; перечень пишет только amend-tests "
+                 f"(по байтам головы кодовой ветки) — верни файл как был")
+    plank_same = ({p: v for p, v in disk.items() if p != manifest_rel}
+                  == {p: v for p, v in baseline.items() if p != manifest_rel})
+    if plank_same and not (manifest and long_changed):
         # AC-2: материализация (выше) сама по себе не считается правкой —
         # сверка идёт по СОДЕРЖИМОМУ против артефактной ветки, не по
         # `git status` worktree (та всегда покажет материализованные
@@ -516,6 +545,11 @@ def _cmd_amend_tests(conn, task_id: str, reason: str | None) -> None:
     if outside:
         sys.exit(f"[{task_id}] amend-tests: отказ — есть изменения за "
                  f"пределами {rel_tests_dir}/: {', '.join(sorted(outside))}")
+
+    if manifest:
+        _amend_with_long_lived(conn, t, task_id, reason, wt_path, disk,
+                               manifest, long_changed)
+        return
 
     # AC-1/AC-4: трассируемость AC — ДО прогона планки (копилка 11.09,
     # коммит 33aeb202: `amend-tests` сдвигал лок мимо этой проверки).
@@ -555,9 +589,96 @@ def _cmd_amend_tests(conn, task_id: str, reason: str | None) -> None:
 
     detail = (f"старый sha={old_locked}, новый sha={new_locked}, "
              f"основание: {reason}\nприёмочные тесты: {_run_summary(tail)}")
+    _record_amend(conn, task_id, detail,
+                  f"[{task_id}] {AMEND_ACTION}: {old_locked} -> {new_locked} "
+                  f"(ветка {artifact_branch.branch_name(task_id)})")
+
+
+def _amend_with_long_lived(conn, t, task_id: str, reason: str, wt_path: Path,
+                           disk: dict[str, bytes], manifest: dict[str, str],
+                           long_changed: list[str]) -> None:
+    """Правка из worktree задачи с непустым перечнем лока (SPEC
+    01M3NSZ4YWZW9SD5Y6H62ATGRV, требования 1, 4): проверки итогового
+    состояния планки и долгоживущих файлов — до любой записи; затем строго
+    (а) коммит `long_changed` в кодовую ветку, (б) коммит планки с
+    перечнем, пересчитанным по новой голове кодовой ветки, в ветку
+    документов, (в) сдвиг `tests_locked_sha`. Сбой после (а) — ненулевой
+    код с путём восстановления `--from-branch`."""
+    old_locked = t["tests_locked_sha"]
+    rel_tests_dir = f"tasks/{task_id}/acceptance_tests"
+    tdir = wt_path / "tasks" / task_id
+    files = _worktree_long_lived_files(wt_path, task_id)
+    code_head = gitcmd.branch_head_sha(t["branch"])
+    if files is None or not code_head:
+        sys.exit(f"[{task_id}] amend-tests: отказ — git не ответил на "
+                 f"долгоживущие файлы worktree {wt_path} или голову "
+                 f"{t['branch']}")
+    deleted = {rel: _deleted_file_text(code_head, rel)
+               for rel in manifest if rel not in files}
+
+    created_spec = _materialize_spec_if_missing(task_id, tdir)
+    try:
+        trace_errors = guard.acceptance_traceability_errors(
+            tdir, list(files.values()))
+    finally:
+        if created_spec is not None:
+            created_spec.unlink(missing_ok=True)
+    if trace_errors:
+        _refuse_traceability(conn, task_id, trace_errors)
+    plank_files = guard.acceptance_test_files(tdir)
+    group_errors = (_group_line_errors(t, rel_tests_dir, plank_files)
+                    + guard.long_lived_plank_errors(plank_files, task_id))
+    if group_errors:
+        _refuse_group_lines(conn, task_id, group_errors)
+    errors = _long_lived_errors(task_id, files, deleted,
+                                [text for _rel, text in plank_files])
+    if errors:
+        _refuse(conn, task_id, "долгоживущие файлы tests/", errors)
+    tail = _collect_and_run(conn, task_id, tdir, wt_path, files, plank_files)
+
+    if long_changed:
+        if not _commit_long_lived(
+                wt_path, long_changed,
+                f"{task_id}: правка долгоживущих тестов — {reason}"):
+            sys.exit(f"[{task_id}] amend-tests: коммит правки "
+                     f"{', '.join(long_changed)} в кодовую ветку не удался — "
+                     f"ничего не записано")
+        code_head = gitcmd.branch_head_sha(t["branch"])
+    digests = _head_digests(code_head, task_id) if code_head else None
+    new_locked = ""
+    if digests is not None:
+        docs_files = dict(disk)
+        docs_files[acceptance_gates.long_lived_manifest_rel(task_id)] = (
+            guard.render_long_lived_manifest(digests))
+        new_locked = artifact_branch.commit_files(
+            task_id, docs_files, f"{task_id}: правка планки приёмки — {reason}")
+    if not new_locked:
+        failure = ("перечень по голове кодовой ветки не посчитан"
+                   if digests is None else
+                   "коммит планки и перечня в ветку документов не удался")
+        if long_changed:
+            _recovery_exit(conn, task_id, f"кодовая ветка несёт правку "
+                           f"{', '.join(long_changed)} (голова {code_head}), "
+                           f"но {failure}")
+        sys.exit(f"[{task_id}] amend-tests: {failure} — ничего не записано")
+    store.update_task(conn, task_id, tests_locked_sha=new_locked)
+
+    detail = (f"старый sha={old_locked}, новый sha={new_locked}, "
+              f"основание: {reason}\nдолгоживущие файлы: "
+              f"{', '.join(long_changed) or 'без правки'}, голова кодовой "
+              f"ветки {code_head}\nприёмочные тесты: {_run_summary(tail)}")
+    _record_amend(conn, task_id, detail,
+                  f"[{task_id}] {AMEND_ACTION}: {old_locked} -> {new_locked} "
+                  f"(ветка {artifact_branch.branch_name(task_id)}, кодовая "
+                  f"ветка {t['branch']} -> {code_head})")
+
+
+def _record_amend(conn, task_id: str, detail: str, line: str) -> None:
+    """Ровно одно событие `AMEND_ACTION` на успешный вызов любого режима,
+    сколько бы веток он ни изменил (SPEC 01M3NSZ4YWZW9SD5Y6H62ATGRV,
+    требование 3), и алерт окна ADR-0012."""
     store.journal(conn, task_id, "operator", AMEND_ACTION, detail)
-    print(f"[{task_id}] {AMEND_ACTION}: {old_locked} -> {new_locked} "
-         f"(ветка {artifact_branch.branch_name(task_id)})")
+    print(line)
 
     window_ids = _locked_window_task_ids(conn)
     count = _amend_events_in_window(conn, window_ids)
@@ -590,7 +711,8 @@ def _branch_tests_snapshot(rev: str, rel_tests_dir: str) -> dict[str, str] | Non
 
 
 def _branch_traceability_errors(task_id: str, rev: str,
-                                tests_snapshot: dict[str, str]) -> list[str] | None:
+                                tests_snapshot: dict[str, str],
+                                extra_sources: list[str] = ()) -> list[str] | None:
     """Ошибки трассируемости AC (SPEC требование 2, AC-3) по SPEC.md и
     `acceptance_tests/` ГОЛОВЫ артефактной ветки — тем же ядром, что
     рабочая копия использует через `guard.acceptance_traceability_errors`
@@ -602,13 +724,17 @@ def _branch_traceability_errors(task_id: str, rev: str,
     нужен). Только `test_*.py` (SPEC T081, тот же фильтр, что `guard.
     scan_acceptance_tests` применяет для рабочей копии) — вспомогательный
     файл каталога (например `_sandbox.py`) не должен читаться как
-    настоящая AC-разметка. `None` — git не ответил на SPEC.md."""
+    настоящая AC-разметка. `None` — git не ответил на SPEC.md.
+
+    `extra_sources` — тексты долгоживущих файлов задачи с головы кодовой
+    ветки: их методы `test_ac<n>_…` покрывают критерии наравне с планкой
+    (тот же контракт, что у `guard.acceptance_traceability_errors`)."""
     spec_text, _reason = gitcmd.show(rev, f"tasks/{task_id}/SPEC.md")
     if spec_text is None:
         return None
     meta = yamlmini.frontmatter(spec_text) or {}
     sources = [text for rel, text in tests_snapshot.items()
-              if Path(rel).name.startswith("test_")]
+              if Path(rel).name.startswith("test_")] + list(extra_sources)
     tested, markers = guard.scan_ac_content(sources)
     return guard.traceability_errors_from_content(spec_text, meta, tested,
                                                    markers)
@@ -622,7 +748,14 @@ def _cmd_amend_tests_from_branch(conn, task_id: str, reason: str | None) -> None
     закоммичено на ветке (например автокоммитом шага роли, минуя
     `amend-tests`, — SPEC «Контекст») — новый коммит здесь не нужен,
     команда только сдвигает `tests_locked_sha` на уже существующий sha
-    головы."""
+    головы.
+
+    Задача с непустым перечнем лока (SPEC 01M3NSZ4YWZW9SD5Y6H62ATGRV,
+    требование 2): правка — и расхождение долгоживущих файлов головы
+    кодовой ветки с перечнем лока (путь восстановления после сбоя между
+    записями worktree-режима). Перечень нового лока — всегда пересчёт по
+    голове кодовой ветки: не совпадающий с ним перечень головы ветки
+    документов заменяется коммитом пересчитанного."""
     t = store.get_task(conn, task_id)
 
     if not (reason or "").strip():
@@ -649,45 +782,111 @@ def _cmd_amend_tests_from_branch(conn, task_id: str, reason: str | None) -> None
         sys.exit(f"[{task_id}] amend-tests: отказ — git не ответил на "
                  f"содержимое {rel_tests_dir}/")
 
-    if old_snapshot == new_snapshot:
+    # Долгоживущие файлы (SPEC 01M3NSZ4YWZW9SD5Y6H62ATGRV, требование 2):
+    # расхождение головы кодовой ветки с перечнем лока — тоже правка, а
+    # перечень на голове ветки документов в сравнение планки не входит:
+    # его в новый лок всё равно пишет эта команда, пересчётом.
+    manifest, manifest_reason = _lock_manifest(conn, task_id, t)
+    if manifest is None:
+        sys.exit(f"[{task_id}] amend-tests: отказ — перечень долгоживущих "
+                 f"файлов лока не прочитан: {manifest_reason}")
+    manifest_rel = acceptance_gates.long_lived_manifest_rel(task_id)
+    head_files: dict[str, str] = {}
+    head_digests: dict[str, str] = {}
+    code_head = ""
+    if manifest:
+        code = _code_head_long_lived(t["branch"], task_id)
+        digests = _head_digests(code[0], task_id) if code else None
+        if code is None or digests is None:
+            sys.exit(f"[{task_id}] amend-tests: отказ — git не ответил на "
+                     f"долгоживущие файлы головы кодовой ветки {t['branch']}")
+        (code_head, head_files), head_digests = code, digests
+        old_plank = {p: v for p, v in old_snapshot.items() if p != manifest_rel}
+        new_plank = {p: v for p, v in new_snapshot.items() if p != manifest_rel}
+    else:
+        old_plank, new_plank = old_snapshot, new_snapshot
+    long_diverged = sorted(p for p in set(manifest) | set(head_digests)
+                           if manifest.get(p) != head_digests.get(p))
+
+    if old_plank == new_plank and not long_diverged:
         sys.exit(f"[{task_id}] amend-tests: отказ — нет расхождения в "
                  f"{rel_tests_dir}/ между {old_locked} и головой ветки "
-                 f"{branch}")
+                 f"{branch}" + (f" и долгоживущих файлов головы "
+                                f"{t['branch']} с перечнем лока"
+                                if manifest else ""))
 
     # AC-3: трассируемость AC по содержимому ГОЛОВЫ ветки — до сдвига
     # tests_locked_sha (копилка 11.09, тот же путь мимо проверки, что и
     # у worktree-пути AC-1).
-    trace_errors = _branch_traceability_errors(task_id, new_sha, new_snapshot)
+    trace_errors = _branch_traceability_errors(task_id, new_sha, new_snapshot,
+                                               list(head_files.values()))
     if trace_errors is None:
         sys.exit(f"[{task_id}] amend-tests: отказ — git не ответил на "
                  f"tasks/{task_id}/SPEC.md")
     if trace_errors:
         _refuse_traceability(conn, task_id, trace_errors)
-    group_errors = _group_line_errors(t, rel_tests_dir,
-                                      _test_files(new_snapshot))
+    plank_files = _test_files(new_snapshot)
+    group_errors = _group_line_errors(t, rel_tests_dir, plank_files)
+    if manifest:
+        group_errors += guard.long_lived_plank_errors(plank_files, task_id)
     if group_errors:
         _refuse_group_lines(conn, task_id, group_errors)
+    if long_diverged:
+        _check_code_head_long_lived(conn, t, task_id, branch, code_head,
+                                    head_files, manifest, plank_files)
+
+    if manifest:
+        recomputed = guard.render_long_lived_manifest(head_digests)
+        if new_snapshot.get(manifest_rel) != recomputed:
+            new_sha = artifact_branch.commit_files(
+                task_id, {manifest_rel: recomputed},
+                f"{task_id}: перечень долгоживущих тестов по голове кодовой "
+                f"ветки {code_head} — {reason}")
+            if not new_sha:
+                sys.exit(f"[{task_id}] amend-tests: коммит перечня в ветку "
+                         f"документов не удался — ничего не записано")
 
     changed_files = sorted(
-        p for p in set(old_snapshot) | set(new_snapshot)
-        if old_snapshot.get(p) != new_snapshot.get(p))
+        p for p in set(old_plank) | set(new_plank)
+        if old_plank.get(p) != new_plank.get(p)) + long_diverged
 
     store.update_task(conn, task_id, tests_locked_sha=new_sha)
 
     detail = (f"старый sha={old_locked}, новый sha={new_sha}, "
              f"основание: {reason}\nотличаются файлы: "
              f"{', '.join(changed_files)}")
-    store.journal(conn, task_id, "operator", AMEND_ACTION, detail)
-    print(f"[{task_id}] {AMEND_ACTION}: {old_locked} -> {new_sha} "
-         f"(ветка {branch}, источник — голова артефактной ветки)")
+    _record_amend(conn, task_id, detail,
+                  f"[{task_id}] {AMEND_ACTION}: {old_locked} -> {new_sha} "
+                  f"(ветка {branch}, источник — голова артефактной ветки)")
 
-    window_ids = _locked_window_task_ids(conn)
-    count = _amend_events_in_window(conn, window_ids)
-    if count > WINDOW_THRESHOLD:
-        message = (
-            f"планка девальвируется: {count} правок планки в скользящем "
-            f"окне последних {len(window_ids)} задач(и), дошедших до "
-            f"фиксации лока (порог — больше {WINDOW_THRESHOLD})")
-        alerts.raise_alert(conn, None, "threshold", DEVALUATION_ALERT_SOURCE,
-                           message)
-        print(f"[{task_id}] ВНИМАНИЕ: {message}")
+
+def _check_code_head_long_lived(conn, t, task_id: str, docs_branch: str,
+                                code_head: str, head_files: dict[str, str],
+                                manifest: dict[str, str],
+                                plank_files: list[tuple[str, str]]) -> None:
+    """Проверки требования 1 по долгоживущим файлам головы кодовой ветки
+    для `--from-branch` (SPEC 01M3NSZ4YWZW9SD5Y6H62ATGRV, требование 2):
+    статические — по текстам из git; сухой сбор и прогон — в worktree
+    задачи, куда планка материализуется с головы ветки документов, как на
+    `in_dev -> verifying`. Незакоммиченная правка долгоживущих путей в
+    worktree — отказ: прогон проверил бы её, а не голову ветки."""
+    deleted = {rel: _deleted_file_text(code_head, rel)
+               for rel in manifest if rel not in head_files}
+    errors = _long_lived_errors(task_id, head_files, deleted,
+                                [text for _rel, text in plank_files])
+    if errors:
+        _refuse(conn, task_id, "долгоживущие файлы tests/", errors)
+    wt_path, error = workspace.ensure(task_id, t["branch"])
+    if error is not None:
+        sys.exit(f"[{task_id}] amend-tests: отказ — worktree не готов: {error}")
+    changed = _worktree_changed_paths(wt_path)
+    if changed is None:
+        sys.exit(f"[{task_id}] amend-tests: отказ — git не ответил на "
+                 f"статус worktree {wt_path}")
+    dirty = sorted(p for p in changed if guard.is_long_lived_test_path(task_id, p))
+    if dirty:
+        sys.exit(f"[{task_id}] amend-tests: отказ — в worktree незакоммиченная "
+                 f"правка {', '.join(dirty)}; --from-branch проверяет голову "
+                 f"кодовой ветки — закоммить правку или верни файлы как были")
+    acc_tdir = acceptance.materialize_from_branch(task_id, docs_branch, wt_path)
+    _collect_and_run(conn, task_id, acc_tdir, wt_path, head_files, plank_files)
