@@ -1,5 +1,6 @@
 """Ревью-пакет: вход ревьювера собирает оркестратор, а не сам агент."""
 import re
+import sqlite3
 
 from . import (artifact_source, brief, config, context_package, gitcmd,
               repo_context, store)
@@ -64,6 +65,12 @@ EMPTY_DIFF_TEXT = "(изменений нет)"
 # константы модуля, что в `orchestrator/brief.py`, `orchestrator/pull.py`
 # и `orchestrator/fsm_postmerge.py`.
 MAP_REL = "docs/codebase-map.md"
+
+# Магия исключения долгоживущего файла перечня лока: точный путь, без
+# глобов — имя файла с `*`/`[` иначе исключило бы соседей.
+LONG_LIVED_EXCLUDE_MAGIC = ":(exclude,literal)"
+LONG_LIVED_NOTE = (" (долгоживущий тест задачи из перечня лока, голова "
+                   "кодовой ветки)")
 
 
 def artifact_text(branch: str, rel: str, *, disk_root=None,
@@ -249,8 +256,49 @@ def snapshot_exclude(task_id: str) -> tuple[str, ...]:
     понадобился взгляд на неё (подозрение на ручную правку
     сгенерированного файла), смотри командой: `python3
     scripts/codebase_map.py` и `git diff -- docs/codebase-map.md`.
+
+    Долгоживущие файлы задачи в `tests/` (SPEC 01M3NSZ4YWZW9SD5Y6H62ATGRV,
+    требование 5; ADR-0020): каждый путь ПЕРЕЧНЯ ЛОКА исключается точным
+    путём (`:(exclude,literal)`) — они приходят ревьюверу отдельными
+    компонентами пакета, как и планка. Не по префиксу задачи: файл с тем
+    же префиксом, добавленный в обход лока, остаётся в diff на виду.
+    Перечень не прочитан — долгоживущие файлы остаются в diff и в мере, а
+    не пропадают из поля зрения.
     """
-    return (".", f":!tasks/{task_id}/", f":!{MAP_REL}")
+    return (".", f":!tasks/{task_id}/", f":!{MAP_REL}",
+            *(f"{LONG_LIVED_EXCLUDE_MAGIC}{rel}"
+              for rel in _locked_long_lived_paths(task_id)))
+
+
+def _locked_long_lived_paths(task_id: str) -> list[str]:
+    """Пути перечня долгоживущих файлов из дерева лока задачи; пусто — лока
+    или перечня нет, перечень пуст или не прочитан (сбой git, порча, сбой
+    БД) — все эти исходы оставляют пакет и гейт на прежнем кортеже.
+
+    Существование задачи проверяется `store.task_exists` до `store.get_task`:
+    тот роняет процесс на задаче, которой нет в БД. БД не создаётся ради
+    чтения — файла нет, значит и лока нет. `advance_gates.acceptance`
+    импортируется здесь: он тянет `fsm`, а `fsm` импортирует этот модуль
+    на верхнем уровне."""
+    if not config.DB.is_file():
+        return []
+    from .advance_gates import acceptance as acceptance_gates
+    try:
+        conn = store.db()
+        if not store.task_exists(conn, task_id):
+            return []
+        row = store.get_task(conn, task_id)
+        target = store.task_target(conn, task_id)
+    except sqlite3.Error:
+        return []
+    digests, _reason = acceptance_gates.long_lived_manifest(task_id, row, target)
+    return sorted(digests or {})
+
+
+def _is_exclude_spec(spec: str) -> bool:
+    """Исключающий pathspec в короткой (`:!`) или длинной (`:(exclude…)`)
+    форме магии."""
+    return spec.startswith(":!") or spec.startswith(":(exclude")
 
 
 def excluded_note(base: str, branch: str, pathspec: tuple,
@@ -465,7 +513,7 @@ def _shown_diff(base: str, branch: str, exclude: tuple, repo,
     # Исключения — из кортежа снимка, а не собранные здесь заново: второй
     # литерал разошёлся бы с первым ровно так, как разошлись мера гейта и
     # diff пакета (R1-F1, REVIEW.md 01M31DRD81092HB69J0MAKZMGH итерация 1).
-    excludes = tuple(spec for spec in exclude if spec.startswith(":!"))
+    excludes = tuple(spec for spec in exclude if _is_exclude_spec(spec))
     own_failed = ""
     if incremental:
         own_paths, own_failed = own_commit_paths(base, branch, repo)
@@ -671,6 +719,11 @@ def review_package(conn, task_id: str, title: str, branch: str, *,
     # 01M31DRD81092HB69J0MAKZMGH). Правило одно для полного и
     # инкрементального diff'а — оба вызова несут один и тот же pathspec.
     exclude = snapshot_exclude(task_id)
+    # Долгоживущие файлы перечня лока — из того же кортежа, не вторым
+    # чтением перечня: компонент пакета и исключение из diff не могут
+    # разойтись (SPEC 01M3NSZ4YWZW9SD5Y6H62ATGRV, требования 5-6).
+    long_lived_rels = [spec[len(LONG_LIVED_EXCLUDE_MAGIC):] for spec in exclude
+                       if spec.startswith(LONG_LIVED_EXCLUDE_MAGIC)]
     # Репозиторный контекст target'а (SPEC 01M1R5B33CC7E6BZK085XV3ZCX,
     # AC-9): diff внешнего target считается в его клоне, не в
     # `config.ROOT`; для self — прежнее поведение (repo=None).
@@ -719,6 +772,12 @@ def review_package(conn, task_id: str, title: str, branch: str, *,
         # делении на части наравне с остальными, не довеском после
         # `discipline`).
         parts.append(artifact_part(rel, *found[rel], run_id))
+    for rel in long_lived_rels:
+        # Текст с головы кодовой ветки — ревьювер проверяет границу групп
+        # (ADR-0020) по тому, что уйдёт в мерж, а не по диску пульта.
+        text, reason = gitcmd.show(branch, rel)
+        note = LONG_LIVED_NOTE if text is not None else f"(не показан: {reason})"
+        parts.append(artifact_part(rel, text, note, run_id))
     parts.append(f"### Изменённые файлы (git diff --stat {base}...{branch})"
                  f"\n\n{brief.wrap_boundary(run_id, shown['stat'])}\n")
     parts.append(f"### Diff (git diff {base}...{branch})"
@@ -777,6 +836,13 @@ def review_package(conn, task_id: str, title: str, branch: str, *,
         f"{config.MAIN_BRANCH} после мержа. Понадобился взгляд на неё — "
         f"смотри командой: python3 scripts/codebase_map.py и "
         f"git diff -- {MAP_REL}.\n")
+    if long_lived_rels:
+        parts.append(
+            f"Из стат-списка и diff исключены также долгоживущие тесты "
+            f"задачи из перечня лока ({', '.join(long_lived_rels)}) — они "
+            f"выше отдельными компонентами пакета; правка их после лока — "
+            f"только `amend-tests`. Файл с префиксом задачи вне перечня лока "
+            f"остаётся в diff.\n")
 
     # Замена прежнего `truncate_package`/`truncate_diff` (SPEC
     # 01M1GCN1FPSC1A6WK9WD1Q1V8X, требования 3-4): пакет крупнее потолка
