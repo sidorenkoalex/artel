@@ -46,9 +46,13 @@ schema_version: 5
   в клоне; нет — `sys.exit` с текстом «коммит <sha> не несёт входа … не умеет
   вести учебную задачу своим кодом (ADR-0021, этап 0)» до заведения задачи,
   возврата к ведению кодом пина нет;
-- `_drive_in_clone` запускает процесс в своей группе (`start_new_session`) и
-  ждёт `proc.wait(timeout=CANARY_DRIVE_TIMEOUT_SEC)`; по таймауту снимает всю
-  группу `liveness.terminate_process_group` (шаги ролей — потомки процесса);
+- `_drive_in_clone` запускает процесс в своей группе (`start_new_session`) с
+  `PYTHONUNBUFFERED=1` (вывод в файл не теряется в буфере при снятии
+  сигналом) и ждёт `proc.wait(timeout=CANARY_DRIVE_TIMEOUT_SEC)`; по таймауту
+  — и при любом другом прерывании ожидания (Ctrl-C, `SystemExit`, ветка
+  `except BaseException` с повторным `raise`) — снимает всю группу
+  `liveness.terminate_process_group` (шаги ролей — потомки процесса, а своя
+  сессия SIGINT терминала не получает);
 - `_read_drive_result` разбирает файл и проверяет все поля, которые читают
   следующие фазы; нет файла / не JSON / не объект / нет поля — причина, не
   исключение;
@@ -163,7 +167,18 @@ ac1_ac2 — 2, ac3+ac4 — 6, ac5_ac6+ac7+ac8_ac9 — 8, оба ac10 — 2, вс
 - `CommitWithoutEntryTest` — отказ «ADR-0021, этап 0», процесс не запускался,
   клон убран.
 - `CloneProcessFailureTest` — код выхода 3 и зависание (предел сжат до 2 с):
-  `CanaryDriveFailed`, вывод процесса сохранён снаружи клона, клон убран.
+  `CanaryDriveFailed`, вывод процесса сохранён снаружи клона, клон убран;
+  зависший процесс, печатающий без `flush`, — вывод всё равно в диагностике
+  (R1-F3).
+- `InterruptedPultTest` — `KeyboardInterrupt` из ожидания процесса клона:
+  прерывание уходит наружу, группа процесса снята, клон убран (R1-F1).
+- `CommitMismatchSummaryTest` — строка сводки `_run_one_task` при
+  `code_sha != target_sha` несёт `[РАСХОЖДЕНИЕ КОММИТА …]` и оба sha, при
+  равенстве — без пометки (AC-6, R1-F2).
+- `CanaryDriveMainTest.test_drive_opens_the_task_then_worktree_then_drives_it`
+  / `test_drive_refuses_without_a_worktree_and_does_not_drive` — порядок
+  `drive()` (HEAD → `cmd_new` → `workspace.ensure` → `_drive_task` →
+  `build_result`) и отказ без worktree (R1-F2).
 - `ReportedCommitMismatchTest` — чужой HEAD в результате: исход не штатный,
   диагностика сохранена.
 - `ReadDriveResultTest`, `RecordCanaryRunCodeShaTest`,
@@ -176,6 +191,22 @@ ac1_ac2 — 2, ac3+ac4 — 6, ac5_ac6+ac7+ac8_ac9 — 8, оба ac10 — 2, вс
 без проверки кода выхода, без сверки HEAD и с `main_sha = target_sha` —
 красные соответственно `test_nonzero_exit_…`, `test_other_reported_head_…`,
 `test_main_sha_is_the_commit_…`. Код возвращён, файл зелёный (14 тестов).
+
+Итерация 2 (замечания ревью R1-F1..R1-F3, коммит b1df1b86), мутации по
+одной, прогон `tests/test_canary_drive.py`, код возвращён `git checkout`:
+`except BaseException` → `except ZeroDivisionError` — красный
+`InterruptedPultTest`; без `PYTHONUNBUFFERED` — красный
+`test_output_of_a_killed_process_is_not_lost_in_its_buffer`; удалён
+`canary._drive_task(conn, task_id)` в `drive` — красный
+`test_drive_opens_the_task_then_worktree_then_drives_it`; условие
+`[РАСХОЖДЕНИЕ КОММИТА]` → `if False:` — красный `CommitMismatchSummaryTest`.
+Файл зелёный — 19 тестов.
+
+Прогоны итерации 2 (`-p timeout -o timeout=120`): `test_canary_drive`,
+`test_canary`, `test_canary_budget_ceiling`, `test_canary_codex_clone_auth`,
+`test_canary_synthetic_answer`, `test_canary_template_flag`,
+`test_canary_sets`, `test_pin`, `test_codebase_map`,
+`test_guard_mutation_claim` — 291 passed; приёмочные тесты задачи — 20 passed.
 
 Прогоны после финальной правки (по модулям, `-p timeout -o timeout=120`):
 `test_canary_drive`, `test_canary`, `test_canary_budget_ceiling`,
