@@ -2,8 +2,8 @@
 task: 01M3N3Z1ZHTGMSQZ4SNRYNJ2SJ
 type: review
 author_role: reviewer
-status: changes_requested
-iteration: 1
+status: approved
+iteration: 2
 schema_version: 5
 ---
 
@@ -11,127 +11,84 @@ schema_version: 5
 
 ## Фаза A: план
 
-- Таблица покрытия PLAN полна: требования 1–12 привязаны к шагам 1–9.
-- Шаги по размеру годятся для MR. Подход «одно правило — один узел»
-  (`guard` для Р1/Р2, `_long_lived_manifest_refuses` для Р4) соответствует
-  архитектуре гейтов (`_run_gates`, `GateRefusal`).
-- «Влияние на систему» сходится с diff. Изменены три существующих теста.
-  В каждом перенесена только предпосылка (коммит «кода фичи» после выхода
-  из `tests_writing`, группа исправленного файла планки), ассерты не
-  тронуты. Колонок БД нет, откат — revert merge-коммита.
-- Все четыре приложения накладываются: `git apply --check` на чистом
-  дереве. Это подтверждает AC-22 планки, он зелёный.
+- В таблице покрытия появился шаг 10: замечания R1-F1 и R1-F2. Требования
+  1–12 по-прежнему привязаны к шагам 1–9.
+- «Влияние на систему» сходится с инкрементальным diff. Добавлены
+  `tests/test_long_lived_transitions.py` и один метод в
+  `tests/test_long_lived_manifest.py`, в `_acceptance_run_refuses`
+  добавлена ветка `else`. Существующие тесты не тронуты: в диффе `tests/`
+  0 удалённых строк.
+- Приложение к `docs/invariants.md` (инвариант 27) теперь называет
+  сторожей, которые действительно проверяют расхождение:
+  `ManifestBoundariesTest`, `MergeGatePlankLockTest`,
+  `TestsWritingManifestTest`. Приложения накладываются: AC-22 планки
+  зелёный.
 
 ## Соответствие SPEC
 
 | Требование | Вердикт | Комментарий |
 |---|---|---|
-| 1 | OK | `checkpoint._test_author_own_paths`/`_test_author_checkpoint` подключены к WIP-чекпоинтам и к `commit_success_checkpoint`. Переименование засчитывается своим только целиком. Сторож в `tests/` покрывает свой коммит, откат правки базы и откат вне `tests_writing`. AC-3 (правка и удаление своего) покрыт только планкой, см. R1-F1 |
-| 2 | OK (без сторожа в tests/) | `_diff_entry_error` + `_tests_writing_long_lived_gate` (tests_writing.py:255, :276). Проверка по `origin/main` идёт через `diff_base_source`. Сторожа в `tests/` нет, см. R1-F1 |
-| 3 | OK | `long_lived_errors_from_files` над текстами с головы; сухой сбор одним вызовом `collect(..., extra=)` |
-| 4 | OK | `guard.long_lived_plank_errors` в `_tests_writing_test_groups_gate`, подсказка с конкретным префиксом |
-| 5 | OK (без сторожа в tests/) | Добавлен `extra_sources`/`long_lived_sources`: в него попадают только `A`-файлы с префиксом задачи. Сторожа в `tests/` нет, см. R1-F1 |
-| 6 | OK (без сторожа в tests/) | `_tests_writing_manifest_gate` стоит последним гейтом до `set_state in_dev`; суммы считаются по байтам блоба. Сторожа в `tests/` нет, см. R1-F1 |
-| 7 | OK | Узел один, вызывается на всех пяти рубежах Р4 (fsm_advance.py:546, :314, :277; fsm.py:931; fsm_merge_gate `_acceptance_locks_refuse`). Сбой git даёт отказ. Проводку рубежей сторожит только планка, см. R1-F1 |
-| 8 | OK | `_acceptance_lock_refuses` на гейте мержа после `_sync_main_or_wait`. В `tests/` проверен только путь сбоя git, расхождение не проверено, см. R1-F1 |
-| 9 | OK с оговоркой | Прогон один, итог называет обе группы. Если worktree не на ветке задачи, долгоживущая группа молча выпадает, см. R1-F2 |
-| 10 | OK | Пункт 2а у test_author и строка у developer: префикс конкретный |
-| 11 | OK | Узел, гейт мержа и `tests_writing` ограничены target `artel`; у `skip_tests` нет лока, сверка проходит |
-| 12 | OK | Четыре приложения, `git apply --check` проходит (AC-22) |
+| 1 | OK | Сторож AC-3 — `TestAuthorCheckpointMandateTest.test_own_file_edit_and_delete_are_committed`: правка и удаление своего файла коммитятся |
+| 2 | OK | `TestsWritingOnlyAdditionGateTest`: M/D/R, без префикса, вне `tests/`, «разовый», путь в `origin/main`. Каждый сценарий называет путь |
+| 3 | OK | Без изменений с итерации 1 |
+| 4 | OK | Без изменений с итерации 1 |
+| 5 | OK | `LongLivedTraceabilityTest`: чужой `test_ac1` в файле базы не покрывает AC-1, свой долгоживущий файл покрывает |
+| 6 | OK | `TestsWritingManifestTest`: перечень лежит в дереве коммита лока, сумма совпадает с головой. Пустой перечень тоже проверен |
+| 7 | OK | `ManifestBoundariesTest.test_changed_file_refused_at_every_boundary` проверяет все пять рубежей Р4 через публичные входы. Контроль с CRLF подтверждает, что сумма считается от байтов |
+| 8 | OK | `MergeGatePlankLockTest`: правка планки после лока → `("stopped",)` |
+| 9 | OK | Красный долгоживущий файл отклоняет `in_dev -> verifying`, итог называет обе группы. R1-F2: без рабочей копии на ветке задачи и при непустом или непрочитанном перечне — отказ |
+| 10 | OK | Без изменений |
+| 11 | OK | Новая ветка `else` работает только для target `artel`: внешний target уходит в первую ветку. Для задач без лока или с пустым перечнем `long_lived_manifest` даёт `{}`, отказа нет |
+| 12 | OK | AC-22 зелёный |
 
 ## Замечания
 
-- **major — нет сторожа в `tests/` для гейтов выхода из `tests_writing`, записи перечня и проводки рубежей Р4.**
-  - Где:
-    - `orchestrator/advance_gates/tests_writing.py:255`, `:276`, `:313`;
-    - `orchestrator/fsm_advance.py:277`, `:314`, `:359`, `:546`;
-    - `orchestrator/fsm.py:931`;
-    - `orchestrator/fsm_merge_gate.py` (`_acceptance_locks_refuse`, ветка расхождения лока).
-  - Суть. Эти свойства должны держаться после мержа (инвариант 27, по
-    приложению PLAN). Сейчас их проверяет только планка, а все её файлы
-    помечены `Группа: разовый`. После мержа планку не гоняет ни один
-    джоб CI (review-checklist «Долгоживущие свойства — в `tests/`»).
-  - Проверено временной мутацией:
-    - гейт «только добавление» `_tests_writing_long_lived_gate` → `return None`;
-    - запись перечня `_tests_writing_manifest_gate` → `return None`;
-    - все четыре вызова `_long_lived_manifest_refuses` в `fsm_advance.py` → `pass`.
-
-    Прогнал `tests/test_long_lived_manifest.py`, `test_acceptance_tests_flow`,
-    `test_amend`, `test_fsm_advance_tests_writing_test_groups` и
-    `test_invariants`: 199 passed, ни один не покраснел. `grep` по `tests/`
-    находит новые гейты только в `test_long_lived_manifest.py`, и там
-    тестируется лишь сам узел сверки.
-  - Сценарий. Позднейший рефакторинг `fsm_advance.tests_writing` теряет
-    элемент списка `gates` или вызов узла на `verifying`. Тогда
-    test_author правит файл базы, а developer — долгоживущий файл после
-    лока, и оба проходят в main при зелёном CI.
-  - Приложение к `docs/invariants.md` называет сторожем инварианта 27
-    `test_long_lived_manifest.MergeGateLocksTest`. Он проверяет только сбой
-    git лока, а не расхождение лока или перечня на гейте мержа (AC-14,
-    AC-18).
-  - Что сделать — добавить в `tests/` (не в планку) сторожей с заявками «Ловит мутацию»:
-    - отказ `tests_writing -> in_dev` на `M`/`D`/`R`, на путь вне
-      `tests/`, на файл без префикса, на путь из `origin/main`, на файл
-      без строки «долгоживущий»;
-    - перечень есть в дереве коммита `tests_locked_sha`, в том числе пустой;
-    - трассируемость: метод `test_ac<n>` своего долгоживущего файла
-      покрывает критерий, а файл без префикса — нет;
-    - отказ на каждом рубеже Р4 при изменённом файле, через публичные
-      `fsm_advance.in_dev`/`verifying`/`review`, `fsm._approve_acceptance`
-      и гейт мержа;
-    - расхождение лока каталога на гейте мержа;
-    - правка и удаление своего файла коммитятся (AC-3).
-
-    Годятся фикстуры `_WorktreeCheckpointTest` и уже написанные
-    `lock_with`. Сторож проверить той же временной мутацией.
-- **minor — `orchestrator/advance_gates/acceptance.py:232`: долгоживущая группа молча выпадает из прогона.**
-  - Суть. Если `workspace.on_task_branch(...)` не `True` (worktree
-    утрачен или git не ответил), прогон идёт из `config.ROOT` без
-    `extra`. Долгоживущие файлы перечня не исполняются, и в итоге нет
-    строки групп. Отказа или записи в журнал об этом нет.
-  - Последствие ограничено: `verifying` всё равно ждёт зелёного CI,
-    который гоняет `tests/` ветки. Но требование 9 («исполняются в одном
-    прогоне») в этом пути нарушено без следа.
-  - Что сделать. Если в перечне есть записи, а рабочая копия не на ветке
-    задачи, отказывать так же, как это уже делает
-    `_tests_writing_long_lived_gate` (tests_writing.py, «рабочая копия …
-    не выписана»). Как минимум — писать отметку в `detail` журнала.
+Замечаний уровня blocker и major нет. R1-F1 и R1-F2 закрыты, проверено
+временными мутациями (см. ниже).
 
 ## Реестр замечаний
 
 | id | статус | файл/строка | суть | последствие | решение |
 |---|---|---|---|---|---|
-| R1-F1 | fixed | orchestrator/advance_gates/tests_writing.py:255,276,313; orchestrator/fsm_advance.py:277,314,359,546; orchestrator/fsm.py:931; orchestrator/fsm_merge_gate.py (`_acceptance_locks_refuse`) | Гейт «только добавление», запись перечня до лока, трассируемость по долгоживущим файлам, проводка рубежей Р4 и расхождение лока на гейте мержа покрыты только планкой (вся — «разовый»). Временная мутация всех трёх узлов не покраснила ни одного теста `tests/` | После мержа эти свойства без сторожа: регресс проводки в `fsm_advance` пропускает правку тестов мимо лока при зелёном CI (инвариант 27) | Добавить сторожей в `tests/` на каждое перечисленное свойство с «Ловит мутацию», проверить временной мутацией. Разработчик: `tests/test_long_lived_transitions.py` — гейт «только добавление» (M/D/R, без префикса, вне tests/, без строки, путь в origin/main), перечень в дереве лока (и пустой), трассируемость своя/чужая, отказ на каждом рубеже Р4 и гейте мержа, исполнение долгоживущего файла в прогоне, расхождение лока на гейте мержа; AC-3 — `test_long_lived_manifest`; 12 временных мутаций краснят своих сторожей (PLAN «Проверено») |
-| R1-F2 | fixed | orchestrator/advance_gates/acceptance.py:232 | Если worktree не на ветке задачи, прогон `in_dev -> verifying` идёт без долгоживущих файлов перечня, молча | Требование 9 не выполняется в этом пути, в журнале нет следа | Отказ (как на выходе `tests_writing`) при непустом перечне и невыписанной рабочей копии, либо явная отметка в журнале. Разработчик: `_acceptance_run_refuses` отказывает («долгоживущие файлы перечня исполнить негде»), если рабочая копия не на ветке задачи, а перечень непуст или не прочитан; сторож `test_long_lived_transitions.ManifestBoundariesTest.test_run_refused_without_worktree_on_task_branch` |
+| R1-F1 | accepted | orchestrator/advance_gates/tests_writing.py:276,313; orchestrator/fsm_advance.py:277,314,359,546; orchestrator/fsm.py:931; orchestrator/fsm_merge_gate.py:901,903 | Гейт «только добавление», перечень, трассируемость, рубежи Р4 и лок на гейте мержа были покрыты только планкой | — | Сторожа добавлены в `tests/test_long_lived_transitions.py` и `tests/test_long_lived_manifest.py`. Проверено 13 временными мутациями по одной, каждая краснит `tests/test_long_lived_transitions.py` (см. «Проверено исполнением») |
+| R1-F2 | accepted | orchestrator/advance_gates/acceptance.py:242-256 | Без рабочей копии на ветке задачи долгоживущая группа молча выпадала из прогона | — | Добавлен отказ с журналом и подсказкой `workspace`. Мутация `if False:` краснит `test_run_refused_without_worktree_on_task_branch` |
 
 ## Вердикт
 
-changes_requested. Нужно закрыть R1-F1: сторожа в `tests/` на гейт
-выхода из `tests_writing`, запись перечня, трассируемость, рубежи Р4 и
-лок на гейте мержа. R1-F2 — minor, но желательно закрыть в той же
-итерации. Реализация по сути соответствует SPEC, планка зелёная.
+approved. Реестр закрыт. Реализация соответствует SPEC, сторожа
+долгоживущих свойств лежат в `tests/` и проверены мутациями.
 
 ## Проверено исполнением
 
-- `timeout 590 python3 -m pytest tasks/01M3N3Z1ZHTGMSQZ4SNRYNJ2SJ/acceptance_tests tests/test_long_lived_manifest.py -p no:cacheprovider -p timeout -o timeout=120 -q` — 46 passed, 56 subtests passed. Это вся планка, включая AC-22 с `git apply --check` приложений.
-- Временная мутация: `_tests_writing_long_lived_gate` и
-  `_tests_writing_manifest_gate` → `return None`; четыре вызова
-  `_long_lived_manifest_refuses` в `orchestrator/fsm_advance.py` → `pass`.
-  - Под мутацией прогнал `tests/test_long_lived_manifest.py`,
-    `tests/test_acceptance_tests_flow.py`, `tests/test_amend.py`,
-    `tests/test_fsm_advance_tests_writing_test_groups.py`,
-    `tests/test_invariants.py`: 199 passed, 222 subtests. Сторожа нет, это
-    основа R1-F1.
-  - Код возвращён: `git checkout -- …`, `git status` чист, кроме `tasks/`.
-- `grep -rln "long_lived_gate|manifest_gate|_tests_writing_code_diff|long_lived_sources|extra_sources|_long_lived_manifest_refuses" tests/` находит только `tests/test_long_lived_manifest.py`.
-- Diff `tests/` сверен глазами на ослабление. Удалённых ассертов нет.
-  - `test_acceptance_tests_flow.LockTest` и `test_amend.AmendThenReviewGateTest`: коммит кода перенесён после лока.
-  - `test_fsm_advance_tests_writing_test_groups`: группа исправленного файла сменена на «разовый».
+- `timeout 590 python3 -m pytest tests/test_long_lived_transitions.py tests/test_long_lived_manifest.py -p no:cacheprovider -p timeout -o timeout=120 -q`: 24 passed, 20 subtests.
+- Временные мутации. Каждую вносил по одной, прогонял
+  `tests/test_long_lived_transitions.py` и возвращал код (`git status`
+  после прогона чист, кроме `tasks/`). Все 13 дали RED:
+  - вызов `_long_lived_manifest_refuses` → `if False:`:
+    - `fsm_advance.py:277`;
+    - `fsm_advance.py:314`;
+    - `fsm_advance.py:546`;
+    - `fsm.py:931`;
+  - `fsm_merge_gate.py:903` → `return False`;
+  - `fsm_merge_gate.py:901`: `_acceptance_lock_refuses` отключён;
+  - `tests_writing.py:296`: проверка пути в `origin/main` снята;
+  - `tests_writing.py:299`: проверка строки «долгоживущий» снята;
+  - `fsm_advance.py:359`: `long_lived_sources=[]`;
+  - `acceptance.py:247` (R1-F2) → `if False:`;
+  - `acceptance.run` без `extra=long_lived`;
+  - `_tests_writing_manifest_gate` → `return None`: 9 failed;
+  - `_tests_writing_long_lived_gate` → `return None`: 7 failed.
+- Мутацию сторожа AC-3 в `checkpoint.py` сам не воспроизводил. Сверил
+  тест с его заявкой по тексту: ассерты головы `branch_text` после правки
+  и после удаления заявку фиксируют.
+- `timeout 590 python3 -m pytest tasks/01M3N3Z1ZHTGMSQZ4SNRYNJ2SJ/acceptance_tests tests/test_acceptance_tests_flow.py tests/test_amend.py tests/test_invariants.py -p no:cacheprovider -p timeout -o timeout=120 -q`: 211 passed, 266 subtests. Это вся планка, включая AC-22.
+- `git diff e9dd950a..HEAD -- tests/ | grep -c '^-[^-]'` → 0: удалённых или изменённых строк в `tests/` нет.
+- CI коммита aa8559b0 зелёный (из пакета).
 
 ## Предложения системе
 
-- Сейчас планка задачи вся помечена «разовый», хотя проверяет свойства
-  кода (гейты, проводку FSM). По ADR-0020 это неверная граница групп, но
-  после лока исправить её может только Оператор. Автору тестов стоит
-  напоминать об этом при выборе группы (`skills/test-authoring.md`).
-  Иначе сторожей в `tests/` приходится добирать на ревью, как здесь.
+- Сторожа переходов FSM на настоящем git (`_TransitionSandbox`) вышли
+  удачными, но каждый гейт вне предмета подменяется вручную списком имён.
+  Общая фикстура «переход с подменой всех гейтов, кроме X» в `tests/`
+  сократила бы такие тесты и защитила бы от молчаливого устаревания
+  списка при добавлении нового гейта.
