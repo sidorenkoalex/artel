@@ -79,8 +79,10 @@ worktree-режиме, по содержимому головы кодовой �
 
 **`review.snapshot_exclude`.** К прежнему кортежу добавляется
 `:(exclude,literal)<путь>` на каждый путь перечня лока. Строка задачи
-читается прямо из БД, только если файл БД есть (`get_task` роняет процесс
-на отсутствующей задаче, а существующий тест зовёт узел без песочницы БД);
+читается только если файл БД есть, через `store.task_exists`, затем
+`store.get_task` (`get_task` роняет процесс на отсутствующей задаче, а
+существующий тест зовёт узел без песочницы БД; SQL вне `store.py` нет —
+`tests/test_multitarget.py::SqlOnlyInStoreTest`);
 любой сбой — прежний кортеж. Фильтр исключений `_shown_diff` распознаёт и
 длинную форму магии (ловушка SPEC). Пакет ревью: компонент на каждый путь
 перечня (текст `git show <кодовая ветка>:<путь>`, `artifact_part` с
@@ -106,6 +108,23 @@ worktree-режиме, по содержимому головы кодовой �
 5. Прогон планки задачи и затронутых модулей `tests/` по одному.
 
 ## Проверено исполнением
+
+Итерация после возврата из verifying (CI красный на
+`tests/test_multitarget.py::SqlOnlyInStoreTest`: прямой `SELECT` в
+`orchestrator/review.py:288`): `_locked_long_lived_paths` переведён на
+`store.task_exists` + `store.get_task`, `store.py` не тронут; grep по
+`orchestrator/*.py` вне `store.py`/`schema.py` — SQL-ключевых слов нет
+(класс закрыт целиком, не один экземпляр). Коммит `cf552455` (с картой).
+- `tests/test_multitarget.py`, `tests/test_amend_long_lived.py`,
+  `tests/test_amend.py`, `tests/test_review_package.py`,
+  `tests/test_review_package_map.py`, `tests/test_capacity_gate.py`,
+  `tests/test_capacity_gate_map.py`, `tests/test_codebase_map.py`:
+  287 passed.
+- Планка задачи + `tests/test_long_lived_*.py`: 49 passed, 257 subtests.
+- Полный набор `tests/` в шаге не запускался (запрет скила
+  coding-standards, решение Оператора 05.09) — его гоняет CI на пуш ветки.
+
+Первая сдача:
 
 - Планка задачи целиком + `tests/test_long_lived_transitions.py`,
   `tests/test_long_lived_manifest.py`,
