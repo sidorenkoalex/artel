@@ -82,6 +82,22 @@ workflows/ci.yml`, приложение к PLAN.md этой задачи — п�
 прогон не красит: задача, прошедшая после него штатно до `merge_gate` без
 расхождения маркера, остаётся `green`.
 
+Ведение учебной задачи — кодом ПРОВЕРЯЕМОГО коммита, не кодом пина (SPEC
+01M3PKSWPETC49WFTFZ69GH3F2; ADR-0021, этап 0; ADR-0019 п.2): задачу
+заводит и ведёт отдельный процесс интерпретатора из эфемерного клона
+(`orchestrator/canary_drive.py`, рабочий каталог — клон), а пульт читает
+его результат — один JSON-объект в файле — и сам ни одного перехода,
+чекпоинта или шага роли учебной задачи не исполняет. Помощники ведения
+(`_drive_task`, `_pass_*`, `_kill_*`, подъём потолка) живут в этом модуле
+по-прежнему, но исполняются только процессом клона — его собственной
+копией модуля. За пультом остаются выбор шаблонов и набора, клон и
+origin-заглушка, слой моделей и вход Codex клона, диагностика, строка
+`canary_runs`, базовая линия, вердикт и сводка. Строка прогона несёт
+коммит, чьим кодом велась задача (HEAD клона, сообщённый процессом); его
+расхождение с проверяемым коммитом красит прогон. Коммит без входа
+`canary_drive.py` — именованный отказ до заведения задачи: вести её кодом
+пина канарейка больше не умеет намеренно.
+
 `canary pool-seal`/восстановление пула (SPEC 01M1NSR5M5THYRC0RFWPMVE2DW,
 часть 2) — отдельная от прогона конвейера механика; вынесена в
 `orchestrator/pool_seal.py` (SPEC 01M2CN42RV0EBBP7HS4HP2VNY1) — детали
@@ -114,7 +130,7 @@ NBJCR5Q6C3B итерации 2, R2-F1), которого эта задача н�
 живёт как чистый совместимый alias, не участвующий в реальном вождении
 канарейки.
 """
-import io
+import json
 import os
 import random
 import shutil
@@ -122,15 +138,15 @@ import subprocess
 import sys
 import tempfile
 from collections import namedtuple
-from contextlib import contextmanager, redirect_stdout
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 
 from scripts import guard
 
 from . import (alerts, answer, artifact_branch, artifact_source, artifacts,
-              auto, budget, catalog, cleanup, config, fsm, gitcmd, models,
-              roles, runner, store, workspace, yamlmini)
+              auto, budget, catalog, cleanup, config, fsm, gitcmd, liveness,
+              models, roles, runner, store, yamlmini)
 from .pool_seal import _pool_dir
 from .providers import codex as codex_provider
 
@@ -227,6 +243,56 @@ _CEILING_EXHAUSTED_REASON = "исчерпан потолок задачи"
 #: `verdict='green'`, поэтому ни `store.py`, ни `pin.py` этой задачей не
 #: правятся и условие ADR-0013 не ослабляется.
 VERDICT_CEILING_EXHAUSTED = "ceiling"
+
+#: Вход ведения учебной задачи кодом клона (SPEC 01M3PKSWPETC49WFTFZ69GH3F2,
+#: требование 1): файл в дереве проверяемого коммита и имя модуля, которым
+#: его запускает интерпретатор с рабочим каталогом — клоном. Именно запуск
+#: модулем (`-m`), а не путём к файлу: так первым в `sys.path` процесса
+#: стоит клон, и пакет `orchestrator` приходит оттуда же, откуда вход.
+CANARY_DRIVE_ENTRY = Path("orchestrator/canary_drive.py")
+CANARY_DRIVE_MODULE = "orchestrator.canary_drive"
+
+#: Предельное время процесса клона на одну учебную задачу (требование 7):
+#: по истечении процесс снимается вместе со своей группой (шаги ролей —
+#: его потомки), прогон красный. Задача проходит четыре роли, у каждой
+#: шаг до `config.AGENT_TIMEOUT_SEC` на попытку, плюс повторы developer,
+#: возвраты из эскалации и ревью-итерации — восемь часов с запасом
+#: покрывают честное ведение и всё же конечны: без предела зависший
+#: процесс держал бы пульт вечно.
+CANARY_DRIVE_TIMEOUT_SEC = 8 * 60 * 60
+
+# Файлы обмена с процессом клона — внутри `.artel/` клона: живут и умирают
+# вместе с ним, а нужное пульту он забирает до уборки клона.
+_DRIVE_RESULT_NAME = "canary-drive-result.json"
+_DRIVE_LOG_NAME = "canary-drive.log"
+
+# Исход строки `canary_runs` прогона, чей процесс клона не дал результата
+# (требование 7): FSM-состояния задачи пульт в этом случае не знает.
+_DRIVE_FAILED_OUTCOME = "drive_failed"
+
+# Поля метрик результата, которые читают фазы 2-3 и печать сводки
+# `_run_one_task`: без любого из них результат неразборчив.
+_DRIVE_METRIC_FIELDS = (
+    "steps", "cost_usd", "review_iterations", "escalations", "dev_retries",
+    "outcome", "kill_note", "test_author_visited", "ceiling_exhausted",
+    "ceiling_raise",
+)
+
+
+class CanaryDriveFailed(Exception):
+    """Процесс клона не довёл учебную задачу до результата (требование 7):
+    отказал, упал, не записал разборчивый результат или снят по времени.
+    Несёт то, что нужно пульту для красной строки прогона и сводки, —
+    диагностика к этому моменту уже сохранена."""
+
+    def __init__(self, title: str, expected: bool | None, reason: str,
+                 diag_dir: Path, task_id: str | None = None):
+        super().__init__(reason)
+        self.title = title
+        self.expected = expected
+        self.reason = reason
+        self.diag_dir = diag_dir
+        self.task_id = task_id
 
 # Origin эфемерного клона (требование 2, AC-2) — заглушка ЯВНО, не то,
 # что `git clone` подставил бы сам (локальный путь до `config.ROOT`,
@@ -1741,12 +1807,29 @@ def _run_task_in_ephemeral_clone(
         explicit_target_sha: str | None, outer_root: Path,
         layer_text: str | None = None,
         codex_auth: CodexCloneAuth | None = None) -> tuple:
-    """Фаза 1 из 3 (требование 6) `_run_one_task`: заводит и ведёт ОДНУ
-    канареечную задачу в собственном эфемерном клоне на checkout'е
-    `explicit_target_sha` (требование 1/2), сохраняя диагностику, пока
-    клон ещё жив. Возвращает всё, что нужно двум следующим фазам —
-    `task_id`, `title`, `expected`, `steps`, `metrics`, `actual`,
-    `mismatch`, `normal_outcome`, `diag_dir`.
+    """Фаза 1 из 3 (требование 6) `_run_one_task`: ОДНА канареечная задача
+    в собственном эфемерном клоне на checkout'е `explicit_target_sha`
+    (требование 1/2), с диагностикой, сохранённой, пока клон ещё жив.
+    Возвращает всё, что нужно двум следующим фазам — `task_id`, `title`,
+    `expected`, `steps`, `metrics`, `actual`, `mismatch`, `normal_outcome`,
+    `diag_dir`.
+
+    Заводит и ведёт задачу НЕ этот процесс (SPEC 01M3PKSWPETC49WFTFZ69GH3F2,
+    требования 1, 3): здесь только запуск процесса клона
+    (`_drive_in_clone`) и разбор его результата (`_read_drive_result`).
+    Форма возвращаемого кортежа прежняя — её держат подмены фазы 1 в
+    `tests/test_canary_codex_clone_auth.py` и залоченной планке
+    01M3GKJFN90ATK2KECNDZXPPP6, — поэтому коммит, чьим кодом велась задача,
+    едет к фазе 3 в `metrics` (`code_sha`, рядом — проверяемый
+    `target_sha`), а не новым элементом кортежа. Его расхождение с
+    проверяемым коммитом (требование 5) делает исход не штатным: вердикт
+    не `green`, диагностика сохраняется, базовая линия не трогается.
+
+    Сбой процесса клона (требование 7) — `CanaryDriveFailed` после
+    сохранения его вывода в каталог диагностики, изнутри блока клона: клон
+    и origin-заглушку убирает тот же `finally`, что и всегда. Коммит без
+    входа `CANARY_DRIVE_ENTRY` (требование 6) — именованный отказ до
+    заведения задачи.
 
     `layer_text` (SPEC 01M3FQ2Z2PY0E9T5F5WQ207NP5, требования 4-5) —
     локальный слой клона, собранный из набора ролей; `None` — слой клона
@@ -1757,14 +1840,19 @@ def _run_task_in_ephemeral_clone(
     (указатель связки ключей и проверка входа домом клона); `None` — ни
     одна роль прогона не идёт провайдером Codex.
 
-    Создание задачи и её вождение — с подавленным stdout
-    (`redirect_stdout`): между строкой «заведена» (печатается вызывающим
-    ПОСЛЕ выхода из этой фазы) и остальным выводом иначе ложится десяток
-    строк `store.set_state`/`cleanup.cmd_kill`.
+    Вывод процесса клона на экран пульта не идёт — только в файл, который
+    попадает в диагностику: между строкой «заведена» (печатается
+    вызывающим ПОСЛЕ выхода из этой фазы) и остальным выводом иначе лёг бы
+    десяток строк `store.set_state`/`cleanup.cmd_kill`, как и до переноса.
     """
     raw = template_path.read_text(encoding="utf-8")
     title = template_path.stem
     expected = _expected_escalation(raw)
+    # Проверяемый коммит — снаружи клона и до него: без явного sha клон
+    # стоит на HEAD главной копии, а изнутри блока `gitcmd` смотрел бы уже
+    # в сам клон.
+    target_sha = (explicit_target_sha if explicit_target_sha is not None
+                  else gitcmd.head_sha())
 
     # Позиционность вызова `_ephemeral_clone` обязана в точности повторять
     # прежнюю (`_ephemeral_clone()`, без аргументов) для обратной
@@ -1777,38 +1865,153 @@ def _run_task_in_ephemeral_clone(
                     and codex_auth is None)
                 else _ephemeral_clone(explicit_target_sha, layer_text,
                                       codex_auth))
-    with clone_ctx:
-        conn = store.db()
-        with redirect_stdout(io.StringIO()):
-            task_id = catalog.cmd_new(title, tz_path=str(template_path),
-                                      canary=True)
-            # `cmd_new` (A7) не заводит worktree/кодовую ветку задачи —
-            # это делает `runner.role_cwd` на первом РЕАЛЬНОМ шаге агента
-            # (`workspace.ensure`). Приёмочная песочница подменяет
-            # `runner.cmd_run` целиком синтетическим агентом, который сам
-            # worktree не заводит (пишет прямо в него), поэтому canary
-            # заводит его явно и заранее — идемпотентно, тем же вызовом,
-            # каким это сделал бы реальный первый шаг.
-            t = store.get_task(conn, task_id)
-            _wt_path, wt_error = workspace.ensure(task_id, t["branch"])
-            if wt_error is not None:
-                raise RuntimeError(
-                    f"canary: worktree для {task_id} не создан: {wt_error}")
-            _drive_task(conn, task_id)
-        steps = store.task_steps(conn, task_id)
-        metrics = _task_metrics(conn, task_id)
-        actual = bool(metrics["escalations"])
+    with clone_ctx as dest:
+        if not (dest / CANARY_DRIVE_ENTRY).is_file():
+            sys.exit(
+                f"canary: коммит {target_sha} не несёт входа "
+                f"{CANARY_DRIVE_ENTRY} — он не умеет вести учебную задачу "
+                "своим кодом (ADR-0021, этап 0). Вести её кодом пина "
+                "канарейка не будет: такой прогон проверял бы не этот "
+                "коммит. Учебная задача не заведена.")
+        returncode, log_text, result_path = _drive_in_clone(dest,
+                                                            template_path)
+        result, problem = _read_drive_result(result_path)
+        if returncode is None:
+            problem = (f"не завершился за {CANARY_DRIVE_TIMEOUT_SEC} с и "
+                       "снят вместе со своей группой процессов")
+        elif returncode != 0:
+            problem = f"завершился с кодом {returncode}"
+        if problem is not None:
+            task_id = result["task_id"] if result is not None else None
+            diag_dir = _save_drive_failure(outer_root, run_stamp,
+                                           task_id or title, log_text,
+                                           problem)
+            raise CanaryDriveFailed(title, expected, problem, diag_dir, task_id)
+
+        task_id = result["task_id"]
+        steps = result["steps"]
+        metrics = result["metrics"]
+        metrics["code_sha"] = result["head"]
+        metrics["target_sha"] = target_sha
+        actual = bool(result["escalated"])
         mismatch = expected is not None and expected != actual
         # «Поделена» (01M29284PTCJXGERV5262E9XMM, требование 4) — штатный
         # исход наравне со «штатно»: родитель, поделённый на подзадачи,
-        # не сбой прогона, диагностика ему не нужна.
-        normal_outcome = metrics["kill_note"] in ("штатно", "поделена")
+        # не сбой прогона, диагностика ему не нужна. Задача, которую вёл
+        # код другого коммита, штатной не бывает (требование 5).
+        normal_outcome = (metrics["kill_note"] in ("штатно", "поделена")
+                          and result["head"] == target_sha)
         diag_dir = None
         if _needs_diagnostics(normal_outcome, mismatch):
             diag_dir = _save_diagnostics(outer_root, run_stamp, task_id, steps)
+            (diag_dir / _DRIVE_LOG_NAME).write_text(log_text, encoding="utf-8")
 
     return (task_id, title, expected, steps, metrics, actual, mismatch,
            normal_outcome, diag_dir)
+
+
+def _drive_in_clone(dest: Path, template_path: Path) -> tuple:
+    """Запускает процесс ведения из клона `dest` и ждёт его не дольше
+    `CANARY_DRIVE_TIMEOUT_SEC` (SPEC 01M3PKSWPETC49WFTFZ69GH3F2, требования
+    1, 7). Возвращает `(код выхода | None, вывод процесса, путь файла
+    результата)`; `None` — процесс снят по времени.
+
+    Своя группа процессов (`start_new_session`): шаги ролей — потомки
+    процесса клона, и по таймауту снимается вся группа, а не один родитель,
+    оставивший бы агентов работать на удалённый клон. Интерпретатор —
+    интерпретатор пульта (`sys.executable`), venv и переопределение
+    `CODEX_HOME` — значения процесса пульта ВНУТРИ блока клона: этим
+    процесс клона повторяет окружение, в котором задачу вёл бы сам пульт.
+
+    Вывод пишется в файл, а не в канал: ведение длится часами, и канал,
+    который никто не читает до конца процесса, заполнился бы и повесил его.
+    """
+    work = dest / ".artel"
+    work.mkdir(parents=True, exist_ok=True)
+    result_path = work / _DRIVE_RESULT_NAME
+    log_path = work / _DRIVE_LOG_NAME
+    argv = [sys.executable, "-m", CANARY_DRIVE_MODULE,
+            "--template", str(template_path), "--result", str(result_path),
+            "--venv-dir", str(config.VENV_DIR)]
+    codex_home = codex_provider.codex_home_override()
+    if codex_home is not None:
+        argv += ["--codex-home", str(codex_home)]
+    # Без буферизации: вывод в файл у Python блочно буферизован, а снятие
+    # по таймауту сигналом буфер не сбрасывает — диагностика зависания
+    # осталась бы без последних строк ведения.
+    env = {**os.environ, "PYTHONUNBUFFERED": "1"}
+    with open(log_path, "w", encoding="utf-8") as log:
+        try:
+            proc = subprocess.Popen(argv, cwd=dest, stdin=subprocess.DEVNULL,
+                                    stdout=log, stderr=subprocess.STDOUT,
+                                    env=env, start_new_session=True)
+        except OSError as exc:
+            return 127, f"canary: процесс клона не запущен: {exc}\n", result_path
+        try:
+            returncode = proc.wait(timeout=CANARY_DRIVE_TIMEOUT_SEC)
+        except subprocess.TimeoutExpired:
+            liveness.terminate_process_group(proc.pid)
+            proc.wait()
+            returncode = None
+        except BaseException:
+            # Своя сессия не получает SIGINT терминала: прерванный пульт
+            # (Ctrl-C, `SystemExit` обработчика сигнала) иначе оставил бы
+            # агентов роли работать на клон, который `finally` уже удаляет.
+            liveness.terminate_process_group(proc.pid)
+            proc.wait()
+            raise
+    log_text = log_path.read_text(encoding="utf-8", errors="replace")
+    return returncode, log_text, result_path
+
+
+def _read_drive_result(path: Path) -> tuple:
+    """`(результат, None)` — файл несёт один разборчивый JSON-объект
+    результата процесса клона; `(None, причина)` — иначе (требование 7).
+
+    Проверяется всё, что читают следующие фазы: без проверки здесь
+    неполный объект уронил бы пульт `KeyError` уже после уборки клона —
+    без диагностики и без строки прогона."""
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError as exc:
+        return None, f"не записал результат {path.name} ({exc.strerror or exc})"
+    try:
+        data = json.loads(text)
+    except ValueError as exc:
+        return None, f"записал неразборчивый результат: {exc}"
+    if not isinstance(data, dict):
+        return None, "записал результат не JSON-объектом"
+    missing = [key for key, kind in (("task_id", str), ("head", str),
+                                     ("escalated", bool), ("metrics", dict),
+                                     ("steps", list))
+               if not isinstance(data.get(key), kind)]
+    if not missing:
+        missing = [f"metrics.{key}" for key in _DRIVE_METRIC_FIELDS
+                   if key not in data["metrics"]]
+    if not missing and not all(
+            isinstance(step, dict)
+            and all(field in step for field in ("ts", "actor", "action",
+                                                "detail"))
+            for step in data["steps"]):
+        missing = ["steps[].ts/actor/action/detail"]
+    if missing:
+        return None, ("записал результат без полей: " + ", ".join(missing))
+    return data, None
+
+
+def _save_drive_failure(outer_root: Path, run_stamp: str, name: str,
+                        log_text: str, reason: str) -> Path:
+    """Диагностика сбоя процесса клона (требование 7): его вывод и причина
+    — под каталог прогона снаружи клона, пока клон ещё жив. `name` — id
+    задачи, если процесс успел его сообщить, иначе имя шаблона: id задачи
+    при сбое бывает неизвестен, а каталог обязан быть свой у каждой задачи
+    прогона."""
+    diag_dir = _diagnostics_dir(outer_root, run_stamp, name)
+    diag_dir.mkdir(parents=True, exist_ok=True)
+    (diag_dir / _DRIVE_LOG_NAME).write_text(log_text, encoding="utf-8")
+    (diag_dir / "failure.txt").write_text(
+        f"процесс клона {reason}\n", encoding="utf-8")
+    return diag_dir
 
 
 def _record_canary_run(outer_conn, run_stamp: str, title: str, task_id: str,
@@ -1836,12 +2039,24 @@ def _record_canary_run(outer_conn, run_stamp: str, title: str, task_id: str,
     01M3FQ2Z2PY0E9T5F5WQ207NP5, требование 7) идут в ту же строку: набор
     — файл вне git, и к разбору истории прогонов его текст уже будет
     другим.
+
+    С переносом ведения в процесс клона (SPEC 01M3PKSWPETC49WFTFZ69GH3F2,
+    требование 5) `main_sha` — коммит, чьим кодом задача ДЕЙСТВИТЕЛЬНО
+    велась (`metrics["code_sha"]`, HEAD клона, сообщённый процессом), а
+    не тот, который пульт собирался проверить: зелёная строка прогона —
+    допуск `pin-update`, и утверждать она обязана исполненный код. Он же
+    возвращается для сводки. При штатном прогоне оба sha равны; их
+    расхождение фаза 1 уже сделала не штатным исходом, поэтому вердикт
+    здесь считается прежней формулой. Метрики без `code_sha` (подмена
+    фазы 1 в тестах) — прежнее поведение: проверяемый sha.
     """
     if explicit_target_sha is None:
         target_sha = gitcmd.head_sha()
     if sha_label is None:
         sha_label = _sha_label(target_sha, None)
-    main_sha = target_sha
+    main_sha = metrics.get("code_sha") or target_sha
+    if main_sha != target_sha:
+        sha_label = _sha_label(main_sha, None)
     # Возврат из merge_gate (06.09, п.2): вердикт зелёности выражен через
     # уже смерженное понятие штатного исхода прогона (`normal_outcome`/
     # `_needs_diagnostics`, вычислены фазой 1), не через «дошла до
@@ -1859,7 +2074,7 @@ def _record_canary_run(outer_conn, run_stamp: str, title: str, task_id: str,
         "yes" if expected else ("no" if expected is False else None),
         actual, mismatch, main_sha=main_sha, verdict=verdict,
         set_name=plan.name, models_summary=plan.summary or None)
-    return target_sha, sha_label
+    return main_sha, sha_label
 
 
 def _baseline_deviation_note(outer_conn, task_id: str, title: str,
@@ -1960,10 +2175,14 @@ def _run_one_task(template_path: Path, run_stamp: str, ratio: float,
     # параметрами, и шестой аргумент уронил бы её `TypeError` даже значением
     # `None`.
     phase_one_extra = {} if codex_auth is None else {"codex_auth": codex_auth}
-    (task_id, title, expected, steps, metrics, actual, mismatch,
-     normal_outcome, diag_dir) = _run_task_in_ephemeral_clone(
-        template_path, run_stamp, explicit_target_sha, outer_root,
-        plan.layer_text, **phase_one_extra)
+    try:
+        (task_id, title, expected, steps, metrics, actual, mismatch,
+         normal_outcome, diag_dir) = _run_task_in_ephemeral_clone(
+            template_path, run_stamp, explicit_target_sha, outer_root,
+            plan.layer_text, **phase_one_extra)
+    except CanaryDriveFailed as failure:
+        _report_drive_failure(failure, run_stamp, plan)
+        return
 
     print(f"[canary] {task_id} заведена из {template_path.name}")
 
@@ -1982,6 +2201,15 @@ def _run_one_task(template_path: Path, run_stamp: str, ratio: float,
             "  [РАСХОЖДЕНИЕ: маркер ожидал "
             f"{'эскалацию' if expected else 'без эскалации'}, по факту "
             f"{'эскалация была' if actual else 'эскалации не было'}]")
+
+    # Требование 5 (SPEC 01M3PKSWPETC49WFTFZ69GH3F2): задачу вёл код не того
+    # коммита, который проверялся, — причина и оба коммита в строке сводки.
+    code_sha = metrics.get("code_sha")
+    checked_sha = metrics.get("target_sha")
+    if code_sha and checked_sha and code_sha != checked_sha:
+        mismatch_note += (
+            f"  [РАСХОЖДЕНИЕ КОММИТА: задачу вёл код {code_sha}, а "
+            f"проверялся {checked_sha} — прогон не зелёный]")
 
     outcome_note = f" ({metrics['kill_note']})" if metrics["kill_note"] else ""
     test_author_note = "да" if metrics["test_author_visited"] else "нет"
@@ -2004,6 +2232,30 @@ def _run_one_task(template_path: Path, run_stamp: str, ratio: float,
          f"test_author={test_author_note}{mismatch_note}{note}")
     if diag_dir is not None:
         print(f"  диагностика: {diag_dir}")
+
+
+def _report_drive_failure(failure: CanaryDriveFailed, run_stamp: str,
+                          plan: CanarySetPlan) -> None:
+    """Красная строка `canary_runs` и сводка задачи, чей процесс клона не
+    дал результата (SPEC 01M3PKSWPETC49WFTFZ69GH3F2, требование 7).
+
+    Строка пишется, а не пропускается: история прогонов обязана показывать
+    и такой прогон, иначе сбой ведения выглядел бы в ней как прогон,
+    которого не было. Метрик у неё нет — нули; `main_sha` пуст: какой код
+    вёл задачу, процесс не сообщил, и утверждать это за него пульт не
+    вправе. Базовая линия не трогается. Остальные задачи прогона идут
+    дальше — пульт не падает."""
+    expected = failure.expected
+    store.insert_canary_run(
+        store.db(), run_stamp, failure.title, failure.task_id, 0, 0.0, 0, 0,
+        _DRIVE_FAILED_OUTCOME,
+        "yes" if expected else ("no" if expected is False else None),
+        False, False, main_sha=None, verdict="red",
+        set_name=plan.name, models_summary=plan.summary or None)
+    who = failure.task_id or failure.title
+    print(f"[canary] {who}: учебная задача шаблона {failure.title} не "
+          f"доведена — процесс клона {failure.reason}; прогон красный")
+    print(f"  диагностика: {failure.diag_dir}")
 
 
 def _summary_note(plan: CanarySetPlan) -> str:
