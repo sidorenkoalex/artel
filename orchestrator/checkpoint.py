@@ -226,6 +226,9 @@ def commit_timeout_checkpoint(conn, task_id: str, role: str) -> str:
         timeout=True)
 
 
+TEST_AUTHOR_NOT_COMMITTED_ACTION = "долгоживущие тесты не закоммичены пультом"
+
+
 def _test_author_own_paths(conn, task_id: str, wt: Path) -> set[str] | None:
     """Пути worktree, которые test_author вправе закоммитить в кодовую
     ветку (SPEC 01M3N3Z1ZHTGMSQZ4SNRYNJ2SJ, требование 1; ADR-0020, п. 7):
@@ -277,9 +280,22 @@ def _test_author_checkpoint(conn, task_id: str, role: str, wt: Path,
     как у любой роли без мандата кода. Откат — ДО коммита: после него
     worktree вне `tasks/<id>/` несёт только свои файлы, и `add -A` не
     подхватит чужого. Возврат — detail коммита кодовой ветки (пусто —
-    коммита не было)."""
+    коммита не было).
+
+    Оба выхода без коммита при непустой работе роли — git не ответил на
+    отбор своих путей либо не принял коммит — пишут
+    `TEST_AUTHOR_NOT_COMMITTED_ACTION` (SPEC 01M3NMHHAMTFN2BNKBN209E15M,
+    дефект А): файл, оставшийся только в рабочей копии, выход из
+    `tests_writing` не видит, и отказ «AC-n: нет теста» без этой записи
+    не объясним по журналу."""
     own = _test_author_own_paths(conn, task_id, wt)
     if own is None:
+        store.journal(conn, task_id, "orchestrator",
+                      TEST_AUTHOR_NOT_COMMITTED_ACTION,
+                      f"{task_id}: свои файлы tests/ роли {role} "
+                      f"{discard_detail} не отобраны — git не ответил на "
+                      f"статус worktree, базу ветки или её дерево; worktree "
+                      f"не тронут")
         return ""
     discarded = _discard_out_of_mandate_changes(wt, task_id, keep=own)
     if discarded:
@@ -291,6 +307,11 @@ def _test_author_checkpoint(conn, task_id: str, role: str, wt: Path,
     committed, sha, _stray = _commit_worktree_change(
         conn, task_id, wt, message, exclude=f"tasks/{task_id}")
     if not committed:
+        store.journal(conn, task_id, "orchestrator",
+                      TEST_AUTHOR_NOT_COMMITTED_ACTION,
+                      f"{task_id}: {', '.join(sorted(own))} роли {role} "
+                      f"{discard_detail} не закоммичены в кодовую ветку — "
+                      f"git не принял коммит; файлы остались в worktree")
         return ""
     detail = f"{message} (sha {sha})" if sha else message
     store.journal(conn, task_id, "orchestrator", action, detail)
