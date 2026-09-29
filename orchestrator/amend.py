@@ -33,8 +33,9 @@ from pathlib import Path
 
 from scripts import guard
 
-from . import (acceptance, alerts, artifact_branch, config, gitcmd, lease,
-               store, workspace, yamlmini)
+from . import (acceptance, alerts, artifact_branch, config, fixation, gitcmd,
+               lease, store, workspace, yamlmini)
+from .advance_gates import acceptance as acceptance_gates
 
 AMEND_ACTION = "правка планки"
 DEVALUATION_ALERT_SOURCE = "amend_tests.window_threshold"
@@ -286,6 +287,188 @@ def _amend_events_in_window(conn, window_ids: list[str]) -> int:
         count += sum(1 for s in store.task_steps(conn, task_id)
                     if AMEND_ACTION in s["action"])
     return count
+
+
+def _refuse(conn, task_id: str, what: str, errors: list[str]) -> None:
+    """Отказ проверки до записи — приёмом `_refuse_traceability` (журнал
+    актором `operator`, не `AMEND_ACTION`)."""
+    reason = "; ".join(errors)
+    store.journal(conn, task_id, "operator", "amend-tests отклонён",
+                  f"{what}: {reason}")
+    sys.exit(f"[{task_id}] amend-tests: отказ — {what}: {reason}")
+
+
+def _lock_manifest(conn, task_id: str, t) -> tuple[dict[str, str] | None, str]:
+    """Перечень долгоживущих файлов из дерева лока — тем же узлом, что
+    сверка сумм на переходах. Пустой словарь — задача без долгоживущих
+    файлов: `amend-tests` ведёт себя как до ADR-0020, задача 3 (SPEC
+    01M3NSZ4YWZW9SD5Y6H62ATGRV, требование 7)."""
+    return acceptance_gates.long_lived_manifest(
+        task_id, t, store.task_target(conn, task_id))
+
+
+def _worktree_long_lived_files(wt_path: Path, task_id: str) -> dict[str, str] | None:
+    """{путь: текст} долгоживущих файлов задачи, которые лежат на диске
+    worktree (отслеживаемые и новые, не игнорируемые git) — итоговое
+    состояние правки; `None` — git не ответил или файл не прочитан."""
+    res = gitcmd.in_repo(wt_path, "ls-files", "--cached", "--others",
+                         "--exclude-standard", "--", "tests")
+    if res is None or res.returncode != 0:
+        return None
+    files: dict[str, str] = {}
+    for rel in sorted(set(res.stdout.splitlines())):
+        rel = rel.strip()
+        if not guard.is_long_lived_test_path(task_id, rel):
+            continue
+        path = wt_path / rel
+        if not path.is_file():
+            continue  # удалён в worktree, но ещё в индексе
+        try:
+            files[rel] = path.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            return None
+    return files
+
+
+def _code_head_long_lived(code_branch: str, task_id: str
+                          ) -> tuple[str, dict[str, str]] | None:
+    """(голова кодовой ветки, {путь: текст} её долгоживущих файлов задачи);
+    `None` — git не ответил."""
+    head = gitcmd.branch_head_sha(code_branch)
+    present = gitcmd.ls_tree_files(head, "tests") if head else None
+    if present is None:
+        return None
+    files: dict[str, str] = {}
+    for rel in present:
+        if not guard.is_long_lived_test_path(task_id, rel):
+            continue
+        text, _reason = gitcmd.show(head, rel)
+        if text is None:
+            return None
+        files[rel] = text
+    return head, files
+
+
+def _head_digests(head: str, task_id: str) -> dict[str, str] | None:
+    """{путь: sha256 байтов} долгоживущих файлов задачи в дереве `head` —
+    содержимое перечня Р2; `None` — git не ответил."""
+    present = gitcmd.ls_tree_files(head, "tests") if head else None
+    if present is None:
+        return None
+    digests: dict[str, str] = {}
+    for rel in present:
+        if guard.is_long_lived_test_path(task_id, rel):
+            digest = acceptance_gates.blob_sha256(head, rel)
+            if digest is None:
+                return None
+            digests[rel] = digest
+    return digests
+
+
+def _deleted_file_text(code_head: str, rel: str) -> str | None:
+    """Текст удаляемого файла перечня: с головы кодовой ветки, а если там
+    его уже нет — с родителя коммита, который его удалил."""
+    text, _reason = gitcmd.show(code_head, rel)
+    if text is not None:
+        return text
+    res = gitcmd.git("log", "-1", "--format=%H", "--no-renames",
+                     "--diff-filter=D", code_head, "--", rel)
+    sha = res.stdout.strip() if res is not None and res.returncode == 0 else ""
+    if not sha:
+        return None
+    text, _reason = gitcmd.show(f"{sha}^", rel)
+    return text
+
+
+def _method_names(source: str) -> set[str]:
+    """Имена тестовых методов без класса: перенос метода в другую группу
+    меняет его класс, но не имя."""
+    return {name.rsplit("::", 1)[-1]
+            for name in guard.qualified_test_methods(source)}
+
+
+def _long_lived_errors(task_id: str, files: dict[str, str],
+                       deleted: dict[str, str | None],
+                       plank_sources: list[str]) -> list[str]:
+    """Проверки итогового состояния долгоживущих файлов (SPEC
+    01M3NSZ4YWZW9SD5Y6H62ATGRV, требования 1, 4): в `tests/` — только
+    «Группа: долгоживущий»; признаки и «Ловит мутацию» — узлом выхода из
+    `tests_writing`; удаление файла перечня — только переносом, без потери
+    метода (ADR-0020, пункт 8). Файл, который не разбирается, строкой
+    группы не проверяется — его точнее назовёт сухой сбор."""
+    errors: list[str] = []
+    for rel, text in sorted(files.items()):
+        group, group_error = guard.plank_file_group(text)
+        if group != guard.GROUP_LONG_LIVED and (group or group_error):
+            errors.append(f"{rel}: нет строки «Группа: {guard.GROUP_LONG_LIVED}» "
+                          f"— в tests/ кодовой ветки только долгоживущие файлы")
+    errors += guard.long_lived_errors_from_files(sorted(files.items()), task_id)
+    kept: set[str] = set()
+    for source in [*plank_sources, *files.values()]:
+        kept |= _method_names(source)
+    for rel, text in sorted(deleted.items()):
+        if text is None:
+            errors.append(f"{rel}: удаляемый файл перечня не прочитан — "
+                          f"сверить его методы с итоговой планкой нечем")
+            continue
+        lost = sorted(_method_names(text) - kept)
+        if lost:
+            errors.append(
+                f"{rel}: удаление снимает методы {', '.join(lost)} — их нет "
+                f"ни в acceptance_tests/, ни в долгоживущих файлах задачи; "
+                f"снятие теста — по мандату Оператора на ослабление, не "
+                f"правкой планки (ADR-0020, пункт 8)")
+    return errors
+
+
+def _collect_and_run(conn, task_id: str, acc_tdir: Path, cwd: Path,
+                     long_lived: dict[str, str],
+                     plank_files: list[tuple[str, str]]) -> str:
+    """Сухой сбор и прогон планки вместе с долгоживущими файлами — как
+    `in_dev -> verifying`; хвост прогона для журнала. Красный прогон
+    допускается прежним правилом: каждый файл прогона несёт маркер
+    «Красен до реализации»/«Зелёный с рождения»."""
+    extra = sorted(long_lived)
+    collected, tail = acceptance.collect(acc_tdir, cwd, extra=extra)
+    if not collected:
+        _refuse(conn, task_id, "сухой сбор планки и долгоживущих файлов "
+                f"({', '.join(extra)}) не прошёл", [tail])
+    green, tail = acceptance.run(acc_tdir, cwd=cwd, extra=extra)
+    if not green:
+        marker_errors = (guard.redness_marker_errors_from_files(plank_files)
+                         + guard.redness_marker_errors_from_files(
+                             sorted(long_lived.items())))
+        if marker_errors:
+            _refuse(conn, task_id, "прогон планки и долгоживущих файлов не "
+                    "«OK», и не все падения промаркированы «Красен до "
+                    "реализации»", [*marker_errors, tail])
+    return tail
+
+
+def _commit_long_lived(wt_path: Path, paths: list[str], message: str) -> bool:
+    """Коммит в worktree кодовой ветки ровно `paths` (включая удаления) —
+    запись (а) требования 1; сбой снимает их со сцены и отдаёт `False`."""
+    added = gitcmd.in_repo(wt_path, "add", "-A", "--", *paths)
+    commit = None
+    if added is not None and added.returncode == 0:
+        commit = gitcmd.in_repo(
+            wt_path, "-c", f"user.name={fixation.FIXATION_AUTHOR_NAME}",
+            "-c", f"user.email={fixation.FIXATION_AUTHOR_EMAIL}",
+            "commit", "-q", "-m", message, "--", *paths)
+    if commit is None or commit.returncode != 0:
+        gitcmd.in_repo(wt_path, "reset", "-q", "--", *paths)
+        return False
+    return True
+
+
+def _recovery_exit(conn, task_id: str, detail: str) -> None:
+    """Сбой между записями (SPEC 01M3NSZ4YWZW9SD5Y6H62ATGRV, требование 2):
+    кодовая ветка уже несёт правку, лок — нет. Не `AMEND_ACTION`: правка
+    не состоялась, счётчик ADR-0012 её не видит."""
+    store.journal(conn, task_id, "operator", "amend-tests прерван", detail)
+    sys.exit(f"[{task_id}] amend-tests: сбой — {detail}; tests_locked_sha не "
+             f"сдвинут. Восстановление: artel.py amend-tests {task_id} "
+             f"--from-branch --reason «…»")
 
 
 def _cmd_amend_tests(conn, task_id: str, reason: str | None) -> None:
