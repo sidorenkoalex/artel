@@ -3,6 +3,8 @@
 Перенесено из orchestrator/runner.py без изменения поведения (T091,
 декомпозиция диспетчеров fsm/runner).
 """
+from scripts import guard
+
 from . import brief, review, stack
 
 
@@ -18,6 +20,9 @@ def mission_brief_package(conn, task_id: str, t, role: str, cwd):
     ролей заканчивается буквальной строкой рабочего каталога — роль не
     обязана домысливать, где именно ей можно писать файлы Write."""
     task_ref = f"tasks/{task_id}"
+    # Префикс имени долгоживущего файла своей задачи — конкретный, не
+    # шаблон (SPEC 01M3N3Z1ZHTGMSQZ4SNRYNJ2SJ, требование 10, Р1).
+    long_lived_prefix = guard.long_lived_path_prefix(task_id)
     package = None
     brief_text = None
     if role == "analyst":
@@ -55,6 +60,14 @@ def mission_brief_package(conn, task_id: str, t, role: str, cwd):
             f"2) Для каждого AC-n напиши unittest в "
             f"{task_ref}/acceptance_tests/test_*.py, метод test_ac<n>_... — "
             f"ТОЛЬКО из формулировки критерия.\n"
+            f"2а) Долгоживущий файл (`Группа: долгоживущий`, "
+            f"skills/test-authoring.md) пиши не в каталог приёмочных тестов, "
+            f"а в каталог tests/ кодовой ветки, с именем "
+            f"{long_lived_prefix}<имя>.py (<имя> — строчные латинские буквы, "
+            f"цифры, подчёркивание). Существующие файлы tests/ не трогай — "
+            f"их правку, переименование и удаление, как и любую другую "
+            f"правку вне {task_ref}/, пульт откатит; свои новые файлы с этим "
+            f"префиксом он сам закоммитит в ветку на чекпоинте шага.\n"
             f"3) Критерий нельзя проверить тестом напрямую — пометь "
             f"`# AC-n: manual — <причина>` (Оператор проверит на приёмке) "
             f"или `# AC-n: skip — <причина>`.\n"
@@ -62,9 +75,10 @@ def mission_brief_package(conn, task_id: str, t, role: str, cwd):
             f"компромисс: `# AC-n: escalate — <вопрос Оператору>`.\n"
             f"5) Прогони `python3 -m pytest {task_ref}/acceptance_tests -p "
             f"no:cacheprovider -p timeout -o "
-            f"timeout={stack.PER_TEST_TIMEOUT_SEC}`. tasks/<id>/ коммитить "
+            f"timeout={stack.PER_TEST_TIMEOUT_SEC}` (долгоживущие файлы — "
+            f"тем же вызовом, добавив их пути). tasks/<id>/ коммитить "
             f"не нужно — автокоммит оркестратора сам перенесёт написанное в "
-            f"артефактную ветку. Код репозитория и SPEC.md НЕ трогай."
+            f"артефактную ветку. Остальной код репозитория и SPEC.md НЕ трогай."
         )
         brief_text = brief.test_author_answer_component(conn, task_id)
     elif role == "developer":
@@ -78,7 +92,10 @@ def mission_brief_package(conn, task_id: str, t, role: str, cwd):
             f"3) Реализуй по плану + юнит-тесты. Если есть {task_ref}/REVIEW.md "
             f"со статусом changes_requested — сначала закрой замечания. Если "
             f"есть {task_ref}/acceptance_tests/ — они залочены (tasks/T023): "
-            f"код чинится под них, их правка — эскалация, не правка.\n"
+            f"код чинится под них, их правка — эскалация, не правка. "
+            f"Долгоживущие файлы задачи в tests/ ({long_lived_prefix}*.py) "
+            f"зафиксированы так же, как приёмочные тесты, — перечнем сумм под "
+            f"тем же локом: их не правь, расхождение с ними эскалируй.\n"
             f"4) Прогони scripts/guard.py на своих артефактах, закоммить код "
             f"в ветку (tasks/<id>/ коммитить не нужно — автокоммит "
             f"оркестратора сам перенесёт PLAN.md в артефактную ветку), "

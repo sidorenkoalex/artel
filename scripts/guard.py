@@ -1089,7 +1089,8 @@ def traceability_errors_from_content(spec_text: str, meta: dict, tested: set,
     return errors
 
 
-def acceptance_traceability_errors(tdir: Path) -> list[str]:
+def acceptance_traceability_errors(tdir: Path,
+                                   extra_sources: list[str] = ()) -> list[str]:
     """AC без теста и без пометки — невалидный выход из tests_writing
     (SPEC T023, требование 4), рабочая копия.
 
@@ -1101,6 +1102,10 @@ def acceptance_traceability_errors(tdir: Path) -> list[str]:
     (01M28NX43ERJGHCJN29HVKMCC3, `scan_indented_ac_markers`) — тот же
     выход из tests_writing обязан отказывать и на этом классе дефекта,
     не только на буквальном «нет теста и нет пометки».
+
+    `extra_sources` — тексты долгоживущих файлов `tests/` кодовой ветки
+    этой задачи (SPEC 01M3N3Z1ZHTGMSQZ4SNRYNJ2SJ, требование 5): их методы
+    `test_ac<n>_…` покрывают критерии наравне с каталогом приёмочных тестов.
     """
     spec_path = tdir / "SPEC.md"
     try:
@@ -1109,6 +1114,9 @@ def acceptance_traceability_errors(tdir: Path) -> list[str]:
         return [f"{spec_path}: не прочитан: {exc}"]
     meta = yamlmini.frontmatter(text) or {}
     tested, markers = scan_acceptance_tests(tdir)
+    extra_tested, extra_markers = scan_ac_content(list(extra_sources))
+    tested = tested | extra_tested
+    markers = {**extra_markers, **markers}
     errors = traceability_errors_from_content(text, meta, tested, markers)
     return errors + scan_indented_ac_markers(tdir)
 
@@ -1790,6 +1798,72 @@ def acceptance_test_files(tdir: Path) -> list[tuple[str, str]]:
         except (OSError, UnicodeDecodeError):
             continue
     return files
+
+
+# --------------------------------------------------------------------------
+# Долгоживущие файлы задачи в `tests/` кодовой ветки (ADR-0020, пункты 3,
+# 5, 7; SPEC 01M3N3Z1ZHTGMSQZ4SNRYNJ2SJ, решения Р1, Р2). Одно место
+# правила имени и формата перечня на всех потребителей: чекпоинт
+# test_author, выход из `tests_writing`, сверка перечня на переходах и на
+# гейте мержа.
+
+# Перечень сумм лежит в каталоге приёмочных тестов: имя подходит под
+# `ACCEPTANCE_TESTS_ALLOWED_TOP_LEVEL` (`.+\.txt`), и нынешний лок
+# `tests_locked_sha` покрывает его без новой колонки БД (Р2).
+LONG_LIVED_MANIFEST_NAME = "long_lived.sha256.txt"
+_LONG_LIVED_NAME = re.compile(r"[a-z0-9_]+")
+_MANIFEST_LINE = re.compile(r"([0-9a-f]{64})  (\S.*)")
+
+
+def long_lived_path_prefix(task_id: str) -> str:
+    """`tests/test_<полный id в нижнем регистре>_` (Р1): только полный id
+    ULID уникален — первые 10 знаков у него метка времени, и у задач,
+    заведённых в одну миллисекунду, совпадают; нижний регистр — форма
+    имени ветки и допустимого имени модуля Python."""
+    return f"tests/test_{task_id.lower()}_"
+
+
+def is_long_lived_test_path(task_id: str, rel: str) -> bool:
+    """`rel` — `tests/test_<префикс задачи>_<имя>.py`, `<имя>` непустое из
+    `[a-z0-9_]` (Р1): файл, который test_author задачи вправе добавить в
+    кодовую ветку."""
+    prefix = long_lived_path_prefix(task_id)
+    if not (rel.startswith(prefix) and rel.endswith(".py")):
+        return False
+    return bool(_LONG_LIVED_NAME.fullmatch(rel[len(prefix):-len(".py")]))
+
+
+def render_long_lived_manifest(digests: dict[str, str]) -> str:
+    """Текст перечня по Р2 из {путь: sha256}: строка `<sha256>␣␣<путь>\\n`
+    на файл, строки по пути, без комментариев; пустой словарь — пустой
+    файл. Формат `sha256sum -c` из корня рабочей копии кодовой ветки."""
+    return "".join(f"{digests[path]}  {path}\n" for path in sorted(digests))
+
+
+def parse_long_lived_manifest(text: str) -> tuple[dict[str, str] | None, str]:
+    """({путь: sha256}, "") — перечень разобран; (None, причина) — строка
+    не по формату Р2. Разбор строгий: перечень пишет только пульт, и
+    строка чужого вида — порча, а не вариант записи."""
+    digests: dict[str, str] = {}
+    for n, line in enumerate(text.split("\n"), start=1):
+        if not line:
+            continue
+        match = _MANIFEST_LINE.fullmatch(line)
+        if match is None:
+            return None, f"строка {n} перечня не по формату «<sha256>  <путь>»"
+        digests[match.group(2)] = match.group(1)
+    return digests, ""
+
+
+def long_lived_plank_errors(files: list[tuple[str, str]], task_id: str) -> list[str]:
+    """Долгоживущий файл в каталоге приёмочных тестов (SPEC
+    01M3N3Z1ZHTGMSQZ4SNRYNJ2SJ, требование 4): временная оговорка задачи 1
+    снята, место такого файла — `tests/` кодовой ветки по правилу имени Р1."""
+    prefix = long_lived_path_prefix(task_id)
+    return [f"{label}: «Группа: {GROUP_LONG_LIVED}» в каталоге приёмочных "
+            f"тестов — перенеси файл в {prefix}<имя>.py кодовой ветки"
+            for label, source in files
+            if plank_file_group(source)[0] == GROUP_LONG_LIVED]
 
 
 # Секция «Проверено исполнением» — обязательна при status: approved

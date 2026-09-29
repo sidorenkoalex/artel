@@ -608,12 +608,6 @@ class AmendThenReviewGateTest(RealGitSandbox):
         self.assertIsNone(error, f"worktree не создан: {error}")
         self.wt_path = wt_path
         self.tdir = wt_path / "tasks" / self.TASK
-        # Код фичи (self-target, тот же приём, что LockTest.setUp, AC-5):
-        # гейт ёмкости diff снимка (`_capacity_gate_refuses`) для self
-        # сверяет именно кодовую ветку в config.ROOT.
-        (self.wt_path / "feature.txt").write_text("код фичи\n", encoding="utf-8")
-        self.git_wt("add", "feature.txt")
-        self.git_wt("commit", "-q", "-m", f"{self.TASK}: код фичи")
 
     def row(self):
         return store.db().execute("SELECT * FROM tasks WHERE id=?",
@@ -648,6 +642,14 @@ class AmendThenReviewGateTest(RealGitSandbox):
             "acceptance_tests")
         capture(fsm.cmd_advance, self.TASK)  # tests_writing -> in_dev
         self.assertEqual(self.state(), "in_dev")
+        # Код фичи (self-target, тот же приём, что LockTest, AC-5): гейт
+        # ёмкости diff снимка (`_capacity_gate_refuses`) для self сверяет
+        # именно кодовую ветку в config.ROOT. После лока: до выхода из
+        # `tests_writing` кодовая ветка несёт только долгоживущие файлы
+        # test_author (SPEC 01M3N3Z1ZHTGMSQZ4SNRYNJ2SJ, требование 2).
+        (self.wt_path / "feature.txt").write_text("код фичи\n", encoding="utf-8")
+        self.git_wt("add", "feature.txt")
+        self.git_wt("commit", "-q", "-m", f"{self.TASK}: код фичи")
 
     def test_amend_then_advance_passes_lock_gate(self):
         """Успешный `amend-tests`, сразу за ним `advance` — переход

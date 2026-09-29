@@ -25,6 +25,8 @@ from scripts import guard
 from . import (acceptance, artifact_branch, artifact_source, ci, cleanup,
               config, fsm, fsm_postmerge, gitcmd, github_adapter, lease,
               merge_lock, merge_queue, repo_context, store, workspace)
+from .advance_gates.acceptance import (_acceptance_lock_refuses,
+                                       _long_lived_manifest_refuses)
 from .advance_gates.plan_appendix import git_apply
 from .advance_gates.test_integrity import merge_gate_escalates
 
@@ -881,6 +883,26 @@ def _cleanup_merged_task(conn, task_id: str, branch: str) -> None:
     store.journal(conn, task_id, "orchestrator", "ветка убрана", branch_note)
 
 
+def _acceptance_locks_refuse(conn, task_id: str) -> bool:
+    """Лок каталога приёмочных тестов (`_acceptance_lock_refuses`) и перечень
+    долгоживущих файлов (`_long_lived_manifest_refuses`) на гейте мержа
+    после `_sync_main_or_wait` (SPEC 01M3N3Z1ZHTGMSQZ4SNRYNJ2SJ, требования
+    7-8): до задачи гейт мержа лок не сверял вовсе, и планку, правленую
+    после `in_dev -> verifying`, никто больше не ловил. Расхождение или сбой
+    git — остановка тела без merge.
+
+    Только target `artel` (требование 11, AC-20): у внешнего target
+    поведение гейта мержа прежнее. Строка задачи — свежая: `t` вызывающего
+    прочитан до подтяжки."""
+    if store.task_target(conn, task_id) != config.DEFAULT_TARGET:
+        return False
+    t = store.get_task(conn, task_id)
+    artifact_branch_name, foreign = artifact_source.resolve(conn, task_id)
+    if _acceptance_lock_refuses(conn, task_id, t, artifact_branch_name, foreign):
+        return True
+    return _long_lived_manifest_refuses(conn, task_id)
+
+
 def _cmd_approve_merge_gate(conn, task_id: str, state: str, t,
                             confirmed_ci_note: str | None = None) -> tuple:
     """Тело окна `merge_gate -> done`, исполняемое ПОД МЬЮТЕКСОМ merge
@@ -938,6 +960,8 @@ def _cmd_approve_merge_gate(conn, task_id: str, state: str, t,
     sync_outcome = _sync_main_or_wait(conn, task_id, t, state, branch, ctx)
     if sync_outcome != "fresh":
         return sync_outcome
+    if _acceptance_locks_refuse(conn, task_id):
+        return ("stopped",)
     ci_outcome = _ci_ready_or_wait(task_id, confirmed_ci_note, branch)
     if ci_outcome != "ok":
         return ci_outcome

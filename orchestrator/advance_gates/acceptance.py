@@ -5,9 +5,110 @@
 Ни одна из двух функций не проходит через каркас `_base._run_gates`
 (SPEC требование 3, PLAN «Подход») — `_acceptance_run_refuses`
 докстрингом фиксирует это решение дословно, перенесено без правки."""
+import hashlib
+
 from scripts import guard
 
 from .. import acceptance, agent_log, config, fsm, gitcmd, store, workspace, yamlmini
+
+LONG_LIVED_MANIFEST_ACTION = "переход отклонён: перечень долгоживущих тестов"
+# Подсказка отказа сверки перечня (SPEC 01M3N3Z1ZHTGMSQZ4SNRYNJ2SJ,
+# требование 7) — та же, что у лока каталога приёмочных тестов по смыслу:
+# спор с тестом решает Оператор, не правка.
+LONG_LIVED_MANIFEST_HINT = ("код чинится под тест; правка теста — "
+                            "`amend-tests` по решению Оператора")
+
+
+def long_lived_manifest_rel(task_id: str) -> str:
+    return f"tasks/{task_id}/acceptance_tests/{guard.LONG_LIVED_MANIFEST_NAME}"
+
+
+def blob_sha256(rev: str, rel: str) -> str | None:
+    """SHA-256 БАЙТОВ файла `rel` в дереве `rev` (Р2: сумма — от дерева
+    коммита, не от текста рабочего каталога и не от текста, прочитанного с
+    перекодировкой концов строк); `None` — git не ответил или пути нет.
+    `gitcmd.carpentry` — единственный вход git пульта, отдающий байты."""
+    res = gitcmd.carpentry(config.ROOT, ["show", f"{rev}:{rel}"], None,
+                           text=False)
+    if res is None or res.returncode != 0:
+        return None
+    return hashlib.sha256(res.stdout).hexdigest()
+
+
+def long_lived_manifest(task_id: str, t, target: str
+                        ) -> tuple[dict[str, str] | None, str]:
+    """({путь: sha256}, "") перечня долгоживущих файлов из дерева коммита
+    лока `tests_locked_sha` — неизменного, в отличие от головы ветки
+    документов, правку которой ловит сверка лока; (None, причина) — git не
+    ответил или перечень испорчен.
+
+    Пустой словарь — сверять нечего: задача вне области правила (внешний
+    target, `skip_tests` — лока нет), либо лок снят до внедрения перечня
+    (задача 2 ADR-0020) и файла в дереве лока нет. У задачи, залоченной
+    после внедрения, перечень в дереве лока есть всегда: выход из
+    `tests_writing` без записанного перечня отказывает."""
+    if target != config.DEFAULT_TARGET or not t["tests_locked_sha"]:
+        return {}, ""
+    locked = t["tests_locked_sha"]
+    rel = long_lived_manifest_rel(task_id)
+    listed = gitcmd.ls_tree_files(locked, rel)
+    if listed is None:
+        return None, f"git не ответил на дерево лока {locked}"
+    if not listed:
+        return {}, ""
+    text, reason = gitcmd.show(locked, rel)
+    if text is None:
+        return None, f"перечень в дереве лока {locked} не прочитан: {reason}"
+    return guard.parse_long_lived_manifest(text)
+
+
+def _long_lived_manifest_refuses(conn, task_id: str) -> bool:
+    """Общий узел сверки перечня долгоживущих файлов с головой кодовой
+    ветки (SPEC 01M3N3Z1ZHTGMSQZ4SNRYNJ2SJ, требование 7, рубежи Р4:
+    `in_dev -> verifying`, `verifying -> review`, `review -> acceptance`,
+    `approve` из `acceptance`, гейт мержа после `_sync_main_or_wait`).
+    Каждый путь перечня обязан быть в дереве головы кодовой ветки с той же
+    суммой; изменённый или удалённый файл — отказ с путём и подсказкой.
+    Сбой git — отказ, не пропуск (ADR-0002, fail-closed).
+
+    Строка задачи читается здесь, а не берётся у вызывающего: на гейте
+    мержа его `t` мог быть прочитан до подтяжки main.
+
+    `True` — переход отклонён (журнал и печать уже сделаны)."""
+    t = store.get_task(conn, task_id)
+    digests, reason = long_lived_manifest(task_id, t,
+                                          store.task_target(conn, task_id))
+    problems: list[str] = []
+    if digests:
+        head = gitcmd.branch_head_sha(t["branch"])
+        present = gitcmd.ls_tree_files(head, "tests") if head else None
+        if not head:
+            reason = f"голова кодовой ветки {t['branch']} не прочитана"
+        elif present is None:
+            reason = f"git не ответил на дерево головы {head}"
+        else:
+            for path, digest in sorted(digests.items()):
+                if path not in present:
+                    problems.append(f"{path} удалён")
+                    continue
+                actual = blob_sha256(head, path)
+                if actual is None:
+                    reason = f"{path} не прочитан на голове {head}"
+                    break
+                if actual != digest:
+                    problems.append(f"{path} изменён")
+    if reason:
+        detail = (f"долгоживущие файлы задачи не сверены с перечнем: "
+                  f"{reason} — сверка невозможна")
+    elif problems:
+        detail = (f"долгоживущие файлы задачи расходятся с перечнем лока "
+                  f"{t['tests_locked_sha']}: {'; '.join(problems)} — "
+                  f"{LONG_LIVED_MANIFEST_HINT}")
+    else:
+        return False
+    store.journal(conn, task_id, "fsm", LONG_LIVED_MANIFEST_ACTION, detail)
+    print(f"[{task_id}] переход отклонён: {detail}")
+    return True
 
 
 def _acceptance_lock_refuses(conn, task_id: str, t, branch: str,
@@ -118,6 +219,10 @@ def _acceptance_run_refuses(conn, task_id: str, t, tdir, target: str,
 
     acc_tdir = tdir
     run_cwd = config.ROOT
+    # Долгоживущие файлы перечня (SPEC 01M3N3Z1ZHTGMSQZ4SNRYNJ2SJ,
+    # требование 9) — в том же прогоне, что планка; они лежат в `tests/`
+    # кодовой ветки, поэтому исполнимы только из её рабочей копии.
+    long_lived = None
     if target != config.DEFAULT_TARGET:
         run_cwd = config.PROJECTS / target / "workspace"
         run_cwd.mkdir(parents=True, exist_ok=True)
@@ -127,9 +232,32 @@ def _acceptance_run_refuses(conn, task_id: str, t, tdir, target: str,
     elif workspace.on_task_branch(task_id, t["branch"]) is True:
         run_cwd = workspace.path(task_id)
         acc_tdir = acceptance.materialize_from_branch(task_id, branch, run_cwd)
+        # Сбой чтения перечня (`None`) раньше в `in_dev` уже отклонил
+        # переход узлом сверки `_long_lived_manifest_refuses`.
+        digests, _reason = long_lived_manifest(task_id, t, target)
+        if digests is not None and t["tests_locked_sha"]:
+            long_lived = sorted(digests)
         if _missing_plank_refuses():
             return True
-    green, tail = acceptance.run(acc_tdir, cwd=run_cwd)
+    else:
+        # Без рабочей копии на ветке задачи долгоживущие файлы перечня
+        # исполнить негде; прогон одной планки молча выронил бы их группу
+        # (требование 9) — отказ, как на выходе из `tests_writing`.
+        digests, _reason = long_lived_manifest(task_id, t, target)
+        if digests is None or digests:
+            detail = (f"рабочая копия задачи не выписана на ветку "
+                      f"{t['branch']} — долгоживущие файлы перечня исполнить "
+                      f"негде")
+            store.journal(conn, task_id, "fsm",
+                          "переход отклонён: приёмочные тесты", detail)
+            print(f"[{task_id}] переход отклонён: {detail}")
+            print(f"  дальше: artel.py workspace {task_id} и повтори "
+                  f"artel.py advance {task_id}")
+            return True
+    if long_lived:
+        green, tail = acceptance.run(acc_tdir, cwd=run_cwd, extra=long_lived)
+    else:
+        green, tail = acceptance.run(acc_tdir, cwd=run_cwd)
     # Fingerprint окружения (SPEC T101, требование 4б, AC-5) — часть
     # исхода прогона приёмочных тестов, значение поля `detail`
     # существующего журнального события, без новой таблицы/колонки.
@@ -143,7 +271,12 @@ def _acceptance_run_refuses(conn, task_id: str, t, tdir, target: str,
         print(f"  дальше: почини код (не тест) и повтори "
               f"artel.py advance {task_id}")
         return True
-    card = acceptance.summary(acc_tdir, branch=t["branch"])
+    if long_lived is None:
+        card = acceptance.summary(acc_tdir, branch=t["branch"])
+    else:
+        card = acceptance.summary(
+            acc_tdir, branch=t["branch"],
+            long_lived=[run_cwd / path for path in long_lived])
     store.journal(conn, task_id, "fsm", "приёмочные тесты пройдены",
                   f"{card}\nокружение: {fingerprint}")
     print(f"[{task_id}] {card}")

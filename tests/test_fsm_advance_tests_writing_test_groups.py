@@ -127,7 +127,9 @@ class TestGroupsGateTest(_GroupsSandbox):
         """
         self.write_plank(plank(claim="Без заявки."))
         self.assertTrue(self.advance())
-        self.write_plank(plank())
+        # Исправленный файл — разовый: долгоживущему с задачи
+        # 01M3N3Z1ZHTGMSQZ4SNRYNJ2SJ (требование 4) место в `tests/`.
+        self.write_plank(plank(group=guard.GROUP_ONE_OFF))
         self.assertEqual(self.advance(), [])
         self.assertEqual(self.state(), "in_dev")
 

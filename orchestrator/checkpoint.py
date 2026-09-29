@@ -121,6 +121,9 @@ def _wip_checkpoint(conn, task_id: str, role: str, message: str, action: str,
             detail = f"{message} (sha {sha})" if sha else message
             store.journal(conn, task_id, "orchestrator", action, detail)
             store.record_fixation(conn, task_id)
+    elif role == "test_author":
+        detail = _test_author_checkpoint(conn, task_id, role, wt, message,
+                                         action, discard_action, discard_detail)
     else:
         discarded = _discard_out_of_mandate_changes(wt, task_id)
         if discarded:
@@ -223,7 +226,80 @@ def commit_timeout_checkpoint(conn, task_id: str, role: str) -> str:
         timeout=True)
 
 
-def _discard_out_of_mandate_changes(wt: Path, task_id: str) -> str:
+def _test_author_own_paths(conn, task_id: str, wt: Path) -> set[str] | None:
+    """Пути worktree, которые test_author вправе закоммитить в кодовую
+    ветку (SPEC 01M3N3Z1ZHTGMSQZ4SNRYNJ2SJ, требование 1; ADR-0020, п. 7):
+    изменённые на этом шаге файлы `tests/test_<префикс задачи>_<имя>.py`
+    (Р1), которых нет в базе ветки (`gitcmd.diff_base`), — новые, а пока
+    задача в `tests_writing`, ещё и правка/удаление уже закоммиченных своих.
+    Вне `tests_writing` — пустое множество: такие файлы после выхода
+    фиксирует перечень сумм, и откат здесь — тот же, что для любой роли без
+    мандата кода.
+
+    Переименование своё только целиком: и источник, и назначение — свои
+    пути. Переименование файла базы в имя с префиксом — нарушение, его
+    откатывает `_discard_out_of_mandate_changes` (источник возвращается).
+
+    `None` — git не ответил на статус, базу ветки или её дерево: тогда
+    чекпоинт не трогает worktree вовсе (та же тихая деградация, что у
+    остального модуля), а не откатывает свою работу роли вслепую."""
+    t = store.get_task(conn, task_id)
+    if t["state"] != "tests_writing":
+        return set()
+    status = gitcmd.in_repo(wt, "status", "--porcelain=v1",
+                            "--untracked-files=all")
+    if status.returncode != 0:
+        return None
+    candidates: set[str] = set()
+    for line in status.stdout.splitlines():
+        rel = line[3:]
+        paths = rel.split(" -> ", 1) if line[:1] == "R" and " -> " in rel else [rel]
+        if all(guard.is_long_lived_test_path(task_id, p) for p in paths):
+            candidates.update(paths)
+    if not candidates:
+        return set()
+    base = gitcmd.diff_base(t["branch"])
+    if base is None:
+        return None
+    in_base = gitcmd.ls_tree_files(base, "tests")
+    if in_base is None:
+        return None
+    return candidates - set(in_base)
+
+
+def _test_author_checkpoint(conn, task_id: str, role: str, wt: Path,
+                            message: str, action: str, discard_action: str,
+                            discard_detail: str) -> str:
+    """Мандат test_author на чекпоинте шага (SPEC 01M3N3Z1ZHTGMSQZ4SNRYNJ2SJ,
+    требование 1): свои долгоживущие файлы (`_test_author_own_paths`)
+    коммитятся в кодовую ветку тем же `_commit_worktree_change`, что у
+    developer, всё прочее вне `tasks/<id>/` откатывается с записью в журнал,
+    как у любой роли без мандата кода. Откат — ДО коммита: после него
+    worktree вне `tasks/<id>/` несёт только свои файлы, и `add -A` не
+    подхватит чужого. Возврат — detail коммита кодовой ветки (пусто —
+    коммита не было)."""
+    own = _test_author_own_paths(conn, task_id, wt)
+    if own is None:
+        return ""
+    discarded = _discard_out_of_mandate_changes(wt, task_id, keep=own)
+    if discarded:
+        store.journal(conn, task_id, "orchestrator", discard_action,
+                      f"{task_id}: WIP вне мандата роли {role} "
+                      f"{discard_detail} откачен — {discarded}")
+    if not own:
+        return ""
+    committed, sha, _stray = _commit_worktree_change(
+        conn, task_id, wt, message, exclude=f"tasks/{task_id}")
+    if not committed:
+        return ""
+    detail = f"{message} (sha {sha})" if sha else message
+    store.journal(conn, task_id, "orchestrator", action, detail)
+    store.record_fixation(conn, task_id)
+    return detail
+
+
+def _discard_out_of_mandate_changes(wt: Path, task_id: str,
+                                    keep: set[str] = frozenset()) -> str:
     """Откатывает WIP вне `tasks/<id>/` для роли без мандата кода (SPEC
     AC-2/AC-3): трекенные пути — `git checkout --` (буквальный механизм,
     названный критерием приёмки), новые нетрекенные файлы — удаление с
@@ -253,6 +329,10 @@ def _discard_out_of_mandate_changes(wt: Path, task_id: str) -> str:
     Тихая деградация при отказе git на самом статусе — та же мысль, что
     у `_commit_worktree_change`: не откатывать по частям, если даже
     список путей прочитать не удалось.
+
+    `keep` — пути мандата test_author (`_test_author_own_paths`), которые
+    не откатываются; переименование остаётся нетронутым, только если в
+    `keep` и назначение, и источник.
     """
     task_prefix = f"tasks/{task_id}/"
     status = gitcmd.in_repo(wt, "status", "--porcelain=v1",
@@ -270,6 +350,8 @@ def _discard_out_of_mandate_changes(wt: Path, task_id: str) -> str:
             # фильтруется/откатывается ниже), `rename_src` — путь ИСТОЧНИК,
             # восстанавливаемый отдельно после разбора назначения.
             rename_src, rel = rel.split(" -> ", 1)
+        if rel in keep and (rename_src is None or rename_src in keep):
+            continue
         if not rel.startswith(task_prefix):
             changed.append((code, rel, rename_src))
     if not changed:
@@ -484,12 +566,26 @@ def commit_success_checkpoint(conn, task_id: str, role: str) -> str:
     Только догфуд, коммитит, только если реально есть что коммитить
     (`_commit_worktree_change` сам отказывает на пустом diff), тихая
     деградация без git — дословно `commit_timeout_checkpoint`.
+
+    test_author (SPEC 01M3N3Z1ZHTGMSQZ4SNRYNJ2SJ, требование 1) — свой
+    мандат и на этом пути: долгоживущие файлы `tests/` с префиксом задачи
+    коммитятся, прочее вне `tasks/<id>/` откатывается с записью в журнал
+    (`_test_author_checkpoint`) — иначе шаг, завершённый штатно, оставлял
+    бы свои файлы незакоммиченными, а чужую правку — на диске.
     """
-    if role != "developer":
+    if role not in ("developer", "test_author"):
         return ""
     if store.task_target(conn, task_id) != config.DEFAULT_TARGET:
         return ""
     wt = workspace.path(task_id)
+    if role == "test_author":
+        return _test_author_checkpoint(
+            conn, task_id, role, wt,
+            f"{task_id}: долгоживущие тесты закоммичены пультом за роль "
+            "test_author — шаг завершён",
+            action="долгоживущие тесты закоммичены пультом за роль",
+            discard_action="чекпоинт шага test_author — откат вне мандата",
+            discard_detail="по завершении шага")
     exclude = f"tasks/{task_id}"
     message = (f"{task_id}: код закоммичен пультом за роль developer — "
               "шаг завершён с незакоммиченным кодом")
