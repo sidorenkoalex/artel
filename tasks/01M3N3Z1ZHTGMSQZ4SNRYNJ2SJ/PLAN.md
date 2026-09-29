@@ -88,6 +88,21 @@ schema_version: 5
    регенерация `docs/codebase-map.md`.
 9. Приложения к `skills/test-authoring.md`, `skills/coding-standards.md`,
    `skills/review-checklist.md`, `docs/invariants.md` (ниже).
+10. Итерация 2, замечания REVIEW итерации 1:
+    - R1-F1 — `tests/test_long_lived_transitions.py`: сторожа переходов
+      через публичные входы на настоящем git — гейт «только добавление»
+      (`M`/`D`/`R`, без префикса, вне `tests/`, без строки
+      «долгоживущий», путь в `origin/main`), перечень в дереве лока (и
+      пустой), трассируемость по своему долгоживущему файлу и не по чужому,
+      отказ на каждом рубеже Р4 при правке после лока (+ контроль с CRLF),
+      долгоживущий файл реально исполняется в прогоне `in_dev`, расхождение
+      лока каталога на гейте мержа. AC-3 (правка/удаление своего файла
+      коммитятся) — `test_long_lived_manifest.TestAuthorCheckpointMandateTest`.
+      Приложение к `docs/invariants.md` называет новых сторожей.
+    - R1-F2 — `advance_gates/acceptance.py::_acceptance_run_refuses`: target
+      `artel`, рабочая копия не на ветке задачи, перечень непуст (или не
+      прочитан) — отказ «долгоживущие файлы перечня исполнить негде», а не
+      прогон одной планки.
 
 ## Покрытие требований
 
@@ -105,6 +120,7 @@ schema_version: 5
 | 10 (задания ролей) | 7 |
 | 11 (область: `artel`, не внешний, не `skip_tests`) | 2, 4, 5, 6 |
 | 12 (приложения) | 9 |
+| REVIEW итерации 1: R1-F1, R1-F2 | 10 |
 
 ## Влияние на систему
 
@@ -166,7 +182,28 @@ schema_version: 5
 - Планка: `python3 -m pytest tasks/01M3N3Z1ZHTGMSQZ4SNRYNJ2SJ/
   acceptance_tests -p no:cacheprovider -p timeout -o timeout=120` — 30
   passed (AC-22 — после автокоммита PLAN.md в артефактную ветку).
-- `tests/test_long_lived_manifest.py` — 13 passed; каждый сторож проверен
+- Итерация 2: `tests/test_long_lived_transitions.py` +
+  `tests/test_long_lived_manifest.py` — 24 passed, 20 subtests. Временные
+  мутации (каждая краснит своего сторожа, код возвращён): гейт
+  `_tests_writing_long_lived_gate` снят из списка гейтов; гейт
+  `_tests_writing_manifest_gate` снят; `long_lived_sources=[]`; вызов
+  `_long_lived_manifest_refuses` снят по одному на каждом из пяти рубежей
+  (fsm_advance.py:277, :314, :546, fsm.py:931, fsm_merge_gate
+  `_acceptance_locks_refuse`); `_acceptance_lock_refuses` на гейте мержа
+  снят; `acceptance.run` без `extra`; отказ R1-F2 снят; чекпоинт признаёт
+  своим только `??` в `git status`. Планка — 33 passed, 51 subtests.
+  Модули, задетые правкой `_acceptance_run_refuses` (по отдельности):
+  test_acceptance_tests_flow, test_advance_guard, test_amend,
+  test_auto_cycle, test_branch_freshness_gate, test_ci_rerun_command,
+  test_draft_mr_commits, test_fsm_map_conflict_autoresolve,
+  test_git_fixation, test_invariants, test_mutation_claim_gate,
+  test_review_freshness, test_stall_alerts, test_test_integrity_gate,
+  test_zone_lock, test_multitarget, test_multitarget_invariants,
+  test_acceptance, test_fsm_advance_gate_*, test_zones_gate,
+  test_capacity_gate — зелёные. Приложения: `git apply --check -` каждого
+  блока в рабочей копии (защищённые файлы в ней равны main) — все четыре
+  накладываются.
+- Итерация 1: `tests/test_long_lived_manifest.py` — 13 passed; каждый сторож проверен
   временной мутацией (9 мутаций: суммы не сверяются, test_author идёт
   веткой отката, снята проверка `tests_writing`, префикс `[:10]`, `run`
   игнорирует `extra`, пустая голова = проход, гейт мержа без области,
@@ -189,6 +226,13 @@ schema_version: 5
   test_canary*, test_answer*, test_brief и др. — зелёные.
 
 ## Предложения системе
+
+- Планка задачи, целиком помеченная «разовый», проверяла проводку гейтов
+  FSM — свойства кода; сторожей в `tests/` пришлось добирать итерацией
+  ревью (R1-F1). `skills/coding-standards.md`: пока планка разовая, а
+  проверяет код, сторож в `tests/` на каждое её свойство — часть первой
+  сдачи разработчика, а не итерации ревью; `skills/test-authoring.md` —
+  тот же урок со стороны выбора группы.
 
 - `orchestrator/gitcmd.py`: `branch_exists` не различает «ветки нет» и
   «git не ответил» (обе — `False`); fail-closed узлам нужен трёхзначный
@@ -297,7 +341,7 @@ index a7106191..418d4e2b 100644
  | 25 | FSM принимает решения только по артефактам, чьи хэши зафиксированы его журналом: расхождение живого sha (или грязная копия) с зафиксированным на последнем переходе — инцидент целостности, агент не запускается; `approve` без явного sha сам сверяет живой sha и чистоту копии/артефактной ветки с зафиксированными на последнем переходе тем же источником, которым печатается подсказка — совпало, гейт проходит без ручного набора и журналирует согласованный sha, расхождение/грязная копия отклоняют его именованным отказом с обоими sha так же, как и явный неверный sha | `test_git_fixation.FsmDecidesOnlyOnFixedHashesTest`; `test_git_fixation.IntegrityIncidentBlocksRunTest`; `test_git_fixation.ApproveByShaTest`; `tasks/01M1SHJX22EMEP4AJ9FFJJ09DC/acceptance_tests/test_ac1_*.py`, `test_ac2_matching_fixation_auto_confirms.py`, `test_ac3_diverged_or_dirty_refuses_named.py` | ADR-0003 п.15, п.17; tasks/T021/SPEC.md, требования 4–6; tasks/01M1SHJX22EMEP4AJ9FFJJ09DC/SPEC.md, требования 1–2 |
  | 26 | Выход из `tests_writing`: критерий приёмки (AC-n) без теста и без пометки manual/skip/escalate — невалидный выход, переход отказывает с именем критерия | `test_acceptance_tests_flow.TraceabilityTest` | tasks/T023/SPEC.md, требование 4 |
 -| 27 | Каталог `acceptance_tests/` залочен фиксацией T021 после выхода из `tests_writing`: расхождение с зафиксированным на выходе sha — отказ перехода `in_dev → verifying`, код чинится под тест, не наоборот | `test_acceptance_tests_flow.LockTest` | tasks/T023/SPEC.md, требование 5; ADR-0015 (переезд рубежа с `in_dev → review`) |
-+| 27 | Каталог `acceptance_tests/` залочен фиксацией T021 после выхода из `tests_writing`: расхождение с зафиксированным на выходе sha — отказ перехода `in_dev → verifying` и гейта мержа после подтяжки main, код чинится под тест, не наоборот. Лок распространяется на перечень долгоживущих файлов задачи `acceptance_tests/long_lived.sha256.txt` (суммы `tests/test_<id задачи в нижнем регистре>_*.py` кодовой ветки): сверка сумм с головой кодовой ветки — на переходах `in_dev → verifying`, `verifying → review`, `review → acceptance`, `approve` из `acceptance` и на гейте мержа после подтяжки main; изменённый или удалённый файл, сбой git — отказ | `test_acceptance_tests_flow.LockTest`; `test_long_lived_manifest.ManifestCheckNodeTest`, `test_long_lived_manifest.MergeGateLocksTest` | tasks/T023/SPEC.md, требование 5; ADR-0015 (переезд рубежа с `in_dev → review`); ADR-0020, п. 3; SPEC 01M3N3Z1ZHTGMSQZ4SNRYNJ2SJ, требования 6-8 |
++| 27 | Каталог `acceptance_tests/` залочен фиксацией T021 после выхода из `tests_writing`: расхождение с зафиксированным на выходе sha — отказ перехода `in_dev → verifying` и гейта мержа после подтяжки main, код чинится под тест, не наоборот. Лок распространяется на перечень долгоживущих файлов задачи `acceptance_tests/long_lived.sha256.txt` (суммы `tests/test_<id задачи в нижнем регистре>_*.py` кодовой ветки): сверка сумм с головой кодовой ветки — на переходах `in_dev → verifying`, `verifying → review`, `review → acceptance`, `approve` из `acceptance` и на гейте мержа после подтяжки main; изменённый или удалённый файл, сбой git — отказ | `test_acceptance_tests_flow.LockTest`; `test_long_lived_manifest.ManifestCheckNodeTest`; `test_long_lived_transitions.ManifestBoundariesTest`, `test_long_lived_transitions.MergeGatePlankLockTest`, `test_long_lived_transitions.TestsWritingManifestTest` | tasks/T023/SPEC.md, требование 5; ADR-0015 (переезд рубежа с `in_dev → review`); ADR-0020, п. 3; SPEC 01M3N3Z1ZHTGMSQZ4SNRYNJ2SJ, требования 6-8 |
  | 28 | Чтение артефактов задачи оркестратором (маршрутизация `spec_gate`, бриф роли developer, трассируемость AC, лок `acceptance_tests/`, sha догфуд-фиксации, статус SPEC.md и батч QUESTIONS.md на переходе `spec_writing → spec_gate`, вердикт REVIEW.md — status и iteration — на переходе `review → acceptance/in_dev`) не зависит от того, какая ветка сейчас выписана в рабочем дереве пульта: источник истины — ВЕТКА задачи (`git show`/`git ls-tree`), чужой чекаут её не подменяет; ветка ещё не создана ролью — прежнее поведение (рабочая копия), не именованный отказ | `test_gitcmd_branch_reads.OnForeignBranchTest`; end-to-end по каждому месту чтения — `tasks/T031/acceptance_tests/test_branch_correct_reads.py` (`SpecGateBranchRoutingTest`, `BriefBuildBranchTest`, `TraceabilityBranchTest`, `LockBranchTest`, `FixationBranchTest`, `NoUnhandledExceptionOnMissingBranchTest`); `tasks/T047/acceptance_tests/test_branch_correct_status_reads.py` (`SpecWritingBranchRoutingTest`, `ReviewBranchRoutingTest`, `NoTaskBranchDegradationTest`, `NoGitDegradationTest`) | tasks/T031/SPEC.md, требования 1–2; tasks/T030 (класс-дефект «артефакто-чтения ветко-зависимы», журнал ~17:35 25.08.2026); tasks/T047/SPEC.md, требования 1–4 (инциденты T046 27.08.2026, T045 27.08.2026) |
  | 29 | Стоимость шага не остаётся неучтённой молча: если финальное событие потока (`type: result`) не пришло из-за таймаута шага или обрыва stdout-пайпа, в журнал попадает либо частичная сумма из промежуточных usage-событий с пометкой «частичная», либо событие «стоимость шага неизвестна» с открытым алертом `alerts` (`kind=incident`, `source=spend.unknown_cost`); `spent_usd` при этом не дописывается фиктивной суммой | `tasks/T040/acceptance_tests/test_step_cost_on_missing_final_event.py::MissingFinalEventCostTest`; `test_step_cost.ChargeMissingResultTest`; `test_step_cost.CmdRunPartialCostTest` | tasks/T040/SPEC.md, требования 1–3 |
  | 30 | Таймаут шага с незакоммиченным WIP в рабочем дереве ветки задачи коммитится оркестратором чекпоинтом (`<id>: WIP-чекпоинт после таймаута шага <role>`, журнал actor=`orchestrator`) без участия Оператора; провал шага по коду возврата (не таймаут) и таймаут при уже чистом дереве чекпоинт не коммитят | `tasks/T041/acceptance_tests/test_checkpoint_after_timeout.py::CheckpointAfterTimeoutTest`; `test_timeout_checkpoint.CommitTimeoutCheckpointTest` | tasks/T041/SPEC.md, требования 1–4; прецеденты tasks/T022, tasks/T037 (ручной чекпоинт Оператора) |
