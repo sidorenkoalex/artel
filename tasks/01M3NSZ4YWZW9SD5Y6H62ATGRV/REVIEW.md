@@ -2,8 +2,8 @@
 task: 01M3NSZ4YWZW9SD5Y6H62ATGRV
 type: review
 author_role: reviewer
-status: changes_requested
-iteration: 1
+status: approved
+iteration: 2
 schema_version: 5
 ---
 
@@ -12,126 +12,64 @@ schema_version: 5
 ## Фаза A — план
 
 - Таблица покрытия полна: требования 1–9 → шаги 1–5.
-- Шаги имеют размер MR: review.py / amend.py / stack.md / тесты / прогон.
-- Подход не конфликтует с архитектурой. Перечень лока читается одним узлом
-  `advance_gates.acceptance.long_lived_manifest`; SQL не выходит за пределы
-  `store.py`; «только чтение» пути не тронуты (дифф: `docs/stack.md`,
-  `orchestrator/amend.py`, `orchestrator/review.py`, `tests/test_amend_long_lived.py`).
-- Дефект плана — шаг 4. План покрывает в `tests/` только «свойства, не покрытые
-  планкой», и считает планку сторожем. Но у планки этой задачи все 7 файлов
-  помечены `Группа: разовый`, а перечень `long_lived.sha256.txt` пуст. После
-  мержа планку не исполняет никто (ADR-0020, п. 1, 9; ADR-0018, п. 2). Пункт 4
-  ADR-0020 («не повторять») относится только к долгоживущим тестам — здесь их
-  нет. Подробно — R1-F1.
+- Дефект итерации 1 закрыт. Шаг 4 теперь явно называет сторожей ядра
+  требований 1–6 в `tests/` и объясняет почему: планка целиком разовая,
+  после мержа её не гоняет никто, поэтому п.4 ADR-0020 («не повторять
+  долгоживущие») здесь не мешает.
+- «Влияние на систему» совпадает с фактическим диффом. Эта итерация
+  (`cf552455..922c4a68`) трогает только `tests/test_amend_long_lived.py`
+  (расширен), `tests/test_review_long_lived_exclude.py` (новый) и карту.
+  Код `orchestrator/` не менялся.
 
 ## Соответствие SPEC
 
 | Требование | Вердикт | Комментарий |
 |---|---|---|
-| 1 | OK | `_amend_with_long_lived`: все проверки идут до записей — трассируемость, строка группы, `long_lived_errors_from_files`, правило удаления, сухой сбор, прогон. Затем записи (а) → (б) → (в); перечень пересчитывается по новой голове (`_head_digests`). Ручная правка перечня — отказ. Сторожа в `tests/` нет — R1-F1 |
-| 2 | OK | `_recovery_exit` называет `--from-branch`. `long_diverged` сравнивает перечень лока с суммами головы кодовой ветки. Перечень нового лока — всегда пересчёт, перечень в обход в лок не попадает. Сторожа в `tests/` нет — R1-F1 |
-| 3 | OK | `_record_amend` — одно событие `AMEND_ACTION` после (в); отказ и сбой пишут «отклонён»/«прерван». Окно и порог не менялись |
-| 4 | OK | Путь без префикса попадает в `outside` и получает отказ. Удаление проверяется по именам методов без класса, с отказом и ссылкой на ADR-0020 п.8. Правило одно для обоих режимов. Сторожа в `tests/` нет (временная мутация) — R1-F1 |
-| 5 | OK | Исключение — `:(exclude,literal)<путь>` из перечня лока. `_is_exclude_spec` закрывает ловушку инкрементального фильтра. Сбой чтения даёт прежний кортеж. Сторожа в `tests/` нет (временная мутация) — R1-F1 |
-| 6 | OK | Компонент `artifact_part(rel, …, run_id)` собирается с головы кодовой ветки и стоит до стат-списка. Сторожа в `tests/` нет — R1-F1 |
-| 7 | OK | Пустой перечень оставляет прежний кортеж, заметка не добавляется; ветка `if manifest` в amend. AC-8 и прежние тесты зелёные |
-| 8 | OK | В `docs/stack.md` есть все шесть утверждений |
-| 9 | Частично | Существующие тесты не ослаблены: дифф `tests/` — только новый файл. Но ядро требований 1–6 после мержа остаётся без теста в `tests/` — R1-F1 |
+| 1 | OK | Реализация прежняя (проверена в итерации 1). Сторожа: `WorktreeModeTest.test_modified_and_added_long_lived_relocked` (коммит ровно с правленными путями, перечень по новой голове, сверка сумм проходит) и `test_failed_check_refused_before_any_write` (5 нарушений — отказ без записей) |
+| 2 | OK | Сторожа: `test_docs_write_failure_names_recovery_then_from_branch_relocks`, `FromBranchModeTest.test_violating_code_head_refused_without_writes`, `test_bypass_manifest_replaced_by_recomputed` |
+| 3 | OK | Во всех новых сценариях проверяется `amend_events()`: 1 при успехе, 0 при отказе и при сбое между записями |
+| 4 | OK | Сторожа: `test_out_of_bounds_and_hand_manifest_refused` (4 сценария AC-3), `DeletionRuleTest` (перенос проходит, потеря метода — отказ с файлом и методом) |
+| 5 | OK | Сторожа: `test_exclude_is_literal_manifest_paths`, полный и инкрементальный дифф, `test_unreadable_manifest_keeps_file_in_diff`, `CapacityGateExcludeTest` (файл перечня не меряется, тот же текст вне перечня — меряется) |
+| 6 | OK | Сторож: `test_component_before_stat_inside_boundaries` — компонент с путём в заголовке, внутри маркеров запуска, до стат-списка |
+| 7 | OK | Код прежний. Прежние тесты `test_review_package*.py`, `test_capacity_gate*.py`, `test_amend.py` зелёные без правок |
+| 8 | OK | Без изменений с итерации 1 |
+| 9 | OK | Дифф `tests/` этой итерации удаляет только строки докстринга модуля, импорт (добавлено `plank_source`) и `lock_with_own()` → `lock_with_own(self.own_source())`. Ни одного ассерта не удалено и не ослаблено. CI коммита 922c4a68 зелёный |
 
 ## Замечания
 
-- major — `tests/test_amend_long_lived.py` (весь файл) и PLAN шаг 4 — нет
-  долгоживущего сторожа для ядра задачи. После мержа ни один тест `tests/`
-  не проверяет:
-  - (1) `snapshot_exclude` исключает пути перечня лока точным путём
-    `literal`, в том числе в инкрементальном диффе (`_is_exclude_spec`);
-    гейт ёмкости не меряет эти байты (`orchestrator/review.py:268-270`, `:516`);
-  - (2) в пакете есть компонент долгоживущего файла в границах запуска, до
-    стат-списка (`orchestrator/review.py:775-780`);
-  - (3) в worktree-режиме проверки идут до записей (а)→(б)→(в), перечень
-    пересчитывается по новой голове, после этого сверка сумм проходит
-    (`orchestrator/amend.py::_amend_with_long_lived`);
-  - (4) правило удаления: потеря метода — отказ, перенос — проходит
-    (`orchestrator/amend.py:414-421`);
-  - (5) сбой после (а) даёт ненулевой код с `--from-branch`, а `--from-branch`
-    восстанавливает лок пересчитанным перечнем (`_recovery_exit`,
-    `_cmd_amend_tests_from_branch`);
-  - (6) отказы AC-3: путь `tests/` без префикса, ручная правка
-    `long_lived.sha256.txt`;
-  - (7) ровно одно `AMEND_ACTION` на успешный вызов в новых путях.
-
-  Всё это сейчас держит только планка, а её файлы помечены
-  `Группа: разовый` — CI после мержа её не гоняет.
-  - Сценарий последствий доказан двумя временными мутациями. Первая —
-    `snapshot_exclude` без долгоживущих исключений: `tests/test_amend_long_lived.py`,
-    `test_review_package.py`, `test_review_package_map.py`,
-    `test_capacity_gate.py`, `test_capacity_gate_map.py`,
-    `test_long_lived_transitions.py`, `test_long_lived_manifest.py` — все
-    190 passed, а планка AC-7 — 4 failed. Вторая — снятое правило потери
-    методов (`if False and lost:`): `test_amend_long_lived.py`,
-    `test_amend.py`, `test_long_lived_transitions.py` — 50 passed, планка
-    AC-4 — 1 failed. Код в обоих случаях возвращён.
-  - Будущая правка `review.py` или `amend.py` молча вернёт долгоживущие файлы
-    в дифф и меру гейта или разрешит `amend-tests` снять тест удалением
-    файла. Это ослабление гейта неослабления в обход ADR-0020 п.8, и CI его
-    не заметит.
-  - Предложение: добавить в `tests/` (песочница `tests/sandbox.py` /
-    `_TransitionSandbox`) сторожа свойств (1)–(7) — поведение через публичные
-    команды и функции, у каждого метода «Ловит мутацию: …», проверенная
-    временной мутацией. Повтором планки (ADR-0020 п.4) это не будет: п.4
-    запрещает повторять только долгоживущие тесты, а у задачи их нет.
-    Шаг 4 PLAN и его обоснование («сторожа свойств, не покрытых планкой»)
-    поправить так же.
+Замечаний нет. Про тесты этой итерации:
+- у каждого нового метода есть докстринг со сценарием и заявкой
+  «Ловит мутацию: …»; каждая заявка называет наблюдаемое расхождение
+  (сдвиг голов, лишний путь в диффе, отказ сверки сумм);
+- ветвлений под литералы фикстур в коде нет — код в этой итерации не
+  менялся.
 
 ## Реестр замечаний
 
 | id | статус | файл/строка | суть | последствие | решение |
 |---|---|---|---|---|---|
-| R1-F1 | fixed | tests/test_amend_long_lived.py (весь файл); orchestrator/review.py:268-270, :516, :775-780; orchestrator/amend.py::_amend_with_long_lived, :414-421, _recovery_exit, _cmd_amend_tests_from_branch | Ядро требований 1–6 (исключение перечня лока из диффа, инкрементального фильтра и меры гейта; компонент пакета; порядок проверок и записей; правило удаления; восстановление `--from-branch`; отказы AC-3; одно `AMEND_ACTION`) держит только планка с `Группа: разовый` | После мержа регресс не ловит никто. Временные мутации `snapshot_exclude` и правила удаления: `tests/` зелёные (190 и 50 passed), планка красная | Добавить сторожей свойств (1)–(7) в `tests/` с заявками «Ловит мутацию», проверенными временной мутацией; поправить шаг 4 PLAN. Разработчик, fixed (коммит 922c4a68): `tests/test_amend_long_lived.py` +9 сторожей (1 успех правка+добавление с пересчётом по новой голове и сверкой сумм, проверки до записей — 5 нарушений, границы AC-3 и ручной перечень, сбой (б) -> `--from-branch` -> лок, перенос удалением, потеря метода, `--from-branch` с нарушением и с перечнем в обход; `AMEND_ACTION` 1/0 в каждом); новый `tests/test_review_long_lived_exclude.py` — кортеж `literal`, полный и инкрементальный diff, компонент до стат-списка в границах, непрочитанный перечень, гейт ёмкости. 13 временных мутаций review.py/amend.py (включая обе мутации ревью) — все сторожа красные, код возвращён; шаг 4 PLAN поправлен |
+| R1-F1 | accepted | tests/test_amend_long_lived.py; tests/test_review_long_lived_exclude.py | Ядро требований 1–6 держала только разовая планка | После мержа регресс не ловил никто | Принято. Сторожа (1)–(7) добавлены в `tests/`. Четыре временные мутации ревьювера (включая обе мутации итерации 1, которые тогда проходили незамеченными) теперь дают красные тесты — см. «Проверено исполнением» |
 
 ## Вердикт
 
-changes_requested. Реализация по требованиям 1–8 корректна: планка и
-затронутые модули зелёные, ловушка длинной формы магии закрыта, поведение
-задачи без перечня прежнее. Возврат — только из-за R1-F1: свойства,
-обязанные держаться после мержа, не имеют теста в `tests/`. Этого требует
-временное правило ревьювера, которое ADR-0020 п.10 сохраняет.
+approved. R1-F1 закрыт: свойства, обязанные держаться после мержа
+(исключение перечня лока из диффа и меры гейта, компонент пакета,
+порядок проверок и записей, правило удаления, восстановление через
+`--from-branch`, границы, одно `AMEND_ACTION`), теперь держат тесты
+`tests/`. Это проверено временными мутациями.
 
 ## Проверено исполнением
 
-- `python3 -m pytest -q tasks/01M3NSZ4YWZW9SD5Y6H62ATGRV/acceptance_tests
-  tests/test_amend_long_lived.py tests/test_amend.py tests/test_review_package.py
-  tests/test_review_package_map.py tests/test_capacity_gate.py
-  tests/test_capacity_gate_map.py tests/test_multitarget.py` — 274 passed,
-  249 subtests passed.
-- Временная мутация 1: `snapshot_exclude` возвращает прежний кортеж без
-  `:(exclude,literal)…`. `tests/test_amend_long_lived.py`,
-  `test_review_package.py`, `test_review_package_map.py`,
-  `test_capacity_gate.py`, `test_capacity_gate_map.py`,
-  `test_long_lived_transitions.py`, `test_long_lived_manifest.py` — 190
-  passed. Планка `test_ac7_review_package_exclude.py` — 4 failed / 1 passed.
-  Код возвращён `git checkout`.
-- Временная мутация 2: в `_long_lived_errors` условие потерянных методов
-  заменено на `if False and lost:`. `tests/test_amend_long_lived.py`,
-  `test_amend.py`, `test_long_lived_transitions.py` — 50 passed. Планка
-  `test_ac4_deletion.py` — 1 failed. Код возвращён.
-- `python3 scripts/codebase_map.py` + `git diff -- docs/codebase-map.md`:
-  расхождение только в `built_at_sha`, карта свежая. Файл возвращён.
-- Дифф `tests/`: только новый файл, удалённых и изменённых ассертов нет.
-  Полный набор не запускался (решение Оператора 05.09); CI коммита
-  cf552455 по пакету зелёный.
+- `python3 -m pytest -q tests/test_amend_long_lived.py tests/test_review_long_lived_exclude.py` — 18 passed, 9 subtests.
+- `python3 -m pytest -q tasks/01M3NSZ4YWZW9SD5Y6H62ATGRV/acceptance_tests tests/test_amend.py tests/test_review_package.py tests/test_review_package_map.py tests/test_capacity_gate.py tests/test_capacity_gate_map.py tests/test_multitarget.py tests/test_long_lived_transitions.py` — 280 passed, 264 subtests.
+- Временные мутации. После каждой код возвращён `git checkout`, `git status orchestrator` пуст:
+  1. В `review.snapshot_exclude` пути перечня не добавляются (`for rel in []`). `tests/test_review_long_lived_exclude.py`: 5 failed / 1 passed. Упали кортеж, полный дифф, инкрементальный дифф, компонент и гейт ёмкости. В итерации 1 та же мутация давала 190 passed.
+  2. `_is_exclude_spec` оставлен только с `:!`. Упал `test_incremental_diff_excludes_manifest_file` (1 failed / 5 passed) — ловушка SPEC держится.
+  3. В `amend._long_lived_errors` условие заменено на `if False and lost:`. Упал `DeletionRuleTest.test_lost_method_refused_naming_file_and_method`. В итерации 1 та же мутация давала 50 passed.
+  4. В `_amend_with_long_lived` коммит (а) поставлен до `_long_lived_errors`. `test_failed_check_refused_before_any_write` красный во всех подсценариях (голова кодовой ветки сдвигается при отказе).
+- `python3 scripts/codebase_map.py` + `git diff -- docs/codebase-map.md`: расхождений нет, карта свежая. Файл возвращён.
+- Полный набор `tests/` не запускался (решение Оператора 05.09). CI коммита 922c4a68 по пакету зелёный (14 проверок).
 
 ## Предложения системе
 
-- `skills/test-authoring.md` / выход из `tests_writing`: у задачи 3
-  внедрения ADR-0020 все 7 файлов планки помечены «разовый», хотя проверяют
-  свойства кода; перечень долгоживущих пуст. Вероятная причина: правило
-  «долгоживущий файл не обращается к git» (ADR-0020 п.2) делает
-  долгоживущими неисполнимыми сквозные тесты команд над git (`amend-tests`,
-  пакет ревью). Класс «свойство кода, помеченное разовым из-за запрета git»
-  переносит работу сторожа на разработчика в обход схемы — стоит решить,
-  законен ли git-песочница (`tests/sandbox.py`) в долгоживущем файле.
-- `orchestrator/review.py::_locked_long_lived_paths`: `snapshot_exclude`
-  теперь при каждом вызове открывает БД пульта через `store.db()`, а тот
-  прогоняет `migrate`. Чистая функция pathspec стала зависеть от
-  глобального состояния — кандидат передавать строку задачи параметром.
+- `tests/test_review_long_lived_exclude.py` импортирует песочницу `_LockedSandbox` из `tests/test_amend_long_lived.py`, а та — из `tests/test_long_lived_transitions.py`. Получается цепочка «тест-модуль как библиотека фикстур». Её кандидат вынести в `tests/sandbox.py`, чтобы правка одного тест-модуля не ломала чужие.
