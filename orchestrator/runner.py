@@ -788,7 +788,8 @@ def _venv_interpreter_bin() -> str:
     return str(config.VENV_DIR / "bin")
 
 
-def role_env(role: str | None = None, task_id: str | None = None) -> dict:
+def role_env(role: str | None = None, task_id: str | None = None,
+             *, provider=None) -> dict:
     """Окружение процесса роли: PATH и переменные — из манифеста, не копия
     `os.environ` Оператора (SPEC 01M1RDCEF0JZ4AVQRE43JFH8TN, требования 1-3).
 
@@ -832,6 +833,9 @@ def role_env(role: str | None = None, task_id: str | None = None) -> dict:
     метки роли/задачи и git-идентичность — они не зависят от того, каким
     CLI исполняется шаг.
 
+    `provider` позволяет офлайн-смоку проверить этот же путь сборки для
+    Codex, даже когда в текущей карте ролей нет роли на этом провайдере.
+
     Белый список при этом ОБЩИЙ на пульт, а провайдеры разные (SPEC
     01M3F7BYE82S9AQCBSP1RTQQTR, требование 4): имена секретов ЧУЖОГО
     исполнителя (`foreign_secret_env_names`) из ambient-копии вычитаются,
@@ -850,7 +854,8 @@ def role_env(role: str | None = None, task_id: str | None = None) -> dict:
     """
     resolved = _resolve_declared_tools()
     venv_bin = _venv_interpreter_bin()
-    provider = providers.for_role(role)
+    if provider is None:
+        provider = providers.for_role(role)
     env = _allowlisted_env(os.environ)
     # Секреты ЧУЖИХ провайдеров — из ambient-копии вон (SPEC
     # 01M3F7BYE82S9AQCBSP1RTQQTR, требование 4): белый список манифеста
@@ -870,16 +875,18 @@ def role_env(role: str | None = None, task_id: str | None = None) -> dict:
     return env
 
 
-def in_role_environment() -> bool:
-    """Верно, если ТЕКУЩИЙ процесс сам исполняется в окружении роли —
-    те же два маркера, что `role_env()` ставит процессу роли (HOME/
-    CLAUDE_CONFIG_DIR на курируемый слой): единственное в кодовой базе
-    определение «окружения роли» читается здесь же, симметрично записи,
-    не задаётся заново (SPEC 01M1NSR5M5THYRC0RFWPMVE2DW, требование 5,
-    AC-15 — второй, независимый от `permissions.deny` рубеж отказа
-    расшифровки пула канарейки, если она вызвана из-под роли)."""
-    return (os.environ.get("HOME") == str(config.ROLE_HOME) and
-            os.environ.get("CLAUDE_CONFIG_DIR") == str(config.ROLE_CONFIG_DIR))
+def in_role_environment(env=None) -> bool:
+    """Распознаёт шаг роли в переданном или текущем окружении.
+
+    Общий для провайдеров маркер `ARTEL_ROLE` ставит `role_env()`;
+    прежняя пара HOME/CLAUDE_CONFIG_DIR остаётся достаточной для шагов
+    claude без маркера (SPEC 01M1NSR5M5THYRC0RFWPMVE2DW, AC-15).
+    """
+    if env is None:
+        env = os.environ
+    return (bool(env.get(config.ARTEL_ROLE_ENV)) or
+            (env.get("HOME") == str(config.ROLE_HOME) and
+             env.get("CLAUDE_CONFIG_DIR") == str(config.ROLE_CONFIG_DIR)))
 
 
 def role_cwd_path(task_id: str, target: str) -> Path:

@@ -23,6 +23,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
@@ -209,6 +210,12 @@ class CmdNoteArgumentValidationTest(SchemaTmpRootTest):
     `sqlite3.OperationalError` раньше ожидаемого `SystemExit` разбора
     аргументов."""
 
+    def setUp(self):
+        super().setUp()
+        role_patcher = mock.patch.dict(os.environ, {config.ARTEL_ROLE_ENV: ""})
+        role_patcher.start()
+        self.addCleanup(role_patcher.stop)
+
     def test_no_arguments_at_all_refuses(self):
         with self.assertRaises(SystemExit):
             notes.cmd_note([])
@@ -233,6 +240,27 @@ class CmdNoteArgumentValidationTest(SchemaTmpRootTest):
         notes.cmd_note(["--flush"])  # не должно поднять исключение
 
 
+class CmdNoteRoleRefusalTest(unittest.TestCase):
+
+    def test_role_refuses_every_form_before_parsing(self):
+        """Шаг роли не доходит до разбора ни одной формы note.
+
+        Ловит мутацию: проверка роли удалена или перенесена после разбора
+        аргументов — подмена разбора поднимет AssertionError.
+        """
+        forms = ([], ["--flush"], ["копилка", "--text", "строка"],
+                 ["--append", "ключ", "--text", "строка"],
+                 ["--apply", "draft.md", "--message", "основание"])
+        with mock.patch.dict(os.environ, {config.ARTEL_ROLE_ENV: "developer"}):
+            for argv in forms:
+                with self.subTest(argv=argv), \
+                        mock.patch.object(notes, "_parse_args",
+                                          side_effect=AssertionError("разбор вызван")):
+                    with self.assertRaises(SystemExit) as refusal:
+                        notes.cmd_note(argv)
+                    self.assertIn("роли", str(refusal.exception))
+
+
 class CheckPendingNotesTest(TmpRootTest):
 
     def test_ok_when_nothing_pending(self):
@@ -254,6 +282,9 @@ class NoteSilenceSandbox(RealGitSandbox):
 
     def setUp(self):
         super().setUp()
+        role_patcher = mock.patch.dict(os.environ, {config.ARTEL_ROLE_ENV: ""})
+        role_patcher.start()
+        self.addCleanup(role_patcher.stop)
         self.origin = tempfile.mkdtemp()
         self.addCleanup(shutil.rmtree, self.origin, ignore_errors=True)
         self.git("init", "-q", "--bare", self.origin)

@@ -91,6 +91,8 @@ def isolation_smoke(role: str = "developer") -> doctor.Check:
     if env.get("HOME") == fake_home or any(
             doctor.ISOLATION_MARKER in str(v) for v in env.values()):
         leaks.append("user-слой: HOME роли не отведён от ambient-значения")
+    if not doctor.runner.in_role_environment(env):
+        leaks.append("окружение шага роли не распознаётся как окружение роли")
 
     project_dir = doctor.runner.role_cwd(None, None, doctor.ISOLATION_SMOKE_TARGET)
     try:
@@ -264,10 +266,12 @@ def _codex_environment_leaks(provider, role: str):
     marker_names = ("HOME", doctor.codex_provider.HOME_ENV)
     prior = {name: os.environ.get(name) for name in marker_names}
     with tempfile.TemporaryDirectory() as fake_home:
+        prior_role = os.environ.pop(doctor.config.ARTEL_ROLE_ENV, None)
         for name in marker_names:
             os.environ[name] = fake_home
         try:
             env = provider.environment(role)
+            step_env = doctor.runner.role_env(role, provider=provider)
         except OSError as exc:
             return None, f"окружение роли не подготовлено: {exc}"
         finally:
@@ -276,6 +280,8 @@ def _codex_environment_leaks(provider, role: str):
                     os.environ.pop(name, None)
                 else:
                     os.environ[name] = value
+            if prior_role is not None:
+                os.environ[doctor.config.ARTEL_ROLE_ENV] = prior_role
     leaks = [f"{name}: окружение шага унаследовало ambient-значение "
              f"Оператора" for name in marker_names
              if env.get(name) == fake_home]
@@ -289,7 +295,8 @@ def _codex_environment_leaks(provider, role: str):
     # все три имени, а не одно: `codex exec` читает ключ из `CODEX_API_KEY`
     # (живая проверка 22.09), и проверка на `OPENAI_API_KEY` пропустила бы
     # именно действующий канал.
-    step_env = _assembled_step_env(env)
+    if not doctor.runner.in_role_environment(step_env):
+        leaks.append("окружение шага роли не распознаётся как окружение роли")
     for name in doctor.codex_provider.FORBIDDEN_KEY_ENV_NAMES:
         if name not in step_env:
             continue
@@ -299,31 +306,6 @@ def _codex_environment_leaks(provider, role: str):
                      f"(значение не читается; канал — {channel}) — роль "
                      f"авторизуется входом по подписке ChatGPT")
     return env, leaks
-
-
-def _assembled_step_env(overlay: dict) -> dict:
-    """Окружение шага так, как его соберёт `runner.role_env`: ambient,
-    суженный общим белым списком манифеста, плюс накладка провайдера.
-
-    Накладка провайдера — не единственный канал переменной в шаг, и после
-    требования 3 не главный: ключ, дописанный в `stack.ROLE_ENV_ALLOWLIST`
-    (своей задачей или «по аналогии»), приезжает в окружение КАЖДОГО шага
-    мимо провайдера — смок, смотревший только накладку, оставался бы
-    зелёным ровно в том сценарии, ради которого заведён (REVIEW.md
-    итерации 1, R1-F2).
-
-    Белый список применяется ЕДИНСТВЕННЫМ его определением
-    (`runner._allowlisted_env`), а не своей копией правила рядом: копия
-    учитывала бы сегодняшние префиксы и молча разъехалась бы с раннером на
-    первой же правке — тот же класс расхождения половин, что эта задача
-    закрывает у пар авторизации. Сам `runner.role_env` не зовётся: он
-    собирает окружение провайдера РОЛИ (роли на Codex сегодня нет ни
-    одной), резолвит инструменты манифеста и venv — смок сверяет изоляцию
-    шага Codex, а не готовность пульта.
-    """
-    env = doctor.runner._allowlisted_env(os.environ)
-    env.update(overlay)
-    return env
 
 
 FOREIGN_SECRETS_CHECK = "foreign-provider-secrets"
@@ -448,5 +430,3 @@ def _foreign_provider_secrets(provider) -> list:
             if name in doctor.stack.ROLE_ENV_ALLOWLIST and os.environ.get(name):
                 found.append(name)
     return found
-
-

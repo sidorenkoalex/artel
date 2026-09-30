@@ -17,12 +17,14 @@
 """
 import io
 import contextlib
+import os
 import shutil
 import subprocess
 import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
@@ -84,6 +86,9 @@ class ApplySandbox(RealGitSandbox):
 
     def setUp(self):
         super().setUp()
+        role_patcher = mock.patch.dict(os.environ, {config.ARTEL_ROLE_ENV: ""})
+        role_patcher.start()
+        self.addCleanup(role_patcher.stop)
         self.origin = tempfile.mkdtemp()
         self.addCleanup(shutil.rmtree, self.origin, ignore_errors=True)
         self.git("init", "-q", "--bare", self.origin)
