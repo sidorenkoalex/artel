@@ -2,7 +2,7 @@
 task: 01M3S9HRZYT0C6TC1CZJPNYKZ1
 type: plan
 author_role: developer
-status: escalate
+status: ready
 schema_version: 5
 ---
 
@@ -94,17 +94,3 @@ diff --git a/skills/test-authoring.md b/skills/test-authoring.md
  ## Каждый AC-n — тест либо пометка
  Для каждого `AC-n` из SPEC — ровно один из трёх исходов, иначе выход
 ```
-
-## Эскалация
-
-### Вопросы
-
-1. Кто выполнит fast-forward ветки задачи до `fbf2622e`, если Git-метаданные worktree недоступны роли? Варианты: (а) Оператор подтянет `origin/main` штатной командой пульта или в разрешённой сессии; (б) роль получит область записи для Git-метаданных этого worktree и повторит `git merge --ff-only origin/main`. По умолчанию — (а).
-
-### Контекст
-
-`HEAD` = `431fe8e3`, `origin/main` = `fbf2622e`; `HEAD` — предок `origin/main`, конфликтов не ожидается. `git merge --ff-only origin/main` отказал при записи `ORIG_HEAD.lock` в общей `.git`. План и приложение к защищённым скилам подготовлены в предыдущем ходе; код задачи по причине возврата менять нельзя.
-
-### Блокирует
-
-Подтяжку `main` и перевод PLAN обратно в `ready` по текущей причине возврата.
