@@ -2,9 +2,8 @@
 task: 01M3SK48D7RDQPSEN78894GDA5
 type: plan
 author_role: developer
-status: escalate
+status: ready
 schema_version: 5
-question: Как выполнить обязательный коммит кода при запрете записи в Git metadata worktree?
 ---
 
 # PLAN: Канарейка использует дом Codex своего клона
@@ -43,15 +42,8 @@ question: Как выполнить обязательный коммит код
 - Профильные тесты: 103 passed, 91 subtests passed (`test_01m3sk48d7rdqpsen78894gda5_codex_home.py`, `test_canary_codex_clone_auth.py`, `test_canary_drive.py`, `test_providers_codex.py`).
 - Соседние модули: 277 passed, 7 subtests passed (`test_canary.py`, `test_canary_sets.py`, `test_doctor.py`).
 - Временные мутации передачи `--codex-home` и возврата переопределения боевого дома сделали соответствующие сторожа красными; рабочий код восстановлен.
+- Код сохранён штатным автокоммитом пульта `9dad649e4e0c37fff32b560f40abc244e709a62d` согласно `ANSWER-1.md`; остаточных изменений кода нет.
 
 ## Предложения системе
 
-- Рабочий каталог шага — отдельный worktree, но Git хранит индекс в `/Users/al.sidorenko/projects/artel/.git/worktrees/01M3SK48D7RDQPSEN78894GDA5/` вне разрешённых на запись путей. `git add` отказал с `index.lock: Operation not permitted`; нужно выдавать шагу право записи в Git metadata его worktree либо изменить штатный путь коммита.
-
-## Эскалация
-
-**Вопросы.** Как завершить обязательный кодовый коммит? Варианты: (а) дать роли запись в Git metadata этого worktree и перезапустить шаг; (б) поручить штатный коммит оркестратору как исключение. По умолчанию — ждать решения и не обходить границу файловой песочницы.
-
-**Контекст.** Реализация, тесты и карта кодовой базы готовы; PLAN прошёл guard, профильные тесты зелёные. `git add orchestrator/canary.py ...` завершился кодом 128: `Unable to create .../.git/worktrees/01M3SK48D7RDQPSEN78894GDA5/index.lock: Operation not permitted`. Запись в `.git` вне разрешённого корня недоступна.
-
-**Блокирует.** Обязательный коммит кода в ветку задачи. Изменения сохранены в рабочем дереве и не откатывались.
+- Git хранит индекс worktree вне разрешённого на запись каталога шага: `git add` отказал с `index.lock: Operation not permitted`. Оператор в `ANSWER-1.md` подтвердил штатный автокоммит пульта; код сохранён коммитом `9dad649e`, права песочницы не расширялись.
