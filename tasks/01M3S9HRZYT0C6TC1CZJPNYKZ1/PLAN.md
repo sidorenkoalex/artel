@@ -2,7 +2,7 @@
 task: 01M3S9HRZYT0C6TC1CZJPNYKZ1
 type: plan
 author_role: developer
-status: ready
+status: escalate
 schema_version: 5
 ---
 
@@ -38,6 +38,7 @@ schema_version: 5
 
 ## Проверено
 
+- Повторный возврат из `verifying` требует подтянуть `fbf2622e`. `origin/main` указывает на `fbf2622e2f218e76a04c4200e7a1513b7fe4ba91`, `git merge-base --is-ancestor HEAD origin/main` вернул 0, а `git rev-list --left-right --count HEAD...origin/main` — `0 11`: возможен fast-forward без конфликта. `git merge --ff-only origin/main` остановился до изменения дерева: Git не смог создать `/Users/al.sidorenko/projects/artel/.git/worktrees/01M3S9HRZYT0C6TC1CZJPNYKZ1/ORIG_HEAD.lock` (`Operation not permitted`). Это вне разрешённой области записи роли. `git status --short --branch` после отказа показывает прежнюю ветку и только несохранённый в кодовой ветке каталог артефактов задачи.
 - Возврат из `verifying` вызван чужим `README.md` без frontmatter в прежнем `main`. В `origin/main` есть исправление `f6e111f2`: `git show --format= --name-status f6e111f2` показывает удаление этого файла, а `git cat-file -e origin/main:tasks/01M3RWA2786HCAC8PT3XSBKQT4/acceptance_tests/README.md` подтверждает его отсутствие. Код задачи не менялся; после сдачи PLAN пульт подтянет исправленный `main`.
 - `git apply --check /tmp/artel-01m3s9hr-skills.patch` на чистом дереве текущей ветки — код 0; это точный дифф приложения.
 - `python3 -m pytest tests/test_plan_appendix.py -p no:cacheprovider -p timeout -o timeout=120 -q` — 30 passed.
@@ -49,6 +50,7 @@ schema_version: 5
 - Корневой `conftest.py` отвергает запуск конкретного файла через программный `pytest.main([...])` как полный набор, потому что внешняя команда — `python3 -`. Для локальной проверки приложения до автокоммита PLAN нужен штатный способ подать черновик артефакта разовой планке; сейчас приходится подменять чтение PLAN тестовым плагином.
 - Задача с одними защищёнными путями не даёт разработчику файлов для кодового коммита, хотя `coding-standards` требует закончить ход таким коммитом; нужен явный маршрут для PLAN-only задач без пустого коммита.
 - `git commit --allow-empty` для маркировки хода отказал: общий `.git/worktrees/<id>/index.lock` вне разрешённой области записи роли (`Operation not permitted`). PLAN остаётся артефактом автокоммита оркестратора; кодовых файлов для коммита нет.
+- Повторный возврат из `verifying` требует ручной подтяжки `main`, но область записи роли не включает общую `.git/worktrees/<id>/`: `git merge --ff-only origin/main` отказал на `ORIG_HEAD.lock`. Нужен штатный маршрут подтяжки ветки задачи через пульт или доступ роли к Git-метаданным её worktree.
 
 ## Приложение: правила для `skills/spec-authoring.md` и `skills/test-authoring.md`
 
@@ -92,3 +94,17 @@ diff --git a/skills/test-authoring.md b/skills/test-authoring.md
  ## Каждый AC-n — тест либо пометка
  Для каждого `AC-n` из SPEC — ровно один из трёх исходов, иначе выход
 ```
+
+## Эскалация
+
+### Вопросы
+
+1. Кто выполнит fast-forward ветки задачи до `fbf2622e`, если Git-метаданные worktree недоступны роли? Варианты: (а) Оператор подтянет `origin/main` штатной командой пульта или в разрешённой сессии; (б) роль получит область записи для Git-метаданных этого worktree и повторит `git merge --ff-only origin/main`. По умолчанию — (а).
+
+### Контекст
+
+`HEAD` = `431fe8e3`, `origin/main` = `fbf2622e`; `HEAD` — предок `origin/main`, конфликтов не ожидается. `git merge --ff-only origin/main` отказал при записи `ORIG_HEAD.lock` в общей `.git`. План и приложение к защищённым скилам подготовлены в предыдущем ходе; код задачи по причине возврата менять нельзя.
+
+### Блокирует
+
+Подтяжку `main` и перевод PLAN обратно в `ready` по текущей причине возврата.
