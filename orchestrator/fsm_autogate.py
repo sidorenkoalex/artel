@@ -13,6 +13,7 @@ from scripts import guard
 
 from . import (acceptance, artifact_source, budget, ci, config, fixation,
               gates, gitcmd, store, workspace)
+from .advance_gates import acceptance as acceptance_gates
 
 AUTOGATE_PASS_MESSAGE = "acceptance пройден автогейтом (политика gates.yaml)"
 
@@ -63,7 +64,44 @@ def _acceptance_pull_merge_commits(branch: str) -> list[str]:
     return [line for line in res.stdout.splitlines() if line.strip()]
 
 
-def _acceptance_manual_criteria(task_id: str, branch: str) -> list[str]:
+def _plank_sources(task_id: str, branch: str, *, conn=None, t=None
+                   ) -> tuple[list[str], bool, str | None]:
+    """Тексты разовой и долгоживущей планки, наличие файлов и ошибка чтения.
+
+    Перечень берётся из дерева лока тем же узлом, что прогон планки на
+    переходе `in_dev`; содержимое долгоживущих файлов — из кодовой ветки,
+    а не из незакоммиченного рабочего дерева.
+    """
+    tests_rel = f"tasks/{task_id}/acceptance_tests"
+    py_paths = [p for p in (gitcmd.ls_tree_files(branch, tests_rel) or [])
+                if p.endswith(".py")]
+    sources = []
+    for path in py_paths:
+        text, _ = gitcmd.show(branch, path)
+        if text is not None:
+            sources.append(text)
+
+    if (t is None or "tests_locked_sha" not in t.keys()
+            or not t["tests_locked_sha"]):
+        return sources, bool(py_paths), None
+    digests, reason = acceptance_gates.long_lived_manifest(
+        task_id, t, store.task_target(conn, task_id))
+    if digests is None:
+        return sources, bool(py_paths), ("перечень долгоживущих файлов не "
+                                         f"прочитан: {reason}")
+    error = None
+    for path in sorted(digests):
+        text, reason = gitcmd.show(t["branch"], path)
+        if text is None:
+            if error is None:
+                error = f"долгоживущий файл планки не прочитан: {path} ({reason})"
+        else:
+            sources.append(text)
+    return sources, bool(py_paths or digests), error
+
+
+def _acceptance_manual_criteria(task_id: str, branch: str, *, conn=None,
+                                t=None) -> list[str]:
     """Требование 3/AC-3, вычислено требованием 2/AC-5 через
     `guard.scan_ac_content` целиком (не через `_autogate_conditions`,
     чьё короткое замыкание на первом отказе не даёт увидеть остальные
@@ -72,21 +110,16 @@ def _acceptance_manual_criteria(task_id: str, branch: str) -> list[str]:
     его пометки. Критерий `ci` не входит (требование 3: он не остаётся
     человеку — уже автоматика, `_autogate_conditions` условие «а»).
 
-    Чтение планки — теми же примитивами, что и условие «а»
-    (`gitcmd.ls_tree_files`/`gitcmd.show` с артефактной ветки,
-    `*.py` целиком, не только `test_*.py` — тот же приём T031)."""
-    tests_rel = f"tasks/{task_id}/acceptance_tests"
-    py_paths = [p for p in (gitcmd.ls_tree_files(branch, tests_rel) or [])
-               if p.endswith(".py")]
-    sources = []
-    for p in py_paths:
-        text, _ = gitcmd.show(branch, p)
-        if text is not None:
-            sources.append(text)
+    Чтение планки — тем же общим сборщиком, что и условие «а»: все
+    разовые `*.py` из артефактной ветки и записи перечня из кодовой."""
+    sources, _, error = _plank_sources(task_id, branch, conn=conn, t=t)
     _, markers = guard.scan_ac_content(sources)
-    return [f"AC-{n}: {kind}" + (f" — {reason}" if reason else "")
-            for n, (kind, reason) in sorted(markers.items())
-            if kind in ("manual", "skip", "escalate")]
+    items = [f"AC-{n}: {kind}" + (f" — {reason}" if reason else "")
+             for n, (kind, reason) in sorted(markers.items())
+             if kind in ("manual", "skip", "escalate")]
+    if error is not None:
+        items.append(error)
+    return items
 
 
 def _acceptance_checklist_detail(conn, task_id: str, t, iteration: int) -> str:
@@ -135,7 +168,8 @@ def _acceptance_checklist_detail(conn, task_id: str, t, iteration: int) -> str:
     )
     header = (f"автоматически при approve: {group_a} | уже проверено: "
               f"{already_checked}")
-    manual_items = _acceptance_manual_criteria(task_id, artifact_branch_name)
+    manual_items = _acceptance_manual_criteria(
+        task_id, artifact_branch_name, conn=conn, t=t)
     if not manual_items:
         return f"{header} | {_ACCEPTANCE_AUTOPASS_NOTE}"
     group_b_items = list(manual_items)
@@ -170,14 +204,10 @@ def _autogate_conditions(conn, task_id: str, t, acc_tdir: Path,
     зелёным (иначе переход не добрался бы до состояния `acceptance`
     вообще) — только записывается в перечень как выполненное.
 
-    Условие "а" (каталог `acceptance_tests/` и его AC-пометки
-    manual/skip/ci) читается через источник артефактов задачи
+    Условие "а" читает разовые `*.py` из источника артефактов задачи
     (`artifact_source.resolve` + `gitcmd.ls_tree_files`/`gitcmd.show`,
-    SPEC 01M1NBWWPJMHKJMYXRDCM0W0C5) — тем же приёмом, что уже несёт
-    `fsm._tests_writing_ac_state` (SPEC T031): разбираются ВСЕ `*.py`
-    файлы каталога, не только `test_*.py` (расходится с дисковым
-    `guard.scan_acceptance_tests`, но повторяет прецедент, а не заводит
-    третий вариант разбора), общим ядром `guard.scan_ac_content`.
+    SPEC 01M1NBWWPJMHKJMYXRDCM0W0C5) и файлы перечня из кодовой ветки.
+    Разбор AC-пометок — общее ядро `guard.scan_ac_content`.
     `acc_tdir` (диск рабочей копии) условия "а" больше не касается —
     параметр сохранён ради сигнатуры, которую использует остальной код
     функции (условия б/в/г/д, эта задача их не меняет) и вызывающий код.
@@ -195,17 +225,12 @@ def _autogate_conditions(conn, task_id: str, t, acc_tdir: Path,
     branch_sha = gitcmd.branch_head_sha(branch)
     source_note = f"источник планки: ветка {branch}, sha {branch_sha}"
 
-    tests_rel = f"tasks/{task_id}/acceptance_tests"
-    paths = gitcmd.ls_tree_files(branch, tests_rel) or []
-    py_paths = [p for p in paths if p.endswith(".py")]
-    if not py_paths:
+    sources, has_files, error = _plank_sources(task_id, branch, conn=conn, t=t)
+    if error is not None:
+        return ok, f"автогейт: {error} ({source_note})"
+    if not has_files:
         return ok, ("автогейт: каталог приёмочных тестов пуст или "
                     f"отсутствует ({source_note})")
-    sources = []
-    for p in py_paths:
-        text, _ = gitcmd.show(branch, p)
-        if text is not None:
-            sources.append(text)
     _, markers = guard.scan_ac_content(sources)
     manual_ns = sorted(n for n, (kind, _) in markers.items() if kind == "manual")
     skip_ns = sorted(n for n, (kind, _) in markers.items() if kind == "skip")
