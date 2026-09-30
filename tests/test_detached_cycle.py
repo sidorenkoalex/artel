@@ -19,7 +19,7 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from orchestrator import artel, cleanup, config, lease, store  # noqa: E402
+from orchestrator import artel, cleanup, config, lease, session, store  # noqa: E402
 from tests.sandbox import TaskSeededTmpRootTest, _dead_pid, _ts_ago, capture  # noqa: E402
 from tests.test_kill_cleanup import TmpRepoTest  # noqa: E402
 
@@ -91,6 +91,14 @@ class TaskIdAndAttachTest(unittest.TestCase):
 
 
 class LaunchDetachedTest(TaskSeededTmpRootTest):
+
+    def setUp(self):
+        super().setUp()
+        conn = store.db()
+        observation_id = store.register_observation(
+            conn, config.DEFAULT_TARGET, "codex", "test-chat",
+            session.resolve_session_id(None), [self.TASK])
+        store.touch_observation(conn, observation_id)
 
     def _popen_mock(self, pid: int = 4242):
         proc = mock.Mock()
@@ -448,6 +456,14 @@ class WaitZoneFlagHotfix22Test(TaskSeededTmpRootTest):
     """Hotfix №22 (11.09): `auto <id> --wait-zone` — флаг разбирается,
     едет в отделённый процесс, а неизвестный флаг даёт отказ, а не
     молчаливый старт без ожидания зоны."""
+
+    def setUp(self):
+        super().setUp()
+        conn = store.db()
+        observation_id = store.register_observation(
+            conn, config.DEFAULT_TARGET, "codex", "test-chat",
+            session.resolve_session_id(None), [self.TASK])
+        store.touch_observation(conn, observation_id)
 
     def test_wait_zone_flag_reaches_the_detached_child_argv(self):
         """Ловит мутацию: `_cmd_auto_or_detach` роняет `--wait-zone` при

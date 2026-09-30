@@ -21,6 +21,7 @@
 import re
 import sqlite3
 import sys
+import uuid
 from datetime import datetime, timezone
 
 from . import config, session
@@ -31,6 +32,54 @@ TASK_ID = re.compile(r"\AT(\d+)\Z")
 
 def now() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%SZ")
+
+
+def register_observation(conn, target: str, client: str, chat: str,
+                         session_id: str, task_ids: list[str]) -> str:
+    observation_id = uuid.uuid4().hex
+    with conn:
+        conn.execute("INSERT INTO observations VALUES (?, ?, ?, ?, ?, 'active', NULL, ?)",
+                     (observation_id, target, client, chat, session_id, now()))
+        conn.executemany("INSERT INTO observation_tasks(observation_id, task_id) VALUES (?, ?)",
+                         [(observation_id, task_id) for task_id in task_ids])
+    return observation_id
+
+
+def observation(conn, observation_id: str):
+    return conn.execute("SELECT * FROM observations WHERE id=?", (observation_id,)).fetchone()
+
+
+def observation_tasks(conn, observation_id: str) -> list[str]:
+    return [r[0] for r in conn.execute(
+        "SELECT task_id FROM observation_tasks WHERE observation_id=? AND enabled=1 ORDER BY task_id",
+        (observation_id,))]
+
+
+def touch_observation(conn, observation_id: str) -> bool:
+    timestamp = datetime.now(timezone.utc).isoformat()
+    with conn:
+        cursor = conn.execute(
+            "UPDATE observations SET last_seen_at=? WHERE id=? AND state='active'",
+            (timestamp, observation_id))
+    return cursor.rowcount == 1
+
+
+def matching_observation(conn, task_id: str, target: str, session_id: str):
+    rows = conn.execute(
+        "SELECT o.* FROM observations o JOIN observation_tasks ot ON ot.observation_id=o.id "
+        "WHERE o.target=? AND o.session_id=? AND o.state='active' "
+        "AND ot.task_id=? AND ot.enabled=1 ORDER BY o.last_seen_at DESC, o.rowid DESC",
+        (target, session_id, task_id)).fetchall()
+    if len({(row["client"], row["chat"]) for row in rows}) > 1:
+        return None  # без явного контекста чата выбор был бы случайным
+    return rows[0] if rows else None
+
+
+def record_observed_run(conn, observation_id: str, task_id: str,
+                        pid: int, log: str) -> None:
+    with conn:
+        conn.execute("INSERT INTO observed_runs(observation_id, task_id, pid, log, started_at) "
+                     "VALUES (?, ?, ?, ?, ?)", (observation_id, task_id, pid, log, now()))
 
 
 class _AutoClosingConnection(sqlite3.Connection):

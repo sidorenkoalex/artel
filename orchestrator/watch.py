@@ -6,7 +6,8 @@
 п.4): то же чтение БД, что и у остального CLI (`store.db()`), без
 lease, без записи в `steps`/`alerts`, без мутации `tasks.state` —
 только печать потока новых записей журнала выбранных задач, начиная с
-момента запуска.
+момента запуска. Режим `--observation` дополнительно записывает связь
+наблюдения в том же цикле опроса.
 
 Монолит — один модуль на разбор argv, выборку задач, опрос и печать
 (решение Оператора 06.09, SPEC «Оценка объёма»): резать нечего — ни
@@ -18,9 +19,9 @@ lease, без записи в `steps`/`alerts`, без мутации `tasks.sta
 import sys
 import time
 
-from . import ci, session, store
+from . import ci, config, session, store
 
-_SELECTOR_FLAGS = ("--tasks", "--mine", "--all")
+_SELECTOR_FLAGS = ("--tasks", "--mine", "--all", "--observation")
 _EVENT_CLASSES = {"transitions", "refusals", "gates", "steps", "budget",
                   "alerts", "stops", "ci"}
 _DEFAULT_EVENTS = ("transitions", "refusals", "gates", "steps", "stops", "ci")
@@ -96,7 +97,7 @@ def _parse_args(argv: list) -> dict:
     if len(present) != 1:
         sys.exit(
             "watch: нужен ровно один селектор — --tasks <id>[,<id>...], "
-            "--mine либо --all")
+            "--mine, --all либо --observation <ID>")
 
     events_raw = _flag_value(argv, "--events")
     events = _parse_event_set(events_raw, "--events") if events_raw is not None \
@@ -104,12 +105,15 @@ def _parse_args(argv: list) -> dict:
 
     interval_raw = _flag_value(argv, "--interval")
     if interval_raw is None:
-        interval = 30.0
+        interval = float(config.OBSERVATION_HEARTBEAT_PERIOD)
     else:
         try:
             interval = float(interval_raw)
         except ValueError:
             sys.exit(f"--interval требует число, получено {interval_raw!r}.")
+    if interval <= 0 or ("--observation" in argv and
+                         interval > config.OBSERVATION_HEARTBEAT_PERIOD):
+        sys.exit("watch: interval должен быть положительным и не больше периода heartbeat")
 
     exit_on_raw = _flag_value(argv, "--exit-on")
     once = "--once" in argv
@@ -125,6 +129,7 @@ def _parse_args(argv: list) -> dict:
     tasks_raw = _flag_value(argv, "--tasks")
     return {
         "tasks": _split_csv(tasks_raw) if tasks_raw is not None else None,
+        "observation": _flag_value(argv, "--observation"),
         "mine": "--mine" in argv,
         "all": "--all" in argv,
         "events": events,
@@ -151,6 +156,8 @@ def _owner_session_id(conn, task_id: str) -> str | None:
 
 
 def _select_tasks(conn, opts: dict, session_id: str) -> list:
+    if opts["observation"] is not None:
+        return store.observation_tasks(conn, opts["observation"])
     if opts["tasks"] is not None:
         return list(opts["tasks"])
     if opts["mine"]:
@@ -275,6 +282,12 @@ def cmd_watch(argv: list) -> None:
     opts = _parse_args(argv)
     conn = store.db()
     session_id = session.resolve_session_id(None)
+    if opts["observation"] is not None:
+        observed = store.observation(conn, opts["observation"])
+        if observed is None or observed["state"] != "active":
+            sys.exit("watch: наблюдение не найдено или прекращено")
+        if observed["session_id"] != session_id:
+            sys.exit("watch: наблюдение принадлежит другой сессии")
     selection = _select_tasks(conn, opts, session_id)
 
     if opts["until"] is not None and len(selection) != 1:
@@ -297,7 +310,7 @@ def cmd_watch(argv: list) -> None:
     # пересчёт `--mine`/`--all` (AC-5) здесь не идёт: список из одного
     # id, уже проверенный выше, остаётся тем же самым всю жизнь команды
     # (см. PLAN.md, «Подход», пункт 4).
-    dynamic = (opts["mine"] or opts["all"]) and opts["until"] is None
+    dynamic = (opts["mine"] or opts["all"] or opts["observation"] is not None) and opts["until"] is None
 
     exit_on = opts["exit_on"]
     known_step_id: dict = {}
@@ -306,6 +319,9 @@ def cmd_watch(argv: list) -> None:
 
     while True:
         conn = store.db()  # свежее чтение на каждой итерации (AC-8)
+        if opts["observation"] is not None:
+            if not store.touch_observation(conn, opts["observation"]):
+                return
         if dynamic:
             selection = _select_tasks(conn, opts, session_id)
         tasks_by_id = {row["id"]: row for row in store.all_tasks(conn)}
