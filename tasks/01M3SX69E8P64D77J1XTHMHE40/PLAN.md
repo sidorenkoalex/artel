@@ -2,7 +2,7 @@
 task: 01M3SX69E8P64D77J1XTHMHE40
 type: plan
 author_role: developer
-status: escalate
+status: ready
 schema_version: 5
 ---
 
@@ -38,14 +38,9 @@ schema_version: 5
 - `python3 -m pytest tests/test_detached_cycle.py tests/test_watch.py tests/test_artel_role_restricted_commands.py tests/test_store_schema_migration_parity.py tests/test_observation_edges.py tests/test_01m3sx69e8p64d77j1xthmhe40_observation.py tests/test_01m3sx69e8p64d77j1xthmhe40_migration.py -q -p no:cacheprovider -p timeout -o timeout=120` — 70 passed, 23 subtests passed.
 - Сторожа `tests/test_observation_edges.py` проверены временными мутациями: удаление распознавания managed, отказа роли, вложенной формы Codex, догоняющей миграции таблиц и защиты от неоднозначного чата окрашивало соответствующие тесты; код восстановлен.
 - `python3 scripts/codebase_map.py`, `git diff --check`, `python3 scripts/guard.py tasks/01M3SX69E8P64D77J1XTHMHE40/PLAN.md` — успешно.
+- Ответ Оператора в `ANSWER-4.md` подтвердил автокоммит пульта `88cd4f2f1d4a1cbd6ccf7b0d37fadcc331de5c0d` как коммит разработчика; `git show --name-only HEAD` содержит реализацию, карту и тесты, рабочее дерево кода чистое.
 
 ## Предложения системе
 
 - `store.db()` из task worktree создал пустую `.artel/state.db` в этом worktree при диагностике задачи; для чтения состояния роли нужна штатная команда, обращающаяся к БД главной копии без побочного создания локальной БД.
 - Файловая песочница шага разрешает запись только в worktree, а git-index рабочего дерева находится во внешнем `.git/worktrees/<id>/`; `git add` получает `Operation not permitted`. Нужен штатный способ коммита кодовой ветки из роли без обхода песочницы.
-
-## Эскалация
-
-- **Вопросы:** Как завершить обязательный коммит кода? Варианты: разрешить записи git-метаданных этой ветки в следующем шаге роли; либо поручить автокоммит оркестратору как явное исключение для этой задачи. Дефолт при отсутствии ответа — оставить задачу в `escalate` без обхода ограничений.
-- **Контекст:** Реализация, карта и тесты находятся в рабочем дереве. Последний полный адресный прогон — 70 passed, 23 subtests passed; guard PLAN и `git diff --check` зелёные. `git add orchestrator/artel.py ... docs/codebase-map.md` завершился `fatal: Unable to create .../.git/worktrees/01M3SX69E8P64D77J1XTHMHE40/index.lock: Operation not permitted`. Залоченные файлы планки не менялись.
-- **Блокирует:** Коммит кода в ветку задачи и, соответственно, сдачу PLAN со статусом `ready`.
