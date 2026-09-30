@@ -38,6 +38,7 @@ schema_version: 5
 
 ## Проверено
 
+- Возврат из `verifying` вызван чужим `README.md` без frontmatter в прежнем `main`. В `origin/main` есть исправление `f6e111f2`: `git show --format= --name-status f6e111f2` показывает удаление этого файла, а `git cat-file -e origin/main:tasks/01M3RWA2786HCAC8PT3XSBKQT4/acceptance_tests/README.md` подтверждает его отсутствие. Код задачи не менялся; после сдачи PLAN пульт подтянет исправленный `main`.
 - `git apply --check /tmp/artel-01m3s9hr-skills.patch` на чистом дереве текущей ветки — код 0; это точный дифф приложения.
 - `python3 -m pytest tests/test_plan_appendix.py -p no:cacheprovider -p timeout -o timeout=120 -q` — 30 passed.
 - `python3 -m pytest tasks/01M3S9HRZYT0C6TC1CZJPNYKZ1/acceptance_tests/test_skill_appendices.py -p artel_plan_test_plugin -p no:cacheprovider -p timeout -o timeout=120 -q` — 4 passed, 23 subtests passed. Временный плагин `/tmp/artel_plan_test_plugin.py` подставил текущий PLAN в чтение артефактной ветки; залоченный тест не изменён.
