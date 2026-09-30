@@ -1175,6 +1175,9 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
 
 
 def cmd_note(argv: list[str]) -> None:
+    if runner.in_role_environment():
+        sys.exit("note отказана — вызов из окружения роли (role_env): "
+                 "записи копилки и бэклога вносит Оператор")
     args = _parse_args(argv)
     # Оппортунистический допуш уважает окно тишины (требование 7, AC-8):
     # при открытом окне удержанные записи остаются нетронутыми, вне окна —
