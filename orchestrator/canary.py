@@ -1708,6 +1708,7 @@ def _task_deviation_warnings(metrics: dict, baseline, ratio: float) -> list:
 # третьей копией — тот же принцип, что уже есть у `store.
 # REFUSAL_ACTION_PREFIX`/`auto.REFUSAL_ACTION_PREFIX`.
 _AUTO_STOPPED_ACTION = "auto остановлен"
+_AUTOGATE_REFUSAL_ACTION = "автогейт acceptance не пройден"
 
 # Потолок строк выдержки журнала (требование 2, AC-6) — с запасом под
 # итоговую строку метрик и строку пути диагностики, которые печатаются
@@ -1718,7 +1719,8 @@ _JOURNAL_EXCERPT_LIMIT = 18
 
 def _journal_excerpt_lines(steps, limit: int = _JOURNAL_EXCERPT_LIMIT) -> list:
     """Выдержка журнала задачи (требование 2, AC-6): переходы состояний
-    (`state -> ...`) и записи «переход отклонён»/«auto остановлен» —
+    (`state -> ...`) и записи «переход отклонён»/«auto остановлен»/
+    «автогейт acceptance не пройден» —
     вместо одной итоговой строки исхода. Последние `limit` записей по
     времени — самые информативные для итога прогона (причина
     финального kill журналируется непосредственно перед ним).
@@ -1730,16 +1732,53 @@ def _journal_excerpt_lines(steps, limit: int = _JOURNAL_EXCERPT_LIMIT) -> list:
     физическими строками вывода, срывая потолок в 20 строк на задачу
     (требование 2) числом записей, укладывающимся в лимит `limit`."""
     lines = []
+    last_refusal = None
     for row in steps:
         action = row["action"]
         if not (action.startswith("state -> ")
                or action.startswith(store.REFUSAL_ACTION_PREFIX)
-               or action == _AUTO_STOPPED_ACTION):
+               or action in (_AUTO_STOPPED_ACTION, _AUTOGATE_REFUSAL_ACTION)):
             continue
         detail = " ".join((row["detail"] or "").split())
         suffix = f" — {detail}" if detail else ""
         lines.append(f"{row['ts']} {row['actor']}: {action}{suffix}")
+        if action == _AUTOGATE_REFUSAL_ACTION:
+            last_refusal = len(lines) - 1
+    if limit > 0 and last_refusal is not None and last_refusal < len(lines) - limit:
+        tail = lines[-(limit - 1):] if limit > 1 else []
+        return [lines[last_refusal], *tail]
     return lines[-limit:]
+
+
+def _acceptance_from_steps(steps) -> tuple[str | None, str | None, bool]:
+    """Способ приёмки, причина отказа и факт входа в acceptance из журнала клона."""
+    reached = False
+    route = None
+    refusal = None
+    for row in steps:
+        action = row["action"]
+        if action == "state -> acceptance":
+            reached = True
+        elif action == _AUTOGATE_REFUSAL_ACTION:
+            refusal = row["detail"] or ""
+        elif action == "state -> merge_gate" and reached:
+            if row["actor"] == "autogate":
+                route = "autogate"
+            elif row["actor"] == "canary":
+                route = "manual"
+    return route, refusal, reached
+
+
+def _acceptance_summary(route: str | None, refusal: str | None,
+                        reached: bool) -> str:
+    if refusal is not None:
+        reason = " ".join(refusal.split())[:500]
+        if route == "manual":
+            return f"  приёмка вручную: {reason}"
+        return f"  причина отказа автогейта: {reason}"
+    if reached and route != "autogate":
+        return "  автогейт не запускался"
+    return ""
 
 
 def _needs_diagnostics(normal_outcome: bool, mismatch: bool) -> bool:
@@ -1772,7 +1811,8 @@ def _diagnostics_dir(outer_root: Path, run_stamp: str, task_id: str) -> Path:
 
 def _save_diagnostics(outer_root: Path, run_stamp: str, task_id: str,
                       steps) -> Path:
-    """Сохраняет диагностику незелёного/расходящегося исхода канареечной
+    """Сохраняет диагностику незелёного/расходящегося исхода или отказа
+    автогейта приёмки канареечной
     задачи ДО удаления эфемерного клона (требование 1, AC-1..AC-3):
     журнал задачи (`steps`) текстом, логи ролей клона, последние
     PLAN.md/REVIEW.md из артефактной ветки клона, если они там есть.
@@ -1994,7 +2034,9 @@ def _run_task_in_ephemeral_clone(
         normal_outcome = (metrics["kill_note"] in ("штатно", "поделена")
                           and result["head"] == target_sha)
         diag_dir = None
-        if _needs_diagnostics(normal_outcome, mismatch):
+        _route, autogate_refusal, _reached = _acceptance_from_steps(steps)
+        if (_needs_diagnostics(normal_outcome, mismatch)
+                or autogate_refusal is not None):
             diag_dir = _save_diagnostics(outer_root, run_stamp, task_id, steps)
             (diag_dir / _DRIVE_LOG_NAME).write_text(log_text, encoding="utf-8")
 
@@ -2111,7 +2153,9 @@ def _record_canary_run(outer_conn, run_stamp: str, title: str, task_id: str,
                        mismatch: bool, normal_outcome: bool,
                        explicit_target_sha: str | None,
                        target_sha: str, sha_label: str | None,
-                       plan: CanarySetPlan) -> tuple:
+                       plan: CanarySetPlan,
+                       acceptance_route: str | None = None,
+                       autogate_refusal: str | None = None) -> tuple:
     """Фаза 3 из 3 (требование 6) `_run_one_task`: закрывает целевой sha
     прогона (если он не был передан явно), вычисляет вердикт зелёности и
     пишет строку `canary_runs` СНАРУЖИ клона (требование 5, 9). Возвращает
@@ -2165,7 +2209,9 @@ def _record_canary_run(outer_conn, run_stamp: str, title: str, task_id: str,
         len(metrics["escalations"]), metrics["outcome"],
         "yes" if expected else ("no" if expected is False else None),
         actual, mismatch, main_sha=main_sha, verdict=verdict,
-        set_name=plan.name, models_summary=plan.summary or None)
+        set_name=plan.name, models_summary=plan.summary or None,
+        acceptance_route=acceptance_route,
+        autogate_refusal=autogate_refusal)
     return main_sha, sha_label
 
 
@@ -2271,10 +2317,10 @@ def _run_one_task(template_path: Path, run_stamp: str, ratio: float,
     на котором и раньше молча оставался клон без единого checkout
     (`gitcmd.head_sha()` главной копии в момент вызова).
 
-    «Штатный исход без расхождения» (ANSWER-1.md, вариант Б) — ЕДИНСТВЕННЫЙ
-    случай, где диагностика не сохраняется (требование 1, AC-4) и где
-    бейзлайн/сравнение отклонений вообще применяются (требование 3,
-    AC-7/AC-8): `_kill_outcome_note` отличает штатный kill на
+    «Штатный исход без расхождения» (ANSWER-1.md, вариант Б) — случай,
+    где бейзлайн/сравнение отклонений применяются (требование 3,
+    AC-7/AC-8). Диагностика в нём сохраняется только при отказе
+    автогейта приёмки: `_kill_outcome_note` отличает штатный kill на
     `merge_gate` (единственный штатный kill РЕАЛЬНОГО вождения —
     `verifying` теперь проходится синтетически, ANSWER-3.md 06.09; см.
     также недостижимую из `_drive_task` `_kill_at_verifying`, оставленную
@@ -2314,11 +2360,13 @@ def _run_one_task(template_path: Path, run_stamp: str, ratio: float,
 
     print(f"[canary] {task_id} заведена из {template_path.name}")
 
+    acceptance_route, autogate_refusal, reached_acceptance = (
+        _acceptance_from_steps(steps))
     outer_conn = store.db()
     target_sha, _label = _record_canary_run(
         outer_conn, run_stamp, title, task_id, metrics, expected, actual,
         mismatch, normal_outcome, explicit_target_sha, target_sha, sha_label,
-        plan)
+        plan, acceptance_route, autogate_refusal)
 
     note = _baseline_deviation_note(outer_conn, task_id, title, metrics,
                                     normal_outcome, mismatch, ratio, plan.name,
@@ -2347,6 +2395,8 @@ def _run_one_task(template_path: Path, run_stamp: str, ratio: float,
     clone_code_label = f"код клона {code_sha or target_sha}"
     outcome_note = f" ({metrics['kill_note']})" if metrics["kill_note"] else ""
     test_author_note = "да" if metrics["test_author_visited"] else "нет"
+    acceptance_note = _acceptance_summary(
+        acceptance_route, autogate_refusal, reached_acceptance)
     for line in _journal_excerpt_lines(steps):
         print(f"  {line}")
     # Требование 11 (01M3HJQV2QV9BXNXSH3F8STAYH): факт подъёма потолка — в
@@ -2363,7 +2413,7 @@ def _run_one_task(template_path: Path, run_stamp: str, ratio: float,
          f"исход={metrics['outcome']}{outcome_note}  "
          f"sha={target_sha} ({clone_code_label})  "
          f"набор={plan.name}{_summary_note(plan)}  "
-         f"test_author={test_author_note}{mismatch_note}{note}")
+         f"test_author={test_author_note}{acceptance_note}{mismatch_note}{note}")
     if diag_dir is not None:
         print(f"  диагностика: {diag_dir}")
 
