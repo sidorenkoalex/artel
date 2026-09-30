@@ -38,7 +38,7 @@ schema_version: 5
 
 Пути: orchestrator/notes.py
 
-Мандат — `tasks/01M3SE87R3M7HGWX8HG1ANAKR0/ANSWER-1.md`, строка «Расширение зон разрешено: orchestrator/notes.py». Файл нужен для раннего отказа `note`, которого не было в исходном списке зон SPEC; тест `tests/test_01m3se87r3m7hgwx8hg1anakr0_role_environment.py::RoleCommandRefusalTest` проверяет этот отказ.
+Мандат — `tasks/01M3SE87R3M7HGWX8HG1ANAKR0/ANSWER-1.md` и повторное подтверждение в `ANSWER-2.md`, строка «Расширение зон разрешено: orchestrator/notes.py». Файл нужен для раннего отказа `note`, которого не было в исходном списке зон SPEC; тест `tests/test_01m3se87r3m7hgwx8hg1anakr0_role_environment.py::RoleCommandRefusalTest` проверяет этот отказ.
 
 ## Риски
 
@@ -50,8 +50,8 @@ schema_version: 5
 - `ARTEL_ROLE=test_author python3 -m pytest tasks/01M3SE87R3M7HGWX8HG1ANAKR0/acceptance_tests/test_documentation_and_ambient_suite.py -q -p no:cacheprovider -p timeout -o timeout=120`: 2 passed; второй сценарий запускает семь модулей из AC-6 с тем же маркером.
 - `ARTEL_ROLE=test_author python3 -m pytest tests/test_doc_commit.py tests/test_doc_commit_suite_gate.py tests/test_doctor.py tests/test_stack_parity_table.py tests/test_stack_codex_section.py tests/test_runner_role_environment.py tests/test_provider_scoped_step_env.py tests/test_providers_codex.py -q -p no:cacheprovider -p timeout -o timeout=120`: 250 passed, 101 subtests passed.
 - Временная мутация `if env is None` → `if not env` из прошлого шага покраснила тест признака. Временная мутация отключения нового отказа `cmd_note` покраснила все пять вариантов нового теста; исходный код восстановлен.
-- `python3 scripts/codebase_map.py` выполнился; `git diff --check` и `python3 scripts/guard.py tasks/01M3SE87R3M7HGWX8HG1ANAKR0/PLAN.md` — чисто.
+- После `ANSWER-2.md` повторно выполнены все три перечисленные команды pytest с теми же результатами. `python3 scripts/codebase_map.py` обновил `built_at_sha` до головы текущего worktree; `git diff --check` и `python3 scripts/guard.py tasks/01M3SE87R3M7HGWX8HG1ANAKR0/PLAN.md` — чисто.
 
 ## Предложения системе
 
-- Песочница шага не даёт разработчику записать gitdir worktree для обязательного `git add`/commit. `ANSWER-1.md` предписал завершить код штатным автокоммитом пульта без обхода песочницы.
+- Песочница шага не даёт разработчику записать gitdir worktree для обязательного `git add`/commit: `git add orchestrator/notes.py docs/codebase-map.md` получил `index.lock: Operation not permitted` и в этом шаге. `ANSWER-1.md` предписал завершить код штатным автокоммитом пульта без обхода песочницы.
