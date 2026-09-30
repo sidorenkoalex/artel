@@ -982,7 +982,8 @@ def _ensure_canary_tables(conn) -> None:
         "  task_id TEXT, steps INTEGER, cost_usd REAL, review_iterations INTEGER,"
         "  escalations INTEGER, outcome TEXT, expected_escalation TEXT,"
         "  actual_escalation INTEGER, marker_mismatch INTEGER, created_at TEXT,"
-        "  main_sha TEXT, verdict TEXT, set_name TEXT, models_summary TEXT);"
+        "  main_sha TEXT, verdict TEXT, set_name TEXT, models_summary TEXT,"
+        "  acceptance_route TEXT, autogate_refusal TEXT);"
         "CREATE TABLE IF NOT EXISTS canary_baseline ("
         "  title TEXT, set_name TEXT, steps INTEGER, cost_usd REAL,"
         "  review_iterations INTEGER, updated_at TEXT,"
@@ -1007,6 +1008,8 @@ def _ensure_canary_tables(conn) -> None:
     # набора, но и модели за ним НА ТОТ прогон.
     add_column(conn, "canary_runs", "set_name", "TEXT")
     add_column(conn, "canary_runs", "models_summary", "TEXT")
+    add_column(conn, "canary_runs", "acceptance_route", "TEXT")
+    add_column(conn, "canary_runs", "autogate_refusal", "TEXT")
     # Строки, заведённые до этой задачи, принадлежат набору по умолчанию
     # (требование 7, AC-8): `NULL` означал бы «прогон ничьего набора», и
     # `green_canary_runs` — вход гейта сдвига пина — перестал бы их видеть.
@@ -1056,7 +1059,9 @@ def insert_canary_run(conn, run_stamp: str, title: str, task_id: str,
                       main_sha: str | None = None,
                       verdict: str | None = None,
                       set_name: str = config.CANARY_DEFAULT_SET,
-                      models_summary: str | None = None) -> None:
+                      models_summary: str | None = None,
+                      acceptance_route: str | None = None,
+                      autogate_refusal: str | None = None) -> None:
     """Строка метрик одной канареечной задачи одного прогона (SPEC
     01M1NEEWH5K1XPFRDGRMPYSBXJ, требование 5, AC-5) — читатель:
     `canary._run_one_task`.
@@ -1074,12 +1079,12 @@ def insert_canary_run(conn, run_stamp: str, title: str, task_id: str,
         "INSERT INTO canary_runs (run_stamp, title, task_id, steps, cost_usd,"
         " review_iterations, escalations, outcome, expected_escalation,"
         " actual_escalation, marker_mismatch, main_sha, verdict, set_name,"
-        " models_summary, created_at)"
-        " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        " models_summary, acceptance_route, autogate_refusal, created_at)"
+        " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
         (run_stamp, title, task_id, steps, cost_usd, review_iterations,
          escalations, outcome, expected_escalation, int(actual_escalation),
          int(marker_mismatch), main_sha, verdict, set_name, models_summary,
-         now()))
+         acceptance_route, autogate_refusal, now()))
     conn.commit()
 
 
