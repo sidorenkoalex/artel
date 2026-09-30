@@ -9,6 +9,7 @@ origin к нему ничего не добавляет. Сквозной пут
 git — `tasks/01M3HST4SGX0SPKAGNHVY7DWHM/acceptance_tests/` (материализуются
 только на время задачи); постоянный регресс — здесь.
 """
+import os
 import re
 import sys
 import unittest
@@ -17,7 +18,7 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from orchestrator import notes  # noqa: E402
+from orchestrator import config, notes  # noqa: E402
 from tests.sandbox import SchemaTmpRootTest  # noqa: E402
 
 # Пятиколоночная «Копилка» с колонками «П» и «Дата» — как на вершине
@@ -310,6 +311,12 @@ class StateFlagAliasTest(SchemaTmpRootTest):
     """`--state` — второе имя `--append` (требование 8). Схема БД заведена:
     `cmd_note` читает `merge_locks`/`tasks` на каждый вызов (окно тишины),
     а сам `_run` здесь подменён — до git дело не доходит."""
+
+    def setUp(self):
+        super().setUp()
+        role_patcher = mock.patch.dict(os.environ, {config.ARTEL_ROLE_ENV: ""})
+        role_patcher.start()
+        self.addCleanup(role_patcher.stop)
 
     def test_state_and_append_build_the_same_request(self):
         """`note --state <ключ> --text …` и `note --append <ключ> --text …`
