@@ -747,30 +747,22 @@ def _cmd_observe(rest: list) -> None:
                   "state": row["state"], "last_seen_at": row["last_seen_at"],
                   "fresh": _observation_fresh(row),
                   "runs": [dict(task=r["task_id"], pid=r["pid"], log=r["log"])
-                           for r in conn.execute(
-                               "SELECT task_id, pid, log FROM observed_runs WHERE observation_id=? ORDER BY id",
-                               (row["id"],))]}
+                           for r in store.observed_runs(conn, row["id"])]}
         print(json.dumps(result, ensure_ascii=False))
         return
     if row["session_id"] != session.resolve_session_id(None):
         sys.exit("observe: наблюдение принадлежит другой сессии")
     if action == "stop":
-        with conn:
-            conn.execute("UPDATE observations SET state='stopped' WHERE id=?", (row["id"],))
+        store.stop_observation(conn, row["id"])
         print(f"наблюдение {row['id']} прекращено")
         return
     if row["state"] != "active":
         sys.exit("observe: прекращённое наблюдение нельзя менять; зарегистрируйте новое")
     task_ids = _validated_observation_tasks(conn, _observe_flag(rest, "--tasks"), row["target"])
-    with conn:
-        if action == "add":
-            conn.executemany(
-                "INSERT INTO observation_tasks(observation_id, task_id, enabled) VALUES (?, ?, 1) "
-                "ON CONFLICT(observation_id, task_id) DO UPDATE SET enabled=1",
-                [(row["id"], task_id) for task_id in task_ids])
-        else:
-            conn.executemany("DELETE FROM observation_tasks WHERE observation_id=? AND task_id=?",
-                             [(row["id"], task_id) for task_id in task_ids])
+    if action == "add":
+        store.add_observation_tasks(conn, row["id"], task_ids)
+    else:
+        store.remove_observation_tasks(conn, row["id"], task_ids)
     print(json.dumps({"id": row["id"], "tasks": store.observation_tasks(conn, row["id"])}))
 
 
@@ -984,8 +976,7 @@ def _cmd_stop(task_id: str) -> None:
     except ProcessLookupError:
         sys.exit(f"[{task_id}] процесс цикла (pid={row['pid']}) уже не "
                  f"существует")
-    with conn:
-        conn.execute("UPDATE observation_tasks SET enabled=0 WHERE task_id=?", (task_id,))
+    store.disable_task_observation(conn, task_id)
     print(f"[{task_id}] stop: SIGTERM отправлен pid={row['pid']} — "
           f"`auto` доиграет текущий шаг и завершится сам; голый `run` "
           f"обработчика не ставит и завершится немедленно")

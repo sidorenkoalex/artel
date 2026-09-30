@@ -37,6 +37,18 @@ class ObservationEdgesTest(TaskSeededTmpRootTest):
                 artel._launch_detached("run", self.TASK)
             popen.assert_not_called()
 
+    def test_explicit_add_reenables_task_after_manual_stop(self):
+        """Ловит мутацию: повторное add не возвращает задачу, отключённую ручным stop."""
+        conn = store.db()
+        observation_id = store.register_observation(
+            conn, config.DEFAULT_TARGET, "codex", "chat-a",
+            session.resolve_session_id(None), [self.TASK])
+        store.disable_task_observation(conn, self.TASK)
+        self.assertEqual(store.observation_tasks(conn, observation_id), [])
+
+        store.add_observation_tasks(conn, observation_id, [self.TASK])
+        self.assertEqual(store.observation_tasks(conn, observation_id), [self.TASK])
+
     def test_codex_nested_script_registration_is_migrated_precisely(self):
         """Ловит мутацию: вложенная регистрация Codex с внешним скриптом остаётся без миграции."""
         script = self.root / "guard-artel-bg.py"

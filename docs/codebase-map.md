@@ -1,5 +1,5 @@
 ---
-built_at_sha: 4f13eb8bc8cf2dc83968faa93f97ecc4a2f01578
+built_at_sha: 88cd4f2f1d4a1cbd6ccf7b0d37fadcc331de5c0d
 ---
 
 # Codebase-map пульта
@@ -1415,6 +1415,7 @@ built_at_sha: 4f13eb8bc8cf2dc83968faa93f97ecc4a2f01578
 
 **Публичные функции:**
 - `ack_alert`
+- `add_observation_tasks`
 - `alerts_older_than`
 - `alerts_since`
 - `all_leases`
@@ -1429,6 +1430,7 @@ built_at_sha: 4f13eb8bc8cf2dc83968faa93f97ecc4a2f01578
 - `db`
 - `delete_merge_queue_row`
 - `dequeue_merge_wait`
+- `disable_task_observation`
 - `enable_wal`
 - `enqueue_merge_wait`
 - `get_alert`
@@ -1451,6 +1453,7 @@ built_at_sha: 4f13eb8bc8cf2dc83968faa93f97ecc4a2f01578
 - `now`
 - `observation`
 - `observation_tasks`
+- `observed_runs`
 - `open_alert_exists`
 - `open_alerts`
 - `peek_task_number`
@@ -1461,12 +1464,14 @@ built_at_sha: 4f13eb8bc8cf2dc83968faa93f97ecc4a2f01578
 - `register_observation`
 - `release_lease`
 - `release_merge_lock`
+- `remove_observation_tasks`
 - `resolve_task_id`
 - `seed_task_counters`
 - `set_canary_baseline`
 - `set_merge_lock`
 - `set_state`
 - `steps_of_action`
+- `stop_observation`
 - `task_branch`
 - `task_exists`
 - `task_number`

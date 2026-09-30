@@ -55,6 +55,39 @@ def observation_tasks(conn, observation_id: str) -> list[str]:
         (observation_id,))]
 
 
+def observed_runs(conn, observation_id: str):
+    return conn.execute(
+        "SELECT task_id, pid, log FROM observed_runs WHERE observation_id=? ORDER BY id",
+        (observation_id,)).fetchall()
+
+
+def stop_observation(conn, observation_id: str) -> None:
+    with conn:
+        conn.execute("UPDATE observations SET state='stopped' WHERE id=?",
+                     (observation_id,))
+
+
+def add_observation_tasks(conn, observation_id: str, task_ids: list[str]) -> None:
+    with conn:
+        conn.executemany(
+            "INSERT INTO observation_tasks(observation_id, task_id, enabled) VALUES (?, ?, 1) "
+            "ON CONFLICT(observation_id, task_id) DO UPDATE SET enabled=1",
+            [(observation_id, task_id) for task_id in task_ids])
+
+
+def remove_observation_tasks(conn, observation_id: str, task_ids: list[str]) -> None:
+    with conn:
+        conn.executemany(
+            "DELETE FROM observation_tasks WHERE observation_id=? AND task_id=?",
+            [(observation_id, task_id) for task_id in task_ids])
+
+
+def disable_task_observation(conn, task_id: str) -> None:
+    with conn:
+        conn.execute("UPDATE observation_tasks SET enabled=0 WHERE task_id=?",
+                     (task_id,))
+
+
 def touch_observation(conn, observation_id: str) -> bool:
     timestamp = datetime.now(timezone.utc).isoformat()
     with conn:
