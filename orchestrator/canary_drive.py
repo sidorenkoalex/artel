@@ -16,10 +16,10 @@
 от расположения самого модуля, то есть в этом процессе это и есть клон.
 Всё, что эфемерный клон пульт готовит сам (`catalog.cmd_init`, локальный
 слой моделей набора, указатель связки ключей Codex), к старту процесса уже
-лежит в клоне. Из состояния процесса пульта сюда доезжают только два
-значения, которых на диске клона нет: переопределение `CODEX_HOME`
-(`--codex-home`) и venv пульта (`--venv-dir`, клон собственного venv не
-заводит — `canary._CLONE_EXEMPT_CONFIG_ATTRS`).
+лежит в клоне. Из состояния процесса пульта сюда доезжает только venv
+пульта (`--venv-dir`): клон собственного venv не заводит
+(`canary._CLONE_EXEMPT_CONFIG_ATTRS`). Дом Codex берётся из развёрнутого
+дома роли клона.
 
 Обмен с пультом — ОДИН JSON-объект в файле `--result`, путь которого
 передал пульт (`build_result`); поток вывода процесса — только
@@ -34,7 +34,6 @@ import sys
 from pathlib import Path
 
 from . import canary, catalog, config, gitcmd, store, workspace
-from .providers import codex as codex_provider
 
 #: Поля строки журнала, которые пульт читает из шагов результата —
 #: выдержка журнала (`canary._journal_excerpt_lines`) и файл диагностики
@@ -101,14 +100,10 @@ def main(argv: list | None = None) -> int:
                         help="шаблон ТЗ учебной задачи (файл пула)")
     parser.add_argument("--result", required=True,
                         help="файл, куда записать JSON-объект результата")
-    parser.add_argument("--codex-home", default=None,
-                        help="переопределение CODEX_HOME шага роли")
     parser.add_argument("--venv-dir", default=None,
                         help="venv пульта, которым исполняется клон")
     args = parser.parse_args(argv)
 
-    if args.codex_home is not None:
-        codex_provider.set_codex_home_override(Path(args.codex_home))
     if args.venv_dir is not None:
         config.VENV_DIR = Path(args.venv_dir)
     # Вывод ведения (`store.set_state`, `cleanup.cmd_kill`, …) — в поток
