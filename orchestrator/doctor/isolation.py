@@ -91,6 +91,8 @@ def isolation_smoke(role: str = "developer") -> doctor.Check:
     if env.get("HOME") == fake_home or any(
             doctor.ISOLATION_MARKER in str(v) for v in env.values()):
         leaks.append("user-слой: HOME роли не отведён от ambient-значения")
+    if not doctor.runner.in_role_environment(env):
+        leaks.append("окружение шага роли не распознаётся как окружение роли")
 
     project_dir = doctor.runner.role_cwd(None, None, doctor.ISOLATION_SMOKE_TARGET)
     try:
@@ -290,6 +292,10 @@ def _codex_environment_leaks(provider, role: str):
     # (живая проверка 22.09), и проверка на `OPENAI_API_KEY` пропустила бы
     # именно действующий канал.
     step_env = _assembled_step_env(env)
+    # Общий маркер runner.role_env кладёт после провайдерской накладки.
+    step_env[doctor.config.ARTEL_ROLE_ENV] = role
+    if not doctor.runner.in_role_environment(step_env):
+        leaks.append("окружение шага роли не распознаётся как окружение роли")
     for name in doctor.codex_provider.FORBIDDEN_KEY_ENV_NAMES:
         if name not in step_env:
             continue

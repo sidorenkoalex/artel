@@ -870,16 +870,18 @@ def role_env(role: str | None = None, task_id: str | None = None) -> dict:
     return env
 
 
-def in_role_environment() -> bool:
-    """Верно, если ТЕКУЩИЙ процесс сам исполняется в окружении роли —
-    те же два маркера, что `role_env()` ставит процессу роли (HOME/
-    CLAUDE_CONFIG_DIR на курируемый слой): единственное в кодовой базе
-    определение «окружения роли» читается здесь же, симметрично записи,
-    не задаётся заново (SPEC 01M1NSR5M5THYRC0RFWPMVE2DW, требование 5,
-    AC-15 — второй, независимый от `permissions.deny` рубеж отказа
-    расшифровки пула канарейки, если она вызвана из-под роли)."""
-    return (os.environ.get("HOME") == str(config.ROLE_HOME) and
-            os.environ.get("CLAUDE_CONFIG_DIR") == str(config.ROLE_CONFIG_DIR))
+def in_role_environment(env=None) -> bool:
+    """Распознаёт шаг роли в переданном или текущем окружении.
+
+    Общий для провайдеров маркер `ARTEL_ROLE` ставит `role_env()`;
+    прежняя пара HOME/CLAUDE_CONFIG_DIR остаётся достаточной для шагов
+    claude без маркера (SPEC 01M1NSR5M5THYRC0RFWPMVE2DW, AC-15).
+    """
+    if env is None:
+        env = os.environ
+    return (bool(env.get(config.ARTEL_ROLE_ENV)) or
+            (env.get("HOME") == str(config.ROLE_HOME) and
+             env.get("CLAUDE_CONFIG_DIR") == str(config.ROLE_CONFIG_DIR)))
 
 
 def role_cwd_path(task_id: str, target: str) -> Path:
