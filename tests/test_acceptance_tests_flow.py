@@ -1034,14 +1034,17 @@ class AcceptanceRunTest(TmpRootTest):
 
         self.assertEqual(self.state(), "verifying")
 
-    def test_timeout_blocks_the_transition_and_names_the_limit(self):
-        """Ревью замечание (итерация 2, major): защита таймаута прогона
-        (orchestrator/acceptance.py:run) не была codified тестом — прогон
-        без сна, тем же приёмом, что и test_timeout_is_not_retried в
-        tests/test_agent_failure.py (мок с side_effect=TimeoutExpired)."""
+    def _assert_timeout_blocks_the_transition(self, fingerprint_cache):
+        """Общее тело двух тестов таймаута ниже: `fingerprint_cache` —
+        состояние кэша `agent_log.environment_fingerprint` на входе в
+        `cmd_advance` (None — пуст, как при одиночном запуске; строка —
+        заполнен соседним тестом полного `tests/`)."""
         self.enter_in_dev()
         self.write_acceptance_tests(AC_TEST_GREEN)
-        exc = subprocess.TimeoutExpired(cmd="unittest",
+        self.addCleanup(setattr, agent_log, "_environment_fingerprint_cache",
+                        agent_log._environment_fingerprint_cache)
+        agent_log._environment_fingerprint_cache = fingerprint_cache
+        exc =subprocess.TimeoutExpired(cmd="unittest",
                                         timeout=config.ACCEPTANCE_TIMEOUT_SEC)
 
         with mock.patch.object(acceptance.subprocess, "run",
@@ -1053,13 +1056,48 @@ class AcceptanceRunTest(TmpRootTest):
         # регресс «убрали timeout= из вызова» (реальный subprocess.run без
         # предела просто не бросил бы это исключение). Проверяем отдельно,
         # что run() действительно передаёт timeout=ACCEPTANCE_TIMEOUT_SEC.
-        self.assertEqual(run_mock.call_args.kwargs.get("timeout"),
+        # Подмена общая на весь модуль `subprocess`: после прогона переход
+        # зовёт `environment_fingerprint()`, и при пустом кэше последними
+        # идут его `git/claude --version` с собственным пределом — поэтому
+        # сверяется вызов прогона pytest, опознанный по команде, а не
+        # последний вызов.
+        pytest_calls = [c for c in run_mock.call_args_list
+                        if c.args and "pytest" in c.args[0]
+                        and "--collect-only" not in c.args[0]]
+        self.assertEqual(len(pytest_calls), 1, run_mock.call_args_list)
+        self.assertEqual(pytest_calls[0].kwargs.get("timeout"),
                          config.ACCEPTANCE_TIMEOUT_SEC)
         self.assertEqual(self.state(), "in_dev", "переход не должен пройти")
         self.assertIn(f"превысил {config.ACCEPTANCE_TIMEOUT_SEC}с", out)
         details = self.journal_details("переход отклонён: приёмочные тесты")
         self.assertEqual(len(details), 1)
         self.assertIn("превысил", details[0])
+
+    def test_timeout_blocks_the_transition_and_names_the_limit(self):
+        """Ревью замечание (итерация 2, major): защита таймаута прогона
+        (orchestrator/acceptance.py:run) не была codified тестом — прогон
+        без сна, тем же приёмом, что и test_timeout_is_not_retried в
+        tests/test_agent_failure.py (мок с side_effect=TimeoutExpired).
+        Кэш `environment_fingerprint` пуст — одиночный запуск (SPEC
+        01M3RHSS9S7GJXW28WMJKNC8YG).
+
+        Ловит мутацию: убран timeout= из вызова прогона приёмочных тестов
+        в `acceptance.run` — сверка `timeout` вызова pytest падает; либо
+        сверяется последний вызов подменённой функции — при пустом кэше
+        это `--version` из fingerprint с timeout=5, тест красный."""
+        self._assert_timeout_blocks_the_transition(None)
+
+    def test_timeout_blocks_the_transition_with_prefilled_fingerprint_cache(self):
+        """То же свойство, кэш `environment_fingerprint` заполнен заранее —
+        состояние после соседнего теста в полном `tests/`: fingerprint
+        процесса не зовёт вовсе (SPEC 01M3RHSS9S7GJXW28WMJKNC8YG, AC-3).
+
+        Ловит мутацию: убран timeout= из вызова прогона приёмочных тестов
+        в `acceptance.run` — сверка `timeout` вызова pytest падает и при
+        заполненном кэше; либо вызов pytest опознаётся позиционно в расчёте
+        на хвост вызовов `--version` — без них сверяется не тот вызов."""
+        self._assert_timeout_blocks_the_transition("python=0 (x), git=x, "
+                                                   "claude=x, заполнен")
 
 
 # --------------------------------------------------------------------------
