@@ -1,10 +1,8 @@
-"""Разовые проверки текста скилов после применения приложения PLAN.
+"""Разовые проверки правок двух скилов в приложении PLAN.
 
 Группа: разовый
 Красен до реализации: PLAN ещё не содержит приложений с правками двух скилов.
 """
-
-# AC-4: escalate — как проверить долгоживущим тестом в tests/ тексты обоих защищённых скилов до мержа, если приёмочный гейт запускает этот тест до применения приложений PLAN? Уточнить момент проверки или скорректировать критерий.
 
 import re
 import sys
@@ -55,7 +53,23 @@ def applied_skills():
             if failure:
                 raise AssertionError(f"приложение {appendix.paths} неприменимо: {failure}")
         result = {rel: (root / rel).read_text(encoding="utf-8") for rel in SKILLS}
-    return plan, result
+    return plan, result, appendices
+
+
+def added_lines(appendices, rel):
+    """Строки, добавленные приложениями именно к указанному скилу."""
+    additions = []
+    for appendix in appendices:
+        current = None
+        for line in appendix.diff.splitlines():
+            if line.startswith("diff --git "):
+                current = None
+                match = re.fullmatch(r"diff --git a/(.+) b/(.+)", line)
+                if match and match.group(1) == match.group(2):
+                    current = match.group(1)
+            elif current == rel and line.startswith("+") and not line.startswith("+++ "):
+                additions.append(line[1:])
+    return "\n".join(additions)
 
 
 def flat(value):
@@ -70,7 +84,7 @@ class SkillAppendixAcceptance(unittest.TestCase):
         защищённые пути или бюджет — соответствующее слово отсутствует в
         тексте после применения приложения, и тест падает.
         """
-        _, skills = applied_skills()
+        _, skills, _ = applied_skills()
         text = flat(skills[SPEC_SKILL])
         for part in ("критери", "пульт", "для любой задач", "полный",
                      "tests/", "ci", "ветк", "защищённ", "бюджет",
@@ -87,7 +101,7 @@ class SkillAppendixAcceptance(unittest.TestCase):
         skip/manual — отсутствие запрета этих пометок или вопроса для
         escalate делает проверку красной.
         """
-        _, skills = applied_skills()
+        _, skills, _ = applied_skills()
         text = flat(skills[TEST_SKILL])
         for part in ("критери", "spec", "пульт", "escalate", "skip",
                      "manual", "критерий держит пульт — убрать из spec?"):
@@ -102,11 +116,25 @@ class SkillAppendixAcceptance(unittest.TestCase):
         строк — штатное применение во временном дереве откажет, и тест
         покажет имя неприменимого приложения.
         """
-        plan, skills = applied_skills()
+        plan, skills, _ = applied_skills()
         self.assertIn("## Приложение", plan)
         for rel in SKILLS:
             with self.subTest(skill=rel):
                 self.assertTrue(skills[rel], rel)
+
+    def test_ac4_both_skill_appendices_guard_full_tests_and_ci(self):
+        """Новые правила двух скилов явно называют проверки пульта.
+
+        Ловит мутацию: правило удалено из приложения любого из двух
+        скилов — в добавленных строках этого скила пропадают слова о
+        полном наборе tests/ и CI ветки, и тест краснеет.
+        """
+        _, _, appendices = applied_skills()
+        for rel in SKILLS:
+            with self.subTest(skill=rel):
+                text = flat(added_lines(appendices, rel))
+                for phrase in ("критери", "пульт", "полн", "tests/", "ci", "ветк"):
+                    self.assertIn(phrase, text, f"{rel}: нет {phrase} в добавленных строках")
 
 
 if __name__ == "__main__":
