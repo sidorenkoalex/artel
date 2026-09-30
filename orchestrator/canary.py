@@ -897,7 +897,7 @@ def _refuse_unless_clone_logged_in(role: str, pult_role_home: Path) -> None:
       который тот уже сделал, и настоящая причина осталась бы
       неназванной.
 
-    Половин у переноса ДВЕ, и отказ называет обе: окружения двух вызовов
+    Половин у подготовки ДВЕ, и отказ называет обе: окружения двух вызовов
     различаются не одним именем, а тремя (`HOME`, `ZDOTDIR`,
     `CODEX_HOME`), поэтому тот же исход «клон не `ok`, пульт `ok`» даёт и
     сломанный указатель связки ключей (`_install_codex_pointer`;
@@ -917,12 +917,12 @@ def _refuse_unless_clone_logged_in(role: str, pult_role_home: Path) -> None:
                  f"проверка {check.name} окружением шага эфемерного клона "
                  f"— нет. Это дефект пульта, а не несделанный шаг "
                  f"Оператора: повторный вход этого не изменит. Сломана "
-                 f"одна из двух половин переноса входа в клон — "
-                 f"переопределение {codex_provider.HOME_ENV} "
-                 f"(`canary._ephemeral_clone` его ставит, "
+                 f"одна из двух половин подготовки входа в клон — "
+                 f"{codex_provider.HOME_ENV} развёрнутого дома клона "
+                 f"(`canary._ephemeral_clone` снимает переопределение, "
                  f"`CodexProvider.environment` отдаёт; шагу клона отдано "
                  f"{codex_provider.HOME_ENV}="
-                 f"{pult_role_home / codex_provider.DEPLOYED_HOME_DIR}) "
+                 f"{config.ROLE_HOME / codex_provider.DEPLOYED_HOME_DIR}) "
                  f"и/или указатель связки ключей "
                  f"(`canary._install_codex_pointer` кладёт его в "
                  f"{config.ROLE_HOME / _KEYCHAIN_POINTER_REL}) — до "
@@ -1024,8 +1024,7 @@ def _ephemeral_clone(target_sha: str | None = None,
 
     `codex_auth` (SPEC 01M3HST1381E1FZCYAN2TSB1F3, требования 1/4) — вход
     Codex для клона: указатель связки ключей копируется в дом роли КЛОНА,
-    `CODEX_HOME` шага переопределяется каталогом клиента дома роли ПУЛЬТА
-    (SPEC 01M3M55070T5NJFYM3QQJH4B9V, требование 1), и вход проверяется
+    переопределение `CODEX_HOME` снимается, и вход проверяется
     узлом `doctor` уже этим окружением; не `ok` — отказ до `yield`, то
     есть до заведения задачи и до первого шага роли. `None` (по
     умолчанию) — ни одна роль прогона не идёт провайдером Codex, дом клона
@@ -1038,7 +1037,7 @@ def _ephemeral_clone(target_sha: str | None = None,
     указатель, положенный раньше, лишил бы роли клона курируемого дома
     целиком. Внутри `try:`: `finally` ниже — единственная уборка клона, и
     отказ проверки входа обязан оставить `/tmp` чистым, а скопированный
-    указатель не обязан пережить прогон. Переопределение — ДО проверки
+    указатель не обязан пережить прогон. Снятие переопределения — ДО проверки
     входа: зелёная строка предполёта обязана доказывать вход того дома,
     каким пойдёт шаг (требование 5), а оба читают один
     `CodexProvider.environment`.
@@ -1099,8 +1098,7 @@ def _ephemeral_clone(target_sha: str | None = None,
             config.MODELS_LOCAL.write_text(local_layer_text, encoding="utf-8")
         if codex_auth is not None:
             _install_codex_pointer(codex_auth.pointer)
-            codex_provider.set_codex_home_override(
-                saved["ROLE_HOME"] / codex_provider.DEPLOYED_HOME_DIR)
+            codex_provider.set_codex_home_override(None)
             _refuse_unless_clone_logged_in(codex_auth.role, saved["ROLE_HOME"])
         yield dest
     finally:
@@ -2053,9 +2051,8 @@ def _drive_in_clone(dest: Path, template_path: Path) -> tuple:
     Своя группа процессов (`start_new_session`): шаги ролей — потомки
     процесса клона, и по таймауту снимается вся группа, а не один родитель,
     оставивший бы агентов работать на удалённый клон. Интерпретатор —
-    интерпретатор пульта (`sys.executable`), venv и переопределение
-    `CODEX_HOME` — значения процесса пульта ВНУТРИ блока клона: этим
-    процесс клона повторяет окружение, в котором задачу вёл бы сам пульт.
+    интерпретатор пульта (`sys.executable`), venv — значение процесса пульта
+    внутри блока клона. `CODEX_HOME` процесс клона получает от своего дома.
 
     Вывод пишется в файл, а не в канал: ведение длится часами, и канал,
     который никто не читает до конца процесса, заполнился бы и повесил его.
@@ -2067,9 +2064,6 @@ def _drive_in_clone(dest: Path, template_path: Path) -> tuple:
     argv = [sys.executable, "-m", CANARY_DRIVE_MODULE,
             "--template", str(template_path), "--result", str(result_path),
             "--venv-dir", str(config.VENV_DIR)]
-    codex_home = codex_provider.codex_home_override()
-    if codex_home is not None:
-        argv += ["--codex-home", str(codex_home)]
     # Без буферизации: вывод в файл у Python блочно буферизован, а снятие
     # по таймауту сигналом буфер не сбрасывает — диагностика зависания
     # осталась бы без последних строк ведения.

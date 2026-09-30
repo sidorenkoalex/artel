@@ -170,6 +170,31 @@ class CloneCodeDrivesTheTaskTest(_CloneDriveTest):
         self.assertEqual(cwd, self.clones[0])
         self.assertIn("--result", args)
 
+    def test_process_does_not_receive_a_pult_codex_home_override(self):
+        """Даже при старом переопределении процесса пульта процесс клона
+        не получает адрес боевого дома Codex.
+
+        Ловит мутацию: в argv возвращён `--codex-home` с путём дома
+        пульта — Codex в клоне снова дописывает доверие в боевой конфиг.
+        """
+        target = self.commit("дом клона")
+        launches = []
+        real_popen = subprocess.Popen
+        previous = codex_provider.set_codex_home_override(
+            self.outer / ".artel" / "home" / ".codex")
+        self.addCleanup(codex_provider.set_codex_home_override, previous)
+
+        def spy(args, *a, **kwargs):
+            if list(args)[:1] == [sys.executable]:
+                launches.append(list(args))
+            return real_popen(args, *a, **kwargs)
+
+        with mock.patch.object(canary.subprocess, "Popen", spy):
+            self.phase_one(target)
+
+        self.assertEqual(len(launches), 1)
+        self.assertNotIn("--codex-home", launches[0])
+
 
 class CommitWithoutEntryTest(_CloneDriveTest):
 
@@ -476,13 +501,13 @@ class CanaryDriveMainTest(unittest.TestCase):
         self.addCleanup(setattr, config, "VENV_DIR", saved_venv)
         self.addCleanup(codex_provider.set_codex_home_override, saved_home)
 
-    def test_result_file_is_one_json_object_and_pult_state_is_applied(self):
+    def test_result_file_is_one_json_object_and_pult_venv_is_applied(self):
         """`main` пишет в `--result` ровно один JSON-объект результата и
-        применяет переданные пультом venv и `CODEX_HOME` до ведения.
+        применяет переданный пультом venv до ведения.
 
         Ловит мутацию: результат уходит в вывод, а не в переданный файл,
-        либо `--codex-home`/`--venv-dir` не применяются — шаги ролей клона
-        шли бы с чужим домом Codex и без venv пульта.
+        либо `--venv-dir` не применяется — шаги ролей клона шли бы без
+        интерпретатора пульта.
         """
         seen = {}
 
@@ -496,11 +521,10 @@ class CanaryDriveMainTest(unittest.TestCase):
                 mock.patch("builtins.print"):
             rc = canary_drive.main([
                 "--template", str(self.dir / "t.md"), "--result", str(result),
-                "--codex-home", str(self.dir / "codex"),
                 "--venv-dir", str(self.dir / "venv")])
         self.assertEqual(rc, 0)
         self.assertEqual(json.loads(result.read_text(encoding="utf-8"))["task_id"], "01X")
-        self.assertEqual(seen, {"home": self.dir / "codex", "venv": self.dir / "venv"})
+        self.assertEqual(seen, {"home": None, "venv": self.dir / "venv"})
         self.assertEqual([p.name for p in self.dir.iterdir()], ["r.json"])
 
     def drive_with(self, wt_error=None) -> tuple:
