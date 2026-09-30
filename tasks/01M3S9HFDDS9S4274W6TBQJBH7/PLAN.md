@@ -2,7 +2,7 @@
 task: 01M3S9HFDDS9S4274W6TBQJBH7
 type: plan
 author_role: developer
-status: escalate
+status: ready
 schema_version: 5
 ---
 
@@ -39,18 +39,13 @@ schema_version: 5
 
 ## Проверка
 
-- `python3 -m pytest tests/test_01m3s9hfdds9s4274w6tbqjbh7_canary_acceptance.py -p no:cacheprovider -p timeout -o timeout=120` — 6 пройдено.
-- `python3 -m pytest tests/test_canary.py tests/test_canary_drive.py tests/test_canary_acceptance_reason.py -p no:cacheprovider -p timeout -o timeout=120` — 114 пройдено.
+- `python3 -m pytest tests/test_01m3s9hfdds9s4274w6tbqjbh7_canary_acceptance.py tests/test_canary.py tests/test_canary_drive.py tests/test_canary_acceptance_reason.py -p no:cacheprovider -p timeout -o timeout=120` — 120 пройдено повторно на коммите `11a38f11`.
 - `python3 -m pytest tests/test_canary_codex_clone_auth.py tests/test_canary_budget_ceiling.py tests/test_canary_sets.py tests/test_pin.py -p no:cacheprovider -p timeout -o timeout=120` — 101 пройдено.
 - Два новых теста покраснели при временном удалении удержания отказа в выдержке и ограничения причины до 500 символов; код восстановлен, повторный прогон — 8 пройдено вместе с зафиксированной планкой.
-- `python3 scripts/codebase_map.py`; `git diff --check`; `python3 scripts/guard.py tasks/01M3S9HFDDS9S4274W6TBQJBH7/PLAN.md` — без ошибок.
+- `python3 scripts/codebase_map.py`; `git diff --check`; `python3 scripts/guard.py tasks/01M3S9HFDDS9S4274W6TBQJBH7/PLAN.md` — без ошибок на предыдущем шаге.
+- Пульт закоммитил код, тесты и карту в `11a38f11` после предыдущего шага; это подтверждено `git show --stat HEAD`. Согласно `ANSWER-2.md`, для выхода из эскалации требуется `status: ready` без нового кодового коммита.
 
 ## Предложения системе
 
-- Рабочий каталог роли доступен на запись, но Git хранит `index.lock` вне него: `git add` получает `Operation not permitted` на `.git/worktrees/<id>/index.lock`; шаг разработчика не может выполнить обязательный кодовый коммит. Пульту нужна запись в git metadata worktree либо штатная команда коммита в доступном контексте.
-
-## Эскалация
-
-- **Вопросы** — Как обеспечить обязательный коммит кода? Вариант А: дать шагу запись в Git metadata этого worktree и повторить коммит; вариант Б: выполнить кодовый коммит штатным процессом пульта, явно отметив причину. Дефолт: А.
-- **Контекст** — Реализация в `orchestrator/canary.py`, `orchestrator/store.py`, `tests/test_canary_acceptance_reason.py` и обновлённая `docs/codebase-map.md` готова; зафиксированная планка и тесты затронутых модулей зелёные. `git add orchestrator/canary.py orchestrator/store.py tests/test_canary_acceptance_reason.py docs/codebase-map.md` завершился с `fatal: Unable to create '/Users/al.sidorenko/projects/artel/.git/worktrees/01M3S9HFDDS9S4274W6TBQJBH7/index.lock': Operation not permitted`.
-- **Блокирует** — Коммит кодовой ветки и перевод PLAN в `ready` для передачи на ревью.
+- Рабочий каталог роли доступен на запись, но Git хранит `index.lock` вне него: `git add` получает `Operation not permitted` на `.git/worktrees/<id>/index.lock`. `ANSWER-2.md` закрепил штатный путь: пульт коммитит код за роль developer после шага; в этой задаче так создан `11a38f11`. Правило coding-standards о дефекте шага без собственного коммита не учитывает такую песочницу Codex.
+- `tasks/01M3S9HFDDS9S4274W6TBQJBH7/ANSWER-2.md` содержит повторённые frontmatter и заголовок; формирование ответа Оператора допускает дублирование тела.
