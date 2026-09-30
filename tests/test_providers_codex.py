@@ -992,6 +992,14 @@ class IsolationSmokeTest(TmpRootTest):
                                   lambda name: f"{STUB_BIN}/{name}")
         tools.start()
         self.addCleanup(tools.stop)
+        for patcher in (
+                mock.patch.object(runner, "_resolve_declared_tools",
+                                  lambda: {name: f"{STUB_BIN}/{name}"
+                                           for name in stack.DECLARED_TOOLS}),
+                mock.patch.object(runner, "_venv_interpreter_bin",
+                                  lambda: STUB_BIN)):
+            patcher.start()
+            self.addCleanup(patcher.stop)
         self.healthy = providers.get("codex").command()
         self.provider_class = type(providers.get("codex"))
 
@@ -1024,6 +1032,23 @@ class IsolationSmokeTest(TmpRootTest):
             [a for a in self.healthy if a != "computer_use"])
         self.assertEqual(no_feature.status, "fail", no_feature.detail)
         self.assertIn("computer_use", no_feature.detail)
+
+    def test_missing_role_marker_in_assembled_codex_env_is_red(self):
+        """Ловит мутацию: общий `role_env` перестал добавлять `ARTEL_ROLE`
+        к шагу Codex, но смок сам ставит маркер в реконструированное
+        окружение и остаётся зелёным."""
+        real_role_env = runner.role_env
+
+        def without_role_marker(*args, **kwargs):
+            env = real_role_env(*args, **kwargs)
+            env.pop(config.ARTEL_ROLE_ENV, None)
+            return env
+
+        with mock.patch.object(runner, "role_env", without_role_marker):
+            check = doctor.codex_isolation_smoke("developer")
+
+        self.assertEqual(check.status, "fail", check.detail)
+        self.assertIn("не распознаётся как окружение роли", check.detail)
 
     def test_any_api_key_name_in_the_step_env_is_a_named_failure(self):
         """Ловит мутацию: проверка написана на одно имя (`OPENAI_API_KEY` —
