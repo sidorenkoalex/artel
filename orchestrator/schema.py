@@ -42,6 +42,23 @@ CREATE TABLE IF NOT EXISTS model_tariffs (
 );
 """
 
+OBSERVATIONS_DDL = """
+CREATE TABLE IF NOT EXISTS observations (
+  id TEXT PRIMARY KEY, target TEXT NOT NULL, client TEXT NOT NULL,
+  chat TEXT NOT NULL, session_id TEXT NOT NULL, state TEXT NOT NULL,
+  last_seen_at TEXT, created_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS observation_tasks (
+  observation_id TEXT NOT NULL, task_id TEXT NOT NULL, enabled INTEGER NOT NULL DEFAULT 1,
+  PRIMARY KEY (observation_id, task_id)
+);
+CREATE TABLE IF NOT EXISTS observed_runs (
+  id INTEGER PRIMARY KEY AUTOINCREMENT, observation_id TEXT NOT NULL,
+  task_id TEXT NOT NULL, pid INTEGER NOT NULL, log TEXT NOT NULL,
+  started_at TEXT NOT NULL
+);
+"""
+
 # Индекс журнала по задаче (SPEC 01M3GKJFN90ATK2KECNDZXPPP6, требования
 # 1-2; находка ревизии CR-2026-09-26-2): до него `steps` не имел ни одного
 # индекса, и каждое чтение журнала ОДНОЙ задачи шло планом SCAN по всей
@@ -111,6 +128,7 @@ CREATE TABLE IF NOT EXISTS merge_queue (
   enqueued_ts TEXT, heartbeat_ts TEXT
 );
 {MODEL_TARIFFS_DDL}
+{OBSERVATIONS_DDL}
 """
 
 
@@ -292,6 +310,7 @@ def migrate(conn: sqlite3.Connection) -> None:
     # (см. комментарий у `MODEL_TARIFFS_DDL`), чтобы составы колонок не
     # разъехались между свежей БД и догнанной.
     conn.executescript(MODEL_TARIFFS_DDL)
+    conn.executescript(OBSERVATIONS_DDL)
     # Индекс `steps(task_id)` (SPEC 01M3GKJFN90ATK2KECNDZXPPP6, требование
     # 1): БД прошлых версий его не имеют — догоняется тем же приёмом и ТЕМ
     # ЖЕ литералом, что `model_tariffs` выше. `IF NOT EXISTS` обязателен:

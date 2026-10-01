@@ -19,7 +19,7 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from orchestrator import artel, cleanup, config, lease, store  # noqa: E402
+from orchestrator import artel, cleanup, config, lease, session, store  # noqa: E402
 from tests.sandbox import TaskSeededTmpRootTest, _dead_pid, _ts_ago, capture  # noqa: E402
 from tests.test_kill_cleanup import TmpRepoTest  # noqa: E402
 
@@ -92,6 +92,14 @@ class TaskIdAndAttachTest(unittest.TestCase):
 
 class LaunchDetachedTest(TaskSeededTmpRootTest):
 
+    def setUp(self):
+        super().setUp()
+        conn = store.db()
+        observation_id = store.register_observation(
+            conn, config.DEFAULT_TARGET, "codex", "test-chat",
+            session.resolve_session_id(None), [self.TASK])
+        store.touch_observation(conn, observation_id)
+
     def _popen_mock(self, pid: int = 4242):
         proc = mock.Mock()
         proc.pid = pid
@@ -106,7 +114,7 @@ class LaunchDetachedTest(TaskSeededTmpRootTest):
         на повторный детач) — любое из этого красит соответствующий
         assert."""
         with self._popen_mock(pid=4242) as popen:
-            out = capture(artel._launch_detached, "auto", self.TASK)
+            out = capture(artel._launch_detached, "auto", self.TASK, "codex", "test-chat")
 
         popen.assert_called_once()
         args, kwargs = popen.call_args
@@ -131,7 +139,7 @@ class LaunchDetachedTest(TaskSeededTmpRootTest):
         `_launch_detached` самого. Мутация имени файла (не
         `<id>-<cmd>-<n>.log`) красит `assertIn` на пути."""
         with self._popen_mock():
-            out = capture(artel._launch_detached, "auto", self.TASK)
+            out = capture(artel._launch_detached, "auto", self.TASK, "codex", "test-chat")
 
         expected = config.LOGS / f"{self.TASK}-auto-1.log"
         self.assertIn(str(expected), out)
@@ -145,9 +153,9 @@ class LaunchDetachedTest(TaskSeededTmpRootTest):
         вызов переписал бы лог первого поверх, тест красен на имени
         файла второго вызова."""
         with self._popen_mock():
-            capture(artel._launch_detached, "auto", self.TASK)
+            capture(artel._launch_detached, "auto", self.TASK, "codex", "test-chat")
         with self._popen_mock():
-            out2 = capture(artel._launch_detached, "auto", self.TASK)
+            out2 = capture(artel._launch_detached, "auto", self.TASK, "codex", "test-chat")
 
         self.assertIn(str(config.LOGS / f"{self.TASK}-auto-2.log"), out2)
 
@@ -157,9 +165,9 @@ class LaunchDetachedTest(TaskSeededTmpRootTest):
         в один и тот же путь (`-1.log` у обоих) вместо раздельных
         `run-1.log`/`auto-1.log`, тест красен на пути второго вызова."""
         with self._popen_mock():
-            out_run = capture(artel._launch_detached, "run", self.TASK)
+            out_run = capture(artel._launch_detached, "run", self.TASK, "codex", "test-chat")
         with self._popen_mock():
-            out_auto = capture(artel._launch_detached, "auto", self.TASK)
+            out_auto = capture(artel._launch_detached, "auto", self.TASK, "codex", "test-chat")
 
         self.assertIn(str(config.LOGS / f"{self.TASK}-run-1.log"), out_run)
         self.assertIn(str(config.LOGS / f"{self.TASK}-auto-1.log"), out_auto)
@@ -172,7 +180,7 @@ class LaunchDetachedTest(TaskSeededTmpRootTest):
         же префикса адресовала бы не ту задачу)."""
         prefix = self.TASK[:4]
         with self._popen_mock() as popen:
-            capture(artel._launch_detached, "auto", prefix)
+            capture(artel._launch_detached, "auto", prefix, "codex", "test-chat")
 
         args, _ = popen.call_args
         self.assertEqual(args[0][-2], self.TASK,
@@ -195,7 +203,7 @@ class LaunchDetachedTest(TaskSeededTmpRootTest):
 
         with self._popen_mock() as popen:
             with self.assertRaises(SystemExit) as ctx:
-                artel._launch_detached("auto", self.TASK)
+                artel._launch_detached("auto", self.TASK, "codex", "test-chat")
 
         popen.assert_not_called()
         self.assertIn("живой lease", str(ctx.exception))
@@ -449,6 +457,14 @@ class WaitZoneFlagHotfix22Test(TaskSeededTmpRootTest):
     едет в отделённый процесс, а неизвестный флаг даёт отказ, а не
     молчаливый старт без ожидания зоны."""
 
+    def setUp(self):
+        super().setUp()
+        conn = store.db()
+        observation_id = store.register_observation(
+            conn, config.DEFAULT_TARGET, "codex", "test-chat",
+            session.resolve_session_id(None), [self.TASK])
+        store.touch_observation(conn, observation_id)
+
     def test_wait_zone_flag_reaches_the_detached_child_argv(self):
         """Ловит мутацию: `_cmd_auto_or_detach` роняет `--wait-zone` при
         детаче — дочерний argv обязан нести флаг ПЕРЕД `--attach`."""
@@ -456,7 +472,7 @@ class WaitZoneFlagHotfix22Test(TaskSeededTmpRootTest):
         proc.pid = 4242
         with mock.patch.object(artel.subprocess, "Popen",
                                return_value=proc) as popen:
-            capture(artel._cmd_auto_or_detach, [self.TASK, "--wait-zone"])
+            capture(artel._cmd_auto_or_detach, [self.TASK, "--wait-zone", "--client", "codex", "--chat", "test-chat"])
         argv = popen.call_args.args[0]
         self.assertEqual(argv[-4:],
                          ["auto", self.TASK, "--wait-zone", "--attach"])

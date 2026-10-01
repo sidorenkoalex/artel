@@ -92,7 +92,9 @@ AUTO_MAX_STEPS шагов за вызов. Решений auto не приним
 команда сама порождает себя отдельным процессом ОС и сразу возвращает
 управление, напечатав pid, путь лога (`.artel/logs/<id>-<cmd>-<n>.log`)
 и подсказку `artel.py log <id>`; цикл переживает обрыв породившей его
-сессии. `--attach` — прежнее (до этой задачи) поведение: передний план
+сессии. Отсоединение требует `--client codex|claude --chat <id>` и
+свежего наблюдения той же сессии, проекта, клиента и чата с назначенной
+задачей. `--attach` — прежнее (до этой задачи) поведение: передний план
 вызывающего процесса, без отвязки. `stop <id>` шлёт отвязанному циклу
 SIGTERM; гарантия «доигрывает уже начатый шаг и завершается сам между
 шагами» — про `auto` (у него есть граница между шагами, на которой
@@ -120,7 +122,14 @@ workspace, tasks, knowledge, logs). БД одна на все проекты: с
 
 Команды:
   init | new "<название>" [--tz <файл>] | status | show <id> | advance <id> |
-  run <id> [--attach] | auto <id> [--attach] | stop <id> |
+  run <id> [--attach | --client codex|claude --chat <id>] |
+  auto <id> [--wait-zone] [--attach | --client codex|claude --chat <id>] |
+  stop <id> |
+  observe register --client codex|claude --chat <id> --tasks <id[,id...]> |
+  observe add|remove <observation-id> --tasks <id[,id...]> |
+  observe show|stop <observation-id> [--json] |
+  hook-migrate inspect|apply|restore --client codex|claude --config <path>
+               [--backup <path>] [--verified] [--json] |
   approve <id> [sha] [--accept-red "<основание>"] |
   reject <id> "<причина>" |
   answer <id> <файл-с-ответом> | zones-extend <id> <путь>[, <путь>...] |
@@ -140,7 +149,8 @@ workspace, tasks, knowledge, logs). БД одна на все проекты: с
   doc-commit <путь-в-репозитории> --from <файл> --message "<основание>"
              [--accept-red "<основание>"] |
   doc-commit --flush |
-  watch [--tasks <id>[,<id>...]] [--mine] [--all] [--events <класс>[,...]]
+  watch [--tasks <id>[,<id>...]] [--mine] [--all] [--observation <id>]
+        [--events <класс>[,...]]
         [--interval SEC] [--until <state>]
 
 `approve <id> --accept-red "<основание>"` (SPEC
@@ -483,14 +493,18 @@ main, не флейк» (урок 12.09: перезапуск замаскиро
             (tasks/01M2XMCG167615YS9EZD9TYJWV); единый формат строки
             бэклога, `note --apply` и прогон полного набора перед
             коммитом конфигурации (tasks/01M3HST4SGX0SPKAGNHVY7DWHM)
-  watch     дозор событий журнала (steps/alerts) для сессии Оператора,
-            read-only, без lease (SPEC 01M1VBEKRN0GA029J98S0K2DAQ)
+  watch     дозор событий журнала (steps/alerts) для сессии Оператора;
+            --observation обновляет связь, без lease
 """
 import os
+import json
+import re
 import signal
 import socket
 import subprocess
 import sys
+import tempfile
+from datetime import datetime, timezone
 from pathlib import Path
 
 # Файл живёт двумя жизнями: модуль пакета (`from orchestrator import artel` в
@@ -580,7 +594,7 @@ _ensure_supported_interpreter()
 from orchestrator import (amend, answer, auto, budget, canary, catalog,  # noqa: E402
                           ci_rerun, cleanup, doctor, dry_run, fsm, lease,
                           liveness, models, notes, pause, pin, pool_seal,
-                          projects, prune, release, report, runner, store,
+                          projects, prune, release, report, runner, session, store,
                           venv, version, watch, workspace, zone_lock)
 
 
@@ -592,6 +606,7 @@ from orchestrator import (amend, answer, auto, budget, canary, catalog,  # noqa:
 
 _CYCLE_FLAGS_RUN = ("--attach",)
 _CYCLE_FLAGS_AUTO = ("--attach", "--wait-zone")
+_CYCLE_CLIENTS = ("codex", "claude")
 
 
 def _task_id_and_attach(rest: list, usage: str,
@@ -609,7 +624,40 @@ def _task_id_and_attach(rest: list, usage: str,
     return positional[0], attach
 
 
-def _launch_detached(cmd: str, task_id: str, extra: tuple = ()) -> None:
+def _cycle_args(rest: list, usage: str, known: tuple) -> tuple:
+    positional = []
+    flags = set()
+    values = {}
+    index = 0
+    while index < len(rest):
+        arg = rest[index]
+        if arg in ("--client", "--chat"):
+            if arg in values or index + 1 >= len(rest) or rest[index + 1].startswith("--"):
+                sys.exit(f"{usage}: требуется одно значение {arg}")
+            values[arg] = rest[index + 1]
+            index += 2
+            continue
+        if arg in known:
+            if arg in flags:
+                sys.exit(f"{usage}: повторный флаг {arg}")
+            flags.add(arg)
+        elif arg.startswith("--"):
+            sys.exit(f"неизвестный флаг {arg!r}; использование: {usage}")
+        else:
+            positional.append(arg)
+        index += 1
+    if len(positional) != 1:
+        sys.exit(usage)
+    attach = "--attach" in flags
+    client, chat = values.get("--client"), values.get("--chat")
+    if not attach and (client not in _CYCLE_CLIENTS or not chat or not chat.strip()):
+        sys.exit(f"{usage}: для отсоединённого запуска нужны "
+                 "--client codex|claude и --chat <непустой ID>")
+    return positional[0], attach, client, chat
+
+
+def _launch_detached(cmd: str, task_id: str, client: str, chat: str,
+                     extra: tuple = ()) -> None:
     """R1-F3 (REVIEW.md итерации 1): до отвязки — дешёвая проверка
     `lease.is_live`, не авторитетное взятие lease (тем ниже и остаётся,
     внутри спавненного процесса, через `lease.run_locked`). Без неё
@@ -620,8 +668,24 @@ def _launch_detached(cmd: str, task_id: str, extra: tuple = ()) -> None:
     и спавном) не авторитетна и не обязана быть — тело `run_locked` внутри
     спавненного процесса решает по факту, эта проверка только возвращает
     немедленную обратную связь на очевидный случай."""
+    if client not in _CYCLE_CLIENTS or not chat or not chat.strip():
+        sys.exit("для отсоединённого запуска нужны --client codex|claude "
+                 "и --chat <непустой ID>")
     conn = store.db()
     task_id = store.resolve_task_id(conn, task_id)
+    task = store.get_task(conn, task_id)
+    observer = store.matching_observation(
+        conn, task_id, task["target"], session.resolve_session_id(None),
+        client, chat)
+    if observer is None:
+        sys.exit(f"[{task_id}] нет активного наблюдения для текущих "
+                 "сессии, проекта, клиента, чата и задачи")
+    if observer["last_seen_at"] is None:
+        sys.exit(f"[{task_id}] наблюдение зарегистрировано, но связи с watch ещё нет")
+    age = (datetime.now(timezone.utc) -
+           datetime.fromisoformat(observer["last_seen_at"])).total_seconds()
+    if age > config.OBSERVATION_STALE_SECONDS:
+        sys.exit(f"[{task_id}] связь наблюдения протухла ({age:.1f} с)")
     if lease.is_live(conn, task_id):
         row = store.lease_row(conn, task_id)
         sys.exit(f"[{task_id}] задачу уже ведёт живой lease "
@@ -650,28 +714,279 @@ def _launch_detached(cmd: str, task_id: str, extra: tuple = ()) -> None:
             start_new_session=True)
     finally:
         log_fh.close()
+    store.record_observed_run(conn, observer["id"], task_id, proc.pid, str(log_path))
     print(f"[{task_id}] {cmd} отвязан от сессии: pid {proc.pid}")
     print(f"  лог: {log_path}")
     print(f"  наблюдать: artel.py log {task_id}")
 
 
 def _cmd_run_or_detach(rest: list) -> None:
-    task_id, attach = _task_id_and_attach(rest, "run <id> [--attach]")
+    task_id, attach, client, chat = _cycle_args(
+        rest, "run <id> [--attach | --client codex|claude --chat <id>]",
+        _CYCLE_FLAGS_RUN)
     if attach:
         runner.cmd_run(task_id)
         return
-    _launch_detached("run", task_id)
+    _launch_detached("run", task_id, client, chat)
 
 
 def _cmd_auto_or_detach(rest: list) -> None:
-    task_id, attach = _task_id_and_attach(
-        rest, "auto <id> [--attach] [--wait-zone]", known=_CYCLE_FLAGS_AUTO)
+    task_id, attach, client, chat = _cycle_args(
+        rest, "auto <id> [--attach | --client codex|claude --chat <id>] [--wait-zone]",
+        _CYCLE_FLAGS_AUTO)
     wait_zone = "--wait-zone" in rest
     if attach:
         auto.cmd_auto(task_id, wait_zone=wait_zone)
         return
-    _launch_detached("auto", task_id,
+    _launch_detached("auto", task_id, client, chat,
                      extra=("--wait-zone",) if wait_zone else ())
+
+
+def _observe_flag(rest: list, flag: str) -> str:
+    if flag not in rest or rest.index(flag) + 1 >= len(rest):
+        sys.exit(f"observe: требуется {flag} <значение>")
+    return rest[rest.index(flag) + 1]
+
+
+def _observation_or_exit(conn, observation_id: str):
+    row = store.observation(conn, observation_id)
+    if row is None:
+        sys.exit(f"observe: наблюдение {observation_id} не найдено")
+    return row
+
+
+def _observation_fresh(row) -> bool:
+    if row["state"] != "active" or row["last_seen_at"] is None:
+        return False
+    age = (datetime.now(timezone.utc) -
+           datetime.fromisoformat(row["last_seen_at"])).total_seconds()
+    return age <= config.OBSERVATION_STALE_SECONDS
+
+
+def _cmd_observe(rest: list) -> None:
+    if not rest:
+        sys.exit("observe: требуется register|add|remove|show|stop")
+    action = rest[0]
+    conn = store.db()
+    if action == "register":
+        client = _observe_flag(rest, "--client")
+        chat = _observe_flag(rest, "--chat")
+        if client not in ("codex", "claude") or not chat.strip():
+            sys.exit("observe register: нужен клиент codex|claude и непустой chat")
+        raw_tasks = _observe_flag(rest, "--tasks")
+        first_task = raw_tasks.split(",", 1)[0].strip()
+        target = store.get_task(conn, first_task)["target"]
+        if "--project" in rest and _observe_flag(rest, "--project") != target:
+            sys.exit("observe: проект не совпадает с проектом задачи")
+        task_ids = _validated_observation_tasks(conn, raw_tasks, target)
+        observation_id = store.register_observation(
+            conn, target, client, chat, session.resolve_session_id(None), task_ids)
+        print(json.dumps({"id": observation_id}))
+        return
+    if action not in ("add", "remove", "show", "stop") or len(rest) < 2:
+        sys.exit("observe: требуется register|add|remove|show|stop <ID>")
+    row = _observation_or_exit(conn, rest[1])
+    if action == "show":
+        result = {"id": row["id"], "project": row["target"],
+                  "client": row["client"], "chat": row["chat"],
+                  "tasks": store.observation_tasks(conn, row["id"]),
+                  "state": row["state"], "last_seen_at": row["last_seen_at"],
+                  "fresh": _observation_fresh(row),
+                  "runs": [dict(task=r["task_id"], pid=r["pid"], log=r["log"])
+                           for r in store.observed_runs(conn, row["id"])]}
+        print(json.dumps(result, ensure_ascii=False))
+        return
+    if row["session_id"] != session.resolve_session_id(None):
+        sys.exit("observe: наблюдение принадлежит другой сессии")
+    if action == "stop":
+        store.stop_observation(conn, row["id"])
+        print(f"наблюдение {row['id']} прекращено")
+        return
+    if row["state"] != "active":
+        sys.exit("observe: прекращённое наблюдение нельзя менять; зарегистрируйте новое")
+    task_ids = _validated_observation_tasks(conn, _observe_flag(rest, "--tasks"), row["target"])
+    if action == "add":
+        store.add_observation_tasks(conn, row["id"], task_ids)
+    else:
+        store.remove_observation_tasks(conn, row["id"], task_ids)
+    print(json.dumps({"id": row["id"], "tasks": store.observation_tasks(conn, row["id"])}))
+
+
+def _validated_observation_tasks(conn, raw: str, target: str) -> list[str]:
+    ids = [part.strip() for part in raw.split(",")]
+    if not ids or any(not item for item in ids):
+        sys.exit("observe: нужен непустой список задач")
+    result = []
+    for task_id in ids:
+        task = store.get_task(conn, task_id)
+        if task["target"] != target:
+            sys.exit(f"observe: задача {task_id} принадлежит другому проекту")
+        result.append(task["id"])
+    return sorted(set(result))
+
+
+def _hook_flag(rest: list, flag: str) -> str:
+    if flag not in rest or rest.index(flag) + 1 >= len(rest):
+        sys.exit(f"hook-migrate: требуется {flag} <значение>")
+    return rest[rest.index(flag) + 1]
+
+
+def _guard_kind(command) -> str:
+    if not isinstance(command, str) or "guard-artel-bg" not in command:
+        return "other"
+    if ("artel.py" in command and "run/auto" in command and
+            "run_in_background" in command):
+        return "target"
+    script = re.search(r"/[^'\";\s]+/guard-artel-bg\.py", command)
+    if script:
+        try:
+            source = Path(script.group()).read_text(encoding="utf-8")
+        except (OSError, UnicodeError):
+            return "unknown"
+        if ("artel.py" in source and "run_in_background" in source and
+                ("auto|run" in source or "run|auto" in source)):
+            return "target"
+        return "unknown"
+    if "artel.py" in command or "run_in_background" in command:
+        return "unknown"
+    return "other"
+
+
+def _hook_candidates(document, client: str) -> tuple[list, str | None]:
+    """Возвращает контейнеры и индексы только для известной формы регистрации."""
+    hooks = document.get("hooks") if isinstance(document, dict) else None
+    candidates = []
+    unknown = None
+    if client == "codex" and isinstance(hooks, list):
+        for index, entry in enumerate(hooks):
+            if not isinstance(entry, dict):
+                continue
+            kind = _guard_kind(entry.get("command"))
+            if kind == "other":
+                continue
+            if (kind == "unknown" or entry.get("event") != "PreToolUse" or
+                    entry.get("name") != "guard-artel-bg" or
+                    entry.get("managed") or entry.get("source") == "managed"):
+                unknown = "неизвестное или управляемое подключение Codex"
+            else:
+                candidates.append((hooks, index))
+    else:
+        if not isinstance(hooks, dict):
+            return [], f"неизвестная форма hooks {client}" if hooks is not None else None
+        for event, groups in hooks.items():
+            if not isinstance(groups, list):
+                continue
+            for group in groups:
+                if not isinstance(group, dict) or not isinstance(group.get("hooks"), list):
+                    continue
+                for index, entry in enumerate(group["hooks"]):
+                    if not isinstance(entry, dict):
+                        continue
+                    kind = _guard_kind(entry.get("command"))
+                    if kind == "other":
+                        continue
+                    if (kind == "unknown" or event != "PreToolUse" or
+                            group.get("matcher") != "Bash" or group.get("managed") or
+                            entry.get("type") != "command" or entry.get("managed") or
+                            entry.get("source") == "managed"):
+                        unknown = f"неизвестное или управляемое подключение {client}"
+                    else:
+                        candidates.append((group["hooks"], index))
+    return candidates, unknown
+
+
+def _write_json_atomic(path: Path, document: dict) -> None:
+    payload = (json.dumps(document, ensure_ascii=False, indent=2) + "\n").encode("utf-8")
+    fd, temporary = tempfile.mkstemp(prefix=path.name + ".", dir=path.parent)
+    try:
+        os.fchmod(fd, path.stat().st_mode & 0o777)
+        with os.fdopen(fd, "wb") as stream:
+            stream.write(payload)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temporary, path)
+    finally:
+        if os.path.exists(temporary):
+            os.unlink(temporary)
+
+
+def _cmd_hook_migrate(rest: list) -> None:
+    if not rest or rest[0] not in ("inspect", "apply", "restore"):
+        sys.exit("hook-migrate: требуется inspect|apply|restore")
+    action = rest[0]
+    client = _hook_flag(rest, "--client")
+    if client not in ("codex", "claude"):
+        sys.exit("hook-migrate: клиент должен быть codex|claude")
+    path = Path(_hook_flag(rest, "--config"))
+    if action == "restore":
+        backup = Path(_hook_flag(rest, "--backup"))
+        if not backup.is_file():
+            sys.exit("hook-migrate: резервная копия не найдена")
+        original = backup.read_bytes()
+        try:
+            json.loads(original)
+        except (ValueError, UnicodeDecodeError):
+            sys.exit("hook-migrate: резервная копия не является JSON")
+        if not path.is_file():
+            sys.exit("hook-migrate: конфигурация не найдена")
+        fd, temporary = tempfile.mkstemp(prefix=path.name + ".", dir=path.parent)
+        try:
+            os.fchmod(fd, path.stat().st_mode & 0o777)
+            with os.fdopen(fd, "wb") as stream:
+                stream.write(original)
+                stream.flush()
+                os.fsync(stream.fileno())
+            os.replace(temporary, path)
+        finally:
+            if os.path.exists(temporary):
+                os.unlink(temporary)
+        print("hook-migrate: исходная конфигурация восстановлена")
+        return
+    if not path.is_file():
+        result = {"status": "absent"}
+        if action == "apply":
+            print(json.dumps(result))
+            return
+        print(json.dumps(result))
+        return
+    original = path.read_bytes()
+    try:
+        document = json.loads(original)
+    except (ValueError, UnicodeDecodeError):
+        sys.exit("hook-migrate: конфигурация не является JSON")
+    candidates, unknown = _hook_candidates(document, client)
+    status = "unknown" if unknown else "supported" if candidates else "absent"
+    result = {"status": status}
+    if unknown:
+        result["reason"] = unknown
+    if action == "inspect":
+        print(json.dumps(result, ensure_ascii=False))
+        return
+    if status == "unknown":
+        sys.exit(f"hook-migrate: {unknown}")
+    if status == "absent":
+        print(json.dumps(result))
+        return
+    if "--verified" not in rest:
+        sys.exit("hook-migrate: сначала проверьте равноценную замену и передайте --verified")
+    backup = Path(_hook_flag(rest, "--backup"))
+    if backup.exists():
+        sys.exit("hook-migrate: резервная копия уже существует")
+    if backup.resolve() == path.resolve():
+        sys.exit("hook-migrate: резервная копия совпадает с конфигурацией")
+    try:
+        with backup.open("xb") as stream:
+            stream.write(original)
+            stream.flush()
+            os.fsync(stream.fileno())
+    except FileExistsError:
+        sys.exit("hook-migrate: резервная копия уже существует")
+    for container, index in reversed(candidates):
+        del container[index]
+    if path.read_bytes() != original:
+        sys.exit("hook-migrate: конфигурация изменилась во время миграции; файл не тронут")
+    _write_json_atomic(path, document)
+    print(json.dumps({"status": "migrated", "backup": str(backup)}))
 
 
 def _cmd_stop(task_id: str) -> None:
@@ -707,6 +1022,7 @@ def _cmd_stop(task_id: str) -> None:
     except ProcessLookupError:
         sys.exit(f"[{task_id}] процесс цикла (pid={row['pid']}) уже не "
                  f"существует")
+    store.disable_task_observation(conn, task_id)
     print(f"[{task_id}] stop: SIGTERM отправлен pid={row['pid']} — "
           f"`auto` доиграет текущий шаг и завершится сам; голый `run` "
           f"обработчика не ставит и завершится немедленно")
@@ -958,6 +1274,14 @@ def _role_restricted_command(cmd: str, rest: list) -> str | None:
     затронуты."""
     if cmd == "init":
         return "init"
+    if cmd == "observe" and rest[:1] in (["register"], ["add"], ["remove"], ["stop"]):
+        return "observe " + rest[0]
+    if cmd == "watch" and "--observation" in rest:
+        return "watch --observation"
+    if cmd == "hook-migrate" and rest[:1] in (["apply"], ["restore"]):
+        return "hook-migrate " + rest[0]
+    if cmd in ("run", "auto") and "--attach" not in rest:
+        return cmd
     if cmd == "doctor" and "--restore" in rest:
         return "doctor --restore"
     if cmd == "canary" and rest[:1] == ["pool-seal"]:
@@ -1031,6 +1355,8 @@ def main() -> None:
         "note": lambda: notes.cmd_note(rest),
         "doc-commit": lambda: notes.cmd_doc_commit(rest),
         "watch": lambda: watch.cmd_watch(rest),
+        "observe": lambda: _cmd_observe(rest),
+        "hook-migrate": lambda: _cmd_hook_migrate(rest),
     }
     fn = table.get(cmd)
     if fn is None:

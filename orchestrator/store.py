@@ -21,6 +21,7 @@
 import re
 import sqlite3
 import sys
+import uuid
 from datetime import datetime, timezone
 
 from . import config, session
@@ -31,6 +32,87 @@ TASK_ID = re.compile(r"\AT(\d+)\Z")
 
 def now() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%SZ")
+
+
+def register_observation(conn, target: str, client: str, chat: str,
+                         session_id: str, task_ids: list[str]) -> str:
+    observation_id = uuid.uuid4().hex
+    with conn:
+        conn.execute("INSERT INTO observations VALUES (?, ?, ?, ?, ?, 'active', NULL, ?)",
+                     (observation_id, target, client, chat, session_id, now()))
+        conn.executemany("INSERT INTO observation_tasks(observation_id, task_id) VALUES (?, ?)",
+                         [(observation_id, task_id) for task_id in task_ids])
+    return observation_id
+
+
+def observation(conn, observation_id: str):
+    return conn.execute("SELECT * FROM observations WHERE id=?", (observation_id,)).fetchone()
+
+
+def observation_tasks(conn, observation_id: str) -> list[str]:
+    return [r[0] for r in conn.execute(
+        "SELECT task_id FROM observation_tasks WHERE observation_id=? AND enabled=1 ORDER BY task_id",
+        (observation_id,))]
+
+
+def observed_runs(conn, observation_id: str):
+    return conn.execute(
+        "SELECT task_id, pid, log FROM observed_runs WHERE observation_id=? ORDER BY id",
+        (observation_id,)).fetchall()
+
+
+def stop_observation(conn, observation_id: str) -> None:
+    with conn:
+        conn.execute("UPDATE observations SET state='stopped' WHERE id=?",
+                     (observation_id,))
+
+
+def add_observation_tasks(conn, observation_id: str, task_ids: list[str]) -> None:
+    with conn:
+        conn.executemany(
+            "INSERT INTO observation_tasks(observation_id, task_id, enabled) VALUES (?, ?, 1) "
+            "ON CONFLICT(observation_id, task_id) DO UPDATE SET enabled=1",
+            [(observation_id, task_id) for task_id in task_ids])
+
+
+def remove_observation_tasks(conn, observation_id: str, task_ids: list[str]) -> None:
+    with conn:
+        conn.executemany(
+            "DELETE FROM observation_tasks WHERE observation_id=? AND task_id=?",
+            [(observation_id, task_id) for task_id in task_ids])
+
+
+def disable_task_observation(conn, task_id: str) -> None:
+    with conn:
+        conn.execute("UPDATE observation_tasks SET enabled=0 WHERE task_id=?",
+                     (task_id,))
+
+
+def touch_observation(conn, observation_id: str) -> bool:
+    timestamp = datetime.now(timezone.utc).isoformat()
+    with conn:
+        cursor = conn.execute(
+            "UPDATE observations SET last_seen_at=? WHERE id=? AND state='active'",
+            (timestamp, observation_id))
+    return cursor.rowcount == 1
+
+
+def matching_observation(conn, task_id: str, target: str, session_id: str,
+                         client: str, chat: str):
+    rows = conn.execute(
+        "SELECT o.* FROM observations o JOIN observation_tasks ot ON ot.observation_id=o.id "
+        "WHERE o.target=? AND o.session_id=? AND o.client=? AND o.chat=? "
+        "AND o.state='active' "
+        "AND ot.task_id=? AND ot.enabled=1 ORDER BY o.last_seen_at DESC, o.rowid DESC",
+        (target, session_id, client, chat, task_id)).fetchall()
+    return rows[0] if rows else None
+
+
+def record_observed_run(conn, observation_id: str, task_id: str,
+                        pid: int, log: str) -> None:
+    with conn:
+        conn.execute("INSERT INTO observed_runs(observation_id, task_id, pid, log, started_at) "
+                     "VALUES (?, ?, ?, ?, ?)", (observation_id, task_id, pid, log, now()))
 
 
 class _AutoClosingConnection(sqlite3.Connection):
