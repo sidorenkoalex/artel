@@ -1,6 +1,4 @@
-"""Сторож раздела `docs/stack.md` о провайдере `codex` — абзац про
-`CODEX_HOME` эфемерного клона канарейки (SPEC
-01M3M55070T5NJFYM3QQJH4B9V, требование 7, AC-8).
+"""Сторож раздела `docs/stack.md` о постоянном профиле Codex канарейки.
 
 Тем же приёмом, что `tests/test_stack_zones_pull_section.py` и
 `tests/test_stack_parity_table.py`: документ читается как данные, а якоря
@@ -55,51 +53,37 @@ class StackCodexCloneHomeSectionTest(unittest.TestCase):
         self.body = " ".join(section_body(stack_md_text()).split())
 
     def test_section_says_the_login_record_is_keyed_by_the_codex_home_path(self):
-        """Раздел объясняет, что запись входа клиент ищет по ПУТИ
-        `CODEX_HOME`, и называет строку `doctor`, которой этот вход
-        проверяется.
+        """Раздел связывает отдельный CODEX_HOME со строкой проверки входа.
 
-        Ловит мутацию: из раздела исчезает причина подмены (остаётся одна
-        механика «клон получает путь пульта») — следующий читатель,
-        увидев в коде переопределение модульного состояния провайдера,
-        не нашёл бы, зачем оно, и снял бы его как лишнюю связность,
-        вернув прогон канарейки к отказу предполёта.
+        Ловит мутацию: документ обещает только постоянство каталога без
+        проверки входа — истёкшая подписка выглядела бы готовой к шагу.
         """
         self.assertTrue(self.body,
                         "в docs/stack.md нет раздела о провайдере codex")
         self.assertIn(codex_provider.HOME_ENV, self.body)
-        self.assertIn("ПУТИ", self.body)
+        self.assertIn("отдельный постоянный профиль", self.body.lower())
         self.assertIn(doctor.CODEX_AUTH_CHECK, self.body)
 
-    def test_section_says_the_clone_gets_the_pult_client_directory(self):
-        """Раздел называет, что в блоке клона `CODEX_HOME` — каталог
-        клиента дома роли ПУЛЬТА, а `HOME` и `ZDOTDIR` остаются
-        клоновскими.
+    def test_section_says_profile_is_separate_from_pult_and_clone(self):
+        """Раздел называет адрес профиля и обе границы изоляции.
 
-        Ловит мутацию: документ обещает, что в клон уезжает весь дом роли
-        пульта (перечень имён из раздела исчез) — Оператор читал бы
-        изоляцию канарейки шире, чем она есть, и не понял бы, почему
-        `.zshenv` проверяемого sha под канарейкой всё ещё проверяется.
+        Ловит мутацию: документ снова рекомендует боевой дом пульта либо
+        временный дом клона — отдельный подписочный вход исчезает.
         """
-        for anchor in (codex_provider.DEPLOYED_HOME_DIR,
-                       codex_provider.ZDOTDIR_ENV, "ПУЛЬТА"):
+        for anchor in ("~/.artel-canary-codex/.codex", "боевым домом пульта",
+                       "временным клоном", "не изменяет боевой дом"):
             with self.subTest(anchor=anchor):
                 self.assertIn(anchor, self.body)
 
-    def test_section_names_both_refusals_of_the_run(self):
-        """Раздел называет ОБА отказа прогона: несделанный однократный
-        шаг Оператора (рецепт `codex login`) и дефект пульта, повторным
-        входом не чинящийся.
+    def test_section_names_login_and_busy_refusals(self):
+        """Раздел объясняет истечение входа и занятость профиля.
 
-        Ловит мутацию: из раздела исчезает второй отказ — Оператор,
-        получив «дефект пульта», не нашёл бы в документе ни того, что
-        такой исход штатно различается, ни того, что входить повторно
-        бессмысленно, и потратил бы на повторный вход ровно тот шаг,
-        который отказ и просил не делать.
+        Ловит мутацию: документ опускает отказ занятости — параллельный
+        платный прогон выглядел бы допустимым действием.
         """
         lowered = self.body.lower()
-        self.assertIn("дефект пульта", lowered)
         self.assertIn("codex login", lowered)
+        self.assertIn("отказ занятости", lowered)
 
 
 if __name__ == "__main__":
