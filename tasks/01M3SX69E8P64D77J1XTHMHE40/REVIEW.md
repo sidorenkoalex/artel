@@ -2,8 +2,8 @@
 task: 01M3SX69E8P64D77J1XTHMHE40
 type: review
 author_role: reviewer
-status: changes_requested
-iteration: 1
+status: approved
+iteration: 2
 schema_version: 5
 ---
 
@@ -11,7 +11,12 @@ schema_version: 5
 
 ## Проверка плана
 
-Таблица покрытия PLAN.md покрывает требования 1–11 шагами 1–3; перенос SQL в шаге 4 соответствует фактической доработке и не меняет публичное поведение. Шаги проверяемы, обратимость миграции описана. Конфликта с существующей архитектурой не найдено.
+Таблица покрытия PLAN.md покрывает требования 1–11: состояние и
+fail-closed запуск — шагом 1, миграция — шагом 2, проверка — шагом 3,
+SQL-инвариант — шагом 4, контекст client/chat после R1-F1 — шагом 5.
+Шаги проверяемы и соразмерны MR; миграция обратима через резервную копию,
+а перенос SQL не меняет публичный контракт. Конфликта с архитектурой и
+конвенциями не найдено.
 
 ## Соответствие SPEC
 
@@ -21,8 +26,8 @@ schema_version: 5
 | 2 | OK | Схема и `observe show --json` хранят и показывают идентичность, набор, состояние, связь и запуски. |
 | 3 | OK | Добавлены штатные команды; мутации наблюдения и heartbeat запрещены среде роли. |
 | 4 | OK | Heartbeat выполняется циклом `watch`; период и трёхпериодный порог именованы. |
-| 5 | Не реализовано | Отказ до `Popen` есть, но подходящее наблюдение не сверяется с текущими client/chat. См. R1-F1. |
-| 6 | Не реализовано | Фильтр учитывает проект, задачу и session_id, но не текущие клиент и чат. См. R1-F1. |
+| 5 | OK | До `Popen` detach требует валидные `--client`/`--chat` и свежее подходящее наблюдение; `--attach` не ограничен. |
+| 6 | OK | `matching_observation` сверяет проект, session_id, client, chat и назначенную задачу; отсутствие или несовпадение отказывает. |
 | 7 | OK | Остановка отключает только остановленную задачу, другие назначения и связь наблюдения сохраняются; возобновление требует явного add/register. |
 | 8 | OK | Новые действия не расширяют полномочия наблюдателя; lease и существующие ограничения сохранены. |
 | 9 | OK | Есть inspect/apply/restore для Codex и Claude, отсутствие и неизвестная форма диагностируются. |
@@ -31,21 +36,20 @@ schema_version: 5
 
 ## Замечания
 
-- major — orchestrator/artel.py:636-637, orchestrator/store.py:100-108, orchestrator/session.py:92-107, tests/test_01m3sx69e8p64d77j1xthmhe40_observation.py:181 — отсоединённый запуск выбирает наблюдение только по `target`, задаче и `session_id`. `resolve_session_id` получает ID из параметра/`ARTEL_SESSION_ID`/общего файла сессии и не содержит client/chat; `matching_observation` также не принимает их. Поэтому из одной сессии можно зарегистрировать наблюдение `--client claude --chat чужой-чат` и затем запустить `artel.py run <задача>` из другого клиента или чата: запуск будет разрешён, хотя наблюдение не подходит текущему client/chat. Это нарушает fail-closed требования 5–6 и AC-8. Нужен доверенный источник либо явная передача текущих client/chat в путь запуска, фильтрация по обоим полям и отрицательный тест перекрёстных client/chat. `orchestrator/session.py` прочитан адресно только для проверки, несёт ли уже существующий идентификатор сессии эту необходимую идентичность.
+Нет.
 
 ## Реестр замечаний
 
 | id | статус | файл/строка | суть | последствие | решение |
 |---|---|---|---|---|---|
-| R1-F1 | fixed | orchestrator/artel.py:636-637; orchestrator/store.py:100-108; orchestrator/session.py:92-107; tests/test_01m3sx69e8p64d77j1xthmhe40_observation.py:181 | Выбор наблюдения не проверяет client/chat текущего запуска. | Наблюдение другого чата либо клиента той же сессии разрешает отсоединённый запуск. | Исправлено по `ANSWER-5.md`: обязательная пара client/chat в отсоединённом CLI, фильтр по обоим полям в store, отрицательные проверки планки и тест двух чатов. |
+| R1-F1 | accepted | orchestrator/artel.py:627-738; orchestrator/store.py:100-107; tests/test_01m3sx69e8p64d77j1xthmhe40_observation.py:167-192; tests/test_observation_edges.py:29-55 | Выбор наблюдения не проверяет client/chat текущего запуска. | Наблюдение другого чата либо клиента той же сессии разрешает отсоединённый запуск. | Подтверждено исправление по `ANSWER-5.md`: обязательная пара client/chat в detach CLI, фильтр по обоим полям, отрицательные сценарии и сторож точного выбора чата. |
 
 ## Вердикт
 
-changes_requested: закрыть R1-F1. После исправления нужен адресный прогон тестов наблюдения и миграции.
+approved
 
 ## Проверено исполнением
 
-- `python3 -m pytest tests/test_detached_cycle.py tests/test_watch.py tests/test_artel_role_restricted_commands.py tests/test_store_schema_migration_parity.py tests/test_observation_edges.py tests/test_01m3sx69e8p64d77j1xthmhe40_observation.py tests/test_01m3sx69e8p64d77j1xthmhe40_migration.py -q -p no:cacheprovider -p timeout -o timeout=120` — 71 passed, 23 subtests passed.
-- `python3 -m pytest tests/test_multitarget.py::SqlOnlyInStoreTest tests/test_observation_edges.py tests/test_01m3sx69e8p64d77j1xthmhe40_observation.py -q -p no:cacheprovider -p timeout -o timeout=120` — 18 passed, 15 subtests passed.
-- `git diff --check 7f55c29abdb91a21030b90bcb3e6dd3332486d3d...HEAD` — без ошибок пробелов.
-
+- `python3 -m pytest tests/test_01m3sx69e8p64d77j1xthmhe40_observation.py tests/test_01m3sx69e8p64d77j1xthmhe40_migration.py tests/test_detached_cycle.py tests/test_observation_edges.py tests/test_watch.py tests/test_artel_role_restricted_commands.py tests/test_store_schema_migration_parity.py tests/test_multitarget.py::SqlOnlyInStoreTest -q -p no:cacheprovider -p timeout -o timeout=120` — 75 passed, 37 subtests passed.
+- Временная мутация `orchestrator/store.py::matching_observation` на безусловный `return None` сделала `tests/test_observation_edges.py::ObservationEdgesTest::test_two_chats_allow_only_the_named_observation` красным; исходный код восстановлен.
+- `git diff --check 66365c5e4794e0bcf78832a55977619c6ccc1ee3...HEAD` и `git diff --check` — без ошибок пробелов.
