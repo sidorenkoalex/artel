@@ -97,14 +97,14 @@ def touch_observation(conn, observation_id: str) -> bool:
     return cursor.rowcount == 1
 
 
-def matching_observation(conn, task_id: str, target: str, session_id: str):
+def matching_observation(conn, task_id: str, target: str, session_id: str,
+                         client: str, chat: str):
     rows = conn.execute(
         "SELECT o.* FROM observations o JOIN observation_tasks ot ON ot.observation_id=o.id "
-        "WHERE o.target=? AND o.session_id=? AND o.state='active' "
+        "WHERE o.target=? AND o.session_id=? AND o.client=? AND o.chat=? "
+        "AND o.state='active' "
         "AND ot.task_id=? AND ot.enabled=1 ORDER BY o.last_seen_at DESC, o.rowid DESC",
-        (target, session_id, task_id)).fetchall()
-    if len({(row["client"], row["chat"]) for row in rows}) > 1:
-        return None  # без явного контекста чата выбор был бы случайным
+        (target, session_id, client, chat, task_id)).fetchall()
     return rows[0] if rows else None
 
 

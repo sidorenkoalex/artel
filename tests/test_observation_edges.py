@@ -25,7 +25,7 @@ class ObservationEdgesTest(TaskSeededTmpRootTest):
             {row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}))
 
     def test_two_chats_cannot_be_chosen_implicitly_for_one_task(self):
-        """Ловит мутацию: запуск берёт случайный чат при двух активных назначениях."""
+        """Ловит мутацию: запуск берёт один из двух чатов, хотя передан третий."""
         conn = store.db()
         identity = session.resolve_session_id(None)
         for chat in ("chat-a", "chat-b"):
@@ -34,8 +34,23 @@ class ObservationEdgesTest(TaskSeededTmpRootTest):
             store.touch_observation(conn, observation_id)
         with mock.patch.object(artel.subprocess, "Popen", return_value=mock.Mock(pid=4242)) as popen:
             with self.assertRaises(SystemExit):
-                artel._launch_detached("run", self.TASK)
+                artel._launch_detached("run", self.TASK, "codex", "chat-c")
             popen.assert_not_called()
+
+    def test_two_chats_allow_only_the_named_observation(self):
+        """Ловит мутацию: два чата одной сессии блокируют точный выбор нужного чата."""
+        conn = store.db()
+        identity = session.resolve_session_id(None)
+        first = store.register_observation(
+            conn, config.DEFAULT_TARGET, "codex", "chat-a", identity, [self.TASK])
+        second = store.register_observation(
+            conn, config.DEFAULT_TARGET, "codex", "chat-b", identity, [self.TASK])
+        for observation_id in (first, second):
+            store.touch_observation(conn, observation_id)
+        with mock.patch.object(artel.subprocess, "Popen", return_value=mock.Mock(pid=4242)):
+            capture(artel._launch_detached, "run", self.TASK, "codex", "chat-b")
+        self.assertEqual(store.observed_runs(conn, first), [])
+        self.assertEqual(len(store.observed_runs(conn, second)), 1)
 
     def test_explicit_add_reenables_task_after_manual_stop(self):
         """Ловит мутацию: повторное add не возвращает задачу, отключённую ручным stop."""

@@ -92,7 +92,9 @@ AUTO_MAX_STEPS шагов за вызов. Решений auto не приним
 команда сама порождает себя отдельным процессом ОС и сразу возвращает
 управление, напечатав pid, путь лога (`.artel/logs/<id>-<cmd>-<n>.log`)
 и подсказку `artel.py log <id>`; цикл переживает обрыв породившей его
-сессии. `--attach` — прежнее (до этой задачи) поведение: передний план
+сессии. Отсоединение требует `--client codex|claude --chat <id>` и
+свежего наблюдения той же сессии, проекта, клиента и чата с назначенной
+задачей. `--attach` — прежнее (до этой задачи) поведение: передний план
 вызывающего процесса, без отвязки. `stop <id>` шлёт отвязанному циклу
 SIGTERM; гарантия «доигрывает уже начатый шаг и завершается сам между
 шагами» — про `auto` (у него есть граница между шагами, на которой
@@ -120,7 +122,9 @@ workspace, tasks, knowledge, logs). БД одна на все проекты: с
 
 Команды:
   init | new "<название>" [--tz <файл>] | status | show <id> | advance <id> |
-  run <id> [--attach] | auto <id> [--attach] | stop <id> |
+  run <id> [--attach | --client codex|claude --chat <id>] |
+  auto <id> [--wait-zone] [--attach | --client codex|claude --chat <id>] |
+  stop <id> |
   observe register --client codex|claude --chat <id> --tasks <id[,id...]> |
   observe add|remove <observation-id> --tasks <id[,id...]> |
   observe show|stop <observation-id> [--json] |
@@ -602,6 +606,7 @@ from orchestrator import (amend, answer, auto, budget, canary, catalog,  # noqa:
 
 _CYCLE_FLAGS_RUN = ("--attach",)
 _CYCLE_FLAGS_AUTO = ("--attach", "--wait-zone")
+_CYCLE_CLIENTS = ("codex", "claude")
 
 
 def _task_id_and_attach(rest: list, usage: str,
@@ -619,7 +624,40 @@ def _task_id_and_attach(rest: list, usage: str,
     return positional[0], attach
 
 
-def _launch_detached(cmd: str, task_id: str, extra: tuple = ()) -> None:
+def _cycle_args(rest: list, usage: str, known: tuple) -> tuple:
+    positional = []
+    flags = set()
+    values = {}
+    index = 0
+    while index < len(rest):
+        arg = rest[index]
+        if arg in ("--client", "--chat"):
+            if arg in values or index + 1 >= len(rest) or rest[index + 1].startswith("--"):
+                sys.exit(f"{usage}: требуется одно значение {arg}")
+            values[arg] = rest[index + 1]
+            index += 2
+            continue
+        if arg in known:
+            if arg in flags:
+                sys.exit(f"{usage}: повторный флаг {arg}")
+            flags.add(arg)
+        elif arg.startswith("--"):
+            sys.exit(f"неизвестный флаг {arg!r}; использование: {usage}")
+        else:
+            positional.append(arg)
+        index += 1
+    if len(positional) != 1:
+        sys.exit(usage)
+    attach = "--attach" in flags
+    client, chat = values.get("--client"), values.get("--chat")
+    if not attach and (client not in _CYCLE_CLIENTS or not chat or not chat.strip()):
+        sys.exit(f"{usage}: для отсоединённого запуска нужны "
+                 "--client codex|claude и --chat <непустой ID>")
+    return positional[0], attach, client, chat
+
+
+def _launch_detached(cmd: str, task_id: str, client: str, chat: str,
+                     extra: tuple = ()) -> None:
     """R1-F3 (REVIEW.md итерации 1): до отвязки — дешёвая проверка
     `lease.is_live`, не авторитетное взятие lease (тем ниже и остаётся,
     внутри спавненного процесса, через `lease.run_locked`). Без неё
@@ -630,13 +668,18 @@ def _launch_detached(cmd: str, task_id: str, extra: tuple = ()) -> None:
     и спавном) не авторитетна и не обязана быть — тело `run_locked` внутри
     спавненного процесса решает по факту, эта проверка только возвращает
     немедленную обратную связь на очевидный случай."""
+    if client not in _CYCLE_CLIENTS or not chat or not chat.strip():
+        sys.exit("для отсоединённого запуска нужны --client codex|claude "
+                 "и --chat <непустой ID>")
     conn = store.db()
     task_id = store.resolve_task_id(conn, task_id)
     task = store.get_task(conn, task_id)
     observer = store.matching_observation(
-        conn, task_id, task["target"], session.resolve_session_id(None))
+        conn, task_id, task["target"], session.resolve_session_id(None),
+        client, chat)
     if observer is None:
-        sys.exit(f"[{task_id}] нет активного наблюдения этой сессии для задачи и проекта")
+        sys.exit(f"[{task_id}] нет активного наблюдения для текущих "
+                 "сессии, проекта, клиента, чата и задачи")
     if observer["last_seen_at"] is None:
         sys.exit(f"[{task_id}] наблюдение зарегистрировано, но связи с watch ещё нет")
     age = (datetime.now(timezone.utc) -
@@ -678,21 +721,24 @@ def _launch_detached(cmd: str, task_id: str, extra: tuple = ()) -> None:
 
 
 def _cmd_run_or_detach(rest: list) -> None:
-    task_id, attach = _task_id_and_attach(rest, "run <id> [--attach]")
+    task_id, attach, client, chat = _cycle_args(
+        rest, "run <id> [--attach | --client codex|claude --chat <id>]",
+        _CYCLE_FLAGS_RUN)
     if attach:
         runner.cmd_run(task_id)
         return
-    _launch_detached("run", task_id)
+    _launch_detached("run", task_id, client, chat)
 
 
 def _cmd_auto_or_detach(rest: list) -> None:
-    task_id, attach = _task_id_and_attach(
-        rest, "auto <id> [--attach] [--wait-zone]", known=_CYCLE_FLAGS_AUTO)
+    task_id, attach, client, chat = _cycle_args(
+        rest, "auto <id> [--attach | --client codex|claude --chat <id>] [--wait-zone]",
+        _CYCLE_FLAGS_AUTO)
     wait_zone = "--wait-zone" in rest
     if attach:
         auto.cmd_auto(task_id, wait_zone=wait_zone)
         return
-    _launch_detached("auto", task_id,
+    _launch_detached("auto", task_id, client, chat,
                      extra=("--wait-zone",) if wait_zone else ())
 
 
