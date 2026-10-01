@@ -1,7 +1,7 @@
 """Публичный CLI наблюдения и управляемого фонового запуска.
 
 Группа: долгоживущий
-Красен до реализации: команды observe, режим watch --observation и настройки heartbeat пока отсутствуют.
+Красен до реализации: обязательные client/chat и отказ при несовпадении контекста запуска по R1-F1 ещё не реализованы.
 
 Контракт ответа Оператора: register печатает JSON с id; show --json содержит
 id, project, client, chat, tasks, state, last_seen_at, fresh и runs.
@@ -66,7 +66,7 @@ class ObservationCliTest(TaskSeededTmpRootTest):
         for command, pid in (("run", 43210), ("auto", 43211)):
             with self.subTest(command=command, seed=self.seed):
                 proc = mock.Mock(pid=pid)
-                with mock.patch.object(sys, "argv", ["artel.py", command, self.TASK]), mock.patch.object(artel.subprocess, "Popen", return_value=proc):
+                with mock.patch.object(sys, "argv", ["artel.py", command, self.TASK, "--client", "codex", "--chat", self.chat]), mock.patch.object(artel.subprocess, "Popen", return_value=proc):
                     capture(artel.main)
         with mock.patch.object(sys, "argv", ["artel.py", "observe", "show", observation_id, "--json"]):
             shown = json.loads(capture(artel.main))
@@ -136,7 +136,7 @@ class ObservationCliTest(TaskSeededTmpRootTest):
         """
         for command in ("run", "auto"):
             with self.subTest(command=command, seed=self.seed):
-                with mock.patch.object(sys, "argv", ["artel.py", command, self.TASK]), mock.patch.object(artel.subprocess, "Popen") as popen:
+                with mock.patch.object(sys, "argv", ["artel.py", command, self.TASK, "--client", "codex", "--chat", self.chat]), mock.patch.object(artel.subprocess, "Popen") as popen:
                     with self.assertRaises(SystemExit) as ctx:
                         capture(artel.main)
                     popen.assert_not_called()
@@ -159,7 +159,7 @@ class ObservationCliTest(TaskSeededTmpRootTest):
             time.sleep(0.01)
             for command in ("run", "auto"):
                 with self.subTest(command=command, state="stale", seed=self.seed):
-                    with mock.patch.object(sys, "argv", ["artel.py", command, self.TASK]), mock.patch.object(artel.subprocess, "Popen") as popen:
+                    with mock.patch.object(sys, "argv", ["artel.py", command, self.TASK, "--client", "codex", "--chat", self.chat]), mock.patch.object(artel.subprocess, "Popen") as popen:
                         with self.assertRaises(SystemExit) as ctx:
                             capture(artel.main)
                         popen.assert_not_called()
@@ -193,14 +193,42 @@ class ObservationCliTest(TaskSeededTmpRootTest):
                 capture(artel.main)
         for task in ("T002", "T003", "T999"):
             with self.subTest(task=task, seed=self.seed):
-                with mock.patch.object(sys, "argv", ["artel.py", "run", task]), mock.patch.object(artel.subprocess, "Popen") as popen:
+                with mock.patch.object(sys, "argv", ["artel.py", "run", task, "--client", "codex", "--chat", self.chat]), mock.patch.object(artel.subprocess, "Popen") as popen:
                     with self.assertRaises(SystemExit):
                         capture(artel.main)
                     popen.assert_not_called()
-        with mock.patch.dict(os.environ, {config.ARTEL_ROLE_ENV: "developer"}), mock.patch.object(sys, "argv", ["artel.py", "run", self.TASK]), mock.patch.object(artel.subprocess, "Popen") as popen:
+        with mock.patch.dict(os.environ, {config.ARTEL_ROLE_ENV: "developer"}), mock.patch.object(sys, "argv", ["artel.py", "run", self.TASK, "--client", "codex", "--chat", self.chat]), mock.patch.object(artel.subprocess, "Popen") as popen:
             with self.assertRaises(SystemExit):
                 capture(artel.main)
             popen.assert_not_called()
+
+    def test_ac8_launch_requires_matching_client_and_chat(self):
+        """Контекст запуска обязателен и совпадает с наблюдением.
+
+        Ловит мутацию: запуск использует только session_id или игнорирует
+        отсутствие и несовпадение client/chat перед Popen.
+        """
+        with mock.patch.object(sys, "argv", ["artel.py", "observe", "register", "--client", "codex", "--chat", self.chat, "--tasks", self.TASK]):
+            observation_id = json.loads(capture(artel.main))["id"]
+        with mock.patch.object(sys, "argv", ["artel.py", "watch", "--observation", observation_id]), mock.patch.object(watch.time, "sleep", side_effect=RuntimeError("watch ended")):
+            with self.assertRaisesRegex(RuntimeError, "watch ended"):
+                capture(artel.main)
+        contexts = (
+            [],
+            ["--client", "codex"],
+            ["--chat", self.chat],
+            ["--client", "codex", "--chat", ""],
+            ["--client", "unknown", "--chat", self.chat],
+            ["--client", "claude", "--chat", self.chat],
+            ["--client", "codex", "--chat", self.chat + "-other"],
+        )
+        for command in ("run", "auto"):
+            for context in contexts:
+                with self.subTest(command=command, context=context, seed=self.seed):
+                    with mock.patch.object(sys, "argv", ["artel.py", command, self.TASK, *context]), mock.patch.object(artel.subprocess, "Popen") as popen:
+                        with self.assertRaises(SystemExit):
+                            capture(artel.main)
+                        popen.assert_not_called()
 
     def test_ac9_other_task_decision_does_not_drop_shared_observation(self):
         """Решение по одной задаче оставляет вторую в свежем наблюдении.
@@ -247,7 +275,7 @@ class ObservationCliTest(TaskSeededTmpRootTest):
                 capture(artel.main)
         with mock.patch.object(sys, "argv", ["artel.py", "observe", "stop", observation_id]):
             capture(artel.main)
-        with mock.patch.object(sys, "argv", ["artel.py", "auto", self.TASK]), mock.patch.object(artel.subprocess, "Popen") as popen:
+        with mock.patch.object(sys, "argv", ["artel.py", "auto", self.TASK, "--client", "codex", "--chat", self.chat]), mock.patch.object(artel.subprocess, "Popen") as popen:
             with self.assertRaises(SystemExit):
                 capture(artel.main)
             popen.assert_not_called()
