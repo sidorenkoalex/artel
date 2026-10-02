@@ -94,6 +94,13 @@ schema_version: 5
   но если какая-то роль звала их штатно, она начнёт отказывать (по скилам
   такого вызова нет).
 
+## Расширение зон
+Мандат Оператора — ANSWER-2.md («Расширение зон разрешено:
+orchestrator/doctor/isolation.py»): прямая проверка маркера `ARTEL_ROLE`
+в смоках изоляции Claude и Codex (шаг 6).
+
+Пути: orchestrator/doctor/isolation.py
+
 ## Предложения системе
 - Смок `codex-isolation-smoke` (`orchestrator/doctor/isolation.py:298`)
   проверяет наличие маркера через признак роли, а не напрямую — любое
