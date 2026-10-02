@@ -38,6 +38,7 @@ docs/research/providers-codex-plan.md §3).
 01M300A14KRHCFB0DQXVCBJEKF, требования 1-2).
 """
 import json
+import re
 import sys
 from collections import namedtuple
 
@@ -1001,13 +1002,16 @@ AUTOGATE_REFUSAL_PREFIX = "автогейт: "
 
 #: Причины по вине роли — начала текстов `fsm_autogate` после префикса:
 #: критерии `manual`/`skip` в планке (test_author), красный полный набор и
-#: непройденный критерий `ci` (developer).
-_ROLE_BLAME_STARTS = (
-    "критерии manual",
-    "критерии skip",
-    "полный набор tests/ красный",
-    "критерий ci не пройден",
-)
+#: непройденный критерий `ci` (developer). Роль — виновная роль причины:
+#: её пару набора приостанавливает отказ автогейта (SPEC
+#: 01M3YCHVVEK14SK8GT4R0H7M2C, требование 4).
+_ROLE_BLAME_ROLES = {
+    "критерии manual": "test_author",
+    "критерии skip": "test_author",
+    "полный набор tests/ красный": "developer",
+    "критерий ci не пройден": "developer",
+}
+_ROLE_BLAME_STARTS = tuple(_ROLE_BLAME_ROLES)
 
 #: Причины по вине пульта/пула: ошибка источника планки
 #: (`fsm_autogate._plank_sources`), пустой каталог приёмочных тестов,
@@ -1137,6 +1141,12 @@ def unclean_reason(row) -> str | None:
         return f"итераций ревью {row['review_iterations']}"
     if row["escalations"] != 0 and not expected_escalation_met(row):
         return f"эскалаций {row['escalations']}, ожидаемой с верным исходом нет"
+    # «Без эскалаций, кроме ожидаемой» (решение Оператора 02.10.2026, SPEC
+    # 01M3YCHVVEK14SK8GT4R0H7M2C, требование 8): выполненная ожидаемая
+    # покрывает ровно одну эскалацию, не любое их число.
+    if row["escalations"] is not None and row["escalations"] > 1:
+        return (f"эскалаций {row['escalations']}, ожидаемая эскалация "
+                f"покрывает только одну")
     blame = autogate_refusal_blame(row["autogate_refusal"])
     if blame not in (None, BLAME_PULT):
         return f"отказ автогейта, вина: {blame}"
@@ -1230,7 +1240,9 @@ def set_admitted(conn, set_name: str) -> tuple[bool, str]:
     """(допущен ли набор `set_name` из `sets:`, пояснение) — требование 4.
 
     Допущен, если (а) каждая его пара, чья модель отличается от боевой
-    модели роли, записана в `pairs:` с `state: допущена`, и (б) в
+    модели роли, записана в `pairs:` с `state: допущена` и не
+    приостановлена пультом (`pair_suspension_refusal`, SPEC
+    01M3YCHVVEK14SK8GT4R0H7M2C, требование 5), и (б) в
     `canary_runs` есть строка `verdict = green` на шаблоне класса
     `трудный`, сводка которой совпадает с набором по всем его ролям.
     Нечитаемый файл и неизвестный набор — «не допущен» с причиной.
@@ -1245,7 +1257,8 @@ def set_admitted(conn, set_name: str) -> tuple[bool, str]:
     for role, model in members.items():
         if model == _combat_model(role):
             continue
-        refusal = _pair_refusal(document, role, model)
+        refusal = (_pair_refusal(document, role, model)
+                   or pair_suspension_refusal(conn, role, model))
         if refusal is not None:
             return False, refusal
     for row in _canary_rows(conn):
@@ -1441,7 +1454,14 @@ def _set_pair_withdrawn(role: str, model_id: str, catalog: Catalog,
         document = load_model_sets()
     except ModelsError as exc:
         return f"допуск пары {role} → {model_id} не подтверждён: {exc}"
-    return _pair_refusal(document, role, model_id)
+    refusal = _pair_refusal(document, role, model_id)
+    if refusal is not None or not config.DB.exists():
+        return refusal
+    # Приостановка пультом перекрывает `state: допущена` файла (SPEC
+    # 01M3YCHVVEK14SK8GT4R0H7M2C, требование 5): шага роли на
+    # приостановленной паре после приостановки нет.
+    from . import store
+    return pair_suspension_refusal(store.db(), role, model_id)
 
 
 def resolve_task_role(role: str, task, catalog: Catalog = None,
@@ -1469,10 +1489,10 @@ def resolve_task_role(role: str, task, catalog: Catalog = None,
     model_id = members[role]
     withdrawn = _set_pair_withdrawn(role, model_id, catalog, local)
     if withdrawn is not None:
-        return _combat_task_model(
-            role, catalog, local,
+        combat = _combat_task_model(role, catalog, local)
+        return combat._replace(withdrawn=(
             f"набор задачи {name}: {withdrawn} — шаг роли {role} идёт на "
-            f"боевой модели вместо {model_id}")
+            f"боевой модели {combat.resolution.model} вместо {model_id}"))
     from . import roles
     try:
         tier = roles.model_tier(role)
@@ -1498,6 +1518,222 @@ def resolve_task_role(role: str, task, catalog: Catalog = None,
                           effective.tariff_source, effective.calibrated_at,
                           effective.source)
     return TaskModel(resolved, f"{SOURCE_TASK_SET} {name}", True, None)
+
+
+# --- Пробный период и приостановка пары набора (SPEC
+# 01M3YCHVVEK14SK8GT4R0H7M2C; ADR-0019 п.5, дополнение 30.09.2026) ---
+#
+# Счётчик пробного периода и приостановки — в БД пульта, не в
+# `model_sets.yaml`: файл несёт решения Оператора, а эти факты — следствия
+# работы пульта. Приостановка пультом перекрывает `state: допущена` файла
+# (`set_admitted`, `_set_pair_withdrawn`) до `pair-resume`.
+
+#: Число пробных задач набора — ADR-0019 п.5.
+SET_TRIAL_TASKS = 3
+SET_TRIAL_PHRASE = "пробная задача набора"
+
+#: Вердикты ревью в `pair_verdicts`.
+VERDICT_RETURN = "return"
+VERDICT_APPROVED = "approved"
+#: Виновная роль возврата ревью: возвращена работа developer.
+REVIEW_RETURN_ROLE = "developer"
+
+PAIR_SUSPENDED_ACTION = "пара набора приостановлена"
+PAIR_RESUMED_ACTION = "пара набора снята с приостановки"
+PAIR_SUSPENSION_ALERT_SOURCE = "pair_suspension"
+PAIR_RESUME_USAGE = 'pair-resume <роль> <модель> "<решение>"'
+
+#: Поле модели записи «agent run started» (`runner._prepare_step`).
+_STEP_MODEL_RE = re.compile(r"\bmodel=([^,\s]+)")
+_STEP_STARTED_ACTION = "agent run started"
+
+
+def _is_canary(task) -> bool:
+    return bool(_task_field(task, "is_canary"))
+
+
+def set_trial_reason(conn, task) -> str | None:
+    """Причина ручной приёмки пробной задачи набора (требования 1-2);
+    `None` — задача не пробная: без набора, канареечная либо настоящих
+    задач в `done` с тем же записанным составом уже три и больше.
+
+    Счёт — из БД на момент решения, по совпадению записанного состава
+    (`model_set_members`), не по имени: набор под тем же именем с другим
+    составом — другой набор. Нечитаемый состав — `TaskSetError`
+    (fail-closed у вызывающего: автогейт не пройдёт)."""
+    from . import store
+    name = task_set_name(task)
+    if not name or _is_canary(task):
+        return None
+    members = task_set_members(task)
+    done = 0
+    for row in store.all_tasks(conn):
+        if row["state"] != "done" or _is_canary(row) or row["id"] == task["id"]:
+            continue
+        try:
+            if task_set_members(row) == members:
+                done += 1
+        except ModelsError:
+            continue
+    if done >= SET_TRIAL_TASKS:
+        return None
+    return (f"{SET_TRIAL_PHRASE} {name}, {done + 1} из {SET_TRIAL_TASKS} — "
+            f"приёмка ручная, пока в done меньше {SET_TRIAL_TASKS} настоящих "
+            f"задач этого состава (ADR-0019 п.5)")
+
+
+def pair_suspension_refusal(conn, role: str, model: str) -> str | None:
+    """Текст отказа по действующей приостановке пары пультом; `None` —
+    пара не приостановлена пультом."""
+    from . import store
+    row = store.active_pair_suspension(conn, role, model)
+    if row is None:
+        return None
+    return (f"пара {role} → {model} приостановлена пультом (набор "
+            f"{row['set_name']}, задача {row['task_id']}: {row['reason']}) — "
+            f"снятие: artel.py pair-resume {role} {model} \"<решение>\"")
+
+
+def _last_step_model(conn, task_id: str, role: str) -> str | None:
+    """Модель последнего шага роли в задаче по записи «agent run started»;
+    `None` — шага роли не было."""
+    from . import store
+    for row in reversed(store.task_steps(conn, task_id)):
+        if row["actor"] == role and row["action"] == _STEP_STARTED_ACTION:
+            match = _STEP_MODEL_RE.search(row["detail"] or "")
+            return match.group(1) if match else None
+    return None
+
+
+def _set_pair(task, role: str) -> str | None:
+    """Модель пары набора настоящей задачи по роли; `None` — задача без
+    набора, канареечная, роль вне состава или на боевой модели (такая
+    пара допуска не требует и не приостанавливается)."""
+    if not task_set_name(task) or _is_canary(task):
+        return None
+    try:
+        model = task_set_members(task).get(role)
+    except ModelsError:
+        return None
+    if model is None or model == _combat_model(role):
+        return None
+    return model
+
+
+def _suspend_pair(conn, task, role: str, model: str, reason: str) -> None:
+    """Приостановка пары пультом (требование 5): строка БД, запись журнала
+    задачи-причины и алерт Оператору. Уже приостановленная пара второй
+    строки не получает."""
+    from . import alerts, store
+    if store.active_pair_suspension(conn, role, model) is not None:
+        return
+    task_id, name = task["id"], task_set_name(task)
+    store.insert_pair_suspension(conn, role, model, name, task_id, reason)
+    detail = (f"пара {role} → {model} набора {name} приостановлена пультом "
+              f"по задаче {task_id}: {reason}; до снятия шаги роли {role} "
+              f"идут на боевой модели, new --set с этой парой отказывает; "
+              f"снятие — artel.py pair-resume {role} {model} \"<решение>\"")
+    store.journal(conn, task_id, "fsm", PAIR_SUSPENDED_ACTION, detail)
+    alerts.raise_alert(conn, task_id, "incident",
+                       PAIR_SUSPENSION_ALERT_SOURCE, detail)
+    print(f"[{task_id}] ВНИМАНИЕ: {detail}")
+
+
+def _consecutive_returns(conn, role: str, model: str, task_id: str,
+                         verdict_id: int) -> str | None:
+    """Причина приостановки по возвратам ревью подряд (требование 3);
+    `None` — возврат одиночный. «Подряд» — по потоку вердиктов пары
+    (ANSWER-1, п.1): непосредственно предыдущий вердикт пары — тоже
+    возврат, в этой задаче или в соседней; одобрение между ними цепочку
+    рвёт. Засчитываются только вердикты после последнего снятия
+    приостановки пары."""
+    from . import store
+    mark = store.last_pair_resume_mark(conn, role, model)
+    earlier = [row for row in store.pair_verdicts_after(conn, role, model, mark)
+               if row["id"] < verdict_id]
+    if not earlier or earlier[-1]["verdict"] != VERDICT_RETURN:
+        return None
+    previous = earlier[-1]["task_id"]
+    if previous == task_id:
+        return f"второй возврат ревью подряд в задаче {task_id}"
+    return (f"возврат ревью в задаче {task_id} подряд за возвратом ревью "
+            f"предыдущей задачи пары {previous}")
+
+
+def record_review_verdict(conn, task_id: str, verdict: str) -> None:
+    """Вердикт ревью настоящей задачи — паре набора по роли developer, если
+    последний шаг developer задачи шёл на этой паре; возврат ревью подряд
+    приостанавливает пару (требование 3). Зовётся из `store.set_state` на
+    переходах `review -> in_dev`/`review -> acceptance`."""
+    from . import store
+    task = store.get_task(conn, task_id)
+    role = REVIEW_RETURN_ROLE
+    model = _set_pair(task, role)
+    if model is None or _last_step_model(conn, task_id, role) != model:
+        return
+    verdict_id = store.insert_pair_verdict(conn, role, model, task_id, verdict)
+    if verdict != VERDICT_RETURN:
+        return
+    reason = _consecutive_returns(conn, role, model, task_id, verdict_id)
+    if reason is not None:
+        _suspend_pair(conn, task, role, model, reason)
+
+
+def _refusal_role(reason: str) -> str | None:
+    """Виновная роль причины отказа автогейта по перечню правила вины."""
+    text = " ".join(str(reason).split())
+    if text.startswith(AUTOGATE_REFUSAL_PREFIX):
+        text = text[len(AUTOGATE_REFUSAL_PREFIX):]
+    for start, role in _ROLE_BLAME_ROLES.items():
+        if text.startswith(start):
+            return role
+    return None
+
+
+def suspend_on_autogate_refusal(conn, task, reason: str) -> None:
+    """Отказ автогейта приёмки по вине роли в настоящей задаче с набором
+    приостанавливает пару набора виновной роли (требование 4), если
+    последний шаг этой роли в задаче не шёл на другой модели (ANSWER-1,
+    п.2): шаг, откаченный на боевую модель, вину на пару не кладёт. Вина `пульт/пул` и `не установлена` (в том числе пробный
+    период) пару не трогают."""
+    if autogate_refusal_blame(reason) != BLAME_ROLE:
+        return
+    role = _refusal_role(reason)
+    model = _set_pair(task, role) if role is not None else None
+    if model is None:
+        return
+    # Записи шага роли нет — отката не наблюдалось, роль шла по составу
+    # набора; вину снимает только последний шаг роли на другой модели.
+    last = _last_step_model(conn, task["id"], role)
+    if last is not None and last != model:
+        return
+    _suspend_pair(conn, task, role, model,
+                  f"отказ автогейта приёмки по вине роли {role}: {reason}")
+
+
+def cmd_pair_resume(argv: list) -> None:
+    """`pair-resume <роль> <модель> "<решение>"` — снятие приостановки пары
+    пультом (требование 6). Пара без действующей приостановки — отказ до
+    любой записи в БД. Ручную `state: приостановлена` в `model_sets.yaml`
+    команда не трогает: её ведёт Оператор (`admit`/`doc-commit`)."""
+    from . import store
+    if len(argv) != 3 or not " ".join(argv[2].split()):
+        sys.exit(f"pair-resume: нужны роль, модель и текст решения\n"
+                 f"{PAIR_RESUME_USAGE}")
+    role, model = argv[0], argv[1]
+    decision = " ".join(argv[2].split())
+    conn = store.db()
+    row = store.active_pair_suspension(conn, role, model)
+    if row is None:
+        sys.exit(f"pair-resume: пара {role} → {model} не приостановлена "
+                 f"пультом — снимать нечего (запись state: "
+                 f"{PAIR_SUSPENDED} в {config.MODEL_SETS_REL} ведёт "
+                 f"Оператор через admit/doc-commit)")
+    store.resume_pair_suspension(conn, row["id"], decision)
+    detail = (f"пара {role} → {model} набора {row['set_name']} снята с "
+              f"приостановки пульта; решение Оператора: {decision}")
+    store.journal(conn, row["task_id"], "operator", PAIR_RESUMED_ACTION, detail)
+    print(detail)
 
 def _scalar_yaml(value, where: str) -> str:
     """Скаляр так, чтобы `yamlmini.scalar` вернул его дословно (число,

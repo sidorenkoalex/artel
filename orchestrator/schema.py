@@ -80,6 +80,26 @@ STEPS_TASK_ID_INDEX_DDL = """
 CREATE INDEX IF NOT EXISTS idx_steps_task_id ON steps(task_id);
 """
 
+# Пробный период и приостановка пары набора (SPEC
+# 01M3YCHVVEK14SK8GT4R0H7M2C, требования 3-6): вердикты ревью настоящих
+# задач на паре набора по роли developer и автоматические приостановки
+# пар — в БД пульта, не в `model_sets.yaml` (решения Оператора). Порядок
+# вердиктов — по `id`, не по секундной метке: «подряд» различает события
+# одной секунды. `resumed_after_verdict` — наибольший `pair_verdicts.id` на
+# момент `pair-resume`: вердикты не новее него в «подряд» не засчитываются.
+# Тем же литералом в `SCHEMA` и `migrate()` (см. `MODEL_TARIFFS_DDL`).
+PAIR_SUSPENSION_DDL = """
+CREATE TABLE IF NOT EXISTS pair_verdicts (
+  id INTEGER PRIMARY KEY AUTOINCREMENT, role TEXT NOT NULL,
+  model TEXT NOT NULL, task_id TEXT NOT NULL, verdict TEXT NOT NULL, ts TEXT
+);
+CREATE TABLE IF NOT EXISTS pair_suspensions (
+  id INTEGER PRIMARY KEY AUTOINCREMENT, role TEXT NOT NULL,
+  model TEXT NOT NULL, set_name TEXT, task_id TEXT, reason TEXT, ts TEXT,
+  resumed_ts TEXT, resume_decision TEXT, resumed_after_verdict INTEGER
+);
+"""
+
 SCHEMA = f"""
 CREATE TABLE IF NOT EXISTS tasks (
   id TEXT PRIMARY KEY, title TEXT, state TEXT, branch TEXT,
@@ -129,6 +149,7 @@ CREATE TABLE IF NOT EXISTS merge_queue (
 );
 {MODEL_TARIFFS_DDL}
 {OBSERVATIONS_DDL}
+{PAIR_SUSPENSION_DDL}
 """
 
 
@@ -318,6 +339,7 @@ def migrate(conn: sqlite3.Connection) -> None:
     # разъехались между свежей БД и догнанной.
     conn.executescript(MODEL_TARIFFS_DDL)
     conn.executescript(OBSERVATIONS_DDL)
+    conn.executescript(PAIR_SUSPENSION_DDL)
     # Индекс `steps(task_id)` (SPEC 01M3GKJFN90ATK2KECNDZXPPP6, требование
     # 1): БД прошлых версий его не имеют — догоняется тем же приёмом и ТЕМ
     # ЖЕ литералом, что `model_tariffs` выше. `IF NOT EXISTS` обязателен:

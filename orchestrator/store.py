@@ -431,6 +431,75 @@ def record_model_tariff(conn: sqlite3.Connection, model_id: str,
     return True
 
 
+# --- Вердикты и приостановки пар набора (SPEC 01M3YCHVVEK14SK8GT4R0H7M2C) ---
+# Решения — в `orchestrator/models.py`; здесь только запросы. Таблицы
+# заводят `SCHEMA`/`migrate()` (`db()`), запросы DDL не исполняют: неявный
+# COMMIT `executescript` на чтении закрыл бы транзакцию вызывающего.
+
+
+def insert_pair_verdict(conn: sqlite3.Connection, role: str, model: str,
+                        task_id: str, verdict: str) -> int:
+    """Вердикт ревью задачи на паре «роль → модель»; возвращает `id`."""
+    cur = conn.execute(
+        "INSERT INTO pair_verdicts (role, model, task_id, verdict, ts) "
+        "VALUES (?,?,?,?,?)", (role, model, task_id, verdict, now()))
+    conn.commit()
+    return cur.lastrowid
+
+
+def pair_verdicts_after(conn: sqlite3.Connection, role: str, model: str,
+                        after_id: int) -> list:
+    """Вердикты пары с `id > after_id` по порядку записи."""
+    return conn.execute(
+        "SELECT * FROM pair_verdicts WHERE role=? AND model=? AND id>? "
+        "ORDER BY id", (role, model, after_id)).fetchall()
+
+
+def max_pair_verdict_id(conn: sqlite3.Connection) -> int:
+    row = conn.execute("SELECT MAX(id) AS top FROM pair_verdicts").fetchone()
+    return row["top"] or 0
+
+
+def active_pair_suspension(conn: sqlite3.Connection, role: str, model: str):
+    """Действующая (не снятая) приостановка пары; `None` — её нет."""
+    return conn.execute(
+        "SELECT * FROM pair_suspensions WHERE role=? AND model=? "
+        "AND resumed_ts IS NULL ORDER BY id DESC LIMIT 1",
+        (role, model)).fetchone()
+
+
+def last_pair_resume_mark(conn: sqlite3.Connection, role: str,
+                          model: str) -> int:
+    """`resumed_after_verdict` последнего снятия приостановки пары; 0 —
+    пару ни разу не снимали."""
+    row = conn.execute(
+        "SELECT MAX(resumed_after_verdict) AS mark FROM pair_suspensions "
+        "WHERE role=? AND model=? AND resumed_ts IS NOT NULL",
+        (role, model)).fetchone()
+    return row["mark"] or 0
+
+
+def insert_pair_suspension(conn: sqlite3.Connection, role: str, model: str,
+                           set_name: str, task_id: str, reason: str) -> int:
+    cur = conn.execute(
+        "INSERT INTO pair_suspensions (role, model, set_name, task_id, "
+        "reason, ts) VALUES (?,?,?,?,?,?)",
+        (role, model, set_name, task_id, reason, now()))
+    conn.commit()
+    return cur.lastrowid
+
+
+def resume_pair_suspension(conn: sqlite3.Connection, suspension_id: int,
+                           decision: str) -> None:
+    """Снимает приостановку: метка, решение Оператора и отметка вердиктов,
+    после которой «подряд» считается заново."""
+    conn.execute(
+        "UPDATE pair_suspensions SET resumed_ts=?, resume_decision=?, "
+        "resumed_after_verdict=? WHERE id=?",
+        (now(), decision, max_pair_verdict_id(conn), suspension_id))
+    conn.commit()
+
+
 def total_spent(conn: sqlite3.Connection) -> float:
     """Суммарный расход по всем задачам всех target'ов (roadmap §5)."""
     row = conn.execute("SELECT SUM(spent_usd) AS total FROM tasks").fetchone()
@@ -580,6 +649,27 @@ def set_state(conn, task_id: str, state: str, actor: str, *,
     record_fixation(conn, task_id)
     _append_passport_line(conn, task_id, state, actor)
     _close_attention_alert(conn, task_id)
+    _record_review_verdict(conn, task_id, expected_state, state)
+
+
+#: Переходы из `review`, которые и есть вердикт ревьювера: возврат
+#: (`changes_requested`) и одобрение.
+_REVIEW_VERDICT_TRANSITIONS = {("review", "in_dev"): "return",
+                               ("review", "acceptance"): "approved"}
+
+
+def _record_review_verdict(conn, task_id: str, expected_state: str,
+                           state: str) -> None:
+    """Вердикт ревью — паре набора задачи (SPEC 01M3YCHVVEK14SK8GT4R0H7M2C,
+    требование 3). Хук здесь, а не в обработчике `review`: `set_state` —
+    единственная точка любого перехода, тот же приём, что
+    `_close_attention_alert`. Отложенный импорт — `store.py` остаётся
+    листом графа импортов при загрузке."""
+    verdict = _REVIEW_VERDICT_TRANSITIONS.get((expected_state, state))
+    if verdict is None:
+        return
+    from . import models
+    models.record_review_verdict(conn, task_id, verdict)
 
 
 def _append_passport_line(conn, task_id: str, state: str, actor: str) -> None:
