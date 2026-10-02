@@ -4,7 +4,7 @@
 
 Группа: долгоживущий
 
-Красен до реализации: предполёт шага (`doctor.preflight_checks(role, target)`) выбирает провайдера по роли — у задачи, где набор переводит роль на Codex, он проверяет CLI и токен Claude, а вход Codex не спрашивает вовсе (шаг уходит в запуск агента, AC-4), отказ по CLI Codex не называет набор (AC-2), а при невыполненном входе боевого Codex шаг набора на модели Claude отклоняется (AC-3); склейка `doctor` спрашивает только провайдеров ролей карты — строк `codex-cli-found`/`codex-chatgpt-auth` от набора задачи в работе нет (AC-5).
+Красен до реализации: предполёт шага (`doctor.preflight_checks(role, target)`) выбирает провайдера по роли — у задачи, где набор переводит роль на Codex, он проверяет CLI и токен Claude (без токена Claude в keychain шаг Codex отклоняется, AC-1), а вход Codex не спрашивает вовсе (шаг уходит в запуск агента, AC-4), отказ по CLI Codex не называет набор (AC-2), а при невыполненном входе боевого Codex шаг набора на модели Claude отклоняется (AC-3); склейка `doctor` спрашивает только провайдеров ролей карты — строк `codex-cli-found`/`codex-chatgpt-auth` от набора задачи в работе нет (AC-5).
 
 Файл провалидирован временным стабом реализации: провайдер шага и имя
 набора переданы в предполёт, провалы предполёта задачи с набором дописаны
@@ -13,8 +13,9 @@
 с разными зёрнами. Мутации стаба: предполёт по провайдеру роли красит AC-3
 («шаг, а не роль») и AC-4; провайдер набора, протёкший на соседнюю задачу,
 красит AC-3 («соседняя»). Стаб удалён, код репозитория не тронут.
-Критерий AC-1 в этом файле не покрыт: он эскалирован (пометка в планке
-задачи).
+AC-1 — в прочтении ANSWER-1 (вариант Б): CLI `claude` на машине есть
+(обязательный инструмент манифеста), но токена Claude в keychain нет;
+предполёт шага на Codex этого не спрашивает, агент запускается.
 
 Публичная поверхность, которую читает файл:
 
@@ -305,6 +306,34 @@ class SetPreflightSandbox(LightTransitionSandbox):
 
 
 class SetStepPreflightTest(SetPreflightSandbox):
+
+    def test_ac1_set_step_on_codex_starts_without_claude_login(self):
+        """Набор переводит роль на Codex, вход Claude в слоте keychain не годится.
+
+        Сценарий: CLI `claude` на машине есть (обязательный инструмент
+        манифеста), но ни один слот keychain не отдаёт токен Claude
+        (случайно: пусто либо `None`); CLI `codex` есть, вход Codex
+        выполнен. Соседняя задача без набора (та же роль) отклонена до
+        запуска агента — Claude в этом сценарии действительно не годится;
+        шаг developer задачи с набором проходит предполёт, и агент
+        запущен CLI `codex` с моделью набора. Порядок шагов — случайный.
+
+        Ловит мутацию: предполёт шага задачи с набором проверяет вход
+        боевого провайдера роли (`check_token` Claude) — шаг отклоняется
+        `pre-flight FAILED: token: … токен не найден`, `spawn_agent` не
+        вызван ни разу."""
+        name, task = self.codex_set()
+        empty = self.rnd.choice((None, ""))
+        self.patch(keychain, "token", lambda slot: empty)
+        order = [("neighbour", self.neighbour), ("set", task)]
+        self.rnd.shuffle(order)
+
+        steps = {kind: self.run_step(task_id) for kind, task_id in order}
+
+        self.assert_refused_before_start(
+            steps["neighbour"], "соседняя без набора, нет токена Claude")
+        self.assert_launched(steps["set"], CODEX, FIXTURE_CODEX_MODEL,
+                             f"набор {name}, нет токена Claude")
 
     def test_ac2_missing_codex_cli_refuses_set_step_naming_provider_role_set(self):
         """Набор переводит роль на Codex, CLI `codex` на машине нет.
