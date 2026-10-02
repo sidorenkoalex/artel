@@ -1,5 +1,5 @@
 ---
-built_at_sha: f7128cae43be5026dfba8a66658871ae8e77d03e
+built_at_sha: 36732227f6781c75762a4f80f3193bec43cb5775
 ---
 
 # Codebase-map пульта
@@ -473,12 +473,13 @@ built_at_sha: f7128cae43be5026dfba8a66658871ae8e77d03e
 **Назначение:** Подсказка запуска цикла `run`/`auto` (SPEC 01M3XTFJCC5TG63FHW907GQM4D).
 
 **Публичные функции:**
+- `cycle_command`
 - `launch_hint`
 - `launch_text`
 
 **Импортирует:** `orchestrator/session.py`, `orchestrator/store.py`
 
-**Импортируется:** `orchestrator/advance_gates/tests_writing.py`, `orchestrator/answer.py`, `orchestrator/auto.py`, `orchestrator/budget.py`, `orchestrator/catalog.py`, `orchestrator/ci_rerun.py`, `orchestrator/fsm.py`, `tests/test_cycle_hint.py`
+**Импортируется:** `orchestrator/advance_gates/tests_writing.py`, `orchestrator/answer.py`, `orchestrator/auto.py`, `orchestrator/budget.py`, `orchestrator/catalog.py`, `orchestrator/ci_rerun.py`, `orchestrator/doctor/__init__.py`, `orchestrator/fsm.py`, `tests/test_cycle_hint.py`, `tests/test_pin_update_stale_cycles.py`
 
 ## orchestrator/doctor/__init__.py
 
@@ -486,7 +487,7 @@ built_at_sha: f7128cae43be5026dfba8a66658871ae8e77d03e
 
 **Публичные функции:** (нет)
 
-**Импортирует:** `orchestrator/alerts.py`, `orchestrator/artifact_branch.py`, `orchestrator/canary.py`, `orchestrator/ci.py`, `orchestrator/coldstart.py`, `orchestrator/config.py`, `orchestrator/doctor/artifact_branches.py`, `orchestrator/doctor/auto_ack.py`, `orchestrator/doctor/branch_freshness.py`, `orchestrator/doctor/canary_pool.py`, `orchestrator/doctor/canary_sets.py`, `orchestrator/doctor/cli.py`, `orchestrator/doctor/git_hooks.py`, `orchestrator/doctor/hung_test_watchdog.py`, `orchestrator/doctor/ignored_artifacts.py`, `orchestrator/doctor/isolation.py`, `orchestrator/doctor/lease_alerts.py`, `orchestrator/doctor/leases.py`, `orchestrator/doctor/live_smoke.py`, `orchestrator/doctor/main_ci.py`, `orchestrator/doctor/map_growth.py`, `orchestrator/doctor/misc_checks.py`, `orchestrator/doctor/model_catalog.py`, `orchestrator/doctor/model_tariffs.py`, `orchestrator/doctor/orphan_branches.py`, `orchestrator/doctor/orphans.py`, `orchestrator/doctor/preflight.py`, `orchestrator/doctor/recovery.py`, `orchestrator/doctor/root_pin.py`, `orchestrator/doctor/stale_cycles.py`, `orchestrator/fixation.py`, `orchestrator/gitcmd.py`, `orchestrator/keychain.py`, `orchestrator/liveness.py`, `orchestrator/merge_lock.py`, `orchestrator/models.py`, `orchestrator/notes.py`, `orchestrator/pool_seal.py`, `orchestrator/projects.py`, `orchestrator/providers/codex.py`, `orchestrator/repo_context.py`, `orchestrator/roles.py`, `orchestrator/runner.py`, `orchestrator/snapshot.py`, `orchestrator/spend.py`, `orchestrator/stack.py`, `orchestrator/store.py`, `orchestrator/targets.py`, `orchestrator/workspace.py`, `orchestrator/zone_lock.py`
+**Импортирует:** `orchestrator/alerts.py`, `orchestrator/artifact_branch.py`, `orchestrator/canary.py`, `orchestrator/ci.py`, `orchestrator/coldstart.py`, `orchestrator/config.py`, `orchestrator/cycle_hint.py`, `orchestrator/doctor/artifact_branches.py`, `orchestrator/doctor/auto_ack.py`, `orchestrator/doctor/branch_freshness.py`, `orchestrator/doctor/canary_pool.py`, `orchestrator/doctor/canary_sets.py`, `orchestrator/doctor/cli.py`, `orchestrator/doctor/git_hooks.py`, `orchestrator/doctor/hung_test_watchdog.py`, `orchestrator/doctor/ignored_artifacts.py`, `orchestrator/doctor/isolation.py`, `orchestrator/doctor/lease_alerts.py`, `orchestrator/doctor/leases.py`, `orchestrator/doctor/live_smoke.py`, `orchestrator/doctor/main_ci.py`, `orchestrator/doctor/map_growth.py`, `orchestrator/doctor/misc_checks.py`, `orchestrator/doctor/model_catalog.py`, `orchestrator/doctor/model_tariffs.py`, `orchestrator/doctor/orphan_branches.py`, `orchestrator/doctor/orphans.py`, `orchestrator/doctor/preflight.py`, `orchestrator/doctor/recovery.py`, `orchestrator/doctor/root_pin.py`, `orchestrator/doctor/stale_cycles.py`, `orchestrator/fixation.py`, `orchestrator/gitcmd.py`, `orchestrator/keychain.py`, `orchestrator/liveness.py`, `orchestrator/merge_lock.py`, `orchestrator/models.py`, `orchestrator/notes.py`, `orchestrator/pool_seal.py`, `orchestrator/projects.py`, `orchestrator/providers/codex.py`, `orchestrator/repo_context.py`, `orchestrator/roles.py`, `orchestrator/runner.py`, `orchestrator/snapshot.py`, `orchestrator/spend.py`, `orchestrator/stack.py`, `orchestrator/store.py`, `orchestrator/targets.py`, `orchestrator/workspace.py`, `orchestrator/zone_lock.py`
 
 **Импортируется:** —
 
@@ -3658,7 +3659,7 @@ built_at_sha: f7128cae43be5026dfba8a66658871ae8e77d03e
 
 **Публичные функции:** (нет)
 
-**Импортирует:** `orchestrator/config.py`, `orchestrator/store.py`, `tests/sandbox.py`
+**Импортирует:** `orchestrator/config.py`, `orchestrator/cycle_hint.py`, `orchestrator/store.py`, `tests/sandbox.py`
 
 **Импортируется:** —
 

@@ -52,18 +52,18 @@ def process_start_time(pid: int) -> datetime | None:
     return started.astimezone(timezone.utc)
 
 
-def _observation_args(conn, task_id: str, pid: int) -> str:
-    """` --client <client> --chat <chat>` наблюдения ЭТОГО запуска — строка
-    `observed_runs` и по задаче, и по pid (у задачи могли наблюдаться
-    прежние запуски с другим pid); пусто — цикл не под наблюдением."""
+def _observation_args(conn, task_id: str, pid: int) -> tuple:
+    """`(client, chat)` наблюдения ЭТОГО запуска — строка `observed_runs`
+    и по задаче, и по pid (у задачи могли наблюдаться прежние запуски с
+    другим pid); `(None, None)` — цикл не под наблюдением."""
     row = conn.execute(
         "SELECT o.client, o.chat FROM observed_runs r "
         "JOIN observations o ON o.id = r.observation_id "
         "WHERE r.task_id=? AND r.pid=? ORDER BY r.id DESC LIMIT 1",
         (task_id, pid)).fetchone()
     if row is None:
-        return ""
-    return f" --client {row['client']} --chat {row['chat']}"
+        return None, None
+    return row["client"], row["chat"]
 
 
 def stale_cycles(conn, pin_moment: datetime) -> list[dict]:
@@ -102,8 +102,9 @@ def stale_cycle_lines(cycles: list[dict]) -> list[str]:
         lines.append(
             f"{c['task_id']} pid {c['pid']}, старт процесса {started}, "
             f"состояние {c['state']}; перезапуск: artel.py stop "
-            f"{c['task_id']}, затем artel.py auto {c['task_id']}"
-            f"{c['observation_args']}")
+            f"{c['task_id']}, затем "
+            + doctor.cycle_hint.cycle_command("auto", c["task_id"],
+                                              *c["observation_args"]))
     return lines
 
 

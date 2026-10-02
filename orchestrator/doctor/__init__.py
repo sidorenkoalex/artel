@@ -94,6 +94,7 @@ from collections import namedtuple
 from pathlib import Path
 
 from .. import (alerts, artifact_branch, canary, ci, coldstart, config,
+                cycle_hint,
                 fixation, gitcmd, keychain, liveness, merge_lock, models,
                 notes, pool_seal, projects, providers, repo_context, roles,
                 runner, snapshot, spend, stack, store, targets, workspace,

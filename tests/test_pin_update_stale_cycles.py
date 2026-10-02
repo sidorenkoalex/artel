@@ -86,5 +86,27 @@ class ProcessStartTimeTest(unittest.TestCase):
         self.assertEqual(run.call_args.kwargs["env"]["LC_ALL"], "C")
 
 
+class CycleCommandTest(unittest.TestCase):
+    def test_restart_line_is_built_by_cycle_hint(self):
+        """Строка `auto` перечня собирается `cycle_hint.cycle_command`.
+
+        Ловит мутацию: `stale_cycle_lines` снова собирает `artel.py auto`
+        сам, мимо `cycle_hint` (подменённый `cycle_command` в строку не
+        попадает), либо `cycle_command` теряет `--client`/`--chat`
+        наблюдения или подставляет их без наблюдения.
+        """
+        from orchestrator import cycle_hint
+        self.assertEqual(cycle_hint.cycle_command("auto", "T1"), "artel.py auto T1")
+        self.assertEqual(cycle_hint.cycle_command("auto", "T1", "codex", "c-9"),
+                         "artel.py auto T1 --client codex --chat c-9")
+        cycle = {"task_id": "T1", "pid": 7, "started": None, "state": "in_dev",
+                 "observation_args": ("codex", "c-9")}
+        with mock.patch.object(cycle_hint, "cycle_command",
+                               return_value="<из cycle_hint>") as built:
+            line, = doctor.stale_cycle_lines([cycle])
+        built.assert_called_once_with("auto", "T1", "codex", "c-9")
+        self.assertTrue(line.endswith("затем <из cycle_hint>"), line)
+
+
 if __name__ == "__main__":
     unittest.main()
