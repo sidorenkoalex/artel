@@ -36,9 +36,11 @@ Job'ы, которые на push в main не исполняются никог�
 исполнявшаяся проверка в цвет не входит, как и сегодняшний `skipped`); потолок
 `MAIN_LINE_MAX_COMMITS` (200) — не разрешённая к нему проверка даёт «неизвестен».
 
-**AC-1, guard после снимка.** `fsm_merge_gate._guard_all_or_refuse` в конце
-`_publish_merge_artifacts`, по финальному дереву scratch (после снимка, карты,
-RETRO — ровно то, что уходит push'ем и что увидит CI main), до push:
+**AC-1, guard после снимка.** `fsm_merge_gate._guard_all_or_refuse` в
+`_publish_merge_artifacts`, по дереву scratch после снимка и карты, но ДО
+генерации RETRO задачи (guard не сканирует планку задачи с
+`docs/retro/<id>.md` на посторонние файлы — собственный RETRO скрыл бы
+нарушение её снимка; см. «Возврат по приёмке» ниже), до push:
 `<python> scripts/guard.py --all` дерева мержа с `cwd=scratch`. Код возврата
 ≠ 0 — запись «merge FAILED», снятие scratch-дерева тем же
 `_drop_scratch_worktree`, `sys.exit` со строками нарушений guard (файлы и
@@ -150,6 +152,31 @@ push/`done`/уборки (задача уже `done` — исход CI не от
   `ARTEL_ROLE` нет. Снять маркер в шаге роли нельзя (команда требует
   подтверждения), правка тестов вне ANSWER-1 — поэтому не правились.
 
+### Возврат по приёмке (отказ advance: AC-1, зёрна 808019665/2803227082)
+
+- Причина: оба зерна выбирают вариант «посторонний файл планки»
+  (`acceptance_tests/fixture.json`). `guard.scan_extraneous_acceptance_files`
+  пропускает задачи, у которых есть `docs/retro/<id>.md`, а guard по дереву
+  мержа звался ПОСЛЕ `_generate_and_commit_retro` — RETRO самой задачи
+  маскировал нарушение, мерж проходил. Варианты README/QUESTIONS.md
+  (`check_content`) от RETRO не зависят — поэтому тест краснел лишь на
+  трети зёрен и в прошлом шаге проходил.
+- Правка: `orchestrator/fsm_merge_gate.py::_publish_merge_artifacts` —
+  `_guard_all_or_refuse` перенесён между картой и RETRO; докстринги
+  обновлены. Правило guard не менялось.
+- Сторож: `tests/test_main_ci_line.py::GuardAllLaunchTest::
+  test_task_retro_does_not_hide_snapshot_violation` — покраснел на
+  временной мутации (guard обратно после RETRO), код возвращён.
+- Прогоны: зерно 808019665 воспроизведено красным до правки и зелёное после
+  (2803227082 — зелёное); долгоживущий файл задачи + `acceptance_tests/` +
+  `test_main_ci_line`, `test_fsm_map_regen`, `test_fsm_retro`,
+  `test_fsm_merge_gate_scratch_worktree_cleanup`,
+  `test_fsm_merge_gate_done_snapshot`, `test_guard_task_root_subdirectory`,
+  `test_invariants` — 135 passed. CLI-сценарии в шаге роли гонялись с
+  подменой `runner.in_role_environment` в процессе pytest (маркер роли
+  иначе отказывает `approve`/`pin-update`, см. «Предложения системе»);
+  окружение и тесты не правились. Карта перегенерирована.
+
 ## Покрытие требований
 
 | Требование | Шаг |
@@ -200,6 +227,15 @@ push/`done`/уборки (задача уже `done` — исход CI не от
   ветки подтверждён ещё в `verifying`).
 
 ## Предложения системе
+
+- `scripts/guard.py::scan_extraneous_acceptance_files` считает «закрытой
+  историей» любую задачу с `docs/retro/<id>.md`, и это неявно зависит от
+  порядка служебных коммитов гейта мержа (RETRO задачи пишется в то же
+  дерево). Порядок теперь закреплён сторожем, но признак «закрыта до
+  правила» лучше брать явным перечнем/датой, а не наличием RETRO.
+- Приёмочный тест с выбором варианта по случайному зерну краснел лишь на
+  трети прогонов: в шаге разработчика прошёл, у пульта упал. Класс
+  «рандомизированная планка без перебора всех вариантов» (skills/test-authoring.md).
 
 - Окружение шага роли: `ls` и `rm` из Bash не находятся (`command not
   found`), `ls` в другой форме требует подтверждения — временные файлы
