@@ -1,5 +1,5 @@
 ---
-built_at_sha: 066f51f1ca66e6bf088396ab89a79098896cf5a9
+built_at_sha: 60d3910f01a70c4cda93c6df2571aeb13709a161
 ---
 
 # Codebase-map пульта
@@ -1460,6 +1460,7 @@ built_at_sha: 066f51f1ca66e6bf088396ab89a79098896cf5a9
 - `add_observation_tasks`
 - `alerts_older_than`
 - `alerts_since`
+- `all_canary_runs`
 - `all_leases`
 - `all_steps`
 - `all_tasks`

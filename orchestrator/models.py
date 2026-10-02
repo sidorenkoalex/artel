@@ -1147,11 +1147,10 @@ def clean_run(row) -> bool:
 
 
 def _canary_rows(conn) -> list:
-    """Все строки `canary_runs` по порядку записи. Таблицу заводит первая
-    запись прогона, до неё её нет вовсе (`store._ensure_canary_tables`)."""
+    """Все строки `canary_runs` по порядку записи; SQL — только в
+    `store.py` (инвариант `test_no_sql_outside_store`)."""
     from . import store
-    store._ensure_canary_tables(conn)
-    return conn.execute("SELECT * FROM canary_runs ORDER BY id").fetchall()
+    return store.all_canary_runs(conn)
 
 
 def _template_class(document: dict, title) -> str | None:
