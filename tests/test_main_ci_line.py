@@ -249,6 +249,47 @@ class GuardAllLaunchTest(unittest.TestCase):
         """
         self.assertIsNone(fsm_merge_gate._guard_all_violations(self.tree(None)))
 
+    def test_task_retro_does_not_hide_snapshot_violation(self):
+        """Снимок задачи несёт посторонний файл планки; guard не сканирует
+        планку задачи, у которой есть `docs/retro/<id>.md` (закрытая
+        история) — здесь guard подменён ровно этим правилом.
+
+        Мерж отказан: guard видит дерево мержа без RETRO самой задачи.
+
+        Ловит мутацию: guard по дереву мержа зовётся после генерации RETRO
+        задачи — её RETRO скрывает посторонний файл снимка, мерж проходит
+        (возврат 02.10 со стороны пульта, зерна 808019665/2803227082).
+        """
+        scratch = self.tree(None)
+        retro = scratch / "docs" / "retro" / "T001.md"
+
+        def write_retro(*args, **kwargs):
+            retro.parent.mkdir(parents=True)
+            retro.write_text("RETRO\n", encoding="utf-8")
+
+        def guard_skipping_closed(tree):
+            return [] if retro.exists() else [
+                "tasks/T001/acceptance_tests/fixture.json: посторонний файл"]
+
+        ctx = mock.Mock(path=config.ROOT)
+        with mock.patch.object(fsm_merge_gate, "_overlay_artifact_snapshot"), \
+                mock.patch.object(fsm_merge_gate, "_guard_task_root_or_refuse"), \
+                mock.patch.object(fsm_merge_gate, "_drop_scratch_worktree"), \
+                mock.patch.object(gitcmd, "head_sha", return_value=sha(1)), \
+                mock.patch.object(store, "journal"), \
+                mock.patch.object(fsm_merge_gate.fsm_postmerge,
+                                  "_regenerate_and_commit_map"), \
+                mock.patch.object(fsm_merge_gate.fsm_postmerge,
+                                  "_generate_and_commit_retro",
+                                  side_effect=write_retro), \
+                mock.patch.object(fsm_merge_gate, "_guard_all_violations",
+                                  side_effect=guard_skipping_closed):
+            with self.assertRaises(SystemExit) as exit_:
+                fsm_merge_gate._publish_merge_artifacts(
+                    mock.Mock(), "T001", scratch, ctx)
+
+        self.assertIn("fixture.json", str(exit_.exception))
+
 
 class AwaitMainCiUnknownTest(TmpRootTest):
 

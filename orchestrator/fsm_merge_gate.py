@@ -467,9 +467,10 @@ def _guard_all_violations(scratch: Path) -> list[str] | None:
 def _guard_all_or_refuse(conn, task_id: str, scratch: Path,
                          ctx: repo_context.RepoContext) -> None:
     """`guard.py --all` по дереву результата мержа — после снимка
-    артефактной ветки, карты и RETRO, до push (SPEC
-    01M3SF7DPFGEZ7VYEGGXGTX49E, требование 1, AC-1): ровно то дерево,
-    которое уйдёт в main и которое проверит CI main. Ветка задачи guard
+    артефактной ветки и карты, до RETRO и push (SPEC
+    01M3SF7DPFGEZ7VYEGGXGTX49E, требование 1, AC-1): дерево, которое уйдёт
+    в main, без RETRO самой задачи — с ним guard счёл бы её закрытой
+    историей и не проверил бы её планку на посторонние файлы. Ветка задачи guard
     проходила, а снимок артефактной ветки накладывается позже —
     30.09 README без frontmatter в `acceptance_tests/` уехал в main и
     покрасил его.
@@ -926,8 +927,10 @@ def _publish_merge_artifacts(conn, task_id: str, scratch: Path,
     AC-7/AC-8) — сразу после наложения снимка, ДО карты/RETRO/push:
     посторонний файл `tasks/<id>/` отказывает переходу `sys.exit`'ом,
     дальше этой функции выполнение не идёт. `_guard_all_or_refuse` (SPEC
-    01M3SF7DPFGEZ7VYEGGXGTX49E, AC-1) — по финальному дереву, после
-    карты/RETRO, тем же `sys.exit`'ом до push.
+    01M3SF7DPFGEZ7VYEGGXGTX49E, AC-1) — после снимка и карты, но ДО
+    RETRO, тем же `sys.exit`'ом до push: guard не сканирует на посторонние
+    файлы планки задачу с `docs/retro/<id>.md` (закрытая история), и
+    собственный RETRO задачи в дереве мержа скрыл бы нарушение её снимка.
 
     `applied_appendices` (SPEC 01M2YSHDKWFJN3XSJ618Z74FNF, требование 6) —
     пути приложений, применённых `_apply_plan_appendices` ДО этого вызова:
@@ -940,10 +943,10 @@ def _publish_merge_artifacts(conn, task_id: str, scratch: Path,
     merge_sha = gitcmd.head_sha(scratch)
     if ctx.path == config.ROOT:
         fsm_postmerge._regenerate_and_commit_map(conn, task_id, repo=scratch)
+        _guard_all_or_refuse(conn, task_id, scratch, ctx)
         fsm_postmerge._generate_and_commit_retro(
             conn, task_id, merge_sha, repo=scratch,
             applied_appendices=applied_appendices)
-    _guard_all_or_refuse(conn, task_id, scratch, ctx)
     final_sha = gitcmd.head_sha(scratch)
     _drop_scratch_worktree(ctx, scratch)
     return final_sha
