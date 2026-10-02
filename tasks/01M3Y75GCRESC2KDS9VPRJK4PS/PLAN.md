@@ -78,6 +78,32 @@ timeout=120`): `tests/test_01m3y75gcresc2kds9vprjk4ps_stale_cycles.py`,
 `tests/test_doctor.py`, `tests/test_invariants.py`,
 `tests/test_codebase_map.py` — вместе 254 passed, 0 failed.
 
+7. Возврат из verifying (CI красный на `36732227`:
+   `tests/test_01m3xtfjcc5tg63fhw907gqm4d_launch_hint.py::LaunchHintTest::
+   test_ac7_no_bare_cycle_hint_literals_outside_cycle_hint` — f-строка
+   `artel.py auto {task_id}` в `orchestrator/doctor/stale_cycles.py`).
+   Зона `orchestrator/cycle_hint.py` разрешена ANSWER-2.
+   - `orchestrator/cycle_hint.py::cycle_command(cmd, task_id, client=None,
+     chat=None)` — строка запуска по уже известным аргументам наблюдения,
+     без чтения БД и без заглушек; `--client`/`--chat` только при обоих
+     значениях.
+   - `orchestrator/doctor/stale_cycles.py`: `_observation_args` возвращает
+     `(client, chat)` наблюдения этого запуска (task_id И pid) либо
+     `(None, None)`; `stale_cycle_lines` строит команду `auto` через
+     `doctor.cycle_hint.cycle_command` (модуль подключён в фасаде
+     `orchestrator/doctor/__init__.py`). Семантика AC-2 прежняя.
+   - Тест `tests/test_pin_update_stale_cycles.py::CycleCommandTest::
+     test_restart_line_is_built_by_cycle_hint`; мутация (возврат
+     собственной сборки строки в `stale_cycle_lines`) — красный, код
+     возвращён. Тест launch_hint и долгоживущие тесты не правились.
+   - Карта перегенерирована `scripts/codebase_map.py`.
+   Прогоны (передний план, `-p no:cacheprovider -p timeout -o
+   timeout=120`): launch_hint + `tests/test_01m3y75gcresc2kds9vprjk4ps_
+   stale_cycles.py` + `tests/test_pin_update_stale_cycles.py` +
+   `tests/test_cycle_hint.py` + `tests/test_pin.py` — 32 passed;
+   `tests/test_doctor.py` + `tests/test_invariants.py` +
+   `tests/test_codebase_map.py` — 236 passed.
+
 ## Покрытие требований
 | Требование | Шаг |
 |---|---|
