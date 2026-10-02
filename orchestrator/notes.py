@@ -139,6 +139,22 @@ DOC_COMMIT_ROLE_REFUSAL = ("doc-commit отказана — вызов из ок
 DOC_COMMIT_BASE_REFUSAL = ("файл изменился в origin после пина — сначала "
                            "pin-update")
 
+# База удержанной записи `doc-commit` (SPEC 01M3Y75X6K2ZMD85971TCWV41E,
+# требование 1): blob-sha пути в HEAD главной копии в момент вызова, `None`
+# — «файла не было». Отсутствие самого поля — запись, удержанная до этой
+# задачи (требование 4). Пиновая сверка удержанной записи не защищает:
+# 02.10 пин и origin совпали после `pin-update`, и флаш стёр 21 чужую
+# строку (28b09389) — сверять надо с той версией, на которой собрано
+# содержимое.
+HELD_BASE_KEY = "held_base"
+DOC_COMMIT_STALE_REFUSAL = "файл изменился в origin после сборки записи"
+NO_BASE_WARNING = ("база не сохранена (запись удержана до сверки по базе) — "
+                   "сверка origin против пина")
+ABSENT_BLOB_TEXT = "файла не было"
+
+# Длина выдержки содержимого в строке `note --pending` (требование 5).
+PENDING_EXCERPT_LEN = 80
+
 # Именованные отказы сверки базы `note --apply` (требование 10). Пиновый
 # текст `DOC_COMMIT_BASE_REFUSAL` здесь не годится: «сначала pin-update»
 # для бэклога не лечение — origin уходит от пина при каждой заметке
@@ -259,11 +275,85 @@ def _silence_window_reason() -> str | None:
 
 
 def _hold_pending(request: dict) -> None:
+    """Удержать запись файлом в `_pending_dir()`. Запись `doc-commit`
+    получает базу (`HELD_BASE_KEY`) здесь, а не при сборке запроса:
+    немедленная отправка сверяется с пином (требование 3), и поле базы в
+    ней перевело бы её на сверку удержанной записи. Удержание идёт в том
+    же вызове `doc-commit`, HEAD главной копии за это время не двигается —
+    это и есть база «в момент вызова». Уже несущая поле запись (повторное
+    удержание) базу не переписывает."""
+    if request["kind"] == DOC_COMMIT_KIND and HELD_BASE_KEY not in request:
+        request = {**request, HELD_BASE_KEY: _blob_sha(
+            config.ROOT, f"HEAD:{request['path']}")}
     d = _pending_dir()
     d.mkdir(parents=True, exist_ok=True)
     name = f"{int(time.time() * 1000):013d}-{uuid.uuid4().hex[:8]}.json"
     (d / name).write_text(json.dumps(request, ensure_ascii=False),
                           encoding="utf-8")
+
+
+def _held_at(record_id: str) -> str:
+    """Время удержания из имени файла записи (миллисекунды эпохи — так их
+    пишет `_hold_pending`), местное: список читает Оператор."""
+    stamp = record_id.split("-", 1)[0]
+    if not stamp.isdigit():
+        return "время неизвестно"
+    return time.strftime("%Y-%m-%d %H:%M:%S",
+                         time.localtime(int(stamp) / 1000))
+
+
+def _pending_line(record_id: str, request: dict) -> str:
+    """Строка `note --pending` (требование 5): id, вид, путь (у
+    `doc-commit`/`--apply`) либо раздел/ключ (у заметки), время и первые
+    `PENDING_EXCERPT_LEN` знаков содержимого — в одну строку, иначе
+    перевод строки содержимого разорвал бы запись на несколько строк
+    вывода."""
+    kind = request.get("kind", "?")
+    if kind == DOC_COMMIT_KIND:
+        where = request.get("path", "?")
+    elif kind == APPLY_KIND:
+        where = BACKLOG_REL
+    elif "section" in request:
+        where = request["section"]
+    else:
+        where = f"ключ {request.get('key', '?')}"
+    body = request.get("content", request.get("text", ""))
+    excerpt = str(body)[:PENDING_EXCERPT_LEN].replace("\n", " ")
+    return f"{record_id}  {kind}  {where}  {_held_at(record_id)}  {excerpt}"
+
+
+def _print_pending() -> None:
+    paths = _pending_paths()
+    if not paths:
+        print("удержанных записей нет")
+        return
+    for path in paths:
+        try:
+            request = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            print(f"{path.stem}  запись не читается: {exc}")
+            continue
+        print(_pending_line(path.stem, request))
+
+
+def _drop_pending(record_id: str) -> None:
+    """Снять одну удержанную запись по id файла (требование 6). Id
+    сверяется с перечнем файлов каталога, а не склеивается в путь: иначе
+    «../…» снимал бы файл вне `_pending_dir()`."""
+    found = [p for p in _pending_paths() if p.stem == record_id]
+    if not found:
+        sys.exit(f"удержанной записи {record_id} нет — перечень: "
+                 f"note --pending")
+    path = found[0]
+    try:
+        line = _pending_line(record_id, json.loads(
+            path.read_text(encoding="utf-8")))
+    except (OSError, json.JSONDecodeError):
+        line = f"{record_id}  запись не читается"
+    path.unlink()
+    store.journal(store.db(), None, "operator",
+                  f"удержанная запись снята: {record_id}", line)
+    print(f"удержанная запись снята: {line}")
 
 
 def _row_cells(line: str) -> list[str]:
@@ -668,12 +758,26 @@ def _build_doc_commit(work_dir: Path,
 
     Возвращает тройку той же формы, что `_build_for` (`(текст, ключ,
     наблюдение)`): ключом служит сам путь — он идёт в сообщение коммита.
+
+    Удержанная запись с базой (`HELD_BASE_KEY`, SPEC
+    01M3Y75X6K2ZMD85971TCWV41E, требование 2) сверяет origin не с пином, а
+    с базой, на которой собрано содержимое: пин к флашу мог уйти вперёд
+    вместе с чужой правкой (сценарий 02.10), и пиновая сверка тогда
+    проходит, затирая её.
     """
     rel = request["path"]
     origin_sha = _blob_sha(work_dir, f"FETCH_HEAD:{rel}")
-    pin_sha = _blob_sha(config.ROOT, f"HEAD:{rel}")
-    if origin_sha != pin_sha:
-        sys.exit(f"{rel}: {DOC_COMMIT_BASE_REFUSAL}")
+    if HELD_BASE_KEY in request:
+        base_sha = request[HELD_BASE_KEY]
+        if origin_sha != base_sha:
+            sys.exit(f"{rel}: {DOC_COMMIT_STALE_REFUSAL} (база "
+                     f"{base_sha or ABSENT_BLOB_TEXT}, origin "
+                     f"{origin_sha or 'файла нет'}) — собери заново от "
+                     f"origin")
+    else:
+        pin_sha = _blob_sha(config.ROOT, f"HEAD:{rel}")
+        if origin_sha != pin_sha:
+            sys.exit(f"{rel}: {DOC_COMMIT_BASE_REFUSAL}")
     content = request["content"]
     if _content_already_in_origin(work_dir, rel, content):
         sys.exit(f"{rel}: содержимое уже совпадает с "
@@ -1093,6 +1197,12 @@ def _flush_pending(explicit: bool = False) -> None:
                   f"не отправляется — её отправка гоняет полный набор "
                   f"tests/; отправка — doc-commit --flush либо note --flush")
             continue
+        if (request.get("kind") == DOC_COMMIT_KIND
+                and HELD_BASE_KEY not in request):
+            # Запись, удержанная до сверки по базе (требование 4): идёт по
+            # пиновой сверке, но Оператор видит, что защиты сценария 02.10
+            # у неё нет.
+            print(f"{request.get('path')}: {NO_BASE_WARNING}")
         try:
             sha = _attempt(request)
         except SystemExit as exc:
@@ -1175,6 +1285,11 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
     # пушится немедленно, не удерживаясь.
     parser.add_argument("--now", choices=list(SECTION_HEADINGS))
     parser.add_argument("--flush", action="store_true")
+    # Просмотр и снятие одной удержанной записи (SPEC
+    # 01M3Y75X6K2ZMD85971TCWV41E, требования 5-6) — `--drop` занят строками
+    # бэклога.
+    parser.add_argument("--pending", action="store_true")
+    parser.add_argument("--drop-pending", dest="drop_pending")
     # Принимается, поведения не несёт сверх приёма (SPEC «Не входит»).
     parser.add_argument("--task")
     return parser.parse_args(argv)
@@ -1185,6 +1300,14 @@ def cmd_note(argv: list[str]) -> None:
         sys.exit("note отказана — вызов из окружения роли (role_env): "
                  "записи копилки и бэклога вносит Оператор")
     args = _parse_args(argv)
+    # Просмотр и снятие удержанных записей — до попутного допуша: иначе он
+    # отправил бы запись, которую Оператор как раз пришёл снять.
+    if args.pending:
+        _print_pending()
+        return
+    if args.drop_pending is not None:
+        _drop_pending(args.drop_pending)
+        return
     # Оппортунистический допуш уважает окно тишины (требование 7, AC-8):
     # при открытом окне удержанные записи остаются нетронутыми, вне окна —
     # допушиваются, как и сегодня. `--flush` форсирует его безусловно
@@ -1238,7 +1361,8 @@ def cmd_note(argv: list[str]) -> None:
     else:
         sys.exit("укажи раздел с --text, --append/--state/--drop/"
                  "--set-state/--set-priority <ключ>, --now <раздел> --text, "
-                 "--apply <файл> --message \"<основание>\", либо --flush")
+                 "--apply <файл> --message \"<основание>\", --pending, "
+                 "--drop-pending <id>, либо --flush")
 
 
 def _parse_doc_commit_args(argv: list[str]) -> argparse.Namespace:

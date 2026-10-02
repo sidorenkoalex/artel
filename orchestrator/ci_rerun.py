@@ -127,9 +127,7 @@ def _ci_rerun_outcome(branch: str, rerun_note: str) -> tuple[str, bool]:
 
 
 def _cmd_ci_rerun(conn, task_id: str, reason: str | None) -> None:
-    from . import fsm  # отложенный импорт — см. докстринг модуля
-
-    t = store.get_task(conn, task_id)
+    t =store.get_task(conn, task_id)
     branch = t["branch"]
 
     # Требование 3: основание — ДО любого обращения к `gh`. «Флага нет» и
@@ -161,15 +159,80 @@ def _cmd_ci_rerun(conn, task_id: str, reason: str | None) -> None:
             conn, task_id,
             f"задача в состоянии {t['state']}, а повтор CI допустим только "
             f"в verifying; статус CI ветки {branch}: {note}")
-    if outcome != ci.VERIFYING_RED:
+    if outcome == ci.VERIFYING_STUCK:
+        rerun_note = _stuck_rerun(conn, task_id, branch, note)
+    elif outcome != ci.VERIFYING_RED:
         # Именно `== VERIFYING_RED`, не «не зелёный»: «проверки идут» и
         # «проверок нет вовсе» — это ре-ран идущего или несуществующего
         # прогона, он ничего не подтверждает (тот же довод, что у
-        # `ci.status_kind` на гейте мержа).
+        # `ci.status_kind` на гейте мержа). «Проверка зависла» — иное:
+        # без перезапуска она не завершится вовсе (SPEC
+        # 01M3Y75C9TY76083CG1PK00EM4, требование 3).
         _ci_rerun_refuse(
             conn, task_id,
             f"CI ветки {branch} не завершённо-красный (исход {outcome}) — "
             f"повторять нечего; статус: {note}")
+    else:
+        rerun_note = _red_rerun(conn, task_id, t, branch)
+    outcome_text, answered = _ci_rerun_outcome(branch, rerun_note)
+
+    # Требование 8: одна запись журнала — основание Оператора, id прогона
+    # (внутри `rerun_note`) и исход ожидания.
+    detail = (f"{rerun_note}; исход ожидания: {outcome_text}; "
+              f"{CI_RERUN_REASON_MARKER}{reason}")
+    store.journal(conn, task_id, "operator", CI_RERUN_ACTION, detail)
+    print(f"[{task_id}] повтор CI ветки {branch}: {rerun_note}")
+    print(f"[{task_id}] исход ожидания: {outcome_text}")
+    if not answered:
+        # Best-effort: сбой `gh` — именованный отказ, не трейсбек; запись
+        # журнала выше уже названа тем же исходом (AC-9).
+        sys.exit(f"[{task_id}] ci-rerun: отказ — {outcome_text}")
+    if outcome_text.startswith(CI_RERUN_OUTCOME_GREEN):
+        print("  дальше: " + cycle_hint.launch_text(
+            conn, task_id, "auto", "(цикл прочитает новый статус CI сам и "
+            "уведёт задачу из verifying)"))
+    else:
+        # Снова красный — второй повтор требует НОВОГО основания
+        # (требование 10); подсказка называет и второй, обычный путь.
+        print(f"  дальше: artel.py reject {task_id} \"причина\"  (вернуть в "
+              f"разработку) либо ci-rerun с НОВЫМ основанием")
+
+
+def _stuck_rerun(conn, task_id: str, branch: str, note: str) -> str:
+    """Перезапуск прогонов зависших проверок (SPEC
+    01M3Y75C9TY76083CG1PK00EM4, требование 3); итог — `note` перезапуска
+    для журнала, как у `ci.trigger_rerun`.
+
+    Сверки красного пути (sha красной записи журнала, флейк ли против
+    главной ветки) здесь не о чем: статус «проверка зависла» прочитан
+    только что по текущей голове ветки, и упавших заданий в нём нет.
+    Прогон находится по самой зависшей проверке, не по sha коммита: у
+    коммита бывает два прогона, и перезапуск «не того» ничего не даст.
+    """
+    check_ids = ci.stuck_check_ids(note)
+    if not check_ids:
+        _ci_rerun_refuse(
+            conn, task_id,
+            f"в статусе зависшего CI ветки {branch} не названо ни одного id "
+            f"check-run — перезапускать нечего; статус: {note}")
+    run_ids = []
+    for check_id in check_ids:
+        run_id, why = ci.check_run_workflow_run(check_id)
+        if not run_id:
+            _ci_rerun_refuse(
+                conn, task_id,
+                f"прогон workflow зависшей проверки {check_id} не найден: "
+                f"{why}")
+        if run_id not in run_ids:
+            run_ids.append(run_id)
+    return "; ".join(ci.trigger_rerun(branch, run_id=run_id)
+                     for run_id in run_ids)
+
+
+def _red_rerun(conn, task_id: str, t, branch: str) -> str:
+    """Сверки завершённо-красного CI перед повтором (требования 4-6) и
+    сам повтор (требование 7); итог — `note` `ci.trigger_rerun`."""
+    from . import fsm  # отложенный импорт — см. докстринг модуля
 
     # Требование 4: красный статус относится к тому же коммиту, что стоит
     # головой ветки сейчас. Уехала голова — красный статус про другой
@@ -228,26 +291,4 @@ def _cmd_ci_rerun(conn, task_id: str, reason: str | None) -> None:
     # sha с предпочтением упавшего, `gh run rerun --failed`, ожидание
     # `gh run watch`. Ровно один вызов: цикла «до зелёного» здесь нет,
     # второй повтор — второе решение Оператора с новым основанием.
-    rerun_note = ci.trigger_rerun(branch)
-    outcome_text, answered = _ci_rerun_outcome(branch, rerun_note)
-
-    # Требование 8: одна запись журнала — основание Оператора, id прогона
-    # (внутри `rerun_note`) и исход ожидания.
-    detail = (f"{rerun_note}; исход ожидания: {outcome_text}; "
-              f"{CI_RERUN_REASON_MARKER}{reason}")
-    store.journal(conn, task_id, "operator", CI_RERUN_ACTION, detail)
-    print(f"[{task_id}] повтор CI ветки {branch}: {rerun_note}")
-    print(f"[{task_id}] исход ожидания: {outcome_text}")
-    if not answered:
-        # Best-effort: сбой `gh` — именованный отказ, не трейсбек; запись
-        # журнала выше уже названа тем же исходом (AC-9).
-        sys.exit(f"[{task_id}] ci-rerun: отказ — {outcome_text}")
-    if outcome_text.startswith(CI_RERUN_OUTCOME_GREEN):
-        print("  дальше: " + cycle_hint.launch_text(
-            conn, task_id, "auto", "(цикл прочитает новый статус CI сам и "
-            "уведёт задачу из verifying)"))
-    else:
-        # Снова красный — второй повтор требует НОВОГО основания
-        # (требование 10); подсказка называет и второй, обычный путь.
-        print(f"  дальше: artel.py reject {task_id} \"причина\"  (вернуть в "
-              f"разработку) либо ci-rerun с НОВЫМ основанием")
+    return ci.trigger_rerun(branch)

@@ -146,6 +146,7 @@ workspace, tasks, knowledge, logs). БД одна на все проекты: с
   pin --to [<sha>] | zone-release <id> | zone-reorder <id1> <id2> ... |
   venv-sync | note (копилка|бэклог|очередь) --text "<строка>" |
   note --append <ключ> --text "<текст>" | note --flush |
+  note --pending | note --drop-pending <id> |
   note --apply <файл-заготовки> --message "<основание>" |
   doc-commit <путь-в-репозитории> --from <файл> --message "<основание>"
              [--accept-red "<основание>"] |
@@ -189,7 +190,15 @@ origin). Журнал пульта после успеха перечисляе�
 «22.09»); дописка состояния (`--append`, то же под именем `--state`)
 отделяется от прежнего текста ячейки разделителем с датой.
 
-`doc-commit <путь> … --accept-red "<основание>"` (тот же SPEC) —
+`note --pending` (SPEC 01M3Y75X6K2ZMD85971TCWV41E) — удержанные записи
+`.artel/notes-pending/` по строке: id, вид, путь или раздел, время
+удержания, первые 80 знаков содержимого. `note --drop-pending <id>` —
+снять одну запись по id с записью журнала. Удержанный `doc-commit` хранит
+базу (blob пути в HEAD главной копии) и при отправке отказывает, если
+файл в origin изменился после сборки записи.
+
+`doc-commit <путь> … --accept-red "<основание>"` (SPEC
+01M3HST4SGX0SPKAGNHVY7DWHM) —
 осознанный обход прогона полного набора tests/, который `doc-commit`
 файла конфигурации Оператора (roles.yaml/gates.yaml/targets.yaml/
 models.yaml) гоняет перед отправкой на дереве с уже применённой правкой.
