@@ -325,7 +325,8 @@ def model_provider_mismatches(role: str | None = None) -> list:
     return found
 
 
-def check_model_provider_cli(role: str | None = None) -> doctor.Check:
+def check_model_provider_cli(role: str | None = None, *,
+                             combat_chain: bool = True) -> doctor.Check:
     """CLI провайдеров, в модели которых разрешаются ярусы agent-ролей,
     найдены И провайдер роли не разошёлся с провайдером её модели —
     блокирующая проверка предполёта (SPEC 01M32NH6P053978AER66P0X4GN,
@@ -362,6 +363,11 @@ def check_model_provider_cli(role: str | None = None) -> doctor.Check:
     Расхождение, наоборот, предмет конкретной роли — по ней предполёт
     шага её и спрашивает.
 
+    `combat_chain=False` — шаг роли идёт на модели набора задачи (SPEC
+    01M3YXYAX5PW9BM67MB4GK85D1, требование 3): расхождение боевой
+    цепочки роли этот шаг не запускает, и останавливать его за неё не за
+    что; ненайденный CLI спрашивается как прежде.
+
     Стоит в блокирующей группе и не заводит ни одного подпроцесса
     (`shutil.which` + чтение файлов слоёв): `preflight_checks` платит за
     строки только до первого провала, а тесты требуют от провального
@@ -377,7 +383,8 @@ def check_model_provider_cli(role: str | None = None) -> doctor.Check:
             f"{', '.join(missing)} — ярус agent-роли разрешается в модель "
             f"его провайдера; установи CLI либо смени модель яруса в "
             f"{doctor.config.MODELS_LOCAL}")
-    mismatched = doctor.model_provider_mismatches(role)
+    mismatched = (doctor.model_provider_mismatches(role)
+                  if combat_chain else [])
     if mismatched:
         named = "; ".join(
             f"роль {name}: исполнитель шага — {own}, но ярус разрешается "
@@ -667,21 +674,46 @@ def provider_preflight_checks() -> dict:
     (`warn`, на код выхода `doctor` не влияет: REVIEW.md итерации 1,
     R1-F6), но именованная, с путём файла и словом о разборе. Трейсбек
     отсюда унёс бы с собой весь прогон `doctor`.
+
+    Провайдеры моделей из наборов незакрытых задач
+    (`models.live_task_set_providers` — тот же источник, что у манифеста
+    стека) спрашиваются дополнительно (SPEC 01M3YXYAX5PW9BM67MB4GK85D1,
+    требование 4): набор вправе перевести роль на провайдера, которого
+    не требует ни одна роль карты, и вход такого провайдера иначе
+    всплыл бы только отказом шага. Источник называет провайдеров, а не
+    роли, поэтому новый провайдер спрашивается по каждой agent-роли — та
+    же «проверка секрета по одной на роль», что у боевых провайдеров.
+    Провайдер, уже спрошенный за роль карты, второй раз не спрашивается.
     """
     grouped = {}
-    for role in agent_roles_or_empty():
-        try:
-            provider = doctor.providers.for_role(role)
-        except doctor.providers.UnknownProviderError:
-            continue
+
+    def add(provider, role):
         for check in provider.preflight(role):
             bucket = grouped.setdefault(check.name, [])
             if check not in bucket:
                 bucket.append(check)
+
+    roles = agent_roles_or_empty()
+    asked = set()
+    for role in roles:
+        try:
+            provider = doctor.providers.for_role(role)
+        except doctor.providers.UnknownProviderError:
+            continue
+        asked.add(provider.name)
+        add(provider, role)
+    for name in sorted(doctor.models.live_task_set_providers() - asked):
+        try:
+            provider = doctor.providers.get(name)
+        except doctor.providers.UnknownProviderError:
+            continue
+        for role in roles:
+            add(provider, role)
     return grouped
 
 
-def preflight_checks(role: str, target: str) -> list[doctor.Check]:
+def preflight_checks(role: str, target: str, *, provider=None,
+                     task_set: str | None = None) -> list[doctor.Check]:
     """Быстрые проверки перед стартом шага (SPEC требование 2).
 
     Блокирующие: CLI найден, токен роли, диск. Warn: layout внешнего
@@ -704,15 +736,26 @@ def preflight_checks(role: str, target: str) -> list[doctor.Check]:
     и блокирующие стоят до дорогих. Сверка дома роли в набор шага не
     входит и здесь: она часть `doctor`, а не предполёта каждого запуска
     (иначе шаг платил бы обходом дерева референса на каждом старте).
+
+    `provider`/`task_set` — шаг роли на модели набора задачи (SPEC
+    01M3YXYAX5PW9BM67MB4GK85D1, требования 1-3): CLI, версия и вход
+    спрашиваются у провайдера ШАГА (`runner._step_provider`), а не у
+    боевого провайдера роли, — его CLI и вход шаг не запускает, и
+    отказывать за них не за что; по той же причине не спрашивается
+    расхождение боевой цепочки роли (`check_model_provider_cli`). Каждый
+    провал такого шага называет провайдера, роль и набор: Оператор
+    обязан видеть, что инструмент требует набор задачи, а не ярус роли.
+    Без них — провайдер роли, поведение прежнее.
     """
-    try:
-        provider = doctor.providers.for_role(role)
-    except doctor.providers.UnknownProviderError as exc:
-        # Сюда предполёт доходит только в обход `runner._refuse_before_
-        # start` (тот отказывает раньше, требование 4) — но молчать об
-        # этом здесь всё равно нельзя: блокирующий провал с тем же
-        # именованным текстом.
-        return [doctor.Check("role-providers", "fail", str(exc))]
+    if provider is None:
+        try:
+            provider = doctor.providers.for_role(role)
+        except doctor.providers.UnknownProviderError as exc:
+            # Сюда предполёт доходит только в обход `runner._refuse_
+            # before_start` (тот отказывает раньше, требование 4) — но
+            # молчать об этом здесь всё равно нельзя: блокирующий провал
+            # с тем же именованным текстом.
+            return [doctor.Check("role-providers", "fail", str(exc))]
     checks = [provider.check_cli_found()]
     # CLI провайдера МОДЕЛИ шага (SPEC 01M32NH6P053978AER66P0X4GN,
     # требование 6): провайдер роли и провайдер её модели совпадают не
@@ -722,14 +765,27 @@ def preflight_checks(role: str, target: str) -> list[doctor.Check]:
     # Роль передаётся явно (REVIEW.md итерации 1, R1-F1): расхождение
     # «исполнитель шага ≠ провайдер модели» — предмет КОНКРЕТНОГО шага, и
     # останавливать им чужие роли не за что.
-    checks.append(doctor.check_model_provider_cli(role))
+    checks.append(doctor.check_model_provider_cli(
+        role, combat_chain=task_set is None))
     checks.append(provider.check_token(role))
     checks.append(doctor.check_disk_space())
     checks.append(doctor.check_target_layout(target))
     if any(c.status == "fail" for c in checks):
-        return checks
+        return _named_by_set(checks, provider, role, task_set)
     checks.append(doctor.check_git_identity())
     checks.append(provider.check_cli_version())
     return checks
+
+
+def _named_by_set(checks: list, provider, role: str,
+                  task_set: str | None) -> list:
+    """Провалы предполёта шага на модели набора, дописанные провайдером
+    шага, ролью и набором (требование 2); без набора — как есть."""
+    if task_set is None:
+        return checks
+    origin = (f" [провайдер шага {provider.name}, роль {role}, набор "
+              f"задачи {task_set}]")
+    return [check._replace(detail=check.detail + origin)
+            if check.status == "fail" else check for check in checks]
 
 

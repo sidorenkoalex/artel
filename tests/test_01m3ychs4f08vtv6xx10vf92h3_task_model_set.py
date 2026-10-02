@@ -322,7 +322,7 @@ class StepSandbox(ModelSetsMixin, LightTransitionSandbox):
             patcher.start()
             self.addCleanup(patcher.stop)
         preflight = mock.patch("orchestrator.doctor.preflight_checks",
-                               lambda role, target: [])
+                               lambda role, target, **step: [])
         preflight.start()
         self.addCleanup(preflight.stop)
         self.neighbour = self.TASK
