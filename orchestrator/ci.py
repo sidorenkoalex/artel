@@ -12,6 +12,7 @@
 import json
 import re
 import subprocess
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import NamedTuple
 
@@ -187,6 +188,111 @@ VERIFYING_GREEN = "green"
 VERIFYING_NONE = "none"
 VERIFYING_RUNNING = "running"
 VERIFYING_RED = "red"
+# Пятый исход (SPEC 01M3Y75C9TY76083CG1PK00EM4, требование 2): проверка без
+# исхода висит дольше `config.CI_STUCK_CHECK_MINUTES`. Не зелёный и не
+# красный — задачу не двигает, но `ci-rerun` в нём перезапускает прогон.
+VERIFYING_STUCK = "stuck"
+
+# Статусы check-run'а, в которых проверка может зависнуть (требование 2).
+_STUCK_STATUSES = {"in_progress", "queued"}
+
+# Ссылка на зависшую проверку в `note` исхода `VERIFYING_STUCK` — вход
+# `stuck_check_ids` ниже, тот же приём, что `_RED_NOTE_SHA_RE`.
+_STUCK_NOTE_ID_RE = re.compile(r"check-run id (\d+)")
+
+
+def check_finished(run: dict) -> tuple[bool, str]:
+    """(Завершена ли проверка, строка журнала о прочтении вопреки `status`
+    или "") — единственное место правила «проверка завершена» для
+    `verifying_status` и `branch_status` (SPEC 01M3Y75C9TY76083CG1PK00EM4,
+    требование 1).
+
+    GitHub отдаёт check-run с `status=in_progress` при уже известных
+    `conclusion` и `completed_at` (инцидент 02.10, задача
+    01M3XTFJCC5TG63FHW907GQM4D простояла полтора часа): по одному `status`
+    такая проверка «идёт» вечно. Исход и время завершения заданы оба —
+    проверка закончилась, и решать по ней надо её `conclusion`. Одно из
+    двух без другого — не повод: `status` остаётся главным признаком, а
+    поверить ему вопреки — решение, которое журнал называет отдельной
+    строкой.
+    """
+    status = run.get("status")
+    if status == "completed":
+        return True, ""
+    conclusion, completed_at = run.get("conclusion"), run.get("completed_at")
+    if conclusion and completed_at:
+        return True, (f"{run.get('name', '?')}: GitHub отдаёт status={status} "
+                      f"при conclusion={conclusion}, "
+                      f"completed_at={completed_at} — считаю завершённой")
+    return False, ""
+
+
+def _unfinished_checks(runs: list) -> tuple[list, list[str]]:
+    """(Незавершённые check-run'ы, строки о прочтённых вопреки `status`) —
+    по `check_finished`, общему для обоих читателей статуса."""
+    unfinished, reread = [], []
+    for run in runs:
+        finished, line = check_finished(run)
+        if not finished:
+            unfinished.append(run)
+        if line:
+            reread.append(line)
+    return unfinished, reread
+
+
+def _with_reread(note: str, reread: list[str]) -> str:
+    """`note` статуса и строки о прочтённых вопреки `status` — каждая своей
+    строкой (требование 1): итог остаётся первой строкой, на которой
+    стоят разборы `verifying_is_red`/`status_kind`/`red_status_sha`."""
+    return "\n".join([note, *reread])
+
+
+def _check_age_minutes(run: dict, now: datetime) -> float | None:
+    """Возраст check-run'а в минутах от `started_at`, без него — от
+    `created_at` (требование 2); None — ни одна отметка не разобрана."""
+    stamp = run.get("started_at") or run.get("created_at")
+    if not isinstance(stamp, str):
+        return None
+    try:
+        moment = datetime.fromisoformat(stamp.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if moment.tzinfo is None:
+        moment = moment.replace(tzinfo=timezone.utc)
+    return (now - moment).total_seconds() / 60
+
+
+def _stuck_checks(unfinished: list) -> list[str]:
+    """Описания зависших проверок среди незавершённых: `in_progress`/
+    `queued` без `conclusion` старше `config.CI_STUCK_CHECK_MINUTES`.
+
+    Описание несёт имя, id check-run'а (по нему `ci-rerun` находит прогон
+    workflow) и возраст — Оператор отличает зависшую проверку от идущей и
+    находит её в GitHub (требование 2, AC-6).
+    """
+    now = datetime.now(timezone.utc)
+    stuck = []
+    for run in unfinished:
+        if run.get("status") not in _STUCK_STATUSES or run.get("conclusion"):
+            continue
+        age = _check_age_minutes(run, now)
+        if age is None or age <= config.CI_STUCK_CHECK_MINUTES:
+            continue
+        stuck.append(f"{run.get('name', '?')} (check-run id {run.get('id')}, "
+                     f"status={run.get('status')}) висит {int(age)} мин "
+                     f"без исхода")
+    return stuck
+
+
+def stuck_check_ids(note: str) -> list[str]:
+    """Id check-run'ов из `note` исхода `VERIFYING_STUCK`, по порядку и без
+    повторов; [] — `note` не про зависшие проверки.
+
+    Тот же приём, что `red_status_sha`: `ci-rerun` берёт адрес перезапуска
+    из `note` статуса, который только что прочитал сам, а не опрашивает
+    check-runs второй раз.
+    """
+    return list(dict.fromkeys(_STUCK_NOTE_ID_RE.findall(note)))
 
 
 def _commit_not_found_in_origin(why: str) -> bool:
@@ -236,17 +342,27 @@ def verifying_status(branch: str) -> tuple[str, str]:
                   f"запусков")
         return VERIFYING_NONE, f"{first_source}, {detail} — проверок нет вовсе"
 
-    running = [str(r.get("name", "?")) for r in runs
-              if r.get("status") != "completed"]
+    unfinished, reread = _unfinished_checks(runs)
+    stuck = _stuck_checks(unfinished)
+    if stuck:
+        # Зависшая проверка важнее идущих рядом: без перезапуска коммит не
+        # станет зелёным, сколько ни жди остальные.
+        return VERIFYING_STUCK, _with_reread(
+            f"CI коммита {short}: проверка зависла (порог "
+            f"{config.CI_STUCK_CHECK_MINUTES} мин) — {'; '.join(stuck)}; "
+            f"перезапуск — ci-rerun", reread)
+    running = [str(r.get("name", "?")) for r in unfinished]
     if running:
-        return VERIFYING_RUNNING, (f"CI коммита {short} ещё идёт: "
-                                   f"{', '.join(running)}")
+        return VERIFYING_RUNNING, _with_reread(
+            f"CI коммита {short} ещё идёт: {', '.join(running)}", reread)
 
     failed = [f"{r.get('name', '?')}={r.get('conclusion')}" for r in runs
              if r.get("conclusion") not in GREEN]
     if failed:
-        return VERIFYING_RED, f"CI коммита {short} не зелёный: {', '.join(failed)}"
-    return VERIFYING_GREEN, f"CI коммита {short} зелёный ({len(runs)} проверок)"
+        return VERIFYING_RED, _with_reread(
+            f"CI коммита {short} не зелёный: {', '.join(failed)}", reread)
+    return VERIFYING_GREEN, _with_reread(
+        f"CI коммита {short} зелёный ({len(runs)} проверок)", reread)
 
 
 def verifying_is_red(note: str) -> bool:
@@ -336,16 +452,21 @@ def branch_status(branch: str) -> tuple[bool, str]:
         return False, (f"у коммита {short} нет ни одной проверки CI — "
                        f"статус неизвестен")
 
-    running = [str(r.get("name", "?")) for r in runs
-               if r.get("status") != "completed"]
+    # Состояния «проверка зависла» здесь нет (SPEC 01M3Y75C9TY76083CG1PK00EM4,
+    # «Не входит»): на гейте мержа проверка без исхода — просто не зелёная.
+    unfinished, reread = _unfinished_checks(runs)
+    running = [str(r.get("name", "?")) for r in unfinished]
     if running:
-        return False, f"CI коммита {short} ещё идёт: {', '.join(running)}"
+        return False, _with_reread(
+            f"CI коммита {short} ещё идёт: {', '.join(running)}", reread)
 
     failed = [f"{r.get('name', '?')}={r.get('conclusion')}" for r in runs
               if r.get("conclusion") not in GREEN]
     if failed:
-        return False, f"CI коммита {short} не зелёный: {', '.join(failed)}"
-    return True, f"CI коммита {short} зелёный ({len(runs)} проверок)"
+        return False, _with_reread(
+            f"CI коммита {short} не зелёный: {', '.join(failed)}", reread)
+    return True, _with_reread(
+        f"CI коммита {short} зелёный ({len(runs)} проверок)", reread)
 
 
 def status_kind(note: str) -> str:
@@ -616,7 +737,31 @@ def find_run_id(sha: str) -> tuple[str, str]:
     return str(run_id), ""
 
 
-def trigger_rerun(branch: str) -> str:
+def check_run_workflow_run(check_id: str) -> tuple[str, str]:
+    """Id workflow-прогона, которому принадлежит check-run; ("", причина) —
+    не найден (SPEC 01M3Y75C9TY76083CG1PK00EM4, требование 3).
+
+    Check-run задания GitHub Actions — это job с тем же id, а job несёт
+    `run_id` своего прогона. «Самый свежий прогон коммита» (`find_run_id`)
+    здесь не годится: у коммита два прогона (push и pull_request), и в
+    инциденте 02.10 оба были `completed/success`, а зависшая проверка
+    принадлежала только одному из них.
+    """
+    res = gh("api", f"repos/{{owner}}/{{repo}}/actions/jobs/{check_id}")
+    if res.returncode != 0:
+        detail = (res.stderr or res.stdout).strip()[:200]
+        return "", f"gh не ответил: {detail or f'код {res.returncode}'}"
+    try:
+        payload = json.loads(res.stdout)
+    except (json.JSONDecodeError, TypeError) as exc:
+        return "", f"ответ gh не разобран: {exc}"
+    run_id = payload.get("run_id") if isinstance(payload, dict) else None
+    if not isinstance(run_id, int) or isinstance(run_id, bool):
+        return "", f"у задания {check_id} нет числового run_id"
+    return str(run_id), ""
+
+
+def trigger_rerun(branch: str, run_id: str = "") -> str:
     """Настоящий повторный прогон CI головного коммита ветки (SPEC T082,
     требование 7): `gh run rerun <id> --failed` реально запускает упавшие
     job'ы заново (не то же самое, что повторное чтение уже завершённого
@@ -624,18 +769,26 @@ def trigger_rerun(branch: str) -> str:
     завершения — до того, как вызывающий код спросит `branch_status`
     снова за итоговым результатом.
 
+    `run_id` задан (SPEC 01M3Y75C9TY76083CG1PK00EM4, требование 3) — это
+    прогон зависшей проверки, найденный вызывающим по самой проверке:
+    поиск по sha пропускается, а прогон перезапускается целиком, без
+    `--failed` — упавших заданий в нём нет, зависшее не «упало».
+
     Best-effort: любой сбой (gh недоступен, прогон не найден, сеть легла)
     не бросает исключение — гейт не имеет права зависнуть на детекте
     флейка. Причина возвращается для журнала; повторный `branch_status`
     следом честно увидит тот же красный статус, если триггер не удался.
     """
-    sha, why = head_sha(branch)
-    if not sha:
-        return f"ре-ран CI не запущен: {why}"
-    run_id, why = find_run_id(sha)
-    if not run_id:
-        return f"ре-ран CI не запущен: {why}"
-    rerun = gh("run", "rerun", run_id, "--failed")
+    if run_id:
+        rerun = gh("run", "rerun", run_id)
+    else:
+        sha, why = head_sha(branch)
+        if not sha:
+            return f"ре-ран CI не запущен: {why}"
+        run_id, why = find_run_id(sha)
+        if not run_id:
+            return f"ре-ран CI не запущен: {why}"
+        rerun = gh("run", "rerun", run_id, "--failed")
     if rerun.returncode != 0:
         detail = (rerun.stderr or rerun.stdout).strip()[:200]
         return (f"ре-ран прогона {run_id} не запущен: "
