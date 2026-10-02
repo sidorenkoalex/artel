@@ -4,7 +4,7 @@ import sys
 
 from scripts import guard
 
-from . import alerts, config, gitcmd, lease, retro, spend, store
+from . import alerts, config, cycle_hint, gitcmd, lease, retro, spend, store
 
 # Действие журнала, которым `enforce_budget` фиксирует sha головы кодовой
 # ветки в момент эскалации ПО БЮДЖЕТУ из состояния `review` (SPEC
@@ -492,4 +492,4 @@ def _cmd_budget(conn, task_id: str, raw_usd: str, mid_step: bool = False) -> Non
         store.update_task(conn, task_id, escalated_from=None)
         store.set_state(conn, task_id, back, "operator",
                         expected_state=t["state"], detail="бюджет поднят, продолжаем")
-        print(f"  дальше: artel.py run {task_id}")
+        print("  дальше: " + cycle_hint.launch_text(conn, task_id, "run"))

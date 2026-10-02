@@ -108,6 +108,21 @@ def matching_observation(conn, task_id: str, target: str, session_id: str,
     return rows[0] if rows else None
 
 
+def session_observations(conn, task_id: str, target: str, session_id: str):
+    """Активные наблюдения сессии и проекта с признаком `task_enabled` задачи.
+
+    Порядок — тот, которым подсказка запуска выбирает наблюдение (SPEC
+    01M3XTFJCC5TG63FHW907GQM4D, требование 5): сначала те, где задача
+    включена, внутри — самая свежая связь, как у `matching_observation`.
+    """
+    return conn.execute(
+        "SELECT o.*, COALESCE(ot.enabled, 0) AS task_enabled FROM observations o "
+        "LEFT JOIN observation_tasks ot ON ot.observation_id=o.id AND ot.task_id=? "
+        "WHERE o.target=? AND o.session_id=? AND o.state='active' "
+        "ORDER BY task_enabled DESC, o.last_seen_at DESC, o.rowid DESC",
+        (task_id, target, session_id)).fetchall()
+
+
 def record_observed_run(conn, observation_id: str, task_id: str,
                         pid: int, log: str) -> None:
     with conn:

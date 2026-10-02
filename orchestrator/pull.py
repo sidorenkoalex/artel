@@ -130,7 +130,8 @@ class Conflict:
 
 
 class Refused:
-    """Именованный отказ (не эскалация): планка не найдена в источнике.
+    """Именованный отказ (не эскалация): планка не найдена в источнике либо
+    перечень её долгоживущей группы не прочитан.
     `reason` — `None`, если чтение SPEC.md уже журналировано/напечатано
     общим узлом `fsm._read_branch_text_or_refuse` (нечего добавлять),
     иначе — готовый текст `detail`/сообщения отказа."""
@@ -506,7 +507,7 @@ def _handle_merge_failure(conn, task_id: str, state: str, branch: str,
     return Conflict(files, detail)
 
 
-def _materialize_and_run_plank(conn, task_id: str, branch: str,
+def _materialize_and_run_plank(conn, task_id: str, t, branch: str,
                                source_branch: str, wt_path, state: str,
                                base: str, read_branch_text_or_refuse):
     """Планка — из АРТЕФАКТНОЙ ветки задачи, материализованная НА МЕСТЕ, в
@@ -555,7 +556,32 @@ def _materialize_and_run_plank(conn, task_id: str, branch: str,
                 return Refused(detail)
             return Pulled(base)
 
-        green, tail = acceptance.run(tdir, cwd=wt_path)
+        # Долгоживущая группа (SPEC 01M3XVW94Z8E8R71XN7QWYMSP4, требования
+        # 1-3) — тем же узлом и тем же вызовом, что прогон на
+        # `in_dev -> verifying`: планка, целиком долгоживущая по ADR-0020,
+        # без неё даёт pytest «collected 0 items» и ложную эскалацию.
+        # Импорт здесь, не наверху: `advance_gates.acceptance` импортирует
+        # `fsm`, а `fsm` — этот модуль.
+        from .advance_gates import acceptance as acceptance_gates
+        digests, reason = acceptance_gates.long_lived_manifest(
+            task_id, t, t["target"] or config.DEFAULT_TARGET)
+        if digests is None:
+            # Сбой чтения — отказ, не прогон одной разовой группы
+            # (ADR-0002, fail-closed): иначе зелёная разовая группа молча
+            # пропустила бы непрогнанные долгоживущие файлы.
+            detail = (f"перечень долгоживущих файлов планки не прочитан "
+                      f"после подтяжки {source_branch}: {reason}")
+            store.journal(
+                conn, task_id, "fsm",
+                "переход отклонён: перечень долгоживущих файлов не прочитан",
+                detail)
+            print(f"[{task_id}] переход отклонён: {detail}")
+            return Refused(detail)
+        long_lived = sorted(digests) if t["tests_locked_sha"] else []
+        if long_lived:
+            green, tail = acceptance.run(tdir, cwd=wt_path, extra=long_lived)
+        else:
+            green, tail = acceptance.run(tdir, cwd=wt_path)
         if not green:
             detail = (f"приёмочные тесты красные после подтяжки {source_branch} "
                       f"(слияние сохранено, откат не выполняется):\n{tail}")
@@ -685,6 +711,6 @@ def evaluate(conn, task_id: str, t, state: str, *, origin_main_source,
         if outcome is not None:
             return outcome
 
-    return _materialize_and_run_plank(conn, task_id, branch, source_branch,
-                                      wt_path, state, base,
-                                      read_branch_text_or_refuse)
+    return _materialize_and_run_plank(conn, task_id, t, branch, source_branch,
+                                     wt_path, state, base,
+                                     read_branch_text_or_refuse)
