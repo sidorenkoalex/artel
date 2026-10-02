@@ -810,51 +810,67 @@ def _number_text(value: float) -> str:
     return f"{value:g}"
 
 
-def _roles_by_tier() -> tuple:
-    """({ярус: [роли]}, причина неполноты либо `None`) по `roles.yaml` —
-    столбец «роли по ярусам» (требование 12).
+def _role_resolutions(catalog: Catalog, local: LocalLayer) -> tuple:
+    """([(роль, `Resolution` либо текст отказа)], причина неполноты либо
+    `None`) по ролям-агентам `roles.yaml` — столбец «роли» и итоговые
+    строки `models` (SPEC 01M3SA3ANYZ7036AAGXZG753E3, требования 1, 6).
 
-    Нечитаемая карта исполнителей не роняет команду: столбец пуст,
-    остальная таблица Оператору всё равно нужна. Но и молчать об этом
-    нельзя (REVIEW итерации 1, R1-F5): пустой столбец у модели значит
-    либо «ни один ярус сюда не ведёт», либо «ярус роли не прочитан», а
-    различить эти два состояния Оператору больше негде — `models` и есть
-    единственная команда обзора. Поэтому причина уходит наружу строкой
-    и печатается НАД таблицей, тем же приёмом, что и непрочитанный
-    локальный слой.
+    Модель роли — только то, что отдаёт `resolve_role`: до этой задачи
+    столбец строился своей копией правила по `tiers:` и не видел
+    `role_models:` — таблица 30.09 приписала `claude-opus-5-5` роли,
+    шаги которых шли на codex.
+
+    Отказ разрешения одной роли не роняет команду и не гасит прочие
+    роли: текст отказа уходит в итоговую строку роли. Нечитаемая карта
+    исполнителей — пустой список. В обоих случаях причина неполноты
+    печатается НАД таблицей (REVIEW итерации 1, R1-F5): прочерк в столбце
+    ролей иначе читался бы как «ни одна роль сюда не ведёт».
     """
     from . import roles
-    grouped = {}
     try:
         entries = roles.load()
     except roles.RolesError as exc:
-        return grouped, f"карта исполнителей не прочитана: {exc}"
-    unreadable = []
+        return [], f"карта исполнителей не прочитана: {exc}"
+    resolutions, refused = [], []
     for role, entry in entries.items():
         if not isinstance(entry, dict) or entry.get("executor") != "agent":
             continue
         try:
-            grouped.setdefault(roles.model_tier(role), []).append(role)
-        except roles.RolesError as exc:
-            unreadable.append(f"{role}: {exc}")
-    if unreadable:
-        return grouped, f"ярус не прочитан — {'; '.join(unreadable)}"
-    return grouped, None
+            resolutions.append((role, resolve_role(role, catalog, local)))
+        except ModelsError as exc:
+            resolutions.append((role, str(exc)))
+            refused.append(role)
+    if refused:
+        return resolutions, (f"разрешение не прошло у ролей "
+                             f"{', '.join(refused)} — причина в итоговых "
+                             f"строках под таблицей")
+    return resolutions, None
+
+
+def _role_source(role: str, resolved: Resolution, local: LocalLayer) -> str:
+    """Ключ источника модели роли: `role_models` либо ярус. Это подпись
+    к уже разрешённой модели, а не выбор её — модель и провайдер берутся
+    только из `Resolution`."""
+    return ROLE_MODELS_KEY if role in local.role_models else resolved.tier
 
 
 def cmd_models() -> None:
     """Команда `models` (требование 12) — ТОЛЬКО чтение: ни файлов, ни
     состояния, ни журнала. Печатает по строке на модель каталога:
     провайдер, модель, статус, минимум CLI, прейскурант, действующий
-    тариф с источником и роли, чьи ярусы на неё указывают.
+    тариф с источником и роли, которые фактически идут на эту модель, с
+    источником (ярус или запись `role_models:`); под таблицей — строка
+    «роль → модель → провайдер (источник)» на каждую роль-агента (SPEC
+    01M3SA3ANYZ7036AAGXZG753E3).
 
     Каталог не разобран — отказ с причиной (sys.exit), а не пустая
     таблица. Локальный слой не прочитан — таблица печатается без
-    столбцов тарифа и ролей: каталог сам по себе Оператору виден и без
-    выбора пульта, а причина названа строкой над таблицей. Ярус роли не
-    прочитан — тем же приёмом: своя строка-причина над таблицей, иначе
-    прочерк в столбце ролей читался бы как «сюда не указывает ни одна
-    роль» (REVIEW итерации 1, R1-F5).
+    столбцов тарифа и ролей и без итоговых строк: каталог сам по себе
+    Оператору виден и без выбора пульта, а причина названа строкой над
+    таблицей. Роль не разрешается — тем же приёмом: своя строка-причина
+    над таблицей, иначе прочерк в столбце ролей читался бы как «сюда не
+    указывает ни одна роль» (REVIEW итерации 1, R1-F5); текст отказа —
+    в итоговой строке роли.
     """
     try:
         catalog = load_catalog()
@@ -869,19 +885,24 @@ def cmd_models() -> None:
         print(f"локальный слой не прочитан: {local_note} — "
               f"действующий тариф и ярусы не показаны ({LOCAL_FIX_HINT})")
 
-    by_tier, roles_note = ({}, None)
+    resolutions, roles_note = ([], None)
     if local is not None:
-        by_tier, roles_note = _roles_by_tier()
+        resolutions, roles_note = _role_resolutions(catalog, local)
     if roles_note is not None:
-        print(f"роли по ярусам показаны не полностью: {roles_note} — "
+        print(f"роли показаны не полностью: {roles_note} — "
               f"прочерк в столбце ролей не значит «ролей нет»")
-    tier_of_model = {}
-    for tier, model_id in (local.tiers.items() if local else ()):
-        tier_of_model.setdefault(model_id, []).append(tier)
+    # {модель: {источник: [роли]}} — только по разрешению роли: роль,
+    # переведённая записью `role_models:`, у модели своего яруса не
+    # появляется, потому что ярус здесь в обход `resolve_role` не читается.
+    roles_of_model = {}
+    for role, resolved in resolutions:
+        if isinstance(resolved, Resolution):
+            roles_of_model.setdefault(resolved.model, {}).setdefault(
+                _role_source(role, resolved, local), []).append(role)
 
     header = ("провайдер", "модель", "статус", "мин. CLI",
               "прейскурант", "действующий тариф", "источник тарифа",
-              "роли по ярусам")
+              "роли")
     rows = []
     for model_id in sorted(catalog.models):
         model = catalog.models[model_id]
@@ -899,14 +920,12 @@ def cmd_models() -> None:
                 f"{TARIFF_SOURCE_OVERRIDE}: {override.source} "
                 f"({override.calibrated_at})" if override
                 else f"{TARIFF_SOURCE_CATALOG} ({model.price_date})")
-        # Ярус, на который не указывает ни одна роль, в столбец не
-        # попадает: «cheap: » пустым хвостом только мешал бы читать
-        # таблицу, а сам факт «ярус ведёт сюда, но ролей нет» виден по
-        # отсутствию строки — модель без единой роли печатает «—».
+        # Модель без единой роли печатает «—»: ярус, который ведёт сюда,
+        # но ролей не несёт, пустым хвостом «cheap: » только мешал бы.
+        by_source = roles_of_model.get(model_id, {})
         used = "; ".join(
-            f"{tier}: {', '.join(sorted(by_tier[tier]))}"
-            for tier in sorted(tier_of_model.get(model_id, []))
-            if by_tier.get(tier)) or "—"
+            f"{source}: {', '.join(sorted(by_source[source]))}"
+            for source in sorted(by_source)) or "—"
         rows.append((model.provider, model_id, model.status,
                      ".".join(str(part) for part in model.min_cli_version),
                      _price_text(model.list_price), tariff_text,
@@ -919,3 +938,17 @@ def cmd_models() -> None:
     for row in rows:
         print("  ".join(str(cell).ljust(width)
                         for cell, width in zip(row, widths)))
+    if resolutions:
+        # Порядок звеньев — как у строки `role-providers` `doctor`: роль,
+        # затем модель, затем провайдер; Оператор сверяет две команды
+        # глазом и не должен переставлять звенья в уме.
+        print("роль → модель → провайдер (источник):")
+    for role, resolved in resolutions:
+        if not isinstance(resolved, Resolution):
+            print(f"  {role} → не разрешено: {resolved}")
+            continue
+        source = _role_source(role, resolved, local)
+        source_text = (ROLE_MODELS_KEY if source == ROLE_MODELS_KEY
+                       else f"ярус {source}")
+        print(f"  {role} → {resolved.model} → {resolved.provider} "
+              f"({source_text})")

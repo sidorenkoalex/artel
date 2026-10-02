@@ -248,6 +248,52 @@ def _artifact_tests_snapshot(task_id: str, rel_tests_dir: str) -> dict[str, byte
            if rel.startswith(prefix)}
 
 
+def _removed_paths(disk: dict[str, bytes], baseline: dict[str, bytes],
+                   manifest_rel: str) -> list[str]:
+    """Пути `acceptance_tests/` артефактной ветки, которых нет на диске
+    worktree, — удаление Оператора, переносимое коммитом правки (SPEC
+    01M3XWR7140Q8C1XAFPZ9E854M, требование 1). Без этого коммит только
+    дописывал файлы, и удалённый README оставался в ветке (случай
+    101965d0). Перечень долгоживущих файлов не удаляется никогда: его
+    пишет только команда (требование 2)."""
+    return sorted(p for p in baseline if p not in disk and p != manifest_rel)
+
+
+def _removed_note(task_id: str, removed: list[str]) -> str:
+    """Хвост детали журнала «правка планки» с удалёнными путями
+    относительно `tasks/<id>/` (требование 5); пусто — удалений нет."""
+    if not removed:
+        return ""
+    prefix = f"tasks/{task_id}/"
+    return "\nудалены: " + ", ".join(p[len(prefix):] if p.startswith(prefix)
+                                      else p for p in removed)
+
+
+def _commit_plank(task_id: str, files: dict, message: str,
+                  removed: list[str]) -> tuple[str, str]:
+    """Коммит правки планки в артефактную ветку с удалениями `removed`:
+    (sha, "") — коммит есть и меняет дерево; ("", "") — git не записал
+    коммит; ("", причина) — дерево коммита равно дереву родителя или не
+    сверено с ним (SPEC 01M3XWR7140Q8C1XAFPZ9E854M, требование 3,
+    fail-closed): такой коммит лок не принимает, а ветка возвращается на
+    родителя, чтобы пустой коммит не оставался её головой."""
+    sha = artifact_branch.commit_files(task_id, files, message, remove=removed)
+    if not sha:
+        return "", ""
+    res = gitcmd.git("rev-parse", f"{sha}^{{tree}}", f"{sha}^1^{{tree}}")
+    trees = res.stdout.split() if res is not None and res.returncode == 0 else []
+    if len(trees) == 2 and trees[0] != trees[1]:
+        return sha, ""
+    gitcmd.git("update-ref", f"refs/heads/{artifact_branch.branch_name(task_id)}",
+               f"{sha}^1", sha)
+    if len(trees) != 2:
+        return "", (f"дерево коммита правки {sha} не сверено с деревом "
+                    f"родителя — git не ответил")
+    return "", (f"коммит правки {sha} не меняет ни одного файла артефактной "
+                f"ветки (дерево равно дереву родителя); tests_locked_sha не "
+                f"сдвинут")
+
+
 def _run_summary(tail: str) -> str:
     """Итоговая строка прогона pytest (`N passed in Xs`/`M failed, N
     passed in Xs`) из хвоста вывода `acceptance.run` — для журнала
@@ -545,10 +591,11 @@ def _cmd_amend_tests(conn, task_id: str, reason: str | None) -> None:
     if outside:
         sys.exit(f"[{task_id}] amend-tests: отказ — есть изменения за "
                  f"пределами {rel_tests_dir}/: {', '.join(sorted(outside))}")
+    removed = _removed_paths(disk, baseline, manifest_rel)
 
     if manifest:
         _amend_with_long_lived(conn, t, task_id, reason, wt_path, disk,
-                               manifest, long_changed)
+                               manifest, long_changed, removed)
         return
 
     # AC-1/AC-4: трассируемость AC — ДО прогона планки (копилка 11.09,
@@ -581,14 +628,17 @@ def _cmd_amend_tests(conn, task_id: str, reason: str | None) -> None:
                 f"«Красен до реализации»: {'; '.join(marker_errors)}\n{tail}")
 
     commit_message = f"{task_id}: правка планки приёмки — {reason}"
-    new_locked = artifact_branch.commit_files(task_id, disk, commit_message)
+    new_locked, refusal = _commit_plank(task_id, disk, commit_message, removed)
+    if refusal:
+        _refuse(conn, task_id, "пустой коммит правки", [refusal])
     if not new_locked:
         sys.exit(f"[{task_id}] amend-tests: коммит правки в артефактную "
                  f"ветку не удался")
     store.update_task(conn, task_id, tests_locked_sha=new_locked)
 
     detail = (f"старый sha={old_locked}, новый sha={new_locked}, "
-             f"основание: {reason}\nприёмочные тесты: {_run_summary(tail)}")
+             f"основание: {reason}{_removed_note(task_id, removed)}\n"
+             f"приёмочные тесты: {_run_summary(tail)}")
     _record_amend(conn, task_id, detail,
                   f"[{task_id}] {AMEND_ACTION}: {old_locked} -> {new_locked} "
                   f"(ветка {artifact_branch.branch_name(task_id)})")
@@ -596,7 +646,7 @@ def _cmd_amend_tests(conn, task_id: str, reason: str | None) -> None:
 
 def _amend_with_long_lived(conn, t, task_id: str, reason: str, wt_path: Path,
                            disk: dict[str, bytes], manifest: dict[str, str],
-                           long_changed: list[str]) -> None:
+                           long_changed: list[str], removed: list[str]) -> None:
     """Правка из worktree задачи с непустым перечнем лока (SPEC
     01M3NSZ4YWZW9SD5Y6H62ATGRV, требования 1, 4): проверки итогового
     состояния планки и долгоживущих файлов — до любой записи; затем строго
@@ -645,26 +695,30 @@ def _amend_with_long_lived(conn, t, task_id: str, reason: str, wt_path: Path,
                      f"ничего не записано")
         code_head = gitcmd.branch_head_sha(t["branch"])
     digests = _head_digests(code_head, task_id) if code_head else None
-    new_locked = ""
+    new_locked, refusal = "", ""
     if digests is not None:
         docs_files = dict(disk)
         docs_files[acceptance_gates.long_lived_manifest_rel(task_id)] = (
             guard.render_long_lived_manifest(digests))
-        new_locked = artifact_branch.commit_files(
-            task_id, docs_files, f"{task_id}: правка планки приёмки — {reason}")
+        new_locked, refusal = _commit_plank(
+            task_id, docs_files, f"{task_id}: правка планки приёмки — {reason}",
+            removed)
     if not new_locked:
         failure = ("перечень по голове кодовой ветки не посчитан"
-                   if digests is None else
+                   if digests is None else refusal or
                    "коммит планки и перечня в ветку документов не удался")
         if long_changed:
             _recovery_exit(conn, task_id, f"кодовая ветка несёт правку "
                            f"{', '.join(long_changed)} (голова {code_head}), "
                            f"но {failure}")
+        if refusal:
+            _refuse(conn, task_id, "пустой коммит правки", [refusal])
         sys.exit(f"[{task_id}] amend-tests: {failure} — ничего не записано")
     store.update_task(conn, task_id, tests_locked_sha=new_locked)
 
     detail = (f"старый sha={old_locked}, новый sha={new_locked}, "
-              f"основание: {reason}\nдолгоживущие файлы: "
+              f"основание: {reason}{_removed_note(task_id, removed)}\n"
+              f"долгоживущие файлы: "
               f"{', '.join(long_changed) or 'без правки'}, голова кодовой "
               f"ветки {code_head}\nприёмочные тесты: {_run_summary(tail)}")
     _record_amend(conn, task_id, detail,

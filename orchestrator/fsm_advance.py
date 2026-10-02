@@ -67,10 +67,12 @@ def _mark_artifact_escalation(conn, task_id: str, detail: str) -> None:
     раньше шага роли. `detail` — текст самой эскалации, как у
     `pull.PULL_CONFLICT_ROLE_STEP_MARKER` (`orchestrator/pull.py`).
 
-    Точек вызова три: `spec_writing` (батч `QUESTIONS.md`, оба пути —
-    ветка-источник и диск), `tests_writing` (пометка `AC-n: escalate`) и
+    Точек вызова пять: `spec_writing` ×2 (батч `QUESTIONS.md`, оба пути —
+    ветка-источник и диск), `tests_writing` (пометка `AC-n: escalate`),
     `_review_escalate` (`REVIEW.md status: escalate`, SPEC
-    01M31JWD10728N5YGWVQGWYACW, требование 1)."""
+    01M31JWD10728N5YGWVQGWYACW, требование 1) и `_in_dev_plan_escalate`
+    (`PLAN.md status: escalate`, SPEC 01M3XTF1CEBXT4J7P0EKG5J342,
+    требование 1)."""
     store.journal(conn, task_id, "fsm",
                   fsm.ARTIFACT_ESCALATION_ROLE_STEP_MARKER, detail)
 
@@ -438,7 +440,14 @@ def _in_dev_plan_escalate(conn, task_id: str, tdir, plan_text: str,
     `in_dev` понимал только `ready`/`approved`, любой другой статус (в т.ч.
     escalate) падал в «PLAN.md не ready — разработчик ещё работает», и
     `auto` продолжал звать `developer` заново вместо остановки на
-    эскалации (регрессия №11, симптом 2)."""
+    эскалации (регрессия №11, симптом 2).
+
+    Признак `_mark_artifact_escalation` — по той же причине, что у
+    `_review_escalate` (SPEC 01M3XTF1CEBXT4J7P0EKG5J342, требование 1):
+    без него после `answer` + `approve` пред-advance перечитывал прежний
+    PLAN.md и эскалировал снова, не позвав developer с ANSWER. Ставит его
+    ИМЕННО эта функция: эскалации `in_dev` по бюджету, целостности или
+    провалу агента основания переделки для роли не несут."""
     answer_baseline = fsm._answer_baseline_or_refuse(conn, task_id, tdir)
     if answer_baseline is None:
         return False
@@ -448,6 +457,7 @@ def _in_dev_plan_escalate(conn, task_id: str, tdir, plan_text: str,
               else "эскалация от разработчика")
     store.set_state(conn, task_id, "escalated", "fsm",
                     expected_state=state, detail=detail)
+    _mark_artifact_escalation(conn, task_id, detail)
     print(f"[{task_id}] эскалация разработчика: {detail}")
     return False
 
