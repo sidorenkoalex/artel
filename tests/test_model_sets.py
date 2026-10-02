@@ -266,5 +266,30 @@ class SetAdmittedUnknownSetTest(unittest.TestCase):
         self.assertIn("nabor-x", reason)
 
 
+class SetAdmittedUnknownOutsideRoleTest(unittest.TestCase):
+
+    def test_unknown_outside_role_does_not_confirm_set(self):
+        """Неизвестная роль сводки не подтверждает прогон набора.
+
+        Ловит мутацию: роль вне набора без разрешимой боевой модели
+        пропущена при сверке — зелёный трудный прогон засчитан."""
+        document = {"sets": {"nabor-x": {"developer": "m-dev"}},
+                    "pairs": {}, "canary_templates": {"canary-h": "трудный"}}
+        with closing(sqlite3.connect(":memory:")) as conn:
+            conn.row_factory = sqlite3.Row
+            store.insert_canary_run(
+                conn, "unknown-role-run", "canary-h", "T", 1, 1.0,
+                0, 0, "merge_gate", None, False, False, verdict="green",
+                models_summary="developer → m-dev, ghost → m-other")
+            with (mock.patch.object(models, "load_model_sets",
+                                    return_value=document),
+                  mock.patch.object(models, "_combat_model",
+                                    side_effect=lambda role: {
+                                        "developer": "m-dev"}.get(role))):
+                admitted, reason = models.set_admitted(conn, "nabor-x")
+        self.assertIs(admitted, False)
+        self.assertIn("роли вне набора — на боевых моделях", reason)
+
+
 if __name__ == "__main__":
     unittest.main()
