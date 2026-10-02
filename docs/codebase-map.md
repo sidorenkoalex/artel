@@ -1,5 +1,5 @@
 ---
-built_at_sha: e549f2b5bf2222046db10fc89bc978adfeb10c6c
+built_at_sha: 7788a65069db468b32c4d37f9310ff426efea62a
 ---
 
 # Codebase-map пульта
@@ -163,7 +163,7 @@ built_at_sha: e549f2b5bf2222046db10fc89bc978adfeb10c6c
 
 **Импортирует:** `orchestrator/config.py`, `orchestrator/spend.py`
 
-**Импортируется:** `orchestrator/acceptance.py`, `orchestrator/advance_gates/acceptance.py`, `orchestrator/auto.py`, `orchestrator/pause.py`, `orchestrator/report.py`, `orchestrator/runner.py`, `tests/test_acceptance_tests_flow.py`, `tests/test_agent_failure.py`, `tests/test_agent_log.py`, `tests/test_auto_cycle.py`, `tests/test_fsm_map_conflict_autoresolve.py`, `tests/test_kill_cleanup.py`, `tests/test_pause_now.py`, `tests/test_providers_codex.py`, `tests/test_report.py`, `tests/test_step_cost.py`
+**Импортируется:** `orchestrator/acceptance.py`, `orchestrator/advance_gates/acceptance.py`, `orchestrator/auto.py`, `orchestrator/pause.py`, `orchestrator/report.py`, `orchestrator/runner.py`, `tests/test_acceptance_tests_flow.py`, `tests/test_agent_failure.py`, `tests/test_agent_failure_cli_isolation.py`, `tests/test_agent_log.py`, `tests/test_auto_cycle.py`, `tests/test_fsm_map_conflict_autoresolve.py`, `tests/test_kill_cleanup.py`, `tests/test_pause_now.py`, `tests/test_providers_codex.py`, `tests/test_report.py`, `tests/test_step_cost.py`
 
 ## orchestrator/alerts.py
 
@@ -1079,7 +1079,7 @@ built_at_sha: e549f2b5bf2222046db10fc89bc978adfeb10c6c
 
 **Импортирует:** `orchestrator/config.py`, `orchestrator/failure_classification.py`, `orchestrator/notes.py`, `orchestrator/roles.py`, `orchestrator/store.py`, `orchestrator/yamlmini.py`
 
-**Импортируется:** `orchestrator/artel.py`, `orchestrator/canary.py`, `orchestrator/catalog.py`, `orchestrator/doctor/__init__.py`, `orchestrator/providers/claude.py`, `orchestrator/providers/codex.py`, `orchestrator/retro.py`, `orchestrator/roles.py`, `orchestrator/runner.py`, `orchestrator/spend.py`, `orchestrator/stack.py`, `tests/sandbox.py`, `tests/test_01m3pymq6n4scaj9wwttkh6xng_canary_clone_models.py`, `tests/test_01m3pymq6n4scaj9wwttkh6xng_role_models.py`, `tests/test_01m3sa3anyz7036aagxzg753e3_models_roles.py`, `tests/test_01m3sk48d7rdqpsen78894gda5_codex_home.py`, `tests/test_01m3v4zpb6hfdj36mtdaqg5vnt_canary_profile.py`, `tests/test_01m3xtf5506gf43hd51ece230t_role_refusal.py`, `tests/test_01m3ychp14179r32sfjvkqb32g_model_sets.py`, `tests/test_agent_prompt.py`, `tests/test_canary_sets.py`, `tests/test_catalog_fixture.py`, `tests/test_doctor_agent_roles.py`, `tests/test_doctor_canary_sets.py`, `tests/test_model_sets.py`, `tests/test_model_tariffs.py`, `tests/test_models.py`, `tests/test_models_doctor.py`, `tests/test_providers.py`, `tests/test_providers_codex.py`, `tests/test_roles_map_fixture.py`, `tests/test_runner_role_model.py`, `tests/test_stack.py`, `tests/test_stack_roles_tier_spread.py`, `tests/test_token_rate_divergence.py`, `tests/test_yaml_parsing.py`
+**Импортируется:** `orchestrator/artel.py`, `orchestrator/canary.py`, `orchestrator/catalog.py`, `orchestrator/doctor/__init__.py`, `orchestrator/providers/claude.py`, `orchestrator/providers/codex.py`, `orchestrator/retro.py`, `orchestrator/roles.py`, `orchestrator/runner.py`, `orchestrator/spend.py`, `orchestrator/stack.py`, `tests/sandbox.py`, `tests/test_01m3pymq6n4scaj9wwttkh6xng_canary_clone_models.py`, `tests/test_01m3pymq6n4scaj9wwttkh6xng_role_models.py`, `tests/test_01m3sa3anyz7036aagxzg753e3_models_roles.py`, `tests/test_01m3sk48d7rdqpsen78894gda5_codex_home.py`, `tests/test_01m3v4zpb6hfdj36mtdaqg5vnt_canary_profile.py`, `tests/test_01m3xtf5506gf43hd51ece230t_role_refusal.py`, `tests/test_01m3ychp14179r32sfjvkqb32g_model_sets.py`, `tests/test_agent_failure.py`, `tests/test_agent_prompt.py`, `tests/test_canary_sets.py`, `tests/test_catalog_fixture.py`, `tests/test_doctor_agent_roles.py`, `tests/test_doctor_canary_sets.py`, `tests/test_model_sets.py`, `tests/test_model_tariffs.py`, `tests/test_models.py`, `tests/test_models_doctor.py`, `tests/test_providers.py`, `tests/test_providers_codex.py`, `tests/test_roles_map_fixture.py`, `tests/test_runner_role_model.py`, `tests/test_stack.py`, `tests/test_stack_roles_tier_spread.py`, `tests/test_token_rate_divergence.py`, `tests/test_yaml_parsing.py`
 
 ## orchestrator/notes.py
 
@@ -1467,7 +1467,7 @@ built_at_sha: e549f2b5bf2222046db10fc89bc978adfeb10c6c
 
 **Импортирует:** `orchestrator/config.py`, `orchestrator/models.py`, `orchestrator/roles.py`
 
-**Импортируется:** `orchestrator/acceptance.py`, `orchestrator/artel.py`, `orchestrator/doctor/__init__.py`, `orchestrator/providers/claude.py`, `orchestrator/providers/codex.py`, `orchestrator/role_prompt.py`, `orchestrator/runner.py`, `orchestrator/version.py`, `scripts/guard.py`, `scripts/stack_ci.py`, `tests/sandbox.py`, `tests/test_01m3y7g6t3mk7a899521vf9n7b_pycache.py`, `tests/test_01m3y8570h9y57ytp3m7e1amhg_required_artifact.py`, `tests/test_agent_prompt.py`, `tests/test_artel_bootstrap.py`, `tests/test_git_hooks.py`, `tests/test_invariants.py`, `tests/test_provider_scoped_step_env.py`, `tests/test_providers.py`, `tests/test_providers_codex.py`, `tests/test_review_freshness.py`, `tests/test_review_package.py`, `tests/test_role_prompt_test_author_mission.py`, `tests/test_runner_model_preflight.py`, `tests/test_stack.py`, `tests/test_stack_ci.py`, `tests/test_stack_optional_tools.py`
+**Импортируется:** `orchestrator/acceptance.py`, `orchestrator/artel.py`, `orchestrator/doctor/__init__.py`, `orchestrator/providers/claude.py`, `orchestrator/providers/codex.py`, `orchestrator/role_prompt.py`, `orchestrator/runner.py`, `orchestrator/version.py`, `scripts/guard.py`, `scripts/stack_ci.py`, `tests/sandbox.py`, `tests/test_01m3y7g6t3mk7a899521vf9n7b_pycache.py`, `tests/test_01m3y8570h9y57ytp3m7e1amhg_required_artifact.py`, `tests/test_agent_failure.py`, `tests/test_agent_prompt.py`, `tests/test_artel_bootstrap.py`, `tests/test_git_hooks.py`, `tests/test_invariants.py`, `tests/test_provider_scoped_step_env.py`, `tests/test_providers.py`, `tests/test_providers_codex.py`, `tests/test_review_freshness.py`, `tests/test_review_package.py`, `tests/test_role_prompt_test_author_mission.py`, `tests/test_runner_model_preflight.py`, `tests/test_stack.py`, `tests/test_stack_ci.py`, `tests/test_stack_optional_tools.py`
 
 ## orchestrator/store.py
 
@@ -2241,7 +2241,17 @@ built_at_sha: e549f2b5bf2222046db10fc89bc978adfeb10c6c
 
 **Публичные функции:** (нет)
 
-**Импортирует:** `orchestrator/agent_log.py`, `orchestrator/catalog.py`, `orchestrator/config.py`, `orchestrator/fsm.py`, `orchestrator/gitcmd.py`, `orchestrator/runner.py`, `orchestrator/store.py`, `tests/sandbox.py`
+**Импортирует:** `orchestrator/agent_log.py`, `orchestrator/catalog.py`, `orchestrator/config.py`, `orchestrator/fsm.py`, `orchestrator/gitcmd.py`, `orchestrator/models.py`, `orchestrator/runner.py`, `orchestrator/stack.py`, `orchestrator/store.py`, `tests/sandbox.py`
+
+**Импортируется:** `tests/test_agent_failure_cli_isolation.py`
+
+## tests/test_agent_failure_cli_isolation.py
+
+**Назначение:** Регрессия нестабильного `tests/test_agent_failure.py::CmdRunFailureTest::
+
+**Публичные функции:** (нет)
+
+**Импортирует:** `orchestrator/agent_log.py`, `tests/test_agent_failure.py`
 
 **Импортируется:** —
 

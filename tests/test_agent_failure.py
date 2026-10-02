@@ -22,7 +22,7 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from orchestrator import (agent_log, catalog, config, fsm, gitcmd,  # noqa: E402
-                          runner, store)
+                          models, runner, stack, store)
 from tests.sandbox import (DeveloperBriefTmpRootTest as TmpRootTest,  # noqa: E402
                            FakeProc, FakeStream, capture_new_task_id,
                            disk_backed_ls_tree_files, disk_backed_show,
@@ -117,6 +117,26 @@ class CmdRunFailureTest(TmpRootTest):
             lambda role, target: [])
         pf_patcher.start()
         self.addCleanup(pf_patcher.stop)
+        # Предполётная сверка модели (`providers/claude.py::model_verdict`)
+        # и fingerprint окружения в журнале старта попытки иначе зовут
+        # НАСТОЯЩИЕ `claude --version`/`git --version` машины прогона (SPEC
+        # 01M3YS928033B1QF89VN2N5KC3). `subprocess.run(timeout=…)` ждёт
+        # выхода процесса циклом `time.sleep` — а `time.sleep` подменён
+        # выше глобально, на весь модуль `time`: CLI, закрывший вывод
+        # раньше выхода (машина под нагрузкой), дописывал паузы
+        # в `self.pauses`. И исход сверки зависел от установленной версии.
+        # Версия здесь — заведомо достаточная для любой модели каталога.
+        cli_patcher = mock.patch.object(
+            stack, "installed_cli_version",
+            lambda tool=None: max(m.min_cli_version for m in
+                                  models.load_catalog().models.values()))
+        cli_patcher.start()
+        self.addCleanup(cli_patcher.stop)
+        fp_patcher = mock.patch.object(
+            agent_log, "environment_fingerprint",
+            lambda: "окружение пульта подменено тестом")
+        fp_patcher.start()
+        self.addCleanup(fp_patcher.stop)
 
     # Имя обязательного артефакта роли этого состояния (SPEC
     # 01M1RQ12JVHE3PQYDFV1XPSTQ3, требование 3) — без него на диске
