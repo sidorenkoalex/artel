@@ -1,0 +1,23 @@
+---
+operator: Alexander Sidorenko
+model: unknown
+artel_sha: 28b093892e0ac662389afb696efbb664e37d43fe
+---
+
+# RETRO: 01M3Y8570H9Y57YTP3M7E1AMHG — Шаг test_author с целиком долгоживущей планкой не считается проваленным
+
+Итог: done, sha 28b093892e0ac662389afb696efbb664e37d43fe
+Адрес артефактов: refs/artifacts/01M3Y8570H9Y57YTP3M7E1AMHG
+Суть: Шаг test_author с целиком долгоживущей планкой не считается проваленным — `orchestrator/runner.py::_missing_required_artifact` (строки 996–1021) засчитывает шаг роли `test_author`, только если в `tasks/<id>/acceptance_tests/` рабочего каталога роли есть хотя бы один файл; иначе `run_agent_once` (строка 1126) уводит шаг в `_finish_missing_artifact` — «шаг завершён без артефакта acceptance_tests/», `agent run FAILED` и повтор попытки.
+
+Стоимость итого: $4.56
+  analyst: $0.78, токенов 710865 (input=20, output=6480, cache_write=65512, cache_read=638853), провайдер claude, модель claude-opus-5-5
+  test_author: $1.87, токенов 2778589 (input=66, output=21155, cache_write=114273, cache_read=2643095), провайдер claude, модель claude-opus-5-5
+  developer: $1.35, токенов 1624350 (input=36, output=12170, cache_write=100650, cache_read=1511494), провайдер claude, модель claude-opus-5-5
+  reviewer: $0.56, токенов 442949 (input=18, output=7050, cache_write=42559, cache_read=393322), провайдер claude, модель claude-opus-5-5
+
+Ревью: 0 итераций; приёмка: 0 отказ(ов)
+
+Эскалации: нет
+
+Приёмочные тесты: 0 тест(ов), 0 manual, 0 skip
