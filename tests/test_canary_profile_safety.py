@@ -47,6 +47,23 @@ class CanaryProfileSafetyTest(unittest.TestCase):
             self.assertIn("auth.json", str(refused.exception))
             self.assertEqual(credentials.read_bytes(), b"fixture-secret")
 
+    def test_commit_without_reference_only_clears_the_profile(self):
+        """Коммит без референса дома Codex: история и доверие удалены,
+        отказа нет.
+
+        Ловит мутацию: отсутствие референса снова отказывает прогон — либо
+        профиль при этом не очищается и история прошлого прогона доезжает
+        до следующего.
+        """
+        with tempfile.TemporaryDirectory() as root:
+            base = Path(root)
+            profile = base / "profile"
+            (profile / "sessions").mkdir(parents=True)
+            (profile / "history.jsonl").write_text("old session")
+            (profile / "config.toml").write_text('[projects."/old"]\n')
+            canary._restore_canary_profile(profile, base / "no-reference")
+            self.assertEqual(list(profile.iterdir()), [])
+
 
 class CanaryProfileRefusalTest(unittest.TestCase):
     """Два отказа входа отдельного профиля различаются адресатом."""

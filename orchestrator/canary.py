@@ -543,7 +543,9 @@ def _canary_profile_auth(plan, home: Path) -> CodexCloneAuth | None:
     try:
         payload = pointer.read_bytes()
     except OSError as exc:
-        sys.exit(f"canary: профиль Codex канарейки не подготовлен: "
+        sys.exit(f"canary: профиль Codex канарейки для "
+                 f"{', '.join(plan.codex_roles)} (роли набора на "
+                 f"{codex_provider.CLI_NAME}) не подготовлен: "
                  f"указатель связки ключей {pointer} недоступен ({exc}). "
                  f"Оператору нужен отдельный вход `codex login` для "
                  f"CODEX_HOME={home / '.codex'}")
@@ -551,14 +553,20 @@ def _canary_profile_auth(plan, home: Path) -> CodexCloneAuth | None:
 
 
 def _restore_canary_profile(profile: Path, curated: Path) -> None:
-    """Вернуть курируемые файлы проверяемого SHA, забыв историю и доверие."""
-    if not curated.is_dir() or curated.is_symlink():
-        sys.exit(f"canary: нет курируемого дома Codex проверяемого SHA: {curated}")
+    """Вернуть курируемые файлы проверяемого SHA, забыв историю и доверие.
+
+    `curated` — референс дома Codex в дереве клона, то есть ровно файлы
+    коммита: `.artel/` в git не хранится. Коммит без референса курируемых
+    настроек не несёт — профиль тогда только очищается.
+    """
+    if curated.is_symlink() or (curated.exists() and not curated.is_dir()):
+        sys.exit(f"canary: курируемый дом Codex проверяемого SHA — не "
+                 f"каталог: {curated}")
     if profile.is_symlink():
         sys.exit(f"canary: профиль Codex канарейки — ссылка: {profile}")
-    sources = tuple(curated.iterdir())
+    sources = tuple(curated.iterdir()) if curated.is_dir() else ()
     allowed = {"config.toml", "AGENTS.md", ".zshenv"}
-    if not (curated / "config.toml").is_file():
+    if sources and not (curated / "config.toml").is_file():
         sys.exit(f"canary: нет config.toml проверяемого SHA: {curated}")
     for source in sources:
         if source.name not in allowed or source.is_symlink() or not source.is_file():
@@ -1134,9 +1142,10 @@ def _ephemeral_clone(target_sha: str | None = None,
     остаётся ровно шаблоном, который кладёт `cmd_init` (слой пульта не
     прочитан, набора нет).
 
-    При `codex_auth.profile` восстанавливается отдельный постоянный профиль
-    из референса проверяемого SHA, затем его `CODEX_HOME` получает проверка
-    входа. Неуспех отказывает до `yield`, то есть до платного шага.
+    При `codex_auth.profile` `CODEX_HOME` отдельного постоянного профиля
+    сначала получает проверка входа, затем профиль восстанавливается из
+    референса в дереве клона (файлы проверяемого SHA). Неуспех любого из
+    двух отказывает до `yield`, то есть до платного шага.
     Старая форма `codex_auth` без `profile` оставлена для прямых вызывающих
     и существующих тестов: она использует развёрнутый дом клона.
     Подготовка идёт после `catalog.cmd_init()` и внутри `try`, чтобы
@@ -1203,16 +1212,19 @@ def _ephemeral_clone(target_sha: str | None = None,
                 codex_provider.set_codex_home_override(None)
                 _refuse_unless_clone_logged_in(codex_auth.role, saved["ROLE_HOME"])
             else:
-                try:
-                    _restore_canary_profile(
-                        codex_auth.profile,
-                        config.ROLE_HOME / codex_provider.DEPLOYED_HOME_DIR)
-                except OSError as exc:
-                    sys.exit(f"canary: профиль Codex канарейки не "
-                             f"восстановлен: {codex_auth.profile}: {exc}")
+                # Вход — раньше восстановления: несделанный вход Оператора
+                # должен называться своим отказом, а не уступать место
+                # отказу подготовки профиля.
                 codex_provider.set_codex_home_override(codex_auth.profile)
                 _refuse_unless_profile_logged_in(
                     codex_auth.role, saved["ROLE_HOME"], codex_auth.profile)
+                try:
+                    _restore_canary_profile(
+                        codex_auth.profile,
+                        dest.joinpath(*codex_provider.HOME_REFERENCE_DIR))
+                except OSError as exc:
+                    sys.exit(f"canary: профиль Codex канарейки не "
+                             f"восстановлен: {codex_auth.profile}: {exc}")
         yield dest
     finally:
         codex_provider.set_codex_home_override(saved_codex_home)
