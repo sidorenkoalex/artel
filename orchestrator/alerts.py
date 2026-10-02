@@ -302,3 +302,25 @@ def ack(conn, alert_id: int, actor: str, resolution: str = "") -> str | None:
                 "«внедряем — задача N» либо «отложено до <граница>»)")
     store.ack_alert(conn, alert_id, actor, resolution)
     return None
+
+
+def bulk_ack_selection(conn, source: str, needle: str) -> tuple[list, list]:
+    """(`incident` к подтверждению, прочие виды — пропущенные): открытые
+    алерты с `source` == `source` и `needle` в тексте, по возрастанию id
+    (SPEC 01M3YDHTY1Y67KB98FVSHREC4N, требование 5).
+
+    Подстрока сверяется оператором `in` по уже прочитанным строкам, а не
+    `LIKE`/регулярным выражением: `%`, `_`, `.` в ней — обычные символы,
+    и подстрока «No%commits» не захватывает «No commits between».
+
+    Массово подтверждается только `incident` — факт «Оператор видел»;
+    `trigger`/`threshold` несут решение программы по существу, и общий
+    текст на всю пачку их не закрывает.
+    """
+    matched = sorted((row for row in store.open_alerts(conn)
+                      if row["source"] == source
+                      and needle in (row["message"] or "")),
+                     key=lambda row: row["id"])
+    incidents = [row for row in matched if row["kind"] == "incident"]
+    skipped = [row for row in matched if row["kind"] != "incident"]
+    return incidents, skipped

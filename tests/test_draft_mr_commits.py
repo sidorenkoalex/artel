@@ -14,6 +14,7 @@
 """
 import subprocess
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -46,6 +47,17 @@ class _DraftMrSandbox(RealGitSandbox):
 
     def setUp(self):
         super().setUp()
+        # База сверки — голова `main` удалённого `origin` свежим fetch (SPEC
+        # 01M3YDHTY1Y67KB98FVSHREC4N, требование 1): без `origin` база «не
+        # читается», и адаптер законно уходит в прежнюю попытку публикации.
+        # `origin` — локальный bare, заведённый ДО подмены `subprocess.run`
+        # (иначе push `main` перехватила бы она же).
+        origin = tempfile.TemporaryDirectory()
+        self.addCleanup(origin.cleanup)
+        self.git("init", "-q", "--bare", origin.name)
+        self.git("remote", "add", "origin", origin.name)
+        self.git("push", "-q", "origin",
+                 f"{config.MAIN_BRANCH}:{config.MAIN_BRANCH}")
         self.conn = store.db()
         config.TARGETS.write_text(TARGETS_YAML, encoding="utf-8")
         self.push_calls: list = []

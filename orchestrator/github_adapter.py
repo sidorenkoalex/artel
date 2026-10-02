@@ -25,14 +25,23 @@ DRAFT_MR_SKIPPED_ACTION = "Draft MR пропущен: в ветке нет ко�
 
 
 def _commits_over_base(branch: str, base: str, repo=None) -> int | None:
-    """Число коммитов `branch`, которых нет в `base` — ЛОКАЛЬНЫМ git, без
-    единого обращения к форджу (SPEC 01M3HP7WAXKFK3GYZ3T6HX08M0,
-    требование 8).
+    """Число коммитов `branch`, которых нет в голове `base` УДАЛЁННОГО
+    `origin`, — git, без единого обращения к форджу (SPEC
+    01M3HP7WAXKFK3GYZ3T6HX08M0, требование 8; SPEC
+    01M3YDHTY1Y67KB98FVSHREC4N, требование 1).
 
-    `None` — ответа нет (git не ответил, ветки/базы нет, вывод не
-    разобрать числом). Вызывающий код обязан деградировать в то поведение,
-    которое у него было ДО этой задачи, а не додумывать за git ни «ноль
-    коммитов», ни «коммиты есть»: единственное новое решение, которое эти
+    База — голова, полученная СВЕЖИМ `gitcmd.fetch_ref_sha`, а не локальная
+    ветка `base` и не `refs/remotes/origin/<base>`: локальная `main` главной
+    копии — пин, он по построению отстаёт от `origin/main`, от которой
+    растут ветки задач, а remote-ref актуализирует только механика подтяжки
+    и входа в `verifying` — позже входа в `in_dev`. По отставшей базе
+    пустая ветка «имела коммиты», проверка её пропускала, и GitHub отвечал
+    «No commits between» (инциденты 28.09–02.10).
+
+    `None` — ответа нет (fetch базы не удался, git не ответил, ветки нет,
+    вывод не разобрать числом). Вызывающий код обязан деградировать в то
+    поведение, которое у него было ДО проверки, а не додумывать за git ни
+    «ноль коммитов», ни «коммиты есть»: единственное решение, которое эти
     числа принимают, — пропустить заведомо отказной вызов форджа, и
     основанием для него служит только положительный ответ git.
 
@@ -41,7 +50,10 @@ def _commits_over_base(branch: str, base: str, repo=None) -> int | None:
     исполняет `rev-list --count X..Y`, то есть «коммиты Y, которых нет в
     X» — нужный вопрос задаётся базой на первом месте и веткой на втором.
     """
-    return gitcmd.commits_behind(base, branch, repo=repo)
+    base_sha, _reason = gitcmd.fetch_ref_sha("origin", base, repo=repo)
+    if not base_sha:
+        return None
+    return gitcmd.commits_behind(base_sha, branch, repo=repo)
 
 
 def _is_github_target(target_name: str) -> bool:
@@ -118,9 +130,9 @@ def ensure_draft_mr(conn, task_id: str, t) -> None:
     # требование 9) пробует снова, уже с коммитом в ветке.
     if _commits_over_base(branch, base, repo=repo) == 0:
         store.journal(conn, task_id, "orchestrator", DRAFT_MR_SKIPPED_ACTION,
-                      f"{branch}: нет коммитов относительно базы {base} — "
-                      f"черновик заведётся на первом переходе после первого "
-                      f"коммита")
+                      f"{branch}: нет коммитов относительно базы "
+                      f"origin/{base} (свежий fetch) — черновик заведётся на "
+                      f"первом переходе после первого коммита")
         return
 
     push = (gitcmd.git("push", "-u", "origin", branch) if repo is None
