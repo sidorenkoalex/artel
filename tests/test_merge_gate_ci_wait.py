@@ -405,8 +405,10 @@ class MovedMainRetryInCycleTest(MergeGateCiWaitUnitTest):
                    lambda *a, **k: ("ok", self.root / "scratch"))
         self.patch(fsm_merge_gate, "_publish_merge_artifacts",
                    lambda *a, **k: "deadbeef")
-        self.patch(fsm_merge_gate, "_publish_closing_snapshot_or_wait",
-                   lambda *a, **k: "ok")
+        self.patch(fsm_merge_gate, "_docs_ref_unsynced",
+                   lambda *a, **k: False)
+        self.patch(fsm_merge_gate.cleanup, "_commit_closing",
+                   lambda *a, **k: None)
         self.patch(fsm_merge_gate, "_cleanup_merged_task", lambda *a, **k: None)
         self.patch(fsm_merge_gate, "_wait_for_branch_ci_green",
                    self.fake_ci_wait)

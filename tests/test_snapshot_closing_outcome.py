@@ -1,5 +1,7 @@
-"""Исход в ретроспективе снимка закрытия (SPEC
-01M3KE80RNBCY9G48E75Z14TA7, требования 1-4, 9; AC-1..AC-5, AC-9, AC-10).
+"""Исход в ретроспективе коммита закрытия (SPEC
+01M3KE80RNBCY9G48E75Z14TA7, требования 1-4, 9; AC-1..AC-5, AC-9, AC-10;
+с ADR-0021 п.3 — коммит RETRO в ссылку документов вместо снимка, SPEC
+01M3Z2DMQRD0BD7AARFVTCVVG8, требование 3, AC-5).
 
 До этой задачи `cleanup._publish_snapshot_if_pending` передавал в
 публикацию литерал «killed» на ОБОИХ путях закрытия, и снимок смерженной
@@ -123,13 +125,15 @@ class ClosingSnapshotOutcomeTest(SyncedOriginConnSandbox):
         return res.stdout.strip()
 
     def publish(self, state: str, *, is_canary: bool = False) -> str:
-        """Закрывает задачу переходом в `state` и публикует снимок тем же
-        узлом, которым это делают оба пути закрытия."""
+        """Закрывает задачу переходом в `state` и пишет коммит закрытия
+        тем же узлом, которым это делают оба пути закрытия. Канарейка с
+        ADR-0021 (п.13) идёт тем же потоком — признак в строке БД."""
+        if is_canary:
+            store.update_task(self.conn, TASK, is_canary=1)
         store.set_state(self.conn, TASK, state, "orchestrator",
                         expected_state="merge_gate", detail="смержено: ветка"
                         if state == "done" else "kill switch")
-        return capture(cleanup._publish_snapshot_if_pending, self.conn, TASK,
-                       config.DEFAULT_TARGET, is_canary)
+        return capture(cleanup._commit_closing, self.conn, TASK)
 
     def test_merged_task_snapshot_says_done_with_a_non_empty_sha(self):
         """AC-1: снимок задачи, закрытой мержем, несёт «Итог: done, sha
@@ -164,8 +168,9 @@ class ClosingSnapshotOutcomeTest(SyncedOriginConnSandbox):
         self.assertNotIn("артефакты не сохранены", retro_text)
 
     def test_merged_task_snapshot_commit_message_names_done(self):
-        """AC-4: сообщение коммита снимка называет фактический исход —
-        «снапшот закрытия (done)».
+        """AC-4: сообщение коммита закрытия называет фактический исход —
+        «закрытие (done) — RETRO» (ADR-0021 п.3: коммит закрытия вместо
+        снимка).
 
         Ловит мутацию: в сообщение коммита снова уходит «killed» —
         `assertEqual` ниже покраснеет на подстроке исхода.
@@ -173,7 +178,7 @@ class ClosingSnapshotOutcomeTest(SyncedOriginConnSandbox):
         self.publish("done")
 
         self.assertEqual(self.origin_commit_subject(),
-                         f"{TASK}: снапшот закрытия (done)")
+                         f"{TASK}: закрытие (done) — RETRO")
 
     def test_killed_task_snapshot_keeps_reason_and_old_address(self):
         """AC-3: путь `kill` не изменился — «Итог: killed — причина:
@@ -191,8 +196,9 @@ class ClosingSnapshotOutcomeTest(SyncedOriginConnSandbox):
         self.assertIn("Итог: killed — причина: kill switch", retro_text)
         self.assertIn("Адрес артефактов: артефакты не сохранены", retro_text)
         self.assertEqual(self.origin_commit_subject(),
-                         f"{TASK}: снапшот закрытия (killed)")
-        self.assertIn("опубликован", note)
+                         f"{TASK}: закрытие (killed) — RETRO")
+        self.assertIn("коммит закрытия", note)
+        self.assertNotIn("не записан", note)
 
     def test_snapshot_retro_counts_and_gist_come_from_the_branch(self):
         """AC-5/AC-10: каталога задачи в главной копии нет, а ветка несёт
@@ -214,33 +220,38 @@ class ClosingSnapshotOutcomeTest(SyncedOriginConnSandbox):
         self.assertIn(GIST_LINE, retro_text)
 
     def test_canary_run_publishes_no_snapshot(self):
-        """AC-9: канареечный прогон при закрытии снимок не публикует —
-        ссылка `refs/artifacts/<id>` не появляется, артефактная ветка
-        остаётся на месте.
+        """ADR-0021 п.13 (вместо AC-9 SPEC 01M3KE80RNBCY9G48E75Z14TA7):
+        канареечная задача закрывается тем же потоком — коммит RETRO
+        ложится в её ссылку документов и доходит до origin.
 
-        Ловит мутацию: исключение канарейки снято вместе с правкой исхода —
-        ссылка появится в origin, и `assertFalse` ниже покраснеет.
+        Ловит мутацию: прежнее исключение канарейки оставлено в узле
+        закрытия — RETRO в ссылке не появится, и `origin_show` ниже
+        покраснеет.
         """
         self.publish("done", is_canary=True)
 
-        self.assertFalse(self.origin_ref_exists())
-        self.assertTrue(gitcmd.branch_exists(artifact_branch.branch_name(TASK)))
+        self.assertTrue(self.origin_ref_exists())
+        self.assertIn("Итог: done", self.origin_show(RETRO_REL))
 
     def test_published_snapshot_removes_the_artifact_branch(self):
-        """Требование 8/AC-8 остаётся в силе: push идёт ДО удаления
-        артефактной ветки — после подтверждённой публикации ссылка в origin
-        есть, а ветки пульта уже нет.
+        """ADR-0021 п.3 (вместо требования 8/AC-8 SPEC T094): закрытие —
+        коммит поверх прежней головы ссылки, ссылка не удаляется и в
+        origin совпадает с локальной; прежний коммит документов достижим
+        из головы.
 
-        Ловит мутацию: правка исхода переставила публикацию и уборку
-        (ветка удаляется раньше push) — ретроспектива снимка собиралась бы
-        по пустому дереву, а `assertTrue` наличия ссылки/`assertFalse`
-        ветки поймают перестановку.
+        Ловит мутацию: закрытие снова пишет коммит без родителя (снимок)
+        или удаляет ссылку — `is_ancestor` прежней головы либо наличие
+        ссылки ниже покраснеют.
         """
+        before = artifact_branch.ref_head(TASK)
+
         self.publish("done")
 
+        head = artifact_branch.ref_head(TASK)
         self.assertTrue(self.origin_ref_exists())
-        self.assertFalse(
-            gitcmd.branch_exists(artifact_branch.branch_name(TASK)))
+        self.assertNotEqual(head, before)
+        self.assertTrue(gitcmd.is_ancestor(before, head))
+        self.assertEqual(gitcmd.remote_ref_state(self.ref()), (head, ""))
 
 
 if __name__ == "__main__":
