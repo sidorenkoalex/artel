@@ -2,7 +2,7 @@
 task: 01M3YCHS4F08VTV6XX10VF92H3
 type: plan
 author_role: developer
-status: escalate
+status: ready
 schema_version: 5
 ---
 
@@ -149,6 +149,10 @@ lease не берётся (у задачи на паузе идущий шаг �
 не назвал `auto.py` в `zones:`. Правка — 3 строки в
 `auto_stop_advice` (хвост `models.task_set_hint`) и `models` в импорте.
 
+Мандат выдан: ANSWER-1, `zones-extend` (ANSWER-2), подтверждён ANSWER-3 —
+«Расширение зон разрешено: orchestrator/auto.py». Вопрос закрыт, код на
+этом шаге не менялся.
+
 ## Влияние на систему
 
 - Схема БД: две новые nullable-колонки (`SCHEMA` и `migrate` одним
@@ -196,22 +200,8 @@ lease не берётся (у задачи на паузе идущий шаг �
   вне `zones:` (`auto.auto_stop_advice`) — сверка «модули, импортируемые
   планкой задачи, ⊂ zones» на выходе `tests_writing` поймала бы это до
   шага разработчика.
-
-## Эскалация
-
-- **Вопросы**
-  1. (блокирующий) Разрешить расширение зоны на `orchestrator/auto.py`
-     (`zones-extend 01M3YCHS4F08VTV6XX10VF92H3 orchestrator/auto.py`)? Без
-     правки `auto.auto_stop_advice` долгоживущий тест AC-10
-     (`test_ac10_approve_hints_on_gates_name_the_set`) не зеленеет, а
-     гейт зон отклонит `in_dev -> review`. Варианты: (а) мандат на
-     `orchestrator/auto.py` — код уже в worktree, PLAN несёт раздел
-     «## Расширение зон»; (б) отказ — тогда нужна правка теста командой
-     `amend-tests` (другая поверхность подсказки, в зонах SPEC).
-     Дефолт при молчании: (а).
-- **Контекст** — реализация всех требований 1–12 завершена в worktree,
-  долгоживущие тесты задачи (16), приёмочный AC-14 и затронутые модули
-  зелёные; единственный файл вне `zones:` — `orchestrator/auto.py`
-  (+7/−3 строки в `auto_stop_advice` и импорте).
-- **Блокирует** — переход `in_dev -> review` (гейт зон по пути
-  `orchestrator/auto.py`).
+- Повторная эскалация (ANSWER-3): шаг после ответа Оператора закончился
+  без снятия `status: escalate` в PLAN, и пульт прочёл старый статус как
+  новый вопрос. Правило есть (`skills/escalation-rules.md`, п.4), но
+  повтор случился — бриф шага после ANSWER мог бы явно напоминать снять
+  статус.
