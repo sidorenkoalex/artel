@@ -28,6 +28,12 @@ fail-closed на сбое git) и `merge_gate_escalates` в
 ранним `return` под условием — 27.09 новый тест оболочки входа выключили
 им вместо пропуска, и на машине без `/bin/zsh` он остался зелёным, не
 проверив ничего.
+
+Тем же проходом по диффу узел наблюдает и изменённые утверждения метода,
+сохранившего имя (SPEC 01M3Y753QNG6TS5C7MTJS1MEV6): нормальную форму
+утверждения считает `guard.test_assertions`, находки пишутся в журнал на
+обоих рубежах и уходят в ревью-пакет, но в узел отказа не входят —
+решение Оператора 02.10: сначала наблюдение, блокировка отдельной задачей.
 """
 import ast
 from typing import NamedTuple
@@ -60,6 +66,18 @@ TEST_INTEGRITY_ALLOWED_ACTION = "ослабление тестов разреш�
 # видимыми они остаться обязаны — запись читает ревьювер, и она же
 # остаётся Оператору на приёмке. Уровень обычный: это не отказ и не алерт.
 TEST_INTEGRITY_CONDITIONAL_SKIP_ACTION = "новый тест с условным пропуском"
+
+# Наблюдение за изменёнными утверждениями метода, сохранившего имя (SPEC
+# 01M3Y753QNG6TS5C7MTJS1MEV6, требование 5): решение Оператора 02.10 —
+# сначала наблюдение, блокировка отдельной задачей по его итогам. Записи
+# обычного уровня, переход и мерж от них не зависят.
+ASSERTION_OBSERVATION_ACTION = "изменены утверждения тестов (наблюдение)"
+ASSERTION_UNOBSERVED_ACTION = "утверждения тестов: наблюдение не выполнено"
+ASSERTION_UNOBSERVED_PREFIX = "наблюдение не выполнено"
+ASSERTIONS_CHANGED = "утверждения изменены в"
+ASSERTIONS_COVERED = "покрыто мандатом"
+# Сколько утверждений одного метода называет текст находки (требование 4).
+ASSERTION_TEXTS_SHOWN = 3
 
 # Декораторы пропуска, несущие УСЛОВИЕ — подмножество
 # `guard.SKIP_DECORATOR_NAMES`. Остальные из того набора (`skip`,
@@ -371,35 +389,58 @@ def _file_findings(base_path, head_path, renamed_to, base_source,
     return found, passed
 
 
-def findings(code_branch: str) -> tuple:
-    """(находки ветки против базы сравнения, прошедшие послабление
-    пропуски, текст сбоя git).
+def _assertion_observation(base_path, head_path, renamed_to, base_source,
+                           head_source) -> tuple:
+    """(находки об изменённых утверждениях одного файла, причина, по
+    которой наблюдение по нему не выполнено) — SPEC
+    01M3Y753QNG6TS5C7MTJS1MEV6, требования 3-4.
 
-    База — `gitcmd.diff_base` (merge-base с origin/main), та же, что у
-    гейта заявки мутации и у `_protected_path_diff_gate`. Git не ответил
-    на базу, на список файлов диффа или на чтение содержимого пути,
-    который по ответу самого git существует в своём дереве, — находки НЕ
-    собраны: `(None, [], detail)`. Как на это реагировать, решает
-    вызывающий гейт (fail-closed на переходе, fail-open на мерже), а не
-    этот узел.
+    Удалённый и добавленный файл не сравниваются: у удалённого находка о
+    самом файле уже названа, у нового базы нет. Метод, исчезнувший из head,
+    сюда не попадает — `guard.changed_test_assertions` сравнивает только
+    имена, живые по обе стороны, и находка «метод … исчез» остаётся
+    единственной (AC-5). Неразбираемая сторона — не исключение и не
+    находка, а названная причина (AC-9)."""
+    if base_path is None or head_path is None:
+        return [], ""
+    path = base_path
+    base = guard.test_assertions(base_source)
+    head = guard.test_assertions(head_source)
+    broken = [side for side, parsed in (("base", base), ("head", head))
+              if parsed is None]
+    if broken:
+        return [], (f"{path}: не разбирается ({', '.join(broken)}) — "
+                    f"утверждения не сравнивались")
+    found = []
+    for name, texts in guard.changed_test_assertions(base, head).items():
+        shown = "; ".join(texts[:ASSERTION_TEXTS_SHOWN])
+        if len(texts) > ASSERTION_TEXTS_SHOWN:
+            shown += f"; и ещё {len(texts) - ASSERTION_TEXTS_SHOWN}"
+        found.append(Finding(path, name, f"{ASSERTIONS_CHANGED} {name}: "
+                                         f"{shown}", renamed_to or ""))
+    return found, ""
 
-    Второй элемент — пропуски, прошедшие послабление требования 2 SPEC
-    01M3HWXFYWVDHGW011P6BZJFYA: находками они не стали, но потеряться не
-    имеют права, и вызывающий вход (`uncovered`) пишет их в журнал задачи.
-    """
+
+def _compare(code_branch: str) -> tuple:
+    """Один проход по диффу `tests/` для обоих наблюдателей узла: (находки,
+    прошедшие послабление пропуски, находки об утверждениях, причины
+    невыполненного наблюдения утверждений, текст сбоя git). Сбой git —
+    `(None, [], None, [], detail)`: не собрано ни то, ни другое."""
     base = gitcmd.diff_base(code_branch)
     if base is None:
-        return None, [], _git_silence(
+        return None, [], None, [], _git_silence(
             f"определение базы сравнения (merge-base с origin/"
             f"{config.MAIN_BRANCH} либо локальным {config.MAIN_BRANCH}) "
             f"для ветки {code_branch}")
     entries = gitcmd.diff_name_status(base, code_branch)
     if entries is None:
-        return None, [], _git_silence(
+        return None, [], None, [], _git_silence(
             f"список файлов диффа (база {base}...{code_branch})")
 
     found: list = []
     passed: list = []
+    observed: list = []
+    unobserved: list = []
     for status, first, second in entries:
         base_path, head_path, renamed_to = _pair(status, first, second)
         if not _in_scope(base_path) and not _in_scope(head_path):
@@ -417,14 +458,85 @@ def findings(code_branch: str) -> tuple:
                 # значит `None` здесь всегда сбой чтения, не легитимное
                 # отсутствие (различать их по тексту причины, как это
                 # вынужден делать гейт заявки мутации, тут не нужно).
-                return None, [], _git_silence(
+                return None, [], None, [], _git_silence(
                     f"чтение {path} из {ref} ({reason})")
             sources[side] = text
         file_found, file_passed = _file_findings(
             base_path, head_path, renamed_to, sources["base"], sources["head"])
         found += file_found
         passed += file_passed
-    return found, passed, ""
+        file_observed, reason = _assertion_observation(
+            base_path, head_path, renamed_to, sources["base"], sources["head"])
+        observed += file_observed
+        if reason:
+            unobserved.append(reason)
+    return found, passed, observed, unobserved, ""
+
+
+def findings(code_branch: str) -> tuple:
+    """(находки ветки против базы сравнения, прошедшие послабление
+    пропуски, текст сбоя git).
+
+    База — `gitcmd.diff_base` (merge-base с origin/main), та же, что у
+    гейта заявки мутации и у `_protected_path_diff_gate`. Git не ответил
+    на базу, на список файлов диффа или на чтение содержимого пути,
+    который по ответу самого git существует в своём дереве, — находки НЕ
+    собраны: `(None, [], detail)`. Как на это реагировать, решает
+    вызывающий гейт (fail-closed на переходе, fail-open на мерже), а не
+    этот узел.
+
+    Второй элемент — пропуски, прошедшие послабление требования 2 SPEC
+    01M3HWXFYWVDHGW011P6BZJFYA: находками они не стали, но потеряться не
+    имеют права, и вызывающий вход (`uncovered`) пишет их в журнал задачи.
+
+    Находки об изменённых утверждениях (SPEC 01M3Y753QNG6TS5C7MTJS1MEV6)
+    сюда НЕ входят: режим — наблюдение, и узел отказа их не видит
+    (требование 5); их отдаёт `assertion_observation`.
+    """
+    found, passed, _observed, _unobserved, git_detail = _compare(code_branch)
+    return found, passed, git_detail
+
+
+def _observation_lines(observed: list, mandate: dict) -> list:
+    """Строки detail записи наблюдения: «файл: утверждения изменены в …»,
+    у покрытых мандатом — с отметкой «покрыто мандатом ANSWER-n»
+    (требование 5, AC-7). Покрытие — тем же правилом, что у находок
+    отказа (`Finding.mandate_elements`): путь файла покрывает все находки
+    файла, элемент с `::` — только названный метод."""
+    lines = []
+    for finding in observed:
+        source = next((mandate[e] for e in finding.mandate_elements
+                       if e in mandate), None)
+        lines.append(finding.line if source is None
+                     else f"{finding.line} — {ASSERTIONS_COVERED} {source}")
+    return lines
+
+
+def assertion_observation(task_id: str, code_branch: str,
+                          artifact_branch: str) -> tuple:
+    """(строки находок об изменённых утверждениях с отметкой мандата,
+    причины невыполненного наблюдения по файлам, текст сбоя git) — вход
+    ревью-пакета (требование 5, AC-10). Ничего не журналирует: запись
+    пишут рубежи через `uncovered`."""
+    _found, _passed, observed, unobserved, git_detail = _compare(code_branch)
+    if observed is None:
+        return [], [], git_detail
+    mandate = _answer_mandate(artifact_branch, task_id) if observed else {}
+    return _observation_lines(observed, mandate), unobserved, ""
+
+
+def _journal_observation(conn, task_id: str, lines: list,
+                         unobserved: list) -> None:
+    """Записи наблюдения рубежа (требование 5, AC-6/AC-8/AC-9): одна —
+    о находках, одна — о невыполненном наблюдении; без находок и без
+    причин журнал не трогается."""
+    if lines:
+        store.journal(conn, task_id, "fsm", ASSERTION_OBSERVATION_ACTION,
+                      "; ".join(lines))
+    if unobserved:
+        store.journal(conn, task_id, "fsm", ASSERTION_UNOBSERVED_ACTION,
+                      "; ".join(f"{ASSERTION_UNOBSERVED_PREFIX}: {reason}"
+                                for reason in unobserved))
 
 
 def _answer_mandate(artifact_branch: str, task_id: str) -> dict:
@@ -470,18 +582,28 @@ def uncovered(conn, task_id: str, code_branch: str,
     вход, а не обёртки: он единственный у узла, кому доступны `conn` и
     `task_id`, и зовут его оба рубежа, так что запись появляется на
     каждом.
+
+    Там же и по тому же доводу — наблюдение за изменёнными утверждениями
+    (SPEC 01M3Y753QNG6TS5C7MTJS1MEV6, требование 5): его записи пишутся,
+    но в возврат его находки не идут — ни переход, ни мерж от них не
+    зависят. Молчание git — запись «наблюдение не выполнено» рядом с
+    обычной реакцией рубежа на сбой.
     """
-    found, passed, git_detail = findings(code_branch)
+    found, passed, observed, unobserved, git_detail = _compare(code_branch)
     if found is None:
+        _journal_observation(conn, task_id, [], [git_detail])
         return None, git_detail
     if passed:
         store.journal(conn, task_id, "fsm",
                       TEST_INTEGRITY_CONDITIONAL_SKIP_ACTION,
                       "; ".join(skip.line for skip in passed))
+    mandate = _answer_mandate(artifact_branch, task_id) \
+        if found or observed else {}
+    _journal_observation(conn, task_id, _observation_lines(observed, mandate),
+                         unobserved)
     if not found:
         return [], ""
 
-    mandate = _answer_mandate(artifact_branch, task_id)
     if not mandate:
         return found, ""
 

@@ -61,6 +61,10 @@ EMPTY_INCREMENT_FALLBACK_REASON = ("инкрементальный diff пуст
 # успешный-но-пустой diff меряется как N байт текста плейсхолдера вместо 0.
 EMPTY_DIFF_TEXT = "(изменений нет)"
 
+# Заголовок раздела находок наблюдения за утверждениями тестов (SPEC
+# 01M3Y753QNG6TS5C7MTJS1MEV6, требование 5, AC-10).
+CHANGED_ASSERTIONS_SECTION = "Изменённые утверждения тестов"
+
 # Сгенерированная карта кодовой базы — то же имя и та же форма локальной
 # константы модуля, что в `orchestrator/brief.py`, `orchestrator/pull.py`
 # и `orchestrator/fsm_postmerge.py`.
@@ -564,6 +568,45 @@ def _shown_diff(base: str, branch: str, exclude: tuple, repo,
     return out
 
 
+def _changed_assertions_part(conn, task_id: str, branch: str,
+                             artifact_branch: str, target: str,
+                             run_id: str) -> str | None:
+    """Раздел «Изменённые утверждения тестов» (SPEC
+    01M3Y753QNG6TS5C7MTJS1MEV6, требование 5, AC-10): те же находки
+    наблюдения гейта неослабления, что рубежи пишут в журнал, — ревьювер
+    сверяет их по Фазе B чек-листа. `None` — находок и неразобранных файлов
+    нет, раздел не добавляется. Канареечная задача и внешний target — без
+    раздела, тем же условием, что у самого гейта (AC-11): дифф в
+    `config.ROOT` не видит код внешнего target. Сбой git (и молчание, и
+    недекодируемый вывод) разделом не называется — его уже называет diff
+    пакета.
+
+    `test_integrity` импортируется здесь: он тянет `advance_gates.zones` и
+    дальше `fsm`-соседей, а `fsm` импортирует этот модуль на верхнем
+    уровне."""
+    if target != config.DEFAULT_TARGET or not store.task_exists(conn, task_id) \
+            or store.get_task(conn, task_id)["is_canary"]:
+        return None
+    from .advance_gates import test_integrity
+    try:
+        lines, unobserved, _git_detail = test_integrity.assertion_observation(
+            task_id, branch, artifact_branch)
+    except UnicodeDecodeError:
+        # Тот же сбой git, что `git_diff_part` превращает в «diff не
+        # собран» (T011): наблюдение — не повод ронять сборку пакета.
+        return None
+    if not lines and not unobserved:
+        return None
+    body = "\n".join(lines + [f"{test_integrity.ASSERTION_UNOBSERVED_PREFIX}: "
+                              f"{reason}" for reason in unobserved])
+    return (f"### {CHANGED_ASSERTIONS_SECTION}\n\n"
+            f"Наблюдение гейта неослабления тестов: утверждения методов, "
+            f"сохранивших имя, которых в голове ветки нет в той же "
+            f"нормальной форме. Переход и мерж от них не зависят — сверь "
+            f"каждое с base по Фазе B чек-листа.\n\n"
+            f"{brief.wrap_boundary(run_id, body)}\n")
+
+
 def _increment_note(shown: dict, prev_sha: str, branch: str) -> str:
     """Первая фраза заметки под diff'ом итерации > 1 с найденной базой:
     называет базу и голову ветки (требование 6) и различает три исхода —
@@ -782,6 +825,10 @@ def review_package(conn, task_id: str, title: str, branch: str, *,
                  f"\n\n{brief.wrap_boundary(run_id, shown['stat'])}\n")
     parts.append(f"### Diff (git diff {base}...{branch})"
                  f"\n\n{brief.wrap_boundary(run_id, shown['diff'])}\n")
+    assertions_part = _changed_assertions_part(
+        conn, task_id, branch, artifact_branch_name, target, run_id)
+    if assertions_part:
+        parts.append(assertions_part)
     if incremental:
         # Требование 5: инструкция, не переключатель — называет команду,
         # но не запускает её и не заводит отдельный CLI-режим («не входит»).
