@@ -1,5 +1,5 @@
 ---
-built_at_sha: d79f03b23a5720f8aa7bfbe241da60ec9a1bd9bc
+built_at_sha: b9cac34cd98aa7cfe282658ad999fe146e28c1e9
 ---
 
 # Codebase-map пульта
@@ -893,7 +893,7 @@ built_at_sha: d79f03b23a5720f8aa7bfbe241da60ec9a1bd9bc
 
 **Импортирует:** `orchestrator/acceptance.py`, `orchestrator/advance_gates/acceptance.py`, `orchestrator/advance_gates/plan_appendix.py`, `orchestrator/advance_gates/test_integrity.py`, `orchestrator/artifact_branch.py`, `orchestrator/artifact_source.py`, `orchestrator/ci.py`, `orchestrator/cleanup.py`, `orchestrator/config.py`, `orchestrator/fsm.py`, `orchestrator/fsm_postmerge.py`, `orchestrator/gitcmd.py`, `orchestrator/github_adapter.py`, `orchestrator/lease.py`, `orchestrator/merge_lock.py`, `orchestrator/merge_queue.py`, `orchestrator/repo_context.py`, `orchestrator/snapshot.py`, `orchestrator/store.py`, `orchestrator/workspace.py`, `scripts/guard.py`
 
-**Импортируется:** `orchestrator/fsm.py`, `tests/test_01m3sf7dpfgez7vyeggxgtx49e_main_ci.py`, `tests/test_fsm_merge_gate_done_snapshot.py`, `tests/test_fsm_merge_gate_scratch_worktree_cleanup.py`, `tests/test_gitcmd_fetch_ref_sha.py`, `tests/test_guard_task_root_subdirectory.py`, `tests/test_long_lived_manifest.py`, `tests/test_long_lived_transitions.py`, `tests/test_main_ci_line.py`, `tests/test_merge_gate_ci_wait.py`, `tests/test_plan_appendix.py`, `tests/test_protected_paths_gate.py`, `tests/test_protected_test_settings.py`, `tests/test_pull_conflict_marker_states.py`, `tests/test_test_integrity_gate.py`
+**Импортируется:** `orchestrator/fsm.py`, `tests/test_01m3sf7dpfgez7vyeggxgtx49e_main_ci.py`, `tests/test_ci_status_kind_gate.py`, `tests/test_fsm_merge_gate_done_snapshot.py`, `tests/test_fsm_merge_gate_scratch_worktree_cleanup.py`, `tests/test_gitcmd_fetch_ref_sha.py`, `tests/test_guard_task_root_subdirectory.py`, `tests/test_long_lived_manifest.py`, `tests/test_long_lived_transitions.py`, `tests/test_main_ci_line.py`, `tests/test_merge_gate_ci_wait.py`, `tests/test_merge_gate_clock_isolation.py`, `tests/test_plan_appendix.py`, `tests/test_protected_paths_gate.py`, `tests/test_protected_test_settings.py`, `tests/test_pull_conflict_marker_states.py`, `tests/test_test_integrity_gate.py`
 
 ## orchestrator/fsm_postmerge.py
 
@@ -2742,7 +2742,7 @@ built_at_sha: d79f03b23a5720f8aa7bfbe241da60ec9a1bd9bc
 
 **Публичные функции:** (нет)
 
-**Импортирует:** `orchestrator/ci.py`, `orchestrator/fsm.py`, `orchestrator/store.py`, `tests/test_invariants.py`
+**Импортирует:** `orchestrator/ci.py`, `orchestrator/fsm.py`, `orchestrator/fsm_merge_gate.py`, `orchestrator/store.py`, `tests/test_invariants.py`
 
 **Импортируется:** —
 
@@ -3543,6 +3543,16 @@ built_at_sha: d79f03b23a5720f8aa7bfbe241da60ec9a1bd9bc
 **Публичные функции:** (нет)
 
 **Импортирует:** `orchestrator/catalog.py`, `orchestrator/ci.py`, `orchestrator/config.py`, `orchestrator/fsm.py`, `orchestrator/fsm_merge_gate.py`, `orchestrator/github_adapter.py`, `orchestrator/merge_lock.py`, `orchestrator/repo_context.py`, `orchestrator/store.py`, `tests/sandbox.py`
+
+**Импортируется:** `tests/test_merge_gate_clock_isolation.py`
+
+## tests/test_merge_gate_clock_isolation.py
+
+**Назначение:** Регрессионный тест изоляции часов тестов гейта мержа (SPEC
+
+**Публичные функции:** (нет)
+
+**Импортирует:** `orchestrator/fsm_merge_gate.py`, `tests/test_merge_gate_ci_wait.py`
 
 **Импортируется:** —
 
