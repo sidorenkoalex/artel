@@ -461,7 +461,8 @@ def cmd_new(title: str, tz_path: str | None = None, *,
     SPEC 01M3YCHS4F08VTV6XX10VF92H3, требования 1, 3): допуск набора
     проверкой части 1 (`models.admitted_set_members`) сверяется ДО id,
     ветки и строки БД — отказ не оставляет ни того, ни другого. Имя и
-    состав набора на момент `new` пишутся в строку задачи тем же INSERT.
+    состав набора на момент `new` пишутся в строку задачи той же записью, что
+    заводит саму строку (`store.insert_task`).
     """
     conn = store.db()
     set_members = None
