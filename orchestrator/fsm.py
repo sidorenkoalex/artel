@@ -1022,8 +1022,7 @@ def _approve_merge_gate(conn, task_id: str, t, state: str, sid: str,
     # а не единым `merge_lock.run_window` на весь вызов.
     from . import fsm_merge_gate
     fsm_merge_gate._cmd_approve_merge_gate_cycle(
-        conn, task_id, sid, t, state,
-        **({"fixes_main": fixes_main} if fixes_main else {}))
+        conn, task_id, sid, t, state, fixes_main=fixes_main)
 
 
 def _approve_escalated(conn, task_id: str, t, state: str, sid: str) -> None:

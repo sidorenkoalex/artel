@@ -44,7 +44,15 @@ class FakeLine:
             out = "\n".join(self.commits[start:start + limit])
             return subprocess.CompletedProcess(list(args), 0, out + "\n", "")
         if args[:2] == ("diff", "--name-only"):
-            path = "kod.py" if args[3] in self.code else "docs/zametka.md"
+            # Диапазон base..head по линии: код, если его меняет хоть один
+            # коммит выше base до head включительно.
+            base, head = args[2], args[3]
+            if base.endswith("^1"):
+                base = self.commits[self.commits.index(base[:-2]) + 1]
+            span = self.commits[self.commits.index(head):
+                                self.commits.index(base)]
+            path = ("kod.py" if self.code.intersection(span)
+                    else "docs/zametka.md")
             return subprocess.CompletedProcess(list(args), 0, path + "\n", "")
         return subprocess.CompletedProcess(list(args), 1, "", "не в таблице")
 
@@ -71,28 +79,62 @@ def sha(n: int) -> str:
 class MainLineStatusTest(unittest.TestCase):
 
     def test_check_skipped_on_code_commit_stops_the_walk(self):
-        """Голова — документный коммит (`python` пропущен), под ним коммит
-        кода с зелёным `python`; `protected-paths` пропущен везде (на push в
-        main не исполняется). Ниже — ещё 30 коммитов.
+        """Топология гейта мержа, 70 мержей подряд: голова push'а — коммит
+        RETRO (документный; проверки `python`/`guard` исполнены,
+        `protected-paths` пропущен — только `pull_request`), под ним снимок
+        и merge-коммит с кодом без проверок. Поверх последнего мержа —
+        документная заметка (`python` и `protected-paths` пропущены).
 
-        Цвет зелёный, опрошены только голова и коммит кода.
+        Цвет зелёный; обход кончается на второй голове с проверками, не
+        уходит к потолку.
 
-        Ловит мутацию: пропуск на коммите с кодом не снимает проверку с
-        обхода — `protected-paths` гонит опрос `gh` по всей истории.
+        Ловит мутацию: класс push'а считается по диффу головы с первым
+        родителем — голова RETRO документная, `protected-paths` не
+        снимается и гонит опрос `gh` до потолка, исход «неизвестен».
         """
-        commits = [sha(i) for i in range(1, 33)]
-        checks = {commits[0]: [done("python", "skipped"),
-                               done("protected-paths", "skipped"),
-                               done("guard", "success")],
-                  commits[1]: [done("python", "success"),
-                               done("protected-paths", "skipped"),
-                               done("guard", "success")]}
-        line = FakeLine(commits, checks, code={commits[1]})
+        commits, checks, code = [sha(1)], {}, set()
+        checks[sha(1)] = [done("python", "skipped"),
+                          done("protected-paths", "skipped"),
+                          done("guard", "success")]
+        for merge in range(70):
+            retro, snap, merged = (sha(10 + 3 * merge + k) for k in range(3))
+            commits += [retro, snap, merged]
+            code.add(merged)
+            checks[retro] = [done("python", "success"),
+                             done("protected-paths", "skipped"),
+                             done("guard", "success")]
+        line = FakeLine(commits, checks, code=code)
 
         status = line.status()
 
         self.assertEqual(status.kind, ci.MAIN_GREEN, status.note)
-        self.assertEqual(line.polled, commits[:2])
+        self.assertEqual(line.polled, commits[:5])
+
+    def test_doc_push_keeps_check_pending_to_the_code_push(self):
+        """Голова — документный push из двух коммитов поверх мержа с
+        упавшим `python`: на голове `python` и `protected-paths` пропущены,
+        промежуточный коммит без проверок.
+
+        Исход — красный с коммитом мержа: документный push не снимает
+        пропущенный `python` с обхода.
+
+        Ловит мутацию: пропуск на любой голове снимает проверку с обхода
+        без сверки класса push'а — документный коммит снова маскирует
+        красный код под ним.
+        """
+        commits = [sha(i) for i in range(1, 7)]
+        checks = {commits[0]: [done("python", "skipped"),
+                               done("protected-paths", "skipped")],
+                  commits[2]: [done("python", "failure"),
+                               done("protected-paths", "skipped")],
+                  commits[5]: [done("python", "success"),
+                               done("protected-paths", "skipped")]}
+        line = FakeLine(commits, checks, code={commits[4]})
+
+        status = line.status()
+
+        self.assertEqual(status.kind, ci.MAIN_RED, status.note)
+        self.assertEqual(status.red_since, commits[2])
 
     def test_check_unresolved_within_the_cap_is_not_confirmed(self):
         """Линия длиннее потолка обхода, `python` пропущен на всех её

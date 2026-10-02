@@ -420,15 +420,18 @@ def first_parent_line(sha: str, limit: int) -> list[str] | None:
             if _SHA_LINE_RE.match(ln.strip())]
 
 
-def _commit_touches_code(sha: str) -> bool:
-    """Коммит меняет не только документы относительно первого родителя — тем
-    же разбором пути, что job `changes` (`scripts/ci_push_class.py`). На
-    таком коммите push-класс «код», и проверка, пропущенная на нём, не
-    исполняется на push в main вовсе (`protected-paths`,
-    `id-format-greplint` — только `pull_request`), а не пропущена как
-    документная. git не ответил (корневой коммит, сбой) — `False`: обход
-    идёт глубже, а не объявляет проверку неисполняемой."""
-    res = gitcmd.git("diff", "--name-only", f"{sha}^1", sha)
+def _push_touches_code(base: str, head: str) -> bool:
+    """Push с головой `head` меняет не только документы — тем же разбором
+    пути, что job `changes` (`scripts/ci_push_class.py`), и тем же
+    диапазоном: от предыдущей головы push'а `base` (ближайший глубже по
+    линии коммит с проверками — CI гоняет только головы), а не от первого
+    родителя. Голова push'а гейта мержа — документный коммит RETRO, код
+    лежит в merge-коммите под ней без проверок. На push класса «код»
+    проверка, пропущенная на его голове, не исполняется на push в main
+    вовсе (`protected-paths`, `id-format-greplint` — только
+    `pull_request`), а не пропущена как документная. git не ответил —
+    `False`: обход идёт глубже, а не объявляет проверку неисполняемой."""
+    res = gitcmd.git("diff", "--name-only", base, head)
     if res is None or res.returncode != 0:
         return False
     return any(not ci_push_class.is_doc_path(p)
@@ -478,7 +481,8 @@ def main_line_status(sha: str) -> MainLineStatus:
     `skipped`: идёт — `running`, исполнена с плохим заключением — упала
     (с этим коммитом), иначе зелёная. Коммит без проверок вовсе
     (промежуточные коммиты мержа — CI гоняет только голову push'а)
-    пропускается. Проверка, пропущенная на коммите с кодом, на push в main
+    пропускается. Проверка, пропущенная на голове push'а класса «код»
+    (диапазон — до следующей глубже головы с проверками), на push в main
     не исполняется вовсе и в цвет не входит; так же — не исполнившаяся до
     начала истории. Не разрешившаяся за `MAIN_LINE_MAX_COMMITS` —
     «неизвестен».
@@ -496,6 +500,9 @@ def main_line_status(sha: str) -> MainLineStatus:
     green_count = 0
     why = ""
     kind = ""
+    # Голова push'а и пропущенные на ней проверки: класс её push'а известен
+    # только у следующей глубже головы с проверками.
+    skipped_at: tuple[str, list] | None = None
     for commit in line:
         runs, reason = check_runs(commit)
         if runs is None and pending is None \
@@ -516,6 +523,15 @@ def main_line_status(sha: str) -> MainLineStatus:
                 kind = MAIN_RUNNING
                 break
             pending = {str(r.get("name", "?")) for r in runs}
+        if not runs:
+            continue
+        if skipped_at is not None:
+            push_head, names = skipped_at
+            skipped_at = None
+            if _push_touches_code(commit, push_head):
+                pending.difference_update(names)
+                if not pending:
+                    break
         skipped_here = []
         for name in sorted(pending):
             verdict = _verdict_of_runs([r for r in runs
@@ -532,8 +548,8 @@ def main_line_status(sha: str) -> MainLineStatus:
             else:
                 green_count += 1
             pending.discard(name)
-        if skipped_here and _commit_touches_code(commit):
-            pending.difference_update(skipped_here)
+        if skipped_here:
+            skipped_at = (commit, skipped_here)
         if not pending:
             break
     else:

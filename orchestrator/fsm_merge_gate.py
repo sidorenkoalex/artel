@@ -1226,11 +1226,9 @@ def _cmd_approve_merge_gate_cycle(conn, task_id: str, sid: str, t,
         merge_queue.wait_for_window(conn, task_id, sid)
     try:
         while True:
-            # `fixes_main` — только когда флаг дан: тестовые подмены тела
-            # несут прежнюю сигнатуру без него.
             outcome = _cmd_approve_merge_gate(
                 conn, task_id, state, t, confirmed_ci_note,
-                **({"fixes_main": fixes_main} if fixes_main else {}))
+                fixes_main=fixes_main)
             confirmed_ci_note = None
             if outcome[0] not in ("wait", "moved"):
                 return
