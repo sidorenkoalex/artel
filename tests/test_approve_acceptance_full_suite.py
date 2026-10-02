@@ -10,6 +10,7 @@
 аргументов диспетчера по отдельности и доезд основания флага до
 `fsm.cmd_approve`.
 """
+import os
 import sys
 import unittest
 from pathlib import Path
@@ -17,7 +18,7 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from orchestrator import acceptance, artel, fsm, store, workspace  # noqa: E402
+from orchestrator import acceptance, artel, config, fsm, store, workspace  # noqa: E402
 from tests.sandbox import LightTransitionSandbox, TmpRootTest  # noqa: E402
 
 SUMMARY_LINE = "2 failed, 305 passed in 71.23s"
@@ -257,13 +258,18 @@ class ApproveDispatchArgsTest(TmpRootTest):
     """Аргументы, с которыми диспетчер зовёт `fsm.cmd_approve` (требование
     8). Песочница `TmpRootTest` — ради `config.ROOT`: `artel.main`
     отказывает, если корень пульта оказался git-worktree (инвариант T056),
-    а тесты гоняются как раз в worktree задачи."""
+    а тесты гоняются как раз в worktree задачи. Признак роли (`ARTEL_ROLE`,
+    `HOME`) из окружения вызова снят: `approve` под ролью отказывает в
+    диспетчере (SPEC 01M3XTF5506GF43HD51ECE230T, требование 10)."""
 
     TASK = "T001"
 
     def call(self, *args):
         argv = ["artel.py", "approve", self.TASK, *args]
-        with mock.patch.object(sys, "argv", argv), \
+        operator_env = {k: v for k, v in os.environ.items()
+                        if k not in (config.ARTEL_ROLE_ENV, "HOME")}
+        with mock.patch.dict(os.environ, operator_env, clear=True), \
+             mock.patch.object(sys, "argv", argv), \
              mock.patch.object(fsm, "cmd_approve") as cmd_approve:
             artel.main()
         return cmd_approve
