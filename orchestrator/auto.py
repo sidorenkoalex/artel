@@ -9,7 +9,7 @@ import time
 from dataclasses import dataclass
 
 from . import (agent_log, alerts, budget, ci, config, cycle_hint, fixation,
-              fsm, lease, pause, pull, runner, store, zone_lock)
+              fsm, lease, models, pause, pull, runner, store, zone_lock)
 from .advance_gates.plan_appendix import \
     PLAN_APPENDIX_INAPPLICABLE_REFUSAL_ACTION
 from .advance_gates.zones import ZONES_MANDATE_WITHOUT_PLAN_REFUSAL_ACTION
@@ -576,11 +576,15 @@ def auto_stop_advice(conn, task_id: str, state: str) -> tuple[str, str]:
             store.get_task(conn, task_id)) is not None:
         reason, hint = config.AUTO_STOP_BUDGET
         needs_sha = False
-    sha_hint = ""
+    sha_hint = set_hint = ""
     if needs_sha:
         target = store.task_target(conn, task_id)
         sha_hint = fixation.approve_sha_hint(task_id, target)
-    return reason, hint.format(id=task_id, sha=sha_hint)
+        # Набор моделей задачи — в подсказке гейта (SPEC
+        # 01M3YCHS4F08VTV6XX10VF92H3, требование 8): Оператор решает
+        # гейт, зная, на каких моделях шла задача.
+        set_hint = models.task_set_hint(store.get_task(conn, task_id))
+    return reason, hint.format(id=task_id, sha=sha_hint) + set_hint
 
 
 def auto_stop(conn, task_id: str, state: str, reason: str, hint: str, *,
