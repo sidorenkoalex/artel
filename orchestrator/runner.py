@@ -17,6 +17,7 @@ from . import (agent_log, alerts, brief, budget, checkpoint, config,
               failure_classification, fixation, gitcmd, keychain, lease,
               liveness, models, parallel_limit, pause, providers, review,
               role_prompt, roles, spend, stack, store, workspace, zone_lock)
+from scripts import guard
 
 # Идентичность коммитера, которую роль обязана унести с собой в свой HOME.
 # git читает эти переменные ПОВЕРХ конфига, поэтому перенос ровно двух пар
@@ -1017,8 +1018,38 @@ def _missing_required_artifact(role: str, cwd: Path, task_id: str) -> str | None
         acc = task_dir / "acceptance_tests"
         if acc.is_dir() and any(p.is_file() for p in acc.rglob("*")):
             return None
-        return "acceptance_tests/"
+        if _has_own_long_lived_test(cwd, task_id):
+            return None
+        return (f"acceptance_tests/ (файл в tasks/{task_id}/acceptance_tests/ "
+                f"либо долгоживущий файл "
+                f"{guard.long_lived_path_prefix(task_id)}<имя>.py)")
     return None
+
+
+def _has_own_long_lived_test(cwd: Path, task_id: str) -> bool:
+    """В рабочем каталоге роли есть долгоживущий файл задачи
+    (`guard.is_long_lived_test_path`), новый или изменённый относительно
+    базы ветки (SPEC 01M3Y8570H9Y57YTP3M7E1AMHG, требование 1; ADR-0020):
+    планка может быть целиком долгоживущей, а перечень сумм в
+    `acceptance_tests/` пульт пишет уже после шага.
+
+    Сравнение — дерево worktree против базы, не только `git status`, как у
+    `checkpoint._test_author_own_paths`: роль вправе закоммитить файл сама,
+    и тогда незакоммиченного изменения уже нет. Удалённый путь артефактом
+    не считается. Git не ответил — `False`: шаг получает прежний отказ, а не
+    засчитывается вслепую."""
+    base = gitcmd.diff_base("HEAD", repo=cwd)
+    if base is None:
+        return False
+    changed = gitcmd.in_repo(cwd, "diff", "--name-only", base, "--", "tests")
+    untracked = gitcmd.in_repo(cwd, "ls-files", "--others",
+                               "--exclude-standard", "--", "tests")
+    if (changed is None or untracked is None
+            or changed.returncode != 0 or untracked.returncode != 0):
+        return False
+    paths = changed.stdout.splitlines() + untracked.stdout.splitlines()
+    return any(guard.is_long_lived_test_path(task_id, rel)
+               and (cwd / rel).is_file() for rel in paths)
 
 
 def _resolved_role_model(role: str) -> str | None:

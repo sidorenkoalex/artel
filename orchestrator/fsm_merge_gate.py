@@ -15,6 +15,7 @@ AC-12). Единственный способ продвинуть ROOT впер
 цикла FSM.
 """
 import shutil
+import subprocess
 import sys
 import tempfile
 import time
@@ -29,6 +30,21 @@ from .advance_gates.acceptance import (_acceptance_lock_refuses,
                                        _long_lived_manifest_refuses)
 from .advance_gates.plan_appendix import git_apply
 from .advance_gates.test_integrity import merge_gate_escalates
+
+# Предел ожидания CI новой головы main после push мержа (SPEC
+# 01M3SF7DPFGEZ7VYEGGXGTX49E, AC-4): полный прогон CI main идёт 3–4
+# минуты, очередь раннеров добавляет столько же. Это не
+# `MERGE_GATE_CI_WAIT_CEILING_SEC` (час на CI ветки до мержа): здесь мерж
+# уже состоялся, и ждать дольше — держать мьютекс мержа ради исхода,
+# который следующий мерж всё равно сверит сам.
+MAIN_CI_WAIT_LIMIT_SEC = 18 * 60
+
+# Предел одного прогона `guard.py --all` по дереву мержа (на дереве пульта
+# — меньше секунды); не ответил — отказ мержа, не пропуск сверки.
+GUARD_ALL_TIMEOUT_SEC = 300
+
+# Действие журнала об исходе CI main после мержа (AC-4).
+MAIN_CI_AFTER_MERGE_ACTION = "CI main после мержа"
 
 
 def _touches_protected_path(path: str) -> bool:
@@ -419,6 +435,153 @@ def _guard_task_root_or_refuse(conn, task_id: str, scratch: Path,
              f"повтори: artel.py approve {task_id}")
 
 
+def _guard_all_violations(scratch: Path) -> list[str] | None:
+    """Нарушения `scripts/guard.py --all` дерева мержа, запущенного из его
+    корня; `[]` — нарушений нет (предупреждения guard — код 0 — не они);
+    `None` — сверять нечем (в дереве нет guard или каталога `tasks`:
+    дерево не пульта). Сбой самого запуска — одна строка-нарушение с
+    причиной: отказ, не пропуск."""
+    script = scratch / "scripts" / "guard.py"
+    if not script.is_file() or not (scratch / "tasks").is_dir():
+        return None
+    try:
+        res = subprocess.run([sys.executable, str(script), "--all"],
+                             cwd=scratch, capture_output=True, text=True,
+                             timeout=GUARD_ALL_TIMEOUT_SEC)
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        return [f"guard --all не ответил: {exc}"]
+    if res.returncode == 0:
+        return []
+    lines = res.stdout.splitlines()
+    try:
+        start = next(i for i, ln in enumerate(lines)
+                     if ln.startswith("GUARD: нарушения"))
+    except StopIteration:
+        tail = (res.stderr or res.stdout).strip()[-500:]
+        return [f"guard --all завершился кодом {res.returncode}: "
+                f"{tail or 'без вывода'}"]
+    return [ln.strip()[2:] for ln in lines[start + 1:]
+            if ln.strip().startswith("- ")]
+
+
+def _guard_all_or_refuse(conn, task_id: str, scratch: Path,
+                         ctx: repo_context.RepoContext) -> None:
+    """`guard.py --all` по дереву результата мержа — после снимка
+    артефактной ветки и карты, до RETRO и push (SPEC
+    01M3SF7DPFGEZ7VYEGGXGTX49E, требование 1, AC-1): дерево, которое уйдёт
+    в main, без RETRO самой задачи — с ним guard счёл бы её закрытой
+    историей и не проверил бы её планку на посторонние файлы. Ветка задачи guard
+    проходила, а снимок артефактной ветки накладывается позже —
+    30.09 README без frontmatter в `acceptance_tests/` уехал в main и
+    покрасил его.
+
+    Guard — того же дерева (`scripts/guard.py` мержа, его правила), не
+    пульта. Только self target: у внешнего target'а guard пульта к его
+    дереву неприменим. Нарушение — отказ тем же путём, что прочие отказы
+    `merge_gate` («merge FAILED», scratch снят, `sys.exit`, задача на
+    гейте, main не тронут)."""
+    if ctx.path != config.ROOT:
+        return
+    violations = _guard_all_violations(scratch)
+    if not violations:
+        return
+    detail = ("guard --all по дереву мержа (снимок артефактной ветки "
+              "наложен): " + "; ".join(violations))
+    store.journal(conn, task_id, "orchestrator", "merge FAILED", detail)
+    _drop_scratch_worktree(ctx, scratch)
+    listing = "\n".join(f"  - {v}" for v in violations)
+    sys.exit(f"[{task_id}] merge отклонён: guard --all по дереву мержа "
+             f"нашёл нарушения:\n{listing}\n"
+             f"  задача осталась на гейте merge; почини артефакты задачи "
+             f"и повтори: artel.py approve {task_id}")
+
+
+def _refuse_if_main_red(conn, task_id: str, ctx: repo_context.RepoContext,
+                        fixes_main: str | None) -> None:
+    """Красный CI main отказывает следующему мержу (SPEC
+    01M3SF7DPFGEZ7VYEGGXGTX49E, требование 4, AC-5): цвет — по проверкам
+    первой родительской линии от головы origin/main (`ci.main_line_status`
+    — то же определение, что у `pin-update` и `doctor`), под мьютексом,
+    перед плотницким merge. Мерж поверх красного main маскирует, чей
+    дефект краснит main, и добавляет к нему следующий.
+
+    Отказ — только на красном: идущий и неизвестный CI (сбой `gh`) — запись
+    журнала и проход, иначе недоступный `gh` останавливал бы весь пульт.
+    `fixes_main` — основание `approve <id> <sha> --fixes-main
+    "<основание>"`: Оператор чинит main этой задачей; основание пишется в
+    журнал задачи, а сверка снимается только для этого вызова.
+
+    Только self target: CI main — пульта; у внешнего target'а свой форж."""
+    if ctx.path != config.ROOT:
+        return
+    origin_sha = _origin_main_sha(ctx)
+    if origin_sha is None:
+        store.journal(conn, task_id, "orchestrator", "сверка CI main",
+                      f"origin/{ctx.base} не прочитан — цвет CI main не "
+                      f"сверен")
+        return
+    status = ci.main_line_status(origin_sha)
+    if fixes_main:
+        store.journal(conn, task_id, "operator",
+                      "сверка CI main снята: --fixes-main",
+                      f"основание: {fixes_main}; {status.note}")
+        print(f"[{task_id}] сверка CI main снята (--fixes-main): "
+              f"{fixes_main}; {status.note}")
+        return
+    if status.kind != ci.MAIN_RED:
+        store.journal(conn, task_id, "orchestrator", "сверка CI main",
+                      status.note)
+        return
+    detail = (f"main красный с {status.red_since[:8]} — сначала починить "
+              f"main ({status.note})")
+    store.journal(conn, task_id, "orchestrator", "merge FAILED", detail)
+    sys.exit(f"[{task_id}] merge отклонён: {detail}\n"
+             f"  задача осталась на гейте merge; повтори approve, когда "
+             f"main позеленеет, либо, если эта задача и чинит main: "
+             f"artel.py approve {task_id} <sha> --fixes-main "
+             f"\"<основание>\"")
+
+
+def _await_main_ci(conn, task_id: str, head: str,
+                   ctx: repo_context.RepoContext) -> None:
+    """Ожидание CI новой головы main после push мержа (SPEC
+    01M3SF7DPFGEZ7VYEGGXGTX49E, требование 4, AC-4) — тем же опросом, что
+    ожидание `verifying` (пауза `config.VERIFYING_POLL_INTERVAL_SEC`), до
+    `MAIN_CI_WAIT_LIMIT_SEC`. Задача к этому моменту уже `done` — исход
+    мерж не откатывает, а называет: зелёный, красный с упавшими
+    проверками либо «не дождался» — записью журнала задачи и строкой
+    вывода. Мьютекс мержа держится всё ожидание (heartbeat продлевается):
+    следующий мерж начнётся, когда цвет новой головы уже известен.
+
+    `gh` не ответил — «не дождался» сразу: опросить нечем, и ждать до
+    предела значило бы держать мьютекс впустую. Только self target."""
+    if ctx.path != config.ROOT:
+        return
+    start = time.monotonic()
+    while True:
+        status = ci.main_line_status(head) if head else None
+        merge_lock.touch_heartbeat(conn)
+        if status is None:
+            outcome = "CI main не дождался: голова main после мержа не определена"
+        elif status.kind == ci.MAIN_GREEN:
+            outcome = f"CI main {head[:8]} после мержа: {status.note}"
+        elif status.kind == ci.MAIN_RED:
+            outcome = (f"CI main {head[:8]} после мержа красный — "
+                       f"{status.note}")
+        elif status.kind == ci.MAIN_UNKNOWN:
+            outcome = f"CI main {head[:8]} не дождался — {status.note}"
+        elif time.monotonic() - start >= MAIN_CI_WAIT_LIMIT_SEC:
+            outcome = (f"CI main {head[:8]} не дождался за "
+                       f"{MAIN_CI_WAIT_LIMIT_SEC // 60} мин — {status.note}")
+        else:
+            time.sleep(config.VERIFYING_POLL_INTERVAL_SEC)
+            continue
+        store.journal(conn, task_id, "orchestrator",
+                      MAIN_CI_AFTER_MERGE_ACTION, outcome)
+        print(f"[{task_id}] {outcome}")
+        return
+
+
 def _ensure_branch_head_published(conn, task_id: str, branch: str) -> str:
     """Голова ветки задачи видна в origin — предусловие КАЖДОГО approve
     merge_gate (SPEC 01M1GS5HZ1JXFGKVR95HEW0AEZ, требование 7,
@@ -763,7 +926,11 @@ def _publish_merge_artifacts(conn, task_id: str, scratch: Path,
     `_guard_task_root_or_refuse` (SPEC 01M1TNN4TMWAQSQ9Y1PW37J5H0,
     AC-7/AC-8) — сразу после наложения снимка, ДО карты/RETRO/push:
     посторонний файл `tasks/<id>/` отказывает переходу `sys.exit`'ом,
-    дальше этой функции выполнение не идёт.
+    дальше этой функции выполнение не идёт. `_guard_all_or_refuse` (SPEC
+    01M3SF7DPFGEZ7VYEGGXGTX49E, AC-1) — после снимка и карты, но ДО
+    RETRO, тем же `sys.exit`'ом до push: guard не сканирует на посторонние
+    файлы планки задачу с `docs/retro/<id>.md` (закрытая история), и
+    собственный RETRO задачи в дереве мержа скрыл бы нарушение её снимка.
 
     `applied_appendices` (SPEC 01M2YSHDKWFJN3XSJ618Z74FNF, требование 6) —
     пути приложений, применённых `_apply_plan_appendices` ДО этого вызова:
@@ -776,6 +943,7 @@ def _publish_merge_artifacts(conn, task_id: str, scratch: Path,
     merge_sha = gitcmd.head_sha(scratch)
     if ctx.path == config.ROOT:
         fsm_postmerge._regenerate_and_commit_map(conn, task_id, repo=scratch)
+        _guard_all_or_refuse(conn, task_id, scratch, ctx)
         fsm_postmerge._generate_and_commit_retro(
             conn, task_id, merge_sha, repo=scratch,
             applied_appendices=applied_appendices)
@@ -904,7 +1072,8 @@ def _acceptance_locks_refuse(conn, task_id: str) -> bool:
 
 
 def _cmd_approve_merge_gate(conn, task_id: str, state: str, t,
-                            confirmed_ci_note: str | None = None) -> tuple:
+                            confirmed_ci_note: str | None = None,
+                            fixes_main: str | None = None) -> tuple:
     """Тело окна `merge_gate -> done`, исполняемое ПОД МЬЮТЕКСОМ merge
     (SPEC T053, требование 1; SPEC T087, требования 1-2, 5-6): короткая
     композиция шагов — защищённые пути в диффе (SPEC
@@ -943,6 +1112,12 @@ def _cmd_approve_merge_gate(conn, task_id: str, state: str, t,
     (targets.yaml сломан/неизвестный target) — `sys.exit` тем же стилем,
     что и остальные инфраструктурные отказы этого гейта: merge — точка
     без права молча деградировать на чужой репозиторий.
+
+    SPEC 01M3SF7DPFGEZ7VYEGGXGTX49E (требования 1, 4): после зелёного CI
+    ветки и до merge — сверка цвета CI main (`_refuse_if_main_red`,
+    `fixes_main` — основание флага `--fixes-main`); после push, `done` и
+    уборки — ожидание CI новой головы main (`_await_main_ci`); guard по
+    дереву мержа — внутри `_publish_merge_artifacts`.
     """
     ctx = repo_context.resolve(store.task_target(conn, task_id))
     if ctx is None:
@@ -965,6 +1140,7 @@ def _cmd_approve_merge_gate(conn, task_id: str, state: str, t,
     ci_outcome = _ci_ready_or_wait(task_id, confirmed_ci_note, branch)
     if ci_outcome != "ok":
         return ci_outcome
+    _refuse_if_main_red(conn, task_id, ctx, fixes_main)
     merge_kind, scratch = _perform_carpentry_merge(conn, task_id, state,
                                                     branch, ctx)
     if merge_kind != "ok":
@@ -978,14 +1154,15 @@ def _cmd_approve_merge_gate(conn, task_id: str, state: str, t,
     if _push_merged_main(conn, task_id, final_sha, ctx) == "moved":
         return ("moved", branch)
     _finalize_done_state(conn, task_id, state, branch)
-    if _publish_closing_snapshot_or_wait(conn, task_id, t) == "done":
-        return ("done",)
-    _cleanup_merged_task(conn, task_id, branch)
+    if _publish_closing_snapshot_or_wait(conn, task_id, t) != "done":
+        _cleanup_merged_task(conn, task_id, branch)
+    _await_main_ci(conn, task_id, final_sha, ctx)
     return ("done",)
 
 
 def _cmd_approve_merge_gate_cycle(conn, task_id: str, sid: str, t,
-                                  state: str) -> None:
+                                  state: str,
+                                  fixes_main: str | None = None) -> None:
     """Внешний цикл гейта `merge_gate` (SPEC T087, требования 1-6, 10;
     решение Оператора 31.08, аудит v6 Q-5; SPEC
     01M291EJMA995AZ61MEMDZKWRY, требования 1-2, 4-5): чередует тело
@@ -1036,6 +1213,9 @@ def _cmd_approve_merge_gate_cycle(conn, task_id: str, sid: str, t,
     без конца. Потолок один и тот же для обоих исходов — не сбрасывается
     (требование 9): истёк — запись «merge FAILED» и `sys.exit` с
     именованным отказом, задача остаётся на `merge_gate`.
+
+    `fixes_main` (SPEC 01M3SF7DPFGEZ7VYEGGXGTX49E, AC-5) — основание
+    `--fixes-main`, доезжает до каждого захода в тело этого вызова.
     """
     start: float | None = None
     deadline: float | None = None
@@ -1046,8 +1226,9 @@ def _cmd_approve_merge_gate_cycle(conn, task_id: str, sid: str, t,
         merge_queue.wait_for_window(conn, task_id, sid)
     try:
         while True:
-            outcome = _cmd_approve_merge_gate(conn, task_id, state, t,
-                                              confirmed_ci_note)
+            outcome = _cmd_approve_merge_gate(
+                conn, task_id, state, t, confirmed_ci_note,
+                fixes_main=fixes_main)
             confirmed_ci_note = None
             if outcome[0] not in ("wait", "moved"):
                 return
