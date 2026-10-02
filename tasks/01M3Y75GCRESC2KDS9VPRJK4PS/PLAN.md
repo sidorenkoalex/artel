@@ -2,7 +2,7 @@
 task: 01M3Y75GCRESC2KDS9VPRJK4PS
 type: plan
 author_role: developer
-status: escalate
+status: ready
 schema_version: 5
 ---
 
@@ -62,13 +62,21 @@ CarpentryGitCallsGoThroughGitcmdTest` (инвариант 33) запрещает
      `check_stale_cycles(conn)`.
    - `docs/codebase-map.md`: взят из main и перегенерирован
      `scripts/codebase_map.py`.
+6. Ответ Оператора ANSWER-1 на эскалацию о красной долгоживущей планке
+   после подтяжки: Оператор поправил долгоживущий файл через `amend-tests`
+   (коммит `f7128cae`, в `_PinUpdateSandbox.setUp` подменён
+   `ci.main_line_status`). Сумма файла `8cedcc42…` сверена с
+   `acceptance_tests/long_lived.sha256.txt` — совпадает. Проверку CI в
+   `pin-update` (`_refuse_unless_main_ci_green`) не ослаблял. Код задачи в
+   этом шаге не менялся. Карта перегенерирована
+   `scripts/codebase_map.py`: тест задачи теперь импортирует
+   `orchestrator/ci.py`.
 
-Прогоны (передний план, `-p no:cacheprovider -p timeout -o timeout=120`):
-`tests/test_01m3y75gcresc2kds9vprjk4ps_stale_cycles.py` (8 passed),
+Прогоны после ANSWER-1 (передний план, `-p no:cacheprovider -p timeout -o
+timeout=120`): `tests/test_01m3y75gcresc2kds9vprjk4ps_stale_cycles.py`,
 `tests/test_pin_update_stale_cycles.py`, `tests/test_pin.py`,
 `tests/test_doctor.py`, `tests/test_invariants.py`,
-`tests/test_codebase_map.py` — вместе 254 passed. Сумма долгоживущего
-файла сверена с `acceptance_tests/long_lived.sha256.txt`, файл не правился.
+`tests/test_codebase_map.py` — вместе 254 passed, 0 failed.
 
 ## Покрытие требований
 | Требование | Шаг |
@@ -82,7 +90,7 @@ CarpentryGitCallsGoThroughGitcmdTest` (инвариант 33) запрещает
 ## Влияние на систему
 - `pin-update`: поведение до и включая запись «pin обновлён» не меняется;
   добавлен вывод и одна запись журнала после неё. Отказы fetch/канарейки/
-  merge — прежние.
+  CI main/merge — прежние.
 - `doctor`: одна новая строка `stale-cycles`, статус только `ok`/`warn`,
   на итог `DOCTOR` (провалы) не влияет. Новый внешний вызов — `ps` на
   каждый живой lease этой машины, с таймаутом 10 с.
@@ -111,50 +119,3 @@ CarpentryGitCallsGoThroughGitcmdTest` (инвариант 33) запрещает
   и разработчик не может это закрыть без `amend-tests`. Гейт подтяжки
   (`orchestrator/pull.py::evaluate`) мог бы называть такой класс сразу —
   красная долгоживущая планка после подтяжки, — а не через шаг разработчика.
-
-## Эскалация
-
-**Код причины:** правка залоченного долгоживущего файла после подтяжки
-main. Это не `тест-навязывает-устройство`: тест проверяет поведение, но его
-песочница не знает о новом условии `pin-update`, пришедшем из main.
-
-**Вопросы**
-1. (блокирует) Как разрешить `amend-tests` для
-   `tests/test_01m3y75gcresc2kds9vprjk4ps_stale_cycles.py`? Варианты:
-   - а) в `_PinUpdateSandbox.setUp` (около строки 202) подменить
-     `ci.main_line_status` зелёным статусом на всё время теста. Это та же
-     идиома, что в `tests/test_pin.py:140-146` из main:
-     `mock.patch.object(ci, "main_line_status",
-     return_value=ci.MainLineStatus(ci.MAIN_GREEN, self.target, [], [], "",
-     "CI main зелёный"))` с `patcher.start()`/`addCleanup(patcher.stop)`;
-   - б) то же, но подмену делать внутри `run_pin_update` (строки 224-229);
-   - в) иное решение Оператора.
-   Дефолт, если Оператор промолчит: а) — правку делают test_author или
-   Оператор, после неё сумма в `acceptance_tests/long_lived.sha256.txt`
-   обновляется.
-2. (не блокирует) Ослаблять в коде проверку CI в `pin-update`
-   (`_refuse_unless_main_ci_green`) под этот тест я не стал. Это ослабило бы
-   гейт из 01M3SF7DPFGEZ7VYEGGXGTX49E, что запрещено ADR-0002.
-   Подтвердите, что такое решение верное. Дефолт — да.
-
-**Контекст**
-- Подтяжка main закоммичена (`8e44ec70`), конфликты разрешены (шаг 5).
-  Код задачи по существу не менялся.
-- Прогон `python3 -m pytest
-  tests/test_01m3y75gcresc2kds9vprjk4ps_stale_cycles.py -p no:cacheprovider
-  -p timeout -o timeout=120` после подтяжки: 6 failed, 2 passed. Все шесть
-  (AC-1…AC-6, классы `PinUpdateNamesStaleCyclesTest`,
-  `PinUpdateSelectionTest`, `PinUpdateRobustnessTest`) падают одинаково:
-  `SystemExit: pin-update: CI не подтверждён для <sha> — … gh не ответил`
-  (`orchestrator/pin.py:87`). В песочнице сдвиг пина не доходит до
-  `merge --ff-only`. Тесты AC-7 (`doctor`) зелёные.
-- До подтяжки (коммит `322bea5f`) все 8 тестов были зелёными.
-- Сумма файла совпадает с перечнем лока (`70730c15…`), файл не правился.
-- Прочие прогоны после подтяжки: `tests/test_pin_update_stale_cycles.py`,
-  `tests/test_pin.py`, `tests/test_doctor.py`, `tests/test_invariants.py`,
-  `tests/test_codebase_map.py` зелёные. В `tests/test_main_ci_line.py` 3
-  падения `FixesMainArgTest` — отказ `artel.py approve: команда недоступна
-  процессу роли developer`. Это окружение шага роли, к задаче не относится.
-
-**Блокирует:** выход `in_dev` → review: долгоживущая планка задачи
-красная, пока не обновлена песочница теста.
