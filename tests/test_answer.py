@@ -9,6 +9,7 @@ Happy path (создание, коммит в артефактную ветку,
 `RealPultGitTest` с настоящим git) — здесь только то, что они не
 проверяют: чистые функции модуля и отказы по предусловиям.
 """
+import os
 import sys
 import tempfile
 import unittest
@@ -17,7 +18,7 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from orchestrator import answer, fsm, gitcmd, store  # noqa: E402
+from orchestrator import answer, config, fsm, gitcmd, store  # noqa: E402
 from scripts import guard  # noqa: E402
 from tests.test_git_fixation import RealPultGitTest  # noqa: E402
 
@@ -329,6 +330,12 @@ class ZonesExtendCommandTest(_ArtifactBranchAnswerTest):
     test_ac4_ac5_ac6_zones_extend.py`) на двух углах, которых они не
     кроют: пустой список путей и слияние с УЖЕ имеющимся
     `zones_extension` при повторном вызове (не перезапись)."""
+
+    def setUp(self):
+        super().setUp()
+        role_patcher = mock.patch.dict(os.environ, {config.ARTEL_ROLE_ENV: ""})
+        role_patcher.start()
+        self.addCleanup(role_patcher.stop)
 
     def row(self):
         return store.db().execute(

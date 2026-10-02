@@ -17,6 +17,7 @@
 acceptance_tests/`.
 """
 import json
+import os
 import subprocess
 import sys
 import tempfile
@@ -240,6 +241,9 @@ class CanaryPoolDriftCheckTest(unittest.TestCase):
     прямой вызов функции, без полного `doctor` CLI."""
 
     def setUp(self):
+        role_patcher = mock.patch.dict(os.environ, {config.ARTEL_ROLE_ENV: ""})
+        role_patcher.start()
+        self.addCleanup(role_patcher.stop)
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
         root_patcher = mock.patch.object(config, "ROOT", Path(tmp.name))

@@ -17,7 +17,7 @@
 """
 import sys
 
-from . import ci, config, lease, store
+from . import ci, config, cycle_hint, lease, store
 
 CI_RERUN_ACTION = "повтор CI ветки (ci-rerun)"
 
@@ -243,8 +243,9 @@ def _cmd_ci_rerun(conn, task_id: str, reason: str | None) -> None:
         # журнала выше уже названа тем же исходом (AC-9).
         sys.exit(f"[{task_id}] ci-rerun: отказ — {outcome_text}")
     if outcome_text.startswith(CI_RERUN_OUTCOME_GREEN):
-        print(f"  дальше: artel.py auto {task_id}  (цикл прочитает новый "
-              f"статус CI сам и уведёт задачу из verifying)")
+        print("  дальше: " + cycle_hint.launch_text(
+            conn, task_id, "auto", "(цикл прочитает новый статус CI сам и "
+            "уведёт задачу из verifying)"))
     else:
         # Снова красный — второй повтор требует НОВОГО основания
         # (требование 10); подсказка называет и второй, обычный путь.

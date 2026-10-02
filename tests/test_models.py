@@ -641,14 +641,14 @@ class CmdModelsTest(_LayersTest):
 
     def test_table_carries_every_column_of_the_requirement(self):
         """Ловит мутацию: из таблицы пропал столбец (статус, минимум CLI,
-        прейскурант, действующий тариф, его источник или роли по ярусам)
-        — Оператор перестал бы видеть, по какому числу считается расход
-        и кто на чём идёт."""
+        прейскурант, действующий тариф, его источник или роли) —
+        Оператор перестал бы видеть, по какому числу считается расход и
+        кто на чём идёт."""
         out = self.run_cmd()
 
         for column in ("провайдер", "модель", "статус", "мин. CLI",
                        "прейскурант", "действующий тариф", "источник тарифа",
-                       "роли по ярусам"):
+                       "роли"):
             self.assertIn(column, out)
         self.assertIn("model-alfa", out)
         self.assertIn("2.1.251", out)
@@ -760,6 +760,29 @@ overrides:
         self.assertIn("developer", out)
         self.assertIn("не полностью", out)
         self.assertIn("model-alfa", out)
+
+    def test_refused_role_is_named_above_the_table(self):
+        """Разрешение роли отказывает (ярус не назван в `tiers:`) — над
+        шапкой таблицы строка о неполноте столбца ролей с именем роли, а
+        у модели, на которую роль раньше указывала, прочерк.
+
+        Ловит мутацию: отказ разрешения роли гасится только в итоговой
+        строке под таблицей, без строки-причины НАД ней — прочерк в
+        столбце ролей читается как «ни одна роль сюда не ведёт», хотя
+        правда «роль не разрешилась» (REVIEW итерации 1, R1-F5).
+        """
+        self.use_local("tiers:\n  standard: model-alfa\n")
+
+        lines = self.run_cmd().splitlines()
+
+        header = next(i for i, line in enumerate(lines)
+                      if "источник тарифа" in line)
+        notes = [i for i, line in enumerate(lines)
+                 if "не полностью" in line and "developer" in line]
+        self.assertTrue(notes and notes[0] < header, lines)
+        row = next(line for line in lines[header + 1:]
+                   if "model-alfa" in line)
+        self.assertTrue(row.rstrip().endswith("—"), row)
 
     def test_unreadable_roles_map_is_named_above_the_table(self):
         """Ловит мутацию: нечитаемая карта исполнителей роняет команду

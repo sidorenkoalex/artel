@@ -67,6 +67,8 @@ AGENT_SETTING_SOURCES = "user"
 # pytest, ARTEL_ROLE) и `artel.py` (отказ команд `init`/`doctor
 # --restore`/`canary pool-seal`, ARTEL_ROLE).
 ARTEL_ROLE_ENV = "ARTEL_ROLE"
+OBSERVATION_HEARTBEAT_PERIOD = 30
+OBSERVATION_STALE_SECONDS = 3 * OBSERVATION_HEARTBEAT_PERIOD
 ARTEL_TASK_ENV = "ARTEL_TASK"
 # Слота keychain с ключом API для ролей на провайдере `codex` здесь больше
 # нет (решение Оператора 22.09.2026, `docs/research/providers-codex-plan.md`,

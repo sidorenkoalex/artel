@@ -10,6 +10,7 @@ tests/test_acceptance_tests_flow.py).
 (`RunAnalystTest`), где нужны те же подмены, что и в
 tests/test_agent_prompt.py: keychain, pre-flight, Popen.
 """
+import os
 import shutil
 import sys
 import tempfile
@@ -347,12 +348,23 @@ class ArtelCliTzFlagTest(TmpRootTest):
         "название" --tz` без пути к файлу — понятный отказ, не трейсбек,
         и без наполовину созданной задачи (сверка с БД, не с листингом
         каталога — conventions-core). Id — ULID (SPEC T094): считаем
-        строки в `tasks`, а не ждём предсказуемый "T002"."""
+        строки в `tasks`, а не ждём предсказуемый "T002".
+
+        Вызов — из окружения Оператора: признак роли (`ARTEL_ROLE`, `HOME`)
+        снят, иначе `new` отказал бы в диспетчере раньше разбора `--tz`
+        (SPEC 01M3XTF5506GF43HD51ECE230T, требование 10).
+
+        Ловит мутацию: `_tz_arg` берёт следующий за `--tz` элемент без
+        проверки длины — вместо понятного отказа трейсбек `IndexError`,
+        либо задача заводится без ТЗ и строк в `tasks` становится больше."""
         before = store.db().execute(
             "SELECT COUNT(*) FROM tasks").fetchone()[0]
 
-        with mock.patch.object(sys, "argv",
-                               ["artel.py", "new", "Экспорт CSV", "--tz"]):
+        operator_env = {k: v for k, v in os.environ.items()
+                        if k not in (config.ARTEL_ROLE_ENV, "HOME")}
+        with mock.patch.dict(os.environ, operator_env, clear=True), \
+                mock.patch.object(sys, "argv",
+                                  ["artel.py", "new", "Экспорт CSV", "--tz"]):
             with self.assertRaises(SystemExit) as ctx:
                 artel.main()
         self.assertIn("--tz", str(ctx.exception))

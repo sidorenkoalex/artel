@@ -143,6 +143,7 @@ NBJCR5Q6C3B итерации 2, R2-F1), которого эта задача н�
 живёт как чистый совместимый alias, не участвующий в реальном вождении
 канарейки.
 """
+import fcntl
 import json
 import os
 import random
@@ -151,7 +152,7 @@ import subprocess
 import sys
 import tempfile
 from collections import namedtuple
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -497,7 +498,90 @@ _KEYCHAIN_POINTER_REL = Path("Library/Preferences/com.apple.security.plist")
 #: Байты, а не путь: читаемость указателя обязана выясниться до клона
 #: (требование 3), то есть прочитать его снаружи всё равно нужно — и второе
 #: чтение внутри клона могло бы отказать там, где отказывать уже нельзя.
-CodexCloneAuth = namedtuple("CodexCloneAuth", "role pointer")
+CodexCloneAuth = namedtuple("CodexCloneAuth", "role pointer profile",
+                            defaults=(None,))
+
+
+def _canary_profile_home() -> Path:
+    """Постоянный дом только канарейки, вне пульта и временных клонов."""
+    return Path.home() / ".artel-canary-codex"
+
+
+@contextmanager
+def _locked_canary_profile():
+    """Один прогон владеет профилем до завершения всех своих задач."""
+    home = _canary_profile_home()
+    if home.is_symlink():
+        sys.exit(f"canary: профиль Codex канарейки — ссылка: {home}")
+    try:
+        home.mkdir(mode=0o700, parents=True, exist_ok=True)
+    except OSError as exc:
+        sys.exit(f"canary: профиль Codex канарейки не создан: {home}: {exc}")
+    lock_path = home / ".lock"
+    if lock_path.is_symlink():
+        sys.exit(f"canary: замок профиля Codex канарейки — ссылка: {lock_path}")
+    with lock_path.open("a+b") as lock:
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            sys.exit(f"canary: профиль Codex канарейки занят: {home}")
+        try:
+            yield home
+        finally:
+            fcntl.flock(lock, fcntl.LOCK_UN)
+
+
+def _canary_profile_auth(plan, home: Path) -> CodexCloneAuth | None:
+    """Подготовить адрес отдельного входа, не обращаясь к токенам."""
+    if not plan.codex_roles:
+        return None
+    pointer = home / _KEYCHAIN_POINTER_REL
+    if not pointer.is_file():
+        # Старый указатель совместим с отдельной записью входа: он задаёт
+        # только связку ключей, а сама запись Codex привязана к CODEX_HOME.
+        pointer = config.ROLE_HOME / _KEYCHAIN_POINTER_REL
+    try:
+        payload = pointer.read_bytes()
+    except OSError as exc:
+        sys.exit(f"canary: профиль Codex канарейки для "
+                 f"{', '.join(plan.codex_roles)} (роли набора на "
+                 f"{codex_provider.CLI_NAME}) не подготовлен: "
+                 f"указатель связки ключей {pointer} недоступен ({exc}). "
+                 f"Оператору нужен отдельный вход `codex login` для "
+                 f"CODEX_HOME={home / '.codex'}")
+    return CodexCloneAuth(plan.codex_roles[0], payload, home / ".codex")
+
+
+def _restore_canary_profile(profile: Path, curated: Path) -> None:
+    """Вернуть курируемые файлы проверяемого SHA, забыв историю и доверие.
+
+    `curated` — референс дома Codex в дереве клона, то есть ровно файлы
+    коммита: `.artel/` в git не хранится. Коммит без референса курируемых
+    настроек не несёт — профиль тогда только очищается.
+    """
+    if curated.is_symlink() or (curated.exists() and not curated.is_dir()):
+        sys.exit(f"canary: курируемый дом Codex проверяемого SHA — не "
+                 f"каталог: {curated}")
+    if profile.is_symlink():
+        sys.exit(f"canary: профиль Codex канарейки — ссылка: {profile}")
+    sources = tuple(curated.iterdir()) if curated.is_dir() else ()
+    allowed = {"config.toml", "AGENTS.md", ".zshenv"}
+    if sources and not (curated / "config.toml").is_file():
+        sys.exit(f"canary: нет config.toml проверяемого SHA: {curated}")
+    for source in sources:
+        if source.name not in allowed or source.is_symlink() or not source.is_file():
+            sys.exit(f"canary: неожиданный файл в курируемом доме Codex: {source}")
+    profile.mkdir(mode=0o700, parents=True, exist_ok=True)
+    if (profile / "auth.json").exists():
+        sys.exit(f"canary: в профиле {profile} найден auth.json; "
+                 "вход должен храниться в keyring, содержимое не читается")
+    for item in profile.iterdir():
+        if item.is_dir() and not item.is_symlink():
+            shutil.rmtree(item)
+        else:
+            item.unlink()
+    for source in sources:
+        shutil.copy2(source, profile / source.name)
 
 #: План прогона (SPEC 01M3FQ2Z2PY0E9T5F5WQ207NP5; SPEC
 #: 01M3PYMQ6N4SCAJ9WWTTKH6XNG): `name` — имя набора (им ключуются бейзлайн
@@ -811,7 +895,11 @@ def _clone_local_layer_text(source: str, layer) -> str:
 
 def _codex_clone_auth(plan: CanarySetPlan) -> CodexCloneAuth | None:
     """Вход Codex для эфемерного клона — либо ИМЕНОВАННЫЙ ОТКАЗ (SPEC
-    01M3HST1381E1FZCYAN2TSB1F3, требование 3). `None` — ни одна роль
+    01M3HST1381E1FZCYAN2TSB1F3, требование 3). Прежняя форма входа через
+    боевой дом пульта: штатный `cmd_canary` её больше не зовёт (SPEC
+    01M3V4ZPB6HFDJ36MTDAQG5VNT — `_locked_canary_profile` и
+    `_canary_profile_auth`), оставлена для формы `codex_auth` без
+    профиля. `None` — ни одна роль
     прогона не идёт провайдером Codex: дом клона не меняется, проверка
     входа не зовётся, поведение прежнее байт-в-байт (требование 2).
 
@@ -897,7 +985,7 @@ def _refuse_unless_clone_logged_in(role: str, pult_role_home: Path) -> None:
       который тот уже сделал, и настоящая причина осталась бы
       неназванной.
 
-    Половин у переноса ДВЕ, и отказ называет обе: окружения двух вызовов
+    Половин у подготовки ДВЕ, и отказ называет обе: окружения двух вызовов
     различаются не одним именем, а тремя (`HOME`, `ZDOTDIR`,
     `CODEX_HOME`), поэтому тот же исход «клон не `ok`, пульт `ok`» даёт и
     сломанный указатель связки ключей (`_install_codex_pointer`;
@@ -917,12 +1005,12 @@ def _refuse_unless_clone_logged_in(role: str, pult_role_home: Path) -> None:
                  f"проверка {check.name} окружением шага эфемерного клона "
                  f"— нет. Это дефект пульта, а не несделанный шаг "
                  f"Оператора: повторный вход этого не изменит. Сломана "
-                 f"одна из двух половин переноса входа в клон — "
-                 f"переопределение {codex_provider.HOME_ENV} "
-                 f"(`canary._ephemeral_clone` его ставит, "
+                 f"одна из двух половин подготовки входа в клон — "
+                 f"{codex_provider.HOME_ENV} развёрнутого дома клона "
+                 f"(`canary._ephemeral_clone` снимает переопределение, "
                  f"`CodexProvider.environment` отдаёт; шагу клона отдано "
                  f"{codex_provider.HOME_ENV}="
-                 f"{pult_role_home / codex_provider.DEPLOYED_HOME_DIR}) "
+                 f"{config.ROLE_HOME / codex_provider.DEPLOYED_HOME_DIR}) "
                  f"и/или указатель связки ключей "
                  f"(`canary._install_codex_pointer` кладёт его в "
                  f"{config.ROLE_HOME / _KEYCHAIN_POINTER_REL}) — до "
@@ -933,22 +1021,58 @@ def _refuse_unless_clone_logged_in(role: str, pult_role_home: Path) -> None:
              f"авторизацией за деньги. {check.name}: {check.detail}")
 
 
-def _pult_home_login_confirmed(role: str, pult_role_home: Path) -> bool:
+def _refuse_unless_profile_logged_in(role: str, pult_role_home: Path,
+                                     profile: Path) -> None:
+    """Проверяет вход отдельного профиля канарейки окружением шага КЛОНА
+    и отказывает до платного шага (SPEC 01M3V4ZPB6HFDJ36MTDAQG5VNT, AC-5).
+
+    Те же два адресата, что у `_refuse_unless_clone_logged_in`, но
+    сравнение идёт с ТЕМ ЖЕ `CODEX_HOME` профиля, а не с боевым каталогом
+    пульта: вход боевого дома ничего не говорит о входе профиля (AC-10).
+    Профиль подтверждён окружением пульта, а клоном нет — расходятся
+    только `HOME`/`ZDOTDIR` клона и скопированный в него указатель связки
+    ключей, то есть сломана подготовка клона: дефект пульта, повторный
+    `codex login` его не чинит.
+    """
+    from . import doctor
+    check = doctor.check_codex_chatgpt_auth(role)
+    if check.status == "ok":
+        return
+    if _pult_home_login_confirmed(role, pult_role_home, profile):
+        sys.exit(f"canary: вход Codex в отдельный профиль {profile} "
+                 f"окружением пульта подтверждён, а проверка {check.name} "
+                 f"окружением шага эфемерного клона — нет. Это дефект "
+                 f"пульта, а не несделанный шаг Оператора: повторный вход "
+                 f"этого не изменит. Сломана подготовка дома клона — "
+                 f"`HOME`/`ZDOTDIR` клона {config.ROLE_HOME} и/или "
+                 f"указатель связки ключей (`canary._install_codex_pointer` "
+                 f"кладёт его в {config.ROLE_HOME / _KEYCHAIN_POINTER_REL}) "
+                 f"— до починки прогон на наборе с ролями "
+                 f"{codex_provider.CLI_NAME} невозможен.")
+    sys.exit(f"canary: вход Codex в отдельный профиль {profile} не "
+             f"подтверждён до платного шага: {check.name}: {check.detail}. "
+             f"Оператору нужен `codex login` с этим CODEX_HOME")
+
+
+def _pult_home_login_confirmed(role: str, pult_role_home: Path,
+                               codex_home: Path | None = None) -> bool:
     """Подтверждён ли вход Codex домом роли ПУЛЬТА — тем же узлом
     `doctor`, но с окружением, которое собралось бы вне блока клона
     (SPEC 01M3M55070T5NJFYM3QQJH4B9V, требование 6).
 
-    Снимается и переадресация `config.ROLE_HOME`, и переопределение
-    `CODEX_HOME`: узел берёт все три имени у `CodexProvider.environment`,
-    и ответ обязан относиться к тому дому, каким входил Оператор, а не к
-    гибриду «`HOME` клона + `CODEX_HOME` пульта». Оба снятия — в
+    Снимается переадресация `config.ROLE_HOME`, а переопределение
+    `CODEX_HOME` ставится в `codex_home`: `None` — боевой каталог дома
+    роли пульта, путь — отдельный профиль канарейки, тот же, что у
+    проверки клона. Узел берёт все три имени у
+    `CodexProvider.environment`, и ответ обязан относиться к тому дому,
+    каким входил Оператор, а не к гибриду. Оба восстановления — в
     `finally`: вызывающий на обеих ветках уходит `sys.exit`, а внешний
     `finally` блока клона до этого ещё не добрался, и оставленные
     пультовские пути увели бы уборку клона не туда.
     """
     from . import doctor
     saved_role_home = config.ROLE_HOME
-    saved_override = codex_provider.set_codex_home_override(None)
+    saved_override = codex_provider.set_codex_home_override(codex_home)
     config.ROLE_HOME = pult_role_home
     try:
         return doctor.check_codex_chatgpt_auth(role).status == "ok"
@@ -1022,26 +1146,14 @@ def _ephemeral_clone(target_sha: str | None = None,
     остаётся ровно шаблоном, который кладёт `cmd_init` (слой пульта не
     прочитан, набора нет).
 
-    `codex_auth` (SPEC 01M3HST1381E1FZCYAN2TSB1F3, требования 1/4) — вход
-    Codex для клона: указатель связки ключей копируется в дом роли КЛОНА,
-    `CODEX_HOME` шага переопределяется каталогом клиента дома роли ПУЛЬТА
-    (SPEC 01M3M55070T5NJFYM3QQJH4B9V, требование 1), и вход проверяется
-    узлом `doctor` уже этим окружением; не `ok` — отказ до `yield`, то
-    есть до заведения задачи и до первого шага роли. `None` (по
-    умолчанию) — ни одна роль прогона не идёт провайдером Codex, дом клона
-    остаётся ровно тем, что развернул холодный старт (требование 2), а
-    окружение шага — тремя именами от `config.ROLE_HOME` клона.
-
-    Все три действия — ПОСЛЕ `catalog.cmd_init()` и ВНУТРИ `try:`, и ни
-    одно не переставимо. После `cmd_init()`: `catalog._deploy_role_home_
-    reference` выходит первой же строкой на существующем `ROLE_HOME`, и
-    указатель, положенный раньше, лишил бы роли клона курируемого дома
-    целиком. Внутри `try:`: `finally` ниже — единственная уборка клона, и
-    отказ проверки входа обязан оставить `/tmp` чистым, а скопированный
-    указатель не обязан пережить прогон. Переопределение — ДО проверки
-    входа: зелёная строка предполёта обязана доказывать вход того дома,
-    каким пойдёт шаг (требование 5), а оба читают один
-    `CodexProvider.environment`.
+    При `codex_auth.profile` `CODEX_HOME` отдельного постоянного профиля
+    сначала получает проверка входа, затем профиль восстанавливается из
+    референса в дереве клона (файлы проверяемого SHA). Неуспех любого из
+    двух отказывает до `yield`, то есть до платного шага.
+    Старая форма `codex_auth` без `profile` оставлена для прямых вызывающих
+    и существующих тестов: она использует развёрнутый дом клона.
+    Подготовка идёт после `catalog.cmd_init()` и внутри `try`, чтобы
+    курируемый дом существовал и исключение всегда убирало временный клон.
 
     Переопределение `CODEX_HOME` сохраняется и восстанавливается тем же
     приёмом и в том же `finally`, что и пути `config`: оно такое же
@@ -1098,10 +1210,25 @@ def _ephemeral_clone(target_sha: str | None = None,
             config.MODELS_LOCAL.parent.mkdir(parents=True, exist_ok=True)
             config.MODELS_LOCAL.write_text(local_layer_text, encoding="utf-8")
         if codex_auth is not None:
-            _install_codex_pointer(codex_auth.pointer)
-            codex_provider.set_codex_home_override(
-                saved["ROLE_HOME"] / codex_provider.DEPLOYED_HOME_DIR)
-            _refuse_unless_clone_logged_in(codex_auth.role, saved["ROLE_HOME"])
+            if codex_auth.pointer is not None:
+                _install_codex_pointer(codex_auth.pointer)
+            if codex_auth.profile is None:
+                codex_provider.set_codex_home_override(None)
+                _refuse_unless_clone_logged_in(codex_auth.role, saved["ROLE_HOME"])
+            else:
+                # Вход — раньше восстановления: несделанный вход Оператора
+                # должен называться своим отказом, а не уступать место
+                # отказу подготовки профиля.
+                codex_provider.set_codex_home_override(codex_auth.profile)
+                _refuse_unless_profile_logged_in(
+                    codex_auth.role, saved["ROLE_HOME"], codex_auth.profile)
+                try:
+                    _restore_canary_profile(
+                        codex_auth.profile,
+                        dest.joinpath(*codex_provider.HOME_REFERENCE_DIR))
+                except OSError as exc:
+                    sys.exit(f"canary: профиль Codex канарейки не "
+                             f"восстановлен: {codex_auth.profile}: {exc}")
         yield dest
     finally:
         codex_provider.set_codex_home_override(saved_codex_home)
@@ -1708,6 +1835,7 @@ def _task_deviation_warnings(metrics: dict, baseline, ratio: float) -> list:
 # третьей копией — тот же принцип, что уже есть у `store.
 # REFUSAL_ACTION_PREFIX`/`auto.REFUSAL_ACTION_PREFIX`.
 _AUTO_STOPPED_ACTION = "auto остановлен"
+_AUTOGATE_REFUSAL_ACTION = "автогейт acceptance не пройден"
 
 # Потолок строк выдержки журнала (требование 2, AC-6) — с запасом под
 # итоговую строку метрик и строку пути диагностики, которые печатаются
@@ -1718,7 +1846,8 @@ _JOURNAL_EXCERPT_LIMIT = 18
 
 def _journal_excerpt_lines(steps, limit: int = _JOURNAL_EXCERPT_LIMIT) -> list:
     """Выдержка журнала задачи (требование 2, AC-6): переходы состояний
-    (`state -> ...`) и записи «переход отклонён»/«auto остановлен» —
+    (`state -> ...`) и записи «переход отклонён»/«auto остановлен»/
+    «автогейт acceptance не пройден» —
     вместо одной итоговой строки исхода. Последние `limit` записей по
     времени — самые информативные для итога прогона (причина
     финального kill журналируется непосредственно перед ним).
@@ -1730,16 +1859,53 @@ def _journal_excerpt_lines(steps, limit: int = _JOURNAL_EXCERPT_LIMIT) -> list:
     физическими строками вывода, срывая потолок в 20 строк на задачу
     (требование 2) числом записей, укладывающимся в лимит `limit`."""
     lines = []
+    last_refusal = None
     for row in steps:
         action = row["action"]
         if not (action.startswith("state -> ")
                or action.startswith(store.REFUSAL_ACTION_PREFIX)
-               or action == _AUTO_STOPPED_ACTION):
+               or action in (_AUTO_STOPPED_ACTION, _AUTOGATE_REFUSAL_ACTION)):
             continue
         detail = " ".join((row["detail"] or "").split())
         suffix = f" — {detail}" if detail else ""
         lines.append(f"{row['ts']} {row['actor']}: {action}{suffix}")
+        if action == _AUTOGATE_REFUSAL_ACTION:
+            last_refusal = len(lines) - 1
+    if limit > 0 and last_refusal is not None and last_refusal < len(lines) - limit:
+        tail = lines[-(limit - 1):] if limit > 1 else []
+        return [lines[last_refusal], *tail]
     return lines[-limit:]
+
+
+def _acceptance_from_steps(steps) -> tuple[str | None, str | None, bool]:
+    """Способ приёмки, причина отказа и факт входа в acceptance из журнала клона."""
+    reached = False
+    route = None
+    refusal = None
+    for row in steps:
+        action = row["action"]
+        if action == "state -> acceptance":
+            reached = True
+        elif action == _AUTOGATE_REFUSAL_ACTION:
+            refusal = row["detail"] or ""
+        elif action == "state -> merge_gate" and reached:
+            if row["actor"] == "autogate":
+                route = "autogate"
+            elif row["actor"] == "canary":
+                route = "manual"
+    return route, refusal, reached
+
+
+def _acceptance_summary(route: str | None, refusal: str | None,
+                        reached: bool) -> str:
+    if refusal is not None:
+        reason = " ".join(refusal.split())[:500]
+        if route == "manual":
+            return f"  приёмка вручную: {reason}"
+        return f"  причина отказа автогейта: {reason}"
+    if reached and route != "autogate":
+        return "  автогейт не запускался"
+    return ""
 
 
 def _needs_diagnostics(normal_outcome: bool, mismatch: bool) -> bool:
@@ -1772,7 +1938,8 @@ def _diagnostics_dir(outer_root: Path, run_stamp: str, task_id: str) -> Path:
 
 def _save_diagnostics(outer_root: Path, run_stamp: str, task_id: str,
                       steps) -> Path:
-    """Сохраняет диагностику незелёного/расходящегося исхода канареечной
+    """Сохраняет диагностику незелёного/расходящегося исхода или отказа
+    автогейта приёмки канареечной
     задачи ДО удаления эфемерного клона (требование 1, AC-1..AC-3):
     журнал задачи (`steps`) текстом, логи ролей клона, последние
     PLAN.md/REVIEW.md из артефактной ветки клона, если они там есть.
@@ -1928,9 +2095,8 @@ def _run_task_in_ephemeral_clone(
     собранный из слоя пульта и набора ролей; `None` — слой клона остаётся
     шаблоном `models.LOCAL_TEMPLATE`, как его кладёт `catalog.cmd_init()`.
 
-    `codex_auth` (SPEC 01M3HST1381E1FZCYAN2TSB1F3) — вход Codex для клона
-    (указатель связки ключей и проверка входа домом клона); `None` — ни
-    одна роль прогона не идёт провайдером Codex.
+    `codex_auth` для набора Codex несёт адрес отдельного профиля и
+    указатель связки ключей; `None` — роли Codex в наборе нет.
 
     Вывод процесса клона на экран пульта не идёт — только в файл, который
     попадает в диагностику: между строкой «заведена» (печатается
@@ -1994,7 +2160,9 @@ def _run_task_in_ephemeral_clone(
         normal_outcome = (metrics["kill_note"] in ("штатно", "поделена")
                           and result["head"] == target_sha)
         diag_dir = None
-        if _needs_diagnostics(normal_outcome, mismatch):
+        _route, autogate_refusal, _reached = _acceptance_from_steps(steps)
+        if (_needs_diagnostics(normal_outcome, mismatch)
+                or autogate_refusal is not None):
             diag_dir = _save_diagnostics(outer_root, run_stamp, task_id, steps)
             (diag_dir / _DRIVE_LOG_NAME).write_text(log_text, encoding="utf-8")
 
@@ -2011,9 +2179,9 @@ def _drive_in_clone(dest: Path, template_path: Path) -> tuple:
     Своя группа процессов (`start_new_session`): шаги ролей — потомки
     процесса клона, и по таймауту снимается вся группа, а не один родитель,
     оставивший бы агентов работать на удалённый клон. Интерпретатор —
-    интерпретатор пульта (`sys.executable`), venv и переопределение
-    `CODEX_HOME` — значения процесса пульта ВНУТРИ блока клона: этим
-    процесс клона повторяет окружение, в котором задачу вёл бы сам пульт.
+    интерпретатор пульта (`sys.executable`), venv — значение процесса пульта
+    внутри блока клона. Адрес отдельного `CODEX_HOME` передаётся процессу
+    клона явно, только когда выбран набор с Codex.
 
     Вывод пишется в файл, а не в канал: ведение длится часами, и канал,
     который никто не читает до конца процесса, заполнился бы и повесил его.
@@ -2026,7 +2194,7 @@ def _drive_in_clone(dest: Path, template_path: Path) -> tuple:
             "--template", str(template_path), "--result", str(result_path),
             "--venv-dir", str(config.VENV_DIR)]
     codex_home = codex_provider.codex_home_override()
-    if codex_home is not None:
+    if codex_home == _canary_profile_home() / ".codex":
         argv += ["--codex-home", str(codex_home)]
     # Без буферизации: вывод в файл у Python блочно буферизован, а снятие
     # по таймауту сигналом буфер не сбрасывает — диагностика зависания
@@ -2111,7 +2279,9 @@ def _record_canary_run(outer_conn, run_stamp: str, title: str, task_id: str,
                        mismatch: bool, normal_outcome: bool,
                        explicit_target_sha: str | None,
                        target_sha: str, sha_label: str | None,
-                       plan: CanarySetPlan) -> tuple:
+                       plan: CanarySetPlan,
+                       acceptance_route: str | None = None,
+                       autogate_refusal: str | None = None) -> tuple:
     """Фаза 3 из 3 (требование 6) `_run_one_task`: закрывает целевой sha
     прогона (если он не был передан явно), вычисляет вердикт зелёности и
     пишет строку `canary_runs` СНАРУЖИ клона (требование 5, 9). Возвращает
@@ -2165,7 +2335,9 @@ def _record_canary_run(outer_conn, run_stamp: str, title: str, task_id: str,
         len(metrics["escalations"]), metrics["outcome"],
         "yes" if expected else ("no" if expected is False else None),
         actual, mismatch, main_sha=main_sha, verdict=verdict,
-        set_name=plan.name, models_summary=plan.summary or None)
+        set_name=plan.name, models_summary=plan.summary or None,
+        acceptance_route=acceptance_route,
+        autogate_refusal=autogate_refusal)
     return main_sha, sha_label
 
 
@@ -2271,10 +2443,10 @@ def _run_one_task(template_path: Path, run_stamp: str, ratio: float,
     на котором и раньше молча оставался клон без единого checkout
     (`gitcmd.head_sha()` главной копии в момент вызова).
 
-    «Штатный исход без расхождения» (ANSWER-1.md, вариант Б) — ЕДИНСТВЕННЫЙ
-    случай, где диагностика не сохраняется (требование 1, AC-4) и где
-    бейзлайн/сравнение отклонений вообще применяются (требование 3,
-    AC-7/AC-8): `_kill_outcome_note` отличает штатный kill на
+    «Штатный исход без расхождения» (ANSWER-1.md, вариант Б) — случай,
+    где бейзлайн/сравнение отклонений применяются (требование 3,
+    AC-7/AC-8). Диагностика в нём сохраняется только при отказе
+    автогейта приёмки: `_kill_outcome_note` отличает штатный kill на
     `merge_gate` (единственный штатный kill РЕАЛЬНОГО вождения —
     `verifying` теперь проходится синтетически, ANSWER-3.md 06.09; см.
     также недостижимую из `_drive_task` `_kill_at_verifying`, оставленную
@@ -2290,8 +2462,10 @@ def _run_one_task(template_path: Path, run_stamp: str, ratio: float,
     аргументами.
 
     `codex_auth` (SPEC 01M3HST1381E1FZCYAN2TSB1F3) — вход Codex для клона,
-    собранный `_codex_clone_auth` ДО клона; `None` — ни одна роль прогона
-    не идёт провайдером Codex.
+    собранный `_canary_profile_auth` ДО клона под замком
+    `_locked_canary_profile` (SPEC 01M3V4ZPB6HFDJ36MTDAQG5VNT: отдельный
+    постоянный профиль); `None` — ни одна роль прогона не идёт провайдером
+    Codex.
     """
     plan = plan or _DEFAULT_SET_PLAN
     explicit_target_sha = target_sha
@@ -2314,11 +2488,13 @@ def _run_one_task(template_path: Path, run_stamp: str, ratio: float,
 
     print(f"[canary] {task_id} заведена из {template_path.name}")
 
+    acceptance_route, autogate_refusal, reached_acceptance = (
+        _acceptance_from_steps(steps))
     outer_conn = store.db()
     target_sha, _label = _record_canary_run(
         outer_conn, run_stamp, title, task_id, metrics, expected, actual,
         mismatch, normal_outcome, explicit_target_sha, target_sha, sha_label,
-        plan)
+        plan, acceptance_route, autogate_refusal)
 
     note = _baseline_deviation_note(outer_conn, task_id, title, metrics,
                                     normal_outcome, mismatch, ratio, plan.name,
@@ -2347,6 +2523,8 @@ def _run_one_task(template_path: Path, run_stamp: str, ratio: float,
     clone_code_label = f"код клона {code_sha or target_sha}"
     outcome_note = f" ({metrics['kill_note']})" if metrics["kill_note"] else ""
     test_author_note = "да" if metrics["test_author_visited"] else "нет"
+    acceptance_note = _acceptance_summary(
+        acceptance_route, autogate_refusal, reached_acceptance)
     for line in _journal_excerpt_lines(steps):
         print(f"  {line}")
     # Требование 11 (01M3HJQV2QV9BXNXSH3F8STAYH): факт подъёма потолка — в
@@ -2363,7 +2541,7 @@ def _run_one_task(template_path: Path, run_stamp: str, ratio: float,
          f"исход={metrics['outcome']}{outcome_note}  "
          f"sha={target_sha} ({clone_code_label})  "
          f"набор={plan.name}{_summary_note(plan)}  "
-         f"test_author={test_author_note}{mismatch_note}{note}")
+         f"test_author={test_author_note}{acceptance_note}{mismatch_note}{note}")
     if diag_dir is not None:
         print(f"  диагностика: {diag_dir}")
 
@@ -2440,26 +2618,32 @@ def cmd_canary(*, k: int, sha: str | None = None,
     # ни заведённой задачей.
     plan = _set_plan(set_name)
     # Вход Codex для клона — здесь же, на той же стадии (SPEC
-    # 01M3HST1381E1FZCYAN2TSB1F3, требование 3): за несделанный однократный
-    # шаг Оператора пульт тоже не платит ни сетью, ни `git clone`, ни
-    # заведённой задачей. `None` — ни одна роль прогона не идёт провайдером
-    # Codex, и дальше всё идёт байт-в-байт как до этой задачи.
-    codex_auth = _codex_clone_auth(plan)
+    # 01M3HST1381E1FZCYAN2TSB1F3, требование 3): за неподготовленный
+    # отдельный профиль пульт тоже не платит ни сетью, ни `git clone`, ни
+    # заведённой задачей. Профиль канарейки (SPEC 01M3V4ZPB6HFDJ36MTDAQG5VNT)
+    # держится замком `_locked_canary_profile` до конца прогона, адрес входа
+    # собирает `_canary_profile_auth`; `_codex_clone_auth` штатно не
+    # зовётся. Без ролей Codex профиль не трогается вовсе.
+    profile_context = (_locked_canary_profile() if plan.codex_roles
+                       else nullcontext(None))
+    with profile_context as profile_home:
+        codex_auth = (_canary_profile_auth(plan, profile_home)
+                      if profile_home is not None else None)
 
-    target_sha, origin_sha = _resolve_target_sha(sha)
-    sha_label = _target_origin_note(sha, target_sha, origin_sha)
+        target_sha, origin_sha = _resolve_target_sha(sha)
+        sha_label = _target_origin_note(sha, target_sha, origin_sha)
 
-    run_stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-    # Требование 5: имена выбранных шаблонов в порядке прогона — в САМОЙ
-    # первой строке вывода, до первого эфемерного клона. Иначе состав
-    # прогона Оператор узнавал бы по мере того, как задачи одна за другой
-    # доходят до конца, то есть через десятки минут, а при падении первого
-    # же клона — не узнал бы вовсе.
-    print(f"[canary] прогон {run_stamp}: {len(templates)} задач из пула "
-         f"{pool_dir} в порядке прогона: "
-         f"{', '.join(p.stem for p in templates)}; целевой sha {target_sha} "
-         f"({sha_label}), набор {plan.name}{_summary_note(plan)}")
-    for template_path in templates:
-        _run_one_task(template_path, run_stamp, config.CANARY_DEVIATION_RATIO,
-                      target_sha, sha_label, plan, codex_auth)
-    print(f"[canary] прогон {run_stamp} завершён")
+        run_stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+        # Требование 5: имена выбранных шаблонов в порядке прогона — в САМОЙ
+        # первой строке вывода, до первого эфемерного клона. Иначе состав
+        # прогона Оператор узнавал бы по мере того, как задачи одна за другой
+        # доходят до конца, то есть через десятки минут, а при падении первого
+        # же клона — не узнал бы вовсе.
+        print(f"[canary] прогон {run_stamp}: {len(templates)} задач из пула "
+             f"{pool_dir} в порядке прогона: "
+             f"{', '.join(p.stem for p in templates)}; целевой sha {target_sha} "
+             f"({sha_label}), набор {plan.name}{_summary_note(plan)}")
+        for template_path in templates:
+            _run_one_task(template_path, run_stamp, config.CANARY_DEVIATION_RATIO,
+                          target_sha, sha_label, plan, codex_auth)
+        print(f"[canary] прогон {run_stamp} завершён")

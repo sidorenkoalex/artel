@@ -149,6 +149,9 @@ class DocCommitSandbox(RealGitSandbox):
 
     def setUp(self):
         super().setUp()
+        role_patcher = mock.patch.dict(os.environ, {config.ARTEL_ROLE_ENV: ""})
+        role_patcher.start()
+        self.addCleanup(role_patcher.stop)
         self.origin = tempfile.mkdtemp()
         self.addCleanup(shutil.rmtree, self.origin, ignore_errors=True)
         self.git("init", "-q", "--bare", self.origin)

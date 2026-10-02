@@ -129,11 +129,19 @@ class KillDispatchYesFlagTest(TmpRepoTest):
     делом отказывает вне главной копии репозитория (`_refuse_if_
     worktree`, инвариант T056); песочница патчит `config.ROOT` на
     свежий `git init`, у которого `.git` — каталог, не worktree-ссылка,
-    так что этот отказ не срабатывает."""
+    так что этот отказ не срабатывает.
+
+    Вызов идёт из окружения Оператора: признак роли (`ARTEL_ROLE`, `HOME`)
+    снят — `kill` под ролью отказывает в диспетчере (SPEC
+    01M3XTF5506GF43HD51ECE230T, требование 10), а прогон шага наследует
+    окружение роли."""
 
     def _dispatch(self, *flags: str) -> None:
-        with mock.patch.object(sys, "argv",
-                               ["artel.py", "kill", self.TASK, *flags]):
+        operator_env = {k: v for k, v in os.environ.items()
+                        if k not in (config.ARTEL_ROLE_ENV, "HOME")}
+        with mock.patch.dict(os.environ, operator_env, clear=True), \
+                mock.patch.object(sys, "argv",
+                                  ["artel.py", "kill", self.TASK, *flags]):
             artel.main()
 
     def test_yes_flag_reaches_cmd_kill_as_confirmed_true(self):

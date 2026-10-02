@@ -4,7 +4,7 @@
 from scripts import guard
 
 from .. import (acceptance, artifact_branch, artifacts, checkpoint, config,
-                github_adapter, gitcmd, store, workspace)
+                cycle_hint, github_adapter, gitcmd, store, workspace)
 from ._base import GateRefusal
 from .acceptance import blob_sha256, long_lived_manifest_rel
 
@@ -25,7 +25,8 @@ def _freshness_refuses(conn, task_id: str, t, meta, status: str) -> bool:
     )
     store.journal(conn, task_id, "fsm", "переход отклонён", detail)
     print(f"[{task_id}] {detail}")
-    print(f"  дальше: artel.py run {task_id}  (прогон ревьювера)")
+    print("  дальше: " + cycle_hint.launch_text(
+        conn, task_id, "run", "(прогон ревьювера)"))
     return True
 
 

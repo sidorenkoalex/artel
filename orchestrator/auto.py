@@ -8,8 +8,8 @@ import signal
 import time
 from dataclasses import dataclass
 
-from . import (agent_log, alerts, budget, ci, config, fixation, fsm, lease,
-              pause, pull, runner, store, zone_lock)
+from . import (agent_log, alerts, budget, ci, config, cycle_hint, fixation,
+              fsm, lease, pause, pull, runner, store, zone_lock)
 from .advance_gates.plan_appendix import \
     PLAN_APPENDIX_INAPPLICABLE_REFUSAL_ACTION
 from .advance_gates.zones import ZONES_MANDATE_WITHOUT_PLAN_REFUSAL_ACTION
@@ -117,10 +117,11 @@ _ZONE_WAIT_LEASE_LOST_REASON = "lease задачи потерян во врем�
 _STOP_COMMAND_REASON = "штатная остановка — команда stop"
 
 
-def _stop_command_stop(task_id: str, state: str) -> "Stop":
+def _stop_command_stop(conn, task_id: str, state: str) -> "Stop":
     """Исход остановки по команде `stop` — один на обе её точки."""
     return Stop(state, _STOP_COMMAND_REASON,
-                f"artel.py auto {task_id} — продолжит отсюда", False)
+                cycle_hint.launch_text(conn, task_id, "auto",
+                                       "— продолжит отсюда"), False)
 
 
 def _sleep_until_next_poll() -> bool:
@@ -186,18 +187,19 @@ def _wait_for_zone(conn, task_id: str, session_id: str, state: str) -> "Stop | N
     elapsed_sec = 0.0
     while True:
         if _stop_requested:
-            return _stop_command_stop(task_id, state)
+            return _stop_command_stop(conn, task_id, state)
         if elapsed_sec >= config.ZONE_WAIT_MAX_SEC:
             hint = (f"artel.py status  (кто держит зону) — дождись мержа/kill "
                     f"занявшей задачи либо artel.py zone-release {task_id}, "
-                    f"затем artel.py auto {task_id}")
+                    f"затем " + cycle_hint.launch_text(conn, task_id, "auto"))
             return Stop(state, _ZONE_WAIT_CEILING_REASON, hint, False)
         if _sleep_until_next_poll():
-            return _stop_command_stop(task_id, state)
+            return _stop_command_stop(conn, task_id, state)
         elapsed_sec += config.ZONE_WAIT_POLL_SEC
         lease_refusal, _ = lease.acquire(conn, task_id, session_id)
         if lease_refusal is not None:
-            hint = f"artel.py auto {task_id} — перезапусти ожидание"
+            hint = cycle_hint.launch_text(conn, task_id, "auto",
+                                          "— перезапусти ожидание")
             return Stop(state, f"{_ZONE_WAIT_LEASE_LOST_REASON}: {lease_refusal}",
                         hint, True)
         t = store.get_task(conn, task_id)
@@ -715,7 +717,7 @@ class Stop:
     alert: bool
 
 
-def _step_limit_stop(task_id: str, state: str, steps: int) -> Stop | None:
+def _step_limit_stop(conn, task_id: str, state: str, steps: int) -> Stop | None:
     """Стоп-кран (г) — лимит шагов за вызов. Гейтит попытку РОЛИ (реальный
     `run` или отказ, который её замещает), не саму итерацию цикла
     (REVIEW.md итерации 1, R1-F1): переход, который предварительный
@@ -729,7 +731,8 @@ def _step_limit_stop(task_id: str, state: str, steps: int) -> Stop | None:
     только сам счётчик растёт реже."""
     if steps >= config.AUTO_MAX_STEPS:
         hint = (f"artel.py log {task_id} (что происходит), "
-                f"затем artel.py auto {task_id} — продолжит отсюда")
+                f"затем " + cycle_hint.launch_text(conn, task_id, "auto",
+                                                   "— продолжит отсюда"))
         return Stop(state, f"лимит {config.AUTO_MAX_STEPS} шагов за вызов исчерпан",
                     hint, True)
     return None
@@ -1092,7 +1095,7 @@ def _cmd_auto(conn, task_id: str, session_id: str, wait_zone: bool = False) -> N
             # чередом. Вторая точка того же исхода — прерванное ожидание
             # зоны (`_wait_for_zone`, ANSWER-2 п.2), поэтому поля стопа
             # собирает общий `_stop_command_stop`.
-            stop = _stop_command_stop(task_id, state)
+            stop = _stop_command_stop(conn, task_id, state)
             auto_stop(conn, task_id, stop.state, stop.reason, stop.hint,
                       alert=stop.alert)
             return
@@ -1104,7 +1107,7 @@ def _cmd_auto(conn, task_id: str, session_id: str, wait_zone: bool = False) -> N
             role = runner.step_role(t)
             continue
 
-        limit_stop = _step_limit_stop(task_id, state, steps)
+        limit_stop = _step_limit_stop(conn, task_id, state, steps)
         if limit_stop is not None:
             auto_stop(conn, task_id, limit_stop.state, limit_stop.reason,
                       limit_stop.hint, alert=limit_stop.alert)

@@ -21,6 +21,7 @@
 import re
 import sqlite3
 import sys
+import uuid
 from datetime import datetime, timezone
 
 from . import config, session
@@ -31,6 +32,102 @@ TASK_ID = re.compile(r"\AT(\d+)\Z")
 
 def now() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%SZ")
+
+
+def register_observation(conn, target: str, client: str, chat: str,
+                         session_id: str, task_ids: list[str]) -> str:
+    observation_id = uuid.uuid4().hex
+    with conn:
+        conn.execute("INSERT INTO observations VALUES (?, ?, ?, ?, ?, 'active', NULL, ?)",
+                     (observation_id, target, client, chat, session_id, now()))
+        conn.executemany("INSERT INTO observation_tasks(observation_id, task_id) VALUES (?, ?)",
+                         [(observation_id, task_id) for task_id in task_ids])
+    return observation_id
+
+
+def observation(conn, observation_id: str):
+    return conn.execute("SELECT * FROM observations WHERE id=?", (observation_id,)).fetchone()
+
+
+def observation_tasks(conn, observation_id: str) -> list[str]:
+    return [r[0] for r in conn.execute(
+        "SELECT task_id FROM observation_tasks WHERE observation_id=? AND enabled=1 ORDER BY task_id",
+        (observation_id,))]
+
+
+def observed_runs(conn, observation_id: str):
+    return conn.execute(
+        "SELECT task_id, pid, log FROM observed_runs WHERE observation_id=? ORDER BY id",
+        (observation_id,)).fetchall()
+
+
+def stop_observation(conn, observation_id: str) -> None:
+    with conn:
+        conn.execute("UPDATE observations SET state='stopped' WHERE id=?",
+                     (observation_id,))
+
+
+def add_observation_tasks(conn, observation_id: str, task_ids: list[str]) -> None:
+    with conn:
+        conn.executemany(
+            "INSERT INTO observation_tasks(observation_id, task_id, enabled) VALUES (?, ?, 1) "
+            "ON CONFLICT(observation_id, task_id) DO UPDATE SET enabled=1",
+            [(observation_id, task_id) for task_id in task_ids])
+
+
+def remove_observation_tasks(conn, observation_id: str, task_ids: list[str]) -> None:
+    with conn:
+        conn.executemany(
+            "DELETE FROM observation_tasks WHERE observation_id=? AND task_id=?",
+            [(observation_id, task_id) for task_id in task_ids])
+
+
+def disable_task_observation(conn, task_id: str) -> None:
+    with conn:
+        conn.execute("UPDATE observation_tasks SET enabled=0 WHERE task_id=?",
+                     (task_id,))
+
+
+def touch_observation(conn, observation_id: str) -> bool:
+    timestamp = datetime.now(timezone.utc).isoformat()
+    with conn:
+        cursor = conn.execute(
+            "UPDATE observations SET last_seen_at=? WHERE id=? AND state='active'",
+            (timestamp, observation_id))
+    return cursor.rowcount == 1
+
+
+def matching_observation(conn, task_id: str, target: str, session_id: str,
+                         client: str, chat: str):
+    rows = conn.execute(
+        "SELECT o.* FROM observations o JOIN observation_tasks ot ON ot.observation_id=o.id "
+        "WHERE o.target=? AND o.session_id=? AND o.client=? AND o.chat=? "
+        "AND o.state='active' "
+        "AND ot.task_id=? AND ot.enabled=1 ORDER BY o.last_seen_at DESC, o.rowid DESC",
+        (target, session_id, client, chat, task_id)).fetchall()
+    return rows[0] if rows else None
+
+
+def session_observations(conn, task_id: str, target: str, session_id: str):
+    """Активные наблюдения сессии и проекта с признаком `task_enabled` задачи.
+
+    Порядок — тот, которым подсказка запуска выбирает наблюдение (SPEC
+    01M3XTFJCC5TG63FHW907GQM4D, требование 5): сначала те, где задача
+    включена, внутри — самая свежая связь, как у `matching_observation`.
+    """
+    return conn.execute(
+        "SELECT o.*, COALESCE(ot.enabled, 0) AS task_enabled FROM observations o "
+        "LEFT JOIN observation_tasks ot ON ot.observation_id=o.id AND ot.task_id=? "
+        "WHERE o.target=? AND o.session_id=? AND o.state='active' "
+        "ORDER BY task_enabled DESC, o.last_seen_at DESC, o.rowid DESC",
+        (task_id, target, session_id)).fetchall()
+
+
+def record_observed_run(conn, observation_id: str, task_id: str,
+                        pid: int, log: str) -> None:
+    with conn:
+        conn.execute("INSERT INTO observed_runs(observation_id, task_id, pid, log, started_at) "
+                     "VALUES (?, ?, ?, ?, ?)", (observation_id, task_id, pid, log, now()))
 
 
 class _AutoClosingConnection(sqlite3.Connection):
@@ -982,7 +1079,8 @@ def _ensure_canary_tables(conn) -> None:
         "  task_id TEXT, steps INTEGER, cost_usd REAL, review_iterations INTEGER,"
         "  escalations INTEGER, outcome TEXT, expected_escalation TEXT,"
         "  actual_escalation INTEGER, marker_mismatch INTEGER, created_at TEXT,"
-        "  main_sha TEXT, verdict TEXT, set_name TEXT, models_summary TEXT);"
+        "  main_sha TEXT, verdict TEXT, set_name TEXT, models_summary TEXT,"
+        "  acceptance_route TEXT, autogate_refusal TEXT);"
         "CREATE TABLE IF NOT EXISTS canary_baseline ("
         "  title TEXT, set_name TEXT, steps INTEGER, cost_usd REAL,"
         "  review_iterations INTEGER, updated_at TEXT,"
@@ -1007,6 +1105,8 @@ def _ensure_canary_tables(conn) -> None:
     # набора, но и модели за ним НА ТОТ прогон.
     add_column(conn, "canary_runs", "set_name", "TEXT")
     add_column(conn, "canary_runs", "models_summary", "TEXT")
+    add_column(conn, "canary_runs", "acceptance_route", "TEXT")
+    add_column(conn, "canary_runs", "autogate_refusal", "TEXT")
     # Строки, заведённые до этой задачи, принадлежат набору по умолчанию
     # (требование 7, AC-8): `NULL` означал бы «прогон ничьего набора», и
     # `green_canary_runs` — вход гейта сдвига пина — перестал бы их видеть.
@@ -1056,7 +1156,9 @@ def insert_canary_run(conn, run_stamp: str, title: str, task_id: str,
                       main_sha: str | None = None,
                       verdict: str | None = None,
                       set_name: str = config.CANARY_DEFAULT_SET,
-                      models_summary: str | None = None) -> None:
+                      models_summary: str | None = None,
+                      acceptance_route: str | None = None,
+                      autogate_refusal: str | None = None) -> None:
     """Строка метрик одной канареечной задачи одного прогона (SPEC
     01M1NEEWH5K1XPFRDGRMPYSBXJ, требование 5, AC-5) — читатель:
     `canary._run_one_task`.
@@ -1074,12 +1176,12 @@ def insert_canary_run(conn, run_stamp: str, title: str, task_id: str,
         "INSERT INTO canary_runs (run_stamp, title, task_id, steps, cost_usd,"
         " review_iterations, escalations, outcome, expected_escalation,"
         " actual_escalation, marker_mismatch, main_sha, verdict, set_name,"
-        " models_summary, created_at)"
-        " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        " models_summary, acceptance_route, autogate_refusal, created_at)"
+        " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
         (run_stamp, title, task_id, steps, cost_usd, review_iterations,
          escalations, outcome, expected_escalation, int(actual_escalation),
          int(marker_mismatch), main_sha, verdict, set_name, models_summary,
-         now()))
+         acceptance_route, autogate_refusal, now()))
     conn.commit()
 
 
