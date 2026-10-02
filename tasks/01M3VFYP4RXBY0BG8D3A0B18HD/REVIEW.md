@@ -2,107 +2,88 @@
 task: 01M3VFYP4RXBY0BG8D3A0B18HD
 type: review
 author_role: reviewer
-status: changes_requested
-iteration: 1
+status: approved
+iteration: 2
 schema_version: 5
 ---
 
 # REVIEW: Единый коммит результата роли через пульт для всех провайдеров
 
 ## Фаза A — план
-- Покрытие: таблица PLAN закрывает требования 1–7; шаги размера MR, не
-  микрооперации. Подход (журнал отказа в `_commit_worktree_change` +
-  сверка `pult_commit_failed_paths` в `fsm._dirty_refuses`) не вводит
-  второго механизма коммита — соответствует «Не входит».
-- Пробел плана: требование 4 («срабатывает требование 3») план покрывает
-  только шагом 1 (журнал). Пункт «задача не переходит из текущего
-  состояния» для test_author (`tests_writing`) не покрыт ни одним шагом —
-  «Влияние на систему» прямо перечисляет только переходы `spec_writing`,
-  `review`, `in_dev`. См. R1-F1.
-- «Влияние на систему» сходится с diff: тронуты ровно 6 путей зоны +
-  сгенерированная карта. Мелкое расхождение без последствий: PLAN говорит
-  о пяти вызывающих `_commit_worktree_change`, в diff их четыре
-  (`_wip_checkpoint`, `_test_author_checkpoint`, `commit_success_checkpoint`,
-  `commit_pull_checkpoint`).
+- В таблице покрытия требование 4 теперь закрыто двумя шагами: шагом 1 и
+  возвратом R1-F1, то есть блокировкой выхода из `tests_writing`. Пробел
+  итерации 1 закрыт.
+- «Влияние на систему» сходится с инкрементальным diff 857a79f9..b826fbbf.
+  Тронуты `orchestrator/fsm.py` (вынос `_uncommitted_step_result_refuses`
+  и второй вызов в начале `_tests_writing_ac_state`) и
+  `tests/test_role_commit_by_pult.py` (сторож); карта регенерирована. Оба
+  пути входят в зоны SPEC, `fsm_advance.py` не тронут. Путь отката
+  (revert b81eb8de и b826fbbf) указан.
+- Расхождение «пять/четыре вызывающих» PLAN признал в разделе возврата.
 
 ## Соответствие SPEC
 
 | Требование | Вердикт | Комментарий |
 |---|---|---|
-| 1 | OK | `role_prompt.py:99-104` — пункт 4 без «закоммить код», сообщение о коммите пультом; планка AC-1 зелёная |
-| 2 | OK | успешный путь не изменён; запись «код закоммичен пультом за роль» без «дефект»; AC-2 зелёный |
-| 3 | OK для developer | журнал `PULT_COMMIT_GIT_FAILED_ACTION` с операцией и текстом git (`checkpoint.py:1121-1131`), отката нет, `_dirty_refuses` раньше `_in_dev_plan_escalate`; «нечего коммитить» не журналируется |
-| 4 | реализовано не полностью | запись `TEST_AUTHOR_NOT_COMMITTED_ACTION` несёт операцию и текст git (`checkpoint.py:310-317`), файл остаётся — но переход из `tests_writing` не блокируется (R1-F1) |
-| 5 | OK | AC-5 зелёный; признак отказа снимается записью успеха (`_PULT_COMMIT_DONE_ACTIONS`), проверено мутацией |
-| 6 | OK | `docs/stack.md` раздел «Коммит результата шага: его делает пульт», `docs/operator-session.md` «Отказ git на коммите пульта» |
-| 7 | OK | приложение-диф извлечено из PLAN.md, `git apply --check` на HEAD 857a79f9 — rc=0 |
+| 1 | OK | без изменений с итерации 1, планка AC-1 зелёная |
+| 2 | OK | без изменений, AC-2 зелёный |
+| 3 | OK | текст и логика отказа перенесены в `fsm._uncommitted_step_result_refuses` дословно (сверено по diff), `_dirty_refuses` зовёт её на прежнем месте до сверки артефактного репозитория |
+| 4 | OK | запись test_author несёт операцию и текст git; выход из `tests_writing` для target `artel` отклоняется до подсчёта покрытия AC (`fsm.py:496-498`), `fsm_advance.tests_writing` на `None` возвращает False, задача остаётся на месте (`fsm_advance.py:359-363`) |
+| 5 | OK | AC-5 зелёный |
+| 6 | OK | без изменений |
+| 7 | OK | приложение-диф `git apply --check -v` на HEAD b826fbbf проходит |
 
 ## Замечания
 
-- major — `orchestrator/fsm_advance.py:340` (`tests_writing`), в связке с
-  `orchestrator/fsm.py:304` — требование 4 SPEC: «если git отказывает при
-  коммите собственных долгоживущих файлов задачи, срабатывает требование 3»,
-  а требование 3 включает «задача не переходит из текущего состояния».
-  Новая сверка `checkpoint.pult_commit_failed_paths` вызывается только из
-  `fsm._dirty_refuses`, а тот — только на `spec_writing` (`fsm_advance.py:158`),
-  `review` (`:264`), `in_dev` (`:542`); в `tests_writing` её нет
-  (`grep pult_commit_failed_paths orchestrator/` — единственный вызов
-  `fsm.py:304`). Сценарий поломки: test_author пишет долгоживущий
-  `tests/test_<id>_x.py` и приёмочные файлы планки, покрывающие все AC; хук
-  `pre-commit` (или занятый `index.lock`) отказывает коммиту пульта →
-  запись об отказе есть, но `advance` из `tests_writing` читает долгоживущие
-  файлы с КОДОВОЙ ветки (`_tests_writing_code_diff`), где файла нет,
-  трассируемость AC проходит по планке, и задача уходит в `in_dev` с
-  незакоммиченным долгоживущим файлом, не попавшим в перечень лока
-  (`_tests_writing_manifest_gate` по `long_lived_paths` из ветки). Дальше
-  этот файл либо закоммитит пульт за developer как обычный код (вне лока),
-  либо он останется посторонним. Если же AC покрыт только этим файлом —
-  отказ будет, но с вводящим в заблуждение текстом «не все критерии
-  покрыты», а не с отсылкой к отказу git — ровно тот класс дефекта
-  диагностики, который задача закрывает. Предложение: в `tests_writing`
-  для `config.DEFAULT_TARGET` до гейтов трассируемости вызвать ту же
-  сверку незакоммиченного результата (например, вынести из
-  `_dirty_refuses` часть с `pult_commit_failed_paths` в отдельную функцию
-  `fsm` и звать её и там; правка `fsm_advance.py` выходит за перечень зон
-  SPEC — если зону расширять нельзя, эскалировать Оператору с этим
-  вопросом); сторож — тест в `tests/test_role_commit_by_pult.py`:
-  отказ git у test_author → `advance` из `tests_writing` оставляет задачу
-  в `tests_writing` с отказом, называющим незакоммиченный результат шага.
+Новых замечаний нет. Исправление R1-F1 проверено:
+- `_tests_writing_ac_state` вызывается из одного места,
+  `fsm_advance.tests_writing:359` (проверено `grep -rn _tests_writing_ac_state orchestrator/`;
+  в `dry_run.py`, `amend.py` и `auto.py` есть только упоминания в
+  комментариях). Значит, новая проверка не задевает другие пути.
+- Перед ней стоит гейт `_tests_writing_code_diff`. Если он откажет раньше,
+  задача всё равно не перейдёт, поэтому требование 3 выполняется. Временная
+  мутация ниже показала, что в сценарии сторожа отказ приходит именно от
+  новой проверки, а не от гейта.
+- Для внешнего target стоит условие `store.task_target(...) ==
+  config.DEFAULT_TARGET`, поэтому внешний target проверку не проходит, как
+  и в `_dirty_refuses`.
+- В diff `tests/` ни один ассерт не удалён: единственная строка `-` —
+  заменённый импорт.
 
 ## Реестр замечаний
 
 | id | статус | файл/строка | суть | последствие | решение |
 |---|---|---|---|---|---|
-| R1-F1 | fixed | orchestrator/fsm_advance.py:340 (tests_writing); orchestrator/fsm.py:304 | после отказа git на коммите долгоживущих файлов test_author переход из `tests_writing` не блокируется — требование 4 → требование 3 («задача не переходит») не выполнено | задача уходит в `in_dev` с незакоммиченным долгоживущим файлом вне перечня лока, либо отказ с неверной причиной «не все критерии покрыты» | вызвать сверку `pult_commit_failed_paths` и в `tests_writing` (target `artel`), отказ с текстом о незакоммиченном результате шага; тест-сторож в `tests/test_role_commit_by_pult.py`; если правка `fsm_advance.py` вне допустимой зоны — эскалация Оператору; разработчик (b826fbbf): сверка вынесена в `fsm._uncommitted_step_result_refuses`, её зовут `_dirty_refuses` и начало `fsm._tests_writing_ac_state` (target `artel`), это вход выхода из `tests_writing`, `fsm_advance.py` не тронут; сторож — `TestsWritingBlockedAfterGitFailureTest`, проверен мутацией |
+| R1-F1 | accepted | orchestrator/fsm.py:496-498 (`_tests_writing_ac_state`); orchestrator/fsm.py:278 (`_uncommitted_step_result_refuses`) | после отказа git на коммите долгоживущих файлов test_author переход из `tests_writing` не блокировался | закрыто: выход из `tests_writing` (target `artel`) отклоняется с текстом «результат шага не закоммичен» и путём файла | принято: сверка вынесена в общую функцию и вызывается в начале `_tests_writing_ac_state`; сторож `TestsWritingBlockedAfterGitFailureTest` проверен временной мутацией (ревьювер воспроизвёл её сам) |
 
 ## Вердикт
-changes_requested — закрыть R1-F1 (блокировка перехода из `tests_writing`
-после отказа git на коммите пульта у test_author). Остальное соответствует
-SPEC: контракт миссии, журнал отказа git с операцией и текстом, сохранение
-worktree, отказ `advance` в `in_dev` с новым текстом, сохранение
-содержательной эскалации, документация, приложение-диф.
+approved. R1-F1 закрыт, новых blocker/major нет.
 
 ## Проверено исполнением
-- `timeout 580 python3 -m pytest -q tests/test_01m3vfyp4rxby0bg8d3a0b18hd_pult_commit.py tests/test_01m3vfyp4rxby0bg8d3a0b18hd_role_missions.py tests/test_role_commit_by_pult.py tasks/01M3VFYP4RXBY0BG8D3A0B18HD/acceptance_tests/ tests/test_timeout_checkpoint.py tests/test_checkpoint_zone_filter.py tests/test_step_autocommit.py tests/test_role_prompt_test_author_mission.py tests/test_advance_guard.py tests/test_git_fixation.py`
-  — 119 passed, 8 subtests passed.
-- Приложение-диф извлечено из блока ```diff PLAN.md, `git apply --check -v`
-  на HEAD 857a79f9 — rc=0 («Checking patch skills/coding-standards.md…»,
-  «…skills/conventions-core.md…»).
-- Временная мутация 1: в `pult_commit_failed_paths` убран зонный фильтр —
-  `tests/test_role_commit_by_pult.py::test_stray_paths_outside_zones_do_not_count`
-  красный (1 failed, 4 passed); код возвращён `git checkout`.
-- Временная мутация 2: `if failed_at <= done_at` → `if failed_at == 0`
-  (успех не снимает отказ) — `test_later_pult_commit_clears_failure`
-  красный (1 failed, 8 passed вместе с долгоживущим pult_commit); код
-  возвращён, `git status orchestrator/` чист.
-- `grep -rn pult_commit_failed_paths orchestrator/ scripts/` — единственный
-  вызов вне checkpoint.py: `fsm.py:304`; `grep _dirty_refuses
-  orchestrator/fsm_advance.py` — строки 158/264/542, в `tests_writing`
-  (340) нет — основание R1-F1.
+- `timeout 580 python3 -m pytest -q -p no:cacheprovider tests/test_01m3vfyp4rxby0bg8d3a0b18hd_pult_commit.py tests/test_01m3vfyp4rxby0bg8d3a0b18hd_role_missions.py tests/test_role_commit_by_pult.py tasks/01M3VFYP4RXBY0BG8D3A0B18HD/acceptance_tests/ tests/test_acceptance_tests_flow.py tests/test_long_lived_transitions.py tests/test_long_lived_step_end_to_end.py tests/test_advance_guard.py tests/test_multitarget.py`
+  — 164 passed, 41 subtests passed.
+- `timeout 580 python3 -m pytest -q tests/test_fsm_advance_tests_writing_*.py tests/test_fsm_advance_gate_smoke.py tests/test_long_lived_manifest.py tests/test_git_fixation.py`
+  — 79 passed, 7 subtests passed.
+- Временная мутация: в `_tests_writing_ac_state` условие заменено на
+  `if (False and _uncommitted_step_result_refuses(...))`. Результат
+  `tests/test_role_commit_by_pult.py`: 1 failed
+  (`TestsWritingBlockedAfterGitFailureTest::test_tests_writing_advance_refuses_uncommitted_long_lived_file`),
+  5 passed. Код возвращён `git checkout orchestrator/fsm.py`, после чего
+  `git status --short orchestrator/` пуст.
+- Приложение-диф извлечено из блока ```diff в PLAN.md. `git apply --check -v`
+  на HEAD b826fbbf вывел «Checking patch skills/coding-standards.md...» и
+  «Checking patch skills/conventions-core.md...» без ошибок.
+- `python3 scripts/codebase_map.py` дал расхождение с закоммиченной картой
+  (без учёта `built_at_sha`), равное нулю: карта свежая. Регенерация
+  откачена `git checkout`.
+- `git diff 857a79f9 HEAD -- tests/ | grep '^-'` — удалена одна строка, это
+  старый импорт; ассерты не удалены и не ослаблены.
 
 ## Предложения системе
-- `checkpoint._stray_staged_paths` и новый `pult_commit_failed_paths`
-  разбирают вывод git без `-z`/`core.quotePath=false`: путь с не-ASCII
-  символами придёт в кавычках с октальными escape и не совпадёт с зоной
-  (сверка молча fail-open). Класс общий для разборов вывода git в
-  `checkpoint.py` — стоит выровнять отдельной задачей.
+- Повтор из итерации 1, в задаче не исправлен: `checkpoint._stray_staged_paths`
+  и `pult_commit_failed_paths` разбирают вывод git без `-z` и без
+  `core.quotePath=false`. Путь с не-ASCII символами при такой сверке
+  пропускается молча (fail-open). Стоит завести отдельную задачу.
+- В shell роли нет `ls`, а составные команды с `$?` отклоняются
+  («simple_expansion»). Из-за этого проверку приложения пришлось разбить на
+  несколько вызовов. То же неудобство отметил разработчик в PLAN.
