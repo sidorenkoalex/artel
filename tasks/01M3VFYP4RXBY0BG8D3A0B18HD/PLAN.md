@@ -101,6 +101,42 @@ schema_version: 5
   `test_fsm_merge_conflict_note`: 99 passed.
 - Приложение-диф повторно проверено `git apply --check` на 857a79f9 — OK.
 
+### Возврат: ревью итерации 1 (R1-F1)
+- Сверка незакоммиченного результата шага вынесена из `_dirty_refuses`
+  в `fsm._uncommitted_step_result_refuses(conn, task_id)`. `_dirty_refuses`
+  зовёт её как раньше. Вторая точка вызова — начало
+  `fsm._tests_writing_ac_state`, только для target `artel`
+  (`store.task_target`). Это первая проверка выхода из `tests_writing`
+  в `fsm.py`. Отказ возвращает `None`, и `fsm_advance.tests_writing`
+  оставляет задачу на месте до гейтов трассируемости. Так требование 4
+  («срабатывает требование 3», задача не переходит) выполняется и для
+  test_author.
+- Почему в `_tests_writing_ac_state`, а не новым вызовом в
+  `fsm_advance.tests_writing`: `fsm_advance.py` не входит в зоны SPEC, и
+  гейт зон отказал бы на `in_dev -> review`. Привязка к этой функции не
+  случайна. Она считает покрытие AC по долгоживущим файлам с кодовой
+  ветки (`long_lived_sources`), а после отказа git этих файлов на ветке
+  нет. Считать покрытие в таком состоянии нельзя: задача либо уйдёт мимо
+  лока, либо получит отказ с ложной причиной «не все критерии покрыты».
+  Других вызывающих у функции нет (`grep _tests_writing_ac_state(`).
+- Сторож: `tests/test_role_commit_by_pult.py::TestsWritingBlockedAfterGitFailureTest`.
+  Хук `pre-commit` отказывает коммиту долгоживущего файла test_author,
+  затем хук снимается, и `advance` из `tests_writing` должен оставить
+  задачу в `tests_writing` с отказом «результат шага не закоммичен», где
+  назван путь файла. Проверен временной мутацией (вызов в
+  `_tests_writing_ac_state` отключён): тест красный (1 failed, 5 passed),
+  код возвращён.
+- Карта регенерирована, коммит b826fbbf.
+- Прогоны (передний план, `-p timeout -o timeout=120`):
+  долгоживущие файлы задачи, `test_role_commit_by_pult`, приёмочные
+  задачи, `test_acceptance_tests_flow`, `test_long_lived_step_end_to_end`,
+  `test_long_lived_transitions`, `test_id_format_guard`,
+  `test_advance_guard`, `test_git_fixation`: 167 passed;
+  `test_fsm_advance_tests_writing_*` (3), `test_fsm_advance_gate_smoke`,
+  `test_long_lived_manifest`, `test_multitarget`: 89 passed.
+- Попутно: вызывающих `_commit_worktree_change` четыре, а не пять, как
+  было написано в шаге «Подход» (замечание фазы A ревью).
+
 ## Покрытие требований
 
 | Требование | Шаг |
@@ -108,7 +144,7 @@ schema_version: 5
 | 1 | 3 |
 | 2 | 1 (успешный путь не меняется, тест AC-2 зелёный) |
 | 3 | 1, 2 |
-| 4 | 1 |
+| 4 | 1; возврат R1-F1 (блокировка выхода из `tests_writing`) |
 | 5 | 2 (порядок `_dirty_refuses` → эскалация), тест AC-5 |
 | 6 | 4 |
 | 7 | 6 |
@@ -123,11 +159,14 @@ schema_version: 5
 - `fsm._dirty_refuses` вызывается на трёх переходах: `spec_writing`,
   `review`, `in_dev`. Новая сверка срабатывает только при свежей записи
   отказа git, без неё это прежняя сверка. Гейт ничего не ослабляет, он
-  добавляет отказ.
+  добавляет отказ. Та же сверка
+  (`_uncommitted_step_result_refuses`) стоит и на выходе из
+  `tests_writing`, в начале `_tests_writing_ac_state`. Без свежей записи
+  отказа git она возвращает «нет отказа», и прежний путь не меняется.
 - Новый отказ снимается сам, когда пульт успешно закоммитил код или
   worktree по зонам чист. Залипания нет; это проверяет тест
   `test_later_pult_commit_clears_failure`.
-- Откат — revert коммита b81eb8de.
+- Откат — revert коммитов b81eb8de и b826fbbf.
 
 ## Риски
 - Если git не ответил на `status` worktree при свежей записи отказа,
