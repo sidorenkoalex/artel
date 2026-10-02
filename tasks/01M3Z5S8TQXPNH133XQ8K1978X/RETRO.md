@@ -1,0 +1,23 @@
+---
+operator: Alexander Sidorenko
+model: unknown
+artel_sha: a690480167271ef4d381656bc3e2497609933e06
+---
+
+# RETRO: 01M3Z5S8TQXPNH133XQ8K1978X — Допуск набора сверяет роли вне набора с боевыми моделями
+
+Итог: done, sha a690480167271ef4d381656bc3e2497609933e06
+Адрес артефактов: refs/artifacts/01M3Z5S8TQXPNH133XQ8K1978X
+Суть: Допуск набора сверяет роли вне набора с боевыми моделями — `orchestrator/models.py::set_admitted` (строки 1239–1274 на пине a6904801) засчитывает набору зелёный прогон канарейки на шаблоне класса `трудный`, если сводка моделей прогона (`summary_models`, строка 1080) совпадает с набором только по ролям набора (строка 1270); модели остальных ролей не сверяются.
+
+Стоимость итого: $3.77
+  analyst: $0.75, токенов 650108 (input=18, output=5576, cache_write=65548, cache_read=578966), провайдер claude, модель claude-opus-5-5
+  test_author: $1.91, токенов 3020811 (input=78, output=27072, cache_write=98207, cache_read=2895454), провайдер claude, модель claude-opus-5-5
+  developer: $0.54, токенов 1651749 (input=77601, output=6788, cache_write=0, cache_read=1567360), провайдер codex, модель gpt-6-sol
+  reviewer: $0.57, токенов 584700 (input=24, output=6004, cache_write=43233, cache_read=535439), провайдер claude, модель claude-opus-5-5
+
+Ревью: 0 итераций; приёмка: 0 отказ(ов)
+
+Эскалации: нет
+
+Приёмочные тесты: 1 тест(ов), 0 manual, 0 skip
