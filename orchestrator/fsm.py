@@ -20,7 +20,7 @@ from pathlib import Path
 from scripts import guard
 
 from . import (acceptance, artifact_source, artifacts, budget, ci, config,
-              fixation, github_adapter, gitcmd, lease, pull, repo_context,
+              cycle_hint, fixation, github_adapter, gitcmd, lease, pull, repo_context,
               review, store, targets, workspace, yamlmini)
 from .pull import _merge_conflict_note
 
@@ -848,12 +848,14 @@ def _approve_spec_gate(conn, task_id: str, t, state: str, sid: str) -> None:
         store.set_state(conn, task_id, "in_dev", "operator",
                         expected_state=state, detail=detail)
         _maybe_ensure_draft_mr(conn, task_id)
-        print(f"  дальше: artel.py run {task_id}  (запуск разработчика)")
+        print("  дальше: " + cycle_hint.launch_text(
+            conn, task_id, "run", "(запуск разработчика)"))
     else:
         store.set_state(conn, task_id, "tests_writing", "operator",
                         expected_state=state,
                         detail="гейт SPEC пройден — приёмочные тесты до кода")
-        print(f"  дальше: artel.py run {task_id}  (запуск test_author)")
+        print("  дальше: " + cycle_hint.launch_text(
+            conn, task_id, "run", "(запуск test_author)"))
 
 
 def _acceptance_full_suite_ok(conn, task_id: str, t,
@@ -1002,7 +1004,7 @@ def _approve_escalated(conn, task_id: str, t, state: str, sid: str) -> None:
                     expected_state=state, detail="эскалация разрешена, продолжаем")
     if back == "in_dev":
         _maybe_ensure_draft_mr(conn, task_id)
-    print(f"  дальше: artel.py run {task_id}")
+    print("  дальше: " + cycle_hint.launch_text(conn, task_id, "run"))
 
 
 def _cmd_approve(conn, task_id: str, sha: str | None, sid: str,
@@ -1102,7 +1104,8 @@ def _cmd_reject(conn, task_id: str, reason: str) -> None:
         store.set_state(conn, task_id, "spec_writing", "operator",
                         expected_state=state,
                         detail=f"возврат из spec_gate: {reason}")
-        print(f"  дальше: artel.py auto {task_id}  (аналитик перепишет SPEC)")
+        print("  дальше: " + cycle_hint.launch_text(
+            conn, task_id, "auto", "(аналитик перепишет SPEC)"))
         return
     if state != "acceptance":
         sys.exit(f"[{task_id}] reject применим только в acceptance, "
