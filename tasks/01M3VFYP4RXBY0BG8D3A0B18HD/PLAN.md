@@ -83,6 +83,24 @@ schema_version: 5
 - приёмочный `DocsDescribePultCommitTest` (AC-6): 2 passed. AC-7 читает
   PLAN.md из артефактной ветки, поэтому зеленеет после автокоммита шага.
 
+### Возврат: конфликт подтяжки main (ANSWER-1)
+- `git merge origin/main` (локальный `main` отставал — на нём
+  `cycle_hint` ещё не было, конфликт воспроизводился только с
+  `origin/main` 22662494). Конфликт `orchestrator/fsm.py` — только список
+  `from . import (...)`: объединены `checkpoint` (ветка) и `cycle_hint`
+  (main), алфавитный порядок, остальной код обеих сторон без изменений.
+- `docs/codebase-map.md` взят из main и перегенерирован
+  `python3 scripts/codebase_map.py`. Merge-коммит 857a79f9.
+- Прогоны после подтяжки (передний план, `-p timeout -o timeout=120`):
+  долгоживущие файлы задачи + `test_role_commit_by_pult` +
+  `test_timeout_checkpoint`, `test_checkpoint_zone_filter`,
+  `test_long_lived_step_end_to_end`, `test_step_autocommit`,
+  `test_agent_prompt`, `test_role_prompt_test_author_mission`: 82 passed;
+  `test_git_fixation`, `test_advance_guard`, `test_fsm_advance_gate_smoke`,
+  `test_stack_*` (3), `test_pull`, `test_long_lived_transitions`,
+  `test_fsm_merge_conflict_note`: 99 passed.
+- Приложение-диф повторно проверено `git apply --check` на 857a79f9 — OK.
+
 ## Покрытие требований
 
 | Требование | Шаг |
