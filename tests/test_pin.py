@@ -22,7 +22,7 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from orchestrator import config, gitcmd, pin, store  # noqa: E402
+from orchestrator import ci, config, gitcmd, pin, store  # noqa: E402
 from tests.sandbox import (ConnRealGitSandbox, RealGitSandbox,  # noqa: E402
                            SyncedOriginConnSandbox)
 
@@ -137,7 +137,13 @@ class PinUpdateGateAfterFetchTest(RealGitSandbox):
             ["git", "-C", clone_tmp, "rev-parse", "HEAD"],
             capture_output=True, text=True, check=True).stdout.strip()
 
-        pin.cmd_pin_update(new_sha)
+        # Зелёный CI коммита — второе условие `pin-update` (SPEC
+        # 01M3SF7DPFGEZ7VYEGGXGTX49E, AC-2); предмет этого теста — порядок
+        # гейта канарейки и `fetch`, поэтому CI подставлен зелёным.
+        green = ci.MainLineStatus(ci.MAIN_GREEN, new_sha, [], [], "",
+                                  "CI main зелёный")
+        with mock.patch.object(ci, "main_line_status", return_value=green):
+            pin.cmd_pin_update(new_sha)
 
         self.assertEqual(self.git("rev-parse", "HEAD").strip(), new_sha)
 

@@ -196,7 +196,8 @@ class OuterCycleDeadlineTest(MergeGateCiWaitUnitTest):
         bodies = [("wait", "task/t001-zadacha"), ("done",)]
         mutex_held = {"value": False}
 
-        def fake_body(conn, task_id, state, t, confirmed_ci_note=None):
+        def fake_body(conn, task_id, state, t, confirmed_ci_note=None,
+                      fixes_main=None):
             self.assertTrue(
                 mutex_held["value"],
                 "тело гейта обязано звать под уже взятым мьютексом")
@@ -234,7 +235,8 @@ class OuterCycleDeadlineTest(MergeGateCiWaitUnitTest):
                     ("wait", "task/t001-zadacha"),
                     ("done",)]
 
-        def fake_body(conn, task_id, state, t, confirmed_ci_note=None):
+        def fake_body(conn, task_id, state, t, confirmed_ci_note=None,
+                      fixes_main=None):
             return outcomes.pop(0)
 
         starts = []

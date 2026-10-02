@@ -741,7 +741,8 @@ def confirm_fixation(conn, task_id: str, sha: str | None) -> bool:
 
 def cmd_approve(task_id: str, sha: str | None = None,
                session_id: str | None = None,
-               accept_red: str | None = None) -> None:
+               accept_red: str | None = None,
+               fixes_main: str | None = None) -> None:
     """Берёт lease задачи перед работой (SPEC T044, требование 2).
 
     Префикс -> полный id (SPEC T094, требование 3, AC-3) резолвится ЗДЕСЬ,
@@ -752,12 +753,18 @@ def cmd_approve(task_id: str, sha: str | None = None,
     принятие не-зелёного полного набора tests/ на приёмке. `None` (флага
     нет) — не-зелёный набор отказывает приёмке; сам флаг разбирает
     диспетчер (`orchestrator/artel.py`), здесь он только доезжает до
-    обработчика состояния `acceptance`."""
+    обработчика состояния `acceptance`.
+
+    `fixes_main` (SPEC 01M3SF7DPFGEZ7VYEGGXGTX49E, AC-5) — основание флага
+    `approve <id> <sha> --fixes-main "<основание>"`: снимает сверку
+    красного CI main на гейте мержа для этой задачи и этого вызова;
+    доезжает только до обработчика `merge_gate`."""
     conn = store.db()
     task_id = store.resolve_task_id(conn, task_id)
     lease.run_locked(
         conn, task_id, session_id,
-        lambda sid: _cmd_approve(conn, task_id, sha, sid, accept_red))
+        lambda sid: _cmd_approve(conn, task_id, sha, sid, accept_red,
+                                 fixes_main))
 
 
 def _spawn_division_subtasks(conn, task_id: str, t, state: str,
@@ -1002,7 +1009,8 @@ def _approve_acceptance(conn, task_id: str, t, state: str, sid: str,
     print(f"  дальше: artel.py approve {task_id}{sha_hint}  (выполнит merge)")
 
 
-def _approve_merge_gate(conn, task_id: str, t, state: str, sid: str) -> None:
+def _approve_merge_gate(conn, task_id: str, t, state: str, sid: str,
+                        fixes_main: str | None = None) -> None:
     # Мьютекс merge-окна (SPEC T053, требования 1-3): один держатель
     # на весь пульт, не на задачу — вторая сессия, вызвавшая approve
     # из merge_gate, пока мьютекс занят, получает немедленный
@@ -1013,8 +1021,8 @@ def _approve_merge_gate(conn, task_id: str, t, state: str, sid: str) -> None:
     # берёт/отпускает мьютекс сама вокруг каждого захода в тело гейта,
     # а не единым `merge_lock.run_window` на весь вызов.
     from . import fsm_merge_gate
-    fsm_merge_gate._cmd_approve_merge_gate_cycle(conn, task_id, sid, t,
-                                                  state)
+    fsm_merge_gate._cmd_approve_merge_gate_cycle(
+        conn, task_id, sid, t, state, fixes_main=fixes_main)
 
 
 def _approve_escalated(conn, task_id: str, t, state: str, sid: str) -> None:
@@ -1055,7 +1063,8 @@ def _approve_escalated(conn, task_id: str, t, state: str, sid: str) -> None:
 
 
 def _cmd_approve(conn, task_id: str, sha: str | None, sid: str,
-                accept_red: str | None = None) -> None:
+                accept_red: str | None = None,
+                fixes_main: str | None = None) -> None:
     t = store.get_task(conn, task_id)
     state = t["state"]
     if state in APPROVE_NEEDS_SHA and not confirm_fixation(conn, task_id, sha):
@@ -1069,11 +1078,12 @@ def _cmd_approve(conn, task_id: str, sha: str | None, sid: str,
     # 01M3FQ3JVC3DGGM33XCX8TC7ME, требование 8) — связывается с ним
     # `partial`, а не шестым параметром во всех четырёх обработчиках:
     # сигнатура «(conn, task_id, t, state, sid)» остаётся общей для
-    # таблицы.
+    # таблицы. Тем же приёмом `fixes_main` (SPEC
+    # 01M3SF7DPFGEZ7VYEGGXGTX49E, AC-5) — только для `merge_gate`.
     handler = {
         "spec_gate": _approve_spec_gate,
         "acceptance": partial(_approve_acceptance, accept_red=accept_red),
-        "merge_gate": _approve_merge_gate,
+        "merge_gate": partial(_approve_merge_gate, fixes_main=fixes_main),
         "escalated": _approve_escalated,
     }.get(state)
     if handler is None:
