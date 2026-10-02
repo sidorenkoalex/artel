@@ -1,0 +1,23 @@
+---
+operator: Alexander Sidorenko
+model: unknown
+artel_sha: 7f55c29abdb91a21030b90bcb3e6dd3332486d3d
+---
+
+# RETRO: 01M3XR84299TD6V6E16D2PNXH4 — Правило о тестовых методах в tests/ и счёт его срабатываний
+
+Итог: done, sha 7f55c29abdb91a21030b90bcb3e6dd3332486d3d
+Адрес артефактов: refs/artifacts/01M3XR84299TD6V6E16D2PNXH4
+Суть: Правило о тестовых методах в tests/ и счёт его срабатываний — Гейт неослабления тестов (инвариант 38, с 27.09) отказывает переходу `in_dev → verifying`, если из `tests/` пропал тестовый метод, а мандат на это команда `answer` принимает только в `escalated`.
+
+Стоимость итого: $5.69
+  analyst: $1.03, токенов 1081785 (input=28, output=10810, cache_write=76508, cache_read=994439), провайдер claude, модель claude-opus-5-5
+  test_author: $2.20, токенов 2727545 (input=68, output=41914, cache_write=106256, cache_read=2579307), провайдер claude, модель claude-opus-5-5
+  developer: $1.73, токенов 2601089 (input=54, output=20819, cache_write=102704, cache_read=2477512), провайдер claude, модель claude-opus-5-5
+  reviewer: $0.73, токенов 889485 (input=32, output=7859, cache_write=50276, cache_read=831318), провайдер claude, модель claude-opus-5-5
+
+Ревью: 0 итераций; приёмка: 0 отказ(ов)
+
+Эскалации: нет
+
+Приёмочные тесты: 2 тест(ов), 0 manual, 0 skip
