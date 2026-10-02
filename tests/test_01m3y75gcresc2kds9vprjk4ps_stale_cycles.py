@@ -97,7 +97,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from unittest import mock
 
-from orchestrator import config, doctor, liveness, pin, store
+from orchestrator import ci, config, doctor, liveness, pin, store
 from tests.sandbox import RealGitSandbox, TmpRootTest, _dead_pid
 
 GAP_SEC = 1.5
@@ -216,6 +216,14 @@ class _PinUpdateSandbox(_CyclesMixin, RealGitSandbox):
             outcome="killed", expected_escalation=None,
             actual_escalation=False, marker_mismatch=False,
             main_sha=self.target, verdict="green")
+        # Зелёный CI коммита — второе условие `pin-update` (SPEC
+        # 01M3SF7DPFGEZ7VYEGGXGTX49E, AC-2), та же идиома, что в
+        # `tests/test_pin.py`; предмет этих тестов — отчёт о живых циклах.
+        green = ci.MainLineStatus(ci.MAIN_GREEN, self.target, [], [], "",
+                                  "CI main зелёный")
+        patcher = mock.patch.object(ci, "main_line_status", return_value=green)
+        patcher.start()
+        self.addCleanup(patcher.stop)
 
     def last_step_id(self) -> int:
         row = self.conn.execute("SELECT MAX(id) FROM steps").fetchone()
