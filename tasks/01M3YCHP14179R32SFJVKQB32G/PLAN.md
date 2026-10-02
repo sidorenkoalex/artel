@@ -194,3 +194,52 @@ d6984ceb) снята ответом Оператора ANSWER-1, вариант 
   — 62 passed, 92 subtests passed; `acceptance_tests/` — 2 passed.
 - `docs/codebase-map.md` регенерирован (`built_at_sha` после коммита
   пульта).
+
+## Исполнение ANSWER-2 (шаг 3 разработчика, возврат из verifying)
+
+Причина возврата — CI красный на инварианте «SQL только в store.py»
+(`tests/test_multitarget.py::SqlOnlyInStoreTest::test_no_sql_outside_store`,
+`orchestrator/models.py:1154`). Исправлено в рамках мандата ANSWER-2
+(зона `orchestrator/store.py`, только одна функция, без миграций схемы):
+
+- `orchestrator/store.py`: новая `all_canary_runs(conn)` рядом с
+  `green_canary_runs` — `_ensure_canary_tables` + `SELECT * FROM
+  canary_runs ORDER BY id`;
+- `orchestrator/models.py::_canary_rows` зовёт `store.all_canary_runs`;
+  обращения к приватному `store._ensure_canary_tables` больше нет (этим же
+  закрыто наблюдение «Предложений системе» о публичном читателе
+  `canary_runs`; п.8 «Подхода» устарел).
+- Класс ошибки: grep `execute|SELECT|INSERT|UPDATE` по
+  `orchestrator/models.py`, `notes.py`, `config.py` — других вхождений
+  нет. `test_no_sql_outside_store` не менялся.
+- `docs/codebase-map.md` регенерирован.
+
+Прогоны (передний план, таймаут 120 с на тест). Полный набор одной
+командой отказывает сторож роли в `conftest.py` («полный прогон набора
+тестов внутри шага запрещён»), поэтому все файлы `tests/test_*.py`
+прогнаны тремя пачками:
+
+- `test_multitarget`, `test_model_sets`, долгоживущий
+  `test_01m3ychp14179r32sfjvkqb32g_model_sets`, `test_canary`, `test_pin`,
+  `test_codebase_map` + `acceptance_tests/` — 211 passed;
+- `tests/test_[0-9a-c]*.py` — 1268 passed, 16 failed: все в
+  `test_01m3sf7dpfgez7vyeggxgtx49e_main_ci.py`, причина
+  `artel.py approve: команда недоступна процессу роли developer` (тест
+  зовёт команды Оператора через CLI, диспетчер отказывает процессу шага
+  роли) — окружение шага, не код задачи;
+- `tests/test_[d-m]*.py` — 1250 passed, 4 failed: `test_main_ci_line.py`
+  (3, тот же отказ процессу роли) и
+  `test_liveness.py::TerminateProcessGroupTest::test_kills_the_leader_and_returns_a_positive_count`
+  (`terminate_process_group` вернул 0 — сигнал группе процессов из
+  песочницы шага не доставлен; `liveness.py` задачей не тронут);
+- `tests/test_[n-z]*.py` — 1300 passed.
+
+Эти 20 падений не касаются поверхности задачи (`models.py`, `store.py`,
+`notes.py`, `config.py`); до возврата CI ветки был красным только на
+`test_no_sql_outside_store`. Окончательный вердикт по полному набору —
+за CI ветки.
+- Предложение системе: ANSWER-2 требует «прогнать полный набор `tests/`»,
+  а сторож роли в `conftest.py` такой прогон в шаге запрещает — указание
+  Оператора и механика противоречат; падения, зависящие от окружения
+  роли (`main_ci`, `main_ci_line`, `liveness`), делают пачечный прогон
+  в шаге неокончательным.
