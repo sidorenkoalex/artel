@@ -1,5 +1,5 @@
 ---
-built_at_sha: 8e44ec703c84199af2b0612beb2f011c537a0531
+built_at_sha: f7128cae43be5026dfba8a66658871ae8e77d03e
 ---
 
 # Codebase-map пульта
@@ -402,7 +402,7 @@ built_at_sha: 8e44ec703c84199af2b0612beb2f011c537a0531
 
 **Импортирует:** `orchestrator/config.py`, `orchestrator/gitcmd.py`, `scripts/ci_push_class.py`
 
-**Импортируется:** `orchestrator/acceptance.py`, `orchestrator/auto.py`, `orchestrator/ci_rerun.py`, `orchestrator/doctor/__init__.py`, `orchestrator/fsm.py`, `orchestrator/fsm_advance.py`, `orchestrator/fsm_autogate.py`, `orchestrator/fsm_merge_gate.py`, `orchestrator/github_adapter.py`, `orchestrator/pin.py`, `orchestrator/watch.py`, `tests/test_01m3rwa2786hcac8pt3xsbkqt4_autogate.py`, `tests/test_01m3xtf1cebxt4j7p0ekg5j342_plan_escalation_marker.py`, `tests/test_acceptance.py`, `tests/test_auto_cycle.py`, `tests/test_ci_rerun_command.py`, `tests/test_ci_status.py`, `tests/test_ci_status_kind_gate.py`, `tests/test_doctor_artifact_branch_ci.py`, `tests/test_fsm_autogate.py`, `tests/test_fsm_merge_gate_done_snapshot.py`, `tests/test_invariants.py`, `tests/test_long_lived_transitions.py`, `tests/test_main_ci_line.py`, `tests/test_merge_gate_ci_wait.py`, `tests/test_pin.py`, `tests/test_plan_appendix.py`, `tests/test_pull_conflict_marker_states.py`, `tests/test_verifying_ceiling.py`
+**Импортируется:** `orchestrator/acceptance.py`, `orchestrator/auto.py`, `orchestrator/ci_rerun.py`, `orchestrator/doctor/__init__.py`, `orchestrator/fsm.py`, `orchestrator/fsm_advance.py`, `orchestrator/fsm_autogate.py`, `orchestrator/fsm_merge_gate.py`, `orchestrator/github_adapter.py`, `orchestrator/pin.py`, `orchestrator/watch.py`, `tests/test_01m3rwa2786hcac8pt3xsbkqt4_autogate.py`, `tests/test_01m3xtf1cebxt4j7p0ekg5j342_plan_escalation_marker.py`, `tests/test_01m3y75gcresc2kds9vprjk4ps_stale_cycles.py`, `tests/test_acceptance.py`, `tests/test_auto_cycle.py`, `tests/test_ci_rerun_command.py`, `tests/test_ci_status.py`, `tests/test_ci_status_kind_gate.py`, `tests/test_doctor_artifact_branch_ci.py`, `tests/test_fsm_autogate.py`, `tests/test_fsm_merge_gate_done_snapshot.py`, `tests/test_invariants.py`, `tests/test_long_lived_transitions.py`, `tests/test_main_ci_line.py`, `tests/test_merge_gate_ci_wait.py`, `tests/test_pin.py`, `tests/test_plan_appendix.py`, `tests/test_pull_conflict_marker_states.py`, `tests/test_verifying_ceiling.py`
 
 ## orchestrator/ci_rerun.py
 
@@ -2040,7 +2040,7 @@ built_at_sha: 8e44ec703c84199af2b0612beb2f011c537a0531
 
 **Публичные функции:** (нет)
 
-**Импортирует:** `orchestrator/config.py`, `orchestrator/liveness.py`, `orchestrator/pin.py`, `orchestrator/store.py`, `tests/sandbox.py`
+**Импортирует:** `orchestrator/ci.py`, `orchestrator/config.py`, `orchestrator/liveness.py`, `orchestrator/pin.py`, `orchestrator/store.py`, `tests/sandbox.py`
 
 **Импортируется:** —
 
