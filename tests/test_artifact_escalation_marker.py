@@ -6,7 +6,11 @@
 эскалация ревьювера `fsm_advance._review_escalate` (SPEC
 01M31JWD10728N5YGWVQGWYACW, требование 1): случай, который SPEC
 01M2XFSJ1Z7BS6HR69SAT1D81Y счёл невоспроизводимым, а инциденты 20.09 и
-21.09 воспроизвели.
+21.09 воспроизвели. Пятая — эскалация разработчика
+`fsm_advance._in_dev_plan_escalate` (SPEC 01M3XTF1CEBXT4J7P0EKG5J342):
+запись признака и сквозной сценарий `auto` кроет долгоживущий файл
+задачи `tests/test_01m3xtf1cebxt4j7p0ekg5j342_plan_escalation_marker.py`,
+здесь — гейт рубежа `in_dev` на собранном руками журнале.
 
 Сквозной сценарий инцидента 13.09 через цикл `auto` кроет планка задачи
 (`tasks/01M2XFSJ1Z7BS6HR69SAT1D81Y/acceptance_tests/`); здесь — обе
@@ -185,6 +189,38 @@ class RoleStepAnchorAfterTheMarkerTest(SchemaConnTmpRootTest):
         ran, _detail = self._since_entry("tests_writing", "test_author")
 
         self.assertFalse(ran)
+
+    def test_marked_developer_escalation_holds_the_in_dev_pre_advance(self):
+        """Пятая точка (SPEC 01M3XTF1CEBXT4J7P0EKG5J342): developer
+        отработал до эскалации через `PLAN.md`, Оператор вернул задачу в
+        `in_dev` — гейт рубежа `auto._rework_gate_blocks` держит
+        пред-advance до шага developer и пишет отказ в журнал; после шага
+        developer — пропускает. Сквозной сценарий цикла `auto` кроет
+        долгоживущий файл задачи; здесь — сам гейт на журнале, собранном
+        руками.
+
+        Ловит мутацию: `in_dev` исключён из `auto._REWORK_GATE_STATES` —
+        гейт не спрашивает рубеж для `in_dev` и пропускает пред-advance
+        по прежнему PLAN.md до шага developer (первый `assertTrue`
+        покраснеет).
+        """
+        self._journal("fsm", "state -> in_dev", FIRST_ENTRY_DETAIL)
+        self._journal("developer", "agent run finished", "rc=0")
+        self._escalate_by_artifact("эскалация от разработчика")
+        self._journal("operator", "state -> in_dev", RETURN_DETAIL)
+
+        blocked = auto._rework_gate_blocks(self.conn, TASK_ID, "in_dev",
+                                           "developer")
+
+        self.assertTrue(blocked, "пред-advance после отвеченной эскалации "
+                        "разработчика не удержан до шага developer")
+        self.assertIn(auto.REWORK_REFUSAL_ACTION,
+                      [r["action"] for r in store.task_steps(self.conn, TASK_ID)])
+
+        self._journal("developer", "agent run finished", "rc=0")
+
+        self.assertFalse(auto._rework_gate_blocks(self.conn, TASK_ID, "in_dev",
+                                                  "developer"))
 
 
 # ---------------------------------------------------------------- запись
