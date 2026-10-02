@@ -13,21 +13,21 @@
 merge_gate больше не отказывает по ОДНОМУ опросу `ci.branch_status`, а
 ждёт циклом `_wait_for_branch_ci_green` (как и путь "pulled") до истечения
 `config.MERGE_GATE_CI_WAIT_CEILING_SEC` — `time.sleep`/`time.monotonic`
-здесь заглушены `FakeClock` (тот же приём, что `tests/
+пульта здесь заглушены `FakeClock` подменой `fsm_merge_gate.time` (тот же приём, что `tests/
 test_merge_gate_ci_wait.py`), иначе тест реально ждал бы часами. Итог
 неизменного класса поведения («running»/«unknown» не подлежат ре-рану,
 flake-rate не пишется) сохраняется — меняется только то, что перед
 финальным отказом гейт теперь опрашивает статус многократно, не единожды.
 """
 import sys
-import time
+import types
 import unittest
 from pathlib import Path
 from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from orchestrator import ci, fsm, store  # noqa: E402
+from orchestrator import ci, fsm, fsm_merge_gate, store  # noqa: E402
 from tests.test_invariants import FsmTest  # noqa: E402
 
 RUNNING = (False, "CI коммита abc12345 ещё идёт: guard")
@@ -57,13 +57,14 @@ class NonRedStatusSkipsRerunTest(FsmTest):
         self.write_review("approved", 1)
         self.set_state("merge_gate")
         self.clock = FakeClock()
-        sleep_patcher = mock.patch.object(time, "sleep", self.clock.sleep)
-        sleep_patcher.start()
-        self.addCleanup(sleep_patcher.stop)
-        monotonic_patcher = mock.patch.object(time, "monotonic",
-                                              self.clock.monotonic)
-        monotonic_patcher.start()
-        self.addCleanup(monotonic_patcher.stop)
+        # Часы — только в пространстве имён пульта, не в модуле `time`
+        # (SPEC 01M3YJ7VQ7CSBBPC8X84Z0YG3R).
+        clock_patcher = mock.patch.object(
+            fsm_merge_gate, "time",
+            types.SimpleNamespace(sleep=self.clock.sleep,
+                                  monotonic=self.clock.monotonic))
+        clock_patcher.start()
+        self.addCleanup(clock_patcher.stop)
 
     def journal_blob(self) -> str:
         rows = store.db().execute(

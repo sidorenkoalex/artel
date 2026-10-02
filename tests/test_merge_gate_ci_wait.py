@@ -7,13 +7,14 @@
 сами новые узлы `orchestrator/fsm.py` в изоляции, тем же приёмом, что
 `tests/test_merge_lock.py`/`tests/test_ci_status_kind_gate.py` уже
 применили к соседним модулям того же гейта: `time.sleep`/`time.monotonic`
-заглушены `FakeClock` (не настоящее ожидание), `ci.branch_status`/
+пульта заглушены `FakeClock` подменой `fsm_merge_gate.time` (не настоящее
+ожидание; паузы стандартной библиотеки часы не видят), `ci.branch_status`/
 `ci.trigger_rerun` — прямыми моками (не сетевой `gh`).
 """
 import math
 import subprocess
 import sys
-import time
+import types
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -55,14 +56,15 @@ class MergeGateCiWaitUnitTest(TmpRootTest):
         store.insert_task(store.db(), self.TASK, "Задача", "merge_gate",
                           "task/t001-zadacha", config.DEFAULT_TARGET, 25.0)
         self.clock = FakeClock()
-        sleep_patcher = mock.patch.object(time, "sleep", self.clock.sleep)
-        sleep_patcher.start()
-        self.addCleanup(sleep_patcher.stop)
-        monotonic_patcher = mock.patch.object(time, "monotonic",
-                                              self.clock.monotonic)
-        monotonic_patcher.start()
-        self.addCleanup(monotonic_patcher.stop)
-
+        # Часы подменяются только в пространстве имён пульта: глобальная
+        # подмена модуля `time` ловила и паузы `subprocess.Popen._wait`
+        # (SPEC 01M3YJ7VQ7CSBBPC8X84Z0YG3R).
+        clock_patcher = mock.patch.object(
+            fsm_merge_gate, "time",
+            types.SimpleNamespace(sleep=self.clock.sleep,
+                                  monotonic=self.clock.monotonic))
+        clock_patcher.start()
+        self.addCleanup(clock_patcher.stop)
     def journal_blob(self) -> str:
         rows = store.db().execute(
             "SELECT action, detail FROM steps WHERE task_id=? ORDER BY id",
@@ -81,7 +83,7 @@ class MergeGateCiWaitUnitTest(TmpRootTest):
 
     def wait(self, ceiling_sec: float = config.MERGE_GATE_CI_WAIT_CEILING_SEC):
         conn = store.db()
-        start = time.monotonic()
+        start = fsm_merge_gate.time.monotonic()
         deadline = start + ceiling_sec
         return fsm_merge_gate._wait_for_branch_ci_green(
             conn, self.TASK, "task/t001-zadacha", start, deadline)
