@@ -138,6 +138,7 @@ workspace, tasks, knowledge, logs). БД одна на все проекты: с
   target-init <target> | doctor [--restore] [--fix] | alert-ack <id> "<решение>" |
   alert-ack --source <источник> --grep <подстрока> "<решение>" [--yes] |
   version | models |
+  admit [--revoke] <роль> <модель> --basis "<основание>" |
   canary --k <N> [--sha <sha>] [--set <имя>] [--template <имя>,<имя>] |
   canary pool-seal |
   prune [--execute] |
@@ -146,6 +147,7 @@ workspace, tasks, knowledge, logs). БД одна на все проекты: с
   pin --to [<sha>] | zone-release <id> | zone-reorder <id1> <id2> ... |
   venv-sync | note (копилка|бэклог|очередь) --text "<строка>" |
   note --append <ключ> --text "<текст>" | note --flush |
+  note --pending | note --drop-pending <id> |
   note --apply <файл-заготовки> --message "<основание>" |
   doc-commit <путь-в-репозитории> --from <файл> --message "<основание>"
              [--accept-red "<основание>"] |
@@ -189,13 +191,31 @@ origin). Журнал пульта после успеха перечисляе�
 «22.09»); дописка состояния (`--append`, то же под именем `--state`)
 отделяется от прежнего текста ячейки разделителем с датой.
 
-`doc-commit <путь> … --accept-red "<основание>"` (тот же SPEC) —
+`note --pending` (SPEC 01M3Y75X6K2ZMD85971TCWV41E) — удержанные записи
+`.artel/notes-pending/` по строке: id, вид, путь или раздел, время
+удержания, первые 80 знаков содержимого. `note --drop-pending <id>` —
+снять одну запись по id с записью журнала. Удержанный `doc-commit` хранит
+базу (blob пути в HEAD главной копии) и при отправке отказывает, если
+файл в origin изменился после сборки записи.
+
+`doc-commit <путь> … --accept-red "<основание>"` (SPEC
+01M3HST4SGX0SPKAGNHVY7DWHM) —
 осознанный обход прогона полного набора tests/, который `doc-commit`
 файла конфигурации Оператора (roles.yaml/gates.yaml/targets.yaml/
 models.yaml) гоняет перед отправкой на дереве с уже применённой правкой.
 Набор красный или не запустился вовсе — отказ, называющий упавшие тесты,
 без коммита и без удержанной записи; с флагом коммит проходит, а путь и
 основание уходят в журнал пульта. Пути `docs/**` набор не гоняют.
+
+`admit <роль> <модель> --basis "<основание>"` (SPEC
+01M3YCHP14179R32SFJVKQB32G) — допуск пары «роль — модель» в разделе
+`pairs:` файла `model_sets.yaml` по числам ADR-0019 п.5: печатает сводку
+прогонов пары из `canary_runs` (не меньше трёх чистых, не меньше двух
+шаблонов, хотя бы один на шаблоне класса «средний»; у analyst — ещё прогон
+с правильным исходом неясности ТЗ) и при недоборе отказывает с перечнем
+недостающего, не трогая файл. `admit --revoke …` переводит пару в
+`state: приостановлена`. Запись — изолированный коммит механизмом
+`doc-commit` (окно тишины, удержание, полный набор tests/).
 
 `pin-update <sha>` (A7, Stage1) — обновляет пин запущенной версии:
 продвигает рабочее дерево и HEAD `config.ROOT` до `<sha>` main артели
@@ -1443,6 +1463,8 @@ def main() -> None:
         # требование 12): под ролью исполняется — она в белом списке
         # `_ROLE_ALLOWED_COMMANDS`.
         "models": lambda: models.cmd_models(),
+        # `admit` пишет файл решений Оператора — вне белого списка ролей.
+        "admit": lambda: models.cmd_admit(rest),
         "canary": lambda: _cmd_canary(rest),
         "prune": lambda: prune.cmd_prune("--execute" in rest),
         "report": lambda: report.cmd_report(),

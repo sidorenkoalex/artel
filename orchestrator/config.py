@@ -30,6 +30,13 @@ MODELS = ROOT / "models.yaml"
 # выше, подменяется песочницей (tests/sandbox.ALL_CONFIG_ATTRS): файла
 # может не быть вовсе, и сценарий «его кладёт init» — часть предмета.
 MODELS_LOCAL = ROOT / ".artel" / "models.yaml"
+# Наборы моделей задач и допуск пар «роль — модель» (SPEC
+# 01M3YCHP14179R32SFJVKQB32G): файл решений Оператора в git, в корне.
+# Относительный путь, а не `ROOT / …`: пишется он `doc-commit` по этому
+# пути, а читается от `config.ROOT` в момент вызова
+# (`models.model_sets_path`), поэтому песочница, подменившая `ROOT`, видит
+# свой файл без записи в `ALL_CONFIG_ATTRS`.
+MODEL_SETS_REL = "model_sets.yaml"
 # Шаблоны артефактов (защищённый путь, PROTECTED_PATHS ниже) — программный
 # ресурс пульта, не данные задачи: якорится на РЕАЛЬНЫЙ корень при загрузке
 # модуля тем же приёмом, что и ROLES выше (сознательно вне ALL_CONFIG_ATTRS
@@ -251,6 +258,13 @@ VERIFYING_POLL_INTERVAL_SEC = 90
 # (требование 3, AC-7); исчерпание потолка эскалирует с диагностикой
 # последнего известного статуса CI (AC-6).
 VERIFYING_CEILING_SEC = 90 * 60
+# Порог «проверка зависла» в `verifying` (SPEC 01M3Y75C9TY76083CG1PK00EM4,
+# требование 2): check-run в `in_progress`/`queued` без `conclusion` старше
+# этого возраста (от `started_at`, без него — от `created_at`). Задачу не
+# двигает и не эскалирует — даёт Оператору именованное состояние, в котором
+# `ci-rerun` перезапускает прогон проверки. Порог ниже потолка
+# VERIFYING_CEILING_SEC: Оператор видит зависание раньше эскалации.
+CI_STUCK_CHECK_MINUTES = 45
 # A3 doctor (tasks/T022/SPEC.md). Пин версии CLI: обновление — осознанный
 # шаг Оператора после смоук-прогона (требование 5); расхождение с ним —
 # предупреждение, не блок. Текущее значение — установленный пакет
@@ -658,10 +672,15 @@ REVIEW_VERDICTS = ("approved", "changes_requested", "escalate")
 # `tests/`. `conftest.py` защищён в ЛЮБОМ каталоге, в том числе ещё не
 # существующем, — отсюда запись-маска `**/conftest.py`; остальные четыре —
 # только корневые (смысл записей — `is_protected_path` ниже).
+# model_sets.yaml (наборы моделей и допуск пар, SPEC
+# 01M3YCHP14179R32SFJVKQB32G, требование 2) — решения Оператора по числам
+# канарейки (ADR-0019 п.5): роль, правящая файл в своей ветке, выдала бы
+# допуск сама себе.
 PROTECTED_PATHS = ("gates.yaml", "roles.yaml", ".github/",
                    "templates/", "skills/", "docs/invariants.md",
                    "tests/test_invariants.py", "docs/adr/", "CLAUDE.md",
                    "AGENTS.md", "targets.yaml", "models.yaml",
+                   "model_sets.yaml",
                    "**/conftest.py", "pyproject.toml", "pytest.ini",
                    "setup.cfg", "tox.ini")
 

@@ -94,6 +94,7 @@ from collections import namedtuple
 from pathlib import Path
 
 from .. import (alerts, artifact_branch, canary, ci, coldstart, config,
+                cycle_hint,
                 fixation, gitcmd, keychain, liveness, merge_lock, models,
                 notes, pool_seal, projects, providers, repo_context, roles,
                 runner, snapshot, spend, stack, store, targets, workspace,
@@ -176,6 +177,10 @@ from .misc_checks import (check_backup_age, check_pending_notes,
 from .root_pin import (check_root_pin, fetch_origin_main_sha,
                        unpushed_commits, check_pin_unpushed)
 from .main_ci import MAIN_CI_CHECK, check_main_ci
+from .stale_cycles import (STALE_CYCLES_CHECK, START_UNDETERMINED,
+                           process_start_time, _observation_args,
+                           stale_cycles, stale_cycle_lines,
+                           check_stale_cycles)
 from .orphan_branches import (ORPHAN_ARTIFACT_BRANCH_SOURCE,
                               _REMOTE_ARTIFACT_GLOB, _UNSET,
                               _remote_artifact_branch_names,

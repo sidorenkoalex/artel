@@ -1207,6 +1207,14 @@ def green_canary_runs(conn, set_name: str = config.CANARY_DEFAULT_SET) -> list:
         "ORDER BY created_at DESC, id DESC", (set_name,)).fetchall()
 
 
+def all_canary_runs(conn) -> list:
+    """Все строки `canary_runs` по порядку записи, без фильтра набора и
+    вердикта — вход допуска пары и набора `models.py` (SPEC
+    01M3YCHP14179R32SFJVKQB32G, требования 3-4)."""
+    _ensure_canary_tables(conn)
+    return conn.execute("SELECT * FROM canary_runs ORDER BY id").fetchall()
+
+
 def latest_green_canary_run(conn, set_name: str = config.CANARY_DEFAULT_SET):
     """Самый свежий зелёный прогон канарейки набора `set_name`; `None` —
     журнал не несёт ни одного (`pin.cmd_pin_to`, AC-6)."""
