@@ -101,6 +101,10 @@ def all_checks(conn) -> list[doctor.Check]:
     checks.extend(doctor.check_artifact_branch_parent_ancestry(conn))
     checks.append(doctor.check_root_pin())
     checks.append(doctor.check_pin_unpushed())
+    # Циклы на коде старше пина (SPEC 01M3Y75GCRESC2KDS9VPRJK4PS,
+    # требование 3) — рядом со строками самого пина: сдвиг пина и живой
+    # цикл на прежнем коде читаются вместе.
+    checks.append(doctor.check_stale_cycles(conn))
     checks.append(doctor.check_git_hooks())
     checks.append(doctor.check_role_log_pool_leak(conn))
     checks.append(doctor.check_canary_pool_drift())

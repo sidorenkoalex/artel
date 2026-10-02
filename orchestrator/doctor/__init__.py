@@ -175,6 +175,10 @@ from .misc_checks import (check_backup_age, check_pending_notes,
                           check_remote_empty, check_base_branch)
 from .root_pin import (check_root_pin, fetch_origin_main_sha,
                        unpushed_commits, check_pin_unpushed)
+from .stale_cycles import (STALE_CYCLES_CHECK, START_UNDETERMINED,
+                           process_start_time, _observation_args,
+                           stale_cycles, stale_cycle_lines,
+                           check_stale_cycles)
 from .orphan_branches import (ORPHAN_ARTIFACT_BRANCH_SOURCE,
                               _REMOTE_ARTIFACT_GLOB, _UNSET,
                               _remote_artifact_branch_names,
