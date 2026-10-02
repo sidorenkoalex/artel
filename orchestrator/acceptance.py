@@ -8,10 +8,15 @@
 а не проверкой. guard.py содержимое файлов принципиально не исполняет
 (его докстринг) — прогон и сбор тестов поэтому здесь, не там.
 """
+import contextlib
+import os
 import re
+import shutil
 import subprocess
+import tempfile
+import time
 from pathlib import Path
-from typing import NamedTuple
+from typing import Iterator, NamedTuple
 
 from scripts import guard
 
@@ -38,6 +43,52 @@ def _pytest_command(*args: str) -> list[str]:
     return [stack.pytest_python_executable(), "-m", "pytest", *args,
             "-p", "no:cacheprovider", "-p", "timeout",
             "-o", f"timeout={stack.PER_TEST_TIMEOUT_SEC}"]
+
+
+@contextlib.contextmanager
+def _pytest_env() -> Iterator[dict[str, str]]:
+    """Окружение одного прогона `_pytest_command`: копия `os.environ`
+    пульта плюс `PYTHONPYCACHEPREFIX` на свежий временный каталог (SPEC
+    01M3Y7G6T3MK7A899521VF9N7B, требования 1, 3, 4).
+
+    Проверка свежести `.pyc` смотрит только на время изменения и размер
+    исходника: 02.10 правка с тем же размером в ту же секунду оставила
+    `__pycache__` worktree «свежим», и автогейт исполнил старый байткод.
+    `PYTHONDONTWRITEBYTECODE` не помогает — уже лежащий `.pyc` всё равно
+    читается; отведённый кеш пуст, и исходник компилируется заново.
+    Каталог — в системном временном (`tempfile`), то есть вне `cwd`
+    прогона и вне `config.ROOT`; рабочие процессы xdist наследуют
+    переменную от главного процесса pytest. Уборка — на выходе из блока,
+    в том числе по `TimeoutExpired` и любому другому исключению."""
+    cache_dir = tempfile.mkdtemp(prefix="artel-pycache-")
+    try:
+        env = dict(os.environ)
+        env["PYTHONPYCACHEPREFIX"] = cache_dir
+        yield env
+    finally:
+        _remove_cache_dir(cache_dir)
+
+
+# Попытки уборки каталога кеша: на таймауте `subprocess.run` убивает
+# главный процесс pytest, а рабочие процессы xdist ещё дописывают `.pyc` —
+# `rmtree` ловит «Directory not empty» на каталоге, куда только что лёг файл.
+_CACHE_RMTREE_ATTEMPTS = 5
+_CACHE_RMTREE_PAUSE_SEC = 0.2
+
+
+def _remove_cache_dir(path: str) -> None:
+    """Удаление каталога кеша прогона с повторами; последняя неудача не
+    поднимается — сбой уборки временного каталога не имеет права подменить
+    исход прогона, который он обслуживал."""
+    for _ in range(_CACHE_RMTREE_ATTEMPTS):
+        try:
+            shutil.rmtree(path)
+            return
+        except FileNotFoundError:
+            return
+        except OSError:
+            time.sleep(_CACHE_RMTREE_PAUSE_SEC)
+    shutil.rmtree(path, ignore_errors=True)
 
 
 def _timeout_text(value: bytes | str | None) -> str:
@@ -183,10 +234,11 @@ def run(tdir: Path, cwd: Path | None = None,
     if extra:
         location_note += f", долгоживущие файлы: {', '.join(extra)}"
     try:
-        res = subprocess.run(
-            _pytest_command(*targets),
-            cwd=run_cwd, capture_output=True, text=True,
-            timeout=config.ACCEPTANCE_TIMEOUT_SEC)
+        with _pytest_env() as env:
+            res = subprocess.run(
+                _pytest_command(*targets),
+                cwd=run_cwd, env=env, capture_output=True, text=True,
+                timeout=config.ACCEPTANCE_TIMEOUT_SEC)
     except subprocess.TimeoutExpired as exc:
         tail = (_timeout_text(exc.stdout) + _timeout_text(exc.stderr))[-2000:]
         return False, (f"{location_note}\nпрогон превысил "
@@ -237,10 +289,11 @@ def collect(tdir: Path, cwd: Path | None = None,
     if extra:
         location_note += f", долгоживущие файлы: {', '.join(extra)}"
     try:
-        res = subprocess.run(
-            _pytest_command(*targets, "--collect-only", "-q"),
-            cwd=run_cwd, capture_output=True, text=True,
-            timeout=config.ACCEPTANCE_TIMEOUT_SEC)
+        with _pytest_env() as env:
+            res = subprocess.run(
+                _pytest_command(*targets, "--collect-only", "-q"),
+                cwd=run_cwd, env=env, capture_output=True, text=True,
+                timeout=config.ACCEPTANCE_TIMEOUT_SEC)
     except subprocess.TimeoutExpired as exc:
         tail = (_timeout_text(exc.stdout) + _timeout_text(exc.stderr))[-2000:]
         return False, (f"{location_note}\nсбор превысил "
@@ -460,11 +513,12 @@ def run_full_suite(root: Path) -> tuple[bool, str]:
     if not tests_dir.is_dir():
         return False, FULL_SUITE_NO_TESTS_NOTE
     try:
-        res = subprocess.run(
-            _pytest_command("tests") + ["-n", str(config.FULL_SUITE_WORKERS),
-                                        "-p", "xdist"],
-            cwd=root, capture_output=True, text=True,
-            timeout=config.FULL_SUITE_TIMEOUT_SEC)
+        with _pytest_env() as env:
+            res = subprocess.run(
+                _pytest_command("tests") + [
+                    "-n", str(config.FULL_SUITE_WORKERS), "-p", "xdist"],
+                cwd=root, env=env, capture_output=True, text=True,
+                timeout=config.FULL_SUITE_TIMEOUT_SEC)
     except subprocess.TimeoutExpired as exc:
         output = _timeout_text(exc.stdout) + _timeout_text(exc.stderr)
         return False, f"{_full_suite_timeout_note()}\n{output}"

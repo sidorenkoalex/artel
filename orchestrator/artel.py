@@ -130,7 +130,7 @@ workspace, tasks, knowledge, logs). БД одна на все проекты: с
   observe show|stop <observation-id> [--json] |
   hook-migrate inspect|apply|restore --client codex|claude --config <path>
                [--backup <path>] [--verified] [--json] |
-  approve <id> [sha] [--accept-red "<основание>"] |
+  approve <id> [sha] [--accept-red "<основание>"] [--fixes-main "<основание>"] |
   reject <id> "<причина>" |
   answer <id> <файл-с-ответом> | zones-extend <id> <путь>[, <путь>...] |
   kill <id> | release <id> |
@@ -164,6 +164,17 @@ workspace, tasks, knowledge, logs). БД одна на все проекты: с
 Флаг без основания — отказ. Worktree задачи не заведён или стоит не на её
 ветке — прогон пропускается с именованной записью журнала, приёмка
 проходит.
+
+Гейт мержа и CI main (SPEC 01M3SF7DPFGEZ7VYEGGXGTX49E): `approve` на
+`merge_gate` гоняет `guard.py --all` по дереву мержа после снимка
+артефактной ветки и до push (нарушение — отказ), отказывает, пока CI main
+красный («main красный с <коммит> — сначала починить main»), а после push
+ждёт CI новой головы main и пишет исход в журнал задачи. Цвет CI main —
+по каждой проверке с последнего коммита первой родительской линии, где
+она исполнялась (документный коммит красноту не маскирует); то же
+определение сверяют `pin-update <sha>` и строка `main-ci` в `doctor`.
+`approve <id> <sha> --fixes-main "<основание>"` — задача чинит main:
+сверка красного main снята для этого вызова, основание — в журнал задачи.
 
 `note --apply <файл-заготовки> --message "<основание>"` (SPEC
 01M3HST4SGX0SPKAGNHVY7DWHM) — замена `docs/backlog.md` содержимым
@@ -1237,14 +1248,37 @@ def _accept_red_arg(rest: list) -> str | None:
     return reason
 
 
+FIXES_MAIN_FLAG = "--fixes-main"
+
+
+def _fixes_main_arg(rest: list) -> str | None:
+    """Основание флага `approve <id> <sha> --fixes-main "<основание>"` (SPEC
+    01M3SF7DPFGEZ7VYEGGXGTX49E, AC-5) — задача чинит красный main, сверка
+    цвета CI main на гейте мержа для неё снята; `None` — флага нет. Без
+    основания — отказ до исполнения, тем же приёмом, что `--accept-red`:
+    снятое без основания исключение и есть то, что флаг делает видимым."""
+    if FIXES_MAIN_FLAG not in rest:
+        return None
+    idx = rest.index(FIXES_MAIN_FLAG)
+    reason = rest[idx + 1] if idx + 1 < len(rest) else ""
+    if not reason.strip():
+        sys.exit(f"{FIXES_MAIN_FLAG} требует основание следующим аргументом: "
+                 f'artel.py approve <id> <sha> {FIXES_MAIN_FLAG} "<основание>"')
+    return reason
+
+
 def _approve_sha_arg(rest: list) -> str | None:
     """Позиционный `sha` команды `approve <id> [sha]` — первый аргумент
-    после `<id>`, не являющийся ни флагом `--accept-red`, ни его
-    основанием (SPEC 01M3FQ3JVC3DGGM33XCX8TC7ME, требование 8: разбор
-    позиционного sha не меняется); `None` — sha не передан."""
-    flag_idx = rest.index(ACCEPT_RED_FLAG) if ACCEPT_RED_FLAG in rest else None
+    после `<id>`, не являющийся ни флагом `--accept-red`/`--fixes-main`,
+    ни его основанием (SPEC 01M3FQ3JVC3DGGM33XCX8TC7ME, требование 8:
+    разбор позиционного sha не меняется); `None` — sha не передан."""
+    skipped: set[int] = set()
+    for flag in (ACCEPT_RED_FLAG, FIXES_MAIN_FLAG):
+        if flag in rest:
+            flag_idx = rest.index(flag)
+            skipped.update((flag_idx, flag_idx + 1))
     for i, arg in enumerate(rest[1:], start=1):
-        if flag_idx is not None and i in (flag_idx, flag_idx + 1):
+        if i in skipped:
             continue
         return arg
     return None
@@ -1357,7 +1391,8 @@ def main() -> None:
         "stop": lambda: _cmd_stop(rest[0]),
         "approve": lambda: fsm.cmd_approve(
             rest[0], _approve_sha_arg(rest),
-            accept_red=_accept_red_arg(rest)),
+            accept_red=_accept_red_arg(rest),
+            fixes_main=_fixes_main_arg(rest)),
         "reject": lambda: fsm.cmd_reject(rest[0],
                                          rest[1] if len(rest) > 1 else ""),
         "answer": lambda: answer.cmd_answer(rest[0], rest[1]),

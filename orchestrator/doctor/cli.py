@@ -101,6 +101,9 @@ def all_checks(conn) -> list[doctor.Check]:
     checks.extend(doctor.check_artifact_branch_parent_ancestry(conn))
     checks.append(doctor.check_root_pin())
     checks.append(doctor.check_pin_unpushed())
+    # Цвет CI main (SPEC 01M3SF7DPFGEZ7VYEGGXGTX49E, AC-3) — рядом с пином:
+    # `pin-update` сверяет тот же цвет, и читать их Оператору вместе.
+    checks.append(doctor.check_main_ci())
     checks.append(doctor.check_git_hooks())
     checks.append(doctor.check_role_log_pool_leak(conn))
     checks.append(doctor.check_canary_pool_drift())

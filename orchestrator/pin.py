@@ -44,7 +44,26 @@ ADR-0013 ч.3). Каждый вызов — ровно одна запись ж�
 """
 import sys
 
-from . import canary, config, gitcmd, store
+from . import canary, ci, config, gitcmd, store
+
+
+def _refuse_unless_main_ci_green(sha: str) -> None:
+    """Зелёный завершённый CI коммита `sha` в origin — наряду с канарейкой
+    (SPEC 01M3SF7DPFGEZ7VYEGGXGTX49E, требование 3, AC-2): цвет по
+    проверкам первой родительской линии от `sha` (`ci.main_line_status`),
+    тот же, что у `doctor` и гейта мержа. Канарейка гоняет пульт на учебной
+    задаче и не видит красного `tests/` main — пин уезжал на коммит, чей
+    CI упал. Вызывается после `fetch` (обход линии читает объекты, которые
+    он принёс). `pin --to` этой сверки не получает: откат нужен именно
+    тогда, когда CI красный или `gh` молчит."""
+    status = ci.main_line_status(sha)
+    if status.kind == ci.MAIN_GREEN:
+        return
+    if status.kind == ci.MAIN_RED:
+        sys.exit(f"pin-update: CI коммита {sha[:8]} красный — {status.note}; "
+                 f"пин не сдвинут, сначала почини main")
+    sys.exit(f"pin-update: CI не подтверждён для {sha[:8]} — {status.note}; "
+             f"пин не сдвинут, повтори, когда CI завершится")
 
 
 def cmd_pin_update(sha: str) -> None:
@@ -63,6 +82,8 @@ def cmd_pin_update(sha: str) -> None:
             f"{config.CANARY_MAX_MERGES_SINCE_GREEN} мержей main на sha "
             f"{sha[:7]} (ADR-0013) — прогони канарейку на этом sha: "
             f"python3 orchestrator/artel.py canary --k 1 --sha {sha}")
+
+    _refuse_unless_main_ci_green(sha)
 
     merge = gitcmd.git("merge", "--ff-only", sha)
     if merge is None or merge.returncode != 0:
