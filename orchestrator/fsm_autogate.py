@@ -12,7 +12,7 @@ from pathlib import Path
 from scripts import guard
 
 from . import (acceptance, artifact_source, budget, ci, config, fixation,
-              gates, gitcmd, store, workspace)
+              gates, gitcmd, models, store, workspace)
 from .advance_gates import acceptance as acceptance_gates
 
 AUTOGATE_PASS_MESSAGE = "acceptance пройден автогейтом (политика gates.yaml)"
@@ -221,6 +221,18 @@ def _autogate_conditions(conn, task_id: str, t, acc_tdir: Path,
     """
     ok: list[str] = []
 
+    # Задача на наборе моделей автогейт не проходит, пока пробный период
+    # наборов (часть 3 деления) не смержен: приёмка любой такой задачи —
+    # ручной гейт Оператора (SPEC 01M3YCHS4F08VTV6XX10VF92H3, требование
+    # 10; ANSWER-1 п.3 родителя 01M3Y9YCKBFRJ8T9HSD40Z3AQN). Первым
+    # условием: остальные (полный набор tests/) решения не меняют, а
+    # прогон стоит минут.
+    model_set = models.task_set_name(t)
+    if model_set:
+        return ok, (f"автогейт: задача на наборе моделей {model_set} — "
+                    f"приёмка задачи с набором только ручная (решение "
+                    f"Оператора до пробного периода наборов)")
+
     branch, _ = artifact_source.resolve(conn, task_id)
     branch_sha = gitcmd.branch_head_sha(branch)
     source_note = f"источник планки: ветка {branch}, sha {branch_sha}"
@@ -340,4 +352,5 @@ def _maybe_autogate_acceptance(conn, task_id: str, t, acc_tdir: Path,
     # подсказках», требование 1) — тот же приём, что и ручной вход в
     # merge_gate из `fsm._cmd_approve`.
     sha_hint = fixation.approve_sha_hint(task_id, store.task_target(conn, task_id))
-    print(f"  дальше: artel.py approve {task_id}{sha_hint}  (выполнит merge)")
+    print(f"  дальше: artel.py approve {task_id}{sha_hint}  (выполнит merge)"
+          f"{models.task_set_hint(t)}")

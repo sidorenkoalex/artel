@@ -317,20 +317,28 @@ def next_task_number(conn: sqlite3.Connection, target: str) -> int:
 
 def insert_task(conn: sqlite3.Connection, task_id: str, title: str,
                 state: str, branch: str, target: str,
-                budget_usd: float, *, is_canary: bool = False) -> None:
+                budget_usd: float, *, is_canary: bool = False,
+                model_set: str | None = None,
+                model_set_members: str | None = None) -> None:
     """Заводит строку задачи (команда `new`).
 
     `is_canary` — keyword-only, дефолт `False` не меняет поведение
     существующих вызывателей (tasks/T065/SPEC.md, требование 6):
     единственный, кто передаёт `True`, — `catalog.cmd_new(..., canary=True)`
     из команды `canary`.
+
+    `model_set`/`model_set_members` — набор моделей задачи и его состав
+    (JSON) с `new --set` (SPEC 01M3YCHS4F08VTV6XX10VF92H3, требование 1):
+    пишутся тем же INSERT, что и строка, — задачи «без набора на миг»
+    между двумя запросами не бывает.
     """
     stamp = now()
     conn.execute(
         "INSERT INTO tasks (id,title,state,branch,target,budget_usd,"
-        "is_canary,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?)",
+        "is_canary,model_set,model_set_members,created_at,updated_at) "
+        "VALUES (?,?,?,?,?,?,?,?,?,?,?)",
         (task_id, title, state, branch, target, budget_usd,
-         int(is_canary), stamp, stamp))
+         int(is_canary), model_set, model_set_members, stamp, stamp))
     conn.commit()
 
 

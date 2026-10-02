@@ -37,6 +37,7 @@ docs/research/providers-codex-plan.md §3).
 Потребитель обоих — `orchestrator/spend.py` (SPEC
 01M300A14KRHCFB0DQXVCBJEKF, требования 1-2).
 """
+import json
 import sys
 from collections import namedtuple
 
@@ -1241,16 +1242,12 @@ def set_admitted(conn, set_name: str) -> tuple[bool, str]:
     members = document[SETS_KEY].get(set_name)
     if not isinstance(members, dict) or not members:
         return False, f"набора {set_name} нет в '{SETS_KEY}:'"
-    pairs = document[PAIRS_KEY]
     for role, model in members.items():
         if model == _combat_model(role):
             continue
-        role_pairs = pairs.get(role)
-        entry = role_pairs.get(model) if isinstance(role_pairs, dict) else None
-        state = entry.get(PAIR_STATE_KEY) if isinstance(entry, dict) else None
-        if state != PAIR_ADMITTED:
-            return False, (f"пара {role} → {model} не допущена "
-                           f"(state: {state or 'нет записи'})")
+        refusal = _pair_refusal(document, role, model)
+        if refusal is not None:
+            return False, refusal
     for row in _canary_rows(conn):
         if row["verdict"] != "green":
             continue
@@ -1263,6 +1260,244 @@ def set_admitted(conn, set_name: str) -> tuple[bool, str]:
     return False, (f"нет зелёного прогона набором целиком на шаблоне класса "
                    f"«{TEMPLATE_HARD}»")
 
+
+def _pair_refusal(document: dict, role: str, model: str) -> str | None:
+    """Почему пара «роль → модель» не допущена записью `pairs:`; `None` —
+    `state: допущена`. Один текст на допуск набора (`set_admitted`) и на
+    сверку пары набора задачи на старте шага (`resolve_task_role`)."""
+    role_pairs = document[PAIRS_KEY].get(role)
+    entry = role_pairs.get(model) if isinstance(role_pairs, dict) else None
+    state = entry.get(PAIR_STATE_KEY) if isinstance(entry, dict) else None
+    if state == PAIR_ADMITTED:
+        return None
+    return (f"пара {role} → {model} не допущена "
+            f"(state: {state or 'нет записи'})")
+
+
+# --- Набор моделей задачи (SPEC 01M3YCHS4F08VTV6XX10VF92H3) ---
+#
+# Набор задачи — имя набора и его состав «роль -> модель», записанные в
+# строку задачи при `new --set`/`set-models` (колонки `model_set`/
+# `model_set_members`). Разрешение модели шага с учётом задачи —
+# `resolve_task_role`: роль из записанного состава идёт на модели набора
+# теми же звеньями fail-closed, что `role_models:`; роль без записи — на
+# боевой модели (`resolve_role`).
+
+#: Подпись источника модели шага из набора задачи (запись старта шага).
+SOURCE_TASK_SET = "набор задачи"
+
+#: Модель шага по задаче: разрешение, подпись источника («набор задачи
+#: <имя>», `role_models` либо «ярус <ярус>»), шла ли модель из набора, и
+#: текст отката на боевую модель, если пара набора снята с допуска.
+TaskModel = namedtuple("TaskModel", "resolution source from_set withdrawn")
+
+
+class TaskSetError(ModelsError):
+    """Набор задачи не допущен к `new --set`/`set-models` либо записанный
+    состав в строке задачи не читается."""
+
+
+class SetModelNotInCatalogError(ModelNotInCatalogError):
+    """Модель набора задачи не найдена в каталоге."""
+
+
+class SetModelExperimentalError(ExperimentalNotAllowedError):
+    """Модель набора задачи со статусом `experimental` не разрешена
+    локальным слоем."""
+
+
+def _task_field(task, key):
+    """Поле строки задачи либо `None`: строки старше колонки и словари
+    тестов поля не несут."""
+    if task is None:
+        return None
+    try:
+        return task[key]
+    except (KeyError, IndexError):
+        return None
+
+
+def task_set_name(task) -> str | None:
+    """Имя набора задачи; `None` — задача без набора."""
+    return _task_field(task, "model_set") or None
+
+
+def task_set_members(task) -> dict:
+    """Записанный состав набора задачи «роль -> модель»; `{}` — без набора.
+
+    Нечитаемый состав — `TaskSetError`, а не пустой набор: пустой значил
+    бы молчаливый шаг на боевых моделях у задачи, которую Оператор завёл
+    на наборе."""
+    raw = _task_field(task, "model_set_members")
+    if not raw:
+        return {}
+    try:
+        members = json.loads(raw)
+    except ValueError as exc:
+        raise TaskSetError(f"состав набора {task_set_name(task)} в строке "
+                           f"задачи не читается: {exc}") from None
+    if not isinstance(members, dict) or not all(
+            isinstance(k, str) and isinstance(v, str)
+            for k, v in members.items()):
+        raise TaskSetError(f"состав набора {task_set_name(task)} в строке "
+                           f"задачи — не отображение «роль -> модель»")
+    return members
+
+
+def task_set_hint(task) -> str:
+    """Хвост подсказки `approve` на гейте задачи с набором (требование 8):
+    Оператор решает гейт, зная, на каких моделях шла задача. Пусто — без
+    набора, подсказка байт-в-байт прежняя."""
+    name = task_set_name(task)
+    return f"  [{SOURCE_TASK_SET}: {name}]" if name else ""
+
+
+#: Состояния закрытой задачи: её набор моделей больше ничего не запускает.
+_CLOSED_STATES = ("done", "killed")
+
+
+def live_task_set_providers() -> set:
+    """Провайдеры моделей из наборов незакрытых задач — добавка к
+    востребованным CLI манифеста стека (`stack.model_providers`): задача
+    на наборе вправе перевести роль на модель провайдера, которого не
+    требует ни один ярус (требование 4).
+
+    БД нет — пустое множество, без её создания: манифест читают и вне
+    пульта (CI `scripts/stack_ci.py`). Нечитаемая БД, состав или модель
+    вне каталога — пропуск, а не исключение: о модели набора, которую
+    шаг не запустит, говорит именованный отказ самого шага."""
+    import sqlite3
+
+    from . import store
+    if not config.DB.exists():
+        return set()
+    try:
+        rows = store.all_tasks(store.db())
+    except sqlite3.Error:
+        return set()
+    found = set()
+    for row in rows:
+        if row["state"] in _CLOSED_STATES:
+            continue
+        try:
+            members = task_set_members(row)
+        except ModelsError:
+            continue
+        for model_id in members.values():
+            try:
+                found.add(catalog_model(model_id).provider)
+            except ModelsError:
+                continue
+    return found
+
+
+def members_text(members: dict) -> str:
+    """Состав набора одной строкой журнала: «роль → модель, …»."""
+    return _SUMMARY_PAIR_SEP.join(f"{role}{_SUMMARY_ARROW}{model}"
+                                  for role, model in members.items())
+
+
+def admitted_set_members(conn, set_name: str) -> dict:
+    """Состав набора `set_name` из `model_sets.yaml`, если набор допущен
+    проверкой части 1 (`set_admitted`); иначе `TaskSetError` с текстом,
+    называющим набор и причину (пару и её состояние либо трудный класс).
+    Вход `new --set` и `set-models` — одна проверка на обе команды."""
+    admitted, reason = set_admitted(conn, set_name)
+    if not admitted:
+        raise TaskSetError(f"набор {set_name} не допущен: {reason}")
+    return dict(load_model_sets()[SETS_KEY][set_name])
+
+
+def _combat_task_model(role: str, catalog: Catalog, local: LocalLayer,
+                       withdrawn: str | None = None) -> TaskModel:
+    """Боевая модель роли (`resolve_role`) с подписью источника. Локальный
+    слой для подписи читается после разрешения и без отказа: подпись не
+    вправе остановить шаг, который цепочка роли уже разрешила."""
+    resolved = resolve_role(role, catalog, local)
+    if local is None:
+        try:
+            local = load_local()
+        except ModelsError:
+            local = None
+    source = (ROLE_MODELS_KEY
+              if local is not None and role in local.role_models
+              else f"ярус {resolved.tier}")
+    return TaskModel(resolved, source, False, withdrawn)
+
+
+def _set_pair_withdrawn(role: str, model_id: str, catalog: Catalog,
+                        local: LocalLayer) -> str | None:
+    """Почему пара набора задачи больше не допущена к старту шага
+    (требование 7); `None` — допущена либо модель совпадает с боевой (её
+    пара допуска не требует — то же правило, что у `set_admitted`).
+    Нечитаемый `model_sets.yaml` — тоже «не допущена»: подтвердить допуск
+    нечем, а молчаливого продолжения на снятой паре быть не должно."""
+    try:
+        if model_id == resolve_role(role, catalog, local).model:
+            return None
+    except ModelsError:
+        pass
+    try:
+        document = load_model_sets()
+    except ModelsError as exc:
+        return f"допуск пары {role} → {model_id} не подтверждён: {exc}"
+    return _pair_refusal(document, role, model_id)
+
+
+def resolve_task_role(role: str, task, catalog: Catalog = None,
+                      local: LocalLayer = None) -> TaskModel:
+    """Модель шага роли с учётом задачи (требования 2, 4, 7).
+
+    Задача без набора и роль без записи в составе набора — боевая модель
+    (`resolve_role`), поведение байт-в-байт прежнее. Роль из записанного
+    состава идёт на модели набора; провайдер и CLI — модели в каталоге
+    (набор переводит роль на модель чужого провайдера — провайдер следует
+    за моделью). Звенья fail-closed те же, что у `role_models:`: модели
+    нет в каталоге, `experimental` без разрешения локального слоя — отказ
+    с ролью, моделью и набором.
+
+    Пара роли, снятая с допуска в `model_sets.yaml` к старту шага, —
+    боевая модель роли и непустой `withdrawn`: запись журнала о ней пишет
+    вызывающий (`runner`), здесь только факт. Сверяется запись `pairs:`,
+    а не `sets:`: правка состава набора в файле задачу в работе не
+    двигает (требование 1), а снятие допуска пары — двигает.
+    """
+    members = task_set_members(task)
+    if role not in members:
+        return _combat_task_model(role, catalog, local)
+    name = task_set_name(task)
+    model_id = members[role]
+    withdrawn = _set_pair_withdrawn(role, model_id, catalog, local)
+    if withdrawn is not None:
+        return _combat_task_model(
+            role, catalog, local,
+            f"набор задачи {name}: {withdrawn} — шаг роли {role} идёт на "
+            f"боевой модели вместо {model_id}")
+    from . import roles
+    try:
+        tier = roles.model_tier(role)
+    except roles.RolesError as exc:
+        raise RoleTierError(str(exc)) from exc
+    local = local or load_local()
+    try:
+        model = catalog_model(model_id, catalog)
+    except ModelNotInCatalogError as exc:
+        raise SetModelNotInCatalogError(
+            f"роль {role}: модель {model_id} набора задачи {name} — "
+            f"{exc}") from None
+    if model.status == STATUS_EXPERIMENTAL and model_id not in local.allow_experimental:
+        raise SetModelExperimentalError(
+            f"роль {role}: модель {model_id} набора задачи {name} имеет "
+            f"статус {STATUS_EXPERIMENTAL} и не разрешена явно — добавь "
+            f"«{ALLOW_EXPERIMENTAL_KEY}: {{{model_id}: true}}» в "
+            f"{config.MODELS_LOCAL}")
+    effective = _effective_tariff(model, local)
+    resolved = Resolution(role, tier, model.id, model.provider, model.cli,
+                          model.min_cli_version, model.status,
+                          model.list_price, effective.tariff,
+                          effective.tariff_source, effective.calibrated_at,
+                          effective.source)
+    return TaskModel(resolved, f"{SOURCE_TASK_SET} {name}", True, None)
 
 def _scalar_yaml(value, where: str) -> str:
     """Скаляр так, чтобы `yamlmini.scalar` вернул его дословно (число,

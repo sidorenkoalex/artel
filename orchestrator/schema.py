@@ -94,7 +94,7 @@ CREATE TABLE IF NOT EXISTS tasks (
   diff_bytes INTEGER, split_assessment TEXT, zones TEXT,
   zones_extension TEXT,
   materialized_artifact_sha TEXT, zone_queue_position INTEGER,
-  parent_task_id TEXT,
+  parent_task_id TEXT, model_set TEXT, model_set_members TEXT,
   created_at TEXT, updated_at TEXT
 );
 CREATE TABLE IF NOT EXISTS steps (
@@ -249,6 +249,13 @@ def migrate(conn: sqlite3.Connection) -> None:
     # строки с parent_task_id = <id родителя> при её состоянии killed,
     # отдельный флаг на строке родителя не заводится.
     add_column(conn, "tasks", "parent_task_id", "TEXT")
+    # Набор моделей задачи (SPEC 01M3YCHS4F08VTV6XX10VF92H3, требование 1):
+    # имя набора из `model_sets.yaml` и его состав «роль -> модель» (JSON)
+    # на момент `new --set`/`set-models`. Состав хранится в строке, а не
+    # перечитывается по имени: правка файла наборов модели задачи в работе
+    # молча не меняет. NULL в обеих — задача без набора, как до этой задачи.
+    add_column(conn, "tasks", "model_set", "TEXT")
+    add_column(conn, "tasks", "model_set_members", "TEXT")
     conn.executescript(
         "CREATE TABLE IF NOT EXISTS task_counters ("
         "  target TEXT PRIMARY KEY, next_number INTEGER NOT NULL);")

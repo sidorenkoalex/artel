@@ -1,4 +1,5 @@
 """Каталог задач: заведение, список, карточка задачи, журнал шагов."""
+import json
 import re
 import shutil
 import socket
@@ -417,7 +418,8 @@ def _warn_pin_divergence(conn, task_id: str) -> None:
 
 
 def cmd_new(title: str, tz_path: str | None = None, *,
-           canary: bool = False, target: str | None = None) -> str:
+           canary: bool = False, target: str | None = None,
+           model_set: str | None = None) -> str:
     """Заводит задачу: ТЗ/SPEC рождаются сразу в её ветке (ADR-0005 п.9,
     SPEC T048) — рабочая копия main не трогается ни на одном шаге
     (требование 4): ни новых файлов на диске main, ни коммитов в main.
@@ -454,8 +456,21 @@ def cmd_new(title: str, tz_path: str | None = None, *,
     не в `title` — `title` канареечной задачи ничем не отличается от
     продуктовой, роль его не видит иначе. Возвращает `task_id`, чтобы
     вызывающий код (тот же `canary`) мог собрать список заведённых задач.
+
+    `model_set` — набор моделей задачи из `model_sets.yaml` (`new --set`,
+    SPEC 01M3YCHS4F08VTV6XX10VF92H3, требования 1, 3): допуск набора
+    проверкой части 1 (`models.admitted_set_members`) сверяется ДО id,
+    ветки и строки БД — отказ не оставляет ни того, ни другого. Имя и
+    состав набора на момент `new` пишутся в строку задачи той же записью, что
+    заводит саму строку (`store.insert_task`).
     """
     conn = store.db()
+    set_members = None
+    if model_set is not None:
+        try:
+            set_members = models.admitted_set_members(conn, model_set)
+        except models.ModelsError as exc:
+            sys.exit(f"new: {exc} — задача не заведена")
     # Файл ТЗ читается ДО побочных эффектов: нечитаемый путь не должен
     # оставлять после себя наполовину созданную задачу.
     tz_raw = None
@@ -476,11 +491,16 @@ def cmd_new(title: str, tz_path: str | None = None, *,
     tz_doc = _tz_document(task_id, title, tz_raw) if tz_raw is not None else None
 
     _new_task_row(conn, task_id, title, target, tz_doc, is_canary=canary,
-                 journal_detail=title)
+                 journal_detail=title, model_set=model_set,
+                 set_members=set_members)
     if tz_raw is not None:
         _record_preliminary_zones(conn, task_id, tz_raw)
     print(f"[{task_id}] «{title}» создана (target {target}, артефактная "
          f"ветка пульта {artifact_branch.branch_name(task_id)})")
+    if model_set is not None:
+        print(f"  набор задачи: {model_set} "
+              f"({models.members_text(set_members)}); приёмка — ручной "
+              f"гейт Оператора")
     _warn_pin_divergence(conn, task_id)
     if tz_raw is not None:
         _print_new_calibration_hint(conn, task_id, tz_raw)
@@ -495,21 +515,29 @@ def cmd_new(title: str, tz_path: str | None = None, *,
 
 def _new_task_row(conn, task_id: str, title: str, target: str,
                   tz_doc: str | None, *, is_canary: bool = False,
-                  journal_detail: str) -> None:
+                  journal_detail: str, model_set: str | None = None,
+                  set_members: dict | None = None) -> None:
     """Общий скелет заведения строки задачи (R1-F4, REVIEW.md итерация 1):
     SPEC из шаблона, `TZ.md` (если есть), артефактная ветка пульта, строка
     в БД, запись в журнал — переиспользуется `cmd_new` (ТЗ Оператора) и
     `spawn_subtask` (подраздел секции «## Деление»), отличающимися только
-    источником `tz_doc`, пометкой `is_canary` и текстом записи журнала."""
+    источником `tz_doc`, пометкой `is_canary`, набором моделей и текстом
+    записи журнала."""
     branch = f"task/{task_id.lower()}-{slugify(title)}"
     spec = (config.TEMPLATES / "SPEC.md").read_text(encoding="utf-8")
     spec = spec.replace("TASK_ID", task_id).replace("<название задачи>", title)
 
     _new_external_artifact_branch(task_id, title, spec, tz_doc)
 
+    members_json = (json.dumps(set_members, ensure_ascii=False)
+                    if model_set is not None else None)
     store.insert_task(conn, task_id, title, "spec_writing", branch, target,
-                      config.DEFAULT_BUDGET_USD, is_canary=is_canary)
+                      config.DEFAULT_BUDGET_USD, is_canary=is_canary,
+                      model_set=model_set, model_set_members=members_json)
     store.journal(conn, task_id, "operator", "created", journal_detail)
+    if model_set is not None:
+        store.journal(conn, task_id, "operator", "набор моделей задачи",
+                      f"{model_set}: {models.members_text(set_members)}")
 
 
 def spawn_subtask(parent_id: str, parent_title: str, title: str,
@@ -775,10 +803,15 @@ def cmd_status() -> None:
         wave_breaker = _wave_breaker_suffix(r, wave_breaker_open)
         division = _division_suffix(rows, r)
         tokens = _tokens_field(conn, r["id"])
+        # Набор моделей задачи — сразу за бюджетом (SPEC
+        # 01M3YCHS4F08VTV6XX10VF92H3, требование 8): от набора зависят и
+        # модели шагов, и тариф, по которому тратится этот бюджет.
+        model_set = models.task_set_name(r)
+        set_field = f"  набор {model_set}" if model_set else ""
         print(
             f"{r['id']}  {r['state']:<13} "
             f"ревью {r['review_iters']}/{config.LIMIT_REVIEW_ITERS}"
-            f"  ${r['spent_usd']:.2f}/{r['budget_usd']:.2f}"
+            f"  ${r['spent_usd']:.2f}/{r['budget_usd']:.2f}{set_field}"
             f"  токенов {tokens}  {r['title']}"
             f"{flag}{mark}{holder}{zone}{wave_breaker}{division}{merge_wait}"
         )
@@ -807,6 +840,10 @@ def cmd_show(task_id: str) -> None:
           f"  отказов приёмки: {t['accept_rejects']}"
           f"/{config.LIMIT_ACCEPT_REJECTS}"
           f"  бюджет: ${t['spent_usd']:.2f}/{t['budget_usd']:.2f}")
+    model_set = models.task_set_name(t)
+    if model_set:
+        print(f"  набор задачи: {model_set} "
+              f"({t['model_set_members'] or '—'})")
     for name in ("SPEC.md", "PLAN.md", "REVIEW.md", "TEST_REPORT.md"):
         meta = _artifact_frontmatter(t["target"], task_id, name)
         if meta:

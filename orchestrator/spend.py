@@ -426,9 +426,14 @@ def journal_model(detail: str) -> str | None:
     return match.group(1) if match else None
 
 
-def role_tariff(role: str) -> models.EffectiveTariff | None:
+def role_tariff(role: str, task=None) -> models.EffectiveTariff | None:
     """Действующий тариф модели РОЛИ (цепочка «роль -> ярус -> модель»);
     `None` — цепочка не разрешилась.
+
+    `task` — строка задачи шага (SPEC 01M3YCHS4F08VTV6XX10VF92H3,
+    требование 5): у задачи с набором модель роли — модель набора, на
+    которой шаг и шёл (`models.resolve_task_role`), а не боевая модель
+    роли. `None` — разрешение без задачи, как до набора.
 
     Деградация вместо исключения — требование 9 SPEC
     01M300A14KRHCFB0DQXVCBJEKF: учёт шага важнее цены и не имеет права
@@ -439,7 +444,8 @@ def role_tariff(role: str) -> models.EffectiveTariff | None:
     стоимость шага.
     """
     try:
-        resolved = models.resolve_role(role)
+        resolved = (models.resolve_role(role) if task is None
+                    else models.resolve_task_role(role, task).resolution)
     except models.ModelsError:
         return None
     return models.EffectiveTariff(resolved.model, resolved.tariff,
@@ -512,7 +518,8 @@ def _tokens_by_type_text(tokens_by_type: dict) -> str:
                      for kind in models.PRICE_KINDS)
 
 
-def partial_cost_usd(role: str, tokens_by_type: dict) -> float | None:
+def partial_cost_usd(role: str, tokens_by_type: dict,
+                     task=None) -> float | None:
     """Стоимость разбивки usage по действующему тарифу МОДЕЛИ роли, или
     `None` — тариф не разрешился (SPEC 01M300A14KRHCFB0DQXVCBJEKF,
     требования 1-2, AC-2).
@@ -528,8 +535,11 @@ def partial_cost_usd(role: str, tokens_by_type: dict) -> float | None:
     (`models._prices`, `IncompletePriceError`) — отказ стал строже и
     переехал раньше по течению, к чтению файла, а сюда неполный тариф
     попасть уже не может.
+
+    `task` — строка задачи шага: тариф модели набора задачи, а не боевой
+    модели роли (`role_tariff`).
     """
-    effective = role_tariff(role)
+    effective = role_tariff(role, task)
     if effective is None:
         return None
     return tariff_cost_usd(effective.tariff, tokens_by_type)
@@ -798,7 +808,9 @@ def charge_missing_result(conn, task_id: str, role: str, numbered: str,
         return ""
 
     total_tokens = sum(partial_tokens.values())
-    effective = role_tariff(role)
+    # Тариф модели, на которой шаг фактически шёл: у задачи с набором это
+    # модель набора (SPEC 01M3YCHS4F08VTV6XX10VF92H3, требование 5).
+    effective = role_tariff(role, store.get_task(conn, task_id))
     rate_reason = f"тариф модели роли {role!r} не разрешён"
     if effective is not None:
         record_tariff(conn, effective)

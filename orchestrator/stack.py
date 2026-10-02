@@ -179,6 +179,11 @@ def model_providers() -> set:
     `models`/`roles` импортируются внутри функции: оба несут аннотации
     вида `X | None`, а этот модуль обязан импортироваться
     интерпретатором 3.9 (докстринг у `REQUIRED_PYTHON`).
+
+    Плюс провайдеры моделей из наборов незакрытых задач (SPEC
+    01M3YCHS4F08VTV6XX10VF92H3, требование 4): набор задачи переводит
+    роль на модель, и CLI этой модели нужен её шагу так же, как CLI яруса
+    (`models.live_task_set_providers`).
     """
     from . import models, roles
     try:
@@ -194,7 +199,7 @@ def model_providers() -> set:
             found.add(models.resolve_role(role, catalog, local).provider)
         except models.ModelsError:
             continue
-    return found
+    return found | models.live_task_set_providers()
 
 
 def demanded_optional_tools() -> dict:
