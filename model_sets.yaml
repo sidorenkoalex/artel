@@ -9,6 +9,8 @@
 # canary_templates:  <title прогона канарейки>: быстрый | средний | трудный
 
 sets:
+  codex-dev:
+    developer: gpt-6-sol
 pairs:
   developer:
     gpt-6-sol:
