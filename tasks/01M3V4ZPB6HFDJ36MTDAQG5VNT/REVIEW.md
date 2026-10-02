@@ -2,8 +2,8 @@
 task: 01M3V4ZPB6HFDJ36MTDAQG5VNT
 type: review
 author_role: reviewer
-status: changes_requested
-iteration: 1
+status: approved
+iteration: 2
 schema_version: 5
 ---
 
@@ -11,50 +11,48 @@ schema_version: 5
 
 ## Фаза A — план
 
-- Таблица покрытия формально полна (требования 1–5 → шаги 1, 2; 6 → 2, 3), шаги размера MR. Выбор по ANSWER-5 п.2 (отказ «дефект пульта» достижим и сохранён) записан с основанием по коду; п.3 (AC-12 — набор с ролью Codex) отражён в PLAN и `docs/stack.md`.
-- «Влияние на систему» соответствует diff: затронуты только ветка канарейки с ролями Codex, `canary_drive` (новый флаг `--codex-home`) и комментарии `providers/codex.py`; обычная задача окружение не меняет (долгоживущий `test_ac1_profile_is_dedicated_and_persistent` проверяет `CODEX_HOME` обычного шага).
-- Замечание к плану не выношу; но в «Влиянии» не названа одна правка тестов вне мандата — см. R1-F1.
+- PLAN дополнен разделом «Замечания ревью, итерация 1» с описанием исправления R1-F1/R1-F2; таблица покрытия (1–5 → шаги 1, 2; 6 → 2, 3) по-прежнему полна, шаги размера MR.
+- «Влияние на систему» соответствует инкрементальному diff `f3446b2e..c6f15838`: затронуты только `docs/stack.md` (абзац о профиле), docstring/комментарии `orchestrator/canary.py` (без изменения логики) и один метод `tests/test_stack_codex_section.py` (строже прежнего). Замечаний к плану нет.
 
 ## Соответствие SPEC
 
 | Требование | Вердикт | Комментарий |
 |---|---|---|
-| 1 (AC-1) | OK | `canary._canary_profile_home()` = `~/.artel-canary-codex`, `CODEX_HOME` = `<он>/.codex`; клоны по-прежнему эфемерные. |
-| 2 (AC-2, AC-3, AC-5) | OK | Login не выполняется пультом; `login_status_command` несёт `AUTH_OVERRIDES` (keyring + chatgpt), поэтому проверка до восстановления профиля не зависит от наличия `config.toml` в профиле. Неуспех — `sys.exit` до `yield` клона. |
-| 3 (AC-4, AC-6) | OK | Проверка и шаг берут `CODEX_HOME` из одного переопределения; в процесс клона он идёт `--codex-home`. `auth.json` в профиле не читается — отказ. Долгоживущие `test_ac4`, `test_ac6` зелёные. |
-| 4 (AC-7, AC-8) | OK | Боевой дом только читается (указатель-фолбэк); профиль очищается перед каждой задачей и наполняется из референса дерева клона; `flock` держит профиль на весь прогон. |
-| 5 (AC-5, AC-9) | OK | Проверка входа и восстановление внутри `try` блока клона; `finally` убирает клон и восстанавливает переопределение. |
-| 6 (AC-10, AC-11, AC-13) | Реализовано не так | AC-10 закрыт (`test_ac10_…`, `CanaryProfileRefusalTest`). AC-11/AC-13: из `docs/stack.md` исчезло объяснение, ПОЧЕМУ профиль обязан быть постоянным (запись входа ищется в связке по ПУТИ `CODEX_HOME`), и вместе с ним снят якорь `"ПУТИ"` теста без мандата — R1-F1. AC-12 — ручная приёмка Оператора (ANSWER-5 п.3). |
+| 1 (AC-1) | OK | Без изменений с итерации 1: `CODEX_HOME=~/.artel-canary-codex/.codex`, клоны эфемерные; долгоживущий `test_ac1_…` зелёный. |
+| 2 (AC-2, AC-3, AC-5) | OK | Без изменений; `test_ac3_…`, `test_ac5_…` зелёные. |
+| 3 (AC-4, AC-6) | OK | Без изменений; `test_ac4_…`, `test_ac6_…` зелёные. |
+| 4 (AC-7, AC-8) | OK | Без изменений; `test_ac7_…`, `test_ac8_…` зелёные. |
+| 5 (AC-5, AC-9) | OK | Без изменений; `test_ac9_…` зелёный. Перенос комментария «Требование 5» внутрь блока `with` (`orchestrator/canary.py:2637–2641`) — только отступ, код не тронут. |
+| 6 (AC-10, AC-11, AC-12, AC-13) | OK | AC-11/AC-13: в `docs/stack.md:258–266` возвращено объяснение «запись подписочного входа ChatGPT клиент ищет в связке ключей по ПУТИ `CODEX_HOME`» с выводом о постоянстве пути; в `tests/test_stack_codex_section.py:69` возвращён `assertIn("ПУТИ", self.body)`, прежние проверки метода сохранены и дополнены — тест строже, не слабее. AC-10 — `test_ac10_…` зелёный. AC-12 — ручная приёмка Оператора на наборе с ролью Codex (ANSWER-5 п.3). |
 
 ## Замечания
 
-- major — `tests/test_stack_codex_section.py:64` (метод `test_section_says_the_login_record_is_keyed_by_the_codex_home_path`) и `docs/stack.md:258–270` — утверждение `self.assertIn("ПУТИ", self.body)` удалено (коммит `5e67f22f`) и заменено проверкой другого свойства («отдельный постоянный профиль»), а из документа ушло предложение «запись подписочного входа клиент ищет в связке ключей по ПУТИ `CODEX_HOME`». Мандат ANSWER-5 п.1 перечисляет ровно два метода (`test_ac1_canary_writes_trust_only_in_clone_home`, `test_section_says_the_clone_gets_the_pult_client_directory`); этот метод в нём не назван, а гейт неослабления его не поймал, потому что имя метода сохранилось. Это именно то свойство, на котором держится вся механика задачи: новый текст говорит лишь «сохраняет адрес подписочного входа» и «отдельной записью для нового `CODEX_HOME`». Сценарий: следующий читатель не находит в документе, что вход привязан к пути, и «упрощает» профиль до каталога на прогон или внутри клона — канарейка снова теряет вход (ровно инцидент `20261001T070315Z`), а сторож документа зелёный. Нарушение AC-11 («существующие защитные тесты не ослаблены») и раздела «Не входит» SPEC. Предложение: вернуть в абзац о профиле явное объяснение «запись входа клиент ищет в связке ключей по ПУТИ `CODEX_HOME`, поэтому путь профиля постоянен» и вернуть в метод `assertIn("ПУТИ", self.body)` (новое утверждение можно оставить рядом); либо, если снятие якоря намеренное, получить мандат Оператора на этот метод.
-- minor — `orchestrator/canary.py:2460–2462` (docstring `_run_one_task`: «`codex_auth` … собранный `_codex_clone_auth` ДО клона») и `orchestrator/canary.py:2612–2616` (комментарий в `cmd_canary` про `_codex_clone_auth`/«байт-в-байт») — после смены механики описывают прежний путь; `_codex_clone_auth` в штатном коде больше не вызывается (только `tests/test_canary_codex_clone_auth.py`). Сценарий: читатель ищет подготовку входа по докстрингу и попадает в мёртвую ветку. Предложение: сослаться на `_locked_canary_profile`/`_canary_profile_auth` и пометить `_codex_clone_auth` как оставленную для старой формы (как уже сделано в docstring `_ephemeral_clone`). Заодно — комментарий «Требование 5» в `cmd_canary` остался на внешнем отступе внутри блока `with` (косметика).
+Новых замечаний нет.
 
 Проверено и замечанием не является:
-- Порядок «проверка входа → восстановление профиля»: первая проверка идёт с конфигом профиля прошлого прогона, но `login status` получает `-c cli_auth_credentials_store=keyring -c forced_login_method=chatgpt` (`providers/codex.py:490–508`), так что ответ не зависит от остатков конфига; платный шаг запускается уже после восстановления, с тем же `CODEX_HOME`.
-- `flock` на отдельном открытом файле в том же процессе даёт `EWOULDBLOCK` — вложенный прогон отказывает (долгоживущий `test_ac8` зелёный).
-- Ссылки внутри профиля удаляются `unlink`, не разыменовываются; профиль-ссылка и замок-ссылка — отказ.
-- Пометки `markers.py` (AC-2, AC-11, AC-12 manual) обоснованы внешним состоянием/смысловым сравнением/реальным прогоном.
+- Докстринг `test_section_says_the_login_record_is_keyed_by_the_codex_home_path` описывает сценарий и несёт наблюдаемую заявку «из раздела исчезает причина постоянства профиля»; временная мутация («по ПУТИ» → «по адресу» в `docs/stack.md`) красит метод — заявка исполнима.
+- `_codex_clone_auth` в `orchestrator/` больше не вызывается (только определение `canary.py:896`), docstring честно помечает её прежней формой.
+- Карта `docs/codebase-map.md`: diff `f3446b2e..HEAD` за вычетом `built_at_sha` пуст по содержимому (правки `canary.py` — только комментарии).
 
 ## Реестр замечаний
 
 | id | статус | файл/строка | суть | последствие | решение |
 |---|---|---|---|---|---|
-| R1-F1 | fixed | tests/test_stack_codex_section.py:64; docs/stack.md:258 | Снят якорь `"ПУТИ"` без мандата ANSWER-5 и удалено объяснение привязки входа к пути `CODEX_HOME` | Сторож документа зелёный при утрате обоснования постоянного профиля; путь к регрессии инцидента 20261001T070315Z; нарушение AC-11 | Вернуть объяснение в `docs/stack.md` и `assertIn("ПУТИ", …)` в метод, либо получить мандат Оператора. Разработчик (c6f15838): в абзац о профиле `docs/stack.md` возвращено «запись подписочного входа ChatGPT клиент ищет в связке ключей по ПУТИ `CODEX_HOME`», с выводом о постоянстве пути и ссылкой на прогон 20261001T070315Z; в метод возвращён `assertIn("ПУТИ", self.body)` рядом с новым утверждением, докстринг расширен; мутация «ПУТИ»→«адресу» в документе красит метод |
-| R1-F2 | fixed | orchestrator/canary.py:2460, 2612 | Устаревшие docstring/комментарий ссылаются на `_codex_clone_auth` как на штатный путь | Вводит в заблуждение при сопровождении | Обновить ссылки на `_locked_canary_profile`/`_canary_profile_auth`. Разработчик (c6f15838): docstring `_run_one_task` и комментарий в `cmd_canary` ссылаются на `_locked_canary_profile`/`_canary_profile_auth`; docstring `_codex_clone_auth` помечает её как прежнюю форму, штатно не зовущуюся; комментарий «Требование 5» перенесён на отступ блока `with` |
+| R1-F1 | accepted | tests/test_stack_codex_section.py:64; docs/stack.md:258 | Снят якорь `"ПУТИ"` без мандата ANSWER-5 и удалено объяснение привязки входа к пути `CODEX_HOME` | Сторож документа зелёный при утрате обоснования постоянного профиля | Исправлено в c6f15838: объяснение возвращено в `docs/stack.md`, `assertIn("ПУТИ", …)` возвращён рядом с новым утверждением; мутация документа красит метод (проверено ревьювером) |
+| R1-F2 | accepted | orchestrator/canary.py:2460, 2612 | Устаревшие docstring/комментарий ссылались на `_codex_clone_auth` как на штатный путь | Вводило в заблуждение при сопровождении | Исправлено в c6f15838: ссылки на `_locked_canary_profile`/`_canary_profile_auth`, `_codex_clone_auth` помечена прежней формой, комментарий «Требование 5» на отступе блока `with` |
 
 ## Вердикт
 
-changes_requested: исправить R1-F1 (вернуть объяснение привязки входа к пути `CODEX_HOME` в `docs/stack.md` и якорь `"ПУТИ"` в `test_section_says_the_login_record_is_keyed_by_the_codex_home_path`); R1-F2 — по возможности тем же заходом.
+approved: R1-F1 и R1-F2 исправлены по сути, новых дефектов в инкрементальном diff нет. AC-12 остаётся ручной приёмкой Оператора (прогон канарейки на наборе с ролью Codex после первоначального входа в `~/.artel-canary-codex`).
 
 ## Проверено исполнением
 
-- `python3 -m pytest -q -p no:cacheprovider tests/test_01m3v4zpb6hfdj36mtdaqg5vnt_canary_profile.py tests/test_canary_profile_safety.py tests/test_stack_codex_section.py tests/test_01m3sk48d7rdqpsen78894gda5_codex_home.py tests/test_canary_codex_clone_auth.py tests/test_canary_drive.py tests/test_providers_codex.py tasks/01M3V4ZPB6HFDJ36MTDAQG5VNT/acceptance_tests` — 122 passed, 100 subtests passed.
-- `python3 -m pytest -q -p no:cacheprovider tests/test_canary.py` — 93 passed, 4 subtests passed.
-- `git log 3f2f6358..HEAD -- tests/test_stack_codex_section.py` + `git show 5e67f22f` — удаление `assertIn("ПУТИ", …)` произошло в `5e67f22f`, до ANSWER-5; `git diff 3f2f6358 HEAD -- docs/stack.md` — удалена строка «…ищет в связке ключей по ПУТИ `CODEX_HOME`…».
-- `grep` по `orchestrator/` — `_codex_clone_auth` вызывается только тестами; `login_status_command` несёт `AUTH_OVERRIDES`.
+- `timeout 600 python3 -m pytest -q -p no:cacheprovider tests/test_stack_codex_section.py tests/test_01m3v4zpb6hfdj36mtdaqg5vnt_canary_profile.py tests/test_canary_profile_safety.py tests/test_canary_codex_clone_auth.py tests/test_canary_drive.py tests/test_canary.py tests/test_codebase_map.py tasks/01M3V4ZPB6HFDJ36MTDAQG5VNT/acceptance_tests` — 189 passed, 17 subtests passed.
+- Временная мутация: в `docs/stack.md` «по ПУТИ `CODEX_HOME`» → «по адресу `CODEX_HOME`»; `tests/test_stack_codex_section.py` — 1 failed (`test_section_says_the_login_record_is_keyed_by_the_codex_home_path`), 2 passed; документ восстановлен `git checkout -- docs/stack.md`, дерево чистое.
+- `grep -rn "_codex_clone_auth(" orchestrator` — только определение `canary.py:896`.
+- `git diff f3446b2e HEAD -- docs/codebase-map.md` без строки `built_at_sha` — содержательных изменений нет.
+- CI коммита c6f15838 зелёный (14 проверок, по пакету).
 
 ## Предложения системе
 
-- Гейт неослабления тестов (`advance_gates`) ловит переименование/удаление метода, но не замену `assert` в методе с сохранённым именем (здесь `"ПУТИ"` → другое свойство прошло незамеченным, и мандат ANSWER-5 его не охватил). Стоит сравнивать набор утверждений изменённых методов, а не только имена.
+- Ревью-пакет: запись в `/tmp` для временной мутации отклоняется правами шага — приём «временная мутация» из review-checklist стоит описать через `git checkout -- <файл>` для восстановления, а не через копию вне рабочего каталога.
