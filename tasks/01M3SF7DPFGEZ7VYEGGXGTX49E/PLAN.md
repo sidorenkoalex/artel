@@ -127,6 +127,29 @@ push/`done`/уборки (задача уже `done` — исход CI не от
   своей временной мутации (11 мутаций в `ci.py`/`artel.py`/
   `fsm_merge_gate.py`, код возвращён).
 
+### Подтяжка main (возврат по конфликту, ANSWER-1)
+
+- `git merge main` → коммит `fb5b572e`. `orchestrator/artel.py`: справка
+  «Команды:» взята из main целиком, в строку `approve` добавлен
+  `[--fixes-main "<основание>"]` после `[--accept-red "<основание>"]`;
+  остальной код обеих сторон без изменений (auto-merge `fsm.py` чистый).
+  `docs/codebase-map.md` взят из main и перегенерирован
+  `python3 scripts/codebase_map.py`. Других правок нет.
+- Прогон после подтяжки: `test_pin`, `test_artel_role_restricted_commands`,
+  `test_new_argv_parsing`, `test_cmd_approve_dispatch`,
+  `test_merge_gate_ci_wait`, `test_codebase_map`, `test_ci_status`,
+  `test_doctor`, `test_invariants`, `test_fsm_merge_gate_done_snapshot` —
+  363 passed.
+- Планка задачи (`tests/test_01m3sf7dpfgez7vyeggxgtx49e_main_ci.py`,
+  `acceptance_tests/`) и `tests/test_main_ci_line.py::FixesMainArgTest` в
+  шаге роли — 19 failed, все одной причиной: пришедший из main отказ
+  команд процессу роли (`artel.py`, SPEC 01M3XTF5506GF43HD51ECE230T) —
+  «artel.py approve|pin-update: команда недоступна процессу роли
+  developer», потому что окружение шага несёт `ARTEL_ROLE`. До подтяжки
+  те же тесты были зелёными (итоги выше); у CI и прогона планки пультом
+  `ARTEL_ROLE` нет. Снять маркер в шаге роли нельзя (команда требует
+  подтверждения), правка тестов вне ANSWER-1 — поэтому не правились.
+
 ## Покрытие требований
 
 | Требование | Шаг |
@@ -185,3 +208,9 @@ push/`done`/уборки (задача уже `done` — исход CI не от
 - `ci.main_line_status` опрашивает `gh` по коммиту за раз; строка `doctor`
   и сверка перед мержем на длинной документной цепочке — десятки вызовов.
   Кандидат в задачу: один GraphQL-запрос на окно линии.
+- Отказ команд процессу роли (01M3XTF5506GF43HD51ECE230T) делает
+  CLI-тесты `artel.main(["approve"|"pin-update", …])` красными внутри шага
+  роли, хотя в CI они зелёные: разработчик не может прогнать такую планку
+  в своём шаге. Кандидат: песочница `tests/sandbox.py` снимает
+  `ARTEL_ROLE` на время сценария (как вручную делают
+  `test_approve_acceptance_full_suite.py:270`, `test_doctor.py:474`).
