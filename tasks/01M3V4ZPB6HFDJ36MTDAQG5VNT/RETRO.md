@@ -1,0 +1,23 @@
+---
+operator: Alexander Sidorenko
+model: unknown
+artel_sha: 7f55c29abdb91a21030b90bcb3e6dd3332486d3d
+---
+
+# RETRO: 01M3V4ZPB6HFDJ36MTDAQG5VNT — Канарейка Codex: авторизация при изолированном доме без записи в боевой профиль
+
+Итог: done, sha 7f55c29abdb91a21030b90bcb3e6dd3332486d3d
+Адрес артефактов: refs/artifacts/01M3V4ZPB6HFDJ36MTDAQG5VNT
+Суть: Канарейка Codex: авторизация при изолированном доме без записи в боевой профиль — Прогон канарейки `20261001T070315Z` завершился до ролей: вход домом роли пульта подтверждён, но окружением клона — нет.
+
+Стоимость итого: $10.24
+  analyst: $1.29, токенов 2443555 (input=297067, output=22712, cache_write=0, cache_read=2123776), провайдер codex, модель gpt-5.6-terra
+  test_author: $1.18, токенов 3323755 (input=125509, output=29350, cache_write=0, cache_read=3168896), провайдер codex, модель gpt-6-sol
+  developer: $6.40, токенов 13434358 (input=195337, output=67588, cache_write=298212, cache_read=12873221), провайдер codex, модель gpt-6-sol
+  reviewer: $1.37, токенов 912456 (input=28, output=15721, cache_write=112698, cache_read=784009), провайдер claude, модель claude-opus-5-5
+
+Ревью: 1 итераций; приёмка: 0 отказ(ов)
+
+Эскалации: 4 (последняя): эскалация от разработчика: **Вопросы**…
+
+Приёмочные тесты: 1 тест(ов), 0 manual, 0 skip
