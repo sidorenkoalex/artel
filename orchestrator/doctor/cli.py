@@ -1,4 +1,4 @@
-"""Пакет orchestrator/doctor -- команда doctor: all_checks, cmd_doctor, cmd_alert_ack.
+"""Пакет orchestrator/doctor -- команда doctor: all_checks, cmd_doctor, cmd_alert_ack, cmd_alert_ack_bulk.
 
 Коллаборанты читаются лениво через фасад doctor (см. докстринг
 orchestrator/doctor/__init__.py) -- не импортируются напрямую.
@@ -231,3 +231,57 @@ def cmd_alert_ack(alert_id: str, resolution: str) -> None:
     if error is not None:
         sys.exit(f"alert-ack: {error}")
     print(f"alert #{parsed_id}: подтверждён")
+
+
+def cmd_alert_ack_bulk(source: str | None, needle: str | None,
+                       resolution: str | None, confirmed: bool) -> None:
+    """`alert-ack --source <источник> --grep <подстрока> "<решение>" [--yes]`
+    (SPEC 01M3YDHTY1Y67KB98FVSHREC4N, требования 4-7): открытые `incident`
+    источника с подстрокой в тексте — перечнем без `--yes`, подтверждением
+    каждого с `--yes`.
+
+    `None` — аргумент не передан. Пустое или пробельное значение любого из
+    трёх — отказ до чтения БД: пустая подстрока отобрала бы все `incident`
+    источника, пустое решение закрыло бы пачку без следа «почему».
+
+    Подтверждение — тот же `alerts.ack(..., "operator", resolution)`, что у
+    одиночной формы: `ack_by` и текст решения совпадают байт-в-байт, отказ
+    `ack` на одном алерте (его успели подтвердить между отбором и записью)
+    не останавливает остальные, но даёт ненулевой код возврата.
+    """
+    for name, value in (("--source", source), ("--grep", needle),
+                        ("текст решения", resolution)):
+        if value is None or not value.strip():
+            sys.exit(f"alert-ack: массовая форма требует непустой {name} — "
+                     f'alert-ack --source <источник> --grep <подстрока> '
+                     f'"<решение>" [--yes]')
+    conn = doctor.store.db()
+    incidents, skipped = doctor.alerts.bulk_ack_selection(conn, source, needle)
+    print(f"alert-ack --source {source} --grep {needle!r}: отобрано открытых "
+          f"incident: {len(incidents)}")
+    if incidents:
+        days = sorted(row["ts"][:10] for row in incidents)
+        print(f"  диапазон дат: {days[0]} — {days[-1]}")
+        print(f"  номера: {', '.join(str(row['id']) for row in incidents)}")
+        for row in incidents:
+            first_line = ((row["message"] or "").splitlines() or [""])[0]
+            print(f"  #{row['id']} {row['ts']}  {first_line[:200]}")
+    if skipped:
+        kinds = {}
+        for row in skipped:
+            kinds[row["kind"]] = kinds.get(row["kind"], 0) + 1
+        detail = ", ".join(f"{kind}: {n}" for kind, n in sorted(kinds.items()))
+        print(f"  пропущено не-incident: {len(skipped)} ({detail}) — массовой "
+              f"формой не подтверждаются, только одиночной alert-ack <id>")
+    if not confirmed:
+        print("предпросмотр: ничего не изменено; подтвердить — та же команда "
+              "с --yes")
+        return
+    failures = []
+    for row in incidents:
+        error = doctor.alerts.ack(conn, row["id"], "operator", resolution)
+        if error is not None:
+            failures.append(error)
+    print(f"подтверждено: {len(incidents) - len(failures)} из {len(incidents)}")
+    if failures:
+        sys.exit("alert-ack: не подтверждены — " + "; ".join(failures))

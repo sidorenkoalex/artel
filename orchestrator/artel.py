@@ -136,6 +136,7 @@ workspace, tasks, knowledge, logs). БД одна на все проекты: с
   kill <id> | release <id> |
   pause [--now] <id> | resume <id> | log <id> | budget <id> <usd> |
   target-init <target> | doctor [--restore] [--fix] | alert-ack <id> "<решение>" |
+  alert-ack --source <источник> --grep <подстрока> "<решение>" [--yes] |
   version | models |
   admit [--revoke] <роль> <модель> --basis "<основание>" |
   canary --k <N> [--sha <sha>] [--set <имя>] [--template <имя>,<имя>] |
@@ -1221,6 +1222,45 @@ def _cmd_new(rest: list) -> None:
     catalog.cmd_new(title, tz_path=tz_path)
 
 
+def _cmd_alert_ack(rest: list) -> None:
+    """`alert-ack <id> "<решение>"` — одиночная форма, прежний разбор как
+    есть (SPEC 01M3YDHTY1Y67KB98FVSHREC4N, требование 8); `--source` или
+    `--grep` среди аргументов — массовая форма (требование 4).
+
+    Флаг без значения и лишний позиционный аргумент — отказ: значение,
+    сдвинутое на чужое место (`--grep` без подстроки съел бы текст
+    решения), иначе молча отобрало бы не те алерты. Отсутствующие и
+    пустые значения отсекает `doctor.cli.cmd_alert_ack_bulk`."""
+    if "--source" not in rest and "--grep" not in rest:
+        doctor.cmd_alert_ack(rest[0], rest[1] if len(rest) > 1 else "")
+        return
+    values = {"--source": None, "--grep": None}
+    positional = []
+    confirmed = False
+    i = 0
+    while i < len(rest):
+        arg = rest[i]
+        if arg in values:
+            if i + 1 >= len(rest) or rest[i + 1] in ("--source", "--grep",
+                                                     "--yes"):
+                sys.exit(f"alert-ack: {arg} требует значение следующим "
+                         f"аргументом.")
+            values[arg] = rest[i + 1]
+            i += 2
+            continue
+        if arg == "--yes":
+            confirmed = True
+        else:
+            positional.append(arg)
+        i += 1
+    if len(positional) > 1:
+        sys.exit(f"alert-ack: массовая форма принимает один текст решения, "
+                 f"получено {len(positional)}: {positional}")
+    doctor.cli.cmd_alert_ack_bulk(values["--source"], values["--grep"],
+                                  positional[0] if positional else None,
+                                  confirmed)
+
+
 def _reason_arg(rest: list) -> str | None:
     """Значение флага `--reason` команд `amend-tests <id> --reason
     "<основание>"` и `ci-rerun <id> --reason "<основание>"`; `None` — флаг
@@ -1417,8 +1457,7 @@ def main() -> None:
                                             rest[1] if len(rest) > 1 else ""),
         "target-init": lambda: projects.cmd_target_init(rest[0]),
         "doctor": lambda: doctor.cmd_doctor("--restore" in rest, "--fix" in rest),
-        "alert-ack": lambda: doctor.cmd_alert_ack(
-            rest[0], rest[1] if len(rest) > 1 else ""),
+        "alert-ack": lambda: _cmd_alert_ack(rest),
         "version": lambda: version.cmd_version(),
         # `models` — только чтение (SPEC 01M3009Y9AGGY6ZCFA7H1HJ1TD,
         # требование 12): под ролью исполняется — она в белом списке
