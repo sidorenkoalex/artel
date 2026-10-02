@@ -175,6 +175,7 @@ from .misc_checks import (check_backup_age, check_pending_notes,
                           check_remote_empty, check_base_branch)
 from .root_pin import (check_root_pin, fetch_origin_main_sha,
                        unpushed_commits, check_pin_unpushed)
+from .main_ci import MAIN_CI_CHECK, check_main_ci
 from .stale_cycles import (STALE_CYCLES_CHECK, START_UNDETERMINED,
                            process_start_time, _observation_args,
                            stale_cycles, stale_cycle_lines,

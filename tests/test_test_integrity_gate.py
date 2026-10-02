@@ -14,6 +14,7 @@ import inspect
 import subprocess
 import sys
 import unittest
+from contextlib import ExitStack
 from pathlib import Path
 from unittest import mock
 
@@ -22,7 +23,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from scripts import guard  # noqa: E402
 
 from orchestrator import (config, fsm_advance, fsm_merge_gate,  # noqa: E402
-                          gitcmd, store)
+                          gitcmd, review, store)
 from orchestrator.advance_gates import test_integrity  # noqa: E402
 from tests.sandbox import (SchemaSeededTmpRootTest,  # noqa: E402
                            TaskIdSchemaConnTmpRootTest)
@@ -929,6 +930,184 @@ class MergeGateTest(SchemaSeededTmpRootTest):
         self.assertEqual(1, len(skips), skips)
         self.assertIn("tests/test_new.py::NewTest::test_call_inside_if — "
                       "вызов внутри if", skips[0])
+
+
+CONTEXT_BASE = '''import unittest
+
+
+class CloneHomeTest(unittest.TestCase):
+
+    def test_defect_names_home(self):
+        defect = check()
+        self.assertIn(str(self.pult_home / "role"), defect)
+
+
+class StackSectionTest(unittest.TestCase):
+
+    def test_section_names_paths(self):
+        self.assertIn("ПУТИ", self.body)
+'''
+
+# Оба случая «Контекста» SPEC 01M3Y753QNG6TS5C7MTJS1MEV6 синтетически:
+# 01M3SK48D7RDQPSEN78894GDA5 (`self.pult_home` -> `self.clone_home`) и
+# 01M3V4ZPB6HFDJ36MTDAQG5VNT (`assertIn("ПУТИ", …)` заменён другим `assertIn`).
+CONTEXT_HEAD = CONTEXT_BASE.replace("self.pult_home", "self.clone_home") \
+    .replace('"ПУТИ", self.body', '"ВЫХОД", self.body')
+
+CONTEXT_PATH = "tests/test_context.py"
+CLONE_HOME_LINE = (f"{CONTEXT_PATH}: утверждения изменены в "
+                   f"CloneHomeTest::test_defect_names_home: "
+                   f'self.assertIn(str(self.pult_home / "role"), defect)')
+STACK_SECTION_LINE = (f"{CONTEXT_PATH}: утверждения изменены в "
+                      f"StackSectionTest::test_section_names_paths: "
+                      f'self.assertIn("ПУТИ", self.body)')
+
+
+class AssertionObservationTest(_GateSandbox):
+    """Наблюдение за изменёнными утверждениями на обоих рубежах и во входе
+    ревьювера (SPEC 01M3Y753QNG6TS5C7MTJS1MEV6, требование 5, тесты 10г-ж)."""
+
+    def setUp(self):
+        super().setUp()
+        store.insert_task(self.conn, self.task_id, "Задача", "in_dev",
+                          CODE_BRANCH, config.DEFAULT_TARGET, 25.0)
+        self.conn.commit()
+        self.entries = [("M", CONTEXT_PATH, None)]
+        self.sources[(BASE, CONTEXT_PATH)] = CONTEXT_BASE
+        self.sources[(CODE_BRANCH, CONTEXT_PATH)] = CONTEXT_HEAD
+
+    def patched(self):
+        stack = ExitStack()
+        for name, value in (("diff_base", mock.Mock(return_value=BASE)),
+                            ("diff_name_status",
+                             mock.Mock(return_value=self.entries)),
+                            ("show", self._show),
+                            ("ls_tree_files", self._ls_tree),
+                            ("git", self._git)):
+            stack.enter_context(mock.patch.object(gitcmd, name, value))
+        return stack
+
+    def observations(self):
+        return [detail for action, detail in self.journal()
+                if action == test_integrity.ASSERTION_OBSERVATION_ACTION]
+
+    def test_transition_passes_and_journals_both_context_cases(self):
+        """Переход `in_dev -> verifying` выполнен, журнал несёт одну запись
+        «изменены утверждения тестов (наблюдение)» с обоими случаями.
+
+        Ловит мутацию: находка об утверждениях не доходит до журнала либо
+        блокирует переход."""
+        with self.patched():
+            refused = fsm_advance._test_integrity_gate_refuses(
+                self.conn, self.task_id, self.t, ARTIFACT_BRANCH)
+        self.assertFalse(refused)
+        self.assertEqual([f"{CLONE_HOME_LINE}; {STACK_SECTION_LINE}"],
+                         self.observations())
+
+    def test_mandate_marks_only_covered_findings(self):
+        """Мандат `путь::Класс::метод` и мандат на путь помечают находку
+        «покрыто мандатом ANSWER-n»; мандат на другой метод — нет.
+
+        Ловит мутацию: находка заведена без имени метода либо под другим
+        именем."""
+        cases = (
+            ("ANSWER-1.md",
+             f"{CONTEXT_PATH}::CloneHomeTest::test_defect_names_home",
+             [f"{CLONE_HOME_LINE} — покрыто мандатом ANSWER-1",
+              STACK_SECTION_LINE]),
+            ("ANSWER-2.md", CONTEXT_PATH,
+             [f"{CLONE_HOME_LINE} — покрыто мандатом ANSWER-2",
+              f"{STACK_SECTION_LINE} — покрыто мандатом ANSWER-2"]),
+            ("ANSWER-3.md", f"{CONTEXT_PATH}::CloneHomeTest::test_other",
+             [CLONE_HOME_LINE, STACK_SECTION_LINE]),
+        )
+        for name, allowed, expected in cases:
+            with self.subTest(mandate=allowed):
+                self.answers.clear()
+                self.conn.execute("DELETE FROM steps")
+                self.add_answer(name, allowed)
+                with self.patched():
+                    self.assertIsNone(fsm_advance._test_integrity_gate(
+                        self.conn, self.task_id, self.t, ARTIFACT_BRANCH))
+                self.assertEqual(["; ".join(expected)], self.observations())
+
+    def test_merge_gate_and_review_package_carry_the_same_findings(self):
+        """Гейт мержа пишет ту же запись и мерж не останавливает; раздел
+        «Изменённые утверждения тестов» входа ревьювера несёт те же находки.
+
+        Ловит мутацию: наблюдение есть только на одном рубеже либо не
+        доходит до ревьювера."""
+        store.update_task(self.conn, self.task_id, state="merge_gate")
+        with self.patched():
+            escalated = test_integrity.merge_gate_escalates(
+                self.conn, self.task_id, "merge_gate", CODE_BRANCH,
+                ARTIFACT_BRANCH)
+            part = review._changed_assertions_part(
+                self.conn, self.task_id, CODE_BRANCH, ARTIFACT_BRANCH,
+                config.DEFAULT_TARGET, "run")
+        self.assertFalse(escalated)
+        self.assertEqual("merge_gate",
+                         store.get_task(self.conn, self.task_id)["state"])
+        self.assertEqual([f"{CLONE_HOME_LINE}; {STACK_SECTION_LINE}"],
+                         self.observations())
+        self.assertIn(review.CHANGED_ASSERTIONS_SECTION, part)
+        self.assertIn(CLONE_HOME_LINE, part)
+        self.assertIn(STACK_SECTION_LINE, part)
+
+    def test_vanished_method_and_unparseable_head(self):
+        """Исчезнувший метод — одна находка «метод … исчез» без находки об
+        утверждениях; неразбираемый head — отказ по исчезнувшим методам,
+        без исключения, с записью «наблюдение не выполнено».
+
+        Ловит мутацию: двойная находка либо трейсбек на неразбираемом
+        файле."""
+        self.sources[(CODE_BRANCH, CONTEXT_PATH)] = \
+            CONTEXT_BASE.split("\n\nclass StackSectionTest")[0] + "\n"
+        with self.patched():
+            refusal = fsm_advance._test_integrity_gate(
+                self.conn, self.task_id, self.t, ARTIFACT_BRANCH)
+        self.assertEqual(
+            f"{CONTEXT_PATH}: метод StackSectionTest::test_section_names_paths "
+            f"исчез", refusal.detail)
+        self.assertEqual([], self.observations())
+
+        self.conn.execute("DELETE FROM steps")
+        self.sources[(CODE_BRANCH, CONTEXT_PATH)] = "class Broken(:\n"
+        with self.patched():
+            refusal = fsm_advance._test_integrity_gate(
+                self.conn, self.task_id, self.t, ARTIFACT_BRANCH)
+        self.assertIn("CloneHomeTest::test_defect_names_home исчез",
+                      refusal.detail)
+        self.assertEqual([], self.observations())
+        unobserved = [detail for action, detail in self.journal()
+                      if action == test_integrity.ASSERTION_UNOBSERVED_ACTION]
+        self.assertEqual(1, len(unobserved), self.journal())
+        self.assertIn(f"наблюдение не выполнено: {CONTEXT_PATH}: "
+                      f"не разбирается (head)", unobserved[0])
+
+    def test_git_silence_journals_not_performed_on_both_routes(self):
+        """Молчание git — запись «наблюдение не выполнено: <причина>»:
+        на переходе рядом с прежним fail-closed отказом, на мерже — без
+        остановки.
+
+        Ловит мутацию: молчание git на наблюдении проходит молча, как
+        «находок нет», либо меняет прежнюю реакцию рубежа на сбой."""
+        store.update_task(self.conn, self.task_id, state="merge_gate")
+        with mock.patch.object(gitcmd, "diff_base", return_value=None):
+            refusal = fsm_advance._test_integrity_gate(
+                self.conn, self.task_id, self.t, ARTIFACT_BRANCH)
+            escalated = test_integrity.merge_gate_escalates(
+                self.conn, self.task_id, "merge_gate", CODE_BRANCH,
+                ARTIFACT_BRANCH)
+        self.assertIn("git не ответил", refusal.detail)
+        self.assertFalse(escalated)
+        unobserved = [detail for action, detail in self.journal()
+                      if action == test_integrity.ASSERTION_UNOBSERVED_ACTION]
+        self.assertEqual(2, len(unobserved), self.journal())
+        for detail in unobserved:
+            self.assertTrue(detail.startswith(
+                "наблюдение не выполнено: гейт неослабления тестов: git не "
+                "ответил"), detail)
 
 
 class DiffNameStatusTest(unittest.TestCase):

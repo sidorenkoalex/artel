@@ -13,6 +13,9 @@ import json
 import re
 import subprocess
 from pathlib import Path
+from typing import NamedTuple
+
+from scripts import ci_push_class
 
 from . import config, gitcmd
 
@@ -370,6 +373,199 @@ def status_kind(note: str) -> str:
     if "неизвестен" in note:
         return "unknown"
     return "red"
+
+
+# Цвет CI main (SPEC 01M3SF7DPFGEZ7VYEGGXGTX49E, требование 2): по каждой
+# проверке отдельно, с последнего коммита первой родительской линии, где она
+# реально исполнялась. Цвет одной головы врал: документный коммит main
+# пропускает job `python` (ADR-0016), пропуск зелёный — и первый же такой
+# коммит маскировал красный код под ним.
+MAIN_GREEN = "green"
+MAIN_RED = "red"
+MAIN_RUNNING = "running"
+MAIN_UNKNOWN = "unknown"
+
+# Потолок обхода линии. Документных коммитов подряд поверх последнего кода
+# на main бывает два-три десятка (02.10 — 25); проверка, не разрешившаяся
+# за потолок, — «не подтверждён», не зелёный.
+MAIN_LINE_MAX_COMMITS = 200
+
+# Исполненная и зелёная проверка; `skipped` из `GREEN` здесь — не результат,
+# а повод смотреть коммит глубже.
+_EXECUTED_GREEN = GREEN - {"skipped"}
+
+_SHA_LINE_RE = re.compile(r"^[0-9a-fA-F]{7,40}$")
+
+
+class MainLineStatus(NamedTuple):
+    """Исход `main_line_status`: `kind` — один из `MAIN_*`; `failed` —
+    [(проверка, заключение, коммит)], `running` — [(проверка, коммит)];
+    `red_since` — самый ранний по линии коммит падения ("" — не красный);
+    `note` — текст для журнала и Оператора."""
+    kind: str
+    sha: str
+    failed: list
+    running: list
+    red_since: str
+    note: str
+
+
+def first_parent_line(sha: str, limit: int) -> list[str] | None:
+    """Коммиты первой родительской линии от `sha` назад (сам `sha` первым),
+    не больше `limit`; `None` — git не ответил."""
+    res = gitcmd.git("rev-list", "--first-parent", f"--max-count={limit}", sha)
+    if res is None or res.returncode != 0:
+        return None
+    return [ln.strip() for ln in res.stdout.splitlines()
+            if _SHA_LINE_RE.match(ln.strip())]
+
+
+def _push_touches_code(base: str, head: str) -> bool:
+    """Push с головой `head` меняет не только документы — тем же разбором
+    пути, что job `changes` (`scripts/ci_push_class.py`), и тем же
+    диапазоном: от предыдущей головы push'а `base` (ближайший глубже по
+    линии коммит с проверками — CI гоняет только головы), а не от первого
+    родителя. Голова push'а гейта мержа — документный коммит RETRO, код
+    лежит в merge-коммите под ней без проверок. На push класса «код»
+    проверка, пропущенная на его голове, не исполняется на push в main
+    вовсе (`protected-paths`, `id-format-greplint` — только
+    `pull_request`), а не пропущена как документная. git не ответил —
+    `False`: обход идёт глубже, а не объявляет проверку неисполняемой."""
+    res = gitcmd.git("diff", "--name-only", base, head)
+    if res is None or res.returncode != 0:
+        return False
+    return any(not ci_push_class.is_doc_path(p)
+               for p in res.stdout.splitlines() if p.strip())
+
+
+def _verdict_of_runs(runs: list) -> tuple[str, str] | None:
+    """(исход, заключение) одной проверки на коммите по её прогонам: `None`
+    — проверка здесь не исполнялась (только `skipped`)."""
+    executed = [r for r in runs if not (r.get("status") == "completed"
+                                        and r.get("conclusion") == "skipped")]
+    if not executed:
+        return None
+    if any(r.get("status") != "completed" for r in executed):
+        return MAIN_RUNNING, ""
+    bad = [str(r.get("conclusion")) for r in executed
+           if r.get("conclusion") not in _EXECUTED_GREEN]
+    if bad:
+        return MAIN_RED, bad[0]
+    return MAIN_GREEN, ""
+
+
+def _main_line_note(kind: str, ref: str, failed: list, running: list,
+                    red_since: str, why: str, green_count: int) -> str:
+    short = ref[:8]
+    if kind == MAIN_RED:
+        listing = ", ".join(f"{name}={conclusion} на {sha[:8]}"
+                            for name, conclusion, sha in failed)
+        return f"main красный с {red_since[:8]}: {listing}"
+    if kind == MAIN_RUNNING:
+        listing = ", ".join(f"{name} на {sha[:8]}" for name, sha in running)
+        return (f"CI main {short} не подтверждён: "
+                f"{why or f'проверки ещё идут: {listing}'}")
+    if kind == MAIN_UNKNOWN:
+        return f"CI main {short} не подтверждён: {why}"
+    return (f"CI main {short} зелёный по первой родительской линии "
+            f"({green_count} проверок)")
+
+
+def main_line_status(sha: str) -> MainLineStatus:
+    """Цвет CI main от опорного коммита `sha` (SPEC 01M3SF7DPFGEZ7VYEGGXGTX49E,
+    требование 2) — общее определение для `pin-update`, строки `doctor` и
+    гейта мержа.
+
+    Набор проверок — с опорного коммита; у каждой результат берётся с
+    первого коммита линии `git rev-list --first-parent`, где она не
+    `skipped`: идёт — `running`, исполнена с плохим заключением — упала
+    (с этим коммитом), иначе зелёная. Коммит без проверок вовсе
+    (промежуточные коммиты мержа — CI гоняет только голову push'а)
+    пропускается. Проверка, пропущенная на голове push'а класса «код»
+    (диапазон — до следующей глубже головы с проверками), на push в main
+    не исполняется вовсе и в цвет не входит; так же — не исполнившаяся до
+    начала истории. Не разрешившаяся за `MAIN_LINE_MAX_COMMITS` —
+    «неизвестен».
+
+    Итог: есть упавшая — `MAIN_RED` (идущие при этом не спасают); есть
+    идущая либо у опорного коммита ещё нет проверок — `MAIN_RUNNING`; сбой
+    `gh` на любом коммите — `MAIN_UNKNOWN` (инвариант 19: неизвестное не
+    зелёное); иначе `MAIN_GREEN`.
+    """
+    line = first_parent_line(sha, MAIN_LINE_MAX_COMMITS) or [sha]
+    ref = line[0]
+    pending: set[str] | None = None
+    failed: list = []
+    running: list = []
+    green_count = 0
+    why = ""
+    kind = ""
+    # Голова push'а и пропущенные на ней проверки: класс её push'а известен
+    # только у следующей глубже головы с проверками.
+    skipped_at: tuple[str, list] | None = None
+    for commit in line:
+        runs, reason = check_runs(commit)
+        if runs is None and pending is None \
+                and _commit_not_found_in_origin(reason):
+            # Сразу после push GitHub ещё не знает голову — CI не начался,
+            # а не «gh недоступен».
+            why = f"GitHub ещё не видит коммит {ref[:8]} ({reason})"
+            kind = MAIN_RUNNING
+            break
+        if runs is None:
+            why = f"статус CI коммита {commit[:8]} неизвестен: {reason}"
+            kind = MAIN_UNKNOWN
+            break
+        if pending is None:
+            if not runs:
+                why = (f"у коммита {ref[:8]} нет ни одной проверки CI — "
+                       f"CI ещё не начался")
+                kind = MAIN_RUNNING
+                break
+            pending = {str(r.get("name", "?")) for r in runs}
+        if not runs:
+            continue
+        if skipped_at is not None:
+            push_head, names = skipped_at
+            skipped_at = None
+            if _push_touches_code(commit, push_head):
+                pending.difference_update(names)
+                if not pending:
+                    break
+        skipped_here = []
+        for name in sorted(pending):
+            verdict = _verdict_of_runs([r for r in runs
+                                        if str(r.get("name", "?")) == name])
+            if verdict is None:
+                if any(str(r.get("name", "?")) == name for r in runs):
+                    skipped_here.append(name)
+                continue
+            outcome, conclusion = verdict
+            if outcome == MAIN_RED:
+                failed.append((name, conclusion, commit))
+            elif outcome == MAIN_RUNNING:
+                running.append((name, commit))
+            else:
+                green_count += 1
+            pending.discard(name)
+        if skipped_here:
+            skipped_at = (commit, skipped_here)
+        if not pending:
+            break
+    else:
+        if pending and len(line) >= MAIN_LINE_MAX_COMMITS:
+            why = (f"проверки {', '.join(sorted(pending))} не исполнялись на "
+                   f"{len(line)} коммитах линии")
+            kind = MAIN_UNKNOWN
+    red_since = ""
+    if failed:
+        kind = MAIN_RED
+        red_since = max((c for _n, _c, c in failed), key=line.index)
+    elif not kind:
+        kind = MAIN_RUNNING if running else MAIN_GREEN
+    note = _main_line_note(kind, ref, failed, running, red_since, why,
+                           green_count)
+    return MainLineStatus(kind, ref, failed, running, red_since, note)
 
 
 def find_run_id(sha: str) -> tuple[str, str]:

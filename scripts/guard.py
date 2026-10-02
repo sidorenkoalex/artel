@@ -33,9 +33,11 @@ M / нарушений K». Без флага — поведение и форм
 артефакта с frontmatter.
 """
 import ast
+import copy
 import math
 import re
 import sys
+from collections import Counter
 from pathlib import Path
 from typing import NamedTuple
 
@@ -738,6 +740,242 @@ def test_skip_markers(source) -> dict[str, set]:
         if found:
             markers[node.name] = found
     return markers
+
+
+# Утверждения тестового метода (SPEC 01M3Y753QNG6TS5C7MTJS1MEV6, требования
+# 1-2): гейт неослабления тестов наблюдает замену и удаление утверждения
+# внутри метода, сохранившего имя. Утверждение — оператор `assert`, вызов
+# атрибута с именем на `assert…` или `fail`, `pytest.raises`/`pytest.warns`.
+ASSERTION_FAIL_NAME = "fail"
+ASSERTION_PYTEST_CALLS = frozenset(("pytest.raises", "pytest.warns"))
+
+# Число обязательных позиционных аргументов методов `unittest`, у которых
+# СЛЕДУЮЩИЙ позиционный аргумент — сообщение (требование 2б). Методов, у
+# которых третьим идёт не сообщение (`assertAlmostEqual(first, second,
+# places)`, `assertRaises(exc, callable, *args)`), в таблице нет: у них,
+# как у любого неизвестного имени, сравниваются все аргументы.
+ASSERTION_REQUIRED_ARGS = {
+    "fail": 0,
+    "assertTrue": 1, "assertFalse": 1, "assertIsNone": 1,
+    "assertIsNotNone": 1,
+    "assertEqual": 2, "assertNotEqual": 2, "assertIn": 2, "assertNotIn": 2,
+    "assertIs": 2, "assertIsNot": 2, "assertIsInstance": 2,
+    "assertNotIsInstance": 2, "assertGreater": 2, "assertGreaterEqual": 2,
+    "assertLess": 2, "assertLessEqual": 2, "assertRegex": 2,
+    "assertNotRegex": 2, "assertCountEqual": 2, "assertListEqual": 2,
+    "assertTupleEqual": 2, "assertSetEqual": 2, "assertDictEqual": 2,
+    "assertMultiLineEqual": 2, "assertSequenceEqual": 2,
+}
+
+# Метки нормальной формы (требование 2в-г): все локальные имена метода —
+# одна метка, корень цепочки атрибутов из импортированного модуля — другая.
+# Угловые скобки делают метку невозможной как имя Python.
+LOCAL_NAME_LABEL = "<локальное имя>"
+IMPORT_ROOT_LABEL = "<импорт>"
+
+# Предел длины исходного текста утверждения в тексте находки (требование 4).
+ASSERTION_TEXT_LIMIT = 120
+
+
+def _is_assertion(node: ast.AST) -> bool:
+    if isinstance(node, ast.Assert):
+        return True
+    if not isinstance(node, ast.Call):
+        return False
+    if isinstance(node.func, ast.Attribute) and (
+            node.func.attr.startswith("assert")
+            or node.func.attr == ASSERTION_FAIL_NAME):
+        return True
+    return _called_dotted_name(node.func) in ASSERTION_PYTEST_CALLS
+
+
+def _local_names(func: ast.AST) -> set:
+    """Локальные имена функции на любой глубине (требование 2в): параметры
+    кроме `self` (и вложенных функций/лямбд тоже), цели присваивания,
+    переменные циклов, `with … as`, генераторов, моржа — всё это `Name` в
+    контексте записи; `except … as` и имя вложенной функции — строки
+    узлов, их собираем отдельно."""
+    names: set = set()
+    for node in ast.walk(func):
+        if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Store):
+            names.add(node.id)
+        elif isinstance(node, ast.ExceptHandler) and node.name:
+            names.add(node.name)
+        elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef,
+                               ast.Lambda)):
+            if node is not func and not isinstance(node, ast.Lambda):
+                names.add(node.name)
+            a = node.args
+            for arg in a.posonlyargs + a.args + a.kwonlyargs:
+                names.add(arg.arg)
+            for arg in (a.vararg, a.kwarg):
+                if arg is not None:
+                    names.add(arg.arg)
+    names.discard("self")
+    return names
+
+
+def _module_imports(tree: ast.Module) -> set:
+    """Имена, связанные на уровне модуля инструкцией `import`/`from …
+    import` (требование 2г): `import a.b` связывает `a`, `import a as b` —
+    `b`."""
+    names: set = set()
+    for node in tree.body:
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                names.add(alias.asname or alias.name.split(".", 1)[0])
+        elif isinstance(node, ast.ImportFrom):
+            for alias in node.names:
+                names.add(alias.asname or alias.name)
+    return names
+
+
+class _AssertionNormalizer(ast.NodeTransformer):
+    """Нормальная форма одного утверждения (требование 2): сообщение
+    отброшено, локальные имена и корень импортированного модуля заменены
+    метками. Работает на копии узла — исходное дерево нужно для текста
+    находки."""
+
+    def __init__(self, local_names: set, imports: set):
+        self.local_names = local_names
+        self.imports = imports
+
+    def visit_Assert(self, node):
+        node.msg = None
+        return self.generic_visit(node)
+
+    def visit_Call(self, node):
+        if _is_assertion(node):
+            node.keywords = [kw for kw in node.keywords if kw.arg != "msg"]
+            name = node.func.attr if isinstance(node.func, ast.Attribute) \
+                else ""
+            required = ASSERTION_REQUIRED_ARGS.get(name)
+            if required is not None and len(node.args) > required and \
+                    not any(isinstance(a, ast.Starred) for a in node.args):
+                node.args = node.args[:required]
+        return self.generic_visit(node)
+
+    def visit_Attribute(self, node):
+        root = node.value
+        # Голое импортированное имя (константа `LIMIT_A`) меткой не
+        # заменяется — только корень цепочки атрибутов (`fsm._x`).
+        if isinstance(root, ast.Name) and root.id in self.imports and \
+                root.id not in self.local_names:
+            node.value = ast.Name(id=IMPORT_ROOT_LABEL, ctx=root.ctx)
+            return node
+        return self.generic_visit(node)
+
+    def visit_Name(self, node):
+        if node.id in self.local_names:
+            return ast.Name(id=LOCAL_NAME_LABEL, ctx=node.ctx)
+        return node
+
+
+def _assertion_text(source: str, node: ast.AST) -> str:
+    """Исходный текст утверждения одной строкой (многострочный вызов
+    склеен), не длиннее `ASSERTION_TEXT_LIMIT` знаков."""
+    text = " ".join((ast.get_source_segment(source, node) or "").split())
+    if len(text) > ASSERTION_TEXT_LIMIT:
+        text = text[:ASSERTION_TEXT_LIMIT - 1] + "…"
+    return text
+
+
+def _own_assertions(func: ast.AST, source: str, imports: set) -> list:
+    """[(нормальная форма, исходный текст)] утверждений тела `func` на
+    любой глубине, в порядке исходного текста."""
+    local_names = _local_names(func)
+    found = []
+    for node in ast.walk(func):
+        if not _is_assertion(node):
+            continue
+        normal = _AssertionNormalizer(local_names, imports).visit(
+            copy.deepcopy(node))
+        found.append((node.lineno, node.col_offset, ast.dump(normal),
+                      _assertion_text(source, node)))
+    found.sort(key=lambda item: item[:2])
+    return [(key, text) for _line, _col, key, text in found]
+
+
+def _helper_calls(func: ast.AST, methods: dict, functions: dict) -> list:
+    """Узлы вспомогательных функций первого уровня, которые зовёт `func`
+    (требование 1): `self.<имя>(…)` — метод того же класса, голое имя —
+    функция модуля без префикса `test_`. Каждый вызов — отдельный элемент:
+    помощник, вызванный дважды, дважды и утверждает."""
+    helpers = []
+    for node in ast.walk(func):
+        if not isinstance(node, ast.Call):
+            continue
+        callee = node.func
+        if isinstance(callee, ast.Attribute) and \
+                isinstance(callee.value, ast.Name) and \
+                callee.value.id == "self" and callee.attr in methods:
+            helpers.append((node.lineno, node.col_offset,
+                            methods[callee.attr]))
+        elif isinstance(callee, ast.Name) and callee.id in functions and \
+                not callee.id.startswith("test_"):
+            helpers.append((node.lineno, node.col_offset,
+                            functions[callee.id]))
+    helpers.sort(key=lambda item: item[:2])
+    return [helper for _line, _col, helper in helpers]
+
+
+def test_assertions(source) -> dict[str, list] | None:
+    """Утверждения тестовых методов текста `source` по квалифицированному
+    имени (`_collect_qualified_test_functions`): список пар (нормальная
+    форма, исходный текст) — свои утверждения метода на любой глубине и
+    утверждения вспомогательных функций первого уровня (требования 1-2).
+
+    `None` — текста нет либо он не парсится: сравнивать утверждения не с
+    чем, и вызывающий обязан отличить это от «утверждений нет»."""
+    tree = _parse_or_none(source)
+    if tree is None:
+        return None
+    imports = _module_imports(tree)
+    functions = {node.name: node for node in tree.body
+                 if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))}
+    class_methods: dict[str, dict] = {}
+    for node in tree.body:
+        if isinstance(node, ast.ClassDef):
+            class_methods[node.name] = {
+                sub.name: sub for sub in node.body
+                if isinstance(sub, (ast.FunctionDef, ast.AsyncFunctionDef))}
+
+    result: dict[str, list] = {}
+    for name, func in _collect_qualified_test_functions(tree).items():
+        owner = name.split(TEST_NAME_SEP, 1)[0] if TEST_NAME_SEP in name \
+            else None
+        methods = class_methods.get(owner, {}) if owner else {}
+        found = _own_assertions(func, source, imports)
+        for helper in _helper_calls(func, methods, functions):
+            if helper is not func:
+                found += _own_assertions(helper, source, imports)
+        result[name] = found
+    return result
+
+
+def changed_test_assertions(base: dict, head: dict) -> dict[str, list]:
+    """{квалифицированное имя: [исходный текст утверждения base]} по
+    методам, имя которых есть по обе стороны, — утверждения base, которых
+    в head меньше по числу вхождений той же нормальной формы (требование
+    3): сравниваются мультимножества, не число утверждений. Добавленное
+    утверждение и перестановка находкой не становятся; «сильнее/слабее»
+    не оценивается — любая смена вида или аргумента находка.
+
+    `base`/`head` — результат `test_assertions` своей стороны."""
+    changed: dict[str, list] = {}
+    for name, base_items in base.items():
+        if name not in head:
+            continue
+        left = Counter(key for key, _text in head[name])
+        lost = []
+        for key, text in base_items:
+            if left[key] > 0:
+                left[key] -= 1
+            else:
+                lost.append(text)
+        if lost:
+            changed[name] = lost
+    return changed
 
 
 def test_functions_without_mutation_claim(base_source: str | None,
