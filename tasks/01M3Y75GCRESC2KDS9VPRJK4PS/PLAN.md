@@ -104,6 +104,16 @@ timeout=120`): `tests/test_01m3y75gcresc2kds9vprjk4ps_stale_cycles.py`,
    `tests/test_doctor.py` + `tests/test_invariants.py` +
    `tests/test_codebase_map.py` — 236 passed.
 
+8. Ответ Оператора ANSWER-3: раздел «Расширение зон» с путём
+   `orchestrator/cycle_hint.py` добавлен в PLAN.md; код не менялся.
+   Карта перегенерирована `scripts/codebase_map.py` (в ней появилась
+   публичная `cycle_hint.cycle_command`). Повторные прогоны (передний
+   план, `-p no:cacheprovider -p timeout -o timeout=120`): launch_hint +
+   `tests/test_01m3y75gcresc2kds9vprjk4ps_stale_cycles.py` +
+   `tests/test_pin_update_stale_cycles.py` + `tests/test_cycle_hint.py` +
+   `tests/test_pin.py` — 32 passed; `tests/test_doctor.py` +
+   `tests/test_invariants.py` + `tests/test_codebase_map.py` — 236 passed.
+
 ## Покрытие требований
 | Требование | Шаг |
 |---|---|
@@ -124,6 +134,12 @@ timeout=120`): `tests/test_01m3y75gcresc2kds9vprjk4ps_stale_cycles.py`,
   фасада doctor (подмодуль не импортирует `subprocess`/`shutil`) соблюдено.
   Тесты, гейты, лимиты не ослаблялись.
 - Откат — revert коммита задачи.
+
+## Расширение зон
+
+Пути: orchestrator/cycle_hint.py
+
+Обоснование: инвариант SPEC 01M3XTFJCC5TG63FHW907GQM4D — строка запуска run/auto собирается только в cycle_hint.py; команда перезапуска stale_cycles строится функцией cycle_command оттуда (возврат Оператора из verifying, 02.10).
 
 ## Риски
 - Точность `ps lstart` — секунда: цикл, стартовавший в ту же секунду, что
