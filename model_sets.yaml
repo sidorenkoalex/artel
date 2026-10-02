@@ -10,6 +10,11 @@
 
 sets:
 pairs:
+  developer:
+    gpt-6-sol:
+      date: 2026-10-02
+      basis: канарейка 30.09–02.10: 14 чистых прогонов на 6 шаблонах, из них на средних canary-status-sort, canary-log-tail, canary-usage-invariant; сводка admit 02.10
+      state: допущена
 canary_templates:
   canary-version-json: быстрый
   canary-log-filters: быстрый
