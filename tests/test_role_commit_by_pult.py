@@ -9,10 +9,13 @@
 (`tests/sandbox.py::RealGitSandbox`), отказ git — настоящий хук
 `pre-commit`.
 """
+import io
 import unittest
+from contextlib import redirect_stdout
 from pathlib import Path
 
-from orchestrator import checkpoint, config, store, workspace
+from orchestrator import checkpoint, config, fsm, store, workspace
+from scripts import guard
 from tests.sandbox import RealGitSandbox
 
 TASK = "01M0000000000000000000RCBP"
@@ -109,6 +112,36 @@ class PultCommitFailedPathsTest(_Sandbox):
         self.wt_git("commit", "-q", "-m", "роль закоммитила сама")
         self.assertEqual(checkpoint.pult_commit_failed_paths(self.conn, TASK),
                          [])
+
+
+class TestsWritingBlockedAfterGitFailureTest(_Sandbox):
+
+    def test_tests_writing_advance_refuses_uncommitted_long_lived_file(self):
+        """Ловит мутацию: выход из `tests_writing` не сверяет
+        незакоммиченный результат шага (требование 4 → требование 3) —
+        после отказа git у test_author `advance` отказывает по иной
+        причине (трассируемость) либо уводит задачу в `in_dev`, и записи
+        «результат шага не закоммичен» с путём долгоживущего файла нет."""
+        store.update_task(self.conn, TASK, state="tests_writing")
+        rel = f"{guard.long_lived_path_prefix(TASK)}case.py"
+        self.write(rel, "def test_ac1_case():\n    pass\n")
+        hook = self.reject_commits()
+        checkpoint.commit_success_checkpoint(self.conn, TASK, "test_author")
+        self.assertTrue(self.failed_records())
+        hook.unlink()
+        since = store.task_steps(self.conn, TASK)[-1]["id"]
+        with redirect_stdout(io.StringIO()):
+            try:
+                fsm.cmd_advance(TASK)
+            except SystemExit:
+                pass
+        self.assertEqual(store.get_task(self.conn, TASK)["state"],
+                         "tests_writing")
+        refusals = [r["detail"] for r in store.task_steps(self.conn, TASK)
+                    if r["id"] > since and r["action"]
+                    == "переход отклонён: результат шага не закоммичен"]
+        self.assertTrue(refusals)
+        self.assertIn(rel, refusals[0])
 
 
 class NothingToCommitIsNotFailureTest(_Sandbox):
