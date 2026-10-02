@@ -11,3 +11,9 @@
 sets:
 pairs:
 canary_templates:
+  canary-version-json: быстрый
+  canary-log-filters: быстрый
+  canary-status-sort: средний
+  canary-log-tail: средний
+  canary-usage-invariant: средний
+  canary-budget-percent-ambiguous: трудный
