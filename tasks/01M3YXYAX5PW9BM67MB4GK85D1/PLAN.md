@@ -48,6 +48,15 @@ schema_version: 5
    принимает именованные аргументы.
 4. `docs/stack.md` — абзац «Предполёт шага задачи с набором»; карта
    `docs/codebase-map.md` перегенерирована.
+5. Возврат из verifying (CI красный после мержа 01M3YCHVVEK14SK8GT4R0H7M2C
+   в main): main уже подтянут (`1f544a05`); заглушка предполёта в
+   `SetSandbox.setUp` долгоживущего файла той задачи
+   `tests/test_01m3ychvvek14sk8gt4r0h7m2c_set_trial_suspension.py:210`
+   `lambda role, target: []` → `lambda role, target, **step: []` — та же
+   правка, что в `test_01m3ychs4f08…`; утверждения не тронуты. Прочие
+   позиционные заглушки (`grep "lambda role, target"`) — у задач без
+   набора, именованных аргументов не получают. Карта перегенерирована
+   после подтяжки (`docs/codebase-map.md` отставала).
 
 ## Покрытие требований
 
@@ -77,6 +86,12 @@ schema_version: 5
   всех строках) красили заявленные методы, код возвращён;
 - `test_stack_codex_section`, `test_stack_parity_table`,
   `test_stack_zones_pull_section`, `test_codebase_map` — 46 passed.
+- после возврата: `test_01m3ychvvek14sk8gt4r0h7m2c_set_trial_suspension`,
+  `test_01m3yxyax5pw9bm67mb4gk85d1_step_provider_preflight`,
+  `test_01m3ychs4f08vtv6xx10vf92h3_task_model_set`,
+  `test_preflight_step_provider` — 38 passed; `test_doctor`,
+  `test_runner_model_preflight`, `test_task_model_set_units`,
+  `test_codebase_map` — 192 passed.
 
 ## Влияние на систему
 - Задача без набора: вызов предполёта и его состав не изменились
@@ -109,3 +124,5 @@ schema_version: 5
 - Десяток тестов подменяет `doctor.preflight_checks` позиционной
   лямбдой `lambda role, target: []` — любое расширение сигнатуры ломает их
   все разом; общая заглушка в `tests/sandbox.py` сняла бы этот класс.
+  Подтверждено: параллельная задача 01M3YCHVVEK14SK8GT4R0H7M2C принесла в
+  main ещё одну такую лямбду — CI ветки покраснел уже после ревью.
