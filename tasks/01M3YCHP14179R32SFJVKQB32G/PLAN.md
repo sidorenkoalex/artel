@@ -2,8 +2,7 @@
 task: 01M3YCHP14179R32SFJVKQB32G
 type: plan
 author_role: developer
-status: escalate
-question: "Мандат на замену утверждения len(config.PROTECTED_PATHS) == 17 на 18 в tests/test_protected_test_settings.py (AC-2 добавляет model_sets.yaml) — см. раздел Эскалация"
+status: ready
 schema_version: 5
 ---
 
@@ -175,40 +174,23 @@ schema_version: 5
   выразим без числа — `[:12] == LEGACY` уже есть, плюс `assertIn` по
   каждой записи.
 
-## Эскалация
+## Исполнение ANSWER-1 (шаг 2 разработчика)
 
-**Вопросы** (один, блокирующий):
+Эскалация шага 1 (мандат на утверждение числа записей
+`config.PROTECTED_PATHS`; реализация шагов 1–4 закоммичена пультом,
+d6984ceb) снята ответом Оператора ANSWER-1, вариант (а). Исполнено строго
+в рамках мандата:
 
-1. Существующий тест
-   `tests/test_protected_test_settings.py::RealProtectedPathsCompositionTest::test_real_list_keeps_legacy_entries_and_adds_test_settings`
-   утверждает `self.assertEqual(len(config.PROTECTED_PATHS), 17)`
-   (строка 62). Требование 2 SPEC (AC-2: `model_sets.yaml` входит в
-   `config.PROTECTED_PATHS`) добавляет 18-ю запись — тест красный. Прочие
-   утверждения метода (`[:12] == LEGACY_PROTECTED_PATHS`, пять записей
-   настроек тестов) остаются верными: запись `model_sets.yaml` стоит
-   13-й, после `models.yaml`. Требуется мандат на замену утверждения:
-   - старое: `self.assertEqual(len(config.PROTECTED_PATHS), 17)`;
-   - новое: `self.assertEqual(len(config.PROTECTED_PATHS), 18)` и
-     `self.assertIn("model_sets.yaml", config.PROTECTED_PATHS)`; в
-     докстринге — «плюс пять записей настроек сбора тестов и
-     `model_sets.yaml`». Имя метода не меняется, остальные утверждения
-     не трогаются.
-
-   Варианты: (а) мандат на замену, как выше; (б) иное — например,
-   правка теста самим Оператором (`amend-tests` неприменим: файл не
-   долгоживущий файл этой задачи) или иной порядок записи в кортеже.
-   **Дефолт при молчании — (а).**
-
-**Контекст.** Вся реализация по PLAN готова и лежит в worktree
-незакоммиченной (шаги 1–4; итоги прогонов — в «Итоге реализации»):
-`model_sets.yaml`, `orchestrator/config.py` (`MODEL_SETS_REL`, запись в
-`PROTECTED_PATHS`), `orchestrator/notes.py` (запись в
-`DOC_COMMIT_CONFIG_PATHS`, `doc_commit_content`), `orchestrator/models.py`
-(блок наборов моделей), `orchestrator/artel.py` (`admit`),
-`docs/stack.md`, `tests/test_model_sets.py`, `docs/codebase-map.md`.
-Планка задачи зелёная. Падение одно:
-`tests/test_protected_test_settings.py:62 AssertionError: 18 != 17`.
-
-**Блокирует.** Сдачу шага в `review`: полный набор `tests/` красен на этом
-утверждении, пока тест не приведён к 18 записям; без мандата правка
-утверждения существующего теста запрещена (coding-standards, инвариант 38).
+- `tests/test_protected_test_settings.py::RealProtectedPathsCompositionTest::test_real_list_keeps_legacy_entries_and_adds_test_settings`:
+  старое `self.assertEqual(len(config.PROTECTED_PATHS), 17)` -> новое
+  `self.assertEqual(len(config.PROTECTED_PATHS), 18)`, добавлено
+  `self.assertIn("model_sets.yaml", config.PROTECTED_PATHS)`; докстринг —
+  «плюс пять записей настроек сбора тестов и `model_sets.yaml`». Имя
+  метода, `[:12] == LEGACY_PROTECTED_PATHS` и проверки пяти записей
+  настроек тестов не тронуты.
+- Прогоны (передний план, таймаут 120 с): `test_protected_test_settings`,
+  долгоживущий `test_01m3ychp14179r32sfjvkqb32g_model_sets`,
+  `test_model_sets`, `test_protected_paths_gate`, `test_ci_protected_paths`
+  — 62 passed, 92 subtests passed; `acceptance_tests/` — 2 passed.
+- `docs/codebase-map.md` регенерирован (`built_at_sha` после коммита
+  пульта).
