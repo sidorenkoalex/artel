@@ -22,14 +22,6 @@ budget_usd: 40
 (вход части 2) и команду Оператора выдачи/снятия допуска пары с проверкой
 чисел ADR-0019 п.5 по таблице `canary_runs`.
 
-Только чтение (не менять): `orchestrator/failure_classification.py`,
-`orchestrator/fsm_autogate.py`, `orchestrator/canary.py`,
-`orchestrator/canary_drive.py`, `orchestrator/pin.py`, `models.yaml`,
-`orchestrator/fsm_merge_gate.py`, `orchestrator/providers/`,
-`scripts/guard.py`, `skills/`, `templates/`, `docs/adr/`,
-`docs/invariants.md`, `tests/test_invariants.py`, `docs/backlog.md`,
-`tasks/`, `.artel/`, `.codex/`.
-
 ## Требования
 
 1. **Файл `model_sets.yaml`.** Новый отслеживаемый git файл в корне
@@ -208,7 +200,13 @@ AC-14. В `docs/stack.md` есть раздел о файле `model_sets.yaml`,
   `orchestrator/canary.py`.
 - Колонка повторов developer в `canary_runs` и проверка условия «без
   повтора developer».
-- Правка файлов из списка «только чтение» Контекста.
+- Только чтение (не менять): `orchestrator/failure_classification.py`,
+  `orchestrator/fsm_autogate.py`, `orchestrator/canary.py`,
+  `orchestrator/canary_drive.py`, `orchestrator/pin.py`, `models.yaml`,
+  `orchestrator/fsm_merge_gate.py`, `orchestrator/providers/`,
+  `scripts/guard.py`, `skills/`, `templates/`, `docs/adr/`,
+  `docs/invariants.md`, `tests/test_invariants.py`, `docs/backlog.md`,
+  `tasks/`, `.artel/`, `.codex/`.
 - Неослабление существующих тестов разрешения моделей, канарейки и
   автогейта и зелёный полный набор `tests/` — их держит пульт.
 
