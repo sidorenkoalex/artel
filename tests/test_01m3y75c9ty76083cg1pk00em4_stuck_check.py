@@ -402,9 +402,9 @@ class StuckCheckRerunTest(CiStandMixin, LightTransitionSandbox):
             "started_at": iso_ago(threshold + rng.randint(5, 400)),
             "created_at": iso_ago(threshold + 401),
             "check_suite": {"id": self.suite_id},
-            "details_url": (f"https://github.com/o/r/actions/runs/"
+            "details_url": (f"http://127.0.0.1/o/r/actions/runs/"
                             f"{self.run_id}/job/{self.check_id}"),
-            "html_url": (f"https://github.com/o/r/actions/runs/"
+            "html_url": (f"http://127.0.0.1/o/r/actions/runs/"
                          f"{self.run_id}/job/{self.check_id}")}
         self.green_runs = [green_check(n, rng.randrange(10 ** 6))
                            for n in names[1:]]
