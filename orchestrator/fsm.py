@@ -9,6 +9,7 @@ acceptance — `orchestrator/fsm_autogate.py` (T091, декомпозиция
 `cmd_approve`, `cmd_reject`) и узлы, общие для нескольких состояний/
 гейтов (сверка свежести ветки, чтения с ветки задачи, guard-отказ).
 """
+import json
 import subprocess  # шов для tests/test_ac3_ac9_pull_message_fixtures.py:
                     # mock.patch.object(fsm.subprocess, "run", ...) —
                     # сам fsm.py вызовов subprocess не делает (они в pull.py)
@@ -1006,7 +1007,9 @@ def _approve_acceptance(conn, task_id: str, t, state: str, sid: str,
     # вместо голого `<id>`, которое Оператору иначе пришлось бы
     # достраивать по памяти (инцидент 02.09, мерж T101).
     sha_hint = fixation.approve_sha_hint(task_id, store.task_target(conn, task_id))
-    print(f"  дальше: artel.py approve {task_id}{sha_hint}  (выполнит merge)")
+    from . import models
+    print(f"  дальше: artel.py approve {task_id}{sha_hint}  (выполнит merge)"
+          f"{models.task_set_hint(t)}")
 
 
 def _approve_merge_gate(conn, task_id: str, t, state: str, sid: str,
@@ -1178,3 +1181,56 @@ def _cmd_reject(conn, task_id: str, reason: str) -> None:
                         expected_state=state,
                         detail=f"приёмка отклонена: {reason}")
         _maybe_ensure_draft_mr(conn, task_id)
+
+
+#: Состояния, в которых Оператор меняет набор моделей задачи командой
+#: `set-models` (SPEC 01M3YCHS4F08VTV6XX10VF92H3, требование 9): гейты
+#: Оператора и эскалация — ни один шаг роли в этот момент не идёт. Пятый
+#: случай — пометка `pause` в любом состоянии (`pause.is_paused`).
+SET_MODELS_STATES = ("spec_gate", "acceptance", "merge_gate", "escalated")
+
+
+def cmd_set_models(task_id: str, set_name: str | None) -> None:
+    """`set-models <id> <набор>` — смена набора моделей задачи в работе;
+    `set_name is None` (`--default`) — снятие набора: следующие шаги идут
+    на боевых моделях (SPEC 01M3YCHS4F08VTV6XX10VF92H3, требование 9).
+
+    Новый набор проходит ту же проверку допуска, что `new --set`
+    (`models.admitted_set_members`); отказ — без смены набора. Имя и
+    состав пишутся в строку задачи одним UPDATE, смена — записью журнала
+    с прежним и новым набором.
+
+    Lease не берётся: команда разрешена у задачи на паузе, где уже
+    идущий шаг держит lease до своего конца (`pause` его не прерывает), а
+    правка — одна строка БД, которую шаг читает на своём старте. Идущий
+    шаг доходит на прежней модели, следующий — на новой.
+    """
+    from . import models, pause
+    conn = store.db()
+    task_id = store.resolve_task_id(conn, task_id)
+    t = store.get_task(conn, task_id)
+    if t["state"] not in SET_MODELS_STATES and not pause.is_paused(t):
+        sys.exit(f"[{task_id}] set-models отклонён: задача в состоянии "
+                 f"{t['state']}; набор моделей меняется только в "
+                 f"состояниях {', '.join(SET_MODELS_STATES)} либо у "
+                 f"задачи на паузе (artel.py pause {task_id})")
+    previous = models.task_set_name(t) or "без набора"
+    if set_name is None:
+        store.update_task(conn, task_id, model_set=None,
+                          model_set_members=None)
+        detail = (f"{previous} → без набора: следующие шаги ролей — на "
+                  f"боевых моделях")
+        store.journal(conn, task_id, "operator", "набор моделей снят", detail)
+        print(f"[{task_id}] набор моделей снят ({detail})")
+        return
+    try:
+        members = models.admitted_set_members(conn, set_name)
+    except models.ModelsError as exc:
+        sys.exit(f"[{task_id}] set-models отклонён: {exc} — набор задачи "
+                 f"не изменён ({previous})")
+    store.update_task(conn, task_id, model_set=set_name,
+                      model_set_members=json.dumps(members,
+                                                   ensure_ascii=False))
+    detail = f"{previous} → {set_name}: {models.members_text(members)}"
+    store.journal(conn, task_id, "operator", "набор моделей сменён", detail)
+    print(f"[{task_id}] набор моделей сменён ({detail})")

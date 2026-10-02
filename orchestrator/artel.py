@@ -121,7 +121,8 @@ workspace, tasks, knowledge, logs). БД одна на все проекты: с
 и падение любого другого агентского шага.
 
 Команды:
-  init | new "<название>" [--tz <файл>] | status | show <id> | advance <id> |
+  init | new "<название>" [--tz <файл>] [--set <набор>] | status | show <id> |
+  advance <id> | set-models <id> <набор>|--default |
   run <id> [--attach | --client codex|claude --chat <id>] |
   auto <id> [--wait-zone] [--attach | --client codex|claude --chat <id>] |
   stop <id> |
@@ -216,6 +217,16 @@ models.yaml) гоняет перед отправкой на дереве с у�
 недостающего, не трогая файл. `admit --revoke …` переводит пару в
 `state: приостановлена`. Запись — изолированный коммит механизмом
 `doc-commit` (окно тишины, удержание, полный набор tests/).
+
+`new "<название>" --tz <файл> --set <набор>` (SPEC
+01M3YCHS4F08VTV6XX10VF92H3) — задача на наборе моделей из
+`model_sets.yaml`: набор, не допущенный проверкой `admit` (пара не
+допущена или приостановлена, нет зелёного прогона набором целиком на
+трудном шаблоне), — отказ до заведения задачи. Имя и состав набора
+пишутся в строку задачи; роль из набора идёт на его модели, прочие — на
+боевых. `set-models <id> <набор>|--default` меняет или снимает набор
+задачи — только на гейтах `spec_gate`/`acceptance`/`merge_gate`, в
+`escalated` и у задачи на паузе (`pause`).
 
 `pin-update <sha>` (A7, Stage1) — обновляет пин запущенной версии:
 продвигает рабочее дерево и HEAD `config.ROOT` до `<sha>` main артели
@@ -1099,7 +1110,7 @@ def _tz_arg(rest: list) -> str | None:
     return rest[idx + 1]
 
 
-_NEW_USAGE = 'new "<название>" [--tz <файл>]'
+_NEW_USAGE = 'new "<название>" [--tz <файл>] [--set <набор>]'
 
 
 def _parse_new_args(rest: list) -> tuple | None:
@@ -1214,12 +1225,41 @@ def _cmd_canary(rest: list) -> None:
                       templates=_template_arg(rest))
 
 
+def _new_set_arg(rest: list) -> tuple[list, str | None]:
+    """(argv `new` без пары `--set <набор>`, имя набора либо `None`) —
+    SPEC 01M3YCHS4F08VTV6XX10VF92H3, требование 1. Флаг снимается здесь,
+    до `_parse_new_args`: остальное разбирается прежним правилом, а флаг
+    без значения — именованный отказ, не набор с именем следующего
+    аргумента."""
+    if "--set" not in rest:
+        return rest, None
+    idx = rest.index("--set")
+    if idx + 1 >= len(rest) or rest[idx + 1].startswith("-"):
+        sys.exit(f"--set требует имя набора из {config.MODEL_SETS_REL} "
+                 f"следующим аргументом.\n{_NEW_USAGE}")
+    return rest[:idx] + rest[idx + 2:], rest[idx + 1]
+
+
 def _cmd_new(rest: list) -> None:
+    rest, model_set = _new_set_arg(rest)
     parsed = _parse_new_args(rest)
     if parsed is None:
         return
     title, tz_path = parsed
-    catalog.cmd_new(title, tz_path=tz_path)
+    catalog.cmd_new(title, tz_path=tz_path, model_set=model_set)
+
+
+_SET_MODELS_USAGE = "set-models <id> <набор>|--default"
+
+
+def _cmd_set_models(rest: list) -> None:
+    """`set-models <id> <набор>` либо `set-models <id> --default` (SPEC
+    01M3YCHS4F08VTV6XX10VF92H3, требование 9)."""
+    if len(rest) != 2:
+        sys.exit(f"set-models: нужны id задачи и имя набора либо --default\n"
+                 f"{_SET_MODELS_USAGE}")
+    task_id, value = rest
+    fsm.cmd_set_models(task_id, None if value == "--default" else value)
 
 
 def _cmd_alert_ack(rest: list) -> None:
@@ -1465,6 +1505,8 @@ def main() -> None:
         "models": lambda: models.cmd_models(),
         # `admit` пишет файл решений Оператора — вне белого списка ролей.
         "admit": lambda: models.cmd_admit(rest),
+        # `set-models` меняет набор моделей задачи — вне белого списка ролей.
+        "set-models": lambda: _cmd_set_models(rest),
         "canary": lambda: _cmd_canary(rest),
         "prune": lambda: prune.cmd_prune("--execute" in rest),
         "report": lambda: report.cmd_report(),

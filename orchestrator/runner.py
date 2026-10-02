@@ -322,7 +322,7 @@ def _refuse_before_start(conn, task_id: str, t, role: str):
     # пауза/стоп-кран выше: `auto` ловит `SystemExit` и останавливает
     # цикл, а не крутит шаги до `AUTO_MAX_STEPS`.
     try:
-        provider = providers.for_role(role)
+        provider = _step_provider(t, role)
     except providers.UnknownProviderError as exc:
         store.journal(conn, task_id, role, PROVIDER_REFUSAL_ACTION, str(exc))
         return "exit", f"[{task_id}] run отклонён: {exc}"
@@ -422,14 +422,23 @@ def _refuse_before_start(conn, task_id: str, t, role: str):
     # ярус без модели, модель вне каталога, `experimental` без явного
     # разрешения) — именованный отказ ДО старта агента, а не дефолт CLI:
     # шаг без явной модели больше не запускается вовсе (требование 5).
+    #
+    # Модель — с учётом задачи (SPEC 01M3YCHS4F08VTV6XX10VF92H3,
+    # требования 2, 4, 7): роль из набора задачи идёт на модели набора
+    # теми же звеньями fail-closed, пара набора, снятая с допуска к старту
+    # шага, — на боевой модели с записью в журнал, не молча.
     try:
-        resolved = models.resolve_role(role)
+        step_model = models.resolve_task_role(role, t)
     except models.ModelsError as exc:
         store.journal(conn, task_id, role, MODEL_UNRESOLVED_REFUSAL_ACTION,
                       str(exc))
         return "exit", (f"[{task_id}] run отклонён: модель роли {role} не "
                         f"разрешена: {exc}")
-    model_id = resolved.model
+    if step_model.withdrawn is not None:
+        store.journal(conn, task_id, role, SET_PAIR_WITHDRAWN_ACTION,
+                      step_model.withdrawn)
+        print(f"[{task_id}] ВНИМАНИЕ: {step_model.withdrawn}")
+    model_id = step_model.resolution.model
 
     # Предполётная сверка модели с версией CLI (SPEC
     # 01M2XJKV84SQ9VEVR0VNVKDNGJ, требование 3, AC-6..AC-8) — ДО сборки
@@ -473,6 +482,31 @@ PROVIDER_REFUSAL_ACTION = "run отклонён: провайдер роли н�
 # против установки CLI).
 MODEL_UNRESOLVED_REFUSAL_ACTION = "run отклонён: модель роли не разрешена"
 
+# Откат шага роли задачи с набором на боевую модель: пара роли из
+# записанного состава к старту шага снята с допуска либо приостановлена в
+# `model_sets.yaml` (SPEC 01M3YCHS4F08VTV6XX10VF92H3, требование 7). Не
+# отказ — шаг идёт, но молчать о смене модели нельзя.
+SET_PAIR_WITHDRAWN_ACTION = "модель набора снята: шаг на боевой модели"
+
+
+def _step_provider(t, role: str):
+    """Провайдер шага роли с учётом набора задачи (SPEC
+    01M3YCHS4F08VTV6XX10VF92H3, требование 4): роль, идущая на модели
+    набора, — провайдер этой модели в каталоге; иначе провайдер роли
+    (`providers.for_role`) ровно как до набора.
+
+    Неразрешимая модель набора здесь не отказ: её именованный отказ даёт
+    разрешение модели шага ниже по `_refuse_before_start`, а провайдер до
+    него нужен лишь затем, чтобы дойти до этой точки."""
+    try:
+        step = (models.resolve_task_role(role, t)
+                if models.task_set_members(t) else None)
+    except models.ModelsError:
+        step = None
+    if step is not None and step.from_set:
+        return providers.get(step.resolution.provider)
+    return providers.for_role(role)
+
 
 def _model_refusal_exit(conn, task_id: str, role: str, detail: str) -> str:
     """Журнал + текст `sys.exit` именованного отказа шага по модели роли:
@@ -500,7 +534,8 @@ def _model_unsupported_after_attempt(conn, task_id: str, role: str,
     # 01M31ZHSA6HMH40C2JTDPQJQNZ требование 9): тот же источник, что у
     # предполётного вердикта выше, и тот же, по которому класс попытки
     # был распознан, — иначе отказ называл бы Оператору слова чужого CLI.
-    provider = providers.for_role(role)
+    # У задачи с набором это провайдер модели набора (`_step_provider`).
+    provider = _step_provider(store.get_task(conn, task_id), role)
     required = failure_classification.required_cli_version(reason, provider)
     installed = provider.installed_cli_version()
     signature = failure_classification.class_signature_text(
@@ -1052,20 +1087,29 @@ def _has_own_long_lived_test(cwd: Path, task_id: str) -> bool:
                and (cwd / rel).is_file() for rel in paths)
 
 
-def _resolved_role_model(role: str) -> str | None:
-    """Модель шага разрешением цепочки (`models.resolve_role`, SPEC
-    01M3009Y9AGGY6ZCFA7H1HJ1TD, требование 9), деградируя к `None` на
+def _resolved_task_model(role: str, t=None):
+    """Модель шага с учётом задачи (`models.resolve_task_role`, SPEC
+    01M3YCHS4F08VTV6XX10VF92H3, требования 2, 4), деградируя к `None` на
     любом `ModelsError` — защитный повтор: неразрешимая цепочка уже
     остановила бы шаг раньше, в `_refuse_before_start`, ДО первой
     попытки, поэтому деградация на живом пути недостижима. Повтор здесь
     нужен только потому, что `run_agent_once` (AC-7
     `tasks/01M2CN3ZCSZ54TFJGTDCXTDHXD` — 101 патч по имени модуля) не
     вправе принять новый параметр — модель попытки резолвится тем же
-    вызовом заново, а не передаётся аргументом."""
+    вызовом заново, а не передаётся аргументом. `t is None` — задача без
+    набора: цепочка роли, как до набора."""
     try:
-        return models.resolve_role(role).model
+        return models.resolve_task_role(role, t)
     except models.ModelsError:
         return None
+
+
+def _resolved_role_model(role: str, t=None) -> str | None:
+    """Идентификатор модели шага (`_resolved_task_model`); `None` —
+    цепочка не разрешилась (SPEC 01M3009Y9AGGY6ZCFA7H1HJ1TD, требование
+    9)."""
+    step = _resolved_task_model(role, t)
+    return step.resolution.model if step is not None else None
 
 
 def _model_journal_label(model_id: str | None) -> str:
@@ -1076,7 +1120,7 @@ def _model_journal_label(model_id: str | None) -> str:
 
 
 def _numbered_with_model(numbered: str, role: str,
-                         model_id: str | None) -> str:
+                         model_id: str | None, provider=None) -> str:
     """`numbered`, дополненный `model=` и `provider=` — источник для
     записей «agent cost KNOWN»/«agent cost PARTIAL», журналируемых
     `spend.py`: тот же приём, что и «agent run started» в
@@ -1090,12 +1134,18 @@ def _numbered_with_model(numbered: str, role: str,
     (`name_for_role`), а не резолвом объекта: незарегистрированное имя
     сюда не доходит (шаг отказал бы до старта агента), но строка
     журнала не должна падать вместе с реестром.
+
+    `provider` — провайдер шага задачи с набором (SPEC
+    01M3YCHS4F08VTV6XX10VF92H3, требование 4): счёт выставляет провайдер
+    модели набора, а не провайдер роли в карте исполнителей.
     """
+    name = (provider.name if provider is not None
+            else providers.name_for_role(role))
     return (f"{numbered}, model={_model_journal_label(model_id)}, "
-            f"provider={providers.name_for_role(role)}")
+            f"provider={name}")
 
 
-def _cost_partial_expected(role: str, pump) -> bool:
+def _cost_partial_expected(role: str, pump, t=None) -> bool:
     """Верно — ровно то же условие, при котором `spend.
     charge_missing_result` заведёт «agent cost PARTIAL», а не «agent cost
     LOST»/«agent cost ESTIMATED» (SPEC 01M2DTT96FS25SHXP0HDTWARQH,
@@ -1103,11 +1153,12 @@ def _cost_partial_expected(role: str, pump) -> bool:
     частичную сумму без `ValueError`. Условие читается ОТСЮДА (не
     правкой `spend.py`, вне зоны этой задачи) вызовом её же публичной
     `partial_cost_usd` — дублируется только ветвление, не арифметика
-    курса."""
+    курса. `t` — строка задачи: у задачи с набором тариф модели набора."""
     if not pump.saw_usage_event:
         return False
     try:
-        return spend.partial_cost_usd(role, pump.partial_tokens) is not None
+        return spend.partial_cost_usd(role, pump.partial_tokens,
+                                      t) is not None
     except ValueError:
         return False
 
@@ -1128,22 +1179,31 @@ def run_agent_once(conn, task_id: str, role: str, prompt: str,
     функции исходов `_finish_*` (SPEC 01M2CN3ZCSZ54TFJGTDCXTDHXD, AC-1) —
     значение и тип возврата не меняются.
     """
-    model_id = _resolved_role_model(role)
+    # Модель, её источник и провайдер — с учётом набора задачи (SPEC
+    # 01M3YCHS4F08VTV6XX10VF92H3, требования 4, 8). `provider is None` —
+    # провайдер роли, как до набора: его разрешают сами фазы ниже.
+    t = store.get_task(conn, task_id)
+    step = _resolved_task_model(role, t)
+    model_id = step.resolution.model if step is not None else None
+    source = step.source if step is not None else None
+    provider = (providers.get(step.resolution.provider)
+                if step is not None and step.from_set else None)
 
-    skip, ctx = _prepare_step(conn, task_id, role, prompt, attempt, model_id)
+    skip, ctx = _prepare_step(conn, task_id, role, prompt, attempt, model_id,
+                              source, provider)
     if skip is not None:
         return skip
     log_path, prompt_path, env, cwd, numbered = ctx
 
     skip, spawn_ctx = _spawn_and_wait(
         conn, task_id, role, log_path, prompt_path, cwd, env, numbered,
-        model_id)
+        model_id, provider)
     if skip is not None:
         return skip
     proc, pump, rc, timed_out, killed_group = spawn_ctx
 
     spent = _account_step(conn, task_id, role, pump, timed_out, numbered,
-                          model_id)
+                          model_id, provider, t)
     agent_pid = getattr(proc, "pid", None)
 
     if timed_out:
@@ -1164,7 +1224,8 @@ def run_agent_once(conn, task_id: str, role: str, prompt: str,
 
 
 def _prepare_step(conn, task_id: str, role: str, prompt: str, attempt: int,
-                  model_id: str | None):
+                  model_id: str | None, source: str | None = None,
+                  provider=None):
     """Подготовка попытки шага: лог/промпт на диске, окружение и рабочий
     каталог роли (SPEC 01M2CN3ZCSZ54TFJGTDCXTDHXD, AC-2/AC-3) — три из
     пяти исходов SKIPPED (промпт не записан; окружение роли не создано;
@@ -1172,7 +1233,12 @@ def _prepare_step(conn, task_id: str, role: str, prompt: str, attempt: int,
     записями журнала. Возвращает `(skip, ctx)`: `skip` — то, что
     `run_agent_once` обязан вернуть немедленно (`None` при успехе); `ctx`
     — `(log_path, prompt_path, env, cwd, numbered)` для
-    `_spawn_and_wait`."""
+    `_spawn_and_wait`.
+
+    `source` — источник модели шага (набор задачи, `role_models` либо
+    ярус) для записи старта шага; `provider` — провайдер модели набора,
+    `None` — провайдер роли (SPEC 01M3YCHS4F08VTV6XX10VF92H3, требования
+    4, 8)."""
     numbered = f"попытка {attempt}/{config.AGENT_ATTEMPTS}"
     log_path = agent_log.new_agent_log(task_id, role)
     # Промпт уходит агенту файлом на stdin, а не аргументом командной строки
@@ -1193,7 +1259,7 @@ def _prepare_step(conn, task_id: str, role: str, prompt: str, attempt: int,
     # каталог курируемого слоя — шаг не начинается. Тихо откатиться на HOME
     # Оператора было бы молчаливой сменой периметра (ADR-0003 п.14).
     try:
-        env = role_env(role, task_id)
+        env = role_env(role, task_id, provider=provider)
     except OSError as exc:
         store.journal(conn, task_id, role, "agent run SKIPPED",
                       f"каталог окружения роли не создан: {exc}")
@@ -1235,8 +1301,11 @@ def _prepare_step(conn, task_id: str, role: str, prompt: str, attempt: int,
     # если токена нет ни в keychain, ни в ambient-окружении.
 
     print(f"[{task_id}] лог шага: {log_path}  (наблюдать: tail -f {log_path})")
+    source_text = (f", роль {role}, источник модели: {source}"
+                   if source is not None else "")
     store.journal(conn, task_id, role, "agent run started",
-                  f"{numbered}, model={_model_journal_label(model_id)}, "
+                  f"{numbered}, model={_model_journal_label(model_id)}"
+                  f"{source_text}, "
                   f"лог: {log_path}, промпт: {prompt_path}, "
                   f"окружение: {agent_log.environment_fingerprint()}")
     return None, (log_path, prompt_path, env, cwd, numbered)
@@ -1244,14 +1313,17 @@ def _prepare_step(conn, task_id: str, role: str, prompt: str, attempt: int,
 
 def _spawn_and_wait(conn, task_id: str, role: str, log_path: Path,
                     prompt_path: Path, cwd: Path, env: dict, numbered: str,
-                    model_id: str | None):
+                    model_id: str | None, provider=None):
     """Запуск агента и ожидание завершения: открытие промпта, `spawn_
     agent`, перекачка вывода, таймаут и снятие группы процессов (SPEC
     01M2CN3ZCSZ54TFJGTDCXTDHXD, AC-3) — оставшиеся два из пяти исходов
     SKIPPED (промпт не прочитан; claude CLI не найден). Возвращает
     `(skip, ctx)`: `skip` — то, что `run_agent_once` обязан вернуть
     немедленно (`None` при успехе); `ctx` — `(proc, pump, rc, timed_out,
-    killed_group)`."""
+    killed_group)`. `provider` — провайдер модели набора задачи, `None` —
+    провайдер роли."""
+    if provider is None:
+        provider = providers.for_role(role)
     # Открытие файла держится вне `try` вокруг Popen: там ловится
     # FileNotFoundError, и пропавший промпт (ручная уборка `.artel/logs`,
     # внешний tmp-reaper) отчитывался бы Оператору как «claude CLI не найден» —
@@ -1275,7 +1347,7 @@ def _spawn_and_wait(conn, task_id: str, role: str, log_path: Path,
         # 01M2DTT96FS25SHXP0HDTWARQH, требование 3), и его место в
         # списке знает тот же, кто знает остальные флаги. Сам список от
         # этого не меняется: модель по-прежнему в конце argv.
-        cmd = providers.for_role(role).command(model_id)
+        cmd = provider.command(model_id)
         try:
             proc = spawn_agent(
                 # Промпт — файлом на стандартном входе, им и отдаётся
@@ -1315,8 +1387,7 @@ def _spawn_and_wait(conn, task_id: str, role: str, log_path: Path,
     # 01M31ZHSA6HMH40C2JTDPQJQNZ, требование 3): лог, трение, токены и
     # стоимость — всё из одного разбора, а формат знает тот, чей CLI
     # его написал.
-    pump = agent_log.OutputPump(proc.stdout, log_path,
-                                providers.for_role(role))
+    pump = agent_log.OutputPump(proc.stdout, log_path, provider)
     pump.start()
     timed_out = False
     killed_group = None
@@ -1369,11 +1440,14 @@ def _program_cost(conn, task_id: str, cost: dict | None,
 
 
 def _account_step(conn, task_id: str, role: str, pump, timed_out: bool,
-                  numbered: str, model_id: str | None) -> str:
+                  numbered: str, model_id: str | None, provider=None,
+                  t=None) -> str:
     """Учёт шага: трение, стоимость и потолок программы (SPEC
     01M2CN3ZCSZ54TFJGTDCXTDHXD, AC-3) — без изменения вызовов и их
     порядка. Возвращает `spent` — хвост строки для журналов и печати
-    исхода."""
+    исхода. `provider`/`t` — провайдер модели набора и строка задачи
+    (SPEC 01M3YCHS4F08VTV6XX10VF92H3, требование 5): тариф и подпись
+    провайдера — модели, на которой шаг шёл."""
     # Трение шага (tasks/T095/SPEC.md, вариант 4б — точка завершения
     # шага, обоснование в tasks/T095/PLAN.md): журналируется сразу по
     # завершении перекачки, независимо от исхода попытки — провалившийся
@@ -1403,14 +1477,16 @@ def _account_step(conn, task_id: str, role: str, pump, timed_out: bool,
     spent_before = store.get_task(conn, task_id)["spent_usd"]
     if pump.cost is None and (timed_out or pump.error is not None):
         cause = "таймаут шага" if timed_out else "обрыв stdout-пайпа"
-        numbered_for_cost = (_numbered_with_model(numbered, role, model_id)
-                             if _cost_partial_expected(role, pump)
+        numbered_for_cost = (_numbered_with_model(numbered, role, model_id,
+                                                  provider)
+                             if _cost_partial_expected(role, pump, t)
                              else numbered)
         spent = spend.charge_missing_result(
             conn, task_id, role, numbered_for_cost, cause,
             pump.partial_tokens, pump.saw_usage_event)
     else:
-        numbered_for_cost = (_numbered_with_model(numbered, role, model_id)
+        numbered_for_cost = (_numbered_with_model(numbered, role, model_id,
+                                                  provider)
                              if pump.cost and pump.cost.get("tokens_by_type")
                              else numbered)
         # Модель шага уходит в учёт ПАРАМЕТРОМ, а не полем текста
