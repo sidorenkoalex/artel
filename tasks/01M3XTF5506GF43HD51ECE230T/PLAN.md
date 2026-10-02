@@ -2,7 +2,7 @@
 task: 01M3XTF5506GF43HD51ECE230T
 type: plan
 author_role: developer
-status: escalate
+status: ready
 schema_version: 5
 ---
 
@@ -43,6 +43,15 @@ schema_version: 5
    сменой `HOME` и `ARTEL_ROLE`, граница — песочница клиента и гейты после
    шага; перечень того, что реально запрещает `permissions.deny`.
 5. Карта кодовой базы регенерирована тем же коммитом (28e4d254).
+6. По ANSWER-2 (вариант А, зона расширена на `orchestrator/doctor/isolation.py`):
+   `isolation_smoke` (Claude) и `_codex_environment_leaks` (Codex) проверяют
+   непустой `config.ARTEL_ROLE_ENV` в собранном окружении напрямую, отдельно
+   от признака роли; при пустом — красная строка «окружение шага роли не
+   распознаётся как окружение роли: нет маркера роли ARTEL_ROLE». Тест
+   `tests/test_providers_codex.py::IsolationSmokeTest::test_missing_role_marker_in_assembled_codex_env_is_red`
+   не тронут и снова зелёный. Симметричный сторож Claude —
+   `tests/test_doctor.py::IsolationSmokeTest::test_missing_role_marker_in_assembled_env_is_red`.
+   Коммит 3ff0f528 (карта регенерирована).
 
 ## Покрытие требований
 
@@ -54,14 +63,16 @@ schema_version: 5
 | 4 | 2 |
 | 5 | 2 |
 | 6 | 2 |
-| 7 | 2 (отказ только в диспетчере); `isolation-smoke`/`codex-isolation-smoke` зелёные, см. «Эскалация» |
+| 7 | 2 (отказ только в диспетчере), 6 (`isolation-smoke`/`codex-isolation-smoke` зелёные и по-прежнему ловят пропажу маркера) |
 | 8 | 4 |
 | 9 | долгоживущий `tests/test_01m3xtf5506gf43hd51ece230t_role_refusal.py` (test_author) |
 | 10 | 3 |
 
 Прогоны (в шаге, сам шаг идёт под `ARTEL_ROLE=developer`):
 - `tests/test_analyst_role.py tests/test_approve_acceptance_full_suite.py tests/test_kill_live_cycle_refusal.py tests/test_stack_parity_table.py tests/test_stack_codex_section.py tests/test_stack_zones_pull_section.py tests/test_stack.py tasks/01M3XTF5506GF43HD51ECE230T/acceptance_tests` — 102 passed, 29 subtests (планка AC-3/AC-8/AC-9 зелёная).
-- `tests/test_answer.py tests/test_canary.py tests/test_doc_commit.py tests/test_notes.py tests/test_notes_apply.py tests/test_doctor.py tests/test_providers_codex.py tests/test_artel_role_restricted_commands.py tests/test_observation_edges.py tests/test_01m3sx69e8p64d77j1xthmhe40_migration.py tests/test_01m3sx69e8p64d77j1xthmhe40_observation.py tests/test_detached_cycle.py tests/test_new_argv_parsing.py tests/test_conftest_role_guard.py tests/test_01m3se87r3m7hgwx8hg1anakr0_role_environment.py tests/test_01m3xtf5506gf43hd51ece230t_role_refusal.py tests/test_runner_role_environment.py` — 480 passed, **1 failed** (`tests/test_providers_codex.py::IsolationSmokeTest::test_missing_role_marker_in_assembled_codex_env_is_red`, см. «Эскалация»).
+- `tests/test_answer.py tests/test_canary.py tests/test_doc_commit.py tests/test_notes.py tests/test_notes_apply.py tests/test_doctor.py tests/test_providers_codex.py tests/test_artel_role_restricted_commands.py tests/test_observation_edges.py tests/test_01m3sx69e8p64d77j1xthmhe40_migration.py tests/test_01m3sx69e8p64d77j1xthmhe40_observation.py tests/test_detached_cycle.py tests/test_new_argv_parsing.py tests/test_conftest_role_guard.py tests/test_01m3se87r3m7hgwx8hg1anakr0_role_environment.py tests/test_01m3xtf5506gf43hd51ece230t_role_refusal.py tests/test_runner_role_environment.py` — 480 passed, 1 failed (`test_providers_codex.py::...::test_missing_role_marker_in_assembled_codex_env_is_red`) до шага 6.
+- После шага 6: `tests/test_doctor.py tests/test_providers_codex.py tests/test_01m3xtf5506gf43hd51ece230t_role_refusal.py tests/test_01m3se87r3m7hgwx8hg1anakr0_role_environment.py tasks/01M3XTF5506GF43HD51ECE230T/acceptance_tests` — 219 passed, 215 subtests, красных нет.
+- Мутация нового сторожа `test_doctor.py::IsolationSmokeTest::test_missing_role_marker_in_assembled_env_is_red`: прямая проверка маркера в `isolation_smoke` выключена — тест красный; код возвращён.
 - `tests/test_invariants.py tests/test_multitarget.py tests/test_providers.py tests/test_provider_scoped_step_env.py` — 155 passed.
 - Мутация заявки изменённого метода `test_analyst_role.py::ArtelCliTzFlagTest::test_cli_new_with_dangling_tz_flag_exits_cleanly`: снята проверка длины в `artel._tz_arg` — тест красный; код возвращён.
 
@@ -69,12 +80,13 @@ schema_version: 5
 - Признак стал шире (HOME без `CLAUDE_CONFIG_DIR`): внутренние отказы
   `answer.py`/`notes.py`/`pool_seal.py` и смоки `doctor`, зовущие тот же
   признак, срабатывают и в окружении с HOME дома роли без маркера. Их тесты
-  зелёные; единственное следствие, ломающее существующий тест, — в «Эскалации».
+  зелёные; смоки `doctor` проверяют маркер напрямую (шаг 6), поэтому
+  расширение признака не гасит их сторожевую функцию.
 - Отказ диспетчера стал закрытым по умолчанию: новая команда таблицы под
   ролью отказывает, пока её не внесут в белый список (`note`, `doc-commit`
   теперь отказывают уже в диспетчере — по требованию 5).
 - `conftest.py` не тронут (по-прежнему читает только `ARTEL_ROLE`).
-- Откат — revert коммита 28e4d254.
+- Откат — revert коммитов 3ff0f528 и 28e4d254.
 
 ## Риски
 - Шаг роли, у которого `HOME` = дом роли, а `ARTEL_ROLE` снят, теперь
@@ -88,40 +100,3 @@ schema_version: 5
   расширение признака молча гасит его сторожевую функцию (пойман этой
   задачей); проверку «маркер поставлен» стоит держать отдельной строкой.
 
-## Эскалация
-
-**Вопросы**
-
-1. (блокирует сдачу) `tests/test_providers_codex.py::IsolationSmokeTest::test_missing_role_marker_in_assembled_codex_env_is_red`
-   требует, чтобы `doctor.codex_isolation_smoke` краснел, когда `runner.role_env`
-   перестал ставить `ARTEL_ROLE` шагу Codex. Смок проверяет это вызовом
-   `runner.in_role_environment(step_env)` (`orchestrator/doctor/isolation.py:298`),
-   а по требованию 2 / AC-2 SPEC окружение Codex со снятым маркером теперь
-   распознаётся ролью по `HOME` — смок зелёный, тест красный. Это прямое
-   противоречие SPEC и существующего теста; `orchestrator/doctor/` по SPEC
-   только для чтения, ослаблять тест мне нельзя. Варианты:
-   - **А (дефолт)** — `zones-extend` на `orchestrator/doctor/isolation.py`:
-     смок Codex дополнительно проверяет напрямую, что
-     `config.ARTEL_ROLE_ENV` в собранном окружении непуст (строка
-     «окружение шага роли не распознаётся как окружение роли» при
-     отсутствии маркера). Тест остаётся без правки и снова зелёный, его
-     свойство («`role_env` ставит маркер шагу Codex») сохранено. Правка —
-     2-3 строки; то же стоит сделать и в `isolation_smoke` Claude
-     (`isolation.py:94`) ради симметрии.
-   - **Б** — `amend`/мандат на правку теста: метод сохраняет имя и
-     проверяет то же свойство напрямую (`runner.role_env` для Codex несёт
-     непустой `ARTEL_ROLE`), без участия смока. Минус — смок `doctor`
-     перестаёт ловить пропажу маркера.
-   - **В** — принять, что маркер у Codex больше не обязателен (признак по
-     HOME его покрывает), и удалить метод. Не рекомендую: маркер остаётся
-     единственным основанием для `conftest.py` и для текста отказа с именем роли.
-
-**Контекст**
-Весь остальной объём SPEC реализован и закоммичен (28e4d254): признак,
-белый список диспетчера, правка трёх тестов-вызывателей, `docs/stack.md`,
-карта. Планка задачи (долгоживущий файл + `acceptance_tests/`) зелёная.
-Красный только один названный метод.
-
-**Блокирует**
-Сдачу `ready`: с красным методом CI ветки и гейт `in_dev -> review` не
-пройдут. При ответе А — правка `isolation.py` в этой же ветке и `ready`.
