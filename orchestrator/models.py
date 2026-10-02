@@ -952,3 +952,463 @@ def cmd_models() -> None:
                        else f"ярус {source}")
         print(f"  {role} → {resolved.model} → {resolved.provider} "
               f"({source_text})")
+
+
+# --- Наборы моделей задач и допуск пар (SPEC 01M3YCHP14179R32SFJVKQB32G) ---
+#
+# Файл решений Оператора `model_sets.yaml` (корень, в git, защищённый
+# путь): `sets:` — именованные наборы «роль -> модель», `pairs:` —
+# допущенные пары «роль -> модель -> date/basis/state», `canary_templates:`
+# — класс шаблона канарейки. Допуск пары выдаёт `admit` по числам ADR-0019
+# п.5 из `canary_runs`; допуск набора (`set_admitted`) — вход части 2
+# деления (`new --set`), правило вины (`autogate_refusal_blame`) — и
+# части 3.
+
+SETS_KEY = "sets"
+PAIRS_KEY = "pairs"
+CANARY_TEMPLATES_KEY = "canary_templates"
+MODEL_SETS_SECTIONS = (SETS_KEY, PAIRS_KEY, CANARY_TEMPLATES_KEY)
+
+PAIR_DATE_KEY = "date"
+PAIR_BASIS_KEY = "basis"
+PAIR_STATE_KEY = "state"
+PAIR_ADMITTED = "допущена"
+PAIR_SUSPENDED = "приостановлена"
+
+TEMPLATE_FAST = "быстрый"
+TEMPLATE_MEDIUM = "средний"
+TEMPLATE_HARD = "трудный"
+TEMPLATE_CLASSES = (TEMPLATE_FAST, TEMPLATE_MEDIUM, TEMPLATE_HARD)
+
+#: Числа допуска пары (ADR-0019 п.5, дополнение 30.09.2026).
+ADMIT_MIN_CLEAN_RUNS = 3
+ADMIT_MIN_TEMPLATES = 2
+#: Роль с дополнительным условием «прогон с правильным исходом неясности ТЗ».
+ADMIT_TZ_AMBIGUITY_ROLE = "analyst"
+#: Условие «без повтора developer» не проверяется: колонки повторов в
+#: `canary_runs` нет (SPEC, «Не входит»), и сводка говорит это прямо, а не
+#: молча опускает условие.
+DEVELOPER_RETRIES_LINE = "повторы developer: нет данных"
+
+#: Исходы правила вины отказа автогейта (требование 6) — дословно SPEC.
+BLAME_ROLE = "роль"
+BLAME_PULT = "пульт/пул"
+BLAME_UNKNOWN = "не установлена"
+
+#: Префикс строки отказа автогейта (`fsm_autogate._autogate_conditions`).
+AUTOGATE_REFUSAL_PREFIX = "автогейт: "
+
+#: Причины по вине роли — начала текстов `fsm_autogate` после префикса:
+#: критерии `manual`/`skip` в планке (test_author), красный полный набор и
+#: непройденный критерий `ci` (developer).
+_ROLE_BLAME_STARTS = (
+    "критерии manual",
+    "критерии skip",
+    "полный набор tests/ красный",
+    "критерий ci не пройден",
+)
+
+#: Причины по вине пульта/пула: ошибка источника планки
+#: (`fsm_autogate._plank_sources`), пустой каталог приёмочных тестов,
+#: незаведённый worktree, таймаут прогона и отсутствие `tests/` в worktree
+#: (`acceptance._full_suite_detail`), исчерпанный бюджет. Тексты — литералы,
+#: а не импорт производителей: `acceptance` тянет `stack`, а тот — этот
+#: модуль; совпадение с производителями сверяет `tests/test_model_sets.py`.
+_PULT_BLAME_STARTS = (
+    "перечень долгоживущих файлов не прочитан",
+    "долгоживущий файл планки не прочитан",
+    "каталог приёмочных тестов пуст",
+    "полный набор tests/ не проверен — worktree задачи не заведён",
+    "прогон полного набора tests/ превысил",
+    "tests/ нет в worktree",
+    "бюджет задачи исчерпан",
+)
+
+#: Разделители сводки прогона канарейки (`canary._SUMMARY_SOURCE_SEP`,
+#: `canary._plan_summary`): «роль → модель, …; источник: …». Литералы по
+#: той же причине: `canary` импортирует этот модуль.
+_SUMMARY_SOURCE_SEP = "; источник: "
+_SUMMARY_PAIR_SEP = ", "
+_SUMMARY_ARROW = " → "
+
+#: Шапка файла, которую `admit` кладёт, если в файле её нет.
+MODEL_SETS_HEADER = """\
+# Наборы моделей задач и допуск пар «роль — модель» (SPEC
+# 01M3YCHP14179R32SFJVKQB32G; ADR-0019 п.5). Решения Оператора: файл
+# защищён от ролей, правится `doc-commit`; запись пары пишет команда
+# `artel.py admit` — она пересобирает файл, сохраняя только эту шапку.
+#
+# sets:              <имя набора>: <роль>: <id модели каталога>
+# pairs:             <роль>: <id модели>: date / basis / state
+#                    (допущена | приостановлена)
+# canary_templates:  <title прогона канарейки>: быстрый | средний | трудный
+"""
+
+ADMIT_USAGE = ('admit [--revoke] <роль> <модель> --basis "<основание: '
+               'прогоны канарейки или документ замера>"')
+
+
+class ModelSetsError(ModelsError):
+    """`model_sets.yaml` не прочитан, не разобран или не по схеме."""
+
+
+def model_sets_path():
+    """Путь файла наборов в корне пульта — от `config.ROOT` в момент
+    вызова (песочница подменяет корень)."""
+    return config.ROOT / config.MODEL_SETS_REL
+
+
+def load_model_sets(path=None) -> dict:
+    """`model_sets.yaml` разобранным: три раздела всегда отображениями
+    (пустой раздел — `{}`), прочие ключи верхнего уровня — как есть."""
+    path = path or model_sets_path()
+    document = _document(path, ModelSetsError)
+    for key in MODEL_SETS_SECTIONS:
+        value = document.get(key)
+        if value is None:
+            document[key] = {}
+        elif not isinstance(value, dict):
+            raise ModelSetsError(f"{path}: раздел '{key}:' — не отображение")
+    return document
+
+
+def summary_models(summary) -> dict:
+    """«роль -> модель» из сводки `models_summary` строки `canary_runs`.
+    Сводка без разделителя источника (строки до SPEC
+    01M3PYMQ6N4SCAJ9WWTTKH6XNG) разбирается целиком; часть без стрелки
+    (карта исполнителей не прочитана) пары не даёт."""
+    if not summary:
+        return {}
+    named = str(summary).split(_SUMMARY_SOURCE_SEP, 1)[0]
+    result = {}
+    for part in named.split(_SUMMARY_PAIR_SEP):
+        role, sep, model = part.partition(_SUMMARY_ARROW)
+        if sep and role.strip() and model.strip():
+            result[role.strip()] = model.strip()
+    return result
+
+
+def autogate_refusal_blame(text) -> str | None:
+    """Правило вины отказа автогейта (требование 6): `BLAME_ROLE`,
+    `BLAME_PULT` либо `BLAME_UNKNOWN`; `None` — отказа не было (пусто).
+
+    Строка с префиксом автогейта сверяется по началу причины: сперва
+    перечень роли, затем пульта/пула, вне обоих — «не установлена».
+    Строка без префикса — не текст `fsm_autogate`; её сверяет
+    классификатор отказа попытки роли (`failure_classification`) по
+    сигнатурам всех провайдеров. На строках с префиксом классификатор не
+    зовётся: его сигнатуры — подстроки («403»), и sha в скобках причины
+    засчитал бы пульту причину, которой нет ни в одном перечне.
+    """
+    if text is None or not str(text).strip():
+        return None
+    reason = " ".join(str(text).split())
+    if reason.startswith(AUTOGATE_REFUSAL_PREFIX):
+        reason = reason[len(AUTOGATE_REFUSAL_PREFIX):]
+        if reason.startswith(_ROLE_BLAME_STARTS):
+            return BLAME_ROLE
+        if reason.startswith(_PULT_BLAME_STARTS):
+            return BLAME_PULT
+        return BLAME_UNKNOWN
+    from . import failure_classification, providers
+    for name in providers.PROVIDERS:
+        if failure_classification.classify_attempt_failure(
+                reason, providers.get(name)) is not None:
+            return BLAME_PULT
+    return BLAME_UNKNOWN
+
+
+def expected_escalation_met(row) -> bool:
+    """Ожидаемая эскалация случилась верно: маркер задан, эскалация была,
+    маркер совпал."""
+    return (bool(row["expected_escalation"])
+            and row["actual_escalation"] == 1
+            and row["marker_mismatch"] == 0)
+
+
+def unclean_reason(row) -> str | None:
+    """Почему строка `canary_runs` не чистый прогон (требование 5);
+    `None` — чистый. Пустой счётчик — не ноль: чистоту без данных не
+    засчитываем."""
+    if row["verdict"] != "green":
+        return f"вердикт {row['verdict'] or '—'}"
+    if row["review_iterations"] != 0:
+        return f"итераций ревью {row['review_iterations']}"
+    if row["escalations"] != 0 and not expected_escalation_met(row):
+        return f"эскалаций {row['escalations']}, ожидаемой с верным исходом нет"
+    blame = autogate_refusal_blame(row["autogate_refusal"])
+    if blame not in (None, BLAME_PULT):
+        return f"отказ автогейта, вина: {blame}"
+    return None
+
+
+def clean_run(row) -> bool:
+    return unclean_reason(row) is None
+
+
+def _canary_rows(conn) -> list:
+    """Все строки `canary_runs` по порядку записи; SQL — только в
+    `store.py` (инвариант `test_no_sql_outside_store`)."""
+    from . import store
+    return store.all_canary_runs(conn)
+
+
+def _template_class(document: dict, title) -> str | None:
+    value = document[CANARY_TEMPLATES_KEY].get(title)
+    return value if value in TEMPLATE_CLASSES else None
+
+
+def pair_admission(conn, role: str, model: str,
+                   document: dict) -> tuple[list, list]:
+    """(строки сводки, перечень недостающего) допуска пары по
+    `canary_runs` против чисел ADR-0019 п.5 (требование 3). Пустой
+    перечень — чисел достаточно.
+
+    Прогон пары — строка, сводка которой ведёт роль этой моделью. Прогон
+    с правильным исходом неясности ТЗ (analyst) по SPEC — любой прогон
+    пары, чистота для него отдельно не требуется.
+    """
+    runs = [row for row in _canary_rows(conn)
+            if summary_models(row["models_summary"]).get(role) == model]
+    clean = [row for row in runs if clean_run(row)]
+    titles = sorted({row["title"] for row in clean})
+    medium = [row for row in clean
+              if _template_class(document, row["title"]) == TEMPLATE_MEDIUM]
+    unclassified = [title for title in titles
+                    if _template_class(document, title) is None]
+
+    lines = [f"прогоны пары {role} → {model} в canary_runs: {len(runs)}"]
+    for row in runs:
+        cls = _template_class(document, row["title"]) or "класс не записан"
+        reason = unclean_reason(row)
+        verdict = "чистый" if reason is None else f"не чистый — {reason}"
+        lines.append(f"  {row['run_stamp']} {row['title']} [{cls}]: {verdict}")
+    lines.append(f"чистых прогонов: {len(clean)} (нужно не меньше "
+                 f"{ADMIT_MIN_CLEAN_RUNS})")
+    lines.append(f"шаблонов среди чистых: {len(titles)} (нужно не меньше "
+                 f"{ADMIT_MIN_TEMPLATES})")
+    lines.append(f"чистых на шаблоне класса «{TEMPLATE_MEDIUM}»: "
+                 f"{len(medium)} (нужно не меньше 1)")
+
+    missing = []
+    if len(clean) < ADMIT_MIN_CLEAN_RUNS:
+        missing.append(f"чистых прогонов {len(clean)} из "
+                       f"{ADMIT_MIN_CLEAN_RUNS}")
+    if len(titles) < ADMIT_MIN_TEMPLATES:
+        missing.append(f"шаблонов среди чистых прогонов {len(titles)} из "
+                       f"{ADMIT_MIN_TEMPLATES}")
+    if not medium:
+        text = f"нет чистого прогона на шаблоне класса «{TEMPLATE_MEDIUM}»"
+        if unclassified:
+            text += (f" (шаблоны без записи класса в "
+                     f"'{CANARY_TEMPLATES_KEY}:' не засчитаны: "
+                     f"{', '.join(unclassified)})")
+        missing.append(text)
+    if role == ADMIT_TZ_AMBIGUITY_ROLE:
+        ambiguity = [row for row in runs if expected_escalation_met(row)]
+        lines.append(f"прогонов с правильным исходом неясности ТЗ: "
+                     f"{len(ambiguity)} (нужно не меньше 1)")
+        if not ambiguity:
+            missing.append("нет прогона пары с правильным исходом неясности "
+                           "ТЗ (expected_escalation задан, "
+                           "actual_escalation = 1, marker_mismatch = 0)")
+    lines.append(DEVELOPER_RETRIES_LINE)
+    return lines, missing
+
+
+def _combat_model(role: str) -> str | None:
+    """Модель роли разрешением пульта без набора; `None` — не разрешилась
+    (тогда пара набора считается не-боевой и требует допуска)."""
+    try:
+        return resolve_role(role).model
+    except ModelsError:
+        return None
+
+
+def set_admitted(conn, set_name: str) -> tuple[bool, str]:
+    """(допущен ли набор `set_name` из `sets:`, пояснение) — требование 4.
+
+    Допущен, если (а) каждая его пара, чья модель отличается от боевой
+    модели роли, записана в `pairs:` с `state: допущена`, и (б) в
+    `canary_runs` есть строка `verdict = green` на шаблоне класса
+    `трудный`, сводка которой совпадает с набором по всем его ролям.
+    Нечитаемый файл и неизвестный набор — «не допущен» с причиной.
+    """
+    try:
+        document = load_model_sets()
+    except ModelsError as exc:
+        return False, str(exc)
+    members = document[SETS_KEY].get(set_name)
+    if not isinstance(members, dict) or not members:
+        return False, f"набора {set_name} нет в '{SETS_KEY}:'"
+    pairs = document[PAIRS_KEY]
+    for role, model in members.items():
+        if model == _combat_model(role):
+            continue
+        role_pairs = pairs.get(role)
+        entry = role_pairs.get(model) if isinstance(role_pairs, dict) else None
+        state = entry.get(PAIR_STATE_KEY) if isinstance(entry, dict) else None
+        if state != PAIR_ADMITTED:
+            return False, (f"пара {role} → {model} не допущена "
+                           f"(state: {state or 'нет записи'})")
+    for row in _canary_rows(conn):
+        if row["verdict"] != "green":
+            continue
+        if _template_class(document, row["title"]) != TEMPLATE_HARD:
+            continue
+        summary = summary_models(row["models_summary"])
+        if all(summary.get(role) == model for role, model in members.items()):
+            return True, (f"пары допущены; зелёный прогон набором "
+                          f"{row['run_stamp']} на шаблоне {row['title']}")
+    return False, (f"нет зелёного прогона набором целиком на шаблоне класса "
+                   f"«{TEMPLATE_HARD}»")
+
+
+def _scalar_yaml(value, where: str) -> str:
+    """Скаляр так, чтобы `yamlmini.scalar` вернул его дословно (число,
+    `#`, ведущая `[` — в кавычки); невыразимый — отказ."""
+    if value is None:
+        return ""
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, (int, float)):
+        return repr(value)
+    text = str(value)
+    if text and not text.startswith("[") and yamlmini.scalar(text) == text:
+        return text
+    for quote in ('"', "'"):
+        if quote not in text:
+            quoted = f"{quote}{text}{quote}"
+            if yamlmini.scalar(quoted) == text:
+                return quoted
+    raise ModelSetsError(f"{where}: значение {text!r} не записывается в "
+                         f"подмножестве YAML пульта")
+
+
+def _render_block(block: dict, indent: int, where: str) -> list:
+    pad = " " * indent
+    lines = []
+    for key, value in block.items():
+        if isinstance(value, dict):
+            lines.append(f"{pad}{key}:")
+            lines += _render_block(value, indent + 2, f"{where}.{key}")
+            continue
+        rendered = _scalar_yaml(value, f"{where}.{key}")
+        lines.append(f"{pad}{key}: {rendered}" if rendered else f"{pad}{key}:")
+    return lines
+
+
+def _with_sections(document: dict) -> dict:
+    """Документ с тремя разделами по порядку (пустой — `{}`) и прочими
+    ключами верхнего уровня за ними — форма записи и сравнения."""
+    result = {key: document.get(key) or {} for key in MODEL_SETS_SECTIONS}
+    result.update({key: value for key, value in document.items()
+                   if key not in result})
+    return result
+
+
+def _leading_comments(text: str) -> str:
+    """Шапка файла — строки комментариев (и пустые) до первого ключа."""
+    head = []
+    for line in text.splitlines():
+        if line.strip() and not line.lstrip().startswith("#"):
+            break
+        head.append(line)
+    while head and not head[-1].strip():
+        head.pop()
+    return "\n".join(head) + "\n" if head else ""
+
+
+def render_model_sets(document: dict, header: str = MODEL_SETS_HEADER) -> str:
+    """Текст `model_sets.yaml`: шапка, три раздела по порядку, прочие
+    ключи верхнего уровня. Результат сверяется обратным разбором: текст,
+    который `yamlmini` прочёл бы в другие записи (ключ с двоеточием,
+    невыразимое значение), не пишется — `ModelSetsError`."""
+    ordered = _with_sections(document)
+    body = "\n".join(_render_block(ordered, 0, config.MODEL_SETS_REL))
+    text = (header.rstrip("\n") + "\n\n" if header else "") + body + "\n"
+    try:
+        parsed = yamlmini.mapping(text)
+    except yamlmini.YamlError as exc:
+        raise ModelSetsError(f"{config.MODEL_SETS_REL}: пересобранный текст "
+                             f"не разбирается: {exc}") from exc
+    if _with_sections(parsed) != ordered:
+        raise ModelSetsError(f"{config.MODEL_SETS_REL}: пересобранный текст "
+                             f"разбирается в другие записи (ключ или значение "
+                             f"вне подмножества YAML пульта)")
+    return text
+
+
+def _parse_admit_args(argv: list):
+    import argparse
+
+    class _Parser(argparse.ArgumentParser):
+        # Отказ разбора — именованный текст с образцом команды, а не код 2
+        # и справка argparse в stderr.
+        def error(self, message):
+            sys.exit(f"admit: {message}\n{ADMIT_USAGE}")
+
+    parser = _Parser(prog="admit", add_help=False)
+    parser.add_argument("--revoke", action="store_true")
+    parser.add_argument("--basis")
+    parser.add_argument("role")
+    parser.add_argument("model")
+    return parser.parse_args(argv)
+
+
+def cmd_admit(argv: list) -> None:
+    """`admit <роль> <модель> --basis <текст>` — допуск пары по числам
+    ADR-0019 п.5; `admit --revoke …` — снятие (требование 3).
+
+    Выдача печатает сводку прогонов пары; недобор — отказ с перечнем
+    недостающего до любой записи: файл и HEAD не трогаются, флага вопреки
+    недобору нет. Снятие чисел не сверяет. Запись — изолированный коммит
+    механизмом `doc-commit` (`notes.doc_commit_content`: окно тишины,
+    удержание, гейт полного набора на пути конфигурации).
+    """
+    from datetime import date
+
+    from . import notes, roles, store
+    args = _parse_admit_args(argv)
+    basis = " ".join((args.basis or "").split())
+    if not basis:
+        sys.exit(f"admit: --basis обязателен — основание решения входит в "
+                 f"запись пары\n{ADMIT_USAGE}")
+    try:
+        roles.model_tier(args.role)
+    except roles.RolesError as exc:
+        sys.exit(f"admit: роль {args.role}: {exc}")
+    try:
+        catalog_model(args.model)
+        document = load_model_sets()
+    except ModelsError as exc:
+        sys.exit(f"admit: {exc}")
+
+    if args.revoke:
+        state, action = PAIR_SUSPENDED, "снятие допуска"
+    else:
+        lines, missing = pair_admission(store.db(), args.role, args.model,
+                                        document)
+        print("\n".join(lines))
+        if missing:
+            sys.exit("admit: допуск пары не выдан — недостаёт:\n"
+                     + "\n".join(f"  - {item}" for item in missing)
+                     + f"\n{config.MODEL_SETS_REL} не изменён")
+        state, action = PAIR_ADMITTED, "допуск"
+
+    pairs = document[PAIRS_KEY]
+    if not isinstance(pairs.get(args.role), dict):
+        pairs[args.role] = {}
+    pairs[args.role][args.model] = {PAIR_DATE_KEY: date.today().isoformat(),
+                                    PAIR_BASIS_KEY: basis,
+                                    PAIR_STATE_KEY: state}
+    try:
+        current = model_sets_path().read_text(encoding="utf-8")
+        text = render_model_sets(
+            document, _leading_comments(current) or MODEL_SETS_HEADER)
+    except (OSError, UnicodeDecodeError, ModelsError) as exc:
+        sys.exit(f"admit: {exc}")
+    print(f"{action} пары {args.role} → {args.model}: state: {state}")
+    notes.doc_commit_content(
+        config.MODEL_SETS_REL, text,
+        f"{action} пары {args.role} → {args.model}: {basis}")

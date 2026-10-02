@@ -125,11 +125,17 @@ APPLY_KIND = "apply"
 # требование 4): та же конфигурация Оператора, что roles.yaml рядом, и
 # тот же канал правки мимо главной копии (префикс коммита `config:` —
 # `_doc_commit_prefix` отдаёт его всему, что вне `docs/`).
+# `model_sets.yaml` — наборы моделей и допуск пар (SPEC
+# 01M3YCHP14179R32SFJVKQB32G, требование 2): его же пишет `admit` через
+# `doc_commit_content`.
 DOC_COMMIT_CONFIG_PATHS = ("roles.yaml", "gates.yaml", "targets.yaml",
-                           "models.yaml")
+                           "models.yaml", config.MODEL_SETS_REL)
 
 DOC_COMMIT_FOREIGN_REFUSAL = ("код и артефакты меняются задачами, не "
                               "doc-commit")
+DOC_COMMIT_ROLE_REFUSAL = ("doc-commit отказана — вызов из окружения роли "
+                           "(role_env): документы и конфигурация Оператора "
+                           "коммитятся Оператором")
 DOC_COMMIT_BASE_REFUSAL = ("файл изменился в origin после пина — сначала "
                            "pin-update")
 
@@ -1416,8 +1422,7 @@ def cmd_doc_commit(argv: list[str]) -> None:
     появляется (`_journal_commit`, R1-F4 ревью итерации 1).
     """
     if runner.in_role_environment():
-        sys.exit("doc-commit отказана — вызов из окружения роли (role_env): "
-                 "документы и конфигурация Оператора коммитятся Оператором")
+        sys.exit(DOC_COMMIT_ROLE_REFUSAL)
     args = _parse_doc_commit_args(argv)
     if args.flush or _silence_window_reason() is None:
         _flush_pending(explicit=args.flush)
@@ -1438,10 +1443,43 @@ def cmd_doc_commit(argv: list[str]) -> None:
                  '<файл> --message "<основание>" --accept-red "<почему '
                  'красный набор tests/ принят>"')
     content = _read_source_file(args.source)
+    accept_red = (args.accept_red.strip() if args.accept_red is not None
+                  else None)
+    _doc_commit_request(rel, content, args.message.strip(), accept_red)
+
+
+def _doc_commit_request(rel: str, content: str, message: str,
+                        accept_red: str | None = None) -> str | None:
+    """Запись `doc-commit` уже проверенного пути — в `_run` (окно тишины,
+    удержание, гейт полного набора) и строка итога. Общий хвост
+    `cmd_doc_commit` и `doc_commit_content`."""
     request = {"kind": DOC_COMMIT_KIND, "path": rel, "content": content,
-               "message": args.message.strip()}
-    if args.accept_red is not None:
-        request["accept_red"] = args.accept_red.strip()
+               "message": message}
+    if accept_red is not None:
+        request["accept_red"] = accept_red
     sha = _run(request)
     if sha is not None:
         print(f"{rel} закоммичен в origin/{config.MAIN_BRANCH}: {sha}")
+    return sha
+
+
+def doc_commit_content(rel: str, content: str, message: str) -> str | None:
+    """Изолированный коммит содержимого `content` по пути `rel` тем же
+    механизмом, что `doc-commit` (SPEC 01M3YCHP14179R32SFJVKQB32G,
+    требование 3: команда `admit` пишет `model_sets.yaml`): сверка базы с
+    пином, окно тишины и удержание, гейт полного набора на пути
+    конфигурации, допуш удержанных записей. Отличие от `cmd_doc_commit` —
+    только источник содержимого: строка вызывающего кода, а не файл
+    `--from`.
+
+    sha коммита в origin; `None` — запись удержана окном тишины. Отказы —
+    `sys.exit`, как у самой команды.
+    """
+    if runner.in_role_environment():
+        sys.exit(DOC_COMMIT_ROLE_REFUSAL)
+    if _silence_window_reason() is None:
+        _flush_pending()
+    refusal = _doc_commit_path_refusal(rel)
+    if refusal is not None:
+        sys.exit(refusal)
+    return _doc_commit_request(str(PurePosixPath(rel)), content, message)
