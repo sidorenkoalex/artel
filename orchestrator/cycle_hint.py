@@ -36,6 +36,18 @@ def launch_hint(conn, task_id: str, cmd: str, note: str = "") -> list[str]:
     return [launch, "сначала:"] + [f"{n}. {step}" for n, step in enumerate(steps, 1)]
 
 
+def cycle_command(cmd: str, task_id: str, client: str | None = None,
+                  chat: str | None = None) -> str:
+    """Строка запуска цикла по уже известным аргументам наблюдения — без
+    чтения БД и без заглушек: перезапуск цикла, наблюдение которого
+    известно месту вызова (`doctor/stale_cycles.py`). Без пары
+    `client`/`chat` — строка без `--client`/`--chat`."""
+    launch = f"artel.py {cmd} {task_id}"
+    if client is not None and chat is not None:
+        launch = f"{launch} --client {client} --chat {chat}"
+    return launch
+
+
 def launch_text(conn, task_id: str, cmd: str, note: str = "",
                 indent: str = "    ") -> str:
     """`launch_hint` одним текстом: строка запуска продолжает префикс места

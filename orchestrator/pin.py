@@ -41,10 +41,32 @@ ADR-0013 ч.3). Каждый вызов — ровно одна запись ж�
 (`_already_at_run_sha`, SPEC 01M3GKJFN90ATK2KECNDZXPPP6, требование 9):
 в журнале прогонов живут короткие `main_sha`, записанные до нормализации
 явного `--sha`.
+
+Циклы на коде старше пина (SPEC 01M3Y75GCRESC2KDS9VPRJK4PS, требование
+1): после успешного `merge --ff-only` `cmd_pin_update` называет живые
+циклы `auto`/`run` этой машины, стартовавшие до сдвига, с готовыми
+командами перезапуска — отбор общий с проверкой `doctor`
+(`doctor/stale_cycles.py`), сигналов процессам команда не шлёт.
 """
 import sys
+from datetime import datetime, timezone
 
-from . import canary, ci, config, gitcmd, store
+from . import canary, ci, config, doctor, gitcmd, store
+
+STALE_CYCLES_ACTION = "pin: циклы на коде старше пина"
+
+
+def _report_stale_cycles(conn, pin_moment: datetime) -> None:
+    cycles = doctor.stale_cycles(conn, pin_moment)
+    if not cycles:
+        return
+    lines = doctor.stale_cycle_lines(cycles)
+    store.journal(conn, config.PIN_UPDATE_JOURNAL_TASK_ID, "operator",
+                  STALE_CYCLES_ACTION, "\n".join(lines))
+    print(f"[pin-update] живые циклы стартовали до сдвига пина и исполняют "
+          f"прежний код ({len(cycles)}) — перезапуск за Оператором:")
+    for line in lines:
+        print(f"  {line}")
 
 
 def _refuse_unless_main_ci_green(sha: str) -> None:
@@ -90,11 +112,13 @@ def cmd_pin_update(sha: str) -> None:
         sys.exit(f"pin-update: git merge --ff-only {sha} не удался: "
                  f"{merge.stderr.strip()[:300] if merge is not None else 'git не ответил'}")
 
+    pin_moment = datetime.now(timezone.utc)
     new_sha = gitcmd.head_sha()
     detail = f"pin обновлён: {old_sha} -> {new_sha}"
     store.journal(conn, config.PIN_UPDATE_JOURNAL_TASK_ID, "operator",
                   "pin обновлён", detail)
     print(f"[pin-update] {detail}")
+    _report_stale_cycles(conn, pin_moment)
 
 
 def _already_at_run_sha(head_sha: str, main_sha: str | None) -> bool:
