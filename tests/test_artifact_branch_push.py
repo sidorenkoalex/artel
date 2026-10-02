@@ -130,8 +130,12 @@ class PushNonFastForwardTest(PushJournalSandbox):
         scratch = tempfile.mkdtemp()
         self.addCleanup(shutil.rmtree, scratch, ignore_errors=True)
         self.git("clone", "-q", self.bare, scratch)
-        subprocess.run(["git", "-C", scratch, "checkout", "-q", self.branch],
-                       check=True)
+        # Ссылку документов `refs/artifacts/<id>` (ADR-0021 п.3) `clone` не
+        # приносит — внешний коммит строится на её голове из origin.
+        subprocess.run(["git", "-C", scratch, "fetch", "-q", "origin",
+                        f"{self.branch}:{self.branch}"], check=True)
+        subprocess.run(["git", "-C", scratch, "checkout", "-q", "--detach",
+                        self.branch], check=True)
         subprocess.run(["git", "-C", scratch, "config", "user.email",
                         "operator@example.invalid"], check=True)
         subprocess.run(["git", "-C", scratch, "config", "user.name",
@@ -143,9 +147,13 @@ class PushNonFastForwardTest(PushJournalSandbox):
         subprocess.run(["git", "-C", scratch, "commit", "-q", "-m",
                         "внешний коммит Оператора"], check=True)
         subprocess.run(["git", "-C", scratch, "push", "-q", "origin",
-                        self.branch], check=True)
+                        f"HEAD:{self.branch}"], check=True)
 
-        self.commit("спека v2, локальная — не запушена\n")
+        # Локальный коммит, отправка которого ещё не случилась: узел записи
+        # отправляет ссылку сам (ADR-0021 п.3), здесь его попытка снята —
+        # сценарий проверяет исход явного `push`, а не попутного.
+        with mock.patch.object(artifact_branch, "_send", return_value=False):
+            self.commit("спека v2, локальная — не запушена\n")
 
     def test_journals_both_sha_direction_and_the_merge_hint(self):
         local_sha = gitcmd.branch_head_sha(self.branch)

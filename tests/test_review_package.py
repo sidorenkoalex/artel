@@ -148,7 +148,9 @@ class FakeGit:
             paths = [p for p in self.files if p.startswith(rel_dir)]
             return subprocess.CompletedProcess(list(args), 0, "\n".join(paths), "")
         if (len(args) >= 3 and args[0] == "rev-parse" and args[1] == "--verify"
-                and args[-1].startswith("refs/heads/")):
+                and args[-1].startswith(("refs/heads/", "refs/artifacts/"))):
+            # Ссылка документов задачи `refs/artifacts/<id>` (ADR-0021 п.3)
+            # спрашивается тем же примитивом — тот же ответ «нет».
             # SPEC T048: `cmd_new` решает по этому ответу, заводить ли
             # задачу (AC-3, `gitcmd.branch_exists`) — «нет такой ветки»,
             # тем же приёмом, что и `tests.sandbox.fake_git`; отвечать
@@ -1161,24 +1163,24 @@ class CmdRunReviewPackageTest(unittest.TestCase):
                           ["show", "main:skills/conventions-core.md"],
                           ["show", "main:skills/escalation-rules.md"],
                           ["show", "main:skills/coding-standards.md"],
-                          ["show", f"artifact/{self.TASK.lower()}:"
+                          ["show", f"refs/artifacts/{self.TASK}:"
                            f"tasks/{self.TASK}/SPEC.md"],
                           ["diff", "--name-only",
                            "0000000000000000000000000000000000000000",
                            "HEAD", "--", "orchestrator/*.py", "scripts/*.py",
                            "tests/*.py"],
                           ["show", "main:CLAUDE.md"],
-                          ["show", f"artifact/{self.TASK.lower()}:"
+                          ["show", f"refs/artifacts/{self.TASK}:"
                            f"tasks/{self.TASK}/PLAN.md"],
-                          ["show", f"artifact/{self.TASK.lower()}:"
+                          ["show", f"refs/artifacts/{self.TASK}:"
                            f"tasks/{self.TASK}/REVIEW.md"],
                           ["ls-tree", "-r", "--name-only",
-                           f"artifact/{self.TASK.lower()}", "--",
+                           f"refs/artifacts/{self.TASK}", "--",
                            f"tasks/{self.TASK}"],
                           ["config", "--get", "user.name"],
                           ["config", "--get", "user.email"],
                           ["rev-parse", "--verify", "--quiet",
-                           f"refs/heads/artifact/{self.TASK.lower()}"],
+                           f"refs/artifacts/{self.TASK}"],
                           ["-C", wt, "add", "-A"],
                           ["-C", wt, "reset", "-q", "--",
                            f"tasks/{self.TASK}"],

@@ -150,13 +150,8 @@ from .canary_pool import (check_role_log_pool_leak, check_canary_pool_drift,
                           check_token_repo_scope, check_canary_trigger)
 from .canary_sets import CANARY_SETS_CHECK, check_canary_sets
 from .branch_freshness import check_branch_freshness
-from .artifact_branches import (_artifact_branch_first_commit_parent,
-                                check_artifact_branch_parent_ancestry,
-                                _artifact_branch_candidates, _is_ancestor,
-                                _sync_direction, check_artifact_branch_sync,
-                                _ARTIFACT_BRANCH_CI_JSON_FIELDS,
-                                _artifact_branch_ci_runs,
-                                check_artifact_branch_ci)
+from .artifact_branches import (ARTIFACT_REF_SYNC_CHECK, _origin_artifact_refs,
+                                check_artifact_ref_sync)
 from .lease_alerts import (_LEASE_ALERT_RE, _MERGE_LOCK_ALERT_RE,
                            _lease_alert_live, _merge_lock_alert_live)
 from .leases import (_STEP_TERMINAL_ACTIONS, _ORPHAN_ACTION_MARKER,
@@ -172,7 +167,7 @@ from .hung_test_watchdog import (_HUNG_TEST_CMD_RE, _ETIME_RE,
                                  check_hung_test_runs, _fix_hung_test_runs,
                                  _fix_dead_lease_groups, check_zone_waits)
 from .misc_checks import (check_backup_age, check_pending_notes,
-                          check_task_counters, check_pending_snapshots,
+                          check_task_counters,
                           check_remote_empty, check_base_branch)
 from .root_pin import (check_root_pin, fetch_origin_main_sha,
                        unpushed_commits, check_pin_unpushed)
@@ -181,12 +176,6 @@ from .stale_cycles import (STALE_CYCLES_CHECK, START_UNDETERMINED,
                            process_start_time, _observation_args,
                            stale_cycles, stale_cycle_lines,
                            check_stale_cycles)
-from .orphan_branches import (ORPHAN_ARTIFACT_BRANCH_SOURCE,
-                              _REMOTE_ARTIFACT_GLOB, _UNSET,
-                              _remote_artifact_branch_names,
-                              _orphan_artifact_branches,
-                              sweep_orphan_artifact_branches,
-                              _print_orphan_branch_candidates)
 from .ignored_artifacts import _fix_ignored_artifact_files
 from .git_hooks import (HOOKS_PATH, HOOK_NAMES, GIT_HOOKS_CHECK,
                         check_git_hooks, _fix_git_hooks)

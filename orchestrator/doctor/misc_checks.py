@@ -1,4 +1,4 @@
-"""Пакет orchestrator/doctor -- разрозненные проверки: бэкап, счётчики, снапшоты, remote, base-branch.
+"""Пакет orchestrator/doctor -- разрозненные проверки: бэкап, счётчики, remote, base-branch.
 
 Коллаборанты читаются лениво через фасад doctor (см. докстринг
 orchestrator/doctor/__init__.py) -- не импортируются напрямую.
@@ -74,25 +74,6 @@ def check_task_counters(conn) -> doctor.Check:
     return doctor.Check("task-counters", "ok",
                  "счётчик номеров задач заморожен как legacy (ULID — "
                  "основной генератор, SPEC T094) — счётчик не движется")
-
-
-def check_pending_snapshots(conn) -> list[doctor.Check]:
-    """Дожимает недоставленные снапшоты закрытия (SPEC T094, требование
-    13, AC-15): задачи `done`/`killed` внешнего target'а, не канарейка,
-    чья артефактная ветка пульта ещё жива — снапшот не подтверждён в
-    origin целевого. Каждый прогон `doctor` пробует push заново; успех
-    убирает ветку тем же путём, что и повторный `kill`."""
-    checks = []
-    for row in doctor.store.closed_external_tasks(conn):
-        task_id = row["id"]
-        target = row["target"] or doctor.config.DEFAULT_TARGET
-        if not doctor.snapshot.pending(task_id):
-            continue
-        state = doctor.store.get_task(conn, task_id)["state"]
-        note = doctor.snapshot.publish_and_cleanup(conn, task_id, target, state)
-        status = "ok" if "опубликован" in note else "warn"
-        checks.append(doctor.Check(f"snapshot-pending:{task_id}", status, note))
-    return checks
 
 
 def check_remote_empty(target: str) -> doctor.Check:

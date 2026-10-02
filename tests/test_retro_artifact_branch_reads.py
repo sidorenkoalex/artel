@@ -269,8 +269,8 @@ class RetroWithoutBranchTest(RealGitSandbox):
         `assertIn` строки счётчиков.
         """
         self.assertFalse(
-            artifact_branch.snapshot_pending(TASK),
-            "предпосылка теста: артефактной ветки задачи нет")
+            artifact_branch.ref_head(TASK),
+            "предпосылка теста: ссылки документов задачи нет")
 
         text = retro.build_done(self.conn, TASK, "abcd" * 10)
 

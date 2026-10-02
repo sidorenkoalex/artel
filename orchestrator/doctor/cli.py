@@ -88,7 +88,6 @@ def all_checks(conn) -> list[doctor.Check]:
         checks.append(doctor.check_base_branch(name, entry))
         checks.extend(doctor.recovery_check(conn, name))
 
-    checks.extend(doctor.check_pending_snapshots(conn))
     checks.extend(doctor.check_orphans(conn))
     checks.extend(doctor.check_leases(conn))
     checks.extend(doctor.check_merge_lock(conn))
@@ -96,9 +95,7 @@ def all_checks(conn) -> list[doctor.Check]:
     checks.extend(doctor.check_hung_test_runs(conn))
     checks.extend(doctor.check_zone_waits(conn))
     checks.extend(doctor.check_branch_freshness(conn))
-    checks.extend(doctor.check_artifact_branch_sync(conn))
-    checks.extend(doctor.check_artifact_branch_ci(conn))
-    checks.extend(doctor.check_artifact_branch_parent_ancestry(conn))
+    checks.extend(doctor.check_artifact_ref_sync(conn))
     checks.append(doctor.check_root_pin())
     checks.append(doctor.check_pin_unpushed())
     # Цвет CI main (SPEC 01M3SF7DPFGEZ7VYEGGXGTX49E, AC-3) — рядом с пином:
@@ -128,20 +125,13 @@ LABELS = {"ok": "ok", "warn": "WARN", "fail": "FAIL", "skip": "skip"}
 
 
 def cmd_doctor(restore: bool = False, fix: bool = False) -> None:
-    """SPEC 01M1REVP9WGRHDDNVEVE8BBH0Z, требования 3-6: `_orphan_artifact_
-    branches(conn)` зовётся РОВНО ОДИН РАЗ за весь прогон (что в режиме
-    предпросмотра, что под `--fix`, AC-3) — результат передаётся явно в
-    `sweep_orphan_artifact_branches`, чтобы та не переспрашивала origin.
-
-    Origin недоступен (`orphans is None`): без `--fix` — информационная
-    строка вместо списка кандидатов (требование 6/AC-7, не FAIL — тем же
-    приёмом деградации, что `check_root_pin`); под `--fix` — именованный
-    `Check` со статусом `fail` вливается в общий список проверок (тот же
-    механизм печати `[FAIL]`/подсчёта провалов/`sys.exit(1)`, что и у
-    остальных доктор-проверок) — уборка веток при этом не запускается
-    вовсе (требование 5/AC-6). Уборка игнорируемых файлов/мёртвых
-    lease-групп/зависших тестов от origin не зависит и продолжает
-    работать независимо от исхода сверки веток-сирот.
+    """`doctor [--restore] [--fix]`: все проверки (`all_checks`); под
+    `--fix` — сначала починки (игнорируемые файлы ссылок документов живых
+    задач, мёртвые группы lease, зависшие тесты, локальный слой моделей,
+    хуки защиты main), затем проверки — те же строки уже видят результат
+    починок. Уборки сирот-веток `artifact/*` больше нет: ветка документов
+    упразднена (ADR-0021 п.3), их разовую уборку в origin делает Оператор
+    (часть в этапа 1).
     """
     conn = doctor.store.db()
     # Стоп-кран волны, часть 2 (01M1THKRK8HPXA7Y2SRB0RFTN2, требование 3):
@@ -162,31 +152,8 @@ def cmd_doctor(restore: bool = False, fix: bool = False) -> None:
         pool_restore_msg = doctor.pool_seal.restore_pool_if_missing(conn)
         if pool_restore_msg:
             print(pool_restore_msg)
-    orphans = doctor._orphan_artifact_branches(conn)
-    extra_checks = []
     if fix:
-        if orphans is None:
-            extra_checks.append(doctor.Check(
-                "orphan-branches-origin", "fail",
-                "origin недоступен (git ls-remote --heads origin "
-                "'artifact/*' не ответил) — критерий сироты артефактных "
-                "веток не вычислим, уборка artifact/*-веток не выполнена"))
-        else:
-            doctor._print_orphan_branch_candidates(orphans)
-            removed = doctor.sweep_orphan_artifact_branches(conn, orphans)
-            if removed:
-                print(f"Осиротевшие артефактные ветки удалены ({len(removed)}):")
-                for branch in removed:
-                    print(f"  {branch}")
-            elif orphans:
-                # R1-F3 (ANSWER-3): найдены, но НИ ОДНО удаление не прошло —
-                # честно об этом, не «не найдено» (расхождение с журналом
-                # алертов, который sweep уже честно ведёт).
-                print("Осиротевшие артефактные ветки найдены, но не удалены "
-                     "— см. журнал алертов (doctor.cleanup.artifact_branches).")
-            else:
-                print("Осиротевших артефактных веток не найдено.")
-        print("Уборка игнорируемых файлов артефактных веток живых задач:")
+        print("Уборка игнорируемых файлов ссылок документов живых задач:")
         doctor._fix_ignored_artifact_files(conn)
         doctor._fix_dead_lease_groups(conn)
         doctor._fix_hung_test_runs(conn)
@@ -199,12 +166,7 @@ def cmd_doctor(restore: bool = False, fix: bool = False) -> None:
         # — до `all_checks` ниже, чтобы проверка «git-hooks» в том же
         # прогоне уже видела включённую защиту (AC-11).
         doctor._fix_git_hooks()
-    else:
-        if orphans is None:
-            print("критерий не вычислим без origin")
-        else:
-            doctor._print_orphan_branch_candidates(orphans)
-    checks = extra_checks + doctor.all_checks(conn)
+    checks = doctor.all_checks(conn)
     for c in checks:
         print(f"  [{doctor.LABELS[c.status]}] {c.name}: {c.detail}")
 

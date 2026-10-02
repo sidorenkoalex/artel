@@ -1,20 +1,27 @@
-"""Артефактная ветка пульта: `tasks/<id>/` target'а при жизни задачи
-(SPEC T094, требования 7-11; AC-8, AC-9, AC-10, AC-12).
+"""Ссылка документов задачи `refs/artifacts/<id>` в репозитории пульта —
+`tasks/<id>/` от `new` до конца жизни задачи (ADR-0021 п.3; до него —
+ветка `artifact/<id>`, SPEC T094, требования 7-11). Для ЛЮБОГО target,
+включая артель.
 
-С A7 (требование 2, требование 3, AC-5/AC-6/AC-7) — ЛЮБОЙ target,
-включая артель: до A7 self/догфуд (`config.DEFAULT_TARGET`) оставался
-на однобраншевом флоу (`tasks/<id>/` жило прямо в ветке `task/*`) —
-убран целиком вместе с `catalog._new_dogfood`; новые задачи артели
-заводят эту ветку тем же кодом, что и любой другой target.
+Дерево ссылки — только `tasks/<id>/…`, первый коммит — без родителя;
+закрытие задачи — последний коммит RETRO в ту же ссылку
+(`orchestrator/snapshot.py`), история документов остаётся достижимой из
+головы. Исторические снимки закрытия (коммит без родителя, ADR-0018 п.1)
+лежат под тем же именем и читаются тем же `gitcmd.show`.
 
-Запись — веткой-плотником (`hash-object`/`update-index`/`write-tree`/
+Запись — плотницкая (`hash-object`/`update-index`/`write-tree`/
 `commit-tree`/`update-ref`), не рабочим деревом `config.ROOT`: главная
-копия пульта в этот момент может стоять на любой ветке (main, ручной
-чекаут Оператора) — плотницкая запись её чекаут не трогает вовсе.
-Временный `GIT_INDEX_FILE` (тот же приём, каким `tasks/T094/
-acceptance_tests/test_ac16_retro_corpus_local_rebuild.py` кладёт тестовый
-`refs/artifacts/*`) держит операции независимыми от индекса основной
-рабочей копии.
+копия пульта в этот момент может стоять на любой ветке — плотницкая
+запись её чекаут не трогает. Временный `GIT_INDEX_FILE` держит операции
+независимыми от индекса основной рабочей копии. `update-ref` идёт со
+сверкой прежнего значения: две записи одной задачи, начатые от одной
+головы, не теряют ни одной правки — проигравшая перечитывает ссылку и
+пересобирает коммит поверх новой головы.
+
+Каждый коммит ссылки сразу отправляется в `origin` пульта; отказ —
+запись журнала, повтор — на следующем переходе (`send_pending` из
+`store.set_state`). Гейт мержа и закрытие сверяют ссылку с `origin`
+(`origin_sync_refusal`).
 """
 import os
 from datetime import datetime, timezone
@@ -23,6 +30,16 @@ from pathlib import Path
 from . import config, fixation, gitcmd, store
 
 PASSPORT_REL_TMPL = "tasks/{task_id}/PASSPORT.md"
+
+# Пустое прежнее значение `update-ref`: ссылки ещё нет, и заводит её только
+# тот, кто увидел её отсутствие (сверка прежнего значения и для первой
+# записи).
+_ABSENT_OID = "0" * 40
+
+# Попыток записи со сверкой: проигрыш гонки перечитывает голову и
+# пересобирает коммит; отказ, не уходящий за эти попытки, — не гонка,
+# а сбой git (вызывающий код получает пустую строку, как и раньше).
+_CAS_ATTEMPTS = 5
 
 # Классификация отказа push (SPEC 01M1TQ0X14Y5B3C87WC0Q31PK2, требование 1):
 # три причины, которые Оператору нужно различать — «заведение без origin»
@@ -34,9 +51,17 @@ PUSH_REASON_NON_FAST_FORWARD = "non-fast-forward"
 
 
 def branch_name(task_id: str) -> str:
-    """Имя артефактной ветки пульта задачи (реестр PLAN.md, требование 1:
-    имя решает разработчик — SPEC схему не называет)."""
-    return f"artifact/{task_id.lower()}"
+    """Полное имя ссылки документов задачи `refs/artifacts/<id>` (ADR-0021
+    п.3). Имя функции прежнее: читатели передают его в `gitcmd.show`/
+    `ls_tree_files`/`branch_head_sha` как ревизию, и полное имя ссылки
+    там принимается так же, как имя ветки."""
+    return f"refs/artifacts/{task_id}"
+
+
+def ref_head(task_id: str) -> str:
+    """sha головы ссылки документов; пустая строка — ссылки нет или git
+    не ответил."""
+    return gitcmd.branch_head_sha(branch_name(task_id))
 
 
 def _now() -> str:
@@ -114,75 +139,77 @@ def write_commit(repo: Path, files: dict, message: str, author_name: str,
             pass
 
 
-def _new_branch_parent(task_id: str) -> str:
-    """Родитель ПЕРВОГО коммита артефактной ветки задачи (SPEC
-    01M1TQ0ZCYJ6TESZ2KGJ6AWYNH, требование 1, AC-1/AC-2/AC-6): голова
-    `origin/main` после `git fetch origin main` — HEAD главной копии не
-    двигается (`gitcmd.fetch_head_sha` — простой `git fetch`, не
-    `pull`/чекаут). Инцидент 06.09: `tasks/` новой ветки, унаследованный
-    от отставшего локального пина `config.MAIN_BRANCH`, тащил за собой
-    уже удалённые на `origin/main` черновики — предпочтение origin, когда
-    он доступен, закрывает этот путь.
-
-    Ни одного `remote` в репозитории вовсе (`gitcmd.has_no_remote`: нет
-    сети/`origin` никогда не настраивался/лёгкая тестовая песочница) —
-    сразу голова локального `config.MAIN_BRANCH`, БЕЗ сетевого вызова и
-    БЕЗ записи в журнал: попытка распространить запись и на этот случай
-    (эскалация тем же коммитом — «## Эскалация» в PLAN.md) сломала бы
-    `tests/test_doctor_fix_ignored_artifacts.py` (существующий тест вне
-    зоны этой задачи, ожидающий пустой журнал для задачи без затронутых
-    файлов — журнал наполнялся бы уже на `seed_task`, до самого предмета
-    того теста) вдобавок к прежде выявленному конфликту с `tests/
-    test_branch_freshness_gate.py::TargetSourcedRemoteTest`. Remote есть,
-    но сам `fetch` не удался (недостижим/сеть недоступна) —
-    фолбэк на голову локального `config.MAIN_BRANCH` (AC-2, поведение до
-    этой задачи), с записью причины в журнал задачи (AC-7): молчаливая
-    деградация иначе прячет от Оператора, что артефактная ветка унаследовала
-    устаревший пин, тот же класс дефекта, что и сам инцидент.
-    """
-    if gitcmd.has_no_remote(config.ROOT):
-        return gitcmd.branch_head_sha(config.MAIN_BRANCH)
-    origin_head, reason = gitcmd.fetch_head_sha("origin", config.MAIN_BRANCH)
-    if origin_head:
-        return origin_head
-    local_head = gitcmd.branch_head_sha(config.MAIN_BRANCH)
-    if local_head:
-        store.journal(
-            store.db(), task_id, "orchestrator",
-            "артефактная ветка: fallback на локальный main",
-            f"артефактная ветка от локального main: {reason}")
-    return local_head
-
-
 def commit_files(task_id: str, files: dict, message: str,
                  author_name: str = fixation.FIXATION_AUTHOR_NAME,
                  author_email: str = fixation.FIXATION_AUTHOR_EMAIL,
                  remove: list | None = None) -> str:
-    """Коммитит `files` в артефактную ветку задачи (создаёт её, если ещё
-    нет — родитель первого коммита см. `_new_branch_parent`, требование 1;
-    для ЛЮБОГО target, включая внешний — ветка физически коммитится
-    здесь, в `config.ROOT`, AC-3). Возвращает sha нового коммита; пустая
-    строка — git не ответил. `remove` — см. `write_commit`.
+    """Единый узел записи документов задачи (ADR-0021 п.3): коммит `files`
+    поверх головы `refs/artifacts/<id>` (ссылки нет — первый коммит без
+    родителя), `update-ref` со сверкой прежнего значения, затем отправка
+    в `origin` (`_send`). Ссылка физически живёт в `config.ROOT` для
+    ЛЮБОГО target. Возвращает sha нового коммита; пустая строка — git не
+    ответил. `remove` — см. `write_commit`.
 
-    НЕ зовёт `push` сама — push остаётся явным действием вызывающего
-    кода (`checkpoint._commit_external_step_artifacts`, `catalog.
-    _new_external_artifact_branch`, `answer._cmd_answer`): песочница
-    doctor-проверки `check_artifact_branch_sync` (SPEC
-    01M1TQ0X14Y5B3C87WC0Q31PK2, тесты `test_ac6_doctor_artifact_branch_
-    sync.py`) намеренно строит расхождение локального ref и origin ЧЕРЕЗ
-    голый `commit_files` без последующего push — автоматический push
-    внутри этой функции сделал бы такую фикстуру невоспроизводимой
-    (коммит уезжал бы в origin тем же вызовом, который её строит)."""
-    branch = branch_name(task_id)
-    parent = gitcmd.branch_head_sha(branch) or _new_branch_parent(task_id) or None
-    commit_sha = write_commit(config.ROOT, files, message, author_name,
-                              author_email, parent=parent, remove=remove)
-    if not commit_sha:
-        return ""
-    upd_ref = gitcmd.git("update-ref", f"refs/heads/{branch}", commit_sha)
-    if upd_ref is None or upd_ref.returncode != 0:
-        return ""
-    return commit_sha
+    Сверка проиграна (ссылку между чтением головы и `update-ref` сдвинула
+    другая запись) — голова перечитывается, коммит пересобирается поверх
+    неё: обе правки остаются в истории, история линейна. Отказ отправки
+    коммит не отменяет — он журналируется и досылается на следующем
+    переходе (`send_pending`)."""
+    sha, _outcome = _write(task_id, files, message, author_name, author_email,
+                           remove, require_change=False)
+    return sha
+
+
+# Исходы `commit_change`, кроме записанного коммита.
+UNCHANGED = "unchanged"
+TREE_UNKNOWN = "tree-unknown"
+
+
+def commit_change(task_id: str, files: dict, message: str,
+                  remove: list | None = None) -> tuple[str, str]:
+    """`commit_files`, которому коммит без изменений не нужен: (sha, "") —
+    записан и меняет дерево; ("", `UNCHANGED`) — дерево совпало с деревом
+    головы, ссылка не тронута; ("", `TREE_UNKNOWN`) — деревья не сверены
+    (git не ответил), ссылка не тронута; ("", "") — коммит не записан.
+    Сверка идёт ДО `update-ref`: отправленный в `origin` пустой коммит
+    назад уже не забрать."""
+    return _write(task_id, files, message, fixation.FIXATION_AUTHOR_NAME,
+                  fixation.FIXATION_AUTHOR_EMAIL, remove, require_change=True)
+
+
+def _same_tree(commit_sha: str, parent: str) -> bool | None:
+    res = gitcmd.git("rev-parse", f"{commit_sha}^{{tree}}", f"{parent}^{{tree}}")
+    trees = res.stdout.split() if res is not None and res.returncode == 0 else []
+    if len(trees) != 2:
+        return None
+    return trees[0] == trees[1]
+
+
+def _write(task_id: str, files: dict, message: str, author_name: str,
+           author_email: str, remove: list | None,
+           require_change: bool) -> tuple[str, str]:
+    ref = branch_name(task_id)
+    for _ in range(_CAS_ATTEMPTS):
+        parent = gitcmd.branch_head_sha(ref)
+        commit_sha = write_commit(config.ROOT, files, message, author_name,
+                                  author_email, parent=parent or None,
+                                  remove=remove)
+        if not commit_sha:
+            return "", ""
+        if require_change and parent:
+            same = _same_tree(commit_sha, parent)
+            if same is None:
+                return "", TREE_UNKNOWN
+            if same:
+                return "", UNCHANGED
+        upd_ref = gitcmd.git("update-ref", ref, commit_sha,
+                             parent or _ABSENT_OID)
+        if upd_ref is None:
+            return "", ""
+        if upd_ref.returncode == 0:
+            _send(task_id, journal_success=False)
+            return commit_sha, ""
+    return "", ""
 
 
 def _classify_push_failure(stderr: str) -> str:
@@ -209,8 +236,8 @@ def _attempt_push(branch: str) -> tuple[bool, str, str]:
     а отсутствие remote проверяется напрямую и надёжно."""
     if gitcmd.has_no_remote(config.ROOT):
         return False, PUSH_REASON_NO_ORIGIN, ""
-    res = gitcmd.git("push", "-q", "origin",
-                     f"refs/heads/{branch}:refs/heads/{branch}")
+    ref = gitcmd.qualified_ref(branch)
+    res = gitcmd.git("push", "-q", "origin", f"{ref}:{ref}")
     if res is not None and res.returncode == 0:
         return True, "", ""
     stderr = (res.stderr or "").strip() if res is not None else "git не ответил"
@@ -256,6 +283,68 @@ def push(task_id: str) -> bool:
     ok, reason, stderr = _attempt_push(branch)
     _journal_push_outcome(task_id, branch, ok, reason, stderr)
     return ok
+
+
+def _origin_configured() -> bool:
+    """У репозитория пульта есть `origin` с адресом. Нет — отправлять
+    некуда (лёгкая песочница без git, пульт без remote): автоматическая
+    отправка после коммита молчит, а о пустом remote говорит `doctor`.
+    Адрес есть, но недоступен — это отказ отправки, он журналируется."""
+    res = gitcmd.git("remote", "get-url", "origin")
+    return res is not None and res.returncode == 0 and bool(res.stdout.strip())
+
+
+def _send(task_id: str, journal_success: bool) -> bool:
+    """Отправка ссылки документов в `origin` после коммита и на переходе.
+    Отказ журналируется всегда (классифицированной причиной, тем же
+    `_journal_push_outcome`, что у `push`); успех — только по просьбе
+    вызывающего: автоматическая отправка идёт после каждого коммита, и
+    запись об успехе на каждой строке паспорта засорила бы журнал."""
+    if not _origin_configured():
+        return False
+    ref = branch_name(task_id)
+    ok, reason, stderr = _attempt_push(ref)
+    if not ok or journal_success:
+        _journal_push_outcome(task_id, ref, ok, reason, stderr)
+    return ok
+
+
+def send_pending(task_id: str) -> None:
+    """Повторная отправка ссылки на переходе FSM (`store.set_state`):
+    коммит, чья отправка раньше отказала, досылается здесь. Ссылки нет
+    локально — отправлять нечего. Совпадающую с `origin` ссылку `git push`
+    не меняет."""
+    if ref_head(task_id):
+        _send(task_id, journal_success=False)
+
+
+def origin_sync_refusal(task_id: str) -> str | None:
+    """None — локальная `refs/artifacts/<id>` совпадает с ней же в
+    `origin` (гейт мержа и закрытие могут идти дальше); иначе — текст
+    отказа, называющий `origin` и оба sha.
+
+    Перед сверкой — попытка отправки: коммит, чья отправка раньше
+    отказала, здесь же и доезжает. Отказ сверки — и расхождение, и
+    отсутствие ссылки в `origin` при локальной, и недоступный `origin`:
+    история документов, которая есть только локально, закрытой не
+    считается. `origin` у пульта не настроен вовсе — сверять не с чем
+    (лёгкая песочница), об этом говорит `doctor`."""
+    if not _origin_configured():
+        return None
+    local = ref_head(task_id)
+    if local:
+        _send(task_id, journal_success=False)
+    remote, reason = gitcmd.remote_ref_state(branch_name(task_id))
+    if reason:
+        return (f"отказ: origin не ответил на сверку {branch_name(task_id)} "
+                f"— {reason}")
+    if local == remote:
+        return None
+    if not remote:
+        return (f"отказ: {branch_name(task_id)} нет в origin (локально "
+                f"{local}) — документы задачи не отправлены")
+    return (f"отказ: {branch_name(task_id)} расходится с origin — локально "
+            f"{local or '(нет)'}, в origin {remote}")
 
 
 def read_tree(task_id: str) -> dict:
@@ -335,23 +424,3 @@ def append_passport_line(task_id: str, state: str, actor: str) -> None:
     line = f"{_now()}  {state}  actor={actor}\n"
     commit_files(task_id, {rel: prior + line},
                 f"{task_id}: паспорт — {state}")
-
-
-def snapshot_pending(task_id: str) -> bool:
-    """True — артефактная ветка задачи ещё существует локально: снапшот
-    закрытия (SPEC требования 12-13) ещё не подтверждён в origin
-    целевого (AC-15) — уборка ветки ждёт."""
-    return gitcmd.branch_exists(branch_name(task_id))
-
-
-def drop(task_id: str) -> str:
-    """Удаляет артефактную ветку задачи ПОСЛЕ подтверждённого снапшота
-    (AC-13, AC-15); строка — что вышло."""
-    branch = branch_name(task_id)
-    if not gitcmd.branch_exists(branch):
-        return f"артефактной ветки {branch} нет"
-    res = gitcmd.git("branch", "-D", branch)
-    if res is None or res.returncode != 0:
-        reason = res.stderr.strip()[:200] if res is not None else "git не ответил"
-        return f"артефактная ветка {branch} не удалена: {reason}"
-    return f"удалена артефактная ветка {branch}"

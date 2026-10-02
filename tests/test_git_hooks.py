@@ -536,8 +536,6 @@ class FixGitHooksTest(_DoctorGitHooksSandbox):
         """
         self.chmod_hooks(0o644)
         with mock.patch.object(doctor, "all_checks", lambda conn: []), \
-                mock.patch.object(doctor, "_remote_artifact_branch_names",
-                                  return_value=set()), \
                 mock.patch.object(doctor, "_fix_ignored_artifact_files",
                                   lambda conn: None), \
                 mock.patch.object(doctor, "_fix_dead_lease_groups",
@@ -555,9 +553,7 @@ class FixGitHooksTest(_DoctorGitHooksSandbox):
         `if fix:` — обычный `doctor` менял бы конфиг репозитория, хотя
         без `--fix` он ничего не чинит.
         """
-        with mock.patch.object(doctor, "all_checks", lambda conn: []), \
-                mock.patch.object(doctor, "_remote_artifact_branch_names",
-                                  return_value=set()):
+        with mock.patch.object(doctor, "all_checks", lambda conn: []):
             capture(doctor.cmd_doctor)
 
         self.assertEqual(self.hooks_path_config(), "")

@@ -1,40 +1,19 @@
-"""Снапшот артефактов задачи в `refs/artifacts/<id>` ЦЕЛЕВОГО при закрытии
-(`done`/`killed`, не канарейка) — SPEC T094, требования 12-14; AC-13,
-AC-14, AC-15. С A7 (требование 2, AC-7/AC-8) — ЛЮБОЙ target, включая
-артель: `cleanup._publish_snapshot_if_pending` не несёт больше
-self-исключения, только канареечное (требование 12/AC-13) — решает это
-вызывающий код (`orchestrator/cleanup.py`) ДО вызова `publish_and_cleanup`.
+"""Коммит закрытия задачи (`done`/`killed`) — последний коммит RETRO в
+ссылку документов `refs/artifacts/<id>` пульта (ADR-0021 п.3). Снимка
+закрытия (коммита без родителя с деревом ветки, отдельного push в
+`origin` клона target и удаления ветки) больше нет: история документов
+задачи остаётся достижимой из головы ссылки, включая коммит лока планки.
 
-Правило требования 14 (AC-14): снапшот пишется ОДИНАКОВО для целевых
-уровня `full` и `partial` — всегда в `refs/artifacts/<id>` РЕПОЗИТОРИЯ
-ЦЕЛЕВОГО (его `origin`), никогда в `.artel/projects/<target>/` пульта —
-здесь нет ни одной строки, которая писала бы куда-то, кроме этого
-репозитория и его `origin`.
+Имя модуля историческое: до ADR-0021 здесь собирался снимок закрытия
+(ADR-0018 п.1); исторические снимки — коммиты без родителя под тем же
+именем ссылки — читаются как раньше, этот модуль их не трогает.
 
-Для self/артели (`config.DEFAULT_TARGET`) этот репозиторий — сам
-`config.ROOT`, не `config.PROJECTS/artel/workspace` (A7, `_target_
-workspace` ниже): у артели структурно нет отдельного клона себя самой —
-`config.ROOT` УЖЕ несёт настоящий `origin` (главная копия пульта — и
-есть её собственный чекаут), тогда как `PROJECTS/artel/workspace`
-(рабочий каталог РОЛИ, `runner.role_cwd`) заводится лениво и получает
-origin только если/когда роль сама его клонирует по ходу шага — задача,
-закрытая ДО первого шага роли (например `kill` сразу после `new`), эту
-предпосылку не несёт. Тот же класс исключения, что PLAN.md A7 уже
-называет для гейта ёмкости diff снимка и сверки свежести ветки: код
-артели физически живёт в `config.ROOT`, не в отдельном клоне, как у
-настоящего внешнего target — явное решение, не молчаливый skip.
+Коммит закрытия записывается в журнал (`CLOSING_ACTION`) — с ним `doctor`
+сверяет неизменность закрытой ссылки (`closing_sha`).
 """
 import os
-from pathlib import Path
 
-from . import artifact_branch, config, fixation, gitcmd, retro, store
-
-
-def _target_workspace(target: str) -> Path:
-    if target == config.DEFAULT_TARGET:
-        return config.ROOT
-    return config.PROJECTS / target / "workspace"
-
+from . import artifact_branch, gitcmd, retro, store
 
 SNAPSHOT_REF_TMPL = "refs/artifacts/{task_id}"
 RETRO_REL_TMPL = "tasks/{task_id}/RETRO.md"
@@ -88,59 +67,49 @@ def _retro_with_frontmatter(conn, task_id: str, outcome: str) -> str:
     return header + body
 
 
-def pending(task_id: str) -> bool:
-    """True — снапшот этой задачи ещё не подтверждён в origin целевого:
-    её артефактная ветка пульта всё ещё существует (AC-15). Задачи
-    self/канарейки сюда не попадают — вызывающий код не заводит для них
-    артефактную ветку вовсе, `snapshot_pending` для них всегда `False`."""
-    return artifact_branch.snapshot_pending(task_id)
+# Действие журнала коммита закрытия: `doctor` ищет по нему sha, с которым
+# сверяет голову закрытой ссылки.
+CLOSING_ACTION = "коммит закрытия"
 
 
-def publish_and_cleanup(conn, task_id: str, target: str, outcome: str) -> str:
-    """Публикует снапшот (`tasks/<id>/` артефактной ветки + RETRO с
-    frontmatter operator/model/artel_sha) в `refs/artifacts/<id>` origin
-    целевого; ТОЛЬКО при подтверждённом push убирает артефактную ветку
-    пульта (AC-13, AC-15). Строка — что вышло; идемпотентна — повторный
-    вызов на уже опубликованном снапшоте безвреден (перезапишет тот же
-    ref новым эквивалентным коммитом, ветка пульта к этому моменту уже
-    убрана — `read_tree` вернёт пусто, но следующий вызов и не должен
-    случаться: `cleanup`/`doctor` зовут эту функцию, только пока
-    `pending(task_id)` истинно).
+def commit_closing(conn, task_id: str, outcome: str) -> str:
+    """Коммит `tasks/<id>/RETRO.md` поверх головы ссылки документов;
+    строка — что вышло. `outcome` — фактическое состояние закрытой задачи
+    из БД (`done`/`killed`): его называют и ретроспектива, и сообщение
+    коммита.
 
-    `outcome` — ФАКТИЧЕСКОЕ состояние закрытой задачи (`done`/`killed`):
-    его называет и ретроспектива снимка, и сообщение коммита снимка
-    («снапшот закрытия (done)»/«(killed)» — SPEC
-    01M3KE80RNBCY9G48E75Z14TA7, требование 1, AC-4). Оба вызывателя берут
-    его из БД: `doctor.check_pending_snapshots` — напрямую,
-    `cleanup._publish_snapshot_if_pending` (оба пути закрытия) — через
-    `cleanup._closing_outcome`.
-    """
-    files = artifact_branch.read_tree(task_id)
-    files[RETRO_REL_TMPL.format(task_id=task_id)] = _retro_with_frontmatter(
-        conn, task_id, outcome)
-
-    workspace = _target_workspace(target)
-    workspace.mkdir(parents=True, exist_ok=True)
-    if not (workspace / ".git").is_dir():
-        init = gitcmd.in_repo(workspace, "init", "-q", "-b", config.MAIN_BRANCH)
-        if init.returncode != 0:
-            return f"снапшот {task_id} не опубликован: workspace {target} не git-репо"
-
-    commit_sha = artifact_branch.write_commit(
-        workspace, files, f"{task_id}: снапшот закрытия ({outcome})",
-        fixation.FIXATION_AUTHOR_NAME, fixation.FIXATION_AUTHOR_EMAIL)
-    if not commit_sha:
-        return f"снапшот {task_id} не собран: git не ответил"
-
-    ref = SNAPSHOT_REF_TMPL.format(task_id=task_id)
-    push = gitcmd.in_repo(workspace, "push", "-q", "origin", f"{commit_sha}:{ref}")
-    if push is None or push.returncode != 0:
-        reason = push.stderr.strip()[:300] if push is not None and push.stderr else "git не ответил"
+    Ссылки локально нет (задача заведена до ADR-0021 и на новое
+    устройство не переносилась, п.13) — коммит не пишется: первый коммит
+    без родителя с одним RETRO.md выдал бы себя за историю документов.
+    Записанный коммит фиксируется (`store.record_fixation`) — фиксация
+    закрытой задачи указывает на коммит закрытия."""
+    ref = artifact_branch.branch_name(task_id)
+    if not artifact_branch.ref_head(task_id):
+        note = f"коммит закрытия {task_id} не записан: {ref} нет локально"
         store.journal(conn, task_id, "orchestrator",
-                      "снапшот закрытия: push не удался", reason)
-        return f"снапшот {task_id} не доставлен в origin {target}: {reason}"
+                      "коммит закрытия не записан", note)
+        return note
+    text = _retro_with_frontmatter(conn, task_id, outcome)
+    sha = artifact_branch.commit_files(
+        task_id, {RETRO_REL_TMPL.format(task_id=task_id): text},
+        f"{task_id}: закрытие ({outcome}) — RETRO")
+    if not sha:
+        note = f"коммит закрытия {task_id} не записан: git не ответил"
+        store.journal(conn, task_id, "orchestrator",
+                      "коммит закрытия не записан", note)
+        return note
+    store.journal(conn, task_id, "orchestrator", CLOSING_ACTION,
+                  f"{ref} <- {sha} ({outcome})")
+    store.record_fixation(conn, task_id)
+    return f"коммит закрытия {task_id}: {ref} <- {sha}"
 
-    store.journal(conn, task_id, "orchestrator", "снапшот закрытия опубликован",
-                  f"{ref} <- {commit_sha}")
-    branch_note = artifact_branch.drop(task_id)
-    return f"снапшот {task_id} опубликован в {ref} ({target}); {branch_note}"
+
+def closing_sha(conn, task_id: str) -> str:
+    """sha последнего записанного коммита закрытия задачи; пустая строка —
+    записи нет (задача не закрыта или закрыта до ADR-0021: исторический
+    снимок записи о коммите закрытия не несёт)."""
+    for row in reversed(store.task_steps(conn, task_id)):
+        if row["action"] == CLOSING_ACTION:
+            _, _, rest = (row["detail"] or "").partition(" <- ")
+            return rest.split(" ", 1)[0]
+    return ""

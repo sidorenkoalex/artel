@@ -25,11 +25,12 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from orchestrator import (acceptance, agent_log, artifact_branch, catalog,  # noqa: E402
+from orchestrator import (acceptance, agent_log, catalog,  # noqa: E402
                           config, fsm, github_adapter, gitcmd, runner, store,
                           workspace)
 from scripts import guard  # noqa: E402
-from tests.sandbox import (FakeProc, TmpDirTest, TmpRootTest, capture,  # noqa: E402
+from tests.sandbox import (FakeProc, TmpDirTest, TmpRootTest,  # noqa: E402
+                           alias_docs_ref_to_branch, capture,
                            capture_new_task_id, disk_backed_ls_tree_files,
                            disk_backed_show, fake_git, resilient_tmp_cleanup)
 
@@ -1208,7 +1209,10 @@ class LockTest(unittest.TestCase):
         self.code_branch = self.row()["branch"]
         self.git("branch", self.code_branch)
 
-        self.branch = artifact_branch.branch_name(self.TASK)
+        # Сценарий правит документы чекаутом ветки и `git commit`; ссылка
+        # документов `refs/artifacts/<id>` (ADR-0021 п.3) указывает на эту
+        # ветку символически — пульт видит каждый её коммит.
+        self.branch = alias_docs_ref_to_branch(self.root, self.TASK)
         self.tdir = self.root / "tasks" / self.TASK
 
     def git(self, *args: str) -> str:
@@ -1249,11 +1253,9 @@ class LockTest(unittest.TestCase):
             SPEC_V2.format(task=self.TASK, extra=""), encoding="utf-8")
         self.commit_task_dir()
         self.capture(fsm.cmd_advance, self.TASK)  # spec_writing -> spec_gate
-        # `confirm_fixation`/`cmd_approve` сверяются с sha АРТЕФАКТНОГО
-        # РЕПО target'а (`fixation._fix_external`, config.PROJECTS/<target>),
-        # не с sha артефактной ветки пульта (`self.head()`) — два разных
-        # репозитория (PLAN.md A7, «Предложения системе»).
-        sha = gitcmd.head_sha(config.PROJECTS / config.DEFAULT_TARGET)
+        # `confirm_fixation`/`cmd_approve` сверяются с головой ссылки
+        # документов (ADR-0021 п.3, инвариант 25) — `self.head()`.
+        sha = self.head()
         self.capture(fsm.cmd_approve, self.TASK, sha)  # -> tests_writing
         self.assertEqual(self.state(), "tests_writing")
         return sha

@@ -898,10 +898,9 @@ def _commit_step_artifacts_to_branch(conn, task_id: str, files: dict[str, bytes]
     будущим коммитом роли (SPEC T094, требование 8: «кодовая ветка
     task/* свободна от артефактов задачи»).
 
-    Push артефактной ветки в origin (`artifact_branch.push`) классифицирует
-    причину отказа и журналирует и успех, и отказ (SPEC
-    01M1TQ0X14Y5B3C87WC0Q31PK2, требования 1-2) — раньше отказ push молча
-    пропадал (`bool` результат никем не читался).
+    Отправку ссылки документов в origin делает сам узел записи
+    (`artifact_branch.commit_files`, ADR-0021 п.3): отказ журналируется
+    классифицированной причиной и досылается на следующем переходе.
     """
     from . import artifact_branch
     if not files and not removed:
@@ -911,7 +910,6 @@ def _commit_step_artifacts_to_branch(conn, task_id: str, files: dict[str, bytes]
     if not commit_sha:
         return ""
     shutil.rmtree(task_dir, ignore_errors=True)
-    artifact_branch.push(task_id)
     detail = f"{message} (артефактная ветка, sha {commit_sha})"
     if removed:
         detail += f"; удалено: {', '.join(removed)}"

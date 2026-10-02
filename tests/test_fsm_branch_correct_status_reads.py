@@ -23,10 +23,11 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from orchestrator import (artifact_branch, catalog, config, fsm,  # noqa: E402
-                          gitcmd, store)
+from orchestrator import (catalog, config, fsm, gitcmd,  # noqa: E402
+                          store)
 from tests.sandbox import (ALL_CONFIG_ATTRS, TmpRootTest,  # noqa: E402
-                           capture_new_task_id, resilient_tmp_cleanup)
+                           alias_docs_ref_to_branch, capture_new_task_id,
+                           resilient_tmp_cleanup)
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
@@ -130,7 +131,10 @@ class RealGitBranchTest(TmpRootTest):
             catalog.cmd_new, "Ветко-корректные чтения статусов")
         self.tdir = config.TASKS / self.TASK
         self.branch = store.get_task(store.db(), self.TASK)["branch"]
-        self.artifact_branch = artifact_branch.branch_name(self.TASK)
+        # Сценарий кладёт документы чекаутом и `git commit`; ссылка
+        # документов `refs/artifacts/<id>` (ADR-0021 п.3) указывает на эту
+        # ветку символически — пульт видит каждый её коммит.
+        self.artifact_branch = alias_docs_ref_to_branch(self.root, self.TASK)
 
     def git(self, *args: str) -> str:
         res = subprocess.run(["git", *args], cwd=self.root,

@@ -801,6 +801,36 @@ def _alive_foreign_pid(testcase) -> int:
     return proc.pid
 
 
+def alias_docs_ref_to_branch(root: Path, task_id: str) -> str:
+    """Ссылка документов задачи `refs/artifacts/<id>` (ADR-0021 п.3) —
+    символической ссылкой на обычную ветку `artifact/<id в нижнем
+    регистре>`, заведённую на голове ссылки (если та уже есть). Для
+    сценариев, которые ведут документы задачи чекаутом и `git commit`, как
+    прежнюю ветку документов: пульт читает и пишет `refs/artifacts/<id>`,
+    а `update-ref` по символической ссылке двигает её цель — обе стороны
+    видят одну и ту же историю. Возвращает имя ветки."""
+    branch = f"artifact/{task_id.lower()}"
+    ref = f"refs/artifacts/{task_id}"
+
+    def git(*args: str) -> subprocess.CompletedProcess:
+        return subprocess.run(["git", *args], cwd=root, capture_output=True,
+                              text=True)
+
+    head = git("rev-parse", "--verify", "--quiet", ref).stdout.strip()
+    if head:
+        git("branch", "-f", branch, head)
+    res = git("symbolic-ref", ref, f"refs/heads/{branch}")
+    if res.returncode != 0:
+        raise RuntimeError(f"symbolic-ref {ref}: {res.stderr}")
+    return branch
+
+
+# Ссылки, которых в лёгких песочницах нет: ветки (`gitcmd.branch_exists`) и
+# ссылки документов задач `refs/artifacts/<id>` (ADR-0021 п.3) — тот же
+# вопрос «есть ли ссылка» задаёт тот же примитив (`gitcmd.qualified_ref`).
+_ABSENT_REF_PREFIXES = ("refs/heads/", "refs/artifacts/")
+
+
 class SpyRun:
     """Подмена `subprocess.run`: команда запоминается; исход зависит от
     `passthrough_unknown`.
@@ -867,7 +897,7 @@ class SpyRun:
         # вызова — отвечай он успехом на всё подряд, `cmd_new` увидел бы
         # любую ветку уже существующей.
         if (len(cmd) >= 4 and cmd[1] == "rev-parse" and cmd[2] == "--verify"
-                and cmd[-1].startswith("refs/heads/")):
+                and cmd[-1].startswith(_ABSENT_REF_PREFIXES)):
             return subprocess.CompletedProcess(list(cmd), 1, empty, empty)
         # `rev-parse --verify refs/artel/fetch/<pid>-<uuid>` (приватная
         # ссылка `gitcmd.fetch_ref_sha`, SPEC 01M2ARQGY51B99YNP9PY806AN1 —
@@ -950,7 +980,7 @@ def fake_git(*args: str) -> subprocess.CompletedProcess:
     там, где раньше заводил всегда.
     """
     if (len(args) >= 3 and args[0] == "rev-parse" and args[1] == "--verify"
-            and args[-1].startswith("refs/heads/")):
+            and args[-1].startswith(_ABSENT_REF_PREFIXES)):
         return subprocess.CompletedProcess(list(args), 1, "", "")
     if (len(args) >= 3 and args[0] == "rev-parse"
             and args[-1].startswith("refs/artel/fetch/")):

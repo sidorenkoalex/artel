@@ -352,8 +352,10 @@ def _cmd_kill(conn, task_id: str, holder_before=None) -> None:
     """
     t = store.get_task(conn, task_id)
     target = t["target"] or config.DEFAULT_TARGET
-    _journal_tz_before_cleanup(conn, task_id, t["branch"], target)
     state = t["state"]
+    if state not in TERMINAL_STATES:
+        _refuse_unsynced_docs(conn, task_id)
+    _journal_tz_before_cleanup(conn, task_id, t["branch"], target)
     won = False
     while not won and state not in TERMINAL_STATES:
         try:
@@ -390,52 +392,57 @@ def _cmd_kill(conn, task_id: str, holder_before=None) -> None:
     # штатный `run_locked` этого же вызова «с нуля» (тот отпустил бы его
     # сам только в этом случае, см. `orchestrator/lease.py`).
     lease.release_any(conn, task_id, "orchestrator", "kill: lease снят")
-    _publish_snapshot_if_pending(conn, task_id, target, bool(t["is_canary"]))
+    if won:
+        _commit_closing(conn, task_id)
     cleanup_killed_task(conn, task_id, t["branch"])
 
 
+# Литерал действия журнала отказа закрытия при документах, не совпадающих с
+# `origin` (ADR-0021 п.3).
+KILL_UNSYNCED_JOURNAL_ACTION = "kill отклонён: документы не совпадают с origin"
+
+
+def _refuse_unsynced_docs(conn, task_id: str) -> None:
+    """Закрытие отказывает, пока `refs/artifacts/<id>` не совпадает с
+    `origin` (ADR-0021 п.3): коммит закрытия поверх истории, которой нет в
+    `origin` (или которая там другая), закрыл бы задачу с документами,
+    существующими только в одном месте. Отказ — до смены состояния: задача
+    остаётся, где была, ссылка не меняется."""
+    from . import artifact_branch
+    refusal = artifact_branch.origin_sync_refusal(task_id)
+    if refusal is None:
+        return
+    text = (f"[{task_id}] kill {refusal}\n  задача не закрыта; сведи "
+            f"{artifact_branch.branch_name(task_id)} с origin и повтори: "
+            f"artel.py kill {task_id}")
+    store.journal(conn, task_id, "operator", KILL_UNSYNCED_JOURNAL_ACTION,
+                  refusal)
+    sys.exit(text)
+
+
 def _closing_outcome(conn, task_id: str) -> str:
-    """Исход для публикации снимка закрытия — ФАКТИЧЕСКОЕ состояние задачи
-    из БД (SPEC 01M3KE80RNBCY9G48E75Z14TA7, требование 1), а не литерал
-    «killed»: этот узел зовут ОБА пути закрытия — `kill` (`_cmd_kill`
-    выше) и мерж (`fsm_merge_gate._publish_closing_snapshot_or_wait`), и
-    литерал делал ретроспективу снимка смерженной задачи ложью («Итог:
-    killed — причина: причина не найдена в журнале» на задаче, смерженной
-    27.09). Состояние на момент вызова уже записано на обоих путях:
-    `_finalize_done_state` пишет `done` ДО публикации снимка, `_cmd_kill`
-    — `killed` до своей. Тот же источник, которым отложенная публикация
-    (`doctor.check_pending_snapshots`) пользуется с самого начала.
+    """Исход коммита закрытия — ФАКТИЧЕСКОЕ состояние задачи из БД (SPEC
+    01M3KE80RNBCY9G48E75Z14TA7, требование 1; ADR-0021 п.3: признак
+    «закрыта» — по БД), а не литерал «killed»: этот узел зовут ОБА пути
+    закрытия — `kill` (`_cmd_kill` выше) и мерж (`fsm_merge_gate.
+    _commit_closing`). Состояние на момент вызова уже записано на обоих
+    путях: `_finalize_done_state` пишет `done` ДО коммита закрытия,
+    `_cmd_kill` — `killed` до своего.
 
     Состояние не терминальное (строка БД читается, но задача почему-то не
-    закрыта) — прежний `"killed"`: публикацию снимка зовут только пути
-    закрытия, и молчаливое «done» на незакрытой задаче было бы хуже, чем
-    прежнее поведение.
+    закрыта) — прежний `"killed"`: коммит закрытия зовут только пути
+    закрытия, и молчаливое «done» на незакрытой задаче было бы хуже.
     """
     t = store.get_task(conn, task_id)
     state = t["state"] if t is not None else ""
     return state if state in TERMINAL_STATES else "killed"
 
 
-def _publish_snapshot_if_pending(conn, task_id: str, target: str,
-                                 is_canary: bool) -> None:
-    """Снапшот закрытия (SPEC T094, требования 12-13, AC-13) — для ЛЮБОГО
-    target (A7, требование 2 — снятие особого случая догфуда) и не
-    канарейка (требование 12, AC-13 «исключение канарейки»). `snapshot.
-    pending` — False, если задача не заводила артефактную ветку вовсе
-    (канарейка) или снапшот уже подтверждён в origin целевого раньше
-    (идемпотентность повторного `kill`, AC-15).
-
-    Исход, уходящий в публикацию, — `_closing_outcome` (состояние задачи
-    из БД), а не литерал: см. её докстринг.
-
-    Отложенный импорт: `snapshot` -> `retro` -> `cleanup` — прямой
-    импорт на уровне модуля замкнул бы этот же файл в цикл.
-    """
-    if is_canary:
-        return
+def _commit_closing(conn, task_id: str) -> None:
+    """Коммит закрытия (`snapshot.commit_closing`) — один узел на оба пути
+    закрытия, `kill` и мерж; канарейка идёт тем же потоком (ADR-0021
+    п.13). Отложенный импорт: `snapshot` -> `retro` -> `cleanup` — прямой
+    импорт на уровне модуля замкнул бы этот же файл в цикл."""
     from . import snapshot
-    if not snapshot.pending(task_id):
-        return
-    note = snapshot.publish_and_cleanup(conn, task_id, target,
-                                        _closing_outcome(conn, task_id))
+    note = snapshot.commit_closing(conn, task_id, _closing_outcome(conn, task_id))
     print(f"  {note}")

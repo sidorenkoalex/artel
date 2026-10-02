@@ -58,10 +58,18 @@ def current_branch() -> str:
     return res.stdout.strip() if res is not None and res.returncode == 0 else ""
 
 
+def qualified_ref(branch: str) -> str:
+    """Полное имя ссылки: имя ветки — под `refs/heads/`, полное имя
+    (`refs/artifacts/<id>` — ссылка документов задачи, ADR-0021 п.3) —
+    как есть. Вопросы «есть ли/какой sha» к ветке и к ссылке документов
+    задаёт один и тот же примитив."""
+    return branch if branch.startswith("refs/") else f"refs/heads/{branch}"
+
+
 def branch_exists(branch: str) -> bool:
     """`res is None` — тот же вырожденный случай, что у `head_sha`: заглушки
     `gitcmd.git` в тестах, не связанных с git, отвечают `None`."""
-    res = git("rev-parse", "--verify", "--quiet", f"refs/heads/{branch}")
+    res = git("rev-parse", "--verify", "--quiet", qualified_ref(branch))
     return res is not None and res.returncode == 0
 
 
@@ -413,7 +421,7 @@ def branch_head_sha(branch: str, repo: Path | None = None) -> str:
     `repo` (SPEC 01M1R5B33CC7E6BZK085XV3ZCX, AC-6) — клон, в котором
     читается голова, не всегда `config.ROOT`. `None` (по умолчанию) —
     прежнее поведение байт-в-байт."""
-    args = ("rev-parse", "--verify", "--quiet", f"refs/heads/{branch}")
+    args = ("rev-parse", "--verify", "--quiet", qualified_ref(branch))
     res = in_repo(repo, *args) if repo else git(*args)
     return res.stdout.strip() if res is not None and res.returncode == 0 else ""
 
@@ -471,11 +479,26 @@ def remote_branch_sha(branch: str, repo: Path | None = None) -> str:
     опрашивается, не всегда `config.ROOT`. `None` (по умолчанию) —
     прежнее поведение байт-в-байт.
     """
-    args = ("ls-remote", "origin", f"refs/heads/{branch}")
+    args = ("ls-remote", "origin", qualified_ref(branch))
     res = in_repo(repo, *args) if repo else git(*args)
     if res is None or res.returncode != 0 or not res.stdout.strip():
         return ""
     return res.stdout.split()[0]
+
+
+def remote_ref_state(ref: str) -> tuple[str, str]:
+    """(sha, "") — голова `ref` в `origin` пульта; ("", "") — в `origin`
+    такой ссылки нет; ("", причина) — `origin` не ответил. В отличие от
+    `remote_branch_sha`, «ссылки нет» и «спросить не удалось» здесь
+    различимы: сверка ссылки документов с `origin` (ADR-0021 п.3) обязана
+    отказывать и там, и там, но называть разное."""
+    res = git("ls-remote", "origin", qualified_ref(ref))
+    if res is None:
+        return "", "git не ответил"
+    if res.returncode != 0:
+        return "", (res.stderr or "").strip()[:200] or "ls-remote не удался"
+    out = res.stdout.split()
+    return (out[0] if out else ""), ""
 
 
 def fetch_ref_sha(remote: str, ref: str, *,

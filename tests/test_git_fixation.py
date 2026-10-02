@@ -820,22 +820,24 @@ class RealPultGitTest(_GitFixationTmpRootTest):
         return res.stdout
 
     def head(self) -> str:
-        """Головной sha репо фиксации self/артели (`fixation._fix_external`,
-        A7 требование 2) — то же самое значение, что `tasks.fixed_sha`."""
-        return gitcmd.head_sha(self.repo())
+        """Голова ссылки документов задачи `refs/artifacts/<id>` — с
+        ADR-0021 (п.3, инвариант 25) то же самое значение, что
+        `tasks.fixed_sha` (`fixation.fix`)."""
+        from orchestrator import artifact_branch
+        return artifact_branch.ref_head(self.TASK)
 
     def commit_task_dir(self, message: str = "артефакт") -> None:
         """Коммит МИМО обычной фиксации (`fixation.fix()` внутри `store.
-        set_state`) — симулирует постороннюю правку репо фиксации (сама
-        фиксация коммитит сама на каждом переходе и в этом явном коммите
-        не нуждается, `ExternalTransitionCommitsTest` выше). Идентичность
-        коммитера — явными `-c`, репо фиксации (`self.repo()`,
-        `projects.init_artifact_repo`) не несёт собственного git-конфига."""
-        self.git_in_worktree("add", "-A")
-        self.git_in_worktree(
-            "-c", f"user.name={fixation.FIXATION_AUTHOR_NAME}",
-            "-c", f"user.email={fixation.FIXATION_AUTHOR_EMAIL}",
-            "commit", "-q", "-m", message)
+        set_state`) — симулирует постороннюю правку документов задачи:
+        файлы `task_dir()` уходят коммитом в ссылку документов
+        `refs/artifacts/<id>` (ADR-0021 п.3) узлом записи напрямую, без
+        перефиксации, которую делают команды пульта."""
+        from orchestrator import artifact_branch
+        files = {f"tasks/{self.TASK}/{p.relative_to(self.task_dir()).as_posix()}":
+                 p.read_bytes()
+                 for p in sorted(self.task_dir().rglob("*")) if p.is_file()}
+        self.assertTrue(artifact_branch.commit_files(self.TASK, files, message),
+                        "посторонний коммит документов не записан")
 
     def _seed_artifact_branch(self, rel: str, text: str, message: str) -> None:
         """Содержимое, которое читает FSM (`artifact_source.resolve`,
@@ -887,6 +889,12 @@ class RealPultGitTest(_GitFixationTmpRootTest):
         self._seed_artifact_branch(f"tasks/{self.TASK}/REVIEW.md",
                                    REVIEW_DRAFT.format(task=self.TASK),
                                    f"{self.TASK}: REVIEW заглушка")
+        # С ADR-0021 (п.3) заглушки выше легли в ссылку документов, которую
+        # и фиксирует переход: это запись пульта (как автокоммит шага), не
+        # посторонняя правка — фиксация подтягивается на неё тем же
+        # `store.record_fixation`, иначе первый же старт шага увидел бы
+        # собственные заглушки инцидентом целостности.
+        store.record_fixation(store.db(), self.TASK)
         # Гейт ёмкости diff (05.09, fsm_advance._capacity_gate_refuses)
         # сверяет `MAIN_BRANCH...t["branch"]` в `config.ROOT` (`gitcmd.git`
         # всегда работает там, не в `self.repo()` — тот отдельный
@@ -914,7 +922,9 @@ class RealPultGitTest(_GitFixationTmpRootTest):
         if branch and not gitcmd.branch_exists(branch):
             subprocess.run(["git", "branch", branch, config.MAIN_BRANCH],
                            cwd=config.ROOT, check=True, capture_output=True)
-        return sha
+        # Зафиксированный sha после заглушек выше — голова ссылки
+        # документов (ADR-0021 п.3), не sha перехода в `in_dev`.
+        return self.head()
 
     def run_faked(self):
         """Прогон `cmd_run` с подложным агентом, но НАСТОЯЩИМ git.

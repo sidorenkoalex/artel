@@ -23,9 +23,7 @@ from tests.sandbox import SchemaTmpRootTest, capture  # noqa: E402
 class DoctorWaveBreakerFirstLineTest(SchemaTmpRootTest):
 
     def run_doctor(self) -> str:
-        with mock.patch.object(doctor, "_orphan_artifact_branches",
-                               return_value=[]), \
-                mock.patch.object(doctor, "all_checks", return_value=[]):
+        with mock.patch.object(doctor, "all_checks", return_value=[]):
             return capture(doctor.cmd_doctor)
 
     def raise_wave_breaker(self, message: str) -> None:

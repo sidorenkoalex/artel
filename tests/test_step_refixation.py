@@ -308,15 +308,19 @@ class SuccessfulTransitionUnaffectedTest(_RefixationTest):
 
 
 class CommitCommitterDatesTest(RealPultGitTest):
-    """`repo=self.repo()` явно на каждом вызове: без `repo=` `gitcmd.
-    commit_committer_dates` смотрит в `config.ROOT` (`gitcmd.git`), а
-    `self.head()` этой песочницы — sha репо ФИКСАЦИИ self/артели
-    (`config.PROJECTS/artel`, A7 generic-путь) — другой репозиторий.
+    """`repo=self.repo()` явно на каждом вызове: `self.head()` этой
+    песочницы — голова ссылки документов `refs/artifacts/<id>` (ADR-0021
+    п.3), которая живёт в репозитории пульта `config.ROOT`, — поэтому
+    `repo()` здесь и называет его, а не прежний репозиторий фиксации.
 
-    Репо фиксации пусто (ни одного коммита) до первого перехода FSM
-    (`ExternalTransitionCommitsTest` — то же самое для 'sled', симметрия
-    A7 требование 2) — `self.enter_spec_gate()` в начале каждого теста
-    даёт `self.head()` реальный, непустой sha, а не пустую строку."""
+    `self.enter_spec_gate()` в начале каждого теста даёт `self.head()`
+    реальный, непустой sha, а не пустую строку."""
+
+    def repo(self):
+        return config.ROOT
+
+    def task_dir(self):
+        return config.PROJECTS / config.DEFAULT_TARGET / "tasks" / self.TASK
 
     def test_returns_one_iso_date_per_commit_in_range(self):
         self.enter_spec_gate()
