@@ -1264,37 +1264,66 @@ def _cmd_pause(rest: list) -> None:
     pause.cmd_pause(rest[0])
 
 
+#: Команды, которые процесс роли исполняет в любой форме: только чтение
+#: (SPEC 01M3XTF5506GF43HD51ECE230T, требование 5). Формы остальных
+#: читающих команд разбирает `_role_allowed_command`.
+_ROLE_ALLOWED_COMMANDS = frozenset(
+    ("status", "show", "log", "version", "models", "report",
+     "acceptance-dry-run"))
+
+#: Флаг, превращающий читающую команду в меняющую состояние.
+_ROLE_REFUSED_FLAGS = {"doctor": ("--fix", "--restore"),
+                       "prune": ("--execute",),
+                       "watch": ("--observation",)}
+
+#: Единственная читающая подкоманда составных команд.
+_ROLE_ALLOWED_SUBCOMMANDS = {"observe": "show", "hook-migrate": "inspect"}
+
+
+def _role_allowed_command(cmd: str, rest: list) -> bool:
+    """Доступна ли команда процессу роли — белый список, закрытый по
+    умолчанию (SPEC 01M3XTF5506GF43HD51ECE230T, требования 4-6): команда,
+    не названная здесь, под ролью отказывает, в том числе новая запись
+    таблицы диспетчера, о которой этот список не знает."""
+    if cmd in _ROLE_ALLOWED_COMMANDS:
+        return True
+    if cmd in _ROLE_REFUSED_FLAGS:
+        return not any(flag in rest for flag in _ROLE_REFUSED_FLAGS[cmd])
+    if cmd in _ROLE_ALLOWED_SUBCOMMANDS:
+        return rest[:1] == [_ROLE_ALLOWED_SUBCOMMANDS[cmd]]
+    # Ребёнок отвязанного запуска наследует окружение родителя и несёт
+    # `--attach` — его отказ сломал бы штатный `run`/`auto` (требование 6).
+    if cmd in ("run", "auto"):
+        return "--attach" in rest
+    return False
+
+
 def _role_restricted_command(cmd: str, rest: list) -> str | None:
-    """Название команды, недоступной процессу роли, либо `None` (SPEC
-    01M2B6K3EM7F2J72RC2F520Y2K, требование 3) — частичная замена
-    `permissions.deny` курируемого слоя LLM-независимым признаком
-    (`ARTEL_ROLE` в окружении, `orchestrator/runner.py::role_env`):
-    `init`, `doctor --restore`, `canary pool-seal` отказывают роли до
-    исполнения, остальные команды (включая голый `doctor`/`canary`) не
-    затронуты."""
-    if cmd == "init":
-        return "init"
-    if cmd == "observe" and rest[:1] in (["register"], ["add"], ["remove"], ["stop"]):
-        return "observe " + rest[0]
-    if cmd == "watch" and "--observation" in rest:
-        return "watch --observation"
-    if cmd == "hook-migrate" and rest[:1] in (["apply"], ["restore"]):
-        return "hook-migrate " + rest[0]
-    if cmd in ("run", "auto") and "--attach" not in rest:
-        return cmd
-    if cmd == "doctor" and "--restore" in rest:
-        return "doctor --restore"
-    if cmd == "canary" and rest[:1] == ["pool-seal"]:
-        return "canary pool-seal"
-    return None
+    """Название команды для текста отказа процессу роли либо `None`, если
+    команда роли доступна (`_role_allowed_command`)."""
+    if _role_allowed_command(cmd, rest):
+        return None
+    for flag in _ROLE_REFUSED_FLAGS.get(cmd, ()):
+        if flag in rest:
+            return f"{cmd} {flag}"
+    if cmd in ("observe", "hook-migrate", "canary") and rest[:1]:
+        return f"{cmd} {rest[0]}"
+    if cmd == "pin" and rest[:1] == ["--to"]:
+        return "pin --to"
+    return cmd
 
 
 def _refuse_if_role_restricted(cmd: str, rest: list) -> None:
-    role = os.environ.get(config.ARTEL_ROLE_ENV)
-    if not role:
+    """Отказ процессу роли до вызова реализации. Шаг роли распознаёт один
+    признак — `runner.in_role_environment` (требование 1); он отсекает
+    ошибочный вызов, но не граница (`docs/stack.md`, «Паритет
+    безопасности роли»). Отказ стоит только здесь: прямые вызовы функций
+    пультом (`auto`, ведение канарейки) им не останавливаются."""
+    if not runner.in_role_environment():
         return
     restricted = _role_restricted_command(cmd, rest)
     if restricted:
+        role = os.environ.get(config.ARTEL_ROLE_ENV) or "(окружение роли)"
         sys.exit(f"artel.py {restricted}: команда недоступна процессу "
                  f"роли {role}")
 
@@ -1337,8 +1366,8 @@ def main() -> None:
             rest[0], rest[1] if len(rest) > 1 else ""),
         "version": lambda: version.cmd_version(),
         # `models` — только чтение (SPEC 01M3009Y9AGGY6ZCFA7H1HJ1TD,
-        # требование 12): отказа из окружения роли ей не нужно, поэтому
-        # в `_role_restricted_command` записи нет.
+        # требование 12): под ролью исполняется — она в белом списке
+        # `_ROLE_ALLOWED_COMMANDS`.
         "models": lambda: models.cmd_models(),
         "canary": lambda: _cmd_canary(rest),
         "prune": lambda: prune.cmd_prune("--execute" in rest),

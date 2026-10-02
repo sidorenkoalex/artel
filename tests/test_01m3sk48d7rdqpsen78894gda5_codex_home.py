@@ -130,11 +130,11 @@ class CanaryCodexHomeTest(RealGitSandbox):
                               templates=["primer"])
         self.output = output.getvalue()
 
-    def test_ac1_canary_writes_trust_only_in_clone_home(self):
-        """Подменённый шаг Codex дописывает доверие в свой config.toml.
+    def test_ac1_canary_writes_trust_only_in_dedicated_profile(self):
+        """Подменённый шаг Codex дописывает доверие в отдельный профиль.
 
         Пультовский файл остаётся байт в байт прежним, а запись видна в
-        клоновском файле до удаления эфемерного клона.
+        профиле канарейки до следующего восстановления.
         Ловит мутацию: канарейка передаёт пультовский CODEX_HOME в процесс
         клона — запись доверия появляется в файле пульта.
         """
@@ -145,7 +145,9 @@ class CanaryCodexHomeTest(RealGitSandbox):
                          f"зерно: {self.seed}\n{self.output}")
         self.assertNotEqual(self.observed[0]["codex_home"], self.pult_codex)
         self.assertEqual(self.observed[0]["codex_home"],
-                         self.observed[0]["clone_home"] / ".codex")
+                         self.pool_home / ".artel-canary-codex" / ".codex")
+        self.assertNotEqual(self.observed[0]["codex_home"],
+                            self.observed[0]["clone_home"] / ".codex")
         self.assertIn(b'trust_level = "trusted"', self.observed[0]["config"])
 
     def test_ac2_clone_checks_login_and_copies_pointer_without_credentials(self):

@@ -462,6 +462,24 @@ class IsolationSmokeTest(TmpRootTest):
         self.assertEqual(check.status, "fail")
         self.assertIn("MCP", check.detail)
 
+    def test_missing_role_marker_in_assembled_env_is_red(self):
+        """Ловит мутацию: смок Claude проверяет маркер только через признак
+        роли, а признак истинен по одному HOME дома роли (SPEC
+        01M3XTF5506GF43HD51ECE230T, требование 2) — `role_env` перестал
+        ставить `ARTEL_ROLE`, а смок остался зелёным."""
+        real_role_env = doctor.runner.role_env
+
+        def without_role_marker(*args, **kwargs):
+            env = real_role_env(*args, **kwargs)
+            env.pop(config.ARTEL_ROLE_ENV, None)
+            return env
+
+        with mock.patch.object(doctor.runner, "role_env", without_role_marker):
+            check = doctor.isolation_smoke()
+
+        self.assertEqual(check.status, "fail", check.detail)
+        self.assertIn(config.ARTEL_ROLE_ENV, check.detail)
+
 
 class TargetWrapperCheckTest(unittest.TestCase):
     """SPEC T069, требование 3: инвентаризация обвязки target'а —

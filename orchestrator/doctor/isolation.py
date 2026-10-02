@@ -91,7 +91,12 @@ def isolation_smoke(role: str = "developer") -> doctor.Check:
     if env.get("HOME") == fake_home or any(
             doctor.ISOLATION_MARKER in str(v) for v in env.values()):
         leaks.append("user-слой: HOME роли не отведён от ambient-значения")
-    if not doctor.runner.in_role_environment(env):
+    # Маркер проверяется напрямую, а не только через признак: признак
+    # истинен и по одному HOME дома роли, и пропажа маркера прошла бы молча.
+    if not env.get(doctor.config.ARTEL_ROLE_ENV):
+        leaks.append("окружение шага роли не распознаётся как окружение роли: "
+                     f"нет маркера роли {doctor.config.ARTEL_ROLE_ENV}")
+    elif not doctor.runner.in_role_environment(env):
         leaks.append("окружение шага роли не распознаётся как окружение роли")
 
     project_dir = doctor.runner.role_cwd(None, None, doctor.ISOLATION_SMOKE_TARGET)
@@ -295,7 +300,12 @@ def _codex_environment_leaks(provider, role: str):
     # все три имени, а не одно: `codex exec` читает ключ из `CODEX_API_KEY`
     # (живая проверка 22.09), и проверка на `OPENAI_API_KEY` пропустила бы
     # именно действующий канал.
-    if not doctor.runner.in_role_environment(step_env):
+    # Маркер проверяется напрямую, а не только через признак: признак
+    # истинен и по одному HOME дома роли, и пропажа маркера прошла бы молча.
+    if not step_env.get(doctor.config.ARTEL_ROLE_ENV):
+        leaks.append("окружение шага роли не распознаётся как окружение роли: "
+                     f"нет маркера роли {doctor.config.ARTEL_ROLE_ENV}")
+    elif not doctor.runner.in_role_environment(step_env):
         leaks.append("окружение шага роли не распознаётся как окружение роли")
     for name in doctor.codex_provider.FORBIDDEN_KEY_ENV_NAMES:
         if name not in step_env:

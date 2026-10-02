@@ -7,8 +7,8 @@ from pathlib import Path
 
 from scripts import guard
 
-from . import (alerts, artifact_branch, artifacts, budget, config, gitcmd,
-              idgen, liveness, merge_queue, models, providers, retro, runner,
+from . import (alerts, artifact_branch, artifacts, budget, config, cycle_hint,
+              gitcmd, idgen, liveness, merge_queue, models, providers, retro, runner,
               store, zone_lock)
 
 # ГОСТ-подобная транслитерация: только stdlib, без внешних зависимостей.
@@ -486,7 +486,8 @@ def cmd_new(title: str, tz_path: str | None = None, *,
         _print_new_calibration_hint(conn, task_id, tz_raw)
         _warn_zone_overlap(conn, task_id, tz_raw, target)
     if tz_path is not None:
-        print(f"  затем: artel.py run {task_id}  (запуск analyst)")
+        print("  затем: " + cycle_hint.launch_text(
+            conn, task_id, "run", "(запуск analyst)"))
     else:
         print(f"  затем: artel.py advance {task_id}  (SPEC status: ready)")
     return task_id

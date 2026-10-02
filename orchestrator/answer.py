@@ -34,8 +34,8 @@ Push артефактной ветки после коммита ANSWER (SPEC
 import sys
 from pathlib import Path
 
-from . import (artifact_branch, artifact_source, fsm_advance, gitcmd, lease,
-              runner, store)
+from . import (artifact_branch, artifact_source, cycle_hint, fsm_advance, gitcmd,
+              lease, runner, store)
 from .advance_gates import mandate
 
 
@@ -273,5 +273,6 @@ def _cmd_zones_extend(conn, task_id: str, paths_arg: str) -> None:
         # 6): гейт зон на этом мандате отказывает действием класса «роль
         # ещё не закончила», и `auto` сам запускает developer оформить
         # раздел — Оператору не нужен ручной `run` (инцидент 13.09).
-        print(f"  дальше: artel.py auto {task_id} — цикл сам запустит "
-              f"developer, тот оформит раздел «## Расширение зон» PLAN.md")
+        print("  дальше: " + cycle_hint.launch_text(
+            conn, task_id, "auto", "— цикл сам запустит developer, тот "
+            "оформит раздел «## Расширение зон» PLAN.md"))
