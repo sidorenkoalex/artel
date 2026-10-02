@@ -11,6 +11,11 @@
 sets:
   codex-dev:
     developer: gpt-6-sol
+  codex-all:
+    analyst: gpt-5.6-terra
+    test_author: gpt-6-sol
+    developer: gpt-6-sol
+    reviewer: gpt-5.6-terra
 pairs:
   developer:
     gpt-6-sol:
