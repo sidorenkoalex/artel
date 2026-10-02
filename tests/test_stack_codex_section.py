@@ -75,14 +75,18 @@ class StackCodexCloneHomeSectionTest(unittest.TestCase):
             with self.subTest(anchor=anchor):
                 self.assertIn(anchor, self.body)
 
-    def test_section_names_login_and_busy_refusals(self):
-        """Раздел объясняет истечение входа и занятость профиля.
+    def test_section_names_both_refusals_of_the_run(self):
+        """Раздел называет ОБА отказа входа — несделанный вход Оператора
+        (рецепт `codex login`) и дефект пульта, повторным входом не
+        чинящийся, — и отказ занятости профиля.
 
-        Ловит мутацию: документ опускает отказ занятости — параллельный
-        платный прогон выглядел бы допустимым действием.
+        Ловит мутацию: из раздела исчезает отказ «дефект пульта» или отказ
+        занятости — Оператор повторял бы вход, который ничего не изменит,
+        либо счёл бы параллельный платный прогон допустимым.
         """
         lowered = self.body.lower()
         self.assertIn("codex login", lowered)
+        self.assertIn("дефект пульта", lowered)
         self.assertIn("отказ занятости", lowered)
 
 

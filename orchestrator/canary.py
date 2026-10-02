@@ -1009,22 +1009,58 @@ def _refuse_unless_clone_logged_in(role: str, pult_role_home: Path) -> None:
              f"авторизацией за деньги. {check.name}: {check.detail}")
 
 
-def _pult_home_login_confirmed(role: str, pult_role_home: Path) -> bool:
+def _refuse_unless_profile_logged_in(role: str, pult_role_home: Path,
+                                     profile: Path) -> None:
+    """Проверяет вход отдельного профиля канарейки окружением шага КЛОНА
+    и отказывает до платного шага (SPEC 01M3V4ZPB6HFDJ36MTDAQG5VNT, AC-5).
+
+    Те же два адресата, что у `_refuse_unless_clone_logged_in`, но
+    сравнение идёт с ТЕМ ЖЕ `CODEX_HOME` профиля, а не с боевым каталогом
+    пульта: вход боевого дома ничего не говорит о входе профиля (AC-10).
+    Профиль подтверждён окружением пульта, а клоном нет — расходятся
+    только `HOME`/`ZDOTDIR` клона и скопированный в него указатель связки
+    ключей, то есть сломана подготовка клона: дефект пульта, повторный
+    `codex login` его не чинит.
+    """
+    from . import doctor
+    check = doctor.check_codex_chatgpt_auth(role)
+    if check.status == "ok":
+        return
+    if _pult_home_login_confirmed(role, pult_role_home, profile):
+        sys.exit(f"canary: вход Codex в отдельный профиль {profile} "
+                 f"окружением пульта подтверждён, а проверка {check.name} "
+                 f"окружением шага эфемерного клона — нет. Это дефект "
+                 f"пульта, а не несделанный шаг Оператора: повторный вход "
+                 f"этого не изменит. Сломана подготовка дома клона — "
+                 f"`HOME`/`ZDOTDIR` клона {config.ROLE_HOME} и/или "
+                 f"указатель связки ключей (`canary._install_codex_pointer` "
+                 f"кладёт его в {config.ROLE_HOME / _KEYCHAIN_POINTER_REL}) "
+                 f"— до починки прогон на наборе с ролями "
+                 f"{codex_provider.CLI_NAME} невозможен.")
+    sys.exit(f"canary: вход Codex в отдельный профиль {profile} не "
+             f"подтверждён до платного шага: {check.name}: {check.detail}. "
+             f"Оператору нужен `codex login` с этим CODEX_HOME")
+
+
+def _pult_home_login_confirmed(role: str, pult_role_home: Path,
+                               codex_home: Path | None = None) -> bool:
     """Подтверждён ли вход Codex домом роли ПУЛЬТА — тем же узлом
     `doctor`, но с окружением, которое собралось бы вне блока клона
     (SPEC 01M3M55070T5NJFYM3QQJH4B9V, требование 6).
 
-    Снимается и переадресация `config.ROLE_HOME`, и переопределение
-    `CODEX_HOME`: узел берёт все три имени у `CodexProvider.environment`,
-    и ответ обязан относиться к тому дому, каким входил Оператор, а не к
-    гибриду «`HOME` клона + `CODEX_HOME` пульта». Оба снятия — в
+    Снимается переадресация `config.ROLE_HOME`, а переопределение
+    `CODEX_HOME` ставится в `codex_home`: `None` — боевой каталог дома
+    роли пульта, путь — отдельный профиль канарейки, тот же, что у
+    проверки клона. Узел берёт все три имени у
+    `CodexProvider.environment`, и ответ обязан относиться к тому дому,
+    каким входил Оператор, а не к гибриду. Оба восстановления — в
     `finally`: вызывающий на обеих ветках уходит `sys.exit`, а внешний
     `finally` блока клона до этого ещё не добрался, и оставленные
     пультовские пути увели бы уборку клона не туда.
     """
     from . import doctor
     saved_role_home = config.ROLE_HOME
-    saved_override = codex_provider.set_codex_home_override(None)
+    saved_override = codex_provider.set_codex_home_override(codex_home)
     config.ROLE_HOME = pult_role_home
     try:
         return doctor.check_codex_chatgpt_auth(role).status == "ok"
@@ -1175,14 +1211,8 @@ def _ephemeral_clone(target_sha: str | None = None,
                     sys.exit(f"canary: профиль Codex канарейки не "
                              f"восстановлен: {codex_auth.profile}: {exc}")
                 codex_provider.set_codex_home_override(codex_auth.profile)
-                from . import doctor
-                check = doctor.check_codex_chatgpt_auth(codex_auth.role)
-                if check.status != "ok":
-                    sys.exit(f"canary: вход Codex в отдельный профиль "
-                             f"{codex_auth.profile} не подтверждён до "
-                             f"платного шага: {check.name}: {check.detail}. "
-                             f"Оператору нужен `codex login` с этим "
-                             f"CODEX_HOME")
+                _refuse_unless_profile_logged_in(
+                    codex_auth.role, saved["ROLE_HOME"], codex_auth.profile)
         yield dest
     finally:
         codex_provider.set_codex_home_override(saved_codex_home)
