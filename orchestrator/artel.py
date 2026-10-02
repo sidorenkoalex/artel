@@ -137,6 +137,7 @@ workspace, tasks, knowledge, logs). БД одна на все проекты: с
   pause [--now] <id> | resume <id> | log <id> | budget <id> <usd> |
   target-init <target> | doctor [--restore] [--fix] | alert-ack <id> "<решение>" |
   version | models |
+  admit [--revoke] <роль> <модель> --basis "<основание>" |
   canary --k <N> [--sha <sha>] [--set <имя>] [--template <имя>,<имя>] |
   canary pool-seal |
   prune [--execute] |
@@ -195,6 +196,16 @@ models.yaml) гоняет перед отправкой на дереве с у�
 Набор красный или не запустился вовсе — отказ, называющий упавшие тесты,
 без коммита и без удержанной записи; с флагом коммит проходит, а путь и
 основание уходят в журнал пульта. Пути `docs/**` набор не гоняют.
+
+`admit <роль> <модель> --basis "<основание>"` (SPEC
+01M3YCHP14179R32SFJVKQB32G) — допуск пары «роль — модель» в разделе
+`pairs:` файла `model_sets.yaml` по числам ADR-0019 п.5: печатает сводку
+прогонов пары из `canary_runs` (не меньше трёх чистых, не меньше двух
+шаблонов, хотя бы один на шаблоне класса «средний»; у analyst — ещё прогон
+с правильным исходом неясности ТЗ) и при недоборе отказывает с перечнем
+недостающего, не трогая файл. `admit --revoke …` переводит пару в
+`state: приостановлена`. Запись — изолированный коммит механизмом
+`doc-commit` (окно тишины, удержание, полный набор tests/).
 
 `pin-update <sha>` (A7, Stage1) — обновляет пин запущенной версии:
 продвигает рабочее дерево и HEAD `config.ROOT` до `<sha>` main артели
@@ -1404,6 +1415,8 @@ def main() -> None:
         # требование 12): под ролью исполняется — она в белом списке
         # `_ROLE_ALLOWED_COMMANDS`.
         "models": lambda: models.cmd_models(),
+        # `admit` пишет файл решений Оператора — вне белого списка ролей.
+        "admit": lambda: models.cmd_admit(rest),
         "canary": lambda: _cmd_canary(rest),
         "prune": lambda: prune.cmd_prune("--execute" in rest),
         "report": lambda: report.cmd_report(),
