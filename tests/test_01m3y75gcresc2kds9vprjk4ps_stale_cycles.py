@@ -86,6 +86,10 @@ AC-7: проверка ищется среди `doctor.all_checks` по соде
 `doctor` «циклы на коде старше пина» нет — ни id задачи, ни команд
 `stop`/`auto`, ни пометки «не удалось определить» в выводе нет.
 """
+import builtins
+import contextlib
+import errno
+import io
 import os
 import random
 import socket
@@ -107,6 +111,38 @@ PROCESS_INFO_TOOLS = ("ps", "sysctl", "lsof")
 REAL_RUN = subprocess.run
 REAL_POPEN = subprocess.Popen
 REAL_KILL = os.kill
+
+
+def is_proc_path(path) -> bool:
+    if isinstance(path, int):
+        return False
+    try:
+        text = os.fsdecode(os.fspath(path))
+    except TypeError:
+        return False
+    return text == "/proc" or text.startswith("/proc/")
+
+
+@contextlib.contextmanager
+def proc_table_hidden():
+    """Пути под `/proc` не открываются, не `stat`-ятся и не перечисляются."""
+    def guarded(real):
+        def wrapper(*args, **kwargs):
+            path = args[0] if args else kwargs.get("path", kwargs.get("file"))
+            if path is not None and is_proc_path(path):
+                raise FileNotFoundError(errno.ENOENT,
+                                        "песочница: таблица процессов скрыта",
+                                        os.fsdecode(os.fspath(path)))
+            return real(*args, **kwargs)
+        return wrapper
+
+    targets = [(builtins, "open"), (io, "open"), (os, "open"), (os, "stat"),
+               (os, "lstat"), (os, "listdir"), (os, "scandir"), (os, "access")]
+    with contextlib.ExitStack() as stack:
+        for owner, name in targets:
+            stack.enter_context(mock.patch.object(owner, name,
+                                                  guarded(getattr(owner, name))))
+        yield
 
 
 class _CyclesMixin:
@@ -401,7 +437,8 @@ class PinUpdateRobustnessTest(_PinUpdateSandbox):
 
         Каждая внешняя команда, кроме git, отвечает одним из сбоев (выбор
         случайный по зерну): отказ запуска, ненулевой код, пустой ответ,
-        мусор. Цикл всё равно назван с пометкой «не удалось определить»,
+        мусор. Таблица процессов `/proc` скрыта и для чтения без внешней
+        утилиты. Цикл всё равно назван с пометкой «не удалось определить»,
         `pin-update` завершается без отказа, HEAD на целевом sha, запись
         «pin обновлён» сделана.
 
@@ -439,7 +476,8 @@ class PinUpdateRobustnessTest(_PinUpdateSandbox):
                 return REAL_POPEN(cmd, *args, **kwargs)
             raise FileNotFoundError("песочница: сведения о процессе недоступны")
 
-        with mock.patch.object(subprocess, "run", broken_run), \
+        with proc_table_hidden(), \
+                mock.patch.object(subprocess, "run", broken_run), \
                 mock.patch.object(subprocess, "Popen", broken_popen):
             output, journal = self.run_pin_update()
 

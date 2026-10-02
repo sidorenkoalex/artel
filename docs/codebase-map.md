@@ -1,5 +1,5 @@
 ---
-built_at_sha: 6bf1d3c022e55657003b856acc7512174e6c68fb
+built_at_sha: e549f2b5bf2222046db10fc89bc978adfeb10c6c
 ---
 
 # Codebase-map пульта
@@ -2078,7 +2078,9 @@ built_at_sha: 6bf1d3c022e55657003b856acc7512174e6c68fb
 
 **Назначение:** `pin-update` и `doctor` называют живые циклы `auto`/`run`, чей процесс
 
-**Публичные функции:** (нет)
+**Публичные функции:**
+- `is_proc_path`
+- `proc_table_hidden`
 
 **Импортирует:** `orchestrator/ci.py`, `orchestrator/config.py`, `orchestrator/liveness.py`, `orchestrator/pin.py`, `orchestrator/store.py`, `tests/sandbox.py`
 
