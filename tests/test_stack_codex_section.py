@@ -53,14 +53,20 @@ class StackCodexCloneHomeSectionTest(unittest.TestCase):
         self.body = " ".join(section_body(stack_md_text()).split())
 
     def test_section_says_the_login_record_is_keyed_by_the_codex_home_path(self):
-        """Раздел связывает отдельный CODEX_HOME со строкой проверки входа.
+        """Раздел объясняет, что запись входа клиент ищет по ПУТИ
+        `CODEX_HOME` (отсюда постоянный отдельный профиль), и называет
+        строку `doctor`, которой этот вход проверяется.
 
-        Ловит мутацию: документ обещает только постоянство каталога без
-        проверки входа — истёкшая подписка выглядела бы готовой к шагу.
+        Ловит мутацию: из раздела исчезает причина постоянства профиля —
+        следующий читатель «упростил» бы профиль до каталога на прогон или
+        внутри клона, и канарейка снова теряла бы вход (прогон
+        20261001T070315Z); либо документ обещает постоянство без проверки
+        входа — истёкшая подписка выглядела бы готовой к шагу.
         """
         self.assertTrue(self.body,
                         "в docs/stack.md нет раздела о провайдере codex")
         self.assertIn(codex_provider.HOME_ENV, self.body)
+        self.assertIn("ПУТИ", self.body)
         self.assertIn("отдельный постоянный профиль", self.body.lower())
         self.assertIn(doctor.CODEX_AUTH_CHECK, self.body)
 

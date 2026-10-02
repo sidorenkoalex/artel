@@ -895,7 +895,11 @@ def _clone_local_layer_text(source: str, layer) -> str:
 
 def _codex_clone_auth(plan: CanarySetPlan) -> CodexCloneAuth | None:
     """Вход Codex для эфемерного клона — либо ИМЕНОВАННЫЙ ОТКАЗ (SPEC
-    01M3HST1381E1FZCYAN2TSB1F3, требование 3). `None` — ни одна роль
+    01M3HST1381E1FZCYAN2TSB1F3, требование 3). Прежняя форма входа через
+    боевой дом пульта: штатный `cmd_canary` её больше не зовёт (SPEC
+    01M3V4ZPB6HFDJ36MTDAQG5VNT — `_locked_canary_profile` и
+    `_canary_profile_auth`), оставлена для формы `codex_auth` без
+    профиля. `None` — ни одна роль
     прогона не идёт провайдером Codex: дом клона не меняется, проверка
     входа не зовётся, поведение прежнее байт-в-байт (требование 2).
 
@@ -2458,8 +2462,10 @@ def _run_one_task(template_path: Path, run_stamp: str, ratio: float,
     аргументами.
 
     `codex_auth` (SPEC 01M3HST1381E1FZCYAN2TSB1F3) — вход Codex для клона,
-    собранный `_codex_clone_auth` ДО клона; `None` — ни одна роль прогона
-    не идёт провайдером Codex.
+    собранный `_canary_profile_auth` ДО клона под замком
+    `_locked_canary_profile` (SPEC 01M3V4ZPB6HFDJ36MTDAQG5VNT: отдельный
+    постоянный профиль); `None` — ни одна роль прогона не идёт провайдером
+    Codex.
     """
     plan = plan or _DEFAULT_SET_PLAN
     explicit_target_sha = target_sha
@@ -2612,10 +2618,12 @@ def cmd_canary(*, k: int, sha: str | None = None,
     # ни заведённой задачей.
     plan = _set_plan(set_name)
     # Вход Codex для клона — здесь же, на той же стадии (SPEC
-    # 01M3HST1381E1FZCYAN2TSB1F3, требование 3): за несделанный однократный
-    # шаг Оператора пульт тоже не платит ни сетью, ни `git clone`, ни
-    # заведённой задачей. `None` — ни одна роль прогона не идёт провайдером
-    # Codex, и дальше всё идёт байт-в-байт как до этой задачи.
+    # 01M3HST1381E1FZCYAN2TSB1F3, требование 3): за неподготовленный
+    # отдельный профиль пульт тоже не платит ни сетью, ни `git clone`, ни
+    # заведённой задачей. Профиль канарейки (SPEC 01M3V4ZPB6HFDJ36MTDAQG5VNT)
+    # держится замком `_locked_canary_profile` до конца прогона, адрес входа
+    # собирает `_canary_profile_auth`; `_codex_clone_auth` штатно не
+    # зовётся. Без ролей Codex профиль не трогается вовсе.
     profile_context = (_locked_canary_profile() if plan.codex_roles
                        else nullcontext(None))
     with profile_context as profile_home:
@@ -2626,11 +2634,11 @@ def cmd_canary(*, k: int, sha: str | None = None,
         sha_label = _target_origin_note(sha, target_sha, origin_sha)
 
         run_stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-    # Требование 5: имена выбранных шаблонов в порядке прогона — в САМОЙ
-    # первой строке вывода, до первого эфемерного клона. Иначе состав
-    # прогона Оператор узнавал бы по мере того, как задачи одна за другой
-    # доходят до конца, то есть через десятки минут, а при падении первого
-    # же клона — не узнал бы вовсе.
+        # Требование 5: имена выбранных шаблонов в порядке прогона — в САМОЙ
+        # первой строке вывода, до первого эфемерного клона. Иначе состав
+        # прогона Оператор узнавал бы по мере того, как задачи одна за другой
+        # доходят до конца, то есть через десятки минут, а при падении первого
+        # же клона — не узнал бы вовсе.
         print(f"[canary] прогон {run_stamp}: {len(templates)} задач из пула "
              f"{pool_dir} в порядке прогона: "
              f"{', '.join(p.stem for p in templates)}; целевой sha {target_sha} "
