@@ -1642,24 +1642,22 @@ def _suspend_pair(conn, task, role: str, model: str, reason: str) -> None:
 def _consecutive_returns(conn, role: str, model: str, task_id: str,
                          verdict_id: int) -> str | None:
     """Причина приостановки по возвратам ревью подряд (требование 3);
-    `None` — возврат одиночный. Засчитываются только вердикты после
-    последнего снятия приостановки пары."""
+    `None` — возврат одиночный. «Подряд» — по потоку вердиктов пары
+    (ANSWER-1, п.1): непосредственно предыдущий вердикт пары — тоже
+    возврат, в этой задаче или в соседней; одобрение между ними цепочку
+    рвёт. Засчитываются только вердикты после последнего снятия
+    приостановки пары."""
     from . import store
     mark = store.last_pair_resume_mark(conn, role, model)
     earlier = [row for row in store.pair_verdicts_after(conn, role, model, mark)
                if row["id"] < verdict_id]
-    if any(row["task_id"] == task_id and row["verdict"] == VERDICT_RETURN
-           for row in earlier):
-        return f"второй возврат ревью в задаче {task_id}"
-    others = [row for row in earlier if row["task_id"] != task_id]
-    if not others:
+    if not earlier or earlier[-1]["verdict"] != VERDICT_RETURN:
         return None
-    previous = others[-1]["task_id"]
-    if any(row["task_id"] == previous and row["verdict"] == VERDICT_RETURN
-           for row in others):
-        return (f"возврат ревью в задаче {task_id} подряд за возвратом ревью "
-                f"предыдущей задачи пары {previous}")
-    return None
+    previous = earlier[-1]["task_id"]
+    if previous == task_id:
+        return f"второй возврат ревью подряд в задаче {task_id}"
+    return (f"возврат ревью в задаче {task_id} подряд за возвратом ревью "
+            f"предыдущей задачи пары {previous}")
 
 
 def record_review_verdict(conn, task_id: str, verdict: str) -> None:
@@ -1694,14 +1692,20 @@ def _refusal_role(reason: str) -> str | None:
 
 def suspend_on_autogate_refusal(conn, task, reason: str) -> None:
     """Отказ автогейта приёмки по вине роли в настоящей задаче с набором
-    приостанавливает пару набора виновной роли (требование 4). Вина
-    `пульт/пул` и `не установлена` (в том числе пробный период) пару не
-    трогают."""
+    приостанавливает пару набора виновной роли (требование 4), если
+    последний шаг этой роли в задаче не шёл на другой модели (ANSWER-1,
+    п.2): шаг, откаченный на боевую модель, вину на пару не кладёт. Вина `пульт/пул` и `не установлена` (в том числе пробный
+    период) пару не трогают."""
     if autogate_refusal_blame(reason) != BLAME_ROLE:
         return
     role = _refusal_role(reason)
     model = _set_pair(task, role) if role is not None else None
     if model is None:
+        return
+    # Записи шага роли нет — отката не наблюдалось, роль шла по составу
+    # набора; вину снимает только последний шаг роли на другой модели.
+    last = _last_step_model(conn, task["id"], role)
+    if last is not None and last != model:
         return
     _suspend_pair(conn, task, role, model,
                   f"отказ автогейта приёмки по вине роли {role}: {reason}")

@@ -3,7 +3,8 @@
 файл задачи `tests/test_01m3ychvvek14sk8gt4r0h7m2c_set_trial_suspension.py`:
 паритет схемы свежей и догнанной БД, вердикт канареечной задачи и шага не
 на паре, однократность приостановки, виновная роль каждой причины,
-пустое решение `pair-resume`.
+пустое решение `pair-resume`; по ANSWER-1 — «подряд» по потоку вердиктов
+пары, сверка модели шага при отказе автогейта, чтение пар без DDL.
 """
 import io
 import json
@@ -86,6 +87,12 @@ class ReviewVerdictTest(TaskSeededTmpRootTest):
             store.set_state(self.conn, task_id, "in_dev", "fsm",
                             expected_state="review")
 
+    def review_approve(self, task_id: str) -> None:
+        store.update_task(self.conn, task_id, state="review")
+        with redirect_stdout(io.StringIO()):
+            store.set_state(self.conn, task_id, "acceptance", "fsm",
+                            expected_state="review")
+
     def suspended(self) -> bool:
         return store.active_pair_suspension(
             self.conn, "developer", SET_MODEL) is not None
@@ -152,6 +159,77 @@ class ReviewVerdictTest(TaskSeededTmpRootTest):
         alerts = [row for row in store.alerts_since(self.conn, 0)
                   if row["source"] == models.PAIR_SUSPENSION_ALERT_SOURCE]
         self.assertEqual(len(alerts), 1)
+
+
+    def test_return_after_approved_previous_task_does_not_suspend(self):
+        """Одобрение предыдущей задачи рвёт цепочку возвратов пары.
+
+        Сценарий (ANSWER-1, п.1): задача P на паре — возврат ревью, затем
+        одобрение; задача Q на паре — возврат ревью. Пара не
+        приостановлена. Следом второй возврат Q — подряд, пара
+        приостановлена.
+
+        Ловит мутацию: возврат одобренной предыдущей задачи засчитан в
+        "подряд"."""
+        first, second = self.set_task(), self.set_task()
+        self.step(first, SET_MODEL)
+        self.review_return(first)
+        self.step(first, SET_MODEL)
+        self.review_approve(first)
+        self.step(second, SET_MODEL)
+        self.review_return(second)
+        self.assertFalse(self.suspended())
+        self.step(second, SET_MODEL)
+        self.review_return(second)
+        self.assertTrue(self.suspended())
+
+    def test_autogate_refusal_after_rollback_to_combat_spares_pair(self):
+        """Отказ автогейта по вине developer, шедшего на боевой модели, пару
+        не приостанавливает.
+
+        Сценарий (ANSWER-1, п.2): последний шаг developer задачи — на
+        боевой модели (откат), отказ «полный набор tests/ красный». Пара
+        не приостановлена. Новый шаг developer на модели набора и тот же
+        отказ — пара приостановлена.
+
+        Ловит мутацию: вина отказа автогейта ложится на пару без сверки
+        модели последнего шага роли — пару приостанавливают за работу
+        боевой модели."""
+        task = self.set_task()
+        reason = (models.AUTOGATE_REFUSAL_PREFIX
+                  + "полный набор tests/ красный: 1 failed")
+        self.step(task, SET_MODEL)
+        self.step(task, COMBAT)
+        with redirect_stdout(io.StringIO()):
+            models.suspend_on_autogate_refusal(
+                self.conn, store.get_task(self.conn, task), reason)
+        self.assertFalse(self.suspended())
+        self.step(task, SET_MODEL)
+        with redirect_stdout(io.StringIO()):
+            models.suspend_on_autogate_refusal(
+                self.conn, store.get_task(self.conn, task), reason)
+        self.assertTrue(self.suspended())
+
+    def test_pair_reads_keep_callers_open_transaction(self):
+        """Чтение пар не коммитит открытую транзакцию вызывающего.
+
+        Сценарий (ANSWER-1, п.3): незакоммиченная запись журнала задачи,
+        затем `active_pair_suspension`, `pair_verdicts_after`,
+        `last_pair_resume_mark`, затем откат транзакции — записи нет.
+
+        Ловит мутацию: запросы к парам исполняют DDL через
+        `executescript` (неявный COMMIT) — запись вызывающего
+        закоммичена мимо его отката."""
+        task = self.set_task()
+        self.conn.execute(
+            "INSERT INTO steps (task_id, actor, action, detail) "
+            "VALUES (?, 'probe', 'probe', 'probe')", (task,))
+        store.active_pair_suspension(self.conn, "developer", SET_MODEL)
+        store.pair_verdicts_after(self.conn, "developer", SET_MODEL, 0)
+        store.last_pair_resume_mark(self.conn, "developer", SET_MODEL)
+        self.conn.rollback()
+        self.assertEqual(self.conn.execute(
+            "SELECT COUNT(*) FROM steps WHERE actor='probe'").fetchone()[0], 0)
 
 
 class RefusalRoleTest(unittest.TestCase):

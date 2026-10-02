@@ -25,8 +25,7 @@ import uuid
 from datetime import datetime, timezone
 
 from . import config, session
-from .schema import (PAIR_SUSPENSION_DDL, SCHEMA, add_column, create_schema,
-                     migrate, table_columns)
+from .schema import SCHEMA, add_column, create_schema, migrate, table_columns
 
 TASK_ID = re.compile(r"\AT(\d+)\Z")
 
@@ -434,18 +433,13 @@ def record_model_tariff(conn: sqlite3.Connection, model_id: str,
 
 # --- Вердикты и приостановки пар набора (SPEC 01M3YCHVVEK14SK8GT4R0H7M2C) ---
 # Решения — в `orchestrator/models.py`; здесь только запросы. Таблицы
-# заведены `SCHEMA`/`migrate()`; `_ensure_pair_tables` — для соединений
-# мимо `db()` (БД в памяти юнит-тестов допуска набора), тем же литералом.
-
-
-def _ensure_pair_tables(conn: sqlite3.Connection) -> None:
-    conn.executescript(PAIR_SUSPENSION_DDL)
+# заводят `SCHEMA`/`migrate()` (`db()`), запросы DDL не исполняют: неявный
+# COMMIT `executescript` на чтении закрыл бы транзакцию вызывающего.
 
 
 def insert_pair_verdict(conn: sqlite3.Connection, role: str, model: str,
                         task_id: str, verdict: str) -> int:
     """Вердикт ревью задачи на паре «роль → модель»; возвращает `id`."""
-    _ensure_pair_tables(conn)
     cur = conn.execute(
         "INSERT INTO pair_verdicts (role, model, task_id, verdict, ts) "
         "VALUES (?,?,?,?,?)", (role, model, task_id, verdict, now()))
@@ -456,21 +450,18 @@ def insert_pair_verdict(conn: sqlite3.Connection, role: str, model: str,
 def pair_verdicts_after(conn: sqlite3.Connection, role: str, model: str,
                         after_id: int) -> list:
     """Вердикты пары с `id > after_id` по порядку записи."""
-    _ensure_pair_tables(conn)
     return conn.execute(
         "SELECT * FROM pair_verdicts WHERE role=? AND model=? AND id>? "
         "ORDER BY id", (role, model, after_id)).fetchall()
 
 
 def max_pair_verdict_id(conn: sqlite3.Connection) -> int:
-    _ensure_pair_tables(conn)
     row = conn.execute("SELECT MAX(id) AS top FROM pair_verdicts").fetchone()
     return row["top"] or 0
 
 
 def active_pair_suspension(conn: sqlite3.Connection, role: str, model: str):
     """Действующая (не снятая) приостановка пары; `None` — её нет."""
-    _ensure_pair_tables(conn)
     return conn.execute(
         "SELECT * FROM pair_suspensions WHERE role=? AND model=? "
         "AND resumed_ts IS NULL ORDER BY id DESC LIMIT 1",
@@ -481,7 +472,6 @@ def last_pair_resume_mark(conn: sqlite3.Connection, role: str,
                           model: str) -> int:
     """`resumed_after_verdict` последнего снятия приостановки пары; 0 —
     пару ни разу не снимали."""
-    _ensure_pair_tables(conn)
     row = conn.execute(
         "SELECT MAX(resumed_after_verdict) AS mark FROM pair_suspensions "
         "WHERE role=? AND model=? AND resumed_ts IS NOT NULL",
@@ -491,7 +481,6 @@ def last_pair_resume_mark(conn: sqlite3.Connection, role: str,
 
 def insert_pair_suspension(conn: sqlite3.Connection, role: str, model: str,
                            set_name: str, task_id: str, reason: str) -> int:
-    _ensure_pair_tables(conn)
     cur = conn.execute(
         "INSERT INTO pair_suspensions (role, model, set_name, task_id, "
         "reason, ts) VALUES (?,?,?,?,?,?)",
