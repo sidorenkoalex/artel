@@ -879,14 +879,28 @@ def in_role_environment(env=None) -> bool:
     """Распознаёт шаг роли в переданном или текущем окружении.
 
     Общий для провайдеров маркер `ARTEL_ROLE` ставит `role_env()`;
-    прежняя пара HOME/CLAUDE_CONFIG_DIR остаётся достаточной для шагов
-    claude без маркера (SPEC 01M1NSR5M5THYRC0RFWPMVE2DW, AC-15).
+    без маркера достаточно `HOME`, равного дому роли (SPEC
+    01M3XTF5506GF43HD51ECE230T, требование 2): дом роли переписывают оба
+    провайдера, а `CLAUDE_CONFIG_DIR` есть только у Claude, и шаг Codex со
+    снятым маркером прежней парой HOME/CLAUDE_CONFIG_DIR не распознавался.
+    Пара по-прежнему достаточна — её HOME совпадает с домом роли.
+
+    Признак отсекает ошибочный вызов, но не граница: процесс, сменивший и
+    `HOME`, и `ARTEL_ROLE`, его обходит (`docs/stack.md`, «Паритет
+    безопасности роли»).
     """
     if env is None:
         env = os.environ
     return (bool(env.get(config.ARTEL_ROLE_ENV)) or
-            (env.get("HOME") == str(config.ROLE_HOME) and
-             env.get("CLAUDE_CONFIG_DIR") == str(config.ROLE_CONFIG_DIR)))
+            _is_role_home(env.get("HOME")))
+
+
+def _is_role_home(home) -> bool:
+    """`home` — дом роли с точностью до абсолютного вида и завершающей
+    черты. Пустой `HOME` не роль: `abspath("")` дал бы текущий каталог."""
+    if not home:
+        return False
+    return os.path.abspath(home) == os.path.abspath(str(config.ROLE_HOME))
 
 
 def role_cwd_path(task_id: str, target: str) -> Path:
