@@ -115,7 +115,7 @@ def _wip_checkpoint(conn, task_id: str, role: str, message: str, action: str,
     wt = workspace.path(task_id)
     detail = ""
     if role == "developer":
-        committed, sha, _stray = _commit_worktree_change(
+        committed, sha, _stray, _error = _commit_worktree_change(
             conn, task_id, wt, message, exclude=f"tasks/{task_id}")
         if committed:
             detail = f"{message} (sha {sha})" if sha else message
@@ -304,14 +304,17 @@ def _test_author_checkpoint(conn, task_id: str, role: str, wt: Path,
                       f"{discard_detail} откачен — {discarded}")
     if not own:
         return ""
-    committed, sha, _stray = _commit_worktree_change(
+    committed, sha, _stray, error = _commit_worktree_change(
         conn, task_id, wt, message, exclude=f"tasks/{task_id}")
     if not committed:
+        # Без операции и текста git запись не объяснима по журналу (SPEC
+        # 01M3VFYP4RXBY0BG8D3A0B18HD, требование 4).
+        cause = error or "git не принял коммит"
         store.journal(conn, task_id, "orchestrator",
                       TEST_AUTHOR_NOT_COMMITTED_ACTION,
                       f"{task_id}: {', '.join(sorted(own))} роли {role} "
                       f"{discard_detail} не закоммичены в кодовую ветку — "
-                      f"git не принял коммит; файлы остались в worktree")
+                      f"{cause}; файлы остались в worktree")
         return ""
     detail = f"{message} (sha {sha})" if sha else message
     store.journal(conn, task_id, "orchestrator", action, detail)
@@ -610,7 +613,7 @@ def commit_success_checkpoint(conn, task_id: str, role: str) -> str:
     exclude = f"tasks/{task_id}"
     message = (f"{task_id}: код закоммичен пультом за роль developer — "
               "шаг завершён с незакоммиченным кодом")
-    committed, sha, _stray = _commit_worktree_change(
+    committed, sha, _stray, _error = _commit_worktree_change(
         conn, task_id, wt, message, exclude=exclude)
     if not committed:
         return ""
@@ -1020,7 +1023,7 @@ def commit_pull_checkpoint(conn, task_id: str, wt: Path) -> str:
     что `auto._run_paused_refusal`), не по возврату этой функции.
     """
     message = f"{task_id}: WIP-чекпоинт перед подтяжкой main"
-    committed, sha, _stray = _commit_worktree_change(
+    committed, sha, _stray, _error = _commit_worktree_change(
         conn, task_id, wt, message, exclude=f"tasks/{task_id}",
         refuse_on_stray=True)
     if not committed:
@@ -1094,14 +1097,91 @@ def _stray_staged_paths(wt: Path, zones: list[str]) -> list[str] | None:
     return stray
 
 
+# Действие журнала «git отказал коммиту пульта» (SPEC
+# 01M3VFYP4RXBY0BG8D3A0B18HD, требование 3): ненулевой код git на операции
+# коммита пульта, кроме «нечего коммитить». Публичное имя — его же ищет
+# `pult_commit_failed_paths`, по нему `fsm._dirty_refuses` отличает
+# незакоммиченный результат шага от прочей грязи worktree.
+PULT_COMMIT_GIT_FAILED_ACTION = "коммит пульта не принят git"
+
+# Действия журнала успешного коммита кода пультом — после любого из них
+# прежний отказ git (`PULT_COMMIT_GIT_FAILED_ACTION`) уже не о текущем
+# результате шага.
+_PULT_COMMIT_DONE_ACTIONS = (
+    "код закоммичен пультом за роль",
+    "долгоживущие тесты закоммичены пультом за роль",
+    "WIP-чекпоинт после таймаута шага",
+    "WIP-чекпоинт после аварийного завершения шага",
+    "WIP-чекпоинт pause --now",
+    "WIP-чекпоинт перед подтяжкой main",
+)
+
+
+def _journal_git_failure(conn, task_id: str, operation: str, res) -> str:
+    """Запись `PULT_COMMIT_GIT_FAILED_ACTION` с именем операции git и его
+    собственным текстом ошибки; возврат — та же фраза об отказе для
+    вызывающего (test_author вставляет её в свою запись, требование 4)."""
+    output = " ".join(((res.stderr or "") + " " + (res.stdout or "")).split())
+    error = (f"git {operation} (rc={res.returncode}): "
+             f"{output or 'git не вывел текста ошибки'}")
+    store.journal(conn, task_id, "orchestrator", PULT_COMMIT_GIT_FAILED_ACTION,
+                  f"{task_id}: {error}; изменения оставлены в worktree "
+                  f"незакоммиченными, ничего не откачено")
+    return error
+
+
+def pult_commit_failed_paths(conn, task_id: str) -> list[str] | None:
+    """Незакоммиченные пути результата шага после отказа git на коммите
+    пульта (SPEC 01M3VFYP4RXBY0BG8D3A0B18HD, требование 3): пусто — отказа
+    git не было, после него пульт уже закоммитил код, либо worktree по
+    зонам задачи чист (роль докоммитила сама). `None` — git не ответил на
+    статус worktree.
+
+    Сверка только при свежей записи отказа: иначе грязь worktree вне
+    зон (`STRAY_WORKTREE_FILES_ACTION` — пульт её сознательно не
+    коммитит) или чужой WIP роли без мандата кода сделали бы любой
+    переход отказом. Каталог `tasks/<id>/` и посторонние вне зон не в
+    счёт — их пульт не коммитит в кодовую ветку и при успехе."""
+    failed_at = done_at = 0
+    for row in store.task_steps(conn, task_id):
+        if row["action"] == PULT_COMMIT_GIT_FAILED_ACTION:
+            failed_at = row["id"]
+        elif row["action"] in _PULT_COMMIT_DONE_ACTIONS:
+            done_at = row["id"]
+    if failed_at <= done_at:
+        return []
+    wt = workspace.path(task_id)
+    status = gitcmd.in_repo(wt, "status", "--porcelain=v1",
+                            "--untracked-files=all")
+    if status is None or status.returncode != 0:
+        return None
+    zones = _zone_paths(conn, task_id)
+    own_dir = task_dir_zone(task_id)
+    paths = []
+    for line in status.stdout.splitlines():
+        rel = line[3:].split(" -> ")[-1].strip().strip('"')
+        if not rel or zone_lock._paths_overlap(rel, own_dir):
+            continue
+        if zones and not any(zone_lock._paths_overlap(rel, z) for z in zones):
+            continue
+        paths.append(rel)
+    return paths
+
+
 def _commit_worktree_change(conn, task_id: str, wt: Path, message: str,
                             exclude: str | None = None,
                             refuse_on_stray: bool = False
-                            ) -> tuple[bool, str, list[str]]:
-    """(закоммичено, sha, посторонние) — `add -A` + фильтр по зонам задачи
-    + `commit` служебной идентичностью В ЗАДАННОМ worktree;
-    `закоммичено=False` — нечего коммитить, git не ответил на любом из
+                            ) -> tuple[bool, str, list[str], str]:
+    """(закоммичено, sha, посторонние, отказ git) — `add -A` + фильтр по
+    зонам задачи + `commit` служебной идентичностью В ЗАДАННОМ worktree;
+    `закоммичено=False` — нечего коммитить, git отказал на любом из
     шагов, либо (`refuse_on_stray=True`) найден посторонний путь.
+
+    Отказ git (ненулевой код, кроме «нечего коммитить») не молчит (SPEC
+    01M3VFYP4RXBY0BG8D3A0B18HD, требование 3): запись
+    `PULT_COMMIT_GIT_FAILED_ACTION` с операцией и текстом git, та же фраза
+    — четвёртым элементом возврата (пусто — отказа не было). Изменения
+    остаются в worktree: ни отката, ни повторной попытки здесь нет.
 
     Общая обвязка всех четырёх WIP-чекпоинтов (SPEC
     01M290PVYG2VJK6442H5BAX9MA, AC-1) — `commit_timeout_checkpoint`/
@@ -1132,31 +1212,34 @@ def _commit_worktree_change(conn, task_id: str, wt: Path, message: str,
     """
     added = gitcmd.in_repo(wt, "add", "-A")
     if added.returncode != 0:
-        return False, "", []
+        return False, "", [], _journal_git_failure(conn, task_id, "add", added)
     if exclude is not None:
         reset = gitcmd.in_repo(wt, "reset", "-q", "--", exclude)
         if reset.returncode != 0:
-            return False, "", []
+            return False, "", [], _journal_git_failure(conn, task_id, "reset",
+                                                       reset)
     stray = _stray_staged_paths(wt, _zone_paths(conn, task_id))
     if stray is None:
-        return False, "", []
+        return False, "", [], ""
     if stray:
         store.journal(conn, task_id, "orchestrator",
                       STRAY_WORKTREE_FILES_ACTION,
                       f"{STRAY_WORKTREE_FILES_ACTION}: {', '.join(stray)}")
         if refuse_on_stray:
             gitcmd.in_repo(wt, "reset", "-q")
-            return False, "", stray
+            return False, "", stray, ""
         unstage = gitcmd.in_repo(wt, "reset", "-q", "--", *stray)
         if unstage.returncode != 0:
-            return False, "", stray
+            return False, "", stray, _journal_git_failure(conn, task_id,
+                                                          "reset", unstage)
     staged = gitcmd.in_repo(wt, "diff", "--cached", "--quiet")
     if staged.returncode != 1:  # 0 — нечего коммитить, иное — git не ответил
-        return False, "", stray
+        return False, "", stray, ""
     commit = gitcmd.in_repo(
         wt, "-c", f"user.name={fixation.FIXATION_AUTHOR_NAME}",
         "-c", f"user.email={fixation.FIXATION_AUTHOR_EMAIL}",
         "commit", "-q", "-m", message)
     if commit.returncode != 0:
-        return False, "", stray
-    return True, gitcmd.head_sha(wt), stray
+        return False, "", stray, _journal_git_failure(conn, task_id, "commit",
+                                                      commit)
+    return True, gitcmd.head_sha(wt), stray, ""

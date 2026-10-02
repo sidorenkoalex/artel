@@ -19,8 +19,9 @@ from pathlib import Path
 
 from scripts import guard
 
-from . import (acceptance, artifact_source, artifacts, budget, ci, config,
-              cycle_hint, fixation, github_adapter, gitcmd, lease, pull, repo_context,
+from . import (acceptance, artifact_source, artifacts, budget, checkpoint, ci,
+              config, cycle_hint, fixation, github_adapter, gitcmd, lease, pull,
+              repo_context,
               review, store, targets, workspace, yamlmini)
 from .pull import _merge_conflict_note
 
@@ -274,6 +275,33 @@ def guard_refuses(conn, task_id: str, path: Path, text: str | None = None) -> bo
     return True
 
 
+def _uncommitted_step_result_refuses(conn, task_id: str) -> bool:
+    """Отказ по незакоммиченному результату шага после отказа git на
+    коммите пульта; True — переход отменён (SPEC
+    01M3VFYP4RXBY0BG8D3A0B18HD, требования 3-4). Только догфуд — target
+    сверяет вызывающий.
+
+    Общая для `_dirty_refuses` (`spec_writing`/`review`/`in_dev`) и выхода
+    из `tests_writing` (`_tests_writing_ac_state`): отказ git у test_author
+    оставляет его долгоживущие файлы вне кодовой ветки, и требование 4
+    («срабатывает требование 3») держит задачу на месте и там.
+    """
+    uncommitted = checkpoint.pult_commit_failed_paths(conn, task_id)
+    if uncommitted is None or uncommitted:
+        paths = (", ".join(uncommitted) if uncommitted
+                 else "git не ответил на статус worktree")
+        detail = (f"результат шага не закоммичен в кодовую ветку: git отказал "
+                  f"коммиту пульта (запись журнала «"
+                  f"{checkpoint.PULT_COMMIT_GIT_FAILED_ACTION}»), в worktree "
+                  f"остались {paths}; устрани причину отказа git и повтори "
+                  f"шаг роли либо закоммить результат вручную, затем advance")
+        store.journal(conn, task_id, "fsm",
+                      "переход отклонён: результат шага не закоммичен", detail)
+        print(f"[{task_id}] переход отклонён: {detail}")
+        return True
+    return False
+
+
 def _dirty_refuses(conn, task_id: str, target: str, artifact_name: str) -> bool:
     """Отказ по грязной копии артефакта-условия перехода; True — переход
     отменён (SPEC T033, требование 1 — симметрия с `approve`).
@@ -291,14 +319,23 @@ def _dirty_refuses(conn, task_id: str, target: str, artifact_name: str) -> bool:
     из `store.set_state`) — до перехода он закономерно не закоммичен,
     это не забытый коммит роли (та ADR-0003 §4 workspace вообще не
     коммитит сама), и наивная сверка отказывала бы там всегда.
+
+    Код результата шага коммитит пульт (`checkpoint.commit_success_
+    checkpoint`), не роль (SPEC 01M3VFYP4RXBY0BG8D3A0B18HD, требование 3):
+    после отказа git на этом коммите незакоммиченный код worktree —
+    отказ перехода с названием результата шага и отсылкой к записи
+    журнала об отказе git, а не к долгу роли коммитить.
     """
     if target != config.DEFAULT_TARGET:
         return False
+    if _uncommitted_step_result_refuses(conn, task_id):
+        return True
     current, clean = fixation.read(task_id, target)
     if not current or clean:
         return False
-    detail = (f"{artifact_name} не закоммичен — роль обязана коммитить "
-              f"артефакты (скил conventions-core); закоммить и повтори advance")
+    detail = (f"{artifact_name} не закоммичен — результат шага остался в "
+              f"рабочей копии артефактов незакоммиченным; разбери её "
+              f"(git status) и повтори advance")
     store.journal(conn, task_id, "fsm",
                   "переход отклонён: рабочая копия артефактов грязная", detail)
     print(f"[{task_id}] переход отклонён: {detail}")
@@ -448,7 +485,17 @@ def _tests_writing_ac_state(conn, task_id: str, branch: str, tdir: Path,
     ветки ЭТОЙ задачи (файлы с её префиксом, SPEC 01M3N3Z1ZHTGMSQZ4SNRYNJ2SJ,
     требование 5, Р3): их методы `test_ac<n>_…` покрывают критерии; прочие
     файлы `tests/`, в том числе одноимённые методы смерженных задач, — нет.
+
+    Первым — сверка незакоммиченного результата шага (SPEC
+    01M3VFYP4RXBY0BG8D3A0B18HD, требование 4): после отказа git на коммите
+    пульта долгоживущие файлы test_author лежат в worktree, а не на
+    кодовой ветке, откуда их читает `long_lived_sources`, — считать по
+    ветке покрытие AC значило бы пропустить задачу в `in_dev` мимо лока
+    либо отказать с ложной причиной «не все критерии покрыты».
     """
+    if (store.task_target(conn, task_id) == config.DEFAULT_TARGET
+            and _uncommitted_step_result_refuses(conn, task_id)):
+        return None
     extra_tested, extra_markers = guard.scan_ac_content(list(long_lived_sources))
     if not gitcmd.on_foreign_branch(branch):
         tested, markers = guard.scan_acceptance_tests(tdir)
