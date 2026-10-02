@@ -138,6 +138,15 @@ lease не берётся (у задачи на паузе идущий шаг �
   Полный набор `tests/` в шаге не запускался (решение Оператора 05.09) —
   его гоняет CI.
 
+Возврат из verifying (CI красный, `tests/test_multitarget.py::SqlOnlyInStoreTest::test_no_sql_outside_store`):
+лексическая проверка ловит ключевые слова SQL в докстрингах вне `store.py`.
+Закрыт класс, не экземпляр: кроме названного `orchestrator/catalog.py:464`
+(«тем же INSERT») тот же тест ловил `orchestrator/fsm.py:1200` («одним
+UPDATE» в `cmd_set_models`). Оба докстринга переформулированы ссылкой на
+`store.insert_task`/`store.update_task`; код и тесты не менялись.
+`tests/test_multitarget.py` + долгоживущий файл задачи +
+`tests/test_task_model_set_units.py` — 74 passed; карта регенерирована.
+
 ## Расширение зон
 
 Пути: orchestrator/auto.py
