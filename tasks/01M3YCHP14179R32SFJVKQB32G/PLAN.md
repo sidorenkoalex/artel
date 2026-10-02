@@ -243,3 +243,13 @@ d6984ceb) снята ответом Оператора ANSWER-1, вариант 
   Оператора и механика противоречат; падения, зависящие от окружения
   роли (`main_ci`, `main_ci_line`, `liveness`), делают пачечный прогон
   в шаге неокончательным.
+
+## Расширение зон
+
+Пути: orchestrator/store.py
+
+Основание: мандат ANSWER-2/ANSWER-3 («Расширение зон разрешено:
+orchestrator/store.py») — инвариант «SQL только в store.py»
+(`tests/test_multitarget.py::SqlOnlyInStoreTest::test_no_sql_outside_store`)
+требует, чтобы чтение `canary_runs` для `models.py` жило функцией
+`store.all_canary_runs`.
