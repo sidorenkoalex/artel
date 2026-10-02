@@ -114,12 +114,11 @@ class _RefixationTest(RealPultGitTest):
         (self.task_dir() / "acceptance_tests").mkdir(parents=True, exist_ok=True)
         (self.task_dir() / "acceptance_tests" / "test_ac.py").write_text(
             text, encoding="utf-8")
-        # `fsm_advance.tests_writing` читает acceptance_tests/ с артефактной
-        # ветки пульта (`artifact_source.resolve`), не с диска репо
-        # фиксации — тот же приём, что и SPEC.md выше.
-        self._seed_artifact_branch(
-            f"tasks/{self.TASK}/acceptance_tests/test_ac.py", text,
-            f"{self.TASK}: acceptance_tests")
+        # В ссылку документов файл уносит следующий за этим коммит
+        # (`commit_as_role`/`commit_task_dir`) — отдельный коммит здесь лёг
+        # бы в ту же ссылку `refs/artifacts/<id>` (ADR-0021 п.3) ВНЕ окна
+        # шага роли, и перефиксация зависела бы от того, уложились ли оба
+        # коммита в одну секунду.
 
     def commit_as_role(self, message: str, role: str = "test_author") -> None:
         """Легитимный коммит роли ВНУТРИ шага — обрамлён теми же
