@@ -221,17 +221,16 @@ def _autogate_conditions(conn, task_id: str, t, acc_tdir: Path,
     """
     ok: list[str] = []
 
-    # Задача на наборе моделей автогейт не проходит, пока пробный период
-    # наборов (часть 3 деления) не смержен: приёмка любой такой задачи —
-    # ручной гейт Оператора (SPEC 01M3YCHS4F08VTV6XX10VF92H3, требование
-    # 10; ANSWER-1 п.3 родителя 01M3Y9YCKBFRJ8T9HSD40Z3AQN). Первым
-    # условием: остальные (полный набор tests/) решения не меняют, а
-    # прогон стоит минут.
-    model_set = models.task_set_name(t)
-    if model_set:
-        return ok, (f"автогейт: задача на наборе моделей {model_set} — "
-                    f"приёмка задачи с набором только ручная (решение "
-                    f"Оператора до пробного периода наборов)")
+    # Пробный период набора (SPEC 01M3YCHVVEK14SK8GT4R0H7M2C, требования
+    # 1-2; ADR-0019 п.5): первые три настоящие задачи набора — ручной гейт
+    # Оператора, дальше — общие условия. Первым условием: остальные
+    # (полный набор tests/) решения не меняют, а прогон стоит минут.
+    try:
+        trial = models.set_trial_reason(conn, t)
+    except models.ModelsError as exc:
+        return ok, f"автогейт: {exc}"
+    if trial is not None:
+        return ok, f"автогейт: {trial}"
 
     branch, _ = artifact_source.resolve(conn, task_id)
     branch_sha = gitcmd.branch_head_sha(branch)
@@ -343,6 +342,9 @@ def _maybe_autogate_acceptance(conn, task_id: str, t, acc_tdir: Path,
         store.journal(conn, task_id, "fsm", "автогейт acceptance не пройден",
                       reason)
         print(f"[{task_id}] {reason} — жду Оператора")
+        # Отказ по вине роли приостанавливает пару набора виновной роли
+        # (SPEC 01M3YCHVVEK14SK8GT4R0H7M2C, требование 4).
+        models.suspend_on_autogate_refusal(conn, t, reason)
         return
     print(f"[{task_id}] {AUTOGATE_PASS_MESSAGE}")
     store.set_state(conn, task_id, "merge_gate", "autogate",

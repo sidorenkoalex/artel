@@ -140,6 +140,7 @@ workspace, tasks, knowledge, logs). БД одна на все проекты: с
   alert-ack --source <источник> --grep <подстрока> "<решение>" [--yes] |
   version | models |
   admit [--revoke] <роль> <модель> --basis "<основание>" |
+  pair-resume <роль> <модель> "<решение>" |
   canary --k <N> [--sha <sha>] [--set <имя>] [--template <имя>,<имя>] |
   canary pool-seal |
   prune [--execute] |
@@ -227,6 +228,13 @@ models.yaml) гоняет перед отправкой на дереве с у�
 боевых. `set-models <id> <набор>|--default` меняет или снимает набор
 задачи — только на гейтах `spec_gate`/`acceptance`/`merge_gate`, в
 `escalated` и у задачи на паузе (`pause`).
+
+`pair-resume <роль> <модель> "<решение>"` (SPEC
+01M3YCHVVEK14SK8GT4R0H7M2C) — снятие приостановки пары набора, которую
+пульт записал в БД сам (два возврата ревью подряд по паре developer либо
+отказ автогейта приёмки по вине роли). Решение уходит в журнал задачи,
+вызвавшей приостановку; пара без такой приостановки — отказ без записи.
+Ручную `state: приостановлена` в `model_sets.yaml` команда не снимает.
 
 `pin-update <sha>` (A7, Stage1) — обновляет пин запущенной версии:
 продвигает рабочее дерево и HEAD `config.ROOT` до `<sha>` main артели
@@ -1505,6 +1513,9 @@ def main() -> None:
         "models": lambda: models.cmd_models(),
         # `admit` пишет файл решений Оператора — вне белого списка ролей.
         "admit": lambda: models.cmd_admit(rest),
+        # `pair-resume` снимает приостановку пары пультом — вне белого
+        # списка ролей.
+        "pair-resume": lambda: models.cmd_pair_resume(rest),
         # `set-models` меняет набор моделей задачи — вне белого списка ролей.
         "set-models": lambda: _cmd_set_models(rest),
         "canary": lambda: _cmd_canary(rest),
