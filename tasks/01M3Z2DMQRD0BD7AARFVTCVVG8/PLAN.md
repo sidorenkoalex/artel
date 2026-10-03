@@ -70,6 +70,10 @@ schema_version: 5
    тестов снятой механики (коммит `b7edb0c8`, перечень — раздел
    «Тесты прежнего устройства»), регенерация карты.
 5. Приложение к `docs/invariants.md` (раздел «Приложение»).
+6. Возврат из verifying: фикстура `MergeSandbox.make_task` долгоживущего
+   `tests/test_01m3sf7dpfgez7vyeggxgtx49e_main_ci.py` кладёт документы в
+   `refs/artifacts/<id>` узлом записи части (а); прогон затронутых тестов
+   без `ARTEL_ROLE`; регенерация карты.
 
 ## Покрытие требований
 | Требование | Шаг |
@@ -100,13 +104,23 @@ schema_version: 5
 Прогоны в шаге: планка задачи — AC-1…AC-10 зелёные (39 passed); AC-11 по
 голове не прогоняется до автокоммита PLAN (читает PLAN из git) — вручную:
 приложение накладывается на дерево ветки, `tests/test_invariants.py` с ним
-— 66 passed, 215 subtests passed. Затронутые модули (87 файлов `tests/`,
-четырьмя порциями) — зелёные, кроме двух файлов, красных от окружения шага,
-а не от задачи: `tests/test_main_ci_line.py::FixesMainArgTest::
-test_flag_without_reason_is_refused` и 16 методов
-`tests/test_01m3sf7dpfgez7vyeggxgtx49e_main_ci.py` — оба отказывают
-«команда недоступна процессу роли developer» (CLI пульта, запущенный тестом
-из шага роли, видит `ARTEL_ROLE`); в CI вне шага роли не воспроизводится.
+— 66 passed, 215 subtests passed.
+
+Прежняя сдача ошибочно списала красноту `tests/test_main_ci_line.py` и
+`tests/test_01m3sf7dpfgez7vyeggxgtx49e_main_ci.py` на `ARTEL_ROLE` целиком;
+CI ветки (прогон 37083080729) показал, что два метода
+`MergeGuardAfterSnapshotTest` красные и без него — см. раздел «Возврат из
+verifying». Прогоны этой итерации — все без `ARTEL_ROLE` (признак снят из
+окружения процесса pytest), чтобы краснота окружения больше не маскировала
+краснота задачи: 140 файлов `tests/` (все изменённые веткой + все,
+упоминающие ссылку/ветку документов, снимок, фиксацию, гейт мержа, уборку
+или `artel.main`), четырьмя порциями — 2824 passed, 2 skipped, 1 failed.
+Единственный красный —
+`tests/test_liveness.py::TerminateProcessGroupTest::test_kills_the_leader_and_returns_a_positive_count`
+(`terminate_process_group` вернул 0): `orchestrator/liveness.py` и тест
+веткой не тронуты (`git diff main` пуст), красный и с `ARTEL_ROLE`, и без —
+`killpg` недоступен песочнице процесса шага; задача к нему отношения не
+имеет, в CI ветки он зелёный.
 
 ## Влияние на систему
 - Инварианты 25, 27, 28, 33, 34, 38 — смена источника на ссылку (таблица
@@ -138,7 +152,12 @@ test_flag_without_reason_is_refused` и 16 методов
   `tests/test_main_ci_line.py`), краснеют в шаге роли из-за унаследованного
   `ARTEL_ROLE` — разработчик не может отличить такую красноту от своей без
   ручного разбора; песочнице стоит снимать признак шага роли с окружения
-  дочернего CLI.
+  дочернего CLI. Цена урока подтверждена возвратом из verifying этой
+  задачи: под общей «ARTEL_ROLE-краснотой» 16 методов спрятались два
+  настоящих провала фикстуры. До такой правки песочницы
+  `skills/coding-standards.md` стоит требовать прогона затронутых тестов
+  с признаком, снятым из окружения pytest (`os.environ.pop('ARTEL_ROLE')`
+  в процессе pytest — `env -u` в шаге требует подтверждения).
 - Шаг developer задачи-монолита (25 модулей + до 62 файлов тестов) не
   уложился в один таймаут (WIP-чекпоинт `aa7cd419`); `pytest -n` в шаге
   роли не работает (воркеры xdist падают «node down»), и порционный прогон
@@ -179,7 +198,9 @@ RecoveryCheckTest::test_sha_mismatch_raises_an_incident_alert` (голова
 test_approve_on_escalated_with_matching_sha_returns_to_escalated_from` и
 `RunnerEscalationHintsIncludeShaTest::test_integrity_incident_hint_includes_full_fixed_sha`
 (подмена — коммитом в ссылку), `test_merge_gate_ci_wait.py` (подмена
-новых узлов гейта вместо `_publish_closing_snapshot_or_wait`) и остальные
+новых узлов гейта вместо `_publish_closing_snapshot_or_wait`),
+`tests/test_01m3sf7dpfgez7vyeggxgtx49e_main_ci.py::MergeSandbox.make_task`
+(документы — в `refs/artifacts/<id>`, возврат из verifying) и остальные
 файлы WIP `aa7cd419` (импорты, песочница `tests/sandbox.py`).
 
 ## Приложение: docs/invariants.md — инварианты 25, 27, 28, 33, 34, 38 (ADR-0021 п.12)
@@ -234,4 +255,33 @@ index cb1233a0..b674ca24 100644
    в часть (б) строкой бэклога Оператора.
 3. Инвариант 25: «(или грязная копия)» остаётся до части (б).
 
-Код и тесты после ответа не менялись.
+Код и тесты после ответа не менялись до возврата из verifying (ниже).
+
+## Возврат из verifying (CI ветки, прогон 37083080729)
+Причина: `tests/test_01m3sf7dpfgez7vyeggxgtx49e_main_ci.py::
+MergeGuardAfterSnapshotTest::test_ac1_clean_snapshot_merges_as_before` и
+`::test_ac1_guard_violation_after_snapshot_refuses_before_push` красные в CI.
+Фикстура `MergeSandbox.make_task` клала документы в ветку `artifact/<id>`, а
+гейт мержа после части (а) накладывает снимок из `refs/artifacts/<id>`:
+ссылки нет — накладывать и проверять guard'ом нечего, нарушение проходит,
+а файл чистого снимка не доезжает до origin/main. Воспроизведено локально
+без `ARTEL_ROLE` — ровно эти два метода, остальные 30 зелёные.
+
+Исправление — только подготовка, утверждения не тронуты: `make_task`
+пишет файлы снимка в `refs/artifacts/<id>` через
+`artifact_branch.commit_files` (тот же узел, что у пульта; он же
+отправляет ссылку в origin, с которым гейт мержа сверяет её до мержа —
+AC-6), после `store.insert_task`; ветка `artifact/<id>` больше не
+заводится; докстринги `MergeSandbox`/`make_task` приведены к ссылке.
+Импорт `artifact_branch` добавлен в файл.
+
+Проверка (без `ARTEL_ROLE`): файл целиком и `tests/test_main_ci_line.py` —
+32 passed, 4 subtests passed. Временная мутация (подмена
+`fsm_merge_gate._guard_all_violations` на «нарушений нет» в процессе
+pytest, файл не правился) — `test_ac1_guard_violation_after_snapshot_refuses_before_push`
+красный, т.е. тест снова ловит свою мутацию на ссылке документов.
+Остальные тесты, списанные прежней сдачей на `ARTEL_ROLE`
+(`tests/test_main_ci_line.py::FixesMainArgTest::test_flag_without_reason_is_refused`
+и прочие методы этого файла), без признака зелёные — их краснота
+действительно была от окружения шага. Широкий прогон без признака — раздел
+«Покрытие требований».
