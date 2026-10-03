@@ -947,5 +947,6 @@ def _check_code_head_long_lived(conn, t, task_id: str, docs_branch: str,
         sys.exit(f"[{task_id}] amend-tests: отказ — в worktree незакоммиченная "
                  f"правка {', '.join(dirty)}; --from-branch проверяет голову "
                  f"кодовой ветки — закоммить правку или верни файлы как были")
-    acc_tdir = acceptance.materialize_from_branch(task_id, docs_branch, wt_path)
-    _collect_and_run(conn, task_id, acc_tdir, wt_path, head_files, plank_files)
+    with acceptance.plank_in_code_copy(task_id, docs_branch, wt_path) as acc_tdir:
+        _collect_and_run(conn, task_id, acc_tdir, wt_path, head_files,
+                         plank_files)

@@ -112,7 +112,7 @@ class ClaudeProvider(RoleExecutorProvider):
     def cli_tool(self):
         return CliTool(CLI_NAME, CLI_MINIMUM, CLI_VERSION_COMMAND)
 
-    def command(self, model=None):
+    def command(self, model=None, docs_dir=None):
         """Argv шага роли: сборка без побочных эффектов, один источник
         истины для реального запуска (`runner._spawn_and_wait`), для
         зеро-арг `runner.role_cmd()` и для офлайн-сверки
@@ -138,6 +138,11 @@ class ClaudeProvider(RoleExecutorProvider):
         `--model` — довеском в конец списка, а не внутри него: флаг
         per-role, и порядок остальных флагов от его наличия не зависит
         (SPEC 01M2DTT96FS25SHXP0HDTWARQH, требование 3).
+
+        `--add-dir <каталог документов задачи>` (ADR-0021 пп. 2, 7, этап
+        1): рабочий каталог шага — рабочая копия кода, документы задачи
+        лежат вне её, и без флага `acceptEdits` не дал бы роли записать
+        свой артефакт. Флаг — до `--model`: тот остаётся последним.
         """
         from .. import config, runner
         cmd = [
@@ -158,6 +163,8 @@ class ClaudeProvider(RoleExecutorProvider):
             # каталога не резолвится — SPEC T069
             "--strict-mcp-config",
         ]
+        if docs_dir is not None:
+            cmd = cmd + ["--add-dir", str(docs_dir)]
         if model is not None:
             cmd = cmd + ["--model", model]
         return cmd

@@ -20,7 +20,8 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from orchestrator import checkpoint, config, fixation, gitcmd, runner, store, workspace  # noqa: E402
+from orchestrator import (artifact_branch, checkpoint, config, fixation,  # noqa: E402
+                          gitcmd, runner, store, workspace)
 from tests.test_git_fixation import RealPultGitTest  # noqa: E402
 
 
@@ -500,7 +501,8 @@ class CommitAbnormalCheckpointTest(_WorktreeCheckpointTest):
                                             config.DEFAULT_TARGET)
         self.assertEqual(materialized_path, self.wt)
         self.assertTrue(
-            (self.wt / "tasks" / self.TASK / "SPEC.md").exists(),
+            (artifact_branch.docs_dir(self.TASK, config.DEFAULT_TARGET)
+             / "SPEC.md").exists(),
             "role_cwd обязан материализовать SPEC.md из артефактной ветки")
 
         checkpoint.commit_abnormal_checkpoint(
@@ -637,7 +639,8 @@ class CommitPauseNowCheckpointTest(_WorktreeCheckpointTest):
                                             config.DEFAULT_TARGET)
         self.assertEqual(materialized_path, self.wt)
         self.assertTrue(
-            (self.wt / "tasks" / self.TASK / "SPEC.md").exists(),
+            (artifact_branch.docs_dir(self.TASK, config.DEFAULT_TARGET)
+             / "SPEC.md").exists(),
             "role_cwd обязан материализовать SPEC.md из артефактной ветки")
 
         checkpoint.commit_pause_now_checkpoint(
@@ -665,7 +668,8 @@ class RoleCwdMaterializationSurvivesTimeoutCheckpointTest(_WorktreeCheckpointTes
                                             config.DEFAULT_TARGET)
         self.assertEqual(materialized_path, self.wt)
         self.assertTrue(
-            (self.wt / "tasks" / self.TASK / "SPEC.md").exists(),
+            (artifact_branch.docs_dir(self.TASK, config.DEFAULT_TARGET)
+             / "SPEC.md").exists(),
             "role_cwd обязан материализовать SPEC.md из артефактной ветки")
         # Настоящий WIP вне tasks/<id>/, чтобы чекпоинт реально что-то
         # закоммитил — иначе тест доказывал бы только «ничего не

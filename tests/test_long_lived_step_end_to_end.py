@@ -124,7 +124,7 @@ class _StepSandbox(_WorktreeCheckpointTest):
             if not is_claude_call(cmd):
                 return subprocess.Popen(cmd, *args, **kwargs)
             cwd = Path(kwargs.get("cwd") or self.wt)
-            plank = cwd / "tasks" / self.TASK / "acceptance_tests"
+            plank = artifact_branch.docs_dir(self.TASK, config.DEFAULT_TARGET) / "acceptance_tests"
             plank.mkdir(parents=True, exist_ok=True)
             (plank / "__init__.py").write_text("", encoding="utf-8")
             (cwd / rel).parent.mkdir(parents=True, exist_ok=True)

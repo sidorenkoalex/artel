@@ -52,8 +52,11 @@ class CommitStepArtifactsTest(RealPultGitTest):
         реальный `runner.role_cwd()` вернёт для self/артели (T045,
         синхронизировано `checkpoint._commit_external_step_artifacts`
         коммитом `9a984c3`/PLAN.md «Эскалация»). ОТДЕЛЬНО от репо
-        фиксации `self.task_dir()` (`config.PROJECTS/artel/tasks/<id>/`)."""
-        d = workspace.path(self.TASK) / "tasks" / self.TASK
+        фиксации `self.task_dir()` (`config.PROJECTS/artel/tasks/<id>/`).
+
+        С ADR-0021 (этап 1) источник автокоммита — каталог документов
+        задачи (`artifact_branch.docs_dir`), куда роль пишет документы."""
+        d = artifact_branch.docs_dir(self.TASK, config.DEFAULT_TARGET)
         d.mkdir(parents=True, exist_ok=True)
         return d
 
@@ -103,7 +106,7 @@ class CommitStepArtifactsTest(RealPultGitTest):
         # ветка/рабочий каталог целевого свободны от артефактов задачи).
         # `workspace_task_dir()` сама создаёт каталог (`mkdir`) — здесь
         # путь вычислен напрямую, чтобы не воссоздать убранное.
-        raw_dir = workspace.path(self.TASK) / "tasks" / self.TASK
+        raw_dir = artifact_branch.docs_dir(self.TASK, config.DEFAULT_TARGET)
         self.assertFalse(raw_dir.exists())
 
     def test_refixation_keeps_check_integrity_clean_after_the_commit(self):

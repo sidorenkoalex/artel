@@ -46,8 +46,10 @@ class CommitExternalStepArtifactsTest(RealGitSandbox):
         store.insert_task(conn, self.TASK, "Задача внешнего target",
                           "in_dev", f"task/{self.TASK.lower()}-x", TARGET,
                           config.DEFAULT_BUDGET_USD)
-        self.workspace_root = config.PROJECTS / TARGET / "workspace"
-        self.task_dir = self.workspace_root / "tasks" / self.TASK
+        # Роль пишет документы в каталог документов задачи (ADR-0021,
+        # этап 1) — источник автокоммита шага.
+        self.workspace_root = artifact_branch.docs_root(TARGET)
+        self.task_dir = artifact_branch.docs_dir(self.TASK, TARGET)
         self.task_dir.mkdir(parents=True)
 
     def write(self, rel: str, text: str) -> None:
@@ -291,8 +293,8 @@ class CommitExternalStepArtifactsGitignoreFilterTest(RealGitSandbox):
         store.insert_task(conn, self.TASK, "Задача внешнего target",
                           "in_dev", f"task/{self.TASK.lower()}-x", TARGET,
                           config.DEFAULT_BUDGET_USD)
-        self.workspace_root = config.PROJECTS / TARGET / "workspace"
-        self.task_dir = self.workspace_root / "tasks" / self.TASK
+        self.workspace_root = artifact_branch.docs_root(TARGET)
+        self.task_dir = artifact_branch.docs_dir(self.TASK, TARGET)
         self.task_dir.mkdir(parents=True)
 
     def write(self, rel: str, content) -> None:

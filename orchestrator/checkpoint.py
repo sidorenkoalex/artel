@@ -120,7 +120,7 @@ def _wip_checkpoint(conn, task_id: str, role: str, message: str, action: str,
         if committed:
             detail = f"{message} (sha {sha})" if sha else message
             store.journal(conn, task_id, "orchestrator", action, detail)
-            store.record_fixation(conn, task_id)
+            _record_step_fixation(conn, task_id)
     elif role == "test_author":
         detail = _test_author_checkpoint(conn, task_id, role, wt, message,
                                          action, discard_action, discard_detail)
@@ -318,7 +318,7 @@ def _test_author_checkpoint(conn, task_id: str, role: str, wt: Path,
         return ""
     detail = f"{message} (sha {sha})" if sha else message
     store.journal(conn, task_id, "orchestrator", action, detail)
-    store.record_fixation(conn, task_id)
+    _record_step_fixation(conn, task_id)
     return detail
 
 
@@ -621,7 +621,7 @@ def commit_success_checkpoint(conn, task_id: str, role: str) -> str:
     detail = f"{summary} (sha {sha})" if sha else summary
     store.journal(conn, task_id, "orchestrator", "код закоммичен пультом за роль",
                   detail)
-    store.record_fixation(conn, task_id)
+    _record_step_fixation(conn, task_id)
     return detail
 
 
@@ -880,6 +880,54 @@ def _step_artifact_deletion_candidates(conn, task_id: str, role: str, t,
     return removed
 
 
+def _same_as_ref(branch: str, files: dict[str, bytes]) -> bool:
+    """Каждый файл `files` совпадает байтами с тем же путём головы ссылки
+    `branch`. Нечитаемый путь (нет в ссылке, git не ответил) или
+    нетекстовое содержимое — расхождение: коммит решает узел записи."""
+    for rel, content in files.items():
+        text, _ = gitcmd.show(branch, rel)
+        if text is None or text.encode("utf-8") != content:
+            return False
+    return True
+
+
+def _docs_ref_moved_past_pult(conn, task_id: str) -> str | None:
+    """Текст расхождения, если голова ссылки документов разошлась с
+    зафиксированным sha (`tasks.fixed_sha`) к концу шага; `None` — ссылка
+    там, где её оставил пульт, или сверять не с чем (фиксации нет, git не
+    ответил — та же деградация, что у `fixation.check_integrity`).
+
+    Каждая запись пульта в ссылку перефиксирует её сама; расхождение к
+    концу шага — запись мимо пульта, то есть ролью (ADR-0021 п.7,
+    ANSWER-1 задачи 01M409YKM3QE5KVRGV0G94F5ZC). Автокоммит и чекпоинты
+    шага такую голову не перефиксируют: иначе подмена стала бы
+    зафиксированным состоянием, а сверка на старте следующего шага её бы
+    не увидела."""
+    from . import artifact_branch
+    fixed = store.get_task(conn, task_id)["fixed_sha"]
+    head = artifact_branch.ref_head(task_id)
+    if not fixed or not head or head == fixed:
+        return None
+    return f"зафиксировано {fixed}, голова ссылки {head}"
+
+
+DOCS_REF_MOVED_ACTION = "ссылка документов сдвинута мимо пульта"
+CODE_COPY_DOCS_DROPPED_ACTION = "документы задачи убраны из рабочей копии кода"
+
+
+def _record_step_fixation(conn, task_id: str) -> None:
+    """`store.record_fixation` чекпоинта шага — кроме случая, когда роль
+    сдвинула ссылку документов мимо пульта (`_docs_ref_moved_past_pult`):
+    тогда фиксация остаётся прежней, расхождение увидит сверка на старте
+    следующего шага."""
+    moved = _docs_ref_moved_past_pult(conn, task_id)
+    if moved is not None:
+        store.journal(conn, task_id, "orchestrator", DOCS_REF_MOVED_ACTION,
+                      f"фиксация не обновлена: {moved}")
+        return
+    store.record_fixation(conn, task_id)
+
+
 def _commit_step_artifacts_to_branch(conn, task_id: str, files: dict[str, bytes],
                                      removed: list[str], message: str,
                                      task_dir: Path) -> str:
@@ -904,6 +952,12 @@ def _commit_step_artifacts_to_branch(conn, task_id: str, files: dict[str, bytes]
     """
     from . import artifact_branch
     if not files and not removed:
+        return ""
+    # Коммит только при изменении (ADR-0021, этап 1): выкладка каталога
+    # документов, не тронутая ролью, не заводит пустой коммит и не
+    # перефиксирует ссылку.
+    if not removed and _same_as_ref(artifact_branch.branch_name(task_id), files):
+        shutil.rmtree(task_dir, ignore_errors=True)
         return ""
     commit_sha = artifact_branch.commit_files(task_id, files, message,
                                               remove=removed)
@@ -947,15 +1001,36 @@ def _commit_external_step_artifacts(conn, task_id: str, role: str,
     несёт пометку «WIP после таймаута», чтобы читатель истории отличил
     «роль успела сама» от «оркестратор подобрал WIP после обрыва».
     """
+    from . import acceptance, artifact_branch
     if target == config.DEFAULT_TARGET:
-        workspace_root = workspace.path(task_id)
+        code_root = workspace.path(task_id)
     else:
-        workspace_root = config.PROJECTS / target / "workspace"
+        code_root = config.PROJECTS / target / "workspace"
+    # Документы задачи в рабочей копии кода вне прогона не лежат (ADR-0021,
+    # этап 1): копия планки, выложенная ролью для своего прогона, или
+    # документ, записанный туда по ошибке, убирается и в ссылку не идёт.
+    stray = code_root / "tasks" / task_id
+    if stray.is_dir():
+        names = sorted(p.relative_to(stray).as_posix()
+                       for p in stray.rglob("*") if p.is_file())
+        acceptance.drop_from_code_copy(task_id, code_root)
+        if names:
+            store.journal(conn, task_id, "orchestrator",
+                          CODE_COPY_DOCS_DROPPED_ACTION,
+                          f"{stray}: {', '.join(names)}")
+    workspace_root = artifact_branch.docs_root(target)
     task_dir = workspace_root / "tasks" / task_id
     if not task_dir.is_dir():
         return ""
+    moved = _docs_ref_moved_past_pult(conn, task_id)
+    if moved is not None:
+        # Каталог документов не переносится и остаётся на диске: сверка на
+        # старте следующего шага остановит задачу инцидентом целостности.
+        store.journal(conn, task_id, "orchestrator", DOCS_REF_MOVED_ACTION,
+                      f"автокоммит каталога документов {task_dir} не "
+                      f"выполнен: {moved}")
+        return ""
 
-    from . import artifact_branch
     branch = artifact_branch.branch_name(task_id)
     own_commit_marker = f"{task_id}: артефакты шага {role} (автокоммит оркестратора"
     message = (f"{own_commit_marker}, WIP после таймаута)" if timeout

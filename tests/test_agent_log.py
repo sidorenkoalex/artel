@@ -26,7 +26,8 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from orchestrator import (agent_log, catalog, config, gitcmd,  # noqa: E402
+from orchestrator import (agent_log, artifact_branch, catalog, config,  # noqa: E402
+                          gitcmd,
                           providers, runner, spend, store)
 from tests.sandbox import (DeveloperBriefTmpRootTest as TmpRootTest,  # noqa: E402
                            FakeProc, FakeStream, capture_new_task_id, event,
@@ -466,7 +467,7 @@ class CmdRunLoggingTest(TmpRootTest):
         # здесь — про лог/журнал шага, не про факт отказа без артефакта).
         # Класс держит один и тот же state='in_dev' на всём протяжении —
         # сидирование один раз в setUp достаточно.
-        tdir = config.WORKTREES / self.TASK / "tasks" / self.TASK
+        tdir = artifact_branch.docs_dir(self.TASK, config.DEFAULT_TARGET)
         tdir.mkdir(parents=True, exist_ok=True)
         (tdir / "PLAN.md").write_text("маркер\n", encoding="utf-8")
 

@@ -14,6 +14,8 @@ if/elif `orchestrator/fsm.py::_cmd_advance`, перенесённое без и�
 (`orchestrator/answer.py`, тесты) продолжает обращаться к ним как к
 `fsm_advance.<имя>`, не подозревая о переносе.
 """
+import contextlib
+
 from scripts import guard
 
 from . import (acceptance, artifact_source, artifacts, budget, ci, config,
@@ -187,14 +189,16 @@ def _review_approved(conn, task_id: str, t, tdir, target: str, state: str,
     # что и прогон приёмки в `in_dev` выше (worktree self-target либо
     # workspace внешнего, SPEC 01M1RNZ6V7TTTTYAHBMF8JBQQS).
     acc_tdir = tdir
-    if target != config.DEFAULT_TARGET:
-        code_dir = config.PROJECTS / target / "workspace"
-        code_dir.mkdir(parents=True, exist_ok=True)
-        acc_tdir = acceptance.materialize_from_branch(task_id, branch, code_dir)
-    elif workspace.on_task_branch(task_id, t["branch"]) is True:
-        acc_tdir = workspace.path(task_id) / "tasks" / task_id
-    fsm_autogate._maybe_autogate_acceptance(conn, task_id, t, acc_tdir,
-                                           t["reviewed_iter"])
+    with contextlib.ExitStack() as cleanup:
+        if target != config.DEFAULT_TARGET:
+            code_dir = config.PROJECTS / target / "workspace"
+            code_dir.mkdir(parents=True, exist_ok=True)
+            acc_tdir = cleanup.enter_context(
+                acceptance.plank_in_code_copy(task_id, branch, code_dir))
+        elif workspace.on_task_branch(task_id, t["branch"]) is True:
+            acc_tdir = workspace.path(task_id) / "tasks" / task_id
+        fsm_autogate._maybe_autogate_acceptance(conn, task_id, t, acc_tdir,
+                                               t["reviewed_iter"])
     return False
 
 
@@ -406,7 +410,13 @@ def tests_writing(conn, task_id: str, t, tdir, target: str, state: str) -> bool:
     if code_diff is not None:
         gates.append(lambda: _tests_writing_manifest_gate(
             conn, task_id, t["branch"], long_lived_paths))
-    if _run_gates(conn, task_id, gates):
+    # Планка в рабочей копии кода — только на время сухого сбора
+    # (ADR-0021, этап 1): убирается при любом исходе гейтов.
+    try:
+        refused = _run_gates(conn, task_id, gates)
+    finally:
+        acceptance.drop_from_code_copy(task_id, run_cwd)
+    if refused:
         return False
     store.set_state(conn, task_id, "in_dev", "fsm", expected_state=state,
                     detail="приёмочные тесты готовы — трассируемость AC "

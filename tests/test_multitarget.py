@@ -23,7 +23,8 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from orchestrator import (budget, catalog, config, gitcmd, projects,  # noqa: E402
+from orchestrator import (artifact_branch, budget, catalog, config, gitcmd,  # noqa: E402
+                          projects,
                           runner, spend, store, targets)
 from tests.sandbox import (FakeProc, TmpRootTest, capture,  # noqa: E402
                            capture_new_task_id, disk_backed_show, fake_git,
@@ -833,8 +834,9 @@ class RoleEnvTest(TmpRootTest):
         # которое проверяет этот тест. `workspace.ensure` этого класса
         # подменена на `self.root` (см. `_MultitargetTmpRootTest.setUp`) —
         # рабочий каталог роли здесь `config.TASKS/<id>/`, не `config.
-        # WORKTREES/<id>/tasks/<id>/`.
-        tdir = config.TASKS / task_id
+        # WORKTREES/<id>/tasks/<id>/`. С ADR-0021 (этап 1) роль пишет его в
+        # каталог документов задачи (`artifact_branch.docs_dir`).
+        tdir = artifact_branch.docs_dir(task_id, config.DEFAULT_TARGET)
         tdir.mkdir(parents=True, exist_ok=True)
         (tdir / "PLAN.md").write_text("маркер\n", encoding="utf-8")
 

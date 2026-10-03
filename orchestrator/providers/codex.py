@@ -215,6 +215,9 @@ CONFIG_OVERRIDES = (
 # Подкоманда шага и позиционный аргумент «промпт со стандартного входа».
 EXEC_SUBCOMMAND = "exec"
 STDIN_PROMPT = "-"
+# Флаг подкоманды `exec`: каталог, открытый на запись рядом с рабочим
+# (каталог документов задачи, ADR-0021 п.2).
+ADD_DIR_FLAG = "--add-dir"
 
 # Подкоманда проверки подписочного входа и её потолок ожидания. Таймаут
 # нужен не теоретически: `codex login status` при `keyring` обращается к
@@ -366,7 +369,7 @@ class CodexProvider(RoleExecutorProvider):
     def cli_tool(self):
         return CliTool(CLI_NAME, CLI_MINIMUM, CLI_VERSION_COMMAND)
 
-    def command(self, model=None):
+    def command(self, model=None, docs_dir=None):
         """Argv шага роли (требования 2-3).
 
         Порядок обязателен и проверяется тестом: 0.155.1 разбирает
@@ -396,6 +399,12 @@ class CodexProvider(RoleExecutorProvider):
         Промпт замыкает список позиционным `-`: `codex exec -` читает
         его со стандартного входа, и текст задачи не уезжает в argv
         (а значит, и в вывод `ps` машины Оператора).
+
+        `--add-dir <каталог документов задачи>` — флаг ПОДКОМАНДЫ `exec`
+        («Additional directories that should be writable alongside the
+        primary workspace», ADR-0021 пп. 2, 7, этап 1): песочница
+        `workspace-write` открывает на запись рабочий каталог шага (код),
+        документы задачи лежат вне его.
         """
         from .. import runner
         cmd = [runner.declared_tool_path(CLI_NAME)]
@@ -407,6 +416,8 @@ class CodexProvider(RoleExecutorProvider):
         # --- подкоманда и её флаги
         cmd += [EXEC_SUBCOMMAND, "--json", "--sandbox", SANDBOX_MODE,
                 "--ephemeral", "--ignore-rules"]
+        if docs_dir is not None:
+            cmd += [ADD_DIR_FLAG, str(docs_dir)]
         if model is not None:
             cmd += ["-m", model]
         cmd.append(STDIN_PROMPT)

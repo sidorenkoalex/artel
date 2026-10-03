@@ -21,7 +21,8 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from orchestrator import (agent_log, budget, catalog, config,  # noqa: E402
+from orchestrator import (agent_log, artifact_branch, budget, catalog,  # noqa: E402
+                          config,
                           fsm, gitcmd, providers, runner, spend, store)
 from tests.sandbox import (DeveloperBriefTmpRootTest as TmpRootTest,  # noqa: E402
                            FakeProc, FakeStream, capture_new_task_id, event,
@@ -716,7 +717,7 @@ class CmdRunCostTest(TmpRootTest):
         # попытка (rc=0) честно ретраится вместо одного тихого прогона,
         # которого ждут тесты этого класса (они проверяют учёт денег, не
         # факт отказа без артефакта).
-        tdir = config.WORKTREES / self.TASK / "tasks" / self.TASK
+        tdir = artifact_branch.docs_dir(self.TASK, config.DEFAULT_TARGET)
         tdir.mkdir(parents=True, exist_ok=True)
         (tdir / "PLAN.md").write_text("маркер\n", encoding="utf-8")
 
