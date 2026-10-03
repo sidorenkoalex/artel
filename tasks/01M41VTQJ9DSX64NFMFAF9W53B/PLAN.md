@@ -2,7 +2,7 @@
 task: 01M41VTQJ9DSX64NFMFAF9W53B
 type: plan
 author_role: developer
-status: escalate
+status: ready
 schema_version: 5
 ---
 
@@ -97,6 +97,17 @@ schema_version: 5
      `git apply --check` каждого разобранного приложения — код 0;
      `python3 scripts/guard.py <PLAN.md>` — «GUARD: ок».
 
+4. После ANSWER-1 (код не менялся): `python3 -m pytest
+   tests/test_ci_push_class.py tests/test_guard_artifact_branch_mode.py
+   tests/test_guard_extraneous_acceptance_files.py
+   tests/test_01m41vtqj9dsx64nfmfaf9w53b_artifact_mode_removed.py
+   tests/test_guard_schema.py -p no:cacheprovider -p timeout -o
+   timeout=120` — 86 passed, 22 subtests passed; `guard.py PLAN.md` —
+   «GUARD: ок». `plank-run 01M41VTQJ9DSX64NFMFAF9W53B` — и без файла, и
+   с файлом `test_ac3_ac4_plan_attachments.py` (именем и путём
+   `tasks/<id>/acceptance_tests/…`) — отказ сторожем полного набора, код
+   2 (см. «Предложения системе»).
+
 ## Покрытие требований
 
 | Требование | Шаг |
@@ -106,7 +117,7 @@ schema_version: 5
 | 3 (режим `--artifact-branch` в guard) | 1 |
 | 4 (без новых гейтов и ослаблений) | 1, 2 — гейты не тронуты; см. «Влияние» |
 | 5 (invariants.md + test_invariants.py приложением) | 2 (приложения 2, 3), 3 |
-| 6 (перечень изменённых/удалённых тестов) | 1; перечень и мандат — «Эскалация» |
+| 6 (перечень изменённых/удалённых тестов) | 1; перечень — «Изменённые и удалённые тесты», мандат — ANSWER-1 |
 
 ## Влияние на систему
 - Гейты переходов, гейт мержа (`fsm_merge_gate` гоняет `guard --all` по
@@ -129,7 +140,7 @@ schema_version: 5
 ## Риски
 - Удаление/переименование/смена утверждений в `tests/` — гейт
   неослабления тестов (инвариант 38) отказывает без мандата Оператора;
-  перечень — в «Эскалации».
+  мандат выдан в ANSWER-1, перечень — «Изменённые и удалённые тесты».
 - Ручной `guard.py --all --artifact-branch` (старые сценарии, заметки)
   теперь падает «файл не найден» вместо мягкого прогона — это и есть
   AC-2.
@@ -138,7 +149,10 @@ schema_version: 5
 - `orchestrator/plank_run.py`: `plank-run <id>` без файла, когда планка
   — только разовые тесты, читающие PLAN.md из ссылки документов,
   упирается в сторож полного набора («итоговой строки нет», код 2) —
-  сообщение не подсказывает назвать файл планки явно.
+  сообщение не подсказывает назвать файл планки явно. Повторный шаг
+  04.10: тот же отказ и с явно названным файлом планки (имя и путь
+  `tasks/<id>/acceptance_tests/<файл>`) — `plank-run` в шаге
+  developer этой задачи не работает вовсе.
 - Разовая планка, читающая PLAN.md из ссылки документов, локально в шаге
   developer непрогоняема до автокоммита — шаг сдаёт приложения
   непроверенными планкой; `plank-run` мог бы подкладывать PLAN.md
@@ -451,22 +465,14 @@ index 3864347d..9bc8eb46 100644
     зелёный»). П.3 в исходной редакции присваивал документному пушу
 ```
 
-## Эскалация
+## Изменённые и удалённые тесты (требование 6)
 
-**Вопросы** (один, блокирующий):
+Мандат гейта неослабления тестов (инвариант 38) выдан Оператором в
+`ANSWER-1.md` (04.10.2026) строкой «Ослабление тестов разрешено: …» —
+ровно на перечень ниже. Код после ответа не менялся (ветка — коммит
+пульта 1de356f1).
 
-1. Мандат гейта неослабления тестов (инвариант 38) на изменения ниже,
-   которых прямо требует ADR-0021 п.4 / SPEC требования 2, 3, 6.
-   Варианты: (а) выдать мандат строкой в ANSWER (готовая строка ниже);
-   (б) отказать — тогда методы, проверяющие удаляемые функции, остаются, а
-   с ними и функции режима guard, что противоречит требованию 3 SPEC.
-   Дефолт при молчании: задача стоит, ветка не сдаётся в `verifying`.
-
-   Готовая строка для ANSWER:
-
-   `Ослабление тестов разрешено: tests/test_ci_push_class.py::AdrClassificationTest::test_artifact_branch_is_code_false_without_touching_git_or_gh, tests/test_ci_push_class.py::AdrClassificationTest::test_artifact_branch_code_is_false, tests/test_ci_push_class.py::OutputFormatTest::test_script_prints_code_and_reason_lines, tests/test_guard_artifact_branch_mode.py::IsDraftLenientTest, tests/test_guard_artifact_branch_mode.py::BasicFrontmatterErrorsTest, tests/test_guard_artifact_branch_mode.py::CheckContentDefaultIsUnaffectedTest::test_explicit_false_matches_the_default, tests/test_guard_artifact_branch_mode.py::CheckContentDefaultIsUnaffectedTest::test_mode_true_on_a_lenient_draft_returns_only_basic_errors, tests/test_guard_artifact_branch_mode.py::CheckContentDefaultIsUnaffectedTest::test_mode_true_on_a_non_lenient_type_is_unaffected`
-
-**Контекст** — перечень по каждому методу (причина → замена):
+Перечень по каждому методу (причина → замена):
 
 | Метод | Что | Причина (SPEC) | Замена |
 |---|---|---|---|
@@ -484,10 +490,3 @@ index 3864347d..9bc8eb46 100644
 (черновик без секций отказывает — верно и без режима; правлен только
 докстринг). `tests/test_invariants.py` — ни один метод не удалён и не
 изменён по утверждениям, только добавлены.
-
-Реализация завершена целиком (шаги 1–3), в worktree незакоммичена —
-закоммитит пульт.
-
-**Блокирует** — выход `in_dev → verifying` (гейт неослабления тестов
-откажет без мандата). После ANSWER снимаю `status: escalate` и сдаю
-`ready` без правок кода.
