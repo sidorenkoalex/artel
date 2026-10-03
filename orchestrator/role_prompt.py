@@ -8,7 +8,8 @@ from scripts import guard
 from . import brief, review, stack
 
 
-def mission_brief_package(conn, task_id: str, t, role: str, cwd):
+def mission_brief_package(conn, task_id: str, t, role: str, cwd,
+                          docs_dir=None):
     """(mission, brief_text, package) — `brief_text`/`package` — `None`,
     когда роли соответствующий компонент не положен (та же комбинация,
     что и раньше в теле `_cmd_run`: только `role == "review"` собирает
@@ -18,7 +19,11 @@ def mission_brief_package(conn, task_id: str, t, role: str, cwd):
     путь, что реально вернул бы `runner.role_cwd`, SPEC
     01M1RQ12JVHE3PQYDFV1XPSTQ3, требование 2): миссия каждой из четырёх
     ролей заканчивается буквальной строкой рабочего каталога — роль не
-    обязана домысливать, где именно ей можно писать файлы Write."""
+    обязана домысливать, где именно ей можно писать файлы Write.
+
+    `docs_dir` — каталог документов задачи (`artifact_branch.docs_dir`):
+    миссия называет его буквальной строкой (`docs_dir_note`); `None` —
+    абзаца нет."""
     task_ref = f"tasks/{task_id}"
     # Префикс имени долгоживущего файла своей задачи — конкретный, не
     # шаблон (SPEC 01M3N3Z1ZHTGMSQZ4SNRYNJ2SJ, требование 10, Р1).
@@ -131,6 +136,36 @@ def mission_brief_package(conn, task_id: str, t, role: str, cwd):
                    if iteration > 1 else "")
         package = review.review_package(conn, task_id, t["title"], t["branch"],
                                         iteration=iteration, prev_sha=prev_sha)
-    mission = (f"{mission}\n\nрабочий каталог шага — {cwd}; все пути ниже "
-              f"относительно него; запись вне него недоступна.")
+    # С каталогом документов запись открыта и в нём (`--add-dir`): строка
+    # «запись вне него недоступна» противоречила бы абзацу ниже, и роль
+    # могла бы не записать документ туда (REVIEW итерации 1, R1-F3).
+    if docs_dir is None:
+        mission = (f"{mission}\n\nрабочий каталог шага — {cwd}; все пути ниже "
+                  f"относительно него; запись вне него недоступна.")
+    else:
+        mission = (f"{mission}\n\nрабочий каталог шага — {cwd}; пути кода "
+                  f"ниже относительно него; запись вне него и вне каталога "
+                  f"документов задачи недоступна.")
+        mission = f"{mission}\n\n{docs_dir_note(task_id, docs_dir)}"
     return mission, brief_text, package
+
+
+def docs_dir_note(task_id: str, docs_dir) -> str:
+    """Абзац миссии о каталоге документов задачи (ADR-0021 пп. 2, 7, этап
+    1): документы задачи лежат вне рабочего каталога шага, роль пишет их
+    туда — каталог открыт ей на запись дополнительно (`--add-dir`).
+    Прогону планки нужен код ветки рядом с ней — отсюда копия на время
+    прогона, которую пульт уберёт после шага."""
+    task_ref = f"tasks/{task_id}"
+    return (
+        f"Каталог документов задачи — {docs_dir}; он открыт на запись "
+        f"дополнительно к рабочему каталогу. Пути {task_ref}/… в этом "
+        f"задании (SPEC.md, PLAN.md, REVIEW.md, QUESTIONS.md, "
+        f"acceptance_tests/ и прочие документы задачи) — файлы этого "
+        f"каталога: {docs_dir}/<файл>. В рабочем каталоге шага {task_ref}/ "
+        f"нет; документ, записанный туда, в артефактную ветку не попадёт — "
+        f"пульт уберёт его после шага. Прогон планки: скопируй её в "
+        f"рабочий каталог (`python3 -c \"import shutil; shutil.copytree("
+        f"'{docs_dir}/acceptance_tests', '{task_ref}/acceptance_tests', "
+        f"dirs_exist_ok=True)\"`) и прогони оттуда; правь только файлы "
+        f"каталога документов.")

@@ -372,6 +372,30 @@ def materialize_from_branch(task_id: str, branch: str, code_dir: Path) -> Path:
     return tdir
 
 
+def drop_from_code_copy(task_id: str, code_dir: Path) -> None:
+    """Убирает `tasks/<id>/` из рабочей копии кода `code_dir` (ADR-0021,
+    этап 1): документы задачи там не лежат, планка — только на время
+    прогона (`plank_in_code_copy`). Главная копия пульта (`config.ROOT`)
+    не трогается: там `tasks/<id>/` — легаси-каталог задач старше T094, не
+    выкладка прогона."""
+    if Path(code_dir).resolve() == config.ROOT.resolve():
+        return
+    shutil.rmtree(Path(code_dir) / "tasks" / task_id, ignore_errors=True)
+
+
+@contextlib.contextmanager
+def plank_in_code_copy(task_id: str, branch: str,
+                       code_dir: Path) -> Iterator[Path]:
+    """`materialize_from_branch` на время блока `with` и уборка выкладки в
+    `finally` — на зелёном, красном исходе и на исключении внутри прогона
+    (ADR-0021 п.13, этап 1): прогону планка нужна в рабочей копии кода
+    (её `__file__` находит код ветки задачи), после него — нет."""
+    try:
+        yield materialize_from_branch(task_id, branch, code_dir)
+    finally:
+        drop_from_code_copy(task_id, code_dir)
+
+
 # ----------------------------------------------- полный набор tests/
 #
 # Исходы прогона полного набора (SPEC 01M3FQ3JVC3DGGM33XCX8TC7ME,

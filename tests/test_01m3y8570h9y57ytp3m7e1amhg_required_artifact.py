@@ -19,7 +19,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from orchestrator import config, keychain, runner, stack, store
+from orchestrator import artifact_branch, config, keychain, runner, stack, store
 from scripts import guard
 from tests.sandbox import FakeProc, RealGitSandbox
 
@@ -72,15 +72,19 @@ class RequiredArtifactStepSandbox(RealGitSandbox):
         return task_id
 
     def run_step(self, task_id: str, role: str, files: list) -> tuple:
-        """Шаг роли: подставной агент пишет `files` (пути от своего `cwd`)
-        и выходит rc=0; возврат — `(исход, пояснение)` `run_agent_once`."""
+        """Шаг роли: подставной агент пишет `files` (пути от своего `cwd`;
+        документы `tasks/<id>/…` — от корня выкладки документов, куда их
+        пишет роль с ADR-0021, этап 1) и выходит rc=0; возврат — `(исход,
+        пояснение)` `run_agent_once`."""
         seen_cwd = []
+        docs_root = artifact_branch.docs_root(config.DEFAULT_TARGET)
 
         def fake_agent(cmd, **kwargs):
             cwd = Path(kwargs["cwd"])
             seen_cwd.append(cwd)
             for rel in files:
-                dest = cwd / rel
+                base = docs_root if Path(rel).parts[0] == "tasks" else cwd
+                dest = base / rel
                 dest.parent.mkdir(parents=True, exist_ok=True)
                 dest.write_text("import unittest\n", encoding="utf-8")
             return FakeProc([RESULT_LINE], 0)

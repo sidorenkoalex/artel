@@ -32,7 +32,8 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from orchestrator import (auto, catalog, config, failure_classification,  # noqa: E402
+from orchestrator import (artifact_branch, auto, catalog, config,  # noqa: E402
+                          failure_classification,
                           gitcmd, runner, stack, store)
 from tests.sandbox import (DeveloperBriefTmpRootTest, FakeProc,  # noqa: E402
                            capture_new_task_id, disk_backed_ls_tree_files,
@@ -103,7 +104,7 @@ class _StepSandbox(DeveloperBriefTmpRootTest):
         conn = store.db()
         conn.execute("UPDATE tasks SET state='in_dev' WHERE id=?", (self.TASK,))
         conn.commit()
-        tdir = config.WORKTREES / self.TASK / "tasks" / self.TASK
+        tdir = artifact_branch.docs_dir(self.TASK, config.DEFAULT_TARGET)
         tdir.mkdir(parents=True, exist_ok=True)
         (tdir / "PLAN.md").write_text("маркер\n", encoding="utf-8")
 

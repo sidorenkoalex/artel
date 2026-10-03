@@ -5,6 +5,7 @@
 Ни одна из двух функций не проходит через каркас `_base._run_gates`
 (SPEC требование 3, PLAN «Подход») — `_acceptance_run_refuses`
 докстрингом фиксирует это решение дословно, перенесено без правки."""
+import contextlib
 import hashlib
 
 from scripts import guard
@@ -177,6 +178,17 @@ def _acceptance_lock_refuses(conn, task_id: str, t, branch: str,
 
 def _acceptance_run_refuses(conn, task_id: str, t, tdir, target: str,
                             branch: str) -> bool:
+    """Обёртка прогона приёмки (`_acceptance_run_body`): планка, выложенная
+    в рабочую копию кода, убирается на выходе из блока при любом исходе —
+    зелёном, красном, отказе до прогона и исключении внутри него (ADR-0021,
+    этап 1; SPEC 01M409YKM3QE5KVRGV0G94F5ZC, требование 3)."""
+    with contextlib.ExitStack() as cleanup:
+        return _acceptance_run_body(conn, task_id, t, tdir, target, branch,
+                                    cleanup)
+
+
+def _acceptance_run_body(conn, task_id: str, t, tdir, target: str,
+                         branch: str, cleanup: contextlib.ExitStack) -> bool:
     """Прогон приёмки после подтяжки (SPEC T023, требование 6; ADR-0015,
     требование 2 — переехал с `in_dev -> review` на `in_dev -> verifying`,
     вместе с остальными шестью рубежами того же перехода): красный
@@ -226,12 +238,14 @@ def _acceptance_run_refuses(conn, task_id: str, t, tdir, target: str,
     if target != config.DEFAULT_TARGET:
         run_cwd = config.PROJECTS / target / "workspace"
         run_cwd.mkdir(parents=True, exist_ok=True)
-        acc_tdir = acceptance.materialize_from_branch(task_id, branch, run_cwd)
+        acc_tdir = cleanup.enter_context(
+            acceptance.plank_in_code_copy(task_id, branch, run_cwd))
         if _missing_plank_refuses():
             return True
     elif workspace.on_task_branch(task_id, t["branch"]) is True:
         run_cwd = workspace.path(task_id)
-        acc_tdir = acceptance.materialize_from_branch(task_id, branch, run_cwd)
+        acc_tdir = cleanup.enter_context(
+            acceptance.plank_in_code_copy(task_id, branch, run_cwd))
         # Сбой чтения перечня (`None`) раньше в `in_dev` уже отклонил
         # переход узлом сверки `_long_lived_manifest_refuses`.
         digests, _reason = long_lived_manifest(task_id, t, target)

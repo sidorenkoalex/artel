@@ -58,7 +58,8 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from orchestrator import (acceptance, artel, auto, catalog, config, fsm, gates,
+from orchestrator import (acceptance, artel, artifact_branch, auto, catalog,
+                          config, fsm, gates,
                           models, pause, runner, spend, store, workspace)
 from tests.sandbox import (CATALOG_FIXTURE_TEXT, FIXTURE_CODEX_MODEL,
                            FIXTURE_OTHER_MODEL, FIXTURE_ROLES,
@@ -335,7 +336,7 @@ class StepSandbox(ModelSetsMixin, LightTransitionSandbox):
         conn = store.db()
         store.update_task(conn, task_id, state="in_dev", paused=0)
         sync_spec_from_worktree(task_id)
-        plan_dir = self.wt_path / config.TASKS.name / task_id
+        plan_dir = artifact_branch.docs_dir(task_id, config.DEFAULT_TARGET)
         plan_dir.mkdir(parents=True, exist_ok=True)
         (plan_dir / "PLAN.md").write_text("маркер\n", encoding="utf-8")
         before = self.last_step_id(task_id)

@@ -296,7 +296,7 @@ class PreflightBlocksMissingTokenTest(TmpRootTest):
         # попытка (rc=0) честно ретраится вместо одного тихого успеха,
         # которого ждут тесты этого класса (они проверяют pre-flight, не
         # факт отказа без артефакта).
-        tdir = config.WORKTREES / self.TASK / "tasks" / self.TASK
+        tdir = artifact_branch.docs_dir(self.TASK, config.DEFAULT_TARGET)
         tdir.mkdir(parents=True, exist_ok=True)
         (tdir / "PLAN.md").write_text("маркер\n", encoding="utf-8")
         # CLI на машине прогона может отсутствовать (CI-раннер) — проверки

@@ -22,7 +22,8 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from orchestrator import (checkpoint, config, fsm_merge_gate, gitcmd,  # noqa: E402
+from orchestrator import (artifact_branch, checkpoint, config,  # noqa: E402
+                          fsm_merge_gate, gitcmd,
                           repo_context, store)
 from scripts import guard  # noqa: E402
 from tests.sandbox import RealGitSandbox, TmpRootTest  # noqa: E402
@@ -120,8 +121,10 @@ class CheckpointDropsSubdirectoryFileTest(RealGitSandbox):
         store.insert_task(conn, self.TASK, "Задача внешнего target",
                           "in_dev", f"task/{self.TASK.lower()}-x", TARGET,
                           config.DEFAULT_BUDGET_USD)
-        self.workspace_root = config.PROJECTS / TARGET / "workspace"
-        self.task_dir = self.workspace_root / "tasks" / self.TASK
+        # Роль пишет документы в каталог документов задачи (ADR-0021,
+        # этап 1) — источник автокоммита шага.
+        self.workspace_root = artifact_branch.docs_root(TARGET)
+        self.task_dir = artifact_branch.docs_dir(self.TASK, TARGET)
         self.task_dir.mkdir(parents=True)
 
     def write(self, rel: str, text: str = "содержимое\n") -> None:

@@ -954,8 +954,11 @@ class CmdRunReviewPackageTest(unittest.TestCase):
         self.set_state(state)
         marker = self._STEP_ARTIFACT.get(state)
         if marker is not None:
-            self.tdir.mkdir(parents=True, exist_ok=True)
-            (self.tdir / marker).write_text("маркер\n", encoding="utf-8")
+            # Артефакт роли — в каталоге документов задачи (ADR-0021,
+            # этап 1), куда роль его пишет.
+            docs = artifact_branch.docs_dir(self.TASK, config.DEFAULT_TARGET)
+            docs.mkdir(parents=True, exist_ok=True)
+            (docs / marker).write_text("маркер\n", encoding="utf-8")
         with mock.patch.object(runner, "spawn_agent") as popen:
             popen.return_value = FakeProc(["готово\n"])
             out = self.capture(runner.cmd_run, self.TASK)
@@ -1098,7 +1101,11 @@ class CmdRunReviewPackageTest(unittest.TestCase):
                       "шаг всё равно стартовал, и с артефактами в пакете")
 
     def test_developer_step_has_no_package(self):
-        """Требование «не входит»: контекст разработчика не меняется."""
+        """Требование «не входит»: контекст разработчика не меняется.
+
+        Ловит мутацию: собрать ревью-пакет (или прочитать diff ветки
+        `show`) в шаге роли developer — либо перестать забирать
+        автокоммитом PLAN.md из каталога документов — и тест покраснеет."""
         _, argv = self.run_agent("in_dev")
 
         self.assertNotIn("--- РЕВЬЮ-ПАКЕТ ---", self.prompt())
@@ -1157,7 +1164,17 @@ class CmdRunReviewPackageTest(unittest.TestCase):
         # вовсе, поэтому `_commit_summary` не вызывается ни разу).
         # `-C <worktree>` — путь `workspace.path(task_id)`, тот же, что
         # строит сам чекпоинт.
+        #
+        # С ADR-0021 (этап 1) маркер PLAN.md лежит в каталоге документов
+        # задачи — там, где его оставляет роль, — и автокоммит шага его
+        # переносит: хвост списка — сверка головы ссылки с фиксацией,
+        # дерево ссылки, автор последнего коммита SPEC.md (кандидат на
+        # удаление), сверка PLAN.md с головой, запись ссылки и её отправка
+        # в `origin`, затем чтение головы ссылки и кодовой ветки
+        # перефиксацией.
         wt = str(config.WORKTREES / self.TASK)
+        ref = f"refs/artifacts/{self.TASK}"
+        code_branch = store.get_task(store.db(), self.TASK)["branch"]
         self.assertEqual(self.git.calls,
                          [["worktree", "list", "--porcelain"],
                           ["show", "main:skills/conventions-core.md"],
@@ -1184,7 +1201,21 @@ class CmdRunReviewPackageTest(unittest.TestCase):
                           ["-C", wt, "add", "-A"],
                           ["-C", wt, "reset", "-q", "--",
                            f"tasks/{self.TASK}"],
-                          ["-C", wt, "diff", "--cached", "--quiet"]],
+                          ["-C", wt, "diff", "--cached", "--quiet"],
+                          ["rev-parse", "--verify", "--quiet", ref],
+                          ["ls-tree", "-r", "--name-only", ref, "--",
+                           f"tasks/{self.TASK}"],
+                          ["log", "-1", "--format=%s", ref, "--",
+                           f"tasks/{self.TASK}/SPEC.md"],
+                          ["show", f"{ref}:tasks/{self.TASK}/PLAN.md"],
+                          ["rev-parse", "--verify", "--quiet", ref],
+                          ["update-ref", ref, "f" * 40, "0" * 40],
+                          ["remote", "get-url", "origin"],
+                          ["-C", str(config.ROOT), "remote"],
+                          ["push", "-q", "origin", f"{ref}:{ref}"],
+                          ["rev-parse", "--verify", "--quiet", ref],
+                          ["rev-parse", "--verify", "--quiet",
+                           f"refs/heads/{code_branch}"]],
                          "diff разработчику не собирается")
 
     def test_reviewer_rights_are_not_narrowed(self):

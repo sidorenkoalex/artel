@@ -23,7 +23,8 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from orchestrator import (budget, catalog, config, gitcmd, projects,  # noqa: E402
+from orchestrator import (artifact_branch, budget, catalog, config, gitcmd,  # noqa: E402
+                          projects,
                           runner, spend, store, targets)
 from tests.sandbox import (FakeProc, TmpRootTest, capture,  # noqa: E402
                            capture_new_task_id, disk_backed_show, fake_git,
@@ -822,7 +823,11 @@ class RoleEnvTest(TmpRootTest):
         self.assertIn("identity", res.stderr.lower())
 
     def test_absent_identity_is_journalled_before_the_step(self):
-        """Идентичности нет — Оператор узнаёт до шага, а не из rc=128 потом."""
+        """Идентичности нет — Оператор узнаёт до шага, а не из rc=128 потом.
+
+        Ловит мутацию: убрать сверку git-идентичности перед запуском
+        агента в `runner.cmd_run` (нет строки «git-идентичность роли не
+        задана» и записи «agent env WARNING») — и тест покраснеет."""
         capture(catalog.cmd_init)
         _, task_id = capture_new_task_id(catalog.cmd_new, "Окружение роли")
         store.update_task(store.db(), task_id, state="in_dev")
@@ -833,8 +838,9 @@ class RoleEnvTest(TmpRootTest):
         # которое проверяет этот тест. `workspace.ensure` этого класса
         # подменена на `self.root` (см. `_MultitargetTmpRootTest.setUp`) —
         # рабочий каталог роли здесь `config.TASKS/<id>/`, не `config.
-        # WORKTREES/<id>/tasks/<id>/`.
-        tdir = config.TASKS / task_id
+        # WORKTREES/<id>/tasks/<id>/`. С ADR-0021 (этап 1) роль пишет его в
+        # каталог документов задачи (`artifact_branch.docs_dir`).
+        tdir = artifact_branch.docs_dir(task_id, config.DEFAULT_TARGET)
         tdir.mkdir(parents=True, exist_ok=True)
         (tdir / "PLAN.md").write_text("маркер\n", encoding="utf-8")
 

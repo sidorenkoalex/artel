@@ -590,7 +590,8 @@ def _build_prompt(conn, task_id: str, t, role: str, target: str,
     попыток."""
     cwd_for_prompt = role_cwd_path(task_id, target)
     mission, brief_text, package = role_prompt.mission_brief_package(
-        conn, task_id, t, role, cwd_for_prompt)
+        conn, task_id, t, role, cwd_for_prompt,
+        docs_dir=_step_docs_dir(conn, task_id))
     prompt = f"{mission}\n\n--- СКИЛЫ РОЛИ ---\n\n{skills}"
     if brief_text is not None:
         prompt = f"{prompt}\n\n{brief_text}"
@@ -1018,6 +1019,14 @@ def role_cwd(conn, task_id: str, target: str) -> Path:
     изоляции (`doctor.isolation_smoke`, синтетический target без реальной
     задачи) — материализация здесь бессмысленна, пропускается тихо, той
     же деградацией, что и отсутствие артефактной ветки.
+
+    Документы выкладываются НЕ в рабочую копию кода, а в каталог
+    документов задачи `.artel/projects/<проект>/tasks/<id>/`
+    (`artifact_branch.docs_dir`, ADR-0021 пп. 2, 12, этап 1) — для любого
+    проекта, включая артель. Роль получает его на запись флагом
+    `--add-dir` (`_spawn_and_wait`). `tasks/<id>/` рабочей копии кода,
+    оставшийся от прежней механики или от прогона планки ролью, здесь же
+    убирается: документы задачи в рабочей копии кода вне прогона не лежат.
     """
     if target == config.DEFAULT_TARGET:
         branch = store.task_branch(conn, task_id)
@@ -1029,11 +1038,41 @@ def role_cwd(conn, task_id: str, target: str) -> Path:
         path = role_cwd_path(task_id, target)
         path.mkdir(parents=True, exist_ok=True)
     if task_id is not None:
-        from . import artifact_branch
-        materialized_sha = artifact_branch.materialize_task_dir(task_id, path)
+        from . import acceptance, artifact_branch
+        # Сначала забрать `tasks/<id>/` рабочей копии кода в ссылку, потом
+        # убирать: иначе файл, оставленный там между шагами, пропал бы до
+        # запуска роли, и сбор в конце шага его уже не увидел бы.
+        harvested = checkpoint.harvest_code_copy_docs(conn, task_id, target)
+        acceptance.drop_from_code_copy(task_id, path)
+        # Каталог документов заводит сама выкладка (ссылка есть с `new`);
+        # отдельный `mkdir` здесь завёл бы его и без ссылки — в том числе
+        # песочницам тестов без подменённого `config.PROJECTS`.
+        materialized_sha = artifact_branch.materialize_task_dir(
+            task_id, artifact_branch.docs_root(target))
         store.update_task(conn, task_id,
                           materialized_artifact_sha=materialized_sha or None)
+        if harvested and not materialized_sha:
+            _place_harvested_docs(harvested, artifact_branch.docs_root(target))
     return path
+
+
+def _place_harvested_docs(files: dict[str, bytes], docs_root: Path) -> None:
+    """Файлы, забранные из рабочей копии кода (`checkpoint.
+    harvest_code_copy_docs`), — в каталог документов, когда выкладка из
+    ссылки не состоялась: роль увидит их там, а автокоммит конца шага
+    заберёт их тем же путём, что и правку роли."""
+    for rel, content in files.items():
+        dest = docs_root / rel
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        dest.write_bytes(content)
+
+
+def _step_docs_dir(conn, task_id: str) -> Path:
+    """Каталог документов задачи шага (`artifact_branch.docs_dir`) — тот
+    же адрес, куда `role_cwd` выкладывает документы и откуда их забирает
+    автокоммит шага."""
+    from . import artifact_branch
+    return artifact_branch.docs_dir(task_id, store.task_target(conn, task_id))
 
 
 def role_cmd() -> list[str]:
@@ -1056,7 +1095,8 @@ def role_cmd() -> list[str]:
     return providers.for_role(None).command()
 
 
-def _missing_required_artifact(role: str, cwd: Path, task_id: str) -> str | None:
+def _missing_required_artifact(role: str, cwd: Path, task_id: str,
+                               docs_dir: Path | None = None) -> str | None:
     """Имя обязательного артефакта роли, отсутствующего в РЕАЛЬНОМ рабочем
     каталоге шага (`cwd`, где роль пишет инструментом Write) — `None`,
     если артефакт на месте либо роль не несёт обязательного выхода этого
@@ -1066,20 +1106,33 @@ def _missing_required_artifact(role: str, cwd: Path, task_id: str) -> str | None
     без файла на диске — тот же класс отказа, что и rc != 0 (два
     инцидента 05.09, «Контекст» SPEC) — headless-шаг не получает
     подтверждения записи вне рабочего каталога и молча ничего не
-    оставляет там, где реально смотрит эта проверка."""
-    task_dir = cwd / "tasks" / task_id
+    оставляет там, где реально смотрит эта проверка.
+
+    `docs_dir` — каталог документов задачи шага (ADR-0021, этап 1): там
+    роль пишет свои документы; `None` — прежний адрес `cwd/tasks/<id>`.
+    `tasks/<id>/` рабочей копии кода засчитывается и при `docs_dir`: его
+    оставляет роль на прежнем правиле путей, и автокоммит шага забирает
+    его в ссылку документов (`checkpoint._commit_external_step_artifacts`).
+    Долгоживущий файл test_author по-прежнему ищется в `cwd`."""
+    code_copy_dir = cwd / "tasks" / task_id
+    task_dirs = [code_copy_dir] if docs_dir is None else [docs_dir, code_copy_dir]
+
+    def has_file(name: str) -> bool:
+        return any((d / name).is_file() for d in task_dirs)
+
     if role == "reviewer":
-        return None if (task_dir / "REVIEW.md").is_file() else "REVIEW.md"
+        return None if has_file("REVIEW.md") else "REVIEW.md"
     if role == "developer":
-        return None if (task_dir / "PLAN.md").is_file() else "PLAN.md"
+        return None if has_file("PLAN.md") else "PLAN.md"
     if role == "analyst":
-        if (task_dir / "SPEC.md").is_file() or (task_dir / "QUESTIONS.md").is_file():
+        if has_file("SPEC.md") or has_file("QUESTIONS.md"):
             return None
         return "SPEC.md/QUESTIONS.md"
     if role == "test_author":
-        acc = task_dir / "acceptance_tests"
-        if acc.is_dir() and any(p.is_file() for p in acc.rglob("*")):
-            return None
+        for task_dir in task_dirs:
+            acc = task_dir / "acceptance_tests"
+            if acc.is_dir() and any(p.is_file() for p in acc.rglob("*")):
+                return None
         if _has_own_long_lived_test(cwd, task_id):
             return None
         return (f"acceptance_tests/ (файл в tasks/{task_id}/acceptance_tests/ "
@@ -1241,7 +1294,8 @@ def run_agent_once(conn, task_id: str, role: str, prompt: str,
         return _finish_failed(conn, task_id, role, rc, numbered, spent,
                               log_path)
 
-    missing_artifact = _missing_required_artifact(role, cwd, task_id)
+    missing_artifact = _missing_required_artifact(
+        role, cwd, task_id, _step_docs_dir(conn, task_id))
     if missing_artifact is not None:
         return _finish_missing_artifact(conn, task_id, role,
                                         missing_artifact, cwd, numbered,
@@ -1374,7 +1428,12 @@ def _spawn_and_wait(conn, task_id: str, role: str, log_path: Path,
         # 01M2DTT96FS25SHXP0HDTWARQH, требование 3), и его место в
         # списке знает тот же, кто знает остальные флаги. Сам список от
         # этого не меняется: модель по-прежнему в конце argv.
-        cmd = provider.command(model_id)
+        #
+        # Каталог документов задачи — вне рабочей копии кода и открыт
+        # роли на запись флагом `--add-dir` (ADR-0021 пп. 2, 7, этап 1):
+        # его место в argv (флаг подкоманды у codex) знает провайдер.
+        cmd = provider.command(model_id,
+                               docs_dir=_step_docs_dir(conn, task_id))
         try:
             proc = spawn_agent(
                 # Промпт — файлом на стандартном входе, им и отдаётся

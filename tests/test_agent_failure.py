@@ -21,7 +21,8 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from orchestrator import (agent_log, catalog, config, fsm, gitcmd,  # noqa: E402
+from orchestrator import (agent_log, artifact_branch, catalog, config,  # noqa: E402
+                          fsm, gitcmd,
                           models, runner, stack, store)
 from tests.sandbox import (DeveloperBriefTmpRootTest as TmpRootTest,  # noqa: E402
                            FakeProc, FakeStream, capture_new_task_id,
@@ -150,7 +151,7 @@ class CmdRunFailureTest(TmpRootTest):
         state = self.task_row()["state"]
         marker = self._STEP_ARTIFACT.get(state)
         if marker is not None:
-            tdir = config.WORKTREES / self.TASK / "tasks" / self.TASK
+            tdir = artifact_branch.docs_dir(self.TASK, config.DEFAULT_TARGET)
             tdir.mkdir(parents=True, exist_ok=True)
             (tdir / marker).write_text("маркер\n", encoding="utf-8")
         procs = [FakeProc(lines, rc) for rc, lines in attempts]

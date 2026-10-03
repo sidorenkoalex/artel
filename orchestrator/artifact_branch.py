@@ -336,6 +336,20 @@ def origin_sync_refusal(task_id: str) -> str | None:
             f"{local or '(нет)'}, в origin {remote}")
 
 
+def docs_root(target: str | None) -> Path:
+    """Корень выкладки документов проекта `.artel/projects/<проект>/` —
+    каталог документов задачи лежит под ним по пути ссылки `tasks/<id>/`
+    (ADR-0021 пп. 2, 12; для артели тоже, до этапа 2). Вне рабочей копии
+    кода: роль получает его на запись флагом `--add-dir`, а защищают его
+    гейты пульта, не права доступа (ADR-0021 п.7)."""
+    return config.PROJECTS / (target or config.DEFAULT_TARGET)
+
+
+def docs_dir(task_id: str, target: str | None) -> Path:
+    """Каталог документов задачи `.artel/projects/<проект>/tasks/<id>/`."""
+    return docs_root(target) / "tasks" / task_id
+
+
 def read_tree(task_id: str) -> dict:
     """{путь: текст} всех файлов `tasks/<id>/` артефактной ветки задачи;
     пустой словарь — ветки нет или каталог в ней пуст."""
@@ -368,6 +382,9 @@ def materialize_task_dir(task_id: str, dest_root: Path) -> str:
     Возвращает sha использованной головы — конфликт-гвард автокоммита
     (`checkpoint._commit_external_step_artifacts`, AC-6/AC-7) хранит его
     как baseline, с которым потом сверяет диск и текущую голову ветки.
+
+    `dest_root` шага роли — корень выкладки документов (`docs_root`), не
+    рабочая копия кода (ADR-0021, этап 1).
     """
     branch = branch_name(task_id)
     head = gitcmd.branch_head_sha(branch)

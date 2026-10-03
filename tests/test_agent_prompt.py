@@ -17,8 +17,8 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from orchestrator import (catalog, config, gitcmd, models, runner,  # noqa: E402
-                          stack, store)
+from orchestrator import (artifact_branch, catalog, config, gitcmd,  # noqa: E402
+                          models, runner, stack, store)
 from tests.sandbox import (FakeProc, SANDBOX_ROLES_TEXT, SpyRun,  # noqa: E402
                            _stub_check_stack, capture,
                            capture_new_task_id, disk_backed_ls_tree_files,
@@ -150,7 +150,9 @@ class PromptChannelTest(unittest.TestCase):
         self.set_state(state)
         marker = self._STEP_ARTIFACT.get(state)
         if marker is not None:
-            tdir = config.WORKTREES / self.TASK / "tasks" / self.TASK
+            # Каталог документов задачи — там роль пишет свой артефакт
+            # (ADR-0021, этап 1), не рабочая копия кода.
+            tdir = artifact_branch.docs_dir(self.TASK, config.DEFAULT_TARGET)
             tdir.mkdir(parents=True, exist_ok=True)
             (tdir / marker).write_text("маркер\n", encoding="utf-8")
         with mock.patch.object(runner, "spawn_agent") as popen:

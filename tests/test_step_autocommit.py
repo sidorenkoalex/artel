@@ -52,8 +52,11 @@ class CommitStepArtifactsTest(RealPultGitTest):
         реальный `runner.role_cwd()` вернёт для self/артели (T045,
         синхронизировано `checkpoint._commit_external_step_artifacts`
         коммитом `9a984c3`/PLAN.md «Эскалация»). ОТДЕЛЬНО от репо
-        фиксации `self.task_dir()` (`config.PROJECTS/artel/tasks/<id>/`)."""
-        d = workspace.path(self.TASK) / "tasks" / self.TASK
+        фиксации `self.task_dir()` (`config.PROJECTS/artel/tasks/<id>/`).
+
+        С ADR-0021 (этап 1) источник автокоммита — каталог документов
+        задачи (`artifact_branch.docs_dir`), куда роль пишет документы."""
+        d = artifact_branch.docs_dir(self.TASK, config.DEFAULT_TARGET)
         d.mkdir(parents=True, exist_ok=True)
         return d
 
@@ -80,6 +83,9 @@ class CommitStepArtifactsTest(RealPultGitTest):
         self.assertEqual(self.orchestrator_steps(), [])
 
     def test_dirty_tree_commits_to_artifact_branch_and_journals(self):
+        """Ловит мутацию: автокоммит не переносит правку каталога документов
+        в ссылку либо оставляет каталог документов (или `tasks/<id>/`
+        рабочей копии кода) на диске после переноса."""
         self.enter_in_dev()
         (self.workspace_task_dir() / "PLAN.md").write_text(
             "недописанный артефакт роли\n", encoding="utf-8")
@@ -105,6 +111,10 @@ class CommitStepArtifactsTest(RealPultGitTest):
         # путь вычислен напрямую, чтобы не воссоздать убранное.
         raw_dir = workspace.path(self.TASK) / "tasks" / self.TASK
         self.assertFalse(raw_dir.exists())
+        # С ADR-0021 (этап 1) роль пишет в каталог документов задачи — он
+        # тоже убран после переноса.
+        docs_dir = artifact_branch.docs_dir(self.TASK, config.DEFAULT_TARGET)
+        self.assertFalse(docs_dir.exists())
 
     def test_refixation_keeps_check_integrity_clean_after_the_commit(self):
         """`store.record_fixation`, вызванная автокоммитом, фиксирует РЕПО

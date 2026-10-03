@@ -120,7 +120,7 @@ def _wip_checkpoint(conn, task_id: str, role: str, message: str, action: str,
         if committed:
             detail = f"{message} (sha {sha})" if sha else message
             store.journal(conn, task_id, "orchestrator", action, detail)
-            store.record_fixation(conn, task_id)
+            _record_step_fixation(conn, task_id)
     elif role == "test_author":
         detail = _test_author_checkpoint(conn, task_id, role, wt, message,
                                          action, discard_action, discard_detail)
@@ -318,7 +318,7 @@ def _test_author_checkpoint(conn, task_id: str, role: str, wt: Path,
         return ""
     detail = f"{message} (sha {sha})" if sha else message
     store.journal(conn, task_id, "orchestrator", action, detail)
-    store.record_fixation(conn, task_id)
+    _record_step_fixation(conn, task_id)
     return detail
 
 
@@ -621,7 +621,7 @@ def commit_success_checkpoint(conn, task_id: str, role: str) -> str:
     detail = f"{summary} (sha {sha})" if sha else summary
     store.journal(conn, task_id, "orchestrator", "код закоммичен пультом за роль",
                   detail)
-    store.record_fixation(conn, task_id)
+    _record_step_fixation(conn, task_id)
     return detail
 
 
@@ -880,6 +880,183 @@ def _step_artifact_deletion_candidates(conn, task_id: str, role: str, t,
     return removed
 
 
+def _same_as_ref(branch: str, files: dict[str, bytes]) -> bool:
+    """Каждый файл `files` совпадает байтами с тем же путём головы ссылки
+    `branch`. Нечитаемый путь (нет в ссылке, git не ответил) или
+    нетекстовое содержимое — расхождение: коммит решает узел записи."""
+    for rel, content in files.items():
+        text, _ = gitcmd.show(branch, rel)
+        if text is None or text.encode("utf-8") != content:
+            return False
+    return True
+
+
+def _docs_ref_moved_past_pult(conn, task_id: str) -> str | None:
+    """Текст расхождения, если голова ссылки документов разошлась с
+    зафиксированным sha (`tasks.fixed_sha`) к концу шага; `None` — ссылка
+    там, где её оставил пульт, или сверять не с чем (фиксации нет, git не
+    ответил — та же деградация, что у `fixation.check_integrity`).
+
+    Каждая запись пульта в ссылку перефиксирует её сама; расхождение к
+    концу шага — запись мимо пульта, то есть ролью (ADR-0021 п.7,
+    ANSWER-1 задачи 01M409YKM3QE5KVRGV0G94F5ZC). Автокоммит и чекпоинты
+    шага такую голову не перефиксируют: иначе подмена стала бы
+    зафиксированным состоянием, а сверка на старте следующего шага её бы
+    не увидела."""
+    from . import artifact_branch
+    fixed = store.get_task(conn, task_id)["fixed_sha"]
+    head = artifact_branch.ref_head(task_id)
+    if not fixed or not head or head == fixed:
+        return None
+    return f"зафиксировано {fixed}, голова ссылки {head}"
+
+
+DOCS_REF_MOVED_ACTION = "ссылка документов сдвинута мимо пульта"
+CODE_COPY_DOCS_DROPPED_ACTION = "документы задачи убраны из рабочей копии кода"
+
+
+def _take_code_copy_docs(conn, task_id: str, code_root: Path, stray: Path,
+                         existing: list[str]) -> dict[str, bytes]:
+    """Файлы `tasks/<id>/` рабочей копии кода `code_root` (`stray`) — в
+    память, сам каталог — прочь с диска (ADR-0021, этап 1, AC-2) с записью
+    журнала. Пути — от корня ссылки (`tasks/<id>/…`), `.gitignore` пульта
+    отфильтрован тем же сбором, что и у каталога документов. Git не ответил
+    на сверку `.gitignore` — каталог всё равно убирается, в ссылку из него
+    ничего не идёт (та же тихая деградация без git, что и у остального
+    модуля)."""
+    from . import acceptance
+    if not stray.is_dir():
+        return {}
+    names = sorted(p.relative_to(stray).as_posix()
+                   for p in stray.rglob("*") if p.is_file())
+    collected = _collect_step_artifact_files(code_root, stray, existing)
+    acceptance.drop_from_code_copy(task_id, code_root)
+    if names:
+        store.journal(conn, task_id, "orchestrator",
+                      CODE_COPY_DOCS_DROPPED_ACTION,
+                      f"{stray}: {', '.join(names)}"
+                      + ("" if collected is not None
+                         else " (git не ответил, в ссылку не перенесены)"))
+    return collected[0] if collected is not None else {}
+
+
+CODE_COPY_DOCS_AT_START_MESSAGE = "документы из рабочей копии кода на старте шага"
+
+
+def harvest_code_copy_docs(conn, task_id: str, target: str
+                           ) -> dict[str, bytes]:
+    """`tasks/<id>/` рабочей копии кода на СТАРТЕ шага — в ссылку документов
+    тем же узлом, что и автокоммит в конце шага (фильтр посторонних файлов,
+    конфликт-гвард против выкладки прошлого шага, коммит только при
+    изменении), и прочь с диска (ADR-0021, этап 1, AC-2). Без этого
+    выкладка на старте (`runner.role_cwd`) убирала бы каталог раньше, чем
+    сбор в конце шага его увидит: файл, оставленный там между шагами
+    (прежнее правило путей HOME роли, прерванный шаг на старом коде),
+    терялся бы молча.
+
+    Возвращает файлы, прошедшие фильтры (`{tasks/<id>/…: bytes}`):
+    `runner.role_cwd` кладёт их в каталог документов, если выкладка из
+    ссылки не состоялась (git не ответил, ссылки нет, ссылка сдвинута мимо
+    пульта) — иначе они снова пропали бы до запуска роли."""
+    from . import artifact_branch
+    if target == config.DEFAULT_TARGET:
+        code_root = workspace.path(task_id)
+    else:
+        code_root = config.PROJECTS / target / "workspace"
+    if code_root.resolve() == config.ROOT.resolve():
+        return {}
+    stray = code_root / "tasks" / task_id
+    if not stray.is_dir():
+        return {}
+    branch = artifact_branch.branch_name(task_id)
+    existing = gitcmd.ls_tree_files(branch, f"tasks/{task_id}") or []
+    files = _take_code_copy_docs(conn, task_id, code_root, stray, existing)
+    files = _journal_stray_step_artifacts(conn, task_id, files)
+    if not files:
+        return {}
+    moved = _docs_ref_moved_past_pult(conn, task_id)
+    if moved is not None:
+        store.journal(conn, task_id, "orchestrator", DOCS_REF_MOVED_ACTION,
+                      f"документы рабочей копии кода не перенесены в ссылку "
+                      f"на старте шага: {moved}")
+        return files
+    baseline_sha = store.get_task(conn, task_id)["materialized_artifact_sha"] or ""
+    files = _apply_artifact_conflict_guard(conn, task_id, files, existing,
+                                           baseline_sha, branch)
+    _commit_step_artifacts_to_branch(
+        conn, task_id, files, [],
+        f"{task_id}: {CODE_COPY_DOCS_AT_START_MESSAGE} (автокоммит оркестратора)",
+        stray)
+    return files
+
+
+def _merge_code_copy_docs(conn, task_id: str, files: dict[str, bytes],
+                          stray_files: dict[str, bytes],
+                          baseline_sha: str, existing: list[str],
+                          docs_dir_present: bool) -> dict[str, bytes]:
+    """`files` каталога документов плюс `stray_files` рабочей копии кода.
+    Совпавший путь берётся из рабочей копии кода, если файл каталога
+    документов роль не трогала (байты как в выкладке `baseline_sha`); если
+    роль правила оба — главный каталог документов, расхождение пишется в
+    журнал.
+
+    Путь ссылки (`existing`), которого нет в каталоге документов, роль там
+    удалила или переименовала: его копия в рабочей копии кода (копию
+    планки для прогона велит делать миссия шага) — устаревшая, не новый
+    документ, и в ссылку не возвращается (REVIEW итерации 1, R1-F2). Без
+    каталога документов удаления не было — берётся всё из рабочей копии
+    кода."""
+    merged = dict(files)
+    kept = []
+    deleted = []
+    known = set(existing)
+    for rel, content in stray_files.items():
+        own = files.get(rel)
+        if own is None and docs_dir_present and rel in known:
+            deleted.append(rel)
+            continue
+        if own is not None and own != content \
+                and not _same_as_commit(baseline_sha, rel, own):
+            kept.append(rel)
+            continue
+        merged[rel] = content
+    if kept:
+        store.journal(conn, task_id, "orchestrator",
+                      CODE_COPY_DOCS_DROPPED_ACTION,
+                      "правлены и в каталоге документов, и в рабочей копии "
+                      f"кода — взята версия каталога документов: "
+                      f"{', '.join(sorted(kept))}")
+    if deleted:
+        store.journal(conn, task_id, "orchestrator",
+                      CODE_COPY_DOCS_DROPPED_ACTION,
+                      "удалены ролью в каталоге документов — копия в "
+                      f"рабочей копии кода в ссылку не возвращена: "
+                      f"{', '.join(sorted(deleted))}")
+    return merged
+
+
+def _same_as_commit(sha: str, rel: str, content: bytes) -> bool:
+    """`content` совпадает байтами с путём `rel` коммита `sha`; нет `sha`,
+    нет пути или git не ответил — `False`."""
+    if not sha:
+        return False
+    text, _ = gitcmd.show(sha, rel)
+    return text is not None and text.encode("utf-8") == content
+
+
+def _record_step_fixation(conn, task_id: str) -> None:
+    """`store.record_fixation` чекпоинта шага — кроме случая, когда роль
+    сдвинула ссылку документов мимо пульта (`_docs_ref_moved_past_pult`):
+    тогда фиксация остаётся прежней, расхождение увидит сверка на старте
+    следующего шага."""
+    moved = _docs_ref_moved_past_pult(conn, task_id)
+    if moved is not None:
+        store.journal(conn, task_id, "orchestrator", DOCS_REF_MOVED_ACTION,
+                      f"фиксация не обновлена: {moved}")
+        return
+    store.record_fixation(conn, task_id)
+
+
 def _commit_step_artifacts_to_branch(conn, task_id: str, files: dict[str, bytes],
                                      removed: list[str], message: str,
                                      task_dir: Path) -> str:
@@ -904,6 +1081,12 @@ def _commit_step_artifacts_to_branch(conn, task_id: str, files: dict[str, bytes]
     """
     from . import artifact_branch
     if not files and not removed:
+        return ""
+    # Коммит только при изменении (ADR-0021, этап 1): выкладка каталога
+    # документов, не тронутая ролью, не заводит пустой коммит и не
+    # перефиксирует ссылку.
+    if not removed and _same_as_ref(artifact_branch.branch_name(task_id), files):
+        shutil.rmtree(task_dir, ignore_errors=True)
         return ""
     commit_sha = artifact_branch.commit_files(task_id, files, message,
                                               remove=removed)
@@ -947,35 +1130,63 @@ def _commit_external_step_artifacts(conn, task_id: str, role: str,
     несёт пометку «WIP после таймаута», чтобы читатель истории отличил
     «роль успела сама» от «оркестратор подобрал WIP после обрыва».
     """
+    from . import acceptance, artifact_branch
     if target == config.DEFAULT_TARGET:
-        workspace_root = workspace.path(task_id)
+        code_root = workspace.path(task_id)
     else:
-        workspace_root = config.PROJECTS / target / "workspace"
+        code_root = config.PROJECTS / target / "workspace"
+    stray = code_root / "tasks" / task_id
+    workspace_root = artifact_branch.docs_root(target)
     task_dir = workspace_root / "tasks" / task_id
-    if not task_dir.is_dir():
+    branch = artifact_branch.branch_name(task_id)
+    # Документы задачи в рабочей копии кода вне прогона не лежат (ADR-0021,
+    # этап 1): `tasks/<id>/`, оставленный там ролью (прежнее правило путей
+    # HOME роли, песочница теста), читается в память и убирается; в ссылку
+    # он идёт вместе с каталогом документов ниже. Дерево ссылки без такого
+    # каталога читается позже — после ранних возвратов, как и прежде.
+    existing = None
+    stray_files: dict[str, bytes] = {}
+    if stray.is_dir():
+        existing = gitcmd.ls_tree_files(branch, f"tasks/{task_id}") or []
+        stray_files = _take_code_copy_docs(conn, task_id, code_root, stray,
+                                           existing)
+    if not task_dir.is_dir() and not stray_files:
+        return ""
+    moved = _docs_ref_moved_past_pult(conn, task_id)
+    if moved is not None:
+        # Каталог документов не переносится и остаётся на диске: сверка на
+        # старте следующего шага остановит задачу инцидентом целостности.
+        store.journal(conn, task_id, "orchestrator", DOCS_REF_MOVED_ACTION,
+                      f"автокоммит каталога документов {task_dir} не "
+                      f"выполнен: {moved}")
         return ""
 
-    from . import artifact_branch
-    branch = artifact_branch.branch_name(task_id)
     own_commit_marker = f"{task_id}: артефакты шага {role} (автокоммит оркестратора"
     message = (f"{own_commit_marker}, WIP после таймаута)" if timeout
               else f"{own_commit_marker})")
-    existing = gitcmd.ls_tree_files(branch, f"tasks/{task_id}") or []
+    if existing is None:
+        existing = gitcmd.ls_tree_files(branch, f"tasks/{task_id}") or []
 
     collected = _collect_step_artifact_files(workspace_root, task_dir, existing)
     if collected is None:
         return ""
     files, existing = collected
+    t = store.get_task(conn, task_id)
+    baseline_sha = t["materialized_artifact_sha"] or ""
+    docs_dir_present = task_dir.is_dir()
+    files = _merge_code_copy_docs(conn, task_id, files, stray_files,
+                                  baseline_sha, existing, docs_dir_present)
 
     files = _journal_stray_step_artifacts(conn, task_id, files)
 
-    t = store.get_task(conn, task_id)
-    baseline_sha = t["materialized_artifact_sha"] or ""
     files = _apply_artifact_conflict_guard(conn, task_id, files, existing,
                                            baseline_sha, branch)
 
-    removed = _step_artifact_deletion_candidates(
+    # Без каталога документов отсутствие файла ссылки в `files` не значит,
+    # что роль его удалила: рабочая копия кода несёт только написанное ролью.
+    removed = (_step_artifact_deletion_candidates(
         conn, task_id, role, t, files, existing, branch, own_commit_marker)
+        if docs_dir_present else [])
 
     return _commit_step_artifacts_to_branch(conn, task_id, files, removed,
                                             message, task_dir)

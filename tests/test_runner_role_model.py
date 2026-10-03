@@ -23,8 +23,8 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from orchestrator import (catalog, config, gitcmd, models,  # noqa: E402
-                          providers, runner, spend, store)
+from orchestrator import (artifact_branch, catalog, config, gitcmd,  # noqa: E402
+                          models, providers, runner, spend, store)
 from tests.sandbox import (DeveloperBriefTmpRootTest as TmpRootTest,  # noqa: E402
                            FakeProc, capture_new_task_id, event, fake_git,
                            role_map_fixture, sync_spec_from_worktree)
@@ -101,7 +101,9 @@ class ModelFlagJournalTest(TmpRootTest):
         conn = store.db()
         conn.execute("UPDATE tasks SET state='in_dev' WHERE id=?", (self.TASK,))
         conn.commit()
-        tdir = config.WORKTREES / self.TASK / "tasks" / self.TASK
+        # Обязательный артефакт шага — в каталоге документов задачи, куда
+        # его пишет роль (ADR-0021, этап 1), не в рабочей копии кода.
+        tdir = artifact_branch.docs_dir(self.TASK, config.DEFAULT_TARGET)
         tdir.mkdir(parents=True, exist_ok=True)
         (tdir / "PLAN.md").write_text("маркер\n", encoding="utf-8")
 

@@ -91,8 +91,10 @@ class ConflictGuardStateGuardTest(RealGitSandbox):
         store.insert_task(store.db(), self.TASK, "State-гвард лока тестов",
                           "tests_writing", f"task/{self.TASK.lower()}-x",
                           self.TARGET, config.DEFAULT_BUDGET_USD)
-        self.workspace_root = config.PROJECTS / self.TARGET / "workspace"
-        self.task_dir = self.workspace_root / "tasks" / self.TASK
+        # Роль пишет документы в каталог документов задачи (ADR-0021,
+        # этап 1) — источник автокоммита шага.
+        self.workspace_root = artifact_branch.docs_root(self.TARGET)
+        self.task_dir = artifact_branch.docs_dir(self.TASK, self.TARGET)
 
     def artifact_branch_files(self) -> list:
         from orchestrator import gitcmd

@@ -20,7 +20,8 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from orchestrator import checkpoint, config, fixation, gitcmd, runner, store, workspace  # noqa: E402
+from orchestrator import (artifact_branch, checkpoint, config, fixation,  # noqa: E402
+                          gitcmd, runner, store, workspace)
 from tests.test_git_fixation import RealPultGitTest  # noqa: E402
 
 
@@ -493,14 +494,19 @@ class CommitAbnormalCheckpointTest(_WorktreeCheckpointTest):
         """Регресс-тест точного репро ревьювера (REVIEW.md итерация 2,
         R1-F1, «Проверено исполнением»): материализованный `role_cwd`
         SPEC.md роли `reviewer` (нет мандата кода) не обязан попасть в
-        кодовую ветку на аварийном завершении шага."""
+        кодовую ветку на аварийном завершении шага.
+
+        Ловит мутацию: `role_cwd` выкладывает документы в рабочую копию
+        кода (`materialize_task_dir(id, path)`), а чекпоинт коммитит её
+        без исключения `tasks/<id>/` для любой роли — и тест покраснеет."""
         self.enter_in_dev()
 
         materialized_path = runner.role_cwd(store.db(), self.TASK,
                                             config.DEFAULT_TARGET)
         self.assertEqual(materialized_path, self.wt)
         self.assertTrue(
-            (self.wt / "tasks" / self.TASK / "SPEC.md").exists(),
+            (artifact_branch.docs_dir(self.TASK, config.DEFAULT_TARGET)
+             / "SPEC.md").exists(),
             "role_cwd обязан материализовать SPEC.md из артефактной ветки")
 
         checkpoint.commit_abnormal_checkpoint(
@@ -630,14 +636,20 @@ class CommitPauseNowCheckpointTest(_WorktreeCheckpointTest):
         """Регресс-тест точного репро ревьювера (REVIEW.md итерация 2,
         R1-F1, «Проверено исполнением»): материализованный `role_cwd`
         SPEC.md роли `reviewer` (нет мандата кода) не обязан попасть в
-        кодовую ветку на `pause --now`."""
+        кодовую ветку на `pause --now`.
+
+        Ловит мутацию: `role_cwd` выкладывает документы в рабочую копию
+        кода (`materialize_task_dir(id, path)`), а чекпоинт `pause --now`
+        коммитит её без исключения `tasks/<id>/` для любой роли — и тест
+        покраснеет."""
         self.enter_in_dev()
 
         materialized_path = runner.role_cwd(store.db(), self.TASK,
                                             config.DEFAULT_TARGET)
         self.assertEqual(materialized_path, self.wt)
         self.assertTrue(
-            (self.wt / "tasks" / self.TASK / "SPEC.md").exists(),
+            (artifact_branch.docs_dir(self.TASK, config.DEFAULT_TARGET)
+             / "SPEC.md").exists(),
             "role_cwd обязан материализовать SPEC.md из артефактной ветки")
 
         checkpoint.commit_pause_now_checkpoint(
@@ -659,13 +671,20 @@ class RoleCwdMaterializationSurvivesTimeoutCheckpointTest(_WorktreeCheckpointTes
     которым дефект был живьём воспроизведён при ревью."""
 
     def test_materialized_spec_is_absent_from_the_code_branch_after_timeout(self):
+        """Материализованный на старте шага SPEC.md не попадает в кодовую
+        ветку через WIP-чекпоинт таймаута.
+
+        Ловит мутацию: `role_cwd` выкладывает документы в рабочую копию
+        кода (`materialize_task_dir(id, path)`), а чекпоинт таймаута
+        коммитит её без `exclude=tasks/<id>` — и тест покраснеет."""
         self.enter_in_dev()
 
         materialized_path = runner.role_cwd(store.db(), self.TASK,
                                             config.DEFAULT_TARGET)
         self.assertEqual(materialized_path, self.wt)
         self.assertTrue(
-            (self.wt / "tasks" / self.TASK / "SPEC.md").exists(),
+            (artifact_branch.docs_dir(self.TASK, config.DEFAULT_TARGET)
+             / "SPEC.md").exists(),
             "role_cwd обязан материализовать SPEC.md из артефактной ветки")
         # Настоящий WIP вне tasks/<id>/, чтобы чекпоинт реально что-то
         # закоммитил — иначе тест доказывал бы только «ничего не

@@ -23,7 +23,8 @@ import unittest
 from contextlib import redirect_stdout
 from pathlib import Path
 
-from orchestrator import alerts, checkpoint, config, fsm, store, workspace
+from orchestrator import (alerts, artifact_branch, checkpoint, config, fsm,
+                          store, workspace)
 from scripts import guard
 from tests.sandbox import RealGitSandbox
 
@@ -104,8 +105,12 @@ class _PultCommitSandbox(RealGitSandbox):
                 f"VALUE = {n}\n" * (1 + self.rng.randrange(5)))
 
     def write_plan_escalate(self) -> None:
-        self.write(str(Path("tasks", FIXTURE_TASK, "PLAN.md")),
-                   PLAN_ESCALATE.format(task=FIXTURE_TASK, tag=self.seed))
+        """PLAN.md шага — в каталог документов задачи, куда его пишет роль
+        (ADR-0021, этап 1), не в рабочую копию кода."""
+        path = artifact_branch.docs_dir(FIXTURE_TASK, config.DEFAULT_TARGET) / "PLAN.md"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(PLAN_ESCALATE.format(task=FIXTURE_TASK, tag=self.seed),
+                        encoding="utf-8")
 
     def reject_commits_with_hook(self) -> str:
         """Хук `pre-commit`, отказывающий любому коммиту с текстом в stderr;
