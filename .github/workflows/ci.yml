@@ -2,16 +2,16 @@ name: ci
 
 on:
   push:
-    # "artifact/**" — артефактная ветка пульта задачи внешнего target'а
-    # (SPEC T094, требование 7): guard обязан валидировать структуру
-    # tasks/<id>/ и там же, не только на кодовых ветках self.
+    # Веток `artifact/**` нет (ADR-0021 п.4, п.12): документы задачи живут
+    # в ссылке `refs/artifacts/<id>` и проверяются гейтами пульта на
+    # переходах, прогона CI на пуше документов нет.
     #
     # Фильтры `paths`/`paths-ignore` здесь ЗАПРЕЩЕНЫ (ADR-0016, инвариант
     # 36): пуш без прогона пульт читает как «проверок нет вовсе»
     # (`ci.verifying_status`/`ci.branch_status`) и висит до потолка
     # ожидания. Лишние проверки снимаются условием на job (статус
     # `skipped`, зелёный для `ci.GREEN`), не сужением триггера.
-    branches: ["main", "task/**", "artifact/**"]
+    branches: ["main", "task/**"]
   pull_request:
 
 jobs:
@@ -29,29 +29,19 @@ jobs:
       - name: guard.py по всем артефактам задач
         run: |
           # Ветка task/** — не источник истины для tasks/<id>/ (SPEC
-          # 01M1R9YEK08XEQWBFX0929WFVJ, требование 4/AC-9): роли коммитят
-          # артефакты только в артефактную ветку (artifact/**), кодовая
-          # ветка задачи несёт в лучшем случае устаревшую легаси-копию —
-          # guard по ней красил CI на расхождении, которого в источнике
-          # истины не было (SPEC «Контекст», 01M1PP0VYRT55WN8GGVG66X89Y).
-          # Источник истины — свой собственный прогон на пуше artifact/**.
+          # 01M1R9YEK08XEQWBFX0929WFVJ, требование 4/AC-9): документы
+          # задачи живут в ссылке `refs/artifacts/<id>` (ADR-0021 п.3),
+          # кодовая ветка задачи несёт в лучшем случае устаревшую
+          # легаси-копию — guard по ней красил CI на расхождении, которого
+          # в источнике истины не было (SPEC «Контекст»,
+          # 01M1PP0VYRT55WN8GGVG66X89Y). Документы проверяют гейты пульта
+          # на переходах и гейт мержа (ADR-0021 п.4).
           if [[ "${GITHUB_REF#refs/heads/}" == task/* ]]; then
-            echo "ветка task/** — tasks/<id>/ не источник истины здесь, источник — artifact/** (SPEC 01M1R9YEK08XEQWBFX0929WFVJ)"
+            echo "ветка task/** — tasks/<id>/ не источник истины здесь, документы проверяют гейты пульта (ADR-0021 п.4)"
             exit 0
           fi
-          # На артефактной ветке пульта задачи (`artifact/<id>`) каждый
-          # автокоммит шага роли несёт промежуточные, по определению
-          # неполные артефакты (01M1R66X5SMD3ZEDCVAJ0DR7K2, требование 6):
-          # `--artifact-branch` понижает нарушения содержания черновика
-          # до предупреждения, оставляя нарушения frontmatter и полную
-          # проверку «сданных» артефактов ошибкой. На `main` — вызов без
-          # флага, поведение прежнее.
-          GUARD_ARGS="--all"
-          if [[ "${GITHUB_REF#refs/heads/}" == artifact/* ]]; then
-            GUARD_ARGS="--all --artifact-branch"
-          fi
           if ls tasks/*/*.md >/dev/null 2>&1; then
-            python3 scripts/guard.py $GUARD_ARGS
+            python3 scripts/guard.py --all
           else
             echo "артефактов пока нет — ок"
           fi
@@ -96,9 +86,7 @@ jobs:
     # Мержи пульта идут пушем в main без pull request (merge_gate ->
     # done), поэтому сторож работает и на push: база — sha до пуша
     # (`github.event.before`); для новой ветки она нулевая — пропуск.
-    # ADR-0016: artifact/** несёт только tasks/<id>/ — skills/, templates/,
-    # docs/ там не меняются, диффу нечего проверять.
-    if: ${{ (github.event_name == 'pull_request' || github.event_name == 'push') && !startsWith(github.ref, 'refs/heads/artifact/') }}
+    if: ${{ github.event_name == 'pull_request' || github.event_name == 'push' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

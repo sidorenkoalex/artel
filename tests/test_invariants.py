@@ -2030,10 +2030,11 @@ if __name__ == "__main__":
 
 
 class CiJobsByPushClassInvariantTest(unittest.TestCase):
-    """Инвариант 36 (docs/invariants.md, ADR-0016): прогон CI существует
-    для каждого пуша в `main`, `task/**`, `artifact/**` — лишние проверки
-    снимаются условием на job (статус `skipped`, зелёный для `ci.GREEN`),
-    не сужением триггера.
+    """Инвариант 36 (docs/invariants.md, ADR-0016, ADR-0021 пп. 4, 12):
+    прогон CI существует для каждого пуша в `main` и `task/**` — лишние
+    проверки снимаются условием на job (статус `skipped`, зелёный для
+    `ci.GREEN`), не сужением триггера. Пуш документов (`artifact/**`)
+    прогона не получает: документы проверяют гейты пульта на переходах.
 
     Почему это инвариант, а не вкус: `ci.verifying_status` и
     `ci.branch_status` читают check-runs головы кодовой ветки; пуш, для
@@ -2047,8 +2048,12 @@ class CiJobsByPushClassInvariantTest(unittest.TestCase):
        `refs/heads/task/`, и не построены как `== 'true'` по output
        соседнего job (упавший `changes` дал бы пустой output и молча снял
        тесты — fail-open);
-    3. job `guard` не несёт условия, исключающего `refs/heads/artifact/`
-       (ради этой ветки триггер и заводился, SPEC T094, требование 7).
+    3. ни один job не несёт собственного условия со ссылкой на
+       `refs/heads/artifact/`, а job `guard` не зовёт режим
+       `--artifact-branch` — режима и веток `artifact/**` больше нет
+       (ADR-0021 п.4), условие на них — мёртвая развилка;
+    4. `on.push.branches` перечисляет `main` и `task/**` и не перечисляет
+       `artifact/**` (ADR-0021 п.12: CI на пуше документов отменён).
 
     Полного YAML в пульте нет намеренно (`orchestrator/yamlmini.py`,
     блочные списки не читаются), поэтому разбор — по блокам отступов:
@@ -2082,6 +2087,11 @@ class CiJobsByPushClassInvariantTest(unittest.TestCase):
         return out
 
     @classmethod
+    def _job_names(cls, text: str) -> list[str]:
+        return [ln.strip().split(":")[0] for ln in cls._top_block(text, "jobs")
+                if ln.startswith("  ") and not ln[2].isspace()]
+
+    @classmethod
     def violations(cls, text: str) -> list[str]:
         found = []
         on = cls._top_block(text, "on")
@@ -2090,15 +2100,30 @@ class CiJobsByPushClassInvariantTest(unittest.TestCase):
         for ln in on:
             if re.match(r"\s+paths(-ignore)?:", ln):
                 found.append(f"фильтр путей под on: — {ln.strip()}")
+        branches = [ln for ln in on if re.match(r"\s+branches:", ln)]
+        if not branches:
+            found.append("под on: нет списка branches")
+        for ln in branches:
+            for required in ('"main"', '"task/**"'):
+                if required not in ln:
+                    found.append(f"on.push.branches без {required} — {ln.strip()}")
+            if "artifact/" in ln:
+                found.append(f"on.push.branches несёт artifact/** — {ln.strip()}")
+        for job in cls._job_names(text):
+            for ln in cls._job_block(text, job):
+                if re.match(r"    if:", ln) and "refs/heads/artifact/" in ln:
+                    found.append(f"job {job}: условие исключает 'artifact/' — {ln.strip()}")
+        if any("--artifact-branch" in ln for ln in cls._job_block(text, "guard")):
+            found.append("job guard: вызывает режим --artifact-branch")
         for job, forbidden in (("python", "task/"), ("python-min", "task/"),
-                               ("guard", "artifact/")):
+                               ("guard", None)):
             block = cls._job_block(text, job)
             if not block:
                 found.append(f"job {job} не найден")
                 continue
             own_if = [ln for ln in block if re.match(r"    if:", ln)]
             for ln in own_if:
-                if forbidden in ln:
+                if forbidden and forbidden in ln:
                     found.append(f"job {job}: условие исключает {forbidden!r} — {ln.strip()}")
                 if job != "guard" and "== 'true'" in ln:
                     found.append(f"job {job}: условие fail-open (== 'true') — {ln.strip()}")
@@ -2142,6 +2167,54 @@ class CiJobsByPushClassInvariantTest(unittest.TestCase):
             "    if: ${{ !startsWith(github.ref, 'refs/heads/artifact/') }}\n", 1)
         self.assertNotEqual(text, planted)
         self.assertTrue(any("исключает 'artifact/'" in v for v in self.violations(planted)),
+                        self.violations(planted))
+
+    def test_planted_artifact_exclusion_on_any_job_is_caught(self):
+        """Ловит мутацию: проверка условия `refs/heads/artifact/` сужена
+        обратно до одного job `guard` — развилка на несуществующие ветки
+        `artifact/**` в условии другого job (здесь `canary-guid-leak`, где
+        она стояла до ADR-0021) прошла бы молча."""
+        text = (REPO_ROOT / self.CI_REL).read_text(encoding="utf-8")
+        planted = re.sub(
+            r"(\n  canary-guid-leak:\n(?:    [^\n]*\n)*?    if: \$\{\{ )",
+            r"\1!startsWith(github.ref, 'refs/heads/artifact/') && ",
+            text, count=1)
+        self.assertNotEqual(text, planted)
+        self.assertTrue(
+            any("canary-guid-leak: условие исключает 'artifact/'" in v
+                for v in self.violations(planted)),
+            self.violations(planted))
+
+    def test_planted_artifact_branch_trigger_is_caught(self):
+        """Ловит мутацию: проверка списка `on.push.branches` снята —
+        возвращённый в триггер `artifact/**` (CI на пуше документов,
+        отменённый ADR-0021 п.12) прошёл бы молча."""
+        text = (REPO_ROOT / self.CI_REL).read_text(encoding="utf-8")
+        planted = text.replace('"task/**"]', '"task/**", "artifact/**"]', 1)
+        self.assertNotEqual(text, planted)
+        self.assertTrue(any("artifact/**" in v for v in self.violations(planted)),
+                        self.violations(planted))
+
+    def test_planted_task_branch_dropped_from_trigger_is_caught(self):
+        """Ловит мутацию: проверка обязательных веток триггера снята —
+        `task/**`, выпавший из `on.push.branches`, оставил бы кодовую
+        ветку задачи без прогона CI, а пульт висел бы до потолка ожидания
+        (инвариант 19)."""
+        text = (REPO_ROOT / self.CI_REL).read_text(encoding="utf-8")
+        planted = text.replace('["main", "task/**"]', '["main"]', 1)
+        self.assertNotEqual(text, planted)
+        self.assertTrue(any('без "task/**"' in v for v in self.violations(planted)),
+                        self.violations(planted))
+
+    def test_planted_artifact_branch_mode_in_guard_job_is_caught(self):
+        """Ловит мутацию: проверка вызова режима в job `guard` снята —
+        возвращённая развилка `--artifact-branch` звала бы режим, которого
+        у `scripts/guard.py` больше нет (ADR-0021 п.4)."""
+        text = (REPO_ROOT / self.CI_REL).read_text(encoding="utf-8")
+        planted = text.replace("python3 scripts/guard.py --all\n",
+                               "python3 scripts/guard.py --all --artifact-branch\n", 1)
+        self.assertNotEqual(text, planted)
+        self.assertTrue(any("--artifact-branch" in v for v in self.violations(planted)),
                         self.violations(planted))
 
 
