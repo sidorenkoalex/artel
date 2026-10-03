@@ -158,9 +158,10 @@ schema_version: 5
   противоречит. Путь вне зон задачи — вопрос 3.
 - `--add-dir` codex 0.155.1 не проверен исполнением — вопрос 2.
 - Роли на старой выкладке после мержа: шаг, начавшийся на старом коде,
-  оставит `tasks/<id>/` в рабочей копии — следующий старт его уберёт;
-  сам `tasks/<id>/` старого шага автокоммит больше не читает (переход
-  при пустом конвейере, ADR-0021 п.13).
+  оставит `tasks/<id>/` в рабочей копии — следующий старт его уберёт.
+  `tasks/<id>/` в коде, оставленный шагом на новом коде (прежнее правило
+  HOME), автокоммит переносит в ссылку и убирает (раздел «Возврат после
+  сбоя входа агента»). Переход — при пустом конвейере, ADR-0021 п.13.
 
 ## Предложения системе
 - Шаг developer этой задачи упал по таймауту, не написав PLAN.md: при
@@ -206,6 +207,44 @@ schema_version: 5
   изменённым `tests/*.py` против базы 8b233806 — пусто. Прогон
   `test_timeout_checkpoint`, `test_review_package`, `test_multitarget`,
   `test_mutation_claim_gate` — 247 passed.
+
+## Возврат после сбоя входа агента (403) и его исполнение
+Причина возврата — сбой аутентификации CLI (rc=1, «403 Request not
+allowed», 0 токенов на 3-й попытке), не дефект кода. Первые попытки того
+шага успели правку, которую пульт подобрал WIP-чекпоинтом `579c4567`;
+этот шаг её довёл и проверил:
+- Переходный перенос `tasks/<id>/` рабочей копии кода в ссылку
+  (`checkpoint._take_code_copy_docs`, `_merge_code_copy_docs`): роль,
+  которая пишет по прежнему правилу HOME (копия `.artel/home` обновляется
+  Оператором только после мержа), не теряет артефакт. Каталог в коде
+  по-прежнему убирается (AC-2). Если роль правила файл в обоих местах,
+  берётся версия каталога документов, расхождение пишется в журнал.
+  `runner._missing_required_artifact` засчитывает и этот путь. Гейты лока
+  и конфликт-гвард применяются к объединённому набору, как и раньше.
+- Дефект WIP исправлен: `ls-tree` ссылки шёл до ранних возвратов при
+  любом шаге и красил `test_review_package.py::CmdRunReviewPackageTest::
+  test_developer_step_has_no_package`. Теперь дерево ссылки читается
+  раньше только при наличии `tasks/<id>/` в коде, иначе — на прежнем
+  месте. Тест зелёный без правки.
+- Новый сторож `tests/test_docs_dir_layout.py::StepAutocommitFromDocsDirTest::
+  test_code_copy_artifact_reaches_ref_and_docs_dir_edit_wins`. Обе мутации
+  его заявки проверены, тест красный: `_take_code_copy_docs` → `return {}`
+  и снятое условие приоритета каталога документов. Код возвращён. В
+  заявке соседнего `test_docs_dir_edit_reaches_ref_code_copy_copy_does_not`
+  (файл этой задачи) убрана ложная часть про `stray.md`: его отсекает
+  фильтр посторонних файлов корня, а не источник автокоммита.
+- Прогоны (`-p no:cacheprovider -p timeout -o timeout=120`): планка
+  `acceptance_tests/` целиком + долгоживущий файл + `test_docs_dir_layout`,
+  `test_checkpoint_external_step_artifacts`, `test_step_autocommit`,
+  `test_01m3y857…_required_artifact`, `test_review_package`,
+  `test_timeout_checkpoint` — 232 passed, 1 failed (исправлено выше);
+  после исправления `test_review_package`, `test_docs_dir_layout`,
+  `test_checkpoint_external_step_artifacts`, `test_step_autocommit`,
+  долгоживущий, `test_docs_dir_step`, `test_docs_dir_integrity`,
+  `test_01m3vfyp…_pult_commit` — 188 passed. Карта регенерирована.
+- `tasks/<id>/inv_test.diff` — черновик прошлого шага (диф приложения 2),
+  попал в ссылку. Удалить его из шага нечем (`rm` роли недоступен). Он не
+  артефакт, guard на PLAN.md зелёный. Оператору: файл можно удалить.
 
 ## Расширение зон
 Пути: docs/reference/role-home/claude/CLAUDE.md
