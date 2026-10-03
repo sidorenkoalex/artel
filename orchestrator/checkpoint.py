@@ -115,16 +115,20 @@ def _wip_checkpoint(conn, task_id: str, role: str, message: str, action: str,
     wt = workspace.path(task_id)
     detail = ""
     if role == "developer":
-        committed, sha, _stray, _error = _commit_worktree_change(
+        committed, sha, stray, _error = _commit_worktree_change(
             conn, task_id, wt, message, exclude=f"tasks/{task_id}")
+        if stray:
+            restore_out_of_bounds_deletions(conn, task_id, role, wt)
         if committed:
             detail = f"{message} (sha {sha})" if sha else message
             store.journal(conn, task_id, "orchestrator", action, detail)
             _record_step_fixation(conn, task_id)
     elif role == "test_author":
+        restore_out_of_bounds_deletions(conn, task_id, role, wt)
         detail = _test_author_checkpoint(conn, task_id, role, wt, message,
                                          action, discard_action, discard_detail)
     else:
+        restore_out_of_bounds_deletions(conn, task_id, role, wt)
         discarded = _discard_out_of_mandate_changes(wt, task_id)
         if discarded:
             journal_detail = (f"{task_id}: WIP вне мандата роли {role} "
@@ -320,6 +324,118 @@ def _test_author_checkpoint(conn, task_id: str, role: str, wt: Path,
     store.journal(conn, task_id, "orchestrator", action, detail)
     _record_step_fixation(conn, task_id)
     return detail
+
+
+# Действие журнала восстановления удалённых файлов (SPEC
+# 01M41R4YAM4NGEQXW1FWH7T22M, требование 4) — одно на все роли: по нему
+# Оператор находит случай независимо от того, чей это был шаг.
+RESTORED_DELETIONS_ACTION = "удалённые вне путей роли файлы восстановлены"
+
+# Сколько путей называет запись журнала: случай 03.10.2026 — 3192 файла,
+# запись читают глазами.
+_RESTORED_PATHS_SHOWN = 5
+
+# Пути на один вызов `git checkout`: тысячи путей одной командной строкой
+# упираются в предел длины argv.
+_RESTORE_CHUNK = 200
+
+
+def _deleted_tracked_paths(wt: Path) -> list[str] | None:
+    """Пути HEAD, удалённые в worktree или в индексе (`git status -z`):
+    `D` в любой колонке, кроме добавленного и тут же удалённого (`AD` — в
+    HEAD его нет), и источник переименования. `None` — git не ответил."""
+    res = gitcmd.in_repo(wt, "status", "--porcelain=v1", "-z",
+                         "--untracked-files=no")
+    if res is None or res.returncode != 0:
+        return None
+    entries = res.stdout.split("\0")
+    deleted = []
+    i = 0
+    while i < len(entries):
+        entry = entries[i]
+        i += 1
+        if len(entry) < 4:
+            continue
+        code, rel = entry[:2], entry[3:]
+        if code[0] in "RC":
+            # В `-z` у переименования/копии источник — следующей записью.
+            src = entries[i] if i < len(entries) else ""
+            i += 1
+            if code[0] == "R" and src:
+                deleted.append(src)
+            continue
+        if code[0] == "D" or (code[1] == "D" and code[0] != "A"):
+            deleted.append(rel)
+    return deleted
+
+
+def _role_may_delete(task_id: str, role: str, rel: str,
+                     zones: list[str]) -> bool:
+    """Путь, удаление которого шагом роли не восстанавливается: свой
+    каталог задачи — любой роли; зоны задачи с общими (`_zone_paths`) —
+    developer (задача без заявленных зон фильтра не имеет, тот же довод,
+    что у `_stray_staged_paths`); свои долгоживущие файлы — test_author
+    (их судьбу решает `_test_author_checkpoint`)."""
+    if zone_lock._paths_overlap(rel, task_dir_zone(task_id)):
+        return True
+    if role == "developer":
+        return not zones or any(zone_lock._paths_overlap(rel, z) for z in zones)
+    if role == "test_author":
+        return guard.is_long_lived_test_path(task_id, rel)
+    return False
+
+
+def restore_out_of_bounds_deletions(conn, task_id: str, role: str,
+                                    wt: Path) -> list[str]:
+    """Восстанавливает из HEAD отслеживаемые файлы, удалённые шагом роли
+    вне путей, которые ей разрешено менять (SPEC 01M41R4YAM4NGEQXW1FWH7T22M,
+    требование 4): 03.10.2026 роли пять раз убирали за собой весь
+    отслеживаемый каталог задач рабочей копии, а чекпоинт developer
+    коммитит незакоммиченное за роль — массовое удаление ушло бы в ветку.
+
+    Прочим ролям — ДО отката вне мандата: восстановленное не попадает в
+    запись отката. developer — ПОСЛЕ `_commit_worktree_change` и только
+    когда тот снял со стейджа пути вне зон (`stray`): удаление вне зон
+    приходит именно так и в коммит пульта уже не попало, а шаг с чистым
+    деревом не платит лишним вызовом git. Удаления внутри разрешённых
+    путей (`_role_may_delete`) не трогаются — их судят гейт зон и гейт
+    сохранности тестов.
+
+    Журнал — одна запись `RESTORED_DELETIONS_ACTION` на шаг: число
+    восстановленных файлов и первые из их путей. Отказ git на статусе —
+    тихая деградация, как у остального модуля; отказ на восстановлении —
+    в той же записи, с текстом git. Возврат — восстановленные пути."""
+    deleted = _deleted_tracked_paths(wt)
+    if not deleted:
+        return []
+    zones = _zone_paths(conn, task_id) if role == "developer" else []
+    doomed = [rel for rel in deleted
+              if not _role_may_delete(task_id, role, rel, zones)]
+    if not doomed:
+        return []
+    restored, errors = [], []
+    for start in range(0, len(doomed), _RESTORE_CHUNK):
+        chunk = doomed[start:start + _RESTORE_CHUNK]
+        res = gitcmd.in_repo(wt, "--literal-pathspecs", "checkout", "HEAD",
+                             "--", *chunk)
+        if res is not None and res.returncode == 0:
+            restored.extend(chunk)
+        else:
+            output = "" if res is None else " ".join(
+                ((res.stderr or "") + " " + (res.stdout or "")).split())
+            errors.append(output or "git не ответил")
+    shown = ", ".join(restored[:_RESTORED_PATHS_SHOWN])
+    more = len(restored) - _RESTORED_PATHS_SHOWN
+    detail = (f"{task_id}: шаг роли {role} удалил отслеживаемые файлы вне "
+              f"разрешённых ей путей — восстановлено из HEAD: {len(restored)}"
+              + (f"; первые: {shown}" if shown else "")
+              + (f" и ещё {more}" if more > 0 else ""))
+    if errors:
+        detail += (f"; не восстановлено {len(doomed) - len(restored)} — git "
+                   f"checkout: {'; '.join(errors)}")
+    store.journal(conn, task_id, "orchestrator", RESTORED_DELETIONS_ACTION,
+                  detail)
+    return restored
 
 
 def _discard_out_of_mandate_changes(wt: Path, task_id: str,
@@ -596,12 +712,20 @@ def commit_success_checkpoint(conn, task_id: str, role: str) -> str:
     коммитятся, прочее вне `tasks/<id>/` откатывается с записью в журнал
     (`_test_author_checkpoint`) — иначе шаг, завершённый штатно, оставлял
     бы свои файлы незакоммиченными, а чужую правку — на диске.
+
+    Исключение из «никакого эффекта» для прочих ролей — удалённые
+    отслеживаемые файлы вне разрешённых роли путей восстанавливаются у
+    ЛЮБОЙ роли (`restore_out_of_bounds_deletions`, SPEC
+    01M41R4YAM4NGEQXW1FWH7T22M, требование 4): 03.10.2026 роли уборкой
+    удаляли весь отслеживаемый каталог задач рабочей копии.
     """
-    if role not in ("developer", "test_author"):
-        return ""
     if store.task_target(conn, task_id) != config.DEFAULT_TARGET:
         return ""
     wt = workspace.path(task_id)
+    if role != "developer":
+        restore_out_of_bounds_deletions(conn, task_id, role, wt)
+    if role not in ("developer", "test_author"):
+        return ""
     if role == "test_author":
         return _test_author_checkpoint(
             conn, task_id, role, wt,
@@ -613,8 +737,10 @@ def commit_success_checkpoint(conn, task_id: str, role: str) -> str:
     exclude = f"tasks/{task_id}"
     message = (f"{task_id}: код закоммичен пультом за роль developer — "
               "шаг завершён с незакоммиченным кодом")
-    committed, sha, _stray, _error = _commit_worktree_change(
+    committed, sha, stray, _error = _commit_worktree_change(
         conn, task_id, wt, message, exclude=exclude)
+    if stray:
+        restore_out_of_bounds_deletions(conn, task_id, role, wt)
     if not committed:
         return ""
     summary = _commit_summary(wt, sha)
