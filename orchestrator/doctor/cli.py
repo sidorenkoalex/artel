@@ -84,7 +84,6 @@ def all_checks(conn) -> list[doctor.Check]:
     for name, entry in declared.items():
         checks.append(doctor.check_target_layout(name))
         checks.append(doctor.check_target_wrapper(name))
-        checks.append(doctor.check_remote_empty(name))
         checks.append(doctor.check_base_branch(name, entry))
         checks.extend(doctor.recovery_check(conn, name))
 

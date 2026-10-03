@@ -6,44 +6,29 @@
 задачи в колонку `tasks.fixed_sha` — FSM и `approve` сверяются с ней
 одинаково, не зная, откуда взялся sha.
 
-С ADR-0021 (п.3, этап 1, часть а) зафиксированное состояние документов —
-коммит ссылки `refs/artifacts/<id>` задачи (`fix`/`read`): документы
-живут там от `new` до закрытия, а репозиторий фиксации, описанный ниже,
-фиксация больше не коммитит (его упраздняет часть б). Пишущие места
+С ADR-0021 (п.3, этап 1) зафиксированное состояние документов — коммит
+ссылки `refs/artifacts/<id>` задачи (`fix`/`read`) в репозитории задачи
+(`artifact_branch.task_repo`: git пульта для артели, git проекта для
+внешнего target): документы живут там от `new` до закрытия. Пишущие места
 пульта, двигающие ссылку вне перехода (автокоммит шага, `answer`,
 `zones-extend`, `amend-tests`, `doctor --fix`, коммит закрытия),
 перефиксируют её сами (`store.record_fixation`); запись мимо них сверка
 видит расхождением.
 
-Единая логика для ЛЮБОГО target (A7, требование 2 — снятие особого
-случая догфуда): артефактный git-репозиторий `.artel/projects/<target>/`
-(`projects.init_artifact_repo`) коммитит оркестратор целиком на каждом
-переходе — будущие типы артефактов фиксируются тем же коммитом без
-правки этого модуля (ADR-0003 п.15). До A7 self/догфуд
-(`config.DEFAULT_TARGET`) нёс собственную ветвь (`_fix_dogfood`: чтение
-головного sha ветки задачи + чистоты `tasks/<id>` рабочей копии) —
-убрана целиком вместе с однобраншевым флоу заведения задачи
-(`catalog._new_dogfood`, тоже убран этой задачей): артель теперь
-фиксируется тем же кодом, что уже сегодня фиксирует любой другой
-target.
+Репозиторий фиксации области проекта `.artel/projects/<target>/`
+(ADR-0003 п.15, коммит каталога целиком на каждом переходе) упразднён
+(ADR-0021 п.2, этап 1, часть б2): фиксация его не заводит, не коммитит и
+не читает. Единая логика для ЛЮБОГО target, включая артель.
 
-`sha == ""` в обеих ветках — git не ответил или фиксировать нечего:
-вырожденный случай, на котором `approve`/`run` ведут себя так же, как до
-T021 (существующие тесты без реального git в песочнице — тот же путь).
+`sha == ""` — ссылки нет или git не ответил: вырожденный случай, на
+котором `approve`/`run` ведут себя так же, как до T021 (существующие
+тесты без реального git в песочнице — тот же путь).
 
-`fix()` и `check_integrity()` читают состояние по-разному (REVIEW.md
-T021, замечание 1, итерация 1): `fix()` — точка ФИКСАЦИИ (`set_state`,
-`approve`), ей положено коммитить внешний репо целиком (требование 2).
-`check_integrity()` — точка ПРОВЕРКИ перед стартом шага, и коммитить ей
-нельзя: коммит здесь как побочный эффект сравнения означал бы, что
-чужой незакоммиченный артефакт (роль другой задачи того же target ещё
-пишет файл) становится частью коммита фиксации ЭТОЙ задачи и сдвигает
-HEAD, который та задача не просила сдвигать — её собственный
-`fixed_sha` тут же расходится с новым HEAD, и она уходит в инцидент
-целостности, которого не совершала. `check_integrity()` (и `confirm_fixation`
-в `fsm.py`, см. REVIEW.md T021 замечание 1 итерации 2) поэтому читают
-через `read()`, не через `fix()`: то же самое для догфуда (там `fix()`
-и так не коммитит), но для внешнего target — без `add -A`/`commit`.
+`fix()` — точка ФИКСАЦИИ (`set_state`, `approve`), `read()` — точка
+СВЕРКИ (`check_integrity` перед стартом шага, `fsm.confirm_fixation` на
+approve, REVIEW.md T021 замечание 1 итераций 1-2). Обе читают голову
+ссылки и ничего не коммитят: у ссылки нет рабочей копии, которую можно
+было бы закоммитить или найти грязной.
 """
 from datetime import datetime, timezone
 
@@ -66,82 +51,17 @@ def fix(task_id: str, target: str) -> tuple[str, bool]:
     «для документов — коммит ссылки»). Коммитить здесь нечего: в ссылку
     пишет только `artifact_branch.commit_files`, у неё нет рабочей копии,
     которая могла бы быть грязной. `target` в сигнатуре — ради
-    вызывающего кода; репозиторий фиксации `.artel/projects/<target>/`
-    (`_fix_external`) фиксация больше не коммитит."""
+    вызывающего кода."""
     return _read_ref(task_id)
 
 
 def _read_ref(task_id: str) -> tuple[str, bool]:
     """(голова `refs/artifacts/<id>`, True); ("", False) — ссылки нет или
-    git не ответил (тот же вырожденный случай, что раньше давал
-    неинициализированный репозиторий фиксации). Отложенный импорт:
+    git не ответил. Отложенный импорт:
     `artifact_branch` берёт отсюда идентичность коммитов фиксации."""
     from . import artifact_branch
     sha = artifact_branch.ref_head(task_id)
     return (sha, True) if sha else ("", False)
-
-
-def _fix_external(target: str) -> tuple[str, bool]:
-    """Коммит артефактного репо target'а целиком (SPEC, требование 2).
-
-    С ADR-0021 (этап 1, часть а) фиксация документов — коммит ссылки
-    `refs/artifacts/<id>` (`fix`/`read` выше), эта функция и
-    `_read_external` не вызываются; сам репозиторий фиксации упраздняет
-    часть (б) этапа 1.
-
-    Нечего коммитить (второй переход подряд без правки файлов) — не
-    отказ: фиксируется уже существующий HEAD той же операцией.
-
-    Репозиторий заводится здесь же, если его ещё нет (A7, «чини класс
-    ошибки»): `config.PROJECTS/<target>/` — подкаталог `config.ROOT`, и
-    `git -C <repo>` без `.git` В НЁМ САМОМ не откажет, а молча уйдёт
-    вверх по дереву и найдёт `.git` пульта — команда «выполнится»
-    успешно, но закоммитит рабочую копию ГЛАВНОЙ КОПИИ ПУЛЬТА под
-    сообщением фиксации target'а (найдено на AC-7: `commit_step_
-    artifacts` первого шага задачи, для которой `target-init` ещё не
-    вызывался, иначе тихо подмешивал бы коммит в `config.ROOT`). `git
-    init` идемпотентен (`projects.init_artifact_repo`, тот же приём, что
-    и `target-init`) — повторный вызов на уже заведённом репо не портит
-    историю.
-    """
-    repo = config.PROJECTS / target
-    if not (repo / ".git").is_dir():
-        from . import projects
-        projects.init_artifact_repo(target)
-    added = gitcmd.in_repo(repo, "add", "-A")
-    if added.returncode != 0:
-        return "", False
-    staged = gitcmd.in_repo(repo, "diff", "--cached", "--quiet")
-    if staged.returncode not in (0, 1):
-        return "", False
-    if staged.returncode == 1:  # есть застейдженный дифф — есть что коммитить
-        commit = gitcmd.in_repo(
-            repo, "-c", f"user.name={FIXATION_AUTHOR_NAME}",
-            "-c", f"user.email={FIXATION_AUTHOR_EMAIL}",
-            "commit", "-q", "-m", f"fixation: {target}")
-        if commit.returncode != 0:
-            return "", False
-    sha = gitcmd.head_sha(repo)
-    clean = gitcmd.is_clean(repo=repo)
-    if not sha or clean is None:
-        return "", False
-    return sha, clean
-
-
-def _read_external(target: str) -> tuple[str, bool]:
-    """(sha, чисто) артефактного репо target'а — БЕЗ `add -A`/`commit`.
-
-    Используется только `check_integrity` (см. модульный докстринг):
-    проверка перед стартом шага не имеет права коммитить рабочее дерево
-    репо, в отличие от `_fix_external`, которую вызывает сама фиксация
-    на переходе FSM.
-    """
-    repo = config.PROJECTS / target
-    sha = gitcmd.head_sha(repo)
-    clean = gitcmd.is_clean(repo=repo)
-    if not sha or clean is None:
-        return "", False
-    return sha, clean
 
 
 def external_code_sha(target: str) -> str:
@@ -153,24 +73,22 @@ def external_code_sha(target: str) -> str:
 
 
 def external_artifact_sha(task_id: str) -> str:
-    """sha головы артефактной ветки ПУЛЬТА задачи (SPEC T094, требование
-    9, AC-10) — `orchestrator/artifact_branch.py`. Пустая строка — ветки
-    ещё нет (self/канарейка её не заводят вовсе) или git не ответил."""
+    """sha головы ссылки документов задачи (SPEC T094, требование 9,
+    AC-10) в её репозитории — для внешнего target это git проекта
+    (`artifact_branch.task_repo`, ADR-0021 п.3). Пустая строка — ссылки
+    ещё нет или git не ответил."""
     from . import artifact_branch
-    return gitcmd.branch_head_sha(artifact_branch.branch_name(task_id))
+    return artifact_branch.ref_head(task_id)
 
 
 def default_code_sha(conn, task_id: str) -> str:
     """sha головы кодовой ветки задачи self/артели (`config.DEFAULT_TARGET`,
     tasks/01M1P9RJVYHTAC087J4B2CAR44, требование 1) — репозиторий пульта
     (`config.ROOT`), где для self реально живёт код (`runner.role_cwd`:
-    собственный worktree задачи, T045), НЕ артефактный/фиксационный репо
-    `config.PROJECTS/<target>`, который коммитит `_fix_external` (SPEC
-    «Контекст»: именно его sha сегодня ошибочно уходит базой diff).
+    собственный worktree задачи, T045), НЕ фиксация документов (SPEC
+    «Контекст»: её sha ошибочно уходил базой diff).
 
-    `gitcmd.branch_head_sha` — независимо от текущего чекаута, тем же
-    приёмом, что `external_artifact_sha` уже применяет к артефактной
-    ветке пульта. Пустая строка — задачи нет в БД (`store.task_branch`)
+    `gitcmd.branch_head_sha` — независимо от текущего чекаута. Пустая строка — задачи нет в БД (`store.task_branch`)
     либо ветки ещё нет физически (вырожденный случай, как и у
     `external_code_sha`/`external_artifact_sha`)."""
     branch = store.task_branch(conn, task_id)

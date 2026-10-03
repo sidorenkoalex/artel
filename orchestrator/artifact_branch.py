@@ -1,7 +1,9 @@
-"""Ссылка документов задачи `refs/artifacts/<id>` в репозитории пульта —
+"""Ссылка документов задачи `refs/artifacts/<id>` в репозитории задачи —
 `tasks/<id>/` от `new` до конца жизни задачи (ADR-0021 п.3; до него —
-ветка `artifact/<id>`, SPEC T094, требования 7-11). Для ЛЮБОГО target,
-включая артель.
+ветка `artifact/<id>`, SPEC T094, требования 7-11). Репозиторий задачи
+(`task_repo`): для артели — git главной копии пульта, для внешнего
+проекта — git самого проекта (его клон `.artel/projects/<проект>/
+workspace`); отправка — в `origin` этого же репозитория.
 
 Дерево ссылки — только `tasks/<id>/…`, первый коммит — без родителя;
 закрытие задачи — последний коммит RETRO в ту же ссылку
@@ -18,7 +20,7 @@
 головы, не теряют ни одной правки — проигравшая перечитывает ссылку и
 пересобирает коммит поверх новой головы.
 
-Каждый коммит ссылки сразу отправляется в `origin` пульта; отказ —
+Каждый коммит ссылки сразу отправляется в `origin` репозитория задачи; отказ —
 запись журнала, повтор — на следующем переходе (`send_pending` из
 `store.set_state`). Гейт мержа и закрытие сверяют ссылку с `origin`
 (`origin_sync_refusal`).
@@ -27,7 +29,7 @@ import os
 from datetime import datetime, timezone
 from pathlib import Path
 
-from . import config, fixation, gitcmd, store
+from . import config, fixation, gitcmd, repo_context, store
 
 PASSPORT_REL_TMPL = "tasks/{task_id}/PASSPORT.md"
 
@@ -58,10 +60,61 @@ def branch_name(task_id: str) -> str:
     return f"refs/artifacts/{task_id}"
 
 
+# Репозиторий задачи внешнего проекта не найден (клона нет): git не
+# спрашивается вовсе. `git -C` в каталоге под `config.ROOT` без своего
+# `.git` молча ушёл бы вверх и записал ссылку в git пульта.
+_NO_REPO = Path("/dev/null/artel-no-project-repo")
+
+
+def repo_for_target(target: str | None) -> Path:
+    """Репозиторий ссылок документов задач target'а (ADR-0021 п.3):
+    `config.ROOT` для артели, клон проекта (`repo_context.resolve`) для
+    внешнего. Клона нет (или target не читается) — `_NO_REPO`: операции
+    ниже отказывают как «git не ответил», ни одна не уходит в git
+    пульта."""
+    if not target or target == config.DEFAULT_TARGET:
+        return config.ROOT
+    ctx = repo_context.resolve(target)
+    if ctx is None or not (ctx.path / ".git").exists():
+        return _NO_REPO
+    return ctx.path
+
+
+def task_repo(task_id: str) -> Path:
+    """Репозиторий ссылки документов задачи — по её target из БД."""
+    return repo_for_target(store.task_target(store.db(), task_id))
+
+
+def _git_repo(repo: Path) -> Path | None:
+    """Аргумент `repo=` примитивов `gitcmd`: `None` для пульта — прежний
+    вызов байт-в-байт (без `-C`), иначе путь клона проекта."""
+    return None if repo == config.ROOT else repo
+
+
+def _git(repo: Path, *args: str):
+    if repo == _NO_REPO:
+        return None
+    if repo == config.ROOT:
+        return gitcmd.git(*args)
+    return gitcmd.in_repo(repo, *args)
+
+
+def _head(task_id: str, repo: Path) -> str:
+    if repo == _NO_REPO:
+        return ""
+    return gitcmd.branch_head_sha(branch_name(task_id), repo=_git_repo(repo))
+
+
 def ref_head(task_id: str) -> str:
-    """sha головы ссылки документов; пустая строка — ссылки нет или git
-    не ответил."""
-    return gitcmd.branch_head_sha(branch_name(task_id))
+    """sha головы ссылки документов в репозитории задачи; пустая строка —
+    ссылки нет или git не ответил."""
+    return _head(task_id, task_repo(task_id))
+
+
+def _repo_kw(repo: Path) -> dict:
+    """Ключевые аргументы `gitcmd.show`/`ls_tree_files` для `repo`: для
+    пульта — никаких (прежний вызов)."""
+    return {"repo": repo} if _git_repo(repo) else {}
 
 
 def _now() -> str:
@@ -146,8 +199,8 @@ def commit_files(task_id: str, files: dict, message: str,
     """Единый узел записи документов задачи (ADR-0021 п.3): коммит `files`
     поверх головы `refs/artifacts/<id>` (ссылки нет — первый коммит без
     родителя), `update-ref` со сверкой прежнего значения, затем отправка
-    в `origin` (`_send`). Ссылка физически живёт в `config.ROOT` для
-    ЛЮБОГО target. Возвращает sha нового коммита; пустая строка — git не
+    в `origin` (`_send`). Ссылка физически живёт в репозитории задачи
+    (`task_repo`). Возвращает sha нового коммита; пустая строка — git не
     ответил. `remove` — см. `write_commit`. Проигрыш сверки и отказ
     отправки — см. докстринг модуля."""
     sha, _outcome = _write(task_id, files, message, author_name, author_email,
@@ -172,8 +225,8 @@ def commit_change(task_id: str, files: dict, message: str,
                   fixation.FIXATION_AUTHOR_EMAIL, remove, require_change=True)
 
 
-def _same_tree(commit_sha: str, parent: str) -> bool | None:
-    res = gitcmd.git("rev-parse", f"{commit_sha}^{{tree}}", f"{parent}^{{tree}}")
+def _same_tree(repo: Path, commit_sha: str, parent: str) -> bool | None:
+    res = _git(repo, "rev-parse",f"{commit_sha}^{{tree}}", f"{parent}^{{tree}}")
     trees = res.stdout.split() if res is not None and res.returncode == 0 else []
     if len(trees) != 2:
         return None
@@ -184,25 +237,28 @@ def _write(task_id: str, files: dict, message: str, author_name: str,
            author_email: str, remove: list | None,
            require_change: bool) -> tuple[str, str]:
     ref = branch_name(task_id)
+    repo = task_repo(task_id)
+    if repo == _NO_REPO:
+        return "", ""
     for _ in range(_CAS_ATTEMPTS):
-        parent = gitcmd.branch_head_sha(ref)
-        commit_sha = write_commit(config.ROOT, files, message, author_name,
+        parent = _head(task_id, repo)
+        commit_sha = write_commit(repo, files, message, author_name,
                                   author_email, parent=parent or None,
                                   remove=remove)
         if not commit_sha:
             return "", ""
         if require_change and parent:
-            same = _same_tree(commit_sha, parent)
+            same = _same_tree(repo, commit_sha, parent)
             if same is None:
                 return "", TREE_UNKNOWN
             if same:
                 return "", UNCHANGED
-        upd_ref = gitcmd.git("update-ref", ref, commit_sha,
-                             parent or _ABSENT_OID)
+        upd_ref = _git(repo, "update-ref", ref, commit_sha,
+                       parent or _ABSENT_OID)
         if upd_ref is None:
             return "", ""
         if upd_ref.returncode == 0:
-            _send(task_id, journal_success=False)
+            _send(task_id, repo, journal_success=False)
             return commit_sha, ""
     return "", ""
 
@@ -223,16 +279,17 @@ def _classify_push_failure(stderr: str) -> str:
     return PUSH_REASON_NETWORK
 
 
-def _attempt_push(branch: str) -> tuple[bool, str, str]:
+def _attempt_push(branch: str, repo: Path) -> tuple[bool, str, str]:
     """(успех, причина отказа, stderr git) — причина/stderr пустые при
     успехе. Отсутствие origin проверяется ДО попытки реального push
     (`gitcmd.has_no_remote`) — не по тексту stderr: `git push` без
     настроенного origin отвечает по-разному в зависимости от версии git,
-    а отсутствие remote проверяется напрямую и надёжно."""
-    if gitcmd.has_no_remote(config.ROOT):
+    а отсутствие remote проверяется напрямую и надёжно. `repo` —
+    репозиторий задачи (`task_repo`), отправка — в его `origin`."""
+    if repo == _NO_REPO or gitcmd.has_no_remote(repo):
         return False, PUSH_REASON_NO_ORIGIN, ""
     ref = gitcmd.qualified_ref(branch)
-    res = gitcmd.git("push", "-q", "origin", f"{ref}:{ref}")
+    res = _git(repo, "push", "-q", "origin", f"{ref}:{ref}")
     if res is not None and res.returncode == 0:
         return True, "", ""
     stderr = (res.stderr or "").strip() if res is not None else "git не ответил"
@@ -240,7 +297,7 @@ def _attempt_push(branch: str) -> tuple[bool, str, str]:
 
 
 def _journal_push_outcome(task_id: str, branch: str, ok: bool, reason: str,
-                          stderr: str) -> None:
+                          stderr: str, repo: Path) -> None:
     """Запись журнала задачи об исходе push — успех и отказ ОБА (AC-3:
     повторная попытка на следующем автокоммите обязана оставить СВОЮ
     запись про исход, успешный или нет, не молчать так же, как молчал бы
@@ -256,8 +313,8 @@ def _journal_push_outcome(task_id: str, branch: str, ok: bool, reason: str,
         return
     detail = reason + (f": {stderr[:300]}" if stderr else "")
     if reason == PUSH_REASON_NON_FAST_FORWARD:
-        local_sha = gitcmd.branch_head_sha(branch)
-        origin_sha = gitcmd.remote_branch_sha(branch)
+        local_sha = gitcmd.branch_head_sha(branch, repo=_git_repo(repo))
+        origin_sha = gitcmd.remote_branch_sha(branch, repo=_git_repo(repo))
         detail += (f"; локальный sha {local_sha}, origin sha {origin_sha} "
                   f"— свести merge-коммитом")
     store.journal(conn, task_id, "orchestrator",
@@ -265,7 +322,7 @@ def _journal_push_outcome(task_id: str, branch: str, ok: bool, reason: str,
 
 
 def push(task_id: str) -> bool:
-    """Push артефактной ветки в origin пульта — best-effort в смысле
+    """Push ссылки документов в origin репозитория задачи — best-effort в смысле
     возврата (SPEC требование 7, AC-8: `False`, не исключение — вызывающий
     код, включая `catalog.cmd_new`, не имеет права из-за отказа push
     отказать в заведении задачи или прервать шаг), но НЕ молчаливый:
@@ -275,30 +332,32 @@ def push(task_id: str) -> bool:
     non-fast-forward (AC-4) — единственный аргумент ветки после `origin`
     в команде push буквальный, без условных путей."""
     branch = branch_name(task_id)
-    ok, reason, stderr = _attempt_push(branch)
-    _journal_push_outcome(task_id, branch, ok, reason, stderr)
+    repo = task_repo(task_id)
+    ok, reason, stderr = _attempt_push(branch, repo)
+    _journal_push_outcome(task_id, branch, ok, reason, stderr, repo)
     return ok
 
 
-def _origin_configured() -> bool:
-    """У репозитория пульта есть `origin` с адресом. Нет — отправлять
+def _origin_configured(repo: Path) -> bool:
+    """У репозитория задачи есть `origin` с адресом. Нет — отправлять
     некуда (лёгкая песочница без git, пульт без remote): автоматическая
     отправка после коммита молчит, а о пустом remote говорит `doctor`.
     Адрес есть, но недоступен — это отказ отправки, он журналируется."""
-    res = gitcmd.git("remote", "get-url", "origin")
+    res = _git(repo, "remote", "get-url", "origin")
     return res is not None and res.returncode == 0 and bool(res.stdout.strip())
 
 
-def _send(task_id: str, journal_success: bool) -> bool:
-    """Отправка ссылки документов в `origin` после коммита и на переходе.
-    Отказ журналируется всегда; успех — по просьбе вызывающего: запись
-    об успехе на каждой строке паспорта засорила бы журнал."""
-    if not _origin_configured():
+def _send(task_id: str, repo: Path, journal_success: bool) -> bool:
+    """Отправка ссылки документов в `origin` репозитория задачи после
+    коммита и на переходе. Отказ журналируется всегда; успех — по просьбе
+    вызывающего: запись об успехе на каждой строке паспорта засорила бы
+    журнал."""
+    if not _origin_configured(repo):
         return False
     ref = branch_name(task_id)
-    ok, reason, stderr = _attempt_push(ref)
+    ok, reason, stderr = _attempt_push(ref, repo)
     if not ok or journal_success:
-        _journal_push_outcome(task_id, ref, ok, reason, stderr)
+        _journal_push_outcome(task_id, ref, ok, reason, stderr, repo)
     return ok
 
 
@@ -307,23 +366,30 @@ def send_pending(task_id: str) -> None:
     коммит, чья отправка раньше отказала, досылается здесь. Ссылки нет
     локально — отправлять нечего. Совпадающую с `origin` ссылку `git push`
     не меняет."""
-    if ref_head(task_id):
-        _send(task_id, journal_success=False)
+    repo = task_repo(task_id)
+    if _head(task_id, repo):
+        _send(task_id, repo, journal_success=False)
 
 
 def origin_sync_refusal(task_id: str) -> str | None:
     """None — локальная `refs/artifacts/<id>` совпадает с ней же в
     `origin` (гейт мержа и закрытие могут идти дальше); иначе — текст
-    отказа, называющий `origin` и оба sha.
+    отказа, называющий `origin` и оба sha. Ссылка и `origin` —
+    репозитория задачи (`task_repo`): для внешнего проекта — его, не
+    пульта.
 
     Перед сверкой — досылка. Недоступный `origin` — тоже отказ; `origin`
-    не настроен вовсе — сверять не с чем (об этом говорит `doctor`)."""
-    if not _origin_configured():
+    не настроен вовсе — сверять не с чем (об этом говорит `doctor`).
+    Клона внешнего проекта нет — ссылки локально нет и сверять нечего
+    (о клоне говорит `doctor`, проверка `target-layout`)."""
+    repo = task_repo(task_id)
+    if not _origin_configured(repo):
         return None
-    local = ref_head(task_id)
+    local = _head(task_id, repo)
     if local:
-        _send(task_id, journal_success=False)
-    remote, reason = gitcmd.remote_ref_state(branch_name(task_id))
+        _send(task_id, repo, journal_success=False)
+    remote, reason = gitcmd.remote_ref_state(branch_name(task_id),
+                                             _git_repo(repo))
     if reason:
         return (f"отказ: origin не ответил на сверку {branch_name(task_id)} "
                 f"— {reason}")
@@ -354,10 +420,14 @@ def read_tree(task_id: str) -> dict:
     """{путь: текст} всех файлов `tasks/<id>/` артефактной ветки задачи;
     пустой словарь — ветки нет или каталог в ней пуст."""
     branch = branch_name(task_id)
-    paths = gitcmd.ls_tree_files(branch, f"tasks/{task_id}") or []
+    repo = task_repo(task_id)
+    if repo == _NO_REPO:
+        return {}
+    kw = _repo_kw(repo)
+    paths = gitcmd.ls_tree_files(branch, f"tasks/{task_id}", **kw) or []
     files = {}
     for rel in paths:
-        text, _ = gitcmd.show(branch, rel)
+        text, _ = gitcmd.show(branch, rel, **kw)
         if text is not None:
             files[rel] = text
     return files
@@ -386,19 +456,20 @@ def materialize_task_dir(task_id: str, dest_root: Path) -> str:
     `dest_root` шага роли — корень выкладки документов (`docs_root`), не
     рабочая копия кода (ADR-0021, этап 1).
     """
-    branch = branch_name(task_id)
-    head = gitcmd.branch_head_sha(branch)
+    repo = task_repo(task_id)
+    head = _head(task_id, repo)
     if not head:
         return ""
+    kw = _repo_kw(repo)
     prefix = f"tasks/{task_id}/"
-    paths = gitcmd.ls_tree_files(head, prefix.rstrip("/"))
+    paths = gitcmd.ls_tree_files(head, prefix.rstrip("/"), **kw)
     if paths is None:
         return ""
     wanted = {}
     for rel in paths:
         if not rel.startswith(prefix):
             continue
-        text, _ = gitcmd.show(head, rel)
+        text, _ = gitcmd.show(head, rel, **kw)
         if text is not None:
             wanted[rel] = text
     task_dir = dest_root / "tasks" / task_id
@@ -424,8 +495,10 @@ def append_passport_line(task_id: str, state: str, actor: str) -> None:
     НАКОПЛЕННЫЙ текст — предыдущие строки не теряются (дописывание, не
     перезапись)."""
     rel = PASSPORT_REL_TMPL.format(task_id=task_id)
-    branch = branch_name(task_id)
-    existing, _ = gitcmd.show(branch, rel)
+    repo = task_repo(task_id)
+    existing = None
+    if repo != _NO_REPO:
+        existing, _ = gitcmd.show(branch_name(task_id), rel, **_repo_kw(repo))
     prior = existing if existing is not None else "# Паспорт живой задачи\n\n"
     line = f"{_now()}  {state}  actor={actor}\n"
     commit_files(task_id, {rel: prior + line},

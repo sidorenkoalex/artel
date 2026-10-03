@@ -120,10 +120,12 @@ def is_ancestor(ancestor: str, descendant: str) -> bool:
     return res is not None and res.returncode == 0
 
 
-def commit_exists(sha: str) -> bool:
-    """`sha` — коммит в объектной базе репозитория пульта. `False` — объекта
-    нет (или он не коммит), либо git не ответил."""
-    res = git("cat-file", "-e", f"{sha}^{{commit}}")
+def commit_exists(sha: str, repo: Path | None = None) -> bool:
+    """`sha` — коммит в объектной базе репозитория пульта (или клона
+    `repo`, если задан). `False` — объекта нет (или он не коммит), либо
+    git не ответил."""
+    args = ("cat-file", "-e", f"{sha}^{{commit}}")
+    res = in_repo(repo, *args) if repo else git(*args)
     return res is not None and res.returncode == 0
 
 
@@ -449,7 +451,8 @@ def on_foreign_branch(branch: str) -> bool:
                and branch_exists(branch))
 
 
-def show(branch: str, rel: str) -> tuple[str | None, str]:
+def show(branch: str, rel: str, *,
+         repo: Path | None = None) -> tuple[str | None, str]:
     """(текст, "") — файл `rel` из `branch`; (None, причина) — файла там
     нет, или git не ответил.
 
@@ -458,9 +461,14 @@ def show(branch: str, rel: str) -> tuple[str | None, str]:
     здесь ветка — источник истины БЕЗ отката на дерево (SPEC T031,
     AC-1/AC-2) — откат на прежнее поведение делает вызывающий код через
     `on_foreign_branch`, а не эта функция молча.
+
+    `repo` — репозиторий, в котором живёт `branch` (ссылка документов
+    задачи внешнего проекта — в клоне проекта, ADR-0021 п.3); `None` —
+    `config.ROOT`, прежнее поведение байт-в-байт.
     """
+    args = ("show", f"{branch}:{rel}")
     try:
-        res = git("show", f"{branch}:{rel}")
+        res = in_repo(repo, *args) if repo else git(*args)
     except UnicodeDecodeError as exc:
         # git отдаёт байты файла как есть; strict-декодирование внутри
         # subprocess роняло бы всю команду трейсбеком (тот же приём, что
@@ -493,13 +501,15 @@ def remote_branch_sha(branch: str, repo: Path | None = None) -> str:
     return res.stdout.split()[0]
 
 
-def remote_ref_state(ref: str) -> tuple[str, str]:
-    """(sha, "") — голова `ref` в `origin` пульта; ("", "") — в `origin`
-    такой ссылки нет; ("", причина) — `origin` не ответил. В отличие от
-    `remote_branch_sha`, «ссылки нет» и «спросить не удалось» здесь
-    различимы: сверка ссылки документов с `origin` (ADR-0021 п.3) обязана
-    отказывать и там, и там, но называть разное."""
-    res = git("ls-remote", "origin", qualified_ref(ref))
+def remote_ref_state(ref: str, repo: Path | None = None) -> tuple[str, str]:
+    """(sha, "") — голова `ref` в `origin` пульта (или клона `repo`, если
+    задан); ("", "") — в `origin` такой ссылки нет; ("", причина) —
+    `origin` не ответил. В отличие от `remote_branch_sha`, «ссылки нет» и
+    «спросить не удалось» здесь различимы: сверка ссылки документов с
+    `origin` (ADR-0021 п.3) обязана отказывать и там, и там, но называть
+    разное."""
+    args = ("ls-remote", "origin", qualified_ref(ref))
+    res = in_repo(repo, *args) if repo else git(*args)
     if res is None:
         return "", "git не ответил"
     if res.returncode != 0:
@@ -581,14 +591,17 @@ def fetch_head_sha(remote: str, ref: str) -> tuple[str, str]:
     return fetch_ref_sha(remote, ref)
 
 
-def ls_tree_files(branch: str, rel_dir: str) -> list[str] | None:
+def ls_tree_files(branch: str, rel_dir: str, *,
+                  repo: Path | None = None) -> list[str] | None:
     """Пути файлов под `rel_dir` в дереве `branch`; None — git не ответил.
 
     Пустой список — легитимный ответ (ветка есть, каталога в ней нет —
     тот же вырожденный случай, что у `guard.scan_acceptance_tests` для
     отсутствующей `acceptance_tests/` на диске), не путать с `None`.
+    `repo` — как у `show`.
     """
-    res = git("ls-tree", "-r", "--name-only", branch, "--", rel_dir)
+    args = ("ls-tree", "-r", "--name-only", branch, "--", rel_dir)
+    res = in_repo(repo, *args) if repo else git(*args)
     if res is None or res.returncode != 0:
         return None
     return [p for p in res.stdout.splitlines() if p]

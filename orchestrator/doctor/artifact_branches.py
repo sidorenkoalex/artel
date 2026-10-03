@@ -1,6 +1,8 @@
 """Пакет orchestrator/doctor -- сверка ссылок документов задач
 `refs/artifacts/<id>` (ADR-0021 п.3): ссылка живой задачи совпадает с
-`origin`, закрытая ссылка не менялась после коммита закрытия.
+`origin`, закрытая ссылка не менялась после коммита закрытия. Ссылка и
+`origin` — репозитория задачи (`artifact_branch.repo_for_target`): git
+пульта для артели, git проекта для внешнего target.
 
 Коллаборанты читаются лениво через фасад doctor (см. докстринг
 orchestrator/doctor/__init__.py) -- не импортируются напрямую.
@@ -12,11 +14,14 @@ ARTIFACT_REF_SYNC_CHECK = "artifact-ref-sync"
 _ARTIFACT_REFS_GLOB = "refs/artifacts/*"
 
 
-def _origin_artifact_refs() -> tuple[dict | None, str]:
+def _origin_artifact_refs(repo=None) -> tuple[dict | None, str]:
     """({ссылка: sha} всех `refs/artifacts/*` в `origin`, "") — одним
-    `ls-remote` на все задачи, а не по запросу на каждую: закрытых задач
-    сотни. (None, причина) — `origin` не ответил."""
-    res = doctor.gitcmd.git("ls-remote", "origin", _ARTIFACT_REFS_GLOB)
+    `ls-remote` на все задачи репозитория, а не по запросу на каждую:
+    закрытых задач сотни. (None, причина) — `origin` не ответил. `repo` —
+    клон проекта; `None` — репозиторий пульта."""
+    args = ("ls-remote", "origin", _ARTIFACT_REFS_GLOB)
+    res = (doctor.gitcmd.in_repo(repo, *args) if repo is not None
+           else doctor.gitcmd.git(*args))
     if res is None:
         return None, "git не ответил"
     if res.returncode != 0:
@@ -27,6 +32,31 @@ def _origin_artifact_refs() -> tuple[dict | None, str]:
         if sha and ref:
             refs[ref.strip()] = sha.strip()
     return refs, ""
+
+
+def _by_repo(task_ids, target_of) -> dict:
+    """{репозиторий задачи: [id]} — порядок задач внутри группы прежний,
+    группы — в порядке первой встречи (у артели одна группа, пульт)."""
+    groups: dict = {}
+    for task_id in task_ids:
+        repo = doctor.artifact_branch.repo_for_target(target_of[task_id])
+        groups.setdefault(repo, []).append(task_id)
+    return groups
+
+
+def _local_head(task_id: str, target: str | None) -> str:
+    """Голова ссылки задачи в её репозитории — target уже известен из строки
+    задачи, БД заново не спрашивается (закрытых задач сотни)."""
+    repo = doctor.artifact_branch.repo_for_target(target)
+    return doctor.artifact_branch._head(task_id, repo)
+
+
+def _remote_refs(repo) -> tuple[dict | None, str]:
+    """`_origin_artifact_refs` для репозитория задачи: пульт — прежний
+    вызов без аргументов (его подменяют тесты фасада)."""
+    if repo == doctor.config.ROOT:
+        return doctor._origin_artifact_refs()
+    return doctor._origin_artifact_refs(repo)
 
 
 def _live_ref_problem(task_id: str, ref: str, local: str,
@@ -66,24 +96,30 @@ def _fix_unsent_closed_refs(conn) -> None:
     """`doctor --fix`: досылает в `origin` закрытую ссылку, чья локальная
     голова — коммит закрытия из журнала, а `origin` её не получил: у
     закрытой задачи переходов (`send_pending`) больше нет. Изменённую после
-    закрытия ссылку не досылает; `push` без force."""
-    closed = _closed_with_closing_sha(conn, doctor.store.all_tasks(conn))
-    if not closed or doctor.gitcmd.has_no_remote(doctor.config.ROOT):
-        return
-    remote, reason = doctor._origin_artifact_refs()
-    if remote is None:
-        print(f"  [FIX] закрытые ссылки документов не досланы: origin не "
-              f"ответил — {reason}")
-        return
-    for task_id, closing in closed:
-        ref = doctor.artifact_branch.branch_name(task_id)
-        if doctor.artifact_branch.ref_head(task_id) != closing:
+    закрытия ссылку не досылает; `push` без force. `origin` — репозитория
+    задачи."""
+    tasks = doctor.store.all_tasks(conn)
+    target_of = {t["id"]: t["target"] for t in tasks}
+    closed = dict(_closed_with_closing_sha(conn, tasks))
+    for repo, ids in _by_repo(closed, target_of).items():
+        if (repo == doctor.artifact_branch._NO_REPO
+                or doctor.gitcmd.has_no_remote(repo)):
             continue
-        if remote.get(ref, "") == closing:
+        remote, reason = _remote_refs(repo)
+        if remote is None:
+            print(f"  [FIX] закрытые ссылки документов не досланы: origin не "
+                  f"ответил — {reason}")
             continue
-        ok = doctor.artifact_branch.push(task_id)
-        print(f"  [FIX] {task_id}: коммит закрытия {closing} "
-              f"{'дослан в origin' if ok else 'в origin не дослан — см. журнал задачи'}")
+        for task_id in ids:
+            closing = closed[task_id]
+            ref = doctor.artifact_branch.branch_name(task_id)
+            if _local_head(task_id, target_of[task_id]) != closing:
+                continue
+            if remote.get(ref, "") == closing:
+                continue
+            ok = doctor.artifact_branch.push(task_id)
+            print(f"  [FIX] {task_id}: коммит закрытия {closing} "
+                  f"{'дослан в origin' if ok else 'в origin не дослан — см. журнал задачи'}")
 
 
 def check_artifact_ref_sync(conn) -> list[doctor.Check]:
@@ -95,42 +131,50 @@ def check_artifact_ref_sync(conn) -> list[doctor.Check]:
       закрытия из журнала (исторический снимок записи не несёт — не
       сверяется).
 
-    `origin` не настроен или не ответил — `skip`, не `ok`."""
+    Ссылка и `origin` — репозитория задачи: задачи внешнего проекта
+    сверяются в его git и с его `origin`, не с пультом. `origin`
+    репозитория не настроен или не ответил — `skip`, не `ok`."""
     tasks = doctor.store.all_tasks(conn)
-    closed = _closed_with_closing_sha(conn, tasks)
+    target_of = {t["id"]: t["target"] for t in tasks}
+    closed = dict(_closed_with_closing_sha(conn, tasks))
     live = [t["id"] for t in tasks
             if t["state"] not in ("done", "killed")
-            and doctor.artifact_branch.ref_head(t["id"])]
+            and _local_head(t["id"], t["target"])]
     if not live and not closed:
         return [doctor.Check(ARTIFACT_REF_SYNC_CHECK, "ok",
                              "ссылок документов для сверки нет")]
-    if doctor.gitcmd.has_no_remote(doctor.config.ROOT):
-        return [doctor.Check(ARTIFACT_REF_SYNC_CHECK, "skip",
-                             "origin пульта не настроен — ссылки документов "
-                             "не сверены")]
-    remote, reason = doctor._origin_artifact_refs()
-    if remote is None:
-        return [doctor.Check(ARTIFACT_REF_SYNC_CHECK, "skip",
-                             f"origin не ответил — ссылки документов не "
-                             f"сверены: {reason}")]
-    problems = []
-    for task_id in live:
-        ref = doctor.artifact_branch.branch_name(task_id)
-        problem = _live_ref_problem(task_id, ref,
-                                    doctor.artifact_branch.ref_head(task_id),
-                                    remote.get(ref, ""))
-        if problem:
-            problems.append(problem)
-    for task_id, closing in closed:
-        ref = doctor.artifact_branch.branch_name(task_id)
-        problem = _closed_ref_problem(task_id, ref, closing,
-                                      doctor.artifact_branch.ref_head(task_id),
-                                      remote.get(ref, ""))
-        if problem:
-            problems.append(problem)
+    problems, skips = [], []
+    for repo, ids in _by_repo(live + list(closed), target_of).items():
+        if (repo == doctor.artifact_branch._NO_REPO
+                or doctor.gitcmd.has_no_remote(repo)):
+            where = ("origin пульта" if repo == doctor.config.ROOT
+                     else f"origin репозитория проекта ({', '.join(ids)})")
+            skips.append(doctor.Check(ARTIFACT_REF_SYNC_CHECK, "skip",
+                                      f"{where} не настроен — ссылки "
+                                      f"документов не сверены"))
+            continue
+        remote, reason = _remote_refs(repo)
+        if remote is None:
+            skips.append(doctor.Check(ARTIFACT_REF_SYNC_CHECK, "skip",
+                                      f"origin не ответил — ссылки документов "
+                                      f"не сверены: {reason}"))
+            continue
+        for task_id in ids:
+            ref = doctor.artifact_branch.branch_name(task_id)
+            local = _local_head(task_id, target_of[task_id])
+            if task_id in closed:
+                problem = _closed_ref_problem(task_id, ref, closed[task_id],
+                                              local, remote.get(ref, ""))
+            else:
+                problem = _live_ref_problem(task_id, ref, local,
+                                            remote.get(ref, ""))
+            if problem:
+                problems.append(problem)
     if problems:
         return [doctor.Check(ARTIFACT_REF_SYNC_CHECK, "warn", p)
-                for p in problems]
+                for p in problems] + skips
+    if skips:
+        return skips
     return [doctor.Check(ARTIFACT_REF_SYNC_CHECK, "ok",
                          f"ссылки документов совпадают с origin (живых "
                          f"{len(live)}), закрытые — с коммитом закрытия "

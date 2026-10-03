@@ -328,7 +328,11 @@ class RecoveryRewrittenRefTest(RefOriginSandbox):
 
     def setUp(self):
         super().setUp()
-        projects.init_artifact_repo(config.DEFAULT_TARGET)
+        # Репозиторий фиксации прежнего устройства, оставшийся на диске:
+        # пульт его больше не заводит (ADR-0021 п.2), фикстура — сама.
+        repo = config.PROJECTS / config.DEFAULT_TARGET
+        repo.mkdir(parents=True, exist_ok=True)
+        gitcmd.in_repo(repo, "init", "-q", "-b", config.MAIN_BRANCH)
 
     def recovery_sha(self):
         checks = doctor.recovery_check(store.db(), config.DEFAULT_TARGET)
