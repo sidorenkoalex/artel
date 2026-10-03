@@ -318,6 +318,48 @@ CI ветки. Выше — все модули, задевающие `runner.ro
 в этом шаге снова проверены `git apply --check` на дереве ветки — все
 четыре применяются (rc=0); `scripts/guard.py` на PLAN.md — «ок».
 
+## Замечания ревью итерации 1 и их исполнение
+Статусы записей реестра REVIEW.md размечены `fixed` (R1-F1..R1-F3).
+- **R1-F1** — сторожа уборки планки на уровне гейтов:
+  `tests/test_docs_dir_layout.py::GatesDropPlankAfterRunTest` —
+  `_acceptance_run_refuses` (зелёный/красный/исключение внутри прогона,
+  три метода), `fsm_advance.tests_writing` (сухой сбор пройден/отклонён/
+  исключение), `fsm_advance._review_approved` внешнего target
+  (штатно/исключение автогейта), `amend._check_code_head_long_lived`
+  (штатно/исключение). Прогон подменён наблюдателем: он подтверждает, что
+  во время прогона планка в рабочей копии кода есть, после — нет.
+- **R1-F2** — `checkpoint._merge_code_copy_docs` (новые аргументы
+  `existing`, `docs_dir_present`): при наличии каталога документов путь
+  ссылки, которого в каталоге документов нет (роль его удалила или
+  переименовала), из копии в рабочей копии кода не берётся, запись журнала
+  «документы задачи убраны из рабочей копии кода» называет такие пути.
+  Новый путь, которого нет в ссылке, по-прежнему переносится (прежнее
+  правило HOME). Сторож
+  `StepAutocommitFromDocsDirTest::test_plank_deleted_in_docs_dir_is_not_revived_from_code_copy`.
+- **R1-F3** — `role_prompt.mission_brief_package`: при каталоге документов
+  строка миссии — «пути кода ниже относительно него; запись вне него и вне
+  каталога документов задачи недоступна»; без каталога — прежняя.
+
+Временные мутации (код возвращён из копии в памяти, после — `git diff`
+только мои правки): условие `rel in known` снято — R1-F2 сторож красный;
+`plank_in_code_copy` → `materialize_from_branch` в
+`_acceptance_run_body` — 3 failed; уборка в `finally` `tests_writing` →
+`pass` — 3 подтеста красные; `_review_approved` внешнего target без
+`plank_in_code_copy` — 2 красных; `amend` без `plank_in_code_copy` — 2
+красных. `guard.test_functions_without_mutation_claim` против HEAD — пусто.
+
+Прогоны (`-p no:cacheprovider -p timeout -o timeout=120`, передний план):
+- планка `acceptance_tests/` целиком, долгоживущий
+  `test_01m409ykm3qe5kvrgv0g94f5zc_step_docs_dir`, `test_docs_dir_layout`,
+  `test_checkpoint_external_step_artifacts`, `test_step_autocommit`,
+  `test_timeout_checkpoint`, `test_review_package`, `test_agent_prompt`,
+  `test_01m3vfyp…_role_missions`, `test_role_prompt_test_author_mission`,
+  `test_artifact_materialization` — 258 passed;
+- `test_acceptance_tests_flow`, `test_long_lived_transitions`, `test_amend`,
+  `test_amend_long_lived`, `test_mutation_claim_gate`,
+  `test_fsm_advance_tests_writing_dry_collect` — 155 passed.
+Карта регенерирована.
+
 ## Расширение зон
 Пути: docs/reference/role-home/claude/CLAUDE.md
 
