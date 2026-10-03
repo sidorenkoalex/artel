@@ -29,7 +29,7 @@ def plan_text() -> str | None:
     return text
 
 
-def test_methods(source: str | None) -> dict:
+def _test_methods(source: str | None) -> dict:
     """{имя метода test_*: его исходный текст} модуля."""
     if source is None:
         return {}
@@ -64,7 +64,7 @@ class ExistingPlankRunTestsTest(unittest.TestCase):
             before, _reason = gitcmd.show(base, rel)
             path = config.ROOT / rel
             after = path.read_text(encoding="utf-8") if path.is_file() else None
-            old, new = test_methods(before), test_methods(after)
+            old, new = _test_methods(before), _test_methods(after)
             changed = sorted(name for name, text in old.items()
                              if new.get(name) != text)
             if not changed:
