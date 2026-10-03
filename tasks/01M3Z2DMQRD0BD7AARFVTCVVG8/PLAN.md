@@ -74,24 +74,38 @@ schema_version: 5
    `tests/test_01m3sf7dpfgez7vyeggxgtx49e_main_ci.py` кладёт документы в
    `refs/artifacts/<id>` узлом записи части (а); прогон затронутых тестов
    без `ARTEL_ROLE`; регенерация карты.
+7. Возврат из ревью (итерация 1, R1-F1…R1-F3): сторожа в `tests/` на
+   AC-2/AC-3/AC-6 (`tests/test_artifact_ref_sync.py`), досылка коммита
+   закрытия в `doctor --fix`, recovery-сверка по наличию объекта;
+   регенерация карты.
 
 ## Покрытие требований
 | Требование | Шаг |
 |---|---|
 | 1 | 1 |
-| 2 | 1 |
-| 3 | 2 |
+| 2 | 1, 7 |
+| 3 | 2, 7 |
 | 4 | 3 |
-| 5 | 3 |
+| 5 | 3, 7 |
 | 6 | 1, 3 (исторические снимки не трогаются, канарейка идёт тем же потоком) |
 | 7 | 5 |
 | 8 | 4 |
 
-Тесты в `tests/` на поведение AC (требование 8): AC-2/AC-3 —
-`test_artifact_branch_push.py`; AC-5 — `test_snapshot_closing_outcome.py`,
+Тесты в `tests/` на поведение AC (требование 8): AC-2, AC-3, AC-6 —
+`tests/test_artifact_ref_sync.py` (итерация 2, R1-F1; прежняя сдача
+ошибочно называла здесь `test_artifact_branch_push.py`, который проверяет
+только явный `push()`, и `test_merge_gate_ci_wait.py`, где сверка
+подменена): `CompareAndSwapRaceTest` — гонка двух записей от одной головы;
+`SendAfterCommitTest` — ссылка в origin после каждого коммита, отказ →
+запись журнала и коммит цел, следующий `set_state` досылает;
+`OriginSyncRefusalTest`, `MergeGateDocsRefTest`, `KillDocsRefTest` — отказ
+при локальной впереди, при отсутствии в origin и недоступном origin
+(журнал `MERGE_UNSYNCED_JOURNAL_ACTION`/`KILL_UNSYNCED_JOURNAL_ACTION`,
+состояние и ссылка не меняются), проход при совпадении; там же
+`DoctorFixResendsClosingCommitTest` (R1-F2) и `RecoveryRewrittenRefTest`
+(R1-F3). AC-5 — `test_snapshot_closing_outcome.py`,
 `test_fsm_merge_gate_done_snapshot.py` (коммит закрытия — потомок прежней
-головы, ссылка не удаляется, канарейка тем же потоком); AC-6 —
-`test_merge_gate_ci_wait.py` (узел сверки в теле гейта); AC-7/AC-10 —
+головы, ссылка не удаляется, канарейка тем же потоком); AC-7/AC-10 —
 `test_doctor_artifact_branch_sync.py` (живая — в обе стороны и разошедшаяся;
 закрытая, изменённая после коммита закрытия, — новый
 `ClosedRefMovedAfterClosingTest`, проверен временной мутацией; закрытая без
@@ -194,7 +208,8 @@ verifying». Прогоны этой итерации — все без `ARTEL_R
 
 Утверждения сохранены, менялась только подготовка: `test_doctor.py::
 RecoveryCheckTest::test_sha_mismatch_raises_an_incident_alert` (голова
-ссылки вместо репозитория фиксации), `test_git_fixation.py::ApproveByShaTest::
+ссылки вместо репозитория фиксации; итерация 2 — подмена
+`gitcmd.is_ancestor` заменена подменой `gitcmd.commit_exists`, R1-F3), `test_git_fixation.py::ApproveByShaTest::
 test_approve_on_escalated_with_matching_sha_returns_to_escalated_from` и
 `RunnerEscalationHintsIncludeShaTest::test_integrity_incident_hint_includes_full_fixed_sha`
 (подмена — коммитом в ссылку), `test_merge_gate_ci_wait.py` (подмена
@@ -285,3 +300,44 @@ pytest, файл не правился) — `test_ac1_guard_violation_after_snap
 и прочие методы этого файла), без признака зелёные — их краснота
 действительно была от окружения шага. Широкий прогон без признака — раздел
 «Покрытие требований».
+
+## Возврат из ревью, итерация 1 (R1-F1…R1-F3)
+- **R1-F1 (major)** — новый `tests/test_artifact_ref_sync.py`, 15 методов
+  на настоящем git с bare origin (`AutoOriginSandbox`), у каждого заявка
+  «Ловит мутацию». Код узла записи, гейта мержа и `kill` не менялся.
+- **R1-F2 (minor)** — `orchestrator/doctor/artifact_branches.py::
+  _fix_unsent_closed_refs`, вызов в `doctor/cli.cmd_doctor` под `--fix`
+  до `all_checks`. Досылает закрытую ссылку, у которой локальная голова
+  равна коммиту закрытия из журнала, а в origin другое значение. Отправка
+  идёт обычным `artifact_branch.push` без force, исход пишется в журнал
+  задачи. Ссылку, изменённую после закрытия, не досылает: о ней говорит
+  `check_artifact_ref_sync`. Общий отбор закрытых задач вынесен в
+  `_closed_with_closing_sha`, его зовут и проверка, и досылка.
+- **R1-F3 (minor)** — `gitcmd.commit_exists` (`cat-file -e
+  <sha>^{commit}`). `doctor/recovery.recovery_check` признаёт фиксацию
+  прежнего устройства по отсутствию объекта в базе пульта, а не по «не
+  предок головы». Прежняя фиксация — коммит отдельного репозитория
+  `.artel/projects/<target>/` (`main:orchestrator/fixation.py::
+  _fix_external`), в базе пульта его нет, поэтому ложных инцидентов на
+  старых задачах не будет.
+
+Временные мутации: подмена в процессе pytest, файлы кода не правились,
+кроме последней (в ней строка удалена и затем возвращена). Прогон —
+`tests/test_artifact_ref_sync.py` без `ARTEL_ROLE`, все красные:
+1. `origin_sync_refusal → None` — 5 failed (сверка, гейт мержа, `kill`);
+2. `update-ref` без прежнего значения — `CompareAndSwapRaceTest` failed;
+3. `send_pending → no-op` — `test_refusal_is_journaled_commit_kept_and_retried_on_transition` failed;
+4. `_send → no-op` — 9 failed;
+5. `_refuse_unsynced_docs → no-op` — `KillDocsRefTest::test_unsynced_ref_refuses_kill_and_keeps_state` failed;
+6. `_docs_ref_unsynced → False` — `MergeGateDocsRefTest::test_unsynced_ref_stops_the_gate_named` failed;
+7. `_fix_unsent_closed_refs → no-op` — `test_fix_pushes_the_closing_commit` failed;
+8. `commit_exists → False` (то же, что прежнее «не предок») — `test_ref_rewritten_outside_its_history_is_a_mismatch` failed;
+9. `commit_exists → True` (признак прежнего устройства снят) — `test_fixation_of_the_old_device_is_not_compared` failed;
+10. в досылке убрана сверка головы с коммитом закрытия —
+    `test_fix_does_not_resend_a_ref_moved_after_closing` failed.
+
+Прогоны без `ARTEL_ROLE`: `test_artifact_ref_sync`, `test_doctor`,
+`test_doctor_artifact_branch_sync`, `test_doctor_fix_ignored_artifacts`,
+`test_gitcmd_branch_reads`, `test_codebase_map`, `test_invariants`,
+`test_artifact_branch_push`, `test_snapshot_closing_outcome` — 290 passed,
+218 subtests passed. Планка задачи — 46 passed. Карта регенерирована.
