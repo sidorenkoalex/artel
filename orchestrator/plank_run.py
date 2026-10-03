@@ -136,8 +136,11 @@ def cmd_plank_run(task_id: str, file_arg: str | None = None) -> None:
     with acceptance.plank_in_code_copy(
             task_id, artifact_branch.branch_name(task_id), code_dir,
             files=draft) as tdir:
-        tests_dir = tdir / "acceptance_tests"
-        target_arg = str(tests_dir / selected) if selected else str(tests_dir)
+        # Путь относителен от cwd pytest (рабочей копии кода): абсолютный
+        # сторож роли `conftest._is_targeted_path` не признаёт целевым и
+        # отказывает прогону в шаге роли (SPEC 01M41W15BK20WBTD9TMBTSXNZA).
+        tests_rel = (tdir / "acceptance_tests").relative_to(code_dir).as_posix()
+        target_arg = f"{tests_rel}/{selected}" if selected else tests_rel
         code, output = acceptance.run_plank([target_arg], code_dir)
     print(output)
     summary = acceptance.run_summary_line(output) or "итоговой строки нет"
