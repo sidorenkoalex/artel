@@ -14,9 +14,12 @@ tasks/<id>/` (`artifact_branch.docs_dir`): выкладка из ссылки п
 import unittest
 from unittest import mock
 
-from orchestrator import (acceptance, artifact_branch, checkpoint, config,
-                          fixation, providers, role_prompt, runner, store,
+from orchestrator import (acceptance, agent_log, amend, artifact_branch,
+                          checkpoint, config, fixation, fsm, fsm_advance,
+                          fsm_autogate, providers, role_prompt, runner, store,
                           workspace)
+from orchestrator.advance_gates import acceptance as acceptance_gate
+from orchestrator.advance_gates._base import GateRefusal
 from tests.sandbox import RealGitSandbox
 
 TASK = "01M409YKM3QE5KVRGV0G94F5ZC"
@@ -178,6 +181,40 @@ class StepAutocommitFromDocsDirTest(DocsDirSandbox):
         actions = [r["action"] for r in store.task_steps(self.conn, TASK)]
         self.assertIn(checkpoint.CODE_COPY_DOCS_DROPPED_ACTION, actions)
 
+    def test_plank_deleted_in_docs_dir_is_not_revived_from_code_copy(self):
+        """Удаление файла планки в каталоге документов не отменяет её копия в коде.
+
+        Сценарий: задача в `tests_writing`, в ссылке планка
+        `acceptance_tests/test_x.py` прошлого шага test_author (лока ещё
+        нет — удаление планки им же доезжает до ссылки); test_author копирует планку в рабочую копию кода для прогона
+        (так велит миссия), затем в каталоге документов переименовывает
+        `test_x.py` в `test_y.py`. После автокоммита шага в ссылке
+        `test_y.py` есть, `test_x.py` нет, `tasks/<id>/` в рабочей копии
+        кода нет.
+
+        Ловит мутацию: `_merge_code_copy_docs` берёт из рабочей копии кода
+        и пути ссылки, удалённые ролью в каталоге документов (снято условие
+        `rel in known`), — `test_x.py` воскресает в ссылке (REVIEW
+        итерации 1, R1-F2)."""
+        self.assertTrue(artifact_branch.commit_files(
+            TASK, {f"tasks/{TASK}/acceptance_tests/test_x.py": "# планка\n"},
+            f"{TASK}: артефакты шага test_author (автокоммит оркестратора)"))
+        store.record_fixation(self.conn, TASK)
+        store.update_task(self.conn, TASK, state="tests_writing")
+        runner.role_cwd(self.conn, TASK, config.DEFAULT_TARGET)
+        copy = self.wt / "tasks" / TASK / "acceptance_tests" / "test_x.py"
+        copy.parent.mkdir(parents=True)
+        copy.write_text("# планка\n", encoding="utf-8")
+        plank = self.docs / "acceptance_tests"
+        (plank / "test_x.py").rename(plank / "test_y.py")
+
+        checkpoint.commit_step_artifacts(self.conn, TASK, "test_author")
+
+        self.assertEqual(self.ref_text("acceptance_tests/test_y.py"),
+                         "# планка\n")
+        self.assertIsNone(self.ref_text("acceptance_tests/test_x.py"))
+        self.assertFalse((self.wt / "tasks" / TASK).exists())
+
     def test_untouched_docs_dir_makes_no_commit(self):
         """Выкладка, не тронутая ролью, не двигает ссылку.
 
@@ -265,6 +302,183 @@ class PlankInCodeCopyTest(DocsDirSandbox):
         acceptance.drop_from_code_copy(TASK, config.ROOT)
 
         self.assertTrue(legacy.is_file())
+
+
+class _Stop(Exception):
+    """Обрывает обработчик перехода после гейтов: дальше — лок и смена
+    состояния, к уборке планки не относящиеся."""
+
+
+class GatesDropPlankAfterRunTest(DocsDirSandbox):
+    """Гейты, гоняющие планку, убирают её из рабочей копии кода после
+    прогона при любом исходе (SPEC требования 3, 7; AC-7..9; REVIEW
+    итерации 1, R1-F1): сторож места вызова, не только
+    `plank_in_code_copy`. Прогон подменён наблюдателем — он отмечает, что
+    планка во время прогона лежит в рабочей копии кода, и отдаёт исход."""
+
+    def setUp(self):
+        super().setUp()
+        self.assertTrue(artifact_branch.commit_files(
+            TASK, {f"tasks/{TASK}/acceptance_tests/test_x.py": "# планка\n"},
+            "планка"))
+        self.t = store.get_task(self.conn, TASK)
+        self.branch = artifact_branch.branch_name(TASK)
+        self.seen = []
+
+    def observer(self, code_dir, outcome):
+        def run(*_args, **_kwargs):
+            self.seen.append((code_dir / "tasks" / TASK / "acceptance_tests"
+                              / "test_x.py").is_file())
+            if isinstance(outcome, Exception):
+                raise outcome
+            return outcome
+        return run
+
+    def assert_ran_and_dropped(self, code_dir):
+        self.assertEqual(self.seen, [True])
+        self.assertFalse((code_dir / "tasks" / TASK).exists())
+
+    def run_acceptance_gate(self, outcome):
+        with mock.patch.object(acceptance_gate, "long_lived_manifest",
+                               return_value=({}, "")), \
+                mock.patch.object(acceptance, "run",
+                                  side_effect=self.observer(self.wt, outcome)), \
+                mock.patch.object(acceptance, "summary",
+                                  return_value="карточка"), \
+                mock.patch.object(agent_log, "environment_fingerprint",
+                                  return_value="окружение"):
+            return acceptance_gate._acceptance_run_refuses(
+                self.conn, TASK, self.t, self.docs, config.DEFAULT_TARGET,
+                self.branch)
+
+    def test_acceptance_run_drops_plank_on_green(self):
+        """Зелёный прогон приёмки — планки в рабочей копии кода после нет.
+
+        Ловит мутацию: `_acceptance_run_body` выкладывает планку
+        `acceptance.materialize_from_branch` вместо `plank_in_code_copy`
+        (или без `ExitStack`) — планка остаётся в рабочей копии кода."""
+        self.assertFalse(self.run_acceptance_gate((True, "")))
+        self.assert_ran_and_dropped(self.wt)
+
+    def test_acceptance_run_drops_plank_on_red(self):
+        """Красный прогон приёмки — переход отклонён, планки в коде нет.
+
+        Ловит мутацию: выкладка планки в `_acceptance_run_body` без
+        уборки — на красном исходе (ранний `return True`) планка остаётся
+        в рабочей копии кода."""
+        self.assertTrue(self.run_acceptance_gate((False, "1 failed")))
+        self.assert_ran_and_dropped(self.wt)
+
+    def test_acceptance_run_drops_plank_on_exception(self):
+        """Сбой внутри прогона приёмки — планки в коде всё равно нет.
+
+        Ловит мутацию: уборка планки в `_acceptance_run_refuses` — строкой
+        после прогона, а не выходом из `ExitStack`: исключение её минует."""
+        with self.assertRaises(RuntimeError):
+            self.run_acceptance_gate(RuntimeError("сбой прогона"))
+        self.assert_ran_and_dropped(self.wt)
+
+    def run_tests_writing(self, outcome):
+        with mock.patch.object(fsm, "_tests_writing_ac_state",
+                               return_value=({1}, {}, [])), \
+                mock.patch.object(fsm_advance, "_tests_writing_code_diff",
+                                  return_value=(None, None, None)), \
+                mock.patch.object(fsm_advance,
+                                  "_tests_writing_stray_plank_files_gate",
+                                  return_value=None), \
+                mock.patch.object(fsm_advance, "_tests_writing_test_groups_gate",
+                                  return_value=None), \
+                mock.patch.object(fsm_advance, "_tests_writing_dry_collect_gate",
+                                  side_effect=self.observer(self.wt, outcome)), \
+                mock.patch.object(store, "set_state", side_effect=_Stop):
+            return fsm_advance.tests_writing(self.conn, TASK, self.t,
+                                             self.docs, config.DEFAULT_TARGET,
+                                             "tests_writing")
+
+    def test_tests_writing_drops_plank_after_dry_collect_on_every_outcome(self):
+        """Выход `tests_writing`: планка в коде только на время сухого сбора.
+
+        Сценарий: сухой сбор пройден (дальше — смена состояния, здесь
+        оборвана), отклонён и упал исключением — во всех трёх случаях
+        планка во время сбора в рабочей копии кода, после — нет.
+
+        Ловит мутацию: `drop_from_code_copy` в `tests_writing` вынесен из
+        `finally` за гейты (или снят) — на отказе либо исключении сухого
+        сбора планка остаётся в рабочей копии кода."""
+        refusal = GateRefusal("переход отклонён: сухой сбор", "красный", "")
+        for name, outcome, raised in (
+                ("пройден", None, _Stop),
+                ("отклонён", refusal, None),
+                ("исключение", RuntimeError("сбой сбора"), RuntimeError)):
+            with self.subTest(outcome=name):
+                self.seen = []
+                if raised is None:
+                    self.assertFalse(self.run_tests_writing(outcome))
+                else:
+                    with self.assertRaises(raised):
+                        self.run_tests_writing(outcome)
+                self.assert_ran_and_dropped(self.wt)
+
+    def test_review_autogate_of_external_target_drops_plank(self):
+        """Автогейт после ревью внешнего target — планки в его workspace нет.
+
+        Сценарий: `_review_approved` внешнего target выкладывает планку в
+        workspace target'а на время автогейта; автогейт проходит штатно и
+        падает исключением — после обоих планки там нет.
+
+        Ловит мутацию: `_review_approved` выкладывает планку
+        `materialize_from_branch` без `plank_in_code_copy` — планка
+        остаётся в рабочей копии кода внешнего target."""
+        code_dir = config.PROJECTS / "ext-proj" / "workspace"
+        for name, outcome in (("штатно", None),
+                              ("исключение", RuntimeError("сбой автогейта"))):
+            with self.subTest(outcome=name):
+                self.seen = []
+                with mock.patch.object(store, "set_state"), \
+                        mock.patch.object(
+                            fsm_autogate, "_maybe_autogate_acceptance",
+                            side_effect=self.observer(code_dir, outcome)):
+                    if outcome is None:
+                        fsm_advance._review_approved(
+                            self.conn, TASK, self.t, self.docs, "ext-proj",
+                            "review", self.branch, "", {})
+                    else:
+                        with self.assertRaises(RuntimeError):
+                            fsm_advance._review_approved(
+                                self.conn, TASK, self.t, self.docs,
+                                "ext-proj", "review", self.branch, "", {})
+                self.assert_ran_and_dropped(code_dir)
+
+    def test_amend_from_branch_run_drops_plank(self):
+        """`amend-tests --from-branch`: прогон с головы ветки убирает планку.
+
+        Сценарий: сухой сбор и прогон долгоживущих файлов
+        (`_collect_and_run`) проходят штатно и падают исключением — после
+        обоих планки в рабочей копии кода нет.
+
+        Ловит мутацию: `_check_code_head_long_lived` выкладывает планку
+        `materialize_from_branch` без `plank_in_code_copy` — планка
+        остаётся в рабочей копии кода."""
+        for name, outcome in (("штатно", None),
+                              ("исключение", RuntimeError("сбой прогона"))):
+            with self.subTest(outcome=name):
+                self.seen = []
+                with mock.patch.object(amend, "_long_lived_errors",
+                                       return_value=[]), \
+                        mock.patch.object(amend, "_worktree_changed_paths",
+                                          return_value=[]), \
+                        mock.patch.object(
+                            amend, "_collect_and_run",
+                            side_effect=self.observer(self.wt, outcome)):
+                    call = lambda: amend._check_code_head_long_lived(  # noqa: E731
+                        self.conn, self.t, TASK, self.branch, "head", {}, {},
+                        [])
+                    if outcome is None:
+                        call()
+                    else:
+                        with self.assertRaises(RuntimeError):
+                            call()
+                self.assert_ran_and_dropped(self.wt)
 
 
 class CommandWithoutDocsDirTest(unittest.TestCase):

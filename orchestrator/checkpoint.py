@@ -992,16 +992,29 @@ def harvest_code_copy_docs(conn, task_id: str, target: str
 
 def _merge_code_copy_docs(conn, task_id: str, files: dict[str, bytes],
                           stray_files: dict[str, bytes],
-                          baseline_sha: str) -> dict[str, bytes]:
+                          baseline_sha: str, existing: list[str],
+                          docs_dir_present: bool) -> dict[str, bytes]:
     """`files` каталога документов плюс `stray_files` рабочей копии кода.
     Совпавший путь берётся из рабочей копии кода, если файл каталога
     документов роль не трогала (байты как в выкладке `baseline_sha`); если
     роль правила оба — главный каталог документов, расхождение пишется в
-    журнал."""
+    журнал.
+
+    Путь ссылки (`existing`), которого нет в каталоге документов, роль там
+    удалила или переименовала: его копия в рабочей копии кода (копию
+    планки для прогона велит делать миссия шага) — устаревшая, не новый
+    документ, и в ссылку не возвращается (REVIEW итерации 1, R1-F2). Без
+    каталога документов удаления не было — берётся всё из рабочей копии
+    кода."""
     merged = dict(files)
     kept = []
+    deleted = []
+    known = set(existing)
     for rel, content in stray_files.items():
         own = files.get(rel)
+        if own is None and docs_dir_present and rel in known:
+            deleted.append(rel)
+            continue
         if own is not None and own != content \
                 and not _same_as_commit(baseline_sha, rel, own):
             kept.append(rel)
@@ -1013,6 +1026,12 @@ def _merge_code_copy_docs(conn, task_id: str, files: dict[str, bytes],
                       "правлены и в каталоге документов, и в рабочей копии "
                       f"кода — взята версия каталога документов: "
                       f"{', '.join(sorted(kept))}")
+    if deleted:
+        store.journal(conn, task_id, "orchestrator",
+                      CODE_COPY_DOCS_DROPPED_ACTION,
+                      "удалены ролью в каталоге документов — копия в "
+                      f"рабочей копии кода в ссылку не возвращена: "
+                      f"{', '.join(sorted(deleted))}")
     return merged
 
 
@@ -1156,7 +1175,7 @@ def _commit_external_step_artifacts(conn, task_id: str, role: str,
     baseline_sha = t["materialized_artifact_sha"] or ""
     docs_dir_present = task_dir.is_dir()
     files = _merge_code_copy_docs(conn, task_id, files, stray_files,
-                                  baseline_sha)
+                                  baseline_sha, existing, docs_dir_present)
 
     files = _journal_stray_step_artifacts(conn, task_id, files)
 

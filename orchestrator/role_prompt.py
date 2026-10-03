@@ -136,9 +136,16 @@ def mission_brief_package(conn, task_id: str, t, role: str, cwd,
                    if iteration > 1 else "")
         package = review.review_package(conn, task_id, t["title"], t["branch"],
                                         iteration=iteration, prev_sha=prev_sha)
-    mission = (f"{mission}\n\nрабочий каталог шага — {cwd}; все пути ниже "
-              f"относительно него; запись вне него недоступна.")
-    if docs_dir is not None:
+    # С каталогом документов запись открыта и в нём (`--add-dir`): строка
+    # «запись вне него недоступна» противоречила бы абзацу ниже, и роль
+    # могла бы не записать документ туда (REVIEW итерации 1, R1-F3).
+    if docs_dir is None:
+        mission = (f"{mission}\n\nрабочий каталог шага — {cwd}; все пути ниже "
+                  f"относительно него; запись вне него недоступна.")
+    else:
+        mission = (f"{mission}\n\nрабочий каталог шага — {cwd}; пути кода "
+                  f"ниже относительно него; запись вне него и вне каталога "
+                  f"документов задачи недоступна.")
         mission = f"{mission}\n\n{docs_dir_note(task_id, docs_dir)}"
     return mission, brief_text, package
 
