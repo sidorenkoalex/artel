@@ -20,7 +20,8 @@ schema_version: 5
 `DOCS_REF_INCIDENT_ACTION` «инцидент целостности: ссылка документов
 сдвинута мимо пульта» или `DOCS_REF_UNREAD_ACTION`), `incident_refusal`
 (именованный отказ с обоими sha и подсказкой `approve <id> <sha>`),
-`stop_on_moved_ref` (вход команд Оператора), `legitimize` (выход Оператора
+`unread_refusal` (именованный отказ при непрочитанной голове),
+`stop_on_ref_drift` (вход команд Оператора), `legitimize` (выход Оператора
 через `approve <id> <sha>`).
 
 Все записи пульта, перефиксирующие документы, зовут этот узел ДО записи:
@@ -32,10 +33,14 @@ schema_version: 5
   `record_fixation` нет: прежняя фиксация остаётся, сверка на старте шага
   остаётся fail-closed (требование 5).
 - `answer`/`zones-extend` (`answer.py`), `amend-tests` (оба режима
-  `amend.py`) — `fixation.stop_on_moved_ref` первой строкой после проверки
-  аргументов: ничего не коммитится, рабочая задача уходит в эскалацию
-  (через `set_state`, без паспорта), эскалированная остаётся; отказ с
-  именем причины.
+  `amend.py`) — `fixation.stop_on_ref_drift` первой строкой после проверки
+  аргументов: при сдвиге ничего не коммитится, рабочая задача уходит в
+  эскалацию (через `set_state`, без паспорта), эскалированная остаётся;
+  отказ с именем причины. При ЛЮБОМ расхождении с живой фиксацией, в том
+  числе при непрочитанной голове (git не ответил или роль удалила ссылку
+  `update-ref -d`), — тоже именованный отказ без коммита и без смены
+  состояния: запись в отсутствующую ссылку дала бы корневой коммит, а его
+  перефиксация узаконила бы потерю документов (R1-F1 ревью итерации 1).
 - `snapshot.commit_closing`, `doctor/ignored_artifacts._fix_ignored_artifact_files`,
   `checkpoint` (`harvest_code_copy_docs`, `_record_step_fixation`,
   `_commit_external_step_artifacts`, `commit_pull_checkpoint`) — при
@@ -48,7 +53,14 @@ schema_version: 5
   тоже коммитит в ссылку на переходе: при сдвиге перечень не пишется
   (переход ниже уводит в инцидент), а свой законный коммит он
   перефиксирует сам (требование 4) — иначе следующий `set_state` принял
-  бы его за сдвиг.
+  бы его за сдвиг. При непрочитанной голове (в т.ч. удалённой ссылке) —
+  отказ гейта `переход отклонён: фиксация не обновлена: голова ссылки
+  документов не прочитана`, перечень не пишется (R1-F1).
+- Остальные места (`set_state`, `snapshot`, `doctor --fix`, чекпоинты,
+  `kill`) при непрочитанной голове уже не писали в ссылку и не
+  перефиксировали (`drift is not None` → без записи; `commit_closing`
+  без ссылки коммит не пишет) — проверено grep'ом по всем вызовам
+  `ref_drift` при закрытии R1-F1.
 - `kill` (`cleanup._cmd_kill`, требование 10): при сдвиге вместо сверки с
   `origin` (она досылала бы подмену в `origin`) — `_warn_moved_ref`:
   журнал инцидента с sha подменённой головы, именованное предупреждение в
@@ -76,6 +88,9 @@ schema_version: 5
    такого коммита (см. «Влияние на систему»); `docs/codebase-map.md`
    регенерирован.
 5. Прогон долгоживущих тестов задачи и тестов затронутых модулей.
+6. Итерация 2 (R1-F1): отказ при любом расхождении с живой фиксацией в
+   `stop_on_ref_drift` и гейте перечня; сторож
+   `tests/test_docs_ref_deleted_refusal.py`.
 
 ## Покрытие требований
 
@@ -85,7 +100,7 @@ schema_version: 5
 | 2 | 1, 2 |
 | 3 | 1, 2 |
 | 4 | 1, 2 |
-| 5 | 1 |
+| 5 | 1, 6 |
 | 6 | 1 |
 | 7 | 1 |
 | 8 | — (инвариант 25 не меняется, см. ниже) |
@@ -100,8 +115,14 @@ schema_version: 5
 
 Требование 9 / AC-1..AC-13: долгоживущий файл задачи
 `tests/test_01m41ab597b330p2rcxcmvrzpe_docs_ref_refixation.py`
-(test_author, под локом, с заявками «Ловит мутацию»). Собственных новых
-тестов разработчик не добавлял — свойства покрыты этим файлом.
+(test_author, под локом, с заявками «Ловит мутацию»). Свойство, не
+покрытое им (R1-F1: ссылка удалена ролью при живой фиксации), —
+собственный сторож разработчика `tests/test_docs_ref_deleted_refusal.py`
+(4 метода: `zones-extend`, `answer`, `amend-tests --from-branch`, гейт
+перечня `tests_writing`; песочница `DocsRefSandbox` импортируется из
+долгоживущего файла без его правки). Временная мутация (возврат пропуска
+`not drift.moved` в `stop_on_ref_drift` и снятие отказа гейта перечня) —
+4 failed; код возвращён, 4 passed.
 Дополнен докстринг-заявкой один существующий метод
 `tests/test_step_refixation.py::SuccessfulTransitionUnaffectedTest::test_no_extra_refixation_journal_on_success`
 (утверждения не менялись).
@@ -123,6 +144,20 @@ schema_version: 5
 - test_doctor, test_fsm_retro, test_auto_cycle, test_role_commit_by_pult,
   test_01m3vfyp4rxby0bg8d3a0b18hd_pult_commit, test_codebase_map,
   test_fsm_advance_gate_smoke — 232 passed.
+
+Итерация 2 (после R1-F1):
+- test_docs_ref_deleted_refusal, долгоживущий файл задачи, test_answer,
+  test_answer_gate, test_answer_branch_reads, test_amend,
+  test_amend_long_lived, test_amend_remove, test_long_lived_transitions,
+  test_acceptance_tests_flow, test_fsm_advance_tests_writing_artifact_source,
+  test_long_lived_step_end_to_end, test_codebase_map — 238 passed,
+  28 subtests passed;
+- test_step_refixation, test_git_fixation, test_cas_set_state,
+  test_kill_cleanup — 64 passed;
+- планка `tasks/01M41AB597B330P2RCXCMVRZPE/acceptance_tests` (копия в
+  рабочем каталоге, затем убрана) — 2 passed;
+- `docs/codebase-map.md` регенерирован (`stop_on_ref_drift`,
+  `unread_refusal`).
 Полный набор `tests/` в шаге не запускался (правило 05.09) — его гоняет CI.
 
 ## Влияние на систему
