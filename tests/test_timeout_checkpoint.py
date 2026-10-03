@@ -494,7 +494,11 @@ class CommitAbnormalCheckpointTest(_WorktreeCheckpointTest):
         """Регресс-тест точного репро ревьювера (REVIEW.md итерация 2,
         R1-F1, «Проверено исполнением»): материализованный `role_cwd`
         SPEC.md роли `reviewer` (нет мандата кода) не обязан попасть в
-        кодовую ветку на аварийном завершении шага."""
+        кодовую ветку на аварийном завершении шага.
+
+        Ловит мутацию: `role_cwd` выкладывает документы в рабочую копию
+        кода (`materialize_task_dir(id, path)`), а чекпоинт коммитит её
+        без исключения `tasks/<id>/` для любой роли — и тест покраснеет."""
         self.enter_in_dev()
 
         materialized_path = runner.role_cwd(store.db(), self.TASK,
@@ -632,7 +636,12 @@ class CommitPauseNowCheckpointTest(_WorktreeCheckpointTest):
         """Регресс-тест точного репро ревьювера (REVIEW.md итерация 2,
         R1-F1, «Проверено исполнением»): материализованный `role_cwd`
         SPEC.md роли `reviewer` (нет мандата кода) не обязан попасть в
-        кодовую ветку на `pause --now`."""
+        кодовую ветку на `pause --now`.
+
+        Ловит мутацию: `role_cwd` выкладывает документы в рабочую копию
+        кода (`materialize_task_dir(id, path)`), а чекпоинт `pause --now`
+        коммитит её без исключения `tasks/<id>/` для любой роли — и тест
+        покраснеет."""
         self.enter_in_dev()
 
         materialized_path = runner.role_cwd(store.db(), self.TASK,
@@ -662,6 +671,12 @@ class RoleCwdMaterializationSurvivesTimeoutCheckpointTest(_WorktreeCheckpointTes
     которым дефект был живьём воспроизведён при ревью."""
 
     def test_materialized_spec_is_absent_from_the_code_branch_after_timeout(self):
+        """Материализованный на старте шага SPEC.md не попадает в кодовую
+        ветку через WIP-чекпоинт таймаута.
+
+        Ловит мутацию: `role_cwd` выкладывает документы в рабочую копию
+        кода (`materialize_task_dir(id, path)`), а чекпоинт таймаута
+        коммитит её без `exclude=tasks/<id>` — и тест покраснеет."""
         self.enter_in_dev()
 
         materialized_path = runner.role_cwd(store.db(), self.TASK,

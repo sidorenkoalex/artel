@@ -823,7 +823,11 @@ class RoleEnvTest(TmpRootTest):
         self.assertIn("identity", res.stderr.lower())
 
     def test_absent_identity_is_journalled_before_the_step(self):
-        """Идентичности нет — Оператор узнаёт до шага, а не из rc=128 потом."""
+        """Идентичности нет — Оператор узнаёт до шага, а не из rc=128 потом.
+
+        Ловит мутацию: убрать сверку git-идентичности перед запуском
+        агента в `runner.cmd_run` (нет строки «git-идентичность роли не
+        задана» и записи «agent env WARNING») — и тест покраснеет."""
         capture(catalog.cmd_init)
         _, task_id = capture_new_task_id(catalog.cmd_new, "Окружение роли")
         store.update_task(store.db(), task_id, state="in_dev")
