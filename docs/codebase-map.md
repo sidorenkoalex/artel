@@ -1,5 +1,5 @@
 ---
-built_at_sha: a932813d080e88beef4e009137967faddbe5323c
+built_at_sha: 77e5787bc3ca3f75feb871106aa167e605dec3bd
 ---
 
 # Codebase-map пульта
@@ -1719,7 +1719,7 @@ built_at_sha: a932813d080e88beef4e009137967faddbe5323c
 
 **Импортирует:** —
 
-**Импортируется:** `orchestrator/ci.py`, `orchestrator/pull.py`, `tests/test_ci_push_class.py`, `tests/test_pull.py`, `tests/test_pull_additive_conflict.py`
+**Импортируется:** `orchestrator/ci.py`, `orchestrator/pull.py`, `tests/test_01m41vtqj9dsx64nfmfaf9w53b_artifact_mode_removed.py`, `tests/test_ci_push_class.py`, `tests/test_pull.py`, `tests/test_pull_additive_conflict.py`
 
 ## scripts/codebase_map.py
 
@@ -1755,7 +1755,6 @@ built_at_sha: a932813d080e88beef4e009137967faddbe5323c
 - `appendix_rename_header_error`
 - `appendix_unprotected_path_error`
 - `artifact_disk_read_errors_from_files`
-- `basic_frontmatter_errors`
 - `changed_test_assertions`
 - `check`
 - `check_content`
@@ -1769,7 +1768,6 @@ built_at_sha: a932813d080e88beef4e009137967faddbe5323c
 - `id_format_patterns`
 - `id_format_sample_errors`
 - `indented_ac_marker_errors_from_files`
-- `is_draft_lenient`
 - `is_extraneous_acceptance_test_file`
 - `is_extraneous_task_root_file`
 - `is_long_lived_test_path`
@@ -1828,7 +1826,7 @@ built_at_sha: a932813d080e88beef4e009137967faddbe5323c
 
 **Импортирует:** `orchestrator/config.py`, `orchestrator/spend.py`, `orchestrator/stack.py`, `orchestrator/yamlmini.py`, `orchestrator/zone_lock.py`
 
-**Импортируется:** `orchestrator/acceptance.py`, `orchestrator/advance_gates/acceptance.py`, `orchestrator/advance_gates/mandate.py`, `orchestrator/advance_gates/plan_appendix.py`, `orchestrator/advance_gates/review.py`, `orchestrator/advance_gates/test_integrity.py`, `orchestrator/advance_gates/tests_writing.py`, `orchestrator/advance_gates/zones.py`, `orchestrator/amend.py`, `orchestrator/budget.py`, `orchestrator/canary.py`, `orchestrator/catalog.py`, `orchestrator/checkpoint.py`, `orchestrator/dry_run.py`, `orchestrator/fsm.py`, `orchestrator/fsm_advance.py`, `orchestrator/fsm_autogate.py`, `orchestrator/fsm_merge_gate.py`, `orchestrator/pull.py`, `orchestrator/retro.py`, `orchestrator/role_prompt.py`, `orchestrator/runner.py`, `orchestrator/version.py`, `tests/test_01m3sf7dpfgez7vyeggxgtx49e_main_ci.py`, `tests/test_01m3vfyp4rxby0bg8d3a0b18hd_pult_commit.py`, `tests/test_01m3y8570h9y57ytp3m7e1amhg_required_artifact.py`, `tests/test_acceptance_tests_flow.py`, `tests/test_amend_long_lived.py`, `tests/test_analyst_role.py`, `tests/test_answer.py`, `tests/test_artifact_materialization.py`, `tests/test_catalog_tz_path_check.py`, `tests/test_fsm_advance_tests_writing_test_groups.py`, `tests/test_fsm_autogate.py`, `tests/test_fsm_spec_gate_path_check.py`, `tests/test_guard_artifact_branch_mode.py`, `tests/test_guard_artifact_disk_read.py`, `tests/test_guard_division_section.py`, `tests/test_guard_extraneous_acceptance_files.py`, `tests/test_guard_mutation_claim.py`, `tests/test_guard_path_mentions.py`, `tests/test_guard_schema.py`, `tests/test_guard_split_signals.py`, `tests/test_guard_task_root_subdirectory.py`, `tests/test_guard_test_ast.py`, `tests/test_guard_test_groups.py`, `tests/test_guard_zones.py`, `tests/test_id_format_guard.py`, `tests/test_invariants.py`, `tests/test_long_lived_manifest.py`, `tests/test_plan_appendix.py`, `tests/test_protected_test_settings.py`, `tests/test_pull_long_lived_plank.py`, `tests/test_review_registry_gate.py`, `tests/test_role_commit_by_pult.py`, `tests/test_test_integrity_gate.py`, `tests/test_version.py`, `tests/test_yaml_parsing.py`, `tests/test_zone_line_parse.py`
+**Импортируется:** `orchestrator/acceptance.py`, `orchestrator/advance_gates/acceptance.py`, `orchestrator/advance_gates/mandate.py`, `orchestrator/advance_gates/plan_appendix.py`, `orchestrator/advance_gates/review.py`, `orchestrator/advance_gates/test_integrity.py`, `orchestrator/advance_gates/tests_writing.py`, `orchestrator/advance_gates/zones.py`, `orchestrator/amend.py`, `orchestrator/budget.py`, `orchestrator/canary.py`, `orchestrator/catalog.py`, `orchestrator/checkpoint.py`, `orchestrator/dry_run.py`, `orchestrator/fsm.py`, `orchestrator/fsm_advance.py`, `orchestrator/fsm_autogate.py`, `orchestrator/fsm_merge_gate.py`, `orchestrator/pull.py`, `orchestrator/retro.py`, `orchestrator/role_prompt.py`, `orchestrator/runner.py`, `orchestrator/version.py`, `tests/test_01m3sf7dpfgez7vyeggxgtx49e_main_ci.py`, `tests/test_01m3vfyp4rxby0bg8d3a0b18hd_pult_commit.py`, `tests/test_01m3y8570h9y57ytp3m7e1amhg_required_artifact.py`, `tests/test_01m41vtqj9dsx64nfmfaf9w53b_artifact_mode_removed.py`, `tests/test_acceptance_tests_flow.py`, `tests/test_amend_long_lived.py`, `tests/test_analyst_role.py`, `tests/test_answer.py`, `tests/test_artifact_materialization.py`, `tests/test_catalog_tz_path_check.py`, `tests/test_fsm_advance_tests_writing_test_groups.py`, `tests/test_fsm_autogate.py`, `tests/test_fsm_spec_gate_path_check.py`, `tests/test_guard_artifact_branch_mode.py`, `tests/test_guard_artifact_disk_read.py`, `tests/test_guard_division_section.py`, `tests/test_guard_extraneous_acceptance_files.py`, `tests/test_guard_mutation_claim.py`, `tests/test_guard_path_mentions.py`, `tests/test_guard_schema.py`, `tests/test_guard_split_signals.py`, `tests/test_guard_task_root_subdirectory.py`, `tests/test_guard_test_ast.py`, `tests/test_guard_test_groups.py`, `tests/test_guard_zones.py`, `tests/test_id_format_guard.py`, `tests/test_invariants.py`, `tests/test_long_lived_manifest.py`, `tests/test_plan_appendix.py`, `tests/test_protected_test_settings.py`, `tests/test_pull_long_lived_plank.py`, `tests/test_review_registry_gate.py`, `tests/test_role_commit_by_pult.py`, `tests/test_test_integrity_gate.py`, `tests/test_version.py`, `tests/test_yaml_parsing.py`, `tests/test_zone_line_parse.py`
 
 ## scripts/stack_ci.py
 
@@ -2317,6 +2315,16 @@ built_at_sha: a932813d080e88beef4e009137967faddbe5323c
 **Импортирует:** `orchestrator/checkpoint.py`, `orchestrator/config.py`, `orchestrator/store.py`, `orchestrator/workspace.py`, `tests/sandbox.py`
 
 **Импортируется:** `tests/test_plank_run_edges.py`
+
+## tests/test_01m41vtqj9dsx64nfmfaf9w53b_artifact_mode_removed.py
+
+**Назначение:** Артефактная ветка без особого статуса в CI: классификатор пуша не
+
+**Публичные функции:** (нет)
+
+**Импортирует:** `scripts/ci_push_class.py`, `scripts/guard.py`
+
+**Импортируется:** —
 
 ## tests/test_01m41w15bk20wbtd9tmbtsxnza_plank_run_role.py
 
@@ -3543,7 +3551,7 @@ built_at_sha: a932813d080e88beef4e009137967faddbe5323c
 
 ## tests/test_guard_artifact_branch_mode.py
 
-**Назначение:** Юнит-тесты режима артефактной ветки guard (01M1R66X5SMD3ZEDCVAJ0DR7K2,
+**Назначение:** Юнит-тесты `guard.check_content` на черновике — наследие режима
 
 **Публичные функции:** (нет)
 
