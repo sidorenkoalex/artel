@@ -9,11 +9,33 @@
 # canary_templates:  <title прогона канарейки>: быстрый | средний | трудный
 
 sets:
+  codex-dev:
+    developer: gpt-6-sol
+  codex-all:
+    analyst: gpt-5.6-terra
+    test_author: gpt-6-sol
+    developer: gpt-6-sol
+    reviewer: gpt-5.6-terra
 pairs:
   developer:
     gpt-6-sol:
       date: 2026-10-02
       basis: канарейка 30.09–02.10: 14 чистых прогонов на 6 шаблонах, из них на средних canary-status-sort, canary-log-tail, canary-usage-invariant; сводка admit 02.10
+      state: допущена
+  analyst:
+    gpt-5.6-terra:
+      date: 2026-10-03
+      basis: канарейка 30.09–02.10: сводка admit 02.10; набор целиком — c-codex-mix 20260930T124136Z (чистый) и 20261002T212516Z (green, 2 эскалации) на canary-budget-percent-ambiguous; решение Оператора 02.10
+      state: допущена
+  test_author:
+    gpt-6-sol:
+      date: 2026-10-03
+      basis: канарейка 30.09–02.10: сводка admit 02.10; набор целиком — c-codex-mix 20260930T124136Z (чистый) и 20261002T212516Z (green, 2 эскалации) на canary-budget-percent-ambiguous; решение Оператора 02.10
+      state: допущена
+  reviewer:
+    gpt-5.6-terra:
+      date: 2026-10-03
+      basis: канарейка 30.09–02.10: сводка admit 02.10; набор целиком — c-codex-mix 20260930T124136Z (чистый) и 20261002T212516Z (green, 2 эскалации) на canary-budget-percent-ambiguous; решение Оператора 02.10
       state: допущена
 canary_templates:
   canary-version-json: быстрый

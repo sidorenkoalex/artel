@@ -1244,7 +1244,8 @@ def set_admitted(conn, set_name: str) -> tuple[bool, str]:
     приостановлена пультом (`pair_suspension_refusal`, SPEC
     01M3YCHVVEK14SK8GT4R0H7M2C, требование 5), и (б) в
     `canary_runs` есть строка `verdict = green` на шаблоне класса
-    `трудный`, сводка которой совпадает с набором по всем его ролям.
+    `трудный`, сводка которой совпадает с набором по всем его ролям, а
+    каждая роль сводки вне набора шла на своей боевой модели.
     Нечитаемый файл и неизвестный набор — «не допущен» с причиной.
     """
     try:
@@ -1267,11 +1268,15 @@ def set_admitted(conn, set_name: str) -> tuple[bool, str]:
         if _template_class(document, row["title"]) != TEMPLATE_HARD:
             continue
         summary = summary_models(row["models_summary"])
-        if all(summary.get(role) == model for role, model in members.items()):
+        if (all(summary.get(role) == model
+                for role, model in members.items())
+                and all(model == _combat_model(role)
+                        for role, model in summary.items()
+                        if role not in members)):
             return True, (f"пары допущены; зелёный прогон набором "
                           f"{row['run_stamp']} на шаблоне {row['title']}")
     return False, (f"нет зелёного прогона набором целиком на шаблоне класса "
-                   f"«{TEMPLATE_HARD}»")
+                   f"«{TEMPLATE_HARD}» (роли вне набора — на боевых моделях)")
 
 
 def _pair_refusal(document: dict, role: str, model: str) -> str | None:

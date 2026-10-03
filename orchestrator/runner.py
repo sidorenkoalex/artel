@@ -353,8 +353,17 @@ def _refuse_before_start(conn, task_id: str, t, role: str):
     # doctor читает runner по имени, runner не должен знать о doctor
     # на уровне модуля). Провал — шаг не начат, без ретрая, с именованной
     # причиной. Версия CLI ≠ пин — предупреждение, не блок (требование 5).
+    #
+    # Шаг роли на модели набора задачи проверяет CLI и вход провайдера
+    # ШАГА, а не боевого провайдера роли (SPEC 01M3YXYAX5PW9BM67MB4GK85D1,
+    # требования 1-3); имя набора уходит в причину отказа. Задача без
+    # набора зовёт предполёт прежним вызовом — поведение байт-в-байт
+    # прежнее.
     from . import doctor
-    preflight = doctor.preflight_checks(role, target)
+    step_set = _step_set_name(t, role)
+    step_kwargs = ({"provider": provider, "task_set": step_set}
+                   if step_set is not None else {})
+    preflight = doctor.preflight_checks(role, target, **step_kwargs)
     for check in preflight:
         if check.status == "warn":
             detail = f"{check.name}: {check.detail}"
@@ -498,14 +507,32 @@ def _step_provider(t, role: str):
     Неразрешимая модель набора здесь не отказ: её именованный отказ даёт
     разрешение модели шага ниже по `_refuse_before_start`, а провайдер до
     него нужен лишь затем, чтобы дойти до этой точки."""
+    step = _set_step_model(t, role)
+    if step is not None:
+        return providers.get(step.resolution.provider)
+    return providers.for_role(role)
+
+
+def _set_step_model(t, role: str):
+    """Модель шага роли из набора задачи (`models.TaskModel`); `None` —
+    шаг идёт на боевой модели: задачи без набора, роли вне состава,
+    снятой пары, неразрешимой модели набора (её отказ — ниже по
+    `_refuse_before_start`)."""
     try:
         step = (models.resolve_task_role(role, t)
                 if models.task_set_members(t) else None)
     except models.ModelsError:
-        step = None
-    if step is not None and step.from_set:
-        return providers.get(step.resolution.provider)
-    return providers.for_role(role)
+        return None
+    return step if step is not None and step.from_set else None
+
+
+def _step_set_name(t, role: str) -> str | None:
+    """Имя набора задачи, если шаг роли идёт на его модели; иначе `None`
+    (SPEC 01M3YXYAX5PW9BM67MB4GK85D1, требование 2: отказ предполёта
+    такого шага называет набор)."""
+    if _set_step_model(t, role) is None:
+        return None
+    return models.task_set_name(t)
 
 
 def _model_refusal_exit(conn, task_id: str, role: str, detail: str) -> str:
