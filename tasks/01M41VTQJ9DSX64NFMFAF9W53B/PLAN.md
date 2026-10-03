@@ -2,7 +2,7 @@
 task: 01M41VTQJ9DSX64NFMFAF9W53B
 type: plan
 author_role: developer
-status: ready
+status: escalate
 schema_version: 5
 ---
 
@@ -108,6 +108,18 @@ schema_version: 5
    `tasks/<id>/acceptance_tests/…`) — отказ сторожем полного набора, код
    2 (см. «Предложения системе»).
 
+5. Отказ advance после ANSWER-1 (гейт неослабления тестов, 12 методов
+   `IsDraftLenientTest::*` и `BasicFrontmatterErrorsTest::*`): мандат
+   ANSWER-1 называет эти два класса элементом `путь::Класс`, а гейт
+   засчитывает только точное совпадение — путь файла или
+   `путь::Класс::метод` (`orchestrator/advance_gates/test_integrity.py:116-131`,
+   `Finding.mandate_elements`; имя находки — `Класс::метод`,
+   `scripts/guard.py:605`). Методы, названные в ANSWER-1 поимённо
+   (`CheckContentDefaultIsUnaffectedTest::*`, `test_ci_push_class.py::*`),
+   гейт принял. Кодом это не закрыть: методы проверяли функции, которые
+   требование 3 SPEC удаляет, а гейт — вне зон задачи. Код не менялся,
+   нужен поимённый мандат — см. «Эскалация».
+
 ## Покрытие требований
 
 | Требование | Шаг |
@@ -146,6 +158,15 @@ schema_version: 5
   AC-2.
 
 ## Предложения системе
+- `orchestrator/advance_gates/test_integrity.py::Finding.mandate_elements`:
+  докстринг обещает «элемент с `::` — только названный метод или
+  класс», но элемент `путь::Класс` метод `Класс::метод` не покрывает
+  (точное сравнение). А `mandate.refusals` при записи ANSWER такой элемент
+  принимает молча (`_qualified_name_ok` допускает `<Класс>`) — тот же
+  класс дефекта, что прецедент 26.09: годный по форме элемент гейт
+  молча не засчитывает. В этой задаче он стоил лишнего круга эскалации.
+  Надо одно из двух: засчитывать класс за все его методы либо отказывать
+  классовому элементу при записи.
 - `orchestrator/plank_run.py`: `plank-run <id>` без файла, когда планка
   — только разовые тесты, читающие PLAN.md из ссылки документов,
   упирается в сторож полного набора («итоговой строки нет», код 2) —
@@ -490,3 +511,36 @@ index 3864347d..9bc8eb46 100644
 (черновик без секций отказывает — верно и без режима; правлен только
 докстринг). `tests/test_invariants.py` — ни один метод не удалён и не
 изменён по утверждениям, только добавлены.
+
+## Эскалация
+
+**Вопросы** (один, блокирующий):
+
+1. Мандат ANSWER-1 записал классы `IsDraftLenientTest` и
+   `BasicFrontmatterErrorsTest` элементом `путь::Класс`. Гейт
+   неослабления тестов такой элемент методам класса не засчитывает (шаг
+   5 «Шагов»), и переход `in_dev → verifying` отказал по всем 12 их
+   методам. По существу перечень тот же, что одобрен в ANSWER-1, меняется
+   только форма записи.
+   Варианты:
+   (а) новый ANSWER с поимённой строкой (готова ниже, только 12
+   непокрытых методов; остальные элементы ANSWER-1 гейт уже засчитал);
+   (б) элемент-путь `tests/test_guard_artifact_branch_mode.py` целиком.
+   Так короче, но мандат шире нужного: он покрыл бы и сохранённый
+   `CheckContentDefaultIsUnaffectedTest::test_default_call_reports_full_content_errors_for_a_draft`.
+   Дефолт при молчании — (а).
+
+   Готовая строка для (а):
+
+   `Ослабление тестов разрешено: tests/test_guard_artifact_branch_mode.py::IsDraftLenientTest::test_spec_draft_is_lenient, tests/test_guard_artifact_branch_mode.py::IsDraftLenientTest::test_plan_review_test_report_draft_are_lenient, tests/test_guard_artifact_branch_mode.py::IsDraftLenientTest::test_tz_questions_answer_draft_are_not_lenient, tests/test_guard_artifact_branch_mode.py::IsDraftLenientTest::test_non_draft_status_is_not_lenient, tests/test_guard_artifact_branch_mode.py::IsDraftLenientTest::test_missing_status_is_not_lenient, tests/test_guard_artifact_branch_mode.py::IsDraftLenientTest::test_missing_type_is_not_lenient, tests/test_guard_artifact_branch_mode.py::IsDraftLenientTest::test_unknown_type_with_draft_status_is_not_lenient, tests/test_guard_artifact_branch_mode.py::BasicFrontmatterErrorsTest::test_clean_meta_has_no_errors, tests/test_guard_artifact_branch_mode.py::BasicFrontmatterErrorsTest::test_missing_task_is_an_error, tests/test_guard_artifact_branch_mode.py::BasicFrontmatterErrorsTest::test_missing_schema_version_is_an_error, tests/test_guard_artifact_branch_mode.py::BasicFrontmatterErrorsTest::test_schema_version_present_but_zero_is_not_reported_as_missing, tests/test_guard_artifact_branch_mode.py::BasicFrontmatterErrorsTest::test_too_new_schema_version_is_an_error_with_the_version_named`
+
+**Контекст** — реализация завершена и закоммичена пультом (1de356f1,
+затем подтяжка main 83ae989d). Причина/замена по каждому из 12 методов —
+таблица «Изменённые и удалённые тесты» (строки `IsDraftLenientTest`,
+`BasicFrontmatterErrorsTest`). Механизм несовпадения:
+`orchestrator/advance_gates/test_integrity.py:116-131` (точное
+сравнение элементов), `scripts/guard.py:605` (имя находки
+`Класс::метод`).
+
+**Блокирует** — выход `in_dev → verifying`. После нового ANSWER сниму
+`status: escalate` и сдам `ready` без правок кода.
