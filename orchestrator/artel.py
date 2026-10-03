@@ -68,6 +68,15 @@ dry-run: план, ничего не трогает. С `--execute` — испо
 не отменяет инвариант 16 (`.artel/logs/` уборка `kill`/`done` не
 трогает) — `prune` не часть этой уборки.
 
+`docs <id> [файл]` (SPEC 01M41VTSE5N15P5P2WZF4GF2BQ) подтягивает ссылку
+документов `refs/artifacts/<id>` из `origin` репозитория задачи (артели или
+внешнего проекта) и печатает файл документов либо их перечень; `docs
+--fetch-all` — все ссылки, один `git fetch` на репозиторий. Локальная
+ссылка с коммитами не из `origin` не перезаписывается. `artifact-branches-
+cleanup` — предпросмотр веток `artifact/**` (origin и главная копия); с
+`--execute` удаляет их, если у каждой задачи перечня есть ссылка документов
+в `origin`. Обе команды процессу роли недоступны.
+
 Вердикт ревьювера учитывается конечным автоматом ровно один раз: после
 возврата задачи в in_dev переход review -> acceptance требует нового
 REVIEW.md (iteration больше уже учтённого, см. fresh_verdict_iteration).
@@ -144,6 +153,7 @@ workspace, tasks, knowledge, logs). БД одна на все проекты: с
   canary --k <N> [--sha <sha>] [--set <имя>] [--template <имя>,<имя>] |
   canary pool-seal |
   prune [--execute] |
+  docs <id> [файл] | docs --fetch-all | artifact-branches-cleanup [--execute] |
   amend-tests <id> --reason "<основание>" [--from-branch] | pin-update <sha main артели> |
   ci-rerun <id> --reason "<основание>" |
   pin --to [<sha>] | zone-release <id> | zone-reorder <id1> <id2> ... |
@@ -531,6 +541,12 @@ main, не флейк» (урок 12.09: перезапуск замаскиро
             роли — выкладка узлом пульта, раннер и таймаут пульта, уборка
             только `tasks/<id>/` рабочей копии (SPEC
             01M41R4YAM4NGEQXW1FWH7T22M)
+  docs_fetch команда `docs <id> [файл]`/`docs --fetch-all`: ссылка
+            документов задачи из origin её репозитория, только вперёд
+            (SPEC 01M41VTSE5N15P5P2WZF4GF2BQ)
+  artifact_cleanup команда `artifact-branches-cleanup [--execute]`: уборка
+            веток artifact/** со сверкой ссылок документов в origin
+            (SPEC 01M41VTSE5N15P5P2WZF4GF2BQ)
   amend    штатная правка зафиксированной планки приёмки: коммит,
             лок, журнал, порог «планка девальвируется» (ADR-0012,
             SPEC 01M1HNNHDMP2C1AJTH5QF1BTN2)
@@ -646,8 +662,9 @@ def _ensure_supported_interpreter():
 
 _ensure_supported_interpreter()
 
-from orchestrator import (amend, answer, auto, budget, canary, catalog,  # noqa: E402
-                          ci_rerun, cleanup, doctor, dry_run, fsm, lease,
+from orchestrator import (amend, answer, artifact_cleanup, auto,  # noqa: E402
+                          budget, canary, catalog, ci_rerun, cleanup, doctor,
+                          docs_fetch, dry_run, fsm, lease,
                           liveness, models, notes, pause, pin, plank_run,
                           pool_seal, projects, prune, release, report, runner,
                           session, store, venv, version, watch, workspace,
@@ -1532,6 +1549,12 @@ def main() -> None:
         "acceptance-dry-run": lambda: dry_run.cmd_acceptance_dry_run(rest[0]),
         "plank-run": lambda: plank_run.cmd_plank_run(
             rest[0], rest[1] if len(rest) > 1 else None),
+        # `docs` и `artifact-branches-cleanup` ходят в сеть и переписывают
+        # локальные ссылки — вне белого списка ролей.
+        "docs": lambda: docs_fetch.cmd_docs(rest),
+        "artifact-branches-cleanup":
+            lambda: artifact_cleanup.cmd_artifact_branches_cleanup(
+                "--execute" in rest),
         "amend-tests": lambda: amend.cmd_amend_tests(
             rest[0], _reason_arg(rest), from_branch="--from-branch" in rest),
         "ci-rerun": lambda: ci_rerun.cmd_ci_rerun(rest[0], _reason_arg(rest)),

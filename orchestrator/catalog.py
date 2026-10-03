@@ -847,6 +847,11 @@ def cmd_show(task_id: str) -> None:
         meta = _artifact_frontmatter(t["target"], task_id, name)
         if meta:
             print(f"  {name}: status={meta.get('status', '?')}")
+    if not artifact_branch.ref_head(task_id):
+        # На второй машине или после чистого клона ссылки документов
+        # локально нет (ADR-0021 п.3) — `show` называет, чем её подтянуть.
+        print(f"  ссылки документов {artifact_branch.branch_name(task_id)} "
+              f"локально нет — подтянуть из origin: artel.py docs {task_id}")
 
 
 def _artifact_frontmatter(target: str, task_id: str, name: str) -> dict:
