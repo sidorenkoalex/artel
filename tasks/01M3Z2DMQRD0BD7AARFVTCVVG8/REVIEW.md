@@ -2,141 +2,99 @@
 task: 01M3Z2DMQRD0BD7AARFVTCVVG8
 type: review
 author_role: reviewer
-status: changes_requested
-iteration: 1
+status: approved
+iteration: 2
 schema_version: 5
 ---
 
 # REVIEW: ADR-0021, этап 1 (а) — документы задачи в одной ссылке refs/artifacts/<id>
 
 ## Фаза A — план
-- Таблица покрытия требований 1–8 полная, шаги размера MR, подход
-  согласуется с ADR-0021 п.3/12/13 (один узел записи, закрытие коммитом
-  RETRO, сверка с origin, doctor на ссылке). Приложение к
-  `docs/invariants.md` — по таблице п.12, оговорки ANSWER-1 (внешний target
-  отправляется в origin пульта; «(или грязная копия)» в 25) учтены.
-- Раздел «Покрытие требований» PLAN утверждает лишнее: «AC-2/AC-3 —
-  `test_artifact_branch_push.py`», «AC-6 — `test_merge_gate_ci_wait.py`
-  (узел сверки в теле гейта)». В диффе `test_artifact_branch_push.py`
-  поменялась только подготовка `PushNonFastForwardTest`. Сам файл проверяет
-  явный `push()`, а не CAS и не автоматическую отправку. В
-  `test_merge_gate_ci_wait.py` `_docs_ref_unsynced` подменён на `False`, то
-  есть отказ там не проверяется. Подробно — R1-F1.
+- Таблица покрытия требований 1–8 полная. Новые шаги 7 (возврат из ревью)
+  и 8 (отказ гейта ёмкости) — проверяемые единицы. Раздел «Покрытие
+  требований» исправлен по R1-F1: AC-2/AC-3/AC-6 теперь отнесены к
+  `tests/test_artifact_ref_sync.py`, а прежняя ошибочная ссылка на
+  `test_artifact_branch_push.py`/`test_merge_gate_ci_wait.py` в PLAN
+  признана.
+- Шаг 8 (сокращение докстрингов под потолок diff) сверен с диффом:
+  `artifact_branch.py`, `snapshot.py`, `doctor/artifact_branches.py` меняют
+  только докстринги. Исключение — рефакторинг отбора закрытых задач в
+  `_closed_with_closing_sha`, он относится к R1-F2 и заявлен в PLAN. Поведение
+  `check_artifact_ref_sync` сохранено: live — не терминальная задача с
+  локальной ссылкой, closed — терминальная задача с записью о коммите
+  закрытия. Это совпадает с прежним циклом.
+- Влияние на систему: новый код ограничен `doctor`, где добавлена досылка под
+  `--fix`, и `gitcmd.commit_exists`. Изменений вне зоны SPEC нет.
 
 ## Соответствие SPEC
 
 | Требование | Вердикт | Комментарий |
 |---|---|---|
-| 1 | OK | `branch_name` → `refs/artifacts/<id>`, первый коммит без родителя (`_write`, `parent or None`), `gitcmd.qualified_ref` для чтения; планка AC-1/AC-9 зелёная |
-| 2 | OK по коду, сторожа в `tests/` нет | `update-ref <ref> <new> <old>` + `_CAS_ATTEMPTS`, `_send` после коммита, `send_pending` в `set_state`; все пишущие места идут через `commit_files`/`commit_change`. Ни CAS, ни повтор отправки не держит ни один тест `tests/` (R1-F1) |
-| 3 | OK, замечание minor | `snapshot.commit_closing` поверх головы, журнал `CLOSING_ACTION`, исход берётся из БД, снимка и `drop` нет; отказ гейта и `kill` по `origin_sync_refusal`. Если не прошла отправка самого коммита закрытия, повтора нет (R1-F2) |
-| 4 | OK | `fixation.fix/read` = голова ссылки; `tests_locked_sha` = `branch_head_sha(ref)` после `set_state` (`fsm_advance.py:429`); паспорт пишется до `record_fixation` |
-| 5 | OK | `check_artifact_ref_sync`: живая задача ≠ origin, закрытая ≠ коммит закрытия; orphan/CI/pending-снимки сняты. В `recovery_check` есть ослабление (R1-F3) |
-| 6 | OK | исторические снимки не сверяются (нет записи `CLOSING_ACTION`), канарейка идёт тем же потоком |
-| 7 | OK | приложение 25/27/28/33/34/38, планка AC-11 зелёная |
-| 8 | Не полностью | удаления и изменённые утверждения покрыты мандатом ANSWER-1 и сверены с таблицами PLAN. Но поведения AC-2, AC-3 и AC-6 в `tests/` не покрыты (R1-F1) |
+| 1 | OK | без изменений с итерации 1; планка AC-1/AC-9 зелёная |
+| 2 | OK | CAS и отправка после коммита с повтором на `set_state` теперь под сторожем `tests/test_artifact_ref_sync.py` (`CompareAndSwapRaceTest`, `SendAfterCommitTest`); мутации ревью итерации 1 краснеют |
+| 3 | OK | отказ гейта мержа и `kill` при ссылке ≠ origin держат `MergeGateDocsRefTest`, `KillDocsRefTest`, `OriginSyncRefusalTest`; неотправленный коммит закрытия досылает `doctor --fix` (`_fix_unsent_closed_refs`, `doctor/cli.py:158`) |
+| 4 | OK | без изменений |
+| 5 | OK | recovery-сверка признаёт прежнее устройство по отсутствию объекта (`doctor/recovery.py:45`, `gitcmd.commit_exists`); ссылку, переписанную мимо пульта, видит (`RecoveryRewrittenRefTest`) |
+| 6 | OK | исторические снимки без записи `CLOSING_ACTION` по-прежнему не сверяются и не досылаются (`_closed_with_closing_sha`) |
+| 7 | OK | приложение не менялось; планка AC-11 зелёная |
+| 8 | OK | поведения AC-2, AC-3, AC-6 и AC-7 (досылка) покрыты в `tests/`, у каждого метода есть заявка «Ловит мутацию» с наблюдаемым расхождением |
 
-Сверка изменённых утверждений с base (14 методов из раздела гейта): все
-перечислены в таблице «Изменены утверждения» PLAN и приняты ANSWER-1 п.2.
-Новые формы проверяют свойства ADR-0021 (потомок прежней головы, ссылка в
-origin), а не ослабленные. Удалённые 32 метода совпадают с мандатом
-ANSWER-1 п.1 поимённо. Сужения данных под неизменными утверждениями не
-нашёл: `test_step_refixation` убрал лишний коммит вне окна шага, а
-`CommitCommitterDatesTest.repo()` указывает на `config.ROOT`, где теперь
-живёт ссылка.
+Сверка с base по изменённым тестам этой итерации:
+- `tests/test_doctor.py::RecoveryCheckTest::test_sha_mismatch_raises_an_incident_alert`:
+  подмена `gitcmd.is_ancestor → True` заменена подменой
+  `commit_exists → True` вслед за сменой признака в коде. Утверждения не
+  тронуты, условие срабатывания осталось тем же: зафиксированный sha
+  признан коммитом ссылки, ослабления нет.
+- 14 методов из раздела гейта «Изменённые утверждения» не изменились с
+  итерации 1. Они сверены там и приняты ANSWER-1 п.2.
+
+Проверка заявок новых тестов. `test_artifact_ref_sync.py` — новый файл, повтора долгоживущего
+`tests/test_01m3z2dmqrd0bd7aarfvtcvvg8_*.py` нет, таких файлов у задачи
+нет. Заявки называют наблюдаемый эффект: голову без `B.md`, `origin` на
+прежней голове, проход гейта к следующему шагу, `status` проверки
+recovery. Четыре заявки проверены временной мутацией (раздел «Проверено
+исполнением»).
 
 ## Замечания
 
-- **major** — `orchestrator/artifact_branch.py:188` (`_write`: `update-ref`
-  со сверкой и повтор), `:297` (`_send` после коммита, журнал отказа),
-  `:312` (`send_pending`), `:321` (`origin_sync_refusal`);
-  `orchestrator/fsm_merge_gate.py:1027` (`_docs_ref_unsynced`);
-  `orchestrator/cleanup.py:405` (`_refuse_unsynced_docs`);
-  `orchestrator/store.py` (`_append_passport_line` → `send_pending`). У этих
-  долгоживущих свойств нет сторожа в `tests/`. Все файлы планки помечены
-  `Группа: разовый`, после мержа их не гоняет ни CI, ни автогейт
-  (ADR-0018 п.3). SPEC, требование 8: «Тесты в `tests/` на каждое поведение
-  из критериев». Проверено временными мутациями в процессе pytest, код не
-  правился:
-  1. `origin_sync_refusal` всегда возвращает `None` (гейт мержа и `kill`
-     больше не отказывают). Прогон `test_merge_gate_ci_wait`,
-     `test_snapshot_closing_outcome`, `test_fsm_merge_gate_done_snapshot`,
-     `test_multitarget_invariants`, `test_01m3sf7…_main_ci`,
-     `test_artifact_branch_push`, `test_doctor_artifact_branch_sync` —
-     78 passed.
-  2. `update-ref` без прежнего значения (CAS снят). Прогон 7 файлов, в том
-     числе `test_artifact_branch_push`, `test_amend`, `test_git_fixation`,
-     `test_step_refixation` — 117 passed.
-  3. `send_pending` ничего не делает (повтора отправки на переходе нет).
-     Прогон 6 файлов — 76 passed.
-
-  Чем грозит: следующая правка узла записи или гейта мержа может молча
-  вернуть потерю правок в гонке, закрытие задачи с документами только в
-  одном месте или вечно неотправленную ссылку, и ни один тест не
-  покраснеет. Что сделать: добавить в `tests/` тесты (на реальном git с
-  bare-origin, как в `AutoOriginSandbox`) с заявками «Ловит мутацию: …» на
-  (а) гонку двух записей от одной головы: обе правки в истории, история
-  линейна; (б) коммит → ссылка в origin; отказ push → запись журнала,
-  коммит цел; следующий `set_state` досылает; (в) гейт мержа и `kill`
-  отказывают именованно при расхождении и при отсутствии ссылки в origin
-  (журнал `MERGE_UNSYNCED_JOURNAL_ACTION`/`KILL_UNSYNCED_JOURNAL_ACTION`,
-  состояние не меняется), при совпадении проходят. Исправить раздел
-  «Покрытие требований» PLAN.
-- **minor** — `orchestrator/snapshot.py:75` / `orchestrator/cleanup.py:441`.
-  Коммит закрытия пишется уже после терминального перехода. Если его
-  отправка откажет (журнал запишет), досылать некому: `send_pending` висит
-  на `set_state`, а у закрытой задачи переходов больше нет. `doctor` покажет
-  WARN «закрытая … в origin не совпадает с коммитом закрытия», но
-  `doctor --fix` ссылку не дошлёт. Итоговый RETRO останется только
-  локально, а требование 2 обещает повтор на следующем переходе. Что
-  сделать: досылать закрытую ссылку в `doctor --fix` (или в самой
-  проверке), если локальная голова = коммит закрытия, а origin отстаёт.
-- **minor** — `orchestrator/doctor/recovery.py:41`. `sha_mismatch` требует
-  `is_ancestor(fixed_sha, current)`. Если ссылку переписали на коммит, не
-  являющийся потомком зафиксированного (`update-ref`/force мимо пульта —
-  тот самый случай подмены), `recovery-sha` молчит: этот sha принимается
-  за фиксацию прежнего устройства. Первый рубеж (`check_integrity` на
-  старте шага) такой случай ловит, ослаблен только doctor. Что сделать:
-  отличать фиксацию прежнего устройства по отсутствию объекта в
-  `config.ROOT` (`git cat-file -e <sha>^{commit}`), а не по «не предок».
+Блокирующих и major-замечаний нет. Новых замечаний нет.
 
 ## Реестр замечаний
 
 | id | статус | файл/строка | суть | последствие | решение |
 |---|---|---|---|---|---|
-| R1-F1 | fixed | orchestrator/artifact_branch.py:188, :297, :312, :321; orchestrator/fsm_merge_gate.py:1027; orchestrator/cleanup.py:405 | CAS, автоматическая отправка с повтором и отказ гейта мержа/`kill` при ссылке ≠ origin без сторожа в `tests/` (планка вся «разовый»); три временные мутации зелёные | регресс узла записи или гейта после мержа пройдёт незамеченным: потеря правок в гонке, закрытие с документами в одном месте | тесты в `tests/` на AC-2, AC-3, AC-6 с заявками «Ловит мутацию»; поправить раздел «Покрытие требований» PLAN. Разработчик (итерация 2): новый `tests/test_artifact_ref_sync.py` на настоящем git с bare origin — `CompareAndSwapRaceTest` (гонка, AC-2), `SendAfterCommitTest` (отправка после коммита, отказ → журнал, досылка на `set_state`, AC-3), `OriginSyncRefusalTest`, `MergeGateDocsRefTest`, `KillDocsRefTest` (отказ при локальной впереди/нет в origin/origin не ответил, проход при совпадении, AC-6); все три мутации ревью и ещё шесть — красные (PLAN, «Возврат из ревью, итерация 1»); раздел «Покрытие требований» PLAN исправлен |
-| R1-F2 | fixed | orchestrator/snapshot.py:75 | отправку коммита закрытия, если она не прошла, никто не повторяет | RETRO закрытой задачи только локально, `doctor` лишь предупреждает | досылка закрытой ссылки в `doctor --fix`. Разработчик (итерация 2): `doctor/artifact_branches._fix_unsent_closed_refs` в `doctor --fix` (до `all_checks`) досылает обычным `artifact_branch.push` закрытую ссылку, у которой локальная голова = коммит закрытия журнала, а origin другой; ссылку, изменённую после закрытия, не досылает; тесты `DoctorFixResendsClosingCommitTest` |
-| R1-F3 | fixed | orchestrator/doctor/recovery.py:41 | `recovery-sha` молчит, если зафиксированный sha не предок головы | переписанная мимо пульта ссылка не видна в `doctor` | отличать прежнее устройство по отсутствию объекта, а не по «не предок». Разработчик (итерация 2): новый `gitcmd.commit_exists` (`cat-file -e <sha>^{commit}`); `recovery-sha` — расхождение, если голова ≠ зафиксированному и тот есть в объектной базе пульта; тесты `RecoveryRewrittenRefTest` (переписанная на коммит без родителя ссылка — fail; фиксация репозитория `.artel/projects/` — не сверяется); в `test_doctor.py::RecoveryCheckTest::test_sha_mismatch_raises_an_incident_alert` подмена `is_ancestor` заменена подменой `commit_exists`, утверждения не тронуты |
+| R1-F1 | accepted | orchestrator/artifact_branch.py:188, :297, :312, :321; orchestrator/fsm_merge_gate.py:1027; orchestrator/cleanup.py:405 | CAS, автоматическая отправка с повтором и отказ гейта мержа/`kill` при ссылке ≠ origin без сторожа в `tests/` | регресс после мержа пройдёт незамеченным | Ревьювер (итерация 2): `tests/test_artifact_ref_sync.py` закрывает все три мутации итерации 1, каждая теперь даёт красный: `origin_sync_refusal → None` — 5 failed, `update-ref` без прежнего значения — 1 failed (`CompareAndSwapRaceTest`), `send_pending → no-op` — 1 failed. Тесты работают на настоящем git с bare origin. Раздел «Покрытие требований» PLAN исправлен |
+| R1-F2 | accepted | orchestrator/snapshot.py:75 | отправку коммита закрытия, если она не прошла, никто не повторяет | RETRO закрытой задачи только локально | Ревьювер (итерация 2): `_fix_unsent_closed_refs` вызывается в `cmd_doctor` под `--fix` до `all_checks`. Он досылает ссылку обычным `push` без force и только когда локальная голова = коммит закрытия. Изменённую после закрытия ссылку не трогает, `origin` без ответа — печатает причину. Оба исхода держит `DoctorFixResendsClosingCommitTest` |
+| R1-F3 | accepted | orchestrator/doctor/recovery.py:41 | `recovery-sha` молчал, если зафиксированный sha не предок головы | переписанная мимо пульта ссылка не видна в `doctor` | Ревьювер (итерация 2): признак — `gitcmd.commit_exists` (`cat-file -e <sha>^{commit}`). Мутация `commit_exists → False` (эквивалент прежнего поведения для переписанной ссылки) краснит `test_ref_rewritten_outside_its_history_is_a_mismatch`. Обратную сторону (старая фиксация `.artel/projects/` не сверяется) держит `test_fixation_of_the_old_device_is_not_compared` |
 
 ## Вердикт
-changes_requested — закрыть R1-F1 (тесты в `tests/` на AC-2, AC-3, AC-6).
-R1-F2 и R1-F3 — minor, закрыть или отклонить с обоснованием.
+approved — R1-F1…R1-F3 закрыты: сторожа в `tests/` проверены временными
+мутациями, новых blocker/major нет.
 
 ## Проверено исполнением
 Во всех прогонах `ARTEL_ROLE` снят из окружения процесса pytest.
-- Планка `tasks/01M3Z2DMQRD0BD7AARFVTCVVG8/acceptance_tests/` — 46 passed
-  (177 с).
-- Затронутые модули: `test_artifact_branch_push`,
-  `test_doctor_artifact_branch_sync`, `test_snapshot_closing_outcome`,
-  `test_fsm_merge_gate_done_snapshot`, `test_merge_gate_ci_wait`,
-  `test_git_fixation`, `test_step_refixation`, `test_amend`,
-  `test_amend_remove`, `test_doctor`, `test_multitarget_invariants`,
-  `test_retro_artifact_branch_reads`,
-  `test_checkpoint_external_step_artifacts`, `test_01m3sf7…_main_ci` —
-  303 passed, 3 subtests passed.
-- Временные мутации (монкипатч в процессе pytest, файлы не правились,
-  `git status` чистый, кроме `tasks/`):
-  1. `origin_sync_refusal → None` — 78 passed, сторожа нет.
-  2. `update-ref` без old — 117 passed, сторожа нет.
-  3. `send_pending → no-op` — 76 passed, сторожа нет.
-  4. Контроль: `_send → no-op` вместе с CAS-мутацией — 10 failed
-     (`test_doctor_artifact_branch_sync`, `test_snapshot_closing_outcome`),
-     то есть сама отправка после коммита косвенно покрыта.
+- `tests/test_artifact_ref_sync.py`, `tests/test_doctor.py`,
+  `tests/test_doctor_artifact_branch_sync.py` — 137 passed, 3 subtests
+  passed.
+- Планка `tasks/01M3Z2DMQRD0BD7AARFVTCVVG8/acceptance_tests/` вместе с
+  `tests/test_snapshot_closing_outcome.py`,
+  `tests/test_fsm_merge_gate_done_snapshot.py`,
+  `tests/test_artifact_branch_push.py` — 64 passed (195 с).
+- Временные мутации: monkeypatch в процессе pytest, файлы кода не
+  правились. Прогон `tests/test_artifact_ref_sync.py`:
+  1. `artifact_branch.origin_sync_refusal → None` — 5 failed;
+  2. `update-ref` без третьего аргумента (CAS снят, обёртка `gitcmd.git`)
+     — 1 failed;
+  3. `artifact_branch.send_pending → no-op` — 1 failed;
+  4. `gitcmd.commit_exists → False` — 1 failed.
+- `python3 scripts/codebase_map.py` — расхождение
+  `docs/codebase-map.md` без строки `built_at_sha`: 0 строк, карта свежая;
+  рабочее дерево возвращено (`git checkout -- docs/codebase-map.md`).
 
 ## Предложения системе
-- `skills/test-authoring.md`: в этой задаче test_author пометил «разовым»
-  каждый файл планки, в том числе свойства кода (CAS, отказ гейта мержа).
-  Граница групп ADR-0020 на долгоживущие свойства не сработала, и сторожа
-  после мержа не осталось. Стоит, чтобы автогейт выхода из `tests_writing`
-  предупреждал о планке, где нет ни одного долгоживущего файла, а у SPEC
-  есть критерии поведения кода.
+- Шаблон пакета ревью: инкрементальный diff итерации 2 мал, 9 файлов.
+  Ревьюверу пришлось отдельно подтверждать, что шаг 8 («сокращены только
+  докстринги») не задел код: правки докстрингов и рефакторинг
+  `_closed_with_closing_sha` лежат в одном хунке. Стоит, чтобы PLAN при
+  отказе гейта ёмкости прикладывал `git diff -w` без докстрингов, либо
+  чтобы гейт пакета размечал хунки «только докстринг».
